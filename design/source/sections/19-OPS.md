@@ -19,7 +19,7 @@ This section maps §9-§15, §18, §20 and §21's services to warp blocks, lb ro
 | R-OPS-9 | One site, no off-site file-cluster copy; site loss recovers from devices; sidecar tables dumped daily off site, kept 14 days (ops-2) | owner decisions 89, 90, 94 |
 | R-OPS-10 | Self-hosted DNS on new edge hosts at the site; no dedicated addresses for user traffic or mail | owner decisions 34, 69, 71, 123, 124 |
 | R-OPS-11 | Business-hours abuse review in v0, with a pager for registrar, registry and law-enforcement emergencies from M5; infrastructure pages out of hours from M3; 24/7 review in v1 | owner decisions 95, 134, 143 |
-| R-OPS-12 | The first metadata cluster: 8 × Samsung PM9A3 1.92 TB, 2 per host, EC:4 (~7.7 TB usable); every metadata drive within 0.8 DWPD and 50% of rated IOPS but for P0 work past the refill, which pages (19.8); growth only by adding clusters | owner decisions 136-140, 145, 186 |
+| R-OPS-12 | The first metadata cluster: 8 × Samsung PM9A3 1.92 TB, 2 per host, EC:4 (~7.7 TB usable); every metadata drive within 0.8 DWPD and 50% of rated write IOPS but for P0 work past the refill, which pages (19.8); growth only by adding clusters | owner decisions 136-140, 145, 186 |
 
 ### 19.3 What exists today
 
@@ -37,19 +37,24 @@ Blocks are `beta 1 + g1 99` on every lb host unless noted.
 | Service (§), blocks | Name, routes, ports | State; ready also needs | `secret_files` |
 |---|---|---|---|
 | api (existing) | `api.bringyour.com`: `/network/*`, `/sidecar/*`, `/acl/*`, `/approval/*`, `/tls/*`, `/smtp/*`, `/mail/*`, `/abuse/*`; internal `/internal/gate/*` for the gate services (§8.9), which the lb refuses from outside; reaches gkm's drop-key route under a deposit token it issues itself, for §14.8's report intake | — | the oauth issuer's signing keys; the SHA-256 of each gate caller class's bearer; the first metadata cluster (`proj/`, `projrows/`, `rev/`, `hold/`) |
-| evs (§11) | `evs.bringyour.com`: `/evs/*`, segments on `streamable_paths`; W2 | §11.8's objects; each cluster's sentinel readable: `sentinel/_`, which xops writes at provisioning and evs's, gkm's and taskworker's hosts HEAD every 30 s with their block's own credentials, so the check is that these credentials reach this bucket, a missing or unreadable one reading not ready (§2.8's evs-30; owner decision 258) | JWKS, redis, every cluster, from v1 with DELETE on the segment bucket for §11.13's purge, receipt MAC keys (current and previous) |
+| evs (§11) | `evs.bringyour.com`: `/evs/*`, segments on `streamable_paths`; W2 | §11.8's objects; each cluster's sentinel readable: `sentinel/_`, which xops writes at provisioning and evs's, gkm's and taskworker's hosts HEAD every 30 s with their block's own credentials, so the check is that these credentials reach this bucket, a missing or unreadable one reading not ready (§2.8's evs-30; owner decision 258); while its gate is enabled, sidecar.yml's `evs.blocks`, the env's evs block count, by which each process divides `evs_unpaid_read_rate` (§20.6), a block whose gate is enabled with no count refusing to start (19.11; owner decision 500) | JWKS, redis, every cluster, from v1 with DELETE on the segment bucket for §11.13's purge, receipt MAC keys (current and previous) |
 | gkm (§10) | `gkm.bringyour.com`: `/gkm/*`; W2; reaches api's internal `POST /sidecar/identity/clients` for §6.8's hint addressing (§5.15) | §10.6's objects | JWKS, redis, metadata clusters, the internal-route credential |
-| sockets (§9) | `sockets.bringyour.com`: `/socket/*`; W2; reaches api's `/internal/gate/*` (§8.9) | Redis; ticket key; projection loaded | JWKS (the verify-only keyring of §9.8's Client tokens), redis, ticket keys (written by `sidecarctl sockets ticket-keygen`, §9.8), its gate bearer |
-| dns (§12): API; host-pinned `dnsedge` on each dns edge | `dns.bringyour.com`: §12.8's routes, journal feed, its internal routes under `/dns/internal/`; edges: UDP, TCP 53 | API: `dns_*`, `{dns}`; edge: current snapshot, verified key set | API: JWKS, pg, redis, DNSKEY windows, the SHA-256 of each internal caller class's bearer (`internal-verify.yml`); edge: current ZSK, its own bearer (`internal-dnsedge-1.yml` or `-2.yml`) |
-| tlsedge (§13) | behind W1's split on 443; 8443, 8883 and 5671 unsplit (W7; owner decision 121) | `{tes_}`, `{vhk}tls:`; K platform clients | the `edge` class's gate bearer (§13.6) |
-| mxedge (§15): the router | TCP 25 (W4) | §15's tables, `{mxr_}`, `{mxc_}`, `{vhk}mx:` | redis; the `edge` class's gate bearer (§13.6) and feed credentials |
-| mxedge-platform (§15): the platform listener, the router's binary in its own role (§15.15) | TCP 25 on `rpt.bringyour.com`'s two lb interfaces (W4) | `{mxc_}`, `{vhk}mx:`; §14.8's intake (smtp-5) | redis; the `edge` class's gate bearer (§13.6) and feed credentials; the platform-mail key |
+| sockets (§9) | `sockets.bringyour.com`: `/socket/*`; W2; reaches api's `/internal/gate/*` (§8.9) | Redis; ticket key; projection loaded | JWKS (the verify-only keyring of §9.8's Client tokens), redis, ticket keys (written by `sidecarctl sockets ticket-keygen`, §9.8), its gate bearer; never auth.yml, `revocation_record_enabled` coming from sidecar.yml (19.11; owner decision 497) |
+| dns (§12): API; the dns edges' `dnsedge`, two host-pinned warp services of one image, `dnsedge-1` on ns1 and `dnsedge-2` on ns2, one block each (19.11) | `dns.bringyour.com`: §12.8's routes, journal feed, its internal routes under `/dns/internal/`; edges: UDP, TCP 53 | API: `dns_*`, `{dns}`; edge: current snapshot, verified key set | API: JWKS, pg, redis, DNSKEY windows, the SHA-256 of each internal caller class's bearer (`internal-verify.yml`); edge: current ZSK, its own bearer (`internal-dnsedge-1.yml` or `-2.yml`) |
+| tlsedge (§13) | behind W1's split on 443; 8443, 8883 and 5671 unsplit (W7; owner decision 121) | `{tes_}`, `{vhk}tls:`; K platform clients; its first snapshot of the label and custom-host maps and the suspensions (§13.5); tlsedge.yml's `blocks`, the lb hosts running it, without which it refuses to start (§13.9) | redis; `pg-tlsedge.yml`, its restricted Postgres role: SELECT on `dns_label`, `network_dns_custom_host`, `network_tls_suspension` and §12.9's suspensions, INSERT on `tls_connection_record`, nothing else (owner decision 495); the `edge` class's gate bearer (§13.6) |
+| mxedge (§15): the router | TCP 25 (W4) | §15's tables, `{mxr_}`, `{mxc_}`, `{vhk}mx:` | redis; `pg-mxedge.yml`, its restricted Postgres role for §15's batch writes, off the connection path (owner decision 495); the `edge` class's gate bearer (§13.6) and feed credentials |
+| mxedge-platform (§15): the platform listener, the router's binary in its own role (§15.15) | TCP 25 on `rpt.bringyour.com`'s two lb interfaces (W4) | `{mxc_}`, `{vhk}mx:`; §14.8's intake (smtp-5), `SmtpReportIntake` from `smtpedgeservice` in process, writing `smtp_complaint` and `smtp_dmarc_daily` (MG5) through a pool of 2 (19.7); no `MxEdgeStore`, which its readiness waives (owner decision 495) | redis; pg, for the intake's tables; the `edge` class's gate bearer (§13.6) and feed credentials; the platform-mail key |
 | smtpedge (§14): g1 1 on 2 sending hosts; `exposed: false`, `cap_net_admin` | outbound 25 from its hosts' shared lb addresses by fwmark (warp/warpctl/config.go:2689; owner decision 124) | `smtp_*`, `{smq_}`; addresses bound | the `edge` class's gate bearer (§13.6), X-UR-Ref keys |
 | taskworker (existing) | — | the jobs §7, §10-§14, §20 and §21 list; the push sender | adds every cluster (GC, hourly evacuation and packing with v1's versionless sweep, shreds, gkm's reconciler, and from v1 §11.13's drop dry runs and jobs, P2 under D-OPS-21, with the segment-bucket DELETE it already holds) and the write budget's and HDD capacity's loops, ACME, EAB, Web Risk, APNs and FCM keys, certs' bearer for dns's internal routes (`internal-certs.yml`) |
 
 Gate services with no database, sockets, tlsedge and mxedge, and evs and gkm for quotas, read projections, rows, listen facts, the over-limit list and §20.14's quota routes from api's `/internal/gate/` surface: each caller class holds its own bearer, one vault file per class, connect's first, which api verifies by its SHA-256 in constant time, and the lb refuses the prefix from outside (§8.9; owner decision 340). dns's internal routes, under `/dns/internal/`, take the same scheme from their own callers (§12.8; owner decision 417): the dns edges' bearers above, the site's and the outside monitor's (`internal-monitor.yml`, `internal-monitor-outside.yml`), certs' in taskworker's `secret_files` and lbmap's (`internal-lbmap.yml`) in the lb's, each its own vault file holding current and previous values, verified by the dns API block from `internal-verify.yml`.
 
-New blocks serve `GET /status` on port 80, mount `{vault: no, config: yes, site: no}`, run as user 65532, call `server.ScrubCommandLogs()` first and gate readiness on the column above (server/router/warp_handlers.go:214). Non-issuer blocks mount only their audience's public JWKS (§7.8), not today's signing keys (server/oauth/token.go:258-268).
+New blocks serve `GET /status` on port 80, mount `{vault: no, config: yes, site: no}` and set `env_vars: {WARP_VAULT_HOME: /srv/warp/secrets}`, so `Vault.RequireSimpleResource` reads their `secret_files` unchanged, Ansible making each mounted file 65532:65532 mode 0400, as playbook-edges.yml makes grafana.yml. They run as user 65532, call `server.ScrubCommandLogs()` first and gate readiness on the column above (server/router/warp_handlers.go:214): `sidecarhost.Run` latches on `Engine.Ready()`, and a block with Postgres also runs the shared check and its groups' markers. Non-issuer blocks mount only their audience's public JWKS (§7.8), not today's signing keys (server/oauth/token.go:258-268).
+
+- **Own credentials.** Each block's `secret_files` hold its own: its file clusters' MinIO user and policy in `file-clusters-<service>.yml`; a push-only metrics user in `grafana-push-<service>.yml`, which `grafanaPushSettings` reads before vault's `grafana.yml`, so a compromised hostile-facing block's credential is revoked and rotated alone, no new block mounting `grafana.yml`; and a restricted Postgres role in `pg-<service>.yml`, which server's pool reads before `pg.yml` (owner decision 495).
+- **Fragments.** Each block is written as a fragment in `warp/services/sidecar-blocks/`, checked by warp's loader on a synthetic base; `warpctl services apply-fragment` merges it into vault's top version, allocating ports by warp's rules and printing a diff, a step the owner runs, since no agent reads vault.
+- **smtpedge's capability.** `cap_net_admin` extends warp's two capability allowlists (warp/services/load.go:167, warp/warpctl/run.go:159) to smtpedge alone, set on its binary in the image, so it still runs as 65532.
+- **Jobs.** `ServiceHost.Tasks` is nil in evs and gkm processes, whose jobs run in taskworker and reschedule themselves; a job is enqueued only from a process with Postgres, and an engine that needs one from a request path raises it as a question.
 
 **Push sender (owner decision 88).** A continuous taskworker loop delivers §18.7's triggers; nothing subscribes per client (R-OPS-8):
 
@@ -82,10 +87,10 @@ metrics  by platform, topic and result, never ids or tokens; sized for twice Y2'
 | W2 | Per-address zones: `route_rate_limits` (warp/services/services.go:737) takes exact paths, for sockets' registration and Find, 12,000/min, burst 3,000 (§9.5); a new whole-service form covers evs (3,000/min, burst 1,000) and gkm (1,200/min); edges are exempt at 2,000 Finds/s each (§13.9); store operations share per network (§11.13), with no tier caps (owner decision 66) | evs, gkm, sockets |
 | W3 | No per-service body limit: ≤ 8 MiB segments fit (§11.6) | evs |
 | W4 | TCP 25 `tcp_stream_port_services`: the router interfaces, every lb interface but `rpt.bringyour.com`'s two, to `mxedge`, the router; those two, on two hosts, to `mxedge-platform`, the platform listener (§15.4) | mxedge, mxedge-platform |
-| W5 | The lb reads `tls/current/<name>`, swapped before `nginx -s reload`; drop `ssl_stapling` (warp/warpctl/config.go:1254) | platform names |
-| W6 | Per service: Makefile, Dockerfile, lock entry (server/cli/RUNTIME-PACKAGES.md:3-18), run.sh line, source graph, rollout class | all |
+| W5 | Built but unused (owner decision 494): the lb keeps reading each platform certificate from its newest versioned path, which the daily lb deploy brings, and no vault entry or lb image reads `tls/current/<name>`, whose swap before `nginx -s reload` waits until D-OPS-12's 45-day lifetimes are due; drop `ssl_stapling` (warp/warpctl/config.go:1254) | platform names |
+| W6 | At M0 the recipe, warp's README "Adding a service" and warpctl/service_blocks_test.go; then each service's own task lands its Makefile, Dockerfile, lock entry (server/cli/RUNTIME-PACKAGES.md:3-18), run.sh lines, source graph and rollout class at that service's milestone | all |
 | W7 | 8443, 8883 and 5671 join `tcp_stream_port_services` to tlsedge on every lb interface (owner decision 121); router rules follow stream ports, 25 included; 53 goes to the dns edges, outbound 25 only from smtpedge's addresses, one rule a sending address by the fwmark smtpedge.yml's tuple gives it; Route 53's checks move from port 80 (warp/warpctl/dns_route53.go:46-48) to HTTPS with SNI, so a broken split drops platform answers | edges, dns, smtpedge |
-| W8 | Hosts with sidecar routes log `$uri`, not `$request` (warp/warpctl/config.go:1270-1273; I-13); dns.bringyour.com answers 403 on `/dns/internal/` unless the source is on dns's allow list, the site's ranges and the off-site monitor host's address (§12.8; owner decision 417) | api, evs, gkm, sockets, dns |
+| W8 | Hosts with sidecar routes log `"$request_method $uri $server_protocol"` in place of `$request`, so each line keeps its three fields inside the quotes and no query string, and other hosts keep `$request` (warp/warpctl/config.go:1270-1273; I-13); dns.bringyour.com answers 403 on `/dns/internal/` unless the source is on dns's allow list, the site's ranges and the off-site monitor host's address (§12.8; owner decision 417) | api, evs, gkm, sockets, dns |
 | W9 | `external_tcp_ports`: a TCP twin of `external_udp_ports`, with the same DNAT and router rules | dns edges |
 | W10 | `recurd.dev` and `www.recurd.dev` join warpctl's `domains` and mmm's `expose_aliases` (vault/main/services.yml:3-10, :580-592); from RS1, mmm 301s them to https://ur.io/recurd under a W5 certificate, as www.bringyour.com (mmm/mmm/nginx/nginx.conf.j2:448-450; owner decision 15). `sidecar.ur.io`, §18.8's key origin, joins them the same way, served under a W5 certificate at the lb as an unproxied record, never through Cloudflare, which terminates https://ur.io (mmm/mmm/nginx/nginx.conf.j2:65-66): `warpctl dns` refuses it proxied, a new name starting unproxied today (warp/warpctl/dns_cloudflare.go:259-261); its values live in vault, an external edit (owner decision 211) | recurd.dev, sidecar.ur.io |
 | W11 | warpctl dns, which derives only A and AAAA today (warp/warpctl/dns_route53.go:112-147), publishes `rpt.bringyour.com` (A and AAAA: W4's two interfaces; MX 10 itself) and `*._report._dmarc.rpt.bringyour.com` TXT "v=DMARC1" (§14.6) from M5, and from M9 the sending addresses' HELO names under bringyour.com (A; owner decision 124) | report host, smtpedge |
@@ -119,15 +124,23 @@ segment   16 x 16 TB HDD per host (1,024 TB raw):    EC:8    seg/, kind-5 (versi
 ```text
 state      entered when                                     left when
 protected  every drive online, no heal pending              -
-degraded   a drive or host offline, or a heal pending       a full heal of the cluster's bucket (mc admin heal
-           (MRF or scanner)                                 --recursive; cmd/admin-router.go:175-177) ends with
-                                                            every drive online
+degraded   a drive or host offline, or the set's            a full heal of the cluster's bucket (mc admin heal
+           partial-write queue (MRF) holding entries        --recursive; cmd/admin-router.go:175-177) ends with
+                                                            every drive online; or, if no drive or host was
+                                                            offline, the queue empties with no drop or unclean
+                                                            start since the last full heal
 at_risk    degraded and a further drive or host fails,      the failure is repaired and a full heal ends
            or a host offline for more than 4 h (the RTO)
-monitor derives each set's state every 30 s from MinIO's drive and heal status (admin API), as the gauge
-urnetwork_filecluster_set_state{cluster,set,state}, with no ids; a drive's rebuild alone (days per 16 TB)
-leaves its set degraded, not at_risk; MinIO's partial-write queue holds 100,000 entries and drops new ones
-when full (cmd/mrf.go:39, :94-97), so only a full heal restores everything a long outage missed
+monitor derives each set's state every 30 s from MinIO's drive and heal status (admin API) and the in-house
+build's export (D-OPS-20): per pool and set the partial-write queue's depth, its dropped entries and its unclean
+starts, since a crash loses the queue and only a shutdown saves it, and each cluster's last full heal time, as
+urnetwork_filecluster_mrf_depth{cluster,set}, urnetwork_filecluster_mrf_dropped_total{cluster,set} and
+urnetwork_filecluster_unclean_starts_total{cluster,set}; until that export and 19.8's node-metrics scrape land,
+the queue reads unknown, never empty (owner decision 496); a drop or an unclean start with every drive online
+warns and starts one full heal; the state is the gauge urnetwork_filecluster_set_state{cluster,set,state}, with
+no ids; a drive's rebuild alone (days per 16 TB) leaves its set degraded, not at_risk; MinIO's partial-write
+queue holds 100,000 entries and drops new ones when full (cmd/mrf.go:39, :94-97), so only a full heal restores
+everything a long outage missed
 ```
 
 - **Cost per usable TB** (owner decision 122, reviewed yearly; §20): the hosts, HDDs, PM9A3s and cold spare, depreciated monthly, with the site's power and rack, over ~512 TB usable; each next metadata cluster, with any hosts it adds, joins it.
@@ -202,17 +215,22 @@ mount     noatime, as today (playbook-minio-clusters.yml:104), since the scanner
 MinIO     unversioned metadata bucket with no lifecycle, replication or notifications; scanner speed=slow;
           MINIO_API_DELETE_CLEANUP_INTERVAL from §22.8's trash row, run with v1's versionless purges at year
           two's rate (30 s if it helps, else the 5 min default); MINIO_FS_OSYNC off; objects carry content-type
-          application/octet-stream and no user metadata
+          application/octet-stream and no user metadata, but for an idx/ entry's state while its head lists
+          sources (§11.7): the key entry-state, valued carried:<source epoch in decimal>, fresh or removed and
+          read by HEAD, so a prefix check stays a HEAD; no other family carries any
 deadline  the store request deadline §10.6 and §11.8 cite is 10 s on both clusters: the Blobs client cancels a
           request with no response 10 s after its last byte (a response body then streams), or earlier at the
           request's own deadline: evs's fold and taskworker's copy writes 15 s after issuing the head read they
           rely on (§11.7's stale row), taskworker's marker collection DELETEs 50 ms before until_ms by its
           clock (§11.7's collect row), and from v1 a drop job's DELETEs 50 ms before its lease's until_ms
           (§11.13); since MinIO keeps no server-side request deadline (requests_deadline is deprecated:
-          internal/config/api/api.go:81-84), every request but a streamed segment PUT also carries its
-          deadline, its own or 10 s after it is issued, as x-ur-deadline-ms (Unix ms by the sender's clock),
-          which the in-house build enforces (settle, below); a push with one timed-out round stays well inside
-          the lb's 30 s proxy_read_timeout (warp/warpctl/config.go:1320), and §11.12's shred waits, 20 s
+          internal/config/api/api.go:81-84), every request but a streamed segment or pack PUT also carries
+          its deadline, its own or 10 s after it is issued, as x-ur-deadline-ms (Unix ms by the sender's clock),
+          which the in-house build enforces (settle, below); a pack/ PUT, one per repo a run, is streamed
+          (PutStream with the pack's SHA-256) and settled 40 s after its last byte by (2), and taskworker cancels
+          one whose last byte has not gone 8 min after issue, the next run retrying the pack, so 5 s of cached
+          repo/, 8 min and 40 s stay inside §11.12's 10 min phase 6; a push with one timed-out round stays well
+          inside the lb's 30 s proxy_read_timeout (warp/warpctl/config.go:1320), and §11.12's shred waits, 20 s
           before keys and 10 min before the stragglers' pass, each outlast 5 s windows plus the deadline
 settle    a PUT or DELETE must take effect before every later request on its key or never, and never once the
           store took it, or would begin a drive commit of it, past its deadline; the deployed build gives
@@ -228,19 +246,21 @@ settle    a PUT or DELETE must take effect before every later request on its key
           stalled after its last check lands after that release; the in-house build (D-OPS-20) therefore, for a
           set of N drives, whose writes need N/2 + 1 and reads N/2 (5 and 4 of 8, 9 and 8 of 16; Parity, above):
           (1) refuses a request whose x-ur-deadline-ms has passed when it holds the key's lock; (2) sends each
-          drive commit (data or metadata rename, delete, heal, revert) the version the coordinator read from that
-          drive under the lock, or its absence, with the drive's stamp for the key (how many commits its process
-          had applied when it last applied one to the key, kept in memory for 2 min, with a value drawn at the
-          process's start), and a deadline fixed before that read: the request's, or, for a streamed segment PUT,
-          a heal or a revert, 40 s after its last byte or its start; the drive host, holding its own lock on the
-          key from that check through the commit rename, applies it only while the drive still holds that version
+          drive commit (a data or metadata rename, a metadata rename being RenameData with inline data, a
+          delete, a heal or a revert) the version the coordinator read from that drive under the lock, or its
+          absence, with the drive's stamp for the key (how many commits its process had applied when it last
+          applied one to the key, kept in memory for 2 min, with a value drawn at the process's start), and a
+          deadline fixed before that read: the request's, or, for a streamed segment or pack PUT, a heal or a
+          revert, 40 s after its last byte or its start; the drive host, holding its own lock on the key from
+          that check through the commit rename, applies it only while the drive still holds that version
           and that stamp, so only if no commit was applied to the key there since the read, and its clock is
           before the deadline, else answers stale and changes nothing; a DELETE of a key the drive lacks counts
           as committed and moves the stamp; (3) releases the key's lock once N/2 + 1 drives have committed the
           write (success; a later commit of it only adds a copy), or, once no more of its commits can begin
           (every drive answered, or its deadline passed), reverting every committed drive to its previous
-          xl.meta, or a DELETE's copy in .minio.sys/settle/<id>-<hash of the key>/, ciphertext and xl.meta, which
-          the settle sweep keeps at least 2 min and while the key is held, its interval checked to stay inside
+          xl.meta, or a DELETE's stash in .minio.sys/settle/<id>-<hash of the key>/, ciphertext and xl.meta, which
+          nothing wipes and the settle sweep keeps at least 2 min and while any lock server or local write holds
+          the key, its interval checked to stay inside
           §11.12's 10 min stragglers' pass (§2.8 evs-10), each version's xl.meta naming its write by
           x-minio-internal-settle-id, the key lock's random id, by (2)'s check, as the deployed build undoes a
           write short of quorum on every drive that took it (cmd/erasure-object.go:1059-1079), once the drives
@@ -248,25 +268,33 @@ settle    a PUT or DELETE must take effect before every later request on its key
           write can never be read and the version before it loses only the drives the write stalled on or could
           not revert; a DELETE, which leaves a drive in the one state every DELETE leaves, releases its key only
           once no drive may still hold it, each commit of it having answered and each that landed been reverted,
-          and is never reverted after its release; until then the key is held: requests on it wait, then fail
-          503; (4) keeps a dead coordinator's write locks, none expiring on a missed refresh, until a settler on
-          another host, past the request's deadline, reads each drive's version for the key, asks its host
-          whether a commit of the request still runs and settles by (3), a host that does not answer counting as
-          still committing; (5) serves a drive from a restarted process only once the old one has exited, by an
-          exclusive flock on the drive; (6) heals no version that fewer than N/2 drives hold onto others,
-          removing it as dangling; a DELETE carrying x-ur-if-unmodified-ms is refused 412, under the key's lock
-          and with nothing sent to a drive, when the object it finds was stored a second or more after that time,
+          and is never reverted after its release (owner decision 501); until then the key is held: requests on
+          it wait, then fail 503; (4) keeps a dead coordinator's write locks, none expiring on a missed refresh,
+          until a settler on another host, past the request's deadline, reads each drive's version for the key,
+          asks its host whether a commit of the request still runs and settles by (3), a host that does not
+          answer counting as still committing; (5) serves a drive from a restarted process only once the old one
+          has exited, by an exclusive flock on the drive; (6) heals no version that fewer than N/2 drives hold
+          onto others, removing it as dangling; UpdateMetadata and WriteMetadata carry no version and are not
+          settled: they run under the key's write lock with the clock rule and a 40 s deadline, and no sidecar
+          service calls them; a DELETE carrying x-ur-if-unmodified-ms is refused 412, under the key's lock and
+          with nothing sent to a drive, when the object it finds was stored a second or more after that time,
           and a missing key answers 204 as upstream's does; orphan GC, the nightly pass's container deletes and
           the sweep send it, which is how GC deletes only the object it listed (§11.13; owner decisions 203,
           225); so one drive or host failing holds a key at most for a revert's round trip, and a key waits
           longer only while a PUT lacking N/2 + 1 drives could still reach N/2, or a DELETE lacking them has a
           commit unanswered, with a host among those drives unreachable, until that host answers or its drives
-          are replaced (19.10, 19.17); §22.9's suite checks it (FS-114) per build, upgrade and cluster, reporting
-          the lag from a cancel to a write's last drive answer, which no margin relies on, since a marker's
-          collection DELETE (owner decision 148) and, from v1, the versionless purge's, the marker collection's
-          kind-5 and slot DELETEs (§11.7, §11.13) and a drop job's (§11.13) are unconditional; on a cluster whose
-          build has not passed it, taskworker opens no collection window, orphan GC deletes nothing and v1's
-          purge and drop jobs delete nothing, keeping markers and candidates
+          are replaced (19.10, 19.17); §22.9's suite checks it (FS-114) per build, upgrade and cluster,
+          reporting the lag from a cancel to a write's last drive answer, which no margin relies on, since a
+          marker's collection DELETE (owner decision 148) and, from v1, the versionless purge's, the marker
+          collection's kind-5 and slot DELETEs (§11.7, §11.13) and a drop job's (§11.13) are unconditional; a
+          cluster's build has passed it only while every host's build in the cluster's admin info equals
+          sidecar.yml's file_clusters.<cluster>.settle_passed_build (19.11), which the operator records once the
+          suite passes, an absent entry, unreadable admin info or a mismatch reading not passed, so an upgrade
+          reads not passed until recorded; on a cluster whose build has not passed it, taskworker opens no
+          collection window, orphan GC deletes nothing and v1's purge and drop jobs delete nothing, keeping
+          markers and candidates; a cluster in settle mode has at least 4 hosts: the build refuses to start a
+          one-process cluster so, naming the rule, and no settle path dereferences a nil lock server (owner
+          decision 504)
 list      a LIST is answered only when it is whole: the build asks every online drive of each set it reads,
           whatever list_quorum says, and answers 503 when three or more of a set's drives are offline, or one is
           while another heals, since a key on N/2 + 1 drives can then fall under the half of the asked drives a
@@ -276,6 +304,13 @@ list      a LIST is answered only when it is whole: the build asks every online 
           overwrite is in flight counts too: one an asked drive holds whose xl.meta read failed other than
           not-found is read again under the key's lock, or the LIST answers 503 rather than leave it out, so evs's
           listers, the fold's marker LIST among them, decide on no LIST that drops a key (owner decision 382)
+read      a read answers 404 only when a read quorum of the object's drives positively report it absent; a drive
+          offline, unreachable or not yet reconnected after a restart counts as unknown, never absent, so when the
+          drives reached make a read quorum neither for the object nor for its absence the build answers 503
+          (InsufficientReadQuorum): an acknowledged object that 3 drives hold, 1 lacks and 4 cannot reach reads
+          503, as does a read through a host whose data path has not reconnected; evs acts on a 404 as definite
+          (an absent head is a new ref, GC and evacuation take an absent object as gone, an outcome read after
+          an unknown PUT sends the bytes again) and never consults drive states (owner decision 511)
 clocks    chrony on every host running evs, gkm, taskworker, a Redis master or MinIO, by whose clocks
           §11.10's push sequence restarts and the settle row's deadlines hold (edge-6 and edge-5:
           xops/main/ansible/REDIS.md:3-6; none synced today, 19.3), serving NTP only to its services network,
@@ -293,14 +328,20 @@ clocks    chrony on every host running evs, gkm, taskworker, a Redis master or M
           monitor warning past 25 ms
 counters  each storage host exports, every 5 s, each metadata drive's /sys/block/<dev>/stat sectors written and
           writes completed (fields 7, 5) and each HDD's reads and writes completed (fields 1, 5), and hourly
-          its NVMe SMART log (data units written, percentage used, available spare, media errors), as
-          fluent-bit's diskstats input does on planetoid
-          (xops/main/ansible/host_files/planetoid/fluent-bit/fluent-bit.conf:20); MinIO's per-drive
-          writes_kb_per_sec cross-checks them
+          its NVMe SMART log (data units written, percentage used, available spare, media errors) on the
+          textfile path; xops's playbook-file-clusters.yml owns the hosts' Fluent Bit, as
+          playbook-minio-clusters.yml owns edge-5's: the shared process remote-writes to Mimir for monitor, with
+          19.8's MinIO node scrape and the SMART and clock textfiles, and a second process of its own unit, whose
+          one node_exporter_metrics input (diskstats and filesystem) is scraped every 5 s, serves the counters on
+          the host's storage-LAN address, port 2021, reachable only from taskworker hosts (owner decision 509);
+          the budget and hdd loops GET http://<host>:2021/metrics every 5 s with a 2 s timeout, reading
+          node_disk_written_bytes_total and node_disk_writes_completed_total per metadata drive and
+          node_disk_reads_completed_total and node_disk_writes_completed_total per HDD, a missing reading
+          publishing nothing; MinIO's per-drive writes_kb_per_sec cross-checks them
 budget    per metadata cluster, a taskworker loop holding a Redis lease drains §11.13's write budget only by the
           busiest drive's measured bytes, P0's included, skipping a drive under heal; a write moves at least one
           512 B sector, so the refill also caps the other classes' sustained writes at ~33,000 a second, 39% of
-          85k rated IOPS (§11.13), and writes completed feed monitor and §22.8, not the bucket; every 5 s it
+          85k rated write IOPS (§11.13), and writes completed feed monitor and §22.8, not the bucket; every 5 s it
           publishes {nvb_<set>} (15 s ttl: calibration, the bucket B, floored at zero, §11.13's allowance T as
           A_U for unfunded P2 and A1 for P1, and the funded P2 allowance A2 from the wallet W), splitting each
           across processes by what each evs, gkm, api and taskworker process reports in it every 5 s (§11.13's
@@ -314,9 +355,12 @@ budget    per metadata cluster, a taskworker loop holding a Redis lease drains �
           exactly, and with none (Redis lost) starts W and B at zero, which is conservative; heals, MRF and
           scanner writes are in the counters
 hdd       per segment cluster, a taskworker loop holding a Redis lease publishes every 5 s, in {nvb_<cluster>}
-          (15 s ttl), its drive operations a second (its HDDs' reads and writes completed over the last 5 s,
-          heals and the scanner included) and its capacity, the rate §22.8's M3 hdd run achieved on it by the
-          same counters; §11.13's per-network HDD admission, a drop job's pause (D-OPS-21), §22.8's M10 hdd
+          (15 s ttl) and as 19.8's urnetwork_filecluster_hdd_drive_ops{cluster} and
+          urnetwork_filecluster_hdd_capacity{cluster}, its drive operations a second (its HDDs' reads and writes
+          completed over the last 5 s, heals and the scanner included) and its capacity, the rate §22.8's M3 hdd
+          run achieved on it by the same counters, which sidecar.yml's file_clusters.<cluster>.hdd_capacity_ops
+          records (19.11); while that entry is absent, evs refuses no upload on HDD grounds and a drop job stays
+          paused; §11.13's per-network HDD admission, a drop job's pause (D-OPS-21), §22.8's M10 hdd
           run (19.11) and Q-OPS-2's switch each act past 50% of that capacity, with no network or repo id;
           admission refusals count in 19.8's urnetwork_evs_hdd_admission_refused_total{cluster}; beside the
           drive counters it reads, the loop sums the evs processes' PUT reports into 19.8's
@@ -376,12 +420,13 @@ No operator copy holds slots or wraps, so a committed erasure is immediate at th
 ```text
 what     the tables 19.7's groups create (columns they add to existing tables stay in the main dump), minus
          every table whose §2.8 ttl is <= 7 d, the list following that column (today tls_connection_record,
-         mail_connection_record, dns_zone_journal, network_acl_ack, network_scim_change, service_debit_journal,
-         service_usage_batch and admin_token_use), which no dump holds, so their published ttls hold in backups
-         too; the main dump's exclude list names every table the groups create; beside them, the network,
-         network_user (with its network_user_auth_* login rows) and network_client rows those tables name,
-         each named network's admin user included, so a network, member or sidecar newer than the main dump
-         keeps its id and rows (19.10)
+         mail_connection_record, dns_zone_journal, dns_custom_host_map, network_acl_ack, network_acl_share,
+         network_scim_change, service_debit_journal, service_usage_batch and admin_token_use, so an open share
+         invite is lost at a Postgres restore and is issued again), which no dump holds, so their published ttls
+         hold in backups too; the main dump's exclude list names every table the groups create; beside them, the
+         network, network_user (with its network_user_auth_* login rows) and network_client rows those tables
+         name, each named network's admin user included, so a network, member or sidecar newer than the main
+         dump keeps its id and rows (19.10)
 how      pg_dump -Fd -j4 of those tables, and COPY of the named rows in its exported snapshot (pg_dump
          --snapshot), from the primary as backup_dump (pg_read_all_data), every night, whatever the main dump
          does, since 19.10's postgres step reconciles the two; its snapshot pins the
@@ -419,14 +464,19 @@ Each migration group is named for the milestone whose code first reads it ungate
 
 ```text
 group   tables, by owning section
-MG0     §7's P0: network_client_owner; altered account_api_key and auth_code
+MG0     §7's P0: network_client_owner; altered account_api_key and auth_code; the competition's
+        competition_v2_source_graph_valid and competition_v2_source_authorized, replaced to pass a source
+        graph of ten keys or of eleven with sidecar (owner decisions 267, 503), a cleanup migration later
+        requiring eleven
 MG1     §5: sidecar_identity, sidecar_identity_binding; §7: network_auth_key, network_admin_event,
         admin_token_use (ur-cli's admin tokens), network_client_owner.client_public_key (nullable, §7.7);
         §18: network_client_lease; §20: network_sidecar_limit
-MG2     §8: network_acl_head, network_acl_ack, network_client.acl_subject_client_id;
+MG2     §8: network_acl_head, network_acl_ack, network_client.acl_subject_client_id; §12: dns_label alone,
+        allocated on first need (§12.5's GET /sidecar/label);
         §20: network_quota_state, network_service_usage, service_debit_journal, service_usage_batch
 MG3-4   none
-MG5     §12: dns_*, network_dns_*; §13: network_tls_*, tls_connection_*; §16: approval_use (§12.8's DNS
+MG5     §12: the rest of dns_*, network_dns_*; §13: network_tls_*, tls_connection_*; §14: smtp_complaint
+        and smtp_dmarc_daily, for the platform listener's report intake (19.4); §16: approval_use (§12.8's DNS
         gate); §21's seven
 MG6     §7's Team tables, network_team.scim_token_sha256 (nullable, §7.6) among them; §8: network_acl_share;
         §17: network_bridge_share;
@@ -435,7 +485,7 @@ MG6     §7's Team tables, network_team.scim_token_sha256 (nullable, §7.6) amon
         team_subscription (owner decision 199)
 MG7     §15: mail_network, mail_host_key, mail_direct_mx, mail_connection_record
 MG8     §7: network_client_owner.forward_only (owner decision 197); §18: sidecar_push_token
-MG9     §14: smtp_*
+MG9     §14: the rest of smtp_*
 ```
 
 **Migrations (D-OPS-6).** Versions continue after main's last, 926 on 2026-11-04 (server/db_migrations.go:235); the catalog keys identities by slice position and aliases the slice in an `init` (server/db_migration_catalog.go:27-42), so a registered group never changes:
@@ -448,25 +498,26 @@ pending   a group is registered in the migrations slice only by its own mileston
 builds    local, T3 and canary set the tag; release legs never do; the pending file's initializer panics unless
           server.Env() is local or canary or the binary is a test (testing.Testing()), as evaluation credential
           overrides refuse anything but WARP_ENV=local (server/env.go:1148-1155)
-promote   a Gn-out moves only its own group from the pending file into the slice, in order; canary databases
-          rebuild after each merge
+promote   a Gn-out moves only its own group from the pending file into the slice, in order; a canary's
+          databases, were its hosts bought, would rebuild after each merge (19.11)
 code      code reading a pending group's tables stays gated off (D-OPS-10) and unready without them (19.4)
 ```
 
 - Groups add tables, nullable columns and new-table indexes; existing tables get `newOnlineSqlMigration` indexes (server/db_migrations.go:50-52). `acl_subject_client_id` turns NOT NULL through a validated `NOT VALID` check (precedent :5961-5969).
 - The SQL and migrations of sidecar's own tables move from server into sidecar in the build's review phase: sidecar registers the migrations through its operator-core `Extension`, server/core runs them, and its stores reach Postgres only through the db a process's `Env` grants, which evs and gkm never get (§4.5; owner decision 251). Until then they live in server's files above.
-- Only `smtp_send` (daily, PK (send_day, send_id)), `tls_connection_record` and `mail_connection_record` (hourly) are partitioned, the last two's partitions UNLOGGED, so no physical copy holds them (19.6's copies row; owner decision 210). Cleanups wait for every database job (connect/CODESTYLE.md:88). Pools per process (config/main/db.yml): dns and smtpedge 4, others 2; locks stay transaction-scoped.
+- Only `smtp_send` (daily, PK (send_day, send_id)), `tls_connection_record` and `mail_connection_record` (hourly) are partitioned, the last two's partitions UNLOGGED, so no physical copy holds them (19.6's copies row; owner decision 210). Cleanups wait for every database job (connect/CODESTYLE.md:88). Pools per process (config/main/db.yml): dns and smtpedge 4, others 2, mxedge-platform's report intake among them; tlsedge and mxedge's router reach Postgres only through their restricted roles, from snapshot and batch goroutines and never a connection path (19.4, I-12; owner decision 495); locks stay transaction-scoped.
 
-**Redis (D-OPS-7).** Tags: `{scp_}`, `{wake_}` (§6, 19.4), `{wakeq_}`, `{tokgen_}` (§18.7), `{dpop_}` (§7), `{acl_}` (§8.9's `{acl_<networkId>}v`; §7.9's `{acl_<networkId>}e`, the verified projection cache, which only api writes (owner decision 136), and `{acl_<networkId>}q`, the append limits' 25 h counter), `{sg_}`, `{sn_}`, `{sc_}`, `{svc_}` (§9), `{gka_}` (§10), `{evsq_}`, `{evsl_}`, `{evsh_}`, `{evsc_}`, v1's `{evsd_}`, `{nvb_}` (§11), `{evsn_}` (§20.7's nightly count; owner decision 198), `{dns}` (§12), `{tes_}`, `{tcb_}` (§13), `{smq_}`, `{smg_}`, `{smd_}` (§14), `{mxr_}`, `{mxc_}` (§15), `{vhk}` (§13.9, §15.4: the daily visitor-hash keys, 25 h), `{sq_}` (§20). Every key is rebuildable: it projects Postgres or a cluster (the head and projection caches for 10 min, certs' budget from `network_tls_cert`, tokens per slot by taskworker's sentinel pass, drop hints by the nightly LIST of `drops/` within a day), returns by re-registration (leases, acks), restarts above its old values (the push sequence) or expires within 48 h (the write budget's allowance in 15 s, and its saved bucket, wallet and counter readings 48 h after the loop's last write, a lost one restarting the bucket and the wallet at zero, which is conservative); switches and halts reach Postgres first and reload within 60 s. The hint listener follows slot owners (`RunRedisShardSubscription`); caps (config/main/redis.yml): sockets 64, evs 32, others 16.
+**Redis (D-OPS-7).** Tags: `{scp_}`, `{wake_}` (§6, 19.4), `{wakeq_}`, `{tokgen_}` (§18.7), `{dpop_}`, `{sso_}`, `{oauthdev_}` and `{oauthuser_}` (§7, the last three 10 min and taken once; owner decision 508), `{acl_}` (§8.9's `{acl_<networkId>}v`; §7.9's `{acl_<networkId>}e`, the verified projection cache, which only api writes (owner decision 136), and `{acl_<networkId>}q`, the append limits' 25 h counter), `{sg_}`, `{sn_}`, `{sc_}`, `{svc_}` (§9), `{gka_}` (§10), `{evsq_}`, `{evsl_}`, `{evsh_}`, `{evsc_}`, v1's `{evsd_}`, `{nvb_}` (§11), `{evsn_}` (§20.7's nightly count; owner decision 198), `{dns}` (§12), `{tes_}`, `{tcb_}` (§13), `{smq_}`, `{smg_}`, `{smd_}` (§14), `{mxr_}`, `{mxc_}` (§15), `{vhk}` (§13.9, §15.4: the daily visitor-hash keys, 25 h), `{sq_}` (§20). Every key is rebuildable: it projects Postgres or a cluster (the head and projection caches for 10 min, certs' budget from `network_tls_cert`, tokens per slot by taskworker's sentinel pass, drop hints by the nightly LIST of `drops/` within a day), returns by re-registration (leases, acks), restarts above its old values (the push sequence) or expires within 48 h (the write budget's allowance in 15 s, and its saved bucket, wallet and counter readings 48 h after the loop's last write, a lost one restarting the bucket and the wallet at zero, which is conservative); switches and halts reach Postgres first and reload within 60 s. The hint listener rides §6.8's keyEventSubscriber, which re-reads the master set; caps (config/main/redis.yml): sockets 64, evs 32, others 16.
 
 ### 19.8 Observability and SLOs
 
 - **Metrics** (`urnetwork_<svc>_*`, server/grafana.go:1-21) keep 90 days, logs 7 (config/main/grafana.yml:31-38). Labels are route template, result, code, cluster and tier; logs are scrubbed (server/scrub.go:3-21) and carry opaque ids only (I-13, W8).
-- **Versionless (v1):** `urnetwork_evs_versionless_purged_bytes_total{by="commit"|"sweep"}`, `urnetwork_evs_versionless_staged_total{outcome="dropped"|"written"}`, `urnetwork_evs_versionless_purge_queue` and `urnetwork_evs_versionless_sweep_deletes_total{result="deleted"|"absent"}`, told apart by a HEAD before each sweep DELETE, since MinIO answers a DELETE 204 either way (cmd/object-handlers.go:2678-2691); the committing processes should delete nearly all, so the sweep's `deleted` share warns past 1% in a day (below).
-- **Drop history (v1):** `urnetwork_evs_drop_jobs{state}`, `urnetwork_evs_drop_scan_bytes_total{pass="preview"|"mark"|"verify"}`, `urnetwork_evs_drop_deletes_total{result="deleted"|"absent"|"packed"|"held"|"young"}` and `urnetwork_evs_drop_freed_bytes_total`; a job ending refused {verify} or {mismatch} pages as a storage-integrity alert. **HDD share:** `urnetwork_evs_hdd_admission_refused_total{cluster}` and `urnetwork_filecluster_hdd_puts{cluster}`, segment PUTs a second, summed from the evs processes' own reports and not from MinIO's request metrics (19.6's hdd row; owner decision 257). None carries a network or repo label.
-- **Write budget (§11.13):** per metadata cluster, with no network or repo label: `urnetwork_evs_budget_issued_bytes_total{cluster,class,kind}` (class p0, p1, p2_funded or p2_unfunded; kind, for P0 only, revocation, log, lifecycle, shred, erasure, remove or rotation); `urnetwork_evs_budget_p0_refill_ratio{cluster}`, P0's measured bytes over the last hour against that hour's refill, the P0 page's input (below); `urnetwork_evs_budget_bucket_bytes{cluster}`, B, never below zero, with `urnetwork_evs_budget_p0_forgiven_bytes_total{cluster,kind}`, P0's forgiven excess, its bytes past what B held, by P0's kinds, shown in drive-writes against the ~420 that five years at the refill leave under the drives' rating (19.6's wear row; owner decision 190); `urnetwork_evs_budget_liability_bytes{cluster,class}` and `urnetwork_evs_budget_drain_seconds{cluster,class}` at the last hour's rate, the wallet and the funded and unfunded backlogs among them; the busiest drive's `urnetwork_filecluster_drive_dwpd{cluster,window}` over 24 h, 7 d and 30 d and `urnetwork_filecluster_drive_rating_days{cluster}`, the days until SMART's percentage used reaches 100 at the 30-day rate; `urnetwork_evs_path_epoch_moves_left{cluster}`, `urnetwork_evs_path_epoch_sources{cluster,n}`, `urnetwork_evs_path_epoch_deferred{cluster}` and `urnetwork_evs_path_epoch_sources_full_total{cluster}` (§11.6); and each cluster's `urnetwork_filecluster_exhaustion_days{cluster,resource}` (raw, inodes, wear, copy), with the first cluster's `urnetwork_filecluster_control_plane_bytes` (19.9's cohorts row).
+- **Versionless (v1):** `urnetwork_evs_versionless_purged_bytes_total{by="commit"|"sweep"}`, `urnetwork_evs_versionless_staged_total{outcome="dropped"|"written"}`, `urnetwork_evs_versionless_purge_queue`, `urnetwork_evs_versionless_sweep_deletes_total{pass="evacuation"|"hold_end"|"turn_on",result="deleted"|"absent"}`, the results told apart by a HEAD before each sweep DELETE, since MinIO answers a DELETE 204 either way (cmd/object-handlers.go:2678-2691); the committing processes should delete nearly all, so the sweep's `deleted` share warns past 1% in a day (below); `urnetwork_evs_versionless_observed_total`, the ids the Purger and the sweep kept in observe mode (owner decision 507); and `urnetwork_evs_versionless_observe_total{result="clean"|"retained"}`, each observed candidate checked against every retained version, D-TEST-12's soak, which `sidecarctl evs observe-report` reads (owner decision 513).
+- **Drop history (v1):** `urnetwork_evs_drop_jobs{state}`, `urnetwork_evs_drop_scan_bytes_total{pass="preview"|"mark"|"verify"}`, `urnetwork_evs_drop_deletes_total{result="deleted"|"absent"|"packed"|"held"|"young"}` and `urnetwork_evs_drop_freed_bytes_total`; a job ending refused {verify} or {mismatch} pages as a storage-integrity alert. **HDD share:** `urnetwork_evs_hdd_admission_refused_total{cluster}`; `urnetwork_filecluster_hdd_drive_ops{cluster}` and `urnetwork_filecluster_hdd_capacity{cluster}`, in drive operations a second, from 19.6's hdd loop; and `urnetwork_filecluster_hdd_puts{cluster}`, segment PUTs a second, summed from the evs processes' own reports and not from MinIO's request metrics (19.6's hdd row; owner decision 257). None carries a network or repo label.
+- **Write budget (§11.13):** per metadata cluster, with no network or repo label: `urnetwork_evs_budget_issued_bytes_total{cluster,class,kind}` (class p0, p1, p2_funded or p2_unfunded; kind, for P0 only, revocation, log, lifecycle, shred, erasure, remove or rotation); `urnetwork_evs_budget_p0_refill_ratio{cluster}`, P0's measured bytes over the last hour against that hour's refill, the P0 page's input (below); `urnetwork_evs_budget_bucket_bytes{cluster}`, B, never below zero, with `urnetwork_evs_budget_p0_forgiven_bytes_total{cluster,kind}`, P0's forgiven excess, its bytes past what B held, by P0's kinds, shown in drive-writes against the ~420 that five years at the refill leave under the drives' rating (19.6's wear row; owner decision 190); `urnetwork_evs_budget_liability_bytes{cluster,class}` and `urnetwork_evs_budget_drain_seconds{cluster,class}` at the last hour's rate, the wallet and the funded and unfunded backlogs among them; the busiest drive's `urnetwork_filecluster_drive_dwpd{cluster,window}` over 24 h, 7 d and 30 d and `urnetwork_filecluster_drive_rating_days{cluster}`, the days until SMART's percentage used reaches 100 at the 30-day rate; `urnetwork_evs_path_epoch_moves_left{cluster}`, `urnetwork_evs_path_epoch_sources{cluster,n}`, `urnetwork_evs_path_epoch_deferred{cluster}` and `urnetwork_evs_path_epoch_sources_full_total{cluster}` (§11.6); and each cluster's `urnetwork_filecluster_exhaustion_days{cluster,resource}` (raw, inodes, wear, copy, and `hdd_ops`, `hdd_puts` and `gen_objects` from their 30-day trends), with the first cluster's `urnetwork_filecluster_control_plane_bytes` (19.9's cohorts row) and `urnetwork_filecluster_gen_objects{cluster}`, a gauge EVSB-M2-12's nightly pass sets from its gen/ count, with no group or repo label, kept in monitor's 30-day trend beside the cluster's objects.
+- **Protection states:** `urnetwork_filecluster_set_state{cluster,set,state}` and the in-house build's partial-write queue export, `urnetwork_filecluster_mrf_depth{cluster,set}`, `urnetwork_filecluster_mrf_dropped_total{cluster,set}` and `urnetwork_filecluster_unclean_starts_total{cluster,set}` (19.6's states; owner decision 496); each cluster's MinIO node metrics (`/minio/v2/metrics/node`) reach Mimir through a Fluent Bit scrape on the storage hosts, under `job file_cluster_minio` with a `cluster` label and a bearer token from vault.
 
-**Alerts and on-call (owner decisions 95, 134, 143).** One rota reviews §21's machine actions in business hours; they act at once and hold until reviewed. From M3, a pager service reaches the same rota out of hours for the page classes below; from M5 it also carries §21.8's registrar, registry and law-enforcement notices. 24/7 review starts in v1.
+**Alerts and on-call (owner decisions 95, 134, 143).** One rota reviews §21's machine actions in business hours; they act at once and hold until reviewed. From M3, a commercial pager service the owner picks, reached from outside the site, which owns rotas, acknowledgment and the 30-minute escalation, reaches the same rota out of hours for the page classes below (owner decision 498): monitor posts events with a dedup key through `pager.Sink`, a generic HTTPS event client, page bodies holding class, time and opaque ids only, never a network name, address or token, and §2.8's ext-13 lists the vendor; a fake sink models its policy at T3 for FS-50, and the out-of-hours drill proves the real one; from M5 it also carries §21.8's registrar, registry and law-enforcement notices. 24/7 review starts in v1.
 
 ```text
 page class (any hour)                            from   acknowledge   then
@@ -491,16 +542,25 @@ a drop job refused {verify} or {mismatch}        M10    30 min        19.10's dr
   (storage integrity)                                                 format2's drop to observe (19.11)
 a file-cluster key held over 1 min by a write    M3     30 min        19.10's held-key row: the host back, or
   that cannot settle (19.6's settle row)                              its drives replaced
+a drop job's list file failing its trailer or    M10    30 min        `sidecarctl evs drop-reindex <repo_id>
+  layout (drop_index_corrupt)                                         <job_id>` rewrites the job's list files
+                                                                      (owner decision 512)
 rota       two people on one pager service; the second is paged when the first has not acknowledged in 30 min;
-           registrar, registry and law-enforcement notices page both at once
+           registrar, registry and law-enforcement notices page both at once; a page class carries its hours,
+           any or business, and a business-hours page waits until the business calendar opens (model's
+           AbuseCalendar, abuse.yml's review hours, or the pager service's schedule once one is chosen), then
+           pages and resolves as usual, the pager's dedup and retry unchanged, one whose alert resolves first
+           being dropped (owner decision 498)
 business   a metadata drive's 7-day mean over 0.75 DWPD pages in business hours only, since the write budget
            holds 0.8 but for P0's excess, which pages at once (above; 19.10), as does a cluster whose projected
            exhaustion (19.9's cohorts row) falls within its move tool's lead time, or which reaches its cohort
            limit, and as does a drive projected, at its 30-day rate, to spend its rated endurance before five
-           years of service; one running NS failing SOA reads for 1 h pages in business hours too, since
-           certificate orders wait on it (§12.6; owner decision 418)
+           years of service, and a segment cluster whose projected hdd_ops or hdd_puts crossing (19.9's hdd row)
+           falls within that lead time; one running NS failing SOA reads for 1 h pages in business hours too,
+           since certificate orders wait on it (§12.6; owner decision 418)
 warn       each service's, every cluster's and the push sender's failures; §14's downgrade, breaker and
-           fail-open cases; a set degraded (19.6); shedding and HDD admission refusals (§11.13), and HDD
+           fail-open cases; a set degraded (19.6), and a partial-write drop or an unclean start with every
+           drive online (owner decision 496); shedding and HDD admission refusals (§11.13), and HDD
            refusals past 0.1% of a day's uploads; P0 over an hour past its warn line, which D-TEST-11 sets at
            four times the hourly share its run measures, at most half the refill; the write budget's bucket
            empty, P0's excess forgiven, for 5 minutes, or a busiest drive's last 24 h past 0.8 DWPD; a
@@ -509,9 +569,12 @@ warn       each service's, every cluster's and the push sender's failures; §14'
            write budget's bucket under 25%; SMART media errors or available spare under 10%; a multi-pool
            metadata cluster; a sidecar dump run skipped or aborted, or the newest verified off-site generation
            older than 26 h; a process's or Redis host's clock offset past 25 ms or unknown (19.6); v1's
-           versionless sweep's `deleted` share past 1% in a day; v1's drop job executing an hour with no scan
-           or delete progress while its cluster is under 50% of capacity and no candidate is young (19.10); 10%
-           of a 30-day budget burned in 6 h
+           versionless sweep's `deleted` share past 1% in a day; v1's purge on in the env's file for a day,
+           the observed count having risen before, with no pass="turn_on" DELETE in that day, the sign that
+           `sidecarctl evs purge-turn-on` was not run (owner decision 507); gen/ projected past 10% of a
+           cluster's objects within the next metadata cluster's lead time (19.9); v1's drop job executing an hour
+           with no scan or delete progress while its cluster is under 50% of capacity and no candidate is young
+           (19.10); 10% of a 30-day budget burned in 6 h
 ```
 
 **SLOs (D-OPS-9),** over 30 days, at all hours (owner decision 143):
@@ -628,9 +691,10 @@ sets needed in year two      endurance 4.7-5 (3.6-3.8 on 1 KiB), space at 50% 4.
 triggers                     the next metadata cluster at 50% raw, 40% inodes or a 0.5 DWPD 7-day mean on the
                              busiest drive (owner decision 136), or when monitor's 30-day trend projects one within
                              that cluster's lead time: at 19.6's estimate, at about 1.25x year one, or about 1.2x
-                             with v1's search index on 4 KiB blocks; §10.16's gen packs on a cluster once that trend
-                             puts its gen/ objects past 10% of its objects within the same lead time, which the
-                             rotation upper bound would reach in weeks
+                             with v1's search index on 4 KiB blocks; §10.16's gen packs on a cluster at its gen
+                             warn (19.8), when monitor's 30-day trend of urnetwork_filecluster_gen_objects projects
+                             its gen/ past 10% of its objects within the next metadata cluster's lead time, which the
+                             rotation upper bound would reach in weeks, §22.8's M2 count seeding the projection
 costs                        NVMe drive writes and objects, HDD bytes, IPv4, the cold spare
 ```
 
@@ -657,9 +721,9 @@ place     sidecar.yml's place_new (19.11) names the cluster that takes new repos
           point, which changes only with a later move tool
 first     place/, proj/, projrows/, rev/, hold/ and per-sidecar gkm/ objects stay on the first cluster, so its
           share keeps growing with networks and sidecars after it stops taking repos, and every cluster's writes
-          depend on it (rev/ checks, cold placement resolves; 19.10); their revocation writes are §11.13's P0
-          and the rest queue per network, so its own cohort's load sheds its own heaviest networks first, and
-          monitor tracks that share apart (cohorts, below)
+          depend on it (rev/ checks, cold placement resolves; 19.10); their rev/, proj/, projrows/ and hold/
+          writes are §11.13's P0 and the rest queue per network, so its own cohort's load sheds its own heaviest
+          networks first, and monitor tracks that share apart (cohorts, below)
 cohorts   a cluster's repos (its cohort) keep growing after place_new moves on, and only a move tool (19.18)
           moves them; monitor tracks per cluster its raw space, inodes, busiest drive's 7-day DWPD and copy load
           (path-epoch copies, above), each with its 30-day slope, the first cluster's control-plane share apart,
@@ -678,9 +742,9 @@ hdd       the segment cluster takes no pools either: a re-upload could pass If-N
           Q-OPS-2's HDD sets wait for §11.22's segment placement that keeps the receipt check and moves upload
           load, not only new repos; year two needs no added HDD space (19.6) but, by 19.6's model, added HDD
           drive operations, since its PUTs alone fill the 50% admission line, so the placement and the added
-          capacity are ordered when §22.8's hdd row's admitted throughput, or monitor's 30-day trend of HDD
-          drive operations, projects 50% of measured capacity within their lead time, and land before it;
-          neither a higher line nor refused uploads count as fit
+          capacity are ordered when monitor's 30-day trend of hdd_ops projects 50% of measured capacity, or its
+          30-day trend of hdd_puts projects §22.8's admitted throughput, within their lead time (§23.7), and
+          land before it; neither a higher line nor refused uploads count as fit
 tests     §22: two creates of one id racing at place/, a retried create, a second cluster that never receives
           a placed repo's objects, FS-63's refusal
 ```
@@ -705,8 +769,18 @@ format 2 rolled back       evs's and taskworker's blocks take                  d
 a dns edge, or a signing   resolvers retry the other NS; an edge keeps its      §12.6's runbook
   fault                    previous key set
 Postgres primary           the token exchange stops, so evs and gkm refuse     repair, or restore the newest dumps, then
-                           new sessions within 15 min; sockets and edges run   the reconcile steps below
-                           from Redis
+                           new sessions within 15 min; sockets runs about an   the reconcile steps below
+                           hour, its clients' projected fields then lapsing
+                           with nothing to re-project them, and answers
+                           unavailable (owner decision 497); the edges run
+                           from memory and Redis, one started meanwhile
+                           staying not ready until Postgres returns (owner
+                           decision 495)
+Postgres or PgBouncer      api answers a request whose connection it cut       none: a route whose effect may have
+  restart                  (SQLSTATE 08000, 08003, 08006, 57P01-57P03) 503     committed before the cut relies on its
+                           with Retry-After: 1, as a lock timeout, the cause   own idempotency (admin-token claims,
+                           in the log; other failures keep the fixed 500       sidecar push ids)
+                           (owner decision 505)
 the push sender, APNs or   wakes stop; clients resync (§6.8)                   restart
   FCM
 a host's clock or chronyd  while its offset is unknown or over 50 ms, evs      fix chrony's sources, or drain the host
@@ -717,18 +791,19 @@ a host's clock or chronyd  while its offset is unknown or over 50 ms, evs      f
                            writes (19.6, §11.8); a Redis host's offset only
                            warns
 file cluster               19.6's tables; on saturation or an exhausted write  heal; on any return, a full heal (mc admin
-                           budget, evs and gkm shed the heaviest network        heal --recursive), the set degraded until
-                           (§11.13)                                            it ends; a second host: within 1 h of the
-                                                                               page (19.8), move its drives into the cold
-                                                                               spare chassis or fit spare drives; past
+                           budget, evs and gkm shed the heaviest network       heal --recursive), the set degraded until it
+                           (§11.13); a partial-write drop or unclean start     ends, or, with no drive offline, until its
+                           with every drive online starts one full heal        queue empties; a second host: within 1 h of
+                                                                               the page (19.8), move its drives into the
+                                                                               cold spare chassis or fit spare drives; past
                                                                                half a set, re-seed (below); a drive over
                                                                                0.75 DWPD (7-day mean) or a budget shedding
-                                                                               for an hour: confirm the counters, check
-                                                                               for a heal or a runaway job, then order the
-                                                                               next metadata cluster (19.9), or, on a
-                                                                               cluster place_new no longer names, act on
-                                                                               19.9's cohorts row: the move tool's date,
-                                                                               then its cohort limit
+                                                                               for an hour: confirm the counters, check for
+                                                                               a heal or a runaway job, then order the next
+                                                                               metadata cluster (19.9), or, on a cluster
+                                                                               place_new no longer names, act on 19.9's
+                                                                               cohorts row: the move tool's date, then its
+                                                                               cohort limit
 a key held by a write      19.6's settle row: requests on the key wait, then   past 1 min (paged): bring the host back,
   that cannot settle       fail 503 (evs answers 503 unknown, gkm retries);    or replace its drives (the cold spare
                            the coordinator, or a settler on another host,      chassis or spare drives), after which
@@ -769,8 +844,9 @@ a drop job stuck           another taskworker takes it once its lease lapsed   r
 **Postgres-loss and site-loss recovery (D-OPS-14, D-OPS-18),** ordering §7.9's, §10.8's, §11.13's, §12.6's and §21.10's mechanisms; steps run in order, each idempotent, and a recovery's identity is its incident id; §22.8 drills both (FS-41, FS-42):
 
 ```text
-postgres   ops            restore the newest main dump, then the newest sidecar dump, setting dns_root.restoring
-                          as they load, before any block reads them (§12.6); the incident records both snapshot
+postgres   ops            first set sidecar.yml's restore_hold (19.11), before the primary answers; restore the
+                          newest main dump, then the newest sidecar dump, setting dns_root.restoring as they load,
+                          before any block reads them (§12.6); the incident records both snapshot
                           times (19.6), and the network, network_user (login rows included) and network_client
                           rows follow the newer dump:
                           sidecar newer  its rows replace the main dump's copy of each id, a user's login rows
@@ -786,10 +862,13 @@ postgres   ops            restore the newest main dump, then the newest sidecar 
                                          deactivated to re-enroll (§7.4)
                           rows the sidecar dump does not name come back as the main dump holds them, a deletion
                           after the main dump's snapshot undone (19.3); a network newer than both is lost with its
-                          rows, and taskworker takes each proj/ log whose network the restored rows lack down
-                          the deleted-network path: each repo the log names marked deleted{deletion_id = the
-                          incident id}, so §11.12 shreds it after 7 d, and the log's proj/ and projrows/
-                          objects deleted with the last shred, all listed in the incident
+                          rows, and taskworker's sidecar_restore_orphan_log job takes each proj/ log whose network
+                          the restored rows lack: the log's repos stay active, unreachable since the network's
+                          tokens are refused, and 7 d 10 min after the incident, the network's rows re-checked
+                          still absent (else it cancels), each moves active -> shredding{incident} with
+                          If-Match, which needs no signer, as a DELETE with now does, and §11.12 shreds it, the
+                          log's proj/ and projrows/ deleted after the last shred, all listed in the incident
+                          (owner decision 506)
 abuse      abuse role     next, at any hour (19.8's rota), before any block reads the restored rows: §21.10's
                           step re-applies, in mail order, every unexpired action and every lift the abuse
                           mailbox holds from after the sidecar dump, each record opened with the mailboxes'
@@ -804,7 +883,8 @@ dns        dns API        next, needing neither api nor the token exchange: §12
                           to restore_serial, and the RRsets and W1's custom hosts that changed listed in the
                           incident and each network's admin events, networks with open §21 cases flagged;
                           restoring then clears, so later dns writes commit above restore_serial
-api        api            next, before api's public routes, the token exchange and CreateContract reopen:
+api        api            next, behind restore_hold, before api's public routes, the token exchange and
+                          CreateContract reopen, its end clearing the hold:
                           verifies each network's proj/ entries past its restored network_acl_head as §7.9's
                           readers do, advancing the head (n, A_n, has_document), so a first policy document
                           filed after the dumps holds; re-applies §7.10's api effects, idempotent (§7.9), for
@@ -887,13 +967,16 @@ close      ops            after 30 days reseed turns off; admins learn which pro
 
 ### 19.11 Environments, gates, rollout
 
-**local:** all, in server/local (postgres:18, redis:8; README.md:36), plus MinIO, Pebble ACME, an SMTP sink and a test dns edge. **canary:** evs, gkm and sockets beside web and api (vault/canary/services.yml:36-47), stores rebuilt per merge; no edges or mail. **main:** all, dark first, edges and mail for internal networks and design partners until launch (owner decision 91); T6 on test roots and LE staging (§12.4). **community:** none.
+**local:** all, in server/local (postgres:18, redis:8; README.md:36), plus MinIO, Pebble ACME, an SMTP sink and a test dns edge. **canary:** none to build for (owner decision 499): config/canary/ was deleted in 2023 and no build leg or host serves it, so only its cheap parts are built (the `sidecar_pending` tag leg, a `config/canary/` a host could use, canary kept in `sidecarPendingAllowed`); no canary deploy counts as evidence, T3 and M2's staging cluster proving stores and hosts, and the tier leaves the design unless the owner buys hosts for it. **main:** all, dark first, edges and mail for internal networks and design partners until launch (owner decision 91); T6 on test roots and LE staging (§12.4). **community:** none.
 
 **Gates (D-OPS-10).** `config/<env>/sidecar.yml` is optional and inert when absent, like config/main/onboarding.yml:3-6:
 
 ```yaml
 sidecar:
-  evs: {enabled: false, writes: true, networks: [], percent: 0}
+  evs: {enabled: false, writes: true, networks: [], percent: 0, blocks: <n>}  # blocks: the env's evs block
+                             # count, set with services.yml's; each process paces a spent network's reads at
+                             # evs_unpaid_read_rate / blocks; none, or below 1, and an enabled block will not start
+                             # (19.4; owner decision 500)
   format2: {enabled: false, networks: [], percent: 0, purge: observe, drop: observe}  # §11.6: networks whose
                              # pushes may carry format 2, each repo migrating at its first such push; purge: observe
                              # logs each candidate and deletes nothing, purge: on deletes, after D-TEST-12's soak (§22),
@@ -910,6 +993,11 @@ sidecar:
                              # the edges' leases, taskworker's closes); on only once M6's Gn-out registers
                              # MG6's index (19.7), never off while a team_credit balance is in window
   reseed: false              # 19.10, site loss only
+  restore_hold: false        # 19.10's restore: while true, api answers every public route but its status route,
+                             # the token exchange among them, 503 with Retry-After 60, and connect's CreateContract
+                             # answers ContractError.Setup; open streams, sockets and edges run on, the dns and api
+                             # steps run as jobs behind it, the runbook's first step sets it and the api step's end
+                             # clears it; a reader that cannot read the file keeps its last answer
   place_new: meta-1          # 19.9: the metadata cluster that takes new repos; absent, the first
   drained: []                # W1: lb interfaces the dns edges and warpctl dns's <env>-lb sets leave out
   certs: {enabled: false}    # §13.15's two installs, api's and taskworker's: off, nothing of certs runs, so the
@@ -917,18 +1005,23 @@ sidecar:
   preview_networks: []       # §7.4 (D-PHASE-3): networks that enroll sidecars before stage 2
   sockets_control_qps: {rate: 50, burst: 500}  # §9.10 (D-SOCK-15), per process and calling client; edges: W2's 2,000 Finds/s
   urnetwork_edge: <network_id>                 # §6.10.1, §9.6: the urnetwork-edge platform network's id
+  revocation_record_enabled: false             # §9.8: session's revocation-record checks, which api and sockets read
+                             # here, a rollout switch and no secret, turned on before M5 (owner decision 497)
+  file_clusters: {<cluster id>: {settle_passed_build: <commit>, hdd_capacity_ops: <n>}}  # 19.6: the build that
+                             # passed the settle suite, recorded by the operator after filecluster-suite passes,
+                             # and the hdd run's measured capacity, published in {nvb_<cluster>}
 ```
 
-A network is in when listed or when hash(network_id) mod 100 < `percent`. A disabled service stays ready and answers 503 with Retry-After; `writes: false` is the incident switch. Services reread the file every 60 s; sidecars learn their set from §6's `core` topic.
+A network is in when listed or when hash(network_id) mod 100 < `percent`, hash(network_id) being the first 8 bytes of SHA-256 over the id's 16 bytes, big-endian, in one function every gate shares, the format2 gate's included. No key enforces §7.4's stage 1 or D-TEAM-14, which refuse in code from M1 whatever the file holds, so it carries no `p0_enforce` (owner decision 510). A disabled service stays ready and answers 503 with Retry-After; `writes: false` is the incident switch. Services reread the file every 60 s; sidecars learn their set from §6's `core` topic.
 
-**Classes (D-OPS-11).** Staged with `--only-older` (build/all/deploy-rollout.zsh:33): evs, gkm, sockets, dns (on Q-OPS-5's conditions), tlsedge, mxedge, mxedge-platform; single pass (:24): smtpedge, and `dnsedge` one host at a time. The staged list (:87) becomes `mmm lb taskworker api connect web app mcp dns gkm evs sockets tlsedge mxedge mxedge-platform`.
+**Classes (D-OPS-11).** Staged with `--only-older` (build/all/deploy-rollout.zsh:33): evs, gkm, sockets, dns (on Q-OPS-5's conditions), tlsedge, mxedge, mxedge-platform; single pass (:24): smtpedge, and the `dnsedge` class's two services one host at a time, `dnsedge-1` first, then `dnsedge-2` once Q-OPS-5's stop rule holds (the canary signature clean, the NS serials equal): server/cli/dnsedge builds one image, which build/all/run.sh imports under each name, as it does for manager to app (run.sh:3554), and warp's core does not change. Classes land at once, and each service joins `staged_services` only in the milestone its block lands, since `warpctl deploy` panics on a service with no blocks; the staged list (:87) becomes `mmm lb taskworker api connect web app mcp dns gkm evs sockets tlsedge mxedge mxedge-platform`.
 
 **Order** (§23 sets milestones; groups merge per 19.7):
-1. M0: MG0 (D-PHASE-3's early merge), with D-OPS-18's daily dump and the main dump's exclude list from its Gn-out, restore-drilled before M3's pilot; W5, on warp's `sidecar` branch (owner decision 196); W6; the hardware order (19.6; owner decisions 116, 136-139); HE's port-25 and reverse-delegation request (§14).
+1. M0: MG0 (D-PHASE-3's early merge), with D-OPS-18's daily dump and the main dump's exclude list from its Gn-out, restore-drilled before M3's pilot; W5, on warp's `sidecar` branch (owner decision 196), built but unused (owner decision 494); W6's recipe; the hardware order (19.6; owner decisions 116, 136-139); HE's port-25 and reverse-delegation request (§14).
 2. M1-M4: MG1-MG4; chrony on the evs, gkm, taskworker, Redis and storage hosts before evs serves (19.6); evs and gkm dark at M2 on a staging cluster on the production hosts, so they and their PM9A3 set arrive before M2's exit (D-TEST-11), rebuilt empty and SMART-rechecked before M3 under D-PHASE-7's data rule; then production (M3) with the write budget, the protection states and the pager (owner decision 143); W2, W8, publishers; W10 at RS1.
-3. M5: dns edges (W9), signed from the first deploy (owner decision 109), then the ur.network move (owner decision 13); sockets, certs and tlsedge with W1, W7 and the LE override; the platform listener with W11; the pager's notice class (19.8).
+3. M5: dns edges (W9), signed from the first deploy (owner decision 109), then the ur.network move (owner decision 13); sockets, once `revocation_record_enabled` is read from sidecar.yml and on (owner decision 497), certs and tlsedge with W1, W7 and the LE override; the platform listener with W11; the pager's notice class (19.8).
 4. M7: mxedge's router (W4); M8: the push sender; M9: smtpedge, once its PTR and HELO names resolve (W11).
-5. M10: after M10's Gn-out the `format2` gate opens to internal networks and design partners (percent 0), purge and drop in observe; purge turns on after D-TEST-12's soak and drop after D-TEST-18's; D-TEST-13's production confirmation runs while the gate holds percent at 0 (owner decision 174); only then does the gate open by percent (§23.9). §22.8's M10 `hdd` run uses a bucket of its own on the production segment cluster in a low-load window, under 19.6's 50% drive-operation pause, its bucket emptied after.
+5. M10: after M10's Gn-out the `format2` gate opens to internal networks and design partners (percent 0), purge and drop in observe; purge turns on after D-TEST-12's soak and drop after D-TEST-18's, which `sidecarctl evs observe-report <env>` prints from monitor's counter and the repos' drop tables, only reading, so turning them on stays an operator's act (owner decision 513); D-TEST-13's production confirmation runs while the gate holds percent at 0 (owner decision 174); only then does the gate open by percent (§23.9). §22.8's M10 `hdd` run uses a bucket of its own on the production segment cluster in a low-load window, under 19.6's 50% drive-operation pause, its bucket emptied after.
 
 ### 19.12 Alternatives considered
 
@@ -957,29 +1050,29 @@ A network is in when listed or when hash(network_id) mod 100 < `percent`. A disa
 
 **D-OPS-8 (proposed).** Metrics and logs carry no identifying labels, names or query strings (19.8). *Why:* I-13.
 
-**D-OPS-9 (proposed).** Adopt 19.8's SLOs and page classes, which page out of hours from M3 (owner decision 143); budget burn stops rollout steps. *Why:* each percent step needs a stop rule, and owner decisions 89 and 116's 4 h RTO a responder at any hour.
+**D-OPS-9 (proposed).** Adopt 19.8's SLOs and page classes, which page out of hours from M3 (owner decision 143) through a commercial pager service (owner decision 498); budget burn stops rollout steps, as does a burn state monitor cannot read, an operator overriding a stop by name. *Why:* each percent step needs a stop rule, and owner decisions 89 and 116's 4 h RTO a responder at any hour.
 
-**D-OPS-10 (proposed).** Gates and the placement target live in `config/<env>/sidecar.yml`. *Why:* §4.8 merges code dark, and a new cluster takes repos without a deploy.
+**D-OPS-10 (proposed).** Gates, the placement target, the restore hold and the owner's switches live in `config/<env>/sidecar.yml`. *Why:* §4.8 merges code dark, and a new cluster takes repos without a deploy.
 
 **D-OPS-11 (proposed).** Classify and order releases per 19.11. *Why:* an unclassified service exits 64.
 
-**D-OPS-12 (proposed).** A builder job renews platform certificates at two thirds of their lifetime (lego v5, ARI, RFC 9773), and W5 reloads them. *Why:* manual renewal (xops/certs/renew.md:3-20) fails at 45-day lifetimes, due 2028-02-16 (https://letsencrypt.org/2025/12/02/from-90-to-45/).
+**D-OPS-12 (proposed).** A builder job renews platform certificates at two thirds of their lifetime, by ARI, with goacme/lego v4.35.2, the release `warpctl certs issue` runs, both commands moving together to lego v5, the target, with RFC 9773's `replaces`, once someone allowed to fetch it has read its CLI (owner decision 502); the daily lb deploy brings them, W5's swap built but unused (owner decision 494). *Why:* manual renewal (xops/certs/renew.md:3-20) fails at 45-day lifetimes, due 2028-02-16 (https://letsencrypt.org/2025/12/02/from-90-to-45/).
 
 **D-OPS-13 (withdrawn).** Superseded by owner decision 34: no dedicated mail or tlsedge addresses.
 
-**D-OPS-14 (proposed).** Durability is 19.6's, judged per object by the shards it holds: quorum writes, the protection states, the cold spare and D-OPS-18's daily sidecar dump off site. Postgres and site loss take 19.10's restore. *Why:* owner decisions 89, 90 and 94 leave devices and dumps as the only copies, and 116 adds the spare.
+**D-OPS-14 (proposed).** Durability is 19.6's, judged per object by the shards it holds: quorum writes, the protection states, which the in-house build's partial-write queue export lets leave `degraded` (owner decision 496), the cold spare and D-OPS-18's daily sidecar dump off site. Postgres and site loss take 19.10's restore. *Why:* owner decisions 89, 90 and 94 leave devices and dumps as the only copies, and 116 adds the spare.
 
 **D-OPS-15 (proposed).** Addresses and dns edges follow 19.4 and 19.5. *Why:* owner decisions 34, 69, 71, 123 and 124; RRL needs resolver addresses.
 
-**D-OPS-16 (proposed).** The Redis bundles leave out 19.7's sidecar families: bringyour-backup.sh filters them from each node's rdb before sealing (xops/main/ansible/host_files/by-us-fmt-5-edge-6/backup/bringyour-backup.sh:8-13). *Why:* they rebuild or expire within 48 h; no backup may outlive a published ttl (D-TRUST-7).
+**D-OPS-16 (proposed).** The Redis bundles leave out 19.7's sidecar families: bringyour-backup.sh filters them from each node's rdb before sealing (xops/main/ansible/host_files/by-us-fmt-5-edge-6/backup/bringyour-backup.sh:8-13), loading each dump into a scratch redis-server of the pinned version, deleting the families, saving, then compressing, one node at a time and publishing nothing on any failure; its prefixes follow 19.7's tags, `{sso_}`, `{oauthdev_}` and `{oauthuser_}` among them (owner decision 508). *Why:* they rebuild or expire within 48 h; no backup may outlive a published ttl (D-TRUST-7).
 
-**D-OPS-17 (proposed).** Size the metadata tier by drive writes, objects and bytes, which §22.8's runs measure per push, per object and in records per batch per cluster; owner decision 136's triggers (50% raw, 40% inodes, 0.5 DWPD), or monitor's projection of one within the lead time, order the next metadata cluster (owner decision 145), on new hosts after the second (19.9); each cluster that no longer takes repos is planned by its own cohort's projection (19.9's cohorts row), which dates the move tool. HDD sets join only through a segment placement that keeps §11.13's receipt check and moves upload load, never as a pool, ordered by 19.9's hdd trigger ahead of year two's HDD load, whose PUTs alone fill the 50% admission line by 19.6's model. *Why:* every drive takes every write, endurance binds before IOPS (owner decision 140), a pool checks preconditions only inside itself (19.9), and placed repos never move without the tool (owner decision 145), so free space elsewhere relieves no cohort; refused uploads are not throughput.
+**D-OPS-17 (proposed).** Size the metadata tier by drive writes, objects and bytes, which §22.8's runs measure per push, per object and in records per batch per cluster; owner decision 136's triggers (50% raw, 40% inodes, 0.5 DWPD), or monitor's projection of one within the lead time, order the next metadata cluster (owner decision 145), on new hosts after the second (19.9); each cluster that no longer takes repos is planned by its own cohort's projection (19.9's cohorts row), which dates the move tool. HDD sets join only through a segment placement that keeps §11.13's receipt check and moves upload load, never as a pool, ordered by 19.9's hdd trigger, monitor's trends of `hdd_ops` and `hdd_puts`, ahead of year two's HDD load, whose PUTs alone fill the 50% admission line by 19.6's model. *Why:* every drive takes every write, endurance binds before IOPS (owner decision 140), a pool checks preconditions only inside itself (19.9), and placed repos never move without the tool (owner decision 145), so free space elsewhere relieves no cohort; refused uploads are not throughput.
 
 **D-OPS-18 (proposed).** The tables 19.7's groups create, with the network, user and client rows they name, have a daily, off-site dump from MG0's Gn-out, and the main dumps exclude those tables (19.6); the primary's physical working copies, edge-6's `pg-base` and edge-5's `main-pgbase-<date>`, are each refreshed or destroyed within 7 d, and the 24 h edge records' partitions are UNLOGGED (owner decision 210). *Why:* owner decisions 2 and 18 moved storage, not identity, naming, mail routing, abuse or billing, out of Postgres; owner decision 94 bars an off-site copy of the file clusters, not of these rows; and the named rows keep a network newer than the twice-weekly main dump attached to its rows, log and repos.
 
 **D-OPS-19 (proposed).** The metadata set runs 19.6's XFS and MinIO settings, and each storage host exports its metadata drives' write counters and SMART wear, and its HDDs' operation counters, to monitor, §11.13's write budget and its HDD share (19.6). *Why:* the drives' endurance is the binding budget, and only drive counters measure it (owner decision 140); the HDD sets' operations bind before their space (Q-OPS-2).
 
-**D-OPS-20 (proposed).** Both clusters run an in-house MinIO build, from the `urnetwork/minio` fork's `sidecar` branch (owner decision 195), with 19.6's deadline and settle rules: every request but a streamed segment PUT carries its deadline, which the build checks where it takes the key's lock and at each drive commit; each drive commit applies only while no commit was applied to its key on its drive since the coordinator read it under the lock; a PUT releases its key only once it holds a write quorum or can never reach a read quorum, and a DELETE only once it holds a write quorum or no drive holds anything of it, each reverting every drive that took it, another host settling a dead coordinator's write; a DELETE may name the LastModified of the object it means, as GC's do (owner decisions 203, 225); and a LIST is answered only when it is whole (owner decision 226). *Why:* in the deployed build a cancel reaches no drive on another host and the lock is released first, and even a lock held to the 30 s drive timeout releases a commit that stalled after its last check, so a cancelled or timed-out write can land after a later request on its key read it or passed its precondition, breaking §11.7's marker collection, v1's versionless purge and drop jobs (§11.13) and every conditional write's atomicity; absence is not a version, so a drive's contents alone cannot tell a commit from before a DELETE from one after it, nor one failed DELETE's leavings from another's; holding a key while such a write settles is the cost, paid only when a host fails during a write that has not reached its write quorum; a fork, not a patch series in warp, keeps MinIO's AGPL source in one public place.
+**D-OPS-20 (proposed).** Both clusters run an in-house MinIO build, from the `urnetwork/minio` fork's `sidecar` branch (owner decision 195), with 19.6's deadline and settle rules: every request but a streamed segment or pack PUT carries its deadline, which the build checks where it takes the key's lock and at each drive commit; each drive commit applies only while no commit was applied to its key on its drive since the coordinator read it under the lock; a PUT releases its key only once it holds a write quorum or can never reach a read quorum, and a DELETE only once it holds a write quorum or no drive holds anything of it, each reverting every drive that took it, another host settling a dead coordinator's write; a DELETE may name the LastModified of the object it means, as GC's do (owner decisions 203, 225); a DELETE's stash stays in `.minio.sys/settle`, which nothing wipes, until its key is released; a LIST is answered only when it is whole (owner decision 226), and a read answers 404 only on a read quorum's absence, else 503 (owner decision 511); it exports each set's partial-write queue (owner decision 496); and it refuses to start a one-process cluster in settle mode (owner decision 504). *Why:* in the deployed build a cancel reaches no drive on another host and the lock is released first, and even a lock held to the 30 s drive timeout releases a commit that stalled after its last check, so a cancelled or timed-out write can land after a later request on its key read it or passed its precondition, breaking §11.7's marker collection, v1's versionless purge and drop jobs (§11.13) and every conditional write's atomicity; absence is not a version, so a drive's contents alone cannot tell a commit from before a DELETE from one after it, nor one failed DELETE's leavings from another's; holding a key while such a write settles is the cost, paid only when a host fails during a write that has not reached its write quorum, and for a DELETE stalled on a frozen host until that host answers or its drives are replaced, which only background jobs' unconditional DELETEs pay (owner decision 501); a fork, not a patch series in warp, keeps MinIO's AGPL source in one public place.
 
 **D-OPS-21 (proposed).** Drop jobs are P2 taskworker work, one per segment cluster at a time, each reading at most 32 MB/s and deleting at most 10 objects a second, paused while HDD drive operations exceed 50% of measured capacity (19.6). *Why:* owner decision 173's scan of every ref must not starve customers' reads or the HDD sets' heal and evacuation.
 
@@ -991,7 +1084,7 @@ A network is in when listed or when hash(network_id) mod 100 < `percent`. A disa
 
 **Q-OPS-2.** Cross-cutting (§10.6, §11.13). Should small objects pack? Y2's HDD mix needs ~32,000 drive operations a second against ~8,000-12,800 (19.6). **Closed by peer review 2026-11-04:** (b) in v0, with (a) a switch: format 1 freezes content-id segment ids, the reserved `spidx/` family and lookup order, and reserved locator kinds 3 and 4, never a physical address; after §22.8's `hdd` row (M3), (a) turns on for segments under 1 MiB and older than 7 days, never kind-5 segments, which stay deletable one by one, once HDD drive operations pass 50% of measured capacity; ~25,600 of Y2's ~32,000 drive operations a second are GETs, which packing does not reduce, so the page cache serves most and (c) HDD sets per D-OPS-17 the rest, which must land before year two's load, since its PUTs alone (~6,400) fill the 50% admission line (19.6, 19.9's hdd trigger); history leaves the batches hourly, so each day everything older than 24 h leaves them (owner decision 136), and a small repo's parcels within 7 d; gkm's `gen/` takes §10.16's gen packs, which keep every generation for the repo's life (D-KEYS-20), count as gen/ for shreds, their 10-minute repeat and re-seeds, and hold no slot, so erasure is unchanged; they start on a cluster at 19.9's gen trigger, projected from §22.8's M2 count. *Residual:* 19.9's hdd trigger, from §22.8's admitted hdd run.
 
-**Q-OPS-3.** Where does Postgres-held sidecar metadata live without a replica? **Decided by owner 2026-11-03 (implied by owner decisions 2, 18):** moot for storage, which left Postgres. **Closed by peer review 2026-11-04:** D-OPS-18 and 19.10's reconcile: the sidecar rows, which are not storage, and the network, user and client rows they name take a daily off-site dump, so they come back to ≤ 24 h at a primary's loss and ≤ 26 h at the site's while each nightly run completes, a day more per skipped run, whatever the main dump's age; the platform's other rows come back to the main dump's (19.3). *Residual:* none.
+**Q-OPS-3.** Where does Postgres-held sidecar metadata live without a replica? **Decided by owner 2026-11-03 (implied by owner decisions 2, 18):** moot for storage, which left Postgres. **Closed by peer review 2026-11-04:** D-OPS-18 and 19.10's reconcile: the sidecar rows, which are not storage, and the network, user and client rows they name take a daily off-site dump, so the dumped sidecar rows (a table whose ttl is at most 7 d is in no dump) come back to ≤ 24 h plus the run (≤ 20 min) at a primary's loss and ≤ 26 h at the site's while each nightly run completes, a day more per skipped or aborted run, whatever the main dump's age; the platform's other rows come back to the main dump's (19.3). *Residual:* none.
 
 **Q-OPS-4.** Where are edges and mail tested? **Decided by owner 2026-11-03 (owner decision 91):** (b), dark in main for internal networks and design partners, no canary stage. *Residual:* none.
 
@@ -1013,10 +1106,10 @@ None: owner decisions 18, 94 and 145 keep MinIO, in new clusters (PLAN.md:61).
 
 ### 19.16 Interfaces
 
-- **Provides:** 19.4-19.11's blocks, push sender, W items, addresses, clusters and their growth, the store request deadline and settle rule, host clocks and each process's offset, protection states, drive counters and SMART wear, the `{nvb_<set>}` allowances, accounts and wallet, the class liabilities, each cluster's cohort projection and limit, and each segment cluster's drive operations and capacity, the sidecar dump, recovery, gates (`format2`'s purge and drop modes included), pager, SLOs, runbooks.
+- **Provides:** 19.4-19.11's blocks, push sender, W items, addresses, clusters and their growth, the store request deadline, settle rule and read rule, host clocks and each process's offset, protection states, drive counters and SMART wear, the `{nvb_<set>}` allowances, accounts and wallet, the class liabilities, each cluster's cohort projection and limit, and each segment cluster's drive operations and capacity, the sidecar dump, recovery, gates (`format2`'s purge and drop modes included), pager, SLOs, runbooks.
 - **Consumes:** engines (§4, §9-§15); §7.8's `rev/` and re-seed mode; §7.9's log, verified cache and site-loss resumption; §8.9; §10.6, §10.8, §10.16's gen packs; §11.8's placement and clock rule, §11.13's mix, write budget, HDD share, v1's purge, sweep and drop jobs and the search index's costs; §11.14's search index; §16.11's directory; §12.6's restore step and `/dns/internal/reload-diff`; §13.4; §14.6; §15.4; §18.7; §20's jobs and draw order; §21's tables, `hold/`, intake and abuse mailbox (§21.10); §22's tests; X15 (§23).
 - **Subprotocol messages:** none. **API routes:** none new but §8.9's internal `/internal/gate/` routes and §20.14's quota routes on them, which take a caller class's bearer and no client token. **Tables:** none owned; 19.7 summarizes; the push sender reads `{scp_<C>}tok`, `{scp_<C>}tokrev`, `{scp_<C>}ack` and `{wakeq_<shard>}`, and taskworker reconciles tokens per hash slot by `{tokgen_<n>}` and re-applies changed rows each pass (19.4; §18.7's steps 5 and 6).
-- **Services and config:** services.yml blocks, two dns edge hosts; `sidecar.yml` (gates, `place_new`, `drained`, `preview_networks`, `sockets_control_qps`, `urnetwork_edge`); `db.yml` and `redis.yml` caps; vault JWKS, ZSK, APNs, FCM and feed credentials, the gate caller classes' bearers and the sockets ticket key file, which `sidecarctl sockets ticket-keygen` writes every 30 days (§9.8); receipt keys in evs's secret files; D-OPS-20's MinIO build from `urnetwork/minio`; xops's `file-clusters` with 19.6's XFS and MinIO settings, the storage hosts' diskstats exporter, chrony on the evs, gkm, taskworker, Redis and storage hosts with the Redis hosts' offset exporter, the daily sidecar dump, the main dump's exclude list and planetoid's pg-sidecar stream (D-OPS-18), the bundle filter (D-OPS-16); the pager.
+- **Services and config:** services.yml blocks, two dns edge hosts; `sidecar.yml` (gates, evs's `blocks`, `place_new`, `drained`, `preview_networks`, `sockets_control_qps`, `urnetwork_edge`, `restore_hold`, `revocation_record_enabled`, `file_clusters`); `db.yml` and `redis.yml` caps; vault JWKS, ZSK, APNs, FCM and feed credentials, the gate caller classes' bearers and the sockets ticket key file, which `sidecarctl sockets ticket-keygen` writes every 30 days (§9.8); receipt keys in evs's secret files; D-OPS-20's MinIO build from `urnetwork/minio`; xops's `file-clusters` with 19.6's XFS and MinIO settings, the storage hosts' Fluent Bit and their 5 s counter process, chrony on the evs, gkm, taskworker, Redis and storage hosts with the Redis hosts' offset exporter, the daily sidecar dump, the main dump's exclude list and planetoid's pg-sidecar stream (D-OPS-18), the bundle filter (D-OPS-16); the pager service and `pager.Sink`; each block's own credential files (`file-clusters-<service>.yml`, `grafana-push-<service>.yml`, `pg-<service>.yml`) and its fragment in `warp/services/sidecar-blocks/`.
 - **Assumptions about other sections:** §7.8's re-seed mode mints only `repo:<id>:admin` for evs's `/reseed` and gkm's GroupForm, which §11.12 also admits for a repo re-seeded as deleted; §7.9 resumes the log from member devices' verbatim entries, each adopted once two members' devices hold it, FS-41 checks that readers see no FORK, that one member's forged TICK takes no position and that a Team whose other members hold only read_only devices resumes, and FS-42 restores both dumps in each order of their snapshot times, keeping the newer one's rows, and checks that revocations between or after the dumps hold once api's replay ends, their TLSA (M7) and DKIM selectors (M9) gone, that a network newer than both takes the deleted-network path, that actions and lifts mailed after the dump hold (§21.10), and that a dns write, an ACME challenge, an NS that missed the SOA read and a custom host after the restore behave as 19.10's dns step says, which runs §12.6's restore step; §10.6, §11.7, §11.8 and v1's purge and drop jobs (§11.13) rely on 19.6's request deadline, which the Blobs client sends as x-ur-deadline-ms, and its settle rule, which §22's suite checks (FS-114); §11.13's HDD admission and drop jobs read 19.6's published HDD drive operations and capacity, and the versionless sweep HEADs each candidate before its DELETE (19.8); while 19.6's clock offset is unknown or over 50 ms, §11.8's evs answers pushes 503, and taskworker raises no evacuation fence and GC deletes nothing; §11.10's restarted push sequence relies on 19.6's chrony on the Redis hosts; §20.9's draw sites read `escrow_draw_order`; §11.8 places new repos on `place_new`, and §11.22 lists a segment placement that keeps the receipt check before any added HDD set (19.9); §11.13's accounts debit P1 admissions from A1 at full price, moving their deferred P2 work into the wallet W, funded P2 spending only W and P1 and unfunded P2 only T, while P0 issues at once, its measured bytes draining the bucket down to its floor at zero, past which they are its forgiven excess (owner decision 190), and no other class issues while the bucket is empty; §10.6's acks and §11.10's leases and push sequence live in Redis; §18.7's trigger feeds `{wakeq_<shard>}`, and its sentinel pass re-projects the slots of a master lost or restarted; §21.8 feeds 19.8's pager; §22.8 measures §11.13's mix, §10.6's sizes, bytes per object and push, records per batch per cluster, and rotations and path-epoch copies, expiry-driven ones included, and its `hdd` row the segment cluster's capacity by 19.6's HDD counters; HE allows port 25.
 
 ### 19.17 Risks
@@ -1032,11 +1125,11 @@ None: owner decisions 18, 94 and 145 keep MinIO, in new clusters (PLAN.md:61).
 | Placement moves only new repos, so a cluster's repos (its cohort), or the first cluster's control plane, can outgrow it before a move tool exists while new clusters stand mostly empty (owner decision 145) | Medium | High | triggers stop new repos with over a third of the budget and half the space left; shedding; 19.9's cohorts row projects each cluster's own exhaustion and builds the move tool before the earliest, and until then holds a cluster at 80% raw or 70% inodes to maintenance (507 CLUSTER_FULL); FS-119 drills it |
 | A pool on a metadata cluster breaks conditional writes (§11.3) | Low | Critical | no pools (owner decision 145); §22's suite refuses one (FS-63); monitor warns |
 | A cancelled or timed-out write lands after a later request on its key read it or passed its precondition, as the deployed MinIO allows (19.6's settle row), so a CAS loses its atomicity, or §11.7's collection or v1's purge (§11.13) deletes a live object | Low | Critical | D-OPS-20's build: deadlines checked where a request takes its key and at each drive commit, each commit applied only if no commit reached its key on that drive since its coordinator read it, and a key released only at a write quorum or once the write can never be read, a DELETE's once no drive holds it, a dead coordinator's write settled from another host; §22.9's suite and FS-114 per build, upgrade and new cluster, with commits held past 30 s and the coordinator killed; StoreSettle.tla; collection, purge and drops wait on a build that has not passed |
-| A write that cannot settle holds its key: a PUT lacking a write quorum that could still reach a read quorum, or a DELETE lacking one with a commit unanswered, with a host among its drives unreachable, keeps requests on the key waiting, then failing 503 (evs answers unknown), until the host answers or its drives are replaced (19.6's settle row) | Low | Medium | it needs a write mid-commit as a host fails after committing; reverts reach every reachable drive at once; ordinary drive and host failures hold no key; paged past 1 min (19.8); 19.10's held-key row |
+| A write that cannot settle holds its key: a PUT lacking a write quorum that could still reach a read quorum, or a DELETE lacking one with a commit unanswered (owner decision 501), with a host among its drives unreachable, keeps requests on the key waiting, then failing 503 (evs answers unknown), until the host answers or its drives are replaced (19.6's settle row) | Low | Medium | it needs a write mid-commit as a host fails after committing; reverts reach every reachable drive at once; ordinary drive and host failures hold no key; paged past 1 min (19.8); 19.10's held-key row |
 | A second failure lands while a set is degraded, before its heal ends | Medium | High | `at_risk` pages; full heal on every return; M3's drill measures heal time |
 | Y2's HDD load passes the 50% admission line: by 19.6's model its PUTs alone (~6,400 drive operations a second) fill it before any GET, and HDD sets cannot be pools (19.9) | High by the model | High | §22.8's hdd row runs the mix with admission on, reporting admitted throughput and refusals (M3); 19.9's hdd trigger lands the segment placement and the added capacity before that load; §11.13's HDD share past 50% of 19.6's published capacity; Q-OPS-2 (a) |
 | Site loss destroys data no device holds | Low | Critical | mirrors (D-EVS-17), spools, D-OPS-18's dump, §22.8's drill |
-| The Postgres primary is lost: the token exchange, and with it new evs and gkm sessions, stops until the platform's restore and 19.10's reconcile end, with no RTO target, and a few hours of that spend many months of the 99.9% SLOs' 43 min per 30 days (19.8) | Low | High | paged at any hour (19.8); FS-42 drills the reconcile per Gn-out from M3; sockets and edges keep running from Redis (19.10) |
+| The Postgres primary is lost: the token exchange, and with it new evs and gkm sessions, stops until the platform's restore and 19.10's reconcile end, with no RTO target, and a few hours of that spend many months of the 99.9% SLOs' 43 min per 30 days (19.8) | Low | High | paged at any hour (19.8); FS-42 drills the reconcile per Gn-out from M3; sockets keeps running about an hour and the edges from memory and Redis, an edge restarted meanwhile waiting for Postgres (19.10; owner decisions 495, 497) |
 | The out-of-hours rota misses a page | Low | High | two-person rota with escalation at 30 min; FS-50's drill per Gn-out from M3 |
 | The split slows connect's H1 path or fails fleet-wide | Low | High | §13.4's bench, drained per-interface rollout, probes |
 | A site or HE outage, or a flood, stops both NS, ACME DNS-01, DANE and inbound mail; paged out of hours, it can still outlast senders' retries (14 h to 5 d, §15.3) (accepted, owner decisions 123, 143) | Medium | Critical | separate blocks and hosts, RRL |

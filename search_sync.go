@@ -35,7 +35,7 @@
 // followed, so through a rebuild it serves i1 until i2 replaces it; a ref whose only root is newer has no snapshot
 // and reads status update. A newer root's files are another build's and raise nothing.
 //
-// Barriers (testHookBarrier), keyed <repo>/<ref>: search.sync.replayed, .fetched (a file), .tables (the version table
+// Barriers (testHookBarrier), keyed <repo>:<ref>: search.sync.replayed, .fetched (a file), .tables (the version table
 // merged), .swapped, .retired. No key is created, derived or unwrapped here: a fetched record opens under the keys its
 // source gives, which the cache never keeps.
 //
@@ -321,9 +321,9 @@ func (self *SearchSync) Unfollow(repoId Id, refId Id) {
 	delete(self.refs, [2]Id{repoId, refId})
 }
 
-// The barrier key of a ref: <repo>/<ref>.
+// The barrier key of a ref: <repo>:<ref>, a pair of ids, since a slash would read as a path to §22.8's barrier rule.
 func searchSyncBarrierKey(repoId Id, refId Id) string {
-	return repoId.String() + "/" + refId.String()
+	return repoId.String() + ":" + refId.String()
 }
 
 // Asks for a round of a repo's followed refs, or of one (refId set), for reason. A hint is leading-edge per repo: the

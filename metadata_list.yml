@@ -1,4 +1,4 @@
-# metadata_list.yml v40; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
+# metadata_list.yml v41; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
 # §7.9, §10, §11). v6 adds to v5 (2026-11-04) connect-1's ShareCert, api-6's push-token slot sentinels, api-7's
 # {acl_}q, cascade signers, recovery bindings, restored bindings' recovery windows and orphaned networks, api-13's
 # per-eraser closure counters, evs-1's secret kind and orphans, evs-3's creation block, fence time, deleted flag
@@ -139,7 +139,11 @@
 # grant activation's canonical action by kind, version and scope, a requested dial or route grant's prefixes and
 # ports only sealed, and a presence key registration's attestation client data; and api-10's dns fields of a
 # server-gated action and approval_use's expiry.
-# v40, updated 2026-11-16 for the owner's answer QD-996 (tls-m6-04-custom-spend-retention), keeps cert-1's Team
+# v40, updated 2026-11-16 for §19's items (owner decisions 495, 498 and 513, and the build's accepted fix
+# QD-151), adds ext-13, the pager service the owner picks (owner decision 498), and changes three rows: tls-1's
+# snapshot of the label and custom-host maps, read through tlsedge's restricted role; smtp-5's report intake in
+# mxedge's platform listener from M5; and evs-28's two booleans a drop job records for the observe report.
+# v41, updated 2026-11-16 for the owner's answer QD-996 (tls-m6-04-custom-spend-retention), keeps cert-1's Team
 # custom-domain spends 16 d, not 15, so a budget's replay paces a host's devices while the host's busy stretch is
 # under the retention less one window, through the tenth device: certs sees the times of orders, certificates and
 # failed authorizations of the last 16 days.
@@ -524,7 +528,7 @@ evs-27:
 evs-28:
   service: evs appends; taskworker runs the dry runs and jobs (§11.13)
   store: drops/<repo>/_ (the repo's metadata cluster, at most 64 KiB); dropscan/<repo>/<id>/<f> (segment cluster; f one of snap, cand, mark, del, held); Redis {evsd_<repo_id>}
-  sees: "per drop: its id, ref, DROP push id, version and place, not_before_ms, state (pending, cancelled, executing with phase and progress, held, observed, done, refused with reason), freed and held bytes, and the dry run it names; per dry run: the token paths and lists it was asked about, its snapshot and results (candidate segment and slot ids with sizes, which of them other versions name, inline and packed bytes), its state and progress, and per path whether the client's list matched and the resolved count, and young bytes; per job: its owner instance and lease, the drops it covers, its snapshots (each ref's version), cursor, counters, and candidate, mark, delete and held sets; for format 2, what a read answers for a version a drop holds or took or collection removed: its read state (collected, drop pending, dropped), the drop's id, not_before_ms and version; per cancelled or refused drop, a 17 B void record {drop_id, state}"
+  sees: "per drop: its id, ref, DROP push id, version and place, not_before_ms, state (pending, cancelled, executing with phase and progress, held, observed, done, refused with reason), freed and held bytes, and the dry run it names; per dry run: the token paths and lists it was asked about, its snapshot and results (candidate segment and slot ids with sizes, which of them other versions name, inline and packed bytes), its state and progress, and per path whether the client's list matched and the resolved count, and young bytes; per job: its owner instance and lease, the drops it covers, its snapshots (each ref's version), cursor, counters, and candidate, mark, delete and held sets, and in its first snapshot file whether a listed version renamed a path (its push removed one path and created another citing its kind-5 content) and whether one copied across refs (its chain named a reuse source of another ref), two booleans the observe report counts (owner decision 513); for format 2, what a read answers for a version a drop holds or took or collection removed: its read state (collected, drop pending, dropped), the drop's id, not_before_ms and version; per cancelled or refused drop, a 17 B void record {drop_id, state}"
   why: a resumable deletion job and a dry run for the drop-history action, after its cancellable window, with no metadata write per push (owner decisions 173, 183)
   ttl: drops/ entries at most 30 d after their drop or dry run ends, ended ones leaving sooner, oldest first, when a write would pass 64 KiB, but never one whose DROP committed under 27 h ago; a void record for the repo's life; dropscan/ files 30 d after their job or dry run ends, but a job's list files, its listed versions' entry hashes, which stay for the repo's life (§11.13; owner decision 398); {evsd_} hints until taken, outside the rdb bundles; all three deleted with the repo at its shred (§11.12's phase 5)
   owner: §11.13
@@ -609,7 +613,7 @@ gkm-10:
   owner: §10.6
 tls-1:
   service: lb (stream split, port 80 redirect), tlsedge
-  store: memory; a 30 s negative cache; the lb's generated custom-host split map (active custom hostnames, public through SNI and CT; §13.4)
+  store: memory, with a snapshot of the label and custom-host maps and the suspensions, read through tlsedge's restricted Postgres role at start and then every 5 s (owner decision 495); a 30 s negative cache; the lb's generated custom-host split map (active custom hostnames, public through SNI and CT; §13.4)
   sees: per TCP 443 connection (and 8443, 8883 and 5671; owner decision 121) the SNI, which the lb's ssl_preread split and tlsedge read (owner decision 34), the whole ClientHello (ALPN list, ECH presence, size), the accepting port, setup timing, record sizes and bytes per direction, the chosen listener; on port 80, the Host and request line of plaintext requests, answered with a redirect to https; the sidecar subprotocol's framing of each stream with a listener, its Envelope, Chunk, Error and Stream* fields (ids, codes, offsets, windows, retry times and versions), in which StreamOpen.target holds only the <net>:<name> socket or service target the edge already routes by and early_data only bytes of the connection it already carries
   why: route by SNI without terminating (X1); caps; absorb scans; no plaintext path to tlsedge (§13.4, §13.5)
   ttl: connection memory; negative cache 30 s; the lb writes no access-log line for *.<root> names (I-13); tls-3 holds the only records
@@ -692,7 +696,7 @@ smtp-4:
   ttl: counters 48 h; halts 24 h; smtp_halt rows 13 months (§14.14); breaker and destination counters 2 h after their UTC hour starts, the median 2 h; concurrency only in memory
   owner: §14.7
 smtp-5:
-  service: smtpedge (report intake)
+  service: mxedge (the platform listener, whose report intake runs in process from M5), then smtpedge (§19.4)
   store: smtp_complaint (with sealed_report), smtp_dmarc_daily
   sees: reports parsed header-only, and aggregate attachments (DMARC XML, TLS-RPT JSON, gzip, or a zip of one file under gzip's 8 MiB and 100:1 bounds, a second entry refused) parsed under size, ratio, entity and depth bounds, each report_id counted once (§14.8); reporter, type, arrival, the attribution fields (domain, DKIM d= and s= with result, Message-ID hash, X-UR-Ref, Feedback-ID) and join result; the last-hop Received IP and time for the join only; RUA and TLS-RPT aggregates per network, day and reporter (header_from domains, burner labels included, counts and results for URnetwork's sending addresses); sealed report copies, only of reports at a network's own token, none of <root>'s, whose counts are split by header_from's label
   why: attribution, halts and breakers (§14.8, §21.5)
@@ -835,3 +839,10 @@ ext-12:
   why: a restore re-applies what the mailboxes hold (§19.10, §21.10; owner decision 208)
   ttl: an action's record as api-14's actions, a hold's until its expire_time (api-14)
   owner: §21.10
+ext-13:
+  service: the commercial pager service the owner picks, reached from outside the site
+  store: external
+  sees: the page events monitor posts through pager.Sink, each a page class, a time, a dedup key and opaque ids only, never a network name, address or token; the rota's acknowledgments and escalations
+  why: page the rota at any hour, and business-hours classes in business hours (§19.8; owner decisions 143, 498)
+  ttl: the provider's
+  owner: §19.8

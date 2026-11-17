@@ -64,6 +64,10 @@ func TestAclRemovedMembersTaggedAgentsKeepTheirTagsGrants(t *testing.T) {
 	aclRun(t, AclRevocationTaggedAgents)
 }
 
+func TestAclDeclaredTagsAndGroupsNoRuleNamesApplyAtEveryReader(t *testing.T) {
+	aclRun(t, AclDeclaredAtoms)
+}
+
 func TestAclRowsALyingWriterForksEveryFullReader(t *testing.T) {
 	aclRun(t, AclRowsALyingWriter)
 }

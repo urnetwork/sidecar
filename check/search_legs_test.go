@@ -1,0 +1,130 @@
+//go:build sidecar_check
+
+// §4.7's legs row for the search index (SEARCH-M10-41; §18.10, §22.5's §18 row, D-SDK-19, D-SDK-20): the forwarding leg
+// links no index or search code, and the page Worker no remote search, since a Worker asks no indexer and serves none.
+// The x/text rule, the deps row's "from M10, a leg selecting a golang.org/x/text other than normalizer 1's", is
+// deps_test.go's xTextFindings.
+
+package check
+
+import (
+	"slices"
+	"strings"
+	"testing"
+)
+
+// Root files of the index and of search, by name: what QD-988 (sdk-m10-01-ios-leg-links-index-code) takes off the
+// ios_extension legs.
+var iosExtensionIndexFilePrefixes = []string{"evs_index_", "search_", "state_search_"}
+
+// rpc_search.go's search paths, which QD-988 puts behind a leg file of their own.
+var iosExtensionIndexFileNames = []string{"rpc_search.go"}
+
+// The generated descriptors of evsindex.proto and search.proto.
+var iosExtensionIndexProtoFiles = []string{"evsindex.pb.go", "search.pb.go"}
+
+// The ios_extension legs compiling a root file of the index or search, or protocol's evsindex.pb.go or search.pb.go:
+// §22.5's §18 row and §18.10 keep them off the forwarding leg, which runs no search. Until QD-988's split lands (a REPO or
+// PROTO lane track's), the row stands behind iosExtensionLinksNoIndex and reports what it finds.
+func (self *repository) iosExtensionIndexFindings(t testing.TB) []string {
+	t.Helper()
+	if !self.readsIosExtensionLeg() {
+		return nil
+	}
+	findings := []string{}
+	for _, leg := range self.legs {
+		if !leg.hasTag(iosExtensionTag) {
+			continue
+		}
+		for _, listed := range self.closure(t, leg) {
+			relative, ours := repositoryRelative(listed.ImportPath)
+			if !ours {
+				continue
+			}
+			for _, goFile := range slices.Concat(listed.GoFiles, listed.CgoFiles) {
+				switch {
+				case relative == "." && (slices.Contains(iosExtensionIndexFileNames, goFile) ||
+					slices.ContainsFunc(iosExtensionIndexFilePrefixes, func(prefix string) bool { return strings.HasPrefix(goFile, prefix) })):
+					findings = append(findings, findingf("%s compiles %s, the index's or search's, which the forwarding leg never runs: give it //go:build !ios_extension (QD-988)", leg.name, goFile))
+				case relative == "protocol" && slices.Contains(iosExtensionIndexProtoFiles, goFile):
+					findings = append(findings, findingf("%s compiles protocol/%s, whose messages only search reads: run make proto with it off the leg's list (QD-988)", leg.name, goFile))
+				}
+			}
+		}
+	}
+	slices.Sort(findings)
+	return slices.Compact(findings)
+}
+
+// The sidecar_http js leg compiling a search_remote_ file: the page Worker asks no indexer and serves none (§11.14,
+// §18.4's remote row; SEARCH's build legs), so remote search's files carry !sidecar_http.
+func (self *repository) searchRemoteWorkerFindings(t testing.TB) []string {
+	t.Helper()
+	findings := []string{}
+	for _, leg := range self.legs {
+		if !leg.hasTag(sidecarHttpTag) {
+			continue
+		}
+		for _, listed := range self.closure(t, leg) {
+			if listed.ImportPath != self.modulePath {
+				continue
+			}
+			for _, goFile := range listed.GoFiles {
+				if strings.HasPrefix(goFile, "search_remote_") {
+					findings = append(findings, findingf("%s compiles %s, which must carry !%s: the page Worker runs no remote search", leg.name, goFile, sidecarHttpTag))
+				}
+			}
+		}
+	}
+	return findings
+}
+
+func TestLegsFailsOnASearchRemoteFileOnTheWorkerLeg(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs(sidecarHttpLegName)
+	fixture.write("search_remote_planted.go", "package sidecar\n")
+	wantFindings(t, fixture.open().searchRemoteWorkerFindings(t), "compiles search_remote_planted.go, which must carry !sidecar_http")
+}
+
+// Its twin: the tag leaves the file off the Worker's leg, and a search file that is not remote search's stays on it.
+func TestLegsAllowsASearchRemoteFileWithTheTag(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs(sidecarHttpLegName)
+	fixture.write("search_remote_planted.go", "//go:build !sidecar_http\n\npackage sidecar\n")
+	fixture.write("search_planted.go", "package sidecar\n")
+	wantFindings(t, fixture.open().searchRemoteWorkerFindings(t))
+}
+
+func TestLegsFailsOnAnIndexFileOnTheIosExtensionLeg(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs(iosExtensionLegName)
+	fixture.write("evs_index_planted.go", "package sidecar\n")
+	fixture.write("search_planted.go", "package sidecar\n")
+	fixture.write("state_search_planted.go", "package sidecar\n")
+	wantFindings(t, fixture.open().iosExtensionIndexFindings(t),
+		iosExtensionLegName+" compiles evs_index_planted.go, the index's or search's",
+		iosExtensionLegName+" compiles search_planted.go, the index's or search's",
+		iosExtensionLegName+" compiles state_search_planted.go, the index's or search's")
+}
+
+func TestLegsFailsOnSearchsProtoOnTheIosExtensionLeg(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs(iosExtensionLegName)
+	fixture.write("protocol/evsindex.pb.go", "// Code generated by protoc-gen-go. DO NOT EDIT.\n\npackage protocol\n")
+	fixture.write("protocol/search.pb.go", "// Code generated by protoc-gen-go. DO NOT EDIT.\n\npackage protocol\n")
+	fixture.write("rpc_search.go", "package sidecar\n")
+	wantFindings(t, fixture.open().iosExtensionIndexFindings(t),
+		iosExtensionLegName+" compiles protocol/evsindex.pb.go, whose messages only search reads",
+		iosExtensionLegName+" compiles protocol/search.pb.go, whose messages only search reads",
+		iosExtensionLegName+" compiles rpc_search.go, the index's or search's")
+}
+
+// Its twin: the tag leaves each off the leg, and the forwarding leg's own files pass.
+func TestLegsAllowsIndexFilesTaggedOffTheIosExtensionLeg(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs(iosExtensionLegName, macExtensionLegName)
+	fixture.write("evs_index_planted.go", "//go:build !ios_extension\n\npackage sidecar\n")
+	fixture.write("protocol/search.pb.go", "//go:build !ios_extension\n\n// Code generated by protoc-gen-go. DO NOT EDIT.\n\npackage protocol\n")
+	fixture.write("envelope_search_settings.go", "package sidecar\n")
+	wantFindings(t, fixture.open().iosExtensionIndexFindings(t))
+}

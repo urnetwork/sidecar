@@ -72,16 +72,16 @@ type metadataListAddition struct {
 // fold.
 var metadataListAdditions = []metadataListAddition{
 	{
-		// QD-996: the list's v40, for cert-1's custom-domain spends kept 16 d
+		// QD-996: the list's v41, after §19's fold took v40, for cert-1's custom-domain spends kept 16 d
 		question: "tls-m6-04-custom-spend-retention",
-		block:    "# metadata_list.yml v39;",
-		list:     "# metadata_list.yml v40;",
+		block:    "# metadata_list.yml v40;",
+		list:     "# metadata_list.yml v41;",
 	},
 	{
 		question: "tls-m6-04-custom-spend-retention",
-		block:    "# server-gated action and approval_use's expiry.\n",
-		list: "# server-gated action and approval_use's expiry.\n" +
-			"# v40, updated 2026-11-16 for the owner's answer QD-996 (tls-m6-04-custom-spend-retention), keeps cert-1's Team\n" +
+		block:    "# mxedge's platform listener from M5; and evs-28's two booleans a drop job records for the observe report.\n",
+		list: "# mxedge's platform listener from M5; and evs-28's two booleans a drop job records for the observe report.\n" +
+			"# v41, updated 2026-11-16 for the owner's answer QD-996 (tls-m6-04-custom-spend-retention), keeps cert-1's Team\n" +
 			"# custom-domain spends 16 d, not 15, so a budget's replay paces a host's devices while the host's busy stretch is\n" +
 			"# under the retention less one window, through the tenth device: certs sees the times of orders, certificates and\n" +
 			"# failed authorizations of the last 16 days.\n",
