@@ -145,7 +145,8 @@ func (self *evsDueClassWorld) expectClass(label string, from *bridge.AuthPin, im
 }
 
 // Each span after the base, classed alike by every reader: an agent's ordinary removals and an expiry alone batched;
-// a compromise of the same agent, a member device's removal and a member's removal immediate; one of each immediate.
+// a compromise of the same agent, a member device's removal and a member's removal immediate; one of each immediate;
+// and, while a base's rows carry no t_s (QD-1015), an expiry and then an entry that touches the rows immediate.
 func TestEvsDueClassFromTheLog(t *testing.T) {
 	cases := []struct {
 		name string
@@ -172,6 +173,14 @@ func TestEvsDueClassFromTheLog(t *testing.T) {
 		}},
 		{name: "an expiry alone", span: func(world *evsDueClassWorld) {
 			world.expire()
+		}},
+		{name: "an expiry and then an entry that touches the rows", shrinks: true, immediate: true, span: func(world *evsDueClassWorld) {
+			// the shrink row's interim closed reading (QD-883), the base having folded the repo's t_s: the first entry
+			// after the lapse that touches the rows shrinks the repo, here a member's admission, which no statement the
+			// class names explains, so every reader fails closed; QD-1015's exact comparison at t_s restores
+			// shrinks: false here, and the batched class of an expiry alone
+			world.expire()
+			world.net.admitMemberDevice("bystander")
 		}},
 		{name: "an agent's revocation and an expiry", shrinks: true, span: func(world *evsDueClassWorld) {
 			world.revoke(world.agent, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_REMOVED)
