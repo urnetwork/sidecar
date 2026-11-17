@@ -3,13 +3,14 @@
 // question evs1-m2-16-due-classification, option 3; QD-949):
 //
 //	span   the entries in (from, through] that advanced the repo's holders_shrunk_at, which config_coverage.go's rule
-//	       advances at exactly the entries that shrink it, and to no other position: S(through)'s holders_shrunk_at
-//	       names the newest, and S(s-1)'s the one before s, so the walk reads one state either side of each shrink
-//	       and none of the entries between
+//	       advances at exactly the entries that shrink it, and to no other position: the newest state's
+//	       holders_shrunk_at names the newest, and S(s-1)'s the one before s, so the walk reads one state either side
+//	       of each shrink after from, those after through only to step past them, and none of the entries between
 //	reach  the walk reads only what StateAt serves, the window from the previous base, or from the base a restored
-//	       reader started at, to the tip. S(from) must be in it, so a reader that cannot reach the earlier pin walks
-//	       nothing; and a state or an entry of the span the window no longer keeps (a newer base moved it on) ends the
-//	       walk with ErrConfigPinNotRetained
+//	       reader started at, to the tip. A pin the window no longer reaches is held to its number, as §10.6's gate
+//	       holds a generation's (QD-1018), and neither pin's own state is read; a pin off the chain or ahead ends the
+//	       walk, and so does a state or an entry around a shrink after from that the window no longer keeps (a newer
+//	       base moved it on), with ErrConfigPinNotRetained
 //	entry  each shrink's kept entry as it took effect at its position: a statement with its body, a tick with its
 //	       reaps and activations, or a base, whose own change no statement says
 //
@@ -23,6 +24,7 @@
 package sidecar
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/urnetwork/sidecar/protocol/bridge"
@@ -40,32 +42,33 @@ type configShrink struct {
 }
 
 // The entries in (from, through] that advanced the repo's holders_shrunk_at, newest first. See the file header. An
-// error for a pin StateAt does not serve (ErrConfigPinNotRetained, ErrConfigPinAhead, ErrConfigPinOffChain), a
-// state or entry of the span the window no longer keeps (ErrConfigPinNotRetained), or a through below from.
+// error for a pin off this state's chain or above it (ErrConfigPinOffChain, ErrConfigPinAhead), a state or entry
+// around a shrink after from that the window no longer keeps (ErrConfigPinNotRetained), or a through below from.
 func (self *ConfigState) shrinksBetween(repoId Id, from *bridge.AuthPin, through *bridge.AuthPin) ([]*configShrink, error) {
 	if through.GetVersion() < from.GetVersion() {
 		return nil, fmt.Errorf("%w: a span from %d to %d", ErrConfigPinOffChain, from.GetVersion(), through.GetVersion())
 	}
-	if _, err := self.StateAt(from); err != nil {
-		return nil, err
-	}
-	state, err := self.StateAt(through)
-	if err != nil {
-		return nil, err
+	for _, pin := range []*bridge.AuthPin{from, through} {
+		if _, err := self.StateAt(pin); err != nil && !errors.Is(err, ErrConfigPinNotRetained) {
+			return nil, err
+		}
 	}
 	shrinks := []*configShrink{}
+	state := self
 	for n := state.ShrunkAt(repoId); from.GetVersion() < n; {
-		after := state
-		if n != state.n {
-			if after, err = self.keptStateAt(n); err != nil {
-				return nil, err
-			}
-		}
 		before, err := self.keptStateAt(n - 1)
 		if err != nil {
 			return nil, err
 		}
-		shrinks = append(shrinks, &configShrink{n: n, kept: self.history.entryAt(n), before: before, after: after})
+		if n <= through.GetVersion() {
+			after := state
+			if n != state.n {
+				if after, err = self.keptStateAt(n); err != nil {
+					return nil, err
+				}
+			}
+			shrinks = append(shrinks, &configShrink{n: n, kept: self.history.entryAt(n), before: before, after: after})
+		}
 		previous := before.ShrunkAt(repoId)
 		if n <= previous {
 			// holders_shrunk_at at S(n-1) is a position at or below n-1 in any state a log builds
