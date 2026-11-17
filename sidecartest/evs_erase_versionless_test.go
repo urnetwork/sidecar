@@ -11,7 +11,8 @@
 //	          stands for the readers' minute and then the purge takes it, and no prior version opens
 //	remove    after three overwrites under one key a REMOVE generation's next write draws a fresh key in a new
 //	          slot, and the purge deletes the old slot and ciphertext
-//	whole     SlotKeysOf of a path removed and created again does not reach its first life, and gives no list
+//	whole     SlotKeysOf of a path removed and created again walks below the second creation into the removal and
+//	          the first life (owner decision 380; QD-888), so it lists both lives' slots, the newest first
 //	rekey     ur evs rekey's pass after a REMOVE generation seals a versionless file again under a fresh key and
 //	          leaves its setting as it was, a versioned file beside it staying versioned
 
@@ -447,15 +448,16 @@ func TestEvsRekeyKeepsAVersionlessPathsSettingEndToEnd(t *testing.T) {
 	}
 }
 
-func TestEvsSlotKeysOfAPathCreatedAgainFailsClosedEndToEnd(t *testing.T) {
+func TestEvsSlotKeysOfAPathCreatedAgainListsEveryLifeEndToEnd(t *testing.T) {
 	world := newVersionlessWorldOf(t, protocol.RepoKind_REPO_KIND_RECORD)
 	w := world.format2Device("w")
 	path := "notes/again.bin"
 	if _, err := w.writeSetting(path, versionlessContent("first life", 40*1024), sidecar.EvsVersioningOff); err != nil {
 		t.Fatal(err)
 	}
-	if keys, err := w.repo.SlotKeysOf(world.ctx, nil, []string{path}); err != nil || len(keys) != 1 {
-		t.Fatalf("the first life's slot keys: %v %v", keys, err)
+	first, err := w.repo.SlotKeysOf(world.ctx, nil, []string{path})
+	if err != nil || len(first) != 1 {
+		t.Fatalf("the first life's slot keys: %v %v", first, err)
 	}
 	if _, err := w.repo.Write(world.ctx, &sidecar.EvsWriteArgs{Path: path, Remove: true}); err != nil {
 		t.Fatalf("the removal: %v", err)
@@ -463,9 +465,9 @@ func TestEvsSlotKeysOfAPathCreatedAgainFailsClosedEndToEnd(t *testing.T) {
 	if _, err := w.writeSetting(path, versionlessContent("second life", 40*1024), sidecar.EvsVersioningOff); err != nil {
 		t.Fatalf("the second creation: %v", err)
 	}
-	// the walk ends at the second creation: the first life's slot is not reached, so no list is given
+	// the walk crosses the second creation into the removal and the first life: both lives' slots, newest first
 	keys, err := w.repo.SlotKeysOf(world.ctx, nil, []string{path})
-	if !errors.Is(err, sidecar.ErrEvsSlotKeysIncomplete) || keys != nil {
+	if err != nil || len(keys) != 2 || keys[1].SlotId != first[0].SlotId || keys[0].SlotId == first[0].SlotId {
 		t.Fatalf("a path created again: %v %v", keys, err)
 	}
 }
