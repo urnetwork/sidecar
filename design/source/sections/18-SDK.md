@@ -247,7 +247,9 @@ func (self *SidecarEvs) VerifiedSince(repoId *Id, refId *Id) int64 // ms: §5.4'
 // owner-bound repo only its owner's consented devices that are not read_only (owner decision 126), each a person's
 // act in the app's UI; the Drops listing by any reader (§11.20)
 func (self *SidecarEvs) DropHistoryPreview(repoId *Id, path string, follow bool, callback SidecarDropPreviewCallback)
-	// the server's mandatory dry run: versions, bytes freed, shared and kept inline, dates, list_match, preview_id
+	// the server's mandatory dry run: versions, bytes freed, shared and kept inline, dates, list_match, preview_id;
+	// a head-mode device walks the path's versions itself, within 4 MiB of statements, and a longer history
+	// answers EVS_DROP_TOO_LARGE, for a device that mirrors the repo (§11.7's cli row; owner decision 396)
 func (self *SidecarEvs) DropHistory(repoId *Id, previewId *Id, confirmPath string, now bool, callback SidecarResultCallback)
 	// confirmPath: the name the person typed, refused unless it is the previewed path; now skips the 7-day window
 	// behind a second confirmation; repo admins' devices then raise history_drop with its cancel
