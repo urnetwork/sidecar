@@ -7,9 +7,9 @@
 // and at one version a tombstone. Pages are written to the cache as they fill, and the index above them a page a level,
 // so nothing of the run is held whole (QD-641); the meta is written last, the run's commit point.
 //
-// Inputs: a shard's doc and tombstone tables, read by frame through its reader; a sealed slot's, head's or large
-// entry's entries, which carry doc keys and ref ids in one order and are sorted in memory, a slot being at most a few
-// KiB; an earlier run's pages; and records a caller lists, such as an erasure's keys.
+// Inputs: a shard's doc and tombstone tables, read in one pass, each frame once, neither table held; a sealed slot's,
+// head's or large entry's entries, which carry doc keys and ref ids in one order and are sorted in memory, a slot being
+// at most a few KiB; an earlier run's pages; and records a caller lists, such as an erasure's keys.
 
 package sidecar
 
@@ -588,89 +588,130 @@ func searchVersionEntriesSource(entries []*indexEntry, file SearchVersionFile) S
 	return SearchVersionRecordsSource(records)
 }
 
-// A shard's doc table and tombstones (§11.14's doc table and tombstones rows) as one key-ordered input, read by frame
-// through reader: its documents, ascending by doc_key as their docids do, and its kind 3 tombstones interleaved by key,
-// then its ref tombstones. file is the shard's path and entry version.
+// A shard's doc table and tombstones (§11.14's doc table and tombstones rows) as one key-ordered input: its documents,
+// ascending by doc_key as their docids do, and its kind 3 tombstones interleaved by key, then its ref tombstones, as
+// the table holds them. One pass reads both tables front to back, each through a reader of its own over the shard's
+// layout, so each frame is decrypted once and neither table is held in memory: a document's doc_key, version and time
+// where the layout starts its entry, its row unread (searchShardHeader), and each tombstone as the pass reaches it
+// (QD-1007; QD-641).
+//
+// reader must have opened the shard from a layout a validation checked (indexValidateFile, which refuses tables out of
+// order and a key in both); the merge still refuses records out of key order. file is the shard's path and entry
+// version. observe, where given, takes each document's and tombstone's time as the pass reads it, so the sync engine
+// stages a shard's two times from the pass that builds its run (search_fetch.go).
 type searchVersionShardSource struct {
-	reader *indexShardReader
-	file   SearchVersionFile
+	reader  *indexShardReader
+	file    SearchVersionFile
+	observe func(timeSeconds uint64)
 }
 
-// Reads the shard's tombstone table and starts at its first document. See SearchVersionSource.
+// Starts the pass at the shard's first document and first tombstone, each table through a reader of its own over the
+// shard's layout. See SearchVersionSource.
 func (self *searchVersionShardSource) Open() (SearchVersionInput, error) {
-	input := &searchVersionShardInput{reader: self.reader, file: self.file}
-	if err := input.readTombstones(); err != nil {
+	reader := self.reader
+	documents, err := indexOpenShardWithLayout(reader.cursor.source, reader.companion, reader.layout)
+	if err != nil {
 		return nil, err
 	}
-	return input, nil
-}
-
-// A shard being read: the next document's docid, and its tombstones, read once, in table order.
-type searchVersionShardInput struct {
-	reader     *indexShardReader
-	file       SearchVersionFile
-	docId      uint32
-	tombstones []*indexShardTombstone
-	nextStone  int
-	document   *SearchVersionRecord
-}
-
-// Reads the tombstone table, which a bucket keeps until its roll-up and an all shard holds none of.
-func (self *searchVersionShardInput) readTombstones() error {
-	layout := self.reader.layout
-	position := layout.tombstonesStart
-	for range layout.header.Tombstones {
-		window, err := self.reader.window(position, layout.dictionaryStart, indexTombstoneMaxByteCount)
-		if err != nil {
-			return err
-		}
-		decoder := indexDecoder{src: window}
-		tombstone := decoder.tombstone(self.reader.companion)
-		if decoder.err != nil {
-			return decoder.err
-		}
-		self.tombstones = append(self.tombstones, tombstone)
-		position += len(window) - decoder.remaining()
+	tombstones, err := indexOpenShardWithLayout(reader.cursor.source, reader.companion, reader.layout)
+	if err != nil {
+		return nil, err
 	}
-	return indexCheckTombstoneOrder(self.tombstones, self.reader.companion)
+	return &searchVersionShardInput{
+		shard:         self,
+		documents:     documents,
+		tombstones:    tombstones,
+		stonePosition: reader.layout.tombstonesStart,
+	}, nil
+}
+
+// A shard being read in one pass: the next document's docid, the next tombstone's place, and the record each holds
+// that the merge has not taken yet.
+type searchVersionShardInput struct {
+	shard      *searchVersionShardSource
+	documents  *indexShardReader
+	tombstones *indexShardReader
+	docId      uint32
+	// the tombstones read, and where the next starts
+	stoneCount    uint32
+	stonePosition int
+	document      SearchVersionRecord
+	hasDocument   bool
+	stone         SearchVersionRecord
+	hasStone      bool
+}
+
+// Reads the next document's doc_key, version and time from the start of its doc table entry, its row unread.
+func (self *searchVersionShardInput) readDocument() error {
+	key, version, timeSeconds, err := searchShardHeader(self.documents, self.docId)
+	if err != nil {
+		return err
+	}
+	self.document = SearchVersionRecord{Key: key, Version: version, File: self.shard.file}
+	self.hasDocument = true
+	self.docId += 1
+	if self.shard.observe != nil {
+		self.shard.observe(timeSeconds)
+	}
+	return nil
+}
+
+// Reads the next tombstone, which a bucket keeps until its roll-up and an all shard holds none of.
+func (self *searchVersionShardInput) readTombstone() error {
+	reader := self.tombstones
+	window, err := reader.window(self.stonePosition, reader.layout.dictionaryStart, indexTombstoneMaxByteCount)
+	if err != nil {
+		return err
+	}
+	decoder := indexDecoder{src: window}
+	tombstone := decoder.tombstone(reader.companion)
+	if decoder.err != nil {
+		return decoder.err
+	}
+	self.stonePosition += len(window) - decoder.remaining()
+	self.stoneCount += 1
+	self.stone = SearchVersionRecord{Key: tombstone.key, Version: tombstone.version, File: self.shard.file}
+	if tombstone.kind == indexEntryRefTombstone {
+		self.stone.RefTombstone = true
+	} else {
+		self.stone.Tombstone = true
+	}
+	self.hasStone = true
+	if self.shard.observe != nil {
+		self.shard.observe(tombstone.timeSeconds)
+	}
+	return nil
 }
 
 // The next of the shard's documents and tombstones in key order. See SearchVersionInput.
 func (self *searchVersionShardInput) Next() (SearchVersionRecord, bool, error) {
-	if self.document == nil && int(self.docId) < self.reader.documentCount() {
-		document, err := self.reader.document(self.docId)
-		if err != nil {
+	layout := self.shard.reader.layout
+	if !self.hasDocument && int(self.docId) < len(layout.documentStarts) {
+		if err := self.readDocument(); err != nil {
 			return SearchVersionRecord{}, false, err
 		}
-		self.docId += 1
-		self.document = &SearchVersionRecord{Key: document.key, Version: document.version, File: self.file}
 	}
-	var stone *SearchVersionRecord
-	if self.nextStone < len(self.tombstones) {
-		tombstone := self.tombstones[self.nextStone]
-		stone = &SearchVersionRecord{Key: tombstone.key, Version: tombstone.version, File: self.file}
-		if tombstone.kind == indexEntryRefTombstone {
-			stone.RefTombstone = true
-		} else {
-			stone.Tombstone = true
+	if !self.hasStone && self.stoneCount < layout.header.Tombstones {
+		if err := self.readTombstone(); err != nil {
+			return SearchVersionRecord{}, false, err
 		}
 	}
 	switch {
-	case self.document == nil && stone == nil:
+	case !self.hasDocument && !self.hasStone:
 		return SearchVersionRecord{}, false, nil
-	case stone == nil || (self.document != nil && compareSearchVersionRecords(self.document, stone) < 0):
-		record := *self.document
-		self.document = nil
-		return record, true, nil
+	case !self.hasStone || (self.hasDocument && compareSearchVersionRecords(&self.document, &self.stone) < 0):
+		self.hasDocument = false
+		return self.document, true, nil
 	}
-	self.nextStone += 1
-	return *stone, true, nil
+	self.hasStone = false
+	return self.stone, true, nil
 }
 
-// One frame and the tombstones.
+// Each reader's frame, and the tail and the window's copy its cursor keeps, each shorter than a doc table entry: the
+// pass holds no table.
 func (self *searchVersionShardInput) ByteCount() int64 {
-	return int64(EvsRecordFrameByteCount) + int64(len(self.tombstones))*int64(indexTombstoneMaxByteCount+16)
+	return 2 * (int64(EvsRecordFrameByteCount) + 2*int64(indexDocumentEntryMaxByteCount))
 }
 
-// Holds nothing to close: the reader is the caller's. See SearchVersionInput.
+// Holds nothing to close: its readers' frames go with it. See SearchVersionInput.
 func (self *searchVersionShardInput) Close() {}
