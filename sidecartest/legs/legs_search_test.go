@@ -88,7 +88,7 @@ func indexVectorLegs() []*Leg {
 }
 
 // The legs cover every target §22.9's row names: darwin/arm64, linux amd64 and arm64, windows/amd64, js/wasm and the
-// Worker, and the gomobile 
+// Worker, and the gomobile legs.
 func TestIndexVectorLegsCoverEveryTarget(t *testing.T) {
 	targets := map[string]bool{}
 	for _, leg := range indexVectorLegs() {
