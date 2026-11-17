@@ -1438,8 +1438,7 @@ func TestEvsWriteAfterThePrefixsRemovalServedAsRemovedIsRefused(t *testing.T) {
 // the removal out (QD-879's window case passed; QD-979): no version, removal, statement or proof, and for each
 // statement whose list is under changes_root the absences evs sends a path it holds nothing of, nothing for the
 // path's own change or a prefix's removal. With presents, beside them the present of the path's own change and of a
-// strict prefix's removal in each such statement that made one, which evs as built does not send (question
-// evs-absent-walked-removal-own-present).
+// strict prefix's removal in each such statement that made one, which QD-1043 has evs send and evs as built does not.
 func evsTestServeAbsent(world *evsTestWorld, path string, presents bool) {
 	tokenPath := world.tokens(path)
 	world.stateLock.Lock()
@@ -1630,7 +1629,7 @@ func TestEvsAbsentAgreesWithAPrefixsWalkedRemoval(t *testing.T) {
 // A write of d/a.txt walked before d's removal, d/a.txt served plain absent. Inline, the walk shows the removal after
 // the write and the reply agrees with it. Under changes_root evs as built shows d's removal by nothing, so the reader
 // can neither count it nor rule it out: it refuses the reply with no alarm, and takes it once the removal's present is
-// beside it (question evs-absent-walked-removal-own-present).
+// beside it, as QD-1043 has evs send.
 func TestEvsAbsentAfterAWriteAndAPrefixsRemoval(t *testing.T) {
 	for _, rooted := range []bool{false, true} {
 		world := newEvsTestWorld(t)
