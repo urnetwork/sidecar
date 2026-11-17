@@ -197,6 +197,9 @@ type EvsSettings struct {
 	// ResumeRepoId waits on again. A non-positive count asks once.
 	GroupFormWait      time.Duration
 	GroupFormWaitCount int
+	// How many times CreateRepo files and places again under another id after evs answers 409 REPO_PLACED, another
+	// creator having placed its id first (§11.8's place row; QD-927): 2. Each files a RepoCreate of its own.
+	RepoPlacedRetryCount int
 
 	// §11.10's lease row: a subscription rereads its head fresh this long after its lease's 200, 5 s, so a commit an
 	// evs process matched against leases read before the write is caught.
@@ -345,6 +348,7 @@ func DefaultEvsSettings() *EvsSettings {
 		DropKeyWaitCount:         20,
 		GroupFormWait:            10 * time.Second,
 		GroupFormWaitCount:       12,
+		RepoPlacedRetryCount:     2,
 		SealLeaseDuration:        120 * time.Second,
 		SealLeaseRenewInterval:   60 * time.Second,
 		SubscribeRereadDelay:     5 * time.Second,
