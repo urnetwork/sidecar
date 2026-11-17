@@ -324,7 +324,7 @@ func (self *fi2Memory) checkReclaimed(oracle *Oracle, repos []*evsStoreRepo, rec
 		if _, committed := self.pushCommits[read.record.PushId]; committed {
 			continue
 		}
-		switch fi6Resolve(repoById[read.record.RepoId], read) {
+		switch fi6Resolve(fi6SettingsOf(oracle.Net), repoById[read.record.RepoId], read) {
 		case fi6CommittedHere, fi6CommittedElsewhere:
 			continue
 		}

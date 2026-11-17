@@ -14,7 +14,11 @@
 //   - every uncommitted object is reclaimable after its deadline, found without the log: a slot no committed version
 //     names is listed as new by a record still in a batch once it is 26 h old (§11.8's objects table: a dead push's
 //     slots live <= ~26 h), so evacuation's Resolve finds and deletes it; segments, path map parts and staged wraps
-//     are found by their reclaimers' LISTs of their repo's or group's prefix, which no key escapes;
+//     are found by their reclaimers' LISTs of their repo's or group's prefix, which no key escapes. One slot is
+//     excused (QD-870): step 6 writes a push's slots before its record (QD-806), so an attempt that died between its
+//     slot round and its record and was never retried leaves slots whose origin (DESIGN-DETAILS 14.2.2) names a
+//     statement no batch, container or head names, DESIGN-DETAILS 14.5's leak and never a loss. A slot whose
+//     statement a batch held, at this check or an earlier one, is still reported, as is one with no origin;
 //   - nothing committed or unknown is reclaimed: between two checks, no DELETE takes a segment, slot or map part a
 //     committed version named, nor a batch, slot or segment of a push that was pending at the first check and is
 //     still pending (neither committed nor dead by §11.8's Resolve row) at the second; and no segment goes before
@@ -27,9 +31,10 @@
 //
 // Deferred, failing closed or unchecked as each says: a table's rows across a path-epoch cut-over are checked by
 // names_through alone; QD-011's orphan markers under idx/<repo>/<ref>/_o/, which carry format 2's ids, are left to
-// FI-16 and FI-27; a batch written and deleted within one step, which no check saw, is not judged; a format-2
-// repo's segment deletes (the versionless purge, a drop job) are FI-16's and FI-27's (TEST-M10-01), so the horizon
-// clause skips a repo of format 2; a staged wrap's 24 h is gkm's reconciler's and is not checked here.
+// FI-16 and FI-27; a batch written and deleted within one step, which no check saw, is not judged, and a statement
+// whose only record went so reads as one no batch held, so its slot is excused; a format-2 repo's segment deletes
+// (the versionless purge, a drop job) are FI-16's and FI-27's (TEST-M10-01), so the horizon clause skips a repo of
+// format 2; a staged wrap's 24 h is gkm's reconciler's and is not checked here.
 
 package fault
 
@@ -37,11 +42,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -55,20 +63,90 @@ var _ = RegisterInvariant(6, func(ctx context.Context, oracle *Oracle) error {
 	return checkFi6(ctx, oracle)
 })
 
-// Design values FI-6 holds evs to, each §11's or DESIGN-DETAILS 2's: facts of the invariant, not tunables.
+// Names the store and object metadata FI-6 reads by.
 const (
-	// §11.8's objects table: a dead push's slots are gone within ~26 h.
-	fi6DeadSlotDeadline = 26 * time.Hour
-	// DESIGN-DETAILS 2.2.4's AdoptionBound, and the horizon's floor 25 h before its LIST.
-	fi6AdoptionBound = 24*time.Hour + 2*time.Minute
-	fi6HorizonFloor  = 25 * time.Hour
-	// §11.8's Resolve row: a statement can no longer pass the time checks 35 min after its time_ms.
-	fi6StatementLife = 35 * time.Minute
-	// §11.8's Resolve row: a file-mode push commits within (b, b+64].
-	fi6ResolveRange = 64
 	// QD-011's orphan markers, idx/<repo>/<ref>/_o/, outside every epoch.
 	fi6OrphanMarkerDirectory = "_o/"
+	// DESIGN-DETAILS 14.2.2: the object metadata key a slot's origin rides under, and the words of its value.
+	fi6SlotOriginMetadataKey = "origin"
+	fi6SlotOriginVersion     = "1"
+	fi6SlotOriginPushKind    = "p"
+	fi6SlotOriginFileMode    = "f"
+	fi6SlotOriginGitMode     = "g"
+	fi6SlotOriginSeparator   = "."
 )
+
+// The bounds FI-6 holds evs to, §11's and DESIGN-DETAILS 2's and 14's values. A schedule may narrow one.
+type Fi6Settings struct {
+	// §11.8's objects table: a dead push's slots are gone within about 26 h, so a slot no committed version names and
+	// no batch record lists is judged once this old. Non-positive judges every such slot at once.
+	DeadSlotDeadline time.Duration
+	// DESIGN-DETAILS 2.2.4's AdoptionBound: a push adopts only an upload younger than this, 24 h 2 min.
+	AdoptionBound time.Duration
+	// DESIGN-DETAILS 2.2.4: GC's horizon stands at least this long before the LIST it deletes by, 25 h, so no segment
+	// goes before AdoptionBound and this have passed since its upload.
+	HorizonFloor time.Duration
+	// §11.8's Resolve row: a statement can no longer pass the time checks this long after its time_ms, 35 min.
+	StatementLife time.Duration
+	// §11.8's Resolve row: a file-mode push built on version b commits within (b, b + this], 64; a git-mode one at
+	// b + 1.
+	FileWindowVersionCount uint64
+	// DESIGN-DETAILS 14.2.2: the longest slot origin evs writes, 190 B. A longer value names no statement, as evs
+	// reads it.
+	SlotOriginMaxByteCount int
+}
+
+func DefaultFi6Settings() *Fi6Settings {
+	return &Fi6Settings{
+		DeadSlotDeadline:       26 * time.Hour,
+		AdoptionBound:          24*time.Hour + 2*time.Minute,
+		HorizonFloor:           25 * time.Hour,
+		StatementLife:          35 * time.Minute,
+		FileWindowVersionCount: 64,
+		SlotOriginMaxByteCount: 190,
+	}
+}
+
+var fi6SettingsMemories sync.Map
+
+// The settings one Net's FI-6 checks with.
+type fi6SettingsMemory struct {
+	stateLock sync.Mutex
+	settings  *Fi6Settings
+}
+
+func newFi6SettingsMemory() *fi6SettingsMemory {
+	return &fi6SettingsMemory{settings: DefaultFi6Settings()}
+}
+
+// Sets the bounds net's FI-6 checks hold evs to; nil restores the defaults.
+func SetFi6Settings(net *Net, settings *Fi6Settings) {
+	memory := netMemoryOf(&fi6SettingsMemories, net, newFi6SettingsMemory)
+	memory.stateLock.Lock()
+	defer memory.stateLock.Unlock()
+	if settings == nil {
+		settings = DefaultFi6Settings()
+	}
+	memory.settings = settings
+}
+
+func fi6SettingsOf(net *Net) *Fi6Settings {
+	memory := netMemoryOf(&fi6SettingsMemories, net, newFi6SettingsMemory)
+	memory.stateLock.Lock()
+	defer memory.stateLock.Unlock()
+	return memory.settings
+}
+
+// A statement as a head's window entry, a log page and a slot's origin name it: its push id and the first 16 bytes
+// of its SHA-256.
+type fi6Statement struct {
+	pushId sidecar.Id
+	prefix [16]byte
+}
+
+func fi6StatementOf(pushId sidecar.Id, statementSha256 [sha256.Size]byte) fi6Statement {
+	return fi6Statement{pushId: pushId, prefix: [16]byte(statementSha256[:16])}
+}
 
 // What FI-6 keeps from one check to the next.
 type fi6Memory struct {
@@ -78,12 +156,20 @@ type fi6Memory struct {
 	pendingObjects map[string]*fi6PendingPush
 	// seg/ objects' LastModified at the last check, by cluster and key
 	segmentTimes map[string]time.Time
+	// every statement a batch record named at this check or an earlier one: the orphan-slot clause excuses only a
+	// slot whose origin's statement no batch ever held
+	heldStatements map[fi6Statement]bool
 	// whether the last check ran
 	checked bool
 }
 
 func newFi6Memory() *fi6Memory {
-	return &fi6Memory{committedObjects: map[string]string{}, pendingObjects: map[string]*fi6PendingPush{}, segmentTimes: map[string]time.Time{}}
+	return &fi6Memory{
+		committedObjects: map[string]string{},
+		pendingObjects:   map[string]*fi6PendingPush{},
+		segmentTimes:     map[string]time.Time{},
+		heldStatements:   map[fi6Statement]bool{},
+	}
 }
 
 type fi6PendingPush struct {
@@ -119,6 +205,7 @@ const (
 )
 
 func checkFi6(ctx context.Context, oracle *Oracle) error {
+	settings := fi6SettingsOf(oracle.Net)
 	repos, walkErrs := evsStoreWalkOf(ctx, oracle)
 	memory := evsOracleMemoryOf(oracle.Net)
 	errs := []error{}
@@ -140,8 +227,15 @@ func checkFi6(ctx context.Context, oracle *Oracle) error {
 	}
 	records, oldestBatch, batchErrs := fi6Batches(ctx, oracle, memory)
 	errs = append(errs, batchErrs...)
-	errs = append(errs, fi6CheckOrphanSlots(oracle, repos, records)...)
-	errs = append(errs, fi6CheckReclaims(oracle, memory, repoById, records, oldestBatch)...)
+	// the statements a batch held at an earlier check and those this one's batches hold
+	memory.stateLock.Lock()
+	held := maps.Clone(memory.fi6.heldStatements)
+	memory.stateLock.Unlock()
+	for _, read := range records {
+		held[fi6StatementOf(read.record.PushId, read.statement.Sha256)] = true
+	}
+	errs = append(errs, fi6CheckOrphanSlots(ctx, oracle, settings, repos, records, held)...)
+	errs = append(errs, fi6CheckReclaims(oracle, settings, memory, repoById, records, oldestBatch, held)...)
 	return errors.Join(errs...)
 }
 
@@ -689,8 +783,8 @@ func (self *fi6BatchRecord) decode() error {
 // (file mode) or at b+1 (git mode), here or at another place; dead iff not committed and the head is at or past b+64
 // (git mode: b+1), or its statement can no longer pass the time checks (time_ms + 35 min) and the head's fence_ms is
 // later than that; otherwise pending. A one-part reseed record counts as committed, a re-seeded push's part follows
-// its seal as any part does (QD-818), and a ref with no head leaves P pending.
-func fi6Resolve(repo *evsStoreRepo, read *fi6BatchRecord) fi6Outcome {
+// its seal as any part does (QD-818), and a ref with no head leaves P pending. 64 and 35 min are settings'.
+func fi6Resolve(settings *Fi6Settings, repo *evsStoreRepo, read *fi6BatchRecord) fi6Outcome {
 	reseededPart := sidecar.EvsReseedRecordHoldsPart(read.record)
 	if read.record.Type == protocol.EvsBatchRecordType_EVS_BATCH_RESEED && !reseededPart {
 		return fi6CommittedHere
@@ -708,7 +802,7 @@ func fi6Resolve(repo *evsStoreRepo, read *fi6BatchRecord) fi6Outcome {
 	}
 	push := read.statement.Push
 	base := push.GetBaseVersion()
-	last := base + fi6ResolveRange
+	last := base + settings.FileWindowVersionCount
 	if protocol.EvsRefMode(push.GetRefMode()) == protocol.EvsRefMode_EVS_REF_GIT {
 		last = base + 1
 	}
@@ -730,7 +824,7 @@ func fi6Resolve(repo *evsStoreRepo, read *fi6BatchRecord) fi6Outcome {
 	if last <= head.GetVersion() {
 		return fi6Dead
 	}
-	if push.GetTimeMs()+fi6StatementLife.Milliseconds() < head.GetFenceMs() {
+	if push.GetTimeMs()+settings.StatementLife.Milliseconds() < head.GetFenceMs() {
 		return fi6Dead
 	}
 	return fi6Pending
@@ -741,8 +835,14 @@ func fi6ObjectKey(clusterId string, key string) string {
 }
 
 // A slot no committed version names, once past a dead push's deadline, is listed as new by a record still in a
-// batch, where evacuation's Resolve finds it: otherwise nothing ever reclaims it.
-func fi6CheckOrphanSlots(oracle *Oracle, repos []*evsStoreRepo, records []*fi6BatchRecord) []error {
+// batch, where evacuation's Resolve finds it: otherwise nothing ever reclaims it. One is excused (QD-870), the
+// slots of an attempt that died between its slot round and its record and was never retried: its slot object's
+// origin, read from the object, names a statement that no batch held, at this check or an earlier one (held), and
+// that the repo's committed history (its heads' windows and log pages, and through them the containers) does not
+// name. Any other is reported, saying why it is not that leak: no origin, or one that does not parse; its statement
+// a batch held or a head commits, so its record was there for evacuation to judge; or a history that could not be
+// read whole, where no statement can be ruled out of it.
+func fi6CheckOrphanSlots(ctx context.Context, oracle *Oracle, settings *Fi6Settings, repos []*evsStoreRepo, records []*fi6BatchRecord, held map[fi6Statement]bool) []error {
 	listed := map[string]bool{}
 	for _, read := range records {
 		for _, slotId := range read.slotIds {
@@ -753,14 +853,92 @@ func fi6CheckOrphanSlots(oracle *Oracle, repos []*evsStoreRepo, records []*fi6Ba
 	errs := []error{}
 	for _, repo := range repos {
 		named := fi6NamedObjects(repo)
+		// the statements the repo's committed history names, read at its first orphan; nil where some ref's history
+		// could not be read whole
+		var committed map[fi6Statement]bool
+		committedRead := false
 		for key, info := range repo.slotInfos {
-			if named[key] || listed[key] || now.Before(info.LastModified.Add(fi6DeadSlotDeadline)) {
+			if named[key] || listed[key] || now.Before(info.LastModified.Add(settings.DeadSlotDeadline)) {
 				continue
 			}
-			errs = append(errs, fmt.Errorf("repo %s: %s, which no committed version names, is %s old and no batch record lists it: no reclaimer finds it", repo.repoId, key, now.Sub(info.LastModified).Round(time.Minute)))
+			if !committedRead {
+				committedRead = true
+				committed = map[fi6Statement]bool{}
+				if 0 < len(repo.missing) {
+					committed = nil
+				}
+				for _, ref := range repo.refs {
+					if committed == nil || !ref.complete {
+						committed = nil
+						break
+					}
+					for _, version := range ref.versions {
+						committed[fi6Statement{pushId: version.entry.PushId, prefix: version.entry.StatementPrefix}] = true
+					}
+				}
+			}
+			object, err := oracle.View.Object(ctx, repo.clusterId, key)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("repo %s: the orphan %s could not be read for its origin: %w", repo.repoId, key, err))
+				continue
+			}
+			if object == nil {
+				// deleted since the walk listed it: nothing stands to reclaim
+				continue
+			}
+			var why string
+			statement, ok := fi6SlotOriginStatement(object.Metadata, settings.SlotOriginMaxByteCount)
+			switch {
+			case !ok:
+				why = "it carries no push's origin"
+			case held[statement]:
+				why = fmt.Sprintf("a batch held its origin's statement, push %s, so evacuation had a record of it to judge", statement.pushId)
+			case committed == nil:
+				why = fmt.Sprintf("the repo's history could not be read whole, so its origin's statement, push %s, cannot be ruled out of it", statement.pushId)
+			case committed[statement]:
+				why = fmt.Sprintf("its origin's statement, push %s, is committed", statement.pushId)
+			default:
+				// QD-870's leak: the attempt that wrote it died before its record, and nothing names its statement
+				continue
+			}
+			errs = append(errs, fmt.Errorf("repo %s: %s, which no committed version names, is %s old and no batch record lists it: no reclaimer finds it (%s)", repo.repoId, key, now.Sub(info.LastModified).Round(time.Minute), why))
 		}
 	}
 	return errs
+}
+
+// The statement a slot object's origin names (DESIGN-DETAILS 14.2.2), read from its text as step 6 writes it:
+// 1.p.<push_id>.<statement_prefix>.<ref_id>.<signer_sidecar_id>.<base_version>.<path_epoch>.<mode>, each id 32
+// lowercase hex characters, each number canonical decimal, the mode f or g. False for a re-seed's 1.r, for no
+// origin, for a value past maxByteCount and for one that does not parse, which name no statement, as evs reads them.
+func fi6SlotOriginStatement(metadata map[string]string, maxByteCount int) (fi6Statement, bool) {
+	value, ok := metadata[fi6SlotOriginMetadataKey]
+	if !ok || maxByteCount < len(value) {
+		return fi6Statement{}, false
+	}
+	fields := strings.Split(value, fi6SlotOriginSeparator)
+	if len(fields) != 9 || fields[0] != fi6SlotOriginVersion || fields[1] != fi6SlotOriginPushKind {
+		return fi6Statement{}, false
+	}
+	ids := [4][16]byte{}
+	for i, text := range fields[2:6] {
+		if len(text) != 2*len(ids[i]) || strings.ToLower(text) != text {
+			return fi6Statement{}, false
+		}
+		if _, err := hex.Decode(ids[i][:], []byte(text)); err != nil {
+			return fi6Statement{}, false
+		}
+	}
+	for _, text := range fields[6:8] {
+		number, err := strconv.ParseUint(text, 10, 64)
+		if err != nil || strconv.FormatUint(number, 10) != text {
+			return fi6Statement{}, false
+		}
+	}
+	if fields[8] != fi6SlotOriginFileMode && fields[8] != fi6SlotOriginGitMode {
+		return fi6Statement{}, false
+	}
+	return fi6Statement{pushId: sidecar.Id(ids[0]), prefix: ids[1]}, true
 }
 
 // The seg/, slot/ and pmap/ keys a committed version of the repo names.
@@ -794,8 +972,9 @@ func fi6NamedObjects(repo *evsStoreRepo) map[string]bool {
 }
 
 // Nothing committed or unknown is reclaimed between the last check and this one, and no segment goes before GC's
-// horizon could pass it; then what this check found is kept for the next.
-func fi6CheckReclaims(oracle *Oracle, memory *evsOracleMemory, repoById map[sidecar.Id]*evsStoreRepo, records []*fi6BatchRecord, oldestBatch time.Time) []error {
+// horizon could pass it; then what this check found is kept for the next, with held, every statement a batch held
+// at this check or an earlier one.
+func fi6CheckReclaims(oracle *Oracle, settings *Fi6Settings, memory *evsOracleMemory, repoById map[sidecar.Id]*evsStoreRepo, records []*fi6BatchRecord, oldestBatch time.Time, held map[fi6Statement]bool) []error {
 	segmentCluster, err := oracle.Net.Host().Blobs.SegmentCluster()
 	if err != nil {
 		return []error{err}
@@ -838,14 +1017,14 @@ func fi6CheckReclaims(oracle *Oracle, memory *evsOracleMemory, repoById map[side
 				outcome := fi6Pending
 				for _, read := range records {
 					if read.record.PushId == pending.pushId {
-						if resolved := fi6Resolve(repoById[pending.repoId], read); resolved != fi6Pending {
+						if resolved := fi6Resolve(settings, repoById[pending.repoId], read); resolved != fi6Pending {
 							outcome = resolved
 						}
 					}
 				}
 				if outcome == fi6Pending {
 					// its record may be gone with the batch: resolve on the ref's history alone
-					outcome = fi6ResolveGone(repoById[pending.repoId], pending)
+					outcome = fi6ResolveGone(settings, repoById[pending.repoId], pending)
 				}
 				if outcome == fi6Pending {
 					errs = append(errs, fmt.Errorf("%s deleted %s on %s, which push %s, still pending, needs: an unknown outcome reclaimed", entry.Actor, entry.Key, entry.ClusterId, pending.pushId))
@@ -860,10 +1039,10 @@ func fi6CheckReclaims(oracle *Oracle, memory *evsOracleMemory, repoById map[side
 				if !known {
 					continue
 				}
-				bound := lastModified.Add(fi6AdoptionBound)
+				bound := lastModified.Add(settings.AdoptionBound)
 				switch {
-				case entry.Invoked.Before(bound.Add(fi6HorizonFloor)):
-					errs = append(errs, fmt.Errorf("%s deleted %s %s after its upload: GC's horizon is never past its bound before %s (DESIGN-DETAILS 2.2.4)", entry.Actor, entry.Key, entry.Invoked.Sub(lastModified).Round(time.Minute), fi6AdoptionBound+fi6HorizonFloor))
+				case entry.Invoked.Before(bound.Add(settings.HorizonFloor)):
+					errs = append(errs, fmt.Errorf("%s deleted %s %s after its upload: GC's horizon is never past its bound before %s (DESIGN-DETAILS 2.2.4)", entry.Actor, entry.Key, entry.Invoked.Sub(lastModified).Round(time.Minute), settings.AdoptionBound+settings.HorizonFloor))
 				case !oldestBatch.IsZero() && oldestBatch.Before(bound):
 					errs = append(errs, fmt.Errorf("%s deleted %s while a batch of %s, before its bound, was left: a push in it could still adopt it", entry.Actor, entry.Key, oldestBatch.Format(time.RFC3339)))
 				}
@@ -873,6 +1052,7 @@ func fi6CheckReclaims(oracle *Oracle, memory *evsOracleMemory, repoById map[side
 
 	next := newFi6Memory()
 	next.checked = true
+	next.heldStatements = held
 	for repoId, repo := range repoById {
 		for key := range fi6NamedObjects(repo) {
 			clusterId := repo.clusterId
@@ -887,7 +1067,7 @@ func fi6CheckReclaims(oracle *Oracle, memory *evsOracleMemory, repoById map[side
 	}
 	for _, read := range records {
 		repo := repoById[read.record.RepoId]
-		if fi6Resolve(repo, read) != fi6Pending {
+		if fi6Resolve(settings, repo, read) != fi6Pending {
 			continue
 		}
 		push := read.statement.Push
@@ -917,7 +1097,7 @@ func fi6CheckReclaims(oracle *Oracle, memory *evsOracleMemory, repoById map[side
 // A push pending at the last check whose record left with its batch, resolved by §11.8's Resolve row on what the last
 // check kept of its statement: committed if the ref's history names it where it could commit, dead by the row's dead
 // rule, else still pending.
-func fi6ResolveGone(repo *evsStoreRepo, pending *fi6PendingPush) fi6Outcome {
+func fi6ResolveGone(settings *Fi6Settings, repo *evsStoreRepo, pending *fi6PendingPush) fi6Outcome {
 	if repo == nil {
 		return fi6Pending
 	}
@@ -925,7 +1105,7 @@ func fi6ResolveGone(repo *evsStoreRepo, pending *fi6PendingPush) fi6Outcome {
 		if ref.refId != pending.refId {
 			continue
 		}
-		last := pending.baseVersion + fi6ResolveRange
+		last := pending.baseVersion + settings.FileWindowVersionCount
 		if pending.gitMode {
 			last = pending.baseVersion + 1
 		}
@@ -935,7 +1115,7 @@ func fi6ResolveGone(repo *evsStoreRepo, pending *fi6PendingPush) fi6Outcome {
 			}
 		}
 		head := ref.head.Head
-		if last <= head.GetVersion() || pending.timeMs+fi6StatementLife.Milliseconds() < head.GetFenceMs() {
+		if last <= head.GetVersion() || pending.timeMs+settings.StatementLife.Milliseconds() < head.GetFenceMs() {
 			return fi6Dead
 		}
 	}
