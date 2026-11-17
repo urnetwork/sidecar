@@ -192,7 +192,8 @@ type ApprovalPhoneArgs struct {
 	// The approval logs to lease; nil for the ones the approver side's log reads (the author's vault, and the team
 	// record where this device reads it).
 	Logs func() ([]Id, error)
-	// Called with no lock held at each hint, so the app host runs Resync; nil for none.
+	// Called with no lock held at each hint, so the app host runs Resync; nil for none. It runs on the leaser's
+	// goroutine, which a hint's reader shares, so it must not block: the host runs Resync on its own.
 	Hinted func()
 }
 
