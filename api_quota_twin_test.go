@@ -37,6 +37,7 @@ func TestQuotaTwinEncodesAsOperatorCoresDoes(t *testing.T) {
 	limitsFields := []string{
 		`Tier string json:"tier"`,
 		`Limits map[string]int64 json:"limits"`,
+		`Enforced bool json:"enforced"`,
 	}
 	if fields := quotaTwinFields(reflect.TypeFor[QuotaLimits]()); !slices.Equal(fields, limitsFields) {
 		t.Errorf("QuotaLimits's fields are %q, want %q", fields, limitsFields)
@@ -74,8 +75,8 @@ func TestQuotaTwinEncodesAsOperatorCoresDoes(t *testing.T) {
 		t.Errorf("review refusal decoded to %+v, %v", decodedReview, err)
 	}
 
-	limits := QuotaLimits{Tier: "team", Limits: map[string]int64{"directory_cards": 16, "evs_stored_bytes": -1, "public_names": 0}}
-	limitsJson := `{"tier":"team","limits":{"directory_cards":16,"evs_stored_bytes":-1,"public_names":0}}`
+	limits := QuotaLimits{Tier: "team", Limits: map[string]int64{"directory_cards": 16, "evs_stored_bytes": -1, "public_names": 0}, Enforced: true}
+	limitsJson := `{"tier":"team","limits":{"directory_cards":16,"evs_stored_bytes":-1,"public_names":0},"enforced":true}`
 	encoded, err = json.Marshal(limits)
 	if err != nil {
 		t.Fatal(err)
@@ -93,5 +94,23 @@ func TestQuotaTwinEncodesAsOperatorCoresDoes(t *testing.T) {
 	// a key this build does not know reads 0, which fails closed (§20.5)
 	if decodedLimits.Limits["a_limit_from_later"] != 0 {
 		t.Errorf("an absent key reads %d", decodedLimits.Limits["a_limit_from_later"])
+	}
+
+	// enforce_sidecar_limits off encodes as false, and an older api's body, which has no enforced, decodes as
+	// false, so it refuses nothing locally (owner decision 520)
+	dark := QuotaLimits{Tier: "free", Limits: map[string]int64{"directory_requests_pending": 20}}
+	encoded, err = json.Marshal(dark)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"tier":"free","limits":{"directory_requests_pending":20},"enforced":false}`; string(encoded) != want {
+		t.Errorf("dark limits %s, want %s", encoded, want)
+	}
+	var older QuotaLimits
+	if err := json.Unmarshal([]byte(`{"tier":"free","limits":{"directory_requests_pending":20}}`), &older); err != nil {
+		t.Fatal(err)
+	}
+	if older.Enforced || older.Limits["directory_requests_pending"] != 20 {
+		t.Errorf("an older body decoded to %+v", older)
 	}
 }

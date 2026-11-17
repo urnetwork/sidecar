@@ -98,7 +98,7 @@ func (self *FakeSmtpGate) SetCommunityLimits(limits *sidecar.QuotaLimits) {
 		self.communityLimits = nil
 		return
 	}
-	self.communityLimits = &sidecar.QuotaLimits{Tier: limits.Tier, Limits: maps.Clone(limits.Limits)}
+	self.communityLimits = &sidecar.QuotaLimits{Tier: limits.Tier, Limits: maps.Clone(limits.Limits), Enforced: limits.Enforced}
 }
 
 // How many loads of the network a miss has asked for.
@@ -167,5 +167,5 @@ func (self *FakeSmtpGate) CommunityLimits() (*sidecar.QuotaLimits, bool) {
 	if self.communityLimits == nil {
 		return nil, false
 	}
-	return &sidecar.QuotaLimits{Tier: self.communityLimits.Tier, Limits: maps.Clone(self.communityLimits.Limits)}, true
+	return &sidecar.QuotaLimits{Tier: self.communityLimits.Tier, Limits: maps.Clone(self.communityLimits.Limits), Enforced: self.communityLimits.Enforced}, true
 }

@@ -8,7 +8,8 @@
 // §20.7's tls_endpoints row lives here too (QUOTA-M4-04): publish grants per (host, port), counted at grant activation.
 // Readers evaluate no tier, so the count sits outside the shared fold: the writer checks its QuotaLimits before it
 // signs a GrantActivate (AclCheckGrantActivateQuota) and api's verifier checks NetworkSidecarLimits
-// (model.CheckGrantActivationLimits), both on AclCheckTlsEndpoints' one table.
+// (model.CheckGrantActivationLimits), both on AclCheckTlsEndpoints' one table, and both only while
+// enforce_sidecar_limits is on, the writer reading it from its QuotaLimits' enforced.
 //
 // On every leg, the sidecar_http page Worker's included: root Id, no connect type.
 
@@ -148,19 +149,18 @@ func AclCheckTlsEndpoints(state *AclState, ask *AclGrantAsk, timeMs int64, limit
 
 // The writer's tls_endpoints check before it signs a GrantActivate at state, the position it files at, timeMs its
 // time: limits as GET /sidecar/limits gave them, a key they lack reading 0, which refuses, so a limit this build
-// does not know fails closed. A writer cannot tell whether enforce_sidecar_limits is on (question
-// quota-m1-02-limits-while-dark), so it applies the limits it reads: the closed direction, where api's verifier
-// passes while they are dark.
+// does not know fails closed, as nil limits, an answer that did not come, do. The check applies the limit only while
+// the answer's enforced is true, so while enforce_sidecar_limits is off the writer signs what api's verifier then
+// passes, its refusal dark as the verifier's is (§20.5; owner decision 520). An activation whose canonical action
+// does not read is an error whatever the switch says.
 func AclCheckGrantActivateQuota(state *AclState, activate *protocol.GrantActivate, timeMs int64, limits *QuotaLimits) (*QuotaRefusal, error) {
 	ask, err := AclGrantActivateAsk(activate)
 	if err != nil {
 		return nil, err
 	}
-	limit := int64(0)
 	upgrade := true
 	if limits != nil {
-		limit = limits.Limits[AclTlsEndpointsLimitKey]
 		upgrade = limits.Tier != "team"
 	}
-	return AclCheckTlsEndpoints(state, ask, timeMs, limit, upgrade), nil
+	return AclCheckTlsEndpoints(state, ask, timeMs, quotaLocalLimit(limits, AclTlsEndpointsLimitKey), upgrade), nil
 }

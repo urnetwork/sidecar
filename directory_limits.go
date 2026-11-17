@@ -11,7 +11,10 @@
 //
 // The daemon refuses a filing past one, and a reader ignores what is past one with an over_limit alarm. A key the
 // limits do not carry reads 0, which refuses (§20.5's not included), and limits that cannot be read refuse too: no
-// limit is ever assumed. -1 is none. The request's own times are a DirectoryRequestSettings' fields.
+// limit is ever assumed. -1 is none. Both apply the limits only while the answer's enforced is true: while
+// enforce_sidecar_limits is off every one reads none, so the daemon files past them and a reader shows what is past
+// them, dark as api's refusals are (§20.5; owner decision 520), the limits still read so that an answer that does
+// not come still refuses. The request's own times are a DirectoryRequestSettings' fields.
 
 package sidecar
 
@@ -92,7 +95,7 @@ type directoryLimits struct {
 }
 
 // Reads the limits through read, GET /sidecar/limits's seam: ErrDirectoryLimitsUnavailable for none bound or an answer
-// that did not come, and 0 for a key the answer does not carry.
+// that did not come, 0 for a key an enforced answer does not carry, and none for every key while it is not enforced.
 func directoryLimitsOf(ctx context.Context, read func(ctx context.Context) (*QuotaLimits, error)) (*directoryLimits, error) {
 	if read == nil {
 		return nil, fmt.Errorf("%w: nothing reads them here", ErrDirectoryLimitsUnavailable)
@@ -105,10 +108,10 @@ func directoryLimitsOf(ctx context.Context, read func(ctx context.Context) (*Quo
 		return nil, fmt.Errorf("%w: no limits answered", ErrDirectoryLimitsUnavailable)
 	}
 	return &directoryLimits{
-		requestsPending: limits.Limits[DirectoryLimitRequestsPending],
-		requestsPerDay:  limits.Limits[DirectoryLimitRequestsPerDay],
-		requestsPerRun:  limits.Limits[DirectoryLimitRequestsPerRun],
-		targetPending:   limits.Limits[DirectoryLimitTargetPending],
+		requestsPending: quotaLocalLimit(limits, DirectoryLimitRequestsPending),
+		requestsPerDay:  quotaLocalLimit(limits, DirectoryLimitRequestsPerDay),
+		requestsPerRun:  quotaLocalLimit(limits, DirectoryLimitRequestsPerRun),
+		targetPending:   quotaLocalLimit(limits, DirectoryLimitTargetPending),
 	}, nil
 }
 

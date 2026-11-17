@@ -314,6 +314,61 @@ func TestQuotaClosurePacingPerSNeverReadsBelowFour(t *testing.T) {
 	}
 }
 
+// Owner decision 522's dark rules are the limits only pro.yml sets with no floor: drops, drop previews and read
+// receipts. The closure rates, allowance and pacing and the erasure push class never are.
+func TestQuotaRateRulesDarkAreThePlansAlone(t *testing.T) {
+	sidecarId, repoId := connect.NewId(), connect.NewId()
+	for _, c := range []struct {
+		key  string
+		dark bool
+	}{
+		{key: QuotaRateKeyDrop, dark: true},
+		{key: QuotaRateKeyDropPreview(repoId), dark: true},
+		{key: QuotaRateKeyReadReceipt(repoId), dark: true},
+		{key: QuotaRateKeyClosureUpload(sidecarId), dark: false},
+		{key: QuotaRateKeyClosureBytes(sidecarId), dark: false},
+		{key: QuotaRateKeyErasurePush, dark: false},
+	} {
+		rule, err := ParseQuotaRateKey(c.key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rule.Dark() != c.dark {
+			t.Errorf("%s: dark %t, want %t", rule.Family, rule.Dark(), c.dark)
+		}
+	}
+}
+
+// The closure allowance with its floor, the pacing and its refusal read the limits as configured whatever their
+// enforced says (owner decision 520): they bound what passes while a network is spent, which is never dark.
+func TestQuotaClosureBoundsIgnoreEnforced(t *testing.T) {
+	closureBytes, err := ParseQuotaRateKey(QuotaRateKeyClosureBytes(connect.NewId()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	closureUploads, err := ParseQuotaRateKey(QuotaRateKeyClosureUpload(connect.NewId()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mib := int64(1024 * 1024)
+	now := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
+	configured := map[string]int64{"evs_closure_bytes_per_day": 1, "evs_closure_bytes_floor": 4 * mib, "evs_closure_uploads_per_s": 8}
+	enforced := &QuotaLimits{Tier: "free", Limits: configured, Enforced: true}
+	dark := &QuotaLimits{Tier: "free", Limits: configured}
+	if closureBytes.Limit(dark) != 4*mib || closureBytes.Limit(enforced) != 4*mib {
+		t.Errorf("the allowance: %d dark, %d enforced", closureBytes.Limit(dark), closureBytes.Limit(enforced))
+	}
+	if closureUploads.Limit(dark) != 60 || closureUploads.Limit(enforced) != 60 {
+		t.Errorf("an eraser's uploads: %d dark, %d enforced", closureUploads.Limit(dark), closureUploads.Limit(enforced))
+	}
+	if QuotaClosurePacingPerS(dark) != 8 || QuotaClosurePacingPerS(enforced) != 8 {
+		t.Errorf("the pacing: %d dark, %d enforced", QuotaClosurePacingPerS(dark), QuotaClosurePacingPerS(enforced))
+	}
+	if *QuotaClosurePacingRefusal(dark, 8, now, now.Add(time.Second)) != *QuotaClosurePacingRefusal(enforced, 8, now, now.Add(time.Second)) {
+		t.Error("the pacing's refusal differs with enforced")
+	}
+}
+
 // A pacing run: each eraser in askerIds asks every step, in order, and takes its turn whenever Ask allows. It
 // answers each eraser's take times and the takes in each aligned second.
 func runQuotaClosurePacing(pacing *QuotaClosurePacing, askerIds []connect.Id, start time.Time, step time.Duration, steps int, perS int64) (map[connect.Id][]time.Time, map[int64]int) {

@@ -106,7 +106,7 @@ func (self *mailClientTestApi) MailStatus(ctx context.Context) (*MailNetworkStat
 func (self *mailClientTestApi) Limits(ctx context.Context) (*QuotaLimits, error) {
 	return &QuotaLimits{Tier: "pro", Limits: map[string]int64{
 		mailLimitInboundMessageBytes: 50 * 1024 * 1024, mailLimitInboundRecipients: 100, mailLimitInboundReposPerMessage: 8,
-	}}, nil
+	}, Enforced: true}, nil
 }
 
 // The repos' parts over the worlds' stand-ins: the access log's, mailcfg's and the mailbox's.

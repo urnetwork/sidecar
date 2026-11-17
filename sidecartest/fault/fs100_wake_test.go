@@ -150,14 +150,14 @@ type wakeWorld struct {
 	filed *sidecar.DirectoryRequestFiled
 }
 
-// The limits §20.4 gives a Team, as GET /sidecar/limits answers them.
+// The limits §20.4 gives a Team, as GET /sidecar/limits answers them with enforce_sidecar_limits on.
 func wakeLimits(ctx context.Context) (*sidecar.QuotaLimits, error) {
 	return &sidecar.QuotaLimits{Tier: "team", Limits: map[string]int64{
 		sidecar.DirectoryLimitRequestsPending: 20,
 		sidecar.DirectoryLimitRequestsPerDay:  50,
 		sidecar.DirectoryLimitRequestsPerRun:  5,
 		sidecar.DirectoryLimitTargetPending:   100,
-	}}, nil
+	}, Enforced: true}, nil
 }
 
 // A device admitted in both states as a member device of memberId, writing its own stream of the directory.
