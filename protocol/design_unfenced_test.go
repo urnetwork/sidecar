@@ -1138,6 +1138,13 @@ var testFenceAdditions = []struct {
 		field:    testFenceField{name: "version", number: 4, typeName: "uint32"},
 		question: "record-m6-03-opening-entry-version",
 	},
+	// QD-900: the run's redacted user prompts, in the stage 2 context entries ingest writes as they arrive, so a vault's
+	// run card reads its prompt text and title fallback from the record (RECORD.md 7.4; §16.7's context row)
+	{
+		message:  "ContextBody",
+		field:    testFenceField{name: "prompts", number: 17, typeName: "string", repeated: true},
+		question: "search-m10-28-transcript-prompts",
+	},
 }
 
 // One field an owner's answer takes out of a message the design fences, its number reserved.

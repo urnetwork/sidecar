@@ -12,7 +12,8 @@
 //	hook_event   ingest_tools.go: PreToolUse, PermissionRequest and the lifecycle events, the payload redacted
 //	permission   ingest_tools.go: PermissionRequest events and the modes they ran under
 //	context      ingest_context.go: a stage 1 entry at SessionStart, stage 2 when the model or mode changes, with
-//	             instruction files by hash and never their text, and the run title
+//	             instruction files by hash and never their text, and the run title; and a stage 2 entry with each
+//	             user prompt, redacted, as it arrives, while the run's prompts stay within a card's 2 KiB (QD-900)
 //	change, blob ingest_context.go: each hook's scan of MCP-M3-20's restore point, with hashes and attribution, and
 //	             the after bytes of each changed file within Ingest.FileByteCount as a blob
 //	coverage     ingest_coverage.go: at SessionEnd or after Record.CoverageIdleTimeout idle, naming the sources,
@@ -40,6 +41,7 @@ import (
 	"errors"
 	"slices"
 	"sync"
+	"unicode/utf8"
 
 	"google.golang.org/protobuf/proto"
 
@@ -96,7 +98,8 @@ type RunCapture struct {
 	ToolCounts map[string]int
 	// Up to Ingest.RunCardPathCount touched paths, relative to the worktree.
 	TouchedPaths []string
-	// The first Ingest.RunCardPromptByteCount of the user prompts, redacted.
+	// The first Ingest.RunCardPromptByteCount of the user prompts, redacted, one a line: the prompts the run's stage 2
+	// context entries carry (QD-900).
 	Prompts            string
 	StartedMillis      int64
 	LastActivityMillis int64
@@ -516,7 +519,7 @@ func (self *Ingest) captureHook(ctx context.Context, captured *HookCaptured) err
 		self.capturePermissionWithLock(ctx, run, event)
 	}
 	if event.Kind == HookEventUserPrompt {
-		self.capturePromptWithLock(ctx, run, redactor, captured.Payload)
+		self.capturePromptWithLock(ctx, run, redactor, event, captured.Payload)
 	}
 	self.captureScanWithLock(ctx, run, redactor, event, captured.Payload)
 	switch event.Kind {
@@ -649,14 +652,23 @@ func ingestValueText(raw []byte) []byte {
 	return raw
 }
 
-// text cut to byteCount at a rune boundary, and whether it was cut.
+// text cut to byteCount at a rune boundary, and whether it was cut: a rune the cut would split goes whole, so a cut
+// string stays valid UTF-8, which a proto string field needs in order to marshal at all. Bytes that are no UTF-8
+// where the cut falls are cut where asked; a non-positive byteCount cuts everything.
 func ingestCut(text []byte, byteCount int64) ([]byte, bool) {
 	if int64(len(text)) <= byteCount {
 		return text, false
 	}
-	cut := text[:byteCount]
-	for 0 < len(cut) && cut[len(cut)-1]&0xC0 == 0x80 {
-		cut = cut[:len(cut)-1]
+	if byteCount <= 0 {
+		return text[:0], true
 	}
-	return cut, true
+	// back to the start of the rune the cut falls in, at most a rune's length less one
+	cut := byteCount
+	for back := 1; back < utf8.UTFMax && 0 < cut && !utf8.RuneStart(text[cut]); back += 1 {
+		cut -= 1
+	}
+	if !utf8.RuneStart(text[cut]) {
+		cut = byteCount
+	}
+	return text[:cut], true
 }

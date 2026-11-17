@@ -78,6 +78,8 @@ type SidecarIngestSettings struct {
 	FileByteCount int64
 	// Captured bytes per run-hour, since vault bytes count toward storage (§20): 256 MiB.
 	RunHourByteCount int64
+	// The run-hour RunHourByteCount counts in, from the first byte charged to it: 1 h.
+	RunHourInterval time.Duration
 	// The local encrypted spool, which keeps capturing while the daemon is locked: 1 GiB.
 	SpoolByteCount int64
 	// One spool segment, past which the next record starts another: 16 MiB, a reading, so a drain
@@ -151,6 +153,33 @@ type SidecarIngestSettings struct {
 	RunCardPromptByteCount int
 	// The most touched paths a run card keeps: 256 (§16.10).
 	RunCardPathCount int
+	// The run title a context entry carries, its first line after redaction, cut on a code point: 120 B,
+	// ContextBody.title's cap. This and the caps below are RECORD.md section 6.4's format values, which capture may set
+	// lower, never higher, since the writer refuses a body past the format's caps (QD-702).
+	ContextTitleByteCount int64
+	// The session ids a context entry names, the run's newest: 4.
+	ContextSessionIdCount int
+	// Each session id a context entry names: 64 B.
+	ContextSessionIdByteCount int64
+	// The harness version a context entry names: 64 B, a reading, since RECORD.md gives the field no cap of its own.
+	ContextHarnessVersionByteCount int64
+	// The model a context entry names: 64 B.
+	ContextModelByteCount int64
+	// The permission mode a context entry names, as the harness spells it: 32 B.
+	ContextPermissionModeByteCount int64
+	// The project a context or change entry names: 128 B, which a worktree's base name can pass.
+	ProjectByteCount int64
+	// The git branch a context entry names: 128 B.
+	ContextBranchByteCount int64
+	// The instruction files a context entry lists by scope, base name, hash and size: 64, past which each one left out
+	// is a truncation warning.
+	ContextInstructionFileCount int
+	// An instruction file's base name in a context entry: 128 B.
+	ContextInstructionFileNameByteCount int64
+	// The truncation warnings a context entry carries: 16.
+	ContextTruncationCount int
+	// The file a truncation warning names: 100 B, so that with ": not listed" the warning stays within its 128 B.
+	ContextTruncationNameByteCount int64
 	// The agent-config files of a shared repo, which evs_write and evs_delete reach only as an outward action
 	// (§16.5's row; sidecar/design/pitch5.html:737): CLAUDE.md, AGENTS.md, .mcp.json and each harness's hook and
 	// settings files. An entry with no / matches a path's last name, at any depth, as harnesses load nested
@@ -296,6 +325,7 @@ func defaultSidecarIngestSettings() *SidecarIngestSettings {
 		PayloadByteCount:       1024 * 1024,
 		FileByteCount:          8 * 1024 * 1024,
 		RunHourByteCount:       256 * 1024 * 1024,
+		RunHourInterval:        1 * time.Hour,
 		SpoolByteCount:         1024 * 1024 * 1024,
 		SpoolSegmentByteCount:  16 * 1024 * 1024,
 		SpoolCursorRecordCount: 64,
@@ -328,6 +358,19 @@ func defaultSidecarIngestSettings() *SidecarIngestSettings {
 		ChangePathCount:          4096,
 		RunCardPromptByteCount:   2 * 1024,
 		RunCardPathCount:         256,
+		// ContextBody's caps, and the project's ChangeBody shares (RECORD.md section 6.4)
+		ContextTitleByteCount:               120,
+		ContextSessionIdCount:               4,
+		ContextSessionIdByteCount:           64,
+		ContextHarnessVersionByteCount:      64,
+		ContextModelByteCount:               64,
+		ContextPermissionModeByteCount:      32,
+		ProjectByteCount:                    128,
+		ContextBranchByteCount:              128,
+		ContextInstructionFileCount:         64,
+		ContextInstructionFileNameByteCount: 128,
+		ContextTruncationCount:              16,
+		ContextTruncationNameByteCount:      100,
 		AgentConfigPaths: []string{
 			"CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", ".mcp.json", ".cursorrules",
 			".claude/settings.json", ".claude/settings.local.json",
