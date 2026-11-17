@@ -86,7 +86,8 @@ The policy is HuJSON in the config repo, parsed in-repo: `aclStandardizeHujson` 
   "tagOwners": { "tag:recurd": ["group:eng"], "tag:db": ["autogroup:admin"],
                  "tag:api": ["autogroup:admin"], "tag:audit": ["autogroup:admin"] },
   "grants": [
-    { "src": ["autogroup:untagged"], "dst": ["autogroup:self"], "allow": ["dial", "route"] }, // 1 laptop→phone
+    { "src": ["autogroup:member", "autogroup:untagged"], "dst": ["autogroup:self"],           // 1 laptop→phone
+      "via": ["autogroup:self"], "allow": ["dial", "route"] },
     { "src": ["tag:recurd"], "dst": ["evs:repo-x"], "allow": ["write"] },                     // 2
     { "src": ["group:eng"], "dst": ["sock:db"], "allow": ["dial"] },                          // 3
     { "src": ["tag:db"],    "dst": ["sock:db"], "allow": ["listen"] },
@@ -104,7 +105,7 @@ The policy is HuJSON in the config repo, parsed in-repo: `aclStandardizeHujson` 
 }
 ```
 
-**Grant 1 (owner decision 344).** Grant 1, and Team's starting document (`acl_team_start.hujson`) with it, reads `{ "src": ["autogroup:member", "autogroup:untagged"], "dst": ["autogroup:self"], "via": ["autogroup:self"], "allow": ["dial", "route"] }`. D-ACL-20 narrowed `autogroup:untagged` to non-sidecars, so the source names `autogroup:member` beside it, and a member's own sidecars and app devices reach each other; a rule's via subjects no longer share its targets (8.8), so `via` names `autogroup:self` and a member's devices also reach the prefixes their own devices' approved routes serve. FS-21's Team case uses peers of two members, since a member's own devices reach each other. The block above keeps its line 1 as first written until the root package's fixture of this example, which a test holds to the block byte for byte, moves with it.
+**Grant 1 (owner decision 344).** Grant 1, and Team's starting document (`acl_team_start.hujson`) with it, reads `{ "src": ["autogroup:member", "autogroup:untagged"], "dst": ["autogroup:self"], "via": ["autogroup:self"], "allow": ["dial", "route"] }`. D-ACL-20 narrowed `autogroup:untagged` to non-sidecars, so the source names `autogroup:member` beside it, and a member's own sidecars and app devices reach each other; a rule's via subjects no longer share its targets (8.8), so `via` names `autogroup:self` and a member's devices also reach the prefixes their own devices' approved routes serve. FS-21's Team case uses peers of two members, since a member's own devices reach each other.
 
 **Kind defaults** come ahead of every document, evaluated in the binary from `AclRepo` rows and the state and never compiled into rules, so an admission between bases reads at once (owner decision 355); `*` never matches these kinds, which §11.12 fixes at creation. Rules add nothing to config, directory or secret repos, add only deposit to vault and mailbox, and add readers only to the last two, as to general and record repos:
 
