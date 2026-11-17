@@ -78,10 +78,16 @@ override    per device, for one repo or every repo: SetPolicy (18.5), the key or
             app hosts and the page Worker's main set Search.AllPolicy and Search.MemoryByteCount over
             DefaultSidecarSettings() per host class, as sdk narrows connect's defaults for mobile
             (applyMobileLowMemoryClientSettings, sdk/mobile_memory_policy.go:332)
-windows     wifi_charging syncs all in an OS-granted window (18.7), or while a foreground app or an open tab is
-            on an unmetered link and charging, and there runs the merges and roll-ups §11.14 assigns the
-            device: a roll-up only while it holds all within its cap, stopping at a window's budget, else a
-            capable writer runs it; Low Power Mode or power saving pauses it
+windows     wifi_charging syncs all only while the host is on an unmetered link and charging, in an OS-granted
+            window (18.7) or with a foreground app or an open tab, and there runs the merges and roll-ups
+            §11.14 assigns the device: a roll-up only while it holds all within its cap, stopping at a
+            window's budget, else a capable writer runs it; Low Power Mode or power saving pauses it; a window
+            on cellular or unplugged fetches no all, since an iOS BGProcessingTask can require power and a
+            network but not Wi-Fi, and the core gates every window itself rather than relying on each host
+            (owner decision 576); a sync round other than "search more"'s asks this rule again before each
+            read of all, and once it no longer allows all (the link metered, the charger unplugged or Low Power
+            Mode on) the round ends its fetch there, what landed staying staged for the next round the rule
+            allows to resume, as at a window's budget (owner decision 583)
 conditions  hosts report unmetered, charging and low power (18.7); a condition not yet reported, or one the
             browser hides, counts as metered and not charging; ur daemon hosts report none and count as
             unmetered; the Go core reads no platform API
@@ -142,8 +148,9 @@ targets     warm, from the cache: phone app: buckets p50 <= 50 ms and p95 <= 150
             frames, lists and pending candidates beside the process's 256 KiB of version-table pages (§5.9),
             whatever the buckets hold, and a host sets DaemonSearchCount so its searches fit
             Search.MemoryByteCount; cold, a "search more" downloading all keeps §16.10's cold contract, a
-            shard's hits within 300 ms of its landing on phones and page Workers; §22 measures them on
-            surrogate phones (owner decision 100) and in Safari's wasm engine
+            shard's hits reaching the caller within 300 ms of its landing on phones and page Workers (owner
+            decision 572); §22 measures them on surrogate phones (owner decision 100) and in Safari's wasm
+            engine
 remote      tap to the first remote page, pre-warmed, on an indexer's warm cache of five years of mail at 100
             a day: Wi-Fi p50 <= 300 ms and p95 <= 1 s, each later page <= 250 ms and <= 800 ms; LTE p50
             <= 500 ms and p95 <= 1.5 s, later pages <= 400 ms and <= 1.2 s; cold (no contract or Hello in
@@ -286,8 +293,10 @@ func (self *SidecarApprovals) AddPendingListener(listener SidecarApprovalListene
 func (self *SidecarApprovals) CreateRecoveryCode(callback SidecarResultCallback) // §5.9's recovery setup for apps: runs
 	// in process, draws the code, signs RecoveryBind or RecoveryRebind through the sidecar and hands the 12 words
 	// to the host's UI once, never over control mode
-func (self *SidecarApprovals) Decide(approvalId *Id, decision string, callback SidecarResultCallback) // single use (§16.8):
-	// request: approve|deny, an ApprovalDecision (§16.6); admission: approve signs the SidecarAdmit (§5.6), with one
+func (self *SidecarApprovals) Decide(approvalId *Id, decision string, callback SidecarResultCallback) // as shown (§16.8):
+	// request: approve|deny, an ApprovalDecision (§16.6) for the uses the request names, a template's count as the
+	// agent asked it and rendered, 1 for any other action, and, until the request carries that count, deny alone
+	// for a template request (owner decision 574); admission: approve signs the SidecarAdmit (§5.6), with one
 	// presence check over the act where §7.9's presence row asks (owner decisions 187, 189), and for
 	// a page Worker, in the same act, SidecarRevoke{removed} of each of its member's page Workers §7.10's stale row
 	// lets this device revoke, an admin's included (D-TEAM-29), on the member's own device listing its other page
@@ -697,7 +706,8 @@ window      iOS: a BGProcessingTaskRequest with requiresExternalPower and requir
             setRequiresCharging(true) and NetworkType.UNMETERED
             (https://developer.android.com/reference/androidx/work/Constraints.Builder); each calls
             RunBackgroundSync(budget), which does 18.4's window work while the reported conditions allow it,
-            stops at the budget and resumes next time
+            asking again before each read of all (owner decision 583), stops at the budget and resumes next
+            time
 conditions  SetConditions(unmetered, charging, lowPower) on each change: iOS NWPathMonitor (unmetered =
             neither isExpensive nor isConstrained), UIDevice batteryState, ProcessInfo
             isLowPowerModeEnabled; Android NET_CAPABILITY_NOT_METERED, BatteryManager.isCharging,
