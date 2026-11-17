@@ -490,7 +490,7 @@ The design-records track for the second pass over §11, §12 and §13 (wave f41d
 - **Elsewhere.** The parts these name outside §11 and §13 went with them: §2.8's evs-28 (570), §15.16's two risk rows on readers that start fresh on a mailcfg ref (568), §19.8's `drop-reindex` page row (570) and §19.10's repos row, which names the segment uploads of a repo re-seeded as deleted (565).
 - **Not applied as section text.** Each answer's code parts, its fix track's (reseed-parts-seal-fence, reseed-segments-deleted-admin, evs-prefix-removal-after-removal, evs-absent-walked-removal, config-place-any-writer and drop-reindex-snap0-source had not landed at this fold; QD-994's, QD-996's, QD-1006's and QD-1018's code had); 570's FILE-CLUSTERS.md runbook row in xops; 568's replaying mailcfg reader, MAIL-M7-04's in the review phase; and DESIGN-DETAILS 17.2.8 and 17.4 (571), which are the design agent's. cert-1's 16 d was already in §2.8's block, list v41. QD-1011, whose changes name §13.6 but which folds into §19, is left to §19's pass.
 
-`build.sh` on this folder reproduced DESIGN.md (SHA-256 `153346b7bbb337b92e093979439701738413ca544209a4a6cfa43d455319247c`) at this fold, and the validation shows:
+`build.sh` on this folder reproduced DESIGN.md (SHA-256 `ff4677a2f081c45897e322ac855ec6203fadf59e23f87da48f5d32cef50b7a0f`) at this fold, and the validation shows:
 
 - **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no new §2.8 row, so no guard line was needed. No proto fence changed, so no guard entry moved.
 - **Owner decisions.** All 571 rows are present and cited; `LATE_DATES` gives each new row its date, and no new day joined the row pattern; rows 414, 424 and 512 note decisions 569's, 571's and 570's amendments.

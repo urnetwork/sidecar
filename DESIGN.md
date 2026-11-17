@@ -9915,8 +9915,8 @@ parts     a push over 1 MiB or 1,024 entry writes goes in n <= 1,024 parts withi
           EvsPushPart k, receipts}, at most 4 at once; evs runs steps 4, 5 (a-e, g, h) for that part's entries,
           appends the part, its receipts and the head version it checked as a batch record (a batch alone above
           256 KiB) and answers 200 {place}, a re-seeded part being an EVS_BATCH_RESEED record read where a part is
-          (owner decision 402), which, as its seal, Resolve judges by the fence alone (below; owner decision 564); a
-          part posted twice is two records, and the seal names one; git mode
+          (owner decision 402), which Resolve, as its seal, judges with the fence in place of the time clause
+          (below; owner decision 564); a part posted twice is two records, and the seal names one; git mode
           first takes the seal lease
 lease     git mode: POST .../push/P/lease {ref_id, base_version, ms <= 120,000} (rw), after the push's segments and
           before its parts: it reads the head as step 4 does, and one head CAS sets lease {P, until} and raises the
@@ -10027,7 +10027,7 @@ Resolve   head window, then at most two log pages of (b, b+64]: P is committed a
           past b+64 (git mode: b+1), or its statement can no longer pass the time checks (time_ms + 35 min) and the
           head's fence_ms is later than that; otherwise pending; log pages never change, so evs caches them; a
           re-seed's records, a one-part push's, a re-seeded part's and a reseed seal's, take the fence in place of
-          the time clause, dead by it only on a head whose fence_ms is at or past the time the evacuation run held
+          the time clause, dead only on a head whose fence_ms is at or past the time the evacuation run held
           the record, never because time_ms + 35 min has passed (11.13's resolve row; owner decisions 404, 564)
 ```
 
