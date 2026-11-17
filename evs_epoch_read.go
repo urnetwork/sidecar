@@ -1171,9 +1171,10 @@ func (self *EvsRepo) finishRead(ctx context.Context, refId Id, keys *evsReadKeys
 			verified.TokenPath = tokenPath
 			path.current = tokenPath
 		} else if path.version == 0 && path.record != nil &&
-			(verified.Absent || (verified.Entry != nil && verified.Entry.GetVersion() < path.record.EntryVersion)) {
+			((verified.Absent && verified.WalkedRemoval == nil) || (verified.Entry != nil && verified.Entry.GetVersion() < path.record.EntryVersion)) {
 			// an older version asked for by number is history, not a rollback, and a path this device read a version
-			// of is never absent: removed at most
+			// of is never absent: removed at most, which a path served absent is where the walk from the record's pin
+			// ends on its removal (QD-979)
 			round.objects.close()
 			self.client.alarm(self.repoId, refId, SidecarEvsAlarmTamper, path.path, nil)
 			return nil, fmt.Errorf("%w: a version below the one this device read", ErrEvsEntryRefused)

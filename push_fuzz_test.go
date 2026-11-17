@@ -1,9 +1,10 @@
 //go:build !js
 
-// §22.6's FuzzPushState: any sequence of reset parts, hints, whole resets and reconciles leaves the
-// machine bounded, with no durable topic ever lowered by a reset, no partial run applied, and every run
-// either applied whole or abandoned for versions. The seed corpus is testdata/fuzz/FuzzPushState/, off
-// the js leg, whose tests cannot open it.
+// §22.6's FuzzPushState: any sequence of reset parts, hints, versions pages and reconciles leaves the
+// machine bounded, with no durable topic ever lowered by a reset, no partial run applied, every run
+// either applied whole or abandoned for versions, and a page begun before an input the machine has since
+// taken lowering nothing, ending no run and raising no alarm (owner decision 299). The seed corpus is
+// testdata/fuzz/FuzzPushState/, off the js leg, whose tests cannot open it.
 
 package sidecar
 
@@ -52,7 +53,25 @@ func FuzzPushState(f *testing.F) {
 			case 2:
 				machine.hint(&protocol.PushHint{Seq: epoch, Topic: topic, Version: version})
 			case 3:
-				machine.reset(map[string]uint64{topic: version})
+				// a versions page, begun after every input, or before the last when epoch is 1
+				noted := machine.inputCount
+				if epoch == 1 && 0 < noted {
+					noted -= 1
+				}
+				runOpen := machine.runOpen
+				alarmCount := len(machine.alarmTopics)
+				action := machine.reset(map[string]uint64{topic: version}, noted)
+				if noted < machine.inputCount {
+					// a late page lowers nothing, ends no run and raises no alarm
+					for topic, version := range before {
+						if machine.topicVersions[topic] < version {
+							t.Fatalf("a late page lowered %s from %d to %d", topic, version, machine.topicVersions[topic])
+						}
+					}
+					if machine.runOpen != runOpen || len(action.alarms) != 0 || alarmCount < len(machine.alarmTopics) {
+						t.Fatalf("a late page: run open %t then %t, %+v", runOpen, machine.runOpen, action)
+					}
+				}
 			case 4:
 				// an owner's reconcile may lower a durable topic: what the machine then holds is the floor
 				machine.reconcile(topic, version)
