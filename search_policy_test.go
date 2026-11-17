@@ -3,10 +3,11 @@
 package sidecar
 
 // SEARCH-M10-20 (§18.4's Search block; FS-77's policy cases, here on the sync engine's fake): the modes per host and
-// their windows, an unreported condition counting as metered and not charging and a daemon host's as unmetered, Low
-// Power Mode pausing background work, per-device overrides sealed in search.state and kept through eviction, the 25 MiB
-// metered wait, the day's background budget, one forced head refresh a repo per interval, the caps and the directory
-// row, and a cellular, unplugged phone fetching nothing of all.
+// their windows, a window keeping all only on an unmetered link while charging (QD-1000), an unreported condition
+// counting as metered and not charging and a daemon host's as unmetered, Low Power Mode pausing background work,
+// per-device overrides sealed in search.state and kept through eviction, the 25 MiB metered wait, the day's background
+// budget, one forced head refresh a repo per interval, the caps and the directory row, and a cellular, unplugged phone
+// fetching nothing of all.
 
 import (
 	"strings"
@@ -42,8 +43,9 @@ func testPhoneSearchSettings() *SidecarSearchSettings {
 	return settings
 }
 
-// §18.4's modes and windows: a desktop keeps all always; a phone only in an OS window or in the foreground on an
-// unmetered link while charging, never in Low Power Mode; on_demand and never keep none.
+// §18.4's modes and windows: a desktop keeps all always; a phone only in an OS window or in the foreground, in both
+// only on an unmetered link while charging and never in Low Power Mode (QD-1000), so a window on cellular, unplugged or
+// in Low Power Mode keeps none, each row failing one condition alone; on_demand and never keep none.
 func TestSearchPolicyModesAndWindows(t *testing.T) {
 	clock := newIdentityTestClock()
 	repoId := evsTestId("repo")
@@ -62,12 +64,19 @@ func TestSearchPolicyModesAndWindows(t *testing.T) {
 		{name: "unreported, background", conditions: SearchConditions{}, keeps: false},
 		{name: "unreported, foreground", conditions: SearchConditions{Foreground: true}, keeps: false},
 		{name: "cellular and unplugged, foreground", conditions: SearchConditions{Reported: true, Foreground: true}, keeps: false},
+		{name: "cellular and charging, foreground", conditions: SearchConditions{Reported: true, Charging: true, Foreground: true}, keeps: false},
 		{name: "wifi and unplugged, foreground", conditions: SearchConditions{Reported: true, Unmetered: true, Foreground: true}, keeps: false},
 		{name: "wifi and charging, background", conditions: SearchConditions{Reported: true, Unmetered: true, Charging: true}, keeps: false},
 		{name: "wifi and charging, foreground", conditions: SearchConditions{Reported: true, Unmetered: true, Charging: true, Foreground: true}, keeps: true},
 		{name: "wifi and charging, foreground, low power", conditions: SearchConditions{Reported: true, Unmetered: true, Charging: true, Foreground: true, LowPower: true}, keeps: false},
-		{name: "a window, cellular", conditions: SearchConditions{Reported: true}, window: true, keeps: true},
-		{name: "a window, low power", conditions: SearchConditions{Reported: true, LowPower: true}, window: true, keeps: false},
+		{name: "a window, wifi and charging", conditions: SearchConditions{Reported: true, Unmetered: true, Charging: true}, window: true, keeps: true},
+		// a BGProcessingTask can require power and a network, never Wi-Fi: the link alone fails it
+		{name: "a window, cellular", conditions: SearchConditions{Reported: true, Charging: true}, window: true, keeps: false},
+		{name: "a window, unplugged", conditions: SearchConditions{Reported: true, Unmetered: true}, window: true, keeps: false},
+		{name: "a window, low power", conditions: SearchConditions{Reported: true, Unmetered: true, Charging: true, LowPower: true}, window: true, keeps: false},
+		{name: "a window, cellular and unplugged", conditions: SearchConditions{Reported: true}, window: true, keeps: false},
+		{name: "a window, unreported", conditions: SearchConditions{}, window: true, keeps: false},
+		{name: "a window, wifi and charging, foreground", conditions: SearchConditions{Reported: true, Unmetered: true, Charging: true, Foreground: true}, window: true, keeps: true},
 	}
 	for _, c := range cases {
 		*conditions = c.conditions
@@ -83,11 +92,14 @@ func TestSearchPolicyModesAndWindows(t *testing.T) {
 		}
 		end()
 	}
-	// a window past its deadline holds nothing open
-	*conditions = SearchConditions{Reported: true}
+	// a window past its deadline holds nothing open, on Wi-Fi while charging, where one inside it keeps all
+	*conditions = SearchConditions{Reported: true, Unmetered: true, Charging: true}
 	defer phone.BeginWindow(clock.Now().Add(time.Minute))()
+	if !phone.KeepsAll(repoId, 0) {
+		t.Fatal("a window on Wi-Fi while charging did not keep all")
+	}
 	clock.advance(2 * time.Minute)
-	if phone.KeepsAll(repoId, 0) {
+	if phone.KeepsAll(repoId, 0) || phone.MayRunBackgroundIndexWork() {
 		t.Error("a window past its deadline kept all")
 	}
 	for _, mode := range []string{SearchPolicyOnDemand, SearchPolicyNever} {
