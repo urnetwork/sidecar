@@ -7,12 +7,13 @@
 //     cannot reach answers a new repo 503 before anything is written, so no place/ ever names it; a repo already
 //     placed goes on to step 2's rule.
 //  2. On 412, or an unknown outcome, it reads place/: the same creator continues on the cluster place/ names,
-//     whatever place_new says now, and any other gets 409, so of two racing creates exactly one places the repo and
-//     a retry never moves it. An unknown outcome whose read finds no place/ never landed and never will (§19.6's
-//     settle rule), and the same bytes go once more.
+//     whatever place_new says now, and any other gets 409 REPO_PLACED and picks another id (owner decision 411), so
+//     of two racing creates exactly one places the repo and a retry never moves it. An unknown outcome whose read
+//     finds no place/ never landed and never will (§19.6's settle rule), and the same bytes go once more.
 //  3. Only then repo/<id> there, If-None-Match, `keying` until §10's KF1, format 1, with the creating token's
 //     network (plan-EVSB-repo-network). A 412 whose repo/ is this repo, network, kind and owner is a retry, and
-//     answers 200 as the first did; any other is a fault that alarms.
+//     answers 200 as the first did; any other is a fault that alarms, and answers 409 REPO_PLACED as well, since the
+//     id holds a repo other than the one this create makes and only another id gets the creator on.
 //
 // Both writes are P1 for the creating network (plan-EVSB-write-classes). The projection's kind must be one of §11.12's
 // nine, with an owner exactly for vault, mailbox and secret, else 400 INVALID with an alarm. The rest of the route's
@@ -163,12 +164,11 @@ func (self *EvsEngine) placeRepo(request *EvsRequest) (*sidecar.EvsRepoPlace, bo
 	}
 }
 
-// Step 2's rule for a placement that stands: its creator continues on its cluster, any other gets 409.
+// Step 2's rule for a placement that stands: its creator continues on its cluster, any other gets 409 REPO_PLACED,
+// final, and picks another id (QD-927), where a lifecycle 409 such as STATEMENT_MISSING keeps the id.
 func (self *EvsEngine) continuePlace(request *EvsRequest, held *sidecar.EvsRepoPlace) (*sidecar.EvsRepoPlace, bool) {
 	if held.CreatorSidecarId != request.SidecarId {
-		// §11.8 names no code for this 409, and questions/evs1-m2-07-placement-refusal-code asks for one: until it
-		// is answered the route and status say it, and the code is left unset
-		request.refuseStatus(http.StatusConflict, &protocol.EvsRefusalReply{})
+		request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_REPO_PLACED)
 		return nil, false
 	}
 	self.places.Remember(request.RepoId, held)
@@ -224,7 +224,7 @@ func (self *EvsEngine) createRepoObject(request *EvsRequest, cluster sidecar.Blo
 			return true
 		case found:
 			self.alarm("repo_mismatch", "repo %s: repo/ holds another kind, owner or network than the projection's", sidecar.EvsKeyId(repoId))
-			request.refuseStatus(http.StatusConflict, &protocol.EvsRefusalReply{})
+			request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_REPO_PLACED)
 			return false
 		}
 		request.Unavailable(nil)
@@ -250,7 +250,7 @@ func (self *EvsEngine) createRepoObject(request *EvsRequest, cluster sidecar.Blo
 				continue
 			case readErr == nil && found:
 				self.alarm("repo_mismatch", "repo %s: repo/ holds another kind, owner or network than the projection's", sidecar.EvsKeyId(repoId))
-				request.refuseStatus(http.StatusConflict, &protocol.EvsRefusalReply{})
+				request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_REPO_PLACED)
 				return false
 			}
 			request.Unavailable(&protocol.EvsRefusalReply{Outcome: protocol.EvsPushOutcome_EVS_PUSH_OUTCOME_UNKNOWN})

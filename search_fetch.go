@@ -17,10 +17,11 @@
 // (SearchCacheRecord.SetSlotKey; QD-845); the engine passes all three to PutRecord with the record, which refuses a
 // slot-keyed record without them, so none is kept that could not reopen or that an ERASE's hint could not find. Then
 // indexValidateFile over the kept copy; then staged in the plan with its two times, the window or coverage its header
-// names, a small file's plaintext, and the version-table run built from it while its keys are at hand. A file that
-// fails either check is listed bad at that version, its copy dropped, and raises index_malformed {repo, ref, path,
-// signer}; a file in a newer format is listed newer and raises nothing. A read answering collected for a wanted
-// version ends the fetch: the round starts again at step 1, on the new head (7.1's C).
+// names, a small file's plaintext, and the version-table run built from it while its keys are at hand, a shard's run
+// and two times from one pass over its tables, which decrypts each frame once (QD-1007). A file that fails either
+// check is listed bad at that version, its copy dropped, and raises index_malformed {repo, ref, path, signer}; a file
+// in a newer format is listed newer and raises nothing. A read answering collected for a wanted version ends the
+// fetch: the round starts again at step 1, on the new head (7.1's C).
 //
 // A file the manifest holds or the plan staged counts as had, except a record the cache kept before it kept those
 // keys (SearchCacheFile.KeysKept false): a reader could not reopen it after the round, so it is fetched again, in the
@@ -353,20 +354,18 @@ func (self *SearchSync) stage(ctx context.Context, ref *searchSyncRef, plan *Sea
 			slot = SearchVersionSlot{Kind: SearchVersionShards, StartDay: parsed.bucketStartDay}
 			staged.WindowDays = reader.layout.header.BucketDays
 		}
-		if err := staged.observeShard(reader); err != nil {
-			if isIndexMalformed(err) {
-				return bad()
-			}
-			return nil, err
-		}
 		if 0 < reader.documentCount() || 0 < reader.layout.header.Tombstones {
-			staged.Run, err = ref.table.Merge(ctx, slot, []SearchVersionSource{&searchVersionShardSource{reader: reader, file: file}})
+			// one pass over the shard's tables builds its run and takes every document's and tombstone's time into
+			// the file's two times, so a deletion sorts where its push does (7.7's trap; QD-1007)
+			times := &SearchManifestFile{}
+			run, err := ref.table.Merge(ctx, slot, []SearchVersionSource{&searchVersionShardSource{reader: reader, file: file, observe: times.observe}})
 			if err != nil {
 				if isIndexMalformed(err) {
 					return bad()
 				}
 				return nil, err
 			}
+			staged.Run, staged.TimeMinMs, staged.TimeMaxMs = run, times.TimeMinMs, times.TimeMaxMs
 		}
 	default:
 		// a small file: kept whole beside the manifest, which a snapshot reads with no record keys
@@ -391,24 +390,4 @@ func (self *SearchManifestFile) observe(timeSeconds uint64) {
 	if self.TimeMaxMs < timeMs {
 		self.TimeMaxMs = timeMs
 	}
-}
-
-// Takes every document's and tombstone's time of a shard into the file's two times, so a deletion sorts where its push
-// does (7.7's trap).
-func (self *SearchManifestFile) observeShard(reader *indexShardReader) error {
-	for docId := range reader.documentCount() {
-		document, err := reader.document(uint32(docId))
-		if err != nil {
-			return err
-		}
-		self.observe(document.timeSeconds)
-	}
-	input := &searchVersionShardInput{reader: reader}
-	if err := input.readTombstones(); err != nil {
-		return err
-	}
-	for _, tombstone := range input.tombstones {
-		self.observe(tombstone.timeSeconds)
-	}
-	return nil
 }

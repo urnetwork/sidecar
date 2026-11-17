@@ -6,6 +6,7 @@ package sidecar
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -246,8 +247,20 @@ func TestEvsTransportMapsEveryRefusalClass(t *testing.T) {
 		}, check: func(e *EvsError) bool { return e.OutcomeUnknown && !e.RefusesNothing() }},
 		{name: "cluster full", status: 507, reply: &protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_CLUSTER_FULL},
 			check: func(e *EvsError) bool { return e.Code == protocol.EvsRefusalCode_EVS_REFUSAL_CLUSTER_FULL }},
+		// QD-927: the placement's 409 is its own, never a lifecycle 409's
+		{name: "repo placed", status: 409, reply: &protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_REPO_PLACED},
+			check: func(e *EvsError) bool {
+				return e.Code == protocol.EvsRefusalCode_EVS_REFUSAL_REPO_PLACED && IsEvsRepoPlaced(e) && !e.RefusesNothing() &&
+					!IsEvsRefusal(e, protocol.EvsRefusalCode_EVS_REFUSAL_STATEMENT_MISSING)
+			}},
+		{name: "statement missing", status: 409, reply: &protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_STATEMENT_MISSING},
+			check: func(e *EvsError) bool {
+				return e.Code == protocol.EvsRefusalCode_EVS_REFUSAL_STATEMENT_MISSING && !IsEvsRepoPlaced(e)
+			}},
 		// a code whose status is not its own is not believed
 		{name: "mismatched code", status: 409, reply: &protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_BUSY},
+			check: func(e *EvsError) bool { return e.Code == protocol.EvsRefusalCode_EVS_REFUSAL_CODE_UNSPECIFIED }},
+		{name: "unauthenticated under 409", status: 409, reply: &protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_UNAUTHENTICATED},
 			check: func(e *EvsError) bool { return e.Code == protocol.EvsRefusalCode_EVS_REFUSAL_CODE_UNSPECIFIED }},
 	}
 	for _, c := range cases {
@@ -263,6 +276,117 @@ func TestEvsTransportMapsEveryRefusalClass(t *testing.T) {
 		if err != nil && strings.Contains(err.Error(), evsTestServiceToken) {
 			t.Errorf("%s: the error repeats the token", c.name)
 		}
+	}
+}
+
+// What a test's token function minted and forgot: each mint a new token, never the refused one again.
+type evsTestRenewingTokens struct {
+	stateLock sync.Mutex
+	minted    int
+	forgotten [][]string
+	resources []string
+	// the mint that fails, counting from 1, or 0 for none
+	failMint int
+}
+
+func (self *evsTestRenewingTokens) token(ctx context.Context, resource string, scopes []string) (string, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.minted += 1
+	if self.minted == self.failMint {
+		return "", errors.New("the exchange refused the client")
+	}
+	return fmt.Sprintf("%s-%d", evsTestServiceToken, self.minted), nil
+}
+
+func (self *evsTestRenewingTokens) forget(resource string, scopes []string) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.resources = append(self.resources, resource)
+	self.forgotten = append(self.forgotten, append([]string{}, scopes...))
+}
+
+// A handler answering each request with the next of statuses, the last again past them, and recording the token
+// each presented. A 401 carries UNAUTHENTICATED and a 403 SCOPE, as evs sends them.
+func evsTestTokenHandler(statuses []int, presented *[]string) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		*presented = append(*presented, strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer "))
+		status := statuses[min(len(*presented), len(statuses))-1]
+		code := protocol.EvsRefusalCode_EVS_REFUSAL_CODE_UNSPECIFIED
+		switch status {
+		case http.StatusOK:
+			writer.WriteHeader(status)
+			return
+		case http.StatusUnauthorized:
+			code = protocol.EvsRefusalCode_EVS_REFUSAL_UNAUTHENTICATED
+		case http.StatusForbidden:
+			code = protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE
+		}
+		body, _ := proto.Marshal(&protocol.EvsRefusalReply{Code: code})
+		writer.WriteHeader(status)
+		writer.Write(body)
+	})
+}
+
+// §11.20's 401 UNAUTHENTICATED refuses nothing (QD-927): a call drops the refused token, mints a new one and goes
+// once more with the same request, a push's included, so a refused token costs one round trip; a second 401 in a row,
+// or no new token, is ErrEvsUnauthorized and no *EvsError, after one renewal and never a third send. 403 SCOPE, the
+// state no longer granting the right, is neither renewed nor sent again.
+func TestEvsTransportRenewsARefusedTokenOnce(t *testing.T) {
+	repoId := evsTestId("repo")
+	push := func() *evsCall {
+		return &evsCall{route: "POST /evs/v1/repos/{repo_id}/push", method: http.MethodPost,
+			path: "/evs/v1/repos/" + evsUrlId(repoId) + "/push", repoId: repoId, role: evsScopeWrite,
+			body: &protocol.EvsPushRequest{Statement: []byte("statement")}}
+	}
+	run := func(statuses []int, failMint int, call *evsCall) (error, []string, *evsTestRenewingTokens) {
+		presented := []string{}
+		test := newEvsTestClient(t, evsTestTokenHandler(statuses, &presented), newEvsTestStore(t))
+		tokens := &evsTestRenewingTokens{failMint: failMint}
+		test.client.http.serviceToken = tokens.token
+		test.client.http.forgetServiceToken = tokens.forget
+		return test.client.http.callMessage(context.Background(), call, nil), presented, tokens
+	}
+	wantScopes := []string{evsRepoScope(repoId, evsScopeWrite)}
+
+	err, presented, tokens := run([]int{http.StatusUnauthorized, http.StatusOK}, 0, push())
+	if err != nil || len(presented) != 2 || presented[0] == presented[1] || tokens.minted != 2 {
+		t.Fatalf("a refused token renewed: %v, presented %v, minted %d", err, presented, tokens.minted)
+	}
+	if len(tokens.forgotten) != 1 || strings.Join(tokens.forgotten[0], " ") != strings.Join(wantScopes, " ") ||
+		tokens.resources[0] != "https://evs.example" {
+		t.Errorf("forgot %v of %v, want the call's own scopes at evs", tokens.forgotten, tokens.resources)
+	}
+
+	err, presented, tokens = run([]int{http.StatusUnauthorized}, 0, push())
+	if !errors.Is(err, ErrEvsUnauthorized) || len(presented) != 2 || tokens.minted != 2 || len(tokens.forgotten) != 1 {
+		t.Errorf("two 401s: %v, %d sent, %d minted, %d forgotten", err, len(presented), tokens.minted, len(tokens.forgotten))
+	}
+	if _, ok := EvsErrorOf(err); ok {
+		t.Errorf("a 401 read as a refusal: %v", err)
+	}
+	if strings.Contains(err.Error(), evsTestServiceToken) {
+		t.Error("the error repeats a token")
+	}
+
+	// a client whose subject a rev/ object voids gets no new token from the exchange: the 401 stands
+	err, presented, tokens = run([]int{http.StatusUnauthorized, http.StatusOK}, 2, push())
+	if !errors.Is(err, ErrEvsUnauthorized) || len(presented) != 1 || !strings.Contains(err.Error(), "the exchange refused the client") {
+		t.Errorf("no new token: %v, %d sent", err, len(presented))
+	}
+
+	// a read that retries a 503 renews its token at most once all the same
+	read := &evsCall{route: "GET /evs/v1/repos/{repo_id}/refs", method: http.MethodGet,
+		path: "/evs/v1/repos/" + evsUrlId(repoId) + "/refs", repoId: repoId, role: evsScopeRead, retry: true}
+	err, presented, tokens = run([]int{http.StatusUnauthorized, http.StatusServiceUnavailable, http.StatusUnauthorized}, 0, read)
+	if !errors.Is(err, ErrEvsUnauthorized) || len(presented) != 3 || len(tokens.forgotten) != 1 {
+		t.Errorf("a retried read: %v, %d sent, %d forgotten", err, len(presented), len(tokens.forgotten))
+	}
+
+	err, presented, tokens = run([]int{http.StatusForbidden, http.StatusOK}, 0, push())
+	if !IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE) || errors.Is(err, ErrEvsUnauthorized) || len(presented) != 1 ||
+		len(tokens.forgotten) != 0 {
+		t.Errorf("403 SCOPE: %v, %d sent, %d forgotten", err, len(presented), len(tokens.forgotten))
 	}
 }
 
@@ -522,6 +646,82 @@ func TestEvsCreateRepoFilesThenPlacesThenActivates(t *testing.T) {
 	}
 	if _, err := test.client.CreateRepo(context.Background(), &EvsCreateRepoArgs{Kind: protocol.RepoKind_REPO_KIND_VAULT}); err == nil {
 		t.Errorf("an owner-bound kind with no owner")
+	}
+}
+
+// QD-927: a placement evs answers 409 REPO_PLACED, its id placed by another creator first, is filed and placed again
+// under another random id, at most RepoPlacedRetryCount times, and the repo made is the one placed; a create resuming
+// its id gets the refusal back with nothing filed; STATEMENT_MISSING keeps the id (the test above).
+func TestEvsCreateRepoPicksAnotherIdWhenPlaced(t *testing.T) {
+	newHandler := func(placedCount int, routes *[]string) http.Handler {
+		puts := 0
+		return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			*routes = append(*routes, request.Method+" "+request.URL.Path)
+			if request.Method == http.MethodPut {
+				puts += 1
+				if puts <= placedCount {
+					body, _ := proto.Marshal(&protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_REPO_PLACED})
+					writer.WriteHeader(http.StatusConflict)
+					writer.Write(body)
+					return
+				}
+			}
+			writer.WriteHeader(http.StatusOK)
+		})
+	}
+	filedIds := func(test *evsTestClient) []Id {
+		ids := []Id{}
+		for _, body := range test.poster.bodies {
+			repoId, err := IdFromBytes(body.(*protocol.RepoCreate).GetRepoId())
+			if err != nil {
+				t.Fatal(err)
+			}
+			ids = append(ids, repoId)
+		}
+		return ids
+	}
+
+	routes := []string{}
+	test := newEvsTestClient(t, newHandler(1, &routes), newEvsTestStore(t))
+	repo, err := test.client.CreateRepo(context.Background(), &EvsCreateRepoArgs{Kind: protocol.RepoKind_REPO_KIND_GENERAL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	filed := filedIds(test)
+	if len(filed) != 2 || filed[0] == filed[1] || filed[1] != repo.RepoId() {
+		t.Fatalf("filed %v for repo %v", filed, repo.RepoId())
+	}
+	want := []string{
+		"PUT /evs/v1/repos/" + evsUrlId(filed[0]),
+		"PUT /evs/v1/repos/" + evsUrlId(filed[1]),
+		"POST /evs/v1/repos/" + evsUrlId(filed[1]) + "/activate",
+	}
+	if strings.Join(routes, ",") != strings.Join(want, ",") {
+		t.Errorf("routes %v, want %v", routes, want)
+	}
+	if len(test.gkm.created) != 1 || test.gkm.created[0].RepoId != repo.RepoId() {
+		t.Errorf("groups %v", test.gkm.created)
+	}
+
+	// every id placed by another: the first and RepoPlacedRetryCount more, then the refusal
+	routes = nil
+	test = newEvsTestClient(t, newHandler(100, &routes), newEvsTestStore(t))
+	if _, err := test.client.CreateRepo(context.Background(), &EvsCreateRepoArgs{Kind: protocol.RepoKind_REPO_KIND_GENERAL}); !IsEvsRepoPlaced(err) {
+		t.Fatalf("every id placed: %v", err)
+	}
+	if want := 1 + DefaultEvsSettings().RepoPlacedRetryCount; len(filedIds(test)) != want || len(routes) != want || len(test.gkm.created) != 0 {
+		t.Errorf("%d filed and %d sent, want %d each; %d groups", len(filedIds(test)), len(routes), want, len(test.gkm.created))
+	}
+
+	// a resumed create places its own id alone
+	routes = nil
+	test = newEvsTestClient(t, newHandler(1, &routes), newEvsTestStore(t))
+	resumed := evsTestId("resumed")
+	if _, err := test.client.CreateRepo(context.Background(), &EvsCreateRepoArgs{Kind: protocol.RepoKind_REPO_KIND_GENERAL, ResumeRepoId: &resumed}); !IsEvsRepoPlaced(err) {
+		t.Errorf("a resumed create: %v", err)
+	}
+	if len(test.poster.filed) != 0 || len(routes) != 1 || routes[0] != "PUT /evs/v1/repos/"+evsUrlId(resumed) {
+		t.Errorf("a resumed create filed %v and sent %v", test.poster.filed, routes)
 	}
 }
 

@@ -3,7 +3,9 @@
 // works over a frame source through a cursor holding one frame. Opening a shard walks its doc table, tombstones and
 // block index once, keeping each document's offset and n_d, the block index and where each part starts: the layout,
 // which SearchCache.PutDerived keeps so a later search opens the shard without reading its tables again. A search
-// then reads only the block holding a key and that key's list, which may span frames.
+// then reads only the block holding a key and that key's list, which may span frames. A pass over a table, opening's,
+// walk's or the version table's (state_search_versions_merge.go), decrypts each of its frames once: the cursor keeps
+// what a read crossing into the next frame took of the one it left, where the table's next entries start.
 //
 // Opening refuses what it reads that breaks the format; walk reads everything and refuses every departure from the
 // one canonical encoding, in memory proportional to the shard's documents and tombstones, which is what verification
@@ -49,12 +51,22 @@ func (self indexBytesFrames) indexReadFrame(index int, dst []byte) ([]byte, erro
 	return self[start:min(len(self), start+EvsRecordFrameByteCount)], nil
 }
 
-// Reads a file's bytes at any position, a frame at a time, holding one frame in a buffer of its own.
+// Reads a file's bytes at any position, a frame at a time, holding one frame in a buffer of its own. A read that
+// crosses from the frame held into the next keeps what it took of the frame it leaves, the tail, so a table read in
+// order, whose next entries start back in that tail, reads no frame twice: one pass over a table decrypts each of its
+// frames once, as a phone's reader must (§5.9's bounds row), and the cursor holds one frame and a tail shorter than the
+// read that crossed.
 type indexFrameCursor struct {
 	source     indexFrameSource
 	buffer     []byte
 	frame      []byte
 	frameIndex int
+	// The end of frame frameIndex-1 from tailStart, kept when a read crossed out of it into the frame held: empty for
+	// none, and always ending where the frame held starts.
+	tail      []byte
+	tailStart int
+	// A window's copy, where its bytes span the tail and the frame held, or two frames.
+	scratch []byte
 }
 
 // A cursor holding no frame yet.
@@ -62,35 +74,102 @@ func indexNewFrameCursor(source indexFrameSource) *indexFrameCursor {
 	return &indexFrameCursor{source: source, frameIndex: -1}
 }
 
-// Fills dst with the file's bytes from position, reading each frame it crosses in turn.
+// Whether the tail holds the byte at position.
+func (self *indexFrameCursor) inTail(position int) bool {
+	return self.tailStart <= position && position < self.tailStart+len(self.tail)
+}
+
+// Reads frame index into the cursor's buffer as the frame held, the tail dropped; the caller keeps a new one.
+func (self *indexFrameCursor) load(index int) error {
+	if self.buffer == nil {
+		self.buffer = make([]byte, EvsRecordFrameByteCount)
+	}
+	self.frameIndex = -1
+	self.tail = self.tail[:0]
+	frame, err := self.source.indexReadFrame(index, self.buffer)
+	if err != nil {
+		return err
+	}
+	// Each frame's length is fixed by the file's, and a short one would stall a read.
+	if len(frame) != min(EvsRecordFrameByteCount, self.source.indexLength()-index*EvsRecordFrameByteCount) {
+		return indexMalformed("a frame of the wrong length")
+	}
+	self.frame = frame
+	self.frameIndex = index
+	return nil
+}
+
+// Fills dst with the file's bytes from position, reading each frame it crosses in turn, and the tail where it holds
+// them.
 func (self *indexFrameCursor) read(position int, dst []byte) error {
 	length := self.source.indexLength()
 	if position < 0 || length-position < len(dst) {
 		return indexMalformed("a read past the file")
 	}
+	start, filled := position, dst
 	for 0 < len(dst) {
 		index := position / EvsRecordFrameByteCount
 		if index != self.frameIndex {
-			if self.buffer == nil {
-				self.buffer = make([]byte, EvsRecordFrameByteCount)
+			if self.inTail(position) {
+				copied := copy(dst, self.tail[position-self.tailStart:])
+				dst = dst[copied:]
+				position += copied
+				continue
 			}
-			self.frameIndex = -1
-			frame, err := self.source.indexReadFrame(index, self.buffer)
-			if err != nil {
+			// A read that began in the frame held and crosses into the next keeps what it took of the one it leaves.
+			crossing := index == self.frameIndex+1 && start/EvsRecordFrameByteCount == self.frameIndex
+			if err := self.load(index); err != nil {
 				return err
 			}
-			// Each frame's length is fixed by the file's, and a short one would stall this loop.
-			if len(frame) != min(EvsRecordFrameByteCount, length-index*EvsRecordFrameByteCount) {
-				return indexMalformed("a frame of the wrong length")
+			if crossing {
+				self.tail = append(self.tail, filled[:position-start]...)
+				self.tailStart = start
 			}
-			self.frame = frame
-			self.frameIndex = index
 		}
 		copied := copy(dst, self.frame[position-self.frameIndex*EvsRecordFrameByteCount:])
 		dst = dst[copied:]
 		position += copied
 	}
 	return nil
+}
+
+// Up to maxByteCount bytes from position, stopping at end, for a decoder that stops where its entry does: a view of the
+// frame held, or of the tail, where they lie in it, else copied out of what they span into the cursor's scratch. Valid
+// until the cursor's next read or window; a decoder copies what it keeps.
+func (self *indexFrameCursor) window(position int, end int, maxByteCount int) ([]byte, error) {
+	byteCount := min(maxByteCount, end-position)
+	if byteCount < 0 {
+		return nil, indexMalformed("a read past its part")
+	}
+	if position < 0 || self.source.indexLength()-position < byteCount {
+		return nil, indexMalformed("a read past the file")
+	}
+	if 0 < byteCount && position/EvsRecordFrameByteCount == (position+byteCount-1)/EvsRecordFrameByteCount {
+		index := position / EvsRecordFrameByteCount
+		switch {
+		case index == self.frameIndex:
+			offset := position - index*EvsRecordFrameByteCount
+			return self.frame[offset : offset+byteCount], nil
+		case self.inTail(position) && position+byteCount <= self.tailStart+len(self.tail):
+			offset := position - self.tailStart
+			return self.tail[offset : offset+byteCount], nil
+		case !self.inTail(position):
+			// inside a frame not held: that frame, whole, and nothing kept of the one before
+			if err := self.load(index); err != nil {
+				return nil, err
+			}
+			offset := position - index*EvsRecordFrameByteCount
+			return self.frame[offset : offset+byteCount], nil
+		}
+	}
+	if cap(self.scratch) < byteCount {
+		self.scratch = make([]byte, byteCount)
+	}
+	window := self.scratch[:byteCount]
+	if err := self.read(position, window); err != nil {
+		return nil, err
+	}
+	return window, nil
 }
 
 // Where a shard's parts sit, from the file's first byte, with its documents' offsets and n_d and its block index:
@@ -122,24 +201,12 @@ type indexShardReader struct {
 	companion bool
 	cursor    *indexFrameCursor
 	layout    *indexShardLayout
-	scratch   []byte
 }
 
-// Up to maxByteCount bytes from position, stopping at end, copied out of the frames they sit in, for a decoder that
-// stops where its entry does.
+// Up to maxByteCount bytes from position, stopping at end, for a decoder that stops where its entry does: the cursor's
+// window, valid until the reader's next read.
 func (self *indexShardReader) window(position int, end int, maxByteCount int) ([]byte, error) {
-	byteCount := min(maxByteCount, end-position)
-	if byteCount < 0 {
-		return nil, indexMalformed("a read past its part")
-	}
-	if cap(self.scratch) < byteCount {
-		self.scratch = make([]byte, byteCount)
-	}
-	window := self.scratch[:byteCount]
-	if err := self.cursor.read(position, window); err != nil {
-		return nil, err
-	}
-	return window, nil
+	return self.cursor.window(position, end, maxByteCount)
 }
 
 // Opens a shard: its header, then its doc table, tombstones and block index read once, and the last block's entries,
@@ -432,7 +499,9 @@ type indexShardVisitor struct {
 func (self *indexShardReader) walk(visitor indexShardVisitor) error {
 	layout := self.layout
 	for position := layout.bodyEnd; position < layout.length; {
-		window, err := self.window(position, layout.length, EvsRecordFrameByteCount)
+		// a frame's part at a time, each a view of its frame
+		frameEnd := (position/EvsRecordFrameByteCount + 1) * EvsRecordFrameByteCount
+		window, err := self.window(position, min(layout.length, frameEnd), EvsRecordFrameByteCount)
 		if err != nil {
 			return err
 		}
