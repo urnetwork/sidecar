@@ -3,16 +3,20 @@
 package sidecar
 
 // CORE-M10-03: §5.9's search state, search.state: written through and read back, kept through the cache's eviction
-// and drops, holding no query, served records pruned at their timeout and bound, nothing changed while locked and a
-// failed file never written over.
+// and drops, holding no query, served records one row per requester, repo and UTC day (owner decision 294, QD-961)
+// pruned by their day's timeout and their bound, the old one-search form read and folded, the file under its byte
+// bound at the requester rate's ceiling, nothing changed while locked and a failed file never written over.
 
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -183,6 +187,44 @@ func (self *searchStateTestWorld) newState(t *testing.T) *SidecarSearchState {
 	return state
 }
 
+// Moves the clock to the next UTC midnight, the start of a served row's day, and answers it.
+func (self *searchStateTestWorld) toUtcMidnight() time.Time {
+	now := self.clock.Now()
+	midnight := now.UTC().Truncate(24 * time.Hour).Add(24 * time.Hour)
+	self.clock.advance(midnight.Sub(now))
+	return midnight
+}
+
+// Writes plaintext as search.state, as another build or a fault would have left it.
+func (self *searchStateTestWorld) writePlaintext(t *testing.T, plaintext []byte) {
+	t.Helper()
+	store, err := self.instance.Store(&self.networkId).Directory("", SidecarSearchFileClass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer, err := store.Create(sidecarSearchStateName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	if _, err := writer.Write(plaintext); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Commit(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// count new ids, in the byte order that breaks a day's ties among served rows.
+func sortedTestIds(count int) []Id {
+	ids := []Id{}
+	for range count {
+		ids = append(ids, NewId())
+	}
+	slices.SortFunc(ids, func(a Id, b Id) int { return bytes.Compare(a[:], b[:]) })
+	return ids
+}
+
 // search.state's plaintext, nil when there is none.
 func (self *searchStateTestWorld) plaintext(t *testing.T) []byte {
 	t.Helper()
@@ -250,7 +292,7 @@ func TestSearchStateRoundTrip(t *testing.T) {
 	if until, err := reread.DistrustUntil(indexer); err != nil || until.IsZero() {
 		t.Errorf("distrust %v %v", until, err)
 	}
-	if records, err := reread.ServedRecords(); err != nil || len(records) != 1 || records[0].RequesterId != requester || records[0].RepoId != repo {
+	if records, err := reread.ServedRecords(); err != nil || len(records) != 1 || records[0].RequesterId != requester || records[0].RepoId != repo || records[0].Count != 1 {
 		t.Errorf("records %v %v", records, err)
 	}
 }
@@ -370,8 +412,8 @@ func TestStateSurvivesEvict(t *testing.T) {
 	}
 }
 
-// The served record is {requester, repo, time}: a search under a canary query leaves no trace of it in search.state,
-// whose records carry no other key.
+// The served record is a row {requester, repo, day, count, first time, last time} (owner decision 294, QD-961): a
+// search under a canary query leaves no trace of it in search.state, whose rows carry no other key.
 func TestServedRecordNamesNoQuery(t *testing.T) {
 	world := newSearchStateTestWorld(t)
 	canary := "q-canary-served-4c1e-okapi"
@@ -399,7 +441,7 @@ func TestServedRecordNamesNoQuery(t *testing.T) {
 		keys = append(keys, key)
 	}
 	slices.Sort(keys)
-	if !slices.Equal(keys, []string{"at_ms", "repo", "requester"}) {
+	if !slices.Equal(keys, []string{"count", "day", "first_ms", "last_ms", "repo", "requester"}) {
 		t.Errorf("a served record holds %v", keys)
 	}
 	if err := world.state.RecordServed(Id{}, repo); !errors.Is(err, ErrSearchStateArgs) {
@@ -407,12 +449,13 @@ func TestServedRecordNamesNoQuery(t *testing.T) {
 	}
 }
 
-// Records go at Search.ServedRecordTimeout and past Search.ServedRecordCount, the oldest first; the served memory at
-// Search.RemoteServedTimeout, and a distrust deadline once passed.
+// The served memory goes at Search.RemoteServedTimeout and a distrust deadline once passed; a served row once its day
+// ended Search.ServedRecordTimeout ago, not its search's time; and a write prunes what reads only hid.
 func TestServedRecordExpires(t *testing.T) {
 	world := newSearchStateTestWorld(t)
-	world.settings.ServedRecordCount = 3
 	requester, repo, indexer := NewId(), NewId(), NewId()
+	midnight := world.toUtcMidnight()
+	world.clock.advance(time.Hour)
 	if err := world.state.RecordServed(requester, repo); err != nil {
 		t.Fatal(err)
 	}
@@ -433,12 +476,14 @@ func TestServedRecordExpires(t *testing.T) {
 	if served, _ := world.state.Served(indexer); len(served) != 0 {
 		t.Errorf("served memory past its timeout: %v", served)
 	}
-	if records, _ := world.state.ServedRecords(); len(records) != 1 {
-		t.Errorf("a record gone before its timeout: %v", records)
-	}
+	// past ServedRecordTimeout from its search, the row's day ended less long ago: it stays
 	world.clock.advance(world.settings.ServedRecordTimeout - world.settings.RemoteServedTimeout)
+	if records, _ := world.state.ServedRecords(); len(records) != 1 {
+		t.Errorf("a row gone before its day's timeout: %v", records)
+	}
+	world.clock.advance(midnight.Add(24 * time.Hour).Add(world.settings.ServedRecordTimeout + time.Millisecond).Sub(world.clock.Now()))
 	if records, _ := world.state.ServedRecords(); len(records) != 0 {
-		t.Errorf("a record past its timeout: %v", records)
+		t.Errorf("a row past its day's timeout: %v", records)
 	}
 	// a write prunes what reads only hid
 	if err := world.state.RecordServed(requester, repo); err != nil {
@@ -451,19 +496,472 @@ func TestServedRecordExpires(t *testing.T) {
 	if len(decoded.Records) != 1 || len(decoded.Served) != 0 || len(decoded.Distrust) != 0 {
 		t.Errorf("after a write: %d records, %d served, %d distrust", len(decoded.Records), len(decoded.Served), len(decoded.Distrust))
 	}
-	// past the count, the oldest go first
-	repos := []Id{}
-	for range 4 {
-		world.clock.advance(time.Second)
-		repo := NewId()
-		repos = append(repos, repo)
+}
+
+// A thousand searches by one reader in one repo in one day leave one row, of count 1,000, from the first search's time
+// to the last's (owner decision 294, QD-961), and a fresh state reads it back.
+func TestServedRowCountsADaysSearches(t *testing.T) {
+	world := newSearchStateTestWorld(t)
+	requester, repo := NewId(), NewId()
+	midnight := world.toUtcMidnight()
+	world.clock.advance(time.Hour)
+	first := world.clock.Now()
+	for i := range 1000 {
+		if 0 < i {
+			world.clock.advance(2 * time.Second)
+		}
 		if err := world.state.RecordServed(requester, repo); err != nil {
 			t.Fatal(err)
 		}
 	}
-	records, _ := world.state.ServedRecords()
-	if len(records) != 3 || records[0].RepoId != repos[1] || records[2].RepoId != repos[3] {
-		t.Errorf("records past the count %v", records)
+	last := world.clock.Now()
+	for _, state := range []*SidecarSearchState{world.state, world.newState(t)} {
+		records, err := state.ServedRecords()
+		if err != nil || len(records) != 1 {
+			t.Fatalf("records %v %v", records, err)
+		}
+		record := records[0]
+		if record.RequesterId != requester || record.RepoId != repo || !record.Day.Equal(midnight) || record.Count != 1000 {
+			t.Errorf("row %v", record)
+		}
+		if record.First.UnixMilli() != first.UnixMilli() || record.Last.UnixMilli() != last.UnixMilli() {
+			t.Errorf("row from %v to %v, searched from %v to %v", record.First, record.Last, first, last)
+		}
+	}
+	decoded := &searchStateWire{}
+	if err := json.Unmarshal(world.plaintext(t), decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Records) != 1 || decoded.Records[0].Count != 1000 {
+		t.Errorf("the file holds %v", decoded.Records)
+	}
+}
+
+// Two readers in two repos over three days leave twelve rows, one per requester, repo and day, each counting its own
+// searches, answered the oldest day first and a day's by requester then repo whatever the order they were written in.
+func TestServedRowsByRequesterRepoAndDay(t *testing.T) {
+	world := newSearchStateTestWorld(t)
+	requesters, repos := sortedTestIds(2), sortedTestIds(2)
+	// each row's own count, by the indexes of its day, requester and repo
+	countOf := func(dayIndex int, requesterIndex int, repoIndex int) int64 {
+		return int64(1 + dayIndex + 2*requesterIndex + repoIndex)
+	}
+	midnights := []time.Time{}
+	for dayIndex := range 3 {
+		midnights = append(midnights, world.toUtcMidnight())
+		world.clock.advance(time.Hour)
+		for requesterIndex := len(requesters) - 1; 0 <= requesterIndex; requesterIndex -= 1 {
+			for repoIndex := len(repos) - 1; 0 <= repoIndex; repoIndex -= 1 {
+				for range countOf(dayIndex, requesterIndex, repoIndex) {
+					world.clock.advance(time.Minute)
+					if err := world.state.RecordServed(requesters[requesterIndex], repos[repoIndex]); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+		}
+	}
+	records, err := world.state.ServedRecords()
+	if err != nil || len(records) != 12 {
+		t.Fatalf("%d rows %v", len(records), err)
+	}
+	index := 0
+	for dayIndex := range 3 {
+		for requesterIndex := range requesters {
+			for repoIndex := range repos {
+				record := records[index]
+				if record.RequesterId != requesters[requesterIndex] || record.RepoId != repos[repoIndex] || !record.Day.Equal(midnights[dayIndex]) ||
+					record.Count != countOf(dayIndex, requesterIndex, repoIndex) {
+					t.Errorf("row %d %v, wanted day %d's of requester %d in repo %d", index, record, dayIndex, requesterIndex, repoIndex)
+				}
+				index += 1
+			}
+		}
+	}
+}
+
+// A search just after UTC midnight starts a new row: the day before keeps its own, and only the new day's rises.
+func TestServedRowStartsAtUtcMidnight(t *testing.T) {
+	world := newSearchStateTestWorld(t)
+	requester, repo := NewId(), NewId()
+	midnight := world.toUtcMidnight()
+	world.clock.advance(24*time.Hour - time.Millisecond)
+	lastOfDay := world.clock.Now()
+	if err := world.state.RecordServed(requester, repo); err != nil {
+		t.Fatal(err)
+	}
+	world.clock.advance(time.Millisecond)
+	nextMidnight := world.clock.Now()
+	if err := world.state.RecordServed(requester, repo); err != nil {
+		t.Fatal(err)
+	}
+	world.clock.advance(time.Minute)
+	if err := world.state.RecordServed(requester, repo); err != nil {
+		t.Fatal(err)
+	}
+	records, err := world.state.ServedRecords()
+	if err != nil || len(records) != 2 {
+		t.Fatalf("records %v %v", records, err)
+	}
+	before, after := records[0], records[1]
+	if !before.Day.Equal(midnight) || before.Count != 1 || before.First.UnixMilli() != lastOfDay.UnixMilli() || before.Last.UnixMilli() != lastOfDay.UnixMilli() {
+		t.Errorf("the day before midnight %v", before)
+	}
+	if !after.Day.Equal(midnight.Add(24*time.Hour)) || after.Count != 2 || after.First.UnixMilli() != nextMidnight.UnixMilli() || after.Last.UnixMilli() != nextMidnight.Add(time.Minute).UnixMilli() {
+		t.Errorf("the day after midnight %v", after)
+	}
+}
+
+// A row is kept until its day ended Search.ServedRecordTimeout ago: read up to that instant, a write then keeping it,
+// and hidden after it, the next write dropping it from the file.
+func TestServedRowDropsPastItsTimeout(t *testing.T) {
+	world := newSearchStateTestWorld(t)
+	requester, other, repo := NewId(), NewId(), NewId()
+	midnight := world.toUtcMidnight()
+	world.clock.advance(23 * time.Hour)
+	if err := world.state.RecordServed(requester, repo); err != nil {
+		t.Fatal(err)
+	}
+	world.clock.advance(midnight.Add(24 * time.Hour).Add(world.settings.ServedRecordTimeout).Sub(world.clock.Now()))
+	if err := world.state.RecordServed(other, repo); err != nil {
+		t.Fatal(err)
+	}
+	if records, err := world.state.ServedRecords(); err != nil || len(records) != 2 || records[0].RequesterId != requester {
+		t.Fatalf("at its day's timeout %v %v", records, err)
+	}
+	world.clock.advance(time.Millisecond)
+	if records, err := world.state.ServedRecords(); err != nil || len(records) != 1 || records[0].RequesterId != other {
+		t.Errorf("past its day's timeout %v %v", records, err)
+	}
+	fileRows := func() []searchStateRecordWire {
+		decoded := &searchStateWire{}
+		if err := json.Unmarshal(world.plaintext(t), decoded); err != nil {
+			t.Fatal(err)
+		}
+		return decoded.Records
+	}
+	if rows := fileRows(); len(rows) != 2 {
+		t.Errorf("a read dropped a row from the file: %v", rows)
+	}
+	if err := world.state.RecordServed(other, repo); err != nil {
+		t.Fatal(err)
+	}
+	if rows := fileRows(); len(rows) != 1 || rows[0].Count != 2 {
+		t.Errorf("after a write the file holds %v", rows)
+	}
+}
+
+// Past Search.ServedRecordCount the oldest days' rows go first, a day's by requester then repo; a raise adds no row;
+// and a new row the bound would drop at once is refused, nothing written, so the server answers that search
+// fail-closed.
+func TestServedRowsPastTheCountDropTheOldestDays(t *testing.T) {
+	world := newSearchStateTestWorld(t)
+	world.settings.ServedRecordCount = 3
+	requesters, repo := sortedTestIds(4), NewId()
+	midnights := []time.Time{}
+	nextDay := func() {
+		midnights = append(midnights, world.toUtcMidnight())
+		world.clock.advance(time.Hour)
+	}
+	search := func(requesterIndex int) {
+		t.Helper()
+		world.clock.advance(time.Minute)
+		if err := world.state.RecordServed(requesters[requesterIndex], repo); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// a row by the indexes of its requester and day, with its count
+	type wantRow struct {
+		requesterIndex int
+		dayIndex       int
+		count          int64
+	}
+	expect := func(wants ...wantRow) {
+		t.Helper()
+		records, err := world.state.ServedRecords()
+		if err != nil || len(records) != len(wants) {
+			t.Fatalf("rows %v %v, wanted %v", records, err, wants)
+		}
+		for i, want := range wants {
+			record := records[i]
+			if record.RequesterId != requesters[want.requesterIndex] || !record.Day.Equal(midnights[want.dayIndex]) || record.Count != want.count {
+				t.Errorf("row %d %v, wanted %v", i, record, want)
+			}
+		}
+	}
+	nextDay()
+	search(2)
+	search(1)
+	nextDay()
+	search(3)
+	expect(wantRow{requesterIndex: 1, dayIndex: 0, count: 1}, wantRow{requesterIndex: 2, dayIndex: 0, count: 1}, wantRow{requesterIndex: 3, dayIndex: 1, count: 1})
+	nextDay()
+	search(1)
+	expect(wantRow{requesterIndex: 2, dayIndex: 0, count: 1}, wantRow{requesterIndex: 3, dayIndex: 1, count: 1}, wantRow{requesterIndex: 1, dayIndex: 2, count: 1})
+	search(2)
+	expect(wantRow{requesterIndex: 3, dayIndex: 1, count: 1}, wantRow{requesterIndex: 1, dayIndex: 2, count: 1}, wantRow{requesterIndex: 2, dayIndex: 2, count: 1})
+	search(1)
+	expect(wantRow{requesterIndex: 3, dayIndex: 1, count: 1}, wantRow{requesterIndex: 1, dayIndex: 2, count: 2}, wantRow{requesterIndex: 2, dayIndex: 2, count: 1})
+	search(3)
+	expect(wantRow{requesterIndex: 1, dayIndex: 2, count: 2}, wantRow{requesterIndex: 2, dayIndex: 2, count: 1}, wantRow{requesterIndex: 3, dayIndex: 2, count: 1})
+	// every row is today's now, and requester 0's would sort first among them: the bound would drop it at once
+	before := world.plaintext(t)
+	count, _ := world.state.Changes()
+	if err := world.state.RecordServed(requesters[0], repo); !errors.Is(err, ErrSearchStateArgs) {
+		t.Errorf("a row the bound drops at once: %v", err)
+	}
+	if !bytes.Equal(before, world.plaintext(t)) {
+		t.Error("a refused row was written")
+	}
+	if next, _ := world.state.Changes(); next != count {
+		t.Errorf("a refused row raised Changes")
+	}
+	search(3)
+	expect(wantRow{requesterIndex: 1, dayIndex: 2, count: 2}, wantRow{requesterIndex: 2, dayIndex: 2, count: 1}, wantRow{requesterIndex: 3, dayIndex: 2, count: 2})
+}
+
+// QD-961's case: a reader's rate raises its row's count and adds no row, so under a bound of three rows one reader's
+// hundred searches a day for three days keep all three days, exact, where a record a search kept only the last three
+// searches.
+func TestServedRowsKeepAReadersDaysWhateverItsRate(t *testing.T) {
+	world := newSearchStateTestWorld(t)
+	world.settings.ServedRecordCount = 3
+	requester, repo := NewId(), NewId()
+	midnights := []time.Time{}
+	for range 3 {
+		midnights = append(midnights, world.toUtcMidnight())
+		for range 100 {
+			world.clock.advance(time.Minute)
+			if err := world.state.RecordServed(requester, repo); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	records, err := world.state.ServedRecords()
+	if err != nil || len(records) != 3 {
+		t.Fatalf("records %v %v", records, err)
+	}
+	for i, record := range records {
+		if !record.Day.Equal(midnights[i]) || record.Count != 100 {
+			t.Errorf("day %d's row %v", i, record)
+		}
+		if record.First.UnixMilli() != midnights[i].Add(time.Minute).UnixMilli() || record.Last.UnixMilli() != midnights[i].Add(100*time.Minute).UnixMilli() {
+			t.Errorf("day %d's row from %v to %v", i, record.First, record.Last)
+		}
+	}
+}
+
+// A search.state of the old one-search form loads: each record reads as a row of count 1 on its time's day, two of one
+// requester, repo and day fold into one, one whose day ended past the timeout is hidden, and the next write leaves only
+// rows, which a fresh state reads the same.
+func TestServedRecordOldFormLoadsAndFolds(t *testing.T) {
+	world := newSearchStateTestWorld(t)
+	requesters, repo := sortedTestIds(2), NewId()
+	midnight := world.toUtcMidnight()
+	world.clock.advance(time.Hour)
+	yesterday := midnight.Add(-24 * time.Hour)
+	oldRecord := func(requester Id, at time.Time) string {
+		return fmt.Sprintf(`{"requester":%q,"repo":%q,"at_ms":%d}`, hex.EncodeToString(requester[:]), hex.EncodeToString(repo[:]), at.UnixMilli())
+	}
+	// as the old form kept them, by time
+	oldRecords := []string{
+		oldRecord(requesters[0], midnight.Add(-40*24*time.Hour)),
+		oldRecord(requesters[1], yesterday.Add(2*time.Hour)),
+		oldRecord(requesters[0], yesterday.Add(3*time.Hour)),
+		oldRecord(requesters[0], yesterday.Add(20*time.Hour)),
+		oldRecord(requesters[0], midnight.Add(30*time.Minute)),
+	}
+	world.writePlaintext(t, []byte(`{"version":1,"mode":"own","records":[`+strings.Join(oldRecords, ",")+`]}`))
+	// a row by its requester, day, count and times
+	type wantRow struct {
+		requesterId Id
+		day         time.Time
+		count       int64
+		first       time.Time
+		last        time.Time
+	}
+	wants := []wantRow{
+		{requesterId: requesters[0], day: yesterday, count: 2, first: yesterday.Add(3 * time.Hour), last: yesterday.Add(20 * time.Hour)},
+		{requesterId: requesters[1], day: yesterday, count: 1, first: yesterday.Add(2 * time.Hour), last: yesterday.Add(2 * time.Hour)},
+		{requesterId: requesters[0], day: midnight, count: 1, first: midnight.Add(30 * time.Minute), last: midnight.Add(30 * time.Minute)},
+	}
+	expect := func(state *SidecarSearchState) {
+		t.Helper()
+		records, err := state.ServedRecords()
+		if err != nil || len(records) != len(wants) {
+			t.Fatalf("rows %v %v", records, err)
+		}
+		for i, want := range wants {
+			record := records[i]
+			if record.RequesterId != want.requesterId || record.RepoId != repo || !record.Day.Equal(want.day) || record.Count != want.count ||
+				record.First.UnixMilli() != want.first.UnixMilli() || record.Last.UnixMilli() != want.last.UnixMilli() {
+				t.Errorf("row %d %v, wanted %v", i, record, want)
+			}
+		}
+	}
+	state := world.newState(t)
+	if mode, err := state.Mode(); err != nil || mode != SearchRemoteOwn {
+		t.Fatalf("an old-form file read %q %v", mode, err)
+	}
+	expect(state)
+
+	world.clock.advance(time.Minute)
+	if err := state.RecordServed(requesters[0], repo); err != nil {
+		t.Fatal(err)
+	}
+	wants[2].count, wants[2].last = 2, world.clock.Now()
+	expect(state)
+	decoded := map[string]any{}
+	if err := json.Unmarshal(world.plaintext(t), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	rows, ok := decoded["records"].([]any)
+	if !ok || len(rows) != len(wants) {
+		t.Fatalf("the file's rows %v", decoded["records"])
+	}
+	for _, row := range rows {
+		keys := []string{}
+		for key := range row.(map[string]any) {
+			keys = append(keys, key)
+		}
+		slices.Sort(keys)
+		if !slices.Equal(keys, []string{"count", "day", "first_ms", "last_ms", "repo", "requester"}) {
+			t.Errorf("a row written as %v", keys)
+		}
+	}
+	expect(world.newState(t))
+}
+
+// search.state stays under Search.StateByteCount whatever a requester's rate, computed and not slept (QD-961): a reader
+// at RemoteRequesterRate's ceiling has one row a day, so forty days leave today's row and the 30 days' before it; and
+// the most rows the file holds, Search.ServedRecordCount of them each at the ceiling's count of a day, encode under the
+// bound, load, and take the next day's row.
+func TestServedRowsStayUnderTheStateBound(t *testing.T) {
+	world := newSearchStateTestWorld(t)
+	settings := world.settings
+	day := 24 * time.Hour
+	// the most searches one requester makes in a day at the rate's ceiling: its burst, then its rate all day
+	rate := settings.RemoteRequesterRate
+	ceilingCount := int64(rate.Burst) + int64(rate.Count)*int64(day/rate.Interval)
+	// a row is kept on its day and the ServedRecordTimeout after it
+	keptDayCount := int(settings.ServedRecordTimeout/day) + 1
+	encodedByteCount := func(wire *searchStateWire) int64 {
+		encoded, err := json.Marshal(wire)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return int64(len(encoded))
+	}
+
+	// one reader, searching at the first and the last instant of each of forty days
+	requester, repo := NewId(), NewId()
+	world.toUtcMidnight()
+	for i := range 40 {
+		if 0 < i {
+			world.clock.advance(time.Millisecond)
+		}
+		if err := world.state.RecordServed(requester, repo); err != nil {
+			t.Fatal(err)
+		}
+		world.clock.advance(day - time.Millisecond)
+		if err := world.state.RecordServed(requester, repo); err != nil {
+			t.Fatal(err)
+		}
+	}
+	decoded := &searchStateWire{}
+	if err := json.Unmarshal(world.plaintext(t), decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Records) != keptDayCount {
+		t.Fatalf("%d rows after forty days, wanted %d", len(decoded.Records), keptDayCount)
+	}
+	// at the ceiling only each row's count is larger
+	for i := range decoded.Records {
+		decoded.Records[i].Count = ceilingCount
+	}
+	if byteCount := encodedByteCount(decoded); settings.StateByteCount < byteCount {
+		t.Errorf("one reader at the ceiling for 30 days: %d bytes past %d", byteCount, settings.StateByteCount)
+	}
+
+	// the most the bound keeps: ServedRecordCount rows on the kept days, each at the ceiling's count across its day
+	today := servedRowDayOf(world.clock.Now().UnixMilli())
+	worst := &searchStateWire{Version: searchStateVersion}
+	for i := range settings.ServedRecordCount {
+		rowDay := today - int64(i%keptDayCount)
+		rowRequesterId := NewId()
+		worst.Records = append(worst.Records, searchStateRecordWire{
+			Requester: hex.EncodeToString(rowRequesterId[:]),
+			Repo:      hex.EncodeToString(repo[:]),
+			Day:       rowDay,
+			Count:     ceilingCount,
+			FirstMs:   servedRowDayStartMs(rowDay),
+			LastMs:    servedRowDayStartMs(rowDay+1) - 1,
+		})
+	}
+	slices.SortFunc(worst.Records, compareServedRows)
+	encoded, err := json.Marshal(worst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.StateByteCount < int64(len(encoded)) {
+		t.Fatalf("%d rows at the ceiling: %d bytes past %d", settings.ServedRecordCount, len(encoded), settings.StateByteCount)
+	}
+	world.writePlaintext(t, encoded)
+	state := world.newState(t)
+	if records, err := state.ServedRecords(); err != nil || len(records) != settings.ServedRecordCount {
+		t.Fatalf("%d rows read %v", len(records), err)
+	}
+	// the next day's first search takes a row, the oldest day's first going
+	world.clock.advance(time.Millisecond)
+	newcomer := NewId()
+	if err := state.RecordServed(newcomer, repo); err != nil {
+		t.Fatal(err)
+	}
+	records, err := state.ServedRecords()
+	if err != nil || len(records) != settings.ServedRecordCount || records[len(records)-1].RequesterId != newcomer {
+		t.Fatalf("%d rows after the next day's search %v", len(records), err)
+	}
+	if oldest := records[0].RequesterId; hex.EncodeToString(oldest[:]) == worst.Records[0].Requester {
+		t.Errorf("the oldest day's first row stayed")
+	}
+	if byteCount := int64(len(world.plaintext(t))); settings.StateByteCount < byteCount {
+		t.Errorf("the file at the bound: %d bytes past %d", byteCount, settings.StateByteCount)
+	}
+}
+
+// A served row that is not one, of no searches, with its times out of order or off its day, or carrying the old form's
+// time besides, reads as a failed file, as any other that does not decode does; a well formed row beside them reads.
+func TestServedRowMalformedFails(t *testing.T) {
+	world := newSearchStateTestWorld(t)
+	requester, repo := NewId(), NewId()
+	midnight := world.toUtcMidnight()
+	world.clock.advance(time.Hour)
+	day, startMs := servedRowDayOf(midnight.UnixMilli()), midnight.UnixMilli()
+	row := func(day int64, count int64, firstMs int64, lastMs int64, extra string) []byte {
+		return fmt.Appendf(nil, `{"version":1,"records":[{"requester":%q,"repo":%q,"day":%d,"count":%d,"first_ms":%d,"last_ms":%d%s}]}`,
+			hex.EncodeToString(requester[:]), hex.EncodeToString(repo[:]), day, count, firstMs, lastMs, extra)
+	}
+	world.writePlaintext(t, row(day, 1, startMs, startMs+1, ""))
+	if records, err := world.newState(t).ServedRecords(); err != nil || len(records) != 1 || records[0].Count != 1 {
+		t.Fatalf("a well formed row read %v %v", records, err)
+	}
+	cases := [][]byte{
+		// of no searches, its times set
+		row(day, 0, startMs, startMs, ""),
+		row(day, -1, startMs, startMs, ""),
+		// its times out of order
+		row(day, 2, startMs+1, startMs, ""),
+		// off its day, before it and after it
+		row(day, 1, startMs-1, startMs, ""),
+		row(day, 1, startMs, startMs+(24*time.Hour).Milliseconds(), ""),
+		// the old form's time besides a row's
+		row(day, 1, startMs, startMs, fmt.Sprintf(`,"at_ms":%d`, startMs)),
+	}
+	for _, content := range cases {
+		world.writePlaintext(t, content)
+		if _, err := world.newState(t).ServedRecords(); !errors.Is(err, ErrSidecarStoreFailed) {
+			t.Errorf("%s read %v", content, err)
+		}
 	}
 }
 
@@ -505,21 +1003,7 @@ func TestSearchStateLockedChangesNothing(t *testing.T) {
 // nothing is written over it.
 func TestSearchStateFailedIsNeverOverwritten(t *testing.T) {
 	world := newSearchStateTestWorld(t)
-	store, err := world.instance.Store(&world.networkId).Directory("", SidecarSearchFileClass)
-	if err != nil {
-		t.Fatal(err)
-	}
-	writer, err := store.Create(sidecarSearchStateName)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := writer.Write([]byte(`{"version":1,"mode":"sometimes"}`)); err != nil {
-		t.Fatal(err)
-	}
-	if err := writer.Commit(); err != nil {
-		t.Fatal(err)
-	}
-	writer.Close()
+	world.writePlaintext(t, []byte(`{"version":1,"mode":"sometimes"}`))
 	before := world.plaintext(t)
 	if _, err := world.state.Mode(); !errors.Is(err, ErrSidecarStoreFailed) {
 		t.Errorf("a failed file read %v", err)
@@ -537,17 +1021,7 @@ func TestSearchStateFailedIsNeverOverwritten(t *testing.T) {
 		t.Errorf("%d alarms", world.failed)
 	}
 	// it is read again at each call: once the file reads well, the state works again, with no change lost
-	writer, err = store.Create(sidecarSearchStateName)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := writer.Write([]byte(`{"version":1,"mode":"own"}`)); err != nil {
-		t.Fatal(err)
-	}
-	if err := writer.Commit(); err != nil {
-		t.Fatal(err)
-	}
-	writer.Close()
+	world.writePlaintext(t, []byte(`{"version":1,"mode":"own"}`))
 	if mode, err := world.state.Mode(); err != nil || mode != SearchRemoteOwn {
 		t.Errorf("a mended file read %q %v", mode, err)
 	}

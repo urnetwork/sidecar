@@ -240,8 +240,9 @@ func TestAnUnverifiableCandidateIsReturned(t *testing.T) {
 }
 
 // §5.9's served record, written at page 0 once a search for a repo the requester reads only by an EvsShare: Ben's phone
-// asking Dana's NAS for Dana's shared vault. It names the requester, the repo and the time, and search.state holds no
-// byte of the query; Dana's own phone leaves none.
+// asking Dana's NAS for Dana's shared vault. It is the row of the requester, the repo and the UTC day, counting the
+// search once though its page 0 came twice (owner decision 294, QD-961), and search.state holds no byte of the query;
+// Dana's own phone leaves none.
 func TestTheServedRecordNamesNoQuery(t *testing.T) {
 	team := newTestConfigSearchTeam(t)
 	fixture := newTestSearchRemoteServer(t, team, team.danaNas)
@@ -254,7 +255,7 @@ func TestTheServedRecordNamesNoQuery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(records) != 1 || records[0].RequesterId != team.benPhone.sidecarId || records[0].RepoId != team.danaVault {
+	if len(records) != 1 || records[0].RequesterId != team.benPhone.sidecarId || records[0].RepoId != team.danaVault || records[0].Count != 1 {
 		t.Fatalf("records %v", records)
 	}
 	if plaintext := fixture.world.plaintext(t); bytes.Contains(plaintext, []byte(query)) {
