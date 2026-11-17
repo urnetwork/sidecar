@@ -9,7 +9,8 @@
 //
 // A read record is (ref_id, path, entry version, pin at last read), one per path a head reader read, at most
 // EvsSettings.HeadReadRecordCount for the network, least recently used out (g0-recheck-0-head-reader-read-paths#1). A
-// path whose record was evicted counts as never read. Paths are this device's own plaintext, held only in the sealed
+// path whose record was evicted counts as never read, as does one whose record a gap head dropped, its pin passed by
+// the re-pin and the path served absent (QD-1041). Paths are this device's own plaintext, held only in the sealed
 // store and never logged (I-13). A record also keeps the path's floor and the ref's current epoch at its pin
 // (DESIGN-DETAILS 9.2.2, 9.2.3): a floor only falls, and a record stored without them reads as no floor, which only
 // sends less.
@@ -774,6 +775,55 @@ func (self *EvsPinStore) RaiseReadRecords(repoId Id, records []*EvsReadRecord) e
 	for changedRepoId, reads := range changed {
 		self.repoWithLock(changedRepoId).reads = reads
 	}
+	return nil
+}
+
+// Drops the read records a read loaded, each only while the store holds it as loaded, at the same entry version and
+// pin: one a later read raised, or a reseed lowered, since then stays. A gap head drops the record of a path it
+// served absent whose pin the gap passed, so the path reads as a never-read one does (QD-1041; evs_epoch_read.go's
+// finishRead).
+func (self *EvsPinStore) DropReadRecords(repoId Id, records []*EvsReadRecord) error {
+	if len(records) == 0 {
+		return nil
+	}
+	if err := self.load(); err != nil {
+		return err
+	}
+	self.writeLock.Lock()
+	defer self.writeLock.Unlock()
+	reads := func() map[evsReadKey]*EvsReadRecord {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		state := self.repoIdRepos[repoId]
+		if state == nil {
+			return nil
+		}
+		var reads map[evsReadKey]*EvsReadRecord
+		for _, record := range records {
+			key := evsReadKey{refId: record.RefId, path: record.Path}
+			held := state.reads[key]
+			if held == nil || held.EntryVersion != record.EntryVersion || held.PinVersion != record.PinVersion {
+				continue
+			}
+			if reads == nil {
+				reads = map[evsReadKey]*EvsReadRecord{}
+				for readKey, read := range state.reads {
+					reads[readKey] = read
+				}
+			}
+			delete(reads, key)
+		}
+		return reads
+	}()
+	if reads == nil {
+		return nil
+	}
+	if err := self.writeReadsWithWriteLock(repoId, reads); err != nil {
+		return err
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.repoWithLock(repoId).reads = reads
 	return nil
 }
 
