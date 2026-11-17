@@ -40,7 +40,11 @@
 // once and fall back to IPv4 rather than waiting out a connect timeout; the daemon's own IPv6 sockets keep today's
 // route by their mark or binding, as its IPv4 ones do. Where the host routes no IPv6 off itself and the platform will not take IPv6's half,
 // IPv4's stands alone, since no IPv6 leaves to begin with; where the host does route IPv6, a refusal of IPv6's half
-// holds the exits as any other does.
+// holds the exits as any other does. The carve's IPv6 addresses go back to the host's own route as IPv4's do (owner
+// decision 480, QD-971): each one the host reaches only by its IPv6 default route, an off-link IPv6 resolver above all,
+// takes an IPv6 throw in the exits table on Linux and an IPv6 host route by the IPv6 default route's gateway on macOS
+// and Windows, kept in step through urTunCarvedInterface beside IPv4's (tun_carve.go), while a link-local one and one
+// the host's own routes reach take none; the tun hands the platform the carve of both families as it reads it.
 //
 // A block of the network's that this device routes to another network, one it joined first holding the same block
 // (§17.4; bridge_shared_block.go), is withheld: each sync leaves the addresses, routes and names inside it off the
@@ -267,13 +271,14 @@ type urTunNamedInterface interface {
 
 // An open tun whose platform passes the bridge's carved addresses back to the host's own route under exits, as Linux's
 // exits table does by a throw route each (tun_linux.go; QD-808) and macOS's and Windows' main table by a host route
-// for each one a half would take (tun_host_routes.go; QD-869), so the host's own traffic to one never meets the tun,
-// which could only drop it. Each sync hands it the carve after SetExits.
+// for each one a half would take (tun_host_routes.go; QD-869), IPv6's carve beside IPv4's (QD-971), so the host's own
+// traffic to one never meets the tun, which could only drop or reject it. Each sync hands it the carve after SetExits.
 type urTunCarvedInterface interface {
 	urTunInterface
-	// Sets the addresses the bridge carves, those the local read last handed Bridge.SetLocalAddresses: under exits,
-	// each is passed back to the host's own route, those no longer carved are not, and off exits the list waits for the
-	// next SetExits(true). Answers what would not go on or come off, which the next call tries again.
+	// Sets the addresses the bridge carves, of both families, those the local read last handed
+	// Bridge.SetLocalAddresses: under exits, each that needs it is passed back to the host's own route, those no longer
+	// carved are not, and off exits the list waits for the next SetExits(true). Answers what would not go on or come
+	// off, which the next call tries again.
 	SetCarved(addresses []netip.Addr) error
 }
 

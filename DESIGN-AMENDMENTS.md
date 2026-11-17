@@ -468,3 +468,14 @@ Changes: §2.8; §22.8.
 Questions: `sock-client-verifier-member-credentials.md`, `dr3-s7-s10-revocation-record-row.md`.
 
 Waits on: the fix track revocation-record-members, then the fix track revocation-record-row (QD-1022).
+
+### QD-1010: How does an app approve a multi-use template request, when SidecarApprovals.Decide carries no uses?
+*Decided by the owner on 2026-11-16, asked one question at a time; owner decision 574. Folds into §16 The local MCP server and record primitives.*
+
+The wire, which waits on the code: §16.8's `ApprovalRequest` fence takes the field holding the uses an agent requests for a template once record.proto declares it, with the version bump RECORD.md's rules give a format change after M3's freeze, a design-records fold writing the line and dropping its `testFenceAdditions` entry in one commit (owner decision 273). The rest is folded (2026-11-17): the decision, §16.6's multi-use row, §18.5's `Decide` and a comment in the fence naming what joins it.
+
+Changes: §16.8's fence; record.proto.
+
+Questions: `mcp-m8-01-app-template-uses.md`.
+
+Waits on: the fix track approval-request-uses.
