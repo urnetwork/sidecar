@@ -250,6 +250,7 @@ type sweepStartFixture struct {
 	hostSettings *sidecartest.FakeHostSettings
 }
 
+// Its gates closed, as an absent sidecar.yml leaves them, and its queue holding nothing.
 func newSweepStartFixture(t *testing.T) *sweepStartFixture {
 	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
 	hostSettings := sidecartest.DefaultFakeHostSettings()
