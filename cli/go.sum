@@ -31,8 +31,8 @@ github.com/fsnotify/fsnotify v1.9.0 h1:2Ml+OJNzbYCTzsxtv8vKSFD9PbJjmhYF14k/jKC7S
 github.com/fsnotify/fsnotify v1.9.0/go.mod h1:8jBTzvmWwFyi3Pb8djgCCO5IBqzKJ/Jwo8TRcHyHii0=
 github.com/fxamacker/cbor/v2 v2.9.0 h1:NpKPmjDBgUfBms6tr6JZkTHtfFGcMKsw3eGcmD/sapM=
 github.com/fxamacker/cbor/v2 v2.9.0/go.mod h1:vM4b+DJCtHn+zz7h3FFp/hDAI9WNWCsZj23V5ytsSxQ=
-github.com/go-jose/go-jose/v4 v4.1.6 h1:sNRkftxFJxwsILiQukqp5z83QBSmntVwmgRY7AqBDO4=
-github.com/go-jose/go-jose/v4 v4.1.6/go.mod h1:x4oUasVrzR7071A4TnHLGSPpNOm2a21K9Kf04k1rs08=
+github.com/go-jose/go-jose/v4 v4.1.8 h1:k38WifTutpGuqt6Imq9xW1OgCvnWFri0Nz7FnfiACM8=
+github.com/go-jose/go-jose/v4 v4.1.8/go.mod h1:x4oUasVrzR7071A4TnHLGSPpNOm2a21K9Kf04k1rs08=
 github.com/godbus/dbus/v5 v5.0.4/go.mod h1:xhWf0FNVPg57R7Z0UbKHbJfkEywrmjJnf7w5xrFpKfA=
 github.com/godbus/dbus/v5 v5.1.0 h1:4KLkAxT3aOY8Li4FRJe/KvhoNFFxo0m6fNuFUO8QJUk=
 github.com/godbus/dbus/v5 v5.1.0/go.mod h1:xhWf0FNVPg57R7Z0UbKHbJfkEywrmjJnf7w5xrFpKfA=
@@ -58,8 +58,8 @@ github.com/leanovate/gopter v0.2.11 h1:vRjThO1EKPb/1NsDXuDrzldR28RLkBflWYcU9CvzW
 github.com/leanovate/gopter v0.2.11/go.mod h1:aK3tzZP/C+p1m3SPRE4SYZFGP7jjkuSI4f7Xvpt0S9c=
 github.com/letsencrypt/challtestsrv v1.4.2 h1:0ON3ldMhZyWlfVNYYpFuWRTmZNnyfiL9Hh5YzC3JVwU=
 github.com/letsencrypt/challtestsrv v1.4.2/go.mod h1:GhqMqcSoeGpYd5zX5TgwA6er/1MbWzx/o7yuuVya+Wk=
-github.com/letsencrypt/pebble/v2 v2.10.1 h1:oKHx3lgN4e5Nno2LKTMrVx+b+NkDptkO9aDireiBDGE=
-github.com/letsencrypt/pebble/v2 v2.10.1/go.mod h1:KtYhQ4YTjT5MtoCZ6RTCXlbrrz6cKyXROCuTpIUDJFY=
+github.com/letsencrypt/pebble/v2 v2.10.3 h1:Zg/Rq9T8FvNMvfLvi3k+dXmrwgDnG9neRpeaJY2hwVM=
+github.com/letsencrypt/pebble/v2 v2.10.3/go.mod h1:t86OY665ATaOG3amRg83FSFMp7/L8MWjvlzBFmXANYc=
 github.com/mattn/go-colorable v0.1.13/go.mod h1:7S9/ev0klgBDR4GtXTXX8a3vIGJpMovkB8vQcUbaXHg=
 github.com/mattn/go-colorable v0.1.14 h1:9A9LHSqF/7dyVVX6g0U9cwm9pG3kP9gSzcuIPHPsaIE=
 github.com/mattn/go-colorable v0.1.14/go.mod h1:6LmQG8QLFO4G5z1gPvYEzlUgJ2wF+stgPZH1UqBm1s8=

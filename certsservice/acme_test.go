@@ -4,10 +4,11 @@
 // needs EAB. Pebble and acmez run on real time over loopback, so a test waits for an order's answer
 // with a guard and never sleeps; Pebble's validation sleeps are off.
 //
-// Pebble v2.10.1 cannot find the order behind about 1 in 255 of its own certificates when a new order
-// names one in replaces (see testOrderReplaceable), so a test that replaces a certificate takes one
-// Pebble can find, and what certs sends as replaces is read from the request itself, for every shape
-// of serial, whatever Pebble answers.
+// What certs sends as replaces is read from each newOrder on its way to Pebble, for every shape of
+// serial, whatever Pebble answers. A renewal also replaces certificates whose serials the test has
+// Pebble draw, with the top bit of the first octet set: Pebble before v2.10.3 could not find the order
+// behind those, about 1 in 255 of its certificates (question certs-ari-flake-pebble-replaces-serial,
+// QD-903).
 
 package certsservice_test
 
@@ -19,12 +20,16 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"io"
+	"math/big"
 	"net/http"
+	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -188,37 +193,89 @@ func testLeafAriId(t *testing.T, leaf *x509.Certificate) string {
 	return testCertificateId(leaf.AuthorityKeyId, leaf.SerialNumber)
 }
 
-// Orders csr's certificate at LE's Pebble for a test that goes on to replace it, and returns it with
-// its verified leaf.
-//
-// Pebble v2.10.1 files an issued order under its certificate's serial as the hex of the serial's bare
-// unsigned octets, and looks a replaces up under the hex of the certificate id's serial octets, which
-// are DER's and lead with a zero octet when the serial's top bit is set. So it answers a newOrder that
-// replaces such a certificate with a 500, "could not find an order for the given certificate", though
-// its own ARI finds it. Its serials are random below 2^63, so that is the 1 in 256 of 7 octets with the
-// top bit set and the few shorter ones (question certs-ari-flake-pebble-replaces-serial). The id certs
-// sends for such a certificate is right, which TestCertsAcmeReplacesNamesTheCertificateIdOnTheWire
-// holds; Pebble is a fetched module and is not patched, so this orders again until Pebble issues a
-// certificate it can find. It tries four times: each order writes its name's challenges twice, and the
-// DNS routes take 10 writes a name an hour (D-DNS-8), so a set has five orders in a test, these and
-// the one that replaces.
-func testOrderReplaceable(t *testing.T, client *certsservice.CertsAcmeClient, pebble *sidecartest.Pebble, csr []byte, names []string) (*certsservice.CertsAcmeIssued, *x509.Certificate) {
+// The function whose reads of crypto/rand.Reader are Pebble's draws of a certificate's serial.
+const testPebbleMakeSerial = "github.com/letsencrypt/pebble/v2/ca.makeSerial"
+
+// Stands in for crypto/rand.Reader and answers Pebble's next draws of a leaf's serial with queued
+// octets, so a test orders a certificate whose serial has the shape it needs. Every other read passes
+// through. Pebble draws a serial in ca.makeSerial as crypto/rand.Int(crypto/rand.Reader, 2^63 - 1),
+// which reads 8 octets and clears the first octet's top bit; a read is that draw exactly when
+// makeSerial is on its stack, whatever else reads the reader meanwhile (TLS, Pebble's nonces and
+// tokens, certs' own keys). StartPebble's t.Setenv already keeps such a test from running in parallel.
+type testPebbleSerials struct {
+	base io.Reader
+
+	stateLock sync.Mutex
+	// the octets of the serials Pebble draws next, in order
+	queued [][]byte
+}
+
+// A testPebbleSerials in crypto/rand.Reader's place until the test ends. A test takes it before
+// StartPebble, so the reader comes back only once Pebble has stopped.
+func newTestPebbleSerials(t *testing.T) *testPebbleSerials {
 	t.Helper()
-	ctx := testAcmeContext(t)
-	for range 4 {
-		issued, err := client.Order(ctx, &certsservice.CertsAcmeOrder{Ca: certsservice.CertsCaLetsEncrypt, Csr: csr})
-		if err != nil {
-			t.Fatal(err)
-		}
-		leaf := testVerifyChain(t, pebble, issued.Chain, names)
-		// the top bit of the serial's first octet is set exactly when its bit length fills its octets
-		if leaf.SerialNumber.BitLen()%8 != 0 {
-			return issued, leaf
-		}
-		t.Logf("Pebble cannot replace its certificate with serial %s; ordering another", certsservice.CertsSerialText(leaf.SerialNumber))
+	serials := &testPebbleSerials{base: rand.Reader}
+	rand.Reader = serials
+	t.Cleanup(func() {
+		rand.Reader = serials.base
+	})
+	return serials
+}
+
+// Queues serial as the next one Pebble issues a certificate under.
+func (self *testPebbleSerials) next(t *testing.T, serial *big.Int) {
+	t.Helper()
+	// rand.Int's 8 octets, read as a serial below 2^63 - 1 with the first octet's top bit clear
+	octets := make([]byte, 8)
+	if serial.Sign() <= 0 || 63 <= serial.BitLen() {
+		t.Fatalf("Pebble draws no serial %s", serial.Text(16))
 	}
-	t.Fatal("Pebble issued no certificate it can replace")
-	return nil, nil
+	serial.FillBytes(octets)
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.queued = append(self.queued, octets)
+}
+
+// How many queued serials Pebble has not drawn yet.
+func (self *testPebbleSerials) pending() int {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return len(self.queued)
+}
+
+func (self *testPebbleSerials) Read(buffer []byte) (int, error) {
+	if octets := self.take(len(buffer)); octets != nil {
+		return copy(buffer, octets), nil
+	}
+	return self.base.Read(buffer)
+}
+
+// The next queued serial's octets when this read of byteCount octets is Pebble's draw of one, and nil
+// otherwise.
+func (self *testPebbleSerials) take(byteCount int) []byte {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if len(self.queued) == 0 || byteCount != len(self.queued[0]) || !testCalledFrom(testPebbleMakeSerial) {
+		return nil
+	}
+	octets := self.queued[0]
+	self.queued = self.queued[1:]
+	return octets
+}
+
+// Whether function is on the caller's stack, inlined frames included.
+func testCalledFrom(function string) bool {
+	callers := make([]uintptr, 64)
+	frames := runtime.CallersFrames(callers[:runtime.Callers(2, callers)])
+	for {
+		frame, more := frames.Next()
+		if frame.Function == function {
+			return true
+		}
+		if !more {
+			return false
+		}
+	}
 }
 
 // Verifies chain under pebble's roots for its names, and returns its leaf.
@@ -305,7 +362,11 @@ func TestCertsAcmeAriAndOfflineRenewal(t *testing.T) {
 	storedCsr := testCsr(t, device.tlsKey, device.identifierSet)
 	ctx := testAcmeContext(t)
 
-	first, leaf := testOrderReplaceable(t, client, pebble, storedCsr, device.identifierSet)
+	first, err := client.Order(ctx, &certsservice.CertsAcmeOrder{Ca: certsservice.CertsCaLetsEncrypt, Csr: storedCsr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf := testVerifyChain(t, pebble, first.Chain, device.identifierSet)
 	if sent := recorder.take(); len(sent) == 0 || slices.ContainsFunc(sent, func(replaces string) bool { return replaces != "" }) {
 		t.Fatalf("a first order sent replaces %q", sent)
 	}
@@ -335,6 +396,63 @@ func TestCertsAcmeAriAndOfflineRenewal(t *testing.T) {
 	leafId := testLeafAriId(t, leaf)
 	if sent := recorder.take(); len(sent) == 0 || slices.ContainsFunc(sent, func(replaces string) bool { return replaces != leafId }) {
 		t.Fatalf("the renewal sent replaces %q, not %q", sent, leafId)
+	}
+}
+
+// A renewal replaces a certificate whose serial's first octet has its top bit set, where the id's DER
+// serial octets lead with a zero octet that the serial's bare unsigned octets lack: Pebble finds the
+// order behind the certificate, and every newOrder of the renewal names it, none falling back to an
+// order without it. Pebble issues each first certificate under a serial the test queues; before v2.10.3
+// it answered each of these renewals with a 500 (question certs-ari-flake-pebble-replaces-serial).
+func TestCertsAcmeRenewsSerialsWithTheTopBitSet(t *testing.T) {
+	serials := newTestPebbleSerials(t)
+	pebble := sidecartest.StartPebble(t, nil)
+	settings := testAcmeSettings(pebble, nil)
+	recorder, httpClient := newTestReplacesRecorder(pebble)
+	client := testAcmeOver(t, settings, pebble, httpClient, testAccountFile(t, certsservice.CertsCaLetsEncrypt, time.Now(), "", ""))
+	ctx := testAcmeContext(t)
+
+	for index, shape := range []struct {
+		// the serial of the certificate the renewal replaces, in hex
+		serial string
+		// the serial octets of its certificate id, in hex
+		idOctets string
+	}{
+		{"80223344556677", "0080223344556677"},
+		{"ff223344556677", "00ff223344556677"},
+		{"80", "0080"},
+	} {
+		// a set of its own each, under the DNS routes' writes a name an hour
+		device := newTestDevice(t, "k6topbit0"+string(rune('a'+index)))
+		storedCsr := testCsr(t, device.tlsKey, device.identifierSet)
+		serial, _ := new(big.Int).SetString(shape.serial, 16)
+		serials.next(t, serial)
+		first, err := client.Order(ctx, &certsservice.CertsAcmeOrder{Ca: certsservice.CertsCaLetsEncrypt, Csr: storedCsr})
+		if err != nil {
+			t.Fatal(err)
+		}
+		leaf := testVerifyChain(t, pebble, first.Chain, device.identifierSet)
+		if leaf.SerialNumber.Cmp(serial) != 0 || serials.pending() != 0 {
+			t.Fatalf("Pebble issued serial %s, not %s", leaf.SerialNumber.Text(16), shape.serial)
+		}
+		leafId := testLeafAriId(t, leaf)
+		_, idSerial, _ := strings.Cut(leafId, ".")
+		if octets, err := base64.RawURLEncoding.DecodeString(idSerial); err != nil || hex.EncodeToString(octets) != shape.idOctets {
+			t.Fatalf("serial %s has id %s", shape.serial, leafId)
+		}
+		recorder.take()
+
+		second, err := client.Order(ctx, &certsservice.CertsAcmeOrder{Ca: certsservice.CertsCaLetsEncrypt, Csr: storedCsr, Replaces: leafId})
+		if err != nil {
+			t.Fatalf("the renewal of serial %s: %v", shape.serial, err)
+		}
+		renewed := testVerifyChain(t, pebble, second.Chain, device.identifierSet)
+		if renewed.SerialNumber.Cmp(serial) == 0 {
+			t.Fatalf("the renewal of serial %s returned the old certificate", shape.serial)
+		}
+		if sent := recorder.take(); len(sent) == 0 || slices.ContainsFunc(sent, func(replaces string) bool { return replaces != leafId }) {
+			t.Fatalf("the renewal of serial %s sent replaces %q, not %q", shape.serial, sent, leafId)
+		}
 	}
 }
 
@@ -425,7 +543,11 @@ func TestCertsAcmeRolloverBetweenOrders(t *testing.T) {
 	storedCsr := testCsr(t, device.tlsKey, device.identifierSet)
 	ctx := testAcmeContext(t)
 
-	_, leaf := testOrderReplaceable(t, client, pebble, storedCsr, device.identifierSet)
+	first, err := client.Order(ctx, &certsservice.CertsAcmeOrder{Ca: certsservice.CertsCaLetsEncrypt, Csr: storedCsr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf := testVerifyChain(t, pebble, first.Chain, device.identifierSet)
 	uriBefore, err := client.AccountUri(ctx, certsservice.CertsCaLetsEncrypt)
 	if err != nil {
 		t.Fatal(err)
