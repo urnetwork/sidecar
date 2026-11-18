@@ -58,9 +58,13 @@ type indexWriterArgs struct {
 	mayMerge func() bool
 	// Whether a general repo is laid out as a group inbox, whose mail is m/ (§15.7). Nil reads none.
 	groupInbox func(repoId Id) bool
-	settings   *IndexFormatSettings
-	clock      Clock
-	log        Logger
+	// The team directory's copy of a card or repo file at the version a write replaces (DirectoryClient.IndexReplaced):
+	// its d/ and r/ files are versionless, so evs holds a replaced version about a minute. False, and nil, read the
+	// version from evs, and a version neither gives leaves the push unindexed.
+	directoryReplaced func(repoId Id, path string, version uint64) ([]byte, bool)
+	settings          *IndexFormatSettings
+	clock             Clock
+	log               Logger
 }
 
 // The in-ref writer of one client's pushes. Construct with newIndexWriter; Install sets Prepare as the client's
@@ -118,6 +122,10 @@ func (self *IndexWriter) Prepare(ctx context.Context, plan *EvsWritePlan) error 
 		if indexExcluded(indexPlace{repoKind: plan.repoKind, groupInbox: groupInbox, path: planned.Path}) {
 			continue
 		}
+		if plan.repoKind == protocol.RepoKind_REPO_KIND_DIRECTORY && !directoryIndexPath(planned.Path) {
+			// a notice, or anything else of the team directory that is no card and no repo file, is no document
+			continue
+		}
 		changes = append(changes, &indexWriterChange{planned: planned, write: write})
 	}
 	if len(changes) == 0 {
@@ -145,7 +153,12 @@ func (self *IndexWriter) Prepare(ctx context.Context, plan *EvsWritePlan) error 
 		writer: self, repo: repo, plan: plan, refKey: refKey, normalizer: normalizer, groupInbox: groupInbox,
 	}
 	for _, change := range changes {
-		complete, err := documents.enter(ctx, change)
+		enter := documents.enter
+		if plan.repoKind == protocol.RepoKind_REPO_KIND_DIRECTORY {
+			// the team directory's documents are its class's: a card's or a repo file's announcements (§16.11)
+			enter = documents.enterDirectory
+		}
+		complete, err := enter(ctx, change)
 		if err != nil {
 			return err
 		}
