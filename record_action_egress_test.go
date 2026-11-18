@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"errors"
+	"slices"
 	"testing"
 
 	"google.golang.org/protobuf/encoding/protowire"
@@ -170,5 +171,28 @@ func TestEgressChangeTemplateBindsTheRequirement(t *testing.T) {
 	}
 	if row, ok := CanonicalActionFields(SidecarActionMail); !ok || len(row.TemplateBound) != 0 {
 		t.Error("mail's row binds a field in its templates")
+	}
+}
+
+// Every field a row binds in its templates is one of its optional fields, which a use may leave empty: a required one
+// every use fills, so a template leaving it empty would cover nothing, and one outside the row no action sets. Only
+// egress_change binds one, its requirement of default egress.
+func TestTemplateBoundFieldsAreOptional(t *testing.T) {
+	fields := (&protocol.CanonicalAction{}).ProtoReflect().Descriptor().Fields()
+	bindingKinds := []SidecarActionKind{}
+	for _, row := range canonicalActionKindRows {
+		for _, number := range row.TemplateBound {
+			if fields.ByNumber(number) == nil || !slices.Contains(row.Optional, number) {
+				t.Errorf("kind %d binds field %d in its templates, which is none of its optional fields", row.Kind, number)
+			}
+		}
+		if 0 < len(row.TemplateBound) {
+			bindingKinds = append(bindingKinds, row.Kind)
+		}
+	}
+	row, _ := CanonicalActionFields(SidecarActionEgressChange)
+	if !slices.Equal(bindingKinds, []SidecarActionKind{SidecarActionEgressChange}) ||
+		!slices.Equal(row.TemplateBound, []protoreflect.FieldNumber{canonicalActionFieldRequireDefaultEgress}) {
+		t.Errorf("kinds %v bind fields in their templates, egress_change's %v", bindingKinds, row.TemplateBound)
 	}
 }
