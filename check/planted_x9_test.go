@@ -175,20 +175,6 @@ func TestX9ReadyForMainRefusesAMarkerWithNoDefaultOffTest(t *testing.T) {
 	wantFindings(t, fixture.open().x9ReadyForMainFindings(t, 0))
 }
 
-// §4.17: C19's sweep passes in connect's own tests before connect's main.
-func TestX9ReadyForMainRefusesC19WithoutItsSweep(t *testing.T) {
-	fixture := newFixture(t)
-	fixture.writeSibling("connect/transfer_peer_window.go", "package connect\n\ntype Client struct{}\n\nfunc (self *Client) SetPeerWindowAccounting() {}\n")
-	plantConnectTests(fixture, "transfer_peer_window_test.go", "TestPeerWindowOffReportsAreIdentical", "TestPeerWindowUnmarkedPairIsUnchanged")
-	wantFindings(t, fixture.open().x9ReadyForMainFindings(t, 0), "C19's marker SetPeerWindowAccounting is in connect without FS-125's sweep")
-
-	plantConnectTests(fixture, "transfer_peer_window_sweep_test.go")
-	wantFindings(t, fixture.open().x9ReadyForMainFindings(t, 0), "C19's marker SetPeerWindowAccounting is in connect without FS-125's sweep")
-
-	plantConnectTests(fixture, "transfer_peer_window_sweep_test.go", "TestFs125WindowSweepDown")
-	wantFindings(t, fixture.open().x9ReadyForMainFindings(t, 0))
-}
-
 // Plants C3, C11 and C12, which M1 lands, with their default-off tests where they need one.
 func plantM1ConnectRows(fixture *fixture) {
 	fixture.writeSibling("connect/subprotocol.go", "package connect\n\ntype SubprotocolListenerOption struct{}\n\nfunc WithSubprotocolControlSource() SubprotocolListenerOption {\n\treturn SubprotocolListenerOption{}\n}\n")

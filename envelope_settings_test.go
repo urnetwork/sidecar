@@ -108,21 +108,3 @@ func TestProtocolMaximumsAreHeld(t *testing.T) {
 		}
 	}
 }
-
-// The most warm search pairs is a setting with one default, 3 (QD-707's two own and one other member's;
-// QD-702), the same on a phone, and never zero, which would read as no pair kept warm.
-func TestMarkedPeerMaxCountIsASetting(t *testing.T) {
-	settings := DefaultSidecarProtocolSettings()
-	if settings.MarkedPeerMaxCount != 3 {
-		t.Errorf("MarkedPeerMaxCount %d", settings.MarkedPeerMaxCount)
-	}
-	ApplyMobileSidecarProtocolSettings(settings)
-	if settings.MarkedPeerMaxCount != 3 {
-		t.Errorf("on a phone, MarkedPeerMaxCount %d", settings.MarkedPeerMaxCount)
-	}
-	unset := validSidecarSettings()
-	unset.ProtocolSettings.MarkedPeerMaxCount = 0
-	if err := unset.validate(); !errors.Is(err, errInvalidSettings) || !strings.Contains(err.Error(), "MarkedPeerMaxCount") {
-		t.Errorf("MarkedPeerMaxCount 0: %v", err)
-	}
-}

@@ -635,10 +635,6 @@ barrier rpc.hello_pin.after rpc_admission.go
 barrier rpc.hello_pin.after rpc_pins.go
 barrier rpc.hello_pin.before rpc_admission.go
 barrier rpc.hello_pin.before rpc_pins.go
-barrier rpc.marked_pair_mark.after rpc_marked_pair.go
-barrier rpc.marked_pair_mark.before rpc_marked_pair.go
-barrier rpc.marked_pair_tick.after rpc_marked_pair.go
-barrier rpc.marked_pair_tick.before rpc_marked_pair.go
 barrier rpc.peer_take.before rpc_peer.go
 barrier rpc.seal_stop rpc_headcheck_stop.go
 barrier rpc.witness_refresh rpc_headcheck_witness.go

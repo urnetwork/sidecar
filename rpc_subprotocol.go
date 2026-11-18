@@ -140,6 +140,10 @@ type Subprotocol struct {
 	// handler runs, for Cancel, and how many each peer has (rpc_handle.go)
 	runningCalls      map[rpcCallKey]context.CancelCauseFunc
 	sourceIdRunCounts map[connect.Id]int
+	// an app host's asking role beside bit 1: whether its host is in the foreground, and the first-choice
+	// own search indexer HeadCheck's round counts there (rpc_features.go)
+	searchForeground bool
+	searchIndexerId  Id
 
 	// Hello's identity: this side's network, binding and event sink, and the pins (rpc_identity.go)
 	networkId Id
@@ -160,14 +164,6 @@ type Subprotocol struct {
 	headCheck atomic.Pointer[headCheckTransport]
 	// the feature bits this side sends, which the inline handler reads with no lock (rpc_features.go)
 	features atomic.Pointer[subprotocolFeatureSet]
-	// connect's C19 ledger, and the warm indexers and foreground the keepalives follow
-	// (rpc_marked_pair.go)
-	peerWindows subprotocolPeerWindows
-	markedPairs *MonitorValue[subprotocolMarkedPairs]
-	// moves each time a keepalive arms a wait or ends, so a test steps its clock with no sleep
-	keepaliveMark *MonitorValue[uint64]
-	// under stateLock: the keepalive loop of each warm indexer, which Close joins with the handlers
-	keepaliveLoops map[connect.Id]*subprotocolKeepaliveLoop
 
 	// §6.10.1's side this dispatcher runs as (stream_edge.go)
 	role SubprotocolRole
@@ -342,7 +338,6 @@ type subprotocolSeams struct {
 	clientPublicKeyOf func(peer connect.Peer) ([ed25519.PublicKeySize]byte, bool)
 	send              subprotocolSendFunction
 	pins              identityPinSource
-	peerWindows       subprotocolPeerWindows
 	clientId          connect.Id
 	streamPressure    func() bool
 }
@@ -413,10 +408,6 @@ func newSubprotocol(ctx context.Context, env *SubprotocolEnv, seams *subprotocol
 		pins:                  seams.pins,
 		admissions:            env.Admissions,
 		idempotency:           newIdempotencyCache(env.Settings, env.Budget, clock),
-		peerWindows:           seams.peerWindows,
-		markedPairs:           NewMonitorValue(subprotocolMarkedPairs{}),
-		keepaliveMark:         NewMonitorValue[uint64](0),
-		keepaliveLoops:        map[connect.Id]*subprotocolKeepaliveLoop{},
 		role:                  env.Role,
 		streams: subprotocolStreams{
 			outboundWake: make(chan struct{}, 1),
@@ -425,9 +416,6 @@ func newSubprotocol(ctx context.Context, env *SubprotocolEnv, seams *subprotocol
 		streamClientId:       seams.clientId,
 		streamPressureOf:     seams.streamPressure,
 		streamKeepaliveArmed: NewMonitorValue(time.Time{}),
-	}
-	if self.peerWindows == nil {
-		self.peerWindows = env.Client.ContractManager()
 	}
 	if self.clientPublicKeyOf == nil {
 		self.clientPublicKeyOf = connect.Peer.VerifiedClientPublicKey
@@ -689,11 +677,6 @@ func (self *Subprotocol) dispatch(message *subprotocolMessage) {
 			self.offerReply(refusalReply(message.sourceId, message.transferKey, envelope.RequestId, envelope.StreamId, protocol.ErrorCode_ERR_INVALID_ARGUMENT))
 			return
 		}
-		// a marked pair's keepalive: its window's activity, and at the indexer its session as of the Ping's
-		// arrival, both before the Pong goes, so a requester holding the Pong never finds this side's
-		// record of the session behind its own (rpc_marked_pair.go)
-		self.noteWindowActivity(message.sourceId)
-		self.touchSession(message.sourceId, message.arrivalTime)
 		self.offerReply(subprotocolReply{
 			destinationId: message.sourceId,
 			transferKey:   message.transferKey,

@@ -287,11 +287,9 @@ func (self *Subprotocol) takeOrRetire(peer *subprotocolPeer) (subprotocolInbound
 type subprotocolPeerIdentity struct {
 	// C15's key on the frame whose Hello verified, which every later frame must carry
 	clientPublicKey [ed25519.PublicKeySize]byte
-	// HelloCacheTimeout after the Hello verified, or later while a marked pair's session lives
-	// (rpc_marked_pair.go)
+	// HelloCacheTimeout after the Hello verified
 	expireTime time.Time
-	// when the session last showed live: the Hello's verification, then each Pong or Ping of a marked
-	// pair
+	// when the Hello verified, which remote search reads as the indexer seen (search_remote_transport.go)
 	sessionTime time.Time
 	// what the Hello showed; nil only where an internal test opened the gate by hand
 	peer *SubprotocolPeerIdentity
@@ -316,6 +314,18 @@ func (self *Subprotocol) markPeerVerifiedAs(sourceId connect.Id, clientPublicKey
 		sessionTime:     now,
 		peer:            peer,
 	}
+}
+
+// When the Hello with peerId verified, and false with none standing.
+func (self *Subprotocol) sessionTime(peerId connect.Id) (time.Time, bool) {
+	now := self.clock.Now()
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	identity, ok := self.sourceIdIdentities[peerId]
+	if !ok || !now.Before(identity.expireTime) {
+		return time.Time{}, false
+	}
+	return identity.sessionTime, true
 }
 
 // Whether a verified Hello with clientId stands now, reading the gate and running nothing.
