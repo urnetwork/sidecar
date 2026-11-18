@@ -22,7 +22,9 @@
 // state and the time it is given. A verdict that rests only on history that never changes (a version's signer and
 // stream, its signer's standing at its pin, D-MCP-35's right found at a position) is kept once reached, so a later
 // view asks the state only what can still change: the pin's distance, a revocation or cascade since, a repo's
-// deletion. A lost read starts a new fold.
+// deletion. One fact outlives the entries: each version of a repo item a view accepted as a full item, which a
+// revocation's lapse rests on after the runner erased or retention expired the entry that carried it (§16.11's revoke
+// row, owner decision 472). A lost read starts a new fold.
 //
 // Safe for concurrent use. No lock is held across a call into the state or the alarm sink.
 
@@ -163,6 +165,9 @@ type DirectoryFold struct {
 	leafNotEndedAt map[[sha256.Size]byte]uint64
 	alarmed        map[directoryAlarmKey]bool
 	reused         map[directoryReuseKey]bool
+	// each repo item's versions a view accepted as a full item, ascending, by key: kept once accepted, whether or not
+	// their entries are erased or expire since, so a revocation lapsed by one stays lapsed (owner decision 472)
+	keyFullVersions map[DirectoryItemKey][]uint64
 	// format 2's card and repo file versions, judged at each Update before the entries fold
 	// (DirectoryClient's directoryFoldFiles, directory_card.go); nil for none
 	files func(fold *DirectoryFold) []*directoryVersion
@@ -173,14 +178,15 @@ type DirectoryFold struct {
 // A fold of directoryId's entries, raising its alarms through alarm, nil for none.
 func NewDirectoryFold(directoryId Id, alarm func(alarm *RecordAlarm)) *DirectoryFold {
 	return &DirectoryFold{
-		directoryId:    directoryId,
-		alarm:          alarm,
-		leafVersions:   map[[sha256.Size]byte]*directoryVersion{},
-		keyVersions:    map[DirectoryItemKey][]*directoryVersion{},
-		leafFixed:      map[[sha256.Size]byte]directoryJudgement{},
-		leafNotEndedAt: map[[sha256.Size]byte]uint64{},
-		alarmed:        map[directoryAlarmKey]bool{},
-		reused:         map[directoryReuseKey]bool{},
+		directoryId:     directoryId,
+		alarm:           alarm,
+		leafVersions:    map[[sha256.Size]byte]*directoryVersion{},
+		keyVersions:     map[DirectoryItemKey][]*directoryVersion{},
+		leafFixed:       map[[sha256.Size]byte]directoryJudgement{},
+		leafNotEndedAt:  map[[sha256.Size]byte]uint64{},
+		alarmed:         map[directoryAlarmKey]bool{},
+		reused:          map[directoryReuseKey]bool{},
+		keyFullVersions: map[DirectoryItemKey][]uint64{},
 	}
 }
 
@@ -321,6 +327,7 @@ func (self *DirectoryFold) View(auth DirectoryAuthView, nowMillis int64) []*Dire
 		accepted := false
 		if key.Kind == DirectoryAnnouncementKindRepo {
 			item, accepted = judge.repoItem(keyVersions[key])
+			judge.keepRepoFull(keyVersions[key])
 		} else {
 			item, accepted = judge.cardItem(keyVersions[key])
 		}
@@ -347,6 +354,59 @@ func (self *DirectoryFold) View(auth DirectoryAuthView, nowMillis int64) []*Dire
 	}
 	slices.SortFunc(items, directoryItemCompare)
 	return items
+}
+
+// The lowest version of repoId's item above markerVersion that this fold accepted as a full item, at this view or any
+// before it, its entry erased or expired since or not; 0 for none. It is what replaced a revocation's private marker,
+// so that revocation's erasure_request lapsed for good, whatever marker stands now (§16.11's revoke row, owner
+// decision 472). A version the rules refuse, or one that waits unjudged, replaces nothing.
+func (self *DirectoryFold) repoMarkerReplaced(auth DirectoryAuthView, nowMillis int64, repoId Id, markerVersion uint64) uint64 {
+	if auth == nil {
+		auth = DirectoryAuthUnavailable{}
+	}
+	key := DirectoryItemKey{Kind: DirectoryAnnouncementKindRepo, AnnouncementId: DirectoryRepoAnnouncementId(repoId)}
+	versions := func() []*directoryVersion {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.keyVersions[key]
+	}()
+	judge := &directoryJudge{fold: self, auth: auth, readerPin: auth.Pin(), nowMillis: nowMillis, standingNow: map[Id]DirectoryStanding{}}
+	judge.keepRepoFull(versions)
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	for _, version := range self.keyFullVersions[key] {
+		if markerVersion < version {
+			return version
+		}
+	}
+	return 0
+}
+
+// Keeps each of one repo item's versions this view accepts as a full item, judging only those not kept yet.
+func (self *directoryJudge) keepRepoFull(versions []*directoryVersion) {
+	for _, version := range versions {
+		if version.item.GetWhere().GetPrivate() {
+			continue
+		}
+		key, number := version.key, version.item.GetVersion()
+		kept := func() bool {
+			self.fold.stateLock.Lock()
+			defer self.fold.stateLock.Unlock()
+			_, found := slices.BinarySearch(self.fold.keyFullVersions[key], number)
+			return found
+		}()
+		if kept || self.repo(version).verdict != directoryVerdictAccepted {
+			continue
+		}
+		func() {
+			self.fold.stateLock.Lock()
+			defer self.fold.stateLock.Unlock()
+			fullVersions := self.fold.keyFullVersions[key]
+			if at, found := slices.BinarySearch(fullVersions, number); !found {
+				self.fold.keyFullVersions[key] = slices.Insert(fullVersions, at, number)
+			}
+		}()
+	}
 }
 
 // Keys in id order: kind, writer, announcement_id.

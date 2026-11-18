@@ -64,9 +64,9 @@ evs never parses git, holds no key (I-1) and keeps no Postgres or durable Redis 
 
 ### 11.5 X2: what the server sees
 
-Owner decision 2 settles X2's residual (Q-EVS-1): the server sees exactly §2.8's evs rows, one per 11.8 family: each ref's token tree, push DAG, pins and per-file changes (token, time, uploader, Padmé-padded size), each client's reads and subscribed prefixes, and which pushes one evs process batched. It never sees names, contents, messages, authors, branch or display names, agent ids or entry sequence numbers, nor links equal content across or within repos (per-repo keys, random nonces, records reused only for renames and merges). It also sees each file version's versioning setting (11.7), which content rides staged inside a push, and when the purge deletes a replaced versionless version's content, about a minute after the replacement commits, staged content with its batch, at most 26 h (11.13); each drop's token-path lineages, listed entry hashes, window, cancel, the deletions its job makes and admins' dry runs (§2.8's evs-12, evs-28); and, in a team directory, when each sidecar's card and each request's notice change, never their contents (evs-27). Of the search index it sees only shape and fetch times (11.14's server rows), never a query, a match, or which trigrams documents share, and nothing of a remote search (§2.8's connect-5).
+Owner decision 2 settles X2's residual (Q-EVS-1): the server sees exactly §2.8's evs rows, one per 11.8 family: each ref's token tree, push DAG, pins and per-file changes (token, time, uploader, Padmé-padded size), each client's reads and subscribed prefixes, and which pushes one evs process batched. It never sees names, contents, messages, authors, branch or display names, agent ids or entry sequence numbers, nor links equal content across or within repos (per-repo keys, random nonces, records reused only for renames and merges). It also sees each file version's versioning setting (11.7), which content rides staged inside a push, and when the purge deletes a replaced versionless version's content, about a minute after the replacement commits, staged content with its batch, at most 26 h (11.13); each drop's token-path lineages, listed entry hashes, window, cancel, the deletions its job makes and admins' dry runs (§2.8's evs-12, evs-28); of a git-mode push, its flags and changes, how many of its parts hold no change and the padded size of the history it carried, never its commits, its tips or the other refs it names as sources (11.7, §2.8's evs-4); and, in a team directory, when each sidecar's card and each request's notice change, never their contents (evs-27). Of the search index it sees only shape and fetch times (11.14's server rows), never a query, a match, or which trigrams documents share, and nothing of a remote search (§2.8's connect-5).
 
-**Token leak bound.** A token alone shows only its place in the tree. With the server's help, a key holder can test guessed names created before the path epoch that drops it (11.6), which a member device's removal or a compromise makes due at once, new names in general, config and mailcfg repos waiting for it, and other drops and authorization expiries within 24 h, or, while two source epochs stand, once one drops (11.6's commit row), each landing when a mapper commits (writers alarm an hour past due, not while such an epoch waits), and guessed branch names for the repo's life, since ref ids stay keyed from RK_1. A new ref starts in the newest path epoch its creator holds (owner decision 232), and evs refuses a creation in the push whose own commit would record an immediate due (owner decision 229), so no committed name is tokenized under a removed key; neither unsends a token such a push carried. A Delegation's reader key counts as dropped only when §10.5's live(d) ends, at one of the drops §10.5 lists. Holders follow files they knew through the map.
+**Token leak bound.** A token alone shows only its place in the tree. With the server's help, a key holder can test guessed names created before the path epoch that drops it (11.6), which every drop of a key holder, a member's, a member device's, a compromise and an authorization expiry alike, makes due within 24 h, or, while two source epochs stand, once one drops (11.6's commit row), each landing when a mapper commits (writers alarm an hour past due, not while such an epoch waits), names created meanwhile included, since no due holds a new name (owner decision 585, which reversed owner decisions 229, 414 and 569); the token of a name first sent within 5 s of a cut-over, which can reach the server under the epoch just left (11.6's read row); and guessed branch names for the repo's life, since ref ids stay keyed from RK_1. A new ref starts in the newest path epoch its creator holds (owner decision 232), so no new ref's first names are tokenized under a removed key. Contents stay sealed throughout. A Delegation's reader key counts as dropped only when §10.5's live(d) ends, at one of the drops §10.5 lists. Holders follow files they knew through the map.
 
 ### 11.6 Format: keys, tokens, records, segments
 
@@ -101,31 +101,18 @@ leaks    K_path is per repo, so one path has one token on every ref of a repo in
 
 ```text
 due      the first commit whose generation pin crosses a REMOVE generation (§10.5: it covers a shrink, an
-         authorization expiry or a compromise retirement, §7.9), or the refusal of a creation in such a push (below),
-         records it in head.path_epoch.due; evs classifies it by what it covers, on its own verified state, never by a
-         member-checked field (owner decision 414): from the log's entries between the two pins that shrank the
-         repo's key holders, each judged on §7.9's states just before and at it, any immediate one making the whole
-         crossing immediate; an earlier pin the party no longer retains is held to its number, as §10.6's gate holds
-         a generation's, its chain checked when it was new by members' rotation checks and evs's gate, so the walk
-         needs only that number and the states around each shrink after it (owner decision 569); a pin off the chain
-         or ahead, or above the later one, and a party that cannot reach the states around a shrink in between, or a
-         kept entry the walk needs, or class an entry, reading immediate, and until that judgment
-         lands, immediate whenever the newest state shows the holders shrank after the auth pin of the generation it
-         crosses from and batched only when expiries alone passed, which fails closed; and it sets due_by_ms; writers
-         alarm 1 h past due_by_ms, but not while the commit row defers a batched epoch, which §19.8 reports, nor
-         within 1 h of that deferral's end:
-         immediate: a member's or a member device's removal, or a compromise retirement (a SidecarRevoke or
-           RecoveryRebind with reason compromise, agents included, or a leaked bundle's DelegationRevoke with
-           since_n > 0; §10.6), due_by_ms that commit's time; on shared and owned refs of general, config and
-           mailcfg repos, whose names carry meaning, a push creating a path (a change with base_entry_version 0,
-           or a directory add) then gets 412 PATH_EPOCH_DUE until the epoch lands, and so does a creation in the
-           crossing push itself, recorded, its refusal's fence write setting the head's due fields as the commit
-           would have, client and evs classifying a due by one shared function (owner decision 229); vault,
-           mailbox, record, team_record, directory and secret repos name entries only by id or sequence (§15.7,
-           §16.8, §16.11) and keep creating, due_blocks_creation staying false on their refs
-         batched: other key-holder shrinks (§7.9; a reap of an agent its live Delegation covers is none) and
-           authorization expiries (a RepoGrant's or requested grant's expires, an uncovered agent's SidecarAdmit
-           or a Delegation's not_after); no block; due_by_ms 24 h after the first
+         authorization expiry or a compromise retirement, §7.9; a reap of an agent its live Delegation covers is
+         none) records it in head.path_epoch.due with due_by_ms 24 h after that commit, a due already recorded
+         keeping its earlier due_by_ms and taking the newer generation; every due is batched, whatever drop or
+         expiry it covers, a member's or a member device's removal and a compromise retirement included (owner
+         decision 585, which reversed owner decisions 229, 414 and 569): nothing classes a crossing, no due holds a
+         creation or a new name, in the push that crosses it or after, a refusal records no due, and
+         due_blocks_creation stays in the format unused, evs writing it false and every reader reading past it;
+         until the epoch lands, a removed holder can test the names created meanwhile under the current epoch
+         (11.5), so the block (below) is the only creation refusal a due brings; writers alarm 1 h past
+         due_by_ms, a REMOVE generation no head has recorded falling due, for a device that holds it, 24 h after it
+         first held it, but not while the commit row defers the epoch, which §19.8 reports, nor within 1 h of that
+         deferral's end
 random   deposit and erasure refs name entries by random ids (tokens, above): evs records no due on them, sets
          no block, refuses a PATH_EPOCH there (409 REF_MODE) and keeps them at path epoch 1 for life, so
          depositors and CONSUME pushes declare 1
@@ -134,15 +121,20 @@ map      the writer that rotates, or any writer holding every name of the ref (a
          by POST .../path-epoch with EvsPathMapRequest {path_map_sha256 1, part 2} (owner decision 408), for
          the newest generation p_new to pmap/<repo>/<ref>/<p_new>/<path_map_sha256>/<k>/_: the root's move first, an
          empty path in each epoch and no sealed name (owner decision 231), then per live path its token path in
-         p_new, in the current epoch and in every source the head lists, and its name re-sealed for the new parent
-         and child tokens; the map binds its source head (map_source_version, map_source_chain), any version at or
-         below the head (commit, below); keys name the map, so a mapper that finds another's map abandoned, or its
-         own parts near their 24 h, uploads a fresh one; once p or a newer epoch commits, taskworker deletes p's
+         p_new, in the current epoch and in each listed source at or above the epoch its standing creation
+         committed in, or its row's (the server was shown its token there; a source below it never held the
+         path), and its name re-sealed for the new parent and child tokens, moves ascending by new token path
+         within and across parts; the map binds its source head (map_source_version, map_source_chain), any version
+         at or below the head (commit, below); keys name the map, and a mapper keeps its built parts and a job
+         record on disk, resuming an interrupted upload from them, so no nonce is drawn twice, and builds a fresh
+         map only when its PATH_EPOCH answers 409 MAP_SOURCE or its oldest part passes 20 h, under the 24 h evs
+         takes (DESIGN-DETAILS.md section 9); once p or a newer epoch commits, taskworker deletes p's
          uncommitted maps, and the nightly pass deletes a map above the head's epoch once 11.13's horizon has passed
          its oldest part's LastModified + 24 h + 2 min, each part by a DELETE naming its LastModified (owner decision
          203)
-tail     paths that versions after the map's source create get moves like the map's, which the mapper builds
-         from those pushes: the PATH_EPOCH push carries them in its payload under path_tail_sha256, and evs checks
+tail     paths that versions after the map's source create, through the PATH_EPOCH push's base, get moves like
+         the map's, removed ones included, which the mapper builds from those pushes, their sources naming the
+         current epoch alone: the PATH_EPOCH push carries them in its payload under path_tail_sha256, and evs checks
          every token path the window's versions after the source create (base_entry_version 0) against them, else
          409 naming the paths; creations between an older source and the window are the mapper's to cover, which
          the copy's end LIST and replaying readers catch (owner decision 228); so a creation costs the mapper a
@@ -153,21 +145,22 @@ tail     paths that versions after the map's source create get moves like the ma
 block    10 min past due_by_ms, a mapper may stop creation for at most 2 min, at most once each 10 min: POST
          .../path-epoch/block, an EvsPathEpochBlockRequest {ref_id 1, ms 2 <= 120,000} (owner decision 408), sets
          head.path_epoch.block_until_ms by one head CAS that raises only the fence (11.8); until it passes, a push
-         creating a path gets 412 PATH_EPOCH_DUE after a fence (11.8's refuse row), so the mapper's tail stops growing
-         and its epoch commits; evs refuses a block for a batched epoch while two sources stand, since the commit row
-         defers it
+         creating a path gets 412 PATH_EPOCH_DUE after a fence (11.8's refuse row), which writers wait out, so the
+         mapper's tail stops growing and its epoch commits on a ref with steady creation; it is the one creation
+         refusal a due brings and 412 PATH_EPOCH_DUE's one use (owner decision 585); evs refuses a block while two
+         sources stand, since the commit row defers the epoch
 commit   a PATH_EPOCH push (file and git mode alike; it carries no git commit, and in git mode it takes TIP like
          every push, its mapper re-signing on a newer head or, on a busy ref, first taking the seal lease) commits
          if its map's parts exist, each under 24 h old, path_map_sha256 matches, its source is a version at or
          below the head whose statement and chain evs reads from the window or that version's log page (one cached
          GET of at most 70 KiB) and which declares the head's current epoch, so no PATH_EPOCH lies between (owner
-         decision 228), its tail covers every creation the window holds after that version, and its own process's
-         fold left nothing unfolded (11.7 (4)); the head then makes p_new current, lists the old current epoch
-         first among the sources (at most 3: a fourth waits, 412 EPOCH_SOURCES_FULL, while creation stays
-         blocked; a batched epoch waits so while two sources stand, with no block and no map built meanwhile,
-         covering every expiry due when it lands, so the third stays for an immediate epoch), clears due and the
-         block; pushes declaring an older epoch get 412 PATH_EPOCH, part and seal
-         checks included, and re-tokenize
+         decision 228), else 409 MAP_SOURCE, its tail covers every creation the window holds after that version,
+         and its own process's fold left nothing unfolded (11.7 (4)); the head then makes p_new current, lists the
+         old current epoch first among the sources and clears due and the block; every due being batched, an epoch
+         waits, 412 EPOCH_SOURCES_FULL, while two sources stand, with no block and no map built meanwhile, covering
+         every removal and expiry due when it lands, so a head lists two sources at most, though the format holds
+         three (owner decision 585); pushes declaring an older epoch get 412 PATH_EPOCH, part and seal checks
+         included, and re-tokenize (read, below)
 copy     one taskworker job per ref, for the newest map and its tail only, as P2 work (11.13), first hashing the
          map's parts against the head's map_sha256 and checking their order, moving nothing and alarming on a
          mismatch (owner decision 230), then running the moves in descending token-path order, so a directory moves
@@ -189,18 +182,25 @@ copy     one taskworker job per ref, for the newest map and its tail only, as P2
          idx/<repo>/<ref>/<p_i>/ for each source, deletes the markers there unmoved, alarms on any other entry or
          carried row the map missed and keeps that source listed; when every source is empty, a fence write drops the
          sources (11.8), and 11.7 collects the current epoch's markers; one a fold left racing a move reads as absent
-read     clients send each path's token path in the current epoch and in each listed source that may hold it:
-         where they knew its name before the cut-over, or their listing showed it in that epoch (a carried row, or
-         a row of an entry that source served); a name they hold no row for they look up through its parent, and
-         an untagged row's child is in the current epoch (copy, above); while sources stand, evs also HEADs in the
-         same round a path's prefixes' current entries, whose state (11.7) rides in object metadata, each settled
-         by 11.7's rule: under a removed prefix the path is absent, and under a fresh one too unless its own
-         current entry is fresh; else evs uses the current entry, else the newest source's, and if every GET of the
-         path returned 404 it GETs the current one again, since the copy PUTs it before deleting a source copy;
-         changes name their source paths by the same rule (the payload's source paths) and a delta removing a
-         child lists its token in each epoch that may hold it, so a fold drops a carried row too, and the server
-         sees no source-epoch token of a name created since the cut-over; readers check a carried row under its
-         epoch's tokens and AAD
+read     a client keeps, per path, the lowest epoch in which it holds evidence the server was shown the path's
+         token (its floor): a verified version, removal or row naming it there, a request of its own that evs
+         answered, or the push a verified version names as its predecessor; it sends the path's token path in the
+         current epoch, in each listed source at or above the floor, and in any other epoch at or above it whose
+         statements it needs proofs under, at most 8 (11.9's request row); a path with no floor is a new name: its
+         token goes only under the current epoch, on a head verified within 5 s, never in a read while sources
+         stand, and no due holds it (owner decision 585); such a name is looked up through its parent's table, from
+         the root, which has no token; while sources stand, evs also HEADs in the same round a path's prefixes'
+         current entries, whose state (11.7) rides in object metadata, each settled by 11.7's rule: under a removed
+         prefix the path is absent, and under a fresh one too unless its own current entry is fresh; else evs uses
+         the current entry, else the newest source's, and if every GET of the path returned 404 it GETs the current
+         one again, since a fold and the copy PUT it before deleting a source copy; the reply names the epoch that
+         served (entry_epoch); changes name their source paths by the floor (the payload's source paths), and a
+         delta removing a child lists its token in the current epoch and each such source, so a fold drops a carried
+         row too, and the server sees no source-epoch token of a name created since the cut-over but one first sent
+         within 5 s of it (11.5); a push refused 412 PATH_EPOCH makes its epoch the floor of every path it named and
+         is re-tokenized on the new head with every sealed byte, receipt and slot id kept (object key, below);
+         readers check a carried row under its epoch's tokens and AAD, an untagged row under the serving epoch's,
+         and every statement under the path's token in that statement's own epoch (DESIGN-DETAILS.md section 9)
 leases   the PATH_EPOCH hint reaches every lease holder of the ref, which re-creates its leases in p_new; a
          holder that missed it does so at its next resync, and a lease on every ref with no prefix names no
          token and matches in any epoch (11.10; owner decision 409)
@@ -210,7 +210,7 @@ costs    a 1M-file ref moves in about 17 h at 50 operations a second (3 per entr
          read takes a HEAD per prefix and, for an unmoved path, a GET per listed source, in the same round
 ```
 
-**Removal: tokens now, content later (owner decisions 2, 64).** Tokens re-key at once, server-side: the server sees them, a removed key holder could keep testing them, and the copy moves no content. New names on shared and owned refs of general, config and mailcfg repos wait for the map, evs refusing the crossing push's own creations too (owner decision 229), and a new ref starts in the newest epoch its creator holds (owner decision 232), so no committed name is tokenized under a removed key. Content rewraps lazily: the removed reader already holds every version it could decrypt, so a file's first write checkpoints it under the new generation (11.7 (4)), or `ur evs rekey` does; moved entries keep their bodies under their old generation, which the ladder opens for current readers.
+**Removal: tokens first, content later (owner decisions 2, 64).** Tokens re-key server-side at the path epoch, which every removal makes due within 24 h: the server sees them, a removed key holder could keep testing them, and the copy moves no content. Until the epoch lands, new names on every ref are tokenized under the current epoch, which the removed holder can test, since no due holds a creation (owner decision 585); a new ref starts in the newest epoch its creator holds (owner decision 232), so no new ref's first names are tokenized under a removed key. Content rewraps lazily: the removed reader already holds every version it could decrypt, so a file's first write checkpoints it under the new generation (11.7 (4)), or `ur evs rekey` does; moved entries keep their bodies under their old generation, which the ladder opens for current readers.
 
 **Nonces.** Every AEAD is XChaCha20-Poly1305 with random 192-bit nonces, so writers share no counter, wasm needs no lookup tables (§10.4), and nothing is encrypted deterministically.
 
@@ -238,8 +238,10 @@ object key      random 32 B, wrapped under fek_g. General repos: one per segment
                 statement's for as long as it stands (owner decision 399; DESIGN-DETAILS.md section 14)
 statements      §6 Signed by the §5 identity key only: EvsPush (purpose evs-push; a DROP by a repo admin, in an
                 owner-bound repo only by a consented, not-read-only device of its owner, 11.7), EvsPathMap
-                (evs-path-epoch, by a writer), EvsImport (evs-import, by a repo admin, one per push over the commits
-                that push carries; 11.11, owner decision 241), EvsReseed (evs-reseed, by a repo admin; 11.13)
+                (evs-path-epoch, by a writer), EvsImport (evs-import, by a repo admin; 11.11, owner decision 241: one
+                push's imported commits, tip_oid that push's new tip, oid_list_sha256 the SHA-256 over its
+                carried commit oids in carried order, count their number), EvsReseed (evs-reseed, by a repo
+                admin; 11.13)
 kinds           EvsLocator.kind 1 (segment) and 2 (inline) ship in format 1, which also reserves kind 5 (versionless
                 segment), EvsEntryVersion.versioning (14; owner decision 167 needs no field 15), EvsLocator.staged
                 (6), the kind-5 segment header (above), EvsUploadReceipt.versionless (8), batch format 2 (11.8),
@@ -361,7 +363,9 @@ message EvsPathMove {
   bytes sealed_name = 3;                // re-sealed under AAD with the new parent and child tokens
 }
 message EvsSourcePath { uint64 epoch = 1; repeated bytes token_path = 2; }
-message EvsImport {                     // purpose evs-import; carried in the push's sealed metadata
+message EvsImport {                     // purpose evs-import, in one push's sealed metadata, over that push's
+                                        // own imported commits: tip_oid its new tip, oid_list_sha256 over
+                                        // their oids in carried order, count their number (owner decision 241)
   bytes repo_id = 1; bytes ref_id = 2; bytes tip_oid = 3; bytes oid_list_sha256 = 4; uint32 count = 5;
 }
 message EvsReseed {                     // §6 Signed, purpose evs-reseed, by a repo admin (§8.8); §19.10
@@ -541,7 +545,7 @@ message EvsSealedMetadata {
 
 ### 11.7 Diffs, checkpoints, index entries, reconstruction
 
-**Mapping to git.** Each ref has a mode: git-mode refs, which the local tier writes, commit only on their tip; file-mode refs land by path (owner decision 141). One evs push carries one git ref update, in parts when large (11.8); its cleartext changes are the net change per path, and its sealed metadata holds every commit with each intermediate commit's sealed changes, and locates each blob its commits name that the net change does not: one sealed history record (a checkpoint, chunks, or a diff against the same path's blob in the commit's first parent) in a segment the push introduces, found by `EvsSealedBlob {git_oid, size, base_oid, file_id, records}` and named by no entry version's chain (owner decision 237), so export rebuilds every original oid and every blob.
+**Mapping to git.** Each ref has a mode: git-mode refs, which the local tier writes, commit only on their tip; file-mode refs land by path (owner decision 141). One evs push carries one git ref update, in parts when large (11.8); its cleartext changes are the net change of the ref's path state, and its sealed metadata states the update (`EvsGitUpdate`: its shape, the ref's value before and after, and any annotated tags) and carries every commit and blob that the ref's readers do not already hold: each commit's object with its changes against its first parent, any tree that does not rebuild from them as its bytes (owner decision 236), any annotated tag as its bytes, and each blob that no entry carries as one sealed history record (a checkpoint, chunks, or a diff against the same path's blob in the commit's first parent, which readers hold by then) in a segment the push introduces, found by `EvsSealedBlob {git_oid, size, base_oid, file_id, records}` and named by no entry version's chain (owner decision 237); what readers hold is what the ref's previous tip, its overlay base and the push's named sources reach (owner decision 238), so export and every syncing device rebuild every original oid and every blob (DESIGN-DETAILS.md section 8).
 
 ```text
 mode  written by                commit condition                       on a lost race                  export
@@ -558,16 +562,29 @@ file  evs_write on file-mode    path-level CAS: each changed file      evs lands
                                                                                                        "ur push <push_id hex>"
 set       the ref's first push sets ref_mode in its statement and the head; another mode is refused (409 REF_MODE);
           only git-mode refs take overlays (below), which are git mode
-replay    replaying readers of a git-mode ref check TIP; that the first new commit's parent is the previous tip, and
-          descent, except on a FORCE push the refs table allows or the first push after a DELETE; oids; and that
-          every new commit's committer is the signer's <client_id>@ur.invalid (owner decision 81) except the oids
-          the push's own EvsImport lists, so the forced identity is a property of the stored history, not only of
-          the hook; new means carried: a git-mode push names up to 16 committed versions of the repo's other
-          git-mode refs as sources (EvsGitUpdate.sources), chosen from tips its writer's mirror has applied, which
-          a reader replays first, so what a source's tip reaches is neither carried nor judged again; a version is
-          applied only after the versions it names, a cycle of waits is refused, and a ref whose source cannot be
-          replayed waits with no alarm of its own (owner decision 238);
-          PATH_EPOCH pushes carry no commit and are skipped in descent
+replay    replaying readers of a git-mode ref check TIP; that the update's stated old tip is the ref's; that every
+          carried commit hashes to its oid with its parents held or carried, and that the new tip is their top;
+          descent, except on a FORCE push the refs table allows or when the ref has no tip; each tree against its
+          commit and each blob against its oid; that the changes are exactly the net change to the new tip's tree;
+          and that every carried commit is canonical with the committer <client_id>@ur.invalid of the push's
+          client or of a client of its signer (owner decision 81), or is listed by the push's own EvsImport, so
+          the forced identity is a property of the stored history, not only of the hook; a commit reached through
+          a named source was judged where it was carried; PATH_EPOCH and REKEY pushes carry no commit and move no
+          tip
+shapes    a git-mode push is an UPDATE (commits and the net change; FORCE when it does not descend), a DELETE, a
+          REKEY (no commit; file entries re-checkpointed, modes and oids unchanged; any writer's device, owner
+          decision 540) or a PATH_EPOCH; a tag ref (refs/tags/…) holds no path state and its pushes carry no change
+sources   a push names up to 16 committed versions of the repo's other git-mode refs (EvsGitUpdate.sources),
+          chosen from tips its writer's mirror has applied, whose tips its readers replay first; a commit a source
+          reaches is not carried and not judged again; a carried commit is new, and its committer is the signer's
+          or it is one of the commits the push's own EvsImport lists; a version is applied only after the versions
+          it names, a cycle of waits is refused, and a ref whose source cannot be replayed waits with no alarm of
+          its own (owner decision 238)
+history   a carried blob that is no entry's content is one sealed history record in a segment of the push: a
+          checkpoint, chunks, or one diff against a blob named by oid that readers hold by then; no entry's chain
+          names it (owner decision 237)
+kinds     a git-mode push may write a file where a directory stands and a directory where a file stands, as a
+          creation, removing what was below by its own changes; a gitlink is a file entry with no chain
 head mode mobile and wasm read both modes and write only file-mode refs; the SDK's Write on a git-mode ref returns
           EVS_GIT_REF, since a head-mode client cannot build a git tree, which needs every sibling's oid
 scope     tags are git-mode refs pushed IMMUTABLE that hold no path state and have no base: a tag's one push
@@ -906,7 +923,7 @@ keys      idx/<repo>/<ref>/<p>/<t1>/.../<tn>.e: the entry of path t1..tn sits be
 
 Readers check each name against its token, so evs folds committed directory deltas itself, and pushes adding different files to one directory never conflict on a file-mode ref.
 
-**Overlays.** Only git-mode refs take overlays: a ref created from one (an agent branch) records its base (ref, version) and writes only the paths it changes, its first push taking its base ref's current path epoch (owner decision 232). It holds a directory whole or not at all: its first push that adds or removes a child of a directory writes that directory as a creation whose delta lists every child it has in the new tree, later pushes sending deltas, so a path reads as the overlay's own standing entry, else absent if any ancestor directory the overlay holds does not list the next name, else the base's, and a removal of an inherited path stands as long as the table does (owner decision 243). A path it has not changed has the base ref's version at that base version, which its writers (the local tier) and its readers settle and check by replaying both refs; head mode reads no overlay (§18.5's `ReadHead` names no ref). So 5g checks an overlay only on paths its own entries or window hold, TIP settling the rest, a chain citing the base's segments names that base version as a `reuse` source (5h), and 11.9 answers `base` {ref, version} for any other path; §22 covers overlays by FS rows, not the model.
+**Overlays.** Only git-mode refs take overlays: a ref created from one (an agent branch) records its base (ref, version) and writes only the paths it changes, its first push taking its base ref's current path epoch (owner decision 232), so overlay and base share token paths at its creation, each cutting over by its own PATH_EPOCH afterwards. The base is chosen at creation as the nearest version of another branch whose tip the new tip descends from, and never changes. It holds a directory whole or not at all: its first push that adds or removes a child of a directory writes that directory as a creation whose delta lists every child it has in the new tree, later pushes sending deltas, so a path reads as the overlay's own standing entry, else absent if any ancestor directory the overlay holds does not list the next name, else the base's, and a removal of an inherited path stands as long as the table does (owner decision 243). A path it has not changed has the base ref's version at that base version, which its writers (the local tier) and its readers settle and check by replaying both refs; head mode reads no overlay (§18.5's `ReadHead` names no ref). So 5g checks an overlay only on paths its own entries or window hold, TIP settling the rest, a chain citing the base's segments names that base version as a `reuse` source (5h), and 11.9 answers `base` {ref, version} for any other path; §22 covers overlays by FS rows, not the model.
 
 **Reconstruction:** check the entry version against its statement (11.9), read the chain, unwrap its keys, apply the deltas and check the blob oid. Delta bases over 1 MiB spill to the sealed local store.
 
@@ -1068,9 +1085,11 @@ message EvsOverlay { bytes ref_id = 1; uint64 version = 2; }
 message EvsSealLease { bytes push_id = 1; int64 until_ms = 2; }
 message EvsPathEpoch {
   uint64 current = 1;                   // p: the generation whose RK derives K_path
-  repeated EvsEpochSource sources = 2;  // at most 3 older epochs still holding entries, newest first
+  repeated EvsEpochSource sources = 2;  // at most 3 older epochs still holding entries, newest first; 2 while
+                                        //   every due is batched (11.6's commit row)
   uint64 due_generation = 3;            // a generation that requires a new epoch, or 0
-  bool due_blocks_creation = 4; int64 due_by_ms = 5;
+  bool due_blocks_creation = 4;         // unused: written false, read past (owner decision 585)
+  int64 due_by_ms = 5;
   int64 block_until_ms = 6;             // a mapper's creation block (11.6), or 0
 }
 message EvsEpochSource { uint64 epoch = 1; bytes map_sha256 = 2; }
@@ -1188,14 +1207,16 @@ evs    4  the head first: its verified cache entry (11.9) when that version is a
              that head's C_1 (§7.9's Bootstrap), and evs takes that pin on no other push; index epoch: a CUT, and a
              push other than a CLOSURE that creates or replaces an entry version with versioning 2 (an index file,
              11.14), names index_epoch equal to the head's, else 409 INDEX_EPOCH (11.12's cut row)
-          e  path epoch: the head's current one, or on a ref with no head any p with 1 <= p <= the push's
-             generation, which the new head takes as its current epoch with no sources and no due below p (owner
-             decision 232); PATH_EPOCH: a shared or owned ref (deposit and erasure refs: 409 REF_MODE), a newer
-             generation, its map's parts present and under 24 h old, its source a version at or below the head in
-             its current epoch with a valid binding (owner decision 228), its tail covering every creation the
-             window holds after it (else 409 with the paths), nothing unfolded after its process's fold (11.6, 11.7
-             (4)); a creation while due_blocks_creation or before block_until_ms, or in a push whose own commit
-             would record a due that blocks (owner decision 229) -> 412 PATH_EPOCH_DUE
+          e  path epoch: the head's current one, or on a ref with no head the epoch its first push names, which the
+             new head takes as its current epoch with no sources and no due below p, a due counting from p (owner
+             decision 232): on a ref that is no overlay any p with 1 <= p <= the push's generation, on an overlay its
+             base ref's current epoch, and on a deposit or erasure ref 1, else 412 PATH_EPOCH; PATH_EPOCH: a shared
+             or owned ref (deposit and erasure refs: 409 REF_MODE), a newer generation, its map's parts present and
+             under 24 h old, its source a version at or below the head with a matching chain and of the head's current
+             epoch (owner decision 228; else 409 MAP_SOURCE), its tail covering every creation the window holds after
+             it (else 409 with the paths), nothing unfolded after its process's fold (11.6, 11.7 (4)); a creation
+             before block_until_ms, a mapper's block, -> 412 PATH_EPOCH_DUE, the one creation refusal a due brings
+             (owner decision 585)
           f  base: git mode b = v (TIP) and no live lease of another push; file mode b >= v - 63, so the push lands
              within (b, b+64], and C_b matches the history, else 409 BASE_STALE, carrying EvsDepositHead from the
              cluster head on the caller's own deposit ref (11.12)
@@ -1292,10 +1313,11 @@ seal      POST .../push {Signed EvsPush, the parts' places, its slot bodies} wit
           deltas merge, except that a later removal of a directory D refuses a part changing D or a path below it, a
           later delta to D refuses one removing D, and the parts' deltas are checked against D's bound by 11.7's
           rule (409 DIRECTORY_FULL, once recorded); then step 6's record (the seal) and step 7, so a git seal fails
-          412 only on a write after its read; a failed seal leaves its parts to evacuation; an import past 1,024
-          parts splits at commits of its tip's first-parent line, each push carrying an EvsImport of its own over
-          the commits it carries (owner decision 241), and a step too large for one push goes through helper refs
-          (11.11's import row)
+          412 only on a write after its read; a failed seal leaves its parts to evacuation; an import is cut at
+          commits of its tip's first-parent line into ordinary descending pushes, each within 512 parts and each
+          carrying an EvsImport signed for that push's own commits (owner decision 241); where one step of that
+          line is too large for a push, the import first brings the merged side into a helper ref of its own,
+          which the step's push names as a source (11.11's import row; owner decision 242)
 costs     steps 4, 6 and 7 are three sequential store round trips, 40-80 ms (owner decision 2), with the head from
           the verified cache and step 4's statements in its round; an uncached head adds one, new slots one, a
           retry after a 412, of a push, seal or lease in either mode, two (its reread and new PUT; three when a
@@ -1469,7 +1491,7 @@ I-EVS-18 a slot object has one origin for its life, the statement whose create s
 | Ref kind | Mode | Writer | FORCE, DELETE and DROP |
 |---|---|---|---|
 | `shared` (`main`, …) | git or file | `rw` scope | `admin` only, DROP on file mode; an IMMUTABLE ref takes only DELETE |
-| `owned`, general repos (`ur/<sidecar_id>/…`, `<sidecar_id>` as Id.String(): 36 characters, lowercase hex in the 8-4-4-4-12 form, which replaying readers check against owner_sidecar_id) | git or file | its sidecar | its sidecar; DROP `admin`, on file mode |
+| `owned`, general repos (`ur/<sidecar_id>/…`, `<sidecar_id>` as Id.String(): 36 characters, lowercase hex in the 8-4-4-4-12 form, which replaying readers check against owner_sidecar_id; `ur/<sidecar_id>/import/…` holds an import's helper refs, which its daemon updates only by the import and a client only deletes, 11.11) | git or file | its sidecar | its sidecar; DROP `admin`, on file mode |
 | `owned`, record-class: a per-writer stream, `ur/<sidecar_id>/record`, `<sidecar_id>` as Id.String() as in every `ur/` name, ids in paths inside a repo staying 32 lowercase hex (so a requester derives a decider's ref_id from `decider_sidecar_id`; owner decision 406) | file | its sidecar, creates only, a directory taking add-only deltas, with no removed token, on its entry's newest version, the entry staying a directory (owner decision 406) | refused; BASE (`admin`, flag 4, the directory's included): only removals, each naming its path's newest version, with no entry version, segment, slot or inline record, changes_root and parts allowed past 1 KiB, else 409 with the paths; it commits at the next version with window bit 3, its statement kept, leaving the live set, and readers take a removal on a creates-only stream only from a BASE a repo admin signed at its auth pin, reading the gap in that writer's seq chain as expired, not withheld; keys go by ERASE first, and BASE deletes nothing itself; erasure by ERASE pushes |
 | `deposit` | file | its depositor, creates only, by random ids at path epoch 1 for life (11.6) | refused; a reader with `rw` deletes ingested entries with CONSUME |
 | `erasure` (per repo; its id SHA-256("UR evs 1.0 erasure" ‖ repo_id)'s first 16 B, 11.6) | file | `admin`, the team directory's included (11.12), creates only, by random ids at path epoch 1 for life (11.6) | refused |
@@ -1524,8 +1546,9 @@ witness   §6's HeadCheck, which any admitted reader may witness (owner decision
 
 ```text
 request   POST /evs/v1/repos/<repo_id>/read (r): {ref_id, pin_version (0 if none), fresh (no cached head), up to 64
-          paths, each with its token path in the current epoch and in each listed source that may hold it (11.6),
-          the root's empty in every epoch (owner decision 231), ranges (64, <= 32 MiB), wanted slots, maps, log
+          paths, each with its token path in the current epoch and in the other epochs 11.6's read row allows, at
+          most 8, matched by epoch, a path named in no current-epoch token path answering stale_epoch with nothing
+          read, the root's empty in every epoch (owner decision 231), ranges (64, <= 32 MiB), wanted slots, maps, log
           pages, push records and parts by push id, and the DROP pushes whose body the reader already holds and has
           checked, by ref version, at most 64 (held_drops)}; this, the refs and log routes and 11.10's subscription
           routes answer a deleted repo 409 REPO_DELETED and a shredding or shredded one 409 SHREDDING, from the 5 s
@@ -1570,11 +1593,13 @@ reply     one framed stream of u32 length | EvsReadFrame, each frame one of thes
           window, which the reader checks against its own walk (reader, below; owner decision 566); on an overlay,
           `base` for a
           path it holds no version of; 11.7), with the statement
-          that wrote it (when not among those returned) and its Merkle proof,
-          and for each later statement whose change list is not inline and whose covering prefixes match the path,
-          the adjacent-leaf proofs (11.6's order) that neither the path nor a removal of a prefix holding it is
-          among its changes, with the inclusion proof of a prefix's delta that is (present, in place of the two
-          leaves); a listing's deltas each with its inclusion proof (delta_proofs, empty for an inline statement),
+          that wrote it (when not among those returned) and its Merkle proof, found by the version's recorded place
+          when its statement is of an older epoch (11.7's holds row),
+          and for each later statement of an epoch the request named the path in, whose change list is not inline
+          and whose covering prefixes match the path, the adjacent-leaf proofs (11.6's order) that neither the path
+          nor a removal of a prefix holding it is among its changes, with the inclusion proof of a prefix's delta
+          that is (present, in place of the two leaves); a listing's deltas each with its inclusion proof
+          (delta_proofs, empty for an inline statement),
           past the first each in a frame of its own (continues), so any directory within its 448 KiB lists in any
           fold state while a frame stays within 1 MiB + 64 KiB, and a frame evs cannot encode is logged and ends
           the stream with an error frame, never silently (owner decision 378); then the records and slots it names
@@ -1603,7 +1628,9 @@ rounds    the head first, from the cache; then the entries and, for a path a ver
 reader    checks each returned statement's signature against its config's writer set and the ref rules, and the chain
           from its pin to C_v; for each entry version, that it hashes to its statement's entry_sha256 (directly, or by
           its proof to changes_root), and for a removal, that its statement removes the path or a prefix holding it;
-          that no statement after the version's own changes the path, or a prefix holding it, again (a prefix sends it
+          that no statement after the version's own changes the path, or a prefix holding it, again, each statement
+          checked under the path's token path in its own epoch, which the reader derives, asking once more for an
+          epoch it did not name (a prefix sends it
           to that push's change list: inline, or by its adjacent-leaf proofs, never the whole list, taking a present
           proof only for a strict prefix whose change writes an entry, a delta, which leaves the path standing, and
           refusing it for the path itself or a removal; owner decision 378), a removed path staying removed through
@@ -1784,16 +1811,24 @@ committer   a new commit's email is <client_id>@ur.invalid, where §5's binding 
             sidecar_id (any generation); the name is the agent label, free-form; author fields stay free
 set by      ur mount add, ur mount share and git-remote-ur write committer.name and committer.email into
             the clone's config (git >= 2.22, within §22.9's matrix); a refusal prints both
-import      ur evs import <dir> [<ref>]: into a new or owned ref, cut at commits of its tip's first-parent
-            line, each push an ordinary update whose EvsImport a repo admin's device signs over that push's
-            carried commits (owner decision 241), the hook accepting exactly those oids, carried in its sealed
-            metadata for replaying readers; it takes every history stock git can walk, commits and odd trees
-            as their bytes (11.6; owner decision 236), refusing only a tree entry name with a slash, a tree
-            naming one entry twice, a tag of a tree or blob and a sha256 repository; a first-parent step that
-            would pass a push's bounds goes through helper refs under ur/<sidecar_id>/import/<id>/<n>: the
-            merged side is imported into them, recursively, and the step's merge commit is carried alone,
-            naming them as sources (owner decision 242); a single commit changing more than 1,048,576
-            entries stays refused; a large merge into a busy shared ref takes the seal lease (11.8); from v1 it
+import      ur evs import <dir> [<ref>]: a repo admin's daemon fetches <dir>'s history into the bare
+            repository and publishes it itself, not through the hook, as ordinary updates cut at commits of its
+            tip's first-parent line (11.8), each with an EvsImport a repo admin's device signs over that push's
+            carried commits (owner decision 241), into a ref that has no tip or an owned ref of this sidecar;
+            imported commits are held to no committer rule and travel as their bytes, trees that do not
+            rebuild from names, modes and oids included (11.6; owner decision 236), so history stock git holds
+            imports with its oids; a tree entry name with a slash, a tree naming one entry twice, a tag of a
+            tree or blob and a sha256 repository are refused before any evs write; where one first-parent step
+            would pass a push's bounds, the import brings the largest merged side into a helper ref,
+            ur/<sidecar_id>/import/<id>/<n>, an owned ref of the importing sidecar filled by the same cut
+            pushes, and repeats until the step fits, the step's push then carrying its merge commit alone and
+            naming the helpers as sources (owner decision 242); a side with such a step of its own gets a
+            helper inside its helper, to 8 levels and 64 helpers an import; when the import ends it deletes
+            its helpers, whose history evs keeps, so the pushes that name them stay replayable; one commit that
+            changes more than 1,048,576 entries and a step that needs more than 16 sources are refused, naming
+            the commit; a rerun resumes from each ref's tip and the import's record of its helpers, and ur evs
+            import --abandon deletes the helpers of an import that will not be finished; a large merge into a
+            busy shared ref takes the seal lease (11.8); from v1 it
             first uploads, through the agent, each git-lfs object the imported tips require (R, below)
             that <dir>'s own git-lfs store holds, so the tip check refuses only what neither store holds
 ```
@@ -1808,30 +1843,38 @@ receive   the daemon sets receive.procReceiveRefs to refs/heads and refs/tags an
           update reports its own status; the pre-receive hook keeps owner decision 81's committer check for all;
           before any evs write the local tier refuses a branch named erasure, ur/index or ur/lfs, one under ur/
           whose second component is not this sidecar's id, and one whose short name starts with refs/ (11.6)
-journal   per ref update, before any evs write, the daemon appends {ref, old, new, push id, statement hash, state} to a
-          journal in its sealed store, from v1 runs the git-lfs tip check on a git-mode tip (below), whose refusal drops
-          the entry (an owned ref's waits), then seals and commits the evs push; the proc-receive hook answers `ok` only
-          after evs's 200, and then runs `git update-ref <ref> <new> <old>` under the ref's daemon lock;
-          `ng <ref> non-fast-forward` only when the head gained a git commit after old; the daemon itself re-signs when
-          only PATH_EPOCH versions moved the head, re-tokenizes on 412 PATH_EPOCH, re-uploads on SEGMENT_GONE, re-posts
-          on PARTS_MISSING, and waits on 429, PATH_EPOCH_DUE and GATE_CLOSED (re-sealing at the next generation) for up
-          to the hook's 3 min, journaling each new push id before its POST; unknown -> `ng <ref> remote outcome pending`,
-          the journal resolving it; any other refusal -> `ng <ref> <code>`
-restart   the daemon resolves each unfinished entry by retrying its push id: committed -> settle the ref (below),
-          raising §5.4's evs_conflict, an ordinary event naming the repo, the path and the local conflict ref,
-          where that leaves one; refused -> drop the entry
+journal   per ref update, before any evs write, the daemon records {old, new} in a sealed journal, and before each
+          attempt's first POST its {push id, statement hash, base version, time}; from v1 it runs the git-lfs tip
+          check on a git-mode tip (below), whose refusal drops the update (an owned ref's waits); the proc-receive
+          hook answers `ok` only after the push is in the ref's history and the local ref has moved; `ng <ref>
+          non-fast-forward` only when the ref's tip moved and no attempt of the update is in the history; the
+          daemon itself signs again when only commitless versions (PATH_EPOCH, a rekey) moved the head,
+          re-tokenizing on 412 PATH_EPOCH (11.6), re-uploads on SEGMENT_GONE, re-posts on PARTS_MISSING, builds
+          again under a new push id on GATE_CLOSED, and waits on 429 and a mapper's block's PATH_EPOCH_DUE for up
+          to 3 min; unknown -> `ng <ref> remote outcome pending`; any other refusal, a gate still closed after its
+          rebuilds among them -> `ng <ref> <code>` (DESIGN-DETAILS.md section 8)
+restart   the daemon never sends a statement again: an attempt in the ref's history committed, one whose base
+          the head has passed never will (TIP), and one that is neither is pending, as `ur status` says, until
+          its time bound; settle then runs for every ref whose local ref is not at the tip applied, raising §5.4's
+          evs_conflict, an ordinary event naming the repo, the path and the local conflict ref, where it makes one
+apply     a device's refs move only by applying evs's versions in order, its own pushes included: the mirror's
+          record of the ref first, then, under the ref's apply lock, the local ref, by settle
 settle    whenever evs's tip for a ref changes, the local ref follows it when it is the tip last applied or an
-          ancestor of evs's, and stays when it is ahead by its own queue; otherwise its commits go, in the git ref
-          transaction that moves it, to a conflict branch ur/<sidecar_id>/conflicts/<ref's name>/<time>, <time>
-          UTC yyyymmddThhmmssZ at the next free second, an owned ref of this sidecar that the queue publishes as
-          an overlay of the conflicted ref, and EvsConflict names both; only settle makes one, the daemon never
-          merges, moves or deletes one, its owner does with stock git, ur status lists each until it is deleted,
-          and a ref with 64 stops settling, its local ref left alone, until one goes (owner decision 240)
-owned     ur/<sidecar_id>/… refs are accepted at once (the local ref first, the journal pushing within 250 ms, then
-          at most once per 2 s; sidecar/design/market2.md:518); offline pushes queue in the journal, and on reconnect the
-          engine re-seals chains whose generation changed
-locks     the sync engine applies remote commits with `git update-ref --stdin` transactions under the same per-ref
-          locks, so receive-pack and sync never race on a ref
+          ancestor of evs's, and stays when it is ahead by an owned ref's queue; otherwise its commits go, in the
+          git ref transaction that moves it, to a conflict branch ur/<sidecar_id>/conflicts/<ref's name>/<time>,
+          <time> UTC yyyymmddThhmmssZ at the next free second, an owned ref of this sidecar that the queue
+          publishes as an overlay of the conflicted ref, EvsConflict names both, and the local ref follows evs;
+          only settle makes one, the daemon never merges, moves or deletes one, its owner does with stock git, ur
+          status lists each until it is deleted, and a ref with 64 stops settling, its local ref left alone, until
+          one goes (owner decision 240)
+owned     ur/<sidecar_id>/… refs are accepted at once (the journal, the local ref, `ok`; the queue pushing within
+          250 ms, then at most once per 2 s, one push for everything queued; sidecar/design/market2.md:518);
+          offline pushes queue, and on reconnect the engine seals to the generation then current; a final refusal
+          holds the queue and is shown until the local ref moves or ur evs retry; ur/<sidecar_id>/import/… is an
+          import's: the daemon takes no client update of a ref there but its deletion
+locks     a publish lock per ref serializes one device's pushes to it and is held across the network; the apply
+          lock covers only local state and is never held across a request; the sync engine takes only the apply
+          lock, so receive-pack and sync never race on a ref and neither waits on evs for the other
 prefix    under §8.8's prefix rules (owner decision 345) a device checks each push it applies: on a git-mode ref one
           that breaks them fails the mount's check like any refused push, every mount stopping at it with
           evs_alarm prefix_rule naming the signer, the recovery an admin's delete of the ref and push of it again,
@@ -1859,6 +1902,8 @@ index     after each git push commits, the daemon journals the index entries of 
           them to its head on ur/index at most once a minute on 1 KiB XFS blocks, else once every 5 minutes (owner
           decision 172; 11.14); a ref DELETE journals a ref tombstone
 ```
+
+The bare repository hides `refs/ur/` (`transfer.hideRefs`), where the daemon keeps each ref's tip as evs holds it, and runs no automatic gc: the daemon runs `git gc` itself, at most daily (DESIGN-DETAILS.md section 8).
 
 **Git and versionless content (owner decisions 141, 162).** Git-mode refs hold no versionless version (11.7). A repo's git-mode refs keep their search index on its `ur/index` file-mode ref, written by companion pushes after git pushes commit (11.14). Export skips `ur/index` and `ur/lfs`, so git history stays exact. From v1, git-lfs carries large files:
 
@@ -2138,7 +2183,7 @@ drops      a drop's job pauses while repo/ shows deleted, resumes at a restore a
            deleting everything (11.13)
 ```
 
-**Export** (`ur evs export`) rebuilds plain git: git-mode refs with their original oids, file-mode refs with one deterministic commit per version (11.7), leaving out the search index's `.ur-index/` files (its roots and erasure set) and the `ur/index` ref, which are derived (11.14), and the `ur/lfs` store (11.11), checked by `git fsck`, with signed provenance in `refs/notes/ur`; every replaced versionless version exports as the git-lfs pointer to its content_sha256 and size, noted there, whether or not its bytes survive in a store, batch or cache, and only a path's newest version exports its content, and a dropped version as the stub blob `ur-dropped <drop id hex> <entry hash hex>\n`, its mode from its entry version where served, else the next kept version's, the drop noted there; a pending drop's versions export with their content.
+**Export** (`ur evs export`) rebuilds plain git: git-mode refs with their original oids, rebuilt from each push's sealed commits, raw trees, tags and history blobs, replaying a push's sources first, a version a replaying reader refuses reported and skipped to the ref's next DELETE, file-mode refs with one deterministic commit per version (11.7), leaving out the search index's `.ur-index/` files (its roots and erasure set) and the `ur/index` ref, which are derived (11.14), and the `ur/lfs` store (11.11), checked by `git fsck`, with signed provenance in `refs/notes/ur`; every replaced versionless version exports as the git-lfs pointer to its content_sha256 and size, noted there, whether or not its bytes survive in a store, batch or cache, and only a path's newest version exports its content, and a dropped version as the stub blob `ur-dropped <drop id hex> <entry hash hex>\n`, its mode from its entry version where served, else the next kept version's, the drop noted there; a pending drop's versions export with their content.
 
 ### 11.13 Backend, IOPS, GC, quotas, durability
 
@@ -3745,7 +3790,7 @@ never     a query, which documents match it, or which trigrams documents share: 
 
 **D-EVS-11 (proposed).** Kinds are fixed at creation; `vault`, `mailbox` and `secret` (any number a member, such as §13.8's ACME account keys) bind `owner_member_id` and are read only by the owner's consented devices (§8.5), their `EvsShare`s' subjects and owner decision 63's audit reader. *Why:* owner decision 126; sessions and mail stay with their owner unless shared (R-ACL-11, R-KEYS-9, R-TRUST-7).
 
-**D-EVS-12 (proposed).** Paths are 11.6-11.7's token tree, re-keyed by a signed map bound to its source head, any version at or below the head, and keyed by its hash, plus a tail for paths created since: due at once on a member device's removal or a compromise, new names on name-bearing repos' shared and owned refs waiting for it, the crossing push's own creations refused and a new ref starting in the newest epoch its creator holds, while deposit and erasure refs, named by random ids, stay at epoch 1 (owner decisions 228, 229, 232), else (other shrinks, authorization expiries) due within 24 h, or, while two source epochs stand, once one drops; re-keyed when a mapper commits, which a creation block of at most 2 min, 10 min past due, assures; up to three source epochs overlap, the third kept for an immediate epoch, each cluster's copies sharing 250 operations a second that §19.9 plans by live entries per rotating ref, the copy translating directory rows a fold carried and removals during it leaving removed entries, so no read falls back to a stale source, and no name created after cut-over gets a source-epoch token. *Why:* owner decisions 2 and 64, with no index rewrite per CI reap, no epoch starved by steady creation and no batched epoch's copy backlog taking the source an immediate epoch needs.
+**D-EVS-12 (proposed).** Paths are 11.6-11.7's token tree, re-keyed by a signed map bound to its source head, any version at or below the head, and keyed by its hash, plus a tail for paths created since: due within 24 h of every drop of a key holder or expiry, or, while two source epochs stand, once one drops, every due batched and none holding a creation or a new name (owner decision 585, which reversed owner decisions 229, 414 and 569), a new ref starting in the newest epoch its creator holds while deposit and erasure refs, named by random ids, stay at epoch 1 (owner decisions 228, 232); re-keyed when a mapper commits, which a creation block of at most 2 min, 10 min past due, assures; at most two source epochs overlap, each cluster's copies sharing 250 operations a second that §19.9 plans by live entries per rotating ref, the copy translating directory rows a fold carried and removals during it leaving removed entries, so no read falls back to a stale source, and a client names a path's token only in epochs at or above the lowest it holds evidence the server saw it in, so no name created after cut-over gets a source-epoch token but one sent within 5 s of it. *Why:* owner decisions 2 and 64, with no index rewrite per CI reap, no epoch starved by steady creation, and no removal stopping a team's new names, at the cost of a removed holder testing new names for up to 24 h (owner decision 585).
 
 **D-EVS-13 (proposed).** evs is stateless over 11.8's objects, each repo's on the cluster its `place/` names: only the head If-Match decides; all else a push writes is immutable or an index cache that committed records rebuild; readers use only versions the head history names. *Why:* owner decisions 2, 20, 145; no lost response or cleanup removes committed data.
 
@@ -3777,7 +3822,7 @@ never     a query, which documents match it, or which trigrams documents share: 
 
 **D-EVS-27 (proposed).** Segments are addressed only by content id, locators carry a kind with two reserved values, and `spidx/` is reserved, so packing needs no format change. *Why:* locators are signed and cannot be rewritten; Q-OPS-2.
 
-**D-EVS-28 (proposed).** The local tier publishes through git's proc-receive hook with per-ref statuses, no atomic pushes and a durable journal resolved by push id. *Why:* a pre-receive hook cannot report per-ref outcomes or survive a crash between the remote and local updates.
+**D-EVS-28 (proposed).** The local tier publishes through git's proc-receive hook with per-ref statuses, no atomic pushes and a durable journal of intent, whose outcomes are read from the ref's history by push id. *Why:* a pre-receive hook cannot report per-ref outcomes or survive a crash between the remote and local updates, and a statement sealed under random nonces cannot be sent again after a restart.
 
 **D-EVS-29 (proposed).** The head holds the commit point and a window of 64-byte entries (push id, statement hash prefix, place, path digest, flags), at most ~9 KiB: one block on each drive per commit. *Why:* every push rewrites the head on all 8 drives, plus a backup (owner decision 140).
 
@@ -3849,13 +3894,17 @@ never     a query, which documents match it, or which trigrams documents share: 
 
 **D-EVS-63 (proposed).** A drop deletes only kind-1 segments and slots that only listed versions name; statements, hashes and entry versions without inline records stay, so history verifies, and listed inline content waits for compaction, unserved; the kept head is written as a fresh checkpoint or re-cited chunk set; readers show pending, then dropped, never missing or tampered. *Why:* no diff chain keeps dropped content, and no drop reads as tampering.
 
-**D-EVS-64 (proposed).** From its commit no push may cite a listed version; the job starts 25 min after the window, marks every ref's live versions at one snapshot once evacuation's horizon has passed by 12 min the time evs saw each covered drop committed (owner decisions 204, 397), verifies with a separate implementation at a later one, deletes only objects whose LastModified + 24 h + 2 min the horizon has passed, by a DELETE naming the object, and resumes from `drops/`. *Why:* a mutator cannot move a reference past a scan of immutable history, and two implementations must agree before any DELETE.
+**D-EVS-64 (proposed).** From its commit no push may cite a listed version; the job starts 25 min after the window, marks every ref's live versions at one snapshot once evacuation's horizon has passed by 12 min the time evs saw each covered drop committed (owner decisions 204, 397), verifies with a separate implementation at a later one, deletes only objects whose LastModified + 24 h + 2 min the horizon has passed, by a DELETE naming the object, and resumes from `drops/`; its candidates are the ids its listed versions' chains name and nothing else, never a sweep of a repo's segments for ones no live version names, so a git-mode push's history segments, which no entry version names, stay while the push is retained (owner decision 237). *Why:* a mutator cannot move a reference past a scan of immutable history, and two implementations must agree before any DELETE.
 
 **D-EVS-65 (proposed).** A hold defers a drop's deletions silently, the drop reading, listing and billing as finished; stored bytes fall as the job deletes; the DROP rewrites listed versions out of the index; mirrors apply it; compaction may later remove listed inline content, keeping every statement and every byte a live version needs. *Why:* owner decisions 93, 133, 159, 165 and 184.
 
 **D-EVS-66 (proposed).** An erasure's first push on each index ref of its documents is a CUT that rewrites the ref's erasure set, a versionless list of the documents pending erasure there, and moves the head's `index_epoch` to its own version; every other push creating or replacing an index file but a CLOSURE names that epoch at its head CAS, else 409 INDEX_EPOCH, and its builder has applied the set, so delayed, resealed and retried index work (fresh writer-head and large-entry paths, merges, roll-ups, builds, backfills, DROP rewrites and companion journals) cannot publish a listed document after the cut; the eraser lists index files only after it, so no watch follows the ERASE; an erasure resumes from the sets and its ERASE notes on its eraser's device, else after 25 h on another device of its member that may erase, else, once its eraser is revoked, on any such device. *Why:* the meta review's F09: path CAS fences only paths a CLOSURE rewrites, a hint is not a barrier and a network has no indexer by default (owner decision 177), so FI-19 needs a durable cut at the index's one commit point; evs enforces an opaque counter and the set stays sealed (owner directive); CLOSUREs stay outside the epoch so that no eraser's CUT voids another's paid uploads (owner decision 146).
 
 **D-EVS-67 (proposed).** An erasure's wait is stated from its rekey objects, not per message: at the storage limit or while spent, with B closure bytes left when its allowance first refuses it and allowance A, its last pair commits after at most the ⌈B / (A - 1,088 KiB)⌉-th 00:00 UTC that follows plus one pacing turn per upload of that day; its CUT and its first ERASE, of the documents' own keys, land at once; the eraser's device reports each erasure's state, remaining objects and bytes, next try and finish (§5.4, §18.5). *Why:* the meta review's F19: one message is one document per 1 MiB chunk of its text, and backfills, absorbed slots and holds add copies, so the fixed next-day bound did not hold; owner decision 146 asks §11.13 and §15.7 to state the wait, and an estimate from the eraser's own allowance and turns is that statement.
+
+**D-EVS-68 (proposed).** A git-mode push carries what its ref's readers do not hold: commits and raw objects as bytes, blobs as entries or history records, and names the other refs' versions it relies on (owner decisions 236, 237, 238). *Why:* exact oids on every device and in export; a pull or merge costs its own commit; owner decision 81 checkable by readers.
+
+**D-EVS-69 (proposed).** A device's git refs move only by applying evs's versions in order under one rule; a local ref that holds what evs's does not goes to a conflict branch, published and never resolved automatically (owner decision 240). *Why:* D-EVS-8; no crash, lost answer or race can lose or duplicate an update.
 
 ### 11.18 Open questions
 
@@ -3916,7 +3965,7 @@ never     a query, which documents match it, or which trigrams documents share: 
 
 ### 11.20 Interfaces
 
-- **Provides:** `EvsClient` and `EvsRepo` (`evs_*.go`: `CreateRepo`, `ReadHead`, `List`, `History`, `Write`, `Deposit`, `Consume`, `Subscribe`, `Shred`, `Erasures`, `Delete`, `Restore`, `Import`, `Export`, `Mount`, and v1's `IndexSettings`, `IndexStatus` and `IndexRebuild`; `Write` takes a versioning setting and, per path, the path version its caller read, `IfVersion` (none as before, 0 absent or removed), answering PATH_CONFLICT where they differ, so a write is a path CAS from the caller's read to the commit, §15.7's created-only-if-absent writes taking 0 (owner decision 407), and `List` and `History` report it and `collected`, 11.7), whose per-path version, signer and git oid answer §16.6's `Lookup(effect_key)` for an evs effect (D-MCP-11); the index writer the push builder calls, its format (`evs_index_*.go`, `sidecar/protocol/evsindex.proto`) and the partitions §16.10's engine reads (11.14); remote search, asking and serving, in the root engine (`search_remote_*.go`, `sidecar/protocol/search.proto`; 11.14); ref modes (11.7); the drop-history engine behind `ur history` and `SidecarEvs`'s four drop calls (`DropHistoryPreview`, `DropHistory`, `CancelDrop`, `Drops`; 11.7, 11.13, §18.5); the `directory` kind (11.12); the sync engine, local git server, `git-remote-ur` and v1's git-lfs transfer agent and tip check (11.11); the `sidecar/evsservice` engine (owner decision 104); the push sequence that versions §6.8's `evs:<repo_id>`; `place/` and storage for `proj/`, `projrows/`, `rev/`, `hold/` and `gkm/`; 11.13's write budget, its classes, accounts and wallet, and fair share, shared with gkm, api and taskworker; §2.8's evs-1 to evs-26 and evs-28, and connect-5 (evs-10 is §19.6's, evs-27 §16.11's; evs-20 withdrawn).
+- **Provides:** `EvsClient` and `EvsRepo` (`evs_*.go`: `CreateRepo`, `ReadHead`, `List`, `History`, `Write`, `Deposit`, `Consume`, `Subscribe`, `Shred`, `Erasures`, `Delete`, `Restore`, `Import`, `Export`, `Mount`, `PathEpochStatus` (a ref's epoch, sources, due and mapper state, which `ur status` prints), and v1's `IndexSettings`, `IndexStatus` and `IndexRebuild`; the mapper and its `EvsNameIndex` seam, every name of a ref at one replayed head, which a mirror or a listing gives it (11.6's map row); `EVS_PATH_EPOCH_DUE`, a retryable error for a creation that outwaits a mapper's block (11.6's block row); `Write` takes a versioning setting and, per path, the path version its caller read, `IfVersion` (none as before, 0 absent or removed), answering PATH_CONFLICT where they differ, so a write is a path CAS from the caller's read to the commit, §15.7's created-only-if-absent writes taking 0 (owner decision 407), and `List` and `History` report it and `collected`, 11.7), whose per-path version, signer and git oid answer §16.6's `Lookup(effect_key)` for an evs effect (D-MCP-11); the index writer the push builder calls, its format (`evs_index_*.go`, `sidecar/protocol/evsindex.proto`) and the partitions §16.10's engine reads (11.14); remote search, asking and serving, in the root engine (`search_remote_*.go`, `sidecar/protocol/search.proto`; 11.14); ref modes (11.7); the drop-history engine behind `ur history` and `SidecarEvs`'s four drop calls (`DropHistoryPreview`, `DropHistory`, `CancelDrop`, `Drops`; 11.7, 11.13, §18.5); the `directory` kind (11.12); the sync engine, local git server, `git-remote-ur` and v1's git-lfs transfer agent and tip check (11.11), with `EvsLocalPublish`, the one builder of a git-mode push that the receive path, an owned ref's queue and an import share, `EvsRepo.Import(EvsImportArgs{Dir, Ref, Target, Cuts, Force, Abandon})`, `ur evs retry`, which releases an owned ref's held queue, and the receive path's `ng <ref>` reasons: `non-fast-forward`, `busy`, `remote outcome pending`, `committed remotely, local update pending`, `too slow`, `too large for one push: ur evs import`, `lfs objects missing`, `tag exists`, `tag of a non-commit`, `ref refused at version <u>`, `import helper` and an evs refusal's code; the `sidecar/evsservice` engine (owner decision 104); the push sequence that versions §6.8's `evs:<repo_id>`; `place/` and storage for `proj/`, `projrows/`, `rev/`, `hold/` and `gkm/`; 11.13's write budget, its classes, accounts and wallet, and fair share, shared with gkm, api and taskworker; §2.8's evs-1 to evs-26 and evs-28, and connect-5 (evs-10 is §19.6's, evs-27 §16.11's; evs-20 withdrawn).
 - **Consumes:** §3.6's indexers; §5 `ServiceToken`, binding log, `git` hello, §5.9's index cache and served record; §6 hints, `Signed`, `HeadCheck` and `RefHead`, `PushReset`, §6.6's RPC and §6.4's control contracts; §7 token exchange and its re-seed mode, `rev/`, the authorization log and its `{acl_}e` cache, `AuthPin`, bootstrap, §7.9's `VersioningRules` and `IndexerSet`; §8 `RepoReaders`, writer sets, kind defaults, §8.5's consent (`consented`), `audit`, access logs (`RepoDelete`, `RepoRestore`, `RepoVersioning`), `EvsShare`, `OwnerConfirm`; §10 `GkmClient`, `DeriveKey`, `GenRotate`, the gate predicate, the `index` purpose; §12 `ResolveNetworkLabel`; §13 certificates; §16.11's path rules and fields; §18 wakes and §18.4's fetch policies and remote mode; §19 clusters, drive counters, `{nvb_<set>}` and §19.6's `{nvb_<cluster>}`, §19.11's `format2` gate and its `purge` and `drop` modes; §20 `ReportUsage`; §21.9 holds.
 - **Subprotocol messages:** `EvsHeadChanged` (0x1401; server→client in §6 `PushHint`; a ref moved); `RefHead` inside §6's `HeadCheck` (compare ref pins); 0x1402-0x1403 stay reserved, never reused; `SearchRequest` in `SEARCH` (0x1404) and `SearchReply` in `SEARCH_RESULT` (0x1405) (app host to indexer and back over §6.6's RPC; remote search, 11.14; §6.11).
 - **API routes:** Client class, authorized by a service token with aud `evs`, specified in connect/api/bringyour.yml.
@@ -3953,7 +4002,7 @@ never     a query, which documents match it, or which trigrams documents share: 
        frees, shared, inline, packed, young, snapshot;  GET /evs/v1/repos/<id>/drops (r) -> each drop's state,
        progress and freed bytes, a held drop reading done; DROP pushes and cancels go through POST .../push
   push refusals, each with the push id: 403 SCOPE; 402 QUOTA_PAYMENT and 403 QUOTA_LIMIT; 409 TIME_STALE,
-       REPO_KEYING, REPO_DELETED, MAP_PARTS, SLOT_UNKNOWN, FORMAT_UNSUPPORTED {needs_format: 2}, REF_MODE,
+       REPO_KEYING, REPO_DELETED, MAP_PARTS, MAP_SOURCE, SLOT_UNKNOWN, FORMAT_UNSUPPORTED {needs_format: 2}, REF_MODE,
        PUSH_ID_REUSED, SEGMENT_GONE, SEGMENT_STALE, SLOT_STALE, PARTS_MISSING, VERSIONING, DIRECTORY_FULL,
        NOTHING_TO_ERASE, INDEX_EPOCH, SHREDDING, DROPPED, DROP_KIND, DROP_PATH, DROP_CONSENT, DROP_BOUNDARY,
        DROP_LIST, DROP_STATE, non-fast-forward, and file mode's 5f BASE_STALE, unrecorded, carrying EvsDepositHead
@@ -3990,9 +4039,9 @@ never     a query, which documents match it, or which trigrams documents share: 
 |---|---|---|---|
 | A flaw in the format, token tree or commit protocol, unaudited and so disclosed (owner decisions 99, 119) | Medium | High | Peer review before format 1 freezes; vectors, fuzzing, a model check of 11.8 (§22) |
 | The final MinIO build loses conditional-write or listing consistency | Low | High | One-object commit point; §22's suite gates every build |
-| A 1M-file ref's path epoch copies for ~17 h, while readers read both epochs; a cluster's copies share 250 operations a second, so refs whose live entries times epochs a day pass ~7.2M keep sources standing, and an immediate epoch on a ref already holding three waits (EPOCH_SOURCES_FULL), creation blocked there | Medium | Medium | Epochs only on removal or compromise, else daily; up to three sources read in one round; the copy speeds to 150 operations a second with two sources, and a cluster's to 1,000 while pushes leave room; refs holding the most sources copy first; a batched epoch waits while two sources stand, keeping the third for an immediate one; §19.8's copy liability and drain time; §19.9 plans live entries per rotating ref; FS-118 |
+| A 1M-file ref's path epoch copies for ~17 h, while readers read both epochs; a cluster's copies share 250 operations a second, so refs whose live entries times epochs a day pass ~7.2M keep sources standing, and an epoch due on a ref holding two waits (EPOCH_SOURCES_FULL), a removed holder testing new names there meanwhile | Medium | Medium | Every due batched, at most one epoch a ref a day (owner decision 585); two sources read in one round; the copy speeds to 150 operations a second with two sources, and a cluster's to 1,000 while pushes leave room; refs holding the most sources copy first; an epoch waits while two sources stand, covering every removal and expiry due when it lands; §19.8's copy liability and drain time; §19.9 plans live entries per rotating ref; FS-118 |
 | P0 work runs at once whatever its volume (owner decision 186): safety work past the refill, legal within every rate, as from 100 large Teams on one cluster each shrinking every 5 minutes (~2.9 TiB a day a drive of rotations, about twice it), wears the cluster's drives past 0.8 DWPD and the PM9A3's 1 DWPD rating while it lasts, its excess forgiven and kept as wear (owner decision 190), ~0.23 drive-writes a 6-hour storm at that stress; every push there is shed, and folds and evacuation wait once P0 empties the bucket, so batches stay on NVMe past 26 h until the storm ends; the M2 sizing bounds wear only at the admitted mix | Low | High | Each uploader's, group's and network's rates (11.13's classes); pushes and evacuation restarting within one interval of the storm's end and ramping up as the bucket refills (11.13); the drives' lifetime writes passing the refill's only by the bucket's depth and each storm's forgiven excess, ~1,800 such storms fitting in the ~420 drive-writes that five years at the refill leave under the rating; §19.8's P0 bytes by kind, forgiven excess and wear projection, and its page within an hour of P0 passing the refill, with §19.10's runbook (capacity, place_new, the networks); FS-117; Q-EVS-24 |
-| No writer able to map is online when an epoch is due, so creation stays blocked in a name-bearing repo, and dropped holders keep testing names past due elsewhere | Low | Medium | Writers alarm 1 h past due_by_ms, batched epochs included; `ur status` names the ref; any capable writer maps, a tail and a 2-min creation block landing it under steady creation |
+| No writer able to map is online when an epoch is due, so dropped holders keep testing names past due, new names among them, since no due holds creation (owner decision 585) | Low | Medium | Writers alarm 1 h past due_by_ms; `ur status` names the ref; any capable writer maps, a tail and a 2-min creation block landing it under steady creation |
 | A writer floods a ref with refusals, so others' refusals there answer 429 until a record lapses, at most about an hour for a seal's | Low | Low | 8 refusal records a ref, one added a second, each kept only until its statement's time bound plus 1 s; a refusal ends no other push's attempt, lease, part or seal; evs counts full lists; FS-1, FS-113 |
 | Counsel does not confirm owner decision 133's condition (shredding under a hold) | Low | High | §21's counsel item, before holds ship (M5) |
 | Site loss destroys repos no device mirrors | Low | Critical | Mirrors; coverage in `ur status`; re-seeding |

@@ -92,3 +92,14 @@ D['D-EVS-34'] = "Segment uploads write nothing to the metadata cluster: a MAC'd 
 # objects the horizon has passed, by a DELETE naming each (owner decision 397).
 assert D['D-EVS-64'].endswith('deletes objects over 25 h old.'), 'EVS drop row moved'
 D['D-EVS-64'] = "Commit fences listed versions; past evacuation's horizon the job marks, verifies separately and deletes objects the horizon has passed."
+# The fold of DESIGN-DETAILS.md sections 8 and 9 (2026-11-17): every path-epoch due batched (owner decision 585).
+assert D['D-EVS-12'].startswith("11.6-11.7's token tree, re-keyed at once on removal"), 'EVS path epoch row moved'
+D['D-EVS-12'] = "11.6-11.7's token tree, re-keyed by a signed map within 24 h of every removal or, deferred, once a source drops."
+# Section 8's fold: the journal's outcomes read from the ref's history, and its two new items.
+assert D['D-EVS-28'].endswith('a durable push-id journal.') and 'D-EVS-68' not in D and 'D-EVS-69' not in D, 'EVS git rows moved'
+D['D-EVS-28'] = ("Publishes through git's proc-receive hook: per-ref statuses, no atomic pushes, an intent journal "
+                 "whose outcomes the ref's history gives.")
+D['D-EVS-68'] = "A git-mode push carries what readers lack: commits and odd trees as bytes, history blobs, and " \
+                "named source versions."
+D['D-EVS-69'] = ("Local git refs move only by applying evs's versions in order; divergent local commits go to a "
+                 "published conflict branch.")
