@@ -1878,3 +1878,21 @@ assert DECISIONS_INTRO.count(_D612) == 1, 'decisions lead moved'
 DECISIONS_INTRO = DECISIONS_INTRO.replace(
     _D612, "with role mail's route to them (612), `mail_send`'s template uses (613), extending @@OD:574@@, and an "
     "`egress_change` template's binding of its requirement (614), extending @@OD:607@@. ")
+INDEX += [
+    (615, "`ip:` deny tests and prefixless routes",
+     "A policy's own `ip:` deny test fails at save where a prefixless route rule takes its source through a "
+     'sidecar both via and destination.'),
+]
+for _n, _note in [
+        (575, ' Followed by @@OD:615@@: an `ip:` deny test against such a rule fails at save.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 616))
+DATES.update({615: '2026-11-18'})
+_D614 = "an `egress_change` template's binding of its requirement (614), extending @@OD:607@@. "
+assert DECISIONS_INTRO.count(_D614) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D614, "an `egress_change` template's binding of its requirement (614), extending @@OD:607@@, and a policy's "
+    "`ip:` deny tests failing at save against a prefixless route rule (615), which follows @@OD:575@@. ")
