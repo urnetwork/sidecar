@@ -44,6 +44,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -61,17 +62,74 @@ var (
 	errIndexCutArgs    = errors.New("index CUT of no erasure or no document")
 )
 
-// What erasing the index holds to (QD-702). SEARCH-M10-17's rewrites add their own fields here.
+// What erasing the index holds to (QD-702): the CUT's, and the rewrites' (evs_index_erase.go, evs_index_wait.go).
 type IndexEraseSettings struct {
 	// Builds of one CUT, the first included, before it gives up on the refusals it builds again after: 409
 	// INDEX_EPOCH, a 409 on the erasure set, a read answering collected, its life passing unsent: 8, a reading, as the
 	// merge's. Each build reads the new set, so this bounds the work a busy ref costs. Positive.
 	CutAttemptCount int
+	// Passes of one rewrite, the first included, before it gives up on the refusals it lists again after: a 409 for a
+	// path another push changed, a read answering collected: 8, as the CUT's. Positive.
+	RewriteAttemptCount int
+	// The most closure bytes one CLOSURE and ERASE pair rewrites: 4 MiB, evs_closure_bytes_floor (§20.4), so a pair
+	// fits a whole day's allowance at the floor; a pair holds at least one file whatever its size. At the limit a 429
+	// naming the allowance sizes the next pair to what is left of it (§11.13's wait row). Positive.
+	PairByteCount int64
+	// The largest ?closure=1 upload, one padded record of a 1 MiB index file: 1,088 KiB (§11.12's rekey row), which
+	// §11.13's finish takes off each day's allowance. A protocol limit, the same as evs's. Positive.
+	ClosureUploadMaxByteCount int64
+	// The most a rewrite stages in its CLOSURE as one inline record rather than one ?closure=1 upload: 16 KiB, a slot's
+	// record (§11.12's versionless row). Positive.
+	StagedMaxByteCount int
+	// One turn of §20.7's closure pacing an upload waits at the limit: 250 ms, 4 uploads a second a network with one
+	// eraser asking, which §11.13's finish adds per upload of its last day. Positive.
+	PacingTurn time.Duration
+	// How long a replaced version's staged bytes may stay in their batch (§11.12's bytes row: 26 h): a version evs no
+	// longer serves of a live index path, replaced within it, may still hold an erased document under the path's live
+	// key, so the eraser rewrites that path and destroys the key (§11.14's erase row; I-EVS-13). Positive.
+	StagedRetention time.Duration
+	// How long after an erasure's CUT or its last ERASE, whichever is later, another device of its eraser's member may
+	// resume it: 25 h (§11.12's reconcile row). Positive.
+	ResumeAfter time.Duration
+	// Between tries of a re-entry push a quota refused: 10 min (DESIGN-DETAILS 15.2.11; §11.14's limit row). Positive.
+	ReentryRetryInterval time.Duration
+	// The most source-entry bytes an eraser that does not mirror the log fetches to fold one run card again: 16 MiB
+	// (DESIGN-DETAILS 15.2.11); past it the eraser enters nothing for that card, which its stream's writer or a mirror
+	// folds again from an again unit. Positive.
+	CardFetchByteCount int64
 }
 
 // The defaults, a fresh value each call.
 func DefaultIndexEraseSettings() *IndexEraseSettings {
-	return &IndexEraseSettings{CutAttemptCount: 8}
+	return &IndexEraseSettings{
+		CutAttemptCount:           8,
+		RewriteAttemptCount:       8,
+		PairByteCount:             4 * 1024 * 1024,
+		ClosureUploadMaxByteCount: 1088 * 1024,
+		StagedMaxByteCount:        16 * 1024,
+		PacingTurn:                250 * time.Millisecond,
+		StagedRetention:           26 * time.Hour,
+		ResumeAfter:               25 * time.Hour,
+		ReentryRetryInterval:      10 * time.Minute,
+		CardFetchByteCount:        16 * 1024 * 1024,
+	}
+}
+
+// Refuses values no erasure can run on.
+func (self *IndexEraseSettings) check() error {
+	if self.CutAttemptCount <= 0 || self.RewriteAttemptCount <= 0 {
+		return fmt.Errorf("%w: a CUT and a rewrite are built at least once", errInvalidSettings)
+	}
+	if self.PairByteCount <= 0 || self.ClosureUploadMaxByteCount <= 0 || self.StagedMaxByteCount <= 0 {
+		return fmt.Errorf("%w: an erasure's pair, upload and staged bounds", errInvalidSettings)
+	}
+	if self.PacingTurn <= 0 || self.StagedRetention <= 0 || self.ResumeAfter <= 0 || self.ReentryRetryInterval <= 0 {
+		return fmt.Errorf("%w: an erasure's turns, retention and waits", errInvalidSettings)
+	}
+	if self.CardFetchByteCount <= 0 {
+		return fmt.Errorf("%w: an erasure's card fetch bound", errInvalidSettings)
+	}
+	return nil
 }
 
 // One document a CUT lists.
@@ -127,18 +185,36 @@ type indexEraserArgs struct {
 	// This device's own masks of what its CUT lists, at once: CORE-M10-04's SearchCache.ApplyCut over the cache, the
 	// journal and the local layer. Nil until that lands; the next sync round's set masks them then.
 	applyCut func(ctx context.Context, repoId Id, refId Id, erasureSet *protocol.IndexErasureSet) error
+	// The rewrites' (evs_index_erase.go): what the eraser asks of evs beyond the index's reads. Nil refuses Rewrite,
+	// Resume and Reenter, and leaves Cut as it is.
+	eraseStore indexEraseStore
+	// The re-entry's (Reenter): K_ref, which a run card's doc_key is drawn under; the tables a head names; whether this
+	// device may merge now; K_index_g for a re-entry that merges inside its push, nil refusing such a push; the record
+	// class's settings a card is folded under, nil its defaults.
+	refKey         []byte
+	tables         indexTables
+	mayMerge       func() bool
+	padKey         func(ctx context.Context) (*indexPadKey, error)
+	recordSettings *IndexRecordSettings
+	// §5.4's erasure event, as each rewrite's or re-entry's state changes (Sidecar.raiseErasure). Nil raises none.
+	events func(erasure *SidecarErasure)
 	// Nil is real time.
 	clock Clock
 	log   Logger
 }
 
-// An erasure's pushes on one index ref: the CUT here; the file list, CLOSURE and ERASE pairs, the re-entry and resume
-// are SEARCH-M10-17's.
+// An erasure's pushes on one index ref: the CUT here; the file list, CLOSURE and ERASE pairs, the run cards' re-entry
+// and resume in evs_index_erase.go; the wait in evs_index_wait.go.
 type IndexEraser struct {
 	args     indexEraserArgs
 	settings *IndexEraseSettings
 	clock    Clock
 	log      Logger
+	// The eraser's closure allowance a UTC day as the last 429 named it, 0 until one did, and what of it this eraser
+	// has spent on the UTC day allowanceDay (days since the epoch): its pairs stay within what is left (§11.13's wait).
+	allowance     int64
+	allowanceUsed int64
+	allowanceDay  int64
 }
 
 // An eraser of one index ref.
@@ -150,8 +226,8 @@ func indexNewEraser(args *indexEraserArgs) (*IndexEraser, error) {
 	if settings == nil {
 		settings = DefaultIndexEraseSettings()
 	}
-	if settings.CutAttemptCount <= 0 {
-		return nil, fmt.Errorf("%w: a CUT is built at least once", errInvalidSettings)
+	if err := settings.check(); err != nil {
+		return nil, err
 	}
 	if bits := args.format.CardVersionBitCount; bits <= 0 || 64 <= bits {
 		return nil, fmt.Errorf("%w: a card's version bits within 1 and 63", errInvalidSettings)
@@ -286,6 +362,8 @@ func (self *IndexEraser) attempt(ctx context.Context, args *IndexCutArgs, result
 	}
 	result.Pushed, result.Version, result.Epoch, result.Set, result.DroppedCount = true, committed.version, epoch, next, droppedCount
 	testHookBarrier("evs.index.cut.pushed", self.barrierKey())
+	// its documents masked and unpublishable from here (§5.4's erasure event)
+	self.raise(&SidecarErasure{ErasureId: args.ErasureId, State: SidecarErasureFenced})
 	if self.args.applyCut != nil {
 		if err := self.args.applyCut(ctx, self.args.repoId, self.args.refId, next); err != nil {
 			// the CUT stands; the next sync round's set masks what it lists

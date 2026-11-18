@@ -18,9 +18,10 @@
 //	           indexRollup at the base as its runner, the lock freed, with the runner's coverage reading where one is
 //	           given (it must be the runner's, or the head rows differ); a roll-up signed before S's expiry is the
 //	           runner rolling early (1.5): every output alarms and is fetched
-//	CLOSURE    each shard it rewrites, rebuilt without the erasure's documents and padded to the replaced length
-//	           (rewriteWithout, QD-173), keeping the replaced pad generation; a slot or large entry it rewrites is
-//	           fetched, SEARCH-M10-17's slot rewrite not being on sidecar, and alarms nothing
+//	CLOSURE    each slot, large entry and shard it rewrites, rebuilt by clean (evs_index_closure.go) without every
+//	           document the erasure set at its base lists at or below its listed version, padded to the replaced
+//	           length, a shard by rewriteWithout (QD-173) keeping the replaced pad generation (DESIGN-DETAILS 15.2.5);
+//	           one that left a listed entry alarms naming the CLOSURE's signer
 //	other      a writer's push, a build, a backfill or a DROP rewrite is fetched; hosts with the text check a writer's
 //	           entries (evs_index_check_text.go)
 //
@@ -521,45 +522,24 @@ func (self *IndexReproducer) rollup(ctx context.Context, view *indexView, root *
 	return built, nil
 }
 
-// A CLOSURE's shard rewrites, each without the erasure's documents and padded to the replaced length; a slot or large
-// entry it rewrites is left unbuilt, fetched with no alarm.
+// A CLOSURE's rewrites, each file it writes rebuilt by clean (evs_index_closure.go) from the version it replaced: without
+// every document the erasure set at the push's base lists at or below its listed version, padded to the replaced
+// length, a shard keeping its replaced pad generation (DESIGN-DETAILS 15.2.5). Its erasure must be one the set lists.
 func (self *IndexReproducer) closure(ctx context.Context, view *indexView, root *indexViewRoot, push *indexReproducePush) (*indexReproduceBuilt, error) {
-	if view.erasureSet == nil {
+	if view.erasureSet == nil || indexErasureOf(view.erasureSet, push.erasureId) == nil {
 		return nil, errIndexReproduceLacking
 	}
-	listed := map[[indexIdByteCount]byte]uint64{}
-	found := false
-	for _, erasure := range view.erasureSet.Erasures {
-		if !bytes.Equal(erasure.ErasureId, push.erasureId.Bytes()) {
-			continue
-		}
-		found = true
-		for _, erased := range erasure.Docs {
-			if len(erased.DocKey) == indexIdByteCount {
-				key := [indexIdByteCount]byte(erased.DocKey)
-				listed[key] = max(listed[key], erased.Version)
-			}
-		}
-	}
-	if !found {
-		return nil, errIndexReproduceLacking
-	}
-	drop := func(kind indexEntryKind, key [indexIdByteCount]byte, version uint64) bool {
-		listedVersion, ok := listed[key]
-		return ok && kind != indexEntryRefTombstone && version <= listedVersion
-	}
+	listed := indexEraseListed(indexErasureSetListed(view.erasureSet))
 	listing := view.store.(*indexHeldStore).base.listing
 	baseFiles := map[string]*indexFileVersion{}
 	for _, file := range listing.files {
 		baseFiles[file.path] = file
 	}
 	built := &indexReproduceBuilt{files: map[string][]byte{}, removals: map[string]bool{}, unbuilt: map[string]bool{}}
-	builder := indexNewShardBuilder(view.companion)
 	for _, written := range push.files {
 		path, ok := indexParsePath(written.file.path, view.companion)
 		replaced := baseFiles[written.file.path]
-		if !ok || replaced == nil || replaced.version != written.replaces ||
-			(path.kind != indexPathBucketShard && path.kind != indexPathAllShard) {
+		if !ok || replaced == nil || replaced.version != written.replaces || !indexPathHoldsDocuments(path.kind) {
 			built.unbuilt[written.file.path] = true
 			continue
 		}
@@ -567,11 +547,11 @@ func (self *IndexReproducer) closure(ctx context.Context, view *indexView, root 
 		if err != nil {
 			return nil, err
 		}
-		shard, err := indexDecodeShard(plaintext, replaced.contentSha256[:], view.companion)
-		if err != nil {
+		rewritten, _, err := indexClean(path, plaintext, listed, view.settings)
+		if isIndexMalformed(err) {
+			// a replaced version that does not read: its rewrite is downloaded, and nothing is raised
 			return nil, errIndexReproduceLacking
 		}
-		rewritten, _, err := builder.rewriteWithout(shard, drop, replaced.byteCount)
 		if err != nil {
 			return nil, err
 		}

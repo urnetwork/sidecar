@@ -40,10 +40,10 @@ Stage: Open, decided at v1's exit review
 
 ### repo-v1: §4's v1 set
 Stage: v1 (M6, M7, M10)
-- **Deferred:** §4.18's v1 row: connect change C18 at M6; C20 at M7 (owner decision 269); C19's window accounting at M10 (owner decisions 176, 188); Homebrew and winget packages.
+- **Deferred:** §4.18's v1 row: connect change C18 at M6; C20 at M7 (owner decision 269); Homebrew and winget packages. C19's window accounting, once at M10, is withdrawn (owner decision 609).
 - **Why:** Each belongs to a v1 milestone: cross-network shares and Team at M6, strict-mode mail at M7, storage format 2 and search at M10 (owner decisions 55, 163, 169).
 - **Launch instead:** v0 uses the connect changes of M1-M5 (§4.6) and ships `ur` through `install.sh` and direct packages.
 - **Lost:** Until those milestones: cross-network shares, `strict_chain`, and remote search's accounting.
-- **Dark in code:** Built in the same run on the `sidecar` branches. C19 blocks M10's Gn-out and C20 blocks M7's `strict_chain` (§4.18's Blocking row).
+- **Dark in code:** Built in the same run on the `sidecar` branches. C20 blocks M7's `strict_chain` (§4.18's Blocking row).
 - **Held:** Nothing.
 - **To bring back:** Nothing to bring back: each ships when its milestone's gate passes (§23.6).

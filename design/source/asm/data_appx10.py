@@ -89,8 +89,9 @@ INTRO = {
           "state is objects in the file cluster (owner decision 2), placed per repo on one metadata cluster (owner "
           "decision 145), and Redis holds only their soft state (owner decision 136)."),
     'E_CONNECT': ("§4.6's rows for connect's `sidecar` branch, verbatim (X9). Dispositions follow owner decisions 22, "
-                  "85 and 86 (C14 into M4, C18 in M6), under D-REPO-5: each change is generic, additive, off by "
-                  "default and wire-compatible, tested in connect and merged to connect `main` first."),
+                  "85 and 86 (C14 into M4, C18 in M6), and 609, which withdraws C19, under D-REPO-5: each change is "
+                  "generic, additive, off by default and wire-compatible, tested in connect and merged to connect "
+                  "`main` first."),
     'F': ("Every statement in sidecar/design/PLAN.md (381 lines), traced to the sections that carry it. Status values: kept, "
           "refined, amended, superseded by the owner directive, departed (with the Q- item and owner decision that "
           "settled it), and n/a. Built from the PLAN review's table and updated to the edited sections' \"Departures "
@@ -423,7 +424,8 @@ _T4 = _section(4)
 CONNECT = connect_rows(_T4)
 assert [r[0] for r in CONNECT] == ['C1', 'C2', 'C3', 'C4', 'C5', 'C6a', 'C6b', 'C7', 'C8', 'C9', 'C10', 'C11', 'C12',
                                    'C13', 'C14', 'C15', 'C16', 'C17', 'C18', 'C19', 'C20'], [r[0] for r in CONNECT]
-assert 'Dispositions follow owner decisions 22, 85 (C14 into M4), 86 (C18) and 176 (C19), under D-REPO-5' in _T4, \
+assert ('Dispositions follow owner decisions 22, 85 (C14 into M4), 86 (C18) and 609 (C19 withdrawn, reversing owner '
+        'decision 176), under D-REPO-5') in _T4, \
     "§4.6's lead changed: update INTRO['E_CONNECT']"
 
 # ------------------------------------------------------------------ Appendix F

@@ -282,9 +282,14 @@ barrier evs.index.companion.built evs_index_companion.go
 barrier evs.index.companion.pushed evs_index_companion.go
 barrier evs.index.cut.built evs_index_cut.go
 barrier evs.index.cut.pushed evs_index_cut.go
+barrier evs.index.erase.closed evs_index_erase.go
+barrier evs.index.erase.erased evs_index_erase.go
+barrier evs.index.erase.listed evs_index_erase.go
 barrier evs.index.merge.built evs_index_merge_runner.go
 barrier evs.index.merge.pushed evs_index_merge_runner.go
 barrier evs.index.merge.uploaded evs_index_merge_runner.go
+barrier evs.index.reenter.built evs_index_erase.go
+barrier evs.index.reenter.pushed evs_index_erase.go
 barrier evs.index.rollup.built evs_index_rollup_runner.go
 barrier evs.index.rollup.locked evs_index_rollup_runner.go
 barrier evs.index.rollup.pushed evs_index_rollup_runner.go

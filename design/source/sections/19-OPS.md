@@ -53,7 +53,7 @@ New blocks serve `GET /status` on port 80, mount `{vault: no, config: yes, site:
 
 - **Own credentials.** Each block's `secret_files` hold its own: its file clusters' MinIO user and policy in `file-clusters-<service>.yml`; a push-only metrics user in `grafana-push-<service>.yml`, which `grafanaPushSettings` reads before vault's `grafana.yml`, so a compromised hostile-facing block's credential is revoked and rotated alone, no new block mounting `grafana.yml`; and a restricted Postgres role in `pg-<service>.yml`, which server's pool reads before `pg.yml` (owner decision 495).
 - **Fragments.** Each block is written as a fragment in `warp/services/sidecar-blocks/`, checked by warp's loader on a synthetic base; `warpctl services apply-fragment` merges it into vault's top version, allocating ports by warp's rules and printing a diff, a step the owner runs, since no agent reads vault.
-- **smtpedge's capability.** `cap_net_admin` extends warp's two capability allowlists (warp/services/load.go:167, warp/warpctl/run.go:159) to smtpedge alone, set on its binary in the image, so it still runs as 65532.
+- **smtpedge's capability.** `cap_net_admin` extends warp's two capability allowlists (warp/services/load.go:167, warp/warpctl/run.go:159) to smtpedge alone, set on its binary in the image as a file capability, so it still runs as 65532 (owner decision 597). A small static Go helper built in server writes the binary's `security.capability` extended attribute in a build stage, running from a bind mount so it never ships, with no new runtime package and nothing fetched, the reviewed package list and D-OPS-1 unchanged; a test in server/cli/smtpedge reads the built attribute back as getcap would, and a release check refuses an smtpedge image whose binary lacks the capability, which would otherwise show only at the first dial, as EPERM at `SO_MARK`.
 - **Jobs.** `ServiceHost.Tasks` is nil in evs and gkm processes, whose jobs run in taskworker and reschedule themselves; a job is enqueued only from a process with Postgres, and an engine that needs one from a request path raises it as a question.
 
 **Push sender (owner decision 88).** A continuous taskworker loop delivers §18.7's triggers; nothing subscribes per client (R-OPS-8):
@@ -950,12 +950,17 @@ authority  token exchange re-seed mode (§7.8): until a network's log resumes, i
                           run that fails, then appends the base and re-derives its ticks; the base resumes the
                           log at unchanged positions and digests (no reader FORKs) and names each repo live,
                           deleted (restorable) or shredded; signers re-submit statements no adopted entry holds
-groups     repo admins'   place each repo they hold afresh (§11.8), writing repo/ deleted{...} first for one the
-           devices        repos step re-seeds as deleted, and re-form its group under a GroupForm linked through
-                          the ladder (D-KEYS-13); an owner-bound repo's group only by its owner's consented
-                          device (§8.5; owner decision 126); writer leaves re-add member leaves, ReaderWraps and
-                          RecoveryWraps, keeping recovery-code-only members (owner decisions 113, 114), for a
-                          deleted repo only once it is restored (§10.8)
+groups     repo admins'   place each repo they hold afresh (§11.8), evs's place route writing repo/ deleted{...}
+           devices        at creation, while reseed is on, for one the repos step re-seeds as deleted (§11.12),
+                          and re-form its group under a GroupForm linked through the ladder (D-KEYS-13); an
+                          owner-bound repo's group only by its owner's consented device (§8.5; owner decision
+                          126); for a repo its state shows deleted the step also sends activate, taking 409
+                          REPO_DELETED as the answer it expects, and mends a 200, from a repo/ that stood keying
+                          and is now active, by DELETE alone, with no new statement, which moves repo/ to
+                          deleted{...} under the projected RepoDelete, waiting out STATEMENT_MISSING while evs's
+                          projection trails (owner decision 602); writer leaves re-add member leaves,
+                          ReaderWraps and RecoveryWraps, keeping recovery-code-only members (owner decisions
+                          113, 114), for a deleted repo only once it is restored (§10.8)
 repos      devices        first the ERASE pushes (§11.12) each device signed in the last 30 days, then the signed
                           pushes, parts, segments (a versionless path's only for versions the device holds, staged
                           ones as uploads) and pack contents past the current head, in version order, and last,
