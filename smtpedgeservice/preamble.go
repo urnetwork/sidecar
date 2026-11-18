@@ -6,12 +6,12 @@
 //
 // Nothing here touches Postgres (I-12, §22.5): the gate answers from memory, the quota with one script on
 // {smq_} (three for Community), the world through the resolver and the dialer. The edge reads the network,
-// client and sidecar from the ticket (smtpPreambleStream), never from the sidecar; a stream whose sidecar
-// is not known yet answers TRY_LATER. The key set is asked of the verifier after the gate and before the
-// quota, so KEYS dials nothing and costs nothing, a burst token included (DESIGN-DETAILS 3.2.5, 3.7), and
-// the session, which needs the MX the dial chose, opens after it; a session that refuses the key set then
-// still answers KEYS, with the MX closed and the reservation released. A refusal after the reservation
-// releases it, so only the burst token is spent (§14.7, §14.9).
+// client and sidecar from the ticket (smtpPreambleStream), never from the sidecar; a stream whose ticket
+// names no dialer sidecar answers TRY_LATER (QD-989). The key set is asked of the verifier after the gate
+// and before the quota, so KEYS dials nothing and costs nothing, a burst token included (DESIGN-DETAILS
+// 3.2.5, 3.7), and the session, which needs the MX the dial chose, opens after it; a session that refuses
+// the key set then still answers KEYS, with the MX closed and the reservation released. A refusal after
+// the reservation releases it, so only the burst token is spent (§14.7, §14.9).
 //
 // What an OK outcome holds, the MX connection past STARTTLS's 220, the reservation, the session and the
 // send record's fields, is the splice's (SMTP-M9-13), which debits at MAIL, closes the quota at the end
@@ -49,7 +49,7 @@ const (
 	smtpPreambleReasonQuota   = "quota_unanswered"
 	smtpPreambleReasonIssue   = "issue"
 	smtpPreambleReasonSession = "session"
-	// The dialing client's sidecar is not known yet (SmtpDialerSource).
+	// The stream's ticket names no dialer sidecar (QD-989), as one a sockets service signed before it named one.
 	smtpPreambleReasonDialer = "dialer_unknown"
 	// The network is out of sidecar.yml's smtpedge gate (D-OPS-10, R-SMTP-13).
 	smtpPreambleReasonDark = "dark"
@@ -59,7 +59,8 @@ const (
 type smtpPreambleStream struct {
 	NetworkId sidecar.Id
 	ClientId  sidecar.Id
-	// The dialer's sidecar, the §8 subject of mail_send (its sockets service token's ur_sidecar_id, QD-1029).
+	// The dialer's sidecar, the §8 subject of mail_send: the ticket's dialer_sidecar_id, which sockets filled at
+	// Find from the caller's service token's ur_sidecar_id (QD-989, QD-1029). Zero when the ticket names none.
 	SidecarId sidecar.Id
 }
 

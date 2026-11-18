@@ -285,8 +285,10 @@ readerkey  every reader, leaves included, keeps a current ReaderKey at gkm/rk/<s
 covered    a covered agent reads R through its Delegation's wrap and holds no ReaderWrap there; it holds a key
            in its own right only where a grant names it
 dwraps     the device that signs a Delegation, an admin's or for a forwarding one its sidecar's (§18.6), writes
-           late DelegationWraps of the current generation of every repo it can read in the Delegation's reach; any holder but a read_only one writes the rest
-           on wrap-pending (10.9's late row); every rotation stages one per live Delegation in H
+           late DelegationWraps of the current generation of every repo it can read in the Delegation's reach,
+           a forwarding one's sidecar uploading the Delegation's reader key object first (10.6; owner decision
+           202); any holder but a read_only one writes the rest on wrap-pending (10.9's late row); every
+           rotation stages one per live Delegation in H
 signer     every GenRotate is signed by a holder of R's key, or one covered, at a pin covering what it rotates
            for (a writer of R, or a config statement signer; 10.9), so a dropped sidecar, whose ReaderKey and
            wraps no later rotation contains, cannot sample or reissue the generation that excludes it
@@ -368,7 +370,9 @@ object (keys: below)                          written                       hold
 on the repo's cluster
 gkm/<group_id>/owner                          If-None-Match, by gkm from    GkmGroupOwner {repo_id, network_id}, the
                                                 the token, before the form  group's one repo, through which alone gkm
-                                                at a creation or re-form    resolves it (owner decision 201)
+                                                at a creation or re-form    resolves it (owner decision 201); the
+                                                                            shred deletes it, and a re-seed's form
+                                                                            writes it again
 gkm/repo/<repo_id>/<seq>                      If-None-Match                 GroupForm, Signed by a repo admin's device
                                                                             (for owner-bound kinds, only the owner's
                                                                             consented device) or by a network admin's

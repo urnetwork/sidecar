@@ -636,21 +636,6 @@ var testFenceAdditions = []struct {
 		field:    testFenceField{name: "agent_cert", number: 5, typeName: "bytes"},
 		question: "plan-CORE-agent-revoke",
 	},
-	{
-		message:  "Pending",
-		field:    testFenceField{name: "forward_delegation_id", number: 5, typeName: "bytes"},
-		question: "DESIGN-DETAILS 4.2.2 (owner decision 197)",
-	},
-	{
-		message:  "BridgeIdentity",
-		field:    testFenceField{name: "forward_delegation_id", number: 6, typeName: "bytes"},
-		question: "DESIGN-DETAILS 4.2.2 (owner decision 197)",
-	},
-	{
-		message:  "BridgeIdentity",
-		field:    testFenceField{name: "forward_public_key", number: 7, typeName: "bytes"},
-		question: "DESIGN-DETAILS 4.2.2 (owner decision 197)",
-	},
 	// QD-864: the RecordEntry.version of the entry an Opening was made from, absent reading 1, so its reader knows
 	// whether body is the kind's message or the AgentSignedBody holding it
 	{
@@ -677,6 +662,13 @@ var testFenceAdditions = []struct {
 		message:  "CanonicalAction",
 		field:    testFenceField{name: "require_default_egress", number: 41, typeName: "bool"},
 		question: "ur-tun-default-egress-option-lock-action",
+	},
+	// QD-989 (owner decision 560): a ur/ ticket names its dialer's sidecar, signed with the rest, so a ur/ listener reads
+	// its subject from the admitted ticket; §2.8's sock-2 row names it (list v45)
+	{
+		message:  "SocketTicket",
+		field:    testFenceField{name: "dialer_sidecar_id", number: 16, typeName: "bytes"},
+		question: "smtp-m9-13-dialer-sidecar",
 	},
 }
 

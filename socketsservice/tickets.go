@@ -6,6 +6,9 @@
 //     caller one of its K clients, ids[h(listener_client_id) mod K], so a listener's edge streams share one
 //     client (§13.6). It carries the log position the signer's own state allowed it at and the grant and grant
 //     expiry of the verdict the Find rests on.
+//   - A ur/ ticket names the dialer's sidecar too, dialer_sidecar_id, the caller's token's ur_sidecar_id, which its
+//     listener reads as the stream's subject (QD-989, owner decision 560); no other ticket names one, edges naming
+//     no sidecar.
 //   - It lives TicketLifetime, 30 s, and is signed by the newest key that signs, through
 //     sidecar.SignSocketTicket, which refuses one past §9.6's bounds, so a Find never hands out a ticket a
 //     listener must refuse. The bytes it signs are the bytes it returns.
@@ -79,6 +82,8 @@ type socketTicketArgs struct {
 	listener        *SocketStoreListener
 	dialerClientId  connect.Id
 	dialerNetworkId connect.Id
+	// A ur/ ticket's alone: the caller's sidecar. nil names none.
+	dialerSidecarId *connect.Id
 	policyVersion   uint64
 	grant           *socketTicketGrant
 	backup          bool
@@ -115,6 +120,9 @@ func (self *SocketsService) signTicket(args *socketTicketArgs) ([]byte, error) {
 		Backup:                args.backup,
 		GrantExpireTimeMillis: args.grant.grantExpireMillis,
 		NameToken:             args.name.nameToken,
+	}
+	if args.dialerSidecarId != nil {
+		ticket.DialerSidecarId = args.dialerSidecarId.Bytes()
 	}
 	testHookBarrier("sockets.find.sign.before", "")
 	signedTicket, err := sidecar.SignSocketTicket(keyId, privateKey, ticket)
