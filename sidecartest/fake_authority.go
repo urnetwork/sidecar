@@ -68,7 +68,6 @@ type FakeAuthority struct {
 	suspended        map[sidecar.Id]bool
 	revokeSignatures map[sidecar.Id]int
 	registeredKeys   map[sidecar.Id][]*bridge.KeyRow
-	restoredBindings map[sidecar.Id]bool
 	proposalRule     func(statement *sidecar.SidecarStatement) bool
 }
 
@@ -82,7 +81,6 @@ var (
 	_ sidecar.SidecarAuthorityCatchUp   = (*FakeAuthority)(nil)
 	_ sidecar.SidecarAuthorityProposals = (*FakeAuthority)(nil)
 	_ sidecar.SidecarRevokeAuthority    = (*FakeAuthority)(nil)
-	_ sidecar.SidecarRecoveryAuthority  = (*FakeAuthority)(nil)
 	_ sidecar.SidecarProposalAuthority  = (*FakeAuthority)(nil)
 )
 
@@ -102,7 +100,6 @@ func NewFakeAuthority() *FakeAuthority {
 		suspended:        map[sidecar.Id]bool{},
 		revokeSignatures: map[sidecar.Id]int{},
 		registeredKeys:   map[sidecar.Id][]*bridge.KeyRow{},
-		restoredBindings: map[sidecar.Id]bool{},
 	}
 }
 
@@ -134,13 +131,6 @@ func (self *FakeAuthority) RemoveRegisteredKey(sidecarId sidecar.Id, keyId []byt
 	self.registeredKeys[sidecarId] = slices.DeleteFunc(self.registeredKeys[sidecarId], func(key *bridge.KeyRow) bool {
 		return bytes.Equal(key.GetKeyId(), keyId)
 	})
-}
-
-// Sets whether the member's binding in effect is one a cascade void restored.
-func (self *FakeAuthority) SetBindingRestored(memberId sidecar.Id, restored bool) {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	self.restoredBindings[memberId] = restored
 }
 
 // Sets ProposalRequired's rule: whether a statement needs more than one counted signer. nil, the default, answers
@@ -203,13 +193,6 @@ func (self *FakeAuthority) EntryTime(n uint64) (time.Time, bool) {
 		}
 	}
 	return time.Time{}, false
-}
-
-// sidecar.SidecarRecoveryAuthority: the fact SetBindingRestored set.
-func (self *FakeAuthority) BindingRestored(memberId sidecar.Id) bool {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	return self.restoredBindings[memberId]
 }
 
 // sidecar.SidecarProposalAuthority: SetProposalRule's answer, or by default whether a SidecarRevoke's target needs

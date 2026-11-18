@@ -6,7 +6,9 @@
 // the recovery stands: filed and waiting on an admin's cosign or on the recovery window, admitted and waiting on the
 // config group's key, recovered, or stopped at a failed anchor. A recovery that waits is run again once its admission
 // lands, with the code typed again, since no device keeps it. Once recovered, ur offers ur keychain recovery-rotate on
-// the terminal: the code was typed into this device.
+// the terminal: the code was typed into this device. Where the member has no code in effect, as once a compromise
+// revocation voided it (QD-1034), the refusal says what is left: a fresh code bound from a device the revocation does
+// not cover, or an admin's admission, parked for owner-bound repos (owner decision 126).
 //
 // The words cross the control socket once, as the pass does, and the daemon's reply holds no secret (the reply walk).
 
@@ -25,6 +27,12 @@ import (
 
 // The control method ur login --recover calls.
 const urMethodRecoveryRecover = "recovery.recover"
+
+// What is left to a member with no recovery code in effect (§7.9's cascade, QD-1034; owner decision 126), after the
+// refusal's own text.
+const urRecoveryNoBindingAdvice = "no code admits a device for this member now. On a device of the member's that the revocation does not cover, " +
+	"ur keychain recovery-rotate binds a fresh code; or an admin admits this device, " +
+	"which reads no owner-bound repo until a consented device of the repo's owner approves it"
 
 func init() {
 	urDaemonMethodExtensions = append(urDaemonMethodExtensions, urLoginRecoverMethods)
@@ -70,7 +78,6 @@ type urRecoverReply struct {
 	MemberId         sidecar.Id       `json:"member_id"`
 	StatementId      []byte           `json:"statement_id,omitempty"`
 	Proposal         bool             `json:"proposal,omitempty"`
-	Restored         bool             `json:"restored,omitempty"`
 	Position         uint64           `json:"position,omitempty"`
 	ActivatesAfterMs int64            `json:"activates_after_ms,omitempty"`
 	Waiting          string           `json:"waiting,omitempty"`
@@ -87,7 +94,6 @@ func newUrRecoverReply(recovery *sidecar.SidecarRecovery) *urRecoverReply {
 		MemberId:    recovery.MemberId,
 		StatementId: recovery.StatementId,
 		Proposal:    recovery.Proposal,
-		Restored:    recovery.Restored,
 		Waiting:     recovery.Waiting,
 		OfferRotate: recovery.OfferRotate,
 	}
@@ -125,6 +131,9 @@ func urLoginRecoverMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
 				defer clear(params.Words)
 				recovery, err := recovering.recoverWithCode(ctx, params.Words)
 				if recovery == nil {
+					if errors.Is(err, sidecar.ErrSidecarRecoveryNoBinding) {
+						return nil, fmt.Errorf("%w: %s", err, urRecoveryNoBindingAdvice)
+					}
 					return nil, err
 				}
 				reply := newUrRecoverReply(recovery)

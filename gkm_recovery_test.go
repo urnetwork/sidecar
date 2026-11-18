@@ -3,8 +3,7 @@
 // Recovery on the fake gkm (KEYS-M2-24; §22.7's recovery rows, DESIGN-DETAILS 6.6's self-join row): a code-only
 // device reading only its wraps before admission, a forged recovery wrap stopping at the anchor with head_alarm, the
 // self-join's generation with a clean tree and its generation 0 over a lost device's leaf, recovery with no leaf
-// online at 16 leaves or fewer and its wait above, the restored order anchoring on a ReaderWrap, and a rebind killed
-// between its steps. FS-20 and FS-22 run in KEYS-M2-27 and KEYS-M2-28.
+// online at 16 leaves or fewer and its wait above, and a rebind killed between its steps. FS-20 and FS-22 run in KEYS-M2-27 and KEYS-M2-28.
 
 package sidecar_test
 
@@ -175,7 +174,7 @@ type gkmRecoveryWorld struct {
 	anchorErr error
 }
 
-func newGkmRecoveryWorld(t *testing.T, kind protocol.RepoKind, restored bool) *gkmRecoveryWorld {
+func newGkmRecoveryWorld(t *testing.T, kind protocol.RepoKind) *gkmRecoveryWorld {
 	world := &gkmRecoveryWorld{gkmFlowWorld: newGkmEngineWorld(t, kind), lostMemberId: sidecar.NewId()}
 	privateKey, keySha256 := gkmTestRecoveryKey(t, "n")
 	world.binding = &sidecar.GkmRecoveryBinding{MemberId: world.lostMemberId, PrivateKey: privateKey, KeySha256: keySha256}
@@ -183,13 +182,7 @@ func newGkmRecoveryWorld(t *testing.T, kind protocol.RepoKind, restored bool) *g
 		MemberId: world.lostMemberId.Bytes(), RecoveryKeySha256: keySha256,
 		Bindings: []*bridge.RecoveryBindingRow{{KeySha256: keySha256, Signer: world.x.id.Bytes(), At: 1}},
 	}
-	if restored {
-		// a void restored this binding: a newer one stands voided above it, so it takes no wrap
-		_, voidedKeySha256 := gkmTestRecoveryKey(t, "n's voided binding")
-		member.Bindings = append([]*bridge.RecoveryBindingRow{{KeySha256: voidedKeySha256, Signer: world.x.id.Bytes(), At: 1}}, member.Bindings...)
-	} else {
-		world.recoveryKeys[world.lostMemberId] = &sidecar.GkmRecoveryKey{XwingPublicKey: privateKey.PublicKey().Bytes(), BindingKeySha256: keySha256}
-	}
+	world.recoveryKeys[world.lostMemberId] = &sidecar.GkmRecoveryKey{XwingPublicKey: privateKey.PublicKey().Bytes(), BindingKeySha256: keySha256}
 	world.members = append(world.members, member)
 	world.x.row.MemberId = world.lostMemberId.Bytes()
 	world.stateFor()
@@ -206,9 +199,9 @@ func newGkmRecoveryWorld(t *testing.T, kind protocol.RepoKind, restored bool) *g
 }
 
 // What CORE-M2-06's anchor check stands in for here: the key must be the one gkm's stored generation commits to.
-func (self *gkmRecoveryWorld) args(restored bool) *sidecar.GkmRecoverArgs {
+func (self *gkmRecoveryWorld) args() *sidecar.GkmRecoverArgs {
 	return &sidecar.GkmRecoverArgs{
-		Binding: self.binding, ConfigRepoId: self.repoId, Restored: restored,
+		Binding: self.binding, ConfigRepoId: self.repoId,
 		Anchor: func(ctx context.Context, key *sidecar.EvsRepoKey) error {
 			self.anchored = append(self.anchored, key)
 			return self.anchorErr
@@ -217,9 +210,9 @@ func (self *gkmRecoveryWorld) args(restored bool) *sidecar.GkmRecoverArgs {
 }
 
 // The progress RunRecovery reports for the world's repo.
-func (self *gkmRecoveryWorld) run(restored bool) *sidecar.GkmRecoveryRepo {
+func (self *gkmRecoveryWorld) run() *sidecar.GkmRecoveryRepo {
 	self.t.Helper()
-	progress, err := self.r.client.RunRecovery(self.ctx, self.args(restored))
+	progress, err := self.r.client.RunRecovery(self.ctx, self.args())
 	if err != nil {
 		self.t.Fatalf("a recovery pass: %v", err)
 	}
@@ -235,7 +228,7 @@ func (self *gkmRecoveryWorld) run(restored bool) *sidecar.GkmRecoveryRepo {
 // §22.7: until it is admitted a code-only device reads only its member's recovery wraps, under
 // recovery:<member_id>, keeps the newest of its binding per group, and runs nothing else: no anchor, no join.
 func TestACodeOnlyDeviceReadsOnlyItsWrapsBeforeAdmission(t *testing.T) {
-	world := newGkmRecoveryWorld(t, protocol.RepoKind_REPO_KIND_GENERAL, false)
+	world := newGkmRecoveryWorld(t, protocol.RepoKind_REPO_KIND_GENERAL)
 	r := world.r
 	// a wrap of another binding of the member is not kept
 	_, otherKeySha256 := gkmTestRecoveryKey(t, "another binding")
@@ -247,10 +240,10 @@ func TestACodeOnlyDeviceReadsOnlyItsWrapsBeforeAdmission(t *testing.T) {
 	if err != nil || kept != 1 {
 		t.Fatalf("the fetch before admission kept %d wraps: %v", kept, err)
 	}
-	if err := r.client.AnchorRecovery(world.ctx, world.args(false)); !errors.Is(err, sidecar.ErrGkmWait) {
+	if err := r.client.AnchorRecovery(world.ctx, world.args()); !errors.Is(err, sidecar.ErrGkmWait) {
 		t.Errorf("an anchor before admission: %v", err)
 	}
-	if _, err := r.client.RunRecovery(world.ctx, world.args(false)); !errors.Is(err, sidecar.ErrGkmRecoveryNotAnchored) {
+	if _, err := r.client.RunRecovery(world.ctx, world.args()); !errors.Is(err, sidecar.ErrGkmRecoveryNotAnchored) {
 		t.Errorf("a recovery pass before the anchor: %v", err)
 	}
 	if calls := world.store.callsOf("r"); !slices.Equal(calls, []string{"RecoveryWraps:recovery"}) {
@@ -268,13 +261,13 @@ func TestACodeOnlyDeviceReadsOnlyItsWrapsBeforeAdmission(t *testing.T) {
 // holder at the recovered device's state, its self-join carries the newest generation with its GenWrap, as a resync
 // does, with no other leaf online; every other leaf then adopts it.
 func TestARecoverySelfJoinCarriesTheNewestGenerationOverACleanTree(t *testing.T) {
-	world := newGkmRecoveryWorld(t, protocol.RepoKind_REPO_KIND_GENERAL, false)
+	world := newGkmRecoveryWorld(t, protocol.RepoKind_REPO_KIND_GENERAL)
 	r := world.r
 	if _, err := r.client.FetchRecoveryWraps(world.ctx, world.binding, false); err != nil {
 		t.Fatal(err)
 	}
 	view := world.stateFor()
-	if err := r.client.AnchorRecovery(world.ctx, world.args(false)); err != nil {
+	if err := r.client.AnchorRecovery(world.ctx, world.args()); err != nil {
 		t.Fatalf("the anchor: %v", err)
 	}
 	gen2 := world.storedGeneration(view, 2)
@@ -285,10 +278,10 @@ func TestARecoverySelfJoinCarriesTheNewestGenerationOverACleanTree(t *testing.T)
 		t.Errorf("the anchor's phase was not kept: %v", err)
 	}
 	// the anchor passes once: a second call asks nothing
-	if err := r.client.AnchorRecovery(world.ctx, world.args(false)); err != nil || len(world.anchored) != 1 {
+	if err := r.client.AnchorRecovery(world.ctx, world.args()); err != nil || len(world.anchored) != 1 {
 		t.Errorf("the anchor ran again: %v", err)
 	}
-	progress := world.run(false)
+	progress := world.run()
 	if !progress.SelfJoined || progress.GenerationZero || !progress.Leaf || progress.Generation != 2 || progress.Waiting != nil {
 		t.Fatalf("the self-join over a clean tree: %+v", progress)
 	}
@@ -319,7 +312,7 @@ func TestARecoverySelfJoinCarriesTheNewestGenerationOverACleanTree(t *testing.T)
 	}
 	// nothing more is due: a second pass commits nothing
 	commits := world.store.callCount("CommitEpoch")
-	if progress := world.run(false); progress.SelfJoined || world.store.callCount("CommitEpoch") != commits {
+	if progress := world.run(); progress.SelfJoined || world.store.callCount("CommitEpoch") != commits {
 		t.Errorf("a second pass joined or committed again")
 	}
 }
@@ -329,15 +322,15 @@ func TestARecoverySelfJoinCarriesTheNewestGenerationOverACleanTree(t *testing.T)
 // generation the joiner holds; the recovered device's next commit removes that leaf, and the rotation after it,
 // cause REMOVE, is the first new generation, which reaches the lost device by no delivery and no tree.
 func TestARecoverySelfJoinCarriesNoGenWrapOverLostLeaves(t *testing.T) {
-	world := newGkmRecoveryWorld(t, protocol.RepoKind_REPO_KIND_GENERAL, false)
+	world := newGkmRecoveryWorld(t, protocol.RepoKind_REPO_KIND_GENERAL)
 	r := world.r
 	world.revoke(world.x)
 	view := world.stateFor()
-	if err := r.client.AnchorRecovery(world.ctx, world.args(false)); err != nil {
+	if err := r.client.AnchorRecovery(world.ctx, world.args()); err != nil {
 		t.Fatalf("the anchor: %v", err)
 	}
 	before := len(world.store.groupEpochs[world.groupId])
-	progress := world.run(false)
+	progress := world.run()
 	if !progress.SelfJoined || !progress.GenerationZero || !progress.Leaf || progress.Waiting != nil {
 		t.Fatalf("the self-join over a lost leaf: %+v", progress)
 	}
@@ -405,7 +398,7 @@ func TestARecoverySelfJoinCarriesNoGenWrapOverLostLeaves(t *testing.T) {
 // log admits, fails §7.9's anchor: the device raises head_alarm (fork), keeps nothing of it, and acts no further,
 // now or after a restart. An anchor check that could not run stops nothing.
 func TestAForgedRecoveryWrapRaisesHeadAlarmAndStops(t *testing.T) {
-	world := newGkmRecoveryWorld(t, protocol.RepoKind_REPO_KIND_GENERAL, false)
+	world := newGkmRecoveryWorld(t, protocol.RepoKind_REPO_KIND_GENERAL)
 	r := world.r
 	world.stateFor()
 	// a wrap whose bytes do not open stops nothing and anchors nothing
@@ -414,7 +407,7 @@ func TestAForgedRecoveryWrapRaisesHeadAlarmAndStops(t *testing.T) {
 		genuine[path] = ciphertext
 		world.store.pathRecoveryWraps[path] = bytes.Repeat([]byte{1}, len(ciphertext))
 	}
-	if err := r.client.AnchorRecovery(world.ctx, world.args(false)); !errors.Is(err, sidecar.ErrGkmAuthentication) || len(world.anchored) != 0 {
+	if err := r.client.AnchorRecovery(world.ctx, world.args()); !errors.Is(err, sidecar.ErrGkmAuthentication) || len(world.anchored) != 0 {
 		t.Fatalf("a wrap that does not open: %v", err)
 	}
 	for path, ciphertext := range genuine {
@@ -422,7 +415,7 @@ func TestAForgedRecoveryWrapRaisesHeadAlarmAndStops(t *testing.T) {
 	}
 	// the check could not run: nothing is decided
 	world.anchorErr = errors.New("the config head could not be fetched")
-	if err := r.client.AnchorRecovery(world.ctx, world.args(false)); err == nil || errors.Is(err, sidecar.ErrGkmRecoveryStopped) {
+	if err := r.client.AnchorRecovery(world.ctx, world.args()); err == nil || errors.Is(err, sidecar.ErrGkmRecoveryStopped) {
 		t.Fatalf("an anchor that could not run: %v", err)
 	}
 	if len(r.alarms) != 0 {
@@ -430,7 +423,7 @@ func TestAForgedRecoveryWrapRaisesHeadAlarmAndStops(t *testing.T) {
 	}
 	// the head the wrap's key opens does not chain to a genesis this binding signed
 	world.anchorErr = fmt.Errorf("%w: the head's genesis is not the one this binding signed", sidecar.ErrGkmRecoveryAnchor)
-	if err := r.client.AnchorRecovery(world.ctx, world.args(false)); !errors.Is(err, sidecar.ErrGkmRecoveryStopped) || !errors.Is(err, sidecar.ErrGkmRecoveryAnchor) {
+	if err := r.client.AnchorRecovery(world.ctx, world.args()); !errors.Is(err, sidecar.ErrGkmRecoveryStopped) || !errors.Is(err, sidecar.ErrGkmRecoveryAnchor) {
 		t.Fatalf("a failed anchor: %v", err)
 	}
 	if len(r.alarms) != 1 || r.alarms[0].Kind != sidecar.GkmAlarmHead || r.alarms[0].Reason != sidecar.GkmRefusalFork || r.alarms[0].Generation != 2 {
@@ -442,19 +435,19 @@ func TestAForgedRecoveryWrapRaisesHeadAlarmAndStops(t *testing.T) {
 	// it acts no further, with a passing check too, and after a restart
 	world.anchorErr = nil
 	r.restart()
-	if err := r.client.AnchorRecovery(world.ctx, world.args(false)); !errors.Is(err, sidecar.ErrGkmRecoveryStopped) {
+	if err := r.client.AnchorRecovery(world.ctx, world.args()); !errors.Is(err, sidecar.ErrGkmRecoveryStopped) {
 		t.Errorf("an anchor after a stop: %v", err)
 	}
-	if _, err := r.client.RunRecovery(world.ctx, world.args(false)); !errors.Is(err, sidecar.ErrGkmRecoveryStopped) {
+	if _, err := r.client.RunRecovery(world.ctx, world.args()); !errors.Is(err, sidecar.ErrGkmRecoveryStopped) {
 		t.Errorf("a recovery pass after a stop: %v", err)
 	}
 	if world.store.callCount("CommitEpoch") != 1 || slices.Contains(world.store.callsOf("r"), "CommitEpoch") {
 		t.Errorf("a stopped recovery committed")
 	}
 	// a host with no anchor check recovers nothing
-	other := newGkmRecoveryWorld(t, protocol.RepoKind_REPO_KIND_GENERAL, false)
+	other := newGkmRecoveryWorld(t, protocol.RepoKind_REPO_KIND_GENERAL)
 	other.stateFor()
-	args := other.args(false)
+	args := other.args()
 	args.Anchor = nil
 	if err := other.r.client.AnchorRecovery(other.ctx, args); !errors.Is(err, sidecar.ErrGkmUnavailable) {
 		t.Errorf("an anchor with no check installed: %v", err)
@@ -465,7 +458,7 @@ func TestAForgedRecoveryWrapRaisesHeadAlarmAndStops(t *testing.T) {
 // leaves the self-join waits for one leaf online to write the current GroupInfo, asks for it, and joins once a leaf
 // has answered.
 func TestARecoverySelfJoinWaitsForALeafAboveSixteenLeaves(t *testing.T) {
-	world := newGkmRecoveryWorld(t, protocol.RepoKind_REPO_KIND_GENERAL, false)
+	world := newGkmRecoveryWorld(t, protocol.RepoKind_REPO_KIND_GENERAL)
 	r := world.r
 	a := world.flows[world.a]
 	world.stateFor()
@@ -483,11 +476,11 @@ func TestARecoverySelfJoinWaitsForALeafAboveSixteenLeaves(t *testing.T) {
 	if roster := world.engineGroup(world.a).Roster(); len(roster) != 16 {
 		t.Fatalf("the tree holds %d leaves", len(roster))
 	}
-	if err := r.client.AnchorRecovery(world.ctx, world.args(false)); err != nil {
+	if err := r.client.AnchorRecovery(world.ctx, world.args()); err != nil {
 		t.Fatalf("the anchor: %v", err)
 	}
 	// at 16 leaves the newest epoch's object holds the GroupInfo: the join needs no one, and makes the 17th leaf
-	progress := world.run(false)
+	progress := world.run()
 	if !progress.SelfJoined || progress.Waiting != nil {
 		t.Fatalf("the self-join at 16 leaves, no leaf online: %+v", progress)
 	}
@@ -508,10 +501,10 @@ func TestARecoverySelfJoinWaitsForALeafAboveSixteenLeaves(t *testing.T) {
 	second := world.flow(s)
 	world.stateFor()
 	world.store.groupInfos = map[sidecar.Id]*protocol.GkmGroupInfoObject{}
-	if err := second.client.AnchorRecovery(world.ctx, world.args(false)); err != nil {
+	if err := second.client.AnchorRecovery(world.ctx, world.args()); err != nil {
 		t.Fatalf("the second device's anchor: %v", err)
 	}
-	passes, err := second.client.RunRecovery(world.ctx, world.args(false))
+	passes, err := second.client.RunRecovery(world.ctx, world.args())
 	if err != nil || len(passes) != 1 || passes[0].SelfJoined || !errors.Is(passes[0].Waiting, sidecar.ErrGkmWait) {
 		t.Fatalf("a self-join above 16 leaves with no GroupInfo: %+v %v", passes, err)
 	}
@@ -523,62 +516,9 @@ func TestARecoverySelfJoinWaitsForALeafAboveSixteenLeaves(t *testing.T) {
 	if err := a.client.AnswerWant(world.ctx, world.repoId); err != nil {
 		t.Fatalf("a leaf answers the want: %v", err)
 	}
-	passes, err = second.client.RunRecovery(world.ctx, world.args(false))
+	passes, err = second.client.RunRecovery(world.ctx, world.args())
 	if err != nil || len(passes) != 1 || !passes[0].SelfJoined || passes[0].Waiting != nil {
 		t.Fatalf("the self-join once a leaf wrote the GroupInfo: %+v %v", passes, err)
-	}
-}
-
-// §22.7: under a binding a void restored the device takes no RecoveryWrap: it anchors on the late ReaderWrap of the
-// config group's current generation that a config writer gives it, waits while none has reached it, and commits
-// nothing before the anchor passes; a forged ReaderWrap fails the anchor with head_alarm, and nothing is joined.
-func TestTheRestoredOrderAnchorsOnAReaderWrapBeforeItSelfJoins(t *testing.T) {
-	for _, forged := range []bool{false, true} {
-		world := newGkmRecoveryWorld(t, protocol.RepoKind_REPO_KIND_CONFIG, true)
-		r := world.r
-		a := world.flows[world.a]
-		world.stateFor()
-		if paths := world.store.recoveryWrapPaths(world.groupId, 2); len(paths) != 0 {
-			t.Fatalf("a restored binding took %d recovery wraps", len(paths))
-		}
-		if _, err := r.client.RunRecovery(world.ctx, world.args(true)); !errors.Is(err, sidecar.ErrGkmRecoveryNotAnchored) {
-			t.Fatalf("a recovery pass before the anchor: %v", err)
-		}
-		if err := r.client.AnchorRecovery(world.ctx, world.args(true)); !errors.Is(err, sidecar.ErrGkmWait) || len(world.anchored) != 0 {
-			t.Fatalf("an anchor with no ReaderWrap yet: %v", err)
-		}
-		if err := a.client.DeliverFirstWrap(world.ctx, world.repoId, world.r.id); err != nil {
-			t.Fatalf("a config writer's late ReaderWrap: %v", err)
-		}
-		if slices.Contains(world.store.callsOf("r"), "CommitEpoch") {
-			t.Fatalf("a commit before the anchor")
-		}
-		if forged {
-			world.anchorErr = fmt.Errorf("%w: the head's genesis is not the one this binding signed", sidecar.ErrGkmRecoveryAnchor)
-			if err := r.client.AnchorRecovery(world.ctx, world.args(true)); !errors.Is(err, sidecar.ErrGkmRecoveryStopped) {
-				t.Fatalf("a forged ReaderWrap's anchor: %v", err)
-			}
-			if len(r.alarms) != 1 || r.alarms[0].Kind != sidecar.GkmAlarmHead {
-				t.Errorf("a forged ReaderWrap's alarm: %+v", r.alarms)
-			}
-			if _, _, found, _ := r.client.TestHeldGeneration(world.repoId, 2); found {
-				t.Errorf("a failed anchor left the ReaderWrap's generation in the keychain")
-			}
-			if _, err := r.client.RunRecovery(world.ctx, world.args(true)); !errors.Is(err, sidecar.ErrGkmRecoveryStopped) || slices.Contains(world.store.callsOf("r"), "CommitEpoch") {
-				t.Errorf("a recovery pass after a failed anchor: %v", err)
-			}
-			continue
-		}
-		if err := r.client.AnchorRecovery(world.ctx, world.args(true)); err != nil {
-			t.Fatalf("the anchor on the ReaderWrap: %v", err)
-		}
-		if len(world.anchored) != 1 || world.anchored[0].Generation() != 2 {
-			t.Fatalf("the anchor was not given the ReaderWrap's RK_2")
-		}
-		progress := world.run(true)
-		if !progress.SelfJoined || progress.GenerationZero || !progress.Leaf || progress.Waiting != nil {
-			t.Fatalf("the self-join after the anchor: %+v", progress)
-		}
 	}
 }
 
