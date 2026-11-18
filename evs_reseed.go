@@ -30,6 +30,16 @@
 // Nothing here reads evs: a head below this device's pin is what a re-seed mends, and the verifier refuses it until
 // the EvsReseed is filed. The walk starts each ref at version 1 and lets 5a answer what evs already holds.
 //
+// A format-2 repo, on a client whose format-2 reader is installed (§11.13's re-seed row; EVS2-M10-13): a versionless
+// path re-seeds content only for versions this device holds. A version whose path a later version the mirror holds
+// writes or removes is replaced: its kind-5 content the mirror no longer holds is not sent, and the version goes as its
+// statement and entry versions, which read `collected`, as do its staged segments, which no later version cites. A
+// version no held version replaces sends its kind-5 content, and a kind-5 segment the mirror lacks for it stops the ref
+// as any missing segment does; its staged segments, which ride its record's tail in the mirror and in no reseed call,
+// go first through PUT .../segments as ordinary kind-5 uploads. A stale mirror's upload of what another device's
+// re-seed replaced is refused by evs at the version's call, 409 VERSIONING, and that ref stops there: such a mirror
+// holds nothing past that version that evs lacks.
+//
 // Before a repo's walk comes its groups step (§19.10's groups row; QD-1062), EvsRepo.ReseedPlace, which the repo's
 // first admin device to reach the new site runs once:
 //
@@ -151,9 +161,13 @@ type EvsReseedSlot struct {
 // What a re-seed did.
 type EvsReseedResult struct {
 	Refs []*EvsReseedRef
-	// Segments sent, and slots evs took or dropped as wholly erased.
+	// Segments sent, staged ones among them, and slots evs took or dropped as wholly erased.
 	SegmentCount int
 	SlotCount    int
+	// Of format 2: the staged segments sent as uploads, and the replaced versions' kind-5 and staged segments not
+	// sent, which those versions read `collected` without.
+	StagedCount    int
+	CollectedCount int
 	// Slots evs did not take.
 	Slots []*EvsReseedSlot
 }
@@ -263,6 +277,8 @@ type evsReseedRun struct {
 	result *EvsReseedResult
 	// by slot id in hex, the statement of the last re-seeded version that names the slot
 	slotStatements map[string][]byte
+	// the client reads format 2, so the mirror may hold a format-2 repo
+	format2 bool
 }
 
 // Re-seeds the repo from this device's mirror. See the file header. An error is the mirror's or the context's; what
@@ -290,7 +306,7 @@ func (self *EvsRepo) Reseed(ctx context.Context, args *EvsReseedArgs) (*EvsResee
 		}
 		return a.RefId.Cmp(b.RefId)
 	})
-	run := &evsReseedRun{repo: self, store: store, result: &EvsReseedResult{}, slotStatements: map[string][]byte{}}
+	run := &evsReseedRun{repo: self, store: store, result: &EvsReseedResult{}, slotStatements: map[string][]byte{}, format2: self.client.format2Reader() != nil}
 	for _, ref := range refs {
 		refResult := &EvsReseedRef{RefId: ref.RefId, MirrorVersion: ref.Version, Chain: EvsChainStart(self.repoId, ref.RefId)}
 		run.result.Refs = append(run.result.Refs, refResult)
@@ -356,47 +372,47 @@ func (self *evsReseedRun) post(ctx context.Context, request *protocol.EvsReseedR
 // The ref's versions from 1 through the mirror's, in order, raising ref's version and chain with each evs holds. The
 // answer is why the walk stopped short, nil when it did not.
 func (self *evsReseedRun) reseedRef(ctx context.Context, ref *EvsReseedRef) error {
+	var lastChanges map[string]uint64
+	if self.format2 {
+		lastChanges = self.lastChanges(ref)
+	}
 	for version := uint64(1); version <= ref.MirrorVersion; version += 1 {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		statementBytes, err := self.held(EvsMirrorStatementKey(ref.RefId, version))
+		statementBytes, statement, pushId, records, err := self.heldVersion(ref, version)
 		if err != nil {
 			return err
 		}
-		statement, err := ParseEvsStatement(statementBytes)
+		checked, err := evsMirrorCheckRecordsOf(statement, records, self.format2)
 		if err != nil {
 			return err
 		}
-		push := statement.Push
-		if !bytes.Equal(push.GetRepoId(), self.repo.repoId.Bytes()) || !bytes.Equal(push.GetRefId(), ref.RefId.Bytes()) {
-			return fmt.Errorf("%w: a statement of another ref at version %d", ErrEvsMirrorRecordInvalid, version)
-		}
-		pushId, err := IdFromBytes(push.GetPushId())
+		payload, parts, err := evsReseedBodiesOf(records, self.format2)
 		if err != nil {
 			return err
 		}
-		// part 0, the push's record or a push in parts' seal, and then each part's record
-		records := make([][]byte, push.GetPartCount()+1)
-		for part := range records {
-			if records[part], err = self.held(EvsMirrorRecordKey(pushId, uint32(part))); err != nil {
-				return err
-			}
-		}
-		checked, err := evsMirrorCheckRecords(statement, records)
-		if err != nil {
-			return err
-		}
-		payload, parts, err := evsReseedBodiesOf(records)
-		if err != nil {
-			return err
-		}
+		content := newEvsReseedContent(version, checked, lastChanges)
 		for _, object := range checked.NewObjects {
-			if object.Kind != protocol.EvsNewObjectKind_EVS_NEW_OBJECT_SEGMENT {
-				continue
-			}
-			if err := self.sendSegment(ctx, object.Id, pushId); err != nil {
-				return err
+			switch object.Kind {
+			case protocol.EvsNewObjectKind_EVS_NEW_OBJECT_SEGMENT:
+				err := self.sendSegment(ctx, object.Id, pushId)
+				if errors.Is(err, ErrEvsReseedMirrorPartial) && content.collected(object.Id) {
+					// a replaced versionless version's content, gone from the mirror with its replacement
+					self.result.CollectedCount += 1
+					continue
+				}
+				if err != nil {
+					return err
+				}
+			case protocol.EvsNewObjectKind_EVS_NEW_OBJECT_STAGED_SEGMENT:
+				if content.collected(object.Id) {
+					self.result.CollectedCount += 1
+					continue
+				}
+				if err := self.sendStaged(ctx, checked.Staged, object.Id, pushId); err != nil {
+					return err
+				}
 			}
 		}
 		var reply *protocol.EvsPushReply
@@ -418,12 +434,119 @@ func (self *evsReseedRun) reseedRef(ctx context.Context, ref *EvsReseedRef) erro
 	return nil
 }
 
+// The statement the mirror holds at the ref's version, its push id and its records: part 0, the push's record or a
+// push in parts' seal, and then each part's record.
+func (self *evsReseedRun) heldVersion(ref *EvsReseedRef, version uint64) ([]byte, *EvsStatement, Id, [][]byte, error) {
+	statementBytes, err := self.held(EvsMirrorStatementKey(ref.RefId, version))
+	if err != nil {
+		return nil, nil, Id{}, nil, err
+	}
+	statement, err := ParseEvsStatement(statementBytes)
+	if err != nil && self.format2 && errors.Is(err, ErrEvsFormatUnsupported) {
+		statement, err = ParseEvsStatementFormat2(statementBytes)
+	}
+	if err != nil {
+		return nil, nil, Id{}, nil, err
+	}
+	push := statement.Push
+	if !bytes.Equal(push.GetRepoId(), self.repo.repoId.Bytes()) || !bytes.Equal(push.GetRefId(), ref.RefId.Bytes()) {
+		return nil, nil, Id{}, nil, fmt.Errorf("%w: a statement of another ref at version %d", ErrEvsMirrorRecordInvalid, version)
+	}
+	pushId, err := IdFromBytes(push.GetPushId())
+	if err != nil {
+		return nil, nil, Id{}, nil, err
+	}
+	records := make([][]byte, push.GetPartCount()+1)
+	for part := range records {
+		if records[part], err = self.held(EvsMirrorRecordKey(pushId, uint32(part))); err != nil {
+			return nil, nil, Id{}, nil, err
+		}
+	}
+	return statementBytes, statement, pushId, records, nil
+}
+
+// For a format-2 mirror: by token path's KeyString, the newest version the mirror holds of the ref that writes or
+// removes the path, read before the walk as far as the mirror holds the ref whole.
+func (self *evsReseedRun) lastChanges(ref *EvsReseedRef) map[string]uint64 {
+	lastChanges := map[string]uint64{}
+	for version := uint64(1); version <= ref.MirrorVersion; version += 1 {
+		_, statement, _, records, err := self.heldVersion(ref, version)
+		if err != nil {
+			break
+		}
+		checked, err := evsMirrorCheckRecordsOf(statement, records, true)
+		if err != nil {
+			break
+		}
+		for _, change := range checked.Changes {
+			lastChanges[change.TokenPath.KeyString()] = version
+		}
+	}
+	return lastChanges
+}
+
+// What one version's kind-5 content is to its walk: see the file header.
+type evsReseedContent struct {
+	version     uint64
+	lastChanges map[string]uint64
+	// by segment id: the token paths whose versions name it by a kind-5 locator, staged or not, and whether any
+	// version names it by a kind-1 one
+	kind5Paths map[string][]string
+	kind1      map[string]bool
+}
+
+func newEvsReseedContent(version uint64, checked *EvsCheckedPayload, lastChanges map[string]uint64) *evsReseedContent {
+	content := &evsReseedContent{version: version, lastChanges: lastChanges, kind5Paths: map[string][]string{}, kind1: map[string]bool{}}
+	for _, change := range checked.Changes {
+		if !change.WritesEntry() {
+			continue
+		}
+		entry := &protocol.EvsEntryVersion{}
+		if proto.Unmarshal(change.EntryVersion, entry) != nil {
+			continue
+		}
+		for _, locator := range entry.GetChain() {
+			switch protocol.EvsLocatorKind(locator.GetKind()) {
+			case protocol.EvsLocatorKind_EVS_LOCATOR_VERSIONLESS_SEGMENT:
+				id := string(locator.GetId())
+				content.kind5Paths[id] = append(content.kind5Paths[id], change.TokenPath.KeyString())
+			case protocol.EvsLocatorKind_EVS_LOCATOR_SEGMENT:
+				content.kind1[string(locator.GetId())] = true
+			}
+		}
+	}
+	return content
+}
+
+// Whether segmentId is content only replaced versionless versions of this version name: kind-5 locators alone name
+// it, each of a path a later version the mirror holds writes or removes.
+func (self *evsReseedContent) collected(segmentId []byte) bool {
+	paths := self.kind5Paths[string(segmentId)]
+	if self.lastChanges == nil || len(paths) == 0 || self.kind1[string(segmentId)] {
+		return false
+	}
+	for _, path := range paths {
+		if self.lastChanges[path] <= self.version {
+			return false
+		}
+	}
+	return true
+}
+
 // What the reseed calls of a version whose records the mirror holds, already held to its statement, carry: a one-part
 // push's payload as its record keeps it, with no parts, or a push in parts' every part as its record keeps it, in part
-// order (QD-818), with no payload; never re-signed or rebuilt.
-func evsReseedBodiesOf(records [][]byte) ([]byte, [][]byte, error) {
+// order (QD-818), with no payload; never re-signed or rebuilt. With format2, a record's format-2 tail, its staged
+// segments and its purge list, stays out of every call: staged content goes as uploads, and evs lists its own.
+func evsReseedBodiesOf(records [][]byte, format2 bool) ([]byte, [][]byte, error) {
+	parse := func(recordBytes []byte) (*EvsBatchRecord, error) {
+		if format2 {
+			record, _, err := ParseEvsBatchRecordFormat2(recordBytes)
+			return record, err
+		}
+		return ParseEvsBatchRecord(recordBytes)
+	}
 	if len(records) == 1 {
-		record, err := ParseEvsBatchRecord(records[0])
+		record, err := parse(records[0])
 		if err != nil {
 			return nil, nil, err
 		}
@@ -435,7 +558,7 @@ func evsReseedBodiesOf(records [][]byte) ([]byte, [][]byte, error) {
 	}
 	parts := make([][]byte, 0, len(records)-1)
 	for _, recordBytes := range records[1:] {
-		record, err := ParseEvsBatchRecord(recordBytes)
+		record, err := parse(recordBytes)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -484,6 +607,11 @@ func (self *evsReseedRun) sendSegment(ctx context.Context, segmentId []byte, pus
 	if err != nil {
 		return err
 	}
+	return self.putSegment(ctx, segmentId, pushId, body)
+}
+
+// PUT .../segments of body under pushId, counted once evs answers it.
+func (self *evsReseedRun) putSegment(ctx context.Context, segmentId []byte, pushId Id, body []byte) error {
 	repo := self.repo
 	call := &evsCall{
 		route:   "PUT /evs/v1/repos/{repo_id}/segments/{segment_id}",
@@ -498,6 +626,26 @@ func (self *evsReseedRun) sendSegment(ctx context.Context, segmentId []byte, pus
 		return err
 	}
 	self.result.SegmentCount += 1
+	return nil
+}
+
+// One staged segment of a format-2 version, from its record's tail as the mirror holds it, to evs as an ordinary
+// kind-5 upload under the push that stages it, which its header names (§11.13's re-seed row).
+func (self *evsReseedRun) sendStaged(ctx context.Context, staged []*EvsStagedSegment, segmentId []byte, pushId Id) error {
+	var segment *EvsStagedSegment
+	for _, candidate := range staged {
+		if bytes.Equal(candidate.Id[:], segmentId) {
+			segment = candidate
+			break
+		}
+	}
+	if segment == nil {
+		return fmt.Errorf("%w: no staged segment %x in its record", ErrEvsReseedMirrorPartial, segmentId[:8])
+	}
+	if err := self.putSegment(ctx, segmentId, pushId, segment.Bytes); err != nil {
+		return err
+	}
+	self.result.StagedCount += 1
 	return nil
 }
 

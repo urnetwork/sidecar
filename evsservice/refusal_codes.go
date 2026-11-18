@@ -196,6 +196,9 @@ const (
 	// 5h's fence (DESIGN-DETAILS 10.2.7): a base, a deleted path or a reuse source that a DROP in the window lists, or
 	// one below its entry's drop mark: 409 DROPPED, recorded on a head read from the cluster.
 	EvsCheckReasonDropped
+	// The reseed mode's 5a for a format-2 push evs holds while seg/ holds kind-5 content of a version of it the
+	// re-seeded history replaces (reseed_format2.go): 409 VERSIONING, final, and recorded by no re-seed.
+	EvsCheckReasonReseedReplaced
 )
 
 // One row of the table.
@@ -232,6 +235,7 @@ var evsCheckReasonRows = map[EvsCheckReason]evsCheckReasonRow{
 	EvsCheckReasonVersioningLocked:  {name: "versioning_locked", code: protocol.EvsRefusalCode_EVS_REFUSAL_VERSIONING, fate: EvsRefusalRecorded},
 	EvsCheckReasonCitation:          {name: "citation", code: protocol.EvsRefusalCode_EVS_REFUSAL_VERSIONING, fate: EvsRefusalRecorded},
 	EvsCheckReasonVersioningPayload: {name: "versioning_payload", code: protocol.EvsRefusalCode_EVS_REFUSAL_VERSIONING, fate: EvsRefusalFinal},
+	EvsCheckReasonReseedReplaced:    {name: "reseed_replaced", code: protocol.EvsRefusalCode_EVS_REFUSAL_VERSIONING, fate: EvsRefusalFinal},
 
 	EvsCheckReasonGateClosed:   {name: "gate_closed", code: protocol.EvsRefusalCode_EVS_REFUSAL_GATE_CLOSED, fate: EvsRefusalRecorded},
 	EvsCheckReasonPinBelowHead: {name: "pin_below_head", code: protocol.EvsRefusalCode_EVS_REFUSAL_GATE_CLOSED, fate: EvsRefusalFinal},
