@@ -5,12 +5,18 @@
 // ur approve cancel <id> signs an approval's cancel the same way. Every line the daemon sends is printed through
 // ApprovalPrintable once more here, so no control character reaches the terminal whatever a daemon answers.
 //
-//	approvals.requests   the requests and what this device may answer each
-//	approvals.request    Confirm: a decision, approve or deny, with uses for a template
+//	approvals.requests   the requests and what this device may answer each, with the uses each request names
+//	approvals.request    Confirm: a decision, approve or deny, with the person's uses for a template, none for the
+//	                     count the request names
 //	approvals.cancel     Confirm: a cancel
 //
 // A request this sidecar made itself signs on channel presence, through the daemon's presence prompt, never device
 // (§16.6's host table); a daemon with no presence prompt refuses it.
+//
+// Uses (QD-1010; §16.6's multi-use row): a request names the uses its agent asks, 1 for any action but a template, and
+// ur approve <id> without --uses approves that count, as the render shows it; --uses=<n> narrows a template's to n, 2
+// or more. A count above the request's, or a version-1 template, whose request names none, approved with no --uses,
+// is refused before the person is asked, as the daemon refuses it too (ErrApprovalUses).
 
 package main
 
@@ -100,8 +106,11 @@ type urRequestItem struct {
 	EntryId    sidecar.Id  `json:"entry_id"`
 	Kind       string      `json:"kind,omitempty"`
 	Template   bool        `json:"template,omitempty"`
-	Text       string      `json:"text,omitempty"`
-	Refused    string      `json:"refused,omitempty"`
+	// The uses the request names, which an approval with no --uses signs (QD-1010): 1 for any action but a template;
+	// 0, left out, for a version-1 template, whose request names none, and a request shown refused.
+	Uses    uint32 `json:"uses,omitempty"`
+	Text    string `json:"text,omitempty"`
+	Refused string `json:"refused,omitempty"`
 	// device or presence, empty where this device signs none
 	Channel   string   `json:"channel,omitempty"`
 	Decisions []string `json:"decisions"`
@@ -162,6 +171,7 @@ func urApproveRequestMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
 						replyItem.ApprovalId = &approvalId
 						replyItem.Kind = item.Render.KindName
 						replyItem.Template = item.Render.Template
+						replyItem.Uses = item.Render.Uses
 						replyItem.Text = item.Render.Text()
 					}
 					reply.Items = append(reply.Items, replyItem)
@@ -211,7 +221,10 @@ func urPrintRequests(cli *urCli, items []*urRequestItem) {
 			continue
 		}
 		kind := sidecar.ApprovalPrintable(item.Kind)
-		if item.Template {
+		switch {
+		case item.Template && 0 < item.Uses:
+			kind += fmt.Sprintf(", template for %d uses", item.Uses)
+		case item.Template:
 			kind += ", template"
 		}
 		answers := strings.Join(item.Decisions, "|")
@@ -255,6 +268,20 @@ func runUrApproveRequest(ctx context.Context, cli *urCli, approvalId sidecar.Id,
 		}
 		return fmt.Errorf("this device may answer the request only with %s", strings.Join(item.Decisions, " or "))
 	}
+	// what an approval signs: the count the request names, or the person's narrower one (the file's uses paragraph)
+	covered := uses
+	if decision == sidecar.SidecarDecisionApprove {
+		switch {
+		case item.Uses == 1 && 1 < uses:
+			return errors.New("the request is for one action, and only a template's approval covers more than one use")
+		case 0 < item.Uses && item.Uses < uses:
+			return fmt.Errorf("the request asks for %d uses, and an approval covers no more than it asks", item.Uses)
+		case item.Template && item.Uses == 0 && uses == 0:
+			return errors.New("this template's request names no count of uses: give one of 2 or more with --uses")
+		case uses == 0:
+			covered = item.Uses
+		}
+	}
 
 	tty, err := cli.openTty()
 	if err != nil {
@@ -266,8 +293,8 @@ func runUrApproveRequest(ctx context.Context, cli *urCli, approvalId sidecar.Id,
 	if item.Channel == "presence" {
 		fmt.Fprintln(tty, "This is this sidecar's own request: your presence key signs it, never this device alone.")
 	}
-	if 1 < uses {
-		fmt.Fprintf(tty, "The approval covers up to %d actions, each matching the template.\n", uses)
+	if decision == sidecar.SidecarDecisionApprove && 1 < covered {
+		fmt.Fprintf(tty, "The approval covers up to %d actions, each matching the template.\n", covered)
 	}
 	tty.Close()
 	confirmed, err := confirmOnTty(cli, decision+" it?")
