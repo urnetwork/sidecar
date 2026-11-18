@@ -34,6 +34,9 @@ type fakeMcpNetwork struct {
 	store     *sidecartest.FakeStore
 	runs      *sidecar.RunStore
 	spool     *sidecar.Spool
+	// each agent label's registered id, as a Sidecar's keychain.ur keeps them, so a restart keeps them too
+	// (session_test.go's ResolveAgentId)
+	labelAgentIds map[string]sidecar.Id
 }
 
 // A restart: a run store over the same files with nothing in memory.

@@ -52,12 +52,21 @@ type DnsSettings struct {
 	// Every root served, canonical once loaded: lowercase, fully qualified. A list, so changing the
 	// root needs no code (D-DNS-1). None may sit inside another, since each is one zone with no cut.
 	Roots []string `yaml:"roots"`
-	// Where the reverse zones of the sending addresses come from (M9). Nothing reads it before
-	// DNS-M9-02 gives it a form. Empty means none.
-	Reverse string `yaml:"reverse"`
-	// Which delegated _domainkey.<domain> zones are served (v1, §14.6). Nothing reads it before
-	// DNS-M9-02 gives it a form. Empty means none.
-	Delegated string `yaml:"delegated"`
+	// The reverse zones HE delegates for the sending addresses (M9, R-DNS-9, owner decision 124),
+	// answered unsigned with each covered address's PTR from SendingAddresses (reverse.go). None by
+	// default, so no PTR is served until HE's delegation and its zone names arrive.
+	Reverse DnsReverseSettings `yaml:"reverse"`
+	// Team customers' delegated _domainkey.<domain> zones (v1, §14.6; plan reading 17), answered
+	// unsigned from the delegations the zone's rows carry (delegated.go). Off by default.
+	Delegated DnsDelegatedSettings `yaml:"delegated"`
+	// smtpedge.yml's sending addresses with their HELO names (§14.6, owner decision 124), which the
+	// host sets beside dns.yml through SetSendingAddresses: _spf.<root> lists them and each reverse
+	// zone answers the PTRs of those it covers. Never read from dns.yml. None: _spf sends from nowhere
+	// and no PTR answers.
+	SendingAddresses []DnsSendingAddress `yaml:"-"`
+	// The most bytes one TXT character-string holds: RFC 1035 §3.3's 255, what its one length octet
+	// counts. A format limit, so no dns.yml key: _spf.<root>'s text splits at it (DnsSpfRdata).
+	TxtStringMaxByteCount int `yaml:"-"`
 	// The NS host labels under each root, one for each dns edge host.
 	Ns []string `yaml:"ns"`
 	// §12.6's TTLs (D-DNS-4).
@@ -120,6 +129,29 @@ type DnsSettings struct {
 	// rather than only hold it. Each must be a root with trust_anchors, since a DS names a KSK. Empty, the
 	// default, is none: validators treat every root as insecure, so a signing fault harms no one.
 	DsPublished []string `yaml:"ds_published"`
+	// The SOA timers every zone here publishes, roots and the unsigned reverse and delegated zones
+	// alike. Not in the sketch.
+	Soa DnsSoaSettings `yaml:"soa"`
+}
+
+// An SOA's REFRESH, RETRY and EXPIRE, in seconds. No zone here is transferred (§12.6), so no secondary
+// reads them; the defaults are RFC 1912 §2.2's, so a checker that reads them finds sane values. Each must
+// be positive, with RETRY below REFRESH and EXPIRE above both.
+type DnsSoaSettings struct {
+	RefreshSeconds uint32 `yaml:"refresh_s"`
+	RetrySeconds   uint32 `yaml:"retry_s"`
+	ExpireSeconds  uint32 `yaml:"expire_s"`
+}
+
+// Whether the timers are in range and in order.
+func (self *DnsSoaSettings) validate() error {
+	switch {
+	case self.RetrySeconds == 0 || self.RefreshSeconds <= self.RetrySeconds:
+		return errors.New("retry_s is not positive and below refresh_s")
+	case self.ExpireSeconds <= self.RefreshSeconds || dnsTtlMaxSeconds < self.ExpireSeconds:
+		return errors.New("expire_s is not above refresh_s and a TTL")
+	}
+	return nil
 }
 
 // Whether the registrar publishes root's DS, root canonical.
@@ -506,7 +538,13 @@ func DefaultDnsSettings() *DnsSettings {
 			IdleTimeoutSeconds: 10,
 			ConnectionCount:    16 * 1024,
 		},
-		CnameChainMaxCount: 8,
+		CnameChainMaxCount:    8,
+		TxtStringMaxByteCount: 255,
+		Soa: DnsSoaSettings{
+			RefreshSeconds: 7200,
+			RetrySeconds:   3600,
+			ExpireSeconds:  14 * 24 * 3600,
+		},
 		Signing: DnsSigningSettings{
 			LifetimeSeconds:        4 * 24 * 3600,
 			InceptionOffsetSeconds: 3600,
@@ -616,6 +654,10 @@ func LoadDnsSettings(data []byte) (*DnsSettings, error) {
 	}
 	for index, root := range settings.DsPublished {
 		settings.DsPublished[index] = dns.CanonicalName(root)
+	}
+	for index := range settings.Reverse.Zones {
+		zone := &settings.Reverse.Zones[index]
+		zone.Zone = dns.CanonicalName(zone.Zone)
 	}
 	if err := settings.Validate(); err != nil {
 		return nil, err
@@ -765,6 +807,18 @@ func (self *DnsSettings) Validate() error {
 		if len(self.TrustAnchors[root]) == 0 {
 			return refuse("ds_published: %s has no trust_anchors, and a DS names a KSK", root)
 		}
+	}
+	if self.TxtStringMaxByteCount < 1 || 255 < self.TxtStringMaxByteCount {
+		return refuse("the TXT string bound %d is not RFC 1035's 1 to 255", self.TxtStringMaxByteCount)
+	}
+	if err := self.Soa.validate(); err != nil {
+		return refuse("soa: %v", err)
+	}
+	if err := self.Reverse.validate(self.Roots); err != nil {
+		return refuse("reverse: %v", err)
+	}
+	if err := validateDnsSendingAddresses(self.SendingAddresses); err != nil {
+		return refuse("sending addresses: %v", err)
 	}
 	for root, records := range self.RootRecords {
 		if !slices.Contains(self.Roots, root) {
