@@ -244,6 +244,10 @@ type EvsMirrorSyncResult struct {
 	// drops applied (evs_mirror_format2.go).
 	CollectedCount int
 	DropCount      int
+	// Format 2: segments evs no longer serves that the mirror holds complete with no content, of a replaced
+	// versionless version and of a version an executed drop lists (evs_mirror_format2.go).
+	ReplacedMissingCount int
+	DroppedMissingCount  int
 }
 
 // The missing objects this sync found, deduplicated by family and name.
@@ -409,6 +413,11 @@ type evsMirrorRun struct {
 	erasedThrough  uint64
 	// the DROPs held whose apply has not run (evs_mirror_format2.go)
 	drops []*EvsMirrorDrop
+	// format 2, per ref: the segments evs did not serve whose versions the walk's end judges, the newest version the
+	// walk held the records of that changes each token path, and whether the ref's head was read again
+	pending map[Id][]*evsMirrorPending
+	changes map[Id]map[string]uint64
+	reread  map[Id]bool
 }
 
 // One ref to its head: the statements past what the mirror holds, walked and verified, then each version's objects,
@@ -456,13 +465,26 @@ func (self *evsMirrorRun) syncRef(ctx context.Context, summary *protocol.EvsHead
 		return nil, fmt.Errorf("%w: the log does not chain to the head", ErrEvsChainBroken)
 	}
 	head := &EvsVerifiedHead{RepoId: mirror.repoId, RefId: refId, Head: summary, Version: summary.GetVersion(), Chain: headChain, Statements: walked, FromVersion: fromVersion}
-	raised := false
-	for _, statement := range walked {
+	wholes := make([]bool, len(walked))
+	for i, statement := range walked {
 		whole, err := self.mirrorVersion(ctx, head, statement)
 		if err != nil {
 			return nil, err
 		}
-		if !whole {
+		wholes[i] = whole
+	}
+	// format 2: what evs no longer serves of a replaced or dropped version, judged once the walk holds what follows it,
+	// the head read again once when a replacement may have landed past it (evs_mirror_format2.go)
+	reread, err := self.resolvePending(ctx, head, walked, wholes)
+	if err != nil {
+		return nil, err
+	}
+	if reread != nil {
+		return self.syncRef(ctx, reread)
+	}
+	raised := false
+	for i, statement := range walked {
+		if !wholes[i] {
 			if refState.FirstMissingMs == 0 {
 				refState.FirstMissingMs = statement.Statement.Push.GetTimeMs()
 			}
@@ -626,7 +648,10 @@ func (self *evsMirrorRun) mirrorVersion(ctx context.Context, head *EvsVerifiedHe
 			return false, fmt.Errorf("%w: new object kind %d", ErrEvsFormatUnsupported, object.Kind)
 		}
 	}
-	segmentsWhole, err := self.mirrorSegments(ctx, head, statement, segments)
+	// format 2: what judges a segment evs does not serve at the walk's end (evs_mirror_format2.go)
+	self.noteChanges(head.RefId, statement.Version, checked)
+	names := self.segmentNames(statement, checked)
+	segmentsWhole, err := self.mirrorSegments(ctx, head, statement, segments, names)
 	if err != nil {
 		return false, err
 	}
@@ -831,7 +856,7 @@ func (self *evsMirrorRun) heldBytes(key EvsMirrorKey) ([]byte, error) {
 
 // The segments a push introduced that the mirror lacks, read whole by ranges in rounds within §11.9's bounds, each put
 // under its SHA-256, which the store checks is its id.
-func (self *evsMirrorRun) mirrorSegments(ctx context.Context, head *EvsVerifiedHead, statement *EvsVerifiedStatement, segments []*EvsNewObject) (bool, error) {
+func (self *evsMirrorRun) mirrorSegments(ctx context.Context, head *EvsVerifiedHead, statement *EvsVerifiedStatement, segments []*EvsNewObject, names map[string]*evsMirrorNamed) (bool, error) {
 	mirror := self.mirror
 	needed := []*EvsNewObject{}
 	for _, segment := range segments {
@@ -892,7 +917,12 @@ func (self *evsMirrorRun) mirrorSegments(ctx context.Context, head *EvsVerifiedH
 		for _, segment := range round {
 			if !served[hex.EncodeToString(segment.Id)] {
 				name, _ := EvsMirrorSegmentKey(segment.Id).Name()
-				self.missing.add(&EvsMirrorMissing{Family: EvsMirrorSegments, Name: name, RefId: head.RefId, Version: statement.Version})
+				missing := &EvsMirrorMissing{Family: EvsMirrorSegments, Name: name, RefId: head.RefId, Version: statement.Version}
+				if self.deferMissing(head.RefId, statement.Version, segment.Id, names, missing) {
+					// judged at the walk's end: a replaced or dropped version's content is complete with none
+					continue
+				}
+				self.missing.add(missing)
 				whole = false
 			}
 		}
@@ -1198,6 +1228,8 @@ func (self *EvsMirror) Check(ctx context.Context) (*EvsMirrorCheckResult, error)
 			fail(refName, "the statements held do not chain to the version held")
 			continue
 		}
+		// format 2: a segment the mirror rightly lacks, of a replaced or dropped version (evs_mirror_format2.go)
+		lack := self.newCheckLack()
 		for _, statement := range walked {
 			push := statement.Statement.Push
 			pushId, _ := IdFromBytes(push.GetPushId())
@@ -1218,12 +1250,13 @@ func (self *EvsMirror) Check(ctx context.Context) (*EvsMirrorCheckResult, error)
 			if !readable {
 				continue
 			}
-			checked, err := evsMirrorCheckRecords(statement.Statement, records)
+			checked, err := evsMirrorCheckRecordsOf(statement.Statement, records, lack != nil)
 			if err != nil {
 				name, _ := EvsMirrorRecordKey(pushId, 0).Name()
 				fail(name, err.Error())
 				continue
 			}
+			lack.note(statement, checked)
 			for _, object := range checked.NewObjects {
 				if object.Kind != protocol.EvsNewObjectKind_EVS_NEW_OBJECT_SEGMENT || checkedSegments[hex.EncodeToString(object.Id)] {
 					continue
@@ -1234,7 +1267,9 @@ func (self *EvsMirror) Check(ctx context.Context) (*EvsMirrorCheckResult, error)
 				segmentBytes, err := self.readHeld(key)
 				result.ObjectCount += 1
 				if err != nil {
-					fail(name, err.Error())
+					if !lack.hold(name, err.Error(), statement, checked, object.Id) {
+						fail(name, err.Error())
+					}
 					continue
 				}
 				if sum := sha256.Sum256(segmentBytes); !bytes.Equal(sum[:], object.Id) {
@@ -1266,6 +1301,7 @@ func (self *EvsMirror) Check(ctx context.Context) (*EvsMirrorCheckResult, error)
 				}
 			}
 		}
+		lack.failures(fail)
 	}
 	slots, err := self.store.List(EvsMirrorSlots, nil)
 	if err != nil {
