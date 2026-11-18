@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -159,6 +160,94 @@ func TestApplyServiceUrlsFillsEveryUrl(t *testing.T) {
 	label, err := list.ServiceLabel(SidecarHostServicePlatform)
 	if err != nil || label != "connect" {
 		t.Errorf("the platform's label is %q, %v", label, err)
+	}
+}
+
+// The embedded table names the mail prover's key set host (QD-123; DESIGN-DETAILS 3.2.7): one optional entry,
+// since no host needs it to run, whose url is https, ends at the key sets' path and carries no trailing slash, so
+// a key set's files sit at <url>/<id>/<name>. The host itself is read from the table and named nowhere here.
+func TestEmbeddedHostListNamesTheSmtpProofKeysHost(t *testing.T) {
+	list, err := SidecarHostListV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, ok := list.ServiceEntry(SidecarHostServiceSmtpProofKeys)
+	if !ok {
+		t.Fatal("no smtp-proof-keys host")
+	}
+	if entry.Requirement != SidecarHostOptional || entry.Tcp != 443 {
+		t.Errorf("the key set host needs %s on %d", entry.Requirement, entry.Tcp)
+	}
+	keysUrl := list.SmtpProofKeysUrl()
+	if keysUrl != "https://"+entry.Host+"/recurd/smtpproof/keys" {
+		t.Errorf("the key sets' url is %q", keysUrl)
+	}
+	// ApplyServiceUrls needs no key set host: it fills no url of the settings
+	if slices.Contains(sidecarHostServices, SidecarHostServiceSmtpProofKeys) {
+		t.Error("the key set host is required of every list")
+	}
+}
+
+// A fixture list's key set host gives the url, with its port when that is not 443, and a list that names none
+// gives the empty url, on which a prover host fetches nothing, and still fills every service url.
+func TestSmtpProofKeysUrlComesFromTheList(t *testing.T) {
+	keysEntry := `{"host": "keys.hosttest.example", "tcp": 443, "need": "optional: mail prover hosts", "service": "smtp-proof-keys", "requirement": "optional"},
+    {"host": "hosttest.example"`
+	withKeys := strings.Replace(testSidecarHostListJson(), `{"host": "hosttest.example"`, keysEntry, 1)
+	list, err := ParseSidecarHostList([]byte(withKeys))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if keysUrl := list.SmtpProofKeysUrl(); keysUrl != "https://keys.hosttest.example/recurd/smtpproof/keys" {
+		t.Errorf("the key sets' url is %q", keysUrl)
+	}
+	// a key set's published files, by the layout the prover's fetch follows
+	id := sha256.Sum256([]byte("a synthetic keyset.json"))
+	if fileUrl := list.SmtpProofKeysUrl() + "/" + hex.EncodeToString(id[:]) + "/keyset.json"; !strings.HasPrefix(fileUrl, "https://keys.hosttest.example/recurd/smtpproof/keys/") || strings.Contains(strings.TrimPrefix(fileUrl, "https://"), "//") {
+		t.Errorf("a key set file's url is %q", fileUrl)
+	}
+	settings := DefaultSidecarSettings()
+	if err := list.ApplyServiceUrls(settings); err != nil {
+		t.Fatal(err)
+	}
+	published, err := list.PublishedJson()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(published, []byte("smtp-proof-keys")) || !bytes.Contains(published, []byte("keys.hosttest.example")) {
+		t.Errorf("published %s", published)
+	}
+
+	onPort, err := ParseSidecarHostList([]byte(strings.Replace(withKeys, `"keys.hosttest.example", "tcp": 443`, `"keys.hosttest.example", "tcp": 8443`, 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if keysUrl := onPort.SmtpProofKeysUrl(); keysUrl != "https://keys.hosttest.example:8443/recurd/smtpproof/keys" {
+		t.Errorf("the key sets' url on a port is %q", keysUrl)
+	}
+
+	without, err := ParseSidecarHostList([]byte(testSidecarHostListJson()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if keysUrl := without.SmtpProofKeysUrl(); keysUrl != "" {
+		t.Errorf("a list with no key set host gives %q", keysUrl)
+	}
+	if err := without.ApplyServiceUrls(DefaultSidecarSettings()); err != nil {
+		t.Errorf("a list with no key set host does not apply: %v", err)
+	}
+
+	// the key set host is optional by the format: a list that makes it required, or names it twice, is refused
+	for name, data := range map[string]string{
+		"required": strings.Replace(withKeys, `"service": "smtp-proof-keys", "requirement": "optional"`, `"service": "smtp-proof-keys", "requirement": "required"`, 1),
+		"twice":    strings.Replace(withKeys, `{"host": "ct.hosttest.example", "tcp": 443, "need": "with tls", "requirement": "tls"}`, `{"host": "ct.hosttest.example", "tcp": 443, "need": "with tls", "service": "smtp-proof-keys", "requirement": "optional"}`, 1),
+	} {
+		if data == withKeys {
+			t.Fatalf("%s: the fixture moved", name)
+		}
+		if _, err := ParseSidecarHostList([]byte(data)); !errors.Is(err, ErrSidecarHostList) {
+			t.Errorf("%s: parsed, %v", name, err)
+		}
 	}
 }
 

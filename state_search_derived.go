@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // §5.9's derived data (CORE-M10-01): what a device computes from the index files it keeps, sealed under the local search
 // key, the file's name carrying repo || ref || path || version || part in its AAD (state_search_cache.go): the search
 // manifest, each shard's dictionary block index and n_d array, the version table (CORE-M10-02), and on desktops the
@@ -14,19 +16,18 @@
 // Decoded state lives in memory, in an LRU within Search.MemoryByteCount, with the version table's pages in their own
 // within Search.VersionCacheByteCount (§5.9's bounds row); a lock drops both (SearchCache.Locked).
 //
-// On every leg: root Id, no connect type. Safe for concurrent use.
+// On every leg but the ios_extension legs, which link no index or search code (QD-988): root Id, no connect type. Safe
+// for concurrent use.
 
 package sidecar
 
 import (
-	"bytes"
 	"container/list"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"slices"
 	"strconv"
 	"strings"
@@ -431,108 +432,4 @@ func (self *searchDecodedCache) dropPrefix(prefix string) {
 			delete(self.entries, name)
 		}
 	}
-}
-
-// The store of a cache kept in memory (Search.CacheByteCount 0): an ephemeral sidecar's, which writes nothing to any
-// medium and dies with the process (§5.9's bounds row). A SidecarStore over a map, every name in one flat space.
-type searchMemoryStore struct {
-	stateLock sync.Mutex
-	files     map[string][]byte
-}
-
-// An empty memory store.
-func newSearchMemoryStore() *searchMemoryStore {
-	return &searchMemoryStore{files: map[string][]byte{}}
-}
-
-// The file's bytes. See SidecarStore.
-func (self *searchMemoryStore) Open(name string) (io.ReadCloser, error) {
-	if !isStoreName(name) {
-		return nil, ErrSidecarStoreName
-	}
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	content, ok := self.files[name]
-	if !ok {
-		return nil, ErrSidecarStoreAbsent
-	}
-	return io.NopCloser(bytes.NewReader(content)), nil
-}
-
-// A writer swapping the file in whole at Commit. See SidecarStore.
-func (self *searchMemoryStore) Create(name string) (SidecarStoreWriter, error) {
-	if !isStoreName(name) {
-		return nil, ErrSidecarStoreName
-	}
-	return &searchMemoryWriter{store: self, name: name}, nil
-}
-
-// Takes the file away. See SidecarStore.
-func (self *searchMemoryStore) Remove(name string) error {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	delete(self.files, name)
-	return nil
-}
-
-// The files whose names start with prefix, sorted. See SidecarStore.
-func (self *searchMemoryStore) List(prefix string) ([]SidecarStoreEntry, error) {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	entries := []SidecarStoreEntry{}
-	for name, content := range self.files {
-		if strings.HasPrefix(name, prefix) {
-			// named from the store's directory, as a sealed store's listing names them
-			entries = append(entries, SidecarStoreEntry{Name: name, ByteCount: int64(len(content))})
-		}
-	}
-	slices.SortFunc(entries, func(a SidecarStoreEntry, b SidecarStoreEntry) int { return strings.Compare(a.Name, b.Name) })
-	return entries, nil
-}
-
-// The cache uses one flat space: narrowing is refused, as nothing asks for it.
-func (self *searchMemoryStore) Directory(name string, class string) (SidecarStore, error) {
-	return nil, ErrSidecarStoreName
-}
-
-// Drops every file.
-func (self *searchMemoryStore) clear() {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	clear(self.files)
-}
-
-// A file on its way into the memory store, swapped in whole at Commit.
-type searchMemoryWriter struct {
-	store  *searchMemoryStore
-	name   string
-	buffer bytes.Buffer
-	done   bool
-}
-
-// Buffers p until Commit.
-func (self *searchMemoryWriter) Write(p []byte) (int, error) {
-	if self.done {
-		return 0, ErrSidecarStoreFailed
-	}
-	return self.buffer.Write(p)
-}
-
-// Swaps the file in whole.
-func (self *searchMemoryWriter) Commit() error {
-	if self.done {
-		return ErrSidecarStoreFailed
-	}
-	self.done = true
-	self.store.stateLock.Lock()
-	defer self.store.stateLock.Unlock()
-	self.store.files[self.name] = bytes.Clone(self.buffer.Bytes())
-	return nil
-}
-
-// Drops what Commit did not take. Safe to call again.
-func (self *searchMemoryWriter) Close() error {
-	self.done = true
-	self.buffer.Reset()
-	return nil
 }

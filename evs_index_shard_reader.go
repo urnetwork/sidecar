@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // Reading a shard by frame (§11.14's plan and verify rows; §5.9's holds row). An index file is an evs record whose body
 // is sealed in 64 KiB frames (§11.6), and a phone decrypts one frame at a time and holds no more, so a reader here
 // works over a frame source through a cursor holding one frame. Opening a shard walks its doc table, tombstones and
