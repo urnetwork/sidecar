@@ -1,7 +1,8 @@
 // ur evs rules and ur evs repair (EVS1-M6-05; DESIGN-DETAILS 16.2.8, 16.2.9): each reaches its method over a target
 // that hosts a Sidecar, with the daemon's refusal printed; a path and a rules file are read before anything is asked;
 // and show's, a filing's, a repair's and status's lines. What the methods do against evs is the root's
-// (evs_prefix_repair_test.go, evs_local_pin_test.go).
+// (evs_prefix_repair_test.go, evs_local_pin_test.go). At launch (QD-1032) the daemon's composition keeps the rules dark,
+// and every form refuses through its method, naming the deferral, before anything is asked.
 
 package main
 
@@ -30,6 +31,64 @@ func (self *testUrEvsRulesTarget) evsClient() (*sidecar.EvsClient, error) {
 
 func (self *testUrEvsRulesTarget) prefixRulesSidecar() (*sidecar.Sidecar, error) {
 	return nil, self.err
+}
+
+// A daemon target whose evs client and Sidecar are a standing network's, as the daemon composes them.
+type testUrEvsRulesClientTarget struct {
+	testUrDaemonTarget
+	client  *sidecar.EvsClient
+	running *sidecar.Sidecar
+}
+
+func (self *testUrEvsRulesClientTarget) evsClient() (*sidecar.EvsClient, error) {
+	return self.client, nil
+}
+
+func (self *testUrEvsRulesClientTarget) prefixRulesSidecar() (*sidecar.Sidecar, error) {
+	return self.running, nil
+}
+
+// QD-1032's launch configuration: the daemon composes each network's evs client with the client-checked prefix rules
+// dark, so its Sidecar files no set, and every form of ur evs rules and ur evs repair refuses through its method,
+// naming the deferral, before anything is asked: lift, which reads no subject, among them, where a question first would
+// have met this test's missing terminal.
+func TestDaemonRunsThePrefixRulesDarkAtLaunch(t *testing.T) {
+	world := newTestUrFollowWorld(t, 1)
+	network := world.networks[0]
+	running := world.host(network, nil)
+	world.standing(running, network)
+	client, err := urDaemonEvsClient(running)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.PrefixRulesEnabled() {
+		t.Fatal("the daemon's evs client runs the prefix rules at launch")
+	}
+	request := &sidecar.AclPrefixRulesRequest{RepoId: sidecar.NewId(), Change: sidecar.AclPrefixRulesLift}
+	if _, err := running.FilePrefixRules(world.ctx, client, request, sidecar.SidecarActConfirmed); !errors.Is(err, sidecar.ErrAclPrefixRulesDeferred) {
+		t.Fatalf("a filing at launch: %v", err)
+	}
+
+	daemon := startTestControlDaemon(t, &testUrEvsRulesClientTarget{client: client, running: running}, nil)
+	repoId := sidecar.NewId()
+	file := filepath.Join(t.TempDir(), "rules.json")
+	if err := os.WriteFile(file, []byte(`{"rules": [{"subject": "tag:ci", "path": "agents/build"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"ur", "evs", "rules", repoId.String(), "show", "--history"},
+		{"ur", "evs", "rules", repoId.String(), "allow", "tag:ci", "agents/build"},
+		{"ur", "evs", "rules", repoId.String(), "deny", "tag:ci"},
+		{"ur", "evs", "rules", repoId.String(), "set", file},
+		{"ur", "evs", "rules", repoId.String(), "lift"},
+		{"ur", "evs", "repair", repoId.String()},
+		{"ur", "evs", "repair", repoId.String(), "src/main.go"},
+	} {
+		cli, _, stderr := newTestUrCli(daemon.socketPath)
+		if code := cli.main(context.Background(), args); code == urExitOk || !strings.Contains(stderr.String(), "deferred past launch (QD-1032)") {
+			t.Errorf("%v: exit %d: %s", args, code, stderr.String())
+		}
+	}
 }
 
 func TestEvsRulesAndRepairReachTheDaemonsMethods(t *testing.T) {

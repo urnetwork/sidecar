@@ -329,8 +329,9 @@ type searchPrefixPathKey struct {
 }
 
 // EVS1-M6-04's judge over one repo as its masks ask it (see the file header), from the verdicts this device holds and
-// never a read of evs. Nil where the repo's rows hold no rule set. A ruled repo on a client whose rules no composition
-// enabled answers every candidate unsearchable, as every read of it is refused (EvsRepo.prefixRuled). Else a version is
+// never a read of evs. Nil where the repo's rows hold no rule set, and on a client whose rules are dark, the launch
+// default (QD-1032), whatever its rows hold. A ruled repo on a client running the rules that no composition gave a
+// judge answers every candidate unsearchable, as every read of it is refused (EvsRepo.prefixRuled). Else a version is
 // ignored where the head reader's record of its path holds it above the accepted version and at or below
 // IgnoredThrough, or where the mirror's journal holds an ignored write, creation or removal of the path at it. The
 // journal is read once, at the first ask, and held as each path's ignored versions: the events no repair has settled

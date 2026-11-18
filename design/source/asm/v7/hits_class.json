@@ -769,7 +769,7 @@
  {
   "family": "mib64_trigger",
   "file": "05-CORE.md",
-  "line": 892,
+  "line": 890,
   "col": 79,
   "match": "64 MiB",
   "snippet": "          dictionaries and doc tables in an LRU within Search.MemoryByteCount (64 MiB on the daemon, inside",
@@ -782,7 +782,7 @@
  {
   "family": "mib64_trigger",
   "file": "05-CORE.md",
-  "line": 902,
+  "line": 900,
   "col": 42,
   "match": "64 MiB",
   "snippet": "- **Pass (cli/UI.md:82-85).** Argon2id at 64 MiB, t=3, p=4 (RFC 9106 §4), or 19 MiB, t=2, p=1 on mobile and wasm (OWASP). The pass or the OS keystore yields U, which opens every R_n (owner decision 23's shared unlock);",

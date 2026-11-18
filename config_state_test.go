@@ -29,10 +29,13 @@ var (
 // The first entry's time, ms since the epoch.
 const testConfigStartMs = int64(1_800_000_000_000)
 
-// The defaults with a logger that keeps refusals and forks out of the test's output.
+// The defaults with a logger that keeps refusals and forks out of the test's output, and with the client-checked prefix
+// rules on, which launch keeps dark (QD-1032): every test net and every reader it starts runs them alike, so the rules'
+// own tests run on the log as written. The launch tests (acl_prefix_settings_test.go) run DefaultConfigLogSettings'.
 func testConfigLogSettings() *ConfigLogSettings {
 	settings := DefaultConfigLogSettings()
 	settings.Log = NewNoopLogger()
+	settings.AclPrefix = testAclPrefixSettingsOn()
 	return settings
 }
 
@@ -129,6 +132,12 @@ func newTestConfigNet(t testing.TB) *testConfigNet {
 
 // newTestConfigNet's network under the id networkLabel names, for a test that runs two networks side by side.
 func newTestConfigNetOf(t testing.TB, networkLabel string) *testConfigNet {
+	return newTestConfigNetWith(t, networkLabel, testConfigLogSettings())
+}
+
+// newTestConfigNetOf's network whose reader under test runs a log of settings: the prefix rules' tests, say, which run
+// the log with the rules on (acl_prefix_dark_test.go).
+func newTestConfigNetWith(t testing.TB, networkLabel string, settings *ConfigLogSettings) *testConfigNet {
 	self := &testConfigNet{
 		t:             t,
 		networkId:     testConfigId(networkLabel),
@@ -149,7 +158,7 @@ func newTestConfigNetOf(t testing.TB, networkLabel string) *testConfigNet {
 	}
 	self.signedGenesis = self.sign(self.owner, bridge.SignedType_SIGNED_GENESIS, genesis)
 	self.chain = bridge.GenesisChain(self.signedGenesis)
-	log, err := NewConfigLog(testConfigLogSettings(), self.signedGenesis)
+	log, err := NewConfigLog(settings, self.signedGenesis)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -39,7 +39,7 @@
   "num": 5,
   "code": "CORE",
   "words": 11196,
-  "code_words": 8507,
+  "code_words": 8470,
   "ceiling": 3500,
   "over": 7696,
   "over_pct": 219.9
@@ -57,7 +57,7 @@
   "num": 7,
   "code": "TEAM",
   "words": 12152,
-  "code_words": 15207,
+  "code_words": 15206,
   "ceiling": 3500,
   "over": 8652,
   "over_pct": 247.2
@@ -146,11 +146,11 @@
  {
   "num": 17,
   "code": "BRIDGE",
-  "words": 9699,
+  "words": 9689,
   "code_words": 6107,
   "ceiling": 3800,
-  "over": 5899,
-  "over_pct": 155.2
+  "over": 5889,
+  "over_pct": 155.0
  },
  {
   "num": 18,

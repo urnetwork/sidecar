@@ -23,6 +23,10 @@
 //
 //	{"rules": [{"subject": "tag:ci", "path": "agents/build"}, {"subject": "user:ops@example.com"}]}
 //
+// Deferred to Later (QD-1032): while the daemon's evs client keeps the prefix rules dark, the launch default, every
+// form refuses before anything is asked or filed, naming the deferral and the repo per prefix that launch uses as the
+// write boundary (sidecar.ErrAclPrefixRulesDeferred). Each method refuses alike, so no control call files a set either.
+//
 // Paths and subjects are the person's own and go only between ur and its daemon on this device (I-13).
 
 package main
@@ -281,7 +285,8 @@ func urEvsRulesRequest(running *sidecar.Sidecar, repoId sidecar.Id, params *urEv
 }
 
 // The rules methods over target, when it hosts a Sidecar: show and the subjects' check read; the filing is a Confirm
-// one, so nothing but a control call a person confirmed files a set.
+// one, so nothing but a control call a person confirmed files a set. Each refuses with sidecar.ErrAclPrefixRulesDeferred
+// while the network's evs client keeps the rules dark (QD-1032).
 func urEvsRulesMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
 	rules, ok := target.(urEvsRulesTarget)
 	if !ok {
@@ -303,6 +308,9 @@ func urEvsRulesMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
 		client, err := rules.evsClient()
 		if err != nil {
 			return nil, nil, nil, sidecar.Id{}, err
+		}
+		if !client.PrefixRulesEnabled() {
+			return nil, nil, nil, sidecar.Id{}, sidecar.ErrAclPrefixRulesDeferred
 		}
 		return params, running, client, repoId, nil
 	}
@@ -418,15 +426,15 @@ func runUrEvsRules(ctx context.Context, cli *urCli, options docopt.Opts) error {
 	default:
 		return errors.New("ur evs rules takes show, allow, deny, set or lift")
 	}
-	if 0 < len(params.Subjects) {
-		refusals := &urEvsRepoReply{}
-		if err := cli.callDaemon(ctx, urMethodEvsRulesSubjects, params, false, refusals); err != nil {
-			return err
-		}
-		if 0 < len(refusals.Lines) {
-			printLines(refusals)
-			return errors.New("nothing was filed")
-		}
+	// the subjects read against the head before anything is asked, lift's none among them: the daemon refuses here
+	// while its rules are dark (QD-1032), so no question is put for a filing it would refuse
+	refusals := &urEvsRepoReply{}
+	if err := cli.callDaemon(ctx, urMethodEvsRulesSubjects, params, false, refusals); err != nil {
+		return err
+	}
+	if 0 < len(refusals.Lines) {
+		printLines(refusals)
+		return errors.New("nothing was filed")
 	}
 	confirmed, err := confirmOnTty(cli, question)
 	if err != nil {

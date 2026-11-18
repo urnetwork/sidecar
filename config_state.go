@@ -72,6 +72,11 @@ type ConfigLogSettings struct {
 	// §7.9's Recovery values, the window an activation waits out (config_recovery.go). Nil is
 	// DefaultConfigRecoverySettings.
 	Recovery *ConfigRecoverySettings
+	// The client-checked prefix write rules' settings, whose Enabled says whether the log takes a RepoPrefixRules
+	// (acl_statement.go): off at launch, where the log refuses each at its position as a type whose rule this release
+	// does not carry (QD-1032). Every verifier of one network's log, api's included, must hold the same switch. Nil is
+	// DefaultAclPrefixSettings.
+	AclPrefix *AclPrefixSettings
 }
 
 // §7.9's values.
@@ -81,6 +86,7 @@ func DefaultConfigLogSettings() *ConfigLogSettings {
 		StateAtCheckpointInterval: 64,
 		StateAtCacheCount:         8,
 		Recovery:                  DefaultConfigRecoverySettings(),
+		AclPrefix:                 DefaultAclPrefixSettings(),
 	}
 }
 

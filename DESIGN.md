@@ -4222,10 +4222,8 @@ holds     per indexed ref this device follows: the ref version it verified (§11
           the record header, about 80 B more a file, a reader asking gkm for both generations when they differ
           (owner decision 289); derived data sealed under HKDF(R_n, "urnetwork-sidecar-v1/local/search") with
           XChaCha20-Poly1305, random nonces, AAD = repo || ref || path || version || part: the search manifest
-          (the version of the index ref its bucket files are whole at, each file's version, state and the
-          oldest and newest time of its rows, all's own pin, the roll-ups between the two pins and the last
-          Search.PinRingCount pins replayed) with the sync round's plan beside it (its target, the files
-          wanted and those staged; §11.14's Reads, DESIGN-DETAILS.md section 7), each shard's dictionary block
+          (what §11.14's pin row records, and the last Search.PinRingCount pins replayed) with the sync
+          round's plan beside it (§11.14's Reads, DESIGN-DETAILS.md section 7), each shard's dictionary block
           index and n_d array, the version table (below), and on desktops the local layer (commits past
           indexed_through this device indexed from its own plaintext, dropped once the index covers them),
           mismatched entries and the local vocabulary; a bucket a roll-up dropped, kept where a stale all is
@@ -6600,7 +6598,7 @@ after       it self-joins, revokes M's lost devices and rotates as §10.8 says, 
             that takes no wrap it joins its other groups as §10.8 says; it then offers ur keychain
             recovery-rotate (§5.9), M having no current binding until a device outside P signs one;
             RecoveryRebind's compromise shrinks every repo M reads, so the next rotation is cause REMOVE and
-            starts a path epoch, due within 24 h as every due is (§11.6; owner decision 585), while routine
+            starts a path epoch, due as §11.6's due row has every due (owner decision 585), while routine
             and lost request a rotation; old wraps are deleted in
             every case; no rebind or void reaches a keychain backup sealed before it, which the retired or
             voided code still opens, so after a compromise rebind or a void M revokes for compromise, and
@@ -18053,7 +18051,7 @@ ipv6     ::/0 goes through the tun too, with IPv6 copies of the two rules on Lin
 | After an uncovered agent's reap, new bridge deltas wait for a config rotation (§8.12) by a config writer or the agent's admitting device, a wrapped one by rotation alone (§7.10; owner decisions [128](#od-128), [144](#od-144)) | Medium | Medium | No admin needed ([owner decision 128](#od-128)); covered agents' reaps need none (§10.5); withdrawals never wait; `ur bridge` shows the wait |
 | A tun's overlay address leaks in WebRTC (libwebrtc's 100.64/10 handling is unverified) | Unknown | Low | `ur tun ip auto` refuses behind `BridgeComponentSettings.AutoAddressEnabled`, false, until §22.9's Browsers check shows no ICE candidate in the overlay block; an explicit address and an admin's assignment work |
 | Links, or forwarding's compile, do not fit the iOS tunnel | High | Medium | No iOS links until §22 measures; Q-BRIDGE-2's own-client links; the compile cap of [owner decision 216](#od-216), measured to admit about 4,300 devices' rows at the tunnel's connected baseline and 770 to 1,440 under provider load, a network past it keeping its last verified state on that device and alarming; links fail closed meanwhile |
-| A revocation the posture cannot check does not apply on a device that cannot compile | Low | High | Accepted by the owner ([owner decision 216](#od-216)): forwarding never drops for it; `bridge_alarm` at 10 minutes, again at doubling intervals to once a day and for each newly overdue entry, the condition in the status throughout ([owner decision 487](#od-487)); denials the posture can check apply at once; the review phase's storage-backed compile removes the memory cap as a cause ([owner decision 366](#od-366); DESIGN-DETAILS.md section 4) |
+| A revocation the posture cannot check does not apply on a device that cannot compile | Low | High | Accepted by the owner ([owner decision 216](#od-216)): forwarding never drops for it; `bridge_alarm` on the schedule 17.8's forwarding roles give, the condition in the status throughout ([owner decision 487](#od-487)); denials the posture can check apply at once; the review phase's storage-backed compile removes the memory cap as a cause ([owner decision 366](#od-366); DESIGN-DETAILS.md section 4) |
 | Between the app's runs an app's forwarding role follows the log unwitnessed, so an operator that withholds a revocation from it keeps a revoked subject reaching that device | Low | Medium | the sidecar role's witnessed pin at each run (§18.6); daemon hosts witness by HeadCheck (§6.4); it needs a malicious operator, and the subject's own revocation still ends it at every other device |
 | A base that leaves a bridge filing unfolded and changes the policy its approval was judged by turns that filing's verdict at every reader | Low | Low | writers fold through their tip whenever a bridge statement is unfolded, so only a filing in the seconds between a head's writing and its base's acceptance is exposed; it fails closed alike at every reader, and the requester files again (17.8; [owner decision 473](#od-473)) |
 | A standing member device keeps filing bridge bodies sealed to generations that never form, holding the config fold | Low | Medium | each is void at the fold `UnformedVoidWait` (24 h) after its entry; while they keep coming, bases past the tail cap wait up to that long at a time; the writer's `config_key_waiting` line names the filer on every plan, and revoking it, which needs no base, ends the hold one wait after its last filing (17.8; [owner decision 478](#od-478)) |
