@@ -78,7 +78,12 @@ evs_drop_preview(repo, path, follow?) -> versions, frees_bytes, shared_bytes, in
                  preview_id: §11.13's server dry run for an admin-scoped sidecar, within the repo's
                  evs_drop_previews_per_day (§20.4); the drop itself is a person's, at a device (D-MCP-32)
 mail_list(alias?, unread?, cursor?) -> headers   mail_read(id or hit) -> headers, text, attachment links
-mail_send(from_alias, to, cc, bcc, subject, text, in_reply_to?) -> status, message_id, approval_id?
+mail_send(from_alias, to, cc, bcc, subject, text, in_reply_to?, uses?) -> status, message_id, approval_id?
+                 uses, 2 or more, asks for a multi-use template: the daemon builds it of the call's from_alias
+                 and recipients, to, cc and bcc the allowed set, with no body hash or preview, and answers
+                 approval_pending with the template's id; once it is approved, each mail_send from that alias
+                 to a subset of them spends a use, the agent retrying its first mail (16.6's multi-use row;
+                 owner decision 613)
 mail_aliases()   mail_alias_create(alias, group?)   mail_alias_delete(alias)
 socket_list()   socket_status(name)   socket_listen(name, local_port) -> status, grant_id   socket_unlisten(name)
 tls_publish(host, port?, local_port, audience, expires, app_mode?, alpn?) -> url, grant_id, cert_file?
@@ -268,14 +273,20 @@ k approvers  a rule asking for k needs k decisions with one request_sha256 from 
              admin clause where that applies, never one of the k (owner decision 471); the budget is the
              smallest uses, the expiry the earliest not_after
 multi-use    a decision with uses > 1 binds a template, a CanonicalAction with scope = true whose non-empty
-             fields every use equals, recipients a subset; each use's full action is what D-MCP-11 hashes; the
-             request names the uses its agent asks for a template, 1 for any other action, daemon-built, under
-             request_sha256 and rendered beside the action's other daemon-built fields, and the approver signs
-             that count as uses: an app's Decide (§18.5) approves the request as shown, and ur approve --uses
-             defaults to it, another count refused or narrowed as before, above 1 only for a template and never
-             above the request's; the field is ApprovalRequest.uses = 18 at the request's version 2, which every
-             request is filed at, an approver that knows only version 1 refusing version 2 whole, and a
-             version-1 template names no count, so an app lists deny alone for it (owner decision 574)
+             fields every use equals, recipients a subset, and whose fields its kind binds every use equals set
+             or empty: an egress_change's require_default_egress, so a template that leaves it empty covers only
+             uses that leave it unset and one under exits covers one distinct action (owner decision 614); each
+             use's full action is what D-MCP-11 hashes; the request names the uses its agent asks for a
+             template, 1 for any other action, daemon-built, under request_sha256 and rendered beside the
+             action's other daemon-built fields, and the approver signs that count as uses: an app's Decide
+             (§18.5) approves the request as shown, and ur approve --uses defaults to it, another count refused
+             or narrowed as before, above 1 only for a template and never above the request's; the field is
+             ApprovalRequest.uses = 18 at the request's version 2, which every request is filed at, an approver
+             that knows only version 1 refusing version 2 whole, and a version-1 template names no count, so an
+             app lists deny alone for it (owner decision 574); an agent asks for a template only through
+             mail_send's uses, 2 or more, for which the daemon builds one of the call's from_alias and
+             recipients, to, cc and bcc the allowed set, with no body hash or preview, and every other O tool
+             files one use (16.5; owner decision 613)
 grants       an approval activates one grant, by §8.8's GrantActivate under the grant_id the approval fixes,
              or, for bridge_expose, at most uses BridgeRoute or BridgeMap rules, each under the rule id §17.8
              derives from its use's effect_key; a replay adds none, and a revoked grant_id or withdrawn rule id
@@ -642,7 +653,8 @@ message CanonicalAction {                   // built by the daemon; hashed as st
                                             // 10, 11, 14, 26, 29 and 38; 4 for a dial or route grant, in fields 8,
                                             // 10, 11, 28, 29 and 38, a share's also 40 (owner decisions 220,
                                             // 457); approvers that do not know a version refuse it
-  bool scope = 13;                          // a multi-use template (16.6)
+  bool scope = 13;                          // a multi-use template (16.6), which an agent asks for only through
+                                            // mail_send's uses (owner decision 613)
   bytes repo_id = 14; string path = 15; bytes content_sha256 = 16; uint64 base_version = 17;  // O-tier evs_write,
                                                         // evs_delete; mail_alias_delete's mailcfg record (16.6)
   string dns_name = 18; string dns_type = 19; string dns_value = 20; uint32 dns_ttl = 21;     // dns_set, dns_delete
@@ -675,7 +687,9 @@ message CanonicalAction {                   // built by the daemon; hashed as st
                                             // 5 and required by no template, rendered as its own clause, "and
                                             // require its devices to keep default egress on"; refused under auto
                                             // or none and on any other kind, version 1, on no server path; an
-                                            // approver that cannot name it refuses the action (owner decision 607)
+                                            // approver that cannot name it refuses the action (owner decision 607);
+                                            // a template binds it set or empty, so one that leaves it empty covers
+                                            // only uses that leave it unset (16.6; owner decision 614)
 }
 // Rendering (D-MCP-17): approver devices render only these daemon-built fields as the action, with the
 // request's daemon-built 14 to 17 and an opened sealed_detail, and ApprovalRequest.summary and preview as

@@ -1856,3 +1856,25 @@ assert DECISIONS_INTRO.count(_D610) == 1, 'decisions lead moved'
 DECISIONS_INTRO = DECISIONS_INTRO.replace(
     _D610, _D610 + "A second sweep the same day numbers the build's last answers: the mail breakers' outside measures "
     "(611) and the notice pages from api and taskworker, with role mail's route to them (612). ")
+INDEX += [
+    (613, "`mail_send`'s template uses",
+     "`mail_send`'s optional `uses` asks for a template of its alias and recipients; every other O tool files one "
+     'use.'),
+    (614, 'A template binds the egress requirement',
+     "An `egress_change` template binds `require_default_egress` set or empty, so one without it covers only "
+     'filings without it.'),
+]
+for _n, _note in [
+        (574, ' Extended by @@OD:613@@: `mail_send`\'s `uses` asks for a template.'),
+        (607, ' Extended by @@OD:614@@: a template binds it, empty included.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 615))
+DATES.update({613: '2026-11-18', 614: '2026-11-18'})
+_D612 = "with role mail's route to them (612). "
+assert DECISIONS_INTRO.count(_D612) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D612, "with role mail's route to them (612), `mail_send`'s template uses (613), extending @@OD:574@@, and an "
+    "`egress_change` template's binding of its requirement (614), extending @@OD:607@@. ")
