@@ -262,7 +262,6 @@ func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 				// DESIGN-DETAILS 7.2.1's asker and merge settings (QD-707, QD-709); the ended ids' bound, the retry, reopen
 				// and seen-again counts and the pins that wait are readings of counts the design names
 				RemoteOwnAskCount:          2,
-				RemoteOtherWarmCount:       1,
 				RemoteSkipTimeout:          2 * time.Minute,
 				RemoteOnlineTimeout:        10 * time.Minute,
 				RemoteRefusedTimeout:       10 * time.Minute,
@@ -319,9 +318,6 @@ func TestDefaultProtocolSettingsMatchDesign(t *testing.T) {
 	// minimum it stands in for
 	want := &SidecarProtocolSettings{
 		HelloCacheTimeout:                10 * time.Minute,
-		MarkedKeepaliveInterval:          60 * time.Second,
-		MarkedSessionTimeout:             120 * time.Second,
-		MarkedPeerMaxCount:               3,
 		DefaultCallTimeout:               15 * time.Second,
 		HelloUnknownPeerCount:            1024,
 		CallSendRetryInterval:            250 * time.Millisecond,

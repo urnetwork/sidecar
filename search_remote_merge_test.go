@@ -206,7 +206,6 @@ func TestOpenCheckTable(t *testing.T) {
 	fixture := newTestSearchRemoteAsker(t, team, team.danaPhone)
 	docs := testSearchRemoteDocs("doc ", 900, 800, 700, 600)
 	fixture.serve(t, team.danaNas).corpus.serveText(team.danaVault, 5, docs...)
-	fixture.warm(t)
 	stream := fixture.search(t, team.danaVault)
 	page := testSearchRemoteNext(t, stream)
 	if len(page.hits) != 4 {
