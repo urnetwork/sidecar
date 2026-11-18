@@ -23,8 +23,10 @@
 // writer splits into pushes each within it (evs_write_split.go). A one-part push keeps them in its payload (QD-806).
 //
 // Format 2 (EVS-FORMAT.md's format 2 chapter) parses through ParseEvsStatementFormat2 and builds through BuildFormat2,
-// which take flags 256 DROP and 512 CUT and fields 33 and 34: a DROP sets flag 256 alone, drop_sha256 over its body
-// and index_epoch 0, and its body and lists ride as payload sections 9 and 10 (evs_drop_payload.go).
+// which take flags 256 DROP and 512 CUT and fields 33 and 34: a DROP sets flag 256 alone and drop_sha256 over its
+// body, and its body and lists ride as payload sections 9 and 10 (evs_drop_payload.go). Its index_epoch is any push's:
+// the head's when it carries §11.14's index rewrites, which 5d holds to it as any push writing an index file
+// (QD-1078), else 0.
 //
 // On every leg. Package-level functions are safe for concurrent use, and so is an EvsStatementBuilder whose sign
 // function is.
@@ -102,8 +104,8 @@ func ParseEvsStatement(statementBytes []byte) (*EvsStatement, error) {
 }
 
 // A statement's bytes held to format 2's shape: format 1's, with flag 256 DROP, alone, and drop_sha256 present
-// exactly when it is, and flag 512 CUT and index_epoch taken. A DROP's index_epoch is 0. What a CUT and an index
-// push's index_epoch must equal is 5d's, which needs the head.
+// exactly when it is, and flag 512 CUT and index_epoch taken, a DROP's among them, since its index rewrites name the
+// head's (QD-1078). What a CUT's and an index push's index_epoch must equal is 5d's, which needs the head.
 func ParseEvsStatementFormat2(statementBytes []byte) (*EvsStatement, error) {
 	return parseEvsStatement(statementBytes, true)
 }
@@ -182,8 +184,8 @@ func (self *EvsStatement) checkShape(format2 bool) error {
 		if drop != (len(push.GetDropSha256()) != 0) {
 			return fmt.Errorf("%w: drop_sha256 without flag 256, or flag 256 without it", ErrEvsPushInvalid)
 		}
-		if drop && (flags != uint32(protocol.EvsPushFlag_EVS_PUSH_DROP) || push.GetIndexEpoch() != 0) {
-			return fmt.Errorf("%w: a DROP with other flags or an index_epoch", ErrEvsPushInvalid)
+		if drop && flags != uint32(protocol.EvsPushFlag_EVS_PUSH_DROP) {
+			return fmt.Errorf("%w: a DROP with other flags", ErrEvsPushInvalid)
 		}
 	}
 	if flags&^knownFlags != 0 {
