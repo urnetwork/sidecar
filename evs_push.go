@@ -261,6 +261,13 @@ func (self *EvsRepo) buildPush(ctx context.Context, sealed *EvsSealedWrite, push
 		change.StagedByteCount = evsStagedByteCount(pathStaged[path])
 		pushPlan.Changes = append(pushPlan.Changes, change)
 	}
+	if plan.drop != nil {
+		// a DROP's body, drawn afresh for this statement, and its lists (evs_drop_push.go): format 2's flag 256
+		if err := plan.drop.fill(pushPlan); err != nil {
+			return nil, err
+		}
+		format2 = true
+	}
 	builder := NewEvsStatementBuilder(self.client.args.Sign)
 	var built *EvsBuiltPush
 	if format2 {
@@ -270,6 +277,12 @@ func (self *EvsRepo) buildPush(ctx context.Context, sealed *EvsSealedWrite, push
 	}
 	if err != nil {
 		return nil, err
+	}
+	if plan.drop != nil {
+		// the DROP's body and lists held to §11.6's checks as evs will hold them, before anything is sent
+		if err := plan.drop.check(built.Statement, pushPlan); err != nil {
+			return nil, err
+		}
 	}
 	attempt.built = built
 	if len(built.Parts) == 0 {

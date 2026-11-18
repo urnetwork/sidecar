@@ -50,7 +50,8 @@
 // Format 2's read states and settings answer ErrEvsFormatUnsupported for that path alone, never a fork, so the
 // caller reads the rest (EVS1-M2-39), to a reader of format 1 alone (EvsClient.format2Reader). A reader of format 2
 // takes versioning 1 and 2 and kind-5 and staged locators, each version judged where it sits (evs_verify_format2.go;
-// EVS2-M10-17), and `collected` for a version's content; a drop's states stay refused until EVS2-M10-22 reads them.
+// EVS2-M10-17), `collected` for a version's content, and a drop's states by the drop's own checks
+// (evs_drop_verify.go; EVS2-M10-22).
 //
 // On every leg. Safe for concurrent use.
 
@@ -62,6 +63,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -115,6 +117,9 @@ type EvsVerifiedPath struct {
 	// Format 2: evs served a version its reader ignores where it sits (evs_verify_format2.go's ignored rows), which
 	// alarmed. The path reads as Absent.
 	Ignored bool
+	// Format 2: the version is listed by a DROP that passed this reader's checks (evs_drop_verify.go): drop_pending or
+	// dropped by this device's clock; nil for every other version, one whose drop failed them among them.
+	Drop *EvsDropState
 }
 
 // A removal of a path, or of a prefix holding it, that the reader's own walk holds and evs no longer names: the
@@ -152,6 +157,8 @@ type EvsPathEpochs struct {
 	// An older version asked for by number: history, not a rollback, so the walk after it is not checked (§11.9's
 	// "older ones on request").
 	History bool
+	// That version's number, 0 for the newest: what a drop's checks judge (DESIGN-DETAILS 10.2.3's H3).
+	Version uint64
 	// The path's own pin, its record's PinVersion, else the ref pin before this read: the walk checks statements after
 	// it and after the version's own (DESIGN-DETAILS 9.2.4's since = max(u, pin(X))).
 	Since uint64
@@ -163,6 +170,13 @@ type EvsPathEpochs struct {
 // that epoch. A rooted statement of an epoch the request did not name, with no proof, adds that epoch to the epochs
 // answered, which the reader asks once more naming; of one it named, it refuses.
 func (self *EvsVerifier) VerifyPath(head *EvsVerifiedHead, epochs *EvsPathEpochs, reply *protocol.EvsReadPathReply) (*EvsVerifiedPath, []uint64, error) {
+	dropState := reply.GetState() == protocol.EvsReadPathState_EVS_READ_PATH_DROP_PENDING ||
+		reply.GetState() == protocol.EvsReadPathState_EVS_READ_PATH_DROPPED
+	if reader := self.client.format2Reader(); dropState && reader != nil {
+		// a version a DROP lists, judged by the drop's own checks (evs_drop_verify.go; EVS2-M10-22)
+		verified, err := reader.verifyDropPath(self, head, epochs, reply)
+		return verified, nil, err
+	}
 	collected := reply.GetState() == protocol.EvsReadPathState_EVS_READ_PATH_COLLECTED && self.client.format2Reader() != nil
 	if (reply.GetState() != protocol.EvsReadPathState_EVS_READ_PATH_STATE_UNSPECIFIED && !collected) || len(reply.GetDropId()) != 0 ||
 		reply.GetNotBeforeMs() != 0 || reply.GetDropVersion() != 0 || len(reply.GetDropStatement()) != 0 || len(reply.GetDropBody()) != 0 {
@@ -648,4 +662,69 @@ func evsVerifyPresent(push *protocol.EvsPush, tokenPath EvsTokenPath, absentPath
 		return nil, fmt.Errorf("%w: a later statement removes a prefix of the path, served as unchanged", ErrEvsEntryRefused)
 	}
 	return change, nil
+}
+
+// A listed version's state on a reader (§11.7's states row; EVS2-M10-22), on every leg beside the verified path that
+// carries it; the checks are evs_drop_verify.go's and the body store evs_drop_state.go's.
+
+var (
+	// A read of a version a drop took (§11.7's states row): nothing is fetched or shown. EVS_DROPPED; MCP answers it
+	// FAILED_PRECONDITION (§16).
+	ErrEvsDropped = errors.New("evs: EVS_DROPPED: a version whose history was dropped")
+	// A reply named a drop whose body it left out, past its byte bound, and this device holds none: the path is read
+	// again, the body first (DESIGN-DETAILS 10.2.3's reply size).
+	errEvsDropBodyMissing = errors.New("evs: a drop's body the reply left out")
+)
+
+// History's and List's states of a version a checked DROP covers (§18.5's History): kept and collected are the others.
+const (
+	EvsVersionStateDropPending = "drop_pending"
+	EvsVersionStateDropped     = "dropped"
+)
+
+// What a reader found of a version a checked DROP covers.
+type EvsDropState struct {
+	DropId Id
+	// The DROP's ref version, 0 where this device could not place its statement (a pending drop's statement evs sent
+	// alone, below the walk).
+	DropVersion uint64
+	// The DROP's signer, a repo admin at its auth pin.
+	SignerSidecarId Id
+	// The body's not_before_ms: drop_pending before it by this device's clock.
+	NotBefore time.Time
+	// evs withheld the version's entry version, as it does for a dropped version whose chain names an inline record
+	// (§11.9's serve row): nothing of it can be read, and the verified path's Entry holds only its number and push.
+	Withheld bool
+}
+
+// Whether the version reads as dropped at now: its window passed, or evs withheld its entry version. False for nil.
+func (self *EvsDropState) Dropped(now time.Time) bool {
+	return self != nil && (self.Withheld || !now.Before(self.NotBefore))
+}
+
+// The state History shows at now, "" for nil.
+func (self *EvsDropState) Name(now time.Time) string {
+	switch {
+	case self == nil:
+		return ""
+	case self.Dropped(now):
+		return EvsVersionStateDropped
+	}
+	return EvsVersionStateDropPending
+}
+
+// The drop's id, zero for nil.
+func evsDropIdOf(state *EvsDropState) Id {
+	if state == nil {
+		return Id{}
+	}
+	return state.DropId
+}
+
+// The drop's window's end, zero for nil.
+func evsDropNotBeforeOf(state *EvsDropState) time.Time {
+	if state == nil {
+		return time.Time{}
+	}
+	return state.NotBefore
 }

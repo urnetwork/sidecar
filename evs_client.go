@@ -182,6 +182,9 @@ type EvsClient struct {
 	// each ref whose creating push evs's gate refused, with that statement's pin and generation: no second statement
 	// is built for the ref on them (evs_push.go; QD-803)
 	gateRefusals map[evsRefKey]*evsGateRefusal
+	// the drop engine's state on the legs that drop, an *evsDropClient made on first use (evs_drop_push.go): the
+	// completed dry runs DropHistory may name, the DROP index hook, and the checked DROP bodies this device keeps
+	drops any
 }
 
 // A creating push's 412 GATE_CLOSED as the sender keeps it for its ref: the refused statement's auth pin and

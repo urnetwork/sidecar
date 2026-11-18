@@ -392,6 +392,8 @@ type evsReadPath struct {
 	// epochs the verifier needs proofs in, asked once more
 	more      []uint64
 	moreAsked bool
+	// the reads again that a drop's body left out of a reply asked (EvsSettings.DropBodyReadCount)
+	dropReads int
 	// a lookup ran for it in this call
 	lookedUp bool
 	// the reply as verified, or the absence a lookup settled with no token of the path sent
@@ -467,6 +469,10 @@ func (self *EvsRepo) readRoundFromPin(ctx context.Context, refId Id, keys *evsRe
 		fresh = true
 	}
 	request := &protocol.EvsReadRequest{RefId: refId.Bytes(), PinVersion: fromVersion, Fresh: fresh}
+	if reader := self.client.format2Reader(); reader != nil {
+		// the DROP bodies this device holds checked, which evs sends none of again (DESIGN-DETAILS 10.2.3)
+		request.HeldDrops = reader.heldDrops(self.client, self.repoId, refId)
+	}
 	for _, path := range paths {
 		readPath := &protocol.EvsReadPath{TokenPaths: path.epochPaths, Version: path.version}
 		if path.version != 0 {

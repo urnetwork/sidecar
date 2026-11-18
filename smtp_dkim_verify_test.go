@@ -2,7 +2,8 @@
 
 // The sender's signatures checked by SMTP-M5-04's verifier in smtpedgeservice, whose canonicalizer
 // was written apart from smtp_dkim_sign.go's: a receiver's whole verify, body hash included, and the
-// header-only check §14.8's joins run on a report that masked recipients.
+// header-only check §14.8's joins run on a report that masked recipients. smtp_dkim_verify_mox_test.go
+// checks the same messages by mox's verifier, which no one here wrote.
 
 package sidecar_test
 
@@ -168,23 +169,30 @@ func TestSmtpDkimSignaturesPassTheEdgesVerifier(t *testing.T) {
 	}
 }
 
-// §14.6: a report that masks the recipients breaks the full signature and leaves the fixed one, so a
-// medium join still finds the network (§14.8).
-func TestSmtpDkimSecondSignatureSurvivesAMaskedTo(t *testing.T) {
-	signTime := time.Date(2026, time.November, 8, 12, 0, 0, 0, time.UTC)
-	verifier := newTestVerifier(t, signTime)
-	signed := testVerifySigned(t, testVerifyMessages()[0].message, 0, signTime)
+// The first message with its recipients masked, as a report may carry it.
+func testVerifyMasked(t *testing.T, signed []byte) []byte {
+	t.Helper()
 	masked := bytes.Replace(signed, []byte("To: Suzie Q <suzie@shopping.example>"), []byte("To: xxxxxxxx@redacted.example"), 1)
 	masked = bytes.Replace(masked, []byte("Cc: <a@b.example>"), []byte("Cc: redacted"), 1)
 	if bytes.Equal(masked, signed) {
 		t.Fatal("nothing was masked")
 	}
+	return masked
+}
+
+// §14.6: a report that masks the recipients breaks the full signature and leaves the fixed one, so a
+// medium join still finds the network (§14.8). The fixed signature is the header block's first, after
+// the head's single fields (DESIGN-DETAILS 3.2.3), and the full one the second.
+func TestSmtpDkimSecondSignatureSurvivesAMaskedTo(t *testing.T) {
+	signTime := time.Date(2026, time.November, 8, 12, 0, 0, 0, time.UTC)
+	verifier := newTestVerifier(t, signTime)
+	masked := testVerifyMasked(t, testVerifySigned(t, testVerifyMessages()[0].message, 0, signTime))
 	headerEnd := bytes.Index(masked, []byte("\r\n\r\n")) + 4
 	results, err := verifier.VerifyHeaders(context.Background(), masked[:headerEnd])
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 2 || results[0].Result != smtpedgeservice.SmtpDkimResultFail || results[1].Result != smtpedgeservice.SmtpDkimResultPass {
-		t.Errorf("results %+v %+v", results[0], results[1])
+	if len(results) != 2 || results[0].Result != smtpedgeservice.SmtpDkimResultPass || results[1].Result != smtpedgeservice.SmtpDkimResultFail {
+		t.Fatalf("results %+v", results)
 	}
 }

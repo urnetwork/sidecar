@@ -2,9 +2,12 @@ package fault
 
 import (
 	"bytes"
+	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -101,7 +104,8 @@ func TestGateFileNamesEachCasesConventionalTests(t *testing.T) {
 		{gate: "M2", rowId: "FS-9", t2: "TestFs9"},
 		// forged: T2 alone, and its twin on T3
 		{gate: "M2", rowId: "FS-10", t2: "TestFs10", t3: "TestFs10OnT3"},
-		{gate: "M2", rowId: "FS-5", t3: "TestFs5OnT3"},
+		// T3 alone (FS-5 was the example until M2's sweep named its test in evshost)
+		{gate: "M6", rowId: "FS-35", t3: "TestFs35OnT3"},
 		{gate: "M6-in", rowId: "FS-46", t2: "TestFs46", t3: "TestFs46OnT3"},
 	} {
 		row := gateFileRow(file, want.gate, want.rowId, want.caseName)
@@ -158,6 +162,132 @@ func TestGateFileShowsFs54AndFs55ByOpsTests(t *testing.T) {
 	fs55 := gateFileRow(file, "every", "FS-55", "")
 	if fs55 == nil || len(fs55.Tests) != 1 || fs55.Tests[0].Package != "./local/fs55" || !slices.Contains(fs55.Tests[0].Args, "-fs55.group={group}") {
 		t.Fatalf("FS-55 at every: %+v", fs55)
+	}
+}
+
+// A row's tests one after another, for a failure's message.
+func gateTestsStringForTest(tests []*GateTest) string {
+	parts := []string{}
+	for _, test := range tests {
+		parts = append(parts, fmt.Sprintf("%+v", *test))
+	}
+	return "[" + strings.Join(parts, "; ") + "]"
+}
+
+// FS-5's, FS-73's and FS-72's rollback case's T3 tests run in server's evshost behind sidecar_localstack, so M2's
+// and M10's sweeps name them there (owner decision 548; QD-995). Each row's T3 entry is the convention's test by
+// name, in ./evshost with sidecar_localstack added to the convention's tags. The rollback case keeps its T2 test
+// as the convention names it. Each row keeps the external and store clock the catalog gives it.
+func TestGateFileNamesFs5Fs73AndFs72RollbackInEvshost(t *testing.T) {
+	catalog := DefaultCatalog()
+	data, err := GateFile(catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := parseGateFileForTest(t, data)
+	evshostTags := "sidecar_testhooks,sidecar_pending,sidecar_localstack"
+	for _, want := range []struct {
+		gate     string
+		rowId    string
+		caseName string
+		tests    []*GateTest
+	}{
+		{gate: "M2", rowId: "FS-5", tests: []*GateTest{
+			{Repo: "server", Package: "./evshost", Tags: evshostTags, Stores: true, Names: []string{"TestFs5OnT3"}},
+		}},
+		{gate: "M10", rowId: "FS-73", tests: []*GateTest{
+			{Repo: "server", Package: "./evshost", Tags: evshostTags, Stores: true, Names: []string{"TestFs73OnT3"}},
+		}},
+		{gate: "M10", rowId: "FS-72", caseName: "rollback", tests: []*GateTest{
+			{Repo: "sidecar", Package: "./sidecartest/fault", Tags: "sidecar_testhooks", Names: []string{"TestFs72Rollback"}},
+			{Repo: "server", Package: "./evshost", Tags: evshostTags, Stores: true, Names: []string{"TestFs72RollbackOnT3"}},
+		}},
+	} {
+		testCase := catalog.Case(want.rowId, want.caseName)
+		row := gateFileRow(file, want.gate, want.rowId, want.caseName)
+		if testCase == nil || row == nil {
+			t.Errorf("%s has no %s %q", want.gate, want.rowId, want.caseName)
+			continue
+		}
+		if !reflect.DeepEqual(row.Tests, want.tests) {
+			t.Errorf("%s at %s runs %s, want %s", testCase, want.gate, gateTestsStringForTest(row.Tests), gateTestsStringForTest(want.tests))
+		}
+		if external := gateCaseExternal(testCase, gateCatalogName(want.gate)); row.External != external || row.StoreClock != testCase.StoreClock {
+			t.Errorf("%s at %s: external %q, store clock %t; the catalog gives %q, %t", testCase, want.gate, row.External, row.StoreClock, external, testCase.StoreClock)
+		}
+		// the convention's names and tiers, moved: every entry but the evshost one is the convention's own
+		conventionNames := []string{}
+		for _, test := range gateConventionalTests(testCase) {
+			conventionNames = append(conventionNames, test.Names...)
+			if test.Repo == "sidecar" && !slices.ContainsFunc(row.Tests, func(named *GateTest) bool { return reflect.DeepEqual(named, test) }) {
+				t.Errorf("%s at %s dropped the convention's T2 test %+v", testCase, want.gate, *test)
+			}
+		}
+		rowNames := []string{}
+		for _, test := range row.Tests {
+			rowNames = append(rowNames, test.Names...)
+		}
+		if !slices.Equal(rowNames, conventionNames) {
+			t.Errorf("%s at %s names %v, the convention %v", testCase, want.gate, rowNames, conventionNames)
+		}
+	}
+}
+
+// Apart from the cases their sweeps name, M2's and M10's rows follow the convention. Each case no sweep names runs
+// its conventional tests and nothing else, and the sweeps of gate_m2_out.go and gate_m10_out.go name only QD-995's
+// cases and add no item. So naming three tests in evshost changed no other row of either gate. TEST-M2-19 and
+// TEST-M10-05 extend these sweeps, and this test with them.
+func TestGateM2AndM10KeepTheConventionForEveryOtherCase(t *testing.T) {
+	catalog := DefaultCatalog()
+	wantSwept := map[string][]string{"M2": {"FS-5"}, "M10": {"FS-72's rollback", "FS-73"}}
+	for _, gate := range []string{"M2", "M10"} {
+		sweep := gateSweep(gate)
+		swept := []string{}
+		for caseName := range sweep.Cases {
+			swept = append(swept, caseName)
+		}
+		slices.Sort(swept)
+		if !slices.Equal(swept, wantSwept[gate]) {
+			t.Errorf("%s's sweeps name %v, want %v", gate, swept, wantSwept[gate])
+		}
+		caseCount := 0
+		for _, row := range GateRows(catalog, gate) {
+			if row.Row == "" {
+				continue
+			}
+			caseCount += 1
+			testCase := catalog.Case(row.Row, row.Case)
+			if testCase == nil {
+				t.Errorf("%s holds %s %q, which the catalog does not", gate, row.Row, row.Case)
+				continue
+			}
+			if _, ok := sweep.Cases[testCase.String()]; ok {
+				continue
+			}
+			if conventional := gateConventionalTests(testCase); !reflect.DeepEqual(row.Tests, conventional) {
+				t.Errorf("%s at %s runs %s, the convention %s", testCase, gate, gateTestsStringForTest(row.Tests), gateTestsStringForTest(conventional))
+			}
+		}
+		if want := len(catalog.GateCases(gateCatalogName(gate))); caseCount != want {
+			t.Errorf("%s holds %d cases, the catalog %d", gate, caseCount, want)
+		}
+	}
+	if len(gateM2Sweep.Items) != 0 || len(gateM10Sweep.Items) != 0 {
+		t.Errorf("the exit sweeps add items: M2 %d, M10 %d", len(gateM2Sweep.Items), len(gateM10Sweep.Items))
+	}
+	// M2's items are still the ones gate_m1.go carries for it
+	items := []string{}
+	for _, row := range GateRows(catalog, "M2") {
+		if row.Item != "" {
+			items = append(items, row.Item)
+		}
+	}
+	carried := []string{}
+	for _, item := range gateM2CarriedSweep.Items {
+		carried = append(carried, item.Item)
+	}
+	if !slices.Equal(items, carried) {
+		t.Errorf("M2's items %v, gate_m1.go's carried %v", items, carried)
 	}
 }
 
@@ -243,6 +373,79 @@ func TestRegisterGateSweepRefusesWhatTheCatalogDoesNotHold(t *testing.T) {
 		if !panicked {
 			t.Errorf("registering %+v did not panic", sweep)
 		}
+	}
+}
+
+// A test with a negative timeout panics where its sweep registers, named by a case or by an item, and leaves
+// nothing behind: the tool refuses such a file when it loads, so the generator never writes one (QD-1058).
+func TestRegisterGateSweepRefusesANegativeTimeout(t *testing.T) {
+	negative := func() []*GateTest {
+		return []*GateTest{{Repo: "server", Package: ".", Timeout: -time.Hour, Names: []string{"TestBoundedByNothing"}}}
+	}
+	// a case no sweep names, so only the timeout can refuse it
+	unswept := ""
+	for _, testCase := range DefaultCatalog().GateCases("M2-out") {
+		if _, ok := gateSweep("M2").Cases[testCase.String()]; !ok {
+			unswept = testCase.String()
+			break
+		}
+	}
+	if unswept == "" {
+		t.Fatal("every M2-out case is named by a sweep, so none is left to plant on")
+	}
+	for _, sweep := range []*GateSweep{
+		{Gate: "M2", Cases: map[string][]*GateTest{unswept: negative()}},
+		{Gate: "M1", Items: []*GateItem{{Item: "a test bounded by nothing", Tests: negative()}}},
+	} {
+		panicked := func() (panicked bool) {
+			defer func() {
+				panicked = recover() != nil
+			}()
+			RegisterGateSweep(sweep)
+			return false
+		}()
+		if !panicked {
+			t.Errorf("registering %+v did not panic", sweep)
+		}
+	}
+	if _, ok := gateSweep("M2").Cases[unswept]; ok {
+		t.Errorf("the refused sweep left M2's %s behind", unswept)
+	}
+	for _, row := range GateRows(DefaultCatalog(), "M1") {
+		if row.Item == "a test bounded by nothing" {
+			t.Error("the refused sweep left its item behind")
+		}
+	}
+}
+
+// §22.4's release fixture runs under its own 3h, as run.sh's BUILD_TEST runs it (QD-1056, QD-1058), written beside
+// its tags, and every other test the file names keeps the tool's default.
+func TestGateFileGivesOnlyTheReleaseFixtureItsOwnTimeout(t *testing.T) {
+	data, err := GateFile(DefaultCatalog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := parseGateFileForTest(t, data)
+	fixtures := 0
+	for _, gate := range GateNames() {
+		for _, row := range file.Gates[gate] {
+			for _, test := range row.Tests {
+				if slices.Contains(test.Names, "TestSidecarReleaseFixture") {
+					fixtures += 1
+					if test.Timeout != 3*time.Hour || test.Tags != "sidecar_release_fixture" {
+						t.Errorf("%s's release fixture runs under %s with tags %q", gate, test.Timeout, test.Tags)
+					}
+				} else if test.Timeout != 0 {
+					t.Errorf("%s's %s%s gives %v a timeout of its own, %s", gate, row.Row, row.Item, test.Names, test.Timeout)
+				}
+			}
+		}
+	}
+	if fixtures != 1 {
+		t.Fatalf("the file names the release fixture %d times", fixtures)
+	}
+	if line := "tags: sidecar_release_fixture, timeout: 3h0m0s, names: [TestSidecarReleaseFixture]"; !bytes.Contains(data, []byte(line)) {
+		t.Errorf("the file lacks %q", line)
 	}
 }
 

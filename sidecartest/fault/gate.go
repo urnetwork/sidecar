@@ -9,7 +9,9 @@
 // server's sidecart3, run on the private stores, where <Case> is the case's name in camel case and empty for
 // the main part. A test nobody wrote reads missing in the tool's report, never pass, so the file need not
 // change as rows land. A sweep names a case's tests in place of the convention only for a row that is no
-// schedule, such as OPS's FS-54 and FS-55, which server's own tests show.
+// schedule, such as OPS's FS-54 and FS-55, which server's own tests show, or for a case whose tests run outside
+// the convention's packages, such as FS-5's, FS-73's and FS-72's rollback case's T3 tests in server's evshost
+// (owner decision 548).
 //
 // Gates are named as the tool takes them: G0; Mn-in for milestone n's entry review; Mn for its exit
 // review, Mn-out in the catalog; every for each Gn-out (FS-55), every-out in the catalog; next before
@@ -27,6 +29,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -35,13 +38,17 @@ import (
 // monoroot, package the package in it, names the tests, each of which must report PASS. Stores runs it
 // through the private-store wrapper; args go after the package.
 type GateTest struct {
-	Repo    string   `yaml:"repo"`
-	Dir     string   `yaml:"dir,omitempty"`
-	Package string   `yaml:"package"`
-	Tags    string   `yaml:"tags,omitempty"`
-	Stores  bool     `yaml:"stores,omitempty"`
-	Names   []string `yaml:"names,flow"`
-	Args    []string `yaml:"args,omitempty,flow"`
+	Repo    string `yaml:"repo"`
+	Dir     string `yaml:"dir,omitempty"`
+	Package string `yaml:"package"`
+	Tags    string `yaml:"tags,omitempty"`
+	// The test's own bound, which the tool passes as go test's -timeout and bounds the command by in place of
+	// its default (QD-1058), for a test known to outlast that default, such as §22.4's release fixture. Zero
+	// keeps the default; a negative one is refused where its sweep registers, since the tool refuses it.
+	Timeout time.Duration `yaml:"timeout,omitempty"`
+	Stores  bool          `yaml:"stores,omitempty"`
+	Names   []string      `yaml:"names,flow"`
+	Args    []string      `yaml:"args,omitempty,flow"`
 }
 
 // One check that is no go test, run in a repo's directory: exit 0 passes.
@@ -88,7 +95,8 @@ var (
 )
 
 // Adds sweep's cases and items to its gate, from a package-level var. A case the catalog does not hold at
-// the gate, or one named by two sweeps, panics, since the file it would write is wrong where it was written.
+// the gate, one named by two sweeps, or a test with a negative timeout panics, since the file it would write
+// is wrong where it was written.
 func RegisterGateSweep(sweep *GateSweep) *GateSweep {
 	catalogGate := gateCatalogName(sweep.Gate)
 	if catalogGate == "" && sweep.Gate != "G0" {
@@ -103,6 +111,18 @@ func RegisterGateSweep(sweep *GateSweep) *GateSweep {
 		}
 		if !found {
 			panic(fmt.Sprintf("gate %s's sweep names %s, which the catalog does not hold at %s", sweep.Gate, caseName, catalogGate))
+		}
+	}
+	tests := []*GateTest{}
+	for _, caseTests := range sweep.Cases {
+		tests = append(tests, caseTests...)
+	}
+	for _, item := range sweep.Items {
+		tests = append(tests, item.Tests...)
+	}
+	for _, test := range tests {
+		if test.Timeout < 0 {
+			panic(fmt.Sprintf("gate %s's sweep gives %s %s's %v the timeout %s, which bounds nothing", sweep.Gate, test.Repo, test.Package, test.Names, test.Timeout))
 		}
 	}
 	gateSweepLock.Lock()
@@ -266,11 +286,12 @@ const gateFileHeader = `# §23.8's gate sweeps (TEST-M1-11; OPS-M1-07's tool): g
 # Gates: G0; Mn-in, milestone n's entry review; Mn, its exit review (Mn-out); every, each Gn-out (FS-55); next,
 # before place_new names a new metadata cluster. A row is an FS row's case, or an item: repo and package name
 # each test, names are the tests, each of which must report PASS, so a test that does not exist reads missing,
-# never pass; tags, a build tag; stores: true runs it through the private-store wrapper SIDECAR_GATE_STORE_WRAPPER
-# names; args go after the package, {base} and {group} filled from the run; commands run in a repo's directory
-# and pass on exit 0, or read the outcome a last "sidecar-gate outcome: <outcome>" line names, a nonzero exit still
-# failing. A row with nothing to run is missing. external says what outside the build (hardware,
-# production, people) the row also waits on, or the later gate a later-of case passes at, and reads open.
+# never pass; tags, a build tag; timeout, a Go duration, bounds that test's run in place of the tool's default,
+# for a test known to outlast it (QD-1058); stores: true runs it through the private-store wrapper
+# SIDECAR_GATE_STORE_WRAPPER names; args go after the package, {base} and {group} filled from the run; commands
+# run in a repo's directory and pass on exit 0, or read the outcome a last "sidecar-gate outcome: <outcome>" line
+# names, a nonzero exit still failing. A row with nothing to run is missing. external says what outside the build
+# (hardware, production, people) the row also waits on, or the later gate a later-of case passes at, and reads open.
 # store_clock: true says the case's T3 run reads stored ages through T3's store clock (QD-264), which the report
 # names beside its outcome. A case's T2 test is TestFs<n><Case> in sidecar's sidecartest/fault and its T3 test
 # TestFs<n><Case>OnT3 in server's sidecart3, by convention, so this file does not change as rows land.

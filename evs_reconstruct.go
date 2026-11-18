@@ -394,6 +394,10 @@ func (self *EvsRepo) reconstructContent(ctx context.Context, result *evsReadResu
 		// as a missing segment: the gone row decides what that comes to
 		return nil, nil, EvsGitOid{}, self.versionlessGone(ctx, result, verified)
 	}
+	if verified.Drop.Dropped(self.client.clock.Now()) {
+		// a version a checked DROP took: nothing fetched or shown (§11.7's states row)
+		return nil, nil, EvsGitOid{}, ErrEvsDropped
+	}
 	entry := verified.Entry
 	push := verified.Statement.Push
 	chain := entry.GetChain()
@@ -445,6 +449,10 @@ func (self *EvsRepo) reconstructContent(ctx context.Context, result *evsReadResu
 	if err != nil {
 		var missing bool
 		missing = errors.Is(err, ErrEvsObjectMissing)
+		if missing && verified.Drop != nil {
+			// a listed version's 404 reads it dropped, with no alarm (§11.7's states row)
+			return nil, nil, EvsGitOid{}, ErrEvsDropped
+		}
 		if missing && entry.GetVersioning() != 0 {
 			// a versionless version's 404: never an alarm before the fresh head read (§11.7's reads row)
 			return nil, nil, EvsGitOid{}, self.versionlessGone(ctx, result, verified)

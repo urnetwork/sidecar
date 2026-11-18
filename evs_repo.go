@@ -187,9 +187,13 @@ type EvsHistoryVersion struct {
 	WrittenOverBy uint64
 	// 0 kept, 1 versionless, 2 index (§11.7).
 	Versioning uint32
-	// kept, or collected for a replaced versionless version whose content evs no longer serves; drop_pending and
-	// dropped are EVS2-M10-22's, refused before they get here (§11.9).
+	// kept, collected for a replaced versionless version whose content evs no longer serves, or drop_pending or
+	// dropped for a version a DROP that passed this device's checks lists (§11.9; evs_drop_verify.go).
 	State string
+	// A listed version's drop and its window's end, which ur evs log shows as "drop pending until <time>"; zero for
+	// any other version.
+	DropId        Id
+	DropNotBefore time.Time
 	// The entry_sha256 its statement's change names, a drop's list value (§11.7's action row); empty for a removal.
 	EntrySha256 []byte
 	// The path epoch its statement declares, which a drop's lineage starts from (DESIGN-DETAILS 10.2.4).
