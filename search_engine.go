@@ -248,17 +248,21 @@ func (self *SearchEngine) RunBackgroundSync(ctx context.Context) error {
 	return self.background.RunBackgroundSync(ctx)
 }
 
-// Drops the cache of repoId, or of every repo, ending the searches reading it first (SidecarSearchCacheDropper).
+// Drops the cache of repoId, or of every repo, ending the searches reading it first (SidecarSearchCacheDropper), and
+// resets the sync's state of every ref it drops, so their next round fetches what the drop removed (QD-1025). A round
+// running on one of them finishes before the drop starts; search.state, which is not in the cache, stays.
 func (self *SearchEngine) DropCache(repoId *Id) error {
 	for _, stream := range self.openStreams() {
 		if repoId == nil || stream.reads(*repoId) {
 			stream.Close()
 		}
 	}
-	if repoId == nil {
-		return self.args.Cache.DropAll()
-	}
-	return self.args.Cache.DropRepo(*repoId)
+	return self.args.Sync.dropAndReset(repoId, func() error {
+		if repoId == nil {
+			return self.args.Cache.DropAll()
+		}
+		return self.args.Cache.DropRepo(*repoId)
+	})
 }
 
 // The searches open now.

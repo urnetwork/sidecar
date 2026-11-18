@@ -14,10 +14,11 @@
 //	gkm:<group_id>  §10   epoch x 2^24 + generation: durable
 //	evs:<repo_id>   §11   the repo's push sequence, a clock created at its master's TIME
 //
-// Only topics that gate access are durable, and a lower or conflicting durable version alarms (I-16).
-// A clock version's fall is a gap: the client refetches, checks what it gets against its pins and
-// adopts it. A raised clock is one the hint script lifts to the stored value plus one when the writer's
-// clock is not above it, so skew between writers never makes a hint stale.
+// Only topics that gate access are durable, and a durable version never falls (I-16): a reset that shows
+// one lower sends the client to versions, whose page alarms if it shows the fall too (QD-1044). A clock
+// version's fall is a gap: the client refetches, checks what it gets against its pins and adopts it. A
+// raised clock is one the hint script lifts to the stored value plus one when the writer's clock is not
+// above it, so skew between writers never makes a hint stale.
 
 package sidecar
 
@@ -78,7 +79,8 @@ type PushTopicClass int
 const (
 	// Not in §6.8's registry: nothing a client applies.
 	PushTopicUnknown PushTopicClass = iota
-	// Never falls: a lower or conflicting one alarms (I-16).
+	// Never falls (I-16): a reset showing one lower sends the client to versions, whose page alarms
+	// (QD-1044).
 	PushTopicDurable
 	// A clock: a fall is a gap, never an alarm.
 	PushTopicClock

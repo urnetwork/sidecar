@@ -493,6 +493,8 @@ barrier mail.send.copy.after mail_send.go
 barrier mail.send.copy.before mail_send.go
 barrier mail.send.deposit.after mail_send_local.go
 barrier mail.send.deposit.before mail_send_local.go
+barrier mail.send.gate.after mail_send_gate.go
+barrier mail.send.gate.before mail_send_gate.go
 barrier mail.spam.teach.after mail_spam.go
 barrier mail.spam.teach.before mail_spam.go
 barrier mail.vault.erase.after mail_vault.go
@@ -637,6 +639,8 @@ barrier search.cache.lost.applied state_search_delete.go
 barrier search.remote.asked search_remote_search.go
 barrier search.remote.ended search_remote_cursor.go
 barrier search.remote.reply search_remote_serve.go
+barrier search.sync.drop.waiting search_sync.go
+barrier search.sync.dropped search_sync.go
 barrier search.sync.fetched search_fetch.go
 barrier search.sync.replayed search_sync.go
 barrier search.sync.retired search_sync.go

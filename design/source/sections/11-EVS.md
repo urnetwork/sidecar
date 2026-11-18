@@ -376,7 +376,8 @@ message EvsDropHistory {                // a DROP push's payload body (format 2;
   uint64 cancels_version = 4;           // cancel: that drop's ref version
   int64 not_before_ms = 5;              // drop: time_ms + 604,800,000 (7 days), or time_ms with now (owner
                                         // decision 183)
-  repeated EvsDropPath paths = 6;       // drop: 1 to 1,024 lineages, sorted by their newest token path's bytes
+  repeated EvsDropPath paths = 6;       // drop: 1 to 1,024 lineages, sorted by their newest token path's bytes;
+                                        // the body at most 256 KiB as bytes (owner decision 396)
   bytes preview_id = 7;                 // drop: the dry run its signer confirmed (11.13), or empty
 }
 message EvsDropPath {                   // one lineage: one path name on this ref, as far as evs can follow it
@@ -386,9 +387,12 @@ message EvsDropPath {                   // one lineage: one path name on this re
   uint64 through_version = 3;           // the path version that stays; every listed version is older
   uint32 boundary = 4;                  // 1 written: this push writes through_version, the head's content again;
                                         // 2 removed: through_version is the path's standing removal
-  uint32 count = 5;                     // listed versions, 1 to 1,048,576
+  uint32 count = 5;                     // listed versions, 1 to 1,048,576, and at most that many over all of a
+                                        // DROP's paths (owner decision 396)
   bytes listed_sha256 = 6;              // SHA-256 over the listed entry_sha256 values, ascending, which follow the
-                                        // body in the payload, spread over the push's parts past one part's 1 MiB
+                                        // body in the payload, spread over the push's parts past one part's 1 MiB;
+                                        // a check of the signer's enumeration, which the job's resolve and a
+                                        // replaying reader recompute and no reader is sent (owner decision 396)
 }
 message EvsUploadReceipt {              // unsigned; evs MACs it (11.13), the push carries it back
   bytes repo_id = 1; bytes segment_id = 2; uint64 padded_size = 3; int64 upload_ms = 4;
@@ -412,18 +416,19 @@ payload  in the push's batch record for a one-part push, else spread over its pa
          as idx/ elides inline records, so the slot object is the one stored copy of each key and an ERASE leaves
          an erased key nowhere a reader can fetch; a push in parts carries them whole in its seal request and in
          none of its parts, within a format setting, a part's 1 MiB by default; owner decision 400), the
-         erased list, a DROP's EvsDropHistory and then its sorted lists, across the push's parts when large in each
-         part's sections field (slices, below; 11.7),
-         a PATH_EPOCH's tail moves, the source paths (per change, an EvsSourcePath for each listed
-         source that may hold it, 11.6's read rule, in change order), the reuse list of committed versions whose
-         segments a new version cites ((ref, token path, entry version), 11.8) and, per entry version, its Merkle
-         proof to changes_root (empty when inline)
+         erased list, a DROP's EvsDropHistory, whole in part 1, and then its sorted lists, across the push's parts
+         when large in each part's sections field, in parts that hold no change once the changes end (slices,
+         below; 11.7, 11.8's parts row), a PATH_EPOCH's tail moves, the source paths (per change, an EvsSourcePath
+         for each listed source that may hold it, 11.6's read rule, in change order), the reuse list of committed
+         versions whose segments a new version cites ((ref, token path, entry version), 11.8) and, per entry
+         version, its Merkle proof to changes_root (empty when inline)
 checks   at push time evs checks that each entry version hashes to its change's entry_sha256, that the change list
          matches changes_root, is sorted (merkle, below) and changed_prefixes cover it, that the payload lists
          match new_objects_sha256, parts_sha256, erased_sha256, path_tail_sha256, source_paths_sha256 and
-         drop_sha256, each drop list its listed_sha256 and count, sorted and unrepeated (409 DROP_LIST), that each
-         staged segment hashes to its id and names this push in its header, and that versionless versions keep
-         11.7's rules (409 VERSIONING); a statement over 1 KiB is refused
+         drop_sha256, each drop list its listed_sha256 and count, sorted and unrepeated (409 DROP_LIST), a DROP's
+         body within 256 KiB and its counts within 1,048,576 in all (owner decision 396), that each staged segment
+         hashes to its id and names this push in its header, and that versionless versions keep 11.7's rules (409
+         VERSIONING); a statement over 1 KiB is refused
 merkle   RFC 9162 hashing: leaf SHA-256(0x00 || bytes), node SHA-256(0x01 || left || right); changes sort by
          their token paths' bytes, each part a contiguous run in part order, so inclusion proofs of two adjacent
          leaves show that no path between them changed (11.9); every proof is repeated, part level last, the leaf
@@ -684,8 +689,8 @@ action    a DROP push (flags 256) on the path's ref carries EvsDropHistory (11.6
           (owner-bound: such a device of the owner) cancels it by a DROP with action 2 committed before not_before_ms
           less 60 s by evs's clock; a lock standing when its job starts voids it (§8.8); 11.13's job deletes nothing
           before not_before_ms + 25 min, and marks only once evacuation's horizon has passed by 12 min the time evs
-          saw the drop committed, so a now drop's deletions start 25 h 12 min to 26 h 12 min after it (owner decisions
-          204, 397)
+          saw the drop committed, which covers a citation validated on a cached head, so a now drop's deletions start
+          25 h 12 min to 26 h 12 min after it (owner decisions 204, 397)
 rule      once it executes: kind-1 segments and slots that only listed versions name, on any ref and path, are
           deleted, each once evacuation's horizon has passed its LastModified + 24 h + 2 min (owner decision 397);
           listed versions' statements, window entries, log pages, chain values, times, signers and entry hashes stay
@@ -709,22 +714,26 @@ not       no boundary below the head: a drop keeps one version's content, and no
           decision 165)
 fence     from its commit, 5h refuses (409 DROPPED) as a base, deleted path or reuse source any version a DROP
           lists: a window version a DROP in the window lists (window bit 5), or one below its entry's drop mark
-          (index entries, below); a seal reruns this against the heads it rereads; a cancel lifts nothing, so a
-          later copy re-uploads
+          (index entries, below); a reuse source's head may come from the cache, which serves a head only
+          within 10 min of that head's own write (11.9's cache row; owner decision 397); a seal reruns this
+          against the heads it rereads; a cancel lifts nothing, so a later copy re-uploads
 states    drop_pending: a listed version before not_before_ms by the reader's clock, with no cancel seen and evs not
           reporting the drop refused: readable, shown "drop pending until <time>"; dropped: after not_before_ms or at
           any 404 of its content, unless a committed cancel names the drop or evs reports it refused: nothing fetched
           or shown, history keeping its version, time, signer, entry hash and, where served, padded size; no alarm for
           a listed version, while a 404 on a version no live drop lists alarms as a missing segment does; a DROP
-          failing a reader's checks (its signer's role at its auth pin, for a drop no lock there (§8.8), drop_sha256,
-          not_before_ms equal to time_ms + 604,800,000 or time_ms, each lineage entry the path's token path in its
-          epoch, the boundary, and, replaying, listed_sha256 and the listed set equal to the lineage's versions with
-          an entry below through_version, which only a replaying reader holds whole, so a DROP whose own list
-          disagrees with its body is invalid to a replaying reader, taken by its body at a head reader, which fetches
-          at most 257.1 KiB a drop, once, and refused by the job either way; owner decision 396) raises SidecarEvent
-          history_drop in state invalid, naming the signer (§5.4), and drops nothing for that reader; a replaced
-          versionless version in range stays collected; D-TEST-18's observe mode changes only whether the server
-          deletes
+          failing a reader's checks (its signer's role at its auth pin, for a drop no lock there (§8.8), drop_sha256
+          over a body of at most 256 KiB, not_before_ms equal to time_ms + 604,800,000 or time_ms, each entry of the
+          path's lineage the path's token path in its epoch, the boundary where the reader reads the kept version,
+          and, replaying, the count and SHA-256 of the lineage's versions with an entry below through_version,
+          computed from its own history, equal to count and listed_sha256, which only a replaying reader can compute,
+          so a DROP whose own list disagrees with its body is invalid to a replaying reader, taken by its body at a
+          head reader, which fetches at most 257.1 KiB a drop, once, and refused by the job either way; owner decision
+          396) raises SidecarEvent history_drop in state invalid, naming the signer (§5.4), and drops nothing for that
+          reader; a replaced versionless version in range stays collected; D-TEST-18's observe mode changes only
+          whether the server deletes; a version is listed for a reader when the DROP's body covers it, its token path
+          in its statement's epoch in a lineage and its version below that lineage's through_version, and the reader
+          judges the name and version it asked for, neither of which the server chooses (DESIGN-DETAILS.md section 10)
 holds     a hold never refuses the DROP push; its deletions wait while a hold covers the repo, and the drop reads,
           lists and bills as finished (owner decision 184; 11.13)
 refused   409 DROP_KIND in config and mailcfg repos; REF_MODE on git-mode refs, overlays included, and creates-only
@@ -802,13 +811,15 @@ fold      for a ref's window versions (f, u]: read their statements and entry ve
           one; GET each entry (404: create it, once a cluster read of the ref's head in this fold succeeds, 11.13's
           skip rule), merge (a file's folded versions, the newest four kept; a creation, or a DROP's written version,
           replaces what the entry held, carrying nothing, a marker's carried ids first put in an orphan marker
-          (orphan, below), the DROP's setting the entry's drop mark {drop_id,
-          through_version}), PUT If-Match (If-None-Match to create), on 412 read again and merge; an entry that
-          already holds a version is not written, and a marker takes only a newer one (collect, below); while
-          sources stand, once the current entry holds a path's change the fold deletes each listed source copy its
-          pushes' source paths name, and under a removed directory LISTs and deletes everything below it in those
-          sources, its range counting as folded only when the deletes answered, so a source holds only what still
-          has to move (owner decision 227); folds are idempotent, and any evs process may run one
+          (orphan, below), the DROP's setting the entry's drop mark {drop_id, through_version}, and a DROP at a
+          removed boundary setting it on the path's marker entry while that entry holds folded versions, so its fence
+          outlives the window, as DESIGN-DETAILS.md section 10 has it), PUT If-Match (If-None-Match to create), on
+          412 read again and merge; an entry that already holds a version is not written, and a marker takes only a
+          newer one (collect, below); while sources stand, once the current entry holds a path's change the fold
+          deletes each listed source copy its pushes' source paths name, and under a removed directory LISTs and
+          deletes everything below it in those sources, its range counting as folded only when the deletes answered,
+          so a source holds only what still has to move (owner decision 227); folds are idempotent, and any evs
+          process may run one
 stale     each fold and copy write carries a store deadline 15 s after it issued the cluster read of the ref's head
           it relies on (§19.6's settle rule: past it the store neither takes the write nor begins a drive commit of
           it, and one it began lands before the next request on its key or never), a page-out's fold reading the
@@ -949,9 +960,9 @@ hold/<network_id>/<case_id>/_              §21.9's preservation hold, written b
                                            scope "network" or 1 to 16 repo ids, each
                                            covering its repo's objects on every cluster and
                                            its gkm group (owner decision 527)
-drops/<repo>/_                             the repo's drop table, running drop job and dry  If-Match; created   <= 64 KiB  the repo; an entry
-                                           runs (11.13)                                     If-None-Match                  at most 30 d after
-                                                                                                                           its drop or dry run
+drops/<repo>/_                             the repo's drop table, each drop with the time   If-Match; created   <= 64 KiB  the repo; an entry
+                                           evs saw it committed, the running drop job with  If-None-Match                  at most 30 d after
+                                           its round and horizon, and dry runs (11.13)                                     its drop or dry run
                                                                                                                            ends, a void record
                                                                                                                            the repo's life
                                                                                                                            (11.13)
@@ -1234,23 +1245,25 @@ evs    4  the head first: its verified cache entry (11.9) when that version is a
           and 5 (a-h) run again first
        8  outcome (below): 200 -> reply 200 {v+1}, with EvsDepositHead on the caller's own deposit ref (11.12);
           then the push sequence and hints (11.10), usage events (11.13),
-          the head cache entry (11.9), a DROP's or cancel's append to drops/<repo>/_ (If-Match, retried on 412)
-          and its {evsd_} hint to taskworker (11.13), the fold of the oldest 64 if 96 are unfolded, and, 60 s
-          later, the purge of its candidates (11.13), off the reply path
+          the head cache entry (11.9), a DROP's or cancel's append to drops/<repo>/_ with the clock read after
+          step 7's 200 as its seen_ms (If-Match, retried on 412; owner decision 397) and its {evsd_} hint to
+          taskworker (11.13), the fold of the oldest 64 if 96 are unfolded, and, 60 s later, the purge of its
+          candidates (11.13), off the reply path
 parts     a push over 1 MiB or 1,024 entry writes goes in n <= 1,024 parts within both bounds, a part holding no
           change only when it holds a slice of a spilled section such as sealed metadata or, in format 2, a DROP's
           lists (owner decision 376): such parts come after
           every part that holds a change, carry no changes_root and are no leaf of the statement's root, and
           parts_sha256 covers them, evs recording and hashing them with no entry check (owner decision 239), each
-          part's sections field carrying its slice of the payload's other sections (11.6's Bytes); the client signs
-          the
-          statement with part_count, parts_sha256 and changes_root, then POSTs .../push/P/<k> {Signed EvsPush,
-          EvsPushPart k, receipts}, at most 4 at once; evs runs steps 4, 5 (a-e, g, h) for that part's entries,
-          appends the part, its receipts and the head version it checked as a batch record (a batch alone above
-          256 KiB) and answers 200 {place}, a re-seeded part being an EVS_BATCH_RESEED record read where a part is
-          (owner decision 402), which Resolve, as its seal, judges with the fence in place of the time clause
-          (below; owner decision 564); a part posted twice is two records, and the seal names one; git mode
-          first takes the seal lease
+          part's sections field carrying its slice of the payload's other sections (11.6's Bytes), a DROP's body
+          whole in part 1 and its lists after it in part order, in parts that hold no change once its changes end,
+          and a DROP with no change at all stating the empty change list (owner decision 376; DESIGN-DETAILS.md
+          section 10); the client signs the statement with part_count, parts_sha256 and changes_root, then POSTs
+          .../push/P/<k> {Signed EvsPush, EvsPushPart k, receipts}, at most 4 at once; evs runs steps 4, 5 (a-e, g,
+          h) for that part's entries, appends the part, its receipts and the head version it checked as a batch
+          record (a batch alone above 256 KiB) and answers 200 {place}, a re-seeded part being an EVS_BATCH_RESEED
+          record read where a part is (owner decision 402), which Resolve, as its seal, judges with the fence in
+          place of the time clause (below; owner decision 564); a part posted twice is two records, and the seal
+          names one; git mode first takes the seal lease
 lease     git mode: POST .../push/P/lease {ref_id, base_version, ms <= 120,000} (rw), after the push's segments and
           before its parts: it reads the head as step 4 does, and one head CAS sets lease {P, until} and raises the
           fence without changing the version, only if v = base_version and no other push's lease is live (P's own
@@ -1268,18 +1281,21 @@ seal      POST .../push {Signed EvsPush, the parts' places, its slot bodies} wit
           that part again and seals P again, as it does, in 11.13's reseed mode, for a part place whose batch minute
           is older than an EvsSettings bound, 24 h by default, under the 25 h after which evacuation can judge a
           part, so no seal names a part evacuation may have judged; owner decision 564), checks them against
-          parts_sha256 and runs step 5 (a-f, h's age check on every part's receipts, and h's DROPPED check of each
-          part's bases and sources against their refs' heads, reread from the cluster) against that head; in file
-          mode, if the head moved after the earliest version a part was checked at, it reruns 5g's rules for each
-          part against every statement after the version that part was checked at (a statement's prefixes sending
-          it to that push's change list): a later change to one of its file paths refuses it (409 with the paths),
-          and directory deltas merge, except that a later removal of a directory D refuses a part changing D or a
-          path below it, a later delta to D refuses one removing D, and the parts' deltas are checked against D's
-          bound by 11.7's rule (409 DIRECTORY_FULL, once recorded); then step 6's record (the seal) and step 7, so
-          a git seal fails 412 only on a write after its read; a failed seal leaves its parts to evacuation; an
-          import past 1,024 parts splits at commits of its tip's first-parent line, each push carrying an EvsImport
-          of its own over the commits it carries (owner decision 241), and a step too large for one push goes
-          through helper refs (11.11's import row)
+          parts_sha256, runs a DROP's body and list checks, which no part runs, over section 9 from part 1 and
+          section 10's slices in part order, streaming (owner decision 396), lists the push's purge candidates from
+          every part's replaced versions less every id any part's versions name (11.13; owner decision 405), and
+          runs step 5 (a-f, h's age check on every part's receipts, and h's DROPPED check of each part's bases and
+          sources against their refs' heads, reread from the cluster) against that head; in file mode, if the head
+          moved after the earliest version a part was checked at, it reruns 5g's rules for each part against every
+          statement after the version that part was checked at (a statement's prefixes sending it to that push's
+          change list): a later change to one of its file paths refuses it (409 with the paths), and directory
+          deltas merge, except that a later removal of a directory D refuses a part changing D or a path below it, a
+          later delta to D refuses one removing D, and the parts' deltas are checked against D's bound by 11.7's
+          rule (409 DIRECTORY_FULL, once recorded); then step 6's record (the seal) and step 7, so a git seal fails
+          412 only on a write after its read; a failed seal leaves its parts to evacuation; an import past 1,024
+          parts splits at commits of its tip's first-parent line, each push carrying an EvsImport of its own over
+          the commits it carries (owner decision 241), and a step too large for one push goes through helper refs
+          (11.11's import row)
 costs     steps 4, 6 and 7 are three sequential store round trips, 40-80 ms (owner decision 2), with the head from
           the verified cache and step 4's statements in its round; an uncached head adds one, new slots one, a
           retry after a 412, of a push, seal or lease in either mode, two (its reread and new PUT; three when a
@@ -1425,10 +1441,14 @@ I-EVS-14 every directory card, repo file and notice a reader accepts was written
          card's pin and, for a member device, consented, and a repo file's held the right at its push's pin, judged
          by retained history (§16.11's repo file row); any other version is ignored and alarms
 I-EVS-15 a drop deletes a kind-1 segment or a slot only once every committed version naming it is listed by a drop
-         whose window passed with no cancel and whose list its job proved exact, the job's two scans at snapshots
-         after every such drop's fence found no other version naming it, evacuation's horizon has passed the object's
-         LastModified + 24 h + 2 min (owner decision 397) and no hold keeps it; no push commits citing a listed
-         version after its drop's fence; every path's newest version keeps all its content
+         whose window passed with no cancel and whose list its job proved exact; the job's two scans, at snapshots
+         taken after evacuation's horizon had passed by 12 min the time evs saw each such drop committed, found no
+         other version naming it, a git-mode push's new-objects list counted as naming what it introduced; the
+         horizon had passed the object's LastModified + 24 h + 2 min; no hold keeps it; and the DELETE names its
+         LastModified (owner decisions 204, 397). No push validated more than 10 min after a drop's commit cites a
+         version it lists, and one validated before then left its record in a batch the horizon waited for. The job's
+         candidates are the ids listed versions' chains name and no others. Every path's newest version keeps all its
+         content
 I-EVS-16 in a directory repo evs takes ERASE, CUT and CLOSURE pushes, ?closure=1 uploads and slots/delete only at
          admin scope, which §7.8 mints only to the directory's consented, not-read-only admins, refusing them below
          it before any commit or slot rewrite, so a refused erasure leaves every slot as it was
@@ -1506,9 +1526,10 @@ witness   §6's HeadCheck, which any admitted reader may witness (owner decision
 request   POST /evs/v1/repos/<repo_id>/read (r): {ref_id, pin_version (0 if none), fresh (no cached head), up to 64
           paths, each with its token path in the current epoch and in each listed source that may hold it (11.6),
           the root's empty in every epoch (owner decision 231), ranges (64, <= 32 MiB), wanted slots, maps, log
-          pages, push records and parts by push id}; this, the refs and log routes and 11.10's subscription routes
-          answer a deleted repo 409 REPO_DELETED and a shredding or shredded one 409 SHREDDING, from the 5 s repo/
-          cache the upload route uses (11.12's refused row; owner decision 379)
+          pages, push records and parts by push id, and the DROP pushes whose body the reader already holds and has
+          checked, by ref version, at most 64 (held_drops)}; this, the refs and log routes and 11.10's subscription
+          routes answer a deleted repo 409 REPO_DELETED and a shredding or shredded one 409 SHREDDING, from the 5 s
+          repo/ cache the upload route uses (11.12's refused row; owner decision 379)
 streams   POST .../read {refs: up to 64 (ref_id, pin_version)} (r) reads a record-class repo's owned streams: per
           ref, the head summary and the Signed EvsPush of every version after its pin with the entries those
           versions create, their records and slots, in one framed stream of at most 4 MiB, a ref past it
@@ -1538,9 +1559,10 @@ reply     one framed stream of u32 length | EvsReadFrame, each frame one of thes
           mailcfg's readers replay as §15.16's row says, so no evs answer below a creation decides a mail
           record (owner decision 568); a replaced versionless version
           answering `collected` for its content, a listed one `drop_pending` {drop_id, not_before_ms} or
-          `dropped` {drop_id, version} with the DROP's statement and body, from which a head reader decides
-          membership alone (owner decision 396): V is listed iff some EvsDropPath's lineage holds V's token path
-          in V's epoch, V is below
+          `dropped` {drop_id, version} with the DROP's statement and body, each once a reply and none for a DROP the
+          request's held drops name, at most 1 MiB of bodies in one reply, a path past that carrying its state alone
+          for the reader to read again, and no list byte, from which a head reader decides membership alone (owner
+          decision 396): V is listed iff some EvsDropPath's lineage holds V's token path in V's epoch, V is below
           through_version and V has an entry, every reader checking drop_sha256 over the body; for a removed path,
           its removal's push id, version and path version, from its marker or the window, and once its marker is
           collected from the window version at or below folded_through that removed it, which the read scans for a
@@ -1610,16 +1632,19 @@ collected from T, the end of the UTC minute in the replacing record's EvsPlace p
           restarts on the newest version, and a 404 of a listed version's content
           reads `dropped`, with no alarm, unless its drop was cancelled or refused (11.7's states); for a path's
           newest version it alarms as a missing segment does (11.7)
-dropped   a reader shows a listed version by 11.7's states, which the DROP's signed body, window and cancels decide,
-          a replaying reader holding its lists too;
-          evs's refused report is unsigned and only lets a reader show content still stored, so a lying server can
-          at most hide content; a read of its content answers EVS_DROPPED (§18.5; MCP FAILED_PRECONDITION)
+dropped   a reader shows a listed version by 11.7's states, which the DROP's signed body, window and cancels decide:
+          the reader checks that the body covers the name and version it asked for, by a lineage that is that name's
+          in every epoch, and a replaying reader also checks the lists' count and hash against its own history
+          (owner decision 396); evs's refused report is unsigned and only lets a reader show content still stored,
+          so a lying server can at most hide content; a read of its content answers EVS_DROPPED (§18.5; MCP
+          FAILED_PRECONDITION)
 serve     from not_before_ms, unless the drop is cancelled or refused (its void record, 11.13's table row; a drop
           absent from the table with none reads executed, the safe default), evs serves for each listed version, found
-          by its entry hash in the job's list files (owner decision 398), its statement and `dropped`, its entry
-          version only when its chain names no inline record, never an inline record of its chain (elided from any
-          record it serves, every other entry version keeping its own hash), and, once the job's delete set exists, no
-          byte of a deleted, held or packed id in it (404, as if deleted), so a held drop reads as a finished one
+          by the body of a drop still in the table or by its entry hash in the job's list files, which stay for the
+          repo's life (owner decision 398), its statement and `dropped`, its entry version only when its chain names
+          no inline record, never an inline record of its chain (its entry version's bytes zeroed, same length, in any
+          record evs serves, every other entry version keeping its own hash), and, once the job's delete set exists,
+          no byte of a deleted, held or packed id in it (404, as if deleted), so a held drop reads as a finished one
 trusts    for a path it has never read or no longer remembers (its record evicted, or its record's pin past the
           budget), which writer-signed version is current at its first pin, and, after a
           re-pin past the budget, for every path, is evs's word (it could serve an older version or a refused
@@ -1631,7 +1656,8 @@ states    a path entry's state is EvsReadPathState {0 unspecified, 1 collected, 
 budget    a mobile catch-up fetches at most 4 MiB of statements and proofs (4,000-8,000 versions); further behind,
           the reader re-pins at the head and marks the gap, shown as "verified since <time>": the pin record
           holds the time of the newest re-pin past the budget, each such re-pin raises §5.4's evs_gap, and
-          EvsRepo.VerifiedSince(refId) answers that time, zero when nothing was skipped (§18.5 mirrors it)
+          EvsRepo.VerifiedSince(refId) answers that time, zero when nothing was skipped (§18.5 mirrors it); a
+          DROP's statement and body, at most 257.1 KiB, count against it once a drop (owner decision 396)
 ```
 
 ```proto
@@ -2396,10 +2422,11 @@ purge     a versionless version V of path X is replaced at the first committed v
           candidates are V's kind-5 segments less every segment a version of u's push names, and, in slot-keyed
           repos, V's slot when no version of u's push names it; evs computes them in step 5 from the versions step
           4 read, and for a push in parts at the seal, from what each part's record carries of the versions it
-          replaced, less every segment and slot any part's versions name (owner decision 405), and lists them in
-          the record of the push, or of a push in parts' seal, no part's record listing any (at most 2,048 ids and
-          within the record's 1 MiB, which counts its staged tail too, else a mark from which the sweep recomputes
-          them, whatever the id count) and sets window bit 4 (11.8)
+          replaced, whole, in a list marked replaced that no purger or sweep deletes from, less every segment and
+          slot any part's versions name (owner decision 405), and lists them in the record of the push, or of a
+          push in parts' seal, no part's record listing any (at most 2,048 ids and within the record's 1 MiB,
+          which counts its staged tail too, else a mark from which the sweep recomputes them, whatever the id
+          count) and sets window bit 4 (11.8)
 who       the evs process that commits u: once its step-7 PUT answers 200, or a reread shows u committed, it
           queues u's candidates in memory; 60 s later, the readers' allowance, it rereads X's newest version and
           the network's hold/ objects (cached at most 5 s), and DELETEs each candidate that the newest version
@@ -2423,25 +2450,25 @@ staged    evacuation decides each staged segment of a committed record as it eva
           turn-on pass to delete, reads still answering `collected`; dropped otherwise; a dead or duplicate record's
           staged segments go with it; taskworker reports the staged content it drops, or writes only for a hold, as
           negative stored-byte deltas in its usage batches (producer taskworker, §20.6)
-sweep     evacuation, resolving each committed record that lists candidates, HEADs each candidate that its path's
-          newest version does not name and no hold keeps, staged ones at seg/, and DELETEs only a present one (most
-          are already gone, the committing process or an earlier evacuation having removed them, and MinIO answers a
-          DELETE 204 either way, cmd/object-handlers.go:2678-2691), counting each as deleted or absent for §19.8's
-          urnetwork_evs_versionless_sweep_deletes_total and purged_bytes_total{by="sweep"}, recomputing a marked
-          list from the replaced versions, before the minute's batches are deleted, so a lost queue or a failed
-          delete leaves content at most ~26 h; it reports nothing, the nightly pass counting what it frees; when a
-          hold ends, one pass rereads the repo's versions flagged from 26 h before its placement to its end (log
-          pages, then their records) and deletes what the hold kept; when §19.11's purge turns on from observe, one
-          pass per admitted repo rereads its versions flagged with window bit 4 since its migration and deletes
-          what observe mode kept, as at a hold's end; the side that ends each condition queues its pass, both
-          idempotent: AbuseHoldPass schedules EvsSweepHoldEndTaskRequest for each hold it ends, before it deletes
-          the hold/ object, and `sidecarctl evs purge-turn-on`, run in the runbook step that sets format2.purge to
-          on, schedules EvsSweepTurnOnTaskRequest, a monitor row watching for observe's retained count staying flat
-          while purge is on (owner decision 206), whose start reads the purge mode of the taskworker running it and,
-          while that host reads anything but on, returns ErrSweepRetry for server/task's backoff, queueing one scan
-          per metadata cluster only once it reads on, so a turn-on never finishes under observe having deleted
-          nothing (owner decision 412); §22.8's testHookBarrier sites include the purge's hold/ reread
-          and evacuation's staged decision
+sweep     evacuation, resolving each committed push or seal record that lists candidates, never a part's, HEADs each
+          candidate that its path's newest version does not name and no hold keeps, staged ones at seg/, and DELETEs
+          only a present one (most are already gone, the committing process or an earlier evacuation having removed
+          them, and MinIO answers a DELETE 204 either way, cmd/object-handlers.go:2678-2691), counting each as
+          deleted or absent for §19.8's urnetwork_evs_versionless_sweep_deletes_total and
+          purged_bytes_total{by="sweep"}, recomputing a marked list from the replaced versions, before the minute's
+          batches are deleted, so a lost queue or a failed delete leaves content at most ~26 h; it reports nothing,
+          the nightly pass counting what it frees; when a hold ends, one pass rereads the repo's versions flagged
+          from 26 h before its placement to its end (log pages, then their records) and deletes what the hold kept;
+          when §19.11's purge turns on from observe, one pass per admitted repo rereads its versions flagged with
+          window bit 4 since its migration and deletes what observe mode kept, as at a hold's end; the side that
+          ends each condition queues its pass, both idempotent: AbuseHoldPass schedules EvsSweepHoldEndTaskRequest
+          for each hold it ends, before it deletes the hold/ object, and `sidecarctl evs purge-turn-on`, run in the
+          runbook step that sets format2.purge to on, schedules EvsSweepTurnOnTaskRequest, a monitor row watching
+          for observe's retained count staying flat while purge is on (owner decision 206), whose start reads the
+          purge mode of the taskworker running it and, while that host reads anything but on, returns ErrSweepRetry
+          for server/task's backoff, queueing one scan per metadata cluster only once it reads on, so a turn-on
+          never finishes under observe having deleted nothing (owner decision 412); §22.8's testHookBarrier sites
+          include the purge's hold/ reread and evacuation's staged decision
 budget    the purge is P2 work that u pays for at admission (accounts, above); HDD DELETEs spend no NVMe budget,
           and a candidate slot's DELETE writes ~3.5 KiB a drive
 ```
@@ -2453,19 +2480,23 @@ who       a job per repo, covering every drop whose start has passed, from drops
           running job and the dry runs; each drop's state one of pending, cancelled, executing (with its phase),
           done, refused {locked, mismatch, verify}, held (its deletions waiting on a hold) or observed (§2.8's
           evs-28); GET .../drops (11.20) reports held as done, as owner decision 184 requires; evs writes it at each
-          DROP, cancel and dry run, the job at most once a minute) and the {evsd_<repo_id>} hint, whose loss the
-          nightly LIST of drops/ bounds to a day; evacuation appends a committed DROP the table lacks; an instance
-          takes the job by If-Match on drops/ (none running, or the owner's lease lapsed 30 s ago by its checked
-          clock), as owner until now + 2 min, renewed at each checkpoint, and stops at once on a lost If-Match
+          DROP, with the time it saw the DROP committed (seen_ms), and at each cancel and dry run, the job at most
+          once a minute) and the {evsd_<repo_id>} hint, whose loss the nightly LIST of drops/ bounds to a day;
+          evacuation appends a committed DROP the table lacks; an instance takes the job by If-Match on drops/ (none
+          running, or the owner's lease lapsed 30 s ago by its checked clock), as owner until now + 2 min, renewed
+          at each checkpoint, and stops at once on a lost If-Match
 start     pending -> executing at the start CAS once not_before_ms + 25 min has passed (owner decision 183), with no
           cancel of the drop after it in its ref's history (read at the CAS); a lock then standing makes it refused
           {locked}; pending -> cancelled when a cancel commits; neither deletes anything
 resolve   check each lineage's older entries against the map part or tail map_parts names, and each list against the
-          ref's statements and records: the listed set must equal every version with an entry_sha256 of the lineage's
-          token paths, each in its epoch, below through_version, a removal never listed, itself the DROP's write or
-          the standing removal, else refused {mismatch}, which pages (§19.8); then write to dropscan/ the candidates:
-          every segment and slot id a listed version names through a kind-1 locator or a slot id, less ids listed
-          versions name only through kind-5 locators
+          ref's statements: the count and SHA-256 of every version with an entry_sha256 of the lineage's token paths,
+          each in its epoch, below through_version, a removal never listed, itself the DROP's write or the standing
+          removal, must equal count and listed_sha256, else refused {mismatch}, which pages (§19.8), the lists read
+          only to describe a mismatch; each covered drop resolved and refused alone; then write to dropscan/ the
+          listed versions' entry hashes, sorted (the table row's list files), and the candidates: every segment and
+          slot id a listed version names through a kind-1 locator or a slot id, less ids listed versions name only
+          through kind-5 locators, and nothing else: the job never lists seg/ (owner decision 237; DESIGN-DETAILS.md
+          section 10)
 table     drops/<repo>/_ holds fixed-size records within 64 KiB: a drop at most 128 B (ids, ref, push id, version,
           place, not_before_ms, seen_ms (owner decision 397), state, phase, freed and held bytes, preview_id and
           ended_day, a UTC day number to 2149), a dry run at most 64 B, holding its run's lease in until_ms while it
@@ -2490,28 +2521,33 @@ table     drops/<repo>/_ holds fixed-size records within 64 KiB: a drop at most 
           or refused drop leaves a 17 B void record {drop_id, state} for the repo's life, so an absent entry with no
           void record reads executed; 5c answers a drop 429 when pending, executing and observed entries and void
           records would pass 48 KiB, held entries never counting, a cancel never refused, and dry runs only evicting
-horizon   the job marks only once the horizon of the repo's metadata cluster (11.13's orphans row) has passed each
-          covered drop's seen_ms, the appender's clock read after the answer that showed it the commit, by 12 min
-          (10 min of head cache, step 7's 5 s window, the clocks and slack), so every push validated before a drop,
-          on a cached head too, has committed on a head a scan reads, or is dead (owner decisions 204, 397)
-mark      at snapshot M, each ref's head read from the cluster after every covered drop's fence, over every ref of
-          the repo (file and git mode, shared and owned, creates-only, deposit and erasure refs, overlays and DELETE
-          tombstones; owner decision 173), each live version (every committed version no executing or done drop
-          lists) marks the candidates it names, comparing locators and slot ids from log pages, windows and records
-          and decrypting nothing; a dry run's marks for the same paths stand, so mark reads only later versions;
-          marks only grow, checkpointed with the cursor
-verify    at snapshot V >= M, reread from the cluster, a separate implementation (§22's oracle, shipped in
-          taskworker) looks every id each live version at or below V names up in D, the unmarked candidates; any
-          hit refuses the job {verify}, which pages too; it rereads each drop's ref for a cancel and the repo for a
-          lock
+horizon   every round first takes the horizon of the repo's metadata cluster (the orphans row), before any LIST of
+          head/, and the job marks only once it has passed each covered drop's seen_ms, the appender's clock read
+          after the answer that showed it the commit, by 12 min (10 min of head cache, step 7's 5 s window, the
+          clocks and slack), so every push validated before a drop, on a cached head too, has committed on a head
+          the round's scans read, or is dead (owner decisions 204, 397); short of it the job waits in its horizon
+          phase, its lease released, until its retry time
+mark      at snapshot M, taken after the round's horizon: the repo's refs listed and each ref's head read from the
+          cluster, a held key waited out and never skipped, over every ref of the repo (file and git mode, shared
+          and owned, creates-only, deposit and erasure refs, overlays and DELETE tombstones; owner decision 173),
+          each live version (every committed version no executing or done drop lists) marks the candidates it names,
+          and a git-mode push those in its new-objects list (owner decision 237), comparing locators and slot ids
+          from log pages, windows and records and decrypting nothing; a dry run's marks for the same paths stand, so
+          mark reads only later versions; marks only grow, checkpointed with the cursor
+verify    at snapshot V >= M, the refs listed again and their heads reread from the cluster, a separate
+          implementation (§22's oracle, shipped in taskworker) looks every id each live version at or below V names
+          up in D, the unmarked candidates; a hit in a version at or below M refuses the job {verify}, which pages
+          too, and one in a later version is marked and counted, paging as drop_late_mark when the horizon had
+          passed its bounds (§19.8); it rereads each drop's ref for a cancel and the repo for a lock
 delete    per id of D: reread hold/ and repo/ (cached at most 5 s), a covering hold moving the rest of D to held;
           HEAD seg/<repo>/<id>: a 404 with a spidx/ entry is packed (withheld until compaction), any other 404 done,
           one whose LastModified + 24 h + 2 min the round's evacuation horizon has not passed young (owner decision
-          397); else DELETE (204: done); slots likewise on the metadata
-          cluster; the job reports each seg/ object once, at its stored size, when it is deleted or moves to held, a
-          held object's DELETE after its hold reporting nothing, and slots, outside §20.7's stored count, report
-          nothing; the cursor advances by CAS only past answered ids, and usage batches keyed by (scan id, cursor
-          range) count freed bytes once (§20.6); refused, cancelled and observed drops delete nothing
+          397); else DELETE naming that LastModified (§19.6; 204: done; 412: stored again since the HEAD, so no
+          longer this drop's, replaced); slots likewise on the metadata cluster; the job reports each seg/ object
+          once, at its stored size, when it is deleted or moves to held, a held object's DELETE after its hold
+          reporting nothing, and slots, outside §20.7's stored count, report nothing; the cursor advances by CAS
+          only past answered ids, and usage batches keyed by (scan id, cursor range) count freed bytes once (§20.6);
+          refused, cancelled and observed drops delete nothing
 young     candidates whose LastModified + 24 h + 2 min the round's evacuation horizon has not passed, both
           settings, wait for a later round (owner decision 397), whose mark and verify read only versions after V
 holds     no hold refuses the DROP, since a refusal would reveal a sealed hold (owner decision 93); the job deletes
@@ -2528,8 +2564,8 @@ observe   under §19.11's format2.drop: observe (D-TEST-18), executing ends afte
           deleted; when drop turns on, an observed drop runs again from mark
 preview   a dry run (11.20's preview route, admin) is P2, one at a time a repo and at most
           evs_drop_previews_per_day (20) a repo (§20.4): resolve and mark at a snapshot, reporting per path
-          list_match against the client's count and listed_sha256, and the versions, freed, shared, inline, packed
-          and young bytes; a job reuses its marks
+          list_match against the client's count and listed_sha256, whether its lineage is linked and the map parts
+          that link it, and the versions, freed, shared, inline, packed and young bytes; a job reuses its marks
 ```
 
 **Uploads (D-EVS-34):**
@@ -3611,7 +3647,7 @@ never     a query, which documents match it, or which trigrams documents share: 
 | Latest buckets, 100 messages a day | both ≤ ~5.4 MB; each file ≤ 1 MiB, decrypted by frame within the working set above |
 | Search masks | one probe per candidate, lazily in rank order, into §5.9's version table through 256 KiB of cached pages a process; no set of the partitions' keys in memory; the table updated at a swap within 1 MiB (11.14) |
 | Cold "search more" | first progress ≤ 500 ms; each shard's hits ≤ 100 ms after it lands, ≤ 300 ms on phones and page Workers; complete within the missing bytes over the throughput, plus 1 s (§16.10's cold contract) |
-| A drop | nothing deleted before `not_before_ms` + 25 min, nor before evacuation's horizon passes the drop's commit by 2 min, about 25 to 26 h after a `now` drop (owner decision 204); a job's two passes read ≤ 32 MB/s; 10,000 segments deleted in about 17 min; ≤ ~0.3 MB written a metadata drive for a drop whose job runs 10 min |
+| A drop | nothing deleted before `not_before_ms` + 25 min, nor before evacuation's horizon passes by 12 min the time evs saw the drop committed, 25 h 12 min to 26 h 12 min after a `now` drop (owner decisions 204, 397); a job's two passes read ≤ 32 MB/s; 10,000 segments deleted in about 17 min; ≤ ~0.3 MB written a metadata drive for a drop whose job runs 10 min |
 
 **Concurrency.** Pushes to one ref meet only at its head's If-Match: a file-mode loser with disjoint paths retries inside evs, so one ref sustains roughly 20-50 pushes/s; a git-mode loser gets a stock non-fast-forward and merges. Distinct refs never contend. In the twenty-agent test (§22), agents write their own refs in real time, and a merge into main every 60 s meets another in its ~60 ms window about 2% of the time, then merges again.
 
@@ -3809,11 +3845,11 @@ never     a query, which documents match it, or which trigrams documents share: 
 
 **D-EVS-61 (proposed).** The `directory` kind has one repo per team network, record-class: a shared file-mode `cards` ref, whose `d/`, `r/` and `q/` paths are versionless from its format 2 and checked by readers against their writers; per-writer streams; `ur/index`; and `erasure`, whose ERASE, CUT and CLOSURE take `admin`, as every repo's, held only by its consented, not-read-only admins, a repo owner's revocation erasing through §16.11's erasure runner. Its index is on by kind, with a 7-day window, and refuses `off`; its group seats readers under §7.9's leaves rule; its daemons read moved streams 64 to a request (11.9). *Why:* owner decision 171 gives this repo's index every announcement, specific beside owner decision 156; evs sees no path, so readers enforce writers, as Q-EVS-3's prefix rules do, but a reader's check after a key is destroyed restores nothing, so erasure needs an authority evs checks first; owner decisions 177, 181, 182.
 
-**D-EVS-62 (proposed).** A drop is a DROP push (flag 256) on the path's file-mode ref, signed by one repo admin (owner-bound: only a consented, not-read-only device of the owner; never MCP), listing per lineage every dropped version by entry hash and the version that stays; it waits 7 days, in which any repo admin may cancel, `now` skipping the window as RepoDelete's does, and a lock voids it; config and mailcfg repos, git-mode and creates-only refs, directory paths and versionless heads refuse it at evs, and the derived refs and paths it cannot see (ur/index, ur/lfs, .ur-index/) at clients and readers. *Why:* owner decisions 126, 173 and 183; a push orders the drop with the path's versions and the head fences it.
+**D-EVS-62 (proposed).** A drop is a DROP push (flag 256) on the path's file-mode ref, signed by one repo admin (owner-bound: only a consented, not-read-only device of the owner; never MCP), listing per lineage every dropped version by entry hash and the version that stays; it waits 7 days, in which any repo admin may cancel, `now` skipping the window as RepoDelete's does, and a lock voids it; config and mailcfg repos, git-mode and creates-only refs, directory paths and versionless heads refuse it at evs, and the derived refs and paths it cannot see (ur/index, ur/lfs, .ur-index/) at clients and readers. The signed body says what is dropped; the lists are its signer's enumeration, proved against history by the job and by replaying readers and sent to no reader (owner decision 396). *Why:* owner decisions 126, 173 and 183; a push orders the drop with the path's versions and the head fences it.
 
 **D-EVS-63 (proposed).** A drop deletes only kind-1 segments and slots that only listed versions name; statements, hashes and entry versions without inline records stay, so history verifies, and listed inline content waits for compaction, unserved; the kept head is written as a fresh checkpoint or re-cited chunk set; readers show pending, then dropped, never missing or tampered. *Why:* no diff chain keeps dropped content, and no drop reads as tampering.
 
-**D-EVS-64 (proposed).** From its commit no push may cite a listed version; the job starts 25 min after the window, marks every ref's live versions at one snapshot once evacuation's horizon has passed each covered drop's commit by 2 min (owner decision 204), verifies with a separate implementation at a later one, deletes only objects over 25 h old, and resumes from `drops/`. *Why:* a mutator cannot move a reference past a scan of immutable history, and two implementations must agree before any DELETE.
+**D-EVS-64 (proposed).** From its commit no push may cite a listed version; the job starts 25 min after the window, marks every ref's live versions at one snapshot once evacuation's horizon has passed by 12 min the time evs saw each covered drop committed (owner decisions 204, 397), verifies with a separate implementation at a later one, deletes only objects whose LastModified + 24 h + 2 min the horizon has passed, by a DELETE naming the object, and resumes from `drops/`. *Why:* a mutator cannot move a reference past a scan of immutable history, and two implementations must agree before any DELETE.
 
 **D-EVS-65 (proposed).** A hold defers a drop's deletions silently, the drop reading, listing and billing as finished; stored bytes fall as the job deletes; the DROP rewrites listed versions out of the index; mirrors apply it; compaction may later remove listed inline content, keeping every statement and every byte a live version needs. *Why:* owner decisions 93, 133, 159, 165 and 184.
 
@@ -3983,7 +4019,7 @@ never     a query, which documents match it, or which trigrams documents share: 
 | A git-mode tip needs a git-lfs object ur/lfs lost or a prune is removing (a force push to a pruned ancestor, a new ref or tag at old history, an import, a skipped pre-push hook) | Medium | Medium | The tip check touches what a prune could take and refuses what is gone, naming the objects and `git lfs push --object-id` (11.11); a prune keeps every tip of its start read; FS-73 with stock clients |
 | Purges and sweeps add HDD DELETEs and HEADs | Low | Medium | ~1-4% of year two's drive operations; a rate per process; §22.8's hdd and trash rows |
 | An evs crash leaves queued purges for up to ~26 h | Medium | Low | A 70 s drain on stop; the sweep; §19.8's sweep metric |
-| A drop bug deletes content a live version needs | Low | Critical | The fence, two independent scans, the 25 h age rule, whole-object deletes only, I-EVS-15 model-checked, observe mode and its soak (D-TEST-18) |
+| A drop bug deletes content a live version needs | Low | Critical | The fence, two independent scans after evacuation's horizon, the horizon's age rule (owner decision 397), whole-object deletes only, I-EVS-15 model-checked, observe mode and its soak (D-TEST-18) |
 | A rogue or compromised admin destroys history | Low | High | The 7-day window, notices, any repo admin's cancel, a lock voiding it, owner-bound consent (owner decision 183); `now` as RepoDelete's (§2.18) |
 | Inline content outlives the drop in packs | Certain; no compaction is scheduled (owner decision 247) | Low | Never served again; slot-keyed repos shred it at once; disclosed |
 | Large repos' scans load the HDDs | Medium | Low | Rate caps, one job a cluster, the 50% pause, coalescing, dry-run marks reused |

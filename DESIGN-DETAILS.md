@@ -17,7 +17,7 @@ Status values: `pending`, `in progress`, `complete (date)`, or `complete pending
 | 7 | Remote search across designated indexers (§11.14, §18.4) | 3 | complete (2026-11-11) |
 | 8 | Git and evs in both directions | 3 | complete (2026-11-10; amended 2026-11-13, section 16, QD-801 and QD-803) |
 | 9 | Client path epochs and re-tokenizing | 3 | complete (2026-11-10) |
-| 10 | DROP lists a phone can check (§11.6, §11.7, §11.9) | 5 | complete (2026-11-11; amended 2026-11-13, section 16) |
+| 10 | DROP lists a phone can check (§11.6, §11.7, §11.9) | 5 | complete (2026-11-11; amended 2026-11-13, section 16); folded into DESIGN.md 2026-11-17 (dr4-details-b) |
 | 11 | Canonical text extraction and exact body sizes for search | 2 | complete (2026-11-10; amended 2026-11-12, QD-760); folded into DESIGN.md 2026-11-17 (dr4-details-a) |
 | 12 | Bridge compiler and NAT engine (§17) | 4 | complete (2026-11-11; amended 2026-11-12, QD-761, built on the recommendations of open questions details-amend-2-late-generation and details-amend-2-fold-holds) |
 | 13 | Smaller scheduling problems: closure pacing, quota leases, socket registration | 4 | complete (2026-11-10) |

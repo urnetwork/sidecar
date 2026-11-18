@@ -3,9 +3,11 @@
 // §6.8's client machine (push_state.go) on every leg but js, whose tests cannot open files: a partial
 // reset applies nothing, a run's union applies once complete, a new epoch or a hint abandons a run, seq
 // gaps and restarts send the client to versions, stale versions are ignored, a reset keeps what it
-// omits, a durable fall raises head_alarm rollback (owner decision 300) and holds Consistent false until
-// reconciled while a clock's fall is adopted and raises nothing, evs-sized versions stay exact, versions
-// outlive a restart, and the feed resyncs at start, on demand and hourly. A versions page
+// omits, a clock's fall is adopted and raises nothing, evs-sized versions stay exact, versions outlive a
+// restart, and the feed resyncs at start, on demand and hourly. Only a versions page judges a durable
+// fall (QD-1044): a reset, a resident's or a poll's, that shows one applies its other topics, raises
+// nothing and sends the client to versions once, and the page begun after it, showing the fall, raises
+// head_alarm rollback (owner decision 300) and holds Consistent false until reconciled. A versions page
 // begun before an input the push gave since takes only its rises (owner decision 299): it ends no run
 // and raises no alarm, sending the client to versions again, one more refetch at most, and keeps the seq
 // baseline, while a page begun after every input keeps the rules, its alarms included.
@@ -16,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -207,23 +210,19 @@ func TestPushSeqGapsAndStaleVersions(t *testing.T) {
 	}
 }
 
-// A reset keeps what it omits; a durable topic's fall alarms and is not applied, and Consistent turns
-// false until its owner reconciles; a clock's fall is adopted with a resync notice and no alarm.
+// A reset keeps what it omits; a durable topic's fall is not applied, raises nothing, leaves Consistent
+// true and asks for versions once (QD-1044), and the page that answers, showing the same fall, alarms and
+// turns Consistent false until the topic's owner reconciles it; a clock's fall is adopted with a resync
+// notice and no alarm.
 func TestPushResetFallsByClass(t *testing.T) {
-	store := newTestPushStore()
-	events := make(chan SidecarEvent, 4)
-	feed, err := newPushFeed(t.Context(), DefaultPushClientSettings(), store, newTestEnvelopeClock(), NewNoopLogger(), func(event SidecarEvent) {
-		events <- event
-	}, func(ctx context.Context, cursor []byte) (*protocol.PollResponse, error) {
-		<-ctx.Done()
-		return nil, ctx.Err()
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer feed.close()
+	held := newTestPushHeldVersions()
+	feed, events, cores := newTestPushHeldFeed(t, held)
+	held.awaitStart(t, "the start's refetch")
+	held.answer(t)
+	testPushAwait(t, cores, "the start page's core notice")
 	repo := PushTopicEvs(NewId())
 	feed.applyResetPart(testPushPart(1, true, PushTopicTeam, 10, repo, 1000, PushTopicSock, 5))
+	testPushAwait(t, cores, "the first reset's core notice")
 	notices := make(chan PushNotice, 16)
 	for _, topic := range []string{PushTopicTeam, PushTopicEvsPrefix, PushTopicSock} {
 		remove, err := feed.subscribe(topic, func(notice PushNotice) {
@@ -235,17 +234,14 @@ func TestPushResetFallsByClass(t *testing.T) {
 		defer remove()
 	}
 
+	asks := feed.asks.Value()
 	feed.applyResetPart(testPushPart(2, true, PushTopicTeam, 6, repo, 400))
-	if feed.version(PushTopicTeam) != 10 || feed.consistent() {
-		t.Fatalf("a durable fall: team %d, consistent %t", feed.version(PushTopicTeam), feed.consistent())
+	testPushAwait(t, cores, "the fall's core notice")
+	if feed.version(PushTopicTeam) != 10 || !feed.consistent() || len(events) != 0 {
+		t.Fatalf("a reset's durable fall: team %d, consistent %t, %d alarms", feed.version(PushTopicTeam), feed.consistent(), len(events))
 	}
-	event := testPushAwait(t, events, "head_alarm")
-	held := &protocol.TopicVersion{}
-	offered := &protocol.TopicVersion{}
-	proto.Unmarshal(event.Evidence[0], held)
-	proto.Unmarshal(event.Evidence[1], offered)
-	if event.Kind != SidecarEventHeadAlarm || event.HeadAlarm != SidecarHeadAlarmRollback || held.Version != 10 || offered.Version != 6 || held.Topic != PushTopicTeam {
-		t.Errorf("event %+v", event)
+	if nextAsks := feed.asks.Value(); nextAsks.askCount != asks.askCount+1 {
+		t.Errorf("a reset's durable fall asked for versions %d times", nextAsks.askCount-asks.askCount)
 	}
 	notice := testPushAwait(t, notices, "notice")
 	if notice.Topic != repo || notice.Version != 400 || !notice.Resync || feed.version(repo) != 400 {
@@ -254,16 +250,39 @@ func TestPushResetFallsByClass(t *testing.T) {
 	if feed.version(PushTopicSock) != 5 {
 		t.Errorf("a topic the reset omitted: %d", feed.version(PushTopicSock))
 	}
-	select {
-	case event := <-events:
-		t.Errorf("a clock's fall alarmed: %+v", event)
-	default:
+
+	held.awaitStart(t, "the refetch the fall asks for")
+	held.answer(t, PushTopicTeam, 6, repo, 400)
+	event := testPushAwait(t, events, "head_alarm")
+	evidence := [2]*protocol.TopicVersion{{}, {}}
+	for i := range evidence {
+		if err := proto.Unmarshal(event.Evidence[i], evidence[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if event.Kind != SidecarEventHeadAlarm || event.HeadAlarm != SidecarHeadAlarmRollback || evidence[0].Topic != PushTopicTeam || evidence[0].Version != 10 || evidence[1].Version != 6 {
+		t.Errorf("event %+v, evidence %v", event, evidence)
+	}
+	// the page's last notice, after any it gave the topics subscribed to
+	testPushAwait(t, cores, "the page's core notice")
+	if feed.version(PushTopicTeam) != 10 || feed.consistent() || len(events) != 0 || len(notices) != 0 {
+		t.Errorf("the page: team %d, consistent %t, %d more alarms, %d notices", feed.version(PushTopicTeam), feed.consistent(), len(events), len(notices))
 	}
 
 	feed.reconcile(PushTopicTeam, 6)
 	if !feed.consistent() || feed.version(PushTopicTeam) != 6 {
 		t.Errorf("reconciled: consistent %t, team %d", feed.consistent(), feed.version(PushTopicTeam))
 	}
+}
+
+// The two ways a reset reaches the feed, each an input: a resident's complete part and a poll's reset.
+var testPushResetInputs = []func(feed *pushFeed, reset *protocol.PushReset){
+	func(feed *pushFeed, reset *protocol.PushReset) {
+		feed.applyResetPart(reset)
+	},
+	func(feed *pushFeed, reset *protocol.PushReset) {
+		feed.applyPoll(&protocol.PollResponse{Reset_: reset})
+	},
 }
 
 // A feed whose start refetch never answers, so every input is the test's, with every event it raises in events. The
@@ -284,32 +303,41 @@ func newTestPushQuietFeed(t *testing.T) (*pushFeed, chan SidecarEvent) {
 	return feed, events
 }
 
-// QD-928 (owner decision 300): a reset below a durable version raises head_alarm of kind rollback, never fork, with
-// no peer and as Evidence the two TopicVersions, the held one first, then the offered one. The version held stands
-// and Consistent is false until the topic's owner reconciles it, the version reconciled then applying, while the
-// clock topics the same reset lowers raise nothing and are adopted. So for each durable topic, team, dns and
-// gkm:<group_id>, through a resident's complete part and a poll's reset alike.
-func TestPushDurableFallRaisesRollback(t *testing.T) {
-	inputs := []func(feed *pushFeed, reset *protocol.PushReset){
-		func(feed *pushFeed, reset *protocol.PushReset) {
-			feed.applyResetPart(reset)
-		},
-		func(feed *pushFeed, reset *protocol.PushReset) {
-			feed.applyPoll(&protocol.PollResponse{Reset_: reset})
-		},
-	}
+// QD-928 (owner decision 300) with QD-1044: a reset below a durable version raises nothing, keeps the version held and
+// Consistent true and asks for versions, and the page that answers, begun after it and showing the same fall, raises
+// head_alarm of kind rollback, never fork, with no peer and as Evidence the two TopicVersions, the held one first, then
+// the offered one. The version held stands and Consistent is false until the topic's owner reconciles it, the version
+// reconciled then applying, while the clock topics the same reset lowers raise nothing and are adopted at the reset.
+// So for each durable topic, team, dns and gkm:<group_id>, through a resident's complete part and a poll's reset alike.
+func TestPushDurableFallAlarmsOneRefetchLater(t *testing.T) {
 	repo := PushTopicEvs(NewId())
 	for _, topic := range []string{PushTopicTeam, PushTopicDns, PushTopicGkmGroup(NewId())} {
-		for i, input := range inputs {
-			feed, events := newTestPushQuietFeed(t)
+		for i, input := range testPushResetInputs {
+			held := newTestPushHeldVersions()
+			feed, events, cores := newTestPushHeldFeed(t, held)
+			held.awaitStart(t, "the start's refetch")
+			held.answer(t)
+			testPushAwait(t, cores, "the start page's core notice")
 			input(feed, testPushPart(1, true, topic, 10, PushTopicSock, 50, repo, 1000))
+			testPushAwait(t, cores, "the first reset's core notice")
 			if len(events) != 0 || !feed.consistent() || feed.version(topic) != 10 {
 				t.Fatalf("%s, input %d: the first reset raised %d events, consistent %t", topic, i, len(events), feed.consistent())
 			}
 
 			input(feed, testPushPart(2, true, topic, 6, PushTopicSock, 40, repo, 400))
+			testPushAwait(t, cores, "the fall's core notice")
+			if len(events) != 0 || !feed.consistent() || feed.version(topic) != 10 {
+				t.Fatalf("%s, input %d: the reset's fall raised %d events, consistent %t, version %d", topic, i, len(events), feed.consistent(), feed.version(topic))
+			}
+			if feed.version(PushTopicSock) != 40 || feed.version(repo) != 400 {
+				t.Errorf("%s, input %d: the clocks' falls: sock %d, repo %d", topic, i, feed.version(PushTopicSock), feed.version(repo))
+			}
+
+			held.awaitStart(t, "the refetch the fall asks for")
+			held.answer(t, topic, 6, PushTopicSock, 40, repo, 400)
+			testPushAwait(t, cores, "the page's core notice")
 			if len(events) != 1 {
-				t.Fatalf("%s, input %d: the fall raised %d events", topic, i, len(events))
+				t.Fatalf("%s, input %d: the page raised %d events", topic, i, len(events))
 			}
 			event := <-events
 			if event.Kind != SidecarEventHeadAlarm || event.HeadAlarm != SidecarHeadAlarmRollback || event.SidecarId != nil {
@@ -325,10 +353,7 @@ func TestPushDurableFallRaisesRollback(t *testing.T) {
 				t.Errorf("%s, input %d: evidence %v", topic, i, evidence)
 			}
 			if feed.version(topic) != 10 || feed.consistent() {
-				t.Errorf("%s, input %d: after the fall: version %d, consistent %t", topic, i, feed.version(topic), feed.consistent())
-			}
-			if feed.version(PushTopicSock) != 40 || feed.version(repo) != 400 {
-				t.Errorf("%s, input %d: the clocks' falls: sock %d, repo %d", topic, i, feed.version(PushTopicSock), feed.version(repo))
+				t.Errorf("%s, input %d: after the page: version %d, consistent %t", topic, i, feed.version(topic), feed.consistent())
 			}
 
 			feed.reconcile(topic, 6)
@@ -339,8 +364,9 @@ func TestPushDurableFallRaisesRollback(t *testing.T) {
 	}
 }
 
-// A reset lowering every clock topic raises nothing and leaves Consistent true: each fall is a gap, adopted (§6.8's
-// topic registry), a resident's part's and a poll's reset's alike.
+// A reset lowering every clock topic raises nothing, leaves Consistent true and asks for no versions: each fall is a
+// gap, adopted (§6.8's topic registry), a resident's part's and a poll's reset's alike, and only a durable topic's fall
+// sends the client to versions (QD-1044).
 func TestPushClockFallRaisesNothing(t *testing.T) {
 	feed, events := newTestPushQuietFeed(t)
 	clocks := []string{PushTopicCore, PushTopicSock, PushTopicMail, PushTopicTls, PushTopicGkm, PushTopicEvs(NewId())}
@@ -351,6 +377,7 @@ func TestPushClockFallRaisesNothing(t *testing.T) {
 		}
 		return topicVersions
 	}
+	asks := feed.asks.Value()
 	feed.applyResetPart(testPushPart(1, true, at(10)...))
 	feed.applyResetPart(testPushPart(2, true, at(5)...))
 	if len(events) != 0 || !feed.consistent() {
@@ -364,6 +391,9 @@ func TestPushClockFallRaisesNothing(t *testing.T) {
 		if feed.version(topic) != 3 {
 			t.Errorf("%s: %d, its falls not adopted", topic, feed.version(topic))
 		}
+	}
+	if nextAsks := feed.asks.Value(); nextAsks != asks {
+		t.Errorf("clock falls asked for versions: %+v, then %+v", asks, nextAsks)
 	}
 }
 
@@ -383,7 +413,7 @@ func TestPushEvsSizedVersionsStayExact(t *testing.T) {
 }
 
 // What a feed applied is kept, and a feed on the same store starts from it: a durable floor outlives a
-// restart.
+// restart, a reset below it keeping it and the page that reset asks for alarming against it.
 func TestPushVersionsOutliveARestart(t *testing.T) {
 	store := newTestPushStore()
 	blocked := func(ctx context.Context, cursor []byte) (*protocol.PollResponse, error) {
@@ -396,7 +426,8 @@ func TestPushVersionsOutliveARestart(t *testing.T) {
 	}
 	feed.applyResetPart(testPushPart(1, true, PushTopicTeam, 10, PushTopicDns, 3))
 	feed.close()
-	restarted, err := newPushFeed(t.Context(), DefaultPushClientSettings(), store, newTestEnvelopeClock(), NewNoopLogger(), nil, blocked)
+	held := newTestPushHeldVersions()
+	restarted, err := newPushFeed(t.Context(), DefaultPushClientSettings(), store, newTestEnvelopeClock(), NewNoopLogger(), nil, held.versions)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -404,9 +435,27 @@ func TestPushVersionsOutliveARestart(t *testing.T) {
 	if restarted.version(PushTopicTeam) != 10 || restarted.version(PushTopicDns) != 3 {
 		t.Fatalf("restarted with team %d dns %d", restarted.version(PushTopicTeam), restarted.version(PushTopicDns))
 	}
+	cores := make(chan PushNotice, 4)
+	remove, err := restarted.subscribe(PushTopicCore, func(notice PushNotice) {
+		cores <- notice
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer remove()
+	held.awaitStart(t, "the restarted feed's start refetch")
+	held.answer(t)
+	testPushAwait(t, cores, "the start page's core notice")
 	restarted.applyResetPart(testPushPart(2, true, PushTopicTeam, 4))
+	if restarted.version(PushTopicTeam) != 10 || !restarted.consistent() {
+		t.Errorf("a restart forgot the durable floor: team %d, consistent %t", restarted.version(PushTopicTeam), restarted.consistent())
+	}
+	testPushAwait(t, cores, "the reset's core notice")
+	held.awaitStart(t, "the refetch the reset asks for")
+	held.answer(t, PushTopicTeam, 4)
+	testPushAwait(t, cores, "the page's core notice")
 	if restarted.version(PushTopicTeam) != 10 || restarted.consistent() {
-		t.Errorf("a restart forgot the durable floor")
+		t.Errorf("a page below the kept floor: team %d, consistent %t", restarted.version(PushTopicTeam), restarted.consistent())
 	}
 	// a kept file that does not decode is a fault, never an empty floor
 	store.files[pushVersionsFileName] = []byte{0xff, 0xff}
@@ -777,5 +826,108 @@ func TestPushTimelyPageLoweringADurableTopicAlarms(t *testing.T) {
 	}
 	if feed.version(PushTopicTeam) != 10 || feed.consistent() {
 		t.Errorf("team %d, consistent %t", feed.version(PushTopicTeam), feed.consistent())
+	}
+}
+
+// QD-1044's first way: a resident reads {scp_<C>}ver for its reset before api reads a page that follows team's rise
+// to 10, and the page lands first. The reset, showing team 9, raises no alarm and keeps team 10 and Consistent true,
+// its dns rise applying, and sends the client to versions, whose page, team 10 again, raises nothing. A resident's
+// part and a poll's reset alike.
+func TestPushResetReadBeforeAnAppliedPageGoesToVersions(t *testing.T) {
+	for i, input := range testPushResetInputs {
+		held := newTestPushHeldVersions()
+		feed, events, cores := newTestPushHeldFeed(t, held)
+		held.awaitStart(t, "the start's refetch")
+		held.answer(t, PushTopicTeam, 10, PushTopicDns, 3)
+		testPushAwait(t, cores, "the page's core notice")
+
+		input(feed, testPushPart(1, true, PushTopicTeam, 9, PushTopicDns, 4))
+		testPushAwait(t, cores, "the reset's core notice")
+		if len(events) != 0 || feed.version(PushTopicTeam) != 10 || feed.version(PushTopicDns) != 4 || !feed.consistent() {
+			t.Fatalf("input %d, the reset: %d alarms, team %d, dns %d, consistent %t", i, len(events), feed.version(PushTopicTeam), feed.version(PushTopicDns), feed.consistent())
+		}
+
+		held.awaitStart(t, "the refetch the reset asks for")
+		held.answer(t, PushTopicTeam, 10, PushTopicDns, 4)
+		testPushAwait(t, cores, "the next page's core notice")
+		if len(events) != 0 || feed.version(PushTopicTeam) != 10 || !feed.consistent() {
+			t.Errorf("input %d, the next page: %d alarms, team %d, consistent %t", i, len(events), feed.version(PushTopicTeam), feed.consistent())
+		}
+	}
+}
+
+// QD-1044's first way through a run: a resident's run opens with team 9 while a page api read after team's rise is in
+// flight, and the page lands late, raising team to 10 and leaving the run open (owner decision 299). The run's union,
+// applied at its last part, shows team 9: no alarm, team 10 kept, its dns applied and versions asked for, and the page
+// that answers, begun after the run, shows team 10 and raises nothing, asking for nothing more.
+func TestPushRunSpanningALatePageGoesToVersions(t *testing.T) {
+	machine := testPushMachine()
+	noted := machine.inputCount
+	machine.resetPart(testPushPart(7, false, PushTopicTeam, 9))
+	if action := machine.reset(map[string]uint64{PushTopicTeam: 10}, noted); !machine.runOpen || !action.refetchVersions || machine.topicVersions[PushTopicTeam] != 10 {
+		t.Fatalf("the late page: run open %t, %+v, team %d", machine.runOpen, action, machine.topicVersions[PushTopicTeam])
+	}
+
+	action := machine.resetPart(testPushPart(7, true, PushTopicDns, 4))
+	if len(action.alarms) != 0 || len(machine.alarmTopics) != 0 || !action.refetchVersions || machine.runOpen {
+		t.Fatalf("the run's union below the page: %+v, alarm topics %v, run open %t", action, machine.alarmTopics, machine.runOpen)
+	}
+	if machine.topicVersions[PushTopicTeam] != 10 || machine.topicVersions[PushTopicDns] != 4 {
+		t.Errorf("the run's union applied %v", machine.topicVersions)
+	}
+	if topics := testNoticeTopics(action); !slices.Equal(topics, []string{PushTopicDns, PushTopicCore}) {
+		t.Errorf("notices %v", topics)
+	}
+
+	action = machine.reset(map[string]uint64{PushTopicTeam: 10, PushTopicDns: 4}, machine.inputCount)
+	if len(action.alarms) != 0 || len(machine.alarmTopics) != 0 || action.refetchVersions {
+		t.Errorf("the page the run asked for: %+v", action)
+	}
+}
+
+// A reset showing a durable topic below the version held applies its other topics as any reset does, a rise with its
+// notice, a clock's fall adopted with its notice, a topic it omits kept, core noticed and the seq baseline cleared,
+// while the durable topic keeps its version, raises nothing and asks for versions once, however many durable topics
+// fell. A reset with no durable fall asks for nothing. A resident's complete part and a poll's reset alike.
+func TestPushResetBelowADurableVersionAppliesItsOtherTopics(t *testing.T) {
+	inputs := []func(machine *pushMachine, reset *protocol.PushReset) *pushAction{
+		func(machine *pushMachine, reset *protocol.PushReset) *pushAction {
+			return machine.resetPart(reset)
+		},
+		func(machine *pushMachine, reset *protocol.PushReset) *pushAction {
+			topicVersions := map[string]uint64{}
+			for _, topicVersion := range reset.Versions {
+				topicVersions[topicVersion.Topic] = topicVersion.Version
+			}
+			return machine.pollReset(topicVersions)
+		},
+	}
+	repo := PushTopicEvs(NewId())
+	group := PushTopicGkmGroup(NewId())
+	for i, input := range inputs {
+		machine := testPushMachine()
+		machine.reset(map[string]uint64{PushTopicTeam: 10, group: 20, PushTopicDns: 3, PushTopicSock: 50, PushTopicMail: 7, repo: 1000}, machine.inputCount)
+		machine.hint(testPushHint(5, PushTopicSock, 51))
+
+		action := input(machine, testPushPart(1, true, PushTopicTeam, 9, group, 19, PushTopicDns, 4, PushTopicSock, 40, repo, 400))
+		if len(action.alarms) != 0 || len(machine.alarmTopics) != 0 || !action.refetchVersions || !action.changed {
+			t.Fatalf("input %d: a reset below two durable versions: %+v, alarm topics %v", i, action, machine.alarmTopics)
+		}
+		want := map[string]uint64{PushTopicTeam: 10, group: 20, PushTopicDns: 4, PushTopicSock: 40, PushTopicMail: 7, repo: 400}
+		if !maps.Equal(machine.topicVersions, want) {
+			t.Errorf("input %d: applied %v, want %v", i, machine.topicVersions, want)
+		}
+		if topics := testNoticeTopics(action); !slices.Equal(topics, []string{PushTopicDns, repo, PushTopicSock, PushTopicCore}) {
+			t.Errorf("input %d: notices %v", i, topics)
+		}
+		// the reset is the new baseline: any seq sets it
+		if action := machine.hint(testPushHint(40, PushTopicSock, 41)); action.refetchVersions {
+			t.Errorf("input %d: after the reset a seq asked for versions: %+v", i, action)
+		}
+
+		action = input(machine, testPushPart(2, true, PushTopicTeam, 11, PushTopicSock, 30))
+		if action.refetchVersions || len(action.alarms) != 0 || machine.topicVersions[PushTopicTeam] != 11 || machine.topicVersions[PushTopicSock] != 30 {
+			t.Errorf("input %d: a reset with no durable fall: %+v, %v", i, action, machine.topicVersions)
+		}
 	}
 }

@@ -75,9 +75,9 @@ type SocketPlatformRegistrationsArgs struct {
 	SocketsUrl string
 	// Carries every request: the host's own.
 	Transport http.RoundTripper
-	// The bearer sockets takes for clientId: a service token of audience sockets naming it (QD-1029). A platform client
-	// is minted none yet, and sockets refuses the client token presented in its place, the closed direction (question
-	// sockets-service-token-edge-clients).
+	// The bearer sockets takes for clientId: a service token of audience sockets naming it (QD-1029), the one api's
+	// edge client route answers beside the platform client's jwt (QD-1054). sockets refuses anything else, a client
+	// jwt among them, 401, and a removed client's token by its rev/ object. A secret: never logged.
 	Bearer func(ctx context.Context, clientId Id) (string, error)
 }
 

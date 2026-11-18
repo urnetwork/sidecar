@@ -588,10 +588,12 @@ const (
 	SidecarHeadAlarmUnverified SidecarHeadAlarm = "unverified"
 	// 24 h without a consistent witness, or 1 h for a revocation this device signed.
 	SidecarHeadAlarmUnwitnessed SidecarHeadAlarm = "unwitnessed"
-	// A push reset presented a durable topic (team, dns, gkm:<group_id>) below the version this client holds: api
-	// lowered a version, where fork is two pins that disagree (§6.8; owner decision 300, QD-928). SidecarId is nil and
-	// Evidence the two TopicVersions as protobuf bytes, the held one first, then the offered one. The push client's
-	// Consistent() is false until the topic's owner reconciles it, as for every head alarm.
+	// A versions page (GET /sidecar/sync/versions) presented a durable topic (team, dns, gkm:<group_id>) below the
+	// version this client holds: api lowered a version, where fork is two pins that disagree (§6.8; owner decision 300,
+	// QD-928). A resident's or a poll's reset showing one lower raises nothing and sends the client to versions, whose
+	// page judges it (QD-1044). SidecarId is nil and Evidence the two TopicVersions as protobuf bytes, the held one
+	// first, then the offered one. The push client's Consistent() is false until the topic's owner reconciles it, as
+	// for every head alarm.
 	SidecarHeadAlarmRollback SidecarHeadAlarm = "rollback"
 )
 
