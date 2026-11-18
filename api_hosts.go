@@ -6,6 +6,12 @@
 // ur.io's /recurd/hosts/v1.json as PublishedJson writes it (QD-566), and ur status probes each entry. No other file
 // names a production host: tests build lists of .example names (CODESTYLE's test data rule).
 //
+// The mail prover's key sets (QD-123; DESIGN-DETAILS 3.2.7, §2.8 smtp-7) are static files under the host whose
+// entry is the smtp-proof-keys service, which only a mail prover host reaches, at idle: SmtpProofKeysUrl is that
+// host with the path below, and a key set's files sit at <SmtpProofKeysUrl>/<id>/<name>, id the SHA-256 of its
+// keyset.json in lowercase hex and name keyset.json, a contribution's name or a verifying key's, as keyset.json
+// gives them. No proving key is published, and nothing there needs a token.
+//
 // The issuer SPKIs are data the release supplies (§18.9). Until it does an entry has none, and a probe cannot tell
 // an intercepted chain from a real one, which ur status says rather than guesses.
 //
@@ -49,7 +55,12 @@ const (
 	SidecarHostServicePlatform SidecarHostService = "platform"
 	SidecarHostServiceSockets  SidecarHostService = "sockets"
 	SidecarHostServiceDns      SidecarHostService = "dns"
+	// The host of the mail prover's key sets, which fills no url of SidecarSettings: SmtpProofKeysUrl.
+	SidecarHostServiceSmtpProofKeys SidecarHostService = "smtp-proof-keys"
 )
+
+// Where the key sets sit under their host: an identifier of the published layout, as /recurd/hosts/v1.json is.
+const sidecarSmtpProofKeysPath = "/recurd/smtpproof/keys"
 
 // Every service a list must name for ApplyServiceUrls, in SidecarSettings' order.
 var sidecarHostServices = []SidecarHostService{
@@ -60,6 +71,11 @@ var sidecarHostServices = []SidecarHostService{
 	SidecarHostServiceGkm,
 	SidecarHostServiceSockets,
 	SidecarHostServiceDns,
+}
+
+// The services a list may name and need not: a host with none of them still runs.
+var sidecarHostOptionalServices = []SidecarHostService{
+	SidecarHostServiceSmtpProofKeys,
 }
 
 // When a host is needed: §18.9's need column, as a value.
@@ -203,8 +219,12 @@ func (self *SidecarHostList) validate() error {
 			return refuse("host %d's requirement %q", i, entry.Requirement)
 		}
 		if entry.Service != "" {
-			if !slices.Contains(sidecarHostServices, entry.Service) {
+			if !slices.Contains(sidecarHostServices, entry.Service) && !slices.Contains(sidecarHostOptionalServices, entry.Service) {
 				return refuse("host %d's service %q", i, entry.Service)
+			}
+			if entry.Service == SidecarHostServiceSmtpProofKeys && entry.Requirement != SidecarHostOptional {
+				// no host needs the key sets to run: only one that sends mail fetches them, at idle
+				return refuse("host %d's service %q is not optional", i, entry.Service)
 			}
 			if services[entry.Service] {
 				return refuse("service %q is listed twice", entry.Service)
@@ -289,6 +309,21 @@ func (self *SidecarHostList) ApplyServiceUrls(settings *SidecarSettings) error {
 	settings.SocketsUrl = urls[SidecarHostServiceSockets]
 	settings.DnsUrl = urls[SidecarHostServiceDns]
 	return nil
+}
+
+// Where the mail prover's key sets are published (DESIGN-DETAILS 3.2.7): https://<host><path>, with :<tcp> unless it
+// is 443, and no trailing slash, so a key set's files are at <url>/<id in hex>/<name>. Empty when the list names no
+// such host, and a prover host given an empty url fetches nothing and checks only the files it already holds.
+func (self *SidecarHostList) SmtpProofKeysUrl() string {
+	entry, ok := self.ServiceEntry(SidecarHostServiceSmtpProofKeys)
+	if !ok {
+		return ""
+	}
+	authority := entry.Host
+	if entry.Tcp != 443 {
+		authority = entry.Address()
+	}
+	return "https://" + authority + sidecarSmtpProofKeysPath
 }
 
 // The list as mmm publishes it (QD-566): {"version":1,"hosts":[{"host","tcp","need"}]}, indented, with a final
