@@ -36,9 +36,9 @@ const (
 	// moves an entry's copy makes (§22.8: live entries times epochs times 3)
 	copyMovesPerEntry = 3
 	// §11.6's rates, scaled by 1/100, in moves an interval
-	copyRepoRate      = 0.5 * 5
-	copyRepoBusyRate  = 1.5 * 5
-	copyStepsPerDay   = 24 * budgetStepsPerHour
+	copyRepoRate     = 0.5 * 5
+	copyRepoBusyRate = 1.5 * 5
+	copyStepsPerDay  = 24 * budgetStepsPerHour
 )
 
 // One ref with a rotating path epoch, in a repo of its own.

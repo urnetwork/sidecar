@@ -18,6 +18,15 @@
 (* here is one, so a pair <<x, e>> with a newer generation standing is one *)
 (* a removed holder can test with the server's help.                       *)
 (*                                                                         *)
+(* Every due is batched (QD-1046): no due holds a new name, so a writer    *)
+(* that holds a REMOVE generation the head has not cut over to may still   *)
+(* tokenize a new name under the head's current epoch, which a removed     *)
+(* holder can test until the epoch lands. That exposure is the design's,   *)
+(* and the leak the model counts is what the design still rules out: a     *)
+(* token under an epoch the head has left, of a name evs was shown no      *)
+(* token of at or below it, and a ref's first names under an epoch below   *)
+(* the newest generation its creator holds.                                *)
+(*                                                                         *)
 (* Left out, each argued in 9.3: the 64-version window and the age of map  *)
 (* parts, the creation block, parts and seals, git mode's lease, a read    *)
 (* racing a single move between its GETs (FS-4 holds it on evs), nested    *)
@@ -47,14 +56,14 @@ CONSTANTS
     Paths,       \* the names under the directory
     Clients,     \* devices that read and write
     Mappers,     \* devices that hold the ref's name index and map
-    MaxEpoch,    \* generations 1..MaxEpoch; every rotation is REMOVE and immediate
+    MaxEpoch,    \* generations 1..MaxEpoch; every rotation is REMOVE, its due batched (QD-1046)
     MaxVersion,  \* the ref's versions
     MaxSources,  \* 11.6: at most 3 sources stand
     NewRef,      \* the ref has no head until its first push commits
     Twin
 
 ASSUME Twin \in {"none", "NoBetweenFence", "NoTailCheck", "BlindRetoken", "SendAllSources", "MapAllSources",
-                 "MissIsAbsent", "StaleEpochSend", "NoNewNameRule", "RowsBeforeMoves", "RemoveCurrentRowOnly",
+                 "MissIsAbsent", "StaleEpochSend", "RowsBeforeMoves", "RemoveCurrentRowOnly",
                  "FoldKeepsSources", "NewRefAtOne", "StaleFirstPush"}
 ASSUME NewRef \in BOOLEAN
 
@@ -131,10 +140,11 @@ SameAs(view, stands) ==
     /\ (view.st = "live") = (stands.st = "live")
     /\ view.st = "live" => view.v = stands.v
 
-\* Sending x's token under each epoch of E: a leak when one of them is an epoch a removed holder holds the key of,
-\* by the head or by what the sender knows, and evs was shown no token of x at or below it before.
+\* Sending x's token under each epoch of E: a leak when one of them is an epoch the head has left, or on a ref with no
+\* head one below the newest generation the sender holds, and evs was shown no token of x at or below it before. A
+\* new name under the current epoch of a ref with a head is no leak while a removal is due (QD-1046).
 Leaks(d, x, E) ==
-    \E e \in E : /\ e < cur \/ e < kgen[d]
+    \E e \in E : /\ e < cur \/ (~HasHead /\ e < kgen[d])
                  /\ ~(\E e2 \in 1..e : <<x, e2>> \in seen)
 
 Shown(x, E) == {<<x, e>> : e \in E}
@@ -146,11 +156,10 @@ AskedFor(d, x) ==
 \* A device may tokenize under an epoch only with that generation's key.
 HoldsKey(d, e) == kgen[d] >= e
 
-\* 9.2.3's rule for a name with no floor: its token goes only under the head's current epoch as just read, and
-\* only while the device knows no generation past it.
+\* 9.2.3's rule for a name with no floor: its token goes only under the head's current epoch as just read, whatever
+\* generation past it the device knows, no due holding a new name (QD-1046).
 MaySendNew(d) ==
-    /\ Twin = "StaleEpochSend" \/ (hcur[d] = cur /\ hsrc[d] = srcs)
-    /\ Twin = "NoNewNameRule" \/ kgen[d] = hcur[d]
+    Twin = "StaleEpochSend" \/ (hcur[d] = cur /\ hsrc[d] = srcs)
 
 ----------------------------------------------------------------------------
 \* Keys and heads.
@@ -448,8 +457,8 @@ TypeOK ==
     /\ Cardinality(srcs) <= MaxSources
     /\ \A d \in Devices : kgen[d] <= gen /\ hcur[d] <= cur
 
-\* No source-epoch token of a name created after a cut-over reaches evs, and no new name is tokenized under an
-\* epoch its sender knows a removed holder's key for.
+\* No source-epoch token of a name created after a cut-over reaches evs, and no ref's first names are tokenized under
+\* an epoch below the newest generation their creator holds.
 NoLateToken == ~leak
 
 \* A conclusive read is the path's newest committed version, or its absence.
