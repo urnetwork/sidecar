@@ -30,8 +30,10 @@
 //	         (DESIGN-DETAILS 9.2.3, PathEpochTwin-StaleFirstPush)
 //	return   any other refusal goes back to the caller as an *EvsError: a file-mode 409 with paths among them
 //	follow   412 GATE_CLOSED on a push this device built to create or re-create a shared ref, planned on no head or
-//	         on a deleted one (DESIGN-DETAILS 16.2.9, 8.2.5; QD-803): evs holds such a push's pin at or above the
-//	         repo's newest rule set, so the device's log is behind it. The sender follows the log once through
+//	         on a deleted one (DESIGN-DETAILS 16.2.9, 8.2.5; QD-803): evs held such a push's pin at or above the
+//	         repo's newest rule set, so the device's log was behind it, until QD-1032 reverted that clause with the
+//	         prefix rules' move to Later; the gate's predicate still closes on such a push, which a newer state or
+//	         generation passes, so the follow stays as built. The sender follows the log once through
 //	         EvsClientArgs.ConfigFollow and keeps the refused statement's pin and generation for the ref. The rebuild
 //	         above then builds a statement only where the installed pin, or the generation EnsureWritable returned,
 //	         is above the kept ones; on the same pin and generation the build answers the kept refusal as an
@@ -476,8 +478,8 @@ func (self *EvsRepo) sendSealedNoting(ctx context.Context, sealed *EvsSealedWrit
 	}
 }
 
-// Whether the plan's push creates or re-creates a shared ref: planned on no head, or on a deleted one. evs holds such
-// a push's pin at or above the repo's newest rule set (QD-803).
+// Whether the plan's push creates or re-creates a shared ref: planned on no head, or on a deleted one. evs held such a
+// push's pin at or above the repo's newest rule set (QD-803) until QD-1032 reverted the clause.
 func evsCreatesSharedRef(plan *EvsWritePlan) bool {
 	return plan.RefKind == protocol.EvsRefKind_EVS_REF_SHARED && (plan.BaseVersion == 0 || plan.Head.GetDeleted())
 }

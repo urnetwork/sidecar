@@ -119,7 +119,8 @@ type EvsClientArgs struct {
 	PrivateCreate func(ctx context.Context, client *EvsClient, args *EvsCreateRepoArgs) error
 	// One follow of the authorization log now, answering once it ran (ConfigClient.CatchUp, within its FollowTimeout
 	// and ctx): what the push sender asks once after evs's gate refuses a push that creates or re-creates a shared
-	// ref, whose pin evs holds at or above the repo's newest rule set (DESIGN-DETAILS 16.2.9, 8.2.5; QD-803). It runs
+	// ref, whose pin evs held at or above the repo's newest rule set (DESIGN-DETAILS 16.2.9, 8.2.5; QD-803) until
+	// QD-1032 reverted that clause, and which the gate's predicate still closes on. It runs
 	// with the write's locks held and applies entries on the caller's goroutine, so no entry callback may wait on
 	// that write. Nil on a leg with no follower, which skips the follow.
 	ConfigFollow func(ctx context.Context) error
