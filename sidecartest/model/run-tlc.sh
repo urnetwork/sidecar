@@ -129,14 +129,14 @@ EOF
 
 # IndexRollup's twins run breadth-first, each on the smallest ground that reaches what its rule
 # protects, one roller unless the rule is the lock's, and the processes its rule never reaches held
-# still. The erasure's run on d1's story. Section 1's (NoOwnCas, ReusePinned, CleanupReferenced,
-# MergeRemovesLarge, NoPromote, PromoteBlind, and IndexSupersede and LongLife for R5's pin and life)
-# run on the grounds DESIGN-DETAILS.md section 1.3 ran them on in details/IndexMerge.tla, with the
-# erasure held still, and NoPromoteLive on the ground its live promotion was reached on there.
-# CutVersion="read" is not a twin but a finding: a CUT listing what its eraser read lets a CLOSURE
-# take the base of a diff that landed before the CUT at a version it does not list, which TLC refuses
-# with ChainsResolve violated on DiffOnListed's ground (question
-# search-m10-46-erased-base-of-a-live-diff), and the cfg runs "commit".
+# still. The erasure's run on d1's story. Section 1's (NoOwnCas, CleanupUnabsorbed, NoPromote,
+# PromoteBlind, and IndexSupersede and LongLife for R5's pin and life) run on the grounds
+# details/IndexMerge.tla's twin configurations run them on, with the erasure held still, and
+# NoPromoteLive on the ground its live promotion was reached on there. Owner decision 584 (QD-1036)
+# ended diffs, and with them the twins that broke a rule only a diff's base needed (DiffOnListed,
+# ReusePinned, CleanupReferenced, MergeRemovesLarge) and the invariant they broke, ChainsResolve;
+# NoOwnCas now loses a tombstone under a seq a merge has absorbed past, and CleanupUnabsorbed a large
+# entry no merge has absorbed, each breaking ResultsHold.
 twins_IndexRollup() {
   local one="Rollers={r1} MaxCrashes=0 MaxLapses=0 MaxRestarts=0 ForeignCuts=0 BigDocs={}"
   local d1="$one Documents={\"d1\"} Skew=FALSE"
@@ -150,18 +150,15 @@ BuildIgnoresSet        CutFences            $d1 Events=1 $quiet
 EraseLiveFirst         ResultsHold          $d12 $quiet
 EarlyComplete          ErasedUnreadable     $d1 Events=1 $quiet
 ClosureNoCas           ResultsHold          $d12 $quiet
-DiffOnListed           ChainsResolve        $d1 Events=2 $quiet
 EraseSkipsAbsorbed     ErasedUnreadable     $d1 Events=1 Still={"rollup","tick","backfill"}
 MergeIgnoresEpoch      EpochHolds           $d1 Events=1 Still={"rollup","tick","backfill"}
 MergeDropsTombstone    ResultsHold          $d3
-ReuseUnabsorbed        ResultsHold          $one Documents={"d2","d3"} Events=2 Skew=FALSE Still={"rollup","erase","tick","bfdiff"}
+ReuseUnabsorbed        ResultsHold          $one Documents={"d2","d3"} Events=2 Skew=FALSE Still={"rollup","erase","tick"}
 RollupForgetsHeads     ResultsHold          $d3
 MergeKeepsOld          OneVersionEach       $d2 Events=2 Still={"rollup","erase","tick","backfill"}
 NoLockFence            RollsOnce            $one Rollers={r1,r2} MaxLapses=1 Documents={"d3"} Events=1 Skew=FALSE Still={"erase","backfill","merge"}
-NoOwnCas               ChainsResolve        $d2 Events=3 MaxRestarts=1 Still={"backfill","rollup","erase","tick"}
-ReusePinned            ChainsResolve        $d2 Events=4 Still={"rollup","erase","tick","bfdiff"}
-CleanupReferenced      ChainsResolve        $d2 Events=4 BigDocs={"d2"} Still={"rollup","erase","tick","bfdiff"}
-MergeRemovesLarge      ChainsResolve        $d2 Events=4 BigDocs={"d2"} Still={"rollup","erase","tick","bfdiff"}
+NoOwnCas               ResultsHold          $one Documents={"d2","d3"} Events=3 Skew=FALSE BigDocs={"d2"} MaxRestarts=1 Still={"rollup","erase","tick"}
+CleanupUnabsorbed      ResultsHold          $one Documents={"d2","d3"} Events=2 Skew=FALSE BigDocs={"d3"} Still={"rollup","erase","tick"}
 NoPromote              ResultsHold          $d3
 NoPromoteLive          BucketsExact         $one Documents={"d2"} Events=3 Skew=TRUE Still={"backfill","erase"}
 PromoteBlind           ResultsHold          $one Documents={"d2","d3"} Events=3 Skew=TRUE Still={"erase"}
@@ -175,10 +172,13 @@ EOF
 # as its row says: "pass", every invariant of the cfg holding; "live", BucketRolls and ErasureFinishes
 # holding under weak fairness, without symmetry; or a predicate violated, its trace the witness. Those
 # predicates are the spec's reach states (Never...), which the joined rules must reach so that a ground
-# passing there is not vacuous, and ChainsResolve for CutVersion="read", the finding above. Each
-# twin's ground runs as its control (control mode). Smallest first: the reach states and the finding;
-# the erasure's narrow grounds (a writer restart beside merges, d1's base and d2's sharing slots, d1
-# unedited across three windows, the eraser's crash and a foreign CUT beside the backfiller); the
+# passing there is not vacuous: a CLOSURE of an absorbed slot, and an edit that landed between the
+# eraser's read and its CUT standing once the erasure completes. Each twin's ground runs as its
+# control (control mode). Smallest first: the reach states; a CUT that lists d1 as committed when it
+# lands, the cfg's listing it as its eraser read it (cut-commit: "commit" was the cfg's while diffs
+# stood, since a CUT as read took a live diff's base; owner decision 584 ended them); the erasure's
+# narrow grounds (a writer restart beside merges, d1 and d2 sharing slots, d1 unedited across three
+# windows, the eraser's crash and a foreign CUT beside the backfiller); the
 # liveness grounds; two rollers with a crash, a lapse and a foreign CUT; the cfg's own bounds by seeded
 # simulation, which shows only that the behaviors it drew (Traces on each worker) kept every invariant;
 # then the widest, which take longest: the erasure's crash and restart grounds with merges and the
@@ -191,11 +191,9 @@ grounds_IndexRollup() {
   local rollers="Rollers={r1,r2} MaxCrashes=1 MaxLapses=1 MaxRestarts=0 ForeignCuts=1 BigDocs={} Documents={\"d3\"}"
   local quiet='Still={"rollup","tick","backfill","merge"}'
   cat <<EOF
-reach-listed-orphan     NeverListedOrphan     $d1 Events=2 Skew=FALSE $quiet
 reach-absorbed-closure  NeverAbsorbedClosure  $d1 Events=1 Skew=FALSE Still={"rollup","tick","backfill"}
-reach-full-after-cut    NeverFullAfterCut     $d1 Events=2 Skew=FALSE $quiet
-reach-kept-closure      NeverKeptClosure      $one Documents={"d1","d2"} Events=3 Skew=FALSE Still={"rollup","tick","backfill"}
-cut-read                ChainsResolve         $d1 Events=2 Skew=FALSE $quiet CutVersion="read"
+reach-survives          NeverSurvives         $d1 Events=2 Skew=FALSE $quiet
+cut-commit              pass                  $d1 Events=2 Skew=FALSE Still={"rollup","tick","backfill"} CutVersion="commit"
 erase-restart-merge     pass                  $d1 Events=2 Skew=FALSE MaxRestarts=1 Still={"rollup","tick","backfill"}
 erase-shared            pass                  $one Documents={"d1","d2"} Events=4 Skew=FALSE Still={"rollup","tick","backfill"}
 erase-windows-unedited  pass                  $d1 Events=1 Skew=TRUE Still={}

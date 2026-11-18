@@ -87,7 +87,7 @@ models:
   - spec: IndexRollup
     owners: [SEARCH-M10-02, SEARCH-M10-46]
     milestones: [M10]
-    objects: "one ref's head with its index_epoch and index files, its erasure set, current, previous and expired buckets, all, each writer's head, sealed and kept slots and large entries on its own bases under the head rule, merges that read no head, the roll-up lock and its promotions, the journal's pin and push life, and each document's newest version and erasure state (DESIGN-DETAILS.md section 1); details/IndexMerge.tla keeps the same rules, without the erasure, beside §11.14's as written, and details/IndexErase.tla keeps an erasure under them, of a path document whose edit may rest on the version a CUT lists and of a run card, beside the writers that keep pushing (DESIGN-DETAILS.md section 15)"
+    objects: "one ref's head with its index_epoch and index files, its erasure set, current, previous and expired buckets, all, each writer's head, sealed and absorbed slots and large entries, every entry full or a tombstone (owner decision 584), under the head rule, merges that read no head, the roll-up lock and its promotions, the journal's pin and push life, and each document's newest version and erasure state (DESIGN-DETAILS.md section 1); details/IndexMerge.tla keeps the same rules, without the erasure, beside §11.14's as written, and details/IndexErase.tla keeps an erasure under them, of a path document whose edit may land beside the CUT at a version it does not list and of a run card, beside the writers that keep pushing (DESIGN-DETAILS.md section 15)"
     companions: [details/IndexMerge, details/IndexErase]
     sources:
       - sidecar/sidecartest/model/IndexRollup.tla
