@@ -158,7 +158,8 @@ func runUrKeychainRecoveryRotate(ctx context.Context, cli *urCli, options docopt
 	if err != nil {
 		return fmt.Errorf("%w: %w", errUrNoTty, err)
 	}
-	fmt.Fprintf(tty, "This replaces your recovery code for this network. The old code will admit no new device and open nothing new.\n%s\n", sidecar.RecoveryBackupRule)
+	fmt.Fprintf(tty, "This replaces your recovery code for this network. The old code will admit no new device and open nothing new.\n"+
+		"Where a compromise revocation voided your code, you have none in effect until this one lands.\n%s\n", sidecar.RecoveryBackupRule)
 	if compromise {
 		fmt.Fprintf(tty, "As a compromise rotation, every repo you read re-keys at its next rotation, and you should then revoke each device the old code's holder may have reached.\n")
 	}
@@ -212,11 +213,16 @@ func runUrKeychainRecoveryRotate(ctx context.Context, cli *urCli, options docopt
 		fmt.Fprintf(tty, "  %s\n", strings.Join(words[row:min(row+4, len(words))], " "))
 	}
 	fmt.Fprintf(tty, "\n")
+	// a first code and one bound after a void replace none (QD-1034): there is no old code to keep
+	keep := " Keep the old code until"
+	if len(reply.PreviousKeySha256) == 0 {
+		keep = " It replaces no code: you have none in effect until"
+	}
 	switch {
 	case len(reply.ProposalId) != 0:
-		fmt.Fprintf(tty, "The binding waits for another admin's cosign: ur approve %x on their device. Keep the old code until it completes.\n", reply.ProposalId)
+		fmt.Fprintf(tty, "The binding waits for another admin's cosign: ur approve %x on their device.%s it completes.\n", reply.ProposalId, keep)
 	case reply.Pending:
-		fmt.Fprintf(tty, "The binding is signed and its post is still going. Keep the old code until ur status shows it landed.\n")
+		fmt.Fprintf(tty, "The binding is signed and its post is still going.%s ur status shows it landed.\n", keep)
 	default:
 		fmt.Fprintf(tty, "The binding landed at position %d.\n", reply.Position)
 	}

@@ -397,5 +397,6 @@ func (self *UpgradeMux) SetLocalZone(localZone LocalZone)
 Milestones and the v0 and v1 sets are §23.4's.
 - **v0:** renewal and census (M0); labels, `dns_label` and api's `GET /sidecar/label` (M2); `ur tun`'s resolver (M4) and C14's seam, dark on app paths until §18's app hosts (M8; owner decision 85); the moved root signed without a DS, labels, edge, challenge, SPF, DMARC, null MX and user records, routes, gates, quotas, suspension, label reclaim and the restore step, the canary and its pages (M5); mail records, `b`, `mx`, TLSA and the DS (M7); replying burners' selectors and label copies, the reverse zones' PTRs (M9).
 - **v1:** aliases, custom domains in both CAA modes, Team scopes (M6); direct MX and strict-mode MX hosts (M7); scope mail hosts with §15 (M8).
-- **Later:** the PSL application once eligible, then §14.6's cut-over; bring-your-own NS; HTTPS/SVCB.
+- **Later:** [the PSL application](DESIGN-DEFER.md#dns-psl-listing) once eligible, then §14.6's cut-over; [bring-your-own NS](DESIGN-DEFER.md#dns-bring-your-own-ns); [HTTPS/SVCB](DESIGN-DEFER.md#dns-https-svcb-records).
+- **Deferred:** DESIGN-DEFER.md holds an entry for each Later item, linked above, and for [this section's v1 set](DESIGN-DEFER.md#dns-v1) (owner decision 587).
 - **Blocking:** §19's dns edge hosts block M5; the soak blocks the DS and M7's DANE; §13.4's generated split map blocks M6's custom hosts; HE's reverse delegation blocks M9's PTRs.

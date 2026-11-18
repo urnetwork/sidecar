@@ -23,7 +23,7 @@ Status values: `pending`, `in progress`, `complete (date)`, or `complete pending
 | 13 | Smaller scheduling problems: closure pacing, quota leases, socket registration | 4 | complete (2026-11-10); folded into DESIGN.md 2026-11-17 (dr4-details-e) |
 | 14 | Slot objects that a dead record and a committed push both list (§11.6, §11.8, §11.13) | 0 | complete (2026-11-12; amended 2026-11-16, QD-870); folded into DESIGN.md 2026-11-17 (dr4-details-b) |
 | 15 | Index erasure and derived documents under section 1's rules (§11.12, §11.14, §16.8, §16.10) | 2 | complete (2026-11-12; §22.8 row added 2026-11-13); folded into DESIGN.md 2026-11-17 (dr4-details-a) |
-| 16 | Client-checked prefix write rules (§8.8, §8.12, §11.7, §11.9) | 0 | complete (2026-11-13; amendments 16-A to 16-D written 2026-11-13; amended 2026-11-13, QD-801, QD-802 and QD-803) |
+| 16 | Client-checked prefix write rules (§8.8, §8.12, §11.7, §11.9) | 0 | complete (2026-11-13; amendments 16-A to 16-D written 2026-11-13; amended 2026-11-13, QD-801, QD-802 and QD-803); Later (owner decision 586, QD-1032, 2026-11-17): not folded, documented in DESIGN-DEFER.md |
 | 17 | Team custom-domain certificates: one ACME account, several ordering desktops, a certificate per device (§13.8, §13.15, §12.8) | 1 | complete (2026-11-13; §22.8 row added 2026-11-13); folded into DESIGN.md 2026-11-17 (dr4-details-e), but for 17.2.8's replay, the design agent's open item, where DESIGN.md carries owner decision 571 |
 
 ## 1. Search index merges, roll-ups and the journal (§11.14)
@@ -13159,6 +13159,8 @@ Each is filed under `.stack/questions/` and the section is built on its recommen
 - **`details-15-small-readings`**: nine readings an implementer would otherwise decide, each with what was built: the mask rule, a record log's companion interval, the fold's order, an empty fold, the 2^32 bound, which devices hold again units and when they build, the CUT for a late copy, a BASE waiting for its erasure, and the eraser's fetch bound.
 
 ## 16. Client-checked prefix write rules (§8.8, §8.12, §11.7, §11.9)
+
+**Later (owner decision 586; QD-1032, 2026-11-17).** The owner moved the client-checked prefix write rules to Later, past launch. Launch uses a repo per prefix (D-ACL-11) as the write boundary, and what the build drafted of this section stays on the branches, dark behind one switch, `AclPrefixSettings.Enabled`, off. This section is not folded into DESIGN.md, and while the deferral stands it governs no task: it is the design the rules return with. [DESIGN-DEFER.md](DESIGN-DEFER.md#acl-prefix-write-rules) says what is deferred, why, what launch does instead, what is lost, what is dark in code and held, and what bringing the rules back would take.
 
 Status: complete (2026-11-13; its amendments 16-A to 16-D were written into sections 5, 8 and 10 on 2026-11-13, as 16.7 lists; amended 2026-11-13, QD-801: 16.2.4, 16.2.6, 16.2.7, 16.2.9, 16.2.13, 16.3, 16.4, 16.5, 16.6, 16.7, 16.8 and 16.9, each place marked; amended 2026-11-13, QD-803: 16.1, 16.2.1, 16.2.4, 16.2.9, 16.2.12, 16.2.13, 16.3, 16.4, 16.5, 16.6, 16.7, 16.8 and 16.9, each place marked; amended 2026-11-13, amendment 6: 16.1, 16.2.9, 16.3, 16.6, 16.7 and 16.8, each place marked)
 

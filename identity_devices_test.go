@@ -25,7 +25,6 @@ type revokeTestCascadeKey struct {
 type revokeTestAuthority struct {
 	*testActAuthority
 	bindings   map[Id]*bridge.RecoveryBindingRow
-	restored   map[Id]bool
 	cascades   map[revokeTestCascadeKey][]DeviceRevokeItem
 	suspended  map[Id]bool
 	signatures map[Id]int
@@ -37,7 +36,6 @@ type revokeTestAuthority struct {
 
 var (
 	_ SidecarRevokeAuthority   = (*revokeTestAuthority)(nil)
-	_ SidecarRecoveryAuthority = (*revokeTestAuthority)(nil)
 	_ SidecarProposalAuthority = (*revokeTestAuthority)(nil)
 )
 
@@ -45,7 +43,6 @@ func newRevokeTestAuthority(base *testActAuthority) *revokeTestAuthority {
 	return &revokeTestAuthority{
 		testActAuthority: base,
 		bindings:         map[Id]*bridge.RecoveryBindingRow{},
-		restored:         map[Id]bool{},
 		cascades:         map[revokeTestCascadeKey][]DeviceRevokeItem{},
 		suspended:        map[Id]bool{},
 		signatures:       map[Id]int{},
@@ -74,12 +71,6 @@ func (self *revokeTestAuthority) CurrentBinding(memberId Id) *bridge.RecoveryBin
 		return proto.Clone(binding).(*bridge.RecoveryBindingRow)
 	}
 	return nil
-}
-
-func (self *revokeTestAuthority) BindingRestored(memberId Id) bool {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	return self.restored[memberId]
 }
 
 func (self *revokeTestAuthority) Cascade(targetId Id, sinceN uint64) ([]DeviceRevokeItem, error) {

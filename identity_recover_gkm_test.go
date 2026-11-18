@@ -28,7 +28,7 @@ func (self *recoverTestRankedView) LeafEntitled(sidecarId sidecar.Id) bool {
 }
 
 func TestARecoveredDevicePastTheFirstThousandReadsByItsRecoveryWrap(t *testing.T) {
-	world := newGkmRecoveryWorld(t, protocol.RepoKind_REPO_KIND_CONFIG, false)
+	world := newGkmRecoveryWorld(t, protocol.RepoKind_REPO_KIND_CONFIG)
 	r := world.r
 	// every other device takes the state as it is; this one takes it ranked past the seats
 	view := world.stateFor(r.gkmWorldDevice)
@@ -36,10 +36,10 @@ func TestARecoveredDevicePastTheFirstThousandReadsByItsRecoveryWrap(t *testing.T
 	if kept, err := r.client.FetchRecoveryWraps(world.ctx, world.binding, false); err != nil || kept != 1 {
 		t.Fatalf("the fetch before admission kept %d: %v", kept, err)
 	}
-	if err := r.client.AnchorRecovery(world.ctx, world.args(false)); err != nil {
+	if err := r.client.AnchorRecovery(world.ctx, world.args()); err != nil {
 		t.Fatalf("the anchor: %v", err)
 	}
-	progress := world.run(false)
+	progress := world.run()
 	if progress.SelfJoined || progress.Leaf || progress.Generation != 2 || progress.Waiting != nil {
 		t.Fatalf("a device past the first 1,000: %+v", progress)
 	}

@@ -4,8 +4,9 @@ package sidecar
 // bindings and real config heads, with fakes of KEYS-M2-24's recovery client and of the head reader. §22.7's admission
 // rows: until admitted the device reads only the log and its member's wraps and signs nothing but its admission; §7.9's
 // table picks a plain admission or a proposal by the log's own judge; FS-16's forged genesis whose log admits the real
-// rotators raises head_alarm (fork) and stops, and so does a forged RecoveryWrap; a restored binding uploads its
-// ReaderKey and no KeyPackage before the anchor; a restart resumes the one admission it filed, with the same bytes.
+// rotators raises head_alarm (fork) and stops, and so does a forged RecoveryWrap; a code a cascade voided, and the one
+// it replaced, recover nothing (QD-1034); an admitted device uploads its ReaderKey and no KeyPackage before the anchor;
+// a restart resumes the one admission it filed, with the same bytes.
 
 import (
 	"bytes"
@@ -121,7 +122,6 @@ var (
 	_ SidecarAuthority          = (*recoverTestAuthority)(nil)
 	_ SidecarStatementJudge     = (*recoverTestAuthority)(nil)
 	_ SidecarRecoveryLogView    = (*recoverTestAuthority)(nil)
-	_ SidecarRecoveryAuthority  = (*recoverTestAuthority)(nil)
 	_ SidecarAuthorityProposals = (*recoverTestAuthority)(nil)
 )
 
@@ -179,10 +179,6 @@ func (self *recoverTestAuthority) ProposedSince(lostAt time.Time) (uint64, time.
 
 func (self *recoverTestAuthority) AddEntryCallback(callback SidecarAuthorityEntryFunction) func() {
 	return func() {}
-}
-
-func (self *recoverTestAuthority) BindingRestored(memberId Id) bool {
-	return self.state().BindingRestored(memberId)
 }
 
 func (self *recoverTestAuthority) PendingProposal(proposalId []byte) *bridge.ProposalRow {
@@ -301,7 +297,7 @@ func (self *recoverTestApi) postsSoFar(t *testing.T) []*bridge.Signed {
 type recoverTestGroups struct {
 	world *recoverTestWorld
 	calls []string
-	// the config group's key a RecoveryWrap or a ReaderWrap gives the device, nil for none yet
+	// the config group's key a RecoveryWrap gives the device, nil for none yet
 	key   *EvsRepoKey
 	phase SidecarRecoveryPhase
 	// what each run of the check answered
@@ -922,42 +918,79 @@ func TestForgedRecoveryWrapStops(t *testing.T) {
 	}
 }
 
-// §7.9's restored order: under a binding a void restored, the code's key files only an AuthorityProposal, fetches no
-// wrap and activates through the window. Admitted, the device uploads its ReaderKey and no KeyPackage, both by the
-// upkeep's role and by Sign's gate, and waits for a config writer's ReaderWrap; on it the anchor passes, and only then
-// do KeyPackages go up.
-func TestRestoredBindingUploadsNoKeyPackageBeforeAnchor(t *testing.T) {
-	world := newRecoverTestWorld(t, false)
-	net := world.net
-	// a stolen device rebinds M to another code, and a compromise revocation of it voids that binding, restoring the
-	// world's code's
-	stolen := net.device("m stolen", world.memberId)
-	net.admitDevice(world.laptop, stolen, 0)
-	sinceN := net.n + 1
-	genesisSha256 := sha256.Sum256(net.signedGenesis)
-	world.bindBy(stolen, recoverTestWords(t, 0x70), genesisSha256[:])
-	net.mustPost(world.laptop, bridge.SignedType_SIGNED_SIDECAR_REVOKE, net.compromise(stolen, sinceN))
-	keys := recoverTestKeys(t, world.words)
-	if !net.log.State().BindingRestored(world.memberId) || !bytes.Equal(net.log.State().Member(world.memberId).GetRecoveryKeySha256(), keys.KeySha256()) {
-		t.Fatal("the void did not restore the world's code")
-	}
-	keys.Erase()
-	world.groups.key = nil
+// §7.9's cascade and QD-1034: a void leaves M no binding, nothing earlier restored. A stolen device rebinds M to
+// another code and a compromise revocation of it voids that binding: the code the rebind replaced and the voided code
+// are each refused as unbound, with self_admit on or off, nothing signed, kept, posted or asked of gkm. M's laptop,
+// outside the cascade, then binds a fresh code (`ur keychain recovery-rotate`), by which the device recovers as by any
+// code in effect.
+func TestACodeACascadeVoidedRecoversNothing(t *testing.T) {
+	for _, selfAdmit := range []bool{true, false} {
+		world := newRecoverTestWorld(t, false)
+		net := world.net
+		stolen := net.device("m stolen", world.memberId)
+		net.admitDevice(world.laptop, stolen, 0)
+		sinceN := net.n + 1
+		genesisSha256 := sha256.Sum256(net.signedGenesis)
+		voidedWords := recoverTestWords(t, 0x70)
+		world.bindBy(stolen, voidedWords, genesisSha256[:])
+		net.mustPost(world.laptop, bridge.SignedType_SIGNED_SIDECAR_REVOKE, net.compromise(stolen, sinceN))
+		if !selfAdmit {
+			world.selfAdmitOff()
+		}
+		if state := net.log.State(); state.CurrentBinding(world.memberId) != nil || state.SelfAdmit() != selfAdmit {
+			t.Fatalf("self_admit %v: the void left M a binding", selfAdmit)
+		}
 
-	result := world.mustRecover(SidecarRecoveryPending)
-	if !result.Proposal || !result.Restored || result.ProposalKind != bridge.ProposalKind_PROPOSAL_KIND_RESTORED || result.ActivatesAfter.IsZero() {
-		t.Fatalf("the filing: %+v", result)
+		tip := net.n
+		for _, words := range []string{world.words, voidedWords} {
+			_, err := world.sidecar.RecoverWithCode(world.ctx, recoverTestCode(t, words), SidecarActConfirmed)
+			if !errors.Is(err, ErrSidecarRecoveryNoBinding) || !errors.Is(err, ErrSidecarRecoveryUnbound) {
+				t.Errorf("self_admit %v: a code with no binding in effect: %v", selfAdmit, err)
+			}
+		}
+		if kept, err := world.sidecar.Recovery(); err != nil || kept != nil {
+			t.Errorf("self_admit %v: a record: %+v %v", selfAdmit, kept, err)
+		}
+		if pending, err := world.sidecar.pendingStatements(); err != nil || len(pending) != 0 {
+			t.Errorf("self_admit %v: %d statements pending: %v", selfAdmit, len(pending), err)
+		}
+		if world.sidecar.RecoveryAwaitingAnchor() {
+			t.Errorf("self_admit %v: the gate is up", selfAdmit)
+		}
+		if len(world.groups.calls) != 0 || len(world.api.postsSoFar(t)) != 0 || net.n != tip || world.row() != nil {
+			t.Errorf("self_admit %v: gkm calls %v, %d posts, the log at %d from %d", selfAdmit, world.groups.calls, len(world.api.postsSoFar(t)), net.n, tip)
+		}
+		if !selfAdmit {
+			continue
+		}
+
+		// the laptop binds a fresh code: a RecoveryBind, since M has no binding to replace
+		world.words = recoverTestWords(t, 0x33)
+		world.bind(world.words, genesisSha256[:])
+		keys := recoverTestKeys(t, world.words)
+		if binding := net.log.State().CurrentBinding(world.memberId); binding == nil || !bytes.Equal(binding.GetKeySha256(), keys.KeySha256()) ||
+			binding.GetReason() != bridge.RecoveryRebindReason_RECOVERY_REBIND_REASON_UNSPECIFIED {
+			t.Fatalf("the fresh binding: %v", binding)
+		}
+		keys.Erase()
+		result := world.mustRecover(SidecarRecoveryAnchored)
+		if result.Proposal || result.Entry == nil || !result.OfferRotate || world.row() == nil {
+			t.Fatalf("the recovery by the fresh code: %+v", result)
+		}
 	}
-	if len(world.groups.calls) != 0 {
-		t.Errorf("a restored binding asked gkm for %v", world.groups.calls)
-	}
-	world.wait(72 * testConfigHourMs)
-	if activated := net.activate(result.StatementId); !activated.Accepted() || world.row() == nil {
-		t.Fatalf("the activation: %v", activated.Refusal)
-	}
+}
+
+// §7.9's anchor: admitted and not yet anchored, the device uploads its ReaderKey and no KeyPackage, both by the
+// upkeep's role and by Sign's gate, so no Add precedes the anchor; once the config group's key reaches it the anchor
+// passes, and only then do KeyPackages go up.
+func TestAnAdmittedRecoveryUploadsNoKeyPackageBeforeItsAnchor(t *testing.T) {
+	world := newRecoverTestWorld(t, false)
+	// gkm serves no wrap of the config group yet
+	world.groups.key = nil
 	waiting := world.mustRecover(SidecarRecoveryAdmitted)
-	if !strings.Contains(waiting.Waiting, "ReaderWrap") || !slices.Equal(world.groups.calls, []string{"anchor"}) {
-		t.Fatalf("admitted with no ReaderWrap: %+v, calls %v", waiting, world.groups.calls)
+	if waiting.Proposal || world.row() == nil || !strings.Contains(waiting.Waiting, "config group's key") ||
+		!slices.Equal(world.groups.calls, []string{"fetch admitted=false", "anchor"}) {
+		t.Fatalf("admitted with no key: %+v, calls %v", waiting, world.groups.calls)
 	}
 
 	// upkeep, admitted and not anchored: its ReaderKey goes up, its KeyPackages wait; a host that read the role wrong
@@ -997,57 +1030,15 @@ func TestRestoredBindingUploadsNoKeyPackageBeforeAnchor(t *testing.T) {
 		t.Fatalf("a role that ignores the anchor uploaded %d KeyPackage sets", len(upkeepApi.keyPackageUploads))
 	}
 
-	// a config writer's late ReaderWrap gives the device the config group's key: the anchor passes, then KeyPackages
+	// the config group's key reaches the device: the anchor passes, then KeyPackages
 	world.groups.key = world.configKey
 	world.mustRecover(SidecarRecoveryAnchored)
-	if !slices.Equal(world.groups.calls, []string{"anchor", "anchor", "run"}) {
+	if !slices.Equal(world.groups.calls, []string{"fetch admitted=false", "anchor", "anchor", "run"}) {
 		t.Errorf("calls %v", world.groups.calls)
 	}
 	upkeep.pass(world.ctx)
 	if len(upkeepApi.keyPackageUploads) == 0 || created == 0 {
 		t.Error("no KeyPackage went up once anchored")
-	}
-}
-
-// §7.9's restored row with self_admit off (QD-952): the code's AuthorityProposal is PROPOSAL_KIND_RESTORED_COSIGNED,
-// and the device shows it waiting out the window and for one admin's cosign. A tick 72 h on with no cosign leaves it
-// pending; once an admin's device cosigns, the tick admits it.
-func TestARestoredRecoveryFiledWithSelfAdmitOffWaitsForTheWindowAndACosign(t *testing.T) {
-	world := newRecoverTestWorld(t, false)
-	net := world.net
-	stolen := net.device("m stolen", world.memberId)
-	net.admitDevice(world.laptop, stolen, 0)
-	sinceN := net.n + 1
-	genesisSha256 := sha256.Sum256(net.signedGenesis)
-	world.bindBy(stolen, recoverTestWords(t, 0x70), genesisSha256[:])
-	net.mustPost(world.laptop, bridge.SignedType_SIGNED_SIDECAR_REVOKE, net.compromise(stolen, sinceN))
-	world.selfAdmitOff()
-	if state := net.log.State(); !state.BindingRestored(world.memberId) || state.SelfAdmit() {
-		t.Fatal("the world's code is not a restored binding's with self_admit off")
-	}
-	world.groups.key = nil
-
-	result := world.mustRecover(SidecarRecoveryPending)
-	if !result.Proposal || !result.Restored || result.ProposalKind != bridge.ProposalKind_PROPOSAL_KIND_RESTORED_COSIGNED || result.ActivatesAfter.IsZero() ||
-		!strings.Contains(result.Waiting, "recovery window") || !strings.Contains(result.Waiting, "cosign") {
-		t.Fatalf("the filing: %+v", result)
-	}
-	world.wait(72 * testConfigHourMs)
-	if refused := net.activate(result.StatementId); refused.Accepted() || !errors.Is(refused.Refusal, ErrConfigAuthority) || world.row() != nil {
-		t.Fatalf("the activation with no cosign: %v", refused.Refusal)
-	}
-	if pending, err := world.sidecar.Recovery(); err != nil || pending.Phase != SidecarRecoveryPending ||
-		pending.ProposalKind != bridge.ProposalKind_PROPOSAL_KIND_RESTORED_COSIGNED || !strings.Contains(pending.Waiting, "cosign") {
-		t.Fatalf("after the refused tick: %+v %v", pending, err)
-	}
-	if cosigned := net.cosign(net.owner, result.StatementId); !cosigned.Accepted() || world.row() != nil {
-		t.Fatalf("the admin's cosign: %v", cosigned.Refusal)
-	}
-	if activated := net.activate(result.StatementId); !activated.Accepted() || world.row() == nil {
-		t.Fatalf("the activation after the cosign: %v", activated.Refusal)
-	}
-	if admitted, err := world.sidecar.Recovery(); err != nil || admitted.Phase != SidecarRecoveryAdmitted {
-		t.Errorf("once activated: %+v %v", admitted, err)
 	}
 }
 

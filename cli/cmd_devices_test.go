@@ -238,6 +238,10 @@ func TestRevokeCompromiseTakesSince(t *testing.T) {
 	if shown := tty.written.String(); !strings.Contains(shown, "as compromise, from entry 17") || !strings.Contains(shown, "parks ") {
 		t.Errorf("the terminal showed %q", shown)
 	}
+	// a plan that voids no recovery binding says nothing of one
+	if shown := tty.written.String(); strings.Contains(shown, "ur keychain recovery-rotate") {
+		t.Errorf("a plan voiding no binding showed %q", shown)
+	}
 	tty = &testTty{lines: []string{"yes"}}
 	if code := cli.main(context.Background(), []string{"ur", "devices", "revoke", phoneId.String(), "--compromise", "--since=2027-01-15T08:00:00Z"}); code != urExitOk {
 		t.Fatalf("a time: exit %d: %q", code, stderr.String())
@@ -255,6 +259,38 @@ func TestRevokeCompromiseTakesSince(t *testing.T) {
 	}
 	if len(devices.callsOf(sidecar.DaemonMethodDevicesRevoke)) != 3 {
 		t.Errorf("%d signing calls", len(devices.callsOf(sidecar.DaemonMethodDevicesRevoke)))
+	}
+}
+
+// A plan that voids a member's recovery binding says what the void leaves (QD-1034; owner decision 126): the member
+// has no code, a device of theirs outside the cascade binds a fresh one with ur keychain recovery-rotate, and an
+// admin's admission reads no owner-bound repo until the owner's consented device approves it.
+func TestRevokeSaysWhatAVoidedRecoveryCodeLeaves(t *testing.T) {
+	phoneId := sidecar.NewId()
+	plan := testDevicesPlan(phoneId)
+	plan.Reason = sidecar.DeviceRevokeCompromise
+	plan.SinceN = 17
+	plan.Items = []*sidecar.DaemonDeviceRevokeItem{
+		{Effect: sidecar.DeviceRevokeEffectPark, Kind: sidecar.DeviceRevokeKindDevice, Id: hex.EncodeToString(sidecar.NewId().Bytes()), Position: 19},
+		{Effect: sidecar.DeviceRevokeEffectVoid, Kind: "recovery_binding", Id: strings.Repeat("ab", 32), Position: 21},
+	}
+	devices := &testUrDevices{preview: &sidecar.DaemonDevicesPreviewReply{Plan: plan}, revoke: &sidecar.DaemonDevicesRevokeReply{Position: 30}}
+	daemon := startTestDevicesDaemon(t, devices)
+	cli, _, stderr := newTestUrCli(daemon.socketPath)
+	tty := &testTty{lines: []string{"yes"}}
+	cli.openTty = func() (urTty, error) { return tty, nil }
+	if code := cli.main(context.Background(), []string{"ur", "devices", "revoke", phoneId.String(), "--compromise", "--since=17"}); code != urExitOk {
+		t.Fatalf("exit %d: %q", code, stderr.String())
+	}
+	shown := tty.written.String()
+	for _, said := range []string{"voids   recovery_binding " + strings.Repeat("ab", 32), "leaves its member none", "ur keychain recovery-rotate", "this revocation does not cover",
+		"an admin admits one", "no owner-bound repo until its owner's consented device approves it"} {
+		if !strings.Contains(shown, said) {
+			t.Errorf("the terminal did not say %q: %q", said, shown)
+		}
+	}
+	if strings.Contains(shown, "restore") {
+		t.Errorf("the terminal promised a restored code: %q", shown)
 	}
 }
 

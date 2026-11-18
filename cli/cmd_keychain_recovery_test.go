@@ -22,6 +22,9 @@ type testUrRecoveryTarget struct {
 	bindings      []*sidecar.RecoveryBinding
 	compromises   []bool
 	devices       []sidecar.MemberDevice
+	// What the rotation answers beside the new binding's name: the binding it replaced, and a post still going.
+	previousKeySha256 []byte
+	pending           bool
 }
 
 func (self *testUrRecoveryTarget) recoveryAnchor() (sidecar.Id, []byte, error) {
@@ -32,8 +35,10 @@ func (self *testUrRecoveryTarget) bindRecovery(ctx context.Context, binding *sid
 	self.bindings = append(self.bindings, binding)
 	self.compromises = append(self.compromises, compromise)
 	return &sidecar.RecoveryRotation{
-		KeySha256: sidecar.RecoveryKeySha256(binding.Ed25519PublicKey),
-		Devices:   self.devices,
+		KeySha256:         sidecar.RecoveryKeySha256(binding.Ed25519PublicKey),
+		PreviousKeySha256: self.previousKeySha256,
+		Pending:           self.pending,
+		Devices:           self.devices,
 	}, nil
 }
 
@@ -106,6 +111,43 @@ func TestKeychainRecoveryRotateShowsTheCodeOnce(t *testing.T) {
 	}
 	if !strings.Contains(written, "ur devices revoke "+otherId.String()+" --compromise") {
 		t.Errorf("a compromise rotation listed no device to review: %q", written)
+	}
+}
+
+// A code bound where the member has none in effect, a first one or one after a compromise revocation voided the last
+// (QD-1034), replaces no code, and the terminal says so in place of asking the person to keep an old one; a rebind
+// still says to keep the old code until it lands. Before either, the terminal says what a void leaves.
+func TestKeychainRecoveryRotateSaysWhenItReplacesNoCode(t *testing.T) {
+	genesisSha256 := sha256.Sum256([]byte("a synthetic Signed Genesis"))
+	target := &testUrRecoveryTarget{
+		networkId:     sidecar.NewId(),
+		genesisSha256: genesisSha256[:],
+		devices:       []sidecar.MemberDevice{{SidecarId: sidecar.NewId(), This: true, State: "live"}},
+		pending:       true,
+	}
+	daemon := startTestControlDaemon(t, target, nil)
+	cli, _, _ := newTestUrCli(daemon.socketPath)
+	tty := &testTty{lines: []string{"yes"}}
+	cli.openTty = func() (urTty, error) { return tty, nil }
+	if code := cli.main(context.Background(), []string{"ur", "keychain", "recovery-rotate"}); code != urExitOk || len(target.bindings) != 1 {
+		t.Fatalf("exit %d, %d bindings", code, len(target.bindings))
+	}
+	written := tty.written.String()
+	if !strings.Contains(written, "Where a compromise revocation voided your code, you have none in effect until this one lands.") {
+		t.Errorf("the terminal did not say what a void leaves: %q", written)
+	}
+	if !strings.Contains(written, "It replaces no code: you have none in effect until ur status shows it landed.") || strings.Contains(written, "Keep the old code") {
+		t.Errorf("a code that replaces none: %q", written)
+	}
+
+	previous := sha256.Sum256([]byte("a synthetic earlier binding"))
+	target.previousKeySha256 = previous[:]
+	tty = &testTty{lines: []string{"yes"}}
+	if code := cli.main(context.Background(), []string{"ur", "keychain", "recovery-rotate"}); code != urExitOk || len(target.bindings) != 2 {
+		t.Fatalf("a rebind: exit %d, %d bindings", code, len(target.bindings))
+	}
+	if written := tty.written.String(); !strings.Contains(written, "Keep the old code until ur status shows it landed.") || strings.Contains(written, "It replaces no code") {
+		t.Errorf("a rebind: %q", written)
 	}
 }
 

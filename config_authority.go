@@ -94,7 +94,7 @@ func (self *ConfigState) authorityAt(signers []ConfigSigner, targets ConfigTarge
 }
 
 // The member one signer counts as, false when it counts for none: a standing member device, not read_only, or a
-// recovery key under its binding in effect that no void restored (config_recovery.go), of an Owner or Admin, or of the
+// recovery key under its member's binding in effect (config_recovery.go), of an Owner or Admin, or of the
 // target device's own AdminSet member; never the target device or a target member. A Delegation never counts.
 func (self *ConfigState) countedMember(signer ConfigSigner, targets ConfigTargets, timeMs int64) (Id, bool) {
 	var memberId Id
@@ -222,7 +222,8 @@ func (self *ConfigState) proposalRowStatement(row *bridge.ProposalRow) (*configS
 	switch kind := bridge.ProposalKind(row.GetKind()); {
 	case len(signers) == 0:
 		return nil, fmt.Errorf("no signer")
-	case kind < bridge.ProposalKind_PROPOSAL_KIND_AUTHORITY || bridge.ProposalKind_PROPOSAL_KIND_RESTORED_COSIGNED < kind:
+	case kind != bridge.ProposalKind_PROPOSAL_KIND_AUTHORITY && kind != bridge.ProposalKind_PROPOSAL_KIND_RECOVERY_SCOPED:
+		// the reserved restored kinds, 3 and 4, among them (QD-1034)
 		return nil, fmt.Errorf("kind %d", kind)
 	}
 	last := row.GetSigners()[len(row.GetSigners())-1].GetAt()
@@ -301,9 +302,7 @@ func configApplyProposal(next *configStateBuilder, statement *configStatement) e
 
 // An AuthorityCosign at state: its proposal open and unexpired, and by kind: for k of n a further counted signer, the
 // k-th completing it unless Recovery's window holds it, where the proposed statement's rule must hold at this state; for
-// a recovery-scoped admission one admission signer's device, which completes it; for a restored binding's admission,
-// of either restored kind, an admission signer's device, which completes nothing and which the activation of one filed
-// with self_admit off needs (QD-952).
+// a recovery-scoped admission one admission signer's device, which completes it.
 func configCheckCosign(state *ConfigState, statement *configStatement) error {
 	cosign := statement.body.(*protocol.AuthorityCosign)
 	if len(cosign.GetProposalId()) != sha256.Size {
@@ -334,12 +333,11 @@ func configCheckCosign(state *ConfigState, statement *configStatement) error {
 		}
 		statement.completes = &proposed
 		return nil
-	case bridge.ProposalKind_PROPOSAL_KIND_RESTORED, bridge.ProposalKind_PROPOSAL_KIND_RESTORED_COSIGNED:
-		if !admissionSigner() {
-			return fmt.Errorf("%w: a restored binding's admission takes only an admission signer's cosign", ErrConfigAuthority)
-		}
-		statement.proposed = &proposed
-		return nil
+	case bridge.ProposalKind_PROPOSAL_KIND_AUTHORITY:
+	default:
+		// a kind this verifier judges no cosign of: the reserved restored kinds, 3 and 4 (QD-1034), which no row a
+		// verifier opens holds
+		return fmt.Errorf("%w: a cosign of a proposal of kind %d", ErrConfigRule, proposal.row.GetKind())
 	}
 	member, counted := state.countedMember(cosigner, targets, statement.timeMs)
 	if !counted {

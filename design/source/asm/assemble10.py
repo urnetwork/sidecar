@@ -19,7 +19,7 @@ design = pathlib.Path(sys.argv[1])
 asm = pathlib.Path(sys.argv[2])
 out_path = pathlib.Path(sys.argv[3])
 research_rel = sys.argv[4].rstrip('/')
-MAXD = 585
+MAXD = 587
 VDIR = asm / 'v7'
 
 
@@ -354,6 +354,10 @@ def status_cell(qid, it):
             out += '; ' + '; '.join(f"amended ({i}, {d})" for d, i in am)
     elif st == 'closed':
         out = 'closed by the 2026-11-03 design review'
+        # a closed question the owner later amends says so, as a decided one does (owner decision 586 on Q-EVS-3)
+        am = AMENDED.findall(it['text'])
+        if am:
+            out += '; ' + '; '.join(f"amended ({i}, {d})" for d, i in am)
     elif st == 'peer-closed':
         out = 'closed by peer review 2026-11-04'
     else:

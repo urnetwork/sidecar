@@ -182,7 +182,7 @@ type SidecarEvent struct { // AddEventCallback, `ur status`, the sdk listener (�
 	                             // ct_alarm: [0], the leaf's SHA-256; key_changed: [0], the foreign key's SHA-256
 	EvsAlarm    SidecarEvsAlarm  // evs_alarm, a closed set: missing_segment, tamper (a failed entry hash, AEAD,
 	                             // oid or statement), version_rule (off §11.7's rule), epoch_overdue (a writer
-	                             // 1 h past due_by_ms) or prefix_rule (from M6)
+	                             // 1 h past due_by_ms) or prefix_rule (Later, with 8.8's rules)
 	VerifiedSince time.Time      // evs_gap: the time of the newest re-pin past §11.9's budget, which the pin
 	                             // record holds; EvsRepo.VerifiedSince(refId) answers it later, zero when
 	                             // nothing was skipped
@@ -1058,4 +1058,5 @@ None: PLAN.md:14 and :59's git identity hold, and D-CORE-1 reads "encryption key
 - **Browser (§18.17):** the HTTPS-only wasm page Worker, built `-tags sidecar_http`, for ur.io/recurd at M4 and the team console at M6 (owner decisions 26, 76).
 - **v1 (§23 M6):** several networks per daemon, with team networks (owner decisions 23, 55); the RFC 8628 device grant; agent subkeys; `.ur`'s `claims` and `project`, the directory's control methods, its group under 5.6's leaves rule, local state and `Directory` settings, and the `access_request` action and events (owner decisions 170, 171, 182).
 - **v1, §23's M10 (owner decision 169):** 5.9's index cache and search state and the `Search` settings, with §16.10's search and 5.4's engine API (owner decision 163); remote serving and the served record with the index cache (owner decision 175); local deletion of dropped content (owner decision 173); the index, search and drop event kinds.
-- **Later:** the extension's Worker and wasm streams (C4); transport proof of possession (Q-CORE-4 (c)).
+- **Later:** [the extension's Worker](DESIGN-DEFER.md#sdk-extension-worker) and [wasm streams (C4)](DESIGN-DEFER.md#repo-c4-browser-carrier); [transport proof of possession](DESIGN-DEFER.md#core-transport-proof-of-possession) (Q-CORE-4 (c)).
+- **Deferred:** DESIGN-DEFER.md holds an entry for each Later item, linked above, and for [this section's v1 set](DESIGN-DEFER.md#core-v1) (owner decision 587).
