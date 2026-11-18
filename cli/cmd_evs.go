@@ -34,7 +34,7 @@ func init() {
 			"  ur evs export <repo_id> <dir> [--ref=<ref>]...",
 			"  ur evs retry <repo_id> [--ref=<ref>]...",
 			"  ur evs status <repo_id>",
-			"  ur evs reseed <repo_id> [--incident=<id>] [--sign]",
+			"  ur evs reseed <repo_id> [--place] [--incident=<id>] [--sign]",
 			"  ur evs rules <repo_id> show [--history]",
 			"  ur evs rules <repo_id> allow <subject> <path>...",
 			"  ur evs rules <repo_id> deny <subject>",

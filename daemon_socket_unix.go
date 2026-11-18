@@ -1,10 +1,14 @@
-//go:build !js && !ios && !android && !windows && !ios_extension
+//go:build !js && (!ios || macos) && !android && !windows && !ios_extension
 
 // The daemon's socket on Unix (§5.9): $XDG_RUNTIME_DIR/ur/<i>.sock on Linux, and on macOS under DARWIN_USER_TEMP_DIR,
 // $TMPDIR, within the 104-byte sun_path. A path that would not fit, or a system with neither directory, falls back to
 // /tmp/ur-<uid>/<i>.sock. The socket's directory is 0700 and the caller's own, and a directory another user owns or
 // opened wider is refused rather than used, since the peer check alone would not stop another user's listener
 // standing in the path (LOCAL_PEERCRED in a 0700 directory, §5.8).
+//
+// The daemon client dials through this file, so it is on every Unix desktop the client is, gomobile's macOS slices
+// included: their binding step type-checks it with GOOS=ios and the macos tag, and their archives compile it with
+// GOOS=darwin, the build whose runtime.GOOS picks the path (§18.10's tags; owner decisions 493, 554).
 
 package sidecar
 

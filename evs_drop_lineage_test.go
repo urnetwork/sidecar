@@ -235,27 +235,31 @@ func TestEvsDropPreviewStopsOnMismatchOrUnlinked(t *testing.T) {
 	}
 }
 
-// In a repo whose rows hold a prefix rule set this client cannot judge, the command stops with EVS_PREFIX_RULE
-// pending before the dry run.
-func TestEvsDropPreviewPendingPrefixSetStops(t *testing.T) {
+// In a repo whose rows hold a prefix rule set, which only a log that runs the rules gives it, a client whose rules are
+// dark, the launch default (QD-1032), judges nothing: the command is not held by the set and its dry run is sent.
+// Before the deferral a client with no judge stopped here with EVS_PREFIX_RULE pending, a branch the defaults now
+// leave to the rules' return.
+func TestEvsDropPreviewIsNotHeldByDarkPrefixRules(t *testing.T) {
 	writer, server := newEvsTestDropWriter(t)
-	if _, err := writer.write(t, "a.txt", []byte("one")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := writer.write(t, "a.txt", []byte("two")); err != nil {
-		t.Fatal(err)
+	for i := 0; i < 2; i += 1 {
+		if _, err := writer.write(t, "a.txt", evsTestEdited("a", 1000, i)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	writer.world.config.stateLock.Lock()
 	repo := proto.Clone(writer.world.config.repo).(*protocol.AclRepo)
 	repo.PrefixRules = []*protocol.AclRepoPrefixRulesRow{{}}
 	writer.world.config.repo = repo
 	writer.world.config.stateLock.Unlock()
-	var ruleErr *EvsPrefixRuleError
-	if _, err := writer.repo.DropHistoryPreview(context.Background(), &EvsDropPreviewArgs{Paths: []string{"a.txt"}}); !errors.As(err, &ruleErr) || ruleErr.Detail != EvsPrefixDetailPending {
-		t.Fatalf("a pending set: %v", err)
+	if writer.test.client.PrefixRulesEnabled() {
+		t.Fatal("a client with no composition's judge runs the prefix rules")
 	}
-	if len(server.requests) != 0 {
-		t.Fatal("the dry run was sent")
+	server.expectPath(t, "a.txt")
+	if _, err := writer.repo.DropHistoryPreview(context.Background(), &EvsDropPreviewArgs{Paths: []string{"a.txt"}}); errors.Is(err, ErrEvsPrefixRule) {
+		t.Fatalf("a dark set held the preview: %v", err)
+	}
+	if len(server.requests) == 0 {
+		t.Fatal("the dry run was not sent")
 	}
 }
 

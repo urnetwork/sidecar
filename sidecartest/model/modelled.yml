@@ -7,7 +7,8 @@
 # models        one per spec in this directory.
 #   spec        EvsCommit, StoreSettle or IndexRollup.
 #   owners      the tasks that write the model.
-#   milestones  the gates whose freeze needs it passing (§22.10).
+#   milestones  the gates whose freeze needs it passing (§22.10), or Later for a model of a design the owner moved
+#               past launch, which no gate's freeze needs and which still runs, and stays runnable, by its script.
 #   objects     what the model keeps, as §22.8 lists it.
 #   companions  models of the same objects under details/, as §22.8's row names them beside the spec,
 #               each run by its own script there: details/IndexMerge.tla is DESIGN-DETAILS.md section
@@ -121,10 +122,12 @@ details:
     exclude: []
     runs: []
 
+  # QD-1032 moved the client-checked prefix rules to Later and held TEST-M6-03: no gate's freeze needs this model,
+  # whose runs below stand at its sources and which its script still runs whenever they change
   - model: details/PrefixRules
     run: details/run-prefixrules.sh
     owners: [TEST-M6-03]
-    milestones: [M6]
+    milestones: [Later]
     objects: "one repo's authorization log with prefix rule sets of three kinds (every path, one path, nothing) and bases, and one file-mode ref with two paths, one under the prefix a set may name, pushed by an admin's device, a design device the sets hold to their paths and a writer that sends any change with any row under any pin evs takes, each push with its pin, its change to the path's content and row, and its lineage; evs's fence on the head's pin and, for the ref's first push, on the newest set; the readers (the long-running one, a device started at each base, a mirror and a head reader started at each version) are functions of the log and the ref (DESIGN-DETAILS.md 16.3)"
     sources:
       - sidecar/sidecartest/model/details/PrefixRules.tla

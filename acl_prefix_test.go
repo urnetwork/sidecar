@@ -2205,6 +2205,7 @@ func TestAclPrefixRulesFilerFilesTheNextSetWithTheAdmins(t *testing.T) {
 			}
 			return sets.Sets(ctx, &AclPrefixSetsArgs{State: state, RepoId: repoId, EntryAt: AclPrefixLogEntries(net.log), Keys: keys})
 		},
+		Settings: testAclPrefixSettingsOn(),
 	})
 	admins := []Id{net.owner.sidecarId, hostId, laptop.sidecarId}
 	adminRules := func() []*protocol.PrefixRule {

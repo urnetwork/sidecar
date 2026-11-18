@@ -14,8 +14,10 @@
 //     whatever tests of it exist outside the registry, since no gate can find those.
 //   - the vector schemas fixed: each M2 format's vector files and the tests that hold the code to them.
 //   - format 2's reserved numbers and format 1's refusal vectors, D-PHASE-9's list, which gains acl.proto's
-//     RepoPrefixRules (SignedType 0x1111) and AclRepo.prefix_rules: code from M2 verifies and folds them, and M6
-//     enforces them (DESIGN-DETAILS 16.8's line for D-PHASE-9; QD-212).
+//     RepoPrefixRules (SignedType 0x1111) and AclRepo.prefix_rules (DESIGN-DETAILS 16.8's line for D-PHASE-9;
+//     QD-212). The client-checked prefix rules moved to Later (QD-1032), so the numbers stay reserved and launch holds
+//     the rules dark: every log refuses a RepoPrefixRules at its position and folds no set, which the item's tests
+//     show, and the rules' own tests, run with the switch on, are no longer what the gate expects.
 //   - people's work: peer review of the schemas and state machines, RECORD.md's review (owner decision 25), §23.6's
 //     design closure and §23.8's review of the changes since G0 and of §22's exit-test plan. Each reads open.
 //
@@ -163,14 +165,12 @@ func gateM2InItems(catalog *Catalog) []*GateItem {
 			},
 		},
 		&GateItem{
-			Item: "acl.proto's RepoPrefixRules (SignedType 0x1111) and AclRepo.prefix_rules reserved, which code from M2 verifies and folds and M6 enforces (DESIGN-DETAILS 16.8's line for D-PHASE-9; QD-212; ACL-M2-18)",
+			Item: "acl.proto's RepoPrefixRules (SignedType 0x1111) and AclRepo.prefix_rules reserved, their numbers kept while the client-checked prefix rules wait for Later (QD-1032): at launch every log refuses a RepoPrefixRules at its position and folds no set, a base's tail included (DESIGN-DETAILS 16.8's line for D-PHASE-9; QD-212; ACL-M2-18)",
 			Tests: []*GateTest{
 				{Repo: "sidecar", Package: "./protocol", Names: []string{"TestPhaseReservations"}},
 				{Repo: "sidecar", Package: "./protocol/bridge", Names: []string{"TestSignedTypeNumbersStable"}},
 				{Repo: "sidecar", Package: ".", Names: []string{
-					"TestAclRepoPrefixRulesSigners", "TestAclRepoPrefixRulesTakesOnlyALiveGeneralRepo", "TestAclRepoPrefixRulesBodyByteCounts",
-					"TestAclRepoPrefixRulesStopsAtSetMaxCount", "TestFoldAclReposAppendsAPrefixRulesRowPerSet", "TestAclRepoPrefixRulesMovesNoRightAndReappliesAlike",
-					"TestAclRepoPrefixRulesRowsAgreeAcrossBases", "TestAclPrefixRulesRowsAreBaseIndependentOverGeneratedLogs", "TestAclRowsCheckLimitsCountsThePrefixRuleRows",
+					"TestAclPrefixRulesAreDarkInTheLaunchSettings", "TestConfigLogRefusesRepoPrefixRulesAtLaunch", "TestConfigLogFoldsNoSetFromABasesTailAtLaunch",
 				}},
 			},
 		},

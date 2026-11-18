@@ -119,7 +119,8 @@ type EvsClientArgs struct {
 	PrivateCreate func(ctx context.Context, client *EvsClient, args *EvsCreateRepoArgs) error
 	// One follow of the authorization log now, answering once it ran (ConfigClient.CatchUp, within its FollowTimeout
 	// and ctx): what the push sender asks once after evs's gate refuses a push that creates or re-creates a shared
-	// ref, whose pin evs holds at or above the repo's newest rule set (DESIGN-DETAILS 16.2.9, 8.2.5; QD-803). It runs
+	// ref, whose pin evs held at or above the repo's newest rule set (DESIGN-DETAILS 16.2.9, 8.2.5; QD-803) until
+	// QD-1032 reverted that clause, and which the gate's predicate still closes on. It runs
 	// with the write's locks held and applies entries on the caller's goroutine, so no entry callback may wait on
 	// that write. Nil on a leg with no follower, which skips the follow.
 	ConfigFollow func(ctx context.Context) error
@@ -381,13 +382,7 @@ func (self *EvsClient) CreateRepo(ctx context.Context, args *EvsCreateRepoArgs) 
 			return nil, fmt.Errorf("evs: the repo's group: %w", err)
 		}
 	}
-	if err := repo.callLifecycle(ctx, &evsCall{
-		route:  "POST /evs/v1/repos/{repo_id}/activate",
-		method: http.MethodPost,
-		path:   "/evs/v1/repos/" + evsUrlId(repoId) + "/activate",
-		repoId: repoId,
-		role:   evsScopeAdmin,
-	}); err != nil {
+	if err := repo.callLifecycle(ctx, evsActivateCall(repoId)); err != nil {
 		return nil, err
 	}
 	if self.args.RepoCreated != nil {
@@ -438,6 +433,18 @@ func evsPlaceCall(repoId Id) *evsCall {
 		route:  "PUT /evs/v1/repos/{repo_id}",
 		method: http.MethodPut,
 		path:   "/evs/v1/repos/" + evsUrlId(repoId),
+		repoId: repoId,
+		role:   evsScopeAdmin,
+	}
+}
+
+// POST /evs/v1/repos/<id>/activate: keying to active once the repo's group has its first generation (§11.12's
+// activate row).
+func evsActivateCall(repoId Id) *evsCall {
+	return &evsCall{
+		route:  "POST /evs/v1/repos/{repo_id}/activate",
+		method: http.MethodPost,
+		path:   "/evs/v1/repos/" + evsUrlId(repoId) + "/activate",
 		repoId: repoId,
 		role:   evsScopeAdmin,
 	}
