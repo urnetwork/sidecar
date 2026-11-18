@@ -1834,3 +1834,25 @@ assert DECISIONS_INTRO.count(_D609) == 1, 'decisions lead moved'
 DECISIONS_INTRO = DECISIONS_INTRO.replace(
     _D609, "and the warm pairs of @@OD:391@@, and MLS set aside for Later, every group key going by wraps in v0 (610), "
     "amending @@OD:1@@ and @@OD:60@@. ")
+# The second late sweep (dr5-late-sweep, 2026-11-18): the build's answers recorded after the first.
+INDEX += [
+    (611, "The breakers' outside measures",
+     "The mail breakers read Postmaster Tools and SNDS under vault credentials of their own, ext-14 and ext-15, "
+     "and the listings from a mirror copy on taskworker's host."),
+    (612, 'Notice pages from api and taskworker',
+     "api and taskworker page notices through a retrying sink over monitor's webhook; role mail reaches api by an "
+     'internal route, header facts only.'),
+]
+for _n, _note in [
+        (498, ' Extended by @@OD:612@@: api and taskworker page §21.8\'s notices too.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 613))
+DATES.update({611: '2026-11-18', 612: '2026-11-18'})
+_D610 = "every group key going by wraps in v0 (610), amending @@OD:1@@ and @@OD:60@@. "
+assert DECISIONS_INTRO.count(_D610) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D610, _D610 + "A second sweep the same day numbers the build's last answers: the mail breakers' outside measures "
+    "(611) and the notice pages from api and taskworker, with role mail's route to them (612). ")
