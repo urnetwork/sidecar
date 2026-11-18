@@ -141,3 +141,53 @@ func TestSocketFindHttpSendsTheRoute(t *testing.T) {
 		t.Error("no transport")
 	}
 }
+
+// The Find client's answer bound is its settings' (QD-702): an answer past MaxAnswerByteCount is no Find's and reads
+// unavailable, one within it is read, and a client whose bound is not positive is never made.
+func TestSocketFindHttpReadsAnswersWithinItsSettings(t *testing.T) {
+	answer := `{"primary":{"ticket":"AQI=","claim":"Aw=="}}`
+	transport := &scriptedApiTransport{
+		answer: func(request *http.Request, body []byte) (*http.Response, error) {
+			return syntheticResponse(request, 200, answer, nil), nil
+		},
+	}
+	bearer := func(ctx context.Context) (string, error) {
+		return "edge-token", nil
+	}
+	networkId := connect.Id(testRegistrarNetworkId)
+	clientId := connect.Id(testSocketId("edge client"))
+	find := func(settings *SocketFindHttpSettings) error {
+		send, err := newSocketFindHttp(&SocketFindHttpArgs{SocketsUrl: "https://sockets.example", Transport: transport, Bearer: bearer, Settings: settings})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = newSocketFindClient(send).find(context.Background(), &SocketFindArgs{
+			NetworkId: &networkId,
+			Name:      "tls/443/blog",
+			ClientIds: []*connect.Id{&clientId},
+		})
+		return err
+	}
+	if DefaultSocketFindHttpSettings().MaxAnswerByteCount != 64*1024 {
+		t.Fatalf("the default bound is %d", DefaultSocketFindHttpSettings().MaxAnswerByteCount)
+	}
+	if err := find(nil); err != nil {
+		t.Fatalf("the default bound: %v", err)
+	}
+	if err := find(&SocketFindHttpSettings{MaxAnswerByteCount: int64(len(answer))}); err != nil {
+		t.Fatalf("an answer at the bound: %v", err)
+	}
+	if err := find(&SocketFindHttpSettings{MaxAnswerByteCount: int64(len(answer)) - 1}); !errors.Is(err, ErrSocketUnavailable) {
+		t.Fatalf("an answer past the bound: %v", err)
+	}
+	for _, maxAnswerByteCount := range []int64{0, -1} {
+		if _, err := newSocketFindHttp(&SocketFindHttpArgs{
+			SocketsUrl: "https://sockets.example",
+			Transport:  transport,
+			Bearer:     bearer,
+			Settings:   &SocketFindHttpSettings{MaxAnswerByteCount: maxAnswerByteCount},
+		}); !errors.Is(err, errInvalidSettings) {
+			t.Errorf("a bound of %d: %v", maxAnswerByteCount, err)
+		}
+	}
+}
