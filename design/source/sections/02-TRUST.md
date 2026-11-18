@@ -116,7 +116,7 @@ Feedback (sidecar/FEEDBACK-SYSTEM.md:11) and hosted models are out of scope.
 **The list** (the only TTL table; I-18):
 
 ```yaml
-# metadata_list.yml v57; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
+# metadata_list.yml v59; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
 # §7.9, §10, §11). v6 adds to v5 (2026-11-04) connect-1's ShareCert, api-6's push-token slot sentinels, api-7's
 # {acl_}q, cascade signers, recovery bindings, restored bindings' recovery windows and orphaned networks, api-13's
 # per-eraser closure counters, evs-1's secret kind and orphans, evs-3's creation block, fence time, deleted flag
@@ -324,6 +324,12 @@ Feedback (sidecar/FEEDBACK-SYSTEM.md:11) and hosted models are out of scope.
 # v57, updated 2026-11-18 for the owner's answer QD-1038 (owner decision 609), adds no row: connect-5's remote-search
 # pair is accounted like any peer's, with no window, floor, withheld report or keepalive, so api's rows show when a
 # phone searched through an indexer and how many 20 KiB exchanges it took.
+# v58, updated 2026-11-18 for the owner's answer QD-1069 (owner decision 611), adds ext-14, Google Postmaster Tools,
+# and ext-15, Microsoft SNDS, which the mail breakers ask for <root>'s daily statistics and for the shared sending
+# addresses' file, naming no network, and amends ext-4: the feed's one pull also syncs a second copy of the
+# mirror to taskworker's host, where the breakers match URnetwork's own sending addresses.
+# v59, updated 2026-11-18 for the owner's answer QD-1070 (owner decision 612), adds no row: ext-13's page events
+# also come from api and taskworker, each paging a §21.8 notice its process committed, keyed by the notice's case.
 # Each row gives service, store (tables, Redis families, object families, logs or memory),
 # sees, why, ttl, and owner: the section that designs the value and states its ttl. Withdrawn rows keep
 # their ids so citations resolve. Public: this list ships in DESIGN.md on the public sidecar repo (owner
@@ -964,8 +970,8 @@ ext-3:
 ext-4:
   service: the IP-listing feed operator (a commercial feed, such as Spamhaus)
   store: external
-  sees: mxedge's licensed mirror pulls every 5 min (URnetwork's address and credential); no sender IP, since listings match locally
-  why: IP reputation (owner decision 111)
+  sees: mxedge's licensed mirror pulls every 5 min (URnetwork's address and credential), each pull also syncing a second copy of the mirror to taskworker's host for the mail breakers' listing (§21.5; owner decision 611); no sender IP, since listings match locally
+  why: IP reputation (owner decision 111); the breakers' listing measure, matched against URnetwork's own sending addresses (D-ABUSE-2)
   ttl: the operator's
   owner: §15.4
 ext-5:
@@ -1022,10 +1028,24 @@ ext-12:
 ext-13:
   service: the commercial pager service the owner picks, reached from outside the site
   store: external
-  sees: the page events monitor posts through pager.Sink, each a page class, a time, a dedup key and opaque ids only, never a network name, address or token; the rota's acknowledgments and escalations
+  sees: the page events monitor posts through pager.Sink, and those api and taskworker post for §21.8's notices through the same webhook (owner decision 612), each a page class, a time, a dedup key and opaque ids only, a notice's keyed by its case, never a network name, address or token; the rota's acknowledgments and escalations
   why: page the rota at any hour, and business-hours classes in business hours (§19.8; owner decisions 143, 498)
   ttl: the provider's
   owner: §19.8
+ext-14:
+  service: Google Postmaster Tools
+  store: external
+  sees: URnetwork's requests, from taskworker under a service account's credential, for <root>'s daily traffic statistics, the user-reported spam ratio among them; no network, address or message
+  why: the mail breakers' Postmaster spam rate (§21.5, D-ABUSE-2; owner decision 611)
+  ttl: Google's
+  owner: §21.5
+ext-15:
+  service: Microsoft SNDS
+  store: external
+  sees: URnetwork's requests, from taskworker under its automated-access key, for the data file of its own sending addresses, the shared lb addresses (owner decision 124); no network or message
+  why: the mail breakers' SNDS measure (§21.5, D-ABUSE-2; owner decision 611)
+  ttl: Microsoft's
+  owner: §21.5
 ```
 
 ### 2.9 Security invariants

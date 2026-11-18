@@ -52,12 +52,16 @@ type SearchTestWorldArgs struct {
 	RepoId Id
 	RefId  Id
 	Clock  SearchTestClock
+	// The repo's kind; zero is a general repo. A config, mailcfg or secret world holds no index a reader follows, and
+	// its builders write none (§11.14's never row).
+	Kind protocol.RepoKind
 }
 
 // One ref's index and the documents written to it.
 type SearchTestWorld struct {
 	repoId  Id
 	refId   Id
+	kind    protocol.RepoKind
 	clock   SearchTestClock
 	format  *IndexFormatSettings
 	repoKey *EvsRepoKey
@@ -89,8 +93,12 @@ func NewSearchTestWorld(args *SearchTestWorldArgs) (*SearchTestWorld, error) {
 	if err != nil {
 		return nil, err
 	}
+	kind := args.Kind
+	if kind == protocol.RepoKind_REPO_KIND_UNSPECIFIED {
+		kind = protocol.RepoKind_REPO_KIND_GENERAL
+	}
 	return &SearchTestWorld{
-		repoId: args.RepoId, refId: args.RefId, clock: args.Clock, format: DefaultIndexFormatSettings(),
+		repoId: args.RepoId, refId: args.RefId, kind: kind, clock: args.Clock, format: DefaultIndexFormatSettings(),
 		repoKey: repoKey, refKey: refKey, padKey: padKey, ref: newSearchTestRef(), normalizer: normalizer,
 	}, nil
 }
@@ -256,7 +264,7 @@ func (self *SearchTestWorld) PushDocuments(ctx context.Context, writer Id, at ti
 	}
 	store := self.ref.store(writer)
 	view, err := indexLoadView(ctx, &indexViewArgs{
-		store: store, repoId: self.repoId, refId: self.refId, repoKind: protocol.RepoKind_REPO_KIND_GENERAL,
+		store: store, repoId: self.repoId, refId: self.refId, repoKind: self.kind,
 		isAdmin: self.isAdmin, settings: self.format,
 	})
 	if err != nil {
@@ -455,18 +463,27 @@ func (self *SearchTestWorld) AllByteCount() int64 {
 // --- the ref, as evs holds it ---
 
 // One ref's index: every version's files, so a replay diffs them. A path but <root>/settings keeps its newest version
-// alone readable, as versionless paths do.
+// alone readable, as versionless paths do. Beside the index, the ref's content, which content pushes write
+// (search_content_testhooks.go): each path's every version.
 type searchTestRef struct {
-	stateLock sync.Mutex
-	states    []*searchTestState
-	removed   map[string]uint64
+	stateLock       sync.Mutex
+	states          []*searchTestState
+	removed         map[string]uint64
+	contentVersions map[string][]*searchTestContentVersion
+	// The store's faults (search_index_testhooks.go): the pushes refused at the storage limit, nil for none, and whether
+	// the next commit loses its answer.
+	refuse    func(shape SearchTestPushShape) bool
+	loseReply bool
 }
 
-// One ref version: its head, the push's signer, and every path's readable version.
+// One ref version: its head, the push's signer, and every path's readable version; and the content paths the push
+// changed, and whether it wrote its signer's index files beside them, as an in-ref writer's push does.
 type searchTestState struct {
-	head   *indexRefHead
-	signer Id
-	files  map[string]*searchTestStored
+	head         *indexRefHead
+	signer       Id
+	files        map[string]*searchTestStored
+	contentPaths []string
+	inRef        bool
 }
 
 // One stored version and its plaintext.
@@ -478,8 +495,9 @@ type searchTestStored struct {
 // An empty ref at version 0.
 func newSearchTestRef() *searchTestRef {
 	return &searchTestRef{
-		states:  []*searchTestState{{head: &indexRefHead{}, files: map[string]*searchTestStored{}}},
-		removed: map[string]uint64{},
+		states:          []*searchTestState{{head: &indexRefHead{}, files: map[string]*searchTestStored{}}},
+		removed:         map[string]uint64{},
+		contentVersions: map[string][]*searchTestContentVersion{},
 	}
 }
 
@@ -562,12 +580,22 @@ func (self *searchTestStore) Read(ctx context.Context, file *indexFileVersion) (
 func (self *searchTestStore) Commit(ctx context.Context, push *indexPush) (*indexCommitted, error) {
 	self.ref.stateLock.Lock()
 	defer self.ref.stateLock.Unlock()
-	head := self.ref.states[len(self.ref.states)-1]
+	return self.ref.commitWithLock(self.signer, push, nil)
+}
+
+// Commits push by signer at the head with content's changes beside it, nil for none: one ref version under one CAS,
+// each index path's and each content path's held to the version its builder read. A push that writes no index file
+// is no index push and names no index_epoch.
+func (self *searchTestRef) commitWithLock(signer Id, push *indexPush, content []*searchTestContentChange) (*indexCommitted, error) {
+	head := self.states[len(self.states)-1]
 	if push.kind == indexPushClosure {
 		return nil, errors.New("search test ref: no CLOSURE here")
 	}
-	if push.indexEpoch != head.head.indexEpoch {
+	if (0 < len(push.files) || 0 < len(push.removals) || push.kind == indexPushCut) && push.indexEpoch != head.head.indexEpoch {
 		return nil, &indexRefusal{kind: indexRefusalIndexEpoch}
+	}
+	if self.refuse != nil && self.refuse(SearchTestPushShape{FileCount: len(push.files), RemovalCount: len(push.removals), Content: 0 < len(content)}) {
+		return nil, &indexRefusal{kind: indexRefusalQuota}
 	}
 	conflicts := []string{}
 	for _, file := range push.files {
@@ -581,43 +609,33 @@ func (self *searchTestStore) Commit(ctx context.Context, push *indexPush) (*inde
 			conflicts = append(conflicts, removal.path)
 		}
 	}
+	for _, change := range content {
+		if self.contentStandingWithLock(change.path, head.head.version) != change.replaces {
+			conflicts = append(conflicts, change.path)
+		}
+	}
 	if 0 < len(conflicts) {
 		slices.Sort(conflicts)
 		return nil, &indexRefusal{kind: indexRefusalConflict, paths: slices.Compact(conflicts)}
 	}
-	version := head.head.version + 1
-	chain := sha256.New()
-	chain.Write(head.head.chain[:])
-	chain.Write(push.pushId.Bytes())
-	chain.Write(binary.BigEndian.AppendUint64(nil, version))
-	next := &searchTestState{
-		head: &indexRefHead{
-			version: version, chain: [sha256.Size]byte(chain.Sum(nil)), indexEpoch: head.head.indexEpoch,
-			signedTimeMs: push.signedTimeMs,
-		},
-		signer: self.signer,
-		files:  make(map[string]*searchTestStored, len(head.files)+len(push.files)),
-	}
+	next := self.nextStateWithLock(head, push.pushId, push.signedTimeMs, signer)
 	if push.kind == indexPushCut {
-		next.head.indexEpoch = version
-	}
-	for path, stored := range head.files {
-		next.files[path] = stored
+		next.head.indexEpoch = next.head.version
 	}
 	for _, removal := range push.removals {
 		delete(next.files, removal.path)
-		self.ref.removed[removal.path] = removal.version + 1
+		self.removed[removal.path] = removal.version + 1
 	}
-	committed := &indexCommitted{version: version}
+	committed := &indexCommitted{version: next.head.version}
 	for _, file := range push.files {
 		entryVersion := file.replaces + 1
 		if file.replaces == 0 {
-			entryVersion = max(push.baseVersion, self.ref.removed[file.path]) + 1
+			entryVersion = max(push.baseVersion, self.removed[file.path]) + 1
 		}
 		stored := &searchTestStored{
 			version: &indexFileVersion{
-				path: file.path, version: entryVersion, commitVersion: version, contentSha256: sha256.Sum256(file.plaintext),
-				byteCount: len(file.plaintext), signerSidecarId: self.signer, signedTimeMs: push.signedTimeMs,
+				path: file.path, version: entryVersion, commitVersion: next.head.version, contentSha256: sha256.Sum256(file.plaintext),
+				byteCount: len(file.plaintext), signerSidecarId: signer, signedTimeMs: push.signedTimeMs,
 			},
 			plaintext: bytes.Clone(file.plaintext),
 		}
@@ -625,8 +643,36 @@ func (self *searchTestStore) Commit(ctx context.Context, push *indexPush) (*inde
 		written := *stored.version
 		committed.files = append(committed.files, &written)
 	}
-	self.ref.states = append(self.ref.states, next)
+	self.applyContentWithLock(next, content)
+	next.inRef = 0 < len(content) && (0 < len(push.files) || 0 < len(push.removals))
+	self.states = append(self.states, next)
+	if self.loseReply {
+		self.loseReply = false
+		return nil, ErrSearchTestReplyLost
+	}
 	return committed, nil
+}
+
+// The ref version after head, its push's signed time and signer, holding head's files: what a push builds on. Not yet
+// a state of the ref.
+func (self *searchTestRef) nextStateWithLock(head *searchTestState, pushId Id, signedTimeMs int64, signer Id) *searchTestState {
+	version := head.head.version + 1
+	chain := sha256.New()
+	chain.Write(head.head.chain[:])
+	chain.Write(pushId.Bytes())
+	chain.Write(binary.BigEndian.AppendUint64(nil, version))
+	next := &searchTestState{
+		head: &indexRefHead{
+			version: version, chain: [sha256.Size]byte(chain.Sum(nil)), indexEpoch: head.head.indexEpoch,
+			signedTimeMs: signedTimeMs,
+		},
+		signer: signer,
+		files:  make(map[string]*searchTestStored, len(head.files)),
+	}
+	for path, stored := range head.files {
+		next.files[path] = stored
+	}
+	return next
 }
 
 // --- a device ---
@@ -658,6 +704,9 @@ type SearchTestDeviceArgs struct {
 	// A delay each page holding hits spends on the world's clock before it answers: what FS-110 plants in the page loop
 	// to show that its arrival clause fails a hit past the bound. Zero plants none.
 	AnswerDelay time.Duration
+	// The device reads indexed_through from the world's content, as SEARCH-M10-12's coverage reader does
+	// (search_content_testhooks.go); false reads none, which claims nothing.
+	Coverage bool
 }
 
 // One device following the world's ref for search.
@@ -712,25 +761,30 @@ func (self *SearchTestWorld) NewDevice(ctx context.Context, args *SearchTestDevi
 	if device.policy, err = NewSearchPolicy(&SearchPolicyArgs{Settings: args.Settings, Conditions: args.Conditions, Clock: self.clock}); err != nil {
 		return fail(err)
 	}
-	if device.sync, err = newSearchSync(&searchSyncArgs{
+	syncArgs := &searchSyncArgs{
 		cache: device.cache, settings: args.Settings, format: self.format, clock: self.clock, log: NewNoopLogger(),
 		readPathCount: DefaultEvsFormatSettings().ReadMaxPathCount, readByteCount: args.ReadByteCount, budget: device.policy,
-	}); err != nil {
+	}
+	if args.Coverage {
+		syncArgs.coverage = self.contentCoverage
+	}
+	if device.sync, err = newSearchSync(syncArgs); err != nil {
 		return fail(err)
 	}
 	device.source = &searchWorldSource{world: self, rate: args.ReadByteRate}
 	err = device.sync.Follow(&searchSyncRefArgs{
-		repoId: self.repoId, refId: self.refId, repoKind: protocol.RepoKind_REPO_KIND_GENERAL, source: device.source,
+		repoId: self.repoId, refId: self.refId, repoKind: self.kind, source: device.source,
 		keepAll:  func() bool { return device.policy.KeepsAll(self.repoId, self.AllByteCount()) },
 		mayErase: func(signer Id, signedTimeMs int64) bool { return false },
 	})
-	if err != nil {
+	// a config, mailcfg or secret repo's index is never followed (FI-17): the device keeps none, and its rounds say so
+	if err != nil && !errors.Is(err, ErrSearchSyncUnfollowed) {
 		return fail(err)
 	}
 	gkm := &searchTestGkm{repoKey: self.repoKey, onRecord: args.OnRecord}
 	device.engine, err = NewSearchEngine(&SearchEngineArgs{
 		Settings: args.Settings, Cache: device.cache, Sync: device.sync, Policy: device.policy, Gkm: gkm, Clock: self.clock,
-		Log: NewNoopLogger(), Scope: &searchTestScope{repoId: self.repoId, refId: self.refId},
+		Log: NewNoopLogger(), Scope: &searchTestScope{repoId: self.repoId, refId: self.refId, kind: self.kind},
 	})
 	if err != nil {
 		return fail(err)
@@ -1143,12 +1197,13 @@ func (self *searchTestGkm) RepoKey(ctx context.Context, repoId Id, generation ui
 type searchTestScope struct {
 	repoId Id
 	refId  Id
+	kind   protocol.RepoKind
 }
 
 // See SearchScopeSource.
 func (self *searchTestScope) Repos(ctx context.Context) ([]*SearchScopeRepo, error) {
 	return []*SearchScopeRepo{{
-		RepoId: self.repoId, Kind: protocol.RepoKind_REPO_KIND_GENERAL, Readable: true,
+		RepoId: self.repoId, Kind: self.kind, Readable: true,
 		Refs: []*SearchScopeRef{{RefId: self.refId, Default: true}},
 	}}, nil
 }

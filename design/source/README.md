@@ -7,7 +7,7 @@
 | Path | What it is |
 |---|---|
 | `sections/01-CTX.md` … `sections/23-PHASE.md` | DESIGN.md §1-§23, one file per section. The build copies them verbatim, adding only links. |
-| `owner/DECISIONS.md` | The owner's record, entries 1-610. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
+| `owner/DECISIONS.md` | The owner's record, entries 1-616. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
 | `owner/APPLY.md` | The rules for applying the owner's decisions: precedence (§1), supersession, where two decisions disagree (§2), notation (§3), editing rules (§4), and the follow-up decisions 112-136 with the sections each binds (§6-§8). |
 | `CONVENTIONS.md` | The writing conventions every section follows: the owner directive (§0), the owner rules (§1), the section template (§2) and the X registry (§7), which DESIGN.md's X1-X20 table replaced. |
 | `OUTLINE.md` | The original outline: section codes, scope boundaries, and the word budgets that G0's density rule replaced on 2026-11-04. |
@@ -44,7 +44,7 @@ It needs only `python3`; it was built and checked with Python 3.13. The steps, a
 
 The data files are layered. Each `data_*N.py` loads its predecessor with `runpy` and patches it: `data_front10.py` loads `data_front9.py`, back to `data_front3.py`, and the registers, glossary and appendices go the same way. Change the top layer (the `*10` files), or add an `*11` layer that loads them. Comments in the scripts cite working files from the design sessions (the reconcilers' orders, `peer/`, `review/`, `snap/`), which were not imported; they are history.
 
-## Adding owner decision N (611 onward)
+## Adding owner decision N (617 onward)
 
 1. Add entry N to `owner/DECISIONS.md`: the question, the answer, its cost, the options not taken, and what raised it.
 2. In `asm/data_front10.py`, append `(N, "<what it settles>", "<one line>")` to `INDEX`, add `DATES[N]`, and raise the `assert` to `list(range(1, N + 1))`. Update `STATUS` and `DECISIONS_INTRO` where they name a range. `@@OD:k@@` writes a link to decision k.
@@ -782,3 +782,37 @@ The design-records track dr4-late-sweep (wave f43d) folds every owner answer tha
 - **The metadata list** follows §2.8 at v57: v55 for owner decision 588, v56 for 608 and v57 for 609.
 
 Outside this folder the track touched DESIGN.md, DESIGN-DEFER.md, DESIGN-AMENDMENTS.md, metadata_list.yml, check/metadata_list_test.go's additions and protocol/design_unfenced_test.go's pending fence entries. Left: what waits in RECORD.md, DESIGN-DETAILS.md, HANDOFF.md and the code, which DESIGN-AMENDMENTS.md's "Later decisions" items and this track's report name.
+
+## Validation after owner decisions 611 to 616: the second late sweep (2026-11-18)
+
+The design-records track dr5-late-sweep (wave f45d) folds the owner's answers that the run's list of pending decisions held on 2026-11-18 after the first late sweep, QD-1069 to QD-1074, each a question of the build's that the owner answered that day as recommended, and checks the items of sidecar/DESIGN-AMENDMENTS.md's "Later decisions". It numbers each answer as it folds it:
+
+| Ledger id | Owner decision | What it settles |
+|---|---|---|
+| QD-1069 | 611 | The mail breakers read all four measures: Postmaster Tools and SNDS under vault credentials of their own, each with a §2.8 row, and the listings from a second copy of the feed mirror on taskworker's host; an absent ratio reads as unknown. |
+| QD-1070 | 612 | api and taskworker page §21.8's notices through a retrying sink over monitor's webhook; the role-mail intake files through an internal api route carrying header facts only; `sidecarctl abuse file_notice` files a staff notice. |
+| QD-1071 | 613 | `mail_send` takes an optional `uses`, by which an agent asks for a template of its alias and recipients; every other O tool files one use. |
+| QD-1073 | 614 | An `egress_change` template binds `require_default_egress` set or empty, so one without it covers only filings without it. |
+| QD-1072 | 615 | A policy's own `ip:` deny test fails at save where a route rule naming no prefix takes its source through a sidecar both via and destination. |
+| QD-1074 | 616 | A client generation that cannot start because a subprotocol-store file fails decoding is §5.9's Failed, raising `refused` once. |
+
+- **The breakers' measures (611).** §21.5's measures paragraph, §21.16's sources and vault files, §15.4's listings, §19.4's taskworker row and §23.7's owner steps. §2.8 takes ext-14, Google Postmaster Tools, and ext-15, Microsoft SNDS, each with its `planned: M9` line in `testdata/metadata/fields.yml` in the same commit, and amends ext-4, list v58.
+- **The notice pages (612).** §21.8's intake, §21.10's staff route and client, §21.16's routes and services, §19.4's api and taskworker rows and §19.8's pager paragraph; §2.8's ext-13 names api and taskworker beside monitor, list v59. The internal route is named by what it carries; its path is the fix track's.
+- **Templates (613, 614).** §16.5's `mail_send` line, §16.6's multi-use row and §16.8's comments on `scope` and field 41. No fence field changed, so no `testFenceAdditions` entry moves. QD-1073's reading is built (kind 5's `TemplateBound`); QD-1071's waits for its fix track.
+- **`ip:` deny tests (615).** §8.8's saving rules, with a pointer from §8.4's readings. The answer places the text in §8.6, but DESIGN.md states a policy's tests in §8.8, so it went there.
+- **A refused generation (616).** §5.9's Failed row and §5.4's state reason. The answer names no reason value, so none is named, and §18.5's `GetStateReason`, which lists the values, is unchanged until the fix track names one.
+- **Index rows.** Owner decisions 498, 574, 575 and 607 note the decisions that extend or follow them.
+- **No deferral.** None of the six defers anything, and QD-1074's file class for the subprotocol store is review-phase work, which DESIGN-DEFER.md does not hold, so DESIGN-DEFER.md is unchanged. QD-1042's reading for ruled repos is in its acl-prefix-write-rules entry already.
+- **"Later decisions".** All eight items still wait on files outside design/source/ and keep their Not folded lines: QD-779, QD-780, QD-782 and QD-783 on RECORD.md 7.1, 7.4 and section 8; QD-024 on the owner's copy of cli/UI.md at sidecar/design/UI.md and on HANDOFF.md; QD-864 on RECORD.md 5.5's `Opening` fence and its sections 9 and 11; QD-899 on RECORD.md 7.3 and 7.4 and DESIGN-DETAILS.md 15.2.2; QD-900 on RECORD.md's `ContextBody` fence and 7.4.
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `0d0d1c88697787df9e8fae278a98fd52397f65f1132060a93bcb72f9ce90bc28`) and DESIGN-DEFER.md (SHA-256 `cf6095e4246abc02ba00374353292f6f7b4fec316a4e429a82e8e45277b1622b`, unchanged), and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item; two new §2.8 rows, ext-14 and ext-15, with their guard lines.
+- **Owner decisions.** All 616 rows are present and cited; APPLY.md's section pairs hold.
+- **Open owner questions.** One, Q-REPO-6.
+- **Superseded options.** 312 grep hits, every one carried with its reading; none is on a changed line and none is live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 11,814 section references, 32 more, with the one unresolved as before. `v7/words.json` and `v7/text_checks.json` were regenerated.
+- **DESIGN-DEFER.md.** 96 entries and 149 pointers, unchanged.
+- **The metadata list** follows §2.8 at v59: v58 for owner decision 611 and v59 for 612, copied to `metadata_list.yml` by `make metadata`.
+
+Outside this folder the track touched DESIGN.md, metadata_list.yml and the two `planned` lines in testdata/metadata/fields.yml. Left: the code the answers' fix tracks have still to land on 2026-11-18, QD-1070's internal route and `sidecarctl abuse file_notice` (its sink installs in api and taskworker have landed, as have QD-1069's sources), QD-1071's `uses`, QD-1072's test rule and QD-1074's refused generation, and the owner's two accounts for owner decision 611.

@@ -146,7 +146,8 @@ type SidecarEvent struct { // AddEventCallback, `ur status`, the sdk listener (�
 	                             // readerkey row; owner decision 358)
 	State       SidecarState
 	Reason      SidecarStateReason // Unenrolled: expired, refused, parent_lost, session_ended, keystore_lost;
-	                               // Revoked: signed (§18.5's GetStateReason)
+	                               // Offline: the failed store a generation could not start on (5.9's
+	                               // Failed; owner decision 616); Revoked: signed (§18.5's GetStateReason)
 	GroupId     *Id // membership kinds: the §10 group
 	SidecarId   *Id // membership kinds: the leaf or wrapped reader; admission_alarm: the admitted sidecar;
 	                // recovery_rebind: its signer; recovery_unseen: the recovered device; head_alarm: the peer,
@@ -908,7 +909,13 @@ rebuild   all of it but state is derived: an AEAD failure drops the file and ref
 ```text
 Present  a value that fails decoding or AEAD counts as Failed, never Absent
 Locked   the sidecar enters Locked; once the store unlocks, the host calls Unlock(nil)
-Failed   as Locked, and alarms; neither Locked nor Failed creates, overwrites or deletes anything
+Failed   as Locked, and alarms; neither Locked nor Failed creates, overwrites or deletes anything; a sealed
+         file of the network's subprotocol store (§6.8's push versions and the pins beside them) that fails
+         decoding as a client generation starts is Failed too: the generation does not start, the sidecar
+         enters Locked or stays Offline with a reason naming the store, and it raises refused once, so a host
+         and ur status see why it is not online; a later wake retries, one event and then a wait for a wake,
+         never a spin; a file class that rebuilds what is derived there can follow if the review phase finds
+         files there safe to rebuild (owner decision 616)
 Absent   no sidecar_id recorded in sidecar.json: create U; R_n is created only at network n's first
          enrollment, with no sidecar_id recorded for n
          one recorded: the item is lost; open U by the pass, or R_n by n's recovery code, else
