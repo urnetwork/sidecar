@@ -215,6 +215,8 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 			Versioning:      entry.GetVersioning(),
 			Ignored:         ignored,
 			State:           state,
+			DropId:          evsDropIdOf(verified.Drop),
+			DropNotBefore:   evsDropNotBeforeOf(verified.Drop),
 			SlotIds:         slotIds,
 			EntrySha256:     evsHistoryEntrySha256(verified),
 			Epoch:           verified.Statement.Push.GetPathEpoch(),

@@ -75,6 +75,22 @@ func (self *EvsDropState) Name(now time.Time) string {
 	return EvsVersionStateDropPending
 }
 
+// The drop's id, zero for nil.
+func evsDropIdOf(state *EvsDropState) Id {
+	if state == nil {
+		return Id{}
+	}
+	return state.DropId
+}
+
+// The drop's window's end, zero for nil.
+func evsDropNotBeforeOf(state *EvsDropState) time.Time {
+	if state == nil {
+		return time.Time{}
+	}
+	return state.NotBefore
+}
+
 // The checked DROP bodies a client keeps: see the file header.
 type evsDropBodies struct {
 	store SidecarStore

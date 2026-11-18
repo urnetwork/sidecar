@@ -313,6 +313,9 @@ type EvsSettings struct {
 	// A read whose reply left out a drop body the reader lacks is read again at most DropBodyReadCount times, 4, its
 	// missing body first each time (10.2.3's reply size).
 	DropBodyReadCount int
+	// `ur status` names at most StatusPathCount versioned paths whose history holds most of a ref's storage, 5
+	// (evs_storage_status.go).
+	StatusPathCount int
 }
 
 // The desktop daemon's evs settings.
@@ -433,5 +436,6 @@ func DefaultEvsSettings() *EvsSettings {
 		DropCancelMargin:         60 * time.Second,
 		DropBodyKeepByteCount:    4 * 1024 * 1024,
 		DropBodyReadCount:        4,
+		StatusPathCount:          5,
 	}
 }

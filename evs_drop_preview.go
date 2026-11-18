@@ -58,6 +58,9 @@ type EvsDropPreviewArgs struct {
 	// Dry runs evs already holds, each batch's preview id in order: the lineages are walked again and evs read for
 	// the results, nothing filed (`ur history drop --resume`). Their count must be the batches' the walk makes.
 	ResumePreviewIds [][]byte
+	// Files each batch's dry run and waits for none (`ur history drop --detach`): the answer names each batch's
+	// preview id and holds no figures, and no drop can name it until a resume reads it done.
+	Detach bool
 }
 
 // One DROP push's worth of a dry run: lineages within one DROP's bounds, cut at lineage boundaries in body order, and
@@ -171,7 +174,7 @@ func (self *EvsRepo) DropHistoryPreview(ctx context.Context, args *EvsDropPrevie
 		if 0 < len(args.ResumePreviewIds) {
 			resume = args.ResumePreviewIds[i]
 		}
-		if err := self.previewBatch(ctx, refId, batch, resume); err != nil {
+		if err := self.previewBatch(ctx, refId, batch, resume, args.Detach); err != nil {
 			return nil, err
 		}
 		preview.Batches = append(preview.Batches, batch)
@@ -182,13 +185,15 @@ func (self *EvsRepo) DropHistoryPreview(ctx context.Context, args *EvsDropPrevie
 		preview.YoungBytes += batch.YoungBytes
 	}
 	preview.PreviewId = preview.Batches[0].PreviewId
-	self.client.keepDropPreview(preview)
+	if !args.Detach {
+		self.client.keepDropPreview(preview)
+	}
 	return preview, nil
 }
 
 // One batch's dry run: filed, or resumed by its preview id, then read until done, every path's list matching and
 // linked, and its map_parts copied into the lineages.
-func (self *EvsRepo) previewBatch(ctx context.Context, refId Id, batch *EvsDropPreviewBatch, resume []byte) error {
+func (self *EvsRepo) previewBatch(ctx context.Context, refId Id, batch *EvsDropPreviewBatch, resume []byte, detach bool) error {
 	previewId := resume
 	if previewId == nil {
 		request := &protocol.EvsDropPreviewRequest{RefId: refId.Bytes()}
@@ -215,6 +220,9 @@ func (self *EvsRepo) previewBatch(ctx context.Context, refId Id, batch *EvsDropP
 		return fmt.Errorf("%w: a dry run with no preview id", ErrEvsReplyInvalid)
 	}
 	batch.PreviewId = bytes.Clone(previewId)
+	if detach {
+		return nil
+	}
 	reply, err := self.waitDropPreview(ctx, batch.PreviewId)
 	if err != nil {
 		return err
@@ -422,6 +430,38 @@ func (self *EvsRepo) Drops(ctx context.Context, args *EvsDropsArgs) ([]*EvsDrop,
 		}
 	}
 	return drops, nil
+}
+
+// The paths of files this device can name on refName's head, from verified listings, at most DropNamesCount: what
+// Drops matches a drop's lineages against (I-13: names stay on the device).
+func (self *EvsRepo) KnownPaths(ctx context.Context, refName []byte) ([]string, error) {
+	known := []string{}
+	level := []string{""}
+	for depth := 0; 0 < len(level) && len(known) < self.client.settings.DropNamesCount; depth += 1 {
+		if EvsTokenPathMaxLength < depth {
+			break
+		}
+		next := []string{}
+		for _, directory := range level {
+			listing, err := self.List(ctx, &EvsReadArgs{RefName: refName, Path: directory, Fresh: depth == 0})
+			if err != nil {
+				return nil, err
+			}
+			for _, entry := range listing.Entries {
+				path := string(entry.Name)
+				if directory != "" {
+					path = directory + "/" + path
+				}
+				if entry.Kind == protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY {
+					next = append(next, path)
+				} else if len(known) < self.client.settings.DropNamesCount {
+					known = append(known, path)
+				}
+			}
+		}
+		level = next
+	}
+	return known, nil
 }
 
 // A drop's body this device checked and keeps (evs_drop_state.go), nil for none: what names a drop whose push record
