@@ -630,26 +630,6 @@ var testFenceAdditions = []struct {
 	field    testFenceField
 	question string
 }{
-	// QD-159: the certificate a version-2 entry's subkey signature checks under rides inside the sealed body
-	{
-		message:  "AgentSignedBody",
-		field:    testFenceField{name: "agent_cert", number: 5, typeName: "bytes"},
-		question: "plan-CORE-agent-revoke",
-	},
-	// QD-864: the RecordEntry.version of the entry an Opening was made from, absent reading 1, so its reader knows
-	// whether body is the kind's message or the AgentSignedBody holding it
-	{
-		message:  "Opening",
-		field:    testFenceField{name: "version", number: 4, typeName: "uint32"},
-		question: "record-m6-03-opening-entry-version",
-	},
-	// QD-900: the run's redacted user prompts, in the stage 2 context entries ingest writes as they arrive, so a vault's
-	// run card reads its prompt text and title fallback from the record (RECORD.md 7.4; §16.7's context row)
-	{
-		message:  "ContextBody",
-		field:    testFenceField{name: "prompts", number: 17, typeName: "string", repeated: true},
-		question: "search-m10-28-transcript-prompts",
-	},
 }
 
 // One field an owner's answer takes out of a message the design fences, its number reserved.
