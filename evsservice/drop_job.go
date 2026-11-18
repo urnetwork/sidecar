@@ -49,6 +49,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/urnetwork/sidecar"
@@ -1636,8 +1637,10 @@ func (self *evacuateRun) appendDrop(minute uint32, place *protocol.EvsPlace, rec
 }
 
 // What tidy deletes and evicts: ended entries and dry runs past their retention, by a table write, and each ended job's
-// and dry run's files but list files, 30 d after the newest of them was written. Nothing deletes on an unsure clock or
-// a cluster that has not passed the settle cases.
+// and dry run's files, 30 d after the newest of them was written, but a job's list files and its snap-0, which stay
+// for the repo's life: snap-0 names the drops the list files hold, so `sidecarctl evs drop-reindex` can write an older
+// job's corrupt list file again (owner decisions 398, 570; QD-1021). Later rounds' snap files go with the rest.
+// Nothing deletes on an unsure clock or a cluster that has not passed the settle cases.
 func (self *DropJob) tidy(ctx context.Context, cluster sidecar.BlobCluster, segmentCluster sidecar.BlobCluster, repoId sidecar.Id, state *DropTableState, now time.Time) error {
 	if self.host.ClockCheck == nil || !self.host.ClockCheck.Sure() || !cluster.SettlePassed() || !segmentCluster.SettlePassed() {
 		return nil
@@ -1692,9 +1695,14 @@ func (self *DropJob) tidy(ctx context.Context, cluster sidecar.BlobCluster, segm
 			continue
 		}
 		listPrefix := dropFileKindPrefix(repoId, jobId, DropFileList)
+		coveredKey := DropFileKey(repoId, jobId, DropFileSnap, 0)
 		for _, object := range objects {
-			if len(object.Key) >= len(listPrefix) && object.Key[:len(listPrefix)] == listPrefix {
+			if strings.HasPrefix(object.Key, listPrefix) {
 				// the listed index stays for the repo's life (DESIGN-DETAILS 10.2.9)
+				continue
+			}
+			if object.Key == coveredKey {
+				// so does snap-0, the drops the listed index was resolved from (owner decision 570)
 				continue
 			}
 			if err := segmentCluster.Delete(sidecar.WithBlobUnmodified(ctx, object.LastModified), object.Key); err != nil && !errors.Is(err, sidecar.ErrBlobPrecondition) {
