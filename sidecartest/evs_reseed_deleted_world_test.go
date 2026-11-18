@@ -2,7 +2,8 @@
 // exception, §11.13's re-seed row; QD-1062, QD-977): the epoch world's repo is deleted, its RepoDelete unrestored, and
 // its site is lost inside the restore window. On the new site, evs with reseed on, the repo admin's device runs the
 // groups step (sidecar.EvsRepo.ReseedPlace) through evsservice's PUT /evs/v1/repos/<id>, which creates repo/
-// deleted{deletion_id, its entry's time, signer} and never keying, re-forms the group and activates nothing; then its
+// deleted{deletion_id, its entry's time, signer} and never keying, re-forms the group and sends an activate, which
+// evs refuses 409 REPO_DELETED, activating nothing (a repo/ created keying is evs_reseed_mend_world_test.go's); then its
 // walk (sidecar.EvsRepo.Reseed), whose first request is a segment upload, before any reseed call, returns the whole
 // mirror while repo/ stays deleted, every read refused. The RepoRestore then brings back a repo a fresh reader reads.
 // A repo past its restore window is refused 409 SHREDDING at the place, and nothing of it comes back.
@@ -192,11 +193,16 @@ func (self *reseedDeletedWorld) requireDeleted(when string) []byte {
 
 // One lifecycle request of the repo's admin at the new site's engine.
 func (self *reseedDeletedWorld) lifecycle(method string, suffix string) *httptest.ResponseRecorder {
+	return self.requestAs("admin", method, suffix)
+}
+
+// One request of the repo's admin at the new site's engine, past the devices' transport, under a token of role.
+func (self *reseedDeletedWorld) requestAs(role string, method string, suffix string) *httptest.ResponseRecorder {
 	signer := self.signers["w"]
 	connectSidecarId := connect.Id(signer.SidecarId)
 	token := self.host.Authenticator.Issue(&sidecar.Principal{
 		NetworkId: connect.Id(self.networkId), ClientId: connect.Id(self.clientId), SidecarId: &connectSidecarId,
-		Audience: evsservice.EvsAudience, Scopes: []string{fmt.Sprintf("repo:%s:admin", self.repoId)},
+		Audience: evsservice.EvsAudience, Scopes: []string{fmt.Sprintf("repo:%s:%s", self.repoId, role)},
 		IssuedAt: self.clock.Now(), ExpiresAt: self.clock.Now().Add(15 * time.Minute),
 	})
 	request := httptest.NewRequest(method, "https://evs.example/evs/v1/repos/"+sidecar.EvsKeyId(self.repoId)+suffix, nil)
@@ -215,13 +221,15 @@ func TestEvsReseedReturnsARepoReseededAsDeletedEndToEnd(t *testing.T) {
 		t.Fatalf("repo/ on the new site before its place: %v", object)
 	}
 
-	// the groups step: the place creates repo/ deleted, the group re-forms as a deleted repo's, and nothing activates
+	// the groups step: the place creates repo/ deleted, the group re-forms as a deleted repo's, and the activate it
+	// sends, the one refused call this order costs, is answered 409 REPO_DELETED, its group there, activating nothing
 	reforms := []*sidecar.GkmReformArgs{}
 	groupId := sidecar.NewId()
+	var created []byte
 	placed, err := world.writer.repo.ReseedPlace(world.ctx, &sidecar.EvsReseedPlaceArgs{
 		ReformGroup: func(ctx context.Context, args *sidecar.GkmReformArgs) (sidecar.Id, error) {
 			// the repo stands deleted before its group returns
-			world.requireDeleted("at the re-form")
+			created = world.requireDeleted("at the re-form")
 			reforms = append(reforms, args)
 			world.returnGroups(world.lost)
 			return groupId, nil
@@ -230,21 +238,18 @@ func TestEvsReseedReturnsARepoReseededAsDeletedEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the groups step: %v", err)
 	}
-	if !placed.Deleted || placed.PlacedByAnother || placed.GroupId != groupId {
+	if !placed.Deleted || placed.Mended || placed.PlacedByAnother || placed.GroupId != groupId {
 		t.Fatalf("placed %+v", placed)
 	}
 	if len(reforms) != 1 || reforms[0].RepoId != world.repoId || !reforms[0].Reseed {
 		t.Fatalf("re-forms %+v", reforms)
 	}
-	if sent := world.sent(); len(sent) != 1 || sent[0] != "PUT "+repoPath {
+	if sent := world.sent(); len(sent) != 2 || sent[0] != "PUT "+repoPath || sent[1] != "POST "+repoPath+"/activate" {
 		t.Fatalf("the groups step sent %v", sent)
 	}
-	created := world.requireDeleted("after the place")
-	// activate answers the deleted repo 409 REPO_DELETED, its group there
-	if recorder := world.lifecycle(http.MethodPost, "/activate"); recorder.Code != http.StatusConflict {
-		t.Fatalf("activate of a repo re-seeded as deleted: %d", recorder.Code)
+	if after := world.requireDeleted("after the groups step"); !bytes.Equal(after, created) {
+		t.Fatal("the refused activate rewrote repo/")
 	}
-	world.requireDeleted("after a refused activation")
 
 	// the walk: its first request is the first version's segment, before any reseed call
 	result, err := world.reseed(world.writer, &sidecar.EvsReseedArgs{IncidentId: []byte("incident 62")})
