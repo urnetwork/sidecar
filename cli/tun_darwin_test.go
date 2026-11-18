@@ -40,6 +40,7 @@ import (
 
 	"github.com/urnetwork/connect"
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 // The utuns this host has now.
@@ -78,7 +79,7 @@ func TestTunDarwinRefusesWithoutRoot(t *testing.T) {
 	}
 	networkId := sidecar.NewId()
 	bridges, _ := newTestUrBridgeDaemon(t, system, networkId, false)
-	if _, err := bridges.tunUp(networkId, nil); !errors.Is(err, errUrTunPrivilege) || bridges.tunStatus() != nil {
+	if _, err := bridges.tunUp(networkId, nil, nil); !errors.Is(err, errUrTunPrivilege) || bridges.tunStatus() != nil {
 		t.Fatalf("through the daemon: %v", err)
 	}
 	if after := testDarwinUtuns(t); !slices.Equal(before, after) {
@@ -1744,5 +1745,108 @@ func TestTunDarwinIoctlStructsFitTheirRequests(t *testing.T) {
 		if size(each.request) != each.size {
 			t.Errorf("%s takes %d bytes, and its struct is %d", each.name, size(each.request), each.size)
 		}
+	}
+}
+
+// Whether iface holds every half, IPv4's and IPv6's, the default routes the plan takes; a test fails on a partial set.
+func testDarwinHalvesHeld(t *testing.T, iface *urTunDarwinInterface) bool {
+	t.Helper()
+	iface.stateLock.Lock()
+	halves := slices.Clone(iface.exitsHalves)
+	iface.stateLock.Unlock()
+	all := append(urTunExitsHalves(), urTunExitsIpv6Halves()...)
+	if 0 < len(halves) && len(halves) != len(all) {
+		t.Errorf("a partial set of halves %v", halves)
+	}
+	return len(halves) == len(all)
+}
+
+// Every combination of the plan for default traffic (QD-1052) over macOS's interface on its recorder, through the tun's
+// own sync: the halves of both families and the binding go on exactly where the plan takes the default route, and none
+// outlives the tun.
+func TestTunDarwinPlansDefaultTrafficForEveryCombination(t *testing.T) {
+	testTunDefaultCasesOnPlatform(t, func(t *testing.T) (urTunInterface, func() bool) {
+		world := newTestDarwinWorld(t)
+		iface := world.open(t)
+		return iface, func() bool { return testDarwinHalvesHeld(t, iface) }
+	})
+}
+
+// Over macOS's interface on its recorder: default egress off takes the halves off at once and on puts them back, as do
+// route local traffic and an exit that comes and goes, with the one utun up throughout (QD-1052).
+func TestTunDarwinSwitchesDefaultEgressWithNoRestart(t *testing.T) {
+	world := newTestDarwinWorld(t)
+	iface := world.open(t)
+	testTunDefaultSwitchOnPlatform(t, iface, func() bool { return testDarwinHalvesHeld(t, iface) })
+	upCount := 0
+	for _, call := range world.kernel.take() {
+		if call == "up utun99" {
+			upCount += 1
+		}
+	}
+	if upCount != 1 {
+		t.Fatalf("the utun came up %d times", upCount)
+	}
+}
+
+// On this machine's kernel, as root: a real utun under exits with an exit takes IPv4's halves through it, default egress
+// off takes them off with the utun up, on puts them back, and the close leaves none. The root this needs is the
+// person's to give: UR_TUN_TEST_DEVICE=darwin and sudo, as TestTunDarwinDeviceCarriesTheBridge runs.
+func TestTunDarwinDeviceSwitchesDefaultEgress(t *testing.T) {
+	if os.Getenv("UR_TUN_TEST_DEVICE") != "darwin" || unix.Geteuid() != 0 {
+		t.Skip("creates a utun and changes the host's routes: runs only as root with UR_TUN_TEST_DEVICE=darwin")
+	}
+	settings := testUrTunSettings()
+	system := newUrTunDarwinSystem(settings, nil).(*urTunDarwinSystem)
+	system.resolverDirectory = t.TempDir()
+	tunBridge := newTestTunBridge()
+	tunBridge.status.EgressMode = bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS
+	tunBridge.status.EgressExitCount = 1
+	tun, err := startUrTun(context.Background(), &urTunArgs{
+		Name:      "ur-test",
+		NetworkId: sidecar.NewId(),
+		System:    system,
+		Bridge:    tunBridge,
+		Links:     &testTunLinks{},
+		Settings:  settings,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(tun.close)
+	name := tun.status().Device
+	link, err := net.InterfaceByName(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	halvesHeld := func() int {
+		routes, err := system.kernel.Routes()
+		if err != nil {
+			t.Fatal(err)
+		}
+		count := 0
+		for _, half := range urTunExitsHalves() {
+			if slices.ContainsFunc(routes, func(held urTunDarwinRoute) bool { return held.dst == half && held.index == link.Index }) {
+				count += 1
+			}
+		}
+		return count
+	}
+	if count := halvesHeld(); count != 2 || !tun.status().DefaultRoute {
+		t.Fatalf("up: %d halves, %+v", count, tun.status())
+	}
+	if status := tun.setChoices(urTunChoices{DefaultEgress: false, RouteLocal: true}); status.DefaultRoute || halvesHeld() != 0 {
+		t.Fatalf("off: %d halves, %+v", halvesHeld(), status)
+	}
+	if status := tun.setChoices(urTunChoices{DefaultEgress: true, RouteLocal: true}); !status.DefaultRoute || halvesHeld() != 2 {
+		t.Fatalf("on: %d halves, %+v", halvesHeld(), status)
+	}
+	if _, err := net.InterfaceByName(name); err != nil {
+		t.Fatalf("%s went with a change: %v", name, err)
+	}
+	tun.close()
+	routes, _ := system.kernel.Routes()
+	if slices.ContainsFunc(routes, func(held urTunDarwinRoute) bool { return held.index == link.Index }) {
+		t.Fatal("a route outlived the tun")
 	}
 }

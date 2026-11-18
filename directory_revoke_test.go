@@ -2,8 +2,9 @@
 
 // RECORD-M6-20's revocation on sidecartest's fakes, FS-99's M6 cases at the revoker and at readers: a revoke with no
 // admin daemon running hides the name at once and reads pending with its age; its marker and its erasure_request
-// leave in one push; a second revoke, and a revoke resumed after a failed append, file one request id; a person's
-// act alone revokes; and a reader takes a directory ERASE only from a directory admin, alarming on any other.
+// leave in one push; a second revoke, and a revoke resumed after a failed append, file one request id; a revocation
+// lapsed by its repo announced again stays lapsed under a later marker (owner decision 472); a person's act alone
+// revokes; and a reader takes a directory ERASE only from a directory admin, alarming on any other.
 
 package sidecar_test
 
@@ -250,6 +251,61 @@ func TestDirectoryRevokeLapsesWhenTheRepoIsAnnouncedAgain(t *testing.T) {
 	second, err := owner.client.RevokeRepo(t.Context(), &sidecar.DirectoryRevokeArgs{RepoId: repoId, Confirmed: true})
 	if err != nil || second.RequestId == first.RequestId || second.MarkerVersion != 4 || second.State != sidecar.DirectoryRevocationPending {
 		t.Fatalf("the second revocation: %+v, %v", second, err)
+	}
+}
+
+// The revoker's half of owner decision 472: P revoked (request 1, marker version 2), announced again (version 3) and
+// then marked private (version 4, a marker that files no request). The revoker reads request 1 lapsed, not pending,
+// under the private item that stands above it; a revoke then files a new request above that item instead of answering
+// the lapsed one; and a runner works the new request alone.
+func TestDirectoryRevokeLapsedStaysLapsedUnderALaterMarker(t *testing.T) {
+	world := newTestDirectoryWorld(t, nil)
+	owner, repoId := world.announcedRepo("design notes")
+	owner.mustSync(t)
+	first, err := owner.client.RevokeRepo(t.Context(), &sidecar.DirectoryRevokeArgs{RepoId: repoId, Confirmed: true})
+	if err != nil || first.MarkerVersion != 2 {
+		t.Fatalf("the first revocation: %+v, %v", first, err)
+	}
+	owner.flush(t)
+	owner.mustSync(t)
+	if _, err := owner.client.AnnounceRepo(t.Context(), &sidecar.DirectoryRepoAnnounceArgs{RepoId: repoId, DisplayName: "design notes, again", Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	owner.flush(t)
+	owner.mustSync(t)
+	if _, err := owner.client.AnnounceRepo(t.Context(), &sidecar.DirectoryRepoAnnounceArgs{RepoId: repoId, Private: true, Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	owner.flush(t)
+	owner.mustSync(t)
+	if marker := testRepoItemShown(t, owner.testDirectoryReader, repoId); marker == nil || marker.Display != sidecar.DirectoryItemPrivate || marker.Announcement.GetVersion() != 4 {
+		t.Fatalf("the private item: %v", marker)
+	}
+	revocations, err := owner.client.Revocations()
+	if err != nil || len(revocations) != 1 || revocations[0].RequestId != first.RequestId || revocations[0].State != sidecar.DirectoryRevocationLapsed {
+		t.Fatalf("the revocation under the private item: %+v, %v", revocations, err)
+	}
+	if lines := owner.client.RevocationStatusLines(); len(lines) != 0 {
+		t.Errorf("a lapsed revocation's status lines: %v", lines)
+	}
+
+	second, err := owner.client.RevokeRepo(t.Context(), &sidecar.DirectoryRevokeArgs{RepoId: repoId, Confirmed: true})
+	if err != nil || second.RequestId == first.RequestId || second.MarkerVersion != 5 || second.State != sidecar.DirectoryRevocationPending {
+		t.Fatalf("a revoke under the private item: %+v, %v", second, err)
+	}
+	owner.flush(t)
+	if requests := owner.entriesAtEvs(t, sidecar.RecordKindErasureRequest); len(requests) != 2 {
+		t.Fatalf("%d erasure_request entries", len(requests))
+	}
+	admin := world.adminDevice()
+	runner, _ := admin.runner(t, 0, nil)
+	pass := admin.pass(t, runner)
+	// every version below the new marker: the first item, the first marker, the item announced again and the private one
+	if !slices.Equal(pass.Refused, []sidecar.Id{first.RequestId}) || len(pass.Erased) != 1 || len(pass.Erased[second.RequestId]) != 4 {
+		t.Fatalf("the runner's pass: %+v", pass)
+	}
+	if count := admin.alarmsNaming(sidecar.SidecarRecordAlarmBadErasure, owner.writer.sidecarId); count != 1 {
+		t.Errorf("%d bad_erasure alarms naming the lapsed request's signer", count)
 	}
 }
 

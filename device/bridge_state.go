@@ -292,6 +292,8 @@ func (self *Bridge) adoptWithLock(decision PostureDecision, force bool) ([]uint6
 		self.expiredCount = times.expiredCount
 		self.routeFindings = routeFindings
 		self.egressMode = routeRules.GetEgress().GetMode()
+		self.defaultEgressRequired = self.egressMode == bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS &&
+			routeRules.GetEgress().GetRequireDefaultEgress()
 	}()
 	testHookBarrier("bridge.adopt.after", "")
 	self.deadline.Set(next)

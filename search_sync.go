@@ -15,7 +15,10 @@
 //	2 target    T = h; staged files T lists at their version stay, the rest go
 //	3 reproduce SEARCH-M10-21's, behind searchSyncReproducer, nil until it lands, when every wanted file is fetched
 //	4 fetch     search_fetch.go: the latest set, then the all set where it is kept, in a fixed order that reads
-//	            nothing a search asked; a read answering collected restarts the round at step 1 on the new head
+//	            nothing a search asked; a read answering collected restarts the round at step 1 on the new head; in
+//	            every round but "search more"'s, keepAll is asked again before each read of all, and once it no
+//	            longer keeps all the fetch of all ends there, what landed staying staged for the next round it allows,
+//	            and the round goes on to step 7 without step 6 (QD-1026; owner decision 583)
 //	5 swap      search_retained.go: once every latest-set file T lists is held, staged or bad at T's version, the
 //	            version table's runs, then the manifest at T (the swap), then the ref's version; rolled buckets kept
 //	            or dropped by 7.2.7's three cases
@@ -83,6 +86,9 @@ var (
 	errSearchSyncReceipt = errors.New("search sync: no read receipt could be deposited")
 	// A background round's next read is past the day's budget (Search.BackgroundByteCount): held back.
 	errSearchSyncHeldBack = errors.New("search sync: background budget spent")
+	// The ref's keepAll stopped keeping all partway through a round's fetch of all (QD-1026): the fetch ended before
+	// its next read, and the round goes on without swapping all. Never leaves the round.
+	errSearchSyncAllEnded = errors.New("search sync: the windows rule no longer keeps all")
 )
 
 // Why a round runs (DESIGN-DETAILS 7.2.7's triggers).
@@ -197,8 +203,10 @@ type searchSyncRefArgs struct {
 	// The index rides ur/index, whose rows carry their ref_id; else the ref's own .ur-index/.
 	companion bool
 	source    searchSyncSource
-	// Whether this device keeps the ref's all set: background hosts always, phones by SEARCH-M10-20's windows rule (in
-	// a window or the foreground, on an unmetered link while charging). Nil keeps it.
+	// Whether this device keeps the ref's all set now: background hosts always, phones by SEARCH-M10-20's windows rule
+	// (in a window or the foreground, on an unmetered link while charging and not in Low Power Mode). Asked before a
+	// round's fetch of all and again before each read of it, but in "search more"'s round, which fetches all whatever it
+	// answers (QD-1026). Nil keeps it.
 	keepAll func() bool
 	// Read for search by a device that is not one of the owner-bound repo's owner's consented devices.
 	nonWriter bool
@@ -714,7 +722,8 @@ func (self *SearchSync) storeManifest(ctx context.Context, ref *searchSyncRef, m
 	return nil
 }
 
-// Whether the ref keeps its all set this round.
+// Whether the ref keeps its all set now: always in "search more"'s round (more), else as keepAll answers, which a round
+// asks before its fetch of all and again before each read of it (QD-1026).
 func (self *searchSyncRef) keepsAll(more bool) bool {
 	return more || self.args.keepAll == nil || self.args.keepAll()
 }
@@ -823,7 +832,7 @@ func (self *SearchSync) roundOnce(ctx context.Context, ref *searchSyncRef, more 
 		return false, err
 	}
 	// step 4 over the latest set, then step 5
-	restarted, err := self.fetch(ctx, ref, manifest, next, true)
+	restarted, err := self.fetch(ctx, ref, manifest, next, true, more)
 	if err != nil || restarted {
 		return restarted, err
 	}
@@ -833,12 +842,17 @@ func (self *SearchSync) roundOnce(ctx context.Context, ref *searchSyncRef, more 
 	}
 	// step 4 over the all set where it is kept, then step 6, only ever at the latest set's pin
 	if ref.keepsAll(more) {
-		restarted, err := self.fetch(ctx, ref, swapped, next, false)
-		if err != nil || restarted {
+		restarted, err := self.fetch(ctx, ref, swapped, next, false, more)
+		switch {
+		case errors.Is(err, errSearchSyncAllEnded):
+			// the windows rule stopped keeping all partway (QD-1026): what landed stays staged in the plan, and the
+			// next round the rule allows fetches on from it and swaps all
+		case err != nil || restarted:
 			return restarted, err
-		}
-		if err := self.swapAllStep(ctx, ref, swapped, next); err != nil {
-			return false, err
+		default:
+			if err := self.swapAllStep(ctx, ref, swapped, next); err != nil {
+				return false, err
+			}
 		}
 	}
 	// step 7

@@ -2012,6 +2012,7 @@ func TestTunLinuxSyncKeepsTheCarveInTheExitsTable(t *testing.T) {
 	system.setLocal([]netip.Addr{gateway, resolver, netip.MustParseAddr("2001:db8::53")})
 	tunBridge := newTestTunBridge()
 	tunBridge.status.EgressMode = bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS
+	tunBridge.status.EgressExitCount = 1
 	// no zones, so no sync reaches the host's resolver
 	tunBridge.zones = nil
 	syncs := make(chan testTunCarveSync, 1024)
@@ -2133,6 +2134,7 @@ func TestTunLinuxSyncKeepsTheIpv6CarveInTheExitsTable(t *testing.T) {
 	system.setLocal(append(slices.Clone(host), router, resolver, other))
 	tunBridge := newTestTunBridge()
 	tunBridge.status.EgressMode = bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS
+	tunBridge.status.EgressExitCount = 1
 	// no zones, so no sync reaches the host's resolver
 	tunBridge.zones = nil
 	syncs := make(chan testTunCarveSync, 1024)
@@ -2427,6 +2429,7 @@ func TestTunLinuxExitsPassTheCarveBackInTheKernel(t *testing.T) {
 	system := &testTunCarvingSystem{urTunLinuxSystem: linux, extraAddrs: []netip.Addr{resolver, gateway}}
 	tunBridge := newTestTunBridge()
 	tunBridge.status.EgressMode = bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS
+	tunBridge.status.EgressExitCount = 1
 	tunBridge.zones = nil
 	// every IPv4 packet the tun reads takes the default route, as a carved one does in the bridge, and counts in
 	// default_count; the device's own IPv6, a tun's router solicitations and the like, goes to a link that takes it, and
@@ -2712,6 +2715,7 @@ func TestTunLinuxExitsTakeIpv6InTheKernel(t *testing.T) {
 
 	tunBridge := newTestTunBridge()
 	tunBridge.status.EgressMode = bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS
+	tunBridge.status.EgressExitCount = 1
 	tunBridge.zones = nil
 	// every packet ur tun reads goes to a link that takes it, the IPv6 destinations noted in order
 	sink := &testTunLink{}
@@ -2938,6 +2942,7 @@ func TestTunLinuxExitsPassTheIpv6CarveBackInTheKernel(t *testing.T) {
 	system := &testTunCarvingSystem{urTunLinuxSystem: linux, extraAddrs: []netip.Addr{resolver, onLink}}
 	tunBridge := newTestTunBridge()
 	tunBridge.status.EgressMode = bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS
+	tunBridge.status.EgressExitCount = 1
 	tunBridge.zones = nil
 	// every packet ur tun reads goes to a link that takes it, the IPv6 destinations noted in order
 	sink := &testTunLink{}
@@ -3070,6 +3075,60 @@ func TestTunLinuxExitsPassTheIpv6CarveBackInTheKernel(t *testing.T) {
 	for _, route := range routes {
 		if route.table == settings.ExitsTable {
 			t.Fatalf("a route outlived the close in the exits table: %+v", route)
+		}
+	}
+}
+
+// Whether iface holds the exits whole, the mark, IPv4's and IPv6's default routes in the exits table and their rules,
+// the default routes the plan takes; a test fails on a partial set.
+func testTunLinuxExitsHeld(t *testing.T, iface *urTunLinuxInterface) bool {
+	t.Helper()
+	iface.stateLock.Lock()
+	parts := []bool{iface.exitsMark, iface.exitsRoute, iface.exitsSuppressRule, iface.exitsMarkRule, iface.exitsIpv6Route,
+		iface.exitsIpv6SuppressRule, iface.exitsIpv6MarkRule}
+	iface.stateLock.Unlock()
+	on := 0
+	for _, part := range parts {
+		if part {
+			on += 1
+		}
+	}
+	if 0 < on && on < len(parts) {
+		t.Errorf("a partial set of the exits %v", parts)
+	}
+	return on == len(parts)
+}
+
+// An interface over the recorder, ready to run under a tun's loops.
+func newTestTunLinuxPlanInterface(t *testing.T) (*urTunLinuxInterface, *testTunNetlink) {
+	t.Helper()
+	iface, netlink := newTestTunLinuxExits(t)
+	iface.device = newTestTunIdleDevice()
+	iface.eventsDone = make(chan struct{})
+	close(iface.eventsDone)
+	return iface, netlink
+}
+
+// Every combination of the plan for default traffic (QD-1052) over the Linux interface on the netlink recorder,
+// through the tun's own sync: the mark, the exits table's default routes and wg-quick's rules of both families go on
+// exactly where the plan takes the default route, and none outlives the tun.
+func TestTunLinuxPlansDefaultTrafficForEveryCombination(t *testing.T) {
+	testTunDefaultCasesOnPlatform(t, func(t *testing.T) (urTunInterface, func() bool) {
+		iface, _ := newTestTunLinuxPlanInterface(t)
+		return iface, func() bool { return testTunLinuxExitsHeld(t, iface) }
+	})
+}
+
+// Over the Linux interface on the netlink recorder: default egress off takes the exits off at once, the rule that sends
+// traffic to the tun first and the mark last, and on puts them back, as do route local traffic and an exit that comes
+// and goes, with the one device up throughout (QD-1052).
+func TestTunLinuxSwitchesDefaultEgressWithNoRestart(t *testing.T) {
+	iface, netlink := newTestTunLinuxPlanInterface(t)
+	testTunDefaultSwitchOnPlatform(t, iface, func() bool { return testTunLinuxExitsHeld(t, iface) })
+	events, _ := netlink.take()
+	for _, event := range events {
+		if event.messageType == unix.RTM_NEWLINK || event.messageType == unix.RTM_DELLINK {
+			t.Fatalf("a change touched the device's link: %d", event.messageType)
 		}
 	}
 }

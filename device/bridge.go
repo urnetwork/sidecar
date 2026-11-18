@@ -96,6 +96,8 @@ type Bridge struct {
 	// what the last build of the route state found
 	routeFindings bridgeRouteFindings
 	egressMode    bridge.BridgeEgressMode
+	// whether the rules the router reads require default egress on, under exits alone (QD-1053)
+	defaultEgressRequired bool
 }
 
 // Restores the posture from store and publishes its decision before it returns, then starts run. host builds links and
@@ -213,9 +215,15 @@ func (self *Bridge) Status() BridgeStatus {
 		nameCount = zone.NameCount()
 	}
 	reachNotedCount, reachWaitingCount, reachDroppedCount := self.reach.counts()
+	// the exits the router reads now: a route state is immutable once stored, and its egress pins swap whole
+	egressExitCount := 0
+	if routeState := self.routeState.Load(); routeState != nil && routeState.egress != nil {
+		egressExitCount = len(routeState.egress.Links())
+	}
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	status := BridgeStatus{
+		EgressExitCount:        egressExitCount,
 		ReachNotedCount:        reachNotedCount,
 		ReachWaitingCount:      reachWaitingCount,
 		ReachDroppedCount:      reachDroppedCount,
@@ -235,6 +243,7 @@ func (self *Bridge) Status() BridgeStatus {
 		HeldRejectCount:        self.routeFindings.heldCount,
 		RouteConflictCount:     self.routeFindings.conflictCount,
 		EgressMode:             self.egressMode,
+		DefaultEgressRequired:  self.defaultEgressRequired,
 		NameCount:              nameCount,
 		ResolverAnsweredCount:  resolverAnsweredCount,
 		ResolverPassedCount:    resolverPassedCount,

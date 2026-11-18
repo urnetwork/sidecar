@@ -261,6 +261,8 @@ type BridgeRulesFixtureReach struct {
 type BridgeRulesFixtureEgress struct {
 	Mode  bridge.BridgeEgressMode
 	Exits []BridgeRulesFixtureLink
+	// Under exits, the spec's requirement of default egress (QD-1053).
+	RequireDefaultEgress bool
 }
 
 // The literal as rules. Panics on what it cannot read.
@@ -337,7 +339,7 @@ func (self *BridgeRulesFixture) Rules() *bridge.BridgeRules {
 		rules.Subjects = append(rules.Subjects, ruleSubject)
 	}
 	if self.Egress != nil {
-		rules.Egress = &bridge.BridgeRuleEgress{Mode: self.Egress.Mode}
+		rules.Egress = &bridge.BridgeRuleEgress{Mode: self.Egress.Mode, RequireDefaultEgress: self.Egress.RequireDefaultEgress}
 		for _, link := range self.Egress.Exits {
 			rules.Egress.Exits = append(rules.Egress.Exits, link.rule())
 		}

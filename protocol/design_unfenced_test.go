@@ -81,6 +81,8 @@ message BridgeLedgerEgressSpecs { repeated BridgeLedgerEgressRow rows = 1; }
 message BridgeLedgerEgressRow {
   bytes subject = 1; BridgeEgressMode mode = 2; repeated bytes exit_sidecar_ids = 3; bytes exit_tag_id = 4;
   uint64 at = 5;
+  // QD-1053 (question ur-tun-default-egress-admin-lock): the exits body's requirement, kept through a fold.
+  bool require_default_egress = 6;
 }
 message BridgeLedgerAliases { repeated BridgeLedgerAliasRow rows = 1; }
 message BridgeLedgerAliasRow {
@@ -147,7 +149,11 @@ message BridgeRuleReach {
   bytes grant_id = 1; BridgeIpv4Prefix prefix = 2; uint32 protocol = 3; repeated BridgePortRange ports = 4;
   int64 expires = 5;
 }
-message BridgeRuleEgress { BridgeEgressMode mode = 1; repeated BridgeRuleLink exits = 2; }
+message BridgeRuleEgress {
+  BridgeEgressMode mode = 1; repeated BridgeRuleLink exits = 2;
+  // QD-1053 (question ur-tun-default-egress-admin-lock): the spec's requirement of default egress, for ur tun.
+  bool require_default_egress = 3;
+}
 // §17.9's shares as the rows a host compiles a share to, as DESIGN-DETAILS 12.2.2 writes them (QD-077, QD-108,
 // QD-670), landing with BridgeRules' shares; §17.9's fences write X's pin and the share seal's bodies. In-process
 // rows: none reaches a server.
@@ -658,6 +664,13 @@ var testFenceAdditions = []struct {
 		message:  "ContextBody",
 		field:    testFenceField{name: "prompts", number: 17, typeName: "string", repeated: true},
 		question: "search-m10-28-transcript-prompts",
+	},
+	// QD-1053: under exits, an admin's, owner's or sponsor's requirement that the subject's devices keep default egress
+	// on, sealed with the rest of the exits body, so §2.8's api-7 row is unchanged
+	{
+		message:  "BridgeEgressBody",
+		field:    testFenceField{name: "require_default_egress", number: 4, typeName: "bool"},
+		question: "ur-tun-default-egress-admin-lock",
 	},
 }
 

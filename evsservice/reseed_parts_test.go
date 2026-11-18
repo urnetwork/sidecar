@@ -10,7 +10,9 @@
 // the push stands committed answers its version writing nothing; the device's walk retries a part whose answer it lost
 // and sends the parts again after PARTS_MISSING; a reseed record holding a part is refused at a place no seal names; a
 // slot returns only under a re-seeded seal; and evacuation keeps a re-seeded part its seal names and drops the copies
-// and the parts of a seal that never came.
+// and the parts of a seal that never came, those only on a fence raised after the run held them (QD-974). A seal
+// naming a part place whose minute began more than EvsSettings.ReseedPartMaxAge before it arrived is refused
+// PARTS_MISSING, writing nothing, and the parts sent again commit under a new seal (QD-974).
 
 package evsservice
 
@@ -759,11 +761,14 @@ func TestReseedSlotReturnsOnlyUnderAReseededSeal(t *testing.T) {
 		http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_SLOT_UNKNOWN)
 }
 
-// Evacuation keeps a re-seeded push in parts' records where its seal names them and drops the rest (QD-818, QD-836):
-// each part's call went twice, as a device retries one whose answer it lost, and the seal named one copy of each; then
-// a push in parts' part calls went and its seal never came. Past 25 h the seal and the two parts it names leave their
-// batches, the copies it does not name drop as duplicates, and the parts of the seal that never came drop as dead once
-// the fence passes their statement. The ref then reads, re-seeds and proves from where the kept records moved.
+// Evacuation keeps a re-seeded push in parts' records where its seal names them and drops the rest (QD-818, QD-836,
+// QD-974): each part's call went twice, as a device retries one whose answer it lost, and the seal named one copy of
+// each; then a push in parts' part calls went and its seal never came, and an hour on the ref took a fence, long past
+// their month-old statement's time. A seal arriving after that fence could still commit those parts, so Resolve
+// holds them pending on it. Past 25 h the seal and the two parts it names leave their batches, the copies it does not
+// name drop as duplicates, and the parts of the seal that never came drop as dead only once the run has raised the
+// ref's fence again, past the time it held them. The ref then reads, re-seeds and proves from where the kept records
+// moved.
 func TestReseededPartsEvacuateWithTheirSeal(t *testing.T) {
 	nightly := newNightlyFixture(t)
 	fixture := reseedFixtureOf(nightly.pushFixture)
@@ -777,12 +782,33 @@ func TestReseededPartsEvacuateWithTheirSeal(t *testing.T) {
 	for i := 0; i < 1100; i += 1 {
 		fixture.create(unsealed, fmt.Sprintf("u-%05d", i))
 	}
-	fixture.reseedParts(fixture.built(unsealed))
+	unsealedPlaces := fixture.reseedParts(fixture.built(unsealed))
+	fixture.clock.Advance(time.Hour)
+	older, err := fixture.engine.heads.RaiseFence(fixture.paidContext(), fixture.cluster, check.repoId, check.refId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// as a run 25 h on holds them, on that fence
+	heldTime := fixture.clock.Now().Add(25 * time.Hour)
+	for i, place := range unsealedPlaces {
+		record, err := fixture.engine.readRecordAt(fixture.ctx, fixture.cluster, check.repoId, check.refId, place)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resolution, err := fixture.engine.ResolvePush(fixture.ctx, fixture.cluster, record, older.Head, heldTime)
+		if err != nil || resolution.State != EvsResolvePending {
+			t.Fatalf("part %d of the seal that never came resolves %+v on the older fence: %v", i+1, resolution, err)
+		}
+	}
 
 	nightly.age()
 	result := nightly.mustRun()
-	if result.KeptCount != 3 || result.DuplicateCount != 2 || result.DeadCount != 2 || result.MinuteWaitingCount != 0 || result.HasBatches {
+	if result.KeptCount != 3 || result.DuplicateCount != 2 || result.DeadCount != 2 || result.FenceCount != 1 || result.MinuteWaitingCount != 0 ||
+		result.HasBatches {
 		t.Fatalf("result %+v", result)
+	}
+	if head := fixture.head(); head.Version() != 1 || head.Head.GetFence() != older.Head.GetFence()+1 || head.Head.GetFenceMs() != fixture.clock.Now().UnixMilli() {
+		t.Fatalf("the run's fence left version %d fence %d fence_ms %d", head.Version(), head.Head.GetFence(), head.Head.GetFenceMs())
 	}
 	if keys := nightly.keys("meta-1", batchKeyPrefix); len(keys) != 0 {
 		t.Fatalf("batches left: %v", keys)
@@ -877,5 +903,81 @@ func TestNewestFindsTheRootsChangeInASealedPush(t *testing.T) {
 		again.PushId = testId(fmt.Sprintf("root again %t", reseeded))
 		again.Changes = []*sidecar.EvsPlannedChange{{TokenPath: root, EntryVersion: check.directoryEntry(again, 2, rowsOf("file-00002"), nil)}}
 		requireRefusal(t, fixture.push(again), http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT)
+	}
+}
+
+// QD-974's bound on a re-seed's seal: a seal naming a part place whose batch minute began more than
+// EvsSettings.ReseedPartMaxAge before it arrived is refused 409 PARTS_MISSING, refusing and recording nothing, so no
+// seal can name a part evacuation may have judged. Both parts sent a day ago, the seal of their places is refused, and
+// so is one naming part 1 sent again beside part 2's old place; neither writes a record or the head. Part 2 sent
+// again, the seal of the fresh places commits and names them, and the stale seal, sent after, answers the version by
+// 5a rather than PARTS_MISSING.
+func TestReseedSealRefusesAPartPlacePastItsAgeBound(t *testing.T) {
+	fixture := newReseedFixture(t)
+	built := fixture.built(fixture.keptParts(1100))
+	stale := fixture.reseedParts(built)
+	// a minute past the bound, so past it from the start of the parts' minute
+	fixture.clock.Advance(fixture.settings.ReseedPartMaxAge + time.Minute)
+	written := len(fixture.batchRecords())
+	requireRefusal(t, fixture.reseed(reseedSealBody(built, stale)), http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_PARTS_MISSING)
+	fresh := []*protocol.EvsPlace{fixture.requirePlace(fixture.reseed(reseedPartBody(built, 0))), stale[1]}
+	requireRefusal(t, fixture.reseed(reseedSealBody(built, fresh)), http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_PARTS_MISSING)
+	if after := len(fixture.batchRecords()); !fixture.head().Absent() || after != written+1 {
+		t.Fatalf("the refused seals wrote %d records or the head", after-written-1)
+	}
+	fresh[1] = fixture.requirePlace(fixture.reseed(reseedPartBody(built, 1)))
+	fixture.requireCommitted(fixture.reseed(reseedSealBody(built, fresh)), 1)
+	fixture.awaitStepEights()
+	if named := fixture.sealPlacesAt(1); len(named) != 2 || !sameEvsPlace(named[0], fresh[0]) || !sameEvsPlace(named[1], fresh[1]) {
+		t.Fatalf("the seal names %v", named)
+	}
+	fixture.requireCommitted(fixture.reseed(reseedSealBody(built, stale)), 1)
+}
+
+// The bound is judged at the seal attempt's arrival from the start of each part place's minute: a place whose minute
+// began exactly ReseedPartMaxAge before is taken, and one a millisecond more is not, whichever of the seal's places it
+// is. Outside the reseed mode, a seal of the push route's, no place is held to it.
+func TestReseedPartAgeIsJudgedAtTheSealsArrival(t *testing.T) {
+	settings := DefaultEvsSettings()
+	minute := BatchMinute(time.Unix(1800000000, 0))
+	start := batchMinuteTime(minute)
+	places := []*protocol.EvsPlace{{Minute: minute + 1, Seq: 1}, {Minute: minute, Seq: 2}}
+	for _, c := range []struct {
+		arrival time.Time
+		reseed  bool
+		stale   bool
+	}{
+		{arrival: start.Add(settings.ReseedPartMaxAge), reseed: true, stale: false},
+		{arrival: start.Add(settings.ReseedPartMaxAge + time.Millisecond), reseed: true, stale: true},
+		{arrival: start.Add(-time.Hour), reseed: true, stale: false},
+		{arrival: start.Add(settings.ReseedPartMaxAge + time.Hour), reseed: false, stale: false},
+	} {
+		attempt := &pushAttempt{settings: settings, arrival: c.arrival}
+		if c.reseed {
+			attempt.reseed = &reseedAttempt{}
+		}
+		if stale := attempt.reseedPartPlaceStale(places); stale != c.stale {
+			t.Errorf("arrival %s after the minute's start, reseed %t: stale %t, want %t", c.arrival.Sub(start), c.reseed, stale, c.stale)
+		}
+	}
+}
+
+// ReseedPartMaxAge is held positive and under evacuation's 25 h floor, which Resolve's fence rule for a re-seeded part
+// rests on (QD-974): a seal may not take a part as old as one evacuation can judge.
+func TestReseedPartMaxAgeIsHeldUnderEvacuationsFloor(t *testing.T) {
+	for _, age := range []time.Duration{0, -time.Hour, evsEvacuateMinMinuteAge, evsEvacuateMinMinuteAge + time.Hour} {
+		settings := DefaultEvsSettings()
+		settings.ReseedPartMaxAge = age
+		if err := settings.Validate(); err == nil {
+			t.Errorf("a part age of %s validated", age)
+		}
+	}
+	settings := DefaultEvsSettings()
+	settings.ReseedPartMaxAge = evsEvacuateMinMinuteAge - time.Minute
+	if err := settings.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if defaults := DefaultEvsSettings(); defaults.ReseedPartMaxAge != 24*time.Hour || defaults.Validate() != nil {
+		t.Fatalf("the default part age %s", defaults.ReseedPartMaxAge)
 	}
 }

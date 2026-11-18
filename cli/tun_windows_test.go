@@ -1299,3 +1299,38 @@ func TestTunWindowsReadsTheHost(t *testing.T) {
 		t.Fatalf("held by %q: %v", holder, err)
 	}
 }
+
+// Whether iface holds every half, IPv4's and IPv6's, the default routes the plan takes; a test fails on a partial set.
+func testWindowsHalvesHeld(t *testing.T, iface *urTunWindowsInterface) bool {
+	t.Helper()
+	iface.stateLock.Lock()
+	halves := slices.Clone(iface.exitsHalves)
+	iface.stateLock.Unlock()
+	all := append(urTunExitsHalves(), urTunExitsIpv6Halves()...)
+	if 0 < len(halves) && len(halves) != len(all) {
+		t.Errorf("a partial set of halves %v", halves)
+	}
+	return len(halves) == len(all)
+}
+
+// Every combination of the plan for default traffic (QD-1052) over the Windows interface on its IP Helper recorder,
+// through the tun's own sync: the halves of both families and the binding go on exactly where the plan takes the
+// default route, and none outlives the tun.
+func TestTunWindowsPlansDefaultTrafficForEveryCombination(t *testing.T) {
+	testTunDefaultCasesOnPlatform(t, func(t *testing.T) (urTunInterface, func() bool) {
+		world := newTestWindowsWorld(t)
+		iface := world.open(t)
+		return iface, func() bool { return testWindowsHalvesHeld(t, iface) }
+	})
+}
+
+// Over the Windows interface on its recorder: default egress off takes the halves off at once and on puts them back,
+// as do route local traffic and an exit that comes and goes, with the one adapter up throughout (QD-1052).
+func TestTunWindowsSwitchesDefaultEgressWithNoRestart(t *testing.T) {
+	world := newTestWindowsWorld(t)
+	iface := world.open(t)
+	testTunDefaultSwitchOnPlatform(t, iface, func() bool { return testWindowsHalvesHeld(t, iface) })
+	if world.created != 1 {
+		t.Fatalf("%d adapters created", world.created)
+	}
+}
