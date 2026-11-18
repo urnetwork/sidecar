@@ -650,19 +650,6 @@ var testFenceAdditions = []struct {
 		field:    testFenceField{name: "prompts", number: 17, typeName: "string", repeated: true},
 		question: "search-m10-28-transcript-prompts",
 	},
-	// QD-1053: under exits, an admin's, owner's or sponsor's requirement that the subject's devices keep default egress
-	// on, sealed with the rest of the exits body, so §2.8's api-7 row is unchanged
-	{
-		message:  "BridgeEgressBody",
-		field:    testFenceField{name: "require_default_egress", number: 4, typeName: "bool"},
-		question: "ur-tun-default-egress-admin-lock",
-	},
-	// QD-1060: an egress_change's requirement of default egress under exits, so its approval shows and binds it
-	{
-		message:  "CanonicalAction",
-		field:    testFenceField{name: "require_default_egress", number: 41, typeName: "bool"},
-		question: "ur-tun-default-egress-option-lock-action",
-	},
 }
 
 // One field an owner's answer takes out of a message the design fences, its number reserved.

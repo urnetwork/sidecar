@@ -248,7 +248,8 @@ BridgeRoute{route_id, advertiser, prefixes, exposed_prefix, site_id,      the ad
 BridgeMap{map_id, host, match_prefix, protocol, ports, target,            the host; a delta, active once
           target_port, expires, drain_seconds, approval}                    approved (17.7)
 BridgeEgress{subject, mode auto|exits|none; sealed: exit sidecar_ids      an admin, owner or sponsor; a delta
-             or tag_id, none under auto or none}
+             or tag_id and require_default_egress, none under auto or
+             none}
 BridgeAlias{share_id, target_index, alias_prefix, host sidecar_id,        the accepting sidecar; a delta (17.9)
             host identity key}
 BridgeWithdraw{rule_id, reset|drain}                                      the rule's signer or an admin; ids only
@@ -322,6 +323,8 @@ message BridgeEgressBody {
   reserved 1; reserved "mode";            // the mode, which BridgeEgress carries in the clear
   repeated bytes exit_sidecar_ids = 2;    // or exit_tag_id
   bytes exit_tag_id = 3;
+  bool require_default_egress = 4;        // the subject's devices keep default egress on (17.11's lock; owner
+                                          // decision 607)
 }
 message BridgeAlias { StatementHeader header = 1; bytes sealed_body = 2; }   // only its header shows
 message BridgeAliasBody {
@@ -702,13 +705,13 @@ type BridgeHost interface {
 
 | Command or UI note | Meaning (v0 unless noted) |
 |---|---|
-| `ur tun` | OS tun `ur-<instance>` with the block and granted prefixes; the default route only under `exits`, IPv6's too (below); yields to an app bridge |
+| `ur tun` | OS tun `ur-<instance>` with the block and granted prefixes; the default routes, IPv6's too, only with default egress on and an egress destination, `--default-egress` and `--route-local` setting the person's two choices (below; owner decision 606); yields to an app bridge |
 | `ur tun ip [<ip>\|auto]`; "client assign local ip" | Show or claim the address |
 | `ur bridge`; "show all ips", "show all hostname:port" | Run the bridge; list addresses, private names, rules, forwards |
 | `ur bridge expose <ranges>`; "client forward ip subnet" | Advertise subnets (a route) |
 | `ur bridge expose :<port>[=<ip>:<port>]` (added); "client:port → ip:port" | Map this client's port |
 | `ur bridge forward client:port[:local ip]:local port`; "client:port → client:port" | Listen on all interfaces unless `--listen` narrows it (owner decision 84); dial over the userspace stack under a §8 grant |
-| `ur bridge egress auto\|<exit>\|tag:<t>\|none` (added); "client egress spec" | The default route |
+| `ur bridge egress auto\|<exit>\|tag:<t>\|none [--require-default-egress]` (added); "client egress spec" | The default route; under exits alone, `--require-default-egress` has the subject's devices keep default egress on (below; owner decision 607) |
 | `ur bridge block [cycle\|<cidr>]` (added; admins) | Re-roll or choose the block (17.4; owner decisions 28, 132) |
 | `ur bridge invite`, `accept-invite` | Cross-network port and subnet shares (17.9), v1 |
 | `ur bridge activate <share_id>` (added; the sharing network's approving admin) | Show an accepted share and activate it (17.9's share pins; owner decision 475), v1 |
@@ -716,7 +719,25 @@ type BridgeHost interface {
 Without an active grant, these commands print the approval prompt and wait (§16.6); `forward` warns that it serves every host reaching the listener. `ur bridge public-tls` is §13's.
 
 ```text
-ur tun under exits (owner decisions 479, 480, 482)
+ur tun's default routes (owner decisions 479, 480, 482, 606, 607)
+choice   (owner decision 606) two per-network settings of the device that ur tun sets and shows: default
+         egress, on unless the person turns it off, whether the host's default traffic goes to the egress
+         destination through the tun; and route local traffic, on by default as the sdk's DefaultRouteLocal is,
+         its counterpart of the sdk's routeLocal; with default egress on, ur tun takes the default routes, both
+         families, by the rows below when the client has an egress destination: under exits an exit of the
+         network it can use, under auto the connect client's destination; with no destination and route local
+         traffic on, default traffic stays on the host's own default routes and the tun carries only the block,
+         the granted prefixes and private names, and with route local traffic off the tun still takes them and
+         refuses that traffic, failing closed; with default egress off, default traffic stays on the host's
+         routes in every mode; a change of either setting, or a destination that comes or goes, re-applies the
+         routes without restarting the tun; the egress mode stays the admin's policy for traffic that enters
+         URnetwork (§8.10)
+lock     (owner decision 607) under exits, a network's admin, owner or sponsor may require default egress on,
+         in the BridgeEgress statement's exits body, sealed with it (require_default_egress, 17.8), so servers
+         learn nothing new; a device whose network requires it keeps default egress on for that network, and
+         ur tun shows the lock and refuses --default-egress=off, naming the requirement; with no exit, route
+         local traffic still decides; ur bridge egress files it through an egress_change action whose
+         require_default_egress = 41 its approval shows and binds (§16.8)
 linux    the daemon's own transport stays off the tun by fwmark policy routing: its sockets carry connect's
          egress mark M (17.10), and ur tun puts the default route in its own table T with wg-quick's rules,
          not fwmark M lookup T and lookup main suppress_prefixlength 0, carving nothing by the platform's

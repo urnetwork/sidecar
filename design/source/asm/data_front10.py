@@ -1736,3 +1736,28 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     _D599, "a cache drop that resets the sync (599), a gap head that drops a path's record (600), presents beside an "
     "absent reply (601), a re-seed as deleted that shows deleted from its placement (602), a durable fall judged by "
     "a `versions` page alone (603), a superseded erasure request (604) and a renewed announcement's row (605). ")
+INDEX += [
+    (606, "`ur tun`'s default routes optional",
+     '`ur tun` takes the default routes only with default egress on and an egress destination; route local '
+     'traffic decides with no destination.'),
+    (607, 'A required default egress',
+     "Under `exits` a network may require default egress on, sealed in the exits body; `egress_change` carries "
+     'the requirement in field 41.'),
+]
+for _n, _note in [
+        (479, ' Amended by @@OD:606@@: the capture is the person\'s choice.'),
+        (480, ' Amended by @@OD:606@@: only while `ur tun` takes the default routes.'),
+        (482, ' Amended by @@OD:606@@: only while `ur tun` takes the default routes.'),
+        (462, ' Extended by @@OD:607@@: `require_default_egress = 41` under exits.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 608))
+DATES.update({606: '2026-11-17', 607: '2026-11-17'})
+_D605 = "and a renewed announcement's row (605). "
+assert DECISIONS_INTRO.count(_D605) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D605, "and a renewed announcement's row (605); the owner's instruction on `ur tun` makes its default routes the "
+    "person's choice (606), amending @@OD:479@@, @@OD:480@@ and @@OD:482@@, and a network may require default egress "
+    "(607), extending @@OD:462@@. ")

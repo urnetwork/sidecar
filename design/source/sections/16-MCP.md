@@ -680,6 +680,12 @@ message CanonicalAction {                   // built by the daemon; hashed as st
                                             // route grant alone, beside its subject, the requesting sidecar; an
                                             // admin's approval covers it as it covers every field (§8.8; owner
                                             // decision 346)
+  bool require_default_egress = 41;         // egress_change under exits alone: the subject's devices keep default
+                                            // egress on, as its BridgeEgressBody seals (§17.11), optional in kind
+                                            // 5 and required by no template, rendered as its own clause, "and
+                                            // require its devices to keep default egress on"; refused under auto
+                                            // or none and on any other kind, version 1, on no server path; an
+                                            // approver that cannot name it refuses the action (owner decision 607)
 }
 // Rendering (D-MCP-17): approver devices render only these daemon-built fields as the action, with the
 // request's daemon-built 14 to 17 and an opened sealed_detail, and ApprovalRequest.summary and preview as
