@@ -7,8 +7,8 @@
 // change; a dry run that never ran, a wrong typed path, and now without its word refused before anything is sent; a
 // versionless head and a head moved since the dry run refused; a retried statement keeping its drop_id and a rebuilt
 // one drawing a new one; the cancel naming the drop and its version, refused within 60 s of the window's end; the index
-// hook's rewrites rebuilt once after 409 INDEX_EPOCH and then dropped; the cut into batches at lineage boundaries; and
-// no MCP code reaching DropHistory or CancelDrop.
+// hook's rewrites rebuilt once after 409 INDEX_EPOCH and then dropped; and the cut into batches at lineage boundaries.
+// That no MCP code reaches DropHistory or CancelDrop is evs_drop_mcp_test.go's, which reads the source tree.
 
 package sidecar
 
@@ -19,8 +19,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -207,10 +205,10 @@ func TestEvsDropHistoryRefusesWhatThePersonDidNotConfirm(t *testing.T) {
 		args *EvsDropHistoryArgs
 		want error
 	}{
-		{&EvsDropHistoryArgs{PreviewId: evsTestBytes("never run", 16), ConfirmPath: "a.txt"}, ErrEvsDropPreviewMissing},
-		{&EvsDropHistoryArgs{PreviewId: preview.PreviewId, ConfirmPath: "b.txt"}, ErrEvsDropConfirm},
-		{&EvsDropHistoryArgs{PreviewId: preview.PreviewId, ConfirmPath: "a.txt", Now: true}, ErrEvsDropConfirm},
-		{&EvsDropHistoryArgs{PreviewId: preview.PreviewId, ConfirmPath: "a.txt", ConfirmNow: EvsDropConfirmNow}, ErrEvsDropConfirm},
+		{args: &EvsDropHistoryArgs{PreviewId: evsTestBytes("never run", 16), ConfirmPath: "a.txt"}, want: ErrEvsDropPreviewMissing},
+		{args: &EvsDropHistoryArgs{PreviewId: preview.PreviewId, ConfirmPath: "b.txt"}, want: ErrEvsDropConfirm},
+		{args: &EvsDropHistoryArgs{PreviewId: preview.PreviewId, ConfirmPath: "a.txt", Now: true}, want: ErrEvsDropConfirm},
+		{args: &EvsDropHistoryArgs{PreviewId: preview.PreviewId, ConfirmPath: "a.txt", ConfirmNow: EvsDropConfirmNow}, want: ErrEvsDropConfirm},
 	}
 	for i, c := range cases {
 		if _, err := writer.repo.DropHistory(context.Background(), c.args); !errors.Is(err, c.want) {
@@ -437,24 +435,5 @@ func TestEvsDropBatchesCutAtTheBounds(t *testing.T) {
 	batches = evsDropBatches(format, []*EvsDropLineage{lineage("a", 1), lineage("b", 1), lineage("c", 1)})
 	if len(batches) < 2 {
 		t.Fatalf("by body size: %d batches", len(batches))
-	}
-}
-
-// No MCP code calls DropHistory or CancelDrop (D-MCP-32; §16.6's refused list): an agent never drops history.
-func TestEvsDropHistoryNoMcpRoute(t *testing.T) {
-	files, err := filepath.Glob(filepath.Join("mcp", "*.go"))
-	if err != nil || len(files) == 0 {
-		t.Fatalf("no mcp sources: %v", err)
-	}
-	for _, file := range files {
-		source, err := os.ReadFile(file)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, call := range []string{".DropHistory(", ".CancelDrop("} {
-			if bytes.Contains(source, []byte(call)) {
-				t.Fatalf("%s calls %s", file, call)
-			}
-		}
 	}
 }

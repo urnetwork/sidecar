@@ -108,6 +108,12 @@ type evsFormat2Reader interface {
 	// What a versionless version's `collected` or missing content comes to after a fresh read of its path's newest
 	// version: ErrEvsObjectMissing after an alarm, or ErrEvsCollected for a replaced one (evs_read_versionless.go).
 	contentGone(ctx context.Context, repo *EvsRepo, result *evsReadResult, verified *EvsVerifiedPath) error
+	// A path's reply in a drop's state, drop_pending or dropped: DESIGN-DETAILS 10.2.3's H0 to H7 and its verdict
+	// (evs_drop_verify.go), the path verified as VerifyPath verifies a version asked for by number, with the drop's
+	// state on it where the drop stands; errEvsDropBodyMissing where the reply left out a body this device lacks.
+	verifyDropPath(verifier *EvsVerifier, head *EvsVerifiedHead, epochs *EvsPathEpochs, reply *protocol.EvsReadPathReply) (*EvsVerifiedPath, error)
+	// The ref versions of the DROP bodies this device keeps for a ref, which a read names in held_drops.
+	heldDrops(client *EvsClient, repoId Id, refId Id) []uint64
 }
 
 // The client's format-2 reader, nil for one that reads format 1 alone: a client whose composition installed none, as

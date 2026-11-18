@@ -50,7 +50,8 @@
 // Format 2's read states and settings answer ErrEvsFormatUnsupported for that path alone, never a fork, so the
 // caller reads the rest (EVS1-M2-39), to a reader of format 1 alone (EvsClient.format2Reader). A reader of format 2
 // takes versioning 1 and 2 and kind-5 and staged locators, each version judged where it sits (evs_verify_format2.go;
-// EVS2-M10-17), and `collected` for a version's content; a drop's states stay refused until EVS2-M10-22 reads them.
+// EVS2-M10-17), `collected` for a version's content, and a drop's states by the drop's own checks
+// (evs_drop_verify.go; EVS2-M10-22).
 //
 // On every leg. Safe for concurrent use.
 
@@ -115,6 +116,9 @@ type EvsVerifiedPath struct {
 	// Format 2: evs served a version its reader ignores where it sits (evs_verify_format2.go's ignored rows), which
 	// alarmed. The path reads as Absent.
 	Ignored bool
+	// Format 2: the version is listed by a DROP that passed this reader's checks (evs_drop_verify.go): drop_pending or
+	// dropped by this device's clock; nil for every other version, one whose drop failed them among them.
+	Drop *EvsDropState
 }
 
 // A removal of a path, or of a prefix holding it, that the reader's own walk holds and evs no longer names: the
@@ -152,6 +156,8 @@ type EvsPathEpochs struct {
 	// An older version asked for by number: history, not a rollback, so the walk after it is not checked (§11.9's
 	// "older ones on request").
 	History bool
+	// That version's number, 0 for the newest: what a drop's checks judge (DESIGN-DETAILS 10.2.3's H3).
+	Version uint64
 	// The path's own pin, its record's PinVersion, else the ref pin before this read: the walk checks statements after
 	// it and after the version's own (DESIGN-DETAILS 9.2.4's since = max(u, pin(X))).
 	Since uint64
@@ -163,6 +169,13 @@ type EvsPathEpochs struct {
 // that epoch. A rooted statement of an epoch the request did not name, with no proof, adds that epoch to the epochs
 // answered, which the reader asks once more naming; of one it named, it refuses.
 func (self *EvsVerifier) VerifyPath(head *EvsVerifiedHead, epochs *EvsPathEpochs, reply *protocol.EvsReadPathReply) (*EvsVerifiedPath, []uint64, error) {
+	dropState := reply.GetState() == protocol.EvsReadPathState_EVS_READ_PATH_DROP_PENDING ||
+		reply.GetState() == protocol.EvsReadPathState_EVS_READ_PATH_DROPPED
+	if reader := self.client.format2Reader(); dropState && reader != nil {
+		// a version a DROP lists, judged by the drop's own checks (evs_drop_verify.go; EVS2-M10-22)
+		verified, err := reader.verifyDropPath(self, head, epochs, reply)
+		return verified, nil, err
+	}
 	collected := reply.GetState() == protocol.EvsReadPathState_EVS_READ_PATH_COLLECTED && self.client.format2Reader() != nil
 	if (reply.GetState() != protocol.EvsReadPathState_EVS_READ_PATH_STATE_UNSPECIFIED && !collected) || len(reply.GetDropId()) != 0 ||
 		reply.GetNotBeforeMs() != 0 || reply.GetDropVersion() != 0 || len(reply.GetDropStatement()) != 0 || len(reply.GetDropBody()) != 0 {

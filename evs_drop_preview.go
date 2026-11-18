@@ -22,7 +22,9 @@
 //	           evs_drop_previews_per_day, which evs counts
 //	Drops      GET .../drops: each drop's status, with the names of the paths this device knows that its lineages
 //	           cover, at most DropNamesCount (I-13: names stay on the device). A DROP's body is read from its push's
-//	           record; a drop whose body this device cannot read is listed with no names
+//	           record, else from the bodies this device checked and keeps (evs_drop_state.go); a drop whose body this
+//	           device cannot read is listed with no names. Each state evs reports raises history_drop once
+//	           (EVS2-M10-22): pending, cancelled, executing, done (a held or observed drop reads done) and refused
 //
 // On every leg but ios_extension. Safe for concurrent use.
 
@@ -395,19 +397,53 @@ func (self *EvsRepo) Drops(ctx context.Context, args *EvsDropsArgs) ([]*EvsDrop,
 	for _, status := range reply.GetDrops() {
 		drop := &EvsDrop{Status: status}
 		drops = append(drops, drop)
-		if !bytes.Equal(status.GetRefId(), refId.Bytes()) || len(args.KnownPaths) == 0 {
-			continue
+		if bytes.Equal(status.GetRefId(), refId.Bytes()) && 0 < len(args.KnownPaths) {
+			body, err := self.dropBody(ctx, refId, status)
+			if err != nil {
+				body = self.keptDropBody(refId, status)
+			}
+			if body != nil {
+				if drop.Paths, err = self.dropNames(ctx, body, args.KnownPaths); err != nil {
+					return nil, err
+				}
+			}
 		}
-		body, err := self.dropBody(ctx, refId, status)
-		if err != nil {
-			// a drop this device cannot read the body of is listed with no names
-			continue
-		}
-		if drop.Paths, err = self.dropNames(ctx, body, args.KnownPaths); err != nil {
-			return nil, err
+		// history_drop at each state evs reports, once a state (EVS2-M10-22): a held drop reads done
+		if state, ok := SidecarDropStateOf(status.GetState()); ok {
+			dropId, dropErr := IdFromBytes(status.GetDropId())
+			statusRefId, refErr := IdFromBytes(status.GetRefId())
+			if dropErr == nil && refErr == nil {
+				event := &SidecarHistoryDrop{RepoId: self.repoId, RefId: statusRefId, DropId: dropId, State: state, NotBefore: evsTime(status.GetNotBeforeMs())}
+				if 0 < len(drop.Paths) {
+					event.Path = drop.Paths[0]
+				}
+				self.client.raiseHistoryDropOnce(event)
+			}
 		}
 	}
 	return drops, nil
+}
+
+// A drop's body this device checked and keeps (evs_drop_state.go), nil for none: what names a drop whose push record
+// this device does not read.
+func (self *EvsRepo) keptDropBody(refId Id, status *protocol.EvsDropStatus) *protocol.EvsDropHistory {
+	dropId, err := IdFromBytes(status.GetDropId())
+	if err != nil {
+		return nil
+	}
+	body, _, statementBytes, ok, err := self.client.dropBodies().get(self.repoId, refId, dropId)
+	if err != nil || !ok {
+		return nil
+	}
+	statement, err := ParseEvsStatementFormat2(statementBytes)
+	if err != nil {
+		return nil
+	}
+	lists, err := NewEvsDropLists(statement.Push, body)
+	if err != nil {
+		return nil
+	}
+	return lists.History()
 }
 
 // The DROP body a status names, read from its push's record through the ref's verified head.

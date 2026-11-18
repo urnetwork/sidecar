@@ -58,6 +58,8 @@ type EvsFormatSettings struct {
 	// The listed values a builder puts in a part that holds no change: 32,000, 1,024,000 B (DESIGN-DETAILS 10.2.5). A
 	// checker takes a slice cut anywhere.
 	DropListPartValueCount int
+	// The DROP bodies one read request names as held, held_drops, at most: 64 (DESIGN-DETAILS 10.2.2).
+	HeldDropMaxCount int
 	// §11.9's streams row: the owned streams one POST .../read {refs} names, 64, and the most its framed reply holds,
 	// 4 MiB, past which a stream answers more with its next version (EVS1-M6-01).
 	ReadStreamMaxRefCount  int
@@ -116,6 +118,7 @@ func DefaultEvsFormatSettings() *EvsFormatSettings {
 		DropMaxBodyByteCount:        256 * 1024,
 		DropWindow:                  7 * 24 * time.Hour,
 		DropListPartValueCount:      32000,
+		HeldDropMaxCount:            64,
 		ReadStreamMaxRefCount:       64,
 		ReadStreamMaxByteCount:      4 * 1024 * 1024,
 		OverlayMaxDepth:             16,

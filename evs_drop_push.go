@@ -130,6 +130,12 @@ type evsDropClient struct {
 	// completed dry runs, oldest first
 	previews  []*EvsDropPreview
 	indexHook EvsDropIndexHook
+	// the checked DROP bodies this device keeps (evs_drop_state.go), and the history_drop state raised last for each
+	// drop (evs_drop_verify.go)
+	bodies *evsDropBodies
+	raised map[string]SidecarDropState
+	// the Sidecar's ApplyExecutedDrop, which a composition sets (evs_drop_apply.go)
+	applier func(ctx context.Context, drop *SidecarExecutedDrop) error
 }
 
 // The client's drop state, made on first use.
