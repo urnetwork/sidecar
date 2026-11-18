@@ -9,11 +9,10 @@
 //	          holds at most MobileMapNameCount names. Wrapped agents are eligible on the same terms
 //	tick      on a new generation, a verified head, a PATH_EPOCH hint and a timer: r is the newest REMOVE generation
 //	          held above the head's current epoch, or the head's due generation; none deletes any job. g*, the newest
-//	          generation held, below r waits for gkm's delivery. A job on disk resumes at its state. A batched due
-//	          builds nothing while two sources stand, any due while three do. Otherwise the job starts now for a
-//	          device whose own EnsureWritable call returned r, else at an immediate due's first sight plus
-//	          U[0, MapperSpread), a batched one's due_by_ms less MapperBatchedLead plus U[0, MapperSpread), U seeded
-//	          by (sidecar_id, ref_id, r)
+//	          generation held, below r waits for gkm's delivery. A job on disk resumes at its state. A due builds
+//	          nothing while two sources stand, every due being batched (QD-1046). Otherwise the job starts now for a
+//	          device whose own EnsureWritable call returned r, else at due_by_ms less MapperBatchedLead plus
+//	          U[0, MapperSpread), U seeded by (sidecar_id, ref_id, r)
 //	build     on the index's head S, whose epoch state is the head's: per path ascending by new token path, its
 //	          token path in p_new = g*, its sources the current epoch's then each listed source at or above its born,
 //	          newest first, its name sealed in p_new; the root first, its paths empty and no sealed name. The moves
@@ -121,8 +120,6 @@ type evsMapper struct {
 	stateLock sync.Mutex
 	indexes   map[evsRefKey]EvsNameIndex
 	running   map[evsRefKey]bool
-	// when this device first saw an immediate due per ref and generation, which its start counts from
-	firstSeen map[evsRefKey]time.Time
 	// the job states it last reached per ref, which PathEpochStatus shows
 	states map[evsRefKey]*EvsMapJob
 	// per ref, the head version that last asked a tick, so the mapper's own head reads ask none again
@@ -142,7 +139,7 @@ func (self *EvsClient) mapper() *evsMapper {
 	}
 	mapper := &evsMapper{
 		client: self, wakeups: make(chan evsRefKey, self.settings.MapperWakeCount), indexes: map[evsRefKey]EvsNameIndex{},
-		running: map[evsRefKey]bool{}, firstSeen: map[evsRefKey]time.Time{}, states: map[evsRefKey]*EvsMapJob{},
+		running: map[evsRefKey]bool{}, states: map[evsRefKey]*EvsMapJob{},
 		wokenAt: map[evsRefKey]uint64{}, refusedThrough: map[evsRefKey]uint64{}, listed: map[evsRefKey]*evsListedNameIndex{},
 	}
 	self.epochs.mapper = mapper
@@ -342,7 +339,7 @@ func (self *EvsRepo) TickMapper(ctx context.Context, refId Id) error {
 	epoch := head.Head.GetPathEpoch()
 	current := evsCurrentEpoch(epoch)
 	state := self.client.refEpochState(self.repoId, refId)
-	_, removal, err := self.pressure(ctx, state)
+	removal, err := self.dueGeneration(ctx, state)
 	if err != nil {
 		return err
 	}
@@ -389,14 +386,13 @@ func (self *EvsRepo) TickMapper(ctx context.Context, refId Id) error {
 			job = nil
 		}
 	}
-	batched := !epoch.GetDueBlocksCreation() && current < epoch.GetDueGeneration()
 	sourceCount := len(epoch.GetSources())
 	if job == nil {
 		switch {
-		case batched && self.client.settings.PathEpochBatchedMaxSourceCount <= sourceCount, self.client.settings.PathEpochMaxSourceCount <= sourceCount:
+		case self.client.settings.PathEpochBatchedMaxSourceCount <= sourceCount, self.client.settings.PathEpochMaxSourceCount <= sourceCount:
 			return errEvsMapperWait
 		}
-		if start := self.mapperStart(refId, epoch, removal, batched); self.client.clock.Now().Before(start) {
+		if start := self.mapperStart(refId, epoch, removal); self.client.clock.Now().Before(start) {
 			return errEvsMapperWait
 		}
 		if job, err = self.buildMap(ctx, refId, head, index, newest.Generation()); err != nil {
@@ -483,32 +479,18 @@ func evsIndexCount(ctx context.Context, index EvsNameIndex) int {
 }
 
 // When the ref's job may start (see the file header's tick row), U seeded by (sidecar_id, ref_id, r).
-func (self *EvsRepo) mapperStart(refId Id, epoch *protocol.EvsPathEpoch, removal uint64, batched bool) time.Time {
+func (self *EvsRepo) mapperStart(refId Id, epoch *protocol.EvsPathEpoch, removal uint64) time.Time {
+	if self.client.epochs.rotatedTo(self.repoId, removal) {
+		return time.Time{}
+	}
 	seed := sha256.New()
 	seed.Write(self.client.args.Identity().SidecarId.Bytes())
 	seed.Write(refId.Bytes())
 	seed.Write(binary.BigEndian.AppendUint64(nil, removal))
 	// U[0, MapperSpread) from the seed's digest, the same on every tick of this device for this removal
 	spread := time.Duration(binary.BigEndian.Uint64(seed.Sum(nil)) % uint64(max(1, int64(self.client.settings.MapperSpread))))
-	mapper := self.client.mapper()
-	key := evsRefKey{repoId: self.repoId, refId: refId}
-	firstSeen := func() time.Time {
-		mapper.stateLock.Lock()
-		defer mapper.stateLock.Unlock()
-		if seen, ok := mapper.firstSeen[key]; ok {
-			return seen
-		}
-		mapper.firstSeen[key] = self.client.clock.Now()
-		return mapper.firstSeen[key]
-	}()
-	if self.client.epochs.rotatedTo(self.repoId, removal) {
-		return time.Time{}
-	}
-	if batched {
-		dueBy := self.client.epochs.dueBy(self.repoId, epoch, removal, true, self.client.settings.PathEpochBatchedDelay)
-		return dueBy.Add(-self.client.settings.MapperBatchedLead).Add(spread)
-	}
-	return firstSeen.Add(spread)
+	dueBy := self.client.epochs.dueBy(self.repoId, epoch, removal, self.client.settings.PathEpochBatchedDelay)
+	return dueBy.Add(-self.client.settings.MapperBatchedLead).Add(spread)
 }
 
 // A move of path in pNew: its new token path, its sources in the current epoch then each listed source at or above
@@ -1040,7 +1022,7 @@ func (self *EvsRepo) commitMap(ctx context.Context, refId Id, job *EvsMapJob, in
 			if head != nil {
 				headEpoch = head.Head.GetPathEpoch()
 			}
-			dueBy := self.client.epochs.dueBy(self.repoId, headEpoch, job.PNew, false, self.client.settings.PathEpochBatchedDelay)
+			dueBy := self.client.epochs.dueBy(self.repoId, headEpoch, job.PNew, self.client.settings.PathEpochBatchedDelay)
 			if self.client.settings.MapTailRefusalCount <= job.TailRefusals && !dueBy.IsZero() &&
 				dueBy.Add(self.client.settings.MapBlockAfterDue).Before(self.client.clock.Now()) {
 				if err := self.blockCreation(ctx, refId); err != nil {

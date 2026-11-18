@@ -94,9 +94,10 @@ type MailConfigSettings struct {
 	// How many times a writer reads again after a conflict on its path before it gives the conflict back: 8, past
 	// the few devices one member has. Non-positive tries once.
 	WriteRetryCount int
-	// How many times a creation waits out evs's 412 PATH_EPOCH_DUE, which holds new names while an immediate path
-	// epoch is due and passes once it commits (DESIGN-DETAILS 9.2.5), and how long each wait is: evs's writer has
-	// waited its own tries by then, so 3 waits of 5 s cover a mapper's turn. Non-positive counts try once.
+	// How many times a creation waits out ErrEvsPathEpochDue, evs's 412 PATH_EPOCH_DUE while a mapper's block holds
+	// the mailcfg past the writer's own waits (§11.6's block row; DESIGN-DETAILS 9.2.5), and how long each wait is:
+	// evs's writer has waited its own tries by then, which outlast a block of at most 2 min, so 3 waits of 5 s are a
+	// margin. Non-positive counts try once.
 	EpochDueRetryCount    int
 	EpochDueRetryInterval time.Duration
 	// A Resolve that finds no record asks for a Sync when the last one is older than this: a record another device

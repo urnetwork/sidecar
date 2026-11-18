@@ -1169,7 +1169,7 @@ func TestMailConfigLookupFindsItsOwnRecord(t *testing.T) {
 	}
 }
 
-// A write that evs refuses for a due path epoch is tried again and lands; a full directory is a refusal, never a
+// A write a mapper's block held past the writer's waits is tried again and lands; a full directory is a refusal, never a
 // retry; and under a standing grant, with no key, a creation is still created only if absent.
 func TestMailConfigCreationRetriesAndRefusals(t *testing.T) {
 	repo, authority := newMailConfigTestWorld(t)
@@ -1177,7 +1177,7 @@ func TestMailConfigCreationRetriesAndRefusals(t *testing.T) {
 	ctx := context.Background()
 	repo.refuseWrite = ErrEvsPathEpochDue
 	if lookup, err := phone.config.CreateAddress(ctx, &MailCreateAddressArgs{LocalPart: "ada", Kind: protocol.MailAddressKind_MAIL_ADDRESS_ID, MailboxRepoId: testMailConfigMailboxId}); err != nil || !lookup.Known {
-		t.Fatalf("after a due path epoch: %+v, %v", lookup, err)
+		t.Fatalf("after a mapper's block: %+v, %v", lookup, err)
 	}
 	if repo.writeCount != 2 {
 		t.Errorf("%d writes", repo.writeCount)

@@ -33,7 +33,8 @@
 //	           push that loses its turn to one is never non-fast-forward (8.2.10's losing row)
 //	           412 PATH_EPOCH is the sender's retoken, a first push planned again; SEGMENT_STALE, SEGMENT_GONE,
 //	           SLOT_STALE, TIME_STALE and GATE_CLOSED build again under a new push id, at most PushRebuildCount
-//	           times; 412 PATH_EPOCH_DUE waits as WritePaths does; any other refusal is the caller's
+//	           times; 412 PATH_EPOCH_DUE, a mapper's block, waits as WritePaths does, ErrEvsPathEpochDue past its
+//	           bound; any other refusal is the caller's
 //
 // Under a general repo's prefix write rules a shared ref's update passes this device's own check before anything is
 // planned (DESIGN-DETAILS 8.2.5's prefix check, 16.2.7; QD-801), so its push passes 8.2.7's prefix line at every reader:
@@ -220,9 +221,9 @@ func EvsLocalPublish(ctx context.Context, args *EvsLocalPublishArgs) (*EvsLocalP
 			// PATH_EPOCH and REKEY versions alone: the update built again on the new head (8.2.5's 409 row)
 			rebuilds += 1
 			baseVersion, baseChain = moved.Head.Version, moved.Head.Chain
-		case errors.Is(err, ErrEvsPathEpochDue) || IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH_DUE):
+		case IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH_DUE):
 			if repo.client.settings.PushRetryCount <= dueWaits {
-				return nil, err
+				return nil, fmt.Errorf("%w: %w", ErrEvsPathEpochDue, err)
 			}
 			dueWaits += 1
 			if err := repo.waitPathEpoch(ctx, refId, err); err != nil {

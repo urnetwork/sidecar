@@ -53,8 +53,8 @@
 //	          (MailEntryUntrusted). No mail is an approval, whatever it says (owner decision 80): ingest writes m/ and
 //	          i/ and decides nothing
 //
-// A group repo is general, so a push creating a path waits out 412 PATH_EPOCH_DUE while an immediate path epoch is
-// due, which EvsRepo.WritePaths does (evs_write.go's waitPathEpoch); a mailbox keeps creating. Slot ids are evs's,
+// A push creating a path waits out 412 PATH_EPOCH_DUE while a mapper's block holds the ref, which EvsRepo.WritePaths
+// does (evs_write.go's waitPathEpoch); no due holds a creation, every due being batched (QD-1046). Slot ids are evs's,
 // drawn per statement (evs_upload.go), never from a deposit or message id.
 //
 // Not built here: the judging of a same-network deposit's From beyond MailIngestAuthority.MaySendAs, which MAIL-M7-18
