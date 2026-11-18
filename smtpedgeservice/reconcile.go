@@ -187,6 +187,12 @@ func (self *SmtpReconcile) newestSettledDay(now time.Time) time.Time {
 	return smtpUtcDay(now.Add(-self.settings.SettleTimeout)).Add(-24 * time.Hour)
 }
 
+// Where a chain with no cursor starts at now: the newest settled day, so a first pass judges from then on and
+// asks §21 about no older day.
+func (self *SmtpReconcile) StartCursor(now time.Time) SmtpReconcileCursor {
+	return SmtpReconcileCursor{Day: self.newestSettledDay(now)}
+}
+
 // The oldest day still judged at now: the UTC day that ended less than MaxDayAge before it.
 func (self *SmtpReconcile) oldestJudgedDay(now time.Time) time.Time {
 	return smtpUtcDay(now.Add(-self.settings.MaxDayAge))
