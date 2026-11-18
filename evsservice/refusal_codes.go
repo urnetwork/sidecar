@@ -5,10 +5,10 @@
 //     shredding and ref rules, 5d's pins against the head and off evs's chain, 5e's epoch, map source and tail, 5f,
 //     and 5g's path and removal checks;
 //   - recorded: evs first records it in the head by one CAS (EVS1-M2-12's refuse row), so no later attempt of the
-//     push id commits: 5b's time, 5c's scope, keying, deleted state and storage limit, 5d's predicate and its
-//     rule-set pin (DESIGN-DETAILS 16.2.9: one process's state settles it, not the head), 5e's map parts,
-//     EPOCH_SOURCES_FULL and a mapper's block's PATH_EPOCH_DUE, 5g's DIRECTORY_FULL, 5h, and
-//     FORMAT_UNSUPPORTED (plan-EVS1-format-unsupported#2);
+//     push id commits: 5b's time, 5c's scope, keying, deleted state and storage limit, 5d's predicate, 5e's map
+//     parts, EPOCH_SOURCES_FULL and a mapper's block's PATH_EPOCH_DUE, 5g's DIRECTORY_FULL, 5h, and
+//     FORMAT_UNSUPPORTED (plan-EVS1-format-unsupported#2). 5d's rule-set pin (QD-803) went with the prefix rules'
+//     move to Later (QD-1032);
 //   - nothing: a 400, 429 or 503 that refuses nothing, which the client retries with the same statement.
 //
 // A recorded reason's code lies in 1 to 63 and a reason that refuses nothing has one from 128; a final reason's lies
@@ -100,9 +100,6 @@ const (
 	EvsCheckReasonGateClosed
 	// 5d: a pin below the head's, or at the head's version under another chain or commitment.
 	EvsCheckReasonPinBelowHead
-	// 5d: a push that creates or re-creates a shared ref, its auth pin below the position of the repo's newest prefix
-	// rule set in the state (DESIGN-DETAILS 16.2.9, QD-803).
-	EvsCheckReasonPinBelowRules
 	// 5d: a generation pin whose commitment or group is not gen/<g>'s, or an auth pin off evs's chain.
 	EvsCheckReasonPinForked
 	// 5d: the authorization state or the generation record is not held yet, or the push's pin is above the state.
@@ -236,11 +233,10 @@ var evsCheckReasonRows = map[EvsCheckReason]evsCheckReasonRow{
 	EvsCheckReasonCitation:          {name: "citation", code: protocol.EvsRefusalCode_EVS_REFUSAL_VERSIONING, fate: EvsRefusalRecorded},
 	EvsCheckReasonVersioningPayload: {name: "versioning_payload", code: protocol.EvsRefusalCode_EVS_REFUSAL_VERSIONING, fate: EvsRefusalFinal},
 
-	EvsCheckReasonGateClosed:    {name: "gate_closed", code: protocol.EvsRefusalCode_EVS_REFUSAL_GATE_CLOSED, fate: EvsRefusalRecorded},
-	EvsCheckReasonPinBelowHead:  {name: "pin_below_head", code: protocol.EvsRefusalCode_EVS_REFUSAL_GATE_CLOSED, fate: EvsRefusalFinal},
-	EvsCheckReasonPinBelowRules: {name: "pin_below_rules", code: protocol.EvsRefusalCode_EVS_REFUSAL_GATE_CLOSED, fate: EvsRefusalRecorded},
-	EvsCheckReasonPinForked:     {name: "pin_forked", code: protocol.EvsRefusalCode_EVS_REFUSAL_GATE_CLOSED, fate: EvsRefusalFinal},
-	EvsCheckReasonGateUnknown:   {name: "gate_unknown", code: protocol.EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE, fate: EvsRefusalNothing},
+	EvsCheckReasonGateClosed:   {name: "gate_closed", code: protocol.EvsRefusalCode_EVS_REFUSAL_GATE_CLOSED, fate: EvsRefusalRecorded},
+	EvsCheckReasonPinBelowHead: {name: "pin_below_head", code: protocol.EvsRefusalCode_EVS_REFUSAL_GATE_CLOSED, fate: EvsRefusalFinal},
+	EvsCheckReasonPinForked:    {name: "pin_forked", code: protocol.EvsRefusalCode_EVS_REFUSAL_GATE_CLOSED, fate: EvsRefusalFinal},
+	EvsCheckReasonGateUnknown:  {name: "gate_unknown", code: protocol.EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE, fate: EvsRefusalNothing},
 
 	EvsCheckReasonPathEpoch:    {name: "path_epoch", code: protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH, fate: EvsRefusalFinal},
 	EvsCheckReasonPathEpochDue: {name: "path_epoch_due", code: protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH_DUE, fate: EvsRefusalRecorded},
