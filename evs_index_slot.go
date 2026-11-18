@@ -185,7 +185,7 @@ func indexEncodeSlot(slot *indexSlot, companion bool, settings *IndexFormatSetti
 			return nil, err
 		}
 	}
-	if slot.header.Type == indexFileLargeEntry && (len(entries) != 1 || entries[0].kind != indexEntryFull) {
+	if slot.header.Type == indexFileLargeEntry && !indexLargeEntryHolds(entries, slot.padByteCount) {
 		return nil, indexMalformed("a large entry that is not one full entry")
 	}
 	header := proto.CloneOf(slot.header)
@@ -208,6 +208,19 @@ func indexEncodeSlot(slot *indexSlot, companion bool, settings *IndexFormatSetti
 		return nil, indexMalformed("a file past its cap")
 	}
 	return file, nil
+}
+
+// What a large entry may hold: its one full entry, or, once an erasure's CLOSURE emptied it, no entry and the pad that
+// keeps it at the replaced version's length (§11.14's erase row; protocol/INDEX-FORMAT.md's Erasure). A writer never
+// writes an empty one: with no pad it is refused, so only a rewrite in place makes one.
+func indexLargeEntryHolds(entries []*indexEntry, padByteCount int) bool {
+	switch len(entries) {
+	case 0:
+		return 0 < padByteCount
+	case 1:
+		return entries[0].kind == indexEntryFull
+	}
+	return false
 }
 
 // Reads a slot or large entry. The hash comes first, so tampered bytes reach no parser; then the header, the entries
@@ -237,7 +250,7 @@ func indexDecodeSlot(file []byte, contentSha256 []byte, companion bool, settings
 			return nil, indexMalformed("a pad byte that is not zero")
 		}
 	}
-	if header.Type == indexFileLargeEntry && header.Count != 1 {
+	if header.Type == indexFileLargeEntry && (1 < header.Count || header.Count == 0 && decoder.remaining() == 0) {
 		return nil, indexMalformed("a large entry not alone")
 	}
 	slot := &indexSlot{header: header, padByteCount: decoder.remaining()}

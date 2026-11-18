@@ -245,6 +245,7 @@ rows:
     milestone: M10
     targets:
       - {name: FuzzSearchQuery, package: "."}
+      - {name: FuzzUrSearchFlags, package: cli, owner: SEARCH-M10-30}
 
   - id: search-wire
     bullet: "`SearchRequest` and `SearchReply`"
