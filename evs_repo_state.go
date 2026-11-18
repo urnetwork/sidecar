@@ -6,8 +6,11 @@
 // it before they act (§10.6's checks row, §11.13's skip row), so the codec and the state machine live here, in the
 // root, where each engine imports them.
 //
-// The state machine (§11.12's deletion rows), every transition one If-Match on repo/:
+// The state machine (§11.12's deletion rows), every transition one If-Match on repo/, the creation If-None-Match:
 //
+//	(none)    -> keying                         the create, PUT /evs/v1/repos/<id>
+//	(none)    -> deleted{id, time, signer}      the create in a recovery, reseed on, of a repo whose RepoDelete stands
+//	                                            unrestored inside the restore window (§19.10's groups row; QD-1062)
 //	keying    -> active                         activate, once KF1's group has its first generation
 //	active    -> deleted{id, time, signer}      DELETE with its projected RepoDelete
 //	active    -> shredding{id, time}            DELETE with its projected RepoDelete{now}

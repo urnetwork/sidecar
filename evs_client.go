@@ -382,13 +382,7 @@ func (self *EvsClient) CreateRepo(ctx context.Context, args *EvsCreateRepoArgs) 
 			return nil, fmt.Errorf("evs: the repo's group: %w", err)
 		}
 	}
-	if err := repo.callLifecycle(ctx, &evsCall{
-		route:  "POST /evs/v1/repos/{repo_id}/activate",
-		method: http.MethodPost,
-		path:   "/evs/v1/repos/" + evsUrlId(repoId) + "/activate",
-		repoId: repoId,
-		role:   evsScopeAdmin,
-	}); err != nil {
+	if err := repo.callLifecycle(ctx, evsActivateCall(repoId)); err != nil {
 		return nil, err
 	}
 	if self.args.RepoCreated != nil {
@@ -439,6 +433,18 @@ func evsPlaceCall(repoId Id) *evsCall {
 		route:  "PUT /evs/v1/repos/{repo_id}",
 		method: http.MethodPut,
 		path:   "/evs/v1/repos/" + evsUrlId(repoId),
+		repoId: repoId,
+		role:   evsScopeAdmin,
+	}
+}
+
+// POST /evs/v1/repos/<id>/activate: keying to active once the repo's group has its first generation (§11.12's
+// activate row).
+func evsActivateCall(repoId Id) *evsCall {
+	return &evsCall{
+		route:  "POST /evs/v1/repos/{repo_id}/activate",
+		method: http.MethodPost,
+		path:   "/evs/v1/repos/" + evsUrlId(repoId) + "/activate",
 		repoId: repoId,
 		role:   evsScopeAdmin,
 	}

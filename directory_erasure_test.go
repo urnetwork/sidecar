@@ -5,8 +5,10 @@
 // delay and erasing exactly the copies naming the repo, each ERASE naming the request; later copies swept while the
 // marker stands; a non-admin's request, and one after the repo is announced again, erasing nothing and alarming; a
 // request lapsed that way staying lapsed when the repo is revoked again, through the erasure of the entries that
-// showed it and a restart (owner decision 472); two runners racing, one ERASE committing; the indexer rule; and expiry
-// holding an item's newest copy.
+// showed it and a restart (owner decision 472); the superseded rule (QD-1061), on a directory admin's device admitted
+// after the later request's ERASEs, and for a request whose marker a later request erased before it was worked, never
+// for a revocation its revoker has not read back, with expiry keeping the marker of a request inside its delay; two runners racing, one ERASE committing; the indexer rule;
+// and expiry holding an item's newest copy.
 
 package sidecar_test
 
@@ -552,6 +554,336 @@ func TestDirectoryRunnerKeepsALapsedRequestLapsed(t *testing.T) {
 	}
 	if requestIds := world.erasureRequestIds(t); slices.Contains(requestIds, first.RequestId) {
 		t.Errorf("an ERASE names the lapsed request: %v", requestIds)
+	}
+}
+
+// QD-1061's sequence at a copy that never opened what lapsed request 1: revoke P (request 1, marker version 2),
+// announce P again (version 3), revoke P again (request 2, marker version 4), and request 2's ERASEs take every
+// version below 4. A directory admin's device admitted after them cannot open version 3, so it finds no lapse; it
+// reads request 1 superseded, its own marker gone under marker 4: not pending, though its push is past 24 h, nothing
+// raised and no bad_erasure, and a copy a daemon writes since goes under request 2, this runner reaching the older
+// request first.
+func TestDirectoryRunnerReadsARequestSupersededOnACopyAdmittedAfterTheErasure(t *testing.T) {
+	world := newTestDirectoryWorld(t, nil)
+	owner, repoId := world.announcedRepo("design notes")
+	memberId := sidecar.NewId()
+	runWriter := world.memberWriter(memberId)
+	world.publish()
+	runWriter.announceRunIn(repoId, memberId)
+	admin := world.adminDevice()
+	runner, _ := admin.runner(t, 0, nil)
+
+	owner.mustSync(t)
+	first, err := owner.client.RevokeRepo(t.Context(), &sidecar.DirectoryRevokeArgs{RepoId: repoId, Confirmed: true})
+	if err != nil || first.MarkerVersion != 2 {
+		t.Fatalf("the first revocation: %+v, %v", first, err)
+	}
+	if _, err := owner.client.AnnounceRepo(t.Context(), &sidecar.DirectoryRepoAnnounceArgs{RepoId: repoId, DisplayName: "design notes", Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	owner.flush(t)
+	owner.mustSync(t)
+	second, err := owner.client.RevokeRepo(t.Context(), &sidecar.DirectoryRevokeArgs{RepoId: repoId, Confirmed: true})
+	if err != nil || second.RequestId == first.RequestId || second.MarkerVersion != 4 {
+		t.Fatalf("the second revocation: %+v, %v", second, err)
+	}
+	owner.flush(t)
+	// the first announcement, the first marker, the item announced again and the run in P, all under request 2
+	pass := admin.pass(t, runner)
+	if !slices.Equal(pass.Refused, []sidecar.Id{first.RequestId}) || len(pass.Erased) != 1 || len(pass.Erased[second.RequestId]) != 4 {
+		t.Fatalf("the pass of the runner that read the lapse: %+v", pass)
+	}
+	admin.flush(t)
+
+	// a directory admin's device admitted a day later, past the 24 h a pending request alarms at
+	world.clock.Advance(25 * time.Hour)
+	world.publish()
+	late := world.adminDevice()
+	lateRunner, lateRaises := late.runner(t, 0, nil)
+	pass = late.pass(t, lateRunner)
+	for _, entry := range late.client.Entries() {
+		if entry.Kind() != sidecar.RecordKindAnnounce || entry.Body == nil {
+			continue
+		}
+		if item, err := sidecar.DirectoryDecodeAnnouncement(entry.Body); err == nil && sidecar.Id(item.GetWhere().GetRepoId()) == repoId && item.GetVersion() < 4 {
+			t.Fatalf("the late copy opens version %d of the repo's item", item.GetVersion())
+		}
+	}
+	if versions := testLapsedVersions(late.client); len(versions) != 2 || versions[first.RequestId] != 0 {
+		t.Fatalf("the late copy found a lapse it holds nothing of: %v", versions)
+	}
+	if !slices.Equal(pass.Superseded, []sidecar.Id{first.RequestId}) || len(pass.Pending) != 0 || len(pass.Refused) != 0 || len(pass.Delayed) != 0 || len(pass.Erased) != 0 {
+		t.Fatalf("the late runner's pass: %+v", pass)
+	}
+	if lines := lateRunner.StatusLines(); len(lines) != 0 {
+		t.Errorf("the late admin's status lines: %v", lines)
+	}
+	if lines := late.client.ErasureStatusLines(nil); len(lines) != 0 {
+		t.Errorf("ur status on the late admin's device: %v", lines)
+	}
+	if pending := lateRunner.Pending(); len(pending) != 0 {
+		t.Errorf("%d requests pending on the late admin's device", len(pending))
+	}
+
+	// a copy a daemon wrote since goes under request 2, on the runner that holds no lapse
+	runWriter.announceRunIn(repoId, memberId)
+	pass = late.pass(t, lateRunner)
+	if !slices.Equal(pass.Superseded, []sidecar.Id{first.RequestId}) || len(pass.Erased) != 1 || len(pass.Erased[second.RequestId]) != 1 || len(pass.Pending) != 0 {
+		t.Fatalf("the late runner's sweep: %+v", pass)
+	}
+	late.flush(t)
+	if requestIds := world.erasureRequestIds(t); len(requestIds) == 0 || slices.ContainsFunc(requestIds, func(id sidecar.Id) bool { return id != second.RequestId }) {
+		t.Errorf("the ERASEs name %v, not request 2 alone", requestIds)
+	}
+	if raised := lateRaises.raised(); len(raised) != 0 {
+		t.Errorf("directory_erasure raised on the late admin's device: %v", raised)
+	}
+	if count := late.alarmsNaming(sidecar.SidecarRecordAlarmBadErasure, owner.writer.sidecarId); count != 0 {
+		t.Errorf("%d bad_erasure alarms for a superseded request", count)
+	}
+}
+
+// A request whose marker a later request erased before the older one was worked (QD-1061): a repo that nothing in the
+// directory names yet is revoked by one of its admins (request 1, marker version 1), which has no copy to erase, so no
+// ERASE names it and it waits, alarming past 24 h. Its other admin revokes it too (request 2, marker version 2), and
+// request 2's ERASE takes the first marker. Request 1 then reads superseded on the runner and lapsed at its revoker,
+// whose next revoke files a new request above the marker that stands.
+func TestDirectoryRunnerSupersedesARequestWhoseMarkerALaterRequestErased(t *testing.T) {
+	world := newTestDirectoryWorld(t, nil)
+	firstWriter := world.memberWriter(sidecar.NewId())
+	secondWriter := world.memberWriter(sidecar.NewId())
+	world.publish()
+	repoId := world.createRepo(protocol.RepoKind_REPO_KIND_GENERAL, nil, firstWriter, secondWriter)
+	firstOwner := world.device(firstWriter)
+	secondOwner := world.device(secondWriter)
+	admin := world.adminDevice()
+	runner, raises := admin.runner(t, 0, nil)
+
+	firstOwner.mustSync(t)
+	first, err := firstOwner.client.RevokeRepo(t.Context(), &sidecar.DirectoryRevokeArgs{RepoId: repoId, Confirmed: true})
+	if err != nil || first.MarkerVersion != 1 {
+		t.Fatalf("the first revocation: %+v, %v", first, err)
+	}
+	firstOwner.flush(t)
+	world.clock.Advance(25 * time.Hour)
+	world.publish()
+	pass := admin.pass(t, runner)
+	if len(pass.Pending) != 1 || pass.Pending[0].Request.RequestId != first.RequestId || len(pass.Erased) != 0 || len(pass.Superseded) != 0 {
+		t.Fatalf("the pass over a request with nothing to erase: %+v", pass)
+	}
+	if raised := raises.raised(); !slices.Equal(raised, []string{sidecar.SidecarDirectoryErasurePending}) {
+		t.Fatalf("raised past 24 h: %v", raised)
+	}
+
+	secondOwner.mustSync(t)
+	second, err := secondOwner.client.RevokeRepo(t.Context(), &sidecar.DirectoryRevokeArgs{RepoId: repoId, Confirmed: true})
+	if err != nil || second.RequestId == first.RequestId || second.MarkerVersion != 2 {
+		t.Fatalf("the second revocation: %+v, %v", second, err)
+	}
+	secondOwner.flush(t)
+	// request 1 is read first and still opens its marker; request 2 erases that marker
+	pass = admin.pass(t, runner)
+	if len(pass.Erased) != 1 || len(pass.Erased[second.RequestId]) != 1 || len(pass.Pending) != 1 || pass.Pending[0].Request.RequestId != first.RequestId {
+		t.Fatalf("the pass that works the later request: %+v", pass)
+	}
+	admin.flush(t)
+
+	pass = admin.pass(t, runner)
+	if !slices.Equal(pass.Superseded, []sidecar.Id{first.RequestId}) || len(pass.Pending) != 0 || len(pass.Refused) != 0 || len(pass.Delayed) != 0 || len(pass.Erased) != 0 {
+		t.Fatalf("the pass once the first marker is erased: %+v", pass)
+	}
+	if lines := runner.StatusLines(); len(lines) != 0 {
+		t.Errorf("an admin's status lines: %v", lines)
+	}
+	// nothing more is raised for it: the pending raised while it waited is the last
+	if raised := raises.raised(); !slices.Equal(raised, []string{sidecar.SidecarDirectoryErasurePending}) {
+		t.Errorf("raised: %v", raised)
+	}
+	if count := admin.alarmsNaming(sidecar.SidecarRecordAlarmBadErasure, firstWriter.sidecarId); count != 0 {
+		t.Errorf("%d bad_erasure alarms for a superseded request", count)
+	}
+	if requestIds := world.erasureRequestIds(t); len(requestIds) != 1 || requestIds[0] != second.RequestId {
+		t.Errorf("the ERASEs name %v, not request 2 alone", requestIds)
+	}
+
+	// its revoker reads it lapsed, the later revoker reads done
+	firstOwner.mustSync(t)
+	revocations, err := firstOwner.client.Revocations()
+	if err != nil || len(revocations) != 1 || revocations[0].RequestId != first.RequestId || revocations[0].State != sidecar.DirectoryRevocationLapsed || !revocations[0].Superseded {
+		t.Fatalf("the superseded revocation at its revoker: %+v, %v", revocations, err)
+	}
+	if lines := firstOwner.client.RevocationStatusLines(); len(lines) != 0 {
+		t.Errorf("the superseded revocation's status lines: %v", lines)
+	}
+	secondOwner.mustSync(t)
+	revocations, err = secondOwner.client.Revocations()
+	if err != nil || len(revocations) != 1 || revocations[0].RequestId != second.RequestId || revocations[0].State != sidecar.DirectoryRevocationDone {
+		t.Fatalf("the later revocation at its revoker: %+v, %v", revocations, err)
+	}
+	// a person's revoke on the first device is a new request above the marker that stands
+	third, err := firstOwner.client.RevokeRepo(t.Context(), &sidecar.DirectoryRevokeArgs{RepoId: repoId, Confirmed: true})
+	if err != nil || third.RequestId == first.RequestId || third.MarkerVersion != 3 || third.State != sidecar.DirectoryRevocationPending || third.Superseded {
+		t.Fatalf("a revoke over a superseded revocation: %+v, %v", third, err)
+	}
+}
+
+// A revocation this copy has not read back is not superseded by a marker another device wrote above it meanwhile: its
+// own marker is not gone, it has not arrived. P's other admin announces it again (version 2) and revokes it (marker
+// version 3) while the first admin's revocation (marker version 2) waits unpushed. The first reads pending under
+// marker 3 before its push and after it, and its request is worked.
+func TestDirectoryRevokeNotReadBackIsNotSuperseded(t *testing.T) {
+	world := newTestDirectoryWorld(t, nil)
+	firstWriter := world.memberWriter(sidecar.NewId())
+	secondWriter := world.memberWriter(sidecar.NewId())
+	world.publish()
+	repoId := world.createRepo(protocol.RepoKind_REPO_KIND_GENERAL, nil, firstWriter, secondWriter)
+	firstOwner := world.device(firstWriter)
+	secondOwner := world.device(secondWriter)
+	if _, err := firstOwner.client.AnnounceRepo(t.Context(), &sidecar.DirectoryRepoAnnounceArgs{RepoId: repoId, DisplayName: "design notes", Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	firstOwner.flush(t)
+	firstOwner.mustSync(t)
+	secondOwner.mustSync(t)
+	if _, err := secondOwner.client.AnnounceRepo(t.Context(), &sidecar.DirectoryRepoAnnounceArgs{RepoId: repoId, DisplayName: "design notes", Description: "the redesign", Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	secondOwner.flush(t)
+	secondOwner.mustSync(t)
+	second, err := secondOwner.client.RevokeRepo(t.Context(), &sidecar.DirectoryRevokeArgs{RepoId: repoId, Confirmed: true})
+	if err != nil || second.MarkerVersion != 3 {
+		t.Fatalf("the second admin's revocation: %+v, %v", second, err)
+	}
+	secondOwner.flush(t)
+
+	// the first admin's copy still shows version 1: its marker is version 2, and waits unpushed
+	first, err := firstOwner.client.RevokeRepo(t.Context(), &sidecar.DirectoryRevokeArgs{RepoId: repoId, Confirmed: true})
+	if err != nil || first.MarkerVersion != 2 || first.RequestId == second.RequestId {
+		t.Fatalf("the first admin's revocation: %+v, %v", first, err)
+	}
+	firstOwner.mustSync(t)
+	if marker := testRepoItemShown(t, firstOwner.testDirectoryReader, repoId); marker == nil || marker.Display != sidecar.DirectoryItemPrivate || marker.Announcement.GetVersion() != 3 {
+		t.Fatalf("the item the first admin's copy shows: %v", marker)
+	}
+	revocations, err := firstOwner.client.Revocations()
+	if err != nil || len(revocations) != 1 || revocations[0].RequestId != first.RequestId || revocations[0].State != sidecar.DirectoryRevocationPending || revocations[0].Superseded {
+		t.Fatalf("the revocation before its push: %+v, %v", revocations, err)
+	}
+	world.clock.Advance(time.Minute)
+	world.publish()
+	firstOwner.flush(t)
+	firstOwner.mustSync(t)
+	revocations, err = firstOwner.client.Revocations()
+	if err != nil || len(revocations) != 1 || revocations[0].State != sidecar.DirectoryRevocationPending || revocations[0].Superseded {
+		t.Fatalf("the revocation once pushed: %+v, %v", revocations, err)
+	}
+	// both requests are worked in push order: the second admin's takes every version below 3, the first marker among
+	// them, and the first admin's, whose marker this copy still opens under marker 3, the version below 2
+	admin := world.adminDevice()
+	runner, _ := admin.runner(t, 0, nil)
+	pass := admin.pass(t, runner)
+	if len(pass.Superseded) != 0 || len(pass.Erased) != 2 || len(pass.Erased[second.RequestId]) != 3 || len(pass.Erased[first.RequestId]) != 1 {
+		t.Fatalf("the runner's pass: %+v", pass)
+	}
+}
+
+// Expiry keeps the marker of a request inside its delay. P is revoked (request 1, marker version 2) and marked private
+// again (version 3, a marker that files no request), and no directory admin's daemon runs for 31 days, so the first
+// marker is past its 30 days under the newer one when a runner starts. Expired in the pass that first showed the
+// request's work, it would read the request superseded with a copy a daemon wrote still unerased. The runner holds it
+// through the delay, erases the copy under the request, and only then lets the marker go.
+func TestDirectoryRunnerExpiryKeepsTheMarkerOfARequestInsideItsDelay(t *testing.T) {
+	world := newTestDirectoryWorld(t, nil)
+	owner, repoId := world.announcedRepo("design notes")
+	memberId := sidecar.NewId()
+	runWriter := world.memberWriter(memberId)
+	world.publish()
+	owner.mustSync(t)
+	first, err := owner.client.RevokeRepo(t.Context(), &sidecar.DirectoryRevokeArgs{RepoId: repoId, Confirmed: true})
+	if err != nil || first.MarkerVersion != 2 {
+		t.Fatalf("the revocation: %+v, %v", first, err)
+	}
+	owner.flush(t)
+	owner.mustSync(t)
+	if _, err := owner.client.AnnounceRepo(t.Context(), &sidecar.DirectoryRepoAnnounceArgs{RepoId: repoId, Private: true, Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	owner.flush(t)
+	world.clock.Advance(31 * 24 * time.Hour)
+	world.publish()
+	// a daemon that has not read the marker yet writes a copy naming the repo
+	runWriter.announceRunIn(repoId, memberId)
+
+	admin := world.adminDevice()
+	runner, err := sidecar.NewDirectoryErasureRunner(&sidecar.DirectoryErasureRunnerArgs{
+		Client: admin.client,
+		Erase:  admin.record.Eraser().Erase,
+		Expire: func(ctx context.Context, directoryId sidecar.Id, hold func(entry *sidecar.RecordReadEntry) bool) error {
+			_, err := admin.record.Retention().Expire(ctx, &sidecar.RecordRetentionExpireArgs{LogId: directoryId, Hold: hold})
+			return err
+		},
+		Random: &testErasureDelay{delay: 4 * time.Minute},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	markerVersions := func() []uint64 {
+		versions := []uint64{}
+		for _, item := range admin.liveAnnouncements(t) {
+			if sidecar.DirectoryAnnouncementKind(item.GetKind()) == sidecar.DirectoryAnnouncementKindRepo && item.GetWhere().GetPrivate() {
+				versions = append(versions, item.GetVersion())
+			}
+		}
+		slices.Sort(versions)
+		return versions
+	}
+	// the pass that first shows the work expires the first announcement, 31 days replaced, and keeps the first marker
+	pass := admin.pass(t, runner)
+	if !slices.Equal(pass.Delayed, []sidecar.Id{first.RequestId}) || len(pass.Erased) != 0 || len(pass.Superseded) != 0 {
+		t.Fatalf("the pass that first shows the work: %+v", pass)
+	}
+	admin.flush(t)
+	if versions := markerVersions(); !slices.Equal(versions, []uint64{2, 3}) {
+		t.Fatalf("the markers held inside the delay: %v", versions)
+	}
+	if live := admin.liveAnnouncements(t); len(live) != 3 {
+		t.Fatalf("%d announce entries held inside the delay, not the two markers and the run", len(live))
+	}
+	world.clock.Advance(4 * time.Minute)
+	pass = admin.pass(t, runner)
+	if len(pass.Erased) != 1 || len(pass.Erased[first.RequestId]) != 1 || len(pass.Superseded) != 0 {
+		t.Fatalf("the pass after the delay: %+v", pass)
+	}
+	admin.flush(t)
+	// one ERASE names the request, the run its only entry; the others are expiry's
+	erasures, err := world.streams.For(world.readerId).ReadErasures(t.Context(), world.directoryId, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	named := 0
+	for _, erasure := range erasures {
+		body := &protocol.ErasureBody{}
+		if err := proto.Unmarshal(erasure.SealedNote, body); err != nil {
+			t.Fatal(err)
+		}
+		if sidecar.RecordErasureReason(body.GetReason()) != sidecar.RecordErasureReasonRevocation {
+			continue
+		}
+		if erasure.ErasureId != first.RequestId || !bytes.Equal(body.GetRequestId(), first.RequestId.Bytes()) || len(body.GetEntryIds()) != 1 {
+			t.Fatalf("a revocation's ERASE: id %s, note %v", erasure.ErasureId, body)
+		}
+		named += 1
+	}
+	if named != 1 {
+		t.Fatalf("%d ERASEs name the request", named)
+	}
+	// its work done, the first marker expires, and the request, an ERASE naming it, reads superseded and is not swept
+	if versions := markerVersions(); !slices.Equal(versions, []uint64{3}) {
+		t.Fatalf("the markers held once the request is erased: %v", versions)
+	}
+	pass = admin.pass(t, runner)
+	if !slices.Equal(pass.Superseded, []sidecar.Id{first.RequestId}) || len(pass.Pending) != 0 || len(pass.Erased) != 0 {
+		t.Fatalf("the pass once the first marker expired: %+v", pass)
 	}
 }
 
