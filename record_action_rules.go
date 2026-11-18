@@ -19,8 +19,9 @@
 //
 // Which fields each other kind fills, and which of them a GrantActivate or a gate may carry, are MCP-M3-02's kind
 // table, and the per-path allowlist ACL's and the gates' (protos-services-canonical-action); this file holds what is
-// true of every action, and the shapes a row cannot say: an egress_change's exits, which its mode decides
-// (QD-799's egress_mode, field 39), and a share's network, share_network_id, field 40 (QD-820), which a dial or route
+// true of every action, and the shapes a row cannot say: an egress_change's exits and its requirement of default
+// egress, require_default_egress, field 41 (QD-1060), which its mode decides (QD-799's egress_mode, field 39), and a
+// share's network, share_network_id, field 40 (QD-820), which a dial or route
 // grant alone names, as a network's id; what the grant's destinations may then be is ACL's (ParseAclGrantAction).
 //
 // Package-level functions are safe for concurrent use.
@@ -63,6 +64,8 @@ const (
 	canonicalActionFieldEgressMode   = 39
 	// A share's other network (§8.11; QD-820), on a dial or route grant.
 	canonicalActionFieldShareNetworkId = 40
+	// An egress_change's requirement of default egress, under exits alone (QD-1060).
+	canonicalActionFieldRequireDefaultEgress = 41
 
 	// field 37's version, versioning at format 2 (§11.7; RECORD-M10-03): the one version that may carry it.
 	canonicalActionVersionVersioning = 2
@@ -229,7 +232,8 @@ func canonicalActionCheck(action *protocol.CanonicalAction, known func(version u
 			return fmt.Errorf("%w: app_mode %d", ErrCanonicalActionInvalid, appMode)
 		}
 	}
-	if kind == protocol.SidecarActionKind_SIDECAR_ACTION_KIND_EGRESS_CHANGE || action.GetEgressMode() != 0 {
+	if kind == protocol.SidecarActionKind_SIDECAR_ACTION_KIND_EGRESS_CHANGE || action.GetEgressMode() != 0 ||
+		action.GetRequireDefaultEgress() {
 		if err := checkEgressChangeAction(action); err != nil {
 			return err
 		}
@@ -247,14 +251,15 @@ func canonicalActionCheck(action *protocol.CanonicalAction, known func(version u
 	return nil
 }
 
-// Holds an action that sets egress_mode to egress_change's shape (QD-799), a template's included: kind egress_change,
-// a 16-byte subject, a mode bridge.proto names, and under exits the exits in grant_dst, sidecar:<id> entries or one
-// tag:<id> alone, each id in 32 lowercase hex digits and none named twice; under auto or none no grant_dst. So no
-// approver renders, and no spender takes, an egress change whose exits read two ways. The ids stay out of every error,
-// which a log may carry (I-13).
+// Holds an action that sets egress_mode or require_default_egress to egress_change's shape (QD-799), a template's
+// included: kind egress_change, a 16-byte subject, a mode bridge.proto names, and under exits the exits in grant_dst,
+// sidecar:<id> entries or one tag:<id> alone, each id in 32 lowercase hex digits and none named twice, and maybe the
+// requirement of default egress (QD-1060); under auto or none no grant_dst and no requirement. So no approver renders,
+// and no spender takes, an egress change whose exits read two ways. The ids stay out of every error, which a log may
+// carry (I-13).
 func checkEgressChangeAction(action *protocol.CanonicalAction) error {
 	if protocol.SidecarActionKind(action.GetKind()) != protocol.SidecarActionKind_SIDECAR_ACTION_KIND_EGRESS_CHANGE {
-		return fmt.Errorf("%w: egress_mode on kind %d", ErrCanonicalActionInvalid, action.GetKind())
+		return fmt.Errorf("%w: egress_mode or require_default_egress on kind %d", ErrCanonicalActionInvalid, action.GetKind())
 	}
 	if len(action.GetSubject()) != recordIdByteCount {
 		return fmt.Errorf("%w: an egress change's subject of %d bytes", ErrCanonicalActionInvalid, len(action.GetSubject()))
@@ -264,6 +269,10 @@ func checkEgressChangeAction(action *protocol.CanonicalAction) error {
 	case bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_AUTO, bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE:
 		if len(grantDsts) != 0 {
 			return fmt.Errorf("%w: an egress change of mode %s naming exits", ErrCanonicalActionInvalid, mode)
+		}
+		if action.GetRequireDefaultEgress() {
+			// only an exits body carries the requirement (QD-1053)
+			return fmt.Errorf("%w: an egress change of mode %s requiring default egress", ErrCanonicalActionInvalid, mode)
 		}
 		return nil
 	case bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS:
