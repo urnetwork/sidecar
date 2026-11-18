@@ -12,8 +12,8 @@
 //	links        AuthWindowClient and RemoveWindowClient: the window clients of the component's links, F's children,
 //	             which the sdk's BridgeHost mints and retires (SDK-M8-08)
 //	poll         SyncPoll: §6.8's long-poll on F, which brings team hints where no device client receives pushes
-//	heads        ConfigHeads (bridge_heads_forward.go, off the ios_extension leg): the config head reader the Forwarder
-//	             reads each base's head through, on F's exchange for the config repo's read scope
+//	heads        ConfigHeads (bridge_forward_heads.go, on every leg as this file is): the config head reader the
+//	             Forwarder reads each base's head through, on F's exchange for the config repo's read scope
 //
 // F's token is forward_only (§7.4): api takes it only on TEAM-M8-02's allowlist and exchanges it only for the config
 // repo's read scope, so what this client can reach is what forwarding needs. It holds no identity key and signs no

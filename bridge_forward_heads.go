@@ -1,5 +1,3 @@
-//go:build !ios_extension
-
 // A VPN component's config head reader (DESIGN-DETAILS 4.2.5's Compile, step 3; QD-804, QD-814; owner decision 197;
 // SDK-M8-16): the replaying EvsConfigHeadReader on the network's config repo, built for a forwarding role, which the
 // Forwarder reads each base's head through. Every base names a head, base 1's included, so with no reader nothing
@@ -21,14 +19,14 @@
 // heads it reads in its own store; the replay of the ref stays in memory between reads, bounded by that head (a
 // storage-backed replay is QD-641's review-phase work).
 //
-// Off the ios_extension leg still. The push records the replay reads are on the leg since QD-839
-// (evs_push_record.go, evs_reseed_record.go), so this file and evs_config_head.go compile there with their tags
-// taken off; but the reader links an EvsClient, and with it the forwarding leg adds 7,009,216 B stripped to the iOS
-// extension, past DESIGN-DETAILS 4.2.3's 6,291,456 B (6,008,480 B without it; make size, 2026-11-15). So the tags stay
-// until question ios-leg-head-reader-size-over-budget is answered: the Apple extensions build no head reader and
-// compile nothing, and a role's posture there stays pending after its hand-off, the closed direction. Android's VPN
-// service and the desktop app services link it. Not a bridge_forward file, so the leg's seed rule does not take it;
-// on the leg it becomes one, since the VPN component calls it. Safe for concurrent use; one read replays at a time.
+// On every leg an app's VPN component builds, the ios_extension leg among them (QD-839, QD-973; owner decision 491):
+// the Apple network extensions build the same reader Android's VPN service and the desktop app services do, so a
+// role there compiles after its hand-off as any other does. The push records the replay reads are on that leg
+// (evs_push_record.go, evs_reseed_record.go), and evs_config_head.go with them. The reader links an EvsClient, which
+// is most of what it costs the iOS extension: with it the forwarding leg adds 7,042,032 B stripped (make size,
+// 2026-11-18; 7,009,216 B on 2026-11-15, 6,008,480 B then without it) against §18.10's 7,864,320 B. A reader over a
+// read-only core of the evs client is review-phase work. A bridge_forward file, so the leg's closure seeds from it and make size keeps its exported
+// surface, as the VPN component calls it. Safe for concurrent use; one read replays at a time.
 
 package sidecar
 

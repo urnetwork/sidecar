@@ -22,9 +22,16 @@
 //	           both send, and evs answers the second NOTHING_TO_ERASE. While the marker stands, for 30 days from the
 //	           request, each later sync erases any copy a daemon wrote since. A request whose check fails erases
 //	           nothing and alarms bad_erasure, naming its signer, once
+//	superseded a request whose signer held the right, whose own marker this copy no longer opens, while a later marker
+//	           of its repo stands (QD-1061; DirectoryClient.requestSuperseded): a later request's ERASEs took the
+//	           marker, with the item that lapsed the request on a copy that never opened it, or before the request was
+//	           worked. It is not worked, not pending and raises nothing, and no bad_erasure: later copies go under the
+//	           newer request, whose marker stands
 //	expiry     the runner also runs the directory's retention expiry (RECORD-M6-03) through Expire: an announce entry
 //	           is held until 30 days after a newer entry or file for its item, or its item's expiry, so a live repo
-//	           item keeps its newest copy (directory_retention.go's hold), and then the weekly admin BASE (Base)
+//	           item keeps its newest copy (directory_retention.go's hold), and then the weekly admin BASE (Base). A
+//	           request whose work waits for its delay keeps its own marker from expiry, which under a later marker
+//	           would read it superseded with its copies unerased
 //	waiting    a request no ERASE names is pending, and is never dropped: past 24 h every directory admin's device
 //	           raises directory_erasure, pending, and done once it is erased; StatusLines names each one past 24 h and
 //	           the oldest waiting
@@ -252,6 +259,8 @@ type DirectoryErasurePass struct {
 	Erased map[Id][]Id
 	// The requests whose check failed at this pass.
 	Refused []Id
+	// The requests it read as superseded at this pass: neither worked, pending nor raised.
+	Superseded []Id
 	// The requests whose work waits for its delay.
 	Delayed []Id
 	// The requests still pending after it.
@@ -387,6 +396,9 @@ const (
 	// A full item above its marker stands, or replaced it since: the repo was announced again, and the request lapsed
 	// for good.
 	directoryErasureCheckLapsed
+	// This copy no longer opens its own marker, and a later marker of the repo stands: the newer request's ERASEs
+	// cover every copy it could name (QD-1061).
+	directoryErasureCheckSuperseded
 )
 
 // §16.11's revoke row's step 3 for one request.
@@ -418,6 +430,9 @@ func (self *DirectoryErasureRunner) check(auth DirectoryAuthView, request *Direc
 		return directoryErasureCheckPassed
 	case standing == nil:
 		return directoryErasureCheckWaits
+	case self.client.requestSuperseded(standing, request.RepoId, request.MarkerVersion):
+		// after the signer's right, so a request with none still alarms; before the standing marker passes it
+		return directoryErasureCheckSuperseded
 	case standing.Display == DirectoryItemPrivate && request.MarkerVersion <= standing.Announcement.GetVersion():
 		return directoryErasureCheckPassed
 	case standing.Display != DirectoryItemPrivate && request.MarkerVersion < standing.Announcement.GetVersion():
@@ -514,6 +529,8 @@ func (self *DirectoryErasureRunner) Pass(ctx context.Context) (*DirectoryErasure
 		erase = self.client.boundEraser()
 	}
 	var firstErr error
+	// the requests whose work waits for its delay at this pass
+	delayedRequests := []*DirectoryErasureRequestView{}
 	for _, request := range self.client.ErasureRequests() {
 		age := max(0, time.Duration(nowMillis-request.PushTimeMillis)*time.Millisecond)
 		verdict := self.check(auth, request, nowMillis)
@@ -540,6 +557,9 @@ func (self *DirectoryErasureRunner) Pass(ctx context.Context) (*DirectoryErasure
 				self.client.raise(SidecarRecordAlarmBadErasure, directoryId, &signerId)
 				pass.Refused = append(pass.Refused, request.RequestId)
 			}
+			continue
+		case directoryErasureCheckSuperseded:
+			pass.Superseded = append(pass.Superseded, request.RequestId)
 			continue
 		case directoryErasureCheckWaits:
 			if !request.Erased {
@@ -585,6 +605,7 @@ func (self *DirectoryErasureRunner) Pass(ctx context.Context) (*DirectoryErasure
 		}()
 		if nowMillis < due {
 			pass.Delayed = append(pass.Delayed, request.RequestId)
+			delayedRequests = append(delayedRequests, request)
 			if !request.Erased {
 				pending()
 			}
@@ -613,7 +634,18 @@ func (self *DirectoryErasureRunner) Pass(ctx context.Context) (*DirectoryErasure
 	if pass.Runs && self.expire != nil && firstErr == nil {
 		entries := self.client.allEntries()
 		hold := directoryAnnounceHold(entries, self.client.foldFileVersions(), nowMillis, self.settings.AnnounceHold)
-		if err := self.expire(ctx, directoryId, hold); err != nil {
+		// a request whose work waits for its delay keeps its own marker: expired under a later marker, it would read
+		// the request superseded with the copies it found still unerased
+		delayedMarkerEntryIds := map[Id]bool{}
+		for _, request := range delayedRequests {
+			for _, entryId := range self.client.repoMarkerEntryIds(request.RepoId, request.MarkerVersion) {
+				delayedMarkerEntryIds[entryId] = true
+			}
+		}
+		held := func(entry *RecordReadEntry) bool {
+			return delayedMarkerEntryIds[entry.EntryId] || hold(entry)
+		}
+		if err := self.expire(ctx, directoryId, held); err != nil {
 			firstErr = err
 		}
 	}
@@ -639,7 +671,7 @@ func (self *DirectoryErasureRunner) Pending() []*DirectoryErasurePending {
 			continue
 		}
 		switch self.check(auth, request, nowMillis) {
-		case directoryErasureCheckNoRight, directoryErasureCheckLapsed:
+		case directoryErasureCheckNoRight, directoryErasureCheckLapsed, directoryErasureCheckSuperseded:
 			continue
 		}
 		pending = append(pending, &DirectoryErasurePending{Request: request, Age: max(0, time.Duration(nowMillis-request.PushTimeMillis)*time.Millisecond)})

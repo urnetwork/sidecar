@@ -19,8 +19,8 @@ func TestTheBudgetLedgerParses(t *testing.T) {
 		t.Fatal(err)
 	}
 	for id, want := range map[string]int64{
-		// DESIGN-DETAILS 4.2.3's forwarding leg, stripped, proposed until question details-4-ios-forwarding-budget is answered
-		"ios-extension-device-role": 6 * 1024 * 1024,
+		// §18.10's forwarding leg, stripped: 7.5 MiB with the config head reader on the leg (QD-973, owner decision 491)
+		"ios-extension-device-role": 7864320,
 		"page-worker-wasm":          41943040,
 	} {
 		budget := ledger.Budget(id)
