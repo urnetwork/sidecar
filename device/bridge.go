@@ -213,9 +213,15 @@ func (self *Bridge) Status() BridgeStatus {
 		nameCount = zone.NameCount()
 	}
 	reachNotedCount, reachWaitingCount, reachDroppedCount := self.reach.counts()
+	// the exits the router reads now: a route state is immutable once stored, and its egress pins swap whole
+	egressExitCount := 0
+	if routeState := self.routeState.Load(); routeState != nil && routeState.egress != nil {
+		egressExitCount = len(routeState.egress.Links())
+	}
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	status := BridgeStatus{
+		EgressExitCount:        egressExitCount,
 		ReachNotedCount:        reachNotedCount,
 		ReachWaitingCount:      reachWaitingCount,
 		ReachDroppedCount:      reachDroppedCount,

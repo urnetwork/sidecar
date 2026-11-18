@@ -106,6 +106,10 @@ type BridgeStatus struct {
 	// This device's own default route, from the state in force: unspecified keeps today's, as auto does (§17.9's
 	// egress spec). `ur tun` routes the default into the tun only under exits.
 	EgressMode bridge.BridgeEgressMode
+	// Under exits, the exits the router may hand a new pair now: the egress spec's links less those revoked, a draining
+	// one until its drain ends; 0 under any other mode. `ur tun` sends the host's default traffic to the exits only
+	// while there is one, the client's egress destination under exits (QD-1052).
+	EgressExitCount int
 
 	// §12.9's private names the state in force holds, and `ur tun`'s resolver's queries since the bridge started:
 	// answered from them, passed to the host's resolver, and dropped as malformed or past its queue.

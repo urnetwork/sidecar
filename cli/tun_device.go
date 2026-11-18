@@ -10,15 +10,20 @@
 //	write    each packet the bridge answers, a link's reply, a reject or the resolver's answer, written into the device
 //	         at once on the caller's goroutine, the packet the caller's again after the call
 //	sync     on each change the bridge reports, coalesced: the device's addresses are this host's overlay addresses,
-//	         its routes Bridge.Routes(), the default route too under the egress mode exits, beside the bridge's carve
-//	         passed back to the host's own route where the platform can, and the state's name zones resolve through
-//	         <block>.0.53
+//	         its routes Bridge.Routes(), the default route too where the plan for default traffic takes it
+//	         (tun_default.go; QD-1052), beside the bridge's carve passed back to the host's own route where the
+//	         platform can, and the state's name zones resolve through <block>.0.53; a change of the network's choices
+//	         or of the destination syncs again too
 //	local    this host's interface, gateway and resolver addresses, which the platform watches and the tun reads again
 //	         every LocalPollInterval, into Bridge.SetLocalAddresses whenever they change, the bridge's own resolvers left
 //	         out so their routes are never carved
 //
-// Under exits the default route rides the tun (§17.11). On Linux it goes in a routing table of the platform's own with
-// wg-quick's rules, `not fwmark <mark> lookup <table>` and `lookup main suppress_prefixlength 0` (tun_linux.go;
+// The default route rides the tun where the plan for default traffic takes it (tun_default.go; QD-1052, amending the
+// unconditional capture under exits of §17.11 and QD-1048): default egress in force and a destination, the network's
+// exits under exits; or no destination with route local traffic off, which the tun refuses. Below, and in each
+// platform's file, "under exits" and "the exits" name that capture, whatever the egress mode that asked for it, and
+// SetExits is how the sync asks for it. On Linux it goes in a routing table of the platform's own with wg-quick's
+// rules, `not fwmark <mark> lookup <table>` and `lookup main suppress_prefixlength 0` (tun_linux.go;
 // QD-800): the daemon's own connect sockets carry connect's egress mark, which the first rule passes by, so its
 // transport, and with it every link the bridge sends on, keeps today's route; nothing is carved by the platform's
 // addresses. The bridge's own carve, this host's interface, gateway and resolver addresses (§17.4), takes a throw route
@@ -33,12 +38,14 @@
 // go.
 //
 // IPv6's default route rides the tun beside IPv4's under exits (QD-881): on Linux ::/0 in the same table with IPv6's
-// copies of the two rules, on macOS and Windows IPv6's two halves (urTunExitsIpv6Halves). No exit carries IPv6 (§17.4),
-// so the bridge answers what reaches it through its rejects, a TCP reset or an ICMPv6 administratively prohibited
-// written back into the device within the source's bucket, past which a packet is dropped, and counts it (owner
-// decision 482, QD-970): a dual-stack host's IPv6 goes nowhere rather than past the exits, and its connections hear at
-// once and fall back to IPv4 rather than waiting out a connect timeout; the daemon's own IPv6 sockets keep today's
-// route by their mark or binding, as its IPv4 ones do. Where the host routes no IPv6 off itself and the platform will not take IPv6's half,
+// copies of the two rules, on macOS and Windows IPv6's two halves (urTunExitsIpv6Halves). Under auto it goes to the
+// destination as IPv4's does, and under none the bridge rejects it with the rest. No exit carries IPv6 (§17.4), so
+// under the egress mode exits the bridge answers what reaches it through its rejects, a TCP reset or an ICMPv6
+// administratively prohibited written back into the device within the source's bucket, past which a packet is
+// dropped, and counts it (owner decision 482, QD-970): a dual-stack host's IPv6 goes nowhere rather than past the
+// exits, and its connections hear at once and fall back to IPv4 rather than waiting out a connect timeout; the
+// daemon's own IPv6 sockets keep today's route by their mark or binding, as its IPv4 ones do. Where the host routes no
+// IPv6 off itself and the platform will not take IPv6's half,
 // IPv4's stands alone, since no IPv6 leaves to begin with; where the host does route IPv6, a refusal of IPv6's half
 // holds the exits as any other does. The carve's IPv6 addresses go back to the host's own route as IPv4's do (owner
 // decision 480, QD-971): each one the host reaches only by its IPv6 default route, an off-link IPv6 resolver above all,
@@ -101,8 +108,8 @@ var (
 	errUrTunClosed = errors.New("ur tun is down")
 	// A read dropped segments its batch had no room for; the read goes on.
 	errUrTunSegmentsDropped = errors.New("segments dropped")
-	// The default route stays off the tun under exits, for the reason it wraps; the sync tries again.
-	errUrTunExitsHeld = errors.New("the exits are held off ur tun")
+	// The default route stays off the tun where the plan takes it, for the reason it wraps; the sync tries again.
+	errUrTunExitsHeld = errors.New("the default route is held off ur tun")
 )
 
 // A privilege the daemon lacks, in its platform's words: errors.Is finds errUrTunPrivilege, so the start ends as it
@@ -199,6 +206,11 @@ type urTunSettings struct {
 	// advises, and how many times it is asked again with the size it answers, for adapters that come between asks: 3.
 	AdapterBufferByteCount  int
 	AdapterReadAttemptCount int
+	// A network's choices for the host's default traffic until the person makes one (tun_default.go; QD-1052): default
+	// egress on, so a host with a destination keeps sending its default traffic there, and route local traffic on, as
+	// the sdk's DefaultRouteLocal is, so a host with none keeps its own default routes.
+	DefaultEgress     bool
+	DefaultRouteLocal bool
 }
 
 // The defaults, a fresh value each call.
@@ -226,6 +238,8 @@ func defaultUrTunSettings() *urTunSettings {
 		ZoneLabelMaxByteCount:   63,
 		AdapterBufferByteCount:  15 * 1024,
 		AdapterReadAttemptCount: 3,
+		DefaultEgress:           true,
+		DefaultRouteLocal:       true,
 	}
 }
 
@@ -252,10 +266,10 @@ type urTunInterface interface {
 	// Points the zones' names at resolver for this device's link: "" when the host's resolver took it, else the step a
 	// person takes. No zones reverts what it set.
 	SetResolver(resolver netip.Addr, zones []string) (string, error)
-	// Puts the default route on the device, for the egress mode exits, in a routing table of its own with the rules that
-	// keep this daemon's own sockets off it, those sockets marked first, IPv6's beside IPv4's (QD-881); or, not exits,
-	// takes the routes, the rules and the mark off. Answers whether the default route rides the device after the call,
-	// and why it does not where exits asked for it.
+	// Puts the host's default routes on the device, where the tun's plan takes them (tun_default.go; QD-1052), with what
+	// keeps this daemon's own sockets off them, those sockets marked or bound first, IPv6's beside IPv4's (QD-881); or,
+	// where it does not, takes the routes, the rules and the mark off. Answers whether the default route rides the
+	// device after the call, and why it does not where the plan asked for it.
 	SetExits(exits bool) (bool, error)
 	// Takes the default route off, reverts the resolver, removes the routes and addresses it added and closes the
 	// device, which ends a Read.
@@ -332,6 +346,10 @@ type urTunArgs struct {
 	// The network's blocks this device routes to another network, one it joined first that holds the same block
 	// (bridge_shared_block.go), read at each sync: the tun carries nothing inside them. Nil for none.
 	Withheld func() []urSharedBlock
+	// The network's choices for the host's default traffic (tun_default.go), nil for the settings' defaults.
+	Choices *urTunChoices
+	// The connect client's destination under auto, nil for none, which is the daemon's today.
+	Destination urTunDestination
 	// Called once the tun has closed, on whichever path, with why; nil for none.
 	OnClose func(tun *urTun, reason error)
 	// Called after each sync has applied, with its error; nil for none. A test's barrier.
@@ -355,12 +373,20 @@ type urTunStatus struct {
 	Resolver     string   `json:"resolver,omitempty"`
 	Zones        []string `json:"zones,omitempty"`
 	ResolverStep string   `json:"resolver_step,omitempty"`
-	// The state's egress mode; whether the default route rides the tun, as it does under exits; and whether the exits
-	// are held off it, with why (the file's comment).
+	// The state's egress mode; whether the default route rides the tun, as the plan for default traffic takes it; and
+	// whether the platform holds it off, with why (the file's comment).
 	EgressMode      string `json:"egress_mode"`
 	DefaultRoute    bool   `json:"default_route,omitempty"`
 	ExitsHeld       bool   `json:"exits_held,omitempty"`
 	ExitsHeldReason string `json:"exits_held_reason,omitempty"`
+	// The plan for default traffic (tun_default.go; QD-1052): default egress in force, and as the person chose it;
+	// route local traffic; whether the client has an egress destination; and what the tun does with default traffic,
+	// egress, local, refused or off.
+	DefaultEgress       bool   `json:"default_egress"`
+	DefaultEgressChosen bool   `json:"default_egress_chosen"`
+	RouteLocal          bool   `json:"route_local"`
+	Destination         bool   `json:"destination,omitempty"`
+	DefaultTraffic      string `json:"default_traffic,omitempty"`
 	// What the bridge waits on, by kind.
 	Waits []string `json:"waits,omitempty"`
 	// The network's blocks this device routes to a network it joined first (§17.4), which the tun leaves off, and the
@@ -417,10 +443,17 @@ type urTun struct {
 	// wakes sync, and the local read; one pending wake each
 	syncWake  chan struct{}
 	localWake chan struct{}
-	// removes the bridge's change callback
-	removeChange func()
+	// removes the bridge's change callback, and the destination's
+	removeChange            func()
+	removeDestinationChange func()
 	// sendRun as a value, made once so a burst allocates no closure
 	send func(client connect.UserNatClient, packets [][]byte)
+	// the connect client's destination under auto, nil for none, and the client a nil route's run goes to while the
+	// plan sends default traffic there, nil while it does not
+	destination       urTunDestination
+	destinationClient atomic.Pointer[urTunDestinationClient]
+	// serializes the syncs, the sync loop's and a change of the choices', so the last to run applies the newest plan
+	syncLock sync.Mutex
 
 	// serializes writes into the device, and owns the buffer each is copied into
 	writeLock   sync.Mutex
@@ -451,6 +484,9 @@ type urTun struct {
 	exitsHeld          bool
 	exitsHeldReason    string
 	syncErr            error
+	// the network's choices, and the plan the last sync applied
+	choices urTunChoices
+	plan    urTunDefaultPlan
 	// the bridge's own resolver addresses, which the local addresses leave out
 	ownResolvers []netip.Addr
 	// what the local read last handed the bridge; nil before the first
@@ -514,6 +550,11 @@ func startUrTun(ctx context.Context, args *urTunArgs) (*urTun, error) {
 		writeBufs:  make([][]byte, 1),
 		// before the read loop hands the bridge a packet
 		ipv6RejectedBase: args.Bridge.Status().Ipv6RejectedCount,
+		destination:      args.Destination,
+		choices:          urTunDefaultChoices(settings),
+	}
+	if args.Choices != nil {
+		self.choices = *args.Choices
 	}
 	if self.log == nil {
 		self.log = sidecar.NewNoopLogger()
@@ -529,6 +570,10 @@ func startUrTun(ctx context.Context, args *urTunArgs) (*urTun, error) {
 	self.bridge.SetReceivePacket(self.write)
 	self.links.setReceive(self.write)
 	self.removeChange = self.bridge.AddChangeCallback(self.wantSync)
+	// a destination that appears or goes plans default traffic again
+	if self.destination != nil {
+		self.removeDestinationChange = self.destination.AddChangeCallback(self.wantSync)
+	}
 	go self.runRead()
 	go self.runSync()
 	go self.runLocal()
@@ -630,15 +675,21 @@ func urTunInsideAny(prefixes []netip.Prefix, address netip.Addr) bool {
 }
 
 // Sends one run of a burst on the route the bridge gave it. Takes every packet: a route takes those it accepts, and a
-// packet it refuses, as a building link does, is returned to the pool and counted. A nil route is the default, which
-// the tun does not carry: each packet is dropped and counted.
+// packet it refuses, as a building link does, is returned to the pool and counted. A nil route is today's: under auto,
+// while the plan sends default traffic to the connect client's destination, the destination takes the run as a route
+// does; else the tun cannot hand a packet back to the host's own route, and each is dropped and counted, which is how
+// the tun refuses default traffic under auto with no destination and route local traffic off.
 func (self *urTun) sendRun(client connect.UserNatClient, packets [][]byte) {
 	if client == nil {
-		for _, packet := range packets {
-			connect.MessagePoolReturn(packet)
+		destination := self.destinationClient.Load()
+		if destination == nil {
+			for _, packet := range packets {
+				connect.MessagePoolReturn(packet)
+			}
+			self.defaultCount.Add(uint64(len(packets)))
+			return
 		}
-		self.defaultCount.Add(uint64(len(packets)))
-		return
+		client = destination.client
 	}
 	source := self.links.sourcePath()
 	if batchClient, ok := client.(connect.UserNatBatchClient); ok {
@@ -717,11 +768,17 @@ func (self *urTun) runSync() {
 	}
 }
 
-// Sets the device to what the bridge has in force now: its addresses, its routes, the default route under exits and the
-// zones' resolver, less everything inside a block another network routes on this device (§17.4). Every step runs even
-// when one fails. The first error is the sync's, joined by why the exits are held, which the sync tries again too and
-// the status names apart.
+// Sets the device to what the bridge has in force now: its addresses, its routes, the default route where the plan for
+// default traffic takes it (tun_default.go) and the zones' resolver, less everything inside a block another network
+// routes on this device (§17.4). Every step runs even when one fails. The first error is the sync's, joined by why the
+// default route is held, which the sync tries again too and the status names apart. One sync runs at a time.
 func (self *urTun) sync() error {
+	self.syncLock.Lock()
+	defer self.syncLock.Unlock()
+	// a close takes this lock to close the device, so no sync puts anything on after it
+	if self.ctx.Err() != nil {
+		return errUrTunClosed
+	}
 	var withheld []urSharedBlock
 	if self.withheldOf != nil {
 		withheld = self.withheldOf()
@@ -789,9 +846,28 @@ func (self *urTun) sync() error {
 	keep(self.iface.SetAddresses(addresses))
 	conflictCount, err := self.iface.SetRoutes(routes)
 	keep(err)
-	exits := status.EgressMode == bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS
-	defaultRoute, exitsErr := self.iface.SetExits(exits)
-	if !exits {
+	// the plan for default traffic, from the network's choices and the destination as they are now
+	choices := func() urTunChoices {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.choices
+	}()
+	var destination connect.UserNatClient
+	if self.destination != nil {
+		destination = self.destination.Client()
+	}
+	plan := urTunPlanDefault(status, destination != nil, choices)
+	// under auto the destination takes what the bridge leaves to today's route, set before the default route goes on
+	// and cleared before it comes off, so no packet the plan does not send there reaches it
+	toDestination := plan.Traffic == urTunDefaultTrafficEgress &&
+		status.EgressMode != bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS && destination != nil
+	if toDestination {
+		self.destinationClient.Store(&urTunDestinationClient{client: destination})
+	} else {
+		self.destinationClient.Store(nil)
+	}
+	defaultRoute, exitsErr := self.iface.SetExits(plan.Take)
+	if !plan.Take {
 		// a default route that did not come off is the sync's to retry, not a hold
 		keep(exitsErr)
 		exitsErr = nil
@@ -838,8 +914,9 @@ func (self *urTun) sync() error {
 			self.resolver, self.zones, self.resolverStep = resolver, zones, step
 		}
 		self.defaultRoute = defaultRoute
-		self.exitsHeld = exits && !defaultRoute
+		self.exitsHeld = plan.Take && !defaultRoute
 		self.exitsHeldReason = exitsHeldReason
+		self.plan = plan
 		self.ownResolvers = ownResolvers
 		self.syncErr = syncErr
 	}()
@@ -984,6 +1061,11 @@ func (self *urTun) status() *urTunStatus {
 	status.DefaultRoute = self.defaultRoute
 	status.ExitsHeld = self.exitsHeld
 	status.ExitsHeldReason = self.exitsHeldReason
+	status.DefaultEgress = self.plan.DefaultEgress
+	status.DefaultEgressChosen = self.choices.DefaultEgress
+	status.RouteLocal = self.choices.RouteLocal
+	status.Destination = self.plan.Destination
+	status.DefaultTraffic = self.plan.Traffic
 	status.LocalAddressCount = -1
 	if self.localKnown {
 		status.LocalAddressCount = len(self.localAddrs)
@@ -992,6 +1074,28 @@ func (self *urTun) status() *urTunStatus {
 		status.SyncError = self.syncErr.Error()
 	}
 	return status
+}
+
+// Takes the network's choices for the host's default traffic, as ur tun set them, and syncs at once, so the default
+// route goes on or comes off before the answer, with no restart of the tun (QD-1052). Answers what the tun carries
+// after that sync, whose failure the status names, as the sync loop's own would, and which the loop tries again.
+func (self *urTun) setChoices(choices urTunChoices) *urTunStatus {
+	changed := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if self.choices == choices {
+			return false
+		}
+		self.choices = choices
+		return true
+	}()
+	if changed && self.ctx.Err() == nil {
+		if err := self.sync(); err != nil {
+			// the loop tries it again, as it does a sync of its own that failed
+			self.wantSync()
+		}
+	}
+	return self.status()
 }
 
 // The egress mode as ur tun prints it.
@@ -1021,6 +1125,9 @@ func (self *urTun) closeAt(reason error, started bool) {
 		if self.removeChange != nil {
 			self.removeChange()
 		}
+		if self.removeDestinationChange != nil {
+			self.removeDestinationChange()
+		}
 		if started {
 			self.bridge.SetReceivePacket(nil)
 			self.links.setReceive(nil)
@@ -1043,9 +1150,15 @@ func (self *urTun) closeAt(reason error, started bool) {
 			defer self.writeLock.Unlock()
 			self.writeClosed = true
 		}()
-		if err := self.iface.Close(); err != nil {
-			self.log.Warningf("[tun]%s the device did not close cleanly: %v", self.networkId, err)
-		}
+		// after a sync a change of the choices runs, which then finds the context ended and puts nothing on
+		func() {
+			self.syncLock.Lock()
+			defer self.syncLock.Unlock()
+			if err := self.iface.Close(); err != nil {
+				self.log.Warningf("[tun]%s the device did not close cleanly: %v", self.networkId, err)
+			}
+		}()
+		self.destinationClient.Store(nil)
 		if started && !wait(self.readDone) {
 			self.log.Warningf("[tun]%s the read did not stop within %s", self.networkId, self.settings.CloseTimeout)
 		}
