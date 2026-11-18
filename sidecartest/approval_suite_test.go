@@ -1,16 +1,19 @@
 // §22.7's decisions row through the real gate on an approval world (MCP-M3-24; §16.6's spend check, D-MCP-12, AD1,
 // AD3): a decision is spent only by its requester, a second daemon presenting the first's unspent decision refused; a
-// decision whose auth_pin digest differs from the one the spender retains at that version is refused; and at k = 2 one
-// approver's decision does not spend, a non-eligible signer's adds nothing, and two eligible approvers' spend. Each
-// refusal beside the twin that must succeed. An approver revoked after signing is FS-29's (fault/fs29.go), and a
-// replayed GrantActivate is ACL-M4-02's grant component, which has not landed.
+// decision whose auth_pin digest differs from the one the spender retains at that version is refused; at k = 2 one
+// approver's decision does not spend, a non-eligible signer's adds nothing, and two eligible approvers' spend; and an
+// admin's decision that only meets §8.6's admin clause is never one of the k (owner decision 471). Each refusal beside
+// the twin that must succeed. An approver revoked after signing is FS-29's (fault/fs29.go), and a replayed
+// GrantActivate is ACL-M4-02's grant component, which has not landed.
 
 package sidecartest
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
+	"slices"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -160,6 +163,70 @@ func TestTwoApproversNeeded(t *testing.T) {
 	}
 	if err := world.CheckEffects(false); err != nil {
 		t.Error(err)
+	}
+}
+
+// §8.6's admin clause at the requesting daemon's gate (owner decision 471, QD-972): under a rule naming the member
+// alone, k = 1, with a clause the other member meets as an admin, the request names both, the clause needing an admin
+// the member is not. The admin's decision alone does not spend, since the rule does not name it, nor does the
+// member's alone, which leaves the clause unmet; whichever came first, the other's then makes the set, which spends
+// once. Each order on a world of its own.
+func TestAdminClauseDecisionIsNoneOfTheK(t *testing.T) {
+	for _, adminFirst := range []bool{true, false} {
+		func() {
+			net := NewNet(t.Context(), nil)
+			defer net.Close()
+			world, err := NewApprovalWorld(net, "daemon")
+			if err != nil {
+				t.Fatal(err)
+			}
+			world.SetAdminClause(world.Other.MemberId)
+			action, err := world.MailAction("someone@recipient.example")
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx := t.Context()
+			pending := &sidecar.ApprovalPendingError{}
+			if err := world.Authorize(ctx, world.Action(action)); !errors.As(err, &pending) {
+				t.Fatalf("admin first %t: the first call: %v", adminFirst, err)
+			}
+			wantApprovers := [][]byte{world.Member.Bytes(), world.Other.MemberId.Bytes()}
+			slices.SortFunc(wantApprovers, bytes.Compare)
+			if approvers := world.Log().Request(pending.ApprovalId).Request.GetApprovers(); !slices.EqualFunc(approvers, wantApprovers, bytes.Equal) {
+				t.Errorf("admin first %t: the request names %x", adminFirst, approvers)
+			}
+			notAfter := net.Clock().Now().Add(sidecar.DefaultSidecarSettings().Mcp.ApprovalRequestTimeout)
+			first, second := world.Other, world.Phone
+			if !adminFirst {
+				first, second = world.Phone, world.Other
+			}
+			firstDecision, err := world.SignDecision(pending.ApprovalId, 1, notAfter, first, world.State().Pin())
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = world.Gate().Authorize(ctx, world.Action(action), approvalSuiteSigned(t, firstDecision))
+			if sidecar.SpendRefusalCodeOf(err) != sidecar.SpendRefusalQuorum {
+				t.Fatalf("admin first %t: one decision alone: %v", adminFirst, err)
+			}
+			if world.Sink(sidecar.SidecarActionMail).EffectCount() != 0 {
+				t.Fatalf("admin first %t: an incomplete set ran an effect", adminFirst)
+			}
+			// twin: the other decision makes the set
+			secondDecision, err := world.SignDecision(pending.ApprovalId, 1, notAfter, second, world.State().Pin())
+			if err != nil {
+				t.Fatal(err)
+			}
+			presented := world.Action(action)
+			if err := world.Gate().Authorize(ctx, presented, approvalSuiteSigned(t, secondDecision)); err != nil || presented.Outcome.State != sidecar.ApprovalOutcomeDone {
+				t.Fatalf("admin first %t: the two: %v %+v", adminFirst, err, presented.Outcome)
+			}
+			if world.Sink(sidecar.SidecarActionMail).EffectCount() != 1 {
+				t.Errorf("admin first %t: %d effects", adminFirst, world.Sink(sidecar.SidecarActionMail).EffectCount())
+			}
+			if err := world.CheckEffects(false); err != nil {
+				t.Error(err)
+			}
+		}()
 	}
 }
 

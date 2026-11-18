@@ -33,7 +33,7 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 
 ## Index
 
-95 entries, grouped by the DESIGN.md section that owns the deferred thing. "Described in" lists the subsections of DESIGN.md that point at the entry.
+96 entries, grouped by the DESIGN.md section that owns the deferred thing. "Described in" lists the subsections of DESIGN.md that point at the entry.
 
 | Section | Entry | Stage | Described in |
 |---|---|---|---|
@@ -62,7 +62,8 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 |  | [Edge-delegated ticket keys](#sock-edge-delegated-ticket-keys) | Later | §9.11, §9.17 |
 |  | [Registration over push](#sock-registration-over-push) | Later | §9.17 |
 |  | [§9's v1 set](#sock-v1) | v1 (M6) | §9.17 |
-| [§10 Group keys for evs: MLS and the GKM service](#s10) | [Suite 0x0020 with hybrid authority signatures](#keys-suite-0x0020-hybrid-signatures) | Later | §10.16 |
+| [§10 Group keys for evs: MLS and the GKM service](#s10) | [MLS](#keys-mls) | Later | §10.4, §10.9, §10.12, §10.16, §23.4 |
+|  | [Suite 0x0020 with hybrid authority signatures](#keys-suite-0x0020-hybrid-signatures) | Later | §10.16 |
 |  | [SafeExportSecret](#keys-safe-export-secret) | Later | §10.16 |
 |  | [Gen packs](#keys-gen-packs) | Later, at §19.9's gen trigger | §10.16, §19.18, §23.4 |
 |  | [§10's v1 set](#keys-v1) | v1 (M6, M10) | §10.16 |
@@ -180,7 +181,7 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 
 *Later, unless the owner reinstates it. DESIGN.md: §2.19, §10.12.*
 
-- **Deferred.** An independent review or audit of the cryptography: the in-house MLS subset whose audit owner decision 43 planned, the key ladder, the storage format and path tokens, and the zero-knowledge mail proofs (owner decisions 99 and 119; Q-TEST-3, Q-TRUST-8, Q-KEYS-1).
+- **Deferred.** An independent review or audit of the cryptography: the in-house MLS subset whose audit owner decision 43 planned, which is Later with MLS itself (owner decision 610), the key ladder, the storage format and path tokens, and the zero-knowledge mail proofs (owner decisions 99 and 119; Q-TEST-3, Q-TRUST-8, Q-KEYS-1).
 - **Why.** The owner's words (owner decision 99): "No review at the moment, just get it working."
 - **Launch instead.** The mlswg vectors and differential tests (owner decision 43), fuzzing (owner decision 101), and the outbound-mail gate as owner decision 99 restates it: sound by design analysis, working, fast enough and interop-tested. Product copy may say "end-to-end encrypted" with §2.18's unaudited-cryptography disclosure on the security page, no audit gating it (owner decision 119).
 - **Lost.** Independent assurance. §2.18's risk row rates unaudited novel cryptography Medium likelihood and Critical impact, and the security page discloses it.
@@ -248,11 +249,11 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 
 *v1 (M6, M7, M10). DESIGN.md: §4.18.*
 
-- **Deferred.** §4.18's v1 row: connect change C18 at M6; C20 at M7 (owner decision 269); C19's window accounting at M10 (owner decisions 176, 188); Homebrew and winget packages.
+- **Deferred.** §4.18's v1 row: connect change C18 at M6; C20 at M7 (owner decision 269); Homebrew and winget packages. C19's window accounting, once at M10, is withdrawn (owner decision 609).
 - **Why.** Each belongs to a v1 milestone: cross-network shares and Team at M6, strict-mode mail at M7, storage format 2 and search at M10 (owner decisions 55, 163, 169).
 - **Launch instead.** v0 uses the connect changes of M1-M5 (§4.6) and ships `ur` through `install.sh` and direct packages.
 - **Lost.** Until those milestones: cross-network shares, `strict_chain`, and remote search's accounting.
-- **Dark in code.** Built in the same run on the `sidecar` branches. C19 blocks M10's Gn-out and C20 blocks M7's `strict_chain` (§4.18's Blocking row).
+- **Dark in code.** Built in the same run on the `sidecar` branches. C20 blocks M7's `strict_chain` (§4.18's Blocking row).
 - **Held.** Nothing.
 - **To bring back.** Nothing to bring back: each ships when its milestone's gate passes (§23.6).
 
@@ -332,7 +333,7 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 
 *v1 (M6, M10). DESIGN.md: §6.18.*
 
-- **Deferred.** §6.18's v1 rows. At M6: FriendsAndFamily shares with C18, and same-network P2P built behind its switch. At M10 (owner decision 169): the SEARCH pair, Hello's feature bits 0 and 1, the control class's acceptance of SEARCH, and C19's window accounting with the app hosts' keepalive (owner decisions 176, 188).
+- **Deferred.** §6.18's v1 rows. At M6: FriendsAndFamily shares with C18, and same-network P2P built behind its switch. At M10 (owner decision 169): the SEARCH pair, Hello's feature bits 0 and 1, and the control class's acceptance of SEARCH, the pair's contracts accounted like any peer's (owner decision 609, which withdrew C19's window accounting and the app hosts' keepalive).
 - **Why.** Shares belong to M6 and remote search to M10 (owner decisions 86, 163, 169, 175).
 - **Launch instead.** v0's wire is M1's and M2's, with M4's seals and control contracts and M5's streams; it freezes at M2, and M10's bytes are additive to it.
 - **Lost.** Until M6 and M10: cross-network shares and remote search.
@@ -482,6 +483,19 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 <a id="s10"></a>
 ## §10 Group keys for evs: MLS and the GKM service
 
+<a id="keys-mls"></a>
+### MLS
+
+*Later. DESIGN.md: §10.4, §10.9, §10.12, §10.16, §23.4.*
+
+- **Deferred.** MLS as v0's key distributor: §10.4's RFC 9420 subset on ciphersuite 0x0010, one group per repo with member devices as leaves, PrivateMessage commits, KeyPackages and Welcomes, external commits, epochs and their KEK_e, GenWrap and LeafWrap, sealed GroupInfo, acks, resync and the config and directory groups' leaves rule (owner decisions 1, 43, 44, 60, 113, 128, 144, 182, 361, 363 and 366; D-KEYS-1, -2, -3, -12, -14, -18 and -23; Q-KEYS-9; ledger ids QD-002, QD-074, QD-442, QD-464, QD-526, QD-616 to QD-618, QD-638, QD-641, QD-659, QD-747, QD-956 and QD-1040; DESIGN-DETAILS.md section 6's MLS rules, which wait with it: the roster rule with its committer and member clauses, its D-KEYS-27 row, KF2's and KF5's commits, the dropped-leaf and waiting-leaf hints, D-KEYS-24's Welcome pointer clause, §10.6's note on the claim key, and the commit legs of FS-15, FS-24, FS-97 and FS-104).
+- **Why.** The complexity review of 2026-11-17 counted about 42.5k MLS-only lines, 15.9k of them production, about 23 decisions, 98 KB of DESIGN-DETAILS.md section 6, about 14 of KEYS' 36 tasks and 27-63 MB of heap at 1,000 leaves; and MLS kept an agent's repo keyless until a member device formed its group, and made recovery above 16 leaves wait for a leaf online. Wraps had grown into a full distributor already, serving agents, member devices past the first 1,000, Delegations and recovery codes. The owner chose wraps only (owner decision 610).
+- **Launch instead.** Every group key RK_g goes by §10.5's `KeyDelivery` wraps: a join is a LATE delivery, a removal the REMOVE rotation, a resync fetches deliveries; gkm keeps no epochs, Welcomes, KeyPackages, GroupInfo or acks, so `gkm:<group_id>` is versioned by generation alone, and the format's epoch fields, GenRotate's `leaf_wrap` among them, stay unset.
+- **Lost.** TreeKEM's post-compromise healing of the key-encryption keys: a copied keychain heals by §10.5's bounds, a reader at its ReaderKey's not_after plus the next generation, where a leaf healed in about 37 days (60 above 50 leaves). Each rotation costs about 1.37 KB a holder, about 1.37 MB and 1,000 objects at 1,000 holders, against one 72 B leaf wrap a leaf.
+- **Dark in code.** The root's `mls_*` files, mlsinterop/, gkm's MLS files, gkmservice's epochs, groupinfo, keypackages, welcomes, acks and reform, and sidecartest's fake_mls, mlssuite and bench_groups stay on the branch, dark, for Later, with owner decision 99's deferred audit; the review phase reworks key formation (KF1 to KF7) onto deliveries and removes gkm's MLS routes and state or leaves them dark.
+- **Held.** The MLS interop freeze (KEYS-M2-11's 0x0010), fuzzing of the `mls_*` decoders, and the MLS legs of FS-15, FS-20, FS-24, FS-97 and FS-104 leave the gates; QD-641's MLS engine rewrite is dropped; the core lane's gkm-guard-right-set is re-briefed to the routes wraps-only keeps.
+- **To bring back.** An owner decision that reverses owner decision 610. Then: freeze the MLS wire and suite 0x0010 on §22.10's interop artifact; return KF1-KF7's MLS steps, §7.9's leaves rule and DESIGN-DETAILS.md section 6's MLS rules; restore the interop, fuzzing and FS legs to their gates; and move existing groups onto MLS by a GroupForm under the ladder, which the generations carry unchanged.
+
 <a id="keys-suite-0x0020-hybrid-signatures"></a>
 ### Suite 0x0020 with hybrid authority signatures
 
@@ -528,7 +542,7 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 
 - **Deferred.** §10.16's v1 row: the Team audit reader (owner decision 63); with Team at M6, the config group's wraps for member devices past the first 1,000 (owner decision 144) and the team directory's group (owner decision 182); at M10 (owner decision 169), the `index` purpose with the search index (owner decision 163) and format 2's one slot key per versionless path.
 - **Why.** Team ships at M6 and format 2 at M10.
-- **Launch instead.** v0's key management at M2: all of §10.4 to §10.9 but these, with `directory` already among `ur_group`'s kinds.
+- **Launch instead.** v0's key management at M2: all of §10.4 to §10.9 but these and MLS, every group key going by wraps (owner decision 610), with `directory` already among `ur_group`'s kinds.
 - **Lost.** Until M6: the audit reader and large teams' wraps. Until M10: index keys and slot keys.
 - **Dark in code.** Built in the same run on the `sidecar` branches.
 - **Held.** Nothing.
@@ -1193,7 +1207,7 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 - **Lost.** A browser tab or a short-lived CLI host pays the index download before it can search.
 - **Dark in code.** Nothing is built. The requester methods exist for app hosts only (§5.4).
 - **Held.** Nothing: no task or track waits on it.
-- **To bring back.** C4 for browsers, then the requester's Hello, keepalive and policy on those hosts.
+- **To bring back.** C4 for browsers, then the requester's Hello and policy on those hosts, with no keepalive (owner decision 609).
 
 <a id="sdk-v1"></a>
 ### §18's v1 set
