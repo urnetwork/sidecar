@@ -49,6 +49,9 @@ type DaemonApprovalsAppItem struct {
 	Kind string `json:"kind,omitempty"`
 	// A multi-use template.
 	Template bool `json:"template,omitempty"`
+	// How many distinct actions the request asks the approval to cover, which an approval signs as shown (QD-1010): 1
+	// for any action but a template; 0, left out, for a request shown refused or a template whose request names none.
+	Uses uint32 `json:"uses,omitempty"`
 	// The render's printable text: the daemon-built fields, the agent's words under their untrusted heading.
 	Text string `json:"text,omitempty"`
 	// Why this device shows it refused; empty for none.
@@ -115,6 +118,7 @@ func DaemonApprovalsAppMethods() []*DaemonMethod {
 						replyItem.SidecarId = &requesterId
 						replyItem.Kind = item.Render.KindName
 						replyItem.Template = item.Render.Template
+						replyItem.Uses = item.Render.Uses
 						replyItem.Text = item.Render.Text()
 					}
 					reply.Items = append(reply.Items, replyItem)
