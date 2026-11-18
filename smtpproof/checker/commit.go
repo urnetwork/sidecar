@@ -4,7 +4,9 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"math/big"
+	"sync"
 )
 
 // The key commitment of DESIGN-DETAILS 3.2.2, read from that text alone and computed in math/big: the
@@ -116,6 +118,53 @@ func commitGenerator(tag string, index uint32) *commitPoint {
 	}
 }
 
+// A generator's multiples by each power of two below l, so that a scalar's multiple is the sum of the
+// entries its set bits name: the same point times would reach, found once a generator.
+type commitTable struct {
+	generator *commitPoint
+	doublings []*commitPoint
+}
+
+// The generators' tables by tag and index. Every commitment reads the same few, and finding one hashes,
+// takes a square root and clears the cofactor.
+var commitTables = struct {
+	stateLock sync.Mutex
+	tables    map[string]*commitTable
+}{tables: map[string]*commitTable{}}
+
+// generator(tag, index)'s table.
+func commitGeneratorTable(tag string, index uint32) *commitTable {
+	key := fmt.Sprintf("%s\x00%d", tag, index)
+	commitTables.stateLock.Lock()
+	defer commitTables.stateLock.Unlock()
+	if table, ok := commitTables.tables[key]; ok {
+		return table
+	}
+	table := &commitTable{generator: commitGenerator(tag, index)}
+	point := table.generator
+	for range commitInteger(commitOrderDecimal).BitLen() {
+		table.doublings = append(table.doublings, point)
+		point = point.add(point)
+	}
+	commitTables.tables[key] = table
+	return table
+}
+
+// scalar times the generator, by its table; a scalar past the table's bits, which no opening below l
+// has, by doubling and adding.
+func (self *commitTable) times(scalar *big.Int) *commitPoint {
+	if len(self.doublings) < scalar.BitLen() {
+		return self.generator.times(scalar)
+	}
+	result := commitIdentity()
+	for i := range scalar.BitLen() {
+		if scalar.Bit(i) == 1 {
+			result = result.add(self.doublings[i])
+		}
+	}
+	return result
+}
+
 // C over a session's keys and IVs, each IV of 12 octets (a 1.2 salt then 8 zero octets).
 func keyCommitment(clientKey []byte, clientIv []byte, serverKey []byte, serverIv []byte, blind *big.Int) *commitPoint {
 	pad := func(iv []byte) []byte {
@@ -137,9 +186,9 @@ func keyCommitment(clientKey []byte, clientIv []byte, serverKey []byte, serverIv
 		for i := run * commitRunBits; i < min((run+1)*commitRunBits, len(bits)); i += 1 {
 			value.SetBit(value, i-run*commitRunBits, bits[i])
 		}
-		sum = sum.add(commitGenerator("key", uint32(run)).times(value))
+		sum = sum.add(commitGeneratorTable("key", uint32(run)).times(value))
 	}
-	return sum.add(commitGenerator("key blind", 0).times(blind))
+	return sum.add(commitGeneratorTable("key blind", 0).times(blind))
 }
 
 // C as the wire carries it, checked as the gate checks it: 64 octets, each coordinate below r, on the
@@ -156,8 +205,10 @@ func parseKeyCommitment(encoded []byte) (*commitPoint, error) {
 	return point, nil
 }
 
-// Z1's opening: the keys and the blind give C. A blind not below l is no blind.
-func checkKeyCommitment(witness *PartWitness, encoded []byte) error {
+// Z1's opening: the keys and the blind give C. A blind not below l is no blind, and keys or IVs of
+// other widths than the session's suite and version give no opening: C holds 448 bits under AES-128-GCM
+// and 704 under ChaCha20 (DESIGN-DETAILS 3.2.2), whatever another width's runs would sum to.
+func checkKeyCommitment(version uint16, suite uint16, witness *PartWitness, encoded []byte) error {
 	want, err := parseKeyCommitment(encoded)
 	if err != nil {
 		return err
@@ -166,8 +217,9 @@ func checkKeyCommitment(witness *PartWitness, encoded []byte) error {
 	if commitInteger(commitOrderDecimal).Cmp(blind) <= 0 {
 		return errors.New("the blind is not below l")
 	}
-	if len(witness.ClientKey) == 0 || len(witness.ClientKey) != len(witness.ServerKey) || 12 < len(witness.ClientIv) || 12 < len(witness.ServerIv) {
-		return errors.New("the witness holds no keys of one length")
+	keyBytes, ivBytes := keyBytesOf(suite), ivBytesOf(version)
+	if len(witness.ClientKey) != keyBytes || len(witness.ServerKey) != keyBytes || len(witness.ClientIv) != ivBytes || len(witness.ServerIv) != ivBytes {
+		return errors.New("the witness holds keys or IVs of other widths than the session's")
 	}
 	if !keyCommitment(witness.ClientKey, witness.ClientIv, witness.ServerKey, witness.ServerIv, blind).equal(want) {
 		return errors.New("the keys and blind do not open C")
@@ -184,7 +236,7 @@ func parseCommitment(encoded []byte) (*commitPoint, error) {
 // A carry over a scan's 24-bit state (DESIGN-DETAILS 3.2.2): S = state T + sigma U, with T the generator
 // tagged "scan" and U "scan blind", the state one run of 24 bits.
 func carryCommitment(state uint32, blind *big.Int) *commitPoint {
-	return commitGenerator("scan", 0).times(new(big.Int).SetUint64(uint64(state))).add(commitGenerator("scan blind", 0).times(blind))
+	return commitGeneratorTable("scan", 0).times(new(big.Int).SetUint64(uint64(state))).add(commitGeneratorTable("scan blind", 0).times(blind))
 }
 
 // The carry the edge holds where a scan starts: the start state, pos 2 alone, under a zero blind.

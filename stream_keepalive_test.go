@@ -2,8 +2,10 @@
 
 // §22.5's PEER_TIMEOUT row on a fake clock (PROTO-M5-02): a peer silent past PingTimeout gets a Ping, and
 // past PeerSilenceTimeout every stream with it resets PEER_TIMEOUT, while a peer whose Pong comes back
-// keeps its streams; a peer the state revokes while streams run has them reset REVOKED. Each step moves
-// the clock to the time the keepalive has armed its wait for, so nothing rests on a sleep.
+// keeps its streams; a peer the state revokes while streams run has them reset REVOKED, by whichever
+// side's keepalive wakes first, since the revoked side reads its own revocation too. Each step moves a
+// clock to the time a keepalive has armed its wait for, so nothing rests on a sleep, and each side runs
+// on a clock of its own, so a test orders two keepalives' wakes by which clock it moves.
 
 package sidecar
 
@@ -85,6 +87,9 @@ func TestStreamPeerTimeoutResets(t *testing.T) {
 	if 60*time.Second <= a.settings.PeerSilenceTimeout {
 		t.Errorf("the silence bound %v is not before connect's 60 s exit", a.settings.PeerSilenceTimeout)
 	}
+	// a reader sees its reset before the keepalive takes the stream out of the table, so the table is read
+	// once the wake that reset them has armed its next wait: none, with no stream left
+	testAwaitStreamKeepaliveArmed(t, a, time.Time{})
 	testStreamsSettled(t, a)
 }
 
@@ -118,7 +123,11 @@ func TestStreamKeepalivePongKeepsThePeer(t *testing.T) {
 }
 
 // A peer the state revokes while its streams run has them reset REVOKED at the keepalive's next wake, at
-// most PingTimeout on, and one that stays admitted while the state moves keeps them.
+// most PingTimeout on, and one that stays admitted while the state moves keeps them. The revoked side's
+// own keepalive reads the revocation too (§5.6: a sidecar not itself admitted gets no peer), so b's first
+// wait is armed before the state moves: b then adds no stream and sends no Ping, so only its clock, which
+// this test never moves, could wake it, and a's wake is the one that resets. Its twin moves b's clock
+// instead.
 func TestStreamRevokedPeerResets(t *testing.T) {
 	pair, authority, aIdentity, bIdentity := newTestAdmissionPair(t)
 	a := pair.add(aIdentity, nil)
@@ -127,6 +136,7 @@ func TestStreamRevokedPeerResets(t *testing.T) {
 	opened, accepted := testStreamOpen(t, b, a, incomings, nil)
 	start := a.clock.Now()
 	testAwaitStreamKeepaliveArmed(t, a, start.Add(a.settings.PingTimeout))
+	testAwaitStreamKeepaliveArmed(t, b, b.clock.Now().Add(b.settings.PingTimeout))
 	// the state moves without touching b: its streams stand
 	authority.admit(NewId(), make([]byte, 32), nil)
 	a.clock.Advance(a.settings.PingTimeout)
@@ -143,10 +153,55 @@ func TestStreamRevokedPeerResets(t *testing.T) {
 	})
 	a.clock.Advance(a.settings.PingTimeout)
 	var resetErr *StreamResetError
-	if _, err := accepted.Read(make([]byte, 8)); !errors.As(err, &resetErr) || resetErr.Code != protocol.StreamResetCode_RST_REVOKED {
+	if _, err := accepted.Read(make([]byte, 8)); !errors.As(err, &resetErr) || resetErr.Code != protocol.StreamResetCode_RST_REVOKED || !resetErr.Local {
 		t.Errorf("a revoked peer's stream reads %v", err)
 	}
 	if _, err := opened.Read(make([]byte, 8)); !errors.As(err, &resetErr) || resetErr.Code != protocol.StreamResetCode_RST_REVOKED || resetErr.Local {
 		t.Errorf("the revoked peer read %v", err)
 	}
+	testAwaitStreamKeepaliveArmed(t, a, time.Time{})
+	testStreamsSettled(t, a)
+}
+
+// Its twin, in the order load can give: the revoked side's own keepalive reads its revocation first, at
+// its next wake at most PingTimeout on, and resets its streams REVOKED itself, its peer reading that reset
+// from the wire; while the state moves without touching it, that wake keeps them. a's first wait is armed
+// before the state moves, and a then adds no stream and sends no Ping, so only its clock, which this test
+// never moves, could wake it, and b's wake is the one that resets.
+func TestStreamRevokedSideResetsItsOwnStreams(t *testing.T) {
+	pair, authority, aIdentity, bIdentity := newTestAdmissionPair(t)
+	a := pair.add(aIdentity, nil)
+	b := pair.add(bIdentity, nil)
+	incomings := testStreamAccepting(t, a, testStreamTarget)
+	opened, accepted := testStreamOpen(t, b, a, incomings, nil)
+	start := b.clock.Now()
+	testAwaitStreamKeepaliveArmed(t, a, a.clock.Now().Add(a.settings.PingTimeout))
+	testAwaitStreamKeepaliveArmed(t, b, start.Add(b.settings.PingTimeout))
+	// the state moves without touching b: at its wake b reads itself and a still admitted
+	authority.admit(NewId(), make([]byte, 32), nil)
+	b.clock.Advance(b.settings.PingTimeout)
+	testAwaitStreamKeepaliveArmed(t, b, start.Add(2*b.settings.PingTimeout))
+	if _, err := opened.Write([]byte("standing")); err != nil {
+		t.Fatalf("a standing side's stream: %v", err)
+	}
+	if got := testStreamReadFull(t, accepted, 8); string(got) != "standing" {
+		t.Errorf("read %q", got)
+	}
+	revokedAt := authority.Pin().GetVersion() + 1
+	authority.edit(bIdentity.sidecarId, func(row *bridge.SidecarRow) {
+		row.RevokedAt = revokedAt
+	})
+	b.clock.Advance(b.settings.PingTimeout)
+	var resetErr *StreamResetError
+	if _, err := opened.Read(make([]byte, 8)); !errors.As(err, &resetErr) || resetErr.Code != protocol.StreamResetCode_RST_REVOKED || !resetErr.Local {
+		t.Errorf("the revoked side's own stream reads %v", err)
+	}
+	if _, err := accepted.Read(make([]byte, 8)); !errors.As(err, &resetErr) || resetErr.Code != protocol.StreamResetCode_RST_REVOKED || resetErr.Local {
+		t.Errorf("its peer read %v", err)
+	}
+	if stats := b.subprotocol.StreamStats(); stats.LocalResetCount != 1 || stats.PingCount != 1 {
+		t.Errorf("stats %+v", stats)
+	}
+	testAwaitStreamKeepaliveArmed(t, b, time.Time{})
+	testStreamsSettled(t, b)
 }

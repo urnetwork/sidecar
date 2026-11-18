@@ -29,24 +29,28 @@ type testSearchRemoteCall struct {
 type testSearchRemoteTransport struct {
 	requester testConfigDevice
 
-	stateLock  sync.Mutex
-	servers    map[Id]*testSearchRemoteServer
-	dead       map[Id]bool
-	gates      map[Id]chan struct{}
-	dropFirst  map[Id]int
-	calls      []testSearchRemoteCall
-	called     chan struct{}
-	marked     [][]Id
-	markedNow  chan struct{}
-	foreground []bool
-	asks       func(indexerId Id) bool
-	seen       map[Id]time.Time
+	stateLock sync.Mutex
+	servers   map[Id]*testSearchRemoteServer
+	dead      map[Id]bool
+	gates     map[Id]chan struct{}
+	dropFirst map[Id]int
+	calls     []testSearchRemoteCall
+	called    chan struct{}
+	// each SetSearchIndexer's indexer, in order, and a channel closed at the next
+	named    []Id
+	namedNow chan struct{}
+	// each SetForeground's value, in order, and a channel closed at the next
+	foreground    []bool
+	foregroundNow chan struct{}
+	asks          func(indexerId Id) bool
+	seen          map[Id]time.Time
 }
 
 func newTestSearchRemoteTransport(requester testConfigDevice) *testSearchRemoteTransport {
 	return &testSearchRemoteTransport{
 		requester: requester, servers: map[Id]*testSearchRemoteServer{}, dead: map[Id]bool{}, gates: map[Id]chan struct{}{},
-		dropFirst: map[Id]int{}, called: make(chan struct{}), markedNow: make(chan struct{}), seen: map[Id]time.Time{},
+		dropFirst: map[Id]int{}, called: make(chan struct{}), namedNow: make(chan struct{}), foregroundNow: make(chan struct{}),
+		seen: map[Id]time.Time{},
 	}
 }
 
@@ -94,31 +98,57 @@ func (self *testSearchRemoteTransport) SeenSince(indexerId Id, at time.Time) boo
 	return ok && seen.After(at)
 }
 
-func (self *testSearchRemoteTransport) MarkSearchPeers(ctx context.Context, indexerIds []Id) error {
+func (self *testSearchRemoteTransport) SetSearchIndexer(indexerId Id) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	self.marked = append(self.marked, slices.Clone(indexerIds))
-	close(self.markedNow)
-	self.markedNow = make(chan struct{})
-	return nil
+	self.named = append(self.named, indexerId)
+	close(self.namedNow)
+	self.namedNow = make(chan struct{})
 }
 
 // Waits until count namings have been made, woken by each, and answers them.
-func (self *testSearchRemoteTransport) awaitMarked(t *testing.T, count int) [][]Id {
+func (self *testSearchRemoteTransport) awaitNamed(t *testing.T, count int) []Id {
 	t.Helper()
 	for {
-		marked, namings := func() (chan struct{}, [][]Id) {
+		named, namings := func() (chan struct{}, []Id) {
 			self.stateLock.Lock()
 			defer self.stateLock.Unlock()
-			return self.markedNow, slices.Clone(self.marked)
+			return self.namedNow, slices.Clone(self.named)
 		}()
 		if count <= len(namings) {
 			return namings
 		}
 		select {
-		case <-marked:
+		case <-named:
 		case <-t.Context().Done():
 			t.Fatalf("%d namings never came", count)
+		}
+	}
+}
+
+// The namings so far.
+func (self *testSearchRemoteTransport) namings() []Id {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return slices.Clone(self.named)
+}
+
+// Waits until the client has told the transport the foreground count times, woken by each, and answers the values.
+func (self *testSearchRemoteTransport) awaitForegrounds(t *testing.T, count int) []bool {
+	t.Helper()
+	for {
+		told, foregrounds := func() (chan struct{}, []bool) {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			return self.foregroundNow, slices.Clone(self.foreground)
+		}()
+		if count <= len(foregrounds) {
+			return foregrounds
+		}
+		select {
+		case <-told:
+		case <-t.Context().Done():
+			t.Fatalf("the foreground was told %d times of %d", len(foregrounds), count)
 		}
 	}
 }
@@ -127,6 +157,8 @@ func (self *testSearchRemoteTransport) SetForeground(foreground bool) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.foreground = append(self.foreground, foreground)
+	close(self.foregroundNow)
+	self.foregroundNow = make(chan struct{})
 }
 
 func (self *testSearchRemoteTransport) SetAsksSearch(asksSearch func(indexerId Id) bool) error {
@@ -283,10 +315,14 @@ func (self *testSearchRemoteAsker) serve(t *testing.T, indexer testConfigDevice)
 	return server
 }
 
-// Names the warm pairs as the foreground does.
-func (self *testSearchRemoteAsker) warm(t *testing.T) {
+// W for a search over repoIds now: the own indexers it asks at once (search_remote_order.go).
+func (self *testSearchRemoteAsker) ownAsk(t *testing.T, repoIds ...Id) []Id {
 	t.Helper()
-	self.client.nameWarm(t.Context(), self.transport)
+	view, err := self.client.orderView(repoIds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return slices.Clone(view.ownAsk)
 }
 
 // A "search more" over repos, remote on.

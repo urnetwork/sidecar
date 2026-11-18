@@ -328,7 +328,6 @@ rpc_hello.go
 rpc_idempotency.go
 rpc_identity.go
 rpc_inbound.go
-rpc_marked_pair.go
 rpc_peer.go
 rpc_pins.go
 rpc_search_leg.go

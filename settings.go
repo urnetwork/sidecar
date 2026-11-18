@@ -414,12 +414,9 @@ type SidecarSearchSettings struct {
 	// How often a "search more" reports progress at the least, beside a report at each shard: 1 s (§16.10's cold
 	// contract).
 	MoreProgressInterval time.Duration
-	// The own search indexers a remote search asks at once, which are the own pairs the foreground keeps warm: 2
-	// (QD-707, DESIGN-DETAILS 7.2.3).
+	// The own search indexers a remote search asks at once, the first by ownKey: 2 (§11.14's order row; owner decision
+	// 391, QD-707). No pair is kept warm for them (owner decision 609).
 	RemoteOwnAskCount int
-	// Other members' indexers kept warm beside the own ones, in mode on once a notice is answered: 1 (DESIGN-DETAILS
-	// 7.2.3).
-	RemoteOtherWarmCount int
 	// A failed indexer is not asked for this long: 2 min (D-SDK-27, DESIGN-DETAILS 7.2.1).
 	RemoteSkipTimeout time.Duration
 	// How long a HelloResult, Pong or page keeps an indexer online, and the own indexer that answered last first: 10 min
@@ -1066,7 +1063,6 @@ func DefaultSidecarSettings() *SidecarSettings {
 			MoreFirstProgress:               500 * time.Millisecond,
 			MoreProgressInterval:            1 * time.Second,
 			RemoteOwnAskCount:               2,
-			RemoteOtherWarmCount:            1,
 			RemoteSkipTimeout:               2 * time.Minute,
 			RemoteOnlineTimeout:             10 * time.Minute,
 			RemoteRefusedTimeout:            10 * time.Minute,

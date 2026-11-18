@@ -248,8 +248,9 @@ func TestCatalogMatchesSection22(t *testing.T) {
 			t.Errorf("%s: cases at %v, and §22.8's %q names %v", row.Id, sortedKeys(caseGates), designRow.gateText, sortedKeys(want))
 		}
 	}
-	// the traps the plan names, read where the design wraps them
-	for rowId, tier := range map[string]Tier{"FS-83": TierT4, "FS-98": TierT4, "FS-100": TierT4, "FS-124": TierT4, "FS-125": TierT4} {
+	// the traps the plan names, read where the design wraps them; FS-125, held with its sweep (owner decision 609), is
+	// no longer one of them
+	for rowId, tier := range map[string]Tier{"FS-83": TierT4, "FS-98": TierT4, "FS-100": TierT4, "FS-124": TierT4} {
 		if !slices.Contains(catalog.Row(rowId).Tiers, tier) {
 			t.Errorf("%s lost its wrapped %s", rowId, tier)
 		}

@@ -11,9 +11,8 @@
 // row it follows, and on connect requiring sidecar. A landed marker no default-off test pins is only
 // reported, as rowOff reports: a connect track lands without touching sidecar, so make check must not turn
 // red for everyone on it. TestX9ReadyForMain is the gate build's sidecar-branches.zsh merge-out runs, with
-// the gate's milestone: it turns that report into a failure, refuses C19's marker without FS-125's sweep
-// in connect's own tests (§4.17), and refuses a row due by the gate whose marker has not landed, which is
-// also what a renamed marker looks like.
+// the gate's milestone: it turns that report into a failure, and refuses a row due by the gate whose
+// marker has not landed, which is also what a renamed marker looks like.
 
 package check
 
@@ -86,8 +85,6 @@ type x9Row struct {
 	defaultOffTests []string
 	// why a row that changes no client's behavior needs no default-off test
 	defaultOffNotNeeded string
-	// C19's: the test file in connect that holds FS-125's sweep, which must pass before connect's main (§4.17)
-	sweepTestFile string
 }
 
 // §4.6's table, as REPO.md's "Connect changes" holds it.
@@ -169,10 +166,9 @@ var x9Rows = []x9Row{
 		defaultOffTests: []string{"TestEgressShareOffKeepsPrivateDestinationsAnIncident"},
 	},
 	{
-		id: "C19", disposition: x9Lands, milestone: 10, task: "PROTO-M10-02, PROTO-M10-03, PROTO-M10-04; FS-125 in PROTO-M10-05",
-		marker: "SetPeerWindowAccounting", markerKind: x9MarkerName,
-		defaultOffTests: []string{"TestPeerWindowOffReportsAreIdentical", "TestPeerWindowUnmarkedPairIsUnchanged"},
-		sweepTestFile:   "transfer_peer_window_sweep_test.go",
+		// withdrawn (owner decision 609, QD-1038), with FS-125's sweep and owner decision 268's gate on it
+		id: "C19", disposition: x9Rejected,
+		task: "withdrawn by owner decision 609: the remote-search pair's contracts are accounted like any peer's, and c19-windows-removed took C19's code off connect's sidecar branch",
 	},
 	{
 		// owner decision 269; the ledger entry landed with the row (QD-980)
@@ -235,9 +231,8 @@ type x9ConnectScan struct {
 	// TransferOptions's exported fields
 	transferOptionFields []string
 	files                []*x9ConnectFile
-	// test functions declared in connect and connect/protocol, and the test files beside them
+	// test functions declared in connect and connect/protocol
 	testNames map[string]bool
-	testFiles map[string][]string
 	goMod     *moduleFile
 	// the descriptor sets of protocol/*.proto at main and at HEAD, nil when either side has none
 	mainDescriptors *descriptorpb.FileDescriptorSet
@@ -267,7 +262,6 @@ func (self *repository) readConnectScan() (*x9ConnectScan, error) {
 		declared:        map[string]bool{},
 		resultTypes:     map[string][]string{},
 		testNames:       map[string]bool{},
-		testFiles:       map[string][]string{},
 	}
 	goMod, err := readModuleFile(goModPath)
 	if err != nil {
@@ -307,10 +301,6 @@ func (self *x9ConnectScan) readPackage(packageDirectory string) error {
 			}
 			for _, match := range x9TestFuncPattern.FindAllSubmatch(data, -1) {
 				self.testNames[string(match[1])] = true
-				self.testFiles[relativeName] = append(self.testFiles[relativeName], string(match[1]))
-			}
-			if _, found := self.testFiles[relativeName]; !found {
-				self.testFiles[relativeName] = []string{}
 			}
 			continue
 		}
@@ -812,7 +802,7 @@ func (self *repository) x9DefaultOffReport(t testing.TB) []string {
 }
 
 // What keeps connect's sidecar changes from reaching connect's main at the gate of milestone gate: every
-// x9 finding, each default-off gap, C19 without FS-125's sweep, and a row due by the gate with no marker.
+// x9 finding, each default-off gap, and a row due by the gate with no marker.
 func (self *repository) x9ReadyForMainFindings(t testing.TB, gate int) []string {
 	scan := self.connectScan(t)
 	findings := []string{}
@@ -826,14 +816,8 @@ func (self *repository) x9ReadyForMainFindings(t testing.TB, gate int) []string 
 		if row.disposition != x9Lands {
 			continue
 		}
-		landed := scan.landed(row)
-		if !landed && row.milestone <= gate {
+		if !scan.landed(row) && row.milestone <= gate {
 			findings = append(findings, findingf("%s is due by M%d (%s), and its marker %s is not in connect", row.id, row.milestone, row.task, row.marker))
-		}
-		if landed && row.sweepTestFile != "" {
-			if names, found := scan.testFiles[row.sweepTestFile]; !found || len(names) == 0 {
-				findings = append(findings, findingf("%s's marker %s is in connect without FS-125's sweep in connect's own %s, which must pass before connect's main (§4.17)", row.id, row.marker, row.sweepTestFile))
-			}
 		}
 	}
 	return findings

@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"fmt"
 
 	"golang.org/x/crypto/chacha20"
 )
@@ -64,6 +65,14 @@ func keyBytesOf(suite uint16) int {
 	return 16
 }
 
+// A direction's IV: 1.3's write IV of 12 octets, 1.2's salt of 4.
+func ivBytesOf(version uint16) int {
+	if version == versionTls12 {
+		return 4
+	}
+	return 12
+}
+
 // A 1.3 direction's key and IV from its traffic secret (RFC 8446 §7.3).
 func trafficKeys13(suite uint16, secret []byte) ([]byte, []byte) {
 	return expandLabel(secret, "key", nil, keyBytesOf(suite)), expandLabel(secret, "iv", nil, 12)
@@ -86,9 +95,12 @@ func finished12(masterSecret []byte, label string, handshakeHash []byte) []byte 
 	return append([]byte{20, 0, 0, 12}, prf12(masterSecret, label, handshakeHash, 12)...)
 }
 
-// The nonce of a record at a sequence number: 1.3 XORs it into the IV; 1.2 takes the salt and the
-// record's own explicit nonce.
+// The nonce of a record at a sequence number: 1.3 XORs it into the 12-octet IV; 1.2 takes the 4-octet
+// salt and the record's own explicit nonce. An IV of another length opens nothing.
 func recordNonce(version uint16, iv []byte, seq uint64, record []byte) ([]byte, error) {
+	if len(iv) != ivBytesOf(version) {
+		return nil, fmt.Errorf("an IV of %d octets", len(iv))
+	}
 	if version == versionTls13 {
 		nonce := append([]byte{}, iv...)
 		for i := range 8 {
@@ -116,8 +128,13 @@ func recordCiphertext(version uint16, record []byte) ([]byte, error) {
 }
 
 // The keystream for size octets under a key and nonce: AES-GCM's counter blocks from 2, or ChaCha20's
-// blocks from counter 1 (RFC 5288, RFC 8439 §2.8). No tag is checked, as Z2 states.
+// blocks from counter 1 (RFC 5288, RFC 8439 §2.8). No tag is checked, as Z2 states. A key of another
+// length than the suite's is no key of it: AES-128-GCM's is 16 octets, where crypto/aes would also take
+// AES-256's 32.
 func keystream(suite uint16, key []byte, nonce []byte, size int) ([]byte, error) {
+	if len(key) != keyBytesOf(suite) {
+		return nil, fmt.Errorf("a key of %d octets", len(key))
+	}
 	out := make([]byte, size)
 	if suite == suiteChacha20Poly1305Sha256 {
 		cipher, err := chacha20.NewUnauthenticatedCipher(key, nonce)

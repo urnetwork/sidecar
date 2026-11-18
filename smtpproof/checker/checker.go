@@ -477,7 +477,7 @@ func (self *checkRun) relation(accepted *acceptedPart) []*Failure {
 			fail("Z1", err)
 		}
 	}
-	if err := checkKeyCommitment(witness, keyCommitment); err != nil {
+	if err := checkKeyCommitment(shake.version, shake.suite, witness, keyCommitment); err != nil {
 		fail("Z1", err)
 	}
 
@@ -534,7 +534,7 @@ func (self *checkRun) relation(accepted *acceptedPart) []*Failure {
 			if ordinal == 1 {
 				firstEnd = len(header)
 			}
-			if err := checkHeaderSoFar(self.settings, preamble, header, firstEnd); err != nil {
+			if err := checkHeaderSoFar(self.settings, preamble, header, firstEnd, ordinal == uint64(accepted.k)); err != nil {
 				fail("Z5", err)
 			} else if ordinal == uint64(accepted.k) {
 				if err := checkHeaderBlock(self.settings, preamble, header); err != nil {
