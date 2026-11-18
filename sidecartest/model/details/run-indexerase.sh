@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
 # Runs DESIGN-DETAILS.md section 15's model through the owner's TLC (ROOT/.stack/tools/tlc): IndexErase.tla, an
 # erasure on one index ref beside the writers that keep pushing, as two specifications: SpecPath, a path
-# document whose edit may rest on the version a CUT lists, and SpecCard, a run card through an erasure. A
-# design config must pass. A config named *Landed-* is section 1 as it stood on 2026-11-12, and one named
-# *Twin-* breaks one rule of the design, and each of those must end with the one invariant its cfg names
-# violated. A config named *Reach-* names a state the design must be able to reach, as an invariant that says
+# document edited beside an erasure, each edit a full entry (owner decision 584), and SpecCard, a run card
+# through an erasure. A design config must pass. A config named *Twin-* breaks one rule of the design, and
+# must end with the one invariant its cfg names violated. A config named *Reach-* names a state the design must be able to reach, as an invariant that says
 # it never does, and must end with that invariant violated. Prints one verdict line per run with the states,
 # depth and time TLC reported and the most its state directory held, sampled every 5 s, which section 15.3
 # records.
 #
-#   run-indexerase.sh <track> [all | design | landed | twins | reach | <Config>]...
+#   run-indexerase.sh <track> [all | design | twins | reach | <Config>]...
 #
 # Disk: the disk is shared with the build lanes, so every run is bounded on disk as well as in states. Every
 # config runs breadth-first at bounds whose complete graph finishes. A run whose state directory passes
@@ -23,21 +22,19 @@ set -uo pipefail
 main() {
   here=$(cd "$(dirname "$0")" && pwd)
   ROOT=/Users/builder/urnetwork-sidecar
-  [ $# -ge 1 ] || { echo "usage: run-indexerase.sh <track> [all | design | landed | twins | reach | <Config>]..." >&2; exit 64; }
+  [ $# -ge 1 ] || { echo "usage: run-indexerase.sh <track> [all | design | twins | reach | <Config>]..." >&2; exit 64; }
   track=$1
   shift
   cap=${TLC_DISK_CAP_MB:-8192}
   designs="IndexErase IndexErase-Long IndexErase-Card IndexErase-CardLong"
-  landed="IndexEraseLanded-ErasedBase"
-  twins="IndexEraseTwin-NoReentry IndexEraseTwin-ClosureFirst IndexEraseTwin-KeepResting IndexEraseTwin-MergeDropsResting IndexEraseTwin-CutFirst IndexEraseTwin-NoSync IndexEraseTwin-NoBlock IndexEraseTwin-SeqVersion IndexEraseTwin-SeqVersion-Late"
-  reach="IndexEraseReach-Owed IndexEraseReach-Reentered IndexEraseReach-Excused IndexEraseReach-ComposedThrough IndexEraseReach-Raced IndexEraseReach-Blocked IndexEraseReach-Returns IndexEraseReach-Twice"
+  twins="IndexEraseTwin-ClosureSkipsAbsorbed IndexEraseTwin-CutFirst IndexEraseTwin-NoSync IndexEraseTwin-NoBlock IndexEraseTwin-SeqVersion IndexEraseTwin-SeqVersion-Late"
+  reach="IndexEraseReach-Survives IndexEraseReach-ClosesAbsorbed IndexEraseReach-Raced IndexEraseReach-Blocked IndexEraseReach-Returns IndexEraseReach-Twice"
   [ $# -ge 1 ] || set -- all
   configs=
   for name in "$@"; do
     case $name in
-      all) configs="$configs $designs $landed $twins $reach" ;;
+      all) configs="$configs $designs $twins $reach" ;;
       design) configs="$configs $designs" ;;
-      landed) configs="$configs $landed" ;;
       twins) configs="$configs $twins" ;;
       reach) configs="$configs $reach" ;;
       *) configs="$configs $name" ;;
@@ -122,7 +119,7 @@ main() {
       echo "== FAIL $config: stopped at the $cap MB disk cap, $facts"; failed=1
     else
       case $config in
-        *Landed-*|*Open-*|*Twin-*|*Reach-*)
+        *Twin-*|*Reach-*)
           if [ "$code" -ne 0 ] && [ "$violated" = "$expect" ]; then
             echo "== PASS $config: $expect violated as it must, a trace of $trace states, $facts"
           else

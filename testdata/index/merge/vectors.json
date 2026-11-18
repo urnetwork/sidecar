@@ -1,11 +1,11 @@
 [
  {
-  "name": "composed-diffs",
+  "name": "sealed-edits",
   "files": [
    {
     "path": ".ur-index/i1/b/20340/m",
     "replaces": 0,
-    "sha256": "1126a6637f49825119fba64dc38feb18e1812b6a7562d3f1a03d896b6562c501",
+    "sha256": "240b7a1a1b68b4324b5b832ef84b9430c49eb3456105a5ae2bdc48156a91f430",
     "byte_count": 40
    },
    {
@@ -22,7 +22,7 @@
    {
     "path": ".ur-index/i1/b/20340/m",
     "replaces": 25,
-    "sha256": "7dbb7dce7f235fb365a2b00b0015af54fd4033fe6039bc3812081bf123d2aa19",
+    "sha256": "8467141c9ab4cca638d3d9908a0c8761a6dfcf655da598ca2b1b21ba84b9a657",
     "byte_count": 62
    },
    {
@@ -39,7 +39,7 @@
    {
     "path": ".ur-index/i1/b/20340/m",
     "replaces": 26,
-    "sha256": "1c3c4be5371a423734d1d9727d9c970f7733bf94456bc812ffa9c643bd051609",
+    "sha256": "1ccfbd4f057aea88dec5a7fd4ed4c93bc50a0c06471a74555fa063684b06aa9c",
     "byte_count": 62
    },
    {

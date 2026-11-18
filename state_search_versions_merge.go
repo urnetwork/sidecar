@@ -571,7 +571,7 @@ func (self *searchVersionListInput) ByteCount() int64 {
 func (self *searchVersionListInput) Close() {}
 
 // The records of an index slot, head or large entry's entries (§11.14's entry row), sorted in memory, since a slot's
-// order mixes doc keys and ref ids: a full entry or a diff is a version of its document, a tombstone deletes it, and a
+// order mixes doc keys and ref ids: a full entry is a version of its document, a tombstone deletes it, and a
 // ref tombstone deletes every row of its ref at or below its version. file is the file they came from.
 func searchVersionEntriesSource(entries []*indexEntry, file SearchVersionFile) SearchVersionRecordsSource {
 	records := make([]SearchVersionRecord, 0, len(entries))

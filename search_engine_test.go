@@ -48,11 +48,7 @@ func testEngineDocument(t *testing.T, label string, index int, version uint64, p
 	keys := indexSortedKeys(indexTrigrams([]byte(" " + string(normalized) + " ")))
 	row := &indexRow{docKind: indexDocFile, byteCount: uint64(len(text)), trigramCount: uint64(len(keys)), locator: path}
 	row.fields[indexFieldTitle] = strings.SplitN(text, "\n", 2)[0]
-	replaces := uint64(0)
-	if 1 < version {
-		replaces = version - 1
-	}
-	return &indexPendingDocument{kind: indexEntryFull, key: testIndexId(label, index), version: version, replaces: replaces, keys: keys, row: row}
+	return &indexPendingDocument{kind: indexEntryFull, key: testIndexId(label, index), version: version, keys: keys, row: row}
 }
 
 // A sync world whose ref holds documents, synced, and an engine over its cache.

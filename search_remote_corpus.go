@@ -325,7 +325,7 @@ func (self *searchEngineRemoteView) openRef(ctx context.Context, ask searchRemot
 	companion := searchRootCompanion(snapshot.manifest.Root)
 	opened := &searchOpenedRef{
 		engine: engine, repoId: repo.RepoId, refId: ref.RefId, snap: snapshot, holding: holding, plan: plan,
-		probe: searchProbeOf(snapshot.Versions()), erased: searchErasedOf(snapshot, engine.format), keys: keys,
+		probe: searchProbeOf(snapshot.Versions()), keys: keys,
 	}
 	if engine.args.Local != nil {
 		opened.local = engine.args.Local(repo.RepoId, ref.RefId)

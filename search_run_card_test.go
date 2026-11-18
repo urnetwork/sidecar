@@ -647,7 +647,7 @@ func TestCardTeamMapping(t *testing.T) {
 func TestCardRaceAfterTheRead(t *testing.T) {
 	world := testNewHeadWorld()
 	writer := evsTestId("writer a")
-	world.push(t, writer, testLive("d", 1, 1, 0, testHeadKeys(1, 0)))
+	world.push(t, writer, testLive("d", 1, 1, testHeadKeys(1, 0)))
 	eraser := testNewEraser(t, world.ref.store(evsTestId("eraser")), false, &testIndexWorldClock{world: world}, nil)
 	epoch := world.view(t, writer).head.indexEpoch
 	runId := evsTestId("run")

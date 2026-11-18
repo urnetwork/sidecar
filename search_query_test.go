@@ -317,7 +317,7 @@ func TestSearchPlanStatuses(t *testing.T) {
 func TestSearchHoldingOfAView(t *testing.T) {
 	world := testNewHeadWorld()
 	a := evsTestId("writer a")
-	world.push(t, a, testLive("d", 1, 1, 0, testHeadKeys(1, 0)))
+	world.push(t, a, testLive("d", 1, 1, testHeadKeys(1, 0)))
 	holding := searchHoldingOf(world.view(t, a))
 	if holding.off || len(holding.buckets) != 1 || holding.buckets[0].window.startDay != 20340 || holding.normalizer != indexNormalizerId || holding.windowDays != 30 {
 		t.Errorf("holding %+v", holding)

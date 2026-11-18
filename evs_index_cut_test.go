@@ -77,7 +77,7 @@ func testErasureSetOf(t testing.TB, view *indexView) *protocol.IndexErasureSet {
 func TestIndexCutWritesTheErasureSetAndMovesTheEpoch(t *testing.T) {
 	world := testNewHeadWorld()
 	a := evsTestId("writer a")
-	world.push(t, a, testLive("d", 1, 1, 0, testHeadKeys(1, 0)))
+	world.push(t, a, testLive("d", 1, 1, testHeadKeys(1, 0)))
 	eraser := testNewEraser(t, world.ref.store(evsTestId("eraser")), false, &testIndexWorldClock{world: world}, nil)
 	before := world.view(t, a)
 	result := testCut(t, eraser, "erasure 1", &IndexCutDocument{Key: testIndexId("d", 2), Version: 3}, &IndexCutDocument{Key: testIndexId("d", 1), Version: 1})
@@ -139,7 +139,7 @@ func TestIndexCutWritesTheErasureSetAndMovesTheEpoch(t *testing.T) {
 func TestIndexCutListsACardThroughTheEpochItNames(t *testing.T) {
 	world := testNewHeadWorld()
 	a := evsTestId("writer a")
-	world.push(t, a, testLive("d", 1, 1, 0, testHeadKeys(1, 0)))
+	world.push(t, a, testLive("d", 1, 1, testHeadKeys(1, 0)))
 	eraser := testNewEraser(t, world.ref.store(evsTestId("eraser")), false, &testIndexWorldClock{world: world}, nil)
 	testCut(t, eraser, "erasure 1", &IndexCutDocument{Key: testIndexId("d", 1), Version: 1})
 	other := testNewEraser(t, world.ref.store(evsTestId("eraser")), false, &testIndexWorldClock{world: world}, nil)
@@ -239,15 +239,16 @@ func TestIndexCutWaitsOnAFullSet(t *testing.T) {
 	}
 }
 
-// The epoch guard: a push names its view's base and epoch; a file holding a listed document at or below its version, a
-// shard row of one, or a diff written anew on a listed base is refused; a resting diff a head carries forward at its
-// own path passes; only a CUT writes the set, and a CLOSURE never goes through the guard.
+// The epoch guard: a push names its view's base and epoch; a file holding a listed document at or below its version,
+// or a shard row of one, is refused; a head holding a version above the listed one passes, since every entry is full
+// and none rests on the listed version (owner decision 584); only a CUT writes the set, and a CLOSURE never goes
+// through the guard.
 func TestIndexEpochGuardRefusesWhatTheSetLists(t *testing.T) {
 	world := testNewHeadWorld()
 	a := evsTestId("writer a")
-	world.push(t, a, testLive("d", 1, 1, 0, testHeadKeys(1, 0)))
+	world.push(t, a, testLive("d", 1, 1, testHeadKeys(1, 0)))
 	world.fillUntilSealed(t, a, "fill", 2)
-	world.push(t, a, testLive("d", 1, 2, 1, testHeadKeys(1, 1)))
+	world.push(t, a, testLive("d", 1, 2, testHeadKeys(1, 1)))
 	eraser := testNewEraser(t, world.ref.store(evsTestId("eraser")), false, &testIndexWorldClock{world: world}, nil)
 	testCut(t, eraser, "erasure 1", &IndexCutDocument{Key: testIndexId("d", 1), Version: 1})
 	view := world.view(t, a)
@@ -256,22 +257,20 @@ func TestIndexEpochGuardRefusesWhatTheSetLists(t *testing.T) {
 		t.Fatal(err)
 	}
 	head := view.writeRoot().newestBucket().writer(a).head()
-	if diff := head.slot.entries; !slices.ContainsFunc(diff, func(entry *indexEntry) bool { return entry.kind == indexEntryDiff && entry.baseVersion == 1 }) {
-		t.Fatal("no resting diff in the head")
+	if entries := head.slot.entries; !slices.ContainsFunc(entries, func(entry *indexEntry) bool {
+		return entry.key == testIndexId("d", 1) && entry.kind == indexEntryFull && entry.version == 2
+	}) {
+		t.Fatal("the head does not hold the version above the listed one")
 	}
 	plaintext, err := view.store.Read(context.Background(), head.file)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// carried at its own path, the head written again with its own bytes: passes
-	if err := guard.checkFiles([]*indexPushFile{{path: head.file.path, plaintext: plaintext, replaces: head.file.version}}, false); err != nil {
-		t.Fatalf("a carried resting diff refused: %v", err)
-	}
-	// the same diff written at a new path: refused
+	// the version above the listed one, full, in the head written again and at a new path: passes
 	paths := view.writeRoot().paths
 	fresh, _ := paths.slot(view.writeRoot().newestBucket().window.startDay, [indexIdByteCount]byte(a), 15)
-	if err := guard.checkFiles([]*indexPushFile{{path: fresh, plaintext: plaintext}}, false); !errors.Is(err, errIndexEpochListed) {
-		t.Fatalf("a new diff on a listed base: %v", err)
+	if err := guard.checkFiles([]*indexPushFile{{path: head.file.path, plaintext: plaintext, replaces: head.file.version}, {path: fresh, plaintext: plaintext}}, false); err != nil {
+		t.Fatalf("an entry above the listed version refused: %v", err)
 	}
 	// a listed version's full entry: refused
 	window := view.writeRoot().newestBucket().window
@@ -372,7 +371,7 @@ func TestIndexCutRefusesCompanionPushesBuiltBeforeIt(t *testing.T) {
 func TestIndexCutRefusesAMergeBuiltBeforeIt(t *testing.T) {
 	world := testNewHeadWorld()
 	a := evsTestId("writer a")
-	world.push(t, a, testLive("d", 1, 1, 0, testHeadKeys(1, 0)))
+	world.push(t, a, testLive("d", 1, 1, testHeadKeys(1, 0)))
 	world.fillUntilSealed(t, a, "fill", 2)
 	eraser := testNewEraser(t, world.ref.store(evsTestId("eraser")), false, &testIndexWorldClock{world: world}, nil)
 	world.ref.beforeCommit = func(push *indexPush) {
@@ -425,7 +424,7 @@ func TestIndexCutRefusesAReusedSlotBuiltBeforeIt(t *testing.T) {
 	index := world.fillUntilSealed(t, a, "fill", 0)
 	index = world.fillUntilSealed(t, a, "fill", index)
 	world.merge(t, evsTestId("merger"))
-	plan, view := world.plan(t, a, true, testLive("d", 1, 1, 0, testHeadKeys(1, 0)))
+	plan, view := world.plan(t, a, true, testLive("d", 1, 1, testHeadKeys(1, 0)))
 	reused := false
 	for _, file := range plan.files() {
 		parsed, _ := indexParsePath(file.path, false)
@@ -449,7 +448,7 @@ func TestIndexCutRefusesAReusedSlotBuiltBeforeIt(t *testing.T) {
 	if _, err := world.ref.store(a).Commit(context.Background(), push); !isIndexRefusal(err, indexRefusalIndexEpoch) {
 		t.Fatalf("the push built before the CUT answered %v", err)
 	}
-	again, view := world.plan(t, a, true, testLive("d", 1, 1, 0, testHeadKeys(1, 0)), testLive("e", 1, 1, 0, testHeadKeys(2, 0)))
+	again, view := world.plan(t, a, true, testLive("d", 1, 1, testHeadKeys(1, 0)), testLive("e", 1, 1, testHeadKeys(2, 0)))
 	if len(again.erased) != 1 || again.erased[0] != testIndexId("d", 1) {
 		t.Fatalf("the rebuilt plan erased %v", again.erased)
 	}
@@ -516,7 +515,7 @@ func TestIndexJournalBegunBelowListedSinceRebuilds(t *testing.T) {
 func TestIndexViewIgnoresAnErasureSetFromANonAdmin(t *testing.T) {
 	world := testNewHeadWorld()
 	a, b := evsTestId("writer a"), evsTestId("writer b")
-	world.push(t, a, testLive("d", 1, 1, 0, testHeadKeys(1, 0)))
+	world.push(t, a, testLive("d", 1, 1, testHeadKeys(1, 0)))
 	forged := world.ref.store(b)
 	push := forged.testPush(t, world.at, []*indexPushFile{{path: indexErasureSetPath(false), plaintext: testSmallFile(t, &protocol.IndexErasureSet{})}}, nil)
 	push.kind = indexPushCut

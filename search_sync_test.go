@@ -375,7 +375,7 @@ func (self *testSyncWorld) push(t *testing.T, writer Id, label string, count int
 	t.Helper()
 	pending := []*indexPendingDocument{}
 	for index := range count {
-		pending = append(pending, testLive(label, index, 1, 0, testIndexKeys(0x100000+index*0x1000, 60, 3)))
+		pending = append(pending, testLive(label, index, 1, testIndexKeys(0x100000+index*0x1000, 60, 3)))
 	}
 	self.head.push(t, writer, pending...)
 }
@@ -722,7 +722,8 @@ func TestAListingRetainsNothing(t *testing.T) {
 }
 
 // 7.2.7's bad file: a file that fails indexValidateFile, or content_sha256 in transit, is listed bad, holds nothing,
-// raises index_malformed naming its path and its push's signer, and does not hold the swap.
+// raises index_malformed naming its path and its push's signer, and does not hold the swap. So is a slot holding an
+// entry of the reserved kind 2, a well-formed file but for that entry (FS-107; owner decision 584).
 func TestABadFileDoesNotBlockTheSwap(t *testing.T) {
 	world := newTestSyncWorld(t, false)
 	world.push(t, evsTestId("writer"), "first", 1)
@@ -732,6 +733,13 @@ func TestABadFileDoesNotBlockTheSwap(t *testing.T) {
 		t.Fatal(err)
 	}
 	world.head.ref.store(forger).testCommit(t, world.head.at, &indexPushFile{path: forgedPath, plaintext: []byte("not a slot")})
+	differ := evsTestId("differ")
+	reservedPath, err := indexNewPaths(false, indexRootNumber).slot(testSyncBucket, [indexIdByteCount]byte(differ), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reserved := testReservedKindSlotFile(t, indexBucketWindow{startDay: testSyncBucket, days: 30}, differ, 1, testIndexId("first", 0), 2)
+	world.head.ref.store(differ).testCommit(t, world.head.at, &indexPushFile{path: reservedPath, plaintext: reserved})
 	tamperedWriter := evsTestId("tampered")
 	world.push(t, tamperedWriter, "tampered", 1)
 	tamperedPath, _ := indexNewPaths(false, indexRootNumber).slot(testSyncBucket, [indexIdByteCount]byte(tamperedWriter), 0)
@@ -743,7 +751,7 @@ func TestABadFileDoesNotBlockTheSwap(t *testing.T) {
 	for _, file := range snapshot.Bad() {
 		bad[file.Path] = true
 	}
-	if !bad[forgedPath] || !bad[tamperedPath] || len(bad) != 2 {
+	if !bad[forgedPath] || !bad[tamperedPath] || !bad[reservedPath] || len(bad) != 3 {
 		t.Fatalf("bad files: %v", bad)
 	}
 	for _, file := range snapshot.Files() {
@@ -752,7 +760,7 @@ func TestABadFileDoesNotBlockTheSwap(t *testing.T) {
 		}
 	}
 	malformed := world.malformed()
-	if malformed[forgedPath] != forger || malformed[tamperedPath] != tamperedWriter {
+	if malformed[forgedPath] != forger || malformed[tamperedPath] != tamperedWriter || malformed[reservedPath] != differ {
 		t.Fatalf("index_malformed named %v", malformed)
 	}
 	held, _ := world.cache.cache.Ref(world.repoId, world.refId)
@@ -1015,7 +1023,7 @@ func TestADropResetsEveryRefOfTheRepo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherHead.push(t, writer, testLive("other", 0, 1, 0, testIndexKeys(0x200000, 60, 3)))
+	otherHead.push(t, writer, testLive("other", 0, 1, testIndexKeys(0x200000, 60, 3)))
 	if err := world.sync.RunRound(context.Background(), world.repoId, otherRefId, false); err != nil {
 		t.Fatal(err)
 	}

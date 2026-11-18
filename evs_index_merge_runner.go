@@ -112,7 +112,7 @@ type indexMergeOutcome struct {
 	skipped   indexMergeSkip
 	// What the merge wrote, nil when skipped.
 	result *indexMergeResult
-	// index_malformed for every diff the merge could not compose and every file its view alarmed.
+	// index_malformed for every file its view alarmed.
 	events []SidecarEvent
 	// Builds made, the committed one included.
 	attempts int
@@ -223,7 +223,6 @@ func (self *IndexMerger) attempt(ctx context.Context, rootNumber uint32, startDa
 		return false, err
 	}
 	outcome.result = result
-	outcome.events = append(outcome.events, indexMalformedEvents(view, result.malformed)...)
 	testHookBarrier("evs.index.merge.built", self.barrierKey())
 
 	push, err := guard.push(indexPushIndex, signedTime.UnixMilli(), result.files(), result.removedShards)
@@ -266,16 +265,6 @@ func indexSendPush(ctx context.Context, store indexRefStore, push *indexPush, si
 	return store.Commit(ctx, push)
 }
 
-// index_malformed for each diff a merge could not compose, naming its slot's signer.
-func indexMalformedEvents(view *indexView, malformed []*indexMalformedDiff) []SidecarEvent {
-	events := make([]SidecarEvent, 0, len(malformed))
-	for _, diff := range malformed {
-		repoId, refId, signerId := view.repoId, view.refId, diff.signerSidecarId
-		events = append(events, SidecarEvent{Kind: SidecarEventIndexMalformed, SidecarId: &signerId, RepoId: &repoId, RefId: &refId, Path: diff.path})
-	}
-	return events
-}
-
 // Whether bucket is expired at signedTimeMs, by the root's windows, never a device's clock (QD-689's reading 1).
 func indexBucketExpiredAt(view *indexView, root *indexViewRoot, bucket *indexViewBucket, signedTimeMs int64) bool {
 	ages := indexBucketAges(root.bucketWindows(), root.windowDays(view.repoKind), signedTimeMs)
@@ -287,22 +276,17 @@ func indexBucketExpiredAt(view *indexView, root *indexViewRoot, bucket *indexVie
 	return false
 }
 
-// Whether a writer of the bucket is out of slots: no slot it may reuse (absorbed, not its head and not kept), and
-// its ring of slots that are not kept full, or all 16 in use, so its next seal must merge first (1.2.3).
+// Whether a writer of the bucket is out of slots: no slot it may reuse (absorbed and not its head), and its ring
+// full, so its next seal must merge first (§11.14's seal row).
 func indexWriterOutOfSlots(bucket *indexViewBucket, writer *indexViewWriter, settings *IndexFormatSettings) bool {
 	absorbed := bucket.absorbedSeq(writer.sidecarId)
 	head := writer.head()
-	kept := writer.kept(absorbed, nil)
-	others := 0
 	for _, slot := range writer.slots {
-		if slot != head && slot.seq() <= absorbed && !kept[slot] {
+		if slot != head && slot.seq() <= absorbed {
 			return false
 		}
-		if !kept[slot] {
-			others += 1
-		}
 	}
-	return settings.RingSlotCount <= others || indexWriterSlotCount <= len(writer.slots)
+	return settings.RingSlotCount <= len(writer.slots) || indexWriterSlotCount <= len(writer.slots)
 }
 
 // The plaintext bytes of the bucket's sealed slots and unabsorbed large entries, every writer's: what a merge would
