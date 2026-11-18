@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -372,6 +373,79 @@ func TestRegisterGateSweepRefusesWhatTheCatalogDoesNotHold(t *testing.T) {
 		if !panicked {
 			t.Errorf("registering %+v did not panic", sweep)
 		}
+	}
+}
+
+// A test with a negative timeout panics where its sweep registers, named by a case or by an item, and leaves
+// nothing behind: the tool refuses such a file when it loads, so the generator never writes one (QD-1058).
+func TestRegisterGateSweepRefusesANegativeTimeout(t *testing.T) {
+	negative := func() []*GateTest {
+		return []*GateTest{{Repo: "server", Package: ".", Timeout: -time.Hour, Names: []string{"TestBoundedByNothing"}}}
+	}
+	// a case no sweep names, so only the timeout can refuse it
+	unswept := ""
+	for _, testCase := range DefaultCatalog().GateCases("M2-out") {
+		if _, ok := gateSweep("M2").Cases[testCase.String()]; !ok {
+			unswept = testCase.String()
+			break
+		}
+	}
+	if unswept == "" {
+		t.Fatal("every M2-out case is named by a sweep, so none is left to plant on")
+	}
+	for _, sweep := range []*GateSweep{
+		{Gate: "M2", Cases: map[string][]*GateTest{unswept: negative()}},
+		{Gate: "M1", Items: []*GateItem{{Item: "a test bounded by nothing", Tests: negative()}}},
+	} {
+		panicked := func() (panicked bool) {
+			defer func() {
+				panicked = recover() != nil
+			}()
+			RegisterGateSweep(sweep)
+			return false
+		}()
+		if !panicked {
+			t.Errorf("registering %+v did not panic", sweep)
+		}
+	}
+	if _, ok := gateSweep("M2").Cases[unswept]; ok {
+		t.Errorf("the refused sweep left M2's %s behind", unswept)
+	}
+	for _, row := range GateRows(DefaultCatalog(), "M1") {
+		if row.Item == "a test bounded by nothing" {
+			t.Error("the refused sweep left its item behind")
+		}
+	}
+}
+
+// §22.4's release fixture runs under its own 3h, as run.sh's BUILD_TEST runs it (QD-1056, QD-1058), written beside
+// its tags, and every other test the file names keeps the tool's default.
+func TestGateFileGivesOnlyTheReleaseFixtureItsOwnTimeout(t *testing.T) {
+	data, err := GateFile(DefaultCatalog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := parseGateFileForTest(t, data)
+	fixtures := 0
+	for _, gate := range GateNames() {
+		for _, row := range file.Gates[gate] {
+			for _, test := range row.Tests {
+				if slices.Contains(test.Names, "TestSidecarReleaseFixture") {
+					fixtures += 1
+					if test.Timeout != 3*time.Hour || test.Tags != "sidecar_release_fixture" {
+						t.Errorf("%s's release fixture runs under %s with tags %q", gate, test.Timeout, test.Tags)
+					}
+				} else if test.Timeout != 0 {
+					t.Errorf("%s's %s%s gives %v a timeout of its own, %s", gate, row.Row, row.Item, test.Names, test.Timeout)
+				}
+			}
+		}
+	}
+	if fixtures != 1 {
+		t.Fatalf("the file names the release fixture %d times", fixtures)
+	}
+	if line := "tags: sidecar_release_fixture, timeout: 3h0m0s, names: [TestSidecarReleaseFixture]"; !bytes.Contains(data, []byte(line)) {
+		t.Errorf("the file lacks %q", line)
 	}
 }
 
