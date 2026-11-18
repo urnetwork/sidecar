@@ -35,9 +35,10 @@
 // BridgeEgressMode, and under exits its exits in grant_dst, sidecar:<id> entries or one tag:<id>, each id in
 // lowercase hex, and require_default_egress, 41, where the spec requires the subject's devices to keep default egress
 // on (QD-1053, QD-1060); auto and none name neither, a shape every parser holds (checkEgressChangeAction). A template
-// names its subject and mode too, so no
-// multi-use decision sets every subject's route. No server path takes it: its BridgeEgress rides the log as its own
-// statement, which no GrantActivate or gate carries.
+// names its subject and mode too, so no multi-use decision sets every subject's route, and binds the requirement
+// whether it sets it or not (TemplateBound), so a template for exits without it never covers the same exits with it:
+// its approver never saw the requirement (question egress-lock-action-field-template-requirement). No server path
+// takes it: its BridgeEgress rides the log as its own statement, which no GrantActivate or gate carries.
 //
 // Kind 18, mail_tls_unauthenticated, is the owner's answer to smtp-m9-06-tl4-allowance-action (QD-729): §14.4's TL4
 // allowance for one recipient domain, host, in the one form a domain has here, lowercase with no trailing dot, so a
@@ -122,6 +123,11 @@ type CanonicalActionKindFields struct {
 	Domains []protoreflect.FieldNumber
 	// Required fields a template fills too, so no template of the kind matches every value of them.
 	TemplateRequired []protoreflect.FieldNumber
+	// Optional fields a template binds whether it fills them or not: each use holds the template's value, empty
+	// included, so a template that leaves one empty covers only uses that leave it empty (ActionMatchesTemplate). For a
+	// field whose empty value is itself what the approver saw, where "a field a template leaves empty matches anything"
+	// would spend an approval on what its approver never saw: an egress_change's require_default_egress (QD-1060).
+	TemplateBound []protoreflect.FieldNumber
 }
 
 // The rows, one a kind with an O tool, in SidecarActionKind's order.
@@ -177,12 +183,14 @@ var canonicalActionKindRows = []*CanonicalActionKindFields{
 	},
 	{
 		// egress_change (QD-799): the subject and its mode, and under exits the exits in grant_dst and the requirement
-		// of default egress (QD-1060); a template names the subject and the mode too. No server path takes it
+		// of default egress (QD-1060); a template names the subject and the mode too, and binds the requirement set or
+		// not. No server path takes it
 		Kind:             SidecarActionEgressChange,
 		Required:         []protoreflect.FieldNumber{29, canonicalActionFieldEgressMode},
 		Optional:         []protoreflect.FieldNumber{canonicalActionFieldGrantDst, canonicalActionFieldRequireDefaultEgress},
 		Versions:         []uint32{1},
 		TemplateRequired: []protoreflect.FieldNumber{29, canonicalActionFieldEgressMode},
+		TemplateBound:    []protoreflect.FieldNumber{canonicalActionFieldRequireDefaultEgress},
 	},
 	{
 		// mail_alias_create(alias, group?) (§15.8)

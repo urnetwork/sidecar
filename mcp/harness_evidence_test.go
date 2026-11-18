@@ -73,9 +73,10 @@ type fakeHarnessRule struct {
 
 func (self *fakeHarnessRule) Evidence() []protocol.ApprovalChannel { return self.states.evidence }
 func (self *fakeHarnessRule) ApproverCount() int                   { return 1 }
-func (self *fakeHarnessRule) Eligible(memberId sidecar.Id) bool {
+func (self *fakeHarnessRule) Names(memberId sidecar.Id) bool {
 	return memberId == self.states.member
 }
+func (self *fakeHarnessRule) ClauseAdmin(memberId sidecar.Id) bool { return false }
 func (self *fakeHarnessRule) AdminClauseMet(memberIds []sidecar.Id) bool {
 	return true
 }
