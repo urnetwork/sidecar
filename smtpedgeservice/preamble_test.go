@@ -533,3 +533,96 @@ func TestPreambleOutOfTheDarkGateTriesLater(t *testing.T) {
 	w.host.Gates.OpenService(sidecar.ServiceGateSmtpedge, connect.Id(w.networkId))
 	w.expect(w.preamble(), protocol.SmtpPreambleCode_SMTP_PREAMBLE_OK).Abandon(w.ctx)
 }
+
+// A ur/smtpedge ticket as sockets signs one for the world's dialer and the listener admits, naming dialerSidecarId
+// when it is not nil (QD-989).
+func (self *edgeWorld) urTicket(dialerSidecarId *sidecar.Id) *protocol.SocketTicket {
+	issueMillis := uint64(self.clock.Now().UnixMilli())
+	ticket := &protocol.SocketTicket{
+		TicketId:              sidecar.NewId().Bytes(),
+		NetworkId:             sidecar.NewId().Bytes(),
+		Name:                  smtpedgeservice.SmtpEdgeSocketName,
+		ListenerClientId:      sidecar.NewId().Bytes(),
+		ListenId:              sidecar.NewId().Bytes(),
+		DialerClientId:        self.clientId.Bytes(),
+		DialerNetworkId:       self.networkId.Bytes(),
+		IssueTimeMillis:       issueMillis,
+		ExpireTimeMillis:      issueMillis + uint64((30 * time.Second).Milliseconds()),
+		GrantExpireTimeMillis: issueMillis + uint64((125 * time.Minute).Milliseconds()),
+	}
+	if dialerSidecarId != nil {
+		ticket.DialerSidecarId = dialerSidecarId.Bytes()
+	}
+	return ticket
+}
+
+// Sends preamble on a stream the ur/smtpedge listener hands the engine admitted on ticket, and returns the result the
+// sidecar read. The sidecar's end then closes: a refused stream has ended after its result frame, and an OK one's
+// connection ends with the engine at the test's end.
+func (self *edgeWorld) sendAdmitted(ticket *protocol.SocketTicket, preamble *protocol.SmtpPreamble) *protocol.SmtpPreambleResult {
+	self.t.Helper()
+	sidecarEnd, edgeEnd := sidecartest.NewMxPipe(nil, nil)
+	defer sidecarEnd.Close()
+	go self.service.ServeTestAdmittedStream(edgeEnd, ticket)
+	if err := sidecar.WriteSmtpPreamble(sidecarEnd, preamble, nil); err != nil {
+		self.t.Fatal(err)
+	}
+	result, err := sidecar.ReadSmtpPreambleResult(sidecarEnd, nil)
+	if err != nil {
+		self.t.Fatalf("the sidecar's read: %v", err)
+	}
+	return result
+}
+
+// QD-989: mail_send is judged for the sidecar the admitted ticket names, never one the stream could claim. With the
+// network and client alike, a ticket naming a sidecar that holds no mail_send answers DENIED before any dial, and one
+// naming the world's sidecar, which holds it, answers OK.
+func TestPreambleJudgesMailSendForTheTicketsSidecar(t *testing.T) {
+	w := newEdgeWorld(t, nil)
+	asks := w.gate.OpCounts()["MaySendMail"]
+	otherSidecarId := sidecar.NewId()
+	if result := w.sendAdmitted(w.urTicket(&otherSidecarId), w.preamble()); result.GetCode() != uint32(protocol.SmtpPreambleCode_SMTP_PREAMBLE_DENIED) {
+		t.Fatalf("a ticket naming a sidecar with no mail_send answered %d", result.GetCode())
+	}
+	if dials := w.world.Dials(); len(dials) != 0 {
+		t.Fatalf("a refused stream dialed %v", dials)
+	}
+	result := w.sendAdmitted(w.urTicket(&w.sidecarId), w.preamble())
+	if result.GetCode() != uint32(protocol.SmtpPreambleCode_SMTP_PREAMBLE_OK) || len(result.GetSendId()) != smtpedgeservice.SmtpSendIdByteCount {
+		t.Fatalf("a ticket naming the sending sidecar answered %d", result.GetCode())
+	}
+	if got := w.gate.OpCounts()["MaySendMail"] - asks; got != 2 {
+		t.Fatalf("mail_send asked %d times for two streams", got)
+	}
+	for _, word := range []string{"denied", "ok"} {
+		if value := w.host.Metrics.Value("urnetwork_smtpedge_preambles_total", word); value != 1 {
+			t.Fatalf("%v %s preambles counted", value, word)
+		}
+	}
+}
+
+// QD-989: a ur/ ticket that names no dialer sidecar, as a sockets service signed before tickets named one, answers
+// TRY_LATER before the gate is asked or anything is reserved or dialed, failing closed: the mail waits at its sender.
+// The same dialer's next ticket, naming its sidecar, passes.
+func TestPreambleOfATicketNamingNoSidecarTriesLater(t *testing.T) {
+	w := newEdgeWorld(t, nil)
+	w.host.Redis.ResetOpCounts()
+	asks := w.gate.OpCounts()["MaySendMail"]
+	result := w.sendAdmitted(w.urTicket(nil), w.preamble())
+	if result.GetCode() != uint32(protocol.SmtpPreambleCode_SMTP_PREAMBLE_TRY_LATER) ||
+		result.GetRetryAfterMs() != uint32(w.settings.GateRetryTimeout.Milliseconds()) {
+		t.Fatalf("a ticket naming no sidecar answered %d, retry after %d ms", result.GetCode(), result.GetRetryAfterMs())
+	}
+	if got := w.gate.OpCounts()["MaySendMail"]; got != asks {
+		t.Fatalf("mail_send asked %d times for a stream with no subject", got-asks)
+	}
+	if counts := w.host.Redis.OpCounts(); len(counts) != 0 {
+		t.Fatalf("redis calls %v", counts)
+	}
+	if dials := w.world.Dials(); len(dials) != 0 {
+		t.Fatalf("dialed %v", dials)
+	}
+	if result := w.sendAdmitted(w.urTicket(&w.sidecarId), w.preamble()); result.GetCode() != uint32(protocol.SmtpPreambleCode_SMTP_PREAMBLE_OK) {
+		t.Fatalf("the dialer's ticket naming its sidecar answered %d", result.GetCode())
+	}
+}

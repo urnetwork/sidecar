@@ -55,6 +55,8 @@ var testFieldWidths = map[string]int{
 	"SocketTicket.dialer_network_id":  testIdSize,
 	"SocketTicket.grant_id":           testIdSize,
 	"SocketTicket.name_token":         8 * testIdSize,
+	// a ur/ ticket's alone (QD-989), so with a token path this overstates the ticket
+	"SocketTicket.dialer_sidecar_id": testIdSize,
 
 	// §9.6 gives a service key's id no width, so this only stands well past any name a key would take.
 	"SignedSocketTicket.key_id":    64,
@@ -168,7 +170,7 @@ func testFillToWidths(message protoreflect.Message, fieldWidths map[string]int) 
 }
 
 // §9.6: a ticket fits with a 112-byte name or an 8-segment token path, and a signed one in StreamOpen.ticket. A ticket
-// carries one or the other, so each case leaves one out.
+// carries one or the other, so each case leaves one out; each keeps a ur/ ticket's dialer_sidecar_id (QD-989).
 func TestSocketTicketFitsItsBounds(t *testing.T) {
 	for _, unset := range []string{"SocketTicket.name", "SocketTicket.name_token"} {
 		fieldWidths := maps.Clone(testFieldWidths)
@@ -246,7 +248,7 @@ func TestBoundsReachAFieldAddedLater(t *testing.T) {
 		{
 			path:    "protocol/socket.proto",
 			message: "SocketTicket",
-			field:   testNewField("extra", 16, bytesKind),
+			field:   testNewField("extra", 17, bytesKind),
 			want:    "SocketTicket.extra has no stated width",
 		},
 		{
