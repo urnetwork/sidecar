@@ -669,3 +669,23 @@ The design-records track dr4-details-e (wave f43d) folds DESIGN-DETAILS.md secti
 Outside this folder the first piece touched DESIGN.md, DESIGN-AMENDMENTS.md's note on the sections to fold and DESIGN-DETAILS.md's Status cells for sections 3, 13 and 17.
 
 At the second piece `build.sh` reproduced DESIGN.md (SHA-256 `cfe5b2944f0e784a49d2c047a79c7b9caa3c0fdb36cdd3a162396679df495ac8`): no id, fence field, §2.8 row or owner decision changed; all 585 decisions are cited and Q-REPO-6 alone is open; 310 superseded-option hits, each with a reading, none live; 11,761 section references, 14 more, with the one unresolved as before; `v7/words.json` was regenerated; the metadata list is unchanged. `protocol`'s fence tests hold `search.proto` to the fence's declarations, which did not change. Outside this folder the second piece touched DESIGN.md, DESIGN-AMENDMENTS.md's note and DESIGN-DETAILS.md's Status cell for section 7.
+
+## Validation after the citation pass's measure at the DESIGN-DETAILS folds (2026-11-18)
+
+The design-records track dr4-citation (wave f43d) measures again what QD-274's pass measures (owner decision 551; "Validation after QD-274's last citation piece", above), now that this wave's folds of DESIGN-DETAILS.md's sections have written their text into several sections each, and turns the restatements they added into citations. The earlier track had finished the pass, deleted QD-274's item from sidecar/DESIGN-AMENDMENTS.md and written its line in the folded list, so none of those is done again here. No decision's meaning changes, so no owner decision is added and no register summary moves.
+
+- **What the folds added.** Measured as before, the passages that share a run of 12 or more words with another section outside §2.8, §3.7 and Requirements rows stood at 1,409 words in 46 groups after the last piece and at 1,590 in 52 when this track began: six new groups, and one grown from 28 words to 50.
+- **Three are now citations.** §5.9's holds row had listed the search manifest's contents as §11.14's pin row does (the fold of section 7): it now names the manifest as what that row records, keeping the last `Search.PinRingCount` pins replayed, which only §5.9 states, and the plan's citation of §11.14's Reads. §7.9's after row had said, as §10.8's `ur keychain recovery-rotate` bullet does, that a compromise rebind's path epoch is due within 24 h as every due is (owner decision 585, the fold of section 9): it now cites §11.6's due row, which owns the 24 h, and §10.8 keeps its clause. §17.17's row for a revocation the posture cannot check had repeated D-SDK-13's alarm times (the fold of section 4): it now cites the schedule 17.8's forwarding roles give. Each edited passage still cites the owner decisions it cited.
+- **Four are kept on purpose**, each one of §22's statements of what a test checks beside the text that owns the rule: FS-47's M5 case and §21.7's case for closure bytes taken at the storage limit, the grown group; §22.7's rows-only gate and D-TEAM-26 on rows keeping every confirmation (section 5); FS-89's `--now` case and D-EVS-64's mark once evacuation's horizon has passed (section 10), which §2.8 also publishes; and §22.6's remote-search merge target and §11.14's merge row on a hit from a repo the request did not name (section 7).
+- **What remains.** 1,508 words in 49 groups, each kept on purpose as the last piece's record lists them, with the four above; at G0's 8-word measure the share of words in near-duplicate passages, deliberate ones included, went from 3.12% to 3.10%. Two sections were not found stating one rule differently.
+
+`build.sh` on this folder reproduced DESIGN.md (SHA-256 `c9d3482c3874df1421fd9470dd3c4b73b498ad8a986b39a3e53ca58976af3f78`), and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no §2.8 row change, so no guard line was needed. No proto fence changed, and §22 is untouched, so none of the rows sidecartest/fault's catalog reads by position moved.
+- **Owner decisions.** All 585 rows are present and cited; APPLY.md's section pairs hold.
+- **Open owner questions.** One, Q-REPO-6.
+- **Superseded options.** 310 grep hits, each with a reading carried by its line's text; two moved up two lines in §5's file and none is on a changed line. None is live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 11,762 section references, 1 more, with the one unresolved as before. `v7/words.json` and `v7/text_checks.json` were regenerated.
+- **The metadata list** is unchanged: no §2.8 row changes.
+
+Outside this folder the track touched DESIGN.md alone.

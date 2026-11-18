@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // Remote search (§11.14): a phone's request to a designated indexer and the reply. Peer to peer over a Required
 // session, so no server reads a field here, and only sizes show (§2.8's connect-5). Freezes at M10, additive to
 // M2's wire (§23.8). Fields 13 and 14 stay reserved for later requesters.

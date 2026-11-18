@@ -89,6 +89,17 @@ type SmtpEdgeSettings struct {
 	// The largest SmtpProof or SmtpHandshake request taken (DESIGN-DETAILS 3.7): a part is under 3 KiB.
 	// Default 16,384.
 	ProofMaxByteCount int `yaml:"-"`
+	// The proof key sets the edge accepts (DESIGN-DETAILS 3.2.7): each the id a preamble names, the directory
+	// that holds its keyset.json and verifying keys, and an optional not_after. None by default, so the edge's
+	// verifier holds none and answers every preamble KEYS until the file lists one. The edge's config checks
+	// the list and each directory (SmtpEdgeConfig); the intake reads the same file and none of this.
+	ProofKeySets []SmtpProofKeySetEntry `yaml:"proof_key_sets"`
+	// How many key sets the file may list. Default 4, the most smtpproof's verifier holds
+	// (VerifierSettings.KeySetMaxCount).
+	ProofKeySetMaxCount int `yaml:"-"`
+	// Octets of a key set's keyset.json read at most when its directory is checked against its id. Default
+	// 262,144, as a prover host reads (smtpproof's KeySettings.ManifestMaxByteCount).
+	ProofManifestMaxByteCount int `yaml:"-"`
 	// The most client octets a connection hands its session that the session has not yet cleared for the MX:
 	// past it the edge stops reading the sidecar's stream until a part clears them, back-pressure and never a
 	// buffer (§14.5's E3 holds records for their part). Default 256 KiB, many times a header block and a
@@ -275,6 +286,8 @@ func DefaultSmtpEdgeSettings() *SmtpEdgeSettings {
 		DrainTimeout:               10 * time.Minute,
 		RecordMaxByteCount:         5 + 16*1024 + 2048,
 		ProofMaxByteCount:          16 * 1024,
+		ProofKeySetMaxCount:        4,
+		ProofManifestMaxByteCount:  256 * 1024,
 		ConnectionHeldMaxByteCount: 256 * 1024,
 		OutcomeAcceptTimeout:       15 * time.Minute,
 		OutcomeMaxCount:            100000,

@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // The search index's plaintext (§11.14): what its files hold before evs seals them as it seals any file, so no
 // server reads a field here. It needs no number at M2 and freezes with format 2 at M10 (D-PHASE-9), inside the
 // versioning-2 files format 1 reserves. Headers and manifests marshal deterministically, repeated fields sorted,

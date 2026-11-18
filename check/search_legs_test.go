@@ -13,19 +13,20 @@ import (
 	"testing"
 )
 
-// Root files of the index and of search, by name: what QD-988 (sdk-m10-01-ios-leg-links-index-code) takes off the
+// Root files of the index and of search, by name: what QD-988 (sdk-m10-01-ios-leg-links-index-code) took off the
 // ios_extension legs.
 var iosExtensionIndexFilePrefixes = []string{"evs_index_", "search_", "state_search_"}
 
-// rpc_search.go's search paths, which QD-988 puts behind a leg file of their own.
+// rpc_search.go's search paths, which QD-988 put behind a leg file of their own, rpc_search_leg.go: the legs compile
+// that one, which refuses SEARCH, and its tests run under their tags (search_leg_run_test.go).
 var iosExtensionIndexFileNames = []string{"rpc_search.go"}
 
 // The generated descriptors of evsindex.proto and search.proto.
 var iosExtensionIndexProtoFiles = []string{"evsindex.pb.go", "search.pb.go"}
 
 // The ios_extension legs compiling a root file of the index or search, or protocol's evsindex.pb.go or search.pb.go:
-// §22.5's §18 row and §18.10 keep them off the forwarding leg, which runs no search. Until QD-988's split lands (a REPO or
-// PROTO lane track's), the row stands behind iosExtensionLinksNoIndex and reports what it finds.
+// §22.5's §18 row and §18.10 keep them off the forwarding leg, which runs no search. The row's switch is
+// iosExtensionLinksNoIndex, on since QD-988's split.
 func (self *repository) iosExtensionIndexFindings(t testing.TB) []string {
 	t.Helper()
 	if !self.readsIosExtensionLeg() {

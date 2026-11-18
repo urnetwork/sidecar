@@ -32,8 +32,8 @@ type rowSwitches struct {
 	// §18.10 and §4.18, from M2: make size holds the sidecar_http js leg to its goal and miss rule.
 	sidecarHttpSizeGate bool
 	// §18.10 and §22.5's §18 row, from M10: the ios_extension legs compile no index or search file and neither
-	// evsindex.pb.go nor search.pb.go (SEARCH-M10-41). Off until QD-988's split (sdk-m10-01-ios-leg-links-index-code)
-	// tags them off the leg, a REPO or PROTO lane track's: the row reports the files the leg still compiles meanwhile.
+	// evsindex.pb.go nor search.pb.go (SEARCH-M10-41). Held since QD-988's split (sdk-m10-01-ios-leg-links-index-code)
+	// tagged them off the leg and put rpc_search.go's paths behind rpc_search_leg.go.
 	iosExtensionLinksNoIndex bool
 }
 
@@ -126,8 +126,7 @@ func defaultCheckSettings() *checkSettings {
 			xTextIsNormalizerOnes:     true,
 			iosExtensionSizeGate:      true,
 			sidecarHttpSizeGate:       true,
-			// on once QD-988's split lands, when TestRowsThatStartLaterHoldNow fails until it is
-			iosExtensionLinksNoIndex: false,
+			iosExtensionLinksNoIndex:  true,
 		},
 		goVersion:                 "1.27.4",
 		protocGenGoTool:           "google.golang.org/protobuf/cmd/protoc-gen-go",

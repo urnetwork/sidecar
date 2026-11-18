@@ -66,6 +66,7 @@
       "host": "ur.io",
       "tcp": 443,
       "need": "optional: install.sh, the release key, this list",
+      "service": "smtp-proof-keys",
       "requirement": "optional"
     }
   ]

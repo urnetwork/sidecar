@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // Normalizer 1 (§11.14; protocol/INDEX-FORMAT.md): the one definition of index text, shared by writers, queries and
 // reproduction, so that builds on one set of tables turn a document into one key set (FI-22). It is a chain of
 // transforms, so a document of any size passes through a few buffers, which lets a phone normalize a 1 MiB chunk
