@@ -1,11 +1,15 @@
 // PUT /evs/v1/repos/<id>/segments/<sid>?push=<push_id>[&closure=1] (§11.13's uploads table, §11.20; EVSB-M2-09):
 // a client's segment, streamed straight to seg/<repo>/<sid> on the segment cluster, If-None-Match with its id as
 // its checksum, never held in memory. The route takes rw or deposit; ?closure=1 takes admin, the team directory's
-// included, refused before any write (I-EVS-16). In order, before the body moves:
+// included, refused before any write (I-EVS-16). It is the one route that carries §11.12's re-seed exception
+// (EvsRoute.ReseedException; QD-977): a deleted repo's standing admin, whom the state gives admin alone (QD-880),
+// passes the guard holding admin alone and marked while the host's reseed gate is on, and only there. In order,
+// before the body moves:
 //
 //  1. §11.12's refused row from repo/ (a deleted repo 409 REPO_DELETED, unless a recovery is returning its history
-//     to it, when its admin's uploads are taken), the repo's facts from the projection, and the body's length, known
-//     and within a segment's 8 MiB;
+//     to it, when its admin's uploads are taken; a request the guard passed marked is taken only so, and refused
+//     403 SCOPE otherwise, as the guard would have refused it), the repo's facts from the projection, and the body's
+//     length, known and within a segment's 8 MiB;
 //  2. the storage gate (quota_gate.go): a closure upload through ChargeClosure, any other through CheckUpload,
 //     §20.7's QuotaRefusal on a refusal;
 //  3. §19.9's cohort limit (cluster_limit.go): while the repo's metadata cluster stands at it, 507 CLUSTER_FULL with
@@ -79,8 +83,10 @@ func (self *EvsEngine) uploadRoutes() []*EvsRoute {
 			Rights:  sidecar.AclEvsWrite | sidecar.AclEvsDeposit | sidecar.AclEvsAdmin,
 			Write:   true,
 			Placed:  true,
-			// §11.12's refused row is the handler's, with the re-seed's exception (uploadRepoState)
-			Serve: self.serveUploadSegment,
+			// §11.12's refused row is the handler's, with the re-seed's exception (uploadRepoState), which a deleted
+			// repo's standing admin reaches only through the guard's marked pass
+			ReseedException: true,
+			Serve:           self.serveUploadSegment,
 		},
 	}
 }
@@ -123,9 +129,33 @@ func evsQuotaRefusalReply(refusal *sidecar.QuotaRefusal) *protocol.EvsRefusalRep
 // §11.12's refused row for an upload, before anything else of the route, from repo/ cached at most 5 s: a deleted
 // repo answers 409 REPO_DELETED and one past it 409 SHREDDING, keying and active pass, and a deleted repo that is
 // taking its history back in a recovery takes its admin's segments (reseed.go's reseedAdmitsDeleted; §11.13), never
-// a closure upload, which no re-seed sends. false once it has answered the refusal.
+// a closure upload, which no re-seed sends. A request the guard passed by the exception alone (reseedAdmitted) is
+// taken only through it, and every other answer to it is 403 SCOPE, the guard's refusal had the exception not
+// applied (QD-977): a keying or active repo/ above all, as between the RepoDelete reaching the gate's state and
+// repo/ showing deleted, and one past deleted or never written; a repo/ or projection evs cannot read takes nothing
+// and answers as any request's read does. false once it has answered the refusal.
 func (self *EvsEngine) uploadRepoState(request *EvsRequest) bool {
+	closure := request.Http.URL.Query().Get("closure") == evsUploadClosureQueryValue
 	read, err := self.repos.Read(request.Ctx, request.Cluster, request.RepoId)
+	if request.reseedAdmitted {
+		switch {
+		case errors.Is(err, sidecar.ErrEvsRepoNotFound):
+		case err != nil:
+			self.answerTransition(request, err)
+			return false
+		case !closure && read.Object.GetState() == protocol.EvsRepoState_EVS_REPO_DELETED:
+			facts, answer := self.deps.AuthState.Repo(request.Principal, request.RepoId)
+			switch {
+			case answer == EvsAuthAllowed && self.reseedAdmitsDeleted(request, facts, read.Object):
+				return true
+			case answer == EvsAuthUnknown:
+				request.Unavailable(nil)
+				return false
+			}
+		}
+		request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE)
+		return false
+	}
 	if !self.answerTransition(request, err) {
 		return false
 	}
@@ -134,7 +164,7 @@ func (self *EvsEngine) uploadRepoState(request *EvsRequest) bool {
 		return true
 	case protocol.EvsRepoState_EVS_REPO_DELETED:
 		// the projection's facts only for the exception: without them the refused row stands
-		if request.Http.URL.Query().Get("closure") == evsUploadClosureQueryValue {
+		if closure {
 			break
 		}
 		if facts, answer := self.deps.AuthState.Repo(request.Principal, request.RepoId); answer == EvsAuthAllowed && self.reseedAdmitsDeleted(request, facts, read.Object) {
