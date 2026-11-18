@@ -158,6 +158,8 @@ Questions: `record-md-change-approval.md`.
 
 Not folded (2026-11-16): RECORD.md sections 6.3, 11 and 17 and Q-RECORD-7, which RECORD.md still marks pending, and P5:728's copy in sidecar/design/pitch5.html, all outside design/source/; the DESIGN.md part is folded as owner decision 453 (§16.8's approvals bullet).
 
+Not folded (2026-11-18): RECORD.md's parts, which track dr4-outside-docs folds next; P5:728's copy is folded (the same track).
+
 ### QD-138: Nothing in the design writes a `record` repo's entries
 *Accepted by the owner on 2026-11-06, in bulk as recommended.*
 
