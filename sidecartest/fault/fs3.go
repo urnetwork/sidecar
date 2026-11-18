@@ -7,7 +7,7 @@
 // path epoch's due; A, released, fails its CAS, and its rerun of 5 (b-h) on the new head refuses it 412 GATE_CLOSED,
 // the head's pins being newer; writerA builds the write again under a new push id and generation 2, and it commits.
 // The twin, Fs3GateOpen, is the same with nobody leaving: B commits under generation 1 and A's rerun commits by the
-// disjoint-retry path. Only changes are made, since a creation waits out the due a removal leaves (FS-4's).
+// disjoint-retry path. Only changes are made, though no due holds a creation any more (QD-1046).
 //
 // The clause beside it, Fs3StepSevenPastFiveSeconds: A held after its step 6, before step 7's window, while the
 // reader leaves and 25 s pass, inside the lb's read timeout, with no other commit: its step 7 is past 5 s of its step

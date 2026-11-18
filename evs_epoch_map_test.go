@@ -21,8 +21,8 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-// A writer with a small tree in epoch 1, holding a REMOVE generation 2 whose crossing is immediate, that rotated to it
-// by its own write, so its mapper starts at once.
+// A writer with a small tree in epoch 1, holding a REMOVE generation 2, that rotated to it by its own write, so its
+// mapper starts at once, the due being batched as every due is (QD-1046).
 func newEvsTestMapperWriter(t *testing.T) *evsTestWriter {
 	t.Helper()
 	writer := newEvsTestWriter(t)
@@ -35,14 +35,12 @@ func newEvsTestMapperWriter(t *testing.T) *evsTestWriter {
 	writer.gkm.newest = 2
 	writer.world.generation = 2
 	writer.gkm.causes[2] = GkmCauseRemove
-	writer.gkm.auths[1] = 3
-	writer.world.config.repo.HoldersShrunkAt = 5
 	// a modification at the new generation: this device's EnsureWritable returned the REMOVE generation, and the push
-	// crossing it recorded the immediate due, as evs's 5e does
+	// crossing it recorded the due, 24 h on, as evs's commit does
 	if _, err := writer.write(t, "a", []byte("a again")); err != nil {
 		t.Fatal(err)
 	}
-	writer.world.due = &protocol.EvsPathEpoch{DueGeneration: 2, DueBlocksCreation: true, DueByMs: writer.test.clock.Now().UnixMilli()}
+	writer.world.due = &protocol.EvsPathEpoch{DueGeneration: 2, DueByMs: writer.test.clock.Now().Add(24 * time.Hour).UnixMilli()}
 	return writer
 }
 
@@ -177,19 +175,23 @@ func TestEvsMapperTailCoversLaterCreations(t *testing.T) {
 	}
 }
 
-// A batched due waits while two sources stand, building nothing; three sources wait any due.
+// Every due waits while two sources stand, building nothing (QD-1046): one this device rotated to, and one a head
+// written before QD-1046 recorded blocking, which once took the third source.
 func TestEvsMapperWaitsOnSources(t *testing.T) {
-	writer := newEvsTestMapperWriter(t)
-	writer.world.cutOver(2)
-	writer.world.cutOver(3)
-	writer.gkm.newest = 4
-	writer.gkm.causes[4] = GkmCauseRemove
-	writer.world.due = &protocol.EvsPathEpoch{DueGeneration: 4, DueByMs: writer.test.clock.Now().UnixMilli()}
-	if err := writer.repo.TickMapper(context.Background(), writer.world.refId); !errors.Is(err, errEvsMapperWait) {
-		t.Fatalf("a batched due with two sources: %v", err)
-	}
-	if job, _ := writer.repo.loadMapJob(writer.world.refId); job != nil || 0 < len(writer.server.mapParts) {
-		t.Fatal("a map built while two sources stand")
+	for _, blocking := range []bool{false, true} {
+		writer := newEvsTestMapperWriter(t)
+		writer.world.cutOver(2)
+		writer.world.cutOver(3)
+		writer.gkm.newest = 4
+		writer.gkm.causes[4] = GkmCauseRemove
+		writer.test.client.epochs.noteWritable(writer.world.repoId, 4)
+		writer.world.due = &protocol.EvsPathEpoch{DueGeneration: 4, DueBlocksCreation: blocking, DueByMs: writer.test.clock.Now().UnixMilli()}
+		if err := writer.repo.TickMapper(context.Background(), writer.world.refId); !errors.Is(err, errEvsMapperWait) {
+			t.Fatalf("a due with two sources, recorded blocking %t: %v", blocking, err)
+		}
+		if job, _ := writer.repo.loadMapJob(writer.world.refId); job != nil || 0 < len(writer.server.mapParts) {
+			t.Fatalf("a map built while two sources stand, the due recorded blocking %t", blocking)
+		}
 	}
 }
 

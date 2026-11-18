@@ -88,3 +88,7 @@ D['D-EVS-47'] = "Merges, reading no head, and roll-ups are functions of base fil
 assert D['D-EVS-25'].endswith('die only after ref fences.') and D['D-EVS-34'].endswith('GC fences idle refs first.'), 'EVS GC rows moved'
 D['D-EVS-25'] = "Orphans are found without the log: evacuation settles batch records, deleting dead records' own slots; GC waits for its horizon."
 D['D-EVS-34'] = "Segment uploads write nothing to the metadata cluster: a MAC'd receipt rides the push; GC waits for evacuation's horizon."
+# The fold of DESIGN-DETAILS.md section 10 (2026-11-17): the drop job marks past evacuation's horizon and deletes only
+# objects the horizon has passed, by a DELETE naming each (owner decision 397).
+assert D['D-EVS-64'].endswith('deletes objects over 25 h old.'), 'EVS drop row moved'
+D['D-EVS-64'] = "Commit fences listed versions; past evacuation's horizon the job marks, verifies separately and deletes objects the horizon has passed."

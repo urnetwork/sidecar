@@ -2,13 +2,16 @@
 
 // §22.6's FuzzPushState: any sequence of reset parts, hints, versions pages and reconciles leaves the
 // machine bounded, with no durable topic ever lowered by a reset, no partial run applied, every run
-// either applied whole or abandoned for versions, and a page begun before an input the machine has since
-// taken lowering nothing, ending no run and raising no alarm (owner decision 299). The seed corpus is
+// either applied whole or abandoned for versions, no reset part or hint raising an alarm and a complete
+// run that shows a durable topic below the version held asking for versions, since only a page judges
+// a durable fall (QD-1044), and a page begun before an input the machine has since taken lowering
+// nothing, ending no run and raising no alarm (owner decision 299). The seed corpus is
 // testdata/fuzz/FuzzPushState/, off the js leg, whose tests cannot open it.
 
 package sidecar
 
 import (
+	"maps"
 	"testing"
 
 	"github.com/urnetwork/sidecar/protocol"
@@ -20,6 +23,9 @@ var testFuzzPushTopics = []string{PushTopicTeam, PushTopicDns, PushTopicCore, Pu
 func FuzzPushState(f *testing.F) {
 	f.Add([]byte{0, 1, 0, 5, 1, 1, 1, 9, 2, 0, 0, 3})
 	f.Add([]byte{0, 1, 0, 5, 0, 2, 0, 9, 1, 3, 0, 1, 3, 0, 0, 0})
+	// a complete part raising team to 10, then one showing it at 5, which asks for versions and raises
+	// nothing (QD-1044)
+	f.Add([]byte{1, 0, 0, 10, 1, 1, 0, 5})
 	f.Fuzz(func(t *testing.T, input []byte) {
 		settings := DefaultPushClientSettings()
 		settings.MaxTopicCount = 4
@@ -39,9 +45,19 @@ func FuzzPushState(f *testing.F) {
 			for topic, version := range machine.topicVersions {
 				before[topic] = version
 			}
+			alarmCount := len(machine.alarmTopics)
 			switch op {
 			case 0, 1:
-				machine.resetPart(&protocol.PushReset{Epoch: epoch, Complete: op == 1, Versions: []*protocol.TopicVersion{{Topic: topic, Version: version}}})
+				// the union a complete part applies, when the part joins the open run or opens one
+				union := map[string]uint64{}
+				if machine.runOpen && machine.runEpoch == epoch {
+					maps.Copy(union, machine.runVersions)
+				}
+				union[topic] = version
+				action := machine.resetPart(&protocol.PushReset{Epoch: epoch, Complete: op == 1, Versions: []*protocol.TopicVersion{{Topic: topic, Version: version}}})
+				if len(action.alarms) != 0 || alarmCount < len(machine.alarmTopics) {
+					t.Fatalf("a reset part raised an alarm: %+v", action)
+				}
 				if op == 0 {
 					// a part that is not complete changes nothing applied
 					for topic, version := range machine.topicVersions {
@@ -50,8 +66,16 @@ func FuzzPushState(f *testing.F) {
 						}
 					}
 				}
+				for topic, version := range union {
+					if held, holds := before[topic]; op == 1 && holds && version < held && PushTopicClassOf(topic) == PushTopicDurable && !action.refetchVersions {
+						t.Fatalf("a complete part showed %s at %d below %d and asked for no versions: %+v", topic, version, held, action)
+					}
+				}
 			case 2:
-				machine.hint(&protocol.PushHint{Seq: epoch, Topic: topic, Version: version})
+				action := machine.hint(&protocol.PushHint{Seq: epoch, Topic: topic, Version: version})
+				if len(action.alarms) != 0 || alarmCount < len(machine.alarmTopics) {
+					t.Fatalf("a hint raised an alarm: %+v", action)
+				}
 			case 3:
 				// a versions page, begun after every input, or before the last when epoch is 1
 				noted := machine.inputCount
@@ -59,7 +83,6 @@ func FuzzPushState(f *testing.F) {
 					noted -= 1
 				}
 				runOpen := machine.runOpen
-				alarmCount := len(machine.alarmTopics)
 				action := machine.reset(map[string]uint64{topic: version}, noted)
 				if noted < machine.inputCount {
 					// a late page lowers nothing, ends no run and raises no alarm

@@ -128,24 +128,6 @@ func (self *EvsWorld) HoldView(instance string) func(ctx context.Context, net *N
 	}
 }
 
-// A step action: device's creation of path waits for the ref's path epoch, sending nothing for it, the ledger
-// keeping it as never written.
-func (self *EvsWorld) WriteDue(device string, path string) func(ctx context.Context, net *Net) error {
-	return func(ctx context.Context, net *Net) error {
-		write, err := self.write(ctx, device, path, EvsWorldContent("fs4 due "+path, 200))
-		if err != nil {
-			return err
-		}
-		if !errors.Is(write.err, sidecar.ErrEvsPathEpochDue) {
-			return fmt.Errorf("%s's creation of %q while due ended %v", device, path, write.err)
-		}
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
-		write.state = evsWorldWriteRefused
-		return nil
-	}
-}
-
 // A step action: device's mapper ticks once on main (EvsRepo.TickMapper), building, uploading and committing a
 // PATH_EPOCH when one is due.
 func (self *EvsWorld) TickMapper(device string) func(ctx context.Context, net *Net) error {

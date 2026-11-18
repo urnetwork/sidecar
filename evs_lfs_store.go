@@ -22,8 +22,8 @@
 //	RemoveMany  one push removing each object, each naming its version, so a concurrent touch wins at path-level CAS;
 //	            the purge deletes the content a minute after it commits (§11.13)
 //
-// A creation under a due path epoch waits as any general-repo creation does, ErrEvsPathEpochDue reaching the caller
-// as retryable once the sender's waits end. Export skips ur/lfs (evs_export.go) and a DROP is refused on it
+// A creation a mapper's block holds waits as any creation does, ErrEvsPathEpochDue reaching the caller as retryable
+// once the sender's waits end; no due holds one (QD-1046). Export skips ur/lfs (evs_export.go) and a DROP is refused on it
 // (evs_drop_lineage.go by name, evs by versioning 1). A path or an oid with its path is never logged (I-13).
 //
 // Desktop legs only. Safe for concurrent use.

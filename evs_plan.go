@@ -23,7 +23,7 @@
 //
 // Path epochs (DESIGN-DETAILS 9.2.5). The plan reads every path by 9.2.4's rules and takes each one's floor from that
 // read. A creation is planned only where the read found the path absent, looked up in its parent's table when it has
-// no floor, and on a blocking ref under immediate pressure not at all (ErrEvsPathEpochDue, no token of it sent). A
+// no floor; no due holds it, every due being batched (QD-1046). A
 // change names its path in the current epoch and, as source paths, in each listed source at or above its floor; a
 // removal lowers the path's floor to its row's epoch and its parent's delta removes the child's token in the current
 // epoch and in each such source, so a fold drops a carried row too. A push refused 412 PATH_EPOCH is made again by
@@ -1310,28 +1310,11 @@ func (self *EvsWritePlan) tokenizeIn(ctx context.Context, epoch uint64) error {
 	return nil
 }
 
-// The plan's path-epoch rules over its written paths (DESIGN-DETAILS 9.2.5): a creation on a blocking ref under
-// immediate pressure waits for the epoch, ErrEvsPathEpochDue, nothing sent; while the head lists sources, a removal
+// The plan's path-epoch rules over its written paths (DESIGN-DETAILS 9.2.5): while the head lists sources, a removal
 // lowers its path's floor to its row's epoch (E2), which its parent's delta then names the child's token in; and each
-// written path's source paths by its floor. A directory change takes its own in evsDirectoryChanges.
+// written path's source paths by its floor. A directory change takes its own in evsDirectoryChanges. No due holds a
+// creation, every due being batched (QD-1046).
 func (self *EvsRepo) planEpochs(ctx context.Context, plan *EvsWritePlan) error {
-	if creates := slices.ContainsFunc(plan.Paths, (*EvsPlannedPath).creates); creates || 0 < len(plan.Sources) {
-		state := &evsRefEpoch{refId: plan.RefId, epoch: plan.Head.GetPathEpoch(), version: plan.BaseVersion,
-			generation: plan.Head.GetGeneration(), refKind: plan.RefKind}
-		if plan.firstPush {
-			// an overlay's creator is held by its base ref's pressure (DESIGN-DETAILS 8.2.10, QD-632)
-			state.base = plan.overlayBase
-		}
-		if creates {
-			quiet, err := self.quiet(ctx, state)
-			if err != nil {
-				return err
-			}
-			if !quiet {
-				return ErrEvsPathEpochDue
-			}
-		}
-	}
 	if 0 < len(plan.Sources) {
 		for _, planned := range plan.Paths {
 			if !planned.Remove {
@@ -1514,9 +1497,9 @@ type EvsGitTreeEntries interface {
 //	versions   versioning 0 on every entry: git mode is never versionless
 //	limits     32 components a path, 4,096 children and 448 KiB of names a directory of the new tree, 1,048,576
 //	           entry writes a push, all before any evs write (ErrEvsDirectoryFull)
-//	epochs     a creation on a blocking ref under immediate pressure waits (ErrEvsPathEpochDue); while sources stand
-//	           each change names its source paths by its floor, as PlanWrite's do; a ref's first push moves whole to
-//	           the epoch it starts in (firstEpoch: an overlay's is its base ref's current one, read fresh)
+//	epochs     while sources stand each change names its source paths by its floor, as PlanWrite's do; a ref's
+//	           first push moves whole to the epoch it starts in (firstEpoch: an overlay's is its base ref's current
+//	           one, read fresh); no due holds a creation (QD-1046)
 //
 //	overlay    a path the overlay holds no version of (evs answers its base, or the overlay has no head yet) is
 //	           inherited: a removal of it is no change, its parent's table dropping it; a directory whose children
