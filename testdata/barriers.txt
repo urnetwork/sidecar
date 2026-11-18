@@ -493,6 +493,8 @@ barrier mail.send.copy.after mail_send.go
 barrier mail.send.copy.before mail_send.go
 barrier mail.send.deposit.after mail_send_local.go
 barrier mail.send.deposit.before mail_send_local.go
+barrier mail.send.gate.after mail_send_gate.go
+barrier mail.send.gate.before mail_send_gate.go
 barrier mail.spam.teach.after mail_spam.go
 barrier mail.spam.teach.before mail_spam.go
 barrier mail.vault.erase.after mail_vault.go
