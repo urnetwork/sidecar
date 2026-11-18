@@ -16,6 +16,14 @@
 // stands in for stays out, with all that file alone needs. Should the closure need another name of that file, the file
 // joins, the round fails on the names both declare, and the test fails: such a leg would not compile either.
 //
+// A deliberate seam is the registration that does not join (QD-1063, QD-1065): a file iosExtensionLegSeams names, a
+// short reviewed list with each entry's reason, whose init sets a hook a closure file declares while its tag keeps it
+// off the legs, since what it registers is no part of the forwarding role. Leaving it out changes what the closure
+// does, and that change is the seam's purpose. The exemption is that narrow: a seam the leg compiles joins as any
+// registration does, one whose name a member lacks joins for the name, and every other init joins as before. The
+// list of seams is checked against the closure too: an entry the closure takes, or one no leg's closure leaves out,
+// fails.
+//
 // This compiles each leg once a round and needs Xcode for the iOS ones, so it runs beside make size, not in make check,
 // which holds the list as written (legrows_test.go). Without the variable it compares the list with the closure: a file
 // the closure needs and the list lacks fails, and one the list names past the closure is logged, the list being free to
@@ -54,11 +62,56 @@ var iosExtensionLegInterimSeeds = []string{
 	"config_seal.go", "evs_read.go", "gkm_api.go", "gkm_delivery.go", "gkm_keys.go", "push_poll.go",
 }
 
+// A deliberate seam on the ios_extension legs: a file their tag leaves out though its init sets a hook a closure file
+// declares.
+type closureSeam struct {
+	// as the list names files
+	name string
+	// what its init sets and what the legs go without, with the question that reviewed it
+	reason string
+}
+
+// The legs' deliberate seams, in the order they were reviewed (QD-1063, QD-1065). Each hook exists so that the file
+// setting it can stay off a leg, and none of these serves the forwarding role, which runs only IP and port forwarding
+// (owner decision 197). An entry joins in the commit that reviews its seam, never to quiet the closure.
+var iosExtensionLegSeams = []*closureSeam{
+	{
+		name:   "evs_read_provenance.go",
+		reason: "init sets evs_read.go's evsProvenanceRead (QD-851, QD-1063): on the legs a read gives no provenance, so the forwarding role links no agent-subkey check",
+	},
+	{
+		name:   "directory_card.go",
+		reason: "init sets directory_client.go's directoryFoldFiles (QD-1065): on the legs a fold folds entries alone, judging and repairing no card or repo file",
+	},
+	{
+		name:   "directory_format2.go",
+		reason: "init sets directory_repo.go's directoryRepoWriter and directoryRepoMigrate (QD-1065): the legs write no format-2 carrier, every repo item going as an announce entry",
+	},
+	{
+		name:   "directory_removal.go",
+		reason: "init sets directory_client.go's directoryAfterRead (QD-1065): the legs raise no moderation alarm",
+	},
+	{
+		name:   "directory_revoke.go",
+		reason: "init sets directory_client.go's directoryErasureJudge (QD-1065): on the legs a reader judges none of the directory's erasures and takes every one",
+	},
+	{
+		name:   "identity_cleanup.go",
+		reason: "init registers the cleanup approval kind in identity_approvals.go's table (QD-1065): the legs register no cleanup approval kind",
+	},
+	{
+		name:   "record_agent_body.go",
+		reason: "init sets record_seal.go's recordAgentBodySealer, record_reader.go's recordAgentBodyOpener and record_writer.go's recordSidecarAgentSigner (QD-1065): on the legs every record entry seals version 1, and a version-2 entry reads generically, its agent body unopened",
+	},
+}
+
 // The list's header, which a rewrite writes above its sorted names.
 const iosExtensionLegListHeader = `# The root and protocol files the ios_extension legs may link, by path from the root module, sorted: the
 # forwarding role's file closure (D-SDK-20; DESIGN-DETAILS 4.2.3; REPO-M4-01). make check fails a root or protocol
 # file either extension leg compiles that this list does not name; every other root file carries
 # //go:build !ios_extension, and protocol/Makefile writes that tag on each generated file this list does not name.
+# A file whose init sets a hook a file here declares is on it too, unless check/legs_closure_test.go's
+# iosExtensionLegSeams names it as a deliberate seam, with its reason (QD-1063, QD-1065).
 # The list may shrink freely and grows only in a commit that edits it. It is computed, never hand-picked:
 #   make ios-extension-leg                                         compares it with the closure
 #   SIDECAR_REGENERATE_IOS_EXTENSION_LEG=1 make ios-extension-leg  rewrites it
@@ -253,14 +306,16 @@ func closureFilesNamed(output string, directory string, files map[string]*closur
 
 // The files outside members whose init function names a function or variable a member declares, or whose package
 // variable's initializer calls one: each changes the closure's state at start, which no compile error shows missing.
-func closureRegistrations(files map[string]*closureFile, declarations *closureDeclarations, members map[string]bool) []string {
+// One in seams, a deliberate seam the leg leaves out, is answered apart and does not join.
+func closureRegistrations(files map[string]*closureFile, declarations *closureDeclarations, members map[string]bool, seams map[string]bool) (registrations []string, skippedSeams []string) {
 	memberDeclares := func(packageName string, identifier string) bool {
 		if !declarations.values[packageName][identifier] {
 			return false
 		}
 		return slices.ContainsFunc(declarations.nameFiles[packageName][identifier], func(name string) bool { return members[name] })
 	}
-	registrations := []string{}
+	registrations = []string{}
+	skippedSeams = []string{}
 	for _, name := range slices.Sorted(maps.Keys(files)) {
 		if members[name] {
 			continue
@@ -306,17 +361,21 @@ func closureRegistrations(files map[string]*closureFile, declarations *closureDe
 				}
 			}
 		}
-		if reaches {
+		switch {
+		case reaches && seams[name]:
+			skippedSeams = append(skippedSeams, name)
+		case reaches:
 			registrations = append(registrations, name)
 		}
 	}
-	return registrations
+	return registrations, skippedSeams
 }
 
-// The leg's file closure from the seeds seedsOf picks among its root files, as the list names files. A round whose
-// errors name nothing a stubbed file declares fails the test with the compiler's account, since a closure that cannot
-// be computed has not been.
-func (self *repository) iosExtensionLegClosure(t testing.TB, leg *buildLeg, seedsOf func(rootFiles []string) []string) (members []string, candidateCount int) {
+// The leg's file closure from the seeds seedsOf picks among its root files, as the list names files, and the seams it
+// left out, those of seams the leg does not compile which it would otherwise have taken as registrations. A round
+// whose errors name nothing a stubbed file declares fails the test with the compiler's account, since a closure that
+// cannot be computed has not been.
+func (self *repository) iosExtensionLegClosure(t testing.TB, leg *buildLeg, seedsOf func(rootFiles []string) []string, seams []*closureSeam) (members []string, candidateCount int, skippedSeams []string) {
 	t.Helper()
 	directory, err := self.legDirectory(leg)
 	if err != nil {
@@ -377,13 +436,24 @@ func (self *repository) iosExtensionLegClosure(t testing.TB, leg *buildLeg, seed
 			rootFiles = append(rootFiles, file.name)
 		}
 	}
-	// and the leg's own, which only its tag selects
+	// what the leg compiles with its tag, and of that its own files, which only its tag selects
 	legFiles := []*closureFile{}
+	legCompiled := map[string]bool{}
 	for _, file := range listFiles(strings.Join(leg.tags, ",")) {
+		legCompiled[file.name] = true
 		if files[file.name] == nil {
 			legFiles = append(legFiles, file)
 		}
 	}
+	// the seams the leg's tag leaves out, which alone a round may skip as registrations: one the leg compiles registers
+	// on the leg whatever its entry says
+	seamSet := map[string]bool{}
+	for _, seam := range seams {
+		if !legCompiled[seam.name] {
+			seamSet[seam.name] = true
+		}
+	}
+	skippedSeamSet := map[string]bool{}
 	memberSet := map[string]bool{}
 	for _, seed := range seedsOf(rootFiles) {
 		if files[seed] == nil {
@@ -451,7 +521,11 @@ func (self *repository) iosExtensionLegClosure(t testing.TB, leg *buildLeg, seed
 		_, buildErr := runGo(directory, environment, "build", "-overlay="+overlayPath, "-tags="+tags, "-gcflags=-e", "./protocol", ".")
 		joined := []string{}
 		if buildErr == nil {
-			joined = closureRegistrations(files, declarations, memberSet)
+			var skipped []string
+			joined, skipped = closureRegistrations(files, declarations, memberSet, seamSet)
+			for _, name := range skipped {
+				skippedSeamSet[name] = true
+			}
 		} else {
 			named, unresolved := closureFilesNamed(buildErr.Error(), directory, files, declarations, protocolPath)
 			for _, name := range slices.Sorted(maps.Keys(named)) {
@@ -478,33 +552,74 @@ func (self *repository) iosExtensionLegClosure(t testing.TB, leg *buildLeg, seed
 			memberSet[name] = true
 		}
 	}
-	return slices.Sorted(maps.Keys(memberSet)), len(files)
+	// a seam a later round took for a name its members lacked is in the closure, not left out
+	skippedSeams = []string{}
+	for _, name := range slices.Sorted(maps.Keys(skippedSeamSet)) {
+		if !memberSet[name] {
+			skippedSeams = append(skippedSeams, name)
+		}
+	}
+	if len(skippedSeams) != 0 {
+		t.Logf("%s: the closure leaves out the deliberate seams it would take as registrations: %s", leg.name, strings.Join(skippedSeams, " "))
+	}
+	return slices.Sorted(maps.Keys(memberSet)), len(files), skippedSeams
 }
 
-// The union of every extension leg's closure.
-func (self *repository) iosExtensionLegClosures(t testing.TB, seedsOf func(rootFiles []string) []string) []string {
+// The union of every extension leg's closure, and of the seams each left out. A seam with no reason, or named twice,
+// fails the test before any leg compiles, since each is reviewed once, for its reason.
+func (self *repository) iosExtensionLegClosures(t testing.TB, seedsOf func(rootFiles []string) []string, seams []*closureSeam) (closure []string, skippedSeams []string) {
 	t.Helper()
+	for index, seam := range seams {
+		if strings.TrimSpace(seam.reason) == "" {
+			t.Fatalf("the seam %s gives no reason: each is reviewed for what the legs go without", seam.name)
+		}
+		if slices.ContainsFunc(seams[:index], func(other *closureSeam) bool { return other.name == seam.name }) {
+			t.Fatalf("the seam %s is named twice", seam.name)
+		}
+	}
 	union := map[string]bool{}
+	skippedUnion := map[string]bool{}
 	for _, leg := range self.legs {
 		if !leg.hasTag(iosExtensionTag) {
 			continue
 		}
-		members, candidateCount := self.iosExtensionLegClosure(t, leg, seedsOf)
+		members, candidateCount, legSkippedSeams := self.iosExtensionLegClosure(t, leg, seedsOf, seams)
 		t.Logf("%s: the closure takes %d of the %d root and protocol files the leg compiles untagged", leg.name, len(members), candidateCount)
 		for _, name := range members {
 			union[name] = true
+		}
+		for _, name := range legSkippedSeams {
+			skippedUnion[name] = true
 		}
 	}
 	if len(union) == 0 {
 		t.Fatal("no ios_extension leg was read, so no closure was computed")
 	}
-	return slices.Sorted(maps.Keys(union))
+	return slices.Sorted(maps.Keys(union)), slices.Sorted(maps.Keys(skippedUnion))
 }
 
-// The list holds the closure of this checkout, or, with SIDECAR_REGENERATE_IOS_EXTENSION_LEG=1, becomes it.
+// What is wrong with seams once the closure and the seams its legs left out are known. An entry the closure takes is
+// no seam, the legs compiling it or a member needing a name it declares. And an entry no leg's closure left out is an
+// exemption nothing uses, its file gone or reaching the closure no more, which would hide the next init the file gains.
+func closureSeamFindings(seams []*closureSeam, closure []string, skippedSeams []string) []string {
+	findings := []string{}
+	for _, seam := range seams {
+		switch {
+		case slices.Contains(closure, seam.name):
+			findings = append(findings, findingf("the closure takes %s, a seam on iosExtensionLegSeams: an extension leg compiles it, or a member needs a name it declares, so the legs do not leave it out; give it its tag back and move the name out of it, or take it off the seams", seam.name))
+		case !slices.Contains(skippedSeams, seam.name):
+			findings = append(findings, findingf("no extension leg's closure leaves out %s, a seam on iosExtensionLegSeams: it is gone or no init or package variable of it reaches the closure, so take it off the seams, where it would hide the next init it gains", seam.name))
+		}
+	}
+	return findings
+}
+
+// The list holds the closure of this checkout, or, with SIDECAR_REGENERATE_IOS_EXTENSION_LEG=1, becomes it; either
+// way each seam on iosExtensionLegSeams must be one the closure leaves out.
 func TestIosExtensionLegListIsItsClosure(t *testing.T) {
 	repository := openThisCheckout(t)
-	closure := repository.iosExtensionLegClosures(t, iosExtensionLegSeeds)
+	closure, skippedSeams := repository.iosExtensionLegClosures(t, iosExtensionLegSeeds, iosExtensionLegSeams)
+	failFindings(t, "legs", closureSeamFindings(iosExtensionLegSeams, closure, skippedSeams))
 	if os.Getenv("SIDECAR_REGENERATE_IOS_EXTENSION_LEG") == "1" {
 		listPath := filepath.Join(repository.moduleDirectory, filepath.FromSlash(iosExtensionLegListPath))
 		if err := os.WriteFile(listPath, []byte(iosExtensionLegListHeader+strings.Join(closure, "\n")+"\n"), 0o644); err != nil {
@@ -554,7 +669,7 @@ func Seed() int {
 	fixture.write("protocol/message.go", "package protocol\n\ntype Message struct {\n\tName string\n}\n")
 	fixture.write("protocol/message_describe.go", "package protocol\n\nfunc (self *Message) Describe() string {\n\treturn self.Name\n}\n")
 	fixture.write("protocol/other.go", "package protocol\n\ntype Other struct{}\n")
-	closure := fixture.open().iosExtensionLegClosures(t, func(rootFiles []string) []string { return []string{"seed.go"} })
+	closure, _ := fixture.open().iosExtensionLegClosures(t, func(rootFiles []string) []string { return []string{"seed.go"} }, nil)
 	want := []string{
 		"helper.go", "protocol/doc.go", "protocol/message.go", "protocol/message_describe.go", "registration.go",
 		"registration_value.go", "registry.go", "seed.go", "thing.go", "thing_name.go", "thing_size.go",
@@ -573,7 +688,7 @@ func TestIosExtensionLegClosureTakesALegFileForTheFileItReplaces(t *testing.T) {
 	fixture.write("answer.go", "//go:build !ios_extension\n\npackage sidecar\n\nimport \"@module@/protocol\"\n\nfunc answer() int {\n\treturn len((&protocol.Message{}).Name)\n}\n")
 	fixture.write("answer_leg.go", "//go:build ios_extension\n\npackage sidecar\n\nfunc answer() int {\n\treturn 0\n}\n")
 	fixture.write("protocol/message.go", "package protocol\n\ntype Message struct {\n\tName string\n}\n")
-	closure := fixture.open().iosExtensionLegClosures(t, func(rootFiles []string) []string { return []string{"seed.go"} })
+	closure, _ := fixture.open().iosExtensionLegClosures(t, func(rootFiles []string) []string { return []string{"seed.go"} }, nil)
 	if want := []string{"answer_leg.go", "protocol/doc.go", "seed.go"}; !slices.Equal(closure, want) {
 		t.Errorf("closure %v, want %v", closure, want)
 	}
@@ -586,10 +701,129 @@ func TestIosExtensionLegClosureTakesATaggedFileWithNoLegFile(t *testing.T) {
 	fixture.write("seed.go", "package sidecar\n\nfunc Seed() int {\n\treturn answer()\n}\n")
 	fixture.write("answer.go", "//go:build !ios_extension\n\npackage sidecar\n\nimport \"@module@/protocol\"\n\nfunc answer() int {\n\treturn len((&protocol.Message{}).Name)\n}\n")
 	fixture.write("protocol/message.go", "package protocol\n\ntype Message struct {\n\tName string\n}\n")
-	closure := fixture.open().iosExtensionLegClosures(t, func(rootFiles []string) []string { return []string{"seed.go"} })
+	closure, _ := fixture.open().iosExtensionLegClosures(t, func(rootFiles []string) []string { return []string{"seed.go"} }, nil)
 	if want := []string{"answer.go", "protocol/doc.go", "protocol/message.go", "seed.go"}; !slices.Equal(closure, want) {
 		t.Errorf("closure %v, want %v", closure, want)
 	}
+}
+
+// A seed reading two hooks, each set from init by a file of the same shape tagged off the legs: seam.go, the only file
+// that reads protocol/provenance.go, and registration.go. With tagged false seam.go carries no tag, so the legs compile
+// it.
+func writeClosureSeamFixture(fixture *fixture, tagged bool) {
+	fixture.write("seed.go", `package sidecar
+
+var seamHook func() int
+
+var registrationHook func() int
+
+func Seed() int {
+	total := 0
+	for _, hook := range []func() int{seamHook, registrationHook} {
+		if hook != nil {
+			total += hook()
+		}
+	}
+	return total
+}
+`)
+	buildLine := "//go:build !ios_extension\n\n"
+	seam := `package sidecar
+
+import "@module@/protocol"
+
+func init() {
+	seamHook = func() int {
+		return len((&protocol.Provenance{}).Signer)
+	}
+}
+`
+	if tagged {
+		seam = buildLine + seam
+	}
+	fixture.write("seam.go", seam)
+	fixture.write("registration.go", buildLine+"package sidecar\n\nfunc init() {\n\tregistrationHook = func() int {\n\t\treturn 1\n\t}\n}\n")
+	fixture.write("protocol/provenance.go", "package protocol\n\ntype Provenance struct {\n\tSigner string\n}\n")
+}
+
+// The seams one fixture names.
+var closureFixtureSeams = []*closureSeam{{name: "seam.go", reason: "a fixture's seam, whose hook the legs go without"}}
+
+// A seam on the list, which the legs' tag leaves out, is left out with the protocol file only it reads, and is answered
+// as left out; beside it an unlisted registration of the same shape still joins, so the rule's guard for every other
+// init stays.
+func TestIosExtensionLegClosureLeavesOutASeam(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs(iosExtensionLegName, macExtensionLegName)
+	writeClosureSeamFixture(fixture, true)
+	closure, skippedSeams := fixture.open().iosExtensionLegClosures(t, func(rootFiles []string) []string { return []string{"seed.go"} }, closureFixtureSeams)
+	if want := []string{"protocol/doc.go", "registration.go", "seed.go"}; !slices.Equal(closure, want) {
+		t.Errorf("closure %v, want %v", closure, want)
+	}
+	if want := []string{"seam.go"}; !slices.Equal(skippedSeams, want) {
+		t.Errorf("seams left out %v, want %v", skippedSeams, want)
+	}
+	wantFindings(t, closureSeamFindings(closureFixtureSeams, closure, skippedSeams))
+}
+
+// Its twin: with the list naming no seam, the same file joins as a registration, with the protocol file it reads.
+func TestIosExtensionLegClosureTakesARegistrationTheSeamsDoNotName(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs(iosExtensionLegName, macExtensionLegName)
+	writeClosureSeamFixture(fixture, true)
+	closure, skippedSeams := fixture.open().iosExtensionLegClosures(t, func(rootFiles []string) []string { return []string{"seed.go"} }, nil)
+	if want := []string{"protocol/doc.go", "protocol/provenance.go", "registration.go", "seam.go", "seed.go"}; !slices.Equal(closure, want) {
+		t.Errorf("closure %v, want %v", closure, want)
+	}
+	if len(skippedSeams) != 0 {
+		t.Errorf("seams left out %v with none listed", skippedSeams)
+	}
+}
+
+// A seam whose tag came off joins as any registration does, though the list names it: the legs compile it, so its init
+// runs there whatever its entry says.
+func TestIosExtensionLegClosureTakesASeamTheLegsCompile(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs(iosExtensionLegName, macExtensionLegName)
+	writeClosureSeamFixture(fixture, false)
+	closure, skippedSeams := fixture.open().iosExtensionLegClosures(t, func(rootFiles []string) []string { return []string{"seed.go"} }, closureFixtureSeams)
+	if want := []string{"protocol/doc.go", "protocol/provenance.go", "registration.go", "seam.go", "seed.go"}; !slices.Equal(closure, want) {
+		t.Errorf("closure %v, want %v", closure, want)
+	}
+	if len(skippedSeams) != 0 {
+		t.Errorf("seams left out %v, though the legs compile the seam", skippedSeams)
+	}
+	wantFindings(t, closureSeamFindings(closureFixtureSeams, closure, skippedSeams), "the closure takes seam.go")
+}
+
+// A seam is exempt as a registration only: once a registration that joined needs a name the seam declares, the seam
+// joins for it, with what it reads, and is no longer answered as left out.
+func TestIosExtensionLegClosureTakesASeamForANameAMemberLacks(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs(iosExtensionLegName, macExtensionLegName)
+	writeClosureSeamFixture(fixture, true)
+	fixture.edit("seam.go", "func init() {", "func seamValue() int {\n\treturn 1\n}\n\nfunc init() {")
+	fixture.edit("registration.go", "return 1", "return seamValue()")
+	closure, skippedSeams := fixture.open().iosExtensionLegClosures(t, func(rootFiles []string) []string { return []string{"seed.go"} }, closureFixtureSeams)
+	if want := []string{"protocol/doc.go", "protocol/provenance.go", "registration.go", "seam.go", "seed.go"}; !slices.Equal(closure, want) {
+		t.Errorf("closure %v, want %v", closure, want)
+	}
+	if len(skippedSeams) != 0 {
+		t.Errorf("seams left out %v, though the closure took the seam for a name", skippedSeams)
+	}
+	wantFindings(t, closureSeamFindings(closureFixtureSeams, closure, skippedSeams), "the closure takes seam.go")
+}
+
+// Of a list of seams, one the closure takes and one no leg's closure left out are each a finding, in the list's order,
+// the first though one leg left it out; one left out and taken by none is no finding.
+func TestIosExtensionLegSeamFindings(t *testing.T) {
+	seams := []*closureSeam{
+		{name: "left_out.go", reason: "a seam the legs leave out"},
+		{name: "taken.go", reason: "a seam one leg leaves out and another takes"},
+		{name: "unused.go", reason: "a seam whose file reaches the closure no more"},
+	}
+	findings := closureSeamFindings(seams, []string{"seed.go", "taken.go"}, []string{"left_out.go", "taken.go"})
+	wantFindings(t, findings, "the closure takes taken.go", "no extension leg's closure leaves out unused.go")
 }
 
 // Before BRIDGE-M8-05 the seeds are DESIGN-DETAILS 4.7's twelve files; once a bridge_forward*.go file exists, they are

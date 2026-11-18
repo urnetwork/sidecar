@@ -1834,3 +1834,84 @@ assert DECISIONS_INTRO.count(_D609) == 1, 'decisions lead moved'
 DECISIONS_INTRO = DECISIONS_INTRO.replace(
     _D609, "and the warm pairs of @@OD:391@@, and MLS set aside for Later, every group key going by wraps in v0 (610), "
     "amending @@OD:1@@ and @@OD:60@@. ")
+# The second late sweep (dr5-late-sweep, 2026-11-18): the build's answers recorded after the first.
+INDEX += [
+    (611, "The breakers' outside measures",
+     "The mail breakers read Postmaster Tools and SNDS under vault credentials of their own, ext-14 and ext-15, "
+     "and the listings from a mirror copy on taskworker's host."),
+    (612, 'Notice pages from api and taskworker',
+     "api and taskworker page notices through a retrying sink over monitor's webhook; role mail reaches api by an "
+     'internal route, header facts only.'),
+]
+for _n, _note in [
+        (498, ' Extended by @@OD:612@@: api and taskworker page §21.8\'s notices too.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 613))
+DATES.update({611: '2026-11-18', 612: '2026-11-18'})
+_D610 = "every group key going by wraps in v0 (610), amending @@OD:1@@ and @@OD:60@@. "
+assert DECISIONS_INTRO.count(_D610) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D610, _D610 + "A second sweep the same day numbers the build's last answers: the mail breakers' outside measures "
+    "(611) and the notice pages from api and taskworker, with role mail's route to them (612). ")
+INDEX += [
+    (613, "`mail_send`'s template uses",
+     "`mail_send`'s optional `uses` asks for a template of its alias and recipients; every other O tool files one "
+     'use.'),
+    (614, 'A template binds the egress requirement',
+     "An `egress_change` template binds `require_default_egress` set or empty, so one without it covers only "
+     'filings without it.'),
+]
+for _n, _note in [
+        (574, ' Extended by @@OD:613@@: `mail_send`\'s `uses` asks for a template.'),
+        (607, ' Extended by @@OD:614@@: a template binds it, empty included.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 615))
+DATES.update({613: '2026-11-18', 614: '2026-11-18'})
+_D612 = "with role mail's route to them (612). "
+assert DECISIONS_INTRO.count(_D612) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D612, "with role mail's route to them (612), `mail_send`'s template uses (613), extending @@OD:574@@, and an "
+    "`egress_change` template's binding of its requirement (614), extending @@OD:607@@. ")
+INDEX += [
+    (615, "`ip:` deny tests and prefixless routes",
+     "A policy's own `ip:` deny test fails at save where a prefixless route rule takes its source through a "
+     'sidecar both via and destination.'),
+]
+for _n, _note in [
+        (575, ' Followed by @@OD:615@@: an `ip:` deny test against such a rule fails at save.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 616))
+DATES.update({615: '2026-11-18'})
+_D614 = "an `egress_change` template's binding of its requirement (614), extending @@OD:607@@. "
+assert DECISIONS_INTRO.count(_D614) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D614, "an `egress_change` template's binding of its requirement (614), extending @@OD:607@@, and a policy's "
+    "`ip:` deny tests failing at save against a prefixless route rule (615), which follows @@OD:575@@. ")
+INDEX += [
+    (616, 'A refused generation on a failed store',
+     "A generation that cannot start because a subprotocol-store file fails decoding is Failed: Locked or Offline "
+     'with a reason, `refused` raised once.'),
+]
+assert [r[0] for r in INDEX] == list(range(1, 617))
+DATES.update({616: '2026-11-18'})
+_D615 = ("A second sweep the same day numbers the build's last answers: the mail breakers' outside measures (611) "
+         "and the notice pages from api and taskworker, with role mail's route to them (612), `mail_send`'s template "
+         "uses (613), extending @@OD:574@@, and an `egress_change` template's binding of its requirement (614), "
+         "extending @@OD:607@@, and a policy's `ip:` deny tests failing at save against a prefixless route rule "
+         "(615), which follows @@OD:575@@. ")
+assert DECISIONS_INTRO.count(_D615) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D615, "A second sweep the same day numbers the build's later answers: the mail breakers' outside measures (611); "
+    "the notice pages from api and taskworker, with role mail's route to them (612); `mail_send`'s template uses "
+    "(613), extending @@OD:574@@; an `egress_change` template's binding of its requirement (614), extending "
+    "@@OD:607@@; a policy's `ip:` deny tests failing at save against a prefixless route rule (615), which follows "
+    "@@OD:575@@; and a generation refused once on a failed store (616). ")
