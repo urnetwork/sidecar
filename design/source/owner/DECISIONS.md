@@ -3960,6 +3960,13 @@ The design-records track that swept up the answers recorded after the first late
     - Not taken: (1) tests judging a rule's prefixes alone, said in §8.8, so a deny test reads as a bound it is not for any document with such a rule; (3) refusing such an `ip:` test as one no test can judge, with a validation message in place of a failed test, which refuses accepts too.
     - Raised by the build (the bridge-prefixless-route-self track; the build's ledger, QD-1072). It follows owner decision 575.
 
+616. **A client generation that cannot start because a file of the subprotocol store fails decoding is §5.9's Failed: the sidecar enters Locked, or stays Offline with a reason, and raises `refused` once, a later wake retrying (option 1, the recommendation, 2026-11-18).**
+    - Question: when a client generation's start failed, the core logged it and returned, leaving the sidecar Offline with no client, no event and no state reason until a wake that nothing schedules, so a sealed file in the network's subprotocol store that failed decoding, the store that holds §6.8's push versions beside the pins, kept the sidecar off line for good with nothing a host or `ur status` could show. The keychain kill test's in-place mutant reached it, in 9 of 627 restarts under -race and load; on the real store, where every write renames a synced temporary file, it means disk damage or a foreign write, which §5.9 treats as Failed for the key stores, while its class rows for component state did not say which applies to this store.
+    - Answer: a generation that cannot start because a subprotocol-store file fails decoding is §5.9's Failed. The sidecar enters Locked, or stays Offline with a reason, and raises `refused` once, so a host and `ur status` see why it is not online. A later wake retries, as now. This keeps the no-spin property: one event, then a wait for a wake. Giving the subprotocol store's files a §5.9 class, so that what is derived can be rebuilt, can follow if the review phase finds files there that are safe to rebuild (§5.9's store states; §5.4's state reason).
+    - Cost: one event and a state or reason on a path that only logged.
+    - Not taken: (2) a §5.9 class for the subprotocol store's files now, dropping and rebuilding what is derived and alarming only for what holds pins, which needs a decision on which of its files carry rollback protection; (3) a log line alone, so a sidecar silently never comes on line after store damage.
+    - Raised by the build (the keychain-kill-test-load track; the build's ledger, QD-1074).
+
 ## Owner instructions after the v1 build (2026-11-05)
 
 These are instructions, not design decisions, so they carry no number.

@@ -1896,3 +1896,22 @@ assert DECISIONS_INTRO.count(_D614) == 1, 'decisions lead moved'
 DECISIONS_INTRO = DECISIONS_INTRO.replace(
     _D614, "an `egress_change` template's binding of its requirement (614), extending @@OD:607@@, and a policy's "
     "`ip:` deny tests failing at save against a prefixless route rule (615), which follows @@OD:575@@. ")
+INDEX += [
+    (616, 'A refused generation on a failed store',
+     "A generation that cannot start because a subprotocol-store file fails decoding is Failed: Locked or Offline "
+     'with a reason, `refused` raised once.'),
+]
+assert [r[0] for r in INDEX] == list(range(1, 617))
+DATES.update({616: '2026-11-18'})
+_D615 = ("A second sweep the same day numbers the build's last answers: the mail breakers' outside measures (611) "
+         "and the notice pages from api and taskworker, with role mail's route to them (612), `mail_send`'s template "
+         "uses (613), extending @@OD:574@@, and an `egress_change` template's binding of its requirement (614), "
+         "extending @@OD:607@@, and a policy's `ip:` deny tests failing at save against a prefixless route rule "
+         "(615), which follows @@OD:575@@. ")
+assert DECISIONS_INTRO.count(_D615) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D615, "A second sweep the same day numbers the build's later answers: the mail breakers' outside measures (611); "
+    "the notice pages from api and taskworker, with role mail's route to them (612); `mail_send`'s template uses "
+    "(613), extending @@OD:574@@; an `egress_change` template's binding of its requirement (614), extending "
+    "@@OD:607@@; a policy's `ip:` deny tests failing at save against a prefixless route rule (615), which follows "
+    "@@OD:575@@; and a generation refused once on a failed store (616). ")
