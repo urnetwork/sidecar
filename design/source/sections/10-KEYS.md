@@ -480,7 +480,8 @@ message GkmKeyPackageClaim { bytes group_id = 1; bytes claimer = 2; }   // the t
 duty               mechanism
 one commit         epoch/<n> is created with If-None-Match once epoch/<n-1> exists; the first wins, and the loser
                    gets 409 with the winner
-checks             the token scopes the repo, whose newest GroupForm names the group and whose repo/<id>, reread
+checks             the token scopes the repo that gkm/<group_id>/owner names (owner decision 201), whose newest
+                   GroupForm names the group and whose repo/<id>, reread
                    as gkm issues each write (cached at most 5 s, like §11.13's skip rule), is active, or keying
                    for its group's creation or re-forming (KF1, 10.8: the GroupForm, epoch 0, ladder and first
                    wraps), or deleted for a repo re-seeded as deleted in §19.10's re-seed mode; so a write in
@@ -966,7 +967,7 @@ use       the recipient opens only a delivery to itself and to a key it holds wh
 
 **D-KEYS-17 (proposed).** Drop keys ride each generation's signed GenRotate, only for kinds that take deposits and for a general repo whose `RepoCreate` marks it a group or admin inbox (§8.5, §8.8), rotators setting `drop_public_key` and `drop_not_after_ms` for both; a depositor seals only to a generation that covers every shrink and expiry it knows and is not below its pin, and whose drop key is unexpired and lives at most `DropKeyLifetime` past its time (owner decision 357); the deposit scope reaches only the drop-key route (10.6, 10.14). *Why:* a stale but unexpired drop key would reach a removed reader.
 
-**D-KEYS-18 (proposed).** At most 16 leaves, the epoch object carries the sealed GroupInfo and `group-info` is a pointer rewritten at each Add and by gkm with any epoch 16 or more past it, resync probing to a 404; KF1 writes its first wraps, recovery wraps included, before evs activates the repo; above 16, recovery and resync need one leaf online (10.6-10.8). *Why:* a crash between two PUTs must not break code-only recovery.
+**D-KEYS-18 (proposed).** At most 16 leaves, the epoch object carries the sealed GroupInfo and `group-info` is a pointer rewritten at each Add and by gkm with any epoch 16 or more past it, resync probing to a 404; KF1 writes the group's owner marker before its form (D-KEYS-27), and its first wraps, recovery wraps included, before evs activates the repo; above 16, recovery and resync need one leaf online (10.6-10.8). *Why:* a crash between two PUTs must not break code-only recovery.
 
 **D-KEYS-19 (proposed).** `gkm:<group_id>` is versioned epoch × 2^24 + generation, and work hints go on the per-client `gkm` topic of the sidecars that must act (10.14). *Why:* same-epoch work hints and commit-less rotations must not be dropped as stale.
 
@@ -983,6 +984,8 @@ use       the recipient opens only a delivery to itself and to a key it holds wh
 **D-KEYS-25 (proposed).** A ReaderKey is valid at most 7 days after signing and replaced at 6 days, its private key kept 30 days past its not_after, and rotators and deliverers seal only to an unexpired one valid no longer than that; so a passive keychain copy heals at the first generation after the device's next path commit and that not_after, about 37 days after the copy (60 above 50 leaves) whatever advertisement gkm serves, and an active clone, which signs fresh keys, ends only at a compromise revocation and a new enrollment (10.5). *Why:* gkm serves one overwriteable advertisement with no authenticated retirement, so only the key's own validity bounds a stale one, and whoever holds an identity key can sign another.
 
 **D-KEYS-26 (proposed).** gkm's routes take 10.6's scopes: a sidecar's own ReaderKey and KeyPackages under a gkm token of its own that holds an r, rw or admin scope on some repo, a token whose only repo scopes are deposit reaching the drop-key route alone; reads, acks and a member device's commits under r; GroupInfo and deliveries under r from a sidecar that is not read_only; claims, Welcomes and KeyPackage claims under rw; members, not gkm, check what a commit carries (10.9). *Why:* reader-only and read_only leaves must keep their keys and leaves current (D-TEAM-24), and gkm cannot see a PrivateMessage's proposals.
+
+**D-KEYS-27 (proposed).** A group belongs to one repo from its first byte: `gkm/<group_id>/owner`, created If-None-Match by gkm from the token before the GroupForm at a creation or a re-form, names the repo through which alone gkm resolves the group, every group route requiring that repo among the token's scopes, and a form naming a group id another repo's marker holds answers 409 with nothing written (10.6, 10.14; owner decision 201; DESIGN-DETAILS.md section 6). *Why:* a form naming another repo's group would give a reader of that repo a write position in its group, and a LIST before the form leaves a race in which two newest forms name one group.
 
 ### 10.12 Open questions
 
@@ -1027,7 +1030,7 @@ use       the recipient opens only a delivery to itself and to a key it holds wh
 
 ### 10.14 Interfaces
 
-- **Provides:** `GkmClient` (`CurrentRepoKey`, `RepoKey(repoId, generation)`, `EnsureWritable`, which first commits the pending changes its device may, `DropKey`); `EvsRepoKey.DeriveKey(purpose, context)`; credential validation and pins (also for §6's `Hello`); GenRotates and drop keys, ReaderWraps and DelegationWraps (`KeyDelivery`, 10.5) with 10.9's delivery checks, and recovery wraps; 10.5's KeyHolders and 10.6's gate predicate (§7.9, §11.8, §11.12).
+- **Provides:** `GkmClient` (`CurrentRepoKey`, `RepoKey(repoId, generation)`, `EnsureWritable`, which first commits the pending changes its device may, `DropKey`); `EvsRepoKey.DeriveKey(purpose, context)`; credential validation and pins (also for §6's `Hello`); GenRotates and drop keys, ReaderWraps and DelegationWraps (`KeyDelivery`, 10.5) with 10.9's delivery checks, and recovery wraps; 10.5's KeyHolders and 10.6's gate predicate (§7.9, §11.8, §11.12); each group's owner marker, the one binding of a group to its repo (D-KEYS-27).
 - **Consumes:** keys, bindings, keychain, recovery code, `SidecarEvent` (§5); topics, `Signed`, `HeadCheck` (§6); tokens, `rev/` (§7.8); the authorization log, `AuthPin`, causal identities, recovery, the `leaves` rule and removals (§7.9, §7.10); `RepoReaders`, seats, kind defaults, consent, `OwnerConfirm`, access logs, `audit`, `EvsShare`, and the gate cache with its network list, sidecar index and install callback (§8, §8.9); kinds, `repo/` state, `place/`, slots, manifests, path epochs, the head-CAS gate and the write budget (§11); `ServiceHost.Blobs` per cluster and Redis (§4.5, §19).
 - **Subprotocol messages:** `GkmHint{group_id, epoch, kind, recipient}` in `PushHint` (§6.11, 0x1301), numbered 1 to 4 in that order, `epoch` a uint64, `kind` a `GkmHintKind` (COMMIT 1, PENDING 2, WELCOME 3, KEY_PACKAGES_LOW 4, WRAP_PENDING 5) and `recipient` bytes in the wrap path's `s:` or `d:` form: commit on `gkm:<group_id>` (version = epoch × 2^24 + generation); pending, welcome, key-packages-low and wrap-pending (a GenWrap, wrap or sealed GroupInfo is missing; for 10.6's late wraps, `recipient` names the ask's `s:` or `d:` recipient, and a hint lost or coalesced comes again at the next ask) on the per-client `gkm` topic (§6.8).
 - **API routes:** Client class, under 10.6's tokens and scopes, specified in connect/api/bringyour.yml.
@@ -1044,10 +1047,14 @@ use       the recipient opens only a delivery to itself and to a key it holds wh
   POST /gkm/groups                             creation (KF1): the Signed GroupForm, epoch 0's GenWrap_0 and
                                                sealed GroupInfo, and gen/1's Signed GenRotate, written after the
                                                owner marker in that order, each If-None-Match, equal bytes
-                                               answering success; 409 on other bytes
+                                               answering success; 409 on other bytes, a group id another
+                                               repo's marker holds answering 409 at the marker with nothing
+                                               written (D-KEYS-27)
   GET  /gkm/groups/<id>                        the GroupForm that names the group, and nothing else
   GET  /gkm/repos/<id>/forms                   r, rw, admin: the repo's Signed GroupForms, oldest first
-  POST /gkm/repos/<id>/forms                   admin: a re-form only (10.8); 409 on other bytes
+  POST /gkm/repos/<id>/forms                   admin: a re-form only (10.8), writing the new group's owner
+                                               marker first; 409 on other bytes, and at the marker for a group
+                                               id another repo's marker holds (D-KEYS-27)
   POST /gkm/groups/<id>/ladder                 admin: a re-formed group's old Signed GenRotates, at most 64 a
                                                call, before its epoch/1 (10.8)
   GET  /gkm/groups/<id>/epochs?after=          epoch objects, in order, with their sizes, to gkm's bound, a

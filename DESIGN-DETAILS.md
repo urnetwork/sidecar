@@ -12,8 +12,8 @@ Status values: `pending`, `in progress`, `complete (date)`, or `complete pending
 | 2 | Storage consistency under stalled writes: segment GC and the MinIO settle rules (§11.13, §19.6) | 4 | complete (2026-11-10); folded into DESIGN.md 2026-11-17 (dr4-details-b) |
 | 3 | Zero-knowledge proofs of TLS delivery for outbound mail (smtpproof; §14.5) | 5 | complete (2026-11-11) |
 | 4 | Forwarding in the apps' VPN component: key, verification and size (owner decision 197) | 40 | complete (2026-11-10) |
-| 5 | Authorization-log verdicts across folds (§7.9) | 13 | complete (2026-11-09; amended 2026-11-13, section 16) |
-| 6 | MLS group key management (§10) | 13 | complete (2026-11-10) |
+| 5 | Authorization-log verdicts across folds (§7.9) | 13 | complete (2026-11-09; amended 2026-11-13, section 16); folded into DESIGN.md 2026-11-17 (dr4-details-d) |
+| 6 | MLS group key management (§10) | 13 | complete (2026-11-10); folded into DESIGN.md 2026-11-17 (dr4-details-d) |
 | 7 | Remote search across designated indexers (§11.14, §18.4) | 3 | complete (2026-11-11) |
 | 8 | Git and evs in both directions | 3 | complete (2026-11-10; amended 2026-11-13, section 16, QD-801 and QD-803); folded into DESIGN.md 2026-11-17 (dr4-details-c) |
 | 9 | Client path epochs and re-tokenizing | 3 | complete (2026-11-10); folded into DESIGN.md 2026-11-17 (dr4-details-c) |

@@ -337,11 +337,17 @@ func TestEgressChangeHoldsItsShape(t *testing.T) {
 	egress := func(mode bridge.BridgeEgressMode, grantDst ...string) *protocol.CanonicalAction {
 		return &protocol.CanonicalAction{Kind: uint32(SidecarActionEgressChange), Subject: subject, EgressMode: uint32(mode), GrantDst: grantDst}
 	}
+	required := func(action *protocol.CanonicalAction) *protocol.CanonicalAction {
+		action.RequireDefaultEgress = true
+		return action
+	}
 	for name, action := range map[string]*protocol.CanonicalAction{
 		"auto":           egress(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_AUTO),
 		"none":           egress(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE),
 		"exits by id":    egress(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS, exitA, exitB),
 		"exits by a tag": egress(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS, tag),
+		// QD-1060: exits that require default egress
+		"exits requiring default egress": required(egress(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS, tag)),
 	} {
 		stored, err := NewCanonicalAction(action)
 		if err != nil {
@@ -368,6 +374,11 @@ func TestEgressChangeHoldsItsShape(t *testing.T) {
 			Kind: uint32(SidecarActionEgressChange), Subject: subject[:8], EgressMode: uint32(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE),
 		},
 		"egress_mode on another kind": {Kind: uint32(SidecarActionDnsDelete), DnsName: "old", DnsType: "A", EgressMode: 1},
+		// QD-1060: the requirement goes with exits, on an egress change alone
+		"auto requiring default egress": required(egress(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_AUTO)),
+		"none requiring default egress": required(egress(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE)),
+		"the requirement on another kind": {Kind: uint32(SidecarActionDnsDelete), DnsName: "old", DnsType: "A",
+			RequireDefaultEgress: true},
 	} {
 		if _, err := NewCanonicalAction(action); !errors.Is(err, ErrCanonicalActionInvalid) {
 			t.Errorf("%s: the builder answered %v", name, err)
@@ -410,6 +421,16 @@ func TestEgressChangeHoldsItsShape(t *testing.T) {
 	if render.KindName != "egress_change" || render.Meaning != wantMeaning || fields["egress_mode"] != "2 (exits)" ||
 		fields["subject"] != hex.EncodeToString(subject) || fields["grant_dst"] != exitA+", "+exitB || !strings.Contains(render.Text(), wantMeaning) {
 		t.Errorf("the render: %+v\n%s", render, render.Text())
+	}
+
+	// the requirement is its own clause, and its action is another action than the same exits without it
+	requiring := buildTestAction(t, required(egress(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS, exitA, exitB)))
+	if bytes.Equal(requiring.Bytes, stored.Bytes) {
+		t.Fatal("the requirement left the action's bytes as they were")
+	}
+	wantRequired := wantMeaning + ", and require its devices to keep default egress on"
+	if meaning := approvalRenderMeaning(requiring.Action); meaning != wantRequired {
+		t.Errorf("the requirement renders as %q", meaning)
 	}
 }
 

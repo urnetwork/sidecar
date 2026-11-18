@@ -13,9 +13,11 @@
 //  4. ur_sidecar_id an admitted, unrevoked sidecar of the token's network, as the exchange bound it to the token's
 //     client (EvsAuthState, QD-717): 403 SCOPE, or 503 while the state is not loaded;
 //  5. on a repo route, the token's repo:<id>:<role> scopes against the rights the route takes, the strongest held
-//     honored only while the newest verified state agrees (D-ACL-21): 403 SCOPE, or 503; then, on one that does not
-//     write, §20.6's spent row: a spent network's reply is paced on its own repo and refused on another's
-//     (quota_read_gate.go);
+//     honored only while the newest verified state agrees (D-ACL-21), and then only whole: 403 SCOPE, or 503. The one
+//     route that carries §11.12's re-seed exception (EvsRoute.ReseedException, PUT .../segments) passes instead a
+//     token's admin that the state honors alone while the host's reseed gate is on, marked, which that route takes
+//     only through the exception (QD-977). Then, on one that does not write, §20.6's spent row: a spent network's
+//     reply is paced on its own repo and refused on another's (quota_read_gate.go);
 //  6. on a write, rev/ for the token's three subjects: 401 UNAUTHENTICATED when one voids it, 503 when evs cannot
 //     tell; a read goes on for the token's life (owner decision 377);
 //  7. on a route that may issue a head CAS, a process whose clock §19.6 finds unknown or over 50 ms off answers
@@ -91,6 +93,13 @@ type EvsRoute struct {
 	// 409 SHREDDING before the route runs, from repo/ cached at most 5 s. For a route that reads no repo/ state of its
 	// own; the push's 5c and the lifecycle routes hold their own.
 	RefuseDeleted bool
+	// The route carries §11.12's re-seed exception, the one route of it that takes more than admin: PUT .../segments
+	// alone (QD-977). When the state refuses the whole right set the guard asks, the token holds admin, the host's
+	// reseed gate is on and the state honors the bare admin right, as it does a deleted repo's standing admin
+	// (QD-880), the guard passes the request holding admin alone, marked as admitted by the exception; the route
+	// then takes a marked request only through the exception and refuses it 403 SCOPE otherwise, as the guard would
+	// have. Every other route honors its rights only whole.
+	ReseedException bool
 	// Answers the request through its methods. Runs on the request's goroutine.
 	Serve func(request *EvsRequest)
 }
@@ -466,7 +475,7 @@ func (self *EvsEngine) guard(route *EvsRoute) http.HandlerFunc {
 				request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
 				return
 			}
-			if !request.AuthorizeRepo(repoId, route.Rights) {
+			if !request.authorizeRepo(repoId, route.Rights, route.ReseedException) {
 				return
 			}
 			if !route.Write && !request.checkRead() {
@@ -599,11 +608,15 @@ type EvsRequest struct {
 	// The route's repo, once AuthorizeRepo passed.
 	RepoId sidecar.Id
 	// What the token holds on RepoId and the state honored: the strongest right the route takes, with what it
-	// implies.
+	// implies; admin alone for a request the re-seed exception admitted.
 	Rights sidecar.AclEvsRights
 	// The repo's placement and metadata cluster, on a placed route.
 	Place   *sidecar.EvsRepoPlace
 	Cluster sidecar.BlobCluster
+
+	// The guard passed it by §11.12's re-seed exception alone (EvsRoute.ReseedException), holding admin and nothing
+	// weaker: its route takes it only through the exception.
+	reseedAdmitted bool
 
 	started             time.Time
 	revocationCheckedAt time.Time
@@ -632,8 +645,18 @@ func (self *EvsRequest) Engine() *EvsEngine {
 // the route takes: a live repo's admin writes and reads and its writer reads, so this asks no more of them, while a
 // deleted repo's standing admin holds admin alone (QD-880), so its admin token passes only the routes that take
 // admin and nothing weaker, DELETE and restore among them, and no read or write route. A route on no one repo
-// calls this itself once its body names the repo. false once it has answered the refusal.
+// calls this itself once its body names the repo, and such a call never takes §11.12's re-seed exception, which is
+// the guard's alone on the one route that carries it. false once it has answered the refusal.
 func (self *EvsRequest) AuthorizeRepo(repoId sidecar.Id, rights sidecar.AclEvsRights) bool {
+	return self.authorizeRepo(repoId, rights, false)
+}
+
+// AuthorizeRepo, and with reseedException, on the route that carries §11.12's re-seed exception (QD-977): where the
+// state refuses the whole set asked of a token whose strongest right here is admin, the host's reseed gate is on and
+// the state honors the bare admin right, as it does a deleted repo's standing admin (QD-880), the request passes
+// holding admin alone and marked, and its route takes it only through the exception. The state is asked twice only
+// then. false once it has answered the refusal.
+func (self *EvsRequest) authorizeRepo(repoId sidecar.Id, rights sidecar.AclEvsRights, reseedException bool) bool {
 	if repoId == (sidecar.Id{}) {
 		self.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
 		return false
@@ -643,7 +666,16 @@ func (self *EvsRequest) AuthorizeRepo(repoId sidecar.Id, rights sidecar.AclEvsRi
 		self.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE)
 		return false
 	}
-	switch self.engine.deps.AuthState.HonorScope(self.Principal, repoId, right|impliedRights(right)&rights, self.Now()) {
+	honored := impliedRights(right)
+	answer := self.engine.deps.AuthState.HonorScope(self.Principal, repoId, right|honored&rights, self.Now())
+	reseedAdmitted := false
+	if answer == EvsAuthDenied && reseedException && right == sidecar.AclEvsAdmin && self.engine.host.GatesOrClosed().Reseed() {
+		// the exception's one pass, admin and nothing weaker, which a refused bare admin refuses as the whole set did
+		answer = self.engine.deps.AuthState.HonorScope(self.Principal, repoId, sidecar.AclEvsAdmin, self.Now())
+		honored = sidecar.AclEvsAdmin
+		reseedAdmitted = true
+	}
+	switch answer {
 	case EvsAuthAllowed:
 	case EvsAuthDenied:
 		self.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE)
@@ -653,7 +685,8 @@ func (self *EvsRequest) AuthorizeRepo(repoId sidecar.Id, rights sidecar.AclEvsRi
 		return false
 	}
 	self.RepoId = repoId
-	self.Rights = impliedRights(right)
+	self.Rights = honored
+	self.reseedAdmitted = reseedAdmitted
 	return true
 }
 

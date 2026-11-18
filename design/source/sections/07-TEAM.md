@@ -329,10 +329,10 @@ Delegation{pubkey, reader_xwing_public_key (§10.5), tag_ids,           owner, a
   | DelegationRevoke{delegation_id, since_n: 0, or for a leaked          device allowed to revoke that sidecar
                      bundle the position from which it parks}            (§5.6) or an admin
 ServiceSettings{team_mail: indexers | member scopes (indexers;         owner or admin; directory from v1
-                owner decisions 58, 150, 304; §15.5, §15.6);           (M6)
-                stale_leaf_days: 90 (§10.9's stale Removes);
-                self_admit: on (owner
-                decision 112; device-signed self-admission only);
+                owner decisions 58, 150, 304; §15.5, §15.6);           (M6); self_admit and scim_signer also
+                stale_leaf_days: 90 (§10.9's stale Removes);           compile into ProjectionRows.settings,
+                self_admit: on (owner                                  which api and every gate judge by
+                decision 112; device-signed self-admission only);      (§2.8 api-7; owner decision 205)
                 witness_bound_hours: 72, 24 to 168 (D-TRUST-10,
                 owner decision 129); scim_signer: none | the
                 sidecar_id of an admin's indexer (7.6); directory:
@@ -693,8 +693,10 @@ proposal    an AuthorityProposal by the first counted signer, proposal_id its st
             AuthorityCosign from each further one, each under its own header; rows carry every proposal still
             open at a base as a ProposalRow (its id, statement type and statement, each signer with its
             position, its not_after_ms, a recovery-signed one's window entry and time, and its kind), compiled
-            from the head's fold records like every other row, so a proposal folded under a base stays open
-            and closes at its k-th counted cosign, its window's ApiTick or its not_after, and api, the gates,
+            from the head's fold records like every other row, so a proposal folded under a base stays open, a
+            cosign, veto, void or activation after the fold finding it at every verifier alike, and closes in
+            place at its k-th counted cosign, its window's ApiTick, a veto, a void or its not_after, a closed
+            or expired row leaving the rows at the next fold (DESIGN-DETAILS.md section 5), and api, the gates,
             a new device and a long-running reader hold the same S(n) after a fold (owner decision 314)
 counted     distinct member_ids among the AdminSet's Owners and Admins at the completing entry's state; a
             member's devices and its recovery key count once; neither the target device nor an AdminSet change's
@@ -751,8 +753,10 @@ lift        a parked sidecar reads, writes and witnesses nothing and is a shrink
             AdmissionConfirm or OwnerConfirm from a consented device outside P, so an admin's AdmissionConfirm
             restores all but owner-bound reads; restored, it leaves P at that position, what it signed in P
             staying parked or void until re-signed outside P; rows keep each such record's signer and position,
-            so api, evs and gkm build P as readers do; what a stolen device admitted, at any depth, or bound
-            stops with it, and a legitimate device costs a confirmation
+            and every AdmissionConfirm and OwnerConfirm that took effect with its signer, position and whether
+            it lifted a park (SidecarRow.confirmations; DESIGN-DETAILS.md section 5), so api, evs and gkm build
+            P from rows alone as readers do; what a stolen device admitted, at any depth, or bound stops with
+            it, and a legitimate device costs a confirmation
 spans       (owner decision 330) a SidecarRow keeps one span per compromise cascade that held the sidecar in
             P: from is since_n for the revoked sidecar and, for any other, the entry that pulled it into P;
             until is the revocation's entry; what the sidecar signed at a position at with from <= at < until
@@ -1099,13 +1103,16 @@ statement  POST /network/config/delta {Signed}: api verifies it against S(tip) (
            (ids) is the retry identity
 base       POST /network/config/projection {Signed ProjectionHeader, rows, config_pushes, genesis (version 1
            only; Bootstrap)}: accepted only if version = tip+1, prev_chain = A_tip, SHA-256(rows) =
-           rows_sha256, config_version and folded_through are each at least the newest base's, its config head
-           is that base's or a descendant (descent), and its tail_verdicts covers exactly
-           folded_through+1..version-1 and agrees with api's own verdict at each position, and its
-           restored_cosigned_ids with api's own list (the self_admit row); api PUTs projrows,
-           then the entry; if the tip moved, 409 {tip, A_tip} and the writer re-signs, re-compiling only when an
-           intervening base moved the config head or the fold; folded_through may stay at its old m while
-           m >= tip - 1,024, so the writer never re-compiles under a stream of statements
+           rows_sha256, config_version and folded_through are each at least the newest base's, folded_through
+           is that base's own or at least that base's position, so no fold splits a tail, version - 1 -
+           folded_through is at most 4,096 (the tail cap), its config head is that base's or a descendant
+           (descent), its tail_verdicts covers exactly folded_through+1..version-1 and agrees with api's own
+           verdict at each position, a 2 only on an AuthorityProposal or AuthorityCosign, and its
+           restored_cosigned_ids with api's own list (the self_admit row), else 403 with the reason
+           (DESIGN-DETAILS.md section 5); api PUTs projrows, then the entry; if the tip moved, 409 {tip, A_tip}
+           and the writer re-signs, re-compiling only when an intervening base moved the config head or the
+           fold; folded_through may stay at its old m while m >= tip - 1,024, so the writer never re-compiles
+           under a stream of statements
 descent    api judges a base's head by descent only, from Signed EvsPush statements the writer supplies:
            records, signer roles and compile stay with readers; config_head_sha256 is C_v of the config repo's
            main ref at config_version (§11.8); config_pushes holds the Signed EvsPush of each version in (the
@@ -1123,13 +1130,16 @@ tick       api appends ApiTick entries at most once a minute per network; it sch
            judges from the row (owner decision 314)
 fold       once the oldest statement or tick past the newest base's folded_through is 1,024 positions behind
            the tip or 24 h old, a config writer saves a config head holding the statements, ticks and bases
-           through the tip and publishes its base, at its next start if it was offline, after a random 0-10
-           min delay that another base cancels; so while any config writer runs, the unfolded tail stays
-           within about 1,024 entries or a day, bounding re-application, {acl_}e's window and devices' kept
-           tails (about two such spans); a writer that publishes a base while a bridge statement is unfolded
-           folds through its tip (owner decision 473); a bridge body sealed to a generation that does not form
-           stops a fold until it is UnformedVoidWait old, and a fold stops only at or above the previous base,
-           so it waits for every such body under that base (§17.8; owner decision 478)
+           through the tip and publishes its base, at its next start if it was offline, after a random 0-10 min
+           delay that another base cancels; so while any config writer runs, the unfolded tail stays within
+           about 1,024 entries or a day, bounding re-application, {acl_}e's window and devices' kept tails
+           (about two such spans); a base leaves at most 4,096 entries unfolded (base), so a writer behind
+           that, after an outage, folds through the tip before it publishes, and a writer never folds part of
+           the previous base's tail: it folds through the tip, or keeps the fold where it was for a policy-only
+           base (DESIGN-DETAILS.md section 5); a writer that publishes a base while a bridge statement is
+           unfolded folds through its tip (owner decision 473); a bridge body sealed to a generation that does
+           not form stops a fold until it is UnformedVoidWait old, and a fold stops only at or above the
+           previous base, so it waits for every such body under that base (§17.8; owner decision 478)
 limits     per network, api takes at most 60 statements a minute in bursts to 600 and 2,000 a day (20,000 on
            Team), and one base a minute and 200 a day (pro.yml, §20.4), counted in Redis {acl_<networkId>}q
            (TTL 25 h), answering 429 {retry_after_ms} beyond them; revocations of every kind, Suspend,
@@ -1143,27 +1153,35 @@ uncertain  on a timeout or lost response, GET the position tried: the same body 
            (retry at the next position), 404 repeats the PUT
 apply(e)   every admitted sidecar: e.n = my.n + 1 and e.prev_chain = my.A, else FORK: alarm, stop sealing
            (§6.4), keep the evidence
-  BASE       the signer is a config writer at S(my.n); config_version and folded_through are each at least
-             the previous base's, its config head being that base's or a descendant, so no base rolls back
-             policy; the config head chains to genesis through config writers and holds, as records, exactly
-             the log's statements and ticks in (the previous base's folded_through, folded_through], each by
-             id with the position of the entry that carried it (a tick by its position), and the BASE
-             entries there, each with its Signed ProjectionHeader as its body, which compile ignores and
-             this check compares like any record, so the chain A_1..A_folded_through is a function of the
-             genesis and the head (owner decision 262);
+  BASE       the signer is a config writer at S(my.n); config_version and folded_through are each at least the
+             previous base's, folded_through is the previous base's own or at least its position, and n - 1 -
+             folded_through is at most 4,096 (base), its config head being that base's or a descendant, so no
+             base rolls back policy; the config head chains to genesis through config writers and holds, as
+             records, exactly the log's statements and ticks in (the previous base's folded_through,
+             folded_through], each by id with the position of the entry that carried it (a tick by its
+             position), and the BASE entries there, each with its Signed ProjectionHeader as its body, which
+             compile ignores and this check compares like any record, so the chain A_1..A_folded_through is a
+             function of the genesis and the head (owner decision 262);
              SHA-256(compile(config head)) = rows_sha256; then the STATEMENT and TICK entries among
-             folded_through+1..n-1 re-apply in order, a BASE among them skipped, its rows superseded by this
-             base's, each keeping the verdict it got at its own position, so a later authority change never
-             undoes an earlier revocation, while effects that depend on rows, such as a GrantActivate whose
-             rule the new config head deleted, follow the new rows, the same for every reader; sidecar/device's
-             posture checks only the signature, prev_chain, rows_sha256 and the two versions
-    verdicts (owner decision 325) the base's tail_verdicts carry those verdicts: a reader that judged the
-             tail compares the bits with its own, a BASE among them 0, and forks on a difference; a new device
-             and a rows-only verifier re-apply the tail by the bits and never re-judge it, so a tail statement
-             whose rule reads what the base's head changed, or whose at lies below what the new device holds,
-             gets the verdict the long-running readers gave it; restored_cosigned_ids carries the one part of a
-             restored binding's admission's judgment the bits do not, its kind, compared and taken alike
-             (the self_admit row; owner decision 556)
+             folded_through+1..n-1 re-apply in order by the verdicts the base carries (verdicts), a BASE among
+             them skipped, its rows superseded by this base's, a 2 applying the proposed statement with its
+             row's signers, each keeping the verdict it got at its own position, so a later authority change
+             never undoes an earlier revocation, while effects that depend on rows, such as a GrantActivate
+             whose rule the new config head deleted, follow the new rows, the same for every reader; a
+             re-applied effect reads only the statement's body and the rows being rebuilt, never what the
+             check found at the entry's own position, so the row signer, lifted_park, live_since,
+             key_dropped_at and holders_shrunk_at are recomputed on the rebuilt state, which every verifier
+             holds alike (DESIGN-DETAILS.md section 5); sidecar/device's posture checks only the signature,
+             prev_chain, rows_sha256 and the two versions
+    verdicts (owner decision 325) the base's tail_verdicts carry those verdicts: a reader that judged the tail
+             compares the bits with its own, a BASE among them 0, and forks on a difference, as on a 2 at an
+             entry that is no AuthorityProposal or AuthorityCosign, a 3 or a bitmap of the wrong length, each
+             of which api answers with 403 (DESIGN-DETAILS.md section 5); a new device and a rows-only verifier
+             re-apply the tail by the bits and never re-judge it, so a tail statement whose rule reads what the
+             base's head changed, or whose at lies below what the new device holds, gets the verdict the
+             long-running readers gave it; restored_cosigned_ids carries the one part of a restored binding's
+             admission's judgment the bits do not, its kind, compared and taken alike (the self_admit row;
+             owner decision 556)
     ledger   (owner decision 473) a reader that opened the bridge statements folded since the previous base
              checks that the head's bridge ledger (§17.8) equals the fold of the previous head's ledger and
              those statements by the verdicts it judged them, and forks on a difference; a device that starts
@@ -1206,7 +1224,9 @@ retain     A_k for every k from api's retention point (below) on, and each base'
            proof it verified, so any holder or relayer answers §6.4's HeadCheckProofRequest; member devices on
            §18.4's desktop and CLI hosts (ur daemon) also every entry's verbatim bytes from that point, for a
            site loss, about two fold spans (fold); a reader that cannot fetch an entry it has proof of treats
-           itself as withheld
+           itself as withheld; a reader whose pin falls below the retention point restarts at the newest base
+           and links its last pin to the retained run, through the head's records where no pin it holds
+           reaches the run (DESIGN-DETAILS.md section 5)
 check      readers pin (n, A_n) for §6's HeadCheck, which any admitted reader, agents included, may witness;
            unwitnessed, writers in shared groups alarm at 24 h and stop at witness_bound_hours, though
            rotations, Removes and revocations, a RecoveryRebind with reason compromise among them, never stop
@@ -1220,7 +1240,10 @@ retention  api keeps entries from the retention point, min(the previous base, th
            records, bases included (owner decision 262), chains A_k back from b's prev_chain through
            the kept entries to the retention point, so it judges every later at as long-running readers do,
            takes the verdict of each entry among folded_through+1..b-1 from b's tail_verdicts and re-applies
-           them as S(b) says, judging nothing before b+1 (owner decision 325)
+           them as S(b) says, judging nothing before b+1 (owner decision 325); it holds the replay ring from
+           b's rows and the tail's applied ids, and a full reader requires the chain it recomputes from the
+           genesis through the head's records, bases included, to reach entry r's prev_chain, r the retention
+           point (DESIGN-DETAILS.md section 5)
 site loss  (§19.10) the log comes back from devices, never re-sequenced, while sidecar.yml's reseed is true
   upload     POST /network/config/reseed {genesis, entries, rows of their bases, pins, config_pushes} from
              member devices other than read_only ones, whose code the server serves: the Signed Genesis, the
@@ -1237,7 +1260,9 @@ site loss  (§19.10) the log comes back from devices, never re-sequenced, while 
              its predecessor's digest once devices of two members hold its own, by bytes or pin (one member's
              where the run's base admits uploading devices, member devices that are not read_only, of one
              member only), so no lone compromised device fills a position with a forged TICK, a reordered
-             statement or one it signs; where no bytes reach two members, the log stops before that position
+             statement or one it signs; where no bytes reach two members, the log stops before that position;
+             a later adopted base's tail_verdicts must equal api's own verdicts on the adopted run, else the
+             run stops before that base (DESIGN-DETAILS.md section 5)
   resume     an admin's device re-seeds the config repo and publishes a base at tip+1 over it; api first
              checks the newest adopted base by descent: the reseed's config_pushes run from version 1 to the
              re-seeded head, and api discards the adopted run unless that base's (config_version,
@@ -1529,7 +1554,7 @@ All three rename routes (server/controller/account_controller.go:13,160-256) cal
 
 **D-TEAM-20 (proposed).** Every log statement carries a StatementHeader (network, the signer's AuthPin, nonce, not_after ≤ 7 d), refused when off-chain, more than 4,096 positions old or before the retention point, expired or repeated, a statement's id being the hash of its signed bytes (purpose, type and body), never of its wrapper; type rules close the rest (7.9). *Why:* typed signed statements still need replay rules, which every reader present must judge alike and every later one takes from the next base, and an id over the wrapper would let a server replay a statement under a new one.
 
-**D-TEAM-21 (proposed).** k-of-n and recovery-signed statements are an AuthorityProposal plus AuthorityCosigns, counted per distinct member; an authority statement with a recovery-key signature, in its proposal or a cosign, or a scoped admission by a binding a cascade restored, stays pending, delivering no key to the proposed device, until an api tick 72 h after its newest such signature's entry with no valid RecoveryVeto, and a veto kept off the log forks only devices that held it before the activation (7.9). *Why:* owner decisions 110, 127 and 149 need a wire form, a clock and an activation path, a late recovery cosign must not skip the window, and a veto's `at` is its signer's claim.
+**D-TEAM-21 (proposed).** k-of-n and recovery-signed statements are an AuthorityProposal plus AuthorityCosigns, counted per distinct member; an authority statement with a recovery-key signature, in its proposal or a cosign, or a scoped admission by a binding a cascade restored, stays pending, delivering no key to the proposed device, until an api tick 72 h after its newest such signature's entry with no valid RecoveryVeto, and a veto kept off the log forks only devices that held it before the activation; open proposals ride ProjectionRows across folds, so a cosign, veto or activation after a base finds them at every verifier alike (7.9; owner decision 314). *Why:* owner decisions 110, 127 and 149 need a wire form, a clock and an activation path, a late recovery cosign must not skip the window, and a veto's `at` is its signer's claim.
 
 **D-TEAM-22 (proposed).** A pre-approved auth key carries its Delegation's seeds only in a client-only `#<bundle>` split off before any request; enrollment has no field for it and api refuses an `auth_key` containing `#` (7.8). *Why:* the server must never receive admission authority or read keys.
 
@@ -1539,7 +1564,7 @@ All three rename routes (server/controller/account_controller.go:13,160-256) cal
 
 **D-TEAM-25 (proposed).** SCIM removals deny at once and are cryptographic only once an admin device, or the admin's indexer that `ServiceSettings.scim_signer` names (owner decision 150), signs the MemberRevoke (7.6). *Why:* a server queue is not a removal.
 
-**D-TEAM-26 (proposed).** `SidecarRevoke{reason: compromise, since_n}`, `since_n` a required position, parks the closure P of what the device signed in entries from `since_n` on, and is refused if P holds one of its signers: each sidecar whose admission it or a sidecar in P signed, whose park such a sidecar's AdmissionConfirm lifted, or whose consent rests only on such a sidecar's OwnerConfirm, a confirmation of a device already unparked and consented adding none, each sidecar a recovery key admitted under a binding one of them signed, and each admitted under a Delegation one of them signed, which is void, while the Delegation that admitted the revoked sidecar, if one did, ends at the revocation, each sidecar it admitted from `since_n` joining P (D-TEAM-30); their RecoveryBinds and Rebinds, KeyRegisters and EvsShares there are void, and a binding a void restores is no current binding: it takes no wrap or keychain seal, its member's devices re-sealing, and admits only through the vetoable 72 h window, a scoped admission as an AuthorityProposal with no counted cosign (owner decision 149); each device that sealed keychain.wrap to a voided binding is listed, and revoked for compromise and enrolled anew if its backups may hold that sealing; only a signer outside P lifts a park or re-signs a voided record, and a consent resting on P's signatures returns only through the member's consented device outside P; grants, approvals and config heads signed in P stand until revoked, listed for admins (7.9); after a compromise rebind at r, a revocation's proposed since_n is clamped to r + 1 for the rebind's signer, which goes last, revoked by the replacement it enrolls, and for any device whose closure would reach it (owner decision 212); signed by a sidecar that registered a live presence key, it carries that key's countersignature (D-TEAM-32; owner decision 185). *Why:* a stolen device's admissions, and what those admit, bind or register, must not survive it; an entry position, unlike a signer's `at`, cannot be backdated; a revocation must neither freeze its own signer nor hand back a retired code, nor may a stolen device's redundant confirmations pull the devices that would revoke it into P; and a voided code must open no keychain.
+**D-TEAM-26 (proposed).** `SidecarRevoke{reason: compromise, since_n}`, `since_n` a required position, parks the closure P of what the device signed in entries from `since_n` on, and is refused if P holds one of its signers: each sidecar whose admission it or a sidecar in P signed, whose park such a sidecar's AdmissionConfirm lifted, or whose consent rests only on such a sidecar's OwnerConfirm, a confirmation of a device already unparked and consented adding none, each sidecar a recovery key admitted under a binding one of them signed, and each admitted under a Delegation one of them signed, which is void, while the Delegation that admitted the revoked sidecar, if one did, ends at the revocation, each sidecar it admitted from `since_n` joining P (D-TEAM-30); their RecoveryBinds and Rebinds, KeyRegisters and EvsShares there are void, and a binding a void restores is no current binding: it takes no wrap or keychain seal, its member's devices re-sealing, and admits only through the vetoable 72 h window, a scoped admission as an AuthorityProposal with no counted cosign (owner decision 149); each device that sealed keychain.wrap to a voided binding is listed, and revoked for compromise and enrolled anew if its backups may hold that sealing; only a signer outside P lifts a park or re-signs a voided record, and a consent resting on P's signatures returns only through the member's consented device outside P; grants, approvals and config heads signed in P stand until revoked, listed for admins (7.9); after a compromise rebind at r, a revocation's proposed since_n is clamped to r + 1 for the rebind's signer, which goes last, revoked by the replacement it enrolls, and for any device whose closure would reach it (owner decision 212); signed by a sidecar that registered a live presence key, it carries that key's countersignature (D-TEAM-32; owner decision 185); rows keep every confirmation with its signer, position and whether it lifted a park, so api and the gates build P from rows alone, as readers do (7.9). *Why:* a stolen device's admissions, and what those admit, bind or register, must not survive it; an entry position, unlike a signer's `at`, cannot be backdated; a revocation must neither freeze its own signer nor hand back a retired code, nor may a stolen device's redundant confirmations pull the devices that would revoke it into P; and a voided code must open no keychain.
 
 **D-TEAM-27 (proposed).** A network designates its indexers (§3.6) by `IndexerSet` statements in the config repo (7.9): an Owner or Admin at network scope, a member's consented device at member scope for that member's own devices, and the subject itself to retire either; a designation names services, grants no key, grant or read, and decides only who runs a service first, so each service keeps a fallback when none is designated. A network starts with none (owner decision 177). For search, a designation also bounds which devices a phone asks, so a query reaches only designated devices (owner decisions 175, 178). *Why:* owner decisions 150 and 177; owner decision 126 leaves members' own repos to their own devices, and a duty must never widen reach.
 

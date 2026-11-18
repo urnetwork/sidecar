@@ -1139,13 +1139,6 @@ func TestBridgeSetEgressFilesUnderTheGate(t *testing.T) {
 			t.Errorf("%+v: %v", refused, err)
 		}
 	}
-	// under exits the requirement waits for egress_change's action to show it, the closed direction, before the gate
-	required := &BridgeEgressRequest{Subject: world.hostId, Mode: bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS,
-		ExitSidecarIds: []Id{world.laptop.sidecarId}, RequireDefaultEgress: true}
-	if _, err := world.filer.SetEgress(ctx, world.confirmed(), required); !errors.Is(err, ErrBridgeFileRefused) ||
-		!errors.Is(err, errBridgeEgressRequirementUnshown) {
-		t.Errorf("a requirement under exits: %v", err)
-	}
 	if world.api.postCount() != 0 || len(world.gate.seen()) != 0 {
 		t.Fatal("a refused egress change reached the gate or the log")
 	}
@@ -1193,6 +1186,27 @@ func TestBridgeSetEgressFilesUnderTheGate(t *testing.T) {
 		t.Error("Lookup answers another statement's id")
 	}
 
+	// the same exits requiring default egress (QD-1053) are another action (QD-1060), which the gate does not answer
+	// from the first's decision: the approval shows the requirement, and the spec the ledger reads holds it
+	required := &BridgeEgressRequest{Subject: world.hostId, Mode: bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS,
+		ExitSidecarIds: []Id{world.laptop.sidecarId}, RequireDefaultEgress: true}
+	if _, err := world.filer.SetEgress(ctx, world.confirmed(), required); err != nil {
+		t.Fatal(err)
+	}
+	requiredCall := world.lastGateCall()
+	requiredStored, err := ParseStoredCanonicalAction(requiredCall.canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !requiredStored.Action.GetRequireDefaultEgress() || bytes.Equal(requiredCall.canonical, call.canonical) ||
+		bytes.Equal(requiredCall.effectKey, call.effectKey) {
+		t.Fatalf("the requirement's action: %v", requiredStored.Action)
+	}
+	egress = world.ledger().Egress()
+	if len(egress) != 1 || !egress[0].RequireDefaultEgress || len(world.egressFilings()) != 2 {
+		t.Fatalf("the required spec: %+v, %d filings", egress, len(world.egressFilings()))
+	}
+
 	// none and then auto, bodiless, the last leaving no spec
 	if _, err := world.filer.SetEgress(ctx, world.confirmed(), none); err != nil {
 		t.Fatal(err)
@@ -1203,7 +1217,7 @@ func TestBridgeSetEgressFilesUnderTheGate(t *testing.T) {
 	if _, err := world.filer.SetEgress(ctx, world.confirmed(), &BridgeEgressRequest{Subject: world.hostId, Mode: bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_AUTO}); err != nil {
 		t.Fatal(err)
 	}
-	if egress := world.ledger().Egress(); len(egress) != 0 || len(world.egressFilings()) != 3 {
+	if egress := world.ledger().Egress(); len(egress) != 0 || len(world.egressFilings()) != 4 {
 		t.Fatalf("after auto: %+v, %d filings", egress, len(world.egressFilings()))
 	}
 	if routes := world.records.routes(t); len(routes) != 0 {
