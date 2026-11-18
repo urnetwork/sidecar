@@ -38,6 +38,8 @@ Sections 5 and 6 are folded (2026-11-17, track dr4-details-d): their proposed DE
 
 Section 4 is folded (2026-11-17, track dr4-details-d): its proposed DESIGN.md text (4.8) as amended, its owner answers being owner decisions 202, 215 and 216 (QD-622, QD-619, QD-620 with QD-621) and 487 (QD-696) already, with 485, 490 and 491's amendments, and §2.8's api-7 and gkm-1 already holding its words; `Pending.forward_delegation_id = 5` and `BridgeIdentity`'s fields 6 and 7 joined §17.8's fences, their three `testFenceAdditions` entries leaving in the same commit. FS-38's schedule now states its forwarding cases at app hosts; the M8-out case they need in its gate column and in §23.6's M8 row waits for sidecartest/fault's catalog to take it in the same commit (the forwarding schedules in sidecartest/fault/fs_bridge_forwarding_m8.go run outside the catalog until then). 4.8's lines for RESOLUTIONS.md are outside this file's folds.
 
+Section 12 is folded (2026-11-17, track dr4-details-d): its proposed DESIGN.md text (12.8) as amended for QD-761, its owner answers being owner decisions 473 to 478 and 483 already, and §17.9's fences already holding its share pins and seal bodies (track dr4-fences).
+
 Section 16 is not folded (2026-11-17, track dr4-details-c): the owner moved the client-checked prefix write rules to Later the same day (QD-1032), so none of 16.8's text goes into DESIGN.md as live design. The design-defer-doc track folds QD-1032, with DESIGN-DEFER.md's entry and the mark at section 16's head, and the prefix-rule amendments to sections 5, 8 and 10 wait with it, section 10's to §11.7's boundary row among them.
 
 <a id="s3"></a>

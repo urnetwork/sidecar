@@ -192,7 +192,9 @@ Parentheses hold T1 tests; the rest run in T2 and T3. Inline server paths (contr
       wire schema: FS-80; the directory's writers, requests, scale, removal and taint: FS-84 to FS-88, its erasure
       authority, decisions and repo items: FS-99 to FS-101; an approver refuses a CanonicalAction version it does not
       know (M3)
-§17   (Classify = linear scan; hook = reference) reset vs drain; reset bucket; C18's aliases within §17.9's
+§17   (Classify = linear scan; hook = reference; BenchmarkCompile at 6, 1,000 and 5,000 devices) a compile
+      reads no fold file, and a daemon's and a forwarding role's compiles of one view are byte-equal
+      (DESIGN-DETAILS.md section 12); reset vs drain; reset bucket; C18's aliases within §17.9's
       isolation; §17.5's Classify budget; blocks outside 100.64/10 and RFC 1918 refused (owner decision 132),
       readers keeping the previous block; native IP and the dial fence: FS-38, FS-56; from M8, an app's VPN
       component (owner decision 197): a delegation its forwarding key signs for its sidecar is admitted, while one
@@ -940,6 +942,14 @@ model       EvsCommit.tla (TLA+, checked by TLC: https://github.com/tlaplus/tlap
             overlay, an overlay that lifts or opens, a state that drops the overlay, a lower state accepted, no
             floor, repeats alone) as failing configurations and owner decision 216's accepted case, a
             revocation the posture cannot check waiting while no compile finishes, as two reach configurations;
+            details/BridgeNat.tla, ShareSign.tla and BridgeFold.tla (DESIGN-DETAILS.md section 12, run by
+            run-bridge.sh beside them) keep the engine against the host's NAT, a share's signers against
+            removal and revocation, and one body-level verdict at every reader across folds, and TLC checks
+            DialFence, NoStaleFlow, PolicySound and FlowSound, SevenDayBound, RatchetBound,
+            RevokedAdmitsNothing and OneSeedOneFile, and Equal, LedgerChecks and FoldedStays, and
+            details/BridgeVoid.tla (run by run-bridgevoid.sh) a body sealed to a generation that never forms,
+            checking NoFork, Equal, FoldedStays, NoPendingRow, Bounded, VoidsAgree and HonestValid, each with
+            the rules as first written or as landed before it as failing configurations;
             StoreSettle.tla keeps one key on 8 drives at EC:4 (4 hosts of 2): each drive's version, its stamp and
             its own lock on the key, each write's coordinator, which may crash, and its drive commits, each a check
             step then a commit step, the settler and heal; writes are cancelled, pass their deadline, arrive after
@@ -999,8 +1009,10 @@ FI-9   git: an acknowledged push has the declared ref, tree, ancestry and per-re
 FI-10  witnesses: a witness names exactly the state it compared; stale peers cannot manufacture freshness; a fork
        under one epoch alarms or reads unwitnessed (§2, §6)
 FI-11  path integrity: no application byte reaches a backend before its audience check, whatever the SNI or ALPN, nor
-       a target after its flow's revocation (§17.6, D-BRIDGE-21); a proof accepts only what the MX's own state machine
-       accepts (§13, §14, §17)
+       a target after its flow's revocation (§17.6, D-BRIDGE-21), and no flow opens, or stays open past its close,
+       under a rule the host has durably judged revoked, across late compiles, new client generations and restarts
+       (17.8's engine; DESIGN-DETAILS.md section 12); a proof accepts only what the MX's own state machine accepts
+       (§13, §14, §17)
 FI-12  recovery: after a Postgres or site loss, the newest copy a device or dump holds comes back exactly (oids, C_v,
        decryptability, identities, labels), save what §19.10's postgres step lists in the incident (a suffixed
        network name, a login left for a reset) or keeps at the main dump's age (rows the sidecar dump does not
@@ -1325,7 +1337,14 @@ FS-14  §7,8   two readers with one base and different statements at n+1 (a sock
               reader whose pin fell below the retention point links its pin through the head's
               records and forks on a forged run (DESIGN-DETAILS.md section 5); a forwarding
               Delegation's row, with its reader key's digest and superseded_at, reads alike
-              across a fold at a new device and a gate (DESIGN-DETAILS.md section 4)
+              across a fold at a new device and a gate (DESIGN-DETAILS.md section 4); a bridge
+              filing across a fold reaches a new device, a daemon and a VPN component with
+              equal ledger digests, and a base that turns an unfolded filing's verdict turns
+              it at all three alike; a filing sealed to a generation that never forms is void
+              at the fold after UnformedVoidWait at all three, with equal digests, and the
+              same filing whose generation is claimed after the void, under its key, leaves a
+              daemon that was behind taking the base with no fork (owner decisions 473, 478;
+              DESIGN-DETAILS.md section 12)
 FS-15  §10    an agent removed with every leaf offline: an agent rotates with ReaderWraps to   FI-4        T2+T3  M2-out
               every leaf and the gate reopens, and a returning leaf commits the Remove first,
               its path-only commit carrying the newest GenWrap; a leaf's and a wrapped
@@ -1544,7 +1563,10 @@ FS-38  §17    a FriendsAndFamily contract whose sealed source network differs f
               an operator-minted contract to an X-granted target: the honest gate refuses the
               contract, the minted one reaches only X's granted targets and ports, and the run
               records X's grant and the gate, never Y's bypassed router, as what enforced
-              (§8.11); at app hosts, once forwarding runs there (§22.5's §17 row), a
+              (§8.11); a ShareSigner renewal racing a rotation at §10.6's write gate is
+              dropped and made again at the new generation, and a share revoked between states
+              ends its principal at once and its flows at the next state (DESIGN-DETAILS.md
+              section 12); at app hosts, once forwarding runs there (§22.5's §17 row), a
               WindowDelegation whose 32-byte signer_id names the subject's forwarding
               Delegation live at the host's state is the positive twin, while one forged, or
               signed by a superseded or revoked forwarding Delegation's key, opens zero
@@ -1703,7 +1725,13 @@ FS-56  §17    the hook resolves a flow and its dial waits at a barrier; a revoc
               policy and runs CloseFlows; the dial completes: reset before any byte reaches
               the target, for TCP and UDP, and for ICMP no echo reaches the target and none is
               answered, a silent drop; the twin without a revocation forwards; a bridged
-              TCP/25 SYN gets the reject client's answer, and no local dial follows it
+              TCP/25 SYN gets the reject client's answer, and no local dial follows it; the
+              engine's schedules, each a twin of BridgeNat.tla on real code with barriers: a
+              close held after its publish while a flow registers and dials, two publishes
+              before the first close, a compile that finishes below a held denial, a restart
+              between a judged denial and its compile, and a provider's first frame against
+              the hook's installation, none opening a flow under a rule the host judged
+              revoked (DESIGN-DETAILS.md section 12)
 FS-57  §11    a batch PUT applied and its response dropped; evs killed after the batch write   FI-1,2,6    T2+T3  M2-out
               and before the head CAS; the push id retried on evs2, which writes a second
               record and commits; the first process's delayed head PUT fails; evacuation keeps

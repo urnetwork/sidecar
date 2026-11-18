@@ -116,3 +116,6 @@ assert D['D-SDK-13'].startswith('The forwarding role compiles its own rules') an
     'Forwarding is `sidecar/device` plus'), 'SDK forwarding rows moved'
 D['D-SDK-13'] = "The forwarding role compiles its rules, applies denials at once, opens only on compiled states, and signs its delegations."
 D['D-SDK-20'] = "Forwarding is `sidecar/device` plus the root's computed forwarding closure; `make check` holds its list, `make size` its stripped size."
+# The fold of DESIGN-DETAILS.md section 12 (2026-11-17): the engine's one order, commit, publish, close.
+assert D['D-BRIDGE-21'].startswith('A revocation swaps policy before'), 'BRIDGE engine row moved'
+D['D-BRIDGE-21'] = "Engine order: commit, publish, close; flows register rule and policy generation before dialing and recheck before the first byte."
