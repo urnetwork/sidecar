@@ -7,16 +7,31 @@
 //	           PUSH_ID_REUSED
 //	recorded   a refusal record names P and its statement: its refusal, again
 //	dead       for Resolve: not committed, and the head at or past b+64 (git mode b+1), or the statement past its time
-//	           checks (time_ms + EvsSettings.ResolveStatementLife, 35 min) with the head's fence_ms later than that
+//	           checks (time_ms + EvsSettings.ResolveStatementLife, 35 min) with the head's fence_ms later than that,
+//	           or for a re-seed's record or a seal, a fence in place of that clause (below)
 //	pending    for Resolve: none of the above
 //
-// A one-part re-seeded push's record, an EVS_BATCH_RESEED record holding a push's body, resolves by its statement as a
-// push's does, with the fence in place of the time clause (the owner's answer QD-872): the reseed mode skips 5b's
-// time window and its statements are as old as the mirror, so a statement's time bounds no attempt's arrival. What
-// bounds it is the record: the attempt that can commit a record at its place is the one that appended it, which
-// arrived before the record was in its batch, so a fence_ms at or past a time the resolver already held the record
-// ends that attempt by §11.8's fence row, and the record, still not committed on that head, is dead. A fence_ms below
-// that time says nothing of it, and the record stays pending until the resolver raises the fence itself.
+// A re-seed's records and every seal resolve by their statement as a push's do, with the fence in place of the time
+// clause (the owner's answers QD-872 and QD-974): not committed, one is dead only on a head whose fence_ms is at or
+// past a time the resolver already held the record, never because its statement's time_ms + 35 min has passed. The
+// reseed mode skips 5b's time window and its statements are as old as the mirror, so a statement's time bounds no
+// attempt's arrival. What bounds it is the record, so that a fence at or past that time ends, by §11.8's fence row,
+// every attempt that can still commit it:
+//
+//	one-part  an EVS_BATCH_RESEED record holding a push's body: the attempt that can commit it at its place is the
+//	          one that appended it, which arrived before the record was in its batch
+//	seal      an EVS_BATCH_SEAL record, a re-seed's or the push route's alike: the same, its attempt the one that
+//	          appended it. Telling a re-seed's seal from a pushed one would take a read of its parts' records, which
+//	          evacuation may already have dropped; the rule holds for both, and for a pushed seal it only moves its
+//	          drop from the time clause to a fence raised after the resolver held it
+//	part      an EVS_BATCH_RESEED record holding a part's body (QD-818): a seal attempt commits it and may come at
+//	          any time, but the reseed mode's seal takes no part place whose batch minute began more than
+//	          EvsSettings.ReseedPartMaxAge, 24 h, before its arrival (reseed.go), and evacuation holds a part only
+//	          25 h past its minute, after every attempt that can commit it arrived. Validate holds the bound under
+//	          evacuation's floor
+//
+// A fence_ms below that time says nothing of the record, which stays pending until the resolver raises the fence
+// itself. A pushed part keeps the time clause: its seal, held to 5b's time window, arrives within 30 min of time_ms.
 //
 // A slot's takeover (DESIGN-DETAILS 14.2.4) asks the same of a statement it knows only by its origin, its push id
 // and statement prefix: EvsPushStandingInPrefix.
@@ -167,21 +182,21 @@ type EvsResolution struct {
 // §11.8's Resolve rule for a batch record, which evacuation runs over every record of a batch past 25 h (§11.13): a
 // push's or seal's by its own statement against its ref's cluster head and log pages; a part follows its seal, so
 // it resolves as its statement's push, a re-seeded push's part, a reseed record holding a part's body, as any part
-// (QD-818); a one-part reseed by its statement too, with the fence in place of the time clause (QD-872; see the file
-// header). head is the ref's head as the caller read it from the cluster, nil when the ref has none. heldTime is a
-// time, on a clock that is sure (§19.6's clocks row), at which the caller already held record as its batch stores it;
-// zero from a caller with none, for which a reseed record no fence can be judged for stays pending.
+// (QD-818). A re-seed's records and every seal take the fence in place of the time clause (QD-872, QD-974; see the
+// file header). head is the ref's head as the caller read it from the cluster, nil when the ref has none. heldTime is
+// a time, on a clock that is sure (§19.6's clocks row), at which the caller already held record as its batch stores
+// it, and for a re-seeded part one past its batch minute's start + EvsSettings.ReseedPartMaxAge, as every evacuation
+// run's is; zero from a caller with none, for which a record the fence judges stays pending.
 func (self *EvsEngine) ResolvePush(ctx context.Context, cluster sidecar.BlobCluster, record *sidecar.EvsBatchRecord, head *protocol.EvsHead, heldTime time.Time) (*EvsResolution, error) {
 	return ResolveBatchRecord(ctx, record, head, self.settings.ResolveStatementLife, heldTime, func(ctx context.Context, page uint64) (*LogPage, error) {
 		return self.readLogPage(ctx, cluster, record.RepoId, record.RefId, page)
 	})
 }
 
-// Whether record is a one-part re-seeded push's: an EVS_BATCH_RESEED record holding a push's body, which Resolve
-// judges by the fence where it judges a push's by its statement's time (QD-872). A re-seeded push's part, a reseed
-// record holding a part's body, is a part (QD-818).
-func evsRecordIsReseededPush(record *sidecar.EvsBatchRecord) bool {
-	return record.Type == protocol.EvsBatchRecordType_EVS_BATCH_RESEED && !sidecar.EvsReseedRecordHoldsPart(record)
+// Whether Resolve judges record by the fence where it judges a push's by its statement's time (QD-872, QD-974): an
+// EVS_BATCH_RESEED record, holding a push's body or a part's, and every seal. See the file header.
+func evsRecordResolvesByFence(record *sidecar.EvsBatchRecord) bool {
+	return record.Type == protocol.EvsBatchRecordType_EVS_BATCH_RESEED || record.Type == protocol.EvsBatchRecordType_EVS_BATCH_SEAL
 }
 
 // A batch record's statement: a push's, part's, seal's or reseed's first item, a reseed's from a push record's body or,
@@ -229,10 +244,10 @@ func ResolveBatchRecord(ctx context.Context, record *sidecar.EvsBatchRecord, hea
 	if head != nil && bound <= head.GetVersion() {
 		return &EvsResolution{State: EvsResolveDead}, nil
 	}
-	if evsRecordIsReseededPush(record) {
-		// the fence in place of the time clause: one at or past a time the caller held the record ends the attempt
-		// that appended it, the only one that can commit it at its place. The fence row's 100 ms under an arrival
-		// covers the two clocks, each within 50 ms of UTC, so equal times end it too
+	if evsRecordResolvesByFence(record) {
+		// the fence in place of the time clause: one at or past a time the caller held the record ends every attempt
+		// that can still commit it (see the file header). The fence row's 100 ms under an arrival covers the two
+		// clocks, each within 50 ms of UTC, so equal times end them too
 		if head != nil && !heldTime.IsZero() && heldTime.UnixMilli() <= head.GetFenceMs() {
 			return &EvsResolution{State: EvsResolveDead}, nil
 		}

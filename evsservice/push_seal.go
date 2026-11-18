@@ -4,7 +4,9 @@
 //
 //	5a       on that head first, so a retry of a sealed push answers its version whatever became of its parts
 //	missing  a place that holds no record, or a record that is not this push's part, answers 409 PARTS_MISSING,
-//	         which records and refuses nothing: the client posts that part again and seals P again
+//	         which records and refuses nothing: the client posts that part again and seals P again; in the reseed
+//	         mode so does a place whose batch minute is older than EvsSettings.ReseedPartMaxAge (QD-974), its parts
+//	         left unread
 //	parts    each part's record is checked to be this statement's, and the parts together to parts_sha256,
 //	         changes_root and change_count, their slices joined into the one-part payload step 5 checks, the
 //	         request's slot bodies its section 7 (sidecar.EvsCheckSeal); every part's receipts join the view's, for
@@ -35,7 +37,9 @@
 // its part calls answered: each an EVS_BATCH_RESEED record holding a part's body, the type the round takes in that
 // mode alone, as the push route's takes EVS_BATCH_PART alone, so neither mode seals the other's parts. Its parts carry
 // no slot body and its seal call none, since its slots come last by their own calls: the round checks it as its
-// records keep it (sidecar.EvsCheckRecordSeal), format 1 alone, as a re-seeded one-part push's payload is checked.
+// records keep it (sidecar.EvsCheckRecordSeal), format 1 alone, as a re-seeded one-part push's payload is checked. Its
+// statement passes no time check, so nothing bounds when its seal comes but the part age bound above: Resolve judges a
+// re-seeded part, and every seal, by the fence rather than by its statement's time (QD-974).
 
 package evsservice
 
@@ -86,6 +90,8 @@ func (self *pushAttempt) readSealParts() *pushOutcome {
 	engine := self.engine
 	format2 := engine.format2Instance()
 	places := self.seal.places
+	// a re-seed's seal naming a part place past its age bound is refused after 5a, so no part of it is read (QD-974)
+	stale := self.reseedPartPlaceStale(places)
 	records := make([]*sidecar.EvsBatchRecord, len(places))
 	tails := make([]*sidecar.EvsBatchRecordTail, len(places))
 	readErrs := make([]error, len(places))
@@ -98,6 +104,9 @@ func (self *pushAttempt) readSealParts() *pushOutcome {
 		head, headErr = engine.heads.ReadCluster(self.ctx, self.cluster, self.repoId, self.refId)
 	}()
 	for i, place := range places {
+		if stale {
+			break
+		}
 		waitGroup.Add(1)
 		go func() {
 			defer waitGroup.Done()
@@ -120,6 +129,9 @@ func (self *pushAttempt) readSealParts() *pushOutcome {
 	}
 	if outcome := self.settle(head); outcome != nil {
 		return outcome
+	}
+	if stale {
+		return self.partsMissing()
 	}
 	partBytes := make([][]byte, len(places))
 	partStaged := make([][]byte, len(places))

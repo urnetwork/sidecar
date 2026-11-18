@@ -3,10 +3,13 @@
 // hourly evacuation: the record resolves by its statement as a push's does, with the fence in place of the time
 // clause. Committed at its place it is kept; a second copy is dropped as a push's is; one its ref's history never
 // commits is pending whatever its statement's age and whatever fence the head held before the run held the record,
-// and dead once the ref is fenced since, dropped with nothing else.
+// and dead once the ref is fenced since, dropped with nothing else. The owner's answer QD-974 extends the rule to a
+// re-seeded push's parts and its seal, and this build to every seal, which
+// TestResolveJudgesReseededPartsAndEverySealByTheFence holds.
 //
 // evacuate_reseed_testhooks_test.go holds the schedules that leave such records through the reseed route's own
 // attempts: a rerun a live push's commit refused, and a retry that commits while the first attempt waits.
+// evacuate_reseed_seal_testhooks_test.go holds a re-seed's seal attempt stalled at its head CAS past a run.
 
 package evsservice
 
@@ -116,6 +119,123 @@ func TestResolveJudgesAReseedRecordByTheFenceInPlaceOfItsStatementsTime(t *testi
 	}
 	if resolution := resolve(record, fixture.head().Head, time.Time{}); resolution.State != EvsResolveDead {
 		t.Fatalf("resolved %+v past its base's window", resolution)
+	}
+}
+
+// The EVS_BATCH_SEAL record step 6 writes for built's parts at places, a re-seed's or the push route's alike.
+func (self *reseedFixture) sealRecord(built *sidecar.EvsBuiltPush, places []*protocol.EvsPlace) *sidecar.EvsBatchRecord {
+	self.t.Helper()
+	parts := make([]*sidecar.EvsSealPart, len(places))
+	for i, place := range places {
+		checked, err := sidecar.EvsCheckPart(built.Statement, built.Parts[i])
+		if err != nil {
+			self.t.Fatal(err)
+		}
+		parts[i] = &sidecar.EvsSealPart{Place: place, ChangesRoot: checked.Root, FirstTokenPath: checked.FirstTokenPath()}
+	}
+	push := built.Statement.Push
+	return &sidecar.EvsBatchRecord{
+		Type: protocol.EvsBatchRecordType_EVS_BATCH_SEAL, RepoId: self.check.repoId, RefId: sidecar.Id(push.GetRefId()),
+		PushId: sidecar.Id(push.GetPushId()), SignerSidecarId: sidecar.Id(push.GetSignerSidecarId()), TimeMs: push.GetTimeMs(),
+		Body: sidecar.EvsSealRecordBody(built.Statement.Bytes, parts),
+	}
+}
+
+// Resolve's rule for a re-seed's other records and for every seal (QD-974): a re-seeded push's part, its seal as the
+// reseed mode writes it, and a seal of the push route's, none committed, are pending on no head, on a head with no
+// fence, on one whose fence is older than the time their resolver held them by, however far past their statements'
+// time, and for a resolver that holds no such time; dead on a fence at or past that time, and once the head stands 64
+// past their base. A part of the push route's keeps the time clause, its seal held to 30 min of its time_ms: pending
+// with no fence, dead on the older fence.
+func TestResolveJudgesReseededPartsAndEverySealByTheFence(t *testing.T) {
+	fixture := newReseedFixture(t)
+	check := fixture.check
+	first := fixture.kept()
+	fixture.create(first, "a")
+	fixture.requireCommitted(fixture.reseed(fixture.reseedBody(first)), 1)
+	head := fixture.head()
+	recordAt := func(place *protocol.EvsPlace) *sidecar.EvsBatchRecord {
+		t.Helper()
+		record, err := fixture.engine.readRecordAt(fixture.ctx, fixture.cluster, check.repoId, check.refId, place)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return record
+	}
+	// a re-seed's push in parts and one of the push route's, each sealed by nobody yet
+	reseeded := fixture.built(fixture.keptParts(1100))
+	reseededPlaces := fixture.reseedParts(reseeded)
+	pushedPlan := fixture.plan()
+	for i := 0; i < 1100; i += 1 {
+		fixture.create(pushedPlan, fmt.Sprintf("p-%05d", i))
+	}
+	pushed := fixture.built(pushedPlan)
+	pushedPlaces := fixture.postParts(fixture.token(check.signerId), pushed)
+	pushedPart := recordAt(pushedPlaces[0])
+	fenced := []struct {
+		label  string
+		record *sidecar.EvsBatchRecord
+	}{
+		{label: "a re-seeded part", record: recordAt(reseededPlaces[0])},
+		{label: "a re-seeded seal", record: fixture.sealRecord(reseeded, reseededPlaces)},
+		{label: "a seal of the push route's", record: fixture.sealRecord(pushed, pushedPlaces)},
+	}
+	if !sidecar.EvsReseedRecordHoldsPart(fenced[0].record) || pushedPart.Type != protocol.EvsBatchRecordType_EVS_BATCH_PART {
+		t.Fatalf("the parts' records are of types %s and %s", fenced[0].record.Type, pushedPart.Type)
+	}
+	resolve := func(record *sidecar.EvsBatchRecord, head *protocol.EvsHead, heldTime time.Time) EvsResolveState {
+		t.Helper()
+		resolution, err := fixture.engine.ResolvePush(fixture.ctx, fixture.cluster, record, head, heldTime)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resolution.State
+	}
+	fencedAt := func(fenceTime time.Time) *protocol.EvsHead {
+		fencedHead := CloneEvsHead(head.Head)
+		fencedHead.Fence += 1
+		fencedHead.FenceMs = fenceTime.UnixMilli()
+		return fencedHead
+	}
+	// as a run holds them 25 h on; the older fence an hour on, past every statement's time clause
+	heldTime := fixture.clock.Now().Add(25*time.Hour + 2*time.Minute)
+	older := fencedAt(fixture.clock.Now().Add(time.Hour))
+	for _, each := range fenced {
+		for _, c := range []struct {
+			on       string
+			head     *protocol.EvsHead
+			heldTime time.Time
+			state    EvsResolveState
+		}{
+			{on: "no head", head: nil, heldTime: heldTime, state: EvsResolvePending},
+			{on: "no fence", head: head.Head, heldTime: heldTime, state: EvsResolvePending},
+			{on: "an older fence", head: older, heldTime: heldTime, state: EvsResolvePending},
+			{on: "a resolver with no time", head: fencedAt(heldTime.Add(time.Hour)), heldTime: time.Time{}, state: EvsResolvePending},
+			{on: "a fence at the time held", head: fencedAt(heldTime), heldTime: heldTime, state: EvsResolveDead},
+			{on: "a later fence", head: fencedAt(heldTime.Add(time.Hour)), heldTime: heldTime, state: EvsResolveDead},
+		} {
+			if state := resolve(each.record, c.head, c.heldTime); state != c.state {
+				t.Errorf("%s on %s resolves %d, want %d", each.label, c.on, state, c.state)
+			}
+		}
+	}
+	if state := resolve(pushedPart, head.Head, heldTime); state != EvsResolvePending {
+		t.Errorf("a part of the push route's resolves %d with no fence", state)
+	}
+	if state := resolve(pushedPart, older, heldTime); state != EvsResolveDead {
+		t.Errorf("a part of the push route's resolves %d on the older fence, past its statement's time", state)
+	}
+
+	// 64 commits past their base: none can land within (b, b+64], fence or none
+	for i := 0; i < evsFileModeBaseWindow+1; i += 1 {
+		next := fixture.plan()
+		fixture.create(next, fmt.Sprintf("after %d", i))
+		fixture.requireCommitted(fixture.push(next), uint64(2+i))
+	}
+	for _, each := range fenced {
+		if state := resolve(each.record, fixture.head().Head, time.Time{}); state != EvsResolveDead {
+			t.Errorf("%s resolves %d past its base's window", each.label, state)
+		}
 	}
 }
 
