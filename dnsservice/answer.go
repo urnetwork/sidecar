@@ -32,57 +32,15 @@ type DnsQuery struct {
 // kept, and the reply shares nothing with the view. view may be nil, when REFUSED is all there is to
 // say. A message that is itself a response gets nil, so two servers can never answer each other.
 func Answer(query *DnsQuery, view *ZoneView, healthy *HealthySet) *dns.Msg {
-	request := query.Message
-	if request == nil || request.Response {
-		return nil
+	udpSize := dnsMinimumMessageByteCount
+	if view != nil {
+		udpSize = view.settings.EdnsUdpSize
 	}
-	reply := &dns.Msg{
-		MsgHdr: dns.MsgHdr{
-			Id:               request.Id,
-			Response:         true,
-			Opcode:           request.Opcode,
-			RecursionDesired: request.RecursionDesired,
-			CheckingDisabled: request.CheckingDisabled,
-		},
-		Compress: true,
-	}
-
-	if len(request.Question) == 1 {
-		reply.Question = []dns.Question{request.Question[0]}
-	}
-
-	// RFC 6891 §6.1.1 refuses a second OPT, and §6.1.3 answers an unknown version before anything else
-	var opt *dns.OPT
-	for _, extra := range request.Extra {
-		if record, ok := extra.(*dns.OPT); ok {
-			if opt != nil || record.Hdr.Name != "." {
-				reply.Rcode = dns.RcodeFormatError
-				return reply
-			}
-			opt = record
-		}
-	}
-	if opt != nil {
-		udpSize := uint16(dnsMinimumMessageByteCount)
-		if view != nil {
-			udpSize = uint16(view.settings.EdnsUdpSize)
-		}
-		// nothing else of the query's OPT comes back: a client subnet option is never echoed (dns-2)
-		reply.SetEdns0(udpSize, opt.Do())
-		if 0 < opt.Version() {
-			reply.Rcode = dns.RcodeBadVers
-			return reply
-		}
-	}
-	if request.Opcode != dns.OpcodeQuery {
-		reply.Rcode = dns.RcodeNotImplemented
+	reply, opt, done := dnsAnswerStart(query, udpSize)
+	if done {
 		return reply
 	}
-	if len(request.Question) != 1 {
-		reply.Rcode = dns.RcodeFormatError
-		return reply
-	}
-	question := request.Question[0]
+	question := query.Message.Question[0]
 	name := dns.CanonicalName(question.Name)
 	refused := question.Qclass != dns.ClassINET || question.Qtype == dns.TypeAXFR || question.Qtype == dns.TypeIXFR ||
 		view == nil || !dns.IsSubDomain(view.root, name)
@@ -99,6 +57,57 @@ func Answer(query *DnsQuery, view *ZoneView, healthy *HealthySet) *dns.Msg {
 	view.answerQuestion(reply, question, healthy)
 	fitDnsAnswer(reply, dnsAnswerLimit(query, opt, view.settings))
 	return reply
+}
+
+// The reply every answer starts from, with the query's question and its OPT, and whether it is already
+// whole: a second OPT or one off the root (FORMERR, RFC 6891 §6.1.1), an EDNS version past 0 (BADVERS,
+// §6.1.3, before anything else), an opcode but QUERY (NOTIMP) or other than one question (FORMERR). A
+// message that is itself a response gets nil and done, so two servers can never answer each other.
+// udpSize is what this server offers in its OPT.
+func dnsAnswerStart(query *DnsQuery, udpSize int) (reply *dns.Msg, opt *dns.OPT, done bool) {
+	request := query.Message
+	if request == nil || request.Response {
+		return nil, nil, true
+	}
+	reply = &dns.Msg{
+		MsgHdr: dns.MsgHdr{
+			Id:               request.Id,
+			Response:         true,
+			Opcode:           request.Opcode,
+			RecursionDesired: request.RecursionDesired,
+			CheckingDisabled: request.CheckingDisabled,
+		},
+		Compress: true,
+	}
+	if len(request.Question) == 1 {
+		reply.Question = []dns.Question{request.Question[0]}
+	}
+	for _, extra := range request.Extra {
+		if record, ok := extra.(*dns.OPT); ok {
+			if opt != nil || record.Hdr.Name != "." {
+				reply.Rcode = dns.RcodeFormatError
+				return reply, nil, true
+			}
+			opt = record
+		}
+	}
+	if opt != nil {
+		// nothing else of the query's OPT comes back: a client subnet option is never echoed (dns-2)
+		reply.SetEdns0(uint16(udpSize), opt.Do())
+		if 0 < opt.Version() {
+			reply.Rcode = dns.RcodeBadVers
+			return reply, opt, true
+		}
+	}
+	if request.Opcode != dns.OpcodeQuery {
+		reply.Rcode = dns.RcodeNotImplemented
+		return reply, opt, true
+	}
+	if len(request.Question) != 1 {
+		reply.Rcode = dns.RcodeFormatError
+		return reply, opt, true
+	}
+	return reply, opt, false
 }
 
 // The most bytes this answer may hold: the message limit on TCP, and on UDP the smaller of what the
