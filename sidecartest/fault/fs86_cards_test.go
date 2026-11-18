@@ -53,6 +53,16 @@ func fs86CardsEvsTestSettings() *Fs86CardsEvsSettings {
 	return settings
 }
 
+// A Net for the card commits' schedule, whose phases are single steps that wait on the wall clock between arrivals:
+// the driver waits a minute for a step, far past what a loaded machine takes for these, and reads a waiting actor as
+// no stalled one.
+func fs86CardsEvsTestNet(ctx context.Context) *sidecartest.Net {
+	netSettings := sidecartest.DefaultNetSettings()
+	netSettings.Barriers.AwaitTimeout = time.Minute
+	netSettings.Barriers.StallTimeout = 0
+	return sidecartest.NewNet(ctx, netSettings)
+}
+
 var Fs86Cards = Register("FS-86", "cards", []Tier{TierT2}, Fs86DirectoryCards)
 
 // What the steps of one schedule share: every run so far.
@@ -212,7 +222,7 @@ func TestFs86Cards(t *testing.T) {
 // card as its last push left it, one statement a push. No time is held: the fakes' store takes none.
 func TestFs86CardsEvsCommits(t *testing.T) {
 	ctx := context.Background()
-	net := sidecartest.NewNet(ctx, nil)
+	net := fs86CardsEvsTestNet(ctx)
 	defer net.Close()
 	schedule, state := Fs86CardsEvsCommitsOf(net, fs86CardsEvsTestSettings())
 	result := Run(ctx, schedule, net)
@@ -236,7 +246,7 @@ func TestFs86CardsEvsCommits(t *testing.T) {
 // The ceilings are held: with a p99 ceiling no commit meets, the peak fails on it.
 func TestFs86CardsEvsCommitsFailPastTheirCeiling(t *testing.T) {
 	ctx := context.Background()
-	net := sidecartest.NewNet(ctx, nil)
+	net := fs86CardsEvsTestNet(ctx)
 	defer net.Close()
 	settings := fs86CardsEvsTestSettings()
 	settings.Ceilings = sidecartest.DefaultDirectoryLoadCeilings()
