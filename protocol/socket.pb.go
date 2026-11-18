@@ -234,6 +234,7 @@ type SocketTicket struct {
 	Backup                bool                   `protobuf:"varint,12,opt,name=backup,proto3" json:"backup,omitempty"`
 	GrantExpireTimeMillis uint64                 `protobuf:"varint,13,opt,name=grant_expire_time_millis,json=grantExpireTimeMillis,proto3" json:"grant_expire_time_millis,omitempty"` // streams end here; 0: none; ur/: issue + 60 min
 	NameToken             []byte                 `protobuf:"bytes,14,opt,name=name_token,json=nameToken,proto3" json:"name_token,omitempty"`                                          // other names: the token path (9.4)
+	DialerSidecarId       []byte                 `protobuf:"bytes,16,opt,name=dialer_sidecar_id,json=dialerSidecarId,proto3" json:"dialer_sidecar_id,omitempty"`                      // 16 B, ur/ tickets alone: the dialer's sidecar, its listener's subject (QD-989)
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
 }
@@ -366,6 +367,13 @@ func (x *SocketTicket) GetNameToken() []byte {
 	return nil
 }
 
+func (x *SocketTicket) GetDialerSidecarId() []byte {
+	if x != nil {
+		return x.DialerSidecarId
+	}
+	return nil
+}
+
 type SignedSocketTicket struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	KeyId         string                 `protobuf:"bytes,1,opt,name=key_id,json=keyId,proto3" json:"key_id,omitempty"` // a service key; fixes the algorithm (Ed25519)
@@ -443,7 +451,7 @@ const file_protocol_socket_proto_rawDesc = "" +
 	"name_token\x18\x03 \x01(\fR\tnameToken\x12\x1b\n" +
 	"\tlisten_id\x18\x04 \x01(\fR\blistenId\x12\x1a\n" +
 	"\bprotocol\x18\x05 \x01(\tR\bprotocol\x12\x19\n" +
-	"\bapp_mode\x18\x06 \x01(\tR\aappMode\"\x91\x04\n" +
+	"\bapp_mode\x18\x06 \x01(\tR\aappMode\"\xbd\x04\n" +
 	"\fSocketTicket\x12\x1b\n" +
 	"\tticket_id\x18\x01 \x01(\fR\bticketId\x12\x1d\n" +
 	"\n" +
@@ -461,7 +469,8 @@ const file_protocol_socket_proto_rawDesc = "" +
 	"\x06backup\x18\f \x01(\bR\x06backup\x127\n" +
 	"\x18grant_expire_time_millis\x18\r \x01(\x04R\x15grantExpireTimeMillis\x12\x1d\n" +
 	"\n" +
-	"name_token\x18\x0e \x01(\fR\tnameTokenJ\x04\b\x0f\x10\x10\"a\n" +
+	"name_token\x18\x0e \x01(\fR\tnameToken\x12*\n" +
+	"\x11dialer_sidecar_id\x18\x10 \x01(\fR\x0fdialerSidecarIdJ\x04\b\x0f\x10\x10\"a\n" +
 	"\x12SignedSocketTicket\x12\x15\n" +
 	"\x06key_id\x18\x01 \x01(\tR\x05keyId\x12\x16\n" +
 	"\x06ticket\x18\x02 \x01(\fR\x06ticket\x12\x1c\n" +

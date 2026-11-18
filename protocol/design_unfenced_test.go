@@ -672,6 +672,13 @@ var testFenceAdditions = []struct {
 		field:    testFenceField{name: "require_default_egress", number: 4, typeName: "bool"},
 		question: "ur-tun-default-egress-admin-lock",
 	},
+	// QD-989 (owner decision 560): a ur/ ticket names its dialer's sidecar, signed with the rest, so a ur/ listener reads
+	// its subject from the admitted ticket; §2.8's sock-2 row names it (list v45)
+	{
+		message:  "SocketTicket",
+		field:    testFenceField{name: "dialer_sidecar_id", number: 16, typeName: "bytes"},
+		question: "smtp-m9-13-dialer-sidecar",
+	},
 }
 
 // One field an owner's answer takes out of a message the design fences, its number reserved.
