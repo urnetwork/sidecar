@@ -890,6 +890,12 @@ model       EvsCommit.tla (TLA+, checked by TLC: https://github.com/tlaplus/tlap
             until its first push, and TLC checks NoLateToken, ReadsNewest, NoLostUpdate, FloorsBacked, EntriesHome,
             RowsLead, NoneMissed and NoGhostRows, with the rules as first written (every source named, no between
             fence or tail check, a blind retoken, a fold keeping its sources, a new ref at epoch 1) as failing
+            configurations; details/GitSync.tla (section 8, run by run-gitsync.sh) keeps one git-mode ref on evs
+            and each device's record of it, settled tip, local ref, journal entry, sent push ids and conflict
+            branches, with crashes, lost answers, commitless versions, forced pushes and owned refs, and TLC
+            checks MirrorExact, NoDuplicate, AckedDurable, SharedSafe, TruthfulNg, NoSpurious and Converge, with
+            the journal as first written (a settle that requires old, a blind update-ref, an ng on an unknown
+            outcome, no recognition of its own push, no apply lock, a refused update dropped alone) as failing
             configurations;
             StoreSettle.tla keeps one key on 8 drives at EC:4 (4 hosts of 2): each drive's version, its stamp and
             its own lock on the key, each write's coordinator, which may crash, and its drive commits, each a check
@@ -1172,18 +1178,23 @@ FS-4   §11    paths inserted, deleted and renamed after a map's enumeration and
 FS-5   §11    two stock git clients push sibling commits from one base to a shared git-mode    FI-9        T3     M2-out
               ref: the second gets a non-fast-forward, and its merge lands with export's tip,
               tree and parents equal to the clients'; a push whose head moved only by a
-              commitless PATH_EPOCH re-signs and lands with no ng, and SEGMENT_GONE, 429 and
-              GATE_CLOSED never reach git as a non-fast-forward; with a warm head cache, a
-              multi-part push takes its lease, posts its parts and seals with no ng, a lease
-              or a push taken after another push's refusal fence lands, one during another
-              push's lease gets 429 with retry_after_ms, and a lease based below the tip gets
-              non-fast-forward; an agent branch based on a main with unfolded changes to X,
-              and one whose base entry for X keeps only versions newer than the branch's base:
-              its first push changing X commits, and a read of a path it has not changed
-              answers base {ref, version}; an overlay of a file-mode ref gets 409 REF_MODE; a
-              two-ref atomic push whose second ref conflicts; the bridge killed after the
-              remote commit and before the local update reconciles from its journal; a local
-              ref-lock failure after pre-receive
+              commitless PATH_EPOCH, or by a rekey, re-signs and lands with no ng, and
+              SEGMENT_GONE, 429 and GATE_CLOSED never reach git as a non-fast-forward; a push
+              of two commits whose middle blob only a history record carries, a second device
+              holding it and its git fsck clean; a pull that names a source and carries only
+              its merge; a push whose sealed metadata spills into a changeless part; an
+              inherited file removed on an overlay, the removal standing after a marker
+              collection and a path-epoch copy; with a warm head cache, a multi-part push
+              takes its lease, posts its parts and seals with no ng, a lease or a push taken
+              after another push's refusal fence lands, one during another push's lease gets
+              429 with retry_after_ms, and a lease based below the tip gets non-fast-forward;
+              an agent branch based on a main with unfolded changes to X, and one whose base
+              entry for X keeps only versions newer than the branch's base: its first push
+              changing X commits, and a read of a path it has not changed answers base {ref,
+              version}; an overlay of a file-mode ref gets 409 REF_MODE; a two-ref atomic push
+              whose second ref conflicts; a daemon killed after the remote commit reconciles
+              from the ref's history, with no conflict branch; a local ref-lock failure after
+              pre-receive
 FS-6   §11    restore raced against --now and the 7-day expiry, paused before and after the    FI-5        T2+T3  M2-out
               SHREDDING claim and before each destructive phase: one winner; the worker killed
               at each phase and restarted; a stale job of an earlier incarnation deletes
