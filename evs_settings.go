@@ -219,8 +219,8 @@ type EvsSettings struct {
 	// creator having placed its id first (§11.8's place row; QD-927): 2. Each files a RepoCreate of its own.
 	RepoPlacedRetryCount int
 	// A repo re-seeded as deleted whose repo/ the groups step found keying, and activated, goes to deleted by a DELETE
-	// of no statement of its own (EvsRepo.ReseedPlace; QD-1064). evs answers it 409 STATEMENT_MISSING while its
-	// projection does not yet hold the RepoDelete this device's state shows, which is asked again after
+	// of no statement of its own (EvsRepo.ReseedPlace; owner decision 602). evs answers it 409 STATEMENT_MISSING while
+	// its projection does not yet hold the RepoDelete this device's state shows, which is asked again after
 	// ReseedDeleteWait, 1 s, at most ReseedDeleteWaitCount times, 30, six of §8.9's 5 s targets for a statement to
 	// reach the gates, before the step answers the refusal with repo/ left active. A non-positive count asks once.
 	ReseedDeleteWait      time.Duration

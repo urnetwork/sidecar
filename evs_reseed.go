@@ -48,7 +48,7 @@
 //	          RepoRestore, after which a second ReformGroup finishes its group. A 200 there says the place created
 //	          repo/ keying, as it does where the reseed gate was off at the place or evs's projection did not yet hold
 //	          the RepoDelete this device's state shows (one filed after the log resumed, within §8.9's 5 s), and that
-//	          repo/ is now active, which delete mends (QD-1064)
+//	          repo/ is now active, which delete mends (owner decision 602; QD-1064)
 //	delete    for that repo alone, DELETE /evs/v1/repos/<id>, the route with no statement of its own, which moves
 //	          active to deleted{deletion_id, its entry's time, signer} under the RepoDelete evs's projection holds and
 //	          answers a repo/ already deleted under it 200; while the projection trails this device's state, its 409
@@ -104,7 +104,7 @@ type EvsReseedPlaced struct {
 	// The repo is re-seeded as deleted: placed, its group's form and ladder returned, and left with repo/ deleted.
 	Deleted bool
 	// For a repo re-seeded as deleted, the place created repo/ keying, and activate and DELETE moved it through active
-	// to deleted (QD-1064).
+	// to deleted (owner decision 602; QD-1064).
 	Mended bool
 	// Another admin's device placed the repo first, so this one re-formed and activated nothing.
 	PlacedByAnother bool
