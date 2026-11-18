@@ -368,8 +368,9 @@ func TestCheckerAndTheGateNameTheSameChecks(t *testing.T) {
 	}
 }
 
-// Writes the checker's fixed transcripts, one honest connection per leg and mode, which its own
-// tests read without this package. Set SMTPPROOF_WRITE_CHECKER_VECTORS to rewrite them.
+// Writes the checker's fixed transcripts, which its own tests read without this package: one honest
+// connection per leg and mode, and one per leg and mode whose header block takes two records, the first
+// cut inside a field's name (-split-name). Set SMTPPROOF_WRITE_CHECKER_VECTORS to rewrite them.
 func TestWriteCheckerVectors(t *testing.T) {
 	if os.Getenv("SMTPPROOF_WRITE_CHECKER_VECTORS") == "" {
 		t.Skip("set SMTPPROOF_WRITE_CHECKER_VECTORS to rewrite checker/testdata")
@@ -379,17 +380,22 @@ func TestWriteCheckerVectors(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, c := range testLegCases() {
-		transcript, witnesses := testCheckerInput(smtpproof.ExportCapture(t, c.leg, c.data))
-		encoded, err := json.MarshalIndent(struct {
-			Transcript *checker.Transcript
-			Witnesses  map[int]*checker.PartWitness
-		}{Transcript: transcript, Witnesses: witnesses}, "", " ")
-		if err != nil {
-			t.Fatal(err)
-		}
-		name := strings.ReplaceAll(c.name, " ", "-") + ".json"
-		if err := os.WriteFile(filepath.Join(directory, name), encoded, 0o644); err != nil {
-			t.Fatal(err)
+		for suffix, capture := range map[string]func(t *testing.T, legIndex int, data bool) *smtpproof.ExportedCapture{
+			"":            smtpproof.ExportCapture,
+			"-split-name": smtpproof.ExportSplitNameCapture,
+		} {
+			transcript, witnesses := testCheckerInput(capture(t, c.leg, c.data))
+			encoded, err := json.MarshalIndent(struct {
+				Transcript *checker.Transcript
+				Witnesses  map[int]*checker.PartWitness
+			}{Transcript: transcript, Witnesses: witnesses}, "", " ")
+			if err != nil {
+				t.Fatal(err)
+			}
+			name := strings.ReplaceAll(c.name, " ", "-") + suffix + ".json"
+			if err := os.WriteFile(filepath.Join(directory, name), encoded, 0o644); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 }
@@ -415,18 +421,25 @@ func testAgreementMxs(t *testing.T, leg *smtpproof.ExportedMxLeg) map[string]sid
 }
 
 // SMTP-M9-02's fixtures as the honest corpus: every leg, both modes, both MXs, whose TLS the checker
-// and this module share no code with, and the gate and the checker each pass every send.
+// and this module share no code with, and the gate and the checker each pass every send, with a header
+// block of one record and of two, the first ending inside a field's name, so that a carry crosses.
 func TestCheckerAgreesOnHonestSendsThroughSidecartestsMxs(t *testing.T) {
 	for _, leg := range smtpproof.ExportMxLegs() {
 		for _, data := range []bool{false, true} {
-			for kind, mx := range testAgreementMxs(t, leg) {
-				capture := smtpproof.ExportMxCapture(t, leg.Name, data, mx)
-				name := fmt.Sprintf("%s %s data=%t", leg.Name, kind, data)
-				if verdict := testGateVerdict(capture); len(verdict) != 0 {
-					t.Errorf("%s: the gate refuses an honest send: %v", name, verdict)
-				}
-				for _, failure := range checker.Check(testCheckerInput(capture)) {
-					t.Errorf("%s: the checker refuses an honest send: %v", name, failure)
+			for _, splitName := range []bool{false, true} {
+				for kind, mx := range testAgreementMxs(t, leg) {
+					capture := smtpproof.ExportMxCapture
+					if splitName {
+						capture = smtpproof.ExportSplitNameMxCapture
+					}
+					honest := capture(t, leg.Name, data, mx)
+					name := fmt.Sprintf("%s %s data=%t split=%t", leg.Name, kind, data, splitName)
+					if verdict := testGateVerdict(honest); len(verdict) != 0 {
+						t.Errorf("%s: the gate refuses an honest send: %v", name, verdict)
+					}
+					for _, failure := range checker.Check(testCheckerInput(honest)) {
+						t.Errorf("%s: the checker refuses an honest send: %v", name, failure)
+					}
 				}
 			}
 		}
@@ -478,6 +491,148 @@ func TestCheckerAndTheGateNameTheSameChecksThroughARecordMx(t *testing.T) {
 					t.Fatal(err)
 				}
 				testExpectSameChecks(t, m, c, smtpproof.ExportMxCapture(t, leg.Name, data, mx))
+			}
+		}
+	}
+}
+
+// DESIGN-DETAILS 3.6's cells through RecordMx as well, on every leg, ECDHE-RSA included: each break
+// mutate_test.go's registry fills a cell with is named alike by the gate and the checker, from a send
+// through a TLS server written apart from both.
+func TestCheckerAndTheGateNameTheSameChecksOnTheDetailsCellsThroughARecordMx(t *testing.T) {
+	for _, leg := range smtpproof.ExportMxLegs() {
+		certificate, err := sidecartest.NewMxCertificate("mx.recipient.example", leg.Suite == tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, data := range []bool{false, true} {
+			c := &testLegCase{name: fmt.Sprintf("%s record data=%t", leg.Name, data), data: data, tls12: leg.Version == tls.VersionTLS12}
+			for _, m := range testMutations() {
+				if m.cell == "" || (m.applies != nil && !m.applies(c)) {
+					continue
+				}
+				mx, err := sidecartest.NewRecordMx("mx.recipient.example", nil, &sidecartest.RecordMxSettings{Version: leg.Version, Suite: leg.Suite, Certificate: &certificate})
+				if err != nil {
+					t.Fatal(err)
+				}
+				capture := smtpproof.ExportMxCapture
+				if m.splitName {
+					capture = smtpproof.ExportSplitNameMxCapture
+				}
+				testExpectSameChecks(t, &testCheckerMutation{name: m.name, want: func(*testLegCase) []string { return []string{m.check} }, mutate: m.mutate}, c, capture(t, leg.Name, data, mx))
+			}
+		}
+	}
+}
+
+// A tail of header lines that take the scan's state through each of its fields: a name unfinished and
+// past its colon, a CR and a line's start, a continuation, names that begin a single field's literal and
+// then leave it, and the full DKIM signature, which runs with the fixed one's prefix up to its h= tag.
+const testCarryTail = "X-Spanning-Name: v\r\n\tcontinued\r\nFrom-Like: x\r\nMessage-Idx: y\r\n" +
+	"DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; h=from:to:subject:date:message-id:x-ur-ref:feedback-id; d=net.root.example; s=s1; t=1; bh=AAAA; b=BBBB\r\n"
+
+// Holds an honest capture to both readers' passing it.
+func testExpectHonestAgreement(t *testing.T, name string, capture *smtpproof.ExportedCapture) {
+	t.Helper()
+	if verdict := testGateVerdict(capture); len(verdict) != 0 {
+		t.Errorf("%s: the gate refuses an honest send: %v", name, verdict)
+	}
+	for _, failure := range checker.Check(testCheckerInput(capture)) {
+		t.Errorf("%s: the checker refuses an honest send: %v", name, failure)
+	}
+}
+
+// Forges, on an honest capture, the state a part's scan starts from to the start state, where the record
+// before left another, holds the gate and the checker to naming check alone, and puts the state back.
+// A part whose record does start at the start state has no such forgery, and is passed over.
+func testExpectForgedStartAgreement(t *testing.T, name string, capture *smtpproof.ExportedCapture, index uint32, check string) {
+	t.Helper()
+	witness := capture.Witnesses[testPartEvents(capture)[index]]
+	honest := witness.CarryInState
+	if honest == smtpproof.ExportScanStart {
+		return
+	}
+	witness.CarryInState = smtpproof.ExportScanStart
+	defer func() { witness.CarryInState = honest }()
+	want := []string{check}
+	gate := testGateVerdict(capture)
+	ours := testCheckerVerdict(capture)
+	if !slices.Equal(gate, want) || !slices.Equal(ours, want) {
+		t.Errorf("%s, part %d scanned from the start state: the gate names %v and the checker %v, want %v", name, index, gate, ours, want)
+	}
+}
+
+// The carry between a header block's two records, read by the checker from the state's definition and by
+// the prover and the gate from the relation's scan, at every octet of testCarryTail on one leg and mode
+// and at every seventh on the rest: an honest send passes both at each cut, so the two readers' states
+// agree there, and its second record scanned from the start state is Z5 to both wherever the first left
+// another state.
+func TestCheckerAgreesOnTheHeaderCarryAtEveryCut(t *testing.T) {
+	for _, c := range testLegCases() {
+		step := 1
+		if c.leg != 0 || c.data {
+			step = 7
+		}
+		for cut := 0; cut+len("\r\n") <= len(testCarryTail); cut += step {
+			capture := smtpproof.ExportCutHeaderCapture(t, c.leg, c.data, testCarryTail, cut)
+			name := fmt.Sprintf("%s, the first record ending %q", c.name, testCarryTail[max(0, cut-16):cut])
+			testExpectHonestAgreement(t, name, capture)
+			testExpectForgedStartAgreement(t, name, capture, 4, "Z5")
+		}
+	}
+}
+
+// DATA's body records, 12 octets each in these captures, with the body shifted by 0 to 11 octets so that a
+// boundary falls at each octet of lines that take the body's scan through its states: a stuffed dot at a
+// line's start, a line of one dot stuffed, an empty line, a dot inside a line, CR and LF. Every shift passes
+// both readers, and each body record after the first scanned from the start state is Z6 to both wherever
+// the record before left another.
+func TestCheckerAgreesOnTheBodyCarryAtEveryCut(t *testing.T) {
+	for _, c := range testLegCases() {
+		if !c.data {
+			continue
+		}
+		for shift := range 12 {
+			body := strings.Repeat("s", shift) + "\r\n.a\r\n.\r\n\r\nb.\r\nend\r\n"
+			capture := smtpproof.ExportBodyCapture(t, c.leg, true, body)
+			name := fmt.Sprintf("%s, the body shifted %d", c.name, shift)
+			testExpectHonestAgreement(t, name, capture)
+			events := testPartEvents(capture)
+			// part 4 opens the body's first record, whose scan the gate starts itself
+			for index := uint32(5); int(index) <= len(events); index += 1 {
+				testExpectForgedStartAgreement(t, name, capture, index, "Z6")
+			}
+		}
+	}
+}
+
+// A single field's line that ends the header block's first record, each single field in turn: an honest
+// send passes both readers, whose states at the cut agree that a single field's line just ended; the
+// second record scanned from the start state is Z5 to both; and the second record opening with a
+// continuation of that field, in its length, is Z5 to both at that record (DESIGN-DETAILS 3.2.4's H6).
+func TestCheckerAgreesOnASingleFieldEndingTheFirstRecord(t *testing.T) {
+	for _, field := range []string{"From", "Message-ID", "X-UR-Ref", "Feedback-ID"} {
+		for _, c := range testLegCases() {
+			block := smtpproof.ExportSingleEndsHeaderBlock(c.leg, field)
+			if block == "" {
+				t.Fatalf("no header block ends its first record with %s", field)
+			}
+			name := fmt.Sprintf("%s, %s ending the first record", c.name, field)
+			capture := smtpproof.ExportMessageCapture(t, c.leg, c.data, block+"one line\r\n", 2)
+			testExpectHonestAgreement(t, name, capture)
+			testExpectForgedStartAgreement(t, name, capture, 4, "Z5")
+
+			header := testPartEvents(capture)[4]
+			plaintext := capture.Witnesses[header].ClientPlaintexts[0]
+			content := []byte(plaintext)
+			if !c.tls12 {
+				content = content[:len(content)-1]
+			}
+			continued := append([]byte(" "), content[1:]...)
+			testRewriteClientRecord(t, c, capture, header, 0, continued)
+			want := []string{"Z5"}
+			if gate, ours := testGateVerdict(capture), testCheckerVerdict(capture); !slices.Equal(gate, want) || !slices.Equal(ours, want) {
+				t.Errorf("%s, then continued: the gate names %v and the checker %v, want %v", name, gate, ours, want)
 			}
 		}
 	}
