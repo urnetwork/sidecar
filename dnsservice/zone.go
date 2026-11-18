@@ -175,13 +175,15 @@ type zoneNode struct {
 	withheldRow *zoneRrset
 	// An alias's row, at an alias's apex alone (zone_alias.go).
 	aliasRow *zoneRrset
+	// A network's delegated _domainkey zones, at its label's apex alone (delegated.go).
+	delegatedRow *zoneRrset
 	// Names one label below this one that exist.
 	childCount int
 }
 
 // Whether this name holds nothing and has no child, and so does not exist.
 func (self *zoneNode) empty() bool {
-	return len(self.rrsets) == 0 && self.copyRow == nil && self.withheldRow == nil && self.aliasRow == nil && self.childCount == 0
+	return len(self.rrsets) == 0 && self.copyRow == nil && self.withheldRow == nil && self.aliasRow == nil && self.delegatedRow == nil && self.childCount == 0
 }
 
 // A copy of this node, or an empty one for a name not there yet, ready to change.
@@ -228,15 +230,18 @@ func (self *zoneNode) holds(key DnsRecordKey) bool {
 	if key.Type == DnsAliasType {
 		return self.aliasRow != nil
 	}
+	if key.Type == DnsDelegatedType {
+		return self.delegatedRow != nil
+	}
 	_, found := self.rrsetIndex(key.Type)
 	return found
 }
 
 // Whether this name holds a row of its own, a copy row aside, withheld or not. A suspended host's
 // withheld owner is its own, so it blocks every wildcard above it as an owner with rows does, and so
-// is an alias's row.
+// is an alias's row and a delegated row.
 func (self *zoneNode) holdsOwnRows() bool {
-	return len(self.rrsets) != 0 || self.withheldOwner() || self.aliasRow != nil
+	return len(self.rrsets) != 0 || self.withheldOwner() || self.aliasRow != nil || self.delegatedRow != nil
 }
 
 // Whether this name answers from its wildcard for the types it lacks: it holds a copy row and no
@@ -269,6 +274,8 @@ type ZoneView struct {
 	soa *dns.SOA
 	// Rows held and not answered.
 	withheldCount int
+	// The delegated _domainkey zones this view's delegated rows name (delegated.go). nil holds none.
+	delegated *DelegatedZones
 }
 
 // Reads a snapshot into a view at its serial, or refuses it whole. settings must be valid, and the
@@ -341,6 +348,9 @@ func (self *ZoneView) Rows() iter.Seq[*DnsRecordSet] {
 			if node.aliasRow != nil && !yield(&node.aliasRow.set) {
 				return
 			}
+			if node.delegatedRow != nil && !yield(&node.delegatedRow.set) {
+				return
+			}
 		}
 	}
 }
@@ -403,6 +413,10 @@ func (self *ZoneView) upsert(generation uint64, set *DnsRecordSet) error {
 	} else if set.Kind == DnsRecordKindAlias {
 		self.countOut(node.aliasRow)
 		node.aliasRow = rrset
+	} else if set.Kind == DnsRecordKindDelegated {
+		self.countOut(node.delegatedRow)
+		self.delegated = self.delegated.change(generation, set.Owner, node.delegatedRow, rrset)
+		node.delegatedRow = rrset
 	} else if set.Kind == DnsRecordKindCopy {
 		self.countOut(node.copyRow)
 		node.copyRow = rrset
@@ -455,6 +469,13 @@ func (self *ZoneView) remove(generation uint64, key DnsRecordKey) {
 		}
 		self.countOut(node.aliasRow)
 		node.aliasRow = nil
+	} else if key.Type == DnsDelegatedType {
+		if node.delegatedRow == nil {
+			return
+		}
+		self.countOut(node.delegatedRow)
+		self.delegated = self.delegated.change(generation, key.Owner, node.delegatedRow, nil)
+		node.delegatedRow = nil
 	} else {
 		index, found := node.rrsetIndex(key.Type)
 		if !found {
