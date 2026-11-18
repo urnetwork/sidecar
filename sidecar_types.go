@@ -318,7 +318,7 @@ const (
 	SidecarEventRecoveryUnseen SidecarEventKind = "recovery_unseen"
 	// On admin devices, from 90% of config_admissions' cap, with §7.10's cleanup list.
 	SidecarEventAdmissionsNearCap SidecarEventKind = "admissions_near_cap"
-	// One of §6.4's alarms, named by HeadAlarm.
+	// One of §6.4's alarms or §6.8's rollback, named by HeadAlarm.
 	SidecarEventHeadAlarm SidecarEventKind = "head_alarm"
 	// An index entry disagrees with its document (§11.14).
 	SidecarEventIndexMismatch SidecarEventKind = "index_mismatch"
@@ -577,16 +577,22 @@ const (
 	SidecarSearchAlarmOmission SidecarSearchAlarm = "omission"
 )
 
-// Which of §6.4's alarms a head_alarm carries.
+// Which alarm a head_alarm carries: one of §6.4's four, or §6.8's rollback (owner decision 300).
 type SidecarHeadAlarm string
 
 const (
+	// Two pins that disagree (§6.4), a head evs serves that does not extend this device's pin among them.
 	SidecarHeadAlarmFork SidecarHeadAlarm = "fork"
 	// A peer holds proof that its entries are being withheld (§6.4).
 	SidecarHeadAlarmWithheld   SidecarHeadAlarm = "withheld"
 	SidecarHeadAlarmUnverified SidecarHeadAlarm = "unverified"
 	// 24 h without a consistent witness, or 1 h for a revocation this device signed.
 	SidecarHeadAlarmUnwitnessed SidecarHeadAlarm = "unwitnessed"
+	// A push reset presented a durable topic (team, dns, gkm:<group_id>) below the version this client holds: api
+	// lowered a version, where fork is two pins that disagree (§6.8; owner decision 300, QD-928). SidecarId is nil and
+	// Evidence the two TopicVersions as protobuf bytes, the held one first, then the offered one. The push client's
+	// Consistent() is false until the topic's owner reconciles it, as for every head alarm.
+	SidecarHeadAlarmRollback SidecarHeadAlarm = "rollback"
 )
 
 // What AddEventCallback, `ur status` and the sdk listener see (§18.5). Each field's comment says
@@ -603,9 +609,9 @@ type SidecarEvent struct {
 	// Membership kinds: the §10 group.
 	GroupId *Id
 	// Membership kinds: the leaf or wrapped reader; admission_alarm: the admitted sidecar;
-	// recovery_rebind: its signer; recovery_unseen: the recovered device; head_alarm: the peer; index
-	// alarms and history_drop: the signer; search_alarm: the indexer; evs_alarm: the signer of what failed,
-	// where one is known; record_alarm: the writer or signer, where one is known.
+	// recovery_rebind: its signer; recovery_unseen: the recovered device; head_alarm: the peer, none for
+	// rollback; index alarms and history_drop: the signer; search_alarm: the indexer; evs_alarm: the signer
+	// of what failed, where one is known; record_alarm: the writer or signer, where one is known.
 	SidecarId *Id
 	// Index alarms, search_alarm, history_drop, directory_erasure, erasure, evs_conflict, evs_alarm, evs_gap,
 	// record_alarm (the log).
@@ -634,8 +640,9 @@ type SidecarEvent struct {
 	// head_alarm.
 	HeadAlarm SidecarHeadAlarm
 	// head_alarm: this device's pin and the peer's or api's, as §6.5 encodes them (AuthPin, GroupHead,
-	// GenHead or RefHead); recovery_rebind at a void: the AuthPins at which keychain.wrap was sealed
-	// to the voided binding and re-sealed (§5.9).
+	// GenHead or RefHead), or for rollback the TopicVersion held and the one offered, as protobuf bytes;
+	// recovery_rebind at a void: the AuthPins at which keychain.wrap was sealed to the voided binding and
+	// re-sealed (§5.9).
 	Evidence [2][]byte
 	// erasure: its id, state and what is left (§11.12, §11.13's wait).
 	Erasure *SidecarErasure

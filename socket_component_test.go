@@ -41,7 +41,7 @@ func newTestSocketsTransport(pages chan<- *SocketRegistrationsArgs) *scriptedApi
 
 func TestSocketComponentFollowsAGeneration(t *testing.T) {
 	pages := make(chan *SocketRegistrationsArgs, 64)
-	api := newTestSidecarApi(t, newTestSocketsTransport(pages))
+	api, _ := newTestSocketsApi(t, newTestSocketsTransport(pages))
 	fixture := newTestSubprotocol(t, nil)
 	fetches := make(chan struct{}, 16)
 	pushClient, err := newPushClient(t.Context(), &PushClientEnv{

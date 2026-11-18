@@ -217,7 +217,9 @@ MinIO     unversioned metadata bucket with no lifecycle, replication or notifica
           two's rate (30 s if it helps, else the 5 min default); MINIO_FS_OSYNC off; objects carry content-type
           application/octet-stream and no user metadata, but for an idx/ entry's state while its head lists
           sources (§11.7): the key entry-state, valued carried:<source epoch in decimal>, fresh or removed and
-          read by HEAD, so a prefix check stays a HEAD; no other family carries any
+          read by HEAD, so a prefix check stays a HEAD, and a slot/ object's origin (§11.8's step 6): the key
+          origin, at most 190 B, written by the object's If-None-Match create and kept by an ERASE's rewrite
+          (owner decision 399); no other family carries any
 deadline  the store request deadline §10.6 and §11.8 cite is 10 s on both clusters: the Blobs client cancels a
           request with no response 10 s after its last byte (a response body then streams), or earlier at the
           request's own deadline: evs's fold and taskworker's copy writes 15 s after issuing the head read they

@@ -297,7 +297,7 @@ func TestFakeApiExchangeNeverIssuesTheApiAudience(t *testing.T) {
 	none := fixture.form(fixture.api.ServiceOrigin("evs"))
 	none.Del("resource")
 	fixture.refused("no resource", none, []string{fixture.proof()}, "invalid_target")
-	for _, audience := range []string{"evs", "gkm", "dns", "certs", "mail"} {
+	for _, audience := range []string{"evs", "gkm", "dns", "certs", "mail", "sockets"} {
 		result := fixture.exchange(fixture.api.ServiceOrigin(audience) + "/")
 		if _, err := fixture.api.Authenticator().Authenticate(fixture.ctx, audience, result.AccessToken); err != nil {
 			t.Errorf("%s: %v", audience, err)

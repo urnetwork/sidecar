@@ -105,14 +105,9 @@ type fakeApiClient struct {
 	clientId  sidecar.Id
 	// the sidecar the client is bound to, zero for none: an unadmitted client may read the log and post a
 	// recovery-signed statement only (§7.9's Recovery `before admission` row). Api's binding, which every token of the
-	// client maps to once it binds, unlike sidecarClaim.
+	// client maps to once it binds, and which the exchange names as a service token's ur_sidecar_id.
 	sidecarId sidecar.Id
-	// the token's sidecar_id claim, zero for none (plan-SOCK-client-auth, QD-040): set only by bind's re-mint and kept
-	// by a refresh of the token, never added by one, nor carried by a reissue or a child (server's ByJwt.Renew), so
-	// the tokens a client held before it bound name no sidecar
-	sidecarClaim sidecar.Id
-	// the token's iat and exp, on the api's clock
-	issuedAt   time.Time
+	// the token's exp, on the api's clock
 	expireTime time.Time
 	// the token's device and session claims, which a refresh keeps
 	deviceId  sidecar.Id
@@ -283,17 +278,15 @@ func (self *FakeApi) Authenticator() *FakeAuthenticator {
 }
 
 // A bearer for a client of networkId, bound to sidecarId when it is not zero, as a sidecar's strict_exp token: it
-// expires ClientTokenTimeout after now on the api's clock, and every route refuses it after (§7.4). A bound one names
-// its sidecar in its sidecar_id claim, as the token a sidecar keeps from bind's re-mint does (QD-040, QD-797). The
-// token is JWT-shaped, its claims server's names, and signed by a key of this api's alone, so it is synthetic and no
-// real api could have made it.
+// expires ClientTokenTimeout after now on the api's clock, and every route refuses it after (§7.4). The token is
+// JWT-shaped, its claims server's names, and signed by a key of this api's alone, so it is synthetic and no real api
+// could have made it.
 func (self *FakeApi) ClientToken(networkId sidecar.Id, clientId sidecar.Id, sidecarId sidecar.Id) string {
 	now := self.clock.Now()
 	return self.mintClientToken(&fakeApiClient{
 		networkId:    networkId,
 		clientId:     clientId,
 		sidecarId:    sidecarId,
-		sidecarClaim: sidecarId,
 		deviceId:     sidecar.NewId(),
 		sessionId:    sidecar.NewId(),
 		strictExp:    true,
