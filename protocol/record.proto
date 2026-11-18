@@ -25,7 +25,9 @@
 // grant_dst entry alone, in the form a server may see. The answer to search-m10-28-transcript-prompts (QD-900) is
 // declared here ahead of RECORD.md section 6.4's fence: ContextBody gains prompts = 17, the run's redacted user
 // prompts in stage 2 entries as they arrive, which a vault's run card reads (RECORD.md 7.4) and T's projection leaves
-// empty. design_unfenced_test.go lists each.
+// empty. The answer to ur-tun-default-egress-option-lock-action (QD-1060) is declared here ahead of §16.8's fence:
+// CanonicalAction gains require_default_egress = 41, an egress_change's requirement of default egress under exits
+// (QD-1053), which approvers render and the gate binds. design_unfenced_test.go lists each.
 
 syntax = "proto3";
 package urnetwork.sidecar;
@@ -116,6 +118,10 @@ message CanonicalAction {                   // built by the daemon; hashed as st
                                             // stays the requesting sidecar, and an admin's approval covers the
                                             // network as it covers every field (QD-820). Empty on every other
                                             // grant, so an action stored before the field reads as before
+  bool require_default_egress = 41;         // egress_change under exits alone: the spec requires the subject's
+                                            // devices to keep default egress on, sealed in its BridgeEgressBody, so
+                                            // an approval shows and binds it (QD-1053, QD-1060); version 1, on no
+                                            // server path, and unset reads as before
 }
 // What sealed_detail opens to: what a dial or route grant's clear fields may not hold (QD-740).
 message CanonicalActionDetail {
