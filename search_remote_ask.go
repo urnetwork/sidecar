@@ -1,9 +1,9 @@
 //go:build !sidecar_http && !ios_extension
 
 // Remote search, asking (SEARCH-M10-33; §11.14's who, eligible, auth, order, failover and limits rows; §18.4's remote,
-// setting and notice rows; §18.7's foreground row; R-SDK-14, D-EVS-58, D-PROTO-22, D-SDK-26, D-SDK-27, C19, FI-24, I-3,
-// FS-83, X9, R-CTX-37; DESIGN-DETAILS 7.2.3, 7.2.4 and 7.7 as amended for QD-707): an app host's "search more" over the
-// repos its network's designated indexers may answer, merged with the device's own search of its cache.
+// setting and notice rows; §18.7's foreground row; R-SDK-14, D-EVS-58, D-SDK-26, D-SDK-27, FI-24, I-3, FS-83, R-CTX-37;
+// DESIGN-DETAILS 7.2.3, 7.2.4 and 7.7 as amended for QD-707, and owner decision 609): an app host's "search more" over
+// the repos its network's designated indexers may answer, merged with the device's own search of its cache.
 //
 // SearchRemoteClient wraps the network's local engine: it is the SidecarSearchEngine the host installs on an app host,
 // and a SidecarComponent that follows each client generation's dispatcher. A search whose scope is not all ("search
@@ -39,8 +39,14 @@
 //	            span stay
 //	config      every step judges the open legs again in the newest state, mode and answers: a leg whose indexer may no
 //	            longer be asked about a repo it asks or serves is ended with no skip, and its repos are planned again
-//	seen again  a HelloResult, Pong or session that shows a skipped indexer live clears its skip, and the repos that fell
-//	            back from it go back to the plan, once a search for each (RemoteSeenAgainCount)
+//	seen again  a Hello with a skipped indexer verified since its skip clears the skip, and the repos that fell back
+//	            from it go back to the plan, once a search for each (RemoteSeenAgainCount)
+//
+// Each client generation's dispatcher is followed while it lives (follow): bit 1 toward each indexer the mode lets
+// this device ask (asksSearch), the host's foreground, and in the foreground the first-choice own indexer, which
+// HeadCheck's round counts among its own picks (§6.4's round row, D-SDK-27). No pair is kept warm and no keepalive
+// runs: a pair's session opens at the search that first needs it, and its contracts are accounted like any peer's
+// (owner decision 609).
 //
 // The open searches this device holds at an indexer stay within RemoteRequesterCursorCount: page 0 supersedes one it
 // no longer wants (a closed stream's, a leg's that lost or ended, the leg it reopens), else the older of two. The
@@ -87,10 +93,11 @@ type searchRemoteTransport interface {
 	Call(ctx context.Context, indexerId Id, body []byte) ([]byte, error)
 	// Whether a Hello with the indexer stands, and whether it showed bit 0.
 	Peer(indexerId Id) (servesSearch bool, standing bool)
-	// Whether a Hello, HelloResult, Ping or Pong showed the indexer live after at.
+	// Whether a Hello with the indexer verified after at and stands.
 	SeenSince(indexerId Id, at time.Time) bool
-	// Names the warm pairs (Subprotocol.MarkSearchPeers), the own ones first.
-	MarkSearchPeers(ctx context.Context, indexerIds []Id) error
+	// Names the first-choice own indexer HeadCheck's foreground round counts (Subprotocol.SetSearchIndexer), the zero Id
+	// none. It sends nothing.
+	SetSearchIndexer(indexerId Id)
 	// Tells the dispatcher whether the host is in the foreground (Subprotocol.SetForeground).
 	SetForeground(foreground bool)
 	// Sets bit 1 toward each indexer asksSearch names (Subprotocol.SetFeatures).
@@ -117,9 +124,9 @@ type SearchRemoteClientArgs struct {
 	Conditions func() SearchConditions
 	// The foreground (Sidecar.SearchForeground). Nil reads background.
 	Foreground func() (bool, chan struct{})
-	// Calls notify at each entry the installed config authority applies (SidecarAuthority.AddEntryCallback), so the warm
-	// pairs follow the config's indexers in the foreground; the answer stops it. Nil follows them at
-	// Search.ServeRecheckInterval alone.
+	// Calls notify at each entry the installed config authority applies (SidecarAuthority.AddEntryCallback), so the
+	// first-choice own indexer HeadCheck counts follows the config's indexers in the foreground; the answer stops it. Nil
+	// follows them at Search.ServeRecheckInterval alone.
 	ConfigWatch func(notify func()) (stop func())
 	// search_alarm and head_alarm's sink (Sidecar.searchEvents and emitEvent). Nil drops.
 	Events func(event SidecarEvent)
@@ -144,10 +151,6 @@ type SearchRemoteClient struct {
 
 	stateLock sync.Mutex
 	health    map[Id]*searchRemoteHealth
-	// the warm own set last named, and the other member's indexer named beside it
-	warmOwn   []Id
-	warmOther []Id
-	warmAt    time.Time
 	transport searchRemoteTransport
 	// the open searches this device holds at each indexer, oldest first
 	open     map[Id][]*searchRemoteOpen
@@ -198,8 +201,9 @@ func (self *SearchRemoteClient) Name() string {
 	return searchAskComponentName
 }
 
-// Follows one generation's dispatcher: bit 1 toward the indexers the mode lets this device ask, and the warm pairs at
-// each foreground and each change of the mode, the answers or the config while in it. See SidecarComponent.
+// Follows one generation's dispatcher: bit 1 toward the indexers the mode lets this device ask, the foreground, and the
+// first-choice own indexer at each foreground and each change of the mode, the answers or the config while in it. See
+// SidecarComponent.
 func (self *SearchRemoteClient) Attach(env *SidecarEnv) error {
 	if env.Subprotocol == nil {
 		return errors.New("remote search needs the generation's dispatcher")
@@ -215,6 +219,103 @@ func (self *SearchRemoteClient) Attach(env *SidecarEnv) error {
 		}
 	}()
 	return nil
+}
+
+// Whether this device asks indexerId for remote search now, bit 1 toward it (§18.4's remote row, DESIGN-DETAILS 7.2.3):
+// the mode is not off, and indexerId is an indexer E1 to E6 let answer this device for some repo it reads, own or with
+// its notice member's answer allowing. Recomputed from the state at each call, so a revoked indexer loses the bit at
+// once, and none is set in mode off. The bit marks nothing (owner decision 609).
+func (self *SearchRemoteClient) asksSearch(indexerId Id) bool {
+	mode := self.mode()
+	if mode == SearchRemoteOff {
+		return false
+	}
+	state, err := self.args.Config()
+	if err != nil || state == nil {
+		return false
+	}
+	selfId, ok := self.args.SelfId()
+	if !ok || !slices.Contains(self.eligibleAnywhere(state, selfId), indexerId) {
+		return false
+	}
+	if searchRemoteOwn(state, indexerId, selfId) {
+		return true
+	}
+	if mode != SearchRemoteOn {
+		return false
+	}
+	memberId, ok := searchRemoteNoticeMember(state, indexerId)
+	if !ok {
+		return false
+	}
+	allow, answered := self.answer(memberId)
+	return answered && allow
+}
+
+// The first-choice own indexer now, which HeadCheck's foreground round counts among its own picks (§6.4's round row,
+// D-SDK-27): the first by ownKey of the own indexers E1 to E6 let answer this device for some repo it reads, as a search
+// over all of them would ask first. False in mode off or with none.
+func (self *SearchRemoteClient) firstOwnIndexer() (Id, bool) {
+	if self.mode() == SearchRemoteOff {
+		return Id{}, false
+	}
+	state, err := self.args.Config()
+	if err != nil || state == nil {
+		return Id{}, false
+	}
+	selfId, ok := self.args.SelfId()
+	if !ok {
+		return Id{}, false
+	}
+	view, err := self.orderView(self.scopeOf(state, selfId, &SearchRequest{}))
+	if err != nil || len(view.ownAsk) == 0 {
+		return Id{}, false
+	}
+	return view.ownAsk[0], true
+}
+
+// The foreground as the host last reported it, and a channel closed at its next change; background with no report.
+func (self *SearchRemoteClient) foreground() (bool, chan struct{}) {
+	if self.args.Foreground == nil {
+		return false, nil
+	}
+	return self.args.Foreground()
+}
+
+// Follows one generation until ctx ends: bit 1 by asksSearch, the foreground to the dispatcher, and at each foreground
+// and each move of the mode, the answers or the config while in it, the first-choice own indexer, the zero Id where
+// there is none. Nothing here opens a session or sends a frame (owner decision 609).
+func (self *SearchRemoteClient) follow(ctx context.Context, transport searchRemoteTransport) {
+	if err := transport.SetAsksSearch(self.asksSearch); err != nil {
+		self.log.Warningf("[search]remote search could not set bit 1: %s", err)
+	}
+	configMoved := make(chan struct{}, 1)
+	if self.args.ConfigWatch != nil {
+		stop := self.args.ConfigWatch(func() {
+			select {
+			case configMoved <- struct{}{}:
+			default:
+			}
+		})
+		defer stop()
+	}
+	for {
+		foreground, foregroundChanged := self.foreground()
+		_, stateChanged := self.args.State.Changes()
+		transport.SetForeground(foreground)
+		if foreground {
+			indexerId, _ := self.firstOwnIndexer()
+			transport.SetSearchIndexer(indexerId)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-foregroundChanged:
+		case <-stateChanged:
+		case <-configMoved:
+		case <-self.clock.After(self.settings.ServeRecheckInterval):
+		}
+	}
 }
 
 // Ends every search. See SidecarComponent.

@@ -5,8 +5,9 @@
 // key-origin frame whether its tab is visible, and a daemon host never reports, so an unreported state reads background.
 // sdk's SidecarSearch.SetForeground wraps it.
 //
-// What follows it: remote search's requester (search_remote_warm.go), which feeds each generation's dispatcher
-// (Subprotocol.SetForeground) and names the warm pairs at each move into the foreground; and search's policy and
+// What follows it: remote search's requester (search_remote_ask.go), which feeds each generation's dispatcher
+// (Subprotocol.SetForeground) and names, at each move into the foreground, the first-choice own indexer HeadCheck's
+// round counts there (Subprotocol.SetSearchIndexer), keeping no pair warm (owner decision 609); and search's policy and
 // background sync, which read it through SearchConditions.Foreground where the host builds them (searchConditionsOf).
 //
 // On every leg but the forwarding one: no connect type. Safe for concurrent use.

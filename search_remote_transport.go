@@ -1,6 +1,6 @@
 //go:build !sidecar_http && !ios_extension
 
-// Remote search's transport (SEARCH-M10-33; §11.14's auth row; §6.4, §6.6; I-3, C19; DESIGN-DETAILS 7.2.4): one client
+// Remote search's transport (SEARCH-M10-33; §11.14's auth row; §6.4, §6.6; I-3; DESIGN-DETAILS 7.2.4): one client
 // generation's dispatcher, as the asker reaches an indexer through it. It names indexers by sidecar_id, as the config
 // does, and the dispatcher by client id, so it resolves one to the other as HeadCheck does: a standing Hello's client,
 // else the sidecar's current binding from api, which counts only once it verifies, names this network and the sidecar,
@@ -9,8 +9,8 @@
 // Before the first request to an indexer its Hello stands (Subprotocol.EnsureHello, which checks §6.4's identity binding
 // and admission), and the HelloResult must name the indexer's sidecar_id and set bit 0; a failure of either is
 // errSearchRemoteAuth, which alarms and drops the indexer until its row or designation changes (§11.14's auth row). The
-// SEARCH itself rides Subprotocol.Call, which keeps SEARCH's one size and timeout, runs a bit-1 Hello first where the
-// pair is not in C19's mode, and never sends a Cancel.
+// SEARCH itself rides Subprotocol.Call, which keeps SEARCH's one size and timeout and never sends a Cancel. The pair's
+// contracts are accounted like any peer's: nothing here marks the pair or keeps it warm (owner decision 609).
 
 package sidecar
 
@@ -152,22 +152,10 @@ func (self *searchRemoteSubprotocolTransport) SeenSince(indexerId Id, at time.Ti
 	return standing && sessionTime.After(at)
 }
 
-// See searchRemoteTransport. An indexer whose client cannot be resolved now is left out, and named at the next.
-func (self *searchRemoteSubprotocolTransport) MarkSearchPeers(ctx context.Context, indexerIds []Id) error {
-	clientIds := []Id{}
-	var failed error
-	for _, indexerId := range indexerIds {
-		clientId, err := self.resolve(ctx, indexerId)
-		if err != nil {
-			failed = err
-			continue
-		}
-		clientIds = append(clientIds, Id(clientId))
-	}
-	if err := self.subprotocol.MarkSearchPeers(clientIds); err != nil {
-		return err
-	}
-	return failed
+// See searchRemoteTransport. The dispatcher keeps the indexer by its sidecar_id, as HeadCheck's candidates name it, so
+// nothing is resolved or sent.
+func (self *searchRemoteSubprotocolTransport) SetSearchIndexer(indexerId Id) {
+	self.subprotocol.SetSearchIndexer(indexerId)
 }
 
 // See searchRemoteTransport.
@@ -176,8 +164,7 @@ func (self *searchRemoteSubprotocolTransport) SetForeground(foreground bool) {
 }
 
 // See searchRemoteTransport: bit 1 toward each client whose sidecar asksSearch names, the client one this transport
-// resolved, as it does before every request and for every warm pair. It reads nothing of the dispatcher's, whose Hello
-// calls it.
+// resolved, as it does before every request. It reads nothing of the dispatcher's, whose Hello calls it.
 func (self *searchRemoteSubprotocolTransport) SetAsksSearch(asksSearch func(indexerId Id) bool) error {
 	if asksSearch == nil {
 		return self.subprotocol.SetFeatures(0, nil)

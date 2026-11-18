@@ -1,14 +1,18 @@
 //go:build !sidecar_http && !ios_extension
 
 // Remote search's order (SEARCH-M10-33; §11.14's who, eligible, auth, order, failover and limits rows; D-SDK-27, FI-24,
-// I-3; DESIGN-DETAILS 7.2.3 as amended for QD-707): which indexer a search asks for which repo, read from this device's
-// newest verified config state in the step that builds the requests, never from a list made earlier (7.1's J).
+// I-3; DESIGN-DETAILS 7.2.3 as amended for QD-707, and owner decision 609): which indexer a search asks for which repo,
+// read from this device's newest verified config state in the step that builds the requests, never from a list made
+// earlier (7.1's J).
 //
 //	assign  for each repo still to plan, in the scope's order: own(R), the own indexers E1 to E7 let answer it that are
-//	        usable, by ownKey; other(R), the rest, by otherKey. Mode off: the fallback. Own indexers: the members of the
-//	        warm own set W that can be asked for it, one or two, asked at once (QD-707); else the first own indexer
-//	        alone. Else, in mode on, the first other member's indexer once its notice member's answer allows, else the
-//	        repo waits on that notice in the fallback. Else the fallback, for the reason the last indexer tried failed
+//	        usable, by ownKey; other(R), the rest, by otherKey. Mode off: the fallback. Own indexers: the members of W
+//	        that can be asked for it, one or two, asked at once (QD-707); else the first own indexer alone. Else, in
+//	        mode on, the first other member's indexer once its notice member's answer allows, else the repo waits on
+//	        that notice in the fallback. Else the fallback, for the reason the last indexer tried failed
+//	W       the own indexers a search asks at once: the first RemoteOwnAskCount (2) by ownKey of the own indexers E1 to
+//	        E6 let answer some repo of its scope, read at each run of the plan; no pair is kept warm for them (owner
+//	        decision 609)
 //	usable  not tried by this search for the repo, not skipped, distrusted or dropped, the repo not refused there within
 //	        RemoteRefusedTimeout, and one more request inside RemoteRequesterRate by this device's own count
 //	ownKey  (0 for the own indexer that answered last within RemoteOnlineTimeout, else 1; H(p, d))
@@ -17,7 +21,7 @@
 //	H       the first 8 bytes, big-endian, of SHA-256("UR search rendezvous 1" || a || b), the ids' 16 raw bytes
 //
 // Nothing else is asked beside another indexer: never a third own one, never another member's beside anything. An own
-// indexer outside W is asked only alone, and its pair opens at the search, as a failover's does (owner decision 191).
+// indexer outside W is asked only alone, when neither of W can be (§11.14's order row).
 // The per-indexer health below lives in RAM only: online, answered, skipped and dropped, mismatches, refused repos and
 // the request rate. The served memory and distrust live in search.state (§5.9). None of it names a query.
 
@@ -127,8 +131,8 @@ type searchRemoteOrderView struct {
 	selfId   Id
 	memberId Id
 	mode     string
-	// the warm own set the foreground last named, less what the state no longer lets answer
-	warm []Id
+	// W (the file header): the own indexers a search asks at once, in ownKey's order
+	ownAsk []Id
 	// the own indexer that answered last within RemoteOnlineTimeout, if any
 	lastOwn    Id
 	hasLastOwn bool
@@ -246,7 +250,7 @@ func (self *SearchRemoteClient) usable(state *ConfigState, indexerId Id, repoId 
 	return health.rateAllowsWithLock(now, self.settings.RemoteRequesterRate)
 }
 
-// The order view of a search now: the newest verified state, the mode, the warm own set and the memories.
+// The order view of a search over scope now: the newest verified state, the mode, W and the memories.
 func (self *SearchRemoteClient) orderView(scope []Id) (*searchRemoteOrderView, error) {
 	state, err := self.args.Config()
 	if err != nil || state == nil {
@@ -273,12 +277,21 @@ func (self *SearchRemoteClient) orderView(scope []Id) (*searchRemoteOrderView, e
 				latest, view.lastOwn, view.hasLastOwn = health.answeredAt, indexerId, true
 			}
 		}
-		for _, indexerId := range self.warmOwn {
+	}()
+	// W, by ownKey, which reads lastOwn
+	ownIds := map[Id]bool{}
+	for _, repoId := range scope {
+		for _, indexerId := range self.eligibleFor(view, repoId) {
 			if searchRemoteOwn(state, indexerId, selfId) {
-				view.warm = append(view.warm, indexerId)
+				ownIds[indexerId] = true
 			}
 		}
-	}()
+	}
+	for indexerId := range ownIds {
+		view.ownAsk = append(view.ownAsk, indexerId)
+	}
+	searchRemoteSortBy(view.ownAsk, view.ownKey)
+	view.ownAsk = view.ownAsk[:min(len(view.ownAsk), self.settings.RemoteOwnAskCount)]
 	inScope := map[Id]bool{}
 	for _, repoId := range scope {
 		inScope[repoId] = true
@@ -300,8 +313,8 @@ func (self *SearchRemoteClient) orderView(scope []Id) (*searchRemoteOrderView, e
 	return view, nil
 }
 
-// What the plan decides for one repo: the indexers asked at once (one, or the two warm own ones), or the fallback with
-// its reason and, for a notice, the indexer it names.
+// What the plan decides for one repo: the indexers asked at once (one, or W's two), or the fallback with its reason
+// and, for a notice, the indexer it names.
 type searchRemoteAssignment struct {
 	targets  []Id
 	fallback string
@@ -317,7 +330,7 @@ func (self *SearchRemoteClient) assign(view *searchRemoteOrderView, repoId Id, t
 	if 0 < len(own) {
 		both := []Id{}
 		for _, indexerId := range own {
-			if slices.Contains(view.warm, indexerId) && len(both) < self.settings.RemoteOwnAskCount {
+			if slices.Contains(view.ownAsk, indexerId) && len(both) < self.settings.RemoteOwnAskCount {
 				both = append(both, indexerId)
 			}
 		}
