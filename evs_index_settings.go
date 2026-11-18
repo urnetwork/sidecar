@@ -35,19 +35,15 @@ type IndexFormatSettings struct {
 	// A slot, its header and entries: 16,208 B, so its record is 16 KiB with 11.6's 160 B header and one 16 B frame
 	// tag inside it (SlotMax).
 	SlotMaxByteCount int
-	// An entry in a slot: 8,192 B; a full entry past it is a large entry, and a diff past it is written full
-	// (EntryMax).
+	// An entry in a slot: 8,192 B; a full entry past it is a large entry (EntryMax).
 	SlotEntryMaxByteCount int
 	// A large entry, header and entry: 1,048,576 B (LargeMax).
 	LargeMaxByteCount int
-	// A push's encoded entries past which they go straight into the bucket's shards as full entries, a merge inside
-	// the push: 262,144 B (DirectBytes).
+	// A push's encoded entries past which they go straight into the bucket's shards, a merge inside the push:
+	// 262,144 B (DirectBytes).
 	PushDirectByteCount int
-	// Slots a writer holds in a bucket that no diff rests on, before it must merge: 8 (RingSlots).
+	// Slots a writer holds in a bucket before it must merge: 8 (RingSlots).
 	RingSlotCount int
-	// Slots a writer keeps in a bucket for the diffs of its unabsorbed slots that rest on them: 8 (KeepSlots). A diff
-	// that would keep a ninth is written full.
-	KeepSlotCount int
 	// Two adjacent shards of a partition that come to fewer bytes than this before their pads become one under the
 	// lower n, where the two as one shard also encode within the shard's cap: 524,288 B (ShardJoin; QD-775). It decides
 	// a merge's and a roll-up's bytes, so every device lays out alike.
@@ -95,7 +91,6 @@ func DefaultIndexFormatSettings() *IndexFormatSettings {
 		LargeMaxByteCount:     1024 * 1024,
 		PushDirectByteCount:   256 * 1024,
 		RingSlotCount:         8,
-		KeepSlotCount:         8,
 		ShardJoinByteCount:    512 * 1024,
 		ShardLoneByteCount:    128,
 		MergeDueByteCount:     128 * 1024,

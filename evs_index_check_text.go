@@ -7,9 +7,8 @@
 // Indexers do so for every repo they read. Every writer of a ref writes its index, so without this an agent could hide
 // a document or plant hits.
 //
-//	live       a full entry, or a diff composed onto its base in the writer's own files, of a path's chunk at version
-//	           v: the path's text at v, extracted as every writer extracts it, must give that chunk's key set and row,
-//	           else the host's own entry stands for it
+//	live       a full entry of a path's chunk at version v: the path's text at v, extracted as every writer extracts
+//	           it, must give that chunk's key set and row, else the host's own entry stands for it
 //	deleted    a live entry whose path the content ref holds removed, or at a higher version, at the pin, with no
 //	           tombstone or newer entry of it above in the index, is a deleted document indexed (1.5): it alarms, and
 //	           the path goes to a backfill, which writes the tombstone or the newer version
@@ -74,9 +73,8 @@ type indexTextCheckOutcome struct {
 
 // One added entry and the file of the signer's holding it.
 type indexTextAdded struct {
-	entry  *indexEntry
-	file   *indexViewSlot
-	writer *indexViewWriter
+	entry *indexEntry
+	file  *indexViewSlot
 }
 
 // A path's chunk.
@@ -116,7 +114,7 @@ func indexTextAddedEntries(view *indexView, push *indexReproducePush, replaced m
 				}
 				for _, entry := range file.slot.entries {
 					if !before[held{key: entry.key, version: entry.version, kind: entry.kind}] {
-						added = append(added, &indexTextAdded{entry: entry, file: file, writer: writer})
+						added = append(added, &indexTextAdded{entry: entry, file: file})
 					}
 				}
 			}
@@ -240,18 +238,7 @@ func indexCheckWithText(ctx context.Context, args *indexTextCheckArgs) (*indexTe
 		}
 		timeMs := int64(entry.timeSeconds) * 1000
 		switch entry.kind {
-		case indexEntryFull, indexEntryDiff:
-			keys := entry.keys
-			if entry.kind == indexEntryDiff {
-				_, base := indexResolveBase(one.writer, entry.key, entry.baseVersion, one.file)
-				if base == nil {
-					// a diff with no base is index_malformed's, and a backfill re-enters it (§11.14's chains row)
-					continue
-				}
-				if keys, err = entry.delta.applyTo(base.keys); err != nil {
-					continue
-				}
-			}
+		case indexEntryFull:
 			if state == nil || state.removed {
 				// the path never held this version live: the entry is planted
 				var own *indexEntry
@@ -270,7 +257,7 @@ func indexCheckWithText(ctx context.Context, args *indexTextCheckArgs) (*indexTe
 				return nil, err
 			}
 			expected := entries[entry.key]
-			if expected == nil || !slices.Equal(expected.keys, keys) || !indexRowsEqual(expected.row, entry.row, view.companion) {
+			if expected == nil || !slices.Equal(expected.keys, entry.keys) || !indexRowsEqual(expected.row, entry.row, view.companion) {
 				mismatch(one, expected)
 				continue
 			}
