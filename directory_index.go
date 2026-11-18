@@ -34,6 +34,10 @@
 //	           (indexDeriveHead, on IndexReproducer.DeriveHead): equal, nothing is fetched; unequal, the head is
 //	           fetched and index_mismatch names the push's signer; lacking the derivation or a base file, the head is
 //	           fetched and nothing raised
+//	rebuild    a build, a rebuild or a backfill takes each announcement from its file as it stands, renewed expiry and
+//	           all (DirectoryIndexCardsSource), so a check by rebuild of the cards ref's index compares an announcement's
+//	           row less its expires, its other bytes, its keys and its version matching (QD-1067); no such check of
+//	           derived documents is built yet (evs_index_check_text.go leaves them unjudged)
 //	settings   on by kind: the index refuses off for this repo and a window outside 7 to 90 days, 7 where none is
 //	           set (evs_index_bucket.go's rule for the kind); ur admin directory --window writes it, a directory
 //	           admin's confirmed act, from format 2 (directory_admin.go's SetDirectoryIndexWindow); searchable_days
