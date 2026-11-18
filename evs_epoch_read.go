@@ -11,8 +11,8 @@
 //	rules     a path with floor f, on a ref whose verified state is (cur, S), is named in cur, in each s of S at or
 //	          above f, in its record's PinEpoch when that is at or above f, and in any other epoch at or above f whose
 //	          statements the verifier needs proofs under; never below f. A path with no floor is a new name: named in
-//	          cur alone, only on a state verified within EpochFresh and, on a blocking ref, with no immediate pressure
-//	          (quiet); a read of one needs S empty besides. Otherwise it is looked up
+//	          cur alone, only on a state verified within EpochFresh; a read of one needs S empty besides. Otherwise it
+//	          is looked up. No due holds a new name, every due being batched (QD-1046)
 //	lookup    a path P/name with no floor is found through P's verified listing at the head, which names no token of
 //	          it: no row, it is absent; a row, its epoch is the floor (E2). A lookup recurses to the first directory
 //	          with a floor, at the latest to the root, each level one round at most and cached for the head version
@@ -23,14 +23,13 @@
 //	          was asked or the parent's table has no row for the name, holds each recorded path to its record (a gap
 //	          head that passed the record's pin drops it for a path served absent or its removal, QD-1041, QD-1055;
 //	          finishRead), and then pins and writes the records' floors
-//	pressure  on a blocking ref (a shared or owned ref of a general, config or mailcfg repo), a head that records a due
-//	          above cur, else the newest generation this device holds above max(the head's generation, cur) whose
-//	          GenRotate cause is REMOVE, the crossing from that generation to the newest one held classed by evs's own
-//	          rule on this device's verified state (EvsClassifyPathEpochDue, from the log between the two generations'
-//	          auth pins; QD-949): immediate holds new names, and the class is noted with the held generation for the
-//	          overdue alarm. A ref with no head is read as holding nothing, and no token of it is sent (DESIGN-DETAILS
+//	due       the generation a ref's coming epoch is due for: a due its head records above cur, else the newest
+//	          generation this device holds above max(the head's generation, cur) whose GenRotate cause is REMOVE,
+//	          noted with when this device first held it for the overdue alarm. Every due is batched (QD-1046): it
+//	          holds no new name and no creation, and only the status, the alarm and the mapper read it. A ref with no
+//	          head is read as holding nothing and as due for nothing, and no token of it is sent (DESIGN-DETAILS
 //	          9.2.3); its first push names the epoch firstEpoch gives, so on a ref that is no overlay no REMOVE lies
-//	          above it and there is no pressure, and an overlay's creator is held by its base ref's pressure
+//	          above it
 //	first     a ref with no head starts in the epoch its first push names (QD-632): the newest generation at or below
 //	          the one the push seals to whose cause is REMOVE, 1 when none; an overlay's base ref's current epoch, from
 //	          its head verified within EpochFreshFor; 1 on a deposit or erasure ref
@@ -110,15 +109,15 @@ func evsSamePathEpoch(a *protocol.EvsPathEpoch, b *protocol.EvsPathEpoch) bool {
 }
 
 // What the rules let one request name of a path with floor (0 none), on a ref whose verified epoch state is epoch:
-// epochs, cur first; else lookup, when the path has no floor and the new-name rule does not hold; else needFresh, when
-// it would hold on a state verified within EpochFreshFor (see the file header). pinEpoch is the path's record's,
-// 0 for none, and more the epochs the verifier asked for. Never an epoch below the floor.
-func evsEpochTokens(epoch *protocol.EvsPathEpoch, floor uint64, pinEpoch uint64, more []uint64, quiet bool, fresh bool) (epochs []uint64, lookup bool, needFresh bool) {
+// epochs, cur first; else lookup, when the path has no floor and the head lists sources; else needFresh, when the
+// new-name rule would hold on a state verified within EpochFreshFor (see the file header). pinEpoch is the path's
+// record's, 0 for none, and more the epochs the verifier asked for. Never an epoch below the floor.
+func evsEpochTokens(epoch *protocol.EvsPathEpoch, floor uint64, pinEpoch uint64, more []uint64, fresh bool) (epochs []uint64, lookup bool, needFresh bool) {
 	current := evsCurrentEpoch(epoch)
 	sources := evsSourceEpochs(epoch)
 	if floor == 0 {
 		switch {
-		case len(sources) != 0 || !quiet:
+		case len(sources) != 0:
 			return nil, true, false
 		case !fresh:
 			return nil, false, true
@@ -150,9 +149,6 @@ type evsRefEpoch struct {
 	version    uint64
 	generation uint64
 	refKind    protocol.EvsRefKind
-	// a ref with no head that an overlay's first push creates: its base, whose pressure holds the creator (set by a
-	// planner on the state it judges the push by, never on a cached head's)
-	base *protocol.EvsOverlay
 }
 
 // The ref's epoch state as the last verified head gave it, nil when this client has verified none.
@@ -288,84 +284,46 @@ func (self *EvsRepo) readHeadPast(ctx context.Context, refId Id, epoch uint64) (
 	}
 }
 
-// How a ref's coming epoch weighs on new names (see the file header's pressure row).
-type evsPressure int
-
-const (
-	evsPressureNone evsPressure = iota
-	evsPressureBatched
-	evsPressureImmediate
-)
-
-// The pressure on a ref whose verified state is state, from its head's due, else from the REMOVE generations this
-// device holds above it. A generation gkm does not answer for reads as immediate, as evs reads a crossing it cannot
-// judge: failing closed holds new names, never sends one.
-func (self *EvsRepo) pressure(ctx context.Context, state *evsRefEpoch) (evsPressure, uint64, error) {
+// The generation the ref whose verified state is state is due for, from its head's due, else from the REMOVE
+// generations this device holds above it; 0 for none (see the file header's due row). A generation gkm does not
+// answer for is taken as due, as evs's crossing would read it for a REMOVE it cannot rule out, so the status shows it
+// and a mapper waits for its key.
+func (self *EvsRepo) dueGeneration(ctx context.Context, state *evsRefEpoch) (uint64, error) {
 	epoch := state.epoch
 	current := evsCurrentEpoch(epoch)
 	if current < epoch.GetDueGeneration() {
-		if epoch.GetDueBlocksCreation() {
-			return evsPressureImmediate, epoch.GetDueGeneration(), nil
-		}
-		return evsPressureBatched, epoch.GetDueGeneration(), nil
+		return epoch.GetDueGeneration(), nil
 	}
 	if state.version == 0 && self.client.epochs.committedVersion(self.repoId, state.refId) == 0 {
 		// a ref with no head, which no push of this device has given one either (DESIGN-DETAILS 9.2.3): its first push
-		// names firstEpoch, the newest removal held, so none lies above it, and an overlay's creator is held by its base
-		// ref's pressure
-		if state.base == nil {
-			return evsPressureNone, 0, nil
-		}
-		baseRefId, err := IdFromBytes(state.base.GetRefId())
-		if err != nil {
-			return evsPressureImmediate, 0, fmt.Errorf("%w: an overlay base's ref id", ErrEvsWriteInvalid)
-		}
-		baseState, err := self.freshEpochState(ctx, baseRefId)
-		if err != nil {
-			return evsPressureNone, 0, err
-		}
-		if baseState.version == 0 {
-			return evsPressureImmediate, 0, fmt.Errorf("%w: an overlay whose base ref has no head", ErrEvsWriteInvalid)
-		}
-		return self.pressure(ctx, baseState)
+		// names firstEpoch, the newest removal held, so none lies above it
+		return 0, nil
 	}
 	newest, err := self.client.args.Gkm.CurrentRepoKey(ctx, self.repoId)
 	if err != nil {
-		return evsPressureNone, 0, err
+		return 0, err
 	}
 	from := max(state.generation, current)
 	removal := uint64(0)
 	for generation := from + 1; generation <= newest.Generation(); generation += 1 {
 		key, err := self.client.args.Gkm.RepoKey(ctx, self.repoId, generation)
 		if err != nil {
-			return evsPressureImmediate, generation, nil
+			return generation, nil
 		}
 		if key.Cause() == GkmCauseRemove {
 			removal = generation
 		}
 	}
-	if removal == 0 {
-		return evsPressureNone, 0, nil
+	if removal != 0 {
+		self.client.epochs.noteHeldRemoval(self.repoId, removal, self.client.clock.Now())
 	}
-	// the crossing a push at the newest generation would make, classed as evs classes it, from this device's
-	// verified state between the two generations' auth pins
-	immediate := true
-	if fromKey, err := self.client.args.Gkm.RepoKey(ctx, self.repoId, from); err == nil {
-		if config, err := self.client.verifier.config(); err == nil {
-			immediate = EvsClassifyPathEpochDue(config, self.repoId, fromKey.Auth(), newest.Auth())
-		}
-	}
-	self.client.epochs.noteHeldRemoval(self.repoId, removal, self.client.clock.Now(), !immediate)
-	if immediate {
-		return evsPressureImmediate, removal, nil
-	}
-	return evsPressureBatched, removal, nil
+	return removal, nil
 }
 
 // The epoch a ref with no head starts in (DESIGN-DETAILS 9.2.3's first push, QD-632; the file header's first row):
 // 1 on a deposit or erasure ref; on an overlay, its base ref's current epoch from a head verified within
 // EpochFreshFor, read again when the one held is older; on any other ref the newest generation at or below
-// generation, the one the push seals to, whose GenRotate cause is REMOVE, walked down as pressure walks up, 1 when
+// generation, the one the push seals to, whose GenRotate cause is REMOVE, walked down as dueGeneration walks up, 1 when
 // there is none. Naming it, a creator sends no name under an epoch a holder dropped at or below generation can test,
 // and crosses no removal, so its first push records no due. A generation gkm does not answer ends it with that error,
 // sending nothing.
@@ -423,28 +381,6 @@ func (self *EvsRepo) freshEpochState(ctx context.Context, refId Id) (*evsRefEpoc
 	return state, nil
 }
 
-// Whether new names may be sent on the ref (9.2.3's quiet): always on a ref whose kind never blocks creation, else
-// only without immediate pressure.
-func (self *EvsRepo) quiet(ctx context.Context, state *evsRefEpoch) (bool, error) {
-	repoKind, err := self.repoKind()
-	if err != nil {
-		return false, err
-	}
-	refKind := state.refKind
-	if refKind == protocol.EvsRefKind_EVS_REF_KIND_UNSPECIFIED {
-		// a ref no push created yet is created shared or owned, as a file-mode write makes it
-		refKind = protocol.EvsRefKind_EVS_REF_SHARED
-	}
-	if !EvsRefBlocksCreation(repoKind, refKind) {
-		return true, nil
-	}
-	pressure, _, err := self.pressure(ctx, state)
-	if err != nil {
-		return false, err
-	}
-	return pressure != evsPressureImmediate, nil
-}
-
 // One row of a directory's verified listing: its child's kind and the epoch it opened under, which is that child's
 // E2 floor.
 type evsListedRow struct {
@@ -466,9 +402,9 @@ type evsClientEpochs struct {
 	// (repo, ref, directory) to its newest cached listings by head version, oldest first in order
 	listings map[evsListingKey]*evsListedDirectory
 	order    []evsListingKey
-	// each REMOVE generation of a repo this device held: the first time, which the overdue alarm counts from, and the
-	// class pressure last gave the crossing to it
-	heldRemovals map[evsHeldRemovalKey]evsHeldRemoval
+	// each REMOVE generation of a repo this device held, and the first time it did, which the overdue alarm and a
+	// due no head records count from
+	heldRemovals map[evsHeldRemovalKey]time.Time
 	// per ref: when it first showed fewer than two sources after showing two, and the last alarm per due generation
 	refAlarms map[evsRefKey]*evsRefAlarm
 	// per ref, closed at its next verified head (evs_epoch.go's moved)
@@ -500,19 +436,11 @@ type evsHeldRemovalKey struct {
 	generation uint64
 }
 
-// What this device noted of a held REMOVE generation.
-type evsHeldRemoval struct {
-	// when it first held it
-	since time.Time
-	// whether the newest crossing to it pressure classed was batched
-	batched bool
-}
-
 // A new client's epoch state.
 func newEvsClientEpochs() *evsClientEpochs {
 	return &evsClientEpochs{
 		listings:     map[evsListingKey]*evsListedDirectory{},
-		heldRemovals: map[evsHeldRemovalKey]evsHeldRemoval{},
+		heldRemovals: map[evsHeldRemovalKey]time.Time{},
 		refAlarms:    map[evsRefKey]*evsRefAlarm{},
 		waiters:      map[evsRefKey]chan struct{}{},
 		committed:    map[evsRefKey]uint64{},
@@ -616,25 +544,21 @@ func (self *evsClientEpochs) cachedRowFloor(repoId Id, refId Id, path string) ui
 	return floor
 }
 
-// Notes that this device holds a REMOVE generation of a repo, from now the first time it does, and the class pressure
-// gave the crossing to it this time.
-func (self *evsClientEpochs) noteHeldRemoval(repoId Id, generation uint64, now time.Time, batched bool) {
+// Notes that this device holds a REMOVE generation of a repo, from now the first time it does.
+func (self *evsClientEpochs) noteHeldRemoval(repoId Id, generation uint64, now time.Time) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	key := evsHeldRemovalKey{repoId: repoId, generation: generation}
-	held, found := self.heldRemovals[key]
-	if !found {
-		held.since = now
+	if _, found := self.heldRemovals[key]; !found {
+		self.heldRemovals[key] = now
 	}
-	held.batched = batched
-	self.heldRemovals[key] = held
 }
 
 // When this device first held a REMOVE generation of a repo, zero when it never noted one.
 func (self *evsClientEpochs) heldRemovalSince(repoId Id, generation uint64) time.Time {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	return self.heldRemovals[evsHeldRemovalKey{repoId: repoId, generation: generation}].since
+	return self.heldRemovals[evsHeldRemovalKey{repoId: repoId, generation: generation}]
 }
 
 // The listing of directory at the ref's head: cached for the head version this client verified last, else read and
@@ -961,7 +885,6 @@ func (self *EvsRepo) choose(ctx context.Context, refId Id, keys *evsReadKeys, st
 		}
 		return nil, false, nil
 	}
-	var quiet *bool
 	fresh := self.client.epochFresh(state)
 	asked := []*evsReadPath{}
 	for _, path := range paths {
@@ -980,18 +903,11 @@ func (self *EvsRepo) choose(ctx context.Context, refId Id, keys *evsReadKeys, st
 		if path.path == "" {
 			path.epochs = []uint64{current}
 		} else {
-			if quiet == nil && path.floor == 0 {
-				value, err := self.quiet(ctx, state)
-				if err != nil {
-					return nil, false, err
-				}
-				quiet = &value
-			}
 			pinEpoch := uint64(0)
 			if path.record != nil {
 				pinEpoch = path.record.PinEpoch
 			}
-			epochs, lookup, needFresh := evsEpochTokens(state.epoch, path.floor, pinEpoch, path.more, quiet != nil && *quiet, fresh)
+			epochs, lookup, needFresh := evsEpochTokens(state.epoch, path.floor, pinEpoch, path.more, fresh)
 			if evsTokenizeEverySourceHook {
 				// the twin: every listed source for every path, floor or none, as tokenize did (9.1 A)
 				epochs, lookup, needFresh = append([]uint64{current}, evsSourceEpochs(state.epoch)...), false, false
@@ -1010,7 +926,7 @@ func (self *EvsRepo) choose(ctx context.Context, refId Id, keys *evsReadKeys, st
 					continue
 				}
 				path.floor = evsLowerFloor(path.floor, row.epoch)
-				epochs, _, _ = evsEpochTokens(state.epoch, path.floor, pinEpoch, path.more, true, true)
+				epochs, _, _ = evsEpochTokens(state.epoch, path.floor, pinEpoch, path.more, true)
 			}
 			path.epochs = epochs
 		}

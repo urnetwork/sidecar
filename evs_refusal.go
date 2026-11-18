@@ -38,9 +38,9 @@ var (
 	// A push, part, seal, batch or window entry that does not parse or breaks its layout or a check that needs no
 	// head: §11.8's INVALID.
 	ErrEvsPushInvalid = errors.New("evs push invalid")
-	// A creation the ref's coming path epoch holds: §18.5's EVS_PATH_EPOCH_DUE, retryable (DESIGN-DETAILS 9.2.8). The
-	// planner answers it at once, nothing sent, for a creation on a blocking ref under immediate pressure, and the
-	// writer waits it out as it waits out 412 PATH_EPOCH_DUE, giving it to the caller past its bound.
+	// A creation a mapper's block held past the writer's waits: §18.5's EVS_PATH_EPOCH_DUE, retryable (DESIGN-DETAILS
+	// 9.2.8). The writer waits out evs's 412 PATH_EPOCH_DUE (§11.6's block row) and gives this to the caller past its
+	// bound; no due holds a creation, every due being batched (QD-1046).
 	ErrEvsPathEpochDue = errors.New("evs: EVS_PATH_EPOCH_DUE: a creation waits for the ref's path epoch")
 	// A change a repo's prefix write rules hold back: §18.5's EVS_PREFIX_RULE (DESIGN-DETAILS 16.2.5, 16.2.7). A
 	// writer's device answers it before anything is planned, sealed or sent, for a path the set in force does not give
