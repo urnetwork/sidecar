@@ -5,7 +5,9 @@
 //	entries    each block's unassigned /16 and services /24; a /32 link entry for each sidecar S may dial that holds a
 //	           live address; for each subnet route in force S may use, its prefix, or its exposed prefix in the block,
 //	           its links the advertisers of that identical prefix (D-BRIDGE-8's replicas), a withdrawn one until its
-//	           drain's end
+//	           drain's end; S may use one by a rule of via[its advertiser] whose CIDRs meet its prefix, or by one that
+//	           names no ip: destination and no autogroup:internet and whose subject destinations name the advertiser
+//	           for S too (owner decision 575)
 //	maps       S's maps in force, their match read into the block by host bits; one onto a block address or a daemon
 //	           listener, or one the device role would refuse, is void here and alarms map_refused
 //	served     S's routes in force, an exposed prefix read into the block, a withdrawn one until its drain's end
@@ -17,7 +19,11 @@
 //	untagged   autogroup:untagged's rows at S, what an sdk provider gives a sealed subject no row binds (QD-733)
 //
 // Route rows name what a flow is sent to: a served prefix's part a rule's CIDR covers, and for a remapped route the
-// same part of its exposed prefix, so a CIDR that happens to cover the block reaches no remap it was not granted.
+// same part of its exposed prefix, so a CIDR that happens to cover the block reaches no remap it was not granted. A
+// route rule that names no ip: destination and no autogroup:internet holds no CIDR: where its subject destinations
+// name S for the source it gives a row for each prefix of S's subnet routes in force, whole, its exposed prefix
+// included, and elsewhere none (§8.4's readings; owner decision 575, QD-1019). It gives no exit row, which only an
+// internet or /0 rule does, and an activated grant, whose detail the device does not hold, gives no route row (QD-003).
 // On every leg, with no connect import.
 
 package sidecar
@@ -181,6 +187,43 @@ func (self *bridgeCompiler) servedRoutes() {
 		}
 		self.served = append(self.served, served)
 	}
+}
+
+// Every advertiser's subnet routes in force at t, S's own among them, as AclEngine.AllowRoute reads them for a route
+// rule that names no prefix (owner decision 575): each prefix of a route, and a remapped route's exposed prefix read into
+// each block, which is what a sender addresses; a withdrawn route until its drain's end, as the entries hold it. A remap
+// with no block reaches nothing, so it serves nothing here. Exits serve no subnet prefix and are left out.
+func (self *bridgeCompiler) servedRoutesByAdvertiser() *AclServedRoutes {
+	netipPrefix := func(prefix bridgePrefix) netip.Prefix {
+		address := netip.AddrFrom4([4]byte{byte(prefix.address >> 24), byte(prefix.address >> 16), byte(prefix.address >> 8), byte(prefix.address)})
+		return netip.PrefixFrom(address, int(prefix.length))
+	}
+	routes := []AclServedRoute{}
+	for _, rule := range self.ledger.Rules(bridge.SignedType_SIGNED_BRIDGE_ROUTE) {
+		if rule.Route.GetKind() != bridge.BridgeRouteKind_BRIDGE_ROUTE_KIND_SUBNET {
+			continue
+		}
+		if inForce, _, _ := self.ruleInForce(rule); !inForce {
+			continue
+		}
+		route := AclServedRoute{Advertiser: rule.Owner}
+		if exposed := rule.Route.GetExposedPrefix(); exposed != nil {
+			first, _, err := bridgeUpperRangeOf(exposed)
+			if err != nil || len(self.blocks) == 0 {
+				continue
+			}
+			for _, block := range self.blocks {
+				route.Prefixes = append(route.Prefixes, netipPrefix(bridgePrefix{address: bridgeCompileInBlock(block, first), length: exposed.GetLength()}))
+			}
+		}
+		for _, wirePrefix := range rule.Route.GetPrefixes() {
+			if prefix, err := bridgePrefixOf(wirePrefix); err == nil {
+				route.Prefixes = append(route.Prefixes, netipPrefix(prefix))
+			}
+		}
+		routes = append(routes, route)
+	}
+	return NewAclServedRoutes(routes)
 }
 
 // Step 7: the rules.
@@ -374,8 +417,10 @@ func (self *bridgeCompiler) routeEntries(rule *BridgeLedgerRule, find func(prefi
 	}
 }
 
-// Whether S may use a route of an advertiser: a rule of via[it] whose CIDRs meet one of its prefixes, or no document
-// and S untagged.
+// Whether S may use a subnet route of an advertiser: a rule of via[it] whose CIDRs meet one of its prefixes; one that
+// names no ip: destination and no autogroup:internet and whose subject destinations name the advertiser for S, which
+// reaches every subnet route of the advertiser's in force whole (owner decision 575); or no document and S untagged. A
+// rule whose detail the device does not hold, an activated grant's, opens none (QD-003).
 func (self *bridgeCompiler) mayUseRoute(reach *bridgeCompileReach, prefixes []bridgePrefix) bool {
 	if !self.hasDocument && !self.selfTagged {
 		return true
@@ -383,6 +428,12 @@ func (self *bridgeCompiler) mayUseRoute(reach *bridgeCompileReach, prefixes []br
 	for _, rule := range reach.viaRoute {
 		local := self.aclLocal.Rule(rule.RuleId)
 		if local == nil {
+			continue
+		}
+		if aclRouteBySubject(local, rule.Internet) {
+			if rule.ViaDestination {
+				return true
+			}
 			continue
 		}
 		for _, cidr := range local.Cidrs {
@@ -600,7 +651,8 @@ func (self *bridgeCompiler) subjects() []*bridge.BridgeRuleSubject {
 }
 
 // The rows of a list of reach rules, by grant id, prefix, protocol and first port: each rule's protocols and port
-// ranges, and on route rows its CIDRs' parts of what S serves. A rule expired at t gives none.
+// ranges, and on route rows its CIDRs' parts of what S serves, or for a rule with no CIDR that names S a destination
+// what S serves whole (routeRowPrefixes). A rule expired at t gives none.
 func (self *bridgeCompiler) reachRows(rules []AclReachRule, routeRows bool) []*bridge.BridgeRuleReach {
 	rows := []*bridge.BridgeRuleReach{}
 	for _, rule := range rules {
@@ -614,7 +666,7 @@ func (self *bridgeCompiler) reachRows(rules []AclReachRule, routeRows bool) []*b
 		}
 		prefixes := []*bridge.BridgeIpv4Prefix{nil}
 		if routeRows {
-			prefixes = self.routeRowPrefixes(local)
+			prefixes = self.routeRowPrefixes(rule, local)
 		}
 		for _, prefix := range prefixes {
 			for _, port := range ports {
@@ -695,9 +747,11 @@ func bridgeCompilePortRows(rule AclReachRule, local *AclLocalRule) ([]bridgeComp
 }
 
 // A route rule's prefixes on S's route rows: each part of a subnet prefix S serves that one of its CIDRs covers, and
-// that part of a remapped route's exposed prefix, which is what a flow to it is sent to. None for a rule whose CIDRs the
-// device does not hold.
-func (self *bridgeCompiler) routeRowPrefixes(local *AclLocalRule) []*bridge.BridgeIpv4Prefix {
+// that part of a remapped route's exposed prefix, which is what a flow to it is sent to. A rule that names no ip:
+// destination and no autogroup:internet gives each subnet prefix S serves whole, with its exposed prefix, where its
+// subject destinations name S for the source, and none where they do not (owner decision 575); S's exits are no
+// subnet prefix, so it reaches none of them. None for a rule whose CIDRs the device does not hold.
+func (self *bridgeCompiler) routeRowPrefixes(rule AclReachRule, local *AclLocalRule) []*bridge.BridgeIpv4Prefix {
 	prefixes := []*bridge.BridgeIpv4Prefix{}
 	if local == nil {
 		return prefixes
@@ -708,6 +762,20 @@ func (self *bridgeCompiler) routeRowPrefixes(local *AclLocalRule) []*bridge.Brid
 		}) {
 			prefixes = append(prefixes, bridgeCompileWire(prefix))
 		}
+	}
+	if aclRouteBySubject(local, rule.Internet) {
+		if !rule.ViaDestination {
+			return prefixes
+		}
+		for _, served := range self.served {
+			for _, prefix := range served.prefixes {
+				add(prefix)
+				if served.hasExposed {
+					add(bridgePrefix{address: served.exposed.address, length: prefix.length})
+				}
+			}
+		}
+		return prefixes
 	}
 	for _, cidr := range local.Cidrs {
 		covered, ok := bridgeCompileCidr(cidr)

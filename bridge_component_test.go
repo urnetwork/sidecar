@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"slices"
 	"strings"
 	"sync"
@@ -92,6 +93,8 @@ type testBridgeSink struct {
 	hook      connect.EgressHook
 	stateLock sync.Mutex
 	decision  BridgeSinkDecision
+	// what SetState answers in place of taking a state, as a posture refuses one it cannot verify; nil takes it
+	refusal error
 }
 
 func (self *testBridgeSink) SetPending(pending *bridge.Pending) error {
@@ -106,9 +109,14 @@ func (self *testBridgeSink) SetPending(pending *bridge.Pending) error {
 
 func (self *testBridgeSink) SetState(state *bridge.BridgeState, log *BridgeStateLog) error {
 	n := state.GetAuth().GetVersion()
+	var refusal error
 	refused := func() bool {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
+		if self.refusal != nil {
+			refusal = self.refusal
+			return true
+		}
 		if n < self.decision.StatePin.GetVersion() {
 			return true
 		}
@@ -119,6 +127,10 @@ func (self *testBridgeSink) SetState(state *bridge.BridgeState, log *BridgeState
 		}
 		return false
 	}()
+	if refusal != nil {
+		self.events.add(fmt.Sprintf("state %d refused", n))
+		return refusal
+	}
 	if refused {
 		self.events.add(fmt.Sprintf("state %d dropped", n))
 		return nil
@@ -185,6 +197,10 @@ type testBridgeComponentWorld struct {
 	// the NAT settings each gate built with
 	natSettings []*connect.LocalUserNatSettings
 	alarms      []SidecarBridgeAlarm
+	// what a component built after it is set hands each compile's routes in force, nil for none
+	servedRoutes func(servedRoutes *AclServedRoutes)
+	// the config's generation keys a component built after it is set opens sealed bodies with, nil for none held
+	repoKeyAt func(generation uint64) *EvsRepoKey
 }
 
 func newTestBridgeComponentWorld(t *testing.T) *testBridgeComponentWorld {
@@ -214,9 +230,11 @@ func (self *testBridgeComponentWorld) component() *BridgeComponent {
 		Identity: func() *SidecarIdentity {
 			return &SidecarIdentity{NetworkId: self.net.networkId, SidecarId: self.host.sidecarId, IdentityPublicKey: self.host.publicKey()}
 		},
-		Config: self.client,
-		Heads:  self.heads,
-		Rows:   self.net.source,
+		Config:       self.client,
+		Heads:        self.heads,
+		Rows:         self.net.source,
+		RepoKeyAt:    self.repoKeyAt,
+		ServedRoutes: self.servedRoutes,
 		Emit: func(event SidecarEvent) {
 			if event.Kind == SidecarEventBridgeAlarm {
 				self.stateLock.Lock()
@@ -290,6 +308,102 @@ func TestTheComponentAnchorsThenCompilesARisingState(t *testing.T) {
 	}
 	if slices.ContainsFunc(world.events.list(), func(event string) bool { return strings.HasSuffix(event, " dropped") }) {
 		t.Errorf("a state below the one in force was handed: %v", world.events.list())
+	}
+}
+
+// Each state the component compiles hands the host's AclEngine every advertiser's subnet routes in force at it (owner
+// decision 575): none before a route stands, and the desktop's 192.168.7.0/24 once it files one, which with no document
+// a standing route of an untagged advertiser is (owner decision 120). The engine holds what the last compile gave it.
+func TestTheComponentHandsEachCompilesRoutesInForceToTheEngine(t *testing.T) {
+	world := newTestBridgeComponentWorld(t)
+	world.repoKeyAt = testConfigSealKeyAt(testConfigSealKey(1))
+	engine := NewAclEngine(world.host.sidecarId, nil, nil, nil)
+	world.servedRoutes = func(servedRoutes *AclServedRoutes) {
+		engine.InstallRoutes(servedRoutes)
+		world.events.add(fmt.Sprint("routes ", servedRoutes.Prefixes(world.peer.sidecarId)))
+	}
+	component := world.component()
+	if err := component.SetDeviceRole(world.sink); err != nil {
+		t.Fatal(err)
+	}
+	world.events.waitFor(t, "the first compile's routes", func(event string) bool { return event == "routes []" })
+	if engine.servedRoutes.Load() == nil {
+		t.Error("the engine holds no routes after a compile that answered none in force")
+	}
+
+	route := world.net.bridgeRoute(world.peer, testBridgeRuleId("home"), testBridgeSubnet(testBridgePrefix(192, 168, 7, 0, 24), "home site"))
+	n := world.post(world.peer, bridge.SignedType_SIGNED_BRIDGE_ROUTE, route)
+	world.events.waitFor(t, "the route's compile", func(event string) bool { return event == "routes [192.168.7.0/24]" })
+	world.events.waitFor(t, "a state at the route", func(event string) bool { return strings.HasPrefix(event, fmt.Sprintf("state %d ", n)) })
+	served := engine.servedRoutes.Load()
+	if !served.serves(world.peer.sidecarId, netip.MustParseAddr("192.168.7.20")) || served.serves(world.host.sidecarId, netip.MustParseAddr("192.168.7.20")) ||
+		served.serves(world.peer.sidecarId, netip.MustParseAddr("192.168.8.20")) {
+		t.Errorf("the engine's routes: the desktop's %v, the laptop's %v", served.Prefixes(world.peer.sidecarId), served.Prefixes(world.host.sidecarId))
+	}
+}
+
+// A state the device role does not then hold in force hands the engine none of its routes (owner decision 575): one the
+// role refuses, as a posture refuses a state it cannot verify, and one it drops below a state it holds past it, which is
+// no error, each leave the engine on the routes of the state in force, and the next state the role takes hands its own.
+// The compile goroutine adds a state's event before it hands that state's routes, so no routes event between the refused
+// state and the next one taken shows that neither handed any.
+func TestAStateTheDeviceRoleDoesNotHoldHandsTheEngineNoRoutes(t *testing.T) {
+	world := newTestBridgeComponentWorld(t)
+	world.repoKeyAt = testConfigSealKeyAt(testConfigSealKey(1))
+	engine := NewAclEngine(world.host.sidecarId, nil, nil, nil)
+	world.servedRoutes = func(servedRoutes *AclServedRoutes) {
+		engine.InstallRoutes(servedRoutes)
+		world.events.add(fmt.Sprint("routes ", servedRoutes.Prefixes(world.peer.sidecarId)))
+	}
+	component := world.component()
+	if err := component.SetDeviceRole(world.sink); err != nil {
+		t.Fatal(err)
+	}
+	// the desktop's route of 192.168.<third>.0/24, filed with no approval, which with no document an untagged
+	// advertiser's is in force (owner decision 120)
+	route := func(label string, third byte) uint64 {
+		t.Helper()
+		body := testBridgeSubnet(testBridgePrefix(192, 168, third, 0, 24), label)
+		return world.post(world.peer, bridge.SignedType_SIGNED_BRIDGE_ROUTE, world.net.bridgeRoute(world.peer, testBridgeRuleId(label), body))
+	}
+	withSink := func(change func(sink *testBridgeSink)) {
+		world.sink.stateLock.Lock()
+		defer world.sink.stateLock.Unlock()
+		change(world.sink)
+	}
+	route("home", 7)
+	world.events.waitFor(t, "the home route's routes", func(event string) bool { return event == "routes [192.168.7.0/24]" })
+
+	withSink(func(sink *testBridgeSink) { sink.refusal = errors.New("a state the posture cannot verify") })
+	refusedN := route("lab", 8)
+	world.events.waitFor(t, "the refused state", func(event string) bool { return event == fmt.Sprintf("state %d refused", refusedN) })
+	var inForce *bridge.AuthPin
+	withSink(func(sink *testBridgeSink) {
+		sink.refusal = nil
+		inForce = sink.decision.StatePin
+		sink.decision.StatePin = &bridge.AuthPin{Version: refusedN + 1000, Chain: make([]byte, 32)}
+	})
+	droppedN := route("office", 9)
+	world.events.waitFor(t, "the dropped state", func(event string) bool { return event == fmt.Sprintf("state %d dropped", droppedN) })
+
+	withSink(func(sink *testBridgeSink) { sink.decision.StatePin = inForce })
+	takenN := route("studio", 10)
+	world.events.waitFor(t, "the taken state's routes", func(event string) bool {
+		return event == "routes [192.168.7.0/24 192.168.8.0/24 192.168.9.0/24 192.168.10.0/24]"
+	})
+	events := world.events.list()
+	from := slices.Index(events, fmt.Sprintf("state %d refused", refusedN))
+	to := slices.IndexFunc(events, func(event string) bool { return strings.HasPrefix(event, fmt.Sprintf("state %d of ", takenN)) })
+	if from < 0 || to < from {
+		t.Fatalf("the states in order: %v", events)
+	}
+	for _, event := range events[from:to] {
+		if strings.HasPrefix(event, "routes ") {
+			t.Fatalf("a state the role did not hold handed the engine routes: %v", events[from:to])
+		}
+	}
+	if served := engine.servedRoutes.Load(); !served.serves(world.peer.sidecarId, netip.MustParseAddr("192.168.10.20")) {
+		t.Errorf("the engine's routes once the role took a state again: %v", served.Prefixes(world.peer.sidecarId))
 	}
 }
 

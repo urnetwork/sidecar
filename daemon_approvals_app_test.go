@@ -125,3 +125,43 @@ func TestApprovalsAppMethodsDecideAsTheRemoteRow(t *testing.T) {
 		t.Errorf("the app's decision: %+v", decision.Decision)
 	}
 }
+
+// A template whose request names 3 uses (QD-1010) lists with its count, approve and deny, and its render saying so,
+// and the app's approval, which carries no count, signs the 3 shown; a version-1 template, whose request names none,
+// lists with no count and deny alone.
+func TestApprovalsAppMethodsApproveATemplateAsRequested(t *testing.T) {
+	world := newTestApproverWorld(t)
+	daemon := newTestApprovalsAppDaemon(t, world)
+	templated := world.putUses(world.requesterId, testApproverDnsTemplate(t), 3)
+	unnamed := world.put(world.requesterId, testApproverDnsTemplate(t), "")
+
+	reply := &DaemonApprovalsAppReply{}
+	if refusal := testApprovalsAppCall(t, daemon, DaemonModeControl, DaemonMethodApprovalsAppRequests, &DaemonApprovalsAppParams{}, false, reply); refusal != nil {
+		t.Fatal(refusal)
+	}
+	if len(reply.Items) != 2 {
+		t.Fatalf("%d items", len(reply.Items))
+	}
+	for _, item := range reply.Items {
+		switch {
+		case item.ApprovalId == nil:
+			t.Fatalf("an item shown refused: %+v", item)
+		case *item.ApprovalId == templated.ApprovalId():
+			if !item.Template || item.Uses != 3 || !slices.Equal(item.Decisions, []string{SidecarDecisionApprove, SidecarDecisionDeny}) ||
+				!strings.Contains(item.Text, "up to 3 uses") {
+				t.Errorf("the template for 3: %+v", item)
+			}
+		case *item.ApprovalId == unnamed.ApprovalId():
+			if !item.Template || item.Uses != 0 || !slices.Equal(item.Decisions, []string{SidecarDecisionDeny}) {
+				t.Errorf("the version-1 template: %+v", item)
+			}
+		}
+	}
+	approve := &DaemonApprovalsAppDecideParams{ApprovalId: templated.ApprovalId(), Decision: SidecarDecisionApprove}
+	if refusal := testApprovalsAppCall(t, daemon, DaemonModeControl, DaemonMethodApprovalsAppRequest, approve, true, nil); refusal != nil {
+		t.Fatal(refusal)
+	}
+	if decision := world.lastDecision(); decision.Decision.GetUses() != 3 || !decision.Binds(templated) {
+		t.Errorf("the app's approval of the template: %+v", decision.Decision)
+	}
+}

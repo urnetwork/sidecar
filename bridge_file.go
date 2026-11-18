@@ -32,7 +32,10 @@
 // standing grant 32 random bytes and no approval. The effect is idempotent per key: it files nothing when the ledger
 // holds its rule id, and a re-signed retry of a filing whose answer was lost files the same id, which every reader holds
 // once (a filing of a held id activates nothing). A route names the §8 route rules of the head that hold it for this
-// advertiser (AclLocalPolicy's own predicate, StandingCovers), which QD-764's rows carry at id level.
+// advertiser (AclLocalPolicy's own predicate, StandingCovers), which QD-764's rows carry at id level: a rule whose
+// prefixes hold the route, and for a subnet route a rule that names no ip: destination and no autogroup:internet whose
+// via and subject destinations both name this advertiser, as Team's grant 1 names a member's own device (owner
+// decision 575).
 //
 // Every statement goes through sidecarAct (C-02), which signs only §5.8's own-resource filings for MCP, a hook or an
 // unconfirmed call. The filer refuses before that what is not this sidecar's own, as every verifier does after (§7.9,
@@ -554,8 +557,10 @@ func (self *BridgeFiler) Expose(ctx context.Context, origin *BridgeFileOrigin, r
 }
 
 // The §8 route rules of the head that hold route for this advertiser, each one alone by the predicate every reader
-// judges a standing route by (AclLocalPolicy.StandingCovers), at most a statement's 64, in rule order. None without a
-// compiled policy where a document stands.
+// judges a standing route by (AclLocalPolicy.StandingCovers), at most a statement's 64, in rule order: a rule whose
+// prefixes hold it, or for a subnet route one with no prefix of its own whose via and subject destinations name this
+// advertiser (owner decision 575), so the route's row names the rule a member's own devices reach it by. None without
+// a compiled policy where a document stands.
 func (self *BridgeFiler) routeRuleIds(view *bridgeFileView, route *bridge.BridgeRouteBody) [][]byte {
 	acl, err := view.state.Acl()
 	if err != nil {

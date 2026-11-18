@@ -636,21 +636,30 @@ func TestRecordHashesRefuseWhatTheirFormulasCannotHold(t *testing.T) {
 
 // What an approver and a spender refuse in a request: an unknown version or field, a risk SidecarRisk does not name,
 // no expiry, a payload_sha256 or action_id that is not its action's, and an action ParseStoredCanonicalAction refuses.
+// Version 2 is known from QD-1010, so 3 stands for a version this build does not know; its uses rules are
+// TestParseStoredApprovalRequestHoldsUsesToItsVersion's.
 func TestParseStoredApprovalRequestRefuses(t *testing.T) {
 	storedAction := testRecordStored(t, testRecordDnsAction())
 	cases := map[string]struct {
 		change func(request *protocol.ApprovalRequest)
 		err    error
 	}{
-		"version 2":      {change: func(request *protocol.ApprovalRequest) { request.Version = 2 }, err: ErrApprovalVersionUnknown},
-		"version 0":      {change: func(request *protocol.ApprovalRequest) { request.Version = 0 }, err: ErrApprovalVersionUnknown},
-		"risk 0":         {change: func(request *protocol.ApprovalRequest) { request.Risk = 0 }, err: ErrRecordStoredInvalid},
-		"risk 3":         {change: func(request *protocol.ApprovalRequest) { request.Risk = 3 }, err: ErrRecordStoredInvalid},
-		"no expiry":      {change: func(request *protocol.ApprovalRequest) { request.NotAfterMillis = 0 }, err: ErrRecordStoredInvalid},
-		"approval_id":    {change: func(request *protocol.ApprovalRequest) { request.ApprovalId = request.ApprovalId[:8] }, err: ErrRecordStoredInvalid},
-		"approver":       {change: func(request *protocol.ApprovalRequest) { request.Approvers = [][]byte{{1}} }, err: ErrRecordStoredInvalid},
-		"payload_sha256": {change: func(request *protocol.ApprovalRequest) { request.PayloadSha256[0] ^= 1 }, err: ErrRecordStoredInvalid},
-		"action_id":      {change: func(request *protocol.ApprovalRequest) { request.ActionId[0] ^= 1 }, err: ErrRecordStoredInvalid},
+		"version 3": {
+			change: func(request *protocol.ApprovalRequest) {
+				request.Version = 3
+				request.Uses = 1
+			},
+			err: ErrApprovalVersionUnknown,
+		},
+		"version 2 without its uses": {change: func(request *protocol.ApprovalRequest) { request.Version = 2 }, err: ErrRecordStoredInvalid},
+		"version 0":                  {change: func(request *protocol.ApprovalRequest) { request.Version = 0 }, err: ErrApprovalVersionUnknown},
+		"risk 0":                     {change: func(request *protocol.ApprovalRequest) { request.Risk = 0 }, err: ErrRecordStoredInvalid},
+		"risk 3":                     {change: func(request *protocol.ApprovalRequest) { request.Risk = 3 }, err: ErrRecordStoredInvalid},
+		"no expiry":                  {change: func(request *protocol.ApprovalRequest) { request.NotAfterMillis = 0 }, err: ErrRecordStoredInvalid},
+		"approval_id":                {change: func(request *protocol.ApprovalRequest) { request.ApprovalId = request.ApprovalId[:8] }, err: ErrRecordStoredInvalid},
+		"approver":                   {change: func(request *protocol.ApprovalRequest) { request.Approvers = [][]byte{{1}} }, err: ErrRecordStoredInvalid},
+		"payload_sha256":             {change: func(request *protocol.ApprovalRequest) { request.PayloadSha256[0] ^= 1 }, err: ErrRecordStoredInvalid},
+		"action_id":                  {change: func(request *protocol.ApprovalRequest) { request.ActionId[0] ^= 1 }, err: ErrRecordStoredInvalid},
 		"unknown field": {
 			change: func(request *protocol.ApprovalRequest) {
 				request.ProtoReflect().SetUnknown(protowire.AppendVarint(protowire.AppendTag(nil, 99, protowire.VarintType), 1))

@@ -228,7 +228,8 @@ type DirectoryRetentionArgs struct {
 
 // Files the directory's RetentionPolicy for the coordination and request classes through the record's retention, a
 // directory admin's confirmed act: see the file's header's set row. Answers the entries written, one a class. A
-// searchable_days past keep_days, or a class's policy the record refuses, stops at that class.
+// searchable_days outside the directory's 7 to 400 days refuses with nothing written; one past keep_days, or a class's
+// policy the record refuses, stops at that class.
 func (self *Sidecar) SetDirectoryRetention(ctx context.Context, args *DirectoryRetentionArgs) ([]*RecordEntryRef, error) {
 	if args == nil || !args.Confirmed || args.HarnessAncestor {
 		return nil, ErrRecordRetentionUnconfirmed
@@ -244,6 +245,12 @@ func (self *Sidecar) SetDirectoryRetention(ctx context.Context, args *DirectoryR
 	}
 	if !admin {
 		return nil, ErrDirectoryEraseNotAdmin
+	}
+	if args.SearchableDays != 0 {
+		// §16.11's settings row: a searchable_days an admin names is within the directory's days
+		if err := client.indexSettings().CheckSearchableDays(args.SearchableDays); err != nil {
+			return nil, err
+		}
 	}
 	record, err := self.Record()
 	if err != nil {
