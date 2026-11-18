@@ -13,9 +13,10 @@
 //   - A version at or below the client's is ignored; a newer one calls the topic's subscribers, who fetch
 //     its state over HTTPS: a hint is a prompt and carries no content (R-PROTO-8).
 //   - A reset never lowers a durable version (team, dns, gkm:<group_id>): a lower one raises head_alarm
-//     and Consistent() turns false until the topic's owner reconciles it, which is what §8's inbound
-//     state reads to fail closed. A clock version's fall (sock, gkm, evs:, core, mail, tls) is a gap:
-//     the subscribers refetch, check what they fetch against their pins, and the fall is adopted.
+//     of kind rollback (owner decision 300), its evidence the held and the offered TopicVersion, and
+//     Consistent() turns false until the topic's owner reconciles it, which is what §8's inbound state
+//     reads to fail closed. A clock version's fall (sock, gkm, evs:, core, mail, tls) is a gap: the
+//     subscribers refetch, check what they fetch against their pins, and the fall is adopted.
 //   - A topic a reset omits keeps the client's version.
 //   - A versions page is judged by what it could have seen (owner decision 299). The machine counts the
 //     inputs the push gives it, each reset part and hint, a poll's reset included, and a refetch notes
@@ -117,7 +118,7 @@ type pushAction struct {
 	refetchVersions bool
 	// the applied versions changed and are to be kept
 	changed bool
-	// durable topics a reset tried to lower: head_alarm for each
+	// durable topics a reset tried to lower: a rollback head_alarm for each
 	alarms []pushAlarm
 	// notices for the subscribers, in order
 	notices []PushNotice
@@ -607,8 +608,9 @@ func (self *pushFeed) apply(input func(machine *pushMachine) *pushAction) {
 	}
 }
 
-// head_alarm for a durable topic a reset presented lower than the client holds, with both versions
-// as evidence, the client's first.
+// head_alarm of kind rollback for a durable topic a reset presented lower than the client holds (§6.8;
+// owner decision 300), with both TopicVersions as evidence, the held one first, then the offered one,
+// and no peer: api lowered a version, where fork is for two pins that disagree.
 func (self *pushFeed) raiseAlarm(alarm pushAlarm) {
 	self.log.Warningf("[push]a reset presented a durable topic below the version held\n")
 	if self.event == nil {
@@ -618,7 +620,7 @@ func (self *pushFeed) raiseAlarm(alarm pushAlarm) {
 	offered, _ := proto.Marshal(&protocol.TopicVersion{Topic: alarm.topic, Version: alarm.offered})
 	self.event(SidecarEvent{
 		Kind:      SidecarEventHeadAlarm,
-		HeadAlarm: SidecarHeadAlarmFork,
+		HeadAlarm: SidecarHeadAlarmRollback,
 		Evidence:  [2][]byte{held, offered},
 	})
 }

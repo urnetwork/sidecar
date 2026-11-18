@@ -3,7 +3,7 @@
 // SocketPlatformListener (SOCK-M9-01; D-SOCK-11, D-SOCK-12, C9, X7, I-3): a platform service's listener on
 // ur/<service>, which smtpedgeservice embeds so sidecars reach it through Find (§14). It needs no Sidecar. Each of the
 // process's K platform clients in urnetwork-edge registers the name as a listener of its own, through a registrar on
-// that client's own token, in the clear and with no claim, since a platform client holds no identity key or Hello
+// that client's bearer, in the clear and with no claim, since a platform client holds no identity key or Hello
 // binding (SOCK.md reading 7); and takes the name's stream target on its dispatcher in the edge role. The target is
 // the name itself, ur/<service>: a ur/ name carries no <net>, and urnetwork-edge's label is nothing a dialer knows (a
 // reading of SOCK.md reading 12).
@@ -51,7 +51,7 @@ type SocketPlatformListenerArgs struct {
 	UrnetworkEdge Id
 	// The process's platform clients, each with its dispatcher in the edge role: each registers the name.
 	Clients []*SocketEdgeClient
-	// How each client's registrations reach the sockets service, on the client's own token.
+	// How each client's registrations reach the sockets service, on the client's bearer.
 	Registrations *SocketPlatformRegistrationsArgs
 	// The protocol, version, weight and max_streams each client registers with. "" and 0 take §9.5's "tcp", 100 and
 	// 256.
@@ -69,13 +69,15 @@ type SocketPlatformListenerArgs struct {
 	Log Logger
 }
 
-// Where a platform listener's registrations go and how each client authenticates (§9.15's Client class).
+// Where a platform listener's registrations go and how each client authenticates.
 type SocketPlatformRegistrationsArgs struct {
 	// The sockets service's origin, with no trailing slash: §19.4's sockets url.
 	SocketsUrl string
 	// Carries every request: the host's own.
 	Transport http.RoundTripper
-	// clientId's own client token.
+	// The bearer sockets takes for clientId: a service token of audience sockets naming it (QD-1029). A platform client
+	// is minted none yet, and sockets refuses the client token presented in its place, the closed direction (question
+	// sockets-service-token-edge-clients).
 	Bearer func(ctx context.Context, clientId Id) (string, error)
 }
 
@@ -586,7 +588,7 @@ func (self *socketPlatformStream) SetWriteDeadline(t time.Time) error {
 	return self.stream.SetWriteDeadline(t)
 }
 
-// POST /socket/registrations on clientId's own token, the answer read as SidecarApi.SocketRegistrations reads it: a
+// POST /socket/registrations on clientId's bearer, the answer read as SidecarApi.SocketRegistrations reads it: a
 // page's refusal is a 200 whose body holds error, an answer that refuses nothing carries one status per entry, and any
 // other status is a *SidecarApiError carrying Retry-After's wait. Nothing here logs or wraps a name or the url (I-13).
 func newSocketPlatformRegistrations(args *SocketPlatformRegistrationsArgs, settings *SocketPlatformListenSettings, clientId Id) (socketRegistrationsFunction, error) {

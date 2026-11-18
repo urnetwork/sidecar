@@ -92,7 +92,7 @@ const (
 	SmtpOutcomeTooLarge SmtpOutcomeKind = 4
 	// The MX refused it, with its reply code.
 	SmtpOutcomeRefused SmtpOutcomeKind = 5
-	// TL4 without an allowance, or below the MX host's pin.
+	// TL4 without an allowance, or below the recipient domain's pin on the MX host.
 	SmtpOutcomeTlsRefused SmtpOutcomeKind = 6
 	SmtpOutcomeFailed     SmtpOutcomeKind = 7
 )

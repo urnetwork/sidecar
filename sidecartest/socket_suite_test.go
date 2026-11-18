@@ -174,7 +174,7 @@ func newSocketSuiteWorld(t *testing.T, mutate func(settings *socketsservice.Sock
 	return world
 }
 
-// A device's sockets token, as plan-SOCK-client-auth's Client-class token names its sidecar.
+// A device's sockets token, a service token of audience sockets naming its sidecar (QD-1029).
 func (self *socketSuiteWorld) sidecarOf(device *sidecartest.AdmissionDevice) *socketSuiteSidecar {
 	sidecarId := connect.Id(device.SidecarId)
 	clientId := connect.NewId()

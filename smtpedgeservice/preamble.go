@@ -59,7 +59,7 @@ const (
 type smtpPreambleStream struct {
 	NetworkId sidecar.Id
 	ClientId  sidecar.Id
-	// The dialer's sidecar, the §8 subject of mail_send (QD-040's sidecar_id claim).
+	// The dialer's sidecar, the §8 subject of mail_send (its sockets service token's ur_sidecar_id, QD-1029).
 	SidecarId sidecar.Id
 }
 

@@ -3,8 +3,9 @@
 // §6.8's client machine (push_state.go) on every leg but js, whose tests cannot open files: a partial
 // reset applies nothing, a run's union applies once complete, a new epoch or a hint abandons a run, seq
 // gaps and restarts send the client to versions, stale versions are ignored, a reset keeps what it
-// omits, a durable fall alarms until reconciled while a clock's fall is adopted, evs-sized versions stay
-// exact, versions outlive a restart, and the feed resyncs at start, on demand and hourly. A versions page
+// omits, a durable fall raises head_alarm rollback (owner decision 300) and holds Consistent false until
+// reconciled while a clock's fall is adopted and raises nothing, evs-sized versions stay exact, versions
+// outlive a restart, and the feed resyncs at start, on demand and hourly. A versions page
 // begun before an input the push gave since takes only its rises (owner decision 299): it ends no run
 // and raises no alarm, sending the client to versions again, one more refetch at most, and keeps the seq
 // baseline, while a page begun after every input keeps the rules, its alarms included.
@@ -243,7 +244,7 @@ func TestPushResetFallsByClass(t *testing.T) {
 	offered := &protocol.TopicVersion{}
 	proto.Unmarshal(event.Evidence[0], held)
 	proto.Unmarshal(event.Evidence[1], offered)
-	if event.Kind != SidecarEventHeadAlarm || held.Version != 10 || offered.Version != 6 || held.Topic != PushTopicTeam {
+	if event.Kind != SidecarEventHeadAlarm || event.HeadAlarm != SidecarHeadAlarmRollback || held.Version != 10 || offered.Version != 6 || held.Topic != PushTopicTeam {
 		t.Errorf("event %+v", event)
 	}
 	notice := testPushAwait(t, notices, "notice")
@@ -262,6 +263,107 @@ func TestPushResetFallsByClass(t *testing.T) {
 	feed.reconcile(PushTopicTeam, 6)
 	if !feed.consistent() || feed.version(PushTopicTeam) != 6 {
 		t.Errorf("reconciled: consistent %t, team %d", feed.consistent(), feed.version(PushTopicTeam))
+	}
+}
+
+// A feed whose start refetch never answers, so every input is the test's, with every event it raises in events. The
+// feed raises an input's alarms before the call that gave it returns, so a test counts events as soon as it returns.
+func newTestPushQuietFeed(t *testing.T) (*pushFeed, chan SidecarEvent) {
+	t.Helper()
+	events := make(chan SidecarEvent, 16)
+	feed, err := newPushFeed(t.Context(), DefaultPushClientSettings(), newTestPushStore(), newTestEnvelopeClock(), NewNoopLogger(), func(event SidecarEvent) {
+		events <- event
+	}, func(ctx context.Context, cursor []byte) (*protocol.PollResponse, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(feed.close)
+	return feed, events
+}
+
+// QD-928 (owner decision 300): a reset below a durable version raises head_alarm of kind rollback, never fork, with
+// no peer and as Evidence the two TopicVersions, the held one first, then the offered one. The version held stands
+// and Consistent is false until the topic's owner reconciles it, the version reconciled then applying, while the
+// clock topics the same reset lowers raise nothing and are adopted. So for each durable topic, team, dns and
+// gkm:<group_id>, through a resident's complete part and a poll's reset alike.
+func TestPushDurableFallRaisesRollback(t *testing.T) {
+	inputs := []func(feed *pushFeed, reset *protocol.PushReset){
+		func(feed *pushFeed, reset *protocol.PushReset) {
+			feed.applyResetPart(reset)
+		},
+		func(feed *pushFeed, reset *protocol.PushReset) {
+			feed.applyPoll(&protocol.PollResponse{Reset_: reset})
+		},
+	}
+	repo := PushTopicEvs(NewId())
+	for _, topic := range []string{PushTopicTeam, PushTopicDns, PushTopicGkmGroup(NewId())} {
+		for i, input := range inputs {
+			feed, events := newTestPushQuietFeed(t)
+			input(feed, testPushPart(1, true, topic, 10, PushTopicSock, 50, repo, 1000))
+			if len(events) != 0 || !feed.consistent() || feed.version(topic) != 10 {
+				t.Fatalf("%s, input %d: the first reset raised %d events, consistent %t", topic, i, len(events), feed.consistent())
+			}
+
+			input(feed, testPushPart(2, true, topic, 6, PushTopicSock, 40, repo, 400))
+			if len(events) != 1 {
+				t.Fatalf("%s, input %d: the fall raised %d events", topic, i, len(events))
+			}
+			event := <-events
+			if event.Kind != SidecarEventHeadAlarm || event.HeadAlarm != SidecarHeadAlarmRollback || event.SidecarId != nil {
+				t.Errorf("%s, input %d: event %+v", topic, i, event)
+			}
+			evidence := [2]*protocol.TopicVersion{{}, {}}
+			for j := range evidence {
+				if err := proto.Unmarshal(event.Evidence[j], evidence[j]); err != nil {
+					t.Fatalf("%s, input %d: evidence %d: %v", topic, i, j, err)
+				}
+			}
+			if evidence[0].Topic != topic || evidence[0].Version != 10 || evidence[1].Topic != topic || evidence[1].Version != 6 {
+				t.Errorf("%s, input %d: evidence %v", topic, i, evidence)
+			}
+			if feed.version(topic) != 10 || feed.consistent() {
+				t.Errorf("%s, input %d: after the fall: version %d, consistent %t", topic, i, feed.version(topic), feed.consistent())
+			}
+			if feed.version(PushTopicSock) != 40 || feed.version(repo) != 400 {
+				t.Errorf("%s, input %d: the clocks' falls: sock %d, repo %d", topic, i, feed.version(PushTopicSock), feed.version(repo))
+			}
+
+			feed.reconcile(topic, 6)
+			if !feed.consistent() || feed.version(topic) != 6 || len(events) != 0 {
+				t.Errorf("%s, input %d: reconciled: consistent %t, version %d, %d events", topic, i, feed.consistent(), feed.version(topic), len(events))
+			}
+		}
+	}
+}
+
+// A reset lowering every clock topic raises nothing and leaves Consistent true: each fall is a gap, adopted (§6.8's
+// topic registry), a resident's part's and a poll's reset's alike.
+func TestPushClockFallRaisesNothing(t *testing.T) {
+	feed, events := newTestPushQuietFeed(t)
+	clocks := []string{PushTopicCore, PushTopicSock, PushTopicMail, PushTopicTls, PushTopicGkm, PushTopicEvs(NewId())}
+	at := func(version int) []any {
+		topicVersions := []any{}
+		for _, topic := range clocks {
+			topicVersions = append(topicVersions, topic, version)
+		}
+		return topicVersions
+	}
+	feed.applyResetPart(testPushPart(1, true, at(10)...))
+	feed.applyResetPart(testPushPart(2, true, at(5)...))
+	if len(events) != 0 || !feed.consistent() {
+		t.Fatalf("a part's clock falls: %d events, consistent %t", len(events), feed.consistent())
+	}
+	feed.applyPoll(&protocol.PollResponse{Reset_: testPushPart(3, true, at(3)...)})
+	if len(events) != 0 || !feed.consistent() {
+		t.Fatalf("a poll's clock falls: %d events, consistent %t", len(events), feed.consistent())
+	}
+	for _, topic := range clocks {
+		if feed.version(topic) != 3 {
+			t.Errorf("%s: %d, its falls not adopted", topic, feed.version(topic))
+		}
 	}
 }
 
@@ -670,7 +772,7 @@ func TestPushTimelyPageLoweringADurableTopicAlarms(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if event.Kind != SidecarEventHeadAlarm || evidence[0].Topic != PushTopicTeam || evidence[0].Version != 10 || evidence[1].Topic != PushTopicTeam || evidence[1].Version != 9 {
+	if event.Kind != SidecarEventHeadAlarm || event.HeadAlarm != SidecarHeadAlarmRollback || evidence[0].Topic != PushTopicTeam || evidence[0].Version != 10 || evidence[1].Topic != PushTopicTeam || evidence[1].Version != 9 {
 		t.Errorf("event %+v, evidence %v", event, evidence)
 	}
 	if feed.version(PushTopicTeam) != 10 || feed.consistent() {

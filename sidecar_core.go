@@ -328,8 +328,8 @@ func (self *Sidecar) Unlock(passphrase []byte) error {
 // Offline and Online are a client generation's own states, so beside them the generation is the one in that state:
 // a pairing or a re-enrollment binds generation n+1 while n's client is up, and Status names n+1 only once the run
 // loop has ended n, installed n+1's token and proof signer, and moved to it, Offline (§18.5's State block;
-// startGeneration). So whoever acts on a status at a generation finds that generation's token in the api client,
-// bind's re-mint included (QD-797). Short of a client, in Locked, Unenrolled and Revoked, the generation is the
+// startGeneration). So whoever acts on a status at a generation finds that generation's token in the api client.
+// Short of a client, in Locked, Unenrolled and Revoked, the generation is the
 // keychain's, which a binding may have moved past the last client's. BoundGeneration answers the keychain's at
 // any time.
 func (self *Sidecar) Status() SidecarStatus {

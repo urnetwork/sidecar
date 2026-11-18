@@ -7,9 +7,9 @@
 // step order (socketFindError), and a call that did not answer, or answered with anything but the route's shape, is
 // unavailable, with whatever wait the service gave.
 //
-// The send is the caller's: SidecarApi.SocketFind on a sidecar's own token, or newSocketFindHttp on an edge host's
-// platform client token. Nothing here verifies a ticket or a claim, which are each dialer's own checks, and nothing
-// logs or wraps a name (I-13). Safe for concurrent use.
+// The send is the caller's: SidecarApi.SocketFind on the sidecar's sockets service token (QD-1029), or
+// newSocketFindHttp on an edge host's bearer. Nothing here verifies a ticket or a claim, which are each dialer's own
+// checks, and nothing logs or wraps a name (I-13). Safe for concurrent use.
 
 package sidecar
 
@@ -96,14 +96,16 @@ func (self *socketFindClient) find(ctx context.Context, args *SocketFindArgs) (*
 }
 
 // What newSocketFindHttp takes: where POST /socket/find goes and how a caller with no SidecarApi authenticates, as an
-// edge host's platform client does (§9.15's Client class).
+// edge host's platform client does.
 type SocketFindHttpArgs struct {
 	// The sockets service's origin, with no trailing slash: §19.4's sockets url.
 	SocketsUrl string
 	// Carries every request: the host's own, since nothing in this package reaches net/http's defaults, whose
 	// unbound sockets can follow a tunnel's default route (CORE-M1-04).
 	Transport http.RoundTripper
-	// The caller's client token for this call.
+	// The bearer sockets takes for this call: a service token of audience sockets (QD-1029). An edge host's platform
+	// client is minted none yet, and sockets refuses the client token it presents in its place, the closed direction
+	// (question sockets-service-token-edge-clients).
 	Bearer func(ctx context.Context) (string, error)
 	// The most of an answer's body read: past it the answer is no Find's. Zero takes socketFindMaxAnswerByteCount.
 	MaxAnswerByteCount int64

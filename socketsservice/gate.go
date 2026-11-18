@@ -47,7 +47,7 @@ type SocketGateRequest struct {
 	CallerNetworkId connect.Id
 	// The caller's §8 subject, from its token's ur_subject_client_id, else its own client.
 	SubjectClientId connect.Id
-	// The caller's sidecar, when its token names one (plan-SOCK-client-auth's sidecar_id claim).
+	// The caller's sidecar, when its service token names one in ur_sidecar_id (QD-1029).
 	SidecarId *connect.Id
 	// An edge name in the clear (tls/, smtp/, ur/), or a blinded name's token path.
 	Name      string
