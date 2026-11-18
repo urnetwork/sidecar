@@ -3,19 +3,24 @@
 // case, 403 with no clock moving), a grant's expiry closes it at its time and a projection that drops it at the next
 // state (FS-3's inputs to step 7's recheck); cold state answers 503 and starts a load; a token's sidecar is served
 // while its network's state admits it, whichever client the exchange bound it to (QD-717), and refused once revoked,
-// when another network admitted it and when none did; rev/ and repo facts answer as the state and their seam do; and a
-// repo whose rows hold an unrestored RepoDelete is open to its standing admin's DELETE and restore alone (QD-880). The
-// gate cache's own event and poll timing is acl_gate_scope_test.go's, on TEAM's real log.
+// when another network admitted it and when none did; rev/ and repo facts answer as the state and their seam do; a
+// repo whose rows hold an unrestored RepoDelete is open to its standing admin's DELETE and restore alone (QD-880); and
+// in a recovery that admin's segment uploads reach §11.12's re-seed exception, and nothing else of the repo opens
+// (QD-977). The gate cache's own event and poll timing is acl_gate_scope_test.go's, on TEAM's real log.
 
 package evsservice
 
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,6 +58,12 @@ type aclAuthFixture struct {
 
 // The engine of newEvsFixture, its auth state the real one over hand-installed states.
 func newAclAuthFixture(t *testing.T, routes ...*EvsRoute) *aclAuthFixture {
+	return newAclAuthFixtureWith(t, false, routes...)
+}
+
+// newAclAuthFixture's engine, with the upload route's deps when uploads is set, so a segment upload runs under the
+// real state as the upload fixture's runs under the fake.
+func newAclAuthFixtureWith(t *testing.T, uploads bool, routes ...*EvsRoute) *aclAuthFixture {
 	ctx := t.Context()
 	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
 	hostSettings := sidecartest.DefaultFakeHostSettings()
@@ -65,11 +76,34 @@ func newAclAuthFixture(t *testing.T, routes ...*EvsRoute) *aclAuthFixture {
 	states := sidecartest.NewFakeAclContractStates()
 	revocations := &testRevocations{}
 	serviceLog := &recordingServiceLog{}
-	engine, err := NewEvsEngine(ctx, host.ServiceHost(), DefaultEvsSettings(), &EvsEngineDeps{
+	deps := &EvsEngineDeps{
 		AuthState:  NewAclEvsAuthState(states, revocations),
 		ServiceLog: serviceLog,
 		testRoutes: routes,
-	})
+	}
+	if uploads {
+		quota, err := newQuotaGate(ctx, host.ServiceHost(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		quota.refresh(ctx)
+		hdd, err := newHddAdmission(ctx, host.ServiceHost(), "seg-1", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		usage, err := NewUsageBatcher(ctx, host.ServiceHost(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(usage.Close)
+		deps.Uploads = &EvsUploadDeps{
+			Keys:  testReceiptKeys(t, testReceiptKey(1, clock.Now().Add(-time.Hour))),
+			Quota: quota,
+			Hdd:   hdd,
+			Usage: usage,
+		}
+	}
+	engine, err := NewEvsEngine(ctx, host.ServiceHost(), DefaultEvsSettings(), deps)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -766,5 +800,256 @@ func TestAclEvsAuthStateHoldsADeletedReposAdminToDeleteAndRestore(t *testing.T) 
 			t.Fatalf("repo/ %s after the restore", state)
 		}
 		live("restored")
+	}
+}
+
+// One segment upload into the fixture's repo by sidecarId under a token of scopes, closure or not.
+func (self *aclAuthFixture) upload(sidecarId sidecar.Id, segment []byte, closure bool, scopes ...string) *httptest.ResponseRecorder {
+	segmentId := sha256.Sum256(segment)
+	path := "/evs/v1/repos/" + sidecar.EvsKeyId(self.repoId) + "/segments/" + hex.EncodeToString(segmentId[:]) + "?push=" + sidecar.EvsKeyId(testId("push"))
+	if closure {
+		path += "&closure=1"
+	}
+	return self.serve(http.MethodPut, path, self.token(sidecarId, scopes...), segment)
+}
+
+// Whether seg/ holds segment under the fixture's repo.
+func (self *aclAuthFixture) stored(segment []byte) bool {
+	segmentId := sha256.Sum256(segment)
+	return self.object("seg-1", SegmentKey(self.repoId, segmentId)) != nil
+}
+
+// The fixture's repo created, its group formed and activated under installGrantedRepo's live rows: the repo's admin
+// is the fixture's device, the writer and depositor new devices of other members.
+func (self *aclAuthFixture) activeGrantedRepo() (admin sidecar.Id, writer sidecar.Id, depositor sidecar.Id) {
+	self.t.Helper()
+	admin = self.device
+	writer = self.view.AddDevice(self.view.AddMember(bridge.MemberRole_MEMBER_ROLE_MEMBER))
+	depositor = self.view.AddDevice(self.view.AddMember(bridge.MemberRole_MEMBER_ROLE_MEMBER))
+	self.installGrantedRepo(admin, writer, depositor, nil)
+	if status := self.putRepo(self.repoId, admin); status != http.StatusOK {
+		self.t.Fatalf("create: %d", status)
+	}
+	self.formGroup(self.repoId, testId("reseeded group"), true)
+	if status := self.lifecycle(http.MethodPost, self.repoId, "/activate", admin); status != http.StatusOK {
+		self.t.Fatalf("activate: %d", status)
+	}
+	return admin, writer, depositor
+}
+
+// A recovery's first re-seed call by admin, which places repo/ deleted under the projection's restorable RepoDelete
+// before it takes anything (§11.13's repos rule; reseed.go's reseedRepo), whatever it carries: here no statement, so
+// it takes nothing and is refused 400 INVALID.
+func (self *aclAuthFixture) reseedPlacesDeleted(admin sidecar.Id, deletionId sidecar.Id) {
+	self.t.Helper()
+	requireRefusal(self.t, self.serve(http.MethodPost, "/evs/v1/repos/"+sidecar.EvsKeyId(self.repoId)+"/reseed", self.token(admin, repoScope(self.repoId, "admin")), nil),
+		http.StatusBadRequest, protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
+	if object := self.repoObject(self.repoId); object.GetState() != protocol.EvsRepoState_EVS_REPO_DELETED || !bytes.Equal(object.GetDeletionId(), deletionId.Bytes()) {
+		self.t.Fatalf("repo/ after the re-seed's call: %v", object)
+	}
+}
+
+// QD-977 under the real state: §11.12's re-seed exception reaches PUT .../segments. A live repo's uploads are as they
+// were, the reseed gate off or on. Once the rows hold an unrestored RepoDelete the repo's standing admin holds admin
+// alone (QD-880), which passes the segment route only marked, by the exception, while the gate is on, and the route
+// takes a marked upload only through the exception: refused 403 SCOPE while repo/ is still active, then, once a
+// re-seed's call has placed repo/ deleted under the RepoDelete, taken, under its minted token and the one it held
+// before the RepoDelete; refused 403 SCOPE with the gate off, from a token without admin, as a closure upload, past
+// the restore window, for a RepoDelete with now, one its row does not date and another RepoDelete than repo/ names,
+// each writing nothing. The writer and the depositor upload nothing while the repo is deleted. Once the rows hold the
+// RepoRestore the admin is honored whole again and refused REPO_DELETED until restore, after which every upload is back.
+func TestAclEvsAuthStateTakesADeletedReposSegmentsFromItsAdminInARecovery(t *testing.T) {
+	fixture := newAclAuthFixtureWith(t, true)
+	repoId := fixture.repoId
+	admin, writer, depositor := fixture.activeGrantedRepo()
+	role := func(name string) string { return repoScope(repoId, name) }
+	fill := byte(0)
+	type upload struct {
+		name      string
+		sidecarId sidecar.Id
+		scopes    []string
+		closure   bool
+	}
+	send := func(c upload) ([]byte, *httptest.ResponseRecorder) {
+		fill += 1
+		segment := testSegment(repoId, 4096, fill)
+		return segment, fixture.upload(c.sidecarId, segment, c.closure, c.scopes...)
+	}
+	taken := func(name string, c upload) {
+		t.Helper()
+		segment, recorder := send(c)
+		if recorder.Code != http.StatusOK || !fixture.stored(segment) {
+			t.Errorf("%s: %s: %d", name, c.name, recorder.Code)
+		}
+	}
+	refused := func(name string, c upload, status int, code protocol.EvsRefusalCode) {
+		t.Helper()
+		segment, recorder := send(c)
+		if recorder.Code != status || refusalOf(t, recorder).GetCode() != code {
+			t.Errorf("%s: %s: %d %s", name, c.name, recorder.Code, refusalOf(t, recorder).GetCode())
+		}
+		if fixture.stored(segment) {
+			t.Errorf("%s: %s: a refused upload wrote", name, c.name)
+		}
+	}
+	scope := protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE
+	adminUpload := upload{name: "the admin's", sidecarId: admin, scopes: []string{role("admin")}}
+	everyRole := []upload{
+		adminUpload,
+		{name: "the admin's closure", sidecarId: admin, scopes: []string{role("admin")}, closure: true},
+		{name: "the writer's", sidecarId: writer, scopes: []string{role("rw")}},
+		{name: "the depositor's", sidecarId: depositor, scopes: []string{role("deposit")}},
+	}
+	withoutAdmin := []upload{
+		{name: "the admin's rw", sidecarId: admin, scopes: []string{role("rw")}},
+		{name: "the admin's r and rw", sidecarId: admin, scopes: []string{role("r"), role("rw")}},
+		{name: "the admin's deposit", sidecarId: admin, scopes: []string{role("deposit")}},
+		{name: "the writer's", sidecarId: writer, scopes: []string{role("rw")}},
+		{name: "the writer's naming admin", sidecarId: writer, scopes: []string{role("admin")}},
+		{name: "the depositor's", sidecarId: depositor, scopes: []string{role("deposit")}},
+	}
+
+	for _, reseed := range []bool{false, true} {
+		fixture.setReseed(reseed)
+		for _, c := range everyRole {
+			taken(fmt.Sprintf("live, reseed %t", reseed), c)
+		}
+	}
+
+	// the RepoDelete reaches the gate's state while repo/ is still active
+	deletionId := testId("reseed deletion")
+	entryTime := fixture.clock.Now().Add(-3 * 24 * time.Hour)
+	install := func(edit func(row *protocol.AclRepoDeletionRow)) {
+		t.Helper()
+		row := &protocol.AclRepoDeletionRow{DeletionId: deletionId.Bytes(), DeletedAt: 9, DeletedTimeMs: entryTime.UnixMilli(), Signer: admin.Bytes()}
+		if edit != nil {
+			edit(row)
+		}
+		fixture.installGrantedRepo(admin, writer, depositor, row)
+	}
+	install(nil)
+	if scopes := fixture.mintedScopes(admin); !slices.Equal(scopes, []string{role("admin")}) {
+		t.Fatalf("the deleted repo's admin is minted %v", scopes)
+	}
+	fixture.setReseed(false)
+	refused("active, the gate off", adminUpload, http.StatusForbidden, scope)
+	fixture.setReseed(true)
+	refused("active", adminUpload, http.StatusForbidden, scope)
+	for _, c := range withoutAdmin {
+		refused("active", c, http.StatusForbidden, scope)
+	}
+	if state := fixture.repoObject(repoId).GetState(); state != protocol.EvsRepoState_EVS_REPO_ACTIVE {
+		t.Fatalf("repo/ %s before the re-seed", state)
+	}
+
+	fixture.reseedPlacesDeleted(admin, deletionId)
+	taken("deleted", adminUpload)
+	taken("deleted", upload{name: "the admin's token from before", sidecarId: admin, scopes: []string{role("r"), role("rw"), role("admin")}})
+	refused("deleted", upload{name: "the admin's closure", sidecarId: admin, scopes: []string{role("admin")}, closure: true}, http.StatusForbidden, scope)
+	for _, c := range withoutAdmin {
+		refused("deleted", c, http.StatusForbidden, scope)
+	}
+	fixture.setReseed(false)
+	refused("deleted, the gate off", adminUpload, http.StatusForbidden, scope)
+	fixture.setReseed(true)
+	for _, c := range []struct {
+		name string
+		edit func(row *protocol.AclRepoDeletionRow)
+	}{
+		{name: "past the restore window", edit: func(row *protocol.AclRepoDeletionRow) {
+			row.DeletedTimeMs = fixture.clock.Now().Add(-fixture.engine.settings.ReseedRestoreWindow).UnixMilli()
+		}},
+		{name: "a RepoDelete with now", edit: func(row *protocol.AclRepoDeletionRow) { row.Now = true }},
+		{name: "a RepoDelete its row does not date", edit: func(row *protocol.AclRepoDeletionRow) { row.DeletedTimeMs = 0 }},
+		{name: "another RepoDelete than repo/ names", edit: func(row *protocol.AclRepoDeletionRow) { row.DeletionId = testId("another deletion").Bytes() }},
+	} {
+		install(c.edit)
+		refused(c.name, adminUpload, http.StatusForbidden, scope)
+	}
+	install(nil)
+	taken("deleted again", adminUpload)
+
+	// the RepoRestore in the rows: the admin is honored whole again, and repo/ refuses until restore
+	install(func(row *protocol.AclRepoDeletionRow) { row.RestoredAt = 10 })
+	refused("restored in the rows", adminUpload, http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_REPO_DELETED)
+	if code := fixture.lifecycle(http.MethodPost, repoId, "/restore", admin); code != http.StatusOK {
+		t.Fatalf("the admin's restore: %d", code)
+	}
+	for _, reseed := range []bool{true, false} {
+		fixture.setReseed(reseed)
+		for _, c := range everyRole {
+			taken(fmt.Sprintf("restored, reseed %t", reseed), c)
+		}
+	}
+}
+
+// QD-977 keeps QD-880's closed reads and writes in a recovery: with the reseed gate on, a deleted repo's standing
+// admin passes none of the table's routes that take a weaker right than admin, the segment route aside, each refused
+// 403 SCOPE at the guard (its evs-7 line naming no repo) under the token it is minted and those it held before, while
+// repo/ is still active and once a re-seed's call has placed it deleted; and every route that takes admin alone passes
+// the guard for it (its line naming the repo), the gate on or off, moving repo/ nowhere.
+func TestAclEvsAuthStateHoldsADeletedReposAdminToTheAdminRoutesInARecovery(t *testing.T) {
+	fixture := newAclAuthFixtureWith(t, true)
+	repoId := fixture.repoId
+	admin, writer, depositor := fixture.activeGrantedRepo()
+	role := func(name string) string { return repoScope(repoId, name) }
+	deletionId := testId("sweep deletion")
+	fixture.installGrantedRepo(admin, writer, depositor, &protocol.AclRepoDeletionRow{
+		DeletionId: deletionId.Bytes(), DeletedAt: 9, DeletedTimeMs: fixture.clock.Now().Add(-time.Hour).UnixMilli(), Signer: admin.Bytes(),
+	})
+	fixture.setReseed(true)
+
+	// a route's path for the repo, with well-formed values for its other path values
+	pathOf := func(route *EvsRoute) string {
+		t.Helper()
+		path := strings.ReplaceAll(route.Pattern, "{"+evsRepoIdPathValue+"}", sidecar.EvsKeyId(repoId))
+		path = strings.ReplaceAll(path, "{"+evsSegmentPathValue+"}", strings.Repeat("ab", 32))
+		path = strings.ReplaceAll(path, "{push_id}", sidecar.EvsKeyId(testId("push")))
+		path = strings.ReplaceAll(path, "{part}", "1")
+		path = strings.ReplaceAll(path, "{"+evsDropPreviewIdPathValue+"}", sidecar.EvsKeyId(testId("preview")))
+		if strings.Contains(path, "{") {
+			t.Fatalf("a path value this test does not fill: %s", route.Pattern)
+		}
+		return path
+	}
+	weakerRoutes, adminRoutes := []*EvsRoute{}, []*EvsRoute{}
+	for _, route := range fixture.engine.Routes() {
+		switch {
+		case route.Rights == 0 || route.ReseedException:
+		case route.Rights == sidecar.AclEvsAdmin:
+			adminRoutes = append(adminRoutes, route)
+		default:
+			weakerRoutes = append(weakerRoutes, route)
+		}
+	}
+	if len(weakerRoutes) == 0 || len(adminRoutes) == 0 {
+		t.Fatalf("%d routes take a weaker right and %d admin alone", len(weakerRoutes), len(adminRoutes))
+	}
+	refused := func(name string) {
+		t.Helper()
+		for _, route := range weakerRoutes {
+			for _, scopes := range [][]string{{role("admin")}, {role("r"), role("rw"), role("admin")}, {role("rw")}, {role("r")}, {role("deposit")}} {
+				recorder := fixture.serve(route.Method, pathOf(route), fixture.token(admin, scopes...), nil)
+				if recorder.Code != http.StatusForbidden || refusalOf(t, recorder).GetCode() != protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE ||
+					fixture.serviceLog.last().RepoId != (sidecar.Id{}) {
+					t.Errorf("%s: the admin's %s %s with %v: %d", name, route.Method, route.Pattern, scopes, recorder.Code)
+				}
+			}
+		}
+	}
+	refused("active")
+	fixture.reseedPlacesDeleted(admin, deletionId)
+	refused("deleted")
+	for _, reseed := range []bool{true, false} {
+		fixture.setReseed(reseed)
+		for _, route := range adminRoutes {
+			recorder := fixture.serve(route.Method, pathOf(route), fixture.token(admin, role("admin")), nil)
+			if fixture.serviceLog.last().RepoId != repoId {
+				t.Errorf("reseed %t: the admin's %s %s stopped at the guard: %d", reseed, route.Method, route.Pattern, recorder.Code)
+			}
+		}
+	}
+	if object := fixture.repoObject(repoId); object.GetState() != protocol.EvsRepoState_EVS_REPO_DELETED || !bytes.Equal(object.GetDeletionId(), deletionId.Bytes()) {
+		t.Errorf("repo/ after the admin routes: %v", object)
 	}
 }

@@ -1057,23 +1057,15 @@ func TestReseedOfADeletedRepoPlacesTheMarkerFirst(t *testing.T) {
 	}
 }
 
-// A deleted repo's segments (§11.12's re-seed exception at PUT .../segments): refused 409 REPO_DELETED as §11.12's
-// refused row has it, to a writer, outside a recovery, under another RepoDelete than the projection ends in and past
-// the restore window; taken from a repo admin while reseed is on and the repo is taking its history back; and a
-// repo past deleted takes none.
+// A deleted repo's segments (§11.12's re-seed exception at PUT .../segments) from a request the state honors whole, as
+// T2's fake honors the admin: refused 409 REPO_DELETED as §11.12's refused row has it, to a writer, outside a recovery,
+// under another RepoDelete than the projection ends in and past the restore window; taken from a repo admin while
+// reseed is on and the repo is taking its history back; and a repo past deleted takes none. The real state gives a
+// deleted repo's standing admin admin alone, whose uploads reach the exception only through the guard's marked pass
+// (QD-977): TestAclEvsAuthStateTakesADeletedReposSegmentsFromItsAdminInARecovery holds that path.
 func TestReseedTakesADeletedReposSegmentsFromItsAdmin(t *testing.T) {
 	fixture := newUploadFixture(t)
-	network := fixture.networkId.String()
-	gate := func(reseed bool) {
-		t.Helper()
-		text := "sidecar:\n  evs:\n    enabled: true\n    networks: [\"" + network + "\"]\n"
-		if reseed {
-			text += "  reseed: true\n"
-		}
-		if err := fixture.host.Gates.Set(text); err != nil {
-			t.Fatal(err)
-		}
-	}
+	gate := fixture.setReseed
 	deletionId := testId("upload deletion")
 	entryTime := fixture.clock.Now().Add(-3 * 24 * time.Hour)
 	project := func(deletion *EvsRepoDeletionFacts) {

@@ -56,20 +56,20 @@
  {
   "num": 7,
   "code": "TEAM",
-  "words": 12067,
-  "code_words": 14774,
+  "words": 12119,
+  "code_words": 15174,
   "ceiling": 3500,
-  "over": 8567,
-  "over_pct": 244.8
+  "over": 8619,
+  "over_pct": 246.3
  },
  {
   "num": 8,
   "code": "ACL",
-  "words": 11925,
+  "words": 11979,
   "code_words": 5019,
   "ceiling": 3800,
-  "over": 8125,
-  "over_pct": 213.8
+  "over": 8179,
+  "over_pct": 215.2
  },
  {
   "num": 9,
@@ -83,11 +83,11 @@
  {
   "num": 10,
   "code": "KEYS",
-  "words": 11121,
-  "code_words": 9481,
+  "words": 11254,
+  "code_words": 9523,
   "ceiling": 4500,
-  "over": 6621,
-  "over_pct": 147.1
+  "over": 6754,
+  "over_pct": 150.1
  },
  {
   "num": 11,
@@ -192,7 +192,7 @@
   "num": 22,
   "code": "TEST",
   "words": 7756,
-  "code_words": 38287,
+  "code_words": 39120,
   "ceiling": 2500,
   "over": 5256,
   "over_pct": 210.2

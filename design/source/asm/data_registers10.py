@@ -103,3 +103,10 @@ D['D-EVS-68'] = "A git-mode push carries what readers lack: commits and odd tree
                 "named source versions."
 D['D-EVS-69'] = ("Local git refs move only by applying evs's versions in order; divergent local commits go to a "
                  "published conflict branch.")
+# The fold of DESIGN-DETAILS.md sections 5 and 6 (2026-11-17): rows keep every confirmation, so rows-only gates build
+# a cascade's closure as readers do (section 5), and a group's one repo through its owner marker (owner decision 201),
+# section 6.8's D-KEYS-28, numbered D-KEYS-27 here since 6.8's D-KEYS-27, the roster rule of MLS commits, waits with
+# QD-1040's MLS deferral.
+assert D['D-TEAM-26'].startswith('A compromise `SidecarRevoke` parks') and 'D-KEYS-27' not in D, 'TEAM and KEYS rows moved'
+D['D-TEAM-26'] = "A compromise `SidecarRevoke` parks what the device signed from `since_n` on until reconfirmed; rows keep every confirmation."
+D['D-KEYS-27'] = "A group belongs to one repo: its owner marker, created first, is the only binding gkm resolves it by."

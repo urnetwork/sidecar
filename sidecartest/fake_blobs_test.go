@@ -401,7 +401,10 @@ func isClosed(channel <-chan struct{}) bool {
 // A Delay fires once its request is parked and its caller's timeout is on the clock, not as the request is
 // taken, so a test that waited for the plan to fire can deliver the request at once. Tip-check at 4418ba43
 // had evsservice's TestBatchKeepsAtMostTwoWritesInFlight deliver one of two PUTs whose plans had fired: the
-// second was taken and not yet parked.
+// second was taken and not yet parked. onFire returns before the plan's channel closes, so it sees the
+// request as it fired: a channel closed first let the test's delivery reach onFire's view under load
+// (kf1-bootstrap-split's landcheck: parkedCount 0 as the plan fired), and onFire here waits out a delivery
+// the channel may already have released, so that order fails every run.
 func TestADelayFiresOnceItsRequestIsParked(t *testing.T) {
 	fakeClock := NewFakeClock(DefaultClockStart())
 	clock := &timerWatchClock{Clock: fakeClock}
@@ -418,12 +421,19 @@ func TestADelayFiresOnceItsRequestIsParked(t *testing.T) {
 	moment := func() delayMoment {
 		return delayMoment{fired: isClosed(fired), parkedCount: store.DelayedCount(), timerCount: len(fakeClock.PendingTimers())}
 	}
-	// both run on the request's own goroutine, the first with the request parked and its timeout not yet set
+	// closed once the test, released by the plan's channel, has delivered
+	delivered := make(chan struct{})
+	// both run on the request's own goroutine, the first with the request parked and its timeout not yet set,
+	// the second with its timeout set and the plan's channel not yet closed
 	atTimer, atFire := make(chan delayMoment, 1), make(chan delayMoment, 1)
 	clock.onAfter = func() {
 		atTimer <- moment()
 	}
 	faults.SetOnFire(func(plan *FaultPlan) {
+		if isClosed(fired) {
+			// the channel released the test before onFire ran: its delivery comes first, as load may have it
+			<-delivered
+		}
 		atFire <- moment()
 	})
 	answered := make(chan error, 1)
@@ -433,8 +443,10 @@ func TestADelayFiresOnceItsRequestIsParked(t *testing.T) {
 	}()
 	<-fired
 	// nothing but the plan's firing was waited for
-	if delivered := store.DeliverDelayed("meta-1", "head/"); delivered != 1 {
-		t.Errorf("delivered %d of a request whose plan fired", delivered)
+	deliveredCount := store.DeliverDelayed("meta-1", "head/")
+	close(delivered)
+	if deliveredCount != 1 {
+		t.Errorf("delivered %d of a request whose plan fired", deliveredCount)
 	}
 	if err := <-answered; err != nil {
 		t.Errorf("the caller got %v", err)
@@ -442,7 +454,7 @@ func TestADelayFiresOnceItsRequestIsParked(t *testing.T) {
 	if got := <-atTimer; got != (delayMoment{fired: false, parkedCount: 1, timerCount: 0}) {
 		t.Errorf("parked, before its timeout is set: %+v", got)
 	}
-	if got := <-atFire; got != (delayMoment{fired: true, parkedCount: 1, timerCount: 1}) {
+	if got := <-atFire; got != (delayMoment{fired: false, parkedCount: 1, timerCount: 1}) {
 		t.Errorf("as the plan fires: %+v", got)
 	}
 }

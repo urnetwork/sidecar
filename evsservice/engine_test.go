@@ -49,14 +49,18 @@ type fakeAuthState struct {
 	rights          map[fakeAuthKey]sidecar.AclEvsRights
 	repoFacts       map[sidecar.Id]*EvsRepoFacts
 	honorCount      int
+	// HonorScope's answer to a right set that a test fixes, ahead of the rights held: as a state that stops
+	// answering between two asks
+	rightsHonorAnswers map[sidecar.AclEvsRights]EvsAuthAnswer
 }
 
 func newFakeAuthState() *fakeAuthState {
 	return &fakeAuthState{
-		unboundSidecarIds: map[sidecar.Id]bool{},
-		revokedSidecarIds: map[sidecar.Id]bool{},
-		rights:            map[fakeAuthKey]sidecar.AclEvsRights{},
-		repoFacts:         map[sidecar.Id]*EvsRepoFacts{},
+		unboundSidecarIds:  map[sidecar.Id]bool{},
+		revokedSidecarIds:  map[sidecar.Id]bool{},
+		rights:             map[fakeAuthKey]sidecar.AclEvsRights{},
+		repoFacts:          map[sidecar.Id]*EvsRepoFacts{},
+		rightsHonorAnswers: map[sidecar.AclEvsRights]EvsAuthAnswer{},
 	}
 }
 
@@ -65,6 +69,14 @@ func (self *fakeAuthState) grant(sidecarId sidecar.Id, repoId sidecar.Id, rights
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.rights[fakeAuthKey{sidecarId: sidecarId, repoId: repoId}] = impliedRights(strongestRight(rights)) | rights
+}
+
+// Gives the sidecar exactly rights on the repo, nothing they imply, replacing what it held: as the state gives a
+// deleted repo's standing admin admin alone (QD-880).
+func (self *fakeAuthState) grantOnly(sidecarId sidecar.Id, repoId sidecar.Id, rights sidecar.AclEvsRights) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.rights[fakeAuthKey{sidecarId: sidecarId, repoId: repoId}] = rights
 }
 
 func (self *fakeAuthState) setRepo(repoId sidecar.Id, facts *EvsRepoFacts) {
@@ -104,6 +116,9 @@ func (self *fakeAuthState) HonorScope(principal *sidecar.Principal, repoId sidec
 	self.honorCount += 1
 	if self.unloaded {
 		return EvsAuthUnknown
+	}
+	if answer, ok := self.rightsHonorAnswers[rights]; ok {
+		return answer
 	}
 	held := self.rights[fakeAuthKey{sidecarId: sidecar.Id(*principal.SidecarId), repoId: repoId}]
 	if held.Has(rights) {
@@ -216,6 +231,18 @@ func (self *evsFixture) token(sidecarId sidecar.Id, scopes ...string) string {
 		IssuedAt:  self.clock.Now(),
 		ExpiresAt: self.clock.Now().Add(15 * time.Minute),
 	})
+}
+
+// sidecar.yml with evs open to the fixture's network, and its reseed gate as given: on in a recovery (§19.10).
+func (self *evsFixture) setReseed(reseed bool) {
+	self.t.Helper()
+	text := "sidecar:\n  evs:\n    enabled: true\n    networks: [\"" + self.networkId.String() + "\"]\n"
+	if reseed {
+		text += "  reseed: true\n"
+	}
+	if err := self.host.Gates.Set(text); err != nil {
+		self.t.Fatal(err)
+	}
 }
 
 // The scope string for a repo and role.
@@ -606,6 +633,115 @@ func TestEvsEngineChecksADepositScopeAgainstTheState(t *testing.T) {
 	readFixture.auth.grant(sidecarId, repoId, sidecar.AclEvsDeposit)
 	recorder := readFixture.serve(http.MethodGet, "/evs/v1/repos/"+sidecar.EvsKeyId(repoId)+"/read-probe", readFixture.token(sidecarId, repoScope(repoId, "deposit")), nil)
 	requireRefusal(t, recorder, http.StatusForbidden, protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE)
+}
+
+// §11.12's re-seed row at the guard (QD-977): on a route that carries the exception, a token's admin that the state
+// honors alone, as it does a deleted repo's standing admin, passes holding admin and nothing weaker, marked, and only
+// while the host's reseed gate is on. The same token is refused 403 SCOPE before the route runs with the gate off, on
+// a route of the same rights without the exception, and through a handler's own AuthorizeRepo on a route that names
+// the exception; so are tokens without admin and a sidecar the state honors no admin for. A state that cannot answer
+// the bare admin answers 503, and a sidecar the state honors whole passes unmarked as before.
+func TestEvsEngineReseedExceptionPassesTheBareAdminRightMarked(t *testing.T) {
+	rights := sidecar.AclEvsWrite | sidecar.AclEvsDeposit | sidecar.AclEvsAdmin
+	excepted := newProbeRoute(http.MethodPut, "/evs/v1/repos/{repo_id}/excepted", rights, true, false, false)
+	excepted.route.ReseedException = true
+	plain := newProbeRoute(http.MethodPut, "/evs/v1/repos/{repo_id}/plain", rights, true, false, false)
+	askedCalls := 0
+	asked := &EvsRoute{
+		Method: http.MethodPut, Pattern: "/evs/v1/repos/{repo_id}/asked", Name: "probe", Write: true, ReseedException: true,
+		Serve: func(request *EvsRequest) {
+			repoId, err := parseEvsHexId(request.Http.PathValue(evsRepoIdPathValue))
+			if err != nil {
+				request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
+				return
+			}
+			if request.AuthorizeRepo(repoId, rights) {
+				askedCalls += 1
+				request.Reply(nil)
+			}
+		},
+	}
+	fixture := newEvsFixture(t, excepted.route, plain.route, asked)
+	repoId := testId("repo")
+	admin, live, writer, stranger := testId("deleted admin"), testId("live admin"), testId("writer"), testId("stranger")
+	fixture.auth.grantOnly(admin, repoId, sidecar.AclEvsAdmin)
+	fixture.auth.grant(live, repoId, sidecar.AclEvsAdmin)
+	fixture.auth.grant(writer, repoId, sidecar.AclEvsWrite)
+	repoPath := "/evs/v1/repos/" + sidecar.EvsKeyId(repoId)
+	role := func(name string) string { return repoScope(repoId, name) }
+	refused := func(name string, path string, token string) {
+		t.Helper()
+		recorder := fixture.serve(http.MethodPut, repoPath+path, token, nil)
+		if recorder.Code != http.StatusForbidden || refusalOf(t, recorder).GetCode() != protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE {
+			t.Errorf("%s: %d", name, recorder.Code)
+		}
+	}
+	passed := func(name string, token string, wantRights sidecar.AclEvsRights, wantMarked bool) {
+		t.Helper()
+		calls := excepted.calls
+		if code := fixture.serve(http.MethodPut, repoPath+"/excepted", token, nil).Code; code != http.StatusOK || excepted.calls != calls+1 {
+			t.Errorf("%s: %d", name, code)
+			return
+		}
+		if excepted.last.Rights != wantRights || excepted.last.reseedAdmitted != wantMarked {
+			t.Errorf("%s: rights %b, marked %t", name, excepted.last.Rights, excepted.last.reseedAdmitted)
+		}
+	}
+
+	fixture.setReseed(false)
+	refused("the gate off", "/excepted", fixture.token(admin, role("admin")))
+	if excepted.calls != 0 {
+		t.Fatalf("the route ran %d times with the gate off", excepted.calls)
+	}
+
+	fixture.setReseed(true)
+	passed("the admin's token", fixture.token(admin, role("admin")), sidecar.AclEvsAdmin, true)
+	passed("the admin's token from before", fixture.token(admin, role("r"), role("rw"), role("admin")), sidecar.AclEvsAdmin, true)
+	refused("a route without the exception", "/plain", fixture.token(admin, role("admin")))
+	refused("a handler's own ask", "/asked", fixture.token(admin, role("admin")))
+	for _, scopes := range [][]string{{role("rw")}, {role("r"), role("rw")}, {role("deposit")}, {role("r")}} {
+		refused(fmt.Sprintf("the admin's %v", scopes), "/excepted", fixture.token(admin, scopes...))
+	}
+	refused("a sidecar the state honors nothing for", "/excepted", fixture.token(stranger, role("admin")))
+	refused("a writer's token naming admin", "/excepted", fixture.token(writer, role("admin")))
+	if plain.calls != 0 || askedCalls != 0 {
+		t.Errorf("refused requests ran: %d plain, %d asked", plain.calls, askedCalls)
+	}
+	passed("a live admin's token", fixture.token(live, role("admin")), sidecar.AclEvsAdmin|sidecar.AclEvsWrite|sidecar.AclEvsRead, false)
+	passed("a writer's token", fixture.token(writer, role("rw")), sidecar.AclEvsWrite|sidecar.AclEvsRead, false)
+	if code := fixture.serve(http.MethodPut, repoPath+"/plain", fixture.token(live, role("admin")), nil).Code; code != http.StatusOK || plain.last.reseedAdmitted {
+		t.Errorf("a live admin on a route without the exception: %d", code)
+	}
+
+	// the whole set refused and the bare admin not answered: nothing is allowed
+	fixture.auth.stateLock.Lock()
+	fixture.auth.rightsHonorAnswers[sidecar.AclEvsAdmin] = EvsAuthUnknown
+	fixture.auth.stateLock.Unlock()
+	calls := excepted.calls
+	requireRefusal(t, fixture.serve(http.MethodPut, repoPath+"/excepted", fixture.token(admin, role("admin")), nil),
+		http.StatusServiceUnavailable, protocol.EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE)
+	if excepted.calls != calls {
+		t.Errorf("the route ran with the bare admin unanswered")
+	}
+}
+
+// The one route of §11.12's re-seed exception that takes more than admin carries it, and no other route does
+// (QD-977): every other route keeps the whole-set rule.
+func TestEvsEngineOnlyTheSegmentRouteCarriesTheReseedException(t *testing.T) {
+	fixture := newEvsFixture(t)
+	carriers := []string{}
+	for _, route := range fixture.engine.Routes() {
+		if !route.ReseedException {
+			continue
+		}
+		carriers = append(carriers, route.Method+" "+route.Pattern)
+		if !route.Rights.Has(sidecar.AclEvsAdmin) || route.Rights == sidecar.AclEvsAdmin || !route.Write || !route.Placed {
+			t.Errorf("%s %s carries the exception with rights %b, write %t, placed %t", route.Method, route.Pattern, route.Rights, route.Write, route.Placed)
+		}
+	}
+	if want := []string{"PUT /evs/v1/repos/{repo_id}/segments/{segment_id}"}; !slices.Equal(carriers, want) {
+		t.Fatalf("the exception's routes %v, want %v", carriers, want)
+	}
 }
 
 func TestEvsEngineReadsRevocationOnWritesOnly(t *testing.T) {
