@@ -113,6 +113,7 @@ func newTestUrCli(socketPath string) (*urCli, *bytes.Buffer, *bytes.Buffer) {
 	cli.stdout = stdout
 	cli.stderr = stderr
 	cli.stdinIsTerminal = func() bool { return false }
+	cli.stdoutIsTerminal = func() bool { return false }
 	cli.openTty = func() (urTty, error) { return nil, errors.New("no terminal in this test") }
 	cli.socketPath = func(instance string) (string, error) { return socketPath, nil }
 	cli.spawnDaemon = func(args []string) error { return errors.New("nothing spawns in this test") }
