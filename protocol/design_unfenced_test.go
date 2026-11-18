@@ -707,18 +707,4 @@ type testFenceValueReservation struct {
 // reservations, as testFenceReservations' fields do, and one the design comes to reserve, or stops writing, fails
 // until its line here leaves.
 var testFenceValueReservations = []testFenceValueReservation{
-	// QD-1034: a cascade's void of a recovery binding leaves no binding, so no proposal is a restored binding's
-	// admission and the two restored kinds leave the format before it freezes, their numbers reserved
-	{
-		enum:     "ProposalKind",
-		name:     "PROPOSAL_KIND_RESTORED",
-		number:   3,
-		question: "recovery-restored-bindings-removed",
-	},
-	{
-		enum:     "ProposalKind",
-		name:     "PROPOSAL_KIND_RESTORED_COSIGNED",
-		number:   4,
-		question: "recovery-restored-bindings-removed",
-	},
 }

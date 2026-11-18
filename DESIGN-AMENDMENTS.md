@@ -391,17 +391,6 @@ Changes: RECORD.md 5's ContextBody and 7.4; record.proto.
 
 Questions: `search-m10-28-transcript-prompts.md`.
 
-### QD-1005: Which kind should a restored binding's admission hold when the base that changes self_admit leaves it unfolded in its tail?
-*Decided by the owner on 2026-11-16, asked one question at a time; owner decision 556. Folds into §7 Networks, teams, members, enrollment, and SSO.*
-
-The wire and the list, which wait on the code: §7.9's `ProjectionHeader` fence takes `repeated bytes restored_cosigned_ids = 12` once auth.proto declares it, a design-records fold writing the line and dropping its `testFenceAdditions` entry in one commit (owner decision 273); and §2.8 api-7's phrase names the field, which the fix track publishes through `check/`'s additions and a design-records fold then writes into the block, the entry leaving in that commit (owner decision 252). DESIGN-DETAILS 5.2.3 and 5.2.4 are the design agent's. The rest is folded (2026-11-17): the decision, §7.9's self_admit, base and verdicts rows, and a comment in the fence naming what joins it.
-
-Changes: §7.9's fence; §2.8 api-7; auth.proto.
-
-Questions: `proposal-kind-restored-cosigned-tail-self-admit.md`.
-
-Waits on: the fix track base-restored-cosigned-ids.
-
 ### QD-1010: How does an app approve a multi-use template request, when SidecarApprovals.Decide carries no uses?
 *Decided by the owner on 2026-11-16, asked one question at a time; owner decision 574. Folds into §16 The local MCP server and record primitives.*
 

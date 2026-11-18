@@ -1640,3 +1640,29 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "build's alike. sockets authenticates with §7.8's service tokens (588), reversing @@OD:347@@, @@OD:497@@, "
     '@@OD:561@@ and @@OD:578@@; edge clients get their sockets tokens from api (589); the ticket keys rotate '
     'yearly (590); and the idle reap leaves edge clients alone (591). '))
+# The dr4-late-sweep fold (2026-11-18), continued: the answers the sweep numbers after the sockets set, one block of
+# rows, notes and dates, its lead extended below.
+INDEX += [
+    (592, 'No restored recovery bindings',
+     "A cascade's void of a member's recovery binding leaves no binding and restores no earlier one; the restored "
+     'proposal kinds leave the format, their numbers reserved.'),
+]
+for _n, _note in [
+        (149,
+         ' Its restore clause is reversed by @@OD:592@@: a void leaves no binding, so its re-seal and backup rule '
+         'stand alone.'),
+        (314,
+         ' Its restored kind is reversed by @@OD:592@@.'),
+        (556,
+         ' Reversed by @@OD:592@@: no base carries a restored kind.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 593))
+DATES.update({592: '2026-11-17'})
+_D591 = "and the idle reap leaves edge clients alone (591). "
+assert DECISIONS_INTRO.count(_D591) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D591, "the idle reap leaves edge clients alone (591); and a cascade's void of a recovery binding restores no "
+    "earlier one (592), reversing @@OD:556@@ and the restore clause of @@OD:149@@. ")

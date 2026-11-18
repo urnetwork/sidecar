@@ -7,7 +7,7 @@
 | Path | What it is |
 |---|---|
 | `sections/01-CTX.md` … `sections/23-PHASE.md` | DESIGN.md §1-§23, one file per section. The build copies them verbatim, adding only links. |
-| `owner/DECISIONS.md` | The owner's record, entries 1-591. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
+| `owner/DECISIONS.md` | The owner's record, entries 1-592. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
 | `owner/APPLY.md` | The rules for applying the owner's decisions: precedence (§1), supersession, where two decisions disagree (§2), notation (§3), editing rules (§4), and the follow-up decisions 112-136 with the sections each binds (§6-§8). |
 | `CONVENTIONS.md` | The writing conventions every section follows: the owner directive (§0), the owner rules (§1), the section template (§2) and the X registry (§7), which DESIGN.md's X1-X20 table replaced. |
 | `OUTLINE.md` | The original outline: section codes, scope boundaries, and the word budgets that G0's density rule replaced on 2026-11-04. |
@@ -44,7 +44,7 @@ It needs only `python3`; it was built and checked with Python 3.13. The steps, a
 
 The data files are layered. Each `data_*N.py` loads its predecessor with `runpy` and patches it: `data_front10.py` loads `data_front9.py`, back to `data_front3.py`, and the registers, glossary and appendices go the same way. Change the top layer (the `*10` files), or add an `*11` layer that loads them. Comments in the scripts cite working files from the design sessions (the reconcilers' orders, `peer/`, `review/`, `snap/`), which were not imported; they are history.
 
-## Adding owner decision N (592 onward)
+## Adding owner decision N (593 onward)
 
 1. Add entry N to `owner/DECISIONS.md`: the question, the answer, its cost, the options not taken, and what raised it.
 2. In `asm/data_front10.py`, append `(N, "<what it settles>", "<one line>")` to `INDEX`, add `DATES[N]`, and raise the `assert` to `list(range(1, N + 1))`. Update `STATUS` and `DECISIONS_INTRO` where they name a range. `@@OD:k@@` writes a link to decision k.
@@ -729,3 +729,30 @@ The design-records track design-defer-doc (wave f43) folds two owner answers of 
 Left for others: the entry for MLS (QD-1040) and what QD-1038 removes are the dr4-late-sweep track's, which adds its entry as "DESIGN-DEFER.md", above, says. HANDOFF.md's table of documents does not list DESIGN-DEFER.md, since HANDOFF.md is outside a design-records track's files.
 
 Outside this folder the track touched DESIGN.md, DESIGN-DEFER.md, DESIGN-DETAILS.md's section 16 mark and DESIGN-AMENDMENTS.md's note on section 16.
+
+## Validation after owner decisions 588 onward: the late sweep (2026-11-18)
+
+The design-records track dr4-late-sweep (wave f43d) folds every owner answer that the run's list of pending decisions still held unfolded on 2026-11-18, whatever its section, and the items of sidecar/DESIGN-AMENDMENTS.md's "Later decisions", numbering each answer that changes a behavior or a rule as it folds it:
+
+| Ledger id | Owner decision | What it settles |
+|---|---|---|
+| QD-1029 | 588 | sockets authenticates a sidecar with the 15-minute service token evs, gkm and dns take, reversing owner decisions 347, 497, 561 and 578. |
+| QD-1054 | 589 | api's edge-client route answers each `urnetwork-edge` platform client a sockets token beside its jwt. |
+| QD-1039 | 590 | The sockets ticket keys' `RotationInterval` defaults to 365 days, amending owner decisions 354 and 562 on the interval. |
+| QD-1059 | 591 | taskworker's idle reap leaves `urnetwork-edge`'s clients alone. |
+| QD-1034 | 592 | A cascade's void of a recovery binding leaves no binding and restores no earlier one; `ProposalKind` 3 and 4 are reserved, reversing owner decision 556, owner decision 149's restore clause and owner decision 314's restored kind. |
+
+- **sockets on service tokens (588 to 591).** D-SOCK-10, §9.8, §9.15, §7.5, §7.8, §5.6, §5.15, §14.5, §18.7, §19.4, §19.10, §19.11 and §23.4 return to the service-token reading; §13.6 and §14.11 give the edge clients their sockets tokens; §9.8 and §19.17 rotate the ticket keys yearly; §13.6 and §19.4 keep edge clients from the idle reap. §9.6's `SocketTicket` fence writes `dialer_sidecar_id = 16`, which socket.proto declares, and its `testFenceAdditions` entry leaves. §2.8 takes v55, sock-5 losing its valid-check time and sockets joining evs-18's readers, and the v54 lines QD-1034's fix track published through `check/`'s additions, whose three entries leave in the same commit. QD-1022's §2.8 row for the revocation record is not added: owner decision 588 reverses the member fields it would have listed, and its track was dropped.
+- **No restored recovery bindings (592).** §7.9's scoped, commit, wrapped, self_admit, cascade, base, verdicts, pending, activation, anchor and after rows, its Recovery table and the `restored` anchor order; §5.6's genesis, signers, alarm and reads rows, §5.9's keychain and recovery code; §10.5's wrapped row, KF2, §10.8 and its risk row; §18.5's `GetPending`; §22.7's revocation suite and FS-16. The `ProposalKind` fence reserves 3 and 4, as auth.proto does, and protocol/design_unfenced_test.go's two `testFenceValueReservations` entries leave; the `ProjectionHeader` fence drops its comment naming `restored_cosigned_ids = 12`, which no code declares, and QD-1005's item, which waited on that field, leaves DESIGN-AMENDMENTS.md's "Later decisions", owner decision 592 reversing owner decision 556. FS-41, FS-42 and FS-115's schedules held no restored-binding clause, so of §22.8's rows only FS-16 changes, its columns in place for sidecartest/fault's catalog.
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `68f4c8a380cc0eb265f0818bdd0b02f565835ba8d3b49932fd0e7f305d90456c`) and DESIGN-DEFER.md (SHA-256 `0080d481d02a1de0a8fd39f0fca9dc15ab614489225e943d89d30f8f64d296ea`), and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no new §2.8 row, so no guard line was needed.
+- **Owner decisions.** All 592 rows are present and cited; APPLY.md's section pairs hold. A reversed decision stays cited where its reversal is stated.
+- **Open owner questions.** One, Q-REPO-6.
+- **Superseded options.** 312 grep hits, every one carried with its reading; none is on a changed line and none is live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 11,806 section references, with the one unresolved as before. `v7/words.json` and `v7/text_checks.json` were regenerated.
+- **DESIGN-DEFER.md.** 95 entries and 144 pointers, unchanged so far.
+- **The metadata list** follows §2.8 at v55.
+
+Outside this folder the track touched DESIGN.md, DESIGN-AMENDMENTS.md, metadata_list.yml, check/metadata_list_test.go's additions and protocol/design_unfenced_test.go's pending fence entries.

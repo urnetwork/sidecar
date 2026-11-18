@@ -374,20 +374,18 @@ authority  k distinct counted signers among the newest AdminSet's n Owners and A
            presence row asks (owner decisions 185, 187)
 scoped     the member's consented device (§8.5), for its own untagged devices, at once, admitting them only
            while self_admit is on (owner decision 112) and revoking them always (7.10); its recovery key admits
-           them at once, or with self_admit off on one admin's cosign (owner decisions 62, 126), either only
-           through Recovery's window under a binding a void restored (owner decision 149); a tag owner's
-           device, for its tags; a Delegation, which admits up to max_admits (counted in log order, rows
-           keeping the count for its life) and never re-delegates, each admission carrying exactly its tag_ids
-           and, unless ephemeral, a not_after no earlier than its own, until it ends (delegation, below)
-commit     in the config group and the team directory's (leaves) the signer of an admission or revocation,
-           or after api's reap of an uncovered ephemeral agent the device that signed its admission (7.10),
-           commits what it requires even if it is no config writer: a leaf-entitled device's Add, a leaf's
-           Remove and its rotation, or a wrapped reader's first wrap or rotation; a wrapped signer only wraps
-           and rotates (below); a recovery-admitted, leaf-entitled device self-joins by external commit (owner
-           decisions 113, 128), under a binding that takes no wrap once its ReaderWrap passes Recovery's
-           anchor (restored); so no membership change waits for an admin, and in the config group the
-           exchange gives member devices other than read_only ones gkm rw, while evs rw stays with config
-           writers
+           them at once, or with self_admit off on one admin's cosign (owner decisions 62, 126); a tag owner's
+           device, for its tags; a Delegation, which admits up to max_admits (counted in log order, rows keeping
+           the count for its life) and never re-delegates, each admission carrying exactly its tag_ids and,
+           unless ephemeral, a not_after no earlier than its own, until it ends (delegation, below)
+commit     in the config group and the team directory's (leaves) the signer of an admission or revocation, or
+           after api's reap of an uncovered ephemeral agent the device that signed its admission (7.10), commits
+           what it requires even if it is no config writer: a leaf-entitled device's Add, a leaf's Remove and
+           its rotation, or a wrapped reader's first wrap or rotation; a wrapped signer only wraps and rotates
+           (below); a recovery-admitted, leaf-entitled device self-joins by external commit (owner decisions
+           113, 128) once it passes Recovery's anchor; so no membership change waits for an admin, and in the
+           config group the exchange gives member devices other than read_only ones gkm rw, while evs rw stays
+           with config writers
 readers    agents (tagged, ephemeral, CI, cloud) and member devices past the first 1,000 below read the config
            and the team directory by per-generation X-Wing wraps at no commit (owner decisions 114, 144, 182,
            amending 60); Delegation-admitted agents read at once by the Delegation's reader key (§10.5; 7.18),
@@ -412,9 +410,8 @@ leaves     (owner decisions 144, 182) in the config group and in the team direct
   wrapped  a wrapped device commits no Add or Remove in either group: signing an admission, it writes the new
            device's first wrap; signing a revocation, it rotates, wrapping to every remaining holder, and the
            next leaf commit removes the target (§10.5); recovered past the first 1,000, it reads by its
-           RecoveryWrap, or under a binding a void restored by Recovery's ReaderWrap (restored), then wraps,
-           instead of self-joining; revoking it is a new generation not wrapped to it, as for an agent (owner
-           decisions 64, 114)
+           RecoveryWrap, then wraps, instead of self-joining; revoking it is a new generation not wrapped to it,
+           as for an agent (owner decisions 64, 114)
 ```
 
 **Paths.** The config head is the files of the repo's file-mode `main` ref at one config_version:
@@ -709,22 +706,14 @@ completion  the entry holding the k-th valid counted signature or, for a stateme
             pending, the window's activation; the statement takes effect at that position, its causal identity
 k = 1       a single signed statement with no recovery-key signature needs no proposal
 self_admit  off: a scoped recovery admission is a proposal by the recovery key that completes on one cosign by
-            an admission signer (an Owner, Admin or IT admin device), under a binding a void restored only at
-            Recovery's activation; a proposal's kind is fixed at its entry, from its signer's kind, whether
-            the member is in the AdminSet, whether the binding is one a void restored, and self_admit then, so
-            an activation reads nothing but the row and a self_admit change between the proposal and its tick
-            decides nothing: ProposalKind is authority (1), recovery_scoped (2), restored (3: activates with
-            no counted cosign, owner decision 149) or restored_cosigned (4: a restored binding's scoped
-            admission filed while self_admit was off, which activates only if one admission signer's cosign
-            is among its signers; owner decision 314); a base carries that kind for the restored bindings'
-            admissions in its tail, in ProjectionHeader.restored_cosigned_ids: the ascending proposal ids,
-            among the tail's entries that took effect, of those filed with self_admit off, which the writer
-            fills from the kinds it judged or took; a verifier present at the tail recomputes the list and
-            forks on a difference, api answering 403, and one that starts at the base takes it, so Reapply
-            opens the listed rows with kind 4 and every other restored binding's admission with kind 3, never
-            by the base's own self_admit, and the rule holds at a base whose own head changes self_admit while
-            keeping its fold (owner decision 556); until that field is declared, such an admission in the tail
-            of a base whose own head changes self_admit takes that base's value, alike at every verifier
+            an admission signer (an Owner, Admin or IT admin device); a proposal's kind is fixed at its entry,
+            from its signer's kind and whether the member is in the AdminSet, a recovery key outside it
+            proposing only while self_admit is off: ProposalKind is authority (1) or recovery_scoped (2), 3 and
+            4 staying reserved for the restored kinds removed with restored bindings before the format froze
+            (owner decision 592, which reverses owner decision 556 and the restored kind of owner decision 314),
+            and a row or cosign of any other kind is refused; neither kind reads self_admit once fixed, so an
+            activation reads nothing but the row and a base whose own head changes self_admit changes no kind in
+            its tail
 cascade     (D-TEAM-26) SidecarRevoke{reason: compromise, since_n} parks a closure P. since_n is a log position
             with no default: the signing device proposes the first entry timed at or after the loss time its
             person gives, which the person may move earlier, lists for its person and admins what P parks and
@@ -732,21 +721,22 @@ cascade     (D-TEAM-26) SidecarRevoke{reason: compromise, since_n} parks a closu
             member's devices live while that binding was current; Recovery's after), and signs on confirmation
             (§5.6); after a compromise rebind, §5.9's procedure clamps the proposal so the rebind stands and
             revokes the rebind's signer last (owner decision 212); a record counts from the entry that carried
-            it (a statement's own, or the base whose config head first holds it), never from its signer's at;
-            in position order from since_n, P holds the revoked sidecar, each sidecar whose admission a sidecar
+            it (a statement's own, or the base whose config head first holds it), never from its signer's at; in
+            position order from since_n, P holds the revoked sidecar, each sidecar whose admission a sidecar
             then in P signed or whose park such a sidecar's AdmissionConfirm lifted, each whose consent (§8.5)
             rests only on such a sidecar's OwnerConfirm, a confirmation of a device then unparked and consented
-            on other signatures adding none, each sidecar a recovery key admitted, alone or in a proposal,
-            under a binding such a sidecar signed, each admitted under a Delegation such a sidecar signed,
-            which is void, and, where a Delegation admitted the revoked sidecar, each sidecar that Delegation
-            admitted from since_n on, the Delegation ending at the revocation's position (delegation); api and
-            readers refuse the revocation if P would hold one of its signers; every RecoveryBind or
-            RecoveryRebind, KeyRegister and EvsShare a sidecar then in P signed is void until a signer outside
-            P signs it again; a void restores the newest earlier binding not void, which is no current binding
-            until a signer outside P signs it again: it takes no wrap (§10.5) and no keychain seal, M's devices
-            re-sealing keychain.wrap with no HPKE copy (§5.9), its admissions activate only by Recovery's
-            window, and M's devices alarm; grants, approvals, suspensions and unsuspensions, access-log
-            statements, SponsorSets, IndexerSets, MemberAdmits and config heads signed in P stand until revoked
+            on other signatures adding none, each sidecar a recovery key admitted, alone or in a proposal, under
+            a binding such a sidecar signed, each admitted under a Delegation such a sidecar signed, which is
+            void, and, where a Delegation admitted the revoked sidecar, each sidecar that Delegation admitted
+            from since_n on, the Delegation ending at the revocation's position (delegation); api and readers
+            refuse the revocation if P would hold one of its signers; every RecoveryBind or RecoveryRebind,
+            KeyRegister and EvsShare a sidecar then in P signed is void until a signer outside P signs it again;
+            a void of M's binding in effect leaves M no binding, nothing earlier restored, until a device of M's
+            outside P binds a fresh code by a RecoveryBind (owner decision 592): M's codes take no wrap (§10.5)
+            and no keychain seal, M's devices re-sealing keychain.wrap with no HPKE copy (§5.9), M's new device
+            comes in only by an admin's admission, parked for owner-bound repos (owner decision 126), and M's
+            devices alarm; grants, approvals, suspensions and unsuspensions, access-log statements, SponsorSets,
+            IndexerSets, MemberAdmits and config heads signed in P stand until revoked
 lift        a parked sidecar reads, writes and witnesses nothing and is a shrink like a revocation until a
             signer outside P confirms it: an AdmissionConfirm{sidecar_id} by one allowed to admit it lifts a
             park through its admission or Delegation, and its member's OwnerConfirm one through its
@@ -929,16 +919,15 @@ message ProjectionHeader {           // §6 Signed, purpose authority, by a conf
                                      // config head change shrinks (shrink, below), which the writer computes
                                      // from S(version-1) and S(version): 16-byte repo_ids of the rows, in
                                      // ascending byte order, none twice; empty for none
-  // repeated bytes restored_cosigned_ids = 12 (owner decision 556; the self_admit row) joins this fence once
-  // auth.proto declares it
 }
 message ProjectionRows {             // projrows/<network_id>/<rows_sha256>/_: a rows-only verifier's whole
                                      // state at folded_through; for the cascade a *_signer names a
                                      // sidecar_id, a recovery key's hash or a delegation_id, and a *_at is
                                      // the position n of the entry carrying the record
-  repeated MemberRow members = 1;    // member_id, role, recovery_key_sha256 (the binding in effect, windowed
-                                     // while a newer one below is void), bindings newest first {key_sha256,
-                                     // signer, at, reason}, kept for the membership's life
+  repeated MemberRow members = 1;    // member_id, role, recovery_key_sha256 (the binding in effect, the
+                                     // newest below, empty for none, as once a cascade voids it), bindings
+                                     // newest first {key_sha256, signer, at, reason}, kept for the
+                                     // membership's life
   repeated SidecarRow sidecars = 2;  // sidecar_id, admission_sha256 (ids; the genesis owner's row, which
                                      // base 1's compile writes, names SHA-256(Signed Genesis), as §10.4's
                                      // credential does; owner decision 320), admission_signers (each
@@ -988,7 +977,8 @@ message ApiTick {                    // kind TICK: api's own facts, each checked
 message MemberRow {                  // for the membership's life
   bytes member_id = 1;
   MemberRole role = 2;
-  bytes recovery_key_sha256 = 3;     // the binding in effect, windowed while a newer one below is void
+  bytes recovery_key_sha256 = 3;     // the binding in effect, the newest below; empty for none, as once a
+                                     //   cascade voids it (owner decision 592)
   repeated RecoveryBindingRow bindings = 4;  // newest first
 }
 message RecoveryBindingRow {
@@ -1073,9 +1063,9 @@ message ProposalRow {                // an AuthorityProposal open at folded_thro
   uint32 kind = 9;                   // ProposalKind, fixed at the proposal's entry
 }
 message ProposalSigner { bytes signer = 1; uint64 at = 2; }
-enum ProposalKind {                  // the self_admit row's four kinds
+enum ProposalKind {                  // the self_admit row's two kinds
   PROPOSAL_KIND_UNSPECIFIED = 0; PROPOSAL_KIND_AUTHORITY = 1; PROPOSAL_KIND_RECOVERY_SCOPED = 2;
-  PROPOSAL_KIND_RESTORED = 3; PROPOSAL_KIND_RESTORED_COSIGNED = 4;
+  reserved 3, 4;                     // the restored kinds, removed before the format froze (owner decision 592)
 }
 message ProjectionSettings {         // owner decision 205
   uint32 self_admit = 1;             // SelfAdmitMode's value
@@ -1110,8 +1100,8 @@ base       POST /network/config/projection {Signed ProjectionHeader, rows, confi
            is that base's own or at least that base's position, so no fold splits a tail, version - 1 -
            folded_through is at most 4,096 (the tail cap), its config head is that base's or a descendant
            (descent), its tail_verdicts covers exactly folded_through+1..version-1 and agrees with api's own
-           verdict at each position, a 2 only on an AuthorityProposal or AuthorityCosign, and its
-           restored_cosigned_ids with api's own list (the self_admit row), else 403 with the reason
+           verdict at each position, a 2 only on an AuthorityProposal or AuthorityCosign, else 403 with
+           the reason
            (DESIGN-DETAILS.md section 5); api PUTs projrows, then the entry; if the tip moved, 409 {tip, A_tip}
            and the writer re-signs, re-compiling only when an intervening base moved the config head or the
            fold; folded_through may stay at its old m while m >= tip - 1,024, so the writer never re-compiles
@@ -1182,9 +1172,7 @@ apply(e)   every admitted sidecar: e.n = my.n + 1 and e.prev_chain = my.A, else 
              of which api answers with 403 (DESIGN-DETAILS.md section 5); a new device and a rows-only verifier
              re-apply the tail by the bits and never re-judge it, so a tail statement whose rule reads what the
              base's head changed, or whose at lies below what the new device holds, gets the verdict the
-             long-running readers gave it; restored_cosigned_ids carries the one part of a restored binding's
-             admission's judgment the bits do not, its kind, compared and taken alike (the self_admit row;
-             owner decision 556)
+             long-running readers gave it
     ledger   (owner decision 473) a reader that opened the bridge statements folded since the previous base
              checks that the head's bridge ledger (§17.8) equals the fold of the previous head's ledger and
              those statements by the verdicts it judged them, and forks on a difference; a device that starts
@@ -1317,7 +1305,7 @@ tokens    evs and gkm honor a capability for R only while its subject holds that
           grant drops loses scope within §8.9's 5 s, not the token's 15 min
 ```
 
-**Recovery** (owner decisions 3, 62, 112, 126-128, 149; D-TEAM-21). A member M's recovery key (`RecoveryBind`) admits M's new untagged device:
+**Recovery** (owner decisions 3, 62, 112, 126-128, 592; D-TEAM-21). A member M's recovery key (`RecoveryBind`) admits M's new untagged device:
 
 ```text
 member                    admission by the recovery key               takes effect
@@ -1325,9 +1313,11 @@ outside the AdminSet,     SidecarAdmit signed by its Ed25519 key      at its pos
   self_admit on             (scoped)
 outside the AdminSet,     the same as an AuthorityProposal, plus one  at the cosign; the recovery signature is
   self_admit off            cosign by an Owner, Admin or IT admin       M's consent (§8.5)
-outside the AdminSet,     an AuthorityProposal of the SidecarAdmit,   at an ApiTick activation 72 h after its
-  binding restored by a     plus with self_admit off one such cosign;   entry, with no counted cosign and no
-  void (cascade)            a plain SidecarAdmit by the key is refused  valid veto (owner decision 149)
+any member whose binding  refused: the void leaves M no binding and   never by the code: a device of M's
+  the cascade voids         restores no earlier one                     outside P binds a fresh one
+                                                                        (RecoveryBind); meanwhile only an admin
+                                                                        admits, parked for owner-bound repos
+                                                                        (owner decision 592)
 in the AdminSet           an AuthorityProposal plus k-1 cosigns       at an ApiTick activation 72 h after the
                                                                         entry of its newest recovery-key
                                                                         signature, with no valid veto
@@ -1341,15 +1331,15 @@ admission   /network/config/projection?after=), submit a recovery-signed stateme
             code holder reads (§10.8, §2.10); the statement carries the recovery Ed25519 public key, raw in
             Signed.key_id with signer_id the member_id (§6.9's signers), whose hash api and readers match to
             MemberRow.recovery_key_sha256, compiled from RecoveryBind
-pending     an authority statement with a recovery-key signature, in its proposal or a cosign, and any admission
-            by a binding a void restored (cascade), a proposal by the table above, is pending and admits
-            nothing: members refuse an Add, Welcome or wrap to its device, and it shows as recovery_window on
-            admins' devices, which offer its veto (§5.6, §18.5); its window starts at p (time T_p), the entry
-            of its newest recovery-key signature, so each recovery cosign restarts it; o is the proposal's entry
-activation  the first ApiTick naming it with time_ms >= T_p + 72 h, once it holds k counted signatures (a
-            scoped admission only its table row's cosign, if any), makes it effective at the tick's position a,
-            unless a valid veto exists; admins thus always get 72 h to veto the last recovery signature, and a
-            proposal whose p lands under 72 h before its not_after_ms expires unactivated
+pending     an authority statement with a recovery-key signature, in its proposal or a cosign, is pending and
+            admits nothing: members refuse an Add, Welcome or wrap to its device, and it shows as
+            recovery_window on admins' devices, which offer its veto (§5.6, §18.5); its window starts at p (time
+            T_p), the entry of its newest recovery-key signature, so each recovery cosign restarts it; o is the
+            proposal's entry
+activation  the first ApiTick naming it with time_ms >= T_p + 72 h, once it holds k counted signatures, makes it
+            effective at the tick's position a, unless a valid veto exists; admins thus always get 72 h to veto
+            the last recovery signature, and a proposal whose p lands under 72 h before its not_after_ms expires
+            unactivated
 valid veto  a RecoveryVeto whose entry lies between o and a, or one a device holds (signed, or verified in
             HeadCheck) whose at.version is >= o and < a, either carrying the countersignature the presence
             row asks of its signer (owner decision 187)
@@ -1373,31 +1363,21 @@ anchor      once admitted, before any commit, wrap, sealed write or further stat
             its newest verified base names, down the ladder from an RK_g matching gen/<g>'s C_g (§10.5), and
             requires the head's records to chain to a genesis whose SHA-256 its own binding's genesis_sig there
             signs under the Ed25519 key its code derives, else it raises head_alarm (fork, with that base's
-            AuthPin) and acts no further; that RK_g is its config-group RecoveryWrap's, or as restored says;
-            genesis_sig, that key's signature over ("urnetwork-sidecar-v1/recovery-genesis" || network_id ||
-            SHA-256(Signed Genesis)), is the one input only the code produces, and only this check reads it, so
-            api, which sees it sealed, and readers judge bindings alike; M's recovery public keys, which every
-            config reader and rotator holds (§10.8), and the device's ReaderKey, which gkm serves, let a server
-            fake either wrap but no head chaining to the genesis M signed, while a C_g match alone proves
-            nothing, gkm seeing every C_g and a forged log free to admit any real rotator
-  restored  under a binding that takes no wrap (cascade), in this order:
-            1  pending, until the activation admits it, it reads the log and signs only its AuthorityProposal
-            2  admitted, it uploads its ReaderKey but no KeyPackage until 4 passes, so it reads by wraps
-               (leaves) and no Add precedes 4
-            3  it fetches the late ReaderWrap of the config group's current generation that a config writer
-               gives such a device (KF2), or the one a later rotation stages to it (§10.5's config row)
-            4  it runs the check above from that wrap's RK_g, and only then acts as after says
+            AuthPin) and acts no further; that RK_g is its config-group RecoveryWrap's; genesis_sig, that key's
+            signature over ("urnetwork-sidecar-v1/recovery-genesis" || network_id || SHA-256(Signed Genesis)),
+            is the one input only the code produces, and only this check reads it, so api, which sees it sealed,
+            and readers judge bindings alike; M's recovery public keys, which every config reader and rotator
+            holds (§10.8), and the device's ReaderKey, which gkm serves, let a server fake either wrap but no
+            head chaining to the genesis M signed, while a C_g match alone proves nothing, gkm seeing every C_g
+            and a forged log free to admit any real rotator
 after       it self-joins, revokes M's lost devices and rotates as §10.8 says, reading the config by its
-            RecoveryWrap, or restored's ReaderWraps, if ranked past the first 1,000 (leaves); under a binding
-            that takes no wrap it joins its other groups as §10.8 says; it then offers ur keychain
-            recovery-rotate (§5.9), M having no current binding until a device outside P signs one;
-            RecoveryRebind's compromise shrinks every repo M reads, so the next rotation is cause REMOVE and
-            starts a path epoch, due as §11.6's due row has every due (owner decision 585), while routine
-            and lost request a rotation; old wraps are deleted in
-            every case; no rebind or void reaches a keychain backup sealed before it, which the retired or
-            voided code still opens, so after a compromise rebind or a void M revokes for compromise, and
-            enrolls anew, each device whose backups may hold such a sealing, by §5.9's backup procedure (owner
-            decision 212)
+            RecoveryWrap if ranked past the first 1,000 (leaves); it then offers ur keychain recovery-rotate
+            (§5.9); RecoveryRebind's compromise shrinks every repo M reads, so the next rotation is cause REMOVE
+            and starts a path epoch, due as §11.6's due row has every due (owner decision 585), while routine
+            and lost request a rotation; old wraps are deleted in every case; no rebind or void reaches a
+            keychain backup sealed before it, which the retired or voided code still opens, so after a
+            compromise rebind or a void M revokes for compromise, and enrolls anew, each device whose backups
+            may hold such a sealing, by §5.9's backup procedure (owner decision 212)
 no code     lacking the member's consent, an admin re-add restores team repos only; short of k signers, the
             AdminSet freezes and the team starts a new network
 ```
@@ -1512,7 +1492,7 @@ All three rename routes (server/controller/account_controller.go:13,160-256) cal
 | Cap member devices at 1,000, or grow the config tree | no member wraps | the cap refuses Teams past ~330 members; 5,000 leaves make a 7.9-14 MB tree | rejected (owner decision 144) |
 | A recovery key alone signs authority statements | a lone Owner recovers | bypasses k of n | rejected (owner decision 127) |
 | Recovery keys sign only AuthorityProposals | one recovery signature per statement | admins who all lost their devices cannot reach k | rejected: a recovery cosign restarts the window (7.9) |
-| ApiTick activates a restored binding's scoped admission by statement id | no proposal | a second activation list; vetoes keyed on statements too | not chosen: an AuthorityProposal reuses both (owner decision 149) |
+| A void restores the member's newest earlier binding, whose scoped admissions activate through the 72 h window (owner decision 149) | a member whose code a thief re-bound from a device with no live presence key still self-admits with the old code | two proposal kinds every base carries, restored branches in the verifier and its tests | removed before the format froze (owner decision 592): a void leaves no binding, and a fresh code or an admin's admission follows |
 | End a Delegation's admissions at every drop of its key | a copied bundle stops at any agent's revocation or Suspend | one CI agent's removal or Suspend stops the pipeline's enrollments until an admin re-issues its secret | rejected: its `DelegationRevoke` or a compromise revocation of one of its agents ends it (7.9's delegation row) |
 
 ### 7.14 Decisions proposed
@@ -1557,7 +1537,7 @@ All three rename routes (server/controller/account_controller.go:13,160-256) cal
 
 **D-TEAM-20 (proposed).** Every log statement carries a StatementHeader (network, the signer's AuthPin, nonce, not_after ≤ 7 d), refused when off-chain, more than 4,096 positions old or before the retention point, expired or repeated, a statement's id being the hash of its signed bytes (purpose, type and body), never of its wrapper; type rules close the rest (7.9). *Why:* typed signed statements still need replay rules, which every reader present must judge alike and every later one takes from the next base, and an id over the wrapper would let a server replay a statement under a new one.
 
-**D-TEAM-21 (proposed).** k-of-n and recovery-signed statements are an AuthorityProposal plus AuthorityCosigns, counted per distinct member; an authority statement with a recovery-key signature, in its proposal or a cosign, or a scoped admission by a binding a cascade restored, stays pending, delivering no key to the proposed device, until an api tick 72 h after its newest such signature's entry with no valid RecoveryVeto, and a veto kept off the log forks only devices that held it before the activation; open proposals ride ProjectionRows across folds, so a cosign, veto or activation after a base finds them at every verifier alike (7.9; owner decision 314). *Why:* owner decisions 110, 127 and 149 need a wire form, a clock and an activation path, a late recovery cosign must not skip the window, and a veto's `at` is its signer's claim.
+**D-TEAM-21 (proposed).** k-of-n and recovery-signed statements are an AuthorityProposal plus AuthorityCosigns, counted per distinct member; an authority statement with a recovery-key signature, in its proposal or a cosign, stays pending, delivering no key to the proposed device, until an api tick 72 h after its newest such signature's entry with no valid RecoveryVeto, and a veto kept off the log forks only devices that held it before the activation; open proposals ride ProjectionRows across folds, so a cosign, veto or activation after a base finds them at every verifier alike (7.9; owner decision 314). *Why:* owner decisions 110 and 127 need a wire form, a clock and an activation path, a late recovery cosign must not skip the window, and a veto's `at` is its signer's claim.
 
 **D-TEAM-22 (proposed).** A pre-approved auth key carries its Delegation's seeds only in a client-only `#<bundle>` split off before any request; enrollment has no field for it and api refuses an `auth_key` containing `#` (7.8). *Why:* the server must never receive admission authority or read keys.
 
@@ -1645,7 +1625,7 @@ All three rename routes (server/controller/account_controller.go:13,160-256) cal
   altered  account_api_key, auth_code (api_key_id); network_team.scim_token_sha256 (nullable, MG6; 7.6)
   ```
 - **Services and config:** `api` (log sequencer and verifier, gate cache, `rev/` writer, the only writer of `{acl_<networkId>}e` and of the append limiter's `{acl_<networkId>}q`, Redis `{dpop_<client_id>}` jtis for 120 s, IdP sign-in flows under `{sso_<state>}` (7.6), device authorizations under `{oauthdev_<device_code_sha256>}` and `{oauthuser_<user_code>}` (7.8) and, during a site-loss restore, re-seed uploads under `{acl_<networkId>}r` (7.9)); `server/oauth` (grants, key sets, edge login); `taskworker` (rechecks, expiries, the reaper, `rev/` deletion, webhooks, and the run-once `config_log_activation` target, 7.9's tick row); `pro.yml` via `Pro()`; `config/<env>/sidecar.yml`'s `preview_networks` (7.4) and `reseed` (7.8, 7.9); vault (IdP secrets, OAuth keys); sidecar repo (`protocol/config.proto`; `protocol/bridge/auth.proto` for the log and what `sidecar/device`'s posture verifies; verifier; `git-credential-ur`).
-- **Assumptions about other sections:** §10 follows 7.9's leaves, wraps, `commit` (a reap's admission signer included) and coverage, in the team directory's group as in the config group, §10.5's key holders and rotation wraps treating that group's wrapped member devices as the config group's (D-KEYS-23), makes a generation covering an authorization expiry cause REMOVE, lets no read_only device claim `gen/`, sign a wrap or write GroupInfo while taking its own ReaderKeys, KeyPackages, path-only commits, resyncs and acks under r (§10.6's scopes), parks owner-bound Adds lacking §8.5's consent, removes a restored config leaf that lost entitlement, reads recovery bindings from the config and wraps to none that a void restored until re-signed, giving a device such a binding admitted, once activated, KF2's late ReaderWrap of the config group's current generation and a staged one at each later rotation while the tree lacks it, from which it anchors (7.9's `restored`) before it self-joins the config group, KF2 adding it to its other groups; §11.6 dates path epochs for those expiries; §4.4 and §6.11 place `auth.proto`'s messages (`ApiTick`, `ProjectionRows` with its rows, and `Suspend`, `Unsuspend` and `GrantRevoke`, which §8.8 declares there) in `protocol/bridge`, beside §6.9's `Signed`, whose `webauthn` field carries 7.9's presence countersignature, which §16.6's countersign row checks, §5.6 and §18.5 produce, and §17's forwarding role checks at its next compile (owner decisions 185, 187, 197); §17.8 derives a decision-carrying rule's id from its effect_key; §5.4 and §18.5 alarm on admissions under a member its own keys did not sign, on each RecoveryRebind of it the device did not itself sign (`recovery_rebind`, offering to revoke the signer for compromise) and on a veto first verified after its activation, and §18.5's deny signs `RecoveryVeto`; §5.6, §5.9, §10.8 and §2.8 EX5 cite 7.9's recovery `anchor`, its `restored` order (a ReaderWrap, not an Add, under a binding a void restored) and §5.4's `head_alarm` (fork) on failure, §5.6 the cascade's `since_n`, §5.6's `recovery_window` and §18.5's veto cover a restored binding's admission proposal, and §5.9 re-seals `keychain.wrap` whenever the cascade changes the member's current binding, with no HPKE copy while none is current, and applies 7.9's backup rule to each device that sealed to a voided binding; §18.7, §18.15 and D-SDK-11 schedule the extension release that stops persisting `by_jwt` before stage 2, which §23.7 and D-PHASE-3 list inside M3's gate; §18.8 reaps by 7.7's 35 min threshold and lease row, and §6.18 and §18.17 phase the close capability and `POST /sidecar/close` with that row (MG1, M1); §18.4 states 7.9's device retention; D-TRUST-10 and §2.8 take `witness_bound_hours`, and §2.8's rows add `strict_exp`, the log and `{dpop_}`, api-4 each ephemeral client's lease (`seen_time`, at most once per 300 s) and its close capability's SHA-256, and api-7 `live_since`, `parked_at`, the signers and positions the cascade reads (AdmissionConfirms' included), recovery bindings as ids with the rest sealed, `{acl_}q` and 7.9's retention point as its ttl, while §8.8's AclRows keep each EvsShare's signer and position; §11.13 prices `proj/` and `rev/` writes as never-shed P0 within 7.9's append limits, which §20.4 carries in pro.yml; §11 and §19 keep `proj/`, `projrows/` and `rev/` on the first metadata cluster (owner decision 145); §8.9, §2.8 api-7 and §19.7 cite 7.9's `{acl_}e`; §19.10 resumes the log as 7.9's site loss says, I-16 names that beside EvsReseed; §22 tests 7.9's rows: FS-14 its bases, retention and append bounds, FS-16 the recovery window, FS-17 a phone holder, FS-19 an ephemeral client's refused join from a member invite, FS-41 the site loss's resumption, FS-62 a lost `{acl_}e`, §22.7's admission suite its counted, scoped, consent, recovery and cascade rows, and its approval suite a cancel under §7.4's allowlist (owner decision 551); §20.4 allows Team 5,000 `config_admissions`, with no member-device cap; §2.8's api-7 shows each `IndexerSet`'s signer, subject, scope and `retire`, its services sealed, and §15.5 keeps an undesignated `tag:mail` device off the mail listener under `team_mail: indexers`; §8.8 and §11.12 refuse a second `directory` RepoCreate in a network, api also one outside the `team` tier (7.5), and §16.11 takes `ServiceSettings.directory` as the team's defaults and 7.10's `cards` row; §11.14 and §18.4 apply the Indexers paragraph's remote-search scope, and §8.8 and §11.7 seal an owner-bound repo's RepoVersioning rules to its own generation, which every reader of that repo holds; §10.5 takes a Delegation's reach from 7.9's scoped tag rule, drops its key at a Suspend of one of its agents and at its end (the delegation row), and counts an ephemeral covered agent's own not_after as no drop; §2.6, §2.10 and §2.18 disclose the split between the shared key and the admission authority; §22.7's suites, FS-18 and FS-102 test 7.9's delegation row and 7.10's agents row.
+- **Assumptions about other sections:** §10 follows 7.9's leaves, wraps, `commit` (a reap's admission signer included) and coverage, in the team directory's group as in the config group, §10.5's key holders and rotation wraps treating that group's wrapped member devices as the config group's (D-KEYS-23), makes a generation covering an authorization expiry cause REMOVE, lets no read_only device claim `gen/`, sign a wrap or write GroupInfo while taking its own ReaderKeys, KeyPackages, path-only commits, resyncs and acks under r (§10.6's scopes), parks owner-bound Adds lacking §8.5's consent, removes a restored config leaf that lost entitlement, reads recovery bindings from the config and wraps to the binding in effect alone, none once a void leaves a member without one (owner decision 592); §11.6 dates path epochs for those expiries; §4.4 and §6.11 place `auth.proto`'s messages (`ApiTick`, `ProjectionRows` with its rows, and `Suspend`, `Unsuspend` and `GrantRevoke`, which §8.8 declares there) in `protocol/bridge`, beside §6.9's `Signed`, whose `webauthn` field carries 7.9's presence countersignature, which §16.6's countersign row checks, §5.6 and §18.5 produce, and §17's forwarding role checks at its next compile (owner decisions 185, 187, 197); §17.8 derives a decision-carrying rule's id from its effect_key; §5.4 and §18.5 alarm on admissions under a member its own keys did not sign, on each RecoveryRebind of it the device did not itself sign (`recovery_rebind`, offering to revoke the signer for compromise) and on a veto first verified after its activation, and §18.5's deny signs `RecoveryVeto`; §5.6, §5.9, §10.8 and §2.8 EX5 cite 7.9's recovery `anchor` on the config RecoveryWrap and §5.4's `head_alarm` (fork) on failure, §5.6 the cascade's `since_n`, §5.6's `recovery_window` and §18.5's veto cover recovery-signed authority statements, and §5.9 re-seals `keychain.wrap` whenever the cascade changes the member's current binding, with no HPKE copy while none is current, and applies 7.9's backup rule to each device that sealed to a voided binding; §18.7, §18.15 and D-SDK-11 schedule the extension release that stops persisting `by_jwt` before stage 2, which §23.7 and D-PHASE-3 list inside M3's gate; §18.8 reaps by 7.7's 35 min threshold and lease row, and §6.18 and §18.17 phase the close capability and `POST /sidecar/close` with that row (MG1, M1); §18.4 states 7.9's device retention; D-TRUST-10 and §2.8 take `witness_bound_hours`, and §2.8's rows add `strict_exp`, the log and `{dpop_}`, api-4 each ephemeral client's lease (`seen_time`, at most once per 300 s) and its close capability's SHA-256, and api-7 `live_since`, `parked_at`, the signers and positions the cascade reads (AdmissionConfirms' included), recovery bindings as ids with the rest sealed, `{acl_}q` and 7.9's retention point as its ttl, while §8.8's AclRows keep each EvsShare's signer and position; §11.13 prices `proj/` and `rev/` writes as never-shed P0 within 7.9's append limits, which §20.4 carries in pro.yml; §11 and §19 keep `proj/`, `projrows/` and `rev/` on the first metadata cluster (owner decision 145); §8.9, §2.8 api-7 and §19.7 cite 7.9's `{acl_}e`; §19.10 resumes the log as 7.9's site loss says, I-16 names that beside EvsReseed; §22 tests 7.9's rows: FS-14 its bases, retention and append bounds, FS-16 the recovery window, FS-17 a phone holder, FS-19 an ephemeral client's refused join from a member invite, FS-41 the site loss's resumption, FS-62 a lost `{acl_}e`, §22.7's admission suite its counted, scoped, consent, recovery and cascade rows, and its approval suite a cancel under §7.4's allowlist (owner decision 551); §20.4 allows Team 5,000 `config_admissions`, with no member-device cap; §2.8's api-7 shows each `IndexerSet`'s signer, subject, scope and `retire`, its services sealed, and §15.5 keeps an undesignated `tag:mail` device off the mail listener under `team_mail: indexers`; §8.8 and §11.12 refuse a second `directory` RepoCreate in a network, api also one outside the `team` tier (7.5), and §16.11 takes `ServiceSettings.directory` as the team's defaults and 7.10's `cards` row; §11.14 and §18.4 apply the Indexers paragraph's remote-search scope, and §8.8 and §11.7 seal an owner-bound repo's RepoVersioning rules to its own generation, which every reader of that repo holds; §10.5 takes a Delegation's reach from 7.9's scoped tag rule, drops its key at a Suspend of one of its agents and at its end (the delegation row), and counts an ephemeral covered agent's own not_after as no drop; §2.6, §2.10 and §2.18 disclose the split between the shared key and the admission authority; §22.7's suites, FS-18 and FS-102 test 7.9's delegation row and 7.10's agents row.
 
 ### 7.18 Risks
 

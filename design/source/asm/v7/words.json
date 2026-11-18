@@ -38,11 +38,11 @@
  {
   "num": 5,
   "code": "CORE",
-  "words": 11151,
-  "code_words": 8472,
+  "words": 11134,
+  "code_words": 8434,
   "ceiling": 3500,
-  "over": 7651,
-  "over_pct": 218.6
+  "over": 7634,
+  "over_pct": 218.1
  },
  {
   "num": 6,
@@ -56,11 +56,11 @@
  {
   "num": 7,
   "code": "TEAM",
-  "words": 12236,
-  "code_words": 15217,
+  "words": 12220,
+  "code_words": 14871,
   "ceiling": 3500,
-  "over": 8736,
-  "over_pct": 249.6
+  "over": 8720,
+  "over_pct": 249.1
  },
  {
   "num": 8,
@@ -83,11 +83,11 @@
  {
   "num": 10,
   "code": "KEYS",
-  "words": 11275,
-  "code_words": 9549,
+  "words": 11188,
+  "code_words": 9538,
   "ceiling": 4500,
-  "over": 6775,
-  "over_pct": 150.6
+  "over": 6688,
+  "over_pct": 148.6
  },
  {
   "num": 11,
@@ -156,7 +156,7 @@
   "num": 18,
   "code": "SDK",
   "words": 10608,
-  "code_words": 11498,
+  "code_words": 11488,
   "ceiling": 3000,
   "over": 7608,
   "over_pct": 253.6
@@ -192,7 +192,7 @@
   "num": 22,
   "code": "TEST",
   "words": 7816,
-  "code_words": 41114,
+  "code_words": 40997,
   "ceiling": 2500,
   "over": 5316,
   "over_pct": 212.6

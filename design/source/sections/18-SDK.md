@@ -282,8 +282,7 @@ func (self *SidecarSocketListener) Accept(timeoutMillis int64) (*Socket, error) 
 func (self *SidecarApprovals) GetPending() *SidecarApprovalList // §16.8 requests; admissions this device may sign (§5.6);
                                                                  // admission alarms, parked devices included; recovery_rebind
                                                                  // alarms; on AdminSet devices, recovery windows: §7.9's
-                                                                 // recovery-signed authority statements and admissions by a
-                                                                 // binding its cascade restored (owner decisions 127, 149);
+                                                                 // recovery-signed authority statements (owner decision 127);
                                                                  // recovery_unseen, where this device may revoke the
                                                                  // recovered device; access_request: §16.11's requests
                                                                  // this member approves (owner decisions 179, 180); on
