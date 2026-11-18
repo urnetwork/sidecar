@@ -470,6 +470,10 @@ type searchTestRef struct {
 	states          []*searchTestState
 	removed         map[string]uint64
 	contentVersions map[string][]*searchTestContentVersion
+	// The store's faults (search_index_testhooks.go): the pushes refused at the storage limit, nil for none, and whether
+	// the next commit loses its answer.
+	refuse    func(shape SearchTestPushShape) bool
+	loseReply bool
 }
 
 // One ref version: its head, the push's signer, and every path's readable version; and the content paths the push
@@ -590,6 +594,9 @@ func (self *searchTestRef) commitWithLock(signer Id, push *indexPush, content []
 	if (0 < len(push.files) || 0 < len(push.removals) || push.kind == indexPushCut) && push.indexEpoch != head.head.indexEpoch {
 		return nil, &indexRefusal{kind: indexRefusalIndexEpoch}
 	}
+	if self.refuse != nil && self.refuse(SearchTestPushShape{FileCount: len(push.files), RemovalCount: len(push.removals), Content: 0 < len(content)}) {
+		return nil, &indexRefusal{kind: indexRefusalQuota}
+	}
 	conflicts := []string{}
 	for _, file := range push.files {
 		current := head.files[file.path]
@@ -639,6 +646,10 @@ func (self *searchTestRef) commitWithLock(signer Id, push *indexPush, content []
 	self.applyContentWithLock(next, content)
 	next.inRef = 0 < len(content) && (0 < len(push.files) || 0 < len(push.removals))
 	self.states = append(self.states, next)
+	if self.loseReply {
+		self.loseReply = false
+		return nil, ErrSearchTestReplyLost
+	}
 	return committed, nil
 }
 
