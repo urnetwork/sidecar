@@ -7,7 +7,8 @@
 //     the daemon's actor, so §22.8's unknown rule loses each one's response in turn (FaultStore);
 //   - the network's verified state P as the gate reads it (ApprovalWorldState): a member M with the requesting laptop
 //     L and an approval-capable phone, another member's device, and one requests rule whose approvers are k of the
-//     eligible members on channel device, P moved by MovePin (FS-29);
+//     members it names on channel device, with §8.6's admin clause where a test sets one (SetAdminClause), whose
+//     admins' decisions meet it and count toward k only where the rule names them too, P moved by MovePin (FS-29);
 //   - the approval family's log (ApprovalWorldLog): each request the router files, and each decision and cancel a test
 //     has the phone, or another device, sign with its real key and deliver;
 //   - one EffectSink for each kind the gate spends, each its kind's Lookup;
@@ -205,17 +206,20 @@ func NewApprovalWorldDevice(label string, memberId sidecar.Id) *ApprovalWorldDev
 }
 
 // The verified state P the gate reads: a pin, each version's chain the spender retains, the devices P admits, the
-// members the rule finds eligible and how many of them a decision set needs. It is its own rule. Read-only once the
-// gate reads it: MovePin installs another.
+// members the rule names and how many of them a decision set needs, and the admins whose decision meets the rule's
+// admin clause where it has one. It is its own rule. Read-only once the gate reads it: MovePin installs another.
 type ApprovalWorldState struct {
 	pin *bridge.AuthPin
 	// each version's chain the spender retains
 	versionChains map[uint64][]byte
 	devices       []*ApprovalWorldDevice
 	// approval-capable devices, by sidecar
-	capable  map[sidecar.Id]bool
-	eligible []sidecar.Id
-	k        int
+	capable map[sidecar.Id]bool
+	// the members the rule names, who alone count toward k
+	namedMemberIds []sidecar.Id
+	k              int
+	// the Owners and Admins whose decision meets §8.6's admin clause, named or not; none where the rule asks no clause
+	clauseAdminIds []sidecar.Id
 	// the governing evidence list, nil for device alone, and whether a requests rule of its own names harness
 	evidence         []protocol.ApprovalChannel
 	ruleNamesHarness bool
@@ -276,13 +280,18 @@ func (self *ApprovalWorldState) Govern(action *sidecar.StoredCanonicalAction, sp
 	return self, nil
 }
 
+// The members the rule names, and the clause's admins only where the clause applies and none of those is one of them,
+// sorted, as ConfigApprovalStates lists them (owner decision 471).
 func (self *ApprovalWorldState) Approvers(action *sidecar.StoredCanonicalAction, requester sidecar.Id, now time.Time) ([]sidecar.Id, error) {
-	if len(self.eligible) == 0 {
-		return nil, errors.New("no member approves")
+	if len(self.namedMemberIds) == 0 {
+		return nil, errors.New("no member the rule names approves")
 	}
-	approvers := slices.Clone(self.eligible)
+	approvers := slices.Clone(self.namedMemberIds)
+	if !self.AdminClauseMet(self.namedMemberIds) {
+		approvers = append(approvers, self.clauseAdminIds...)
+	}
 	slices.SortFunc(approvers, func(a sidecar.Id, b sidecar.Id) int { return bytes.Compare(a[:], b[:]) })
-	return approvers, nil
+	return slices.Compact(approvers), nil
 }
 
 func (self *ApprovalWorldState) RuleNamesHarness(action *sidecar.StoredCanonicalAction) bool {
@@ -300,12 +309,17 @@ func (self *ApprovalWorldState) ApproverCount() int {
 	return max(self.k, 1)
 }
 
-func (self *ApprovalWorldState) Eligible(memberId sidecar.Id) bool {
-	return slices.Contains(self.eligible, memberId)
+func (self *ApprovalWorldState) Names(memberId sidecar.Id) bool {
+	return slices.Contains(self.namedMemberIds, memberId)
 }
 
+func (self *ApprovalWorldState) ClauseAdmin(memberId sidecar.Id) bool {
+	return slices.Contains(self.clauseAdminIds, memberId)
+}
+
+// One of the clause's admins among them, or no clause.
 func (self *ApprovalWorldState) AdminClauseMet(memberIds []sidecar.Id) bool {
-	return true
+	return len(self.clauseAdminIds) == 0 || slices.ContainsFunc(memberIds, self.ClauseAdmin)
 }
 
 // The approval family's log as the world keeps it: requests the router filed, by approval, in order; decisions and
@@ -510,12 +524,12 @@ func NewApprovalWorldWith(net *Net, name string, options *ApprovalWorldOptions) 
 	}
 	chain := sha256.Sum256([]byte("approval world chain " + name))
 	world.state = &ApprovalWorldState{
-		pin:           &bridge.AuthPin{Version: 4, Chain: chain[:]},
-		versionChains: map[uint64][]byte{4: chain[:]},
-		devices:       []*ApprovalWorldDevice{world.Laptop, world.Phone, world.Other, world.Stranger},
-		capable:       map[sidecar.Id]bool{world.Phone.SidecarId: true, world.Laptop.SidecarId: true, world.Other.SidecarId: true},
-		eligible:      []sidecar.Id{member},
-		k:             1,
+		pin:            &bridge.AuthPin{Version: 4, Chain: chain[:]},
+		versionChains:  map[uint64][]byte{4: chain[:]},
+		devices:        []*ApprovalWorldDevice{world.Laptop, world.Phone, world.Other, world.Stranger},
+		capable:        map[sidecar.Id]bool{world.Phone.SidecarId: true, world.Laptop.SidecarId: true, world.Other.SidecarId: true},
+		namedMemberIds: []sidecar.Id{member},
+		k:              1,
 	}
 	// the run, untainted, written before the daemon starts and around the fault queue: the world's setup, not a write of
 	// the daemon's the unknown rule loses
@@ -663,8 +677,8 @@ func (self *ApprovalWorld) LogId() sidecar.Id {
 }
 
 // Moves P to P' at the next version, its chain new and the last one's kept, as the authorization log's next position
-// does: with dropApprover the member is no longer eligible and its phone no longer approval-capable (FS-29), else
-// nothing else changes.
+// does: with dropApprover the member is no longer eligible, named or for the clause, and its phone no longer
+// approval-capable (FS-29), else nothing else changes.
 func (self *ApprovalWorld) MovePin(dropApprover bool) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
@@ -672,12 +686,13 @@ func (self *ApprovalWorld) MovePin(dropApprover bool) {
 	version := old.pin.GetVersion() + 1
 	chain := sha256.Sum256(append([]byte(fmt.Sprintf("approval world chain %s at %d ", self.name, version)), old.pin.GetChain()...))
 	moved := &ApprovalWorldState{
-		pin:           &bridge.AuthPin{Version: version, Chain: chain[:]},
-		versionChains: map[uint64][]byte{version: chain[:]},
-		devices:       old.devices,
-		capable:       map[sidecar.Id]bool{},
-		eligible:      slices.Clone(old.eligible),
-		k:             old.k,
+		pin:            &bridge.AuthPin{Version: version, Chain: chain[:]},
+		versionChains:  map[uint64][]byte{version: chain[:]},
+		devices:        old.devices,
+		capable:        map[sidecar.Id]bool{},
+		namedMemberIds: slices.Clone(old.namedMemberIds),
+		k:              old.k,
+		clauseAdminIds: slices.Clone(old.clauseAdminIds),
 
 		evidence:         old.evidence,
 		ruleNamesHarness: old.ruleNamesHarness,
@@ -690,19 +705,32 @@ func (self *ApprovalWorld) MovePin(dropApprover bool) {
 		moved.capable[sidecarId] = capable
 	}
 	if dropApprover {
-		moved.eligible = slices.DeleteFunc(moved.eligible, func(memberId sidecar.Id) bool { return memberId == self.Member })
+		isMember := func(memberId sidecar.Id) bool { return memberId == self.Member }
+		moved.namedMemberIds = slices.DeleteFunc(moved.namedMemberIds, isMember)
+		moved.clauseAdminIds = slices.DeleteFunc(moved.clauseAdminIds, isMember)
 		delete(moved.capable, self.Phone.SidecarId)
 	}
 	self.state = moved
 }
 
-// Sets the rule's approvers to members, k of them needed (§16.6's k approvers row).
+// Sets the rule's approvers to the members it names, k of them needed (§16.6's k approvers row).
 func (self *ApprovalWorld) SetApprovers(k int, members ...sidecar.Id) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	updated := *self.state
-	updated.eligible = slices.Clone(members)
+	updated.namedMemberIds = slices.Clone(members)
 	updated.k = k
+	self.state = &updated
+}
+
+// Gives the rule §8.6's admin clause, which a decision of one of admins, Owners or Admins of the network, meets
+// whether or not the rule names it, and which counts toward k only where the rule names it too (owner decision 471);
+// no admins takes the clause away.
+func (self *ApprovalWorld) SetAdminClause(admins ...sidecar.Id) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	updated := *self.state
+	updated.clauseAdminIds = slices.Clone(admins)
 	self.state = &updated
 }
 

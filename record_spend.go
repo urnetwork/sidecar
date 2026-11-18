@@ -26,14 +26,20 @@
 //	expired    now <= d.not_after_millis plus the settings' skew, skipped for a use already reserved (spend step 1)
 //	pin        d.auth_pin is 40 bytes' worth, its version <= P's, and its digest equals A_k wherever P retains k
 //	rule       a rule governs a: a grant's requests rule still takes it at P, its subject s (SpendState.Govern)
-//	approver   the approver is still eligible under P
+//	approver   the approver is still eligible under P: one the rule names (SpendRule.Names), or an Owner or Admin
+//	           whose decision meets §8.6's admin clause where that applies (SpendRule.ClauseAdmin), as the
+//	           authorization log takes each decision it judges (acl_grant.go's grantQuorum)
 //	evidence   d.channel is in the governing evidence list: the requests rule's, else the document's evidenceDefault,
 //	           both from P's rows (QD-727)
 //
 // SpendableSet adds §16.6's k approvers: decisions of one approval and one request_sha256 from distinct eligible
-// approvers, at least the rule's k and meeting §8.6's admin clause, the budget the smallest uses and the expiry the
-// earliest not_after. A gate adds the field comparison (SpendableAtGate): a carries only fields its kind's server column
-// lets a server path see (QD-064), and those equal the gate's own request.
+// approvers, at least the rule's k of them ones the rule names, and meeting §8.6's admin clause, the budget the
+// smallest uses and the expiry the earliest not_after. An Owner's or Admin's decision the rule does not name meets
+// only the clause and is never one of the k, as the log's quorum counts it (owner decisions 349 and 471), so a set
+// holding only such a decision spends nowhere: under the directory's rule, autogroup:dst-owner at k = 1, an Admin's
+// lone decision on reach to another member's device spends at no gate, as its GrantActivate takes effect at no reader.
+// A gate adds the field comparison (SpendableAtGate): a carries only fields its kind's server column lets a server path
+// see (QD-064), and those equal the gate's own request.
 //
 // A presence decision's signCount is never compared here, as a gate's and a reader's never are: a decision is spent
 // many times over (its uses, its retries, each reader's check), so the spending daemon compares the count once, when
@@ -87,13 +93,13 @@ const (
 	SpendRefusalPin SpendRefusalCode = "pin"
 	// No rule governs the action at P that should: the rule is gone or no longer takes it.
 	SpendRefusalRule SpendRefusalCode = "rule"
-	// The approver is not eligible under P.
+	// The approver is not eligible under P: the rule does not name it, and its decision meets no admin clause.
 	SpendRefusalApprover SpendRefusalCode = "approver"
 	// The channel is not in the governing evidence list.
 	SpendRefusalEvidence SpendRefusalCode = "evidence"
 	// Decisions of more than one approval or request, or one approver twice.
 	SpendRefusalSet SpendRefusalCode = "set"
-	// Fewer distinct eligible approvers than the rule's k, or §8.6's admin clause unmet.
+	// Fewer distinct approvers the rule names than its k, or §8.6's admin clause unmet.
 	SpendRefusalQuorum SpendRefusalCode = "quorum"
 	// The action carries a field no server path may see, or its fields differ from the gate's request.
 	SpendRefusalGateField SpendRefusalCode = "gate_field"
@@ -201,13 +207,15 @@ type SpendBudget struct {
 	Uses uint32
 	// The earliest not_after_millis.
 	NotAfterMillis int64
-	// The distinct approvers, sorted.
+	// The distinct approvers, sorted: those the rule names, and any Owner or Admin whose decision only meets §8.6's
+	// admin clause.
 	ApproverMemberIds []Id
 }
 
 // §16.6's k approvers: every decision spendable, all of one approval_id and request_sha256, each approver once, at
-// least the governing rule's k of them and §8.6's admin clause met. The budget is the smallest uses and the expiry the
-// earliest not_after. nil and a *SpendRefusal when the set does not spend.
+// least the governing rule's k of them ones it names, an Owner's or Admin's decision it does not name counting for the
+// admin clause alone (owner decision 471), and §8.6's admin clause met. The budget is the smallest uses and the expiry
+// the earliest not_after, every decision's in the set. nil and a *SpendRefusal when the set does not spend.
 func SpendableSet(decisions []*StoredApprovalDecision, input *SpendInput, state SpendState, settings *SpendSettings) (*SpendBudget, error) {
 	return spendableSet(decisions, input, state, settings.decisionSkew())
 }
@@ -260,8 +268,16 @@ func spendableSet(decisions []*StoredApprovalDecision, input *SpendInput, state 
 			return nil, refusal
 		}
 	}
-	if len(budget.ApproverMemberIds) < rule.ApproverCount() {
-		return nil, spendRefuse(SpendRefusalQuorum, fmt.Errorf("%d of %d approvers", len(budget.ApproverMemberIds), rule.ApproverCount()))
+	// only the approvers the rule names count toward k, as the log's quorum counts them (acl_grant.go): an Owner or
+	// Admin it does not name is in the set for the admin clause alone
+	namedCount := 0
+	for _, approver := range budget.ApproverMemberIds {
+		if rule.Names(approver) {
+			namedCount += 1
+		}
+	}
+	if namedCount < rule.ApproverCount() {
+		return nil, spendRefuse(SpendRefusalQuorum, fmt.Errorf("%d of %d approvers the rule names", namedCount, rule.ApproverCount()))
 	}
 	if !rule.AdminClauseMet(budget.ApproverMemberIds) {
 		return nil, spendRefuse(SpendRefusalQuorum, errors.New("a grant touching others needs an admin's approval"))
@@ -375,10 +391,14 @@ func spendDecision(decision *StoredApprovalDecision, input *SpendInput, state Sp
 	return nil
 }
 
-// spendable's "under P": the approver still eligible and the channel in the governing evidence list.
+// spendable's "under P": the approver still eligible, one the rule names or an Owner or Admin whose decision meets
+// §8.6's admin clause where that applies, and the channel in the governing evidence list. So one decision judged alone,
+// as the log judges each a GrantActivate embeds, spends for the clause where the rule does not name its approver; only
+// a set's count asks whether it is one of the k.
 func spendUnderRule(decision *StoredApprovalDecision, rule SpendRule) *SpendRefusal {
 	body := decision.Decision
-	if !rule.Eligible(recordIdOf(body.GetApproverMemberId())) {
+	approver := recordIdOf(body.GetApproverMemberId())
+	if !rule.Names(approver) && !rule.ClauseAdmin(approver) {
 		return spendRefuse(SpendRefusalApprover, nil)
 	}
 	if !slices.Contains(rule.Evidence(), protocol.ApprovalChannel(body.GetChannel())) {

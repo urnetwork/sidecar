@@ -125,3 +125,32 @@ Q['Q-EVS-3'] = (Q['Q-EVS-3'][0], "Separate repos at launch; sidecar-enforced pre
 # The dr4-late-sweep fold (2026-11-18): sockets' routes take service tokens (owner decision 588).
 assert D['D-SOCK-10'].startswith('Host the engine as server/cli/sockets with Client-class routes'), 'D-SOCK-10 row moved'
 D['D-SOCK-10'] = "Host the engine as server/cli/sockets, its routes under service tokens of audience sockets, keeping registration load off api."
+# The dr4-late-sweep fold (2026-11-18): presence keys with no attestation (owner decision 608).
+assert D['D-MCP-19'] == "Presence evidence follows 16.6's profiles: WebAuthn with UP and UV per use; Secure Enclave keys labeled asserted.", 'D-MCP-19 row moved'
+D['D-MCP-19'] = "Presence evidence follows 16.6's profiles: WebAuthn with UP and UV per use, and Secure Enclave keys; one label, presence."
+# The dr4-late-sweep fold (2026-11-18): MLS Later, every group key by wraps in v0 (owner decision 610).
+for _k, _start, _new in [
+        ('D-KEYS-1', 'MLS distributes key-encryption keys', "v0 distributes every group key by KeyDelivery wraps; in-house MLS is Later, its code dark (owner decisions 43, 610)."),
+        ('D-KEYS-2', 'One MLS group per repo', "Every reader holds per-generation wraps in v0; MLS, Later, gives member devices leaves up to 1,000 (owner decision 610)."),
+        ('D-KEYS-3', 'Member commits are PrivateMessage', "With MLS, Later: PrivateMessage member commits add only generation and auth pin in clear; v0 has no commits."),
+        ('D-KEYS-12', 'MLS is 10.4', "With MLS, Later: 10.4's subset on ciphersuite 0x0010, migrating through GroupForm if IANA assigns another value."),
+        ('D-KEYS-14', "Groups scale by 10.6", "With MLS, Later: 10.6's sizes, KF5 resync, GroupInfo above 16 leaves, daily acks, streamed trees; v0 delivers per holder."),
+        ('D-KEYS-18', 'At most 16 leaves', "With MLS, Later: at most 16 leaves the epoch carries sealed GroupInfo; KF1 writes owner marker and wraps first."),
+        ('D-KEYS-23', "The team directory's group", "The directory's readers hold wraps in v0; with MLS, Later, its group follows the config group's leaves rule."),
+]:
+    assert D[_k].startswith(_start), (_k, 'row moved')
+    D[_k] = _new
+assert Q['Q-KEYS-9'][1].startswith('MLS in v0'), 'Q-KEYS-9 row moved'
+Q['Q-KEYS-9'] = (Q['Q-KEYS-9'][0], "Wraps alone in v0, MLS Later (owner decision 610, amending owner decision 1).")
+# The dr4-late-sweep fold (2026-11-18): C19's windows withdrawn (owner decision 609).
+assert D['D-PROTO-22'].startswith("A marked pair's reports are withheld"), 'D-PROTO-22 row moved'
+D['D-PROTO-22'] = "Superseded by owner decision 609: the remote-search pair's contracts are accounted like any peer's."
+WITHDRAWN_D = dict(WITHDRAWN_D)
+WITHDRAWN_D['D-PROTO-22'] = 'owner decision 609'
+assert D['D-SDK-27'].startswith('At foreground, apps Hello'), 'D-SDK-27 row moved'
+D['D-SDK-27'] = "Apps Hello an own indexer when a search needs it, keeping no warm pair; failover waits 3 s."
+assert Q['Q-PROTO-4'][1].startswith('(b), owner decisions 176, 188, 191'), 'Q-PROTO-4 row moved'
+Q['Q-PROTO-4'] = (Q['Q-PROTO-4'][0], "(b), then owner decision 609: the pair is accounted like any peer's, with no windows.")
+# The dr4-late-sweep fold (2026-11-18): sidecar's server-hosted packages (owner decisions 593, 594).
+assert D['D-REPO-3'].startswith("Engines live in sidecar over operator-core's Env"), 'D-REPO-3 row moved'
+D['D-REPO-3'] = "Engines live in sidecar over operator-core's Env; sidecar owns its SQL and server-hosted packages (owner decisions 19, 251, 594)."

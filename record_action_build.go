@@ -6,7 +6,8 @@
 // these bytes at proposal is the one action_id from proposal to execution.
 //
 // A multi-use decision binds a template, an action with scope = true whose non-empty fields every use equals, its
-// recipients a superset of each use's (§16.6's multi-use row): ActionMatchesTemplate. A server path admits only its
+// recipients a superset of each use's (§16.6's multi-use row), and the empty ones its kind's row binds (TemplateBound:
+// an egress_change's require_default_egress, QD-1060): ActionMatchesTemplate. A server path admits only its
 // kind's column of the table (QD-064): CheckCanonicalActionForServer.
 //
 // The builder takes both of QD-740's forms. A kind that binds a local port, a weight or ALPNs builds its action
@@ -165,7 +166,9 @@ func canonicalActionClearBytes(clear *protocol.CanonicalAction) ([]byte, error) 
 
 // Whether use falls inside template (§16.6's multi-use row): template is a scope = true action, use a full one of
 // the same kind and version, and every field template fills, scope aside, equals use's, but recipients, where use's
-// must each be among template's. A field template leaves empty matches anything.
+// must each be among template's. A field template leaves empty matches anything, but one its kind's row binds
+// (TemplateBound), which use leaves empty too: an egress_change's require_default_egress (QD-1060), so a template for
+// exits without the requirement, whose approver never saw it, covers no use that sets it.
 func ActionMatchesTemplate(template *StoredCanonicalAction, use *StoredCanonicalAction) bool {
 	if template == nil || use == nil || !template.Action.GetScope() || use.Action.GetScope() {
 		return false
@@ -196,7 +199,19 @@ func ActionMatchesTemplate(template *StoredCanonicalAction, use *StoredCanonical
 		}
 		return true
 	})
-	return matches
+	if !matches {
+		return false
+	}
+	if row, ok := CanonicalActionFields(SidecarActionKind(template.Action.GetKind())); ok {
+		fields := templateMessage.Descriptor().Fields()
+		for _, number := range row.TemplateBound {
+			// one template fills is equal in use by the range above; one it leaves empty, use leaves empty too
+			if field := fields.ByNumber(number); templateMessage.Has(field) != useMessage.Has(field) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // Whether two values of field are equal: lists element by element, bytes by content.
