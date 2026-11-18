@@ -80,6 +80,8 @@ type gkmMatrix struct {
 	classSidecarIds map[gkmMatrixClass]sidecar.Id
 	classTokens     map[gkmMatrixClass]string
 	served          map[string]int
+	// the rights the last request a probe served held, by pattern
+	servedRights map[string]sidecar.AclEvsRights
 }
 
 // Every route served by a probe that authorizes a body-named repo or group as its handler would, then answers 200.
@@ -91,6 +93,7 @@ func newGkmMatrix(t *testing.T) *gkmMatrix {
 		classSidecarIds: map[gkmMatrixClass]sidecar.Id{},
 		classTokens:     map[gkmMatrixClass]string{},
 		served:          map[string]int{},
+		servedRights:    map[string]sidecar.AclEvsRights{},
 	}
 	matrix.fixture = newGkmFixtureWith(t, func(settings *GkmServiceSettings, deps *GkmEngineDeps) {
 		deps.testServes = map[string]func(engine *GkmEngine, request *GkmRequest){}
@@ -109,6 +112,7 @@ func newGkmMatrix(t *testing.T) *gkmMatrix {
 					}
 				}
 				matrix.served[pattern] += 1
+				matrix.servedRights[pattern] = request.Rights
 				request.Reply(nil)
 			}
 		}
@@ -203,6 +207,99 @@ func TestGkmScopeMatrixHoldsEveryRouteToItsRow(t *testing.T) {
 			case !wantAllowed && matrix.served[route.Pattern] != servedBefore:
 				t.Errorf("%s by %s: a refused request reached the handler", route.Pattern, class)
 			}
+		}
+	}
+}
+
+// The routes wraps-only v0 keeps (QD-1040) whose guard authorizes a repo: group create, the generations and their
+// claims, the deliveries and recovery deliveries, and the repo's forms and drop key. The MLS routes QD-1040 sets aside
+// are left to the matrix.
+var gkmWrapsOnlyRepoRoutes = []string{
+	"POST /gkm/groups",
+	"GET /gkm/repos/{repo_id}/forms",
+	"GET /gkm/groups/{group_id}/gen",
+	"POST /gkm/groups/{group_id}/gen/{g}",
+	"GET /gkm/groups/{group_id}/wraps/{g}",
+	"POST /gkm/groups/{group_id}/wraps/{g}/{c8}",
+	"POST /gkm/groups/{group_id}/recovery-wraps/{g}/{c8}",
+	"POST /gkm/recovery/{member_id}/wraps",
+	"GET /gkm/repos/{repo_id}/drop-key",
+}
+
+// QD-975: the guard asks the state, once a request, for the strongest right the token holds of those the route's row
+// takes together with each weaker right of its role that the row takes. On the routes wraps-only v0 keeps an admin
+// token asks admin, rw and r where the row takes all three, admin and rw on a claim and admin alone on group create, a
+// writer's rw and r, a reader's r, and a deposit token deposit alone, on the drop key; a token holding none of the
+// row's rights is refused before the state is asked. The request then holds that set, which the state honored whole.
+func TestGkmGuardAsksTheStrongestRightWithTheWeakerOnesItsRowTakes(t *testing.T) {
+	matrix := newGkmMatrix(t)
+	fixture := matrix.fixture
+	admin, write, read, deposit := sidecar.AclEvsAdmin, sidecar.AclEvsWrite, sidecar.AclEvsRead, sidecar.AclEvsDeposit
+	reads := map[gkmMatrixClass]sidecar.AclEvsRights{gkmClassRead: read, gkmClassWrite: write | read, gkmClassAdmin: admin | write | read}
+	// what each class's token asks on each route; a class not listed is refused unasked
+	asked := map[string]map[gkmMatrixClass]sidecar.AclEvsRights{
+		"POST /gkm/groups":                                    {gkmClassAdmin: admin},
+		"GET /gkm/repos/{repo_id}/forms":                      reads,
+		"GET /gkm/groups/{group_id}/gen":                      reads,
+		"POST /gkm/groups/{group_id}/gen/{g}":                 {gkmClassWrite: write, gkmClassAdmin: admin | write},
+		"GET /gkm/groups/{group_id}/wraps/{g}":                reads,
+		"POST /gkm/groups/{group_id}/wraps/{g}/{c8}":          reads,
+		"POST /gkm/groups/{group_id}/recovery-wraps/{g}/{c8}": reads,
+		"POST /gkm/recovery/{member_id}/wraps":                reads,
+		"GET /gkm/repos/{repo_id}/drop-key":                   {gkmClassRead: read, gkmClassWrite: write | read, gkmClassAdmin: admin | write | read, gkmClassDeposit: deposit},
+	}
+	for _, pattern := range gkmWrapsOnlyRepoRoutes {
+		classAsks, ok := asked[pattern]
+		if !ok {
+			t.Fatalf("%s: no row of asks", pattern)
+		}
+		for _, class := range []gkmMatrixClass{gkmClassRead, gkmClassWrite, gkmClassAdmin, gkmClassDeposit} {
+			before := len(fixture.auth.honorAsked())
+			method, path := matrix.path(pattern)
+			recorder := fixture.serve(method, path, matrix.classTokens[class], nil)
+			asks := fixture.auth.honorAsked()[before:]
+			want, wantAsked := classAsks[class]
+			switch {
+			case !wantAsked:
+				if recorder.Code != http.StatusForbidden || len(asks) != 0 {
+					t.Errorf("%s by %s: %d after %d asks, want 403 unasked", pattern, class, recorder.Code, len(asks))
+				}
+			case recorder.Code != http.StatusOK || len(asks) != 1:
+				t.Errorf("%s by %s: %d after %d asks, want 200 after one", pattern, class, recorder.Code, len(asks))
+			case asks[0].rights != want || asks[0].repoId != matrix.repoId || asks[0].sidecarId != matrix.classSidecarIds[class]:
+				t.Errorf("%s by %s: asked %04b of %s for %s, want %04b", pattern, class, asks[0].rights, asks[0].repoId, asks[0].sidecarId, want)
+			case matrix.servedRights[pattern] != want:
+				t.Errorf("%s by %s: the request holds %04b, want %04b", pattern, class, matrix.servedRights[pattern], want)
+			}
+		}
+	}
+}
+
+// QD-975 over QD-880's state: a sidecar the state gives admin alone, as a repo whose newest RepoDelete stands
+// unrestored gives its standing admin, passes group create under its admin token holding admin and nothing an admin
+// holds of a live repo beside it, and is refused 403 before the handler on every other route wraps-only v0 keeps; a
+// live repo's admin, whom the state gives admin, rw and r, passes them all.
+func TestGkmGuardPassesAnAdminAloneOnlyOnGroupCreate(t *testing.T) {
+	matrix := newGkmMatrix(t)
+	fixture := matrix.fixture
+	alone := testId("sc-alone")
+	fixture.auth.admit(alone, memberDeviceFacts(matrix.memberId))
+	fixture.auth.holdExactly(alone, matrix.repoId, sidecar.AclEvsAdmin)
+	aloneToken := fixture.token(alone, repoScope(matrix.repoId, "admin"))
+	for _, pattern := range gkmWrapsOnlyRepoRoutes {
+		method, path := matrix.path(pattern)
+		servedBefore := matrix.served[pattern]
+		recorder := fixture.serve(method, path, aloneToken, nil)
+		switch {
+		case pattern == "POST /gkm/groups":
+			if recorder.Code != http.StatusOK || matrix.servedRights[pattern] != sidecar.AclEvsAdmin {
+				t.Errorf("%s by admin alone: %d holding %04b, want 200 holding admin", pattern, recorder.Code, matrix.servedRights[pattern])
+			}
+		case recorder.Code != http.StatusForbidden || matrix.served[pattern] != servedBefore:
+			t.Errorf("%s by admin alone: %d, served %d times, want 403 unserved", pattern, recorder.Code, matrix.served[pattern]-servedBefore)
+		}
+		if recorder := fixture.serve(method, path, matrix.classTokens[gkmClassAdmin], nil); recorder.Code != http.StatusOK {
+			t.Errorf("%s by a live repo's admin: %d", pattern, recorder.Code)
 		}
 	}
 }

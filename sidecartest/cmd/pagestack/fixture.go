@@ -486,11 +486,12 @@ func (self *pagestackFixture) view() *pagestackFixtureView {
 	}
 }
 
-// Whether the tip honors right on repoId for sidecarId at now: read while it reads the repo then, write and admin
+// Whether the tip honors rights on repoId for sidecarId at now: read while it reads the repo then, write and admin
 // while it writes it, standing and not read_only. Deposit is honored to no one: no fixture device deposits, and a read
-// receipt's deposit is RECORD-M3-12's binding. Every right in right must hold.
-func pagestackHonors(view *sidecartest.FakeGkmAuthView, repoId sidecar.Id, sidecarId sidecar.Id, right sidecar.AclEvsRights, now time.Time) bool {
-	if right == 0 || view.Repo(repoId) == nil {
+// receipt's deposit is RECORD-M3-12's binding. Every right of the set must hold, as evs's and gkm's guards ask one
+// (QD-975).
+func pagestackHonors(view *sidecartest.FakeGkmAuthView, repoId sidecar.Id, sidecarId sidecar.Id, rights sidecar.AclEvsRights, now time.Time) bool {
+	if rights == 0 || view.Repo(repoId) == nil {
 		return false
 	}
 	row := view.SidecarRow(sidecarId)
@@ -499,7 +500,7 @@ func pagestackHonors(view *sidecartest.FakeGkmAuthView, repoId sidecar.Id, sidec
 	}
 	readOnly := row.GetCapabilities()&uint32(bridge.SidecarCapability_SIDECAR_CAPABILITY_READ_ONLY) != 0
 	for _, one := range []sidecar.AclEvsRights{sidecar.AclEvsRead, sidecar.AclEvsWrite, sidecar.AclEvsAdmin, sidecar.AclEvsDeposit} {
-		if !right.Has(one) {
+		if !rights.Has(one) {
 			continue
 		}
 		switch one {
@@ -515,7 +516,7 @@ func pagestackHonors(view *sidecartest.FakeGkmAuthView, repoId sidecar.Id, sidec
 			return false
 		}
 	}
-	return right&^(sidecar.AclEvsRead|sidecar.AclEvsWrite|sidecar.AclEvsAdmin|sidecar.AclEvsDeposit) == 0
+	return rights&^(sidecar.AclEvsRead|sidecar.AclEvsWrite|sidecar.AclEvsAdmin|sidecar.AclEvsDeposit) == 0
 }
 
 // evs's newest verified state of the fixture (evsservice.EvsAuthState): see the file header.
@@ -622,12 +623,13 @@ func (self *pagestackGkmAuthState) Sidecar(principal *sidecar.Principal, sidecar
 	return facts, gkmservice.GkmAuthAllowed
 }
 
-func (self *pagestackGkmAuthState) HonorScope(principal *sidecar.Principal, repoId sidecar.Id, right sidecar.AclEvsRights, now time.Time) gkmservice.GkmAuthAnswer {
+// The whole set, honored only when every right of it holds (pagestackHonors).
+func (self *pagestackGkmAuthState) HonorScope(principal *sidecar.Principal, repoId sidecar.Id, rights sidecar.AclEvsRights, now time.Time) gkmservice.GkmAuthAnswer {
 	view := self.fixture.viewOf(principal)
 	if view == nil {
 		return gkmservice.GkmAuthUnknown
 	}
-	return pagestackGkmAnswer(principal.SidecarId != nil && pagestackHonors(view, repoId, sidecar.Id(*principal.SidecarId), right, now))
+	return pagestackGkmAnswer(principal.SidecarId != nil && pagestackHonors(view, repoId, sidecar.Id(*principal.SidecarId), rights, now))
 }
 
 func (self *pagestackGkmAuthState) Reads(principal *sidecar.Principal, repoId sidecar.Id, sidecarId sidecar.Id, now time.Time) gkmservice.GkmAuthAnswer {

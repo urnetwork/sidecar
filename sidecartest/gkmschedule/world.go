@@ -1779,37 +1779,53 @@ func fsKeysAnswer(allowed bool) gkmservice.GkmAuthAnswer {
 	return gkmservice.GkmAuthDenied
 }
 
-func (self *fsKeysWorldState) HonorScope(principal *sidecar.Principal, repoId sidecar.Id, right sidecar.AclEvsRights, now time.Time) gkmservice.GkmAuthAnswer {
+// Honored only when the tip gives the sidecar every right of the set at now (QD-975), each by the world's rule for it,
+// with what AclState.EvsAccess gives a live repo's admin and writer beside it: admin implies rw, and rw r.
+func (self *fsKeysWorldState) HonorScope(principal *sidecar.Principal, repoId sidecar.Id, rights sidecar.AclEvsRights, now time.Time) gkmservice.GkmAuthAnswer {
 	view := self.tip()
 	sidecarId := sidecar.Id(*principal.SidecarId)
 	world := self.world
-	if repoId == world.ConfigRepoId && repoId != (sidecar.Id{}) && right == sidecar.AclEvsWrite {
+	config := repoId == world.ConfigRepoId && repoId != (sidecar.Id{})
+	reads := slices.Contains(view.RepoReadersAt(repoId, now), sidecarId)
+	repo := view.Repo(repoId)
+	held := sidecar.AclEvsRights(0)
+	if reads {
+		held |= sidecar.AclEvsRead
+	}
+	if config {
 		// §7.8: the config gives its member devices gkm's rw, read_only ones aside
 		row := view.SidecarRow(sidecarId)
 		memberDevice := row != nil && len(row.GetTagIds()) == 0 && len(row.GetMemberId()) != 0 && !row.GetEphemeral() &&
 			row.GetCapabilities()&uint32(bridge.SidecarCapability_SIDECAR_CAPABILITY_READ_ONLY) == 0
-		return fsKeysAnswer(memberDevice && slices.Contains(view.RepoReadersAt(repoId, now), sidecarId))
-	}
-	switch right {
-	case sidecar.AclEvsRead:
-		return fsKeysAnswer(slices.Contains(view.RepoReadersAt(repoId, now), sidecarId))
-	case sidecar.AclEvsWrite:
-		return fsKeysAnswer(slices.Contains(view.RepoWriters(repoId), sidecarId))
-	case sidecar.AclEvsAdmin:
-		repo := view.Repo(repoId)
-		if repoId == world.ConfigRepoId && repoId != (sidecar.Id{}) {
-			// no row lists the config's admins (QD-719, QD-762): the world's config writers at the tip hold it, which
-			// question acl-config-repo-row-config-admin's second option reads; ACL as built gives it to the Genesis's
-			// owner sidecar alone
-			return fsKeysAnswer(repo != nil && slices.Contains(view.RepoWriters(repoId), sidecarId))
+		if memberDevice && reads {
+			held |= sidecar.AclEvsWrite
 		}
-		return fsKeysAnswer(repo != nil && slices.ContainsFunc(repo.GetAdmins(), func(admin *protocol.AclRepoAdminRow) bool {
+		// no row lists the config's admins (QD-719, QD-762): the world's config writers at the tip hold it, which
+		// question acl-config-repo-row-config-admin's second option reads; ACL as built gives it to the Genesis's
+		// owner sidecar alone
+		if repo != nil && slices.Contains(view.RepoWriters(repoId), sidecarId) {
+			held |= sidecar.AclEvsAdmin
+		}
+	} else {
+		if slices.Contains(view.RepoWriters(repoId), sidecarId) {
+			held |= sidecar.AclEvsWrite
+		}
+		if repo != nil && slices.ContainsFunc(repo.GetAdmins(), func(admin *protocol.AclRepoAdminRow) bool {
 			return sidecar.AclRepoAdminStands(admin) && bytes.Equal(admin.GetSidecarId(), sidecarId.Bytes())
-		}))
-	case sidecar.AclEvsDeposit:
-		return fsKeysAnswer(slices.Contains(world.depositors, sidecarId) || slices.Contains(view.RepoReadersAt(repoId, now), sidecarId))
+		}) {
+			held |= sidecar.AclEvsAdmin
+		}
 	}
-	return gkmservice.GkmAuthDenied
+	if reads || slices.Contains(world.depositors, sidecarId) {
+		held |= sidecar.AclEvsDeposit
+	}
+	if held.Has(sidecar.AclEvsAdmin) {
+		held |= sidecar.AclEvsWrite
+	}
+	if held.Has(sidecar.AclEvsWrite) {
+		held |= sidecar.AclEvsRead
+	}
+	return fsKeysAnswer(rights != 0 && held.Has(rights))
 }
 
 func (self *fsKeysWorldState) Reads(principal *sidecar.Principal, repoId sidecar.Id, sidecarId sidecar.Id, now time.Time) gkmservice.GkmAuthAnswer {
