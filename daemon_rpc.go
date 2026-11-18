@@ -49,7 +49,9 @@ type DaemonCall struct {
 	// A Network method's network, resolved by §5.8's rule, and the Sidecar hosting it.
 	NetworkId Id
 	Sidecar   *Sidecar
-	// The agent the session acts as: its hello's, else its project's .ur default; nil for none (daemon_agent.go).
+	// The agent the session acts as: its hello's, else its project's .ur default; nil for none (daemon_agent.go). A
+	// Network method's carries its id in NetworkId, the one the session took at its first call there, unless that
+	// network's Sidecar holds no agent's id now.
 	Agent *SidecarAgent
 	// The ur that sent the call confirmed it on /dev/tty or in an app's UI (D-CORE-13). Only control mode sets it;
 	// any same-uid process can forge it (owner decision 47).
@@ -233,8 +235,11 @@ func (self *Daemon) dispatch(line []byte, session *daemonSession, run func(handl
 		call.NetworkId = networkId
 		call.Sidecar = sidecar
 	}
-	agent, err := self.sessionAgent(session)
+	agent, err := self.sessionAgent(session, call.NetworkId, call.Sidecar)
 	if err != nil {
+		if errors.Is(err, errDaemonAgentId) {
+			return answer(DaemonRpcFailed, errDaemonAgentId.Error())
+		}
 		return answer(daemonRpcInvalidParams, err.Error())
 	}
 	call.Agent = agent
