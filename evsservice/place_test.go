@@ -2,9 +2,11 @@ package evsservice
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -240,6 +242,60 @@ func TestPlaceLostResponseOnPlaceItselfReadsItBack(t *testing.T) {
 	}
 }
 
+// EvsSettings.CreateWriteCount bounds the sends of one create, held positive: at 1, a create of place/ or of repo/
+// whose send was lost and whose read finds nothing is not sent again and answers 503 unknown, where the default's
+// second send lands (TestPlaceLostResponseOnPlaceItselfReadsItBack); the client's retry then lands it.
+func TestPlaceCreateWriteCountBoundsTheSends(t *testing.T) {
+	for _, createWriteCount := range []int{0, -1} {
+		settings := DefaultEvsSettings()
+		settings.CreateWriteCount = createWriteCount
+		if err := settings.Validate(); !errors.Is(err, ErrEvsSettings) {
+			t.Errorf("a create sent %d times: %v", createWriteCount, err)
+		}
+	}
+	fixture := newEvsFixtureWith(t, func(hostSettings *sidecartest.FakeHostSettings, settings *EvsSettings) {
+		settings.CreateWriteCount = 1
+	})
+	creator := testId("sidecar-a")
+	requireUnknown := func(label string, recorder *httptest.ResponseRecorder) {
+		t.Helper()
+		requireRefusal(t, recorder, http.StatusServiceUnavailable, protocol.EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE)
+		if outcome := refusalOf(t, recorder).GetOutcome(); outcome != protocol.EvsPushOutcome_EVS_PUSH_OUTCOME_UNKNOWN {
+			t.Errorf("%s: outcome %s", label, outcome)
+		}
+	}
+	// place/'s one send is lost before it reaches the store
+	placeRepoId := testId("repo-place")
+	fixture.projectRepo(placeRepoId, creator)
+	if _, err := fixture.host.Blobs.Faults().Add(&sidecartest.FaultPlan{
+		Op: sidecartest.FaultOpPut, KeyPrefix: sidecar.EvsPlaceKey(placeRepoId), Result: sidecartest.FailBeforeApply,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	requireUnknown("place/", fixture.putRepoAnswer(placeRepoId, creator))
+	if fixture.placement(placeRepoId) != nil {
+		t.Fatal("place/ was sent again")
+	}
+	if status := fixture.putRepo(placeRepoId, creator); status != http.StatusOK {
+		t.Errorf("place/'s retry: %d", status)
+	}
+	// repo/'s one send is lost the same way, after place/ landed
+	repoRepoId := testId("repo-object")
+	fixture.projectRepo(repoRepoId, creator)
+	if _, err := fixture.host.Blobs.Faults().Add(&sidecartest.FaultPlan{
+		Op: sidecartest.FaultOpPut, KeyPrefix: RepoKey(repoRepoId), Result: sidecartest.FailBeforeApply,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	requireUnknown("repo/", fixture.putRepoAnswer(repoRepoId, creator))
+	if fixture.placement(repoRepoId) == nil || fixture.object("meta-1", RepoKey(repoRepoId)) != nil {
+		t.Fatal("repo/ was sent again, or place/ never landed")
+	}
+	if status := fixture.putRepo(repoRepoId, creator); status != http.StatusOK || fixture.object("meta-1", RepoKey(repoRepoId)) == nil {
+		t.Errorf("repo/'s retry: %d", status)
+	}
+}
+
 // FS-63: with place_new naming a second metadata cluster, new repos land only there, and placed repos' objects never
 // do.
 func TestPlaceNewSecondClusterTakesOnlyNewRepos(t *testing.T) {
@@ -333,6 +389,223 @@ func TestPlaceCachedNotFoundClearsWithinFiveSeconds(t *testing.T) {
 	}
 	if readsAfter, _ := resolver.Counts(); readsAfter != readsBefore+1 {
 		t.Errorf("%d reads of place/ after it resolved", readsAfter-readsBefore)
+	}
+}
+
+// The network's config repo as the projection holds it from the Genesis (QD-719): kind config with no owner, its
+// admin granted to each config writer (QD-894).
+func (self *evsFixture) projectConfigRepo(repoId sidecar.Id, configWriterIds ...sidecar.Id) {
+	self.auth.setRepo(repoId, &EvsRepoFacts{Kind: protocol.RepoKind_REPO_KIND_CONFIG, NetworkId: sidecar.Id(self.networkId)})
+	for _, configWriterId := range configWriterIds {
+		self.auth.grant(configWriterId, repoId, sidecar.AclEvsAdmin)
+	}
+}
+
+// place/ for repoId on the first cluster with no repo/, as a restore that brought back place/ alone leaves it:
+// naming clusterId and creatorSidecarId. Its bytes.
+func (self *evsFixture) standPlacement(repoId sidecar.Id, clusterId string, creatorSidecarId sidecar.Id) []byte {
+	self.t.Helper()
+	placeBytes, err := (&sidecar.EvsRepoPlace{ClusterId: clusterId, CreatorSidecarId: creatorSidecarId}).Marshal()
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	cluster, err := self.host.Blobs.Cluster("meta-1")
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	if _, err := cluster.PutIfNoneMatch(sidecar.WithWriteClass(self.ctx, sidecar.WriteClassP1), sidecar.EvsPlaceKey(repoId), placeBytes, nil); err != nil {
+		self.t.Fatal(err)
+	}
+	return placeBytes
+}
+
+// repo/ of a config repo as a create writes it: kind config, keying, format 1, the fixture's network and no owner.
+func (self *evsFixture) requireConfigRepoObject(clusterId string, repoId sidecar.Id) []byte {
+	self.t.Helper()
+	repoBytes := self.object(clusterId, RepoKey(repoId))
+	if repoBytes == nil {
+		self.t.Fatalf("no repo/ on %s", clusterId)
+	}
+	object, err := sidecar.ParseEvsRepoObject(repoId, repoBytes)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	if object.GetKind() != protocol.RepoKind_REPO_KIND_CONFIG || object.GetState() != protocol.EvsRepoState_EVS_REPO_KEYING ||
+		object.GetFormat() != sidecar.EvsRepoFormat1 || sidecar.Id(object.GetNetworkId()) != sidecar.Id(self.networkId) ||
+		len(object.GetOwnerMemberId()) != 0 {
+		self.t.Fatalf("repo/ %v", object)
+	}
+	return repoBytes
+}
+
+// QD-982, owner decision 567: the bootstrap sidecar's create of the config repo stops between place/ and repo/, and
+// that sidecar is gone. Another config writer's PUT continues the placement: place/ keeps the cluster and creator it
+// names, byte for byte, even once place_new names another cluster, and repo/ is written there. Its retry answers 200
+// again and changes nothing, and the gone creator's admin is refused at the guard.
+func TestPlaceConfigRepoStoppedBeforeRepoObjectIsContinuedByAnotherConfigWriter(t *testing.T) {
+	fixture := newEvsFixture(t)
+	repoId := testId("config")
+	bootstrap := testId("sidecar-a")
+	configWriter := testId("sidecar-b")
+	fixture.projectConfigRepo(repoId, bootstrap, configWriter)
+	// place/ lands, repo/'s write is lost and its read-back fails: the create ends 503 with no repo/
+	for _, plan := range []*sidecartest.FaultPlan{
+		{Op: sidecartest.FaultOpPut, KeyPrefix: RepoKey(repoId), Result: sidecartest.FailBeforeApply},
+		{Op: sidecartest.FaultOpGet, KeyPrefix: RepoKey(repoId), Result: sidecartest.FailBeforeApply},
+	} {
+		if _, err := fixture.host.Blobs.Faults().Add(plan); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if status := fixture.putRepo(repoId, bootstrap); status != http.StatusServiceUnavailable {
+		t.Fatalf("the bootstrap's create: %d", status)
+	}
+	placeBytes := fixture.object("meta-1", sidecar.EvsPlaceKey(repoId))
+	if place := fixture.placement(repoId); place == nil || place.ClusterId != "meta-1" || place.CreatorSidecarId != bootstrap {
+		t.Fatalf("place/ %+v", place)
+	}
+	if fixture.object("meta-1", RepoKey(repoId)) != nil {
+		t.Fatal("repo/ was written")
+	}
+	// the bootstrap sidecar is gone: the state no longer honors its admin
+	fixture.auth.grantOnly(bootstrap, repoId, 0)
+	requireRefusal(t, fixture.putRepoAnswer(repoId, bootstrap), http.StatusForbidden, protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE)
+	fixture.host.Blobs.SetNewRepoClusterId("meta-2")
+	if status := fixture.putRepo(repoId, configWriter); status != http.StatusOK {
+		t.Fatalf("the config writer's create: %d", status)
+	}
+	if string(fixture.object("meta-1", sidecar.EvsPlaceKey(repoId))) != string(placeBytes) {
+		t.Error("place/ was rewritten")
+	}
+	repoBytes := fixture.requireConfigRepoObject("meta-1", repoId)
+	if keys := fixture.keysUnder("meta-2", "repo/"); len(keys) != 0 {
+		t.Errorf("repo/ on a cluster place/ does not name: %v", keys)
+	}
+	if entry := fixture.serviceLog.last(); entry.Status != http.StatusOK {
+		t.Errorf("evs-7 logged %d", entry.Status)
+	}
+	fixture.clock.Advance(time.Minute)
+	if status := fixture.putRepo(repoId, configWriter); status != http.StatusOK {
+		t.Errorf("the config writer's retry: %d", status)
+	}
+	if string(fixture.object("meta-1", RepoKey(repoId))) != string(repoBytes) || string(fixture.object("meta-1", sidecar.EvsPlaceKey(repoId))) != string(placeBytes) {
+		t.Error("a retry rewrote place/ or repo/")
+	}
+}
+
+// QD-982: a restore brought back the config repo's place/ alone, naming a creator that is no config writer now and a
+// cluster place_new no longer names. A config writer's PUT writes repo/ on the cluster place/ names, and another
+// config writer's, with place_new naming a cluster this process cannot reach, continues on it too and answers 200 on
+// the repo/ that stands, place/ untouched throughout.
+func TestPlaceConfigRepoWhosePlaceAloneWasRestoredIsPlacedByAConfigWriter(t *testing.T) {
+	fixture := newEvsFixture(t)
+	repoId := testId("config")
+	gone := testId("sidecar-gone")
+	configWriterA := testId("sidecar-a")
+	configWriterB := testId("sidecar-b")
+	fixture.projectConfigRepo(repoId, configWriterA, configWriterB)
+	placeBytes := fixture.standPlacement(repoId, "meta-2", gone)
+	if status := fixture.putRepo(repoId, configWriterA); status != http.StatusOK {
+		t.Fatalf("a config writer's create: %d", status)
+	}
+	repoBytes := fixture.requireConfigRepoObject("meta-2", repoId)
+	if fixture.object("meta-1", RepoKey(repoId)) != nil {
+		t.Error("repo/ on place_new's cluster, not place/'s")
+	}
+	fixture.host.Blobs.SetNewRepoClusterId("meta-9")
+	if status := fixture.putRepo(repoId, configWriterB); status != http.StatusOK {
+		t.Errorf("another config writer's create with place_new unreachable: %d", status)
+	}
+	if string(fixture.object("meta-2", RepoKey(repoId))) != string(repoBytes) {
+		t.Error("repo/ was rewritten")
+	}
+	if string(fixture.object("meta-1", sidecar.EvsPlaceKey(repoId))) != string(placeBytes) {
+		t.Error("place/ was rewritten")
+	}
+}
+
+// QD-982 holds for config writers alone: a sidecar whose config admin the state does not honor, with a token that
+// claims it or one that holds only the config's r, is refused at the guard, 403 SCOPE, before place/ is read, and
+// writes nothing; a config writer's create then continues the same placement.
+func TestPlaceConfigRepoRefusesASidecarThatIsNotAConfigWriter(t *testing.T) {
+	fixture := newEvsFixture(t)
+	repoId := testId("config")
+	configWriter := testId("sidecar-a")
+	member := testId("sidecar-m")
+	fixture.projectConfigRepo(repoId, configWriter)
+	// a member device reads the config and administers nothing of it
+	fixture.auth.grant(member, repoId, sidecar.AclEvsRead)
+	placeBytes := fixture.standPlacement(repoId, "meta-1", testId("sidecar-gone"))
+	getsBefore := fixture.host.Blobs.RequestCount("meta-1", sidecartest.FaultOpGet)
+	for _, scope := range []string{"admin", "r"} {
+		recorder := fixture.serve(http.MethodPut, "/evs/v1/repos/"+sidecar.EvsKeyId(repoId), fixture.token(member, repoScope(repoId, scope)), nil)
+		requireRefusal(t, recorder, http.StatusForbidden, protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE)
+	}
+	if gets := fixture.host.Blobs.RequestCount("meta-1", sidecartest.FaultOpGet) - getsBefore; gets != 0 {
+		t.Errorf("a refused create read the cluster %d times", gets)
+	}
+	if fixture.object("meta-1", RepoKey(repoId)) != nil || string(fixture.object("meta-1", sidecar.EvsPlaceKey(repoId))) != string(placeBytes) {
+		t.Fatal("a refused create wrote place/ or repo/")
+	}
+	if status := fixture.putRepo(repoId, configWriter); status != http.StatusOK {
+		t.Fatalf("the config writer's create: %d", status)
+	}
+	fixture.requireConfigRepoObject("meta-1", repoId)
+}
+
+// QD-982 is the config kind's alone: for every other kind of §11.12's nine, a repo another creator placed answers an
+// admin's create 409 REPO_PLACED and writes nothing (QD-927), whether its repo/ stands or place/ stands alone with its
+// creator gone, since its client can pick another id.
+func TestPlaceEveryOtherKindKeepsRepoPlacedForAnotherCreator(t *testing.T) {
+	fixture := newEvsFixture(t)
+	creator := testId("sidecar-a")
+	other := testId("sidecar-b")
+	gone := testId("sidecar-gone")
+	kinds := []protocol.RepoKind{}
+	for value := range protocol.RepoKind_name {
+		if kind := protocol.RepoKind(value); sidecar.EvsRepoKindKnown(kind) && kind != protocol.RepoKind_REPO_KIND_CONFIG {
+			kinds = append(kinds, kind)
+		}
+	}
+	slices.Sort(kinds)
+	if len(kinds) != 8 {
+		t.Fatalf("%d kinds besides config, want §11.12's nine less one", len(kinds))
+	}
+	refusedPlaced := func(kind protocol.RepoKind, label string, repoId sidecar.Id) {
+		t.Helper()
+		recorder := fixture.putRepoAnswer(repoId, other)
+		if recorder.Code != http.StatusConflict || refusalOf(t, recorder).GetCode() != protocol.EvsRefusalCode_EVS_REFUSAL_REPO_PLACED {
+			t.Errorf("%s, %s: another admin's create answered %d %s", kind, label, recorder.Code, refusalOf(t, recorder).GetCode())
+		}
+	}
+	for _, kind := range kinds {
+		facts := &EvsRepoFacts{Kind: kind, NetworkId: sidecar.Id(fixture.networkId)}
+		if sidecar.EvsRepoKindOwnerBound(kind) {
+			facts.OwnerMemberId = testId("owner-member")
+		}
+		// placed and created by its creator
+		placedRepoId := testId(fmt.Sprintf("kind-%d-placed", kind))
+		fixture.auth.setRepo(placedRepoId, facts)
+		fixture.auth.grant(creator, placedRepoId, sidecar.AclEvsAdmin)
+		fixture.auth.grant(other, placedRepoId, sidecar.AclEvsAdmin)
+		if status := fixture.putRepo(placedRepoId, creator); status != http.StatusOK {
+			t.Fatalf("%s: the creator's create: %d", kind, status)
+		}
+		placeBytes := fixture.object("meta-1", sidecar.EvsPlaceKey(placedRepoId))
+		repoBytes := fixture.object("meta-1", RepoKey(placedRepoId))
+		refusedPlaced(kind, "repo/ standing", placedRepoId)
+		if string(fixture.object("meta-1", sidecar.EvsPlaceKey(placedRepoId))) != string(placeBytes) || string(fixture.object("meta-1", RepoKey(placedRepoId))) != string(repoBytes) {
+			t.Errorf("%s: a refused create rewrote place/ or repo/", kind)
+		}
+		// place/ standing alone, its creator gone
+		aloneRepoId := testId(fmt.Sprintf("kind-%d-alone", kind))
+		fixture.auth.setRepo(aloneRepoId, facts)
+		fixture.auth.grant(other, aloneRepoId, sidecar.AclEvsAdmin)
+		alonePlaceBytes := fixture.standPlacement(aloneRepoId, "meta-1", gone)
+		refusedPlaced(kind, "place/ alone", aloneRepoId)
+		if fixture.object("meta-1", RepoKey(aloneRepoId)) != nil || string(fixture.object("meta-1", sidecar.EvsPlaceKey(aloneRepoId))) != string(alonePlaceBytes) {
+			t.Errorf("%s: a refused create wrote over a placement standing alone", kind)
+		}
 	}
 }
 

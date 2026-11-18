@@ -252,10 +252,13 @@ fails on
   layering  the root importing a package of this module other than protocol and protocol/bridge; protocol
             importing beyond std, protobuf and protocol/bridge, or protocol/bridge beyond std and protobuf; a
             client package importing a <svc>service
-  legs      the ios_extension leg's root files leaving §18.10's forwarding list, or its protocol descriptors
-            beyond that list's (owner decisions 197, 275); a root file of the sidecar_http js leg importing a
-            connect package (from M1), or the leg linking one, its Id being the root's own twin (owner decision
-            276); net/rpc or template packages on ios, android or js
+  legs      the ios_extension leg's root or protocol files leaving §18.10's forwarding list, the fix being the
+            file's !ios_extension tag and the list growing only in a commit that edits it, or its protocol
+            descriptors beyond that list's (owner decisions 197, 275); its go list -deps holding a package of a
+            module §18.10 leaves out, or of x/text's legacy encodings or x/net's HTML parser, beyond what
+            connect links there itself (DESIGN-DETAILS.md section 4); a root file of the sidecar_http js leg
+            importing a connect package (from M1), or the leg linking one, its Id being the root's own twin
+            (owner decision 276); net/rpc or template packages on ios, android or js
   cgo       CgoFiles, except keychain_darwin.go in §5.10's darwin fallback leg
   hygiene   replaces other than 4.7's; registry conflicts; stale generated code; a release leg built with
             sidecar_testhooks (§22.4); a direct wall-clock call in a non-test file of the root, a <svc>service,

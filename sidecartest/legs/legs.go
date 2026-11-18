@@ -87,11 +87,15 @@ func DefaultLegs() []*Leg {
 		{Name: "gomobile android/amd64", Module: ".", Goos: "android", Goarch: "amd64", Cgo: true, Tags: []string{"sdk_mobile_bind"}, Packages: allPackages, Runner: RunnerCells, Why: "SDK-M10-06's cells run it"},
 		{Name: "gomobile ios/arm64", Module: ".", Goos: "ios", Goarch: "arm64", Cgo: true, Tags: []string{"sdk_mobile_bind", "ios"}, Packages: allPackages, Runner: RunnerCells, Why: "SDK-M10-06's cells run it"},
 		{Name: "gomobile iossimulator/arm64", Module: ".", Goos: "ios", Goarch: "arm64", Cgo: true, Tags: []string{"sdk_mobile_bind", "ios"}, Packages: allPackages, Runner: RunnerCells, Why: "SDK-M10-06's cells run it"},
+		{Name: "gomobile macos/arm64 binding step", Module: ".", Goos: "ios", Goarch: "arm64", Cgo: true, Tags: []string{"sdk_mobile_bind", "macos"}, Packages: allPackages, Runner: RunnerCells, Why: "SDK-M10-06's cells run it"},
 		{Name: "gomobile macos/arm64 compile", Module: ".", Goos: "darwin", Goarch: "arm64", Cgo: true, Tags: []string{"sdk_mobile_bind"}, Packages: allPackages, Runner: RunnerCells, Why: "SDK-M10-06's cells run it"},
+		{Name: "gomobile macos/amd64 binding step", Module: ".", Goos: "ios", Goarch: "amd64", Cgo: true, Tags: []string{"sdk_mobile_bind", "macos"}, Packages: allPackages, Runner: RunnerCells, Why: "SDK-M10-06's cells run it"},
 		{Name: "gomobile macos/amd64 compile", Module: ".", Goos: "darwin", Goarch: "amd64", Cgo: true, Tags: []string{"sdk_mobile_bind"}, Packages: allPackages, Runner: RunnerCells, Why: "SDK-M10-06's cells run it"},
 		{Name: "gomobile ios/arm64 extension", Module: ".", Goos: "ios", Goarch: "arm64", Cgo: true, Tags: []string{"sdk_mobile_bind", "ios_extension", "ios"}, Packages: []string{"./protocol/bridge", "./device"}, Runner: RunnerCells, Why: "SDK-M10-06's cells run it"},
 		{Name: "gomobile iossimulator/arm64 extension", Module: ".", Goos: "ios", Goarch: "arm64", Cgo: true, Tags: []string{"sdk_mobile_bind", "ios_extension", "ios"}, Packages: []string{"./protocol/bridge", "./device"}, Runner: RunnerCells, Why: "SDK-M10-06's cells run it"},
+		{Name: "gomobile macos/arm64 extension binding step", Module: ".", Goos: "ios", Goarch: "arm64", Cgo: true, Tags: []string{"sdk_mobile_bind", "ios_extension", "macos"}, Packages: []string{"./protocol/bridge", "./device"}, Runner: RunnerCells, Why: "SDK-M10-06's cells run it"},
 		{Name: "gomobile macos/arm64 extension compile", Module: ".", Goos: "darwin", Goarch: "arm64", Cgo: true, Tags: []string{"sdk_mobile_bind", "ios_extension"}, Packages: []string{"./protocol/bridge", "./device"}, Runner: RunnerCells, Why: "SDK-M10-06's cells run it"},
+		{Name: "gomobile macos/amd64 extension binding step", Module: ".", Goos: "ios", Goarch: "amd64", Cgo: true, Tags: []string{"sdk_mobile_bind", "ios_extension", "macos"}, Packages: []string{"./protocol/bridge", "./device"}, Runner: RunnerCells, Why: "SDK-M10-06's cells run it"},
 		{Name: "gomobile macos/amd64 extension compile", Module: ".", Goos: "darwin", Goarch: "amd64", Cgo: true, Tags: []string{"sdk_mobile_bind", "ios_extension"}, Packages: []string{"./protocol/bridge", "./device"}, Runner: RunnerCells, Why: "SDK-M10-06's cells run it"},
 	}
 }
