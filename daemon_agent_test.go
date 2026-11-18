@@ -182,8 +182,8 @@ func TestSessionAgentIdOnePerLabelAcrossRestart(t *testing.T) {
 }
 
 // A network's Sidecar that holds no agent's id now, Locked or not enrolled yet, gives the call none and runs it, and
-// the session asks again at its next call; a registration that does not decode fails the call with a constant text,
-// and runs nothing.
+// the session asks again at its next call. So does a registration that does not decode, logged: a control or hook call,
+// hook.event's among them, never fails for want of an attribution.
 func TestSessionAgentIdWhereNoneCanBeHeld(t *testing.T) {
 	networkId := testBindingFields().NetworkId
 	session := agentIdTestSession("builder")
@@ -206,16 +206,25 @@ func TestSessionAgentIdWhereNoneCanBeHeld(t *testing.T) {
 		t.Fatalf("once the sidecar holds one the session carries %v, the registration %s: %v", agentId, registered, err)
 	}
 
-	// a registration that does not decode is a failure, never absence
-	if err := hosted.coreSecrets.Put(sidecarAgentLabelRecordName("reviewer"), []byte("not a registration")); err != nil {
+	// a registration that does not decode is a failure, never absence: nothing is drawn over it, and the call runs with
+	// no id, which the session asks for again once the registration reads
+	name := sidecarAgentLabelRecordName("reviewer")
+	if err := hosted.coreSecrets.Put(name, []byte("not a registration")); err != nil {
 		t.Fatal(err)
 	}
-	response, _, ran := daemon.call(agentIdTestSession("reviewer"), "synthetic.scoped")
-	if ran || response.Error == nil || response.Error.Code != DaemonRpcFailed || response.Error.Message != errDaemonAgentId.Error() {
-		t.Errorf("a registration that does not decode: ran %t, %+v", ran, response.Error)
+	reviewer := agentIdTestSession("reviewer")
+	response, agent, ran := daemon.call(reviewer, "synthetic.scoped")
+	if !ran || response.Error != nil || agent == nil || agent.Label != "reviewer" || agent.Id != nil {
+		t.Errorf("a registration that does not decode: ran %t, %+v, agent %+v", ran, response.Error, agent)
 	}
-	// a call that names no network reads no registration, and runs
-	if _, agent, ran := daemon.call(agentIdTestSession("reviewer"), "synthetic.unscoped"); !ran || agent == nil || agent.Id != nil {
-		t.Errorf("an unscoped call of the label: ran %t, agent %+v", ran, agent)
+	if kept, err := hosted.coreSecrets.Get(name); err != nil || string(kept) != "not a registration" {
+		t.Errorf("an id was drawn over a registration that does not decode: %q %v", kept, err)
+	}
+	if err := hosted.coreSecrets.Delete(name); err != nil {
+		t.Fatal(err)
+	}
+	reviewerId := daemon.agentIdOf(reviewer, "synthetic.scoped")
+	if registered, err := hosted.ResolveAgentId("reviewer"); reviewerId == nil || err != nil || *reviewerId != registered {
+		t.Errorf("once the registration reads the session carries %v, the registration %s: %v", reviewerId, registered, err)
 	}
 }
