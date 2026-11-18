@@ -3,12 +3,14 @@
 // §14.6's two DKIM signatures over a SmtpWireMessage, after the preamble's OK. Both are rsa-sha256,
 // relaxed/relaxed, with no l= and x= 7 days after t=, and neither covers the other:
 //
-//   - the full signature, d= and s= first, covers the fields §14.6 lists that the message holds and
-//     the issued ones, with From oversigned, so a From added later breaks it;
 //   - the fixed signature covers only from:date:message-id:x-ur-ref:feedback-id, so it survives a
 //     report that masks recipients (§14.8), and its first line opens with SPEC.md Z5.5's constant
 //     prefix, h= ahead of d= and s=, which is how the circuit finds it. SPEC.md's order wins over the
-//     plan's, which put d= and s= first.
+//     plan's, which put d= and s= first. That line ends the header block's head, after the issued
+//     fields, From, Message-ID and a BULK message's List-Unsubscribe-Post, so its d= and s= lie in the
+//     first header record with them (DESIGN-DETAILS 3.2.3);
+//   - the full signature follows it, d= and s= first, and covers the fields §14.6 lists that the
+//     message holds and the issued ones, with From oversigned, so a From added later breaks it.
 //
 // Each field is folded in one fixed way, and every value in it but bh= is of a fixed length, so the
 // octets differ from ByteCount's placeholder rendering only in value, never in length. The issued
@@ -112,7 +114,7 @@ type smtpDkimValues struct {
 	expireTime string
 }
 
-// Placeholders of the real values' lengths, for ByteCount and assembly's header block bound.
+// Placeholders of the real values' lengths, for ByteCount and assembly's header block bounds.
 func smtpDkimPlaceholderValues() *smtpDkimValues {
 	return &smtpDkimValues{
 		selector:   strings.Repeat("a", SmtpDkimSelectorLength),
@@ -175,11 +177,19 @@ func smtpDkimFoldSignature(signature []byte) string {
 	return folded.String()
 }
 
-// The message's octets: both signatures, the issued fields, the message's fields, the blank line and
-// the body. sign nil writes b= as zeros of a signature's length, which is all ByteCount needs.
-func (self *SmtpWireMessage) render(values *smtpDkimValues, sign func(digest []byte) ([]byte, error)) ([]byte, error) {
-	var fieldLines []string
-	fieldLines = append(fieldLines, "X-UR-Ref: "+values.xUrRef, "Feedback-ID: "+values.feedbackId)
+// The message's octets in DESIGN-DETAILS 3.2.3's order. The head first: X-UR-Ref, Feedback-ID, From,
+// Message-ID and, on a BULK message, List-Unsubscribe-Post, then the fixed signature's first line.
+// Then the fixed signature's other lines, the full signature, the message's other fields in their
+// order, the blank line and the body. Also returns the head's length, its last CRLF included, which no
+// value written after the preamble changes. sign nil writes b= as zeros of a signature's length, which
+// is all ByteCount and assembly's bounds need.
+func (self *SmtpWireMessage) render(values *smtpDkimValues, sign func(digest []byte) ([]byte, error)) ([]byte, int, error) {
+	// every field but the two signatures, in the order written: the head's, then the message's others
+	fieldLines := []string{"X-UR-Ref: " + values.xUrRef, "Feedback-ID: " + values.feedbackId}
+	for _, field := range self.headFields {
+		fieldLines = append(fieldLines, field.line())
+	}
+	headLineCount := len(fieldLines)
 	for _, field := range self.fields {
 		fieldLines = append(fieldLines, field.line())
 	}
@@ -191,7 +201,9 @@ func (self *SmtpWireMessage) render(values *smtpDkimValues, sign func(digest []b
 		"\th=" + strings.Join(self.signedFieldNames, ":") + ";\r\n" +
 		"\tbh=" + encodedBodyHash + ";\r\n" +
 		"\tb="
-	unsignedFixed := smtpDkimFixedPrefix + "d=" + domain + "; s=" + values.selector + "; t=" + values.signTime + "; x=" + values.expireTime + ";\r\n" +
+	// the head's last line, which carries the d= and s= Z5.5 reads
+	fixedFirstLine := smtpDkimFixedPrefix + "d=" + domain + "; s=" + values.selector + "; t=" + values.signTime + "; x=" + values.expireTime + ";"
+	unsignedFixed := fixedFirstLine + "\r\n" +
 		"\tbh=" + encodedBodyHash + ";\r\n" +
 		"\tb="
 	signed := func(unsigned string, names []string) (string, error) {
@@ -225,27 +237,37 @@ func (self *SmtpWireMessage) render(values *smtpDkimValues, sign func(digest []b
 	}
 	full, err := signed(unsignedFull, self.signedFieldNames)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	fixed, err := signed(unsignedFixed, []string{"from", "date", "message-id", "x-ur-ref", "feedback-id"})
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	var out bytes.Buffer
-	out.WriteString(full)
-	out.WriteString("\r\n")
+	writeFields := func(lines []string) error {
+		for _, line := range lines {
+			folded, err := smtpFoldLine(line)
+			if err != nil {
+				return err
+			}
+			out.Write(folded)
+		}
+		return nil
+	}
+	if err := writeFields(fieldLines[:headLineCount]); err != nil {
+		return nil, 0, err
+	}
+	headByteCount := out.Len() + len(fixedFirstLine) + len("\r\n")
 	out.WriteString(fixed)
 	out.WriteString("\r\n")
-	for _, line := range fieldLines {
-		folded, err := smtpFoldLine(line)
-		if err != nil {
-			return nil, err
-		}
-		out.Write(folded)
+	out.WriteString(full)
+	out.WriteString("\r\n")
+	if err := writeFields(fieldLines[headLineCount:]); err != nil {
+		return nil, 0, err
 	}
 	out.WriteString("\r\n")
 	out.Write(self.body)
-	return out.Bytes(), nil
+	return out.Bytes(), headByteCount, nil
 }
 
 // The message's final octets, SmtpProofJob.Message: wire with the issued fields and both of §14.6's
@@ -276,5 +298,6 @@ func SmtpDkimSign(wire *SmtpWireMessage, args *SmtpDkimSignArgs) ([]byte, error)
 		signTime:   signText,
 		expireTime: expireText,
 	}
-	return wire.render(values, args.Signer.SignDkim)
+	message, _, err := wire.render(values, args.Signer.SignDkim)
+	return message, err
 }

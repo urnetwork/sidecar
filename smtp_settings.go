@@ -1,9 +1,9 @@
 //go:build !sidecar_http
 
-// SmtpSender's tunables (§14.4, §14.5, D-SMTP-18), which SidecarConnectSettings carries beside the
-// prover, since only connect legs send. Format values every reader applies alike, such as the frame
-// bound and the issued headers' widths, are constants beside their formats, not settings. Every
-// number here must be positive, as settings.go's header says.
+// SmtpSender's tunables and the limits assembly holds a message to (§14.4, §14.5, D-SMTP-18, QD-702),
+// which SidecarConnectSettings carries beside the prover, since only connect legs send. The issued
+// headers' widths are identifiers of their formats and stay constants beside them (DESIGN-DETAILS
+// 3.7). Every number here must be positive, as settings.go's header says.
 //
 // Off the sidecar_http leg: a page Worker sends no mail (§18.10).
 
@@ -73,6 +73,19 @@ type SmtpSenderSettings struct {
 	// How long a DKIM signature stays valid: x= is t= plus 7 days (§14.6), and a report about the
 	// message joins on the fixed signature only while it holds.
 	DkimExpireTimeout time.Duration
+	// The octets the header block's head may fill, each line's CRLF included: X-UR-Ref, Feedback-ID,
+	// From, Message-ID and, on a BULK message, List-Unsubscribe-Post, then the fixed signature's first
+	// line, which carries its d= and s=. 720, under the 831 octets the shortest first record holds (an
+	// AES-128-GCM msg shape's head under TLS 1.3), so the prover's cut by length alone leaves them all in
+	// the header block's first record, where Z5 requires them (DESIGN-DETAILS 3.2.3, 3.2.4, 3.2.6).
+	// Assembly refuses a message past it before the preamble, which mostly means a long From display
+	// name.
+	HeaderHeadMaxByteCount int
+	// The longest header block assembly makes, its final CRLF CRLF and every issued value and signature
+	// included: 16 KiB, the most the prover cuts into header records, as smtpproof's
+	// ProofSettings.HeaderBlockMaxByteCount has it (DESIGN-DETAILS 3.2.8). Assembly refuses a message
+	// past it before the preamble.
+	HeaderBlockMaxByteCount int
 }
 
 // A fresh value each call, sharing nothing mutable with any other (connect/CODESTYLE.md:151).
@@ -96,11 +109,14 @@ func DefaultSmtpSenderSettings() *SmtpSenderSettings {
 		DkimRotateTimeout:          90 * 24 * time.Hour,
 		DkimRetiredKeepTimeout:     7 * 24 * time.Hour,
 		DkimExpireTimeout:          7 * 24 * time.Hour,
+		HeaderHeadMaxByteCount:     720,
+		HeaderBlockMaxByteCount:    16 * 1024,
 	}
 }
 
-// What validateLeg holds a sender's settings to: present, every number positive, and the schedules
-// in their order, so a retry never waits past giving up and a live host is never taken over.
+// What validateLeg holds a sender's settings to: present, every number positive, the schedules in
+// their order, so a retry never waits past giving up and a live host is never taken over, and the
+// header block's head inside the block.
 func (self *SmtpSenderSettings) validate() error {
 	if self == nil {
 		return fmt.Errorf("%w: Connect.SmtpSender is nil", errInvalidSettings)
@@ -113,6 +129,9 @@ func (self *SmtpSenderSettings) validate() error {
 	}
 	if self.OutboxTakeoverTimeout <= self.OutboxProgressInterval {
 		return fmt.Errorf("%w: Connect.SmtpSender takes a send over before its host could show progress", errInvalidSettings)
+	}
+	if self.HeaderBlockMaxByteCount < self.HeaderHeadMaxByteCount {
+		return fmt.Errorf("%w: Connect.SmtpSender's header head passes its header block", errInvalidSettings)
 	}
 	return nil
 }
