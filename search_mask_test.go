@@ -751,8 +751,8 @@ func TestSearchMaskPrefixVerdictsAtTheJudge(t *testing.T) {
 // The device's own verdicts through a real evs client (EVS1-M6-04): a held writer's breach of src/main.go, which the
 // reader's head read walked under and recorded, is masked while the accepted version counts; a path the mirror
 // journalled as a breach's creation is masked though this reader never read it; a path read with nothing ignored, and
-// one never read, count. Nothing is read from evs to judge a candidate. A client whose rules no composition enabled
-// holds every candidate of the ruled repo, as it refuses every read of it.
+// one never read, count. Nothing is read from evs to judge a candidate. A client whose rules no composition enabled keeps
+// them dark, the launch default (QD-1032), and gets no prefix judge for the ruled repo: its mask asks none.
 func TestSearchMaskTakesTheDevicesOwnVerdicts(t *testing.T) {
 	test := newEvsPrefixTest(t)
 	world := test.world
@@ -825,15 +825,8 @@ func TestSearchMaskTakesTheDevicesOwnVerdicts(t *testing.T) {
 	}
 
 	plain := world.reader(t, evsTestId("no rules enabled"))
-	held, err := searchPrefixJudgeOf(plain.client, world.repoId)
-	if err != nil || held == nil {
-		t.Fatalf("no judge for a client without rules: %v", err)
-	}
-	verdicts, _ = judgeAll(held)
-	for index, verdict := range verdicts {
-		if verdict != searchMaskUnknown {
-			t.Errorf("candidate %d on a client without rules: %d", index, verdict)
-		}
+	if dark, err := searchPrefixJudgeOf(plain.client, world.repoId); err != nil || dark != nil {
+		t.Fatalf("a judge for a client whose rules are dark: %v", err)
 	}
 }
 

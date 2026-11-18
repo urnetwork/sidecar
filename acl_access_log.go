@@ -18,7 +18,9 @@
 //	             for the repo's life: a set stays after a later one replaces it, since pushes pinned in its span are
 //	             judged by it, and a compromise cascade voids none. Nothing else moves: no right, holder or key
 //	             changes, so holders_shrunk_at stays and no generation is asked for. M2 folds it and enforces
-//	             nothing (D-PHASE-9; DESIGN-DETAILS 16.2.3)
+//	             nothing (D-PHASE-9; DESIGN-DETAILS 16.2.3). At launch none is folded: the rules moved to Later
+//	             (QD-1032), and the log refuses every RepoPrefixRules before it reaches this fold
+//	             (acl_statement.go's configAclPrefixRulesDark), so the list stays empty unless a log runs the rules
 //	consented    an owner-bound repo's owner's devices consented at its RepoCreate, and each its owner's
 //	             OwnerConfirm adds; a device consented any other way between bases waits for the next base's compile
 //	shrunk time  RepoCreate's entry time_ms as holders_shrunk_time_ms, the repo's t_s while holders_shrunk_at is 0,

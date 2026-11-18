@@ -34,6 +34,11 @@
 // A void set leaves the set below it in force; a pending or newer one makes every verdict at or above it wait or
 // update, never allowed (16.2.3). A path's plaintext is its device's own and goes into no log and no error (I-13).
 //
+// Dark at launch (QD-1032): the rules moved to Later and stay here for their return, behind AclPrefixSettings.Enabled.
+// With it off, the launch default, the filer signs nothing (ErrAclPrefixRulesDeferred), no log takes a set
+// (acl_statement.go), and no reader asks PrefixVerdict or AllowPrefixWrite (evs_read.go's prefixRuled); the
+// functions here are what their tests run with the switch on.
+//
 // On every leg but ios_extension, whose forwarding role reads no evs repo (owner decision 197). testHookSecret runs
 // where config_seal and evs_key derive keys, through EvsRepoKey.DeriveKey; nothing here derives one itself.
 // testHookBarrier runs around the sealed store's write of a repo's sets. Package-level functions are safe for
@@ -1427,8 +1432,12 @@ func NewAclPrefixRulesFiler(args *AclPrefixRulesFilerArgs) *AclPrefixRulesFiler 
 // answering its position once it lands. api and every reader judge the signer (16.2.2: a repo admin or a config
 // writer). A subject that names nobody, a group's or a role's among them, is refused before anything is signed, as is
 // a set no reader would open, and an Allow or a Deny where the set in force is pending or newer here: a device that
-// cannot read the rules in force does not build on them (EVS_PREFIX_RULE, pending or update).
+// cannot read the rules in force does not build on them (EVS_PREFIX_RULE, pending or update). While the filer's settings
+// keep the rules dark, the launch default, nothing is built or signed: ErrAclPrefixRulesDeferred (QD-1032).
 func (self *AclPrefixRulesFiler) File(ctx context.Context, request *AclPrefixRulesRequest, origin SidecarActOrigin, check SidecarPresenceCheck) (*AclPrefixRulesFiled, error) {
+	if !self.settings.Enabled {
+		return nil, ErrAclPrefixRulesDeferred
+	}
 	if origin != SidecarActConfirmed {
 		return nil, ErrSidecarActMode
 	}

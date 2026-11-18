@@ -6,6 +6,9 @@
 //
 //	ur evs repair <repo_id> [<path>]
 //
+// Deferred to Later with the prefix rules (QD-1032): while the daemon's evs client keeps them dark, the launch default,
+// it refuses naming the deferral and sends nothing.
+//
 // The path is the person's own and goes only between ur and its daemon on this device (I-13).
 
 package main
@@ -59,6 +62,9 @@ func urEvsRepairMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
 				return nil, err
 			}
 			result, err := client.RepairPrefix(ctx, &sidecar.EvsPrefixRepairArgs{RepoId: repoId, Path: params.Path, ByHand: true})
+			if errors.Is(err, sidecar.ErrAclPrefixRulesDeferred) {
+				return nil, sidecar.ErrAclPrefixRulesDeferred
+			}
 			if errors.Is(err, sidecar.ErrEvsPrefixRepairOff) {
 				return nil, errors.New("this device runs no prefix repair: only a desktop or the daemon that mirrors the repo repairs")
 			}

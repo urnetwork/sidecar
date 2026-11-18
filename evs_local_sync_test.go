@@ -985,6 +985,7 @@ func newEvsTestGitRules(t *testing.T) *evsTestGitRules {
 	publisher.writer.test.client.EnablePrefixRules(&EvsPrefixRulesArgs{
 		Sets:       func(ctx context.Context, repoId Id) ([]*AclPrefixRuleSet, error) { return slices.Clone(test.sets), nil },
 		AllowWrite: test.allowWrite,
+		Settings:   testAclPrefixSettingsOn(),
 	})
 	evsLocalPublishSkipPrefixHook = func(update *evsGitPublishUpdate) bool { return test.breach }
 	t.Cleanup(func() { evsLocalPublishSkipPrefixHook = nil })
@@ -1480,7 +1481,8 @@ func TestEvsExportPrefixStopsAtABreach(t *testing.T) {
 	pending := rules.world.reader(t, evsTestId("pending exporter"))
 	pendingSets := []*AclPrefixRuleSet{{At: 5, Signer: rules.admin.sidecarId, State: AclPrefixSetPending}}
 	pending.client.EnablePrefixRules(&EvsPrefixRulesArgs{
-		Sets: func(ctx context.Context, repoId Id) ([]*AclPrefixRuleSet, error) { return pendingSets, nil },
+		Sets:     func(ctx context.Context, repoId Id) ([]*AclPrefixRuleSet, error) { return pendingSets, nil },
+		Settings: testAclPrefixSettingsOn(),
 	})
 	_, err = pending.client.Repo(rules.world.repoId).Export(context.Background(), &EvsExportArgs{Dir: t.TempDir() + "/pending.git"})
 	if detail, _ := evsTestPrefixRefusal(err); detail != EvsPrefixDetailPending {

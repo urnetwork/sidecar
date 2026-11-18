@@ -49,6 +49,11 @@
 // PinPushRetryCount sends, after which the next honest push on the ref binds it, as any push pinned at its writer's
 // installed state does.
 //
+// Dark at launch (QD-1032): while the client's prefix settings keep the rules off, the defaults, no repair and no pin
+// push is sent, by timer or by hand. RepairPrefix and RepairPath answer ErrEvsPrefixRepairOff wrapped with
+// ErrAclPrefixRulesDeferred, PrefixRulesStatus and PinPushRules ErrAclPrefixRulesDeferred, and the timer's pass and
+// the owed pin pushes do nothing.
+//
 // A path is its device's own and goes into no log (I-13). Safe for concurrent use: one repair pass runs at a time.
 
 package sidecar
@@ -74,7 +79,14 @@ import (
 const evsPrefixRepairDirectory = "prefix_repair/"
 
 // This device's composition does not repair: a phone, an ephemeral sidecar, or a client with no prefix rules enabled.
+// A client whose rules are dark (QD-1032) answers it wrapped with ErrAclPrefixRulesDeferred, which names why.
 var ErrEvsPrefixRepairOff = errors.New("evs: this device runs no prefix repair")
+
+// The repair runner's refusal while the client's prefix rules are dark, the launch default (QD-1032): no repair push
+// is sent. Both ErrEvsPrefixRepairOff, which the runner's callers already answer, and ErrAclPrefixRulesDeferred.
+func evsPrefixRepairDeferred() error {
+	return fmt.Errorf("%w: %w", ErrEvsPrefixRepairOff, ErrAclPrefixRulesDeferred)
+}
 
 // What one pass of the runner is asked.
 type EvsPrefixRepairArgs struct {
@@ -128,8 +140,12 @@ const (
 )
 
 // One pass of the repair runner over a repo's journal (the file header). The daemon calls it on its timer, `ur evs
-// repair` by hand. ErrEvsPrefixRepairOff on a device that does not repair.
+// repair` by hand. ErrEvsPrefixRepairOff on a device that does not repair, and while the rules are dark (QD-1032)
+// wrapped with ErrAclPrefixRulesDeferred.
 func (self *EvsClient) RepairPrefix(ctx context.Context, args *EvsPrefixRepairArgs) (*EvsPrefixRepairResult, error) {
+	if !self.PrefixRulesEnabled() {
+		return nil, evsPrefixRepairDeferred()
+	}
 	judge := self.prefixJudge()
 	if judge == nil || !judge.repairs() {
 		return nil, ErrEvsPrefixRepairOff
@@ -442,7 +458,11 @@ func (self *evsPrefixJudge) repairs() bool {
 // refused, naming `ur evs repair` on a device that mirrors the ref (10.2.4); and one the rules allow the path, else the
 // planner's EVS_PREFIX_RULE before any request. A path whose newest event at evs is allowed already sends nothing, its
 // SettledCount 1; one another write moves under it answers that write's conflict, which the caller reads again on.
+// While the rules are dark (QD-1032) nothing is sent: ErrEvsPrefixRepairOff wrapped with ErrAclPrefixRulesDeferred.
 func (self *EvsRepo) RepairPath(ctx context.Context, refName []byte, path string) (*EvsPrefixRepairResult, error) {
+	if !self.client.PrefixRulesEnabled() {
+		return nil, evsPrefixRepairDeferred()
+	}
 	judge := self.client.prefixJudge()
 	if judge == nil || !judge.repairs() {
 		return nil, ErrEvsPrefixRepairOff
@@ -483,7 +503,11 @@ func (self *EvsRepo) RepairPath(ctx context.Context, refName []byte, path string
 
 // One pass of the daemon's prefix timer (evs_component.go): the runner over each repo whose mirror journalled an ignored
 // event, then the pin pushes the journal owes. What fails is logged and waits for the next pass; no path is logged.
+// Nothing while the rules are dark (QD-1032).
 func (self *EvsClient) passPrefixRepair(ctx context.Context) {
+	if !self.PrefixRulesEnabled() {
+		return
+	}
 	entries, err := self.args.Store.List(evsPrefixJournalDirectory)
 	if err != nil {
 		self.log.Warningf("[evs]the prefix journal does not list: %v", err)
@@ -562,8 +586,11 @@ type EvsPrefixRulesStatus struct {
 
 // A repo's sets and refs as `ur evs rules show` prints them (DESIGN-DETAILS 16.2.9): each ref against the newest
 // set's position, a deleted one as held at its re-creation, a tag and a ref stopped on this device apart. Nothing is
-// sent.
+// sent. ErrAclPrefixRulesDeferred while the rules are dark (QD-1032): there are none to show.
 func (self *EvsClient) PrefixRulesStatus(ctx context.Context, repoId Id) (*EvsPrefixRulesStatus, error) {
+	if !self.PrefixRulesEnabled() {
+		return nil, ErrAclPrefixRulesDeferred
+	}
 	judge := self.prefixJudge()
 	if judge == nil {
 		return nil, &EvsPrefixRuleError{Detail: EvsPrefixDetailPending}
@@ -669,8 +696,12 @@ func (self *EvsClient) prefixRefStopped(repoId Id, refId Id) bool {
 // set's position at, following the log once where it does not yet, a pin push to each shared ref whose head's pin is
 // below at, a tag ref, a deleted ref and a ref stopped here excepted. A ref whose pin push fails, or every ref when the
 // log does not hold the set yet, stays owed in the sealed store under prefix_pin/<repo_id>, which RetryPrefixPinPushes
-// sends again. Each ref's outcome is answered.
+// sends again. Each ref's outcome is answered. ErrAclPrefixRulesDeferred, sending nothing and owing nothing, while the
+// rules are dark (QD-1032).
 func (self *EvsClient) PinPushRules(ctx context.Context, repoId Id, at uint64) ([]*EvsPrefixRef, error) {
+	if !self.PrefixRulesEnabled() {
+		return nil, ErrAclPrefixRulesDeferred
+	}
 	judge := self.prefixJudge()
 	if judge == nil {
 		return nil, &EvsPrefixRuleError{Detail: EvsPrefixDetailPending}
@@ -784,7 +815,8 @@ func (self *evsPrefixJudge) settlePinPushes(repoId Id, at uint64) error {
 
 // Sends again every pin push the journal owes (16.2.9's retry row), repo by repo, each at most once a
 // PinPushRetryInterval: what the daemon's prefix timer runs. A repo's failure is logged and left owed, up to
-// PinPushRetryCount sends; the first error is answered.
+// PinPushRetryCount sends; the first error is answered. Nothing while the rules are dark (QD-1032): prefixJudge answers
+// no judge.
 func (self *EvsClient) RetryPrefixPinPushes(ctx context.Context) error {
 	judge := self.prefixJudge()
 	if judge == nil {
