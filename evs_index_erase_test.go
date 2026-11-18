@@ -818,11 +818,20 @@ func TestIndexResumeByAnotherDeviceAfter25Hours(t *testing.T) {
 	world.evs.sweep(t, world.listed(t))
 }
 
-// A crash that left the CUT missing: a resume given the erasure's documents commits the CUT itself, then rewrites; one
-// without them cannot, and says so.
+// A crash that left the CUT missing after the erasure's first ERASE (a record erasure ERASEs its bodies first,
+// QD-781): a resume given the erasure's documents commits the CUT itself, then rewrites; one without them cannot, and
+// says so; and an erasure that committed nothing never began, so no other device takes it up.
 func TestIndexResumeCommitsAMissingCut(t *testing.T) {
 	world := testEraseWorldWithCopies(t)
 	documents := []*IndexCutDocument{{Key: testIndexId("d", 0), Version: 1}}
+	if _, err := world.eraser(t, nil).Resume(context.Background(), &IndexResumeArgs{ErasureId: evsTestId("erasure"), Role: IndexResumeAny, Documents: documents}); !errors.Is(err, ErrIndexErasureNotBegun) {
+		t.Fatalf("another device's resume of an erasure that never began: %v", err)
+	}
+	// the erasure's first ERASE, of the entry's own keys, lands before the crash
+	body := world.evs.as(evsTestId("eraser"))
+	if err := body.Erase(context.Background(), &indexErasePush{erasureId: evsTestId("erasure"), keys: []*EvsErasedKey{{SlotId: evsTestId("entry body slot")}}}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := world.eraser(t, nil).Resume(context.Background(), &IndexResumeArgs{ErasureId: evsTestId("erasure"), Role: IndexResumeAny}); !errors.Is(err, ErrIndexEraseNotCut) {
 		t.Fatalf("a resume with no CUT and no documents: %v", err)
 	}

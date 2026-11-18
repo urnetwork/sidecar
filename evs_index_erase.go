@@ -61,6 +61,9 @@ import (
 var (
 	// The erasure set at the head does not list the erasure: its CUT is committed first (§11.12's reconcile row).
 	ErrIndexEraseNotCut = errors.New("index erasure not cut on this ref: its CUT comes first")
+	// An erasure that committed nothing, no CUT and no ERASE, never began, and only its own device resumes it (§11.12's
+	// reconcile row).
+	ErrIndexErasureNotBegun = errors.New("index erasure never began: only its own device's journal retries it")
 	// A rewrite or re-entry of no erasure, or a resume asked of no role.
 	errIndexEraseArgs = errors.New("index erasure rewrite of no erasure")
 	// A rewrite listed again RewriteAttemptCount times, each refused for a change under it: the caller tries again.
@@ -747,6 +750,10 @@ func (self *IndexEraser) Resume(ctx context.Context, args *IndexResumeArgs) (*In
 	}
 	result := &IndexResumeResult{}
 	erasure := indexErasureOf(view.erasureSet, args.ErasureId)
+	if erasure == nil && len(progress.erases) == 0 && len(progress.closures) == 0 && args.Role != IndexResumeEraser {
+		// an erasure that committed nothing never began: only its own device's journal retries it
+		return result, ErrIndexErasureNotBegun
+	}
 	if args.Role == IndexResumeMember {
 		lastMs := progress.lastEraseMs()
 		if erasure != nil {
