@@ -17,8 +17,6 @@ import (
 	"crypto/sha256"
 	"errors"
 	"time"
-
-	"github.com/urnetwork/sidecar/protocol"
 )
 
 var (
@@ -48,7 +46,7 @@ type SearchTestPlannedPush struct {
 // The index's view at the head, as signer reads it.
 func (self *SearchTestWorld) view(ctx context.Context, signer Id) (*indexView, error) {
 	return indexLoadView(ctx, &indexViewArgs{
-		store: self.ref.store(signer), repoId: self.repoId, refId: self.refId, repoKind: protocol.RepoKind_REPO_KIND_GENERAL,
+		store: self.ref.store(signer), repoId: self.repoId, refId: self.refId, repoKind: self.kind,
 		isAdmin: self.isAdmin, settings: self.format,
 	})
 }
@@ -113,7 +111,7 @@ func (self *SearchTestWorld) HeadVersion(ctx context.Context) (uint64, error) {
 // ref version its push committed at, 0 where it committed nothing.
 func (self *SearchTestWorld) Merge(ctx context.Context, signer Id, startDay uint32) (uint64, error) {
 	merger, err := indexNewMerger(&indexMergerArgs{
-		store: self.ref.store(signer), repoId: self.repoId, refId: self.refId, repoKind: protocol.RepoKind_REPO_KIND_GENERAL,
+		store: self.ref.store(signer), repoId: self.repoId, refId: self.refId, repoKind: self.kind,
 		isAdmin: self.isAdmin, format: self.format,
 		padKey: func(ctx context.Context) (*indexPadKey, error) { return self.padKey, nil }, tables: indexLinkedTables(),
 		clock: self.clock,
@@ -143,7 +141,7 @@ func (self *SearchTestWorld) Merge(ctx context.Context, signer Id, startDay uint
 // at, 0 where none was due or another runner's lock held it.
 func (self *SearchTestWorld) RollUp(ctx context.Context, runner Id) (uint64, error) {
 	roller, err := indexNewRoller(&indexRollerArgs{
-		store: self.ref.store(runner), repoId: self.repoId, refId: self.refId, repoKind: protocol.RepoKind_REPO_KIND_GENERAL,
+		store: self.ref.store(runner), repoId: self.repoId, refId: self.refId, repoKind: self.kind,
 		isAdmin: self.isAdmin, format: self.format,
 		padKey: func(ctx context.Context) (*indexPadKey, error) { return self.padKey, nil }, tables: indexLinkedTables(),
 		clock: self.clock, runner: runner,
@@ -215,7 +213,7 @@ func (self *SearchTestWorld) Cut(ctx context.Context, erasureId Id, documents []
 		cut = append(cut, &IndexCutDocument{Key: key, Version: document.Version})
 	}
 	eraser, err := indexNewEraser(&indexEraserArgs{
-		store: self.ref.store(self.AdminId()), repoId: self.repoId, refId: self.refId, repoKind: protocol.RepoKind_REPO_KIND_GENERAL,
+		store: self.ref.store(self.AdminId()), repoId: self.repoId, refId: self.refId, repoKind: self.kind,
 		isAdmin: self.isAdmin, format: self.format,
 		eraser: self.AdminId(), clock: self.clock,
 	})
