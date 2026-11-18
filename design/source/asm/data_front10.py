@@ -1078,6 +1078,10 @@ INDEX = list(_P9['INDEX']) + [
     (584, 'Full index entries only',
      "Every search-index entry is a full key set or a tombstone; the diff kind is refused, and kept slots, chains and "
      "resting diffs go."),
+    # The fold of DESIGN-DETAILS.md sections 8 and 9 (2026-11-17): the complexity review's answer on section 9.
+    (585, 'Batched path-epoch dues',
+     "Every path-epoch due is batched, 24 h on, and holds no creation or new name; a mapper's 2-min block is the one "
+     "creation refusal."),
 ]
 # Owner decision 188 amends 176's summary (the reconciler's ASM.md, 1.2).
 _i176 = [r[0] for r in INDEX].index(176)
@@ -1140,11 +1144,18 @@ for _n, _old_end, _note in [
          " Amended by @@OD:584@@: no entry is a diff, so no base is kept; the head rule, merges reading no head and "
          "promotion stand."),
         (395, "and at the limit only those two files wait.",
-         " Reversed by @@OD:584@@: no entry is a diff; the re-entry folds run cards alone, and nothing waits for it.")]:
+         " Reversed by @@OD:584@@: no entry is a diff; the re-entry folds run cards alone, and nothing waits for it."),
+        # Owner decision 585 batches every path-epoch due: the crossing creation's refusal and the due's class go.
+        (229, "as the commit would have.",
+         " Reversed by @@OD:585@@: every due is batched and holds no creation; only a mapper's block refuses one."),
+        (414, "as §10.6's gate holds it.",
+         " Reversed by @@OD:585@@: every due is batched, and no crossing is classed."),
+        (569, "reading the states around each shrink after it.",
+         " Reversed by @@OD:585@@: no crossing is classed.")]:
     _i = [r[0] for r in INDEX].index(_n)
     assert INDEX[_i][2].endswith(_old_end), _n
     INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
-assert [r[0] for r in INDEX] == list(range(1, 585))
+assert [r[0] for r in INDEX] == list(range(1, 586))
 DATES = dict(_P9['DATES'])
 DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '2026-11-06', 189: '2026-11-06',
               190: '2026-11-06', 191: '2026-11-06', 192: '2026-11-06', 193: '2026-11-06',
@@ -1232,7 +1243,7 @@ DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '202
               568: '2026-11-16', 569: '2026-11-17', 570: '2026-11-17', 571: '2026-11-16', 572: '2026-11-16',
               573: '2026-11-16', 574: '2026-11-16', 575: '2026-11-17', 576: '2026-11-16', 577: '2026-11-17',
               578: '2026-11-17', 579: '2026-11-17', 580: '2026-11-17', 581: '2026-11-17', 582: '2026-11-17',
-              583: '2026-11-17', 584: '2026-11-17'})
+              583: '2026-11-17', 584: '2026-11-17', 585: '2026-11-17'})
 _ANCHOR = "This section lists the cross-cutting decisions"
 assert _ANCHOR in _P9['DECISIONS_INTRO']
 DECISIONS_INTRO = _P9['DECISIONS_INTRO'].replace(
@@ -1550,3 +1561,9 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     _D583, _D583 + "The fold of DESIGN-DETAILS.md sections 1, 11 and 15 numbers the answer of the owner's complexity "
     "review that bears on them: full search-index entries only (584), amending @@OD:385@@ and reversing "
     "@@OD:395@@. ")
+# The fold of DESIGN-DETAILS.md sections 8 and 9 (2026-11-17) numbers the complexity review's answer on section 9.
+_D584 = "full search-index entries only (584), amending @@OD:385@@ and reversing @@OD:395@@. "
+assert DECISIONS_INTRO.count(_D584) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D584, _D584 + "The fold of DESIGN-DETAILS.md sections 8 and 9 numbers its answer on section 9: every path-epoch "
+    "due batched (585), reversing @@OD:229@@, @@OD:414@@ and @@OD:569@@. ")

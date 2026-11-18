@@ -400,6 +400,9 @@ type BridgeLedgerEgress struct {
 	// subject no exit.
 	ExitSidecarIds []Id
 	ExitTagId      []byte
+	// Under exits: whether the body requires the subject's devices to keep default egress on (QD-1053). False while the
+	// body is pending or void, which requires nothing.
+	RequireDefaultEgress bool
 	// The entry that set it, and the statement for one past the fold.
 	At        uint64
 	Statement *BridgeLogStatement
@@ -1314,8 +1317,9 @@ func (self *BridgeLedger) countApproval(approvalId Id, uses uint32, ruleId []byt
 	return nil
 }
 
-// A BridgeEgress at body level: none and auto carry no body; exits lists its exit sidecars or names their tag. auto
-// is every subject's default, so it leaves no spec.
+// A BridgeEgress at body level: none and auto carry no body; exits lists its exit sidecars or names their tag, and may
+// require the subject's devices to keep default egress on (QD-1053). auto is every subject's default, so it leaves no
+// spec.
 func (self *BridgeLedger) applyEgress(entry *BridgeLedgerEntry) error {
 	statement := entry.Statement
 	if statement.EgressMode == bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_AUTO {
@@ -1350,6 +1354,7 @@ func (self *BridgeLedger) applyEgress(entry *BridgeLedgerEntry) error {
 		return fmt.Errorf("an exit_tag_id of %d bytes", len(body.GetExitTagId()))
 	}
 	egress.ExitSidecarIds, egress.ExitTagId = exits, bytes.Clone(body.GetExitTagId())
+	egress.RequireDefaultEgress = body.GetRequireDefaultEgress()
 	return nil
 }
 

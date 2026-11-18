@@ -12,8 +12,11 @@
 //	                                          on every interface unless a local ip or --listen narrows it (owner
 //	                                          decision 84); it serves every host that reaches the listener
 //	ur bridge close <id>                      ends a forward, or withdraws a rule or revokes a grant by its id
-//	ur bridge egress auto|<exit>[,<exit>]|tag:<t>|none
-//	                                          this device's default route; a person's confirmation
+//	ur bridge egress auto|<exit>[,<exit>]|tag:<t>|none [--require-default-egress]
+//	                                          this device's default route; a person's confirmation. Under exits,
+//	                                          --require-default-egress has the subject's devices keep default egress
+//	                                          on, which ur tun then refuses to turn off (QD-1053), sealed with the
+//	                                          exits so no server learns it
 //	ur bridge block [cycle|<cidr>]            shows the network's block, or re-rolls or chooses it, an admin's; a
 //	                                          person's confirmation
 //
@@ -80,7 +83,7 @@ func init() {
 			"  ur bridge expose <ranges>... [--udp] [--remap] [--network=<name>]",
 			"  ur bridge forward <spec> [--listen=<ip>] [--udp] [--network=<name>]",
 			"  ur bridge close <id> [--reset] [--network=<name>]",
-			"  ur bridge egress <egress> [--network=<name>]",
+			"  ur bridge egress <egress> [--require-default-egress] [--network=<name>]",
 			"  ur bridge block [<block>] [--network=<name>]",
 		}, append(urBridgeShareUsage, urBridgePublicTlsUsage...)...), "\n"),
 		summary: "list the network's bridge, expose subnets and ports, forward a client's port",
@@ -139,6 +142,11 @@ func runUrBridge(ctx context.Context, cli *urCli, options docopt.Opts) error {
 			return err
 		}
 		params.Network = network
+		params.RequireDefaultEgress, _ = options.Bool("--require-default-egress")
+		if params.RequireDefaultEgress && params.Mode != "" && !strings.HasPrefix(params.Mode, "tag:") {
+			// auto and none name no exit, so nothing can carry default egress there
+			return fmt.Errorf("--require-default-egress goes with exits, not %s", params.Mode)
+		}
 		return runUrBridgeEgress(ctx, cli, spec, params)
 	case options["block"] == true:
 		block, _ := options.String("<block>")
@@ -348,7 +356,11 @@ func runUrBridgeClose(ctx context.Context, cli *urCli, params *sidecar.DaemonBri
 }
 
 func runUrBridgeEgress(ctx context.Context, cli *urCli, spec string, params *sidecar.DaemonBridgeEgressParams) error {
-	confirmed, err := confirmOnTty(cli, fmt.Sprintf("Set this device's default route to %s?", spec))
+	question := fmt.Sprintf("Set this device's default route to %s?", spec)
+	if params.RequireDefaultEgress {
+		question = fmt.Sprintf("Set this device's default route to %s, and require its devices to keep default egress on?", spec)
+	}
+	confirmed, err := confirmOnTty(cli, question)
 	if err != nil {
 		return err
 	}
@@ -359,6 +371,9 @@ func runUrBridgeEgress(ctx context.Context, cli *urCli, spec string, params *sid
 		return err
 	}
 	cli.printf("egress     %s\n", spec)
+	if params.RequireDefaultEgress {
+		cli.printf("required   default egress stays on for the subject's devices\n")
+	}
 	return nil
 }
 

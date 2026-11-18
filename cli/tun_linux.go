@@ -11,7 +11,8 @@
 //	           created exclusively: a route another interface holds at the same prefix and metric keeps it, counted
 //	resolver   bridge_dns_linux.go's
 //	local      bridge_local_linux.go's
-//	exits      under the egress mode exits, the default route through the device in a table of its own, ExitsTable,
+//	exits      where the tun's plan takes the host's default route (tun_default.go; QD-1052), "under exits"
+//	           here, the default route through the device in a table of its own, ExitsTable,
 //	           and wg-quick's two rules ahead of the main table's: `lookup main suppress_prefixlength 0`, so every route
 //	           of the main table but its default keeps its way, then `not fwmark <ExitsMark> lookup <ExitsTable>`, so
 //	           the rest takes the tun but for the daemon's own connect sockets, which carry connect's egress mark

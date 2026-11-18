@@ -2,11 +2,17 @@
 // socket does, so each command returns once the daemon holds what it asked for, and the daemon stays up while its
 // bridge is on (the bridge component is an active one, §5.8).
 //
-//	ur tun [--network=<name>]                 brings the tun up over the network's bridge: the block and the granted
-//	                                          prefixes, and the default route under the egress mode exits, IPv6's
+//	ur tun [--network=<name>] [--default-egress=on|off] [--route-local=on|off]
+//	                                          brings the tun up over the network's bridge: the block and the granted
+//	                                          prefixes, and the host's default route where the plan for default
+//	                                          traffic takes it (tun_default.go; QD-1052): with default egress on and a
+//	                                          destination, the network's exits under the egress mode exits, IPv6's
 //	                                          beside IPv4's though no exit carries IPv6, which goes nowhere, refused
-//	                                          at once (QD-881, QD-970), the daemon's own transport kept off it by
-//	                                          connect's egress mark (QD-800); it yields to an app's bridge
+//	                                          at once (QD-881, QD-970); or with no destination and route local
+//	                                          traffic off, refused; the daemon's own transport kept off it by
+//	                                          connect's egress mark (QD-800). Either choice, given, is the network's
+//	                                          from then on, kept by the daemon and planned again at once on a tun
+//	                                          already up, with no restart; it yields to an app's bridge
 //	ur tun down                               ends it, removing its routes
 //	ur tun ip [<ip> | auto] [--network=<name>]
 //	                                          shows this host's overlay address and the block, or claims an address in
@@ -29,6 +35,7 @@ import (
 	"github.com/docopt/docopt-go"
 
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 // The tun's control methods.
@@ -56,7 +63,7 @@ func init() {
 	registerUrCommand(&urCommand{
 		name: "tun",
 		usage: strings.Join([]string{
-			"  ur tun [--network=<name>]",
+			"  ur tun [--network=<name>] [--default-egress=<on_off>] [--route-local=<on_off>]",
 			"  ur tun down",
 			"  ur tun ip [<ip>] [--network=<name>]",
 		}, "\n"),
@@ -66,10 +73,26 @@ func init() {
 	urDaemonMethodExtensions = append(urDaemonMethodExtensions, urTunMethods)
 }
 
-// tun.up's and tun.ip's params: the network argument, and ur tun ip's address, "auto", or empty to show.
+// tun.up's and tun.ip's params: the network argument; ur tun ip's address, "auto", or empty to show; and tun.up's
+// choices for default traffic, on, off, or empty to leave one as it is (tun_default.go).
 type urTunParams struct {
-	Network string `json:"network,omitempty"`
-	Address string `json:"address,omitempty"`
+	Network       string `json:"network,omitempty"`
+	Address       string `json:"address,omitempty"`
+	DefaultEgress string `json:"default_egress,omitempty"`
+	RouteLocal    string `json:"route_local,omitempty"`
+}
+
+// The change of the network's choices params ask for.
+func (self *urTunParams) choiceChange() (*urTunChoiceChange, error) {
+	defaultEgress, err := parseUrTunChoice(self.DefaultEgress)
+	if err != nil {
+		return nil, fmt.Errorf("default egress: %w", err)
+	}
+	routeLocal, err := parseUrTunChoice(self.RouteLocal)
+	if err != nil {
+		return nil, fmt.Errorf("route local traffic: %w", err)
+	}
+	return &urTunChoiceChange{DefaultEgress: defaultEgress, RouteLocal: routeLocal}, nil
 }
 
 // tun.down's reply.
@@ -104,7 +127,15 @@ func urTunDaemonMethods(bridges *urBridgeDaemon) []*sidecar.DaemonMethod {
 			Name:    urMethodTunUp,
 			Network: true,
 			Handler: func(ctx context.Context, call *sidecar.DaemonCall) (any, error) {
-				return bridges.tunUp(call.NetworkId, call.Sidecar)
+				params := &urTunParams{}
+				if err := decodeUrParams(call, params); err != nil {
+					return nil, errors.New("tun.up takes a network and its choices for default traffic")
+				}
+				change, err := params.choiceChange()
+				if err != nil {
+					return nil, err
+				}
+				return bridges.tunUp(call.NetworkId, call.Sidecar, change)
 			},
 		},
 		{
@@ -205,17 +236,24 @@ func runUrTun(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		address, _ := options.String("<ip>")
 		return runUrTunIp(ctx, cli, network, address)
 	}
-	return runUrTunUp(ctx, cli, network)
+	defaultEgress, _ := options.String("--default-egress")
+	routeLocal, _ := options.String("--route-local")
+	params := &urTunParams{Network: network, DefaultEgress: defaultEgress, RouteLocal: routeLocal}
+	// a choice that is neither on nor off is refused here, before any daemon is reached
+	if _, err := params.choiceChange(); err != nil {
+		return err
+	}
+	return runUrTunUp(ctx, cli, params)
 }
 
-// Asks the daemon to bring the tun up and prints what it carries.
-func runUrTunUp(ctx context.Context, cli *urCli, network string) error {
+// Asks the daemon to bring the tun up, with the choices params name, and prints what it carries.
+func runUrTunUp(ctx context.Context, cli *urCli, params *urTunParams) error {
 	// the daemon is this binary on this host, so a platform with no tun refuses before one is spawned
 	if urTunPlatform == nil {
 		return errUrTunPlatform
 	}
 	status := &urTunStatus{}
-	if err := cli.callDaemon(ctx, urMethodTunUp, &urTunParams{Network: network}, false, status); err != nil {
+	if err := cli.callDaemon(ctx, urMethodTunUp, params, false, status); err != nil {
 		return err
 	}
 	printUrTunStatus(cli, status)
@@ -303,17 +341,52 @@ func printUrTunStatus(cli *urCli, status *urTunStatus) {
 		cli.printf("  names      not set on this host's resolver; %s\n", status.ResolverStep)
 	}
 	cli.printf("  egress     %s\n", status.EgressMode)
+	printUrTunDefault(cli, status)
+	if status.SyncError != "" {
+		cli.printf("  error      %s, tried again\n", status.SyncError)
+	}
+}
+
+// Prints the network's choices for default traffic and what the tun does with it (tun_default.go; QD-1052).
+func printUrTunDefault(cli *urCli, status *urTunStatus) {
+	cli.printf("  choices    default egress %s, route local traffic %s\n", urTunChoiceName(status.DefaultEgressChosen),
+		urTunChoiceName(status.RouteLocal))
+	if status.DefaultEgressRequired {
+		// the lock (QD-1053): the network holds default egress on, whatever the choice above
+		cli.printf("  required   default egress stays on: network %s requires it of its devices, and ur tun "+
+			"--default-egress=off waits for its admin, owner or sponsor to lift that\n", status.NetworkId)
+	}
+	exits := status.EgressMode == urTunEgressModeName(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS)
+	label := "default"
+	if exits {
+		label = "exits"
+	}
+	// why a destination is missing, in the egress mode's words
+	missing := "the client has no egress destination"
+	switch status.EgressMode {
+	case urTunEgressModeName(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS):
+		missing = "no exit the network names is usable now"
+	case urTunEgressModeName(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE):
+		missing = "the egress mode none sends nothing out"
+	}
 	switch {
-	case status.DefaultRoute:
+	case status.DefaultRoute && status.DefaultTraffic == urTunDefaultTrafficRefused:
+		cli.printf("  %-10s the default route rides ur tun, which refuses it: %s, and route local traffic is off; the "+
+			"daemon's own transport keeps today's route\n", label, missing)
+	case status.DefaultRoute && exits:
 		cli.printf("  exits      the default route rides ur tun to the network's exits, and the daemon's own transport " +
 			"keeps today's route; IPv6 goes nowhere, since no exit carries it: ur tun refuses it at once, and the host " +
 			"falls back to IPv4\n")
+	case status.DefaultRoute:
+		cli.printf("  default    the default route rides ur tun to the client's egress destination, and the daemon's own " +
+			"transport keeps today's route\n")
 	case status.ExitsHeld && status.ExitsHeldReason != "":
-		cli.printf("  exits      held: %s; other traffic keeps today's route, and ur tun tries again\n", status.ExitsHeldReason)
+		cli.printf("  %-10s held: %s; other traffic keeps today's route, and ur tun tries again\n", label, status.ExitsHeldReason)
 	case status.ExitsHeld:
-		cli.printf("  exits      held: other traffic keeps today's route, and ur tun tries again\n")
-	}
-	if status.SyncError != "" {
-		cli.printf("  error      %s, tried again\n", status.SyncError)
+		cli.printf("  %-10s held: other traffic keeps today's route, and ur tun tries again\n", label)
+	case status.DefaultTraffic == urTunDefaultTrafficLocal:
+		cli.printf("  %-10s default traffic keeps this host's own routes: %s, and route local traffic is on\n", label, missing)
+	case status.DefaultTraffic == urTunDefaultTrafficOff:
+		cli.printf("  %-10s default traffic keeps this host's own routes, since default egress is off\n", label)
 	}
 }

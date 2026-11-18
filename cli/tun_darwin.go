@@ -13,7 +13,8 @@
 //	           as the gateway; a route another interface holds at the same prefix answers EEXIST and keeps it, counted
 //	resolver   bridge_dns_darwin.go's
 //	local      bridge_local_darwin.go's
-//	exits      under the egress mode exits, IPv4's two halves through the device (urTunExitsHalves), each more specific
+//	exits      where the tun's plan takes the host's default route (tun_default.go; QD-1052), "under exits"
+//	           here, IPv4's two halves through the device (urTunExitsHalves), each more specific
 //	           than the host's own default route, which stays. connect's sockets are bound to that default route's
 //	           interface first (IP_BOUND_IF, connect.SetEgressInterfaceIndex) and its transports dial again, so the
 //	           daemon's own transport, and every link the bridge sends on, keeps the host's route; each sync binds them

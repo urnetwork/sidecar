@@ -3,8 +3,10 @@
 // RECORD-M6-20's erasure runner and the directory admin's erasure on sidecartest's fakes, FS-99's M6 cases: an
 // admin's ERASE of another writer's entry; a runner that starts after 24 h raising directory_erasure, waiting its
 // delay and erasing exactly the copies naming the repo, each ERASE naming the request; later copies swept while the
-// marker stands; a non-admin's request, and one after the repo is announced again, erasing nothing and alarming; two
-// runners racing, one ERASE committing; the indexer rule; and expiry holding an item's newest copy.
+// marker stands; a non-admin's request, and one after the repo is announced again, erasing nothing and alarming; a
+// request lapsed that way staying lapsed when the repo is revoked again, through the erasure of the entries that
+// showed it and a restart (owner decision 472); two runners racing, one ERASE committing; the indexer rule; and expiry
+// holding an item's newest copy.
 
 package sidecar_test
 
@@ -72,6 +74,67 @@ func (self *testDirectoryDevice) runner(t *testing.T, delay time.Duration, index
 		t.Fatal(err)
 	}
 	return runner, raises
+}
+
+// The device after a restart: a new directory client over its own copy's store and its record, raising its own
+// alarms.
+func (self *testDirectoryWorld) restarted(device *testDirectoryDevice) *testDirectoryDevice {
+	self.t.Helper()
+	reader := &testDirectoryReader{files: device.files, store: device.store, synced: make(chan struct{}, 64)}
+	client, err := sidecar.NewDirectoryClient(&sidecar.DirectoryClientArgs{
+		SidecarId:  device.writer.sidecarId,
+		Store:      device.store,
+		Cards:      self.cards.For(device.writer.sidecarId),
+		Streams:    func() sidecar.RecordStreams { return self.streams.For(device.writer.sidecarId) },
+		Auth:       func() sidecar.DirectoryAuthView { return self.directoryAuth.Tip() },
+		RecordAuth: func() sidecar.RecordAuthView { return self.recordAuth.Tip() },
+		Alarm: func(alarm *sidecar.RecordAlarm) {
+			reader.stateLock.Lock()
+			defer reader.stateLock.Unlock()
+			reader.alarms = append(reader.alarms, alarm)
+		},
+		Clock:     self.clock,
+		Settings:  sidecar.DefaultSidecarSettings().Directory,
+		Writer:    device.record.Writer(),
+		NetworkId: self.networkId,
+		Sign:      device.writer.sign,
+	})
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	reader.client = client
+	return &testDirectoryDevice{writer: device.writer, record: device.record, testDirectoryReader: reader}
+}
+
+// Each erasure_request's LapsedVersion as client holds it, by request id.
+func testLapsedVersions(client *sidecar.DirectoryClient) map[sidecar.Id]uint64 {
+	versions := map[sidecar.Id]uint64{}
+	for _, view := range client.ErasureRequests() {
+		versions[view.RequestId] = view.LapsedVersion
+	}
+	return versions
+}
+
+// The request ids the directory's ERASEs name at evs, one an ERASE, failing the test unless each is a revocation's whose
+// erasure id is the request its note names.
+func (self *testDirectoryWorld) erasureRequestIds(t *testing.T) []sidecar.Id {
+	t.Helper()
+	erasures, err := self.streams.For(self.readerId).ReadErasures(t.Context(), self.directoryId, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestIds := []sidecar.Id{}
+	for _, erasure := range erasures {
+		body := &protocol.ErasureBody{}
+		if err := proto.Unmarshal(erasure.SealedNote, body); err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(body.GetRequestId(), erasure.ErasureId.Bytes()) {
+			t.Fatalf("an ERASE whose id %s is not the request its note names, %x", erasure.ErasureId, body.GetRequestId())
+		}
+		requestIds = append(requestIds, erasure.ErasureId)
+	}
+	return requestIds
 }
 
 // One sync and one pass, which must both succeed.
@@ -369,6 +432,126 @@ func TestDirectoryRunnerRefusesARequestThatFailsItsCheck(t *testing.T) {
 	reader.mustSync(t)
 	if item := testRepoItemShown(t, reader, repoId); item == nil || item.Announcement.GetWhat().GetTitle() != "design notes" {
 		t.Errorf("the item announced again: %v", item)
+	}
+}
+
+// QD-984's sequence in one repo (owner decision 472): revoke P (request 1, marker version 2), announce P again (version
+// 3: request 1 lapses, refused with bad_erasure naming its signer), revoke P again (request 2, marker version 4). The
+// next pass holds request 2 alone as work, every ERASE names request 2 and the second revocation reads done at its
+// revoker. Request 1 stays lapsed after the ERASEs took the entries that showed its lapse, through a later copy's
+// sweep, which goes under request 2, and through a restart of the runner's client over its own copy.
+func TestDirectoryRunnerKeepsALapsedRequestLapsed(t *testing.T) {
+	world := newTestDirectoryWorld(t, nil)
+	owner, repoId := world.announcedRepo("design notes")
+	memberId := sidecar.NewId()
+	runWriter := world.memberWriter(memberId)
+	world.publish()
+	runWriter.announceRunIn(repoId, memberId)
+	admin := world.adminDevice()
+	runner, raises := admin.runner(t, 4*time.Minute, nil)
+
+	owner.mustSync(t)
+	first, err := owner.client.RevokeRepo(t.Context(), &sidecar.DirectoryRevokeArgs{RepoId: repoId, Confirmed: true})
+	if err != nil || first.MarkerVersion != 2 {
+		t.Fatalf("the first revocation: %+v, %v", first, err)
+	}
+	if _, err := owner.client.AnnounceRepo(t.Context(), &sidecar.DirectoryRepoAnnounceArgs{RepoId: repoId, DisplayName: "design notes", Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	owner.flush(t)
+	pass := admin.pass(t, runner)
+	if !slices.Equal(pass.Refused, []sidecar.Id{first.RequestId}) || len(pass.Delayed) != 0 || len(pass.Pending) != 0 || len(pass.Erased) != 0 {
+		t.Fatalf("the pass over the lapsed request: %+v", pass)
+	}
+	if count := admin.alarmsNaming(sidecar.SidecarRecordAlarmBadErasure, owner.writer.sidecarId); count != 1 {
+		t.Fatalf("%d bad_erasure alarms naming the lapsed request's signer", count)
+	}
+
+	// the second revocation's marker, a higher version, revives nothing: request 2 alone is work
+	owner.mustSync(t)
+	second, err := owner.client.RevokeRepo(t.Context(), &sidecar.DirectoryRevokeArgs{RepoId: repoId, Confirmed: true})
+	if err != nil || second.RequestId == first.RequestId || second.MarkerVersion != 4 || second.State != sidecar.DirectoryRevocationPending {
+		t.Fatalf("the second revocation: %+v, %v", second, err)
+	}
+	owner.flush(t)
+	pass = admin.pass(t, runner)
+	if !slices.Equal(pass.Delayed, []sidecar.Id{second.RequestId}) || len(pass.Refused) != 0 || len(pass.Erased) != 0 ||
+		len(pass.Pending) != 1 || pass.Pending[0].Request.RequestId != second.RequestId {
+		t.Fatalf("the pass after the second revocation: %+v", pass)
+	}
+	if versions := testLapsedVersions(admin.client); len(versions) != 2 || versions[first.RequestId] != 3 || versions[second.RequestId] != 0 {
+		t.Fatalf("the requests' lapses: %v", versions)
+	}
+	world.clock.Advance(4 * time.Minute)
+	pass = admin.pass(t, runner)
+	// the first announcement, the first marker, the item announced again and the run in P
+	if len(pass.Erased) != 1 || len(pass.Erased[second.RequestId]) != 4 {
+		t.Fatalf("the pass after the delay erased %v", pass.Erased)
+	}
+	admin.flush(t)
+	if requestIds := world.erasureRequestIds(t); len(requestIds) == 0 || slices.ContainsFunc(requestIds, func(id sidecar.Id) bool { return id != second.RequestId }) {
+		t.Fatalf("the ERASEs name %v, not request 2 alone", requestIds)
+	}
+
+	// the entries that showed the lapse are erased now, and request 1 stays lapsed, alarmed once
+	pass = admin.pass(t, runner)
+	if len(pass.Erased) != 0 || len(pass.Delayed) != 0 || len(pass.Pending) != 0 || len(pass.Refused) != 0 {
+		t.Fatalf("the pass once the copies are erased: %+v", pass)
+	}
+	if versions := testLapsedVersions(admin.client); versions[first.RequestId] != 3 {
+		t.Fatalf("the requests' lapses once the copies are erased: %v", versions)
+	}
+	if count := admin.alarmsNaming(sidecar.SidecarRecordAlarmBadErasure, owner.writer.sidecarId); count != 1 {
+		t.Errorf("%d bad_erasure alarms naming the lapsed request's signer", count)
+	}
+	if lines := runner.StatusLines(); len(lines) != 0 {
+		t.Errorf("an admin's status lines: %v", lines)
+	}
+	owner.mustSync(t)
+	revocations, err := owner.client.Revocations()
+	if err != nil || len(revocations) != 1 || revocations[0].RequestId != second.RequestId || revocations[0].State != sidecar.DirectoryRevocationDone ||
+		revocations[0].EraserSidecarId == nil || *revocations[0].EraserSidecarId != admin.writer.sidecarId {
+		t.Fatalf("the second revocation at its revoker: %+v, %v", revocations, err)
+	}
+
+	// a copy a daemon wrote since goes under request 2
+	world.clock.Advance(time.Hour)
+	world.publish()
+	runWriter.announceRunIn(repoId, memberId)
+	if pass = admin.pass(t, runner); !slices.Equal(pass.Delayed, []sidecar.Id{second.RequestId}) || len(pass.Refused) != 0 {
+		t.Fatalf("the pass that first shows a later copy: %+v", pass)
+	}
+	world.clock.Advance(4 * time.Minute)
+	if pass = admin.pass(t, runner); len(pass.Erased) != 1 || len(pass.Erased[second.RequestId]) != 1 {
+		t.Fatalf("the sweep erased %v", pass.Erased)
+	}
+	admin.flush(t)
+
+	// a restart: the copy holds none of the entries that showed the lapse, and the store keeps it
+	restarted := world.restarted(admin)
+	restartedRunner, restartedRaises := restarted.runner(t, 0, nil)
+	world.clock.Advance(25 * time.Hour)
+	world.publish()
+	pass = restarted.pass(t, restartedRunner)
+	for _, entry := range restarted.client.Entries() {
+		if entry.Kind() != sidecar.RecordKindAnnounce || entry.Body == nil {
+			continue
+		}
+		if item, err := sidecar.DirectoryDecodeAnnouncement(entry.Body); err == nil && sidecar.Id(item.GetWhere().GetRepoId()) == repoId && item.GetVersion() == 3 {
+			t.Fatalf("the restarted copy still opens the item announced again")
+		}
+	}
+	if slices.ContainsFunc(pass.Refused, func(id sidecar.Id) bool { return id != first.RequestId }) || len(pass.Delayed) != 0 || len(pass.Pending) != 0 || len(pass.Erased) != 0 {
+		t.Fatalf("the restarted runner's pass: %+v", pass)
+	}
+	if versions := testLapsedVersions(restarted.client); versions[first.RequestId] != 3 || versions[second.RequestId] != 0 {
+		t.Fatalf("the requests' lapses after a restart: %v", versions)
+	}
+	if raised := slices.Concat(raises.raised(), restartedRaises.raised()); len(raised) != 0 {
+		t.Errorf("directory_erasure raised: %v", raised)
+	}
+	if requestIds := world.erasureRequestIds(t); slices.Contains(requestIds, first.RequestId) {
+		t.Errorf("an ERASE names the lapsed request: %v", requestIds)
 	}
 }
 
