@@ -12,7 +12,7 @@
   "num": 2,
   "code": "TRUST",
   "words": 9316,
-  "code_words": 20616,
+  "code_words": 20702,
   "ceiling": 3000,
   "over": 6316,
   "over_pct": 210.5
@@ -39,7 +39,7 @@
   "num": 5,
   "code": "CORE",
   "words": 11151,
-  "code_words": 8178,
+  "code_words": 8187,
   "ceiling": 3500,
   "over": 7651,
   "over_pct": 218.6
@@ -57,7 +57,7 @@
   "num": 7,
   "code": "TEAM",
   "words": 12067,
-  "code_words": 14764,
+  "code_words": 14774,
   "ceiling": 3500,
   "over": 8567,
   "over_pct": 244.8
@@ -74,29 +74,29 @@
  {
   "num": 9,
   "code": "SOCK",
-  "words": 5641,
+  "words": 5677,
   "code_words": 1647,
   "ceiling": 3000,
-  "over": 2641,
-  "over_pct": 88.0
+  "over": 2677,
+  "over_pct": 89.2
  },
  {
   "num": 10,
   "code": "KEYS",
-  "words": 11061,
-  "code_words": 9492,
+  "words": 11101,
+  "code_words": 9481,
   "ceiling": 4500,
-  "over": 6561,
-  "over_pct": 145.8
+  "over": 6601,
+  "over_pct": 146.7
  },
  {
   "num": 11,
   "code": "EVS",
-  "words": 21732,
-  "code_words": 51642,
+  "words": 21860,
+  "code_words": 51824,
   "ceiling": 5000,
-  "over": 16732,
-  "over_pct": 334.6
+  "over": 16860,
+  "over_pct": 337.2
  },
  {
   "num": 12,
@@ -165,7 +165,7 @@
   "num": 19,
   "code": "OPS",
   "words": 9735,
-  "code_words": 10837,
+  "code_words": 10832,
   "ceiling": 3500,
   "over": 6235,
   "over_pct": 178.1
@@ -192,7 +192,7 @@
   "num": 22,
   "code": "TEST",
   "words": 7756,
-  "code_words": 37958,
+  "code_words": 38132,
   "ceiling": 2500,
   "over": 5256,
   "over_pct": 210.2

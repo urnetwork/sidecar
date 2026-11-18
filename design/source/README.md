@@ -7,7 +7,7 @@
 | Path | What it is |
 |---|---|
 | `sections/01-CTX.md` … `sections/23-PHASE.md` | DESIGN.md §1-§23, one file per section. The build copies them verbatim, adding only links. |
-| `owner/DECISIONS.md` | The owner's record, entries 1-584. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
+| `owner/DECISIONS.md` | The owner's record, entries 1-585. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
 | `owner/APPLY.md` | The rules for applying the owner's decisions: precedence (§1), supersession, where two decisions disagree (§2), notation (§3), editing rules (§4), and the follow-up decisions 112-136 with the sections each binds (§6-§8). |
 | `CONVENTIONS.md` | The writing conventions every section follows: the owner directive (§0), the owner rules (§1), the section template (§2) and the X registry (§7), which DESIGN.md's X1-X20 table replaced. |
 | `OUTLINE.md` | The original outline: section codes, scope boundaries, and the word budgets that G0's density rule replaced on 2026-11-04. |
@@ -42,7 +42,7 @@ It needs only `python3`; it was built and checked with Python 3.13. The steps, a
 
 The data files are layered. Each `data_*N.py` loads its predecessor with `runpy` and patches it: `data_front10.py` loads `data_front9.py`, back to `data_front3.py`, and the registers, glossary and appendices go the same way. Change the top layer (the `*10` files), or add an `*11` layer that loads them. Comments in the scripts cite working files from the design sessions (the reconcilers' orders, `peer/`, `review/`, `snap/`), which were not imported; they are history.
 
-## Adding owner decision N (585 onward)
+## Adding owner decision N (586 onward)
 
 1. Add entry N to `owner/DECISIONS.md`: the question, the answer, its cost, the options not taken, and what raised it.
 2. In `asm/data_front10.py`, append `(N, "<what it settles>", "<one line>")` to `INDEX`, add `DATES[N]`, and raise the `assert` to `list(range(1, N + 1))`. Update `STATUS` and `DECISIONS_INTRO` where they name a range. `@@OD:k@@` writes a link to decision k.
@@ -604,3 +604,20 @@ The design-records track dr4-details-b (wave f43d) folds DESIGN-DETAILS.md secti
 - **The metadata list** is v51, whose header names what it changes in evs-4, evs-7, evs-12 and evs-28 and that it adds no row, copied to `metadata_list.yml` by `make metadata`; the block and the file are the same bytes, and the list's first line names v51.
 
 Outside this folder the fold touched DESIGN.md, `metadata_list.yml`, DESIGN-AMENDMENTS.md's note on the sections to fold and DESIGN-DETAILS.md's three Status cells.
+
+## Validation after DESIGN-DETAILS.md sections 8 and 9 and owner decision 585 (2026-11-17)
+
+The design-records track dr4-details-c (wave f43d) folds DESIGN-DETAILS.md sections 8 and 9 (git and evs in both directions; client path epochs and re-tokenizing), whose owner questions were already owner decisions 227-235 (section 9's, with section 6's key prefixes as 234) and 236-244 (section 8's), with 540 for a git-mode rekey: each section's proposed text (its N.8) goes, as amended since, into the places it names, citing the section where no decision does, and what earlier folds had carried is skipped. Section 16 (client-checked prefix write rules) is not folded: the owner moved the prefix rules to Later on 2026-11-17 (QD-1032), which the design-defer-doc track folds with sidecar/DESIGN-DEFER.md, so none of 16.8's text goes in as live design, and section 8's amendments from section 16 and from QD-801 and QD-803 wait with it. Each piece lands on its own.
+
+- **First piece: section 9 and owner decision 585.** The owner's answer of 2026-11-17 to the complexity review, QD-1046, with QD-1057, which keeps a mapper's 2-minute block, governs section 9's due, so it became owner decision 585: every path-epoch due is batched, 24 h on, no due holds a creation or a new name, the crossing push's creation is no longer refused and no crossing is classed, reversing owner decisions 229, 414 and 569, whose rows note it, and the block is the one creation refusal, with 412 PATH_EPOCH_DUE; a new ref still starts in the newest epoch its creator holds (owner decision 232), as the fix track path-epoch-dues-batched kept it, QD-632's question, a first push across an immediate removal, no longer arising. Section 9's text as amended: §11.5's leak bound, now up to 24 h after any removal, with the 5 s window of a name first sent at a cut-over; §11.6's due row rewritten, the map row's sources by floor and the mapper's job record and parts on disk, the tail row through the PATH_EPOCH push's base, the block and commit rows (409 MAP_SOURCE, two sources at most), the read row replaced by the floor and new-name rules, and the removal paragraph; the EvsPathEpoch fence's comments (`due_blocks_creation` unused); §11.8's 5e (a first push's epoch by kind, MAP_SOURCE, the block's refusal alone); §11.9's request, reply and reader rows (token paths matched by epoch, at most 8, proofs by leaf place and in each statement's own epoch); D-EVS-12 with its register summary; §11.20's `PathEpochStatus`, `EvsNameIndex`, `EVS_PATH_EPOCH_DUE` and MAP_SOURCE; §11.21's two epoch rows; §2.8's evs-11 ttl (list v52); FS-4 and FS-118, each rewrapped inside its schedule column; §22.7's revocation suite; and details/PathEpoch.tla in §22.8's model row. Owner decision 585's other places went with it: §5.6's compromise reason, §7.9's recovery rows, §10.5's table and §10.8's recovery rotation, §19.9's copies row and §9.4, whose `K_sock` keeps its own rotation classes, which had cited the path epochs'. Section 14's Amendments 14-B and 14-C, to section 9's own text, were already carried by §11.6's object key row and §11.8's step 6.
+
+`build.sh` on this folder reproduced DESIGN.md (SHA-256 `ca25a8dfb9eff36ca3d6cd5abce9ba01b5d0fcd3dfea98358ee22533930ed48f`) at the first piece, and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no new §2.8 row, so no guard line was needed. No proto fence changed but in comments (§11.8's EvsPathEpoch). §22.8's FS table reads, column for column, as sidecartest/fault's catalog holds it, FS-4 and FS-118 rewrapped inside their schedule column.
+- **Owner decisions.** All 585 rows are present and cited; `LATE_DATES` gives 585 its date, and no new day joined the row pattern; rows 229, 414 and 569 note decision 585's reversal, and the decisions lead names it.
+- **Open owner questions.** One, Q-REPO-6.
+- **Superseded options.** 310 grep hits, each with a reading, carried forward with no changed line raising a new one; the carried file's line numbers follow the sections.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 11,692 section references, with the one unresolved as before. `v7/words.json` and `v7/text_checks.json` were regenerated.
+- **The metadata list** is v52, whose header names what it changes in evs-11 and that it adds no row, copied to `metadata_list.yml` by `make metadata`; the block and the file are the same bytes, and the list's first line names v52.
+
+Outside this folder the first piece touched DESIGN.md, `metadata_list.yml`, DESIGN-AMENDMENTS.md's note on the sections to fold and DESIGN-DETAILS.md's Status cell for section 9.

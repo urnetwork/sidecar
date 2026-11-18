@@ -92,3 +92,6 @@ D['D-EVS-34'] = "Segment uploads write nothing to the metadata cluster: a MAC'd 
 # objects the horizon has passed, by a DELETE naming each (owner decision 397).
 assert D['D-EVS-64'].endswith('deletes objects over 25 h old.'), 'EVS drop row moved'
 D['D-EVS-64'] = "Commit fences listed versions; past evacuation's horizon the job marks, verifies separately and deletes objects the horizon has passed."
+# The fold of DESIGN-DETAILS.md sections 8 and 9 (2026-11-17): every path-epoch due batched (owner decision 585).
+assert D['D-EVS-12'].startswith("11.6-11.7's token tree, re-keyed at once on removal"), 'EVS path epoch row moved'
+D['D-EVS-12'] = "11.6-11.7's token tree, re-keyed by a signed map within 24 h of every removal or, deferred, once a source drops."
