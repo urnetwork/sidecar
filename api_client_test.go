@@ -91,64 +91,6 @@ func syntheticResponse(request *http.Request, status int, body string, header ht
 
 const testByJwt = "synthetic-client-jwt-canary"
 
-// A JWT-shaped client token of networkId's clientId on a device of its own, with its own jti, living a day from
-// testApiNow: what a bind test presents, so the re-mint bind answers is held to it.
-func testBindClientJwt(networkId Id, clientId Id) string {
-	return testClientJwt(fmt.Sprintf(`{"jti":%q,"iat":%d,"exp":%d,"network_id":%q,"client_id":%q,"device_id":%q,"strict_exp":true}`,
-		NewId().String(), testApiNow.Unix(), testApiNow.Add(24*time.Hour).Unix(), networkId, clientId, NewId()))
-}
-
-// byJwt's claims, edited, as a synthetic token: "" for a token whose claims do not read.
-func testEditedJwt(byJwt string, edit func(claims map[string]any)) string {
-	parts := strings.Split(byJwt, ".")
-	if len(parts) != 3 {
-		return ""
-	}
-	claimBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return ""
-	}
-	claims := map[string]any{}
-	if err := json.Unmarshal(claimBytes, &claims); err != nil {
-		return ""
-	}
-	edit(claims)
-	editedBytes, err := json.Marshal(claims)
-	if err != nil {
-		return ""
-	}
-	return testClientJwt(string(editedBytes))
-}
-
-// byJwt as api re-mints it at bind (server's session.RemintSidecarCredential): every claim as presented, its lifetime
-// included, with sidecarId as its sidecar_id and a new jti. "" for a token whose claims do not read.
-func testRemintJwt(byJwt string, sidecarId Id) string {
-	return testEditedJwt(byJwt, func(claims map[string]any) {
-		claims["sidecar_id"] = sidecarId.String()
-		claims["jti"] = NewId().String()
-	})
-}
-
-// POST /sidecar/bind's 200 to a request presenting byJwt: generation, and byJwt re-minted for sidecarId.
-func testBindReply(generation int64, byJwt string, sidecarId Id) string {
-	body, err := json.Marshal(map[string]any{"generation": generation, "by_client_jwt": testRemintJwt(byJwt, sidecarId)})
-	if err != nil {
-		panic(err)
-	}
-	return string(body)
-}
-
-// Answers every request as POST /sidecar/bind does: generation, and the token the request presents re-minted for
-// sidecarId.
-func bindAnswer(generation int64, sidecarId Id) *scriptedApiTransport {
-	return &scriptedApiTransport{
-		answer: func(request *http.Request, requestBody []byte) (*http.Response, error) {
-			presented := strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")
-			return syntheticResponse(request, 200, testBindReply(generation, presented, sidecarId), nil), nil
-		},
-	}
-}
-
 // The instant every test api's clock reads, so a Retry-After date asks for one wait.
 var testApiNow = time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
 
@@ -579,89 +521,29 @@ func TestRemoveClientPostsItsClient(t *testing.T) {
 }
 
 // Bind posts the wrapper's bytes in base64 under its bearer and takes no proof
-// (plan-CORE-binding-wire #6), and answers the generation with the bearer re-minted for the bound
-// sidecar (QD-797), which it hands back rather than installs: the caller persists it first.
+// (plan-CORE-binding-wire #6).
 func TestBindPostsTheWrapper(t *testing.T) {
 	binding := []byte("synthetic\x00binding\xffbytes")
-	sidecarId := NewId()
-	transport := bindAnswer(3, sidecarId)
+	transport := answerWith(200, `{"generation":3}`)
 	api := newTestSidecarApi(t, transport)
 	installTestDpopSigner(t, api)
-	presented := testBindClientJwt(NewId(), NewId())
-	api.SetByJwt(presented)
 
-	bound, err := api.Bind(context.Background(), binding)
+	generation, err := api.Bind(context.Background(), binding)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bound.Generation != 3 || bound.SidecarId != sidecarId {
-		t.Errorf("generation %d, sidecar %s", bound.Generation, bound.SidecarId)
-	}
-	reminted, remintedOk := sidecarJwtIdentityOf(bound.ByClientJwt)
-	original, _ := sidecarJwtIdentityOf(presented)
-	if claimed, ok := sidecarJwtSidecarId(bound.ByClientJwt); !remintedOk || reminted != original || !ok || claimed != sidecarId {
-		t.Errorf("the re-mint names %+v and sidecar %s, presented %+v", reminted, claimed, original)
-	}
-	if !sidecarJwtExpiration(bound.ByClientJwt).Equal(sidecarJwtExpiration(presented)) {
-		t.Error("the re-mint's lifetime is not the presented token's")
-	}
-	if api.currentByJwt() != presented {
-		t.Error("bind installed the re-mint itself")
+	if generation != 3 {
+		t.Errorf("generation %d", generation)
 	}
 	request, body := transport.onlyRequest(t)
 	if request.Method != "POST" || request.URL.String() != "https://api.example/sidecar/bind" {
 		t.Errorf("%s %s", request.Method, request.URL)
 	}
-	if string(body) != `{"binding":"`+base64.StdEncoding.EncodeToString(binding)+`"}` || request.Header.Get("Content-Type") != "application/json" {
+	if string(body) != `{"binding":"`+base64.StdEncoding.EncodeToString(binding)+`"}` {
 		t.Errorf("body %s", body)
 	}
-	if request.Header.Get("Authorization") != "Bearer "+presented || request.Header.Get("DPoP") != "" {
+	if request.Header.Get("Authorization") != "Bearer "+testByJwt || request.Header.Get("DPoP") != "" {
 		t.Error("bind presents its bearer and no proof")
-	}
-}
-
-// A re-mint that names another network, client or device than the token the request presented, names no sidecar, or
-// is no client token at all is not bind's answer (QD-797): a malformed reply whose error holds neither token, and
-// nothing installed. A presented token that names no network, client or device leaves nothing to hold a re-mint to.
-func TestBindRefusesARemintOfAnotherClient(t *testing.T) {
-	presented := testBindClientJwt(NewId(), NewId())
-	other := func(edit func(claims map[string]any)) string {
-		return testEditedJwt(testRemintJwt(presented, NewId()), edit)
-	}
-	for _, reminted := range []string{
-		other(func(claims map[string]any) { claims["network_id"] = NewId().String() }),
-		other(func(claims map[string]any) { claims["client_id"] = NewId().String() }),
-		other(func(claims map[string]any) { claims["device_id"] = NewId().String() }),
-		other(func(claims map[string]any) { delete(claims, "network_id") }),
-		other(func(claims map[string]any) { delete(claims, "sidecar_id") }),
-		other(func(claims map[string]any) { claims["sidecar_id"] = Id{}.String() }),
-		other(func(claims map[string]any) { claims["sidecar_id"] = "synthetic-not-an-id" }),
-		other(func(claims map[string]any) { claims["sidecar_id"] = 7 }),
-		"synthetic-not-a-token",
-		"",
-	} {
-		body, err := json.Marshal(map[string]any{"generation": 1, "by_client_jwt": reminted})
-		if err != nil {
-			t.Fatal(err)
-		}
-		api := newTestSidecarApi(t, answerWith(200, string(body)))
-		api.SetByJwt(presented)
-		bound, err := api.Bind(context.Background(), []byte("synthetic-binding"))
-		if !errors.Is(err, ErrSidecarApiReply) || bound != nil {
-			t.Errorf("%q: %v", reminted, err)
-			continue
-		}
-		if err.Error() != "sidecar api POST /sidecar/bind: "+ErrSidecarApiReply.Error() {
-			t.Errorf("the refusal says more than a malformed answer: %v", err)
-		}
-		if api.currentByJwt() != presented {
-			t.Errorf("%q: the held token changed", reminted)
-		}
-	}
-
-	api := newTestSidecarApi(t, bindAnswer(1, NewId()))
-	if _, err := api.Bind(context.Background(), []byte("synthetic-binding")); !errors.Is(err, ErrSidecarApiReply) {
-		t.Errorf("a presented token naming no client: %v", err)
 	}
 }
 
@@ -681,18 +563,8 @@ func TestBindRefusalsCarryTheirCodes(t *testing.T) {
 			t.Errorf("%+v", apiErr)
 		}
 	}
-	presented := testBindClientJwt(NewId(), NewId())
-	reminted := testRemintJwt(presented, NewId())
-	for _, body := range []string{
-		`{}`,
-		`{"generation":0,"by_client_jwt":"` + reminted + `"}`,
-		`{"generation":-1,"by_client_jwt":"` + reminted + `"}`,
-		// an answer of the route before QD-040, with no re-mint
-		`{"generation":1}`,
-		`{"generation":1,"by_client_jwt":""}`,
-	} {
+	for _, body := range []string{`{}`, `{"generation":0}`, `{"generation":-1}`} {
 		api := newTestSidecarApi(t, answerWith(200, body))
-		api.SetByJwt(presented)
 		if _, err := api.Bind(context.Background(), []byte("synthetic-binding")); !errors.Is(err, ErrSidecarApiReply) {
 			t.Errorf("%s: %v", body, err)
 		}
@@ -1126,24 +998,23 @@ func TestRedirectIsNotFollowed(t *testing.T) {
 // An answer past ApiResponseByteCount is refused, not buffered.
 func TestAnAnswerPastItsBoundIsRefused(t *testing.T) {
 	settings := validSidecarSettings()
-	presented := testBindClientJwt(NewId(), NewId())
-	body := testBindReply(1, presented, NewId())
+	body := `{"generation":1}`
 	settings.ApiResponseByteCount = int64(len(body))
 	api, err := newSidecarApi(settings, answerWith(200, body), testApiClock)
 	if err != nil {
 		t.Fatal(err)
 	}
-	api.SetByJwt(presented)
-	if bound, err := api.Bind(context.Background(), []byte("synthetic-binding")); err != nil || bound.Generation != 1 {
-		t.Errorf("an answer of exactly the bound: %v, %v", bound, err)
+	api.SetByJwt(testByJwt)
+	if generation, err := api.Bind(context.Background(), []byte("synthetic-binding")); err != nil || generation != 1 {
+		t.Errorf("an answer of exactly the bound: %d, %v", generation, err)
 	}
 
-	padded := body + " "
+	padded := `{"generation":1} `
 	api, err = newSidecarApi(settings, answerWith(200, padded), testApiClock)
 	if err != nil {
 		t.Fatal(err)
 	}
-	api.SetByJwt(presented)
+	api.SetByJwt(testByJwt)
 	if _, err := api.Bind(context.Background(), []byte("synthetic-binding")); !errors.Is(err, ErrSidecarApiReply) {
 		t.Errorf("err %v", err)
 	}
@@ -1298,7 +1169,6 @@ func TestTokenHoldersPrintNoToken(t *testing.T) {
 		&SidecarEnrollResult{ByClientJwt: testByJwt, Close: "synthetic-close-canary"},
 		&SidecarAuthClientResult{ByClientJwt: testByJwt, Close: "synthetic-close-canary"},
 		&SidecarServiceToken{AccessToken: testByJwt, Scopes: []string{"repo:synthetic:r"}},
-		&SidecarBindResult{Generation: 1, ByClientJwt: testByJwt, SidecarId: NewId(), presentedByJwt: "synthetic-close-canary"},
 	}
 	for _, holder := range holders {
 		text := fmt.Sprintf("%v %+v %#v %s", holder, holder, holder, holder)
@@ -1308,38 +1178,25 @@ func TestTokenHoldersPrintNoToken(t *testing.T) {
 	}
 }
 
-// A call in flight keeps the token it started with, and the next one presents the new token. Bind holds its re-mint to
-// the token its own request presented, so another client's token installed while it was out neither refuses the
-// re-mint nor passes one of its own.
+// A call in flight keeps the token it started with, and the next one presents the new token.
 func TestACallKeepsTheTokenItStartedWith(t *testing.T) {
 	var api *SidecarApi
-	first := testBindClientJwt(NewId(), NewId())
-	later := testBindClientJwt(NewId(), NewId())
-	sidecarId := NewId()
 	transport := &scriptedApiTransport{
 		answer: func(request *http.Request, body []byte) (*http.Response, error) {
-			api.SetByJwt(later)
-			presented := strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")
-			return syntheticResponse(request, 200, testBindReply(1, presented, sidecarId), nil), nil
+			api.SetByJwt("synthetic-later-jwt")
+			return syntheticResponse(request, 200, `{"generation":1}`, nil), nil
 		},
 	}
 	api = newTestSidecarApi(t, transport)
-	api.SetByJwt(first)
-	for _, presented := range []string{first, later} {
-		bound, err := api.Bind(context.Background(), []byte("synthetic-binding"))
-		if err != nil {
+	for i := 0; i < 2; i += 1 {
+		if _, err := api.Bind(context.Background(), []byte("synthetic-binding")); err != nil {
 			t.Fatal(err)
-		}
-		reminted, _ := sidecarJwtIdentityOf(bound.ByClientJwt)
-		original, _ := sidecarJwtIdentityOf(presented)
-		if reminted != original || bound.presentedByJwt != presented {
-			t.Error("bind held its re-mint to another token than the one it presented")
 		}
 	}
 	transport.stateLock.Lock()
 	defer transport.stateLock.Unlock()
-	if transport.requests[0].Header.Get("Authorization") != "Bearer "+first ||
-		transport.requests[1].Header.Get("Authorization") != "Bearer "+later {
+	if transport.requests[0].Header.Get("Authorization") != "Bearer "+testByJwt ||
+		transport.requests[1].Header.Get("Authorization") != "Bearer synthetic-later-jwt" {
 		t.Error("a call presented another token than the one it started with")
 	}
 }
@@ -1359,17 +1216,16 @@ func (self *closingApiTransport) CloseIdleConnections() {
 }
 
 func TestSetTransportDropsTheOldIdleConnections(t *testing.T) {
-	old := &closingApiTransport{transport: bindAnswer(1, NewId())}
+	old := &closingApiTransport{transport: answerWith(200, `{"generation":1}`)}
 	api := newTestSidecarApi(t, old)
-	api.SetByJwt(testBindClientJwt(NewId(), NewId()))
-	replacement := bindAnswer(2, NewId())
+	replacement := answerWith(200, `{"generation":2}`)
 	api.setTransport(replacement)
 	if old.closeCount != 1 {
 		t.Errorf("%d closes", old.closeCount)
 	}
-	bound, err := api.Bind(context.Background(), []byte("synthetic-binding"))
-	if err != nil || bound.Generation != 2 {
-		t.Errorf("%v, %v", bound, err)
+	generation, err := api.Bind(context.Background(), []byte("synthetic-binding"))
+	if err != nil || generation != 2 {
+		t.Errorf("%d, %v", generation, err)
 	}
 	if old.transport.requestCount() != 0 || replacement.requestCount() != 1 {
 		t.Error("the request went to the old transport")

@@ -187,8 +187,8 @@ func TestClosedSocketGateAllowsNothing(t *testing.T) {
 	}
 }
 
-// §9.15's four routes are served: the three Client-class ones refuse a call with no token, GET /socket/keys
-// answers anyone, and any other path is the mux's 404.
+// §9.15's four routes are served: the three that take a sockets service token refuse a call with no token, GET
+// /socket/keys answers anyone, and any other path is the mux's 404.
 func TestSocketsServiceServesItsFourRoutes(t *testing.T) {
 	service, _ := testSocketsService(t, nil, nil)
 	for _, route := range []struct {

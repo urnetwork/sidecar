@@ -6,9 +6,7 @@
 // CheckAuthKeyBody passed (api_routes_core.go); POST /sidecar/bind posts the dual-signed binding; and only once the
 // reply confirms admin_refused and the binding is recorded does anything persist, the keychain first and sidecar.json
 // last of all. Without the mark nothing is kept, the new client is removed best effort, and the error stops the
-// daemon from starting on it (D-CORE-7). The token the keychain keeps is the one bind answers, the enrollment's
-// re-minted with the bound sidecar_id, which sockets reads (QD-040, QD-797); a re-mint naming another sidecar is
-// refused as a malformed answer, and nothing is kept.
+// daemon from starting on it (D-CORE-7).
 //
 // A re-enrollment after Unenrolled keeps the sidecar_id and identity key: a new ClientKey binds generation n+1, and
 // the old client is removed, best effort, with its own token (§5.5). A refused, expired or ended generation is the
@@ -35,19 +33,6 @@ const sidecarDefaultDeviceSpec = "ur"
 
 // A sidecar that a verified SidecarRevoke ended enrolls only as a new sidecar_id, from new state (§5.5).
 var ErrSidecarRevoked = errors.New("this sidecar is revoked")
-
-// Why api's answer to POST /sidecar/bind is not the binding of generation for sidecarId, or nil: another generation
-// recorded, or a re-minted token naming another sidecar than the one bound (QD-797). Bind has already held the re-mint
-// to the presented token's network, client and device.
-func checkSidecarBound(bound *SidecarBindResult, generation int64, sidecarId Id) error {
-	if bound.Generation != generation {
-		return fmt.Errorf("%w: api bound generation %d, not %d", ErrSidecarApiReply, bound.Generation, generation)
-	}
-	if bound.SidecarId != sidecarId {
-		return fmt.Errorf("%w: api's re-minted token names another sidecar than the one bound", ErrSidecarApiReply)
-	}
-	return nil
-}
 
 // A client token's network and client, read unverified as the refresh schedule reads its claims: only for checks
 // that a verified answer already stands behind, never as authority.
@@ -237,7 +222,7 @@ func (self *Sidecar) Enroll(ctx context.Context, credential *SidecarEnrollCreden
 		return abandon(err)
 	}
 	testHookBarrier("identity.bind.before", sidecarId.String())
-	bound, err := enrollApi.Bind(ctx, signedBinding)
+	boundGeneration, err := enrollApi.Bind(ctx, signedBinding)
 	testHookBarrier("identity.bind.after", sidecarId.String())
 	if err != nil {
 		if previous != nil && isSidecarRevokedRefusal(err) {
@@ -248,12 +233,11 @@ func (self *Sidecar) Enroll(ctx context.Context, credential *SidecarEnrollCreden
 		}
 		return abandon(err)
 	}
-	if err := checkSidecarBound(bound, generation, sidecarId); err != nil {
-		return abandon(err)
+	if boundGeneration != generation {
+		return abandon(fmt.Errorf("%w: api bound generation %d, not %d", ErrSidecarApiReply, boundGeneration, generation))
 	}
 
-	// admin_refused confirmed and the binding recorded: the keychain first, sidecar.json last of all; the token kept is
-	// api's re-mint, which names the sidecar, in place of the enrollment's (QD-797)
+	// admin_refused confirmed and the binding recorded: the keychain first, sidecar.json last of all
 	if previous == nil {
 		if _, err := self.instance.createKeychain(networkId); err != nil {
 			return abandon(err)
@@ -263,7 +247,7 @@ func (self *Sidecar) Enroll(ctx context.Context, credential *SidecarEnrollCreden
 	if _, err := persistSidecarIdentity(secrets, keys, signedBinding); err != nil {
 		return abandon(err)
 	}
-	if err := persistSidecarByJwt(secrets, bound.ByClientJwt); err != nil {
+	if err := persistSidecarByJwt(secrets, result.ByClientJwt); err != nil {
 		return abandon(err)
 	}
 	if readerKeySeed != nil {

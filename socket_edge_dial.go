@@ -64,7 +64,7 @@ type SocketEdgeClient struct {
 type SocketEdgeDialerArgs struct {
 	// The process's K clients: every Find names them all, and a ticket names one.
 	Clients []*SocketEdgeClient
-	// How Find reaches the sockets service on the process's own client token.
+	// How Find reaches the sockets service, on the bearer its Bearer gives (SocketFindHttpArgs).
 	Find *SocketFindHttpArgs
 	// Nil is DefaultSocketEdgeDialSettings.
 	Settings *SocketEdgeDialSettings

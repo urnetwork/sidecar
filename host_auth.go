@@ -22,9 +22,6 @@ import (
 // An engine answers 401; any other Authenticate error says nothing about the token.
 var ErrAuthenticationRefused = operator.ErrAuthenticationRefused
 
-// An Authenticate error that says nothing about the token and names how long its caller should wait.
-type AuthenticationUnavailableError = operator.AuthenticationUnavailableError
-
 // Who a verified token names, with the Validate every Authenticator runs.
 type Principal = operator.Principal
 

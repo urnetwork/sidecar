@@ -2,12 +2,12 @@
 // and the fair queue, the name a request carries, and the JSON answers. Each route's own file runs its steps
 // around these, in DESIGN-DETAILS 13.2.3's order.
 //
-// Authentication. sockets' callers hold Client-class tokens (plan-SOCK-client-auth, QD-040), which the engine
-// verifies through ServiceHost.Authenticate under SocketsAudience. A host whose Authenticator has no verifier
-// for that audience, as sidecarhost's has none until plan-SOCK-client-auth's verify-only keyring lands, answers
-// an error that is no refusal, and every authenticated route then answers unavailable, never an
-// unauthenticated allow. A refused token answers 401, as does a client in the removed-client set. A token
-// with no sidecar_id outside urnetwork-edge is denied (QD-040).
+// Authentication. sockets' callers hold §7.8 service tokens of audience sockets (QD-1029), which the engine
+// verifies through ServiceHost.Authenticate under SocketsAudience: the host checks the token offline and, on
+// server's block, §7.8's rev/ objects for its client, sidecar and member. A host that cannot answer, no verifier
+// or no rev/ reader, answers an error that is no refusal, and every authenticated route then answers
+// unavailable, never an unauthenticated allow. A refused token answers 401, as does a client in the
+// removed-client set. A token naming no sidecar in its ur_sidecar_id outside urnetwork-edge is denied.
 //
 // Answers. A route answers 200 with its own JSON body, a refusal of the whole call in its error, except 401
 // for a refused token or a removed client, and 503 with Retry-After while §19.11's sockets gate is closed for
@@ -31,7 +31,7 @@ import (
 	"github.com/urnetwork/sidecar"
 )
 
-// The audience the engine authenticates its callers' Client-class tokens under (plan-SOCK-client-auth).
+// The audience of the service tokens the engine authenticates its callers' under (§7.8, QD-1029).
 const SocketsAudience = "sockets"
 
 // §9.4's and §9.5's formats as the routes check them, which every reader applies alike.
@@ -134,7 +134,7 @@ func readSocketJson(r *http.Request, maxByteCount int64, value any) error {
 	return json.Unmarshal(body, value)
 }
 
-// §9.15's Client class: the caller's token, verified under SocketsAudience, its client not removed, and a
+// §9.15's caller: the caller's service token, verified under SocketsAudience, its client not removed, and a
 // sidecar's unless it is urnetwork-edge's. A refusal says how to answer.
 func (self *SocketsService) authenticate(r *http.Request) (*socketCaller, *socketRefusal) {
 	jwt, found := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
