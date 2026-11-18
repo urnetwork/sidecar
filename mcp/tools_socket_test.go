@@ -274,6 +274,18 @@ func TestSocketListenUncoveredAsksTheGate(t *testing.T) {
 	if err := sidecar.CheckCanonicalActionForServer(stored); err != nil {
 		t.Errorf("the listen's action on a server path: %v", err)
 	}
+	// the decision binds the call's run and its session's agent (owner decision 470), beside the action's bytes and
+	// never in them
+	agentId, err := env.network.ResolveAgentId("builder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runId := env.runOf("claude-code", "socket session"); action.RunId == nil || *action.RunId != runId || action.AgentId == nil || *action.AgentId != agentId {
+		t.Errorf("the listen binds run %v and agent %v, not %s and %s", action.RunId, action.AgentId, runId, agentId)
+	}
+	if bytes.Contains(action.Canonical, agentId.Bytes()) {
+		t.Error("the action's bytes hold the agent id")
+	}
 }
 
 // A daemon that holds no K_sock for the network yet takes no outward listen: it could not name the socket in the form

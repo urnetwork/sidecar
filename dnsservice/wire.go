@@ -86,6 +86,11 @@ const (
 	// in place of the router rows. Held to §12.7's public-address rule at the write and again at the
 	// answer, as a user's addresses are, since a customer names them.
 	DnsRecordKindDirect DnsRecordKind = "direct"
+	// A Team network's delegated _domainkey.<domain> zones (§14.6, plan reading 17; DNS-M9-02): one row
+	// at the network's label apex, <label>.<root>, of type DnsDelegatedType, whose rdata names each
+	// delegated apex, _domainkey.<domain>. It answers nothing itself: each apex's selectors answer from
+	// the label's _domainkey rows, unsigned and outside the root (delegated.go).
+	DnsRecordKindDelegated DnsRecordKind = "delegated"
 )
 
 // The type a copy row holds, since one row stands for every type at the wildcard. RFC 1035 reserves
@@ -101,12 +106,16 @@ const DnsWithheldType uint16 = dns.TypeReserved
 // apex (D-DNS-10).
 const DnsAliasType uint16 = 0xfffe
 
+// The type a delegated row holds: the private-use range's next below DnsAliasType, so it keys apart
+// from every real RRset and from an alias row at the same apex.
+const DnsDelegatedType uint16 = 0xfffd
+
 // Whether this is a kind this release answers.
 func (self DnsRecordKind) known() bool {
 	switch self {
 	case DnsRecordKindUser, DnsRecordKindSystem, DnsRecordKindCopy, DnsRecordKindEdge, DnsRecordKindRouter,
 		DnsRecordKindChallenge, DnsRecordKindCanary, DnsRecordKindKey, DnsRecordKindWithheld, DnsRecordKindAlias,
-		DnsRecordKindDirect:
+		DnsRecordKindDirect, DnsRecordKindDelegated:
 		return true
 	}
 	return false
@@ -183,7 +192,7 @@ func dnsTypeStorable(rrType uint16) bool {
 	switch rrType {
 	case dns.TypeNone, dns.TypeOPT, dns.TypeTSIG, dns.TypeTKEY, dns.TypeAXFR, dns.TypeIXFR, dns.TypeMAILA, dns.TypeMAILB,
 		dns.TypeANY, dns.TypeRRSIG, dns.TypeNSEC, dns.TypeNSEC3, dns.TypeNSEC3PARAM, dns.TypeDNSKEY, dns.TypeNXNAME,
-		dns.TypeReserved, DnsAliasType:
+		dns.TypeReserved, DnsAliasType, DnsDelegatedType:
 		return false
 	}
 	return true
@@ -222,7 +231,7 @@ func (self *DnsRecordKey) Validate(root string) error {
 	if err := validateDnsOwner(root, self.Owner); err != nil {
 		return err
 	}
-	if self.Type != DnsCopyType && self.Type != DnsWithheldType && self.Type != DnsAliasType && !dnsTypeStorable(self.Type) {
+	if self.Type != DnsCopyType && self.Type != DnsWithheldType && self.Type != DnsAliasType && self.Type != DnsDelegatedType && !dnsTypeStorable(self.Type) {
 		return fmt.Errorf("%w: type %s", ErrDnsRowMalformed, dnsTypeText(self.Type))
 	}
 	return nil
@@ -280,6 +289,17 @@ func (self *DnsRecordSet) parse(root string) ([]dns.RR, error) {
 			if _, ok := dnsLabelBelowRoot(root, target); !ok {
 				return nil, fmt.Errorf("%w: alias %q names %q, not directly below %s", ErrDnsRowMalformed, self.Owner, target, root)
 			}
+		}
+		return nil, nil
+	case DnsRecordKindDelegated:
+		if self.Type != DnsDelegatedType {
+			return nil, fmt.Errorf("%w: a delegated row holds its type", ErrDnsRowMalformed)
+		}
+		if _, ok := dnsLabelBelowRoot(root, self.Owner); !ok {
+			return nil, fmt.Errorf("%w: delegated row %q is not directly below %s", ErrDnsRowMalformed, self.Owner, root)
+		}
+		if err := validateDnsDelegatedApexes(root, self.Rdata); err != nil {
+			return nil, fmt.Errorf("%w: delegated row %q: %w", ErrDnsRowMalformed, self.Owner, err)
 		}
 		return nil, nil
 	case DnsRecordKindDirect:

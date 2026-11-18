@@ -86,6 +86,8 @@ type DnsEdge struct {
 	metrics  *dnsMetrics
 	signer   *Signer
 	rrl      *dnsRrl
+	// The sending addresses' reverse zones, fixed at construction and answered unsigned (reverse.go).
+	reverse *ReverseZones
 	// By root, fixed at construction, so a query finds its root with no lock.
 	servings      map[string]*atomic.Pointer[dnsServing]
 	servedSerials map[string]*sidecar.MonitorValue[uint64]
@@ -112,6 +114,10 @@ func NewDnsEdge(ctx context.Context, host *sidecar.ServiceHost, settings *DnsSet
 	if err := settings.Validate(); err != nil {
 		return nil, err
 	}
+	reverse, err := NewReverseZones(settings)
+	if err != nil {
+		return nil, err
+	}
 	if deps == nil {
 		deps = &DnsEdgeDeps{}
 	}
@@ -130,6 +136,7 @@ func NewDnsEdge(ctx context.Context, host *sidecar.ServiceHost, settings *DnsSet
 		metrics:        newDnsMetrics(host.Metrics),
 		signer:         NewSigner(settings, clock, host.Metrics),
 		rrl:            newDnsRrl(settings),
+		reverse:        reverse,
 		servings:       map[string]*atomic.Pointer[dnsServing]{},
 		servedSerials:  map[string]*sidecar.MonitorValue[uint64]{},
 		tcpCount:       sidecar.NewMonitorValue(0),
@@ -208,6 +215,26 @@ func (self *DnsEdge) servingFor(request *dns.Msg) (serving *dnsServing, known bo
 	return nil, false
 }
 
+// The view whose delegated rows serve the question's name, with the delegated apex it is in and the
+// label apex that answers it (delegated.go), roots in dns.yml's order. False while delegated zones are
+// off, for a name in none, and while no root holding one has a view.
+func (self *DnsEdge) delegatedFor(request *dns.Msg) (view *ZoneView, apex string, labelApex string, ok bool) {
+	if !self.settings.Delegated.Enabled || len(request.Question) != 1 {
+		return nil, "", "", false
+	}
+	name := dns.CanonicalName(request.Question[0].Name)
+	for _, root := range self.settings.Roots {
+		serving := self.servings[root].Load()
+		if serving == nil {
+			continue
+		}
+		if apex, labelApex, ok := serving.view.Delegated().Lookup(name); ok {
+			return serving.view, apex, labelApex, true
+		}
+	}
+	return nil, "", "", false
+}
+
 // The RRL class of an unsigned answer: an error's rcode, a denial (a name that does not exist or has no
 // data of the type), or an answer, a truncated one included.
 func dnsRrlClass(reply *dns.Msg) string {
@@ -261,7 +288,22 @@ func (self *DnsEdge) answer(packet []byte, source netip.Addr, tcp bool) []byte {
 		}
 		healthy := self.healthy.Load()
 		query := &DnsQuery{Message: request, Tcp: tcp}
-		reply = Answer(query, view, healthy)
+		// the reverse and delegated zones are no roots and are answered unsigned, DO or not
+		unsigned := false
+		switch {
+		case known:
+			reply = Answer(query, view, healthy)
+		case self.reverse.holds(query):
+			unsigned = true
+			reply = self.reverse.Answer(query)
+		default:
+			if delegatedView, apex, labelApex, ok := self.delegatedFor(request); ok {
+				unsigned = true
+				reply = AnswerDelegated(query, delegatedView, apex, labelApex)
+			} else {
+				reply = Answer(query, nil, healthy)
+			}
+		}
 		if reply == nil {
 			return nil
 		}
@@ -279,7 +321,9 @@ func (self *DnsEdge) answer(packet []byte, source netip.Addr, tcp bool) []byte {
 				return self.pack(reply)
 			}
 		}
-		reply = self.signer.signReply(query, reply, view, keys, healthy, now)
+		if !unsigned {
+			reply = self.signer.signReply(query, reply, view, keys, healthy, now)
+		}
 	}
 	return self.pack(reply)
 }

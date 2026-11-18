@@ -207,9 +207,11 @@ func (self *EvsComponent) tickRef(ctx context.Context, repoId Id, refId Id) {
 
 // The args an EvsClient takes from this Sidecar for the network it is enrolled in: the service url, SidecarApi's
 // transport, ServiceToken and ForgetServiceToken, Sign, the identity, the evs component's sealed directory, events,
-// the clock, the log, settings.Evs, and the team directory's hooks around a create (§16.11's default and private
-// rows, QD-748). gkm, the verified config state and the statement poster are the caller's, from KEYS, TEAM and
-// CORE-M2-02 as each lands.
+// the clock, the log, settings.Evs, the team directory's hooks around a create (§16.11's default and private rows,
+// QD-748), and SignProvenance with settings.AgentSubkeys, so the agent's subkey in this network's keychain.ur signs a
+// push made for its agent_id and a reader holds certificates to this sidecar's bound (evs_provenance.go; owner decision
+// 470). gkm, the verified config state and the statement poster are the caller's, from KEYS, TEAM and CORE-M2-02 as
+// each lands.
 func (self *Sidecar) EvsClientArgs(gkm GkmClient, config EvsConfigFunction, fileStatement EvsFileStatementFunction) (*EvsClientArgs, error) {
 	networkId := self.enrolledNetworkId()
 	if networkId == nil {
@@ -238,6 +240,8 @@ func (self *Sidecar) EvsClientArgs(gkm GkmClient, config EvsConfigFunction, file
 		RepoCreated:        self.announceCreatedRepo,
 		PrivateCreate:      self.readyPrivateRepo,
 		ConfigFollow:       self.evsConfigFollow,
+		SignProvenance:     self.SignProvenance,
+		AgentSubkeys:       self.settings.AgentSubkeys,
 	}, nil
 }
 

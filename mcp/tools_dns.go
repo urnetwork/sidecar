@@ -150,8 +150,8 @@ func mcpDnsOwner(name string, recordType string) (string, string, error) {
 	return "", "", errMcpDnsArguments
 }
 
-// A dns_set or dns_delete action of the call's run, built from the arguments alone, with no effect yet. The run
-// binding rides the SidecarAction, never the CanonicalAction a gate sees (AD4).
+// A dns_set or dns_delete action of the call's run and agent, built from the arguments alone, with no effect yet. The
+// run and agent binding rides the SidecarAction, never the CanonicalAction a gate sees (AD4).
 func mcpDnsAction(call *McpCall, kind sidecar.SidecarActionKind, name string, recordType string, value string) (*sidecar.SidecarAction, error) {
 	stored, err := sidecar.NewCanonicalAction(&protocol.CanonicalAction{
 		Kind:     uint32(kind),
@@ -167,7 +167,7 @@ func mcpDnsAction(call *McpCall, kind sidecar.SidecarActionKind, name string, re
 		return nil, err
 	}
 	runId := call.RunId
-	return sidecar.NewSidecarAction(stored, sidecar.SidecarRiskNormal, sidecar.SidecarRiskNormal, &runId, nil)
+	return sidecar.NewSidecarAction(stored, sidecar.SidecarRiskNormal, sidecar.SidecarRiskNormal, &runId, mcpCallAgentId(call))
 }
 
 // One write through §5.4's gate: its action, the client's effect, and the outcome as the tool answers it.

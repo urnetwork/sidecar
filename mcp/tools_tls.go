@@ -162,9 +162,10 @@ func addTlsTools(catalog *McpCatalog, now func() time.Time) {
 		if !ok {
 			return nil, errMcpTlsUnavailable
 		}
-		// the decision binds this call's run
+		// the decision binds this call's run and its session's agent (owner decision 470)
 		runId := call.RunId
 		settings.RunId = &runId
+		settings.AgentId = mcpCallAgentId(call)
 		result.SetSource("tls:publish")
 		published, err := publisher.PublishTls(ctx, settings)
 		var pending *sidecar.ApprovalPendingError

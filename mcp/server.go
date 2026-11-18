@@ -65,7 +65,8 @@ type McpDaemon interface {
 	ResolveNetwork(hello *sidecar.DaemonHello, network string) (sidecar.Id, error)
 	// The network's hosted Sidecar.
 	Network(networkId sidecar.Id) (McpNetwork, bool)
-	// The agent a session acts as: its hello's, else its project's `.ur` default; nil for none.
+	// The agent a session acts as: its hello's, else its project's `.ur` default; nil for none. A label alone: its id
+	// is each network's (McpAgentNetwork).
 	Agent(hello *sidecar.DaemonHello) (*sidecar.SidecarAgent, error)
 }
 
@@ -479,7 +480,9 @@ func (self *McpServer) middleware(next gomcp.MethodHandler) gomcp.MethodHandler 
 // A call's network, resolved by §5.8's rules and ready: refused with FAILED_PRECONDITION when none resolves, or when
 // its Sidecar is Locked, Unenrolled or Revoked, each naming what the person runs in their own terminal. Then the
 // session's run in it is readied (hook_bind.go): a taint taken while Locked applied first, the session bound where a
-// hook has opened its harness process's run, and the coverage rules run.
+// hook has opened its harness process's run, and the coverage rules run. Last the session's agent takes its id in the
+// network (session.go), refused, retryably, when the keychain cannot read or write it, and for good in a network that
+// keeps no agents' ids.
 func (self *McpServer) call(ctx context.Context, session *McpSession, network string) (*McpCall, error) {
 	hello := session.hello
 	networkId, err := self.daemon.ResolveNetwork(&hello, network)
@@ -508,6 +511,13 @@ func (self *McpServer) call(ctx context.Context, session *McpSession, network st
 			return nil, err
 		}
 		return nil, newMcpError(McpCodeFailedPrecondition, "the run's taint cannot be read or written: run ur status in your own terminal", true)
+	}
+	// the session's agent's id in this network, taken at its first call here (session.go), before any tool binds to it
+	if err := session.resolveAgentId(networkId, host); err != nil {
+		if errors.Is(err, errMcpSessionAgentNoRegistry) {
+			return nil, newMcpError(McpCodeFailedPrecondition, "this network keeps no agent ids, so a session with an agent cannot act in it", false)
+		}
+		return nil, newMcpError(McpCodeFailedPrecondition, "the session's agent id cannot be read from the keychain: run ur status in your own terminal", true)
 	}
 	return call, nil
 }

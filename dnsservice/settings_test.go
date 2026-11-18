@@ -10,8 +10,8 @@ import (
 // §12.6's sketch, with an .example root and numbers where it leaves <cap> placeholders.
 const dnsSettingsSketch = `# config/<env>/dns.yml (sketch)
 roots: [zone.example]
-reverse: from smtpedge.yml's sending addresses   # M9; HE's classless delegation; unsigned
-delegated: Team customers' _domainkey.<domain> zones   # v1 (§14.6); not roots
+reverse: {zones: [{zone: 0/26.2.0.192.in-addr.arpa, prefix: 192.0.2.0/26}]}   # M9; HE's classless delegation; unsigned
+delegated: {enabled: false}     # v1 (§14.6): Team customers' _domainkey.<domain> zones; not roots
 ns: [ns1, ns2]                  # two hosts at the site; IPv4 and IPv6 from different gateway blocks
 ttl: {challenge: 60, edge: 60, mx: 300, mx_host: 300, tlsa: 300, mail_policy: 3600, caa: 3600,
       user: 300, user_range: [60, 3600], soa_minimum: 60, ns: 86400, ptr: 3600}   # edge: A, AAAA at *, @
@@ -39,8 +39,7 @@ func TestDnsSettingsSketchParses(t *testing.T) {
 	}
 	want := DefaultDnsSettings()
 	want.Roots = []string{"zone.example."}
-	want.Reverse = "from smtpedge.yml's sending addresses"
-	want.Delegated = "Team customers' _domainkey.<domain> zones"
+	want.Reverse.Zones = []DnsReverseZoneSettings{{Zone: "0/26.2.0.192.in-addr.arpa.", Prefix: "192.0.2.0/26"}}
 	want.SignaturesPerSecond = 500
 	want.Tcp.ConnectionsPerSource = 8
 	want.Rrl.ResponsesPerSecond = 20
