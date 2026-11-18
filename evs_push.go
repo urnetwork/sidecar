@@ -537,17 +537,6 @@ func (self *EvsRepo) retoken(ctx context.Context, sealed *EvsSealedWrite) error 
 	if err != nil {
 		return err
 	}
-	if slices.ContainsFunc(plan.Paths, (*EvsPlannedPath).creates) {
-		// a creation on a blocking ref whose pressure is immediate again waits, as the planner's does
-		quiet, err := self.quiet(ctx, &evsRefEpoch{refId: plan.RefId, epoch: head.Head.GetPathEpoch(), version: head.Version,
-			generation: head.Head.GetGeneration(), refKind: plan.RefKind})
-		if err != nil {
-			return err
-		}
-		if !quiet {
-			return ErrEvsPathEpochDue
-		}
-	}
 	if err := plan.Retoken(ctx, head); err != nil {
 		return err
 	}

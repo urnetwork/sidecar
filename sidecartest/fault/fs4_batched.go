@@ -4,8 +4,8 @@
 // tick, commit and block rows and 9.6's mapper row; EVS1-M2-41) on the evs world, against EVS1-M2-47's mapper and
 // EVS1-M2-16's and EVS1-M2-44's 5e, tail check and block, as a clause beside fs4.go's registered case.
 //
-// Fs4BatchedEpoch: a reader's grant ends, which shrinks no holders, so writerA's next write rotates to a REMOVE
-// generation whose crossing evs records as a batched due, and creation goes on. writerA's mapper starts at once, as
+// Fs4BatchedEpoch: a reader's grant ends, so writerA's next write rotates to a REMOVE generation whose crossing evs
+// records as a batched due, as it records every due (QD-1046), and creation goes on. writerA's mapper starts at once, as
 // the device that rotated; its PATH_EPOCH is held at step 6 on evs1 while writerB creates a file, so its tail misses
 // it and evs refuses it 409 naming the path; its next push carries the file in its tail and commits epoch 2, which
 // evs's copy then drains. A second grant ends, and 24 h and 11 min on, past the second due's due_by_ms and the 10 min
@@ -143,8 +143,8 @@ func fs4BatchedEpoch(net *Net, readBeforeCopy bool) *Schedule {
 	return &Schedule{Id: "FS-4 batched epoch", Steps: steps, Check: world.Checks(), Tiers: []Tier{TierT2, TierT3}}
 }
 
-// A step action: device's read of the repo ends after; the access log's grants say so, and no holder shrinks, so the
-// REMOVE generation it calls for is batched (DESIGN-DETAILS 9.2.3).
+// A step action: device's read of the repo ends after; the access log's grants say so, and the REMOVE generation it
+// calls for is batched, as every one is (QD-1046).
 func (self *EvsWorld) ExpireReader(device string, after time.Duration) func(ctx context.Context, net *Net) error {
 	return func(ctx context.Context, net *Net) error {
 		self.Device(device)

@@ -23,8 +23,9 @@
 //	seats     every write first asks whether this device holds a key of the repo: an unseated device waits keyless
 //	          and creates nothing (§8.12), before any approval is asked for
 //
-// A creation waits out evs's 412 PATH_EPOCH_DUE, which holds new names in a mailcfg while an immediate path epoch is
-// due. evs's DIRECTORY_FULL is a refusal, never retried (mail_paths.go).
+// A creation waits out ErrEvsPathEpochDue, which reaches it when a mapper's block held the mailcfg past the writer's
+// own waits; no due holds a new name, every due being batched (QD-1046). evs's DIRECTORY_FULL is a refusal, never
+// retried (mail_paths.go).
 //
 // With a label drawer installed, a stored alias_create whose address another's record holds reads uncertain rather
 // than not_done: the kind is one for addresses and burners, and the action alone does not say which it made.

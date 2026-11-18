@@ -4,7 +4,8 @@
 // or not; a reader pinned before a cut-over refuses a rollback across it; a read naming no current-epoch token path is
 // answered stale_epoch and asked again on the new head; a rooted statement of an epoch the request did not name takes
 // one second round; History crosses two cut-overs by E4; a creation across a cut-over answers 409 (9.1 C); a removal
-// while its row is carried drops the row (G); a creation under immediate pressure sends nothing (F); the capture
+// while its row is carried drops the row (G); a creation under a removal lands at once, no due holding it (QD-1046,
+// in place of F's hold); the capture
 // over three epochs holds P1; and a creation whose push names a generation ahead of its path epoch reads through its
 // source after a cut-over, each sealed value under what its own statement names (QD-666).
 
@@ -362,10 +363,11 @@ func TestEvsRemovalWhileItsRowIsCarried(t *testing.T) {
 	}
 }
 
-// F: a device holding a REMOVE generation the ref has not cut over to, the crossing immediate, plans a creation on a
-// blocking ref: nothing of the new name is sent, and past its waits the write answers EVS_PATH_EPOCH_DUE; a
-// modification of a standing path still writes.
-func TestEvsCreationUnderImmediatePressureWaits(t *testing.T) {
+// No due holds a creation (QD-1046, which retired F's hold): a device holding a REMOVE generation the ref has not cut
+// over to, a member device's removal among what shrank the holders, creates on a blocking ref at once, the new name
+// named in the current epoch alone, and a reader reads it; so does a creation under a due a head written before
+// QD-1046 recorded blocking; and a modification of a standing path writes as ever.
+func TestEvsCreationUnderARemovalLands(t *testing.T) {
 	writer := newEvsTestWriter(t)
 	if _, err := writer.write(t, "a", []byte("a1")); err != nil {
 		t.Fatal(err)
@@ -374,15 +376,25 @@ func TestEvsCreationUnderImmediatePressureWaits(t *testing.T) {
 	writer.gkm.causes[2] = GkmCauseRemove
 	writer.gkm.auths[1] = 3
 	writer.world.config.repo.HoldersShrunkAt = 5
-	posted := len(writer.server.postedStatements)
-	if _, err := writer.write(t, "new.txt", []byte("new")); !errors.Is(err, ErrEvsPathEpochDue) {
-		t.Fatalf("a creation under immediate pressure: %v", err)
+	created := func(path string) {
+		t.Helper()
+		posted := len(writer.server.postedStatements)
+		if _, err := writer.write(t, path, []byte("content of "+path)); err != nil {
+			t.Fatalf("a creation of %s under a removal: %v", path, err)
+		}
+		named := writer.world.epochsNamed(path)
+		if len(writer.server.postedStatements) != posted+1 || len(named) == 0 || slices.ContainsFunc(named, func(epoch uint64) bool { return epoch != 1 }) {
+			t.Fatalf("%s: %d pushes posted, the new name named in %v", path, len(writer.server.postedStatements)-posted, named)
+		}
+		if content, _, err := writer.read(t, path); err != nil || string(content) != "content of "+path {
+			t.Fatalf("%s read back %q: %v", path, content, err)
+		}
 	}
-	if len(writer.server.postedStatements) != posted || 0 < len(writer.world.epochsNamed("new.txt")) {
-		t.Fatalf("%d pushes posted, the new name named in %v", len(writer.server.postedStatements)-posted, writer.world.epochsNamed("new.txt"))
-	}
+	created("new.txt")
+	writer.world.due = &protocol.EvsPathEpoch{DueGeneration: 2, DueBlocksCreation: true, DueByMs: writer.test.clock.Now().UnixMilli()}
+	created("newer.txt")
 	if _, err := writer.write(t, "a", []byte("a2")); err != nil {
-		t.Fatalf("a modification under the same pressure: %v", err)
+		t.Fatalf("a modification under the same removal: %v", err)
 	}
 }
 
