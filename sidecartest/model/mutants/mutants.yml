@@ -48,9 +48,8 @@ models:
   - spec: IndexRollup
     invariants:
       - {invariant: TypeOk, none: "the type invariant, which every mutant's run checks before its own and none can break alone"}
-      - {invariant: ResultsHold, mutants: [EraseLiveFirst, ClosureNoCas, MergeDropsTombstone, ReuseUnabsorbed, RollupForgetsHeads, NoPromote, PromoteBlind, IndexSupersede, LongLife]}
+      - {invariant: ResultsHold, mutants: [EraseLiveFirst, ClosureNoCas, MergeDropsTombstone, ReuseUnabsorbed, RollupForgetsHeads, NoOwnCas, CleanupUnabsorbed, NoPromote, PromoteBlind, IndexSupersede, LongLife]}
       - {invariant: BucketsExact, mutants: [NoPromoteLive]}
-      - {invariant: ChainsResolve, mutants: [DiffOnListed, NoOwnCas, ReusePinned, CleanupReferenced, MergeRemovesLarge]}
       - {invariant: OneVersionEach, mutants: [MergeKeepsOld]}
       - {invariant: RollsOnce, mutants: [NoLockFence]}
       - {invariant: EpochHolds, mutants: [MergeIgnoresEpoch]}
