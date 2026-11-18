@@ -345,7 +345,7 @@ Served uses never exceed `uses`, counted by Reserves, and no get starts, resumes
 | Per-listener MAC ticket (contract pattern) | Cheap verify | Server holds the keys; no receipt | Rejected |
 | 4-tuple hash (SO_REUSEPORT) | Stateless, sticky | Load-blind; aborts a closing socket's queue without `tcp_migrate_req` ([R:ext-edge] §2.10) | Opt-in affinity |
 | Presence-only liveness | No heartbeats | Residents outlive disconnects ~5 min (`server/CLIENTCLOSE.md`); no load data | Rejected |
-| Edge-delegated ticket keys | Edges survive a sockets outage | Keys on edge hosts; C9 still needs Redis | Later |
+| Edge-delegated ticket keys | Edges survive a sockets outage | Keys on edge hosts; C9 still needs Redis | [Later](DESIGN-DEFER.md#sock-edge-delegated-ticket-keys) |
 | Plaintext application names | Server-side globs | URnetwork reads every internal name | Rejected (owner decision 67) |
 | One HMAC per whole name | Hides depth | No server-side prefix grants | Rejected |
 | `ur share` as an evs object sealed under a link-fragment key | Works while the sharer is offline | Changes format 1, which freezes at M2 | Rejected (D-SOCK-16) |
@@ -435,4 +435,5 @@ Served uses never exceed `uses`, counted by Reserves, and no get starts, resumes
 - **v0 (§23 M5):** the `sockets` service with 9.10's bounds; blinded application names; `tls/` with §13, `AppMode` included; tickets, P2C and 9.7's per-dialer clamp on `est`; `SocketHint`; the Go API; `ur socket` and `ur share`; MCP tools. Blocked by §6 streams, §5 identity, the config repo and projection (X3, M2) and §4's C9.
 - **v0, mail track:** `smtp/` with §15 (M7); `ur/` once §14 passes D-SMTP-16's gate, DATA mode included (M9; owner decisions 35, 99, 125).
 - **v1 (M6):** affinity, with §13; Team scope hosts (owner decisions 40, 55, 58), the `smtp/` ones with §15.
-- **Later:** region-aware selection (one lb site today, [R:ext-edge] §5 R8), slow start, edge-delegated ticket keys, registration over push.
+- **Later:** [region-aware selection](DESIGN-DEFER.md#sock-region-aware-selection) (one lb site today, [R:ext-edge] §5 R8), [slow start](DESIGN-DEFER.md#sock-slow-start), [edge-delegated ticket keys](DESIGN-DEFER.md#sock-edge-delegated-ticket-keys), [registration over push](DESIGN-DEFER.md#sock-registration-over-push).
+- **Deferred:** DESIGN-DEFER.md holds an entry for each Later item, linked above, and for [this section's v1 set](DESIGN-DEFER.md#sock-v1) (owner decision 587).

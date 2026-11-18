@@ -7,18 +7,19 @@
 | Path | What it is |
 |---|---|
 | `sections/01-CTX.md` … `sections/23-PHASE.md` | DESIGN.md §1-§23, one file per section. The build copies them verbatim, adding only links. |
-| `owner/DECISIONS.md` | The owner's record, entries 1-585. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
+| `owner/DECISIONS.md` | The owner's record, entries 1-587. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
 | `owner/APPLY.md` | The rules for applying the owner's decisions: precedence (§1), supersession, where two decisions disagree (§2), notation (§3), editing rules (§4), and the follow-up decisions 112-136 with the sections each binds (§6-§8). |
 | `CONVENTIONS.md` | The writing conventions every section follows: the owner directive (§0), the owner rules (§1), the section template (§2) and the X registry (§7), which DESIGN.md's X1-X20 table replaced. |
 | `OUTLINE.md` | The original outline: section codes, scope boundaries, and the word budgets that G0's density rule replaced on 2026-11-04. |
 | `asm/` | The assembler, the validator and their data (below). |
-| `build.sh` | Rebuilds DESIGN.md and validates it. |
+| `defer/00-INTRO.md`, `defer/02-TRUST.md` … `defer/23-PHASE.md` | [DESIGN-DEFER.md](../../DESIGN-DEFER.md)'s sources: its opening, and each section's deferred decisions, one entry each, in a file named as the section's is (owner decision 587; "DESIGN-DEFER.md", below). |
+| `build.sh` | Rebuilds DESIGN.md and DESIGN-DEFER.md and validates them. |
 
 ## Build
 
 ```sh
-design/source/build.sh                  # rebuild DESIGN.md at the repo root, then validate it
-design/source/build.sh /tmp/DESIGN.md   # build elsewhere, to check a change without touching DESIGN.md
+design/source/build.sh                    # rebuild DESIGN.md and DESIGN-DEFER.md at the repo root, then validate them
+design/source/build.sh /tmp/d/DESIGN.md   # build elsewhere, DESIGN-DEFER.md beside it, without touching either
 ```
 
 It needs only `python3`; it was built and checked with Python 3.13. The steps, all run from `asm/`:
@@ -27,7 +28,8 @@ It needs only `python3`; it was built and checked with Python 3.13. The steps, a
 2. `fields.py` pulls each question's fields into `v7/qfields.json`.
 3. `cites10.py` maps every owner decision to the sections that cite it, in `v7/cites.json`.
 4. `assemble10.py` writes DESIGN.md: the front matter, the owner decisions by number, the contents, §1-§23, and Appendices A-H.
-5. `validate10.py` writes `v7/validate.json`, with a summary in `v7/validate_stdout.txt`.
+5. `defer10.py` writes DESIGN-DEFER.md beside DESIGN.md from `defer/` and checks it against the sections, with its summary in `v7/defer.json`. The build stops here, before the validator, when an entry or a pointer is wrong.
+6. `validate10.py` writes `v7/validate.json`, with a summary in `v7/validate_stdout.txt`. Its `defer` key repeats step 5's counts.
 
 `v7/` is the working-directory name the scripts expect; the name is historical. Every file the build writes is git-ignored.
 
@@ -42,7 +44,7 @@ It needs only `python3`; it was built and checked with Python 3.13. The steps, a
 
 The data files are layered. Each `data_*N.py` loads its predecessor with `runpy` and patches it: `data_front10.py` loads `data_front9.py`, back to `data_front3.py`, and the registers, glossary and appendices go the same way. Change the top layer (the `*10` files), or add an `*11` layer that loads them. Comments in the scripts cite working files from the design sessions (the reconcilers' orders, `peer/`, `review/`, `snap/`), which were not imported; they are history.
 
-## Adding owner decision N (586 onward)
+## Adding owner decision N (588 onward)
 
 1. Add entry N to `owner/DECISIONS.md`: the question, the answer, its cost, the options not taken, and what raised it.
 2. In `asm/data_front10.py`, append `(N, "<what it settles>", "<one line>")` to `INDEX`, add `DATES[N]`, and raise the `assert` to `list(range(1, N + 1))`. Update `STATUS` and `DECISIONS_INTRO` where they name a range. `@@OD:k@@` writes a link to decision k.
@@ -51,6 +53,15 @@ The data files are layered. Each `data_*N.py` loads its predecessor with `runpy`
 5. In the sections, mark the question "**Decided by owner YYYY-MM-DD (owner decision N):**", or "**Amended by owner …**" for a change to an earlier answer; `assemble10.py`'s `DECIDED` and `AMENDED` patterns read the date from that mark for Appendix B's status cell. Cite "owner decision N" in every section that implements it: the validator fails any decision that no section cites. That is D-ARCH-4's assembly check, which G0 requires (§23.8).
 6. If the question's status cell changes, update it in `asm/v10/qstatus_final.json`.
 7. Rebuild, and read `v7/validate.json`.
+
+## DESIGN-DEFER.md
+
+[DESIGN-DEFER.md](../../DESIGN-DEFER.md) documents every deferred decision, one entry each (owner decision 587). It is generated, as DESIGN.md is: never edit it by hand.
+
+- **Where an entry lives.** In `defer/NN-CODE.md`, the file named as the section that owns the deferred thing. An entry opens `### <anchor>: <title>`, then a `Stage:` line, then seven lines in this order, each `- **Field:** text` on one line: Deferred, Why, Launch instead, Lost, Dark in code, Held, To bring back. The anchor is lowercase words joined by hyphens, starting with the section's short name (`acl-prefix-write-rules`), and never changes once sections link it. `defer/00-INTRO.md` is the document's opening, copied verbatim.
+- **How a section points at it.** With a link, `[the words that name the deferred thing](DESIGN-DEFER.md#<anchor>)`, on the line where the section describes it, most often its phasing subsection's Later row. Inside a code fence, where a link does not render, the words "DESIGN-DEFER.md's `<anchor>` entry" (without the backticks) point instead. The document's index and each entry's head list the subsections that point at it.
+- **What the build refuses.** `defer10.py` exits 1, and `build.sh` with it, on an entry that lacks its stage or a field or has them out of order, an anchor used twice, a pointer no entry answers, an entry no section points at, an entry that cites an R-, D- or Q- item or a `§N.M` the sections do not hold, and a link in the document that does not resolve.
+- **Adding a deferral.** The design-records pass that folds it writes the entry, points each section it touches at the entry, and says in the section what launch does instead. A v1 item needs no entry of its own: each section has one entry, `<name>-v1`, for its phasing subsection's v1 rows, which the pass edits. When a deferred thing is built or brought back, the pass that folds that removes the entry and its pointers.
 
 ## The validator's hand-maintained inputs
 
@@ -689,3 +700,32 @@ The design-records track dr4-citation (wave f43d) measures again what QD-274's p
 - **The metadata list** is unchanged: no §2.8 row changes.
 
 Outside this folder the track touched DESIGN.md alone.
+
+## Validation after DESIGN-DEFER.md and owner decisions 586 and 587 (2026-11-18)
+
+The design-records track design-defer-doc (wave f43) folds two owner answers of 2026-11-17, numbered as folded:
+
+| Ledger id | Owner decision | What it settles |
+|---|---|---|
+| QD-1032 | 586 | The client-checked prefix write rules move to Later: launch uses a repo per prefix, and the drafted rules stay dark behind one switch. |
+| QD-1033 | 587 | DESIGN-DEFER.md documents every deferred decision, one entry each, and each section a deferral touches points at its entry. |
+
+- **DESIGN-DEFER.md is new, and generated.** Its sources are `defer/`, and `asm/defer10.py`, a new build step before the validator, assembles and checks it ("DESIGN-DEFER.md", above). It holds 95 entries under 21 sections, §2 and §4 to §23: 73 Later items, one each; 19 entries for the sections' v1 sets, one a section, since v1 is built in the same run and ships at its milestones' gates; and three for things built and off or still open (same-network P2P, preservation holds, and apt and yum repositories). It collects the Later and v1 rows of every phasing subsection, §4.6's C4, C7 and C17, §23.4's Later paragraph, and the deferrals that DESIGN.md states only in a row or a decision (the audits of owner decisions 99 and 119, sha256 repositories, the later pass over `slot/`, named mail credentials, the harness keys of owner decision 452, the retuning of taskworker's claim shares, the holds' switch). §1 and §3 own no entry: §3.4's embedding points at §16's.
+- **Pointers.** 144, in every section file but §1's. Each phasing subsection's Later row links its items, and a closing "Deferred" line cites owner decision 587 and links the section's v1 entry; §23.4's Later paragraph links each item it lists and states the rule. A pointer inside a code fence is words, not a link (§8.8, §11.11). §4.11 lists DESIGN-DEFER.md among the checkout's documents.
+- **Owner decision 586 in the sections.** §8.8's statement table and its `RepoPrefixRules` block say Later and open with a Later row that says what launch does; §8.12's `AllowPrefixWrite`, D-ACL-11 and §8.19, where the rules leave v1's row for Later's; §11.8's refusals row and D-EVS-18, whose clause for a ref-creating push in a ruled repo goes; §11.11's prefix and new refs rows, under a Later row; Q-EVS-3, marked "Amended by owner 2026-11-17"; §11.22, where the rules leave v1's row; §23.4; and §5.4's `prefix_rule` alarm comment. The rules' own rows stay as the design they return with, as the decision says. No proto fence changed: `RepoPrefixRules`, SignedType 0x1111 and `AclRepo.prefix_rules = 12` stay in their fences, reserved, as the code keeps them. The index rows of owner decisions 345, 415, 416 and 559 say "Deferred by owner decision 586".
+- **Appendix B.** `assemble10.py`'s status cell now adds an amendment to a closed question as it does to a decided one, so Q-EVS-3 reads "closed by the 2026-11-03 design review; amended (owner decision 586, 2026-11-17)" (`asm/v10/qstatus_final.json`), and its summary says the rules are Later (`asm/data_registers10.py`).
+- **DESIGN-DETAILS.md and DESIGN-AMENDMENTS.md.** Section 16 is marked Later at its head and in the status table; it is not folded, and its amendments to sections 5, 8 and 10 wait with it. DESIGN-AMENDMENTS.md's note on section 16 says so. Neither file held an item to delete for these two ids.
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `77b4aa187dc4470c78084e6fdc071e7440cc385d5e805ed1a5353156e9b742af`) and DESIGN-DEFER.md (SHA-256 `0080d481d02a1de0a8fd39f0fca9dc15ab614489225e943d89d30f8f64d296ea`), and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no §2.8 row change, so no guard line was needed. §22 gained two lines in 22.17 alone, so none of the rows sidecartest/fault's catalog reads by position moved.
+- **Owner decisions.** All 587 rows are present and cited; APPLY.md's section pairs hold.
+- **Open owner questions.** One, Q-REPO-6.
+- **Superseded options.** 310 grep hits. Three are on reworded lines and were read again: D-EVS-61's analogy to Q-EVS-3's prefix rules, which now says they are Later, and §19.18's second site and off-site copy, now a link to their entry. 34 others moved with their lines and keep their readings. None is live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 11,787 section references, 25 more, with the one unresolved as before. `v7/words.json` and `v7/text_checks.json` were regenerated.
+- **DESIGN-DEFER.md.** 95 entries and 144 pointers; no entry lacks a field or a pointer, no pointer lacks an entry, and every R-, D- and Q- item and subsection an entry cites exists.
+- **The metadata list** is unchanged: no §2.8 row changes. api-7 still names what api would hold of a `RepoPrefixRules`, since the row format is reserved and what servers see does not change; at launch no such statement is filed.
+
+Left for others: the entry for MLS (QD-1040) and what QD-1038 removes are the dr4-late-sweep track's, which adds its entry as "DESIGN-DEFER.md", above, says. HANDOFF.md's table of documents does not list DESIGN-DEFER.md, since HANDOFF.md is outside a design-records track's files.
+
+Outside this folder the track touched DESIGN.md, DESIGN-DEFER.md, DESIGN-DETAILS.md's section 16 mark and DESIGN-AMENDMENTS.md's note on section 16.

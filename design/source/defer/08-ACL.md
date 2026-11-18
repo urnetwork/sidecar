@@ -1,0 +1,29 @@
+### acl-prefix-write-rules: Client-checked prefix write rules
+Stage: Later
+- **Deferred:** `RepoPrefixRules`, the rules that hold a writer to path prefixes inside one general repo, which every reader checks and no server does (owner decision 586; QD-1032). It takes with it Q-EVS-3's v1 half, D-ACL-11's prefix clause, owner decisions 345, 415 and 416 with 559's filer rule, and D-EVS-18's clause for a ref-creating push; §8.8's statement and §8.12's `AllowPrefixWrite`, §11.8's gate clause and §11.11's prefix and new refs rows; DESIGN-DETAILS.md section 16 with its amendments to sections 5, 8 and 10; ledger ids QD-212, QD-791 to QD-795, QD-801 to QD-803, QD-826, QD-833, QD-1001 and QD-1042; tasks ACL-M6-04, EVS1-M6-04 to EVS1-M6-07 and TEST-M6-03.
+- **Why:** The complexity review of 2026-11-17 counted the rules' cost: about 8.2k lines and rule hooks in 54 other files, 12 decisions, 158 KB of design, an 18-configuration TLA+ model, a clause in evs's gate and repair-push quotas. The rules are advisory at evs: a breaching push commits, and readers ignore it and repair it, and one breaching push stops a shared git-mode ref on every mount until an admin deletes and re-pushes it. The owner chose to defer them.
+- **Launch instead:** A repo per prefix (D-ACL-11; Q-EVS-3's v0 answer). The repo is the write boundary: servers enforce it, and it limits reads as well. Agents keep their owned branches and overlays.
+- **Lost:** Subtree write limits inside one repo or branch. A team that needs them splits the tree into repos and loses atomic commits across the split. What servers see does not change.
+- **Dark in code:** One switch, `AclPrefixSettings.Enabled`, false in `DefaultAclPrefixSettings` (sidecar/acl_prefix_settings.go). Off: the log refuses a `RepoPrefixRules` at its position as a type this release does not carry, so the log goes on, and SignedType 0x1111 and `AclRepo.prefix_rules = 12` stay reserved (sidecar/acl_statement.go); no filer signs one, and `ur evs rules` refuses with `ErrAclPrefixRulesDeferred`, naming the deferral (sidecar/acl_prefix.go, sidecar/cli/cmd_evs_rules.go); no reader judges a push, journals, alarms, repairs or pin-pushes (sidecar/evs_prefix.go, sidecar/evs_prefix_repair.go, sidecar/acl_prefix_gate.go); evs's gate has no clause for a push that creates a shared ref (QD-803's, reverted). The rules' own tests and the `details/PrefixRules` model run with the switch on, and sidecar/acl_prefix_dark_test.go holds the launch default off.
+- **Held:** TEST-M6-03, the rules' end-to-end schedule rows, breach helper and model in the gate; it left TEST-M6-02's and TEST-M10-06's needs. The core lane's track acl-prefix-group-atom-refused was dropped. QD-1042's reading waits with the rules: about 30 lines in sidecar/evs_prefix.go and a ruled-repo test, by which the prefix judge takes the walked removal behind an absent reply as its version.
+- **To bring back:** An owner decision that reverses owner decision 586. Then: fold DESIGN-DETAILS.md section 16 and its amendments to sections 5, 8 and 10 into DESIGN.md; restore QD-803's gate clause in evsservice; build QD-1042's reading; release TEST-M6-03 and return it to TEST-M6-02's and TEST-M10-06's needs; turn the switch on only in a release that every device and api of a network runs, since the format limits and the log's verdict on the statement are every verifier's alike.
+
+### acl-client-attested-postures: Client-attested postures
+Stage: Later
+- **Deferred:** Access rules that depend on a posture the client attests, named in §8.19's Later row after the Team mock (sidecar/design/mocks' team-management.html:847-850). It has no requirement, D- item, task or FS row.
+- **Why:** DESIGN.md gives no reason beyond the Later row.
+- **Launch instead:** Rules name subjects an admission fixes: sidecars, members, tags, groups and the autogroups (§8.5). No rule reads a device's state.
+- **Lost:** A team cannot write a rule such as "only from a managed, patched device".
+- **Dark in code:** Nothing is built. `sidecar/device`'s posture is a different thing, the forwarding role's checks between compiles (§17.8).
+- **Held:** Nothing: no task or track waits on it.
+- **To bring back:** A design: what a client attests, who verifies it, how a rule names it, and what §2.8's list then publishes.
+
+### acl-v1: §8's v1 set
+Stage: v1 (M6, M10)
+- **Deferred:** §8.19's v1 rows. At M6: team networks (owner decision 55) with two-approver rules, scope hosts, the audit reader (owner decision 63) and config wraps past the first 1,000 member devices (owner decision 144); the team directory and its default rule (owner decisions 171, 180, 182); cross-network shares (Q-PROTO-3, Q-QUOTA-5, C18); peer-list filtering. At M10 (owner decision 169): `RepoVersioning` enforced with storage format 2 (owner decisions 163, 173, 183), and the `control` class's remote search (owner decisions 175, 178).
+- **Why:** Team ships at M6 and format 2 at M10.
+- **Launch instead:** v0 evaluates policy on personal networks from M2: `AclRows`, grant chains, access logs and every §8.8 statement are checked and folded from M2, the `directory` kind's default and `RepoVersioning`'s lock among them, so a device on M2 code computes what M6 code does (D-PHASE-9).
+- **Lost:** Until M6: team policy and shares. Until M10: the versioning lock's enforcement and remote search's class.
+- **Dark in code:** Built in the same run on the `sidecar` branches; M2 folds what M6 and M10 enforce.
+- **Held:** Nothing.
+- **To bring back:** Nothing to bring back: each ships when its milestone's gate passes (§23.6).
