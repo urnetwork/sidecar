@@ -13,12 +13,14 @@ package fault
 //	admin     a directory admin's ERASE of A's entry destroys its keys, every reader counting it
 //	breach    where evs breaches its scope rule and takes X's ERASE, every reader that held the entry keeps it, alarms
 //	          bad_erasure naming X and counts no erasure
-//	revoke    a repo's admin revokes it and announces it again before any runner: the request lapsed, the runner erases
-//	          nothing and alarms; a request by a member with no right on P likewise; P's admin revokes P with no
-//	          directory admin daemon running: the marker hides P's name from every honest reader at once, nothing is
-//	          erased, and the revoker's status reads pending; past 24 h a directory admin's daemon starts, raises
-//	          directory_erasure pending, and erases exactly the copies naming P, each ERASE naming the request, while
-//	          a second admin's runner that synced the same work commits none
+//	revoke    in one repo P (owner decision 472): P's admin revokes P (request 1) and announces it again before any
+//	          runner, so request 1 lapsed, and the runner erases nothing for it and alarms; a request by a member with
+//	          no right on P likewise; P's admin revokes P again (request 2) with no directory admin daemon running:
+//	          the marker hides P's name from every honest reader at once, nothing is erased, and the revoker's status
+//	          reads pending; past 24 h a directory admin's daemon starts, raises directory_erasure pending, holds
+//	          request 2 alone as work and erases exactly the copies naming P, each ERASE naming request 2, request 1
+//	          staying lapsed, while a second admin's runner that synced the same work commits none; the second
+//	          revocation reads done at its revoker
 //	fresh     a fresh member device with an empty cache then opens every entry of A and B that names no P
 //
 // After every step, FI-25 as the authorship world holds it. TestFs99MutantEvsWithoutTheAdminScopeRuleFails runs the
@@ -286,15 +288,8 @@ func Fs99ErasureAuthorityOf(state *authorState, mutant bool) *Schedule {
 			return nil
 		}),
 		authorStep(state, "daemonA", func(ctx context.Context, world *authorWorld) error {
-			// P announced with a run of A's in it; a second repo Q of the same admin announced, revoked and announced
-			// again before any runner, so its request lapsed
-			queueId := sidecar.NewId()
-			next := world.directoryAuth.Tip().Pin().GetVersion() + 1
-			world.directoryFixture.Repos[queueId] = &sidecartest.FakeDirectoryRepo{
-				Kind: protocol.RepoKind_REPO_KIND_GENERAL, Admins: []sidecartest.FakeDirectoryRepoAdmin{{SidecarId: world.approver.sidecarId, At: next}},
-			}
-			world.rights[queueId] = map[sidecar.Id]*dirRight{world.approver.sidecarId: {from: next}}
-			world.publish()
+			// P announced with a run of A's in it; P's admin revokes P (request 1, marker version 2) and announces it
+			// again (version 3) before any runner, so request 1 lapsed (owner decision 472)
 			if err := world.approver.client.Sync(ctx); err != nil {
 				return err
 			}
@@ -310,20 +305,17 @@ func Fs99ErasureAuthorityOf(state *authorState, mutant bool) *Schedule {
 			if err := world.announce(ctx, writer, inRepo); err != nil {
 				return err
 			}
-			if _, err := world.approver.client.AnnounceRepo(ctx, &sidecar.DirectoryRepoAnnounceArgs{RepoId: queueId, DisplayName: "old drafts", Confirmed: true}); err != nil {
-				return err
-			}
-			if err := world.approver.record.Flush(ctx); err != nil {
-				return err
-			}
 			if err := world.approver.client.Sync(ctx); err != nil {
 				return err
 			}
-			lapsed, err := world.approver.client.RevokeRepo(ctx, &sidecar.DirectoryRevokeArgs{RepoId: queueId, Confirmed: true})
+			lapsed, err := world.approver.client.RevokeRepo(ctx, &sidecar.DirectoryRevokeArgs{RepoId: world.repoId, Confirmed: true})
 			if err != nil {
 				return err
 			}
-			if _, err := world.approver.client.AnnounceRepo(ctx, &sidecar.DirectoryRepoAnnounceArgs{RepoId: queueId, DisplayName: "old drafts", Confirmed: true}); err != nil {
+			if lapsed.MarkerVersion != 2 {
+				return fmt.Errorf("P's first revocation: %+v", lapsed)
+			}
+			if _, err := world.approver.client.AnnounceRepo(ctx, &sidecar.DirectoryRepoAnnounceArgs{RepoId: world.repoId, DisplayName: "launch plans", Confirmed: true}); err != nil {
 				return err
 			}
 			if err := world.approver.record.Flush(ctx); err != nil {
@@ -371,7 +363,7 @@ func Fs99ErasureAuthorityOf(state *authorState, mutant bool) *Schedule {
 			if err != nil {
 				return err
 			}
-			if !slices.Contains(pass.Refused, state.ids["lapsed"]) || !slices.Contains(pass.Refused, state.ids["forged"]) || len(pass.Erased) != 0 || len(pass.Pending) != 0 {
+			if !slices.Contains(pass.Refused, state.ids["lapsed"]) || !slices.Contains(pass.Refused, state.ids["forged"]) || len(pass.Erased) != 0 || len(pass.Pending) != 0 || len(pass.Delayed) != 0 {
 				return fmt.Errorf("the pass over a lapsed and a rightless request: %+v", pass)
 			}
 			if count := world.admin.alarmsNaming(sidecar.SidecarRecordAlarmBadErasure, state.ids["stranger"]); count != 1 {
@@ -386,16 +378,14 @@ func Fs99ErasureAuthorityOf(state *authorState, mutant bool) *Schedule {
 			if len(raised) != 0 {
 				return fmt.Errorf("directory_erasure raised for refused requests: %v", raised)
 			}
-			if shown, err := world.syncShown(ctx, world.reader, "old drafts"); err != nil || shown == nil {
-				return fmt.Errorf("Q's item announced again: %v", err)
-			}
-			if shown, err := world.reader.shown("launch plans"); err != nil || shown == nil {
-				return fmt.Errorf("P's item after a rightless request: %v", err)
+			// P's item announced again shows, through the lapsed request and the rightless one
+			if shown, err := world.syncShown(ctx, world.reader, "launch plans"); err != nil || shown == nil || shown.Announcement.GetVersion() != 3 {
+				return fmt.Errorf("P's item announced again: %v, %v", shown, err)
 			}
 			return nil
 		}),
 		authorStep(state, "daemonA", func(ctx context.Context, world *authorWorld) error {
-			// P's admin revokes with no directory admin daemon running
+			// P's admin revokes P again (request 2, marker version 4) with no directory admin daemon running
 			if err := world.approver.client.Sync(ctx); err != nil {
 				return err
 			}
@@ -403,8 +393,8 @@ func Fs99ErasureAuthorityOf(state *authorState, mutant bool) *Schedule {
 			if revocation, err = world.approver.client.RevokeRepo(ctx, &sidecar.DirectoryRevokeArgs{RepoId: world.repoId, Confirmed: true}); err != nil {
 				return err
 			}
-			if revocation.State != sidecar.DirectoryRevocationPending {
-				return fmt.Errorf("the revocation: %+v", revocation)
+			if revocation.State != sidecar.DirectoryRevocationPending || revocation.RequestId == state.ids["lapsed"] || revocation.MarkerVersion != 4 {
+				return fmt.Errorf("the second revocation: %+v", revocation)
 			}
 			if err := world.approver.record.Flush(ctx); err != nil {
 				return err
@@ -462,12 +452,14 @@ func Fs99ErasureAuthorityOf(state *authorState, mutant bool) *Schedule {
 			if err := second.client.Sync(ctx); err != nil {
 				return err
 			}
-			// the pass that first shows the work, a day and an hour old, raises pending and waits its delay
+			// the pass that first shows the work, a day and an hour old, raises pending and waits its delay: request 2
+			// alone, the later marker reviving no lapsed request (owner decision 472)
 			pass, err := runner.Pass(ctx)
 			if err != nil {
 				return err
 			}
-			if !pass.Runs || len(pass.Erased) != 0 || !slices.Equal(pass.Delayed, []sidecar.Id{revocation.RequestId}) || len(pass.Pending) != 1 || pass.Pending[0].Age < 25*time.Hour {
+			if !pass.Runs || len(pass.Erased) != 0 || len(pass.Refused) != 0 || !slices.Equal(pass.Delayed, []sidecar.Id{revocation.RequestId}) ||
+				len(pass.Pending) != 1 || pass.Pending[0].Request.RequestId != revocation.RequestId || pass.Pending[0].Age < 25*time.Hour {
 				return fmt.Errorf("the pass that first shows the work: %+v", pass)
 			}
 			if !slices.Equal(raised, []string{sidecar.SidecarDirectoryErasurePending}) {
@@ -517,11 +509,17 @@ func Fs99ErasureAuthorityOf(state *authorState, mutant bool) *Schedule {
 			if err := world.admin.client.Sync(ctx); err != nil {
 				return err
 			}
-			if pass, err = runner.Pass(ctx); err != nil || len(pass.Erased) != 0 || len(pass.Pending) != 0 {
+			if pass, err = runner.Pass(ctx); err != nil || len(pass.Erased) != 0 || len(pass.Pending) != 0 || len(pass.Delayed) != 0 || len(pass.Refused) != 0 {
 				return fmt.Errorf("the pass after the erasure: %+v, %v", pass, err)
 			}
 			if !slices.Contains(raised, sidecar.SidecarDirectoryErasureDone) {
 				return fmt.Errorf("directory_erasure once erased: %v", raised)
+			}
+			// request 1 stays lapsed at the version that replaced its marker, though the ERASEs took that entry
+			for _, view := range world.admin.client.ErasureRequests() {
+				if view.RequestId == state.ids["lapsed"] && (view.LapsedVersion != 3 || view.Erased) {
+					return fmt.Errorf("request 1 once the copies naming P are erased: %+v", view)
+				}
 			}
 			if err := world.approver.client.Sync(ctx); err != nil {
 				return err
