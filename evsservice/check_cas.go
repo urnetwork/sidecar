@@ -8,9 +8,9 @@
 //	    ref, an overlay's base ref's current epoch as step 4 read its head, and otherwise any epoch from 1 to the
 //	    push's generation, else 412 PATH_EPOCH. No due blocks creation, every due being batched (QD-1046): the one
 //	    creation 5e holds is a push creating a path (a change on base 0, or a directory add) before the head's
-//	    block_until_ms, a mapper's block (§11.6's block row, kept while question
-//	    path-epoch-dues-batched-mapper-block is open), which gets 412 PATH_EPOCH_DUE, recorded. A PATH_EPOCH push's
-//	    own rules (map parts, source binding, tail, fold) are EVS1-M2-16's, through PushView.PathEpochRules.
+//	    block_until_ms, a mapper's block on this ref (§11.6's block row, which stays: QD-1057), which gets 412
+//	    PATH_EPOCH_DUE, recorded. A PATH_EPOCH push's own rules (map parts, source binding, tail, fold) are
+//	    EVS1-M2-16's, through PushView.PathEpochRules.
 //	5f  git mode: b = v (TIP), else final 409 non-fast-forward, and no other push's live seal lease, else 429 with
 //	    the lease's remaining time, refusing nothing; file mode: v - 63 <= b <= v, so the push lands within
 //	    (b, b+64], else final 409 BASE_STALE, which on the caller's own deposit ref carries its head

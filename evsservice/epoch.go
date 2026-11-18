@@ -7,11 +7,10 @@
 //	       through .../push checks them at its commit (epoch_commit.go)
 //	block  {ref_id, ms <= 120,000} (rw): 10 min past due_by_ms a mapper may stop creation on the ref for at most 2 min,
 //	       at most once each 10 min, by one head CAS raising only the fence and setting block_until_ms; until it passes
-//	       a push creating a path gets 412 PATH_EPOCH_DUE (check_cas.go; kept while question
-//	       path-epoch-dues-batched-mapper-block is open). A ref with nothing due answers 412 PATH_EPOCH, a block
-//	       before its time 429 WAIT with retry_after_ms, a due while two sources stand 412 EPOCH_SOURCES_FULL, since
-//	       every epoch is batched and the commit row defers it (QD-1046), and a CAS lost PushRefusalRetryCount times
-//	       429 BUSY.
+//	       a push creating a path on the ref gets 412 PATH_EPOCH_DUE (check_cas.go), the one creation refusal left
+//	       once every due is batched (QD-1046, QD-1057). A ref with nothing due answers 412 PATH_EPOCH, a block before
+//	       its time 429 WAIT with retry_after_ms, a due while two sources stand 412 EPOCH_SOURCES_FULL, since every
+//	       epoch is batched and the commit row defers it, and a CAS lost PushRefusalRetryCount times 429 BUSY.
 //	       "At most once each 10 min" reads block_until_ms alone, the head keeping no block's start: a block may begin
 //	       once 8 min have passed since the last one's end, as if that one had lasted its whole 2 min
 //
