@@ -156,8 +156,13 @@ func approvalRenderMeaning(action *protocol.CanonicalAction) string {
 		case bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_AUTO:
 			return fmt.Sprintf("Let sidecar %s reach the internet through public egress again", subject)
 		case bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS:
-			return fmt.Sprintf("Send sidecar %s's internet traffic only through %s, and refuse it public egress",
+			meaning := fmt.Sprintf("Send sidecar %s's internet traffic only through %s, and refuse it public egress",
 				subject, ApprovalPrintable(strings.Join(action.GetGrantDst(), ", ")))
+			if action.GetRequireDefaultEgress() {
+				// its own clause (QD-1060)
+				meaning += ", and require its devices to keep default egress on"
+			}
+			return meaning
 		case bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE:
 			return fmt.Sprintf("Give sidecar %s no route to the internet", subject)
 		}

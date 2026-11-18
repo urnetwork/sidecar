@@ -387,7 +387,11 @@ func TestARedisCallDelayedThenDeliveredServesThen(t *testing.T) {
 }
 
 // A Redis Delay fires once its call is parked and its caller's timeout is on the clock, as a store's does
-// (TestADelayFiresOnceItsRequestIsParked), so a delivery made as the plan fires reaches the call.
+// (TestADelayFiresOnceItsRequestIsParked), so a delivery made as the plan fires reaches the call. onFire
+// returns before the plan's channel closes, so it sees the call as it fired, whatever the test the channel
+// released does next. Under load, a channel closed first let the test's delivery reach onFire's view
+// (dr2-s21-s23, 2026-11-17: parkedCount 0 as the plan fired); onFire here waits out a delivery the channel
+// may already have released, so that order fails every run.
 func TestARedisDelayFiresOnceItsCallIsParked(t *testing.T) {
 	fakeClock := NewFakeClock(DefaultClockStart())
 	clock := &timerWatchClock{Clock: fakeClock}
@@ -406,12 +410,19 @@ func TestARedisDelayFiresOnceItsCallIsParked(t *testing.T) {
 	moment := func() delayMoment {
 		return delayMoment{fired: isClosed(fired), parkedCount: parkedCount(), timerCount: len(fakeClock.PendingTimers())}
 	}
-	// both run on the call's own goroutine, the first with the call parked and its timeout not yet set
+	// closed once the test, released by the plan's channel, has delivered
+	delivered := make(chan struct{})
+	// both run on the call's own goroutine, the first with the call parked and its timeout not yet set, the
+	// second with its timeout set and the plan's channel not yet closed
 	atTimer, atFire := make(chan delayMoment, 1), make(chan delayMoment, 1)
 	clock.onAfter = func() {
 		atTimer <- moment()
 	}
 	faults.SetOnFire(func(plan *FaultPlan) {
+		if isClosed(fired) {
+			// the channel released the test before onFire ran: its delivery comes first, as load may have it
+			<-delivered
+		}
 		atFire <- moment()
 	})
 	answered := make(chan error, 1)
@@ -420,8 +431,10 @@ func TestARedisDelayFiresOnceItsCallIsParked(t *testing.T) {
 	}()
 	<-fired
 	// nothing but the plan's firing was waited for
-	if delivered := redis.DeliverDelayed(); delivered != 1 {
-		t.Errorf("delivered %d of a call whose plan fired", delivered)
+	deliveredCount := redis.DeliverDelayed()
+	close(delivered)
+	if deliveredCount != 1 {
+		t.Errorf("delivered %d of a call whose plan fired", deliveredCount)
 	}
 	if err := <-answered; err != nil {
 		t.Errorf("the caller got %v", err)
@@ -429,7 +442,7 @@ func TestARedisDelayFiresOnceItsCallIsParked(t *testing.T) {
 	if got := <-atTimer; got != (delayMoment{fired: false, parkedCount: 1, timerCount: 0}) {
 		t.Errorf("parked, before its timeout is set: %+v", got)
 	}
-	if got := <-atFire; got != (delayMoment{fired: true, parkedCount: 1, timerCount: 1}) {
+	if got := <-atFire; got != (delayMoment{fired: false, parkedCount: 1, timerCount: 1}) {
 		t.Errorf("as the plan fires: %+v", got)
 	}
 }
