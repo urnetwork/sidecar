@@ -53,6 +53,9 @@ type fakeDropResolver struct {
 	requests   []*DropResolveRequest
 	preview    *DropPreviewResolveResult
 	previewErr error
+	// what it says the listed versions show, and a call before it answers
+	shape     DropListedShape
+	onResolve func(request *DropResolveRequest)
 }
 
 func (self *fakeDropResolver) Resolve(ctx context.Context, request *DropResolveRequest) (*DropResolveResult, error) {
@@ -66,7 +69,10 @@ func (self *fakeDropResolver) Resolve(ctx context.Context, request *DropResolveR
 	if err := files.Put(ctx, DropFileCand, 0, encoded); err != nil {
 		return nil, err
 	}
-	return &DropResolveResult{Mismatch: self.mismatch}, nil
+	if self.onResolve != nil {
+		self.onResolve(request)
+	}
+	return &DropResolveResult{Mismatch: self.mismatch, Shape: self.shape}, nil
 }
 
 func (self *fakeDropResolver) Preview(ctx context.Context, request *DropPreviewResolveRequest) (*DropPreviewResolveResult, error) {
@@ -596,6 +602,124 @@ func TestDropJobObservesAndRunsAgainWhenDropTurnsOn(t *testing.T) {
 	}
 	if fixture.table().Void(testId("drop-1")) != nil {
 		t.Fatal("an observed drop left a void record")
+	}
+}
+
+// Owner decision 513's bytes: snap-0 round-trips each of the four shapes in its header's first spare byte, a snap-0
+// written before the decision reads neither, a bit the layout does not name is refused, and no other file may set the
+// byte.
+func TestDropSnapZeroRoundTripsTheListedShape(t *testing.T) {
+	repoId, jobId := testId("repo"), testId("job")
+	place := &protocol.EvsPlace{Minute: 5, Instance: 6, Seq: 7, Offset: 8, Length: 9}
+	covered := []*DropCovered{{DropId: testId("d1"), RefId: testId("r1"), Version: 4, PushId: testId("p1"), Place: place, SeenMs: 12345}}
+	for _, shape := range []DropListedShape{{}, {Renames: true}, {CrossRefCopies: true}, {Renames: true, CrossRefCopies: true}} {
+		encoded := EncodeDropCoveredFile(repoId, jobId, covered, shape)
+		file, err := DecodeDropFile(encoded, repoId, jobId, DropFileSnap, 0)
+		if err != nil || file.Shape != shape || len(file.Covered) != 1 || file.Covered[0].DropId != testId("d1") {
+			t.Fatalf("shape %+v read %+v: %v", shape, file, err)
+		}
+		if len(encoded) != dropFileHeaderByteCount+dropFileSnapDropRowByteCount+dropFileTrailerByteCount {
+			t.Fatalf("shape %+v made snap-0 %d bytes", shape, len(encoded))
+		}
+	}
+	// the bytes before the decision: both spare bytes zero
+	plain := EncodeDropCoveredFile(repoId, jobId, covered, DropListedShape{})
+	if plain[6] != 0 || plain[7] != 0 {
+		t.Fatalf("a snap-0 of neither set its spare bytes %x %x", plain[6], plain[7])
+	}
+	both := EncodeDropCoveredFile(repoId, jobId, covered, DropListedShape{Renames: true, CrossRefCopies: true})
+	if both[6] != 3 || both[7] != 0 {
+		t.Fatalf("a snap-0 of both set its spare bytes %x %x", both[6], both[7])
+	}
+	reseal := func(encoded []byte, offset int, value byte) []byte {
+		body := bytes.Clone(encoded[:len(encoded)-dropFileTrailerByteCount])
+		body[offset] = value
+		return sealDropFile(body)
+	}
+	if _, err := DecodeDropFile(reseal(plain, 6, 4), repoId, jobId, DropFileSnap, 0); !errors.Is(err, ErrDropFileInvalid) {
+		t.Fatalf("a snap-0 with an unnamed shape bit: %v", err)
+	}
+	if _, err := DecodeDropFile(reseal(plain, 7, 1), repoId, jobId, DropFileSnap, 0); !errors.Is(err, ErrDropFileInvalid) {
+		t.Fatalf("a snap-0 with its second spare byte set: %v", err)
+	}
+	round := EncodeDropRoundFile(repoId, jobId, 1, &DropRoundSnapshot{Horizon: time.UnixMilli(777000)})
+	if _, err := DecodeDropFile(reseal(round, 6, 1), repoId, jobId, DropFileSnap, 1); !errors.Is(err, ErrDropFileInvalid) {
+		t.Fatalf("a round's snap with a shape bit: %v", err)
+	}
+	cand, err := EncodeDropIdFile(DropFileCand, repoId, jobId, 0, []DropScanId{DropSegmentId([32]byte{9})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeDropFile(reseal(cand, 6, 1), repoId, jobId, DropFileCand, 0); !errors.Is(err, ErrDropFileInvalid) {
+		t.Fatalf("a cand file with a shape bit: %v", err)
+	}
+}
+
+// Owner decision 513: the job writes what resolve read of its listed versions into snap-0, under observe as under on,
+// for D-TEST-18's soak to count.
+func TestDropJobRecordsItsListedShapeInSnapZero(t *testing.T) {
+	for _, shape := range []DropListedShape{{}, {Renames: true}, {CrossRefCopies: true}, {Renames: true, CrossRefCopies: true}} {
+		fixture := newDropJobFixture(t)
+		fixture.format2.mode = sidecar.Format2Observe
+		fixture.deleter = nil
+		fixture.resolver.shape = shape
+		fixture.job = fixture.newJob(testId("instance-a"))
+		fixture.appendDrop("drop-1", fixture.world.clock.Now())
+		fixture.ripen()
+		if result := fixture.run(); fixture.entry("drop-1").State != DropStateObserved {
+			t.Fatalf("shape %+v: the observed run: %+v", shape, result)
+		}
+		snap, err := fixture.files(fixture.resolver.requests[0].JobId).Read(t.Context(), DropFileSnap, 0)
+		if err != nil || snap == nil || snap.Shape != shape || len(snap.Covered) != 1 {
+			t.Fatalf("shape %+v: snap-0 %+v: %v", shape, snap, err)
+		}
+	}
+}
+
+// A resolve killed after its snap-0 and run again by a build that reads another shape meets a snap-0 of other bytes:
+// one covering the drops resolved stands with the shape it was written with and the job goes on, while one covering
+// other drops stops the job on the store's mismatch, deleting nothing.
+func TestDropJobKeepsASnapZeroStandingWithAnotherShape(t *testing.T) {
+	fixture := newDropJobFixture(t)
+	fixture.format2.mode = sidecar.Format2Observe
+	fixture.deleter = nil
+	fixture.resolver.shape = DropListedShape{Renames: true, CrossRefCopies: true}
+	fixture.resolver.onResolve = func(request *DropResolveRequest) {
+		// the snap-0 an earlier run of this resolve left, which read neither
+		files := NewDropFiles(request.SegmentCluster, request.RepoId, request.JobId, DefaultDropSettings())
+		if err := files.Put(t.Context(), DropFileSnap, 0, EncodeDropCoveredFile(request.RepoId, request.JobId, request.Drops, DropListedShape{})); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fixture.job = fixture.newJob(testId("instance-a"))
+	fixture.appendDrop("drop-1", fixture.world.clock.Now())
+	fixture.ripen()
+	if result := fixture.run(); fixture.entry("drop-1").State != DropStateObserved {
+		t.Fatalf("the run over a standing snap-0: %+v", result)
+	}
+	snap, err := fixture.files(fixture.resolver.requests[0].JobId).Read(t.Context(), DropFileSnap, 0)
+	if err != nil || snap == nil || snap.Shape != (DropListedShape{}) || len(snap.Covered) != 1 {
+		t.Fatalf("the standing snap-0 changed: %+v: %v", snap, err)
+	}
+
+	other := newDropJobFixture(t)
+	other.format2.mode = sidecar.Format2Observe
+	other.deleter = nil
+	other.resolver.onResolve = func(request *DropResolveRequest) {
+		covered := []*DropCovered{{DropId: testId("drop-other"), RefId: request.Drops[0].RefId, Version: 1, PushId: testId("push-other"), Place: request.Drops[0].Place, SeenMs: 1}}
+		files := NewDropFiles(request.SegmentCluster, request.RepoId, request.JobId, DefaultDropSettings())
+		if err := files.Put(t.Context(), DropFileSnap, 0, EncodeDropCoveredFile(request.RepoId, request.JobId, covered, DropListedShape{})); err != nil {
+			t.Fatal(err)
+		}
+	}
+	other.job = other.newJob(testId("instance-a"))
+	other.appendDrop("drop-1", other.world.clock.Now())
+	other.ripen()
+	if _, err := other.job.Run(other.world.ctx, "meta-1", other.world.repoId); !errors.Is(err, sidecar.ErrBlobImmutableMismatch) {
+		t.Fatalf("a snap-0 covering other drops: %v", err)
+	}
+	if entry := other.entry("drop-1"); entry.State != DropStateExecuting || entry.Phase != protocol.EvsDropPhase_EVS_DROP_RESOLVE {
+		t.Fatalf("the job moved past a snap-0 that is not its: %+v", entry)
 	}
 }
 

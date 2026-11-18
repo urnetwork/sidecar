@@ -402,7 +402,7 @@ func TestDropFilesRoundTrip(t *testing.T) {
 	repoId, jobId := testId("repo"), testId("job")
 	place := &protocol.EvsPlace{Minute: 5, Instance: 6, Seq: 7, Offset: 8, Length: 9}
 	covered := []*DropCovered{{DropId: testId("d1"), RefId: testId("r1"), Version: 4, PushId: testId("p1"), Place: place, SeenMs: 12345}}
-	file, err := DecodeDropFile(EncodeDropCoveredFile(repoId, jobId, covered), repoId, jobId, DropFileSnap, 0)
+	file, err := DecodeDropFile(EncodeDropCoveredFile(repoId, jobId, covered, DropListedShape{}), repoId, jobId, DropFileSnap, 0)
 	if err != nil || len(file.Covered) != 1 || file.Covered[0].SeenMs != 12345 || !proto.Equal(file.Covered[0].Place, place) {
 		t.Fatalf("snap-0: %+v %v", file, err)
 	}

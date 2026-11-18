@@ -43,6 +43,7 @@
 package evsservice
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"errors"
@@ -123,6 +124,9 @@ type DropResolveResult struct {
 	// Drops refused {mismatch}: a link or a list off the ref's history. The rest are resolved, their list rows and the
 	// candidates of all of them written, list files before cand files.
 	Mismatch []sidecar.Id
+	// What the resolved drops' listed versions show of the repo's history, read off their own pushes, which the job
+	// records in snap-0 for D-TEST-18's soak (owner decision 513).
+	Shape DropListedShape
 	// Bytes it read.
 	ScanByteCount int64
 }
@@ -1103,7 +1107,7 @@ func (self *dropJobRun) resolve(table *DropTableState) (*DropTableState, error) 
 		kept = append(kept, drop)
 		fenceMs = max(fenceMs, drop.SeenMs)
 	}
-	if err := self.files.Put(self.ctx, DropFileSnap, 0, EncodeDropCoveredFile(self.repoId, self.jobId, kept)); err != nil {
+	if err := self.putCovered(kept, resolved.Shape); err != nil {
 		return nil, err
 	}
 	refusedCount := 0
@@ -1129,6 +1133,29 @@ func (self *dropJobRun) resolve(table *DropTableState) (*DropTableState, error) 
 		return nil, self.end(DropStateDone)
 	}
 	return next, nil
+}
+
+// Writes snap-0: the drops resolve kept and what their listed versions show of the repo's history (owner decision
+// 513). A snap-0 that already stands with other bytes stays when it covers the same drops, its shape as it was first
+// written: a resolve killed after its snap-0 and run again by a build that reads the shape, or reads it otherwise,
+// must not strand the job on two bits the soak alone counts. One covering other drops is the store's
+// ErrBlobImmutableMismatch, as before.
+func (self *dropJobRun) putCovered(kept []*DropCovered, shape DropListedShape) error {
+	err := self.files.Put(self.ctx, DropFileSnap, 0, EncodeDropCoveredFile(self.repoId, self.jobId, kept, shape))
+	if !errors.Is(err, sidecar.ErrBlobImmutableMismatch) {
+		return err
+	}
+	standing, readErr := self.files.Read(self.ctx, DropFileSnap, 0)
+	if readErr != nil {
+		return readErr
+	}
+	if standing == nil || !bytes.Equal(EncodeDropCoveredFile(self.repoId, self.jobId, standing.Covered, shape), EncodeDropCoveredFile(self.repoId, self.jobId, kept, shape)) {
+		return err
+	}
+	if self.job.log.V(1).Enabled() {
+		self.job.log.Infof("[evs] drop snap-0 stands: repo %s job %s: it covers the drops resolved and keeps the shape it was written with", sidecar.EvsKeyId(self.repoId), sidecar.EvsKeyId(self.jobId))
+	}
+	return nil
 }
 
 // The snapshot of round r, nil for round 0 or one not written.
