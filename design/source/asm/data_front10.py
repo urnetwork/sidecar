@@ -1803,3 +1803,34 @@ assert DECISIONS_INTRO.count(_D608) == 1, 'decisions lead moved'
 DECISIONS_INTRO = DECISIONS_INTRO.replace(
     _D608, "number presence keys with no attestation (608), reversing @@OD:327@@, @@OD:455@@ and @@OD:553@@, and C19's "
     "windows withdrawn (609), reversing @@OD:176@@, @@OD:188@@ and @@OD:191@@ and the warm pairs of @@OD:391@@. ")
+INDEX += [
+    (610, 'MLS Later, wraps in v0',
+     "v0 distributes every group key by `KeyDelivery` wraps alone; MLS is Later, its drafted code dark, and the "
+     'review phase reworks key formation onto deliveries.'),
+]
+for _n, _note in [
+        (1, ' Reversed by @@OD:610@@: v0 distributes keys by wraps alone, and MLS is Later.'),
+        (60, ' Reversed by @@OD:610@@ for v0: every reader holds wraps until MLS returns.'),
+        (144, ' Moot in v0 by @@OD:610@@: every member device reads by wraps.'),
+        (182, ' Moot in v0 by @@OD:610@@: the directory is read by wraps.'),
+        (361, ' Moot by @@OD:610@@ until MLS returns.'),
+        (363, ' Moot by @@OD:610@@ until MLS returns.'),
+        (366, ' Moot by @@OD:610@@ until MLS returns.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 611))
+DATES.update({610: '2026-11-17'})
+_ix = [r[0] for r in X_ROWS].index('X12')
+_x = X_ROWS[_ix]
+_old12 = "MLS in v0 (@@OD:1@@), built in house as 10.4's subset, its audit deferred (@@OD:43@@, @@OD:99@@),"
+assert _x[2].startswith(_old12), 'X12 row moved'
+X_ROWS[_ix] = (_x[0], _x[1], "Wraps alone in v0, every group key by §10.5's deliveries, and MLS Later (@@OD:610@@, amending "
+               "@@OD:1@@): built in house as 10.4's subset, its drafted code dark and its audit deferred (@@OD:43@@, @@OD:99@@),"
+               + _x[2][len(_old12):]) + tuple(_x[3:])
+_D609 = "and the warm pairs of @@OD:391@@. "
+assert DECISIONS_INTRO.count(_D609) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D609, "and the warm pairs of @@OD:391@@, and MLS set aside for Later, every group key going by wraps in v0 (610), "
+    "amending @@OD:1@@ and @@OD:60@@. ")

@@ -391,13 +391,14 @@ readers    agents (tagged, ephemeral, CI, cloud) and member devices past the fir
            amending 60); Delegation-admitted agents read at once by the Delegation's reader key (§10.5; 7.18),
            which also covers them in their Delegation's repos, so they hold no wraps of their own there;
            §20.4's 5,000 Team admissions count member devices and agents alike, with no member-device cap
-leaves     (owner decisions 144, 182) in the config group and in the team directory's, its own MLS group
-           (§16.11; D-KEYS-23), member devices (untagged, not ephemeral) that are admitted and not revoked
-           (nor their member), parked or suspended rank by (live_since, sidecar_id), live_since being the
-           position at which one last became so: its admission, its recovery activation, or the
-           AdmissionConfirm, OwnerConfirm or Unsuspend that restored it; the first 1,000 are leaf-entitled,
-           each group's MLS leaves (D-KEYS-2); the rest read each by ReaderWraps as agents do (~1.3 KB each
-           per rotation) and stay leaves of their data repos, each still at most 1,000 leaves
+leaves     (owner decisions 144, 182; MLS's, Later: in v0 every member device reads both by wraps, owner
+           decision 610) in the config group and in the team directory's, its own MLS group (§16.11; D-KEYS-23),
+           member devices (untagged, not ephemeral) that are admitted and not revoked (nor their member), parked
+           or suspended rank by (live_since, sidecar_id), live_since being the position at which one last became
+           so: its admission, its recovery activation, or the AdmissionConfirm, OwnerConfirm or Unsuspend that
+           restored it; the first 1,000 are leaf-entitled, each group's MLS leaves (D-KEYS-2); the rest read
+           each by ReaderWraps as agents do (~1.3 KB each per rotation) and stay leaves of their data repos,
+           each still at most 1,000 leaves
   move     a newly live device ranks last, so one that stays live never loses entitlement; one restored before
            its Remove commits ranks last too and, if that leaves it unentitled, the next leaf commit removes it
            for lost entitlement (§10.9) as it reads on by wraps; when a leaf-entitled device stops being live,

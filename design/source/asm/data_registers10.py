@@ -128,6 +128,20 @@ D['D-SOCK-10'] = "Host the engine as server/cli/sockets, its routes under servic
 # The dr4-late-sweep fold (2026-11-18): presence keys with no attestation (owner decision 608).
 assert D['D-MCP-19'] == "Presence evidence follows 16.6's profiles: WebAuthn with UP and UV per use; Secure Enclave keys labeled asserted.", 'D-MCP-19 row moved'
 D['D-MCP-19'] = "Presence evidence follows 16.6's profiles: WebAuthn with UP and UV per use, and Secure Enclave keys; one label, presence."
+# The dr4-late-sweep fold (2026-11-18): MLS Later, every group key by wraps in v0 (owner decision 610).
+for _k, _start, _new in [
+        ('D-KEYS-1', 'MLS distributes key-encryption keys', "v0 distributes every group key by KeyDelivery wraps; in-house MLS is Later, its code dark (owner decisions 43, 610)."),
+        ('D-KEYS-2', 'One MLS group per repo', "Every reader holds per-generation wraps in v0; MLS, Later, gives member devices leaves up to 1,000 (owner decision 610)."),
+        ('D-KEYS-3', 'Member commits are PrivateMessage', "With MLS, Later: PrivateMessage member commits add only generation and auth pin in clear; v0 has no commits."),
+        ('D-KEYS-12', 'MLS is 10.4', "With MLS, Later: 10.4's subset on ciphersuite 0x0010, migrating through GroupForm if IANA assigns another value."),
+        ('D-KEYS-14', "Groups scale by 10.6", "With MLS, Later: 10.6's sizes, KF5 resync, GroupInfo above 16 leaves, daily acks, streamed trees; v0 delivers per holder."),
+        ('D-KEYS-18', 'At most 16 leaves', "With MLS, Later: at most 16 leaves the epoch carries sealed GroupInfo; KF1 writes owner marker and wraps first."),
+        ('D-KEYS-23', "The team directory's group", "The directory's readers hold wraps in v0; with MLS, Later, its group follows the config group's leaves rule."),
+]:
+    assert D[_k].startswith(_start), (_k, 'row moved')
+    D[_k] = _new
+assert Q['Q-KEYS-9'][1].startswith('MLS in v0'), 'Q-KEYS-9 row moved'
+Q['Q-KEYS-9'] = (Q['Q-KEYS-9'][0], "Wraps alone in v0, MLS Later (owner decision 610, amending owner decision 1).")
 # The dr4-late-sweep fold (2026-11-18): C19's windows withdrawn (owner decision 609).
 assert D['D-PROTO-22'].startswith("A marked pair's reports are withheld"), 'D-PROTO-22 row moved'
 D['D-PROTO-22'] = "Superseded by owner decision 609: the remote-search pair's contracts are accounted like any peer's."

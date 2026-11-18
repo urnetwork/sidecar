@@ -609,7 +609,8 @@ alarm    M's devices raise admission_alarm for every admission under M that none
          FORK, PROOF OF WITHHOLDING, an UNVERIFIED pin, and no consistent witness (5.4)
 reads    every admitted sidecar, ephemeral ones included, reads the config repo and, in a team
            network, the directory (owner decisions 6, 171; §8.6's ceiling excepts both)
-         member devices: MLS leaves of each repo they read, at most 1,000 per group (D-KEYS-2); in
+         member devices: by per-generation wraps in v0, MLS being Later (§10.4; owner decision 610);
+           with MLS, leaves of each repo they read, at most 1,000 per group (D-KEYS-2); in
            the config group and a team's directory group by §7.9's leaves rule (owner decisions 144,
            182): live member devices rank by (live_since, sidecar_id), the first 1,000 are
            leaf-entitled and the rest read by per-generation wraps as agents do, moving between the
