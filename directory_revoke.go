@@ -18,13 +18,13 @@
 //	          the version that replaced the marker is read from the fold, which keeps it past its entry, and kept per
 //	          request in the store once found (requestLapsed), so a later revocation's marker, a higher version,
 //	          revives none, though the runner's own ERASEs take the entry that showed it
-//	superseded a copy that never opened the item that lapsed a request cannot find the lapse, and a later request's
+//	          A copy that never opened the item that lapsed a request cannot find the lapse, and a later request's
 //	          ERASEs may take an older request's marker before it was worked. So a request whose own marker this
-//	          copy no longer opens, while a later marker of its repo stands, is superseded (QD-1061, requestSuperseded):
-//	          the runner does not work it, name it or raise for it, later copies go under the newer request, and its
-//	          revoker reads it lapsed, once this copy holds the request's entry, so it has read the push that carried
-//	          the marker. A revoke of a repo whose journaled revocation is superseded files a new request above the
-//	          marker that stands, as one after a lapse does
+//	          copy no longer opens, while a later marker of its repo stands, is superseded (QD-1061,
+//	          requestSuperseded): the runner does not work it, name it or raise for it, later copies go under the
+//	          newer request, and its revoker reads it lapsed, once this copy holds the request's entry, so it has
+//	          read the push that carried the marker. A revoke of a repo whose journaled revocation is superseded
+//	          files a new request above the marker that stands, as one after a lapse does
 //	readers   a directory ERASE counts only from a sidecar the state names a directory admin: the reader takes no
 //	          other, and alarms bad_erasure naming its signer, which only a server breaching the scope rule can
 //	          commit. One whose note names an erasure_request is shown as that repo owner's revocation (ErasureOf)
