@@ -24,9 +24,10 @@ package fault
 //
 // Not here: the table's own columns, a day at 500 members and the Team limit's and the stress case's days, which are
 // sidecartest's own tests (directory_cost_cards_test.go); the index itself, whose heads the load prices and does not
-// store, so a forged head's fetch and alarm is directory_index_test.go's; the physical peak hour with 3x bursts,
-// FOLD_BEHIND and the governor's FI-14 on T3's stores (server's sidecar_directory_load_t3_test.go); and the cold phone,
-// which is the M6 case's.
+// store, so a forged head's fetch and alarm is directory_index_test.go's; the governor's FI-14 on T3's stores; and the
+// cold phone, which is the M6 case's. The physical peak with 3x bursts on the real engine is fs86_cards_evs.go's
+// schedule, which server's sidecar_directory_load_t3_test.go runs on T3's stores and the tests at the end of this
+// file run on T2's fakes, where it holds what was written and read and no time.
 
 import (
 	"context"
@@ -38,6 +39,19 @@ import (
 
 	"github.com/urnetwork/sidecar/sidecartest"
 )
+
+// The card commits' schedule at a size T2 runs in a second or two: 4 writers, 40 pushes a second for a second and
+// twice that for half a second.
+func fs86CardsEvsTestSettings() *Fs86CardsEvsSettings {
+	settings := DefaultFs86CardsEvsSettings()
+	settings.WriterCount = 4
+	settings.PushesPerSecond = 40
+	settings.PeakDuration = time.Second
+	settings.BurstFactor = 2
+	settings.BurstDuration = 500 * time.Millisecond
+	settings.Ceilings = nil
+	return settings
+}
 
 var Fs86Cards = Register("FS-86", "cards", []Tier{TierT2}, Fs86DirectoryCards)
 
@@ -191,4 +205,45 @@ func Fs86DirectoryCards(net *Net) *Schedule {
 
 func TestFs86Cards(t *testing.T) {
 	RunRow(t, "FS-86", "cards", nil)
+}
+
+// The card commits' schedule on T2's fakes, the real engine and the real client's binding: every push of both phases
+// commits on the one cards ref, each writer's card by path CAS from its own last version, and the reader finds every
+// card as its last push left it, one statement a push. No time is held: the fakes' store takes none.
+func TestFs86CardsEvsCommits(t *testing.T) {
+	ctx := context.Background()
+	net := sidecartest.NewNet(ctx, nil)
+	defer net.Close()
+	schedule, state := Fs86CardsEvsCommitsOf(net, fs86CardsEvsTestSettings())
+	result := Run(ctx, schedule, net)
+	for _, phase := range state.Phases() {
+		t.Log(phase)
+	}
+	if result.Err != nil {
+		t.Fatal(result.Err)
+	}
+	phases := state.Phases()
+	if len(phases) != 3 || phases[0].Name != "alone" || phases[1].Name != "peak" || phases[2].Name != "burst" {
+		t.Fatalf("%d phases ran", len(phases))
+	}
+	for _, phase := range phases {
+		if len(phase.Latencies) < 4 || phase.FoldBehindCount != 0 {
+			t.Fatalf("%s", phase)
+		}
+	}
+}
+
+// The ceilings are held: with a p99 ceiling no commit meets, the peak fails on it.
+func TestFs86CardsEvsCommitsFailPastTheirCeiling(t *testing.T) {
+	ctx := context.Background()
+	net := sidecartest.NewNet(ctx, nil)
+	defer net.Close()
+	settings := fs86CardsEvsTestSettings()
+	settings.Ceilings = sidecartest.DefaultDirectoryLoadCeilings()
+	settings.Ceilings.CardPushP99 = time.Nanosecond
+	schedule, _ := Fs86CardsEvsCommitsOf(net, settings)
+	result := Run(ctx, schedule, net)
+	if result.Err == nil || !strings.Contains(result.Err.Error(), "peak: the cards ref's commits' p99") {
+		t.Fatalf("a p99 ceiling of 1 ns: %v", result.Err)
+	}
 }
