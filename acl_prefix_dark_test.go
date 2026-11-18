@@ -4,9 +4,8 @@
 // EvsClient judges no push against a repo's rule sets, whatever rows its state holds, as 16.2.12's release that does
 // not enforce reads a ruled repo: a breach reads as evs has it, by head, by number and in History, with no alarm and
 // nothing journalled; a write asks the writer's local refusal nothing; and no repair, pin push or status is answered,
-// each refusal naming the deferral. The filer signs nothing. NewEvsComponent installs the dark defaults where no
-// composition installed a judge, and keeps a judge a composition installed. The rules' own tests run the judge with
-// the switch on (evs_prefix_test.go, evs_prefix_repair_test.go).
+// each refusal naming the deferral. The filer signs nothing. The component's half is evs_component_prefix_test.go's.
+// The rules' own tests run the judge with the switch on (evs_prefix_test.go, evs_prefix_repair_test.go).
 
 package sidecar
 
@@ -120,26 +119,5 @@ func TestEvsWriterAsksNoPrefixRefusalWhileDark(t *testing.T) {
 	}
 	if asked != 0 {
 		t.Fatalf("the local refusal was asked %d times", asked)
-	}
-}
-
-// NewEvsComponent installs the dark defaults on a client no composition gave a judge, and keeps the judge a composition
-// installed, its settings with it.
-func TestEvsComponentKeepsTheCompositionsPrefixSettings(t *testing.T) {
-	world := newEvsTestWorld(t)
-	bare := world.reader(t, evsTestId("bare reader"))
-	if bare.client.installedPrefixJudge() != nil || bare.client.PrefixRulesEnabled() {
-		t.Fatal("a client no composition enabled holds a judge, or runs the rules")
-	}
-	NewEvsComponent(bare.client)
-	if bare.client.installedPrefixJudge() == nil || bare.client.PrefixRulesEnabled() {
-		t.Fatal("the component's defaults")
-	}
-	composed := world.reader(t, evsTestId("composed reader"))
-	composed.client.EnablePrefixRules(&EvsPrefixRulesArgs{Settings: testAclPrefixSettingsOn(), Repair: true})
-	installed := composed.client.installedPrefixJudge()
-	NewEvsComponent(composed.client)
-	if composed.client.installedPrefixJudge() != installed || !composed.client.PrefixRulesEnabled() || !installed.args.Repair {
-		t.Fatal("the component replaced the composition's judge")
 	}
 }
