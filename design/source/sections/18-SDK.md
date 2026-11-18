@@ -296,8 +296,8 @@ func (self *SidecarApprovals) CreateRecoveryCode(callback SidecarResultCallback)
 	// to the host's UI once, never over control mode
 func (self *SidecarApprovals) Decide(approvalId *Id, decision string, callback SidecarResultCallback) // as shown (§16.8):
 	// request: approve|deny, an ApprovalDecision (§16.6) for the uses the request names, a template's count as the
-	// agent asked it and rendered, 1 for any other action, and, until the request carries that count, deny alone
-	// for a template request (owner decision 574); admission: approve signs the SidecarAdmit (§5.6), with one
+	// agent asked it and rendered, 1 for any other action, and deny alone for a version-1 template request, which
+	// names no count (owner decision 574); admission: approve signs the SidecarAdmit (§5.6), with one
 	// presence check over the act where §7.9's presence row asks (owner decisions 187, 189), and for
 	// a page Worker, in the same act, SidecarRevoke{removed} of each of its member's page Workers §7.10's stale row
 	// lets this device revoke, an admin's included (D-TEAM-29), on the member's own device listing its other page

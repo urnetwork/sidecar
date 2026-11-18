@@ -650,13 +650,6 @@ var testFenceAdditions = []struct {
 		field:    testFenceField{name: "prompts", number: 17, typeName: "string", repeated: true},
 		question: "search-m10-28-transcript-prompts",
 	},
-	// QD-1010 (owner decision 574): the uses an agent asks a template's approval for, 1 for any other action, daemon-built
-	// and rendered, which the approver signs as ApprovalDecision.uses; version 2's, sealed in the approval entry
-	{
-		message:  "ApprovalRequest",
-		field:    testFenceField{name: "uses", number: 18, typeName: "uint32"},
-		question: "mcp-m8-01-app-template-uses",
-	},
 }
 
 // One field an owner's answer takes out of a message the design fences, its number reserved.

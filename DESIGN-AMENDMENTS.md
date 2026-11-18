@@ -398,16 +398,3 @@ Changes: RECORD.md 5's ContextBody and 7.4; record.proto.
 Questions: `search-m10-28-transcript-prompts.md`.
 
 Not folded (2026-11-18): RECORD.md's `ContextBody` fence and 7.4's prompt row, outside design/source/; record.proto declares `ContextBody.prompts = 17`, and protocol/design_unfenced_test.go's `testFenceAdditions` holds it until RECORD.md's fence writes it.
-
-### QD-1010: How does an app approve a multi-use template request, when SidecarApprovals.Decide carries no uses?
-*Decided by the owner on 2026-11-16, asked one question at a time; owner decision 574. Folds into §16 The local MCP server and record primitives.*
-
-The wire, which waits on the code: §16.8's `ApprovalRequest` fence takes the field holding the uses an agent requests for a template once record.proto declares it, with the version bump RECORD.md's rules give a format change after M3's freeze, a design-records fold writing the line and dropping its `testFenceAdditions` entry in one commit (owner decision 273). The rest is folded (2026-11-17): the decision, §16.6's multi-use row, §18.5's `Decide` and a comment in the fence naming what joins it.
-
-Changes: §16.8's fence; record.proto.
-
-Questions: `mcp-m8-01-app-template-uses.md`.
-
-Waits on: the fix track approval-request-uses.
-
-Not folded (2026-11-18): record.proto's `ApprovalRequest` declares no uses field yet, so §16.8's fence keeps its comment and no `testFenceAdditions` entry exists to drop.

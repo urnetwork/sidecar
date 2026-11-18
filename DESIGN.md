@@ -15431,14 +15431,14 @@ k approvers  a rule asking for k needs k decisions with one request_sha256 from 
              admin clause where that applies, never one of the k (owner decision 471); the budget is the
              smallest uses, the expiry the earliest not_after
 multi-use    a decision with uses > 1 binds a template, a CanonicalAction with scope = true whose non-empty
-             fields every use equals, recipients a subset; each use's full action is what D-MCP-11 hashes;
-             the request names the uses its agent asks for a template, 1 for any other action, daemon-built,
-             under request_sha256 and rendered beside the action's other daemon-built fields, and the approver
-             signs that count as uses: an app's Decide (§18.5) approves the request as shown, and ur approve
-             --uses defaults to it, another count refused or narrowed as before, above 1 only for a template
-             and never above the request's; the field is a record.proto change after M3's freeze, taking the
-             version bump RECORD.md's rules give, and until it lands an app lists deny alone for a template
-             request (owner decision 574)
+             fields every use equals, recipients a subset; each use's full action is what D-MCP-11 hashes; the
+             request names the uses its agent asks for a template, 1 for any other action, daemon-built, under
+             request_sha256 and rendered beside the action's other daemon-built fields, and the approver signs
+             that count as uses: an app's Decide (§18.5) approves the request as shown, and ur approve --uses
+             defaults to it, another count refused or narrowed as before, above 1 only for a template and never
+             above the request's; the field is ApprovalRequest.uses = 18 at the request's version 2, which every
+             request is filed at, an approver that knows only version 1 refusing version 2 whole, and a
+             version-1 template names no count, so an app lists deny alone for it (owner decision 574)
 grants       an approval activates one grant, by §8.8's GrantActivate under the grant_id the approval fixes,
              or, for bridge_expose, at most uses BridgeRoute or BridgeMap rules, each under the rule id §17.8
              derives from its use's effect_key; a replay adds none, and a revoked grant_id or withdrawn rule id
@@ -15849,15 +15849,20 @@ message ApprovalRequest {                   // body of an approval entry
   string summary = 7;                       // agent text, shown as untrusted
   uint32 risk = 8;                          // SidecarRisk: 1 normal for every action (owner decision 279)
   bytes requester_sidecar_id = 9; bool tainted = 10; repeated bytes approvers = 11; int64 not_after_millis = 12;
-  uint32 version = 13;                      // 1
+  uint32 version = 13;                      // 1, or 2, which adds uses (18) and always sets it; an approver
+                                            // that does not know a version refuses it (owner decision 574)
   uint32 local_port = 14; int32 weight = 15; repeated string alpn = 16;  // daemon-built and rendered by
                                             // approvers, under request_sha256: the local port a socket_listen,
                                             // tls_publish, bridge_forward or bridge_expose binds, a listen's
                                             // weight and a publish's ALPNs (owner decision 457)
   string socket_name = 17;                  // a socket_listen's name, which agrees with its action's one sock:
                                             // entry in grant_dst; no server sees it (owner decision 457)
-  // the uses an agent requests for a template, daemon-built and rendered (16.6's multi-use row), join this
-  // fence with record.proto's field and its version bump (owner decision 574)
+  uint32 uses = 18;                         // version 2's: how many distinct actions the agent asks the
+                                            // approval to cover, daemon-built and rendered, 2 or more for a
+                                            // template (scope = true), 1 for any other action, never 0; signed
+                                            // as ApprovalDecision.uses, or for a template a smaller count of 2
+                                            // or more, never a larger one; a version-1 request sets none
+                                            // (16.6's multi-use row; owner decision 574)
 }
 message ApprovalDecision {                  // inside §6 Signed, purpose approval; holds no run or agent id
   bytes approval_id = 1;
@@ -18373,8 +18378,8 @@ func (self *SidecarApprovals) CreateRecoveryCode(callback SidecarResultCallback)
 	// to the host's UI once, never over control mode
 func (self *SidecarApprovals) Decide(approvalId *Id, decision string, callback SidecarResultCallback) // as shown (§16.8):
 	// request: approve|deny, an ApprovalDecision (§16.6) for the uses the request names, a template's count as the
-	// agent asked it and rendered, 1 for any other action, and, until the request carries that count, deny alone
-	// for a template request (owner decision 574); admission: approve signs the SidecarAdmit (§5.6), with one
+	// agent asked it and rendered, 1 for any other action, and deny alone for a version-1 template request, which
+	// names no count (owner decision 574); admission: approve signs the SidecarAdmit (§5.6), with one
 	// presence check over the act where §7.9's presence row asks (owner decisions 187, 189), and for
 	// a page Worker, in the same act, SidecarRevoke{removed} of each of its member's page Workers §7.10's stale row
 	// lets this device revoke, an admin's included (D-TEAM-29), on the member's own device listing its other page
