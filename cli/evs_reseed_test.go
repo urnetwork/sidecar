@@ -13,13 +13,26 @@ import (
 	"github.com/urnetwork/sidecar"
 )
 
-// A daemon target whose re-seeds a test sets and reads.
+// A daemon target whose re-seeds and groups steps a test sets and reads.
 type testUrEvsReseedTarget struct {
 	testUrDaemonTarget
 	repoIds []sidecar.Id
 	args    []*sidecar.EvsReseedArgs
 	result  *sidecar.EvsReseedResult
 	err     error
+	// the groups steps asked, each after how many re-seeds, and what they answer
+	placedRepoIds    []sidecar.Id
+	placedAfterCount []int
+	placed           *sidecar.EvsReseedPlaced
+	placeErr         error
+}
+
+func (self *testUrEvsReseedTarget) reseedPlaceRepo(ctx context.Context, repoId sidecar.Id) (*sidecar.EvsReseedPlaced, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.placedRepoIds = append(self.placedRepoIds, repoId)
+	self.placedAfterCount = append(self.placedAfterCount, len(self.args))
+	return self.placed, self.placeErr
 }
 
 func (self *testUrEvsReseedTarget) reseedRepo(ctx context.Context, repoId sidecar.Id, args *sidecar.EvsReseedArgs) (*sidecar.EvsReseedResult, error) {
@@ -103,5 +116,68 @@ func TestEvsReseedExitsFailedOnAPartialReseed(t *testing.T) {
 	stdout.Reset()
 	if code := cli.main(context.Background(), []string{"ur", "evs", "reseed", repoId.String()}); code != urExitFailed || !strings.Contains(stdout.String(), "ended early: the mirror would not open") {
 		t.Fatalf("an early end: exit %d:\n%s", code, stdout.String())
+	}
+}
+
+// --place runs the repo's groups step before its walk, after the same yes, and shows what it did: a live repo placed
+// and active, one re-seeded as deleted left deleted, one another admin's device placed; a groups step that fails walks
+// nothing and exits failed; and without --place no groups step runs.
+func TestEvsReseedPlaceRunsTheGroupsStepBeforeTheWalk(t *testing.T) {
+	repoId, refId := sidecar.NewId(), sidecar.NewId()
+	target := &testUrEvsReseedTarget{
+		result: &sidecar.EvsReseedResult{Refs: []*sidecar.EvsReseedRef{{RefId: refId, MirrorVersion: 3, Version: 3}}, SegmentCount: 1},
+		placed: &sidecar.EvsReseedPlaced{Deleted: true, GroupId: sidecar.NewId()},
+	}
+	daemon := startTestControlDaemon(t, target, nil)
+	cli, stdout, stderr := newTestUrCli(daemon.socketPath)
+	command := []string{"ur", "evs", "reseed", repoId.String(), "--place"}
+	tty := &testTty{lines: []string{"n"}}
+	cli.openTty = func() (urTty, error) { return tty, nil }
+	if code := cli.main(context.Background(), command); code != urExitOk || len(target.placedRepoIds) != 0 || len(target.args) != 0 {
+		t.Fatalf("a no: exit %d, %d groups steps, %d re-seeds", code, len(target.placedRepoIds), len(target.args))
+	}
+	yes := func() {
+		cli.openTty = func() (urTty, error) { return &testTty{lines: []string{"yes"}}, nil }
+	}
+	yes()
+	if code := cli.main(context.Background(), command); code != urExitOk {
+		t.Fatalf("a repo re-seeded as deleted: exit %d: %s", code, stderr.String())
+	}
+	if len(target.placedRepoIds) != 1 || target.placedRepoIds[0] != repoId || target.placedAfterCount[0] != 0 || len(target.args) != 1 {
+		t.Fatalf("groups steps %v after %v re-seeds, %d re-seeds", target.placedRepoIds, target.placedAfterCount, len(target.args))
+	}
+	placedLine := "repo " + repoId.String() + ": placed as deleted, its group's form and ladder returned; it stays deleted until its restore"
+	walkedLine := "ref " + refId.String() + ": version 3 of 3"
+	shown := stdout.String()
+	if !strings.Contains(shown, placedLine) || !strings.Contains(shown, walkedLine) || strings.Index(shown, walkedLine) < strings.Index(shown, placedLine) {
+		t.Errorf("a repo re-seeded as deleted shows:\n%s", shown)
+	}
+	for _, c := range []struct {
+		placed *sidecar.EvsReseedPlaced
+		want   string
+	}{
+		{placed: &sidecar.EvsReseedPlaced{GroupId: sidecar.NewId()}, want: "placed afresh, its group re-formed, active"},
+		{placed: &sidecar.EvsReseedPlaced{PlacedByAnother: true}, want: "placed by another admin's device, which re-forms its group"},
+	} {
+		target.placed = c.placed
+		stdout.Reset()
+		yes()
+		if code := cli.main(context.Background(), command); code != urExitOk || !strings.Contains(stdout.String(), c.want) {
+			t.Errorf("exit %d, want %q in:\n%s", code, c.want, stdout.String())
+		}
+	}
+	// a groups step that fails walks nothing
+	walked := len(target.args)
+	target.placed, target.placeErr = nil, errors.New("evs refused: 409 SHREDDING")
+	stderr.Reset()
+	yes()
+	if code := cli.main(context.Background(), command); code != urExitFailed || len(target.args) != walked || !strings.Contains(stderr.String(), "the repo's place: evs refused: 409 SHREDDING") {
+		t.Fatalf("a refused place: exit %d, %d re-seeds, %s", code, len(target.args)-walked, stderr.String())
+	}
+	// and without --place no groups step runs
+	steps := len(target.placedRepoIds)
+	yes()
+	if code := cli.main(context.Background(), []string{"ur", "evs", "reseed", repoId.String()}); code != urExitOk || len(target.placedRepoIds) != steps {
+		t.Fatalf("without --place: exit %d, %d groups steps", code, len(target.placedRepoIds)-steps)
 	}
 }
