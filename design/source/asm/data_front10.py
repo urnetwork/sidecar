@@ -1781,3 +1781,25 @@ assert DECISIONS_INTRO.count(_D607) == 1, 'decisions lead moved'
 DECISIONS_INTRO = DECISIONS_INTRO.replace(
     _D607, "and a network may require default egress (607), extending @@OD:462@@. The complexity review's last answers "
     "number presence keys with no attestation (608), reversing @@OD:327@@, @@OD:455@@ and @@OD:553@@. ")
+INDEX += [
+    (609, "C19's windows withdrawn",
+     "Remote search's pair is accounted like any peer's: no window ledger, floor, withheld report, bit-1 marking, "
+     'warm pair or keepalive.'),
+]
+for _n, _note in [
+        (176, ' Reversed by @@OD:609@@: C19 is withdrawn.'),
+        (188, ' Reversed by @@OD:609@@: no windows or floor.'),
+        (191, ' Reversed by @@OD:609@@: no keepalive holds the session.'),
+        (268, ' Its FS-125 gate is reversed by @@OD:609@@.'),
+        (391, ' Its warm pairs are reversed by @@OD:609@@.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 610))
+DATES.update({609: '2026-11-17'})
+_D608 = "number presence keys with no attestation (608), reversing @@OD:327@@, @@OD:455@@ and @@OD:553@@. "
+assert DECISIONS_INTRO.count(_D608) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D608, "number presence keys with no attestation (608), reversing @@OD:327@@, @@OD:455@@ and @@OD:553@@, and C19's "
+    "windows withdrawn (609), reversing @@OD:176@@, @@OD:188@@ and @@OD:191@@ and the warm pairs of @@OD:391@@. ")

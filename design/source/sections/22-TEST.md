@@ -99,7 +99,7 @@ Parentheses hold T1 tests; the rest run in T2 and T3. Inline server paths (contr
       empty in v0) lossy streams; PEER_TIMEOUT; nothing before a verified Hello; ControlId push dropped over p2p, kept
       over h1; team hints to acl_enforcing device clients; long-poll hints within 25 s, the 200 body round-tripping; a
       complete=false reset followed by a dropped tail applies nothing until versions are refetched; receive allocs;
-      witnesses: FS-17, FS-21; C19's remote-search windows: FS-125; the P2P schedule D-PROTO-10 waits on, at
+      witnesses: FS-17, FS-21; the P2P schedule D-PROTO-10 waits on, at
       M6-out with C3 on and EnablePeerP2p set: a forged ControlId frame over P2P dropped, a same-network pair moving
       from relay to P2P and back under a live RPC and stream, its session key unchanged, Hello and HeadCheck holding
       across each move, and bytes on P2P debiting nothing (§20.6)
@@ -387,7 +387,7 @@ assert every stored commit but an external commit parses as PrivateMessage, and 
          frames to an indexer FI-24 allows (FI-21); a relay capture of remote searches shows
          one frame-size sequence per kind across ten queries with 0-20 hits and every
          post-parse failure (FI-24); both parties' close reports for the pair, both
-         directions, are each window's floor and zeros, sent at its end (C19; FS-125)
+         directions, carry its bytes as any peer's do (owner decision 609)
        the directory's plaintext, decrypted with a member's keys, holds no canary from a
          prompt past the first line, a tool input or output, a touched path or a diff (I-20);
          title canaries reach it only in its sealed cards, entries and index files, and never
@@ -1151,10 +1151,8 @@ FI-24  remote search: a query leaves an app host only for a designated search in
        reads, and a verified hit's newest version contains the query; each request body is 4,016 B and each reply steps
        x 16,384 B, whatever the query, scope, filters, results or failure after parsing; neither device sends evs, api
        or gkm a request because of a remote search; no query, hit, snippet or cursor persists on either device, and the
-       served record names none; for a pair §6.11's bit 1 marks, each §6.10 window and direction has one report a
-       contract, F on the first and 0 on the others, whenever its other bytes stay within the allowance and it carries
-       at most five exchanges, none sent before the window's end, and no contract of the pair is created inside a
-       foreground window but at its start, a session re-establishment or overflow (§4.6, §6.10, §11.14, §18.4, §2)
+       served record names none; the pair's contracts report its bytes as any peer's do (§6.10, §11.14, §18.4, §2;
+       owner decision 609)
 FI-25  directory authorship: every card, notice and run or worker announce entry a reader shows or acts on was written
        and signed as §16.11's path and signing rules require, by a signer that is admitted, unrevoked, unreaped,
        unsuspended, unparked and, for a member device, consented in the reader's state, and every repo item by a signer that
@@ -2269,18 +2267,17 @@ FS-83  §11,18 remote search (owner decisions 175, 178), with the member's index
               none, and every reply steps x 16,384 B in one frame sequence, for queries with
               0, 1 and 20 hits, TOO_BROAD, INVALID, CURSOR_EXPIRED, UNSUPPORTED_VERSION and a
               two-step reply whose content sits on the 16,387 B gap, and no Cancel is sent;
-              connect: the pair's close reports follow C19's windows in both directions
-              whatever ran in them (FS-125), and a pair whose Hellos carried no bit 1 reports
-              its bytes exactly; evs: both devices' evs request logs are identical with and
-              without the remote search, the indexer issuing no read at search time even with
-              a hint pending; merge: against SearchOracle, the merged list equals the oracle's
-              verified set over SERVED_TEXT repos, a local possible match inside the checked
-              span that no page returned collapses, one outside it or newer than the pinned
-              version stays, an ERASE mid-cursor answers CURSOR_EXPIRED and the erased
-              document never shows; a late repeat of page 0 after an erasure is answered
-              CURSOR_EXPIRED; a search reopened after 10 min idle pays one exchange and shows
-              no hit twice; a possible match committed 30 min before the indexer's pinned
-              push, in parts, is not folded; a higher-version possible claim leaves a
+              connect: the pair's close reports carry its bytes exactly in both directions, as
+              any peer's do (owner decision 609); evs: both devices' evs request logs are
+              identical with and without the remote search, the indexer issuing no read at
+              search time even with a hint pending; merge: against SearchOracle, the merged
+              list equals the oracle's verified set over SERVED_TEXT repos, a local possible
+              match inside the checked span that no page returned collapses, one outside it or
+              newer than the pinned version stays, an ERASE mid-cursor answers CURSOR_EXPIRED
+              and the erased document never shows; a late repeat of page 0 after an erasure is
+              answered CURSOR_EXPIRED; a search reopened after 10 min idle pays one exchange
+              and shows no hit twice; a possible match committed 30 min before the indexer's
+              pinned push, in parts, is not folded; a higher-version possible claim leaves a
               confirmed row a match; an omission at unequal pins raises nothing; a fabricated
               hit is dropped on open with search_alarm{mismatch}, and a display-field match
               the indexer omits inside its span raises search_alarm{omission}; failover: two
@@ -2993,34 +2990,10 @@ FS-124 §7,16  presence countersignatures (owner decisions 185, 187, 189, 192; D
               each refused without it (Team); SignWithPresence on each app host, Decide's
               admission and alarm answers included, in remote mode by 5.8's two calls, and
               both profiles' vectors byte-equal on every leg (app hosts)
-FS-125 §4,6   C19's windows (owner decisions 176, 188) on a fake clock, with a fake            FI-24       T2+T3  M10-out;
-              contract service that keeps every report and its time: a requester surrogate and             +T4    app hosts
-              its indexer, on a control and on a data contract. Sweep: each direction's                           at M8-out
-              background from 0 to its allowance (178,419 B down, 241,709 B up) through every
-              multiple of 128 KiB and F, each ±1 B, then 0 to 5 exchanges of exact envelope
-              sizes added, both directions, the bytes split across the window's first
-              contract, a session re-establishment's contract and an overflow successor, and
-              windows ending mid-exchange: both clients report F on the first contract, the
-              lowest contract id a frame rode (§6.10's first row), and 0
-              on the others, identical across the sweep, at the window's end and never before;
-              past the allowance, and at a sixth exchange, F plus 128 KiB steps; the review's
-              case, 120 KiB of background and one 16 KiB page, reports F both ways. Root
-              cause: a receive sequence idling out mid-window sends no checkpoint and an idle
-              send sequence no close, and no search opens a contract in either direction,
-              30 min into a foreground window or 10 s after a window's end, the next window
-              opening with the contract connect took at that end. Lifecycle: the Ping grid
-              holds every sequence open for 55 min; a 3-min suspension re-establishes by a
-              Hello at the next foreground, its contract inside the window reporting 0; a
-              3-min network drop in the foreground re-establishes by the search that comes
-              before the next tick, its contract inside the window reporting 0 and created,
-              with its successor, at that search (owner decision 191); a failover search opens
-              its own window then; a window ending in the background clears the mode, and the
-              next foreground's Hello opens a new one; a suspended requester's reports go out
-              at its next run, and the deadline close settles from the indexer's; marking
-              retires the contracts each side already sent on, reported exactly; a pair whose
-              Hellos carried no bit 1 reports its bytes exactly. Sizes: every frame kind's
-              counted bytes are at most §6.10's table, a HeadCheck at its list caps (four
-              vetoes, four unverified pins with 8-hop paths) within two envelopes
+FS-125 §4,6   held with PROTO-M10-05 (owner decision 609): C19's window accounting, which this FI-24       T2+T3  M10-out;
+              row swept on a fake clock with a fake contract service, is withdrawn, the                    +T4    app hosts
+              remote-search pair's contracts being accounted like any peer's, as FS-83 checks;                    at M8-out
+              the row keeps its number, and its sweep runs only if the windows return
 FS-126 §6     D-PROTO-10's P2P schedule (owner decision 296), with C3 on and                   I-3,FI-10,  T2+T3  M6-out
               SidecarProtocolSettings.EnablePeerP2p set: a forged ControlId frame over P2P is  13a,
               dropped; a same-network pair moves from relay to P2P and back under a live RPC   D-PROTO-8

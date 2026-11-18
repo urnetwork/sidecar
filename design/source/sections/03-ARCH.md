@@ -637,9 +637,8 @@ Each flow implements the owner decisions its header names (D-ARCH-3, D-ARCH-4). 
    confirmed hits, collapses possible matches the checked span disproves, and labels the hits that
    indexer verified "verified by <device>" (§11.14; §18.5)
 7  each further page, on scroll, in the same sizes; relays see only each request's and reply's time and
-   fixed size, connect reports the pair's bytes per window, in both directions, at a fixed floor that
-   up to five pages leave unchanged (§6.10), and every byte debits the transfer balance (owner
-   decisions 10, 176, 188; §4.6 C19; §2.8 connect-5)
+   fixed size, connect accounts the pair's contracts like any peer's, and every byte debits the transfer
+   balance (owner decisions 10, 609; §2.8 connect-5)
 8  opening a hit is a read as in F2 step 7, whose text the phone checks, a mismatch alarming and naming
    the indexer; with no designated indexer answering, the default, step 3 falls back to a download of
    all as in F11 step 7, by sync position under §18.4's metered rule, and owner decision 155's
@@ -790,7 +789,7 @@ None introduced here; Appendix F traces every PLAN.md line. Departures that shap
   - §10.6's gkm checks and §10.9's table accept, from a non-writer signer in the config group, an agent's first wrap, a Remove and the rotation it requires, under the gkm `rw` scope §7.8 gives member devices in the config group, and a recovery-admitted device's external commit, and follow §7.9's `leaves` and `move` rows, where a wrapped signer only wraps or rotates and a lost entitlement is a Remove input (owner decisions 128, 144; F1, F9).
   - evs and gkm keep each repo's metadata on the cluster its `place/<repo_id>` names, and §11.10's leases, the push sequence and the head cache in Redis (owner decisions 136, 145; F2, F3).
   - §5.9 keeps the index cache, and §16.10 states the scope, taint, paging and grouping rules F11 cites; §11.14's index provides buckets and all, roll-ups by the indexer or the first writer after expiry, and entry versions naming each index file's plaintext hash; §7.9's `IndexerSet` designates 3.6's indexers, none by default (owner decisions 150, 151-157, 166, 177).
-  - §11.14 states remote search's eligibility, fixed sizes and merge rules, §18.4 its notice and setting and §18.7 the foreground Hello; §6.4's control contracts carry SEARCH, and §4.6's C19 reports a requester-indexer pair that §6.11's bit 1 marks per §6.10's windows, both directions, at a fixed floor (owner decisions 175-178, 188; F12). §16.11 states the directory's announcements and requests in their M6 and M10 forms, §8.4 `autogroup:dst-owner`, and §10.4 the directory's group under §7.9's leaves rule (owner decisions 170, 171, 179-182; F13).
+  - §11.14 states remote search's eligibility, fixed sizes and merge rules, §18.4 its notice and setting and §18.7 the foreground Hello; §6.4's control contracts carry SEARCH, whose pair's contracts are accounted like any peer's (owner decisions 175-178, 609; F12). §16.11 states the directory's announcements and requests in their M6 and M10 forms, §8.4 `autogroup:dst-owner`, and §10.4 the directory's group under §7.9's leaves rule (owner decisions 170, 171, 179-182; F13).
   - §22.7 draws S1-S13 from F1-F13 and ties its `GkmCommitHeader` assertion to S3 and S4; §23 schedules §11's v0b (the local git server) with v0a at M2 (F2) and orders the flows (owner decision 9).
 
 ### 3.14 Risks

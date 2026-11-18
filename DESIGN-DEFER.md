@@ -248,11 +248,11 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 
 *v1 (M6, M7, M10). DESIGN.md: §4.18.*
 
-- **Deferred.** §4.18's v1 row: connect change C18 at M6; C20 at M7 (owner decision 269); C19's window accounting at M10 (owner decisions 176, 188); Homebrew and winget packages.
+- **Deferred.** §4.18's v1 row: connect change C18 at M6; C20 at M7 (owner decision 269); Homebrew and winget packages. C19's window accounting, once at M10, is withdrawn (owner decision 609).
 - **Why.** Each belongs to a v1 milestone: cross-network shares and Team at M6, strict-mode mail at M7, storage format 2 and search at M10 (owner decisions 55, 163, 169).
 - **Launch instead.** v0 uses the connect changes of M1-M5 (§4.6) and ships `ur` through `install.sh` and direct packages.
 - **Lost.** Until those milestones: cross-network shares, `strict_chain`, and remote search's accounting.
-- **Dark in code.** Built in the same run on the `sidecar` branches. C19 blocks M10's Gn-out and C20 blocks M7's `strict_chain` (§4.18's Blocking row).
+- **Dark in code.** Built in the same run on the `sidecar` branches. C20 blocks M7's `strict_chain` (§4.18's Blocking row).
 - **Held.** Nothing.
 - **To bring back.** Nothing to bring back: each ships when its milestone's gate passes (§23.6).
 
@@ -332,7 +332,7 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 
 *v1 (M6, M10). DESIGN.md: §6.18.*
 
-- **Deferred.** §6.18's v1 rows. At M6: FriendsAndFamily shares with C18, and same-network P2P built behind its switch. At M10 (owner decision 169): the SEARCH pair, Hello's feature bits 0 and 1, the control class's acceptance of SEARCH, and C19's window accounting with the app hosts' keepalive (owner decisions 176, 188).
+- **Deferred.** §6.18's v1 rows. At M6: FriendsAndFamily shares with C18, and same-network P2P built behind its switch. At M10 (owner decision 169): the SEARCH pair, Hello's feature bits 0 and 1, and the control class's acceptance of SEARCH, the pair's contracts accounted like any peer's (owner decision 609, which withdrew C19's window accounting and the app hosts' keepalive).
 - **Why.** Shares belong to M6 and remote search to M10 (owner decisions 86, 163, 169, 175).
 - **Launch instead.** v0's wire is M1's and M2's, with M4's seals and control contracts and M5's streams; it freezes at M2, and M10's bytes are additive to it.
 - **Lost.** Until M6 and M10: cross-network shares and remote search.
@@ -1193,7 +1193,7 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 - **Lost.** A browser tab or a short-lived CLI host pays the index download before it can search.
 - **Dark in code.** Nothing is built. The requester methods exist for app hosts only (§5.4).
 - **Held.** Nothing: no task or track waits on it.
-- **To bring back.** C4 for browsers, then the requester's Hello, keepalive and policy on those hosts.
+- **To bring back.** C4 for browsers, then the requester's Hello and policy on those hosts, with no keepalive (owner decision 609).
 
 <a id="sdk-v1"></a>
 ### §18's v1 set

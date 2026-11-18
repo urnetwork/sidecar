@@ -26,7 +26,7 @@ Stage: Later
 - **Lost:** A browser tab or a short-lived CLI host pays the index download before it can search.
 - **Dark in code:** Nothing is built. The requester methods exist for app hosts only (§5.4).
 - **Held:** Nothing: no task or track waits on it.
-- **To bring back:** C4 for browsers, then the requester's Hello, keepalive and policy on those hosts.
+- **To bring back:** C4 for browsers, then the requester's Hello and policy on those hosts, with no keepalive (owner decision 609).
 
 ### sdk-v1: §18's v1 set
 Stage: v1 (M6, M10)

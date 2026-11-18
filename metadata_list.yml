@@ -1,4 +1,4 @@
-# metadata_list.yml v56; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
+# metadata_list.yml v57; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
 # §7.9, §10, §11). v6 adds to v5 (2026-11-04) connect-1's ShareCert, api-6's push-token slot sentinels, api-7's
 # {acl_}q, cascade signers, recovery bindings, restored bindings' recovery windows and orphaned networks, api-13's
 # per-eraser closure counters, evs-1's secret kind and orphans, evs-3's creation block, fence time, deleted flag
@@ -203,6 +203,9 @@
 # v56, updated 2026-11-18 for the owner's answer QD-1035 (owner decision 608), adds no row: api-7's presence key
 # registrations carry an empty attestation, clients requesting attestation none, so api sees no create
 # ceremony's client data, authenticator model or vendor certificate chain.
+# v57, updated 2026-11-18 for the owner's answer QD-1038 (owner decision 609), adds no row: connect-5's remote-search
+# pair is accounted like any peer's, with no window, floor, withheld report or keepalive, so api's rows show when a
+# phone searched through an indexer and how many 20 KiB exchanges it took.
 # Each row gives service, store (tables, Redis families, object families, logs or memory),
 # sees, why, ttl, and owner: the section that designs the value and states its ttl. Withdrawn rows keep
 # their ids so citations resolve. Public: this list ships in DESIGN.md on the public sidecar repo (owner
@@ -261,7 +264,7 @@ connect-4:
 connect-5:
   service: connect relays (residents) and api's contract service, for §11.14's remote search (owner decision 175)
   store: none new; what connect-2's relay memory and connect-1's contract rows and close reports hold for the Network contracts, both directions, between an app host and an indexer it asks
-  sees: per frame, the app host's and the indexer's client ids, size, timing and acks, every search request a 4,016 B body and every reply the requester's steps times 16,384 B, failures after parsing included, and a Ping and a Pong each minute while the app host is in the foreground; so when each "search more" and each further page runs, how many pages a search takes, and how long the indexer took to answer; from connect-1, for a pair that §6.11's bit 1 marks, its §6.10 windows, each direction's first contract created when the app host comes to the foreground, when the previous window ends while it is there, or when a search fails over to an indexer it had not warmed, and any other contract of a window created at a session re-establishment, which is at the search itself when a search finds the session lost before the next keepalive (owner decision 191), or at overflow; and one report a contract in both directions, sent at the window's end or at a suspended app's next run, of exactly 256 KiB on the window's first contract and 0 on the others (owner decisions 176, 188), so a window with up to five pages reports as one with none whatever its scheduled background, and 256 KiB plus 128 KiB steps when a sixth exchange, a second HeadCheckProof, or a stream or other RPC on a data contract overflows it; the floor itself shows api, since reports of exactly 256 KiB, or 256 KiB plus 128 KiB steps, mark the pair, that this app host's remote-search mode lets it ask that device and that the device serves search, which api-7 keeps sealed in the IndexerSet; never a query, term, filter, repo named, hit, snippet or result count, all sealed end to end (I-3, I-19)
+  sees: per frame, the app host's and the indexer's client ids, size, timing and acks, every search request a 4,016 B body and every reply the requester's steps times 16,384 B, failures after parsing included; so when each "search more" and each further page runs, how many pages a search takes, and how long the indexer took to answer; from connect-1, the pair's contracts and close reports as for any peer's, so api's retained rows show when a phone searched through an indexer and how many 20 KiB exchanges it took, the that and when evs-26 concedes for "search more" (owner decision 609, which reverses owner decisions 176, 188 and 191); never a query, term, filter, repo named, hit, snippet or result count, all sealed end to end (I-3, I-19)
   why: phones ask a designated indexer (owner decisions 175, 178) instead of downloading all partitions, which evs-26 would otherwise show
   ttl: relay memory while in flight (connect-2); contract rows and close reports as connect-1, at the contract horizon, 35 to 91 d, and at most 300 d while its reaper is off
   owner: §11.14

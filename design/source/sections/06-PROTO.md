@@ -209,12 +209,7 @@ search reply (SEARCH_RESULT)               steps x 16,384 B of body (steps 1-4; 
 type SidecarProtocolSettings struct {
 	HelloCacheTimeout               time.Duration // 10 min; Hello state also ends at any change of C15's
 	                                              // session key, checked per frame, and on a send's ack
-	                                              // error, connect signaling no sequence exit; a pair in a
-	                                              // §6.10 window keeps it while the window is open and no
-	                                              // 120 s pass without a keepalive
-	MarkedKeepaliveInterval         time.Duration // 60 s: an app host's Ping to an indexer whose §6.10 window
-	                                              // is open, while in the foreground, on a grid from the
-	                                              // window's start; under connect's 120 s receive idle
+	                                              // error, connect signaling no sequence exit
 	DefaultCallTimeout              time.Duration // 15 s (protocol maximum 55 s)
 	PeerQueueMessageCount           int           // 64
 	ReassemblyMaxBodyByteCount      int64         // 256 KiB (protocol maximum 1 MiB)
@@ -443,78 +438,7 @@ func VerifyPresenceCountersign(signed *Signed, purpose string, keyAlg SignedKeyA
 
 Same-network sidecar traffic uses Network, witnesses and remote search without a reach grant a Network contract of class `control` (§6.4), edges Service (C9) both ways, and cross-network shares FriendsAndFamily (owner decision 11); C13 seals every contract's subject, source network and class, whatever its mode (item 4, D-PROTO-19). Every byte is debited (owner decision 10): relayed same-network bytes from close reports (`CloseContract`'s byte counts, connect/protocol/transfer.proto:650-653), a marked remote-search pair's per window at C19's floor (below; Q-PROTO-4), edge bytes by lease, shares from the dialer's escrow (§20.6). Neither mode CreateContract computes today fits (§8.3): Network grants allow-all egress, LAN and loopback included, and Public would list sidecars in VPN exits' egress index (server/model/egress_index.go:1308-1315). Contract rows keep today's retention (§2.8 connect-1): contracts expire within 60 min (server/model/subscription_contract_expiration.go:14); paid ones (shares) are reaped 7 days after payout and unpaid ones (Network, Service) at 300 days (server/model/subscription_model.go:47-52); close-report evidence goes after 35-91 days (server/db_contract_close_evidence.go:94).
 
-**Remote-search windows (C19; owner decisions 176, 188; D-PROTO-22).** Connect keeps each party's close reports with their times (connect-1), a receive sequence that idles out reports its current contract as a checkpoint (connect/transfer.go:16691-16729), and a send sequence that idles out closes its contracts, so its next frame takes another (:9715-9721). A requester-indexer pair's reports and contract rows would therefore show when search pages ran, and under rounding alone whether a page crossed a 128 KiB step (meta review F18). A pair that §6.11's bit 1 marks is accounted in windows instead, whose reports depend on neither:
-
-```text
-mark      a sidecar that sends or receives a Hello or HelloResult carrying bit 1 while that peer is not in C19's
-          mode puts it there (§4.6) and, before its next frame to it, retires every contract it holds to that
-          peer, a queued successor included, whose reports go out at once, as today, since no marked frame rode
-          them; a bit-1 Hello while the mode holds, as at a session re-establishment, retires nothing
-window    per direction: opened by the contract carrying the pair's first bit-1 Hello (up) or the HelloResult
-          that answers it (down), whatever bits that HelloResult sets, an indexer never setting bit 1; where
-          the app host's own HelloResult carries bit 1, because the indexer said Hello first, that frame
-          opens the up window and the indexer's next frame the down one; the Hello is sent at a foreground
-          (D-SDK-27) or, to an indexer not warmed, at a failover's first request (§11.14); later by the
-          contract connect takes for that direction at its previous window's end (end, below), whatever
-          frame first rides it; it lasts 55 min, to 5 min before that contract's signed
-          expiration (connect's 60 min contracts), so its reports land before the server's deadline close
-          (server/model/subscription_contract_scheduled_close.go:99); each later contract of that direction to
-          the peer created inside it belongs to it
-first     a window's first contract is the lowest contract id, compared as bytes, among that direction's
-          window contracts that carried at least one frame by this client's count, sent or received; the ids
-          are server-minted and ULID-shaped, and both sides hold them. Adoption is by lane, through C19's
-          AdoptPeerWindowContract: the contract the Hello rode belongs to the up window, the requester's
-          sidecar also adopts the HelloResult's lane, which pins that contract as the down window's first,
-          and receive contracts registered before it leave the window and report exactly. A frame lost at
-          a window's very start can still split the two clients' reports, which is accepted
-keepalive while in the foreground the requester Pings the indexer each MarkedKeepaliveInterval (60 s, under
-          connect's 120 s receive idle, connect/transfer.go:1070) on a grid from the window's start, and the
-          indexer answers Pong; so no sequence of the pair idles out, and no contract opens inside a foreground
-          window but at its start, a session re-establishment or overflow; the pair's Hello state lasts while
-          the window is open and its session lives (§6.6), so a search waits for a Hello only when it finds the
-          session lost (below)
-session   lost after 120 s without a Pong (a suspension, a dropped network); re-established by the next Hello,
-          at the next foreground or keepalive tick, or at once by a search that comes first, whose new
-          contract, and the successor connect requests with it, keep that search's time in connect's rows
-          (connect-5; owner decision 191)
-reports   connect withholds every report of a window's contracts, checkpoint or close, until the window ends;
-          each client then sends one report a contract: R(T) on the window's first and 0 on the others, T being
-          that client's counted bytes, acked and unacked, over the window's contracts in that direction, and
-          R(T) = F when T <= F, else F + 128 KiB x ceil((T - F) / 128 KiB), F = 256 KiB; R(T) past the first
-          contract's grant (1 MiB at least) goes on the next contracts in ascending contract id, capped by
-          their grants, and a contract no frame rode reports 0; a client that cannot run at the window's
-          end (a suspended app) sends its reports when it next runs, and the deadline close settles from
-          those the server holds, the indexer's among them
-end       at the window's end connect moves the pair's sequences off its contracts, as at expiry, onto a new
-          contract each, which it takes at once with its successor requested then and which opens the next
-          window whatever frame first rides it, so no search's request or reply opens one; a window that ends
-          with no Ping or Hello in its last 2 min instead clears C19's mode until the next bit-1 Hello; the
-          sidecar tells connect of each Ping, Pong, Hello and HelloResult through C19's
-          NotePeerWindowActivity(peerId), so connect stays generic
-overflow  T past F: F plus 128 KiB steps, which shows that much and never the count inside a step; T past the
-          first contract's grant: a successor then, as connect rolls today
-```
-
-F covers each direction's maximum in a window, every frame counted as connect counts it, the envelope and its 7 B wrapper (connect/subprotocol.go:110-116; caps from §6.5):
-
-```text
-kind (at most a window)                                each, down / up    down (to requester)  up (to indexer)
-search exchanges (5, the promise; a retry, reopen or   16,745 / 4,087                  83,725           20,435
-  split request counts as one; one step each, v1)
-keepalives: Pong / Ping (55, one a minute)             32 / 32                          1,760            1,760
-Hello exchanges (28: the opening one, and one for      512 / 512                       14,336           14,336
-  each session lost, each after 120 s)
-HeadCheck exchanges (9: each side's hourly round and   8,174 / 8,174                   73,566           73,566
-  its repeat after a fetch, 4, and a revoker's retries
-  each 10 min, 5; two envelopes each, §6.5)
-HeadCheckProof exchanges (1 each way: 64 KiB served    66,749 + 64                     66,813           66,813
-  in 17 envelopes, and the other side's request)
-total                                                                                 240,200          176,910
-F                                                                                     262,144          262,144
-allowance for other bytes (F less five exchanges)                                     178,419          241,709
-```
-
-So a window whose non-search bytes stay within its allowance in each direction, every scheduled kind at its maximum among them, reports F both ways whether it carried no exchange or five. A sixth exchange, a second HeadCheckProof, or a stream or other RPC on a data contract can carry it past F, to F plus 128 KiB steps. A window debits 2F = 512 KiB unless it overflows (§20.6). The exact sizes are below the caps: a request counts 4,043 B, a one-step reply 16,596 B, a Hello ~325 B, a Ping or Pong 22 B at most, and a HeadCheck at its list caps ~5.2 KB.
+**Remote search's contracts (owner decision 609).** A requester-indexer pair's contracts are accounted like any peer's: connect keeps no window ledger, withholds no report, reports no floor and moves no sequence at a window's end, no Hello marks the pair, and app hosts keep no pair warm and send no keepalive Ping. The fixed sizes that hide a search's pages from relays stay (§6.11, §11.14). api's retained contract rows and close reports therefore show when a phone searched through an indexer and how many 20 KiB exchanges it took, the same that and when evs-26 concedes for "search more", and never a query, hit or repo (§2.8's connect-5). This reverses owner decisions 176, 188 and 191, which had C19 account the pair in 55-minute windows at a 256 KiB floor, with a keepalive a minute in the foreground and a search that found its session lost re-establishing it at once.
 
 #### 6.10.1 Service and share relationships
 
@@ -613,13 +537,9 @@ Hello.features   bit n set: the sender implements n, in Hello and HelloResult al
                  each side deciding by its own state (§6.4's floor); a bit is permanent once released
 0 serves remote  set by a sidecar that serves §11.14's remote search, a designated search indexer (§7.9);
   search v1      requesters ask only a peer that set it
-1 asks remote    set by an app host toward each search indexer its remote-search mode lets it ask (§18.4); a
-  searches       sidecar that sends or receives it puts that peer in C19's mode (§4.6), so the pair's bytes in
-                 both directions are reported per §6.10's windows at a fixed floor (Q-PROTO-4); the pair, not
-                 the contract a Hello rode, because replies settle on the reply direction's own Network
-                 contract (server/controller/connect_controller.go:912-927) and a send sequence rolls
-                 successor contracts without exiting (connect/transfer.go:11380-11413), so one window spans
-                 several
+1 asks remote    set by an app host toward each search indexer its remote-search mode lets it ask (§18.4); it
+  searches       marks nothing, the pair's contracts being accounted like any peer's (§6.10; owner decision
+                 609)
 ```
 
 - **Files.** One proto3 `sidecar/protocol/<service>.proto` per service, generated by protoc-gen-go v1.36.11 as connect is (connect/protocol/transfer.pb.go:1-4), within sdk/build's v1.36.12 pin [R:sdk-clients]. What `sidecar/device` parses lives in `sidecar/protocol/bridge/*.proto` instead (§4.4; std and protobuf only): `Signed`, `WebAuthnEvidence` and `SignedType`; §7.9's `AuthPin`, `AuthEntry`, `ProjectionHeader`, `StatementHeader`, `Genesis` and every other record a device verifies against the anchor or applies between states, at least `SidecarRevoke`, `MemberRevoke`, `Suspend`, `Unsuspend`, `GrantRevoke` and §17.8's statements, `BridgeWithdraw` included; and §17's `BridgeState` (with `BridgeIdentity` and `BridgeShareKey`), `Pending`, `WindowDelegation` and `ShareCert`. `protocol`'s files, config.proto and acl.proto among them, import these and never redeclare them: both packages are `urnetwork.sidecar`, where a duplicate panics at init (§4.9).
@@ -640,12 +560,7 @@ Hello.features   bit n set: the sender implements n, in Hello and HelloResult al
 | A uvarint type in the signed bytes | 1-3 B shorter | Non-canonical varints let one statement sign two ways | Rejected: u32be |
 | A contract class of its own for search | Policy could cut it | The gate marks which contracts carry search; a new class for C13 to seal | Rejected |
 | The pair's Network contract, data or control | Works under every document; looks like HeadCheck at the gate | Policy cannot cut it (admins retire `search` instead) | Chosen (D-PROTO-21) |
-| C19 keyed on the contract a Hello rode | No per-peer state in connect | Reply and successor contracts carry no Hello, so their bytes still count pages | Rejected: the marked pair (§6.11) |
-| C19 rounding each close report of the marked pair up to 128 KiB (as first designed) | One per-peer quantum; no window state | Background near a multiple, a checkpoint at each sequence exit and contracts opened after idle exits let one page cross a step (meta review F18) | Rejected: §6.10's windows (owner decision 188) |
-| A floor covering five exchanges and the pair's scheduled background at its maximum, per 55-minute window | Up to five pages report as none whatever the scheduled background; reports only at window ends | 512 KiB a window; a keepalive a minute while foregrounded | Chosen (D-PROTO-22) |
-| The same windows with a 128 KiB floor | The debit owner decision 176 accepted | Covers only the routine schedule: a revoker's retries or a HeadCheckProof overflow the window | Not taken (owner decision 188) |
-| connect holding a marked peer's contracts across idle sequence exits, with no keepalive | No traffic while idle | New contract state in connect's sequences; the next window's contract would still open at the first frame after the last ended, perhaps a search | Rejected: the keepalive |
-| A search that finds the pair's session lost waiting for the keepalive's re-establishment | No contract opens at a search on a warmed pair | After an outage at the indexer's end a search stalls up to 60 s, and failing over instead shows its time anyway | Not taken (owner decision 191): the search re-establishes the session at once, disclosed in §2.8's connect-5 |
+| C19's windows: the marked pair's reports withheld to each 55-minute window's end at a 256 KiB floor, with a keepalive a minute in the foreground (owner decisions 176, 188) | Up to five pages a window read as none in api's rows | About 1.4k lines and 3k test lines in connect and 1.7k in sidecar, a sweep every connect merge waited on, 512 KiB of transfer balance a warm pair an hour in the foreground | Removed (owner decision 609): the pair's contracts are accounted like any peer's |
 
 ### 6.13 Decisions proposed
 
@@ -691,7 +606,7 @@ Hello.features   bit n set: the sender implements n, in Hello and HelloResult al
 
 **D-PROTO-21 (proposed).** `SEARCH` (0x1404) and `SEARCH_RESULT` (0x1405) carry §11.14's remote search, to a designated search indexer (owner decisions 175, 178), on the pair's Network contract: data where reach allows, otherwise the control class, whose receivers accept SEARCH only at a sidecar advertising Hello feature bit 0, and SEARCH_RESULT only as its reply. Search requests always carry `timeout_ms` 10,000, are never cancelled, and repeat by (search_id, page). *Why:* remote search must work under every policy document without a reach grant, and carries no IP. On the control class the gate sees what HeadCheck shows it, and the indexer's own evaluation authorizes each repo.
 
-**D-PROTO-22 (proposed).** A pair that §6.11's bit 1 marks is accounted in §6.10's windows: each direction's window opens with its first contract after the mark or after its previous window and lasts 55 minutes; while in the foreground the requester keeps the pair's sequences alive with a Ping a minute; and C19 withholds every report of a window's contracts until it ends, then reports the window's counted bytes at the floor F = 256 KiB, or F plus 128 KiB steps past it, on its first contract and 0 on the others. *Why:* rounding each report up to 128 KiB hid nothing once background, checkpoints at sequence exits or contracts opened after idle exits put a page across a step (meta review F18). A floor covering five exchanges and the pair's scheduled background at its maximum keeps owner decision 176's promise for every window that does not overflow. The keepalive keeps contract creation at foregrounds and window ends rather than at searches, and withheld reports keep their times at window ends (owner decision 188); a search that fails over, or that finds the session lost and re-establishes it, opens its contract then, as connect-5 discloses (owner decision 191).
+**D-PROTO-22 (withdrawn).** Superseded by owner decision 609: the remote-search pair's contracts are accounted like any peer's, with no windows, floor, withheld reports or keepalive.
 
 ### 6.14 Open questions
 
@@ -701,7 +616,7 @@ Hello.features   bit n set: the sender implements n, in Hello and HelloResult al
 
 **Q-PROTO-3.** Which provide modes carry edge and share traffic (cross-cutting, X11)? **Decided by owner 2026-11-03 (owner decision 11):** (b), Service (6, C9, M5) for edges, authorized by §9's Find-recorded pair, and FriendsAndFamily (2) with a sealed source network (C13) for shares (§6.10.1). *Residual:* none.
 
-**Q-PROTO-4.** Cross-cutting (§2.8, §11.14, §20.6). Should connect keep remote search's byte totals per contract, which show roughly how many search pages ran in each contract hour? **Decided by owner 2026-11-05 (owner decision 176):** (b), connect change C19 (§4.6), hiding up to five pages an hour by rounding the marked pair's reports up to 128 KiB, at ~5 MiB a day for a phone foregrounded in 20 separate hours, against the free tier's 30 GiB daily grant (config/all/pro.yml:88-89); §2.8's connect-5 states what remains visible (options (a), disclosure alone, and (c), shorter contract retention, not taken). **Amended by owner 2026-11-06 (owner decision 188), after the meta review's F18:** rounding each report did not hide one page once background, checkpoints or contracts opened after idle exits put a page across a step, so C19 reports each §6.10 window, both directions, at a floor F = 256 KiB covering five exchanges and the pair's scheduled background at its maximum, F plus 128 KiB steps past it, withholding every report to the window's end, with a keepalive a minute while the app is in the foreground: 512 KiB a window, ~10 MiB a day for a phone foregrounded in 20 separate hours and at most 13.5 MiB a day a pair; the same windows at a 128 KiB floor, which covers only the routine schedule, and the claim narrowed to 128 KiB quantization were not taken. **Amended by owner 2026-11-06 (owner decision 191), after the meta review's checks:** a search that finds the pair's foreground session lost (120 s with no Pong) re-establishes it at once by its own Hello, whose contract and successor keep that search's time in connect's rows, as connect-5 discloses beside a failover's window; waiting for the keepalive's re-establishment, which can stall a search up to a minute after an outage at the indexer's end, was not taken. *Residual:* none.
+**Q-PROTO-4.** Cross-cutting (§2.8, §11.14, §20.6). Should connect keep remote search's byte totals per contract, which show roughly how many search pages ran in each contract hour? **Decided by owner 2026-11-05 (owner decision 176):** (b), connect change C19 (§4.6), hiding up to five pages an hour by rounding the marked pair's reports up to 128 KiB, at ~5 MiB a day for a phone foregrounded in 20 separate hours, against the free tier's 30 GiB daily grant (config/all/pro.yml:88-89); §2.8's connect-5 states what remains visible (options (a), disclosure alone, and (c), shorter contract retention, not taken). **Amended by owner 2026-11-06 (owner decision 188), after the meta review's F18:** rounding each report did not hide one page once background, checkpoints or contracts opened after idle exits put a page across a step, so C19 reports each §6.10 window, both directions, at a floor F = 256 KiB covering five exchanges and the pair's scheduled background at its maximum, F plus 128 KiB steps past it, withholding every report to the window's end, with a keepalive a minute while the app is in the foreground: 512 KiB a window, ~10 MiB a day for a phone foregrounded in 20 separate hours and at most 13.5 MiB a day a pair; the same windows at a 128 KiB floor, which covers only the routine schedule, and the claim narrowed to 128 KiB quantization were not taken. **Amended by owner 2026-11-06 (owner decision 191), after the meta review's checks:** a search that finds the pair's foreground session lost (120 s with no Pong) re-establishes it at once by its own Hello, whose contract and successor keep that search's time in connect's rows, as connect-5 discloses beside a failover's window; waiting for the keepalive's re-establishment, which can stall a search up to a minute after an outage at the indexer's end, was not taken. **Amended by owner 2026-11-17 (owner decision 609), after the complexity review:** C19's window accounting goes, with its floor, withheld reports, keepalive and warm pairs; the pair's contracts are accounted like any peer's, so api's rows show when a phone searched through an indexer and how many 20 KiB exchanges it took, the fixed sizes still hiding pages from relays; keeping both and deferring remote search were not taken. *Residual:* none.
 
 ### 6.15 Departures from PLAN.md
 
@@ -731,8 +646,7 @@ Hello.features   bit n set: the sender implements n, in Hello and HelloResult al
 | No witness for a writer: weekend CI, a lone cloud agent, an absent team | Medium | Medium | Agents witness too, over control contracts; alarm at 24 h; shared writes stop at `witness_bound_hours`, up to 168 h (owner decision 129) |
 | A relaying server withholds a revocation and drops cross-split traffic; stale writers witness one another and keep sealing to the removed reader | Medium | High | A HeadCheck path from a holder, direct or within 8 hops through peers relaying `proven` or `unverified`, stops the writer: at once with a proof, at `witness_bound_hours` without one (dropped, or a gap wider than the newest 64 KiB of entries the holder keeps); each round includes peers of other members (§6.4); where no path crosses, owner decision 129's bound does not hold, as §2.8 states |
 | Memory across hundreds of peers | Low | High | Per-process caps; mobile defaults |
-| Relays time remote searches and count their pages | High | Low | Fixed sizes; windows opened at foreground and held by a keepalive; C19 reports each window at a 256 KiB floor a direction, withheld to its end (owner decisions 176, 188); a search that fails over or re-establishes a lost session opens its contract then (owner decision 191); disclosed in §2.8's connect-5 |
-| A window's other traffic passes its allowance, so its pages show to a 128 KiB step | Low | Low | The floor covers every scheduled kind at its maximum and one HeadCheckProof each way (§6.10); only a second proof in a window, or a stream or other RPC on a data contract, overflows it; FS-125 |
+| Relays time remote searches and count their pages, and api's rows show when a phone searched through an indexer and how many exchanges it took | High | Low | Fixed sizes hide each page's content and length; the rest is disclosed in §2.8's connect-5, as evs-26 discloses "search more" (owner decision 609) |
 
 ### 6.18 Phasing
 
@@ -741,7 +655,7 @@ Hello.features   bit n set: the sender implements n, in Hello and HelloResult al
 - **M4.** C13's seals (D-PROTO-19), with §17's bridge; control contracts (D-PROTO-18) with §8.10's contract gate, since from then a network's document can cut every other witness path.
 - **M5-M6.** Streams with §9's `tls/`, and the pooled codec if measured worthwhile; Service edges (C9, M5); FriendsAndFamily shares with C18 (M6); same-network P2P behind `EnablePeerP2p`, built at M6 and off by default (owner decision 296).
 - **M8.** `POST /sidecar/wake`, wakes through §19's push sender for unacked hints (§18.7), and `team` hints to `acl_enforcing` device clients, with §18's mobile hosts (owner decision 88).
-- **M10 (v1; owner decision 169).** The SEARCH pair, Hello's feature bits 0 and 1 and the control class's acceptance of SEARCH, app hosts asking from the later of M10's and M8's exits (§18); C19's window accounting on connect's `sidecar` branch and the app hosts' keepalive (owner decisions 176, 188); their bytes freeze at M10's Gn-out, additive to M2's wire.
+- **M10 (v1; owner decision 169).** The SEARCH pair, Hello's feature bits 0 and 1 and the control class's acceptance of SEARCH, app hosts asking from the later of M10's and M8's exits (§18), the pair's contracts accounted like any peer's (owner decision 609); their bytes freeze at M10's Gn-out, additive to M2's wire.
 - **v1.** P2P for same-network sidecar pairs once C3 is tested, able to end relay-only at [a later owner call](DESIGN-DEFER.md#proto-peer-p2p) (owner decision 296).
 - **Later.** [Logical lanes (C7)](DESIGN-DEFER.md#repo-c7-logical-lanes), [stream resume](DESIGN-DEFER.md#proto-stream-resume), and [hybrid-only TLS groups](DESIGN-DEFER.md#proto-hybrid-only-tls-groups).
 - **Deferred.** DESIGN-DEFER.md holds an entry for each Later item, linked above, and for [this section's v1 set](DESIGN-DEFER.md#proto-v1) (owner decision 587).

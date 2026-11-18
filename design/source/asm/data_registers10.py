@@ -128,6 +128,15 @@ D['D-SOCK-10'] = "Host the engine as server/cli/sockets, its routes under servic
 # The dr4-late-sweep fold (2026-11-18): presence keys with no attestation (owner decision 608).
 assert D['D-MCP-19'] == "Presence evidence follows 16.6's profiles: WebAuthn with UP and UV per use; Secure Enclave keys labeled asserted.", 'D-MCP-19 row moved'
 D['D-MCP-19'] = "Presence evidence follows 16.6's profiles: WebAuthn with UP and UV per use, and Secure Enclave keys; one label, presence."
+# The dr4-late-sweep fold (2026-11-18): C19's windows withdrawn (owner decision 609).
+assert D['D-PROTO-22'].startswith("A marked pair's reports are withheld"), 'D-PROTO-22 row moved'
+D['D-PROTO-22'] = "Superseded by owner decision 609: the remote-search pair's contracts are accounted like any peer's."
+WITHDRAWN_D = dict(WITHDRAWN_D)
+WITHDRAWN_D['D-PROTO-22'] = 'owner decision 609'
+assert D['D-SDK-27'].startswith('At foreground, apps Hello'), 'D-SDK-27 row moved'
+D['D-SDK-27'] = "Apps Hello an own indexer when a search needs it, keeping no warm pair; failover waits 3 s."
+assert Q['Q-PROTO-4'][1].startswith('(b), owner decisions 176, 188, 191'), 'Q-PROTO-4 row moved'
+Q['Q-PROTO-4'] = (Q['Q-PROTO-4'][0], "(b), then owner decision 609: the pair is accounted like any peer's, with no windows.")
 # The dr4-late-sweep fold (2026-11-18): sidecar's server-hosted packages (owner decisions 593, 594).
 assert D['D-REPO-3'].startswith("Engines live in sidecar over operator-core's Env"), 'D-REPO-3 row moved'
 D['D-REPO-3'] = "Engines live in sidecar over operator-core's Env; sidecar owns its SQL and server-hosted packages (owner decisions 19, 251, 594)."
