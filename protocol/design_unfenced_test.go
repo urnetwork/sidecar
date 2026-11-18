@@ -672,6 +672,12 @@ var testFenceAdditions = []struct {
 		field:    testFenceField{name: "require_default_egress", number: 4, typeName: "bool"},
 		question: "ur-tun-default-egress-admin-lock",
 	},
+	// QD-1060: an egress_change's requirement of default egress under exits, so its approval shows and binds it
+	{
+		message:  "CanonicalAction",
+		field:    testFenceField{name: "require_default_egress", number: 41, typeName: "bool"},
+		question: "ur-tun-default-egress-option-lock-action",
+	},
 }
 
 // One field an owner's answer takes out of a message the design fences, its number reserved.

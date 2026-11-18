@@ -145,7 +145,8 @@ func canonicalActionBuildVersion(action *protocol.CanonicalAction, row *Canonica
 // clear's bytes as the builder stores them, before its detail is sealed: sealed_detail left out and the version fixed
 // as NewCanonicalAction fixes it, deterministically encoded, field by field in number order. The stored action is
 // these bytes with its sealed_detail's record, field 38's, among them in number order: after every other field (39,
-// egress_mode, is a version-1 egress_change's alone) but a share's share_network_id, 40 (QD-820), which follows it.
+// egress_mode, and 41, require_default_egress, are a version-1 egress_change's alone) but a share's
+// share_network_id, 40 (QD-820), which follows it.
 // The context cuts field 38's record out wherever it stands, so the one a detail is sealed to here is the one its
 // stored bytes derive (CanonicalActionDetailSealContext), a share's network bound into it as every clear field is.
 // The caller's message is not changed.

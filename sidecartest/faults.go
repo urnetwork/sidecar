@@ -207,7 +207,10 @@ func NewFaultQueue() *FaultQueue {
 }
 
 // Called with each plan as it fires, on the goroutine of the operation it hit, and with no lock held.
-// A Delay fires once its request is parked, as its channel says (Add).
+// A Delay fires once its request is parked, as its channel says (Add). It returns before the plan's
+// channel closes, so whoever the channel releases finds what it did. It must not wait on such a waiter,
+// whose channel stays open until it returns: a test that holds an operation where its plan fires learns
+// of the firing from onFire itself.
 func (self *FaultQueue) SetOnFire(onFire func(plan *FaultPlan)) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
@@ -236,7 +239,8 @@ func (self *FaultQueue) SetRealStore(admit func(plan *FaultPlan) error) {
 }
 
 // Arms plan. A plan a fake cannot carry out is an error here, so a schedule fails where it was
-// written. The returned channel closes when the plan first fires. For a Delay that is once the fake
+// written. The returned channel closes when the plan first fires, once onFire has returned
+// (SetOnFire), so whoever it releases finds what onFire did. For a Delay that is once the fake
 // has parked the request and set its caller's timeout on the clock, so a test that waited for the
 // channel can deliver the request (DeliverDelayed) or move the clock past the timeout, and never meets
 // a request taken and not yet parked.
@@ -295,8 +299,9 @@ func (self *FaultQueue) takeParking(ctx context.Context, op string, clusterId st
 // For one operation, the plan it gets, or nil. Reading counts a match on every armed plan the
 // operation fits, so Nth means the same whatever else is armed. The oldest plan that fires wins,
 // unless a plan that Displaces fires too. write says whether the operation writes. The operation is
-// counted here, and fire tells who waits: it closes the channel of each plan this operation fired for
-// the first time and calls onFire, once, with no lock held.
+// counted here, and fire tells who waits: it calls onFire, once, with no lock held, and then closes the
+// channel of each plan this operation fired for the first time, so a waiter a channel releases finds
+// what onFire did.
 func (self *FaultQueue) takeUnfired(ctx context.Context, op string, clusterId string, key string, write bool) (taken *FaultPlan, fire func()) {
 	if isInspecting(ctx) {
 		return nil, func() {}
@@ -368,11 +373,15 @@ func (self *FaultQueue) takeUnfired(ctx context.Context, op string, clusterId st
 		onFire = self.onFire
 	}()
 	return taken, func() {
-		// each plan is in one operation's firstFired alone, so its channel closes once
-		for _, armed := range firstFired {
-			close(armed.fired)
-		}
-		firstFired = nil
+		// the channels close once onFire has returned, so whoever they release finds what it did, and close
+		// even if onFire ends its goroutine, as a t.Fatal on a test's own call does
+		defer func() {
+			// each plan is in one operation's firstFired alone, so its channel closes once
+			for _, armed := range firstFired {
+				close(armed.fired)
+			}
+			firstFired = nil
+		}()
 		if taken != nil && onFire != nil {
 			onFire(taken)
 			onFire = nil

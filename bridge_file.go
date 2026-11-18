@@ -1532,13 +1532,6 @@ type BridgeEgressRequest struct {
 	RequireDefaultEgress bool
 }
 
-// An egress change that requires default egress on, which SetEgress files only once its approval can show the
-// requirement (question ur-tun-default-egress-option-lock-action).
-var errBridgeEgressRequirementUnshown = errors.New("an egress change that requires default egress on waits for the " +
-	"approval to show the requirement: egress_change's action names its subject, mode and exits alone (owner decision " +
-	"462), so a decision on one would not cover it, and a filing that differed only by it would reuse an earlier " +
-	"decision's statement")
-
 // The statement and the body an egress spec files: the mode in the clear, and under exits only a sealed body, nil
 // under auto and none, which never wait on a seal, the requirement of default egress among its fields (QD-1053), which
 // auto and none refuse. Exits named twice, an exit of zero, or more exits than the ledger's settings allow (nil, the
@@ -1580,13 +1573,15 @@ func bridgeEgressStatement(request *BridgeEgressRequest, settings *BridgeLedgerS
 }
 
 // The CanonicalAction an egress change asks for (QD-799): its subject and mode, and under exits its exits in grant_dst,
-// sidecar:<id> entries in the request's order or one tag:<id>, which approvers render and every parser holds to that
-// shape (checkEgressChangeAction).
+// sidecar:<id> entries in the request's order or one tag:<id>, and its requirement of default egress (QD-1060), which
+// approvers render and every parser holds to that shape (checkEgressChangeAction). A filing with the requirement and
+// one without are two actions, so the gate never spends one's decision on the other.
 func bridgeEgressAction(request *BridgeEgressRequest) (*StoredCanonicalAction, error) {
 	action := &protocol.CanonicalAction{
-		Kind:       uint32(SidecarActionEgressChange),
-		Subject:    request.Subject.Bytes(),
-		EgressMode: uint32(request.Mode),
+		Kind:                 uint32(SidecarActionEgressChange),
+		Subject:              request.Subject.Bytes(),
+		EgressMode:           uint32(request.Mode),
+		RequireDefaultEgress: request.RequireDefaultEgress,
 	}
 	for _, exitId := range request.ExitSidecarIds {
 		action.GrantDst = append(action.GrantDst, "sidecar:"+hex.EncodeToString(exitId.Bytes()))
@@ -1616,10 +1611,6 @@ func (self *BridgeFiler) SetEgress(ctx context.Context, origin *BridgeFileOrigin
 	}
 	if _, _, err := bridgeEgressStatement(request, self.settings.Ledger); err != nil {
 		return nil, err
-	}
-	if request.RequireDefaultEgress {
-		// the closed direction until egress_change's action carries the requirement
-		return nil, fmt.Errorf("%w: %w", ErrBridgeFileRefused, errBridgeEgressRequirementUnshown)
 	}
 	view, err := self.view(ctx)
 	if err != nil {
