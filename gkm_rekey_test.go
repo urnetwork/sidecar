@@ -888,6 +888,7 @@ func newRekeyPrefixTest(t *testing.T, engineRepo string) *rekeyPrefixTest {
 			}
 			return engineWorld.engine.AllowPrefixWrite(&asked)
 		},
+		Settings: testAclPrefixSettingsOn(),
 	})
 	test.readBack = ruled.readRuled
 	return ruled

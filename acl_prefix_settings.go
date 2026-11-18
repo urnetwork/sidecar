@@ -7,8 +7,17 @@
 // AlarmInterval (EVS1-M6-04's evs_prefix.go), and the repair's and the pin pushes' bounds and timer (EVS1-M6-05's
 // evs_prefix_repair.go).
 //
-// The statement rules read DefaultAclPrefixSettings(), as they read DefaultAclAccessLogSettings(); threading each
-// side's own instance through them is the review phase's settings sweep (QD-706).
+// The rules are deferred to Later (QD-1032, the owner's choice on the 2026-11-17 complexity review): launch uses
+// D-ACL-11's v0 answer, a repo per prefix, as the write boundary, which servers enforce. The drafted rules stay on the
+// branch, dark behind Enabled, the one switch, off in DefaultAclPrefixSettings. Off, the log refuses every
+// RepoPrefixRules at its position as a type whose rule this release does not carry (ConfigLogSettings.AclPrefix,
+// acl_statement.go), no filer signs one (AclPrefixRulesFiler, `ur evs rules`), and no reader judges a push against
+// rules, repairs or sends a pin push (EvsPrefixRulesArgs.Settings, evs_prefix.go). The rules' own tests run with it on,
+// so the code does not rot until it comes back.
+//
+// The statement rules' limits read DefaultAclPrefixSettings(), as they read DefaultAclAccessLogSettings(); threading
+// each side's own instance through them is the review phase's settings sweep (QD-706). The switch is the log's own
+// instance's, so a test runs a log with the rules on.
 //
 // The sealed form is config_seal.go's: u64be(g), a 24 B nonce, the plaintext padded to a multiple of 256 B, and the
 // AEAD's 16 B tag. Those sizes are that format's and a cipher's, so they stay its constants. A rule's path is at most
@@ -20,14 +29,30 @@
 package sidecar
 
 import (
+	"errors"
 	"time"
 
 	"golang.org/x/crypto/chacha20poly1305"
 )
 
-// A RepoPrefixRules' limits: the five every verifier of the log holds alike, then a reader's and the repair's
-// (DESIGN-DETAILS 16.2.11).
+// The prefix rules are dark on this device or at this verifier (AclPrefixSettings.Enabled false, the launch default):
+// QD-1032 deferred them to Later, so nothing files a RepoPrefixRules, shows the rules, repairs or pin-pushes under
+// them. A team that needs a writer held to part of a repo gives that part a repo of its own (D-ACL-11).
+var ErrAclPrefixRulesDeferred = errors.New("prefix write rules are deferred past launch (QD-1032): this release files and enforces none; give each writer that needs its own prefix a repo of its own (a repo per prefix, D-ACL-11)")
+
+// A RepoPrefixRules' limits: the switch, then the five every verifier of the log holds alike, then a reader's and the
+// repair's (DESIGN-DETAILS 16.2.11).
 type AclPrefixSettings struct {
+	// Whether the client-checked prefix write rules run: false, deferred to Later (QD-1032). Off, a log refuses every
+	// RepoPrefixRules at its position, ErrConfigRuleMissing as for any type whose rule this release does not carry,
+	// so it keeps its place in the chain, api and every reader refuse it alike and the log goes on (FS-102), and its
+	// statement number 0x1111 stays reserved; no filer signs one (ErrAclPrefixRulesDeferred); and an EvsClient judges
+	// no push against the rows' sets, walks nothing back, journals, alarms, repairs and pin-pushes nothing, whatever
+	// rows a base handed it, as 16.2.12's release that does not enforce reads a ruled repo. Like the format limits below
+	// it is every verifier's alike: on comes only with a release every device and api of a network runs, and the rules'
+	// own tests run with it on.
+	Enabled bool
+
 	// The longest RepoPrefixRules.sealed_rules, in bytes: 65,536 (64 KiB), which with config_seal's 48 B of framing
 	// holds 255 blocks of 256 B of padded rules, room for RuleMaxCount rules of deep paths. An id-level rule: a longer
 	// body is refused at api and by every reader. Non-positive takes no set.
@@ -93,9 +118,11 @@ type AclPrefixSettings struct {
 	PinPushRetryCount int
 }
 
-// DESIGN-DETAILS 16.2.11's values. A fresh value each call.
+// DESIGN-DETAILS 16.2.11's values, the rules off as QD-1032 has them at launch. A fresh value each call.
 func DefaultAclPrefixSettings() *AclPrefixSettings {
 	return &AclPrefixSettings{
+		Enabled: false,
+
 		SealedMaxByteCount:  64 * 1024,
 		SetMaxCount:         256,
 		RuleMaxCount:        256,

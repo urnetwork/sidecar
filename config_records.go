@@ -59,7 +59,9 @@ var configStatementTypes = map[bridge.SignedType]configStatementType{
 	bridge.SignedType_SIGNED_AUDIT_OPT_IN:    {purpose: bridge.SignedPurposeAuthority, body: (*protocol.AuditOptIn)(nil)},
 	bridge.SignedType_SIGNED_AUDIT_OPT_OUT:   {purpose: bridge.SignedPurposeAuthority, body: (*protocol.AuditOptOut)(nil)},
 	// reserved at M2 so that no verifier refuses it as unknown and forks at a repo's first set (QD-212; DESIGN-DETAILS
-	// 16.2.12)
+	// 16.2.12). Deferred to Later (QD-1032), it keeps its number and its parse: a log refuses each at its position while
+	// its prefix rules are dark (acl_statement.go), the log's rule for a type whose rule this release does not carry,
+	// so the entry keeps its place in the chain and nothing forks or stops on it
 	bridge.SignedType_SIGNED_REPO_PREFIX_RULES: {purpose: bridge.SignedPurposeAcl, body: (*protocol.RepoPrefixRules)(nil)},
 
 	bridge.SignedType_SIGNED_GENESIS:            {purpose: bridge.SignedPurposeAuthority, body: (*bridge.Genesis)(nil)},

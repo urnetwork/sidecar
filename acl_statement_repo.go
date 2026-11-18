@@ -20,7 +20,9 @@
 //	RepoPrefixRules a repo admin or a config writer, by RepoVersioning's test, only in a general repo that is not
 //	                deleted; sealed_rules 48 B and a positive multiple of 256 B, at most SealedMaxByteCount, read by
 //	                its length alone; fewer than SetMaxCount sets in the repo's rows (DESIGN-DETAILS 16.2.2). Code
-//	                from M2 checks it and folds its row, and nothing enforces a rule until M6 (D-PHASE-9; QD-212)
+//	                from M2 checks it and folds its row (D-PHASE-9; QD-212). Deferred to Later (QD-1032): the log
+//	                refuses it at its position before this rule is asked while its prefix rules are dark, the launch
+//	                default (acl_statement.go), and the rule stays here for their return
 //
 // A repo admin counts while it stands, and in an owner-bound repo while it is a consented device of the owner, in
 // the directory while it is consented, either way not read_only. The config takes no access-log statement: no rows
