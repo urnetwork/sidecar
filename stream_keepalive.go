@@ -8,7 +8,11 @@
 //
 // The same loop rereads, for each sidecar peer with streams, its admission in this side's state: a peer the
 // state has since revoked, parked or let expire has its streams reset REVOKED, at the next wake, at most
-// PingTimeout after the state moved while streams run (rpc_admission.go's standing).
+// PingTimeout after the state moved while streams run (rpc_admission.go's standing). It rereads this side's
+// own admission too, since a sidecar not itself admitted gets no peer (§5.6): a side the state revokes
+// resets its sidecar streams REVOKED at its own next wake. So either end of a stream may reset it first,
+// each at its own wake on its own view of the state, and the other end reads that reset as its peer's
+// unless its own wake came first.
 //
 // One loop per dispatcher, started with the first stream, which waits on the clock, a change to the
 // streams or the dispatcher's end, so it never spins.
