@@ -3,18 +3,13 @@
 // item, pass, fail, missing or open. It adds no mechanism: each row runs the tests its owners wrote, and a failure or
 // a missing test goes back to the task that owns the mechanism and stays in the report until fixed.
 //
-// The rows are catalog.yml's M2-out cases, each run by convention (gate.go) but where its tests run elsewhere:
-//
-//   - T3 tests in server's evshost, which drive the evs block on the local stack's MinIO: FS-5's, which drives
-//     stock git through evsgit's world and has no builder (owner decision 548, QD-995), and FS-1's, FS-2's, FS-3's,
-//     FS-4's, FS-6's, FS-7's, FS-12's, FS-57's, FS-58's, FS-62's, FS-63's and FS-113's, each the convention's
-//     TestFs<n>OnT3 run through sidecart3.RunRow, and FS-10's twins by their real names, TestFs10TwinOnT3 and
-//     TestFs10RollbackTwinOnT3 (QD-1081). A case run on both tiers keeps its convention T2 test, and no test moves.
-//   - T3 tests in the convention's sidecart3 whose files build only under sidecar_localstack, as every T3 Net's
-//     stores need, a tag the convention's entry lacks, so the convention reads them missing at a real run: FS-14's,
-//     FS-16's, FS-19's config read, FS-102's and FS-124's, and the twins of FS-102's and FS-124's forged cases, by
-//     the convention's names with the local stack's tag (QD-1081's tag reading, applied to the cases it did not
-//     list).
+// The rows are catalog.yml's M2-out cases, each run by convention (gate.go), whose T3 entry carries
+// sidecar_localstack (QD-1085), but where its T3 tests run in server's evshost, which drives the evs block on the
+// local stack's MinIO: FS-5's, which drives stock git through evsgit's world and has no builder (owner decision 548,
+// QD-995), and FS-1's, FS-2's, FS-3's, FS-4's, FS-6's, FS-7's, FS-12's, FS-57's, FS-58's, FS-62's, FS-63's and
+// FS-113's, each the convention's TestFs<n>OnT3 run through sidecart3.RunRow, and FS-10's twins by their real names,
+// TestFs10TwinOnT3 and TestFs10RollbackTwinOnT3 (QD-1081). A case run on both tiers keeps its convention T2 test, and
+// no test moves.
 //
 // If a named test is renamed or its tags drift, its row reads missing, never pass, and server's
 // TestGateSweepsNameServerTestsDeclaredUnderTheirTags fails first. Every other case keeps the convention, so a case
@@ -48,10 +43,6 @@ import (
 	"github.com/urnetwork/sidecar/sidecartest"
 )
 
-// The tags a T3 test builds under when its file needs the local stack's MinIO, as every T3 Net's stores do: the
-// convention's and sidecar_localstack.
-const gateT3LocalstackTags = "sidecar_testhooks,sidecar_pending,sidecar_localstack"
-
 // The catalog's name for M2's exit.
 const gateM2OutGate = "M2-out"
 
@@ -63,7 +54,7 @@ var gateModulePaths = map[string]string{
 }
 
 // A case's tests with its T3 run named where it is: the convention's T2 test kept, and the convention's T3 entry
-// replaced by names in server's packagePath under the local stack's tags. names empty takes the convention's T3
+// replaced by names in server's packagePath under the convention's tags. names empty takes the convention's T3
 // name.
 func gateCaseT3Elsewhere(testCase *Case, packagePath string, names ...string) []*GateTest {
 	if len(names) == 0 {
@@ -72,7 +63,7 @@ func gateCaseT3Elsewhere(testCase *Case, packagePath string, names ...string) []
 	tests := []*GateTest{}
 	for _, test := range gateConventionalTests(testCase) {
 		if test.Repo == "server" {
-			test = &GateTest{Repo: "server", Package: packagePath, Tags: gateT3LocalstackTags, Stores: true, Names: names}
+			test = &GateTest{Repo: "server", Package: packagePath, Tags: gateT3Tags, Stores: true, Names: names}
 		}
 		tests = append(tests, test)
 	}
@@ -102,13 +93,6 @@ func gateM2Cases(catalog *Catalog) map[string][]*GateTest {
 		{rowId: "FS-62", packagePath: "./evshost"},
 		{rowId: "FS-63", packagePath: "./evshost"},
 		{rowId: "FS-113", packagePath: "./evshost"},
-		{rowId: "FS-14", packagePath: "./sidecart3"},
-		{rowId: "FS-16", packagePath: "./sidecart3"},
-		{rowId: "FS-19", caseName: "config-read", packagePath: "./sidecart3"},
-		{rowId: "FS-102", packagePath: "./sidecart3"},
-		{rowId: "FS-102", caseName: "forged", packagePath: "./sidecart3"},
-		{rowId: "FS-124", packagePath: "./sidecart3"},
-		{rowId: "FS-124", caseName: "forged", packagePath: "./sidecart3"},
 	}
 	cases := map[string][]*GateTest{}
 	for _, place := range places {
@@ -288,7 +272,7 @@ func gateStoreClockItem(catalog *Catalog, gate string) *GateItem {
 	return &GateItem{
 		Item: fmt.Sprintf("T3's store clock (QD-264; TEST-M2-07): %s read LastModified and their ttls on the schedule's clock, and FS-114 never does", casesText),
 		Tests: []*GateTest{
-			{Repo: "server", Package: "./sidecart3", Tags: gateT3LocalstackTags, Stores: true, Names: []string{"TestT3StoreClockReadsAgesOnTheScheduleClock", "TestT3AnAdvancePassesATtl", "TestT3EachNetHasItsOwnStoreClock"}},
+			{Repo: "server", Package: "./sidecart3", Tags: gateT3Tags, Stores: true, Names: []string{"TestT3StoreClockReadsAgesOnTheScheduleClock", "TestT3AnAdvancePassesATtl", "TestT3EachNetHasItsOwnStoreClock"}},
 			{Repo: "server", Package: "./sidecart3", Names: []string{"TestFs114RefusesTheStoreClock"}},
 		},
 	}
@@ -312,7 +296,7 @@ func gateM2OutItems(catalog *Catalog) []*GateItem {
 		{
 			Item: "Porcupine passes T3's histories with unknown outcomes, per ref, under §11.8's commit rule (§22.10's M2 exit; TEST-M2-02)",
 			Tests: []*GateTest{
-				{Repo: "server", Package: "./sidecart3", Tags: gateT3LocalstackTags, Stores: true, Names: []string{"TestFs1HistoriesLinearizeOnT3", "TestFs58HistoriesLinearizeOnT3"}},
+				{Repo: "server", Package: "./sidecart3", Tags: gateT3Tags, Stores: true, Names: []string{"TestFs1HistoriesLinearizeOnT3", "TestFs58HistoriesLinearizeOnT3"}},
 				{Repo: "server", Package: "./sidecart3", Tags: "sidecar_testhooks", Names: []string{"TestFs1HistoriesLinearizeOnT2", "TestFs58HistoriesLinearizeOnT2", "TestFs1HistoryMutantsFailOnT2"}},
 				{Repo: "server", Package: "./sidecart3", Names: []string{
 					"TestCheckLinearizablePassesAnUnknownOutcomeThatCommitted", "TestCheckLinearizablePassesAnUnknownOutcomeThatDidNot",
@@ -327,7 +311,7 @@ func gateM2OutItems(catalog *Catalog) []*GateItem {
 			Item: "§22.7's leak leg: a sidecar_leaktest build leaks into every class the scan covers, and the scan catches each, on T2 and on T3's stores (TEST-M2-09)",
 			Tests: []*GateTest{
 				{Repo: "sidecar", Package: "./sidecartest", Tags: "sidecar_leaktest", Names: []string{"TestEveryClassCatchesItsLeak", "TestAClassWithNoLeakFails", "TestRemovingAFormFromTheScannerFailsTheSelfTest"}},
-				{Repo: "server", Package: "./sidecart3", Tags: gateT3LocalstackTags + ",sidecar_leaktest", Stores: true, Names: []string{"TestT3EveryStoreClassCatchesItsLeak"}},
+				{Repo: "server", Package: "./sidecart3", Tags: gateT3Tags + ",sidecar_leaktest", Stores: true, Names: []string{"TestT3EveryStoreClassCatchesItsLeak"}},
 			},
 		},
 		&GateItem{
@@ -417,7 +401,7 @@ func gateM2OutItems(catalog *Catalog) []*GateItem {
 					"TestAdmissionSigners", "TestAdmissionOutsideTheAdminSet", "TestAdmissionRecoveryWindow", "TestAdmissionTwoFirstDevicesRacing", "TestAdmissionOwnerConsent",
 					"TestAdmissionCommitters", "TestAdmissionSeats", "TestAdmissionAgentsCostNoCommit", "TestAdmissionReadOnlyPageWorkers", "TestAdmissionCompromiseCascade", "TestAdmissionAuthKeys",
 				}},
-				{Repo: "server", Package: "./api", Tags: gateT3LocalstackTags, Stores: true, Names: []string{
+				{Repo: "server", Package: "./api", Tags: gateT3Tags, Stores: true, Names: []string{
 					"TestAdmissionSignersOnT3", "TestAdmissionOutsideTheAdminSetOnT3", "TestAdmissionRecoveryWindowOnT3", "TestAdmissionTwoFirstDevicesRacingOnT3", "TestAdmissionOwnerConsentOnT3",
 					"TestAdmissionCommittersOnT3", "TestAdmissionSeatsOnT3", "TestAdmissionAgentsCostNoCommitOnT3", "TestAdmissionReadOnlyPageWorkersOnT3", "TestAdmissionCompromiseCascadeOnT3", "TestAdmissionAuthKeysOnT3",
 				}},

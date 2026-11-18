@@ -6,12 +6,13 @@
 //
 // A case's tests are named by convention, never registered: its T2 test is TestFs<n><Case> in this package
 // under sidecar_testhooks, the thin test that calls RunRow, and its T3 test is TestFs<n><Case>OnT3 in
-// server's sidecart3, run on the private stores, where <Case> is the case's name in camel case and empty for
-// the main part. A test nobody wrote reads missing in the tool's report, never pass, so the file need not
+// server's sidecart3, run on the private stores under sidecar_localstack too, since every T3 Net hosts its stores
+// on the local stack's MinIO and every sidecart3 FS test file carries that tag (QD-1085), where <Case> is the
+// case's name in camel case and empty for the main part. A test nobody wrote reads missing in the tool's report, never pass, so the file need not
 // change as rows land. A sweep names a case's tests in place of the convention only for a row that is no
 // schedule, such as OPS's FS-54 and FS-55, which server's own tests show, or for a case whose tests run outside
 // the convention's packages, such as FS-5's, FS-73's and FS-72's rollback case's T3 tests in server's evshost
-// (owner decision 548).
+// (owner decision 548; QD-1081).
 //
 // Gates are named as the tool takes them: G0; Mn-in for milestone n's entry review; Mn for its exit
 // review, Mn-out in the catalog; every for each Gn-out (FS-55), every-out in the catalog; next before
@@ -195,6 +196,10 @@ func gateCaseCamel(caseName string) string {
 	return camel.String()
 }
 
+// The tags a case's T3 test builds under by convention, in sidecart3 as in evshost: the hooks, the pending
+// migration groups, and the local stack whose MinIO every T3 Net's stores are on (QD-1085).
+const gateT3Tags = "sidecar_testhooks,sidecar_pending,sidecar_localstack"
+
 // The thin T2 test a case's row writes in fs<n>_test.go, which calls RunRow.
 func GateT2TestName(testCase *Case) string {
 	return "TestFs" + strconv.Itoa(testCase.Row.Number) + gateCaseCamel(testCase.Name)
@@ -214,7 +219,7 @@ func gateConventionalTests(testCase *Case) []*GateTest {
 		tests = append(tests, &GateTest{Repo: "sidecar", Package: "./sidecartest/fault", Tags: "sidecar_testhooks", Names: []string{GateT2TestName(testCase)}})
 	}
 	if slices.Contains(tiers, TierT3) {
-		tests = append(tests, &GateTest{Repo: "server", Package: "./sidecart3", Tags: "sidecar_testhooks,sidecar_pending", Stores: true, Names: []string{GateT3TestName(testCase)}})
+		tests = append(tests, &GateTest{Repo: "server", Package: "./sidecart3", Tags: gateT3Tags, Stores: true, Names: []string{GateT3TestName(testCase)}})
 	}
 	return tests
 }
@@ -294,7 +299,8 @@ const gateFileHeader = `# §23.8's gate sweeps (TEST-M1-11; OPS-M1-07's tool): g
 # (hardware, production, people) the row also waits on, or the later gate a later-of case passes at, and reads open.
 # store_clock: true says the case's T3 run reads stored ages through T3's store clock (QD-264), which the report
 # names beside its outcome. A case's T2 test is TestFs<n><Case> in sidecar's sidecartest/fault and its T3 test
-# TestFs<n><Case>OnT3 in server's sidecart3, by convention, so this file does not change as rows land.
+# TestFs<n><Case>OnT3 in server's sidecart3 under sidecar_localstack too, by convention, so this file does not
+# change as rows land.
 `
 
 // gates.yml's bytes for catalog: every gate in review order, each with its rows.

@@ -134,9 +134,9 @@ func TestGateRunsItsRowsUnderSection228sRules(t *testing.T) {
 	}
 }
 
-// M2's rows name each T3 test where it runs: QD-1081's evshost cases and FS-10's twins by their real names, and the
-// sidecart3 cases whose files need the local stack's tag, each on the private stores with the local stack's tags and
-// each keeping the convention's T2 test; FS-5 runs on T3 alone.
+// M2's rows name each T3 test where it runs: QD-1081's evshost cases and FS-10's twins by their real names, which the
+// sweep names, and the sidecart3 cases, which the convention names under the local stack's tag (QD-1085), each on the
+// private stores with the convention's T3 tags and each keeping the convention's T2 test; FS-5 runs on T3 alone.
 func TestGateM2NamesEachT3TestWhereItRuns(t *testing.T) {
 	catalog := DefaultCatalog()
 	data, err := GateFile(catalog)
@@ -173,6 +173,9 @@ func TestGateM2NamesEachT3TestWhereItRuns(t *testing.T) {
 		{rowId: "FS-124", caseName: "forged", packagePath: "./sidecart3", names: []string{"TestFs124ForgedOnT3"}},
 	} {
 		testCase := catalog.Case(want.rowId, want.caseName)
+		if _, swept := gateM2Cases(catalog)[testCase.String()]; swept != (want.packagePath != "./sidecart3") {
+			t.Errorf("%s: named by the sweep %t, but its T3 test is in %s", testCase, swept, want.packagePath)
+		}
 		row := gateFileRow(file, "M2", want.rowId, want.caseName)
 		if testCase == nil || row == nil {
 			t.Errorf("M2 has no %s %q", want.rowId, want.caseName)
@@ -182,7 +185,7 @@ func TestGateM2NamesEachT3TestWhereItRuns(t *testing.T) {
 		if want.rowId != "FS-5" {
 			wantTests = append(wantTests, &GateTest{Repo: "sidecar", Package: "./sidecartest/fault", Tags: "sidecar_testhooks", Names: []string{GateT2TestName(testCase)}})
 		}
-		wantTests = append(wantTests, &GateTest{Repo: "server", Package: want.packagePath, Tags: gateT3LocalstackTags, Stores: true, Names: want.names})
+		wantTests = append(wantTests, &GateTest{Repo: "server", Package: want.packagePath, Tags: gateT3Tags, Stores: true, Names: want.names})
 		if !reflect.DeepEqual(row.Tests, wantTests) {
 			t.Errorf("%s at M2 runs %s, want %s", testCase, gateTestsStringForTest(row.Tests), gateTestsStringForTest(wantTests))
 		}
