@@ -26,8 +26,9 @@ package fault
 // sidecartest's own tests (directory_cost_cards_test.go); the index itself, whose heads the load prices and does not
 // store, so a forged head's fetch and alarm is directory_index_test.go's; the governor's FI-14 on T3's stores; and the
 // cold phone, which is the M6 case's. The physical peak with 3x bursts on the real engine is fs86_cards_evs.go's
-// schedule, which server's sidecar_directory_load_t3_test.go runs on T3's stores and the tests at the end of this
-// file run on T2's fakes, where it holds what was written and read and no time.
+// schedule, which server runs on T3's stores, at reduced scale on the local stack (sidecar_directory_load_t3_test.go)
+// and nightly for a whole peak hour on the 4-host layouts, the row's reading (sidecar_directory_load_layout_t3_test.go),
+// and which the tests at the end of this file run on T2's fakes, where it holds what was written and read and no time.
 
 import (
 	"context"
