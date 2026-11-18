@@ -386,7 +386,7 @@ func TestDirectoryEvsCardsReadStreamsFollowsMore(t *testing.T) {
 		t.Fatalf("read through %v", held)
 	}
 	tooMany := []*sidecar.DirectoryStreamRead{}
-	for range sidecar.DirectoryStreamReadCount + 1 {
+	for range sidecar.DefaultEvsFormatSettings().ReadStreamMaxRefCount + 1 {
 		tooMany = append(tooMany, &sidecar.DirectoryStreamRead{WriterSidecarId: sidecar.NewId()})
 	}
 	before, _, _ := directory.requestCounts()

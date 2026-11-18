@@ -10,7 +10,7 @@
 //	          listed head is named by its id: the erasure ref's, the cards ref's (the shared ref named cards, §11.6's
 //	          ref ids), a writer's stream where an owned ref's id is its owner's ur/<sidecar_id>/record
 //	          (RecordStreamRefName), anything else Other. Heads are evs's word: what a sync acts on it reads verified
-//	streams   POST .../read {refs} (EvsRepo.ReadStreams), up to DirectoryStreamReadCount streams in the order asked, each
+//	streams   POST .../read {refs} (EvsRepo.ReadStreams), up to ReadStreamMaxRefCount streams in the order asked, each
 //	          walked and verified from the version the reader holds and C there (the chain row), and pinned once read to
 //	          its head. Each version's payload is held to the creates-only rule as far as its entry versions show it
 //	          (EvsVerifier.VerifyPayloadRefRules, with no path state: a directory delta's base on its newest version is
@@ -327,9 +327,9 @@ func (self *DirectoryEvsCards) raisePin(repoId Id, refId Id, walked []*EvsVerifi
 	return self.client.verifier.Pin(&EvsVerifiedHead{RepoId: repoId, RefId: refId, Head: &protocol.EvsHeadSummary{}, Version: last.Version, Chain: last.Chain})
 }
 
-// Up to DirectoryStreamReadCount streams after the versions held: see the file header's streams row.
+// Up to ReadStreamMaxRefCount streams after the versions held: see the file header's streams row.
 func (self *DirectoryEvsCards) ReadStreams(ctx context.Context, repoId Id, reads []*DirectoryStreamRead) ([]*DirectoryStreamVersions, error) {
-	if len(reads) == 0 || DirectoryStreamReadCount < len(reads) {
+	if len(reads) == 0 || DefaultEvsFormatSettings().ReadStreamMaxRefCount < len(reads) {
 		return nil, directoryEvsInvalid()
 	}
 	repo := self.client.Repo(repoId)

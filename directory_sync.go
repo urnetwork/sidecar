@@ -41,9 +41,6 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
-// §11.9's streams row: refs one POST .../read {refs} carries, a format value.
-const DirectoryStreamReadCount = 64
-
 var (
 	// No DirectoryCards is bound yet: nothing was read or written.
 	ErrDirectoryCardsUnavailable = errors.New("directory cards unavailable")
@@ -172,8 +169,8 @@ type DirectoryCards interface {
 	// GET .../refs?moved_after=: the refs whose last commit raised the push sequence past movedAfter; 0 lists every
 	// ref, as GET .../refs does.
 	Refs(ctx context.Context, repoId Id, movedAfter uint64) (*DirectoryRefListing, error)
-	// POST .../read {refs}: up to DirectoryStreamReadCount streams after their pins, each answering its versions,
-	// more or behind, in the order asked.
+	// POST .../read {refs}: up to EvsFormatSettings.ReadStreamMaxRefCount streams, §11.9's 64, after their pins, each
+	// answering its versions, more or behind, in the order asked.
 	ReadStreams(ctx context.Context, repoId Id, reads []*DirectoryStreamRead) ([]*DirectoryStreamVersions, error)
 	// GET .../log?ref=&since=: one page of a stream's versions after afterVersion, for a pin older than the window.
 	ReadStreamLog(ctx context.Context, repoId Id, writerSidecarId Id, afterVersion uint64) (*DirectoryStreamVersions, error)
@@ -363,7 +360,7 @@ func (self *DirectoryClient) syncFrom(ctx context.Context, cards DirectoryCards,
 
 	// streams: 64 to a request; a stream past the frame joins the next request, one behind the window pages the log
 	for 0 < len(reads) {
-		batch := reads[:min(len(reads), DirectoryStreamReadCount)]
+		batch := reads[:min(len(reads), DefaultEvsFormatSettings().ReadStreamMaxRefCount)]
 		reads = reads[len(batch):]
 		results, err := cards.ReadStreams(ctx, directoryId, batch)
 		if err != nil {
