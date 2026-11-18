@@ -6,15 +6,21 @@ package checker
 
 import (
 	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"go/parser"
 	"go/token"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
+
+	"golang.org/x/crypto/chacha20poly1305"
 )
 
 func testOctets(t *testing.T, spaced string) []byte {
@@ -48,7 +54,9 @@ func TestKeyScheduleReproducesRfc8448(t *testing.T) {
 	}
 }
 
-// A fixed transcript of an honest connection, as checker_agreement_test.go wrote it.
+// A fixed transcript of an honest connection, as checker_agreement_test.go wrote it: per leg and mode,
+// one whose header block is one record, and one (-split-name) whose header block takes two, the first
+// ending inside a field's name.
 type testConnection struct {
 	name       string
 	Transcript *Transcript
@@ -58,7 +66,7 @@ type testConnection struct {
 func testConnections(t *testing.T) []*testConnection {
 	t.Helper()
 	paths, err := filepath.Glob(filepath.Join("testdata", "*.json"))
-	if err != nil || len(paths) != 6 {
+	if err != nil || len(paths) != 12 {
 		t.Fatalf("%d fixed transcripts, %v", len(paths), err)
 	}
 	var connections []*testConnection
@@ -78,6 +86,85 @@ func testConnections(t *testing.T) []*testConnection {
 
 func (self *testConnection) tls12() bool {
 	return strings.HasPrefix(self.name, "tls12")
+}
+
+func (self *testConnection) data() bool {
+	return strings.Contains(self.name, "-data")
+}
+
+func (self *testConnection) splitName() bool {
+	return strings.Contains(self.name, "-split-name")
+}
+
+// The first application record's sequence number in each direction.
+func (self *testConnection) firstSeq() uint64 {
+	if self.tls12() {
+		return 1
+	}
+	return 0
+}
+
+// The witness of a part by its index.
+func (self *testConnection) witness(t *testing.T, index uint32) *PartWitness {
+	t.Helper()
+	return self.Witnesses[self.partEvent(t, index)]
+}
+
+// Seals a server record's plaintext again under the part's witness's server key, at the record's place in
+// the stream and in the part's witness, as the MX would have sent it: 1.3's nonce the IV XOR the
+// sequence number under the record's header, 1.2's the salt and the record's own explicit nonce under the
+// sequence number, type, version and length.
+func (self *testConnection) resealServerRecord(t *testing.T, index uint32, i int, plaintext []byte) {
+	t.Helper()
+	witness := self.witness(t, index)
+	previous := uint64(0)
+	if 1 < index {
+		previous = self.Transcript.Events[self.partEvent(t, index-1)].Part.ServerRecordCount
+	}
+	position := previous + uint64(i)
+	seq := self.firstSeq() + position
+	var aead cipher.AEAD
+	var err error
+	if len(witness.ServerKey) == chacha20poly1305.KeySize {
+		aead, err = chacha20poly1305.New(witness.ServerKey)
+	} else {
+		var block cipher.Block
+		if block, err = aes.NewCipher(witness.ServerKey); err == nil {
+			aead, err = cipher.NewGCM(block)
+		}
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []*Event
+	keyPart := false
+	for _, event := range self.Transcript.Events {
+		keyPart = keyPart || (event.Part != nil && event.Part.Index == 1)
+		if keyPart && event.ServerRecord != nil {
+			events = append(events, event)
+		}
+	}
+	event := events[position]
+	var sealed []byte
+	if self.tls12() {
+		explicit := event.ServerRecord[recordHeaderBytes : recordHeaderBytes+explicitNonceBytes]
+		additional := binary.BigEndian.AppendUint64(nil, seq)
+		additional = append(additional, recordApplicationData, 3, 3, byte(len(plaintext)>>8), byte(len(plaintext)))
+		size := explicitNonceBytes + len(plaintext) + tagBytes
+		sealed = append([]byte{recordApplicationData, 3, 3, byte(size >> 8), byte(size)}, explicit...)
+		sealed = aead.Seal(sealed, append(slices.Clone(witness.ServerIv), explicit...), plaintext, additional)
+	} else {
+		nonce := slices.Clone(witness.ServerIv)
+		for j := range 8 {
+			nonce[len(nonce)-1-j] ^= byte(seq >> (8 * j))
+		}
+		size := len(plaintext) + tagBytes
+		header := []byte{recordApplicationData, 3, 3, byte(size >> 8), byte(size)}
+		sealed = aead.Seal(header, nonce, plaintext, header)
+	}
+	event.ServerRecord = sealed
+	witness.ServerPlaintexts = slices.Clone(witness.ServerPlaintexts)
+	witness.ServerPlaintexts[i] = plaintext
 }
 
 // The event of a part by its index.
@@ -112,9 +199,11 @@ func TestEveryFixedHonestConnectionPasses(t *testing.T) {
 
 func TestTheCheckerRefusesEachBreakByItsCheck(t *testing.T) {
 	cases := []struct {
-		name   string
-		check  string
-		mutate func(t *testing.T, connection *testConnection)
+		name  string
+		check string
+		// Whether the break applies to a connection. Nil is every one.
+		applies func(connection *testConnection) bool
+		mutate  func(t *testing.T, connection *testConnection)
 	}{
 		{name: "a preamble with a path in its domain", check: "preamble", mutate: func(t *testing.T, connection *testConnection) {
 			connection.Transcript.Preamble.RecipientDomain = "a.example>\r\nRCPT TO:<victim@other.example"
@@ -148,13 +237,53 @@ func TestTheCheckerRefusesEachBreakByItsCheck(t *testing.T) {
 			connection.Transcript.Events[connection.partEvent(t, 2)].Part.Index = 3
 		}},
 		{name: "the MX's reply relayed twice", check: "E3", mutate: func(t *testing.T, connection *testConnection) {
-			// pi2 then claims more server records than were relayed by its time
+			// the env part then claims more server records than were relayed by its time
 			envelope := connection.partEvent(t, 2)
 			connection.Transcript.Events[envelope].Part.ServerRecordCount += 1
+		}},
+
+		// DESIGN-DETAILS 3.6's cells, as far as a fixed transcript holds them without this module
+		{name: "a later part opening C under another blind", check: "Z1", mutate: func(t *testing.T, connection *testConnection) {
+			witness := connection.witness(t, 2)
+			witness.KeyBlind = slices.Clone(witness.KeyBlind)
+			witness.KeyBlind[len(witness.KeyBlind)-1] ^= 1
+		}},
+		{name: "header record 2 scanned from the start state", check: "Z5", applies: (*testConnection).splitName, mutate: func(t *testing.T, connection *testConnection) {
+			witness := connection.witness(t, 4)
+			if witness.CarryInState == scanPosLf {
+				t.Fatalf("%s: record 1 left the start state", connection.name)
+			}
+			witness.CarryInState = scanPosLf
+		}},
+		{name: "body record 2 scanned from the start state", check: "Z6", applies: func(connection *testConnection) bool { return connection.data() && !connection.splitName() }, mutate: func(t *testing.T, connection *testConnection) {
+			witness := connection.witness(t, 5)
+			if witness.CarryInState == scanPosLf {
+				t.Fatalf("%s: body record 1 left the start state", connection.name)
+			}
+			witness.CarryInState = scanPosLf
+		}},
+		{name: "a reply_count one more than the records hold", check: "Z8", mutate: func(t *testing.T, connection *testConnection) {
+			// MAIL's reply continued into the first RCPT's, in its length
+			plaintext := connection.witness(t, 3).ServerPlaintexts[0]
+			if !bytes.HasPrefix(plaintext, []byte("250 ")) {
+				t.Fatalf("%s: a MAIL reply of %q", connection.name, plaintext)
+			}
+			continued := slices.Clone(plaintext)
+			continued[len("250")] = '-'
+			connection.resealServerRecord(t, 3, 0, continued)
+		}},
+		{name: "a first message record before 2 + R replies are proven", check: "E3", mutate: func(t *testing.T, connection *testConnection) {
+			message := connection.Transcript.Events[connection.partEvent(t, 3)].Part
+			message.ServerRecordCount = connection.Transcript.Events[connection.partEvent(t, 2)].Part.ServerRecordCount
+			message.ReplyCount = 0
+			connection.witness(t, 3).ServerPlaintexts = nil
 		}},
 	}
 	for _, c := range cases {
 		for _, connection := range testConnections(t) {
+			if c.applies != nil && !c.applies(connection) {
+				continue
+			}
 			c.mutate(t, connection)
 			checks := testChecks(Check(connection.Transcript, connection.Witnesses))
 			if len(checks) != 1 || checks[0] != c.check {
@@ -276,6 +405,118 @@ func TestTheCheckerHoldsTheIssuedValuesToTheirSpelling(t *testing.T) {
 		mutate(value)
 		if checkPreambleForms(DefaultCheckSettings(), value) == nil {
 			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+// The scan's state between records, read from DESIGN-DETAILS 3.2.4's definition over the octets so far:
+// pos, an unfinished name, the run of a line that began in the record and the literals it may still be,
+// and whether a single field's line ended at the record's end.
+func TestTheCheckerReadsTheScanStateByItsDefinition(t *testing.T) {
+	const first = "From: <alice@net.root.example>\r\n"
+	run := func(octets int) uint32 { return uint32(octets) << 3 }
+	prefix := func(literal int) uint32 { return 1 << (10 + literal) }
+	for _, c := range []struct {
+		name        string
+		header      string
+		recordStart int
+		first       bool
+		want        uint32
+	}{
+		{name: "a name unfinished", header: first + "X-Spa", want: 1<<2 | run(5)},
+		{name: "a single field's name begun", header: first + "Feedb", want: 1<<2 | run(5) | prefix(3)},
+		{name: "a name begun in another case", header: first + "MESSAGE-", want: 1<<2 | run(8) | prefix(1)},
+		{name: "the fixed signature's prefix begun", header: first + "DKIM-Signature: v=1; a", want: run(22) | prefix(5)},
+		{name: "the fixed signature's prefix in another case", header: first + "dkim-signature: v=1; a", want: run(22)},
+		{name: "a line past its colon", header: first + "Subject: hi", want: run(11)},
+		{name: "a line begun in an earlier record", header: first + "X-Long-name: v", recordStart: len(first) + 6, want: run(127)},
+		{name: "a line past 126 octets", header: first + "X: " + strings.Repeat("v", 200), want: run(127)},
+		{name: "a continuation", header: first + "X: v\r\n continued", want: 0},
+		{name: "a CR at the end", header: first + "A: b\r", want: scanPosCr | run(5)},
+		{name: "a single field's line ended in the first record", header: first, first: true, want: scanPosLf | 1<<16},
+		{name: "a single field's line ended in a later record", header: first, want: scanPosLf},
+		{name: "another line ended", header: first + "Subject: hi\r\n", first: true, want: scanPosLf},
+	} {
+		if got := headerState([]byte(c.header), c.recordStart, c.first, false); got != c.want {
+			t.Errorf("%s: state %#x, want %#x", c.name, got, c.want)
+		}
+	}
+	// the one-click field is a single field on BULK alone
+	post := first + "List-Unsubscribe-Post: List-Unsubscribe=One-Click\r\n"
+	if got := headerState([]byte(post), 0, true, false); got != scanPosLf {
+		t.Errorf("List-Unsubscribe-Post ended, not BULK: state %#x", got)
+	}
+	if got := headerState([]byte(post), 0, true, true); got != scanPosLf|1<<16 {
+		t.Errorf("List-Unsubscribe-Post ended, BULK: state %#x", got)
+	}
+	for body, want := range map[string]uint32{"": scanPosLf, "a": scanPosLine, "a\r": scanPosCr, "a\r\n": scanPosLf, "a\r\n.": scanPosDot, ".": scanPosDot, "a.": scanPosLine, "..": scanPosLine} {
+		if got := bodyState([]byte(body)); got != want {
+			t.Errorf("body %q: state %d, want %d", body, got, want)
+		}
+	}
+}
+
+// DESIGN-DETAILS 3.2.4 states Z5 record by record, so a rule is refused at the record that breaks it and
+// not when the block is whole: an empty line before the block's end (H3), and a single field's line that
+// ended with the first record continued by the second (H6).
+func TestTheCheckerRefusesEachHeaderRuleAtItsRecord(t *testing.T) {
+	preamble := &Preamble{
+		HeaderFromDomain: "net.root.example", DkimSelector: "s1", MessageId: "id@net.root.example",
+		XUrRef: "1.ref", FeedbackId: "n:c:token:urnetwork",
+	}
+	record := "From: Alice Example <alice@net.root.example>\r\n" +
+		"Message-ID: <id@net.root.example>\r\n" +
+		"X-UR-Ref: 1.ref\r\n" +
+		"DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; h=from:date:message-id:x-ur-ref:feedback-id; d=net.root.example; s=s1; b=x\r\n" +
+		"Feedback-ID: n:c:token:urnetwork\r\n"
+	settings := DefaultCheckSettings()
+	if err := checkHeaderSoFar(settings, preamble, []byte(record), len(record), false); err != nil {
+		t.Fatalf("an honest first record: %v", err)
+	}
+	if err := checkHeaderSoFar(settings, preamble, []byte(record+"\r\n"), len(record)+2, true); err != nil {
+		t.Fatalf("an honest one-record block: %v", err)
+	}
+	// H3: the empty line in the first of two records is refused there
+	early := record + "\r\nX: y\r\n"
+	if err := checkHeaderSoFar(settings, preamble, []byte(early), len(early), false); err == nil {
+		t.Error("an empty line inside the first of two records: accepted at that record")
+	}
+	// and in a later record that is not the last
+	later := record + "X: y\r\n\r\nX: z\r\n"
+	if err := checkHeaderSoFar(settings, preamble, []byte(later), len(record), false); err == nil {
+		t.Error("an empty line inside a later record that is not the last: accepted at that record")
+	}
+	// H6: Feedback-ID ends the first record, and the second continues it
+	continued := record + " a continuation\r\nX: y\r\n"
+	if err := checkHeaderSoFar(settings, preamble, []byte(continued), len(record), false); err == nil {
+		t.Error("a single field continued across the first boundary: accepted at the second record")
+	}
+	if err := checkHeaderSoFar(settings, preamble, []byte(record+"X: y\r\n"), len(record), false); err != nil {
+		t.Errorf("a field after the single field across the first boundary: %v", err)
+	}
+	// a continuation of a field that is no single one, across the boundary
+	other := record + "Subject: hi\r\n"
+	if err := checkHeaderSoFar(settings, preamble, []byte(other+" there\r\n"), len(other), false); err != nil {
+		t.Errorf("Subject continued across the first boundary: %v", err)
+	}
+}
+
+// An adversarial witness whose keys or IVs are not the session's widths is refused, never a crash: Z2
+// opens nothing under them, and they open no C.
+func TestTheCheckerRefusesKeysOfOtherWidths(t *testing.T) {
+	for name, mutate := range map[string]func(witness *PartWitness){
+		"a short client IV":         func(witness *PartWitness) { witness.ClientIv = witness.ClientIv[:3] },
+		"a long server IV":          func(witness *PartWitness) { witness.ServerIv = append(slices.Clone(witness.ServerIv), 0) },
+		"a client key of 24 octets": func(witness *PartWitness) { witness.ClientKey = make([]byte, 24) },
+		"no server key":             func(witness *PartWitness) { witness.ServerKey = nil },
+		"a client key twice over":   func(witness *PartWitness) { witness.ClientKey = append(slices.Clone(witness.ClientKey), witness.ClientKey...) },
+	} {
+		for _, connection := range testConnections(t) {
+			mutate(connection.witness(t, 2))
+			checks := testChecks(Check(connection.Transcript, connection.Witnesses))
+			if !slices.Contains(checks, "Z1") {
+				t.Errorf("%s, %s: %v, want Z1 among them", name, connection.name, checks)
+			}
 		}
 	}
 }

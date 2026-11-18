@@ -747,6 +747,15 @@ func checkHeaderPlacement(settings *CheckSettings, preamble *Preamble, header []
 		start = next
 	}
 	if len(header) != firstEnd {
+		// a single field's line that ended with the first record is not continued by the next (H6)
+		if header[firstEnd-1] == '\n' && (header[firstEnd] == ' ' || header[firstEnd] == '\t') {
+			start := bytes.LastIndexByte(header[:firstEnd-1], '\n') + 1
+			for literal := range 5 {
+				if literalCounts(literal, bulk) && beginsLiteral(header[start:firstEnd], literal, len(scanLiterals[literal].text)) {
+					return fmt.Errorf("Z5: %q is continued in the header block's second record", scanLiterals[literal].text)
+				}
+			}
+		}
 		return nil
 	}
 	// the first record alone: each once, in its literal form, whole inside it
@@ -797,11 +806,13 @@ func checkHeaderPlacement(settings *CheckSettings, preamble *Preamble, header []
 	return nil
 }
 
-// Z5's rules over the header records so far that a whole block's check cannot wait for: no leading
-// continuation, no empty line, each line a field or a continuation whose name holds 21-7E but ':' and
-// does not start with '.', CR and LF in pairs but for a CR the next record answers, and a single field's
-// line not continued in a later record.
-func checkHeaderSoFar(settings *CheckSettings, preamble *Preamble, header []byte, firstEnd int) error {
+// Z5's rules over the header records so far that a whole block's check cannot wait for, each refused at
+// the record that breaks it, as DESIGN-DETAILS 3.2.4 states them record by record: no leading
+// continuation, no empty line but the block's final one, which lies whole in its last record (H13), each
+// line a field or a continuation whose name holds 21-7E but ':' and does not start with '.', CR and LF in
+// pairs but for a CR the next record answers, and a single field's line not continued in a later record.
+// whole says the records so far are the whole block.
+func checkHeaderSoFar(settings *CheckSettings, preamble *Preamble, header []byte, firstEnd int, whole bool) error {
 	for i, octet := range header {
 		switch {
 		case octet == '\t' || ' ' <= octet && octet <= '~':
@@ -827,13 +838,18 @@ func checkHeaderSoFar(settings *CheckSettings, preamble *Preamble, header []byte
 			next = start + end + 1
 		}
 		line := header[start:next]
+		lineStart := start
 		start = next
 		if line[0] == ' ' || line[0] == '\t' {
 			continue
 		}
 		if line[0] == '\r' {
-			// the block's final empty line ends it, and the whole block's check reads that
-			continue
+			// the block's final empty line ends it, and the whole block's check reads that; any other
+			// line that starts with CR ends the block early, wherever the records are cut (H3)
+			if whole && lineStart == len(header)-len(crlf) {
+				continue
+			}
+			return errors.New("Z5.2: an empty line before the end")
 		}
 		name, _, found := bytes.Cut(line, []byte(":"))
 		complete := bytes.HasSuffix(line, []byte(crlf))

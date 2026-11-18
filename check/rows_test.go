@@ -523,8 +523,8 @@ var failsOnRows = []failsOnRow{
 		row: "x9", item: "what merge-out's TestX9ReadyForMain refuses before connect's main, at the gate's milestone",
 		checkoutTest: "TestX9ReadyForMain",
 		plantedTests: []string{
-			"TestX9ReadyForMainRefusesAMarkerWithNoDefaultOffTest", "TestX9ReadyForMainRefusesC19WithoutItsSweep",
-			"TestX9ReadyForMainRefusesARowDueWithNoMarker", "TestX9ReadyForMainPassesAReadyConnect",
+			"TestX9ReadyForMainRefusesAMarkerWithNoDefaultOffTest", "TestX9ReadyForMainRefusesARowDueWithNoMarker",
+			"TestX9ReadyForMainPassesAReadyConnect",
 		},
 	},
 

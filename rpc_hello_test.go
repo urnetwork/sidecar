@@ -150,9 +150,6 @@ type testRpcPair struct {
 	// the network's verified state every side added from now on reads for M2's admission check; nil
 	// runs M1's first-use pins (rpc_admission_test.go)
 	authority *testAdmissionAuthority
-	// a fake of connect's window ledger for each side added from now on; nil runs the client's own
-	// (rpc_marked_pair_test.go)
-	newPeerWindows func(side *testRpcSide) subprotocolPeerWindows
 	// sides added from now on read real time, as net.Conn's deadlines do (stream_conn_test.go)
 	realClock bool
 }
@@ -192,11 +189,8 @@ type testRpcSide struct {
 	contractClass connectprotocol.ContractClass
 	// an edge's side (stream_edge.go): its frames, and a sidecar's to it, ride Service contracts
 	edge bool
-	// set before the side runs: its window ledger fake and the log it shares with onSend, which hears each
-	// send before it is delivered or dropped
-	peerWindows  *testPeerWindows
-	windowEvents *testEvents
-	onSend       func(envelope *protocol.Envelope, destinationId connect.Id)
+	// set before the side runs: hears each send before it is delivered or dropped
+	onSend func(envelope *protocol.Envelope, destinationId connect.Id)
 }
 
 // The side's identity for a new side: fresh seeds and ids.
@@ -273,11 +267,6 @@ func (self *testRpcPair) add(identity *testRpcIdentity, adjust func(settings *Si
 		sentCount:     NewMonitorValue(0),
 	}
 	copy(side.clientPublicKey[:], verified.ClientPublicKey)
-	var peerWindows subprotocolPeerWindows
-	if self.newPeerWindows != nil {
-		peerWindows = self.newPeerWindows(side)
-		side.peerWindows, _ = peerWindows.(*testPeerWindows)
-	}
 	client := newTestRequiredClient(t, ctx)
 	subprotocol, err := newSubprotocol(ctx, &SubprotocolEnv{
 		Client:    client,
@@ -293,7 +282,7 @@ func (self *testRpcPair) add(identity *testRpcIdentity, adjust func(settings *Si
 			side.events <- event
 		},
 		Admissions: self.admissionsFor(identity.sidecarId, clock),
-	}, &subprotocolSeams{clientPublicKeyOf: testRpcClientPublicKeyOf, send: side.send, peerWindows: peerWindows, clientId: clientId})
+	}, &subprotocolSeams{clientPublicKeyOf: testRpcClientPublicKeyOf, send: side.send, clientId: clientId})
 	if err != nil {
 		t.Fatal(err)
 	}
