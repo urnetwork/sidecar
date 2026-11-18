@@ -3,9 +3,17 @@
 // is the point, since a break that trips two checks shows neither doing work the other does not. Each
 // break must be pinned on one check, the same one, by two readers written apart: the gate, whose
 // verifier is relationCheckPart over the edge's own statement, so that a part it refuses names every
-// check of the relation failing there; and smtpproof/checker, which reads SPEC.md and nothing of this
-// module. Then a Z break must be refused by the circuit at its part, and an E break by edgeSession on
-// its own, before any circuit is asked.
+// check of the relation failing there; and smtpproof/checker, which reads SPEC.md and DESIGN-DETAILS 3.2
+// and nothing of this module. Then a Z break must be refused by the circuit at its part, and an E break
+// by edgeSession on its own, before any circuit is asked.
+//
+// Parts are bound to one key part (DESIGN-DETAILS 3.2): part 1 (key) proves Z1 and commits to the keys,
+// part 2 (env) the envelope with the EHLO reply, part 3 (msg) the header block's first record with the
+// envelope's replies, then a hdr part a later header record, and in DATA mode a body part a body record.
+// DESIGN-DETAILS 3.6 adds five cells to the table, which testDetailsCells names: a later part under other
+// keys than the key part committed, a header or body record scanned from another state than the record
+// before left, a reply_count the records do not hold, and a first message record before the envelope's
+// replies are proven.
 //
 // mutate_edge_test.go runs the E rows and mutate_circuit_test.go the Z rows, one test a check.
 // TestMutatedWitnessTable holds this registry to every cell, and to testdata/mutations/table.md, the
@@ -32,11 +40,50 @@ var testMutationChecks = []string{"E1", "E2", "E3", "Z1", "Z2", "Z3", "Z4", "Z5"
 type testMutation struct {
 	check string
 	name  string
+	// The DESIGN-DETAILS 3.6 cell the break fills, as testDetailsCells words it, or none.
+	cell string
 	// Whether the break applies to a leg and mode. Nil is every one.
 	applies func(c *testLegCase) bool
+	// Whether the break starts from a send whose header block takes two records, the first cut inside a
+	// field's name (ExportSplitNameCapture), rather than ExportCapture's one-record block.
+	splitName bool
 	// The part a Z break's circuit refuses. Unused for an E break, which the gate refuses itself.
-	part   func(c *testLegCase) uint32
+	part   func(c *testLegCase) *testRefusedPart
 	mutate func(t *testing.T, c *testLegCase, capture *smtpproof.ExportedCapture)
+}
+
+// A part by its index and the kind the gate gives it, as its catalog shape names it.
+type testRefusedPart struct {
+	index uint32
+	kind  string
+}
+
+func (self *testRefusedPart) String() string {
+	return fmt.Sprintf("part %d (%s)", self.index, self.kind)
+}
+
+// A cell DESIGN-DETAILS 3.6 adds to the table: a check and what its break does.
+type testDetailsCell struct {
+	check string
+	text  string
+	// Whether the check applies in DATA mode alone there.
+	dataOnly bool
+}
+
+const (
+	testCellLaterKeys    = "a later part opens other keys than the key part committed"
+	testCellForgedScan   = "a scan started from another state than the record before left"
+	testCellReplyCount   = "reply_count is not what the records hold"
+	testCellEarlyMessage = "a first message record before 2 + R replies are proven"
+)
+
+// DESIGN-DETAILS 3.6's new cells, each of which must hold a break in every TLS version and mode it names.
+var testDetailsCells = []*testDetailsCell{
+	{check: "Z1", text: testCellLaterKeys},
+	{check: "Z5", text: testCellForgedScan},
+	{check: "Z6", text: testCellForgedScan, dataOnly: true},
+	{check: "Z8", text: testCellReplyCount},
+	{check: "E3", text: testCellEarlyMessage},
 }
 
 // A cell of the table: a check, a TLS version and a mode.
@@ -83,17 +130,41 @@ func testDataOnly(c *testLegCase) bool {
 	return c.data
 }
 
-func testPartAt(index uint32) func(c *testLegCase) uint32 {
-	return func(c *testLegCase) uint32 { return index }
+func testPartAt(index uint32, kind string) func(c *testLegCase) *testRefusedPart {
+	return func(c *testLegCase) *testRefusedPart { return &testRefusedPart{index: index, kind: kind} }
 }
 
-func testPartByMode(bdat uint32, data uint32) func(c *testLegCase) uint32 {
-	return func(c *testLegCase) uint32 {
+func testPartByMode(bdat *testRefusedPart, data *testRefusedPart) func(c *testLegCase) *testRefusedPart {
+	return func(c *testLegCase) *testRefusedPart {
 		if c.data {
 			return data
 		}
 		return bdat
 	}
+}
+
+// The honest capture a break starts from.
+func testMutationCapture(t *testing.T, m *testMutation, c *testLegCase) *smtpproof.ExportedCapture {
+	t.Helper()
+	if m.splitName {
+		return smtpproof.ExportSplitNameCapture(t, c.leg, c.data)
+	}
+	return smtpproof.ExportCapture(t, c.leg, c.data)
+}
+
+// Forges the state a hdr or body part's scan starts from, its carry in's opening, to the start state,
+// where the record before left another: the part's scan alone passes from there, so that only the carry
+// can refuse it (ProofParts.tla's CarryFromPart).
+func testForgeCarryIn(t *testing.T, capture *smtpproof.ExportedCapture, index uint32) {
+	t.Helper()
+	witness := capture.Witnesses[testPartEvents(capture)[index]]
+	if witness.CarryInState == smtpproof.ExportScanStart {
+		t.Fatalf("part %d starts its scan where every scan does, so no forgery is possible there", index)
+	}
+	if !smtpproof.ExportRecordScansFrom(capture, index, smtpproof.ExportScanStart) {
+		t.Fatalf("part %d's record does not scan from the start state on its own", index)
+	}
+	witness.CarryInState = smtpproof.ExportScanStart
 }
 
 // Replaces, in the stream, every copy of a client record with what edit makes of a clone of it.
@@ -248,16 +319,25 @@ func testMutations() []*testMutation {
 			part.Records[0][0] = 22
 			event.Part = &part
 		}},
-		{check: "E3", name: "a part opening one record more than its index has roles for", mutate: func(t *testing.T, c *testLegCase, capture *smtpproof.ExportedCapture) {
+		{check: "E3", name: "a part opening one record more, which its position gives a role the part cannot open", mutate: func(t *testing.T, c *testLegCase, capture *smtpproof.ExportedCapture) {
 			event := capture.Events[testPartEvents(capture)[2]]
 			part := *event.Part
 			part.Records = append(slices.Clone(part.Records), part.Records[len(part.Records)-1])
 			part.LastRecord += 1
 			event.Part = &part
 		}},
+		{check: "E3", cell: testCellEarlyMessage, name: "the msg part covers none of the envelope's replies, its own count of them 0, so only the EHLO reply is proven", mutate: func(t *testing.T, c *testLegCase, capture *smtpproof.ExportedCapture) {
+			events := testPartEvents(capture)
+			event := capture.Events[events[3]]
+			part := *event.Part
+			part.ServerRecordCount = capture.Events[events[2]].Part.ServerRecordCount
+			part.ReplyCount = 0
+			event.Part = &part
+			capture.Witnesses[events[3]].ServerPlaintexts = nil
+		}},
 
 		// Z1
-		{check: "Z1", name: "another HS or master secret, the keys it gave kept", part: testPartAt(1), mutate: func(t *testing.T, c *testLegCase, capture *smtpproof.ExportedCapture) {
+		{check: "Z1", name: "another HS or master secret, the keys it gave kept", part: testPartAt(1, "key"), mutate: func(t *testing.T, c *testLegCase, capture *smtpproof.ExportedCapture) {
 			witness := capture.Witnesses[testPartEvents(capture)[1]]
 			if c.tls12 {
 				witness.MasterSecret = bytes.Clone(witness.MasterSecret)
@@ -268,8 +348,19 @@ func testMutations() []*testMutation {
 			}
 		}},
 
+		{check: "Z1", cell: testCellLaterKeys, name: "the env part's client key one bit off, its records sealed again under that key", part: testPartAt(2, "env"), mutate: func(t *testing.T, c *testLegCase, capture *smtpproof.ExportedCapture) {
+			envelope := testPartEvents(capture)[2]
+			witness := capture.Witnesses[envelope]
+			key := bytes.Clone(witness.ClientKey)
+			key[0] ^= 1
+			witness.ClientKey = key
+			for i := range capture.Events[envelope].Part.Records {
+				testRewriteClientPlaintext(t, c, capture, envelope, i, witness.ClientPlaintexts[i])
+			}
+		}},
+
 		// Z2
-		{check: "Z2", name: "a MAIL record whose first ciphertext octet no longer opens to the claimed M", part: testPartAt(2), mutate: func(t *testing.T, c *testLegCase, capture *smtpproof.ExportedCapture) {
+		{check: "Z2", name: "a MAIL record whose first ciphertext octet no longer opens to the claimed M", part: testPartAt(2, "env"), mutate: func(t *testing.T, c *testLegCase, capture *smtpproof.ExportedCapture) {
 			event := capture.Events[testPartEvents(capture)[2]]
 			original := event.Part.Records[0]
 			offset := 5
@@ -287,7 +378,7 @@ func testMutations() []*testMutation {
 		}},
 
 		// Z3
-		{check: "Z3", name: "pi3's first record sealed with inner type 22 under the true key", applies: testTls13Only, part: testPartAt(3), mutate: func(t *testing.T, c *testLegCase, capture *smtpproof.ExportedCapture) {
+		{check: "Z3", name: "the msg part's first record sealed with inner type 22 under the true key", applies: testTls13Only, part: testPartAt(3, "msg"), mutate: func(t *testing.T, c *testLegCase, capture *smtpproof.ExportedCapture) {
 			message := testPartEvents(capture)[3]
 			plaintext := bytes.Clone(capture.Witnesses[message].ClientPlaintexts[0])
 			plaintext[len(plaintext)-1] = 22
@@ -295,7 +386,7 @@ func testMutations() []*testMutation {
 		}},
 
 		// Z4
-		{check: "Z4", name: "a command of its template's length that says another: BDAT's count, or DATB", part: testPartByMode(3, 2), mutate: func(t *testing.T, c *testLegCase, capture *smtpproof.ExportedCapture) {
+		{check: "Z4", name: "a command of its template's length that says another: BDAT's count, or DATB", part: testPartByMode(&testRefusedPart{index: 3, kind: "msg"}, &testRefusedPart{index: 2, kind: "env"}), mutate: func(t *testing.T, c *testLegCase, capture *smtpproof.ExportedCapture) {
 			if c.data {
 				envelope := testPartEvents(capture)[2]
 				last := len(capture.Events[envelope].Part.Records) - 1
@@ -310,7 +401,7 @@ func testMutations() []*testMutation {
 		}},
 
 		// Z5
-		{check: "Z5", name: "a header block whose Feedback-ID field is renamed, so it has none", part: testPartAt(3), mutate: func(t *testing.T, c *testLegCase, capture *smtpproof.ExportedCapture) {
+		{check: "Z5", name: "a header block whose Feedback-ID field is renamed, so it has none", part: testPartAt(3, "msg"), mutate: func(t *testing.T, c *testLegCase, capture *smtpproof.ExportedCapture) {
 			message := testPartEvents(capture)[3]
 			header := 1
 			if c.data {
@@ -323,24 +414,31 @@ func testMutations() []*testMutation {
 			testRewriteClientRecord(t, c, capture, message, header, []byte(strings.Replace(block, "\r\nFeedback-ID: ", "\r\nFeedback-IX: ", 1)))
 		}},
 
+		{check: "Z5", cell: testCellForgedScan, name: "header record 2 scanned from the start state, where record 1 ended inside a field's name", splitName: true, part: testPartAt(4, "hdr"), mutate: func(t *testing.T, c *testLegCase, capture *smtpproof.ExportedCapture) {
+			testForgeCarryIn(t, capture, 4)
+		}},
+
 		// Z6
-		{check: "Z6", name: "QUIX in QUIT's place at last_record", applies: testBdatOnly, part: testPartAt(3), mutate: func(t *testing.T, c *testLegCase, capture *smtpproof.ExportedCapture) {
+		{check: "Z6", name: "QUIX in QUIT's place at last_record", applies: testBdatOnly, part: testPartAt(3, "msg"), mutate: func(t *testing.T, c *testLegCase, capture *smtpproof.ExportedCapture) {
 			message := testPartEvents(capture)[3]
 			testRewriteClientRecord(t, c, capture, message, len(capture.Events[message].Part.Records)-1, []byte("QUIX\r\n"))
 		}},
-		{check: "Z6", name: "a body record ending the message early, as long as its honest twin", applies: testDataOnly, part: testPartAt(4), mutate: func(t *testing.T, c *testLegCase, capture *smtpproof.ExportedCapture) {
+		{check: "Z6", name: "a body record ending the message early, as long as its honest twin", applies: testDataOnly, part: testPartAt(4, "body"), mutate: func(t *testing.T, c *testLegCase, capture *smtpproof.ExportedCapture) {
 			body := testPartEvents(capture)[4]
 			length := len(testRecordContent(c, capture.Witnesses[body].ClientPlaintexts[0]))
 			testRewriteClientRecord(t, c, capture, body, 0, []byte(strings.Repeat("x", length-5)+"\r\n.\r\n"))
 		}},
+		{check: "Z6", cell: testCellForgedScan, name: "body record 2 scanned from the start state, where record 1 ended inside a line", applies: testDataOnly, part: testPartAt(5, "body"), mutate: func(t *testing.T, c *testLegCase, capture *smtpproof.ExportedCapture) {
+			testForgeCarryIn(t, capture, 5)
+		}},
 
 		// Z7
-		{check: "Z7", name: "an RCPT reply's record replaced by a server KeyUpdate", applies: testTls13Only, part: testPartAt(3), mutate: func(t *testing.T, c *testLegCase, capture *smtpproof.ExportedCapture) {
+		{check: "Z7", name: "an RCPT reply's record replaced by a server KeyUpdate", applies: testTls13Only, part: testPartAt(3, "msg"), mutate: func(t *testing.T, c *testLegCase, capture *smtpproof.ExportedCapture) {
 			testRewriteServerRecord(t, c, capture, testPartEvents(capture)[3], 1, []byte{24, 0, 0, 1, 0, 22})
 		}},
 
 		// Z8
-		{check: "Z8", name: "an RCPT reply refused, 550 in 250's place", part: testPartAt(3), mutate: func(t *testing.T, c *testLegCase, capture *smtpproof.ExportedCapture) {
+		{check: "Z8", name: "an RCPT reply refused, 550 in 250's place", part: testPartAt(3, "msg"), mutate: func(t *testing.T, c *testLegCase, capture *smtpproof.ExportedCapture) {
 			message := testPartEvents(capture)[3]
 			reply := string(testRecordContent(c, capture.Witnesses[message].ServerPlaintexts[1]))
 			if !strings.HasPrefix(reply, "250 ") {
@@ -349,8 +447,27 @@ func testMutations() []*testMutation {
 			testRewriteServerRecord(t, c, capture, message, 1, testServerPlaintext(c, "5"+reply[1:]))
 		}},
 
+		{check: "Z8", cell: testCellReplyCount, name: "reply_count one more than the records hold: MAIL's reply continued into the first RCPT's, in its length", part: testPartAt(3, "msg"), mutate: func(t *testing.T, c *testLegCase, capture *smtpproof.ExportedCapture) {
+			message := testPartEvents(capture)[3]
+			reply := string(testRecordContent(c, capture.Witnesses[message].ServerPlaintexts[0]))
+			if !strings.HasPrefix(reply, "250 ") || strings.Count(reply, "\r\n") != 1 {
+				t.Fatalf("a MAIL reply of %q", reply)
+			}
+			testRewriteServerRecord(t, c, capture, message, 0, testServerPlaintext(c, "250-"+reply[len("250 "):]))
+		}},
+		{check: "Z8", cell: testCellReplyCount, name: "reply_count one fewer than the records hold: the first RCPT's reply rewritten as two replies, in its length", part: testPartAt(3, "msg"), mutate: func(t *testing.T, c *testLegCase, capture *smtpproof.ExportedCapture) {
+			message := testPartEvents(capture)[3]
+			reply := string(testRecordContent(c, capture.Witnesses[message].ServerPlaintexts[1]))
+			text := strings.TrimSuffix(strings.TrimPrefix(reply, "250 "), "\r\n")
+			if len(text) != len(reply)-len("250 \r\n") || len(text) < len("250 x\r\n") || strings.Contains(text, "\r\n") {
+				t.Fatalf("an RCPT reply of %q", reply)
+			}
+			two := "250 x\r\n" + "250 " + text[:len(text)-len("250 x\r\n")] + "\r\n"
+			testRewriteServerRecord(t, c, capture, message, 1, testServerPlaintext(c, two))
+		}},
+
 		// Z9
-		{check: "Z9", name: "an EHLO reply whose CHUNKING line is misspelled CHUNKINX", applies: testBdatOnly, part: testPartAt(2), mutate: func(t *testing.T, c *testLegCase, capture *smtpproof.ExportedCapture) {
+		{check: "Z9", name: "an EHLO reply whose CHUNKING line is misspelled CHUNKINX", applies: testBdatOnly, part: testPartAt(2, "env"), mutate: func(t *testing.T, c *testLegCase, capture *smtpproof.ExportedCapture) {
 			envelope := testPartEvents(capture)[2]
 			reply := string(testRecordContent(c, capture.Witnesses[envelope].ServerPlaintexts[0]))
 			if !strings.Contains(reply, "CHUNKING\r\n") {
@@ -384,11 +501,19 @@ func testRunMutations(t *testing.T, check string) {
 }
 
 // Holds one break to its check: the gate's relation and the checker each name it alone, then the
-// circuit refuses its part, or edgeSession refuses on its own with the solver as its verifier too.
+// circuit refuses its part, or edgeSession refuses on its own with the solver as its verifier too. The part
+// a Z break names has the kind it names in the honest capture, so the table says which circuit refused.
 func testRunMutation(t *testing.T, m *testMutation, c *testLegCase) {
 	t.Helper()
 	name := fmt.Sprintf("%s, %s: %s", m.check, c.name, m.name)
-	capture := smtpproof.ExportCapture(t, c.leg, c.data)
+	capture := testMutationCapture(t, m, c)
+	var refused *testRefusedPart
+	if m.part != nil {
+		refused = m.part(c)
+		if kind := smtpproof.ExportPartKinds(capture)[refused.index]; kind != refused.kind {
+			t.Fatalf("%s: the honest capture's part %d is %q, not %s", name, refused.index, kind, refused)
+		}
+	}
 	m.mutate(t, c, capture)
 	want := []string{m.check}
 	if gate := testGateVerdict(capture); !slices.Equal(gate, want) {
@@ -408,28 +533,37 @@ func testRunMutation(t *testing.T, m *testMutation, c *testLegCase) {
 	switch {
 	case strings.HasPrefix(m.check, "E") && (part != 0 || err == nil):
 		t.Errorf("%s: with the solver as its verifier the gate refuses part %d (%v), want its own refusal", name, part, err)
-	case strings.HasPrefix(m.check, "Z") && (part != m.part(c) || err != nil):
-		t.Errorf("%s: the circuits refuse part %d (%v), want part %d", name, part, err, m.part(c))
+	case strings.HasPrefix(m.check, "Z") && (part != refused.index || err != nil):
+		t.Errorf("%s: the circuits refuse part %d (%v), want %s", name, part, err, refused)
 	}
 }
 
-// Every honest capture the breaks start from passes the gate, the checker and every part's circuit,
-// pi1's with Z1 in it.
+// Every honest capture the breaks start from passes the gate, the checker and every part's circuit, the
+// key part's with Z1's derivation in it: ExportCapture's, and ExportSplitNameCapture's, whose header block
+// takes two records.
 func TestMutatedWitnessHonestTwins(t *testing.T) {
 	t.Parallel()
-	for _, c := range testLegCases() {
-		capture := smtpproof.ExportCapture(t, c.leg, c.data)
-		if verdict := testGateVerdict(capture); len(verdict) != 0 {
-			t.Errorf("%s: the gate refuses an honest send: %v", c.name, verdict)
-		}
-		if verdict := testCheckerVerdict(capture); len(verdict) != 0 {
-			t.Errorf("%s: the checker refuses an honest send: %v", c.name, verdict)
-		}
-		if !smtpproof.ExportCircuitsRun() {
-			continue
-		}
-		if part, err := smtpproof.ExportKeyedCircuitVerdict(t, capture); part != 0 || err != nil {
-			t.Errorf("%s: the circuits refuse an honest send at part %d: %v", c.name, part, err)
+	for _, splitName := range []bool{false, true} {
+		for _, c := range testLegCases() {
+			name := c.name
+			capture := smtpproof.ExportCapture
+			if splitName {
+				name += ", the header block in two records"
+				capture = smtpproof.ExportSplitNameCapture
+			}
+			honest := capture(t, c.leg, c.data)
+			if verdict := testGateVerdict(honest); len(verdict) != 0 {
+				t.Errorf("%s: the gate refuses an honest send: %v", name, verdict)
+			}
+			if verdict := testCheckerVerdict(honest); len(verdict) != 0 {
+				t.Errorf("%s: the checker refuses an honest send: %v", name, verdict)
+			}
+			if !smtpproof.ExportCircuitsRun() {
+				continue
+			}
+			if part, err := smtpproof.ExportKeyedCircuitVerdict(t, honest); part != 0 || err != nil {
+				t.Errorf("%s: the circuits refuse an honest send at part %d: %v", name, part, err)
+			}
 		}
 	}
 }
@@ -446,14 +580,32 @@ func testLegMode(c *testLegCase) string {
 	return "BDAT"
 }
 
-// The evidence table, one row a break and leg, then the cells no break fills.
+// Where a row's break is refused: the gate itself for an E break, else the part whose circuit refuses it.
+func testRefusedAt(m *testMutation, c *testLegCase) string {
+	if m.part == nil {
+		return "gate"
+	}
+	refused := m.part(c)
+	if m.check == "Z1" && refused.index == 1 {
+		return refused.String() + ", on its production shape"
+	}
+	return refused.String()
+}
+
+// The evidence table: one row a break and leg, then DESIGN-DETAILS 3.6's cells and the breaks that fill
+// them, then the cells no break fills.
 func testMutationTable() string {
 	var table strings.Builder
 	table.WriteString("# Mutated witnesses (SMTP-M9-29)\n\n")
 	table.WriteString("Written by `TestMutatedWitnessTable` from `mutate_test.go`'s registry, which fails when this file differs; set `SMTPPROOF_WRITE_MUTATIONS` to rewrite it. ")
-	table.WriteString("Each row is a break of one honest connection that the named check alone refuses. The gate, whose verifier is `relationCheckPart` over the edge's own statement, and `smtpproof/checker`, which reads SPEC.md apart from this module, each name exactly that check; ")
+	table.WriteString("Each row is a break of one honest connection that the named check alone refuses. ")
+	table.WriteString("Parts are bound to one key part (DESIGN-DETAILS 3.2): part 1 (key) derives the session's keys from the handshake and commits to them, and every later part opens that commitment, part 2 (env) with MAIL and the RCPTs, part 3 (msg) with the header block's first record, a hdr part with a later header record and in DATA mode a body part with a body record. ")
+	table.WriteString("The gate, whose verifier is `relationCheckPart` over the edge's own statement, and `smtpproof/checker`, which reads SPEC.md and DESIGN-DETAILS 3.2 apart from this module, each name exactly that check; ")
 	table.WriteString("then the circuit refuses the part named, through gnark's solver over the edge's own statement, or `edgeSession` refuses on its own (\"gate\"), with the solver as its verifier as well. ")
-	table.WriteString("Every record keeps its length, so a break's part fits the shape its honest twin's does. The test named runs the row on every run of the package; its circuit half runs in the leg without `sidecar_testhooks`.\n\n")
+	table.WriteString("The solver takes each part on a test shape sized to it, which holds every check of its kind and the opening of the key commitment but not the key part's derivation; Z1's rows take part 1 on its production shape, which holds that too. ")
+	table.WriteString("Every record keeps its length, so a break's part fits the shape its honest twin's does, and the part named has the kind named in the honest connection. ")
+	table.WriteString("The header-record rows of DESIGN-DETAILS 3.6's cells start from a send whose header block takes two records, the first ending inside a field's name; the forged-scan rows also hold that the record scans from the forged state on its own, so that the carry alone refuses. ")
+	table.WriteString("The test named runs the row on every run of the package; its circuit half runs in the leg without `sidecar_testhooks`.\n\n")
 	table.WriteString("| Check | TLS | Mode | Refused at | Mutation | Test |\n")
 	table.WriteString("|---|---|---|---|---|---|\n")
 	for _, check := range testMutationChecks {
@@ -465,14 +617,21 @@ func testMutationTable() string {
 				if m.applies != nil && !m.applies(c) {
 					continue
 				}
-				at := "gate"
-				if m.part != nil {
-					at = fmt.Sprintf("pi%d", m.part(c))
-					if check == "Z1" {
-						at += ", Z1 in its circuit"
-					}
-				}
-				fmt.Fprintf(&table, "| %s | %s | %s | %s | %s | TestMutatedWitness%s |\n", check, testLegTls(c), testLegMode(c), at, m.name, check)
+				fmt.Fprintf(&table, "| %s | %s | %s | %s | %s | TestMutatedWitness%s |\n", check, testLegTls(c), testLegMode(c), testRefusedAt(m, c), m.name, check)
+			}
+		}
+	}
+	table.WriteString("\nDESIGN-DETAILS 3.6's cells, each filled in every TLS version and mode its check applies to there:\n\n")
+	table.WriteString("| Check | Cell | Mutation | Modes |\n")
+	table.WriteString("|---|---|---|---|\n")
+	for _, cell := range testDetailsCells {
+		modes := "BDAT and DATA, every leg"
+		if cell.dataOnly {
+			modes = "DATA, every leg"
+		}
+		for _, m := range testMutations() {
+			if m.check == cell.check && m.cell == cell.text {
+				fmt.Fprintf(&table, "| %s | %s | %s | %s |\n", cell.check, cell.text, m.name, modes)
 			}
 		}
 	}
@@ -501,10 +660,12 @@ func testMutationTable() string {
 }
 
 // Fails if any check lacks a break in a cell it applies to, if a cell no break can fill holds one, if
-// a check's test is missing, or if the evidence table differs from the registry.
+// one of DESIGN-DETAILS 3.6's cells lacks a break in a TLS version or mode it names, if a check's test is
+// missing, or if the evidence table differs from the registry.
 func TestMutatedWitnessTable(t *testing.T) {
 	inapplicable := testInapplicableCells()
 	covered := map[testMutationCell][]string{}
+	detailed := map[string]bool{}
 	for _, m := range testMutations() {
 		if !slices.Contains(testMutationChecks, m.check) {
 			t.Errorf("%s: no such check", m.name)
@@ -512,10 +673,27 @@ func TestMutatedWitnessTable(t *testing.T) {
 		if strings.HasPrefix(m.check, "Z") != (m.part != nil) {
 			t.Errorf("%s %s: a Z break names its part, and only a Z break", m.check, m.name)
 		}
+		if m.cell != "" && !slices.ContainsFunc(testDetailsCells, func(cell *testDetailsCell) bool { return cell.check == m.check && cell.text == m.cell }) {
+			t.Errorf("%s %s: no DESIGN-DETAILS 3.6 cell %q of %s", m.check, m.name, m.cell, m.check)
+		}
 		for _, c := range testLegCases() {
 			if m.applies == nil || m.applies(c) {
 				cell := testMutationCell{check: m.check, tls12: c.tls12, data: c.data}
 				covered[cell] = append(covered[cell], m.name)
+				if m.cell != "" {
+					detailed[fmt.Sprintf("%s %s %v", m.check, m.cell, cell)] = true
+				}
+			}
+		}
+	}
+	for _, cell := range testDetailsCells {
+		for _, c := range testLegCases() {
+			if cell.dataOnly && !c.data {
+				continue
+			}
+			at := testMutationCell{check: cell.check, tls12: c.tls12, data: c.data}
+			if !detailed[fmt.Sprintf("%s %s %v", cell.check, cell.text, at)] {
+				t.Errorf("%v: no break for DESIGN-DETAILS 3.6's cell %q", at, cell.text)
 			}
 		}
 	}
