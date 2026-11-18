@@ -115,15 +115,19 @@ func TestDropJobRecordsARenameItsListedVersionsPushMade(t *testing.T) {
 }
 
 // The renames row's limits: a push that removes one path and creates another on a kind-5 segment it introduces itself
-// moved no content, and a push that creates a path citing nothing it removes is no rename either.
+// moved no content, a push that creates a path citing nothing it removes is no rename, and neither is a push that
+// removes one path and writes a standing one again on the content its base holds.
 func TestDropResolveReadsNoRenameWithoutCitedContentOrARemoval(t *testing.T) {
 	world := newDropWorld(t)
 	refA := testId("ref-a")
-	a, b, c := worldPath("a"), worldPath("b"), worldPath("c")
-	v5, w5 := dropTestId("v5"), dropTestId("w5")
+	a, b, c, d := worldPath("a"), worldPath("b"), worldPath("c"), worldPath("d")
+	v5, w5, d5 := dropTestId("v5"), dropTestId("w5"), dropTestId("d5")
 	world.commit(refA, protocol.EvsRefMode_EVS_REF_FILE, &dropPush{
-		changes:    []*dropChange{{path: a, base: 0, spec: &dropEntry{version: 1, kind5: [][32]byte{v5}}}},
-		newObjects: []*sidecar.EvsNewObject{dropNewSegment(v5)},
+		changes: []*dropChange{
+			{path: a, base: 0, spec: &dropEntry{version: 1, kind5: [][32]byte{v5}}},
+			{path: d, base: 0, spec: &dropEntry{version: 1, kind5: [][32]byte{d5}}},
+		},
+		newObjects: []*sidecar.EvsNewObject{dropNewSegment(v5), dropNewSegment(d5)},
 	})
 	// removes a and creates b on content of the push's own
 	fresh := &dropChange{path: b, base: 0, spec: &dropEntry{version: 1, kind5: [][32]byte{w5}}}
@@ -134,10 +138,13 @@ func TestDropResolveReadsNoRenameWithoutCitedContentOrARemoval(t *testing.T) {
 	// creates c on a kind-5 segment it does not introduce, removing nothing
 	alone := &dropChange{path: c, base: 0, spec: &dropEntry{version: 1, kind5: [][32]byte{w5}}}
 	world.commit(refA, protocol.EvsRefMode_EVS_REF_FILE, &dropPush{changes: []*dropChange{alone}})
+	// removes d and writes b again on the kind-5 segment b's version before it holds
+	again := &dropChange{path: b, base: 1, spec: &dropEntry{version: 2, kind5: [][32]byte{w5}}}
+	world.commit(refA, protocol.EvsRefMode_EVS_REF_FILE, &dropPush{changes: []*dropChange{{path: d, base: 1}, again}})
 	covered := world.drop(refA, testId("drop-bc"), []*protocol.EvsDropPath{
-		dropPathOf(2, evsDropBoundaryWritten, nil, dropSource(1, b)),
+		dropPathOf(3, evsDropBoundaryWritten, nil, dropSource(1, b)),
 		dropPathOf(2, evsDropBoundaryWritten, nil, dropSource(1, c)),
-	}, [][][]byte{{fresh.entry}, {alone.entry}})
+	}, [][][]byte{{fresh.entry, again.entry}, {alone.entry}})
 	result := world.resolve(covered)
 	if len(result.Mismatch) != 0 || result.Shape != (DropListedShape{}) {
 		t.Fatalf("mismatch %v, shape %+v", result.Mismatch, result.Shape)
@@ -170,12 +177,13 @@ func TestDropJobRecordsACopyFromAnotherRef(t *testing.T) {
 }
 
 // The cross-ref row's limits: a copy from another path of the same ref is no cross-ref copy, and a listed version
-// that names only its own base's segment is none either, though its push copies across refs for another path.
+// that names only its own base's segments, or those and one its push uploads, is none either, though its push copies
+// across refs for another path.
 func TestDropResolveReadsNoCrossRefCopyFromItsOwnRefOrItsBase(t *testing.T) {
 	world := newDropWorld(t)
 	refA, refB := testId("ref-a"), testId("ref-b")
-	x, y, z, w := worldPath("x"), worldPath("y"), worldPath("z"), worldPath("w")
-	s1, s7, s9 := dropTestId("s1"), dropTestId("s7"), dropTestId("s9")
+	x, y, z, w, u := worldPath("x"), worldPath("y"), worldPath("z"), worldPath("w"), worldPath("u")
+	s1, s2, s7, s9 := dropTestId("s1"), dropTestId("s2"), dropTestId("s7"), dropTestId("s9")
 	world.commit(refB, protocol.EvsRefMode_EVS_REF_FILE, &dropPush{
 		changes:    []*dropChange{{path: y, base: 0, spec: &dropEntry{version: 1, segments: [][32]byte{s9}}}},
 		newObjects: []*sidecar.EvsNewObject{dropNewSegment(s9)},
@@ -198,7 +206,15 @@ func TestDropResolveReadsNoCrossRefCopyFromItsOwnRefOrItsBase(t *testing.T) {
 		changes: []*dropChange{third, {path: w, base: 0, spec: &dropEntry{version: 1, segments: [][32]byte{s9}}}},
 		reuse:   []*sidecar.EvsReuse{{RefId: refB, EntryVersion: 1, TokenPath: y}},
 	})
-	covered := world.drop(refA, testId("drop-x"), []*protocol.EvsDropPath{dropPathOf(4, evsDropBoundaryWritten, nil, dropSource(1, x))}, [][][]byte{{first.entry, second.entry, third.entry}})
+	// x adds a segment the push uploads while the same push copies ref B's y into u
+	fourth := &dropChange{path: x, base: 3, spec: &dropEntry{version: 4, segments: [][32]byte{s1, s7, s2}}}
+	world.commit(refA, protocol.EvsRefMode_EVS_REF_FILE, &dropPush{
+		changes:    []*dropChange{fourth, {path: u, base: 0, spec: &dropEntry{version: 1, segments: [][32]byte{s9}}}},
+		newObjects: []*sidecar.EvsNewObject{dropNewSegment(s2)},
+		reuse:      []*sidecar.EvsReuse{{RefId: refB, EntryVersion: 1, TokenPath: y}},
+	})
+	covered := world.drop(refA, testId("drop-x"), []*protocol.EvsDropPath{dropPathOf(5, evsDropBoundaryWritten, nil, dropSource(1, x))},
+		[][][]byte{{first.entry, second.entry, third.entry, fourth.entry}})
 	result := world.resolve(covered)
 	if len(result.Mismatch) != 0 || result.Shape != (DropListedShape{}) {
 		t.Fatalf("mismatch %v, shape %+v", result.Mismatch, result.Shape)
