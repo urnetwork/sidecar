@@ -17,6 +17,14 @@
 // route rule with no via reaches exactly its advertisers here, as in MayRoute and at the contract gate, and nothing
 // before an approved route names it.
 //
+// A route rule that names no ip: destination and no autogroup:internet holds no prefix of its own: it reaches, through
+// each advertiser its via subjects hold for the source that is also among its subject destinations for that source,
+// every prefix of that advertiser's subnet routes in force, whole (§8.4's readings; owner decision 575, QD-1019). So
+// RouteRules answers ViaDestination beside each rule, the compile, AclEngine.AllowRoute and Check's ip ranges read a
+// rule's detail through aclRouteBySubject, and StandingCovers covers a subnet route by such a rule whose via and
+// destinations both name its advertiser. An exit is never reached this way, and a rule whose detail the device does not hold, an activated
+// grant's (QD-003), reaches nothing by it.
+//
 // EgressMode exports the mode the contract gate's egressRestricted reads (§17.9's egress spec, D-BRIDGE-13), and
 // StandingCovers answers 12.2.4's "in force" for a bridge rule filed with no approval.
 //
@@ -54,6 +62,108 @@ type AclReachRule struct {
 	// Whether its dst names autogroup:internet, which takes public destinations through its via subjects; any other
 	// rule takes them only by a prefix that holds them, 0.0.0.0/0, which only AclLocalPolicy holds.
 	Internet bool
+	// On RouteRules' and ExitRules' answers, whether the rule's subject destinations name the via for this source: an
+	// atom the via holds, its id, or autogroup:self where the two share an owner or sponsor. A route rule that names no
+	// prefix reaches the via's subnet routes in force only where this holds (owner decision 575). False on DialRules'.
+	ViaDestination bool
+}
+
+// One advertiser's subnet routes in force, as a route rule that names no prefix reaches them.
+type AclServedRoute struct {
+	Advertiser Id
+	// Each prefix its subnet routes in force serve, and a remapped route's exposed prefix as a sender addresses it.
+	Prefixes []netip.Prefix
+}
+
+// The subnet routes in force by advertiser, which a route rule that names no ip: destination and no autogroup:internet
+// reaches whole through an advertiser its destinations name (§8.4's readings; owner decision 575). Rows carry no prefix
+// (D-BRIDGE-6), so an AclState holds none: BRIDGE's compile answers these from its ledger at the state it compiled
+// (BridgeCompiled.ServedRoutes), and AclEngine.AllowRoute and Check's ip ranges read them. Never changed once built, so
+// safe for concurrent use; a nil one serves nothing.
+type AclServedRoutes struct {
+	// in advertiser order, one an advertiser, its prefixes in address then length order, none twice
+	routes []AclServedRoute
+}
+
+// The routes by advertiser, an advertiser named twice holding the prefixes of both. An invalid prefix is left out, and
+// so is an advertiser with none. The caller's slices are not kept.
+func NewAclServedRoutes(routes []AclServedRoute) *AclServedRoutes {
+	served := &AclServedRoutes{}
+	for _, route := range routes {
+		index, found := slices.BinarySearchFunc(served.routes, route.Advertiser, func(held AclServedRoute, advertiser Id) int {
+			return held.Advertiser.Cmp(advertiser)
+		})
+		if !found {
+			served.routes = slices.Insert(served.routes, index, AclServedRoute{Advertiser: route.Advertiser})
+		}
+		for _, prefix := range route.Prefixes {
+			if prefix.IsValid() {
+				served.routes[index].Prefixes = append(served.routes[index].Prefixes, prefix.Masked())
+			}
+		}
+	}
+	for i := range served.routes {
+		slices.SortFunc(served.routes[i].Prefixes, func(a netip.Prefix, b netip.Prefix) int {
+			if order := a.Addr().Compare(b.Addr()); order != 0 {
+				return order
+			}
+			return a.Bits() - b.Bits()
+		})
+		served.routes[i].Prefixes = slices.Compact(served.routes[i].Prefixes)
+	}
+	served.routes = slices.DeleteFunc(served.routes, func(route AclServedRoute) bool { return len(route.Prefixes) == 0 })
+	return served
+}
+
+// An advertiser's prefixes, in address then length order, nil for one that serves none. The caller must not change them.
+func (self *AclServedRoutes) Prefixes(advertiser Id) []netip.Prefix {
+	if self == nil {
+		return nil
+	}
+	index, found := slices.BinarySearchFunc(self.routes, advertiser, func(held AclServedRoute, target Id) int {
+		return held.Advertiser.Cmp(target)
+	})
+	if !found {
+		return nil
+	}
+	return self.routes[index].Prefixes
+}
+
+// Whether a subnet route in force of the advertiser's serves the address. Allocates nothing.
+func (self *AclServedRoutes) serves(advertiser Id, address netip.Addr) bool {
+	if !address.IsValid() {
+		return false
+	}
+	for _, prefix := range self.Prefixes(advertiser) {
+		if prefix.Contains(address) {
+			return true
+		}
+	}
+	return false
+}
+
+// The advertisers one of whose subnet routes in force holds the whole of prefix, in advertiser order; none for an
+// invalid prefix or a nil set.
+func (self *AclServedRoutes) advertisersHolding(prefix netip.Prefix) []Id {
+	if self == nil || !prefix.IsValid() {
+		return nil
+	}
+	advertisers := []Id{}
+	for _, route := range self.routes {
+		if slices.ContainsFunc(route.Prefixes, func(served netip.Prefix) bool {
+			return served.Bits() <= prefix.Bits() && served.Contains(prefix.Addr())
+		}) {
+			advertisers = append(advertisers, route.Advertiser)
+		}
+	}
+	return advertisers
+}
+
+// Whether a route rule reaches its subject destinations' routes in force rather than prefixes of its own (§8.4's
+// readings; owner decision 575): the device holds its detail, which names no ip: destination, and it names no
+// autogroup:internet. False for a rule with no local detail, an activated grant's (QD-003), the closed direction.
+func aclRouteBySubject(local *AclLocalRule, internet bool) bool {
+	return local != nil && len(local.Cidrs) == 0 && !internet
 }
 
 // A rule as the enumerators answer it.
@@ -126,7 +236,9 @@ func (self *AclState) routeRules(source AclSubject, via AclSubject, nowMs int64)
 		return self.nextResourceRule(&sourceResolved, nowMs, protocol.AclAction_ACL_ACTION_ROUTE, match, from)
 	}
 	for rule := next(0); rule != nil; rule = next(rule.index + 1) {
-		reach = append(reach, aclReachRuleOf(rule))
+		reachRule := aclReachRuleOf(rule)
+		reachRule.ViaDestination = self.targetsSubject(&sourceResolved, &viaResolved, rule)
+		reach = append(reach, reachRule)
 	}
 	return aclSortReachRules(reach)
 }
@@ -235,7 +347,9 @@ func aclEgressRow(row []byte) (Id, bridge.BridgeEgressMode, bool) {
 //	route   a route rule of the head among the ids its route_rule_ids name, in force at now, whose prefixes hold every
 //	        prefix of a subnet route, or for an exit route reach public destinations (autogroup:internet, or a /0 such as
 //	        a bare * gives), and whose via, AclRule.via, holds its advertiser; a rule that names no via is held by every
-//	        advertiser whose route names it (QD-004, QD-764)
+//	        advertiser whose route names it (QD-004, QD-764); a rule that names no ip: destination and no
+//	        autogroup:internet covers a subnet route whole where its subject destinations name the advertiser too, and
+//	        no exit (owner decision 575)
 //	map     a dial rule of the head in force at now whose subject targets name its host, autogroup:self naming any host
 //	        with an owner or sponsor, and whose ports cover the map's protocol and ports
 //
@@ -243,8 +357,9 @@ func aclEgressRow(row []byte) (Id, bridge.BridgeEgressMode, bool) {
 // document's rules, which this judges as it does a document's. A rule of the head is the document's or the implicit
 // one's: an activated grant is no standing grant. Ports and prefixes are this policy's; a nil policy with no document
 // reads the implicit document's own, so it judges as CompileAclLocal's, and a nil one under a document holds none, so a
-// map is covered only by a rule that limits no ports and a route by none, the closed direction AclEngine takes. The owner
-// must be a sidecar the state admits with no hard deny at now. Whether the rule's body is active is the ledger's to say.
+// map is covered only by a rule that limits no ports and a route by none, a rule with no prefix included, since whether
+// it names one is the policy's to say: the closed direction AclEngine takes. The owner must be a sidecar the state admits
+// with no hard deny at now. Whether the rule's body is active is the ledger's to say.
 func (self *AclLocalPolicy) StandingCovers(state *AclState, rule *BridgeLedgerRule, now time.Time) bool {
 	if state == nil || rule == nil {
 		return false
@@ -322,6 +437,13 @@ func (self *AclLocalPolicy) routeCovered(state *AclState, advertiser *aclSidecar
 			local := self.Rule(rule.row.GetRuleId())
 			if exit {
 				if rule.internetTarget || (local != nil && slices.ContainsFunc(local.Cidrs, ipv4Default)) {
+					return true
+				}
+				continue
+			}
+			if aclRouteBySubject(local, rule.internetTarget) {
+				// no prefix of its own: the routes of the advertisers its destinations name (owner decision 575)
+				if state.namesTarget(advertiser, rule) {
 					return true
 				}
 				continue

@@ -663,13 +663,6 @@ var testFenceAdditions = []struct {
 		field:    testFenceField{name: "require_default_egress", number: 41, typeName: "bool"},
 		question: "ur-tun-default-egress-option-lock-action",
 	},
-	// QD-989 (owner decision 560): a ur/ ticket names its dialer's sidecar, signed with the rest, so a ur/ listener reads
-	// its subject from the admitted ticket; §2.8's sock-2 row names it (list v45)
-	{
-		message:  "SocketTicket",
-		field:    testFenceField{name: "dialer_sidecar_id", number: 16, typeName: "bytes"},
-		question: "smtp-m9-13-dialer-sidecar",
-	},
 	// QD-1010 (owner decision 574): the uses an agent asks a template's approval for, 1 for any other action, daemon-built
 	// and rendered, which the approver signs as ApprovalDecision.uses; version 2's, sealed in the approval entry
 	{
@@ -721,18 +714,4 @@ type testFenceValueReservation struct {
 // reservations, as testFenceReservations' fields do, and one the design comes to reserve, or stops writing, fails
 // until its line here leaves.
 var testFenceValueReservations = []testFenceValueReservation{
-	// QD-1034: a cascade's void of a recovery binding leaves no binding, so no proposal is a restored binding's
-	// admission and the two restored kinds leave the format before it freezes, their numbers reserved
-	{
-		enum:     "ProposalKind",
-		name:     "PROPOSAL_KIND_RESTORED",
-		number:   3,
-		question: "recovery-restored-bindings-removed",
-	},
-	{
-		enum:     "ProposalKind",
-		name:     "PROPOSAL_KIND_RESTORED_COSIGNED",
-		number:   4,
-		question: "recovery-restored-bindings-removed",
-	},
 }

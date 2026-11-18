@@ -128,6 +128,9 @@ type BridgeCompiled struct {
 	// Every share link the state names, by share then target, each once: the targets Sidecar.SignWindowDelegation
 	// signs a share's delegation for (DESIGN-DETAILS 12.2.6).
 	ShareLinks []BridgeCompiledShareLink
+	// Every advertiser's subnet routes in force at the state compiled, S's own among them, for AclEngine.InstallRoutes
+	// (owner decision 575); nil unless BridgeCompileLocal.AnswerServedRoutes asked. Never in State.
+	ServedRoutes *AclServedRoutes
 }
 
 // A share link of a compiled state: the share and its host in the sharing network.
@@ -382,6 +385,9 @@ func CompileBridgeState(view BridgeConfigView, local *BridgeCompileLocal, settin
 	rules := compiler.build()
 	if err := compiler.finish(rules); err != nil {
 		return refused(err)
+	}
+	if local.AnswerServedRoutes {
+		compiler.compiled.ServedRoutes = compiler.servedRoutesByAdvertiser()
 	}
 	return compiler.compiled, nil
 }

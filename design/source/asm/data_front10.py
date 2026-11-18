@@ -1090,6 +1090,19 @@ INDEX = list(_P9['INDEX']) + [
     (587, 'DESIGN-DEFER.md',
      "DESIGN-DEFER.md documents every deferred decision, one entry each, and each section a deferral touches points "
      "at its entry."),
+    # The dr4-late-sweep fold (2026-11-18): sockets on service tokens, the edge clients' tokens, the ticket keys'
+    # yearly rotation and the idle reap's skip of edge clients.
+    (588, 'sockets on service tokens',
+     'sockets authenticates a sidecar with the 15-minute service token evs, gkm and dns take; the '
+     'Postgres-free check of Client-class tokens and what served it go.'),
+    (589, "Edge clients' sockets tokens",
+     "api's edge-client route answers each `urnetwork-edge` platform client a 15-minute sockets token beside "
+     'its jwt, which the edges present to sockets.'),
+    (590, 'Ticket keys rotate yearly',
+     "The sockets ticket keys' `RotationInterval` defaults to 365 days; the overlap and the settle rule stay."),
+    (591, 'Edge clients are not reaped idle',
+     "taskworker's idle client reap skips `urnetwork-edge`'s clients, so an unused edge slot can still be "
+     'deployed into.'),
 ]
 # Owner decision 188 amends 176's summary (the reconciler's ASM.md, 1.2).
 _i176 = [r[0] for r in INDEX].index(176)
@@ -1172,7 +1185,28 @@ for _n, _old_end, _note in [
     _i = [r[0] for r in INDEX].index(_n)
     assert INDEX[_i][2].endswith(_old_end), _n
     INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
-assert [r[0] for r in INDEX] == list(range(1, 588))
+# The dr4-late-sweep fold (2026-11-18): sockets on service tokens, the edge clients' tokens, the ticket keys'
+# yearly rotation and the idle reap's skip of edge clients.
+for _n, _note in [
+        (347,
+         'Reversed by @@OD:588@@: sockets takes service tokens, and the verifier, the keyring and the '
+         '`sidecar_id` claim go.'),
+        (497,
+         'Reversed by @@OD:588@@: sockets stops with its 15-minute tokens, and the switch is no step of its '
+         'rollout.'),
+        (561,
+         "Reversed by @@OD:588@@: the record keeps no membership, a member's `rev/` object voiding its tokens."),
+        (578,
+         'Reversed by @@OD:588@@: sockets mounts no by_jwt keys, and the command is not built.'),
+        (354,
+         'Amended by @@OD:590@@: the interval is 365 days.'),
+        (562,
+         'Amended by @@OD:590@@ on the interval alone: 365 days.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 592))
 DATES = dict(_P9['DATES'])
 DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '2026-11-06', 189: '2026-11-06',
               190: '2026-11-06', 191: '2026-11-06', 192: '2026-11-06', 193: '2026-11-06',
@@ -1260,7 +1294,11 @@ DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '202
               568: '2026-11-16', 569: '2026-11-17', 570: '2026-11-17', 571: '2026-11-16', 572: '2026-11-16',
               573: '2026-11-16', 574: '2026-11-16', 575: '2026-11-17', 576: '2026-11-16', 577: '2026-11-17',
               578: '2026-11-17', 579: '2026-11-17', 580: '2026-11-17', 581: '2026-11-17', 582: '2026-11-17',
-              583: '2026-11-17', 584: '2026-11-17', 585: '2026-11-17', 586: '2026-11-17', 587: '2026-11-17'})
+              583: '2026-11-17', 584: '2026-11-17', 585: '2026-11-17', 586: '2026-11-17', 587: '2026-11-17',
+              588: '2026-11-17',
+              589: '2026-11-17',
+              590: '2026-11-17',
+              591: '2026-11-17'})
 _ANCHOR = "This section lists the cross-cutting decisions"
 assert _ANCHOR in _P9['DECISIONS_INTRO']
 DECISIONS_INTRO = _P9['DECISIONS_INTRO'].replace(
@@ -1592,3 +1630,39 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     _D585, _D585 + "The fold that wrote DESIGN-DEFER.md numbers two more: the client-checked prefix write rules moved "
     "to Later (586), deferring @@OD:345@@, @@OD:415@@ and @@OD:416@@, and every deferred decision documented in "
     "DESIGN-DEFER.md (587). ")
+# The dr4-late-sweep fold (2026-11-18): sockets on service tokens, the edge clients' tokens, the ticket keys'
+# yearly rotation and the idle reap's skip of edge clients.
+_D587 = "and every deferred decision documented in DESIGN-DEFER.md (587). "
+assert DECISIONS_INTRO.count(_D587) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D587, _D587 + (
+    "The track that swept up the answers still pending on 2026-11-18 numbers the rest, the review's and the "
+    "build's alike. sockets authenticates with §7.8's service tokens (588), reversing @@OD:347@@, @@OD:497@@, "
+    '@@OD:561@@ and @@OD:578@@; edge clients get their sockets tokens from api (589); the ticket keys rotate '
+    'yearly (590); and the idle reap leaves edge clients alone (591). '))
+# The dr4-late-sweep fold (2026-11-18), continued: the answers the sweep numbers after the sockets set, one block of
+# rows, notes and dates, its lead extended below.
+INDEX += [
+    (592, 'No restored recovery bindings',
+     "A cascade's void of a member's recovery binding leaves no binding and restores no earlier one; the restored "
+     'proposal kinds leave the format, their numbers reserved.'),
+]
+for _n, _note in [
+        (149,
+         ' Its restore clause is reversed by @@OD:592@@: a void leaves no binding, so its re-seal and backup rule '
+         'stand alone.'),
+        (314,
+         ' Its restored kind is reversed by @@OD:592@@.'),
+        (556,
+         ' Reversed by @@OD:592@@: no base carries a restored kind.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 593))
+DATES.update({592: '2026-11-17'})
+_D591 = "and the idle reap leaves edge clients alone (591). "
+assert DECISIONS_INTRO.count(_D591) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D591, "the idle reap leaves edge clients alone (591); and a cascade's void of a recovery binding restores no "
+    "earlier one (592), reversing @@OD:556@@ and the restore clause of @@OD:149@@. ")

@@ -1,4 +1,4 @@
-# metadata_list.yml v54; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
+# metadata_list.yml v55; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
 # §7.9, §10, §11). v6 adds to v5 (2026-11-04) connect-1's ShareCert, api-6's push-token slot sentinels, api-7's
 # {acl_}q, cascade signers, recovery bindings, restored bindings' recovery windows and orphaned networks, api-13's
 # per-eraser closure counters, evs-1's secret kind and orphans, evs-3's creation block, fence time, deleted flag
@@ -197,6 +197,9 @@
 # v54, updated 2026-11-18 for the owner's answer QD-1034, adds no row: api-7 sees no restored binding's admission
 # proposals, since a cascade's void of a member's recovery binding leaves that member none and restores no
 # earlier one, so no such proposal is filed.
+# v55, updated 2026-11-18 for the owner's answer QD-1029 (owner decision 588), adds no row: sockets authenticates
+# with service tokens, so sock-5 loses {sc_<client_id>}ok, the time a client's token last checked valid, sock-2's
+# sidecar id is the one the caller's service token names, and sockets joins evs-18's readers of rev/ objects.
 # Each row gives service, store (tables, Redis families, object families, logs or memory),
 # sees, why, ttl, and owner: the section that designs the value and states its ttl. Withdrawn rows keep
 # their ids so citations resolve. Public: this list ships in DESIGN.md on the public sidecar repo (owner
@@ -369,7 +372,7 @@ sock-1:
 sock-2:
   service: sockets
   store: memory; per-dialer fields in sock-1's hash
-  sees: each Find's dialer client, network and sidecar id, which its token names (QD-040; edges add their K client ids and name no sidecar), token path or edge name, a dial's protocol, minimum version and offered ALPN ids, the server name of a dial that came by a custom host or an alias, affinity key (tlsedge's keyed /24 or /48 hash, never stored), the authorization log position that allowed it (§7.9), chosen listeners, grant id, issued tickets, a ur/ ticket naming its dialer's sidecar id for the listener's subject (owner decision 560), and the failed tickets a retry reports; each dialer's issued share and exclusions; reported accept timeouts; per-source registration and Find rates for the control-plane bound (memory; D-SOCK-15)
+  sees: each Find's dialer client, network and sidecar id, which its service token names (owner decision 588; edges add their K client ids and name no sidecar), token path or edge name, a dial's protocol, minimum version and offered ALPN ids, the server name of a dial that came by a custom host or an alias, affinity key (tlsedge's keyed /24 or /48 hash, never stored), the authorization log position that allowed it (§7.9), chosen listeners, grant id, issued tickets, a ur/ ticket naming its dialer's sidecar id for the listener's subject (owner decision 560), and the failed tickets a retry reports; each dialer's issued share and exclusions; reported accept timeouts; per-source registration and Find rates for the control-plane bound (memory; D-SOCK-15)
   why: admission, scheduling and outlier ejection (§9.6, §9.7)
   ttl: the request; tickets 30 s; dialer shares and exclusions at most 300 s; no per-dial record (D-SOCK-9)
   owner: §9.6
@@ -389,10 +392,10 @@ sock-4:
   owner: §9.8
 sock-5:
   service: sockets
-  store: Redis {sc_<client_id>}set and {sc_<client_id>}ok
-  sees: a client's set_version and registered entries; the time its token last checked valid (QD-040)
-  why: idempotent full-set calls; removal on the client's removal signal (§9.5, §9.8); a revocation-record miss within 120 s of a valid check counts as valid, since only api's and connect's SQL fallback projects the record again (QD-040)
-  ttl: 5 min after the client's last call; the valid time 120 s after the check it records
+  store: Redis {sc_<client_id>}set
+  sees: a client's set_version and registered entries
+  why: idempotent full-set calls; removal on the client's removal signal (§9.5, §9.8)
+  ttl: 5 min after the client's last call
   owner: §9.8
 evs-1:
   service: evs; gkm reads it
@@ -514,7 +517,7 @@ evs-17:
   ttl: as its pack or parcel; a parcel's entries go with it, after its pack's entries exist (§11.13)
   owner: §11.13
 evs-18:
-  service: api writes; evs and gkm read
+  service: api writes; evs, gkm and sockets read
   store: rev/<network_id>/<kind>/<subject_id>/_ (the first metadata cluster)
   sees: revocation objects for a client, sidecar or member; a JWS under api's svc- keys with subject, not_before, reason and time
   why: void 15-minute tokens on removal, deactivation, suspension or revocation (owner decision 2; §7.8)

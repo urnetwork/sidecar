@@ -1,11 +1,12 @@
 //go:build !sidecar_http && !ios_extension
 
 // Team's documents (ACL-M6-01), pure (T1): the starting document compiles to its golden and passes its own tests under
-// Team's limits; its grant 1 routes a member through the member's own devices alone and dials them as before (owner
-// decision 344); two approvers validate on Team alone and are enforced at GrantActivate; scope hosts validate only for a
-// scope the network holds and *.<scope> covers that scope alone, a member scope's hosts its member's consented devices
-// alone; SCIM's group:<name>@<domain> validates with no groups entry; and FS-85's worker case at the rule level, a
-// harness decision refused and the destination owner's device decision passing.
+// Team's limits; its grant 1 routes a member through the member's own devices alone, to the prefixes their routes in
+// force serve, and dials them as before (owner decisions 344 and 575); two approvers validate on Team alone and are
+// enforced at GrantActivate; scope hosts validate only for a scope the network holds and *.<scope> covers that scope
+// alone, a member scope's hosts its member's consented devices alone; SCIM's group:<name>@<domain> validates with no
+// groups entry; and FS-85's worker case at the rule level, a harness decision refused and the destination owner's
+// device decision passing.
 
 package sidecar
 
@@ -106,11 +107,13 @@ func TestAclTeamStartCompilesToItsGoldenAndPassesItsTests(t *testing.T) {
 
 // Grant 1's route (owner decision 344): dana's laptop routes through her own home device, which serves 192.168.7.0/24
 // under an approved route, by grant 1 alone, at MayRoute, at the contract gate, in RouteRules and ExitRules, which agree
-// with it, and in her engine; through amir's device, whose approved route serves 192.168.8.0/24, nothing routes at any of
-// them, nor does amir route through dana's. Grant 1 names no prefix, so it covers no route filed with no approval,
-// dana's or amir's. Rows carry no prefix, and the engine holds a rule with none to its via alone, so these are the
-// policy's answers: which of a via's prefixes a flow takes is the bridge compile's, which gives a rule with no prefix
-// none yet (question team-grant1-via-self-bridge-prefixless-route).
+// with it and name the home device a destination of grant 1 for her laptop; through amir's device, whose approved route
+// serves 192.168.8.0/24, nothing routes at any of them, nor does amir route through dana's. Rows carry no prefix, and
+// grant 1 names none, so it reaches the prefixes a via its destinations name serves (owner decision 575): dana's engine
+// routes her laptop to her home device's prefix once it holds the routes in force, and to no public address, no
+// address the home device does not serve and nothing through amir's device, and to nothing before it holds them. By the
+// same reading grant 1 covers a subnet route a member's device files with no approval that names it, which that
+// member's own devices alone then reach, and covers neither one that does not name it nor an exit.
 func TestAclTeamStartRoutesThroughAMembersOwnDevicesAlone(t *testing.T) {
 	team := newAclTeamWorld(t, string(AclTeamStartDocument()))
 	grant1 := team.world.documentRuleId(t, "grant", 0)
@@ -137,7 +140,8 @@ func TestAclTeamStartRoutesThroughAMembersOwnDevicesAlone(t *testing.T) {
 			t.Fatalf("through %v the reads disagree: MayRoute %+v, %d route rules, %d exit rules", via, decision, len(routeRules), len(exitRules))
 		}
 		if decision.Allowed && (!bytes.Equal(decision.Rule.GetRuleId(), grant1.Bytes()) || len(routeRules) != 1 ||
-			!bytes.Equal(routeRules[0].RuleId, grant1.Bytes()) || routeRules[0].Internet || routeRules[0].PortsLimited) {
+			!bytes.Equal(routeRules[0].RuleId, grant1.Bytes()) || routeRules[0].Internet || routeRules[0].PortsLimited ||
+			!routeRules[0].ViaDestination) {
 			t.Fatalf("through %v: %+v, %+v", via, decision, routeRules)
 		}
 		if decision.Allowed && !aclRouteRowsTestReaches(gate, end(source), end(via)) {
@@ -156,25 +160,59 @@ func TestAclTeamStartRoutesThroughAMembersOwnDevicesAlone(t *testing.T) {
 	}
 
 	engine := aclRouteRowsTestEngine(t, laptop, team.world)
-	if decision := engine.AllowRoute(AclSidecarSubject(laptop), danaAddress, aclIpProtocolTcp, 22, AclSidecarSubject(home), aclTestNow); !decision.Allowed ||
-		!bytes.Equal(decision.Rule.GetRuleId(), grant1.Bytes()) {
-		t.Errorf("dana's engine refused her home device's prefix: %+v", decision)
+	engineRoutes := func(address netip.Addr, via Id) bool {
+		t.Helper()
+		decision := engine.AllowRoute(AclSidecarSubject(laptop), address, aclIpProtocolTcp, 22, AclSidecarSubject(via), aclTestNow)
+		if decision.Allowed && !bytes.Equal(decision.Rule.GetRuleId(), grant1.Bytes()) {
+			t.Fatalf("dana's engine routed by another rule: %+v", decision)
+		}
+		return decision.Allowed
 	}
-	if decision := engine.AllowRoute(AclSidecarSubject(laptop), amirAddress, aclIpProtocolTcp, 22, AclSidecarSubject(amir), aclTestNow); decision.Allowed {
-		t.Errorf("dana's engine routed through amir's device: %+v", decision)
+	if engineRoutes(danaAddress, home) {
+		t.Error("dana's engine routed to a prefix before it held the routes in force")
+	}
+	engine.InstallRoutes(NewAclServedRoutes([]AclServedRoute{
+		{Advertiser: home, Prefixes: []netip.Prefix{netip.MustParsePrefix("192.168.7.0/24")}},
+		{Advertiser: amir, Prefixes: []netip.Prefix{netip.MustParsePrefix("192.168.8.0/24")}},
+	}))
+	if !engineRoutes(danaAddress, home) {
+		t.Error("dana's engine refused her home device's prefix")
+	}
+	if engineRoutes(netip.MustParseAddr("203.0.113.9"), home) {
+		t.Error("dana's engine routed to a public address through her home device")
+	}
+	if engineRoutes(amirAddress, home) {
+		t.Error("dana's engine routed through her home device to a prefix it does not serve")
+	}
+	if engineRoutes(amirAddress, amir) || engineRoutes(danaAddress, amir) {
+		t.Error("dana's engine routed through amir's device")
 	}
 
 	local, err := CompileAclLocal(team.world.input())
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, standing := range []*BridgeLedgerRule{
-		team.world.ledgerRoute("dana's unapproved", home, false, grant1), team.world.ledgerRoute("amir's unapproved", amir, false, grant1),
-	} {
+	unapproved := func(label string, advertiser Id, ruleIds ...Id) *BridgeLedgerRule {
+		standing := team.world.ledgerRoute(label, advertiser, false, ruleIds...)
 		standing.Route.Prefixes = []*bridge.BridgeIpv4Prefix{testBridgePrefix(192, 168, 9, 0, 24)}
-		if local.StandingCovers(state, standing, aclTestNow) {
-			t.Errorf("grant 1 covers %v's route filed with no approval", standing.Owner)
+		return standing
+	}
+	for _, advertiser := range []Id{home, amir} {
+		if !local.StandingCovers(state, unapproved("named", advertiser, grant1), aclTestNow) {
+			t.Errorf("grant 1 does not cover the route %v files with no approval that names it", advertiser)
 		}
+		if local.StandingCovers(state, unapproved("unnamed", advertiser), aclTestNow) {
+			t.Errorf("grant 1 covers a route of %v that does not name it", advertiser)
+		}
+		exit := unapproved("exit", advertiser, grant1)
+		exit.Route = &bridge.BridgeRouteBody{Kind: bridge.BridgeRouteKind_BRIDGE_ROUTE_KIND_EXIT, Weight: 1}
+		if local.StandingCovers(state, exit, aclTestNow) {
+			t.Errorf("grant 1 covers an exit of %v", advertiser)
+		}
+	}
+	// no compiled policy under the document: whether a rule names a prefix is the policy's to say, so none is covered
+	if (*AclLocalPolicy)(nil).StandingCovers(state, unapproved("no policy", home, grant1), aclTestNow) {
+		t.Error("a nil policy under a document covers a route")
 	}
 }
 
