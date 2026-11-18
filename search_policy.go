@@ -12,6 +12,11 @@
 //	            background keeps all at each roll-up and rewrite; wifi_charging in an OS-granted window or while the
 //	            app is in the foreground, in both only on an unmetered link while charging and never in Low Power
 //	            Mode (QD-1000); on_demand only for "search more"; never not at all
+//	rounds      the rule holds for a whole round, not only its start (QD-1026; owner decision 583; §18.7's window
+//	            works "while the reported conditions allow it"): the sync engine asks KeepsAll before a round's
+//	            fetch of all and again before each read of all, in every round but "search more"'s, so a window or
+//	            foreground round stops fetching all once its link turns metered, its charger is unplugged or Low
+//	            Power Mode turns on, what landed staying staged for the next round the rule allows
 //	caps        a host with Search.AllCacheByteCount keeps all only while the repo's all fits it, else on demand;
 //	            Search.UnusedAllAge evicts all shards no search used that long, search.state kept
 //	windows     background index work (merges, roll-ups) runs on a background host always, on a wifi_charging host
@@ -152,7 +157,9 @@ func (self *SearchPolicy) windowsAllow() bool {
 }
 
 // Whether this device keeps repoId's all synced now (the sync engine's keepAll), all being allByteCount bytes as the
-// device's listing knows it (0 where unknown): by the mode in force, within Search.AllCacheByteCount.
+// device's listing knows it (0 where unknown): by the mode in force, within Search.AllCacheByteCount. Each call reads
+// the conditions afresh; a round asks before its fetch of all and again before each read of all (QD-1026), so the
+// answer follows the host's reports through a round.
 func (self *SearchPolicy) KeepsAll(repoId Id, allByteCount int64) bool {
 	if allCap := self.settings.AllCacheByteCount; 0 < allCap && allCap < allByteCount {
 		// past a cap all is kept on demand (§18.4's caps row)
@@ -197,7 +204,8 @@ func (self *SearchPolicy) MayRollUp(allHeld bool, allByteCount int64) bool {
 }
 
 // Opens an OS window until deadline, its budget: wifi_charging syncs all and runs background work inside it while the
-// windows rule allows, on an unmetered link while charging and not in Low Power Mode. The answer ends it early.
+// windows rule allows, on an unmetered link while charging and not in Low Power Mode, asked again before each read of
+// all (QD-1026). The answer ends it early.
 func (self *SearchPolicy) BeginWindow(deadline time.Time) func() {
 	window := &searchPolicyWindow{deadline: deadline}
 	self.stateLock.Lock()

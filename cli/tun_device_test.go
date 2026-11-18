@@ -708,10 +708,15 @@ func TestTunReadsOnPastDroppedSegments(t *testing.T) {
 	}
 }
 
-// Sets the bridge's egress mode and has it report the change, as an adoption does.
+// Sets the bridge's egress mode, with one exit it can use under exits, and has it report the change, as an adoption
+// does.
 func (self *testTunBridge) setEgressMode(mode bridge.BridgeEgressMode) {
 	self.stateLock.Lock()
 	self.status.EgressMode = mode
+	self.status.EgressExitCount = 0
+	if mode == bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS {
+		self.status.EgressExitCount = 1
+	}
 	self.stateLock.Unlock()
 	self.changed()
 }
@@ -806,8 +811,9 @@ func TestTunStartsWithTheExitsHeld(t *testing.T) {
 	bridges, tunBridge := newTestUrBridgeDaemon(t, system, networkId, false)
 	tunBridge.stateLock.Lock()
 	tunBridge.status.EgressMode = bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS
+	tunBridge.status.EgressExitCount = 1
 	tunBridge.stateLock.Unlock()
-	status, err := bridges.tunUp(networkId, nil)
+	status, err := bridges.tunUp(networkId, nil, nil)
 	if err != nil || !status.ExitsHeld || status.DefaultRoute || !strings.Contains(status.ExitsHeldReason, "a rule refused") {
 		t.Fatalf("up: %+v %v", status, err)
 	}
@@ -825,6 +831,7 @@ func TestTunCountsTheIpv6TheBridgeRejects(t *testing.T) {
 	system := newTestTunSystem()
 	tunBridge := newTestTunBridge()
 	tunBridge.status.EgressMode = bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS
+	tunBridge.status.EgressExitCount = 1
 	tunBridge.status.Ipv6RejectedCount = 5
 	tun, err := startUrTun(context.Background(), &urTunArgs{
 		Name:      "ur-test",
@@ -868,6 +875,7 @@ func TestTunWritesTheBridgesIpv6RejectsIntoTheDevice(t *testing.T) {
 	reject := device.NewBridgeRejectClient(bridgeReceive, device.DefaultBridgeSettings())
 	tunBridge.stateLock.Lock()
 	tunBridge.status.EgressMode = bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS
+	tunBridge.status.EgressExitCount = 1
 	tunBridge.route = func(packet []byte) connect.UserNatClient {
 		if packet[0]>>4 == 6 {
 			return reject
@@ -991,12 +999,12 @@ func newTestUrBridgeDaemon(t *testing.T, system urTunSystem, networkId sidecar.I
 // nothing.
 func TestTunRefusesWhatItCannotCarry(t *testing.T) {
 	bridges, _ := newTestUrBridgeDaemon(t, nil, sidecar.NewId(), false)
-	if _, err := bridges.tunUp(sidecar.NewId(), nil); !errors.Is(err, errUrTunPlatform) {
+	if _, err := bridges.tunUp(sidecar.NewId(), nil, nil); !errors.Is(err, errUrTunPlatform) {
 		t.Fatalf("no platform: %v", err)
 	}
 	system := newTestTunSystem()
 	unwired, _ := newTestUrBridgeDaemon(t, system, sidecar.NewId(), false)
-	if _, err := unwired.tunUp(sidecar.NewId(), nil); !errors.Is(err, errUrBridgeUnwired) {
+	if _, err := unwired.tunUp(sidecar.NewId(), nil, nil); !errors.Is(err, errUrBridgeUnwired) {
 		t.Fatalf("no bridge: %v", err)
 	}
 	if _, err := unwired.bridgeNetwork(sidecar.NewId(), nil); !errors.Is(err, errUrBridgeUnwired) {
@@ -1015,7 +1023,7 @@ func TestTunReportsAMissingPrivilege(t *testing.T) {
 	system.openErr = errUrTunPrivilege
 	networkId := sidecar.NewId()
 	bridges, _ := newTestUrBridgeDaemon(t, system, networkId, false)
-	if _, err := bridges.tunUp(networkId, nil); !errors.Is(err, errUrTunPrivilege) {
+	if _, err := bridges.tunUp(networkId, nil, nil); !errors.Is(err, errUrTunPrivilege) {
 		t.Fatalf("no privilege: %v", err)
 	}
 	if bridges.tunStatus() != nil {
@@ -1030,7 +1038,7 @@ func TestTunEndsAStartItMayNotConfigure(t *testing.T) {
 	system.iface.addressErr = errUrTunPrivilege
 	networkId := sidecar.NewId()
 	bridges, _ := newTestUrBridgeDaemon(t, system, networkId, false)
-	if _, err := bridges.tunUp(networkId, nil); !errors.Is(err, errUrTunPrivilege) {
+	if _, err := bridges.tunUp(networkId, nil, nil); !errors.Is(err, errUrTunPrivilege) {
 		t.Fatalf("no privilege to configure: %v", err)
 	}
 	system.iface.stateLock.Lock()
@@ -1042,7 +1050,7 @@ func TestTunEndsAStartItMayNotConfigure(t *testing.T) {
 	other := newTestTunSystem()
 	other.iface.addressErr = errors.New("an address the kernel refused")
 	otherBridges, _ := newTestUrBridgeDaemon(t, other, networkId, false)
-	status, err := otherBridges.tunUp(networkId, nil)
+	status, err := otherBridges.tunUp(networkId, nil, nil)
 	if err != nil || !strings.Contains(status.SyncError, "refused") {
 		t.Fatalf("another failure: %+v %v", status, err)
 	}
@@ -1054,12 +1062,12 @@ func TestTunYieldsToAnAppsBridge(t *testing.T) {
 	system.holder = "tun7"
 	networkId := sidecar.NewId()
 	bridges, _ := newTestUrBridgeDaemon(t, system, networkId, true)
-	_, err := bridges.tunUp(networkId, nil)
+	_, err := bridges.tunUp(networkId, nil, nil)
 	if !errors.Is(err, errUrTunYield) || !strings.Contains(err.Error(), "tun7") {
 		t.Fatalf("paired: %v", err)
 	}
 	unpaired, _ := newTestUrBridgeDaemon(t, newTestTunSystem(), networkId, false)
-	if _, err := unpaired.tunUp(networkId, nil); err != nil {
+	if _, err := unpaired.tunUp(networkId, nil, nil); err != nil {
 		t.Fatalf("unpaired: %v", err)
 	}
 }
@@ -1069,15 +1077,15 @@ func TestTunCarriesOneNetworkAtATime(t *testing.T) {
 	system := newTestTunSystem()
 	networkId := sidecar.NewId()
 	bridges, _ := newTestUrBridgeDaemon(t, system, networkId, false)
-	status, err := bridges.tunUp(networkId, nil)
+	status, err := bridges.tunUp(networkId, nil, nil)
 	if err != nil || status.Device != "ur-test" || status.NetworkId != networkId {
 		t.Fatalf("up: %+v %v", status, err)
 	}
-	if again, err := bridges.tunUp(networkId, nil); err != nil || again.Device != "ur-test" {
+	if again, err := bridges.tunUp(networkId, nil, nil); err != nil || again.Device != "ur-test" {
 		t.Fatalf("again: %v", err)
 	}
 	other := sidecar.NewId()
-	if _, err := bridges.tunUp(other, nil); err == nil || !strings.Contains(err.Error(), "ur tun down first") {
+	if _, err := bridges.tunUp(other, nil, nil); err == nil || !strings.Contains(err.Error(), "ur tun down first") {
 		t.Fatalf("another network: %v", err)
 	}
 	if !bridges.tunDown() {

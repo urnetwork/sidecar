@@ -31,8 +31,8 @@ import (
 var _ sidecar.HttpEngine = (*SocketsService)(nil)
 
 // The service's ticket keys (§9.8): the newest settled key signs, and every listed key verifies.
-// SOCK-M5-08's SocketTicketKeySet reads them from vault's secret_files and rotates them on 30 days with
-// overlap. Safe for concurrent use.
+// SOCK-M5-08's SocketTicketKeySet reads them from vault's secret_files and rotates them every RotationInterval
+// with overlap. Safe for concurrent use.
 type SocketTicketKeys interface {
 	// The key that signs now, and false when none is loaded, which leaves the engine not ready and
 	// signing nothing.

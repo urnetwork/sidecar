@@ -1528,11 +1528,21 @@ type BridgeEgressRequest struct {
 	// Under exits, the exits by id or their tag, not both.
 	ExitSidecarIds []Id
 	ExitTagId      Id
+	// Under exits, whether the subject's devices must keep default egress on (QD-1053), sealed in the exits body.
+	RequireDefaultEgress bool
 }
 
+// An egress change that requires default egress on, which SetEgress files only once its approval can show the
+// requirement (question ur-tun-default-egress-option-lock-action).
+var errBridgeEgressRequirementUnshown = errors.New("an egress change that requires default egress on waits for the " +
+	"approval to show the requirement: egress_change's action names its subject, mode and exits alone (owner decision " +
+	"462), so a decision on one would not cover it, and a filing that differed only by it would reuse an earlier " +
+	"decision's statement")
+
 // The statement and the body an egress spec files: the mode in the clear, and under exits only a sealed body, nil
-// under auto and none, which never wait on a seal. Exits named twice, an exit of zero, or more exits than the ledger's
-// settings allow (nil, the defaults), are refused, as the readers void such a body.
+// under auto and none, which never wait on a seal, the requirement of default egress among its fields (QD-1053), which
+// auto and none refuse. Exits named twice, an exit of zero, or more exits than the ledger's settings allow (nil, the
+// defaults), are refused, as the readers void such a body.
 func bridgeEgressStatement(request *BridgeEgressRequest, settings *BridgeLedgerSettings) (*bridge.BridgeEgress, *bridge.BridgeEgressBody, error) {
 	if request == nil || request.Subject == (Id{}) {
 		return nil, nil, fmt.Errorf("%w: an egress spec names its subject", ErrBridgeFileRefused)
@@ -1543,6 +1553,9 @@ func bridgeEgressStatement(request *BridgeEgressRequest, settings *BridgeLedgerS
 		if len(request.ExitSidecarIds) != 0 || request.ExitTagId != (Id{}) {
 			return nil, nil, fmt.Errorf("%w: exits under mode %s", ErrBridgeFileRefused, request.Mode)
 		}
+		if request.RequireDefaultEgress {
+			return nil, nil, fmt.Errorf("%w: default egress required under mode %s", ErrBridgeFileRefused, request.Mode)
+		}
 		return statement, nil, nil
 	case bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS:
 		if (len(request.ExitSidecarIds) == 0) == (request.ExitTagId == (Id{})) {
@@ -1551,7 +1564,7 @@ func bridgeEgressStatement(request *BridgeEgressRequest, settings *BridgeLedgerS
 		if bridgeLedgerSettingsOrDefault(settings).BodyListMaxCount < len(request.ExitSidecarIds) {
 			return nil, nil, fmt.Errorf("%w: %d exits", ErrBridgeFileRefused, len(request.ExitSidecarIds))
 		}
-		body := &bridge.BridgeEgressBody{}
+		body := &bridge.BridgeEgressBody{RequireDefaultEgress: request.RequireDefaultEgress}
 		for i, exitId := range request.ExitSidecarIds {
 			if exitId == (Id{}) || slices.Contains(request.ExitSidecarIds[:i], exitId) {
 				return nil, nil, fmt.Errorf("%w: an exit of zero or named twice", ErrBridgeFileRefused)
@@ -1603,6 +1616,10 @@ func (self *BridgeFiler) SetEgress(ctx context.Context, origin *BridgeFileOrigin
 	}
 	if _, _, err := bridgeEgressStatement(request, self.settings.Ledger); err != nil {
 		return nil, err
+	}
+	if request.RequireDefaultEgress {
+		// the closed direction until egress_change's action carries the requirement
+		return nil, fmt.Errorf("%w: %w", ErrBridgeFileRefused, errBridgeEgressRequirementUnshown)
 	}
 	view, err := self.view(ctx)
 	if err != nil {

@@ -439,6 +439,7 @@ message BridgeLedgerEgressRow {
   repeated bytes exit_sidecar_ids = 3;   // under exits, from its body; none when the body is void
   bytes  exit_tag_id = 4;
   uint64 at = 5;
+  bool   require_default_egress = 6;     // under exits, from its body: default egress stays on (QD-1053)
 }
 
 message BridgeLedgerAliases {            // bridge/ledger/aliases, by (share_id, target_index)
