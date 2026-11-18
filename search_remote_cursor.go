@@ -392,11 +392,12 @@ func (self *searchRemoteCursor) serves(repoId Id) bool {
 	return false
 }
 
-// The barrier key of the cursor's pages: its first served repo and ref, else empty.
+// The barrier key of the cursor's pages: its first served repo and ref as <repo>:<ref>, an opaque id with no slash
+// (testhook.go; I-13), else empty.
 func (self *searchRemoteCursor) barrierKey() string {
 	for _, repo := range self.repos {
 		if searchRemoteServes(protocol.SearchServed(repo.row.GetServed())) {
-			return repo.repoId.String() + "/" + Id(repo.row.GetRefId()).String()
+			return repo.repoId.String() + ":" + Id(repo.row.GetRefId()).String()
 		}
 	}
 	return ""

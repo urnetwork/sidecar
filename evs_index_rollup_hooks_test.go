@@ -1,7 +1,7 @@
 //go:build sidecar_testhooks && !ios_extension
 
 // FS-75's kills and the barriers' order (SEARCH-M10-10, SEARCH-M10-11; DESIGN-DETAILS 1.5): a merge and a roll-up pass
-// their barriers in order, keyed <repo>/<ref>; killed at each barrier before its push, a merge commits nothing and the
+// their barriers in order, keyed <repo>:<ref>; killed at each barrier before its push, a merge commits nothing and the
 // next merge writes what it would have, and a roll-up leaves its bucket and all as they were, its lock to lapse, after
 // which a second runner rolls the same plaintext; killed after its push, the push stands.
 
@@ -10,6 +10,7 @@ package sidecar
 import (
 	"context"
 	"crypto/sha256"
+	"regexp"
 	"slices"
 	"sync"
 	"testing"
@@ -25,7 +26,7 @@ type testIndexKill struct {
 func testIndexBarriers(t *testing.T, kill string) *[]string {
 	stateLock := sync.Mutex{}
 	passed := []string{}
-	key := evsTestId("view repo").String() + "/" + evsTestId("view ref").String()
+	key := evsTestId("view repo").String() + ":" + evsTestId("view ref").String()
 	SetTestHooks(&TestHooks{Barrier: func(name string, barrierKey string) {
 		if barrierKey != key {
 			return
@@ -169,6 +170,30 @@ func TestIndexRollupKilledAtEachBarrier(t *testing.T) {
 			if want[file.path] != sha256.Sum256(file.plaintext) {
 				t.Errorf("%s: the rerun's %s differs from the roll-up's", barrier, file.path)
 			}
+		}
+	}
+}
+
+// sidecartest's barrier driver's key rule (sidecartest/barrier.go's barrierKeyPattern), which a Net holds every hook
+// call to: an opaque id, or ids joined by ':', never a slash, which reads as a path (testhook.go; I-13).
+var testBarrierKeyPattern = regexp.MustCompile(`^[A-Za-z0-9_:=+.-]{1,128}$`)
+
+// Every index runner keys its barriers <repo>:<ref>, an opaque id a Net's barrier driver takes: FS-75's roll-up on the
+// evs world failed while the key was <repo>/<ref>.
+func TestIndexBarrierKeysAreOpaqueIds(t *testing.T) {
+	repoId, refId := evsTestId("view repo"), evsTestId("view ref")
+	want := repoId.String() + ":" + refId.String()
+	keys := map[string]string{
+		"build":     (&IndexBuilder{args: indexBuilderArgs{repoId: repoId, refId: refId}}).barrierKey(),
+		"backfill":  (&IndexBackfiller{args: indexBackfillArgs{repoId: repoId, refId: refId}}).barrierKey(),
+		"merge":     (&IndexMerger{args: indexMergerArgs{repoId: repoId, refId: refId}}).barrierKey(),
+		"roll-up":   (&IndexRoller{args: indexRollerArgs{repoId: repoId, refId: refId}}).barrierKey(),
+		"erasure":   (&IndexEraser{args: indexEraserArgs{repoId: repoId, refId: refId}}).barrierKey(),
+		"companion": (&IndexCompanion{args: &indexCompanionArgs{repoId: repoId, indexRefId: refId}}).barrierKey(),
+	}
+	for part, key := range keys {
+		if key != want || !testBarrierKeyPattern.MatchString(key) {
+			t.Errorf("the %s's barrier key %q is not %q, an opaque id", part, key, want)
 		}
 	}
 }
