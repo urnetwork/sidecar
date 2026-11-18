@@ -20,9 +20,11 @@
 //     statement no batch, container or head names, DESIGN-DETAILS 14.5's leak and never a loss. A slot whose
 //     statement a batch held, at this check or an earlier one, is still reported, as is one with no origin;
 //   - nothing committed or unknown is reclaimed: between two checks, no DELETE takes a segment, slot or map part a
-//     committed version named, nor a batch, slot or segment of a push that was pending at the first check and is
-//     still pending (neither committed nor dead by §11.8's Resolve row) at the second; and no segment goes before
-//     DESIGN-DETAILS 2.2.4's horizon passed its LastModified + 24 h 2 min, which is at least 25 h past that bound.
+//     committed version named, nor a batch, slot or segment of a record that was pending at the first check and is
+//     still pending at the second, its push neither committed nor dead by §11.8's Resolve row as that record's own
+//     rule reads it, a re-seed's records and every seal by the fence in place of the time clause (QD-872, QD-974;
+//     fi6FenceFloor); and no segment goes before DESIGN-DETAILS 2.2.4's horizon passed its LastModified + 24 h 2 min,
+//     which is at least 25 h past that bound.
 //
 // Unknown is read from durable state, so it spans a kill: a record in a batch whose push the head history neither
 // commits nor shows dead is pending, whatever the process that wrote it saw. FI-2's ledger (ledger.go) is the
@@ -94,6 +96,9 @@ type Fi6Settings struct {
 	// DESIGN-DETAILS 14.2.2: the longest slot origin evs writes, 190 B. A longer value names no statement, as evs
 	// reads it.
 	SlotOriginMaxByteCount int
+	// §11.8's seal row in §11.13's reseed mode (QD-974): a re-seed's seal takes no part place whose batch minute began
+	// more than this before it arrived, 24 h, so no seal arriving later can commit a re-seeded part.
+	ReseedPartMaxAge time.Duration
 }
 
 func DefaultFi6Settings() *Fi6Settings {
@@ -104,6 +109,7 @@ func DefaultFi6Settings() *Fi6Settings {
 		StatementLife:          35 * time.Minute,
 		FileWindowVersionCount: 64,
 		SlotOriginMaxByteCount: 190,
+		ReseedPartMaxAge:       24 * time.Hour,
 	}
 }
 
@@ -152,8 +158,8 @@ func fi6StatementOf(pushId sidecar.Id, statementSha256 [sha256.Size]byte) fi6Sta
 type fi6Memory struct {
 	// objects a committed version named at the last check, "cluster\x00key" -> what named it
 	committedObjects map[string]string
-	// objects of a push pending at the last check, "cluster\x00key" -> the push
-	pendingObjects map[string]*fi6PendingPush
+	// objects of a record pending at the last check, "cluster\x00key" -> each such record listing it or held in it
+	pendingObjects map[string][]*fi6PendingPush
 	// seg/ objects' LastModified at the last check, by cluster and key
 	segmentTimes map[string]time.Time
 	// every statement a batch record named at this check or an earlier one: the orphan-slot clause excuses only a
@@ -166,32 +172,39 @@ type fi6Memory struct {
 func newFi6Memory() *fi6Memory {
 	return &fi6Memory{
 		committedObjects: map[string]string{},
-		pendingObjects:   map[string]*fi6PendingPush{},
+		pendingObjects:   map[string][]*fi6PendingPush{},
 		segmentTimes:     map[string]time.Time{},
 		heldStatements:   map[fi6Statement]bool{},
 	}
 }
 
+// One pending record, with what Resolve's dead rule reads of it, kept for when the record has gone.
 type fi6PendingPush struct {
 	repoId   sidecar.Id
 	refId    sidecar.Id
 	pushId   sidecar.Id
 	batchKey string
-	// what Resolve's dead rule reads of its statement, kept for when its record has gone
+	// of its statement
 	baseVersion uint64
 	timeMs      int64
 	gitMode     bool
+	// for a record the fence judges in place of its statement's time (fi6FenceFloor), the time a fence must reach
+	byFence    bool
+	fenceFloor time.Time
 }
 
 // A record in a batch, as the reclaim clauses read it.
 type fi6BatchRecord struct {
-	clusterId  string
-	batchKey   string
-	place      *protocol.EvsPlace
-	record     *sidecar.EvsBatchRecord
-	statement  *sidecar.EvsStatement
-	segmentIds [][]byte
-	slotIds    [][]byte
+	clusterId string
+	batchKey  string
+	place     *protocol.EvsPlace
+	// its batch's LastModified, by which the record stood in its batch, and the minute its key names
+	batchTime   time.Time
+	batchMinute time.Time
+	record      *sidecar.EvsBatchRecord
+	statement   *sidecar.EvsStatement
+	segmentIds  [][]byte
+	slotIds     [][]byte
 }
 
 // What §11.8's Resolve row makes of a record on its ref's head.
@@ -696,7 +709,10 @@ func fi6ReadBatches(ctx context.Context, oracle *Oracle, memory *evsOracleMemory
 			}
 			batch := value.(*sidecar.EvsBatch)
 			for i, record := range batch.Records {
-				read := &fi6BatchRecord{clusterId: clusterId, batchKey: object.Key, place: batch.Places[i], record: record}
+				read := &fi6BatchRecord{
+					clusterId: clusterId, batchKey: object.Key, place: batch.Places[i], batchTime: object.LastModified, batchMinute: minute,
+					record: record,
+				}
 				if err := read.decode(); err != nil {
 					errs = append(errs, fmt.Errorf("%s's record %d: %w", object.Key, i, err))
 					continue
@@ -782,13 +798,12 @@ func (self *fi6BatchRecord) decode() error {
 // §11.8's Resolve row, from its text: P is committed at u iff the head history names P at a version u in (b, b+64]
 // (file mode) or at b+1 (git mode), here or at another place; dead iff not committed and the head is at or past b+64
 // (git mode: b+1), or its statement can no longer pass the time checks (time_ms + 35 min) and the head's fence_ms is
-// later than that; otherwise pending. A one-part reseed record counts as committed, a re-seeded push's part follows
-// its seal as any part does (QD-818), and a ref with no head leaves P pending. 64 and 35 min are settings'.
+// later than that; otherwise pending. A part follows its seal, a re-seeded push's part included (QD-818), and a ref
+// with no head leaves P pending. A re-seed's records and every seal take the fence in place of the time clause
+// (QD-872, QD-974; fi6FenceFloor): dead, uncommitted, only on a head whose fence_ms is at or past the time after which
+// no attempt that can commit the record arrives, never by the statement's time. 64, 35 min and 24 h are settings'.
 func fi6Resolve(settings *Fi6Settings, repo *evsStoreRepo, read *fi6BatchRecord) fi6Outcome {
 	reseededPart := sidecar.EvsReseedRecordHoldsPart(read.record)
-	if read.record.Type == protocol.EvsBatchRecordType_EVS_BATCH_RESEED && !reseededPart {
-		return fi6CommittedHere
-	}
 	var ref *evsStoreRef
 	if repo != nil {
 		for _, each := range repo.refs {
@@ -824,7 +839,42 @@ func fi6Resolve(settings *Fi6Settings, repo *evsStoreRepo, read *fi6BatchRecord)
 	if last <= head.GetVersion() {
 		return fi6Dead
 	}
+	if floor, byFence := fi6FenceFloor(settings, read); byFence {
+		return fi6FencedOutcome(floor, head)
+	}
 	if push.GetTimeMs()+settings.StatementLife.Milliseconds() < head.GetFenceMs() {
+		return fi6Dead
+	}
+	return fi6Pending
+}
+
+// For a record §11.8's Resolve row judges by the fence in place of its statement's time (QD-872, QD-974), a re-seed's
+// record, one-part or part, and every seal: the time after which no attempt that can still commit it arrives, and true.
+// The attempt that appended a one-part reseed record or a seal, the only one that can commit it at its place, arrived
+// before the record stood in its batch, by the batch's LastModified. A re-seeded part is committed by a seal attempt
+// that may come later, but the reseed mode's seal takes no part place whose batch minute began more than
+// ReseedPartMaxAge before it arrived. A fence at or past that time ends every such attempt by §11.8's fence row. evs's
+// own rule, a fence at or past the time its evacuation run held the record, 25 h past its minute, implies this one.
+// False for a record its statement's time judges: a one-part push's, and a part of the push route's, whose seal 5b
+// holds within 30 min of time_ms.
+func fi6FenceFloor(settings *Fi6Settings, read *fi6BatchRecord) (time.Time, bool) {
+	switch {
+	case sidecar.EvsReseedRecordHoldsPart(read.record):
+		floor := read.batchMinute.Add(settings.ReseedPartMaxAge)
+		if floor.Before(read.batchTime) {
+			floor = read.batchTime
+		}
+		return floor, true
+	case read.record.Type == protocol.EvsBatchRecordType_EVS_BATCH_RESEED, read.record.Type == protocol.EvsBatchRecordType_EVS_BATCH_SEAL:
+		return read.batchTime, true
+	}
+	return time.Time{}, false
+}
+
+// A fenced record's outcome on head, uncommitted and inside its window: dead on a fence_ms at or past floor, else
+// pending. A floor the store did not give, a batch with no LastModified, ends nothing.
+func fi6FencedOutcome(floor time.Time, head *protocol.EvsHead) fi6Outcome {
+	if !floor.IsZero() && floor.UnixMilli() <= head.GetFenceMs() {
 		return fi6Dead
 	}
 	return fi6Pending
@@ -1020,21 +1070,14 @@ func fi6CheckReclaims(oracle *Oracle, settings *Fi6Settings, memory *evsOracleMe
 			if committed {
 				errs = append(errs, fmt.Errorf("%s deleted %s on %s, which %s names: a committed object reclaimed", entry.Actor, entry.Key, entry.ClusterId, namedBy))
 			}
-			if pending := previous.pendingObjects[objectKey]; pending != nil {
-				outcome := fi6Pending
-				for _, read := range records {
-					if read.record.PushId == pending.pushId {
-						if resolved := fi6Resolve(settings, repoById[pending.repoId], read); resolved != fi6Pending {
-							outcome = resolved
-						}
-					}
-				}
-				if outcome == fi6Pending {
-					// its record may be gone with the batch: resolve on the ref's history alone
-					outcome = fi6ResolveGone(settings, repoById[pending.repoId], pending)
-				}
-				if outcome == fi6Pending {
+			// each record that was pending at the last check and listed the object or stood in it, judged again by its
+			// own rule on this check's history, whether or not it is still in its batch: a re-seed's records and
+			// seals each have their own fence floor, so another record of the same push being dead says nothing of
+			// this one (QD-974)
+			for _, pending := range previous.pendingObjects[objectKey] {
+				if fi6ResolveAgain(settings, repoById[pending.repoId], pending) == fi6Pending {
 					errs = append(errs, fmt.Errorf("%s deleted %s on %s, which push %s, still pending, needs: an unknown outcome reclaimed", entry.Actor, entry.Key, entry.ClusterId, pending.pushId))
+					break
 				}
 			}
 			if entry.ClusterId == segmentClusterId && strings.HasPrefix(entry.Key, "seg/") {
@@ -1078,21 +1121,26 @@ func fi6CheckReclaims(oracle *Oracle, settings *Fi6Settings, memory *evsOracleMe
 			continue
 		}
 		push := read.statement.Push
+		fenceFloor, byFence := fi6FenceFloor(settings, read)
 		pending := &fi6PendingPush{
 			repoId: read.record.RepoId, refId: read.record.RefId, pushId: read.record.PushId, batchKey: read.batchKey,
 			baseVersion: push.GetBaseVersion(), timeMs: push.GetTimeMs(),
 			gitMode: protocol.EvsRefMode(push.GetRefMode()) == protocol.EvsRefMode_EVS_REF_GIT,
+			byFence: byFence, fenceFloor: fenceFloor,
 		}
-		next.pendingObjects[fi6ObjectKey(read.clusterId, read.batchKey)] = pending
+		add := func(objectKey string) {
+			next.pendingObjects[objectKey] = append(next.pendingObjects[objectKey], pending)
+		}
+		add(fi6ObjectKey(read.clusterId, read.batchKey))
 		clusterId := read.clusterId
 		if repo != nil {
 			clusterId = repo.clusterId
 		}
 		for _, slotId := range read.slotIds {
-			next.pendingObjects[fi6ObjectKey(clusterId, evsOracleSlotKey(read.record.RepoId, slotId))] = pending
+			add(fi6ObjectKey(clusterId, evsOracleSlotKey(read.record.RepoId, slotId)))
 		}
 		for _, segmentId := range read.segmentIds {
-			next.pendingObjects[fi6ObjectKey(segmentClusterId, evsOracleSegmentKey(read.record.RepoId, segmentId))] = pending
+			add(fi6ObjectKey(segmentClusterId, evsOracleSegmentKey(read.record.RepoId, segmentId)))
 		}
 	}
 	memory.stateLock.Lock()
@@ -1101,10 +1149,10 @@ func fi6CheckReclaims(oracle *Oracle, settings *Fi6Settings, memory *evsOracleMe
 	return errs
 }
 
-// A push pending at the last check whose record left with its batch, resolved by §11.8's Resolve row on what the last
-// check kept of its statement: committed if the ref's history names it where it could commit, dead by the row's dead
-// rule, else still pending.
-func fi6ResolveGone(settings *Fi6Settings, repo *evsStoreRepo, pending *fi6PendingPush) fi6Outcome {
+// A record pending at the last check, in its batch still or gone with it, resolved again by §11.8's Resolve row on
+// this check's history and what the last check kept of it: committed if the ref's history names its push where it
+// could commit, dead by the row's dead rule, its own fence floor for a record the fence judges, else still pending.
+func fi6ResolveAgain(settings *Fi6Settings, repo *evsStoreRepo, pending *fi6PendingPush) fi6Outcome {
 	if repo == nil {
 		return fi6Pending
 	}
@@ -1122,7 +1170,12 @@ func fi6ResolveGone(settings *Fi6Settings, repo *evsStoreRepo, pending *fi6Pendi
 			}
 		}
 		head := ref.head.Head
-		if last <= head.GetVersion() || pending.timeMs+settings.StatementLife.Milliseconds() < head.GetFenceMs() {
+		switch {
+		case last <= head.GetVersion():
+			return fi6Dead
+		case pending.byFence:
+			return fi6FencedOutcome(pending.fenceFloor, head)
+		case pending.timeMs+settings.StatementLife.Milliseconds() < head.GetFenceMs():
 			return fi6Dead
 		}
 	}
