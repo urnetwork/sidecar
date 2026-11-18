@@ -645,27 +645,6 @@ func (self *indexViewWriter) unabsorbed(absorbed uint32) []*indexViewSlot {
 	return files
 }
 
-// The writer's kept files (1.2.1): each file but its head that holds the base of a diff in one of its unabsorbed
-// slots, which the writer neither reuses nor removes. counts says whether a diff counts, which a plan uses to leave out
-// the head entries its push replaces; nil counts every one.
-func (self *indexViewWriter) kept(absorbed uint32, counts func(slot *indexViewSlot, entry *indexEntry) bool) map[*indexViewSlot]bool {
-	kept := map[*indexViewSlot]bool{}
-	for _, file := range self.unabsorbed(absorbed) {
-		if file.path.kind != indexPathSlot {
-			continue
-		}
-		for _, entry := range file.slot.entries {
-			if entry.kind != indexEntryDiff || (counts != nil && !counts(file, entry)) {
-				continue
-			}
-			if baseFile, _ := indexResolveBase(self, entry.key, entry.baseVersion, file); baseFile != nil {
-				kept[baseFile] = true
-			}
-		}
-	}
-	return kept
-}
-
 // The highest seq of the writer's slots and large entries in the bucket, 0 for none: its next file takes one more.
 func (self *indexViewWriter) highestSeq() uint32 {
 	highest := uint32(0)

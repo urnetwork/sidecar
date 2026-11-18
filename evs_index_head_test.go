@@ -1,7 +1,7 @@
-// Writer heads on own bases (SEARCH-M10-09 and SEARCH-M10-45; DESIGN-DETAILS 1.2.3 and 1.6): each branch of choose as
-// a table, a writer's diffs resting on its own files and never on another writer's, the head rule's two pushes of one
-// writer on one base, the keep rule's skipped and reused slots and its ninth kept slot, absorbed large entries removed
-// and a kept one left, a plan run twice giving equal bytes, seals, the ring and the push past DirectBytes, and 1.6's
+// Writer heads (SEARCH-M10-09 and SEARCH-M10-45; §11.14's dependency, seal and large rows; owner decision 584): every
+// entry full or a tombstone, an edit's full entry replacing its writer's older one in the head and standing beside it
+// once the head sealed, the head rule's two pushes of one writer on one base, an absorbed slot reused and absorbed
+// large entries removed, a plan run twice giving equal bytes, seals, the ring and the push past DirectBytes, and the
 // head vectors with plaintext hashes (D-TEST-15), all on the fake store.
 
 package sidecar
@@ -124,7 +124,7 @@ func (self *testHeadWorld) entries(t testing.TB, label string, index int) []*ind
 func (self *testHeadWorld) fillUntilSealed(t testing.TB, writer Id, label string, index int) int {
 	t.Helper()
 	for ; ; index += 1 {
-		plan := self.push(t, writer, testLive(label, index, 1, 0, testIndexKeys(0x300000+index*0x1000, 1500, 1)))
+		plan := self.push(t, writer, testLive(label, index, 1, testIndexKeys(0x300000+index*0x1000, 1500, 1)))
 		if len(plan.buckets[0].sealedSlots) != 0 {
 			return index + 1
 		}
@@ -134,7 +134,7 @@ func (self *testHeadWorld) fillUntilSealed(t testing.TB, writer Id, label string
 	}
 }
 
-// The keys of document index at its version n: a base range with n keys moved, so each edit is a small delta.
+// The keys of document index at its version n: a base range with n keys moved, so each edit changes little.
 func testHeadKeys(index int, n int) indexKeySet {
 	keys := testIndexKeys(0x200000+index*0x1000, 200, 2)
 	for edit := range n {
@@ -143,15 +143,14 @@ func testHeadKeys(index int, n int) indexKeySet {
 	return keys
 }
 
-// A live version of document index at version, replacing replaces, with keys.
-func testLive(label string, index int, version uint64, replaces uint64, keys indexKeySet) *indexPendingDocument {
+// A live version of document index at version, with keys.
+func testLive(label string, index int, version uint64, keys indexKeySet) *indexPendingDocument {
 	return &indexPendingDocument{
-		kind:     indexEntryFull,
-		key:      testIndexId(label, index),
-		version:  version,
-		replaces: replaces,
-		keys:     keys,
-		row:      testFileRow(keys),
+		kind:    indexEntryFull,
+		key:     testIndexId(label, index),
+		version: version,
+		keys:    keys,
+		row:     testFileRow(keys),
 	}
 }
 
@@ -203,160 +202,36 @@ func testShardCopy(label string, index int, version uint64, keys indexKeySet) *i
 	return &indexShardDocument{key: testIndexId(label, index), version: version, timeSeconds: 1757400000, row: testFileRow(keys), keys: keys}
 }
 
-// A writer's file for choose's table: a slot at k or a large entry, of seq, holding entries.
-func testWriterFile(kind indexPathKind, k uint32, seq uint32, entries ...*indexEntry) *indexViewSlot {
-	return &indexViewSlot{
-		path: indexPath{kind: kind, slotIndex: k, seq: seq},
-		slot: &indexSlot{header: &protocol.IndexFileHeader{Seq: seq}, entries: entries},
-		file: &indexFileVersion{version: uint64(seq)},
-	}
-}
-
-// A full entry of document index at version.
-func testFullEntry(label string, index int, version uint64, keys indexKeySet) *indexEntry {
-	return &indexEntry{kind: indexEntryFull, key: testIndexId(label, index), version: version, timeSeconds: 1, row: testFileRow(keys), keys: keys}
-}
-
-// choose (DESIGN-DETAILS 1.2.3), one branch a row: a creation and a writer with no files are full; a base only in
-// the head is no base; a sealed slot's, an absorbed slot's and a large entry's full entry are, the newest version first
-// and of two copies the higher seq; an erased version is no base; a delta of half the base or more, or a diff past
-// EntryMax, is full; at KeepSlots kept slots a base in an unkept slot is full, in a kept slot or a large entry a diff.
-func TestIndexChooseBranches(t *testing.T) {
-	settings := DefaultIndexFormatSettings()
-	v1, v2 := testHeadKeys(1, 0), testHeadKeys(1, 1)
-	edit := testHeadKeys(1, 3)
-	large := testIndexKeys(0, 9000, 3)
-	largeEdit := slices.Clone(large)
-	largeEdit[10] += 1
-	nothing := func(key [indexIdByteCount]byte, version uint64) bool { return false }
-	type row struct {
-		name     string
-		files    []*indexViewSlot
-		head     int
-		keep     func(files []*indexViewSlot) map[*indexViewSlot]bool
-		pending  *indexPendingDocument
-		erased   func(key [indexIdByteCount]byte, version uint64) bool
-		diff     bool
-		base     uint64
-		baseFile int
-	}
-	none := func(files []*indexViewSlot) map[*indexViewSlot]bool { return map[*indexViewSlot]bool{} }
-	eightOthers := func(files []*indexViewSlot) map[*indexViewSlot]bool {
-		keep := map[*indexViewSlot]bool{}
-		for k := range uint32(settings.KeepSlotCount) {
-			keep[testWriterFile(indexPathSlot, 8+k, 100+k)] = true
-		}
-		return keep
-	}
-	eightWithBase := func(files []*indexViewSlot) map[*indexViewSlot]bool {
-		keep := eightOthers(files)
-		for file := range keep {
-			delete(keep, file)
-			break
-		}
-		keep[files[0]] = true
-		return keep
-	}
-	rows := []row{
-		{name: "a creation", files: []*indexViewSlot{testWriterFile(indexPathSlot, 0, 1, testFullEntry("d", 1, 1, v1)), testWriterFile(indexPathSlot, 1, 2)}, head: 1, keep: none, pending: testLive("d", 1, 2, 0, v2), baseFile: -1},
-		{name: "no files", files: nil, head: -1, keep: none, pending: testLive("d", 1, 2, 1, v2), baseFile: -1},
-		{name: "a base in the head alone", files: []*indexViewSlot{testWriterFile(indexPathSlot, 0, 1, testFullEntry("d", 1, 1, v1))}, head: 0, keep: none, pending: testLive("d", 1, 2, 1, v2), baseFile: -1},
-		{name: "a base in a sealed slot", files: []*indexViewSlot{testWriterFile(indexPathSlot, 0, 1, testFullEntry("d", 1, 1, v1)), testWriterFile(indexPathSlot, 1, 2)}, head: 1, keep: none, pending: testLive("d", 1, 2, 1, v2), diff: true, base: 1, baseFile: 0},
-		{name: "a base in a large entry", files: []*indexViewSlot{testWriterFile(indexPathLargeEntry, 0, 1, testFullEntry("d", 1, 1, large)), testWriterFile(indexPathSlot, 0, 2)}, head: 1, keep: eightOthers, pending: testLive("d", 1, 2, 1, largeEdit), diff: true, base: 1, baseFile: 0},
-		{name: "the newest base", files: []*indexViewSlot{testWriterFile(indexPathSlot, 0, 1, testFullEntry("d", 1, 1, v1)), testWriterFile(indexPathSlot, 1, 2, testFullEntry("d", 1, 2, v2)), testWriterFile(indexPathSlot, 2, 3)}, head: 2, keep: none, pending: testLive("d", 1, 3, 2, edit), diff: true, base: 2, baseFile: 1},
-		{name: "two copies, the higher seq", files: []*indexViewSlot{testWriterFile(indexPathSlot, 3, 1, testFullEntry("d", 1, 1, v1)), testWriterFile(indexPathSlot, 0, 4, testFullEntry("d", 1, 1, v1)), testWriterFile(indexPathSlot, 2, 5)}, head: 2, keep: none, pending: testLive("d", 1, 2, 1, v2), diff: true, base: 1, baseFile: 1},
-		{name: "no base at or above the version", files: []*indexViewSlot{testWriterFile(indexPathSlot, 0, 1, testFullEntry("d", 1, 2, v2)), testWriterFile(indexPathSlot, 1, 2)}, head: 1, keep: none, pending: testLive("d", 1, 2, 1, v2), baseFile: -1},
-		{name: "an erased base", files: []*indexViewSlot{testWriterFile(indexPathSlot, 0, 1, testFullEntry("d", 1, 1, v1)), testWriterFile(indexPathSlot, 1, 2)}, head: 1, keep: none, pending: testLive("d", 1, 2, 1, v2), erased: func(key [indexIdByteCount]byte, version uint64) bool { return version <= 1 }, baseFile: -1},
-		{name: "a delta of half the base", files: []*indexViewSlot{testWriterFile(indexPathSlot, 0, 1, testFullEntry("d", 1, 1, v1)), testWriterFile(indexPathSlot, 1, 2)}, head: 1, keep: none, pending: testLive("d", 1, 2, 1, testHeadKeys(2, 0)), baseFile: -1},
-		{name: "KeepSlots reached, the base's slot not kept", files: []*indexViewSlot{testWriterFile(indexPathSlot, 0, 1, testFullEntry("d", 1, 1, v1)), testWriterFile(indexPathSlot, 1, 2)}, head: 1, keep: eightOthers, pending: testLive("d", 1, 2, 1, v2), baseFile: -1},
-		{name: "KeepSlots reached, the base's slot kept", files: []*indexViewSlot{testWriterFile(indexPathSlot, 0, 1, testFullEntry("d", 1, 1, v1)), testWriterFile(indexPathSlot, 1, 2)}, head: 1, keep: eightWithBase, pending: testLive("d", 1, 2, 1, v2), diff: true, base: 1, baseFile: 0},
-	}
-	for _, c := range rows {
-		var writer *indexViewWriter
-		if c.files != nil {
-			writer = &indexViewWriter{sidecarId: evsTestId("writer a")}
-			for index, file := range c.files {
-				if file.path.kind == indexPathLargeEntry {
-					writer.large = append(writer.large, file)
-				} else {
-					writer.slots = append(writer.slots, file)
-				}
-				if index == c.head {
-					// the head holds the highest seq
-					file.slot.header.Seq = 1000
-				}
-			}
-		}
-		erased := c.erased
-		if erased == nil {
-			erased = nothing
-		}
-		choice, err := indexChooseEntry(writer, c.keep(c.files), c.pending, 1, false, erased, settings)
-		if err != nil {
-			t.Fatalf("%s: %v", c.name, err)
-		}
-		if choice.diff != c.diff || choice.baseVersion != c.base {
-			t.Errorf("%s: diff %v on %d, want %v on %d", c.name, choice.diff, choice.baseVersion, c.diff, c.base)
-			continue
-		}
-		if c.diff && choice.baseFile != c.files[c.baseFile] {
-			t.Errorf("%s: the base's file is not the one", c.name)
-		}
-		if c.diff {
-			if keys, err := choice.delta.applyTo(c.files[c.baseFile].slot.entries[0].keys); err != nil || !slices.Equal(keys, c.pending.keys) {
-				t.Errorf("%s: the delta does not give the version's keys", c.name)
-			}
-		}
-	}
-
-	// a diff past EntryMax is full: a base of 30,000 keys against an edit of 7,000 of them, a delta under half the base
-	// whose 14,000 keys take more than 8 KiB
-	many := testIndexKeys(0, 30000, 3)
-	moved := slices.Clone(many)
-	for index := 0; index < 7000; index += 1 {
-		moved[index*4] += 1
-	}
-	writer := &indexViewWriter{sidecarId: evsTestId("writer a"), large: []*indexViewSlot{testWriterFile(indexPathLargeEntry, 0, 1, testFullEntry("d", 1, 1, many))}, slots: []*indexViewSlot{testWriterFile(indexPathSlot, 0, 2)}}
-	delta := indexDeltaBetween(many, moved)
-	if len(many) <= 2*(len(delta.added)+len(delta.removed)) {
-		t.Fatalf("the delta is not under half its base")
-	}
-	choice, err := indexChooseEntry(writer, map[*indexViewSlot]bool{}, testLive("d", 1, 2, 1, moved), 1, false, nothing, settings)
-	if err != nil || choice.diff {
-		t.Errorf("a diff past EntryMax: %v, %v", choice, err)
-	}
-}
-
-// FS-107's own bases: D created and edited twice in one unsealed head, each full entry replacing the last, since no
-// base stands outside the head; once the head seals, the next edit is a diff on the sealed slot, and the one after it a
-// diff on the same full entry, never on a diff.
-func TestIndexHeadEditsRestOnTheWritersSealedSlot(t *testing.T) {
+// FS-107 (owner decision 584): D created and edited twice in one unsealed head, each full entry replacing the last;
+// once the head seals, the next edit is full again in the new head, the sealed slot keeping the older version as it
+// stood, and the edit after it replaces that one in the head. Every entry holds its version's whole key set.
+func TestIndexHeadEditsAreFullEntries(t *testing.T) {
 	world := testNewHeadWorld()
 	a := evsTestId("writer a")
-	world.push(t, a, testLive("d", 1, 1, 0, testHeadKeys(1, 0)))
-	world.push(t, a, testLive("d", 1, 2, 1, testHeadKeys(1, 1)))
+	world.push(t, a, testLive("d", 1, 1, testHeadKeys(1, 0)))
+	world.push(t, a, testLive("d", 1, 2, testHeadKeys(1, 1)))
 	if entries := world.entries(t, "d", 1); len(entries) != 1 || entries[0].kind != indexEntryFull || entries[0].version != 2 || !entries[0].head {
 		t.Fatalf("D's entries %+v", entries)
 	}
 	world.fillUntilSealed(t, a, "fill", 2)
-	world.push(t, a, testLive("d", 1, 3, 2, testHeadKeys(1, 2)))
-	world.push(t, a, testLive("d", 1, 4, 3, testHeadKeys(1, 3)))
+	world.push(t, a, testLive("d", 1, 3, testHeadKeys(1, 2)))
+	world.push(t, a, testLive("d", 1, 4, testHeadKeys(1, 3)))
 	entries := world.entries(t, "d", 1)
-	if sealed := testEntryAt(t, entries, 2); sealed.kind != indexEntryFull || sealed.head {
+	if sealed := testEntryAt(t, entries, 2); sealed.kind != indexEntryFull || sealed.head || !slices.Equal(sealed.entry.keys, testHeadKeys(1, 1)) {
 		t.Fatalf("D's v2 %+v", sealed)
 	}
-	if fourth := testEntryAt(t, entries, 4); fourth.kind != indexEntryDiff || fourth.baseVersion != 2 || !fourth.head {
+	if fourth := testEntryAt(t, entries, 4); fourth.kind != indexEntryFull || !fourth.head || !slices.Equal(fourth.entry.keys, testHeadKeys(1, 3)) {
 		t.Fatalf("D's v4 %+v", fourth)
 	}
-	// the head's newer entry replaced v3's diff
-	if 2 < len(entries) {
+	// the head's newer entry replaced v3's
+	if len(entries) != 2 {
 		t.Errorf("D in %d places", len(entries))
 	}
 }
 
-// A large entry and then diffs on it: each edit rests on the large entry itself, its delta taken against it, not
-// composed onto an earlier diff.
-func TestIndexHeadDiffsRestOnALargeEntry(t *testing.T) {
+// FS-107's large case: a big document's edit is a large entry of its own with its whole key set, beside the one it
+// replaces until that one is absorbed and removed.
+func TestIndexHeadLargeEditsAreLargeEntries(t *testing.T) {
 	world := testNewHeadWorld()
 	a := evsTestId("writer a")
 	base := testIndexKeys(0, 9000, 3)
@@ -367,39 +242,45 @@ func TestIndexHeadDiffsRestOnALargeEntry(t *testing.T) {
 		}
 		return keys
 	}
-	world.push(t, a, testLive("d", 1, 1, 0, base))
+	world.push(t, a, testLive("d", 1, 1, base))
 	if entry := testEntryAt(t, world.entries(t, "d", 1), 1); !entry.large || entry.kind != indexEntryFull {
 		t.Fatalf("D's first version %+v", entry)
 	}
-	world.push(t, a, testLive("d", 1, 2, 1, edit(3)))
-	world.push(t, a, testLive("d", 1, 3, 2, edit(5)))
-	third := testEntryAt(t, world.entries(t, "d", 1), 3)
-	if !third.head || third.kind != indexEntryDiff || third.baseVersion != 1 {
-		t.Fatalf("D's third version %+v", third)
+	world.push(t, a, testLive("d", 1, 2, edit(3)))
+	second := testEntryAt(t, world.entries(t, "d", 1), 2)
+	if !second.large || second.kind != indexEntryFull || !slices.Equal(second.entry.keys, edit(3)) {
+		t.Fatalf("D's second version %+v", second)
 	}
-	if keys, err := third.entry.delta.applyTo(base); err != nil || !slices.Equal(keys, edit(5)) {
-		t.Errorf("the diff on the large entry gives %d keys, %v", len(keys), err)
+	// the first, absorbed, goes at the writer's next push; the second stays
+	first := testEntryAt(t, world.entries(t, "d", 1), 1)
+	world.absorb(t, a, first.seq, testShardCopy("d", 1, 1, base))
+	plan := world.push(t, a, testLive("d", 1, 3, edit(5)))
+	if removals := plan.removals(); len(removals) != 1 {
+		t.Fatalf("%d removals", len(removals))
+	}
+	writer := world.writer(t, a)
+	if len(writer.large) != 2 || !slices.ContainsFunc(writer.large, func(file *indexViewSlot) bool { return file.slot.entries[0].version == 2 }) || !slices.ContainsFunc(writer.large, func(file *indexViewSlot) bool { return file.slot.entries[0].version == 3 }) {
+		t.Errorf("after the third version: %d large entries", len(writer.large))
 	}
 }
 
-// FS-107: another writer's edit rests on nothing of the first writer's: full whether the first writer's version sits in
-// its head or in a sealed slot; each writer then diffs on its own full entry.
+// FS-107: another writer's edit is full, as every entry is, whether the first writer's version sits in its head or in
+// a sealed slot, and so is the first writer's own next edit.
 func TestIndexHeadAnotherWritersEditIsFull(t *testing.T) {
 	world := testNewHeadWorld()
 	a, b := evsTestId("writer a"), evsTestId("writer b")
-	world.push(t, a, testLive("d", 1, 1, 0, testHeadKeys(1, 0)))
-	world.push(t, b, testLive("d", 1, 2, 1, testHeadKeys(1, 1)))
+	world.push(t, a, testLive("d", 1, 1, testHeadKeys(1, 0)))
+	world.push(t, b, testLive("d", 1, 2, testHeadKeys(1, 1)))
 	if entry := testEntryAt(t, world.entries(t, "d", 1), 2); entry.kind != indexEntryFull || entry.writer != b {
 		t.Fatalf("B's edit on A's head %+v", entry)
 	}
 	world.fillUntilSealed(t, a, "fill", 2)
-	world.push(t, b, testLive("d", 1, 3, 2, testHeadKeys(1, 2)))
+	world.push(t, b, testLive("d", 1, 3, testHeadKeys(1, 2)))
 	if entry := testEntryAt(t, world.entries(t, "d", 1), 3); entry.kind != indexEntryFull || entry.writer != b {
 		t.Fatalf("B's edit on A's sealed slot %+v", entry)
 	}
-	// A's own edit rests on its own sealed v1
-	world.push(t, a, testLive("d", 1, 4, 3, testHeadKeys(1, 3)))
-	if entry := testEntryAt(t, world.entries(t, "d", 1), 4); entry.kind != indexEntryDiff || entry.baseVersion != 1 || entry.writer != a {
+	world.push(t, a, testLive("d", 1, 4, testHeadKeys(1, 3)))
+	if entry := testEntryAt(t, world.entries(t, "d", 1), 4); entry.kind != indexEntryFull || entry.writer != a || !slices.Equal(entry.entry.keys, testHeadKeys(1, 3)) {
 		t.Fatalf("A's edit %+v", entry)
 	}
 }
@@ -413,14 +294,14 @@ func TestIndexHeadTwoPushesOfOneWriterOnOneBase(t *testing.T) {
 		// the head holds what fits but one more entry of this size
 		index := 1
 		for ; ; index += 1 {
-			plan, _ := world.plan(t, a, true, testLive("fill", index, 1, 0, testIndexKeys(0x300000+index*0x1000, 1500, 1)))
+			plan, _ := world.plan(t, a, true, testLive("fill", index, 1, testIndexKeys(0x300000+index*0x1000, 1500, 1)))
 			if 0 < len(world.view(t, a).writeRoot().buckets) && len(plan.buckets[0].sealedSlots) != 0 {
 				break
 			}
-			world.push(t, a, testLive("fill", index, 1, 0, testIndexKeys(0x300000+index*0x1000, 1500, 1)))
+			world.push(t, a, testLive("fill", index, 1, testIndexKeys(0x300000+index*0x1000, 1500, 1)))
 		}
-		appending := testLive("small", 1, 1, 0, testIndexKeys(0x700000, 3, 1))
-		sealing := testLive("fill", index, 1, 0, testIndexKeys(0x300000+index*0x1000, 1500, 1))
+		appending := testLive("small", 1, 1, testIndexKeys(0x700000, 3, 1))
+		sealing := testLive("fill", index, 1, testIndexKeys(0x300000+index*0x1000, 1500, 1))
 		planAppend, viewAppend := world.plan(t, a, true, appending)
 		planSeal, viewSeal := world.plan(t, a, true, sealing)
 		if len(planSeal.buckets[0].sealed) != 1 || planSeal.buckets[0].sealed[0].replaces == 0 || len(planAppend.buckets[0].sealedSlots) != 0 {
@@ -451,75 +332,59 @@ func TestIndexHeadTwoPushesOfOneWriterOnOneBase(t *testing.T) {
 	}
 }
 
-// The keep rule: a slot a diff of the writer's unabsorbed slots rests on is skipped by every seal while the diff
-// stands, absorbed or not, three seals here, and reused once no unabsorbed diff rests on it.
-func TestIndexHeadKeptSlotIsSkippedThenReused(t *testing.T) {
+// FS-107: a merge absorbs the slot holding D's older version and the writer reuses it at its next seal, whatever its
+// head holds of D: no entry rests on the slot, so nothing keeps it, and D's newer version reads on from the slot that
+// holds it.
+func TestIndexHeadReusesItsAbsorbedSlot(t *testing.T) {
 	world := testNewHeadWorld()
 	a := evsTestId("writer a")
-	world.push(t, a, testLive("d", 1, 1, 0, testHeadKeys(1, 0)))
+	world.push(t, a, testLive("d", 1, 1, testHeadKeys(1, 0)))
 	next := world.fillUntilSealed(t, a, "fill", 2)
-	// D's v2 is a diff in the head, slot 1, on v1 in sealed slot 0, which is now kept
-	world.push(t, a, testLive("d", 1, 2, 1, testHeadKeys(1, 1)))
-	if entry := testEntryAt(t, world.entries(t, "d", 1), 2); entry.kind != indexEntryDiff || entry.baseVersion != 1 {
+	// D's v2 is full in the head, slot 1, beside v1 in sealed slot 0
+	world.push(t, a, testLive("d", 1, 2, testHeadKeys(1, 1)))
+	if entry := testEntryAt(t, world.entries(t, "d", 1), 2); entry.kind != indexEntryFull || !entry.head {
 		t.Fatalf("D's v2 %+v", entry)
 	}
-	writer := world.writer(t, a)
-	world.absorb(t, a, writer.slotAt(0).seq(), testShardCopy("d", 1, 1, testHeadKeys(1, 0)))
-	for seal := range 3 {
-		before := world.writer(t, a)
-		next = world.fillUntilSealed(t, a, "more", next)
-		after := world.writer(t, a)
-		if head := after.head(); head.path.slotIndex == 0 || before.slotAt(0).file.version != after.slotAt(0).file.version {
-			t.Fatalf("seal %d took the kept slot 0", seal)
-		}
+	before := world.writer(t, a)
+	world.absorb(t, a, before.slotAt(0).seq(), testShardCopy("d", 1, 1, testHeadKeys(1, 0)))
+	world.fillUntilSealed(t, a, "more", next)
+	after := world.writer(t, a)
+	if head := after.head(); head.path.slotIndex != 0 || after.slotAt(0).file.version == before.slotAt(0).file.version {
+		t.Fatalf("the seal took slot %d, not the absorbed slot 0", head.path.slotIndex)
 	}
-	// a merge absorbs every sealed slot, slot 1 with D's diff among them: no unabsorbed diff rests on slot 0
-	writer = world.writer(t, a)
-	highest := uint32(0)
-	for _, slot := range writer.slots {
-		if slot != writer.head() {
-			highest = max(highest, slot.seq())
-		}
+	entries := world.entries(t, "d", 1)
+	if first := testEntryAt(t, entries, 1); !first.shard {
+		t.Errorf("D's v1 %+v", first)
 	}
-	world.absorb(t, a, highest, testShardCopy("d", 1, 2, testHeadKeys(1, 1)))
-	if kept := world.writer(t, a).kept(highest, nil); len(kept) != 0 {
-		t.Fatalf("%d files kept with every diff absorbed", len(kept))
-	}
-	world.fillUntilSealed(t, a, "last", next)
-	if head := world.writer(t, a).head(); head.path.slotIndex != 0 {
-		t.Errorf("the seal took slot %d, not the freed slot 0", head.path.slotIndex)
+	if second := testEntryAt(t, entries, 2); second.kind != indexEntryFull || second.shard || second.head || !slices.Equal(second.entry.keys, testHeadKeys(1, 1)) {
+		t.Errorf("D's v2 %+v", second)
 	}
 }
 
-// An absorbed large entry no diff rests on is removed at its writer's next push in the bucket, and one a diff in the
-// head rests on is left.
+// A writer's absorbed large entries are removed at its next push in the bucket, and one above the watermark is left.
 func TestIndexHeadRemovesAbsorbedLargeEntries(t *testing.T) {
 	world := testNewHeadWorld()
 	a := evsTestId("writer a")
-	first, second := testIndexKeys(0, 9000, 3), testIndexKeys(1, 9000, 3)
-	world.push(t, a, testLive("big", 1, 1, 0, first), testLive("big", 2, 1, 0, second))
-	edited := slices.Clone(second)
-	edited[5] += 1
-	world.push(t, a, testLive("big", 2, 2, 1, edited))
+	first, second, third := testIndexKeys(0, 9000, 3), testIndexKeys(1, 9000, 3), testIndexKeys(2, 9000, 3)
+	world.push(t, a, testLive("big", 1, 1, first), testLive("big", 2, 1, second))
 	writer := world.writer(t, a)
 	if len(writer.large) != 2 {
 		t.Fatalf("%d large entries", len(writer.large))
 	}
 	highest := max(writer.large[0].seq(), writer.large[1].seq())
+	world.push(t, a, testLive("big", 3, 1, third))
 	world.absorb(t, a, highest, testShardCopy("big", 1, 1, first), testShardCopy("big", 2, 1, second))
-	plan := world.push(t, a, testLive("d", 9, 1, 0, testHeadKeys(9, 0)))
+	plan := world.push(t, a, testLive("d", 9, 1, testHeadKeys(9, 0)))
 	removals := plan.removals()
-	if len(removals) != 1 {
+	if len(removals) != 2 {
 		t.Fatalf("%d removals", len(removals))
 	}
-	removed, _ := indexParsePath(removals[0].path, false)
-	for _, file := range writer.large {
-		holdsFirst := file.slot.entries[0].key == testIndexId("big", 1)
-		if holdsFirst != (removed.seq == file.seq()) {
-			t.Errorf("large entry %d removed %v", file.seq(), removed.seq == file.seq())
+	for _, removal := range removals {
+		if removed, _ := indexParsePath(removal.path, false); removed.kind != indexPathLargeEntry || highest < removed.seq {
+			t.Errorf("removed %s", removal.path)
 		}
 	}
-	if after := world.writer(t, a); len(after.large) != 1 || after.large[0].slot.entries[0].key != testIndexId("big", 2) {
+	if after := world.writer(t, a); len(after.large) != 1 || after.large[0].slot.entries[0].key != testIndexId("big", 3) {
 		t.Errorf("after the push: %d large entries", len(after.large))
 	}
 }
@@ -529,11 +394,11 @@ func TestIndexHeadRemovesAbsorbedLargeEntries(t *testing.T) {
 func TestIndexHeadPlanIsAFunction(t *testing.T) {
 	world := testNewHeadWorld()
 	a := evsTestId("writer a")
-	world.push(t, a, testLive("d", 1, 1, 0, testHeadKeys(1, 0)), testLive("d", 2, 1, 0, testHeadKeys(2, 0)))
+	world.push(t, a, testLive("d", 1, 1, testHeadKeys(1, 0)), testLive("d", 2, 1, testHeadKeys(2, 0)))
 	world.fillUntilSealed(t, a, "fill", 3)
 	documents := []*indexPendingDocument{
-		testLive("d", 1, 2, 1, testHeadKeys(1, 1)), testLive("d", 2, 2, 1, testHeadKeys(2, 1)),
-		testRemoved("fill", 3, 2), testLive("big", 1, 1, 0, testIndexKeys(0, 9000, 3)),
+		testLive("d", 1, 2, testHeadKeys(1, 1)), testLive("d", 2, 2, testHeadKeys(2, 1)),
+		testRemoved("fill", 3, 2), testLive("big", 1, 1, testIndexKeys(0, 9000, 3)),
 	}
 	reversed := slices.Clone(documents)
 	slices.Reverse(reversed)
@@ -550,16 +415,16 @@ func TestIndexHeadPlanIsAFunction(t *testing.T) {
 	}
 }
 
-// A tombstone as the document's newest entry leaves the next version full where no full entry of it stands sealed, and
-// the erasure set's documents are left out of the push and out of the head the push rewrites.
+// A version after a tombstone is a full entry replacing it in the head, and the erasure set's documents are left out
+// of the push and out of the head the push rewrites.
 func TestIndexHeadTombstonesAndTheErasureSet(t *testing.T) {
 	world := testNewHeadWorld()
 	a := evsTestId("writer a")
 	// a signs the erasure set below, as an admin's CUT
 	world.admins = append(world.admins, a)
-	world.push(t, a, testLive("d", 1, 1, 0, testHeadKeys(1, 0)), testLive("d", 2, 1, 0, testHeadKeys(2, 0)))
+	world.push(t, a, testLive("d", 1, 1, testHeadKeys(1, 0)), testLive("d", 2, 1, testHeadKeys(2, 0)))
 	world.push(t, a, testRemoved("d", 1, 2))
-	world.push(t, a, testLive("d", 1, 3, 2, testHeadKeys(1, 1)))
+	world.push(t, a, testLive("d", 1, 3, testHeadKeys(1, 1)))
 	if entry := testEntryAt(t, world.entries(t, "d", 1), 3); entry.kind != indexEntryFull {
 		t.Fatalf("after a tombstone %+v", entry)
 	}
@@ -569,7 +434,7 @@ func TestIndexHeadTombstonesAndTheErasureSet(t *testing.T) {
 		Docs: []*protocol.IndexErased{{DocKey: testIndexIdBytes("d", 2), Version: 5}},
 	}}}
 	world.ref.store(a).testCommit(t, world.at, &indexPushFile{path: indexErasureSetPath(false), plaintext: testSmallFile(t, erasureSet)})
-	plan, _ := world.plan(t, a, true, testLive("d", 2, 2, 1, testHeadKeys(2, 1)), testLive("d", 3, 1, 0, testHeadKeys(3, 0)))
+	plan, _ := world.plan(t, a, true, testLive("d", 2, 2, testHeadKeys(2, 1)), testLive("d", 3, 1, testHeadKeys(3, 0)))
 	if len(plan.erased) != 1 || plan.erased[0] != testIndexId("d", 2) {
 		t.Fatalf("erased %v", plan.erased)
 	}
@@ -580,7 +445,7 @@ func TestIndexHeadTombstonesAndTheErasureSet(t *testing.T) {
 	}
 	world.ref.store(a).testCommit(t, world.at, &indexPushFile{path: indexErasureSetPath(false), replaces: world.ref.store(a).testVersionOf(indexErasureSetPath(false)), plaintext: []byte{0xff}})
 	view := world.view(t, a)
-	if _, err := indexPlanHead(context.Background(), &indexHeadPlanArgs{view: view, root: view.writeRoot(), writer: a, signedTimeMs: world.at.UnixMilli(), tables: testHeadTables, pending: []*indexPendingDocument{testLive("d", 4, 1, 0, testHeadKeys(4, 0))}}); !errors.Is(err, errIndexErasureSetUnreadable) {
+	if _, err := indexPlanHead(context.Background(), &indexHeadPlanArgs{view: view, root: view.writeRoot(), writer: a, signedTimeMs: world.at.UnixMilli(), tables: testHeadTables, pending: []*indexPendingDocument{testLive("d", 4, 1, testHeadKeys(4, 0))}}); !errors.Is(err, errIndexErasureSetUnreadable) {
 		t.Errorf("an unreadable erasure set planned %v", err)
 	}
 }
@@ -606,7 +471,7 @@ func TestIndexHeadSealsOnlyAtItsCap(t *testing.T) {
 			}
 			headBytes = stored
 		}
-		document := testLive("fill", index, 1, 0, testIndexKeys(0x300000+index*0x1000, 1500, 1))
+		document := testLive("fill", index, 1, testIndexKeys(0x300000+index*0x1000, 1500, 1))
 		plan := world.push(t, a, document)
 		bucket := plan.buckets[0]
 		if len(bucket.sealedSlots) == 0 {
@@ -640,15 +505,14 @@ func TestIndexHeadSealsOnlyAtItsCap(t *testing.T) {
 	}
 }
 
-// The ring: a writer reuses its lowest absorbed slot that is not kept; with none, new slots while fewer than RingSlots
-// are held that no diff rests on; at a ninth it merges first, or, unable to, takes it and alarms; with every slot held,
-// it writes nothing.
+// The ring: a writer reuses its lowest absorbed slot; with none, new slots while it holds fewer than RingSlots; at a
+// ninth it merges first, or, unable to, takes it and alarms; with every slot held, it writes nothing.
 func TestIndexHeadSlotRing(t *testing.T) {
 	world := testNewHeadWorld()
 	a := evsTestId("writer a")
 	settings := world.settings
 	fill := func(index int) *indexPendingDocument {
-		return testLive("fill", index, 1, 0, testIndexKeys(0x300000+index*0x400, 7000, 1))
+		return testLive("fill", index, 1, testIndexKeys(0x300000+index*0x400, 7000, 1))
 	}
 	index := 1
 	for k := 0; k < settings.RingSlotCount; k += 1 {
@@ -658,7 +522,7 @@ func TestIndexHeadSlotRing(t *testing.T) {
 			break
 		}
 	}
-	// slot 7 is the head and holds what fits: the next seal would hold a ninth slot no diff rests on
+	// slot 7 is the head and holds what fits: the next seal would hold a ninth slot
 	plan, _ := world.plan(t, a, true, fill(index), fill(index+1), fill(index+2))
 	if !plan.mergeFirst || len(plan.files()) != 0 {
 		t.Fatalf("a full ring that may merge planned %+v", plan)
@@ -700,7 +564,7 @@ func TestIndexHeadSlotRing(t *testing.T) {
 	}
 	bucket := &indexViewBucket{window: indexBucketWindow{startDay: 20340, days: 30}, writers: []*indexViewWriter{full}}
 	args := &indexHeadPlanArgs{view: world.view(t, a), writer: a, tables: testHeadTables}
-	work := &indexHeadBucketWork{window: bucket.window, bucket: bucket, writer: full, keep: map[*indexViewSlot]bool{}, entries: []*indexEntry{{kind: indexEntryTombstone, key: testIndexId("x", 1), version: 1}}}
+	work := &indexHeadBucketWork{window: bucket.window, bucket: bucket, writer: full, entries: []*indexEntry{{kind: indexEntryTombstone, key: testIndexId("x", 1), version: 1}}}
 	err := indexPlaceEntries(args, args.view.writeRoot(), work, &indexHeadPlanBucket{window: bucket.window}, &indexHeadPlan{})
 	if !errors.Is(err, errIndexNoFreeSlot) {
 		t.Errorf("a writer holding every slot answered %v", err)
@@ -712,8 +576,8 @@ func TestIndexHeadSlotRing(t *testing.T) {
 func TestIndexHeadStaysAboveItsLargeEntries(t *testing.T) {
 	world := testNewHeadWorld()
 	a, b := evsTestId("writer a"), evsTestId("writer b")
-	world.push(t, a, testLive("d", 1, 1, 0, testHeadKeys(1, 0)))
-	plan := world.push(t, a, testLive("big", 1, 1, 0, testIndexKeys(0, 9000, 3)))
+	world.push(t, a, testLive("d", 1, 1, testHeadKeys(1, 0)))
+	plan := world.push(t, a, testLive("big", 1, 1, testIndexKeys(0, 9000, 3)))
 	if len(plan.buckets[0].large) != 1 || plan.buckets[0].head == nil {
 		t.Fatalf("plan %+v", plan.buckets[0])
 	}
@@ -721,21 +585,21 @@ func TestIndexHeadStaysAboveItsLargeEntries(t *testing.T) {
 	if writer.head().seq() != 3 || writer.large[0].seq() != 2 || writer.highestSeq() != writer.head().seq() {
 		t.Errorf("head seq %d, large seq %d", writer.head().seq(), writer.large[0].seq())
 	}
-	only := world.push(t, b, testLive("big", 2, 1, 0, testIndexKeys(1, 9000, 3)))
+	only := world.push(t, b, testLive("big", 2, 1, testIndexKeys(1, 9000, 3)))
 	if head := only.buckets[0].head; head == nil || head.path.slotIndex != 0 || head.replaces != 0 || len(head.slot.entries) != 0 || head.slot.header.Seq != 2 {
 		t.Errorf("a writer's first push of a large entry alone wrote head %+v", head)
 	}
 }
 
-// A push whose entries pass DirectBytes goes straight into the bucket's shards as full entries, a merge inside the
-// push, and writes the writer's head there without the keys it carried (1.2.3).
+// A push whose entries pass DirectBytes goes straight into the bucket's shards, a merge inside the push, and writes
+// the writer's head there without the keys it carried.
 func TestIndexHeadPastDirectBytesWritesItsHead(t *testing.T) {
 	world := testNewHeadWorld()
 	a := evsTestId("writer a")
-	world.push(t, a, testLive("bulk", 0, 1, 0, testIndexKeys(0, 7000, 1)), testLive("d", 1, 1, 0, testHeadKeys(1, 0)))
+	world.push(t, a, testLive("bulk", 0, 1, testIndexKeys(0, 7000, 1)), testLive("d", 1, 1, testHeadKeys(1, 0)))
 	pending := []*indexPendingDocument{}
 	for index := range 40 {
-		pending = append(pending, testLive("bulk", index, 2, 1, testIndexKeys(index*0x10000, 7000, 1)))
+		pending = append(pending, testLive("bulk", index, 2, testIndexKeys(index*0x10000, 7000, 1)))
 	}
 	plan, _ := world.plan(t, a, true, pending...)
 	if !plan.mergeInPush || len(plan.buckets) != 1 || len(plan.buckets[0].direct) != 40 {
@@ -757,11 +621,11 @@ func TestIndexHeadPastDirectBytesWritesItsHead(t *testing.T) {
 func TestIndexHeadFollowsANewerBucketHoldingTheDocument(t *testing.T) {
 	world := testNewHeadWorld()
 	a, b := evsTestId("writer a"), evsTestId("writer b")
-	world.push(t, a, testLive("seed", 1, 1, 0, testHeadKeys(8, 0)))
+	world.push(t, a, testLive("seed", 1, 1, testHeadKeys(8, 0)))
 	world.at = testDayTime(testBoundaryDay, 5*time.Minute)
-	world.push(t, b, testLive("d", 1, 1, 0, testHeadKeys(1, 0)))
+	world.push(t, b, testLive("d", 1, 1, testHeadKeys(1, 0)))
 	world.at = testDayTime(testBoundaryDay, -5*time.Minute)
-	plan, _ := world.plan(t, a, true, testLive("d", 1, 2, 1, testHeadKeys(1, 1)), testLive("e", 1, 1, 0, testHeadKeys(2, 0)))
+	plan, _ := world.plan(t, a, true, testLive("d", 1, 2, testHeadKeys(1, 1)), testLive("e", 1, 1, testHeadKeys(2, 0)))
 	if len(plan.buckets) != 2 || plan.buckets[0].window.startDay != 20340 || plan.buckets[1].window.startDay != testBoundaryDay {
 		t.Fatalf("buckets %+v", plan.buckets)
 	}
@@ -770,25 +634,24 @@ func TestIndexHeadFollowsANewerBucketHoldingTheDocument(t *testing.T) {
 	}
 }
 
-// FS-107 under own bases: an entry late into the previous bucket rests on its writer's own full entry there, the
-// bucket need not be the current one (DESIGN-DETAILS 1.2.3).
-func TestIndexHeadLateEntryRestsOnItsOwnBase(t *testing.T) {
+// An entry late into the previous bucket is full there, as in the current one: the bucket need not be the newest.
+func TestIndexHeadLateEntryIsFull(t *testing.T) {
 	world := testNewHeadWorld()
 	a, b := evsTestId("writer a"), evsTestId("writer b")
-	world.push(t, a, testLive("d", 1, 1, 0, testHeadKeys(1, 0)))
+	world.push(t, a, testLive("d", 1, 1, testHeadKeys(1, 0)))
 	world.fillUntilSealed(t, a, "fill", 2)
 	// B, ahead of the boundary, opens the next bucket with another document
 	world.at = testDayTime(testBoundaryDay, 5*time.Minute)
-	world.push(t, b, testLive("other", 1, 1, 0, testHeadKeys(9, 0)))
+	world.push(t, b, testLive("other", 1, 1, testHeadKeys(9, 0)))
 	// A, its clock behind, signs its edit of D in the previous window
 	world.at = testDayTime(testBoundaryDay, -5*time.Minute)
-	plan, _ := world.plan(t, a, true, testLive("d", 1, 2, 1, testHeadKeys(1, 1)))
+	plan, _ := world.plan(t, a, true, testLive("d", 1, 2, testHeadKeys(1, 1)))
 	if len(plan.buckets) != 1 || plan.buckets[0].window.startDay != 20340 {
 		t.Fatalf("A's late edit went to %+v", plan.buckets)
 	}
 	entries := plan.buckets[0].head.slot.entries
-	if entry := entries[slices.IndexFunc(entries, func(entry *indexEntry) bool { return entry.key == testIndexId("d", 1) })]; entry.kind != indexEntryDiff || entry.baseVersion != 1 {
-		t.Errorf("a late entry is a %v on %d", entry.kind, entry.baseVersion)
+	if entry := entries[slices.IndexFunc(entries, func(entry *indexEntry) bool { return entry.key == testIndexId("d", 1) })]; entry.kind != indexEntryFull || !slices.Equal(entry.keys, testHeadKeys(1, 1)) {
+		t.Errorf("a late entry is a %v", entry.kind)
 	}
 }
 
@@ -798,9 +661,9 @@ func TestIndexHeadLateEntryRestsOnItsOwnBase(t *testing.T) {
 func TestIndexHeadRacingPushes(t *testing.T) {
 	world := testNewHeadWorld()
 	a, b := evsTestId("writer a"), evsTestId("writer b")
-	world.push(t, a, testLive("d", 1, 1, 0, testHeadKeys(1, 0)))
-	planA, viewA := world.plan(t, a, true, testLive("d", 2, 1, 0, testHeadKeys(2, 0)))
-	planB, viewB := world.plan(t, b, true, testLive("d", 3, 1, 0, testHeadKeys(3, 0)))
+	world.push(t, a, testLive("d", 1, 1, testHeadKeys(1, 0)))
+	planA, viewA := world.plan(t, a, true, testLive("d", 2, 1, testHeadKeys(2, 0)))
+	planB, viewB := world.plan(t, b, true, testLive("d", 3, 1, testHeadKeys(3, 0)))
 	first, err := world.commit(t, a, planA, viewA)
 	if err != nil {
 		t.Fatal(err)
@@ -810,8 +673,8 @@ func TestIndexHeadRacingPushes(t *testing.T) {
 		t.Fatalf("B's push at %+v, %v", second, err)
 	}
 
-	planOne, viewOne := world.plan(t, a, true, testLive("d", 4, 1, 0, testHeadKeys(4, 0)))
-	planTwo, viewTwo := world.plan(t, a, true, testLive("d", 5, 1, 0, testHeadKeys(5, 0)))
+	planOne, viewOne := world.plan(t, a, true, testLive("d", 4, 1, testHeadKeys(4, 0)))
+	planTwo, viewTwo := world.plan(t, a, true, testLive("d", 5, 1, testHeadKeys(5, 0)))
 	if _, err := world.commit(t, a, planOne, viewOne); err != nil {
 		t.Fatal(err)
 	}
@@ -820,7 +683,7 @@ func TestIndexHeadRacingPushes(t *testing.T) {
 	if !ok || refusal.kind != indexRefusalConflict || len(refusal.paths) != 1 || refusal.paths[0] != planTwo.files()[0].path {
 		t.Fatalf("the racing push answered %v", err)
 	}
-	world.push(t, a, testLive("d", 5, 1, 0, testHeadKeys(5, 0)))
+	world.push(t, a, testLive("d", 5, 1, testHeadKeys(5, 0)))
 	head := world.writer(t, a).head()
 	for _, index := range []int{1, 2, 4, 5} {
 		key := testIndexId("d", index)
@@ -861,11 +724,11 @@ func testHeadVectorOf(name string, plan *indexHeadPlan) testHeadVector {
 	return vector
 }
 
-// D-TEST-15, DESIGN-DETAILS 1.6's head/ list as plaintext, pinned with their hashes: a first entry full; a second edit
-// while the first is in the head, full again; a seal as the head stood, its bytes written again; an edit after the
-// seal, a diff on the sealed slot; a big document, a large entry and then a diff on it; a delta past half its base,
-// full; a creation after a removal, full; a seal that skips a kept slot; KeepSlots reached, full; an absorbed large
-// entry removed and a kept one left; a push past DirectBytes. SIDECAR_WRITE_VECTORS rewrites them.
+// D-TEST-15, the head/ list as plaintext, pinned with their hashes, every entry full or a tombstone (owner decision
+// 584): a first entry; a second edit while the first is in the head, replacing it; a seal as the head stood, its bytes
+// written again; an edit after the seal, full in the new head; a seal that reuses an absorbed slot; a big document, a
+// large entry, and its edit, another; a removal's tombstone and a creation after it; an absorbed large entry removed
+// and an unabsorbed one left; a push past DirectBytes. SIDECAR_WRITE_VECTORS rewrites them.
 func TestIndexHeadVectors(t *testing.T) {
 	world := testNewHeadWorld()
 	a := evsTestId("writer a")
@@ -881,7 +744,7 @@ func TestIndexHeadVectors(t *testing.T) {
 		return plan
 	}
 	fill := func(index int) *indexPendingDocument {
-		return testLive("v", index, 1, 0, testIndexKeys(0x300000+index*0x1000, 1500, 1))
+		return testLive("v", index, 1, testIndexKeys(0x300000+index*0x1000, 1500, 1))
 	}
 	// fills from index until one seals the head, recorded as name; the index after it
 	sealWith := func(name string, index int) int {
@@ -894,42 +757,35 @@ func TestIndexHeadVectors(t *testing.T) {
 			record("", fill(index))
 		}
 	}
-	record("first-entry-full", testLive("v", 1, 1, 0, testHeadKeys(1, 0)))
-	record("edit-in-the-head-full", testLive("v", 1, 2, 1, testHeadKeys(1, 1)))
+	record("first-entry-full", testLive("v", 1, 1, testHeadKeys(1, 0)))
+	record("edit-in-the-head-full", testLive("v", 1, 2, testHeadKeys(1, 1)))
 	// slot 0 sealed as it stood, v1's v2 in it; the fill that sealed it opens slot 1
 	sealIndex := sealWith("seal-as-it-stood", 10)
-	record("edit-after-a-seal-diff", testLive("v", 1, 3, 2, testHeadKeys(1, 2)))
-	// slot 0 absorbed and kept by v1's diff in the head: the next seal passes over it
+	record("edit-after-a-seal-full", testLive("v", 1, 3, testHeadKeys(1, 2)))
+	// slot 0 absorbed, v1's v3 full in the head: the next seal reuses slot 0
 	world.absorb(t, a, world.writer(t, a).slotAt(0).seq(), testShardCopy("v", 1, 2, testHeadKeys(1, 1)))
-	sealWith("seal-skips-a-kept-slot", sealIndex+1)
+	sealWith("seal-reuses-an-absorbed-slot", sealIndex+1)
 	large := testIndexKeys(0, 9000, 3)
-	record("large-entry", testLive("v", 2, 1, 0, large))
+	record("large-entry", testLive("v", 2, 1, large))
 	largeEdit := slices.Clone(large)
 	largeEdit[10] += 1
-	record("diff-on-a-large-entry", testLive("v", 2, 2, 1, largeEdit))
-	record("delta-past-half-full", testLive("v", 1, 4, 3, testHeadKeys(3, 0)))
-	record("", testLive("v", 3, 1, 0, testHeadKeys(3, 1)))
-	record("", testRemoved("v", 3, 2))
-	record("creation-after-a-removal-full", testLive("v", 3, 3, 0, testHeadKeys(3, 2)))
-	// KeepSlots at one, slot 0 kept: an edit of the fill sealed in slot 1 is full
-	world.settings = DefaultIndexFormatSettings()
-	world.settings.KeepSlotCount = 1
-	sealedFill := testIndexKeys(0x300000+sealIndex*0x1000, 1500, 1)
-	// the last key moved past the rest, so the set stays sorted and the delta small
-	sealedFill[len(sealedFill)-1] += 0x800
-	record("keep-slots-reached-full", testLive("v", sealIndex, 2, 1, sealedFill))
-	world.settings = DefaultIndexFormatSettings()
-	// a second large entry; both absorbed, the one v2's diff in the head rests on is kept and the other removed
-	record("", testLive("v", 4, 1, 0, testIndexKeys(1, 9000, 3)))
-	highest := uint32(0)
+	// the first large entry absorbed, the edit's not: the edit's push leaves both, the first not yet absorbed at its base
+	record("large-entry-edit", testLive("v", 2, 2, largeEdit))
+	record("", testLive("v", 3, 1, testHeadKeys(3, 1)))
+	record("removal-tombstone", testRemoved("v", 3, 2))
+	record("creation-after-a-removal-full", testLive("v", 3, 3, testHeadKeys(3, 2)))
+	// the first large entry absorbed and removed at the next push, the edit's, above the watermark, left
+	lowest := uint32(0)
 	for _, file := range world.writer(t, a).large {
-		highest = max(highest, file.seq())
+		if lowest == 0 || file.seq() < lowest {
+			lowest = file.seq()
+		}
 	}
-	world.absorb(t, a, highest, testShardCopy("v", 4, 1, testIndexKeys(1, 9000, 3)))
-	record("absorbed-large-entry-removed", testLive("v", 5, 1, 0, testHeadKeys(5, 0)))
+	world.absorb(t, a, lowest, testShardCopy("v", 2, 1, large))
+	record("absorbed-large-entry-removed", testLive("v", 5, 1, testHeadKeys(5, 0)))
 	pending := []*indexPendingDocument{}
 	for bulk := range 40 {
-		pending = append(pending, testLive("bulk", bulk, 1, 0, testIndexKeys(bulk*0x10000, 7000, 1)))
+		pending = append(pending, testLive("bulk", bulk, 1, testIndexKeys(bulk*0x10000, 7000, 1)))
 	}
 	record("past-direct-bytes", pending...)
 
@@ -993,23 +849,39 @@ func TestIndexHeadVectors(t *testing.T) {
 		return nil
 	}
 	for _, c := range []struct {
-		name string
-		key  [indexIdByteCount]byte
-		kind indexEntryKind
-		base uint64
+		name    string
+		key     [indexIdByteCount]byte
+		kind    indexEntryKind
+		version uint64
+		keys    indexKeySet
 	}{
-		{name: "first-entry-full", key: testIndexId("v", 1), kind: indexEntryFull},
-		{name: "edit-in-the-head-full", key: testIndexId("v", 1), kind: indexEntryFull},
-		{name: "edit-after-a-seal-diff", key: testIndexId("v", 1), kind: indexEntryDiff, base: 2},
-		{name: "large-entry", key: testIndexId("v", 2), kind: indexEntryFull},
-		{name: "diff-on-a-large-entry", key: testIndexId("v", 2), kind: indexEntryDiff, base: 1},
-		{name: "delta-past-half-full", key: testIndexId("v", 1), kind: indexEntryFull},
-		{name: "creation-after-a-removal-full", key: testIndexId("v", 3), kind: indexEntryFull},
-		{name: "keep-slots-reached-full", key: testIndexId("v", sealIndex), kind: indexEntryFull},
+		{name: "first-entry-full", key: testIndexId("v", 1), kind: indexEntryFull, version: 1, keys: testHeadKeys(1, 0)},
+		{name: "edit-in-the-head-full", key: testIndexId("v", 1), kind: indexEntryFull, version: 2, keys: testHeadKeys(1, 1)},
+		{name: "edit-after-a-seal-full", key: testIndexId("v", 1), kind: indexEntryFull, version: 3, keys: testHeadKeys(1, 2)},
+		{name: "large-entry", key: testIndexId("v", 2), kind: indexEntryFull, version: 1, keys: large},
+		{name: "large-entry-edit", key: testIndexId("v", 2), kind: indexEntryFull, version: 2, keys: largeEdit},
+		{name: "removal-tombstone", key: testIndexId("v", 3), kind: indexEntryTombstone, version: 2},
+		{name: "creation-after-a-removal-full", key: testIndexId("v", 3), kind: indexEntryFull, version: 3, keys: testHeadKeys(3, 2)},
 	} {
 		entry := entryOf(c.name, c.key)
-		if entry == nil || entry.kind != c.kind || entry.baseVersion != c.base {
+		if entry == nil || entry.kind != c.kind || entry.version != c.version || !slices.Equal(entry.keys, c.keys) {
 			t.Errorf("%s: %+v", c.name, entry)
+		}
+	}
+	// no vector holds the reserved kind 2: every entry of every file is full or a tombstone
+	for _, vector := range named {
+		for _, file := range vector.Files {
+			plaintext := mustHex(t, file.Hex)
+			sum := sha256.Sum256(plaintext)
+			slot, err := indexDecodeSlot(plaintext, sum[:], false, DefaultIndexFormatSettings())
+			if err != nil {
+				t.Fatalf("%s: %v", vector.Name, err)
+			}
+			for _, entry := range slot.entries {
+				if entry.kind != indexEntryFull && entry.kind != indexEntryTombstone {
+					t.Errorf("%s: %s holds an entry of kind %d", vector.Name, file.Path, entry.kind)
+				}
+			}
 		}
 	}
 	if stood := byName["seal-as-it-stood"]; len(stood.Files) != 2 || stood.Files[0].Replaces == 0 {
@@ -1018,10 +890,17 @@ func TestIndexHeadVectors(t *testing.T) {
 	if removed := byName["absorbed-large-entry-removed"]; len(removed.Removals) != 1 {
 		t.Errorf("absorbed-large-entry-removed removes %v", removed.Removals)
 	}
-	for _, file := range byName["seal-skips-a-kept-slot"].Files {
-		if path, _ := indexParsePath(file.Path, false); path.kind == indexPathSlot && path.slotIndex == 0 {
-			t.Errorf("seal-skips-a-kept-slot writes the kept slot 0")
+	if edit := byName["large-entry-edit"]; len(edit.Removals) != 0 {
+		t.Errorf("large-entry-edit removes %v", edit.Removals)
+	}
+	reused := false
+	for _, file := range byName["seal-reuses-an-absorbed-slot"].Files {
+		if path, _ := indexParsePath(file.Path, false); path.kind == indexPathSlot && path.slotIndex == 0 && file.Replaces != 0 {
+			reused = true
 		}
+	}
+	if !reused {
+		t.Errorf("seal-reuses-an-absorbed-slot does not write the absorbed slot 0")
 	}
 	if direct := byName["past-direct-bytes"]; len(direct.Files) != 1 {
 		t.Errorf("past-direct-bytes writes %d files, not its head alone", len(direct.Files))
@@ -1045,7 +924,7 @@ func TestIndexHeadRefusesADocumentTwice(t *testing.T) {
 	view := world.view(t, a)
 	_, err := indexPlanHead(context.Background(), &indexHeadPlanArgs{
 		view: view, root: view.writeRoot(), writer: a, signedTimeMs: world.at.UnixMilli(), tables: testHeadTables,
-		pending: []*indexPendingDocument{testLive("d", 1, 2, 1, testHeadKeys(1, 1)), testRemoved("d", 1, 3)},
+		pending: []*indexPendingDocument{testLive("d", 1, 2, testHeadKeys(1, 1)), testRemoved("d", 1, 3)},
 	})
 	if !errors.Is(err, errIndexMalformed) {
 		t.Errorf("a document twice planned %v", err)
@@ -1113,25 +992,20 @@ func TestIndexSlotCoverageHoldsTwoRowsARef(t *testing.T) {
 	}
 }
 
-// A diff stands only in a slot, and a large entry's one entry is full (DESIGN-DETAILS 1.2.2): the encoder refuses a
-// large entry holding a diff, and so does the decoder.
+// A large entry's one entry is full: the encoder refuses a large entry holding a tombstone, and so does the decoder.
 func TestIndexLargeEntryHoldsOneFullEntry(t *testing.T) {
 	settings := DefaultIndexFormatSettings()
 	base := testIndexKeys(0, 30000, 3)
-	moved := slices.Clone(base)
-	for index := 0; index < 7000; index += 1 {
-		moved[index*4] += 1
-	}
-	diff := &indexEntry{kind: indexEntryDiff, key: testIndexId("d", 1), version: 2, baseVersion: 1, timeSeconds: 1, row: testFileRow(moved), delta: indexDeltaBetween(base, moved)}
+	tombstone := &indexEntry{kind: indexEntryTombstone, key: testIndexId("d", 1), version: 2, timeSeconds: 1}
 	header := indexNewFileHeader(indexFileLargeEntry, testHeadTables)
 	header.BucketStartDay, header.BucketDays, header.WriterSidecarId, header.Seq = 20340, 30, evsTestId("writer a").Bytes(), 1
-	if _, err := indexEncodeSlot(&indexSlot{header: header, entries: []*indexEntry{diff}}, false, settings); !errors.Is(err, errIndexMalformed) {
-		t.Errorf("a large entry holding a diff encoded, %v", err)
+	if _, err := indexEncodeSlot(&indexSlot{header: header, entries: []*indexEntry{tombstone}}, false, settings); !errors.Is(err, errIndexMalformed) {
+		t.Errorf("a large entry holding a tombstone encoded, %v", err)
 	}
-	raw := testRawSlot(t, header, diff)
+	raw := testRawSlot(t, header, tombstone)
 	sum := sha256.Sum256(raw)
 	if _, err := indexDecodeSlot(raw, sum[:], false, settings); !errors.Is(err, errIndexMalformed) {
-		t.Errorf("a large entry holding a diff decoded, %v", err)
+		t.Errorf("a large entry holding a tombstone decoded, %v", err)
 	}
 	full := &indexEntry{kind: indexEntryFull, key: testIndexId("d", 1), version: 1, timeSeconds: 1, row: testFileRow(base), keys: base}
 	if _, err := indexEncodeSlot(&indexSlot{header: header, entries: []*indexEntry{full}}, false, settings); err != nil {

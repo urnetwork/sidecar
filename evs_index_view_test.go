@@ -189,6 +189,36 @@ func testViewSlotFile(t testing.TB, window indexBucketWindow, writer Id, seq uin
 	return file
 }
 
+// A slot of writer's holding one entry of the reserved kind 2 for key at version, in the bytes a diff took before
+// owner decision 584, under a true header and hash: what no encoder here writes, for a reader to refuse.
+func testReservedKindSlotFile(t testing.TB, window indexBucketWindow, writer Id, seq uint32, key [indexIdByteCount]byte, version uint64) []byte {
+	t.Helper()
+	keys := indexKeySet{1, 2}
+	body := append([]byte{2}, key[:]...)
+	body = indexAppendVByte(body, version)
+	body = indexAppendVByte(body, 1800000000)
+	// a diff's base version, row, added keys and removed keys
+	body = indexAppendVByte(body, version-1)
+	var err error
+	if body, err = testFileRow(keys).appendEncoded(body, false); err != nil {
+		t.Fatal(err)
+	}
+	if body, err = keys.appendEncoded(body); err != nil {
+		t.Fatal(err)
+	}
+	if body, err = (indexKeySet{}).appendEncoded(body); err != nil {
+		t.Fatal(err)
+	}
+	header := indexNewFileHeader(indexFileSlot, indexTables{normVersion: "17.0.0", textModuleVersion: "v0.43.0"})
+	header.BucketStartDay = window.startDay
+	header.BucketDays = window.days
+	header.WriterSidecarId = writer.Bytes()
+	header.Seq = seq
+	header.Count = 1
+	header.BodyLength = uint32(len(body))
+	return testRawFile(t, header, body, nil)
+}
+
 // A full entry of a file document with keys, at version, signed at timeMs.
 func testViewEntry(label string, index int, version uint64, timeMs int64, keys indexKeySet) *indexEntry {
 	return &indexEntry{

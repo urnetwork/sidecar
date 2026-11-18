@@ -1,16 +1,15 @@
 //go:build !ios_extension
 
-// Bucket merges (§11.14's Merges block as DESIGN-DETAILS 1.2.4 rewrites it; D-EVS-47; R3; QD-685, QD-688, QD-689;
-// SEARCH-M10-10): a merge folds a bucket's sealed slots and unabsorbed large entries into its shards. It is a pure
+// Bucket merges (§11.14's Merges block; D-EVS-47; R3; owner decisions 385 and 584; QD-688, QD-689; SEARCH-M10-10): a
+// merge folds a bucket's sealed slots and unabsorbed large entries into its shards. It is a pure
 // function of the bucket's manifest and shards, those files, the erasure set, the merger's pad key and the tables it
 // names, so two mergers of one base build equal plaintext (FI-22) and a reproducer learns its inputs from the push:
 // the files it replaces and the watermarks its manifest raises.
 //
-// A merge reads no head. A writer's head is its own until it seals (R2), and a diff rests only on its own writer's
-// files (R1), which that writer keeps while the diff needs them, so every input composes (I2). The output is each
-// document's newest version among the shards, the sealed slots, the unabsorbed large entries and any extra entries,
-// every diff composed onto its own writer's base: at one version a tombstone, then the shards' own entry, then an
-// extra entry, then the full entry from the lowest writer_sidecar_id and the lowest seq. Honest copies of one version
+// A merge reads no head. A writer's head is its own until it seals (R2), and every entry is full or a tombstone, so a
+// merge takes each input as it stands. The output is each document's newest version among the shards, the sealed
+// slots, the unabsorbed large entries and any extra entries: at one version a tombstone, then the shards' own entry,
+// then an extra entry, then the full entry from the lowest writer_sidecar_id and the lowest seq. Honest copies of one version
 // are equal, so the order only makes the result a function. A live winner is a doc-table row with its postings, a
 // tombstone goes to the tombstone table, and on ur/index a ref tombstone takes every row of its ref below its version;
 // each stays for older partitions until the bucket rolls. layout drops each superseded entry from the shard holding it,
@@ -47,8 +46,8 @@ import (
 var (
 	// An empty shard that takes nothing: in take's step 2, and in step 1 where a give-up's search finds no count. Each
 	// entry of a layout is a tombstone or a row D6 kept, and either fits a shard of its own (QD-760: extraction skips a
-	// document whose lone(d) passes ShardBody, a decoder refuses a full entry past it, and a merge leaves out a diff that
-	// composes past it), so no input a decoder accepts reaches this. It stays as the closed guard: the layout fails,
+	// document whose lone(d) passes ShardBody, and a decoder refuses a full entry past it), so no input a decoder
+	// accepts reaches this. It stays as the closed guard: the layout fails,
 	// and the merge, the push past PushDirectByteCount or the roll-up writes nothing.
 	errIndexMergeUnplaceable = errors.New("index document fits no shard")
 	// A merge's inputs do not line up: a shard decoded for none the bucket names, or one missing.
@@ -64,7 +63,7 @@ type indexMergeArgs struct {
 	// The bucket's shards decoded, one for each of bucket.shards and in its order.
 	shards []*indexShard
 	// Entries the merge takes beside its inputs: a push's own documents, full entries and tombstones, or a roll-up's
-	// promoted versions and tombstones. No diff, and one entry a key.
+	// promoted versions and tombstones. One entry a key.
 	extra []*indexEntry
 	// Whether the merge absorbs its writers' sealed slots and unabsorbed large entries. A push merging its own entries
 	// and a promotion do not, so every watermark stands.
@@ -80,13 +79,6 @@ type indexMergeArgs struct {
 	settings  *IndexFormatSettings
 }
 
-// A diff a merge could not compose, since no other file of its writer's holds its base: index_malformed names the
-// slot's signer (1.2.4; I1 says an honest slot never has one).
-type indexMalformedDiff struct {
-	path            string
-	signerSidecarId Id
-}
-
 // What a merge writes: one push's files and removals, none of them a writer's.
 type indexMergeResult struct {
 	// Shards created or replaced, in path order; slot is nil on each.
@@ -96,7 +88,6 @@ type indexMergeResult struct {
 	// The bucket's manifest, replaced or created.
 	manifest        *indexPlannedFile
 	writtenManifest *protocol.IndexManifest
-	malformed       []*indexMalformedDiff
 }
 
 // The files the merge writes, in path order, each under its path's CAS.
@@ -120,7 +111,7 @@ const (
 	indexMergeFromWriter
 )
 
-// One candidate for a key's winner: a full entry, diffs composed; a tombstone; or on ur/index a ref tombstone.
+// One candidate for a key's winner: a full entry; a tombstone; or on ur/index a ref tombstone.
 type indexMergeCandidate struct {
 	kind        indexEntryKind
 	key         [indexIdByteCount]byte
@@ -251,10 +242,9 @@ func (self *indexMergeWinners) appended() []*indexLayoutEntry {
 
 // The shards' entries, every extra entry and, when absorbing, every sealed slot's and unabsorbed large entry's entry
 // as candidates, the erasure set's documents left out first: what a merge's winners are chosen from. Each writer's
-// highest seq read joins watermarks. A diff composes onto its own writer's base; one whose base no other file of its
-// writer's holds, or whose composed set D6 skips under the diff's own row (QD-760), is malformed and left out. A merge
-// never skips a document itself: its output is its inputs' newest versions, so it places a winner or fails.
-func indexMergeCandidates(bucket *indexViewBucket, shards []*indexShard, extra []*indexEntry, absorb bool, includeHeads bool, erased func(key [indexIdByteCount]byte, version uint64) bool, watermarks map[Id]uint32, settings *IndexFormatSettings) (*indexMergeWinners, []*indexMalformedDiff, error) {
+// highest seq read joins watermarks. A merge never skips a document itself: its output is its inputs' newest versions,
+// so it places a winner or fails.
+func indexMergeCandidates(bucket *indexViewBucket, shards []*indexShard, extra []*indexEntry, absorb bool, includeHeads bool, erased func(key [indexIdByteCount]byte, version uint64) bool, watermarks map[Id]uint32) (*indexMergeWinners, error) {
 	winners := indexNewMergeWinners()
 	for shardIndex, shard := range shards {
 		for _, document := range shard.documents {
@@ -276,18 +266,14 @@ func indexMergeCandidates(bucket *indexViewBucket, shards []*indexShard, extra [
 	}
 	extraKeys := map[[indexIdByteCount]byte]bool{}
 	for _, entry := range extra {
-		if entry.kind == indexEntryDiff {
-			return nil, nil, indexMalformed("a diff among a merge's extra entries")
-		}
 		if extraKeys[entry.key] {
-			return nil, nil, indexMalformed("a document twice among a merge's extra entries")
+			return nil, indexMalformed("a document twice among a merge's extra entries")
 		}
 		extraKeys[entry.key] = true
 		if !erased(entry.key, entry.version) {
 			winners.consider(indexMergeCandidateOf(entry, indexMergeFromExtra))
 		}
 	}
-	malformed := []*indexMalformedDiff{}
 	if absorb {
 		for _, writer := range bucket.writers {
 			absorbed := bucket.absorbedSeq(writer.sidecarId)
@@ -304,25 +290,6 @@ func indexMergeCandidates(bucket *indexViewBucket, shards []*indexShard, extra [
 					}
 					candidate := indexMergeCandidateOf(entry, indexMergeFromWriter)
 					candidate.writer, candidate.seq = writer.sidecarId, file.seq()
-					if entry.kind == indexEntryDiff {
-						// A diff whose base version the set lists, while its own version it does not, loses its base to
-						// the eraser's CLOSURE: it is left out and alarms nothing, as both of question
-						// search-m10-46-erased-base-of-a-live-diff's options 1 and 2 read it.
-						if erased(entry.key, entry.baseVersion) {
-							continue
-						}
-						_, base := indexResolveBase(writer, entry.key, entry.baseVersion, file)
-						var keys indexKeySet
-						var err error
-						if base != nil {
-							keys, err = entry.delta.applyTo(base.keys)
-						}
-						if base == nil || err != nil || uint64(len(keys)) != entry.row.trigramCount || indexDocumentSkipped(keys, entry.row, settings) {
-							malformed = append(malformed, &indexMalformedDiff{path: file.file.path, signerSidecarId: file.file.signerSidecarId})
-							continue
-						}
-						candidate.kind, candidate.keys = indexEntryFull, keys
-					}
 					winners.consider(candidate)
 				}
 			}
@@ -332,7 +299,7 @@ func indexMergeCandidates(bucket *indexViewBucket, shards []*indexShard, extra [
 		}
 	}
 	winners.dropRefRows()
-	return winners, malformed, nil
+	return winners, nil
 }
 
 // 1.2.4's merge of args.bucket at its base: the winners over its shards, its sealed slots and unabsorbed large entries
@@ -357,7 +324,7 @@ func indexMerge(args *indexMergeArgs) (*indexMergeResult, error) {
 			}
 		}
 	}
-	winners, malformed, err := indexMergeCandidates(bucket, args.shards, args.extra, args.absorb, false, erased, watermarks, args.settings)
+	winners, err := indexMergeCandidates(bucket, args.shards, args.extra, args.absorb, false, erased, watermarks)
 	if err != nil {
 		return nil, err
 	}
@@ -410,7 +377,6 @@ func indexMerge(args *indexMergeArgs) (*indexMergeResult, error) {
 		removedShards:   laid.removals,
 		manifest:        &indexPlannedFile{path: manifestPath, file: manifestBytes, replaces: replaces},
 		writtenManifest: manifest,
-		malformed:       malformed,
 	}, nil
 }
 
@@ -812,15 +778,14 @@ func indexDecodeBucketShards(ctx context.Context, view *indexView, shards []*ind
 	return decoded, nil
 }
 
-// A push past PushDirectByteCount (1.2.3): each bucket of a plan whose mergeInPush is set merges the push's own
+// A push past PushDirectByteCount: each bucket of a plan whose mergeInPush is set merges the push's own
 // entries into its shards without absorbing, beside the writer's head the plan wrote without them. The plan's files
 // and removals and every merge's, in path order, are the whole push.
-func indexMergeHeadPlan(ctx context.Context, view *indexView, root *indexViewRoot, plan *indexHeadPlan, padKey *indexPadKey, tables indexTables) ([]*indexPushFile, []*indexPushRemoval, []*indexMalformedDiff, error) {
+func indexMergeHeadPlan(ctx context.Context, view *indexView, root *indexViewRoot, plan *indexHeadPlan, padKey *indexPadKey, tables indexTables) ([]*indexPushFile, []*indexPushRemoval, error) {
 	files := plan.files()
 	removals := plan.removals()
-	malformed := []*indexMalformedDiff{}
 	if !plan.mergeInPush {
-		return files, removals, malformed, nil
+		return files, removals, nil
 	}
 	for _, planned := range plan.buckets {
 		if len(planned.direct) == 0 {
@@ -832,7 +797,7 @@ func indexMergeHeadPlan(ctx context.Context, view *indexView, root *indexViewRoo
 		}
 		shards, err := indexDecodeBucketShards(ctx, view, bucket.shards)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, err
 		}
 		merged, err := indexMerge(&indexMergeArgs{
 			root:      root,
@@ -846,11 +811,10 @@ func indexMergeHeadPlan(ctx context.Context, view *indexView, root *indexViewRoo
 			settings:  view.settings,
 		})
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, err
 		}
 		files = append(files, merged.files()...)
 		removals = append(removals, merged.removedShards...)
-		malformed = append(malformed, merged.malformed...)
 	}
 	slices.SortFunc(files, func(a *indexPushFile, b *indexPushFile) int {
 		return cmp.Compare(a.path, b.path)
@@ -858,5 +822,5 @@ func indexMergeHeadPlan(ctx context.Context, view *indexView, root *indexViewRoo
 	slices.SortFunc(removals, func(a *indexPushRemoval, b *indexPushRemoval) int {
 		return cmp.Compare(a.path, b.path)
 	})
-	return files, removals, malformed, nil
+	return files, removals, nil
 }

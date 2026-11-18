@@ -1,9 +1,9 @@
-// Bucket merges (SEARCH-M10-10; DESIGN-DETAILS 1.2.4 and 1.6): a sealed diff composed onto its writer's kept slot and
-// onto a large entry, the tie order at one version, tombstones over rows and their survival past a slot's reuse, a ref
+// Bucket merges (SEARCH-M10-10; §11.14's Merges block; owner decision 584): a sealed slot's and a large entry's full
+// entries taken as they stand, the tie order at one version, tombstones over rows and their survival past a slot's reuse, a ref
 // tombstone taking its ref's older rows, the erasure set's documents left out, take at the cap against an exhaustive
 // count and the shard opened after it, a join, a manifest-only merge, a push past DirectBytes merging its own entries,
 // two mergers racing, a head push landing between a merge's build and its commit, reruns after 409 and INDEX_EPOCH,
-// an input collected, the expiry and due rules, a forged diff with no base, and 1.6's merge vectors with their
+// an input collected, the expiry and due rules, a forged slot of the reserved kind 2, and the merge vectors with their
 // plaintext hashes, all on the fake store.
 
 package sidecar
@@ -137,23 +137,29 @@ func testNoWriterFile(t testing.TB, result *indexMergeResult) {
 	}
 }
 
-// A sealed diff composes onto its writer's kept slot, and another onto a large entry: the shard rows hold the composed
-// key sets, the watermark is the highest sealed seq read and never the head's, the head and every writer file stay,
-// and the push names no writer's file. A merge of nothing more then commits nothing.
-func TestIndexMergeComposesSealedDiffs(t *testing.T) {
+// A sealed slot's edit and a large entry's, each full, are taken as they stand over the older versions beside them:
+// the shard rows hold the newer versions' key sets, the watermark is the highest sealed seq read and never the head's,
+// the head and every writer file stay, and the push names no writer's file. A merge of nothing more then commits
+// nothing.
+func TestIndexMergeTakesSealedEntriesAsTheyStand(t *testing.T) {
 	world := testNewHeadWorld()
 	a := evsTestId("writer a")
-	world.push(t, a, testLive("d", 1, 1, 0, testHeadKeys(1, 0)))
+	world.push(t, a, testLive("d", 1, 1, testHeadKeys(1, 0)))
 	index := world.fillUntilSealed(t, a, "f", 0)
 	large := testIndexKeys(0, 9000, 3)
-	world.push(t, a, testLive("d", 2, 1, 0, large))
+	world.push(t, a, testLive("d", 2, 1, large))
 	largeEdit := slices.Clone(large)
 	largeEdit[10] += 1
-	plan := world.push(t, a, testLive("d", 1, 2, 1, testHeadKeys(1, 1)), testLive("d", 2, 2, 1, largeEdit))
-	for _, entry := range plan.buckets[0].head.slot.entries {
-		if (entry.key == testIndexId("d", 1) || entry.key == testIndexId("d", 2)) && entry.kind != indexEntryDiff {
-			t.Fatalf("an edit of a sealed or large base written %d", entry.kind)
+	plan := world.push(t, a, testLive("d", 1, 2, testHeadKeys(1, 1)), testLive("d", 2, 2, largeEdit))
+	for _, file := range slices.Concat([]*indexPlannedFile{plan.buckets[0].head}, plan.buckets[0].large) {
+		for _, entry := range file.slot.entries {
+			if (entry.key == testIndexId("d", 1) || entry.key == testIndexId("d", 2)) && entry.kind != indexEntryFull {
+				t.Fatalf("an edit written %d", entry.kind)
+			}
 		}
+	}
+	if len(plan.buckets[0].large) != 1 {
+		t.Fatalf("the large document's edit in %d large entries", len(plan.buckets[0].large))
 	}
 	world.fillUntilSealed(t, a, "g", index)
 	before := world.writer(t, a)
@@ -163,10 +169,10 @@ func TestIndexMergeComposesSealedDiffs(t *testing.T) {
 	testNoWriterFile(t, outcome.result)
 	merged := world.mergedBucket(t)
 	if got := merged.documents[testIndexId("d", 1)]; got == nil || got.version != 2 || !slices.Equal(got.keys, testHeadKeys(1, 1)) {
-		t.Fatalf("the slot diff did not compose: %+v", got)
+		t.Fatalf("the sealed slot's edit did not win: %+v", got)
 	}
 	if got := merged.documents[testIndexId("d", 2)]; got == nil || got.version != 2 || !slices.Equal(got.keys, largeEdit) {
-		t.Fatalf("the large entry's diff did not compose")
+		t.Fatalf("the large entry's edit did not win")
 	}
 	highestSealed := uint32(0)
 	for _, file := range slices.Concat(before.slots, before.large) {
@@ -199,13 +205,13 @@ func TestIndexMergeTieOrder(t *testing.T) {
 		a, b = b, a
 	}
 	keys := testHeadKeys(4, 0)
-	other := testLive("d", 4, 3, 0, keys)
+	other := testLive("d", 4, 3, keys)
 	other.row = testFileRow(keys)
 	other.row.locator = "notes/other.md"
 	other.row.fit()
 	world.push(t, b, other)
 	world.fillUntilSealed(t, b, "fb", 0)
-	world.push(t, a, testLive("d", 4, 3, 0, keys))
+	world.push(t, a, testLive("d", 4, 3, keys))
 	world.fillUntilSealed(t, a, "fa", 0)
 	world.merge(t, evsTestId("merger"))
 	merged := world.mergedBucket(t)
@@ -215,7 +221,7 @@ func TestIndexMergeTieOrder(t *testing.T) {
 	}
 
 	c := evsTestId("writer c")
-	world.push(t, c, testLive("d", 4, 3, 0, keys))
+	world.push(t, c, testLive("d", 4, 3, keys))
 	world.fillUntilSealed(t, c, "fa", 0)
 	outcome := world.merge(t, evsTestId("merger"))
 	if len(outcome.result.shards) != 0 || len(outcome.result.removedShards) != 0 {
@@ -236,7 +242,7 @@ func TestIndexMergeTieOrder(t *testing.T) {
 func TestIndexMergeTombstones(t *testing.T) {
 	world := testNewHeadWorld()
 	a := evsTestId("writer a")
-	world.push(t, a, testLive("d", 5, 1, 0, testHeadKeys(5, 0)))
+	world.push(t, a, testLive("d", 5, 1, testHeadKeys(5, 0)))
 	index := world.fillUntilSealed(t, a, "f", 0)
 	world.merge(t, evsTestId("merger"))
 	if world.mergedBucket(t).documents[testIndexId("d", 5)] == nil {
@@ -260,7 +266,7 @@ func TestIndexMergeTombstones(t *testing.T) {
 	if got := merged.tombstones[testIndexId("d", 5)]; got == nil || got.version != 2 {
 		t.Fatal("the tombstone went with its slot's reuse")
 	}
-	world.push(t, a, testLive("d", 5, 3, 0, testHeadKeys(5, 1)))
+	world.push(t, a, testLive("d", 5, 3, testHeadKeys(5, 1)))
 	world.fillUntilSealed(t, a, "f", index)
 	world.merge(t, evsTestId("merger"))
 	merged = world.mergedBucket(t)
@@ -376,14 +382,14 @@ func TestIndexMergeRefTombstone(t *testing.T) {
 }
 
 // Every entry the erasure set lists at or below its version is left out first: the listed document's shard row and
-// its sealed newer copy both go, a diff resting on a listed base goes with no alarm, and an unlisted document stays.
+// its sealed newer copy both go with no alarm, and an unlisted document stays.
 func TestIndexMergeLeavesOutErased(t *testing.T) {
 	world := testNewHeadWorld()
 	a := evsTestId("writer a")
-	world.push(t, a, testLive("e", 1, 1, 0, testHeadKeys(1, 0)), testLive("e", 2, 1, 0, testHeadKeys(2, 0)))
+	world.push(t, a, testLive("e", 1, 1, testHeadKeys(1, 0)), testLive("e", 2, 1, testHeadKeys(2, 0)))
 	index := world.fillUntilSealed(t, a, "f", 0)
 	world.merge(t, evsTestId("merger"))
-	world.push(t, a, testLive("e", 1, 2, 1, testHeadKeys(1, 1)), testLive("e", 3, 1, 0, testHeadKeys(3, 0)))
+	world.push(t, a, testLive("e", 1, 2, testHeadKeys(1, 1)), testLive("e", 3, 1, testHeadKeys(3, 0)))
 	world.fillUntilSealed(t, a, "f", index)
 	erasureSet := &protocol.IndexErasureSet{Erasures: []*protocol.IndexErasure{{
 		ErasureId:       testIndexIdBytes("erasure", 1),
@@ -486,20 +492,20 @@ func TestIndexMergeTakeAtTheCap(t *testing.T) {
 func TestIndexMergeHeadPlanPastDirectBytes(t *testing.T) {
 	world := testNewHeadWorld()
 	a := evsTestId("writer a")
-	world.push(t, a, testLive("h", 1, 1, 0, testHeadKeys(1, 0)))
+	world.push(t, a, testLive("h", 1, 1, testHeadKeys(1, 0)))
 	world.fillUntilSealed(t, a, "f", 0)
-	pending := []*indexPendingDocument{testLive("h", 1, 2, 0, testHeadKeys(1, 3))}
+	pending := []*indexPendingDocument{testLive("h", 1, 2, testHeadKeys(1, 3))}
 	for bulk := range 40 {
-		pending = append(pending, testLive("bulk", bulk, 1, 0, testIndexKeys(bulk*0x10000, 7000, 1)))
+		pending = append(pending, testLive("bulk", bulk, 1, testIndexKeys(bulk*0x10000, 7000, 1)))
 	}
 	plan, view := world.plan(t, a, true, pending...)
 	if !plan.mergeInPush {
 		t.Fatal("the push did not pass DirectBytes")
 	}
 	root := view.writeRoot()
-	files, removals, malformed, err := indexMergeHeadPlan(context.Background(), view, root, plan, testPadKey(t, 2), testHeadTables)
-	if err != nil || len(malformed) != 0 {
-		t.Fatal(err, malformed)
+	files, removals, err := indexMergeHeadPlan(context.Background(), view, root, plan, testPadKey(t, 2), testHeadTables)
+	if err != nil {
+		t.Fatal(err)
 	}
 	_, err = world.ref.store(a).Commit(context.Background(), &indexPush{pushId: NewId(), baseVersion: view.head.version, indexEpoch: view.head.indexEpoch, signedTimeMs: world.at.UnixMilli(), files: files, removals: removals})
 	if err != nil {
@@ -530,7 +536,7 @@ func TestIndexMergeHeadPlanPastDirectBytes(t *testing.T) {
 func TestIndexMergersRace(t *testing.T) {
 	world := testNewHeadWorld()
 	a := evsTestId("writer a")
-	world.push(t, a, testLive("r", 1, 1, 0, testHeadKeys(1, 0)))
+	world.push(t, a, testLive("r", 1, 1, testHeadKeys(1, 0)))
 	world.fillUntilSealed(t, a, "f", 0)
 	build := func(signer Id) (*indexMergeResult, *indexView) {
 		view := world.view(t, signer)
@@ -593,13 +599,13 @@ func TestIndexMergersRace(t *testing.T) {
 	}
 }
 
-// A head push landing between a merge's build and its commit: both commit, the push's diff still finds its base in
-// the slot the merge absorbed, which its writer now keeps, and the head the push sealed is not absorbed (FS-107's
-// merge based before a composed diff's push and committing after it).
+// A head push landing between a merge's build and its commit (FS-107's merge landing between an entry's build and
+// its commit): both commit, the merge leaves the slot it absorbed as it stood, the head the push wrote is not absorbed,
+// and the push's full entry reads beside the shard's older row, one newest version found.
 func TestIndexMergeHeadPushBetweenBuildAndCommit(t *testing.T) {
 	world := testNewHeadWorld()
 	a := evsTestId("writer a")
-	world.push(t, a, testLive("p", 1, 1, 0, testHeadKeys(1, 0)))
+	world.push(t, a, testLive("p", 1, 1, testHeadKeys(1, 0)))
 	world.fillUntilSealed(t, a, "f", 0)
 	baseSlot := world.writer(t, a).slotAt(0)
 	merger := world.merger(t, evsTestId("merger"))
@@ -614,7 +620,7 @@ func TestIndexMergeHeadPushBetweenBuildAndCommit(t *testing.T) {
 		}
 		landed = true
 		world.ref.beforeCommit = nil
-		world.push(t, a, testLive("p", 1, 2, 1, testHeadKeys(1, 1)))
+		world.push(t, a, testLive("p", 1, 2, testHeadKeys(1, 1)))
 	}
 	outcome, err := merger.Merge(context.Background(), indexRootNumber, startDay)
 	world.ref.beforeCommit = nil
@@ -627,13 +633,18 @@ func TestIndexMergeHeadPushBetweenBuildAndCommit(t *testing.T) {
 	if writer.head().seq() <= absorbed {
 		t.Fatal("the head the push wrote is absorbed")
 	}
-	kept := writer.kept(absorbed, nil)
-	base := writer.slotAt(0)
-	if base == nil || base.file.version != baseSlot.file.version || !kept[base] {
-		t.Fatal("the diff's base is not kept in its slot")
+	sealed := writer.slotAt(0)
+	if sealed == nil || sealed.file.version != baseSlot.file.version || absorbed < sealed.seq() {
+		t.Fatal("the merge did not leave the slot it absorbed as it stood")
 	}
-	if file, entry := indexResolveBase(writer, testIndexId("p", 1), 1, writer.head()); file != base || entry == nil {
-		t.Fatal("the diff does not resolve from its base")
+	entries := world.entries(t, "p", 1)
+	if newest := testEntryAt(t, entries, 2); newest.kind != indexEntryFull || !newest.head || !slices.Equal(newest.entry.keys, testHeadKeys(1, 1)) {
+		t.Fatalf("the push's entry %+v", newest)
+	}
+	for _, entry := range entries {
+		if 2 < entry.version || (entry.version == 1 && !entry.shard && !entry.absorbed) {
+			t.Errorf("an entry of P the merge and the push do not account for: %+v", entry)
+		}
 	}
 }
 
@@ -642,7 +653,7 @@ func TestIndexMergeHeadPushBetweenBuildAndCommit(t *testing.T) {
 func TestIndexMergeReruns(t *testing.T) {
 	world := testNewHeadWorld()
 	a := evsTestId("writer a")
-	world.push(t, a, testLive("q", 1, 1, 0, testHeadKeys(1, 0)))
+	world.push(t, a, testLive("q", 1, 1, testHeadKeys(1, 0)))
 	world.fillUntilSealed(t, a, "f", 0)
 	startDay := world.view(t, a).writeRoot().newestBucket().window.startDay
 
@@ -695,7 +706,7 @@ func (self *testCollectingStore) Read(ctx context.Context, file *indexFileVersio
 func TestIndexMergeExpiryAndDue(t *testing.T) {
 	world := testNewHeadWorld()
 	a := evsTestId("writer a")
-	world.push(t, a, testLive("x", 1, 1, 0, testHeadKeys(1, 0)))
+	world.push(t, a, testLive("x", 1, 1, testHeadKeys(1, 0)))
 	world.fillUntilSealed(t, a, "f", 0)
 	view := world.view(t, a)
 	root := view.writeRoot()
@@ -740,37 +751,35 @@ func TestIndexMergeExpiryAndDue(t *testing.T) {
 	}
 }
 
-// A forged diff whose base no other file of its writer's holds is left out, and alarms index_malformed naming the
-// slot's signer; the writer's other entries merge.
-func TestIndexMergeMalformedDiff(t *testing.T) {
+// FS-107 (owner decision 584): a forged slot holding an entry of the reserved kind 2 is refused whole and alarms
+// index_malformed naming its signer; the merge reads nothing of it, and the writer's other slot merges.
+func TestIndexMergeLeavesOutASlotOfTheReservedKind(t *testing.T) {
 	world := testNewHeadWorld()
 	forger := evsTestId("forger")
 	window := indexBucketWindow{startDay: 20340, days: 30}
-	forged := &indexEntry{kind: indexEntryDiff, key: testIndexId("m", 1), version: 3, baseVersion: 2, timeSeconds: 1757400000, row: testFileRow(testHeadKeys(1, 0)), delta: indexDelta{added: indexKeySet{7}}}
 	honest := testViewEntry("m", 2, 1, world.at.UnixMilli(), testHeadKeys(2, 0))
 	root := indexNewPaths(false, indexRootNumber)
 	path0, _ := root.slot(window.startDay, [indexIdByteCount]byte(forger), 0)
 	path1, _ := root.slot(window.startDay, [indexIdByteCount]byte(forger), 1)
-	entries := []*indexEntry{forged, honest}
-	slices.SortFunc(entries, indexCompareEntries)
+	path2, _ := root.slot(window.startDay, [indexIdByteCount]byte(forger), 2)
 	world.ref.store(forger).testCommit(t, world.at,
-		&indexPushFile{path: path0, plaintext: testViewSlotFile(t, window, forger, 1, indexFileSlot, entries...)},
-		&indexPushFile{path: path1, plaintext: testViewSlotFile(t, window, forger, 2, indexFileSlot)},
+		&indexPushFile{path: path0, plaintext: testReservedKindSlotFile(t, window, forger, 1, testIndexId("m", 1), 3)},
+		&indexPushFile{path: path1, plaintext: testViewSlotFile(t, window, forger, 2, indexFileSlot, honest)},
+		&indexPushFile{path: path2, plaintext: testViewSlotFile(t, window, forger, 3, indexFileSlot)},
 	)
 	outcome := world.merge(t, evsTestId("merger"))
-	if len(outcome.result.malformed) != 1 || outcome.result.malformed[0].signerSidecarId != forger || outcome.result.malformed[0].path != path0 {
-		t.Fatalf("the forged diff: %+v", outcome.result.malformed)
-	}
-	alarmed := false
+	alarmed := 0
 	for _, event := range outcome.events {
-		alarmed = alarmed || event.Kind == SidecarEventIndexMalformed && *event.SidecarId == forger && event.Path == path0
+		if event.Kind == SidecarEventIndexMalformed && *event.SidecarId == forger && event.Path == path0 {
+			alarmed += 1
+		}
 	}
-	if !alarmed {
-		t.Fatal("no index_malformed named the forger")
+	if alarmed != 1 {
+		t.Fatalf("index_malformed named the forger %d times: %+v", alarmed, outcome.events)
 	}
 	merged := world.mergedBucket(t)
-	if merged.documents[testIndexId("m", 1)] != nil || merged.documents[testIndexId("m", 2)] == nil {
-		t.Fatal("the forged diff merged, or the honest entry did not")
+	if merged.documents[testIndexId("m", 1)] != nil || merged.tombstones[testIndexId("m", 1)] != nil || merged.documents[testIndexId("m", 2)] == nil {
+		t.Fatal("the forged entry merged, or the honest entry did not")
 	}
 }
 
@@ -827,10 +836,9 @@ func testBoundaryEntry(t testing.TB, label string, keyCount int, rowByteCount in
 	return &indexEntry{kind: indexEntryFull, key: testIndexId(label, keyCount), version: 1, timeSeconds: 1757400000, row: testFileRowOfByteCount(t, keyCount, rowByteCount), keys: keys}
 }
 
-// 1.6's TestAnEntryPastAShardIsRefused (QD-760): the entry codec writes and reads a full entry at lone = ShardBody
-// (keys 0 to 199,607 under a 36 B row) and refuses one at ShardBody + 1 (under a 37 B row) and one at 199,609 keys,
-// both ways; a large entry holding one is index_malformed naming its signer; and a diff whose composed set passes the
-// bound under its own row is left out of the merge, reported with its slot's signer, while the merge commits the rest.
+// TestAnEntryPastAShardIsRefused (QD-760): the entry codec writes and reads a full entry at lone = ShardBody (keys 0 to
+// 199,607 under a 36 B row) and refuses one at ShardBody + 1 (under a 37 B row) and one at 199,609 keys, both ways; a
+// large entry holding one is index_malformed naming its signer, and a merge beside it commits the rest.
 func TestAnEntryPastAShardIsRefused(t *testing.T) {
 	settings := DefaultIndexFormatSettings()
 	// bytes no honest writer makes: the encoder's own test let through by counting nothing for ShardLone
@@ -887,53 +895,33 @@ func TestAnEntryPastAShardIsRefused(t *testing.T) {
 		t.Fatal("no index_malformed named the large entry's signer")
 	}
 
-	// a diff whose base is kept and whose composed set, keys 0 to 200,000 under a 36 B row, passes the bound
-	composer := evsTestId("composer")
-	base := testBoundaryEntry(t, "composed", 199001, 36)
-	base.key = testIndexId("composed", 1)
-	diff := &indexEntry{
-		kind: indexEntryDiff, key: base.key, version: 2, baseVersion: 1, timeSeconds: 1757400060,
-		row: testFileRowOfByteCount(t, 200001, 36), delta: indexDelta{added: testIndexKeys(199001, 1000, 1)},
-	}
-	honest := testViewEntry("composed honest", 1, 1, world.at.UnixMilli(), testHeadKeys(3, 0))
-	baseLargePath, _ := paths.largeEntry(window.startDay, [indexIdByteCount]byte(composer), 1)
-	sealedPath, _ := paths.slot(window.startDay, [indexIdByteCount]byte(composer), 0)
-	headPath, _ := paths.slot(window.startDay, [indexIdByteCount]byte(composer), 1)
-	sealed := []*indexEntry{diff, honest}
-	slices.SortFunc(sealed, indexCompareEntries)
+	// the forger's other files, honest, merge beside it
+	honest := testViewEntry("bound honest", 1, 1, world.at.UnixMilli(), testHeadKeys(3, 0))
+	sealedPath, _ := paths.slot(window.startDay, [indexIdByteCount]byte(forger), 0)
+	headPath, _ := paths.slot(window.startDay, [indexIdByteCount]byte(forger), 1)
 	files := []*indexPushFile{}
-	type writerFile struct {
-		path     string
-		seq      uint32
-		fileType uint32
-		entries  []*indexEntry
-	}
-	for _, file := range []writerFile{
-		{path: baseLargePath, seq: 1, fileType: indexFileLargeEntry, entries: []*indexEntry{base}},
-		{path: sealedPath, seq: 2, fileType: indexFileSlot, entries: sealed},
-		{path: headPath, seq: 3, fileType: indexFileSlot},
+	for _, file := range []struct {
+		path    string
+		seq     uint32
+		entries []*indexEntry
+	}{
+		{path: sealedPath, seq: 2, entries: []*indexEntry{honest}},
+		{path: headPath, seq: 3},
 	} {
-		plaintext, err := indexEncodeSlot(&indexSlot{header: header(composer, file.seq, file.fileType), entries: file.entries}, false, settings)
+		plaintext, err := indexEncodeSlot(&indexSlot{header: header(forger, file.seq, indexFileSlot), entries: file.entries}, false, settings)
 		if err != nil {
 			t.Fatal(err)
 		}
 		files = append(files, &indexPushFile{path: file.path, plaintext: plaintext})
 	}
-	world.ref.store(composer).testCommit(t, world.at, files...)
-	outcome := world.merge(t, evsTestId("merger"))
-	reported := false
-	for _, malformed := range outcome.result.malformed {
-		reported = reported || malformed.signerSidecarId == composer && malformed.path == sealedPath
-	}
-	if !reported {
-		t.Fatalf("the diff composing past a shard: %+v", outcome.result.malformed)
-	}
+	world.ref.store(forger).testCommit(t, world.at, files...)
+	world.merge(t, evsTestId("merger"))
 	merged := world.mergedBucket(t)
-	if document := merged.documents[base.key]; document == nil || document.version != 1 {
-		t.Fatal("the diff past a shard won, or its base did not merge")
+	if merged.documents[testIndexId("bound", 199609)] != nil {
+		t.Fatal("the entry past a shard merged")
 	}
 	if merged.documents[honest.key] == nil {
-		t.Fatal("the merge left out the rest of the slot")
+		t.Fatal("the merge left out the rest of the writer's files")
 	}
 }
 
@@ -958,11 +946,11 @@ func TestADocumentPastAShardNeverReachesAMerge(t *testing.T) {
 		return prepared
 	}
 	// what the in-ref writer makes of a prepared version: its full entry, or its tombstone where it was indexed before
-	pending := func(prepared *indexPreparedDocument, version uint64, replaces uint64) *indexPendingDocument {
+	pending := func(prepared *indexPreparedDocument, version uint64) *indexPendingDocument {
 		if prepared.skipped {
 			return &indexPendingDocument{kind: indexEntryTombstone, key: testIndexId("noise", 0), version: version}
 		}
-		return &indexPendingDocument{kind: indexEntryFull, key: testIndexId("noise", 0), version: version, replaces: replaces, keys: prepared.keys, row: prepared.row}
+		return &indexPendingDocument{kind: indexEntryFull, key: testIndexId("noise", 0), version: version, keys: prepared.keys, row: prepared.row}
 	}
 
 	world := testNewHeadWorld()
@@ -971,12 +959,12 @@ func TestADocumentPastAShardNeverReachesAMerge(t *testing.T) {
 	if smaller.skipped {
 		t.Fatal("the smaller text was skipped")
 	}
-	world.push(t, a, pending(smaller, 1, 0))
+	world.push(t, a, pending(smaller, 1))
 	skipped := prepare(letters)
 	if !skipped.skipped {
 		t.Fatal("the chunk of letters was kept")
 	}
-	world.push(t, a, pending(skipped, 2, 1))
+	world.push(t, a, pending(skipped, 2))
 	if entry := testEntryAt(t, world.entries(t, "noise", 0), 2); entry.kind != indexEntryTombstone {
 		t.Fatal("the skipped version is no tombstone")
 	}
@@ -985,17 +973,17 @@ func TestADocumentPastAShardNeverReachesAMerge(t *testing.T) {
 	if !again.skipped {
 		t.Fatal("the second chunk of letters was kept")
 	}
-	bulk := []*indexPendingDocument{pending(again, 3, 2)}
+	bulk := []*indexPendingDocument{pending(again, 3)}
 	for index := range 40 {
-		bulk = append(bulk, testLive("bulk", index, 1, 0, testIndexKeys(index*0x10000, 7000, 1)))
+		bulk = append(bulk, testLive("bulk", index, 1, testIndexKeys(index*0x10000, 7000, 1)))
 	}
 	plan, view := world.plan(t, a, true, bulk...)
 	if !plan.mergeInPush {
 		t.Fatal("the push did not pass DirectBytes")
 	}
-	files, removals, malformed, err := indexMergeHeadPlan(context.Background(), view, view.writeRoot(), plan, testPadKey(t, 2), testHeadTables)
-	if err != nil || len(malformed) != 0 {
-		t.Fatal(err, malformed)
+	files, removals, err := indexMergeHeadPlan(context.Background(), view, view.writeRoot(), plan, testPadKey(t, 2), testHeadTables)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if _, err := world.ref.store(a).Commit(context.Background(), &indexPush{pushId: NewId(), baseVersion: view.head.version, indexEpoch: view.head.indexEpoch, signedTimeMs: world.at.UnixMilli(), files: files, removals: removals}); err != nil {
 		t.Fatal(err)
@@ -1487,8 +1475,8 @@ func testCheckMergeVectors(t *testing.T, path string, built []testMergeVector) {
 	}
 }
 
-// D-TEST-15, DESIGN-DETAILS 1.6's merge/ list, pinned by each output file's plaintext hash: a sealed diff composed
-// onto its writer's kept slot and onto a large entry; one version from two writers (the tie order); a tombstone over a
+// D-TEST-15, the merge/ list, pinned by each output file's plaintext hash: a sealed slot's edit and a large entry's
+// edit, full, taken over the older versions beside them; one version from two writers (the tie order); a tombstone over a
 // row; a ref tombstone; the erasure set's document left out; take at the cap and the shard opened after it; a join; a
 // merge that changes only the manifest; a merge with extra entries; take at the cap before a document at lone =
 // ShardBody, which a shard holds alone (QD-760); and, each with its input shards' hashes, a join refused at the cap
@@ -1502,19 +1490,19 @@ func TestIndexMergeVectors(t *testing.T) {
 
 	world := testNewHeadWorld()
 	a, b := evsTestId("writer a"), evsTestId("writer b")
-	world.push(t, a, testLive("d", 1, 1, 0, testHeadKeys(1, 0)))
+	world.push(t, a, testLive("d", 1, 1, testHeadKeys(1, 0)))
 	index := world.fillUntilSealed(t, a, "f", 0)
 	large := testIndexKeys(0, 9000, 3)
-	world.push(t, a, testLive("d", 2, 1, 0, large))
+	world.push(t, a, testLive("d", 2, 1, large))
 	largeEdit := slices.Clone(large)
 	largeEdit[10] += 1
-	world.push(t, a, testLive("d", 1, 2, 1, testHeadKeys(1, 1)), testLive("d", 2, 2, 1, largeEdit))
+	world.push(t, a, testLive("d", 1, 2, testHeadKeys(1, 1)), testLive("d", 2, 2, largeEdit))
 	index = world.fillUntilSealed(t, a, "f", index)
-	record("composed-diffs", world.merge(t, merger).result)
+	record("sealed-edits", world.merge(t, merger).result)
 
-	world.push(t, b, testLive("d", 9, 3, 0, testHeadKeys(9, 0)))
+	world.push(t, b, testLive("d", 9, 3, testHeadKeys(9, 0)))
 	world.fillUntilSealed(t, b, "fb", 0)
-	world.push(t, a, testLive("d", 9, 3, 0, testHeadKeys(9, 0)))
+	world.push(t, a, testLive("d", 9, 3, testHeadKeys(9, 0)))
 	index = world.fillUntilSealed(t, a, "f", index)
 	record("tie-order", world.merge(t, merger).result)
 
@@ -1523,10 +1511,10 @@ func TestIndexMergeVectors(t *testing.T) {
 	record("tombstone-over-a-row", world.merge(t, merger).result)
 
 	copies := testNewHeadWorld()
-	copies.push(t, a, testLive("d", 1, 1, 0, testHeadKeys(1, 0)))
+	copies.push(t, a, testLive("d", 1, 1, testHeadKeys(1, 0)))
 	copies.fillUntilSealed(t, a, "f", 0)
 	copies.merge(t, merger)
-	copies.push(t, b, testLive("d", 1, 1, 0, testHeadKeys(1, 0)))
+	copies.push(t, b, testLive("d", 1, 1, testHeadKeys(1, 0)))
 	copies.fillUntilSealed(t, b, "f", 0)
 	record("manifest-only", copies.merge(t, merger).result)
 
@@ -1537,7 +1525,7 @@ func TestIndexMergeVectors(t *testing.T) {
 	record("ref-tombstone", refResult)
 
 	erased := testNewHeadWorld()
-	erased.push(t, a, testLive("e", 1, 1, 0, testHeadKeys(1, 0)), testLive("e", 2, 1, 0, testHeadKeys(2, 0)))
+	erased.push(t, a, testLive("e", 1, 1, testHeadKeys(1, 0)), testLive("e", 2, 1, testHeadKeys(2, 0)))
 	erased.fillUntilSealed(t, a, "f", 0)
 	erasureSet := &protocol.IndexErasureSet{Erasures: []*protocol.IndexErasure{{ErasureId: testIndexIdBytes("erasure", 1), EraserSidecarId: evsTestId("eraser").Bytes(), Docs: []*protocol.IndexErased{{DocKey: testIndexIdBytes("e", 1), Version: 1}}}}}
 	file, err := indexEncodeErasureSet(erasureSet, erased.settings)
@@ -1636,7 +1624,7 @@ func TestIndexMergeIsAFunction(t *testing.T) {
 	world := testNewHeadWorld()
 	writers := []Id{evsTestId("writer c"), evsTestId("writer a"), evsTestId("writer b")}
 	for writerIndex, writer := range writers {
-		world.push(t, writer, testLive("fn", writerIndex, 1, 0, testHeadKeys(writerIndex, 0)), testLive("shared", 1, 2, 0, testHeadKeys(7, 0)))
+		world.push(t, writer, testLive("fn", writerIndex, 1, testHeadKeys(writerIndex, 0)), testLive("shared", 1, 2, testHeadKeys(7, 0)))
 		world.fillUntilSealed(t, writer, "f"+writer.String(), 0)
 	}
 	results := [][]*indexPushFile{}
@@ -1667,44 +1655,47 @@ func TestIndexMergeIsAFunction(t *testing.T) {
 	}
 }
 
-// A merge removes no large entry, since a diff its writer's head holds may rest on one: after a merge absorbs two, the
-// writer's next push there removes the one no diff rests on and keeps the one its head's diff names (1.6; twin
-// MergeRemovesLarge).
+// A merge writes and removes no file of any writer's: after a merge absorbs three large entries, two documents and an
+// edit of one, they stand until their writer's next push in the bucket removes them, the shards holding what they held.
 func TestIndexMergeLeavesLargeEntriesToTheirWriter(t *testing.T) {
 	world := testNewHeadWorld()
 	a := evsTestId("writer a")
-	kept, gone := testIndexKeys(0, 9000, 3), testIndexKeys(1, 9000, 3)
-	world.push(t, a, testLive("l", 1, 1, 0, kept), testLive("l", 2, 1, 0, gone))
+	first, second := testIndexKeys(0, 9000, 3), testIndexKeys(1, 9000, 3)
+	world.push(t, a, testLive("l", 1, 1, first), testLive("l", 2, 1, second))
 	world.fillUntilSealed(t, a, "f", 0)
-	edit := slices.Clone(kept)
+	edit := slices.Clone(first)
 	edit[10] += 1
-	world.push(t, a, testLive("l", 1, 2, 1, edit))
+	world.push(t, a, testLive("l", 1, 2, edit))
 	outcome := world.merge(t, evsTestId("merger"))
+	testNoWriterFile(t, outcome.result)
 	for _, removal := range outcome.result.removedShards {
 		if path, _ := indexParsePath(removal.path, false); path.kind == indexPathLargeEntry {
 			t.Fatal("a merge removed a large entry")
 		}
 	}
 	writer := world.writer(t, a)
-	if len(writer.large) != 2 {
+	if len(writer.large) != 3 {
 		t.Fatalf("%d large entries after the merge", len(writer.large))
 	}
-	plan := world.push(t, a, testLive("l", 3, 1, 0, testHeadKeys(3, 0)))
-	if len(plan.buckets[0].removed) != 1 {
+	plan := world.push(t, a, testLive("l", 3, 1, testHeadKeys(3, 0)))
+	if len(plan.buckets[0].removed) != 3 {
 		t.Fatalf("the writer's next push removed %d large entries", len(plan.buckets[0].removed))
 	}
-	writer = world.writer(t, a)
-	if len(writer.large) != 1 || writer.large[0].slot.entries[0].key != testIndexId("l", 1) {
-		t.Fatal("the writer removed the large entry its head's diff rests on")
+	if writer = world.writer(t, a); len(writer.large) != 0 {
+		t.Fatalf("%d large entries after the writer's push", len(writer.large))
 	}
-	if file, entry := indexResolveBase(writer, testIndexId("l", 1), 1, writer.head()); file == nil || entry == nil {
-		t.Fatal("the head's diff lost its base")
+	merged := world.mergedBucket(t)
+	if got := merged.documents[testIndexId("l", 1)]; got == nil || got.version != 2 || !slices.Equal(got.keys, edit) {
+		t.Fatalf("the shards' row of the edited document: %+v", got)
+	}
+	if got := merged.documents[testIndexId("l", 2)]; got == nil || got.version != 1 {
+		t.Fatalf("the shards' row of the other document: %+v", got)
 	}
 }
 
 // A seeded walk of two writers' pushes, edits, removals, seals and merges (FI-18's and I1's ground, 1.3): after every
 // step each document's newest entry over the shards and every unabsorbed file, heads included, is the newest version
-// written, every unabsorbed diff has its base in its own writer's files, and the shards hold one version a key.
+// written with its whole key set, and the shards hold one version a key.
 func TestIndexMergeKeepsEveryNewestVersion(t *testing.T) {
 	for seed := range int64(6) {
 		random := rand.New(rand.NewSource(seed))
@@ -1727,11 +1718,7 @@ func TestIndexMergeKeepsEveryNewestVersion(t *testing.T) {
 					world.push(t, writer, testRemoved("w", document, version))
 					newest[document] = written{version: version, removed: true}
 				} else {
-					replaces := last.version
-					if last.removed {
-						replaces = 0
-					}
-					world.push(t, writer, testLive("w", document, version, replaces, testHeadKeys(document, int(version))))
+					world.push(t, writer, testLive("w", document, version, testHeadKeys(document, int(version))))
 					newest[document] = written{version: version}
 				}
 			case action < 8:
@@ -1751,12 +1738,9 @@ func TestIndexMergeKeepsEveryNewestVersion(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			winners, malformed, err := indexMergeCandidates(bucket, shards, nil, true, true, view.erased, map[Id]uint32{}, view.settings)
+			winners, err := indexMergeCandidates(bucket, shards, nil, true, true, view.erased, map[Id]uint32{})
 			if err != nil {
 				t.Fatal(err)
-			}
-			if len(malformed) != 0 {
-				t.Fatalf("seed %d step %d: an unabsorbed diff with no base", seed, step)
 			}
 			seen := map[[indexIdByteCount]byte]bool{}
 			for _, shard := range shards {
@@ -1779,7 +1763,7 @@ func TestIndexMergeKeepsEveryNewestVersion(t *testing.T) {
 					t.Fatalf("seed %d step %d: document %d's newest %+v, written %+v", seed, step, document, winner, want)
 				}
 				if !want.removed && !slices.Equal(winner.keys, testHeadKeys(document, int(want.version))) {
-					t.Fatalf("seed %d step %d: document %d's keys composed wrong", seed, step, document)
+					t.Fatalf("seed %d step %d: document %d's keys are not its newest version's", seed, step, document)
 				}
 			}
 		}

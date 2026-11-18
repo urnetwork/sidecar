@@ -188,15 +188,13 @@ func (self *searchNearArgs) termExactCount(term *SearchTerm) (int, error) {
 	return count, err
 }
 
-// The candidates a query has across the partitions, and whether one of them is current under its mask. A diff's
-// currency is not judged here (newest answers nothing), since a probe only asks whether documents hold the trigrams.
+// The candidates a query has across the partitions, and whether one of them is current under its mask.
 func (self *searchNearArgs) candidateCount(query *SearchQuery, wantCurrent bool) (int, bool, error) {
 	count := 0
 	current := false
 	for _, partition := range self.partitions {
 		matched, err := searchMatch(&searchMatchArgs{
 			query: query, source: partition.source, maxCandidateCount: self.maxCandidateCount,
-			newest: func(key [indexIdByteCount]byte) (uint64, bool) { return 0, false },
 		})
 		if err != nil {
 			return 0, false, err

@@ -1,8 +1,9 @@
 //go:build !ios_extension
 
-// An entry (§11.14's entry row; protocol/INDEX-FORMAT.md): one document version's change to the index, or a deletion.
-// An entry is encoded from its own document alone, since nothing here may compress across documents: inbound mail
-// and collaborators' commits can inject probes (§11.14's codes row). Its version and time are passed in, never read
+// An entry (§11.14's entry and dependency rows; protocol/INDEX-FORMAT.md; owner decision 584): one document version's
+// whole key set, or a deletion. An entry is encoded from its own document alone, since nothing here may compress across
+// documents: inbound mail and collaborators' commits can inject probes (§11.14's codes row). So no entry rests on
+// another, and a reader, a merge or a roll-up takes each as it stands. Its version and time are passed in, never read
 // from a clock, so devices that build one entry write one set of bytes (FI-22).
 
 package sidecar
@@ -12,12 +13,12 @@ import (
 	"cmp"
 )
 
-// An entry's first byte, and a shard tombstone table's kind where it is 3 or 4.
+// An entry's first byte, and a shard tombstone table's kind where it is 3 or 4. Kind 2 was a diff's and stays reserved
+// in format 2: no writer writes it, and a decoder refuses it as it refuses any kind it does not know.
 type indexEntryKind uint8
 
 const (
 	indexEntryFull         indexEntryKind = 1
-	indexEntryDiff         indexEntryKind = 2
 	indexEntryTombstone    indexEntryKind = 3
 	indexEntryRefTombstone indexEntryKind = 4
 )
@@ -30,14 +31,9 @@ type indexEntry struct {
 	version uint64
 	// Seconds of the push's signed time_ms: see indexEntrySeconds.
 	timeSeconds uint64
-	// Diffs: the base's version, which is below version.
-	baseVersion uint64
-	// Full entries and diffs.
-	row *indexRow
-	// Full entries.
+	// Full entries: the document's row and its whole key set.
+	row  *indexRow
 	keys indexKeySet
-	// Diffs.
-	delta indexDelta
 }
 
 // An entry's time from its push's signed time_ms. evs keeps that within 10 min of its clock, so it is never before
@@ -48,8 +44,7 @@ func indexEntrySeconds(signedTimeMs int64) uint64 {
 
 // Refuses what an entry may not hold, for encoder and decoder alike. A full entry whose row and key set D6 skips holds
 // a value past its cap, as one whose key set passes KeySetMax does: no honest writer writes one, since D6 made that
-// version a tombstone (DESIGN-DETAILS 1.2.2; QD-760). A diff's composed set is held to the same test where it is
-// composed, since its base is in another file.
+// version a tombstone (QD-760). The reserved kind 2 is an unknown kind here.
 func (self *indexEntry) check(companion bool, settings *IndexFormatSettings) error {
 	switch self.kind {
 	case indexEntryFull:
@@ -68,19 +63,6 @@ func (self *indexEntry) check(companion bool, settings *IndexFormatSettings) err
 		}
 		if indexDocumentPastAShard(self.keys, self.row, settings) {
 			return indexMalformed("an entry past a shard")
-		}
-	case indexEntryDiff:
-		if self.row == nil {
-			return indexMalformed("a diff with no row")
-		}
-		if self.version <= self.baseVersion {
-			return indexMalformed("a diff's base at or above its version")
-		}
-		if err := self.delta.check(); err != nil {
-			return err
-		}
-		if self.row.trigramCount < uint64(len(self.delta.added)) {
-			return indexMalformed("a trigram count below what a diff added")
 		}
 	case indexEntryTombstone:
 	case indexEntryRefTombstone:
@@ -102,41 +84,26 @@ func (self *indexEntry) appendEncoded(dst []byte, companion bool, settings *Inde
 	dst = append(dst, self.key[:]...)
 	dst = indexAppendVByte(dst, self.version)
 	dst = indexAppendVByte(dst, self.timeSeconds)
-	var err error
-	switch self.kind {
-	case indexEntryFull:
+	if self.kind == indexEntryFull {
+		var err error
 		if dst, err = self.row.appendEncoded(dst, companion); err != nil {
 			return nil, err
 		}
 		return self.keys.appendEncoded(dst)
-	case indexEntryDiff:
-		dst = indexAppendVByte(dst, self.baseVersion)
-		if dst, err = self.row.appendEncoded(dst, companion); err != nil {
-			return nil, err
-		}
-		if dst, err = self.delta.added.appendEncoded(dst); err != nil {
-			return nil, err
-		}
-		return self.delta.removed.appendEncoded(dst)
 	}
 	return dst, nil
 }
 
-// Reads one entry.
+// Reads one entry. A kind this format does not write, the reserved 2 among them, is refused by check, whatever bytes
+// follow it.
 func (self *indexDecoder) entry(companion bool, settings *IndexFormatSettings) *indexEntry {
 	entry := &indexEntry{kind: indexEntryKind(self.oneByte())}
 	copy(entry.key[:], self.take(indexIdByteCount))
 	entry.version = self.vbyte()
 	entry.timeSeconds = self.vbyte()
-	switch entry.kind {
-	case indexEntryFull:
+	if entry.kind == indexEntryFull {
 		entry.row = self.row(companion)
 		entry.keys = self.keySet()
-	case indexEntryDiff:
-		entry.baseVersion = self.vbyte()
-		entry.row = self.row(companion)
-		entry.delta.added = self.keySet()
-		entry.delta.removed = self.keySet()
 	}
 	if self.err != nil {
 		return nil

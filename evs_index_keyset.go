@@ -1,8 +1,7 @@
 //go:build !ios_extension
 
-// Key sets and deltas (§11.14's key set row; protocol/INDEX-FORMAT.md). A document's set of trigram keys is written
-// whole in a full entry, or as what a diff added to and removed from its base's set. Composing deltas lives here
-// because a reader's chains and a writer's head rule must agree on it (D-EVS-46).
+// Key sets (§11.14's key set row; protocol/INDEX-FORMAT.md). A document's set of trigram keys is written whole in its
+// full entry (owner decision 584).
 
 package sidecar
 
@@ -121,80 +120,4 @@ func (self indexKeySet) with(other indexKeySet) indexKeySet {
 		keys = append(keys, key)
 	}
 	return append(keys, other[otherIndex:]...)
-}
-
-// Whether a key is in both sets.
-func (self indexKeySet) overlaps(other indexKeySet) bool {
-	otherIndex := 0
-	for _, key := range self {
-		for otherIndex < len(other) && other[otherIndex] < key {
-			otherIndex += 1
-		}
-		if otherIndex < len(other) && other[otherIndex] == key {
-			return true
-		}
-	}
-	return false
-}
-
-// What a diff changes: its base's set less removed, plus added. added holds no key of the base, and removed only keys
-// of it, so a delta has one meaning against one base.
-type indexDelta struct {
-	added   indexKeySet
-	removed indexKeySet
-}
-
-// Refuses a delta that adds and removes one key, or whose sets are not key sets.
-func (self indexDelta) check() error {
-	if err := self.added.check(); err != nil {
-		return err
-	}
-	if err := self.removed.check(); err != nil {
-		return err
-	}
-	if self.added.overlaps(self.removed) {
-		return indexMalformed("a key both added and removed")
-	}
-	return nil
-}
-
-// The delta from base to next.
-func indexDeltaBetween(base indexKeySet, next indexKeySet) indexDelta {
-	return indexDelta{added: next.without(base), removed: base.without(next)}
-}
-
-// The set this delta makes of base, refused when base is not the set the delta was taken against, which is how a
-// chain that does not resolve shows (§11.14's chains row).
-func (self indexDelta) applyTo(base indexKeySet) (indexKeySet, error) {
-	if err := self.check(); err != nil {
-		return nil, err
-	}
-	if base.overlaps(self.added) {
-		return nil, indexMalformed("a delta adds a key its base holds")
-	}
-	kept := base.without(self.removed)
-	if len(kept)+len(self.removed) != len(base) {
-		return nil, indexMalformed("a delta removes a key its base lacks")
-	}
-	return kept.with(self.added), nil
-}
-
-// One delta equal to first and then second, for a diff that takes over its head entry's base and for a reader walking
-// a chain. A delta's effect is the set of keys it flips, so composing is the symmetric difference of those sets, which
-// is what makes it associative. Two deltas that could not apply in turn are refused: a key added twice, or removed
-// twice, without the other delta undoing it between.
-func indexComposeDelta(first indexDelta, second indexDelta) (indexDelta, error) {
-	if err := first.check(); err != nil {
-		return indexDelta{}, err
-	}
-	if err := second.check(); err != nil {
-		return indexDelta{}, err
-	}
-	if first.added.overlaps(second.added) || first.removed.overlaps(second.removed) {
-		return indexDelta{}, indexMalformed("two deltas that do not compose")
-	}
-	return indexDelta{
-		added:   first.added.without(second.removed).with(second.added.without(first.removed)),
-		removed: first.removed.without(second.added).with(second.removed.without(first.added)),
-	}, nil
 }
