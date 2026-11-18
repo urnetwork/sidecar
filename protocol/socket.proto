@@ -32,7 +32,7 @@ message SocketRegistrationClaim { // §9.5's Claim: the body of SocketRegistrati
   string app_mode = 6;
 }
 
-message SocketTicket {           // signed: <= 370 B with a 112-byte name or an 8-segment token path
+message SocketTicket {           // signed: <= 370 B with a 112-byte name and dialer_sidecar_id, or an 8-segment token path
   bytes ticket_id = 1;           // 16 random bytes, single use
   bytes network_id = 2;
   string name = 3;               // tls/, smtp/ and ur/ names only
@@ -48,6 +48,7 @@ message SocketTicket {           // signed: <= 370 B with a 112-byte name or an 
   uint64 grant_expire_time_millis = 13; // streams end here; 0: none; ur/: issue + 60 min
   bytes name_token = 14;         // other names: the token path (9.4)
   reserved 15;                   // withdrawn policy_delta_seq
+  bytes dialer_sidecar_id = 16;  // 16 B, ur/ tickets alone: the dialer's sidecar, its listener's subject (QD-989)
 }
 message SignedSocketTicket {     // in StreamOpen.ticket (<= 512 B); §6's Signed format, purpose socket-ticket
   string key_id = 1;             // a service key; fixes the algorithm (Ed25519)

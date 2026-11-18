@@ -28,7 +28,8 @@ import (
 var _ sidecar.Engine = (*SmtpEdgeService)(nil)
 
 // What the outbound path reads beyond §14.9's signature, which SMTP-M9-20's host supplies: the send gate
-// and the world. A nil member leaves the engine not ready.
+// and the world. A nil member leaves the engine not ready. The dialing sidecar, mail_send's subject, is no dep:
+// each stream's admitted ticket names it (splice.go, QD-989).
 type SmtpEdgeDeps struct {
 	Gate SmtpGate
 	// The DNSSEC-validating resolver and the TCP 25 dialer (SmtpMxNetDialer on a sending host).
@@ -36,8 +37,6 @@ type SmtpEdgeDeps struct {
 	Dialer   sidecar.SmtpMxDialer
 	// The sending addresses' reverse names, for FCrDNS.
 	Ptr SmtpPtrResolver
-	// The dialing client's sidecar, for mail_send. nil answers every stream's preamble TRY_LATER.
-	Dialers SmtpDialerSource
 	// How the LAN splice reaches mxedge's LAN listener (lan_splice.go). nil dials TCP.
 	LanDial SmtpLanDial
 	// What §14.8's ladder reads for cuts and hard bounces, and §21's sink. Any nil leaves both unjudged.

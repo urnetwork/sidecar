@@ -102,7 +102,8 @@ Parentheses hold T1 tests; the rest run in T2 and T3. Inline server paths (contr
       M6-out with C3 on and EnablePeerP2p set: a forged ControlId frame over P2P dropped, a same-network pair moving
       from relay to P2P and back under a live RPC and stream, its session key unchanged, Hello and HeadCheck holding
       across each move, and bytes on P2P debiting nothing (§20.6)
-§7    (config-repo replay) 403 for marked tokens on §7.4's 37 routes, for unmarked device tokens on stage 2's six,
+§7    (config-repo replay; rows vectors byte-equal on every leg with open proposals, the ring, settings and
+      confirmations) 403 for marked tokens on §7.4's 37 routes, for unmarked device tokens on stage 2's six,
       and for a strict_exp bearer on each payment route; strict_exp only on sidecar-held tokens
       (owner decision 131), an expired one refused by api, the exchange and connect's transport auth with
       reject_expired off; a copied token fails refresh, exchange and auth-client, as do a replayed DPoP proof and
@@ -110,7 +111,9 @@ Parentheses hold T1 tests; the rest run in T2 and T3. Inline server paths (contr
       refuses enrollment before stage 2; a one-command admin token changes neither its invite's email nor its role,
       works once, and answers a retry after a lost response with the stored result; an older head or unauthorized
       signer refused; 22.7's admission suite; §7.6's OIDC, JIT and IdP scoping; the log, forks and the recovery
-      window: FS-14, FS-16; stale page Workers revoked at a newer Worker's admission (D-TEAM-29): FS-97; a copied
+      window: FS-14, FS-16; rows-only and full readers, and a new device started at each base, reach one S(n) and
+      one verdict an entry over generated logs with bases, tails, open proposals and a cascade (DESIGN-DETAILS.md
+      section 5); stale page Workers revoked at a newer Worker's admission (D-TEAM-29): FS-97; a copied
       auth-key bundle after its agents' revocations and its Delegation's end: FS-102; presence countersignatures,
       refused alike by api and every member device (7.9's presence row): FS-124
 §8    (deterministic compile; compiled = reference; one definition's fixed vectors) readers' AclRows equal the
@@ -419,7 +422,10 @@ owner consent (owner decision 126): in M's vault and mailbox an admin's grant to
 committers (owner decisions 113, 128): any writer leaf commits the Add or Remove a signed
   grant, admission or revocation requires, and members reject one without it; in the config
   group the signing device commits it though no config writer, a config head from it still
-  refused, so a self-admitted device reads with no admin online
+  refused, so a self-admitted device reads with no admin online; a squatting GroupForm, one
+  an admin of repo B files naming repo A's group while it only reads A, is refused at A's
+  owner marker with nothing written, and its B-scoped token reaches none of A's group
+  routes, so it claims no generation of A (D-KEYS-27; DESIGN-DETAILS.md section 6)
 seats (owner decisions 144, 182): the 1,001st live member device reads the config, and from
   M6 a team's directory, by ReaderWrap at once with no commit, and members refuse its Add or
   external join in either group; a wrapped device signing an admission writes the new
@@ -483,7 +489,11 @@ a compromise revocation parks the closure P from its since_n, counting each reco
   AdmissionConfirm, the device then leaving P and what it signed in P staying parked or
   void, but a consent resting on what P signed returns only by M's own AdmissionConfirm or
   OwnerConfirm from a consented device outside P, an admin's AdmissionConfirm restoring
-  all but owner-bound reads
+  all but owner-bound reads; api, evs, gkm and a new device build P from rows alone, which
+  keep every confirmation with its signer, position and whether it lifted a park, so A's
+  redundant OwnerConfirm of the consented H parks nothing at a rows-only gate either, and
+  an AdmissionConfirm by A that lifted a park pulls that device into P there as well
+  (DESIGN-DETAILS.md section 5)
 stale page Workers (D-TEAM-29; FS-97): the device admitting a member's page Worker, an
   admin's where self_admit is off included, revokes as removed in that act, under its one
   presence check where it registered a live presence key (owner decision 187), each of the
@@ -896,7 +906,24 @@ model       EvsCommit.tla (TLA+, checked by TLC: https://github.com/tlaplus/tlap
             checks MirrorExact, NoDuplicate, AckedDurable, SharedSafe, TruthfulNg, NoSpurious and Converge, with
             the journal as first written (a settle that requires old, a blind update-ref, an ng on an unknown
             outcome, no recognition of its own push, no apply lock, a refused update dropped alone) as failing
-            configurations;
+            configurations; details/AuthLog.tla (DESIGN-DETAILS.md section 5, run by run.sh beside it) keeps one
+            network's authorization log with a long-running full reader, a new full device started at each base
+            and a rows-only gate cold-started at the newest, through admissions with their confirmations, a
+            Delegation, recovery bindings and windows, k-of-n proposals and cosigns, the compromise cascade, the
+            replay ring and bases with their tail verdicts, a lying writer and an api that sequences refused
+            statements among its runs, and TLC checks Agreement, RevocationsStand, CascadeClosed,
+            DelegationEnds, ProposalsNeedK, WindowHolds, TailBounded, LiesAreForks and ProposalsSurviveFolds,
+            with §7.9 as first written (a tail judged again, no proposal, settings or ring rows, proposals
+            closed at a base, a cascade from the signer's at, no bits check, no tail cap) as failing
+            configurations; details/Gkm.tla (DESIGN-DETAILS.md section 6, run by run-gkm.sh beside it) keeps one
+            repo's objects at gkm, its epoch chain of commits and its generation chain of claims with their
+            staged and LATE deliveries, Welcomes and the owner marker, among member devices, a read_only leaf,
+            an agent, a recovered device and a squatter, and TLC checks RemovedReadsNothingNew,
+            NoContentToDropped, RosterWithinHolders, NoContentPastRefusal, GenerationsFromWriters,
+            WelcomesReachable and ChainsMonotone, with the rules as first written (a Welcome pointer keyed by
+            its KeyPackageRef, unchecked forms, a GenWrap blind to the roster, a self-join carrying a GenWrap, a
+            LATE delivery below its claim's pin, a claim below its parent, a leaf_wrap over a tree holding a
+            dropped leaf, no gate, members that skip the roster check) as failing configurations;
             StoreSettle.tla keeps one key on 8 drives at EC:4 (4 hosts of 2): each drive's version, its stamp and
             its own lock on the key, each write's coordinator, which may crash, and its drive commits, each a check
             step then a commit step, the settler and heal; writes are cancelled, pass their deadline, arrive after
@@ -1207,7 +1234,10 @@ FS-6   §11    restore raced against --now and the 7-day expiry, paused before a
               or restore without its projected statement gets 409 STATEMENT_MISSING; a re-seed
               refused for a repo whose RepoDelete carries now or is over 7 d old, while one
               soft-deleted under 7 d is placed deleted first and takes its history, group and
-              slots with every other route refused, a restore then opening every file
+              slots with every other route refused, a restore then opening every file; the
+              group's owner marker is deleted by the shred and written again by a re-seed's
+              form, and a form for another repo naming the group is refused at it (D-KEYS-27;
+              DESIGN-DETAILS.md section 6)
 FS-7   §11    five writers push one path from one base: one commits and the others get 409; a  FI-6        T2+T3  M2-out
               reader sees the committed version throughout, folded or in the window, across
               the losers' evacuation and a restart
@@ -1250,24 +1280,34 @@ FS-12  §11    a crash after the lease's Redis write and before the 200; the cli
 FS-13  §15    an erased mailbox message's deposit and index copies after a CONSUME crash: none FI-1,5      T2     M7-out
               decrypts for a newly admitted reader, and a restarted ingest does not recreate
               the message
-FS-14  §7,8   two readers with one base and different statements at n+1 (a socket              FI-3,10     T2     M2-out
-              GrantRevoke, a KeyRegister), then connected: HeadCheck reports FORK with both
-              A_{n+1} and refreshes no witnessed_at; Suspend and Unsuspend in both orders, a
-              stale suspend_id a no-op; a base signed at tip n loses to a statement (409) and
-              lands re-signed at n+2, folding a stream of statements, while a stale compile
+FS-14  §7,8   two readers with one base and different statements at n+1 (a socket GrantRevoke, FI-3,10     T2     M2-out
+              a KeyRegister), then connected: HeadCheck reports FORK with both A_{n+1} and
+              refreshes no witnessed_at; Suspend and Unsuspend in both orders, a stale
+              suspend_id a no-op; a base signed at tip n loses to a statement (409) and lands
+              re-signed at n+2, folding a stream of statements, while a stale compile
               re-signed after a 409 that names an older config head or a lower folded_through
               is refused by api, and a FORK for readers if appended; after the 30-day
               retention a new device starting at a base folded below the previous one,
-              skipping the BASE in its re-applied range, reaches a long-running reader's
-              S(n); a GrantActivate whose requests rule the new config head deleted ends at
-              that base for every reader; a lost append retried: one entry; a rotation at n1,
-              then shrinks at n2 > n1, reopens no gate, and an expired RepoGrant fails a
-              generation older than its expiry; a base off the reader's chain, or missing a
-              folded statement: FORK; a statement 4,097 positions old, expired or repeated
-              refused, as is one whose at, though within 4,096 positions, precedes the
-              retention point of the state it lands on, by a device started at a base near
-              the tip and a long-running reader alike; a subject a group edit drops gets 403
-              at evs within 5 s
+              skipping the BASE in its re-applied range, reaches a long-running reader's S(n);
+              a GrantActivate whose requests rule the new config head deleted ends at that
+              base for every reader; a lost append retried: one entry; a rotation at n1, then
+              shrinks at n2 > n1, reopens no gate, and an expired RepoGrant fails a generation
+              older than its expiry; a base off the reader's chain, or missing a folded
+              statement: FORK; a statement 4,097 positions old, expired or repeated refused,
+              as is one whose at, though within 4,096 positions, precedes the retention point
+              of the state it lands on, by a device started at a base near the tip and a
+              long-running reader alike; a subject a group edit drops gets 403 at evs within 5
+              s; a new device at a base takes each tail verdict from the bits and reaches a
+              long-running reader's S(b) byte for byte, under a head that moved a tag owner
+              and toggled self_admit and with a tail statement whose at lies below its first
+              held position; a flipped bit, a 2 on a SidecarAdmit, a 3, a short or long bitmap
+              or a 1 at a BASE answers 403 at api and, appended, forks every present reader,
+              as do 4,097 unfolded entries and a folded_through between the previous base's
+              own and that base's position; a vetoed proposal replayed after a fold is refused
+              by every reader, the ring taken from rows; a member's own admission is judged
+              alike at api, a rows-only gate and a full reader under self_admit on and off; a
+              reader whose pin fell below the retention point links its pin through the head's
+              records and forks on a forged run (DESIGN-DETAILS.md section 5)
 FS-15  §10    an agent removed with every leaf offline: an agent rotates with ReaderWraps to   FI-4        T2+T3  M2-out
               every leaf and the gate reopens, and a returning leaf commits the Remove first,
               its path-only commit carrying the newest GenWrap; a leaf's and a wrapped
@@ -1278,17 +1318,22 @@ FS-15  §10    an agent removed with every leaf offline: an agent rotates with R
               generation 0 (FS-20), refused by gkm and members; in the config group the
               admission's signer rotates and commits, as does a reaped agent's admission
               signer after the reap, a config head from either refused; a delivery to a
-              non-holder makes members alarm and rotate
+              non-holder makes members alarm and rotate; a rotator whose tip is behind
+              gen/<g>'s pin claims no gen/<g+1>, and gkm refuses a claim whose auth or time
+              falls below its parent's (DESIGN-DETAILS.md section 6)
 FS-16  §7     the recovery window on a fake clock at k = 1 and k = 2: backdating, late         FI-3        T2     M2-out
               publication, replay, restart, an authority change, RecoveryRebind, a veto and
-              finalization at once, again for a scoped admission by a binding a void
-              restored, which needs no counted cosign (owner decision 149); a recovery
-              cosign 72 h after an admin's proposal activates only 72 h after the cosign, and
-              a veto between them wins; a RecoveryRebind of the cosigning code's member, not
-              the subject, voids the proposal; a veto backdated after an activation: devices
-              past it only alarm, those before it fork until a compromise revocation of the
-              recovered device; a code-only recovery served a forged genesis whose log admits
-              the real rotators alarms and seals nothing
+              finalization at once, again for a scoped admission by a binding a void restored,
+              which needs no counted cosign (owner decision 149); a recovery cosign 72 h after
+              an admin's proposal activates only 72 h after the cosign, and a veto between
+              them wins; a RecoveryRebind of the cosigning code's member, not the subject,
+              voids the proposal; a veto backdated after an activation: devices past it only
+              alarm, those before it fork until a compromise revocation of the recovered
+              device; a code-only recovery served a forged genesis whose log admits the real
+              rotators alarms and seals nothing; across a fold, a recovery proposal open at a
+              base activates at its tick, T_p + 72 h, at every reader, a new device and a
+              rows-only gate alike, and a veto or a rebind in the base's tail closes it at
+              each of them (DESIGN-DETAILS.md section 5)
 FS-17  §6,11  one ref forked under an unchanged epoch; both peers replay, then meet: a fork    FI-10       T2     M2-out
               alarm or an unwitnessed status, more refs than one message carries covered
               within ceil(refs/16) rounds; a generation fork two agents see: GenHead reports
@@ -1319,17 +1364,19 @@ FS-18  §10    a DelegationRevoke, a passed not_after, a non-reap revocation or 
               covering it is cause REMOVE, the next write to an inline file is a full
               checkpoint, and a path epoch is due within 24 h; with fixed keys on a fake
               clock, Delegation D admits agents A and B, then A is suspended while D and B
-              stay live: with evs's gate off and every staged and late wrap delivered to A,
-              no generation claimed after the Suspend's position, and no checkpoint sealed to
-              one, opens under any key A kept, D's reader seed included, while B reads each
-              by its own ReaderWrap; A unsuspended reads the current generation only by a
-              late ReaderWrap of its own; a SidecarAdmit signed by D's key for a
-              non-ephemeral sidecar with a not_after before D's, or naming other tags than
-              D's, is refused by api and every reader, a new device included; a repo that
-              only an autogroup:tagged grant reads lies outside D's reach, so D's
-              non-ephemeral agent reads it by its own ReaderWrap and D's ephemeral one not at
-              all; a lost or removed revocation of an already reaped covered agent lands and
-              drops D's key
+              stay live: with evs's gate off and every staged and late wrap delivered to A, no
+              generation claimed after the Suspend's position, and no checkpoint sealed to
+              one, opens under any key A kept, D's reader seed included, while B reads each by
+              its own ReaderWrap; A unsuspended reads the current generation only by a late
+              ReaderWrap of its own; a SidecarAdmit signed by D's key for a non-ephemeral
+              sidecar with a not_after before D's, or naming other tags than D's, is refused
+              by api and every reader, a new device included; a repo that only an
+              autogroup:tagged grant reads lies outside D's reach, so D's non-ephemeral agent
+              reads it by its own ReaderWrap and D's ephemeral one not at all; a lost or
+              removed revocation of an already reaped covered agent lands and drops D's key; a
+              Delegation's admission count and end, carried through a fold, refuse its key's
+              admissions past them at a new device as at a long-running reader
+              (DESIGN-DETAILS.md section 5)
 FS-19  §8     an untagged ephemeral admitted with no policy under a personal network's Owner   I-15        T2+T3  M2-out;
               (the config read, M2): it reads the config and deposits, holding no other repo's                    later runs
               generation, while general reads, writes and admin and owner-bound writes fail,                      at M4, M6
@@ -1349,10 +1396,11 @@ FS-20  §10    an epoch commits and its committer crashes before GroupInfo is pu
               inline GroupInfo at 16 leaves or fewer; revoked lost leaves still in the tree:
               the self-join carries no GenWrap and gkm accepts its generation 0, its next
               commit removes them, and the rotation that follows is the first new generation;
-              a kill at each KF1 step, after the activate route's CAS (its retry answering
-              200) included, then the creator's only device lost: the repo is still keying,
-              or code-only recovery opens all it holds; gkm killed between an epoch's PUT 16
-              past the pointer and the pointer's rewrite: gkm rewrites it with the next
+              a kill at each KF1 step, between the owner marker and the form (the resumed
+              request writing equal bytes) and after the activate route's CAS (its retry
+              answering 200) included, then the creator's only device lost: the repo is still
+              keying, or code-only recovery opens all it holds; gkm killed between an epoch's
+              PUT 16 past the pointer and the pointer's rewrite: gkm rewrites it with the next
               epoch, and a resync's probe, run uncapped to a 404, finds the newest epoch
 FS-21  §2,6   a document giving the writer's peers no reach to each other (a personal          FI-10       T3     M4-out;
               network's from M4, Team's default from M6): HeadCheck flows over control                            Team at
@@ -1498,14 +1546,19 @@ FS-41  §19    drives lost past parity first (readers alarm on heads naming miss
               check against the re-seeded config repo is discarded; a Team whose other
               members' only devices are read_only page Workers resumes too, no device seeing a
               FORK; a statement no upload holds is re-submitted by its signer, and a device
-              whose tail passes a position filled after resumption sees a FORK; readers accept
-              a head below their pin only under an EvsReseed; an unread record entry comes
-              back from a full mirror; an entry erased after a stale mirror's last sync stays
-              erased once the eraser's device re-seeds; a slot re-seeded with one erased and
-              one live key keeps the live key, which reads, and loses the erased one; with
-              only stale mirrors, a repo that came back under an EvsReseed is flagged, and
-              with no reader pin above the mirror nothing names it, the stated residual; a
-              shredded repo is not resurrected; a vault is re-formed by its owner's devices; a
+              whose tail passes a position filled after resumption sees a FORK; a resumed run
+              whose later adopted base's tail verdicts disagree with api's on the adopted
+              statements stops before that base, and a proposal open at the site loss resumes
+              in rows, to complete or lapse alike at every reader (DESIGN-DETAILS.md section
+              5); readers accept a head below their pin only under an EvsReseed; an unread
+              record entry comes back from a full mirror; an entry erased after a stale
+              mirror's last sync stays erased once the eraser's device re-seeds; a slot
+              re-seeded with one erased and one live key keeps the live key, which reads, and
+              loses the erased one; with only stale mirrors, a repo that came back under an
+              EvsReseed is flagged, and with no reader pin above the mirror nothing names it,
+              the stated residual; a shredded repo is not resurrected; a vault is re-formed by
+              its owner's devices, its group's owner marker written again by the re-seed's
+              form and a form for another repo naming that group refused at it (D-KEYS-27); a
               recovery-code-only member keeps access; each later step at its mechanism's
               Gn-out: CT replay re-binds a label allocated after the dump and TLS endpoints
               re-register (M5), meter rows re-send without double-billing (M6), a mailbox is
@@ -2433,22 +2486,24 @@ FS-102 §7,10  a copied whole auth-key bundle (both seeds) on a fake clock: Dele
               an eleventh SidecarAdmit by D's key is still refused; (5) a kill between the
               compromise revocation's post and its landing: the restart posts the same bytes,
               one entry, D ending once
-FS-103 §10    late delivery identity on a fake clock: g's staged ReaderWrap to agent A         FI-28       T2+T3  M2-out
-              lies under A's key K0; A replaces its key every 6 days without fetching g,
-              keeping K0 30 days past its not_after; aged past that, with no writer online
-              and no rotation run, A asks for g with its current key K1's k8: after 15 min
-              gkm hints a reader-only holder, which delivers RK_g LATE at A's K1 path while
-              the K0 object stays, and A opens it; the K0 delivery never opens under K1, nor
-              a K1 one under K0 (wrap_aad binds the key digest); two late deliverers
-              barriered on one target: one 201, the other's 412 carrying the winner, which
-              it judges; each killed before and after its PUT and retried, an unknown
-              outcome resolved by repeating the PUT: one valid object; a K0 object fake-aged
-              30 days past the K1 one's creation is collected; gkm refuses (409) a LATE
-              delivery to a key it does not serve for A, of a generation not the newest or
-              before the claim, and a STAGED one after it; again for a same-generation
-              RecoveryRebind: the new binding's RecoveryWraps land at their own b8 before
-              the old binding's go, a kill between leaving both and the retry deleting only
-              the old, and the new code, the old's objects gone, opens g
+FS-103 §10    late delivery identity on a fake clock: g's staged ReaderWrap to agent A lies    FI-28       T2+T3  M2-out
+              under A's key K0; A replaces its key every 6 days without fetching g, keeping K0
+              30 days past its not_after; aged past that, with no writer online and no
+              rotation run, A asks for g with its current key K1's k8: after 15 min gkm hints
+              a reader-only holder, which delivers RK_g LATE at A's K1 path while the K0
+              object stays, and A opens it; the K0 delivery never opens under K1, nor a K1 one
+              under K0 (wrap_aad binds the key digest); two late deliverers barriered on one
+              target: one 201, the other's 412 carrying the winner, which it judges; each
+              killed before and after its PUT and retried, an unknown outcome resolved by
+              repeating the PUT: one valid object; a K0 object fake-aged 30 days past the K1
+              one's creation is collected; gkm refuses (409) a LATE delivery to a key it does
+              not serve for A, of a generation not the newest or before the claim, and a
+              STAGED one after it; a LATE delivery whose signer's state trails the claim's pin
+              is refused by gkm and judged invalid by members, and one at the pin accepted
+              (DESIGN-DETAILS.md section 6); again for a same-generation RecoveryRebind: the
+              new binding's RecoveryWraps land at their own b8 before the old binding's go, a
+              kill between leaving both and the retry deleting only the old, and the new code,
+              the old's objects gone, opens g
 FS-104 §10    delivery authority: g claimed at P0 with holders {A}; at P1 member B's           FI-28       T2     M2-out
               device is admitted and agent C granted, with no shrink and no new generation;
               A delivers RK_g LATE to both at P1: every member and the schedule's oracle,
@@ -2770,39 +2825,40 @@ FS-123 §14,18 a message 1 KiB over the prover host's measured smtp_data_proof_b
               and tls_refused outcomes per domain reach GetSendResult and mail_send;
               GetReceiverCoverage's copy speaks of no sending, and every send copy names no
               indexer, receiver or coverage setting
-FS-124 §7,16  presence countersignatures (owner decisions 185, 187, 189, 192; D-TEAM-32),      I-4,FI-2    T2+T3  M2-out;
-              with fixture keys of both §16.6 profiles registered by device D: at api and on               +T4    CLI at
-              every member device alike, each statement 7.9's presence row covers that D                          M3-out;
-              signs, a k = 2 proposal and its cosign included, is refused with no                                 Team at
-              countersignature, one by another key, by a key another device registered, by a                      M6-out;
-              revoked, voided or expired key, over another act's root or another signer's                         app hosts
-              act, with a path that misses its leaf, or with UV clear, and lands with D's                         at M8-out
-              valid one; one check covers a five-statement act whose statements land in any
-              order or alone, each by its own path; a device that registered none signs them
-              on its confirmation, and a countersignature whose key a KeyRevoke removed
-              meanwhile is ignored; D's own sign-out and a recovery key's statements need
-              none; the thief: a modified client on D, unlocked, signs a compromise revocation
-              of the member's phone, a lost one, a Suspend of it, a KeyRevoke of D's key, then
-              a KeyRegister of a software key and statements that key countersigns: api
-              refuses each with the tip, and a malicious api sequencing them anyway sees
-              every member device, evs and gkm refuse each at its position, while each other
-              member device's forwarding role, the phone's included, applies the revocations
-              and the Suspend only as denials its next compile reverses; in a
-              personal network D's RecoveryVeto of the member's
-              recovery proposal, its RecoveryRebind of the member and its SidecarAdmit of a
-              fresh device T, which would sign on its confirmation, are each refused without
-              the countersignature, and the proposal activates 72 h on; a page
+FS-124 §7,16  presence countersignatures (owner decisions 185, 187, 189, 192; D-TEAM-32), with I-4,FI-2    T2+T3  M2-out;
+              fixture keys of both §16.6 profiles registered by device D: at api and on every              +T4    CLI at
+              member device alike, each statement 7.9's presence row covers that D signs, a                       M3-out;
+              k = 2 proposal and its cosign included, is refused with no countersignature, one                    Team at
+              by another key, by a key another device registered, by a revoked, voided or                         M6-out;
+              expired key, over another act's root or another signer's act, with a path that                      app hosts
+              misses its leaf, or with UV clear, and lands with D's valid one; one check                          at M8-out
+              covers a five-statement act whose statements land in any order or alone, each by
+              its own path; a device that registered none signs them on its confirmation, and
+              a countersignature whose key a KeyRevoke removed meanwhile is ignored; D's own
+              sign-out and a recovery key's statements need none; the thief: a modified client
+              on D, unlocked, signs a compromise revocation of the member's phone, a lost one,
+              a Suspend of it, a KeyRevoke of D's key, then a KeyRegister of a software key
+              and statements that key countersigns: api refuses each with the tip, and a
+              malicious api sequencing them anyway sees every member device, evs and gkm
+              refuse each at its position, while each other member device's forwarding role,
+              the phone's included, applies the revocations and the Suspend only as denials
+              its next compile reverses; in a personal network D's RecoveryVeto of the
+              member's recovery proposal, its RecoveryRebind of the member and its
+              SidecarAdmit of a fresh device T, which would sign on its confirmation, are each
+              refused without the countersignature, and the proposal activates 72 h on; a page
               Worker's admission by D carries its stale revocations under one
               countersignature; the phone's countersigned compromise revocation of D lands; a
               kill after the check and before the post: the restart posts the same bytes,
-              countersignature included, one entry each; ur devices revoke, ur approve
-              <proposal_id>, an admission, ur approve's OwnerConfirm, ur keychain
-              recovery-rotate, ur keys add-presence and ur keys rm through the daemon's prompt
-              (CLI); an admin's countersigned Suspend, veto and cosign at k = 2, AdminSet
-              change, member removal and parking DelegationRevoke, each refused without it
-              (Team); SignWithPresence on each app host, Decide's admission and alarm answers
-              included, in remote mode by 5.8's two calls, and both profiles' vectors
-              byte-equal on every leg (app hosts)
+              countersignature included, one entry each; a covered statement refused for its
+              missing countersignature and later folded into a base's tail is carried there as
+              0, never re-judged by a new device or a gate (DESIGN-DETAILS.md section 5); ur
+              devices revoke, ur approve <proposal_id>, an admission, ur approve's
+              OwnerConfirm, ur keychain recovery-rotate, ur keys add-presence and ur keys rm
+              through the daemon's prompt (CLI); an admin's countersigned Suspend, veto and
+              cosign at k = 2, AdminSet change, member removal and parking DelegationRevoke,
+              each refused without it (Team); SignWithPresence on each app host, Decide's
+              admission and alarm answers included, in remote mode by 5.8's two calls, and
+              both profiles' vectors byte-equal on every leg (app hosts)
 FS-125 §4,6   C19's windows (owner decisions 176, 188) on a fake clock, with a fake            FI-24       T2+T3  M10-out;
               contract service that keeps every report and its time: a requester surrogate and             +T4    app hosts
               its indexer, on a control and on a data contract. Sweep: each direction's                           at M8-out

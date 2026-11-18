@@ -860,3 +860,85 @@ func TestSocketFindCountsOnlyItsHoldersReports(t *testing.T) {
 		t.Fatalf("%v holder reports counted", counted)
 	}
 }
+
+// QD-989: a ur/ Find's tickets, primary and backup, name the caller's sidecar, its token's ur_sidecar_id, signed with
+// the rest, so each dialer's tickets name its own; and a holder's report of a failed ur/ ticket, which carries it,
+// still counts.
+func TestSocketFindNamesTheDialersSidecarOnUr(t *testing.T) {
+	world := newTestSocketWorld(t)
+	process := newTestPlatformProcess(t, world)
+	for range 2 {
+		process.registerAsEdge(world.newEdge(1), 1, testPlatformRegistration("ur/smtpedge"))
+	}
+	dialers := []*testSocketSidecar{}
+	for range 2 {
+		networkId := testSocketId()
+		process.gate.Load(networkId)
+		dialers = append(dialers, world.newSidecar(networkId))
+	}
+	for _, dialer := range dialers {
+		result := process.findPlatform(dialer, "ur/smtpedge")
+		if result.Error != nil || result.Primary == nil || result.Backup == nil {
+			t.Fatalf("a sidecar's ur/ Find answered %+v", result.Error)
+		}
+		for _, findTicket := range []*sidecar.SocketFindTicket{result.Primary, result.Backup} {
+			ticket := world.verifyTicket(findTicket)
+			if !bytes.Equal(ticket.GetDialerSidecarId(), dialer.sidecarId.Bytes()) || !bytes.Equal(ticket.GetDialerClientId(), dialer.clientId.Bytes()) {
+				t.Fatalf("a ur/ ticket names sidecar %x for client %x", ticket.GetDialerSidecarId(), ticket.GetDialerClientId())
+			}
+		}
+	}
+
+	dialer := dialers[0]
+	result := process.findPlatform(dialer, "ur/smtpedge")
+	edgeNetworkId := world.edgeNetworkId
+	args := &sidecar.SocketFindArgs{
+		Name:          "ur/smtpedge",
+		NetworkId:     &edgeNetworkId,
+		FailedTickets: []*sidecar.SocketFailedTicket{{Ticket: result.Primary.Ticket, Reason: sidecar.SocketFailedReasonTimeout}},
+	}
+	if code, answer := process.find(dialer.token, args); code != http.StatusOK || answer.Error != nil {
+		t.Fatalf("a Find reporting its failed ur/ ticket answered %d, %+v", code, answer)
+	}
+	if counted := process.host.Metrics.Value("urnetwork_sockets_failure_reports_total", "timeout"); counted != 1 {
+		t.Fatalf("%v reports of a failed ur/ ticket counted", counted)
+	}
+}
+
+// QD-989: no ticket but a ur/ one names a dialer sidecar: an edge's tls/ Find names none, edges naming no sidecar, and
+// neither does a sidecar's Find of a blinded name, whose token names one.
+func TestSocketFindNamesNoDialerSidecarOffUr(t *testing.T) {
+	world := newTestSocketWorld(t)
+	process := world.newProcess(nil)
+	if err := process.service.RegisterNamespace(sidecar.SocketNamespaceTls, &testSocketRecordingHooks{}); err != nil {
+		t.Fatal(err)
+	}
+	networkId := testSocketId()
+	name := "tls/443/blog"
+	listener := world.newSidecar(networkId)
+	process.gate.SetIdentityKey(networkId, listener.sidecarId, listener.publicKey())
+	process.gate.AllowListen(networkId, listener.sidecarId, []byte(name), testSocketGrant("listen"))
+	process.gate.AllowPublicDial(networkId, []byte(name), testSocketGrant("public"))
+	process.gate.AllowPublish(networkId, []byte(name), testSocketGrant("publish"))
+	process.gate.Load(networkId)
+	process.registerOk(listener, 1, listener.edgeRegistration(t, name, "tls", "http"))
+	edge := world.newEdge(2)
+	code, result := process.find(edge.token, &sidecar.SocketFindArgs{Name: name, NetworkId: &networkId, ClientIds: edge.clientIdArgs()})
+	if code != http.StatusOK || result.Error != nil || result.Primary == nil {
+		t.Fatalf("an edge's tls/ Find answered %d, %+v", code, result)
+	}
+	if ticket := world.verifyTicket(result.Primary); len(ticket.GetDialerSidecarId()) != 0 {
+		t.Fatalf("an edge's tls/ ticket names sidecar %x", ticket.GetDialerSidecarId())
+	}
+
+	scene := newTestSocketFindScene(t, 2)
+	code, result = scene.process.find(scene.dialer.token, scene.findArgs())
+	if code != http.StatusOK || result.Error != nil || result.Backup == nil {
+		t.Fatalf("a blinded Find answered %d, %+v", code, result)
+	}
+	for _, findTicket := range []*sidecar.SocketFindTicket{result.Primary, result.Backup} {
+		if ticket := scene.world.verifyTicket(findTicket); len(ticket.GetDialerSidecarId()) != 0 {
+			t.Fatalf("a blinded name's ticket names sidecar %x", ticket.GetDialerSidecarId())
+		}
+	}
+}

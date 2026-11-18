@@ -280,6 +280,7 @@ fields:
   SocketTicket.backup: sock-2
   SocketTicket.grant_expire_time_millis: sock-2
   SocketTicket.name_token: sock-2
+  SocketTicket.dialer_sidecar_id: sock-2
   SignedSocketTicket.key_id: sock-2
   SignedSocketTicket.ticket: sock-2
   SignedSocketTicket.signature: sock-2
