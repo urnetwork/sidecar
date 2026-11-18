@@ -80,11 +80,12 @@ func (self *pushFixture) write(plan *sidecar.EvsPushPlan, base uint64, labels ..
 }
 
 // Commits a, then crosses to generation 2 under cause with a write of a, the state having shrunk or not: the head
-// then carries the due.
+// then carries the due. The state moves once the first commit's step 8, which reads the gate view, has finished.
 func (self *pushFixture) crossRemove(shrink bool) []byte {
 	plan := self.plan()
 	self.create(plan, "a")
 	self.requireCommitted(self.push(plan), 1)
+	self.awaitStepEights()
 	holdersShrunkAt := uint64(0)
 	if shrink {
 		holdersShrunkAt = self.check.firstView.Pin().GetVersion() + 1
@@ -149,6 +150,7 @@ func TestPathEpochNoDueOnARequestRotation(t *testing.T) {
 	plan := fixture.plan()
 	fixture.create(plan, "a")
 	fixture.requireCommitted(fixture.push(plan), 1)
+	fixture.awaitStepEights()
 	fixture.check.appendState(0, nil)
 	commitment := fixture.putGenerationTwo(sidecar.GkmCauseRequest)
 	next := fixture.planAtTwo(commitment)
@@ -476,6 +478,7 @@ func TestPathEpochCrossingCreationCommitsAndRecordsTheDue(t *testing.T) {
 		plan := fixture.plan()
 		fixture.create(plan, "a")
 		fixture.requireCommitted(fixture.push(plan), 1)
+		fixture.awaitStepEights()
 		fixture.check.appendState(fixture.check.firstView.Pin().GetVersion()+1, nil)
 		commitment := fixture.putGenerationTwo(sidecar.GkmCauseRemove)
 		crossing := fixture.planAtTwo(commitment)
