@@ -1,9 +1,13 @@
-//go:build !js && !ios && !android && !ios_extension
+//go:build !js && (!ios || macos) && !android && !ios_extension
 
 // DaemonClient, the caller's side of §5.8's local IPC, which ur's commands and relays use, and a desktop sdk's remote
 // backend links too (§18.4), so this file and the hello's and wire's are the daemon's only files without
 // sdk_mobile_bind's exclusion. It dials the instance's socket or pipe, sends the hello, reads the daemon's answer,
 // and then either calls control methods by JSON-RPC 2.0 or hands the stream to a relay (mcp, git).
+//
+// A desktop is any system but the phones', and gomobile's macOS slices are desktops: their archives compile with
+// GOOS=darwin, and their binding step type-checks with GOOS=ios and the macos tag, which `|| macos` lets in here, so
+// both select the client the sdk's desktop dial names (§18.10's tags; owner decisions 493, 554).
 //
 // A sandboxed macOS app's remote backend cannot reach the instance's socket, so it dials the one in its app-group
 // container (daemon_pair.go), whose name DaemonAppGroupSocketName gives both ends; the app supplies the container,

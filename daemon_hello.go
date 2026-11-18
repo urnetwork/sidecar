@@ -1,8 +1,11 @@
-//go:build !js && !ios && !android && !ios_extension
+//go:build !js && (!ios || macos) && !android && !ios_extension
 
 // §5.8's hello: the first line of every local session, newline-delimited JSON with ur_local 1, naming the mode the
 // session speaks and the version of the ur that opened it. The mode selects a protocol, never a privilege (D-CORE-9).
 // A hello of another version is refused, so a just-upgraded ur restarts an old daemon rather than relaying through it.
+//
+// Like the client's file, it is on every desktop, gomobile's macOS slices included, whose binding step type-checks
+// with GOOS=ios and the macos tag (§18.10's tags; owner decisions 493, 554).
 //
 // The daemon answers one line of its own, {"ur_local":1,"version":<its version>}, with "error" set when it refuses
 // the session; §5.8 writes no answer, so this one is a reading, kept to what a client needs to tell a refusal from a
