@@ -159,7 +159,7 @@ func TestSharedBlockWithheldFromTheLaterNetworksTun(t *testing.T) {
 	world.secondBridge.stateLock.Lock()
 	world.secondBridge.route = func(packet []byte) connect.UserNatClient { return link }
 	world.secondBridge.stateLock.Unlock()
-	status, err := world.bridges.tunUp(world.second, nil)
+	status, err := world.bridges.tunUp(world.second, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +199,7 @@ func TestSharedBlockWithheldFromTheLaterNetworksTun(t *testing.T) {
 // The first-joined network's tun carries the block as ever; the later network is the one withheld and warned of.
 func TestSharedBlockStaysWithTheFirstJoinedNetwork(t *testing.T) {
 	world := newTestSharedBlockWorld(t)
-	status, err := world.bridges.tunUp(world.first, nil)
+	status, err := world.bridges.tunUp(world.first, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +225,7 @@ func TestSharedBlockStaysWithTheFirstJoinedNetwork(t *testing.T) {
 // warns of nothing, and a later share raises the alarm again.
 func TestSharedBlockClearsWhenABlockCycles(t *testing.T) {
 	world := newTestSharedBlockWorld(t)
-	if _, err := world.bridges.tunUp(world.second, nil); err != nil {
+	if _, err := world.bridges.tunUp(world.second, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	cycled := []netip.Prefix{netip.MustParsePrefix("100.71.0.53/32"), netip.MustParsePrefix("100.71.3.4/32")}

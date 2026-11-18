@@ -18,7 +18,8 @@
 //	           route holds keeps it, counted, since Windows would otherwise choose between them by metric
 //	resolver   bridge_dns_windows.go's
 //	local      bridge_local_windows.go's
-//	exits      under the egress mode exits, IPv4's two halves on the adapter (urTunExitsHalves), each more specific
+//	exits      where the tun's plan takes the host's default route (tun_default.go; QD-1052), "under exits"
+//	           here, IPv4's two halves on the adapter (urTunExitsHalves), each more specific
 //	           than the host's own default route, which stays. connect's sockets are bound to that route's interface
 //	           first (IP_UNICAST_IF, connect.SetEgressInterfaceIndex, connect/egress_windows.go), as
 //	           egress_dial_sites_test.go pins at every dial site connect makes, so the daemon's own transport keeps the

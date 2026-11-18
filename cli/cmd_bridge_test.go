@@ -360,3 +360,37 @@ func TestUrBridgePrintsTheListingAndItsFilings(t *testing.T) {
 		t.Fatalf("the close: %s", printed)
 	}
 }
+
+// ur bridge egress --require-default-egress asks the person about the requirement too and sends it with exits
+// (QD-1053); with auto or none it is refused before any question.
+func TestUrBridgeEgressRequiresDefaultEgress(t *testing.T) {
+	setTestUrBridgeWait(t, defaultUrBridgeSettings())
+	daemon := &testUrBridgeDaemon{}
+	cli, out, _ := startTestUrSocketCli(t,
+		daemon.method(sidecar.DaemonMethodBridgeEgress, true, func(callCount int) (any, error) {
+			return &sidecar.DaemonBridgeFilingReply{}, nil
+		}),
+	)
+	cli.openTty = func() (urTty, error) { t.Fatal("asked"); return nil, nil }
+	for _, mode := range []string{"auto", "none"} {
+		if code := cli.main(context.Background(), []string{"ur", "bridge", "egress", mode, "--require-default-egress"}); code == urExitOk {
+			t.Fatalf("%s took the requirement", mode)
+		}
+	}
+	tty := &testTty{lines: []string{"yes"}}
+	cli.openTty = func() (urTty, error) { return tty, nil }
+	if code := cli.main(context.Background(), []string{"ur", "bridge", "egress", "exit1,exit2", "--require-default-egress"}); code != urExitOk {
+		t.Fatalf("exits: exit %d", code)
+	}
+	calls, confirmed := daemon.calls()
+	if len(calls) != 1 || !confirmed[0] {
+		t.Fatalf("%d calls, confirmed %v", len(calls), confirmed)
+	}
+	egress := &sidecar.DaemonBridgeEgressParams{}
+	if err := json.Unmarshal(calls[0], egress); err != nil || !egress.RequireDefaultEgress || len(egress.Exits) != 2 {
+		t.Fatalf("egress params: %+v, %v", egress, err)
+	}
+	if !strings.Contains(out.String(), "required   default egress stays on") {
+		t.Fatalf("printed:\n%s", out.String())
+	}
+}

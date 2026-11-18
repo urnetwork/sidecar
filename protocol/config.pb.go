@@ -3398,14 +3398,15 @@ func (x *BridgeLedgerEgressSpecs) GetRows() []*BridgeLedgerEgressRow {
 }
 
 type BridgeLedgerEgressRow struct {
-	state          protoimpl.MessageState  `protogen:"open.v1"`
-	Subject        []byte                  `protobuf:"bytes,1,opt,name=subject,proto3" json:"subject,omitempty"`                                       // a sidecar_id or a keyed atom
-	Mode           bridge.BridgeEgressMode `protobuf:"varint,2,opt,name=mode,proto3,enum=urnetwork.sidecar.BridgeEgressMode" json:"mode,omitempty"`    // the newest BridgeEgress's clear mode (QD-630)
-	ExitSidecarIds [][]byte                `protobuf:"bytes,3,rep,name=exit_sidecar_ids,json=exitSidecarIds,proto3" json:"exit_sidecar_ids,omitempty"` // under exits, from its body; none when the body is void
-	ExitTagId      []byte                  `protobuf:"bytes,4,opt,name=exit_tag_id,json=exitTagId,proto3" json:"exit_tag_id,omitempty"`
-	At             uint64                  `protobuf:"varint,5,opt,name=at,proto3" json:"at,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state                protoimpl.MessageState  `protogen:"open.v1"`
+	Subject              []byte                  `protobuf:"bytes,1,opt,name=subject,proto3" json:"subject,omitempty"`                                       // a sidecar_id or a keyed atom
+	Mode                 bridge.BridgeEgressMode `protobuf:"varint,2,opt,name=mode,proto3,enum=urnetwork.sidecar.BridgeEgressMode" json:"mode,omitempty"`    // the newest BridgeEgress's clear mode (QD-630)
+	ExitSidecarIds       [][]byte                `protobuf:"bytes,3,rep,name=exit_sidecar_ids,json=exitSidecarIds,proto3" json:"exit_sidecar_ids,omitempty"` // under exits, from its body; none when the body is void
+	ExitTagId            []byte                  `protobuf:"bytes,4,opt,name=exit_tag_id,json=exitTagId,proto3" json:"exit_tag_id,omitempty"`
+	At                   uint64                  `protobuf:"varint,5,opt,name=at,proto3" json:"at,omitempty"`
+	RequireDefaultEgress bool                    `protobuf:"varint,6,opt,name=require_default_egress,json=requireDefaultEgress,proto3" json:"require_default_egress,omitempty"` // under exits, from its body: default egress stays on (QD-1053)
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *BridgeLedgerEgressRow) Reset() {
@@ -3471,6 +3472,13 @@ func (x *BridgeLedgerEgressRow) GetAt() uint64 {
 		return x.At
 	}
 	return 0
+}
+
+func (x *BridgeLedgerEgressRow) GetRequireDefaultEgress() bool {
+	if x != nil {
+		return x.RequireDefaultEgress
+	}
+	return false
 }
 
 type BridgeLedgerAliases struct {
@@ -3841,13 +3849,14 @@ const file_protocol_config_proto_rawDesc = "" +
 	"\x12withdrawn_by_admin\x18\x15 \x01(\bR\x10withdrawnByAdmin\x12&\n" +
 	"\x0fretain_until_ms\x18\x16 \x01(\x03R\rretainUntilMs\"W\n" +
 	"\x17BridgeLedgerEgressSpecs\x12<\n" +
-	"\x04rows\x18\x01 \x03(\v2(.urnetwork.sidecar.BridgeLedgerEgressRowR\x04rows\"\xc4\x01\n" +
+	"\x04rows\x18\x01 \x03(\v2(.urnetwork.sidecar.BridgeLedgerEgressRowR\x04rows\"\xfa\x01\n" +
 	"\x15BridgeLedgerEgressRow\x12\x18\n" +
 	"\asubject\x18\x01 \x01(\fR\asubject\x127\n" +
 	"\x04mode\x18\x02 \x01(\x0e2#.urnetwork.sidecar.BridgeEgressModeR\x04mode\x12(\n" +
 	"\x10exit_sidecar_ids\x18\x03 \x03(\fR\x0eexitSidecarIds\x12\x1e\n" +
 	"\vexit_tag_id\x18\x04 \x01(\fR\texitTagId\x12\x0e\n" +
-	"\x02at\x18\x05 \x01(\x04R\x02at\"R\n" +
+	"\x02at\x18\x05 \x01(\x04R\x02at\x124\n" +
+	"\x16require_default_egress\x18\x06 \x01(\bR\x14requireDefaultEgress\"R\n" +
 	"\x13BridgeLedgerAliases\x12;\n" +
 	"\x04rows\x18\x01 \x03(\v2'.urnetwork.sidecar.BridgeLedgerAliasRowR\x04rows\"\xb8\x01\n" +
 	"\x14BridgeLedgerAliasRow\x126\n" +

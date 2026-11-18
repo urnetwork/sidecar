@@ -364,11 +364,13 @@ type DaemonBridgeCloseParams struct {
 	Reset bool `json:"reset,omitempty"`
 }
 
-// bridge.egress's params: auto, none, exits by sidecar, or an exit tag as tag:<id>.
+// bridge.egress's params: auto, none, exits by sidecar, or an exit tag as tag:<id>; and under exits whether the
+// subject's devices must keep default egress on (QD-1053).
 type DaemonBridgeEgressParams struct {
-	Network string   `json:"network,omitempty"`
-	Mode    string   `json:"mode,omitempty"`
-	Exits   []string `json:"exits,omitempty"`
+	Network              string   `json:"network,omitempty"`
+	Mode                 string   `json:"mode,omitempty"`
+	Exits                []string `json:"exits,omitempty"`
+	RequireDefaultEgress bool     `json:"require_default_egress,omitempty"`
 }
 
 // bridge.block's params: "cycle", or a /16.
@@ -617,6 +619,10 @@ func (self *DaemonBridges) Egress(ctx context.Context, networkId Id, running *Si
 	default:
 		return nil, fmt.Errorf("%w: an egress spec is auto, none, exits or tag:<id>", ErrDaemonBridgeParams)
 	}
+	if params.RequireDefaultEgress && request.Mode != bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS {
+		return nil, fmt.Errorf("%w: only exits can require default egress", ErrDaemonBridgeParams)
+	}
+	request.RequireDefaultEgress = params.RequireDefaultEgress
 	return daemonBridgeFilingReply(backend.SetEgress(ctx, origin, request))
 }
 

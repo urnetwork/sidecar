@@ -369,6 +369,8 @@ func (self *urBridgeWire) network() *urBridgeNetwork {
 			self.raise(alarm, nil)
 		},
 		close: self.close,
+		// ur tun's choices for default traffic, in the network's sealed local state (tun_default.go)
+		choices: newUrTunSealedChoices(self.args.Sidecar),
 	}
 }
 
@@ -384,6 +386,11 @@ type urBridgeNetwork struct {
 	alarm func(alarm sidecar.SidecarBridgeAlarm)
 	// ends the bridge, nil for none
 	close func()
+	// where ur tun's choices for the network's default traffic are kept (tun_default.go); nil keeps them for the
+	// daemon's life alone, in memory
+	choices urTunChoiceStore
+	// the connect client's destination under auto, nil for none, which is every network's today (tun_default.go)
+	destination urTunDestination
 }
 
 // What builds a network's bridge over the daemon's config follower for it.
@@ -477,6 +484,9 @@ func newUrBridgeDaemon(ctx context.Context, args *urBridgeDaemonArgs) *urBridgeD
 // Holds a network's bridge, which the daemon's composition built, and judges the shared blocks on each of its changes;
 // the returned function forgets it again.
 func (self *urBridgeDaemon) addNetwork(network *urBridgeNetwork) (func(), error) {
+	if network.choices == nil {
+		network.choices = &urTunMemoryChoices{}
+	}
 	err := func() error {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
@@ -542,10 +552,12 @@ func (self *urBridgeDaemon) networkWithLock(networkId sidecar.Id, running *sidec
 }
 
 // Brings the instance's tun up over the network's bridge, or answers it as it is when it carries that network
-// already. Refuses where the platform has no tun, while the tun carries another network, and when an app's bridge
-// holds the block on this host (§17.11's yield): a paired sidecar's app runs the device role in its VPN component
-// whenever that runs (owner decision 197), so a route inside the block on another interface is its.
-func (self *urBridgeDaemon) tunUp(networkId sidecar.Id, running *sidecar.Sidecar) (*urTunStatus, error) {
+// already, with change applied to the network's choices for default traffic first, kept, and planned at once where the
+// tun is up (tun_default.go; QD-1052). Refuses where the platform has no tun, while the tun carries another network,
+// and when an app's bridge holds the block on this host (§17.11's yield): a paired sidecar's app runs the device role
+// in its VPN component whenever that runs (owner decision 197), so a route inside the block on another interface is
+// its.
+func (self *urBridgeDaemon) tunUp(networkId sidecar.Id, running *sidecar.Sidecar, change *urTunChoiceChange) (*urTunStatus, error) {
 	if self.system == nil {
 		return nil, errUrTunPlatform
 	}
@@ -556,15 +568,19 @@ func (self *urBridgeDaemon) tunUp(networkId sidecar.Id, running *sidecar.Sidecar
 		defer self.stateLock.Unlock()
 		return self.tun
 	}()
-	if current != nil {
-		if current.networkId == networkId {
-			return current.status(), nil
-		}
+	if current != nil && current.networkId != networkId {
 		return nil, fmt.Errorf("ur tun carries network %s: ur tun down first", current.networkId)
 	}
 	network, err := self.networkWithLock(networkId, running)
 	if err != nil {
 		return nil, err
+	}
+	choices, err := self.choicesWithLock(network, change)
+	if err != nil {
+		return nil, err
+	}
+	if current != nil {
+		return current.setChoices(choices), nil
 	}
 	name := urTunDeviceName(self.instance, self.settings.DeviceNameByteCount)
 	if block := network.bridge.Status().Block; block.IsValid() && network.paired != nil && network.paired() {
@@ -589,8 +605,10 @@ func (self *urBridgeDaemon) tunUp(networkId sidecar.Id, running *sidecar.Sidecar
 		Withheld: func() []urSharedBlock {
 			return self.sharedBlocksFor(networkId)
 		},
-		OnClose: self.forgetTun,
-		OnSync:  self.onTunSync,
+		Choices:     &choices,
+		Destination: network.destination,
+		OnClose:     self.forgetTun,
+		OnSync:      self.onTunSync,
 	})
 	if err != nil {
 		return nil, err

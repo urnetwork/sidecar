@@ -1,15 +1,21 @@
 // SocketTicketKeySet (SOCK-M5-08; §9.8, D-SOCK-4): the service's Ed25519 ticket keys, from one key file among the
 // block's vault secret_files, which the host rereads every ReloadInterval. Every listed key verifies until its
-// expiry, and the newest key that has settled signs: a key settles SettleTime after its creation, by when every
-// live listener holds it from a registration answer or GET /socket/keys, so no ticket names a key a listener has
-// not been given. While no key has settled, the oldest live one signs, which is a deployment's first key. A key
-// signs only while it outlives SignMargin, so no ticket outlives its key.
+// expiry, and the newest key that has settled signs: a key settles SettleTime after the later of its creation and
+// its first sight, the first read in which this process saw it, by when every live listener holds it from a
+// registration answer or GET /socket/keys. So no ticket names a key a listener has not been given, however long
+// the owner's hand placement of the file in vault takes after the key's creation (owner decisions 354 and 562,
+// QD-1016): a slow placement only delays the switch. A per-process map keeps each key's first sight, and a key gone
+// from the file leaves it, so a key that comes back, or an id that comes back naming another key, is seen anew.
+// While no key has settled, the oldest live one signs: a deployment's first key, or, through a restarted process's
+// first SettleTime, in which it sees every key as new, the key the blocks have given out longest. Blocks may then
+// sign under different keys for up to a reread interval, each of which every listener verifies. A key signs only
+// while it outlives SignMargin, so no ticket outlives its key.
 //
-// Rotation, every RotationInterval (30 days): SocketTicketKeyFileAdd adds a key to the file beside the ones it
-// holds, each expiring RotationInterval and KeyOverlap after its creation, and drops the expired; the operations
-// command that runs it is sidecarctl's to add (question sock-m5-07-ticket-keygen-command). The new key verifies at
-// once and signs once settled, while the old one verifies through the overlap. A rotation never stops the service:
-// vault's file changes and the next reread takes it.
+// Rotation, every RotationInterval (365 days, QD-1039): SocketTicketKeyFileAdd adds a key to the file beside the
+// ones it holds, each expiring RotationInterval and KeyOverlap after its creation, and drops the expired; `sidecarctl
+// sockets ticket-keygen` runs it, and the owner places what it writes in vault (owner decision 354). The new key
+// verifies once read and signs once settled, while the old one verifies through the overlap. A rotation never stops
+// the service: vault's file changes and the next reread takes it.
 //
 // The file, YAML, the seed in standard base64:
 //
@@ -37,6 +43,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -50,15 +57,17 @@ var _ SocketTicketKeys = (*SocketTicketKeySet)(nil)
 // A key file that cannot be used. The text names what is wrong, never a key.
 var ErrSocketTicketKeyFileRefused = errors.New("socket ticket key file refused")
 
-// The key set's tunables (§9.8's 30-day rotation with overlap).
+// The key set's tunables (§9.8's rotation with overlap).
 type SocketTicketKeySettings struct {
-	// How often a key file gets a new key: 30 days, which SocketTicketKeyFileAdd's expiry follows.
+	// How often a key file gets a new key: 365 days, the owner running the keygen once a year in each environment
+	// (QD-1039, which amends owner decisions 354 and 562 on the interval alone). SocketTicketKeyFileAdd's expiry
+	// follows it.
 	RotationInterval time.Duration
 	// How long a key verifies past RotationInterval, so a ticket under it, and the listeners that hold it, outlive
 	// its successor's settling: 1 day.
 	KeyOverlap time.Duration
-	// How long after its creation a key starts to sign: 10 min, many registration heartbeats (§9.5's 15 s), so
-	// every live listener has been given it.
+	// How long after the later of its creation and its first sight in this process a key starts to sign: 10 min,
+	// many registration heartbeats (§9.5's 15 s), so every live listener has been given it.
 	SettleTime time.Duration
 	// How long a key must still verify for it to sign: 10 min, past any ticket's 30 s life and any clock skew a
 	// listener tolerates.
@@ -74,7 +83,7 @@ type SocketTicketKeySettings struct {
 // §9.8's values.
 func DefaultSocketTicketKeySettings() *SocketTicketKeySettings {
 	return &SocketTicketKeySettings{
-		RotationInterval: 30 * 24 * time.Hour,
+		RotationInterval: 365 * 24 * time.Hour,
 		KeyOverlap:       24 * time.Hour,
 		SettleTime:       10 * time.Minute,
 		SignMargin:       10 * time.Minute,
@@ -129,9 +138,12 @@ type socketTicketKey struct {
 	expireMillis  int64
 }
 
-// The keys a file held, oldest first, never changed once published.
+// The keys a file held, oldest first, with each one's first sight, never changed once published.
 type socketTicketKeyView struct {
 	keys []*socketTicketKey
+	// the per-process map of first sights: for every key of keys and no other, the time, in Unix milliseconds, of
+	// the first read in which this process saw it
+	keyIdFirstSightMillis map[string]int64
 }
 
 // The parsed keys of a file, oldest first: every key with an id, a 32-byte seed and an expiry after its creation,
@@ -240,7 +252,10 @@ type SocketTicketKeySet struct {
 	settings *SocketTicketKeySettings
 	log      sidecar.Logger
 
-	view atomic.Pointer[socketTicketKeyView]
+	// serializes reads of the file, the reread loop's and a test's, so each view is published after the one it
+	// carries first sights over from, in the order the reads were made; only reload takes it
+	reloadLock sync.Mutex
+	view       atomic.Pointer[socketTicketKeyView]
 	// reads finished, each counted once the wait for the next is armed
 	readCount *sidecar.MonitorValue[int]
 }
@@ -287,13 +302,33 @@ func (self *SocketTicketKeySet) run(ctx context.Context) {
 	}
 }
 
-// One read of the file. A failure keeps the last good set, and says what failed, never a key.
+// One read of the file. A good file's keys are published with their first sights: a key the last view held under
+// the same id, the same key, keeps its first sight, and every other is first seen at this read, so a key gone from
+// the file leaves the map and one that comes back is new again. A failure keeps the last good set with its first
+// sights, and says what failed, never a key.
 func (self *SocketTicketKeySet) reload() {
+	self.reloadLock.Lock()
+	defer self.reloadLock.Unlock()
 	data, err := self.read()
 	if err == nil {
 		var keys []*socketTicketKey
 		if keys, err = parseSocketTicketKeyFile(data, self.settings); err == nil {
-			self.view.Store(&socketTicketKeyView{keys: keys})
+			// taken once the file is read, just before its keys are given out
+			nowMillis := self.clock.Now().UnixMilli()
+			last := self.view.Load()
+			lastKeyIdKeys := map[string]*socketTicketKey{}
+			for _, key := range last.keys {
+				lastKeyIdKeys[key.keyId] = key
+			}
+			keyIdFirstSightMillis := map[string]int64{}
+			for _, key := range keys {
+				keyIdFirstSightMillis[key.keyId] = nowMillis
+				// an id naming another key than it did is another key, which listeners have not been given
+				if lastKey, ok := lastKeyIdKeys[key.keyId]; ok && lastKey.privateKey.Equal(key.privateKey) {
+					keyIdFirstSightMillis[key.keyId] = last.keyIdFirstSightMillis[key.keyId]
+				}
+			}
+			self.view.Store(&socketTicketKeyView{keys: keys, keyIdFirstSightMillis: keyIdFirstSightMillis})
 			return
 		}
 	}
@@ -302,15 +337,18 @@ func (self *SocketTicketKeySet) reload() {
 	}
 }
 
-// See SocketTicketKeys: the newest settled key that outlives SignMargin, else the oldest live one that does.
+// See SocketTicketKeys: the newest settled key that outlives SignMargin, else the oldest live one that does. A key
+// settles SettleTime after the later of its creation and its first sight; one with no first sight never does.
 func (self *SocketTicketKeySet) SigningKey() (string, ed25519.PrivateKey, bool) {
 	nowMillis := self.clock.Now().UnixMilli()
+	view := self.view.Load()
 	var signing *socketTicketKey
-	for _, key := range self.view.Load().keys {
+	for _, key := range view.keys {
 		if key.expireMillis <= nowMillis+self.settings.SignMargin.Milliseconds() || nowMillis < key.createdMillis {
 			continue
 		}
-		settled := key.createdMillis+self.settings.SettleTime.Milliseconds() <= nowMillis
+		firstSightMillis, seen := view.keyIdFirstSightMillis[key.keyId]
+		settled := seen && max(key.createdMillis, firstSightMillis)+self.settings.SettleTime.Milliseconds() <= nowMillis
 		if signing == nil || settled {
 			signing = key
 		}

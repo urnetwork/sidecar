@@ -671,7 +671,7 @@ func checkBridgeRulesUntagged(rules *bridge.BridgeRules) error {
 	return checkBridgeRuleSubjectReach("untagged", untagged)
 }
 
-// The egress: a mode, and exits under exits alone.
+// The egress: a mode, and exits and a requirement of default egress (QD-1053) under exits alone.
 func checkBridgeRulesEgress(rules *bridge.BridgeRules) error {
 	egress := rules.GetEgress()
 	if egress == nil {
@@ -689,6 +689,9 @@ func checkBridgeRulesEgress(rules *bridge.BridgeRules) error {
 	case bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_AUTO, bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE:
 		if 0 < len(egress.GetExits()) {
 			return bridgeRulesFault("egress", "exits under a mode that uses none")
+		}
+		if egress.GetRequireDefaultEgress() {
+			return bridgeRulesFault("egress", "default egress required under a mode that uses no exit")
 		}
 		return nil
 	default:

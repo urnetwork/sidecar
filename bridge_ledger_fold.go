@@ -257,7 +257,8 @@ func (self *BridgeLedger) foldRows() ([]*protocol.BridgeLedgerAddressRow, []*pro
 
 	egressRows := []*protocol.BridgeLedgerEgressRow{}
 	for _, egress := range self.Egress() {
-		row := &protocol.BridgeLedgerEgressRow{Subject: egress.Subject.Bytes(), Mode: egress.Mode, ExitTagId: bytes.Clone(egress.ExitTagId), At: egress.At}
+		row := &protocol.BridgeLedgerEgressRow{Subject: egress.Subject.Bytes(), Mode: egress.Mode, ExitTagId: bytes.Clone(egress.ExitTagId), At: egress.At,
+			RequireDefaultEgress: egress.RequireDefaultEgress}
 		for _, exitId := range egress.ExitSidecarIds {
 			row.ExitSidecarIds = append(row.ExitSidecarIds, exitId.Bytes())
 		}
