@@ -36,7 +36,7 @@
 // format is never written over: errIndexBuildNewerFormat, status update. Config, mailcfg and secret repos hold no
 // index: errIndexBuildExcluded.
 //
-// Barriers evs.index.build.locked, .built and .pushed, keyed <repo>/<ref>. No key is created, derived or unwrapped
+// Barriers evs.index.build.locked, .built and .pushed, keyed <repo>:<ref>. No key is created, derived or unwrapped
 // here: K_ref comes derived, doc_keys are MACs under it, and the pad key comes from the caller. A path is this device's
 // own plaintext and goes into no log or error's text (I-13). Not safe for concurrent use.
 //
@@ -178,9 +178,9 @@ type indexBuildOutcome struct {
 	lock     *indexHeldLock
 }
 
-// The barrier key of this ref: <repo>/<ref>.
+// The barrier key of this ref: <repo>:<ref>, an opaque id with no slash (testhook.go; I-13).
 func (self *IndexBuilder) barrierKey() string {
-	return self.args.repoId.String() + "/" + self.args.refId.String()
+	return self.args.repoId.String() + ":" + self.args.refId.String()
 }
 
 // The ref's index at its head.

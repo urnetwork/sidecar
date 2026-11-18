@@ -30,7 +30,7 @@
 // Not here: a record log's card markers, step 2a's erasure-ref read at a new epoch, and again units (DESIGN-DETAILS
 // 15.2.9), which wait on SEARCH-M10-28's cards; a sent unit whose outcome a restart cannot settle by push id returns to
 // committed and is published again, its entries the same versions. Barriers evs.index.companion.built and .pushed,
-// keyed <repo>/<ref>. Safe for concurrent use: one build at a time.
+// keyed <repo>:<ref>. Safe for concurrent use: one build at a time.
 
 package sidecar
 
@@ -103,9 +103,9 @@ func newIndexCompanion(args *indexCompanionArgs) (*IndexCompanion, error) {
 	return &IndexCompanion{args: &copied}, nil
 }
 
-// The barrier key of ur/index: <repo>/<ref>.
+// The barrier key of ur/index: <repo>:<ref>, an opaque id with no slash (testhook.go; I-13).
 func (self *IndexCompanion) barrierKey() string {
-	return self.args.repoId.String() + "/" + self.args.indexRefId.String()
+	return self.args.repoId.String() + ":" + self.args.indexRefId.String()
 }
 
 // Journals a unit (IndexJournal.Committed), and makes a build due at once when the committed units' entries would

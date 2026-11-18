@@ -170,12 +170,15 @@ func TestRecordEnumerationsMatchSectionSixTwo(t *testing.T) {
 		}
 	}
 
-	// The two record.proto enums section 6.2 numbers: every value it writes, and no other but 0.
+	// The four record.proto enums section 6.2 numbers (plan-MCP-wire-enum-numbers): every value it writes, and no other
+	// but 0.
 	enumCases := []struct {
 		key    string
 		prefix string
 		names  map[int32]string
 	}{
+		{key: "CanonicalAction.kind", prefix: "SIDECAR_ACTION_KIND_", names: protocol.SidecarActionKind_name},
+		{key: "ApprovalRequest.risk", prefix: "SIDECAR_RISK_", names: protocol.SidecarRisk_name},
 		{key: "ApprovalDecision.decision", prefix: "APPROVAL_VERDICT_", names: protocol.ApprovalVerdict_name},
 		{key: "ApprovalDecision.channel", prefix: "APPROVAL_CHANNEL_", names: protocol.ApprovalChannel_name},
 	}

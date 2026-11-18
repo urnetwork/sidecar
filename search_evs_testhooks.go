@@ -54,6 +54,10 @@ type SearchTestEvsIndex struct {
 	Version uint64
 	Files   map[string]uint64
 	Live    map[[indexIdByteCount]byte]uint64
+	// The start days of its buckets, ascending, and all's rolled_through_day and shards; 0 and none before a roll-up.
+	Buckets          []uint32
+	RolledThroughDay uint32
+	AllShardCount    int
 }
 
 // Reads the index of repo's file-mode ref refName (nil: main) at its head, judging settings by isAdmin.
@@ -83,7 +87,15 @@ func ReadSearchTestEvsIndex(ctx context.Context, repo *EvsRepo, refName []byte, 
 	for _, file := range listing.files {
 		index.Files[file.path] = file.version
 	}
-	held, err := indexLoadHeldKeys(ctx, view, view.writeRoot())
+	root := view.writeRoot()
+	for _, bucket := range root.buckets {
+		index.Buckets = append(index.Buckets, bucket.window.startDay)
+	}
+	if root.allManifest != nil {
+		index.RolledThroughDay = root.allManifest.RolledThroughDay
+	}
+	index.AllShardCount = len(root.allShards)
+	held, err := indexLoadHeldKeys(ctx, view, root)
 	if err != nil {
 		return nil, err
 	}
@@ -106,4 +118,41 @@ func SearchTestEvsDocKey(ctx context.Context, repo *EvsRepo, refId Id, path stri
 		return [indexIdByteCount]byte{}, err
 	}
 	return indexDocKey(refKey, refId, []byte(path), 0)
+}
+
+// One roll-up of the oldest expired bucket of repo's file-mode ref refName (nil: main), by runner, the device repo's
+// client is, on that client's clock, through EvsRepo as every index builder reaches evs (SEARCH-M10-11's roller over
+// indexEvsStore). K_index_g is the repo's newest generation's, as the device's gkm answers it.
+func RollUpSearchTestEvs(ctx context.Context, repo *EvsRepo, refName []byte, runner Id, isAdmin func(signer Id) bool) (*SearchTestRollUp, error) {
+	store := newIndexEvsStore(repo, refName, false)
+	refId, err := store.refId(ctx)
+	if err != nil {
+		return nil, err
+	}
+	kind, err := repo.repoKind()
+	if err != nil {
+		return nil, err
+	}
+	repoKey, err := repo.client.args.Gkm.CurrentRepoKey(ctx, repo.repoId)
+	if err != nil {
+		return nil, err
+	}
+	padKey, err := indexNewPadKey(repoKey)
+	if err != nil {
+		return nil, err
+	}
+	roller, err := indexNewRoller(&indexRollerArgs{
+		store: store, repoId: repo.repoId, refId: refId, repoKind: kind,
+		isAdmin: func(file *indexFileVersion) bool { return isAdmin(file.signerSidecarId) },
+		format:  DefaultIndexFormatSettings(),
+		padKey:  func(ctx context.Context) (*indexPadKey, error) { return padKey, nil },
+		tables:  indexLinkedTables(),
+		clock:   repo.client.clock,
+		runner:  runner,
+	})
+	if err != nil {
+		return nil, err
+	}
+	outcome, err := roller.Roll(ctx, indexRootNumber)
+	return searchTestRollUpOf(outcome, runner), searchTestErr(err)
 }

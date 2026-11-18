@@ -16,7 +16,7 @@
 // schedule's (indexer_search.go): an indexer serving the repo for search first, else a desktop or the daemon, and a
 // phone only out of slots or on Wi-Fi while charging.
 //
-// Barriers evs.index.merge.built, .uploaded and .pushed, keyed <repo>/<ref>. The caller passes this build's linked
+// Barriers evs.index.merge.built, .uploaded and .pushed, keyed <repo>:<ref>. The caller passes this build's linked
 // tables, which it has checked are normalizer 1's, and the pad key of its newest generation. Not safe for concurrent
 // use.
 
@@ -118,9 +118,9 @@ type indexMergeOutcome struct {
 	attempts int
 }
 
-// The barrier key of this ref: <repo>/<ref>.
+// The barrier key of this ref: <repo>:<ref>, an opaque id with no slash (testhook.go; I-13).
 func (self *IndexMerger) barrierKey() string {
-	return self.args.repoId.String() + "/" + self.args.refId.String()
+	return self.args.repoId.String() + ":" + self.args.refId.String()
 }
 
 // The ref's index at its head.
