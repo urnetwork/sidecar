@@ -30,6 +30,9 @@ func TestDefaultSmtpSenderSettingsMatchDesign(t *testing.T) {
 		DkimRotateTimeout:          90 * 24 * time.Hour,
 		DkimRetiredKeepTimeout:     7 * 24 * time.Hour,
 		DkimExpireTimeout:          7 * 24 * time.Hour,
+		// DESIGN-DETAILS 3.2.8
+		HeaderHeadMaxByteCount:  720,
+		HeaderBlockMaxByteCount: 16384,
 	}
 	if !reflect.DeepEqual(settings, want) {
 		t.Errorf("%+v", settings)
@@ -88,5 +91,18 @@ func TestSmtpSenderSettingsRefuseSchedulesOutOfOrder(t *testing.T) {
 	settings.Connect.SmtpSender = nil
 	if err := settings.validate(); !errors.Is(err, errInvalidSettings) {
 		t.Errorf("nil: %v", err)
+	}
+}
+
+// The head is the header block's start, so a head bound past the block's bound is no bound at all.
+func TestSmtpSenderSettingsRefuseAHeadPastTheBlock(t *testing.T) {
+	settings := validSidecarSettings()
+	settings.Connect.SmtpSender.HeaderHeadMaxByteCount = settings.Connect.SmtpSender.HeaderBlockMaxByteCount + 1
+	if err := settings.validate(); !errors.Is(err, errInvalidSettings) {
+		t.Errorf("head past the block: %v", err)
+	}
+	settings.Connect.SmtpSender.HeaderHeadMaxByteCount = settings.Connect.SmtpSender.HeaderBlockMaxByteCount
+	if err := settings.validate(); err != nil {
+		t.Errorf("head at the block: %v", err)
 	}
 }

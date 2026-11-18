@@ -11,8 +11,15 @@
 // Everything added after the preamble has a fixed length: X-UR-Ref 36 characters and Feedback-ID 40
 // (plan-SMTP-small-readings#3, #4), a selector 26 (#5), t= and x= 10 digits each, bh= 44 and an
 // RSA-2048 b= 344. So ByteCount is exact before the edge has issued anything, as the preamble's
-// message_byte_count must be (plan-SMTP-preamble-byte-count), and assembly refuses a header block
-// past one TLS record before anything is sent.
+// message_byte_count must be (plan-SMTP-preamble-byte-count), and assembly holds the header block to
+// its bounds before anything is sent.
+//
+// The prover cuts the header block into records by length alone, and Z5 requires the single fields
+// and the fixed signature's d= and s= in the first record (DESIGN-DETAILS 3.2.3, 3.2.4). So the block
+// leads with its head: X-UR-Ref, Feedback-ID, From, Message-ID and, on a BULK message,
+// List-Unsubscribe-Post, then the fixed signature's first line. The rest of the fixed signature, the
+// full signature and the message's other fields, in their order, follow. A head past
+// SmtpSenderSettings.HeaderHeadMaxByteCount, or a block past HeaderBlockMaxByteCount, is refused.
 //
 // Assembly is strict where the relation is: one From in Z5.4's form at the declared domain, one
 // Message-ID in §14.6's form, a header block of HTAB and printable octets, and nothing else bearing
@@ -39,10 +46,9 @@ import (
 	"unicode/utf8"
 )
 
-// Format values (SPEC.md 4.2, §14.6, RFC 5322, RFC 2045, RFC 2047), not settings.
+// Format values (SPEC.md 4.2, §14.6, RFC 5322, RFC 2045, RFC 2047). The limits among them are the
+// review phase's settings sweep's to move into SmtpSenderSettings (QD-702, QD-706).
 const (
-	// The header block is one TLS record's content (SPEC.md 4.2), its final CRLF CRLF included.
-	SmtpHeaderBlockMaxByteCount = 16 * 1024
 	// RFC 5322 §2.1.1: the most octets in a line, CRLF excluded, which a DATA line also keeps to.
 	smtpLineMaxByteCount = 998
 	// The issued values' lengths (plan-SMTP-small-readings#3, #4).
@@ -78,6 +84,9 @@ type SmtpAssembleArgs struct {
 	Flags uint32
 	// What a Date field says when the message has none.
 	Now time.Time
+	// The sender's settings, whose HeaderHeadMaxByteCount and HeaderBlockMaxByteCount bound the header
+	// block. nil is DefaultSmtpSenderSettings().
+	Settings *SmtpSenderSettings
 }
 
 // One header field as assembly keeps it: its name as written, its value unfolded and trimmed.
@@ -103,6 +112,10 @@ func (self *smtpWireField) line() string {
 // issued headers and both signatures, so its byte count is known before they exist. Immutable, and
 // so safe for concurrent use.
 type SmtpWireMessage struct {
+	// The single fields the head holds after X-UR-Ref and Feedback-ID, in its order: From, Message-ID
+	// and, on a BULK message, List-Unsubscribe-Post (DESIGN-DETAILS 3.2.3).
+	headFields []*smtpWireField
+	// The message's other fields, in their order.
 	fields []*smtpWireField
 	// CRLF throughout, ending in CRLF unless empty, unstuffed.
 	body             []byte
@@ -131,7 +144,7 @@ func (self *SmtpWireMessage) ByteCount(mode SmtpMode) (uint64, error) {
 	if mode != SmtpModeBdat && mode != SmtpModeData {
 		return 0, fmt.Errorf("%w: no byte count for mode %d", ErrSmtpAssemble, mode)
 	}
-	message, err := self.render(smtpDkimPlaceholderValues(), nil)
+	message, _, err := self.render(smtpDkimPlaceholderValues(), nil)
 	if err != nil {
 		return 0, err
 	}
@@ -707,6 +720,10 @@ func AssembleSmtpMessage(args *SmtpAssembleArgs) (*SmtpWireMessage, error) {
 	if args.Flags&^SmtpFlagsKnown != 0 {
 		return nil, fmt.Errorf("%w: unknown flags %#x", ErrSmtpAssemble, args.Flags)
 	}
+	settings := args.Settings
+	if settings == nil {
+		settings = DefaultSmtpSenderSettings()
+	}
 	normalized, err := smtpNormalizeLines(args.Message)
 	if err != nil {
 		return nil, err
@@ -720,6 +737,8 @@ func AssembleSmtpMessage(args *SmtpAssembleArgs) (*SmtpWireMessage, error) {
 	bulk := args.Flags&SmtpFlagBulk != 0
 	var fields []*smtpWireField
 	var fromCount, messageIdCount, dateCount, unsubscribeCount int
+	// the octets From's phrase takes on the wire, which a refusal of the head names
+	fromPhraseByteCount := 0
 	for _, field := range parsed {
 		switch {
 		// what no recipient sees, what an MTA adds, and what the edge issues
@@ -739,6 +758,11 @@ func AssembleSmtpMessage(args *SmtpAssembleArgs) (*SmtpWireMessage, error) {
 			value, err := smtpFromLine(field.value, args.HeaderFromDomain)
 			if err != nil {
 				return nil, err
+			}
+			// neither a phrase word nor an encoded word holds <, so the last one opens the address, and
+			// a phrase ends one space before it
+			if angle := strings.LastIndexByte(value, '<'); 0 < angle {
+				fromPhraseByteCount = angle - 1
 			}
 			fields = append(fields, &smtpWireField{name: "From", value: value})
 			continue
@@ -790,16 +814,36 @@ func AssembleSmtpMessage(args *SmtpAssembleArgs) (*SmtpWireMessage, error) {
 			return nil, fmt.Errorf("%w: a header field is not 7-bit", ErrSmtpAssemble)
 		}
 	}
-	wire.fields = fields
-	wire.body = body
 	wire.signedFieldNames = smtpSignedFieldNames(fields)
-	// the header block's length is fixed now, issued values and signatures included
-	message, err := wire.render(smtpDkimPlaceholderValues(), nil)
+	// the single fields lead the header block, in the head's order, and the rest keep theirs
+	headNames := []string{"From", "Message-ID"}
+	if bulk {
+		headNames = append(headNames, "List-Unsubscribe-Post")
+	}
+	for _, name := range headNames {
+		for _, field := range fields {
+			if field.is(name) {
+				wire.headFields = append(wire.headFields, field)
+			}
+		}
+	}
+	for _, field := range fields {
+		if !slices.ContainsFunc(headNames, field.is) {
+			wire.fields = append(wire.fields, field)
+		}
+	}
+	wire.body = body
+	// every length is fixed now, issued values and signatures included
+	message, headByteCount, err := wire.render(smtpDkimPlaceholderValues(), nil)
 	if err != nil {
 		return nil, err
 	}
-	if headerEnd := bytes.Index(message, []byte("\r\n\r\n")) + 4; SmtpHeaderBlockMaxByteCount < headerEnd {
-		return nil, fmt.Errorf("%w: a %d-octet header block passes one record", ErrSmtpAssemble, headerEnd)
+	if headerEnd := bytes.Index(message, []byte("\r\n\r\n")) + 4; settings.HeaderBlockMaxByteCount < headerEnd {
+		return nil, fmt.Errorf("%w: a %d-octet header block passes %d", ErrSmtpAssemble, headerEnd, settings.HeaderBlockMaxByteCount)
+	}
+	if settings.HeaderHeadMaxByteCount < headByteCount {
+		return nil, fmt.Errorf("%w: the single fields and the fixed signature's first line take %d octets, past %d, with a %d-octet From display name",
+			ErrSmtpAssemble, headByteCount, settings.HeaderHeadMaxByteCount, fromPhraseByteCount)
 	}
 	return wire, nil
 }

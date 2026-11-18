@@ -991,6 +991,7 @@ func (self *EvsRepo) verifyRound(ctx context.Context, refId Id, state *evsRefEpo
 			TokenPathIn: tokenPathIn,
 			Named:       path.named,
 			History:     path.version != 0,
+			Version:     path.version,
 			Since:       since,
 			Reserved:    reserved,
 		}
@@ -1002,6 +1003,12 @@ func (self *EvsRepo) verifyRound(ctx context.Context, refId Id, state *evsRefEpo
 			}
 		}
 		verified, more, err := self.client.verifier.VerifyPath(round.head, epochs, round.reply.paths[i])
+		if errors.Is(err, errEvsDropBodyMissing) && path.dropReads < self.client.settings.DropBodyReadCount {
+			// a drop's body the reply left out past its byte bound: the path read again, that body first
+			path.dropReads += 1
+			again = true
+			continue
+		}
 		if err != nil {
 			return false, err
 		}
