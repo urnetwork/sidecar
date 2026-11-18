@@ -69,31 +69,9 @@ type metadataListAddition struct {
 
 // Design-records wrote every entry before these into §2.8's block with the folds of 2026-11-16 (owner decision 252),
 // QD-857's with §10's, QD-199's with §11's, QD-990's with §13's (owner decision 424), QD-996's with §20's, QD-1015's
-// with the second fold of §7 (owner decision 557) and QD-950's with the second fold of §11 (owner decision 408);
-// each here waits for the next fold.
+// with the second fold of §7 (owner decision 557), QD-950's with the second fold of §11 (owner decision 408) and
+// QD-1034's with the late sweep's (owner decision 592); each here waits for the next fold.
 var metadataListAdditions = []metadataListAddition{
-	{
-		// QD-1034: the list's v54, for api-7's sees
-		question: "recovery-restored-bindings-removed",
-		block:    "# metadata_list.yml v53;",
-		list:     "# metadata_list.yml v54;",
-	},
-	{
-		question: "recovery-restored-bindings-removed",
-		block:    "# names.\n# Each row gives service,",
-		list: "# names.\n" +
-			"# v54, updated 2026-11-18 for the owner's answer QD-1034, adds no row: api-7 sees no restored binding's admission\n" +
-			"# proposals, since a cascade's void of a member's recovery binding leaves that member none and restores no\n" +
-			"# earlier one, so no such proposal is filed.\n" +
-			"# Each row gives service,",
-	},
-	{
-		// QD-1034: a cascade's void of a recovery binding leaves no binding, so the log holds no restored binding's
-		// admission proposal for api-7 to see; the recovery-signed statements stay, as owner decision 127 has them
-		question: "recovery-restored-bindings-removed",
-		block:    "(§6.9), and a restored binding's admission proposals included (owner decisions 127, 149), grant activations",
-		list:     "(§6.9), included (owner decision 127), grant activations",
-	},
 }
 
 // §2.8's block with each addition in place, in order, and a finding for each that does not apply.

@@ -402,28 +402,6 @@ Questions: `proposal-kind-restored-cosigned-tail-self-admit.md`.
 
 Waits on: the fix track base-restored-cosigned-ids.
 
-### QD-989: How does smtpedge learn which sidecar dialed a ur/smtpedge stream, the subject §8's mail_send is judged for, when the ur/ ticket names only the dialer's network and client?
-*Decided by the owner on 2026-11-16, asked one question at a time; owner decision 560. Folds into §9 Abstract socket listeners and the scheduler.*
-
-The wire, which waits on the code: §9.6's `SocketTicket` fence takes `bytes dialer_sidecar_id = 16` once socket.proto declares it, a design-records fold writing the line and dropping its `testFenceAdditions` entry in one commit (owner decision 273). The rest is folded (2026-11-17): the decision, §9.6's `ur/` tickets paragraph and a comment in the fence naming what joins it, §14.5's Authorization, and §2.8's sock-2 (list v45).
-
-Changes: §9.6's fence; socket.proto.
-
-Questions: `smtp-m9-13-dialer-sidecar.md`.
-
-Waits on: the fix track ur-ticket-dialer-sidecar.
-
-### QD-1013: How does sockets check a team member's Client-class token, which carries member_id and which the revocation record keeps no state for, with no SQL?
-*Decided by the owner on 2026-11-17, asked one question at a time; owner decision 561. Folds into §9 Abstract socket listeners and the scheduler.*
-
-The list and the test, which wait: §2.8's row for the revocation record's family gains member and user ids (I-18), and an FS case covers a membership's removal racing a projection. §2.8 holds no row for that family, `{rv_<network_id>_<k>}` (server/session/REVOKE-FINAL.md), so the words have no row to join. QD-1022 (owner, 2026-11-17; question `dr3-s7-s10-revocation-record-row.md`) has a design-records fold add one, api-16 or the next free api id, with its `planned` line, once the fix track revocation-record-members has settled the record's exact field forms: the fix track revocation-record-row, run in the design-records lane, that track's addition to a row that does not exist dropped. The FS case is the fix track's, and a §22.8 row for it, if it takes one, lands with sidecartest/fault's catalog, which holds §22.8's table row for row. The rest is folded (2026-11-17): the decision, §9.8's client tokens, §7.5's members and §19.10's Postgres row.
-
-Changes: §2.8; §22.8.
-
-Questions: `sock-client-verifier-member-credentials.md`, `dr3-s7-s10-revocation-record-row.md`.
-
-Waits on: the fix track revocation-record-members, then the fix track revocation-record-row (QD-1022).
-
 ### QD-1010: How does an app approve a multi-use template request, when SidecarApprovals.Decide carries no uses?
 *Decided by the owner on 2026-11-16, asked one question at a time; owner decision 574. Folds into §16 The local MCP server and record primitives.*
 
