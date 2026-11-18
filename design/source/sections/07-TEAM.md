@@ -1679,5 +1679,6 @@ All three rename routes (server/controller/account_controller.go:13,160-256) cal
 - **v0, app hosts (§23 M8; owner decision 197):** the forwarding Delegation and the `forward_only` mark with its exchange rule, the Delegation's `forward` fields reserved in config.proto at M2 with 7.9's records.
 - **v1, Team (M6):** members, roles, invitations, switching, OIDC, domains, JIT, SCIM and `scim_signer`, OAuth clients, full `ur-cli` admin, audit log, multi-admin teams, and config wraps for member devices past the first 1,000 (owner decision 144); the team directory, created with the team, its group under 7.9's leaves rule, and `ServiceSettings.directory` (owner decisions 170, 171, 182).
 - **v1, every network (§23's M10, with storage format 2; owner decision 169):** `VersioningRules` (§11.7), its type reserved at M2 with 7.9's records, and `IndexerSet`'s `search` service, which includes answering remote searches (§11.14; owner decisions 157, 163, 164, 175, 178).
-- **On app migration:** stage 3 (7.4).
+- **On app migration:** [stage 3](DESIGN-DEFER.md#team-stage-3-hard-gate) (7.4).
+- **Deferred:** DESIGN-DEFER.md holds an entry for stage 3 and for [this section's v1 set](DESIGN-DEFER.md#team-v1) (owner decision 587).
 - **Blocking:** the `admin_user_id` audit blocks members; stage 1 and D-TEAM-14 block the first sidecar, stage 2 the first desktop sidecar; token exchange and `rev/` block evs (§11); the config repo needs §10 and §11 and blocks §8's gates, and its records and log freeze at M2 (§23.8).

@@ -119,3 +119,6 @@ D['D-SDK-20'] = "Forwarding is `sidecar/device` plus the root's computed forward
 # The fold of DESIGN-DETAILS.md section 12 (2026-11-17): the engine's one order, commit, publish, close.
 assert D['D-BRIDGE-21'].startswith('A revocation swaps policy before'), 'BRIDGE engine row moved'
 D['D-BRIDGE-21'] = "Engine order: commit, publish, close; flows register rule and policy generation before dialing and recheck before the first byte."
+# The design-defer-doc fold (2026-11-18): Q-EVS-3's prefix rules are Later (owner decision 586).
+assert Q['Q-EVS-3'][1] == "Separate repos in v0; sidecar-enforced prefix rules in v1.", 'Q-EVS-3 row moved'
+Q['Q-EVS-3'] = (Q['Q-EVS-3'][0], "Separate repos at launch; sidecar-enforced prefix rules are Later (owner decision 586).")
