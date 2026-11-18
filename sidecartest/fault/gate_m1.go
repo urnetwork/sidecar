@@ -11,6 +11,10 @@
 
 package fault
 
+import (
+	"time"
+)
+
 // FS-54's three build legs: the release leg, the tagged build and promotion (OPS-M1-01, OPS-M1-02).
 var gateFs54Tests = []*GateTest{
 	{Repo: "server", Package: ".", Names: []string{"TestSidecarPendingBuildTags", "TestReleaseBuildRegistersNoPendingGroup"}},
@@ -88,8 +92,10 @@ var gateM1Sweep = RegisterGateSweep(&GateSweep{
 		},
 		{
 			Item: "§22.4's release fixture, from the consumer wiring (build's sidecar release step)",
+			// its make check takes over an hour and grows with the tree, past the tool's default bound, so it runs
+			// under the 3h run.sh's BUILD_TEST gives it (QD-1056, QD-1058)
 			Tests: []*GateTest{
-				{Repo: "build", Dir: "all", Package: ".", Tags: "sidecar_release_fixture", Names: []string{"TestSidecarReleaseFixture"}},
+				{Repo: "build", Dir: "all", Package: ".", Tags: "sidecar_release_fixture", Timeout: 3 * time.Hour, Names: []string{"TestSidecarReleaseFixture"}},
 			},
 		},
 	},
