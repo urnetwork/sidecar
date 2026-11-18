@@ -23,9 +23,10 @@
 //	writes     a push on either ref mode, this sidecar as committer (owner decision 81), sealing the call's run's
 //	           tainted bit as the call read it (McpCall.Tainted) in the push's provenance, so the version reads back
 //	           untrusted in any run where a tainted run wrote it; the session's agent rides as the commit's label,
-//	           and no agent_id is sealed, since a session holds a label and no agent id (question
-//	           evs-provenance-taint-session-agent-id). A file-mode ref by path CAS on base_version, a conflict
-//	           answering FAILED_PRECONDITION; a git-mode ref through the local tier's WriteAtTip, which rebuilds on a
+//	           and its agent_id in the network (McpSession.AgentId) is sealed beside the bit, where the host signs
+//	           provenance under that agent's subkey (owner decision 470; QD-981), an outward write's effect and action
+//	           carrying the same id; a session with no agent seals none. A file-mode ref by path CAS on base_version,
+//	           a conflict answering FAILED_PRECONDITION; a git-mode ref through the local tier's WriteAtTip, which rebuilds on a
 //	           newer tip while the path is unchanged, at most EvsSettings' WriteAtTipTryCount tips (owner decision
 //	           141), the tool calling it once and its tries running out answering a retryable failure; a daemon with
 //	           no local tier answers EVS_GIT_REF; versioning on alone, format 1's, off answering FAILED_PRECONDITION
@@ -501,12 +502,14 @@ func mcpEvsWrite(ctx context.Context, call *McpCall, repoId sidecar.Id, path str
 	if agent := call.Session.Agent(); agent != nil {
 		agentLabel = agent.Label
 	}
+	// the session's agent's id here, which the push's provenance seals (owner decision 470); nil for no agent
+	agentId := mcpCallAgentId(call)
 	// the run's taint as this call finds it, before anything is written: what the push's provenance seals, so a
 	// tainted run's words read back untrusted in every run (QD-042). An unbound session's placeholder reads tainted
 	tainted := call.Tainted()
 	shared := mcpEvsShared(network.RepoKind(repoId))
 	if shared && McpAgentConfigPath(call.Session.server.settings.Ingest, path) {
-		return mcpEvsWriteOutward(ctx, call, network, repoId, path, base, content, remove, message, agentLabel, tainted)
+		return mcpEvsWriteOutward(ctx, call, network, repoId, path, base, content, remove, message, agentLabel, agentId, tainted)
 	}
 	if shared && !remove {
 		scanner, err := sidecar.NewRedactor(rand.Reader)
@@ -521,7 +524,7 @@ func mcpEvsWrite(ctx context.Context, call *McpCall, repoId sidecar.Id, path str
 	if !remove {
 		write.Content = bytes.NewReader(content)
 	}
-	written, err := repo.WritePaths(ctx, &sidecar.EvsWritePathsArgs{Writes: []*sidecar.EvsPathWrite{write}, Tainted: tainted})
+	written, err := repo.WritePaths(ctx, &sidecar.EvsWritePathsArgs{Writes: []*sidecar.EvsPathWrite{write}, AgentId: agentId, Tainted: tainted})
 	if err == nil {
 		McpMeter(ctx, int64(len(content)))
 		return &mcpEvsWriteOut{Status: "written", Version: written.PathVersions[0], PushId: written.PushId.String()}, nil
@@ -532,7 +535,7 @@ func mcpEvsWrite(ctx context.Context, call *McpCall, repoId sidecar.Id, path str
 	// a git-mode ref: a commit through the local tier on the current tip, while the path is unchanged
 	committed, err := repo.WriteAtTip(ctx, &sidecar.EvsWriteAtTipArgs{
 		Path: path, BaseVersion: base, Content: content, Remove: remove, Message: message, AgentLabel: agentLabel,
-		Tainted: tainted,
+		AgentId: agentId, Tainted: tainted,
 	})
 	if err != nil {
 		return nil, mcpEvsError(err)
@@ -541,9 +544,10 @@ func mcpEvsWrite(ctx context.Context, call *McpCall, repoId sidecar.Id, path str
 	return &mcpEvsWriteOut{Status: "written", Version: committed.PathVersion, PushId: committed.PushId.String()}, nil
 }
 
-// An agent-config write or delete as an outward action (§16.5): its action, and the evs effect, through §5.4's gate.
+// An agent-config write or delete as an outward action (§16.5): its action, bound to the call's run and agent, and the
+// evs effect, sealing the same agent id, through §5.4's gate.
 func mcpEvsWriteOutward(ctx context.Context, call *McpCall, network McpEvsNetwork, repoId sidecar.Id, path string, base uint64,
-	content []byte, remove bool, message string, agentLabel string, tainted bool) (*mcpEvsWriteOut, error) {
+	content []byte, remove bool, message string, agentLabel string, agentId *sidecar.Id, tainted bool) (*mcpEvsWriteOut, error) {
 	authorizer, ok := call.Network.(mcpAuthorizer)
 	if !ok {
 		return nil, errMcpEvsOutward
@@ -562,12 +566,13 @@ func mcpEvsWriteOutward(ctx context.Context, call *McpCall, network McpEvsNetwor
 		return nil, errMcpEvsOutward
 	}
 	runId := call.RunId
-	sidecarAction, err := sidecar.NewSidecarAction(stored, sidecar.SidecarRiskNormal, sidecar.SidecarRiskNormal, &runId, nil)
+	sidecarAction, err := sidecar.NewSidecarAction(stored, sidecar.SidecarRiskNormal, sidecar.SidecarRiskNormal, &runId, agentId)
 	if err != nil {
 		return nil, errMcpEvsOutward
 	}
 	effect := &sidecar.EvsWriteEffect{
-		Path: path, BaseVersion: base, Remove: remove, Message: message, AgentLabel: agentLabel, Tainted: tainted,
+		Path: path, BaseVersion: base, Remove: remove, Message: message, AgentLabel: agentLabel, AgentId: agentId,
+		Tainted: tainted,
 	}
 	if !remove {
 		effect.Content = content

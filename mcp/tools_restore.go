@@ -263,8 +263,9 @@ func (self *mcpRestoreTool) handle(ctx context.Context, call *McpCall, in *mcpRu
 	if err != nil {
 		return nil, errMcpRestoreHeld
 	}
+	// the decision binds the calling run and its session's agent (owner decision 470)
 	callRunId := call.RunId
-	action, err := sidecar.NewSidecarAction(stored, sidecar.SidecarRiskNormal, sidecar.SidecarRiskNormal, &callRunId, nil)
+	action, err := sidecar.NewSidecarAction(stored, sidecar.SidecarRiskNormal, sidecar.SidecarRiskNormal, &callRunId, mcpCallAgentId(call))
 	if err != nil {
 		return nil, errMcpRestoreHeld
 	}

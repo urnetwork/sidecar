@@ -25,8 +25,12 @@ package fault
 //	           expiry, it is index_mismatch at the reproducer
 //	cut        a roll-up built before an erasure's CUT is refused 409 INDEX_EPOCH and rebuilt without the document
 //
-// Not here, each named for what it waits on: these on real engines and on T3 (a roll-up over EvsRepo, and evs's
-// purge after the commit); a device holding a stale all keeping a rolled bucket until its all records it, dropping it
+// The kill and lock clauses also run on real engines as the row's registered case (fs75.go): a roll-up through EvsRepo
+// whose first runner is killed holding the lock, on T2 here and on T3 through server's evshost
+// (server/fs74_t3_test.go), with each of its writes' answers lost.
+//
+// Not here, each named for what it waits on: the other clauses on real engines and on T3 (a merge, a promotion and a
+// reproducer over EvsRepo, and evs's purge after the commit); a device holding a stale all keeping a rolled bucket until its all records it, dropping it
 // at an ERASE and after 2W days (the retained bucket on a phone, SEARCH-M10-19's, beside a stale all); a phone's
 // §18.4 budget for a roll-up (SEARCH-M10-20's conditions, which the schedule's mayRun stands for here); both CLOSURE
 // orders against the roll-up (SEARCH-M10-17's eraser on the world's store, which takes no CLOSURE yet); a roll-up
@@ -696,4 +700,10 @@ func TestFs75AReproducerRebuildsTheRollUp(t *testing.T) {
 	if early.Mismatches == 0 || len(early.Matched) != 0 {
 		t.Fatalf("a roll-up signed before its bucket's expiry: %+v", early)
 	}
+}
+
+// FS-75's registered case on real engines (fs75.go), under every rule §22.8 gives the row, its writes' lost answers
+// included.
+func TestFs75OnEvs(t *testing.T) {
+	RunRow(t, "FS-75", "", nil)
 }
