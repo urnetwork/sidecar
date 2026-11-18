@@ -7,6 +7,13 @@
 //   - a scope is honored only while the newest verified state gives its subject that right on the repo (D-ACL-21):
 //     r while it reads R, rw and admin while it writes R, deposit while it may deposit there (QD-070, decided), so a
 //     subject a group edit or a Suspend drops loses it within §8.9's 5 s and not at the token's 15 minutes;
+//   - the guard asks the state for the strongest right the token holds of those the route's row takes, together with
+//     each weaker right of its role that the row takes, and the state honors the set only whole, as evs's guard asks
+//     over the one rights table (§10.6's checks row; QD-975, owner decision 563). A live repo's admin writes and reads
+//     and its writer reads, so the set asks them nothing more, while a deleted repo's standing admins hold admin alone
+//     (QD-880), so from the moment the RepoDelete is in the state their token passes only the admin rows (POST
+//     /gkm/groups, a re-form and the ladder), which repo/'s state closes outside a re-seed. GET /gkm/welcomes, an MLS
+//     route QD-1040 sets aside for the review phase to remove, still asks its own one right of each pointer's repo;
 //   - rev/ for the token's three subjects is read on every write (§7.8), and voids a token issued before its
 //     not_before;
 //   - a token whose only repo scopes are deposit reaches GET drop-key and nothing else, and every other route needs
@@ -103,9 +110,11 @@ type GkmAuthState interface {
 	CheckRevocation(ctx context.Context, principal *sidecar.Principal) error
 	// What the token's network's state holds of a sidecar: Denied when it never admitted it.
 	Sidecar(principal *sidecar.Principal, sidecarId sidecar.Id) (*GkmSidecarFacts, GkmAuthAnswer)
-	// Whether the newest verified state gives the token's sidecar right on repoId at now for the gkm audience
-	// (D-ACL-21): AclState.EvsAccess's rights, in which the config gives member devices but read_only ones gkm rw.
-	HonorScope(principal *sidecar.Principal, repoId sidecar.Id, right sidecar.AclEvsRights, now time.Time) GkmAuthAnswer
+	// Whether the newest verified state gives the token's sidecar every right in rights on repoId at now for the gkm
+	// audience (D-ACL-21): AclState.EvsAccess's rights, in which the config gives member devices but read_only ones
+	// gkm rw. The set is honored only whole, as EvsAuthState.HonorScope honors one: a deleted repo's standing admin
+	// holds admin alone (QD-880), so a set naming rw or r beside admin is refused it (QD-975).
+	HonorScope(principal *sidecar.Principal, repoId sidecar.Id, rights sidecar.AclEvsRights, now time.Time) GkmAuthAnswer
 	// Whether sidecarId reads repoId at now in the newest verified state (§8.12's RepoReaders): a KeyPackage claim's
 	// target and a late delivery's recipient must.
 	Reads(principal *sidecar.Principal, repoId sidecar.Id, sidecarId sidecar.Id, now time.Time) GkmAuthAnswer
@@ -243,8 +252,8 @@ func (self *gkmTokenScopes) reposWith(rights sidecar.AclEvsRights) []sidecar.Id 
 	return repoIds
 }
 
-// The one right a check honors: the strongest that both the token holds and the route takes, so a token holding
-// admin on a route taking r, rw or admin is held to admin. Zero when they share none.
+// The strongest right that both the token holds and the route takes, which the guard asks the state for together
+// with each weaker right of its role that the route takes (GkmRequest.AuthorizeRepo). Zero when they share none.
 func gkmStrongestRight(rights sidecar.AclEvsRights) sidecar.AclEvsRights {
 	for _, right := range []sidecar.AclEvsRights{sidecar.AclEvsAdmin, sidecar.AclEvsWrite, sidecar.AclEvsRead, sidecar.AclEvsDeposit} {
 		if rights.Has(right) {
@@ -254,7 +263,9 @@ func gkmStrongestRight(rights sidecar.AclEvsRights) sidecar.AclEvsRights {
 	return 0
 }
 
-// What a right implies within its role: the rights recorded as honored once the state agrees.
+// What a right's role carries with it: admin write and read, write read, and read or deposit nothing more. The guard
+// asks the state for those of them the route takes beside the right itself, so a live repo's admin and writer are
+// asked nothing they do not hold.
 func gkmImpliedRights(right sidecar.AclEvsRights) sidecar.AclEvsRights {
 	switch right {
 	case sidecar.AclEvsAdmin:

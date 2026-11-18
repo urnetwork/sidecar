@@ -404,7 +404,9 @@ type GkmRequest struct {
 	// The route's repo and group, once authorized.
 	RepoId  sidecar.Id
 	GroupId *sidecar.Id
-	// What the token holds on RepoId and the state honored: the strongest right the row takes, with what it implies.
+	// What the token holds on RepoId and the state honored whole: the strongest right the row takes, with each weaker
+	// right of its role that the row also takes, so a deleted repo's standing admin passed on an admin row holds admin
+	// and nothing it implies on a live repo.
 	Rights sidecar.AclEvsRights
 	// The repo's metadata cluster, where its group's objects live.
 	Cluster sidecar.BlobCluster
@@ -548,20 +550,26 @@ func (self *GkmRequest) checkMember() bool {
 	return true
 }
 
-// Step 7 for repoId: the strongest right the token holds of those the route's row takes, honored only while the
-// newest verified state agrees, then the repo's cluster from place/, and for a write repo/'s state. A route whose
-// body names its repo calls this itself before it answers a success. false once it has answered the refusal.
+// Step 7 for repoId: the strongest right the token holds of those the route's row takes, asked of the newest verified
+// state together with each weaker right of its role that the row takes and honored only whole (§10.6's checks row;
+// QD-975), then the repo's cluster from place/, and for a write repo/'s state. A live repo's admin writes and reads
+// and its writer reads, so the set asks them no more than the one right would, while a deleted repo's standing admin
+// holds admin alone (QD-880), so its admin token passes only the rows that take admin and nothing weaker, and no read
+// or other write, before repo/ shows deleted as after. A route whose body names its repo calls this itself before it
+// answers a success. false once it has answered the refusal.
 func (self *GkmRequest) AuthorizeRepo(repoId sidecar.Id) bool {
 	if repoId == (sidecar.Id{}) {
 		self.BadRequest()
 		return false
 	}
-	right := gkmStrongestRight(self.scopes.repoIdRights[repoId] & self.route.Scope.rights())
+	rowRights := self.route.Scope.rights()
+	right := gkmStrongestRight(self.scopes.repoIdRights[repoId] & rowRights)
 	if right == 0 {
 		self.Forbidden()
 		return false
 	}
-	switch self.engine.deps.AuthState.HonorScope(self.Principal, repoId, right, self.Now()) {
+	rights := right | gkmImpliedRights(right)&rowRights
+	switch self.engine.deps.AuthState.HonorScope(self.Principal, repoId, rights, self.Now()) {
 	case GkmAuthAllowed:
 	case GkmAuthDenied:
 		self.Forbidden()
@@ -585,7 +593,7 @@ func (self *GkmRequest) AuthorizeRepo(repoId sidecar.Id) bool {
 		return false
 	}
 	self.RepoId = repoId
-	self.Rights = gkmImpliedRights(right)
+	self.Rights = rights
 	self.Cluster = cluster
 	if self.route.Write && self.route.RepoState != gkmRepoStateAny && !self.CheckRepoWritable() {
 		return false

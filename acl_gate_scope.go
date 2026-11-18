@@ -21,8 +21,8 @@
 //
 // A repo whose newest RepoDelete stands unrestored honors admin alone, and only for its standing admins (QD-880):
 // there admin implies neither write nor read, so a scope asking admin together with rw or r is refused, as r, rw and
-// deposit are for everyone. evs's guard, taking an admin token on a route a weaker right also opens, asks for both
-// (EvsRequest.AuthorizeRepo); gkm's asks for the one strongest right and rechecks repo/ before each write.
+// deposit are for everyone. evs's guard and gkm's, taking an admin token on a route a weaker right also opens, ask for
+// both (EvsRequest.AuthorizeRepo, GkmRequest.AuthorizeRepo; QD-975), and gkm's rechecks repo/ before each write.
 //
 // Cold state is no pass: a network the cache holds nothing of, or holds with nothing loaded, answers AclScopeUnknown,
 // which every gate answers 503, and a network the cache had never heard of is told to it so its load starts.

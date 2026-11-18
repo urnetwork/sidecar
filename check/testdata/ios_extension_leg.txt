@@ -2,6 +2,8 @@
 # forwarding role's file closure (D-SDK-20; DESIGN-DETAILS 4.2.3; REPO-M4-01). make check fails a root or protocol
 # file either extension leg compiles that this list does not name; every other root file carries
 # //go:build !ios_extension, and protocol/Makefile writes that tag on each generated file this list does not name.
+# A file whose init sets a hook a file here declares is on it too, unless check/legs_closure_test.go's
+# iosExtensionLegSeams names it as a deliberate seam, with its reason (QD-1063, QD-1065).
 # The list may shrink freely and grows only in a commit that edits it. It is computed, never hand-picked:
 #   make ios-extension-leg                                         compares it with the closure
 #   SIDECAR_REGENERATE_IOS_EXTENSION_LEG=1 make ios-extension-leg  rewrites it
@@ -96,34 +98,18 @@ config_settings.go
 config_state.go
 config_state_at.go
 config_versioning.go
-config_workers.go
 config_writer.go
 directory_auth.go
-directory_card.go
 directory_client.go
 directory_component.go
-directory_decide.go
 directory_decode.go
-directory_erasure.go
 directory_fields.go
 directory_fold.go
 directory_format.go
-directory_format2.go
-directory_limits.go
-directory_notice.go
-directory_phone.go
-directory_receipt.go
-directory_removal.go
-directory_repair.go
 directory_repo.go
-directory_repo_file.go
-directory_request.go
-directory_retention.go
-directory_revoke.go
 directory_rules.go
 directory_store.go
 directory_sync.go
-directory_view.go
 dns_label.go
 envelope_budget.go
 envelope_chunk.go
@@ -161,10 +147,8 @@ evs_plan.go
 evs_plan_transition.go
 evs_plan_versionless.go
 evs_proof.go
-evs_provenance.go
 evs_push_record.go
 evs_read.go
-evs_read_provenance.go
 evs_reconstruct.go
 evs_record.go
 evs_ref.go
@@ -221,13 +205,11 @@ id.go
 identity_act.go
 identity_act_stale.go
 identity_admission.go
-identity_agent.go
 identity_alarms.go
 identity_anchor.go
 identity_approvals.go
 identity_authority.go
 identity_binding.go
-identity_cleanup.go
 identity_committer.go
 identity_credential.go
 identity_devices.go
@@ -287,10 +269,8 @@ push_state.go
 push_topic.go
 record_accounting.go
 record_action_build.go
-record_action_detail.go
 record_action_kinds.go
 record_action_rules.go
-record_agent_body.go
 record_approval_log.go
 record_batch.go
 record_body.go
@@ -298,7 +278,6 @@ record_chain.go
 record_copy.go
 record_deposit.go
 record_disclose.go
-record_erase.go
 record_export.go
 record_export_ocsf.go
 record_export_otel.go
@@ -318,7 +297,6 @@ record_receipt.go
 record_redact.go
 record_redact_entropy.go
 record_redact_rules.go
-record_retention.go
 record_route.go
 record_run.go
 record_seal.go
@@ -363,7 +341,6 @@ settings_validate.go
 sidecar.go
 sidecar_component.go
 sidecar_core.go
-sidecar_directory_acts.go
 sidecar_gate.go
 sidecar_generation.go
 sidecar_host.go
@@ -384,7 +361,6 @@ state_dir.go
 state_json.go
 state_log.go
 state_seal.go
-state_search_memory.go
 state_store.go
 stream_buffer.go
 stream_conn.go

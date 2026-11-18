@@ -50,11 +50,12 @@ func (self *gkmClientEngineState) Sidecar(principal *sidecar.Principal, sidecarI
 	return &factsCopy, gkmservice.GkmAuthAllowed
 }
 
-func (self *gkmClientEngineState) HonorScope(principal *sidecar.Principal, repoId sidecar.Id, right sidecar.AclEvsRights, now time.Time) gkmservice.GkmAuthAnswer {
+// Honored only when the sidecar holds every right of the set (QD-975).
+func (self *gkmClientEngineState) HonorScope(principal *sidecar.Principal, repoId sidecar.Id, rights sidecar.AclEvsRights, now time.Time) gkmservice.GkmAuthAnswer {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	held := self.sidecarRights[sidecar.Id(*principal.SidecarId)]
-	if right != 0 && held.Has(right) {
+	if rights != 0 && held.Has(rights) {
 		return gkmservice.GkmAuthAllowed
 	}
 	return gkmservice.GkmAuthDenied

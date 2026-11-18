@@ -122,16 +122,19 @@ func fsKeysDelegationAnswer(allowed bool) gkmservice.GkmAuthAnswer {
 	return gkmservice.GkmAuthDenied
 }
 
-func (self *fsKeysDelegationState) HonorScope(principal *sidecar.Principal, repoId sidecar.Id, right sidecar.AclEvsRights, now time.Time) gkmservice.GkmAuthAnswer {
+// Honored only when the tip gives the sidecar every right of the set (QD-975): r while it reads the repo, rw and admin
+// while it writes it, and r beside them, as a live repo's writer reads (AclState.EvsAccess); deposit to no one.
+func (self *fsKeysDelegationState) HonorScope(principal *sidecar.Principal, repoId sidecar.Id, rights sidecar.AclEvsRights, now time.Time) gkmservice.GkmAuthAnswer {
 	view := self.log.Tip()
 	sidecarId := sidecar.Id(*principal.SidecarId)
-	switch right {
-	case sidecar.AclEvsRead:
-		return fsKeysDelegationAnswer(slices.Contains(view.RepoReadersAt(repoId, now), sidecarId))
-	case sidecar.AclEvsWrite, sidecar.AclEvsAdmin:
-		return fsKeysDelegationAnswer(slices.Contains(view.RepoWriters(repoId), sidecarId))
+	held := sidecar.AclEvsRights(0)
+	if slices.Contains(view.RepoReadersAt(repoId, now), sidecarId) {
+		held |= sidecar.AclEvsRead
 	}
-	return gkmservice.GkmAuthDenied
+	if slices.Contains(view.RepoWriters(repoId), sidecarId) {
+		held |= sidecar.AclEvsAdmin | sidecar.AclEvsWrite | sidecar.AclEvsRead
+	}
+	return fsKeysDelegationAnswer(rights != 0 && held.Has(rights))
 }
 
 func (self *fsKeysDelegationState) Reads(principal *sidecar.Principal, repoId sidecar.Id, sidecarId sidecar.Id, now time.Time) gkmservice.GkmAuthAnswer {

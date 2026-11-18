@@ -82,8 +82,10 @@ func (self *fsKeysBudgetState) Sidecar(principal *sidecar.Principal, sidecarId s
 	return &gkmservice.GkmSidecarFacts{IdentityPublicKey: identityKey, MemberDevice: true, MemberId: &memberId}, gkmservice.GkmAuthAllowed
 }
 
-func (self *fsKeysBudgetState) HonorScope(principal *sidecar.Principal, repoId sidecar.Id, right sidecar.AclEvsRights, now time.Time) gkmservice.GkmAuthAnswer {
-	if right == sidecar.AclEvsAdmin {
+// Every sidecar holds every right of every repo but admin, so a set is honored unless it names admin (QD-975).
+func (self *fsKeysBudgetState) HonorScope(principal *sidecar.Principal, repoId sidecar.Id, rights sidecar.AclEvsRights, now time.Time) gkmservice.GkmAuthAnswer {
+	held := sidecar.AclEvsDeposit | sidecar.AclEvsRead | sidecar.AclEvsWrite
+	if rights == 0 || !held.Has(rights) {
 		return gkmservice.GkmAuthDenied
 	}
 	return gkmservice.GkmAuthAllowed

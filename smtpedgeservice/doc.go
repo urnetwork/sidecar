@@ -28,7 +28,7 @@
 //     handlers; lease.go, the lease on meter smtp; send_log.go, the batched send records; outcome.go,
 //     SmtpOutcome.
 //   - attribution.go, which network a report names and how surely; halt.go and halt_reload.go, §14.8's
-//     ladder and the edges' reload of halts.
+//     ladder and the edges' reload of halts; reconcile.go, §14.8's RUA check, which taskworker runs.
 //   - config.go, smtpedge.yml as the edge block reads it.
 //
 // Nothing here logs report text, an envelope, a recipient or an address (I-13; §2.8 mx-4).

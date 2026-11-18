@@ -14,6 +14,10 @@
 //	deleted     a repo's RepoDelete leaves its standing admin gkm's admin scope alone (QD-880): r and rw are refused
 //	            to everyone, so a token held to either passes no route, and with repo/ deleted the admin's own write
 //	            is refused by gkm's repo/ recheck; a RepoRestore brings the scopes back
+//	guard       gkm's guard asks the state for a token's strongest right on a route's row together with each weaker
+//	            right of its role the row takes, honored only whole (QD-975): of the routes wraps-only v0 keeps
+//	            (QD-1040), a deleted repo's admin token passes group create alone while repo/ is active, and nothing
+//	            once repo/ shows deleted; a live repo's admin and writer pass them as before
 //
 // No sleeps: each load is awaited by the cache's OnLoad, a load is held open in its source, and the clock is the
 // Net's.
@@ -816,4 +820,197 @@ func TestGkmAuthStateHoldsADeletedReposAdminToAdminAlone(t *testing.T) {
 	}))
 	world.load()
 	check("restored", false)
+}
+
+// KF1's request for repoId's first group, groupId, by signer: its GroupForm and gen/1 at the tip and the Net's clock,
+// with genWrap as its GenWrap, which gkm checks only once the guard and the form's signer rule have passed it, so 72
+// bytes give a create that lands and any other length one refused 400 past both. The holders hash and the GroupInfo
+// are stand-ins gkm stores and never opens, as the config repo's world makes them (acl_config_repo_test.go).
+func (self *gkmAclStateWorld) groupCreate(signer *AdmissionDevice, repoId sidecar.Id, groupId sidecar.Id, genWrap []byte) []byte {
+	self.t.Helper()
+	sign := aclConfigRepoSign(signer)
+	formBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.GroupForm{
+		RepoId: repoId.Bytes(), GroupId: groupId.Bytes(), Generation: 1, Auth: self.admission.Tip(),
+	})
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	form, err := sign(aclConfigRepoGroupFormPurpose, bridge.SignedType_SIGNED_GROUP_FORM, formBytes, nil)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	holdersSha256 := sha256.Sum256([]byte("gkm guard repo holders"))
+	_, rotate, err := sidecar.NewGkmFirstGeneration(repoId, groupId, &sidecar.GkmGenerationArgs{
+		Cause:         sidecar.GkmCauseRequest,
+		Auth:          self.admission.Tip(),
+		Time:          self.net.Clock().Now(),
+		HoldersSha256: holdersSha256[:],
+	})
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	signedRotate, err := sidecar.SignGenRotate(rotate, sign)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	body, err := proto.Marshal(&protocol.GkmGroupCreateRequest{
+		Form:            form,
+		GenRotate:       signedRotate,
+		GenWrap:         genWrap,
+		SealedGroupInfo: []byte("sealed group info of the guard repo's epoch 0"),
+		CipherSuite:     aclConfigRepoCipherSuite,
+	})
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	return body
+}
+
+// QD-975 through gkm's guard, the real state over the real gate cache on the admission world's log: the guard asks the
+// state for the strongest right a token holds of those a route's row takes together with each weaker right of its
+// role that the row takes, and the state honors the set only whole (§10.6's checks row). A live repo's admin and
+// writer pass every route wraps-only v0 keeps (QD-1040) as before: group create, the generations and their claims,
+// the deliveries and recovery deliveries, and the repo's forms and drop key. Once the repo's RepoDelete is in the
+// gate's state its standing admin holds admin alone (QD-880), so its admin token passes group create, the one admin
+// route of them, and is refused 403 on every other, while repo/ is still active and once it shows deleted, when the
+// repo/ recheck closes group create too; the writer passes none, and a RepoRestore brings every route back. The MLS
+// routes QD-1040 sets aside keep their own tests.
+func TestGkmGuardHoldsADeletedReposAdminTokenToItsAdminRoute(t *testing.T) {
+	world := newGkmAclStateWorld(t)
+	admission := world.admission
+	now := world.net.Clock().Now
+	_, admin := admission.ConsentedMember("gkm guard admin")
+	_, writer := admission.ConsentedMember("gkm guard writer")
+	repoId := admission.Id("gkm guard repo")
+	admission.MustLand(admission.Sign(admin, bridge.SignedType_SIGNED_REPO_CREATE, &protocol.RepoCreate{
+		Header: admission.Header(), RepoId: repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL,
+	}))
+	admission.MustLand(admission.Sign(admin, bridge.SignedType_SIGNED_REPO_GRANT, &protocol.RepoGrant{
+		Header: admission.Header(), RepoId: repoId.Bytes(), Subject: writer.SidecarId.Bytes(), Role: protocol.RepoGrantRole_REPO_GRANT_ROLE_WRITER,
+	}))
+	world.load()
+	world.place(repoId, admin)
+	first, err := world.net.Host().Blobs.FirstCluster()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoObject := &protocol.EvsRepoObject{RepoId: repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL, State: protocol.EvsRepoState_EVS_REPO_ACTIVE, Format: 1}
+	writeRepo := func(etag string) string {
+		t.Helper()
+		repoBytes, err := proto.Marshal(repoObject)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if etag == "" {
+			etag, err = first.PutIfNoneMatch(t.Context(), gkmservice.GkmEvsRepoKey(repoId), repoBytes, nil)
+		} else {
+			etag, err = first.PutIfMatch(t.Context(), gkmservice.GkmEvsRepoKey(repoId), etag, repoBytes, nil)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		// gkm rereads repo/ once its cache of it has passed
+		world.net.Clock().Advance(gkmservice.DefaultGkmServiceSettings().RepoCacheTtl)
+		return etag
+	}
+	repoEtag := writeRepo("")
+
+	// the repo's group, formed under the admin's admin scope as KF1 forms it
+	adminScope, writerScope := gkmAclStateScope(repoId, "admin"), gkmAclStateScope(repoId, "rw")
+	groupId := admission.Id("gkm guard group")
+	if status := world.serveBody(http.MethodPost, "/gkm/groups", world.groupCreate(admin, repoId, groupId, bytes.Repeat([]byte{7}, 24+32+16)), admin, adminScope); status != http.StatusOK {
+		t.Fatalf("the group's creation: %d", status)
+	}
+
+	group := "/gkm/groups/" + sidecar.EvsKeyId(groupId)
+	repo := "/gkm/repos/" + sidecar.EvsKeyId(repoId)
+	routes := []struct {
+		name   string
+		method string
+		path   string
+		// the request's body from a device, nil for none
+		body func(device *AdmissionDevice) []byte
+		// what a request the guard passes is answered: a read's 200, an empty write's 400 from its handler, and a
+		// group create whose GenWrap is short refused 400 past its form's signer rule
+		passed int
+	}{
+		{name: "the forms", method: http.MethodGet, path: gkmAclStateFormsPath(repoId), passed: http.StatusOK},
+		{name: "the generations", method: http.MethodGet, path: group + "/gen", passed: http.StatusOK},
+		{name: "the own wraps", method: http.MethodGet, path: group + "/wraps/1", passed: http.StatusOK},
+		{name: "the drop key", method: http.MethodGet, path: repo + "/drop-key", passed: http.StatusOK},
+		{name: "a generation claim", method: http.MethodPost, path: group + "/gen/2", passed: http.StatusBadRequest},
+		{name: "a wrap batch", method: http.MethodPost, path: group + "/wraps/1/0123456789abcdef", passed: http.StatusBadRequest},
+		{name: "a recovery wrap batch", method: http.MethodPost, path: group + "/recovery-wraps/1/0123456789abcdef", passed: http.StatusBadRequest},
+		{name: "a group create", method: http.MethodPost, path: "/gkm/groups", body: func(device *AdmissionDevice) []byte {
+			return world.groupCreate(device, repoId, admission.Id("gkm guard second group"), []byte("short"))
+		}, passed: http.StatusBadRequest},
+	}
+	// a writer's rw reaches every route but group create, whose row takes admin alone
+	every, writerRoutes := []string{}, []string{}
+	for _, route := range routes {
+		every = append(every, route.name)
+		if route.name != "a group create" {
+			writerRoutes = append(writerRoutes, route.name)
+		}
+	}
+	allowed, denied := gkmservice.GkmAuthAllowed, gkmservice.GkmAuthDenied
+	check := func(phase string, adminPasses []string, writerPasses []string, adminSet gkmservice.GkmAuthAnswer) {
+		t.Helper()
+		// the set the guard asks of an admin token on a read, honored only whole, beside the admin right alone
+		set := sidecar.AclEvsAdmin | sidecar.AclEvsWrite | sidecar.AclEvsRead
+		if answer := world.state.HonorScope(world.principal(admin), repoId, set, now()); answer != adminSet {
+			t.Errorf("%s: the admin's admin, rw and r: %d, want %d", phase, answer, adminSet)
+		}
+		if answer := world.state.HonorScope(world.principal(admin), repoId, sidecar.AclEvsAdmin, now()); answer != allowed {
+			t.Errorf("%s: the admin's admin alone: %d", phase, answer)
+		}
+		for _, route := range routes {
+			for _, c := range []struct {
+				name   string
+				device *AdmissionDevice
+				scope  string
+				passes []string
+			}{
+				{name: "the admin's admin token", device: admin, scope: adminScope, passes: adminPasses},
+				{name: "the writer's rw token", device: writer, scope: writerScope, passes: writerPasses},
+			} {
+				var body []byte
+				if route.body != nil {
+					body = route.body(c.device)
+				}
+				want := http.StatusForbidden
+				if slices.Contains(c.passes, route.name) {
+					want = route.passed
+				}
+				if got := world.serveBody(route.method, route.path, body, c.device, c.scope); got != want {
+					t.Errorf("%s: %s: %s: %d, want %d", phase, c.name, route.name, got, want)
+				}
+			}
+		}
+	}
+	check("live", every, writerRoutes, allowed)
+
+	deletionId := admission.Id("gkm guard deletion")
+	admission.MustLand(admission.Sign(admin, bridge.SignedType_SIGNED_REPO_DELETE, &protocol.RepoDelete{
+		Header: admission.Header(), RepoId: repoId.Bytes(), DeletionId: deletionId.Bytes(),
+	}))
+	world.load()
+	// before repo/ shows deleted: the admin row alone, which repo/'s active state still takes
+	check("deleted", []string{"a group create"}, nil, denied)
+
+	// evs's DELETE moves repo/ to deleted: group create's repo/ recheck refuses it too, the re-seed mode being off
+	repoObject.State = protocol.EvsRepoState_EVS_REPO_DELETED
+	repoObject.DeletionId = deletionId.Bytes()
+	repoEtag = writeRepo(repoEtag)
+	check("repo/ deleted", nil, nil, denied)
+
+	// a RepoRestore, and restore moving repo/ back to active
+	admission.MustLand(admission.Sign(admin, bridge.SignedType_SIGNED_REPO_RESTORE, &protocol.RepoRestore{
+		Header: admission.Header(), RepoId: repoId.Bytes(), DeletionId: deletionId.Bytes(),
+	}))
+	world.load()
+	repoObject.State = protocol.EvsRepoState_EVS_REPO_ACTIVE
+	repoObject.DeletionId = nil
+	writeRepo(repoEtag)
+	check("restored", every, writerRoutes, allowed)
 }
