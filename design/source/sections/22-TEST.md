@@ -485,26 +485,17 @@ a compromise revocation parks the closure P from its since_n, counting each reco
   admits E and E admits F, all before A's revocation: E and F parked); earlier records
   stay; parked devices read, write and witness nothing (a shrink); a RecoveryBind or
   RecoveryRebind, KeyRegister or EvsShare a device in P signed is void until a signer
-  outside P signs it again; a void restores the newest earlier binding not void, which
-  until so re-signed takes no wrap and admits only through the 72 h window, M's devices
-  alarming, so K' admits nothing, nor at once a code a voided compromise rebind had
-  retired: with M outside the AdminSet, self_admit on and A its only device, M's restored
-  code K's plain SidecarAdmit of M's new device N is refused, and K's AuthorityProposal of
-  that admission activates 72 h after its entry with no counted cosign unless an AdminSet
-  device's RecoveryVeto lands first (one at 71 h wins), with self_admit off only on one
-  admin's cosign as well, admins' devices showing recovery_window meanwhile; admitted, N,
-  which no RecoveryWrap reaches, uploads its ReaderKey and no KeyPackage, takes the late
-  ReaderWrap of the config's current generation a config writer gives it (KF2), and again
-  the one a later rotation stages, and from its RK_g opens the config head and checks its
-  chain to the genesis K's genesis_sig signs before any commit, wrap, sealed write or
-  further statement, no Add preceding that; it then reads the config, self-joins the
-  config group by the GroupInfo that RK_g opens, is added to M's other groups by KF2 once
-  it uploads KeyPackages, and offers recovery-rotate, whose rebind gives M a current
-  binding again, while given instead a ReaderWrap the server forged to its ReaderKey,
-  over a matching C_g and a forged log, N raises head_alarm (fork) and acts no further
-  (§7.9's anchor and restored rows); again with a second device D of M, which sealed
-  keychain.wrap to K' on applying A's rebind: D re-seals it at the void with no HPKE copy
-  while M has no current binding and raises recovery_rebind naming that span, A's
+  outside P signs it again; a void of M's binding in effect leaves M none and restores no
+  earlier one (owner decision 592), M's devices alarming, so neither K' nor the code K a
+  voided compromise rebind had retired admits anything: with M outside the AdminSet and A
+  its only device, K's plain SidecarAdmit of M's new device N and K's AuthorityProposal of
+  it are both refused, self_admit on or off, no rotation wraps to K or K', ur login
+  --recover on either says what is left, and an admin's admission of N admits it parked
+  for M's owner-bound repos (owner decision 126); again with a second device D of M, which
+  sealed keychain.wrap to K' on applying A's rebind: D re-seals it at the void with no
+  HPKE copy while M has no binding and raises recovery_rebind naming that span, D's ur
+  keychain recovery-rotate then binds a fresh code by a RecoveryBind whose prev_sha256 is
+  empty, which takes wraps and admits as a first binding does, A's
   revocation lists D, and each device that may revoke D offers its compromise revocation
   from the rebind's entry, after which the identity key in a backup of D taken in that
   span, opened under K', signs nothing members accept, an AdmissionConfirm of E or a
@@ -1420,17 +1411,18 @@ FS-15  §10    an agent removed with every leaf offline: an agent rotates with R
               falls below its parent's (DESIGN-DETAILS.md section 6)
 FS-16  §7     the recovery window on a fake clock at k = 1 and k = 2: backdating, late         FI-3        T2     M2-out
               publication, replay, restart, an authority change, RecoveryRebind, a veto and
-              finalization at once, again for a scoped admission by a binding a void restored,
-              which needs no counted cosign (owner decision 149); a recovery cosign 72 h after
-              an admin's proposal activates only 72 h after the cosign, and a veto between
-              them wins; a RecoveryRebind of the cosigning code's member, not the subject,
-              voids the proposal; a veto backdated after an activation: devices past it only
-              alarm, those before it fork until a compromise revocation of the recovered
-              device; a code-only recovery served a forged genesis whose log admits the real
-              rotators alarms and seals nothing; across a fold, a recovery proposal open at a
-              base activates at its tick, T_p + 72 h, at every reader, a new device and a
-              rows-only gate alike, and a veto or a rebind in the base's tail closes it at
-              each of them (DESIGN-DETAILS.md section 5)
+              finalization at once; a recovery admission by a code whose binding a cascade
+              voided, plain or proposed, refused, since a void restores no earlier binding
+              (owner decision 592); a recovery cosign 72 h after an admin's proposal activates
+              only 72 h after the cosign, and a veto between them wins; a RecoveryRebind of
+              the cosigning code's member, not the subject, voids the proposal; a veto
+              backdated after an activation: devices past it only alarm, those before it fork
+              until a compromise revocation of the recovered device; a code-only recovery
+              served a forged genesis whose log admits the real rotators alarms and seals
+              nothing; across a fold, a recovery proposal open at a base activates at its
+              tick, T_p + 72 h, at every reader, a new device and a rows-only gate alike, and
+              a veto or a rebind in the base's tail closes it at each of them
+              (DESIGN-DETAILS.md section 5)
 FS-17  §6,11  one ref forked under an unchanged epoch; both peers replay, then meet: a fork    FI-10       T2     M2-out
               alarm or an unwitnessed status, more refs than one message carries covered
               within ceil(refs/16) rounds; a generation fork two agents see: GenHead reports

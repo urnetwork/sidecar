@@ -128,8 +128,10 @@ at its next push, and the erasure's CLOSUREs rewrite each file that held a liste
 slots included, in no order. The diff, its base, kept slots, composed merges and roll-ups went with
 the invariant that held them, ChainsResolve, its twins (DiffOnListed, ReusePinned, CleanupReferenced,
 MergeRemovesLarge) and three reach states. The cfg's CUT now lists d1 as its eraser read it
-(CutVersion "read"); a CUT listing d1 as committed when it lands is the `cut-commit` ground. Every run
-was on 2026-11-18 on 6 workers, on a host the build lanes were loading at a load average between 70
+(CutVersion "read"); a CUT listing d1 as committed when it lands is the `cut-commit` ground. The spec,
+its cfg and run-tlc.sh are those 68a26f8c landed, and its companions those 318602d6 landed, which no
+later commit changed, so every run here is of one model. Every run was on 2026-11-18, on 6 workers
+unless its block says otherwise, on a host the build lanes were loading at a load average between 55
 and 105 on 14 cores, so a time here is several times an idle host's. A breadth-first run on several
 workers may count a few states more or fewer from one run to the next, and a twin's count is what TLC
 had explored when it met its violation.
@@ -166,7 +168,9 @@ grounds below stand in for them.
 ### Each twin's ground as its control
 
 `run-tlc.sh control IndexRollup <Twin>`: the design at the twin's bounds, every invariant of the cfg
-holding, so a twin's refusal is its broken rule's and not its ground's.
+holding, so a twin's refusal is its broken rule's and not its ground's. Every twin's control passes.
+PromoteBlind's, the widest, d2 and d3 through three events with skew and everything but the erasure,
+ran on 3 workers at c2484175.
 
 ```text
 == PASS control-NoEpochCheck: exit 0, 41 distinct states, depth 11, 02s
@@ -185,6 +189,9 @@ holding, so a twin's refusal is its broken rule's and not its ground's.
 == PASS control-CleanupUnabsorbed: exit 0, 2824 distinct states, depth 19, 03s
 == PASS control-NoPromote: exit 0, 16803 distinct states, depth 23, 19s
 == PASS control-NoPromoteLive: exit 0, 12203 distinct states, depth 24, 15s
+== PASS control-PromoteBlind: exit 0, 3648706 distinct states, depth 32, 46min 56s
+== PASS control-IndexSupersede: exit 0, 16803 distinct states, depth 23, 51s
+== PASS control-LongLife: exit 0, 16803 distinct states, depth 24, 32s
 ```
 
 ### The design grounds
@@ -208,6 +215,71 @@ only that the behaviors it drew kept every invariant.
 == PASS ground-live-windows: exit 0, 61182 distinct states, depth 34, 01min 51s
 == PASS ground-rollers-epoch: exit 0, 1130471 distinct states, depth 35, 08min 32s
 == PASS ground-cfg-simulation: exit 0, simulation, 1571928 states generated, 11min 44s
+```
+
+Then the widest grounds. `erase-crash` is the eraser's crash and a foreign CUT with merges and the
+backfiller beside them. `edits-restart` is d2 edited three times by both writers with a restart, the
+first of the two grounds DESIGN-DETAILS.md 1.3 narrowed when details/IndexMerge.tla did not finish
+them while diffs stood, and which it asks the review phase to run on this joined model; it ran on 3
+workers at c2484175. The other three, `erase-restart`, `edits-windows` (the second ground 1.3
+narrowed) and `erase-windows`, have no finished run here.
+
+```text
+== PASS ground-erase-crash: exit 0, 4553714 distinct states, depth 41, 46min 53s
+== PASS ground-edits-restart: exit 0, 844814 distinct states, depth 33, 11min 20s
+```
+
+### The companions on full entries
+
+`details/run-indexmerge.sh <track> all` and `details/run-indexerase.sh <track> all` at c2484175, each
+on 4 workers but IndexMerge.cfg, whose `\* tlc:` line runs it by simulation on 8. DESIGN-DETAILS.md 1.3
+and 15.3 hold these models' runs while diffs stood, until a design-records pass amends them for owner
+decision 584; these are their runs with full entries only. Every design configuration passes, and
+every twin, Written and reach configuration ends with its invariant violated.
+
+```text
+== PASS IndexMerge: tlc d8fb231, exit 0, simulation (-workers 8 -simulate num=4000 -depth 150 -seed 1), 2147465 states generated, 04min 45s, 0 MB on disk at most
+== PASS IndexMerge-Buckets: tlc d8fb231, exit 0, 12203 distinct states, depth 24, 09s, 0 MB on disk at most
+== PASS IndexMerge-Copies: tlc d8fb231, exit 0, 171052 distinct states, depth 27, 56s, 70 MB on disk at most
+== PASS IndexMerge-Large: tlc d8fb231, exit 0, 129851 distinct states, depth 37, 42s, 44 MB on disk at most
+== PASS IndexMerge-Late: tlc d8fb231, exit 0, 16803 distinct states, depth 23, 06s, 1 MB on disk at most
+== PASS IndexMerge-Mixed: tlc d8fb231, exit 0, 286561 distinct states, depth 29, 02min 10s, 132 MB on disk at most
+== PASS IndexMerge-Restart: tlc d8fb231, exit 0, 3137 distinct states, depth 21, 02s, 0 MB on disk at most
+== PASS IndexMerge-Rollers: tlc d8fb231, exit 0, 264130 distinct states, depth 34, 02min 32s, 82 MB on disk at most
+== PASS IndexMerge-Slots: tlc d8fb231, exit 0, 454221 distinct states, depth 37, 03min 26s, 213 MB on disk at most
+== PASS IndexMergeWritten-LateJournal: ResultsHold violated as it must, a trace of 15 states, tlc d8fb231, exit 12, 9300 distinct states, depth 15, 06s, 1 MB on disk at most
+== PASS IndexMergeWritten-RollupMergeRace: ResultsHold violated as it must, a trace of 17 states, tlc d8fb231, exit 12, 13970 distinct states, depth 17, 07s, 1 MB on disk at most
+== PASS IndexMergeTwin-CleanupUnabsorbed: ResultsHold violated as it must, a trace of 7 states, tlc d8fb231, exit 12, 71 distinct states, depth 8, 02s, 0 MB on disk at most
+== PASS IndexMergeTwin-LongLife: ResultsHold violated as it must, a trace of 15 states, tlc d8fb231, exit 12, 23645 distinct states, depth 15, 07s, 1 MB on disk at most
+== PASS IndexMergeTwin-MergeDropsTombstone: ResultsHold violated as it must, a trace of 9 states, tlc d8fb231, exit 12, 1791 distinct states, depth 10, 03s, 0 MB on disk at most
+== PASS IndexMergeTwin-NoOwnCas: ResultsHold violated as it must, a trace of 13 states, tlc d8fb231, exit 12, 37816 distinct states, depth 14, 07s, 1 MB on disk at most
+== PASS IndexMergeTwin-NoPromote: ResultsHold violated as it must, a trace of 15 states, tlc d8fb231, exit 12, 9925 distinct states, depth 15, 03s, 0 MB on disk at most
+== PASS IndexMergeTwin-PromoteBlind: ResultsHold violated as it must, a trace of 20 states, tlc d8fb231, exit 12, 1336106 distinct states, depth 20, 07min 09s, 435 MB on disk at most
+== PASS IndexMergeTwin-ReuseUnabsorbed: ResultsHold violated as it must, a trace of 7 states, tlc d8fb231, exit 12, 187 distinct states, depth 8, 01s, 0 MB on disk at most
+== PASS IndexMergeTwin-RollupForgetsHeads: ResultsHold violated as it must, a trace of 12 states, tlc d8fb231, exit 12, 4949 distinct states, depth 12, 02s, 0 MB on disk at most
+== PASS IndexMergeReach-Dropped: NeverDropped violated as it must, a trace of 4 states, tlc d8fb231, exit 12, 63 distinct states, depth 5, 01s, 0 MB on disk at most
+== PASS IndexMergeReach-Promoted: NeverPromoted violated as it must, a trace of 15 states, tlc d8fb231, exit 12, 9943 distinct states, depth 16, 03s, 0 MB on disk at most
+== PASS IndexMergeReach-PromotedLive: NeverPromotedLive violated as it must, a trace of 15 states, tlc d8fb231, exit 12, 5122 distinct states, depth 15, 02s, 0 MB on disk at most
+== PASS IndexMergeReach-Rolled: NeverRolled violated as it must, a trace of 12 states, tlc d8fb231, exit 12, 4938 distinct states, depth 12, 02s, 0 MB on disk at most
+```
+
+```text
+== PASS IndexErase: tlc d8fb231, exit 0, 7494 distinct states, depth 18, 01s, 0 MB on disk at most
+== PASS IndexErase-Long: tlc d8fb231, exit 0, 134845 distinct states, depth 26, 07s, 8 MB on disk at most
+== PASS IndexErase-Card: tlc d8fb231, exit 0, 181881 distinct states, depth 22, 15s, 34 MB on disk at most
+== PASS IndexErase-CardLong: tlc d8fb231, exit 0, 2741466 distinct states, depth 31, 02min 16s, 231 MB on disk at most
+== PASS IndexEraseTwin-ClosureSkipsAbsorbed: ErasedGone violated as it must, a trace of 6 states, tlc d8fb231, exit 12, 66 distinct states, depth 8, 01s, 0 MB on disk at most
+== PASS IndexEraseTwin-CutFirst: Fence violated as it must, a trace of 5 states, tlc d8fb231, exit 12, 32 distinct states, depth 7, 00s, 0 MB on disk at most
+== PASS IndexEraseTwin-NoSync: Fence violated as it must, a trace of 6 states, tlc d8fb231, exit 12, 41 distinct states, depth 7, 00s, 0 MB on disk at most
+== PASS IndexEraseTwin-NoBlock: CopiesEqual violated as it must, a trace of 8 states, tlc d8fb231, exit 12, 227 distinct states, depth 8, 00s, 0 MB on disk at most
+== PASS IndexEraseTwin-SeqVersion: CardStands violated as it must, a trace of 8 states, tlc d8fb231, exit 12, 205 distinct states, depth 9, 00s, 0 MB on disk at most
+== PASS IndexEraseTwin-SeqVersion-Late: Fence violated as it must, a trace of 7 states, tlc d8fb231, exit 12, 79 distinct states, depth 7, 01s, 0 MB on disk at most
+== PASS IndexEraseReach-Survives: NeverSurvives violated as it must, a trace of 6 states, tlc d8fb231, exit 12, 37 distinct states, depth 7, 01s, 0 MB on disk at most
+== PASS IndexEraseReach-ClosesAbsorbed: NeverClosesAbsorbed violated as it must, a trace of 6 states, tlc d8fb231, exit 12, 54 distinct states, depth 7, 00s, 0 MB on disk at most
+== PASS IndexEraseReach-Raced: NeverRaced violated as it must, a trace of 7 states, tlc d8fb231, exit 12, 87 distinct states, depth 7, 00s, 0 MB on disk at most
+== PASS IndexEraseReach-Blocked: NeverBlocked violated as it must, a trace of 6 states, tlc d8fb231, exit 12, 65 distinct states, depth 7, 01s, 0 MB on disk at most
+== PASS IndexEraseReach-Returns: NeverReturns violated as it must, a trace of 8 states, tlc d8fb231, exit 12, 157 distinct states, depth 8, 04s, 0 MB on disk at most
+== PASS IndexEraseReach-Twice: NeverTwice violated as it must, a trace of 14 states, tlc d8fb231, exit 12, 16795 distinct states, depth 14, 03s, 0 MB on disk at most
 ```
 
 ### The probe of details/IndexMerge.tla
