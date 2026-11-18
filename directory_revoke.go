@@ -436,14 +436,18 @@ func (self *DirectoryClient) revokeLapsed(auth DirectoryAuthView, journal *direc
 	if standing != nil && standing.Display != DirectoryItemPrivate && journal.MarkerVersion < standing.Announcement.GetVersion() {
 		return true
 	}
-	return self.requestLapsed(auth, nowMillis, journal.RequestId, journal.RepoId, journal.MarkerVersion) != 0
+	lapsedVersion, found := self.requestLapsed(auth, nowMillis, journal.RequestId, journal.RepoId, journal.MarkerVersion)
+	if found {
+		self.keepLapsed()
+	}
+	return lapsedVersion != 0
 }
 
 // The version of the full item that replaced a request's marker, 0 while none has: the one kept for requestId once
-// found, else the lowest the fold accepted for repoId above markerVersion, which is then kept, in memory and in the
-// store, since the entry that carried it may be erased, by the runner's ERASEs for a later request among others, or
-// expire (§16.11's revoke row, owner decision 472).
-func (self *DirectoryClient) requestLapsed(auth DirectoryAuthView, nowMillis int64, requestId Id, repoId Id, markerVersion uint64) uint64 {
+// found, else the lowest the fold accepted for repoId above markerVersion, then held in memory and true, for the
+// caller to keep it in the store (keepLapsed), since the entry that carried it may be erased, by the runner's ERASEs
+// for a later request among others, or expire (§16.11's revoke row, owner decision 472).
+func (self *DirectoryClient) requestLapsed(auth DirectoryAuthView, nowMillis int64, requestId Id, repoId Id, markerVersion uint64) (uint64, bool) {
 	part := self.revocations()
 	kept := func() uint64 {
 		part.stateLock.Lock()
@@ -452,26 +456,33 @@ func (self *DirectoryClient) requestLapsed(auth DirectoryAuthView, nowMillis int
 		return part.lapsedVersions[requestId]
 	}()
 	if kept != 0 {
-		return kept
+		return kept, false
 	}
 	replaced := self.currentFold().repoMarkerReplaced(auth, nowMillis, repoId, markerVersion)
 	if replaced == 0 {
-		return 0
+		return 0, false
 	}
+	part.stateLock.Lock()
+	defer part.stateLock.Unlock()
+	if held := part.lapsedVersions[requestId]; held != 0 {
+		return held, false
+	}
+	part.lapsedVersions[requestId] = replaced
+	return replaced, true
+}
+
+// Writes every lapsed request held to the store, once for the lapses one reading found. A failure leaves them held in
+// memory, for the next write.
+func (self *DirectoryClient) keepLapsed() {
+	part := self.revocations()
 	err := func() error {
 		part.stateLock.Lock()
 		defer part.stateLock.Unlock()
-		if part.lapsedVersions[requestId] != 0 {
-			return nil
-		}
-		part.lapsedVersions[requestId] = replaced
 		return self.keepLapsedWithLock(part)
 	}()
 	if err != nil {
-		// held in memory: the next lapse found writes the store again, this one included
-		self.log.Warningf("[directory]a lapsed erasure request was not kept: %s", err)
+		self.log.Warningf("[directory]the lapsed erasure requests were not kept: %s", err)
 	}
-	return replaced
 }
 
 // A journaled revocation as it stands now.
@@ -756,6 +767,21 @@ func (self *DirectoryClient) requestErased(requestId Id) (*directoryErasedRow, b
 func (self *DirectoryClient) ErasureRequests() []*DirectoryErasureRequestView {
 	auth := self.auth()
 	nowMillis := self.clock.Now().UnixMilli()
+	views := self.erasureRequestViews()
+	found := false
+	for _, view := range views {
+		lapsedVersion, foundNow := self.requestLapsed(auth, nowMillis, view.RequestId, view.RepoId, view.MarkerVersion)
+		view.LapsedVersion = lapsedVersion
+		found = found || foundNow
+	}
+	if found {
+		self.keepLapsed()
+	}
+	return views
+}
+
+// ErasureRequests' views with no lapse judged, for a reader that only maps a request to its repo.
+func (self *DirectoryClient) erasureRequestViews() []*DirectoryErasureRequestView {
 	erased := self.erasedRequests()
 	views := []*DirectoryErasureRequestView{}
 	for _, entry := range self.entriesOfKinds(RecordKindErasureRequest) {
@@ -786,17 +812,13 @@ func (self *DirectoryClient) ErasureRequests() []*DirectoryErasureRequestView {
 		return a.EntryId.Cmp(b.EntryId)
 	})
 	seen := map[Id]bool{}
-	views = slices.DeleteFunc(views, func(view *DirectoryErasureRequestView) bool {
+	return slices.DeleteFunc(views, func(view *DirectoryErasureRequestView) bool {
 		if seen[view.RequestId] {
 			return true
 		}
 		seen[view.RequestId] = true
 		return false
 	})
-	for _, view := range views {
-		view.LapsedVersion = self.requestLapsed(auth, nowMillis, view.RequestId, view.RepoId, view.MarkerVersion)
-	}
-	return views
 }
 
 // What erased entryId, for a reader's line beside an erased entry: a directory admin's erasure, and a repo owner's
@@ -830,7 +852,7 @@ func (self *DirectoryClient) ErasureOf(entryId Id) (*DirectoryErasure, bool) {
 		return nil, false
 	}
 	if seen.RequestId != nil {
-		for _, request := range self.ErasureRequests() {
+		for _, request := range self.erasureRequestViews() {
 			if request.RequestId == *seen.RequestId {
 				repoId := request.RepoId
 				seen.RepoId = &repoId
