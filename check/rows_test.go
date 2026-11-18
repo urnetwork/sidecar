@@ -529,7 +529,7 @@ var failsOnRows = []failsOnRow{
 	},
 
 	{
-		row: "size", item: "the forwarding leg adding over DESIGN-DETAILS 4.2.3's 6 MiB to the ios_extension leg, stripped (proposed; Q-SDK-7)",
+		row: "size", item: "the forwarding leg adding over §18.10's 7.5 MiB to the ios_extension leg, stripped (Q-SDK-7; owner decisions 215 and 491)",
 		checkoutTest: "TestSizeVerdictsHoldTheirLimits",
 		plantedTests: []string{"TestSizeFailsOnAForwardingLegOverItsLimit"},
 	},

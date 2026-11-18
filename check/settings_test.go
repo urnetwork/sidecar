@@ -77,9 +77,10 @@ type checkSettings struct {
 	legCompileConcurrency int
 
 	// DESIGN-DETAILS 4.2.3 (§18.10, D-SDK-20): the most the forwarding leg, device and protocol/bridge with the
-	// root and protocol files on the leg's list, may add to the ios_extension leg, stripped, in bytes. Proposed until
-	// question details-4-ios-forwarding-budget (Q-SDK-7's executable half) is answered: 6 MiB against 5,040,248 B
-	// measured on 2026-11-10, where §18.10 wrote 4 MiB and D-SDK-20 1 MiB unstripped.
+	// root and protocol files on the leg's list, may add to the ios_extension leg, stripped, in bytes. Decided
+	// (Q-SDK-7's executable half): 7.5 MiB since QD-973 (owner decision 491), with the replaying config head reader on
+	// the leg, against 7,009,216 B measured on 2026-11-15; 6 MiB before it (QD-619, owner decision 215), against
+	// 5,040,248 B measured on 2026-11-10, where §18.10 first wrote 4 MiB and D-SDK-20 1 MiB unstripped.
 	iosExtensionAddedMaxByteCount int64
 	// the linker flags both of make size's ios_extension builds take: sdk/build/Makefile's ios_extension bind ships
 	// stripped, and sdk/build/check_apple_size.sh's ceilings read that binary
@@ -221,7 +222,7 @@ func defaultCheckSettings() *checkSettings {
 		vulnDatabase:                  "https://vuln.go.dev",
 		vulnScanConcurrency:           8,
 		legCompileConcurrency:         4,
-		iosExtensionAddedMaxByteCount: 6 * 1024 * 1024,
+		iosExtensionAddedMaxByteCount: 7864320,
 		iosExtensionLinkerFlags:       "-s -w",
 		sidecarHttpGoalByteCount:      40 * 1024 * 1024,
 		sidecarHttpMissByteCount:      74965628,

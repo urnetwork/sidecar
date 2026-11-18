@@ -336,10 +336,17 @@ func TestEvsMirrorCheckFindsARottedSegment(t *testing.T) {
 // The world's view advanced with label among the repo's admins, as its access log's RepoAdmins would hold it, so
 // readers take its ERASEs (§11.8's refs table: the erasure ref takes a repo admin's pushes alone).
 func mirrorWorldAdmin(world *epochWorld, label string) {
+	mirrorWorldAdminWith(world, label, nil)
+}
+
+// mirrorWorldAdmin's view with the repo's row carrying deletion, its newest RepoDelete with any RepoRestore of it, as
+// the access log would leave it; nil for a repo never deleted.
+func mirrorWorldAdminWith(world *epochWorld, label string, deletion *protocol.AclRepoDeletionRow) {
 	fixture := &FakeGkmAuthFixture{
 		Rows: FakeGkmAuthRows(&protocol.AclRepo{
 			RepoId: world.repoId.Bytes(), Kind: world.kind,
-			Admins: []*protocol.AclRepoAdminRow{{SidecarId: world.signers[label].SidecarId.Bytes()}},
+			Admins:   []*protocol.AclRepoAdminRow{{SidecarId: world.signers[label].SidecarId.Bytes()}},
+			Deletion: deletion,
 		}),
 		IdentityKeys:       map[sidecar.Id][]byte{},
 		RepoReaders:        map[sidecar.Id][]sidecar.Id{},

@@ -1,5 +1,3 @@
-//go:build !ios_extension
-
 // A VPN component's config head reading (SDK-M8-16; DESIGN-DETAILS 4.2.5's Compile, step 3; QD-814) on the root's
 // fakes: the Forwarder reads a base's head at the state at that base through a reader that anchors, a head read that
 // lacked a generation's key has the next compile list gkm, and the forwarding reader's keys and store answer as a read

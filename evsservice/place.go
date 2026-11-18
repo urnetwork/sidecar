@@ -20,6 +20,18 @@
 //     writers converge on one repo/; any other is a fault that alarms, and answers 409 REPO_PLACED as well, since the
 //     id holds a repo other than the one this create makes and only another id gets the creator on.
 //
+// In a recovery (§19.10's groups row, §11.13's re-seed row; QD-1062): while sidecar.yml's reseed is on, a repo whose
+// projection ends in an unrestored, dated RepoDelete without now, inside ReseedRestoreWindow of its entry, is created
+// with repo/ deleted{deletion_id, its entry's time, signer}, never keying, so access stays refused from the repo's
+// first object while its history, group and slots return (reseed.go; §11.12's re-seed exception), a segment its
+// admin's walk uploads before its first reseed call included (QD-977), and restore and the 7-day start resume: the
+// start is queued as a transition to deleted queues it. Nothing activates such a repo, activate answering a deleted
+// repo/ 409 REPO_DELETED; a RepoRestore brings it to active. One past restoring, its RepoDelete carrying now, undated
+// or past the window, answers 409 SHREDDING before anything is written, place/ included, as the reseed route answers
+// it; an unsure clock judges no window and answers 503; and a RepoDelete whose signer neither the projection's log
+// nor its row names answers 409 STATEMENT_MISSING, no value guessed (decideDelete's rule). With reseed off every
+// create is keying, as before. A retry answers by the repo/ that stands, whatever its state, as every create's does.
+//
 // Both writes are P1 for the creating network (plan-EVSB-write-classes). The projection's kind must be one of §11.12's
 // nine, with an owner exactly for vault, mailbox and secret, else 400 INVALID with an alarm. The rest of the route's
 // family, GET, DELETE, restore and activate, is repo.go's.
@@ -30,8 +42,6 @@ import (
 	"bytes"
 	"errors"
 	"net/http"
-
-	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
@@ -76,6 +86,10 @@ func (self *EvsEngine) servePutRepo(request *EvsRequest) {
 		request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
 		return
 	}
+	deletion, ok := self.placeDeletion(request, facts)
+	if !ok {
+		return
+	}
 	place, ok := self.placeRepo(request, facts)
 	if !ok {
 		return
@@ -87,10 +101,44 @@ func (self *EvsEngine) servePutRepo(request *EvsRequest) {
 		request.Unavailable(nil)
 		return
 	}
-	if !self.createRepoObject(request, cluster, facts) {
+	created, ok := self.createRepoObject(request, cluster, facts, deletion)
+	if !ok {
 		return
 	}
+	if created != nil {
+		// created deleted: its 7-day start, once-keyed by repo and deletion, as a transition to deleted queues it
+		self.queueShred(request.Ctx, request.RepoId, created)
+	}
 	request.Reply(nil)
+}
+
+// The unrestored RepoDelete a repo placed in a recovery is created deleted under (see the file header; QD-1062), nil
+// for one created keying: every create while reseed is off, and a live or restored repo's while it is on. false once
+// it has answered the refusal of a repo past restoring, a window an unsure clock cannot judge, or a RepoDelete with
+// no signer named, each before anything is written.
+func (self *EvsEngine) placeDeletion(request *EvsRequest, facts *EvsRepoFacts) (*EvsRepoDeletionFacts, bool) {
+	if !self.host.GatesOrClosed().Reseed() {
+		return nil, true
+	}
+	// a window is judged only for a dated RepoDelete without now, and only by a sure clock
+	if deletion := facts.Deletion; deletion != nil && deletion.DeletionId != (sidecar.Id{}) && !deletion.Restored &&
+		!deletion.Now && !deletion.Time.IsZero() && !self.clockSure() {
+		request.Unavailable(nil)
+		return nil, false
+	}
+	deletion, restorable := self.reseedDeletion(facts, request.Now())
+	switch {
+	case deletion == nil:
+		return nil, true
+	case !restorable:
+		request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_SHREDDING)
+		return nil, false
+	case deletion.SignerSidecarId == (sidecar.Id{}):
+		// repo/ deleted names its RepoDelete's signer: a projection that tells none writes no guessed value
+		request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_STATEMENT_MISSING)
+		return nil, false
+	}
+	return deletion, true
 }
 
 // Steps 1 and 2 for the repo the projection's facts describe: the placement this create continues on. false once it
@@ -184,8 +232,10 @@ func (self *EvsEngine) continuePlace(request *EvsRequest, facts *EvsRepoFacts, h
 	return held, true
 }
 
-// Step 3: repo/ on the placed cluster. false once it has answered the refusal.
-func (self *EvsEngine) createRepoObject(request *EvsRequest, cluster sidecar.BlobCluster, facts *EvsRepoFacts) bool {
+// Step 3: repo/ on the placed cluster, keying, or with deletion deleted{its id, its entry's time, its signer} (see the
+// file header). The answer is the repo/ this call's own write created deleted, which leaves its 7-day start due, nil
+// for a keying create and for a retry that found repo/ standing; false once it has answered the refusal.
+func (self *EvsEngine) createRepoObject(request *EvsRequest, cluster sidecar.BlobCluster, facts *EvsRepoFacts, deletion *EvsRepoDeletionFacts) (*protocol.EvsRepoObject, bool) {
 	repoId := request.RepoId
 	object := &protocol.EvsRepoObject{
 		RepoId:    repoId.Bytes(),
@@ -198,14 +248,25 @@ func (self *EvsEngine) createRepoObject(request *EvsRequest, cluster sidecar.Blo
 	if facts.OwnerMemberId != (sidecar.Id{}) {
 		object.OwnerMemberId = facts.OwnerMemberId.Bytes()
 	}
-	objectBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(object)
+	var created *protocol.EvsRepoObject
+	if deletion != nil {
+		// as DELETE writes an active repo's deleted state (decideDelete): the entry's time, which the 7-day start
+		// counts from, so every retry sends the same bytes
+		object.State = protocol.EvsRepoState_EVS_REPO_DELETED
+		object.StateMs = deletion.Time.UnixMilli()
+		object.DeletionId = deletion.DeletionId.Bytes()
+		object.StateSigner = deletion.SignerSidecarId.Bytes()
+		created = object
+	}
+	// held to repo/'s shape, a deleted one's deletion id and signer among it
+	objectBytes, err := sidecar.MarshalEvsRepoObject(object)
 	if err != nil {
 		request.Unavailable(nil)
-		return false
+		return nil, false
 	}
 	grant, ok := self.admitCreate(request, cluster.ClusterId(), len(objectBytes))
 	if !ok {
-		return false
+		return nil, false
 	}
 	defer grant.Close()
 	barrierKey := barrierRepoKey(repoId)
@@ -247,26 +308,27 @@ func (self *EvsEngine) createRepoObject(request *EvsRequest, cluster sidecar.Blo
 		switch {
 		case err == nil:
 			self.repos.Forget(repoId)
-			return true
+			return created, true
 		case errors.Is(err, sidecar.ErrBlobPrecondition):
-			return settle()
+			return nil, settle()
 		case errors.As(err, &unknown):
 			same, found, readErr := sameRepo()
 			switch {
 			case readErr == nil && same:
-				return true
+				// this write's or another create's: the reconciler queues a deleted repo's start either way
+				return nil, true
 			case readErr == nil && !found && writeCount < self.settings.CreateWriteCount:
 				continue
 			case readErr == nil && found:
 				self.alarm("repo_mismatch", "repo %s: repo/ holds another kind, owner or network than the projection's", sidecar.EvsKeyId(repoId))
 				request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_REPO_PLACED)
-				return false
+				return nil, false
 			}
 			request.Unavailable(&protocol.EvsRefusalReply{Outcome: protocol.EvsPushOutcome_EVS_PUSH_OUTCOME_UNKNOWN})
-			return false
+			return nil, false
 		}
 		request.Unavailable(nil)
-		return false
+		return nil, false
 	}
 }
 

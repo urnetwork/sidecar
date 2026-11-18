@@ -1,5 +1,3 @@
-//go:build !ios_extension
-
 // The config repo's head reader over evs (QD-804; §7.9's BASE row, §11.8's replay row, §11.9): ConfigClient's
 // ConfigHeadReader for a network whose config repo is an EvsRepo. A base names a config head as (config_version,
 // config_head_sha256), the version v of the config repo's file-mode main ref and its chain value C_v. The reader
@@ -56,7 +54,8 @@
 // so a follower checking bases in order reads each push once and each file version once; a read of an older version
 // replays from the first. The newest heads answered are kept whole, so the base a device stands on is not read twice.
 //
-// On desktop and mobile legs. Safe for concurrent use; one read replays at a time. Nothing here creates, derives or
+// On desktop and mobile legs, and on the ios_extension leg since QD-973 (owner decision 491), where the forwarding
+// role's reader is built over it (bridge_forward_heads.go). Safe for concurrent use; one read replays at a time. Nothing here creates, derives or
 // unwraps a key but through the read's keys (evs_read.go), whose derivations are hooked.
 
 package sidecar
