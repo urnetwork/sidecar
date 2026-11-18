@@ -78,8 +78,10 @@ type SmtpSenderSettings struct {
 	// line, which carries its d= and s=. 720, under the 831 octets the shortest first record holds (an
 	// AES-128-GCM msg shape's head under TLS 1.3), so the prover's cut by length alone leaves them all in
 	// the header block's first record, where Z5 requires them (DESIGN-DETAILS 3.2.3, 3.2.4, 3.2.6).
-	// Assembly refuses a message past it before the preamble, which mostly means a long From display
-	// name.
+	// Assembly refuses a message past it before the preamble: a long From display name, or a long
+	// header-from domain, which From and the fixed signature's d= both carry. At the default, with a
+	// Message-ID domain of up to 40 octets, a domain of up to 154 octets can still send BULK and one
+	// of up to 180 any other mail, each with a one-octet local part and no display name.
 	HeaderHeadMaxByteCount int
 	// The longest header block assembly makes, its final CRLF CRLF and every issued value and signature
 	// included: 16 KiB, the most the prover cuts into header records, as smtpproof's
