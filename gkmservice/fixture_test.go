@@ -50,7 +50,8 @@ type fakeGkmAuthState struct {
 	honoredRights   map[fakeGkmAuthKey]sidecar.AclEvsRights
 	repoReaderIds   map[sidecar.Id]map[sidecar.Id]bool
 	pendingTargets  map[sidecar.Id][]*GkmPendingTarget
-	honorCount      int
+	// every HonorScope question, in order
+	honorAsks []*fakeGkmHonorAsk
 	// the log as gkm's state judges pins: the chain at each position, its newest position and its previous base's
 	logChains       map[uint64][]byte
 	newestVersion   uint64
@@ -66,6 +67,13 @@ type fakeGkmAuthState struct {
 	// what HoldersDropped answers for a repo, Denied when unset, and what it was last asked
 	holdersDroppedAnswers map[sidecar.Id]GkmAuthAnswer
 	holdersDroppedAsks    []*fakeGkmHoldersDroppedAsk
+}
+
+// One HonorScope question as the fake state was asked it: the token's sidecar, the repo and the whole right set.
+type fakeGkmHonorAsk struct {
+	sidecarId sidecar.Id
+	repoId    sidecar.Id
+	rights    sidecar.AclEvsRights
 }
 
 // One HoldersDropped question as the fake state was asked it.
@@ -293,6 +301,25 @@ func (self *fakeGkmAuthState) grant(sidecarId sidecar.Id, repoId sidecar.Id, rig
 	self.repoReaderIds[repoId][sidecarId] = implied.Has(sidecar.AclEvsRead)
 }
 
+// Gives a sidecar exactly rights on a repo, implying nothing, replacing what it held, as a repo whose newest RepoDelete
+// stands unrestored gives its standing admin admin alone (QD-880); a reader only while r is among them.
+func (self *fakeGkmAuthState) holdExactly(sidecarId sidecar.Id, repoId sidecar.Id, rights sidecar.AclEvsRights) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.honoredRights[fakeGkmAuthKey{sidecarId: sidecarId, repoId: repoId}] = rights
+	if self.repoReaderIds[repoId] == nil {
+		self.repoReaderIds[repoId] = map[sidecar.Id]bool{}
+	}
+	self.repoReaderIds[repoId][sidecarId] = rights.Has(sidecar.AclEvsRead)
+}
+
+// The HonorScope questions asked so far.
+func (self *fakeGkmAuthState) honorAsked() []*fakeGkmHonorAsk {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return slices.Clone(self.honorAsks)
+}
+
 // Drops every right a sidecar holds on a repo, as a group edit or a Suspend would.
 func (self *fakeGkmAuthState) drop(sidecarId sidecar.Id, repoId sidecar.Id) {
 	self.stateLock.Lock()
@@ -340,15 +367,17 @@ func (self *fakeGkmAuthState) Sidecar(principal *sidecar.Principal, sidecarId si
 	return &factsCopy, GkmAuthAllowed
 }
 
-func (self *fakeGkmAuthState) HonorScope(principal *sidecar.Principal, repoId sidecar.Id, right sidecar.AclEvsRights, now time.Time) GkmAuthAnswer {
+// Honored only when the sidecar holds every right of the set, as the gate cache answers it.
+func (self *fakeGkmAuthState) HonorScope(principal *sidecar.Principal, repoId sidecar.Id, rights sidecar.AclEvsRights, now time.Time) GkmAuthAnswer {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	self.honorCount += 1
+	sidecarId := sidecar.Id(*principal.SidecarId)
+	self.honorAsks = append(self.honorAsks, &fakeGkmHonorAsk{sidecarId: sidecarId, repoId: repoId, rights: rights})
 	if self.unloaded {
 		return GkmAuthUnknown
 	}
-	held := self.honoredRights[fakeGkmAuthKey{sidecarId: sidecar.Id(*principal.SidecarId), repoId: repoId}]
-	if right != 0 && held.Has(right) {
+	held := self.honoredRights[fakeGkmAuthKey{sidecarId: sidecarId, repoId: repoId}]
+	if rights != 0 && held.Has(rights) {
 		return GkmAuthAllowed
 	}
 	return GkmAuthDenied

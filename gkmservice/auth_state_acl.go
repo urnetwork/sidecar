@@ -4,7 +4,8 @@
 //
 //	CheckRevocation  rev/ for the token's client, sidecar and member, each answer kept at most 5 s (§7.8's check row)
 //	HonorScope       AclGateCache.HonorScope for the gkm audience (D-ACL-21, QD-070): the one scope check, ACL's, in
-//	                 which the config gives member devices but read_only ones gkm's rw. No copy of it lives here
+//	                 which the config gives member devices but read_only ones gkm's rw, given the guard's whole right
+//	                 set, which it honors only whole (QD-975). No copy of it lives here
 //	Reads            the same check for r of another sidecar: a KeyPackage claim's target, a late delivery's recipient
 //	Sidecar          the row's standing as members read it (sidecar.GkmSidecarStandingAt), and the acl part's Suspend
 //	RepoReaders      §8.12's RepoReaders at now
@@ -152,15 +153,16 @@ func (self *AclGkmAuthState) Sidecar(principal *sidecar.Principal, sidecarId sid
 	}, GkmAuthAllowed
 }
 
-// See GkmAuthState: AclGateCache.HonorScope's answer for the gkm audience.
-func (self *AclGkmAuthState) HonorScope(principal *sidecar.Principal, repoId sidecar.Id, right sidecar.AclEvsRights, now time.Time) GkmAuthAnswer {
+// See GkmAuthState: AclGateCache.HonorScope's answer for the gkm audience to the whole set, which honors it only
+// when the sidecar holds every right of it.
+func (self *AclGkmAuthState) HonorScope(principal *sidecar.Principal, repoId sidecar.Id, rights sidecar.AclEvsRights, now time.Time) GkmAuthAnswer {
 	if self.gate == nil || principal == nil {
 		return GkmAuthUnknown
 	}
 	if principal.SidecarId == nil {
 		return GkmAuthDenied
 	}
-	return gkmAclScopeAnswer(self.gate.HonorScope(sidecar.Id(principal.NetworkId), sidecar.Id(*principal.SidecarId), repoId, right, sidecar.AclTokenAudienceGkm, now))
+	return gkmAclScopeAnswer(self.gate.HonorScope(sidecar.Id(principal.NetworkId), sidecar.Id(*principal.SidecarId), repoId, rights, sidecar.AclTokenAudienceGkm, now))
 }
 
 // See GkmAuthState: the gate's r for sidecarId in the token's network.
