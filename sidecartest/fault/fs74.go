@@ -1,3 +1,5 @@
+//go:build sidecar_testhooks
+
 // FS-74 on real engines (§11.14's commit path and in-ref row; D-EVS-46, FI-18; SEARCH-M10-35): writers' in-ref
 // pushes on the evs world (evs_world.go) at format 2, each writer's IndexWriter (SEARCH-M10-13) planning its head
 // beside its content push through the push builder, so one head CAS commits content and index, through evsservice's
@@ -6,11 +8,13 @@
 //
 //	Fs74DisjointHeadsOnEvs  writerA's and writerB's text pushes to the main ref, each changing only its own head in
 //	                        the current bucket, commit at successive ref versions, and the reader's view of the index
-//	                        holds both documents live, each at the version its content push wrote
+//	                        holds both documents live
 //
-// The rest of FS-74, and FS-75 and FS-79, run on the search world (fs74_test.go, fs75_test.go, fs79_test.go), whose
-// store stands in for evs; their merges, roll-ups, builds and backfills over EvsRepo, and a device's search through an
-// EvsRepo-backed sync source (SEARCH-M10-19's, not built), are not run here yet.
+// The index's seams here (search_evs_testhooks.go) are the root's under sidecar_testhooks alone, so the case is
+// registered only on that build, which both its tiers' tests take. The rest of FS-74, and FS-75 and FS-79, run on the
+// search world (fs74_test.go, fs75_test.go, fs79_test.go), whose store stands in for evs; their merges, roll-ups,
+// builds and backfills over EvsRepo, and a device's search through an EvsRepo-backed sync source (SEARCH-M10-19's,
+// not built), are not run here yet.
 
 package fault
 
