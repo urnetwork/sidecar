@@ -1,19 +1,16 @@
 //go:build sidecar_check
 
-// The Apple network extensions' config head reader (QD-839; DESIGN-DETAILS 4.2.3, 4.2.5's Compile, step 3): the
-// replaying reader's push record reads are on the ios_extension legs, the git export machinery is not, and the reader's
-// own files compile on each extension leg once their tag is off. The reader stays tagged off the leg while question
-// ios-leg-head-reader-size-over-budget is open, since with it the forwarding leg passes its size budget; until it is
-// answered this holds the half that landed, so the change that remains is the tags, a rename and the list. Once the
-// tags are off, the same rule reads the files as the leg compiles them.
+// The Apple network extensions' config head reader (QD-839, QD-973; owner decision 491; §18.10, DESIGN-DETAILS 4.2.3,
+// 4.2.5's Compile, step 3): the replaying reader is on both ios_extension legs, as on every other leg a VPN component
+// builds. Each extension leg compiles the reader's two files and the push record reads it replays through, compiles
+// none of the git export machinery, and compiles the root so. The forwarding role's reader is a bridge_forward file,
+// since the leg's closure seeds from that prefix and make size keeps its exported surface (isForwardingEntryFile);
+// what the leg adds with it is make size's to hold.
 
 package check
 
 import (
-	"bytes"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -27,19 +24,12 @@ var iosExtensionPushRecordFiles = []string{"evs_push_record.go", "evs_reseed_rec
 // the tree builder and object sink.
 var iosExtensionGitExportFiles = []string{"evs_export.go", "evs_export_file.go", "evs_export_notes.go", "evs_git_build.go"}
 
-// The reader's files, each by the names it has had: the forwarding role's reader is a bridge_forward file once it is
-// on the leg, since the leg's closure seeds from that prefix.
-var iosExtensionHeadReaderFiles = [][]string{
-	{"evs_config_head.go"},
-	{"bridge_forward_heads.go", "bridge_heads_forward.go"},
-}
+// The reader's files, which every extension leg compiles: the replaying reader, and the forwarding role's reader over
+// it, the VPN component's entry point.
+var iosExtensionHeadReaderFiles = []string{"evs_config_head.go", "bridge_forward_heads.go"}
 
-// The build line that leaves a root file off the extension legs.
-const iosExtensionOffTagLine = "//go:build !ios_extension\n"
-
-// What is wrong with the reader's place on one extension leg: a push record file the leg does not compile, a git
-// export file it does, a reader file that is missing, and a compile of the root that fails with the reader's files
-// read without their tag.
+// What is wrong with the reader's place on one extension leg: a push record file or a reader file the leg does not
+// compile, a git export file it does, and a compile of the root that fails.
 func (self *repository) iosExtensionHeadReaderFindings(t testing.TB, leg *buildLeg) []string {
 	t.Helper()
 	directory, err := self.legDirectory(leg)
@@ -67,52 +57,13 @@ func (self *repository) iosExtensionHeadReaderFindings(t testing.TB, leg *buildL
 			findings = append(findings, findingf("%s compiles %s, the git export machinery the leg leaves out (DESIGN-DETAILS 4.2.3)", leg.name, name))
 		}
 	}
-	// each reader file as the leg would compile it with its tag off
-	replace := map[string]string{}
-	scratch := t.TempDir()
-	for _, names := range iosExtensionHeadReaderFiles {
-		found := ""
-		for _, name := range names {
-			if _, err := os.Stat(filepath.Join(listed.Dir, name)); err == nil {
-				found = name
-				break
-			}
+	for _, name := range iosExtensionHeadReaderFiles {
+		if !slices.Contains(compiled, name) {
+			findings = append(findings, findingf("%s does not compile %s, the config head reader every VPN component builds (QD-839, QD-973)", leg.name, name))
 		}
-		if found == "" {
-			findings = append(findings, findingf("the head reader's file %s is not in the root", strings.Join(names, " or ")))
-			continue
-		}
-		if slices.Contains(compiled, found) {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(listed.Dir, found))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !bytes.HasPrefix(data, []byte(iosExtensionOffTagLine)) {
-			findings = append(findings, findingf("%s does not compile %s, and its first line is not the plain %q this rule reads", leg.name, found, strings.TrimSpace(iosExtensionOffTagLine)))
-			continue
-		}
-		untaggedPath := filepath.Join(scratch, found)
-		if err := os.WriteFile(untaggedPath, data[len(iosExtensionOffTagLine):], 0o600); err != nil {
-			t.Fatal(err)
-		}
-		replace[filepath.Join(listed.Dir, found)] = untaggedPath
 	}
 	if len(findings) != 0 {
 		return findings
-	}
-	arguments := []string{"build", tags}
-	if len(replace) != 0 {
-		data, err := json.Marshal(map[string]map[string]string{"Replace": replace})
-		if err != nil {
-			t.Fatal(err)
-		}
-		overlayPath := filepath.Join(scratch, "overlay.json")
-		if err := os.WriteFile(overlayPath, data, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		arguments = append(arguments, "-overlay="+overlayPath)
 	}
 	environment := leg.environment()
 	switch {
@@ -124,7 +75,7 @@ func (self *repository) iosExtensionHeadReaderFindings(t testing.TB, leg *buildL
 			t.Fatalf("%s compiles only with Xcode: %v", leg.name, err)
 		}
 	}
-	if _, err := runGo(directory, environment, append(arguments, ".")...); err != nil {
+	if _, err := runGo(directory, environment, "build", tags, "."); err != nil {
 		findings = append(findings, findingf("%s does not compile the root with the config head reader's files on it: %v", leg.name, err))
 	}
 	return findings
@@ -147,8 +98,9 @@ func TestIosExtensionLegsCompileTheConfigHeadReader(t *testing.T) {
 	}
 }
 
-// Its twin on a fixture: a reader file that names what only a file off the leg declares fails the leg's compile, and
-// a push record file tagged off the leg, or a git export file on it, is found.
+// Its twin on a fixture: a reader file tagged off the leg is found, under its own name or the forwarding reader's old
+// one, as is a reader file that names what only a file off the leg declares, which fails the leg's compile, a push
+// record file tagged off the leg, and a git export file on it.
 func TestIosExtensionHeadReaderRuleFindsWhatBreaksIt(t *testing.T) {
 	plant := func(t *testing.T, change func(fixture *fixture)) []string {
 		t.Helper()
@@ -156,8 +108,8 @@ func TestIosExtensionHeadReaderRuleFindsWhatBreaksIt(t *testing.T) {
 		fixture.keepLegs(macExtensionLegName)
 		fixture.write("evs_push_record.go", "package sidecar\n\nfunc pushRecord() int {\n\treturn 1\n}\n")
 		fixture.write("evs_reseed_record.go", "package sidecar\n\nfunc reseedRecord() int {\n\treturn 2\n}\n")
-		fixture.write("evs_config_head.go", "//go:build !ios_extension\n\npackage sidecar\n\nfunc configHead() int {\n\treturn pushRecord() + reseedRecord()\n}\n")
-		fixture.write("bridge_heads_forward.go", "//go:build !ios_extension\n\npackage sidecar\n\nfunc ForwardingHeads() int {\n\treturn configHead()\n}\n")
+		fixture.write("evs_config_head.go", "package sidecar\n\nfunc configHead() int {\n\treturn pushRecord() + reseedRecord()\n}\n")
+		fixture.write("bridge_forward_heads.go", "package sidecar\n\nfunc ForwardingHeads() int {\n\treturn configHead()\n}\n")
 		fixture.write("evs_export.go", "//go:build !ios_extension\n\npackage sidecar\n\nfunc exportOnly() int {\n\treturn 3\n}\n")
 		if change != nil {
 			change(fixture)
@@ -166,8 +118,21 @@ func TestIosExtensionHeadReaderRuleFindsWhatBreaksIt(t *testing.T) {
 		return repository.iosExtensionHeadReaderFindings(t, repository.leg(t, macExtensionLegName))
 	}
 	wantFindings(t, plant(t, nil))
+	// the reader as it stood while the budget question was open: both files tagged off the leg
 	wantFindings(t, plant(t, func(fixture *fixture) {
-		fixture.write("evs_config_head.go", "//go:build !ios_extension\n\npackage sidecar\n\nfunc configHead() int {\n\treturn pushRecord() + exportOnly()\n}\n")
+		fixture.write("evs_config_head.go", "//go:build !ios_extension\n\npackage sidecar\n\nfunc configHead() int {\n\treturn pushRecord() + reseedRecord()\n}\n")
+		fixture.write("bridge_forward_heads.go", "//go:build !ios_extension\n\npackage sidecar\n\nfunc ForwardingHeads() int {\n\treturn configHead()\n}\n")
+	}), "does not compile evs_config_head.go, the config head reader", "does not compile bridge_forward_heads.go, the config head reader")
+	wantFindings(t, plant(t, func(fixture *fixture) {
+		fixture.write("bridge_forward_heads.go", "//go:build !ios_extension\n\npackage sidecar\n\nfunc ForwardingHeads() int {\n\treturn configHead()\n}\n")
+	}), "does not compile bridge_forward_heads.go, the config head reader")
+	// under its old name the leg's closure would not seed from it
+	wantFindings(t, plant(t, func(fixture *fixture) {
+		fixture.remove("bridge_forward_heads.go")
+		fixture.write("bridge_heads_forward.go", "package sidecar\n\nfunc ForwardingHeads() int {\n\treturn configHead()\n}\n")
+	}), "does not compile bridge_forward_heads.go, the config head reader")
+	wantFindings(t, plant(t, func(fixture *fixture) {
+		fixture.write("evs_config_head.go", "package sidecar\n\nfunc configHead() int {\n\treturn pushRecord() + exportOnly()\n}\n")
 	}), "does not compile the root with the config head reader's files on it")
 	wantFindings(t, plant(t, func(fixture *fixture) {
 		fixture.write("evs_push_record.go", "//go:build !ios_extension\n\npackage sidecar\n\nfunc pushRecord() int {\n\treturn 1\n}\n")
@@ -175,10 +140,15 @@ func TestIosExtensionHeadReaderRuleFindsWhatBreaksIt(t *testing.T) {
 	wantFindings(t, plant(t, func(fixture *fixture) {
 		fixture.write("evs_export.go", "package sidecar\n\nfunc exportOnly() int {\n\treturn 3\n}\n")
 	}), "compiles evs_export.go, the git export machinery")
-	// the reader on the leg, renamed into the Forwarder's prefix: read as the leg compiles it
-	wantFindings(t, plant(t, func(fixture *fixture) {
-		fixture.write("evs_config_head.go", "package sidecar\n\nfunc configHead() int {\n\treturn pushRecord() + reseedRecord()\n}\n")
-		fixture.remove("bridge_heads_forward.go")
-		fixture.write("bridge_forward_heads.go", "package sidecar\n\nfunc ForwardingHeads() int {\n\treturn configHead()\n}\n")
-	}))
+}
+
+// The forwarding role's reader is a file the leg's closure seeds from and make size keeps, which under its old name it
+// was not; the replaying reader under it is on the leg because the forwarding reader reaches it.
+func TestIosExtensionHeadReaderIsAForwardingEntryFile(t *testing.T) {
+	if !slices.ContainsFunc(iosExtensionHeadReaderFiles, isForwardingEntryFile) || !isForwardingEntryFile("bridge_forward_heads.go") {
+		t.Error("no head reader file is a forwarding entry file, so the leg's closure seeds from none and make size keeps no reader's surface")
+	}
+	if isForwardingEntryFile("bridge_heads_forward.go") || isForwardingEntryFile("evs_config_head.go") {
+		t.Error("the reader's old name or the replaying reader's file reads as a forwarding entry file")
+	}
 }

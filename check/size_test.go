@@ -32,13 +32,13 @@ import (
 	"testing"
 )
 
-// DESIGN-DETAILS 4.2.3: fails when the forwarding leg adds over the limit, so exactly the limit passes. The limit is
-// proposed until question details-4-ios-forwarding-budget is answered, and the finding says so.
+// §18.10 and DESIGN-DETAILS 4.2.3: fails when the forwarding leg adds over the limit, so exactly the limit passes. The
+// limit is decided (QD-619, raised by QD-973; owner decisions 215 and 491).
 func (self *checkSettings) iosExtensionSizeFindings(baselineByteCount int64, withSidecarByteCount int64) []string {
 	addedByteCount := withSidecarByteCount - baselineByteCount
 	if addedByteCount > self.iosExtensionAddedMaxByteCount {
 		return []string{findingf("the forwarding leg adds %d B to the ios_extension leg, stripped, over the %d B limit "+
-			"(DESIGN-DETAILS 4.2.3, D-SDK-20; proposed until question details-4-ios-forwarding-budget is answered)",
+			"(§18.10, DESIGN-DETAILS 4.2.3, D-SDK-20; owner decision 491)",
 			addedByteCount, self.iosExtensionAddedMaxByteCount)}
 	}
 	return nil
@@ -357,9 +357,9 @@ func sdkIosExtensionLinkerFlags(makefile string) ([]string, error) {
 func TestSizeVerdictsHoldTheirLimits(t *testing.T) {
 	settings := defaultCheckSettings()
 	wantFindings(t, settings.iosExtensionSizeFindings(34*1024*1024, 34*1024*1024))
-	wantFindings(t, settings.iosExtensionSizeFindings(34*1024*1024, 34*1024*1024+6291456))
+	wantFindings(t, settings.iosExtensionSizeFindings(34*1024*1024, 34*1024*1024+7864320))
 	wantFindings(t, settings.sidecarHttpSizeFindings(41943040))
-	if settings.sidecarHttpGoalByteCount != 41943040 || settings.sidecarHttpMissByteCount != 74965628 || settings.iosExtensionAddedMaxByteCount != 6291456 {
+	if settings.sidecarHttpGoalByteCount != 41943040 || settings.sidecarHttpMissByteCount != 74965628 || settings.iosExtensionAddedMaxByteCount != 7864320 {
 		t.Errorf("the settings stray from §18.10 and DESIGN-DETAILS 4.2.3: %d, %d, %d", settings.sidecarHttpGoalByteCount, settings.sidecarHttpMissByteCount, settings.iosExtensionAddedMaxByteCount)
 	}
 	if settings.iosExtensionLinkerFlags != "-s -w" {
@@ -367,15 +367,18 @@ func TestSizeVerdictsHoldTheirLimits(t *testing.T) {
 	}
 }
 
-// One byte past 6 MiB fails, and says the limit is proposed.
+// One byte past 7.5 MiB fails, naming the decision that set the limit and no open question; the 6 MiB limit it
+// replaced, and what the leg measured with the reader on it, pass.
 func TestSizeFailsOnAForwardingLegOverItsLimit(t *testing.T) {
 	settings := defaultCheckSettings()
-	wantFindings(t, settings.iosExtensionSizeFindings(34*1024*1024, 34*1024*1024+6291457),
-		"adds 6291457 B to the ios_extension leg, stripped, over the 6291456 B limit")
-	findings := settings.iosExtensionSizeFindings(0, 6291457)
-	if len(findings) != 1 || !strings.Contains(findings[0], "proposed until question details-4-ios-forwarding-budget is answered") {
-		t.Errorf("the finding does not say its limit is proposed: %v", findings)
+	wantFindings(t, settings.iosExtensionSizeFindings(34*1024*1024, 34*1024*1024+7864321),
+		"adds 7864321 B to the ios_extension leg, stripped, over the 7864320 B limit")
+	findings := settings.iosExtensionSizeFindings(0, 7864321)
+	if len(findings) != 1 || !strings.Contains(findings[0], "owner decision 491") || strings.Contains(findings[0], "proposed") {
+		t.Errorf("the finding does not name the decision its limit stands on: %v", findings)
 	}
+	wantFindings(t, settings.iosExtensionSizeFindings(0, 6291457))
+	wantFindings(t, settings.iosExtensionSizeFindings(34217800, 34217800+7009216))
 }
 
 // make size measures the binary sdk ships, so its flags are the ios_extension bind's own: a bind that stopped

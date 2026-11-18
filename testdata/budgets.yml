@@ -196,15 +196,15 @@ budgets:
     reviewed: ""
     note: "the gate is no regression from PROTO-M1-11's recorded baseline, 18 a request by testing.AllocsPerRun's least of three (testdata/receive_allocs.json, which TestReceiveAllocsHoldTheBaseline holds); this benchmark's one 100-iteration run counts the process's allocations, the fixture's background goroutines' among them, and reads 19 run after run, so 19 is that baseline here (PROTO-M5-05, 2026-11-11)"
   - id: ios-extension-device-role
-    spec: "DESIGN-DETAILS 4.2.3 (§18.10, D-SDK-20, Q-SDK-7): what the forwarding leg, device and protocol/bridge with the root and protocol files on check/testdata/ios_extension_leg.txt, adds to the ios_extension leg, 6 MiB stripped"
+    spec: "§18.10 and DESIGN-DETAILS 4.2.3 (D-SDK-20, Q-SDK-7; owner decisions 215 and 491): what the forwarding leg, device and protocol/bridge with the root and protocol files on check/testdata/ios_extension_leg.txt, adds to the ios_extension leg, 7.5 MiB stripped"
     kind: size
     owner: REPO-M4-01
     module: sidecar
     package: check
     name: TestSizeGateIosExtension
     settings: "make size, stripped with -s -w as sdk/build/Makefile's ios_extension bind ships"
-    limits: {bytes: 6291456}
-    reviewed: "2026-11-10: raised from D-SDK-20's 1 MiB unstripped to DESIGN-DETAILS 4.2.3's 6 MiB stripped, the budget section 4 of DESIGN-DETAILS sets for owner decision 197's forwarding leg (REPO-M4-01). Proposed: it stands until the owner answers question details-4-ios-forwarding-budget, and no person has reviewed the raise; sdk/build/check_apple_size.sh's 50 MiB extension ceiling does not move with it"
+    limits: {bytes: 7864320}
+    reviewed: "2026-11-16: raised from 6 MiB (6,291,456 B; QD-619, owner decision 215) to 7.5 MiB (7,864,320 B) stripped by the owner's answer to question ios-leg-head-reader-size-over-budget (QD-973, owner decision 491: option 1, the recommendation, accepted under the owner's standing acceptance of recommended options), which puts the replaying config head reader on the ios_extension leg (QD-839) so the Apple network extensions forward as every other VPN component does. The leg measured 7,009,216 B added with the reader on 2026-11-15 (go1.27.4), 1,000,736 B of it the reader and the evs client it links, with no new package, and 7,042,032 B at this landing on 2026-11-18 (34,234,192 B to 41,276,224 B), 822,288 B under the limit. The limit is decided, not proposed: details-4-ios-forwarding-budget was answered by QD-619. The signed extension's ceiling, 54 MiB (56,623,104 B; owner decision 215, sdk/build/check_apple_size.sh), does not move with this raise. A reader over a read-only core of the evs client, which would give room back, is review-phase work"
   - id: page-worker-wasm
     spec: "§18.10 and §22.9: the page Worker's wasm goal, 41,943,040 B"
     kind: size

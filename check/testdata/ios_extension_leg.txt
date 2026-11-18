@@ -51,6 +51,7 @@ bridge_forward_client.go
 bridge_forward_client_connect.go
 bridge_forward_compile.go
 bridge_forward_follow.go
+bridge_forward_heads.go
 bridge_forward_keys.go
 bridge_forward_sign.go
 bridge_ledger.go
@@ -92,7 +93,6 @@ config_retain.go
 config_rows_only.go
 config_seal.go
 config_settings.go
-config_shrink_span.go
 config_state.go
 config_state_at.go
 config_versioning.go
@@ -138,6 +138,7 @@ evs_chain.go
 evs_checkpoint.go
 evs_chunk.go
 evs_client.go
+evs_config_head.go
 evs_creates_only.go
 evs_digest.go
 evs_directory.go
@@ -178,6 +179,7 @@ evs_proof.go
 evs_provenance.go
 evs_push_record.go
 evs_read.go
+evs_read_provenance.go
 evs_reconstruct.go
 evs_record.go
 evs_ref.go
