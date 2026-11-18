@@ -2,8 +2,8 @@
 
 Usage: python3 -I validate7.py <design_dir> <asm_dir> <design_md> <research_dir_abs> [<out_json>]
 Writes <out_json> (default <asm_dir>/v7/validate.json) and prints a summary. Uses v7/extract.json, v7/cites.json,
-v7/words.json, v7/text_checks.json and v7/hits_class.json (from extract.py, cites6.py, wordcount2.py, text_checks6.py,
-v7/supersede_grep7.py with v7/hitmap7.py and v7/classify7.py), and owner/DECISIONS.md.
+v7/words.json, v7/text_checks.json, v7/defer.json and v7/hits_class.json (from extract.py, cites6.py, wordcount2.py,
+text_checks6.py, defer10.py, v7/supersede_grep7.py with v7/hitmap7.py and v7/classify7.py), and owner/DECISIONS.md.
 Changes from validate6.py: the v7 inputs; the grep's STATED readings counted apart; the owner record's Q- ids read
 from whole entries as well as headings, and every item a 2026-11-04 entry names checked for "Decided by owner
 2026-11-04"; mentions of the items decided since the 2026-11-04 peer review checked outside their own items; and the
@@ -305,7 +305,7 @@ for n, head in sorted(entries.items()):
             named_open.append({'decision': n, 'q': q, 'issue': 'no such item'})
 open_items = [q for q, st in qstatus.items() if st == 'open']
 qf = json.loads((V7 / 'qfields.json').read_text())
-out['owner_record'] = {'entries': len(entries), 'entry_numbers_ok': sorted(entries) == list(range(1, 586)),
+out['owner_record'] = {'entries': len(entries), 'entry_numbers_ok': sorted(entries) == list(range(1, 588)),
                        'q_named_by_decisions': sum(len(re.findall(r'Q-[A-Z]+-\d+', h)) for h in entries.values()),
                        'named_but_open': named_open,
                        'open_items': open_items,
@@ -513,13 +513,18 @@ LATE_DATES = {198: '2026-11-10', 199: '2026-11-10', 200: '2026-11-10', 201: '202
               568: '2026-11-16', 569: '2026-11-17', 570: '2026-11-17', 571: '2026-11-16', 572: '2026-11-16',
               573: '2026-11-16', 574: '2026-11-16', 575: '2026-11-17', 576: '2026-11-16', 577: '2026-11-17',
               578: '2026-11-17', 579: '2026-11-17', 580: '2026-11-17', 581: '2026-11-17', 582: '2026-11-17',
-              583: '2026-11-17', 584: '2026-11-17', 585: '2026-11-17'}
+              583: '2026-11-17', 584: '2026-11-17', 585: '2026-11-17', 586: '2026-11-17', 587: '2026-11-17'}
 idx_rows = re.findall(r'^\| <a id="od-(\d+)"></a>\d+ \| (2026-11-(?:0[34569]|1[01234567])) \|', doc, re.M)
-out['decision_rows'] = {'rows': len(idx_rows), 'numbers_ok': [int(n) for n, d in idx_rows] == list(range(1, 586)),
+out['decision_rows'] = {'rows': len(idx_rows), 'numbers_ok': [int(n) for n, d in idx_rows] == list(range(1, 588)),
                         'dates_ok': all(d == ('2026-11-03' if int(n) <= 111 else '2026-11-04' if int(n) <= 145 else '2026-11-05' if int(n) <= 187 else '2026-11-06' if int(n) <= 196 else '2026-11-09' if int(n) == 197 else LATE_DATES.get(int(n))) for n, d in idx_rows),
                         'known_gaps_heading': '### Known gaps' in doc,
                         'closed_by_peer_review_text': len(re.findall(r'closed by peer review', doc))}
 
+# DESIGN-DEFER.md (owner decision 587): defer10.py's own checks, and the file beside the document validated here.
+_defer = json.loads((V7 / 'defer.json').read_text())
+out['defer'] = {'entries': _defer['entries'], 'pointers': _defer['pointers'], 'errors': _defer['errors'],
+                'written_beside': (doc_path.parent / 'DESIGN-DEFER.md').exists(),
+                'unlinked_from_design': 'DESIGN-DEFER.md#' not in doc}
 out_json.write_text(json.dumps(out, indent=1, ensure_ascii=False))
 summary = {
     'ids': {'counts': out['ids']['counts'], 'duplicates': len(dups), 'outside_own_section': len(wrong_sec), 'invariants': out['ids']['invariants'],
@@ -546,5 +551,6 @@ summary = {
     'apply_sections': out['apply_sections'],
     'od_link_style': {k: len(v) for k, v in out['od_link_style'].items()},
     'registers': {k: (len(v) if isinstance(v, (list, dict)) else v) for k, v in out['registers'].items()},
+    'defer': out['defer'],
 }
 print(json.dumps(summary, indent=1, ensure_ascii=False))

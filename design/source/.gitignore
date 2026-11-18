@@ -7,4 +7,6 @@ asm/v7/assemble_stdout.txt
 asm/v7/qstatus_computed.json
 asm/v7/validate.json
 asm/v7/validate_stdout.txt
+asm/v7/defer.json
+asm/v7/defer_stdout.txt
 __pycache__/

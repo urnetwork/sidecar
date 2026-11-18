@@ -742,5 +742,6 @@ Hello.features   bit n set: the sender implements n, in Hello and HelloResult al
 - **M5-M6.** Streams with §9's `tls/`, and the pooled codec if measured worthwhile; Service edges (C9, M5); FriendsAndFamily shares with C18 (M6); same-network P2P behind `EnablePeerP2p`, built at M6 and off by default (owner decision 296).
 - **M8.** `POST /sidecar/wake`, wakes through §19's push sender for unacked hints (§18.7), and `team` hints to `acl_enforcing` device clients, with §18's mobile hosts (owner decision 88).
 - **M10 (v1; owner decision 169).** The SEARCH pair, Hello's feature bits 0 and 1 and the control class's acceptance of SEARCH, app hosts asking from the later of M10's and M8's exits (§18); C19's window accounting on connect's `sidecar` branch and the app hosts' keepalive (owner decisions 176, 188); their bytes freeze at M10's Gn-out, additive to M2's wire.
-- **v1.** P2P for same-network sidecar pairs once C3 is tested, able to end relay-only at a later owner call (owner decision 296).
-- **Later.** Logical lanes (C7), stream resume, and hybrid-only TLS groups.
+- **v1.** P2P for same-network sidecar pairs once C3 is tested, able to end relay-only at [a later owner call](DESIGN-DEFER.md#proto-peer-p2p) (owner decision 296).
+- **Later.** [Logical lanes (C7)](DESIGN-DEFER.md#repo-c7-logical-lanes), [stream resume](DESIGN-DEFER.md#proto-stream-resume), and [hybrid-only TLS groups](DESIGN-DEFER.md#proto-hybrid-only-tls-groups).
+- **Deferred.** DESIGN-DEFER.md holds an entry for each Later item, linked above, and for [this section's v1 set](DESIGN-DEFER.md#proto-v1) (owner decision 587).
