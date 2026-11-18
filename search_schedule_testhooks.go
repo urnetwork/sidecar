@@ -808,6 +808,14 @@ func (self *SearchTestDevice) Close() {
 	}
 }
 
+// The device's engine, for a host to install on a Sidecar (Sidecar.InstallSearchEngine) so a search reaches it through
+// the Sidecar's own calls, as the sdk's T4 cells drive it through the bound SidecarSearch (SDK-M10-06). A search through
+// it takes no turns (the file header): its reads go as they come, so a schedule timing a download searches through
+// Search.
+func (self *SearchTestDevice) Engine() *SearchEngine {
+	return self.engine
+}
+
 // One round of the ref now: the latest set, and all where the policy keeps it.
 func (self *SearchTestDevice) Sync(ctx context.Context) error {
 	return self.sync.RunRound(ctx, self.world.repoId, self.world.refId, false)
