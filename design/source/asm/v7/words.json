@@ -12,7 +12,7 @@
   "num": 2,
   "code": "TRUST",
   "words": 9282,
-  "code_words": 20730,
+  "code_words": 20991,
   "ceiling": 3000,
   "over": 6282,
   "over_pct": 209.4
@@ -39,7 +39,7 @@
   "num": 5,
   "code": "CORE",
   "words": 11134,
-  "code_words": 8471,
+  "code_words": 8589,
   "ceiling": 3500,
   "over": 7634,
   "over_pct": 218.1
@@ -65,11 +65,11 @@
  {
   "num": 8,
   "code": "ACL",
-  "words": 12230,
+  "words": 12390,
   "code_words": 5148,
   "ceiling": 3800,
-  "over": 8430,
-  "over_pct": 221.8
+  "over": 8590,
+  "over_pct": 226.1
  },
  {
   "num": 9,
@@ -128,17 +128,17 @@
  {
   "num": 15,
   "code": "MAIL",
-  "words": 10873,
+  "words": 10899,
   "code_words": 2125,
   "ceiling": 4500,
-  "over": 6373,
-  "over_pct": 141.6
+  "over": 6399,
+  "over_pct": 142.2
  },
  {
   "num": 16,
   "code": "MCP",
   "words": 14980,
-  "code_words": 19609,
+  "code_words": 19887,
   "ceiling": 3500,
   "over": 11480,
   "over_pct": 328.0
@@ -156,7 +156,7 @@
   "num": 18,
   "code": "SDK",
   "words": 10550,
-  "code_words": 11442,
+  "code_words": 11441,
   "ceiling": 3000,
   "over": 7550,
   "over_pct": 251.7
@@ -164,11 +164,11 @@
  {
   "num": 19,
   "code": "OPS",
-  "words": 9848,
+  "words": 9925,
   "code_words": 10821,
   "ceiling": 3500,
-  "over": 6348,
-  "over_pct": 181.4
+  "over": 6425,
+  "over_pct": 183.6
  },
  {
   "num": 20,
@@ -182,11 +182,11 @@
  {
   "num": 21,
   "code": "ABUSE",
-  "words": 5541,
+  "words": 5938,
   "code_words": 1403,
   "ceiling": 2500,
-  "over": 3041,
-  "over_pct": 121.6
+  "over": 3438,
+  "over_pct": 137.5
  },
  {
   "num": 22,
@@ -200,10 +200,10 @@
  {
   "num": 23,
   "code": "PHASE",
-  "words": 7558,
+  "words": 7608,
   "code_words": 1163,
   "ceiling": 2500,
-  "over": 5058,
-  "over_pct": 202.3
+  "over": 5108,
+  "over_pct": 204.3
  }
 ]
