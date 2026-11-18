@@ -159,6 +159,9 @@ rows:
       - {name: FuzzEvsDrop, package: ".", owner: EVS2-M10-32, milestone: M10, seeds: [testdata/fuzz/evs_drop]}
       - {name: FuzzEvsFormat2Batch, package: ".", owner: EVS2-M10-32, milestone: M10, seeds: [testdata/fuzz/evs_batch]}
       - {name: FuzzEvsKind5Segment, package: ".", owner: EVS2-M10-32, milestone: M10, seeds: [testdata/fuzz/evs_segment]}
+      - {name: FuzzEvsPurgeList, package: ".", owner: EVS2-M10-32, milestone: M10}
+      - {name: FuzzEvsStaged, package: ".", owner: EVS2-M10-32, milestone: M10}
+      - {name: FuzzEvsDropStatus, package: ".", owner: EVS2-M10-32, milestone: M10}
 
   - id: mls
     bullet: "MLS messages, Welcome, GroupInfo, tree, `GkmCommitHeader`"

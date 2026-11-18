@@ -12,6 +12,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -95,8 +97,11 @@ func TestEvsExportFormat2PointersAndStubs(t *testing.T) {
 		if pointer := show("main~8", "big.txt"); pointer != string(EvsLfsPointerText(first[:], uint64(len(versionless[0])))) {
 			t.Fatalf("a replaced versionless version exported %q", pointer)
 		}
-		if !strings.HasPrefix(show("main~8", "big.txt"), "version https://git-lfs.github.com/spec/v1\noid sha256:") {
-			t.Fatalf("not git-lfs's pointer")
+		// git-lfs's spec v1: a version line naming the spec, then the oid and size lines, each ended by a newline
+		pointerLines := strings.Split(show("main~8", "big.txt"), "\n")
+		if len(pointerLines) != 4 || !strings.HasPrefix(pointerLines[0], "version https://") || !strings.HasSuffix(pointerLines[0], "/spec/v1") ||
+			pointerLines[1] != "oid sha256:"+hex.EncodeToString(first[:]) || pointerLines[2] != fmt.Sprintf("size %d", len(versionless[0])) || pointerLines[3] != "" {
+			t.Fatalf("not git-lfs's pointer: %q", pointerLines)
 		}
 		if content := show("main~7", "big.txt"); content != string(versionless[1]) {
 			t.Fatalf("the newest versionless version exported other content")

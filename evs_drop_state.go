@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // A listed version's state on a reader, and the checked DROP bodies a device keeps (§11.7's states row, §11.9's
 // dropped and drop_pending rows; D-EVS-63, FI-27, FS-89; DESIGN-DETAILS 10.2.3's storage paragraph; EVS2-M10-22).
 //
@@ -13,9 +15,10 @@
 //	         A body is written to the store as it is checked and read back from it, never held in RAM past its check
 //	         (QD-641)
 //
-// The state is on every leg, so the reader's checks (evs_drop_verify.go) leave it on a verified path; the store's index
-// is kept in memory and the bodies on storage, so a restarted device fetches each body once more. Safe for concurrent
-// use.
+// The state itself, EVS_DROPPED and the reread's error are on every leg, in evs_proof.go beside the verified path that
+// carries them, so the reader's checks (evs_drop_verify.go) leave the state on a verified path. The store's index is
+// kept in memory and the bodies on storage, so a restarted device fetches each body once more. On every leg but
+// ios_extension. Safe for concurrent use.
 
 package sidecar
 
@@ -26,70 +29,7 @@ import (
 	"io"
 	"slices"
 	"sync"
-	"time"
 )
-
-var (
-	// A read of a version a drop took (§11.7's states row): nothing is fetched or shown. EVS_DROPPED; MCP answers it
-	// FAILED_PRECONDITION (§16).
-	ErrEvsDropped = errors.New("evs: EVS_DROPPED: a version whose history was dropped")
-	// A reply named a drop whose body it left out, past its byte bound, and this device holds none: the path is read
-	// again, the body first (DESIGN-DETAILS 10.2.3's reply size).
-	errEvsDropBodyMissing = errors.New("evs: a drop's body the reply left out")
-)
-
-// History's and List's states of a version a checked DROP covers (§18.5's History): kept and collected are the others.
-const (
-	EvsVersionStateDropPending = "drop_pending"
-	EvsVersionStateDropped     = "dropped"
-)
-
-// What a reader found of a version a checked DROP covers.
-type EvsDropState struct {
-	DropId Id
-	// The DROP's ref version, 0 where this device could not place its statement (a pending drop's statement evs sent
-	// alone, below the walk).
-	DropVersion uint64
-	// The DROP's signer, a repo admin at its auth pin.
-	SignerSidecarId Id
-	// The body's not_before_ms: drop_pending before it by this device's clock.
-	NotBefore time.Time
-	// evs withheld the version's entry version, as it does for a dropped version whose chain names an inline record
-	// (§11.9's serve row): nothing of it can be read, and the verified path's Entry holds only its number and push.
-	Withheld bool
-}
-
-// Whether the version reads as dropped at now: its window passed, or evs withheld its entry version. False for nil.
-func (self *EvsDropState) Dropped(now time.Time) bool {
-	return self != nil && (self.Withheld || !now.Before(self.NotBefore))
-}
-
-// The state History shows at now, "" for nil.
-func (self *EvsDropState) Name(now time.Time) string {
-	switch {
-	case self == nil:
-		return ""
-	case self.Dropped(now):
-		return EvsVersionStateDropped
-	}
-	return EvsVersionStateDropPending
-}
-
-// The drop's id, zero for nil.
-func evsDropIdOf(state *EvsDropState) Id {
-	if state == nil {
-		return Id{}
-	}
-	return state.DropId
-}
-
-// The drop's window's end, zero for nil.
-func evsDropNotBeforeOf(state *EvsDropState) time.Time {
-	if state == nil {
-		return time.Time{}
-	}
-	return state.NotBefore
-}
 
 // The checked DROP bodies a client keeps: see the file header.
 type evsDropBodies struct {
