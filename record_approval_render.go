@@ -74,7 +74,9 @@ type ApprovalRender struct {
 	// record.proto's name for the kind, lowercased past its prefix: dns_set, mail_send.
 	KindName string
 	Version  uint32
-	// A multi-use template: each use's action equals its non-empty fields, its recipients among those listed.
+	// A multi-use template: each use's action equals its non-empty fields, its recipients among those listed, and leaves
+	// empty what its kind's row binds and it leaves empty, so an egress_change template whose meaning names no
+	// requirement of default egress covers no use that requires it (QD-1060).
 	Template bool
 	// How many distinct actions the request asks the approval to cover (ApprovalRequest.uses; QD-1010), which an
 	// approval signs as shown: 1 for any action but a template, a template's 2 or more, and 0 for a version-1
