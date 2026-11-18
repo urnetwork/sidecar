@@ -6,17 +6,11 @@ Every design decision made since DESIGN.md was last rebuilt and not yet folded i
 
 **Folding.** Only a design-records track edits `design/source/` and rebuilds DESIGN.md with `design/source/build.sh`. Each design-records track takes one DESIGN.md section, applies its items below (and the matching "Proposed DESIGN.md text" of DESIGN-DETAILS.md), and in the same commit deletes those items from this file. When this file holds no items it is deleted. Owner decisions that change behavior go into `design/source/owner/DECISIONS.md` as numbered owner decisions, after decision 197, as decision 197 was.
 
-Holds 11 decided items and 2 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded, and QD-336 went into §4.5 with owner decision 251 (QD-841 to QD-843), which DESIGN.md carries directly.
+Generated from the ledger on 2026-11-10, it holds no item under a DESIGN.md section now: the last were folded on 2026-11-18 by track dr4-outside-docs, their parts in RECORD.md, the review ledger, pitch5.html and HANDOFF.md with them. "Later decisions", below, holds two items, each waiting on a file outside the design-records tracks' reach. QD-597 (owner decision 197) is already folded, and QD-336 went into §4.5 with owner decision 251 (QD-841 to QD-843), which DESIGN.md carries directly.
 
 ## Index
 
-| DESIGN.md section | Decided | Proposed |
-|---|---|---|
-| [§3 Architecture overview and end-to-end flows](#s3) | 1 | 0 |
-| [§5 The Sidecar core](#s5) | 1 | 1 |
-| [§7 Networks, teams, members, enrollment, and SSO](#s7) | 2 | 0 |
-| [§11 Encrypted versioned storage](#s11) | 1 | 0 |
-| [§16 The local MCP server and record primitives](#s16) | 6 | 1 |
+No section holds an item. "Later decisions" holds QD-024 (§4) and QD-899 (§16).
 
 ## DESIGN-DETAILS.md sections to fold
 
@@ -41,168 +35,6 @@ Section 7 is folded (2026-11-18, track dr4-details-e): its proposed DESIGN.md te
 Section 12 is folded (2026-11-17, track dr4-details-d): its proposed DESIGN.md text (12.8) as amended for QD-761, its owner answers being owner decisions 473 to 478 and 483 already, and §17.9's fences already holding its share pins and seal bodies (track dr4-fences).
 
 Section 16 is not folded (2026-11-17, track dr4-details-c): the owner moved the client-checked prefix write rules to Later the same day (QD-1032), so none of 16.8's text goes into DESIGN.md as live design. The design-defer-doc track folded QD-1032 as owner decision 586 (2026-11-18): DESIGN.md says the rules are Later where it describes them (§8.8, §8.12, D-ACL-11, §8.19, §11.8's refusals row, §11.11's prefix and new refs rows, D-EVS-18, Q-EVS-3, §11.22, §23.4), DESIGN-DEFER.md's entry "Client-checked prefix write rules" documents the deferral, and section 16 carries the mark at its head. Not folded, waiting with the rules: section 16's proposed text (16.8) and its prefix-rule amendments to sections 5, 8 and 10, section 10's to §11.7's boundary row among them; a reversal of owner decision 586 folds them. The same track folded QD-1033 as owner decision 587: DESIGN-DEFER.md, generated from `design/source/defer/` by `design/source/build.sh`, documents every deferred decision, one entry each, and each section a deferral touches points at its entry.
-
-<a id="s3"></a>
-## §3 Architecture overview and end-to-end flows
-
-### QD-242: Whether a checkpointer's HTTPS POST to a customer's witness may exist, as a new carrier under D-ARCH-2
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §2.*
-
-Rule it no URnetwork carrier, in one sentence in §3: a checkpointer's own outbound HTTPS call to a witness a log admin named in a signed, /dev/tty-confirmed `log_settings`. It carries a signed note and a consistency proof, never an entry, no agent can set the host, and §2.8 stands because no URnetwork server takes part. §3.5's map names it as outside the six planes, and RECORD.md section 10.2's step 6 turns on.
-
-Changes: D-ARCH-2; §3.5 planes; RECORD.md section 10.2; Q-RECORD-8.
-
-Questions: `record-md-witness-carrier.md`.
-
-Not folded (2026-11-10): RECORD.md section 10.2's step 6 and Q-RECORD-8, which live in RECORD.md, outside design/source/ and so outside a design-records track's files; the DESIGN.md part is folded as owner decision 214 (D-ARCH-2, §3.5).
-
-Not folded (2026-11-16): the same two parts, still RECORD.md's, which no design-records track edits.
-
-<a id="s5"></a>
-## §5 The Sidecar core
-
-### QD-168: No SidecarEvent kind carries the record's and the directory's reader alarms
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §18, §16.*
-
-Add one kind to §5.4's SidecarEventKind and §18.5's list: `record_alarm`, with a new field `RecordAlarm SidecarRecordAlarm` beside `HeadAlarm`, using the existing `RepoId` and `SidecarId` (the writer or signer). Its closed reasons are 14: chain_gap, chain_fork, bad_entry (RECORD.md section 5.4 steps 1-4, section 5.5 steps 1-3, 5 and 6), depositor_kind, early_removal (a BASE or ERASE taking an entry before keep_days, or a class 7 entry), path_rule, parked_writer, over_cap, over_limit (§16.11's limits row), id_reuse (plan-RECORD-small-readings #2), bad_erasure (an ERASE, CUT or CLOSURE from another signer, or an erasure_request that fails its check), bad_decision, log_check (RECORD.md section 10.2) and moderation, which apps show as a notice. `head_alarm` stays HeadCheck's and `index_mismatch` the index's. plan-EVS1-evs-events' `evs_alarm` stays separate, for storage tampering.
-
-Changes: §5.4 SidecarEventKind and SidecarEvent; §18.5 AddEventListener list; RECORD.md section 18's §5.4 ask.
-
-Questions: `plan-RECORD-alarm-kinds.md`.
-
-Not folded (2026-11-16): RECORD.md section 18's §5.4 ask, which lives in RECORD.md, outside design/source/; the DESIGN.md parts are folded as text (§5.4's record_alarm kind and its RecordAlarm field with the 14 reasons, §18.5's listener comment).
-
-### QD-429: Numbers for the uint32 values inside CanonicalAction, ApprovalRequest and ApprovalDecision
-*Proposed fill: a gap the agents filled; work builds on it. Also amends §16, §15.*
-
-RECORD-M2-01 declares four enums in protocol/record.proto; the fields stay uint32 as §16.8 writes them, and 0 is UNSPECIFIED, written by no one. `SidecarActionKind`, in §5.4's order, one verb a value, `restore` appended: 1 publish, 2 listen, 3 forward, 4 expose, 5 egress_change, 6 invite, 7 share, 8 alias_create (burners too, §15.8), 9 alias_delete, 10 agent_config_write, 11 agent_config_delete, 12 dns_set, 13 dns_delete, 14 mail_send, 15 access_request, 16 payment, 17 restore; new kinds append. publish and listen cover tls/ and smtp/ alike, since `host` and `socket_name` say which. `SidecarRisk`: 1 normal, 2 high, numeric order being the max §5.4 takes. `ApprovalVerdict` (`decision`): 1 approve, 2 deny. `ApprovalChannel` (`channel`, and `AclRequestRule.evidence`): 1 device, 2 presence, 3 harness, as RECORD.md section 6.2. `audience` and `app_mode` hold acl.proto's `AclAudience` and `AclAppMode`: a publish's action always writes the resolved non-zero value (members 1, http 1), and a gate maps a request's 0 to 1 before comparing. An approver, spender or gate refuses 0 or an unknown value of any of these; §16.8's "unknown kinds are kept" covers `RecordHeader.kind` only. CORE-M1-01's Go types take these values. Kinds 5, 6, 7 and 16 have no O tool and no row in MCP-M3-02's kind table, so `NewCanonicalAction` refuses each until its owner names its fields. §5.4 and §16.8 record the table at M3's Gn-in.
-
-Changes: §5.4 SidecarAction; §16.8 CanonicalAction, ApprovalRequest, ApprovalDecision; RECORD.md section 6.2.
-
-Questions: `plan-MCP-wire-enum-numbers.md`.
-
-Not folded (2026-11-16): RECORD.md section 6.2's table of the four enums' values, which lives in RECORD.md, outside design/source/; the DESIGN.md parts are folded as text (§5.4's SidecarAction kinds 1 to 17, §16.8's values row).
-
-<a id="s7"></a>
-## §7 Networks, teams, members, enrollment, and SSO
-
-### QD-019: Whether per-run cost totals reach the team record, where admins can read a per-person series
-*Decided by the owner: owner 2026-11-06.*
-
-per-run totals (tokens by model and reported amounts, never a model_call) go to the team record by default, with Proposed's grouping rules: `ur record cost` groups by project, client or month, never ranks people, and folds groups under 5 members into other. A Team turns it off with ServiceSettings.record_cost, signed by an Owner or Admin, and every member's `ur status` names the setting. This replaces Proposed's off-by-default. (The recommendation it replaces: Per-run totals (tokens by model, reported amounts) go to the team record only in a Team that turns them on: `ServiceSettings.record_cost` (field 8, since `mail_strict` keeps 7, off by default, signed by an Owner or Admin), named in every member's `ur status`. Never a model_call. `ur record cost` groups by project, client or month, never ranks people, and shows groups under 5 members as `other`, which shapes the tool and is no privacy control. Counsel reviews before RS2, and also says whether the default may flip.)
-
-Changes: §7.9 ServiceSettings; RECORD.md sections 6.3 and 13.1; Q-RECORD-6.
-
-Questions: `record-md-run-cost-in-team-record.md`.
-
-Not folded (2026-11-16): RECORD.md sections 6.3 and 13.1 and Q-RECORD-6, which still hold the cost entry in the vault pending that question and live in RECORD.md, outside design/source/ and so outside a design-records track's files; the DESIGN.md part is folded as owner decision 302 (§7.9's settings fields: `record_cost`, field 8, on by default).
-
-### QD-050: Who files the team record's RepoCreate, what refuses a second, and whether a Team may go without one
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §8, §11.*
-
-`team-create`'s first Owner device files RepoCreate{kind team_record} right after the directory's, and an admin device that finds a team whose access logs hold no team_record RepoCreate files it. api and readers refuse a second live one in a network, and api one outside the team tier. Its admins are its creator and every config writer, as the directory's. A RepoDelete of it stands: only a person's /dev/tty-confirmed admin command files a new one, so a Team may decline the ledger and route as personal (RECORD.md section 4.2).
-
-Changes: D-TEAM-28; §7.5; §8.8 RepoCreate row and directory paragraph; §11.12; Q-RECORD-3.
-
-Questions: `record-md-team-record-creation.md`.
-
-Not folded (2026-11-16): Q-RECORD-3, which RECORD.md still lists as open and which no design-records track edits; the DESIGN.md parts are folded as owner decision 303 (§7.5, D-TEAM-28, §8.8's RepoCreate row and team_record paragraph, §11.12).
-
-<a id="s11"></a>
-## §11 Encrypted versioned storage
-
-### QD-176: A depositor cannot see a CONSUME, so D-MCP-10's "spool until consumed" has no mechanism
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §2, §16.*
-
-The ingester declares a mark in its CONSUME: `EvsPush.consumed_through` (uint64, field 35), the highest version of this deposit ref at or below which no unconsumed deposit remains, by its own read. evs copies it to `EvsHead.consumed_through` (field 27), never falling, and returns it beside {v+1} in a deposit push's 200 and in plan-EVS1-deposit-head's refusal body. The depositor stores each spooled deposit's push version and prunes at or below the mark; everything else stays within §16.7's 1 GiB, oldest dropped first, coverage naming spool_drop. No age bound: ingest lets no outcome hold a ref back (RECORD.md section 5.4), so the mark does not stick, and 30 days would drop exactly an offline author's deposits. §2.8 evs-3 gains the field and says a depositor, receipt-only readers included, learns when its deposits were ingested.
-
-Changes: §11.6 EvsPush; §11.8 EvsHead and the 200 reply; §2.8 evs-3; §16.8 Mirrors and site loss; RECORD.md sections 5.4 and 5.7.
-
-Questions: `plan-RECORD-depositor-spool.md`.
-
-Not folded (2026-11-16): RECORD.md sections 5.4 and 5.7's part, the depositor spool's pruning at the mark, which lives in RECORD.md, outside design/source/ and so outside a design-records track's files; the DESIGN.md parts are folded as text (§11.6's EvsPush and §11.8's EvsHead fences take consumed_through, §11.12's deposits paragraph, §11.8's step 8 and 5f, §2.8's evs-3 and evs-12, and §16.8's mirrors bullet).
-
-<a id="s16"></a>
-## §16 The local MCP server and record primitives
-
-### QD-018: A forged SessionStart can leave a tainted run behind
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §2, §5.*
-
-Recommended: option 1, with its limit stated. The run file keeps the harness process's identity (pid and start time; local, never shown). Every session or event under a harness process binds to the union of that process's runs, ended ones included: a new run there starts with their taint, fsynced, until the process exits. Only a SessionStart reporting a fresh start opens a new run, a session with no live harness ancestor binds nothing and reads tainted, and SessionEnd clears nothing. §16.6's monotone row reads "a new run starts untainted unless a run of its harness process is tainted". FS-27 gains forged SessionStart and SessionEnd steps. §2.10 and §16.17 state the residual: a process that leaves the harness's tree (setsid, a launchd or systemd job, a second harness started detached) inherits nothing and can use what §5.5 leaves to any local process, so I-9 binds runs, not all of a user's processes (owner decision 47).
-
-Changes: D-MCP-16; §16.6 monotone; §16.6 run file; §16.6 rejoin; FS-27; §2.10 P0 row; §16.17; RECORD.md section 4.3.
-
-Questions: `plan-MCP-taint-new-session.md`.
-
-Not folded (2026-11-16): RECORD.md section 4.3's part, the union of a harness process's runs for a run's binding, which lives in RECORD.md, outside design/source/ and so outside a design-records track's files; the DESIGN.md parts are folded as owner decision 448 (§16.6's run file, rejoin and monotone rows, D-MCP-16, §16.17, §2.10's P0 row and FS-27).
-
-### QD-127: What P5:728's "a person approved a change" is, when approvals bind only outward actions
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-An `attestation` entry (kind 29, RECORD.md section 11): a person's signed statement (1 reviewed, 2 tested, 3 approved) about named commits, by `ur record attest` on /dev/tty or in an app's UI, with an SSHSIG where the member holds a key. It sits outside the I-8 gate, is never called an approval, and P5:728's copy says what it is.
-
-Changes: RECORD.md sections 6.3, 11 and 17; Q-RECORD-7; P5:728 copy.
-
-Questions: `record-md-change-approval.md`.
-
-Not folded (2026-11-16): RECORD.md sections 6.3, 11 and 17 and Q-RECORD-7, which RECORD.md still marks pending, and P5:728's copy in sidecar/design/pitch5.html, all outside design/source/; the DESIGN.md part is folded as owner decision 453 (§16.8's approvals bullet).
-
-Not folded (2026-11-18): RECORD.md's parts, which track dr4-outside-docs folds next; P5:728's copy is folded (the same track).
-
-### QD-138: Nothing in the design writes a `record` repo's entries
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-A log admin's `ledger_scope` entry (kind 43, RECORD.md section 6.5) names the repos and projects a ledger covers, and a sidecar with write on that log adds a copy of each T-bound run entry: T's projection, never a vault body. No tool changes and no agent chooses a log. `ur status` names each `record` log a daemon copies to, so a member can see it.
-
-Changes: RECORD.md sections 6.3 and 6.5; §16.8 matrix; Q-RECORD-4.
-
-Questions: `record-md-record-repo-writers.md`.
-
-Not folded (2026-11-16): RECORD.md sections 6.3 and 6.5 and Q-RECORD-4, which RECORD.md still marks pending, outside design/source/; the DESIGN.md part is folded as owner decision 454 (§16.8's logs table).
-
-### QD-203: §16.8's total order for a log cannot span its streams
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-§16.8's order row becomes: within one stream, (evs push version, position in the push), each push's entries sorted by (writer, seq); across a log's streams the verifiable log appends in batches, batch by batch, streams by ref_id bytes within a batch, each checkpoint entry listing its frontier and leaves; no log-wide sequence, no format change. RECORD.md section 10.1 stands as drafted. Land this before M3's Gn-in, not M6's entry as the question says, because D-MCP-6 freezes log order with the envelope.
-
-Changes: §16.8 order row; D-MCP-6; Q-RECORD-1.
-
-Questions: `record-md-log-order-across-streams.md`.
-
-Not folded (2026-11-16): Q-RECORD-1, which RECORD.md still lists as open, outside design/source/; the DESIGN.md parts are folded as text (§16.8's order row and D-MCP-6).
-
-### QD-261: evidence_sha256 cannot hold the WebAuthn assertion that signs it
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-§16.8's comment becomes: harness: the matched hook event, which stays in the record; device and presence: empty, a presence decision's assertion riding in Signed.webauthn. Writers leave field 10 empty on channels 1 and 2. RECORD.md section 5.1 stands, and protocol/record.proto's copy of the comment follows.
-
-Changes: §16.8 ApprovalDecision comment; protocol/record.proto comment; Q-RECORD-2.
-
-Questions: `record-md-presence-evidence-sha256.md`.
-
-Not folded (2026-11-16): Q-RECORD-2, which RECORD.md still lists as open, outside design/source/; the DESIGN.md part is folded as text (§16.8's ApprovalDecision comment), and protocol/record.proto's comment already reads so.
-
-### QD-651: What bytes does `ur record open` write, and does a packet's `--content` take them?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-The file ur record open writes, and ur record disclose --content reads, is a new record.proto message, DisclosureOpenings {version, log_id, repeated Opening openings, repeated DisclosedKey keys, purpose}, which cannot be mistaken for a DisclosurePacket; the vault's disclosure entry of act 2 records its SHA-256 as packet_sha256. Adopted at M6's entry review: RECORD-M6-06's Open writes it and Disclose reads it (two functions), with a section 20 vector. RECORD.md section 11 names the message (design-records or RECORD's own doc).
-
-Changes: RECORD follow-up at M6 entry review: DisclosureOpenings in record.proto, Open and Disclose, a vector; RECORD.md section 11 text.
-
-Questions: `record-m6-05-open-file-format.md`.
-
-Not folded (2026-11-16): RECORD.md section 11's text naming the message, outside design/source/; the DESIGN.md part is folded as owner decision 456 (§16.8's disclosure row), and DisclosureOpenings itself waits on record.proto (RECORD-M6-06).
-
-### QD-360: The requester's record of an outcome is a `copy` entry
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-The requester writes a `copy` entry (kind 39) to the member's vault, CopyBody holding one Opening (header, salt, body) per decision entry the notice names; a tagged requester deposits it to its sponsor's vault and writes none while it has no sponsor. RECORD.md's CopyBody comment and row 39's writer widen from "deposited to T" to cover it. As with every copy, an erasure of the decision in the directory does not reach it, and its prose stays a stub for agents.
-
-Changes: RECORD.md sections 6.3 and 6.4.
-
-Questions: `plan-RECORD-small-readings.md#6`.
-
-Not folded (2026-11-16): RECORD.md sections 6.3 and 6.4, CopyBody's comment and row 39's writer, outside design/source/; the DESIGN.md part is folded as text (§16.11's receipt row).
 
 <a id="later"></a>
 ## Later decisions
