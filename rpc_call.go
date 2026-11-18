@@ -245,9 +245,10 @@ func (self *Subprotocol) Call(ctx context.Context, clientId Id, messageType prot
 	}
 	search := messageType == protocol.MessageType_SEARCH
 	if search {
-		// one envelope of one size, and one timeout_ms, whatever the caller asks (rpc_search.go)
-		if len(body) != self.settings.Search.RequestByteCount {
-			return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_INVALID_ARGUMENT, Message: "a SEARCH body of another size"}
+		// one envelope of one size, and one timeout_ms, whatever the caller asks (rpc_search.go); a leg that links
+		// no search refuses the call here, before anything is sent (rpc_search_leg.go)
+		if err := searchRequestBodyError(body, &self.settings.Search); err != nil {
+			return nil, err
 		}
 		timeout = self.settings.Search.Timeout
 	}

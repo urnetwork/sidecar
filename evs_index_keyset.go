@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // Key sets and deltas (§11.14's key set row; protocol/INDEX-FORMAT.md). A document's set of trigram keys is written
 // whole in a full entry, or as what a diff added to and removed from its base's set. Composing deltas lives here
 // because a reader's chains and a writer's head rule must agree on it (D-EVS-46).

@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // §5.9's bounds row for the index cache (CORE-M10-01), and the retained buckets of its holds row (D-EVS-51).
 //
 // Bound: Search.CacheByteCount, 4 GiB on a desktop, 16 GiB on a daemon designated for search, §18.4's caps on phones
@@ -14,7 +16,8 @@
 // complete between a roll-up and its download. The sync engine, SEARCH-M10-19's, says when a bucket is retained and
 // when its all moves; this file keeps the record and drops the files.
 //
-// On every leg: root Id, no connect type. Safe for concurrent use.
+// On every leg but the ios_extension legs, which link no index or search code (QD-988): root Id, no connect type. Safe
+// for concurrent use.
 
 package sidecar
 

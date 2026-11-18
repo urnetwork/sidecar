@@ -10,6 +10,12 @@
 // package's doc.go, which costs nothing. The extension legs' closures, one per slice the extension's bind builds, make
 // one list.
 //
+// A leg file is one only the leg's tag selects, such as rpc_search_leg.go (QD-988): the leg's stand-in for a file tagged
+// off in its favor. The leg compiles it whatever the seeds need, so it is in the closure from the start, and in the
+// rounds it compiles as a copy without its build line, so the closure takes what it declares from it and the file it
+// stands in for stays out, with all that file alone needs. Should the closure need another name of that file, the file
+// joins, the round fails on the names both declare, and the test fails: such a leg would not compile either.
+//
 // This compiles each leg once a round and needs Xcode for the iOS ones, so it runs beside make size, not in make check,
 // which holds the list as written (legrows_test.go). Without the variable it compares the list with the closure: a file
 // the closure needs and the list lacks fails, and one the list names past the closure is logged, the list being free to
@@ -24,6 +30,7 @@ import (
 	"encoding/json"
 	"errors"
 	"go/ast"
+	"go/build/constraint"
 	"go/parser"
 	"go/token"
 	"io"
@@ -325,43 +332,58 @@ func (self *repository) iosExtensionLegClosure(t testing.TB, leg *buildLeg, seed
 			t.Fatalf("%s's closure compiles only with Xcode: %v", leg.name, err)
 		}
 	}
-	// the files the leg would compile were the tag to leave none out
-	tags := strings.Join(slices.DeleteFunc(slices.Clone(leg.tags), func(tag string) bool { return tag == iosExtensionTag }), ",")
-	output, err := runGo(directory, environment, "list", "-tags="+tags, "-json=ImportPath,Name,Dir,GoFiles,CgoFiles", ".", "./protocol")
-	if err != nil {
-		t.Fatal(err)
-	}
-	files := map[string]*closureFile{}
-	rootFiles := []string{}
-	decoder := json.NewDecoder(bytes.NewReader(output))
-	for {
-		listed := &listedPackage{}
-		if err := decoder.Decode(listed); err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
+	// the root and protocol files a set of tags compiles, as the list names files
+	listFiles := func(tags string) []*closureFile {
+		output, err := runGo(directory, environment, "list", "-tags="+tags, "-json=ImportPath,Name,Dir,GoFiles,CgoFiles", ".", "./protocol")
+		if err != nil {
 			t.Fatal(err)
 		}
-		packageName := "."
-		if listed.ImportPath != self.modulePath {
-			packageName = "protocol"
-		}
-		for _, goFile := range slices.Concat(listed.GoFiles, listed.CgoFiles) {
-			name := goFile
-			if packageName == "protocol" {
-				name = "protocol/" + goFile
-			} else {
-				rootFiles = append(rootFiles, goFile)
-			}
-			filePath := filepath.Join(listed.Dir, goFile)
-			syntax, err := parser.ParseFile(token.NewFileSet(), filePath, nil, parser.SkipObjectResolution)
-			if err != nil {
+		listedFiles := []*closureFile{}
+		decoder := json.NewDecoder(bytes.NewReader(output))
+		for {
+			listed := &listedPackage{}
+			if err := decoder.Decode(listed); err != nil {
+				if errors.Is(err, io.EOF) {
+					break
+				}
 				t.Fatal(err)
 			}
-			files[name] = &closureFile{name: name, path: filePath, packageName: packageName, clauseName: syntax.Name.Name, syntax: syntax}
+			packageName := "."
+			if listed.ImportPath != self.modulePath {
+				packageName = "protocol"
+			}
+			for _, goFile := range slices.Concat(listed.GoFiles, listed.CgoFiles) {
+				name := goFile
+				if packageName == "protocol" {
+					name = "protocol/" + goFile
+				}
+				filePath := filepath.Join(listed.Dir, goFile)
+				syntax, err := parser.ParseFile(token.NewFileSet(), filePath, nil, parser.SkipObjectResolution)
+				if err != nil {
+					t.Fatal(err)
+				}
+				listedFiles = append(listedFiles, &closureFile{name: name, path: filePath, packageName: packageName, clauseName: syntax.Name.Name, syntax: syntax})
+			}
+		}
+		return listedFiles
+	}
+	// the files the leg would compile were the tag to leave none out
+	tags := strings.Join(slices.DeleteFunc(slices.Clone(leg.tags), func(tag string) bool { return tag == iosExtensionTag }), ",")
+	files := map[string]*closureFile{}
+	rootFiles := []string{}
+	for _, file := range listFiles(tags) {
+		files[file.name] = file
+		if file.packageName == "." {
+			rootFiles = append(rootFiles, file.name)
 		}
 	}
-	declarations := readClosureDeclarations(files)
+	// and the leg's own, which only its tag selects
+	legFiles := []*closureFile{}
+	for _, file := range listFiles(strings.Join(leg.tags, ",")) {
+		if files[file.name] == nil {
+			legFiles = append(legFiles, file)
+		}
+	}
 	memberSet := map[string]bool{}
 	for _, seed := range seedsOf(rootFiles) {
 		if files[seed] == nil {
@@ -369,12 +391,34 @@ func (self *repository) iosExtensionLegClosure(t testing.TB, leg *buildLeg, seed
 		}
 		memberSet[seed] = true
 	}
+	scratch := t.TempDir()
+	// each leg file's copy without its build line, which a round without the tag compiles in its place
+	legFilePaths := map[string]string{}
+	for index, file := range legFiles {
+		data, err := os.ReadFile(file.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(string(data), "\n")
+		for lineIndex, line := range lines {
+			if constraint.IsGoBuild(line) || constraint.IsPlusBuild(line) {
+				lines[lineIndex] = ""
+			}
+		}
+		legFilePath := filepath.Join(scratch, "leg"+strconv.Itoa(index)+"_"+filepath.Base(file.path))
+		if err := os.WriteFile(legFilePath, []byte(strings.Join(lines, "\n")), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		legFilePaths[file.name] = legFilePath
+		files[file.name] = file
+		memberSet[file.name] = true
+	}
+	declarations := readClosureDeclarations(files)
 	for name, file := range files {
 		if len(file.syntax.Decls) == 0 {
 			memberSet[name] = true
 		}
 	}
-	scratch := t.TempDir()
 	stubPaths := map[string]string{}
 	for _, file := range files {
 		if stubPaths[file.clauseName] != "" {
@@ -393,6 +437,8 @@ func (self *repository) iosExtensionLegClosure(t testing.TB, leg *buildLeg, seed
 		for name, file := range files {
 			if !memberSet[name] {
 				replace[file.path] = stubPaths[file.clauseName]
+			} else if legFilePath := legFilePaths[name]; legFilePath != "" {
+				replace[file.path] = legFilePath
 			}
 		}
 		data, err := json.Marshal(map[string]map[string]string{"Replace": replace})
@@ -421,6 +467,13 @@ func (self *repository) iosExtensionLegClosure(t testing.TB, leg *buildLeg, seed
 		if len(joined) == 0 {
 			break
 		}
+		// why each file is on the list: the round it joined in, for a name a member lacked or, the round having
+		// compiled, as a registration
+		reason := "for names its members lack"
+		if buildErr == nil {
+			reason = "as registrations into its members"
+		}
+		t.Logf("%s: round %d takes %d files %s: %s", leg.name, round, len(joined), reason, strings.Join(joined, " "))
 		for _, name := range joined {
 			memberSet[name] = true
 		}
@@ -507,6 +560,34 @@ func Seed() int {
 		"registration_value.go", "registry.go", "seed.go", "thing.go", "thing_name.go", "thing_size.go",
 	}
 	if !slices.Equal(closure, want) {
+		t.Errorf("closure %v, want %v", closure, want)
+	}
+}
+
+// A leg file, which only the legs' tag selects, is in the closure and stands in for the file tagged off in its favor: the
+// closure takes the seed's name from it, and neither the file it replaces nor the protocol file only that one reads.
+func TestIosExtensionLegClosureTakesALegFileForTheFileItReplaces(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs(iosExtensionLegName, macExtensionLegName)
+	fixture.write("seed.go", "package sidecar\n\nfunc Seed() int {\n\treturn answer()\n}\n")
+	fixture.write("answer.go", "//go:build !ios_extension\n\npackage sidecar\n\nimport \"@module@/protocol\"\n\nfunc answer() int {\n\treturn len((&protocol.Message{}).Name)\n}\n")
+	fixture.write("answer_leg.go", "//go:build ios_extension\n\npackage sidecar\n\nfunc answer() int {\n\treturn 0\n}\n")
+	fixture.write("protocol/message.go", "package protocol\n\ntype Message struct {\n\tName string\n}\n")
+	closure := fixture.open().iosExtensionLegClosures(t, func(rootFiles []string) []string { return []string{"seed.go"} })
+	if want := []string{"answer_leg.go", "protocol/doc.go", "seed.go"}; !slices.Equal(closure, want) {
+		t.Errorf("closure %v, want %v", closure, want)
+	}
+}
+
+// Its twin: with no leg file, the closure takes the tagged file the seed needs and the protocol file that one reads.
+func TestIosExtensionLegClosureTakesATaggedFileWithNoLegFile(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs(iosExtensionLegName, macExtensionLegName)
+	fixture.write("seed.go", "package sidecar\n\nfunc Seed() int {\n\treturn answer()\n}\n")
+	fixture.write("answer.go", "//go:build !ios_extension\n\npackage sidecar\n\nimport \"@module@/protocol\"\n\nfunc answer() int {\n\treturn len((&protocol.Message{}).Name)\n}\n")
+	fixture.write("protocol/message.go", "package protocol\n\ntype Message struct {\n\tName string\n}\n")
+	closure := fixture.open().iosExtensionLegClosures(t, func(rootFiles []string) []string { return []string{"seed.go"} })
+	if want := []string{"answer.go", "protocol/doc.go", "protocol/message.go", "seed.go"}; !slices.Equal(closure, want) {
 		t.Errorf("closure %v, want %v", closure, want)
 	}
 }

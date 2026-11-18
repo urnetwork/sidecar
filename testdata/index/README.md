@@ -53,7 +53,7 @@ exist.
 - **Under the sdk's module graph.** `sdk/sidecar_index_vectors_test.go` reproduces the normalize, slot and shard
   vectors through `TestHookIndexVectorFindings` in the binary the sdk builds, where the apps' x/text is selected.
 - **make check.** `check/` fails a leg that selects another x/text (the deps row), an `ios_extension` leg that compiles
-  an index or search file (behind its switch until QD-988's split lands), and a `sidecar_http` leg that compiles a
+  an index or search file (its switch on since QD-988's split), and a `sidecar_http` leg that compiles a
   `search_remote_` file.
 
 ## Rewriting
