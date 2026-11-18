@@ -16,7 +16,10 @@ package fault
 // cellular, which can require power and a network but never Wi-Fi, and a window in Low Power Mode each bring the
 // latest set and fetch no all; on Wi-Fi while charging in the background a phone syncs all only in an OS-granted
 // window, which stops at its budget and resumes in the next, from the first shard it did not keep and fetching none it
-// kept, until all is held and a cached search reads it with no fetch.
+// kept, until all is held and a cached search reads it with no fetch. A DropCache between two such windows (QD-1025)
+// leaves the next window to fetch the latest set and all again, every shard the first kept included, and a cached
+// search then finds the latest set's hits and all's; alone, a device that syncs one document, drops its cache and
+// syncs again finds it again, its round after the drop fetching the latest set anew.
 //
 // Readings: MeteredMoreByteCount stands at 64 KiB here, under this all's size, for §18.4's 25 MiB over a larger one;
 // the candidates a phone lists, possible ones included, are held to SearchOracle's matches, since a phone holds no
@@ -496,6 +499,140 @@ func (self *fs77State) wifiChargingWindows(host *searchHost, label string) func(
 	}
 }
 
+// FS-77's phone on Wi-Fi while charging whose cache is dropped between two OS windows (QD-1025).
+const fs77DropLabel = "android on Wi-Fi while charging, its cache dropped between two windows"
+
+// A phone on Wi-Fi while charging, reading a file at a time at fs77ReadByteRate, whose cache is dropped between two
+// windows: a round outside a window brings the latest set, the first window part of all; after DropCache the next
+// window, with the budget to finish, fetches the latest set again and every shard of all, youngest first, the ones the
+// first window kept included, and a cached search then finds the latest set's hits and all's with no fetch. Before
+// QD-1025's reset the window after the drop counted every dropped file as held, and the search found not even the
+// latest set's hits.
+func (self *fs77State) dropBetweenWindows(host *searchHost, label string) func(ctx context.Context, net *Net) error {
+	return func(ctx context.Context, net *Net) error {
+		world := self.world
+		conditions := sidecar.SearchConditions{Reported: true, Unmetered: true, Charging: true}
+		device, err := world.index.NewDevice(ctx, &sidecar.SearchTestDeviceArgs{
+			Settings: host.settings(), Conditions: func() sidecar.SearchConditions { return conditions },
+			ReadByteRate: fs77ReadByteRate, ReadByteCount: 1,
+		})
+		if err != nil {
+			return err
+		}
+		defer device.Close()
+		if err := device.Sync(ctx); err != nil {
+			return err
+		}
+		shards := fs77AllShards(world)
+		if len(shards) < 2 {
+			return fmt.Errorf("all holds %d shards, too few for a window to stop partway", len(shards))
+		}
+		readTime := func(file sidecar.SearchTestFile) time.Duration {
+			return time.Duration(int64(file.ByteCount) * int64(time.Second) / fs77ReadByteRate)
+		}
+		order := []string{}
+		allTime := time.Duration(0)
+		for _, shard := range shards {
+			order = append(order, fs77TraceLine(shard))
+			allTime += readTime(shard)
+		}
+		before := len(device.Fetches())
+		if _, err := fs77Window(ctx, net, device, readTime(shards[0])+readTime(shards[1])/2); err != nil {
+			return err
+		}
+		if first := searchAllShardsOf(searchTraceOf(device.Fetches()[before:])); len(first) == 0 || len(order) <= len(first) {
+			self.breaks("%s: the first window read %v of all, not part of it", label, first)
+		}
+
+		if err := device.DropCache(); err != nil {
+			return err
+		}
+		before = len(device.Fetches())
+		// the latest set's files are a few KiB, read in well under the hour beside all's time
+		deadline, err := fs77Window(ctx, net, device, allTime+time.Hour)
+		if err != nil {
+			return err
+		}
+		if !net.Clock().Now().Before(deadline) {
+			self.breaks("%s: the window after the drop ran to its budget, not until all was held", label)
+		}
+		fetches := device.Fetches()[before:]
+		if !slices.ContainsFunc(fetches, func(fetch sidecar.SearchTestFetch) bool { return !fs77AllShard(fetch.Path) }) {
+			self.breaks("%s: the window after the drop fetched none of the latest set", label)
+		}
+		if second := searchAllShardsOf(searchTraceOf(fetches)); !slices.Equal(second, order) {
+			self.breaks("%s: the window after the drop read all as %v, not every shard youngest first, %v", label, second, order)
+		}
+
+		before = len(device.Fetches())
+		cached, err := device.Search(ctx, &sidecar.SearchRequest{Text: fs77Query, Scope: sidecar.SearchCached, Remote: "off"}, 64, nil)
+		if err != nil {
+			return err
+		}
+		if fetched := len(device.Fetches()) - before; fetched != 0 {
+			self.breaks("%s: the cached search after the windows fetched %d files", label, fetched)
+		}
+		got := searchHitNames(cached.Hits())
+		for _, latest := range self.oracle(fs77Query, sidecartest.SearchScopeLatest) {
+			if !slices.Contains(got, latest) {
+				self.breaks("%s: the cached search after the windows found %v, without the latest set's %s", label, got, latest)
+			}
+		}
+		if want := self.oracle(fs77Query, sidecartest.SearchScopeAll); !slices.Equal(got, want) {
+			self.breaks("%s: the cached search after the windows found %v, and SearchOracle over all %v", label, got, want)
+		}
+		return nil
+	}
+}
+
+// A device that syncs, finds the row's query in the buckets, drops its cache and syncs again: the round after the drop
+// fetches the latest set anew, and the same cached search finds what it found before (QD-1025). Before the reset, that
+// round fetched nothing and the search found nothing until a restart.
+func (self *fs77State) dropAndSync(host *searchHost, label string) func(ctx context.Context, net *Net) error {
+	return func(ctx context.Context, net *Net) error {
+		device, err := self.world.device(ctx, host, nil, nil, 0, nil)
+		if err != nil {
+			return err
+		}
+		defer self.world.done(device)
+		search := func() ([]string, error) {
+			found, err := device.Search(ctx, &sidecar.SearchRequest{Text: fs77Query, Scope: sidecar.SearchCached, Remote: "off"}, 64, nil)
+			if err != nil {
+				return nil, err
+			}
+			return searchHitNames(found.Hits()), nil
+		}
+		want := self.oracle(fs77Query, sidecartest.SearchScopeLatest)
+		if len(want) == 0 {
+			return fmt.Errorf("SearchOracle finds nothing of %q for %s to find", fs77Query, label)
+		}
+		if err := device.Sync(ctx); err != nil {
+			return err
+		}
+		if got, err := search(); err != nil {
+			return err
+		} else if !slices.Equal(got, want) {
+			self.breaks("%s found %v before its drop, and SearchOracle %v", label, got, want)
+		}
+		fetched := len(device.Fetches())
+		if err := device.DropCache(); err != nil {
+			return err
+		}
+		if err := device.Sync(ctx); err != nil {
+			return err
+		}
+		if len(device.Fetches()) == fetched {
+			self.breaks("%s's round after its drop fetched nothing", label)
+		}
+		if got, err := search(); err != nil {
+			return err
+		} else if !slices.Equal(got, want) {
+			self.breaks("%s found %v after its drop and a round, and SearchOracle %v", label, got, want)
+		}
+		return nil
+	}
+}
+
 // FI-23 as FS-77 holds it: two different queries from equal sync states give the same requests.
 func (self *fs77State) fi23() Invariant {
 	return NewInvariant("FI-23 (FS-77's equal requests)", func(ctx context.Context, oracle *Oracle) error {
@@ -537,6 +674,7 @@ func Fs77PhoneSearch(net *Net) *Schedule {
 		&Step{Actor: "ios32", Action: state.cellularWindow(nil)},
 		&Step{Actor: "ios32", Action: state.windowWithoutAll(searchHostNamed("ios32"), lowPower, "ios32 in a window in Low Power Mode", nil)},
 		&Step{Actor: "android", Action: state.wifiChargingWindows(searchHostNamed("android"), "android on Wi-Fi while charging")},
+		&Step{Actor: "android", Action: state.dropBetweenWindows(searchHostNamed("android"), fs77DropLabel)},
 	)
 	steps = append(steps, &Step{Actor: "writer", Action: func(ctx context.Context, net *Net) error {
 		state.world.close()
@@ -590,5 +728,60 @@ func TestFs77FailsAWindowRuleIgnoringTheLink(t *testing.T) {
 		case planted && !strings.Contains(result.Err.Error(), fs77CellularWindowLabel+" fetched all's "):
 			t.Fatalf("a windows rule ignoring the link failed, but not on the all it fetched on cellular: %s", result)
 		}
+	}
+}
+
+// FS-77's DropCache between two windows (QD-1025), alone: it samples no heap, so it runs in the test's own process.
+func TestFs77DropCacheBetweenWindows(t *testing.T) {
+	state := &fs77State{traces: map[string][]string{}}
+	steps := []*Step{
+		{Actor: "writer", Action: state.write},
+		{Actor: "android", Action: state.dropBetweenWindows(searchHostNamed("android"), fs77DropLabel)},
+		{Actor: "writer", Action: func(ctx context.Context, net *Net) error {
+			state.world.close()
+			return nil
+		}},
+	}
+	net := sidecartest.NewNet(t.Context(), nil)
+	result := Run(t.Context(), &Schedule{Id: "FS-77 drop between windows", Steps: steps, Check: []Invariant{state.fi18()}}, net)
+	net.Close()
+	if result.Err != nil {
+		t.Fatalf("%s", result)
+	}
+}
+
+// QD-1025's reproduction on the search world: one pushed document, synced, which a cached search finds; after DropCache
+// and another round the same search finds it again, the round fetching the latest set anew. Before the reset, the round
+// after the drop fetched nothing and the search found nothing until a restart.
+func TestFs77DropCacheSyncsAgain(t *testing.T) {
+	state := &fs77State{traces: map[string][]string{}}
+	steps := []*Step{
+		{Actor: "writer", Action: func(ctx context.Context, net *Net) error {
+			world, err := newSearchWorld(net, "fs77 drop")
+			if err != nil {
+				return err
+			}
+			state.world = world
+			now := net.Clock().Now()
+			document := &sidecar.SearchTestDocument{Path: "notes/harbor.md", Version: 1, Title: "Harbor lights", Text: "the evening boat", Time: now}
+			if err := world.index.PushDocuments(ctx, world.writerId, now, []*sidecar.SearchTestDocument{document}); err != nil {
+				return err
+			}
+			return world.record(now, document)
+		}},
+		{Actor: "ios32", Action: state.dropAndSync(searchHostNamed("ios32"), "ios32")},
+		{Actor: "writer", Action: func(ctx context.Context, net *Net) error {
+			state.world.close()
+			return nil
+		}},
+	}
+	net := sidecartest.NewNet(t.Context(), nil)
+	result := Run(t.Context(), &Schedule{Id: "FS-77 drop and sync", Steps: steps, Check: []Invariant{state.fi18()}}, net)
+	net.Close()
+	if result.Err != nil {
+		t.Fatalf("%s", result)
+	}
+	if want := []string{"notes/harbor.md@1"}; !slices.Equal(state.oracle(fs77Query, sidecartest.SearchScopeLatest), want) {
+		t.Fatalf("SearchOracle finds %v, not the one document %v", state.oracle(fs77Query, sidecartest.SearchScopeLatest), want)
 	}
 }
