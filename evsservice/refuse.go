@@ -17,8 +17,7 @@
 //	         by If-Match, keeping its records; the placeholder stays, as a tombstone head does
 //
 // The recording CAS is paid with its request (§11.13's order row: "a refusal's record with its request"), at one head
-// overwrite. A PATH_EPOCH_DUE refusal of a push crossing a REMOVE generation also writes that due, as the commit
-// would have (DESIGN-DETAILS 9.2.6; question details-9-crossing-creation).
+// overwrite. It records no path-epoch due: a due is recorded by the commit that crosses it alone (QD-1046).
 
 package evsservice
 
@@ -95,9 +94,6 @@ func (self *pushAttempt) record(refusal *EvsCheckRefusal) *pushOutcome {
 			return self.unavailableOn(err)
 		}
 		next.Refused = refused
-		if due := self.refusalDue(refusal, head.Head); due != nil {
-			next.PathEpoch = applyPathEpochDue(next.GetPathEpoch(), due, now)
-		}
 		written, err := self.engine.heads.Commit(self.writeCtx, self.cluster, self.repoId, self.refId, head, next)
 		var unknown *sidecar.BlobUnknownError
 		switch {
@@ -126,20 +122,6 @@ func (self *pushAttempt) record(refusal *EvsCheckRefusal) *pushOutcome {
 		head = reread
 	}
 	return self.recordingUnknown()
-}
-
-// The due a refusal's fence write records over head (DESIGN-DETAILS 9.2.6): a PATH_EPOCH_DUE refusal of a push
-// that crosses a REMOVE generation records that due as its commit would have, so the first push across a removal
-// stops creation whether it commits or not. nil for any other refusal, and for a head whose current epoch already
-// reaches the due's generation, which a PATH_EPOCH landing first cleared.
-func (self *pushAttempt) refusalDue(refusal *EvsCheckRefusal, head *protocol.EvsHead) *pathEpochDue {
-	if self.due == nil || refusal.Reason != EvsCheckReasonPathEpochDue || head.GetVersion() == 0 {
-		return nil
-	}
-	if self.due.generation <= EvsHeadCurrentEpoch(head) {
-		return nil
-	}
-	return self.due
 }
 
 // The head's refusal records not lapsed at now.
