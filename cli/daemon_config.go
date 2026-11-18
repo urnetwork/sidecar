@@ -125,6 +125,12 @@ func newUrBridgeBuild(args *urBridgeBuildArgs) urBridgeBuildFunction {
 		if client.NetworkId() != networkId {
 			return nil, fmt.Errorf("%w: the sidecar's follower follows another network", errUrBridgeUnwired)
 		}
+		// the engine ur bridge's previews ask holds the routes in force the device role's state was compiled from
+		installRoutes := func(servedRoutes *sidecar.AclServedRoutes) {
+			if engine := follower.AclEngine(); engine != nil {
+				engine.InstallRoutes(servedRoutes)
+			}
+		}
 		wire, err := newUrBridgeWire(ctx, &urBridgeWireArgs{
 			NetworkId:       networkId,
 			Sidecar:         running,
@@ -133,6 +139,7 @@ func newUrBridgeBuild(args *urBridgeBuildArgs) urBridgeBuildFunction {
 			Rows:            follower.Rows(),
 			RepoKeyAt:       follower.RepoKeyAt,
 			AclLocal:        follower.AclLocal,
+			ServedRoutes:    installRoutes,
 			StateDirectory:  args.StateDirectory,
 			DaemonListeners: args.daemonListeners,
 			SidecarSettings: args.Settings,

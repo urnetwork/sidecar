@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"slices"
 	"strings"
 	"sync"
@@ -185,6 +186,10 @@ type testBridgeComponentWorld struct {
 	// the NAT settings each gate built with
 	natSettings []*connect.LocalUserNatSettings
 	alarms      []SidecarBridgeAlarm
+	// what a component built after it is set hands each compile's routes in force, nil for none
+	servedRoutes func(servedRoutes *AclServedRoutes)
+	// the config's generation keys a component built after it is set opens sealed bodies with, nil for none held
+	repoKeyAt func(generation uint64) *EvsRepoKey
 }
 
 func newTestBridgeComponentWorld(t *testing.T) *testBridgeComponentWorld {
@@ -214,9 +219,11 @@ func (self *testBridgeComponentWorld) component() *BridgeComponent {
 		Identity: func() *SidecarIdentity {
 			return &SidecarIdentity{NetworkId: self.net.networkId, SidecarId: self.host.sidecarId, IdentityPublicKey: self.host.publicKey()}
 		},
-		Config: self.client,
-		Heads:  self.heads,
-		Rows:   self.net.source,
+		Config:       self.client,
+		Heads:        self.heads,
+		Rows:         self.net.source,
+		RepoKeyAt:    self.repoKeyAt,
+		ServedRoutes: self.servedRoutes,
 		Emit: func(event SidecarEvent) {
 			if event.Kind == SidecarEventBridgeAlarm {
 				self.stateLock.Lock()
@@ -290,6 +297,37 @@ func TestTheComponentAnchorsThenCompilesARisingState(t *testing.T) {
 	}
 	if slices.ContainsFunc(world.events.list(), func(event string) bool { return strings.HasSuffix(event, " dropped") }) {
 		t.Errorf("a state below the one in force was handed: %v", world.events.list())
+	}
+}
+
+// Each state the component compiles hands the host's AclEngine every advertiser's subnet routes in force at it (owner
+// decision 575): none before a route stands, and the desktop's 192.168.7.0/24 once it files one, which with no document
+// a standing route of an untagged advertiser is (owner decision 120). The engine holds what the last compile gave it.
+func TestTheComponentHandsEachCompilesRoutesInForceToTheEngine(t *testing.T) {
+	world := newTestBridgeComponentWorld(t)
+	world.repoKeyAt = testConfigSealKeyAt(testConfigSealKey(1))
+	engine := NewAclEngine(world.host.sidecarId, nil, nil, nil)
+	world.servedRoutes = func(servedRoutes *AclServedRoutes) {
+		engine.InstallRoutes(servedRoutes)
+		world.events.add(fmt.Sprint("routes ", servedRoutes.Prefixes(world.peer.sidecarId)))
+	}
+	component := world.component()
+	if err := component.SetDeviceRole(world.sink); err != nil {
+		t.Fatal(err)
+	}
+	world.events.waitFor(t, "the first compile's routes", func(event string) bool { return event == "routes []" })
+	if engine.servedRoutes.Load() == nil {
+		t.Error("the engine holds no routes after a compile that answered none in force")
+	}
+
+	route := world.net.bridgeRoute(world.peer, testBridgeRuleId("home"), testBridgeSubnet(testBridgePrefix(192, 168, 7, 0, 24), "home site"))
+	n := world.post(world.peer, bridge.SignedType_SIGNED_BRIDGE_ROUTE, route)
+	world.events.waitFor(t, "the route's compile", func(event string) bool { return event == "routes [192.168.7.0/24]" })
+	world.events.waitFor(t, "a state at the route", func(event string) bool { return strings.HasPrefix(event, fmt.Sprintf("state %d ", n)) })
+	served := engine.servedRoutes.Load()
+	if !served.serves(world.peer.sidecarId, netip.MustParseAddr("192.168.7.20")) || served.serves(world.host.sidecarId, netip.MustParseAddr("192.168.7.20")) ||
+		served.serves(world.peer.sidecarId, netip.MustParseAddr("192.168.8.20")) {
+		t.Errorf("the engine's routes: the desktop's %v, the laptop's %v", served.Prefixes(world.peer.sidecarId), served.Prefixes(world.host.sidecarId))
 	}
 }
 

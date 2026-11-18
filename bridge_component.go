@@ -164,6 +164,11 @@ type BridgeComponentArgs struct {
 	RepoKeyAt func(generation uint64) *EvsRepoKey
 	// AclFollower's local policy, nil with no document or before it compiles.
 	AclLocal func() *AclLocalPolicy
+	// Takes every advertiser's subnet routes in force at each state the component compiles, for the host's AclEngine
+	// (AclEngine.InstallRoutes; owner decision 575), so ur bridge's previews answer a route rule that names no prefix by
+	// the routes the device role enforces. Nil asks the compile for none. Called on the compile's goroutine with no
+	// lock held, so it must not block.
+	ServedRoutes func(servedRoutes *AclServedRoutes)
 	// Rule 0's input, DaemonLocalListen's binds, host:port. Nil for none.
 	DaemonListeners func() []string
 	// The zones the names answer under (§12.9), and the labels the zone publishes, which no client name shadows.
@@ -879,6 +884,8 @@ func (self *BridgeComponent) compileNow() {
 			NameZones:     self.args.NameZones,
 			ShareTables:   self.shareTables.Rows(),
 			Settings:      self.settings.Compile,
+
+			AnswerServedRoutes: self.args.ServedRoutes != nil,
 		}
 		if self.args.DaemonListeners != nil {
 			local.DaemonListeners = self.args.DaemonListeners()
@@ -902,6 +909,9 @@ func (self *BridgeComponent) compileNow() {
 			self.log.Warningf("[bridge]%s the device role refused the state at %d: %v", self.args.NetworkId, state.Pin().GetVersion(), err)
 		}
 		self.block = compiled.Block
+		if self.args.ServedRoutes != nil {
+			self.args.ServedRoutes(compiled.ServedRoutes)
+		}
 		func() {
 			self.stateLock.Lock()
 			defer self.stateLock.Unlock()
