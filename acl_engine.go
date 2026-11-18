@@ -9,8 +9,10 @@
 //
 //	AllowInbound      stream accept (§6) and a listener's check of its dialer: a dial grant reaching this sidecar,
 //	                  its ports when the rule limits them, or a socket grant whose exact glob takes the name
-//	AllowRoute        a route rule reaching the via whose prefixes take the address and whose ports take the port;
-//	                  it serves BRIDGE's compiler and ur bridge's previews, never the device's hook (QD-590)
+//	AllowRoute        a route rule reaching the via whose prefixes take the address and whose ports take the port, or
+//	                  one that names no prefix whose destinations name the via too, for an address the via's subnet
+//	                  routes in force serve (owner decision 575), which InstallRoutes hands in; it serves BRIDGE's
+//	                  compiler and ur bridge's previews, never the device's hook (QD-590)
 //	AllowAlias        mail:<alias> for send or listen, which rows carry only as mail_send (D-ACL-12)
 //	Check             Sidecar.Authorize's active-grant test through CORE's SidecarGate, and MCP's acl_check
 //	VerifyRepoMember  ACL-M2-08's CheckRepoMember at the pin the push or delivery carries (§10.9, FS-104)
@@ -119,6 +121,8 @@ type AclEngine struct {
 	// installs serialize here; checks never take it
 	stateLock sync.Mutex
 	installed atomic.Pointer[aclEngineInstall]
+	// the subnet routes in force the bridge compile last answered, nil before the first InstallRoutes
+	servedRoutes atomic.Pointer[AclServedRoutes]
 }
 
 // An engine for the sidecar, with nothing installed: every check refuses until the first Install. states may be nil,
@@ -169,6 +173,15 @@ func (self *AclEngine) Install(state *AclState, local *AclLocalPolicy) error {
 		self.alarm(*alarm)
 	}
 	return err
+}
+
+// Swaps in the subnet routes in force by advertiser, which AllowRoute reads for a route rule that names no prefix
+// (owner decision 575): BRIDGE's compile answers them at the state it compiled (BridgeCompiled.ServedRoutes), so they
+// are as new as the rows the device's hook enforces, which that compile gave it too. Before the first call, and after a
+// nil one, such a rule routes to nothing here, the closed direction. No signed statement, so no pin is checked: the
+// routes only narrow which addresses a rule the installed state already holds takes.
+func (self *AclEngine) InstallRoutes(servedRoutes *AclServedRoutes) {
+	self.servedRoutes.Store(servedRoutes)
 }
 
 // The installed state's (n, A_n), nil before the first Install.
@@ -264,25 +277,44 @@ func aclLocalSocketMatch(local *AclLocalRule, name string) bool {
 // Whether the source may route to the address on the port via a subject: a route rule whose via subjects hold the via,
 // its AclRule.via or, where it names none, the advertisers whose approved routes name it (QD-764), whose ports take the
 // port and which takes the address: a public one by its autogroup:internet, through those vias alone, and any by a
-// prefix of the device's that holds it.
+// prefix of the device's that holds it. A rule that names no ip: destination and no autogroup:internet takes an address
+// only where its subject destinations name the via for the source too and a subnet route in force of the via's serves
+// the address (§8.4's readings; owner decision 575), by the routes InstallRoutes last took and by none before it. A
+// rule whose detail the device does not hold, an activated grant's, takes only a public address by its
+// autogroup:internet, which rows carry: its prefixes ride the grant (QD-003), the closed direction.
 func (self *AclEngine) AllowRoute(source AclSubject, address netip.Addr, ipProtocol uint32, port uint32, via AclSubject, now time.Time) AclDecision {
 	installed := self.installed.Load()
 	if installed == nil {
 		return aclDeny(AclReasonNoState)
 	}
+	state := installed.state
+	nowMs := self.checkMs(now)
+	sourceResolved := state.resolve(&source, nowMs)
+	if sourceResolved.deny != 0 {
+		return aclDeny(sourceResolved.deny)
+	}
+	viaResolved := state.resolve(&via, nowMs)
+	if viaResolved.deny != 0 {
+		return aclDeny(viaResolved.deny)
+	}
+	servedRoutes := self.servedRoutes.Load()
 	address = address.Unmap()
 	public := aclAddressPublic(address)
-	return installed.state.mayRoute(source, address, via, self.checkMs(now), func(rule *aclRule) bool {
+	rule := state.findResourceRule(&sourceResolved, nowMs, protocol.AclAction_ACL_ACTION_ROUTE, func(rule *aclRule) bool {
 		local := installed.localRules[rule.index]
-		if !aclLocalPortsMatch(rule, local, ipProtocol, port) {
+		if !aclLocalPortsMatch(rule, local, ipProtocol, port) || !state.routeTakes(&sourceResolved, &viaResolved, rule) {
 			return false
 		}
 		if rule.internetTarget && public {
 			return true
 		}
-		if local == nil || len(local.Cidrs) == 0 {
-			// the via's own addresses (§8.4); an autogroup:internet rule with no prefix takes no other
-			return !rule.internetTarget
+		if local == nil {
+			return false
+		}
+		if aclRouteBySubject(local, rule.internetTarget) {
+			// no prefix of its own: the subnet routes in force of a via its destinations name
+			return viaResolved.sidecar != nil && state.targetsSubject(&sourceResolved, &viaResolved, rule) &&
+				servedRoutes.serves(viaResolved.sidecar.id, address)
 		}
 		for _, cidr := range local.Cidrs {
 			if aclCidrCovers(cidr, address) {
@@ -291,6 +323,10 @@ func (self *AclEngine) AllowRoute(source AclSubject, address netip.Addr, ipProto
 		}
 		return false
 	})
+	if rule != nil {
+		return aclAllowRule(rule)
+	}
+	return aclDeny(AclReasonNoGrant)
 }
 
 // Whether the subject may send to or listen on mail:<alias> (§15.10): a send or listen grant whose aliases take it.
