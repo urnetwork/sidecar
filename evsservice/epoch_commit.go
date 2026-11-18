@@ -1,25 +1,18 @@
 // Path epochs on evs at the push route's steps (§11.6's due, tail and commit rows; D-EVS-12, FI-3; EVS1-M2-16, with
-// DESIGN-DETAILS 9.2.6's source rule, between fence and crossing creation, EVS1-M2-44):
+// DESIGN-DETAILS 9.2.6's source rule and between fence, EVS1-M2-44; every due batched, QD-1046):
 //
 //	due     the first push whose generation pin crosses a REMOVE generation records it in head.path_epoch: each
 //	        generation k in (max(the head's generation, its current epoch), the push's] is read from gen/<k>, and the
-//	        newest whose GenRotate cause is REMOVE becomes due_generation. sidecar.EvsClassifyPathEpochDue, which
-//	        clients call too, classes the crossing on the gate view, from the log between the auth pins of gen/<from>
-//	        and gen/<to>: batched when only expiries passed or every shrink in between was an agent's ordinary
-//	        removal, immediate on a member's or a member device's removal, a compromise retirement, or anything the
-//	        view cannot class (question evs1-m2-16-due-classification, option 3; QD-949), and immediate when
-//	        gen/<from> does not read. Immediate takes due_by_ms that push's time and, on the refs
-//	        sidecar.EvsRefBlocksCreation names, due_blocks_creation (plan-EVS1-epoch-kinds#1); batched takes due_by_ms
-//	        24 h after the first and no block. Deposit and erasure refs record no due and stay at epoch 1 for life
-//	        (plan-EVS1-epoch-kinds#2). A due already recorded keeps its earlier due_by_ms and its block, an immediate
-//	        crossing pulling both forward, and takes the newer generation. The push records it at its commit, or,
-//	        when it creates a path the due blocks, at its refusal: 412 PATH_EPOCH_DUE, recorded, whose fence write
-//	        sets the due as the commit would have (check_cas.go, refuse.go; question details-9-crossing-creation)
+//	        newest whose GenRotate cause is REMOVE becomes due_generation. Every due is batched (QD-1046): it takes
+//	        due_by_ms 24 h after the first commit crossing it and blocks no creation, due_blocks_creation staying in
+//	        the format unused and written false. Deposit and erasure refs record no due and stay at epoch 1 for life
+//	        (plan-EVS1-epoch-kinds#2). A due already recorded keeps its earlier due_by_ms and takes the newer
+//	        generation. The push records it at its commit, and a refusal records none
 //	commit  a PATH_EPOCH push names p_new, a generation above the head's current epoch and at most its own pin's; it
-//	        commits only if the head lists fewer than three sources, and fewer than two unless the due blocks
-//	        creation, else 412 EPOCH_SOURCES_FULL; its map's parts exist under the key path_map_sha256 names, each
-//	        under 24 h old and part 1 naming this repo, ref, epoch and source head, else 409 MAP_PARTS; its source S
-//	        is at or below the head's version with C_S its map_source_chain, the statement at S and C_S read from the
+//	        commits only if the head lists fewer than two sources, every epoch being batched, and fewer than the three
+//	        a head may list, else 412 EPOCH_SOURCES_FULL; its map's parts exist under the key path_map_sha256 names,
+//	        each under 24 h old and part 1 naming this repo, ref, epoch and source head, else 409 MAP_PARTS; its source
+//	        S is at or below the head's version with C_S its map_source_chain, the statement at S and C_S read from the
 //	        window when it holds S, else from log page S/64, one cached GET, C_S carried from the page's first_chain
 //	        (question details-9-map-source-window); the epoch the statement at S declares, a PATH_EPOCH's being its
 //	        p_new, is the head's current one, so no PATH_EPOCH committed after S (the between fence); else 409
@@ -33,10 +26,9 @@
 // 5e's epoch, source and tail refusals are final, and EPOCH_SOURCES_FULL and the map parts' are recorded (§11.8's
 // refuse row). Readings, each named in the report: "path_map_sha256 matches" is the parts' presence under the key that
 // hash names, the copy checking the parts' bytes against it as it reads them (epoch_copy.go; question
-// details-9-map-verifiers); a batched epoch is one whose due does not block creation, so in a repo whose kind never
-// blocks every epoch waits while two sources stand; the log page holding S is read only when it is among
-// MapSourcePageCount pages just below the window, a source further down answering MAP_SOURCE (9.6's "a source below
-// the window by one page commits; by more, 409"); S of 0, a map of a ref before its first commit, is C_0 in epoch 1.
+// details-9-map-verifiers); the log page holding S is read only when it is among MapSourcePageCount pages just below
+// the window, a source further down answering MAP_SOURCE (9.6's "a source below the window by one page commits; by
+// more, 409"); S of 0, a map of a ref before its first commit, is C_0 in epoch 1.
 
 package evsservice
 
@@ -54,13 +46,10 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
-// What a commit crossing REMOVE generations records: the newest one, and whether the crossing is immediate.
+// What a commit crossing REMOVE generations records: the newest one, every due being batched (QD-1046).
 type pathEpochDue struct {
 	generation uint64
-	immediate  bool
-	// on a shared or owned ref of a general, config or mailcfg repo: an immediate due blocks creation
-	blocks bool
-	// how long after the commit a batched due falls due (EvsSettings.PathEpochBatchedDelay, 24 h)
+	// how long after the commit the due falls due (EvsSettings.PathEpochBatchedDelay, 24 h)
 	batchedDelay time.Duration
 }
 
@@ -97,7 +86,6 @@ func (self *pushAttempt) pathEpochDueOver(head *protocol.EvsHead) (*pathEpochDue
 		return nil, err
 	}
 	due := &pathEpochDue{batchedDelay: self.settings.PathEpochBatchedDelay}
-	var toRecord *protocol.GenRotate
 	for generation := from + 1; generation <= to; generation += 1 {
 		record, err := self.engine.generations.Read(self.ctx, self.cluster, groupId, generation, self.gateView)
 		if err != nil {
@@ -109,36 +97,22 @@ func (self *pushAttempt) pathEpochDueOver(head *protocol.EvsHead) (*pathEpochDue
 		if sidecar.GkmCause(record.GetCause()) == sidecar.GkmCauseRemove {
 			due.generation = generation
 		}
-		toRecord = record
 	}
 	if due.generation == 0 {
 		return nil, nil
 	}
-	// immediate unless the starting generation's record reads and the gate view classes the log between its pin and
-	// the crossed-to generation's batched
-	due.immediate = true
-	if fromRecord, err := self.engine.generations.Read(self.ctx, self.cluster, groupId, from, self.gateView); err == nil && fromRecord != nil {
-		due.immediate = sidecar.EvsClassifyPathEpochDue(self.gateView, self.repoId, fromRecord.GetAuth(), toRecord.GetAuth())
-	}
-	due.blocks = due.immediate && sidecar.EvsRefBlocksCreation(self.reads.repo.Object.GetKind(), refKind)
 	return due, nil
 }
 
-// prior's path epoch with due recorded at now. See the file header.
+// prior's path epoch with due recorded at now, due_blocks_creation written false. See the file header.
 func applyPathEpochDue(prior *protocol.EvsPathEpoch, due *pathEpochDue, now time.Time) *protocol.EvsPathEpoch {
 	next := &protocol.EvsPathEpoch{Current: max(1, prior.GetCurrent()), Sources: prior.GetSources(),
-		DueGeneration: prior.GetDueGeneration(), DueBlocksCreation: prior.GetDueBlocksCreation(), DueByMs: prior.GetDueByMs(),
-		BlockUntilMs: prior.GetBlockUntilMs()}
+		DueGeneration: prior.GetDueGeneration(), DueByMs: prior.GetDueByMs(), BlockUntilMs: prior.GetBlockUntilMs()}
 	dueByMs := now.Add(due.batchedDelay).UnixMilli()
-	if due.immediate {
-		dueByMs = now.UnixMilli()
-	}
 	if next.GetDueGeneration() == 0 {
 		next.DueByMs = dueByMs
-		next.DueBlocksCreation = due.blocks
 	} else {
 		next.DueByMs = min(next.GetDueByMs(), dueByMs)
-		next.DueBlocksCreation = next.GetDueBlocksCreation() || due.blocks
 	}
 	next.DueGeneration = max(next.GetDueGeneration(), due.generation)
 	return next
@@ -153,7 +127,6 @@ func committedPathEpoch(prior *protocol.EvsHead, pNew uint64, mapSha256 []byte) 
 	if pNew < pathEpoch.GetDueGeneration() {
 		// an epoch below the due generation leaves it due
 		next.DueGeneration = pathEpoch.GetDueGeneration()
-		next.DueBlocksCreation = pathEpoch.GetDueBlocksCreation()
 		next.DueByMs = pathEpoch.GetDueByMs()
 	}
 	return next
@@ -275,7 +248,7 @@ func (self *pushAttempt) pathEpochRules(view *PushView) *EvsCheckRefusal {
 	}
 	pathEpoch := head.GetPathEpoch()
 	sourceCount := len(pathEpoch.GetSources())
-	if self.settings.PathEpochMaxSourceCount <= sourceCount || (self.settings.PathEpochBatchedMaxSourceCount <= sourceCount && !pathEpoch.GetDueBlocksCreation()) {
+	if self.settings.PathEpochMaxSourceCount <= sourceCount || self.settings.PathEpochBatchedMaxSourceCount <= sourceCount {
 		return newEvsCheckRefusal(EvsCheckReasonEpochSourcesFull, fmt.Sprintf("%d sources standing", sourceCount))
 	}
 	reads := self.pathEpoch

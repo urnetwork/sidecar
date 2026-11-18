@@ -7,7 +7,7 @@
 //   - recorded: evs first records it in the head by one CAS (EVS1-M2-12's refuse row), so no later attempt of the
 //     push id commits: 5b's time, 5c's scope, keying, deleted state and storage limit, 5d's predicate and its
 //     rule-set pin (DESIGN-DETAILS 16.2.9: one process's state settles it, not the head), 5e's map parts,
-//     EPOCH_SOURCES_FULL and PATH_EPOCH_DUE, a block's or a crossing creation's, 5g's DIRECTORY_FULL, 5h, and
+//     EPOCH_SOURCES_FULL and a mapper's block's PATH_EPOCH_DUE, 5g's DIRECTORY_FULL, 5h, and
 //     FORMAT_UNSUPPORTED (plan-EVS1-format-unsupported#2);
 //   - nothing: a 400, 429 or 503 that refuses nothing, which the client retries with the same statement.
 //
@@ -110,8 +110,7 @@ const (
 
 	// 5e: an epoch other than the head's current one.
 	EvsCheckReasonPathEpoch
-	// 5e: a creation while due_blocks_creation or before block_until_ms, or in a push whose own commit would record a
-	// due that blocks it (DESIGN-DETAILS 9.2.6's crossing creation).
+	// 5e: a creation before block_until_ms, a mapper's block (§11.6's block row); no due blocks creation (QD-1046).
 	EvsCheckReasonPathEpochDue
 
 	// 5f: git mode, a base other than the head's version.
@@ -146,7 +145,8 @@ const (
 	// grows a chain past Padmé of the one it replaces (§11.12's rekey row): 409 naming the paths.
 	EvsCheckReasonClosureShape
 
-	// 5e, a PATH_EPOCH: three sources standing, or two for an epoch that does not block creation (§11.6).
+	// 5e, a PATH_EPOCH: two sources standing, every epoch being batched (§11.6's commit row; QD-1046), or three, the
+	// most a head lists.
 	EvsCheckReasonEpochSourcesFull
 	// 5e, a PATH_EPOCH: its map's parts not all standing under 24 h old.
 	EvsCheckReasonMapParts

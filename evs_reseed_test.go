@@ -227,7 +227,8 @@ func TestEvsReseedReadsALostPathsSurvivingVersionAsALoss(t *testing.T) {
 // A cut-over among the versions the incident lost (QD-816): a record of a path that stands at the re-seeded head
 // keeps its entry, its pin and pin epoch lowered to the head's, and reads there; the listing cached at a lost head,
 // whose rows are floors of the lost epoch, goes, so a name the incident lost, on a ref under a removal the device
-// holds, is looked up through its directory and settled absent with no token of it sent under the head's epoch.
+// holds, is a new name again: no due holding it (QD-1046), it is read under the re-seeded head's epoch, after one round
+// under the epoch of the head the reader held before the incident, and settled absent.
 func TestEvsReseedLeavesNoFloorOfTheLostEpoch(t *testing.T) {
 	world := newEvsTestWorld(t)
 	world.config.repo.Admins = []*protocol.AclRepoAdminRow{{SidecarId: world.signer.sidecarId.Bytes()}}
@@ -240,8 +241,7 @@ func TestEvsReseedLeavesNoFloorOfTheLostEpoch(t *testing.T) {
 	world.push(&evsTestChange{path: "d", children: []string{"new.txt"}}, &evsTestChange{path: "d/new.txt", content: []byte("new")})
 	lostVersion, _ := world.head()
 
-	// the reader holds generation 2, a removal the re-seeded head, at epoch 1, has not cut over to, the crossing
-	// immediate
+	// the reader holds generation 2, a removal the re-seeded head, at epoch 1, has not cut over to
 	gkm := newEvsTestWriteGkm()
 	gkm.newest = 2
 	gkm.causes[2] = GkmCauseRemove
@@ -286,8 +286,8 @@ func TestEvsReseedLeavesNoFloorOfTheLostEpoch(t *testing.T) {
 	if _, _, err := evsTestRead(t, reader, world, "d/new.txt"); !errors.Is(err, ErrEvsPathAbsent) {
 		t.Fatalf("the lost name after the reseed: %v", err)
 	}
-	if epochs := world.epochsNamed("d/new.txt"); slices.Contains(epochs, 1) {
-		t.Fatalf("the lost name was named in the head's epoch: %v", epochs)
+	if epochs := world.epochsNamed("d/new.txt"); !slices.Equal(epochs, []uint64{2, 1}) {
+		t.Fatalf("the lost name was named in %v", epochs)
 	}
 	if alarms := reader.eventsOf(SidecarEventEvsAlarm); len(alarms) != 0 {
 		t.Fatalf("alarms after the reseed: %+v", alarms)

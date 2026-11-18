@@ -5,15 +5,15 @@
 //
 //	cut-over  files written in epoch 1, one push of them rooted, read, listed and walked by History by a reader pinned
 //	          before the removal and by one first reading after the cut-over, before the copy and after it (9.1 B);
-//	          a creation on the blocking ref while the removal is due sends no token of its name and waits (F), and
-//	          lands in epoch 2 once the mapper committed
+//	          a creation on a general repo's shared ref while the removal is due lands at once in epoch 1, no due
+//	          holding it (QD-1046), the map carrying it into epoch 2, and another lands in epoch 2 after the cut-over
 //	409       9.1 C: a creation planned in epoch 1 and in flight across a cut-over, after another writer created the
 //	          same name, answers 409 on its retoken, the other's file standing under one row
 //	mapper    a map in several parts whose upload fails after the first resumes on a client restarted over the same
 //	          store, uploading the rest from disk, and commits
 //
-// The devices' clock reads the world's and answers every wait at once, so a creation waiting out a due spins through
-// its retries without sleeping; the engine's clock is the world's. Every request goes through the world's transport,
+// The devices' clock reads the world's and answers every wait at once, so a creation waiting out a mapper's block spins
+// through its retries without sleeping; the engine's clock is the world's. Every request goes through the world's transport,
 // which may hold one device's request while the test acts.
 
 package sidecartest
@@ -529,12 +529,13 @@ func epochContent(path string, round int) []byte {
 	return []byte(fmt.Sprintf("%s, round %d", path, round))
 }
 
-// 9.1 B, F and the copy end to end: twelve files written in one rooted push and docs/old.md written twice in epoch 1;
-// d removed (a shrink, so the crossing is immediate on this blocking ref); w's creation of docs/new.md sends no token of
-// the name and answers EVS_PATH_EPOCH_DUE; w maps, being the device whose EnsureWritable rotated, and its PATH_EPOCH
-// commits epoch 2 over source 1; a reader pinned before the removal and one first reading now read every file, list
-// the directories and walk docs/old.md's History, before the copy and after it; the copy drains and drops the source;
-// and the creation then lands in epoch 2.
+// 9.1 B and the copy end to end, every due batched (QD-1046): twelve files written in one rooted push and docs/old.md
+// written twice in epoch 1; d removed, a member device's removal that once made the crossing immediate; w's creation
+// of docs/new.md lands at once, its name sent in epoch 1 alone, and records the batched due it crosses, as w's status
+// shows; w maps, being the device whose EnsureWritable rotated, and its PATH_EPOCH commits epoch 2 over source 1; a
+// reader pinned before the removal and one first reading now read every file, docs/new.md among them, list the
+// directories and walk docs/old.md's History, before the copy and after it; the copy drains and drops the source; and
+// a creation then lands in epoch 2.
 func TestEvsPathEpochCutOverEndToEnd(t *testing.T) {
 	world := newEpochWorld(t)
 	w := world.device("w", nil)
@@ -560,29 +561,28 @@ func TestEvsPathEpochCutOverEndToEnd(t *testing.T) {
 		t.Fatalf("the pinned reader's bulk/f03 before the removal: %q %v", content, err)
 	}
 
-	// d leaves: a shrink at the next position, so w's next EnsureWritable rotates REMOVE and the crossing is immediate
+	// d leaves: a shrink at the next position, so w's next EnsureWritable rotates REMOVE; no due holds the creation
 	world.advance([]string{"w", "v", "m", "r"}, 2, nil)
 	requests := world.record()
-	if _, err := w.write("docs/new.md", epochContent("docs/new.md", 1)); !errors.Is(err, sidecar.ErrEvsPathEpochDue) {
+	crossedAt := world.clock.Now()
+	if _, err := w.write("docs/new.md", epochContent("docs/new.md", 1)); err != nil {
 		t.Fatalf("a creation while the removal is due: %v", err)
 	}
-	if requests.named(w.tokenPath("docs/new.md", 1)) || requests.named(w.tokenPath("docs/new.md", 2)) {
-		t.Fatal("a token of docs/new.md reached evs while the removal was due")
-	}
-	if 0 == requests.count() {
-		t.Fatal("the creation read nothing")
+	if !requests.named(w.tokenPath("docs/new.md", 1)) || requests.named(w.tokenPath("docs/new.md", 2)) {
+		t.Fatal("docs/new.md was not named in epoch 1 alone")
 	}
 	world.setIntercept(nil)
-	// a modification still writes, crossing the removal and recording the due
+	head := world.head(refId)
+	dueBy := crossedAt.Add(sidecar.DefaultEvsFormatSettings().PathEpochBatchedDelay)
+	if head.GetPathEpoch().GetDueGeneration() != 2 || head.GetPathEpoch().GetDueBlocksCreation() || head.GetPathEpoch().GetDueByMs() != dueBy.UnixMilli() {
+		t.Fatalf("the due evs recorded: %v", head.GetPathEpoch())
+	}
+	// a modification writes as ever, the due standing
 	if _, err := w.write("docs/old.md", epochContent("docs/old.md", 3)); err != nil {
 		t.Fatalf("a modification while the removal is due: %v", err)
 	}
-	head := world.head(refId)
-	if head.GetPathEpoch().GetDueGeneration() != 2 || !head.GetPathEpoch().GetDueBlocksCreation() {
-		t.Fatalf("the due evs recorded: %v", head.GetPathEpoch())
-	}
 	status, err := w.repo.PathEpochStatus(world.ctx, nil)
-	if err != nil || status.Current != 1 || status.DueGeneration != 2 || status.Class != "immediate" {
+	if err != nil || status.Current != 1 || status.DueGeneration != 2 || status.Class != sidecar.EvsPathEpochClassBatched || !status.DueBy.Equal(dueBy) {
 		t.Fatalf("w's status while due: %+v %v", status, err)
 	}
 
@@ -613,7 +613,10 @@ func TestEvsPathEpochCutOverEndToEnd(t *testing.T) {
 			if names, err := reader.list("bulk"); err != nil || len(names) != 12 {
 				t.Fatalf("%s: the bulk listing: %v %v", when, names, err)
 			}
-			if names, err := reader.list("docs"); err != nil || !slices.Equal(names, []string{"old.md"}) {
+			if content, _, err := reader.read("docs/new.md"); err != nil || !bytes.Equal(content, epochContent("docs/new.md", 1)) {
+				t.Fatalf("%s: docs/new.md: %q %v", when, content, err)
+			}
+			if names, err := reader.list("docs"); err != nil || !slices.Equal(names, []string{"new.md", "old.md"}) {
 				t.Fatalf("%s: the docs listing: %v %v", when, names, err)
 			}
 			if names, err := reader.list(""); err != nil || !slices.Equal(names, []string{"bulk", "docs"}) {
@@ -635,14 +638,14 @@ func TestEvsPathEpochCutOverEndToEnd(t *testing.T) {
 	}
 	readAll("after the copy")
 
-	// the creation lands in epoch 2
-	if _, err := w.write("docs/new.md", epochContent("docs/new.md", 1)); err != nil {
+	// a creation lands in epoch 2
+	if _, err := w.write("docs/newer.md", epochContent("docs/newer.md", 1)); err != nil {
 		t.Fatalf("the creation after the cut-over: %v", err)
 	}
-	if content, _, err := fresh.read("docs/new.md"); err != nil || !bytes.Equal(content, epochContent("docs/new.md", 1)) {
-		t.Fatalf("docs/new.md: %q %v", content, err)
+	if content, _, err := fresh.read("docs/newer.md"); err != nil || !bytes.Equal(content, epochContent("docs/newer.md", 1)) {
+		t.Fatalf("docs/newer.md: %q %v", content, err)
 	}
-	if names, err := fresh.list("docs"); err != nil || !slices.Equal(names, []string{"new.md", "old.md"}) {
+	if names, err := fresh.list("docs"); err != nil || !slices.Equal(names, []string{"new.md", "newer.md", "old.md"}) {
 		t.Fatalf("the docs listing at the end: %v %v", names, err)
 	}
 }
@@ -1047,7 +1050,11 @@ func epochPushSlots(t *testing.T, request *http.Request) (flags uint32, slotIds 
 func TestEvsRecordClassClosureAcrossACutOverKeepsItsSlotEndToEnd(t *testing.T) {
 	world := newEpochWorldOf(t, protocol.RepoKind_REPO_KIND_RECORD)
 	w := world.device("w", nil)
-	m := world.device("m", func(settings *sidecar.EvsSettings) { settings.MapperSpread = time.Nanosecond })
+	// m maps the due at once: its lead covers the whole day, every due being batched (QD-1046), and its spread is nothing
+	m := world.device("m", func(settings *sidecar.EvsSettings) {
+		settings.MapperBatchedLead = 48 * time.Hour
+		settings.MapperSpread = time.Nanosecond
+	})
 	entry := bytes.Repeat([]byte("an entry to close over; "), 400)
 	if _, err := w.write("ledger/a", entry); err != nil {
 		t.Fatal(err)
