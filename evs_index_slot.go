@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // The framing every index file with a header shares, and slots and large entries on it (§11.14's slot and large rows;
 // protocol/INDEX-FORMAT.md). A slot is one writer's entries, at most IndexFormatSettings.SlotMaxByteCount, 16,208 B, so
 // that its record is 16 KiB and rides staged in its push's batch; a large entry is one full entry over

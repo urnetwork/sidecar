@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // D6's shard test (DESIGN-DETAILS 11.2.3 as QD-760 amends it; protocol/INDEX-FORMAT.md's Documents): a document is
 // skipped when its key set would encode past KeySetMax, or when it alone would not fit a shard, lone(d) past
 // ShardBody, with
@@ -16,7 +18,7 @@
 // The test reads the key set and the row's bytes as its entry holds them and nothing else, so the device that extracts,
 // a reproducer, a decoder and a merger or reader composing a diff all compute it alike. It calls no encoder: it is one
 // pass over the keys, an addition and two comparisons a key, and allocates nothing. ShardBody is the shard encoder's
-// own cap, so the test and the encoder cannot part. It links on every leg, since the entry codec does.
+// own cap, so the test and the encoder cannot part. It links on every leg the entry codec does: all but ios_extension.
 
 package sidecar
 

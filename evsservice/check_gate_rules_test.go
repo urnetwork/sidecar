@@ -1,21 +1,16 @@
-// DESIGN-DETAILS 16.6's first gate bullet (EVS1-M6-07; QD-803): 5d's rules clause over hand-built push views. A push
-// that creates a shared ref, on no head, a placeholder or a deleted head, is held to the position of the repo's newest
-// rule set: below it 412 GATE_CLOSED recorded, at it and above it passing, the fence's final refusal first below a
-// DELETE's pin. Each kind of creating push is held: a file-mode ref's first, a branch's creating UPDATE, a tag ref's
-// IMMUTABLE push, each again after a DELETE, and one carrying FORCE. None of these is held at a pin below the set: an
-// owned, a deposit and the erasure ref on no head; a pin push, a DELETE and an ordinary push on a live head at the
-// head's pin; a creating push where the repo's row holds no set, and one in a repo that is not general. The greater of
-// two positions is compared in either order in the row; a state without the repo's row answers 503; and the push's
-// own pin is judged first, above evs's state 503 and off its chain final. The testhooks switch's case is in
-// check_gate_off_testhooks_test.go, and the refusal's fate through the engine in push_gate_rules_test.go.
+// QD-803's clause reverted (QD-1032): the client-checked prefix write rules moved to Later, and 5d holds no push to the
+// repo's rule sets, as it held none before EVS1-M6-07 (e0d318f0). Over hand-built push views whose state's row holds a
+// set at a position above the push's pin, every creating push of a shared ref passes 5d and step 5 whole: on no head,
+// a placeholder and a deleted head, a file-mode ref's first push, a branch's creating UPDATE, a tag ref's IMMUTABLE
+// push and one carrying FORCE. What held a creating push before the clause still does: the fence below a DELETE's pin,
+// the own-pin row above evs's state or off its chain, and the predicate's 503 for a state lacking the repo, which no
+// longer names the rows. The engine's half is push_gate_rules_test.go's.
 
 package evsservice
 
 import (
-	"bytes"
 	"crypto/ed25519"
 	"fmt"
-	"net/http"
 	"strings"
 	"testing"
 
@@ -44,7 +39,8 @@ func (self *checkFixture) appendRepoState(repos ...*protocol.AclRepo) *sidecarte
 	return self.auth
 }
 
-// The fixture's repo as a general repo's row, with a rule set filed at each position given, in that order.
+// The fixture's repo as a general repo's row, with a rule set filed at each position given, in that order: rows a
+// state holds only from a log that ran the rules, which evs reads nothing of now.
 func (self *checkFixture) rulesRepo(ats ...uint64) *protocol.AclRepo {
 	repo := &protocol.AclRepo{RepoId: self.repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL}
 	for _, at := range ats {
@@ -89,28 +85,10 @@ func checkRulesTombstone(view *PushView, deletePin *bridge.AuthPin) {
 	view.HeadFlags = uint32(protocol.EvsPushFlag_EVS_PUSH_DELETE)
 }
 
-// Holds a refusal to the clause's, its detail naming the push's pin and the set's position.
-func requireRulesRefusal(t *testing.T, name string, refusal *EvsCheckRefusal, pin uint64, at uint64) {
-	t.Helper()
-	requireCheckRefusal(t, name, refusal, EvsCheckReasonPinBelowRules)
-	if refusal == nil || refusal.Reason != EvsCheckReasonPinBelowRules {
-		return
-	}
-	if refusal.Code != protocol.EvsRefusalCode_EVS_REFUSAL_GATE_CLOSED || !refusal.Recorded() {
-		t.Errorf("%s: code %s, recorded %t, want GATE_CLOSED recorded", name, refusal.Code, refusal.Recorded())
-	}
-	if status, _ := sidecar.EvsRefusalStatus(refusal.Code); status != http.StatusPreconditionFailed {
-		t.Errorf("%s: status %d, want 412", name, status)
-	}
-	if want := fmt.Sprintf("auth pin %d below the repo's newest rule set at %d", pin, at); refusal.Detail != want {
-		t.Errorf("%s: detail %q, want %q", name, refusal.Detail, want)
-	}
-}
-
-// A push creating a shared ref, pinned below, at and above the newest set's position: on no head, on a placeholder,
-// and on a deleted head at pins at or above the DELETE's, where below the DELETE's pin the fence's final refusal comes
-// first. Through step 5 whole, the refusal is 5d's.
-func TestCheckGateHoldsACreatingPushToTheNewestRuleSet(t *testing.T) {
+// A push creating a shared ref, pinned below the newest set's position, at it and above it, passes 5d on no head, on a
+// placeholder and on a deleted head at or above the DELETE's pin, and step 5 whole below the set; below the DELETE's
+// pin the fence's final refusal is what it always was.
+func TestCheckGateHoldsNoCreatingPushToTheRuleSets(t *testing.T) {
 	fixture, pins := newCheckRulesFixture(t)
 	heads := []struct {
 		name string
@@ -122,29 +100,24 @@ func TestCheckGateHoldsACreatingPushToTheNewestRuleSet(t *testing.T) {
 		{name: "a deleted head", put: func(view *PushView) { checkRulesTombstone(view, pins[2]) }},
 	}
 	for _, head := range heads {
-		at := func(pin *bridge.AuthPin) *PushView {
+		for _, pin := range pins[2:] {
 			view := fixture.rulesView(pin, nil)
 			head.put(view)
-			return view
+			requireCheckPass(t, fmt.Sprintf("%s, pinned at %d against a set at 3", head.name, pin.GetVersion()), CheckGate(view))
 		}
-		requireRulesRefusal(t, head.name+", pinned below the set", CheckGate(at(pins[2])), 2, 3)
-		requireCheckPass(t, head.name+", pinned at the set", CheckGate(at(pins[3])))
-		requireCheckPass(t, head.name+", pinned above the set", CheckGate(at(pins[4])))
 	}
 
-	// below the DELETE's pin the fence settles it, finally, before the clause is asked
 	below := fixture.rulesView(pins[1], nil)
 	checkRulesTombstone(below, pins[2])
 	requireCheckRefusal(t, "a deleted head, pinned below the DELETE's", CheckGate(below), EvsCheckReasonPinBelowHead)
 
-	// step 5 whole: the push passes 5b and 5c and is refused at 5d's clause, and passes at the set
-	requireRulesRefusal(t, "step 5, pinned below the set", CheckPush(fixture.rulesView(pins[2], nil)), 2, 3)
-	requireCheckPass(t, "step 5, pinned at the set", CheckPush(fixture.rulesView(pins[3], nil)))
+	requireCheckPass(t, "step 5, pinned below the set", CheckPush(fixture.rulesView(pins[2], nil)))
 }
 
-// Each kind of creating push is held, on no head and again after a DELETE: a file-mode ref's first, a branch's creating
-// UPDATE, a tag ref's IMMUTABLE push, and one carrying FORCE in either mode. Each passes at the set's position.
-func TestCheckGateHoldsEachKindOfCreatingPush(t *testing.T) {
+// Each kind of creating push that QD-803's clause held passes 5d below the set, on no head and again after a DELETE:
+// a file-mode ref's first, a branch's creating UPDATE, a tag ref's IMMUTABLE push, and one carrying FORCE in either
+// mode.
+func TestCheckGatePassesEachKindOfCreatingPushBelowTheRuleSets(t *testing.T) {
 	fixture, pins := newCheckRulesFixture(t)
 	git := func(plan *sidecar.EvsPushPlan) {
 		plan.RefMode = protocol.EvsRefMode_EVS_REF_GIT
@@ -168,148 +141,29 @@ func TestCheckGateHoldsEachKindOfCreatingPush(t *testing.T) {
 		}},
 	}
 	for _, kind := range kinds {
-		requireRulesRefusal(t, kind.name+" on no head", CheckGate(fixture.rulesView(pins[2], kind.shape)), 2, 3)
-		requireCheckPass(t, kind.name+" on no head, at the set", CheckGate(fixture.rulesView(pins[3], kind.shape)))
-
+		requireCheckPass(t, kind.name+" on no head, below the set", CheckGate(fixture.rulesView(pins[2], kind.shape)))
 		again := fixture.rulesView(pins[2], kind.shape)
 		checkRulesTombstone(again, pins[1])
-		requireRulesRefusal(t, kind.name+" after a DELETE", CheckGate(again), 2, 3)
-		passes := fixture.rulesView(pins[3], kind.shape)
-		checkRulesTombstone(passes, pins[1])
-		requireCheckPass(t, kind.name+" after a DELETE, at the set", CheckGate(passes))
+		requireCheckPass(t, kind.name+" after a DELETE, below the set", CheckGate(again))
 	}
 }
 
-// None of these is held, each at a pin below the set: an owned, a deposit and the erasure ref on no head; a pin push,
-// a DELETE and an ordinary push on a live head, each at the head's pin; a creating push where the repo's row holds no
-// set; and one in a repo that is not general, beside a general repo whose row holds a set above the pin.
-func TestCheckGateLeavesWhatTheRulesClauseDoesNotHold(t *testing.T) {
-	fixture, pins := newCheckRulesFixture(t)
-	signer := fixture.signerId
-	refs := []struct {
-		name  string
-		shape func(plan *sidecar.EvsPushPlan)
-	}{
-		{name: "an owned ref", shape: func(plan *sidecar.EvsPushPlan) {
-			plan.RefKind, plan.OwnerSidecarId = protocol.EvsRefKind_EVS_REF_OWNED, &signer
-		}},
-		{name: "a deposit ref", shape: func(plan *sidecar.EvsPushPlan) {
-			plan.RefKind, plan.OwnerSidecarId = protocol.EvsRefKind_EVS_REF_DEPOSIT, &signer
-			plan.RefId = sidecar.EvsDepositRefId(fixture.repoId, signer)
-		}},
-		{name: "the erasure ref", shape: func(plan *sidecar.EvsPushPlan) {
-			plan.RefKind, plan.RefId = protocol.EvsRefKind_EVS_REF_ERASURE, sidecar.EvsErasureRefId(fixture.repoId)
-		}},
-	}
-	for _, ref := range refs {
-		requireCheckPass(t, ref.name+" on no head, pinned below the set", CheckGate(fixture.rulesView(pins[2], ref.shape)))
-	}
-
-	// a live head at version 3 whose push was pinned at 2, below the set: each push at the head's pin
-	onHead := func(shape func(plan *sidecar.EvsPushPlan)) *PushView {
-		view := fixture.rulesView(pins[2], func(plan *sidecar.EvsPushPlan) {
-			plan.BaseVersion = 3
-			shape(plan)
-		})
-		view.Head = checkTestHead(view, 3)
-		return view
-	}
-	pinPush := onHead(func(plan *sidecar.EvsPushPlan) {
-		plan.Changes = []*sidecar.EvsPlannedChange{}
-	})
-	if 0 < len(pinPush.Payload.Changes) {
-		t.Fatalf("the pin push carries %d changes", len(pinPush.Payload.Changes))
-	}
-	requireCheckPass(t, "a pin push on a live head", CheckGate(pinPush))
-	deletion := onHead(func(plan *sidecar.EvsPushPlan) {
-		plan.Flags = uint32(protocol.EvsPushFlag_EVS_PUSH_DELETE)
-		plan.Changes = []*sidecar.EvsPlannedChange{}
-	})
-	requireCheckPass(t, "a DELETE of a live head", CheckGate(deletion))
-	ordinary := onHead(func(plan *sidecar.EvsPushPlan) {
-		plan.Changes = []*sidecar.EvsPlannedChange{fixture.change(plan, checkTestPath("b"), 0, 4)}
-	})
-	requireCheckPass(t, "an ordinary push on a live head", CheckGate(ordinary))
-	// the same pushes after the head's pin rose past the set are held by the fence, not the clause
-	raised := onHead(func(plan *sidecar.EvsPushPlan) {
-		plan.Changes = []*sidecar.EvsPlannedChange{fixture.change(plan, checkTestPath("b"), 0, 4)}
-	})
-	raised.Head.Auth = pins[3]
-	requireCheckRefusal(t, "an ordinary push below a head pinned at the set", CheckGate(raised), EvsCheckReasonPinBelowHead)
-
-	// no set in the repo's row, at a later position
-	unset := newCheckFixture(t)
-	unset.appendRepoState(unset.rulesRepo())
-	unset.appendRepoState(unset.rulesRepo())
-	requireCheckPass(t, "a creating push where the row holds no set", CheckGate(unset.rulesView(unset.firstView.Pin(), nil)))
-
-	// a repo that is not general holds no set, whatever a general repo of the network holds
-	notGeneral := newCheckFixture(t)
-	general := testId("check general repo")
-	notGeneral.appendRepoState(
-		&protocol.AclRepo{RepoId: notGeneral.repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_VAULT},
-		&protocol.AclRepo{RepoId: general.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL, PrefixRules: []*protocol.AclRepoPrefixRulesRow{
-			{Signer: notGeneral.otherId.Bytes(), At: 2},
-		}},
-	)
-	requireCheckPass(t, "a creating push in a repo that is not general", CheckGate(notGeneral.rulesView(notGeneral.firstView.Pin(), nil)))
-}
-
-// Two sets: the greater position is the one compared, in either order in the row.
-func TestCheckGateComparesTheNewestOfTwoRuleSets(t *testing.T) {
-	for _, order := range [][]uint64{{3, 5}, {5, 3}} {
-		fixture := newCheckFixture(t)
-		pins := []*bridge.AuthPin{nil, fixture.firstView.Pin()}
-		for position := uint64(2); position <= 6; position += 1 {
-			ats := []uint64{}
-			for _, at := range order {
-				if at <= position {
-					ats = append(ats, at)
-				}
-			}
-			pins = append(pins, fixture.appendRepoState(fixture.rulesRepo(ats...)).Pin())
-		}
-		name := fmt.Sprintf("sets at %v", order)
-		requireRulesRefusal(t, name+", pinned at the older", CheckGate(fixture.rulesView(pins[3], nil)), 3, 5)
-		requireRulesRefusal(t, name+", pinned between", CheckGate(fixture.rulesView(pins[4], nil)), 4, 5)
-		requireCheckPass(t, name+", pinned at the newer", CheckGate(fixture.rulesView(pins[5], nil)))
-		requireCheckPass(t, name+", pinned above both", CheckGate(fixture.rulesView(pins[6], nil)))
-	}
-}
-
-// A state that lacks the repo's row answers 503 at the clause, as the predicate does, and the same push of an owned ref
-// reaches the predicate's 503.
-func TestCheckGateRulesClauseOnAStateLackingTheRepo(t *testing.T) {
+// What held a creating push before the clause still holds it, whatever sets the row holds: a state that lacks the
+// repo's row answers the predicate's 503, which names no rows; and the push's own pin, above evs's state 503 and off
+// its chain final.
+func TestCheckGateHoldsACreatingPushAsBeforeTheRulesClause(t *testing.T) {
 	fixture := newCheckFixture(t)
 	other := testId("check other repo")
 	pin := fixture.appendRepoState(&protocol.AclRepo{RepoId: other.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL}).Pin()
 	refusal := CheckGate(fixture.rulesView(pin, nil))
-	requireCheckRefusal(t, "a creating push of a shared ref", refusal, EvsCheckReasonGateUnknown)
-	if refusal != nil && !strings.Contains(refusal.Detail, "lacking the repo's row") {
-		t.Errorf("the 503 came from %q, not the clause", refusal.Detail)
+	requireCheckRefusal(t, "a state lacking the repo's row", refusal, EvsCheckReasonGateUnknown)
+	if refusal != nil && strings.Contains(refusal.Detail, "row") {
+		t.Errorf("the 503 came from the reverted clause: %q", refusal.Detail)
 	}
-	signer := fixture.signerId
-	owned := CheckGate(fixture.rulesView(pin, func(plan *sidecar.EvsPushPlan) {
-		plan.RefKind, plan.OwnerSidecarId = protocol.EvsRefKind_EVS_REF_OWNED, &signer
-	}))
-	requireCheckRefusal(t, "a creating push of an owned ref", owned, EvsCheckReasonGateUnknown)
-	if owned != nil && strings.Contains(owned.Detail, "lacking the repo's row") {
-		t.Error("the clause judged an owned ref")
-	}
-}
 
-// The push's own pin is judged before the clause: above evs's state 503, and off its chain final, though the pin's
-// version lies below the set. A pin before what evs retains is not judged there, and the clause compares its version.
-func TestCheckGateJudgesTheOwnPinBeforeTheRulesClause(t *testing.T) {
-	fixture, pins := newCheckRulesFixture(t)
-	ahead := CheckGate(fixture.rulesView(&bridge.AuthPin{Version: 9, Chain: bytes.Repeat([]byte{3}, 32)}, nil))
+	ruled, pins := newCheckRulesFixture(t)
+	ahead := CheckGate(ruled.rulesView(&bridge.AuthPin{Version: 9, Chain: pins[4].GetChain()}, nil))
 	requireCheckRefusal(t, "an auth pin above evs's state", ahead, EvsCheckReasonGateUnknown)
-	if ahead != nil && ahead.Detail != "an auth pin above evs's state" {
-		t.Errorf("the 503 came from %q, not the own-pin row", ahead.Detail)
-	}
-	requireCheckRefusal(t, "an auth pin off evs's chain, below the set", CheckGate(fixture.rulesView(sidecartest.FakeGkmForkPin(2), nil)),
+	requireCheckRefusal(t, "an auth pin off evs's chain, below the set", CheckGate(ruled.rulesView(sidecartest.FakeGkmForkPin(2), nil)),
 		EvsCheckReasonPinForked)
-
-	fixture.authLog.Retain(3)
-	requireRulesRefusal(t, "an auth pin before what evs retains", CheckGate(fixture.rulesView(pins[2], nil)), 2, 3)
 }

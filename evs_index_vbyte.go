@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // VByte and the reader every index decoder shares (protocol/INDEX-FORMAT.md). Index files are read by devices that did
 // not write them, so a decoder here refuses everything but the one canonical encoding, which is what makes
 // re-encoding reproduce a file's bytes (FI-22). Nothing is compressed, so no decoder needs more memory than its input.

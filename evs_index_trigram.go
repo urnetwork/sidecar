@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // The trigram extractor (§11.14's trigrams row): every 3-byte window of normalized text, a document's set of distinct
 // 24-bit keys. A key's bytes read in text order, so an aligned CJK character is one trigram and one- and two-character
 // queries resolve.

@@ -38,6 +38,12 @@
 // Head mode on a git-mode ref applies the same rule to the one change it reads, and follows no base: a path an
 // overlay holds no entry for answers ErrEvsOverlayBase before anything here is asked (16.2.6; QD-801).
 //
+// Dark at launch (QD-1032): the rules moved to Later. A judge whose settings keep them off, the defaults every
+// composition takes, is held but never asked: prefixJudge answers nil and EvsRepo.prefixRuled nothing, so every read
+// shows evs's newest verified version, no write asks AllowPrefixWrite, the mirror journals nothing, and no alarm,
+// repair or pin push is sent, whatever rows a state holds. The judge runs as written with EvsPrefixRulesArgs.Settings'
+// Enabled on, which the rules' own tests set.
+//
 // A path's plaintext is its device's own: it goes into an event and the sealed journal, never a log or an error's
 // text (I-13). No key is created, derived or unwrapped here but K_path through NewEvsPathKey, which calls
 // testHookSecret itself. testHookBarrier runs around the journal's write.
@@ -89,7 +95,7 @@ type EvsPrefixRulesArgs struct {
 	// Whether this device repairs (DESIGN-DETAILS 16.2.8's who): true on a desktop or the daemon, never on a phone
 	// or an ephemeral sidecar. False runs no repair, by timer or by hand.
 	Repair bool
-	// Nil: DefaultAclPrefixSettings.
+	// Nil: DefaultAclPrefixSettings, whose Enabled keeps the rules dark (QD-1032): the judge is held and never asked.
 	Settings *AclPrefixSettings
 }
 
@@ -180,7 +186,8 @@ type evsPrefixSetAlarms struct {
 
 // Enables the repo's prefix write rules on this client's reads (DESIGN-DETAILS 16.2.5): from here a repo whose rows
 // hold a rule set is read through the judge. args nil takes the defaults. A client no composition enables refuses
-// every read of such a repo with EVS_PREFIX_RULE, so none shows a version its rules do not allow.
+// every read of such a repo with EVS_PREFIX_RULE, so none shows a version its rules do not allow. With the settings'
+// rules dark, the defaults (QD-1032), the judge is installed and asked nothing: see the file header.
 func (self *EvsClient) EnablePrefixRules(args *EvsPrefixRulesArgs) {
 	if args == nil {
 		args = &EvsPrefixRulesArgs{}
@@ -204,12 +211,27 @@ func (self *EvsClient) EnablePrefixRules(args *EvsPrefixRulesArgs) {
 	self.prefixReads = judge
 }
 
-// The client's prefix judge, nil for a client no composition enabled it on.
+// The client's prefix judge while its rules run: nil for a client no composition enabled it on, and for one whose
+// judge's settings keep the rules dark (QD-1032), so every caller asks it nothing.
 func (self *EvsClient) prefixJudge() *evsPrefixJudge {
+	judge := self.installedPrefixJudge()
+	if judge == nil || !judge.settings.Enabled {
+		return nil
+	}
+	return judge
+}
+
+// The judge a composition installed, whether or not its rules run: nil for a client none enabled it on.
+func (self *EvsClient) installedPrefixJudge() *evsPrefixJudge {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	judge, _ := self.prefixReads.(*evsPrefixJudge)
 	return judge
+}
+
+// evsPrefixReader's enabled: the judge's settings.
+func (self *evsPrefixJudge) enabled() bool {
+	return self.settings.Enabled
 }
 
 // The prefix judge of this repo's replays, as prefixRuled gives a read's: nil where the repo's rows hold no set.

@@ -57,8 +57,11 @@ var (
 
 // A repo's prefix write rules as a client's reads follow them (DESIGN-DETAILS 16.2.5), once its composition enables
 // them (EvsClient.EnablePrefixRules, evs_prefix.go): behind a seam, so that the forwarding role's leg, which reads no
-// repo under rules, links none of them.
+// repo under rules, links none of them. The rules are dark at launch (QD-1032): a reader whose settings keep them off
+// is asked nothing but enabled.
 type evsPrefixReader interface {
+	// Whether its settings run the rules (AclPrefixSettings.Enabled); false, the launch default, keeps them dark.
+	enabled() bool
 	// 16.2.5's effective(X) over a head read of one path, result's only one: the read to show in its place, which is
 	// result itself where its rules allow the newest event, and what the walk found. It closes every read it
 	// replaces, result included, and on an error result too.
@@ -122,10 +125,15 @@ type evsPrefixIgnoredPush struct {
 	pushId        Id
 }
 
-// The prefix reader of this repo's reads: nil where the repo's rows hold no rule set, so nothing is judged (16.2.4's
-// line 2), else the client's, or EVS_PREFIX_RULE with detail pending for a client that holds none, which cannot read
-// the rules in force and so shows nothing under them.
+// The prefix reader of this repo's reads: nil while the client's rules are dark (QD-1032), so nothing is judged
+// against them whatever rows the state holds, as a release that does not enforce reads a ruled repo (DESIGN-DETAILS
+// 16.2.12); nil where the repo's rows hold no rule set (16.2.4's line 2); else the client's, or EVS_PREFIX_RULE with
+// detail pending for a client that holds none, which cannot read the rules in force and so shows nothing under them.
 func (self *EvsRepo) prefixRuled() (evsPrefixReader, error) {
+	reader, enabled := self.client.prefixReader()
+	if !enabled {
+		return nil, nil
+	}
 	state, err := self.client.verifier.config()
 	if err != nil {
 		// no state judges anything, and the read's own checks refuse
@@ -135,15 +143,32 @@ func (self *EvsRepo) prefixRuled() (evsPrefixReader, error) {
 	if repo == nil || len(repo.GetPrefixRules()) == 0 {
 		return nil, nil
 	}
-	reader := func() evsPrefixReader {
-		self.client.stateLock.Lock()
-		defer self.client.stateLock.Unlock()
-		return self.client.prefixReads
-	}()
 	if reader == nil {
 		return nil, &EvsPrefixRuleError{Detail: EvsPrefixDetailPending}
 	}
 	return reader, nil
+}
+
+// The prefix reader a composition installed, nil for none, and whether the client runs the rules: the reader's
+// settings, else the defaults, whose rules are dark at launch (QD-1032).
+func (self *EvsClient) prefixReader() (evsPrefixReader, bool) {
+	reader := func() evsPrefixReader {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.prefixReads
+	}()
+	if reader == nil {
+		return nil, DefaultAclPrefixSettings().Enabled
+	}
+	return reader, reader.enabled()
+}
+
+// Whether this client runs the client-checked prefix write rules: its judge's settings, else the defaults, whose
+// rules are dark at launch (QD-1032). Off, it files, judges, journals, alarms, repairs and pin-pushes nothing under
+// them.
+func (self *EvsClient) PrefixRulesEnabled() bool {
+	_, enabled := self.prefixReader()
+	return enabled
 }
 
 // How a read gives a version's push provenance: the push's record read by its id and version, its sealed metadata
