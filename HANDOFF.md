@@ -236,7 +236,7 @@ These rules are hard. When a section cannot meet one, it raises a Q- item for th
 | build | public | The `sidecar` submodule, the release step, and `warpctl build` and a rollout class for each service | M0 |
 | sn | public (`urfoundation/sn`) | sidecar's require and replace, repeating server's | M0 |
 | xops | private | D-OPS-18's sidecar dumps | M0 |
-| mmm | internal | `install.sh` on ur.io | M0 |
+| mmm | internal | `install.sh` on ur.io; and ur.io's OAuth consent page, `ur.io/react/src/components/OauthConsent.jsx`, which shows `ur login`'s matching code and the one command from `authorization_details`: the issuer's security control, not product UI, so owner rule 6 does not reach it ([§7.8](DESIGN.md#78-credentials-and-scoped-tokens); owner decision 306) | M0 |
 | config | private | `config/<env>/sidecar.yml` (dark gates, `preview_networks`) and `pro.yml`'s `sidecar:` blocks | M0 |
 | vault | private | Secrets | M0 |
 | warp | public | W1-W11 ([§19.5](DESIGN.md#195-load-balancer-addresses-certificates)) | M0 |

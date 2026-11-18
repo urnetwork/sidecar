@@ -725,7 +725,7 @@
       <ul class="tight">
         <li>Which agents, harnesses, and models touched which repos, for which sponsor.</li>
         <li>Who approved each action: one action ID, SSH-signed for high-risk steps.</li>
-        <li>Proof for a client that a person approved a change, without the code.</li>
+        <li>Proof for a client of a person's signed statement that they reviewed, tested, or approved named commits, without the code.</li>
         <li>One switch revokes an agent's forwards, addresses, names, and mail.</li>
       </ul>
     </div>
@@ -763,7 +763,7 @@
       <tr><td>Who sees prompts and code</td><td>The model provider</td><td>Only your team</td></tr>
       <tr><td>Vendor record of agent work</td><td>Each vendor's, for its own product; GitLab now ingests some</td><td>None, so the record is the one you keep</td></tr>
       <tr><td>What URnetwork holds</td><td>Ciphertext</td><td>Ciphertext, or nothing if you self-host</td></tr>
-      <tr><td>What the record can prove</td><td>Which harness and which model name</td><td>Also the weight digest, quantization, and engine</td></tr>
+      <tr><td>What the record can prove</td><td>Which harness and which model name</td><td>Also the weight digest, quantization, and engine, each labelled declared, reported, or measured</td></tr>
     </tbody>
   </table>
   </div>
@@ -776,7 +776,7 @@
       <dl class="pae">
         <dt>Grant</dt><dd>Per agent and per model, approved by a person, revoked with the agent.</dd>
         <dt>Encrypted</dt><dd>Between the sidecars. No vendor sits in the path.</dd>
-        <dt>Signs</dt><dd>Per request: the weight digest, quantization, and engine, each labelled by evidence level.</dd>
+        <dt>Signs</dt><dd>Per grant and 5-minute window: the weight digest, quantization, and engine, each labelled by evidence level. Each call is recorded per request, as the harness reports it.</dd>
       </dl>
       <div class="writes"><span class="lbl">Records</span><span class="entry">route</span><span class="entry">model</span><span class="readers"><code>ur bridge forward</code></span></div>
     </div>
