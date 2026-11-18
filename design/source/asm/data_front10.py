@@ -1666,3 +1666,44 @@ assert DECISIONS_INTRO.count(_D591) == 1, 'decisions lead moved'
 DECISIONS_INTRO = DECISIONS_INTRO.replace(
     _D591, "the idle reap leaves edge clients alone (591); and a cascade's void of a recovery binding restores no "
     "earlier one (592), reversing @@OD:556@@ and the restore clause of @@OD:149@@. ")
+INDEX += [
+    (593, 'A process-wide Env',
+     "operator-core's `SetGlobalEnv` and `GlobalEnv` hold one process-wide `Env`, which every service process "
+     'server launches sets at startup; code with no `Env` of its own reads it.'),
+    (594, "sidecar's server-hosted packages",
+     'sidecar/model, sidecar/controller, sidecar/work and sidecar/handler hold its server-hosted code: model and '
+     'controller take the `Env` first, work and handler read the global one.'),
+    (595, "The release fixture's base and limits",
+     "The real fixture's copies name their one commit main for X9's rule, and the real fixture runs under a 3 h "
+     "limit of its own in run.sh's BUILD_TEST and at sidecar-gate."),
+    (596, "The leg closure's reviewed seams",
+     "The `ios_extension` leg's closure skips seven reviewed registration seams, `evs_read_provenance.go` first, so "
+     'its list names only what the leg links.'),
+    (597, "smtpedge's file capability",
+     "A static Go helper sets `CAP_NET_ADMIN` on smtpedge's binary in a build stage, and a release check refuses an "
+     'image whose binary lacks it.'),
+    (598, "FS-86's card commits on quiet T3",
+     "FS-86's card commits are judged on T3's 4-host file-cluster layout with nothing else running; the local "
+     "stack's run is a reduced-scale form."),
+    (599, 'A cache drop resets the sync',
+     "`DropCache` resets the sync engine's loaded manifest, plan and versions of each ref it drops, so the next "
+     'round fetches again.'),
+]
+for _n, _note in [
+        (251,
+         ' Amended by @@OD:593@@ for one process-wide `Env`, which @@OD:594@@\'s work and handler packages read.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 600))
+DATES.update({593: '2026-11-17', 594: '2026-11-17', 595: '2026-11-17', 596: '2026-11-18', 597: '2026-11-18',
+              598: '2026-11-18', 599: '2026-11-17'})
+_D592 = "and the restore clause of @@OD:149@@. "
+assert DECISIONS_INTRO.count(_D592) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D592, "and the restore clause of @@OD:149@@. The owner's instructions on operator-core give it one process-wide "
+    "`Env` (593), amending @@OD:251@@, and sidecar its model, controller, work and handler packages (594); the "
+    "build's answers number the release fixture's base and limits (595), the leg closure's reviewed seams (596), "
+    "smtpedge's file capability (597), FS-86's card commits judged on quiet T3 (598) and a cache drop that resets "
+    "the sync (599). ")

@@ -475,7 +475,10 @@ func (self *Sidecar) SetSearchForeground(foreground bool) // the app's lifecycle
 func (self *Sidecar) RunSearchBackgroundSync(ctx context.Context) error // an OS window, ctx's deadline its budget
                                                                         // (§18.5's budgetMillis); resumes next time
 func (self *Sidecar) SetSearchPolicy(repoId *Id, mode string) error // nil repoId: every repo; "": the host default
-func (self *Sidecar) DropSearchCache(repoId *Id) error              // nil repoId: every repo; 5.9's state stays
+func (self *Sidecar) DropSearchCache(repoId *Id) error              // nil repoId: every repo; 5.9's state stays;
+                                                                    // resets the sync's loaded manifest, plan and
+                                                                    // versions of each dropped ref, so its next
+                                                                    // round fetches again (owner decision 599)
 // remote search's requester side, on app hosts only (§18.4; CLI and browser requesters are Later):
 func (self *Sidecar) GetSearchIndexers() []SearchIndexer                      // those that may answer, own first
 func (self *Sidecar) SetSearchRemote(mode string) error                       // on, own or off (5.9's state)

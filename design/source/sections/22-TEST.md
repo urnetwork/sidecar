@@ -79,7 +79,8 @@ not       canary, which has no hosts (§19.11; owner decision 499); a one-node R
 release   build/all/run.sh's rewrite functions on a fixture copy, the tags served through GOPROXY=file:// with
 fixture   GOWORK=off, an empty module cache and no replaces: root, protocol and an engine package import at the tag;
           ur builds from cli/; go list -m all shows one sidecar path; each protocol/<name>.proto registers once; sdk's
-          go mod graph holds no smtpproof or prover dependency
+          go mod graph holds no smtpproof or prover dependency; X9's rule holds against the copy's main; the real
+          run under a 3 h limit of its own (§4.9's fixture row; owner decision 595)
 ```
 
 ### 22.5 Component matrix and hot-path gates
@@ -778,7 +779,8 @@ directory
          FS-86's load (D-TEST-17), its M6 case at M6's exit and its card case at the later of M10's and M6's: 500
          members in physical time, and the Team limit (2,000 members) and 5,000 as fake-clock days with a
          physical peak hour at 3x bursts beside the 1x year-one mix; the cards ref's commit p99, 412 reruns and
-         429s, priced NVMe bytes per push per drive, and readers' requests, path reads and bytes per reader-day
+         429s, on T3's 4-host file-cluster layout with nothing else running (owner decision 598), priced NVMe
+         bytes per push per drive, and readers' requests, path reads and bytes per reader-day
          and team-day against the golden schedule and §16.11's cost table, with a cold phone past 8 MiB
 drop     at M10 on T3: dry-run and job scan rates, HDD drive operations, HEAD and DELETE costs, NVMe writes per job
          and per drop, and a 60 GB history's job time; the directory and drop rows' NVMe operations, priced by M2's
@@ -2155,12 +2157,16 @@ FS-77  §11,18 an ios32 and an Android surrogate cell and a page Worker, each ho
               not yet called SetConditions counts as metered; an iOS BGProcessingTask window
               on cellular fetches no all; a window on Wi-Fi while charging whose link turns
               metered after its first shard reads no further shard of all, and the next
-              allowed window resumes there (owner decision 583); ur search sync --evict,
-              DropCache and the caps' eviction keep §5.9's non-derived search state (policy
-              overrides, remote mode, notice answers and served records), while a browser's
-              whole-origin eviction loses it with the keychain, the next Worker starting from
-              defaults (§5.9's rebuild row); a phone runs its merges and roll-ups only in
-              windows, within its cap (FS-75)
+              allowed window resumes there (owner decision 583); a DropCache resets the sync
+              engine's loaded manifest, plan and version table for each ref it drops, under
+              the ref's round lock, so the next round reloads from the emptied cache and
+              fetches the latest set, and all where it is kept, and a cached search of that
+              ref finds its hits again (owner decision 599); ur search sync --evict, DropCache
+              and the caps' eviction keep §5.9's non-derived search state (policy overrides,
+              remote mode, notice answers and served records), while a browser's whole-origin
+              eviction loses it with the keychain, the next Worker starting from defaults
+              (§5.9's rebuild row); a phone runs its merges and roll-ups only in windows,
+              within its cap (FS-75)
 FS-78  §11,15 a mailbox and a vault, both indexed, at the exact storage limit and spent, the   FI-5,13c,19 T2+T3  M10-out;
               eraser at evs_closure_bytes_floor: an admin's erasure of one email first                            mailbox
               commits its CUT and an ERASE of the email's own keys, both at once, the email                       M7, holds
@@ -2329,15 +2335,19 @@ FS-86  §16,11 scale (D-TEST-17), against §16.11's cost table: 500 members' dae
               them per reader-day and per team-day, and three mutants, run one at a time, fail
               that check: no coalescing to each card's newest version, no head reproduction,
               and refetching unchanged cards; the cards ref's commits meet the table's
-              ceilings (p99, 412 reruns, 429 BUSY, no FOLD_BEHIND), and injected 200 ms delays
-              on head PUTs, or conflicts past those ceilings, fail the run; priced NVMe bytes
-              per push per drive within the directory rows of §11.13's price table; heads
-              reproduced with no head download on an honest stream; a cold desktop within the
-              table's bytes; a cold phone whose current state passes 8 MiB on a metered link
-              shows partial coverage naming what is left, and continues with AllowMetered or
-              on Wi-Fi from where it stopped, never a complete or empty view; the M6 case runs
-              the same on announce entries against the M6 rows, streams read 64 to a request;
-              a miss at the Team limit blocks the gate, and the owner hears then
+              ceilings (p99, 412 reruns, 429 BUSY, no FOLD_BEHIND), judged on T3's 4-host
+              file-cluster layout with nothing else running on the machine, over a whole peak
+              hour at the Team limit's rate in sidecar-t3.sh nightly, the local stack's run
+              being the reduced-scale form, whose Team-limit test logs a p99 miss and fails
+              nothing (owner decision 598), and injected 200 ms delays on head PUTs, or
+              conflicts past those ceilings, fail the run; priced NVMe bytes per push per
+              drive within the directory rows of §11.13's price table; heads reproduced with
+              no head download on an honest stream; a cold desktop within the table's bytes; a
+              cold phone whose current state passes 8 MiB on a metered link shows partial
+              coverage naming what is left, and continues with AllowMetered or on Wi-Fi from
+              where it stopped, never a complete or empty view; the M6 case runs the same on
+              announce entries against the M6 rows, streams read 64 to a request; a miss at
+              the Team limit blocks the gate, and the owner hears then
 FS-87  §7,10, removal and retention: a MemberRevoke masks the member's cards, notices and      FI-19,25    T2+T3  M6-out;
        16     pending requests at its position in every reader; the directory group's Removes                     later of
               and rotation reach leaves and wraps (owner decision 182), and the removed                           M6-out and
@@ -3168,7 +3178,7 @@ gaps      any other step tmc/mls lacks is named in the artifact as a gap; mlswg 
 
 **D-TEST-16 (proposed).** Remote search is checked against `SearchOracle` as local search is, and its privacy by a relay capture: one frame-size sequence per kind whatever the query, results or post-parse failure, and equal evs request logs on both devices with and without it (FS-83, FI-24). Its stored accounting is checked by FS-125's sweep: a window's reports are the same for zero to five exchanges over every background within its allowance, both directions, across its contracts. *Why:* fixed sizes and evs's blindness are owner decision 175's whole privacy claim, and one optimization would break either silently: an early short reply, or a sync before answering. Owner decision 176's claim fails just as silently when a fixture's background sits far from a multiple of 128 KiB (meta review F18).
 
-**D-TEST-17 (proposed).** FS-86 gates the directory against §16.11's cost table: its M6 case on announce entries at M6's Gn-out, and its card case at the later of M6's and M10's, each at 500 members in physical time on T3 and, as fake-clock days with one physical peak hour at 3x bursts beside §22.8's 1x year-one mix, at the Team limit (2,000 members, 5,000 admissions) and at a 5,000-member stress case; a golden schedule (`DirectoryCostOracle`) computes each reader's expected requests, path reads and ciphertext bytes from the events and sync times alone, the measured ones staying within 1.25 times them per reader-day and per team-day, and disabling coalescing, head reproduction or unchanged-card suppression fails that check; the cards ref's commits meet the table's p99, rerun and 429 ceilings, and injected store delays fail them; the year-one mix keeps its p99; a cold phone past 8 MiB on a metered link shows partial coverage it can continue; priced NVMe bytes per push per drive meet §11.13's price table, and the directory's pushes join format 2's computed write gate, which production confirms after the freeze (D-TEST-13; owner decision 174). A miss at the Team limit blocks its gate, and the owner hears then. *Why:* reader transfer, per-stream reads and one ref's head are the directory's binding terms, and a number recorded with no ceiling cannot fail.
+**D-TEST-17 (proposed).** FS-86 gates the directory against §16.11's cost table: its M6 case on announce entries at M6's Gn-out, and its card case at the later of M6's and M10's, each at 500 members in physical time on T3 and, as fake-clock days with one physical peak hour at 3x bursts beside §22.8's 1x year-one mix, at the Team limit (2,000 members, 5,000 admissions) and at a 5,000-member stress case; a golden schedule (`DirectoryCostOracle`) computes each reader's expected requests, path reads and ciphertext bytes from the events and sync times alone, the measured ones staying within 1.25 times them per reader-day and per team-day, and disabling coalescing, head reproduction or unchanged-card suppression fails that check; the cards ref's commits meet the table's p99, rerun and 429 ceilings on T3's 4-host file-cluster layout with nothing else running on the machine, over a whole peak hour at the Team limit's rate, the local stack's run being a reduced-scale form that logs a miss and fails nothing (owner decision 598), and injected store delays fail them; the year-one mix keeps its p99; a cold phone past 8 MiB on a metered link shows partial coverage it can continue; priced NVMe bytes per push per drive meet §11.13's price table, and the directory's pushes join format 2's computed write gate, which production confirms after the freeze (D-TEST-13; owner decision 174). A miss at the Team limit blocks its gate, and the owner hears then. *Why:* reader transfer, per-stream reads and one ref's head are the directory's binding terms, and a number recorded with no ceiling cannot fail.
 
 **D-TEST-18 (proposed).** Drop deletes ship in observe mode (§19.11's `drop: observe`): jobs run every phase and record their delete sets, deleting nothing, while the drop oracle (taskworker's verify, written apart from mark) checks each set against every retained version. Deletes turn on only once FS-89 to FS-96 pass on their tiers, TLC checks I-EVS-15 and FI-27, and a production soak on internal networks and design partners of at least 30 days and 200 jobs, half of them on repos with renames and cross-ref copies, finds no delete-set member that a retained version names. *Why:* a drop deletes keep-forever content (owner decision 173), the costliest bug class, and observe mode shows its sets on real histories first.
 
