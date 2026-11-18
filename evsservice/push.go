@@ -460,6 +460,10 @@ func (self *pushAttempt) runSteps() *pushOutcome {
 		}
 		cached = false
 		if outcome := self.settle(self.head); outcome != nil {
+			if self.reseed != nil {
+				// a re-seeded format-2 push evs holds: its replaced content a stale mirror sent (reseed_format2.go)
+				return self.reseedSettled(outcome)
+			}
 			return outcome
 		}
 		// the fence row ends an attempt that may issue step 7: a push or a seal, never a part

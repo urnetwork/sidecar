@@ -26,9 +26,11 @@ func (self *pushAttempt) recordTail() (*sidecar.EvsBatchRecordTail, error) {
 			base += 4 + len(self.staged)
 		}
 		room := evsPurgeListRoom(base)
-		if self.seal != nil {
+		if self.seal != nil && self.reseed == nil {
 			self.purge = evsSealPurge(self.reads.view, self.seal.partLists, room)
 		} else {
+			// a one-part push's, or a re-seeded push in parts', whose part records carry no replaced list: over every
+			// change the view holds (reseed_format2.go)
 			self.purge = evsPushPurge(self.reads.view, room)
 		}
 	}

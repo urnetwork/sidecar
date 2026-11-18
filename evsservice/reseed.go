@@ -77,9 +77,9 @@
 // INVALID, so no reseed record keeps a key an ERASE may have destroyed, and the push's slots return by their own
 // calls, stripped.
 //
-// Not built here, each refused before anything is written: a push carrying format 2 (EVS2-M10-13), and a statement at
-// an auth pin evs's state does not retain. A reading waits on its question: a slot call names its version by the
-// statement it carries (evs-reseed-route-slot-naming).
+// Format 2's rules, a format-2 push's at a format-2 instance, are reseed_format2.go's (EVS2-M10-13). Not built here,
+// refused before anything is written: a statement at an auth pin evs's state does not retain. A reading waits on its
+// question: a slot call names its version by the statement it carries (evs-reseed-route-slot-naming).
 
 package evsservice
 
@@ -131,6 +131,9 @@ type reseedAttempt struct {
 	// no entry.
 	segments     map[[32]byte]int64
 	segmentsRead bool
+	// a format-2 push's: which new segments kind-5 and kind-1 locators name, and which held ones are its kind-5
+	// uploads (reseed_format2.go); nil until read, and for a format-1 push
+	format2 *reseedFormat2Segments
 }
 
 // Whether a call is a part call or a seal call of a push in parts, by the fields only those carry (QD-836).
@@ -293,14 +296,22 @@ func (self *EvsEngine) newReseedAttempt(request *EvsRequest, body *protocol.EvsR
 			attempt.cancel()
 		}
 	}()
+	// at a format-2 instance format 2's parsers read the push as its record stored it, format-1 data being valid
+	// format 2; at a format-1 instance a format-2 construct is FORMAT_UNSUPPORTED {needs_format: 2}, recording nothing
+	format2 := self.format2Instance()
 	statement, err := sidecar.ParseEvsStatement(body.GetStatement())
 	if err != nil {
 		refusal := EvsCheckRefusalOfCodec(err)
-		if refusal.Reason == EvsCheckReasonFormatUnsupported {
-			refusal = newEvsCheckRefusal(EvsCheckReasonUnchecked, "format 2's re-seed rules are EVS2-M10-13's")
+		if refusal.Reason != EvsCheckReasonFormatUnsupported || !format2 {
+			request.Refuse(refusal.Reply(sidecar.Id{}))
+			return nil, false
 		}
-		request.Refuse(refusal.Reply(sidecar.Id{}))
-		return nil, false
+		statement, err = sidecar.ParseEvsStatementFormat2(body.GetStatement())
+		if err != nil {
+			request.Refuse(EvsCheckRefusalOfCodec(err).Reply(sidecar.Id{}))
+			return nil, false
+		}
+		attempt.needsFormat2 = true
 	}
 	attempt.statement = statement
 	push := statement.Push
@@ -335,15 +346,16 @@ func (self *EvsEngine) newReseedAttempt(request *EvsRequest, body *protocol.EvsR
 		// one part, checked against its statement as the part route checks one (QD-836); its record is written by
 		// runReseedPart, and the seal reads it at the place that answers
 		part := body.GetParts()[0]
-		checked, err := sidecar.EvsCheckPart(statement, part)
+		checkPart := sidecar.EvsCheckPart
+		if format2 {
+			checkPart = sidecar.EvsCheckStoredPart
+		}
+		checked, err := checkPart(statement, part)
 		if err != nil {
-			refusal := EvsCheckRefusalOfCodec(err)
-			if refusal.Reason == EvsCheckReasonFormatUnsupported {
-				refusal = newEvsCheckRefusal(EvsCheckReasonUnchecked, "format 2's re-seed rules are EVS2-M10-13's")
-			}
-			request.Refuse(refusal.Reply(attempt.pushId))
+			request.Refuse(EvsCheckRefusalOfCodec(err).Reply(attempt.pushId))
 			return nil, false
 		}
+		attempt.needsFormat2 = attempt.needsFormat2 || (format2 && sidecar.EvsChangesNeedFormat2(checked.Changes))
 		if checked.Part != body.GetPartNumber() {
 			invalid("a part numbered unlike its call")
 			return nil, false
@@ -358,16 +370,19 @@ func (self *EvsEngine) newReseedAttempt(request *EvsRequest, body *protocol.EvsR
 	default:
 		// the payload as the mirror holds the push's record, which evs served with no slot body (QD-806); slots come
 		// last, by their own calls
-		payload, err := sidecar.EvsCheckRecordPayload(statement, body.GetPayload())
+		checkPayload := sidecar.EvsCheckRecordPayload
+		if format2 {
+			// format 2's values and a DROP's sections, with no staged bytes: a re-seeded record carries none, its
+			// staged content coming back as uploads (reseed_format2.go)
+			checkPayload = sidecar.EvsCheckStoredPayload
+		}
+		payload, err := checkPayload(statement, body.GetPayload())
 		if err != nil {
-			refusal := EvsCheckRefusalOfCodec(err)
-			if refusal.Reason == EvsCheckReasonFormatUnsupported {
-				refusal = newEvsCheckRefusal(EvsCheckReasonUnchecked, "format 2's re-seed rules are EVS2-M10-13's")
-			}
-			request.Refuse(refusal.Reply(attempt.pushId))
+			request.Refuse(EvsCheckRefusalOfCodec(err).Reply(attempt.pushId))
 			return nil, false
 		}
 		attempt.payload = payload
+		attempt.needsFormat2 = attempt.needsFormat2 || (format2 && sidecar.EvsPushNeedsFormat2(statement, payload))
 		// and the record keeps none, whatever a mirror sends: a body an ERASE since destroyed a key of is not stored
 		// again
 		recordPayload, err := sidecar.EvsRecordPayload(body.GetPayload())
@@ -447,8 +462,8 @@ func reseedSignerRights(state sidecar.GkmAuthView, repoId sidecar.Id, signerId s
 
 // 5 (b-h) in the reseed mode, over what step 4 read: see the file header for what is skipped and kept.
 func (self *pushAttempt) checkReseed() *EvsCheckRefusal {
-	if self.formatRefusal != nil || self.needsFormat2 {
-		return newEvsCheckRefusal(EvsCheckReasonUnchecked, "format 2's re-seed rules are EVS2-M10-13's")
+	if self.formatRefusal != nil {
+		return self.formatRefusal
 	}
 	if self.reads == nil || self.reads.view == nil || self.reads.view.Payload == nil {
 		return newEvsCheckRefusal(EvsCheckReasonUnchecked, "no statement or payload in the view")
@@ -474,12 +489,16 @@ func (self *pushAttempt) checkReseed() *EvsCheckRefusal {
 		checkReseedSignature,
 		self.checkReseedRepo,
 		checkRefTable,
+		// format 2's gate and 5c (reseed_format2.go); a format-1 push passes
+		self.checkReseedFormat2,
 		checkReseedPins,
 		CheckPathEpoch,
 		// the push route's own 5f and 5g, its window included (QD-815)
 		CheckBase,
 		CheckPaths,
 		self.checkReseedObjects,
+		// format 2's 5h: the citation rule and a DROP's boundary
+		self.checkReseedFormat2Objects,
 	}
 	for _, check := range checks {
 		if refusal := check(&view); refusal != nil {
@@ -576,7 +595,9 @@ func (self *pushAttempt) readReseedSegments() *EvsCheckRefusal {
 	segments := map[[32]byte]int64{}
 	var segmentCluster sidecar.BlobCluster
 	for _, object := range self.payload.NewObjects {
-		if object.Kind != protocol.EvsNewObjectKind_EVS_NEW_OBJECT_SEGMENT || len(object.Id) != 32 {
+		// a format-2 push's staged items come back as ordinary uploads (reseed_format2.go)
+		staged := object.Kind == protocol.EvsNewObjectKind_EVS_NEW_OBJECT_STAGED_SEGMENT && self.needsFormat2
+		if (object.Kind != protocol.EvsNewObjectKind_EVS_NEW_OBJECT_SEGMENT && !staged) || len(object.Id) != 32 {
 			continue
 		}
 		if segmentCluster == nil {
@@ -598,7 +619,7 @@ func (self *pushAttempt) readReseedSegments() *EvsCheckRefusal {
 	}
 	reseed.segments = segments
 	reseed.segmentsRead = true
-	return nil
+	return self.readReseedFormat2Segments(self.engine.blobs.SegmentCluster)
 }
 
 // The EVS_BATCH_RESEED record of a part call's part (QD-818, QD-836): a part record's body, the statement, the part as
@@ -680,17 +701,25 @@ func (self *pushAttempt) checkReseedObjects(view *PushView) *EvsCheckRefusal {
 	newSlots := map[sidecar.Id]bool{}
 	for _, object := range view.Payload.NewObjects {
 		switch object.Kind {
-		case protocol.EvsNewObjectKind_EVS_NEW_OBJECT_SEGMENT:
+		case protocol.EvsNewObjectKind_EVS_NEW_OBJECT_SEGMENT, protocol.EvsNewObjectKind_EVS_NEW_OBJECT_STAGED_SEGMENT:
 			if len(object.Id) != 32 {
 				return newEvsCheckRefusal(EvsCheckReasonInvalid, "a new segment's id")
 			}
 			segmentId := [32]byte(object.Id)
+			if object.Kind == protocol.EvsNewObjectKind_EVS_NEW_OBJECT_STAGED_SEGMENT && !self.needsFormat2 {
+				refusal := newEvsCheckRefusal(EvsCheckReasonFormatUnsupported, "a staged segment")
+				refusal.NeedsFormat = sidecar.EvsRepoFormat2
+				return refusal
+			}
 			size, held := self.reseed.segments[segmentId]
-			if !held {
+			switch {
+			case !held && self.reseed.format2.mayBeAbsent(segmentId):
+				// a versionless version's content no device held: the version reads `collected` once replaced
+				continue
+			case !held:
 				// the re-upload is still to come: nothing is refused for good
 				return newEvsCheckRefusal(EvsCheckReasonSegmentGone, "a new segment seg/ does not hold")
-			}
-			if uint64(size) != object.PaddedSize {
+			case uint64(size) != object.PaddedSize:
 				return newEvsCheckRefusal(EvsCheckReasonReceiptInvalid, "a new segment unlike the object seg/ holds")
 			}
 			newSegments[segmentId] = true
@@ -720,7 +749,8 @@ func (self *pushAttempt) checkReseedObjects(view *PushView) *EvsCheckRefusal {
 					return newEvsCheckRefusal(EvsCheckReasonInvalid, "a segment locator's id")
 				}
 				segmentId := [32]byte(locator.GetId())
-				if !newSegments[segmentId] && !citedSegments[segmentId] {
+				// a kind-5 segment its path's own newest version names unstaged is adopted as kind 1 (check_objects.go)
+				if !newSegments[segmentId] && !citedSegments[segmentId] && !evsAdoptsKind5(view, change.TokenPath, segmentId) {
 					refusal := newEvsCheckRefusal(EvsCheckReasonSegmentUnknown, "a segment neither held nor named by a version read")
 					refusal.Paths = []sidecar.EvsTokenPath{change.TokenPath}
 					return refusal

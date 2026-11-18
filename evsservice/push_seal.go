@@ -179,6 +179,13 @@ func (self *pushAttempt) readSealParts() *pushOutcome {
 	var checkedParts []*sidecar.EvsCheckedPart
 	var err error
 	switch {
+	case self.reseed != nil && format2:
+		// a re-seeded push in parts at a format-2 instance: as its records stored it, of either format, with no slot
+		// body and no staged bytes, its staged content coming back as uploads (reseed_format2.go)
+		payload, checkedParts, err = sidecar.EvsCheckStoredSeal(self.statement, partBytes)
+		if err == nil {
+			self.needsFormat2 = self.needsFormat2 || sidecar.EvsPushNeedsFormat2(self.statement, payload)
+		}
 	case self.reseed != nil:
 		// a re-seeded push in parts: no part carries a slot body, nor its call, its slots coming last (QD-819); held to
 		// format 1, as a re-seeded one-part push's payload is
