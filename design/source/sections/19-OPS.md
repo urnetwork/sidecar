@@ -950,12 +950,17 @@ authority  token exchange re-seed mode (§7.8): until a network's log resumes, i
                           run that fails, then appends the base and re-derives its ticks; the base resumes the
                           log at unchanged positions and digests (no reader FORKs) and names each repo live,
                           deleted (restorable) or shredded; signers re-submit statements no adopted entry holds
-groups     repo admins'   place each repo they hold afresh (§11.8), writing repo/ deleted{...} first for one the
-           devices        repos step re-seeds as deleted, and re-form its group under a GroupForm linked through
-                          the ladder (D-KEYS-13); an owner-bound repo's group only by its owner's consented
-                          device (§8.5; owner decision 126); writer leaves re-add member leaves, ReaderWraps and
-                          RecoveryWraps, keeping recovery-code-only members (owner decisions 113, 114), for a
-                          deleted repo only once it is restored (§10.8)
+groups     repo admins'   place each repo they hold afresh (§11.8), evs's place route writing repo/ deleted{...}
+           devices        at creation, while reseed is on, for one the repos step re-seeds as deleted (§11.12),
+                          and re-form its group under a GroupForm linked through the ladder (D-KEYS-13); an
+                          owner-bound repo's group only by its owner's consented device (§8.5; owner decision
+                          126); for a repo its state shows deleted the step also sends activate, taking 409
+                          REPO_DELETED as the answer it expects, and mends a 200, from a repo/ that stood keying
+                          and is now active, by DELETE alone, with no new statement, which moves repo/ to
+                          deleted{...} under the projected RepoDelete, waiting out STATEMENT_MISSING while evs's
+                          projection trails (owner decision 602); writer leaves re-add member leaves,
+                          ReaderWraps and RecoveryWraps, keeping recovery-code-only members (owner decisions
+                          113, 114), for a deleted repo only once it is restored (§10.8)
 repos      devices        first the ERASE pushes (§11.12) each device signed in the last 30 days, then the signed
                           pushes, parts, segments (a versionless path's only for versions the device holds, staged
                           ones as uploads) and pack contents past the current head, in version order, and last,

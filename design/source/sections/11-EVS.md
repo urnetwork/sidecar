@@ -1598,7 +1598,11 @@ reply     one framed stream of u32 length | EvsReadFrame, each frame one of thes
           and for each later statement of an epoch the request named the path in, whose change list is not inline
           and whose covering prefixes match the path, the adjacent-leaf proofs (11.6's order) that neither the path
           nor a removal of a prefix holding it is among its changes, with the inclusion proof of a prefix's delta
-          that is (present, in place of the two leaves); a listing's deltas each with its inclusion proof
+          that is (present, in place of the two leaves), and, for a path it serves no version, removal or base,
+          the present of the path's own change, a write or a removal, and of a strict prefix's removal where such
+          a statement holds one, from the record it reads for the leaves, one inclusion proof each, so the
+          reader's walk shows a removal under changes_root as it shows an inline one (owner decision 601); a
+          listing's deltas each with its inclusion proof
           (delta_proofs, empty for an inline statement),
           past the first each in a frame of its own (continues), so any directory within its 448 KiB lists in any
           fold state while a frame stays within 1 MiB + 64 KiB, and a frame evs cannot encode is logged and ends
@@ -1625,32 +1629,38 @@ rounds    the head first, from the cache; then the entries and, for a path a ver
           when an entry's push is older than the window, and a read by number below a re-created path its scan's
           log pages, at most about 256 (reply, above; owner decision 568); segments up to 256 KiB are read whole and
           larger ones in 64 KiB-aligned ranges
-reader    checks each returned statement's signature against its config's writer set and the ref rules, and the chain
-          from its pin to C_v; for each entry version, that it hashes to its statement's entry_sha256 (directly, or by
-          its proof to changes_root), and for a removal, that its statement removes the path or a prefix holding it;
-          that no statement after the version's own changes the path, or a prefix holding it, again, each statement
-          checked under the path's token path in its own epoch, which the reader derives, asking once more for an
-          epoch it did not name (a prefix sends it
-          to that push's change list: inline, or by its adjacent-leaf proofs, never the whole list, taking a present
-          proof only for a strict prefix whose change writes an entry, a delta, which leaves the path standing, and
-          refusing it for the path itself or a removal; owner decision 378), a removed path staying removed through
-          a later removal of a prefix holding it: after a served removal of the path, a walked removal of a prefix
-          agrees with the reply, in the inline form and the rooted one, and only a walked write of the path, or of a
-          prefix that writes an entry over it, refutes it; a path served plain absent, a collected removal paged out
-          of the window among them, agrees with the walk when the newest walked change of the path, or of a prefix
-          holding it, is a removal, so the walk's signed statements prove the absence, at any distance behind the
-          window and with no further read, and only a walked write of the path with no walked removal of it or of a
-          prefix after it refutes absent; a refuted reply raises the tamper alarm, and a creation on an absent reply
-          takes max(b, m) + 1 with no m, b being past any collected removal (11.8; owner decision 566); then it pins
-          (ref, v, C_v) durably, and
-          keeps, sealed under §5's AEAD, one record per path read (ref_id, path, entry version, pin at last read), at
-          most HeadReadRecordCount = 16,384 a network, least recently used out (§5.9), each also keeping the commit
-          version of the entry it read, which a verified EvsReseed reads (11.13's re-seed row; owner decision 403); a
-          read of a recorded path sets pin_version to the record's pin, not the ref's (a request of several paths
-          takes the oldest of their pins), checks every statement after it as above, refuses and alarms if the served
-          version is below the record's or a later statement changes the path, then raises the record (owner decision
-          209); a head below its pin is refused unless a verified EvsReseed covers it (11.13, §19.10), which it shows
-          as a loss
+reader    checks each returned statement's signature against its config's writer set and the ref rules, and the
+          chain from its pin to C_v; for each entry version, that it hashes to its statement's entry_sha256
+          (directly, or by its proof to changes_root), and for a removal, that its statement removes the path or
+          a prefix holding it; that no statement after the version's own changes the path, or a prefix holding
+          it, again, each statement checked under the path's token path in its own epoch, which the reader
+          derives, asking once more for an epoch it did not name (a prefix sends it to that push's change list:
+          inline, or by its adjacent-leaf proofs, never the whole list, taking a present proof for a strict
+          prefix whose change writes an entry, a delta, which leaves the path standing, and, beside a reply that
+          serves the path no version, removal or base, for the path's own change, a write or a removal, or a
+          strict prefix's removal, which it judges in the walk's order (owner decision 601), refusing any other
+          present for the path itself or a removal; owner decision 378), a removed path staying removed through a
+          later removal of a prefix holding it: after a served removal of the path, a walked removal of a prefix
+          agrees with the reply, in the inline form and the rooted one, and only a walked write of the path, or
+          of a prefix that writes an entry over it, refutes it; a path served plain absent, a collected removal
+          paged out of the window among them, agrees with the walk when the newest walked change of the path, or
+          of a prefix holding it, is a removal, so the walk's signed statements prove the absence, at any
+          distance behind the window and with no further read, and only a walked write of the path with no walked
+          removal of it or of a prefix after it refutes absent; a refuted reply raises the tamper alarm, and a
+          creation on an absent reply takes max(b, m) + 1 with no m, b being past any collected removal (11.8;
+          owner decision 566); then it pins (ref, v, C_v) durably, and keeps, sealed under §5's AEAD, one record
+          per path read (ref_id, path, entry version, pin at last read), at most HeadReadRecordCount = 16,384 a
+          network, least recently used out (§5.9), each also keeping the commit version of the entry it read,
+          which a verified EvsReseed reads (11.13's re-seed row; owner decision 403); a read of a recorded path
+          sets pin_version to the record's pin, not the ref's (a request of several paths takes the oldest of
+          their pins), checks every statement after it as above, refuses and alarms if the served version is
+          below the record's or a later statement changes the path, then raises the record (owner decision 209);
+          on a gap head, a re-pin past the budget (below), it takes a recorded path that evs serves absent, or
+          serves its removal, with no alarm and drops its record, the gap having marked the versions before the
+          re-pin as evs's word, so the path reads as a never-read path does (Q-EVS-6) and its later versions are
+          held to the walk alone, while a version served below the record is still refused, gap or not (owner
+          decision 600); a head below its pin is refused unless a verified EvsReseed covers it (11.13, §19.10),
+          which it shows as a loss
 collected from T, the end of the UTC minute in the replacing record's EvsPlace plus 60 s, every read of a replaced
           versionless version answers `collected` by evs's checked clock, whether or not its bytes remain (staged in
           a batch, purge: observe, or kept by a hold), evs serving it before T and never using time_ms, which may
@@ -1995,7 +2005,7 @@ secret       any number a member, owner-bound:  record-class   the owner's conse
 
 **Owner-bound** repos carry `owner_member_id` (D-EVS-11). The first consented, not read_only device of member M with an entry to write files RepoCreate{kind vault} (§10's KF1), and M's vault is M's live vault repo whose RepoCreate has the lowest log position, live as RECORD.md section 4.2 reads it, by which writers, depositors and readers all judge at their pin; once its RepoCreate lands, and before its first write, a device reads the log, and if another repo is the vault it ingests any deposit into that one and files RepoDelete{now} for its own empty repo. Only the owner's consented devices (§8.5) read and write them, so one admin signature never makes a reader; others read through a consented device's `EvsShare` or as a Team's visible audit reader, the only reader admins may add, though they may revoke (owner decisions 63, 126); the owner's other sidecars deposit into its vault and mailbox, and a `secret` takes only read receipts; MCP's evs tools reach no `secret` repo and never read the config's contents (§16.6). Members refuse, and no writer commits, any other Add or wrap; KF2 parks such a device with `approval_pending`, and the owner's devices alarm on admissions under the owner they did not sign (§10.7, §5.4).
 
-**Naming and creation.** `repo_id` is random, URLs carry only ids (I-13), display names are sealed, and labels exist only in the config repo (owner decision 59). A sidecar files §8.8's `RepoCreate`, becoming repo admin; `PUT /evs/v1/repos/<id>` then places the repo (11.8) and writes `repo/<id>` (If-None-Match) with kind and owner from the projection and network_id from the token's network, checked against the projection's AclRepo, never changed and kept in the shredded tombstone, `keying` until §10's KF1; taskworker matches `hold/` and reports stored bytes by that network, a re-seed writes it from the projection, and a reader that finds it absent treats the repo as held and keeps everything. A config repo's `repo/<id>` follows its network's first projection base, whose sidecar alone holds the first `admin` token (§7.9). A team network's one `directory` repo and its `team_record` repo are filed as §7.5 says (D-TEAM-28; owner decision 303), refused and given admins as §8.8's directory and team_record rows say, api alone seeing the tier (§20.5's `NetworkTierOf`). `RepoKind` numbers the kinds from 1 in the order written, 0 being unspecified (§7.9's record bytes).
+**Naming and creation.** `repo_id` is random, URLs carry only ids (I-13), display names are sealed, and labels exist only in the config repo (owner decision 59). A sidecar files §8.8's `RepoCreate`, becoming repo admin; `PUT /evs/v1/repos/<id>` then places the repo (11.8) and writes `repo/<id>` (If-None-Match) with kind and owner from the projection and network_id from the token's network, checked against the projection's AclRepo, never changed and kept in the shredded tombstone, `keying` until §10's KF1, or, while §19.10's reseed gate is on, `deleted{deletion_id, its entry's time, signer}` at creation for a repo whose projection ends in an unrestored, dated `RepoDelete` without `now` whose 7 d restore window holds the time, one past restoring answering 409 SHREDDING, so a re-seed's segment uploads and calls meet it deleted from its first object (owner decision 602); taskworker matches `hold/` and reports stored bytes by that network, a re-seed writes it from the projection, and a reader that finds it absent treats the repo as held and keeps everything. A config repo's `repo/<id>` follows its network's first projection base, whose sidecar alone holds the first `admin` token (§7.9). A team network's one `directory` repo and its `team_record` repo are filed as §7.5 says (D-TEAM-28; owner decision 303), refused and given admins as §8.8's directory and team_record rows say, api alone seeing the tier (§20.5's `NetworkTierOf`). `RepoKind` numbers the kinds from 1 in the order written, 0 being unspecified (§7.9's record bytes).
 
 **Grants (owner decisions 7, 8, 60, 114, 144, 182).** Member devices are leaves of the repo's MLS group, except readers of the config and of the team directory past §7.9's first 1,000, which read by wraps; the directory's readers are fixed by kind, which refuses `RepoAdmin` adds, `RepoGrant` and `RepoRevoke` (§8.5, D-ACL-24); tagged, ephemeral, CI and cloud sidecars hold per-generation `ReaderWrap`s or a covering Delegation's wrap (§10.5), and RecoveryWraps hold recovery copies (owner decision 62). Writers are sidecars whose pushes readers accept. Repo admins and config writers sign the access log (§8.8), which clients verify from the config repo and the token exchange mirrors as scopes. `ur mount share` files a grant, or an `EvsShare` for owner-bound kinds; `ur share` is §9's (D-SOCK-16).
 
@@ -2981,7 +2991,9 @@ determinism a file is a function of its inputs: pinned tables and ids, docids by
           always re-block by 64, and both outcomes are functions of the inputs, so reproduction holds), no clock,
           randomness or library-version input; headers and
           manifests are proto3 marshaled deterministically, repeated fields sorted; devices that build one file
-          from the same inputs write the same plaintext, whose SHA-256 its entry version carries (11.7)
+          from the same inputs write the same plaintext, whose SHA-256 its entry version carries (11.7); a check
+          by rebuild of the team directory's cards ref compares an announcement's row less its expires, which a
+          renewal leaves at the content-changing version's (§16.11's versions row; owner decision 605)
 shrink    any rewrite padded to a replaced length (a CLOSURE or a DROP's rewrite; a roll-up rewrites nothing in
           place, owner decision 385) first
           builds the shard canonically, in blocks of 64, and pads if that fits the replaced length; if not, it

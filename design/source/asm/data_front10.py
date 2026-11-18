@@ -1707,3 +1707,32 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "build's answers number the release fixture's base and limits (595), the leg closure's reviewed seams (596), "
     "smtpedge's file capability (597), FS-86's card commits judged on quiet T3 (598) and a cache drop that resets "
     "the sync (599). ")
+INDEX += [
+    (600, "A gap head drops a path's record",
+     "On a gap head a reader takes a recorded path that evs serves absent, or serves its removal, with no alarm "
+     'and drops its record.'),
+    (601, "Presents beside an absent reply",
+     "For a path it serves no version, removal or base, evs sends the present of the path's own change and of a "
+     "prefix's removal in each rooted walked statement."),
+    (602, 'A re-seed as deleted shows deleted',
+     "Under reseed evs's place route writes `repo/` deleted at creation for a repo re-seeded as deleted, and the "
+     'groups step mends a keying `repo/` by activate and DELETE.'),
+    (603, "Only a page judges a durable fall",
+     "A reset that shows a durable topic below the version held sends the client to `versions` once, whose page "
+     'alarms if the fall is real.'),
+    (604, 'A superseded erasure request',
+     "A copy that no longer opens a request's own marker entry, while a later marker stands, takes the request "
+     'as superseded.'),
+    (605, "A renewed announcement's row",
+     "An announcement's index row keeps its content version's times, and a check by rebuild compares it less "
+     'its `expires`.'),
+]
+assert [r[0] for r in INDEX] == list(range(1, 606))
+DATES.update({600: '2026-11-17', 601: '2026-11-17', 602: '2026-11-17', 603: '2026-11-17', 604: '2026-11-17',
+              605: '2026-11-18'})
+_D599 = "and a cache drop that resets the sync (599). "
+assert DECISIONS_INTRO.count(_D599) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D599, "a cache drop that resets the sync (599), a gap head that drops a path's record (600), presents beside an "
+    "absent reply (601), a re-seed as deleted that shows deleted from its placement (602), a durable fall judged by "
+    "a `versions` page alone (603), a superseded erasure request (604) and a renewed announcement's row (605). ")

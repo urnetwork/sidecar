@@ -1232,7 +1232,10 @@ documents   derived (§11.14): one per announcement, registered as a/ || writer_
             entries folding into it; one per stream entry
 versions    an announcement document's version is Announcement.version: a content change raises it; a renewal
             keeps it and writes no index entry, nor does an ended item dropped from its card; only a withdrawal
-            or a revocation writes a tombstone
+            or a revocation writes a tombstone; since a renewal writes no entry, an announcement's row keeps the
+            times the content-changing version held, search_agents reading the current expiry from the fold, and
+            a check by rebuild of the cards ref's index compares an announcement row less its expires, its other
+            bytes, keys and version matching (§11.14's determinism row; owner decision 605)
 fields      §11.14's registry for this class: 4 a run's title or a repo's display name; 5 prose, with the
             identifier values harness, host label, service names, topics and claim targets; 6 announcement kind
             (run, worker, repo) or entry kind; 7 sidecar_id; 8 agent_id; 9 agent label; 10 run_id; 11 member_id;
@@ -1460,23 +1463,28 @@ revoke      the owner (a repo admin; owner-bound, a consented device of its owne
             directory revoke <repo>, or the app): (1) it writes the private marker over the item (from format 2
             an r/ overwrite, purged about a minute later, owner decision 161; at M6 a newer announce entry), so
             every honest reader stops showing the name at once; (2) it appends to its stream an erasure_request
-            entry, DirectoryErasureRequest (Requests), journaled before the marker so a restart files it once, in
-            the marker's push at M6; (3) the directory's erasure runner (Erasure and removal) checks that the
+            entry, DirectoryErasureRequest (Requests), journaled before the marker so a restart files it once,
+            in the marker's push at M6; (3) the directory's erasure runner (Erasure and removal) checks that the
             entry's signer is a repo admin of the repo at its push's pin (owner-bound: its owner's consented
-            device) and that the marker is still the repo's newest item, then erases every copy holding the name,
-            the repo's and its runs': a per-entry ERASE of each earlier announce entry for the repo or a run
-            naming it (16.8) and, from format 2, a CUT on the cards ref and on ur/index listing the documents
-            that name it (§11.12), a CLOSURE rewriting under fresh keys the index files holding them, then the
-            ERASE of the old slots' keys (§11.12, §11.14), each ERASE's sealed note naming the request; at each
-            later sync while the marker stands, for 30 days, it erases any copy naming the repo that a daemon
-            wrote after the request; a request whose check fails erases nothing and alarms, naming its signer; a
-            request that lapsed because its repo was announced again stays lapsed, the runner comparing its
-            marker_version with the version of the announcement that replaced its marker, which it keeps per
-            request in the fold, not only with the standing marker, so a later revocation's marker revives none
-            and each ERASE names the revocation a person just made (owner decision 472); (4) until an ERASE names
-            the request, the revoking device, ur directory revoke and ur status show the erasure pending with its
-            age, and past 24 h every directory admin's device raises directory_erasure (§5.4); a reader that
-            syncs the copies meanwhile keeps them, as §2.8 discloses
+            device) and that the marker is still the repo's newest item, then erases every copy holding the
+            name, the repo's and its runs': a per-entry ERASE of each earlier announce entry for the repo or a
+            run naming it (16.8) and, from format 2, a CUT on the cards ref and on ur/index listing the
+            documents that name it (§11.12), a CLOSURE rewriting under fresh keys the index files holding them,
+            then the ERASE of the old slots' keys (§11.12, §11.14), each ERASE's sealed note naming the request;
+            at each later sync while the marker stands, for 30 days, it erases any copy naming the repo that a
+            daemon wrote after the request; a request whose check fails erases nothing and alarms, naming its
+            signer; a request that lapsed because its repo was announced again stays lapsed, the runner
+            comparing its marker_version with the version of the announcement that replaced its marker, which it
+            keeps per request in the fold, not only with the standing marker, so a later revocation's marker
+            revives none and each ERASE names the revocation a person just made (owner decision 472); a copy
+            that no longer opens a request's own marker entry, while a later marker of the repo stands, takes
+            the request as superseded, from what every copy holds: its runner works none of it, shows it as no
+            pending erasure and raises no directory_erasure for it, later copies going under the newer request,
+            whose ERASEs cover every copy the older could name, and its revoker reads it as lapsed, with no
+            format change (owner decision 604); (4) until an ERASE names the request, the revoking device, ur
+            directory revoke and ur status show the erasure pending with its age, and past 24 h every directory
+            admin's device raises directory_erasure (§5.4); a reader that syncs the copies meanwhile keeps them,
+            as §2.8 discloses
 runs        a run in an evs repo with no live, non-private item (private, revoked, not announced by default, or
             not yet) announces its repo_id with private true and project and branch empty, its daemon rewriting a
             live item so once it reads the repo's marker; readers that read the repo show its name from their own
