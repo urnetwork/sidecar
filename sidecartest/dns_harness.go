@@ -119,6 +119,11 @@ type DnsHarnessSettings struct {
 	SeedApex bool
 	// How the stand-in for DNS-M5-19's released windows makes them.
 	Keys DnsHarnessKeySettings
+	// Wraps the transport the edge for ns sends its feed and route-probe requests through, at each of
+	// its starts, so a test sees one edge's requests apart from another's, or stands a block of its own
+	// beside the harness's (FS-52's N and N+1) and sends some requests there. nil sends each request
+	// to the harness's block.
+	EdgeTransport func(ns string, block http.RoundTripper) http.RoundTripper
 }
 
 // The DNSKEY windows the block's feed names, standing in for DNS-M5-19's release: each signed by this
@@ -231,6 +236,9 @@ type DnsHarness struct {
 	// Interfaces whose 25 greets as a draining mxedge does, while tlsedge still answers.
 	bannerFailedNames map[string]bool
 	requireReloads    map[string]bool
+	// Applied to each window the block names, so a test releases one that fails its self-check. nil
+	// releases each as made.
+	keyWindowFault func(window *dnsservice.DnsKeyWindow) *dnsservice.DnsKeyWindow
 	// Set by Close: nothing here runs any more.
 	closed bool
 
@@ -583,17 +591,47 @@ func (self *DnsHarness) processHost(host *sidecar.ServiceHost, process string) (
 	return &hostCopy, metrics
 }
 
-// Builds the block from durable state alone: the store, the settings and the credentials.
-func (self *DnsHarness) buildApi(ctx context.Context, host *sidecar.ServiceHost) (sidecar.Engine, error) {
-	processHost, metrics := self.processHost(host, self.ApiProcess())
-	api, err := dnsservice.NewDnsApi(ctx, processHost, self.dnsSettings, self.store, &dnsservice.DnsApiDeps{
+// What the harness's block is built on: its bearer digests, the inventory, the released windows,
+// the ready store, the edges' SOAs and certs' writer. A test builds another block on these, beside
+// the harness's, as FS-52's N+1 is.
+func (self *DnsHarness) ApiDeps() *dnsservice.DnsApiDeps {
+	return &dnsservice.DnsApiDeps{
 		Auth:       self.verifier,
 		Interfaces: self.currentInterfaces,
-		KeyWindow:  self.keys.releasedWindow,
+		KeyWindow:  self.releasedWindow,
 		ReadyStore: self.readyStore,
 		SoaReader:  &dnsHarnessSoaReader{harness: self},
 		Challenges: self.challenges,
-	})
+	}
+}
+
+// The window the block names for root at now: the stand-in's, through a fault a test set.
+func (self *DnsHarness) releasedWindow(root string, now time.Time) *dnsservice.DnsKeyWindow {
+	window := self.keys.releasedWindow(root, now)
+	fault := func() func(window *dnsservice.DnsKeyWindow) *dnsservice.DnsKeyWindow {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.keyWindowFault
+	}()
+	if fault == nil || window == nil {
+		return window
+	}
+	return fault(window)
+}
+
+// From the next feed answer on, the block names fault's window in place of each one released, so a
+// key set that fails its self-check reaches the edges (§12.6: it never serves). fault takes a window
+// the harness keeps and returns a copy of its own. nil releases each as made again.
+func (self *DnsHarness) SetKeyWindowFault(fault func(window *dnsservice.DnsKeyWindow) *dnsservice.DnsKeyWindow) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.keyWindowFault = fault
+}
+
+// Builds the block from durable state alone: the store, the settings and the credentials.
+func (self *DnsHarness) buildApi(ctx context.Context, host *sidecar.ServiceHost) (sidecar.Engine, error) {
+	processHost, metrics := self.processHost(host, self.ApiProcess())
+	api, err := dnsservice.NewDnsApi(ctx, processHost, self.dnsSettings, self.store, self.ApiDeps())
 	if err != nil {
 		return nil, err
 	}
@@ -642,7 +680,11 @@ func (self *DnsHarness) buildEdge(ctx context.Context, ns string, host *sidecar.
 	if err != nil {
 		return nil, err
 	}
-	client := &http.Client{Transport: self.transport}
+	transport := http.RoundTripper(self.transport)
+	if self.settings.EdgeTransport != nil {
+		transport = self.settings.EdgeTransport(ns, transport)
+	}
+	client := &http.Client{Transport: transport}
 	bearer := self.classBearers[dnsservice.DnsCallerEdge]
 	// the block answers route-probes only once DNS-M6-03 adds the route, so a report fails until then
 	routeProbes, err := dnsservice.NewDnsRouteProbeSinkHttp(self.apiUrl, bearer, client, self.dnsSettings)
@@ -712,6 +754,19 @@ func (self *DnsHarness) bumpInstances() {
 func (self *DnsHarness) edgeAddr(ns string) *net.TCPAddr {
 	index := max(slices.Index(self.dnsSettings.Ns, ns), 0)
 	return &net.TCPAddr{IP: net.IPv4(203, 0, 113, byte(53+index)), Port: 53}
+}
+
+// Stops ns's edge as a host's shutdown does, its feed writing the local snapshot of the view it serves
+// first, then takes it off the Net, so a test knows what the edge comes back with: the Net's Restart
+// of EdgeProcess(ns) starts it again from that snapshot. A killed edge's snapshot is instead whatever
+// its coalescing writer last saved on the Net's clock.
+func (self *DnsHarness) StopEdge(ns string) error {
+	edge := self.runningEdge(ns)
+	if edge == nil {
+		return fmt.Errorf("%w: %s", ErrDnsHarnessDown, ns)
+	}
+	edge.Close()
+	return self.net.Kill(self.EdgeProcess(ns))
 }
 
 // Restarts of ns's edge, from the next on, start with --require-reload: serve nothing until a reload,

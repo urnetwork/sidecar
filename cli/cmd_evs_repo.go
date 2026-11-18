@@ -351,8 +351,11 @@ func urEvsLogLines(history *sidecar.EvsHistory) []string {
 	lines := []string{}
 	for _, version := range history.Versions {
 		what := version.State
-		if version.Removed {
+		switch {
+		case version.Removed:
 			what = "removed"
+		case version.State == sidecar.EvsVersionStateDropPending:
+			what = "drop pending until " + version.DropNotBefore.UTC().Format("2006-01-02 15:04:05Z")
 		}
 		line := fmt.Sprintf("version %d at ref version %d by sidecar %s, %s, %s", version.Version,
 			version.CommitVersion, version.SignerSidecarId, version.Time.UTC().Format("2006-01-02 15:04:05Z"), what)

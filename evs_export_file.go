@@ -316,6 +316,13 @@ func (self *EvsRepo) exportFileRef(ctx context.Context, writer *evsGitObjectWrit
 	}
 	var tip *EvsGitOid
 	notes := []*evsExportNote{}
+	// format 2's pointers and stubs, decided before any commit is written (evs_export_format2.go)
+	var scan *evsExportFormat2
+	if self.client.format2Reader() != nil {
+		if scan, err = self.exportFormat2Scan(ctx, head); err != nil {
+			return nil, nil, err
+		}
+	}
 	for _, statement := range head.Statements {
 		push := statement.Statement.Push
 		flags := push.GetFlags()
@@ -350,6 +357,7 @@ func (self *EvsRepo) exportFileRef(ctx context.Context, writer *evsGitObjectWrit
 			return nil, nil, err
 		}
 		ignoredCount := 0
+		noteLines := []string{}
 		for _, change := range payload.Changes {
 			key := string(change.TokenPath.Bytes())
 			pathNames, named := names[key]
@@ -424,6 +432,18 @@ func (self *EvsRepo) exportFileRef(ctx context.Context, writer *evsGitObjectWrit
 			if len(pathNames) == 0 || bytes.Equal(pathNames[0], []byte(evsExportSkippedDirectory)) {
 				continue
 			}
+			if scan != nil {
+				written, line, err := self.exportFormat2File(ctx, writer, head, scan, statement, change, entry, fieldsKey, pathNames, state)
+				if err != nil {
+					return nil, nil, err
+				}
+				if line != "" {
+					noteLines = append(noteLines, line)
+				}
+				if written {
+					continue
+				}
+			}
 			file, err := self.exportBlob(ctx, writer, head, keys, statement, change)
 			if err != nil {
 				return nil, nil, err
@@ -458,7 +478,12 @@ func (self *EvsRepo) exportFileRef(ctx context.Context, writer *evsGitObjectWrit
 			return nil, nil, err
 		}
 		tip = &commitOid
-		notes = append(notes, &evsExportNote{commit: commitOid, statement: statement})
+		notes = append(notes, &evsExportNote{commit: commitOid, statement: statement, lines: noteLines})
+	}
+	if scan != nil {
+		if err := self.exportFormat2Exact(head, scan); err != nil {
+			return nil, nil, err
+		}
 	}
 	if tip == nil {
 		return nil, notes, nil

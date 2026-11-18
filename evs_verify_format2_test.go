@@ -653,27 +653,41 @@ func TestEvsFormat2CollectedVerdicts(t *testing.T) {
 	}
 }
 
-// A drop's read states stay a later reader's (EVS2-M10-22): a format-2 reader of this task answers them
-// FORMAT_UNSUPPORTED for the path, with no alarm, and shows nothing dropped.
-func TestEvsFormat2DropStatesStayUnsupported(t *testing.T) {
+// A drop's read states on a path's newest version are refused with a tamper alarm, since a drop never takes the head
+// (EVS2-M10-22's H0, evs_drop_verify.go), and a drop id with no state answers FORMAT_UNSUPPORTED for the path, with no
+// alarm; nothing is shown dropped either way.
+func TestEvsFormat2DropStatesOnTheNewestVersionRefused(t *testing.T) {
 	mutations := map[string]func(reply *protocol.EvsReadPathReply){
 		"drop_pending": func(reply *protocol.EvsReadPathReply) {
 			reply.State = protocol.EvsReadPathState_EVS_READ_PATH_DROP_PENDING
+			reply.DropId = make([]byte, 16)
 		},
-		"dropped":   func(reply *protocol.EvsReadPathReply) { reply.State = protocol.EvsReadPathState_EVS_READ_PATH_DROPPED },
-		"a drop id": func(reply *protocol.EvsReadPathReply) { reply.DropId = make([]byte, 16) },
+		"dropped": func(reply *protocol.EvsReadPathReply) {
+			reply.State = protocol.EvsReadPathState_EVS_READ_PATH_DROPPED
+			reply.DropId = make([]byte, 16)
+		},
 	}
 	for name, mutate := range mutations {
 		world := newEvsTestWorld(t)
 		world.push(&evsTestChange{path: "a.txt", content: []byte("one")})
 		world.mutatePath = mutate
 		reader := evsTestFormat2Reader(t, world)
-		if _, _, err := evsTestRead(t, reader, world, "a.txt"); !errors.Is(err, ErrEvsFormatUnsupported) {
+		if _, _, err := evsTestRead(t, reader, world, "a.txt"); !errors.Is(err, ErrEvsEntryRefused) {
 			t.Fatalf("%s: %v", name, err)
 		}
-		if alarms := len(reader.eventsOf(SidecarEventEvsAlarm)) + len(reader.eventsOf(SidecarEventHeadAlarm)); alarms != 0 {
-			t.Errorf("%s: %d alarms", name, alarms)
+		if alarms := reader.eventsOf(SidecarEventEvsAlarm); len(alarms) != 1 || alarms[0].EvsAlarm != SidecarEvsAlarmTamper {
+			t.Errorf("%s: alarms %v", name, alarms)
 		}
+	}
+	world := newEvsTestWorld(t)
+	world.push(&evsTestChange{path: "a.txt", content: []byte("one")})
+	world.mutatePath = func(reply *protocol.EvsReadPathReply) { reply.DropId = make([]byte, 16) }
+	reader := evsTestFormat2Reader(t, world)
+	if _, _, err := evsTestRead(t, reader, world, "a.txt"); !errors.Is(err, ErrEvsFormatUnsupported) {
+		t.Fatalf("a drop id with no state: %v", err)
+	}
+	if alarms := len(reader.eventsOf(SidecarEventEvsAlarm)) + len(reader.eventsOf(SidecarEventHeadAlarm)); alarms != 0 {
+		t.Errorf("a drop id with no state: %d alarms", alarms)
 	}
 }
 

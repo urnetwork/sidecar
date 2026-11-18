@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/miekg/dns"
 
@@ -391,4 +393,83 @@ func TestDnsHarnessCloseStopsEveryWriteBeforeItReturns(t *testing.T) {
 		t.Errorf("something wrote after Close: %v", err)
 	}
 	harness.Close()
+}
+
+// A window that fails its self-check never serves (§12.6): once the block names one, both edges keep the window that
+// passed, and an edge stopped and started to reload serves nothing until the block names a good one again.
+func TestDnsHarnessKeyWindowFaultNeverServes(t *testing.T) {
+	net := newTestNet(t)
+	harness := newTestDnsHarness(t, net, "dns")
+	inception := func(ns string) uint32 {
+		t.Helper()
+		query := &dns.Msg{}
+		query.SetQuestion(harness.Root(), dns.TypeDNSKEY)
+		query.SetEdns0(1232, true)
+		reply, err := harness.Query(t.Context(), ns, query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, record := range reply.Answer {
+			if rrsig, ok := record.(*dns.RRSIG); ok {
+				return rrsig.Inception
+			}
+		}
+		t.Fatalf("%s serves no DNSKEY RRSIG", ns)
+		return 0
+	}
+	first := inception("ns1")
+	harness.SetKeyWindowFault(func(window *dnsservice.DnsKeyWindow) *dnsservice.DnsKeyWindow {
+		corrupt := *window
+		corrupt.Rrsigs = []string{strings.Replace(window.Rrsigs[0], " harness.example. ", " harness.example. AAAA", 1)}
+		return &corrupt
+	})
+	net.Clock().Advance(7 * 24 * time.Hour)
+	if _, err := harness.WriteServed(t.Context(), &dnsservice.DnsZoneWrite{Upserts: []dnsservice.DnsRecordSet{dnsHarnessTestTxt(harness, "keys", "after the fault")}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, ns := range harness.Settings().Ns {
+		if got := inception(ns); got != first {
+			t.Errorf("%s serves a window from %d, not %d", ns, got, first)
+		}
+	}
+	// stopped, its snapshot written, and started to reload: it may serve only what the failing window checks
+	harness.SetRequireReload("ns2", true)
+	if err := harness.StopEdge("ns2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := net.Restart(harness.EdgeProcess("ns2"), harness.EdgeProcess("ns2")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := harness.Write(t.Context(), &dnsservice.DnsZoneWrite{Upserts: []dnsservice.DnsRecordSet{dnsHarnessTestTxt(harness, "keys", "for the restart")}}); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		_, timerAdded := net.Clock().WatchTimers()
+		if 1 <= harness.EdgeMetrics("ns2").Value("urnetwork_dnsedge_self_checks_total", "fail") {
+			break
+		}
+		select {
+		case <-timerAdded:
+		case <-t.Context().Done():
+			t.Fatal(t.Context().Err())
+		}
+	}
+	if harness.Edge("ns2").Ready() {
+		t.Fatal("ready on a failing window")
+	}
+	harness.SetKeyWindowFault(nil)
+	if err := harness.StopEdge("ns2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := net.Restart(harness.EdgeProcess("ns2"), harness.EdgeProcess("ns2")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := harness.WriteServed(t.Context(), &dnsservice.DnsZoneWrite{Upserts: []dnsservice.DnsRecordSet{dnsHarnessTestTxt(harness, "keys", "after the fix")}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, ns := range harness.Settings().Ns {
+		if got := inception(ns); got == first {
+			t.Errorf("%s still serves the first window", ns)
+		}
+	}
 }
