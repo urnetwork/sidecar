@@ -22,8 +22,11 @@ package fault
 //	          absorbed, finds the same set, a fresh one and one that synced before alike (DESIGN-DETAILS section 7)
 //	large     a writer's large entry, absorbed by a merge that leaves it, is removed by the writer's next push
 //
-// Not here, each named for what it waits on: these on real engines and on T3 (pushes, merges and backfills through
-// EvsRepo on evsservice, and a device's sync over EvsRepo, SEARCH-M10-19's source); a writer killed between its git push and its companion push (the search world is a file-mode ref: a
+// The disjoint clause also runs on real engines as the row's registered case (fs74.go), on T2 here and on T3 through
+// server's evshost (server/fs74_t3_test.go).
+//
+// Not here, each named for what it waits on: the other clauses on real engines and on T3 (merges and backfills
+// through EvsRepo, and a device's sync over EvsRepo, SEARCH-M10-19's source); a writer killed between its git push and its companion push (the search world is a file-mode ref: a
 // companion world over a git-mode content ref and SEARCH-M10-14's journal); index_none (QD-209's field is not in
 // evs.proto, so no push carries it); a user's versionless file never retried as an index 409 is (the in-ref writer's
 // sender on EvsRepo); FI-20's checker and the ten explorer seeds a merge (TEST-M10-02's fault.FI(18) and FI(20), and
@@ -669,4 +672,9 @@ func TestFs74AWritersReturnRemovesItsAbsorbedLargeEntries(t *testing.T) {
 	}
 	world.checkSearch(t, phrase)
 	world.checkSearch(t, "harbor")
+}
+
+// FS-74's registered case on real engines (fs74.go), under every rule §22.8 gives the row.
+func TestFs74OnEvs(t *testing.T) {
+	RunRow(t, "FS-74", "", nil)
 }
