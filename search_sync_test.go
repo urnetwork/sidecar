@@ -995,3 +995,90 @@ func TestASnapshotNeverWaitsForARound(t *testing.T) {
 		}
 	}
 }
+
+// QD-1025: a cache drop resets every followed ref of the repo it drops: each one's manifest, plan, their serials and
+// its version table go from memory and its open snapshots end, even where the drop answers an error, which it passes
+// on; a snapshot then finds no manifest, and the next round loads the emptied cache and brings each ref back to one
+// version at its head, fetching its files again.
+func TestADropResetsEveryRefOfTheRepo(t *testing.T) {
+	world := newTestSyncWorld(t, false)
+	writer := evsTestId("writer")
+	world.push(t, writer, "first", 2)
+	world.round(t)
+	otherRefId := evsTestId("view other ref")
+	otherHead := testNewHeadWorld()
+	otherSource := newTestSyncSource(t, otherHead.ref, world.repoId, otherRefId)
+	err := world.sync.Follow(&searchSyncRefArgs{
+		repoId: world.repoId, refId: otherRefId, repoKind: protocol.RepoKind_REPO_KIND_GENERAL, source: otherSource,
+		mayErase: func(signer Id, signedTimeMs int64) bool { return true },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherHead.push(t, writer, testLive("other", 0, 1, 0, testIndexKeys(0x200000, 60, 3)))
+	if err := world.sync.RunRound(context.Background(), world.repoId, otherRefId, false); err != nil {
+		t.Fatal(err)
+	}
+	snapshots := []*SearchSyncSnapshot{world.snapshot(t)}
+	otherSnapshot, err := world.sync.Snapshot(world.repoId, otherRefId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer otherSnapshot.Release()
+	snapshots = append(snapshots, otherSnapshot)
+
+	failed := errors.New("a drop that failed partway")
+	err = world.sync.dropAndReset(&world.repoId, func() error {
+		if err := world.cache.cache.DropRepo(world.repoId); err != nil {
+			return err
+		}
+		return failed
+	})
+	if !errors.Is(err, failed) {
+		t.Fatalf("the drop's error was answered as %v", err)
+	}
+	for _, refId := range []Id{world.refId, otherRefId} {
+		world.sync.stateLock.Lock()
+		ref := world.sync.refs[[2]Id{world.repoId, refId}]
+		reset := !ref.loaded && ref.manifest == nil && ref.manifestSer == 0 && ref.plan == nil && ref.planSer == 0 && ref.table == nil
+		world.sync.stateLock.Unlock()
+		if !reset {
+			t.Fatal("a drop left a ref's sync state in memory")
+		}
+		if _, err := world.sync.Snapshot(world.repoId, refId); !errors.Is(err, ErrSidecarStoreAbsent) {
+			t.Fatalf("a snapshot after the drop answered %v", err)
+		}
+	}
+	for _, snapshot := range snapshots {
+		select {
+		case <-snapshot.Ended():
+		default:
+			t.Fatal("a snapshot of a dropped ref stayed open")
+		}
+	}
+	fetched, otherFetched := len(world.source.fetched()), len(otherSource.fetched())
+	world.round(t)
+	if err := world.sync.RunRound(context.Background(), world.repoId, otherRefId, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(world.source.fetched()) == fetched || len(otherSource.fetched()) == otherFetched {
+		t.Fatal("a round after the drop fetched nothing")
+	}
+	after := world.snapshot(t)
+	world.assertOneVersion(t, after)
+	head, err := world.head.ref.store(evsTestId("reader")).Head(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Pin().Version != head.version {
+		t.Fatalf("the round after the drop reached v%d of v%d", after.Pin().Version, head.version)
+	}
+	otherAfter, err := world.sync.Snapshot(world.repoId, otherRefId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer otherAfter.Release()
+	if len(otherAfter.Files()) == 0 {
+		t.Fatal("the other ref's round after the drop holds no file")
+	}
+}

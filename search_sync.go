@@ -35,9 +35,17 @@
 // followed, so through a rebuild it serves i1 until i2 replaces it; a ref whose only root is newer has no snapshot
 // and reads status update. A newer root's files are another build's and raise nothing.
 //
+// A cache drop (SearchEngine.DropCache, which Sidecar.DropSearchCache reaches) runs through dropAndReset (QD-1025): it
+// waits for the rounds running on the refs it drops, drops with their rounds and loads held off, and resets each ref's
+// manifest, plan and version table in memory, so the next round loads the emptied cache and fetches what the drop
+// removed rather than counting it held. The caps' eviction (SearchCache.Evict) and SearchPolicy.EvictUnused tell the
+// sync nothing; a review-phase check (SEARCH-M10-19's note) asks whether they leave the same gap.
+//
 // Barriers (testHookBarrier), keyed <repo>:<ref>: search.sync.replayed, .fetched (a file), .tables (the version table
-// merged), .swapped, .retired. No key is created, derived or unwrapped here: a fetched record opens under the keys its
-// source gives, which the cache never keeps.
+// merged), .swapped, .retired, and .drop.waiting (a cache drop waiting for the round running on the ref); and
+// search.sync.dropped, keyed by the repo a cache drop took or empty for every repo, once its reset is done. No key is
+// created, derived or unwrapped here: a fetched record opens under the keys its source gives, which the cache never
+// keeps.
 //
 // Not here: the settings file's signer, which the view judges where it reads it (SEARCH-M10-08); indexed_through,
 // which searchSyncCoverage computes where one is given (SEARCH-M10-12's reader), and reads 0, claiming nothing, where
@@ -1131,6 +1139,75 @@ func (self *SearchSync) Snapshot(repoId Id, refId Id) (*SearchSyncSnapshot, erro
 		snapshot.versions = versions
 	}
 	return snapshot, nil
+}
+
+// Drops the cache of a repo's followed refs, or with nil of every ref, by drop, and resets what the sync holds in
+// memory of each (QD-1025): its manifest, its plan, their serials and its version table, unloaded, so its next round
+// loads the emptied cache and fetches the latest set again, and all where it is kept. A round running on one of them
+// finishes first. Each ref's round lock and load lock are held across the drop and the reset, so no round and no load
+// reads or stores the cache between the two, which would leave the state naming files the drop removed. Every
+// snapshot still open on a reset ref ends then, as at an erasure, so no search reads what the drop removed. The ref's
+// triggers and times, its alarms and its last round's error stay. Answers the drop's error; the reset runs either way,
+// since a drop that failed may still have removed part of what the state names.
+func (self *SearchSync) dropAndReset(repoId *Id, drop func() error) error {
+	keys, refs := func() ([][2]Id, []*searchSyncRef) {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		keys := [][2]Id{}
+		for key := range self.refs {
+			if repoId == nil || key[0] == *repoId {
+				keys = append(keys, key)
+			}
+		}
+		// one order for every drop's locks, so two drops at once never each hold one the other waits on
+		slices.SortFunc(keys, func(a [2]Id, b [2]Id) int {
+			return cmp.Or(compareIndexKeys(a[0], b[0]), compareIndexKeys(a[1], b[1]))
+		})
+		refs := make([]*searchSyncRef, 0, len(keys))
+		for _, key := range keys {
+			refs = append(refs, self.refs[key])
+		}
+		return keys, refs
+	}()
+	err := func() error {
+		for index, ref := range refs {
+			if !ref.roundLock.TryLock() {
+				// a round runs on the ref: nothing of the drop runs before it ends
+				testHookBarrier("search.sync.drop.waiting", searchSyncBarrierKey(keys[index][0], keys[index][1]))
+				ref.roundLock.Lock()
+			}
+			defer ref.roundLock.Unlock()
+			ref.loadLock.Lock()
+			defer ref.loadLock.Unlock()
+		}
+		err := drop()
+		ended := func() []*SearchSyncSnapshot {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			ended := []*SearchSyncSnapshot{}
+			for _, ref := range refs {
+				ref.loaded = false
+				ref.manifest, ref.manifestSer = nil, 0
+				ref.plan, ref.planSer = nil, 0
+				ref.table = nil
+				for snapshot := range ref.open {
+					ended = append(ended, snapshot)
+				}
+			}
+			return ended
+		}()
+		// each ends with its round lock held here, so it retires nothing against the state just reset
+		for _, snapshot := range ended {
+			snapshot.end()
+		}
+		return err
+	}()
+	key := ""
+	if repoId != nil {
+		key = repoId.String()
+	}
+	testHookBarrier("search.sync.dropped", key)
+	return err
 }
 
 // Ends every open snapshot of the repo, releasing what it held: CORE-M10-04's ApplyErase, ApplyCut and an executed

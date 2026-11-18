@@ -762,3 +762,139 @@ func TestSearchEngineNearHitsCorrectATypo(t *testing.T) {
 		t.Fatalf("the counts %+v", progress.Counts)
 	}
 }
+
+// QD-1025: a drop of the cache, of every repo or of one, resets the sync's state of what it dropped, so a search before
+// the next round leaves the ref out as unbuilt, reading no manifest whose files are gone, and the next round fetches the
+// latest set again and a search finds what it found before the drop. Before, the round replayed from the pin the sync
+// held in memory, counted every dropped file as held and fetched nothing, and every search found nothing until a
+// restart.
+func TestSearchEngineDropCacheSyncsAgain(t *testing.T) {
+	world := newTestEngineWorld(t, nil, testEngineDocument(t, "doc", 1, 1, "notes/harbor.md", "Harbor lights\nthe evening boat"))
+	if hits, _ := world.all(t, &SearchRequest{Text: "harbor"}); !slices.Equal(testHitPaths(hits), []string{"notes/harbor.md"}) {
+		t.Fatalf("before a drop, hits %v", testHitPaths(hits))
+	}
+	repoId, refId := world.sync.repoId, world.sync.refId
+	for _, dropped := range []*Id{nil, &repoId} {
+		fetched := len(world.sync.source.fetched())
+		if err := world.engine.DropCache(dropped); err != nil {
+			t.Fatal(err)
+		}
+		if held, err := world.sync.cache.cache.Ref(repoId, refId); err != nil || held != nil {
+			t.Fatalf("the drop left %+v, %v", held, err)
+		}
+		hits, progress := world.all(t, &SearchRequest{Text: "harbor"})
+		if len(hits) != 0 || len(progress.Excluded) != 1 || progress.Excluded[0].Reason != SearchExcludedUnbuilt {
+			t.Fatalf("a search between the drop and the next round found %v, excluding %+v", testHitPaths(hits), progress.Excluded)
+		}
+		world.sync.round(t)
+		if len(world.sync.source.fetched()) == fetched {
+			t.Fatal("the round after a drop fetched nothing")
+		}
+		if hits, _ := world.all(t, &SearchRequest{Text: "harbor"}); !slices.Equal(testHitPaths(hits), []string{"notes/harbor.md"}) {
+			t.Fatalf("after a drop and a round, hits %v", testHitPaths(hits))
+		}
+	}
+}
+
+// QD-1025: a drop of one repo's cache resets that repo's sync state alone. The other repo's manifest, plan and version
+// table stay as the sync held them, its files stay cached and its snapshot open, its hits are found with no round
+// between and its next round fetches nothing; the dropped repo's open snapshot ends, its search reads it as unbuilt,
+// and its next round fetches its files again.
+func TestSearchEngineDropCacheOfOneRepoLeavesAnother(t *testing.T) {
+	world := newTestEngineWorld(t, nil, testEngineDocument(t, "doc", 1, 1, "notes/harbor.md", "Harbor lights\nthe evening boat"))
+	synced := world.sync
+	repoId, refId := synced.repoId, synced.refId
+	otherRepoId, otherRefId := evsTestId("other repo"), evsTestId("other ref")
+	otherHead := testNewHeadWorld()
+	otherSource := newTestSyncSource(t, otherHead.ref, otherRepoId, otherRefId)
+	err := synced.sync.Follow(&searchSyncRefArgs{
+		repoId: otherRepoId, refId: otherRefId, repoKind: protocol.RepoKind_REPO_KIND_GENERAL, source: otherSource,
+		mayErase: func(signer Id, signedTimeMs int64) bool { return true },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherHead.push(t, evsTestId("writer"), testEngineDocument(t, "other", 1, 1, "notes/harbor-wall.md", "Harbor wall\nthe old stones"))
+	if err := synced.sync.RunRound(context.Background(), otherRepoId, otherRefId, false); err != nil {
+		t.Fatal(err)
+	}
+	world.scope.repos = append(world.scope.repos, &SearchScopeRepo{
+		RepoId: otherRepoId, Kind: protocol.RepoKind_REPO_KIND_GENERAL, Readable: true,
+		Refs: []*SearchScopeRef{{RefId: otherRefId, Default: true}},
+	})
+	if hits, _ := world.all(t, &SearchRequest{Text: "harbor"}); !slices.Equal(testHitPaths(hits), []string{"notes/harbor-wall.md", "notes/harbor.md"}) {
+		t.Fatalf("before a drop, hits %v", testHitPaths(hits))
+	}
+	// what the sync holds of a ref
+	type syncState struct {
+		loaded   bool
+		manifest *SearchManifest
+		plan     *SearchSyncPlan
+		table    *SearchVersionTable
+	}
+	stateOf := func(repoId Id, refId Id) syncState {
+		synced.sync.stateLock.Lock()
+		defer synced.sync.stateLock.Unlock()
+		ref := synced.sync.refs[[2]Id{repoId, refId}]
+		return syncState{loaded: ref.loaded, manifest: ref.manifest, plan: ref.plan, table: ref.table}
+	}
+	other := stateOf(otherRepoId, otherRefId)
+	if !other.loaded || other.manifest == nil || other.table == nil {
+		t.Fatalf("the other repo was never synced: %+v", other)
+	}
+	otherHeld, err := synced.cache.cache.Ref(otherRepoId, otherRefId)
+	if err != nil || otherHeld == nil {
+		t.Fatalf("the other repo's cache %+v, %v", otherHeld, err)
+	}
+	snapshot := synced.snapshot(t)
+	otherSnapshot, err := synced.sync.Snapshot(otherRepoId, otherRefId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer otherSnapshot.Release()
+
+	if err := world.engine.DropCache(&repoId); err != nil {
+		t.Fatal(err)
+	}
+	if after := stateOf(otherRepoId, otherRefId); after != other {
+		t.Fatalf("a drop of one repo reset another's sync state: %+v, was %+v", after, other)
+	}
+	if held, err := synced.cache.cache.Ref(otherRepoId, otherRefId); err != nil || held == nil || len(held.Files) != len(otherHeld.Files) {
+		t.Fatalf("a drop of one repo took another's files: %+v, %v", held, err)
+	}
+	if dropped := stateOf(repoId, refId); dropped != (syncState{}) {
+		t.Fatalf("the dropped repo's sync state stayed: %+v", dropped)
+	}
+	select {
+	case <-snapshot.Ended():
+	default:
+		t.Fatal("a snapshot of the dropped repo stayed open")
+	}
+	select {
+	case <-otherSnapshot.Ended():
+		t.Fatal("a drop of one repo ended another's snapshot")
+	default:
+	}
+	hits, progress := world.all(t, &SearchRequest{Text: "harbor"})
+	if !slices.Equal(testHitPaths(hits), []string{"notes/harbor-wall.md"}) {
+		t.Fatalf("after one repo's drop, hits %v", testHitPaths(hits))
+	}
+	if len(progress.Excluded) != 1 || progress.Excluded[0].RepoId != repoId || progress.Excluded[0].Reason != SearchExcludedUnbuilt {
+		t.Fatalf("after one repo's drop, excluded %+v", progress.Excluded)
+	}
+	otherFetched := len(otherSource.fetched())
+	if err := synced.sync.RunRound(context.Background(), otherRepoId, otherRefId, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(otherSource.fetched()) != otherFetched {
+		t.Fatalf("the other repo's round after the drop fetched %v", otherSource.fetched()[otherFetched:])
+	}
+	fetched := len(synced.source.fetched())
+	synced.round(t)
+	if len(synced.source.fetched()) == fetched {
+		t.Fatal("the dropped repo's round fetched nothing")
+	}
+	if hits, _ := world.all(t, &SearchRequest{Text: "harbor"}); !slices.Equal(testHitPaths(hits), []string{"notes/harbor-wall.md", "notes/harbor.md"}) {
+		t.Fatalf("after the dropped repo's round, hits %v", testHitPaths(hits))
+	}
+}

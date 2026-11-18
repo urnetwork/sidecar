@@ -21,6 +21,8 @@
 //	deposit   then one deposit a repo (mail_send_local.go), each answered delivered once evs confirmed it, else failed.
 //	          A Send is no outward action and keeps no effect key: sending again after a failure deposits again to
 //	          the repos that took it, so a caller sends only the recipients that failed
+//	submit    a host's send naming any outside recipient waits on §5.4's gate first (MailClient.SubmitSend,
+//	          mail_send_gate.go), which starts from the same checks (planSend); Send itself passes no gate
 //
 // The message is plain text, UTF-8, quoted-printable, with From, To, Cc, Subject, Date and a Message-ID under the
 // From's domain; a Bcc recipient is deposited to and named in no header. Nothing here logs an address, a subject or
@@ -53,6 +55,14 @@ var (
 	ErrMailSendFromRefused = errors.New("mail send: this device may not send as that From")
 	// The sent copy could not be kept in this device's mailbox, so nothing was sent.
 	ErrMailSendCopyFailed = errors.New("mail send: the sent copy was not kept, so nothing was sent")
+	// What the call asks of a send is not on this sidecar yet: a send's check (MailClient's over
+	// SmtpSender.Check) or a send's outcomes by its send_id (from or/). ur daemon's mail.check_send and
+	// mail.send_result answer it until they land (mail_send_daemon.go), and an app reads it as MAIL_UNAVAILABLE.
+	ErrMailSendUnavailable = errors.New("mail send: this sidecar cannot do that yet")
+	// No send of this device's member has that send_id. Names no id.
+	ErrMailSendUnknown = errors.New("mail send: no send has that id")
+	// §5.4's gate ran a send's effect and could not say whether it happened (mail_send_gate.go).
+	ErrMailSendUncertain = errors.New("mail send: whether the send happened is not known")
 )
 
 // What became of one recipient of a Send.
@@ -86,6 +96,10 @@ type MailSendSettings struct {
 	// The most bytes of the text, before encoding: far under a deposit's 50 MiB bound
 	// (MailIngestSettings.DepositMaxByteCount), since quoted-printable may triple it.
 	TextMaxByteCount int
+	// The most bytes of the preview a send's mail_send action shows an approver (mail_send_gate.go): the canonical
+	// action's own bound, CanonicalActionSettings.PreviewMaxByteCount (§16.8's 2 KiB). A larger value builds an
+	// action NewCanonicalAction refuses, so the send is refused rather than its preview cut short.
+	PreviewMaxByteCount int
 }
 
 // The one default.
@@ -95,13 +109,14 @@ func DefaultMailSendSettings() *MailSendSettings {
 		AddressMaxByteCount: 254,
 		SubjectMaxByteCount: 512,
 		TextMaxByteCount:    8 * 1024 * 1024,
+		PreviewMaxByteCount: DefaultCanonicalActionSettings().PreviewMaxByteCount,
 	}
 }
 
 // Whether every value is in range.
 func (self *MailSendSettings) valid() bool {
 	return self != nil && 0 < self.RecipientMaxCount && 0 < self.AddressMaxByteCount && 0 < self.SubjectMaxByteCount &&
-		0 < self.TextMaxByteCount
+		0 < self.TextMaxByteCount && 0 < self.PreviewMaxByteCount
 }
 
 // What Send sends.
@@ -159,9 +174,23 @@ func (self *MailClient) sendSettings() *MailSendSettings {
 	return DefaultMailSendSettings()
 }
 
-// Sends a message to this network's own addresses (see the file header). An error is the whole send's: nothing was
-// sent. Otherwise each recipient's outcome is in the answer, outside ones answered MailSendInternetWaits.
-func (self *MailClient) Send(ctx context.Context, args *MailSendArgs) (*MailSendResult, error) {
+// What a send is held to before anything is kept or deposited: the binding and its parts, the zone's row, the
+// authority and the deposits over them, the From in its one form with its domain, and the distinct recipients.
+type mailSendPlan struct {
+	binding     *MailBinding
+	parts       mailClientParts
+	row         NetworkLabelRow
+	authority   MailSendAuthority
+	depositRepo func(repoId Id) mailSendDepositRepo
+	fromAddress string
+	fromDomain  string
+	recipients  []string
+}
+
+// Holds args to what a send needs before it keeps or deposits anything (see the file header): its shape and bounds,
+// the zone, and a From of this network that policy lets this device send as. Send and SubmitSend both start here,
+// so a send the gate holds was refused for none of these. An error names no address.
+func (self *MailClient) planSend(args *MailSendArgs) (*mailSendPlan, error) {
 	settings := self.sendSettings()
 	if args == nil {
 		return nil, fmt.Errorf("%w: no message", ErrMailSendInvalid)
@@ -217,20 +246,59 @@ func (self *MailClient) Send(ctx context.Context, args *MailSendArgs) (*MailSend
 	if !authority.MaySendAs(self.sidecarId, fromAddress) {
 		return nil, ErrMailSendFromRefused
 	}
+	return &mailSendPlan{
+		binding:     binding,
+		parts:       parts,
+		row:         row,
+		authority:   authority,
+		depositRepo: depositRepo,
+		fromAddress: fromAddress,
+		fromDomain:  from.Domain(),
+		recipients:  recipients,
+	}, nil
+}
+
+// address parsed under row's root, and whether it is an address of row's network. One that does not parse there is
+// not: it is outside mail, §14's path, never a deposit. A same-network address is never outside, whatever form the
+// sender's alias has elsewhere.
+func mailSendOwnRecipient(row NetworkLabelRow, address string) (MailRecipient, bool) {
+	parsed, err := ParseMailRecipient(row.Root, address)
+	if err != nil || !parsed.Zone.OfNetwork(row) {
+		return MailRecipient{}, false
+	}
+	return parsed, true
+}
+
+// Sends a message to this network's own addresses (see the file header). An error is the whole send's: nothing was
+// sent. Otherwise each recipient's outcome is in the answer, outside ones answered MailSendInternetWaits. It passes
+// no gate: mail to members is W. A host's submission, which holds mail to outside recipients for an I-8 approval,
+// is SubmitSend (mail_send_gate.go).
+func (self *MailClient) Send(ctx context.Context, args *MailSendArgs) (*MailSendResult, error) {
+	plan, err := self.planSend(args)
+	if err != nil {
+		return nil, err
+	}
+	return self.deliverSend(ctx, args, plan)
+}
+
+// Send's delivery of args once plan holds: the split, the resolution, the sent copy and the deposits.
+func (self *MailClient) deliverSend(ctx context.Context, args *MailSendArgs, plan *mailSendPlan) (*MailSendResult, error) {
+	row, authority, fromAddress := plan.row, plan.authority, plan.fromAddress
 
 	// split and resolve
 	result := &MailSendResult{SendId: NewId()}
 	targets := []*mailSendTarget{}
 	targetIndexes := map[*MailSendRecipient]int{}
 	var config *MailConfig
-	for _, address := range recipients {
+	for _, address := range plan.recipients {
 		recipient := &MailSendRecipient{Address: address, Outcome: MailSendInternetWaits}
 		result.Recipients = append(result.Recipients, recipient)
-		parsed, err := ParseMailRecipient(row.Root, address)
-		if err != nil || !parsed.Zone.OfNetwork(row) {
+		parsed, own := mailSendOwnRecipient(row, address)
+		if !own {
 			// outside this network: §14's path, from M9
 			continue
 		}
+		var err error
 		if config == nil {
 			if config, err = self.syncedConfig(ctx); err != nil {
 				return nil, err
@@ -262,18 +330,18 @@ func (self *MailClient) Send(ctx context.Context, args *MailSendArgs) (*MailSend
 	}
 
 	now := self.clock.Now()
-	message, err := mailSendBuildMessage(args, fromAddress, from.Domain(), result.SendId, now)
+	message, err := mailSendBuildMessage(args, fromAddress, plan.fromDomain, result.SendId, now)
 	if err != nil {
 		return nil, err
 	}
 	// copy: before any deposit, so one that cannot be kept sends nothing
 	if mailboxId, err := self.mailboxId(); err == nil && authority.Writes(self.sidecarId, mailboxId) {
-		if err := self.keepSentCopy(ctx, parts.store(mailboxId), result.SendId, message, fromAddress, now); err != nil {
+		if err := self.keepSentCopy(ctx, plan.parts.store(mailboxId), result.SendId, message, fromAddress, now); err != nil {
 			return nil, fmt.Errorf("%w: %w", ErrMailSendCopyFailed, err)
 		}
 		result.SentCopy = true
 	}
-	outcomes := mailSendDeposit(ctx, depositRepo, message, fromAddress, targets)
+	outcomes := mailSendDeposit(ctx, plan.depositRepo, message, fromAddress, targets)
 	for recipient, index := range targetIndexes {
 		recipient.Outcome = outcomes[index]
 	}

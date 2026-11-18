@@ -12,11 +12,18 @@
 //     hint sets it.
 //   - A version at or below the client's is ignored; a newer one calls the topic's subscribers, who fetch
 //     its state over HTTPS: a hint is a prompt and carries no content (R-PROTO-8).
-//   - A reset never lowers a durable version (team, dns, gkm:<group_id>): a lower one raises head_alarm
-//     of kind rollback (owner decision 300), its evidence the held and the offered TopicVersion, and
-//     Consistent() turns false until the topic's owner reconciles it, which is what §8's inbound state
-//     reads to fail closed. A clock version's fall (sock, gkm, evs:, core, mail, tls) is a gap: the
-//     subscribers refetch, check what they fetch against their pins, and the fall is adopted.
+//   - Nothing lowers a durable version (team, dns, gkm:<group_id>), and only a versions page judges a
+//     fall (QD-1044). A resident's or a poll's reset shows {scp_<C>}ver, Redis soft state its owner
+//     raises after the commit, and nothing orders its read against api's read of a page, so a reset
+//     that shows a durable topic below the version held applies its other topics, raises nothing and
+//     sends the client to versions once. §6.8's route reads team and dns from the stores that never
+//     fall, and a page that shows a durable topic lower raises head_alarm of kind rollback (owner
+//     decision 300), its evidence the held and the offered TopicVersion, and Consistent() turns false
+//     until the topic's owner reconciles it, which is what §8's inbound state reads to fail closed. So a
+//     reset read before a page the client applied first, or one reading a ver its owner has not raised
+//     yet, costs one more refetch and no alarm, and a real rollback alarms one refetch later. A clock
+//     version's fall (sock, gkm, evs:, core, mail, tls) is a gap: the subscribers refetch, check what
+//     they fetch against their pins, and the fall is adopted.
 //   - A topic a reset omits keeps the client's version.
 //   - A versions page is judged by what it could have seen (owner decision 299). The machine counts the
 //     inputs the push gives it, each reset part and hint, a poll's reset included, and a refetch notes
@@ -118,18 +125,32 @@ type pushAction struct {
 	refetchVersions bool
 	// the applied versions changed and are to be kept
 	changed bool
-	// durable topics a reset tried to lower: a rollback head_alarm for each
+	// durable topics a versions page begun after every input showed lower than held: a rollback
+	// head_alarm for each
 	alarms []pushAlarm
 	// notices for the subscribers, in order
 	notices []PushNotice
 }
 
-// A durable topic a reset presented lower than the client holds.
+// A durable topic a versions page presented lower than the client holds.
 type pushAlarm struct {
 	topic   string
 	held    uint64
 	offered uint64
 }
+
+// Where a complete reset's versions come from, which decides how applyReset takes a fall.
+type pushResetSource int
+
+const (
+	// A resident's complete run or a poll's reset, read from {scp_<C>}ver: a durable topic it shows lower
+	// is not judged here but sent to versions (QD-1044).
+	pushResetSourcePush pushResetSource = iota
+	// A versions page begun after every input taken, the judge of a durable fall, which alarms.
+	pushResetSourcePage
+	// A versions page begun before an input since taken, which takes only its rises (owner decision 299).
+	pushResetSourceLatePage
+)
 
 // The machine of the file header. Not safe for concurrent use: pushFeed holds it under its lock.
 type pushMachine struct {
@@ -171,7 +192,8 @@ func (self *pushMachine) abandonRun() {
 	self.runVersions = nil
 }
 
-// One part of a resident's reset: opens or extends the run, and applies the union once complete.
+// One part of a resident's reset: opens or extends the run, and applies the union once complete, a
+// durable topic it shows lower sending the client to versions.
 func (self *pushMachine) resetPart(part *protocol.PushReset) *pushAction {
 	action := &pushAction{}
 	if part == nil {
@@ -205,7 +227,10 @@ func (self *pushMachine) resetPart(part *protocol.PushReset) *pushAction {
 	}
 	union := self.runVersions
 	self.abandonRun()
-	self.applyReset(union, false, action)
+	if self.applyReset(union, pushResetSourcePush, action) {
+		// a page begun after this reset judges the fall (QD-1044): one ask, however many topics fell
+		action.refetchVersions = true
+	}
 	return action
 }
 
@@ -214,23 +239,27 @@ func (self *pushMachine) pollReset(topicVersions map[string]uint64) *pushAction 
 	action := &pushAction{}
 	self.inputCount += 1
 	self.abandonRun()
-	self.applyReset(topicVersions, false, action)
+	if self.applyReset(topicVersions, pushResetSourcePush, action) {
+		// a page begun after this reset judges the fall (QD-1044): one ask, however many topics fell
+		action.refetchVersions = true
+	}
 	return action
 }
 
 // A versions refetch's run of pages, every page's versions together, from a refetch begun when the
 // machine had taken inputCount inputs. Begun after every input since, it ends any open run and applies
-// by the file header's rules; begun before an input since taken, it is late and takes only its rises,
-// as the file header says, asking for versions again while MaxLateRefetchCount allows.
+// by the file header's rules, the one input that judges a durable fall; begun before an input since
+// taken, it is late and takes only its rises, as the file header says, asking for versions again while
+// MaxLateRefetchCount allows.
 func (self *pushMachine) reset(topicVersions map[string]uint64, inputCount uint64) *pushAction {
 	action := &pushAction{}
 	if self.inputCount <= inputCount {
 		self.lateRefetchCount = 0
 		self.abandonRun()
-		self.applyReset(topicVersions, false, action)
+		self.applyReset(topicVersions, pushResetSourcePage, action)
 		return action
 	}
-	durableFell := self.applyReset(topicVersions, true, action)
+	durableFell := self.applyReset(topicVersions, pushResetSourceLatePage, action)
 	if (durableFell || self.runOpen) && self.lateRefetchCount < self.settings.MaxLateRefetchCount {
 		self.lateRefetchCount += 1
 		action.refetchVersions = true
@@ -240,11 +269,12 @@ func (self *pushMachine) reset(topicVersions map[string]uint64, inputCount uint6
 	return action
 }
 
-// Applies a complete reset's union by the file header's rules, into action, or, for a late page, only
-// its rises, returning whether it showed a durable topic lower than held. Every topic named gets its
-// subscribers' resync notice when it moves, and core gets one whatever it shows, since a client fetches
-// core at every resync (plan-CORE-core-hint-body #3).
-func (self *pushMachine) applyReset(topicVersions map[string]uint64, late bool, action *pushAction) (durableFell bool) {
+// Applies a complete reset's union by the file header's rules for its source, into action: a reset from
+// the push or a timely page all of it, a late page only its rises. Returns whether it showed a durable
+// topic lower than held that it did not judge, as only a timely page judges one, so its caller sends the
+// client to versions. Every topic named gets its subscribers' resync notice when it moves, and core gets
+// one whatever it shows, since a client fetches core at every resync (plan-CORE-core-hint-body #3).
+func (self *pushMachine) applyReset(topicVersions map[string]uint64, source pushResetSource, action *pushAction) (durableFell bool) {
 	topics := slices.Sorted(func(yield func(string) bool) {
 		for topic := range topicVersions {
 			if !yield(topic) {
@@ -273,15 +303,16 @@ func (self *pushMachine) applyReset(topicVersions map[string]uint64, late bool, 
 			}
 			action.notices = append(action.notices, PushNotice{Topic: topic, Version: version, Resync: true})
 			coreNoticed = coreNoticed || topic == PushTopicCore
-		case late && class == PushTopicDurable:
-			// below a rise the page may not have seen: no alarm, and versions again
-			durableFell = true
-		case late:
-			// a clock's fall waits for the next page
-		case class == PushTopicDurable:
+		case class == PushTopicDurable && source == pushResetSourcePage:
 			// never lowered: an alarm, and the topic fails closed until its owner reconciles it
 			self.alarmTopics[topic] = true
 			action.alarms = append(action.alarms, pushAlarm{topic: topic, held: held, offered: version})
+		case class == PushTopicDurable:
+			// never lowered, and no alarm: ver that lags its owner's store, or a page that may not have
+			// seen a rise, so a page begun after this input judges it
+			durableFell = true
+		case source == pushResetSourceLatePage:
+			// a clock's fall waits for the next page
 		default:
 			// a clock's fall is a gap: refetch, and adopt what verifies
 			self.topicVersions[topic] = version
@@ -293,8 +324,8 @@ func (self *pushMachine) applyReset(topicVersions map[string]uint64, late bool, 
 	if !coreNoticed {
 		action.notices = append(action.notices, PushNotice{Topic: PushTopicCore, Version: self.topicVersions[PushTopicCore], Resync: true})
 	}
-	if !late {
-		// a reset is the new baseline: the next hint's seq sets it
+	if source != pushResetSourceLatePage {
+		// a reset or a timely page is the new baseline: the next hint's seq sets it
 		self.hasSeq = false
 	}
 	return durableFell
@@ -608,11 +639,11 @@ func (self *pushFeed) apply(input func(machine *pushMachine) *pushAction) {
 	}
 }
 
-// head_alarm of kind rollback for a durable topic a reset presented lower than the client holds (§6.8;
-// owner decision 300), with both TopicVersions as evidence, the held one first, then the offered one,
-// and no peer: api lowered a version, where fork is for two pins that disagree.
+// head_alarm of kind rollback for a durable topic a versions page presented lower than the client holds
+// (§6.8; owner decision 300, QD-1044), with both TopicVersions as evidence, the held one first, then the
+// offered one, and no peer: api lowered a version, where fork is for two pins that disagree.
 func (self *pushFeed) raiseAlarm(alarm pushAlarm) {
-	self.log.Warningf("[push]a reset presented a durable topic below the version held\n")
+	self.log.Warningf("[push]a versions page presented a durable topic below the version held\n")
 	if self.event == nil {
 		return
 	}
