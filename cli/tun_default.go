@@ -17,9 +17,13 @@
 // Default egress and route local traffic are the person's two choices for each network (urTunChoices), which ur tun
 // sets and shows and the daemon keeps in the network's sealed local state (urTunSealedChoices): default egress is on
 // unless the person turns it off, and route local traffic on, as the sdk's DefaultRouteLocal is, each default a field
-// of urTunSettings (QD-702). The network's egress mode stays its admin's policy for traffic that enters URnetwork, and
-// §8.10's gate is unchanged. Each sync plans again (tun_device.go), so a change of either choice, or a destination
-// that appears or goes, puts the default routes on or takes them off with no restart of the tun.
+// of urTunSettings (QD-702). Under exits, the network's admin, owner or sponsor may require default egress on in the
+// egress spec's sealed exits body (QD-1053; device.BridgeStatus's DefaultEgressRequired): the plan then keeps it on
+// whatever the person chose, and ur tun refuses to turn it off, naming the requirement, while the other rules hold, so
+// with no destination default traffic still keeps the host's routes, or with route local traffic off is refused. The
+// network's egress mode stays its admin's policy for traffic that enters URnetwork, and §8.10's gate is unchanged.
+// Each sync plans again (tun_device.go), so a change of either choice, a destination that appears or goes, or a
+// requirement that comes or is lifted, puts the default routes on or takes them off with no restart of the tun.
 
 package main
 
@@ -62,6 +66,10 @@ const (
 
 // A choice that is neither on nor off.
 var errUrTunChoice = errors.New("a choice is on or off")
+
+// Default egress turned off for a network whose egress spec requires it on (QD-1053).
+var errUrTunDefaultEgressRequired = errors.New("the network requires its devices to keep default egress on: its " +
+	"admin, owner or sponsor set it with the egress mode exits, and ur tun --default-egress=off waits for them to lift it")
 
 // One network's choices for the host's default traffic (QD-1052): what the person chose, else the settings' defaults.
 type urTunChoices struct {
@@ -242,12 +250,19 @@ type urTunDestination interface {
 type urTunDefaultPlan struct {
 	// Whether the tun takes the host's default routes.
 	Take bool
-	// Whether default egress is in force.
+	// Whether default egress is in force: the person's choice, or the network's requirement.
 	DefaultEgress bool
+	// Whether the network requires it, under exits alone (QD-1053).
+	Required bool
 	// Whether the client has an egress destination.
 	Destination bool
 	// egress, local, refused or off (urTunDefaultTraffic...).
 	Traffic string
+}
+
+// Whether the bridge's state requires default egress on, under exits alone (QD-1053).
+func urTunDefaultEgressRequired(status device.BridgeStatus) bool {
+	return status.EgressMode == bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS && status.DefaultEgressRequired
 }
 
 // The plan for the bridge's state, whether the connect client has a destination under auto, and the network's choices.
@@ -256,6 +271,9 @@ func urTunPlanDefault(status device.BridgeStatus, autoDestination bool, choices 
 	switch status.EgressMode {
 	case bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS:
 		plan.Destination = 0 < status.EgressExitCount
+		// the network's requirement holds default egress on whatever the person chose (QD-1053)
+		plan.Required = status.DefaultEgressRequired
+		plan.DefaultEgress = plan.DefaultEgress || plan.Required
 	case bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE:
 		// no egress at all, so no destination
 	default:
@@ -301,6 +319,9 @@ func (self *urBridgeDaemon) choicesWithLock(network *urBridgeNetwork, change *ur
 	}
 	if change.empty() {
 		return record.choices(self.settings), nil
+	}
+	if change.DefaultEgress != nil && !*change.DefaultEgress && urTunDefaultEgressRequired(network.bridge.Status()) {
+		return urTunChoices{}, fmt.Errorf("network %s: %w", network.networkId, errUrTunDefaultEgressRequired)
 	}
 	next := *record
 	next.Version = urTunChoicesRecordVersion

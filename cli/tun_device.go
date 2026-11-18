@@ -387,6 +387,9 @@ type urTunStatus struct {
 	RouteLocal          bool   `json:"route_local"`
 	Destination         bool   `json:"destination,omitempty"`
 	DefaultTraffic      string `json:"default_traffic,omitempty"`
+	// Whether the network requires default egress on, under exits (QD-1053): it holds DefaultEgress on whatever the
+	// person chose, and ur tun refuses to turn it off.
+	DefaultEgressRequired bool `json:"default_egress_required,omitempty"`
 	// What the bridge waits on, by kind.
 	Waits []string `json:"waits,omitempty"`
 	// The network's blocks this device routes to a network it joined first (§17.4), which the tun leaves off, and the
@@ -1062,6 +1065,7 @@ func (self *urTun) status() *urTunStatus {
 	status.ExitsHeld = self.exitsHeld
 	status.ExitsHeldReason = self.exitsHeldReason
 	status.DefaultEgress = self.plan.DefaultEgress
+	status.DefaultEgressRequired = self.plan.Required
 	status.DefaultEgressChosen = self.choices.DefaultEgress
 	status.RouteLocal = self.choices.RouteLocal
 	status.Destination = self.plan.Destination

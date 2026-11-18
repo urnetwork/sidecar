@@ -351,6 +351,11 @@ func printUrTunStatus(cli *urCli, status *urTunStatus) {
 func printUrTunDefault(cli *urCli, status *urTunStatus) {
 	cli.printf("  choices    default egress %s, route local traffic %s\n", urTunChoiceName(status.DefaultEgressChosen),
 		urTunChoiceName(status.RouteLocal))
+	if status.DefaultEgressRequired {
+		// the lock (QD-1053): the network holds default egress on, whatever the choice above
+		cli.printf("  required   default egress stays on: network %s requires it of its devices, and ur tun "+
+			"--default-egress=off waits for its admin, owner or sponsor to lift that\n", status.NetworkId)
+	}
 	exits := status.EgressMode == urTunEgressModeName(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS)
 	label := "default"
 	if exits {

@@ -463,6 +463,25 @@ func TestBridgeStatusCountsTheExitsItCanUse(t *testing.T) {
 	}
 }
 
+// The status shows the egress spec's requirement of default egress under exits (QD-1053), which `ur tun` holds the
+// person's choice to; a spec without it, and the spec's switch, EgressSpecOff, show none.
+func TestBridgeStatusShowsTheDefaultEgressRequirement(t *testing.T) {
+	required := routeTestExitsFixture()
+	required.Egress.RequireDefaultEgress = true
+	test := newRouteTest(t, required, nil)
+	if status := test.bridge.Status(); !status.DefaultEgressRequired || status.EgressExitCount != 1 {
+		t.Fatalf("required: %+v", status)
+	}
+	test = newRouteTest(t, routeTestExitsFixture(), nil)
+	if status := test.bridge.Status(); status.DefaultEgressRequired {
+		t.Fatal("required with no requirement")
+	}
+	test = newRouteTest(t, required, func(settings *device.BridgeSettings) { settings.EgressSpecOff = true })
+	if status := test.bridge.Status(); status.DefaultEgressRequired || status.EgressMode != bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_AUTO {
+		t.Fatalf("with the spec off: %+v", status)
+	}
+}
+
 // Under the egress spec's exits an IPv6 packet goes nowhere and its source hears at once (owner decision 482, QD-970):
 // Route hands each one, TCP/25, an ICMPv6 echo and a short one among them, to the client that answers it through the
 // rejects, never to an exit's pins, with no allocation; a TCP SYN gets a reset and a UDP datagram or an echo an ICMPv6

@@ -1801,11 +1801,12 @@ func (x *BridgeRuleShareTarget) GetPorts() []*BridgePortRange {
 
 // This device's own default route (§17.9's egress spec): today's under auto, only exits under exits, none under none.
 type BridgeRuleEgress struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Mode          BridgeEgressMode       `protobuf:"varint,1,opt,name=mode,proto3,enum=urnetwork.sidecar.BridgeEgressMode" json:"mode,omitempty"`
-	Exits         []*BridgeRuleLink      `protobuf:"bytes,2,rep,name=exits,proto3" json:"exits,omitempty"` // the approved exits it may use, under exits only
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	Mode                 BridgeEgressMode       `protobuf:"varint,1,opt,name=mode,proto3,enum=urnetwork.sidecar.BridgeEgressMode" json:"mode,omitempty"`
+	Exits                []*BridgeRuleLink      `protobuf:"bytes,2,rep,name=exits,proto3" json:"exits,omitempty"`                                                              // the approved exits it may use, under exits only
+	RequireDefaultEgress bool                   `protobuf:"varint,3,opt,name=require_default_egress,json=requireDefaultEgress,proto3" json:"require_default_egress,omitempty"` // under exits only: the spec's BridgeEgressBody requires default egress on,
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *BridgeRuleEgress) Reset() {
@@ -1850,6 +1851,13 @@ func (x *BridgeRuleEgress) GetExits() []*BridgeRuleLink {
 		return x.Exits
 	}
 	return nil
+}
+
+func (x *BridgeRuleEgress) GetRequireDefaultEgress() bool {
+	if x != nil {
+		return x.RequireDefaultEgress
+	}
+	return false
 }
 
 // §6.9 Signed, purpose window-delegation, SignedType 0x1908; by the subject's identity key or, on a share
@@ -2833,11 +2841,12 @@ func (x *BridgeEgress) GetMode() BridgeEgressMode {
 }
 
 type BridgeEgressBody struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	ExitSidecarIds [][]byte               `protobuf:"bytes,2,rep,name=exit_sidecar_ids,json=exitSidecarIds,proto3" json:"exit_sidecar_ids,omitempty"` // or exit_tag_id
-	ExitTagId      []byte                 `protobuf:"bytes,3,opt,name=exit_tag_id,json=exitTagId,proto3" json:"exit_tag_id,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	ExitSidecarIds       [][]byte               `protobuf:"bytes,2,rep,name=exit_sidecar_ids,json=exitSidecarIds,proto3" json:"exit_sidecar_ids,omitempty"` // or exit_tag_id
+	ExitTagId            []byte                 `protobuf:"bytes,3,opt,name=exit_tag_id,json=exitTagId,proto3" json:"exit_tag_id,omitempty"`
+	RequireDefaultEgress bool                   `protobuf:"varint,4,opt,name=require_default_egress,json=requireDefaultEgress,proto3" json:"require_default_egress,omitempty"` // the subject's devices keep default egress on: an admin's, owner's or
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *BridgeEgressBody) Reset() {
@@ -2882,6 +2891,13 @@ func (x *BridgeEgressBody) GetExitTagId() []byte {
 		return x.ExitTagId
 	}
 	return nil
+}
+
+func (x *BridgeEgressBody) GetRequireDefaultEgress() bool {
+	if x != nil {
+		return x.RequireDefaultEgress
+	}
+	return false
 }
 
 // §17.9 seals a share's targets T_i, host included, under a key no server derives, and api-9 keeps both
@@ -3809,10 +3825,11 @@ const file_protocol_bridge_bridge_proto_rawDesc = "" +
 	"\x06length\x18\x03 \x01(\rR\x06length\x12;\n" +
 	"\x06target\x18\x04 \x01(\v2#.urnetwork.sidecar.BridgeIpv4PrefixR\x06target\x12\x1a\n" +
 	"\bprotocol\x18\x05 \x01(\rR\bprotocol\x128\n" +
-	"\x05ports\x18\x06 \x03(\v2\".urnetwork.sidecar.BridgePortRangeR\x05ports\"\x84\x01\n" +
+	"\x05ports\x18\x06 \x03(\v2\".urnetwork.sidecar.BridgePortRangeR\x05ports\"\xba\x01\n" +
 	"\x10BridgeRuleEgress\x127\n" +
 	"\x04mode\x18\x01 \x01(\x0e2#.urnetwork.sidecar.BridgeEgressModeR\x04mode\x127\n" +
-	"\x05exits\x18\x02 \x03(\v2!.urnetwork.sidecar.BridgeRuleLinkR\x05exits\"\xca\x02\n" +
+	"\x05exits\x18\x02 \x03(\v2!.urnetwork.sidecar.BridgeRuleLinkR\x05exits\x124\n" +
+	"\x16require_default_egress\x18\x03 \x01(\bR\x14requireDefaultEgress\"\xca\x02\n" +
 	"\x10WindowDelegation\x12\x1d\n" +
 	"\n" +
 	"network_id\x18\x01 \x01(\fR\tnetworkId\x12,\n" +
@@ -3900,10 +3917,11 @@ const file_protocol_bridge_bridge_proto_rawDesc = "" +
 	"\asubject\x18\x02 \x01(\fR\asubject\x12\x1f\n" +
 	"\vsealed_body\x18\x03 \x01(\fR\n" +
 	"sealedBody\x127\n" +
-	"\x04mode\x18\x04 \x01(\x0e2#.urnetwork.sidecar.BridgeEgressModeR\x04mode\"h\n" +
+	"\x04mode\x18\x04 \x01(\x0e2#.urnetwork.sidecar.BridgeEgressModeR\x04mode\"\x9e\x01\n" +
 	"\x10BridgeEgressBody\x12(\n" +
 	"\x10exit_sidecar_ids\x18\x02 \x03(\fR\x0eexitSidecarIds\x12\x1e\n" +
-	"\vexit_tag_id\x18\x03 \x01(\fR\texitTagIdJ\x04\b\x01\x10\x02R\x04mode\"j\n" +
+	"\vexit_tag_id\x18\x03 \x01(\fR\texitTagId\x124\n" +
+	"\x16require_default_egress\x18\x04 \x01(\bR\x14requireDefaultEgressJ\x04\b\x01\x10\x02R\x04mode\"j\n" +
 	"\vBridgeAlias\x12:\n" +
 	"\x06header\x18\x01 \x01(\v2\".urnetwork.sidecar.StatementHeaderR\x06header\x12\x1f\n" +
 	"\vsealed_body\x18\x02 \x01(\fR\n" +

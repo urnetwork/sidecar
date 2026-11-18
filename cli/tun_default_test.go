@@ -664,3 +664,149 @@ func TestTunPrintsThePlanForDefaultTraffic(t *testing.T) {
 		}
 	}
 }
+
+// Under exits the network's requirement holds default egress on whatever the person chose (QD-1053), and the plan is
+// then the one default egress on gives: with an exit the default route rides the tun, and with none it keeps the host's
+// routes or is refused as route local traffic says. Under auto and none a requirement, which no spec could carry, holds
+// nothing.
+func TestTunPlansDefaultTrafficUnderTheRequirement(t *testing.T) {
+	for _, c := range testTunDefaultCases {
+		tunBridge := newTestTunBridge()
+		c.applyTo(tunBridge)
+		tunBridge.status.DefaultEgressRequired = true
+		plan := urTunPlanDefault(tunBridge.Status(), c.destination, c.choices())
+		want := c
+		if c.mode == testTunExits {
+			// the case default egress on gives
+			for _, on := range testTunDefaultCases {
+				if on.mode == c.mode && on.destination == c.destination && on.routeLocal == c.routeLocal && on.defaultEgress {
+					want = on
+				}
+			}
+		}
+		if plan.Take != want.take || plan.Traffic != want.traffic || plan.DefaultEgress != want.defaultEgress ||
+			plan.Required != (c.mode == testTunExits) {
+			t.Errorf("%+v required: %+v", c, plan)
+		}
+	}
+}
+
+// A network that requires default egress keeps it on through ur tun --default-egress=off, which is refused naming the
+// requirement and keeps nothing; one that does not lets it go off. A choice of off made before the requirement waits
+// under it, the default route riding the tun, and holds again once it is lifted. Route local traffic still decides
+// with no exit under the requirement.
+func TestTunKeepsDefaultEgressOnUnderTheRequirement(t *testing.T) {
+	system := newTestTunSystem()
+	networkId := sidecar.NewId()
+	bridges, tunBridge := newTestUrBridgeDaemon(t, system, networkId, false)
+	setStatus := func(exitCount int, required bool) {
+		tunBridge.stateLock.Lock()
+		tunBridge.status.EgressMode = testTunExits
+		tunBridge.status.EgressExitCount = exitCount
+		tunBridge.status.DefaultEgressRequired = required
+		tunBridge.stateLock.Unlock()
+	}
+	syncs := make(chan struct{}, 1024)
+	bridges.onTunSync = func(err error) {
+		select {
+		case syncs <- struct{}{}:
+		default:
+		}
+	}
+	waitStatus := func(what string, done func(status *urTunStatus) bool) *urTunStatus {
+		t.Helper()
+		deadline := time.After(urTestTimeout)
+		for {
+			if status := bridges.tunStatus(); status != nil && done(status) {
+				return status
+			}
+			select {
+			case <-syncs:
+			case <-deadline:
+				t.Fatalf("waited too long for %s", what)
+			}
+		}
+	}
+	off := false
+	on := true
+	setStatus(1, true)
+	status, err := bridges.tunUp(networkId, nil, nil)
+	if err != nil || !status.DefaultRoute || !status.DefaultEgressRequired || !status.DefaultEgress {
+		t.Fatalf("up: %+v %v", status, err)
+	}
+	if _, err := bridges.tunUp(networkId, nil, &urTunChoiceChange{DefaultEgress: &off, RouteLocal: &off}); !errors.Is(err, errUrTunDefaultEgressRequired) ||
+		!strings.Contains(err.Error(), networkId.String()) {
+		t.Fatalf("off under the requirement: %v", err)
+	}
+	status = bridges.tunStatus()
+	if !status.DefaultRoute || !status.DefaultEgressChosen || !status.RouteLocal {
+		t.Fatalf("after the refusal: %+v", status)
+	}
+	if record, _ := bridges.networks[networkId].choices.Load(); record != nil {
+		t.Fatalf("a refused change was kept: %+v", record)
+	}
+
+	// lifted: default egress goes off
+	setStatus(1, false)
+	tunBridge.changed()
+	waitStatus("the requirement to lift", func(status *urTunStatus) bool { return !status.DefaultEgressRequired })
+	status, err = bridges.tunUp(networkId, nil, &urTunChoiceChange{DefaultEgress: &off})
+	if err != nil || status.DefaultRoute || status.DefaultEgress || status.DefaultTraffic != urTunDefaultTrafficOff {
+		t.Fatalf("off with no requirement: %+v %v", status, err)
+	}
+
+	// required again: the person's off waits, and the default route rides the tun
+	setStatus(1, true)
+	tunBridge.changed()
+	status = waitStatus("the requirement to hold", func(status *urTunStatus) bool { return status.DefaultRoute })
+	if !status.DefaultEgress || status.DefaultEgressChosen || !status.DefaultEgressRequired ||
+		status.DefaultTraffic != urTunDefaultTrafficEgress {
+		t.Fatalf("required over an off: %+v", status)
+	}
+	// no exit under the requirement: route local traffic on keeps the host's routes, off refuses
+	setStatus(0, true)
+	tunBridge.changed()
+	status = waitStatus("the exit to go", func(status *urTunStatus) bool { return !status.DefaultRoute })
+	if status.DefaultTraffic != urTunDefaultTrafficLocal || !status.DefaultEgress {
+		t.Fatalf("no exit, route local traffic on: %+v", status)
+	}
+	status, err = bridges.tunUp(networkId, nil, &urTunChoiceChange{RouteLocal: &off})
+	if err != nil || !status.DefaultRoute || status.DefaultTraffic != urTunDefaultTrafficRefused {
+		t.Fatalf("no exit, route local traffic off: %+v %v", status, err)
+	}
+	// turning default egress on is no refusal under the requirement
+	if _, err := bridges.tunUp(networkId, nil, &urTunChoiceChange{DefaultEgress: &on}); err != nil {
+		t.Fatalf("on under the requirement: %v", err)
+	}
+
+	// lifted again: the person's choice holds
+	if _, err := bridges.tunUp(networkId, nil, &urTunChoiceChange{DefaultEgress: &off, RouteLocal: &on}); !errors.Is(err, errUrTunDefaultEgressRequired) {
+		t.Fatalf("off under the requirement again: %v", err)
+	}
+	setStatus(1, false)
+	tunBridge.changed()
+	waitStatus("the requirement to lift again", func(status *urTunStatus) bool {
+		return !status.DefaultEgressRequired && status.DefaultTraffic == urTunDefaultTrafficEgress
+	})
+	system.iface.stateLock.Lock()
+	defer system.iface.stateLock.Unlock()
+	if system.iface.closeCount != 0 {
+		t.Fatal("a change closed the tun")
+	}
+}
+
+// ur tun shows the requirement beside the person's choice.
+func TestTunPrintsTheRequirement(t *testing.T) {
+	cli, stdout, _ := newTestUrCli("/nonexistent/socket")
+	networkId := sidecar.NewId()
+	printUrTunStatus(cli, &urTunStatus{Device: "ur-test", NetworkId: networkId, EgressMode: "exits", DefaultEgress: true,
+		DefaultEgressRequired: true, RouteLocal: true, DefaultRoute: true, DefaultTraffic: urTunDefaultTrafficEgress})
+	printed := stdout.String()
+	for _, want := range []string{"choices    default egress off, route local traffic on",
+		"required   default egress stays on: network " + networkId.String() + " requires it of its devices",
+		"exits      the default route rides ur tun to the network's exits"} {
+		if !strings.Contains(printed, want) {
+			t.Errorf("printed no %q:\n%s", want, printed)
+		}
+	}
+}

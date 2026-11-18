@@ -110,6 +110,9 @@ type BridgeStatus struct {
 	// one until its drain ends; 0 under any other mode. `ur tun` sends the host's default traffic to the exits only
 	// while there is one, the client's egress destination under exits (QD-1052).
 	EgressExitCount int
+	// Under exits, whether the network's egress spec for this device requires it to keep default egress on, which `ur
+	// tun` holds the person's choice to (QD-1053); false under any other mode.
+	DefaultEgressRequired bool
 
 	// §12.9's private names the state in force holds, and `ur tun`'s resolver's queries since the bridge started:
 	// answered from them, passed to the host's resolver, and dropped as malformed or past its queue.

@@ -836,7 +836,8 @@ func (self *BridgeLedger) loadEgressRow(row *protocol.BridgeLedgerEgressRow) err
 	if err != nil {
 		return err
 	}
-	egress := &BridgeLedgerEgress{Subject: subject, Mode: row.GetMode(), At: row.GetAt(), ExitTagId: bytes.Clone(row.GetExitTagId())}
+	egress := &BridgeLedgerEgress{Subject: subject, Mode: row.GetMode(), At: row.GetAt(), ExitTagId: bytes.Clone(row.GetExitTagId()),
+		RequireDefaultEgress: row.GetRequireDefaultEgress()}
 	switch {
 	case row.GetAt() == 0:
 		return errors.New("a spec with no entry")
@@ -844,6 +845,9 @@ func (self *BridgeLedger) loadEgressRow(row *protocol.BridgeLedgerEgressRow) err
 		return fmt.Errorf("mode %d", row.GetMode())
 	case row.GetMode() == bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE && (len(row.GetExitSidecarIds()) != 0 || len(row.GetExitTagId()) != 0):
 		return errors.New("exits under none")
+	case row.GetMode() == bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE && row.GetRequireDefaultEgress():
+		// only an exits body requires default egress (QD-1053)
+		return errors.New("default egress required under none")
 	case len(row.GetExitTagId()) != 0 && (len(row.GetExitTagId()) != len(Id{}) || len(row.GetExitSidecarIds()) != 0):
 		return errors.New("an exit tag malformed, or beside exits")
 	case self.settings.BodyListMaxCount < len(row.GetExitSidecarIds()):

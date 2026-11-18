@@ -1131,10 +1131,20 @@ func TestBridgeSetEgressFilesUnderTheGate(t *testing.T) {
 		{Subject: world.hostId, Mode: bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS, ExitSidecarIds: []Id{world.laptop.sidecarId}, ExitTagId: testConfigId("exit tag")},
 		{Subject: world.hostId},
 		{Mode: bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_AUTO},
+		// QD-1053's requirement goes with exits alone
+		{Subject: world.hostId, Mode: bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_AUTO, RequireDefaultEgress: true},
+		{Subject: world.hostId, Mode: bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE, RequireDefaultEgress: true},
 	} {
 		if _, err := world.filer.SetEgress(ctx, world.confirmed(), refused); !errors.Is(err, ErrBridgeFileRefused) {
 			t.Errorf("%+v: %v", refused, err)
 		}
+	}
+	// under exits the requirement waits for egress_change's action to show it, the closed direction, before the gate
+	required := &BridgeEgressRequest{Subject: world.hostId, Mode: bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS,
+		ExitSidecarIds: []Id{world.laptop.sidecarId}, RequireDefaultEgress: true}
+	if _, err := world.filer.SetEgress(ctx, world.confirmed(), required); !errors.Is(err, ErrBridgeFileRefused) ||
+		!errors.Is(err, errBridgeEgressRequirementUnshown) {
+		t.Errorf("a requirement under exits: %v", err)
 	}
 	if world.api.postCount() != 0 || len(world.gate.seen()) != 0 {
 		t.Fatal("a refused egress change reached the gate or the log")
