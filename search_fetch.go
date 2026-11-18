@@ -407,3 +407,8 @@ func (self *SearchManifestFile) observe(timeSeconds uint64) {
 		self.TimeMaxMs = timeMs
 	}
 }
+
+// Whether err says an index file broke its format.
+func isIndexMalformed(err error) bool {
+	return errors.Is(err, errIndexMalformed)
+}

@@ -850,13 +850,10 @@ func configAclBodyVerdict(statement *configStatement) *AclStatementVerdict {
 }
 
 // The kind an AuthorityProposal that took effect and stayed open takes on the rebuilt state (DESIGN-DETAILS 5.2.3: fixed
-// when it takes effect, from the signer's kind, the member's AdminSet standing, whether its binding is one a void
-// restored and self_admit then): a device's is k of n; a recovery key's is k of n for an AdminSet member, under a
-// restored binding restored or, with self_admit off on the rebuilt rows, restored-cosigned (QD-952), and otherwise
-// recovery-scoped, since it took effect only with self_admit off. A tail entry's own self_admit is not in the rows a
-// base rebuilds from, so a proposal a base leaves in its tail takes that base's self_admit, at every reader alike: one
-// whose base's own head turns self_admit off or on changes kind there (question
-// proposal-kind-restored-cosigned-tail-self-admit).
+// when it takes effect, from the signer's kind and the member's AdminSet standing): a device's is k of n; a recovery
+// key's is k of n for an AdminSet member, and otherwise recovery-scoped, since outside the AdminSet a key's proposal
+// took effect only with self_admit off. Neither kind reads self_admit once fixed, so a base whose own head changes the
+// setting changes no kind in its tail (QD-1034 took out the restored kinds, which read it).
 func configReapplyProposalKind(view *ConfigState, proposer ConfigSigner, proposed *configStatement) bridge.ProposalKind {
 	if proposer.Kind != ConfigSignerRecovery {
 		return bridge.ProposalKind_PROPOSAL_KIND_AUTHORITY
@@ -865,13 +862,8 @@ func configReapplyProposalKind(view *ConfigState, proposer ConfigSigner, propose
 		return kind
 	}
 	member := view.members[proposer.MemberId]
-	switch {
-	case member != nil && configRoleInAdminSet(member.GetRole()):
+	if member != nil && configRoleInAdminSet(member.GetRole()) {
 		return bridge.ProposalKind_PROPOSAL_KIND_AUTHORITY
-	case view.BindingRestored(proposer.MemberId) && view.SelfAdmit():
-		return bridge.ProposalKind_PROPOSAL_KIND_RESTORED
-	case view.BindingRestored(proposer.MemberId):
-		return bridge.ProposalKind_PROPOSAL_KIND_RESTORED_COSIGNED
 	}
 	return bridge.ProposalKind_PROPOSAL_KIND_RECOVERY_SCOPED
 }

@@ -1,27 +1,26 @@
-// §7.9's Recovery in the verifier (owner decisions 3, 62, 112, 126-128, 149; D-TEAM-21): a member's recovery key, its
+// §7.9's Recovery in the verifier (owner decisions 3, 62, 112, 126-128; D-TEAM-21; QD-1034): a member's recovery key, its
 // bindings, the proposals it signs and the window that holds them, judged alike at api and every reader. A member M's
 // recovery key admits M's new untagged device:
 //
 //	outside the AdminSet, self_admit on   a plain SidecarAdmit by the key, at its position (scoped)
 //	outside the AdminSet, self_admit off  an AuthorityProposal by the key, completing at one cosign by an Owner's,
 //	                                        Admin's or IT admin's device (PROPOSAL_KIND_RECOVERY_SCOPED)
-//	under a binding a void restored       an AuthorityProposal, activating at an ApiTick 72 h after its entry with no
-//	                                        counted cosign (PROPOSAL_KIND_RESTORED; owner decision 149) or, filed
-//	                                        while self_admit is off, only with one such cosign among its signers
-//	                                        (PROPOSAL_KIND_RESTORED_COSIGNED; QD-952); a plain SidecarAdmit by the
-//	                                        key refused
 //	in the AdminSet                       an AuthorityProposal plus k-1 cosigns, the key counting as one of k,
 //	                                        activating at an ApiTick 72 h after the entry of its newest recovery-key
 //	                                        signature (PROPOSAL_KIND_AUTHORITY, windowed)
+//
+// A member whose binding a compromise cascade voided has no binding (QD-1034): nothing earlier is restored, so no key
+// of M's signs until one of M's devices outside the cascade binds a fresh code (a RecoveryBind, `ur keychain
+// recovery-rotate`), and meanwhile M's new device comes in only by an admin's admission, which stays parked for
+// owner-bound repos (owner decision 126).
 //
 // Any authority statement a recovery key signs, in its proposal or a cosign, is pending until such an activation, a
 // later recovery cosign restarting the window; a RecoveryVeto between the proposal and the activation closes it
 // (config_recovery_veto.go), and so do, as voids, a RecoveryRebind of its subject or of a member whose key signed it,
 // an AdminSet change, its subject's removal and a compromise cascade that voids the binding of a key that signed it.
 // Rows carry every open proposal with its signers, window and kind (DESIGN-DETAILS 5.2.2), so all of this holds across
-// a fold at every reader. The kind is fixed at the proposal's entry, self_admit then included, so an activation reads
-// nothing but the row and a self_admit change between the proposal and its tick decides nothing (owner decision 314).
-// A proposal a base leaves in its tail takes its kind again on that base's rebuilt rows (configReapplyProposalKind),
+// a fold at every reader. The kind is fixed at the proposal's entry, and an activation reads nothing but the row. A
+// proposal a base leaves in its tail takes its kind again on that base's rebuilt rows (configReapplyProposalKind),
 // alike at every reader.
 //
 // RecoveryBind and RecoveryRebind show in the log only member_id, reason, prev_sha256 and the Ed25519 key's hash; the
@@ -170,8 +169,9 @@ func (self *ConfigState) recoveryKeyMember(keySha256 []byte) (Id, bool) {
 	return memberId, found
 }
 
-// The member's binding in effect (§7.9's MemberRow.recovery_key_sha256), nil for none: its newest binding no cascade
-// voids, which is a restored one while a newer binding is void. The caller must not change it.
+// The member's binding in effect (§7.9's MemberRow.recovery_key_sha256), nil for none: its newest binding, unless a
+// cascade voided that one, which leaves the member none until a fresh one is bound (QD-1034). The caller must not
+// change it.
 func (self *ConfigState) CurrentBinding(memberId Id) *bridge.RecoveryBindingRow {
 	member := self.members[memberId]
 	if member == nil || len(member.GetRecoveryKeySha256()) == 0 {
@@ -185,23 +185,12 @@ func (self *ConfigState) CurrentBinding(memberId Id) *bridge.RecoveryBindingRow 
 	return nil
 }
 
-// Whether the member's binding in effect is one a void restored (§7.9's cascade): its newest binding is void, so it
-// takes no wrap and its admissions activate only by Recovery's window until a signer outside P signs it again.
-func (self *ConfigState) BindingRestored(memberId Id) bool {
-	member := self.members[memberId]
-	bindings := member.GetBindings()
-	if len(member.GetRecoveryKeySha256()) == 0 || len(bindings) == 0 {
-		return false
-	}
-	return self.heldInCascadeAt(bindings[0].GetSigner(), bindings[0].GetAt())
-}
-
-// Whether a recovery signer's key counts as its member at this state: the member's binding in effect, not one a void
-// restored, which counts for no k (owner decision 149).
+// Whether a recovery signer's key counts as its member at this state: the member's binding in effect, which a cascade's
+// void of it ends.
 func (self *ConfigState) recoveryKeyCurrent(signer ConfigSigner) bool {
 	member := self.members[signer.MemberId]
 	return member != nil && len(signer.RecoveryKeySha256) == sha256.Size &&
-		bytes.Equal(member.GetRecoveryKeySha256(), signer.RecoveryKeySha256) && !self.BindingRestored(signer.MemberId)
+		bytes.Equal(member.GetRecoveryKeySha256(), signer.RecoveryKeySha256)
 }
 
 // A binding's member, never counted out: the member's own consented device signs its binding.
@@ -222,8 +211,9 @@ func configRecoveryBindingFields(body proto.Message) (memberBytes []byte, prevSh
 }
 
 // A RecoveryBind or RecoveryRebind: a member of this state; a 32-byte key hash no other member ever bound; prev_sha256
-// the binding in effect, empty for a first binding; for a rebind a binding to replace and a reason; signed by the
-// member's consented device (§8.5), with authority for an AdminSet member.
+// the binding in effect, empty for a first binding and for the one that follows a cascade's void, which left none
+// (QD-1034); for a rebind a binding to replace and a reason; signed by the member's consented device (§8.5), with
+// authority for an AdminSet member.
 func configCheckRecoveryBinding(state *ConfigState, statement *configStatement) error {
 	memberBytes, prevSha256, keySha256, reason, rebind := configRecoveryBindingFields(statement.body)
 	memberId, err := IdFromBytes(memberBytes)
@@ -331,19 +321,13 @@ func configVoidProposals(next *configStateBuilder, n uint64, void func(proposal 
 
 // The kind a recovery key's AuthorityProposal takes (§7.9's Recovery table), fixed at its entry: an AdminSet member's
 // key, its binding current, proposes as one of k under the window; outside the AdminSet a key proposes only its own
-// member's untagged device: under a binding a void restored, restored while self_admit is on and restored-cosigned
-// while it is off (QD-952), and else recovery-scoped while self_admit is off. self_admit is this state's, the
-// proposal's entry's, which the row keeps in its kind so its activation reads no setting.
+// member's untagged device, recovery-scoped, and only while self_admit is off, since with it on the key admits plainly.
 func (self *ConfigState) recoveryProposalKind(signer ConfigSigner, proposed *configStatement) (bridge.ProposalKind, error) {
 	member := self.members[signer.MemberId]
 	if member == nil {
 		return 0, fmt.Errorf("%w: no such member", ErrConfigSigner)
 	}
-	restored := self.BindingRestored(signer.MemberId)
 	if configRoleInAdminSet(member.GetRole()) {
-		if restored {
-			return 0, fmt.Errorf("%w: an AdminSet member's key under a restored binding counts for no k", ErrConfigAuthority)
-		}
 		return bridge.ProposalKind_PROPOSAL_KIND_AUTHORITY, nil
 	}
 	admit, ok := proposed.body.(*protocol.SidecarAdmit)
@@ -357,23 +341,17 @@ func (self *ConfigState) recoveryProposalKind(signer ConfigSigner, proposed *con
 	if admission.tagged || admission.ephemeral || admission.memberId != signer.MemberId {
 		return 0, fmt.Errorf("%w: a recovery key proposes only its member's untagged device", ErrConfigAuthority)
 	}
-	selfAdmit := self.SelfAdmit()
-	switch {
-	case restored && selfAdmit:
-		return bridge.ProposalKind_PROPOSAL_KIND_RESTORED, nil
-	case restored:
-		return bridge.ProposalKind_PROPOSAL_KIND_RESTORED_COSIGNED, nil
-	case !selfAdmit:
+	if !self.SelfAdmit() {
 		return bridge.ProposalKind_PROPOSAL_KIND_RECOVERY_SCOPED, nil
 	}
 	return 0, fmt.Errorf("%w: with self_admit on the key admits by a plain SidecarAdmit", ErrConfigRule)
 }
 
 // §7.9's Recovery row for a SidecarAdmit a recovery key signs or helps sign: the admission names the key's member and an
-// untagged member device. Outside the AdminSet, a plain one takes effect while self_admit is on and the binding is
-// current; one completing a recovery-scoped proposal needs an admission signer's device among its signers; one an
-// activation carries stands on the window. In the AdminSet only an activation admits, with k counted, the key one of
-// them.
+// untagged member device. Outside the AdminSet, a plain one takes effect while self_admit is on; one completing a
+// recovery-scoped proposal needs an admission signer's device among its signers. In the AdminSet only an activation
+// admits, with k counted, the key one of them; an activation of any other member's admission is refused, since no
+// window holds one (QD-1034).
 func (self *ConfigState) checkRecoveryAdmission(statement *configStatement, admission *configAdmission) (ConfigSigner, error) {
 	var recovery ConfigSigner
 	for _, signer := range statement.signers {
@@ -400,11 +378,8 @@ func (self *ConfigState) checkRecoveryAdmission(statement *configStatement, admi
 	}
 	switch {
 	case statement.activated:
-		return recovery, nil
+		return ConfigSigner{}, fmt.Errorf("%w: no window activates a recovery admission outside the AdminSet", ErrConfigAuthority)
 	case statement.signed != nil:
-		if self.BindingRestored(recovery.MemberId) {
-			return ConfigSigner{}, fmt.Errorf("%w: a restored binding's key admits only through Recovery's window", ErrConfigAuthority)
-		}
 		if !self.SelfAdmit() {
 			return ConfigSigner{}, fmt.Errorf("%w: self_admit is off", ErrConfigAuthority)
 		}
@@ -423,7 +398,7 @@ func (self *ConfigState) checkRecoveryAdmission(statement *configStatement, admi
 type ConfigRecoveryWindow struct {
 	// The proposal's row: its kind, signers and window (window_entry, p, and window_time_ms, T_p).
 	Row *bridge.ProposalRow
-	// The member whose recovery key signed it, or whose restored binding admits.
+	// The member whose recovery key signed it.
 	MemberId Id
 	// The device it admits, nil for another authority statement.
 	SidecarId *Id
@@ -482,12 +457,10 @@ func (self *ConfigState) PendingProposals() []*bridge.ProposalRow {
 }
 
 // An ApiTick's activation of a proposal (§7.9's activation row) at the tick's state: open and unexpired at the tick's
-// time, held by Recovery's window, the tick at least 72 h after its newest recovery-key signature, by its row's kind k
-// counted for an authority one, nothing more for a restored binding's admission filed with self_admit on, and for one
-// filed with it off an Owner's, Admin's or IT admin's device, standing at the tick, among its signers; and its
-// statement's rule holding at the tick. No setting is read here: a self_admit change since the proposal's entry decides
-// nothing (owner decision 314; QD-952). recovery is the log's Recovery values. Returns the statement as it takes effect
-// there.
+// time, held by Recovery's window, the tick at least 72 h after its newest recovery-key signature, its row's kind
+// authority with k counted, the only kind a window activates (a recovery-scoped admission completes at its cosign, and
+// the reserved restored kinds, 3 and 4, are refused: QD-1034); and its statement's rule holding at the tick. No setting
+// is read here. recovery is the log's Recovery values. Returns the statement as it takes effect there.
 func (self *ConfigState) checkActivation(proposalId []byte, n uint64, timeMs int64, recovery *ConfigRecoverySettings) (*configStatement, error) {
 	if len(proposalId) != sha256.Size {
 		return nil, fmt.Errorf("%w: an activated id of %d bytes", ErrConfigRule, len(proposalId))
@@ -508,14 +481,6 @@ func (self *ConfigState) checkActivation(proposalId []byte, n uint64, timeMs int
 	case bridge.ProposalKind_PROPOSAL_KIND_AUTHORITY:
 		if !self.authorityAt(statement.signers, targets, timeMs) {
 			return nil, fmt.Errorf("%w: an activation short of k", ErrConfigAuthority)
-		}
-	case bridge.ProposalKind_PROPOSAL_KIND_RESTORED:
-		// no counted cosign (owner decision 149)
-	case bridge.ProposalKind_PROPOSAL_KIND_RESTORED_COSIGNED:
-		if _, ok := self.anyMemberDevice(statement.signers, timeMs, func(signerId Id, memberId Id, role bridge.MemberRole) bool {
-			return configRoleAdmits(role)
-		}); !ok {
-			return nil, fmt.Errorf("%w: a restored binding's admission filed with self_admit off needs an admission signer's cosign", ErrConfigAuthority)
 		}
 	default:
 		return nil, fmt.Errorf("%w: an activation of kind %d", ErrConfigRule, proposal.row.GetKind())

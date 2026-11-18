@@ -158,14 +158,6 @@ func testEntryCases() []testEntryCase {
 			entry:     &indexEntry{kind: indexEntryFull, key: testIndexId("doc", 3), version: 300, timeSeconds: 1800000456, row: testDerivedRow(keys), keys: keys},
 		},
 		{
-			name: "diff",
-			entry: &indexEntry{
-				kind: indexEntryDiff, key: testIndexId("doc", 4), version: 9, timeSeconds: 1800001000, baseVersion: 8,
-				row:   testFileRow(keys),
-				delta: indexDelta{added: indexKeySet{5, 0xFFFFFF}, removed: indexKeySet{0, 0x206120}},
-			},
-		},
-		{
 			name:  "tombstone",
 			entry: &indexEntry{kind: indexEntryTombstone, key: testIndexId("doc", 5), version: 10, timeSeconds: 1800002000},
 		},
@@ -327,12 +319,6 @@ func testComparableEntry(entry *indexEntry) indexEntry {
 	}
 	if len(comparable.keys) == 0 {
 		comparable.keys = nil
-	}
-	if len(comparable.delta.added) == 0 {
-		comparable.delta.added = nil
-	}
-	if len(comparable.delta.removed) == 0 {
-		comparable.delta.removed = nil
 	}
 	return comparable
 }
@@ -572,143 +558,6 @@ func TestKeySetCap(t *testing.T) {
 	decoder = indexDecoder{src: encoded}
 	if decoder.keySet(); !errors.Is(decoder.err, errIndexMalformed) {
 		t.Errorf("one past decoded: %v", decoder.err)
-	}
-}
-
-func TestDeltaBetweenAndApply(t *testing.T) {
-	base := indexKeySet{1, 2, 3, 5, 8}
-	next := indexKeySet{2, 3, 4, 8, 9}
-	delta := indexDeltaBetween(base, next)
-	if !slices.Equal(delta.added, indexKeySet{4, 9}) || !slices.Equal(delta.removed, indexKeySet{1, 5}) {
-		t.Fatalf("%+v", delta)
-	}
-	got, err := delta.applyTo(base)
-	if err != nil || !slices.Equal(got, next) {
-		t.Errorf("%x: %v", got, err)
-	}
-	for _, wrong := range []indexKeySet{{1, 2, 3, 4, 5, 8}, {2, 3, 8}, {}} {
-		if got, err := delta.applyTo(wrong); !errors.Is(err, errIndexMalformed) {
-			t.Errorf("%x gave %x", wrong, got)
-		}
-	}
-	if _, err := (indexDelta{added: indexKeySet{1}, removed: indexKeySet{1}}).applyTo(indexKeySet{1}); !errors.Is(err, errIndexMalformed) {
-		t.Errorf("a key added and removed: %v", err)
-	}
-}
-
-// A random walk of key sets, so composing has something to cancel: keys added then removed, and removed then added.
-func testDeltaChain(rng *rand.Rand, length int) (base indexKeySet, sets []indexKeySet, deltas []indexDelta) {
-	universe := 200
-	pick := func() indexKeySet {
-		keys := indexKeySet{}
-		for key := range universe {
-			if rng.Intn(2) == 0 {
-				keys = append(keys, uint32(key))
-			}
-		}
-		return keys
-	}
-	base = pick()
-	last := base
-	for range length {
-		next := slices.Clone(last)
-		for range 12 {
-			key := uint32(rng.Intn(universe))
-			if index, found := slices.BinarySearch(next, key); found {
-				next = slices.Delete(next, index, index+1)
-			} else {
-				next = slices.Insert(next, index, key)
-			}
-		}
-		deltas = append(deltas, indexDeltaBetween(last, next))
-		sets = append(sets, next)
-		last = next
-	}
-	return base, sets, deltas
-}
-
-// SEARCH-M10-04's test: across a 16-entry chain every grouping of the compositions is one delta, and it takes the base
-// to the chain's last set.
-func TestDeltaCompositionIsAssociativeAcrossAChain(t *testing.T) {
-	rng := rand.New(rand.NewSource(14))
-	for range 200 {
-		base, sets, deltas := testDeltaChain(rng, 16)
-		left := deltas[0]
-		for _, delta := range deltas[1:] {
-			var err error
-			if left, err = indexComposeDelta(left, delta); err != nil {
-				t.Fatal(err)
-			}
-		}
-		right := deltas[len(deltas)-1]
-		for index := len(deltas) - 2; 0 <= index; index -= 1 {
-			var err error
-			if right, err = indexComposeDelta(deltas[index], right); err != nil {
-				t.Fatal(err)
-			}
-		}
-		if !slices.Equal(left.added, right.added) || !slices.Equal(left.removed, right.removed) {
-			t.Fatalf("left %+v, right %+v", left, right)
-		}
-		// a split at every point composes to the same delta too
-		for split := 1; split < len(deltas); split += 1 {
-			head, tail := deltas[0], deltas[split]
-			for _, delta := range deltas[1:split] {
-				var err error
-				if head, err = indexComposeDelta(head, delta); err != nil {
-					t.Fatal(err)
-				}
-			}
-			for _, delta := range deltas[split+1:] {
-				var err error
-				if tail, err = indexComposeDelta(tail, delta); err != nil {
-					t.Fatal(err)
-				}
-			}
-			joined, err := indexComposeDelta(head, tail)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !slices.Equal(joined.added, left.added) || !slices.Equal(joined.removed, left.removed) {
-				t.Fatalf("split at %d differs", split)
-			}
-		}
-		last := sets[len(sets)-1]
-		got, err := left.applyTo(base)
-		if err != nil || !slices.Equal(got, last) {
-			t.Fatalf("%x, %v", got, err)
-		}
-		if want := indexDeltaBetween(base, last); !slices.Equal(left.added, want.added) || !slices.Equal(left.removed, want.removed) {
-			t.Fatalf("composed %+v, direct %+v", left, want)
-		}
-	}
-}
-
-// A key added and removed again cancels, and so does the other way round, and neither reaches the composed delta.
-func TestComposedDeltaCancels(t *testing.T) {
-	composed, err := indexComposeDelta(
-		indexDelta{added: indexKeySet{1, 2}, removed: indexKeySet{7, 8}},
-		indexDelta{added: indexKeySet{7, 9}, removed: indexKeySet{2, 6}},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !slices.Equal(composed.added, indexKeySet{1, 9}) || !slices.Equal(composed.removed, indexKeySet{6, 8}) {
-		t.Errorf("%+v", composed)
-	}
-}
-
-func TestDeltasThatCannotComposeAreRefused(t *testing.T) {
-	cases := []struct{ first, second indexDelta }{
-		{first: indexDelta{added: indexKeySet{1}}, second: indexDelta{added: indexKeySet{1}}},
-		{first: indexDelta{removed: indexKeySet{1}}, second: indexDelta{removed: indexKeySet{1}}},
-		{first: indexDelta{added: indexKeySet{1}, removed: indexKeySet{1}}, second: indexDelta{}},
-		{first: indexDelta{}, second: indexDelta{added: indexKeySet{2, 1}}},
-	}
-	for _, c := range cases {
-		if composed, err := indexComposeDelta(c.first, c.second); !errors.Is(err, errIndexMalformed) {
-			t.Errorf("%+v then %+v gave %+v", c.first, c.second, composed)
-		}
 	}
 }
 
@@ -1039,16 +888,53 @@ func TestEntryRefusals(t *testing.T) {
 		{name: "a cut key", entry: []byte{3, 1, 2, 3}},
 		{name: "a full entry's count off its set", entry: testRawEntry(1, 1, row(1), two)},
 		{name: "a full entry with no set", entry: testRawEntry(1, 1, row(0))},
-		{name: "a diff's base at its version", entry: testRawEntry(2, 5, indexAppendVByte(nil, 5), row(2), two, empty)},
-		{name: "a diff's base above its version", entry: testRawEntry(2, 5, indexAppendVByte(nil, 6), row(2), two, empty)},
-		{name: "a key added and removed", entry: testRawEntry(2, 5, indexAppendVByte(nil, 4), row(2), two, two)},
-		{name: "a diff's count below what it added", entry: testRawEntry(2, 5, indexAppendVByte(nil, 4), row(1), two, empty)},
+		{name: "kind 2, reserved, bare", entry: testRawEntry(2, 5)},
+		{name: "kind 2, reserved, with a diff's fields", entry: testRawEntry(2, 5, indexAppendVByte(nil, 4), row(2), two, empty)},
 		{name: "a non-minimal version", entry: append(append([]byte{3}, make([]byte, 16)...), 0x81, 0x00, 0x01)},
 	}
 	for _, c := range cases {
 		if entry, err := testDecodeEntry(c.entry, false); !errors.Is(err, errIndexMalformed) {
 			t.Errorf("%s decoded to %+v", c.name, entry)
 		}
+	}
+}
+
+// §11.14's entry row (owner decision 584): kind 2 was a diff's and stays reserved in format 2. A decoder refuses it as
+// it refuses any kind it does not know, alone and in a slot, whatever follows it, and no encoder writes it.
+func TestReservedDiffKindIsRefused(t *testing.T) {
+	const reservedKind = 2
+	settings := DefaultIndexFormatSettings()
+	keys := indexKeySet{1, 2}
+	row, err := (&indexRow{docKind: indexDocFile, trigramCount: 2, locator: "f"}).appendEncoded(nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the bytes a diff took before the kind was reserved: base version, row, added, removed
+	diff := testRawEntry(reservedKind, 5, indexAppendVByte(nil, 4), row, testKeySetBytes(t, keys), testKeySetBytes(t, indexKeySet{}))
+	// the same key and version as a full entry, which decodes, so the kind alone is what refuses
+	full := testRawEntry(byte(indexEntryFull), 5, row, testKeySetBytes(t, keys))
+	if _, err := testDecodeEntry(full, false); err != nil {
+		t.Fatalf("the full entry beside it: %v", err)
+	}
+	for name, encoded := range map[string][]byte{"a diff's bytes": diff, "the kind alone": testRawEntry(reservedKind, 5)} {
+		if entry, err := testDecodeEntry(encoded, false); !errors.Is(err, errIndexMalformed) {
+			t.Errorf("%s decoded to %+v: %v", name, entry, err)
+		}
+		for _, companion := range []bool{false, true} {
+			if slot, err := testDecodeFile(testRawFile(t, testFilledHeader(indexFileSlot, 1, encoded), encoded, nil), companion); !errors.Is(err, errIndexMalformed) {
+				t.Errorf("%s in a slot (companion %t) decoded to %+v: %v", name, companion, slot, err)
+			}
+		}
+	}
+	if slot, err := testDecodeFile(testRawFile(t, testFilledHeader(indexFileSlot, 1, full), full, nil), false); err != nil || len(slot.entries) != 1 {
+		t.Errorf("the full entry in a slot: %v", err)
+	}
+	written := &indexEntry{kind: reservedKind, key: testIndexId("doc", 1), version: 5, timeSeconds: 1800000000, row: testFileRow(keys), keys: keys}
+	if encoded, err := written.appendEncoded(nil, false, settings); !errors.Is(err, errIndexMalformed) {
+		t.Errorf("the encoder wrote kind 2: %x, %v", encoded, err)
+	}
+	if file, err := indexEncodeSlot(&indexSlot{header: testSlotHeader(indexFileSlot), entries: []*indexEntry{written}}, false, settings); !errors.Is(err, errIndexMalformed) {
+		t.Errorf("a slot was written with kind 2: %d B, %v", len(file), err)
 	}
 }
 

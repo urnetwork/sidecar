@@ -63,7 +63,7 @@ type indexRow struct {
 	// The source's length, a whole file's on each of its chunks' rows.
 	byteCount uint64
 	chunk     uint64
-	// n_d: the size of the document's key set, on a diff's row too.
+	// n_d: the size of the document's key set.
 	trigramCount   uint64
 	startedSeconds uint64
 	expiresSeconds uint64

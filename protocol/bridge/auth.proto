@@ -107,11 +107,9 @@ enum ProposalKind {
   PROPOSAL_KIND_AUTHORITY = 1;           // k of n (7.9's several row)
   PROPOSAL_KIND_RECOVERY_SCOPED = 2;     // a scoped recovery admission filed with self_admit off: completes on one
                                          //   cosign by an admission signer (7.9's self_admit row)
-  PROPOSAL_KIND_RESTORED = 3;            // a restored binding's scoped admission filed with self_admit on: activates
-                                         //   at the window with no counted cosign (owner decision 149)
-  PROPOSAL_KIND_RESTORED_COSIGNED = 4;   // a restored binding's scoped admission filed with self_admit off: activates
-                                         //   at the window only with one admission signer's cosign among its signers
-                                         //   (owner decision 314; QD-952)
+  reserved 3, 4;                         // the restored kinds, removed before the format froze (QD-1034): a cascade's
+                                         //   void of a recovery binding leaves no binding, and a row of either is
+                                         //   refused
 }
 
 message ProjectionSettings {
@@ -152,7 +150,8 @@ message IndexerRow {
 message MemberRow {
   bytes      member_id = 1;
   MemberRole role = 2;
-  bytes      recovery_key_sha256 = 3;   // the binding in effect, windowed while a newer one below is void
+  bytes      recovery_key_sha256 = 3;   // the binding in effect, the newest below; empty for none, as once a
+                                        //   cascade voids that one (QD-1034)
   repeated   RecoveryBindingRow bindings = 4;   // newest first
 }
 

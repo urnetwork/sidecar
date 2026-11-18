@@ -8,7 +8,7 @@
 // index's reserved writer's write held to the version the plan read, naming the head's index_epoch, so one head CAS
 // commits content and index. An in-ref push needs no pin and no life of its own: its content CAS is its fence.
 //
-// Documents (1.2.3's choose): a put is extracted in one pass (SEARCH-M10-44's form), one document a chunk, each a full
+// Documents (§11.14's dependency row): a put is extracted in one pass (SEARCH-M10-44's form), one document a chunk, each a full
 // entry at the version the plan writes, replacing the version it read; a removal, a version turned binary and a chunk
 // D6 skips are tombstones at the version, and a version with fewer chunks than the one it replaces writes tombstones
 // for the chunk numbers from its count up to the replaced version's less one, the replaced count taken from the
@@ -188,7 +188,7 @@ func (self *IndexWriter) Prepare(ctx context.Context, plan *EvsWritePlan) error 
 		if err != nil {
 			return err
 		}
-		files, removals, _, err = indexMergeHeadPlan(ctx, view, view.writeRoot(), headPlan, padKey, tables)
+		files, removals, err = indexMergeHeadPlan(ctx, view, view.writeRoot(), headPlan, padKey, tables)
 		if errors.Is(err, errIndexCollected) {
 			return errEvsIndexMoved
 		}
@@ -244,7 +244,7 @@ type indexWriterExtraction struct {
 	text    bool
 }
 
-// Enters one change's documents (1.2.3's choose); false where the replaced version's text is needed and cannot be
+// Enters one change's documents; false where the replaced version's text is needed and cannot be
 // read, so the push writes no entry.
 func (self *indexWriterDocuments) enter(ctx context.Context, change *indexWriterChange) (bool, error) {
 	planned := change.planned
@@ -304,8 +304,7 @@ func (self *indexWriterDocuments) enter(ctx context.Context, change *indexWriter
 			return false, err
 		}
 		self.pending = append(self.pending, &indexPendingDocument{
-			kind: indexEntryFull, key: key, version: planned.Version, replaces: planned.BaseEntryVersion,
-			keys: document.keys, row: document.row,
+			kind: indexEntryFull, key: key, version: planned.Version, keys: document.keys, row: document.row,
 		})
 	}
 	for _, chunk := range extraction.skipped {

@@ -503,7 +503,7 @@ func TestEraseMaskGivesWayToSetListing(t *testing.T) {
 func TestCutAppliesAtOnceThroughTheEraser(t *testing.T) {
 	headWorld := testNewHeadWorld()
 	writer := evsTestId("writer a")
-	headWorld.push(t, writer, testLive("d", 1, 1, 0, testHeadKeys(1, 0)))
+	headWorld.push(t, writer, testLive("d", 1, 1, testHeadKeys(1, 0)))
 	repoId, refId := evsTestId("view repo"), evsTestId("view ref")
 	world := newTestDeleteWorld(t, repoId, refId)
 	ctx := t.Context()

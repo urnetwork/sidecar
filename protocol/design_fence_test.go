@@ -3,7 +3,8 @@
 // package declares beyond the fences is written out in testUnfencedFence, with where the design writes it, which is
 // where a reviewer reads what this repository added to the design's wire, and a field an owner's answer adds to a
 // fenced message before design-records folds it in is in testFenceAdditions, with the question that holds the answer,
-// as one it takes out, its number reserved, is in testFenceReservations.
+// as one it takes out, its number reserved, is in testFenceReservations, and an enum value it takes out in
+// testFenceValueReservations.
 
 package protocol
 
@@ -284,7 +285,7 @@ func testParseFences(t *testing.T, fences *testFences, document []byte) int {
 
 // Every fenced proto block in DESIGN.md and RECORD.md, then testUnfencedFence, read into one set of declarations,
 // with testFenceAdditions' fields and testFenceValueAdditions' values joining the fences they extend and
-// testFenceReservations' fields leaving theirs. A declaration that later gains a fence is then written twice, which
+// testFenceReservations' fields and testFenceValueReservations' values leaving theirs. A declaration that later gains a fence is then written twice, which
 // says to take it out of testUnfencedFence, and an added field or value the design comes to write, or a reserved one
 // it comes to reserve, fails until its line leaves its list.
 func testReadFences(t *testing.T) *testFences {
@@ -319,6 +320,9 @@ func testReadFences(t *testing.T) *testFences {
 		t.Error(finding)
 	}
 	for _, finding := range testApplyReservations(fences, testFenceReservations) {
+		t.Error(finding)
+	}
+	for _, finding := range testApplyValueReservations(fences, testFenceValueReservations) {
 		t.Error(finding)
 	}
 	return fences
@@ -374,6 +378,55 @@ func TestFenceReservationsTakeOnlyWhatTheDesignWrites(t *testing.T) {
 	} {
 		if findings := testApplyReservations(planted(), []testFenceReservation{reservation}); len(findings) != 1 {
 			t.Errorf("%s.%s at %d: %v", reservation.message, reservation.name, reservation.number, findings)
+		}
+	}
+}
+
+// Takes each value out of the enum fence that writes it and reserves its number there, and says which cannot leave:
+// an enum no fence writes, a value its fence no longer writes at that number, or a number the design now reserves
+// itself, whose line should leave the list.
+func testApplyValueReservations(fences *testFences, reservations []testFenceValueReservation) []string {
+	findings := []string{}
+	for _, reservation := range reservations {
+		enum := fences.enums[reservation.enum]
+		if enum == nil {
+			findings = append(findings, fmt.Sprintf("%s loses %s by %s, and no fence writes that enum", reservation.enum, reservation.name, reservation.question))
+			continue
+		}
+		number, written := enum.values[reservation.name]
+		if !written || number != reservation.number || slices.Contains(enum.reservedNumbers, reservation.number) {
+			findings = append(findings, fmt.Sprintf("the design no longer writes %s.%s at %d, or reserves it: drop its line from testFenceValueReservations (%s)", reservation.enum, reservation.name, reservation.number, reservation.question))
+			continue
+		}
+		delete(enum.values, reservation.name)
+		enum.reservedNumbers = append(enum.reservedNumbers, reservation.number)
+	}
+	return findings
+}
+
+// The value reservation list's own checks, on fences planted for it: a written value leaves and its number is
+// reserved, and a value the fence does not write, one it writes at another number, a number it already reserves, or an
+// enum no fence writes is a finding.
+func TestFenceValueReservationsTakeOnlyWhatTheDesignWrites(t *testing.T) {
+	planted := func() *testFences {
+		return &testFences{messages: map[string]*testFenceMessage{}, enums: map[string]*testFenceEnum{
+			"Planted": {path: "protocol/types.proto", values: map[string]int32{"PLANTED_NONE": 0, "PLANTED_KEPT": 1, "PLANTED_LEAVING": 2}, reservedNumbers: []int32{9}},
+		}}
+	}
+	fences := planted()
+	findings := testApplyValueReservations(fences, []testFenceValueReservation{{enum: "Planted", name: "PLANTED_LEAVING", number: 2, question: "q"}})
+	enum := fences.enums["Planted"]
+	if _, written := enum.values["PLANTED_LEAVING"]; len(findings) != 0 || written || len(enum.values) != 2 || !slices.Equal(enum.reservedNumbers, []int32{9, 2}) {
+		t.Errorf("a written value: %v, %+v", findings, enum)
+	}
+	for _, reservation := range []testFenceValueReservation{
+		{enum: "Planted", name: "PLANTED_UNWRITTEN", number: 3, question: "q"},
+		{enum: "Planted", name: "PLANTED_LEAVING", number: 4, question: "q"},
+		{enum: "Planted", name: "PLANTED_KEPT", number: 9, question: "q"},
+		{enum: "Unwritten", name: "UNWRITTEN_LEAVING", number: 2, question: "q"},
+	} {
+		if findings := testApplyValueReservations(planted(), []testFenceValueReservation{reservation}); len(findings) != 1 {
+			t.Errorf("%s.%s at %d: %v", reservation.enum, reservation.name, reservation.number, findings)
 		}
 	}
 }

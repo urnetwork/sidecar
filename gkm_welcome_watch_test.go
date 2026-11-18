@@ -329,7 +329,7 @@ func TestTheWelcomeAsksTimerRunsTheEngineWhenItFallsDue(t *testing.T) {
 }
 
 // Pending's Unwelcomed is a Remove and an Add of the same leaf, or neither: a joiner that may join is in both, its
-// seat kept; one that may not join now, a device not anchored, keeps its leaf.
+// seat kept; one that may not join now, an owner-bound repo's unconsented device, keeps its leaf.
 func TestAnUnwelcomedLeafIsRemovedOnlyWithItsAdd(t *testing.T) {
 	world := newGkmWorld(t, protocol.RepoKind_REPO_KIND_GENERAL)
 	a := world.admit("a")
@@ -342,10 +342,10 @@ func TestAnUnwelcomedLeafIsRemovedOnlyWithItsAdd(t *testing.T) {
 		{LeafIndex: 0, SidecarId: a.id, Credential: a.credential},
 		{LeafIndex: 1, SidecarId: d.id, Credential: d.credential},
 	}
-	pendingWith := func(seatCount int, anchored func(sidecarId sidecar.Id) bool) *sidecar.GkmPending {
+	pendingWith := func(seatCount int) *sidecar.GkmPending {
 		t.Helper()
 		pending, err := sidecar.GkmPendingChanges(view, &sidecar.GkmPendingArgs{
-			RepoId: world.repoId, Roster: roster, Unwelcomed: []sidecar.Id{d.id}, Anchored: anchored,
+			RepoId: world.repoId, Roster: roster, Unwelcomed: []sidecar.Id{d.id},
 			SeatCount: seatCount, ScheduleInterval: 30 * 24 * time.Hour, StaleRemoveMargin: 24 * time.Hour, Now: world.now,
 		})
 		if err != nil {
@@ -353,18 +353,22 @@ func TestAnUnwelcomedLeafIsRemovedOnlyWithItsAdd(t *testing.T) {
 		}
 		return pending
 	}
-	pending := pendingWith(1000, nil)
+	pending := pendingWith(1000)
 	if len(pending.Removes) != 1 || pending.Removes[0].SidecarId != d.id || !slices.Equal(pending.Adds, []sidecar.Id{d.id, e.id}) {
 		t.Errorf("a re-add: removes %v, adds %v", pending.Removes, pending.Adds)
 	}
 	// two seats, both held: the re-added joiner keeps its own, and the device outside the tree waits
-	pending = pendingWith(2, nil)
+	pending = pendingWith(2)
 	if len(pending.Removes) != 1 || !slices.Equal(pending.Adds, []sidecar.Id{d.id}) || !slices.Equal(pending.Waiting, []sidecar.Id{e.id}) {
 		t.Errorf("a re-add in a full tree: removes %v, adds %v, waiting %v", pending.Removes, pending.Adds, pending.Waiting)
 	}
-	pending = pendingWith(1000, func(sidecarId sidecar.Id) bool { return sidecarId != d.id })
-	if len(pending.Removes) != 0 || !slices.Equal(pending.Adds, []sidecar.Id{e.id}) || !slices.Equal(pending.Unanchored, []sidecar.Id{d.id}) {
-		t.Errorf("a joiner that may not join now: removes %v, adds %v, unanchored %v", pending.Removes, pending.Adds, pending.Unanchored)
+	// the repo owner-bound and the joiner not consented: it may not join now, so it is not removed either
+	world.repo.OwnerMemberId = world.memberId.Bytes()
+	world.repo.ConsentedSidecarIds = [][]byte{a.id.Bytes(), e.id.Bytes()}
+	view = world.state()
+	pending = pendingWith(1000)
+	if len(pending.Removes) != 0 || !slices.Equal(pending.Adds, []sidecar.Id{e.id}) || !slices.Equal(pending.Unconsented, []sidecar.Id{d.id}) {
+		t.Errorf("a joiner that may not join now: removes %v, adds %v, unconsented %v", pending.Removes, pending.Adds, pending.Unconsented)
 	}
 }
 

@@ -250,12 +250,8 @@ func (self *SearchTestWorld) PushDocuments(ctx context.Context, writer Id, at ti
 		if err != nil {
 			return err
 		}
-		replaces := uint64(0)
-		if 1 < document.Version {
-			replaces = document.Version - 1
-		}
 		pending = append(pending, &indexPendingDocument{
-			kind: indexEntryFull, key: prepared.key, version: document.Version, replaces: replaces, keys: prepared.keys, row: prepared.row,
+			kind: indexEntryFull, key: prepared.key, version: document.Version, keys: prepared.keys, row: prepared.row,
 		})
 	}
 	store := self.ref.store(writer)

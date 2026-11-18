@@ -334,7 +334,7 @@ func TestASignerCommitsItsAddWithNoAdminOnline(t *testing.T) {
 }
 
 // KF2's waits: a device with no KeyPackage is not added and nothing is committed for it; an owner-bound repo's
-// unconsented device is parked with approval_pending; a device a restored binding admitted waits for its anchor.
+// unconsented device is parked with approval_pending.
 func TestTheEngineAddsOnlyADeviceThatMayJoin(t *testing.T) {
 	world := newGkmEngineWorld(t, protocol.RepoKind_REPO_KIND_VAULT)
 	a := world.flows[world.a]

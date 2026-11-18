@@ -300,9 +300,8 @@ func (self *SearchLocalLayer) partition() (*searchPartitionSource, error) {
 		return nil, err
 	}
 	return &searchPartitionSource{
-		partition:      searchPartitionLocal,
-		slots:          []*searchSlotSource{{slot: &indexSlot{entries: entries}, head: true, path: "local"}},
-		formatSettings: self.args.FormatSettings,
+		partition: searchPartitionLocal,
+		slots:     []*searchSlotSource{{slot: &indexSlot{entries: entries}, path: "local"}},
 	}, nil
 }
 
@@ -352,8 +351,8 @@ func (self *SearchLocalLayer) decode(encoded []byte) error {
 		if decoder.err != nil {
 			return decoder.err
 		}
-		if entry.kind == indexEntryDiff || previous != nil && indexCompareEntries(previous, entry) >= 0 || entries[entry.key] != nil {
-			return fmt.Errorf("%w: a local layer's entries out of order, repeated or diffs", ErrSearchCacheArgs)
+		if previous != nil && indexCompareEntries(previous, entry) >= 0 || entries[entry.key] != nil {
+			return fmt.Errorf("%w: a local layer's entries out of order or repeated", ErrSearchCacheArgs)
 		}
 		previous = entry
 		entries[entry.key] = entry

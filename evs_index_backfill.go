@@ -19,8 +19,6 @@
 //	           superseded entry is never written); the erasure set's documents and any whose content an ERASE left
 //	           unopenable are skipped; a version the device ignores under the repo's prefix rules is never indexed; a
 //	           ref DELETE gives a ref tombstone on ur/index; on a record log each run touched gets its card (15.2.9)
-//	re-entry   a document whose unabsorbed diff has no base (1.2.9's malformed row; "re-enter a broken chain's
-//	           version" in §11.14's chains row as 1.7 rewords it) is entered again from its text at p_R
 //	coverage   {R, h, horizon} in every slot the push writes, beside its writer's rows carried forward; on ur/index
 //	           also {R, p_R, own} where this device signed no push in (h, p_R] that is still unindexed
 //
@@ -173,7 +171,7 @@ type indexBackfillRef struct {
 	coverage *indexCoverage
 	// The horizon the push raises the ref to; 0 where nothing was due.
 	h uint64
-	// The entries the push carries for the ref, re-entries included.
+	// The entries the push carries for the ref.
 	entryCount int
 }
 
@@ -182,9 +180,7 @@ type indexBackfillOutcome struct {
 	committed *indexCommitted
 	skipped   indexBackfillSkip
 	refs      []*indexBackfillRef
-	// The documents entered again for a diff with no base.
-	reentered [][indexIdByteCount]byte
-	// index_malformed for each file the view alarmed and each diff a merge in the push could not compose.
+	// index_malformed for each file the view alarmed.
 	events []SidecarEvent
 	// Builds, the committed one included.
 	attempts int
@@ -263,7 +259,6 @@ func (self *IndexBackfiller) attempt(ctx context.Context, outcome *indexBackfill
 	}
 	outcome.events = view.events()
 	outcome.refs = nil
-	outcome.reentered = nil
 	if view.erasureSetUnreadable {
 		return false, errIndexErasureSetUnreadable
 	}
@@ -286,9 +281,7 @@ func (self *IndexBackfiller) attempt(ctx context.Context, outcome *indexBackfill
 		root:       root,
 		signedTime: signedTime,
 		normalizer: normalizer,
-		refIdPaths: map[Id]map[string]bool{},
 	}
-	pins := map[Id]uint64{}
 	for _, content := range self.args.contents {
 		// 3 and 4: R's pin, read after the index, and what is due of it
 		ref, err := build.refWork(ctx, content)
@@ -299,16 +292,7 @@ func (self *IndexBackfiller) attempt(ctx context.Context, outcome *indexBackfill
 			return false, err
 		}
 		outcome.refs = append(outcome.refs, ref)
-		pins[ref.refId] = ref.pin
 	}
-	reentered, err := build.reenter(ctx, pins)
-	if errors.Is(err, errIndexCollected) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	outcome.reentered = reentered
 	if len(build.pending) == 0 && len(build.rows) == 0 {
 		for _, ref := range outcome.refs {
 			self.raiseFloor(ref.refId, ref.coverage.indexedThrough)
@@ -343,12 +327,10 @@ func (self *IndexBackfiller) attempt(ctx context.Context, outcome *indexBackfill
 		if err != nil {
 			return false, err
 		}
-		var malformed []*indexMalformedDiff
-		files, removals, malformed, err = indexMergeHeadPlan(ctx, view, root, plan, padKey, self.args.tables)
+		files, removals, err = indexMergeHeadPlan(ctx, view, root, plan, padKey, self.args.tables)
 		if err != nil {
 			return false, indexRerunCollected(err)
 		}
-		outcome.events = append(outcome.events, indexMalformedEvents(view, malformed)...)
 	}
 	testHookBarrier("evs.index.backfill.built", self.barrierKey())
 
@@ -388,8 +370,6 @@ type indexBackfillBuild struct {
 	// The entries the push carries, and the coverage rows it raises.
 	pending []*indexPendingDocument
 	rows    []*protocol.IndexCoverage
-	// The paths entered for each content ref, so a re-entry adds none twice.
-	refIdPaths map[Id]map[string]bool
 }
 
 // What one content ref gives the push: its pin, its coverage, h, and its entries and rows added to the build's.
@@ -610,15 +590,6 @@ func (self *indexBackfillBuild) heldKeys(ctx context.Context) (*indexHeldKeys, e
 func (self *indexBackfillBuild) enter(ctx context.Context, refId Id, path string, state *indexContentState) error {
 	args := &self.backfiller.args
 	settings := self.view.settings
-	paths := self.refIdPaths[refId]
-	if paths == nil {
-		paths = map[string]bool{}
-		self.refIdPaths[refId] = paths
-	}
-	if paths[path] {
-		return nil
-	}
-	paths[path] = true
 	held, err := self.heldKeys(ctx)
 	if err != nil {
 		return err
@@ -642,10 +613,6 @@ func (self *indexBackfillBuild) enter(ctx context.Context, refId Id, path string
 	if state.removed {
 		return tombstonesFrom(0)
 	}
-	replaces := uint64(0)
-	if 1 < state.version {
-		replaces = state.version - 1
-	}
 	chunkCount := uint32(0)
 	take := func(chunk uint32, keys indexKeySet, row *indexRow, skipped bool) error {
 		key, err := keyOf(chunk)
@@ -659,7 +626,7 @@ func (self *indexBackfillBuild) enter(ctx context.Context, refId Id, path string
 			}
 			return nil
 		}
-		self.pending = append(self.pending, &indexPendingDocument{kind: indexEntryFull, key: key, version: state.version, replaces: replaces, keys: keys, row: row})
+		self.pending = append(self.pending, &indexPendingDocument{kind: indexEntryFull, key: key, version: state.version, keys: keys, row: row})
 		return nil
 	}
 	if state.documents != nil {
@@ -745,82 +712,6 @@ func (self *indexBackfillBuild) enterRegistered(ctx context.Context, refId Id, d
 	return nil
 }
 
-// Enters again, from their text at their ref's pin, the documents whose unabsorbed diff has no base: the key of each
-// such diff is matched to a path by the doc_keys a host with the text computes for each path's possible chunks (a
-// chunk count past four times the path's bytes over ChunkByteCount no extraction gives, R3). Answers the keys entered.
-func (self *indexBackfillBuild) reenter(ctx context.Context, pins map[Id]uint64) ([][indexIdByteCount]byte, error) {
-	args := &self.backfiller.args
-	baseless := indexBaselessDiffs(self.view, self.root)
-	if len(baseless) == 0 {
-		return nil, nil
-	}
-	entered := [][indexIdByteCount]byte{}
-	for _, content := range args.contents {
-		refId := content.RefId()
-		pin := pins[refId]
-		matched := []string{}
-		err := content.Paths(ctx, pin, func(path string, byteCount uint64) error {
-			chunkBound := 4*byteCount/uint64(self.view.settings.ChunkByteCount) + 1
-			for chunk := uint64(0); chunk <= chunkBound; chunk += 1 {
-				key, err := indexDocKey(args.refKey, refId, []byte(path), uint32(chunk))
-				if err != nil {
-					return err
-				}
-				if baseless[key] {
-					entered = append(entered, key)
-					matched = append(matched, path)
-					return nil
-				}
-			}
-			return nil
-		})
-		if err != nil {
-			return nil, err
-		}
-		slices.Sort(matched)
-		for _, path := range slices.Compact(matched) {
-			state, err := content.State(ctx, path, pin)
-			if err != nil {
-				return nil, err
-			}
-			if state.version == 0 || state.unopenable {
-				continue
-			}
-			if err := self.enter(ctx, refId, path, state); err != nil {
-				return nil, err
-			}
-		}
-	}
-	slices.SortFunc(entered, func(a [indexIdByteCount]byte, b [indexIdByteCount]byte) int {
-		return compareIndexKeys(a, b)
-	})
-	return entered, nil
-}
-
-// The keys of root's unabsorbed diffs whose base no other file of their writer's holds (1.2.9's malformed row), less
-// those whose base version the erasure set lists, which are excused (15.2.6).
-func indexBaselessDiffs(view *indexView, root *indexViewRoot) map[[indexIdByteCount]byte]bool {
-	baseless := map[[indexIdByteCount]byte]bool{}
-	for _, bucket := range root.buckets {
-		for _, writer := range bucket.writers {
-			for _, file := range writer.unabsorbed(bucket.absorbedSeq(writer.sidecarId)) {
-				if file.path.kind != indexPathSlot {
-					continue
-				}
-				for _, entry := range file.slot.entries {
-					if entry.kind != indexEntryDiff || view.erased(entry.key, entry.baseVersion) {
-						continue
-					}
-					if base, _ := indexResolveBase(writer, entry.key, entry.baseVersion, file); base == nil {
-						baseless[entry.key] = true
-					}
-				}
-			}
-		}
-	}
-	return baseless
-}
-
 // Each key's newest entry over every partition of a root: whether the index holds a document live, as a host with
 // the text checks before it writes a tombstone.
 type indexHeldKeys struct {
@@ -850,7 +741,7 @@ func indexLoadHeldKeys(ctx context.Context, view *indexView, root *indexViewRoot
 		for key, entries := range documents.entries {
 			for _, entry := range entries {
 				switch entry.kind {
-				case indexEntryFull, indexEntryDiff:
+				case indexEntryFull:
 					consider(key, entry.version, true)
 				case indexEntryTombstone:
 					consider(key, entry.version, false)

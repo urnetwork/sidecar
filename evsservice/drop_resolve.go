@@ -740,6 +740,8 @@ type dropResolved struct {
 	drop     *DropCovered
 	mismatch string
 	listed   []*dropHit
+	// listed, a path at a time, which the shape reads each version's base from (drop_resolve_shape.go)
+	pathListed [][]*dropHit
 }
 
 // Resolve (EVSB-M10-04): see the file header.
@@ -759,7 +761,7 @@ func (self *DropResolve) Resolve(ctx context.Context, request *DropResolveReques
 	slices.SortFunc(refIds, func(a sidecar.Id, b sidecar.Id) int { return bytes.Compare(a[:], b[:]) })
 	resolved := []*dropResolved{}
 	for _, refId := range refIds {
-		refResolved, byteCount, err := self.resolveRef(ctx, request, refId, refDrops[refId])
+		refResolved, byteCount, err := self.resolveRef(ctx, request, refId, refDrops[refId], &result.Shape)
 		result.ScanByteCount += byteCount
 		if err != nil {
 			return result, err
@@ -848,8 +850,9 @@ func putDropCandFiles(ctx context.Context, files *DropFiles, repoId sidecar.Id, 
 	}
 }
 
-// One ref's covered drops resolved over one scan of its history.
-func (self *DropResolve) resolveRef(ctx context.Context, request *DropResolveRequest, refId sidecar.Id, drops []*DropCovered) ([]*dropResolved, int64, error) {
+// One ref's covered drops resolved over one scan of its history. With shape set, what the resolved drops' listed
+// versions show of the repo's history is read into it (drop_resolve_shape.go); a reindex passes nil and reads none.
+func (self *DropResolve) resolveRef(ctx context.Context, request *DropResolveRequest, refId sidecar.Id, drops []*DropCovered, shape *DropListedShape) ([]*dropResolved, int64, error) {
 	head, err := dropReadHead(ctx, request.Cluster, request.RepoId, refId)
 	if err != nil {
 		return nil, 0, err
@@ -926,10 +929,16 @@ func (self *DropResolve) resolveRef(ctx context.Context, request *DropResolveReq
 				if detail := self.describeMismatch(reader, one.drop, pathIndex, bodies[i], verdict.listed); detail != "" {
 					one.mismatch += "; " + detail
 				}
-				one.listed = nil
+				one.listed, one.pathListed = nil, nil
 				break
 			}
 			one.listed = append(one.listed, verdict.listed...)
+			one.pathListed = append(one.pathListed, verdict.listed)
+		}
+	}
+	if shape != nil {
+		if err := self.listedShape(reader, resolved, shape, request.Renew); err != nil {
+			return nil, reader.byteCount, err
 		}
 	}
 	return resolved, reader.byteCount, nil
@@ -1566,7 +1575,7 @@ func (self *DropResolve) Reindex(ctx context.Context, request *DropReindexReques
 	}
 	resolved := []*dropResolved{}
 	for refId, refCovered := range refDrops {
-		refResolved, byteCount, err := self.resolveRef(ctx, resolveRequest, refId, refCovered)
+		refResolved, byteCount, err := self.resolveRef(ctx, resolveRequest, refId, refCovered, nil)
 		result.ScanByteCount += byteCount
 		if err != nil {
 			return result, err

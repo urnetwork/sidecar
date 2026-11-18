@@ -544,7 +544,7 @@ func (self *urNetworkClients) sidecarRow() *bridge.SidecarRow {
 // What the upkeep keeps at gkm for this device: KeyPackages once the newest state admits it as an untagged, standing
 // member device (§10.6), a joining device's unconfirmed state included, since F1 has a new device upload them before
 // it reads the config back to genesis and its admitter claims one for the config group's Add (QD-817); held back while
-// a restored binding's admission waits for its anchor (§10.8).
+// a code-only recovery waits for its anchor (§7.9's anchor).
 func (self *urNetworkClients) upkeepRole() sidecar.GkmUpkeepRole {
 	role := sidecar.GkmUpkeepRole{AwaitingAnchor: self.running.RecoveryAwaitingAnchor()}
 	row := self.sidecarRow()

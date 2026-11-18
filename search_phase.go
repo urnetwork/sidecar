@@ -54,25 +54,6 @@ func searchProbeOf(versions *SearchVersionSnapshot) searchVersionProbe {
 	}
 }
 
-// The listed versions of the snapshot's erasure set, L(k), as the match asks: a diff of a listed document is left out
-// before it is resolved.
-func searchErasedOf(snapshot *SearchSyncSnapshot, format *IndexFormatSettings) func(key [indexIdByteCount]byte, version uint64) bool {
-	listed := map[[indexIdByteCount]byte]uint64{}
-	for _, file := range snapshot.manifest.Files {
-		parsed, ok := indexParsePath(file.Path, searchRootCompanion(snapshot.manifest.Root))
-		if !ok || parsed.kind != indexPathErasureSet || file.State != SearchManifestHeld || file.Small == nil {
-			continue
-		}
-		if erasureSet, err := indexDecodeErasureSet(file.Small, format); err == nil {
-			listed = indexErasureSetListed(erasureSet)
-		}
-	}
-	return func(key [indexIdByteCount]byte, version uint64) bool {
-		listedVersion, ok := listed[key]
-		return ok && version <= listedVersion
-	}
-}
-
 // One ref opened for one search: its snapshot, what its plan reads, and the reads it holds open.
 type searchOpenedRef struct {
 	engine  *SearchEngine
@@ -84,7 +65,6 @@ type searchOpenedRef struct {
 	plan    *searchRefPlan
 	source  *searchRankSource
 	probe   searchVersionProbe
-	erased  func(key [indexIdByteCount]byte, version uint64) bool
 	local   *SearchLocalLayer
 	// Kept records opened for this search, closed at its end.
 	reads []*SearchCacheRecordRead
@@ -220,7 +200,7 @@ func (self *searchOpenedRef) slotOf(ctx context.Context, file *SearchManifestFil
 // manifest's watermark absorbed.
 func (self *searchOpenedRef) bucketSource(ctx context.Context, step *searchPlanStep) (*searchPartitionSource, error) {
 	companion := self.source.companion
-	source := &searchPartitionSource{partition: step.partition, formatSettings: self.engine.format}
+	source := &searchPartitionSource{partition: step.partition}
 	absorbed := map[Id]uint32{}
 	type slotFile struct {
 		slot *indexSlot
@@ -270,7 +250,7 @@ func (self *searchOpenedRef) bucketSource(ctx context.Context, step *searchPlanS
 		seq := held.slot.header.Seq
 		head := held.path.kind == indexPathSlot && heads[writer] == seq
 		source.slots = append(source.slots, &searchSlotSource{
-			slot: held.slot, writer: writer, seq: seq, head: head, absorbed: !head && seq <= absorbed[writer],
+			slot: held.slot, writer: writer, seq: seq, absorbed: !head && seq <= absorbed[writer],
 			path: held.file.Path, signer: held.file.Signer,
 		})
 		if self.holding.normalizer == 0 {
@@ -294,7 +274,7 @@ func (self *searchOpenedRef) allSource(ctx context.Context, n uint32) (*searchPa
 		if err != nil {
 			return nil, err
 		}
-		return &searchPartitionSource{partition: searchPartitionAll, shards: []*searchShardSource{shard}, formatSettings: self.engine.format}, nil
+		return &searchPartitionSource{partition: searchPartitionAll, shards: []*searchShardSource{shard}}, nil
 	}
 	return nil, nil
 }
@@ -309,34 +289,18 @@ func (self *searchOpenedRef) landedSource(ctx context.Context, file *SearchManif
 	if err != nil {
 		return nil, err
 	}
-	return &searchPartitionSource{partition: searchPartitionAll, shards: []*searchShardSource{shard}, formatSettings: self.engine.format}, nil
+	return &searchPartitionSource{partition: searchPartitionAll, shards: []*searchShardSource{shard}}, nil
 }
 
 // Matches one partition for the query, as a ranker input of the search's step.
 func (self *searchOpenedRef) match(query *SearchQuery, source *searchPartitionSource, step int) (*searchRankInput, error) {
 	result, err := searchMatch(&searchMatchArgs{
-		query:  query,
-		source: source,
-		newest: func(key [indexIdByteCount]byte) (uint64, bool) {
-			if self.probe == nil {
-				return 0, false
-			}
-			record, err := self.probe(key)
-			if err != nil || !record.found {
-				return 0, false
-			}
-			return record.version, true
-		},
-		erased:            self.erased,
+		query:             query,
+		source:            source,
 		maxCandidateCount: self.engine.args.Settings.TooBroadCandidateCount,
 	})
 	if err != nil {
 		return nil, err
-	}
-	for _, unresolved := range result.unresolved {
-		// a current diff whose chain broke the format: index_malformed naming its signer (§11.14's chains row)
-		repoId, refId, signer := self.repoId, self.refId, unresolved.signer
-		self.engine.raise(SidecarEvent{Kind: SidecarEventIndexMalformed, RepoId: &repoId, RefId: &refId, Path: unresolved.path, SidecarId: &signer})
 	}
 	return &searchRankInput{source: self.source, partition: source.partition, step: step, result: result}, nil
 }
@@ -597,16 +561,8 @@ func (self *searchOpenedRef) matchLanded(query *SearchQuery, source *searchParti
 	}
 	rankSource := &searchRankSource{repoId: self.repoId, refId: self.refId, companion: self.source.companion, mask: mask, confirmer: self.source.confirmer}
 	result, err := searchMatch(&searchMatchArgs{
-		query:  query,
-		source: source,
-		newest: func(key [indexIdByteCount]byte) (uint64, bool) {
-			record, err := probe(key)
-			if err != nil || !record.found {
-				return 0, false
-			}
-			return record.version, true
-		},
-		erased:            self.erased,
+		query:             query,
+		source:            source,
 		maxCandidateCount: self.engine.args.Settings.TooBroadCandidateCount,
 	})
 	if err != nil {

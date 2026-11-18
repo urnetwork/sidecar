@@ -67,9 +67,11 @@ type dropChange struct {
 type dropPush struct {
 	changes    []*dropChange
 	newObjects []*sidecar.EvsNewObject
-	flags      uint32
-	dropBody   []byte
-	dropLists  []byte
+	// the committed versions its new versions' segments cite (section 13)
+	reuse     []*sidecar.EvsReuse
+	flags     uint32
+	dropBody  []byte
+	dropLists []byte
 	// a PATH_EPOCH's
 	pathEpoch        uint64
 	pathMapSha256    []byte
@@ -205,6 +207,7 @@ func (self *dropWorld) commit(refId sidecar.Id, mode protocol.EvsRefMode, push *
 		SealedMetadata: []byte("sealed metadata"), Flags: push.flags, NewObjects: push.newObjects,
 		DropBody: push.dropBody, DropLists: push.dropLists, PathMapSha256: push.pathMapSha256,
 		MapSourceVersion: push.mapSourceVersion, MapSourceChain: push.mapSourceChain, TailMoves: push.tailMoves,
+		ReuseList: push.reuse,
 	}
 	changes := slices.Clone(push.changes)
 	slices.SortStableFunc(changes, func(a *dropChange, b *dropChange) int { return a.path.Compare(b.path) })
