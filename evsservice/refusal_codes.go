@@ -188,7 +188,8 @@ const (
 	EvsCheckReasonDropState
 	// 5h, a DROP's boundary rules (§11.7's boundary row, DESIGN-DETAILS 10.2.5): a written boundary that is not the
 	// path's next version, of versioning 0 and self-contained, or a removed one that is not the standing removal, or a
-	// change no written lineage names: 409 DROP_BOUNDARY, recorded.
+	// change no written lineage names that is no index rewrite §11.14's drop row admits (QD-1078): 409 DROP_BOUNDARY,
+	// recorded.
 	EvsCheckReasonDropBoundary
 	// 5h, a DROP's lists: their count, order, repeats or hash, or a written lineage's list missing the base step 4 read
 	// (§11.7's action row): 409 DROP_LIST, recorded.

@@ -302,9 +302,11 @@ func (self *foldRun) dropMarksAt(version uint64, windowEntry *sidecar.EvsWindowE
 }
 
 // The mark a DROP's write event sets, from the marks its push's body gives: its lineage's, its through_version the
-// version written, which §11.7's boundary row makes the path's next. A write of a DROP that names no written lineage
-// for it, or a lineage through another version, breaks the rules 5c and 5h hold a DROP to: it alarms, and the first
-// folds as an ordinary write, the second with the version written.
+// version written, which §11.7's boundary row makes the path's next. A write of versioning 2 that no written lineage
+// names is one of §11.14's index rewrites, which 5h admits beside the lineages (check_drop.go; QD-1078): it folds as
+// an ordinary write and sets no mark. Any other write of a DROP that names no written lineage for it, or a lineage
+// through another version, breaks the rules 5c and 5h hold a DROP to: it alarms, and the first folds as an ordinary
+// write, the second with the version written.
 func (self *foldRun) dropMarkOf(marks map[string]*protocol.EvsDropMark, event *foldEvent) *protocol.EvsDropMark {
 	if marks == nil || event.kind != foldEventWrite {
 		return nil
@@ -312,6 +314,8 @@ func (self *foldRun) dropMarkOf(marks map[string]*protocol.EvsDropMark, event *f
 	mark := marks[string(event.change.TokenPath.Bytes())]
 	written := event.entryVersion.GetVersion()
 	switch {
+	case mark == nil && event.entryVersion.GetVersioning() == uint32(protocol.EvsVersioning_EVS_VERSIONING_INDEX):
+		return nil
 	case mark == nil:
 		self.folder.log.Errorf("[evs] alarm fold_drop: version %d's DROP writes a path no written lineage names", event.commitVersion)
 		return nil
