@@ -14,9 +14,10 @@
 //	              decision, for ur approve or the daemon's prompt (D-SDK-9)
 //	  nothing     a page Worker, quick burner, tagged, ephemeral or cloud sidecar: no host of it signs, as the
 //	              approver's standing refuses every device that is not approval-capable (D-MCP-14)
-//	templates   an app's Decide carries no uses (§18.5), and a template's approval takes 2 or more (D-MCP-11), so an
-//	            app host lists a template request with deny alone; ur approve --uses approves one. QD-1010 gives the
-//	            request the uses its agent asks for, which an app then approves as shown; until that lands, deny alone
+//	templates   an app's Decide carries no uses (§18.5), and a template's approval takes 2 or more (D-MCP-11): the
+//	            request names the uses its agent asks for (QD-1010; ApprovalRequest.uses, version 2's), which the
+//	            render shows and an app approves as shown. A version-1 template's request names no count, so an app
+//	            host lists it with deny alone, and ur approve --uses approves it
 //	log         InstallApproverLog: the approval logs the approver side reads in place of its record's, on a host
 //	            whose record has no streams bound yet (RECORD-M3-12's binding has no composition), and in tests
 //	phone       an ApprovalRequest reaches a phone by its evs hint, else §18.7's wake (§16.6's flow): an app host
@@ -109,10 +110,10 @@ func approvalHostApp(host ApprovalHost) bool {
 	return host == ApprovalHostAppLocal || host == ApprovalHostAppRemote
 }
 
-// What host may answer a request it signs on a channel: approve and deny; deny alone for a template on an app host,
-// which cannot give the template's uses (the file's templates row).
+// What host may answer a request it signs on a channel: approve and deny; deny alone on an app host for a request
+// that names no count of uses, a version-1 template's, which the app cannot give (the file's templates row).
 func approvalHostDecisions(host ApprovalHost, request *StoredApprovalRequest) []string {
-	if approvalHostApp(host) && request.Action.Action.GetScope() {
+	if _, named := request.Uses(); approvalHostApp(host) && !named {
 		return []string{SidecarDecisionDeny}
 	}
 	return []string{SidecarDecisionApprove, SidecarDecisionDeny}

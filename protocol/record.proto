@@ -27,7 +27,10 @@
 // prompts in stage 2 entries as they arrive, which a vault's run card reads (RECORD.md 7.4) and T's projection leaves
 // empty. The answer to ur-tun-default-egress-option-lock-action (QD-1060) is declared here ahead of §16.8's fence:
 // CanonicalAction gains require_default_egress = 41, an egress_change's requirement of default egress under exits
-// (QD-1053), which approvers render and the gate binds. design_unfenced_test.go lists each.
+// (QD-1053), which approvers render and the gate binds. The answer to mcp-m8-01-app-template-uses (QD-1010) is
+// declared here ahead of §16.8's fence: ApprovalRequest gains uses = 18 at its version 2, the uses its agent asks a
+// template's approval for, 1 for any other action, which approvers render and sign as ApprovalDecision.uses.
+// design_unfenced_test.go lists each.
 
 syntax = "proto3";
 package urnetwork.sidecar;
@@ -139,13 +142,21 @@ message ApprovalRequest {                   // body of an approval entry
   string summary = 7;                       // agent text, shown as untrusted
   uint32 risk = 8;                          // max(policy, classifier); agents may only raise it
   bytes requester_sidecar_id = 9; bool tainted = 10; repeated bytes approvers = 11; int64 not_after_millis = 12;
-  uint32 version = 13;                      // 1
+  uint32 version = 13;                      // 1, or 2, which adds uses (18) and always sets it; an approver that
+                                            // does not know a version refuses it
   // Daemon-built, as the action's fields are, and rendered by approvers; request_sha256 covers them: the local port a
   // socket_listen, tls_publish, bridge_forward or bridge_expose binds, a listen's weight and a publish's ALPNs
   // (QD-740), and a socket_listen's name in its one form, which every listen's request carries (QD-772). The name
   // agrees with the action's one grant_dst entry: sock:<the name> for a tls/ or smtp/ name, sock:<its token path in
   // hex> for an application name, which an approver derives under K_sock before it approves.
   uint32 local_port = 14; int32 weight = 15; repeated string alpn = 16; string socket_name = 17;
+  uint32 uses = 18;                         // version 2's (QD-1010; 16.6's multi-use row): how many distinct actions
+                                            // the agent asks the approval to cover, daemon-built and rendered as the
+                                            // fields above are: 2 or more for a template (scope = true), 1 for any
+                                            // other action, never 0. An approver signs it as ApprovalDecision.uses, or
+                                            // for a template a smaller count of 2 or more, never a larger one. A
+                                            // version-1 request sets none: it asks for 1, and a version-1 template
+                                            // names no count, which its approver gives as before
 }
 message ApprovalDecision {                  // inside §6 Signed, purpose approval; holds no run or agent id
   bytes approval_id = 1;

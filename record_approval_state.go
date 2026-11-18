@@ -588,14 +588,18 @@ func (self *ApprovalInbox) candidates(action *StoredCanonicalAction, detail *Sid
 }
 
 // The request for exactly this action, its detail, run and agent that still waits for a decision at now: filed
-// tainted when the run is tainted, since a decision on an untainted request spends nothing in a tainted run (TS1).
-// Nil for none.
-func (self *ApprovalInbox) waitingFor(action *StoredCanonicalAction, detail *SidecarActionDetail, runId *Id, agentId *Id, tainted bool, now time.Time) *approvalIndexed {
+// tainted when the run is tainted, since a decision on an untainted request spends nothing in a tainted run (TS1),
+// and asking for uses, since an approver signs the count its request names (QD-1010), so a template asked again for
+// another count, or one a version-1 request filed with none, is filed anew. Nil for none.
+func (self *ApprovalInbox) waitingFor(action *StoredCanonicalAction, detail *SidecarActionDetail, runId *Id, agentId *Id, tainted bool, uses uint32, now time.Time) *approvalIndexed {
 	for _, candidate := range self.candidates(action, detail, runId, agentId) {
 		request := candidate.request
 		approvalId := request.ApprovalId()
 		if !bytes.Equal(request.Action.Bytes, action.Bytes) || candidate.decided || self.logCancelled(approvalId) ||
 			request.Request.GetTainted() != tainted || request.Request.GetNotAfterMillis() <= now.UnixMilli() {
+			continue
+		}
+		if requestUses, named := request.Uses(); !named || requestUses != uses {
 			continue
 		}
 		return candidate
@@ -652,6 +656,10 @@ func (self *ApprovalInbox) intake(decision *StoredApprovalDecision, storedSigned
 		}
 		if !decision.Binds(request) {
 			return false, fmt.Errorf("%w: a decision that does not name its request's stored bytes", ErrApprovalRefused)
+		}
+		if requestUses, named := request.Uses(); named && requestUses < decision.Decision.GetUses() {
+			// an approver signs the count its request names or a smaller one, never more than was asked (QD-1010)
+			return false, fmt.Errorf("%w: a decision for %d uses on a request for %d", ErrApprovalRefused, decision.Decision.GetUses(), requestUses)
 		}
 		for _, keptSigned := range state.Decisions {
 			if kept, err := ParseStoredApprovalDecision(keptSigned); err == nil && bytes.Equal(kept.Bytes, decision.Bytes) {
@@ -984,15 +992,19 @@ func (self *ApprovalRouter) findOrFile(ctx context.Context, action *SidecarActio
 	if err := self.inbox.ensureLoaded(); err != nil {
 		return nil, err
 	}
+	uses, err := approvalActionUses(action, stored)
+	if err != nil {
+		return nil, err
+	}
 	self.fileLock.Lock()
 	defer self.fileLock.Unlock()
-	if waiting := self.inbox.waitingFor(stored, action.Detail, action.RunId, action.AgentId, tainted, self.args.Clock.Now()); waiting != nil {
+	if waiting := self.inbox.waitingFor(stored, action.Detail, action.RunId, action.AgentId, tainted, uses, self.args.Clock.Now()); waiting != nil {
 		if !waiting.filed {
 			self.fileToLog(waiting.request)
 		}
 		return waiting.request, nil
 	}
-	request, err := self.newRequest(action, stored, tainted)
+	request, err := self.newRequest(action, stored, tainted, uses)
 	if err != nil {
 		return nil, err
 	}
@@ -1004,10 +1016,23 @@ func (self *ApprovalRouter) findOrFile(ctx context.Context, action *SidecarActio
 	return request, nil
 }
 
-// A new ApprovalRequest for action, as stored: §16.8's fields, the approvers P names, not_after reading 3's, and the
-// action's daemon-built detail as socket_name, local_port, weight and alpn (QD-740, QD-772), which the parse holds to
-// the action's kind, a listen's name to its action's grant_dst as far as no key is needed.
-func (self *ApprovalRouter) newRequest(action *SidecarAction, stored *StoredCanonicalAction, tainted bool) (*StoredApprovalRequest, error) {
+// How many distinct actions action asks its approval to cover, as its request names it (QD-1010; §16.6's multi-use
+// row): action.Uses, 2 or more, for a template, and 1 for any other action, whose Uses is 0 or 1. ErrApprovalUses for
+// a count above 1 on an action that is no template, or a template asking for fewer than 2, which no decision could
+// spend.
+func approvalActionUses(action *SidecarAction, stored *StoredCanonicalAction) (uint32, error) {
+	uses := max(1, action.Uses)
+	if (1 < uses) != stored.Action.GetScope() {
+		return 0, fmt.Errorf("%w: uses %d, scope %t", ErrApprovalUses, uses, stored.Action.GetScope())
+	}
+	return uses, nil
+}
+
+// A new ApprovalRequest for action, as stored: §16.8's fields at version 2, the approvers P names, not_after reading
+// 3's, the action's daemon-built detail as socket_name, local_port, weight and alpn (QD-740, QD-772), which the parse
+// holds to the action's kind, a listen's name to its action's grant_dst as far as no key is needed, and uses, the
+// count approvalActionUses answered for it (QD-1010), which the parse holds to the action's scope.
+func (self *ApprovalRouter) newRequest(action *SidecarAction, stored *StoredCanonicalAction, tainted bool, uses uint32) (*StoredApprovalRequest, error) {
 	states, err := self.args.states()
 	if err != nil {
 		return nil, err
@@ -1037,7 +1062,8 @@ func (self *ApprovalRouter) newRequest(action *SidecarAction, stored *StoredCano
 		RequesterSidecarId: self.args.SidecarId.Bytes(),
 		Tainted:            tainted,
 		NotAfterMillis:     notAfterMillis,
-		Version:            1,
+		Version:            approvalRequestVersion2,
+		Uses:               uses,
 	}
 	if action.RunId != nil {
 		request.RunId = action.RunId.Bytes()

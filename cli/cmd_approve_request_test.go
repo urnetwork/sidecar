@@ -1,6 +1,7 @@
 // ur approve for requests: the list, a request's render on /dev/tty with the daemon-built action apart from the
-// agent's untrusted text and every control character dropped, a decision only on a yes, uses passed for a template, a
-// request shown refused never prompted, no terminal refused, a cancel, and the deciding methods Confirm ones.
+// agent's untrusted text and every control character dropped, a decision only on a yes, a template approved for the
+// uses its request names or the person's smaller count and refused a larger one (QD-1010), a request shown refused
+// never prompted, no terminal refused, a cancel, and the deciding methods Confirm ones.
 
 package main
 
@@ -165,17 +166,98 @@ func TestApproveRequestNeedsATerminal(t *testing.T) {
 	}
 }
 
-// A template's approval passes the person's uses; a cancel goes on a yes.
-func TestApproveRequestUsesAndCancel(t *testing.T) {
-	item := testUrDnsRequestItem(t, "")
-	target := &testUrRequestsTarget{requests: []*sidecar.SidecarRequestItem{item}}
-	daemon := startTestControlDaemon(t, target, nil)
-	cli, _, _ := newTestUrCli(daemon.socketPath)
-	cli.openTty = func() (urTty, error) { return &testTty{lines: []string{"y"}}, nil }
-	if code := cli.main(context.Background(), []string{"ur", "approve", item.ApprovalId.String(), "--uses=3"}); code != urExitOk ||
-		len(target.requestDecisions) != 1 || target.requestDecisions[0] != item.ApprovalId.String()+" approve +++" {
-		t.Errorf("--uses: exit %d, %v", code, target.requestDecisions)
+// A dns_set template's request as the approver's device renders it: at version 2 for uses, or at version 1, naming no
+// count, for 0.
+func testUrTemplateRequestItem(t *testing.T, uses uint32) *sidecar.SidecarRequestItem {
+	t.Helper()
+	action, err := sidecar.NewCanonicalAction(&protocol.CanonicalAction{
+		Kind: uint32(sidecar.SidecarActionDnsSet), Scope: true, DnsName: "app.example", DnsType: "A",
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
+	approvalId := sidecar.NewId()
+	actionId := action.ActionId(approvalId)
+	payloadSha256 := action.PayloadSha256()
+	version := uint32(2)
+	if uses == 0 {
+		version = 1
+	}
+	stored, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.ApprovalRequest{
+		ApprovalId: approvalId.Bytes(), ActionId: actionId[:], CanonicalAction: action.Bytes, PayloadSha256: payloadSha256[:],
+		Risk: uint32(sidecar.SidecarRiskNormal), RequesterSidecarId: sidecar.NewId().Bytes(), Approvers: [][]byte{sidecar.NewId().Bytes()},
+		NotAfterMillis: time.Now().Add(time.Hour).UnixMilli(), Version: version, Uses: uses,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := sidecar.ParseStoredApprovalRequest(stored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &sidecar.SidecarRequestItem{
+		ApprovalId: approvalId,
+		EntryId:    sidecar.NewId(),
+		Render:     sidecar.RenderApprovalRequest(request),
+		Decisions:  []string{sidecar.SidecarDecisionApprove, sidecar.SidecarDecisionDeny},
+	}
+}
+
+// A template whose request names 3 uses (QD-1010): the list names the count; ur approve <id> with no --uses shows it and
+// approves as shown, passing no count, which the daemon signs as the request's 3; --uses=2 narrows it; --uses=4 is
+// refused before the person is asked. A version-1 template, whose request names none, takes --uses and is refused
+// without; one action takes no count above 1. A cancel goes on a yes.
+func TestApproveRequestUsesAndCancel(t *testing.T) {
+	item := testUrTemplateRequestItem(t, 3)
+	unnamed := testUrTemplateRequestItem(t, 0)
+	single := testUrDnsRequestItem(t, "")
+	target := &testUrRequestsTarget{requests: []*sidecar.SidecarRequestItem{item, unnamed, single}}
+	daemon := startTestControlDaemon(t, target, nil)
+	cli, stdout, _ := newTestUrCli(daemon.socketPath)
+	if code := cli.main(context.Background(), []string{"ur", "approve"}); code != urExitOk ||
+		!strings.Contains(stdout.String(), item.ApprovalId.String()+"  request dns_set, template for 3 uses  approve|deny") ||
+		!strings.Contains(stdout.String(), unnamed.ApprovalId.String()+"  request dns_set, template  approve|deny") {
+		t.Fatalf("the list: exit %d: %s", code, stdout.String())
+	}
+	var tty *testTty
+	cli.openTty = func() (urTty, error) { return tty, nil }
+	approve := func(approvalId sidecar.Id, arguments ...string) int {
+		tty = &testTty{lines: []string{"y"}}
+		return cli.main(context.Background(), append([]string{"ur", "approve", approvalId.String()}, arguments...))
+	}
+
+	if code := approve(item.ApprovalId); code != urExitOk || len(target.requestDecisions) != 1 || target.requestDecisions[0] != item.ApprovalId.String()+" approve " {
+		t.Fatalf("no --uses: exit %d, %v", code, target.requestDecisions)
+	}
+	if printed := tty.written.String(); !strings.Contains(printed, "  uses: 3") || !strings.Contains(printed, "covers up to 3 actions") {
+		t.Errorf("the terminal showed:\n%s", printed)
+	}
+	if code := approve(item.ApprovalId, "--uses=2"); code != urExitOk || len(target.requestDecisions) != 2 || target.requestDecisions[1] != item.ApprovalId.String()+" approve ++" {
+		t.Fatalf("--uses=2: exit %d, %v", code, target.requestDecisions)
+	}
+	if printed := tty.written.String(); !strings.Contains(printed, "covers up to 2 actions") {
+		t.Errorf("the terminal showed:\n%s", printed)
+	}
+	for _, refused := range []struct {
+		approvalId sidecar.Id
+		arguments  []string
+	}{
+		{approvalId: item.ApprovalId, arguments: []string{"--uses=4"}},
+		{approvalId: unnamed.ApprovalId},
+		{approvalId: single.ApprovalId, arguments: []string{"--uses=2"}},
+	} {
+		if code := approve(refused.approvalId, refused.arguments...); code != urExitFailed || tty.written.Len() != 0 {
+			t.Errorf("%s %v: exit %d, asked %q", refused.approvalId, refused.arguments, code, tty.written.String())
+		}
+	}
+	if len(target.requestDecisions) != 2 {
+		t.Fatalf("a refused count decided: %v", target.requestDecisions)
+	}
+	if code := approve(unnamed.ApprovalId, "--uses=3"); code != urExitOk || len(target.requestDecisions) != 3 || target.requestDecisions[2] != unnamed.ApprovalId.String()+" approve +++" {
+		t.Errorf("a version-1 template with --uses=3: exit %d, %v", code, target.requestDecisions)
+	}
+
+	tty = &testTty{lines: []string{"y"}}
 	if code := cli.main(context.Background(), []string{"ur", "approve", "cancel", item.ApprovalId.String()}); code != urExitOk ||
 		len(target.cancels) != 1 || target.cancels[0] != item.ApprovalId {
 		t.Errorf("cancel: exit %d, %v", code, target.cancels)

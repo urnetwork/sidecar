@@ -37,11 +37,13 @@ func (self *testApprovalWorld) mailTemplate(recipients ...string) *StoredCanonic
 	return template
 }
 
-// Files template's request and keeps the phone's approval of it for uses, answering the request and the decision as
-// stored.
+// Files template's request for uses, the count its agent asks (QD-1010), and keeps the phone's approval of it for
+// those uses, answering the request and the decision as stored.
 func (self *testApprovalWorld) approvedTemplate(template *StoredCanonicalAction, uses uint32) (*StoredApprovalRequest, []byte) {
 	self.t.Helper()
-	request, err := self.router.FindOrFile(self.t.Context(), self.action(template))
+	action := self.action(template)
+	action.Uses = uses
+	request, err := self.router.FindOrFile(self.t.Context(), action)
 	if err != nil {
 		self.t.Fatal(err)
 	}
@@ -481,7 +483,8 @@ func TestDeniedAndNoLookupRefuse(t *testing.T) {
 // CORE-M3-01's TestEveryKindReachesGate on the real gate: every kind of §5.4's list reaches it through
 // Sidecar.Authorize, and none passes without a decision. A kind with a row in the kind table files its request and
 // waits; one with none is refused as the action it cannot parse. A listen's request always names its socket, the one
-// its action's grant_dst names (QD-772), so a listen asks with both.
+// its action's grant_dst names (QD-772), so a listen asks with both, and each action is a template, so it asks for
+// the 2 uses a template's request names (QD-1010).
 func TestEveryKindReachesRealGate(t *testing.T) {
 	world := newTestApprovalWorld(t)
 	sidecar, _, _ := newIdentityTestSidecar(t)
@@ -499,6 +502,7 @@ func TestEveryKindReachesRealGate(t *testing.T) {
 		}
 		action := world.action(&StoredCanonicalAction{Action: &protocol.CanonicalAction{Kind: uint32(kind)}, Bytes: canonical})
 		action.Detail = detail
+		action.Uses = 2
 		err = sidecar.Authorize(t.Context(), action, nil)
 		pending := &ApprovalPendingError{}
 		switch {
