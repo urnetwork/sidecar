@@ -266,7 +266,7 @@ func TestDirectoryIndexCardChange(t *testing.T) {
 	}
 	first := testDirectoryIndexCard(writer, 1, start, testDirectoryIndexRun(writer, "limiter-fix", 1, start, "rework the rate limiter"))
 	derived := change(nil, first)
-	if len(derived) != 1 || derived[0].tombstone || derived[0].replaces != 0 || derived[0].document.Version != 1 {
+	if len(derived) != 1 || derived[0].tombstone || derived[0].document.Version != 1 {
 		t.Fatalf("a first card: %+v", derived)
 	}
 
@@ -282,9 +282,8 @@ func TestDirectoryIndexCardChange(t *testing.T) {
 		testDirectoryIndexRun(writer, "limiter-fix", 2, start+hour, "rework the rate limiter, round two"),
 		testDirectoryIndexRun(writer, "docs", 1, start+hour, "the limiter's docs"))
 	derived = change(renewed, changed)
-	if len(derived) != 2 || derived[0].tombstone || derived[0].replaces != 1 || derived[0].document.Version != 2 ||
-		string(derived[0].document.Fields[indexFieldTitle]) != "rework the rate limiter, round two" ||
-		derived[1].replaces != 0 || string(derived[1].document.Name) != testDirectoryIndexName(writer, "docs") {
+	if len(derived) != 2 || derived[0].tombstone || derived[0].document.Version != 2 ||
+		string(derived[0].document.Fields[indexFieldTitle]) != "rework the rate limiter, round two" || string(derived[1].document.Name) != testDirectoryIndexName(writer, "docs") {
 		t.Fatalf("a content change and a new run: %+v", derived)
 	}
 
@@ -293,7 +292,7 @@ func TestDirectoryIndexCardChange(t *testing.T) {
 	ended.State = uint32(DirectoryAnnouncementStateEnded)
 	endedCard := testDirectoryIndexCard(writer, 4, start+hour, changed.GetItems()[0], ended)
 	derived = change(changed, endedCard)
-	if len(derived) != 1 || derived[0].tombstone || string(derived[0].document.Fields[searchFieldState]) != "ended" || derived[0].replaces != 1 {
+	if len(derived) != 1 || derived[0].tombstone || string(derived[0].document.Fields[searchFieldState]) != "ended" {
 		t.Fatalf("a run's end: %+v", derived)
 	}
 	dropped := testDirectoryIndexCard(writer, 5, start+2*hour, changed.GetItems()[0])
@@ -333,14 +332,14 @@ func TestDirectoryIndexRepoFileChange(t *testing.T) {
 	repoId := evsTestId("notes repo")
 	announced := testDirectoryIndexRepo(admin, repoId, 1, false)
 	derived, err := directoryIndexRepoFileChange(nil, announced)
-	if err != nil || len(derived) != 1 || derived[0].tombstone || derived[0].replaces != 0 || derived[0].document.Version != 1 {
+	if err != nil || len(derived) != 1 || derived[0].tombstone || derived[0].document.Version != 1 {
 		t.Fatalf("an announcement: %+v %v", derived, err)
 	}
 	if derived, err := directoryIndexRepoFileChange(announced, announced); err != nil || len(derived) != 0 {
 		t.Fatalf("a file rewritten at its version: %+v %v", derived, err)
 	}
 	edited := testDirectoryIndexRepo(evsTestId("admin b"), repoId, 2, false)
-	if derived, err := directoryIndexRepoFileChange(announced, edited); err != nil || len(derived) != 1 || derived[0].replaces != 1 || derived[0].document.Version != 2 {
+	if derived, err := directoryIndexRepoFileChange(announced, edited); err != nil || len(derived) != 1 || derived[0].document.Version != 2 {
 		t.Fatalf("another admin's edit: %+v %v", derived, err)
 	}
 	marker := testDirectoryIndexRepo(admin, repoId, 3, true)
@@ -353,7 +352,7 @@ func TestDirectoryIndexRepoFileChange(t *testing.T) {
 		t.Fatalf("a marker where nothing stood: %+v %v", derived, err)
 	}
 	again := testDirectoryIndexRepo(admin, repoId, 4, false)
-	if derived, err := directoryIndexRepoFileChange(marker, again); err != nil || len(derived) != 1 || derived[0].tombstone || derived[0].replaces != 0 {
+	if derived, err := directoryIndexRepoFileChange(marker, again); err != nil || len(derived) != 1 || derived[0].tombstone {
 		t.Fatalf("an announcement after a revocation: %+v %v", derived, err)
 	}
 	if derived, err := directoryIndexRepoFileChange(edited, nil); err != nil || len(derived) != 1 || !derived[0].tombstone || derived[0].document.Version != 3 {
@@ -375,7 +374,7 @@ func TestDirectoryIndexFileChange(t *testing.T) {
 		t.Fatal("the paths whose items are documents")
 	}
 	derived, err := directoryIndexFileChange(path, first, second, settings)
-	if err != nil || len(derived) != 1 || derived[0].replaces != 1 || derived[0].document.Version != 2 {
+	if err != nil || len(derived) != 1 || derived[0].document.Version != 2 {
 		t.Fatalf("a card's change: %+v %v", derived, err)
 	}
 	if derived, err := directoryIndexFileChange(path, first, nil, settings); err != nil || len(derived) != 1 || !derived[0].tombstone {
@@ -384,7 +383,7 @@ func TestDirectoryIndexFileChange(t *testing.T) {
 	if _, err := directoryIndexFileChange(path, first, []byte("no card at all"), settings); err == nil {
 		t.Fatal("a card that does not decode gave entries")
 	}
-	if derived, err := directoryIndexFileChange(path, []byte("no card at all"), second, settings); err != nil || len(derived) != 1 || derived[0].replaces != 0 {
+	if derived, err := directoryIndexFileChange(path, []byte("no card at all"), second, settings); err != nil || len(derived) != 1 {
 		t.Fatalf("a card over one no reader accepted: %+v %v", derived, err)
 	}
 	admin := evsTestId("admin a")

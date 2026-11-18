@@ -251,7 +251,7 @@ func indexDecodeSlot(file []byte, contentSha256 []byte, companion bool, settings
 			return nil, err
 		}
 		if header.Type == indexFileLargeEntry && entry.kind != indexEntryFull {
-			// a diff stands only in a slot, and a large entry's one entry is full (DESIGN-DETAILS 1.2.2)
+			// a tombstone stands only in a slot, and a large entry's one entry is full
 			return nil, indexMalformed("a large entry that is not one full entry")
 		}
 		if count := len(slot.entries); 0 < count && 0 <= bytes.Compare(slot.entries[count-1].key[:], entry.key[:]) {

@@ -387,7 +387,7 @@ func (self *IndexCompanion) attempt(ctx context.Context) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		files, removals, _, err = indexMergeHeadPlan(ctx, view, root, plan, padKey, args.tables)
+		files, removals, err = indexMergeHeadPlan(ctx, view, root, plan, padKey, args.tables)
 		if err != nil {
 			return false, indexRerunCollected(err)
 		}
@@ -457,15 +457,11 @@ func (self *IndexCompanion) ignored(ctx context.Context, ref *indexCompanionRef,
 // the pin where the bound stripped it; a removal's tombstone. Nil for a stripped put whose text the device cannot read,
 // which a backfill covers.
 func (self *IndexCompanion) pendingOf(ctx context.Context, unit *indexJournalUnit, document *indexJournalDocument, state *indexContentState, normalizer *indexNormalizer) (*indexPendingDocument, error) {
-	replaces := uint64(0)
-	if 1 < document.version {
-		replaces = document.version - 1
-	}
 	if document.remove {
 		return &indexPendingDocument{kind: indexEntryTombstone, key: document.key, version: document.version}, nil
 	}
 	if document.keys != nil {
-		return &indexPendingDocument{kind: indexEntryFull, key: document.key, version: document.version, replaces: replaces, keys: document.keys, row: document.row}, nil
+		return &indexPendingDocument{kind: indexEntryFull, key: document.key, version: document.version, keys: document.keys, row: document.row}, nil
 	}
 	if state.content == nil {
 		return nil, nil
@@ -481,7 +477,7 @@ func (self *IndexCompanion) pendingOf(ctx context.Context, unit *indexJournalUni
 		settings:   self.args.format,
 		emit: func(extracted *indexStreamDocument) error {
 			if extracted.chunk == document.chunk && !extracted.skipped {
-				found = &indexPendingDocument{kind: indexEntryFull, key: document.key, version: document.version, replaces: replaces, keys: extracted.keys, row: extracted.row}
+				found = &indexPendingDocument{kind: indexEntryFull, key: document.key, version: document.version, keys: extracted.keys, row: extracted.row}
 			}
 			return nil
 		},

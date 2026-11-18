@@ -580,10 +580,9 @@ func (self *IndexReproducer) closure(ctx context.Context, view *indexView, root 
 	return built, nil
 }
 
-// One card document a writer's push carries, and the version it replaces in the writer's files, 0 for a first.
+// One card document a writer's push carries.
 type indexDeriveDocument struct {
 	document *IndexDocument
-	replaces uint64
 	// A withdrawal's or a revocation's tombstone (§16.11's versions row): the document gives its name and the
 	// tombstone's version, and nothing else of it is read.
 	tombstone bool
@@ -612,8 +611,7 @@ func indexDerivePending(derived []*indexDeriveDocument, normalizer *indexNormali
 			continue
 		}
 		pending = append(pending, &indexPendingDocument{
-			kind: indexEntryFull, key: key, version: one.document.Version, replaces: one.replaces,
-			keys: prepared.keys, row: prepared.row,
+			kind: indexEntryFull, key: key, version: one.document.Version, keys: prepared.keys, row: prepared.row,
 		})
 	}
 	return pending, nil

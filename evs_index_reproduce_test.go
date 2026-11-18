@@ -266,7 +266,7 @@ func TestIndexDeriveHeadFromACard(t *testing.T) {
 		document.Fields[indexFieldTitle] = []byte(title)
 		return document
 	}
-	pending := func(document *IndexDocument, replaces uint64) *indexPendingDocument {
+	pending := func(document *IndexDocument) *indexPendingDocument {
 		key, err := indexDocKey(refKey, refId, document.Name, document.Chunk)
 		if err != nil {
 			t.Fatal(err)
@@ -275,13 +275,13 @@ func TestIndexDeriveHeadFromACard(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return &indexPendingDocument{kind: indexEntryFull, key: key, version: document.Version, replaces: replaces, keys: prepared.keys, row: prepared.row}
+		return &indexPendingDocument{kind: indexEntryFull, key: key, version: document.Version, keys: prepared.keys, row: prepared.row}
 	}
-	world.push(t, writer, pending(card("limiter fix", 1), 0))
+	world.push(t, writer, pending(card("limiter fix", 1)))
 
 	derive := func(pushed *IndexDocument, folded *IndexDocument) (*indexReproduceOutcome, []SidecarEvent) {
 		base := testHeldBase(t, world.ref)
-		plan, view := world.plan(t, writer, false, pending(pushed, 1))
+		plan, view := world.plan(t, writer, false, pending(pushed))
 		signedTime := world.at
 		committed, err := world.commit(t, writer, plan, view)
 		if err != nil {
@@ -290,7 +290,7 @@ func TestIndexDeriveHeadFromACard(t *testing.T) {
 		push := testReproducePush(&indexPush{baseVersion: view.head.version, signedTimeMs: signedTime.UnixMilli(), files: plan.files(), removals: plan.removals()}, committed, writer, 2)
 		raised := []SidecarEvent{}
 		outcome, err := world.reproducer(t, nil, func(event SidecarEvent) { raised = append(raised, event) }).DeriveHead(context.Background(), &indexDeriveHeadArgs{
-			push: push, base: base, documents: []*indexDeriveDocument{{document: folded, replaces: 1}}, refId: refId, refKey: refKey,
+			push: push, base: base, documents: []*indexDeriveDocument{{document: folded}}, refId: refId, refKey: refKey,
 		})
 		if err != nil {
 			t.Fatal(err)

@@ -93,10 +93,10 @@ func (self *testHeadWorld) allRows(t testing.TB) (map[[indexIdByteCount]byte]*in
 func testRollupWorld(t testing.TB) (*testHeadWorld, Id) {
 	world := testNewHeadWorld()
 	a := evsTestId("writer a")
-	world.push(t, a, testLive("u", 1, 1, 0, testHeadKeys(1, 0)), testLive("u", 2, 1, 0, testHeadKeys(2, 0)))
+	world.push(t, a, testLive("u", 1, 1, testHeadKeys(1, 0)), testLive("u", 2, 1, testHeadKeys(2, 0)))
 	world.fillUntilSealed(t, a, "f", 0)
 	world.merge(t, evsTestId("merger"))
-	world.push(t, a, testLive("u", 3, 1, 0, testHeadKeys(3, 0)))
+	world.push(t, a, testLive("u", 3, 1, testHeadKeys(3, 0)))
 	return world, a
 }
 
@@ -143,7 +143,7 @@ func TestIndexRollupOverAllRows(t *testing.T) {
 	first := world.view(t, a).writeRoot().newestBucket()
 	// the next window: u1 edited, u2 removed, u4 created and erased
 	world.at = testDayTime(first.window.endDay(), time.Hour)
-	world.push(t, a, testLive("u", 1, 2, 0, testHeadKeys(1, 1)), testRemoved("u", 2, 2), testLive("u", 4, 1, 0, testHeadKeys(4, 0)))
+	world.push(t, a, testLive("u", 1, 2, testHeadKeys(1, 1)), testRemoved("u", 2, 2), testLive("u", 4, 1, testHeadKeys(4, 0)))
 	world.at = testDayTime(first.window.endDay()+first.window.days, time.Hour)
 	world.rollUp(t, evsTestId("runner"))
 	rows, _ := world.allRows(t)
@@ -184,10 +184,10 @@ func TestIndexRollupPromotes(t *testing.T) {
 	boundary := first.window.endDay()
 	// b plans at a base before the next window opens, signed a minute before the boundary
 	world.at = testDayTime(boundary, -time.Minute)
-	planB, viewB := world.plan(t, b, true, testLive("s", 1, 3, 0, testHeadKeys(11, 1)), testRemoved("s", 2, 3))
+	planB, viewB := world.plan(t, b, true, testLive("s", 1, 3, testHeadKeys(11, 1)), testRemoved("s", 2, 3))
 	// a's older versions land first, past the boundary, opening the next bucket
 	world.at = testDayTime(boundary, time.Minute)
-	world.push(t, a, testLive("s", 1, 2, 0, testHeadKeys(11, 0)), testLive("s", 2, 2, 0, testHeadKeys(12, 0)))
+	world.push(t, a, testLive("s", 1, 2, testHeadKeys(11, 0)), testLive("s", 2, 2, testHeadKeys(12, 0)))
 	if _, err := world.commit(t, b, planB, viewB); err != nil {
 		t.Fatal(err)
 	}
@@ -235,9 +235,9 @@ func testRollupSkewWorld(t testing.TB) (*testHeadWorld, Id, uint32) {
 	b := evsTestId("writer b")
 	boundary := world.view(t, a).writeRoot().newestBucket().window.endDay()
 	world.at = testDayTime(boundary, -time.Minute)
-	planB, viewB := world.plan(t, b, true, testLive("s", 1, 3, 0, testHeadKeys(11, 1)), testRemoved("s", 2, 3))
+	planB, viewB := world.plan(t, b, true, testLive("s", 1, 3, testHeadKeys(11, 1)), testRemoved("s", 2, 3))
 	world.at = testDayTime(boundary, time.Minute)
-	world.push(t, a, testLive("s", 1, 2, 0, testHeadKeys(11, 0)), testLive("s", 2, 2, 0, testHeadKeys(12, 0)))
+	world.push(t, a, testLive("s", 1, 2, testHeadKeys(11, 0)), testLive("s", 2, 2, testHeadKeys(12, 0)))
 	world.fillUntilSealed(t, a, "g", 0)
 	if _, err := world.commit(t, b, planB, viewB); err != nil {
 		t.Fatal(err)
@@ -326,7 +326,7 @@ func TestIndexRollupNewerEntryLandsInTarget(t *testing.T) {
 		at := world.at
 		// a's clock an hour behind, inside the target's window
 		world.at = testDayTime(boundary+30, -time.Hour)
-		world.push(t, a, testLive("s", 1, 4, 0, testHeadKeys(11, 2)))
+		world.push(t, a, testLive("s", 1, 4, testHeadKeys(11, 2)))
 		world.at = at
 	}
 	outcome := world.rollUp(t, evsTestId("runner"))
@@ -465,7 +465,7 @@ func TestIndexRollupCarriesCoverage(t *testing.T) {
 	view := world.view(t, a)
 	plan, err := indexPlanHead(context.Background(), &indexHeadPlanArgs{
 		view: view, root: view.writeRoot(), writer: a, signedTimeMs: world.at.UnixMilli(), tables: testHeadTables,
-		pending:  []*indexPendingDocument{testLive("c", 1, 1, 0, testHeadKeys(1, 0))},
+		pending:  []*indexPendingDocument{testLive("c", 1, 1, testHeadKeys(1, 0))},
 		coverage: []*protocol.IndexCoverage{{RefId: refId, Version: 5, Horizon: true}, {RefId: other, Version: 9, Horizon: true}},
 	})
 	if err != nil {
@@ -480,7 +480,7 @@ func TestIndexRollupCarriesCoverage(t *testing.T) {
 	view = world.view(t, a)
 	plan, err = indexPlanHead(context.Background(), &indexHeadPlanArgs{
 		view: view, root: view.writeRoot(), writer: a, signedTimeMs: world.at.UnixMilli(), tables: testHeadTables,
-		pending:  []*indexPendingDocument{testLive("c", 2, 1, 0, testHeadKeys(2, 0))},
+		pending:  []*indexPendingDocument{testLive("c", 2, 1, testHeadKeys(2, 0))},
 		coverage: []*protocol.IndexCoverage{{RefId: other, Version: 12, Horizon: true}},
 	})
 	if err != nil {
@@ -504,7 +504,7 @@ func TestIndexRollupCarriesCoverage(t *testing.T) {
 	view = world2.view(t, a)
 	plan, err = indexPlanHead(context.Background(), &indexHeadPlanArgs{
 		view: view, root: view.writeRoot(), writer: a, signedTimeMs: world2.at.UnixMilli(), tables: testHeadTables,
-		pending:  []*indexPendingDocument{testLive("c", 1, 1, 0, testHeadKeys(1, 0))},
+		pending:  []*indexPendingDocument{testLive("c", 1, 1, testHeadKeys(1, 0))},
 		coverage: []*protocol.IndexCoverage{{RefId: refId, Version: 3}},
 	})
 	if err != nil {
@@ -606,7 +606,7 @@ func TestIndexScheduleRunnerRules(t *testing.T) {
 	// merges: a due bucket the indexer serves is left by a desktop that is not out of slots
 	world := testNewHeadWorld()
 	a := evsTestId("writer a")
-	world.push(t, a, testLive("m", 1, 1, 0, testHeadKeys(1, 0)))
+	world.push(t, a, testLive("m", 1, 1, testHeadKeys(1, 0)))
 	world.fillUntilSealed(t, a, "f", 0)
 	world.settings.MergeDueByteCount = 1
 	for _, c := range []struct {
@@ -641,7 +641,7 @@ func TestIndexRollupVectors(t *testing.T) {
 	world, a := testRollupWorld(t)
 	first := world.view(t, a).writeRoot().newestBucket()
 	world.at = testDayTime(first.window.endDay(), time.Hour)
-	world.push(t, a, testLive("u", 1, 2, 0, testHeadKeys(1, 1)), testRemoved("u", 2, 2))
+	world.push(t, a, testLive("u", 1, 2, testHeadKeys(1, 1)), testRemoved("u", 2, 2))
 	world.at = testDayTime(first.window.endDay()+first.window.days, time.Hour)
 	record("into-an-empty-all", world.rollUp(t, runner))
 	world.at = testDayTime(first.window.endDay()+2*first.window.days, time.Hour)
@@ -651,9 +651,9 @@ func TestIndexRollupVectors(t *testing.T) {
 	b := evsTestId("writer b")
 	boundary := skew.view(t, a).writeRoot().newestBucket().window.endDay()
 	skew.at = testDayTime(boundary, -time.Minute)
-	planB, viewB := skew.plan(t, b, true, testLive("s", 1, 3, 0, testHeadKeys(11, 1)), testRemoved("s", 2, 3))
+	planB, viewB := skew.plan(t, b, true, testLive("s", 1, 3, testHeadKeys(11, 1)), testRemoved("s", 2, 3))
 	skew.at = testDayTime(boundary, time.Minute)
-	skew.push(t, a, testLive("s", 1, 2, 0, testHeadKeys(11, 0)), testLive("s", 2, 2, 0, testHeadKeys(12, 0)))
+	skew.push(t, a, testLive("s", 1, 2, testHeadKeys(11, 0)), testLive("s", 2, 2, testHeadKeys(12, 0)))
 	if _, err := skew.commit(t, b, planB, viewB); err != nil {
 		t.Fatal(err)
 	}

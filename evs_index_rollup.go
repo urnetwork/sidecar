@@ -72,8 +72,6 @@ type indexRollupResult struct {
 	// In path order.
 	files    []*indexPushFile
 	removals []*indexPushRemoval
-	// Diffs of S that did not compose, alarmed against their slots' signers.
-	malformed []*indexMalformedDiff
 	// The entries promoted, by the start day of the bucket that took them.
 	promoted    map[uint32][]*indexEntry
 	allManifest *protocol.IndexManifest
@@ -154,7 +152,7 @@ func (self *indexMergeCandidate) entry() *indexEntry {
 func indexRollup(ctx context.Context, args *indexRollupArgs) (*indexRollupResult, error) {
 	view, root := args.view, args.root
 	expired := args.expired
-	carried, malformed, err := indexMergeCandidates(expired.bucket, expired.shards, nil, true, true, view.erased, map[Id]uint32{}, view.settings)
+	carried, err := indexMergeCandidates(expired.bucket, expired.shards, nil, true, true, view.erased, map[Id]uint32{})
 	if err != nil {
 		return nil, err
 	}
@@ -247,7 +245,7 @@ func indexRollup(ctx context.Context, args *indexRollupArgs) (*indexRollupResult
 	if err != nil {
 		return nil, err
 	}
-	result := &indexRollupResult{malformed: malformed, promoted: map[uint32][]*indexEntry{}}
+	result := &indexRollupResult{promoted: map[uint32][]*indexEntry{}}
 	for _, file := range laid.files {
 		result.files = append(result.files, &indexPushFile{path: file.path.String(), plaintext: file.file, replaces: file.replaces})
 	}
@@ -286,7 +284,6 @@ func indexRollup(ctx context.Context, args *indexRollupArgs) (*indexRollupResult
 		}
 		result.files = append(result.files, merged.files()...)
 		result.removals = append(result.removals, merged.removedShards...)
-		result.malformed = append(result.malformed, merged.malformed...)
 		result.promoted[newerBucket.bucket.window.startDay] = promoted[target]
 	}
 

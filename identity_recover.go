@@ -9,20 +9,22 @@
 //	          one statement by the code's Ed25519 key: a plain SidecarAdmit of itself, or an AuthorityProposal of it,
 //	          whichever the verified state takes now, by the log's own judge (SidecarStatementJudge), never a table
 //	          kept here (C-01): plain outside the AdminSet with self_admit on; a proposal with it off, inside the
-//	          AdminSet, in a personal network and under a binding a void restored. It keeps the statement in
+//	          AdminSet and in a personal network. A member whose binding a cascade voided has none (QD-1034), so
+//	          its old code is refused here as unbound, with nothing signed: one of its devices outside the cascade
+//	          binds a fresh code, or an admin admits the new device. It keeps the statement in
 //	          keychain.ur's pending records before it posts it, the same bytes until its not_after, and its own record
 //	          beside it: the member, the code's key hash, the statement's id and whether it is a proposal, which with
 //	          the identity key and sidecar_id that enrollment kept is what §7.9's restart row names. A restart resumes
 //	          from it and never files a second admission
-//	pending   a proposal waits on one admission signer's cosign or on Recovery's 72 h window and its veto, or on both
-//	          under a binding a void restored when it was filed with self_admit off (the kind the log fixed at its
-//	          entry, QD-952). The device polls the log as before; the code is asked for again once the admission has
-//	          landed, since no device keeps a code or the keys it derives (§5.9), and RecoverWithCode erases them
-//	          before it answers
+//	pending   a proposal waits on one admission signer's cosign or on Recovery's 72 h window and its veto, by the kind
+//	          the log fixed at its entry. The device polls the log as before; the code is asked for again once the
+//	          admission has landed, since no device keeps a code or the keys it derives (§5.9), and RecoverWithCode
+//	          erases them before it answers
 //	anchor    once admitted, before any commit, wrap, sealed write or further statement: KEYS-M2-24's AnchorRecovery
-//	          opens the config group's RK_g, from M's RecoveryWrap against gen/<g>'s C_g or, under a binding a void
-//	          restored, from the late ReaderWrap a config writer gives the device, and hands it to this file's check
-//	          (checkRecoveryCodeAnchor). The config head the newest verified base names, read under that key and the
+//	          opens the config group's RK_g, from M's RecoveryWrap against gen/<g>'s C_g, and hands it to this file's
+//	          check (checkRecoveryCodeAnchor). Until it passes the device's ReaderKey goes up and no KeyPackage
+//	          (RecoveryAwaitingAnchor, upkeep's AwaitingAnchor, and Sign's gate below), so no Add precedes the anchor.
+//	          The config head the newest verified base names, read under that key and the
 //	          ladder below it, must hold the genesis the verified log starts from and records chaining from it to the
 //	          entries the log holds (CheckConfigBase's anchor, DESIGN-DETAILS 5.2.4's StartAtBase), and M's binding of
 //	          this code on that chain must carry a genesis_sig that verifies, under the Ed25519 key the code derives,
@@ -30,10 +32,6 @@
 //	          and a forged log can admit any real rotator; genesis_sig is the one input only the code makes. A failed
 //	          check raises head_alarm (fork, with that base's AuthPin), keeps the record stopped, and the device acts
 //	          no further, now or after a restart; a check that could not run changes nothing
-//	restored  under a binding a void restored, §7.9's restored row in the same frame: pending, it signs only its
-//	          AuthorityProposal; activated, its ReaderKey goes up and no KeyPackage (RecoveryAwaitingAnchor, upkeep's
-//	          AwaitingAnchor, and Sign's gate below), so no Add precedes the anchor; it waits for the late ReaderWrap
-//	          and anchors on that wrap's RK_g
 //	after     KEYS-M2-24's RunRecovery: the other RecoveryWraps opened, the self-join where the device is entitled to a
 //	          leaf, reads by wraps where it is not; then the caller offers `ur keychain recovery-rotate`, since the
 //	          code was typed into this device
@@ -79,8 +77,13 @@ const sidecarRecoveryRecordVersion = 1
 
 var (
 	// The code's binding is not its member's binding in effect: another member's code, a code a rebind retired, or
-	// a member the verified log holds no binding of. Nothing was signed.
+	// a member the verified log holds no binding of, as after a compromise cascade voided it (QD-1034). Nothing was
+	// signed.
 	ErrSidecarRecoveryUnbound = errors.New("this recovery code is not the member's recovery code in effect")
+	// ErrSidecarRecoveryUnbound where the member has no binding in effect at all: none bound yet, or a compromise
+	// cascade voided it, which restores no earlier code (QD-1034). No code recovers the member until one of its
+	// devices outside the cascade binds a fresh one; until then an admin admits its new device.
+	ErrSidecarRecoveryNoBinding = fmt.Errorf("%w: the member has none, as once a compromise revocation voids it", ErrSidecarRecoveryUnbound)
 	// A recovery by another code is under way on this device: finish it with that code, or sign out.
 	ErrSidecarRecoveryOtherCode = errors.New("a recovery by another code is under way on this device")
 	// The device is admitted by other than its own recovery: it needs no code to join, and recovery-rotate sets a new
@@ -123,8 +126,6 @@ type SidecarRecovery struct {
 	// Whether it went as an AuthorityProposal, and the kind the log fixed for it, unspecified while the log shows none.
 	Proposal     bool
 	ProposalKind bridge.ProposalKind
-	// Under a binding a void restored (§7.9's restored row).
-	Restored bool
 	// Where this call's post landed, nil when it made none or its answer was lost: a lost one goes again with the
 	// same bytes (PostPendingStatements).
 	Entry *bridge.AuthPin
@@ -204,7 +205,6 @@ type sidecarRecoveryRecord struct {
 	KeySha256   []byte               `json:"key_sha256"`
 	StatementId []byte               `json:"statement_id"`
 	Proposal    bool                 `json:"proposal,omitempty"`
-	Restored    bool                 `json:"restored,omitempty"`
 	Phase       SidecarRecoveryPhase `json:"phase"`
 }
 
@@ -299,7 +299,7 @@ func sidecarJwtUserId(byJwt string) (Id, bool) {
 }
 
 // Sign's gate while this device recovers by code (§7.9's anchor). Before the anchor passes the identity key signs only
-// this device's ReaderKey, which §7.9's restored row uploads ahead of it, and its own sign-out, which only narrows;
+// this device's ReaderKey, which upkeep uploads ahead of it, and its own sign-out, which only narrows;
 // once the anchor failed, only the sign-out. nil on a device that recovers by no code. A record that does not read
 // refuses.
 func (self *Sidecar) checkRecoveryAnchorSign(secrets SidecarSecrets, signedType bridge.SignedType, body []byte) error {
@@ -327,7 +327,7 @@ func (self *Sidecar) checkRecoveryAnchorSign(secrets SidecarSecrets, signedType 
 }
 
 // Whether this device recovers by code and its anchor has not passed: what upkeep's GkmUpkeepRole.AwaitingAnchor
-// reads, so its ReaderKey goes up and its KeyPackages wait (§7.9's restored row), and what a component asks before it
+// reads, so its ReaderKey goes up and its KeyPackages wait (§7.9's anchor), and what a component asks before it
 // commits, wraps, seals or files. Sign refuses those meanwhile whatever a component asks. True for a record that does
 // not read, false on a device that recovers by no code.
 func (self *Sidecar) RecoveryAwaitingAnchor() bool {
@@ -362,7 +362,6 @@ func (self *Sidecar) recoveryResult(record *sidecarRecoveryRecord, authority Sid
 		MemberId:    record.MemberId,
 		StatementId: bytes.Clone(record.StatementId),
 		Proposal:    record.Proposal,
-		Restored:    record.Restored,
 	}
 	if record.Phase == SidecarRecoveryPending && self.Admitted() {
 		result.Phase = SidecarRecoveryAdmitted
@@ -386,16 +385,9 @@ func (self *Sidecar) recoveryResult(record *sidecarRecoveryRecord, authority Sid
 	switch result.ProposalKind {
 	case bridge.ProposalKind_PROPOSAL_KIND_RECOVERY_SCOPED:
 		result.Waiting = "the admission waits for one admin's cosign: ur approve on an admin's device"
-	case bridge.ProposalKind_PROPOSAL_KIND_AUTHORITY, bridge.ProposalKind_PROPOSAL_KIND_RESTORED, bridge.ProposalKind_PROPOSAL_KIND_RESTORED_COSIGNED:
+	case bridge.ProposalKind_PROPOSAL_KIND_AUTHORITY:
 		result.ActivatesAfter = time.UnixMilli(row.GetWindowTimeMs() + sidecarAuthorityRecoverySettings(authority).Window.Milliseconds())
-		result.Waiting = "the admission waits out the recovery window, in which an admin may veto it"
-		switch result.ProposalKind {
-		case bridge.ProposalKind_PROPOSAL_KIND_AUTHORITY:
-			result.Waiting += ", and for its cosigns where the network needs more than one admin"
-		case bridge.ProposalKind_PROPOSAL_KIND_RESTORED_COSIGNED:
-			// filed with self_admit off, so its activation needs one admission signer's cosign (QD-952)
-			result.Waiting += ", and for one admin's cosign: ur approve on an admin's device"
-		}
+		result.Waiting = "the admission waits out the recovery window, in which an admin may veto it, and for its cosigns where the network needs more than one admin"
 	}
 	return result
 }
@@ -586,7 +578,6 @@ func (self *Sidecar) RecoverWithCode(ctx context.Context, code *RecoveryCode, or
 	gkmArgs := &GkmRecoverArgs{
 		Binding:      gkmBinding,
 		ConfigRepoId: log.ConfigRepoId,
-		Restored:     record.Restored,
 		Anchor: func(ctx context.Context, key *EvsRepoKey) error {
 			log, err := view.RecoveryLog()
 			if err != nil {
@@ -634,9 +625,6 @@ func (self *Sidecar) RecoverWithCode(ctx context.Context, code *RecoveryCode, or
 		case errors.Is(err, ErrGkmWait):
 			result := resultOf()
 			result.Waiting = "admitted; waiting for the config group's key"
-			if record.Restored {
-				result.Waiting = "admitted; waiting for a config writer's ReaderWrap"
-			}
 			return result, nil
 		default:
 			// the check could not run: nothing is decided
@@ -668,30 +656,28 @@ func (self *Sidecar) fileRecovery(ctx context.Context, identity *SidecarIdentity
 		return nil, nil, fmt.Errorf("%w: the client token names no member", ErrSidecarRecoveryUnbound)
 	}
 	keySha256 := keys.KeySha256()
+	// the binding in effect: none once a cascade voided the member's, which restores no earlier code (QD-1034)
 	binding := authority.CurrentBinding(memberId)
-	if binding == nil || !bytes.Equal(binding.GetKeySha256(), keySha256) {
-		return nil, nil, ErrSidecarRecoveryUnbound
+	if binding == nil {
+		return nil, nil, ErrSidecarRecoveryNoBinding
 	}
-	restored := false
-	if restores, ok := authority.(SidecarRecoveryAuthority); ok {
-		restored = restores.BindingRestored(memberId)
+	if !bytes.Equal(binding.GetKeySha256(), keySha256) {
+		return nil, nil, ErrSidecarRecoveryUnbound
 	}
 	pin := authority.Pin()
 	if pin == nil {
 		return nil, nil, ErrSidecarActNoAuthority
 	}
 
-	if !restored {
-		// M's wraps while unadmitted, under recovery:<member_id>: kept, and opened only once the device is admitted
-		// (KEYS-M2-24's fetch row); a failure here leaves the anchor's own fetch
-		privateKey, err := keys.XwingPrivateKey()
-		if err != nil {
-			return nil, nil, err
-		}
-		binding := &GkmRecoveryBinding{MemberId: memberId, PrivateKey: privateKey, KeySha256: keySha256}
-		if _, err := recoveryArgs.Groups.FetchRecoveryWraps(ctx, binding, false); err != nil && self.log.V(1).Enabled() {
-			self.log.Infof("[identity]the member's recovery wraps were not fetched before admission: %s", err)
-		}
+	// M's wraps while unadmitted, under recovery:<member_id>: kept, and opened only once the device is admitted
+	// (KEYS-M2-24's fetch row); a failure here leaves the anchor's own fetch
+	privateKey, err := keys.XwingPrivateKey()
+	if err != nil {
+		return nil, nil, err
+	}
+	gkmBinding := &GkmRecoveryBinding{MemberId: memberId, PrivateKey: privateKey, KeySha256: keySha256}
+	if _, err := recoveryArgs.Groups.FetchRecoveryWraps(ctx, gkmBinding, false); err != nil && self.log.V(1).Enabled() {
+		self.log.Infof("[identity]the member's recovery wraps were not fetched before admission: %s", err)
 	}
 
 	pending, statementId, proposal, err := self.recoveryStatement(identity, memberId, keys, pin, judge)
@@ -703,7 +689,6 @@ func (self *Sidecar) fileRecovery(ctx context.Context, identity *SidecarIdentity
 		KeySha256:   keySha256,
 		StatementId: statementId,
 		Proposal:    proposal,
-		Restored:    restored,
 		Phase:       SidecarRecoveryPending,
 	}
 	// the record and the statement are kept before the post, so a kill resumes on the same bytes

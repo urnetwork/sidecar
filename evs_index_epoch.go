@@ -8,9 +8,9 @@
 //	         refuses it 409 INDEX_EPOCH once a CUT has moved the epoch since (evs's step 5d); a CUT names it too, and
 //	         evs moves the epoch to the CUT's own version
 //	write    no file a push writes holds an entry, posting, row or tombstone of a document the ref's erasure set lists
-//	         at or below its listed version, nor a diff of one this push writes on a listed base (choose takes no
-//	         listed base); the builders leave those documents out themselves, from the view, and the guard checks
-//	         each file before it is sent, so a builder that did not is refused here rather than at a reader
+//	         at or below its listed version; the builders leave those documents out themselves, from the view, and
+//	         the guard checks each file before it is sent, so a builder that did not is refused here rather than at a
+//	         reader
 //	rebuild  on 409 INDEX_EPOCH a builder reads the head and the set again, drops the listed documents from its pending
 //	         entries and inputs and builds again under a new push id (each builder's loop, as on a 409 for a path);
 //	         work begun at an epoch below the set's listed_since cannot tell which complete erasures the set has since
@@ -18,10 +18,9 @@
 //	         open, or left to backfill: a journal's units begun there lose their key sets (rebuildJournal), which the
 //	         companion then extracts again from the text or drops
 //
-// A diff a writer's head carries forward from before the CUT, resting on a version the CUT then listed, is a resting
-// diff (DESIGN-DETAILS 15.2.2): the eraser re-enters its version and its CLOSUREs remove it (SEARCH-M10-17), so the
-// guard passes it where the push writes it again at the path that held it at the base. Hints only speed this: the
-// guard reads the set of the view, so a lost hint publishes nothing, and no indexer takes part.
+// Every entry is full or a tombstone (owner decision 584), so no surviving version rests on a listed one and the rule
+// is per entry. Hints only speed this: the guard reads the set of the view, so a lost hint publishes nothing, and no
+// indexer takes part.
 //
 // Off the ios_extension leg, as every index builder is. Not safe for concurrent use: one build holds one guard.
 
@@ -121,8 +120,7 @@ func (self *indexEpochGuard) push(kind indexPushKind, signedTimeMs int64, files 
 }
 
 // Refuses a file the push may not write: the erasure set from any push but a CUT, and any slot, large entry or shard
-// holding a listed document at or below its listed version, or a diff this push writes on a listed base. Manifests,
-// the lock and the settings hold no document.
+// holding a listed document at or below its listed version. Manifests, the lock and the settings hold no document.
 func (self *indexEpochGuard) checkFiles(files []*indexPushFile, cut bool) error {
 	companion := self.view.companion
 	settings := self.view.settings
@@ -142,15 +140,11 @@ func (self *indexEpochGuard) checkFiles(files []*indexPushFile, cut bool) error 
 			if err != nil {
 				return err
 			}
-			carried := self.carriedDiffs(file)
 			for _, entry := range slot.entries {
 				if entry.kind == indexEntryRefTombstone {
 					continue
 				}
 				if self.erased(entry.key, entry.version) {
-					return errIndexEpochListed
-				}
-				if entry.kind == indexEntryDiff && self.erased(entry.key, entry.baseVersion) && !carried[indexCarriedDiff{key: entry.key, version: entry.version, baseVersion: entry.baseVersion}] {
 					return errIndexEpochListed
 				}
 			}
@@ -182,39 +176,6 @@ func (self *indexEpochGuard) checkFiles(files []*indexPushFile, cut bool) error 
 		}
 	}
 	return nil
-}
-
-// A diff as the base's file held it.
-type indexCarriedDiff struct {
-	key         [indexIdByteCount]byte
-	version     uint64
-	baseVersion uint64
-}
-
-// The diffs the replaced version of file's path held at the view, which a head written again with its own bytes
-// carries forward: a resting diff there is the eraser's to re-enter and remove (DESIGN-DETAILS 15.2.4, 15.2.5).
-func (self *indexEpochGuard) carriedDiffs(file *indexPushFile) map[indexCarriedDiff]bool {
-	carried := map[indexCarriedDiff]bool{}
-	if file.replaces == 0 {
-		return carried
-	}
-	for _, root := range self.view.roots {
-		for _, bucket := range root.buckets {
-			for _, writer := range bucket.writers {
-				for _, slot := range writer.slots {
-					if slot.file.path != file.path || slot.file.version != file.replaces {
-						continue
-					}
-					for _, entry := range slot.slot.entries {
-						if entry.kind == indexEntryDiff {
-							carried[indexCarriedDiff{key: entry.key, version: entry.version, baseVersion: entry.baseVersion}] = true
-						}
-					}
-				}
-			}
-		}
-	}
-	return carried
 }
 
 // Strips the key sets of every journal unit begun below the set's listed_since, so the companion extracts each again

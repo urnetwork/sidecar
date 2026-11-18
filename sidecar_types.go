@@ -312,7 +312,7 @@ const (
 	SidecarEventAdmissionAlarm SidecarEventKind = "admission_alarm"
 	// A RecoveryRebind this device did not sign, or a binding §7.9's cascade voids (§5.6).
 	SidecarEventRecoveryRebind SidecarEventKind = "recovery_rebind"
-	// A recovery-signed statement or a restored binding's admission is pending (§5.6).
+	// A recovery-signed statement is pending (§5.6).
 	SidecarEventRecoveryWindow SidecarEventKind = "recovery_window"
 	// A recovery activated too soon for this device to have seen it (§5.6).
 	SidecarEventRecoveryUnseen SidecarEventKind = "recovery_unseen"

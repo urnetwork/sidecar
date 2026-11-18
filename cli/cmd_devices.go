@@ -23,6 +23,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"slices"
 	"strconv"
 	"strings"
@@ -141,6 +142,22 @@ func urParseSince(since string) (sinceN uint64, lostAtMs int64, err error) {
 	return 0, 0, fmt.Errorf("--since takes a log position or an RFC 3339 time: %q", since)
 }
 
+// A plan row's kind for a member's recovery binding, as ConfigCascadePlan.Items names it.
+const urDeviceRevokeKindRecoveryBinding = "recovery_binding"
+
+// What a plan that voids a member's recovery binding leaves that member, after the plan's rows: a void restores no
+// earlier code (§7.9's cascade, QD-1034), and an admin's admission stays parked for owner-bound repos (owner decision
+// 126). Nothing for a plan that voids none.
+func urPrintVoidedBindingNote(tty io.Writer, items []*sidecar.DaemonDeviceRevokeItem) {
+	if !slices.ContainsFunc(items, func(item *sidecar.DaemonDeviceRevokeItem) bool {
+		return item.Effect == sidecar.DeviceRevokeEffectVoid && item.Kind == urDeviceRevokeKindRecoveryBinding
+	}) {
+		return
+	}
+	fmt.Fprintln(tty, "  a voided recovery code leaves its member none: ur keychain recovery-rotate on a device of theirs this revocation does not cover binds a fresh one")
+	fmt.Fprintln(tty, "  until then no code admits a device for that member: an admin admits one, which reads no owner-bound repo until its owner's consented device approves it")
+}
+
 // One row of a plan as the terminal shows it.
 func urDeviceRevokeItemLine(item *sidecar.DaemonDeviceRevokeItem) string {
 	effect := map[string]string{
@@ -256,6 +273,7 @@ func runUrDevicesRevoke(ctx context.Context, cli *urCli, options docopt.Opts) er
 		}
 		fmt.Fprintln(tty, line)
 	}
+	urPrintVoidedBindingNote(tty, plan.Items)
 	if 0 < len(planKeyIds) && !plan.Presence {
 		fmt.Fprintln(tty, "  no key is revoked: this device holds no presence key to revoke one under")
 	}

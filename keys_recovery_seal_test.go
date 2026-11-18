@@ -196,21 +196,20 @@ func (self *revokeTestWorld) sealedTo(t *testing.T) string {
 }
 
 // Sets the member's binding in effect and applies the entry that did it.
-func (self *revokeTestWorld) bind(keys *RecoveryKeys, restored bool, edit func(entry *SidecarAuthorityEntry)) *SidecarAuthorityEntry {
+func (self *revokeTestWorld) bind(keys *RecoveryKeys, edit func(entry *SidecarAuthorityEntry)) *SidecarAuthorityEntry {
 	self.authority.edit(func() {
 		if keys == nil {
 			delete(self.authority.bindings, self.memberId)
 		} else {
 			self.authority.bindings[self.memberId] = &bridge.RecoveryBindingRow{KeySha256: keys.KeySha256(), Signer: self.selfId.Bytes(), At: self.n + 1}
 		}
-		self.authority.restored[self.memberId] = restored
 	})
 	return self.apply(edit)
 }
 
 // §22.5's §5 row: keychain.wrap is re-sealed at every change to the member's current binding as this device applies
-// it, a RecoveryBind, a RecoveryRebind, a cascade's void and a restored binding signed again, with no HPKE copy while
-// none is current or while the one in effect is a restored one.
+// it, a RecoveryBind, a RecoveryRebind, a cascade's void, which leaves the member no binding (QD-1034), and the fresh
+// code bound after it, with no HPKE copy while none is current.
 func TestSealerFollowsTheCurrentBinding(t *testing.T) {
 	world := newRevokeTestWorld(t)
 	first, second := testRecoveryKeys(t, 0x10), testRecoveryKeys(t, 0x50)
@@ -222,7 +221,7 @@ func TestSealerFollowsTheCurrentBinding(t *testing.T) {
 	if sealedTo := world.sealedTo(t); sealedTo != "" {
 		t.Fatalf("a copy before any binding: %s", sealedTo)
 	}
-	world.bind(first, false, nil)
+	world.bind(first, nil)
 	if sealedTo := world.sealedTo(t); sealedTo != hex.EncodeToString(first.KeySha256()) {
 		t.Fatalf("after the bind: %q", sealedTo)
 	}
@@ -230,27 +229,40 @@ func TestSealerFollowsTheCurrentBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	// a rebind: the old code gets no new wrap
-	world.bind(second, false, nil)
+	world.bind(second, nil)
 	if sealedTo := world.sealedTo(t); sealedTo != hex.EncodeToString(second.KeySha256()) {
 		t.Fatalf("after the rebind: %q", sealedTo)
 	}
 	if _, _, err := world.instance.openRecoveryRoots(world.sidecar.currentIdentity().NetworkId, first); !errors.Is(err, ErrRecoveryCopyKey) {
 		t.Errorf("the old code after a rebind: %v", err)
 	}
-	// the cascade voids the rebind and restores the first binding, which takes no wrap until signed again
-	world.bind(first, true, func(entry *SidecarAuthorityEntry) {
+	// the cascade voids the rebind, which leaves the member no binding: the binding it replaced is not restored, so
+	// the copy goes and neither code opens the roots
+	world.bind(nil, func(entry *SidecarAuthorityEntry) {
 		entry.VoidedBindings = []SidecarVoidedBinding{{MemberId: world.memberId, KeySha256: second.KeySha256(), Signer: world.otherId.Bytes()}}
 	})
 	if sealedTo := world.sealedTo(t); sealedTo != "" {
-		t.Fatalf("a copy under a restored binding: %q", sealedTo)
+		t.Fatalf("a copy after a void: %q", sealedTo)
 	}
-	// a signer outside P signs the restored binding again
-	world.bind(first, false, nil)
-	if sealedTo := world.sealedTo(t); sealedTo != hex.EncodeToString(first.KeySha256()) {
-		t.Fatalf("after the restored binding was signed again: %q", sealedTo)
+	for i, keys := range []*RecoveryKeys{first, second} {
+		if _, _, err := world.instance.openRecoveryRoots(world.sidecar.currentIdentity().NetworkId, keys); err == nil {
+			t.Errorf("code %d opened the roots after the void", i+1)
+		}
+	}
+	// a device outside P binds a fresh code, which the copy is sealed to
+	third := testRecoveryKeys(t, 0x60)
+	if err := world.sidecar.keepRecoveryPublicKey(third.KeySha256(), third.XwingPublicKey()); err != nil {
+		t.Fatal(err)
+	}
+	world.bind(third, nil)
+	if sealedTo := world.sealedTo(t); sealedTo != hex.EncodeToString(third.KeySha256()) {
+		t.Fatalf("after a fresh code was bound: %q", sealedTo)
+	}
+	if _, _, err := world.instance.openRecoveryRoots(world.sidecar.currentIdentity().NetworkId, third); err != nil {
+		t.Fatalf("the fresh code: %v", err)
 	}
 	// no binding at all
-	world.bind(nil, false, nil)
+	world.bind(nil, nil)
 	if sealedTo := world.sealedTo(t); sealedTo != "" {
 		t.Fatalf("a copy with no binding: %q", sealedTo)
 	}
@@ -296,14 +308,14 @@ func TestSealerLearnsABindingFromItsRecord(t *testing.T) {
 	}
 	forged := testRecoveryKeys(t, 0x50)
 	otherGenesisSha256 := sha256.Sum256([]byte("another genesis"))
-	world.bind(forged, false, func(entry *SidecarAuthorityEntry) {
+	world.bind(forged, func(entry *SidecarAuthorityEntry) {
 		entry.Effects = []*SidecarAuthorityEffect{{Type: bridge.SignedType_SIGNED_RECOVERY_BIND, Body: record(forged, otherGenesisSha256[:])}}
 	})
 	if sealedTo := world.sealedTo(t); sealedTo != "" {
 		t.Fatalf("sealed to a binding whose genesis_sig fails: %q", sealedTo)
 	}
 	keys := testRecoveryKeys(t, 0x10)
-	world.bind(keys, false, func(entry *SidecarAuthorityEntry) {
+	world.bind(keys, func(entry *SidecarAuthorityEntry) {
 		entry.Effects = []*SidecarAuthorityEffect{{Type: bridge.SignedType_SIGNED_RECOVERY_BIND, Body: record(keys, genesisSha256[:])}}
 	})
 	if sealedTo := world.sealedTo(t); sealedTo != hex.EncodeToString(keys.KeySha256()) {
@@ -319,9 +331,9 @@ func TestVoidRecordsSealSpan(t *testing.T) {
 	if err := world.sidecar.keepRecoveryPublicKey(keys.KeySha256(), keys.XwingPublicKey()); err != nil {
 		t.Fatal(err)
 	}
-	sealedAt := world.bind(keys, false, nil)
+	sealedAt := world.bind(keys, nil)
 	world.apply(nil)
-	voidedAt := world.bind(nil, false, func(entry *SidecarAuthorityEntry) {
+	voidedAt := world.bind(nil, func(entry *SidecarAuthorityEntry) {
 		entry.VoidedBindings = []SidecarVoidedBinding{{MemberId: world.memberId, KeySha256: keys.KeySha256(), Signer: world.otherId.Bytes()}}
 	})
 	spans, err := world.sidecar.RecoverySealSpans(keys.KeySha256())
@@ -445,7 +457,7 @@ func TestRotateRecoveryBindsThenRebinds(t *testing.T) {
 		t.Fatal(err)
 	}
 	// this device applies its own bind: the copy is sealed to it
-	world.bind(firstKeys, false, nil)
+	world.bind(firstKeys, nil)
 	if sealedTo := world.sealedTo(t); sealedTo != hex.EncodeToString(firstKeys.KeySha256()) {
 		t.Fatalf("after the bind: %q", sealedTo)
 	}
@@ -469,7 +481,7 @@ func TestRotateRecoveryBindsThenRebinds(t *testing.T) {
 	if len(second.Devices) != 2 || !second.Devices[0].This {
 		t.Errorf("the rotation lists no devices to review: %+v", second.Devices)
 	}
-	world.bind(secondKeys, false, nil)
+	world.bind(secondKeys, nil)
 	if _, _, err := world.instance.openRecoveryRoots(networkId, secondKeys); err != nil {
 		t.Fatal(err)
 	}
@@ -536,7 +548,7 @@ func TestCodeNeverPersisted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	world.bind(keys, false, nil)
+	world.bind(keys, nil)
 	needles := map[string][]byte{
 		"the entropy":             entropy,
 		"the Ed25519 seed":        keys.ed25519Key.Seed(),
@@ -608,7 +620,7 @@ func TestBindRecoveryChecksTheGenesisSig(t *testing.T) {
 		t.Fatalf("the binding: %+v, %v", rotation, err)
 	}
 	// a lost answer leaves the statement pending, the result still naming the binding
-	world.bind(keys, false, nil)
+	world.bind(keys, nil)
 	world.deltaApi.answers = []string{"lost"}
 	next := testRecoveryKeys(t, 0x50)
 	nextSig, _ := next.SignGenesis(networkId, genesisSha256)

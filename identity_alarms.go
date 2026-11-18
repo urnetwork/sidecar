@@ -6,8 +6,8 @@
 //	                     included; approval_pending beside it for one M has not consented
 //	recovery_rebind      on each of M's devices, every RecoveryRebind of M it did not itself sign, another device of
 //	                     M's included, and each binding of M a cascade voids
-//	recovery_window      on every member device, while an authority statement with a recovery-key signature, or a
-//	                     restored binding's admission, is pending, from its window start p
+//	recovery_window      on every member device, while an authority statement with a recovery-key signature is
+//	                     pending, from its window start p
 //	recovery_unseen      when the window activates under 72 h minus 10 min after this device applied p, or a valid
 //	                     veto first verifies only after this device applied the activation
 //	admissions_near_cap  on admin devices, from 90% of config_admissions, once each time the count rises past it,

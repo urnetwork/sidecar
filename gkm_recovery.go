@@ -1,5 +1,5 @@
 // Recovery by a member's recovery code, gkm's side (KEYS-M2-24; D-KEYS-9, FI-12, I-15; §10.8's Recovery block,
-// §7.9's anchor and restored rows, DESIGN-DETAILS 6.2.4's Recovery): what CORE-M2-06 composes, in §5.6's order,
+// §7.9's anchor row, DESIGN-DETAILS 6.2.4's Recovery; QD-1034): what CORE-M2-06 composes, in §5.6's order,
 // for a device a recovery key admitted, and what `ur keychain recovery-rotate` runs after a rebind.
 //
 //	fetch     under recovery:<member_id> while unadmitted, GET recovery/<member_id>/wraps: of what gkm serves, the
@@ -8,9 +8,9 @@
 //	          holds, so it is opened once the device is admitted and gen/<g> reaches it (question
 //	          keys-m2-24-recovery-wrap-opens-before-admission)
 //	anchor    once admitted, before any commit, wrap, sealed write or further statement: the config group's RK_g,
-//	          opened from its RecoveryWrap against gen/<g>'s C_g, or under a binding a void restored from the late
-//	          ReaderWrap a config writer gives the device, goes to §7.9's anchor check, which is CORE-M2-06's
-//	          (CONTRACTS.md). A failed check raises head_alarm (fork), drops what was opened and stops recovery in
+//	          opened from its RecoveryWrap against gen/<g>'s C_g, goes to §7.9's anchor check, which is CORE-M2-06's
+//	          (CONTRACTS.md). Until it passes the device uploads its ReaderKey and no KeyPackage (upkeep's
+//	          AwaitingAnchor). A failed check raises head_alarm (fork), drops what was opened and stops recovery in
 //	          this keychain for good; a check that could not run changes nothing. Nothing below runs before it passes
 //	open      every other group's RecoveryWrap is opened the same way, its generation judged by the rotation checks,
 //	          kept, and its ladder walked
@@ -24,8 +24,6 @@
 //	          commit of its own may skip, and a REMOVE rotation follows where the newest generation does not cover;
 //	          so no generation after the lost devices' revocation is wrapped into a tree that holds them. Revoking
 //	          them is §5.6's, in any order with the self-join
-//	restored  a binding a void restored takes no RecoveryWrap: the device uploads its ReaderKey and no KeyPackage
-//	          (upkeep's AwaitingAnchor), anchors on the late ReaderWrap, and only then self-joins the config group
 //	rebind    after a RecoveryRebind: each group's newest generation is wrapped to the new binding at its own b8
 //	          path, the retired binding's wraps are deleted only once every new one stands, and then a REQUEST
 //	          rotation is run in the groups this device may rotate; a compromise rebind asks REMOVE, which Rotate
@@ -111,8 +109,6 @@ type GkmRecoverArgs struct {
 	Binding *GkmRecoveryBinding
 	// The network's config repo, whose group's key the anchor reads.
 	ConfigRepoId Id
-	// §7.9's restored row: the binding takes no wrap, so the anchor reads the config group's late ReaderWrap.
-	Restored bool
 	// §7.9's anchor on the config group's RK_g, CORE-M2-06's: it opens the config head its newest verified base
 	// names and holds its genesis to the binding's genesis_sig. An error wrapping ErrGkmRecoveryAnchor says the check
 	// failed; any other says it could not run. Nil refuses, since nothing may run ahead of the anchor.
@@ -380,8 +376,8 @@ func (self *GkmGroupClient) dropRepoRecords(repoId Id) error {
 }
 
 // The anchor row. See the file header. Nil once the anchor has passed, now or before; ErrGkmRecoveryStopped, with
-// head_alarm (fork) raised, when the check failed, now or before; ErrGkmWait while this device is not admitted, or
-// under a restored binding while no ReaderWrap has reached it; the check's own error when it could not run.
+// head_alarm (fork) raised, when the check failed, now or before; ErrGkmWait while this device is not admitted; the
+// check's own error when it could not run.
 func (self *GkmGroupClient) AnchorRecovery(ctx context.Context, args *GkmRecoverArgs) error {
 	if args == nil || args.ConfigRepoId == (Id{}) {
 		return fmt.Errorf("%w: recovery needs its binding and the config repo", ErrGkmMalformed)
@@ -414,52 +410,27 @@ func (self *GkmGroupClient) AnchorRecovery(ctx context.Context, args *GkmRecover
 		return fmt.Errorf("%w: repo %s", ErrGkmNoRepo, args.ConfigRepoId)
 	}
 
-	// the config group's RK_g
-	var held *gkmHeldGeneration
-	var groupId Id
-	if args.Restored {
-		// the late ReaderWrap a config writer gives such a device, or one a later rotation staged to it: taken as
-		// any first wrap, under the rotation and delivery checks, and kept only if the anchor passes
-		if err := manager.takeGenerationsInFlow(ctx, state); err != nil {
-			if errors.Is(err, ErrGkmKeyMissing) {
-				return fmt.Errorf("%w: no ReaderWrap of the config group reached this device yet: %w", ErrGkmWait, err)
-			}
-			return err
-		}
-		held, err = self.newestOpenedGeneration(args.ConfigRepoId)
-		if errors.Is(err, ErrGkmKeyMissing) {
-			return fmt.Errorf("%w: no ReaderWrap of the config group reached this device yet", ErrGkmWait)
-		}
-		if err != nil {
-			return err
-		}
-		pins, err := self.repoPins(args.ConfigRepoId)
-		if err != nil {
-			return err
-		}
-		groupId = pins.groupId
-	} else {
-		groupId, err = manager.formedGroupId(ctx)
-		if err != nil {
-			return err
-		}
-		// as a device of the member now: gkm may hold a newer wrap than the fetch before admission kept, and with
-		// gkm unreachable the kept one serves
-		if _, err := self.FetchRecoveryWraps(ctx, args.Binding, true); err != nil && !gkmUnreachable(ctx, err) {
-			return err
-		}
-		wraps, err := self.keptRecoveryWraps(args.Binding)
-		if err != nil {
-			return err
-		}
-		wrap := gkmRecoveryWrapOf(wraps, groupId)
-		if wrap == nil {
-			return fmt.Errorf("%w: gkm serves no recovery wrap of the config group for this binding", ErrGkmKeyMissing)
-		}
-		held, err = manager.openRecoveryWrapInFlow(ctx, state, args.Binding, groupId, wrap)
-		if err != nil {
-			return err
-		}
+	// the config group's RK_g, from its RecoveryWrap
+	groupId, err := manager.formedGroupId(ctx)
+	if err != nil {
+		return err
+	}
+	// as a device of the member now: gkm may hold a newer wrap than the fetch before admission kept, and with gkm
+	// unreachable the kept one serves
+	if _, err := self.FetchRecoveryWraps(ctx, args.Binding, true); err != nil && !gkmUnreachable(ctx, err) {
+		return err
+	}
+	wraps, err := self.keptRecoveryWraps(args.Binding)
+	if err != nil {
+		return err
+	}
+	wrap := gkmRecoveryWrapOf(wraps, groupId)
+	if wrap == nil {
+		return fmt.Errorf("%w: gkm serves no recovery wrap of the config group for this binding", ErrGkmKeyMissing)
+	}
+	held, err := manager.openRecoveryWrapInFlow(ctx, state, args.Binding, groupId, wrap)
+	if err != nil {
+		return err
 	}
 
 	stop := func(detail string, cause error) error {
@@ -485,10 +456,8 @@ func (self *GkmGroupClient) AnchorRecovery(ctx context.Context, args *GkmRecover
 		}
 		return err
 	}
-	if !args.Restored {
-		if err := manager.keepRecoveredInFlow(ctx, state, groupId, held); err != nil {
-			return err
-		}
+	if err := manager.keepRecoveredInFlow(ctx, state, groupId, held); err != nil {
+		return err
 	}
 	return self.args.Secrets.Put(gkmRecoveryPhaseRecord, []byte{gkmRecordVersion, gkmRecoveryPhaseAnchored})
 }
@@ -519,15 +488,13 @@ func (self *GkmGroupClient) RunRecovery(ctx context.Context, args *GkmRecoverArg
 	if _, err := self.recoveryState(); err != nil {
 		return nil, err
 	}
-	var wraps []*protocol.GkmRecoveryWrap
-	if !args.Restored {
-		// as a device of the member now: a rotation since the last fetch left a newer wrap
-		if _, err := self.FetchRecoveryWraps(ctx, args.Binding, true); err != nil && !gkmUnreachable(ctx, err) {
-			return nil, err
-		}
-		if wraps, err = self.keptRecoveryWraps(args.Binding); err != nil {
-			return nil, err
-		}
+	// as a device of the member now: a rotation since the last fetch left a newer wrap
+	if _, err := self.FetchRecoveryWraps(ctx, args.Binding, true); err != nil && !gkmUnreachable(ctx, err) {
+		return nil, err
+	}
+	wraps, err := self.keptRecoveryWraps(args.Binding)
+	if err != nil {
+		return nil, err
 	}
 	repoIds := []Id{args.ConfigRepoId}
 	if self.args.ReaderRepoIds != nil {

@@ -349,7 +349,7 @@ func directoryIndexCardChange(sidecarId Id, previous *protocol.DirectoryCard, ne
 		if err != nil {
 			return nil, err
 		}
-		derived = append(derived, &indexDeriveDocument{document: document, replaces: replaced.GetVersion()})
+		derived = append(derived, &indexDeriveDocument{document: document})
 	}
 	for _, item := range previous.GetItems() {
 		announcementId := recordIdOf(item.GetAnnouncementId())
@@ -382,11 +382,7 @@ func directoryIndexRepoFileChange(previous *protocol.Announcement, next *protoco
 		if err != nil {
 			return nil, err
 		}
-		replaces := uint64(0)
-		if stood {
-			replaces = previous.GetVersion()
-		}
-		return []*indexDeriveDocument{{document: document, replaces: replaces}}, nil
+		return []*indexDeriveDocument{{document: document}}, nil
 	}
 	if !stood {
 		return nil, nil

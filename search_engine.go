@@ -469,7 +469,7 @@ func (self *searchEngineStream) open(ctx context.Context, scoped []*searchScoped
 		companion := searchRootCompanion(snapshot.manifest.Root)
 		opened := &searchOpenedRef{
 			engine: engine, scoped: entry, repoId: repoId, refId: refId, snap: snapshot, holding: holding, plan: plan,
-			probe: searchProbeOf(snapshot.Versions()), erased: searchErasedOf(snapshot, engine.format),
+			probe: searchProbeOf(snapshot.Versions()),
 		}
 		if engine.args.Local != nil {
 			opened.local = engine.args.Local(repoId, refId)
