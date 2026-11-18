@@ -6,7 +6,7 @@ Every design decision made since DESIGN.md was last rebuilt and not yet folded i
 
 **Folding.** Only a design-records track edits `design/source/` and rebuilds DESIGN.md with `design/source/build.sh`. Each design-records track takes one DESIGN.md section, applies its items below (and the matching "Proposed DESIGN.md text" of DESIGN-DETAILS.md), and in the same commit deletes those items from this file. When this file holds no items it is deleted. Owner decisions that change behavior go into `design/source/owner/DECISIONS.md` as numbered owner decisions, after decision 197, as decision 197 was.
 
-Holds 17 decided items and 4 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded, and QD-336 went into §4.5 with owner decision 251 (QD-841 to QD-843), which DESIGN.md carries directly.
+Holds 12 decided items and 2 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded, and QD-336 went into §4.5 with owner decision 251 (QD-841 to QD-843), which DESIGN.md carries directly.
 
 ## Index
 
@@ -14,13 +14,9 @@ Holds 17 decided items and 4 proposed ones, generated from the ledger on 2026-11
 |---|---|---|
 | [§3 Architecture overview and end-to-end flows](#s3) | 1 | 0 |
 | [§5 The Sidecar core](#s5) | 2 | 1 |
-| [§7 Networks, teams, members, enrollment, and SSO](#s7) | 3 | 0 |
-| [§10 Group keys for evs: MLS and the GKM service](#s10) | 1 | 0 |
+| [§7 Networks, teams, members, enrollment, and SSO](#s7) | 2 | 0 |
 | [§11 Encrypted versioned storage](#s11) | 1 | 0 |
-| [§15 The local email server, inbound mail, and burner email](#s15) | 1 | 0 |
-| [§16 The local MCP server and record primitives](#s16) | 6 | 2 |
-| [§19 Server services](#s19) | 0 | 1 |
-| [No section named](#s0) | 2 | 0 |
+| [§16 The local MCP server and record primitives](#s16) | 6 | 1 |
 
 ## DESIGN-DETAILS.md sections to fold
 
@@ -123,31 +119,6 @@ Questions: `record-md-team-record-creation.md`.
 
 Not folded (2026-11-16): Q-RECORD-3, which RECORD.md still lists as open and which no design-records track edits; the DESIGN.md parts are folded as owner decision 303 (§7.5, D-TEAM-28, §8.8's RepoCreate row and team_record paragraph, §11.12).
 
-### QD-129: Is ur.io's OAuth consent page in scope, given owner rule 6?
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Recommend in scope: change mmm/ur.io/react/src/components/OauthConsent.jsx on mmm's `sidecar` branch to show the matching code and the one command from `authorization_details`, and add one line to HANDOFF section 5's mmm row. It is the issuer's `authorization_endpoint` and a security control, not product UI.
-
-Changes: HANDOFF section 5; owner rule 6 (its reach).
-
-Questions: `plan-TEAM-consent-page.md`.
-
-Not folded (2026-11-16): the line in HANDOFF section 5's mmm row, since HANDOFF.md is outside design/source/ and so outside a design-records track's files; the decision is folded as owner decision 306, and §7.8's `page` row names the consent page's code and command.
-
-<a id="s10"></a>
-## §10 Group keys for evs: MLS and the GKM service
-
-### QD-046: A forged reader key, beyond correcting the text
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §2, §5.*
-
-[g0-recheck-0-readerkey-forgery#2] Recommended: option 2 on top of the text fix, and no post-quantum signature. Once a day, at its ReaderKey upkeep, a device GETs /gkm/reader-key/<its own id> and compares the key digest with those it signed; a key it never signed raises SidecarEvent key_changed, a kind §5.4 lists and no section yet defines, naming the foreign digest, and the remedy is §10.5's for an active clone: SidecarRevoke{reason: compromise} and a new enrollment. ReaderKey keeps the three fields landed in protocol/gkm.proto. [g0-recheck-0-readerkey-forgery#1] Correct the text, option 1. §10.5's Ladder bullet says an adversary that can forge Ed25519 and that the operator serves "could forge admissions, or a holder's ReaderKey, to which an honest rotator or hinted holder then seals RK_g with no person acting, and, through the ladder, read all retained history". Its last sentence becomes: "An external commit needs RK_g, under which the GroupInfo is sealed, so a published identity key alone commits nothing; RK_g itself rests on those signatures." §2.18's unaudited-cryptography row adds "by a forged admission or ReaderKey", and the ledger's HNDL row replaces "Nothing" with this residual. Q-KEYS-2's residual stands.
-
-Changes: §10.5 Ladder bullet; §2.18 unaudited-cryptography row; ledger row for R3's HNDL major; §10.5 readerkey row; §5.4 key_changed; §10.15 active clone row.
-
-Questions: `g0-recheck-0-readerkey-forgery.md#1`, `g0-recheck-0-readerkey-forgery.md#2`.
-
-Not folded (2026-11-16): the ledger's row for R3's HNDL major, whose "Nothing" becomes this residual, since that row is in DESIGN-REVIEW-RESPONSE.md, outside design/source/ and so outside a design-records track's files; the DESIGN.md parts are folded as owner decision 358 (§10.5's Ladder and readerkey rows, §10.15's active clone row, §5.4's `key_changed`, §2.18's unaudited-cryptography row).
-
 <a id="s11"></a>
 ## §11 Encrypted versioned storage
 
@@ -161,20 +132,6 @@ Changes: §11.6 EvsPush; §11.8 EvsHead and the 200 reply; §2.8 evs-3; §16.8 M
 Questions: `plan-RECORD-depositor-spool.md`.
 
 Not folded (2026-11-16): RECORD.md sections 5.4 and 5.7's part, the depositor spool's pruning at the mark, which lives in RECORD.md, outside design/source/ and so outside a design-records track's files; the DESIGN.md parts are folded as text (§11.6's EvsPush and §11.8's EvsHead fences take consumed_through, §11.12's deposits paragraph, §11.8's step 8 and 5f, §2.8's evs-3 and evs-12, and §16.8's mirrors bullet).
-
-<a id="s15"></a>
-## §15 The local email server, inbound mail, and burner email
-
-### QD-025: Whether tracks may fetch mail modules through the Go module proxy
-*Decided by the owner: owner 2026-11-08.*
-
-Option 1: tracks fetch the Go modules the plan names through proxy.golang.org, checked against go.sum and the checksum database; each gets its dependencies.yml row with the license read from its files.
-
-Changes: BRIEF.md tlc bullet.
-
-Questions: `mail-m5-02-module-fetch.md`.
-
-Not folded (2026-11-16): it changes only the run's brief, which carries it (BRIEF.md's paragraph of 2026-11-08 on Go modules through the module proxy); DESIGN.md sets no rule for what a build track fetches, and §4's Go line already takes the toolchain through the module proxy, checked against Go's checksum database (owner decision 272).
 
 <a id="s16"></a>
 ## §16 The local MCP server and record primitives
@@ -200,6 +157,8 @@ Changes: RECORD.md sections 6.3, 11 and 17; Q-RECORD-7; P5:728 copy.
 Questions: `record-md-change-approval.md`.
 
 Not folded (2026-11-16): RECORD.md sections 6.3, 11 and 17 and Q-RECORD-7, which RECORD.md still marks pending, and P5:728's copy in sidecar/design/pitch5.html, all outside design/source/; the DESIGN.md part is folded as owner decision 453 (§16.8's approvals bullet).
+
+Not folded (2026-11-18): RECORD.md's parts, which track dr4-outside-docs folds next; P5:728's copy is folded (the same track).
 
 ### QD-138: Nothing in the design writes a `record` repo's entries
 *Accepted by the owner on 2026-11-06, in bulk as recommended.*
@@ -255,56 +214,6 @@ Changes: RECORD.md sections 6.3 and 6.4.
 Questions: `plan-RECORD-small-readings.md#6`.
 
 Not folded (2026-11-16): RECORD.md sections 6.3 and 6.4, CopyBody's comment and row 39's writer, outside design/source/; the DESIGN.md part is folded as text (§16.11's receipt row).
-
-### QD-581: Product copy may not keep "per request" for model receipts
-*Settled by the agents from the design; work builds on it.*
-
-No. Per-request signing stays out of scope, and copy follows. At RS2 P5:779 says per grant and 5-minute window, with calls recorded per request from the harness at hook strength, and P5:766's "can prove" takes RECORD.md section 12's evidence labels. RECORD.md sections 12 and 17 stand, and no code changes.
-
-Changes: P5:779 and P5:766 copy.
-
-Questions: `record-md-model-receipt-granularity.md`.
-
-Not folded (2026-11-16): P5:779's and P5:766's copy in sidecar/design/pitch5.html, outside design/source/; DESIGN.md already says it, D-CTX-5 keeping per-request signing out of scope.
-
-<a id="s19"></a>
-## §19 Server services
-
-### QD-411: Q-OPS-3's residual is closed in §19.14 and open in the front matter
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it. Also amends §23.*
-
-It is closed: §19.14 owns Q-OPS-3 and reads "Residual: none", and §23.6's M0 row keeps D-OPS-18's closure as a gate. Drop the Q-OPS-3 clause from PEER_INTRO (asm/data_front7.py:123-125), leaving one residual. Add "Q-OPS-3's residual" to the ledger's section 5 beside Q-QUOTA-3's, keeping Appendix B's status as decided by the owner. Copy §19.6's bound into Q-OPS-3: <= 24 h plus the run (<= 20 min) at a primary's loss, <= 26 h at the site's, a day more per skipped or aborted run; and say "the dumped sidecar rows", since tables with a ttl of at most 7 d are in no dump. The "Closed by peer review 2026-11-04" label stays, as OT-N7's own row records that marking.
-
-Changes: front matter PEER_INTRO; ledger section 5; Q-OPS-3 text.
-
-Questions: `g0-recheck-2-q-ops-3-records.md`.
-
-Not folded (2026-11-16): the ledger's section 5 entry naming Q-OPS-3's residual beside Q-QUOTA-3's, since the ledger is DESIGN-REVIEW-RESPONSE.md, outside design/source/ and so outside a design-records track's files; the DESIGN.md parts are folded (the front matter's peer lead names one engineering residual, and §19.14's Q-OPS-3 carries §19.6's bound and "the dumped sidecar rows"; Appendix B's status and the "Closed by peer review 2026-11-04" label stay).
-
-<a id="s0"></a>
-## No section named
-
-### QD-007: A stray link stops all landing on two repositories
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-[connect-m1-stray-self-link] Someone with authority over the main checkouts runs `rm /Users/builder/urnetwork-sidecar/connect/connect` and `rm /Users/builder/urnetwork-sidecar/userwireguard/userwireguard`, with no `-r` and no trailing slash, since `rm -r` on a trailing slash follows the link and deletes the checkout. `glog/glog` and `gvisor/gvisor` are ignored by git and can go in the same pass. Then `track-land --merge connect-m1` runs. `track-land` keeps its check, and later loops use `ln -sfn`. [connect-c14-c9-stray-symlink-blocks-landing] Duplicate of connect-m1-stray-self-link: answer that one. Once the link is gone, `track-land --merge connect-c14-c9` runs as normal.
-
-Changes: BRIEF.md Where you work, only under options 2 and 3.
-
-Questions: `connect-m1-stray-self-link.md`, `connect-c14-c9-stray-symlink-blocks-landing.md`.
-
-Not folded (2026-11-16): it changes only the run's BRIEF.md and the main checkouts' stray links, outside design/source/; DESIGN.md states nothing about the build machine's checkouts, so nothing of it belongs there.
-
-### QD-052: Seven sdk worktrees under ~/urnetwork/temp were relinked by a mistaken `git worktree repair`
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Recommended: run the question file's restore loop, which writes fourteen one-line files, checks each before writing, and uses no `git worktree` command. Add a line to the brief: no agent runs `git worktree repair` or `prune` in a monoroot clone whose admin directory holds entries copied from `~/urnetwork`.
-
-Changes: BRIEF.md hard limits.
-
-Questions: `wire-consumers-sdk-worktree-links.md`.
-
-Not folded (2026-11-16): it changes only the run's BRIEF.md and a clone's worktree links, outside design/source/; DESIGN.md states nothing about the build machine's worktrees, so nothing of it belongs there.
 
 <a id="later"></a>
 ## Later decisions
