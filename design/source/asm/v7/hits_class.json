@@ -1107,7 +1107,7 @@
  {
   "family": "window_14d_weekly",
   "file": "08-ACL.md",
-  "line": 666,
+  "line": 674,
   "col": 117,
   "match": "7-day window",
   "snippet": "- **Invite.** `ur bridge invite` (cli/UI.md:50) files X's request with a hashed 256-bit code, `uses = --count` and a 7-day window; `accept-invite` (`:51`) files Y's, the server binds `invited_network_id`, and each activation is a delta in its network. `POST /acl/accept-invite` takes two body forms ",
@@ -1120,7 +1120,7 @@
  {
   "family": "device_cap_1000",
   "file": "08-ACL.md",
-  "line": 705,
+  "line": 713,
   "col": 11,
   "match": "1,000 member devices",
   "snippet": "| A cap of 1,000 member devices per network | config leaves only | refuses Teams past about 330 members with three devices each | rejected (owner decision 144) |",
@@ -1133,7 +1133,7 @@
  {
   "family": "device_cap_1000",
   "file": "08-ACL.md",
-  "line": 745,
+  "line": 753,
   "col": 542,
   "match": "1,000 member devices",
   "snippet": "r decisions 114, 144 and 182: agents cost no commit and read with no member device online, members accept config Adds by one function of the log, and no network stops at 1,000 member devices.",
@@ -1146,7 +1146,7 @@
  {
   "family": "pg_redis_durable",
   "file": "08-ACL.md",
-  "line": 800,
+  "line": 808,
   "col": 65,
   "match": "evs`, `gkm`, `tlsedge`, `certs`, `dns`, `smtpedge`, `mxedge`; Redis",
   "snippet": "- **Services and config:** gates in `api`/`connect`, `sockets`, `evs`, `gkm`, `tlsedge`, `certs`, `dns`, `smtpedge`, `mxedge`; Redis `{acl_<networkId>}v` (48 h after its last change), with §7.9's `{acl_<networkId>}e` read only; `config/all/pro.yml`.",
@@ -1159,7 +1159,7 @@
  {
   "family": "device_cap_1000",
   "file": "08-ACL.md",
-  "line": 812,
+  "line": 820,
   "col": 35,
   "match": "1,000 member devices",
   "snippet": "| A data repo granted to more than 1,000 member devices seats only 1,000; the rest wait keyless | Low | Medium | the preview and console name the repo; seats fill earliest-admitted first; data-repo wraps would need the owner ",
@@ -1575,7 +1575,7 @@
  {
   "family": "pools",
   "file": "11-EVS.md",
-  "line": 2202,
+  "line": 2206,
   "col": 54,
   "match": "pool",
   "snippet": "          collect rows), each metadata cluster in one pool (11.8) and no lifecycle rule on any bucket, which §22's",
@@ -1588,7 +1588,7 @@
  {
   "family": "window_14d_weekly",
   "file": "11-EVS.md",
-  "line": 2217,
+  "line": 2221,
   "col": 54,
   "match": "weekly",
   "snippet": "         one, ~150,000 in year two); gkm commits from weekly self-updates and device changes; rotations from",
@@ -1601,7 +1601,7 @@
  {
   "family": "sizing_145",
   "file": "11-EVS.md",
-  "line": 2286,
+  "line": 2290,
   "col": 1008,
   "match": "490-650",
   "snippet": "e refill writes past it (owner decision 186). Batches are per process and cluster (11.8), so a set near its capacity sustains the pushes §19.9's sets row gives, not the ~490-650 owner decision 145 records, which assumed batches shared across the whole load; §19.9 sizes year two's sets from §22.8's records per batch per cluster. Each next cluster",
@@ -1614,7 +1614,7 @@
  {
   "family": "mib64_trigger",
   "file": "11-EVS.md",
-  "line": 2681,
+  "line": 2685,
   "col": 68,
   "match": "64 MiB",
   "snippet": "wait      an eraser's allowance (§20.4's evs_closure_bytes_per_day: 64 MiB a UTC day, never under",
@@ -1627,7 +1627,7 @@
  {
   "family": "window_14d_weekly",
   "file": "11-EVS.md",
-  "line": 3092,
+  "line": 3096,
   "col": 106,
   "match": "a week",
   "snippet": "          tombstone (the reads' coverage row), the accepted residual being a device whose clock ran about a week",
@@ -1640,7 +1640,7 @@
  {
   "family": "pg_redis_durable",
   "file": "11-EVS.md",
-  "line": 3748,
+  "line": 3752,
   "col": 68,
   "match": "Postgres (the drafted Q-EVS",
   "snippet": "| Plaintext paths (PLAN.md:59), or a sealed client index ordered in Postgres (the drafted Q-EVS-1 (c)) | Server-side paths; or only repos and refs visible | Names, shape and sizes in the clear; or 3-RTT cold reads, client-side GC, Postgres on the storage path | Rul",
@@ -1653,7 +1653,7 @@
  {
   "family": "pools",
   "file": "11-EVS.md",
-  "line": 3755,
+  "line": 3759,
   "col": 8,
   "match": "pools",
   "snippet": "| MinIO pools for the metadata tier | One namespace | A multi-pool PUT checks its precondition only in the pool it picks (11.3) | Rejected (owner decision 145) |",
@@ -1666,7 +1666,7 @@
  {
   "family": "pools",
   "file": "11-EVS.md",
-  "line": 3755,
+  "line": 3759,
   "col": 56,
   "match": "multi-pool",
   "snippet": "| MinIO pools for the metadata tier | One namespace | A multi-pool PUT checks its precondition only in the pool it picks (11.3) | Rejected (owner decision 145) |",
@@ -1679,7 +1679,7 @@
  {
   "family": "pools",
   "file": "11-EVS.md",
-  "line": 3755,
+  "line": 3759,
   "col": 107,
   "match": "pool",
   "snippet": "| MinIO pools for the metadata tier | One namespace | A multi-pool PUT checks its precondition only in the pool it picks (11.3) | Rejected (owner decision 145) |",
@@ -1692,7 +1692,7 @@
  {
   "family": "pg_redis_durable",
   "file": "11-EVS.md",
-  "line": 3842,
+  "line": 3846,
   "col": 79,
   "match": "Redis soft state that holders re-create after a loss, answered once the lease",
   "snippet": "**D-EVS-14 (proposed).** Subscriptions are token-prefix leases per path epoch, Redis soft state that holders re-create after a loss, answered once the lease exists; hints carry only server-held fields, versioned by the push sequence, a Redis counter seeded from the master's clock, so it restarts above every earlier value. *W",
@@ -1705,7 +1705,7 @@
  {
   "family": "pg_redis_durable",
   "file": "11-EVS.md",
-  "line": 3856,
+  "line": 3860,
   "col": 136,
   "match": "gkm acks in Redis",
   "snippet": "**D-EVS-21 (proposed).** 11.13 budgets every metadata write in drive bytes, which bound its IOs too, with leases, the push sequence and gkm acks in Redis and a per-network fair share that sheds the heaviest network first. *Why:* every drive takes every write (owner decisions 21, 116, 140).",
@@ -1718,7 +1718,7 @@
  {
   "family": "decided_q_open",
   "file": "11-EVS.md",
-  "line": 3862,
+  "line": 3866,
   "col": 261,
   "match": "for every reader (Q-EVS-6",
   "snippet": " head window names each recent one's place and hash; head readers verify every statement after their pin and the one behind each entry they read. *Why:* owner decision 7 for every reader (Q-EVS-6), at one block per head write.",
@@ -1731,7 +1731,7 @@
  {
   "family": "mib64_trigger",
   "file": "11-EVS.md",
-  "line": 3898,
+  "line": 3902,
   "col": 157,
   "match": "64 MiB",
   "snippet": "**D-EVS-42 (proposed).** Writers set a new path's versioning from the rules in force at its creation: the repo's, else its network's, else versionless above 64 MiB, a present rule set replacing the next entirely; it persists until a writer changes it. *Why:* owner decision 164; no rule edit flips existing paths (owner decision 167)",
@@ -1744,7 +1744,7 @@
  {
   "family": "window_14d_weekly",
   "file": "11-EVS.md",
-  "line": 3936,
+  "line": 3940,
   "col": 491,
   "match": "7-day window",
   "snippet": "n`, as every repo's, held only by its consented, not-read-only admins, a repo owner's revocation erasing through §16.11's erasure runner. Its index is on by kind, with a 7-day window, and refuses `off`; its group seats readers under §7.9's leaves rule; its daemons read moved streams 64 to a request (11.9). *Why:* owner decision 171 gives this repo's ",
@@ -1757,20 +1757,20 @@
  {
   "family": "decided_q_open",
   "file": "11-EVS.md",
-  "line": 3936,
+  "line": 3940,
   "col": 766,
   "match": "force writers, as Q-EVS-3",
-  "snippet": " streams 64 to a request (11.9). *Why:* owner decision 171 gives this repo's index every announcement, specific beside owner decision 156; evs sees no path, so readers enforce writers, as Q-EVS-3's prefix rules do, but a reader's check after a key is destroyed restores nothing, so erasure needs an authority evs checks first; owner decisions 177, 181, 182.",
-  "reading": "\"readers enforce writers, as Q-EVS-3's prefix rules do\" cites the outcome of Q-EVS-3, which is closed 2026-11-03 (v1 prefix rules enforced by sidecars) as an analogy. It does not read as open, and the pattern matched \"for\" inside \"enforce\".",
+  "snippet": " streams 64 to a request (11.9). *Why:* owner decision 171 gives this repo's index every announcement, specific beside owner decision 156; evs sees no path, so readers enforce writers, as Q-EVS-3's prefix rules, now Later, would, but a reader's check after a key is destroyed restores nothing, so erasure needs an authority evs checks first; owner decisions 177, 18",
+  "reading": "\"readers enforce writers, as Q-EVS-3's prefix rules, now Later, would\" cites Q-EVS-3, closed 2026-11-03 and amended by owner decision 586, which moves its prefix rules to Later, as an analogy. It does not read as open, and the pattern matched \"for\" inside \"enforce\" (read 2026-11-18, the line reworded by owner decision 586's fold).",
   "live": false,
   "gap": false,
   "stated": false,
-  "source": "hand-2026-11-06"
+  "source": "hand-2026-11-18"
  },
  {
   "family": "kib_10_15",
   "file": "11-EVS.md",
-  "line": 3972,
+  "line": 3976,
   "col": 94,
   "match": "10-15 KiB",
   "snippet": "**Q-EVS-9.** Cross-cutting (owner decisions 2, 140, 145; §19, §22). Must the design meet the ~10-15 KiB of drive writes a push in owner decision 140's record, when owner decision 2's commit point, the head's If-Match overwrite, alone writes ~14 KiB a drive (~10.5 on 1 KiB ",
@@ -1783,7 +1783,7 @@
  {
   "family": "kib_10_15",
   "file": "11-EVS.md",
-  "line": 3972,
+  "line": 3976,
   "col": 480,
   "match": "10-15 KiB",
   "snippet": "e old xl.meta (11.3)? **Decided by owner 2026-11-04 (owner decision 140, record corrected):** (a): the binding budget, gated at 43 KiB a push per drive (D-TEST-11). The ~10-15 KiB figure was the design team's first estimate, not the owner's requirement, which is the PM9A3 profile itself (\"We have to make that iop profile work\"): at most 0.8 DWPD a",
@@ -1796,7 +1796,7 @@
  {
   "family": "mib64_trigger",
   "file": "11-EVS.md",
-  "line": 3986,
+  "line": 3990,
   "col": 135,
   "match": "64 MiB",
   "snippet": "**Q-EVS-16.** Is there a default versioning rule? **Decided by owner 2026-11-05 (owner decision 164):** per network, versionless above 64 MiB by default, edited by admins in the config repo (§7.9). *Residual:* none.",
@@ -1809,7 +1809,7 @@
  {
   "family": "window_14d_weekly",
   "file": "11-EVS.md",
-  "line": 3992,
+  "line": 3996,
   "col": 294,
   "match": "7-day window",
   "snippet": "2026-11-05 (owner decision 173):** (b), as 11.7 and 11.13 write: a repo admin's signed DROP push on a file-mode ref, refused in config and mailcfg repos, deletes after a 7-day window the kind-1 segments and slots that only the dropped versions name, found by scanning every ref's versions; inline records in packs wait for compaction; statements and ha",
@@ -1822,7 +1822,7 @@
  {
   "family": "window_14d_weekly",
   "file": "11-EVS.md",
-  "line": 4000,
+  "line": 4004,
   "col": 136,
   "match": "7-day window",
   "snippet": "**Q-EVS-23.** Does a drop wait out a cancellable window before it deletes? **Decided by owner 2026-11-05 (owner decision 183):** (a), a 7-day window in which any repo admin can cancel; `now` skips it, as RepoDelete's does; a repo lock voids a pending drop; deletion starts after the window and the 25-minute fence (11.",
@@ -1835,7 +1835,7 @@
  {
   "family": "pg_redis_durable",
   "file": "11-EVS.md",
-  "line": 4067,
+  "line": 4071,
   "col": 75,
   "match": "Redis soft state: §6's hint keys, {evsl_} leases",
   "snippet": "- **Tables:** none; evs keeps only 11.8's objects (owner decision 2), plus Redis soft state: §6's hint keys, {evsl_} leases, the {evsq_} push sequence, the {evsh_} head cache and {evsd_} drop hints (owner decision 136).",
@@ -1848,7 +1848,7 @@
  {
   "family": "pg_redis_durable",
   "file": "11-EVS.md",
-  "line": 4070,
+  "line": 4074,
   "col": 44,
   "match": "evs-8 and evs-24 in Redis",
   "snippet": "  - §2.8's evs rows follow 11.8's families (evs-8 and evs-24 in Redis; evs-21 to evs-23 `spidx/`, `pb/`, `hp/`; evs-25 `place/`; evs-28 `drops/`, `dropscan/` and `{evsd_}`; evs-20 withdrawn), evs-1 listing the `secret` kind, evs-3 a mapper",
@@ -1861,7 +1861,7 @@
  {
   "family": "pools",
   "file": "11-EVS.md",
-  "line": 4073,
+  "line": 4077,
   "col": 1238,
   "match": "multi-pool",
   "snippet": "s and P0 figures with their page (§19.8), tracks each cluster's cohort and its limit (§19.9's cohorts row) and provides the clusters and a conformance suite that refuses multi-pool metadata, and §19.9's triggers start each next cluster (owner decision 145), §19.9 sizing year two at five to six sets by 11.13's per-cluster batches; §19.10 re-seeds sl",
@@ -1874,7 +1874,7 @@
  {
   "family": "pg_redis_durable",
   "file": "11-EVS.md",
-  "line": 4073,
+  "line": 4077,
   "col": 691,
   "match": "evs, gkm, taskworker, Redis",
   "snippet": "never, a key held while a write that lacks a write quorum could still be read), which 11.7's stale and collect margins need instead of a measured lag, runs chrony on the evs, gkm, taskworker, Redis master and MinIO hosts within 50 ms of UTC, alarmed past 25 ms, a taskworker whose offset is unknown or over 50 ms raising no fence and GC deleting nothing (§19.10's clo",
@@ -1887,7 +1887,7 @@
  {
   "family": "pg_redis_durable",
   "file": "11-EVS.md",
-  "line": 4073,
+  "line": 4077,
   "col": 1499,
   "match": "gkm's objects on the repo's cluster, acks in Redis",
   "snippet": ".9 sizing year two at five to six sets by 11.13's per-cluster batches; §19.10 re-seeds slots last and places a repo re-seeded as deleted in that state first; §10.6 keeps gkm's objects on the repo's cluster, acks in Redis; §21.9's api writes `hold/`, and §21 tracks counsel's confirmation for owner decision 133.",
@@ -1900,7 +1900,7 @@
  {
   "family": "decided_q_open",
   "file": "11-EVS.md",
-  "line": 4075,
+  "line": 4079,
   "col": 410,
   "match": "format 2 out, Q-OPS-2",
   "snippet": "16 add no versionless rule of their own beyond the index's and §15.7's `s/model`; §19's evs credentials include DELETE on the segment bucket, §19.11's format2 gate rolls format 2 out, Q-OPS-2's packing never takes kind-5 segments, and §19.8 exports the purge's metrics; §20.7 counts replaced versionless content until purged; §21.9's holds keep only content exi",
@@ -1913,7 +1913,7 @@
  {
   "family": "audit_gate",
   "file": "11-EVS.md",
-  "line": 4085,
+  "line": 4089,
   "col": 57,
   "match": "audited",
   "snippet": "| A flaw in the format, token tree or commit protocol, unaudited and so disclosed (owner decisions 99, 119) | Medium | High | Peer review before format 1 freezes; vectors, fuzzing, a model check of 11.8 (§22) |",
@@ -1926,7 +1926,7 @@
  {
   "family": "mib64_trigger",
   "file": "11-EVS.md",
-  "line": 4110,
+  "line": 4114,
   "col": 89,
   "match": "64 MiB",
   "snippet": "| Users lose content they expected to keep | Medium | Medium | Versioning stays on below 64 MiB; history written while on stays; listings and `ur status` show the setting; a repo lock |",
@@ -1939,7 +1939,7 @@
  {
   "family": "window_14d_weekly",
   "file": "11-EVS.md",
-  "line": 4117,
+  "line": 4121,
   "col": 67,
   "match": "7-day window",
   "snippet": "| A rogue or compromised admin destroys history | Low | High | The 7-day window, notices, any repo admin's cancel, a lock voiding it, owner-bound consent (owner decision 183); `now` as RepoDelete's (§2.18) |",
@@ -1952,7 +1952,7 @@
  {
   "family": "pg_redis_durable",
   "file": "11-EVS.md",
-  "line": 4133,
+  "line": 4137,
   "col": 343,
   "match": "Redis soft state, the verified head",
   "snippet": "acement); streams, deposits, slots and ERASE, and the owner-bound read-receipt budget, which an `EvsShare` reader needs before it reads (§16.8, D-MCP-18); subscriptions, Redis soft state, the verified head cache and reads of §7.9's `{acl_}e`; head mode; path epochs; the gate and HeadCheck's ref pins (§6.4); usage events, fair share and the write budget, with its classes, a",
@@ -3214,27 +3214,27 @@
   "family": "offsite",
   "file": "19-OPS.md",
   "line": 1166,
-  "col": 554,
+  "col": 757,
   "match": "second site",
-  "snippet": "nt before any HDD set, ordered by 19.9's hdd trigger, a tracked item whose lead time and page §23.7 gives and whose design is Q-OPS-11's residual (owner decision 550); a second site or an off-site copy, from operating data (owner decisions 89, 94).",
-  "reading": "The off-site copy is listed as a later option decided from operating data (owner decisions 89, 94), not as the v0 design, which keeps one site and no off-site copy (19.6); QD-274's citation pass shortened the tracked segment placement just before it, which moved the snippet (read 2026-11-17).",
+  "snippet": ") before any HDD set, ordered by 19.9's hdd trigger, a tracked item whose lead time and page §23.7 gives and whose design is Q-OPS-11's residual (owner decision 550); [a second site or an off-site copy](DESIGN-DEFER.md#ops-second-site), from operating data (owner decisions 89, 94).",
+  "reading": "The off-site copy is listed as a later option decided from operating data (owner decisions 89, 94), not as the v0 design, which keeps one site and no off-site copy (19.6); the design-defer-doc fold made the words a link to DESIGN-DEFER.md's ops-second-site entry, which moved the snippet (read 2026-11-18).",
   "live": false,
   "gap": false,
   "stated": false,
-  "source": "hand-2026-11-17"
+  "source": "hand-2026-11-18"
  },
  {
   "family": "offsite",
   "file": "19-OPS.md",
   "line": 1166,
-  "col": 572,
+  "col": 775,
   "match": "off-site",
-  "snippet": "set, ordered by 19.9's hdd trigger, a tracked item whose lead time and page §23.7 gives and whose design is Q-OPS-11's residual (owner decision 550); a second site or an off-site copy, from operating data (owner decisions 89, 94).",
-  "reading": "The off-site copy is listed as a later option decided from operating data (owner decisions 89, 94), not as the v0 design, which keeps one site and no off-site copy (19.6); QD-274's citation pass shortened the tracked segment placement just before it, which moved the snippet (read 2026-11-17).",
+  "snippet": "et, ordered by 19.9's hdd trigger, a tracked item whose lead time and page §23.7 gives and whose design is Q-OPS-11's residual (owner decision 550); [a second site or an off-site copy](DESIGN-DEFER.md#ops-second-site), from operating data (owner decisions 89, 94).",
+  "reading": "The off-site copy is listed as a later option decided from operating data (owner decisions 89, 94), not as the v0 design, which keeps one site and no off-site copy (19.6); the design-defer-doc fold made the words a link to DESIGN-DEFER.md's ops-second-site entry, which moved the snippet (read 2026-11-18).",
   "live": false,
   "gap": false,
   "stated": false,
-  "source": "hand-2026-11-17"
+  "source": "hand-2026-11-18"
  },
  {
   "family": "pg_redis_durable",

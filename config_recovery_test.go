@@ -1,10 +1,10 @@
 // §7.9's Recovery on the test network, FS-16's verifier cases on entry times: each row of the members' table (a plain
 // SidecarAdmit by the key with self_admit on, a recovery-scoped proposal completing at an admission signer's cosign
-// with it off, an AdminSet member's proposal activating only at a tick 72 h on, a restored binding's admission with no
-// counted cosign), a late recovery cosign restarting the window, a veto between the proposal and the activation
-// winning, voids by a rebind of the cosigning code's member, an AdminSet change and the subject's removal, a veto a
-// device holds forking it at the activation, and proposals and windows surviving folds at a long-running reader, a new
-// device and a rows-only gate alike.
+// with it off, an AdminSet member's proposal activating only at a tick 72 h on), a late recovery cosign restarting the
+// window, a veto between the proposal and the activation winning, voids by a rebind of the cosigning code's member, an
+// AdminSet change and the subject's removal, a veto a device holds forking it at the activation, and proposals and
+// windows surviving folds at a long-running reader, a new device and a rows-only gate alike. A cascade's void of a
+// binding is config_recovery_void_test.go's.
 
 package sidecar
 
@@ -99,7 +99,7 @@ func TestARecoveryKeyAdmitsItsMembersDeviceWithSelfAdmitOn(t *testing.T) {
 	net.mustPost(laptop, bridge.SignedType_SIGNED_RECOVERY_BIND, net.recoveryBind(key))
 	state := net.log.State()
 	if binding := state.CurrentBinding(member); binding == nil || !bytes.Equal(binding.GetKeySha256(), key.sha256()) ||
-		!bytes.Equal(binding.GetSigner(), laptop.sidecarId.Bytes()) || state.BindingRestored(member) {
+		!bytes.Equal(binding.GetSigner(), laptop.sidecarId.Bytes()) {
 		t.Fatalf("the binding: %v", binding)
 	}
 
@@ -381,50 +381,6 @@ func TestARebindAdminSetChangeOrRemovalVoidsAWindow(t *testing.T) {
 		}
 		team.everyReaderAgrees()
 	}
-}
-
-// §22.7's restored code: a member whose binding a compromise void restored admits by its key only through the window:
-// a plain SidecarAdmit is refused, and its proposal activates 72 h on with no counted cosign.
-func TestARestoredBindingAdmitsOnlyThroughTheWindow(t *testing.T) {
-	net := newTestConfigNet(t)
-	member, laptop := net.consentedMember("m")
-	keyOne := testConfigRecovery(member, "m one")
-	net.mustPost(laptop, bridge.SignedType_SIGNED_RECOVERY_BIND, net.recoveryBind(keyOne))
-	stolen := net.device("m stolen", member)
-	net.admitDevice(laptop, stolen, 0)
-	sinceN := net.n + 1
-	keyTwo := testConfigRecovery(member, "m two")
-	net.mustPost(stolen, bridge.SignedType_SIGNED_RECOVERY_REBIND, &protocol.RecoveryRebind{Header: net.header(), MemberId: member.Bytes(),
-		PrevSha256: keyOne.sha256(), Ed25519PublicKeySha256: keyTwo.sha256(), Reason: bridge.RecoveryRebindReason_RECOVERY_REBIND_REASON_ROUTINE})
-	plan, err := net.log.State().CascadePlan(stolen.sidecarId, sinceN)
-	if err != nil || len(plan.VoidedBindings) != 1 || !bytes.Equal(plan.VoidedBindings[0].KeySha256, keyTwo.sha256()) || len(plan.Reseals) == 0 {
-		t.Fatalf("the plan: %+v, %v", plan, err)
-	}
-	net.mustPost(laptop, bridge.SignedType_SIGNED_SIDECAR_REVOKE, net.compromise(stolen, sinceN))
-	state := net.log.State()
-	if !bytes.Equal(state.Member(member).GetRecoveryKeySha256(), keyOne.sha256()) || !state.BindingRestored(member) ||
-		!state.CascadeVoids(keyTwo.sha256(), net.n) || state.CascadeVoids(keyOne.sha256(), net.n) {
-		t.Fatal("the void did not restore the earlier binding")
-	}
-	if verdict := net.postByRecovery(keyTwo, bridge.SignedType_SIGNED_SIDECAR_ADMIT, net.admission(net.device("m by two", member), nil, false, 0, 0)); verdict.Accepted() {
-		t.Error("the voided key admitted")
-	}
-	phone := net.device("m phone", member)
-	if verdict := net.postByRecovery(keyOne, bridge.SignedType_SIGNED_SIDECAR_ADMIT, net.admission(phone, nil, false, 0, 0)); verdict.Accepted() {
-		t.Error("a plain admission under a restored binding")
-	}
-	proposed := net.postByRecovery(keyOne, bridge.SignedType_SIGNED_AUTHORITY_PROPOSAL, net.longProposal(bridge.SignedType_SIGNED_SIDECAR_ADMIT, net.admission(phone, nil, false, 0, 0)))
-	if !proposed.Accepted() {
-		t.Fatal(proposed.Refusal)
-	}
-	if rows := net.log.State().openProposalRows(); len(rows) != 1 || rows[0].GetKind() != uint32(bridge.ProposalKind_PROPOSAL_KIND_RESTORED) {
-		t.Fatalf("the proposal: %v", rows)
-	}
-	net.wait(72 * testConfigHourMs)
-	if activated := net.activate(proposed.StatementId[:]); !activated.Accepted() || net.log.State().SidecarRow(phone.sidecarId) == nil {
-		t.Fatalf("the activation: %v", activated.Refusal)
-	}
-	net.everyReaderAgrees()
 }
 
 // §7.9's precedence row: a device that holds a valid veto before the activation forks there; a reader without it

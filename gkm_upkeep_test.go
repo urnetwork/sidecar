@@ -359,8 +359,8 @@ func TestGkmUpkeepSelfCheckRaisesKeyChangedForAForeignKey(t *testing.T) {
 	}
 }
 
-// Agents upload only a ReaderKey, and a device a restored binding admitted none of its KeyPackages until it has
-// anchored (§10.8); a read_only member device keeps its upkeep under r, KeyPackages included (FS-106).
+// Agents upload only a ReaderKey, and a device recovering by its member's code none of its KeyPackages until it has
+// anchored (§7.9's anchor); a read_only member device keeps its upkeep under r, KeyPackages included (FS-106).
 func TestGkmUpkeepKeyPackagesOnlyFromAnchoredMemberDevices(t *testing.T) {
 	agent := newGkmUpkeepFixture(t, GkmUpkeepRole{})
 	agent.pass()

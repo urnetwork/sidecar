@@ -6,8 +6,10 @@
 //	every file  "URds" | format u8 = 1 | kind u8 | 2 zero bytes | repo_id 16 | job_id 16 | sequence u32 | row count u32;
 //	            its rows; then SHA-256 of every byte before it
 //	snap   1    sequence 0, one row per covered drop: drop_id 16 | ref_id 16 | version u64 | push_id 16 | place 20 |
-//	            seen_ms i64 (84 B). Sequence r >= 1, round r's: a first row of horizon_ms i64 and 24 zero bytes, then one
-//	            row per ref: ref_id 16 | its head's version at M_r u64 | at V_r u64 (32 B each)
+//	            seen_ms i64 (84 B); the first of its header's 2 zero bytes holds what the job's listed versions show
+//	            of the repo's history, bit 0 renames and bit 1 cross-ref copies, its other bits zero (below).
+//	            Sequence r >= 1, round r's: a first row of horizon_ms i64 and 24 zero bytes, then one row per ref:
+//	            ref_id 16 | its head's version at M_r u64 | at V_r u64 (32 B each)
 //	cand   2    the candidates, ascending: id 32 (a slot's 16 B id zero-filled on the right) | kind u8 (1 segment, 2 slot)
 //	list   3    the listed index, DESIGN-DETAILS 10.2.9's, which resolve writes (EVSB-M10-04) and this file does not parse
 //	mark   4    a first row, the scan's cursor: ref_id 16 | version u64 | 9 zero bytes; then ids as cand's rows. A
@@ -24,6 +26,13 @@
 //
 // A mark file the job writes for verify's late marks repeats the newest mark file's cursor, so mark's resume reads the
 // same position.
+//
+// snap-0's two bits are owner decision 513's (QD-987, question evs2-m10-33-observe-report-command), which D-TEST-18's
+// soak counts through `sidecarctl evs observe-report`: renames, a listed version's push removed one path and created
+// another citing its kind-5 content; cross-ref copies, a listed version's chain named a reuse source of another ref
+// (DropListedShape, which resolve reads off the listed versions' own pushes). The decision names the file and not the
+// byte: the header's first spare byte is this file's fill, so a snap-0 written before it reads neither, and every
+// other file keeps both bytes zero.
 //
 // Retention (§11.13's table row; owner decisions 398, 570, QD-1021): a job's list files and its snap-0 stay for the
 // repo's life, snap-0 because it names the drops the list files were resolved from, each with its place and seen_ms,
@@ -62,6 +71,10 @@ const (
 	dropFileIdRowByteCount            = 33
 	dropFileDelRowByteCount           = 34
 	dropFileSequenceDigitCount        = 10
+	// where snap-0's header holds its shape bits, and the bits
+	dropFileShapeOffset              = 6
+	dropFileShapeRenames        byte = 1
+	dropFileShapeCrossRefCopies byte = 2
 )
 
 // A dropscan/ file's kind (DESIGN-DETAILS 10.2.2's kind byte).
@@ -173,6 +186,27 @@ type DropAnswer struct {
 	Outcome DropOutcome
 }
 
+// What a job's listed versions show of its repo's history, as snap-0 records it for D-TEST-18's soak (owner decision
+// 513): a job counts toward the soak's share of repos with renames and cross-ref copies when both hold.
+type DropListedShape struct {
+	// A listed version's push removed one path and created another citing its kind-5 content.
+	Renames bool
+	// A listed version's chain named a reuse source of another ref.
+	CrossRefCopies bool
+}
+
+// Its bits in snap-0's header.
+func (self DropListedShape) bits() byte {
+	bits := byte(0)
+	if self.Renames {
+		bits |= dropFileShapeRenames
+	}
+	if self.CrossRefCopies {
+		bits |= dropFileShapeCrossRefCopies
+	}
+	return bits
+}
+
 // One covered drop, as snap-0 names it.
 type DropCovered struct {
 	DropId  sidecar.Id
@@ -204,6 +238,7 @@ type DropFile struct {
 	Sequence uint32
 	// snap 0
 	Covered []*DropCovered
+	Shape   DropListedShape
 	// snap r >= 1
 	Round *DropRoundSnapshot
 	// cand, held, and mark's ids
@@ -268,9 +303,10 @@ func appendDropIdRow(encoded []byte, scanId DropScanId) []byte {
 	return append(encoded, byte(scanId.Kind))
 }
 
-// snap-0: the covered drops.
-func EncodeDropCoveredFile(repoId sidecar.Id, jobId sidecar.Id, covered []*DropCovered) []byte {
+// snap-0: the covered drops, and what their listed versions show of the repo's history.
+func EncodeDropCoveredFile(repoId sidecar.Id, jobId sidecar.Id, covered []*DropCovered, shape DropListedShape) []byte {
 	encoded := encodeDropFileHeader(DropFileSnap, repoId, jobId, 0, len(covered))
+	encoded[dropFileShapeOffset] = shape.bits()
 	for _, drop := range covered {
 		encoded = append(encoded, drop.DropId[:]...)
 		encoded = append(encoded, drop.RefId[:]...)
@@ -359,7 +395,12 @@ func DecodeDropFile(encoded []byte, repoId sidecar.Id, jobId sidecar.Id, kind Dr
 	if trailer := sha256.Sum256(body); !bytes.Equal(trailer[:], encoded[len(body):]) {
 		return nil, invalid("trailer")
 	}
-	if string(body[0:4]) != dropFileMagic || body[4] != dropFileFormat1 || body[6] != 0 || body[7] != 0 {
+	// the spare bytes are zero but for snap-0's shape bits
+	shapeBits := byte(0)
+	if DropFileKind(body[5]) == DropFileSnap && binary.BigEndian.Uint32(body[40:44]) == 0 {
+		shapeBits = body[dropFileShapeOffset] & (dropFileShapeRenames | dropFileShapeCrossRefCopies)
+	}
+	if string(body[0:4]) != dropFileMagic || body[4] != dropFileFormat1 || body[dropFileShapeOffset] != shapeBits || body[7] != 0 {
 		return nil, invalid("header")
 	}
 	file := &DropFile{
@@ -392,6 +433,10 @@ func DecodeDropFile(encoded []byte, repoId sidecar.Id, jobId sidecar.Id, kind Dr
 		if sequence == 0 {
 			if len(rows) != rowCount*dropFileSnapDropRowByteCount {
 				return nil, invalid("rows")
+			}
+			file.Shape = DropListedShape{
+				Renames:        shapeBits&dropFileShapeRenames != 0,
+				CrossRefCopies: shapeBits&dropFileShapeCrossRefCopies != 0,
 			}
 			for offset := 0; offset < len(rows); offset += dropFileSnapDropRowByteCount {
 				row := rows[offset : offset+dropFileSnapDropRowByteCount]

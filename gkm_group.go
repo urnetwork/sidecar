@@ -136,9 +136,6 @@ type GkmGroupClientArgs struct {
 	// opens (§7.9). Nil, or an answer of none for a member that holds a recovery identity, refuses the rotation
 	// rather than leave that member without its RecoveryWrap (D-KEYS-18).
 	RecoveryKey func(memberId Id) (*GkmRecoveryKey, error)
-	// Whether a device a restored binding admitted is anchored (§10.8): until it is, no committer adds it. Nil
-	// reads every device as anchored, since only §7.9's restored row parks one.
-	Anchored func(sidecarId Id) bool
 	// The repos this sidecar reads at its newest state, the list its token scopes come from: where a Welcome's
 	// group is looked for. Nil joins only groups of repos this device already holds.
 	ReaderRepoIds func() []Id

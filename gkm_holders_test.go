@@ -476,7 +476,8 @@ func TestGkmDelegationReach(t *testing.T) {
 }
 
 // recovery(m) needs a member device of m reading R and m's newest binding in effect and outside every cascade: a
-// binding a void restored is in effect but takes no wrap (§7.9's cascade).
+// void leaves the member no binding, so no wrap (§7.9's cascade; QD-1034), and rows that named an older binding in
+// effect under a voided one, which no verifier writes, would give it none either.
 func TestKeyHoldersRecoveryNeedsACurrentBinding(t *testing.T) {
 	recoveryOf := func(net *gkmTestNet) bool {
 		return gkmTestHolders(t, net.view(t, 1), net.repoId, aclTestNow).Contains(GkmHolderRecovery, net.owner.Bytes())
@@ -494,22 +495,27 @@ func TestKeyHoldersRecoveryNeedsACurrentBinding(t *testing.T) {
 		t.Errorf("no binding holds a key")
 	}
 
-	// a newer binding signed in a cascade's P is void, and the older one it restores is not current
+	// a newer binding signed in a cascade's P is void, which leaves the member none in effect
 	net = newGkmTestNet()
 	ownerRow = net.fixture.view.members[net.owner]
 	older := ownerRow.Bindings[0]
 	voidKey := sha256.Sum256([]byte("void recovery key"))
 	thief := NewId()
 	ownerRow.Bindings = []*bridge.RecoveryBindingRow{{KeySha256: voidKey[:], Signer: thief.Bytes(), At: 40}, older}
-	ownerRow.RecoveryKeySha256 = older.GetKeySha256()
+	ownerRow.RecoveryKeySha256 = nil
 	net.fixture.view.voidFrom[string(thief.Bytes())] = 30
 	if recoveryOf(net) {
-		t.Errorf("a binding a void restored holds a key")
+		t.Errorf("a member a void left no binding holds a key")
 	}
-	// re-signed outside P, it is current again
+	// rows naming the older binding in effect under the voided one give it no key either
+	ownerRow.RecoveryKeySha256 = older.GetKeySha256()
+	if recoveryOf(net) {
+		t.Errorf("an older binding under a voided one holds a key")
+	}
+	// a fresh binding signed outside P is current
 	ownerRow.Bindings = append([]*bridge.RecoveryBindingRow{{KeySha256: older.GetKeySha256(), Signer: net.ownerDevice.Bytes(), At: 50}}, ownerRow.Bindings...)
 	if !recoveryOf(net) {
-		t.Errorf("a binding re-signed outside P holds no key")
+		t.Errorf("a binding signed outside P after a void holds no key")
 	}
 
 	// a newest binding the cascade voids, though no older one is in effect either

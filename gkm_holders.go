@@ -21,9 +21,9 @@
 //	holders_sha256 SHA-256 of the identities sorted by bytes.Compare and joined with no separator (QD-465)
 //
 // The set is a function of the log and t alone, so every member recomputes holders_sha256: leaf(s) is every member
-// device reading R, seated or not, since seats live in the tree (plan reading 1). A binding a void restored is in
-// effect but not current, and takes no recovery identity (§7.9's cascade), so recovery(m) needs the member's newest
-// binding to be the one in effect and outside every cascade.
+// device reading R, seated or not, since seats live in the tree (plan reading 1). A binding a cascade voids is not in
+// effect, the member having none from there (§7.9's cascade; QD-1034), and takes no recovery identity, so recovery(m)
+// needs the member's newest binding to be the one in effect and outside every cascade.
 //
 // Holders leave in two ways. An entry n shrinks R when KeyHolders(R, n-1, t_n) loses a holder at n (§7.9's shrink);
 // a holder expires at T_e when it leaves as t passes T_e with no entry (§7.9's expiry). Dropped decides both, and an
@@ -240,8 +240,8 @@ func KeyHolders(view GkmAuthView, repoId Id, at time.Time) (GkmHolders, error) {
 	memberDevice := func(row *bridge.SidecarRow) bool {
 		return len(row.GetTagIds()) == 0 && len(row.GetMemberId()) == len(Id{}) && !row.GetEphemeral()
 	}
-	// the binding in effect is the newest and no cascade voids it: a void restores an older binding, which takes no
-	// wrap until a signer outside P signs it again (§7.9's cascade)
+	// the binding in effect is the newest and no cascade voids it: a void leaves the member no binding (§7.9's
+	// cascade; QD-1034), and rows that named an older one in effect would give it no wrap either
 	recoveryCurrent := func(member *bridge.MemberRow) bool {
 		inEffect := member.GetRecoveryKeySha256()
 		bindings := member.GetBindings()

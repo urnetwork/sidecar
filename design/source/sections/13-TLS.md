@@ -409,4 +409,4 @@ Flags: `--port` (443, or a listed port), `--expires`, `--audience`, `--alpn`, `-
 
 **v1** (§23 M6): Team custom domains (with §12's custom-host-add, the split's custom-host map with its versions, interface reports and readiness, and strong-mode CAA checks; FS-32, FS-35, FS-122), Team scopes, affinity, `members-device`, overlay access for members by §17's maps and grants alone, with M6's `ur tun` on macOS and Windows (§17), and publish reach receipts (§16).
 
-**Later:** ECH split mode, h3 on edge UDP 443, the PSL listing (§12), anycast.
+**Later:** [ECH split mode](DESIGN-DEFER.md#tls-ech-split-mode), [h3 on edge UDP 443](DESIGN-DEFER.md#tls-h3-edge), [the PSL listing](DESIGN-DEFER.md#dns-psl-listing) (§12), [anycast](DESIGN-DEFER.md#tls-anycast). DESIGN-DEFER.md holds an entry for each, and for [this section's v1 set](DESIGN-DEFER.md#tls-v1) (owner decision 587).

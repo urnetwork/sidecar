@@ -18,11 +18,12 @@
 //
 // The revocation is refused when P would hold one of its signers. Its effect: the revoked sidecar revoked and every
 // other in P parked at the entry, each holding a span [from, entry) in rows; what each signed inside its span void
-// until a signer outside P signs it again (CascadeVoids): its recovery bindings, so a member's binding in effect falls
-// back to its newest one not void, its registered keys, its EvsShares (ACL's VoidEvsShares) and its Delegations, which
-// end; while grants, approvals, suspensions, access-log statements, SponsorSets, IndexerSets, MemberAdmits and config
-// heads it signed stand. The plan lists what stands, a repo's prefix rule sets among them, which stay in force until an
-// admin files the next (DESIGN-DETAILS 16.2.3, QD-795).
+// until a signer outside P signs it again (CascadeVoids): its recovery bindings, so a member whose binding in effect is
+// one of them has none from here, nothing earlier restored (QD-1034), until one of its devices outside P binds a fresh
+// code; its registered keys, its EvsShares (ACL's VoidEvsShares) and its Delegations, which end; while grants,
+// approvals, suspensions, access-log statements, SponsorSets, IndexerSets, MemberAdmits and config heads it signed
+// stand. The plan lists what stands, a repo's prefix rule sets among them, which stay in force until an admin files the
+// next (DESIGN-DETAILS 16.2.3, QD-795).
 //
 // A lift: an AdmissionConfirm by one allowed to admit the sidecar, or its member's OwnerConfirm, from a standing
 // signer, so one outside P, unparks it there, the device live again from that position; what it signed in P stays
@@ -374,8 +375,8 @@ func configCheckCompromise(state *ConfigState, statement *configStatement, sidec
 
 // A compromise revocation's effect, P computed on the state being built: the target revoked and each other sidecar of
 // P parked here, every one holding its span; the Delegations P signed and the target's own ended, their keys dropped;
-// each member's binding in effect its newest one P left standing; and the recovery proposals a voided binding's key
-// signed closed.
+// each member whose binding in effect P voids left with none; and the recovery proposals a voided binding's key signed
+// closed.
 func configApplyCompromise(next *configStateBuilder, statement *configStatement, sidecarId Id) error {
 	revoke := statement.body.(*bridge.SidecarRevoke)
 	closure, err := next.snapshot().CascadeClosure(sidecarId, revoke.GetSinceN())
@@ -398,7 +399,7 @@ func configApplyCompromise(next *configStateBuilder, statement *configStatement,
 			configEndDelegation(next.delegationForWrite(delegation.GetDelegationId()), statement.n)
 		}
 	}
-	configRestoreBindings(next)
+	configVoidBindings(next)
 	configCloseVoidedProposals(next, statement.n)
 	return nil
 }
@@ -418,20 +419,18 @@ func configParkSidecar(next *configStateBuilder, sidecarId Id, from uint64, n ui
 	configParkForwarding(next, sidecarId, from, n)
 }
 
-// Sets each member's binding in effect to its newest binding no cascade voids, none when every one is void (§7.9: a
-// void restores the newest earlier binding not void).
-func configRestoreBindings(next *configStateBuilder) {
+// Leaves each member whose binding in effect a cascade voids with none (§7.9's cascade; QD-1034): a void restores no
+// earlier binding, so the member's rows keep its bindings as history and name no key until a RecoveryBind from a device
+// outside P binds a fresh one. The binding in effect is the member's newest, the first row.
+func configVoidBindings(next *configStateBuilder) {
 	for _, memberId := range next.state.MemberIds() {
 		member := next.member(memberId)
-		var inEffect []byte
-		for _, binding := range member.GetBindings() {
-			if !next.state.heldInCascadeAt(binding.GetSigner(), binding.GetAt()) {
-				inEffect = binding.GetKeySha256()
-				break
-			}
+		bindings := member.GetBindings()
+		if len(member.GetRecoveryKeySha256()) == 0 || len(bindings) == 0 {
+			continue
 		}
-		if !bytes.Equal(inEffect, member.GetRecoveryKeySha256()) {
-			next.memberForWrite(memberId).RecoveryKeySha256 = bytes.Clone(inEffect)
+		if next.state.heldInCascadeAt(bindings[0].GetSigner(), bindings[0].GetAt()) {
+			next.memberForWrite(memberId).RecoveryKeySha256 = nil
 		}
 	}
 }

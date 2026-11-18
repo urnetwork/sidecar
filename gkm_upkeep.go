@@ -11,8 +11,8 @@
 //     current one is sent again.
 //   - KeyPackages: a member device keeps up to 128 one-time KeyPackages and a last-resort one at gkm, a full set at
 //     first and a refill at each key-packages-low hint, and renews the set and the last-resort before their 90 days
-//     lapse. Agents upload only a ReaderKey, and a device a restored binding admitted uploads no KeyPackage until it
-//     has anchored (§10.8).
+//     lapse. Agents upload only a ReaderKey, and a device recovering by its member's code uploads no KeyPackage
+//     until it has anchored (§7.9's anchor, §10.8).
 //   - Acks: each group this device is a leaf of, at most once a day, with its newest applied epoch, which retention
 //     reads (§10.6's ack row).
 //
@@ -65,7 +65,8 @@ type GkmUpkeepRole struct {
 	// Untagged and not ephemeral: it holds leaves, so it keeps KeyPackages at gkm (§10.6). An agent holds wraps
 	// only, and uploads only a ReaderKey.
 	MemberDevice bool
-	// Admitted under a restored binding and not yet anchored (§10.8): its ReaderKey goes up, its KeyPackages wait.
+	// Recovering by its member's code and not yet anchored (§7.9's anchor): its ReaderKey goes up, its KeyPackages
+	// wait.
 	AwaitingAnchor bool
 	// When this device last joined a group through its last-resort KeyPackage, zero for never
 	// (GkmGroupClient.LastResortJoinedAt): a last-resort KeyPackage uploaded before it is replaced at the next pass,
