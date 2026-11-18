@@ -4,7 +4,7 @@
    "file": "09-SOCK.md",
    "line": 438,
    "id": "R8",
-   "ctx": " region-aware selection (one lb site today, [R:ext-edge] \u00a75 R8), slow start, edge-delegated ticket key"
+   "ctx": "region-aware-selection) (one lb site today, [R:ext-edge] \u00a75 R8), [slow start](DESIGN-DEFER.md#sock-slo"
   }
  ],
  "bare_placeholders": [],

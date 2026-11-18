@@ -1162,5 +1162,5 @@ Decided (owner decisions 15, 108): recURd uses the main services; a dedicated is
 ### 2.19 Phasing
 
 - **Each invariant with its mechanism.** M1: I-1 to I-3, I-12, I-13, and I-6 and I-7 with the P0's first stage (§7.4). M2: I-4, I-16 with D-TRUST-10's bound, device-removal I-15, members' I-5. M3: I-8, I-9. M4: I-5, I-10 (§17). M5: I-5 (§9), I-14, CT and zone watches, TTL sweeps, holds. M6: member-removal I-15, I-20 (§16.11), two-approver policies, the audit reader. M7, M9: I-11, mail-host zone watches. I-17 per listener, I-18 at each Gn-out (§23.8), I-19, as amended for remote search, at M10's Gn-out (owner decision 169); connect-5, evs-27 and evs-28 before their mechanisms release (I-18).
-- **Later:** key transparency, a release log, ECH, web code transparency.
-- **Blocking:** D-TRUST-3 gates every sidecar release; "end-to-end encrypted" appears with D-TRUST-4's document, the canary and §2.18's disclosure on the security page, no audit gating it (owner decision 119).
+- **Later:** [key transparency](DESIGN-DEFER.md#trust-key-transparency), [a release log](DESIGN-DEFER.md#trust-release-log), [ECH](DESIGN-DEFER.md#tls-ech-split-mode), [web code transparency](DESIGN-DEFER.md#trust-web-code-transparency). DESIGN-DEFER.md holds an entry for each deferred decision (owner decision 587).
+- **Blocking:** D-TRUST-3 gates every sidecar release; "end-to-end encrypted" appears with D-TRUST-4's document, the canary and §2.18's disclosure on the security page, [no audit](DESIGN-DEFER.md#trust-external-audit) gating it (owner decision 119).

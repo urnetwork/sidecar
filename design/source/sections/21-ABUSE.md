@@ -310,7 +310,8 @@ also                    Web Risk, reviewer and pager routing, and counsel's out-
 
 ### 21.18 Phasing
 
-- **v0 (M5), before any public name:** 21.6-21.10 with `rpt.bringyour.com` and 21.11's RFC 3207 deviation, less the later items below; the DMCA agent; Search Console and registrar contacts; business-hours review, with 21.8's notices on §19.8's rota (owner decisions 134, 143); holds once counsel confirms, `holds_enabled` refusing them until then (21.9). **v1 (M6):** 24/7 review; tightening the team directory's request limits (21.7).
+- **v0 (M5), before any public name:** 21.6-21.10 with `rpt.bringyour.com` and 21.11's RFC 3207 deviation, less the later items below; the DMCA agent; Search Console and registrar contacts; business-hours review, with 21.8's notices on §19.8's rota (owner decisions 134, 143); [holds once counsel confirms](DESIGN-DEFER.md#abuse-preservation-holds), `holds_enabled` refusing them until then (21.9). **v1 (M6):** 24/7 review; tightening the team directory's request limits (21.7).
 - **M7:** reporters in the census (D-MAIL-9). **M8:** trusted flaggers. **M9** (owner decisions 35, 124): §14.8's ladder, the send gate and 21.5's breakers. **M10** (v1's format 2, owner decision 169): holds defer drops' deletions (§11.13).
+- **Deferred:** DESIGN-DEFER.md holds an entry for the holds' switch and for [this section's v1 set](DESIGN-DEFER.md#abuse-v1) (owner decision 587).
 - **With "end-to-end encrypted" (§23.8):** 21.11's trust documents; the first report six months after the first public name.
 - **Blocking:** M5's names wait on intake, the report host, the kill switch and the pager; holds on counsel; M5's exit on FS-39's report-intake cases, FS-48, FS-49 and S7's SNI-less `abuse@<root>` (§22.7, §22.8); M9's sending on the breakers.
