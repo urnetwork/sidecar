@@ -329,7 +329,7 @@ Every entry of the owner's record (owner/DECISIONS.md), by number: 1-111 from th
 | <a id="od-199"></a>199 | 2026-11-10 | Team billing | A `team_subscription` row (MG6) records each Team's Stripe subscription, customer, anchor and start, written at the first `invoice.paid` and ended at `customer.subscription.deleted`; only a live row is granted a period. | §2, §19, §20 |
 | <a id="od-200"></a>200 | 2026-11-10 | Path epochs | The fold records each folded version's place in its statement's change list (`leaf_part`, `leaf_index`), so evs serves the proof of a version an older path epoch wrote and the reader checks the leaf names its token. | §2, §11 |
 | <a id="od-201"></a>201 | 2026-11-10 | Group owner | A group's first object is `gkm/<group_id>/owner` (repo and network), created If-None-Match from the token; every group route resolves through it, so no other repo's form can claim the group. | §2, §10 |
-| <a id="od-202"></a>202 | 2026-11-10 | Forwarding keys | A forwarding Delegation's row carries its reader key's SHA-256, and the 1,216 B key is the gkm object `gkm/dkey/<delegation_id>`, keeping 5,000-device rows near 2.2 MB under §8.8's 4 MiB. Amended by [owner decision 370](#od-370): the key is `gkm/dkey/<network_id>/<delegation_id>`. | §2, §7, §10 |
+| <a id="od-202"></a>202 | 2026-11-10 | Forwarding keys | A forwarding Delegation's row carries its reader key's SHA-256, and the 1,216 B key is the gkm object `gkm/dkey/<delegation_id>`, keeping 5,000-device rows near 2.2 MB under §8.8's 4 MiB. Amended by [owner decision 370](#od-370): the key is `gkm/dkey/<network_id>/<delegation_id>`. | §2, §7, §8, §10, §18 |
 | <a id="od-203"></a>203 | 2026-11-10 | Segment GC | An unadopted segment goes once no batch is left from before its upload + 24 h + 2 min, 49 to 75 h, so GC raises no fence; evacuation fences a ref with no head by a placeholder head. | §2, §11, §19, §22 |
 | <a id="od-204"></a>204 | 2026-11-10 | Drop history | A drop job marks only once evacuation's horizon has passed each covered drop's commit by 2 min, so a `now` drop's deletions start about 25 to 26 h after it, amending [owner decision 183](#od-183)'s 25-minute fence. Amended by [owner decision 397](#od-397): 12 min past each drop's seen_ms, so 25 h 12 min to 26 h 12 min. | §2, §11, §22 |
 | <a id="od-205"></a>205 | 2026-11-10 | Settings in rows | `self_admit` and `scim_signer` compile into `ProjectionRows.settings`, which full readers check against the head and api and the gates take, so every verifier judges a self-admission alike. | §2, §7 |
@@ -402,7 +402,7 @@ Every entry of the owner's record (owner/DECISIONS.md), by number: 1-111 from th
 | <a id="od-272"></a>272 | 2026-11-11 | Go 1.27.4 | Every repo moves to go1.27.4 for GO-2026-6859, server's lock following by one authorized re-pin; the competition evaluator and the perf runner stay on go1.27.3 until re-qualified. | §4 |
 | <a id="od-273"></a>273 | 2026-11-11 | Proto fences | A design-records fold that writes a field into a proto fence drops that field's line from protocol's fence additions in the same commit; a fence never moves ahead of the code. | §4 |
 | <a id="od-274"></a>274 | 2026-11-12 | `sidecarctl` | The one binary for every operations command this build adds lives in server/sidecarctl, where it may link server's model and the engines. | §4, §12 |
-| <a id="od-275"></a>275 | 2026-11-15 | `ios_extension` leg | The leg's seed rule stands: a file it takes wrongly is renamed and a declaration its closure needs is moved, never the rule narrowed or a tag dropped. | §4 |
+| <a id="od-275"></a>275 | 2026-11-15 | `ios_extension` leg | The leg's seed rule stands: a file it takes wrongly is renamed and a declaration its closure needs is moved, never the rule narrowed or a tag dropped. | §4, §18 |
 | <a id="od-276"></a>276 | 2026-11-15 | `Id` on the page Worker | Amends [owner decision 251](#od-251): on the page Worker's leg `sidecar.Id` stays a twin of `operator.Id`, so the leg links no connect; `operator.Id`'s JSON decode refuses what either id refused. | §4, §5, §18 |
 | <a id="od-277"></a>277 | 2026-11-15 | gomobile legs | §4.7's legs are sdk's table, which lists every target gomobile binds, 32-bit android/arm, the simulator and macos/amd64 among them, with gomobile's tags. Amended by [owner decision 554](#od-554): each macOS slice takes two rows, the binding step's as GOOS=ios with `macos` and the compile's as GOOS=darwin without it. | §4, §22 |
 | <a id="od-278"></a>278 | 2026-11-15 | Release, `third_party/` | The release step keeps `third_party/`, the go-smtp fork and the mox subset, at the repository's top beside `v2026/`, so every replace still resolves. | §4 |
@@ -493,7 +493,7 @@ Every entry of the owner's record (owner/DECISIONS.md), by number: 1-111 from th
 | <a id="od-363"></a>363 | 2026-11-10 | Welcome pointers | Welcome pointers are keyed by recipient, group and epoch, `gkm/welcome/<sidecar_id>/<group_id>/<n>`, the KeyPackageRef inside. | §2, §10 |
 | <a id="od-364"></a>364 | 2026-11-10 | Delegation key batches | `POST /gkm/delegation-keys` answers up to 256 forwarding reader keys a request for a config rotator. | §10 |
 | <a id="od-365"></a>365 | 2026-11-11 | An agent's repo's group | A config writer that reads and administers a repo an agent creates forms its group at gkm's hint; with none, the repo stays keying. | §8, §10 |
-| <a id="od-366"></a>366 | 2026-11-10 | MLS memory | The MLS engine meets the phone budget by keeping the tree on disk and streaming it; the SDK keeps bulk state on storage. | §10, §18 |
+| <a id="od-366"></a>366 | 2026-11-10 | MLS memory | The MLS engine meets the phone budget by keeping the tree on disk and streaming it; the SDK keeps bulk state on storage. | §10, §17, §18 |
 | <a id="od-367"></a>367 | 2026-11-10 | Recovery wraps | A code-only device fetches its recovery wraps before admission and opens them once admitted. | §7, §10 |
 | <a id="od-368"></a>368 | 2026-11-10 | GroupForm pin | A GroupForm carries its signer's auth pin, at which members judge the signer. | §2, §10 |
 | <a id="od-369"></a>369 | 2026-11-11 | Poison window | A wrapped writer, or a leaf racing a poisoned commit, may seal to its generation until the refuser's REMOVE rotation: accepted. | §10 |
@@ -600,7 +600,7 @@ Every entry of the owner's record (owner/DECISIONS.md), by number: 1-111 from th
 | <a id="od-470"></a>470 | 2026-11-16 | Write provenance | evs writes seal the run's tainted bit and the session's durable agent id, and reads return each version's provenance. | §5, §16 |
 | <a id="od-471"></a>471 | 2026-11-16 | Named approvers toward k | The spend check counts toward k only the approvers a rule names, as the log's quorum does. | §16 |
 | <a id="od-472"></a>472 | 2026-11-16 | Lapsed erasure requests | An erasure request that lapsed when its repo was announced again stays lapsed through a later revocation. | §16, §22 |
-| <a id="od-473"></a>473 | 2026-11-11 | The bridge ledger | The config head carries each folded bridge statement's body-level verdict, judged on the state its entry lands on and checked by every full reader; writers fold through their tip while one is unfolded. | §7, §17 |
+| <a id="od-473"></a>473 | 2026-11-11 | The bridge ledger | The config head carries each folded bridge statement's body-level verdict, judged on the state its entry lands on and checked by every full reader; writers fold through their tip while one is unfolded. | §7, §17, §18 |
 | <a id="od-474"></a>474 | 2026-11-11 | The bridge start gate | A daemon builds its bridge provider only after replaying every denial above its restored state, waiting for the follow where its store lagged. | §17 |
 | <a id="od-475"></a>475 | 2026-11-15 | Share activation | `ur bridge activate` pins both of a share's tables, the accepting side's one sealed `BridgeShareAccept` among them, and hosts match aliases by host bits. | §17 |
 | <a id="od-476"></a>476 | 2026-11-11 | The share ratchet | A host commits a share's raised config generation before it admits the contract that carried it. | §17 |
@@ -614,7 +614,7 @@ Every entry of the owner's record (owner/DECISIONS.md), by number: 1-111 from th
 | <a id="od-484"></a>484 | 2026-11-15 | [Q-BRIDGE-8](#1714-open-questions) | An app device claims its overlay address only on demand; forwarding's setup files none. | §1, §3, §17, §23 |
 | <a id="od-485"></a>485 | 2026-11-11 | The posture overlay | A VPN component's overlay of checked denials moves to its sealed store; until then a full overlay makes the decision pending. | §17, §18 |
 | <a id="od-486"></a>486 | 2026-11-11 | Key origin framing | The lb sends the key origin no X-Frame-Options, so its framing rests on its CSP's frame-ancestors. | §18 |
-| <a id="od-487"></a>487 | 2026-11-11 | Overdue alarm backoff | `narrowing_overdue` backs off to daily while its condition lasts and comes at once for each newly overdue entry. | §5, §18 |
+| <a id="od-487"></a>487 | 2026-11-11 | Overdue alarm backoff | `narrowing_overdue` backs off to daily while its condition lasts and comes at once for each newly overdue entry. | §5, §17, §18, §22 |
 | <a id="od-488"></a>488 | 2026-11-13 | Date for page Workers | The lb exposes `Date` to cross-origin fetches, so a page Worker signs its DPoP `iat` by api's clock. | §7, §18 |
 | <a id="od-489"></a>489 | 2026-11-14 | Remote edge logins | `tls.edge_login.sign`, a Confirm control method, gives a remote-mode app its device's edge-login statement. | §5, §13, §18 |
 | <a id="od-490"></a>490 | 2026-11-15 | Forwarding exports | Apps hand the sidecar role their VPN component's `Device` at each start, and C ABI services pass a forwarding key store. | §18 |
@@ -685,7 +685,7 @@ Every entry of the owner's record (owner/DECISIONS.md), by number: 1-111 from th
 | <a id="od-555"></a>555 | 2026-11-16 | Release layout paths | Tests only the release layout broke are fixed where they live, `check/` models run.sh's two path passes, and sdk's release restores its nested modules' paths. | §4 |
 | <a id="od-556"></a>556 | 2026-11-16 | Restored admissions' kinds in a base | A base's header lists the restored bindings' admissions in its tail filed with `self_admit` off, so [owner decision 314](#od-314)'s kind holds at every base. | §7 |
 | <a id="od-557"></a>557 | 2026-11-17 | A repo's shrink time in rows | `AclRepo` carries the time of the entry at its `holders_shrunk_at`, so every verifier reads [owner decision 315](#od-315)'s t_s from the rows. | §2, §7, §8 |
-| <a id="od-558"></a>558 | 2026-11-16 | Targets at an app host | At an app's forwarding role §8.9's targets bind revocations; a grant, which only a compile applies, is held to the p99 at a quiet moment. | §8 |
+| <a id="od-558"></a>558 | 2026-11-16 | Targets at an app host | At an app's forwarding role §8.9's targets bind revocations; a grant, which only a compile applies, is held to the p99 at a quiet moment. | §8, §18, §22 |
 | <a id="od-559"></a>559 | 2026-11-16 | Group atoms at the prefix filer | The prefix filer knows a group's atom by the head's group atom ids, so an empty group's atom names nobody. | §8 |
 | <a id="od-560"></a>560 | 2026-11-16 | The dialer's sidecar in `ur/` tickets | A `ur/` ticket names its dialer's sidecar, signed at Find, and smtpedge judges `mail_send` for it. | §2, §9, §14 |
 | <a id="od-561"></a>561 | 2026-11-17 | Members in the revocation record | The revocation record keeps memberships and their users' cutoffs, so sockets checks a member's token with no SQL. | §7, §9, §19 |
@@ -3195,10 +3195,13 @@ fails on
   layering  the root importing a package of this module other than protocol and protocol/bridge; protocol
             importing beyond std, protobuf and protocol/bridge, or protocol/bridge beyond std and protobuf; a
             client package importing a <svc>service
-  legs      the ios_extension leg's root files leaving §18.10's forwarding list, or its protocol descriptors
-            beyond that list's (owner decisions 197, 275); a root file of the sidecar_http js leg importing a
-            connect package (from M1), or the leg linking one, its Id being the root's own twin (owner decision
-            276); net/rpc or template packages on ios, android or js
+  legs      the ios_extension leg's root or protocol files leaving §18.10's forwarding list, the fix being the
+            file's !ios_extension tag and the list growing only in a commit that edits it, or its protocol
+            descriptors beyond that list's (owner decisions 197, 275); its go list -deps holding a package of a
+            module §18.10 leaves out, or of x/text's legacy encodings or x/net's HTML parser, beyond what
+            connect links there itself (DESIGN-DETAILS.md section 4); a root file of the sidecar_http js leg
+            importing a connect package (from M1), or the leg linking one, its Id being the root's own twin
+            (owner decision 276); net/rpc or template packages on ios, android or js
   cgo       CgoFiles, except keychain_darwin.go in §5.10's darwin fallback leg
   hygiene   replaces other than 4.7's; registry conflicts; stale generated code; a release leg built with
             sidecar_testhooks (§22.4); a direct wall-clock call in a non-test file of the root, a <svc>service,
@@ -4294,7 +4297,7 @@ Absent   no sidecar_id recorded in sidecar.json: create U; R_n is created only a
 | Linux desktop | Secret Service |
 | Linux headless | The pass, else a 0600 key file with a warning |
 
-**Forwarding's keys ([owner decision 197](#od-197)).** An app's VPN component keeps its forwarding key, forwarding reader key, forwarding clients' ClientKey seeds and tokens, and a forwarding root key that seals its posture, compiled state and config cache by this section's file sealing, apart from the sidecar role's, so neither reads the other's (§18.6); it generates them only at a setup, and after one a store state other than Present leaves forwarding pending, never resets it, and only its sidecar's own sign-out wipes it:
+**Forwarding's keys ([owner decision 197](#od-197)).** An app's VPN component keeps its forwarding key, forwarding reader key, forwarding clients' ClientKey seeds and tokens, and a forwarding root key that seals its posture, compiled state and config cache by this section's file sealing, apart from the sidecar role's, so neither reads the other's (§18.6); its key sets sit in two slots, current and next, a set promoted only when the component's own state shows its Delegation live, beside the floor, the highest pin it committed, below which a restored store is pending (§18.6's setup and posture; DESIGN-DETAILS.md section 4); it generates them only at a setup, and after one a store state other than Present leaves forwarding pending, never resets it, and only its sidecar's own sign-out wipes it:
 
 | VPN component | Forwarding's keys |
 |---|---|
@@ -5958,7 +5961,9 @@ forwarding  (D-TEAM-33; owner decision 197) a Delegation with forward set is its
             not read_only, no tag_ids, max_admits 0 and no not_after, and a host_client_id, where set, the
             source client of S's current client, which api checks; it admits nothing, api and readers refusing
             a SidecarAdmit or AdmissionConfirm its key signs; its key signs only S's WindowDelegations (§17.9);
-            its reach is the config alone (§10.5); a newer one of S supersedes it at its position; it ends at
+            its reach is the config alone (§10.5); its row carries its reader key's SHA-256, never the key
+            (owner decision 202); a newer one of S supersedes it at its position, recorded as the older one's
+            superseded_at, which is no end for §10.5: the holder's identity stays and no key drops; it ends at
             its DelegationRevoke (since_n 0 only), S's revocation for any reason, a newer one or its void
             (cascade), and its key drops while S is parked or suspended; hosts admit S's flows under its key
             only while it is live (§17.9's verify); a superseded or ended one's row leaves ProjectionRows at
@@ -7492,11 +7497,11 @@ message Unsuspend { StatementHeader header = 1; bytes subject = 2; bytes suspend
 
 **Saving.** A writer's device validates, compiles, tests, previews and signs; a failing test rejects the head (https://tailscale.com/docs/reference/syntax/policy-file). The writer's device runs `tests` before signing, and readers do not rerun them at replay. The config repo's signed head history is the change audit: read-only `ur acl log` lists each head's config_version, signer and time and never runs through MCP (D-MCP-17), and a rollback is `ur acl push` of an older source, a new head at a higher version (D-ACL-9). Validation refuses unknown atoms, approver-only atoms (`autogroup:sponsor`, `autogroup:dst-owner`) outside `approver`, tags outside `tagOwners`, bad ports, overruns, `evs:` paths (X2), owner-bound readers outside the `audit` block, `evs:` grants naming the config or the directory (D-ACL-13, D-ACL-24), an `audit` block without an `AuditOptIn`, publishes past §13.9's limits, `raw` outside `public` and `link`, and a raw `link` without a pin; `network:` selectors resolve from labels or aliases, never legacy names (D-DNS-2). compile is a pure function of the head, so `user:`, `network:` and `client:` selectors resolve through the config's sealed `resolve` file (§7.9's paths), one row per selector the policy names: the writer fills it at save, a server answer being only a proposal, as §7.6 treats SCIM. For an email it uses its own invite record where it has one, else `GET /network/members`, and the preview lists each new or changed row with the member's role and devices, which the person's confirmed save signs; for a network, §12's ResolveNetworkLabel, by label or alias, the id pinned until a person saves again, so a moved alias retargets nothing (§7.12); for a client, a dual-signed `SidecarIdentityBinding` the writer verifies itself, a client with no binding staying a literal client id. Validation refuses a member_id with no live MemberRow, so a stale row fails closed until the next save; 8.4's grammar and the stored source do not change. The preview names readers a repo cannot seat (§8.12).
 
-**Code and limits.** Pure Go `acl_*.go` in the sidecar root; `ur acl test policy.hujson` runs offline. Per-tier limits ([owner decision 73](#od-73)) are §20.4's `acl_*` keys in `config/all/pro.yml` (`model.Pro()`). ProjectionRows hold at most 4,096 atoms and 4 MiB, and §7.9's `config_admissions` bounds subjects; validation and api's verifier refuse a head or base over a limit (`RESOURCE_EXHAUSTED`). An acl statement's re-application in a base's tail reads only its body and the rebuilt rows, an effect the new rows no longer allow being dropped (`ReapplyStatement`; §7.9's apply; DESIGN-DETAILS.md section 5). Every tier may hold a document (owner decisions [50](#od-50), [73](#od-73)); after a downgrade new heads must fit (§20.7).
+**Code and limits.** Pure Go `acl_*.go` in the sidecar root; `ur acl test policy.hujson` runs offline. Per-tier limits ([owner decision 73](#od-73)) are §20.4's `acl_*` keys in `config/all/pro.yml` (`model.Pro()`). ProjectionRows hold at most 4,096 atoms and 4 MiB, a forwarding Delegation's row about 200 B since its reader key is a gkm object its digest names ([owner decision 202](#od-202)), and §7.9's `config_admissions` bounds subjects; validation and api's verifier refuse a head or base over a limit (`RESOURCE_EXHAUSTED`). An acl statement's re-application in a base's tail reads only its body and the rebuilt rows, an effect the new rows no longer allow being dropped (`ReapplyStatement`; §7.9's apply; DESIGN-DETAILS.md section 5). Every tier may hold a document (owner decisions [50](#od-50), [73](#od-73)); after a downgrade new heads must fit (§20.7).
 
 ### 8.9 Distribution: local evaluation and gate caches
 
-**Clients.** Every admitted sidecar follows the config repo and §7's `team` hints, verifies config heads and the authorization log (§7.9) and evaluates its own rules in `AclEngine`, with no always-on compiler ([owner decision 6](#od-6)). The engine swaps compiled state through an `atomic.Pointer`, checks without locks or allocation, and compares its auth pin (n, A_n) in HeadCheck (§6.4), which any admitted reader, agents included, may witness ([owner decision 129](#od-129)): it refuses a lower pin, and reconciles, alarms, relays (`proven`) and stops sealing in shared groups as §6.4's auth rules say. An app's forwarding role follows them itself in its VPN component, by its forwarding Delegation's reader key, through the same engine (§18.6; [owner decision 197](#od-197)), and between its compiles `sidecar/device`'s posture checks bases' signatures and chain only.
+**Clients.** Every admitted sidecar follows the config repo and §7's `team` hints, verifies config heads and the authorization log (§7.9) and evaluates its own rules in `AclEngine`, with no always-on compiler ([owner decision 6](#od-6)). The engine swaps compiled state through an `atomic.Pointer`, checks without locks or allocation, and compares its auth pin (n, A_n) in HeadCheck (§6.4), which any admitted reader, agents included, may witness ([owner decision 129](#od-129)): it refuses a lower pin, and reconciles, alarms, relays (`proven`) and stops sealing in shared groups as §6.4's auth rules say. An app's forwarding role follows them itself in its VPN component, by its forwarding Delegation's reader key, through the same engine (§18.6; [owner decision 197](#od-197)), and between its compiles `sidecar/device`'s posture checks the chain and bases' signatures and applies at once, as denials, the revocations it can check by their signers' keys in the rows it holds, opening nothing (§17.8's forwarding roles).
 
 **Gates.** api's verifier (§7.9) keeps each network's newest base and the entries after it, which api, evs and gkm read from §7.9's verified Redis cache `{acl_<networkId>}e` when it reaches `{acl_}v` and every pin they hold, else from `proj/` on the first metadata cluster ([owner decision 136](#od-136)); only api writes that cache, which decides nothing, and other gate services fetch from api, as only those three and taskworker reach the metadata tier (§2.8 evs-10). Each process caches them per (network, n), loading asynchronously outside packet locks on api's `INCR {acl_<networkId>}v` (class `$`, xops/redis-set-notify-keyspace-events.sh:23) after every entry it appends and on a 5-min poll; a network without a config repo costs one map miss (R-ACL-8). Gates check every entry's chain from their own pin wherever they read it, and refuse a lower n, or a second A_n at one n, with an alarm. Taskworker's gkm reconciler tells its cache of the networks §10.6's networks row names, at its runtime's start and again for one the bounded cache evicted, so a quiet network's hints, key deletions and sweeps run after a restart; gkm and the reconciler read their state through this cache ([owner decision 371](#od-371)).
 
@@ -8395,8 +8400,10 @@ readerkey  every reader, leaves included, keeps a current ReaderKey at gkm/rk/<s
 covered    a covered agent reads R through its Delegation's wrap and holds no ReaderWrap there; it holds a key
            in its own right only where a grant names it
 dwraps     the device that signs a Delegation, an admin's or for a forwarding one its sidecar's (§18.6), writes
-           late DelegationWraps of the current generation of every repo it can read in the Delegation's reach; any holder but a read_only one writes the rest
-           on wrap-pending (10.9's late row); every rotation stages one per live Delegation in H
+           late DelegationWraps of the current generation of every repo it can read in the Delegation's reach,
+           a forwarding one's sidecar uploading the Delegation's reader key object first (10.6; owner decision
+           202); any holder but a read_only one writes the rest on wrap-pending (10.9's late row); every
+           rotation stages one per live Delegation in H
 signer     every GenRotate is signed by a holder of R's key, or one covered, at a pin covering what it rotates
            for (a writer of R, or a config statement signer; 10.9), so a dropped sidecar, whose ReaderKey and
            wraps no later rotation contains, cannot sample or reissue the generation that excludes it
@@ -8478,7 +8485,9 @@ object (keys: below)                          written                       hold
 on the repo's cluster
 gkm/<group_id>/owner                          If-None-Match, by gkm from    GkmGroupOwner {repo_id, network_id}, the
                                                 the token, before the form  group's one repo, through which alone gkm
-                                                at a creation or re-form    resolves it (owner decision 201)
+                                                at a creation or re-form    resolves it (owner decision 201); the
+                                                                            shred deletes it, and a re-seed's form
+                                                                            writes it again
 gkm/repo/<repo_id>/<seq>                      If-None-Match                 GroupForm, Signed by a repo admin's device
                                                                             (for owner-bound kinds, only the owner's
                                                                             consented device) or by a network admin's
@@ -17475,9 +17484,12 @@ persist               the anchor, the newest verified AuthPin, the signed base h
                       since, the latch document_seen_at (the newest pin with has_document = true) and each
                       served share's newest verified ShareCert (17.9); on restart they re-verify offline
                       against the anchor and the pinned ShareKeys, and the state applies before the first
-                      packet
+                      packet; in an app's forwarding role they are sealed under forwarding's root key and the
+                      highest pin committed is also kept in the key store, a store below it being pending
+                      (§18.6's posture; DESIGN-DETAILS.md section 4)
 legacy -> pending     the sidecar enrolls, or on an app sets up its forwarding (§18.6), with
-                      Pending{network_id, genesis_sha256, sidecar_id, identity_public_key}, stored with the
+                      Pending{network_id, genesis_sha256, sidecar_id, identity_public_key}, on an app with
+                      the forwarding Delegation its keys are named in (forward_delegation_id), stored with the
                       anchor; a later Pending for the same network and anchor, as after an admin's revocation
                       and a new enrollment, replaces the stored id and key and changes no state
 pending -> enforcing  the first state verified against the anchor
@@ -17491,7 +17503,7 @@ never                 an unsigned has_document, a projection that does not chain
                       state; one that fails to verify leaves it and alarms
 ```
 
-- **Forwarding roles** (owner decisions [87](#od-87), [197](#od-197)). An app's VPN component compiles its own `BridgeState` from the config it reads by its forwarding Delegation's reader key, with `Pending` from forwarding's setup (§18.6), its `Names` feeding C14's zone (§12.9); between compiles its posture applies the log's `SidecarRevoke`, `MemberRevoke`, `Suspend`, `Unsuspend`, `GrantRevoke` and `BridgeWithdraw` entries, verified against the anchor (§7.9) with `protocol/bridge`'s types alone, a `SidecarRevoke`, `MemberRevoke` or `Suspend` that §7.9's presence row covers on its identity signature as a denial that the next compile, which checks the countersignature, confirms or reverses (owner decisions [185](#od-185), [187](#od-187), [189](#od-189)). It holds those denials in its overlay, which goes to the component's sealed store in the review phase and until then, past its bound, makes the posture's decision pending rather than stop applying them (§18.6's posture; [owner decision 485](#od-485)). So rules and revocations apply whether or not the app runs.
+- **Forwarding roles** (owner decisions [87](#od-87), [197](#od-197)). An app's VPN component compiles its own `BridgeState` from the config it reads by its forwarding Delegation's reader key, with `Pending` from forwarding's setup (§18.6), its `Names` feeding C14's zone (§12.9). The compile's judge is §7.9's rows-only verifier, as api's: the forwarding role checks a head against the base that names it and does not re-compile rows from it, which the app's sidecar role, a full reader, does whenever it runs (§18.6's witness). Between compiles its posture applies as denials the log's `SidecarRevoke`, `MemberRevoke`, `Suspend`, `GrantRevoke`, `BridgeWithdraw` and `DelegationRevoke` entries and a newer forwarding Delegation's supersession, each on its signer's identity key in the rows it holds, verified against the anchor (§7.9) with `protocol/bridge`'s types alone, a `SidecarRevoke`, `MemberRevoke` or `Suspend` that §7.9's presence row covers on its identity signature as a denial that the next compile, which checks the countersignature, confirms or reverses (owner decisions [185](#od-185), [187](#od-187), [189](#od-189)), and it lifts nothing: an `Unsuspend` and every opening take effect at the next compile. A statement that could narrow reach and that it cannot check waits for the next compile, the last compiled state staying in force: the component never goes pending for it, and raises `bridge_alarm` with the statement's age once it has waited 10 minutes, again at doubling intervals (20 minutes, 40 minutes and so on) up to once a day while the condition lasts and at once whenever a further such statement becomes overdue, the condition staying in the posture's status until a compile clears it, so a revocation the posture cannot check does not apply on a device that cannot compile, an accepted cost (owner decisions [216](#od-216), [487](#od-487); DESIGN-DETAILS.md section 4). It holds the denials in its overlay, which goes to the component's sealed store in the review phase and until then, past its bound, makes the posture's decision pending rather than stop applying them (§18.6's posture; [owner decision 485](#od-485)). So rules and revocations apply whether or not the app runs.
 - **Limits.** None per network ([owner decision 66](#od-66)); the block bounds addresses at 64,770.
 
 ```proto
@@ -17529,16 +17541,21 @@ message BridgeState {
   repeated string daemon_listeners = 9;    // rule 0 (17.6): the daemon's listener binds, host:port
 }
 message BridgeIdentity { bytes sidecar_id = 1; bytes identity_public_key = 2; uint64 admitted_at = 3;
-                         bool revoked = 4; bool suspended = 5; }
+                         bool revoked = 4; bool suspended = 5;
+  bytes forward_delegation_id = 6;         // the subject's forwarding Delegation live at the state, 32 B;
+                                           // empty for none (§7.9's forwarding row)
+  bytes forward_public_key = 7;            // its Ed25519 key, 32 B, under which a delegation whose 32-byte
+                                           // signer_id is that Delegation's id verifies (17.9's verify)
+}
 message BridgeShareKey { bytes share_id = 1; bytes public_key = 2; }   // the pinned ShareKey, Ed25519
 message Pending {                         // legacy -> pending
   bytes network_id = 1;
   bytes genesis_sha256 = 2;
   bytes sidecar_id = 3;                   // this sidecar's, which the sign-out edge above checks
   bytes identity_public_key = 4;          // its identity key, Ed25519, under which that SidecarRevoke verifies
+  bytes forward_delegation_id = 5;        // on an app, the forwarding Delegation this component's keys are
+                                          // named in (§18.6's setup; owner decision 197)
 }
-// bridge.proto also declares Pending's forward_delegation_id = 5 (DESIGN-DETAILS 4.2.2), which joins this fence
-// with that section's fold; protocol's fence test's additions list holds it now
 ```
 
 **Disposition** (D-BRIDGE-7):
@@ -17602,7 +17619,10 @@ sign     BridgeHost gets one per window client it builds, signed by the subject'
 verify   once per contract, before the first flow's dial: the signature, by the subject's identity key
          pinned through its SidecarAdmit and neither revoked nor suspended at this state, by the key of the
          subject's forwarding Delegation live at this state (§7.9's forwarding row: forward names the
-         subject, and it is neither superseded, revoked nor void), or by a ShareSigner that share signers
+         subject, and it is neither superseded, revoked nor void; a 32-byte signer_id is its delegation_id,
+         verified only under that subject's BridgeIdentity.forward_public_key, never by trying keys), which
+         the host denies again from the entry that revokes or supersedes it (§17.8's forwarding roles), or by
+         a ShareSigner that share signers
          admit; window_client_id = the contract's source; window_client_public_key = the
          sealed session's peer key (C15); target_sidecar_id = this host; not_after_ms ahead; network_id =
          C13's sealed network; C13's sealed subject is among subject_sidecar_id's client_ids in the compiled
@@ -17920,7 +17940,7 @@ ipv6     ::/0 goes through the tun too, with IPv6 copies of the two rules on Lin
 - **API routes:** statements through §7's `POST /network/config/delta`; shares through §8's `POST /acl/invite` and `POST /acl/accept-invite`, which carry the sealed tables, the accept status included, the accept in §8.11's two forms, a claim that answers the share's id with the sealed targets and a completion that stores the sealed accept and the status once ([owner decision 350](#od-350)); `GET|PUT /network/bridge/share/<share_id>` (Client, a sidecar of either network: read both tables, or replace its own at a higher version).
 - **Tables:** `network_bridge_share` (api): share_id, both network ids, sealed target and alias tables, versions, `accept_status enum{active, refused_too_large, refused_no_space}`; kept until revoked.
 - **Services and config:** no new service and no `sidecar_abuse:` caps; sdk flag `EnableBridge` and §19's `bridge` gate, which keep the bridge dark until its release (§19.11) and are no setting: released, an app's forwarding runs whenever its VPN component runs ([owner decision 197](#od-197)); `ur tun` needs CAP_NET_ADMIN or root.
-- **Assumptions about other sections:** §7.9 carries 17.8's statements as log entries, its type rule bounding a decision's bridge rules by 17.8's rule ids; §7.9's config head holds `bridge/ledger/`, its writer folds the ledger at each base that folds a bridge statement and through its tip while one is unfolded, and its head check compares the ledger ([owner decision 473](#od-473)); the daemon's `ConfigClient` stores an entry before any entry callback runs ([owner decision 474](#od-474)); a §5.8 Confirm method, `bridge.activate`, runs 17.9's activation ([owner decision 475](#od-475)); §16.6's step 5 has a bridge component whose Lookup finds that id in the authorization log, AU1 counts those rules, `bridge_expose` returns the id, and `bridge_close` takes it or a forward's grant_id (§16.5); `sidecar/device` parses only `protocol/bridge`'s auth.proto (§7.9: `AuthPin`, `AuthEntry`, `ProjectionHeader`, `StatementHeader`, `Genesis`, `SidecarRevoke`, `MemberRevoke`, and §8.8's `Suspend`, `Unsuspend` and `GrantRevoke`) and signed.proto (§6.9: `Signed`, `WebAuthnEvidence`, `SignedType`), which `config.proto` and `acl.proto` import (§4.4); §5.8 and §16.6 sign 17.9's own-resource filings, a host's own `BridgeAddress` among them, from any mode, and other bridge statements only for a /dev/tty-confirmed `ur` command or in an app's UI; §18.6's setup gives an app's VPN component its forwarding Delegation, forwarding clients and `Pending`, after which its forwarding role compiles 17.8's states itself, persists them as its posture and signs its links' delegations with its forwarding key or a share's ShareSigner, and `DeviceLocal` takes the physical path's /32s; §7.9 defines the forwarding Delegation, its signer, what its key signs and its ends, §6.9 that key's `signer_id`, and §7.4 the forwarding client's `forward_only` mark; §2.8 lists `network_bridge_share` with its accept status and C13's delegation with a share's ShareCert, §2.10 17.9's share-signer bound, and §2.6 and §7.9 the ShareKey's custody and the `BridgeShareSigner` seeds every Y config reader, agents included, holds; §6.9's Signers and §5.5's identity-key rule (D-CORE-6) admit 17.9's two share keys; §22 tests D-BRIDGE-16 to D-BRIDGE-21: §22.5's §17 row; §22.7's S8, its actions suite and its assert block's bridge clauses (17.5's pins, aliases, private names, the no-document rules, MCP's own-resource bridge filings); FS-38, with its share signers in the M6-out run with C18; FS-56's dial fence, no byte reaching a target after its flow's revocation (D-BRIDGE-21); and §22.9's Browsers row (the CGNAT carve) and Memory row (mobile churn past a full table, the link cell's NAT at C5's per-flow idles) ([owner decision 551](#od-551)).
+- **Assumptions about other sections:** §7.9 carries 17.8's statements as log entries, its type rule bounding a decision's bridge rules by 17.8's rule ids; §7.9's config head holds `bridge/ledger/`, its writer folds the ledger at each base that folds a bridge statement and through its tip while one is unfolded, and its head check compares the ledger ([owner decision 473](#od-473)); the daemon's `ConfigClient` stores an entry before any entry callback runs ([owner decision 474](#od-474)); a §5.8 Confirm method, `bridge.activate`, runs 17.9's activation ([owner decision 475](#od-475)); §16.6's step 5 has a bridge component whose Lookup finds that id in the authorization log, AU1 counts those rules, `bridge_expose` returns the id, and `bridge_close` takes it or a forward's grant_id (§16.5); `sidecar/device` parses only `protocol/bridge`'s auth.proto (§7.9: `AuthPin`, `AuthEntry`, `ProjectionHeader`, `StatementHeader`, `Genesis`, `SidecarRevoke`, `MemberRevoke`, `ForwardScope`, and §8.8's `Suspend`, `Unsuspend` and `GrantRevoke`) and signed.proto (§6.9: `Signed`, `WebAuthnEvidence`, `SignedType`), which `config.proto` and `acl.proto` import (§4.4), reading the fields of config.proto's `Delegation` and `DelegationRevoke` its overlay needs by their numbers (DESIGN-DETAILS.md section 4); §5.8 and §16.6 sign 17.9's own-resource filings, a host's own `BridgeAddress` among them, from any mode, and other bridge statements only for a /dev/tty-confirmed `ur` command or in an app's UI; §18.6's setup gives an app's VPN component its forwarding Delegation, forwarding clients and `Pending`, after which its forwarding role compiles 17.8's states itself, persists them as its posture and signs its links' delegations with its forwarding key or a share's ShareSigner, and `DeviceLocal` takes the physical path's /32s; §7.9 defines the forwarding Delegation, its signer, what its key signs and its ends, §6.9 that key's `signer_id`, and §7.4 the forwarding client's `forward_only` mark; §2.8 lists `network_bridge_share` with its accept status and C13's delegation with a share's ShareCert, §2.10 17.9's share-signer bound, and §2.6 and §7.9 the ShareKey's custody and the `BridgeShareSigner` seeds every Y config reader, agents included, holds; §6.9's Signers and §5.5's identity-key rule (D-CORE-6) admit 17.9's two share keys; §22 tests D-BRIDGE-16 to D-BRIDGE-21: §22.5's §17 row; §22.7's S8, its actions suite and its assert block's bridge clauses (17.5's pins, aliases, private names, the no-document rules, MCP's own-resource bridge filings); FS-38, with its share signers in the M6-out run with C18; FS-56's dial fence, no byte reaching a target after its flow's revocation (D-BRIDGE-21); and §22.9's Browsers row (the CGNAT carve) and Memory row (mobile churn past a full table, the link cell's NAT at C5's per-flow idles) ([owner decision 551](#od-551)).
 
 ### 17.17 Risks
 
@@ -17937,7 +17957,8 @@ ipv6     ::/0 goes through the tun too, with IPv6 copies of the two rules on Lin
 | A full pin table leaves pairs unpinned, so an edit can move their live flows | Low | Medium | One pin per pair, only where an entry offers a choice; nothing refused ([owner decision 66](#od-66)); `ur bridge` counts unpinned pairs; §22.9's mobile churn case |
 | After an uncovered agent's reap, new bridge deltas wait for a config rotation (§8.12) by a config writer or the agent's admitting device, a wrapped one by rotation alone (§7.10; owner decisions [128](#od-128), [144](#od-144)) | Medium | Medium | No admin needed ([owner decision 128](#od-128)); covered agents' reaps need none (§10.5); withdrawals never wait; `ur bridge` shows the wait |
 | A tun's overlay address leaks in WebRTC (libwebrtc's 100.64/10 handling is unverified) | Unknown | Low | `ur tun ip auto` refuses behind `BridgeComponentSettings.AutoAddressEnabled`, false, until §22.9's Browsers check shows no ICE candidate in the overlay block; an explicit address and an admin's assignment work |
-| Links, or forwarding's compile, do not fit the iOS tunnel | High | Medium | No iOS links until §22 measures; Q-BRIDGE-2's own-client links; the compile cap of [owner decision 216](#od-216), a network past it keeping its last verified state on that device and alarming; links fail closed meanwhile |
+| Links, or forwarding's compile, do not fit the iOS tunnel | High | Medium | No iOS links until §22 measures; Q-BRIDGE-2's own-client links; the compile cap of [owner decision 216](#od-216), measured to admit about 4,300 devices' rows at the tunnel's connected baseline and 770 to 1,440 under provider load, a network past it keeping its last verified state on that device and alarming; links fail closed meanwhile |
+| A revocation the posture cannot check does not apply on a device that cannot compile | Low | High | Accepted by the owner ([owner decision 216](#od-216)): forwarding never drops for it; `bridge_alarm` at 10 minutes, again at doubling intervals to once a day and for each newly overdue entry, the condition in the status throughout ([owner decision 487](#od-487)); denials the posture can check apply at once; the review phase's storage-backed compile removes the memory cap as a cause ([owner decision 366](#od-366); DESIGN-DETAILS.md section 4) |
 | Between the app's runs an app's forwarding role follows the log unwitnessed, so an operator that withholds a revocation from it keeps a revoked subject reaching that device | Low | Medium | the sidecar role's witnessed pin at each run (§18.6); daemon hosts witness by HeadCheck (§6.4); it needs a malicious operator, and the subject's own revocation still ends it at every other device |
 | A base that leaves a bridge filing unfolded and changes the policy its approval was judged by turns that filing's verdict at every reader | Low | Low | writers fold through their tip whenever a bridge statement is unfolded, so only a filing in the seconds between a head's writing and its base's acceptance is exposed; it fails closed alike at every reader, and the requester files again (17.8; [owner decision 473](#od-473)) |
 | A standing member device keeps filing bridge bodies sealed to generations that never form, holding the config fold | Low | Medium | each is void at the fold `UnformedVoidWait` (24 h) after its entry; while they keep coming, bases past the tail cap wait up to that long at a time; the writer's `config_key_waiting` line names the filer on every plan, and revoking it, which needs no base, ends the hold one wait after its last filing (17.8; [owner decision 478](#od-478)) |
@@ -18523,8 +18544,10 @@ type deviceBridge interface {
 	                                           // those unknown, per-peer /32s instead of the block (§17.4, D-BRIDGE-12)
 	LocalZone() connect.LocalZone              // §12.9's private names from the state's Names and NameZones; nil before a state
 	SetPending(pending *bridge.Pending) error  // legacy -> pending, at forwarding's setup (Setup, below)
-	SetState(state *bridge.BridgeState) error  // §17.8, from the forwarding role's own compile (Following); versions only rise
-	ApplyDeltas(objects [][]byte) error        // projection deltas, verified offline against the state's anchor (§8.9)
+	SetState(state *bridge.BridgeState, log *device.PostureLog) error // §17.8, from the forwarding role's own compile
+	                                           // (Following), with the log run that vouches for the state, from the
+	                                           // component's own store; versions only rise
+	ApplyDeltas(log *device.PostureLog) error  // projection deltas, verified offline against the state's anchor (§8.9)
 	Status() device.BridgeStatus
 	AddChangeCallback(callback func()) func()
 }
@@ -18551,17 +18574,38 @@ when        each new client generation of the sidecar S (enrollment, re-enrollme
             the sidecar role its VPN component's Device at each start (18.5's SetForwardingDevice), and the role
             checks what is due then and at every interval after: the 90-day rotation, no live forwarding
             Delegation, a new client generation the core finds (owner decision 490)
-keys        the VPN component generates, and never exports, a forwarding key (Ed25519), a forwarding reader key
-            (X-Wing) and its forwarding client's ClientKey; only their public halves cross
-delegate    S signs its forwarding Delegation {pubkey, reader_xwing_public_key, forward: S, and in its device
-            client D's network D as host_client_id and host_client_public_key} (§7.9's forwarding row), which
-            supersedes S's earlier one, and writes its first DelegationWrap of the config's current generation
-            (§10.5's dwraps)
-mint        S mints its forwarding client F: POST /network/auth-client {source_client_id: S's client,
-            admin_refused, strict_exp, forward_only, the VPN component's client public key} with S's DPoP proof;
-            F and its window clients act as S (D-ACL-3), and forward_only confines their tokens (§7.4, §7.8)
-hand off    F's token, the Delegation's id and Pending {network_id, genesis_sha256, sidecar_id, identity public
-            key} reach the VPN component; no key of S does
+steps       S is the sidecar role and C the VPN component; each step is idempotent (DESIGN-DETAILS.md section 4)
+C0 keys     C generates, and never exports, a key set under a fresh 16-byte key_set_id in its key store's slot
+            next: a forwarding key (Ed25519), a forwarding reader key (X-Wing) and its forwarding client's
+            ClientKey; it replies ForwardingKeys, their public halves, a repeat while next is unpromoted
+            returning the same set
+S1 sign     S records forward/<network>/setup {key_set_id, the public halves, its step} and signs its
+            forwarding Delegation {pubkey, reader_xwing_public_key, forward: S, and in its device client D's
+            network D as host_client_id and host_client_public_key} (§7.9's forwarding row), which supersedes
+            S's earlier one; delegation_id is the SHA-256 of the Signed, whose bytes it records
+S2 file     POST /network/config/delta, then wait for its position n; a 409 at the tip re-signs at the new
+            pin and records again
+S3 key      PUT /gkm/delegation-keys/<delegation_id>, the reader key's object, which gkm answers 409 until its
+            state holds the row (§10.6)
+S4 wrap     the late DelegationWrap of the config's current generation to that key (§10.5's dwraps)
+S5 mint     S mints its forwarding client F: POST /network/auth-client {source_client_id: S's client,
+            admin_refused, strict_exp, forward_only, the VPN component's client public key} with S's DPoP proof,
+            a repeat for the same key reusing F; F and its window clients act as S (D-ACL-3), and forward_only
+            confines their tokens (§7.4, §7.8)
+S6 hand off S returns ForwardingHandOff: Pending {network_id, genesis_sha256, sidecar_id, identity public key,
+            forward_delegation_id}, the key_set_id, F's id and token with its strict_exp, the config repo's
+            and group's ids, the Signed Delegation as filed and the AuthPin that carried it; no key of S
+C7 check    C requires the Delegation's pubkey, reader key and, where set, host client to equal slot next's
+            and this device's, its forward to name Pending's sidecar_id and its signature to verify under
+            Pending's identity key, else refuses and keeps current; then it stores the token and the hand-off,
+            sets Pending if legacy, and follows
+C8 promote  once a state at or past that AuthPin shows the Delegation live for S, C promotes next to
+            current, re-signs every live window client and deletes the old set
+kill        around S2 a repeat posts the recorded bytes again and finds a copy already in the log by its id,
+            since the replay row refuses a second, so one Delegation is filed; after S2 the record's step
+            resumes; between C7 and C8 C keeps signing with current, which hosts admit until they apply the
+            newer Delegation's entry, and with next after C8: at most one compile at each host, links failing
+            closed across it and rebuilding
 after       the VPN component refreshes F by its own DPoP proofs (§7.4), follows and compiles (Following) and
             signs (Signing); a forwarding client left unrefreshed 7 days, its VPN component off that long, lapses
             with no grace (D-TEAM-14), and forwarding stays pending until the app's next run mints another
@@ -18573,21 +18617,31 @@ after       the VPN component refreshes F by its own DPoP proofs (§7.4), follow
 pushes      team hints reach the VPN component on its device client D in D's network (21842 registered for
             pushes only, D-PROTO-8; D minted acl_enforcing, Rules below), and in any other network by §6.8's
             long-poll on F
-follow      it fetches the authorization log (GET /network/config/projection?after=) and config heads with F's
-            config-read token (§7.8), reading the head each base names with the replaying head reader every
-            leg runs, the Apple extensions' included (owner decisions 317, 318, 491), opens each config
-            generation by its DelegationWrap (§10.5), and runs the forwarding leg's follower, AclEngine and
-            §17.8's compiler for S off the packet path, within §8.9's targets, so a new rule, grant, block or
-            revocation applies while the app sleeps
+follow      it fetches the authorization log (GET /network/config/projection?after=) with F's config-read
+            token (§7.8) and hands each page to its posture, which applies denials at once (§17.8's forwarding
+            roles); when an entry is not a denial it runs a compile off the packet path, CompileDelay (2 s)
+            after it and at most one each CompileMinInterval (10 s): a rows-only ConfigLog restored from its
+            store judges the entries, as api's does (§7.9); DelegationWraps open the config generations
+            (§10.5); the head the base names is read with the replaying head reader every leg runs, the Apple
+            extensions' included (owner decisions 317, 318, 491), and checked against the base, never
+            compiled into rows again; and AclEngine and §17.8's compiler produce S's state, the compile
+            streaming the head's bridge ledger from the component's store and reading no fold (owner decision
+            473), all released afterwards; a compile is admitted by an estimate of about five times its rows'
+            bytes against the host's cap and heap ceiling (18.10's memory), and one refused or deferred leaves
+            the last state in force, never pending, and raises bridge_alarm; so while the app sleeps a
+            revocation applies within §8.9's targets, and a new rule, grant or block at a quiet moment within
+            its p99 (owner decision 558; DESIGN-DETAILS.md section 4)
 witness     while the sidecar role runs, it sends its witnessed AuthPin (§6.4) as a hint: the forwarding role
             fetches and verifies up to it, and a pin off its chain raises head_alarm through the status mirror;
-            between the app's runs its view is unwitnessed (§17.17)
+            a fork the sidecar role finds, a full reader that re-compiles each base's rows, forces the
+            forwarding role pending until a later witness clears it; between the app's runs its view is
+            unwitnessed (§17.17)
 ```
 
 Its posture is one state machine with §17.8's engine (D-SDK-13, D-BRIDGE-18):
 
 ```text
-posture      per network, persisted in the VPN component's own store, sealed under forwarding's local key (§5.9):
+posture      per network, persisted in the VPN component's own store, sealed under forwarding's root key (§5.9):
              iOS and macOS, the extension's container, never the app group; Android, the VPN service's files;
              Windows and Linux, the app service's state directory
 legacy       no sidecar has set up forwarding here: nil deviceBridge, today's behavior
@@ -18599,7 +18653,11 @@ enforcing    a state its own compile verified, and the anchored deltas after it,
              decisions 50, 105 and 120's allow-all, entered only on a verified base above the persisted
              document_seen_at latch (the newest pin at which has_document was true)
 stored       the anchor, the newest verified AuthPin, the signed base header and rows, the statements since,
-             document_seen_at, and the config generations and compiled state its last compile used
+             document_seen_at, the config generations and compiled state its last compile used, the entries
+             waiting for a compile with the time each was first seen, which times the alarm and nothing else
+             (owner decision 487), and a fork its sidecar role reported, every record sealed under
+             forwarding's root key and the highest pin committed kept in the key store as its floor (§5.9;
+             DESIGN-DETAILS.md section 4)
 overlay      the denials it checked by signature and applies between compiles (§17.8's forwarding roles) move to
              the component's sealed store in the review phase, streamed and indexed with only an index and a
              cache in RAM (owner decision 366), so storage alone bounds them and the per-flow check reads the
@@ -18613,8 +18671,11 @@ transitions  legacy -> pending -> enforcing{doc|nodoc}; back to legacy only on t
              any -> legacy), which wipes the stored state and forwarding's keys; another sidecar's sign-out or
              an admin's revocation of this one lowers nothing, and a later Pending for the same network and
              anchor replaces the stored id and key and changes no state
-never        an unverified projection, one that does not chain, a lower version or an unsigned has_document
-             changes the posture; one that fails to verify leaves it unchanged and alarms
+never        an unverified projection, one that does not chain, a lower version, a state below the one in
+             force or an unsigned has_document changes the posture; one that fails to verify leaves it
+             unchanged and alarms; a store below the key store's floor, or at it on another chain, is a
+             rolled-back copy, pending with store_rolled_back until a follow brings the pin back to the floor
+             on the floor's chain
 DP1          after a device's first verified state, no restart, delay or unsigned response lowers enforcement
 so           an unverified projection is never read; a verified no-document state keeps owner decisions 50,
              105 and 120's allow-all
@@ -18921,17 +18982,28 @@ Claude Code cloud adds secrets at its proxy (https://code.claude.com/docs/en/clo
 - **Forwarding leg ([owner decision 197](#od-197); D-SDK-20).** Every VPN component runs forwarding and no other sidecar code: Apple's extensions link only forwarding, as the `ios_extension` leg, and the Windows and Linux app services the same file list, while Android's VPN service runs in the app's own binding, where the sidecar role's code is present but runs only while the app is open (18.4):
 
 ```text
-kept        the every-leg types and SidecarApi; the forwarding client's DPoP refresh (§7.4); the authorization
-            log's follower and config verification (§7.9); DelegationWrap unwrap, X-Wing and the key ladder
-            (§10.5); evs head reads of the config repo, a base's head by the replaying config head reader every
-            leg runs, with the push records' readers and the seal part record's parser it needs (§11; owner
-            decisions 317, 318, 491); AclEngine (§8); §17.8's statements and compiler; forwarding's signer;
-            protocol's config, acl, evs and gkm descriptors; sidecar/device; protocol/bridge; operator-core,
-            whose Id the root's aliases (owner decision 251)
-excluded    every other root file, under !ios_extension as connect-facing ones carry !sidecar_http: mls_,
-            mail_, smtp_, tls_, dns_, socket_, search_, record_, directory_, indexer_ and the subprotocol but
-            push hints; evs writes, evs's git export and every repo but config; approvals, enrollment and
-            recovery; mcp/, cli/ and every <svc>service
+links       sidecar/device and sidecar/protocol/bridge whole; of the root, built with ios_extension, only the
+            files on the leg's list, check/testdata/ios_extension_leg.txt, which check/ regenerates as the
+            closure of the Forwarder's files and §17.8's compiler (owner decision 275): 269 of 428 root files
+            when first computed on 2026-11-10 and 395 of 906 on 2026-11-17, many there for one type or
+            constant, since the root's files are not layered, and the linker keeps only what an entry point
+            reaches; through them the every-leg types and SidecarApi, the forwarding client's DPoP refresh
+            (§7.4), the rows-only follower and config verification (§7.9), DelegationWrap unwrap, X-Wing and
+            the key ladder (§10.5), evs head reads of the config repo, a base's head by the replaying config
+            head reader every leg runs, with the push records' readers and the seal part record's parser it
+            needs (§11; owner decisions 317, 318, 491), AclEngine (§8), §17.8's statements and compiler and
+            forwarding's signer; of protocol, every generated file but mail.pb.go and socket.pb.go, which
+            protocol/Makefile tags; operator-core, whose Id the root's aliases (owner decision 251); and sdk's
+            device_sidecar*.go, which name the root only through the Forwarder (DESIGN-DETAILS.md section 4)
+leaves      every other root file, by its !ios_extension tag, as connect-facing ones carry !sidecar_http:
+            every mail_, search_, host_, daemon_ and indexer_ file, most smtp_, socket_, tls_, dns_ and evs_
+            files and some record_ files; and by module, mail's servers and verifiers, DNS, ACME and its test
+            server, the MCP sdk, brotli and yaml.v3, with x/text's legacy encodings and x/net's HTML parser,
+            whose tables a package-level variable roots past any dead-code pass: no listed file imports them,
+            and make check refuses each in the leg's go list -deps beyond what connect links there itself
+            (§4.7's legs); without the tags the same entry points measured 1,885,888 B more, stripped
+            (2026-11-10)
+never       cli/, mcp/, smtpproof, sidecarctl and every <svc>service: other modules or packages
 make size   from M4 the leg adds at most 7.5 MiB (7,864,320 B) of executable over today's binding, measured
             stripped as the shipped binding is (owner decision 491, amending 215's 6 MiB), and the signed iOS
             extension's ceiling rises from 50 MiB to 54 MiB (56,623,104 B) (owner decision 215); owner
@@ -18956,8 +19028,11 @@ memory      forwarding's Go heap at most 4 MiB steady, inside the iOS tunnel's 2
             posture's status until the first compile clears it (owner decision 487); no VPN component goes
             pending for that wait, so forwarding never drops for it, the next compile judging every waiting
             statement, at the accepted cost that such a revocation may not apply on a device that cannot
-            compile; it compiles on Android, Windows and Linux (owner decision 216); measured on surrogates
-            only (owner decision 100)
+            compile; it compiles on Android, Windows and Linux (owner decision 216); bulk state stays on
+            storage and RAM is a working set, so the review phase's path past the cap is a storage-backed
+            compile that reads its rows from the sealed store under the same cap, with an index the follow
+            writes as the rows stream in (owner decision 366; DESIGN-DETAILS.md section 4); measured on
+            surrogates only (owner decision 100)
 ```
 - **Pruning.** No `net/rpc`, templates or dynamic reflect lookups (sdk/build/mobile_method_pruning_test.go:27); the worker needs protobuf v1.36.12, the first that keeps pruning (sdk/build/go.mod:98; sdk/js/go.mod:97 has v1.36.11), and sidecar generates with v1.36.11 (§6).
 - **Tags.** sdk's sidecar-role files carry `!ios_extension`, and §5.10's Keychain tag keeps gomobile's darwin slices (sdk/dependency_boundary_test.go:91) on the app's `SidecarKeyStore`. The golang.org/x/mobile sdk pins runs each macOS slice in two configurations and fails the bind if either fails: its binding step, gobind's type-check of the bound package and its dependencies, uses GOOS=ios with the bind's tags plus `macos` (its cmd/gomobile/env.go's platformOS; https://go.dev/issue/52299), and the compile of the c-archive the slice links uses GOOS=darwin with the bind's tags alone, since a command-line `-tags` replaces the `-tags=macos` gomobile sets in GOFLAGS. So desktop behavior selects on gomobile's `macos` tag as well as on GOOS: sdk's remote dial files carry `!ios_extension && !js && ((ios && !macos) || android)` (sidecar_remote_dial_mobile.go) and `!ios_extension && !js && (!ios || macos) && !android` (sidecar_remote_dial.go), and the root's daemon client files that carry `!ios` add `|| macos` the same way, the daemon's server files staying out through `!sdk_mobile_bind`, so both configurations select the desktop dial and the daemon client, and the macOS app's `NewSidecarRemote` reaches `ur daemon` (18.4, 18.5, R-SDK-9) from one xcframework ([owner decision 493](#od-493)). The compiled archive selected them before these tags, so the macOS app's remote mode works as linked; the tags make the binding step agree, and §4.7's legs hold both configurations, the root's desktop client files checked to build in each, so a later divergence between them fails `make check` rather than the bind ([owner decision 554](#od-554)). Should the daemon client not build under GOOS=ios, a separate GOOS=darwin bind is a new question ([owner decision 493](#od-493)).
@@ -19010,6 +19085,8 @@ miss        if the leg still exceeds the goal at M4's entry, RS1 ships it under 
 |---|---|---|---|
 | Full sidecar in network processes | always on | iOS: 4,690,096 B headroom, 32 MiB shared, jetsam kills the VPN; desktop: root, LocalSystem or sandboxed processes (apple/app/app.xcodeproj/project.pbxproj:1291) hold content | rejected (owner decisions [87](#od-87), [197](#od-197)) |
 | The keyless device role: the app compiles the rules and signs each link's delegation | no key or config reader in the tunnel; a 1 MiB budget | new rules and new links wait for the app, and a sleeping app stalls links | not taken ([owner decision 197](#od-197)) |
+| A file allow-list of the forwarding files alone | a short list | the root's files are not layered: the closure was 269 of 428 files when first computed | not available without seam work: a computed list, tags on the rest, and the linker (18.10; DESIGN-DETAILS.md section 4) |
+| The follower kept resident in the tunnel | no reload at a compile | 10.5 MB decoded at 5,000 devices | rejected: transient compiles (18.6; DESIGN-DETAILS.md section 4) |
 | A forwarding sidecar of its own in the VPN component, admitted as a device | hosts verify as today | two sidecars per app device in policy, `ur devices` and admissions; filings signed for a sidecar the app does not hold; with self_admit off an admin admits every phone's | rejected: a forwarding Delegation of the device's own sidecar (D-SDK-32) |
 | A second, minimal follower, policy evaluator and compiler in `sidecar/device` | keeps the tunnel near 1 MiB | two implementations of security-critical rules to keep equal | not chosen ([owner decision 215](#od-215)) |
 | A forwarding Delegation that expires within 90 days, as an auth key's | bounds a copied forwarding key with no revocation | forwarding stops where the app has not run for 90 days | rejected: it ends with its sidecar, its revocation or a newer one ([owner decision 197](#od-197)) |
@@ -19050,7 +19127,7 @@ miss        if the leg still exceeds the goal at M4's entry, RS1 ships it under 
 
 **D-SDK-12 (proposed).** ur.io's hosted DeviceLocal runs no sidecar or bridge, and 18.3's hosted check marks it for §8.10's gate. *Why:* I-10.
 
-**D-SDK-13 (proposed).** The forwarding role takes rules and names only from the `BridgeState` its own compile of the verified config produces and the anchored deltas after it, persists its posture (legacy, pending, enforcing), restoring enforcing state before the first packet, and signs each window client's `WindowDelegation` itself, with its forwarding key or a share's current `BridgeShareSigner` (18.6). *Why:* owner decisions [3](#od-3), [85](#od-85), [197](#od-197); forwarding must never wait on the app, a restart plus an unsigned `has_document = false` must not reopen a LAN, and §17.9's hosts admit only delegated window clients.
+**D-SDK-13 (proposed).** The forwarding role takes rules and names only from the `BridgeState` its own compile of the verified config produces and the anchored deltas after it, persists its posture (legacy, pending, enforcing), restoring enforcing state before the first packet, and signs each window client's `WindowDelegation` itself, with its forwarding key or a share's current `BridgeShareSigner` (18.6); its posture applies denials at once and opens only on a compiled state, and a narrowing entry it cannot check never makes it pending: the last compiled state stays in force and `bridge_alarm` is raised at 10 minutes, again at doubling intervals to once a day and for each newly overdue entry, until a compile judges it (owner decisions [216](#od-216), [487](#od-487)). *Why:* owner decisions [3](#od-3), [85](#od-85), [197](#od-197); forwarding must never wait on the app, a restart plus an unsigned `has_document = false` must not reopen a LAN, and §17.9's hosts admit only delegated window clients.
 
 **D-SDK-14 (proposed).** Transport rejections are generation-bound and map to Unenrolled with a reason; only a verified `SidecarRevoke` maps to Revoked. *Why:* a lost or expired client is not a revocation (D-CORE-8), and a stale callback must not end a new pairing.
 
@@ -19064,7 +19141,7 @@ miss        if the leg still exceeds the goal at M4's entry, RS1 ships it under 
 
 **D-SDK-19 (proposed).** The page Worker builds the root with `-tags sidecar_http`: connect-facing and engine host (`host_*.go`) files are `!sidecar_http`, and the rest, token path included, use only §5.4's root types and `SidecarApi`. The root's `Id` aliases operator-core's, which imports connect, on every other leg; on this one it is a twin with the same methods and encodings, so the leg links no connect or gVisor ([owner decision 276](#od-276), amending 251), and at about 57.8 MB it misses 18.10's goal, a recorded slip under the miss rule's gate. Its loader starts `sidecar.wasm` with `GODEBUG=gcstoptheworld=1` ([owner decision 492](#od-492)). *Why:* the page Worker runs no connect client, engine or `Env`, and connect's IP stack puts the 40 MB goal out of reach without C17; on js/wasm's one thread the background mark worker runs only when the program blocks, so a long CPU-bound call could leave a GC cycle open while linear memory, which never shrinks, grows.
 
-**D-SDK-20 (proposed).** The forwarding role is `sidecar/device`, importing connect and `sidecar/protocol/bridge` only, with the root's forwarding files, the only root files the `ios_extension` leg links, whose file and descriptor lists `make check` holds (18.10); through the root's `Id` the leg also links operator-core ([owner decision 251](#od-251)), and with the replaying config head reader every leg runs it is held to 7.5 MiB, the budget [owner decision 491](#od-491) set from the measurement [owner decision 251](#od-251) asked for, amending 215's 6 MiB. *Why:* [owner decision 197](#od-197) puts the config follower and compiler in the VPN component, and only an allow-list keeps every other root init and descriptor out of the jetsam-bound tunnel.
+**D-SDK-20 (proposed).** The forwarding role is `sidecar/device`, importing connect and `sidecar/protocol/bridge` only, with the root files on the `ios_extension` leg's list, a computed closure every other root file is tagged out of, whose list, refused modules and descriptors `make check` holds and whose stripped size `make size` holds (18.10); through the root's `Id` the leg also links operator-core ([owner decision 251](#od-251)), and with the replaying config head reader every leg runs it is held to 7.5 MiB, the budget [owner decision 491](#od-491) set from the measurement [owner decision 251](#od-251) asked for, amending 215's 6 MiB. *Why:* [owner decision 197](#od-197) puts the config follower and compiler in the VPN component, and only an allow-list keeps every other root init and descriptor out of the jetsam-bound tunnel.
 
 **D-SDK-21 (proposed).** Every host that searches a repo keeps its two latest buckets synced, phones' team directory aside (D-SDK-28). Desktops and indexers keep all in the background; phones fetch it at "search more" for repos no designated indexer answers and browser tabs at "search more", both also on Wi-Fi while charging, phones in OS windows, and tabs while open only where their browser reports both conditions; ephemeral agents fetch it only at "search more"; each device may override per repo, within 18.4's caps. A condition an app or browser has not reported counts as metered and not charging. *Why:* owner decisions [154](#od-154), [177](#od-177) and [178](#od-178); 154's per-device override covers browsers, since Safari and Firefox report neither condition and desktop browsers no network type, and ephemeral agents, whose in-memory caches would re-download all at every start; only OS windows let a backgrounded phone download tens to hundreds of MB.
 
@@ -19088,7 +19165,7 @@ miss        if the leg still exceeds the goal at M4's entry, RS1 ships it under 
 
 **D-SDK-31 (proposed).** Apps check and follow internet sends through `SidecarMail`: before Send, `CheckSend` gives each recipient domain's mode, the message's encoded bytes, the DATA cap, the expected delay and a predicted outcome; after it, `GetSendResult` and the `mail_send` event give each domain's outcome, with 18.5's copy; `GetReceiverCoverage` speaks only of receiving. *Why:* [owner decision 125](#od-125) keeps the DATA cap, so a person needs the size, the cap and the one domain it stops, at composition or before MAIL, and an inbound API cannot explain an outbound limit (meta review K04).
 
-**D-SDK-32 (proposed).** Forwarding is authorized by a forwarding Delegation the sidecar signs for keys its VPN component generated and never exports, and runs on forwarding clients the sidecar mints as its `forward_only` children, which the VPN component refreshes itself; the forwarding key signs only that sidecar's `WindowDelegation`s, and the Delegation ends with the sidecar, its `DelegationRevoke` or a newer one (18.6, §7.9). *Why:* [owner decision 197](#od-197)'s self-contained forwarding keeps the device one subject in policy, `ur devices` and admissions, and reuses the Delegation's signer path, reader wraps, rows, revocation and cascade.
+**D-SDK-32 (proposed).** Forwarding is authorized by a forwarding Delegation the sidecar signs for keys its VPN component generated and never exports, and runs on forwarding clients the sidecar mints as its `forward_only` children, which the VPN component refreshes itself; the forwarding key signs only that sidecar's `WindowDelegation`s, and the Delegation ends with the sidecar, its `DelegationRevoke` or a newer one (18.6, §7.9); its reader key is a gkm object the row's digest names ([owner decision 202](#od-202)), and the component promotes a key set only once its own state shows that set's Delegation live. *Why:* [owner decision 197](#od-197)'s self-contained forwarding keeps the device one subject in policy, `ur devices` and admissions, and reuses the Delegation's signer path, reader wraps, rows, revocation and cascade.
 
 ### 18.13 Open questions
 
@@ -21489,8 +21566,15 @@ Parentheses hold T1 tests; the rest run in T2 and T3. Inline server paths (contr
       signed by a superseded, revoked or voided forwarding Delegation's key, or by one whose forward names another
       sidecar, is refused before any byte, as is a link to an app host whose client key is not the host client its
       live forwarding Delegation names, each on FS-38's operator-minted contracts; api and every reader refuse a
-      SidecarAdmit, statement or head a forwarding key signs; with the sidecar role stopped, a new grant and a
-      revocation reach the host within §8.9's targets; a forward_only client gets only the config's r scope and no
+      SidecarAdmit, statement or head a forwarding key signs; with the sidecar role stopped, a revocation reaches
+      the host within §8.9's targets and a grant at a quiet moment within its p99 (owner decision 558), a
+      DelegationRevoke racing a compile, a supersession racing a contract, a compile finishing below a newer
+      state and a refused Unsuspend open nothing the rule table did not judge, and a revocation the posture
+      cannot check, with compiles blocked, leaves the state in force and forwarding running, raises
+      narrowing_overdue at 10 min, again at 30 and at once for a second such entry when it becomes overdue,
+      the status showing the condition throughout, and is applied by the first compile let run, which clears
+      it, as on a network over the memory cap, which never goes pending (owner decisions 216, 487;
+      DESIGN-DETAILS.md section 4); a forward_only client gets only the config's r scope and no
       other route; after a 7-day lapse forwarding stays pending until the app's next run mints its client anew
 §18   (SidecarKeyStore statuses through the generated Swift, Kotlin, C-ABI and js adapters: one terminal result, no
       panic) LOCKED then unlock keeps the identity, and nothing is created while LOCKED; Absent with a recorded id
@@ -22214,6 +22298,15 @@ model       EvsCommit.tla (TLA+, checked by TLC: https://github.com/tlaplus/tlap
             its KeyPackageRef, unchecked forms, a GenWrap blind to the roster, a self-join carrying a GenWrap, a
             LATE delivery below its claim's pin, a claim below its parent, a leaf_wrap over a tree holding a
             dropped leaf, no gate, members that skip the roster check) as failing configurations;
+            details/Fwd.tla (DESIGN-DETAILS.md section 4, run by run-fwd.sh beside it) keeps one sidecar's
+            forwarding Delegations, their revocations and its suspension, unsuspension and revocation, and one
+            host's forwarding role: the posture's pin, the compiled state's pin and key, the overlay, compiles
+            in flight that finish in any order, the key store's floor and a copy of the store put back, and
+            TLC checks OnlyLiveKeysAdmitted, OverlayAfterState, StaleIsAlarmed and EachOverdueRaised, and
+            EventuallyRefused under fairness of compiles, with the rules as first written (no Delegation
+            overlay, an overlay that lifts or opens, a state that drops the overlay, a lower state accepted, no
+            floor, repeats alone) as failing configurations and owner decision 216's accepted case, a
+            revocation the posture cannot check waiting while no compile finishes, as two reach configurations;
             StoreSettle.tla keeps one key on 8 drives at EC:4 (4 hosts of 2): each drive's version, its stamp and
             its own lock on the key, each write's coordinator, which may crash, and its drive commits, each a check
             step then a commit step, the settler and heal; writes are cancelled, pass their deadline, arrive after
@@ -22597,7 +22690,9 @@ FS-14  §7,8   two readers with one base and different statements at n+1 (a sock
               by every reader, the ring taken from rows; a member's own admission is judged
               alike at api, a rows-only gate and a full reader under self_admit on and off; a
               reader whose pin fell below the retention point links its pin through the head's
-              records and forks on a forged run (DESIGN-DETAILS.md section 5)
+              records and forks on a forged run (DESIGN-DETAILS.md section 5); a forwarding
+              Delegation's row, with its reader key's digest and superseded_at, reads alike
+              across a fold at a new device and a gate (DESIGN-DETAILS.md section 4)
 FS-15  §10    an agent removed with every leaf offline: an agent rotates with ReaderWraps to   FI-4        T2+T3  M2-out
               every leaf and the gate reopens, and a returning leaf commits the Remove first,
               its path-only commit carrying the newest GenWrap; a leaf's and a wrapped
@@ -22666,7 +22761,10 @@ FS-18  §10    a DelegationRevoke, a passed not_after, a non-reap revocation or 
               removed revocation of an already reaped covered agent lands and drops D's key; a
               Delegation's admission count and end, carried through a fold, refuse its key's
               admissions past them at a new device as at a long-running reader
-              (DESIGN-DETAILS.md section 5)
+              (DESIGN-DETAILS.md section 5); gkm refuses a forwarding Delegation's reader key
+              object whose SHA-256 is not the row's digest, and a rotation that finds neither
+              the statement's key nor such an object skips that Delegation's wrap, a late one
+              going once the object stands (DESIGN-DETAILS.md section 4)
 FS-19  §8     an untagged ephemeral admitted with no policy under a personal network's Owner   I-15        T2+T3  M2-out;
               (the config read, M2): it reads the config and deposits, holding no other repo's                    later runs
               generation, while general reads, writes and admin and owner-bound writes fail,                      at M4, M6
@@ -22813,7 +22911,11 @@ FS-38  §17    a FriendsAndFamily contract whose sealed source network differs f
               an operator-minted contract to an X-granted target: the honest gate refuses the
               contract, the minted one reaches only X's granted targets and ports, and the run
               records X's grant and the gate, never Y's bypassed router, as what enforced
-              (§8.11)
+              (§8.11); at app hosts, once forwarding runs there (§22.5's §17 row), a
+              WindowDelegation whose 32-byte signer_id names the subject's forwarding
+              Delegation live at the host's state is the positive twin, while one forged, or
+              signed by a superseded or revoked forwarding Delegation's key, opens zero
+              upstream sockets (DESIGN-DETAILS.md section 4)
 FS-39  §14,15 report intake: gzip XML and JSON aggregates count once per reporter and          FI-11       T2     M5-out;
               report_id, and an ARF body canary appears in no log; at M7, delayed DNS evidence                    the rest
               and REQUIRETLS added by an active second hop: labels as stated                                      at M7-out
@@ -24201,7 +24303,7 @@ Beyond the schedules:
 - **ACME** (Pebble with 5% bad nonces in T2 and T3; LE staging; GTS, ZeroSSL): §13.8's challenges, ARI, CAA, an operator CAA at a custom host's exact target refused (FS-32); custom-domain desktops order and renew on Pebble, the test leg's release one that finds its own certificates for replacement, else sidecartest's Pebble harness issuing a leaf it can replace ([owner decision 546](#od-546)); LE staging refuses URnetwork's account under a customer `accounturi`, which Pebble never checks (https://github.com/letsencrypt/pebble/blob/main/va/va.go, 2026-11-04); CT watch on a fixture (staging CT is unreliable: https://letsencrypt.org/docs/staging-environment/, 2026-04-10).
 - **DNS** (zonemaster; Unbound, BIND, Knot Resolver; two public resolvers): R-DNS-7; compact denial and wildcards validate; before the DS, Unbound validates against the KSK as a trust anchor; a broken canary signature pages.
 - **Browsers** (Chrome, Firefox, Safari, curl; Playwright on ur.io's page Worker and the native companion): 421 on coalescing; split PQ hellos; other origins' POST, subresource GET and WebSocket arrive sessionless, and login works without Fetch Metadata (§13.7); private audiences without a usable ALPN (FS-34) and custom hosts through the split (FS-35); another origin, a framed copy and localhost are refused the key origin, no key or token crosses postMessage, and a script injected on ur.io finds neither the Worker's key nor its token; IndexedDB survives a reload, and after Safari's 7-day storage cap evicts the key origin its page Worker re-enrolls through a consented device, the old leaf leaving by §10.9's stale-leaf rule; a storage-pressure eviction of a non-persistent bucket does the same, the re-enrollment's admitting device, an admin's in a Team with self_admit off, revoking each Worker it saw removed as stale from every group it is a leaf of that seated it, at least one, and no other, a Worker no group of that device seated never being revoked in that act, and the member's consented device, in that act or at its OwnerConfirm, offering to revoke the evicted one (§7.10's stale row; FS-97); the key-origin frame calls navigator.storage.persist(), and the page tells the person what an eviction costs (§18.8); in two ur.io tabs on one network only the Web Lock's holder loads state, refreshes, commits and writes the keychain, the other Worker relaying, and closing the holder's tab hands over the lock, relayed requests retrying; a vault record opens with C4 absent; no ICE candidate in the overlay block (§17.17), the check `ur tun ip auto` waits for, and a CGNAT fixture whose WAN address lies in the block keeps its carrier path and overlay reachability; no torn writes; no network `by_jwt` in the worker.
-- **Memory, size** (darwin/arm64 iOS settings in T4; ios32 surrogate cells, one with a link; §18.4's other hosts): §18.4's budgets, and forwarding's within owner decisions [215](#od-215), [216](#od-216) and [491](#od-491)'s on an ios32 cell whose forwarding role compiles a 3,000-device team's config within its 10 MiB cap and refuses a 5,000-device one with bridge_alarm (owner decisions [197](#od-197), [216](#od-216)), a hooked NAT's per-flow UDP loop re-measured on constrained provider profiles at M8 (§17.6), in every LOWBAR phase on iOS, the link cell deciding links and holding an app-device host's NAT with bridge flows at §17.5's idles through C5's per-flow IdleTimeout, while its public egress flows keep the NAT's own; sizes unstripped (§18.10); `make check` fails an HTTP-only file importing connect; the mobile sender's 1,024-slot pin table, churned past 1,024 live pairs, routes the excess unpinned and refuses none (§17.5).
+- **Memory, size** (darwin/arm64 iOS settings in T4; ios32 surrogate cells, one with a link; §18.4's other hosts): §18.4's budgets, and forwarding's within owner decisions [215](#od-215), [216](#od-216) and [491](#od-491)'s on an ios32 cell whose forwarding role compiles a 3,000-device team's config within its 10 MiB cap and refuses a 5,000-device one with bridge_alarm (owner decisions [197](#od-197), [216](#od-216)), a hooked NAT's per-flow UDP loop re-measured on constrained provider profiles at M8 (§17.6), in every LOWBAR phase on iOS, the link cell deciding links and holding an app-device host's NAT with bridge flows at §17.5's idles through C5's per-flow IdleTimeout, while its public egress flows keep the NAT's own; sizes as §18.10 measures them, the ios_extension leg's stripped (owner decisions [215](#od-215), [491](#od-491)) and the sidecar_http leg's unstripped; `make check` fails an HTTP-only file importing connect; the mobile sender's 1,024-slot pin table, churned past 1,024 live pairs, routes the excess unpinned and refuses none (§17.5).
 - **Index determinism** (darwin/arm64, linux/amd64 and arm64, windows/amd64, gomobile android/arm64 and the iOS settings, js/wasm in Node and, through Playwright, Chrome, Firefox and Safari): testdata/index/, its extraction (mail, files, the character-reference table, the charset labels) and search body sizes included, reproduces byte-equal plaintext and hashes under GOMAXPROCS 1 and 16, repeated runs (Go randomizes map order) and changed TZ and locale; the linked `norm.Version`, `cases.UnicodeVersion` and `unicode.Version` equal the format's normalization version and x/text's linked module version equals `IndexFileHeader` field 14's, so a toolchain or x/text bump fails until a new one is assigned (D-TEST-15).
 
 ### 22.10 Internal review gates
@@ -25086,14 +25188,14 @@ Every D- item, in section order: 463 items, 16 of them withdrawn and 1 decided b
 | D-SDK-10 | Wake pushes carry only a topic class and version, from M8 ([owner decision 88](#od-88)). | [§18](#1812-decisions-proposed) |
 | D-SDK-11 | Desktop sdk hosts adopt 18.7's credential rules before §7.4's stage 2 (I-6; [owner decision 45](#od-45)). | [§18](#1812-decisions-proposed) |
 | D-SDK-12 | ur.io's hosted DeviceLocal runs no sidecar or bridge, and 18.3's hosted check marks it for §8.10's gate. | [§18](#1812-decisions-proposed) |
-| D-SDK-13 | The forwarding role compiles its own rules from the verified config, restores its posture first, and signs its own delegations. | [§18](#1812-decisions-proposed) |
+| D-SDK-13 | The forwarding role compiles its rules, applies denials at once, opens only on compiled states, and signs its delegations. | [§18](#1812-decisions-proposed) |
 | D-SDK-14 | Transport rejections are generation-bound and map to Unenrolled with a reason; only a verified `SidecarRevoke` maps to Revoked. | [§18](#1812-decisions-proposed) |
 | D-SDK-15 | `SidecarKeyStore` returns status codes and a `SidecarSecret` struct, since gobind carries no error type. | [§18](#1812-decisions-proposed) |
 | D-SDK-16 | Wakes follow 18.7: a slot-local script ordering token projections by revision, a separate enqueue, frame acks, a deferred live check. | [§18](#1812-decisions-proposed) |
 | D-SDK-17 | Ephemeral clients are reaped with no open connection once their poll lease and newest disconnect pass 35 min. | [§18](#1812-decisions-proposed) |
 | D-SDK-18 | Browser keys, tokens and the Worker live in a key origin that ur.io pages frame and message by exact origin. | [§18](#1812-decisions-proposed) |
 | D-SDK-19 | The page Worker builds the root `-tags sidecar_http`, linking no connect, its `Id` a twin; its loader sets gcstoptheworld=1. | [§18](#1812-decisions-proposed) |
-| D-SDK-20 | Forwarding is `sidecar/device` plus the root's listed forwarding files, whose file and descriptor lists `make check` holds. | [§18](#1812-decisions-proposed) |
+| D-SDK-20 | Forwarding is `sidecar/device` plus the root's computed forwarding closure; `make check` holds its list, `make size` its stripped size. | [§18](#1812-decisions-proposed) |
 | D-SDK-21 | Searching hosts sync buckets; desktops and indexers always sync all, phones and tabs at "search more" or Wi-Fi while charging. | [§18](#1812-decisions-proposed) |
 | D-SDK-22 | `SidecarSearch` gives apps one call streaming replacing pages of state-labeled hits naming any verifying indexer, with fetch and remote progress. | [§18](#1812-decisions-proposed) |
 | D-SDK-23 | Conditions come from apps' `SetConditions` and browsers' key-origin frame, background time from `RunBackgroundSync`; the Go core reads no platform API. | [§18](#1812-decisions-proposed) |

@@ -899,7 +899,7 @@ Absent   no sidecar_id recorded in sidecar.json: create U; R_n is created only a
 | Linux desktop | Secret Service |
 | Linux headless | The pass, else a 0600 key file with a warning |
 
-**Forwarding's keys (owner decision 197).** An app's VPN component keeps its forwarding key, forwarding reader key, forwarding clients' ClientKey seeds and tokens, and a forwarding root key that seals its posture, compiled state and config cache by this section's file sealing, apart from the sidecar role's, so neither reads the other's (§18.6); it generates them only at a setup, and after one a store state other than Present leaves forwarding pending, never resets it, and only its sidecar's own sign-out wipes it:
+**Forwarding's keys (owner decision 197).** An app's VPN component keeps its forwarding key, forwarding reader key, forwarding clients' ClientKey seeds and tokens, and a forwarding root key that seals its posture, compiled state and config cache by this section's file sealing, apart from the sidecar role's, so neither reads the other's (§18.6); its key sets sit in two slots, current and next, a set promoted only when the component's own state shows its Delegation live, beside the floor, the highest pin it committed, below which a restored store is pending (§18.6's setup and posture; DESIGN-DETAILS.md section 4); it generates them only at a setup, and after one a store state other than Present leaves forwarding pending, never resets it, and only its sidecar's own sign-out wipes it:
 
 | VPN component | Forwarding's keys |
 |---|---|

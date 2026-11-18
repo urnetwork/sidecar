@@ -110,3 +110,9 @@ D['D-EVS-69'] = ("Local git refs move only by applying evs's versions in order; 
 assert D['D-TEAM-26'].startswith('A compromise `SidecarRevoke` parks') and 'D-KEYS-27' not in D, 'TEAM and KEYS rows moved'
 D['D-TEAM-26'] = "A compromise `SidecarRevoke` parks what the device signed from `since_n` on until reconfirmed; rows keep every confirmation."
 D['D-KEYS-27'] = "A group belongs to one repo: its owner marker, created first, is the only binding gkm resolves it by."
+# The fold of DESIGN-DETAILS.md section 4 (2026-11-17): the posture applies denials at once and opens only on a
+# compiled state (owner decisions 216, 487), and the leg is a computed closure whose size make size holds.
+assert D['D-SDK-13'].startswith('The forwarding role compiles its own rules') and D['D-SDK-20'].startswith(
+    'Forwarding is `sidecar/device` plus'), 'SDK forwarding rows moved'
+D['D-SDK-13'] = "The forwarding role compiles its rules, applies denials at once, opens only on compiled states, and signs its delegations."
+D['D-SDK-20'] = "Forwarding is `sidecar/device` plus the root's computed forwarding closure; `make check` holds its list, `make size` its stripped size."

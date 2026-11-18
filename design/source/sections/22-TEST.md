@@ -199,8 +199,15 @@ Parentheses hold T1 tests; the rest run in T2 and T3. Inline server paths (contr
       signed by a superseded, revoked or voided forwarding Delegation's key, or by one whose forward names another
       sidecar, is refused before any byte, as is a link to an app host whose client key is not the host client its
       live forwarding Delegation names, each on FS-38's operator-minted contracts; api and every reader refuse a
-      SidecarAdmit, statement or head a forwarding key signs; with the sidecar role stopped, a new grant and a
-      revocation reach the host within §8.9's targets; a forward_only client gets only the config's r scope and no
+      SidecarAdmit, statement or head a forwarding key signs; with the sidecar role stopped, a revocation reaches
+      the host within §8.9's targets and a grant at a quiet moment within its p99 (owner decision 558), a
+      DelegationRevoke racing a compile, a supersession racing a contract, a compile finishing below a newer
+      state and a refused Unsuspend open nothing the rule table did not judge, and a revocation the posture
+      cannot check, with compiles blocked, leaves the state in force and forwarding running, raises
+      narrowing_overdue at 10 min, again at 30 and at once for a second such entry when it becomes overdue,
+      the status showing the condition throughout, and is applied by the first compile let run, which clears
+      it, as on a network over the memory cap, which never goes pending (owner decisions 216, 487;
+      DESIGN-DETAILS.md section 4); a forward_only client gets only the config's r scope and no
       other route; after a 7-day lapse forwarding stays pending until the app's next run mints its client anew
 §18   (SidecarKeyStore statuses through the generated Swift, Kotlin, C-ABI and js adapters: one terminal result, no
       panic) LOCKED then unlock keeps the identity, and nothing is created while LOCKED; Absent with a recorded id
@@ -924,6 +931,15 @@ model       EvsCommit.tla (TLA+, checked by TLC: https://github.com/tlaplus/tlap
             its KeyPackageRef, unchecked forms, a GenWrap blind to the roster, a self-join carrying a GenWrap, a
             LATE delivery below its claim's pin, a claim below its parent, a leaf_wrap over a tree holding a
             dropped leaf, no gate, members that skip the roster check) as failing configurations;
+            details/Fwd.tla (DESIGN-DETAILS.md section 4, run by run-fwd.sh beside it) keeps one sidecar's
+            forwarding Delegations, their revocations and its suspension, unsuspension and revocation, and one
+            host's forwarding role: the posture's pin, the compiled state's pin and key, the overlay, compiles
+            in flight that finish in any order, the key store's floor and a copy of the store put back, and
+            TLC checks OnlyLiveKeysAdmitted, OverlayAfterState, StaleIsAlarmed and EachOverdueRaised, and
+            EventuallyRefused under fairness of compiles, with the rules as first written (no Delegation
+            overlay, an overlay that lifts or opens, a state that drops the overlay, a lower state accepted, no
+            floor, repeats alone) as failing configurations and owner decision 216's accepted case, a
+            revocation the posture cannot check waiting while no compile finishes, as two reach configurations;
             StoreSettle.tla keeps one key on 8 drives at EC:4 (4 hosts of 2): each drive's version, its stamp and
             its own lock on the key, each write's coordinator, which may crash, and its drive commits, each a check
             step then a commit step, the settler and heal; writes are cancelled, pass their deadline, arrive after
@@ -1307,7 +1323,9 @@ FS-14  §7,8   two readers with one base and different statements at n+1 (a sock
               by every reader, the ring taken from rows; a member's own admission is judged
               alike at api, a rows-only gate and a full reader under self_admit on and off; a
               reader whose pin fell below the retention point links its pin through the head's
-              records and forks on a forged run (DESIGN-DETAILS.md section 5)
+              records and forks on a forged run (DESIGN-DETAILS.md section 5); a forwarding
+              Delegation's row, with its reader key's digest and superseded_at, reads alike
+              across a fold at a new device and a gate (DESIGN-DETAILS.md section 4)
 FS-15  §10    an agent removed with every leaf offline: an agent rotates with ReaderWraps to   FI-4        T2+T3  M2-out
               every leaf and the gate reopens, and a returning leaf commits the Remove first,
               its path-only commit carrying the newest GenWrap; a leaf's and a wrapped
@@ -1376,7 +1394,10 @@ FS-18  §10    a DelegationRevoke, a passed not_after, a non-reap revocation or 
               removed revocation of an already reaped covered agent lands and drops D's key; a
               Delegation's admission count and end, carried through a fold, refuse its key's
               admissions past them at a new device as at a long-running reader
-              (DESIGN-DETAILS.md section 5)
+              (DESIGN-DETAILS.md section 5); gkm refuses a forwarding Delegation's reader key
+              object whose SHA-256 is not the row's digest, and a rotation that finds neither
+              the statement's key nor such an object skips that Delegation's wrap, a late one
+              going once the object stands (DESIGN-DETAILS.md section 4)
 FS-19  §8     an untagged ephemeral admitted with no policy under a personal network's Owner   I-15        T2+T3  M2-out;
               (the config read, M2): it reads the config and deposits, holding no other repo's                    later runs
               generation, while general reads, writes and admin and owner-bound writes fail,                      at M4, M6
@@ -1523,7 +1544,11 @@ FS-38  §17    a FriendsAndFamily contract whose sealed source network differs f
               an operator-minted contract to an X-granted target: the honest gate refuses the
               contract, the minted one reaches only X's granted targets and ports, and the run
               records X's grant and the gate, never Y's bypassed router, as what enforced
-              (§8.11)
+              (§8.11); at app hosts, once forwarding runs there (§22.5's §17 row), a
+              WindowDelegation whose 32-byte signer_id names the subject's forwarding
+              Delegation live at the host's state is the positive twin, while one forged, or
+              signed by a superseded or revoked forwarding Delegation's key, opens zero
+              upstream sockets (DESIGN-DETAILS.md section 4)
 FS-39  §14,15 report intake: gzip XML and JSON aggregates count once per reporter and          FI-11       T2     M5-out;
               report_id, and an ARF body canary appears in no log; at M7, delayed DNS evidence                    the rest
               and REQUIRETLS added by an active second hop: labels as stated                                      at M7-out
@@ -2911,7 +2936,7 @@ Beyond the schedules:
 - **ACME** (Pebble with 5% bad nonces in T2 and T3; LE staging; GTS, ZeroSSL): §13.8's challenges, ARI, CAA, an operator CAA at a custom host's exact target refused (FS-32); custom-domain desktops order and renew on Pebble, the test leg's release one that finds its own certificates for replacement, else sidecartest's Pebble harness issuing a leaf it can replace (owner decision 546); LE staging refuses URnetwork's account under a customer `accounturi`, which Pebble never checks (https://github.com/letsencrypt/pebble/blob/main/va/va.go, 2026-11-04); CT watch on a fixture (staging CT is unreliable: https://letsencrypt.org/docs/staging-environment/, 2026-04-10).
 - **DNS** (zonemaster; Unbound, BIND, Knot Resolver; two public resolvers): R-DNS-7; compact denial and wildcards validate; before the DS, Unbound validates against the KSK as a trust anchor; a broken canary signature pages.
 - **Browsers** (Chrome, Firefox, Safari, curl; Playwright on ur.io's page Worker and the native companion): 421 on coalescing; split PQ hellos; other origins' POST, subresource GET and WebSocket arrive sessionless, and login works without Fetch Metadata (§13.7); private audiences without a usable ALPN (FS-34) and custom hosts through the split (FS-35); another origin, a framed copy and localhost are refused the key origin, no key or token crosses postMessage, and a script injected on ur.io finds neither the Worker's key nor its token; IndexedDB survives a reload, and after Safari's 7-day storage cap evicts the key origin its page Worker re-enrolls through a consented device, the old leaf leaving by §10.9's stale-leaf rule; a storage-pressure eviction of a non-persistent bucket does the same, the re-enrollment's admitting device, an admin's in a Team with self_admit off, revoking each Worker it saw removed as stale from every group it is a leaf of that seated it, at least one, and no other, a Worker no group of that device seated never being revoked in that act, and the member's consented device, in that act or at its OwnerConfirm, offering to revoke the evicted one (§7.10's stale row; FS-97); the key-origin frame calls navigator.storage.persist(), and the page tells the person what an eviction costs (§18.8); in two ur.io tabs on one network only the Web Lock's holder loads state, refreshes, commits and writes the keychain, the other Worker relaying, and closing the holder's tab hands over the lock, relayed requests retrying; a vault record opens with C4 absent; no ICE candidate in the overlay block (§17.17), the check `ur tun ip auto` waits for, and a CGNAT fixture whose WAN address lies in the block keeps its carrier path and overlay reachability; no torn writes; no network `by_jwt` in the worker.
-- **Memory, size** (darwin/arm64 iOS settings in T4; ios32 surrogate cells, one with a link; §18.4's other hosts): §18.4's budgets, and forwarding's within owner decisions 215, 216 and 491's on an ios32 cell whose forwarding role compiles a 3,000-device team's config within its 10 MiB cap and refuses a 5,000-device one with bridge_alarm (owner decisions 197, 216), a hooked NAT's per-flow UDP loop re-measured on constrained provider profiles at M8 (§17.6), in every LOWBAR phase on iOS, the link cell deciding links and holding an app-device host's NAT with bridge flows at §17.5's idles through C5's per-flow IdleTimeout, while its public egress flows keep the NAT's own; sizes unstripped (§18.10); `make check` fails an HTTP-only file importing connect; the mobile sender's 1,024-slot pin table, churned past 1,024 live pairs, routes the excess unpinned and refuses none (§17.5).
+- **Memory, size** (darwin/arm64 iOS settings in T4; ios32 surrogate cells, one with a link; §18.4's other hosts): §18.4's budgets, and forwarding's within owner decisions 215, 216 and 491's on an ios32 cell whose forwarding role compiles a 3,000-device team's config within its 10 MiB cap and refuses a 5,000-device one with bridge_alarm (owner decisions 197, 216), a hooked NAT's per-flow UDP loop re-measured on constrained provider profiles at M8 (§17.6), in every LOWBAR phase on iOS, the link cell deciding links and holding an app-device host's NAT with bridge flows at §17.5's idles through C5's per-flow IdleTimeout, while its public egress flows keep the NAT's own; sizes as §18.10 measures them, the ios_extension leg's stripped (owner decisions 215, 491) and the sidecar_http leg's unstripped; `make check` fails an HTTP-only file importing connect; the mobile sender's 1,024-slot pin table, churned past 1,024 live pairs, routes the excess unpinned and refuses none (§17.5).
 - **Index determinism** (darwin/arm64, linux/amd64 and arm64, windows/amd64, gomobile android/arm64 and the iOS settings, js/wasm in Node and, through Playwright, Chrome, Firefox and Safari): testdata/index/, its extraction (mail, files, the character-reference table, the charset labels) and search body sizes included, reproduces byte-equal plaintext and hashes under GOMAXPROCS 1 and 16, repeated runs (Go randomizes map order) and changed TZ and locale; the linked `norm.Version`, `cases.UnicodeVersion` and `unicode.Version` equal the format's normalization version and x/text's linked module version equals `IndexFileHeader` field 14's, so a toolchain or x/text bump fails until a new one is assigned (D-TEST-15).
 
 ### 22.10 Internal review gates

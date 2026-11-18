@@ -636,21 +636,6 @@ var testFenceAdditions = []struct {
 		field:    testFenceField{name: "agent_cert", number: 5, typeName: "bytes"},
 		question: "plan-CORE-agent-revoke",
 	},
-	{
-		message:  "Pending",
-		field:    testFenceField{name: "forward_delegation_id", number: 5, typeName: "bytes"},
-		question: "DESIGN-DETAILS 4.2.2 (owner decision 197)",
-	},
-	{
-		message:  "BridgeIdentity",
-		field:    testFenceField{name: "forward_delegation_id", number: 6, typeName: "bytes"},
-		question: "DESIGN-DETAILS 4.2.2 (owner decision 197)",
-	},
-	{
-		message:  "BridgeIdentity",
-		field:    testFenceField{name: "forward_public_key", number: 7, typeName: "bytes"},
-		question: "DESIGN-DETAILS 4.2.2 (owner decision 197)",
-	},
 	// QD-864: the RecordEntry.version of the entry an Opening was made from, absent reading 1, so its reader knows
 	// whether body is the kind's message or the AgentSignedBody holding it
 	{

@@ -777,7 +777,9 @@ forwarding  (D-TEAM-33; owner decision 197) a Delegation with forward set is its
             not read_only, no tag_ids, max_admits 0 and no not_after, and a host_client_id, where set, the
             source client of S's current client, which api checks; it admits nothing, api and readers refusing
             a SidecarAdmit or AdmissionConfirm its key signs; its key signs only S's WindowDelegations (§17.9);
-            its reach is the config alone (§10.5); a newer one of S supersedes it at its position; it ends at
+            its reach is the config alone (§10.5); its row carries its reader key's SHA-256, never the key
+            (owner decision 202); a newer one of S supersedes it at its position, recorded as the older one's
+            superseded_at, which is no end for §10.5: the holder's identity stays and no key drops; it ends at
             its DelegationRevoke (since_n 0 only), S's revocation for any reason, a newer one or its void
             (cascade), and its key drops while S is parked or suspended; hosts admit S's flows under its key
             only while it is live (§17.9's verify); a superseded or ended one's row leaves ProjectionRows at
