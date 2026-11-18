@@ -9,7 +9,9 @@
 // server's sidecart3, run on the private stores, where <Case> is the case's name in camel case and empty for
 // the main part. A test nobody wrote reads missing in the tool's report, never pass, so the file need not
 // change as rows land. A sweep names a case's tests in place of the convention only for a row that is no
-// schedule, such as OPS's FS-54 and FS-55, which server's own tests show.
+// schedule, such as OPS's FS-54 and FS-55, which server's own tests show, or for a case whose tests run outside
+// the convention's packages, such as FS-5's, FS-73's and FS-72's rollback case's T3 tests in server's evshost
+// (owner decision 548).
 //
 // Gates are named as the tool takes them: G0; Mn-in for milestone n's entry review; Mn for its exit
 // review, Mn-out in the catalog; every for each Gn-out (FS-55), every-out in the catalog; next before
