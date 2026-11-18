@@ -9,8 +9,9 @@
 //	           WelcomeTimeout after its epoch, which is added again in the same commit
 //	  adds     member devices in H outside the tree: leaf-entitled in the config and directory groups, else seated,
 //	           the earliest-admitted first up to SeatCount (§8.12); consented where the repo is owner-bound, an
-//	           unconsented device parking and raising approval_pending (§8.5); anchored where a restored binding
-//	           admitted it (§10.8); and only with a KeyPackage gkm serves, which the claim tells
+//	           unconsented device parking and raising approval_pending (§8.5); and only with a KeyPackage gkm
+//	           serves, which the claim tells, so a device recovering by its member's code, which uploads none before
+//	           its anchor (upkeep's AwaitingAnchor), is added only after it
 //	  rotate   the newest generation does not cover the repo's holders_shrunk_at or an expiry at S, or is older than
 //	           ScheduleInterval
 //
@@ -98,8 +99,6 @@ type GkmPending struct {
 	Waiting []Id
 	// An owner-bound repo's owner devices that have not consented: parked, with no Add and no wrap (§8.5).
 	Unconsented []Id
-	// Devices a restored binding admitted that are not yet anchored: no Add until they are (§10.8).
-	Unanchored []Id
 	// Whether a rotation is due, and for what: REMOVE when the newest generation does not cover the state,
 	// SCHEDULE when it is only old.
 	Rotate      bool
@@ -123,8 +122,6 @@ type GkmPendingArgs struct {
 	// Leaves added at an epoch whose Welcome has not appeared WelcomeTimeout after it, as gkm answered this device
 	// (QD-747). Each is removed and added again, both or neither: one that may not join now keeps its leaf.
 	Unwelcomed []Id
-	// GkmGroupClientArgs.Anchored; nil reads every device as anchored.
-	Anchored func(sidecarId Id) bool
 	// GkmSettings.SeatCount, ScheduleInterval and StaleRemoveMargin.
 	SeatCount         int
 	ScheduleInterval  time.Duration
@@ -150,8 +147,8 @@ func GkmPendingChanges(view GkmAuthView, args *GkmPendingArgs) (*GkmPending, err
 	seatCount := min(max(args.SeatCount, 0), GkmSeatCount)
 	pending := &GkmPending{}
 
-	// whether a key holder may be added now: a standing member device, consented where the repo is owner-bound,
-	// anchored, and leaf-entitled where the group seats by rank
+	// whether a key holder may be added now: a standing member device, consented where the repo is owner-bound, and
+	// leaf-entitled where the group seats by rank
 	mayJoin := func(sidecarId Id) bool {
 		row := view.SidecarRow(sidecarId)
 		if !gkmRowMemberDevice(row) || !gkmRowStanding(row) {
@@ -160,10 +157,6 @@ func GkmPendingChanges(view GkmAuthView, args *GkmPendingArgs) (*GkmPending, err
 		if ownerMemberId := repo.GetOwnerMemberId(); 0 < len(ownerMemberId) && bytes.Equal(ownerMemberId, row.GetMemberId()) &&
 			!slices.ContainsFunc(repo.GetConsentedSidecarIds(), func(consented []byte) bool { return bytes.Equal(consented, sidecarId.Bytes()) }) {
 			pending.Unconsented = append(pending.Unconsented, sidecarId)
-			return false
-		}
-		if args.Anchored != nil && !args.Anchored(sidecarId) {
-			pending.Unanchored = append(pending.Unanchored, sidecarId)
 			return false
 		}
 		// past the first 1,000 of a ranked group it reads by wraps
@@ -308,7 +301,6 @@ func (self *gkmGroupManager) pendingInFlow(state GkmAuthView, pins *gkmRepoPins)
 	client := self.client
 	args := &GkmPendingArgs{
 		RepoId:            self.repoId,
-		Anchored:          client.args.Anchored,
 		SeatCount:         client.settings.SeatCount,
 		ScheduleInterval:  client.settings.ScheduleInterval,
 		StaleRemoveMargin: client.settings.StaleRemoveMargin,

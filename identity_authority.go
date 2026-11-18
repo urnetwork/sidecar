@@ -48,11 +48,12 @@ type SidecarRecoveryWindow struct {
 	State string
 	// p: the entry of the window's newest recovery-key signature, which a late recovery cosign moves.
 	Start uint64
-	// The member whose recovery key signed it, or whose restored binding admits.
+	// The member whose recovery key signed it.
 	MemberId Id
-	// A restored binding's admission: the device it admits. Nil for an authority statement.
+	// An admission's: the device it admits. Nil for any other authority statement.
 	SidecarId *Id
-	// Whether a recovery-key signature opened it, else a restored binding's admission (§5.6's signers row).
+	// Whether a recovery-key signature opened it (§5.6's signers row): every window's, since nothing else opens one
+	// (QD-1034).
 	RecoverySigned bool
 }
 
