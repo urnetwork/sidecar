@@ -123,19 +123,22 @@ Parentheses hold T1 tests; the rest run in T2 and T3. Inline server paths (contr
       rules; §8.10's legacy-client rule, and its reply step: the gate's verdict reads no Postgres
       (DenyPostgresForTest), the origin read being contract creation's, run only with a head row and only when
       reach(a,b) fails; gate < 1 us, 0 allocs; the ephemeral ceiling: FS-19
-§9    (P2C vs a stale-load oracle; admission; fixed vectors for 9.4's K_tok, K_seal, tokens and 152 B seals, a moved
-      or mismatched seal dropped) replay refused; drain; one script per Find; a 3,000-name set registers
-      as three pages under one set_version, none refused for size, each unlistening only names in its own key range;
-      an entry outside its page's range, or an older set_version, refuses the page; after Redis loss one interval
-      of pages rebuilds the set; a client looping registrations or Finds is shed with unavailable before signing,
-      one with many established streams never limited; a spent network's Find answers quota with no ticket; an
-      unused edge ticket from another source, or an edge-marked ticket for an application name, is refused invalid
-      before any application byte, a valid edge splice working; ur share: an omitted --count is one use; no get
-      or resume at or past expire_millis, a live stream reset there, a sharer restarted past it serving nothing,
-      --expires over 30 days refused, uses never exceeded across a crash after a Reserve; on a fake clock, one
-      dialer's 100 ms connections to one 256-stream listener: Find issues the bucket's 50 tickets a second after
-      its burst of 500, none refused or delayed by 9.7's clamp or by est, that dialer adding at most 25 to est
-      between reports, and a second dialer that redeems none moving est by at most 25
+§9    (P2C vs a stale-load oracle; admission; fixed vectors for 9.4's K_tok, K_seal, tokens and 152 B seals, a moved or
+      mismatched seal dropped) replay refused; drain; one script per Find; a 3,000-name set registers as three pages
+      under one set_version, none refused for size, each unlistening only names in its own key range; an entry outside
+      its page's range, or an older set_version, refuses the page; after Redis loss one interval of pages rebuilds the
+      set; a client looping registrations or Finds is shed with unavailable before signing, one with many established
+      streams never limited; a spent network's Find answers quota with no ticket; an unused edge ticket from another
+      source, or an edge-marked ticket for an application name, is refused invalid before any application byte, a valid
+      edge splice working; ur share: an omitted --count is one use; no get or resume at or past expire_millis, a live
+      stream reset there, a sharer restarted past it serving nothing, --expires over 30 days refused, uses never
+      exceeded across a crash after a Reserve; on a fake clock, one dialer's 100 ms connections to one 256-stream
+      listener: Find issues the bucket's 50 tickets a second after its burst of 500, none refused or delayed by 9.7's
+      clamp or by est, that dialer adding at most 25 to est between reports, and a second dialer that redeems none
+      moving est by at most 25; a put stalled at a barrier across a revocation and its sweep is fenced and answers
+      unavailable, then revoked; a Find that picked before the sweep signs nothing and writes no pair; a process whose
+      event is withheld serves until its resubscription check and then stops within the grace; a process whose source
+      fails after evidence answers unavailable for that network alone (DESIGN-DETAILS.md section 13)
 §10   (§10.4's mapped vectors; X-Wing KATs; ladder; missing key refused) KF1-KF7 (one commit per epoch, one claim
       per KeyPackage, no early Welcome, retention by acks, which live in Redis: FS-62); path-only self-updates by
       any leaf, an Update proposal refused; no commit past the projection; once every ack has expired the newest
@@ -172,13 +175,26 @@ Parentheses hold T1 tests; the rest run in T2 and T3. Inline server paths (contr
       dropped from *, @, every copy of *'s records and each mx on both; a key set failing self-check never serves;
       §12.5's label uniqueness; §12.8's verification gate
 §13   (ClientHello parser; 421) §13.9's kill switch and ValidateListen refusals, network_verified, the time box, a
-      screened host and an unread fact among them; mta-sts served only as a receiver's system publish; §13.4's
-      bench; tlsedge on 443, 8443, 8883 and 5671 only (owner decision 121); CAA, audiences and custom hosts: FS-32,
-      FS-34, FS-35; custom-host readiness: FS-122; a hello offering ur-route-probe gets unrecognized_name with no
-      lookup or Find
-§14   (X-UR-Ref MAC; header-only report parse) every §14.8 halt row, burner labels included; a report replaying
-      network A's X-UR-Ref under network B's verifying d= halts nothing, while a genuine one halts A; Redis loss
-      fails open <= 1 day's quota; the preamble proof: FS-31; outbound DATA size outcomes: FS-123
+      screened host and an unread fact among them; mta-sts served only as a receiver's system publish; §13.4's bench;
+      tlsedge on 443, 8443, 8883 and 5671 only (owner decision 121); CAA, audiences and custom hosts: FS-32, FS-34,
+      FS-35; custom-host readiness: FS-122; a hello offering ur-route-probe gets unrecognized_name with no lookup or
+      Find; custom-domain orders on a scripted ACME client and the fake clock (DESIGN-DETAILS.md section 17, 17.6): two
+      ordering desktops polling together end with one certificate at the CA and one custom_issued row, the loser's
+      claim refused locked; a holder killed after finalize, the second desktop registering the same serial with no
+      newOrder; a holder frozen before finalize past its lease and thawed after the takeover registered, one
+      certificate and its register refused; six devices of one host, the fifth and sixth granted 34 h apart with no
+      request reaching the CA before; a 429 held by both desktops; every acme-tls/1 hello for a host reaching the
+      listener holding the newest claim, and one for a network name finding no listener; visitors' hellos reaching only
+      certified listeners, none inside the margin, and with none no_listener and never a certificate for another name;
+      a removed device's row revoked at the CA and unrouted after its next page; a renewal's successor ordered with
+      replaces and no certificate spend; a row ended under its order settled at the CA before the next row is claimed;
+      a key change killed at each step and resumed by a second desktop, at no instant a CA key that no committed file
+      holds
+§14   (X-UR-Ref MAC; header-only report parse) every §14.8 halt row, burner labels included; a report replaying network
+      A's X-UR-Ref under network B's verifying d= halts nothing, while a genuine one halts A; Redis loss fails open <=
+      1 day's quota; the preamble proof: FS-31, with smtpproof's own tests of parts bound to one key part (key
+      substitution between parts, a forged carry, a short reply count) and of the key-set cache (another circuit's
+      entry, a torn write, a retired set; DESIGN-DETAILS.md section 3); outbound DATA size outcomes: FS-123
 §15   (every §15.4 dialog row) 250 only after a durable deposit; 451, not 530, after a closed handshake anywhere or
       under a closed gate; §15.4's direct-MX checks; erasure, strict MX and reports: FS-13, FS-33, FS-39;
       MailAuthEvidence at maximal identifiers within 8,192 B, and authentication bounds: FS-121
@@ -228,11 +244,13 @@ Parentheses hold T1 tests; the rest run in T2 and T3. Inline server paths (contr
       through connect's golang.org/x/net/idna (connect/net_http_doh.go:26;
       .gomodcache/golang.org/x/net@v0.57.0/idna/idna.go:26), so only the sidecar_http leg pays them in full;
       push-token projections in revision order: FS-120
-§20   (Spend atomic, no I/O) all-or-none debits per debit_id; 402 and 429; §20.6's payers; relayed contracts reserve
-      at CreateContract and debit once per contract_id, P2P none after C3 (FS-45); a usage batch retried after a
-      lost response debits once, and a drained producer loses nothing (FS-44); meter rows re-sent after Stripe's
-      24 h dedup window replace, never add, and a correction is a new version (FS-43); declared sidecars get no
-      Public contract, only sidecar_clients
+§20   (Spend atomic, no I/O) all-or-none debits per debit_id; 402 and 429; §20.6's payers; relayed contracts reserve at
+      CreateContract and debit once per contract_id, P2P none after C3 (FS-45); a usage batch retried after a lost
+      response debits once, and a drained producer loses nothing (FS-44); two hosts on one balance, one holding a 30 s
+      old reading and the other's debit flushed between: the second reservation is clamped by the balance's floor in
+      Redis and the balance ends at zero, never below (DESIGN-DETAILS.md section 13); meter rows re-sent after Stripe's
+      24 h dedup window replace, never add, and a correction is a new version (FS-43); declared sidecars get no Public
+      contract, only sidecar_clients
 §21   TTL sweeps on an injected clock; an access-log row per read; holds pause only sweeps, GC and a drop's deletions,
       the last silently (owner decision 184; FS-92), each kind to its deadline (FS-48); abuse clocks on a fake clock
       across a weekend, every registrar or registry notice paging (FS-49); FS-48's and FS-49's T2 are pure tests of
@@ -639,7 +657,8 @@ after members write at generation g+1:
     every file of the repo opens only under the current generation, git-mode refs included,
     whose rekey is a git-mode push with no commit that keeps the tip and only re-checkpoints
     files, each new entry's sealed mode, oid and name the standing one's (owner decision 540)
-  X's sockets, publishes, forwards, DKIM selector and certificate end; a removed member's
+  X's sockets, publishes, forwards, DKIM selector and certificate end, its sockets within the
+    bounds DESIGN-DETAILS.md section 13 states (13.2.3); a removed member's
     tagged agents keep their tags' grants, and autogroup:sponsor resolves to autogroup:admin
     until an admin's SponsorSet (owner decision 83)
 five ephemeral agents keep writing through one's reap with no member device online, any
@@ -950,6 +969,32 @@ model       EvsCommit.tla (TLA+, checked by TLC: https://github.com/tlaplus/tlap
             details/BridgeVoid.tla (run by run-bridgevoid.sh) a body sealed to a generation that never forms,
             checking NoFork, Equal, FoldedStays, NoPendingRow, Bounded, VoidsAgree and HonestValid, each with
             the rules as first written or as landed before it as failing configurations;
+            details/ProofParts.tla and ProofKeys.tla (DESIGN-DETAILS.md section 3, run by run-proof.sh beside them)
+            keep one mail connection's proof parts at the edge's gate against an adversarial sidecar, an MX that
+            answers late and two parts verifying at once, and one prover host's keys over two key sets, two circuits
+            and every build, with crashes mid-write and an edge that adds and retires sets, and TLC checks
+            ContentSound, HeaderSound, EnvelopeProven, HeldUntilCovered and OneKey, and ZkSafe, AcceptedAtOpen and
+            OneSet, with the rules done wrong (keys or a carry taken from the part, no reply total, a release past an
+            uncovered record, no recheck at commit; a published key trusted, a partial file standing, a retired set
+            accepted, sets mixed) and the cache as landed before it, keyed by no circuit, as failing configurations;
+            details/Pacing.tla, Lease.tla and SockReg.tla (DESIGN-DETAILS.md section 13, run by run-sched.sh beside
+            them) keep one network's closure pacing by seats among obedient and wild erasers, one balance's edge
+            leases across hosts that reserve, spend, carve, post, crash and expire with a flush in two steps, and one
+            listener's registration against a log that revokes and grants again at processes with their own positions,
+            and TLC checks Rate, Cells, Turn and Ghost, NoOverdraw, BilledOnce and Backed, and TicketSound,
+            FencedLease, SetOrder, PairFenced and EvidenceBound, with the rules as landed before them or done wrong
+            (admission by arrival, a refusal sent to the tail; no floor, a floor that expires under an older reading,
+            a release before the commit, a blind carve, spending past expiry, a batch planned again; no tombstone, no
+            listener check at Find, no pair floor, a process admitting while behind, pages in any order) as failing
+            configurations;
+            details/CertOrder.tla (DESIGN-DETAILS.md section 17, run by run-certorder.sh beside it), standing alone,
+            since no other model keeps an account's lock or a custom row's recorded order, keeps one custom domain's
+            account lock, each row's state, recorded order and registered order, the CA's orders, which it validates,
+            fails, expires or hands back for a second newOrder as it likes, and what each ordering desktop remembers
+            across crashes, a lapsed lease whose holder goes on and a device's removal at any step, and TLC checks
+            OneInFlight, OneCert, KeyMatch, Tracked, Served and NoForeign, with the rules done wrong (an unrecorded
+            order finalized, a takeover that orders again, a live order replaced on a timeout, two rows in flight with
+            and without the leaf check, a row failed with its order live) as failing configurations;
             StoreSettle.tla keeps one key on 8 drives at EC:4 (4 hosts of 2): each drive's version, its stamp and
             its own lock on the key, each write's coordinator, which may crash, and its drive commits, each a check
             step then a commit step, the settler and heal; writes are cancelled, pass their deadline, arrive after
@@ -1504,11 +1549,15 @@ FS-30  §16    an EvsShare reader's first read of a vault with the author offlin
 FS-31  §14    a scripted MX with no CHUNKING, pre-TLS-only CHUNKING, no PIPELINING, MAIL or    FI-11       T2+T3  M9-out
               RCPT refused, no 354, mixed recipients, a late NewSessionTicket, a second
               transaction in the body, record splits, replayed server replies, and a smuggled
-              or bare-LF DATA terminator; padded and KeyUpdate BDAT body records, which may
-              fail the send but smuggle nothing; both TLS versions and modes: every mismatch
-              between proved and accepted fails before any effect, positive controls passing;
-              an honest TLS 1.2 MX answers 451 while the edge forges 250 and EHLO replies: the
-              sender keeps and retries the message, and the edge reads no MX reply
+              or bare-LF DATA terminator; a later part under other keys than the key part
+              committed, a header or body record scanned from a forged state, a reply count
+              the records do not hold, and a message record before the envelope's replies are
+              proven (DESIGN-DETAILS.md section 3); padded and KeyUpdate BDAT body records,
+              which may fail the send but smuggle nothing; both TLS versions and modes: every
+              mismatch between proved and accepted fails before any effect, positive controls
+              passing, a 100-recipient send and a 16 KiB header block among them; an honest
+              TLS 1.2 MX answers 451 while the edge forges 250 and EHLO replies: the sender
+              keeps and retries the message, and the edge reads no MX reply
 FS-32  §13    a customer pin, an empty alias target, then an operator CAA at the exact         FI-11       T2     M6-out
               target, wildcard and delegated-challenge cases included: strong mode refuses
               the topology; a customer-side ALIAS that also flattens CAA: certs' canary at
@@ -1653,8 +1702,11 @@ FS-43  §20    a fake Stripe accepts an event, then drops the response; the 24 h
               original; a period boundary at 00:00 UTC; finalization at +72 h; a missed row
 FS-44  §20    a producer killed before ReportUsage; a ReportUsage response lost and retried; a FI-13a      T2+T3  M2-out
               SIGTERM drain: zero loss on a drain, at most one window on a kill, never double;
-              api unavailable for 11 min: the batch is dropped, counted and alerted, and never
-              applied
+              a host killed between a carve and its post: no debit, the carved token gone at
+              24 h on the fake clock; a carve whose answer is lost, retried, with a third copy
+              delivered after the flush: one debit, the lease token moved once
+              (DESIGN-DETAILS.md section 13); api unavailable for 11 min: the batch is
+              dropped, counted and alerted, and never applied
 FS-45  §20    a network near empty with N relayed pairs: grants shrink and spending stops at   FI-13a      T2+T3  M2-out
               the balance; spent refuses CreateContract; a P2P-bound pair is unaffected; one
               debit per contract_id; Redis loss over-admits at most as for leases
@@ -1682,24 +1734,24 @@ FS-47  §20    at the exact storage limit, and spent: each maintenance push kind
               retry_after_ms (the allowance's at the next 00:00 UTC); admin A past its rate,
               its ERASEs past the network's, or its allowance spent on CLOSUREs no ERASE
               follows leaves admin B's closure uploads passing and its erasures committing; k
-              erasers asking at once, as when allowances reset at 00:00 UTC, are each served
-              once every k/4 s, none starved, the network taking at most 4 uploads a second,
-              and erasers obeying a retry_after_ms over a minute get equal turns against
-              erasers re-asking every second; a §21 row below the floor or changing the pacing
-              is refused, and one written directly is clamped to the floor or, for the pacing,
-              ignored (§11.12's rekey row, §20.4, §20.7; owner decision 146); at M7, a mail
-              erasure whose IndexEntry shares an i/ segment with other messages, its
-              re-checkpoint crossing a Padmé step, and a 30-day trash shred spanning several
-              i/ segments complete with no reader opening their index fields, and at the floor
-              a shred of n full i/ segments, refused past its eraser's allowance, completes in
-              CLOSURE and ERASE parts resuming at retry_after_ms, its last committing within
-              ⌈n/3⌉ days of fake clock (§20.7's wait), the messages' bodies unreadable from
-              its first ERASE, which spends no allowance; from M5, the abuse worker opens a
-              case with no machine action for a network whose closure bytes taken at the
-              storage limit grow its stored bytes past it, and a reviewed tightening row takes
-              its erasers' allowances to the 4 MiB floor and lowers its
-              config_statements_per_day, while revocations still append (§21.7); the nightly
-              count corrects an injected drift
+              erasers asking at once, as when allowances reset at 00:00 UTC, in a fixed
+              hostile order, are each served once every k/4 s, none starved, the network
+              taking at most 4 uploads a second, and erasers obeying a retry_after_ms over a
+              minute get equal turns against erasers re-asking every second; a §21 row below
+              the floor or changing the pacing is refused, and one written directly is clamped
+              to the floor or, for the pacing, ignored (§11.12's rekey row, §20.4, §20.7;
+              owner decision 146); at M7, a mail erasure whose IndexEntry shares an i/ segment
+              with other messages, its re-checkpoint crossing a Padmé step, and a 30-day trash
+              shred spanning several i/ segments complete with no reader opening their index
+              fields, and at the floor a shred of n full i/ segments, refused past its
+              eraser's allowance, completes in CLOSURE and ERASE parts resuming at
+              retry_after_ms, its last committing within ⌈n/3⌉ days of fake clock (§20.7's
+              wait), the messages' bodies unreadable from its first ERASE, which spends no
+              allowance; from M5, the abuse worker opens a case with no machine action for a
+              network whose closure bytes taken at the storage limit grow its stored bytes
+              past it, and a reviewed tightening row takes its erasers' allowances to the 4
+              MiB floor and lowers its config_statements_per_day, while revocations still
+              append (§21.7); the nightly count corrects an injected drift
 FS-48  §21    a §2258A hold across days 180-364 while §2703(f) holds expire at 90 and 180;     holds       T2     M5-out
               sweeps resume at expiry; --now and erasure proceed under both
 FS-49  §21    abuse clocks on a fake clock across a weekend; every registrar or registry       clocks      T2     M5-out
@@ -2961,7 +3013,7 @@ Beyond the schedules:
 - **File clusters** (D-OPS-20's in-house MinIO build, every cluster, each build, upgrade and new cluster; D-OPS-4): stale conditions refused with a host or quorum lost (§11.3); §19.6's deadline and settle rules, by FS-114's late-drive cases: a request past its x-ur-deadline-ms, sent late by the clock rule's margin (sidecartest/blobsuite's `Settle.LateBy`, 200 ms by default; owner decision 545), refused where it takes its key's lock, no drive commit begun past it, and a PUT or DELETE whose drive commits are held after their checks past the 30 s drive timeout, its coordinator killed, taking effect before the next request on its key or never, the newer acknowledged state surviving release and a full heal, since a removal marker's collection deletes unconditionally (owner decision 148), as from v1 do the versionless purge's and the marker collection's kind-5 and slot DELETEs and a drop job's DELETEs; the lag from a cancel to a write's last drive answer, measured and reported, which no margin relies on; no heal resurrects a deleted object or spreads a version fewer than a read quorum of drives hold; read-after-write consistency, and a LIST answered whole or 503 (owner decision 226); a read answering 404 only on a read quorum's absence: a DriveMiss'd object with two hosts down reads 503, and while a host reconnects every host serves it or answers 503, never 404 (owner decision 511); checksums; ranged GET; Delete, and a DELETE naming its object's LastModified refused 412 for a newer one (owner decision 225); no lifecycle rule set on either bucket; one pool per cluster (FS-63).
 - **MTAs** (Postfix (may, dane), Exim; Gmail, Outlook.com, Microsoft 365, Yahoo, iCloud, SES, Proton, Fastmail): in, D-MAIL-9's census with nothing lost; out, §14.4 levels, DKIM, strict DMARC, which B's selector fails for A's network and burners, FCrDNS, JMRP and CFL joins; aggregate reports as FS-39, a one-connection, ten-recipient send raising no alarm.
 - **ZK preamble** (`smtpproof`, BDAT and DATA (owner decision 125), on D-SMTP-16's hardware; census MXs): D-SMTP-16's adversarial corpus, FS-31's server-state cases included, fails before any effect; p95 times, coverage, interop.
-- **ACME** (Pebble with 5% bad nonces in T2 and T3; LE staging; GTS, ZeroSSL): §13.8's challenges, ARI, CAA, an operator CAA at a custom host's exact target refused (FS-32); custom-domain desktops order and renew on Pebble, the test leg's release one that finds its own certificates for replacement, else sidecartest's Pebble harness issuing a leaf it can replace (owner decision 546); LE staging refuses URnetwork's account under a customer `accounturi`, which Pebble never checks (https://github.com/letsencrypt/pebble/blob/main/va/va.go, 2026-11-04); CT watch on a fixture (staging CT is unreliable: https://letsencrypt.org/docs/staging-environment/, 2026-04-10).
+- **ACME** (Pebble with 5% bad nonces in T2 and T3; LE staging; GTS, ZeroSSL): §13.8's challenges, ARI, CAA, an operator CAA at a custom host's exact target refused (FS-32); custom-domain desktops order and renew on Pebble, the test leg's release one that finds its own certificates for replacement, else sidecartest's Pebble harness issuing a leaf it can replace (owner decision 546); Pebble neither reuses orders nor limits, so order reuse, the limits and the 429 are tested on a scripted client (DESIGN-DETAILS.md section 17, 17.6); LE staging refuses URnetwork's account under a customer `accounturi`, which Pebble never checks (https://github.com/letsencrypt/pebble/blob/main/va/va.go, 2026-11-04); CT watch on a fixture (staging CT is unreliable: https://letsencrypt.org/docs/staging-environment/, 2026-04-10).
 - **DNS** (zonemaster; Unbound, BIND, Knot Resolver; two public resolvers): R-DNS-7; compact denial and wildcards validate; before the DS, Unbound validates against the KSK as a trust anchor; a broken canary signature pages.
 - **Browsers** (Chrome, Firefox, Safari, curl; Playwright on ur.io's page Worker and the native companion): 421 on coalescing; split PQ hellos; other origins' POST, subresource GET and WebSocket arrive sessionless, and login works without Fetch Metadata (§13.7); private audiences without a usable ALPN (FS-34) and custom hosts through the split (FS-35); another origin, a framed copy and localhost are refused the key origin, no key or token crosses postMessage, and a script injected on ur.io finds neither the Worker's key nor its token; IndexedDB survives a reload, and after Safari's 7-day storage cap evicts the key origin its page Worker re-enrolls through a consented device, the old leaf leaving by §10.9's stale-leaf rule; a storage-pressure eviction of a non-persistent bucket does the same, the re-enrollment's admitting device, an admin's in a Team with self_admit off, revoking each Worker it saw removed as stale from every group it is a leaf of that seated it, at least one, and no other, a Worker no group of that device seated never being revoked in that act, and the member's consented device, in that act or at its OwnerConfirm, offering to revoke the evicted one (§7.10's stale row; FS-97); the key-origin frame calls navigator.storage.persist(), and the page tells the person what an eviction costs (§18.8); in two ur.io tabs on one network only the Web Lock's holder loads state, refreshes, commits and writes the keychain, the other Worker relaying, and closing the holder's tab hands over the lock, relayed requests retrying; a vault record opens with C4 absent; no ICE candidate in the overlay block (§17.17), the check `ur tun ip auto` waits for, and a CGNAT fixture whose WAN address lies in the block keeps its carrier path and overlay reachability; no torn writes; no network `by_jwt` in the worker.
 - **Memory, size** (darwin/arm64 iOS settings in T4; ios32 surrogate cells, one with a link; §18.4's other hosts): §18.4's budgets, and forwarding's within owner decisions 215, 216 and 491's on an ios32 cell whose forwarding role compiles a 3,000-device team's config within its 10 MiB cap and refuses a 5,000-device one with bridge_alarm (owner decisions 197, 216), a hooked NAT's per-flow UDP loop re-measured on constrained provider profiles at M8 (§17.6), in every LOWBAR phase on iOS, the link cell deciding links and holding an app-device host's NAT with bridge flows at §17.5's idles through C5's per-flow IdleTimeout, while its public egress flows keep the NAT's own; sizes as §18.10 measures them, the ios_extension leg's stripped (owner decisions 215, 491) and the sidecar_http leg's unstripped; `make check` fails an HTTP-only file importing connect; the mobile sender's 1,024-slot pin table, churned past 1,024 live pairs, routes the excess unpinned and refuses none (§17.5).

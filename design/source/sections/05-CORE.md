@@ -269,9 +269,12 @@ type SidecarSettings struct { // validate refuses every number that is not posit
 	                             // queues; 1 MiB, 256 envelopes in their 4 KiB pool class, a reassembled body
 	                             // counting by its size, so one 256 KiB body takes a quarter of the queue
 	MemoryBudgetByteCount int64 // contains §6's process-wide reassembly, idempotency and credit caps; proving
-	                            // (§14) sits outside it: SmtpSenderSettings.ProverConcurrency defaults to 1, and a
-	                            // host records p/ only after Prover.Measure finishes its largest shape, one that
-	                            // cannot recording none and only queueing
+	                            // (§14) sits outside it, under the injected prover's own MemoryMaxByteCount
+	                            // (2,240 MiB: two loaded shapes and one proof in flight, kept by counting and a
+	                            // collection after each proof; DESIGN-DETAILS.md section 3, 3.2.8):
+	                            // SmtpSenderSettings.ProverConcurrency defaults to 1, and a host records p/ only
+	                            // after Prover.Measure finishes inside that bound, one that cannot recording
+	                            // none and only queueing
 	StreamChunkByteCount  int
 	Log                   Logger // nil: connect.DefaultLogger() (glog), adapted; sidecar_http: none unless set
 }
