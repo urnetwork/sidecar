@@ -262,6 +262,7 @@ func (self *EvsRepo) writeOnce(ctx context.Context, args *EvsWritePathsArgs, ref
 			}
 		}
 		plan.Flags, plan.Erased, plan.scope, plan.erasureNote = extras.flags, extras.erased, extras.scope, extras.erasureNote
+		plan.drop = extras.drop
 		if extras.indexEpoch != 0 {
 			plan.IndexEpoch = extras.indexEpoch
 		}

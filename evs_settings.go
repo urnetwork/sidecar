@@ -301,6 +301,18 @@ type EvsSettings struct {
 	DropPreviewPollCount    int
 	// Drops names at most this many paths a drop covers: 1,024 (I-13).
 	DropNamesCount int
+	// The completed dry runs a client keeps for DropHistory to name by preview id, 16, the oldest out first
+	// (evs_drop_push.go).
+	DropPreviewKeepCount int
+	// A cancel is refused on this device within DropCancelMargin of its drop's not_before_ms, 60 s, as evs refuses one
+	// (§11.7's action row; owner decision 183).
+	DropCancelMargin time.Duration
+	// The checked DROP bodies a device keeps sealed on storage, 4 MiB a client, least recently used out, which a read
+	// names in held_drops so evs sends none of them again (DESIGN-DETAILS 10.2.2's DropBodyKeepByteCount, 10.2.3).
+	DropBodyKeepByteCount int64
+	// A read whose reply left out a drop body the reader lacks is read again at most DropBodyReadCount times, 4, its
+	// missing body first each time (10.2.3's reply size).
+	DropBodyReadCount int
 }
 
 // The desktop daemon's evs settings.
@@ -417,5 +429,9 @@ func DefaultEvsSettings() *EvsSettings {
 		DropPreviewPollInterval:  2 * time.Second,
 		DropPreviewPollCount:     300,
 		DropNamesCount:           1024,
+		DropPreviewKeepCount:     16,
+		DropCancelMargin:         60 * time.Second,
+		DropBodyKeepByteCount:    4 * 1024 * 1024,
+		DropBodyReadCount:        4,
 	}
 }

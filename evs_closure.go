@@ -73,6 +73,8 @@ type evsPushExtras struct {
 	// time its builder took first (§11.14's epoch row, DESIGN-DETAILS 1.2.7; SEARCH-M10-13's store over EvsRepo)
 	indexEpoch   uint64
 	signedTimeMs int64
+	// a DROP's: the body and lists each statement of it carries (evs_drop_push.go; EVS2-M10-21)
+	drop *evsDropSpec
 }
 
 // Commits a CLOSURE: see the file header.

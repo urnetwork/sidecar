@@ -7,7 +7,11 @@
 //	paths      each named path a lineage (evs_drop_lineage.go); --recursive adds every file below a directory, each a
 //	           lineage, from verified listings; --follow, rename ancestors through file_id, is not built and is
 //	           refused, failing closed; one command's lineages ride one DROP while they fit its bounds, and past them
-//	           the command cuts them into several pushes at lineage boundaries, each previewed (EVS2-M10-21's)
+//	           the command cuts them into batches at lineage boundaries, each its own dry run and DROP push
+//	           (evsDropBatches; EVS2-M10-21), confirmed once as one command
+//	keep       a completed dry run is kept on the client for DropHistory to name by its first batch's preview id
+//	           (evs_drop_push.go); --resume reads evs's results for dry runs it filed before, walking the lineages
+//	           again and filing nothing
 //	dry run    POST .../drops/preview {ref_id, paths} with each lineage, through_version, count and listed_sha256, its
 //	           map_parts left empty; then GET .../drops/preview/<preview_id> every DropPreviewPollInterval, at most
 //	           DropPreviewPollCount times, until done. A path whose list_match is false stops the command with
@@ -29,8 +33,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"slices"
+
+	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar/protocol"
 )
@@ -45,19 +53,80 @@ type EvsDropPreviewArgs struct {
 	Recursive bool
 	// Rename ancestors through file_id: not built, refused.
 	Follow bool
+	// Dry runs evs already holds, each batch's preview id in order: the lineages are walked again and evs read for
+	// the results, nothing filed (`ur history drop --resume`). Their count must be the batches' the walk makes.
+	ResumePreviewIds [][]byte
 }
 
-// A dry run's lineages and evs's figures.
-type EvsDropPreview struct {
+// One DROP push's worth of a dry run: lineages within one DROP's bounds, cut at lineage boundaries in body order, and
+// evs's dry run of them (EVS2-M10-21).
+type EvsDropPreviewBatch struct {
 	PreviewId []byte
 	Lineages  []*EvsDropLineage
-	// versions listed in all, and the bytes evs's resolve reported
+	// versions listed, and the bytes evs's resolve reported
 	VersionCount uint64
 	FreedBytes   uint64
 	SharedBytes  uint64
 	InlineBytes  uint64
 	PackedBytes  uint64
 	YoungBytes   uint64
+	// the push that dropped it, once one committed (evs_drop_push.go)
+	committed *EvsDropPushResult
+}
+
+// A dry run's lineages and evs's figures.
+type EvsDropPreview struct {
+	// The first batch's preview id: what DropHistory names.
+	PreviewId []byte
+	// The ref, and the paths the dry run was asked for as the person named them (EvsDropConfirmText).
+	RefName    []byte
+	NamedPaths []string
+	// Every batch's lineages in order, and the batches, one DROP push each.
+	Lineages []*EvsDropLineage
+	Batches  []*EvsDropPreviewBatch
+	// versions listed in all, and the bytes evs's resolve reported, summed over the batches
+	VersionCount uint64
+	FreedBytes   uint64
+	SharedBytes  uint64
+	InlineBytes  uint64
+	PackedBytes  uint64
+	YoungBytes   uint64
+	repoId       Id
+}
+
+// lineages, in body order, cut into DROP pushes at lineage boundaries, each within one DROP's bounds: at most
+// DropMaxPathCount lineages, lists of at most DropMaxListedCount values, and a body within DropMaxBodyByteCount once
+// the dry run's map_parts are in it, which is reckoned at their largest (§11.7's action row; DESIGN-DETAILS 10.2.4's
+// bounds row). A lineage alone past a bound was refused when it was walked (ErrEvsDropTooLarge).
+func evsDropBatches(format *EvsFormatSettings, lineages []*EvsDropLineage) [][]*EvsDropLineage {
+	fixed := proto.Size(&protocol.EvsDropHistory{
+		DropId: make([]byte, 16), Action: evsDropActionDrop, NotBeforeMs: math.MaxInt64, PreviewId: make([]byte, 16),
+	})
+	pathSize := func(lineage *EvsDropLineage) int {
+		largest := proto.Clone(lineage.DropPath).(*protocol.EvsDropPath)
+		for i := range largest.MapParts {
+			largest.MapParts[i] = uint32(format.PathMapMaxPartCount)
+		}
+		return protowire.SizeTag(6) + protowire.SizeBytes(proto.Size(largest))
+	}
+	batches := [][]*EvsDropLineage{}
+	batch := []*EvsDropLineage{}
+	bodySize, listedCount := fixed, 0
+	for _, lineage := range lineages {
+		size, count := pathSize(lineage), int(lineage.DropPath.GetCount())
+		if 0 < len(batch) && (format.DropMaxPathCount <= len(batch) || format.DropMaxBodyByteCount < bodySize+size ||
+			format.DropMaxListedCount < listedCount+count) {
+			batches = append(batches, batch)
+			batch, bodySize, listedCount = []*EvsDropLineage{}, fixed, 0
+		}
+		batch = append(batch, lineage)
+		bodySize += size
+		listedCount += count
+	}
+	if 0 < len(batch) {
+		batches = append(batches, batch)
+	}
+	return batches
 }
 
 // The dry run of a drop of args' paths: see the file header.
@@ -77,65 +146,96 @@ func (self *EvsRepo) DropHistoryPreview(ctx context.Context, args *EvsDropPrevie
 	if err != nil {
 		return nil, err
 	}
-	preview := &EvsDropPreview{}
-	request := &protocol.EvsDropPreviewRequest{RefId: refId.Bytes()}
+	preview := &EvsDropPreview{RefName: refName, NamedPaths: slices.Clone(args.Paths), repoId: self.repoId}
 	for _, path := range paths {
 		lineage, err := self.DropLineage(ctx, refName, path)
 		if err != nil {
 			return nil, err
 		}
 		preview.Lineages = append(preview.Lineages, lineage)
-		request.Paths = append(request.Paths, lineage.DropPath)
 		preview.VersionCount += uint64(lineage.DropPath.GetCount())
 	}
 	// the lineages sorted as a DROP's body holds them: by their newest token path's bytes
 	slices.SortStableFunc(preview.Lineages, func(a *EvsDropLineage, b *EvsDropLineage) int {
 		return evsDropNewestTokenPathCompare(a.DropPath, b.DropPath)
 	})
-	request.Paths = request.Paths[:0]
-	for _, lineage := range preview.Lineages {
-		request.Paths = append(request.Paths, lineage.DropPath)
+	cut := evsDropBatches(DefaultEvsFormatSettings(), preview.Lineages)
+	if 0 < len(args.ResumePreviewIds) && len(args.ResumePreviewIds) != len(cut) {
+		return nil, fmt.Errorf("%w: %d dry runs to resume for %d batches", ErrEvsDropListMismatch, len(args.ResumePreviewIds), len(cut))
 	}
-	started := &protocol.EvsDropPreviewReply{}
-	call := &evsCall{
-		route:  "POST /evs/v1/repos/{repo_id}/drops/preview",
-		method: http.MethodPost,
-		path:   "/evs/v1/repos/" + evsUrlId(self.repoId) + "/drops/preview",
-		repoId: self.repoId,
-		role:   evsScopeAdmin,
-		body:   request,
-		// the dry run's queuing answers 202 {preview_id}
-		accepted: true,
+	for i, lineages := range cut {
+		batch := &EvsDropPreviewBatch{Lineages: lineages}
+		var resume []byte
+		if 0 < len(args.ResumePreviewIds) {
+			resume = args.ResumePreviewIds[i]
+		}
+		if err := self.previewBatch(ctx, refId, batch, resume); err != nil {
+			return nil, err
+		}
+		preview.Batches = append(preview.Batches, batch)
+		preview.FreedBytes += batch.FreedBytes
+		preview.SharedBytes += batch.SharedBytes
+		preview.InlineBytes += batch.InlineBytes
+		preview.PackedBytes += batch.PackedBytes
+		preview.YoungBytes += batch.YoungBytes
 	}
-	if err := self.client.http.callMessage(ctx, call, started); err != nil {
-		return nil, err
+	preview.PreviewId = preview.Batches[0].PreviewId
+	self.client.keepDropPreview(preview)
+	return preview, nil
+}
+
+// One batch's dry run: filed, or resumed by its preview id, then read until done, every path's list matching and
+// linked, and its map_parts copied into the lineages.
+func (self *EvsRepo) previewBatch(ctx context.Context, refId Id, batch *EvsDropPreviewBatch, resume []byte) error {
+	previewId := resume
+	if previewId == nil {
+		request := &protocol.EvsDropPreviewRequest{RefId: refId.Bytes()}
+		for _, lineage := range batch.Lineages {
+			request.Paths = append(request.Paths, lineage.DropPath)
+		}
+		started := &protocol.EvsDropPreviewReply{}
+		call := &evsCall{
+			route:  "POST /evs/v1/repos/{repo_id}/drops/preview",
+			method: http.MethodPost,
+			path:   "/evs/v1/repos/" + evsUrlId(self.repoId) + "/drops/preview",
+			repoId: self.repoId,
+			role:   evsScopeAdmin,
+			body:   request,
+			// the dry run's queuing answers 202 {preview_id}
+			accepted: true,
+		}
+		if err := self.client.http.callMessage(ctx, call, started); err != nil {
+			return err
+		}
+		previewId = started.GetPreviewId()
 	}
-	if len(started.GetPreviewId()) != 16 {
-		return nil, fmt.Errorf("%w: a dry run with no preview id", ErrEvsReplyInvalid)
+	if len(previewId) != 16 {
+		return fmt.Errorf("%w: a dry run with no preview id", ErrEvsReplyInvalid)
 	}
-	preview.PreviewId = started.GetPreviewId()
-	reply, err := self.waitDropPreview(ctx, preview.PreviewId)
+	batch.PreviewId = bytes.Clone(previewId)
+	reply, err := self.waitDropPreview(ctx, batch.PreviewId)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if len(reply.GetPaths()) != len(preview.Lineages) {
-		return nil, fmt.Errorf("%w: a dry run answering %d of %d paths", ErrEvsReplyInvalid, len(reply.GetPaths()), len(preview.Lineages))
+	if len(reply.GetPaths()) != len(batch.Lineages) {
+		return fmt.Errorf("%w: a dry run answering %d of %d paths", ErrEvsReplyInvalid, len(reply.GetPaths()), len(batch.Lineages))
 	}
 	for i, result := range reply.GetPaths() {
-		lineage := preview.Lineages[i]
+		lineage := batch.Lineages[i]
 		switch {
 		case !result.GetListMatch():
-			return nil, fmt.Errorf("%w: lineage %d lists %d versions where evs resolved %d", ErrEvsDropListMismatch, i, lineage.DropPath.GetCount(), result.GetCount())
+			return fmt.Errorf("%w: lineage %d lists %d versions where evs resolved %d", ErrEvsDropListMismatch, i, lineage.DropPath.GetCount(), result.GetCount())
 		case !result.GetLinked():
-			return nil, fmt.Errorf("%w: lineage %d", ErrEvsDropUnlinked, i)
+			return fmt.Errorf("%w: lineage %d", ErrEvsDropUnlinked, i)
 		case len(result.GetMapParts()) != len(lineage.DropPath.GetMapParts()):
-			return nil, fmt.Errorf("%w: a dry run's map parts for %d of %d older entries", ErrEvsReplyInvalid, len(result.GetMapParts()), len(lineage.DropPath.GetMapParts()))
+			return fmt.Errorf("%w: a dry run's map parts for %d of %d older entries", ErrEvsReplyInvalid, len(result.GetMapParts()), len(lineage.DropPath.GetMapParts()))
 		}
 		lineage.DropPath.MapParts = slices.Clone(result.GetMapParts())
+		batch.VersionCount += uint64(lineage.DropPath.GetCount())
 	}
-	preview.FreedBytes, preview.SharedBytes, preview.InlineBytes = reply.GetFreedBytes(), reply.GetSharedBytes(), reply.GetInlineBytes()
-	preview.PackedBytes, preview.YoungBytes = reply.GetPackedBytes(), reply.GetYoungBytes()
-	return preview, nil
+	batch.FreedBytes, batch.SharedBytes, batch.InlineBytes = reply.GetFreedBytes(), reply.GetSharedBytes(), reply.GetInlineBytes()
+	batch.PackedBytes, batch.YoungBytes = reply.GetPackedBytes(), reply.GetYoungBytes()
+	return nil
 }
 
 // Orders two lineages by their newest token path's bytes, then their newest epoch.

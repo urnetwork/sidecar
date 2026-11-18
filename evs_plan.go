@@ -297,6 +297,9 @@ type EvsWritePlan struct {
 	// the flags the plan was asked for (EvsPlanArgs.Flags), which the hook reads before the sender sets Flags: a
 	// CLOSURE, ERASE or CUT carries no in-ref entry
 	argsFlags uint32
+	// a DROP's body and lists, which the sender builds afresh for each statement (evs_drop_push.go); nil for any other
+	// push
+	drop *evsDropSpec
 }
 
 // Adds an index writer's writes to the plan the hook was given, which PlanWrite plans in the same push once the hook
