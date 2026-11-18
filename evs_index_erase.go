@@ -43,7 +43,7 @@
 // takes part. No watch follows an ERASE, since the CUT fences. A hold never pauses an ERASE. Not built here: ?closure=1
 // uploads at the limit, which EvsRepo.Closure refuses for now (evs_closure.go), and an eraser's own walk of a removed
 // index path's history on EvsRepo (indexEvsStore.Retained answers incomplete). Barriers evs.index.erase.listed, .closed
-// and .erased, and evs.index.reenter.built and .pushed, keyed <repo>/<ref>. Paths and documents stay on the device
+// and .erased, and evs.index.reenter.built and .pushed, keyed <repo>:<ref>. Paths and documents stay on the device
 // (I-13). Not safe for concurrent use: one rewrite or re-entry of an erasure at a time.
 
 package sidecar

@@ -28,7 +28,7 @@
 // DirectBytes merges its own entries. Who backfills is the schedule's (indexer_search.go): an indexer serving the
 // repo for search, else a desktop or the daemon where none serves it.
 //
-// Barriers evs.index.backfill.built and .pushed, keyed <repo>/<ref>. No key is created, derived or unwrapped here: K_ref
+// Barriers evs.index.backfill.built and .pushed, keyed <repo>:<ref>. No key is created, derived or unwrapped here: K_ref
 // comes derived, and doc_keys are MACs under it. A path is this device's own plaintext and goes into no log or
 // error's text (I-13). Not safe for concurrent use.
 
@@ -192,9 +192,9 @@ func (self *IndexBackfiller) Backfill(ctx context.Context) error {
 	return err
 }
 
-// The barrier key of this ref: <repo>/<ref>.
+// The barrier key of this ref: <repo>:<ref>, an opaque id with no slash (testhook.go; I-13).
 func (self *IndexBackfiller) barrierKey() string {
-	return self.args.repoId.String() + "/" + self.args.refId.String()
+	return self.args.repoId.String() + ":" + self.args.refId.String()
 }
 
 // The index at its head.

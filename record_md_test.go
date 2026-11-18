@@ -502,6 +502,9 @@ func TestRecordMdFormatOneFindingNamesWhatItRestsOn(t *testing.T) {
 		"plan-RECORD-stream-names",
 		"`consumed_through`",
 	)
+	// The depositor's spool prunes at the CONSUME mark format 1 now carries (QD-176), so that row is no longer open.
+	recordMdForbid(t, "section 5.7", section, `D-MCP-10's "spool until consumed" has no mechanism`)
+	recordMdRequire(t, "section 5.4's spool row", doc.row(t, "5.4", "spool"), "declares consumed_through", "prunes at or below the mark")
 	recordMdRequire(t, "section 20's G0 row", doc.row(t, "20", "G0, M2-in"), "section 5.7's open rows settled")
 	// A listing no reader can see is no check.
 	recordMdForbid(t, "section 8", doc.section(t, "8"), "lists every class 7 entry", "finds one unlisted")
@@ -850,17 +853,24 @@ func TestRecordMdNewestOrdersAcrossWriters(t *testing.T) {
 	}
 }
 
-// Finding: the witness POST is a new carrier D-ARCH-2 reserves to the owner, and nothing gated it.
-func TestRecordMdWitnessCarrierWaitsOnTheOwner(t *testing.T) {
+// Finding: the witness POST is a new carrier D-ARCH-2 reserves to the owner, and nothing gated it. The owner ruled it
+// no URnetwork carrier (owner decision 214), so the step runs, and every place that held it closed says why it opened.
+func TestRecordMdWitnessCallIsNoUrnetworkCarrier(t *testing.T) {
 	doc := newRecordMd(t)
 	questions := recordMdFlat(doc.section(t, "16.1"))
-	recordMdRequire(t, "section 16.1", questions, "**Q-RECORD-8.**", "D-ARCH-2", "no device POSTs a note")
-	recordMdRequire(t, "section 10.2's witness step", doc.row(t, "10.2", "6 witness"), "once Q-RECORD-8 is answered")
-	recordMdRequire(t, "section 10.2's on row", doc.row(t, "10.2", "on"), "--witness refuses", "while Q-RECORD-8 is open")
-	recordMdRequire(t, "section 18", doc.section(t, "18"), "*pending Q-RECORD-8*", "each row naming a Q-RECORD item waits on the owner", "another way | Q-RECORD-8 |")
-	recordMdForbid(t, "section 18", doc.section(t, "18"), "the first four wait on the owner")
-	recordMdRequire(t, "section 20's M6 row", doc.row(t, "20", "M6"), "Q-RECORD-1, 3, 4, 5, 6, 7, 8")
-	recordMdRequire(t, "D-RECORD-9", doc.section(t, "15"), "Pending Q-RECORD-1, Q-RECORD-8")
+	recordMdRequire(t, "section 16.1", questions, "**Q-RECORD-8.**", "D-ARCH-2", "(owner decision 214; QD-242)", "is no URnetwork carrier")
+	witness := doc.row(t, "10.2", "6 witness")
+	recordMdRequire(t, "section 10.2's witness step", witness, "no URnetwork carrier", "owner decision 214")
+	recordMdForbid(t, "section 10.2's witness step", witness, "once Q-RECORD-8 is answered")
+	recordMdForbid(t, "section 10.2's on row", doc.row(t, "10.2", "on"), "--witness refuses", "while Q-RECORD-8 is open")
+	if witnesses := doc.field(t, "LogSettingsBody", "witnesses"); strings.Contains(witnesses.comment, "Q-RECORD-8") {
+		t.Errorf("LogSettingsBody.witnesses still waits on Q-RECORD-8: %q", witnesses.comment)
+	}
+	section := doc.section(t, "18")
+	recordMdRequire(t, "section 18", section, "no URnetwork carrier (D-ARCH-2; owner decision 214)", "| Q-RECORD-8 | §3.5 and D-ARCH-2 (owner decision 214) |")
+	recordMdForbid(t, "section 18", section, "pending Q-RECORD-8", "the first four wait on the owner")
+	recordMdRequire(t, "section 20's M6 row", doc.row(t, "20", "M6"), "witness calls", "Q-RECORD-1, 3, 4, 5, 6, 7, 8 settled")
+	recordMdRequire(t, "D-RECORD-9", doc.section(t, "15"), "(Q-RECORD-8; owner decision 214)")
 }
 
 // Finding: a note a witness cosigned could live only in a dead checkpointer's journal, so a successor signed an
@@ -919,32 +929,55 @@ func TestRecordMdEveryWitnessedNoteIsInTheLog(t *testing.T) {
 }
 
 // Finding: "stays off" had no enforcement point, ledger_scope could move cost out of V, and Q-RECORD-1 understated
-// what it blocks.
-func TestRecordMdEveryPendingGateNamesItsEnforcementPoint(t *testing.T) {
+// what it blocks. Every question is now answered (2026-11-06), so each names its answer, no gate it held stands
+// where the document held it, and each answer says where it runs.
+func TestRecordMdEveryAnsweredQuestionOpensItsGate(t *testing.T) {
 	doc := newRecordMd(t)
 	section := doc.section(t, "16.1")
 	questions := regexp.MustCompile(`\*\*(Q-RECORD-\d+)\.\*\*`).FindAllStringSubmatch(section, -1)
 	if len(questions) < 8 {
 		t.Fatalf("section 16.1 holds %d questions", len(questions))
 	}
-	for _, question := range questions {
+	answered := regexp.MustCompile(`\*\*(Decided by owner|Closed by the design) 2026-11-\d\d \((owner decision \d+|QD-\d+)[^)]*\):\*\*`)
+	for i, question := range questions {
+		text, _, _ := strings.Cut(section[strings.Index(section, question[0]):], "\n\n")
+		if !answered.MatchString(text) {
+			t.Errorf("%s names no answer", question[1])
+		}
+		if i+1 < len(questions) && strings.Contains(text, questions[i+1][0]) {
+			t.Fatalf("%s runs into %s", question[1], questions[i+1][1])
+		}
 		pattern := regexp.MustCompile(`(?m)^\| ` + question[1] + ` \| ([^|]+) \| ([^|]+) \|$`)
-		match := pattern.FindStringSubmatch(section)
-		if match == nil {
-			t.Errorf("%s has no row saying what stays off and what enforces it", question[1])
+		if pattern.FindStringSubmatch(section) == nil {
+			t.Errorf("%s has no row saying what its answer settled and where it runs", question[1])
 		}
 	}
-	recordMdRequire(t, "Q-RECORD-1", section, "which is most T logs, and so disclosure packets from them")
-	recordMdRequire(t, "section 10.2's read step", doc.row(t, "10.2", "1 read"), "while Q-RECORD-1 is open, if the log holds more than one stream")
-	recordMdRequire(t, "section 10.2's on row", doc.row(t, "10.2", "on"), "refuses on a log with more than one stream")
-	recordMdRequire(t, "section 11's checkpoint row", doc.row(t, "11", "checkpoint"), "refuses on a log whose verifiable log is off")
-	// A reader holds the gate too, as it does Q-RECORD-8's, so an old or rogue checkpointer gets nowhere.
-	recordMdRequire(t, "section 10.2's monitor row", doc.row(t, "10.2", "monitor"), "while Q-RECORD-1 is open, a batch whose frontier names more than one stream is ignored with an alarm")
-	if kinds := doc.field(t, "LedgerScopeBody", "kinds"); !strings.Contains(kinds.comment, "Q-RECORD-6") {
-		t.Errorf("LedgerScopeBody.kinds can still list cost past V: %q", kinds.comment)
+	// No gate a question held stands anywhere in the document.
+	for _, gate := range []string{`[Pp]ending Q-RECORD-\d`, `while Q-RECORD-\d+ is open`, `once Q-RECORD-\d+ is answered`} {
+		if found := regexp.MustCompile(gate).FindString(recordMdFlat(doc.text)); found != "" {
+			t.Errorf("RECORD.md still gates on %q", found)
+		}
 	}
-	recordMdRequire(t, "section 4.2", doc.section(t, "4.2"), "until the owner answers no daemon files one")
-	recordMdRequire(t, "section 11", doc.section(t, "11"), "Until the owner answers, `ur record attest` refuses")
+	// Q-RECORD-1's batches run on the multi-stream logs it held off.
+	recordMdRequire(t, "Q-RECORD-1", section, "The verifiable log and packets run on logs with many streams, most T logs among them")
+	recordMdForbid(t, "section 10.2's read step", doc.row(t, "10.2", "1 read"), "if the log holds more than one stream")
+	recordMdRequire(t, "section 10.2's on row", doc.row(t, "10.2", "on"), "takes a log of one stream or many")
+	recordMdForbid(t, "section 10.2's monitor row", doc.row(t, "10.2", "monitor"), "frontier names more than one stream is ignored")
+	recordMdRequire(t, "section 11's checkpoint row", doc.row(t, "11", "checkpoint"), "refuses on a log whose verifiable log is off")
+	// Cost reaches T, and an R log, only while the Team's record_cost is on (owner decision 302).
+	if kinds := doc.field(t, "LedgerScopeBody", "kinds"); !strings.Contains(kinds.comment, "record_cost") {
+		t.Errorf("LedgerScopeBody.kinds does not tie cost to record_cost: %q", kinds.comment)
+	}
+	registry := doc.registry(t)
+	recordMdRequire(t, "kind cost's Team column", registry["cost"].team, "V, T while", "`ServiceSettings.record_cost` is on")
+	recordMdRequire(t, "section 13.1's T row", doc.row(t, "13.1", "T"), "go to T by default", "owner decision 302")
+	// The team record's RepoCreate (owner decision 303), R logs (454) and attestations (453).
+	recordMdRequire(t, "section 4.2", doc.section(t, "4.2"), "owner decision 303", "a `RepoDelete` of it stands")
+	if registry["ledger_scope"].team != "R (owner decision 454)" || registry["attestation"].personal != "V" {
+		t.Errorf("ledger_scope is Team %q and attestation Personal %q", registry["ledger_scope"].team, registry["attestation"].personal)
+	}
+	recordMdRequire(t, "section 6.5", doc.section(t, "6.5"), "owner decision 454", "never a vault body")
+	recordMdRequire(t, "section 11", doc.section(t, "11"), "owner decision 453", "never called an approval")
 }
 
 // Finding: three failed checks had no stated outcome, so a forged entry's fate at ingest was undefined.
@@ -1238,8 +1271,8 @@ func TestRecordMdCostCountsARunOnce(t *testing.T) {
 		seq   uint64
 		total uint64
 	}
-	// Whole-run totals: the second entry follows a re-open and restates the first, and the last, once Q-RECORD-6 lets
-	// cost past V, is the same run in T, where its chain stands at a lower seq.
+	// Whole-run totals: the second entry follows a re-open and restates the first, and the last, now that owner
+	// decision 302 sends cost to T by default, is the same run in T, where its chain stands at a lower seq.
 	entries := []entry{
 		{log: "V", runId: "a", seq: 11, total: 100},
 		{log: "V", runId: "a", seq: 12, total: 150},

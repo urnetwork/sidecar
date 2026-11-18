@@ -10,7 +10,7 @@
 // then lapses, as after a crash; nothing shows before the head CAS.
 //
 // Who runs a roll-up, and when, is the schedule's (indexer_search.go). Barriers evs.index.rollup.locked, .built,
-// .uploaded and .pushed, keyed <repo>/<ref>; the batch write and the head CAS between the last two are evs's. Not safe
+// .uploaded and .pushed, keyed <repo>:<ref>; the batch write and the head CAS between the last two are evs's. Not safe
 // for concurrent use.
 
 package sidecar
@@ -118,9 +118,9 @@ type indexRollupOutcome struct {
 	lock *indexHeldLock
 }
 
-// The barrier key of this ref: <repo>/<ref>.
+// The barrier key of this ref: <repo>:<ref>, an opaque id with no slash (testhook.go; I-13).
 func (self *IndexRoller) barrierKey() string {
-	return self.args.repoId.String() + "/" + self.args.refId.String()
+	return self.args.repoId.String() + ":" + self.args.refId.String()
 }
 
 // The ref's index at its head.
