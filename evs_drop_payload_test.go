@@ -480,8 +480,9 @@ func TestEvsDropListsSplitAnywhere(t *testing.T) {
 }
 
 // Format 2's DROP statement and payload through the push checks: a one-part DROP checks with its body and lists; a push
-// in parts carries them in its parts' slices, which the seal streams; a DROP with other flags, an index_epoch, or no
-// drop_sha256, and DROP sections under a push without flag 256, are refused; format 1 refuses the statement.
+// in parts carries them in its parts' slices, which the seal streams; a DROP with other flags or no drop_sha256, and
+// DROP sections under a push without flag 256, are refused, while a DROP naming the index_epoch its index rewrites
+// need passes (QD-1078); format 1 refuses the statement.
 func TestEvsDropThroughThePushChecks(t *testing.T) {
 	signer := newEvsTestSigner("drop writer")
 	_, body, lists := evsTestTwoPathDrop(t)
@@ -567,7 +568,7 @@ func TestEvsDropThroughThePushChecks(t *testing.T) {
 		mutate func(*protocol.EvsPush)
 	}{
 		{name: "DROP with FORCE", mutate: func(push *protocol.EvsPush) { push.Flags |= uint32(protocol.EvsPushFlag_EVS_PUSH_FORCE) }},
-		{name: "DROP with an index_epoch", mutate: func(push *protocol.EvsPush) { push.IndexEpoch = 3 }},
+		{name: "DROP with a CUT", mutate: func(push *protocol.EvsPush) { push.Flags |= uint32(protocol.EvsPushFlag_EVS_PUSH_CUT) }},
 		{name: "DROP without drop_sha256", mutate: func(push *protocol.EvsPush) { push.DropSha256 = nil }},
 		{name: "drop_sha256 without DROP", mutate: func(push *protocol.EvsPush) { push.Flags = 0 }},
 		{name: "a drop_sha256 of 16 bytes", mutate: func(push *protocol.EvsPush) { push.DropSha256 = push.DropSha256[:16] }},
@@ -588,6 +589,16 @@ func TestEvsDropThroughThePushChecks(t *testing.T) {
 	cut.IndexEpoch = 7
 	if _, err := NewEvsStatementBuilder(signer.sign).signStatementOf(cut, true); err != nil {
 		t.Errorf("a CUT's shape: %v", err)
+	}
+	// a DROP carrying §11.14's index rewrites names the head's index_epoch, which 5d holds (QD-1078); format 1 still
+	// refuses it
+	indexed := proto.Clone(statement.Push).(*protocol.EvsPush)
+	indexed.IndexEpoch = 3
+	if _, err := NewEvsStatementBuilder(signer.sign).signStatementOf(indexed, true); err != nil {
+		t.Errorf("a DROP naming an index_epoch: %v", err)
+	}
+	if _, err := NewEvsStatementBuilder(signer.sign).signStatementOf(indexed, false); !errors.Is(err, ErrEvsFormatUnsupported) {
+		t.Errorf("format 1 took a DROP naming an index_epoch: %v", err)
 	}
 
 	// DROP sections under a push without flag 256

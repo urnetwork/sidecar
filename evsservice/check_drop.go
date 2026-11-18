@@ -21,8 +21,18 @@
 //	          self-contained: one locator naming this push's upload or an inline record, or chunk locators each this
 //	          push's upload or a kind-1 locator its base names, all but the last a whole 4 MiB chunk; a removed one has
 //	          none, and where its newest entry's epoch is current or a listed source, that entry's newest is the
-//	          standing removal at through_version, else resolve judges it; every change is a written lineage's: else
-//	          409 DROP_BOUNDARY
+//	          standing removal at through_version, else resolve judges it; every other change is one of §11.14's index
+//	          rewrites (index below): else 409 DROP_BOUNDARY
+//	index     beside the written lineages' changes, a DROP carries §11.14's drop row's rewrites of the index files
+//	          holding a listed version (QD-1078): each a change of a file whose newest version stands at versioning
+//	          2, writing it again at versioning 2 on that version, never a creation, a removal or a directory delta,
+//	          its chain's records summing to at most Padmé of the replaced chain's, the rekey bound a CLOSURE's
+//	          rewrite is held to (closure.go), which a rewrite padded to the replaced length meets; else 409
+//	          DROP_BOUNDARY naming the path. 5d holds such a DROP to the head's index_epoch as any push writing an
+//	          index file (CheckIndexEpoch, check_cut.go), so it applies the ref's erasure set. evs sees no names: an
+//	          index file is a version of versioning 2, which readers ignore outside an index root (§11.7's setting
+//	          row), and a push changes its own ref alone, so `.ur-index/` on the DROP's file-mode ref is the only root
+//	          it rewrites, and `ur/index`, another ref, never rides it
 //	list      a written lineage's list holds its base's entry hash, found by a search over section 10's slices as
 //	          received: else 409 DROP_LIST. The lists' own counts, order, repeats and hashes, and the body's shape and
 //	          drop_sha256, are EvsCheckDropPayload's, where the bytes are first whole (the one-part payload, the seal)
@@ -239,9 +249,9 @@ func evsDropNewestTokenPath(path *protocol.EvsDropPath) (sidecar.EvsTokenPath, e
 	return sidecar.ParseEvsChangedTokenPath(lineage[0].GetTokenPath())
 }
 
-// 5h's DROP rules at a one-part push or a seal: each lineage's boundary against the push's changes, and each written
-// lineage's list holding its base. See the file header. Any other push, a part, and a view whose test stands in for
-// format 2's rules pass.
+// 5h's DROP rules at a one-part push or a seal: each lineage's boundary against the push's changes, each written
+// lineage's list holding its base, and every other change an index rewrite. See the file header. Any other push, a
+// part, and a view whose test stands in for format 2's rules pass.
 func CheckDropBoundary(view *PushView) *EvsCheckRefusal {
 	if !view.drop() || view.Stage == PushStagePart || view.Format2Rules != nil {
 		return nil
@@ -318,9 +328,57 @@ func CheckDropBoundary(view *PushView) *EvsCheckRefusal {
 		}
 	}
 	for _, change := range view.Payload.Changes {
-		if !written[change.TokenPath.KeyString()] {
-			return boundary(change.TokenPath, "a change no written lineage names")
+		if written[change.TokenPath.KeyString()] {
+			continue
 		}
+		if refusal := checkDropIndexRewrite(view, change); refusal != nil {
+			return refusal
+		}
+	}
+	return nil
+}
+
+// A change no written lineage names, which a DROP may carry only as one of §11.14's index rewrites: see the file
+// header's index row.
+func checkDropIndexRewrite(view *PushView, change *sidecar.EvsCheckedChange) *EvsCheckRefusal {
+	boundary := func(detail string) *EvsCheckRefusal {
+		refusal := newEvsCheckRefusal(EvsCheckReasonDropBoundary, detail)
+		refusal.Paths = []sidecar.EvsTokenPath{change.TokenPath}
+		return refusal
+	}
+	base := change.Change.GetBaseEntryVersion()
+	switch {
+	case !change.WritesEntry():
+		return boundary("a removal no written lineage names")
+	case base == 0:
+		return boundary("a creation no written lineage names")
+	}
+	entry, err := parseEvsEntryVersion(change.EntryVersion)
+	if err != nil {
+		return newEvsCheckRefusal(EvsCheckReasonInvalid, "an entry version that does not parse")
+	}
+	switch {
+	case protocol.EvsEntryKind(entry.GetKind()) != protocol.EvsEntryKind_EVS_ENTRY_FILE:
+		return boundary("a directory delta no written lineage names")
+	case protocol.EvsVersioning(entry.GetVersioning()) != protocol.EvsVersioning_EVS_VERSIONING_INDEX:
+		return boundary("a change no written lineage names that writes no index file")
+	}
+	read := view.Paths[change.TokenPath.KeyString()]
+	if read == nil || read.Newest == nil || !read.Newest.Exists || read.Newest.Directory || read.Newest.Version != base {
+		return boundary("an index rewrite over no standing file at its base")
+	}
+	replaced, err := replacedEntryVersion(read)
+	switch {
+	case err != nil:
+		return newEvsCheckRefusal(EvsCheckReasonUnchecked, "a replaced version that does not parse")
+	case replaced == nil:
+		// a standing file whose version step 4 gave no bytes of: nothing here may pass on a check it did not run
+		return newEvsCheckRefusal(EvsCheckReasonUnchecked, "a replaced version step 4 did not read")
+	case protocol.EvsEntryKind(replaced.GetKind()) != protocol.EvsEntryKind_EVS_ENTRY_FILE ||
+		protocol.EvsVersioning(replaced.GetVersioning()) != protocol.EvsVersioning_EVS_VERSIONING_INDEX:
+		return boundary("an index rewrite of a file that is no index file")
+	case sidecar.EvsPadme(evsChainRecordByteCount(replaced)) < evsChainRecordByteCount(entry):
+		return boundary("an index rewrite past Padmé of the chain it replaces")
 	}
 	return nil
 }
