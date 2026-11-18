@@ -164,10 +164,11 @@ type BridgeComponentArgs struct {
 	RepoKeyAt func(generation uint64) *EvsRepoKey
 	// AclFollower's local policy, nil with no document or before it compiles.
 	AclLocal func() *AclLocalPolicy
-	// Takes every advertiser's subnet routes in force at each state the component compiles, for the host's AclEngine
-	// (AclEngine.InstallRoutes; owner decision 575), so ur bridge's previews answer a route rule that names no prefix by
-	// the routes the device role enforces. Nil asks the compile for none. Called on the compile's goroutine with no
-	// lock held, so it must not block.
+	// Takes every advertiser's subnet routes in force at each state the component compiles that the device role then
+	// holds in force, for the host's AclEngine (AclEngine.InstallRoutes; owner decision 575), so ur bridge's previews
+	// and MCP's acl_check answer a route rule that names no prefix by the routes the device role enforces: a state the
+	// role drops or refuses hands none. Nil asks the compile for none. Called on the compile's goroutine with no lock
+	// held, so it must not block.
 	ServedRoutes func(servedRoutes *AclServedRoutes)
 	// Rule 0's input, DaemonLocalListen's binds, host:port. Nil for none.
 	DaemonListeners func() []string
@@ -907,11 +908,12 @@ func (self *BridgeComponent) compileNow() {
 		if err := sink.SetState(compiled.State, run); err != nil {
 			// the posture drops a state below the one in force whole, and refuses one it cannot verify
 			self.log.Warningf("[bridge]%s the device role refused the state at %d: %v", self.args.NetworkId, state.Pin().GetVersion(), err)
-		}
-		self.block = compiled.Block
-		if self.args.ServedRoutes != nil {
+		} else if self.args.ServedRoutes != nil && proto.Equal(sink.Decision().StatePin, compiled.State.GetAuth()) {
+			// the routes of the state the device role holds in force: one it dropped, below the state it keeps, or
+			// refused leaves the engine on the routes of the state it keeps
 			self.args.ServedRoutes(compiled.ServedRoutes)
 		}
+		self.block = compiled.Block
 		func() {
 			self.stateLock.Lock()
 			defer self.stateLock.Unlock()
