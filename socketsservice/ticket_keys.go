@@ -11,8 +11,8 @@
 // sign under different keys for up to a reread interval, each of which every listener verifies. A key signs only
 // while it outlives SignMargin, so no ticket outlives its key.
 //
-// Rotation, every RotationInterval (30 days): SocketTicketKeyFileAdd adds a key to the file beside the ones it
-// holds, each expiring RotationInterval and KeyOverlap after its creation, and drops the expired; `sidecarctl
+// Rotation, every RotationInterval (365 days, QD-1039): SocketTicketKeyFileAdd adds a key to the file beside the
+// ones it holds, each expiring RotationInterval and KeyOverlap after its creation, and drops the expired; `sidecarctl
 // sockets ticket-keygen` runs it, and the owner places what it writes in vault (owner decision 354). The new key
 // verifies once read and signs once settled, while the old one verifies through the overlap. A rotation never stops
 // the service: vault's file changes and the next reread takes it.
@@ -57,9 +57,11 @@ var _ SocketTicketKeys = (*SocketTicketKeySet)(nil)
 // A key file that cannot be used. The text names what is wrong, never a key.
 var ErrSocketTicketKeyFileRefused = errors.New("socket ticket key file refused")
 
-// The key set's tunables (§9.8's 30-day rotation with overlap).
+// The key set's tunables (§9.8's rotation with overlap).
 type SocketTicketKeySettings struct {
-	// How often a key file gets a new key: 30 days, which SocketTicketKeyFileAdd's expiry follows.
+	// How often a key file gets a new key: 365 days, the owner running the keygen once a year in each environment
+	// (QD-1039, which amends owner decisions 354 and 562 on the interval alone). SocketTicketKeyFileAdd's expiry
+	// follows it.
 	RotationInterval time.Duration
 	// How long a key verifies past RotationInterval, so a ticket under it, and the listeners that hold it, outlive
 	// its successor's settling: 1 day.
@@ -81,7 +83,7 @@ type SocketTicketKeySettings struct {
 // §9.8's values.
 func DefaultSocketTicketKeySettings() *SocketTicketKeySettings {
 	return &SocketTicketKeySettings{
-		RotationInterval: 30 * 24 * time.Hour,
+		RotationInterval: 365 * 24 * time.Hour,
 		KeyOverlap:       24 * time.Hour,
 		SettleTime:       10 * time.Minute,
 		SignMargin:       10 * time.Minute,

@@ -512,3 +512,17 @@ func TestTicketKeyGoneFromTheFileIsSeenAnewWhenItComesBack(t *testing.T) {
 		t.Fatal("the key an id names anew does not sign SettleTime after it was first seen")
 	}
 }
+
+// The defaults are §9.8's and the owner's: a new key every 365 days (QD-1039), each verifying a day past that and
+// settling 10 min after the later of its creation and its first sight, no key signing within 10 min of its expiry,
+// and the file reread every minute.
+func TestTicketKeyDefaultsAreTheOwners(t *testing.T) {
+	settings := socketsservice.DefaultSocketTicketKeySettings()
+	if settings.RotationInterval != 365*24*time.Hour || settings.KeyOverlap != 24*time.Hour || settings.SettleTime != 10*time.Minute ||
+		settings.SignMargin != 10*time.Minute || settings.ReloadInterval != 60*time.Second {
+		t.Fatalf("the defaults are %+v", settings)
+	}
+	if err := settings.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
