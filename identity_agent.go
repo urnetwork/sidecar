@@ -20,6 +20,11 @@
 //	         registration is a new agent_id. Readers bound what was signed before by not_after. A compromised daemon
 //	         is a SidecarRevoke for compromise, from whose since_n on readers take its provenance as unattributed,
 //	         which they decide before they call VerifyAgentProvenance.
+//	register an in-daemon agent's agent_id is one per (sidecar, label) (§5.5, owner decision 470; QD-981):
+//	         ResolveAgentId draws a random Id at the label's first ask and keeps it in keychain.ur under
+//	         agent-label/<label>, beside the agent's own record, so it comes back with a restored keychain.ur and no
+//	         reader of the label can derive it. Once AgentRevoke tombstoned the id, the label's next ask draws another,
+//	         the new registration's (QD-232)
 //	read     VerifyAgentProvenance: the certificate under the identity key of the sidecar that signed the carrying
 //	         entry, naming that sidecar and the entry's agent; the entry's time before not_after and no further than
 //	         MaxLifetime before it; then the subkey's signature over the purpose and message. An absent certificate
@@ -71,7 +76,48 @@ const (
 	sidecarAgentRecordRevoked = 2
 )
 
+// An agent label's registration in the core's namespace of keychain.ur, beside the agent's own record (owner decision
+// 470): magic, version and the 16-byte agent_id the label names now.
+const (
+	sidecarAgentLabelRecordPrefix  = "agent-label/"
+	sidecarAgentLabelRecordMagic   = "URAL"
+	sidecarAgentLabelRecordVersion = 1
+)
+
+// What an agent label may be (§5.5, §5.8): a hello's and a `.ur`'s alike, and so what a registration is keyed by.
+type SidecarAgentLabelSettings struct {
+	// The longest label: 64 B, short enough to name a run, a record and a registration without escaping. A format
+	// limit that ur, its daemon and every `.ur` share, so it changes for all of them at once.
+	MaxByteCount int
+}
+
+// A fresh value each call.
+func DefaultSidecarAgentLabelSettings() *SidecarAgentLabelSettings {
+	return &SidecarAgentLabelSettings{
+		MaxByteCount: 64,
+	}
+}
+
+// Nil for an agent label: 1 to MaxByteCount of A-Z, a-z, 0-9, '.', '_' and '-', starting with a letter or digit, so
+// it is short printable ASCII. Anything else is ErrSidecarAgentLabel, which names the bound and never the label.
+func (self *SidecarAgentLabelSettings) Check(label string) error {
+	refused := fmt.Errorf("%w, 1 to %d of them", ErrSidecarAgentLabel, self.MaxByteCount)
+	if label == "" || self.MaxByteCount < len(label) {
+		return refused
+	}
+	for i := 0; i < len(label); i += 1 {
+		c := label[i]
+		alphanumeric := ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || ('0' <= c && c <= '9')
+		if !alphanumeric && (i == 0 || (c != '.' && c != '_' && c != '-')) {
+			return refused
+		}
+	}
+	return nil
+}
+
 var (
+	// An agent label that is not one (SidecarAgentLabelSettings.Check).
+	ErrSidecarAgentLabel = errors.New("an agent label is A-Z, a-z, 0-9, '.', '_' and '-', starting with a letter or digit")
 	// The agent's subkey was revoked here (AgentRevoke): this daemon signs nothing more for that agent_id, and a new
 	// registration takes a new one.
 	ErrAgentSubkeyRevoked = errors.New("this agent's subkey was revoked: register the agent again")
@@ -85,6 +131,8 @@ var (
 	ErrAgentProvenanceInvalid = errors.New("agent provenance does not verify")
 	// The agent record does not decode: a failure, never absence (D-CORE-15).
 	errSidecarAgentRecordFormat = fmt.Errorf("%w: an agent subkey record does not decode", ErrSidecarStoreFailed)
+	// A label's registration does not decode: a failure, never absence, so no id is drawn over it (D-CORE-15).
+	errSidecarAgentLabelRecordFormat = fmt.Errorf("%w: an agent label's registration does not decode", ErrSidecarStoreFailed)
 )
 
 // An agent subkey's certificate as its sidecar holds it, with no private key, so it may go anywhere an id may.
@@ -398,6 +446,105 @@ func (self *Sidecar) AgentRevoke(agentId Id) error {
 	err = secrets.Put(sidecarAgentRecordName(agentId), (&sidecarAgentRecord{revoked: true}).encode())
 	testHookBarrier("identity.agent_subkey.revoke.after", hookKey)
 	return err
+}
+
+// The registration's name in the core's namespace: the label, which SidecarAgentLabelSettings holds to printable
+// ASCII.
+func sidecarAgentLabelRecordName(label string) string {
+	return sidecarAgentLabelRecordPrefix + label
+}
+
+// A registration's bytes.
+func encodeSidecarAgentLabelRecord(agentId Id) []byte {
+	encoded := make([]byte, 0, len(sidecarAgentLabelRecordMagic)+1+len(agentId))
+	encoded = append(encoded, sidecarAgentLabelRecordMagic...)
+	encoded = append(encoded, sidecarAgentLabelRecordVersion)
+	return append(encoded, agentId[:]...)
+}
+
+// Exactly one registration of this version naming an agent: anything else is errSidecarAgentLabelRecordFormat, which
+// never repeats the bytes.
+func decodeSidecarAgentLabelRecord(encoded []byte) (Id, error) {
+	cursor := &wrapCursor{remaining: encoded}
+	magic := cursor.take(len(sidecarAgentLabelRecordMagic))
+	version := cursor.takeUint8()
+	agentIdBytes := cursor.take(len(Id{}))
+	if !cursor.finished() || string(magic) != sidecarAgentLabelRecordMagic || version != sidecarAgentLabelRecordVersion {
+		return Id{}, errSidecarAgentLabelRecordFormat
+	}
+	agentId, err := IdFromBytes(agentIdBytes)
+	if err != nil || agentId == (Id{}) {
+		return Id{}, errSidecarAgentLabelRecordFormat
+	}
+	return agentId, nil
+}
+
+// Whether AgentRevoke left its tombstone for agentId here: false for an agent with no record yet, whose subkey its first
+// use mints, and for a live one. A record that does not decode is a failure.
+func sidecarAgentRevoked(secrets SidecarSecrets, agentId Id) (bool, error) {
+	encoded, err := secrets.Get(sidecarAgentRecordName(agentId))
+	if errors.Is(err, ErrSidecarStoreAbsent) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	record, err := decodeSidecarAgentRecord(encoded)
+	clear(encoded)
+	if err != nil {
+		return false, err
+	}
+	clear(record.seed)
+	return record.revoked, nil
+}
+
+// The label's agent_id in this sidecar (§5.5, owner decision 470): the one its registration in keychain.ur names, or a
+// new random Id, kept there before it is answered, at the label's first ask and once AgentRevoke tombstoned the one it
+// named, a new registration being a new agent_id (QD-232). So every session of one label names one agent, across a
+// restart and a restore of keychain.ur, and no reader of the label can derive its id. Refuses a label that is not one
+// under the default form (ErrSidecarAgentLabel) and, as AgentSubkey does, a Locked or Revoked sidecar and one with no
+// identity yet. A registration or an agent record that does not decode is a failure, never absence, so no id is drawn
+// over it. Takes turns with AgentSubkey, SignProvenance and AgentRevoke under agentSubkeyLock, so two first asks draw
+// one id.
+func (self *Sidecar) ResolveAgentId(label string) (Id, error) {
+	if err := DefaultSidecarAgentLabelSettings().Check(label); err != nil {
+		return Id{}, err
+	}
+	self.agentSubkeyLock.Lock()
+	defer self.agentSubkeyLock.Unlock()
+	secrets, _, err := self.agentSubkeySecrets()
+	if err != nil {
+		return Id{}, err
+	}
+	name := sidecarAgentLabelRecordName(label)
+	encoded, err := secrets.Get(name)
+	switch {
+	case err == nil:
+		agentId, decodeErr := decodeSidecarAgentLabelRecord(encoded)
+		if decodeErr != nil {
+			return Id{}, decodeErr
+		}
+		revoked, revokedErr := sidecarAgentRevoked(secrets, agentId)
+		if revokedErr != nil {
+			return Id{}, revokedErr
+		}
+		if !revoked {
+			return agentId, nil
+		}
+		// AgentRevoke ended this registration: the label's next is a new agent_id
+	case errors.Is(err, ErrSidecarStoreAbsent):
+	default:
+		return Id{}, err
+	}
+	agentId := NewId()
+	hookKey := agentId.String()
+	testHookBarrier("identity.agent_label.register.before", hookKey)
+	err = secrets.Put(name, encodeSidecarAgentLabelRecord(agentId))
+	testHookBarrier("identity.agent_label.register.after", hookKey)
+	if err != nil {
+		return Id{}, err
+	}
+	return agentId, nil
 }
 
 // What a reader makes of an agent's provenance (QD-159).

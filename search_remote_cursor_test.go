@@ -210,3 +210,16 @@ func TestAnIdleCursorEnds(t *testing.T) {
 		t.Errorf("an idle cursor's page: %d", reply.GetStatus())
 	}
 }
+
+// A remote cursor keys its page barriers by its first served repo and ref as <repo>:<ref>, an opaque id a Net's
+// barrier driver takes, with no slash, which reads as a path (testhook.go; I-13).
+func TestSearchRemoteCursorBarrierKeyIsAnOpaqueId(t *testing.T) {
+	repoId, refId := evsTestId("remote repo"), evsTestId("remote ref")
+	cursor := &searchRemoteCursor{repos: []*searchRemoteCursorRepo{
+		{repoId: evsTestId("unserved repo"), row: &protocol.SearchCoverage{RefId: evsTestId("unserved ref").Bytes()}},
+		{repoId: repoId, row: &protocol.SearchCoverage{Served: uint32(protocol.SearchServed_SERVED_INDEX), RefId: refId.Bytes()}},
+	}}
+	if key := cursor.barrierKey(); key != repoId.String()+":"+refId.String() {
+		t.Fatalf("the cursor's barrier key %q", key)
+	}
+}

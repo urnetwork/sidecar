@@ -7,9 +7,10 @@
 // owner-bound repo's read going through its receipt gate and nothing returning when the gate refuses,
 // writes by path CAS with a conflict answering FAILED_PRECONDITION, git-mode writes through the local tier or
 // EVS_GIT_REF and each of the local tier's refusals answering a constant text, agent-config writes outward through the
-// gate, and shared writes refused on a secret. ur://evs is resources_evs_test.go's and resources_test.go's. The
-// receipt-before-decrypt of FS-30, WriteAtTip's count of tries and the effect's Lookup are EVS1-M3-01's, on the
-// engine.
+// gate, and shared writes refused on a secret. Every write and outward action carries the session's agent_id (owner
+// decision 470), and on a T2 sidecar a session's write reads back with that id, signed by the agent's subkey and
+// verified. ur://evs is resources_evs_test.go's and resources_test.go's. The receipt-before-decrypt of FS-30,
+// WriteAtTip's count of tries and the effect's Lookup are EVS1-M3-01's, on the engine.
 
 package mcp
 
@@ -251,6 +252,16 @@ func newTestEvsToolEnv(t *testing.T) *testEvsToolEnv {
 // Puts a file in a repo, signed by signer, whose push sealed no provenance: one from before the field.
 func (self *testEvsToolEnv) put(repoId sidecar.Id, path string, content string, signer sidecar.Id) {
 	self.putWith(repoId, path, content, signer, nil)
+}
+
+// The agent id the env's sessions act under: their label's registration in the network (owner decision 470).
+func (self *testEvsToolEnv) sessionAgentId() sidecar.Id {
+	self.t.Helper()
+	agentId, err := self.tools.ResolveAgentId("builder")
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	return agentId
 }
 
 // A clean run's provenance: no agent, untainted, no import.
@@ -542,6 +553,10 @@ func TestConflictIsFailedPrecondition(t *testing.T) {
 	if written.Status != "written" || written.Version != 5 || *repo.writes[0].IfBaseVersion != 4 {
 		t.Errorf("written %+v", written)
 	}
+	// the push seals the session's agent's id in the network beside the run's bit (owner decision 470)
+	if agentId := repo.writeArgs[0].AgentId; agentId == nil || *agentId != env.sessionAgentId() {
+		t.Errorf("the push seals agent %v, not the session's %s", agentId, env.sessionAgentId())
+	}
 	repo.writeErr = sidecar.ErrEvsPathMoved
 	wantMcpError(t, env.callTool(conn, "2025-11-25", "evs_write", map[string]any{"repo": env.general.String(), "path": "a.md", "content": "two", "base_version": 4}),
 		McpCodeFailedPrecondition, "the path moved")
@@ -562,6 +577,9 @@ func TestNoLocalTierAnswersEvsGitRef(t *testing.T) {
 	}
 	if repo.atTips[0].Tainted {
 		t.Error("an untainted run's git-mode write seals the bit")
+	}
+	if agentId := repo.atTips[0].AgentId; agentId == nil || *agentId != env.sessionAgentId() || repo.atTips[0].AgentLabel != "builder" {
+		t.Errorf("a git-mode write seals agent %v labeled %q, not the session's %s", agentId, repo.atTips[0].AgentLabel, env.sessionAgentId())
 	}
 	// once the run is tainted, its commit through the local tier seals the bit as a file-mode push does
 	env.put(env.general, "inbox.md", "outside words", sidecar.NewId())
@@ -645,6 +663,11 @@ func TestAgentConfigWriteIsOutward(t *testing.T) {
 	if action.Kind != sidecar.SidecarActionAgentConfigWrite || stored.Action.GetPath() != "docs/CLAUDE.md" || stored.Action.GetBaseVersion() != 1 ||
 		action.RunId == nil || *action.RunId != env.runId || env.evs.effects[0].BaseVersion != 1 {
 		t.Errorf("the action %+v", stored.Action)
+	}
+	// the decision binds the session's agent as well as its run, and the effect's push seals the same id
+	agentId := env.sessionAgentId()
+	if action.AgentId == nil || *action.AgentId != agentId || env.evs.effects[0].AgentId == nil || *env.evs.effects[0].AgentId != agentId {
+		t.Errorf("the action binds agent %v and the effect seals %v, not the session's %s", action.AgentId, env.evs.effects[0].AgentId, agentId)
 	}
 	if env.evs.effects[0].Tainted {
 		t.Error("an untainted run's effect seals the bit")
@@ -731,5 +754,283 @@ func TestPrefixRuleRefusalAnswersItsDetailAndNoPath(t *testing.T) {
 	}
 	if text := mcpEvsError(&sidecar.EvsPrefixRuleError{}).Error(); !strings.Contains(text, "EVS_PREFIX_RULE") {
 		t.Errorf("no detail: %q", text)
+	}
+}
+
+// A tool network over a T2 sidecar, whose keychain.ur keeps the session's agent's registration and subkey, allowing
+// read and write on one general repo, whose writes a signing repo keeps.
+type testAgentEvsNetwork struct {
+	*sidecar.Sidecar
+	repoId sidecar.Id
+	repo   *testSigningEvsRepo
+}
+
+func (self *testAgentEvsNetwork) PolicyInstalled() bool {
+	return true
+}
+
+// Read and write on the one repo, and nothing else.
+func (self *testAgentEvsNetwork) Allow(action protocol.AclAction, resource sidecar.AclResource, now time.Time) (sidecar.AclCheck, bool) {
+	if resource.Kind == sidecar.AclResourceRepo && resource.RepoId == self.repoId {
+		return sidecar.AclCheck{Allowed: true}, true
+	}
+	return sidecar.AclCheck{Reason: sidecar.AclReasonNoGrant}, true
+}
+
+func (self *testAgentEvsNetwork) RepoKind(repoId sidecar.Id) protocol.RepoKind {
+	if repoId == self.repoId {
+		return protocol.RepoKind_REPO_KIND_GENERAL
+	}
+	return protocol.RepoKind_REPO_KIND_UNSPECIFIED
+}
+
+func (self *testAgentEvsNetwork) RepoIds() []sidecar.Id {
+	return []sidecar.Id{self.repoId}
+}
+
+func (self *testAgentEvsNetwork) EvsRepo(repoId sidecar.Id) McpEvsRepo {
+	if repoId != self.repoId {
+		return nil
+	}
+	return self.repo
+}
+
+// No outward writes here: the agent-config path is TestAgentConfigWriteIsOutward's.
+func (self *testAgentEvsNetwork) EvsWriteEffect(repoId sidecar.Id, effect *sidecar.EvsWriteEffect) sidecar.SidecarEffect {
+	return nil
+}
+
+// A path's newest push as the signing repo keeps it.
+type testSignedPush struct {
+	pushId     sidecar.Id
+	timeMs     int64
+	version    uint64
+	content    []byte
+	provenance *protocol.EvsProvenance
+}
+
+// One file-mode repo standing in for EvsRepo's evs half behind McpEvsRepo: a write's push seals the call's tainted bit
+// and agent_id in its provenance and, as evs_push.go does, has the host's provenance signer (EvsClientArgs's
+// SignProvenance, which the hosted Sidecar gives) sign EvsAgentProvenanceMessage with the agent's subkey, a revoked
+// agent named alone; a read that asks checks the push as EvsClient's reader does, EvsCheckPushProvenance under the
+// writer's identity key, a refused signature reading unattributed with Refused set. The planner's own sealing is the
+// root's evs tests'.
+type testSigningEvsRepo struct {
+	repoId sidecar.Id
+	refId  sidecar.Id
+	writer *sidecar.SidecarIdentity
+	sign   sidecar.EvsSignProvenanceFunction
+	clock  sidecar.Clock
+
+	stateLock  sync.Mutex
+	pathPushes map[string]*testSignedPush
+	version    uint64
+}
+
+func (self *testSigningEvsRepo) List(ctx context.Context, args *sidecar.EvsReadArgs) (*sidecar.EvsListing, error) {
+	return &sidecar.EvsListing{Path: args.Path}, nil
+}
+
+func (self *testSigningEvsRepo) History(ctx context.Context, args *sidecar.EvsReadArgs) (*sidecar.EvsHistory, error) {
+	return nil, sidecar.ErrEvsPathAbsent
+}
+
+func (self *testSigningEvsRepo) Subscribe(ctx context.Context, args *sidecar.EvsSubscribeArgs) (*sidecar.EvsSubscription, error) {
+	return &sidecar.EvsSubscription{}, nil
+}
+
+// A file-mode ref's repo takes no commit through the local tier.
+func (self *testSigningEvsRepo) WriteAtTip(ctx context.Context, args *sidecar.EvsWriteAtTipArgs) (*sidecar.EvsWriteAtTipResult, error) {
+	return nil, sidecar.ErrEvsGitRef
+}
+
+func (self *testSigningEvsRepo) WritePaths(ctx context.Context, args *sidecar.EvsWritePathsArgs) (*sidecar.EvsWritePathsResult, error) {
+	write := args.Writes[0]
+	content, err := io.ReadAll(io.NewSectionReader(write.Content, 0, write.Content.Size()))
+	if err != nil {
+		return nil, err
+	}
+	push := &testSignedPush{
+		pushId: sidecar.NewId(), timeMs: self.clock.Now().UnixMilli(), content: content,
+		provenance: &protocol.EvsProvenance{Tainted: args.Tainted},
+	}
+	if args.AgentId != nil {
+		push.provenance.AgentId = args.AgentId.Bytes()
+		message := sidecar.EvsAgentProvenanceMessage(self.repoId, self.refId, push.pushId, push.timeMs, nil)
+		signature, err := self.sign(*args.AgentId, sidecar.AgentProvenancePurposeEvsAgent, message)
+		switch {
+		case errors.Is(err, sidecar.ErrAgentSubkeyRevoked):
+			// a revoked agent's push names it alone, agent_asserted
+		case err != nil:
+			return nil, err
+		default:
+			push.provenance.AgentCert, push.provenance.AgentKeyId, push.provenance.AgentSignature = signature.Cert, signature.KeyId, signature.Signature
+		}
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.version += 1
+	push.version = self.version
+	self.pathPushes[write.Path] = push
+	return &sidecar.EvsWritePathsResult{PushId: push.pushId, Version: push.version, PathVersions: []uint64{push.version}}, nil
+}
+
+func (self *testSigningEvsRepo) ReadHead(ctx context.Context, args *sidecar.EvsReadArgs, out io.Writer) (*sidecar.EvsFileInfo, error) {
+	self.stateLock.Lock()
+	push, ok := self.pathPushes[args.Path]
+	self.stateLock.Unlock()
+	if !ok {
+		return nil, sidecar.ErrEvsPathAbsent
+	}
+	if _, err := out.Write(push.content); err != nil {
+		return nil, err
+	}
+	info := &sidecar.EvsFileInfo{
+		Path: args.Path, Version: push.version, CommitVersion: push.version, SignerSidecarId: self.writer.SidecarId,
+		Time: time.UnixMilli(push.timeMs), Size: uint64(len(push.content)),
+	}
+	if !args.Provenance {
+		return info, nil
+	}
+	read, err := sidecar.EvsCheckPushProvenance(&sidecar.EvsPushProvenanceCheck{
+		RepoId: self.repoId, RefId: self.refId,
+		Statement: &sidecar.EvsStatement{Push: &protocol.EvsPush{
+			PushId: push.pushId.Bytes(), SignerSidecarId: self.writer.SidecarId.Bytes(), TimeMs: push.timeMs,
+		}},
+		Metadata:          &protocol.EvsSealedMetadata{Provenance: push.provenance},
+		IdentityPublicKey: self.writer.IdentityPublicKey,
+	})
+	if errors.Is(err, sidecar.ErrAgentProvenanceInvalid) {
+		read.Refused = true
+	} else if err != nil {
+		return nil, err
+	}
+	info.Provenance = read
+	return info, nil
+}
+
+// Overwrites a byte of path's push's agent signature, as a tampered push would carry it.
+func (self *testSigningEvsRepo) tamper(path string) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	signature := bytes.Clone(self.pathPushes[path].provenance.AgentSignature)
+	signature[0] ^= 1
+	self.pathPushes[path].provenance.AgentSignature = signature
+}
+
+// Its version of path as a reader that asks for provenance reads it.
+func (self *testSigningEvsRepo) provenanceOf(t *testing.T, path string) *sidecar.EvsPushProvenance {
+	t.Helper()
+	info, err := self.ReadHead(context.Background(), &sidecar.EvsReadArgs{Path: path, Provenance: true}, io.Discard)
+	if err != nil || info.Provenance == nil {
+		t.Fatalf("%s: %+v %v", path, info, err)
+	}
+	return info.Provenance
+}
+
+// MCP-M3-13's sealed agent on a T2 sidecar (owner decision 470; QD-981): an evs_write of a session with an agent gives
+// its version back with the session's agent_id in its push's provenance, signed by that agent's subkey in the keychain
+// where the id was registered, through the provenance signer the Sidecar gives its evs client, and a reader verifies it
+// under the writing sidecar's identity key; a signature tampered with reads refused and unattributed. A session with no
+// agent seals none. After AgentRevoke a session open across it names its id unsigned, agent_asserted, and the label's
+// next session writes under a new id, verified.
+func TestEvsWriteSealsTheSessionsAgentId(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), mcpTestTimeout)
+	defer cancel()
+	net := sidecartest.NewNet(ctx, sidecartest.DefaultNetSettings())
+	defer net.Close()
+	testSidecar, err := net.AddSidecar("writer", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hosted := testSidecar.Sidecar()
+	networkId := testSidecar.NetworkId()
+	args, err := hosted.EvsClientArgs(nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if args.SignProvenance == nil {
+		t.Fatal("the Sidecar gives its evs client no provenance signer")
+	}
+	repoId := sidecar.NewId()
+	network := &testAgentEvsNetwork{Sidecar: hosted, repoId: repoId, repo: &testSigningEvsRepo{
+		repoId: repoId, refId: sidecar.NewId(), writer: hosted.Identity(), sign: args.SignProvenance, clock: net.Clock(),
+		pathPushes: map[string]*testSignedPush{},
+	}}
+	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
+	table := sidecartest.NewFakeProcessTable(clock)
+	daemon := newFakeMcpDaemon()
+	daemon.hostNetwork(networkId, network)
+	settings := NewMcpServerSettings(sidecar.DefaultSidecarSettings(), sidecar.Version)
+	settings.Clock = clock
+	settings.Processes = table
+	server := NewMcpServer(daemon, settings)
+	server.Binder().SetConfigCheck(func(ctx context.Context, harness string, cwd string) (bool, error) { return false, nil })
+	catalog := NewMcpCatalog(server.settings.Mcp, clock, nil)
+	addEvsTools(catalog)
+	catalog.Install(server)
+	terminal := table.Spawn(1, "zsh")
+	claude := sidecartest.NewFakeHarness(table, terminal.Identity.Pid, sidecartest.FakeHarnessClaudeCode, hookTestCwd,
+		func(hello *sidecar.DaemonHello, payload []byte) error {
+			return server.HandleHook(ctx, hello, networkId, network, &HookEventParams{Payload: payload, ByteCount: int64(len(payload))})
+		})
+	if err := claude.SessionStart("agent session", "startup"); err != nil {
+		t.Fatal(err)
+	}
+	session := func(agent string) *testMcpConn {
+		conn := startTestMcpConn(t, server, claude.RelayHello(agent))
+		conn.initialize("2025-11-25")
+		return conn
+	}
+	write := func(conn *testMcpConn, path string) {
+		t.Helper()
+		out := &mcpEvsWriteOut{}
+		testViewData(t, conn.callTool("evs_write", map[string]any{"repo": repoId.String(), "path": path, "content": "words for " + path, "base_version": 0}), out)
+		if out.Status != "written" {
+			t.Fatalf("%s: %+v", path, out)
+		}
+	}
+
+	builder := session("builder")
+	write(builder, "notes.md")
+	builderId, err := hosted.ResolveAgentId("builder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agentId := testSessionOf(t, server, "builder").AgentId(networkId); agentId == nil || *agentId != builderId {
+		t.Fatalf("the session names %v, the registration %s", agentId, builderId)
+	}
+	signed := network.repo.provenanceOf(t, "notes.md")
+	if signed.State != sidecar.EvsProvenanceVerified || signed.AgentId == nil || *signed.AgentId != builderId || signed.Refused {
+		t.Errorf("the session's write reads back %+v, not verified under %s", signed, builderId)
+	}
+
+	write(session(""), "plain.md")
+	if unsealed := network.repo.provenanceOf(t, "plain.md"); unsealed.State != sidecar.EvsProvenanceUnattributed || unsealed.AgentId != nil {
+		t.Errorf("a session with no agent sealed %+v", unsealed)
+	}
+
+	// a tampered signature is refused, never attributed
+	network.repo.tamper("notes.md")
+	if tampered := network.repo.provenanceOf(t, "notes.md"); !tampered.Refused || tampered.AgentId != nil || tampered.State != sidecar.EvsProvenanceUnattributed {
+		t.Errorf("a tampered signature reads %+v", tampered)
+	}
+
+	// AgentRevoke: the open session's next write names its id alone, and the label's next session writes under a new id
+	if err := hosted.AgentRevoke(builderId); err != nil {
+		t.Fatal(err)
+	}
+	write(builder, "after.md")
+	if asserted := network.repo.provenanceOf(t, "after.md"); asserted.State != sidecar.EvsProvenanceAsserted || asserted.AgentId == nil || *asserted.AgentId != builderId {
+		t.Errorf("a revoked agent's write reads %+v", asserted)
+	}
+	write(session("builder"), "next.md")
+	next := network.repo.provenanceOf(t, "next.md")
+	nextId, err := hosted.ResolveAgentId("builder")
+	if err != nil || nextId == builderId {
+		t.Fatalf("the label's registration after the revocation: %s %v", nextId, err)
+	}
+	if next.State != sidecar.EvsProvenanceVerified || next.AgentId == nil || *next.AgentId != nextId {
+		t.Errorf("the next session's write reads %+v, not verified under %s", next, nextId)
 	}
 }

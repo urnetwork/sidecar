@@ -280,6 +280,11 @@ func (self *SearchTestWorld) RollUpResult(ctx context.Context, runner Id) (*Sear
 		return nil, err
 	}
 	outcome, err := roller.Roll(ctx, indexRootNumber)
+	return searchTestRollUpOf(outcome, runner), searchTestErr(err)
+}
+
+// What a roll-up's outcome says, the runner's own head left out of its content.
+func searchTestRollUpOf(outcome *indexRollupOutcome, runner Id) *SearchTestRollUp {
 	result := &SearchTestRollUp{Content: map[string][sha256.Size]byte{}}
 	if outcome != nil {
 		result.StartDay, result.Attempts = outcome.startDay, outcome.attempts
@@ -313,7 +318,7 @@ func (self *SearchTestWorld) RollUpResult(ctx context.Context, runner Id) (*Sear
 			slices.Sort(result.PromotedTo)
 		}
 	}
-	return result, searchTestErr(err)
+	return result
 }
 
 // The world's errors for a builder's: a lost lock, the storage limit, a lost reply; any other as it came.
