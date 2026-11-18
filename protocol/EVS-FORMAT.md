@@ -75,10 +75,10 @@ Each is an `evs.proto` enum, so the numbers live in one place. Fields the design
 | 67 | BASE_STALE | 409 | 5f, file mode (plan-EVS1-deposit-head) |
 | 68 | PATH_CONFLICT | 409 | naming the paths: 5g, 5e's tail, a seal's rerun, a BASE's other changes |
 | 69 | PATH_EPOCH | 412 | 5e: an older epoch |
-| 70 | SHREDDING | 409 | 5c, and restore past deleted |
+| 70 | SHREDDING | 409 | 5c, and restore past deleted; in a recovery (`reseed` on), `PUT /evs/v1/repos/<id>` and `/reseed` for a repo past restoring, its RepoDelete carrying now, undated or past the 7 d window (QD-1062) |
 | 71 | DROP_KIND | 409 | 5c (format 2) |
 | 72 | SEGMENT_STALE | 409 | the segment route, and a re-upload |
-| 73 | STATEMENT_MISSING | 409 | DELETE and restore without their projected statement |
+| 73 | STATEMENT_MISSING | 409 | DELETE and restore without their projected statement; in a recovery, `PUT /evs/v1/repos/<id>` for a repo re-seeded as deleted whose RepoDelete the projection names no signer for |
 | 74 | GROUP_NOT_READY | 409 | the activate route (plan-EVS1-repo-activate-route) |
 | 75 | MAP_SOURCE | 409 | 5e, a PATH_EPOCH: its map's source unknown, under another chain or of an epoch no longer current, and a map part whose key holds other bytes (DESIGN-DETAILS 9.2.6) |
 | 76 | REPO_PLACED | 409 | `PUT /evs/v1/repos/<id>`: `place/` names another creator, or `repo/` holds another repo than this create's, which alarms; the client picks another id and files its RepoCreate again, where STATEMENT_MISSING keeps the id (owner decision 411) |
