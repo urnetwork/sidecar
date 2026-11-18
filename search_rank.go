@@ -213,7 +213,7 @@ type searchRankCounts struct {
 	masked int
 	// False candidates, by text or by a scoped field.
 	rejected int
-	// Not yet searchable: a table that does not cover a candidate, or a diff whose chain broke the format.
+	// Not yet searchable: a table that does not cover a candidate.
 	unsearchable int
 	// Left unchecked, so the count reads "about n".
 	pending int
@@ -311,9 +311,6 @@ func (self *searchRanker) collect(inputs []*searchRankInput, exact bool) ([]*sea
 		if exact && result.tooBroad {
 			self.counts.tooBroad = true
 			self.counts.tooBroadUncounted += result.candidateCount - len(result.candidates)
-		}
-		if exact {
-			self.counts.unsearchable += len(result.unresolved)
 		}
 		for _, candidate := range result.candidates {
 			ranked := &searchRankCandidate{

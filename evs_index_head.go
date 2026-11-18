@@ -1,24 +1,28 @@
 //go:build !ios_extension
 
-// Writer heads (§11.14's slot, seal, large and version rows; D-EVS-46; DESIGN-DETAILS 1.2.3; SEARCH-M10-09 and
-// SEARCH-M10-45): what one writer's push writes to the index, a pure function of the writer's own files in each bucket
-// it writes, the bucket's manifest row for it, the erasure set, the bucket windows, the push's signed time and the
-// documents it carries. It reads no other writer's file and no shard of a bucket it writes.
+// Writer heads (§11.14's dependency, slot, seal, large and version rows; D-EVS-46; owner decisions 385 and 584;
+// SEARCH-M10-09 and SEARCH-M10-45): what one writer's push writes to the index, a pure function of the writer's own
+// files in each bucket it writes, the bucket's manifest row for it, the erasure set, the bucket windows, the push's
+// signed time and the documents it carries. It reads no other writer's file and no shard of a bucket it writes.
+//
+// Every entry is full or a tombstone, encoded from its own document alone: a live version's whole key set and row, in
+// a slot within SlotEntryMaxByteCount, else as a large entry. No entry rests on another, so the plan keeps no file for
+// one.
 //
 // Each writer appends to a head of its own, its slot with the highest seq, never shared. A head keeps one entry per
 // doc_key, a newer one replacing the writer's older one there. When the head cannot take an entry within
-// SlotMaxByteCount, the head is sealed as it stands and the next slot becomes the head: the lowest k that is absorbed,
-// not the head and not kept, else the lowest unused k. A writer holds at most KeepSlotCount kept slots, for the diffs
-// that rest on them, and RingSlotCount others: at a ninth other slot it merges first, or, unable to, takes it and
-// alarms; with all 16 in use (the slot paths' k 0 to 15) nothing is written. An entry past SlotEntryMaxByteCount is a
-// large entry, alone in a file of its own, and a push whose entries pass PushDirectByteCount puts them straight into
-// the bucket's shards, a merge inside that push, and writes its head without them.
+// SlotMaxByteCount, the head is sealed as it stands and the next slot becomes the head: the lowest k that is absorbed
+// and not the head, else the lowest unused k. A writer holds RingSlotCount slots: at a ninth it merges first, or,
+// unable to, takes it and alarms; with all 16 in use (the slot paths' k 0 to 15) nothing is written. An entry past
+// SlotEntryMaxByteCount is a large entry, alone in a file of its own, and a push whose entries pass
+// PushDirectByteCount puts them straight into the bucket's shards, a merge inside that push, and writes its head
+// without them.
 //
 // The head rule (R2): every push that writes a file of a writer's in a bucket replaces that writer's head there at the
 // version the push's base showed, a head sealed as it stood written again with its own bytes, and a writer with no slot
 // there given slot 0, empty when every entry is a large entry. So a writer's pushes in a bucket commit one at a time,
-// and each finds every file of the writer's as it read them, which is what lets a diff rest on the writer's own files
-// (evs_index_dependency.go). The plan removes each of the writer's absorbed large entries that no diff rests on.
+// and each finds every file of the writer's as it read them. The plan removes each of the writer's absorbed large
+// entries.
 //
 // One counter a writer a bucket numbers its slots and large entries, so the manifest's absorbed watermark reads as one
 // number; a push that numbers anything renumbers the head above it, so the head always holds its writer's highest seq
@@ -48,6 +52,19 @@ var (
 	// stays unindexed until a backfill covers it (§11.14's coverage row).
 	errIndexNoFreeSlot = errors.New("index writer has no free slot")
 )
+
+// One document version a writer's push carries.
+type indexPendingDocument struct {
+	// indexEntryFull for a live version; indexEntryTombstone for a removal, a dropped chunk or a turn to binary or
+	// skipped; indexEntryRefTombstone for a ref DELETE on ur/index.
+	kind indexEntryKind
+	// The doc_key, or a ref tombstone's ref_id.
+	key     [indexIdByteCount]byte
+	version uint64
+	// A live version's key set and row.
+	keys indexKeySet
+	row  *indexRow
+}
 
 // What one writer's push asks of its head.
 type indexHeadPlanArgs struct {
@@ -92,7 +109,7 @@ type indexHeadPlanBucket struct {
 	// Every slot the push seals, by k.
 	sealedSlots []uint32
 	large       []*indexPlannedFile
-	// The writer's absorbed large entries no diff rests on, which the push removes.
+	// The writer's absorbed large entries, which the push removes.
 	removed []*indexPushRemoval
 	// The entries a merge inside the push takes into the bucket's shards, as full entries, when the plan's
 	// mergeInPush is set.
@@ -144,8 +161,7 @@ func (self *indexHeadPlan) removals() []*indexPushRemoval {
 	return removals
 }
 
-// One bucket's share of a push: the writer's own files there and its keep set, the documents placed there, and their
-// entries as choose made them.
+// One bucket's share of a push: the writer's own files there, the documents placed there, and their entries.
 type indexHeadBucketWork struct {
 	window  indexBucketWindow
 	created bool
@@ -153,7 +169,6 @@ type indexHeadBucketWork struct {
 	// The writer's files in the bucket at the base, nil for none, and its manifest watermark there.
 	writer   *indexViewWriter
 	absorbed uint32
-	keep     map[*indexViewSlot]bool
 	pending  []*indexPendingDocument
 	entries  []*indexEntry
 }
@@ -245,33 +260,10 @@ func indexPlanHead(ctx context.Context, args *indexHeadPlanArgs) (*indexHeadPlan
 	totalByteCount := 0
 	for _, start := range starts {
 		work := works[start]
-		// the keep set as this plan leaves the writer's unabsorbed slots: a head entry the push replaces, or the erasure
-		// set drops, no longer counts, and each diff chosen below adds its base
-		replaced := map[[indexIdByteCount]byte]bool{}
-		for _, document := range work.pending {
-			replaced[document.key] = true
-		}
-		work.keep = map[*indexViewSlot]bool{}
-		if work.writer != nil {
-			head := work.writer.head()
-			work.keep = work.writer.kept(work.absorbed, func(slot *indexViewSlot, entry *indexEntry) bool {
-				return slot != head || !(replaced[entry.key] || view.erased(entry.key, entry.version))
-			})
-		}
 		for _, document := range work.pending {
 			entry := &indexEntry{kind: document.kind, key: document.key, version: document.version, timeSeconds: timeSeconds}
 			if document.kind == indexEntryFull {
-				entry.row = document.row
-				choice, err := indexChooseEntry(work.writer, work.keep, document, timeSeconds, view.companion, view.erased, settings)
-				if err != nil {
-					return nil, err
-				}
-				if choice.diff {
-					entry.kind, entry.baseVersion, entry.delta = indexEntryDiff, choice.baseVersion, choice.delta
-					work.keep[choice.baseFile] = true
-				} else {
-					entry.keys = document.keys
-				}
+				entry.row, entry.keys = document.row, document.keys
 			}
 			encoded, err := entry.appendEncoded(nil, view.companion, view.settings)
 			if err != nil {
@@ -283,20 +275,14 @@ func indexPlanHead(ctx context.Context, args *indexHeadPlanArgs) (*indexHeadPlan
 	}
 
 	if settings.PushDirectByteCount < totalByteCount {
-		// the push merges its documents itself, as full entries, and writes each head it has without the keys it
-		// carried (1.2.3); the merge is SEARCH-M10-10's
+		// the push merges its documents itself and writes each head it has without the keys it carried; the merge is
+		// SEARCH-M10-10's
 		plan.mergeInPush = true
 		for _, start := range starts {
 			work := works[start]
 			planned := &indexHeadPlanBucket{window: work.window, created: work.created}
 			plan.buckets = append(plan.buckets, planned)
-			for _, document := range work.pending {
-				entry := &indexEntry{kind: document.kind, key: document.key, version: document.version, timeSeconds: timeSeconds}
-				if document.kind == indexEntryFull {
-					entry.row, entry.keys = document.row, document.keys
-				}
-				planned.direct = append(planned.direct, entry)
-			}
+			planned.direct = work.entries
 			if work.writer == nil || work.writer.head() == nil {
 				continue
 			}
@@ -369,7 +355,7 @@ type indexOpenSlot struct {
 func indexPlaceEntries(args *indexHeadPlanArgs, root *indexViewRoot, work *indexHeadBucketWork, planned *indexHeadPlanBucket, plan *indexHeadPlan) error {
 	view := args.view
 	settings := view.settings
-	writer, keep := work.writer, work.keep
+	writer := work.writer
 	pushed := map[[indexIdByteCount]byte]bool{}
 	sizes := map[*indexEntry]int{}
 	small, large := []*indexEntry{}, []*indexEntry{}
@@ -391,17 +377,15 @@ func indexPlaceEntries(args *indexHeadPlanArgs, root *indexViewRoot, work *index
 	nextSeq := uint32(1)
 	usedSlots := map[uint32]bool{}
 	reusable := []*indexViewSlot{}
-	// slots in use that no diff rests on, which the ring bounds
-	othersInUse := 0
+	// slots in use, which the ring bounds
+	slotsInUse := 0
 	if writer != nil {
 		head = writer.head()
 		nextSeq = writer.highestSeq() + 1
 		for _, slot := range writer.slots {
 			usedSlots[slot.path.slotIndex] = true
-			if !keep[slot] {
-				othersInUse += 1
-			}
-			if slot != head && slot.seq() <= work.absorbed && !keep[slot] {
+			slotsInUse += 1
+			if slot != head && slot.seq() <= work.absorbed {
 				reusable = append(reusable, slot)
 			}
 		}
@@ -409,7 +393,7 @@ func indexPlaceEntries(args *indexHeadPlanArgs, root *indexViewRoot, work *index
 			return cmp.Compare(a.path.slotIndex, b.path.slotIndex)
 		})
 		for _, file := range writer.large {
-			if file.seq() <= work.absorbed && !keep[file] {
+			if file.seq() <= work.absorbed {
 				planned.removed = append(planned.removed, &indexPushRemoval{path: file.path.String(), version: file.file.version})
 			}
 		}
@@ -424,7 +408,7 @@ func indexPlaceEntries(args *indexHeadPlanArgs, root *indexViewRoot, work *index
 			if usedSlots[k] {
 				continue
 			}
-			if settings.RingSlotCount <= othersInUse {
+			if settings.RingSlotCount <= slotsInUse {
 				if args.mayMerge {
 					plan.mergeFirst = true
 					return nil, nil
@@ -432,7 +416,7 @@ func indexPlaceEntries(args *indexHeadPlanArgs, root *indexViewRoot, work *index
 				plan.pastRing = true
 			}
 			usedSlots[k] = true
-			othersInUse += 1
+			slotsInUse += 1
 			return &indexOpenSlot{k: k}, nil
 		}
 		if args.mayMerge {

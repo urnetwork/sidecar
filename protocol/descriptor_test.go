@@ -754,15 +754,21 @@ func TestSealedStatementsShowOnlyIds(t *testing.T) {
 
 // FS-72 and D-PHASE-9: what §7's three files hold for a later milestone equals the decided list. Their reservations are
 // declared rather than `reserved`: ServiceSettings.directory is a field older readers ignore, and VersioningRules a
-// record and a type format 1 verifies and applies nothing from. So these files keep no `reserved` statement, and each
-// message a reservation touches holds exactly its decided numbers, lest something undecided freeze beside them at M2.
+// record and a type format 1 verifies and applies nothing from. So these files keep no `reserved` statement but the
+// ones a decision took a value out by, and each message a reservation touches holds exactly its decided numbers, lest
+// something undecided freeze beside them at M2.
 func TestConfigReservationsEqualTheDecidedList(t *testing.T) {
+	// The numbers a decision took out of an enum before the freeze, which stay reserved so no later value takes them.
+	decidedEnumReservations := map[protoreflect.Name][]int32{
+		// QD-1034: the restored kinds, gone with restored recovery bindings
+		"ProposalKind": {3, 4},
+	}
 	for _, path := range []string{"protocol/bridge/auth.proto", "protocol/bridge/signed.proto", "protocol/config.proto"} {
 		file := testFile(t, path)
 		enums := file.Enums()
 		for i := range enums.Len() {
 			enum := enums.Get(i)
-			if enum.ReservedRanges().Len() != 0 || enum.ReservedNames().Len() != 0 {
+			if !slices.Equal(testEnumReservedNumbers(enum.ReservedRanges()), decidedEnumReservations[enum.Name()]) || enum.ReservedNames().Len() != 0 {
 				t.Errorf("%s reserves numbers no decision lists", enum.FullName())
 			}
 		}

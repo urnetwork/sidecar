@@ -1,26 +1,24 @@
 //go:build !ios_extension
 
-// Matching (§11.14's plan and chains rows, as DESIGN-DETAILS 1.2.9 rewrites them; R-EVS-14; D-EVS-44; FS-107;
-// SEARCH-M10-23 and SEARCH-M10-45): one partition's candidates for a query. Per shard the query's trigrams are looked
-// up rarest first, a term with an absent trigram matching nothing there and a group none of whose terms is present
-// ending that shard; only the query's lists are decoded, read through the shard's frames, and intersected rarest first
+// Matching (§11.14's plan and reads rows; R-EVS-14; D-EVS-44; owner decision 584; FS-107; SEARCH-M10-23 and
+// SEARCH-M10-45): one partition's candidates for a query. Per shard the query's trigrams are looked up rarest first, a
+// term with an absent trigram matching nothing there and a group none of whose terms is present ending that shard;
+// only the query's lists are decoded, read through the shard's frames, and intersected rarest first
 // (search_intersect.go). Heads, sealed slots and unabsorbed large entries are scanned per document, a full entry's key
-// set or a diff's set resolved in one step from its own writer's files (search_chains.go) holding every trigram of a
-// term in each group. A slot or large entry at or below its writer's watermark is not scanned: it is read only as a
-// diff's base. An unabsorbed diff whose base its writer's files do not hold reads not yet searchable and names its
-// signer, whatever its document's newest version, since under own bases no honest writer leaves one; the erasure set's
-// documents are left out before anything is resolved. A resolved diff below its key's newest version is no candidate.
+// set holding every trigram of a term in each group. Every entry is full or a tombstone, so each is matched as it
+// stands and nothing resolves through another file; a file holding an entry of the reserved kind 2 never decodes, so
+// it reaches no partition (its sync lists it bad, index_malformed naming its signer). A slot or large entry at or
+// below its writer's watermark is not scanned: what it held is in the shards.
 //
 // A candidate is where a document's row sits and its n_d, nothing more: masking, confirmation and ranking read its row
 // lazily in rank order (SEARCH-M10-24), so a partition's candidates cost a few words each, and past
 // Search.TooBroadCandidateCount the partition answers too_broad with its count. A query never fetches: the partition
-// holds what this device has, and a diff whose base it lacks is a coverage gap.
+// holds what this device has.
 
 package sidecar
 
 import (
 	"cmp"
-	"errors"
 	"slices"
 )
 
@@ -35,10 +33,8 @@ type searchSlotSource struct {
 	slot   *indexSlot
 	writer Id
 	seq    uint32
-	// The writer's head: never a diff's base.
-	head bool
 	// A slot or large entry at or below its writer's watermark, other than its head: what it held is in the shards, so
-	// it holds no candidate and is read only as a diff's base (1.2.1).
+	// it holds no candidate.
 	absorbed bool
 	// Its file's path and its version's signer, which an alarm names.
 	path   string
@@ -51,17 +47,6 @@ type searchPartitionSource struct {
 	shards    []*searchShardSource
 	// Bucket partitions: every writer's slots, heads included, and large entries.
 	slots []*searchSlotSource
-	// The format's bounds its files were read under, which a diff's composed set is held to (D6); nil takes
-	// DefaultIndexFormatSettings.
-	formatSettings *IndexFormatSettings
-}
-
-// The bounds the partition's files were read under.
-func (self *searchPartitionSource) settings() *IndexFormatSettings {
-	if self.formatSettings == nil {
-		return DefaultIndexFormatSettings()
-	}
-	return self.formatSettings
 }
 
 // A document a partition offers a query.
@@ -69,21 +54,11 @@ type searchCandidate struct {
 	// A shard row: its shard and docid.
 	shard *searchShardSource
 	docId uint32
-	// A slot's or large entry's entry, and its chain where it is a diff.
+	// A slot's or large entry's full entry.
 	slot  *searchSlotSource
 	entry *indexEntry
-	chain *searchResolvedChain
 	// n_d, the document's trigram count.
 	trigramCount int
-}
-
-// A current diff whose chain broke the format: its document reads not yet searchable, and index_malformed names its
-// signer.
-type searchUnresolved struct {
-	key     [indexIdByteCount]byte
-	version uint64
-	path    string
-	signer  Id
 }
 
 // One partition's answer to a query.
@@ -92,8 +67,7 @@ type searchPartitionResult struct {
 	// Every candidate the partition gave, kept or not.
 	candidateCount int
 	// Past the cap: the partition answers too_broad with candidateCount.
-	tooBroad   bool
-	unresolved []*searchUnresolved
+	tooBroad bool
 	// The lists decoded, which a query's trigrams bound (§16.10's targets count postings).
 	listCount int
 }
@@ -102,12 +76,6 @@ type searchPartitionResult struct {
 type searchMatchArgs struct {
 	query  *SearchQuery
 	source *searchPartitionSource
-	// The newest version of a key over every partition this device holds: §5.9's version table (CORE-M10-02's Probe),
-	// nil until it lands, when only the partition's own slots and large entries say.
-	newest func(key [indexIdByteCount]byte) (uint64, bool)
-	// Whether the ref's erasure set lists a key at or above a version: such a diff is left out before it is resolved,
-	// since a CLOSURE takes a listed document's base and its diffs in separate pushes. Nil lists nothing.
-	erased func(key [indexIdByteCount]byte, version uint64) bool
 	// Search.TooBroadCandidateCount.
 	maxCandidateCount int
 }
@@ -139,69 +107,17 @@ func searchMatch(args *searchMatchArgs) (*searchPartitionResult, error) {
 		}
 	}
 
-	sources := searchNewChainSources(args.source.slots, args.source.settings())
-	newest := args.newest
-	if newest == nil {
-		newest = searchLocalNewest(args.source.slots)
-	}
 	for _, slot := range args.source.slots {
 		if slot.absorbed {
 			continue
 		}
 		for _, entry := range slot.slot.entries {
-			switch entry.kind {
-			case indexEntryFull:
-				if query.Empty() || searchQueryHoldsKeys(query, entry.keys) {
-					add(&searchCandidate{slot: slot, entry: entry, trigramCount: len(entry.keys)})
-				}
-			case indexEntryDiff:
-				if args.erased != nil && args.erased(entry.key, entry.version) {
-					continue
-				}
-				chain, err := searchResolveChain(sources, slot, entry)
-				if err != nil {
-					if !isIndexMalformed(err) {
-						return nil, err
-					}
-					result.unresolved = append(result.unresolved, &searchUnresolved{key: entry.key, version: entry.version, path: slot.path, signer: slot.signer})
-					continue
-				}
-				if version, ok := newest(entry.key); ok && entry.version < version {
-					continue
-				}
-				holds := query.Empty()
-				if !holds {
-					if holds, err = searchQueryHoldsChain(query, chain); err != nil {
-						return nil, err
-					}
-				}
-				if holds {
-					add(&searchCandidate{slot: slot, entry: entry, chain: chain, trigramCount: chain.trigramCount()})
-				}
+			if entry.kind == indexEntryFull && (query.Empty() || searchQueryHoldsKeys(query, entry.keys)) {
+				add(&searchCandidate{slot: slot, entry: entry, trigramCount: len(entry.keys)})
 			}
 		}
 	}
 	return result, nil
-}
-
-// Whether err says an index file broke its format.
-func isIndexMalformed(err error) bool {
-	return errors.Is(err, errIndexMalformed)
-}
-
-// The newest version of each key among a bucket's slots and large entries, for a partition matched without the
-// version table.
-func searchLocalNewest(slots []*searchSlotSource) func(key [indexIdByteCount]byte) (uint64, bool) {
-	newest := map[[indexIdByteCount]byte]uint64{}
-	for _, slot := range slots {
-		for _, entry := range slot.slot.entries {
-			newest[entry.key] = max(newest[entry.key], entry.version)
-		}
-	}
-	return func(key [indexIdByteCount]byte) (uint64, bool) {
-		version, ok := newest[key]
-		return version, ok
-	}
 }
 
 // Whether a key set holds a term of every group.
@@ -217,34 +133,6 @@ func searchQueryHoldsKeys(query *SearchQuery, keys indexKeySet) bool {
 		}
 	}
 	return true
-}
-
-// Whether a composed chain holds a term of every group.
-func searchQueryHoldsChain(query *SearchQuery, chain *searchResolvedChain) (bool, error) {
-	for _, group := range query.Groups {
-		groupHolds := false
-		for _, term := range group {
-			termHolds := true
-			for _, key := range term.trigrams {
-				holds, err := chain.holds(key)
-				if err != nil {
-					return false, err
-				}
-				if !holds {
-					termHolds = false
-					break
-				}
-			}
-			if termHolds {
-				groupHolds = true
-				break
-			}
-		}
-		if !groupHolds {
-			return false, nil
-		}
-	}
-	return true, nil
 }
 
 // One shard's docids holding the query: each trigram looked up once, rarest first within a term, a term with an absent

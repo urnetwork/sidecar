@@ -3,7 +3,7 @@
 // and skipped index reported not yet searchable until a backfill covers them; a backfill dropping a superseded entry,
 // leaving what changed after h, skipping an erased and an unopenable document, indexing no ignored version, stopping
 // below a push it cannot judge, rebuilding on the epoch, writing tombstones for a removal, dropped chunks and a ref
-// DELETE, entering a document whose diff has no base, and carrying a record log's run cards; all on the fake stores.
+// DELETE, refusing a slot of the reserved kind 2, and carrying a record log's run cards; all on the fake stores.
 
 package sidecar
 
@@ -751,9 +751,10 @@ func TestIndexBackfillTombstones(t *testing.T) {
 	}
 }
 
-// A host with the text enters again a document whose unabsorbed diff has no base: a forged slot's diff, matched to
-// its path by the doc_keys the host computes, is entered full in the backfiller's head, with nothing else due.
-func TestIndexBackfillReentersADiffWithNoBase(t *testing.T) {
+// FS-107 (owner decision 584): a slot holding an entry of the reserved kind 2 is refused whole. Its file is
+// index_malformed naming its signer, the view holds nothing of it, and a host with the text enters nothing for it:
+// no entry rests on another, so there is no chain to repair.
+func TestIndexBackfillRefusesTheReservedDiffKind(t *testing.T) {
 	world := testNewBackfillWorld(false)
 	writer, forger, backfillerId := evsTestId("writer a"), evsTestId("forger"), evsTestId("desktop")
 	world.commit(t, writer, func(push *indexContentPush) { push.changesHead = true }, testContentChange{path: "notes/forged.md", content: []byte("the first words")})
@@ -761,30 +762,43 @@ func TestIndexBackfillReentersADiffWithNoBase(t *testing.T) {
 	view := world.view(t)
 	root := view.writeRoot()
 	window, _ := indexBucketFor(root.bucketWindows(), root.windowDays(view.repoKind), world.now.UnixMilli())
-	keys := testIndexKeys(0x616100, 20, 1)
-	// version 2 as a diff on a version 1 that no other file of the forger's holds
-	diff := &indexEntry{
-		kind: indexEntryDiff, key: world.key(t, "notes/forged.md", 0), version: 2, baseVersion: 1,
-		timeSeconds: indexEntrySeconds(world.now.UnixMilli()), row: testFileRow(keys), delta: indexDelta{added: keys[:2]},
-	}
 	path, err := root.paths.slot(window.startDay, [indexIdByteCount]byte(forger.Bytes()), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	world.index.store(forger).testCommit(t, world.now, &indexPushFile{path: path, plaintext: testViewSlotFile(t, window, forger, 1, indexFileSlot, diff)})
+	// version 2 in the bytes a diff on version 1 took
+	forged := testReservedKindSlotFile(t, window, forger, 1, world.key(t, "notes/forged.md", 0), 2)
+	world.index.store(forger).testCommit(t, world.now, &indexPushFile{path: path, plaintext: forged})
 	head, _ := world.index.store(writer).Head(context.Background())
 	world.carry(t, writer, world.row(head.version, true))
 	world.now = world.now.Add(time.Minute)
 	if coverage := world.coverage(t, true); coverage.unindexedCount != 0 {
-		t.Fatalf("%d unindexed: the re-entry would ride a backfill", coverage.unindexedCount)
+		t.Fatalf("%d unindexed", coverage.unindexedCount)
+	}
+	view = world.view(t)
+	alarmed := 0
+	for _, event := range view.events() {
+		if event.Kind == SidecarEventIndexMalformed && event.Path == path && event.SidecarId != nil && *event.SidecarId == forger {
+			alarmed += 1
+		}
+	}
+	if alarmed != 1 {
+		t.Fatalf("the forged slot alarmed %d times: %+v", alarmed, view.events())
+	}
+	if entries := world.entriesOf(t, forger, "notes/forged.md", 0); len(entries) != 0 {
+		t.Fatalf("the view holds the forged slot's entry: %+v", entries)
 	}
 	outcome := world.backfill(t, world.backfiller(t, backfillerId, nil))
-	if outcome.committed == nil || len(outcome.reentered) != 1 || outcome.reentered[0] != world.key(t, "notes/forged.md", 0) {
-		t.Fatalf("re-entered %d, committed %v", len(outcome.reentered), outcome.committed != nil)
+	if outcome.committed != nil {
+		t.Fatalf("a backfill entered something for the forged slot")
 	}
-	entries := world.entriesOf(t, backfillerId, "notes/forged.md", 0)
-	if len(entries) != 1 || entries[0].kind != indexEntryFull || entries[0].version != 2 {
-		t.Fatalf("the re-entry: %+v", entries)
+	if !slices.ContainsFunc(outcome.events, func(event SidecarEvent) bool {
+		return event.Kind == SidecarEventIndexMalformed && event.Path == path && event.SidecarId != nil && *event.SidecarId == forger
+	}) {
+		t.Errorf("the backfill's events do not name the forger: %+v", outcome.events)
+	}
+	if entries := world.entriesOf(t, backfillerId, "notes/forged.md", 0); len(entries) != 0 {
+		t.Errorf("the backfiller entered %+v", entries)
 	}
 }
 

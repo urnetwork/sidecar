@@ -1,31 +1,28 @@
 ---------------------------- MODULE IndexErase ----------------------------
 (***************************************************************************)
 (* DESIGN-DETAILS.md section 15's model of an erasure on one index ref      *)
-(* (§11.12, §11.14) under section 1's own bases: the CUT, the eraser's      *)
-(* re-entry, its CLOSUREs and its end, beside the writers that keep         *)
-(* pushing. Two specifications share the module, one a document.            *)
+(* (§11.12, §11.14) under owner decision 584's full entries: the CUT, the   *)
+(* eraser's CLOSUREs and its end, and for a run card its fold again, beside *)
+(* the writers that keep pushing. Two specifications share the module, one  *)
+(* a document.                                                              *)
 (*                                                                          *)
-(* SpecPath: one path document d on an in-ref index. Writer w edits it;     *)
-(* each edit's entry is full or, by 1.2.3's choose, a diff on a full entry  *)
-(* in another file of w's that the erasure set does not list. w seals its   *)
-(* head, a merge absorbs w's sealed slots into the bucket's shard, and w    *)
-(* reuses an absorbed slot no unabsorbed diff rests on. The eraser reads    *)
-(* d's version, and its CUT lists d up to the version it read, whatever     *)
-(* landed since (IndexRollup.tla's CutVersion "read"). The design (15.2):   *)
-(*   re-entry    a diff whose base version the set lists and whose own it   *)
-(*               does not is a resting diff. For the highest version a      *)
-(*               resting diff carries that no other entry a reader scans    *)
-(*               holds at or above it, the eraser composes that version     *)
-(*               from the diff and its base and enters it full in its own   *)
-(*               head, before any CLOSURE                                   *)
-(*   CLOSURE     rewrites a file without every listed entry and every       *)
-(*               resting diff, since a resting diff and its version's set   *)
-(*               give the erased base's set back                            *)
-(*   readers     resolve a diff in one step from its writer's other files,  *)
-(*               through a listed base while it stands; a diff whose base   *)
-(*               is gone and listed is no candidate and alarms nothing      *)
-(*   merges      compose a resting diff while its base stands, and leave    *)
-(*               it out once the base is gone                               *)
+(* SpecPath: one path document d on an in-ref index. Writer w edits it, and *)
+(* each edit's entry is full, encoded from its own version alone. w seals   *)
+(* its head, a merge absorbs w's sealed slots into the bucket's shard, and  *)
+(* w takes an absorbed slot again. The eraser reads d's version, and its    *)
+(* CUT lists d up to the version it read, whatever landed since             *)
+(* (IndexRollup.tla's CutVersion "read"). The design (15.2):                *)
+(*   CLOSURE     rewrites a file without every listed entry, in a head, a   *)
+(*               sealed slot, an absorbed slot or the shard alike, and      *)
+(*               touches no other: an edit that landed after the eraser's   *)
+(*               read stands as its writer entered it                       *)
+(*   readers     take each entry as it stands, and none the set lists       *)
+(*   merges      take the newest version the set does not list              *)
+(* No entry rests on another, so the eraser enters nothing for a path       *)
+(* document and its CLOSUREs need no order. Diffs, the resting diff, the    *)
+(* eraser's re-entry of a composed edit and the CLOSURE order they needed   *)
+(* were this model's until owner decision 584 (QD-1036) ended them, and the *)
+(* configurations that ran them are retired.                                *)
 (*                                                                          *)
 (* SpecCard: one run card, a derived document of one stream. The stream     *)
 (* takes entries, each a source of the card; a card is the fold of the      *)
@@ -53,7 +50,6 @@
 (* - A push is built and committed in one step. The epoch guard refuses     *)
 (*   every index push built before a CUT (I-EVS-17; IndexRollup.tla's       *)
 (*   CutFences), so a push that commits was built at the epoch it names.    *)
-(* - Whether an edit's delta is small enough for a diff is a choice.        *)
 (* - Erasures run one after another on one eraser. The resume by another    *)
 (*   device is the same steps from the same state, which every step here    *)
 (*   reads from the files and the set alone.                                *)
@@ -61,11 +57,9 @@
 (* Twin names a rule to break; a twin config sets it, and TLC must then     *)
 (* refuse the model with the invariant that rule protects. "none" is the    *)
 (* design.                                                                  *)
-(*   NoReentry          the eraser enters nothing, and its CLOSUREs go on   *)
-(*   ClosureFirst       a CLOSURE may precede the re-entry                  *)
-(*   KeepResting        a CLOSURE leaves a resting diff in the file         *)
-(*   MergeDropsResting  a merge leaves out a resting diff whose base stands *)
-(*                      (evs_index_merge.go as landed)                      *)
+(*   ClosureSkipsAbsorbed  no CLOSURE rewrites an absorbed slot, which      *)
+(*                      holds nothing for a reader and still holds its      *)
+(*                      bytes                                               *)
 (*   CutFirst           the CUT precedes the ERASE of the entry's body      *)
 (*   NoSync             a builder folds at a new epoch without the erasure  *)
 (*                      ref                                                 *)
@@ -93,7 +87,6 @@ VARIABLES
     wsealed,        \* w's sealed slots that no merge has absorbed
     wabsorbed,      \* w's absorbed slots that it has not taken again
     shard,          \* the bucket's row of d, or None
-    xhead,          \* the eraser's head: its entry of d, or None
     listed,         \* the erasure set lists d up to this version; 0 lists nothing
     readVer,        \* the version the eraser read
     phase,          \* idle, read, cut, closing
@@ -116,7 +109,7 @@ VARIABLES
     cerasures, cseals,
     stands          \* the eraser has folded the card again since its CUT
 
-pvars == <<ver, whead, wsealed, wabsorbed, shard, xhead, listed, readVer, phase, erasures, seals, merges, reuses>>
+pvars == <<ver, whead, wsealed, wabsorbed, shard, listed, readVer, phase, erasures, seals, merges, reuses>>
 cvars == <<n, body, applied, appliedEpoch, epoch, through, listC, readC, cutOf, complete, chead, store, cphase,
            target, cerasures, cseals, stands>>
 vars == <<pvars, cvars>>
@@ -126,121 +119,90 @@ Max(S) == CHOOSE m \in S : \A o \in S : o <= m
 ----------------------------------------------------------------------------
 \* SpecPath
 
-None == [k |-> "none", v |-> 0, b |-> 0]
-Full(v) == [k |-> "full", v |-> v, b |-> 0]
-Diff(v, b) == [k |-> "diff", v |-> v, b |-> b]
-Entries == {None} \cup {Full(v) : v \in 1..MaxVer} \cup {Diff(v, b) : v \in 1..MaxVer, b \in 1..MaxVer}
+None == [k |-> "none", v |-> 0]
+Full(v) == [k |-> "full", v |-> v]
+Entries == {None} \cup {Full(v) : v \in 1..MaxVer}
 
-\* w's files that are not its head: where a base of w's sits (1.2.3).
-Others == wsealed \cup wabsorbed
 \* Every file of w's.
 WFiles == ({whead} \cup wsealed \cup wabsorbed) \ {None}
-\* What a reader scans: heads, unabsorbed slots and the shard (1.2.9).
-Seen == ({whead, shard, xhead} \cup wsealed) \ {None}
+\* What a reader scans: the head, unabsorbed slots and the shard (1.2.9).
+Seen == ({whead, shard} \cup wsealed) \ {None}
 
-\* A diff whose base version the set lists and whose own it does not.
-IsResting(e) == e.k = "diff" /\ e.b <= listed /\ e.v > listed
-Resting == {e \in WFiles : IsResting(e)}
-\* A reader's one-step resolution.
-Resolves(e) == e.k = "full" \/ Full(e.b) \in Others
-\* The newest version a reader finds, 0 for none.
-View == Max({e.v : e \in {s \in Seen : s.v > listed /\ Resolves(s)}} \cup {0})
+\* The newest version a reader finds, 0 for none: each entry as it stands, and none the set lists.
+View == Max({e.v : e \in {s \in Seen : s.v > listed}} \cup {0})
 \* The newest version indexed that the set does not list: every edit enters its version.
 Want == IF ver > listed THEN ver ELSE 0
 
-\* The version the eraser owes: the highest a resting diff carries, where no other entry a reader scans holds it
-\* or a newer one.
-Top == Max({e.v : e \in Resting})
-Owed == Resting # {} /\ ~(\E e \in Seen : e.v >= Top /\ ~IsResting(e))
-\* What a CLOSURE takes from a file: a listed entry, and a diff that rests on a listed version.
-Stale(e) == e # None /\ (e.v <= listed \/ (e.k = "diff" /\ e.b <= listed))
-Dirty(e) == e # None /\ (e.v <= listed \/ (Twin # "KeepResting" /\ e.k = "diff" /\ e.b <= listed))
+\* What a CLOSURE takes from a file: a listed entry.
+Stale(e) == e # None /\ e.v <= listed
 
 PathInit ==
-    /\ ver = 1 /\ whead = Full(1) /\ wsealed = {} /\ wabsorbed = {} /\ shard = None /\ xhead = None
+    /\ ver = 1 /\ whead = Full(1) /\ wsealed = {} /\ wabsorbed = {} /\ shard = None
     /\ listed = 0 /\ readVer = 0 /\ phase = "idle"
     /\ erasures = 0 /\ seals = 0 /\ merges = 0 /\ reuses = 0
 
-\* w's push of the next version: choose's B leaves out the versions the set lists.
+\* w's push of the next version, full.
 Edit ==
     /\ ver < MaxVer
-    /\ LET v == ver + 1
-           B == {e \in Others : e.k = "full" /\ e.v < v /\ e.v > listed}
-       IN /\ ver' = v
-          /\ \/ whead' = Full(v)
-             \/ /\ B # {}
-                /\ whead' = Diff(v, Max({e.v : e \in B}))
-    /\ UNCHANGED <<wsealed, wabsorbed, shard, xhead, listed, readVer, phase, erasures, seals, merges, reuses>>
+    /\ ver' = ver + 1
+    /\ whead' = Full(ver + 1)
+    /\ UNCHANGED <<wsealed, wabsorbed, shard, listed, readVer, phase, erasures, seals, merges, reuses>>
 
 Seal ==
     /\ whead # None /\ seals < MaxSeals
     /\ wsealed' = wsealed \cup {whead} /\ whead' = None /\ seals' = seals + 1
-    /\ UNCHANGED <<ver, wabsorbed, shard, xhead, listed, readVer, phase, erasures, merges, reuses>>
+    /\ UNCHANGED <<ver, wabsorbed, shard, listed, readVer, phase, erasures, merges, reuses>>
 
-\* A merge absorbs w's sealed slots: the shard takes the newest version it can compose that the set does not list.
+\* A merge absorbs w's sealed slots: the shard takes the newest version the set does not list.
 Merge ==
     /\ merges < MaxMerges /\ wsealed # {}
-    /\ LET composes(e) == /\ e.v > listed
-                          /\ \/ e.k = "full"
-                             \/ /\ Full(e.b) \in Others
-                                /\ Twin # "MergeDropsResting" \/ e.b > listed
-           cands == {e.v : e \in {s \in wsealed : composes(s)}}
+    /\ LET cands == {e.v : e \in {s \in wsealed : s.v > listed}}
                         \cup (IF shard # None /\ shard.v > listed THEN {shard.v} ELSE {})
        IN shard' = IF cands = {} THEN None ELSE Full(Max(cands))
     /\ wabsorbed' = wabsorbed \cup wsealed /\ wsealed' = {} /\ merges' = merges + 1
-    /\ UNCHANGED <<ver, whead, xhead, listed, readVer, phase, erasures, seals, reuses>>
+    /\ UNCHANGED <<ver, whead, listed, readVer, phase, erasures, seals, reuses>>
 
-\* w takes an absorbed slot again, which no diff of its unabsorbed slots rests on (1.2.3's keep set).
+\* w takes an absorbed slot again: it holds nothing, so any will do.
 Reuse ==
     /\ reuses < MaxReuses
-    /\ \E e \in wabsorbed :
-        /\ ~(\E d \in ({whead} \cup wsealed) \ {None} : d.k = "diff" /\ e.k = "full" /\ d.b = e.v)
-        /\ wabsorbed' = wabsorbed \ {e}
+    /\ \E e \in wabsorbed : wabsorbed' = wabsorbed \ {e}
     /\ reuses' = reuses + 1
-    /\ UNCHANGED <<ver, whead, wsealed, shard, xhead, listed, readVer, phase, erasures, seals, merges>>
+    /\ UNCHANGED <<ver, whead, wsealed, shard, listed, readVer, phase, erasures, seals, merges>>
 
 Read ==
     /\ phase = "idle" /\ erasures < MaxErasures /\ ver > listed
     /\ readVer' = ver /\ phase' = "read"
-    /\ UNCHANGED <<ver, whead, wsealed, wabsorbed, shard, xhead, listed, erasures, seals, merges, reuses>>
+    /\ UNCHANGED <<ver, whead, wsealed, wabsorbed, shard, listed, erasures, seals, merges, reuses>>
 
 \* The CUT lists what its eraser read.
 Cut ==
     /\ phase = "read"
     /\ listed' = readVer /\ phase' = "cut"
-    /\ UNCHANGED <<ver, whead, wsealed, wabsorbed, shard, xhead, readVer, erasures, seals, merges, reuses>>
+    /\ UNCHANGED <<ver, whead, wsealed, wabsorbed, shard, readVer, erasures, seals, merges, reuses>>
 
-\* The eraser composes the version it owes from the diff and its base, and enters it full in its own head.
-Reenter ==
-    /\ phase \in {"cut", "closing"} /\ Twin # "NoReentry"
-    /\ Owed
-    /\ \E e \in Resting : e.v = Top /\ Full(e.b) \in Others
-    /\ xhead' = Full(Top)
-    /\ UNCHANGED <<ver, whead, wsealed, wabsorbed, shard, listed, readVer, phase, erasures, seals, merges, reuses>>
+\* The absorbed slots a CLOSURE rewrites: all of them, though a reader scans none.
+Closable == IF Twin = "ClosureSkipsAbsorbed" THEN {} ELSE wabsorbed
 
-\* One CLOSURE: one file without what it takes.
+\* One CLOSURE: one file without its listed entry.
 Closure ==
     /\ phase \in {"cut", "closing"}
-    /\ Twin \in {"NoReentry", "ClosureFirst"} \/ ~Owed
-    /\ \/ /\ Dirty(whead) /\ whead' = None /\ UNCHANGED <<wsealed, wabsorbed, shard, xhead>>
-       \/ /\ \E e \in wsealed : Dirty(e) /\ wsealed' = wsealed \ {e}
-          /\ UNCHANGED <<whead, wabsorbed, shard, xhead>>
-       \/ /\ \E e \in wabsorbed : Dirty(e) /\ wabsorbed' = wabsorbed \ {e}
-          /\ UNCHANGED <<whead, wsealed, shard, xhead>>
-       \/ /\ Dirty(shard) /\ shard' = None /\ UNCHANGED <<whead, wsealed, wabsorbed, xhead>>
-       \/ /\ Dirty(xhead) /\ xhead' = None /\ UNCHANGED <<whead, wsealed, wabsorbed, shard>>
+    /\ \/ /\ Stale(whead) /\ whead' = None /\ UNCHANGED <<wsealed, wabsorbed, shard>>
+       \/ /\ \E e \in wsealed : Stale(e) /\ wsealed' = wsealed \ {e}
+          /\ UNCHANGED <<whead, wabsorbed, shard>>
+       \/ /\ \E e \in Closable : Stale(e) /\ wabsorbed' = wabsorbed \ {e}
+          /\ UNCHANGED <<whead, wsealed, shard>>
+       \/ /\ Stale(shard) /\ shard' = None /\ UNCHANGED <<whead, wsealed, wabsorbed>>
     /\ phase' = "closing"
     /\ UNCHANGED <<ver, listed, readVer, erasures, seals, merges, reuses>>
 
-\* The erasure ends when no file holds what a CLOSURE takes.
+\* The erasure ends when no file a CLOSURE rewrites holds a listed entry.
 Finish ==
     /\ phase \in {"cut", "closing"}
-    /\ Twin \in {"NoReentry", "ClosureFirst"} \/ ~Owed
-    /\ \A e \in WFiles \cup {shard, xhead} : ~Dirty(e)
+    /\ \A e \in ({whead, shard} \cup wsealed \cup Closable) : ~Stale(e)
     /\ phase' = "idle" /\ erasures' = erasures + 1
-    /\ UNCHANGED <<ver, whead, wsealed, wabsorbed, shard, xhead, listed, readVer, seals, merges, reuses>>
+    /\ UNCHANGED <<ver, whead, wsealed, wabsorbed, shard, listed, readVer, seals, merges, reuses>>
 
-PathNext == Edit \/ Seal \/ Merge \/ Reuse \/ Read \/ Cut \/ Reenter \/ Closure \/ Finish
+PathNext == Edit \/ Seal \/ Merge \/ Reuse \/ Read \/ Cut \/ Closure \/ Finish
 
 ----------------------------------------------------------------------------
 \* SpecCard
@@ -363,37 +325,22 @@ SpecCard == Init /\ [][CardNext /\ UNCHANGED pvars]_vars
 
 PathTypeOk ==
     /\ ver \in 1..MaxVer /\ whead \in Entries /\ wsealed \subseteq Entries /\ wabsorbed \subseteq Entries
-    /\ shard \in Entries /\ xhead \in Entries /\ listed \in 0..MaxVer /\ readVer \in 0..MaxVer
+    /\ shard \in Entries /\ listed \in 0..MaxVer /\ readVer \in 0..MaxVer
     /\ phase \in {"idle", "read", "cut", "closing"}
-    /\ shard.k # "diff" /\ xhead.k # "diff"
 
-\* I1 as section 15 words it: every diff in an unabsorbed slot whose base version the set does not list has its
-\* base in another file of its writer. Where it holds, no honest writer's diff reads index_malformed.
-OwnBases ==
-    \A e \in ({whead} \cup wsealed) \ {None} : (e.k = "diff" /\ e.b > listed) => Full(e.b) \in Others
-
-\* I9: the newest version indexed that the set does not list is the one a reader finds (FI-18).
+\* I9: the newest version indexed that the set does not list is the one a reader finds (FI-18), through every
+\* seal, merge, reuse, CUT and CLOSURE.
 Searchable == View = Want
 
-\* I10: once an erasure ends, no file holds a listed entry or a diff resting on a listed version (FI-19).
-ErasedGone == phase = "idle" => \A e \in WFiles \cup {shard, xhead} : ~Stale(e)
-
-\* What the eraser owes it can compose: the base of the diff still stands.
-Composable ==
-    (phase \in {"cut", "closing"} /\ Owed) => \E e \in Resting : e.v = Top /\ Full(e.b) \in Others
-
-\* I1 as section 1 had it, and §11.14's chains row: every diff in an unabsorbed slot, of a version the set does
-\* not list, has its base.
-ChainsResolveLanded ==
-    \A e \in ({whead} \cup wsealed) \ {None} : (e.k = "diff" /\ e.v > listed) => Full(e.b) \in Others
+\* I10: once an erasure ends, no file holds a listed entry, an absorbed slot included (FI-19).
+ErasedGone == phase = "idle" => \A e \in WFiles \cup {shard} : ~Stale(e)
 
 \* Reach: states the design must be able to reach, each stated as an invariant that says it never does.
-NeverOwed == ~(phase = "cut" /\ Owed)
-NeverReentered == xhead = None
-NeverExcused == ~(\E e \in ({whead} \cup wsealed) \ {None} : IsResting(e) /\ Full(e.b) \notin Others)
-NeverComposedThrough ==
-    ~(phase \in {"cut", "closing"} /\ shard # None /\ shard.v > listed /\ xhead = None
-      /\ \E e \in wabsorbed : IsResting(e) /\ e.v = shard.v)
+\* An edit that landed after the eraser's read, which the CUT does not list, stands and is found once the erasure
+\* has ended.
+NeverSurvives == ~(phase = "idle" /\ erasures >= 1 /\ ver > listed /\ readVer = listed /\ View = ver)
+\* A CLOSURE rewrites an absorbed slot, which no reader scans.
+NeverClosesAbsorbed == ~(phase = "closing" /\ merges >= 1 /\ reuses = 0 /\ wabsorbed = {})
 
 ----------------------------------------------------------------------------
 \* Invariants of SpecCard

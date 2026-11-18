@@ -69,7 +69,7 @@ func testIndexCommittedHashes(world *testHeadWorld) map[string][sha256.Size]byte
 func TestIndexMergePassesItsBarriersInOrder(t *testing.T) {
 	world := testNewHeadWorld()
 	a := evsTestId("writer a")
-	world.push(t, a, testLive("k", 1, 1, 0, testHeadKeys(1, 0)))
+	world.push(t, a, testLive("k", 1, 1, testHeadKeys(1, 0)))
 	world.fillUntilSealed(t, a, "f", 0)
 	passed := testIndexBarriers(t, "")
 	world.merge(t, evsTestId("merger"))
@@ -84,7 +84,7 @@ func TestIndexMergeKilledAtEachBarrier(t *testing.T) {
 	for _, barrier := range []string{"evs.index.merge.built", "evs.index.merge.uploaded", "evs.index.merge.pushed"} {
 		world := testNewHeadWorld()
 		a := evsTestId("writer a")
-		world.push(t, a, testLive("k", 1, 1, 0, testHeadKeys(1, 0)))
+		world.push(t, a, testLive("k", 1, 1, testHeadKeys(1, 0)))
 		world.fillUntilSealed(t, a, "f", 0)
 		startDay := world.view(t, a).writeRoot().newestBucket().window.startDay
 		before := testIndexCommittedHashes(world)

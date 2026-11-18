@@ -144,6 +144,41 @@ func TestLoginRecoverOffersANewCodeAndReportsAStop(t *testing.T) {
 	}
 }
 
+// A member with no code in effect, as once a compromise revocation voided it (QD-1034): the refusal says no code
+// admits a device now, that a device of the member's outside the revocation binds a fresh one, and that an admin's
+// admission stays parked for owner-bound repos (owner decision 126). A code that is merely not the one in effect
+// gets no such advice.
+func TestLoginRecoverSaysWhatAVoidedCodeLeaves(t *testing.T) {
+	target := &testUrRecoverTarget{
+		testUrDaemonTarget: testUrDaemonTarget{statusValue: sidecar.SidecarStatus{State: sidecar.SidecarStateOnline, Generation: 1}},
+		err:                sidecar.ErrSidecarRecoveryNoBinding,
+	}
+	daemon := startTestControlDaemon(t, target, nil)
+	cli, stdout, stderr := newTestUrCli(daemon.socketPath)
+	tty := &testTty{lines: []string{testUrRecoveryWords(t)}}
+	cli.openTty = func() (urTty, error) { return tty, nil }
+	if code := cli.main(context.Background(), []string{"ur", "login", "--recover"}); code == urExitOk {
+		t.Fatalf("a voided code recovered: %q", stdout.String())
+	}
+	for _, said := range []string{"the member has none", "ur keychain recovery-rotate binds a fresh code", "the revocation does not cover",
+		"an admin admits this device", "no owner-bound repo until a consented device of the repo's owner approves it"} {
+		if !strings.Contains(stderr.String(), said) {
+			t.Errorf("the refusal did not say %q: %q", said, stderr.String())
+		}
+	}
+	if strings.Contains(tty.written.String(), "set a new recovery code now?") {
+		t.Error("a refused recovery offered a rotation")
+	}
+
+	target.err = sidecar.ErrSidecarRecoveryUnbound
+	stderr.Reset()
+	tty.lines = []string{testUrRecoveryWords(t)}
+	if code := cli.main(context.Background(), []string{"ur", "login", "--recover"}); code == urExitOk ||
+		!strings.Contains(stderr.String(), "not the member's recovery code in effect") || strings.Contains(stderr.String(), "an admin admits") {
+		t.Errorf("another code: exit %d: %q", code, stderr.String())
+	}
+}
+
 // recovery.recover is a Confirm method: only a confirmed control call runs it, never MCP or an unconfirmed call.
 func TestRecoveryRecoverIsConfirmOnly(t *testing.T) {
 	methods := urLoginRecoverMethods(&testUrRecoverTarget{})

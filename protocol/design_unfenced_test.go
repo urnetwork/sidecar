@@ -700,3 +700,32 @@ type testFenceValueAddition struct {
 // to write fails until its line here leaves.
 var testFenceValueAdditions = []testFenceValueAddition{
 }
+
+// One value an owner's answer takes out of an enum the design fences, its number reserved.
+type testFenceValueReservation struct {
+	enum     string
+	name     string
+	number   int32
+	question string
+}
+
+// Values the owner's answers take out of enums the design fences, ahead of design-records' fold, each with the
+// question that holds its answer. Each leaves the fence that writes it and its number joins that fence's
+// reservations, as testFenceReservations' fields do, and one the design comes to reserve, or stops writing, fails
+// until its line here leaves.
+var testFenceValueReservations = []testFenceValueReservation{
+	// QD-1034: a cascade's void of a recovery binding leaves no binding, so no proposal is a restored binding's
+	// admission and the two restored kinds leave the format before it freezes, their numbers reserved
+	{
+		enum:     "ProposalKind",
+		name:     "PROPOSAL_KIND_RESTORED",
+		number:   3,
+		question: "recovery-restored-bindings-removed",
+	},
+	{
+		enum:     "ProposalKind",
+		name:     "PROPOSAL_KIND_RESTORED_COSIGNED",
+		number:   4,
+		question: "recovery-restored-bindings-removed",
+	},
+}

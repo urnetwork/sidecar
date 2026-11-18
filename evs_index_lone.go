@@ -16,7 +16,7 @@
 // the cap, in a bucket and in all, whoever writes it and when: what a merge's take needs of a new shard (1.2.4).
 //
 // The test reads the key set and the row's bytes as its entry holds them and nothing else, so the device that extracts,
-// a reproducer, a decoder and a merger or reader composing a diff all compute it alike. It calls no encoder: it is one
+// a reproducer, a decoder, a merger and a reader all compute it alike. It calls no encoder: it is one
 // pass over the keys, an addition and two comparisons a key, and allocates nothing. ShardBody is the shard encoder's
 // own cap, so the test and the encoder cannot part. It links on every leg the entry codec does: all but ios_extension.
 

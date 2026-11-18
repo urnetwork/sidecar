@@ -580,10 +580,9 @@ func (self *IndexReproducer) closure(ctx context.Context, view *indexView, root 
 	return built, nil
 }
 
-// One card document a writer's push carries, and the version it replaces in the writer's files, 0 for a first.
+// One card document a writer's push carries.
 type indexDeriveDocument struct {
 	document *IndexDocument
-	replaces uint64
 }
 
 // What a team directory reader derives a card writer's next head from (§11.14's reproduce row; §16.11).
@@ -635,8 +634,7 @@ func (self *IndexReproducer) DeriveHead(ctx context.Context, args *indexDeriveHe
 			continue
 		}
 		pending = append(pending, &indexPendingDocument{
-			kind: indexEntryFull, key: key, version: derived.document.Version, replaces: derived.replaces,
-			keys: prepared.keys, row: prepared.row,
+			kind: indexEntryFull, key: key, version: derived.document.Version, keys: prepared.keys, row: prepared.row,
 		})
 	}
 	plan, err := indexPlanHead(ctx, &indexHeadPlanArgs{

@@ -145,7 +145,7 @@ func testSearchSlotPartition(kind searchPartitionKind, entries ...*indexEntry) *
 	writer := evsTestId("search writer")
 	return &searchPartitionSource{
 		partition: kind,
-		slots:     []*searchSlotSource{{slot: &indexSlot{entries: sorted}, writer: writer, seq: 1, head: true, path: "w/head", signer: writer}},
+		slots:     []*searchSlotSource{{slot: &indexSlot{entries: sorted}, writer: writer, seq: 1, path: "w/head", signer: writer}},
 	}
 }
 

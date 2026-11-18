@@ -7,11 +7,14 @@
 (* each file it replaces at the version its builder read. The erasure's     *)
 (* CUT, CLOSUREs and index_epoch are IndexRollup.tla's and are not here.    *)
 (*                                                                          *)
-(* The design (section 1.2), which the passing configurations run:          *)
-(*   Bases = "own"        a diff rests on a full entry in another file of   *)
-(*                        its own writer in its own bucket, a slot that is  *)
-(*                        not the head or a large entry, which that writer  *)
-(*                        keeps while the diff needs it (1.2.3)             *)
+(* The design (section 1.2, with owner decision 584's full entries only),   *)
+(* which the passing configurations run:                                    *)
+(*   full entries         every entry is full or a tombstone, encoded from  *)
+(*                        its own document alone, so a reader, a merge and  *)
+(*                        a roll-up take each entry as it stands; an        *)
+(*                        absorbed slot or large entry holds nothing, its   *)
+(*                        writer reuses the slot and removes the large      *)
+(*                        entry at its next push                            *)
 (*   head CAS             every push that writes a writer's file replaces   *)
 (*                        that writer's head as the push's base showed it   *)
 (*   Supersede = "content" a journaled entry is dropped when its content    *)
@@ -23,20 +26,19 @@
 (*   Life = "short"       a built push lands within minutes or never        *)
 (*                                                                          *)
 (* §11.14 as written, which the Written configurations run and TLC refuses: *)
-(*   Bases = "shard"      a diff rests on its document's previous version   *)
-(*                        outside every head, merges read heads and keep a  *)
-(*                        base (KeepBase "all"), composing each document's  *)
-(*                        newest input (MergeCompose "newest")              *)
 (*   Supersede = "index"  superseded is judged from the index alone         *)
 (*   Step4 = "inplace"    a roll-up rewrites a newer bucket's files in      *)
 (*                        place, replacing only those (RollupFence "files") *)
-(* KeepBase "any", MergeCompose "composable" and RollupFence "manifests"    *)
-(* are three of the questions' first options, kept so the patched rules can *)
-(* be run beside the design; MergeCompose "covered" widens the second to a  *)
-(* head entry at the same version. Both patched pairs fail too (1.1 E).     *)
+(* RollupFence "manifests" is question rollup-merge-race's first option,    *)
+(* kept so the patched rule can be run beside the design (the Probe).       *)
 (*                                                                          *)
-(* Documents: d2 is edited four times and its edits may be diffs; d3 is     *)
-(* created and deleted. A full entry of a document in BigDocs is past 8 KiB *)
+(* Diffs, the bases they rested on and the slots a writer kept for them     *)
+(* were this model's until owner decision 584 (QD-1036) ended them: kind 2  *)
+(* is reserved, no writer writes it, and the configurations that ran them   *)
+(* are retired.                                                             *)
+(*                                                                          *)
+(* Documents: d2 is edited four times; d3 is created and deleted. A full    *)
+(* entry of a document in BigDocs is past 8 KiB                             *)
 (* and so a large entry, a file of its own; any other full entry sits in a  *)
 (* slot. Story fixes the order of the content commits, which push nothing   *)
 (* to the index themselves: the journaler and the backfiller do, as on      *)
@@ -47,8 +49,7 @@
 (* - A document's text is its version. Sizes, chunks, ref tombstones,       *)
 (*   capped and joined shards do not appear; a bucket has one shard file.   *)
 (* - When a head is full is a choice: a push may seal its writer's head     *)
-(*   while a slot is free. Whether an edit's delta is small enough for a    *)
-(*   diff is a choice too.                                                  *)
+(*   while a slot is free.                                                  *)
 (* - A push carries one entry. The design's push carries every entry due,   *)
 (*   which is some sequence of these.                                       *)
 (* - Time is three windows, each with an early and a late part (clock 1 to  *)
@@ -63,10 +64,9 @@
 (*                                                                          *)
 (* Still names what a run holds still, for focused runs: a process          *)
 (* ("backfill", "merge", "rollup", "crash", "lapse"), time ("tick": every   *)
-(* step in window 1), the backfiller's diffs ("bfdiff": it writes full      *)
-(* entries only) or the Reach marks ("marks": not recorded). Twin names a   *)
-(* rule to break; a twin config sets it, and TLC must then refuse the model *)
-(* with the invariant that rule protects. "none" is the design.             *)
+(* step in window 1) or the Reach marks ("marks": not recorded). Twin names *)
+(* a rule to break; a twin config sets it, and TLC must then refuse the     *)
+(* model with the invariant that rule protects. "none" is the design.       *)
 (***************************************************************************)
 EXTENDS Naturals, Sequences, FiniteSets, TLC
 
@@ -82,15 +82,11 @@ CONSTANTS
     BigDocs,        \* the documents whose full entries are large entries
     Events,         \* how many of those commits a run makes, in Story's order
     Skew,           \* whether a push's signed time may fall in the window before the current one
-    Bases,          \* "own": the design; "shard": §11.14 as written
-    KeepBase,       \* Bases "shard" only: "all" as written, "any" question keep-base-full-copy's option 1
-    MergeCompose,   \* Bases "shard" only: "newest" as written, "composable" question merge-stale-diff's option 1,
-                    \* "covered" that option widened to a head entry at the same version
     Supersede,      \* "content": the design; "index": §11.14 as written
     Step4,          \* "promote": the design; "inplace": §11.14 as written
     RollupFence,    \* Step4 "inplace" only: "files" as written, "manifests" question rollup-merge-race's option 1
     Life,           \* "short": the design; "long": a built push lands whenever
-    Still,          \* held still: any of "backfill", "merge", "rollup", "crash", "lapse", "tick", "bfdiff", "marks"
+    Still,          \* held still: any of "backfill", "merge", "rollup", "crash", "lapse", "tick", "marks"
     Twin            \* "none", or the rule a twin config breaks
 
 Writers == {Journaler, Backfiller}
@@ -101,17 +97,14 @@ NoRoller == "none"
 NoPath == <<>>
 None == [kind |-> "none"]
 
-Twins == {"none", "NoOwnCas", "CleanupReferenced", "MergeRemovesLarge", "ReuseUnabsorbed", "ReusePinned",
-          "MergeDropsTombstone", "NoPromote", "PromoteBlind", "RollupForgetsHeads"}
+Twins == {"none", "NoOwnCas", "CleanupUnabsorbed", "ReuseUnabsorbed", "MergeDropsTombstone", "NoPromote",
+          "PromoteBlind", "RollupForgetsHeads"}
 
 ASSUME
     /\ Journaler # Backfiller
     /\ MaxSlots \in 1..16
     /\ Twin \in Twins
-    /\ Still \subseteq {"backfill", "merge", "rollup", "crash", "lapse", "tick", "bfdiff", "marks"}
-    /\ Bases \in {"own", "shard"}
-    /\ KeepBase \in {"all", "any"}
-    /\ MergeCompose \in {"newest", "composable", "covered"}
+    /\ Still \subseteq {"backfill", "merge", "rollup", "crash", "lapse", "tick", "marks"}
     /\ Supersede \in {"index", "content"}
     /\ Step4 \in {"promote", "inplace"}
     /\ RollupFence \in {"files", "manifests"}
@@ -168,14 +161,13 @@ VARIABLES
     indexed,     \* ghost: indexed[d], the newest entry of d a committed push carried: v and k
     rollCommits, \* ghost: committed roll-ups of bucket 1
     fenceBad,    \* ghost: a roll-up committed from a lock version its runner did not take
-    broken,      \* ghost: a merge or roll-up met an entry it could not compose from its inputs
     reached      \* ghost: what a behavior did, for the Reach configurations
 
 storeVars == <<file, large, man, gone, rolled, lock>>
 worldVars == <<clock, next, content, journal>>
 procVars == <<wpend, wlate, mpend, rphase, rheld, rpend>>
 budgetVars == <<crashes, lapses, restarts>>
-ghostVars == <<indexed, rollCommits, fenceBad, broken, reached>>
+ghostVars == <<indexed, rollCommits, fenceBad, reached>>
 vars == <<storeVars, worldVars, procVars, budgetVars, ghostVars>>
 
 (***************************************************************************)
@@ -194,9 +186,9 @@ Heads(b) == {HeadOf(b, w) : w \in Writers} \ {NoPath}
 IsAbsorbed(p) == file[p].seq <= man[p[2]].abs[p[3]]
 \* A writer's slots other than its head that no merge has absorbed. An absorbed slot holds nothing.
 Sealed(b) == {p \in BucketSlots(b) : Exists(p) /\ p \notin Heads(b) /\ ~IsAbsorbed(p)}
-\* A writer's large entries no merge has absorbed. An absorbed one holds nothing but a diff's base.
+\* A writer's large entries no merge has absorbed. An absorbed one holds nothing.
 LiveLarge(b, w) == {l \in large[b][w] : l.seq > man[b].abs[w]}
-AsFull(l) == [d |-> l.d, v |-> l.v, k |-> "full", base |-> 0]
+AsFull(l) == [d |-> l.d, v |-> l.v, k |-> "full"]
 LargeEnts(b) == UNION {{AsFull(l) : l \in LiveLarge(b, w)} : w \in Writers}
 
 EntsAt(P) == UNION {IF Exists(p) THEN file[p].ent ELSE {} : p \in P}
@@ -222,55 +214,8 @@ Truth == [d \in Docs |-> IF indexed[d].v = 0 \/ indexed[d].k = "tomb" THEN 0 ELS
 \* A Reach mark, where a run records them.
 Mark(S) == IF "marks" \in Still THEN reached ELSE reached \cup S
 
-Row(S, d, v) == [d |-> d, v |-> v, k |-> IF TombAt(S, d, v) THEN "tomb" ELSE "full", base |-> 0]
+Row(S, d, v) == [d |-> d, v |-> v, k |-> IF TombAt(S, d, v) THEN "tomb" ELSE "full"]
 Newer(old, e) == IF e.v > old.v THEN [v |-> e.v, k |-> IF e.k = "tomb" THEN "tomb" ELSE "live"] ELSE old
-
-(***************************************************************************)
-(* Bases "own": a diff in a slot of writer w in bucket b rests on the full  *)
-(* entry of its document at its base version in another file of w's in b:   *)
-(* a large entry, or a slot that is not w's head, absorbed or not.          *)
-(***************************************************************************)
-
-BaseVersions(b, w, d) ==
-    {l.v : l \in {x \in large[b][w] : x.d = d}}
-        \cup {x.v : x \in {y \in EntsAt(WriterSlots(b, w) \ {HeadOf(b, w)}) : y.d = d /\ y.k = "full"}}
-HasBase(b, w, e) == e.base \in BaseVersions(b, w, e.d)
-\* A slot's entries with each diff composed onto its base; a diff with no base composes to nothing.
-SlotResolved(p) ==
-    {IF e.k = "diff" THEN [d |-> e.d, v |-> e.v, k |-> "full", base |-> 0] ELSE e :
-        e \in {x \in file[p].ent : x.k # "diff" \/ HasBase(p[2], p[3], x)}}
-SlotBroken(p) == \E e \in file[p].ent : e.k = "diff" /\ ~HasBase(p[2], p[3], e)
-
-(***************************************************************************)
-(* Bases "shard", §11.14 as written: a diff resolves outside every head.    *)
-(***************************************************************************)
-
-RECURSIVE Resolves(_, _, _)
-Resolves(b, d, v) ==
-    \E e \in Of(OutEnts(b), d) :
-        /\ e.v = v
-        /\ e.k = "full" \/ (e.k = "diff" /\ Resolves(b, d, e.base))
-
-RECURSIVE ComposesIn(_, _, _)
-ComposesIn(S, d, v) ==
-    \E e \in Of(S, d) :
-        /\ e.v = v
-        /\ e.k \in {"full", "tomb"} \/ (e.k = "diff" /\ ComposesIn(S, d, e.base))
-
-\* The dependency row as written: the base a diff of d at version v may name in bucket b for w's push, or 0.
-DiffBaseWritten(w, b, d, v) ==
-    LET t == Top(IndexEnts, d)
-        outTop == Top(OutEnts(b), d)
-        own == IF HeadOf(b, w) = NoPath THEN {} ELSE Of(EntsAt({HeadOf(b, w)}), d)
-        headDiffAt(u) == \E e \in Of(HeadEnts(b), d) : e.v = u /\ e.k = "diff"
-    IN  IF b # Now \/ v = 1 \/ t # v - 1 \/ TombAt(IndexEnts, d, t) THEN 0
-        ELSE IF /\ \E e \in Of(OutEnts(b), d) : e.v = v - 1 /\ e.k # "tomb"
-                /\ ~headDiffAt(v - 1)
-             THEN v - 1
-        ELSE IF /\ outTop > 0
-                /\ \E e \in own : e.v = v - 1 /\ e.k = "diff" /\ e.base = outTop
-             THEN outTop
-        ELSE 0
 
 (***************************************************************************)
 (* Writers: the journaler's companion pushes and the backfiller's.          *)
@@ -283,51 +228,27 @@ Windows == IF Skew /\ Early /\ Now > 1 THEN {Now, Now - 1} ELSE {Now}
 \* next (1.2.6's life). Life "long" is a client that sends a push it built long before.
 Alive(P) == Life = "long" \/ P.t = clock \/ (P.t + 1 = clock /\ P.t % 2 = 0)
 
-\* The versions of d below v that w's other files in b hold full: what a diff of d at v may rest on.
-OwnBases(b, w, d, v) == {y \in BaseVersions(b, w, d) : y < v}
-
-\* The entries w may write for content version j in bucket b. Under "own" an edit is a diff on the newest full
-\* entry of its document in w's other files there, or full where the delta is too large or no such entry is;
-\* under "shard" the journaler follows the dependency row as written and the backfiller writes full entries.
-EntryOptions(w, b, j) ==
-    LET full == [d |-> j.d, v |-> j.v, k |-> "full", base |-> 0] IN
-    IF j.op = "del" THEN {[d |-> j.d, v |-> j.v, k |-> "tomb", base |-> 0]}
-    ELSE IF Bases = "own"
-         THEN {full} \cup
-              (IF OwnBases(b, w, j.d, j.v) # {} /\ ~(w = Backfiller /\ "bfdiff" \in Still)
-               THEN {[d |-> j.d, v |-> j.v, k |-> "diff", base |-> Max(OwnBases(b, w, j.d, j.v))]}
-               ELSE {})
-    ELSE IF w = Journaler /\ DiffBaseWritten(w, b, j.d, j.v) > 0
-         THEN {[d |-> j.d, v |-> j.v, k |-> "diff", base |-> DiffBaseWritten(w, b, j.d, j.v)]}
-         ELSE {full}
+\* The entry a writer writes for content version j: full, or a tombstone for a removal. It is encoded from its
+\* own document alone, so it is the same whoever writes it and whatever the index holds (owner decision 584).
+EntryOf(j) == [d |-> j.d, v |-> j.v, k |-> IF j.op = "del" THEN "tomb" ELSE "full"]
 
 MaxSeq(b, w) ==
     Max({0} \cup {file[p].seq : p \in WriterSlots(b, w)} \cup {l.seq : l \in large[b][w]})
-\* The slots of w in b, other than its head, holding a full entry that a diff in S names: w keeps them.
-PinnedSlots(b, w, S) ==
-    {q \in WriterSlots(b, w) \ {HeadOf(b, w)} :
-        \E x \in file[q].ent : x.k = "full" /\ \E e \in S : e.k = "diff" /\ e.d = x.d /\ e.base = x.v}
-\* The slot a seal opens when the push leaves w's unabsorbed slots holding S: the lowest the manifest shows
-\* absorbed that no diff in S rests on, else a new one (§11.14's seal row with 1.2.3's keep rule).
-Reusable(b, w, S) ==
+\* The slot a seal opens: the lowest the manifest shows absorbed that is not the head, else a new one (§11.14's
+\* seal row). An absorbed slot holds nothing, so its writer may always take it again.
+Reusable(b, w) ==
     {k \in 1..MaxSlots :
         /\ Exists(SlotPath(b, w, k))
         /\ SlotPath(b, w, k) # HeadOf(b, w)
-        /\ IsAbsorbed(SlotPath(b, w, k)) \/ Twin = "ReuseUnabsorbed"
-        /\ SlotPath(b, w, k) \notin PinnedSlots(b, w, S) \/ Twin = "ReusePinned" \/ Bases = "shard"}
+        /\ IsAbsorbed(SlotPath(b, w, k)) \/ Twin = "ReuseUnabsorbed"}
 Unused(b, w) == {k \in 1..MaxSlots : ~Exists(SlotPath(b, w, k))}
-SealSlot(b, w, S) ==
-    IF Reusable(b, w, S) # {} THEN Min(Reusable(b, w, S))
+SealSlot(b, w) ==
+    IF Reusable(b, w) # {} THEN Min(Reusable(b, w))
     ELSE IF Unused(b, w) # {} THEN Min(Unused(b, w)) ELSE 0
 
-\* What w's sealed, unabsorbed slots in b hold.
-SealedEnts(b, w) == EntsAt(Sealed(b) \cap SlotPaths(b, w))
-\* The large entries of w in b that a push may remove when it leaves w's unabsorbed slots holding S: those the
-\* manifest shows absorbed that no diff in S names (1.2.3).
-Removable(b, w, S) ==
-    {l \in large[b][w] :
-        /\ l.seq <= man[b].abs[w]
-        /\ Twin = "CleanupReferenced" \/ ~\E e \in S : e.k = "diff" /\ e.d = l.d /\ e.base = l.v}
+\* The large entries of w in b that its next push removes: every one the manifest shows absorbed.
+Removable(b, w) ==
+    {l \in large[b][w] : l.seq <= man[b].abs[w] \/ Twin = "CleanupUnabsorbed"}
 
 \* w's head push of entry e into bucket b: creating w's first slot there; appending to its head, a newer entry
 \* replacing the head's entry of its document; sealing the head as it stood and opening the next slot with e;
@@ -336,30 +257,27 @@ Removable(b, w, S) ==
 \* renumbered head. hp and hv are the head as the base showed it, which the push replaces (1.2.3's head rule).
 HeadPushes(w, b, e) ==
     LET head == HeadOf(b, w)
-        big == Bases = "own" /\ IsBig(e.d) /\ e.k = "full"
+        big == IsBig(e.d) /\ e.k = "full"
         ms == MaxSeq(b, w)
         lg == IF big THEN {[seq |-> ms + 1, d |-> e.d, v |-> e.v]} ELSE {}
-        push(p, hp, seq, ent, refs, p2, seq2) ==
+        push(p, hp, seq, ent, p2, seq2) ==
             [kind |-> "head", b |-> b, w |-> w, hp |-> hp, hv |-> IF hp = NoPath THEN 0 ELSE file[hp].ver,
              p |-> p, ver |-> file[p].ver, seq |-> seq, ent |-> ent,
              p2 |-> p2, ver2 |-> IF p2 = NoPath THEN 0 ELSE file[p2].ver, seq2 |-> seq2, lgAdd |-> lg,
-             lgDrop |-> IF Bases = "own" THEN Removable(b, w, refs) ELSE {}, entry |-> e, t |-> clock]
+             lgDrop |-> Removable(b, w), entry |-> e, t |-> clock]
         first == IF big THEN {} ELSE {e}
     IN  IF head = NoPath
-        THEN {push(SlotPath(b, w, 1), NoPath, IF big THEN ms + 2 ELSE ms + 1, first, first, NoPath, 0)}
+        THEN {push(SlotPath(b, w, 1), NoPath, IF big THEN ms + 2 ELSE ms + 1, first, NoPath, 0)}
              \cup (IF big \/ MaxSlots < 2 THEN {}
-                   ELSE {push(SlotPath(b, w, 1), NoPath, ms + 1, first, first, SlotPath(b, w, 2), ms + 2)})
-        ELSE LET kept == {y \in file[head].ent : y.d # e.d}
-                 appended == IF big THEN kept ELSE kept \cup {e}
-                 refsA == appended \cup SealedEnts(b, w)
-                 refsO == {e} \cup file[head].ent \cup SealedEnts(b, w)
-                 kA == SealSlot(b, w, refsA)
-                 kO == SealSlot(b, w, refsO)
-             IN  {push(head, head, IF big THEN ms + 2 ELSE file[head].seq, appended, refsA, NoPath, 0)}
-                 \cup (IF big \/ kO = 0 THEN {}
-                       ELSE {push(SlotPath(b, w, kO), head, ms + 1, {e}, refsO, NoPath, 0)})
-                 \cup (IF big \/ kA = 0 THEN {}
-                       ELSE {push(head, head, file[head].seq, appended, refsA, SlotPath(b, w, kA), ms + 1)})
+                   ELSE {push(SlotPath(b, w, 1), NoPath, ms + 1, first, SlotPath(b, w, 2), ms + 2)})
+        ELSE LET others == {y \in file[head].ent : y.d # e.d}
+                 appended == IF big THEN others ELSE others \cup {e}
+                 k == SealSlot(b, w)
+             IN  {push(head, head, IF big THEN ms + 2 ELSE file[head].seq, appended, NoPath, 0)}
+                 \cup (IF big \/ k = 0 THEN {}
+                       ELSE {push(SlotPath(b, w, k), head, ms + 1, {e}, NoPath, 0)})
+                 \cup (IF big \/ k = 0 THEN {}
+                       ELSE {push(head, head, file[head].seq, appended, SlotPath(b, w, k), ms + 1)})
 
 \* §11.14's superseded rule. As written ("index") a journaled entry is dropped when the index at the push's base
 \* holds its document at a higher version. The design ("content") drops it when the content ref, read after the
@@ -375,12 +293,11 @@ JournalBuild ==
        THEN /\ journal' = Tail(journal)
             /\ reached' = Mark({"dropped"})
             /\ UNCHANGED wpend
-       ELSE /\ \E t0 \in Windows : \E e \in EntryOptions(Journaler, t0, j) :
-                 \E push \in HeadPushes(Journaler, t0, e) :
-                     wpend' = [wpend EXCEPT ![Journaler] = push]
+       ELSE /\ \E t0 \in Windows : \E push \in HeadPushes(Journaler, t0, EntryOf(j)) :
+                 wpend' = [wpend EXCEPT ![Journaler] = push]
             /\ UNCHANGED <<journal, reached>>
     /\ UNCHANGED <<storeVars, clock, next, content, wlate, mpend, rphase, rheld, rpend, budgetVars,
-                   indexed, rollCommits, fenceBad, broken>>
+                   indexed, rollCommits, fenceBad>>
 
 \* A content version no index entry reaches yet, which the backfiller indexes into its own head from the
 \* content as it stands (1.2.6).
@@ -392,26 +309,25 @@ BackfillBuild ==
            /\ indexed[d].v < content[d].v
            /\ \E t0 \in Windows :
                   LET j == [d |-> d, v |-> content[d].v, op |-> content[d].op] IN
-                  \E e \in EntryOptions(Backfiller, t0, j) :
-                      \E push \in HeadPushes(Backfiller, t0, e) :
-                          wpend' = [wpend EXCEPT ![Backfiller] = push]
+                  \E push \in HeadPushes(Backfiller, t0, EntryOf(j)) :
+                      wpend' = [wpend EXCEPT ![Backfiller] = push]
     /\ UNCHANGED <<storeVars, worldVars, wlate, mpend, rphase, rheld, rpend, budgetVars, ghostVars>>
 
-\* The head CAS of push P. Under "own" the push replaces its writer's head as its base showed it, creating the
+\* The head CAS of push P. The push replaces its writer's head as its base showed it, creating the
 \* writer's first slot only where it still has none, so a writer's pushes commit one at a time and every file of
 \* the writer's is as the push read it. On 409 the builder rereads and builds again.
 HeadOk(P) ==
     /\ P.b \notin gone
     /\ file[P.p].ver = P.ver
     /\ P.p2 = NoPath \/ file[P.p2].ver = P.ver2
-    /\ (Bases = "own" /\ Twin # "NoOwnCas") =>
+    /\ Twin # "NoOwnCas" =>
            IF P.hp = NoPath THEN WriterSlots(P.b, P.w) = {} ELSE file[P.hp].ver = P.hv
 
 HeadApply(P) ==
     /\ file' = [q \in Paths |->
                    IF q = P.p THEN [live |-> TRUE, ver |-> file[q].ver + 1, seq |-> P.seq, ent |-> P.ent]
                    ELSE IF q = P.p2 THEN [live |-> TRUE, ver |-> file[q].ver + 1, seq |-> P.seq2, ent |-> {}]
-                   ELSE IF Bases = "own" /\ Twin # "NoOwnCas" /\ q = P.hp THEN [file[q] EXCEPT !.ver = @ + 1]
+                   ELSE IF Twin # "NoOwnCas" /\ q = P.hp THEN [file[q] EXCEPT !.ver = @ + 1]
                    ELSE file[q]]
     /\ large' = [large EXCEPT ![P.b][P.w] = (@ \ P.lgDrop) \cup P.lgAdd]
     /\ indexed' = [indexed EXCEPT ![P.entry.d] = Newer(@, P.entry)]
@@ -426,7 +342,7 @@ HeadCommit(w) ==
        ELSE UNCHANGED <<file, large, indexed, journal>>
     /\ wpend' = [wpend EXCEPT ![w] = None]
     /\ UNCHANGED <<man, gone, rolled, lock, clock, next, content, wlate, mpend, rphase, rheld, rpend,
-                   budgetVars, rollCommits, fenceBad, broken, reached>>
+                   budgetVars, rollCommits, fenceBad, reached>>
 
 \* A writer's process dies with a push in flight. The push may still land; the process that follows reads its
 \* journal again and builds anew.
@@ -446,51 +362,21 @@ LateCommit(w) ==
     /\ IF HeadOk(P) THEN HeadApply(P) ELSE UNCHANGED <<file, large, indexed>>
     /\ wlate' = [wlate EXCEPT ![w] = None]
     /\ UNCHANGED <<man, gone, rolled, lock, worldVars, wpend, mpend, rphase, rheld, rpend, budgetVars,
-                   rollCommits, fenceBad, broken, reached>>
+                   rollCommits, fenceBad, reached>>
 
 (***************************************************************************)
 (* The merger (§11.14's merges): a bucket's sealed slots and large entries  *)
 (* into its shard.                                                          *)
 (***************************************************************************)
 
-\* The design's merge: each document's newest version among the shard, the sealed slots and the large entries,
-\* every diff composed onto its own writer's base. It reads no head.
-MergeInOwn(b) ==
-    file[ShardPath(b)].ent \cup (UNION {SlotResolved(p) : p \in Sealed(b)}) \cup LargeEnts(b)
-
-\* As written: the version a merge keeps of d from inputs In, given the heads' entries H.
-MergeVersion(In, H, d) ==
-    LET top == Top(In, d)
-        hTop == Top(H, d)
-        hn == {e \in Of(H, d) : e.v = hTop}
-        hd == {e \in hn : e.k = "diff" /\ \E i \in Of(In, d) : i.v = e.base}
-    IN  IF /\ hTop >= top
-           /\ hd # {}
-           /\ KeepBase = "any" \/ hd = hn
-        THEN Min({e.base : e \in hd})
-        ELSE top
-Composable(In, d) == {e.v : e \in {y \in Of(In, d) : ComposesIn(In, d, y.v)}}
-MergeKept(In, H, d) ==
-    LET v == MergeVersion(In, H, d) IN
-    IF /\ MergeCompose # "newest"
-       /\ ~ComposesIn(In, d, v)
-       /\ Top(H, d) > v \/ (MergeCompose = "covered" /\ Top(H, d) = v)
-    THEN IF Composable(In, d) = {} THEN 0 ELSE Max(Composable(In, d))
-    ELSE v
+\* The merge: each document's newest version among the shard, the sealed slots and the large entries, each entry
+\* as it stands. It reads no head.
+MergeIn(b) == file[ShardPath(b)].ent \cup EntsAt(Sealed(b)) \cup LargeEnts(b)
 
 MergeRows(b) ==
-    LET kept == IF Bases = "own"
-                THEN LET In == MergeInOwn(b) IN {Row(In, d, Top(In, d)) : d \in {e.d : e \in In}}
-                ELSE LET In == OutEnts(b)
-                         H == HeadEnts(b)
-                     IN  {Row(In, d, MergeKept(In, H, d)) : d \in {doc \in {e.d : e \in In} : MergeKept(In, H, doc) > 0}}
+    LET In == MergeIn(b)
+        kept == {Row(In, d, Top(In, d)) : d \in {e.d : e \in In}}
     IN  IF Twin = "MergeDropsTombstone" THEN {r \in kept : r.k # "tomb"} ELSE kept
-
-MergeBroken(b) ==
-    IF Bases = "own" THEN \E p \in Sealed(b) : SlotBroken(p)
-    ELSE LET In == OutEnts(b)
-             H == HeadEnts(b)
-         IN  \E d \in {e.d : e \in In} : MergeKept(In, H, d) > 0 /\ ~ComposesIn(In, d, MergeKept(In, H, d))
 
 MergeBuild(b) ==
     /\ "merge" \notin Still
@@ -503,14 +389,9 @@ MergeBuild(b) ==
                           \cup {l.seq : l \in LiveLarge(b, w)})]
        IN  mpend' = [kind |-> "merge", b |-> b, shard |-> file[ShardPath(b)].ver, man |-> man[b].ver,
                      rows |-> MergeRows(b), abs |-> abs, t |-> clock]
-    /\ broken' = (broken \/ MergeBroken(b))
-    /\ reached' = IF \E p \in Sealed(b) : \E e \in file[p].ent : e.k = "diff" /\ Top(OutEnts(b), e.d) = e.v
-                  THEN Mark({"composed"}) ELSE reached
-    /\ UNCHANGED <<storeVars, worldVars, wpend, wlate, rphase, rheld, rpend, budgetVars, indexed,
-                   rollCommits, fenceBad>>
+    /\ UNCHANGED <<storeVars, worldVars, wpend, wlate, rphase, rheld, rpend, budgetVars, ghostVars>>
 
-\* One push: the shard and the manifest, each at the version read. It writes no file of any writer; as written
-\* (and under the twin) it also removes the large entries it absorbed.
+\* One push: the shard and the manifest, each at the version read. It writes and removes no file of any writer.
 MergeCommit ==
     LET P == mpend
         s == ShardPath(P.b)
@@ -522,28 +403,19 @@ MergeCommit ==
         /\ IF ok
            THEN /\ file' = [file EXCEPT ![s] = [live |-> TRUE, ver |-> @.ver + 1, seq |-> 0, ent |-> P.rows]]
                 /\ man' = [man EXCEPT ![P.b] = [ver |-> @.ver + 1, abs |-> P.abs]]
-                /\ large' = IF Bases = "shard" \/ Twin = "MergeRemovesLarge"
-                            THEN [large EXCEPT ![P.b] = [w \in Writers |-> {l \in large[P.b][w] : l.seq > P.abs[w]}]]
-                            ELSE large
-           ELSE UNCHANGED <<file, man, large>>
+           ELSE UNCHANGED <<file, man>>
         /\ mpend' = None
-        /\ UNCHANGED <<gone, rolled, lock, worldVars, wpend, wlate, rphase, rheld, rpend, budgetVars,
+        /\ UNCHANGED <<large, gone, rolled, lock, worldVars, wpend, wlate, rphase, rheld, rpend, budgetVars,
                        ghostVars>>
 
 (***************************************************************************)
 (* The roll-up of bucket 1 (§11.14's roll-up), under the lock.              *)
 (***************************************************************************)
 
-\* Step 2's inputs: every entry of the bucket, writers' heads included, diffs composed.
+\* Step 2's inputs: every entry of the bucket as it stands, writers' heads included.
 RollSlots == IF Twin = "RollupForgetsHeads" THEN Sealed(1) ELSE Sealed(1) \cup Heads(1)
-RollIn ==
-    IF Bases = "own"
-    THEN file[ShardPath(1)].ent \cup (UNION {SlotResolved(p) : p \in RollSlots}) \cup LargeEnts(1)
-    ELSE EntsAt(RollSlots \cup {ShardPath(1)})
+RollIn == EntsAt(RollSlots \cup {ShardPath(1)}) \cup LargeEnts(1)
 Carried(d) == Top(RollIn, d)
-RollBroken ==
-    IF Bases = "own" THEN \E p \in RollSlots : SlotBroken(p)
-    ELSE \E d \in Docs : Carried(d) > 0 /\ ~ComposesIn(RollIn, d, Carried(d))
 
 \* What the newer buckets hold of d, heads included, and the newest of them holding any of it.
 NewerEnts == BucketEnts(2) \cup BucketEnts(3)
@@ -568,9 +440,9 @@ PromoEnt(nb) ==
 \* and then going itself. A promoted tombstone takes all's row too; a promoted version leaves all's row be.
 NewAll ==
     LET old == AllEnts
-        keep(d) == [d |-> d, v |-> Top(old, d), k |-> "full", base |-> 0]
+        keep(d) == [d |-> d, v |-> Top(old, d), k |-> "full"]
         row(d) == IF Promoted(d)
-                  THEN (IF TombAt(RollIn, d, Carried(d)) THEN [d |-> d, v |-> 0, k |-> "full", base |-> 0] ELSE keep(d))
+                  THEN (IF TombAt(RollIn, d, Carried(d)) THEN [d |-> d, v |-> 0, k |-> "full"] ELSE keep(d))
                   ELSE IF Carried(d) = 0 \/ Top(old, d) > Carried(d) THEN keep(d)
                   ELSE Row(RollIn, d, Carried(d))
     IN  {r \in {row(d) : d \in Docs} : r.v > 0 /\ r.k = "full"}
@@ -614,7 +486,7 @@ RollBuild(r) ==
     /\ rpend[r] = None
     /\ IF 1 \in gone /\ rolled >= 1
        THEN /\ rphase' = [rphase EXCEPT ![r] = "done"]
-            /\ UNCHANGED <<rpend, broken>>
+            /\ UNCHANGED rpend
        ELSE /\ rpend' = [rpend EXCEPT ![r] =
                    [kind |-> "roll", lock |-> rheld[r], all |-> file[AllPath].ver, man |-> man[1].ver,
                     bucket |-> [p \in BucketPaths(1) |-> file[p].ver],
@@ -624,10 +496,8 @@ RollBuild(r) ==
                     fenced |-> [b \in Fenced |-> man[b].ver],
                     live |-> \E d \in Docs : Promoted(d) /\ ~TombAt(RollIn, d, Carried(d)),
                     rows |-> NewAll, t |-> clock]]
-            /\ broken' = (broken \/ RollBroken)
             /\ UNCHANGED rphase
-    /\ UNCHANGED <<storeVars, worldVars, wpend, wlate, mpend, rheld, budgetVars, indexed, rollCommits,
-                   fenceBad, reached>>
+    /\ UNCHANGED <<storeVars, worldVars, wpend, wlate, mpend, rheld, budgetVars, ghostVars>>
 
 \* Step 6: one push writing all and each promotion's shard and manifest (as written: the rewrites), removing
 \* every file of bucket 1, setting a/m's rolled_through and freeing the lock from the version the runner holds.
@@ -676,7 +546,7 @@ RollCommit(r) ==
                    ELSE UNCHANGED <<rphase, rheld>>
                 /\ UNCHANGED <<file, large, man, gone, rolled, lock, rollCommits, fenceBad, reached>>
         /\ rpend' = [rpend EXCEPT ![r] = None]
-        /\ UNCHANGED <<worldVars, wpend, wlate, mpend, budgetVars, indexed, broken>>
+        /\ UNCHANGED <<worldVars, wpend, wlate, mpend, budgetVars, indexed>>
 
 \* The lock's until_ms passes: a crashed holder's always, a live holder's while lapses last.
 Lapse ==
@@ -745,7 +615,6 @@ Init ==
     /\ indexed = [d \in Docs |-> [v |-> 0, k |-> "live"]]
     /\ rollCommits = 0
     /\ fenceBad = FALSE
-    /\ broken = FALSE
     /\ reached = {}
 
 RollerStep(r) ==
@@ -773,9 +642,9 @@ TypeOk ==
     /\ rollCommits \in 0..2
     \* no file of a bucket a roll-up removed comes back
     /\ \A b \in gone : ~BucketLive(b) /\ (\A p \in BucketPaths(b) : ~Exists(p)) /\ (\A w \in Writers : large[b][w] = {})
-    \* one entry a key in each slot (§11.14's slot row), and no diff in a shard or in all
+    \* one entry a key in each slot (§11.14's slot row), and every entry full or a tombstone (owner decision 584)
     /\ \A b \in Buckets : \A p \in BucketSlots(b) : \A d \in Docs : Cardinality(Of(file[p].ent, d)) <= 1
-    /\ \A b \in Buckets : \A e \in file[ShardPath(b)].ent : e.k # "diff"
+    /\ \A p \in Paths : \A e \in file[p].ent : e.k \in {"full", "tomb"}
 
 \* FI-18: every search at the head, over the buckets and all, answers each document's newest indexed version,
 \* so no seal, merge, slot reuse or roll-up changes a result set, no tombstoned version counts, and no late
@@ -786,20 +655,6 @@ ResultsHold == ViewOf(IndexEnts) = Truth
 BucketsExact ==
     LET v == ViewOf(UNION {BucketEnts(b) : b \in Buckets}) IN
     \A d \in Docs : v[d] # 0 => v[d] = Truth[d]
-
-\* The design (I1): every diff in a slot no merge has absorbed, a head or a sealed one, has its base in another
-\* file of its own writer in its bucket, so no reader, merge or roll-up meets a diff it cannot compose. As
-\* written: every current diff's chain resolves outside every head of its bucket.
-ChainsResolve ==
-    /\ ~broken
-    /\ IF Bases = "own"
-       THEN \A b \in Buckets \ gone : \A p \in Sealed(b) \cup Heads(b) : ~SlotBroken(p)
-       ELSE \A d \in Docs :
-               LET t == Top(IndexEnts, d) IN
-               (t > 0 /\ ~TombAt(IndexEnts, d, t)) =>
-                   \/ \E e \in Of(IndexEnts, d) : e.v = t /\ e.k = "full"
-                   \/ \E b \in Buckets \ gone :
-                          \E e \in Of(BucketEnts(b), d) : e.v = t /\ e.k = "diff" /\ Resolves(b, d, e.base)
 
 \* I-EVS-11: at most one version of a document in all and in each bucket's shards, and no tombstone in all.
 OneVersionEach ==
@@ -819,18 +674,7 @@ RollsOnce == rollCommits <= 1 /\ ~fenceBad
 NeverRolled == "rolled" \notin reached
 NeverPromoted == "promoted" \notin reached
 NeverPromotedLive == "promotedLive" \notin reached
-NeverComposed == "composed" \notin reached
 NeverDropped == "dropped" \notin reached
-\* A head holds a diff whose base sits in a file a merge has absorbed and its writer still keeps.
-NeverKeptBase ==
-    ~\E b \in Buckets \ gone : \E w \in Writers :
-        /\ HeadOf(b, w) # NoPath
-        /\ \E e \in file[HeadOf(b, w)].ent :
-               /\ e.k = "diff"
-               /\ \/ \E l \in large[b][w] : l.d = e.d /\ l.v = e.base /\ l.seq <= man[b].abs[w]
-                  \/ \E q \in WriterSlots(b, w) \ {HeadOf(b, w)} :
-                         IsAbsorbed(q) /\ \E x \in file[q].ent : x.k = "full" /\ x.d = e.d /\ x.v = e.base
-
 RollerSymmetry == Permutations(Rollers)
 
 =============================================================================

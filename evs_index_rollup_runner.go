@@ -110,7 +110,7 @@ type indexRollupOutcome struct {
 	// The bucket rolled, or being rolled.
 	startDay uint32
 	result   *indexRollupResult
-	// index_malformed for every diff of S that did not compose and every file its views alarmed.
+	// index_malformed for every file its views alarmed.
 	events []SidecarEvent
 	// Builds after the lock, the committed one included.
 	attempts int
@@ -279,7 +279,6 @@ func (self *IndexRoller) attempt(ctx context.Context, rootNumber uint32, outcome
 		return false, err
 	}
 	outcome.result = result
-	outcome.events = append(outcome.events, indexMalformedEvents(view, result.malformed)...)
 	testHookBarrier("evs.index.rollup.built", self.barrierKey())
 
 	free, err := indexLockFreeFile(root, outcome.lock)

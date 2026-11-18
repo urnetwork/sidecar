@@ -389,6 +389,7 @@ func runUrApprove(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		for _, planItem := range revokePlan.Items {
 			fmt.Fprintln(tty, urDeviceRevokeItemLine(planItem))
 		}
+		urPrintVoidedBindingNote(tty, revokePlan.Items)
 		if 1 < revokePlan.Signatures {
 			fmt.Fprintf(tty, "  it takes %d admins: this signs the proposal and suspends the device at once\n", revokePlan.Signatures)
 		}
@@ -457,6 +458,7 @@ func runUrApproveProposal(ctx context.Context, cli *urCli, proposalIdText string
 	for _, item := range proposal.Items {
 		fmt.Fprintln(tty, urDeviceRevokeItemLine(item))
 	}
+	urPrintVoidedBindingNote(tty, proposal.Items)
 	fmt.Fprintf(tty, "  proposed at entry %d, signed so far by %s\n", proposal.ProposedAt, strings.Join(proposal.Signers, ", "))
 	if proposal.Suspended {
 		fmt.Fprintln(tty, "  the device is suspended while the proposal waits")

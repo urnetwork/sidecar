@@ -16,10 +16,10 @@
 // it from api (plan-TEAM-sealed-field-format), and this file never leaves the device.
 //
 // recoverySealer is the Sidecar's half. As this device applies each entry of the log it compares the binding the copy
-// is sealed to with its member's current one and re-seals on any difference: a RecoveryBind or RecoveryRebind, §7.9's
-// cascade voiding one, or a signer outside P signing a restored one again. No copy is kept while none is current: with
-// no binding, under a binding a void restored (which takes no wrap until signed again, §5.9), or while this device
-// does not hold the current binding's X-Wing key. That key rides sealed in the binding's record, so this device learns
+// is sealed to with its member's current one and re-seals on any difference: a RecoveryBind or RecoveryRebind, or §7.9's
+// cascade voiding one, which leaves the member none (QD-1034). No copy is kept while none is current: with no binding,
+// as after such a void until a fresh code is bound, or while this device does not hold the current binding's X-Wing
+// key. That key rides sealed in the binding's record, so this device learns
 // it by signing the binding itself (identity_recovery_bind.go) or by opening the record's sealed body with the config
 // repo's key (SidecarConfigKeys). Each seal and each end is recorded with the AuthPin this device stood at, in the core
 // namespace's recovery_seal record, and those spans are what recovery_rebind's Evidence names at a void (§5.6's alarm
@@ -306,19 +306,6 @@ type SidecarConfigKeys interface {
 	ConfigKeyAt(generation uint64) *EvsRepoKey
 }
 
-// An authority that also says whether a member's binding in effect is one a cascade void restored, which takes no wrap
-// until a signer outside P signs it again (§7.9, §5.9): ConfigState.BindingRestored. Optional beside SidecarAuthority:
-// an authority without it holds no restored binding.
-type SidecarRecoveryAuthority interface {
-	BindingRestored(memberId Id) bool
-}
-
-// ConfigState's own answer.
-func (self *ConfigAuthority) BindingRestored(memberId Id) bool {
-	state := self.client.State()
-	return state != nil && state.BindingRestored(memberId)
-}
-
 // One span keychain.wrap was sealed to a binding.
 type recoverySealSpan struct {
 	KeySha256 []byte `json:"key_sha256"`
@@ -529,9 +516,6 @@ func (self *Sidecar) recoverySealTargetWithLock(authority SidecarAuthority, iden
 	binding := authority.CurrentBinding(own.MemberId)
 	if binding == nil || len(binding.GetKeySha256()) != sha256.Size {
 		return nil, nil, "its member has no current binding"
-	}
-	if restores, ok := authority.(SidecarRecoveryAuthority); ok && restores.BindingRestored(own.MemberId) {
-		return nil, nil, "its member's binding is one a void restored"
 	}
 	xwingPublicKey := record.PublicKeys[hex.EncodeToString(binding.GetKeySha256())]
 	if len(xwingPublicKey) != recoveryXwingPublicKeyByteCount {
