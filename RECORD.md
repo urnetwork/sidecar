@@ -301,9 +301,14 @@ restart     every writer first replays its journal, re-sending each entry whose 
             writer then takes the higher of that head and its stream's newest entry of this chain; a depositor reads no
             log, so a device restored from an old backup forks its chain, which readers alarm on
 agent key   RecordEntry.version 2 (M6, agent subkeys, §5.5): the sealed plaintext is AgentSignedBody {body, agent_id,
-            key_id, signature}, the signature by the agent's subkey over "urnetwork-sidecar-v1/record-agent" ||
-            0x00 || log_id || entry_id || body, and body_commitment covers that message; a version-1 reader keeps
+            key_id, signature, agent_cert}, the signature by the agent's subkey over "urnetwork-sidecar-v1/record-agent"
+            || 0x00 || log_id || entry_id || body, and body_commitment covers that message; a version-1 reader keeps
             the entry, verifies its header and shows the body generically
+agent cert  agent_cert is the Signed AgentCert{sidecar_id, agent_id, public_key, not_after_ms} by the writer's identity
+            key, purpose agent-cert, SIGNED_AGENT_CERT, not_after_ms at most 30 days after signing (§5.5), carried
+            only inside the sealed body it vouches for; a reader checks the certificate under the identity key of
+            the sidecar that signed the entry, that the entry's time is before not_after_ms, then the subkey's
+            signature: a bad signature alarms, and an absent certificate reads agent_asserted (QD-159)
 ```
 
 ### 5.4 Deposits and ingest
@@ -353,7 +358,8 @@ full        a deposit ref's entries sit flat under random ids (§11.6), so it ho
             deposits: about 44 working days of 80 a day with no ingester online, a receipt-only reader's 256 a day
             filling it in 14; past that a 409 DIRECTORY_FULL keeps entries in the spool, and a receipt that cannot
             land refuses its read (§16.8); each CONSUME frees its row, so this bound never lasts past an ingest
-index       the ingester is the log's writer for the run card (§16.10) and journals its index entries
+index       the ingester writes the run cards of its own stream, one a run (§16.10; owner decision 459), and journals
+            its index entries
 ```
 
 ### 5.5 Reading
@@ -569,6 +575,9 @@ message ContextBody {                       // context
   repeated string truncations = 13;         // V: <= 16 warnings, each <= 128 B: a base name and its cut
   bytes config_sha256 = 14;                 // the harness config hash §16.6 checks
   bytes continues_run_id = 15; bytes continues_entry_id = 16;
+  repeated string prompts = 17;             // V: the run's user prompts as they arrive (§16.7), each redacted and
+                                            // none empty, in order, <= 2,048 B together; stage 2 entries carry
+                                            // them, which a vault's run card reads (section 7.4; owner decision 467)
 }
 message InstructionFile {
   uint32 scope = 1;                         // 1 managed, 2 user, 3 project
@@ -672,10 +681,16 @@ message InventoryAgent {
 }
 message AgentSignedBody {                   // the sealed plaintext of RecordEntry.version 2 (M6; section 5.3)
   bytes body = 1; bytes agent_id = 2; bytes key_id = 3; bytes signature = 4;
+  bytes agent_cert = 5;                     // the Signed AgentCert the subkey's signature checks under, by the
+                                            // writer's identity key; absent, the agent reads agent_asserted (QD-159)
 }
 message Opening {                           // an entry with what opens it
   bytes header = 1;                         // RecordEntry.header, the whole Signed, as stored
   bytes salt = 2; bytes body = 3;           // both empty: the header alone
+  uint32 version = 4;                       // RecordEntry.version of the entry this was made from, absent reading
+                                            // 1: body is the kind's message at 1 and the AgentSignedBody holding it
+                                            // at 2; the opener's word, unsigned, since the commitment binds body
+                                            // (owner decision 466)
 }
 message CopyBody { repeated Opening entries = 1; }  // copy (M6): <= 64 entries the daemon deposited to T
 message TranscriptBody {                    // transcript: a chunk of §16.7's tail
@@ -744,9 +759,10 @@ The newest `ledger_scope` by section 5.5's `newest` row, from a repo admin at it
 ### 7.1 Rules
 
 ```text
-documents   V: one run card per run; in personal mode each claim, handoff, ask, answer, check and note entry
+documents   V: one run card per run and stream (section 7.4); in personal mode each claim, handoff, ask, answer,
+            check and note entry
             D: §16.11's announcements, announce entries folding into them, and one document per other stream entry
-            T: one run card per run, and nothing else (§16.10)
+            T: one run card per run and stream, and nothing else (§16.10)
             R: each entry except class log
             never: raw kinds (§16.12's "Later", once §22.8 measures it), copy, class log
 row         §11.14's row: doc kind record for an entry, derived for a run card; flag bit 0 the header's tainted;
@@ -754,8 +770,12 @@ row         §11.14's row: doc kind record for an entry, derived for a run card;
             which a hit opens in its ref (§11.14's SearchHit), so two ingesters' copies of an entry are two
             documents, each under its own ref and doc_key
 fields      4 title, 5 text; 6 the kind's registry name, or for an unknown kind kind-<number>; 7 writer sidecar_id,
-            8 agent_id and 10 run_id in lowercase hex; 9 agent label and 11 session ids (space-joined) from the
-            run's first context entry in this log, empty if none; 12-14 by section 7.3 and 7.4; 15 empty
+            8 agent_id and 10 run_id in lowercase hex; 9 agent label and 11 session ids (space-joined): a run
+            card's from the newest context among the entries folded; an entry's from the first context entry of
+            its run that its own stream holds at the push's pin and no erasure with a CUT below the push's epoch
+            names, empty if none, so rows written before an erasure of a context entry keep what it gave them,
+            and between the ERASE and the CUT a builder that holds the ERASE builds no entry document of that run
+            (owner decision 460); 12-14 by section 7.3 and 7.4; 15 empty
             D's documents use §16.11's registry instead: 7-10 as above; 11 member_id (the writer's member or
             sponsor), 12 project, 13 branch and 14 repo_id from the run's announcement at writing; 15 state
 times       a time in a field is RFC 3339 UTC to the second
@@ -764,9 +784,9 @@ caps        each display field <= 256 B cut on a code point, its flag bit set, a
             indexed whole, up to the body's own cap, and displays its first 256 B
 filters     SearchFilters.kinds carries numbers; a reader maps them to field 6's names, and a number it does not
             know matches nothing and is named in coverage
-determinism a row and its text are functions of the entry, its copy's path and its run's first context entry, so a
-            rebuild writes the same bytes (§11.14); this section is record extractor 1, named in each index file's
-            header, and any change to it is a new extractor id and a rebuild
+determinism a row and its text are functions of the entry, its copy's path and the context entry the fields row
+            names, so a rebuild writes the same bytes (§11.14); this section is record extractor 1, named in each
+            index file's header, and any change to it is a new extractor id and a rebuild
 trust       §16.10's rule, from the row's writer and tainted bit; §16.11 narrows it in D
 ```
 
@@ -812,7 +832,9 @@ Entries never change, and a row is encoded from its own document (§11.14), so a
 
 ```text
 field 13    claim: expires
-field 14    claim: active or released, its claim_state; handoff: handed_off; run card: section 7.4
+field 14    claim: active or released, its claim_state; handoff: handed_off; run card: the newest claim's own
+            claim_state, or handed_off, as of the card's fold, never expired, which a reader computes (section 7.4;
+            owner decision 467)
 release     record_append(kind: claim, targets: [claim:<id>], expires <= now) writes a claim entry with claim_state 2;
             in team mode it sets that Claim's state to 2, raising the item's version (§16.11)
 fold        per claim, its opener's newest entry by seq gives text, targets and expires; closing is a state each
@@ -829,31 +851,35 @@ team mode   claims and handoffs live in the run's announcement (§16.11), so no 
 
 ### 7.4 Run cards
 
-§16.10 gives the card's contents, name (`run/` || run_id), caps and cadence. Its version is the highest seq, in the run's writer's chain in this log, of the entries folded (§11.14's "its writer's sequence"), so two ingesters agree. Here is the mapping, so that a rebuild reproduces it:
+§16.10 gives the card's contents, name (`run/` || run_id, under its stream's ref_id), caps and cadence. A card is one per run and stream: the fold of the run's source entries that stream holds, written by the stream's writer in its companion push, so one push carries it and one coverage row counts it, and §16.10's group row joins a run's cards by run_id, started the earliest, last activity the latest, title and fields from the card whose row time is newer (owner decision 459). Its version is the index_epoch its push names times 2^32 plus the stream version of the run's newest source entry in its stream, so every device that folds one stream at one epoch writes one card, and an erasure's CUT lists it through its epoch; a stream version or epoch at or past 2^32 writes no card (`IndexFormatSettings.CardVersionBitCount`). A record log's companion push runs every `CardInterval` (5 min, section 18) while the run moves, with a build at once at the run's first source entry and at the coverage entry that ends it; source entries fold in the order of their seq in their writer's chain, then their entry_id bytes, and a run whose every source entry is erased has no card (owner decision 461). Here is the mapping, so that a rebuild reproduces it:
 
 ```text
                  V's card                                     T's card
 4 title          the newest context's title, else             empty: T holds no title (§16.10)
-                 first(the run's first user prompt)
+                 first(the first prompt its context entries
+                 carry)
 6 kind           run                                          run
 7-11             as section 7.1, from the newest context      the same
 12 tools         name:count, by count then name, <= 32        empty
-13, 14           personal mode: the newest claim's expires    empty
-                 and folded state
+13, 14           personal mode: the newest claim's expires,   empty
+                 and its own claim_state or handed_off as of
+                 the fold, never expired (section 7.3)
 row started      the first entry's time                       the same
 row expires      the newest coverage's time while the run is  the same
                  ended, else 0
 row time         the run's last event                         the same
 5 text, in       harness and version; model; project and      harness and version; model; project;
-order, one       branch; every tool name:count; each commit;  each commit; each approved action kind:count;
-a line           up to 256 touched paths, byte order; user    each published host; each route target;
-                 prompts in order, cut at 2 KiB               each coverage gap code
+order, one       branch; every tool name:count; each commit;  each commit; each action kind asked for
+a line           up to 256 touched paths, byte order; user    approval:count; each published host; each
+                 prompts in order, from its context entries'  route target; each coverage gap code
+                 prompts, cut at 2 KiB
                  at most 16 KiB, cut on a code point          at most 16 KiB
-sources          context, tool_call, change, transcript       context, change, approval, publish, route, reach,
-                                                              coverage (§16.10)
+sources          context, tool_call, change, transcript,      context, change, approval, publish, route, reach,
+                 coverage; in personal mode claim and         coverage (§16.10)
+                 handoff (owner decision 467)
 ```
 
-An erasure re-projects the card without the erased entry (§16.8). A card's `active` reading is §16.10's, with "no Coverage entry" read as section 4.3's "not ended". `search_agents` asks for `kind [claim, handoff, ask, note, run]` (§16.10).
+A vault card reads its prompts from its context entries' `prompts`, which ingest writes in stage 2 entries as they arrive, so no harness's transcript format enters record extractor 1 (owner decision 467). A team card counts the action kinds asked for approval, since `approval_decision` stays outside its sources. An erasure lists the card through its CUT's epoch, and the eraser folds it again without the erased entry (§16.8). A card's `active` reading is §16.10's, with "no Coverage entry" read as section 4.3's "not ended". `search_agents` asks for `kind [claim, handoff, ask, note, run]` (§16.10).
 
 ## 8. Retention and erasure
 
@@ -887,9 +913,9 @@ change        a policy takes effect at the next expiry pass, on existing entries
 expiry        once a UTC day on each log admin's daemon, 0-10 min after it first syncs the work, the first commit
               winning and a NOTHING_TO_ERASE counting as done (§11.12; in D, §16.11's runner): ERASE the expired
               entries, every copy of each (§16.8; below), write one erasure entry per batch with reason 2, then weekly
-              an admin BASE re-listing the live set; a BASE removes no class 7 entry, and a reader that held one and
-              sees a BASE remove it, or an ERASE name its key, alarms; a preservation hold pauses only §11.13's GC
-              (§21.9)
+              an admin BASE re-listing the live set, which removes only entries whose erasure is complete (owner
+              decision 461); a BASE removes no class 7 entry, and a reader that held one and sees a BASE remove it,
+              or an ERASE name its key, alarms; a preservation hold pauses only §11.13's GC (§21.9)
 floor         on T, a keep_days of 1 to 364 or a searchable_days of 1 to 89 is refused, and a reader ignores such an
               entry and alarms (R-MCP-8); 0, keeping entries or leaving them searchable with no limit, meets the floor;
               a shorter life for particular entries is a per-entry erasure, which no policy blocks, class 7 aside
@@ -903,11 +929,11 @@ ur record erase --log l --entry id... --reason r                                
 
 **What an erasure leaves.** The header stays: kind, ids, time, source, tainted and the commitment, readable by the log's readers (§16.8). A leaf and any `checkpoint` naming it stay. A commitment whose salt is gone links to nothing (REC:219-223). Expiry adds BASE and GC, after which the entry file is gone as well, and its push statement and leaf remain.
 
-**Who erases.** Only `admin` on the log (§11.12): V's owner, T's and R's repo admins, D's admins and runner (§16.11). An author cannot erase a T entry: a member asks an admin. An erasure names entries in one log, and §11.12's closure covers an entry's own representations, never its twin or `copy` in another log, so taking a run's facts out of V and T is an erasure in each. `ur record erase` runs §16.8's erasure and writes the `erasure` entry, reason 1 or 3, source `approver`. Erasure cannot be undone, so, like `ur directory erase` (§16.11) and a history drop (D-MCP-32), a person does it: the command lists what it will destroy and signs only once confirmed on /dev/tty or in an app's UI (§5.8), no MCP tool reaches it, and a command with a harness process as its ancestor is refused, so a prompt-injected agent's shell cannot run it. It refuses a class 7 entry, which lasts as long as the log. A `ur record retention set` that shortens a class's life takes the same refusal, since its next expiry pass erases those entries with no further act. Only expiry, under a policy a person signed, erases with no person at the keys.
+**Who erases.** Only `admin` on the log (§11.12): V's owner, T's and R's repo admins, D's admins and runner (§16.11). An author cannot erase a T entry: a member asks an admin. An erasure names entries in one log, and §11.12's closure covers an entry's own representations, never its twin or `copy` in another log, so taking a run's facts out of V and T is an erasure in each. `ur record erase` runs §16.8's erasure and writes the `erasure` entry, reason 1 or 3, source `approver`. Erasure cannot be undone, so, like `ur directory erase` (§16.11) and a history drop (D-MCP-32), a person does it: the command lists what it will destroy, saying for a context entry that the run's other entry documents written before the erasure keep the agent label and session ids it gave them, so a person who wants those gone erases the run's other indexed entries too (owner decision 460), and signs only once confirmed on /dev/tty or in an app's UI (§5.8), no MCP tool reaches it, and a command with a harness process as its ancestor is refused, so a prompt-injected agent's shell cannot run it. It refuses a class 7 entry, which lasts as long as the log. A `ur record retention set` that shortens a class's life takes the same refusal, since its next expiry pass erases those entries with no further act. Only expiry, under a policy a person signed, erases with no person at the keys.
 
 **Every copy.** An entry's copies are representations of it, so an erasure reaches them all (owner decision 61; REC:221). The eraser reads every stream and deposit ref of the log to its head first, then names in one ERASE each copy's `(key_slot_id, key_index)` (section 5.4's `twice`) and any unconsumed deposit's slot holding the entry, which §11.12's closure row asks for. That slot's key opens a whole batch, so the eraser first ingests the deposit, step 6 refusing the erased entry, and its CONSUME deletes the slot; an ERASE names the slot itself only where ingest cannot run, such as at the storage limit, and the batch's other entries then read as a gap. An ingester's push can still race that read, so ingest refuses an erased entry (section 5.4's step 6), and a log admin's daemon that later reads a live copy of an entry an erasure names ERASEs that copy's row under the same `erasure_id`, at its next sync, with no time limit. A reader that holds the ERASE treats every copy as erased, whichever row it named. Where search indexes the entry each copy is its own document (section 7.1), so the erasure's CUT lists each.
 
-**Run cards and packets.** An erased entry leaves its run card at the next re-projection (§16.8). A packet can no longer open it (§16.8's `disclosure` row), though a packet already sent stays out of reach, as every copy does.
+**Run cards and packets.** An erased entry leaves its run card when the erasure folds the card again, after its CUT (§16.8). A packet can no longer open it (§16.8's `disclosure` row), though a packet already sent stays out of reach, as every copy does.
 
 ## 9. Exports
 
@@ -946,7 +972,7 @@ copies      an exported line is a copy beyond recall (§11.12's residual); a lat
 {"action":"","agent":"7c1e...","agent_label":"limiter-fix","agent_source":1,"body":"CgV...","content":[{"commitment":"a590...","object":"4b7e...","repo":"e3f1..."}],"entry":"9a0c...","fields":{"path_count":3},"grant":"","header":"Cgh...","kind":"change","kind_no":17,"leaf":"1b80...","log":"aaaa...","policy_version":412,"prev":"124c...","run":"4b7e...","salt":"ERE...","seq":12,"source":1,"state":"live","tainted":false,"time":"2026-11-05T07:12:09.123Z","v":1,"writer":"d0c4..."}
 ```
 
-`header`, `salt` and `body` verify a line given its writer's public key, which no line carries: a verifier takes it from the team, as a packet's `DisclosedKey` states it. `salt`, `body`, `fields` and `agent_label`, which comes from a `context` body, appear only with `--bodies`, so a plain line holds what the header holds. `fields` is the body by proto field name, a convenience: repeated fields as arrays, bytes as lowercase hex, enumerations as numbers, unknown fields left out and kept in `body`. An erased or expired entry is §11.12's stub: `state`, `token_path` and `entry_hash`, plus the header fields while the header is held.
+`header`, `salt` and `body` verify a line given its writer's public key, which no line carries: a verifier takes it from the team, as a packet's `DisclosedKey` states it. `salt`, `body`, `fields` and `agent_label`, which comes from a `context` body, appear only with `--bodies`, so a plain line holds what the header holds. `fields` is the body by proto field name, a convenience: repeated fields as arrays, bytes as lowercase hex, enumerations as numbers, unknown fields left out and kept in `body`. A line with bodies whose entry is above version 1 carries `entry_version`, the answer an `Opening`'s `version` gives (owner decision 466): `body` is then what that version seals, the `AgentSignedBody` holding the kind's message at 2 (section 5.3), and a line without the key is version 1. An erased or expired entry is §11.12's stub: `state`, `token_path` and `entry_hash`, plus the header fields while the header is held.
 
 **`ur evs export`** of a log keeps §11.12's plain-git form and counts as `ur record export --bodies`: on every log, V, D, T and R alike, the `who`, `confirm`, `receipt`, `record` and `copies` rows above bind it, its `disclosure` entry saying format 4 and bodies true. This document fixes only the blob: each entry's file holds its canonical line with bodies, so a clone reads without a sidecar (R-RECORD-12). An erased entry's file holds the stub. Slot rows are never exported.
 
@@ -1162,7 +1188,9 @@ no keys     a packet holds salts and bodies of what it opens, never an entry key
              cosignature's time is reported
 2 inclusion  leaf(opening.header) reaches the note's root at its size by the path (RFC 9162 §2.1.3.2)
 3 header     VerifySigned(record-entry) under a key in keys; log_id equals the packet's
-4 body       where opened, body_commitment recomputes
+4 body       where opened, body_commitment recomputes, and body parses as its Opening's version says: the kind's
+             message at 1 or absent, the AgentSignedBody holding it at 2, never by how the bytes parse (owner
+             decision 466)
 5 content    each content Opening's own header verifies, and its entry_id and body_commitment equal a ContentRef's
 6 approval   approval_decision: VerifySigned(approval, SIGNED_APPROVAL_DECISION) under a key in keys; beside its
              approval entry, request_sha256 is SHA-256 of that body and payload_sha256 SHA-256 of its canonical_action

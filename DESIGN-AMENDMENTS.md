@@ -6,14 +6,14 @@ Every design decision made since DESIGN.md was last rebuilt and not yet folded i
 
 **Folding.** Only a design-records track edits `design/source/` and rebuilds DESIGN.md with `design/source/build.sh`. Each design-records track takes one DESIGN.md section, applies its items below (and the matching "Proposed DESIGN.md text" of DESIGN-DETAILS.md), and in the same commit deletes those items from this file. When this file holds no items it is deleted. Owner decisions that change behavior go into `design/source/owner/DECISIONS.md` as numbered owner decisions, after decision 197, as decision 197 was.
 
-Holds 12 decided items and 2 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded, and QD-336 went into §4.5 with owner decision 251 (QD-841 to QD-843), which DESIGN.md carries directly.
+Holds 11 decided items and 2 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded, and QD-336 went into §4.5 with owner decision 251 (QD-841 to QD-843), which DESIGN.md carries directly.
 
 ## Index
 
 | DESIGN.md section | Decided | Proposed |
 |---|---|---|
 | [§3 Architecture overview and end-to-end flows](#s3) | 1 | 0 |
-| [§5 The Sidecar core](#s5) | 2 | 1 |
+| [§5 The Sidecar core](#s5) | 1 | 1 |
 | [§7 Networks, teams, members, enrollment, and SSO](#s7) | 2 | 0 |
 | [§11 Encrypted versioned storage](#s11) | 1 | 0 |
 | [§16 The local MCP server and record primitives](#s16) | 6 | 1 |
@@ -60,17 +60,6 @@ Not folded (2026-11-16): the same two parts, still RECORD.md's, which no design-
 
 <a id="s5"></a>
 ## §5 The Sidecar core
-
-### QD-159: How a reader learns and checks an agent subkey
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §6, §11.*
-
-The identity key signs AgentCert{sidecar_id, agent_id, public_key, not_after_ms}, not_after_ms at most 30 days after signing, as a typed Signed with purpose agent-cert and SIGNED_AGENT_CERT = 0x1A02. That Signed rides inside the sealed provenance it vouches for: AgentSignedBody (RECORD.md 5.3) and a push's sealed metadata (§11.6), never a log statement or config record. A reader checks the certificate under the identity key of the sidecar that signed the carrying entry, that the entry's time is before not_after_ms, then the subkey's signature. A bad signature alarms; an absent certificate reads agent_asserted.
-
-Changes: §5.5; §6.9; §6.11; §11.6; RECORD.md 5.3.
-
-Questions: `plan-CORE-agent-revoke.md#1`.
-
-Not folded (2026-11-16): RECORD.md 5.3's AgentSignedBody, which carries the certificate inside a record entry and lives in RECORD.md, outside design/source/ and so outside a design-records track's files; the DESIGN.md parts are folded as text with owner decision 285 (§5.5's agent subkeys bullet, §6.9's purposes, §6.11's SIGNED_AGENT_CERT, §11.6's sealed metadata).
 
 ### QD-168: No SidecarEvent kind carries the record's and the directory's reader alarms
 *Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §18, §16.*
@@ -222,50 +211,6 @@ Decisions taken after this file was generated, each naming the section it folds 
 
 §2.8's block holds the published list whole since 2026-11-16 (v26): the track for §2 and §3 wrote into it every line that items here and above had added to metadata_list.yml ahead of a fold through check's additions, list versions v12 to v25 (QD-040, QD-720, QD-724, QD-725, QD-743, QD-746, QD-763, QD-764, QD-765, QD-798, QD-819, QD-828, QD-830, QD-840 and DESIGN-DETAILS 17.2.16), and check's additions list is empty. Those items' §2.8 words are therefore done; their other parts fold with their sections, and a later row change is written in the block and copied by `make metadata`. The §10 fold wrote QD-857's v31 lines (cert-1's name failure backoff), which check's additions had published, into the block the same way on 2026-11-16, its entries leaving check's list, and took v32 for itself; QD-857's §13 parts were folded with §13 (owner decision 430). The §11 fold wrote QD-199's smtp-4 words, which SMTP-M9-16 had published through check's additions, into the block the same way, in the list's v34, after its own v33; QD-199's §14 and §20 parts were folded with §14.
 
-### QD-779: Should a run card's version be the index epoch above the stream version of its run's newest entry, in place of the highest seq folded?
-*Decided by the owner on 2026-11-13, asked one question at a time. Folds into §16 The local MCP server and record primitives.*
-
-A run card's version is E * 2^32 + c: E the index_epoch its push names, which only a CUT moves, and c the stream version at which the run last gained a source entry in that stream (IndexFormatSettings.CardVersionBitCount, 32). A CUT lists a card through its epoch, so every projection made before the CUT is listed and every one made after it is above the list. This replaces RECORD.md 7.4's 'highest seq'.
-
-Changes: DESIGN-DETAILS section 15 stands as written; SEARCH-M10-28's card version; SEARCH-M10-16's Cut takes a through-epoch document; RECORD.md 7.4 and §11.14's version row, §16.8, §16.10 text from 15.8.
-
-Questions: `details-15-card-version.md`.
-
-Not folded (2026-11-16): RECORD.md 7.4's version sentence and section 8's Run cards paragraph, which DESIGN-DETAILS.md 15.8 proposes, outside design/source/; the DESIGN.md parts are folded as owner decision 459 (§16.8's erasure and search bullets, §16.10's run card row, §11.12's cut row, §11.14's version, cut and erase rows).
-
-### QD-780: Should a run have one card for each stream that holds its entries, joined at display, in place of one card a log?
-*Decided by the owner on 2026-11-13, asked one question at a time. Folds into §16 The local MCP server and record primitives.*
-
-A run card is one per run per stream: card (R, r) is the fold of what stream R holds of run r, under R's ref_id, written by R's writer in its companion push, so one push carries it and one coverage row counts it. §16.10's group row joins a run's cards by run_id: started the earliest, last activity the latest, title and fields from the card whose row time is newer.
-
-Changes: DESIGN-DETAILS section 15 stands as written; SEARCH-M10-28's card identity and fold; SEARCH-M10-12 and -14's card markers and backfills; §16.10's documents row and RECORD.md 7.1 text from 15.8.
-
-Questions: `details-15-card-per-stream.md`.
-
-Not folded (2026-11-16): RECORD.md 7.1's fields row for a card, which DESIGN-DETAILS.md 15.8 proposes, outside design/source/; the DESIGN.md parts are folded as owner decision 459 (§16.8's search bullet, §16.10's documents, run card and group rows).
-
-### QD-782: When a run's context entry is erased, may the agent label and session ids it gave the run's other entry documents stay in their index rows?
-*Decided by the owner on 2026-11-13, asked one question at a time. Folds into §16 The local MCP server and record primitives.*
-
-An erasure of a context entry lists that entry and the run's card, as §16.8 has it. Index rows of the run's other entry documents written before the erasure keep fields 9 (agent label) and 11 (session ids). From the erasure's CUT on, a builder reads those fields from the first context entry of the run that its stream holds and no erasure names; between the ERASE and the CUT a builder that holds the ERASE builds no entry document of that run. A person who wants the label or session id gone erases the run's other indexed entries too, and ur record erase says so when it lists what it will destroy.
-
-Changes: DESIGN-DETAILS 15.2.8 stands as written; SEARCH-M10-28's reading of fields 9 and 11; ur record erase's listing text (RECORD-M10-01); §16.8 and RECORD.md 7.1 text from 15.8; taking fields 9 and 11 out of entry rows stays the sound change if this is revisited.
-
-Questions: `details-15-context-fields.md`.
-
-Not folded (2026-11-16): RECORD.md 7.1's fields row for an entry and ur record erase's listing in section 8, outside design/source/; the DESIGN.md part is folded as owner decision 460 (§16.8's erasure bullet).
-
-### QD-783: Nine small readings section 15 took for index erasure and run cards: are they right?
-*Decided by the owner on 2026-11-13, asked one question at a time. Folds into §16 The local MCP server and record primitives.*
-
-Section 15's nine small readings stand as built: a reader masks a listed key at or below its listed version and applies an ERASE's whole-key mask only while no set version it holds lists the key; a record log's companion push runs on RecordSettings.CardInterval (5 min) with a build at a run's first source entry and at the coverage entry that ends it; source entries fold in (seq in their writer's chain, entry_id bytes) order; a run whose every source entry is erased has no card; a stream version or index epoch at or past 2^32 writes no card (IndexFormatSettings.CardVersionBitCount); each device that held the stream's entries when it applied the ERASE folds the card again BackfillAge after the CUT unless the index already holds it above the list; the daemon that ERASEs a copy ingested after the erasure calls the CUT again for it; the weekly BASE removes only entries whose erasure is complete; an eraser that does not mirror the log fetches at most IndexEraseSettings.CardFetchByteCount (16 MiB) a card.
-
-Changes: DESIGN-DETAILS section 15 stands as written; RECORD.md 7.4's cadence and 8's expiry row, from 15.8's proposed text.
-
-Questions: `details-15-small-readings.md`.
-
-Not folded (2026-11-16): RECORD.md 7.4's cadence and section 8's expiry row, which DESIGN-DETAILS.md 15.8 proposes, outside design/source/; the DESIGN.md parts are folded as owner decision 461 (§16.8's retention bullet and §16.10's run card row).
-
 ### QD-024: cli/UI.md is on no path this run can read
 *Accepted by the owner on 2026-11-06, in bulk as recommended; owner decision 265. Folds into §4 Repositories, code placement, branches, and build.*
 
@@ -275,16 +220,7 @@ Changes: sidecar/design/UI.md (owner step); HANDOFF section 2.
 
 Not folded (2026-11-18): sidecar/design/UI.md is still absent, and the copy is the owner's step; HANDOFF.md is outside design/source/.
 
-### QD-864: How does a reader of an Opening, a packet or an export line learn that its body is a version-2 AgentSignedBody?
-*Decided by the owner on 2026-11-15, asked one question at a time; owner decision 466. Folds into §16 The local MCP server and record primitives.*
-
-RECORD.md's part, which waits on RECORD.md's own change: section 5.5's `Opening` fence gains `uint32 version = 4`, which protocol/design_unfenced_test.go's `testFenceAdditions` holds until that fence writes it; section 9's jsonl export names the same answer `entry_version`; and section 11's openings read it. The rest is folded (2026-11-16): the decision and §16.8's disclosure row.
-
-Changes: RECORD.md 5.5, 9 and 11.
-
-Questions: `record-m6-03-opening-entry-version.md`.
-
-Not folded (2026-11-18): RECORD.md 5.5's `Opening` fence, its section 9 and 11, which only a RECORD.md track edits, outside design/source/; record.proto declares `Opening.version = 4`, and protocol/design_unfenced_test.go's `testFenceAdditions` holds it until RECORD.md's fence writes it.
+Not folded (2026-11-18, track dr4-outside-docs): sidecar/design/UI.md is still absent, and HANDOFF section 2's line would name that copy, so it waits with it.
 
 ### QD-899: Which source kinds give a run card the fields RECORD.md 7.4 reads from claims, coverage and approval decisions?
 *Decided by the owner on 2026-11-15, asked one question at a time; owner decision 467. Folds into §16 The local MCP server and record primitives.*
@@ -297,13 +233,5 @@ Questions: `search-m10-28-vault-card-sources.md`.
 
 Not folded (2026-11-18): RECORD.md 7.3 and 7.4, outside design/source/, and DESIGN-DETAILS.md 15.2.2, the design agent's.
 
-### QD-900: How does record extractor 1 find a run's user prompts, for a vault card's title fallback and its prompt text?
-*Decided by the owner on 2026-11-15, asked one question at a time; owner decision 467. Folds into §16 The local MCP server and record primitives.*
+Not folded (2026-11-18, track dr4-outside-docs): DESIGN-DETAILS.md 15.2.2's source entry, which still names a vault's sources without coverage, claim and handoff, the design agent's to amend; RECORD.md 7.3 and 7.4 are folded (the vault card's sources, fields 13 and 14 and its row's expires, and the team card's line of action kinds asked for approval).
 
-RECORD.md's part, which waits on RECORD.md and record.proto: section 5's `ContextBody` gains its repeated prompts field (or the new raw kind its fix track names), which record.proto and RECORD.md's fence take together, and 7.4's prompt row reads it. The rest is folded (2026-11-16): the decision, §16.7's context row and §16.10's run card row.
-
-Changes: RECORD.md 5's ContextBody and 7.4; record.proto.
-
-Questions: `search-m10-28-transcript-prompts.md`.
-
-Not folded (2026-11-18): RECORD.md's `ContextBody` fence and 7.4's prompt row, outside design/source/; record.proto declares `ContextBody.prompts = 17`, and protocol/design_unfenced_test.go's `testFenceAdditions` holds it until RECORD.md's fence writes it.
