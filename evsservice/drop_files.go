@@ -23,8 +23,13 @@
 // GET .../drops/preview/<preview_id> answers the stored reply as it is.
 //
 // A mark file the job writes for verify's late marks repeats the newest mark file's cursor, so mark's resume reads the
-// same position. snap, cand, mark, del, held, ask and res go 30 d after their job or dry run ends; list files stay for
-// the repo's life.
+// same position.
+//
+// Retention (§11.13's table row; owner decisions 398, 570, QD-1021): a job's list files and its snap-0 stay for the
+// repo's life, snap-0 because it names the drops the list files were resolved from, each with its place and seen_ms,
+// so `sidecarctl evs drop-reindex` can write an older job's corrupt list file again and check drops named to it. Every
+// other file goes 30 d after its job or dry run ends: snap files of later rounds, cand, mark, del, held, ask and res.
+// The drop job's tidy (drop_job.go) is what deletes them.
 //
 // Package-level functions are safe for concurrent use.
 
