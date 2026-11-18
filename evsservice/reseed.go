@@ -17,8 +17,10 @@
 //	           round, which takes EVS_BATCH_RESEED records alone, so the seal's checks with no slot body
 //	           (EvsCheckRecordSeal; QD-819) and 5g for every part are the push route's own): a place that holds no
 //	           part of this statement answers 409 PARTS_MISSING, and parts that are not the statement's push 400, each
-//	           committing nothing. Step 6 writes the EVS_BATCH_SEAL record naming their places, which the window entry
-//	           names as a pushed seal's, and step 7 commits
+//	           committing nothing. So does, after 5a, a place whose batch minute began more than
+//	           EvsSettings.ReseedPartMaxAge (24 h) before the seal arrived, refusing and recording nothing, so the
+//	           device sends that part again (QD-974; reseedPartPlaceStale). Step 6 writes the EVS_BATCH_SEAL record
+//	           naming their places, which the window entry names as a pushed seal's, and step 7 commits
 //	slot       {statement, slot_id, slot}: one slot object, taken only once the statement's push stands committed in
 //	           its ref's history as a re-seeded version that names the slot, stripped of every key an ERASE evs holds
 //	           covers, and written If-None-Match with origin 1.r (DESIGN-DETAILS 14.2.6); a slot left with no key is
@@ -68,9 +70,12 @@
 // does. A call carrying a push in parts whole, or more than one part, is INVALID. The parts'
 // records are written before the seal is checked, as posted parts are: a part call retried after an answer it lost
 // writes a second record and the seal names one, and parts a seal never names, a seal that never came's or a retry's
-// copy, are dead weight that evacuation drops once their push is dead (resolve.go), as it drops a posted part no seal
-// names. A re-seeded part carries no slot body, as no part does (QD-819): one that holds one is INVALID, so no reseed
-// record keeps a key an ERASE may have destroyed, and the push's slots return by their own calls, stripped.
+// copy, are dead weight that evacuation drops once Resolve finds them dead, as it drops a posted part no seal names.
+// For a re-seed's records, its parts and its seal as for a one-part push's, that is only by the fence, never by its
+// statement's time (resolve.go; QD-872, QD-974): its statement is as old as the mirror and its seal may come any time
+// within the part age bound. A re-seeded part carries no slot body, as no part does (QD-819): one that holds one is
+// INVALID, so no reseed record keeps a key an ERASE may have destroyed, and the push's slots return by their own
+// calls, stripped.
 //
 // Not built here, each refused before anything is written: a push carrying format 2 (EVS2-M10-13), and a statement at
 // an auth pin evs's state does not retain. A reading waits on its question: a slot call names its version by the
@@ -610,6 +615,25 @@ func (self *pushAttempt) reseedPartRecord(checkedVersion uint64) *sidecar.EvsBat
 		TimeMs:          push.GetTimeMs(),
 		Body:            sidecar.EvsPartRecordBody(self.statement.Bytes, self.part.bytes, nil, checkedVersion),
 	}
+}
+
+// Whether a re-seed's seal names a part place too old to take (QD-974): one whose batch minute began more than
+// EvsSettings.ReseedPartMaxAge before the attempt's arrival, the time §11.8's fence row judges an attempt by. The
+// round refuses such a seal 409 PARTS_MISSING after 5a (push_seal.go), so a seal that commits arrived within the bound
+// of every part it names, and evacuation, which holds a part only 25 h past its minute, holds it after every attempt
+// that could commit it arrived: a fence at or past that time ends them all, which is what makes a re-seeded part dead
+// (resolve.go). A minute's start stands in for its records' times, which are no earlier. False outside the reseed
+// mode, whose parts the push route's own bounds hold (30 min of time_ms, 24 h receipts).
+func (self *pushAttempt) reseedPartPlaceStale(places []*protocol.EvsPlace) bool {
+	if self.reseed == nil {
+		return false
+	}
+	for _, place := range places {
+		if batchMinuteTime(place.GetMinute()).Add(self.settings.ReseedPartMaxAge).Before(self.arrival) {
+			return true
+		}
+	}
+	return false
 }
 
 // A part call once its statement and part have checked (QD-836): 5a on the cluster's head, then the part's

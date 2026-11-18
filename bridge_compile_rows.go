@@ -13,7 +13,7 @@
 //	           port range, ports and prefixes from AclLocalPolicy; a port-limited rule whose ports the device does not
 //	           hold, as an activated grant's (sealed_detail, QD-003), gives no row, the closed direction
 //	egress     S's mode from the rows' BridgeRows, and under exits the exits of S's own spec, else of the first atom S
-//	           holds that has one, each a link
+//	           holds that has one, each a link, and whether that spec requires default egress on (QD-1053)
 //	untagged   autogroup:untagged's rows at S, what an sdk provider gives a sealed subject no row binds (QD-733)
 //
 // Route rows name what a flow is sent to: a served prefix's part a rule's CIDR covers, and for a remapped route the
@@ -736,7 +736,8 @@ func (self *bridgeCompiler) routeRowPrefixes(local *AclLocalRule) []*bridge.Brid
 }
 
 // S's default route (§17.9's egress spec): the rows' mode for S, and under exits the exits of the ledger's spec naming
-// S, else of the first atom S holds that has one, in atom id order, each a link.
+// S, else of the first atom S holds that has one, in atom id order, each a link, and whether that spec requires S's
+// devices to keep default egress on (QD-1053), which ur tun holds the person's choice to.
 func (self *bridgeCompiler) egress() *bridge.BridgeRuleEgress {
 	mode := self.acl.EgressMode(self.selfSubject)
 	egress := &bridge.BridgeRuleEgress{Mode: mode}
@@ -750,6 +751,7 @@ func (self *bridgeCompiler) egress() *bridge.BridgeRuleEgress {
 	if spec == nil {
 		return egress
 	}
+	egress.RequireDefaultEgress = spec.RequireDefaultEgress
 	exits := slices.Clone(spec.ExitSidecarIds)
 	if len(spec.ExitTagId) == len(Id{}) {
 		tagId := Id(spec.ExitTagId)

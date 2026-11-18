@@ -19,13 +19,13 @@
 //	pending    the ref's fence is raised, one head CAS with fence_ms, and the record resolved again on the fenced
 //	           head. While this process's clock is unsure no fence is raised and the record stays. A ref with no
 //	           head is fenced by a placeholder head created with its fence raised (DESIGN-DETAILS 2.2.3)
-//	reseed     a one-part re-seeded push's record resolves by its statement as a push's does, with the fence in place
-//	           of the time clause (the owner's answer QD-872; resolve.go): committed at its place it is kept at its
-//	           version; committed at another place it is a second copy, dropped; otherwise it is pending, its ref's
-//	           fence is raised, and still not committed on a head fenced since this run held it, it is dead. A dead
-//	           reseed record goes with nothing else: the reseed mode's step 6 writes no slot, so none it lists is its
-//	           own. A re-seeded push's part, a reseed record holding a part's body, follows its seal as any part does
-//	           (QD-818), and no part call writes a slot either
+//	fence      a re-seed's record, a one-part push's or a part's, and every seal resolve by their statement as a
+//	           push's does, with the fence in place of the time clause (the owner's answers QD-872 and QD-974;
+//	           resolve.go): committed at its place it is kept at its version, a part where its committed seal names it
+//	           (QD-818); committed at another place it is a second copy, dropped; otherwise it is pending, its ref's
+//	           fence is raised, and still not committed on a head fenced since this run held it, it is dead, never by
+//	           its statement's time. A dead reseed record goes with nothing else: the reseed mode's step 6 writes no
+//	           slot, and no part call does, so none it lists is its own; a seal lists none
 //
 // A kept record's bytes go to the run's spool, a local file, so a run holds no batch in memory past its parse, and
 // its segments and a dead record's slots are read from the new-objects list of its payload or part.
@@ -266,7 +266,8 @@ func (self *evacuateRun) resolveRecord(minute *evacuateMinute, place *protocol.E
 	case EvsResolveDead:
 		if record.Type == protocol.EvsBatchRecordType_EVS_BATCH_RESEED {
 			// nothing else goes with a reseed record, and nothing of it is counted as left: the reseed mode writes
-			// no slot at step 6 or in a part call, so no slot its record lists is one its attempt made (QD-872)
+			// no slot at step 6 or in a part call, so no slot its record lists is one its attempt made (QD-872,
+			// QD-974)
 			self.result.DeadCount += 1
 			return
 		}
@@ -393,10 +394,12 @@ func (self *evacuateRun) resolve(minute *evacuateMinute, record *sidecar.EvsBatc
 		return nil, "head unread", err
 	}
 	statementLife := self.evacuator.evsSettings.ResolveStatementLife
-	// The run holds the record now, read from its batch: a fence_ms at or past this reading ends the attempt that
-	// appended it, which is what makes a one-part reseed record dead (resolve.go; QD-872). Read only while this
-	// process's clock is sure, since an unsure one could set it below a fence older than the record; with none, such a
-	// record stays pending, as every pending record does on an unsure clock.
+	// The run holds the record now, read from its batch, whose minute is over 25 h old (takeMinutes): a fence_ms at or
+	// past this reading ends every attempt that can still commit it, which is what makes a re-seed's record or a seal
+	// dead (resolve.go; QD-872, QD-974), a re-seeded part's included, since its seal takes it only within
+	// EvsSettings.ReseedPartMaxAge of its minute. Read only while this process's clock is sure, since an unsure one
+	// could set it below a fence older than the record; with none, such a record stays pending, as every pending
+	// record does on an unsure clock.
 	sure := false
 	heldTime := time.Time{}
 	if clockCheck := self.evacuator.host.ClockCheck; clockCheck != nil && clockCheck.Sure() {

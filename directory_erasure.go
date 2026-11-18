@@ -12,14 +12,16 @@
 //	           erasure. Its reason is moderation when another sidecar wrote any of them, a person's otherwise
 //	runner     a network-scope indexer that is itself a directory admin, else each directory admin's daemon. It runs
 //	           after each sync of its client: every erasure_request entry is checked, its signer holding D-MCP-35's
-//	           right on the repo at the entry's push's pin and the repo's private marker still its newest item, and
-//	           then each earlier announce entry for the repo, and each run's that names it, is erased, every ERASE's
-//	           note naming the request, whose id is the erasure's (plan-RECORD-small-readings #12). The work waits
-//	           0-10 min from the sync that first showed it, so the first commit wins and a later runner, which has
-//	           synced that ERASE, finds nothing left; two that race both send, and evs answers the second
-//	           NOTHING_TO_ERASE. While the marker stands, for 30 days from the request, each later sync erases any copy
-//	           a daemon wrote since. A request whose check fails erases nothing and alarms bad_erasure, naming its
-//	           signer, once
+//	           right on the repo at the entry's push's pin, the repo's private marker still its newest item, and no
+//	           full item of the repo accepted above the request's marker, now or since: a request a full item replaced
+//	           lapsed for good, so a later revocation's marker, a higher version, revives none (owner decision 472;
+//	           DirectoryErasureRequestView.LapsedVersion). Then each earlier announce entry for the repo, and each
+//	           run's that names it, is erased, every ERASE's note naming the request, whose id is the erasure's
+//	           (plan-RECORD-small-readings #12). The work waits 0-10 min from the sync that first showed it, so the
+//	           first commit wins and a later runner, which has synced that ERASE, finds nothing left; two that race
+//	           both send, and evs answers the second NOTHING_TO_ERASE. While the marker stands, for 30 days from the
+//	           request, each later sync erases any copy a daemon wrote since. A request whose check fails erases
+//	           nothing and alarms bad_erasure, naming its signer, once
 //	expiry     the runner also runs the directory's retention expiry (RECORD-M6-03) through Expire: an announce entry
 //	           is held until 30 days after a newer entry or file for its item, or its item's expiry, so a live repo
 //	           item keeps its newest copy (directory_retention.go's hold), and then the weekly admin BASE (Base)
@@ -382,12 +384,18 @@ const (
 	directoryErasureCheckWaits
 	// Its signer held no right on the repo at its pin.
 	directoryErasureCheckNoRight
-	// A full item above its marker stands: the repo was announced again.
+	// A full item above its marker stands, or replaced it since: the repo was announced again, and the request lapsed
+	// for good.
 	directoryErasureCheckLapsed
 )
 
 // §16.11's revoke row's step 3 for one request.
 func (self *DirectoryErasureRunner) check(auth DirectoryAuthView, request *DirectoryErasureRequestView, nowMillis int64) directoryErasureCheck {
+	if request.LapsedVersion != 0 {
+		// a full item replaced its marker: whatever marker stands now, a later revocation's among them, the request
+		// erases nothing (owner decision 472)
+		return directoryErasureCheckLapsed
+	}
 	if request.PushPin == nil {
 		return directoryErasureCheckNoRight
 	}

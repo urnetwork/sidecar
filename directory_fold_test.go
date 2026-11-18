@@ -2,7 +2,8 @@
 
 // RECORD-M6-14's fold on sidecartest's fakes, its entries sealed and signed for real so each reader verifies them as
 // any log's: a run and its renewal, a withdrawal, a reused announcement_id, the fold reaching one state whatever order
-// the streams arrive in, and List and Get over it. The card rules' FS-84 cases are directory_rules_test.go's.
+// the streams arrive in, List and Get over it, and a refused repo item above a revocation's marker lapsing nothing
+// (owner decision 472). The card rules' FS-84 cases are directory_rules_test.go's.
 
 package sidecar_test
 
@@ -488,6 +489,92 @@ func TestDirectoryListFilters(t *testing.T) {
 	after := world.cards.Counts()
 	if after.StreamReads != before.StreamReads || after.StreamsNamed != before.StreamsNamed || after.CardsReads != before.CardsReads {
 		t.Errorf("a filter reached evs: %+v, then %+v", before, after)
+	}
+}
+
+// A version of a repo's item lapses a revocation only once the fold accepts it (owner decision 472): a member with no
+// right on P signs P's item, full, above the marker of P's revocation. The fold refuses it, alarming bad_entry naming
+// its signer; the request keeps no lapse; the marker stands; and the runner works the request, its ERASE naming it.
+func TestDirectoryFoldLapsesNoRevocationOnARefusedItem(t *testing.T) {
+	world := newTestDirectoryWorld(t, nil)
+	owner, repoId := world.announcedRepo("design notes")
+	owner.mustSync(t)
+	revocation, err := owner.client.RevokeRepo(t.Context(), &sidecar.DirectoryRevokeArgs{RepoId: repoId, Confirmed: true})
+	if err != nil || revocation.MarkerVersion != 2 {
+		t.Fatalf("the revocation: %+v, %v", revocation, err)
+	}
+	owner.flush(t)
+	strangerMemberId := sidecar.NewId()
+	stranger := world.memberWriter(strangerMemberId)
+	world.publish()
+	stranger.announce(testRepoItem(t, stranger.sidecarId, &strangerMemberId, repoId, protocol.RepoKind_REPO_KIND_GENERAL, 3, world.clock.Now().UnixMilli(), "design notes", false))
+
+	admin := world.adminDevice()
+	runner, _ := admin.runner(t, 0, nil)
+	pass := admin.pass(t, runner)
+	// the item before the marker; the stranger's, above it, is no copy of the request's
+	if len(pass.Refused) != 0 || len(pass.Erased) != 1 || len(pass.Erased[revocation.RequestId]) != 1 {
+		t.Fatalf("the runner's pass: %+v", pass)
+	}
+	if count := admin.alarmsNaming(sidecar.SidecarRecordAlarmBadEntry, stranger.sidecarId); count != 1 {
+		t.Errorf("%d bad_entry alarms naming the signer with no right", count)
+	}
+	if versions := testLapsedVersions(admin.client); len(versions) != 1 || versions[revocation.RequestId] != 0 {
+		t.Errorf("the request's lapse: %v", versions)
+	}
+	if marker := testRepoItemShown(t, admin.testDirectoryReader, repoId); marker == nil || marker.Display != sidecar.DirectoryItemPrivate || marker.Announcement.GetVersion() != 2 {
+		t.Errorf("the item standing: %v", marker)
+	}
+	admin.flush(t)
+	owner.mustSync(t)
+	revocations, err := owner.client.Revocations()
+	if err != nil || len(revocations) != 1 || revocations[0].State != sidecar.DirectoryRevocationDone {
+		t.Errorf("the revocation at its revoker: %+v, %v", revocations, err)
+	}
+}
+
+// The fold keeps a repo item's full version past its entry (owner decision 472): a reader syncs P revoked (request 1,
+// marker version 2) and announced again (version 3), asks nothing, and syncs next once a later revocation's ERASEs
+// took those entries; it still finds request 1 lapsed at version 3, and request 2 standing.
+func TestDirectoryFoldKeepsAFullVersionPastItsErasure(t *testing.T) {
+	world := newTestDirectoryWorld(t, nil)
+	owner, repoId := world.announcedRepo("design notes")
+	owner.mustSync(t)
+	first, err := owner.client.RevokeRepo(t.Context(), &sidecar.DirectoryRevokeArgs{RepoId: repoId, Confirmed: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := owner.client.AnnounceRepo(t.Context(), &sidecar.DirectoryRepoAnnounceArgs{RepoId: repoId, DisplayName: "design notes", Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	owner.flush(t)
+	reader := world.reader(nil)
+	reader.mustSync(t)
+
+	owner.mustSync(t)
+	second, err := owner.client.RevokeRepo(t.Context(), &sidecar.DirectoryRevokeArgs{RepoId: repoId, Confirmed: true})
+	if err != nil || second.MarkerVersion != 4 {
+		t.Fatalf("the second revocation: %+v, %v", second, err)
+	}
+	owner.flush(t)
+	admin := world.adminDevice()
+	runner, _ := admin.runner(t, 0, nil)
+	// the first item, the first marker and the item announced again
+	if pass := admin.pass(t, runner); len(pass.Erased[second.RequestId]) != 3 {
+		t.Fatalf("the runner's pass: %+v", pass)
+	}
+	admin.flush(t)
+	reader.mustSync(t)
+	for _, entry := range reader.client.Entries() {
+		if entry.Kind() != sidecar.RecordKindAnnounce || entry.Body == nil {
+			continue
+		}
+		if item, err := sidecar.DirectoryDecodeAnnouncement(entry.Body); err == nil && item.GetVersion() < second.MarkerVersion {
+			t.Fatalf("the reader still opens version %d", item.GetVersion())
+		}
+	}
+	if versions := testLapsedVersions(reader.client); len(versions) != 2 || versions[first.RequestId] != 3 || versions[second.RequestId] != 0 {
+		t.Fatalf("the requests' lapses: %v", versions)
 	}
 }
 

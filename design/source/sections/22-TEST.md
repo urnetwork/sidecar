@@ -611,11 +611,11 @@ after members write at generation g+1:
     after its suspension or a revocation for any reason but reaped, its Delegation's
     key among its keys, or, after its DelegationRevoke, a Delegation (a covered agent's
     reap, or an ephemeral one's own not_after, starts no generation, §10.5)
-  after a member removal or a compromise revocation, X cannot compute the new path epoch's
-    tokens, a creation in a general repo waits for the map, a stale-source map and an
-    old-epoch seal are refused, and two removals during a paused copy keep every path
-    readable (FS-4); after other drops and expiries, a path epoch is due within 24 h, or, while
-    two sources stand, once one drops (§11.6)
+  after any drop or expiry, a path epoch is due within 24 h, or, while two sources stand, once
+    one drops, a member removal and a compromise revocation alike, and a creation in a general
+    repo lands meanwhile (§11.6; owner decision 585); once it lands X cannot compute the new
+    path epoch's tokens, a stale-source map and an old-epoch seal are refused, and two removals
+    during a paused copy keep every path readable (FS-4)
   each file's first write is a full checkpoint (owner decision 64), and after ur evs rekey
     every file of the repo opens only under the current generation, git-mode refs included,
     whose rekey is a git-mode push with no commit that keeps the tip and only re-checkpoints
@@ -884,7 +884,19 @@ model       EvsCommit.tla (TLA+, checked by TLC: https://github.com/tlaplus/tlap
             first commit to a ref with no head, with §11.13's rules as first written as failing configurations;
             details/EvsSlot.tla (section 14, run by run-slot.sh), EvsCommit.tla's companion, checks each slot
             object's origin, a retoken's takeover and evacuation's delete of a dead record's own slots, with the
-            code as landed before them as failing configurations;
+            code as landed before them as failing configurations; details/PathEpoch.tla (section 9, run by
+            run-pathepoch.sh) keeps one ref's entries in each path epoch, its sources and its directory's rows,
+            with writers, mappers and the copy, every due batched (owner decision 585), and a ref with no head
+            until its first push, and TLC checks NoLateToken, ReadsNewest, NoLostUpdate, FloorsBacked, EntriesHome,
+            RowsLead, NoneMissed and NoGhostRows, with the rules as first written (every source named, no between
+            fence or tail check, a blind retoken, a fold keeping its sources, a new ref at epoch 1) as failing
+            configurations; details/GitSync.tla (section 8, run by run-gitsync.sh) keeps one git-mode ref on evs
+            and each device's record of it, settled tip, local ref, journal entry, sent push ids and conflict
+            branches, with crashes, lost answers, commitless versions, forced pushes and owned refs, and TLC
+            checks MirrorExact, NoDuplicate, AckedDurable, SharedSafe, TruthfulNg, NoSpurious and Converge, with
+            the journal as first written (a settle that requires old, a blind update-ref, an ng on an unknown
+            outcome, no recognition of its own push, no apply lock, a refused update dropped alone) as failing
+            configurations;
             StoreSettle.tla keeps one key on 8 drives at EC:4 (4 hosts of 2): each drive's version, its stamp and
             its own lock on the key, each write's coordinator, which may crash, and its drive commits, each a check
             step then a commit step, the settler and heal; writes are cancelled, pass their deadline, arrive after
@@ -1124,51 +1136,65 @@ FS-3   §11,8  A paused after validation; a projection drop closes the gate; B r
               again with a multipart seal, a deposit, a new ref, a repo delete, a grant expiry
               and an evs restart before the CAS
 FS-4   §11    paths inserted, deleted and renamed after a map's enumeration and before         FI-1,3,6    T2+T3  M2-out
-              PATH_EPOCH commits; a creation in a general repo gets 412 PATH_EPOCH_DUE until
-              the map lands; a PATH_EPOCH whose tail omits a path created after its map's
-              source gets 409 naming it; a disjoint retry; a path created every second on a
-              vault ref under an immediate epoch and on a general ref under a batched one:
-              each epoch still commits, first by its tail, then within a mapper's 2-min
-              creation block (§11.6), and a batched epoch whose mapper is offline alarms
-              writers 1 h past due_by_ms; an old-epoch part and seal after cut-over get 412
-              PATH_EPOCH; a mapper killed after half its parts while the window passes its
-              source: a second mapper's map commits, and the first's parts are deleted; two
-              removals during a paused copy, reads finding every path across three sources; a
-              child added to an unmoved directory D during a paused copy and folded before the
-              copy reaches it: readers verify D's carried rows under the source epoch; while
-              the copy is still paused one carried child is removed and folded, and its row is
-              dropped; the copy then resumes and translates the rest, a fold of D landing
-              between its GET and its If-Match PUT making it reread, no row lost or
-              duplicated; after the sources drop the listing is complete and every name
-              verifies in the current epoch; D carried from p1 into p2, then into p3 after a
-              superseded copy, listed and name-verified before and after the p3 copy; after
-              cut-over and before the copy reaches them, a file removed, a directory removed,
-              and a directory removed and re-created with one new child, each read and listed
-              once the removal leaves the window and again after the sources drop: nothing
-              removed is served or listed, and no reader alarms; a move landing between one
+              PATH_EPOCH commits; a creation under a removal, a member device's included,
+              landing at once in the current epoch, no due holding it (owner decision 585); a
+              PATH_EPOCH whose tail omits a path created after its map's source gets 409
+              naming it; a disjoint retry; a path created every second on a general ref under
+              a due: each epoch still commits, first by its tail, then within a mapper's 2-min
+              creation block (§11.6), whose 412 PATH_EPOCH_DUE writers wait out, and an epoch
+              whose mapper is offline alarms writers 1 h past due_by_ms; an old-epoch part and
+              seal after cut-over get 412 PATH_EPOCH; a mapper killed after half its parts
+              while the window passes its source: a second mapper's map commits, and the
+              first's parts are deleted; two mappers at two generations from one head, the
+              second refused MAP_SOURCE and mapping again; two removals during a paused copy,
+              reads finding every path across the two sources a head lists; a child added to
+              an unmoved directory D during a paused copy and folded before the copy reaches
+              it: readers verify D's carried rows under the source epoch; while the copy is
+              still paused one carried child is removed and folded, and its row is dropped;
+              the copy then resumes and translates the rest, a fold of D landing between its
+              GET and its If-Match PUT making it reread, no row lost or duplicated; after the
+              sources drop the listing is complete and every name verifies in the current
+              epoch; D carried from p1 into p2, then into p3 after a superseded copy, listed
+              and name-verified before and after the p3 copy; after cut-over and before the
+              copy reaches them, a file removed, a directory removed, and a directory removed
+              and re-created with one new child, each read and listed once the removal leaves
+              the window and again after the sources drop: nothing removed is served or
+              listed, and no reader alarms; a path removed and re-created while its copy is
+              superseded, the next copy's LIST finding nothing; a move landing between one
               step-4 round's current-epoch and source GETs, under a push creating the path, a
               push modifying it and a listing: the creation gets 409, the modification from
-              the path's current version commits, and the listing shows it; no source-epoch
-              token of a name created after cut-over reaches the server; a PATH_EPOCH that
-              would list a fourth source gets 412 EPOCH_SOURCES_FULL only after the ref's
-              fence; a kill at each copy boundary, a superseded job included: no source
-              deleted before its newest copy exists; a lease holder re-subscribes under the
-              new path epoch and is hinted every later commit
+              the path's current version commits, and the listing shows it; a creation refused
+              412 PATH_EPOCH that would land on a file created in the epoch it left answers
+              409 once re-tokenized; a reader pinned before a cut-over refuses a rollback
+              across it; a directory last changed by an inline push of an older epoch is read
+              in one round after a cut-over; a ref created after a removal starts in the
+              removal's epoch; no source-epoch token of a name created after cut-over reaches
+              the server, a capture showing no token under a source epoch that was not sent at
+              or below it before; a PATH_EPOCH while two sources stand gets 412
+              EPOCH_SOURCES_FULL only after the ref's fence; a kill at each copy boundary, a
+              superseded job included: no source deleted before its newest copy exists; a
+              lease holder re-subscribes under the new path epoch and is hinted every later
+              commit
 FS-5   §11    two stock git clients push sibling commits from one base to a shared git-mode    FI-9        T3     M2-out
               ref: the second gets a non-fast-forward, and its merge lands with export's tip,
               tree and parents equal to the clients'; a push whose head moved only by a
-              commitless PATH_EPOCH re-signs and lands with no ng, and SEGMENT_GONE, 429 and
-              GATE_CLOSED never reach git as a non-fast-forward; with a warm head cache, a
-              multi-part push takes its lease, posts its parts and seals with no ng, a lease
-              or a push taken after another push's refusal fence lands, one during another
-              push's lease gets 429 with retry_after_ms, and a lease based below the tip gets
-              non-fast-forward; an agent branch based on a main with unfolded changes to X,
-              and one whose base entry for X keeps only versions newer than the branch's base:
-              its first push changing X commits, and a read of a path it has not changed
-              answers base {ref, version}; an overlay of a file-mode ref gets 409 REF_MODE; a
-              two-ref atomic push whose second ref conflicts; the bridge killed after the
-              remote commit and before the local update reconciles from its journal; a local
-              ref-lock failure after pre-receive
+              commitless PATH_EPOCH, or by a rekey, re-signs and lands with no ng, and
+              SEGMENT_GONE, 429 and GATE_CLOSED never reach git as a non-fast-forward; a push
+              of two commits whose middle blob only a history record carries, a second device
+              holding it and its git fsck clean; a pull that names a source and carries only
+              its merge; a push whose sealed metadata spills into a changeless part; an
+              inherited file removed on an overlay, the removal standing after a marker
+              collection and a path-epoch copy; with a warm head cache, a multi-part push
+              takes its lease, posts its parts and seals with no ng, a lease or a push taken
+              after another push's refusal fence lands, one during another push's lease gets
+              429 with retry_after_ms, and a lease based below the tip gets non-fast-forward;
+              an agent branch based on a main with unfolded changes to X, and one whose base
+              entry for X keeps only versions newer than the branch's base: its first push
+              changing X commits, and a read of a path it has not changed answers base {ref,
+              version}; an overlay of a file-mode ref gets 409 REF_MODE; a two-ref atomic push
+              whose second ref conflicts; a daemon killed after the remote commit reconciles
+              from the ref's history, with no conflict branch; a local ref-lock failure after
+              pre-receive
 FS-6   §11    restore raced against --now and the 7-day expiry, paused before and after the    FI-5        T2+T3  M2-out
               SHREDDING claim and before each destructive phase: one winner; the worker killed
               at each phase and restarted; a stale job of an earlier incarnation deletes
@@ -2672,17 +2698,15 @@ FS-117 §10,11 P0 alone past the refill for 24 h of fake counters on one metadat
 FS-118 §11,19 path-epoch copies for 7 days of fake clock on one metadata cluster, entries and  FI-1,6,14   T2     M2-out
               copy limits scaled by 1/100 together: at the planned copy load (live entries of
               rotating refs times epochs a day times 3: half the cluster's 21.6M operations a
-              day), with batched epochs due daily from 1 h requested grants and an immediate
-              one every other day on a third of the refs, beside FS-61's mix: each source
-              empties within 30 h of its cut-over, no ref holds three sources 10 min, no
-              PATH_EPOCH meets EPOCH_SOURCES_FULL, no batched epoch waits, and the copies stay
-              within A_U; then 30 one-million-entry refs with a batched epoch due daily each:
-              batched epochs wait while two sources stand, with no block or writer alarm, each
-              covering every expiry due when it lands, and no ref reaches a fourth source; an
-              immediate epoch on such a ref commits at once onto its third source, and its
-              copy runs first; no batched epoch blocks a creation; P1's admission is
-              unchanged; §19.8's copy liability, drain time, deferrals and source counts equal
-              the oracle's, warning past 24 h
+              day), with epochs due daily from 1 h requested grants, every due batched (owner
+              decision 585), beside FS-61's mix: each source empties within 30 h of its
+              cut-over, no PATH_EPOCH meets EPOCH_SOURCES_FULL, no epoch waits, and the copies
+              stay within A_U; then 30 one-million-entry refs with an epoch due daily each:
+              epochs wait while two sources stand, with no block or writer alarm, each
+              covering every removal and expiry due when it lands, and no ref reaches a third
+              source; no due blocks a creation; P1's admission is unchanged; §19.8's copy
+              liability, drain time, deferrals and source counts equal the oracle's, warning
+              past 24 h
 FS-119 §11,19 two metadata clusters with fake drive counters and space and inode gauges: the   FI-1,14     T3     M3-out;
               first's cohort grows toward its marks while place_new names the second, mostly                      each next
               empty; the first sheds its own heaviest networks while networks placed on the                       cluster

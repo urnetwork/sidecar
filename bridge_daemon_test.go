@@ -543,7 +543,8 @@ func TestBridgeEgressAndBlockFileEachForm(t *testing.T) {
 	world := newTestDaemonBridges(t)
 	origin := &BridgeFileOrigin{Act: SidecarActConfirmed}
 	tagId := NewId()
-	for _, params := range []*DaemonBridgeEgressParams{{Mode: "auto"}, {Mode: "none"}, {Mode: "tag:" + tagId.String()}, {Exits: []string{"peer"}}} {
+	for _, params := range []*DaemonBridgeEgressParams{{Mode: "auto"}, {Mode: "none"}, {Mode: "tag:" + tagId.String()}, {Exits: []string{"peer"}},
+		{Exits: []string{"peer"}, RequireDefaultEgress: true}} {
 		if _, err := world.bridges.Egress(context.Background(), world.networkId, nil, origin, params); err != nil {
 			t.Fatal(err)
 		}
@@ -553,6 +554,9 @@ func TestBridgeEgressAndBlockFileEachForm(t *testing.T) {
 		"an unknown mode":  {Mode: "fastest"},
 		"a mode and exits": {Mode: "auto", Exits: []string{"peer"}},
 		"a malformed tag":  {Mode: "tag:x"},
+		// QD-1053's requirement goes with exits alone
+		"auto required": {Mode: "auto", RequireDefaultEgress: true},
+		"none required": {Mode: "none", RequireDefaultEgress: true},
 	} {
 		if _, err := world.bridges.Egress(context.Background(), world.networkId, nil, origin, params); !errors.Is(err, ErrDaemonBridgeParams) {
 			t.Fatalf("%s: %v", name, err)
@@ -570,7 +574,7 @@ func TestBridgeEgressAndBlockFileEachForm(t *testing.T) {
 	}
 	world.backend.set(func() {
 		egress := world.backend.egress
-		if len(egress) != 4 {
+		if len(egress) != 5 {
 			t.Fatalf("%d egress filings", len(egress))
 		}
 		for _, request := range egress {
@@ -584,8 +588,17 @@ func TestBridgeEgressAndBlockFileEachForm(t *testing.T) {
 		if egress[2].Mode != bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS || egress[2].ExitTagId != tagId || len(egress[2].ExitSidecarIds) != 0 {
 			t.Fatalf("a tag: %+v", egress[2])
 		}
-		if egress[3].Mode != bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS || len(egress[3].ExitSidecarIds) != 1 || egress[3].ExitSidecarIds[0] != world.backend.target {
+		if egress[3].Mode != bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS || len(egress[3].ExitSidecarIds) != 1 || egress[3].ExitSidecarIds[0] != world.backend.target ||
+			egress[3].RequireDefaultEgress {
 			t.Fatalf("exits: %+v", egress[3])
+		}
+		if egress[4].Mode != bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS || !egress[4].RequireDefaultEgress {
+			t.Fatalf("exits that require default egress: %+v", egress[4])
+		}
+		for _, request := range egress[:4] {
+			if request.RequireDefaultEgress {
+				t.Fatalf("a requirement nobody asked for: %+v", request)
+			}
 		}
 		blocks := world.backend.blocks
 		if len(blocks) != 2 || !blocks[0].Cycle || blocks[1].Cycle || blocks[1].Prefix != netip.MustParsePrefix("10.20.0.0/16") {

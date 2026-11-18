@@ -638,7 +638,8 @@ reasons   lost: SidecarRevoke{reason: lost}, no cascade, what the device signed 
           for an evicted page Worker not yet stale, lost acting as removed would (§7.10);
           compromise: SidecarRevoke{reason: compromise, since_n}, §7.9's cascade from since_n
           parking P and voiding what P signed as 7.9 lists, and a compromise retirement, so each
-          repo the device read rotates as cause REMOVE with a path epoch at once (§10.8, §11.6)
+          repo the device read rotates as cause REMOVE with a path epoch due within 24 h, as every
+          due is (§10.8, §11.6; owner decision 585)
 plan      PreviewDeviceRevoke derives at the tip: since_n as above, the first entry timed at or after
           the loss time or, where that time is past but later than the log's newest entry, the tip, the
           largest since_n §7.9's verifier accepts for a revocation landing at the next position

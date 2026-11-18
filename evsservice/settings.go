@@ -195,6 +195,12 @@ type EvsSettings struct {
 	ReseedStatementMaxByteCount int
 	ReseedRestoreWindow         time.Duration
 	ReseedStatementRetryCount   int
+	// §11.8's seal row in §11.13's reseed mode (QD-974): a re-seed's seal refuses 409 PARTS_MISSING, refusing and
+	// recording nothing, a part place whose batch minute began this long before the seal's arrival, 24 h, the push
+	// route's receipt figure, so the device sends those parts again. No seal can then name a part once evacuation,
+	// which judges a minute only 25 h on, may have judged it, and Resolve judges a re-seeded part by the fence
+	// (resolve.go). Positive and under evacuation's 25 h floor, which the argument needs.
+	ReseedPartMaxAge time.Duration
 	// The gen/<g> records a process keeps, which never change while their repo lives (§10's gen row). Non-positive
 	// keeps none.
 	GenerationCacheCount int
@@ -396,6 +402,7 @@ func DefaultEvsSettings() *EvsSettings {
 		ReseedStatementMaxByteCount: sidecar.DefaultEvsFormatSettings().ReseedStatementMaxByteCount,
 		ReseedRestoreWindow:         7 * 24 * time.Hour,
 		ReseedStatementRetryCount:   4,
+		ReseedPartMaxAge:            24 * time.Hour,
 		GenerationCacheCount:        100 * 1000,
 		LeaseMaxDuration:            evsLeaseMaxDuration,
 
@@ -542,8 +549,12 @@ func (self *EvsSettings) Validate() error {
 		return fmt.Errorf("%w: a push's retry counts, reread count, refusal fence interval, attempt timeout and body bound must be positive", ErrEvsSettings)
 	}
 	if self.ReseedBodyMaxByteCount <= 0 || self.ReseedStatementMaxByteCount <= 0 ||
-		self.ReseedRestoreWindow <= 0 || self.ReseedStatementRetryCount <= 0 {
-		return fmt.Errorf("%w: a re-seed's body bound, statement bound, restore window and retry count must be positive", ErrEvsSettings)
+		self.ReseedRestoreWindow <= 0 || self.ReseedStatementRetryCount <= 0 || self.ReseedPartMaxAge <= 0 {
+		return fmt.Errorf("%w: a re-seed's body bound, statement bound, restore window, retry count and part age must be positive", ErrEvsSettings)
+	}
+	if evsEvacuateMinMinuteAge <= self.ReseedPartMaxAge {
+		// a seal could then name a part evacuation may already have judged dead (QD-974)
+		return fmt.Errorf("%w: a re-seeded part taken %s old by its seal, not under evacuation's %s", ErrEvsSettings, self.ReseedPartMaxAge, evsEvacuateMinMinuteAge)
 	}
 	if self.LeaseMaxDuration <= 0 || evsLeaseMaxDuration < self.LeaseMaxDuration {
 		return fmt.Errorf("%w: a lease bound %s, outside (0, %s]", ErrEvsSettings, self.LeaseMaxDuration, evsLeaseMaxDuration)

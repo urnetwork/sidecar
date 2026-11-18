@@ -317,6 +317,13 @@ func TestParseBridgeRulesRefusesEachMalformedRow(t *testing.T) {
 		{"egress of an unknown mode", func(rules *bridge.BridgeRules) { rules.Egress.Mode = 7 }},
 		{"exits under auto", func(rules *bridge.BridgeRules) { rules.Egress.Mode = bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_AUTO }},
 		{"exits under none", func(rules *bridge.BridgeRules) { rules.Egress.Mode = bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE }},
+		// QD-1053: only exits require default egress
+		{"default egress required under auto", func(rules *bridge.BridgeRules) {
+			rules.Egress = &bridge.BridgeRuleEgress{Mode: bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_AUTO, RequireDefaultEgress: true}
+		}},
+		{"default egress required under none", func(rules *bridge.BridgeRules) {
+			rules.Egress = &bridge.BridgeRuleEgress{Mode: bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE, RequireDefaultEgress: true}
+		}},
 		{"an exit of weight 0", func(rules *bridge.BridgeRules) { rules.Egress.Exits[0].Weight = 0 }},
 		{"an exit twice", func(rules *bridge.BridgeRules) {
 			rules.Egress.Exits = append(rules.Egress.Exits, proto.Clone(rules.Egress.Exits[0]).(*bridge.BridgeRuleLink))
