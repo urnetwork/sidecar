@@ -31,12 +31,13 @@ type SmtpSenderSettings struct {
 	// Sends proving at once on this host: 1, since a part's proving does not fit an 8 GB host twice
 	// (plan-SMTP-small-readings#19). Proving sits outside MemoryBudgetByteCount.
 	ProverConcurrency int
-	// How long an MX host's best TLS level and its post-TLS mode stay pinned: 90 days (§14.4, §14.5).
-	// Nothing is sent below a pin while it holds.
+	// How long each MX host's best TLS level for each recipient domain, and each host's post-TLS mode,
+	// stay pinned: 90 days (§14.4, §14.5, owner decision 438). Nothing is sent to a domain through a
+	// host below its pin there while it holds.
 	PinTimeout time.Duration
-	// How many MX hosts' pins, and how many recipient domains' last sessions, the pin store keeps:
-	// 4,096 each, the one closest to lapsing leaving first past it, so the sealed file stays small
-	// enough to rewrite on every send.
+	// How many pins, counted by (recipient domain, MX host) pair, how many MX hosts' modes, and how many
+	// recipient domains' last sessions the pin store keeps: 4,096 each, the one closest to lapsing
+	// leaving first past it, so the sealed file stays small enough to rewrite on every send.
 	PinMaxCount int
 	// How many recipient domains' TL4 allowances the store keeps: 4,096. Past it a new domain's
 	// allowance is refused until one ends, rather than another's dropped, since each is a person's

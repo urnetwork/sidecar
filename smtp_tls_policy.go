@@ -15,16 +15,18 @@
 //     plan-SMTP-small-readings#13), and PKIX holds for mx_host.
 //   - TL4: nothing.
 //
-// Then what may refuse the level reached, in this order: a level below the host's pin (SmtpPinStore), a
-// refused downgrade; a REQUIRETLS message at neither TL1 nor TL2 (plan-SMTP-small-readings#12); and TL4
-// for a recipient domain the user has not allowed (owner decision 38, an outward action under I-8).
+// Then what may refuse the level reached, in this order: a level below the pin the recipient domain
+// holds on the MX host (SmtpPinStore, keyed by the pair, owner decision 438), a refused downgrade, which
+// no TL4 consent below lifts and which a pin the host holds for another domain never causes; a
+// REQUIRETLS message at neither TL1 nor TL2 (plan-SMTP-small-readings#12); and TL4 for a recipient
+// domain the user has not allowed (owner decision 38, an outward action under I-8).
 // The allowance is its own action, mail_tls_unauthenticated with the domain as host (QD-729):
 // AllowUnauthenticated passes it through Sidecar.Authorize, and its effect keeps the allowance in the
 // desktop's store until it ends (smtp_tls_allowance.go). TL4 then passes for a domain with an allowance
 // that holds, or for a message whose verified outbox entry names the domain in tl4_domains
 // (plan-SMTP-small-readings#11), the composing device's approval, and for nothing else: an approval of
 // a mail_send to the domain is consent to that message, never to TL4. What passes raises or refreshes
-// the host's pin before the handshake goes on.
+// the pair's pin before the handshake goes on.
 //
 // The refusal comes inside the handshake, as VerifyPeer's error, so no application byte reaches the MX:
 // no data, then a retry, then a DSN (§14.4). SendSmtp returns only that error, so the
@@ -98,7 +100,7 @@ const (
 	SmtpTlsRefusalUnspecified SmtpTlsRefusalKind = 0
 	// TL4, and the user has not allowed the recipient domain (owner decision 38).
 	SmtpTlsRefusalUnauthenticated SmtpTlsRefusalKind = 1
-	// A level below the host's pin: a refused downgrade (D-SMTP-2).
+	// A level below the pin the recipient domain holds on the MX host: a refused downgrade (D-SMTP-2).
 	SmtpTlsRefusalBelowPin SmtpTlsRefusalKind = 2
 	// A validated TLSA RRset matched nothing the MX presented (RFC 7672 §2.2).
 	SmtpTlsRefusalDaneMismatch SmtpTlsRefusalKind = 3
@@ -141,7 +143,8 @@ func (self *SmtpTlsRefusal) Is(target error) bool {
 	return target == ErrSmtpTlsRefused
 }
 
-// Whether the refusal kept the send off a level below the host's pin, SmtpOutcome's downgrade_refused.
+// Whether the refusal kept the send off a level below the domain's pin on the host, SmtpOutcome's
+// downgrade_refused.
 func (self *SmtpTlsRefusal) DowngradeRefused() bool {
 	return self.Kind == SmtpTlsRefusalBelowPin
 }
@@ -154,8 +157,8 @@ func (self *SmtpTlsRefusal) Reason() string {
 			"valid certificate for its name, so an active URnetwork edge could have read the message. Sending " +
 			"to this domain without authentication has not been allowed, so the message was not sent."
 	case SmtpTlsRefusalBelowPin:
-		return "The receiving mail server authenticated less strongly than it has before, which an attack on " +
-			"the connection would cause, so the message was not sent."
+		return "The receiving mail server authenticated less strongly than it has before for this domain, " +
+			"which an attack on the connection would cause, so the message was not sent."
 	case SmtpTlsRefusalDaneMismatch:
 		return "The receiving mail server's certificate does not match the domain's DANE (TLSA) records, so " +
 			"the message was not sent."
@@ -277,11 +280,11 @@ func (self *SmtpTlsPolicy) lookupMx(ctx context.Context, domain string) *smtpTls
 	return view
 }
 
-// Readies one connection's check: the names held to their form, the host's pin read, and TL2's policy
-// and TL3's MX view looked up from the device, side by side. Its errors are ErrSmtpTlsRequest, the
-// store's, on which the sender holds the send, since a pin or policy it cannot read could be one that
-// refuses this MX, and ctx's once it has ended. A DoH or HTTPS failure is no error: the level it would
-// have given is out of reach.
+// Readies one connection's check: the names held to their form, the recipient domain's pin on the host
+// read, and TL2's policy and TL3's MX view looked up from the device, side by side. Its errors are
+// ErrSmtpTlsRequest, the store's, on which the sender holds the send, since a pin or policy it cannot
+// read could be one that refuses this MX, and ctx's once it has ended. A DoH or HTTPS failure is no
+// error: the level it would have given is out of reach.
 func (self *SmtpTlsPolicy) Authenticate(ctx context.Context, request *SmtpTlsRequest) (*SmtpTlsAuthentication, error) {
 	if request == nil || request.Flags&^SmtpFlagsKnown != 0 {
 		return nil, ErrSmtpTlsRequest
@@ -291,7 +294,7 @@ func (self *SmtpTlsPolicy) Authenticate(ctx context.Context, request *SmtpTlsReq
 	if !domainOk || !hostOk {
 		return nil, ErrSmtpTlsRequest
 	}
-	if _, err := self.pins.Pin(mxHost); err != nil {
+	if _, err := self.pins.Pin(domain, mxHost); err != nil {
 		return nil, err
 	}
 	authentication := &SmtpTlsAuthentication{
@@ -514,11 +517,12 @@ func (self *SmtpTlsAuthentication) reach(chain []*x509.Certificate, now time.Tim
 }
 
 // Decides the level of the chain the MX presented, leaf first, as SmtpProofJob.VerifyPeer, inside the
-// handshake: nil once the level passes and the host's pin has been raised to it or refreshed, so the
-// handshake goes on; a *SmtpTlsRefusal when the MX is refused, so no application byte is sent; any other
-// error is the store's, which records no level and holds the send. TL4 passes for a message whose own
-// approval names the domain, or for a domain whose allowance holds now, read from the store here, so
-// one that ended since Authenticate lets nothing through. It decides once: a second call is refused.
+// handshake: nil once the level passes and the recipient domain's pin on the host has been raised to it
+// or refreshed, so the handshake goes on; a *SmtpTlsRefusal when the MX is refused, so no application
+// byte is sent; any other error is the store's, which records no level and holds the send. TL4 passes
+// for a message whose own approval names the domain, or for a domain whose allowance holds now, read
+// from the store here, so one that ended since Authenticate lets nothing through; neither passes a pin.
+// It decides once: a second call is refused.
 func (self *SmtpTlsAuthentication) VerifyPeer(chain []*x509.Certificate) error {
 	first := func() bool {
 		self.stateLock.Lock()
@@ -542,7 +546,7 @@ func (self *SmtpTlsAuthentication) VerifyPeer(chain []*x509.Certificate) error {
 	if refusal != nil {
 		return refuse(refusal)
 	}
-	pin, err := self.policy.pins.Pin(self.mxHost)
+	pin, err := self.policy.pins.Pin(self.domain, self.mxHost)
 	if err != nil {
 		return err
 	}
@@ -564,10 +568,10 @@ func (self *SmtpTlsAuthentication) VerifyPeer(chain []*x509.Certificate) error {
 	}
 	// the check and the raise are one step in the store, so a pin another send raised since the read
 	// above still refuses this one
-	if _, err := self.policy.pins.Raise(self.mxHost, level); err != nil {
+	if _, err := self.policy.pins.Raise(self.domain, self.mxHost, level); err != nil {
 		if errors.Is(err, ErrSmtpPinBelow) {
 			pinLevel := SmtpTlsLevelUnreached
-			if pin, pinErr := self.policy.pins.Pin(self.mxHost); pinErr == nil && pin != nil {
+			if pin, pinErr := self.policy.pins.Pin(self.domain, self.mxHost); pinErr == nil && pin != nil {
 				pinLevel = pin.Level
 			}
 			return refuse(&SmtpTlsRefusal{Kind: SmtpTlsRefusalBelowPin, Level: level, PinLevel: pinLevel})
@@ -596,14 +600,15 @@ func (self *SmtpTlsAuthentication) Refusal() *SmtpTlsRefusal {
 	return self.refusal
 }
 
-// Whether VerifyPeer refused a level below the host's pin, SmtpOutcome's downgrade_refused.
+// Whether VerifyPeer refused a level below the domain's pin on the host, SmtpOutcome's
+// downgrade_refused.
 func (self *SmtpTlsAuthentication) DowngradeRefused() bool {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	return self.refusal != nil && self.refusal.DowngradeRefused()
 }
 
-// Records the post-TLS mode of the session, once its EHLO reply inside TLS chose it, for the host's pin
+// Records the post-TLS mode of the session, once its EHLO reply inside TLS chose it, as the host's mode
 // and the recipient domain's last session, which Check reports (§14.5). Nothing is recorded for a
 // connection VerifyPeer did not pass, or for unknown.
 func (self *SmtpTlsAuthentication) RecordMode(mode SmtpMode) error {
