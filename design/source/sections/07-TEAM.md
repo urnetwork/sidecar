@@ -1391,7 +1391,7 @@ after       it self-joins, revokes M's lost devices and rotates as §10.8 says, 
             that takes no wrap it joins its other groups as §10.8 says; it then offers ur keychain
             recovery-rotate (§5.9), M having no current binding until a device outside P signs one;
             RecoveryRebind's compromise shrinks every repo M reads, so the next rotation is cause REMOVE and
-            starts a path epoch, due within 24 h as every due is (§11.6; owner decision 585), while routine
+            starts a path epoch, due as §11.6's due row has every due (owner decision 585), while routine
             and lost request a rotation; old wraps are deleted in
             every case; no rebind or void reaches a keychain backup sealed before it, which the retired or
             voided code still opens, so after a compromise rebind or a void M revokes for compromise, and
