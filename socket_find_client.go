@@ -8,8 +8,9 @@
 // unavailable, with whatever wait the service gave.
 //
 // The send is the caller's: SidecarApi.SocketFind on the sidecar's sockets service token (QD-1029), or
-// newSocketFindHttp on an edge host's bearer. Nothing here verifies a ticket or a claim, which are each dialer's own
-// checks, and nothing logs or wraps a name (I-13). Safe for concurrent use.
+// newSocketFindHttp on an edge host's, its platform client's sockets token, which api's edge client route answers
+// beside the client's jwt (QD-1054). Nothing here verifies a ticket or a claim, which are each dialer's own checks,
+// and nothing logs or wraps a name or a token (I-7, I-13). Safe for concurrent use.
 
 package sidecar
 
@@ -103,16 +104,27 @@ type SocketFindHttpArgs struct {
 	// Carries every request: the host's own, since nothing in this package reaches net/http's defaults, whose
 	// unbound sockets can follow a tunnel's default route (CORE-M1-04).
 	Transport http.RoundTripper
-	// The bearer sockets takes for this call: a service token of audience sockets (QD-1029). An edge host's platform
-	// client is minted none yet, and sockets refuses the client token it presents in its place, the closed direction
-	// (question sockets-service-token-edge-clients).
+	// The bearer sockets takes for this call: a service token of audience sockets (QD-1029). An edge host presents
+	// its first platform client's, which api's edge client route answers beside the client's jwt (QD-1054); sockets
+	// refuses anything else, a client jwt among them, 401. A secret: never logged.
 	Bearer func(ctx context.Context) (string, error)
-	// The most of an answer's body read: past it the answer is no Find's. Zero takes socketFindMaxAnswerByteCount.
+	// Nil is DefaultSocketFindHttpSettings.
+	Settings *SocketFindHttpSettings
+}
+
+// A Find client's own limits.
+type SocketFindHttpSettings struct {
+	// The most of an answer's body read: past it the answer is no Find's. 64 KiB: two tickets of at most 512 B and
+	// their claims, in base64 and JSON, fit many times over. Not positive: refused.
 	MaxAnswerByteCount int64
 }
 
-// The largest Find answer read: two tickets of at most 512 B and their claims, in base64 and JSON, fit many times over.
-const socketFindMaxAnswerByteCount = 64 * 1024
+// The defaults, a fresh value each call.
+func DefaultSocketFindHttpSettings() *SocketFindHttpSettings {
+	return &SocketFindHttpSettings{
+		MaxAnswerByteCount: 64 * 1024,
+	}
+}
 
 // A send for a caller with no SidecarApi: one JSON POST with the caller's bearer, whose 200 body is the route's
 // answer. Any other status is a *SidecarApiError carrying Retry-After's wait, which a dialer reads as unavailable.
@@ -123,11 +135,15 @@ func newSocketFindHttp(args *SocketFindHttpArgs) (socketFindSend, error) {
 	if err := checkServiceUrl("SocketsUrl", args.SocketsUrl, "http", "https"); err != nil {
 		return nil, err
 	}
-	transport := args.Transport
-	maxAnswerByteCount := args.MaxAnswerByteCount
-	if maxAnswerByteCount <= 0 {
-		maxAnswerByteCount = socketFindMaxAnswerByteCount
+	settings := args.Settings
+	if settings == nil {
+		settings = DefaultSocketFindHttpSettings()
 	}
+	if settings.MaxAnswerByteCount <= 0 {
+		return nil, fmt.Errorf("%w: a find client reads a positive answer", errInvalidSettings)
+	}
+	transport := args.Transport
+	maxAnswerByteCount := settings.MaxAnswerByteCount
 	client := &http.Client{
 		Transport: transport,
 		CheckRedirect: func(redirect *http.Request, via []*http.Request) error {
