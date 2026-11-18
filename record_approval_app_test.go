@@ -165,8 +165,10 @@ func TestLocalAppSignsOwnByPresenceOthersByDevice(t *testing.T) {
 	}
 }
 
-// An app's Decide carries no uses, so an app host lists a template with deny alone and refuses its approval, nothing
-// filed, while ur approve on the daemon approves it with 2 or more.
+// An app's Decide carries no uses, so an app host lists a template whose request names no count, a version-1
+// template's, with deny alone and refuses its approval, nothing filed, while ur approve on the daemon approves it with
+// 2 or more. A version-2 template, whose request names its count, an app approves as shown
+// (TestAppHostApprovesATemplateAsRequested).
 func TestAppHostTemplateTakesDenyAlone(t *testing.T) {
 	world := newTestApproverWorld(t)
 	template, err := NewCanonicalAction(&protocol.CanonicalAction{

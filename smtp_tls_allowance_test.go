@@ -91,8 +91,10 @@ func TestSmtpTlsAllowancePassesTheRealGate(t *testing.T) {
 	}
 	render := RenderApprovalRequest(request)
 	wantMeaning := "Send mail to mail.example through a mail server that cannot be authenticated: an active URnetwork edge could read it"
+	// the action's host, then the request's one use (QD-1010)
 	if render.Meaning != wantMeaning || render.KindName != "mail_tls_unauthenticated" || !strings.Contains(render.Text(), wantMeaning) ||
-		len(render.Fields) != 1 || render.Fields[0].Name != "host" || render.Fields[0].Value != "mail.example" {
+		len(render.Fields) != 2 || render.Fields[0].Name != "host" || render.Fields[0].Value != "mail.example" ||
+		render.Fields[1].Name != "uses" || render.Fields[1].Value != "1" {
 		t.Errorf("the render: %+v\n%s", render, render.Text())
 	}
 	if allowance, err := policy.UnauthenticatedAllowance("mail.example"); err != nil || allowance != nil {

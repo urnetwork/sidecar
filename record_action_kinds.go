@@ -84,6 +84,10 @@ const (
 	approvalRequestFieldSocketName protoreflect.FieldNumber = 17
 )
 
+// ApprovalRequest's uses, version 2's, which every kind's request carries: the count its agent asks the approval to
+// cover (QD-1010; approvalRequestUsesCheck).
+const approvalRequestFieldUses protoreflect.FieldNumber = 18
+
 // Every one of them, which a request of a kind whose row names none may not set, in the order an approver's render
 // shows them: the name first, as what a listen is.
 var approvalRequestDetailFields = []protoreflect.FieldNumber{
