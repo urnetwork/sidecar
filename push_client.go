@@ -38,7 +38,7 @@ type PushClientEnv struct {
 	// nil is real time.
 	Clock Clock
 	Log   Logger
-	// head_alarm for a durable topic a reset tried to lower. nil drops it.
+	// head_alarm for a durable topic a versions page showed below the version held. nil drops it.
 	Event SidecarEventFunction
 }
 
