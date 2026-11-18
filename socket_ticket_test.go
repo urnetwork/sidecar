@@ -53,6 +53,7 @@ type testSocketTicketFields struct {
 	Backup                bool   `json:"backup"`
 	GrantExpireTimeMillis uint64 `json:"grant_expire_time_millis"`
 	NameToken             string `json:"name_token"`
+	DialerSidecarId       string `json:"dialer_sidecar_id"`
 }
 
 // A ticket that verifies, with each stage of its encoding.
@@ -142,6 +143,7 @@ func (self *testSocketTicketFields) ticket(t testing.TB) *protocol.SocketTicket 
 		Backup:                self.Backup,
 		GrantExpireTimeMillis: self.GrantExpireTimeMillis,
 		NameToken:             testSocketHex(t, self.NameToken),
+		DialerSidecarId:       testSocketHex(t, self.DialerSidecarId),
 	}
 }
 
@@ -216,9 +218,23 @@ func testTokenSocketTicket(segmentCount int) *protocol.SocketTicket {
 	return ticket
 }
 
+// As testSocketTicket, naming ur/smtpedge and the dialer's sidecar, as a ur/ Find signs it (QD-989).
+func testUrSocketTicket() *protocol.SocketTicket {
+	ticket := testSocketTicket()
+	ticket.Name = "ur/smtpedge"
+	ticket.DialerSidecarId = bytes.Repeat([]byte{0x09}, socketTicketIdByteCount)
+	return ticket
+}
+
 // A plaintext name of exactly byteCount bytes, in the widest shape the grammar allows.
 func testLongEdgeName(byteCount int) string {
 	prefix := "tls/443/" + strings.Repeat("a", socketSegmentMaxByteCount) + "/"
+	return prefix + strings.Repeat("b", byteCount-len(prefix))
+}
+
+// As testLongEdgeName under ur/, which the ticket check reads by its first segment alone.
+func testLongPlatformName(byteCount int) string {
+	prefix := "ur/" + strings.Repeat("a", socketSegmentMaxByteCount) + "/"
 	return prefix + strings.Repeat("b", byteCount-len(prefix))
 }
 
@@ -365,14 +381,20 @@ func TestSocketTicketVectorRefusals(t *testing.T) {
 	}
 }
 
-// A ticket fits within §9.6's bounds at both of its limits, and the next step past either is refused.
+// A ticket fits within §9.6's bounds at both of its limits, a ur/ ticket's dialer_sidecar_id included (QD-989), and
+// the next step past either is refused.
 func TestSocketTicketSizeBoundsAtBothLimits(t *testing.T) {
 	longest := testSocketTicket()
 	longest.Name = testLongEdgeName(socketNameMaxByteCount)
 	if len(longest.GetName()) != socketNameMaxByteCount {
 		t.Fatalf("a %d-byte name", len(longest.GetName()))
 	}
-	for _, ticket := range []*protocol.SocketTicket{longest, testTokenSocketTicket(socketNameMaxSegmentCount)} {
+	longestUr := testUrSocketTicket()
+	longestUr.Name = testLongPlatformName(socketNameMaxByteCount)
+	if len(longestUr.GetName()) != socketNameMaxByteCount {
+		t.Fatalf("a %d-byte ur/ name", len(longestUr.GetName()))
+	}
+	for _, ticket := range []*protocol.SocketTicket{longest, longestUr, testTokenSocketTicket(socketNameMaxSegmentCount)} {
 		signedTicket, err := SignSocketTicket(strings.Repeat("k", 64), testSocketTicketPrivateKey, ticket)
 		if err != nil {
 			t.Fatal(err)
@@ -557,10 +579,10 @@ func TestVerifySocketTicketLeavesTheTicketsExpiryToItsCaller(t *testing.T) {
 	}
 }
 
-// Between a named and a tokened ticket every field of the message is set, and each comes back whole.
+// Between a named, a ur/ and a tokened ticket every field of the message is set, and each comes back whole.
 func TestSocketTicketEveryFieldRoundTrips(t *testing.T) {
 	seenNumbers := map[protoreflect.FieldNumber]bool{}
-	for _, ticket := range []*protocol.SocketTicket{testNamedSocketTicket(), testTokenSocketTicket(2)} {
+	for _, ticket := range []*protocol.SocketTicket{testNamedSocketTicket(), testUrSocketTicket(), testTokenSocketTicket(2)} {
 		verified, err := VerifySocketTicket(testSignedSocketTicketBytes(t, ticket), testSocketTicketPublicKeys(), testSocketTicketNow)
 		if err != nil {
 			t.Fatal(err)
@@ -643,6 +665,27 @@ func TestSocketTicketShapeRefusals(t *testing.T) {
 		{name: "an expiry before its issue time", change: func(ticket *protocol.SocketTicket) {
 			ticket.ExpireTimeMillis = ticket.GetIssueTimeMillis() - 1
 		}},
+		// QD-989: only a ur/ ticket names its dialer's sidecar, and as a whole id
+		{name: "a dialer sidecar on a tls/ name", change: func(ticket *protocol.SocketTicket) {
+			ticket.DialerSidecarId = bytes.Repeat([]byte{0x09}, socketTicketIdByteCount)
+		}},
+		{name: "a dialer sidecar on an smtp/ name", change: func(ticket *protocol.SocketTicket) {
+			ticket.Name = "smtp/25/mx"
+			ticket.DialerSidecarId = bytes.Repeat([]byte{0x09}, socketTicketIdByteCount)
+		}},
+		{name: "a dialer sidecar on a token path", change: func(ticket *protocol.SocketTicket) {
+			ticket.Name = ""
+			ticket.NameToken = bytes.Repeat([]byte{0x08}, socketTokenByteCount)
+			ticket.DialerSidecarId = bytes.Repeat([]byte{0x09}, socketTicketIdByteCount)
+		}},
+		{name: "a short dialer_sidecar_id", change: func(ticket *protocol.SocketTicket) {
+			ticket.Name = "ur/smtpedge"
+			ticket.DialerSidecarId = bytes.Repeat([]byte{0x09}, socketTicketIdByteCount-1)
+		}},
+		{name: "a long dialer_sidecar_id", change: func(ticket *protocol.SocketTicket) {
+			ticket.Name = "ur/smtpedge"
+			ticket.DialerSidecarId = bytes.Repeat([]byte{0x09}, socketTicketIdByteCount+1)
+		}},
 	}
 	for _, c := range cases {
 		ticket := testNamedSocketTicket()
@@ -667,6 +710,29 @@ func TestSocketTicketShapeRefusals(t *testing.T) {
 		} else if strings.Contains(err.Error(), "ecret") {
 			t.Errorf("%s: the name is in %q", c.name, err)
 		}
+	}
+}
+
+// QD-989: a ur/ ticket carries its dialer's sidecar through signing and verifying, and a ur/ ticket naming none is
+// well formed too, since what no subject means is its listener's to refuse.
+func TestSocketTicketCarriesADialerSidecarOnUr(t *testing.T) {
+	named := testUrSocketTicket()
+	verified, err := VerifySocketTicket(testSignedSocketTicketBytes(t, named), testSocketTicketPublicKeys(), testSocketTicketNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(verified.GetDialerSidecarId(), named.GetDialerSidecarId()) {
+		t.Fatalf("the dialer's sidecar came back as %x", verified.GetDialerSidecarId())
+	}
+
+	none := testUrSocketTicket()
+	none.DialerSidecarId = nil
+	verified, err = VerifySocketTicket(testSignedSocketTicketBytes(t, none), testSocketTicketPublicKeys(), testSocketTicketNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(verified.GetDialerSidecarId()) != 0 {
+		t.Fatalf("a ticket naming no sidecar came back naming %x", verified.GetDialerSidecarId())
 	}
 }
 
