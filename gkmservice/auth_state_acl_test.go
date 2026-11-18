@@ -1,6 +1,7 @@
 // The real states' closed directions, on a stand-in gate that holds no loaded state: every answer of AclGkmAuthState
 // is Unknown, which gkm answers 503, a network with no loaded state is asked for, and AclGkmReconcilerState gives no
-// state and no standing. The answers of a loaded state run on T2 over the real cache and TEAM's log
+// state and no standing. On a stand-in that answers from what it holds, AclGkmAuthState hands the gate the guard's
+// whole right set (QD-975). The answers of a loaded state run on T2 over the real cache and TEAM's log
 // (sidecartest/gkm_auth_state_acl_test.go).
 
 package gkmservice
@@ -173,5 +174,93 @@ func TestAclGkmReconcilerStateGivesNothingWithoutALoadedState(t *testing.T) {
 	}
 	if _, _, known, err := none.SidecarStanding(t.Context(), sidecar.NewId()); err != nil || known {
 		t.Errorf("no gate: a standing %t, %v", known, err)
+	}
+}
+
+// One scope question as a stand-in gate was asked it.
+type gkmAclGateAsk struct {
+	networkId sidecar.Id
+	subjectId sidecar.Id
+	repoId    sidecar.Id
+	scope     sidecar.AclEvsRights
+	audience  sidecar.AclTokenAudience
+}
+
+// A gate whose state gives every subject held on every repo, honoring a scope only when it holds every right of it, as
+// AclGateCache.HonorScope does, and recording each scope it was asked.
+type heldGkmAclGate struct {
+	held sidecar.AclEvsRights
+
+	stateLock sync.Mutex
+	asks      []*gkmAclGateAsk
+}
+
+func (self *heldGkmAclGate) State(networkId sidecar.Id) (*sidecar.AclGateSnapshot, sidecar.AclGateStatus) {
+	return nil, sidecar.AclGateNotLoaded
+}
+
+func (self *heldGkmAclGate) Changed(networkId sidecar.Id) {
+}
+
+func (self *heldGkmAclGate) HonorScope(networkId sidecar.Id, subjectId sidecar.Id, repoId sidecar.Id, scope sidecar.AclEvsRights, audience sidecar.AclTokenAudience, now time.Time) sidecar.AclScopeAnswer {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.asks = append(self.asks, &gkmAclGateAsk{networkId: networkId, subjectId: subjectId, repoId: repoId, scope: scope, audience: audience})
+	if scope != 0 && self.held.Has(scope) {
+		return sidecar.AclScopeHonored
+	}
+	return sidecar.AclScopeRefused
+}
+
+// The last scope the gate was asked, nil for none.
+func (self *heldGkmAclGate) lastAsk() *gkmAclGateAsk {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if len(self.asks) == 0 {
+		return nil
+	}
+	return self.asks[len(self.asks)-1]
+}
+
+// QD-975: the real state hands the guard's whole right set to the gate cache for the gkm audience, unchanged, and
+// answers the cache's verdict on it, so a set is honored only whole: a live repo's admin, whom the gate gives admin,
+// rw and r, holds the set a read asks of its admin token, while a deleted repo's standing admin, whom it gives admin
+// alone (QD-880), is refused that set and honored admin alone. Reads asks r of the sidecar it names.
+func TestAclGkmAuthStateHandsTheGateTheWholeSet(t *testing.T) {
+	networkId, sidecarId := connect.NewId(), connect.NewId()
+	principal := &sidecar.Principal{NetworkId: networkId, ClientId: connect.NewId(), SidecarId: &sidecarId}
+	repoId, otherId, now := sidecar.NewId(), sidecar.NewId(), time.UnixMilli(1790000000000)
+	set := sidecar.AclEvsAdmin | sidecar.AclEvsWrite | sidecar.AclEvsRead
+	cases := []struct {
+		name string
+		held sidecar.AclEvsRights
+		// what the state answers the set, and admin alone
+		setAnswer   GkmAuthAnswer
+		adminAnswer GkmAuthAnswer
+	}{
+		{name: "a live repo's admin", held: set, setAnswer: GkmAuthAllowed, adminAnswer: GkmAuthAllowed},
+		{name: "a deleted repo's standing admin", held: sidecar.AclEvsAdmin, setAnswer: GkmAuthDenied, adminAnswer: GkmAuthAllowed},
+		{name: "a deleted repo's writer", held: 0, setAnswer: GkmAuthDenied, adminAnswer: GkmAuthDenied},
+	}
+	for _, c := range cases {
+		gate := &heldGkmAclGate{held: c.held}
+		state := NewAclGkmAuthState(gate, nil, nil)
+		for _, ask := range []struct {
+			rights sidecar.AclEvsRights
+			want   GkmAuthAnswer
+		}{{rights: set, want: c.setAnswer}, {rights: sidecar.AclEvsAdmin, want: c.adminAnswer}} {
+			if answer := state.HonorScope(principal, repoId, ask.rights, now); answer != ask.want {
+				t.Errorf("%s: %04b answered %d, want %d", c.name, ask.rights, answer, ask.want)
+			}
+			gateAsk := gate.lastAsk()
+			if gateAsk == nil || gateAsk.scope != ask.rights || gateAsk.audience != sidecar.AclTokenAudienceGkm ||
+				gateAsk.networkId != sidecar.Id(networkId) || gateAsk.subjectId != sidecar.Id(sidecarId) || gateAsk.repoId != repoId {
+				t.Errorf("%s: the gate was asked %+v for %04b", c.name, gateAsk, ask.rights)
+			}
+		}
+		state.Reads(principal, repoId, otherId, now)
+		if gateAsk := gate.lastAsk(); gateAsk == nil || gateAsk.scope != sidecar.AclEvsRead || gateAsk.subjectId != otherId {
+			t.Errorf("%s: Reads asked the gate %+v", c.name, gateAsk)
+		}
 	}
 }

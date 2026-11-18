@@ -53,8 +53,8 @@ const (
 	gkmScopeRecoveryOwn
 )
 
-// The rights a scope row's routes take on their repo, any one of them; the strongest the token holds is the one
-// honored. Zero for a row on no one repo.
+// The rights a scope row's routes take on their repo, any one of them; the strongest the token holds is honored
+// together with each weaker right of its role the row takes, only whole (QD-975). Zero for a row on no one repo.
 func (self gkmScope) rights() sidecar.AclEvsRights {
 	switch self {
 	case gkmScopeRead, gkmScopeLeaf, gkmScopeInfo, gkmScopeDeliver, gkmScopeStage, gkmScopeRecoveryOwn:
