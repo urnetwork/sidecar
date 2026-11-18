@@ -28,6 +28,15 @@
 // same order, and its new copy replaces the staged one. Which records lack keys is cache state, never a query (FI-23).
 //
 // The plan is written after each read, so a round killed between reads resumes with what it staged.
+//
+// Before each read of the all set, in every round but "search more"'s, the ref's keepAll (§18.4's windows rule on a
+// phone) is asked again, after the round's context and before the day's background budget (QD-1026; owner decision
+// 583; §18.7's window does its work "while the reported conditions allow it"): a window or foreground round whose link
+// turns metered, whose charger is unplugged or that enters Low Power Mode partway through all reads no further shard.
+// Its fetch of all ends there, what landed staying staged in the plan, the budget neither spent nor holding anything
+// back, and the next round the rule allows fetches on from what is staged, as after a window's budget. The latest set
+// is read whole whatever the rule answers. A "search more" keeps its own metered wait, at the call
+// (SearchPolicy.MoreWaiting), and is not asked again.
 
 package sidecar
 
@@ -157,8 +166,10 @@ func (self *SearchSync) lackingKeys(ref *searchSyncRef) (map[SearchVersionFile]b
 	return lacking, nil
 }
 
-// Step 4 over the latest set, or the all set: true where a read answered collected.
-func (self *SearchSync) fetch(ctx context.Context, ref *searchSyncRef, manifest *SearchManifest, plan *SearchSyncPlan, latest bool) (bool, error) {
+// Step 4 over the latest set, or the all set: true where a read answered collected. Over the all set in a round that is
+// not "search more"'s (more), the ref's keepAll is asked again before each read, and once it no longer keeps all the
+// fetch ends before that read with errSearchSyncAllEnded, what landed staged in the plan (QD-1026).
+func (self *SearchSync) fetch(ctx context.Context, ref *searchSyncRef, manifest *SearchManifest, plan *SearchSyncPlan, latest bool, more bool) (bool, error) {
 	lacking, err := self.lackingKeys(ref)
 	if err != nil {
 		return false, err
@@ -184,6 +195,11 @@ func (self *SearchSync) fetch(ctx context.Context, ref *searchSyncRef, manifest 
 	for _, batch := range self.fetchBatches(files) {
 		if err := ctx.Err(); err != nil {
 			return false, err
+		}
+		if !latest && !ref.keepsAll(more) {
+			// the windows rule no longer keeps all, the link metered, the charger unplugged or Low Power Mode on: no
+			// further read of all this round, and what landed stays staged for the next round the rule allows
+			return false, errSearchSyncAllEnded
 		}
 		batchByteCount := int64(0)
 		for _, wanted := range batch {

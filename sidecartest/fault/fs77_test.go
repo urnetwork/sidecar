@@ -19,7 +19,13 @@ package fault
 // kept, until all is held and a cached search reads it with no fetch. A DropCache between two such windows (QD-1025)
 // leaves the next window to fetch the latest set and all again, every shard the first kept included, and a cached
 // search then finds the latest set's hits and all's; alone, a device that syncs one document, drops its cache and
-// syncs again finds it again, its round after the drop fetching the latest set anew.
+// syncs again finds it again, its round after the drop fetching the latest set anew. The rule holds for the whole round
+// (QD-1026; owner decision 583): a window on Wi-Fi while charging whose link turns metered, whose charger is unplugged
+// or that enters Low Power Mode while it reads its first shard of all reads no further shard and ends before its
+// budget, a window while the change holds reads none, and the next window the rule allows resumes from the staged plan,
+// reading every other shard youngest first and never that one again, until all is held and a cached search reads it
+// with no fetch; a "search more" under the same change reads every shard and completes, its metered wait judged at the
+// call; and a window whose link turns metered in its first read reads the latest set whole and nothing of all.
 //
 // Readings: MeteredMoreByteCount stands at 64 KiB here, under this all's size, for §18.4's 25 MiB over a larger one;
 // the candidates a phone lists, possible ones included, are held to SearchOracle's matches, since a phone holds no
@@ -30,7 +36,10 @@ package fault
 // read, so the timer fires inside the read that reaches the deadline, and the round stops before its next read. The
 // next window resumes through the sync's plan, where each read's files are staged as it lands (search_fetch.go): the
 // read in flight at the end is not staged, since its staging sees the ended ctx, so the next window reads it again,
-// and what the row holds is that no shard read before the end is read again.
+// and what the row holds is that no shard read before the end is read again. A change of the host's conditions partway
+// through a round is a timer on the world's clock too, fired inside the read that crosses its time, as a report through
+// Sidecar.SetSearchConditions lands while a read is in flight; that read lands and is staged, since a change, unlike a
+// window's end, ends no ctx, and the rule is asked again before the next one.
 //
 // Not here, each listed for the review phase in SEARCH-M10-38's report: device overrides and the key origin's policy
 // request, search.state across DropCache and eviction (the world's devices hold no SidecarSearchState), the quick
@@ -416,20 +425,16 @@ func (self *fs77State) wifiChargingWindows(host *searchHost, label string) func(
 		if len(shards) < 3 {
 			return fmt.Errorf("all holds %d shards, too few for a window to stop partway", len(shards))
 		}
-		// a read's time on the world's clock, as the world's source takes it
-		readTime := func(file sidecar.SearchTestFile) time.Duration {
-			return time.Duration(int64(file.ByteCount) * int64(time.Second) / fs77ReadByteRate)
-		}
 		order := []string{}
 		allTime := time.Duration(0)
 		for _, shard := range shards {
 			order = append(order, fs77TraceLine(shard))
-			allTime += readTime(shard)
+			allTime += fs77ReadTime(shard)
 		}
 
 		// the first window's budget ends halfway through its second read of all
 		before := len(device.Fetches())
-		deadline, err := fs77Window(ctx, net, device, readTime(shards[0])+readTime(shards[1])/2)
+		deadline, err := fs77Window(ctx, net, device, fs77ReadTime(shards[0])+fs77ReadTime(shards[1])/2)
 		if err != nil {
 			return err
 		}
@@ -527,17 +532,14 @@ func (self *fs77State) dropBetweenWindows(host *searchHost, label string) func(c
 		if len(shards) < 2 {
 			return fmt.Errorf("all holds %d shards, too few for a window to stop partway", len(shards))
 		}
-		readTime := func(file sidecar.SearchTestFile) time.Duration {
-			return time.Duration(int64(file.ByteCount) * int64(time.Second) / fs77ReadByteRate)
-		}
 		order := []string{}
 		allTime := time.Duration(0)
 		for _, shard := range shards {
 			order = append(order, fs77TraceLine(shard))
-			allTime += readTime(shard)
+			allTime += fs77ReadTime(shard)
 		}
 		before := len(device.Fetches())
-		if _, err := fs77Window(ctx, net, device, readTime(shards[0])+readTime(shards[1])/2); err != nil {
+		if _, err := fs77Window(ctx, net, device, fs77ReadTime(shards[0])+fs77ReadTime(shards[1])/2); err != nil {
 			return err
 		}
 		if first := searchAllShardsOf(searchTraceOf(device.Fetches()[before:])); len(first) == 0 || len(order) <= len(first) {
@@ -633,6 +635,264 @@ func (self *fs77State) dropAndSync(host *searchHost, label string) func(ctx cont
 	}
 }
 
+// A host's reports as Sidecar.SetSearchConditions keeps them, which a device's policy reads at each decision.
+type fs77Conditions struct {
+	stateLock  sync.Mutex
+	conditions sidecar.SearchConditions
+}
+
+// The conditions last reported.
+func (self *fs77Conditions) get() sidecar.SearchConditions {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.conditions
+}
+
+// Reports conditions.
+func (self *fs77Conditions) set(conditions sidecar.SearchConditions) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.conditions = conditions
+}
+
+// One change partway through a round (QD-1026), and what a case's failure calls it.
+type fs77Change struct {
+	name       string
+	conditions sidecar.SearchConditions
+}
+
+// What ends a phone's window work partway, each from Wi-Fi while charging: its link turning metered, its charger
+// unplugged, Low Power Mode turned on; foreground as given.
+func fs77Changes(foreground bool) []fs77Change {
+	return []fs77Change{
+		{name: "its link turns metered", conditions: sidecar.SearchConditions{Reported: true, Charging: true, Foreground: foreground}},
+		{name: "its charger is unplugged", conditions: sidecar.SearchConditions{Reported: true, Unmetered: true, Foreground: foreground}},
+		{name: "it enters Low Power Mode", conditions: sidecar.SearchConditions{Reported: true, Unmetered: true, Charging: true, LowPower: true, Foreground: foreground}},
+	}
+}
+
+// A device of host on the world reading a file at a time at fs77ReadByteRate, so a change timed on the world's clock
+// lands inside one read of all, its conditions what reports holds.
+func (self *fs77State) readingDevice(ctx context.Context, host *searchHost, reports *fs77Conditions) (*sidecar.SearchTestDevice, error) {
+	return self.world.index.NewDevice(ctx, &sidecar.SearchTestDeviceArgs{
+		Settings: host.settings(), Conditions: reports.get, ReadByteRate: fs77ReadByteRate, ReadByteCount: 1,
+	})
+}
+
+// A read's time on the world's clock, as the world's source takes it.
+func fs77ReadTime(file sidecar.SearchTestFile) time.Duration {
+	return time.Duration(int64(file.ByteCount) * int64(time.Second) / fs77ReadByteRate)
+}
+
+// A phone in the background on Wi-Fi while charging whose conditions change while its window reads the first shard of
+// all (QD-1026): the window reads that shard and no further one, ending before its budget, since its round asks the
+// windows rule again before each read of all; a window while the change holds reads nothing of all; and once Wi-Fi and
+// the charger are back the next window resumes from the staged plan, reading every other shard youngest first and never
+// the first again, until all is held, which a cached search then reads with no fetch.
+func (self *fs77State) windowChangesMidRound(host *searchHost, change fs77Change, label string) func(ctx context.Context, net *Net) error {
+	return func(ctx context.Context, net *Net) error {
+		world := self.world
+		allowed := sidecar.SearchConditions{Reported: true, Unmetered: true, Charging: true}
+		reports := &fs77Conditions{conditions: allowed}
+		device, err := self.readingDevice(ctx, host, reports)
+		if err != nil {
+			return err
+		}
+		defer device.Close()
+		// outside a window: the latest set alone
+		if err := device.Sync(ctx); err != nil {
+			return err
+		}
+		if outside := searchAllShardsOf(searchTraceOf(device.Fetches())); len(outside) != 0 {
+			self.breaks("%s: a round outside a window fetched all's %v", label, outside)
+		}
+		shards := fs77AllShards(world)
+		if len(shards) < 3 {
+			return fmt.Errorf("all holds %d shards, too few for a change to land partway", len(shards))
+		}
+		order := []string{}
+		allTime := time.Duration(0)
+		for _, shard := range shards {
+			order = append(order, fs77TraceLine(shard))
+			allTime += fs77ReadTime(shard)
+		}
+
+		// a window with the budget for all, the change landing halfway through its first read of all
+		before := len(device.Fetches())
+		stop := net.Clock().AfterFunc(fs77ReadTime(shards[0])/2, func() { reports.set(change.conditions) })
+		deadline, err := fs77Window(ctx, net, device, allTime+time.Hour)
+		stop()
+		if err != nil {
+			return err
+		}
+		if reports.get() != change.conditions {
+			return fmt.Errorf("%s: the window read nothing for the change to land in", label)
+		}
+		if first := searchAllShardsOf(searchTraceOf(device.Fetches()[before:])); !slices.Equal(first, order[:1]) {
+			self.breaks("%s: once %s while it read the first shard of all, the window read all as %v, not %v alone", label, change.name, first, order[:1])
+		}
+		if !net.Clock().Now().Before(deadline) {
+			self.breaks("%s: once %s, the window ran on to its budget", label, change.name)
+		}
+
+		// a window while the change holds: nothing of all
+		before = len(device.Fetches())
+		if _, err := fs77Window(ctx, net, device, allTime+time.Hour); err != nil {
+			return err
+		}
+		if held := searchAllShardsOf(searchTraceOf(device.Fetches()[before:])); len(held) != 0 {
+			self.breaks("%s: a window after %s fetched all's %v", label, change.name, held)
+		}
+
+		// Wi-Fi and the charger back: the next window resumes from the staged plan and completes
+		reports.set(allowed)
+		before = len(device.Fetches())
+		deadline, err = fs77Window(ctx, net, device, allTime+time.Hour)
+		if err != nil {
+			return err
+		}
+		if !net.Clock().Now().Before(deadline) {
+			self.breaks("%s: the window the rule allowed again ran to its budget, not until all was held", label)
+		}
+		if rest := searchAllShardsOf(searchTraceOf(device.Fetches()[before:])); !slices.Equal(rest, order[1:]) {
+			self.breaks("%s: the window the rule allowed again read all as %v, not on from the staged plan, %v", label, rest, order[1:])
+		}
+		before = len(device.Fetches())
+		cached, err := device.Search(ctx, &sidecar.SearchRequest{Text: fs77Query, Scope: sidecar.SearchCached, Remote: "off"}, 64, nil)
+		if err != nil {
+			return err
+		}
+		if fetched := len(device.Fetches()) - before; fetched != 0 {
+			self.breaks("%s: the cached search after the windows fetched %d files", label, fetched)
+		}
+		if got, want := searchHitNames(cached.Hits()), self.oracle(fs77Query, sidecartest.SearchScopeAll); !slices.Equal(got, want) {
+			self.breaks("%s: the cached search after the windows found %v, and SearchOracle over all %v", label, got, want)
+		}
+		return nil
+	}
+}
+
+// A phone in the foreground on Wi-Fi while charging whose "search more" sees the change while it reads its first shard
+// of all: the call reads every shard youngest first and completes, since its metered wait is judged once at the call
+// (MoreWaiting) and its round is not asked the windows rule again; it lists all's hits.
+func (self *fs77State) moreReadsOnMidRound(host *searchHost, change fs77Change, label string) func(ctx context.Context, net *Net) error {
+	return func(ctx context.Context, net *Net) error {
+		world := self.world
+		// unplugged at first, so its own round keeps no all
+		reports := &fs77Conditions{conditions: sidecar.SearchConditions{Reported: true, Unmetered: true, Foreground: true}}
+		device, err := self.readingDevice(ctx, host, reports)
+		if err != nil {
+			return err
+		}
+		defer device.Close()
+		if err := device.Sync(ctx); err != nil {
+			return err
+		}
+		if held := searchAllShardsOf(searchTraceOf(device.Fetches())); len(held) != 0 {
+			self.breaks("%s: a round unplugged fetched all's %v", label, held)
+		}
+		shards := fs77AllShards(world)
+		if len(shards) < 2 {
+			return fmt.Errorf("all holds %d shards, too few for a change to land partway", len(shards))
+		}
+		order := []string{}
+		for _, shard := range shards {
+			order = append(order, fs77TraceLine(shard))
+		}
+
+		reports.set(sidecar.SearchConditions{Reported: true, Unmetered: true, Charging: true, Foreground: true})
+		before := len(device.Fetches())
+		stop := net.Clock().AfterFunc(fs77ReadTime(shards[0])/2, func() { reports.set(change.conditions) })
+		more, err := device.Search(ctx, &sidecar.SearchRequest{Text: fs77Query, Scope: sidecar.SearchAll, Remote: "off"}, 256, nil)
+		stop()
+		if err != nil {
+			return err
+		}
+		if reports.get() != change.conditions {
+			return fmt.Errorf("%s: the search more read nothing for the change to land in", label)
+		}
+		if trace := searchAllShardsOf(searchTraceOf(device.Fetches()[before:])); !slices.Equal(trace, order) {
+			self.breaks("%s: once %s while it read the first shard of all, the search more read all as %v, not every shard, %v", label, change.name, trace, order)
+		}
+		if last := more.Last(); last.FetchBytes != 0 || last.Waiting != "" {
+			self.breaks("%s: the search more ended with %d bytes to fetch, waiting %q", label, last.FetchBytes, last.Waiting)
+		}
+		if got, want := searchHitNames(more.Hits()), self.oracle(fs77Query, sidecartest.SearchScopeAll); !slices.Equal(got, want) {
+			self.breaks("%s: the search more found %v, and SearchOracle %v", label, got, want)
+		}
+		return nil
+	}
+}
+
+// A phone in the background on Wi-Fi while charging whose first window's link turns metered inside its first read: the
+// window reads every file of the latest set the head lists and nothing of all, and a cached search finds the latest
+// set's hits.
+func (self *fs77State) latestReadsOnMidRound(host *searchHost, label string) func(ctx context.Context, net *Net) error {
+	return func(ctx context.Context, net *Net) error {
+		world := self.world
+		metered := sidecar.SearchConditions{Reported: true, Charging: true}
+		reports := &fs77Conditions{conditions: sidecar.SearchConditions{Reported: true, Unmetered: true, Charging: true}}
+		device, err := self.readingDevice(ctx, host, reports)
+		if err != nil {
+			return err
+		}
+		defer device.Close()
+		// the first read moves the clock past a nanosecond, whatever file it takes
+		stop := net.Clock().AfterFunc(time.Nanosecond, func() { reports.set(metered) })
+		_, err = fs77Window(ctx, net, device, time.Hour)
+		stop()
+		if err != nil {
+			return err
+		}
+		if reports.get() != metered {
+			return fmt.Errorf("%s: the window read nothing for the change to land in", label)
+		}
+		fetches := device.Fetches()
+		if held := searchAllShardsOf(searchTraceOf(fetches)); len(held) != 0 {
+			self.breaks("%s: a window whose link turned metered in its first read fetched all's %v", label, held)
+		}
+		want := []string{}
+		for _, file := range world.index.Files() {
+			if !file.AllShard && !strings.HasSuffix(file.Path, "/lock") {
+				want = append(want, file.Path)
+			}
+		}
+		got := []string{}
+		for _, fetch := range fetches {
+			got = append(got, fetch.Path)
+		}
+		slices.Sort(want)
+		slices.Sort(got)
+		if !slices.Equal(got, want) {
+			self.breaks("%s: a window whose link turned metered in its first read fetched %v of the latest set %v", label, got, want)
+		}
+		cached, err := device.Search(ctx, &sidecar.SearchRequest{Text: fs77Query, Scope: sidecar.SearchCached, Remote: "off"}, 64, nil)
+		if err != nil {
+			return err
+		}
+		if got, want := searchHitNames(cached.Hits()), self.oracle(fs77Query, sidecartest.SearchScopeLatest); !slices.Equal(got, want) {
+			self.breaks("%s: the cached search after the window found %v, and SearchOracle over the latest set %v", label, got, want)
+		}
+		return nil
+	}
+}
+
+// FS-77's changes partway through a round (QD-1026): each in an android window, each under an ios32 "search more", and
+// the latest set read whole.
+func (self *fs77State) midRoundSteps() []*Step {
+	steps := []*Step{}
+	for _, change := range fs77Changes(false) {
+		label := "android in a window on Wi-Fi while charging, where " + change.name
+		steps = append(steps, &Step{Actor: "android", Action: self.windowChangesMidRound(searchHostNamed("android"), change, label)})
+	}
+	for _, change := range fs77Changes(true) {
+		label := "ios32's search more on Wi-Fi while charging, where " + change.name
+		steps = append(steps, &Step{Actor: "ios32", Action: self.moreReadsOnMidRound(searchHostNamed("ios32"), change, label)})
+	}
+	steps = append(steps, &Step{Actor: "android", Action: self.latestReadsOnMidRound(searchHostNamed("android"), "android's first window, whose link turns metered in its first read")})
+	return steps
+}
+
 // FI-23 as FS-77 holds it: two different queries from equal sync states give the same requests.
 func (self *fs77State) fi23() Invariant {
 	return NewInvariant("FI-23 (FS-77's equal requests)", func(ctx context.Context, oracle *Oracle) error {
@@ -676,6 +936,8 @@ func Fs77PhoneSearch(net *Net) *Schedule {
 		&Step{Actor: "android", Action: state.wifiChargingWindows(searchHostNamed("android"), "android on Wi-Fi while charging")},
 		&Step{Actor: "android", Action: state.dropBetweenWindows(searchHostNamed("android"), fs77DropLabel)},
 	)
+	// the rule through a whole round (QD-1026)
+	steps = append(steps, state.midRoundSteps()...)
 	steps = append(steps, &Step{Actor: "writer", Action: func(ctx context.Context, net *Net) error {
 		state.world.close()
 		return nil
@@ -744,6 +1006,25 @@ func TestFs77DropCacheBetweenWindows(t *testing.T) {
 	}
 	net := sidecartest.NewNet(t.Context(), nil)
 	result := Run(t.Context(), &Schedule{Id: "FS-77 drop between windows", Steps: steps, Check: []Invariant{state.fi18()}}, net)
+	net.Close()
+	if result.Err != nil {
+		t.Fatalf("%s", result)
+	}
+}
+
+// FS-77's changes partway through a round (QD-1026), alone: they sample no heap, so they run in the test's own process.
+// Before the fetch loop asked the windows rule again before each read of all, each window read every shard of all
+// after its change.
+func TestFs77ChangesPartwayThroughARound(t *testing.T) {
+	state := &fs77State{traces: map[string][]string{}}
+	steps := []*Step{{Actor: "writer", Action: state.write}}
+	steps = append(steps, state.midRoundSteps()...)
+	steps = append(steps, &Step{Actor: "writer", Action: func(ctx context.Context, net *Net) error {
+		state.world.close()
+		return nil
+	}})
+	net := sidecartest.NewNet(t.Context(), nil)
+	result := Run(t.Context(), &Schedule{Id: "FS-77 changes partway through a round", Steps: steps, Check: []Invariant{state.fi18()}}, net)
 	net.Close()
 	if result.Err != nil {
 		t.Fatalf("%s", result)
