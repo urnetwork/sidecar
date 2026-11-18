@@ -518,9 +518,9 @@ Every entry of the owner's record (owner/DECISIONS.md), by number: 1-111 from th
 | <a id="od-388"></a>388 | 2026-11-11 | Index readings | Fourteen readings of §11.14 stand as section 1 of the design details writes them. | §11 |
 | <a id="od-389"></a>389 | 2026-11-11 | Extractor 1's own rules | Extractor 1's decoders are the format's rules, a header is cut at 16,384 B, and thirteen readings stand. | §11 |
 | <a id="od-390"></a>390 | 2026-11-11 | One body encoding | A remote-search body that is not its message's one deterministic encoding, or holds an unknown field, is refused. | §11 |
-| <a id="od-391"></a>391 | 2026-11-11 | Two own indexers | A remote search asks the first two own indexers at once, both kept warm, with no hedge delay; eleven readings stand. | §11, §18 |
+| <a id="od-391"></a>391 | 2026-11-11 | Two own indexers | A remote search asks the first two own indexers at once, both kept warm, with no hedge delay; eleven readings stand. | §7, §11, §18 |
 | <a id="od-392"></a>392 | 2026-11-11 | Remote merge | A phone's merged row is the strongest claim by class first, and it folds its possible matches only where the indexer saw their push. | §11 |
-| <a id="od-393"></a>393 | 2026-11-11 | A stale all | A device searches a cached all only while a bridge vouches for it, else its buckets until it fetches all's changes. | §11 |
+| <a id="od-393"></a>393 | 2026-11-11 | A stale all | A device searches a cached all only while a bridge vouches for it, else its buckets until it fetches all's changes. | §11, §16 |
 | <a id="od-394"></a>394 | 2026-11-12 | Documents past a shard | A document that alone would not fit a shard is skipped at extraction, and a layout tests joins and removals against the bound. | §11 |
 | <a id="od-395"></a>395 | 2026-11-13 | Resting diffs at erasure | An erasure re-enters an edit whose diff rests on an erased version, and at the limit only those two files wait. Reversed by [owner decision 584](#od-584): no entry is a diff; the re-entry folds run cards alone, and nothing waits for it. | §11 |
 | <a id="od-396"></a>396 | 2026-11-11 | A DROP's body, bounds and signer | Membership comes from a DROP's body alone, a DROP holds at most 256 KiB and 2^20 listed values, and a phone signs only a history it walked. | §2, §11, §18, §22 |
@@ -577,7 +577,7 @@ Every entry of the owner's record (owner/DECISIONS.md), by number: 1-111 from th
 | <a id="od-447"></a>447 | 2026-11-06 | Approval deliveries | A decision no vault carries back reaches its requester as an `ApprovalDelivery`, sealed to the requester's ReaderKey. | §2, §6, §7, §8, §16 |
 | <a id="od-448"></a>448 | 2026-11-06 | A harness process's taint | Every run of a harness process takes the union of its runs' taint, so a forged SessionStart opens no clean run. | §2, §16, §22 |
 | <a id="od-449"></a>449 | 2026-11-06 | The cloud key file | A cloud VM's `ur` takes its auth key from a file the setup writes and its first hook unlinks, never the environment. | §5, §16 |
-| <a id="od-450"></a>450 | 2026-11-06 | No fetch at search time | Hints coalesce on the leading edge, a search reads only the cache, and a hinted version not yet fetched is uncovered. | §5, §16 |
+| <a id="od-450"></a>450 | 2026-11-06 | No fetch at search time | Hints coalesce on the leading edge, a search reads only the cache, and a hinted version not yet fetched is uncovered. | §5, §11, §16 |
 | <a id="od-451"></a>451 | 2026-11-06 | Worker items by deployment | A tagged sidecar's worker announcement is set on its own host by whoever controls its deployment, with no record. | §16 |
 | <a id="od-452"></a>452 | 2026-11-06 | Harness config keys | PII hashing from M3 and `claims` from M6 act; capture narrowing, `reach`, `models` and `identity` wait. | §1, §8, §16 |
 | <a id="od-453"></a>453 | 2026-11-06 | Attestation entries | A person's statement about a change is an `attestation` entry, never an approval. | §16 |
@@ -3716,6 +3716,25 @@ type SidecarSearchSettings struct { // §16.10's limits, 5.9's cache and §11.14
 	RemoteCursorCount      int              // 64 open remote cursors, the oldest dropped
 	RemoteRequesterRate    SidecarRate      // 30 a minute, burst 10: per requester at an indexer, and per
 	                                        // indexer at a requester
+	RemoteOwnAskCount      int              // 2 own indexers a search asks at once (§11.14's order row)
+	RemoteSkipTimeout      time.Duration    // 2 min: a failed indexer is not asked (D-SDK-27)
+	RemoteOnlineTimeout    time.Duration    // 10 min: how long a HelloResult, Pong or page keeps an indexer
+	                                        // online, and the own indexer that answered last first
+	RemoteRefusedTimeout   time.Duration    // 10 min: a repo an indexer refused in coverage is not asked of it
+	RemoteServedTimeout    time.Duration    // 24 h: 5.9's memory of which repos each indexer served
+	RemoteMismatchCount    int              // 3 mismatches from one indexer within RemoteMismatchInterval, 24 h,
+	RemoteMismatchInterval time.Duration    // void its claims and skip it for RemoteDistrustTimeout, 24 h
+	RemoteDistrustTimeout  time.Duration    // (§11.14's merge row)
+	SkewGuard              time.Duration    // 40 min: evs's time check both ways (§11.8's 5b), which bounds a
+	                                        // fold; a value of the format, changed on no side alone
+	PinRingCount           int              // 64 (version, chain) pairs kept a ref, to match a coverage's pin
+	RetainFactor           int              // 2: a retained bucket lives at most 2 of its windows past its
+	                                        // roll-up
+	ResyncInterval         time.Duration    // 1 h: §11.14's resync
+	SyncRoundCount         int              // sync rounds at once a network: 4 on daemon hosts, 1 on app hosts
+	                                        // and page Workers
+	SyncRetryInterval      time.Duration    // 30 s, doubling to ResyncInterval: a round that failed on a read
+	                                        // (these fourteen: DESIGN-DETAILS.md section 7, 7.2.1)
 	ServedRecordTimeout    time.Duration    // 30 d: an owner's indexer keeps 5.9's served records, by their day
 	ServedRecordCount      int              // 8,192 served rows at most, the oldest days dropped first: a last
 	                                        // bound that ordinary use and one abusive reader never reach (owner
@@ -4192,23 +4211,26 @@ socket   $XDG_RUNTIME_DIR/ur/<i>.sock; macOS DARWIN_USER_TEMP_DIR (104-byte sun_
 ```text
 holds     per indexed ref this device follows: the ref version it verified (§11.9) and each index file it
           keeps, as the sealed evs records it fetched under the repo's object keys, checked against its entry
-          version's content_sha256 before it is kept (a mirror of the ref shares its copies), and beside
-          each kept record its file id and its wrapped object key exactly as its segment header carried it,
-          sealed under the repo generation's key, about 100 B a file, so no plaintext key rests on the device
-          and the cache still holds no key: a reader that holds the repo key at that generation, from §10's
-          client as any evs read does, unwraps it per file and opens the record one 64 KiB frame at a time, so
-          searches read kept shards, postings and slots without reading evs; for a slot-keyed repo
-          (record-class repos and group inboxes, §11.14's keys row) the slot's 72 B wrapped object key block
-          exactly as the slot object carried it, that slot key's generation and the segment's generation
-          whose manifest_g seals the record header, about 80 B more a file, a reader asking gkm for both
-          generations when they differ (owner decision 289); derived data
-          sealed under HKDF(R_n, "urnetwork-sidecar-v1/local/search") with XChaCha20-Poly1305, random nonces,
-          AAD = repo || ref || path || version || part: the search manifest, each shard's dictionary block
+          version's content_sha256 before it is kept (a mirror of the ref shares its copies), and beside each
+          kept record its file id and its wrapped object key exactly as its segment header carried it, sealed
+          under the repo generation's key, about 100 B a file, so no plaintext key rests on the device and the
+          cache still holds no key: a reader that holds the repo key at that generation, from §10's client as
+          any evs read does, unwraps it per file and opens the record one 64 KiB frame at a time, so searches
+          read kept shards, postings and slots without reading evs; for a slot-keyed repo (record-class repos
+          and group inboxes, §11.14's keys row) the slot's 72 B wrapped object key block exactly as the slot
+          object carried it, that slot key's generation and the segment's generation whose manifest_g seals
+          the record header, about 80 B more a file, a reader asking gkm for both generations when they differ
+          (owner decision 289); derived data sealed under HKDF(R_n, "urnetwork-sidecar-v1/local/search") with
+          XChaCha20-Poly1305, random nonces, AAD = repo || ref || path || version || part: the search manifest
+          (the version of the index ref its bucket files are whole at, each file's version, state and the
+          oldest and newest time of its rows, all's own pin, the roll-ups between the two pins and the last
+          Search.PinRingCount pins replayed) with the sync round's plan beside it (its target, the files
+          wanted and those staged; §11.14's Reads, DESIGN-DETAILS.md section 7), each shard's dictionary block
           index and n_d array, the version table (below), and on desktops the local layer (commits past
           indexed_through this device indexed from its own plaintext, dropped once the index covers them),
           mismatched entries and the local vocabulary; a bucket a roll-up dropped, kept where a stale all is
-          cached until that all shows it rolled up (a/m's rolled_through_day), and never past two bucket lengths
-          after the roll-up, so search stays complete between a roll-up and its download
+          cached until that all shows it rolled up (a/m's rolled_through_day), and never past two bucket
+          lengths after the roll-up, so search stays complete between a roll-up and its download
 versions  the version table, per index root: for each doc key and ref id the partitions this device keeps hold
           (shards' doc and tombstone tables, sealed slots, heads, large entries), its highest version there,
           whether that is a tombstone, and the file holding it, in key order in 4 KiB sealed pages under a page
@@ -4220,16 +4242,16 @@ versions  the version table, per index root: for each doc key and ref id the par
           epoch row), join it as erased, the former until the rewritten files are cached; §11.14's newest row
           probes it
 state     not derived, so ur search sync --evict, DropCache and the bounds row's eviction keep it: per-device
-          policy overrides (§18.4); remote search's mode, its notice answers and, for 24 h, which repos each
-          indexer served (§18.4, §11.14); on an owner's indexer, the served record, one row per (requester
-          sidecar_id, repo_id, UTC day): {requester, repo, day, count, first time, last time}, written at page
-          0 once a search and naming no query; the first remote search an EvsShare reader makes in an
-          owner-bound repo on a day adds the row, and each later one that day raises its count and moves its
-          last time; rows are kept Search.ServedRecordTimeout (30 days) by their day, so the owner's view
-          holds exact counts for the whole 30 days in at most readers x repos x 30 rows whatever a requester's
-          rate, only the times inside a day going unkept, with Search.ServedRecordCount (8,192) a last bound,
-          the oldest days dropped first (D-CORE-17; owner decision 294); deleted with the network's local
-          state
+          policy overrides (§18.4); remote search's mode, its notice answers, which repos each indexer served,
+          for 24 h, and an indexer's distrust deadline (§18.4, §11.14's merge row); on an owner's indexer, the
+          served record, one row per (requester sidecar_id, repo_id, UTC day): {requester, repo, day, count,
+          first time, last time}, written at page 0 once a search and naming no query; the first remote search
+          an EvsShare reader makes in an owner-bound repo on a day adds the row, and each later one that day
+          raises its count and moves its last time; rows are kept Search.ServedRecordTimeout (30 days) by
+          their day, so the owner's view holds exact counts for the whole 30 days in at most readers x repos x
+          30 rows whatever a requester's rate, only the times inside a day going unkept, with
+          Search.ServedRecordCount (8,192) a last bound, the oldest days dropped first (D-CORE-17; owner
+          decision 294); deleted with the network's local state
 never     a query, query history, hit, snippet, cursor (memory only, 10 min), result count or per-query verdict,
           local or remote, on the asking phone and on the answering indexer (owner decision 175); a file no
           verified entry version named
@@ -5834,7 +5856,7 @@ sealed  u64be(g) || nonce (24 random B) || XChaCha20-Poly1305(K, nonce, pt, aad)
 
 **Authority statements** ([owner decision 110](#od-110)) need `authority`: one signature (7.5) admits or revokes only members outside the AdminSet and their devices, and no lone signer mints or removes a config-signing key, though n ≤ 2 forces k = 1 (7.18).
 
-**Indexers** (owner decisions [150](#od-150), [175](#od-175), [177](#od-177), [178](#od-178); D-TEAM-27). A network starts with no `IndexerSet`; an indexer exists only once an Owner or Admin designates one at network scope, or a member's consented device at member scope, and every service keeps its fallback until then, a phone's "search more" downloading all and searching its own index (§3.6; [owner decision 177](#od-177)). An `IndexerSet` designates one of §3.6's indexers, its subject a sidecar that is neither ephemeral nor read_only and, at member scope, a consented device of the signer's member; readers ignore a designation of any other subject. The newest one per (sidecar_id, scope) holds, a device designated at both scopes running their union; `retire` ends it, as does the subject's revocation, and a parked subject serves nothing until lifted. Scope `network` covers network services within the subject's access: a personal network's mail or, under `team_mail: indexers`, a Team's on a `tag:mail` device (§8.5, §15.5); mirrors of the team record, the team directory, `record` ledgers and the config on an admin's device, or of the team record on an auditor's; search upkeep of the indexes it reads outside members' own repos (§11.14), the team directory's roll-ups included; removal of revoked sidecars' directory cards and notices (§16.11). Scope `member` covers its member's own repos ([owner decision 126](#od-126)) and, in a Team member scope ([owner decision 58](#od-58)), that scope's mail; a Team's network mail indexers only deposit, so members' own indexers keep their mailboxes' mirrors and indexes. A personal network's designations are network scope and also cover its owner's repos. For remote search (§11.14), `search` also answers app hosts' "search more": at network scope, any member's app hosts over the team repos the subject reads; at member scope, its own member's over any repo it reads and an `EvsShare` reader's over the repo shared. So an owner-bound repo reaches only a consented device of its owner ([owner decision 126](#od-126)), and a tagged subject, never consented, answers only team repos, the asking app naming its sponsor. No app host answers (`ur indexer add` refuses `search` there and app builds never serve it), nor a browser Worker, which is read_only or ephemeral; the subject retires the designation to stop answering. A designation grants no key, grant or read, and readers ignore a service value they do not know. It enters the log at once, api seeing its signer, subject, scope and `retire`, while `services` is sealed to the config's current generation as §17.8 seals rule bodies; each designation that holds is also a row of `ProjectionRows.indexers` (sidecar_id, scope, signer, position and the sealed services, ordered by sidecar_id then scope), so it survives every fold and a new device, a rows-only gate and a long-running reader read the same designations ([owner decision 330](#od-330)). `ur indexer add|rm [--services mail,mirror,search]` signs only for a /dev/tty-confirmed command or in an app's UI, never through MCP (§5.8), since an indexer's mirror and index downloads spend the transfer balance ([owner decision 10](#od-10)), and at network scope `--services search` warns when the host has harness hooks installed, since its same-user agents could read members' queries (§2.4's TB1); `ur indexer ls` lists the network's indexers.
+**Indexers** (owner decisions [150](#od-150), [175](#od-175), [177](#od-177), [178](#od-178); D-TEAM-27). A network starts with no `IndexerSet`; an indexer exists only once an Owner or Admin designates one at network scope, or a member's consented device at member scope, and every service keeps its fallback until then, a phone's "search more" downloading all and searching its own index (§3.6; [owner decision 177](#od-177)). An `IndexerSet` designates one of §3.6's indexers, its subject a sidecar that is neither ephemeral nor read_only and, at member scope, a consented device of the signer's member; readers ignore a designation of any other subject. The newest one per (sidecar_id, scope) holds, a device designated at both scopes running their union; `retire` ends it, as does the subject's revocation, and a parked subject serves nothing until lifted. Scope `network` covers network services within the subject's access: a personal network's mail or, under `team_mail: indexers`, a Team's on a `tag:mail` device (§8.5, §15.5); mirrors of the team record, the team directory, `record` ledgers and the config on an admin's device, or of the team record on an auditor's; search upkeep of the indexes it reads outside members' own repos (§11.14), the team directory's roll-ups included; removal of revoked sidecars' directory cards and notices (§16.11). Scope `member` covers its member's own repos ([owner decision 126](#od-126)) and, in a Team member scope ([owner decision 58](#od-58)), that scope's mail; a Team's network mail indexers only deposit, so members' own indexers keep their mailboxes' mirrors and indexes. A personal network's designations are network scope and also cover its owner's repos. For remote search (§11.14), `search` also answers app hosts' "search more": at network scope, any member's app hosts over the team repos the subject reads; at member scope, its own member's over any repo it reads and an `EvsShare` reader's over the repo shared. So an owner-bound repo is answered only by a consented device of its owner ([owner decision 126](#od-126)), designated at member scope, or at network scope in a network of one member, which is what a personal network is for this rule ([owner decision 391](#od-391); DESIGN-DETAILS.md section 7, 7.2.2), and a tagged subject, never consented, answers only team repos, the asking app naming its sponsor. No app host answers (`ur indexer add` refuses `search` there and app builds never serve it), nor a browser Worker, which is read_only or ephemeral; the subject retires the designation to stop answering. A designation grants no key, grant or read, and readers ignore a service value they do not know. It enters the log at once, api seeing its signer, subject, scope and `retire`, while `services` is sealed to the config's current generation as §17.8 seals rule bodies; each designation that holds is also a row of `ProjectionRows.indexers` (sidecar_id, scope, signer, position and the sealed services, ordered by sidecar_id then scope), so it survives every fold and a new device, a rows-only gate and a long-running reader read the same designations ([owner decision 330](#od-330)). `ur indexer add|rm [--services mail,mirror,search]` signs only for a /dev/tty-confirmed command or in an app's UI, never through MCP (§5.8), since an indexer's mirror and index downloads spend the transfer balance ([owner decision 10](#od-10)), and at network scope `--services search` warns when the host has harness hooks installed, since its same-user agents could read members' queries (§2.4's TB1); `ur indexer ls` lists the network's indexers.
 
 **Versioning rules** ([owner decision 164](#od-164)). A network's VersioningRules set the versioning an honest writer gives each path it creates, existing paths keeping theirs (§11.7; [owner decision 167](#od-167)); without the record the platform rule holds, versionless above 64 MiB of plaintext; Owners, Admins and Network admins write the record with `ur admin versioning`. The rules cover file-mode refs of every repo kind but config and mailcfg, never git-mode or creates-only refs, the search index's files or git-lfs's store. A repo's own rules in its RepoVersioning (§8.8) replace them for that repo; an owner-bound repo's rules are sealed to that repo's own generation, so only its readers open them, not every admitted sidecar, while the network's record and other repos' rules are sealed to the config's generation (§8.8; [owner decision 126](#od-126)); either way the server never sees a glob. A locked repo takes no versioning off; in an owner-bound repo the owner's devices apply the rules like any writer, and the owner may lock it.
 
@@ -12475,20 +12497,29 @@ readings  (owner decision 388) a slot other than the head, or a large entry, at 
 
 ```text
 pin       per (repo, ref): the reader's 11.9 pin (v, C_v) and a search manifest of the index files it holds (path,
-          version, content_sha256, padded size, partition, state)
+          version, content_sha256, padded size, partition, a state of held or bad, and the oldest and newest time of
+          its rows), which records the version of the index ref its bucket files are whole at, all's own pin and the
+          roll-ups between the two, with a round's plan beside it (its target, the files wanted and those staged;
+          DESIGN-DETAILS.md section 7, 7.2.7)
 trigger   a hint (11.10) or wake (§18.7), the app coming to the foreground, the hourly resync, "search more", or a
-          background window (§18.4); a search reads only the cache and triggers no fetch, except "search more"
-          for the all files the device lacks in repos no designated search indexer answers (remote search, below)
+          background window (§18.4); a search reads only the cache and triggers no fetch, except "search more" for
+          the all files the device lacks in repos no designated search indexer answers (remote search, below); one
+          round runs at a time a ref, a trigger that arrives during it running another after it; the first hint or
+          wake for a repo in a quiet Search.HintCoalesce (1 min) starts a round at once and later ones in that
+          interval start one at its end (owner decision 450); a round that fails on a read keeps its plan and staged
+          files and is tried again after Search.SyncRetryInterval (30 s, doubling to the hourly resync) or at the
+          next trigger (DESIGN-DETAILS.md section 7, 7.2.7)
 replay    POST .../read from the pin returns the statements after it; a change under the index's token prefix marks
           that file; past the 4 MiB catch-up budget the reader re-pins and lists the index directories instead (one
           read per partition directory)
 fetch     whole files by sync position, never a range or file a query chose: each marked file the device keeps, up
           to 64 paths and 32 MiB of ranges a read (11.9), buckets first, then all's shards youngest first, the most
-          recently searched repos first; every device keeps the buckets of the repos it syncs (phones too, the
-          exception to 11.11's versionless fetch rule, but the team directory's only desktops keep, §16.11), and
-          each index ref's erasure set wherever it keeps or writes that ref's index, and
-          desktops, the daemon and indexers keep all in the background, others at "search more" where no
-          designated search indexer answers, or on Wi-Fi while charging (owner decisions 154, 178; §18.4)
+          recently searched repos first; settings, the erasure set and a/m belong to the latest set every device
+          keeps, and a round fetches them before the buckets; every device keeps the buckets of the repos it syncs
+          (phones too, the exception to 11.11's versionless fetch rule, but the team directory's only desktops keep,
+          §16.11), and each index ref's erasure set wherever it keeps or writes that ref's index, and desktops, the
+          daemon and indexers keep all in the background, others at "search more" where no designated search indexer
+          answers, or on Wi-Fi while charging (owner decisions 154, 178; §18.4)
 verify    11.9's checks (signed statement, entry hash), then content_sha256 after decryption; a file that breaks the
           format (past 1 MiB, a dictionary out of order, a docid out of range, a tombstone table out of order or
           naming a key its doc table holds, a tombstone in an all shard, an entry of the reserved kind 2, a
@@ -12497,9 +12528,13 @@ verify    11.9's checks (signed statement, entry hash), then content_sha256 afte
           IndexShard.docs is an upper bound and its first_day to last_day a covering range, which no step compares
           with the shard's header and the next merge or roll-up recomputes, an eraser still finding a document by
           a/m's days and the shard's doc table
-swap      the new manifest replaces the old one atomically once every kept file of the new pin is cached and the
-          version table (§5.9) covers it; running searches keep their snapshot; files no manifest names are
-          deleted once no search holds them
+swap      the manifest of a new pin replaces the old one, atomically, only when every bucket file that pin lists is
+          held at the listed version and the version table (§5.9) covers it, so a snapshot is one version of the
+          ref; all is swapped separately and only at the snapshot's pin, so it is never ahead; a file that fails its
+          checks is listed bad, holds nothing for search and does not hold the swap, or one writer could keep every
+          reader's index at an old version, and a host with the text serves that repo from the index, not from text,
+          until its local layer covers what the file held; running searches keep their snapshot; files no manifest,
+          plan or open snapshot names are deleted (DESIGN-DETAILS.md section 7, 7.2.7; details/IndexSync.tla, §22.8)
 reproduce a device holding every input of a merge, roll-up or CLOSURE at its push's base version (the new manifest's
           absorbed seqs and the files the push replaces name them) builds the result and compares content_sha256
           with each new file's entry version: equal, it caches its own output and fetches nothing; unequal, it
@@ -12518,14 +12553,15 @@ retained  readers search every bucket present, expired ones included, so search 
           keeping only latest drops it, its instant coverage the last W to 2W days; a device searches its cached all
           only while it is usable, its pin the snapshot's, or every roll-up between the two pins bridged by the
           rolled bucket held as the roll-up read it, which it knows from the statements it replayed; with a bridge
-          lost or not vouched for (an ERASE, two windows passed, a roll-up slept through, or a bucket copy older
-          than the roll-up's input) it searches its buckets only, reports its coverage from the oldest bucket and
-          fetches all's changed files (a/m and the youngest shards, usually a few MiB) at its next window or at
-          "search more", which fetches before it answers, so no deleted document is found again (owner decision
-          393)
-collected a fetch of a replaced index file that answers `collected` (11.9) rereads the head, drops what it fetched of
-          that file and fetches the newest version; only writers' heads change often, each one read, and all's
-          shards change only at roll-ups and erasures
+          lost or not vouched for (an ERASE or an executed drop in the repo, two windows passed, a roll-up slept
+          through, or a bucket copy older than the roll-up's input) it searches its buckets only, reports its
+          coverage from the oldest bucket and fetches all's changed files (a/m and the youngest shards, usually a
+          few MiB) at its next window or at "search more", which fetches before it answers, so no deleted document
+          is found again (owner decision 393)
+collected a fetch of a replaced index file that answers `collected` (11.9) restarts the round on the new head, which
+          brings every file to it, so no snapshot mixes two versions of the ref (DESIGN-DETAILS.md section 7,
+          7.2.7); only writers' heads change often, each one read, and all's shards change only at roll-ups and
+          erasures
 subscribe file-mode refs need no new lease, since index files change in the same push as content; a repo whose
           git-mode refs or record streams are indexed adds one whole-ref lease on its ur/index ref (11.10)
 traffic   at 100 messages a day a phone's heads and sealed slots cost ~4-6 MB a month at about ten syncs a day, and
@@ -12619,33 +12655,47 @@ who       per repo, first an own search indexer (a device of the requester's mem
           search indexer; a team repo (general, record, team_record, the directory) otherwise on one network-scope
           search indexer that reads it, a tagged one answering only team repos, its sponsor named; in a personal
           network every indexer is own; never secret, config, mailcfg or deposit-only repos
-eligible  eligible(d, R, p), which each side evaluates in its own newest verified state, so a stale or forged view
-          reaches nothing the other refuses: d's newest IndexerSet at some scope names search, unretired, and d is
-          not revoked, parked or suspended; d is a ur daemon host advertising Hello feature bit 0; p is an admitted
-          member device, untagged and not ephemeral, revoked, parked or suspended (in v1 an app host); d and p are
-          in RepoReaders(R) (§8.12); for R owner-bound to M, consented(d, M) (§8.5) and p reads R as M's consented
-          device or by an EvsShare; for a team R, d is a device of p's member or its designation is network scope;
-          d holds R's all current under its background policy (§18.4), with R's index on in a format d reads
+eligible  eligible(d, R, p), which each side evaluates in its own newest verified state at every send and every
+          page, never from a list made earlier, so a stale or forged view reaches nothing the other refuses: d's
+          newest IndexerSet at some scope names search, unretired, and d is not revoked, parked or suspended; d is
+          a ur daemon host advertising Hello feature bit 0; p is an admitted member device, untagged and not
+          ephemeral, revoked, parked or suspended (in v1 an app host); d and p are in RepoReaders(R) (§8.12); for R
+          owner-bound to M, consented(d, M) (§8.5), d's designation at member scope, or at network scope where the
+          config state holds one member, and p reads R as M's consented device or by an EvsShare; for a team R, d
+          is a device of p's member or its designation is network scope; d holds a whole snapshot of R's index
+          under its background policy (§18.4), its all usable (retained, above) where the request's scope is all,
+          with R's index on in a format and normalizer d reads; the indexer's verdict for a repo is the first that
+          holds of REFUSED_NOT_READER, REFUSED_NOT_CONSENTED, REFUSED_SCOPE, REFUSED_INDEX_OFF, REFUSED_FORMAT,
+          REFUSED_ALL_ABSENT, SERVED_INDEX (no text of the ref, or a bad file its local layer does not cover) and
+          SERVED_TEXT (DESIGN-DETAILS.md section 7, 7.2.2)
 auth      the phone checks d's IndexerSet, admission and consent evidence in its own config (owner decision 6) and,
           before the first request, §6.4's identity binding with HelloResult's bit 0, a failure alarming and
           dropping d until its admission changes; each reply's coverage carries the (v, C_v) its cursor pinned,
           matched at the phone's own version (else §6.4's FORK alarm) or at its next sync, never prompting a read
 order     the first two own search indexers asked at once, for the repos each may answer (first the one that
-          answered last within 10 min, then by rendezvous hash of the two sidecar_ids), both own pairs kept warm
-          from each foreground, so no contract opens at a search on either; the first page 0 to serve a repo wins
-          it and the other reply is dropped, with no hedge delay, at two exchanges and two indexers' CPU a search
-          and a second own pair's window floor, 512 KiB of transfer balance an hour, a foreground (owner decision
-          391); then, where `who` allows, other members' by rendezvous hash of
-          (member_id, indexer sidecar_id), one at a time and sticky until it fails, so a member's queries reach at
-          most one other device for a set of repos; repos sharing a first choice go in one request of at most 64,
-          and the phone remembers for 24 h which repos each indexer served
+          answered last within 10 min, then by rendezvous hash of the two sidecar_ids, the first 8 bytes of SHA-256
+          over a label and the two ids, ascending), both own pairs kept warm from each foreground, so no contract
+          opens at a search on either; the first page 0 to serve a repo wins it and the other reply is dropped,
+          with no hedge delay, at two exchanges and two indexers' CPU a search and a second own pair's window
+          floor, 512 KiB of transfer balance an hour, a foreground (owner decision 391); a further own indexer is
+          asked alone, and only when neither of those two can be; then, where `who` allows, other members', the one
+          that served this member's repos within 24 h first, else by rendezvous hash of (member_id, indexer
+          sidecar_id), one at a time and sticky until it fails, so a member's queries reach at most one other
+          device for a set of repos; repos sharing a first choice go in one request of at most 64, and the phone
+          remembers for 24 h which repos each indexer served (DESIGN-DETAILS.md section 7, 7.2.3;
+          details/RemoteAsk.tla, §22.8)
 failover  no first page within Search.RemoteTimeout (3 s, 5 s metered), RESOURCE_EXHAUSTED, UNIMPLEMENTED or a repo
-          refused in coverage sends those repos to the next eligible indexer; liveness comes from the foreground
-          Hello and §6.10's keepalive (online 10 min after a HelloResult or Pong within 3 s, a failed indexer
-          skipped for 2 min; D-SDK-27); an indexer first asked on failover gets its bit-1 Hello then, which opens
-          its §6.10 window at that search; a repo no indexer answers, in off mode or behind an unanswered notice
-          follows owner decision 155's download; an indexer seen again while the search screen is open is asked
-          once more for the repos that fell back
+          refused in coverage sends those repos to the next eligible indexer, read from the config state then; a
+          later page with no reply by its deadline is asked once more, the same search_id and page, before its leg
+          fails, and page 0 is never sent twice under one search_id, so no late copy of it opens a cursor again;
+          CURSOR_EXPIRED reopens the search once, under a new search_id; an open leg is judged again whenever the
+          config state moves, and one whose indexer may no longer be asked ends with no skip, its reply in flight
+          dropped (DESIGN-DETAILS.md section 7, 7.2.4); liveness comes from the foreground Hello and §6.10's
+          keepalive (online 10 min after a HelloResult or Pong within 3 s, a failed indexer skipped for 2 min;
+          D-SDK-27); an indexer first asked on failover gets its bit-1 Hello then, which opens its §6.10 window at
+          that search; a repo no indexer answers, in off mode or behind an unanswered notice follows owner decision
+          155's download; an indexer seen again while the search screen is open is asked once more for the repos
+          that fell back
 ```
 
 ```proto
@@ -12663,7 +12713,7 @@ message SearchRequest {
                                       //   the indexer normalizes it with each index's normalizer
   repeated SearchRepo repos = 8;      // page 0 only: <= 64 repos the requester reads and asks of this indexer
   int64 since_ms = 9;                 // page 0 only; 0 unbounded
-  int64 until_ms = 10;
+  int64 until_ms = 10;                // inclusive, as since_ms; a reopened search narrows it to resume
   SearchFilters filters = 11;         // page 0 only: §16.10's filters
   bool fuzzy = 12;                    // page 0 only: near hits even with 3 or more exact hits
   reserved 13, 14;                    // group_by and withhold_untrusted, for later requesters
@@ -12690,8 +12740,9 @@ message SearchReply {
   uint32 status = 6;                  // SearchStatus
   uint32 phase = 7;                   // 1 latest, 2 all, 3 done
   bool complete = 8;                  // no later page holds a hit
-  int64 checked_through_ms = 9;       // SERVED_TEXT repos: every candidate newer than this was checked, and
-                                      //   returned on this or an earlier page if it matched
+  int64 checked_through_ms = 9;       // SERVED_TEXT repos: the time of the newest candidate not yet accounted
+                                      //   for, so every newer one was checked and returned on this or an
+                                      //   earlier page if it matched; 0: none is left
   repeated SearchCoverage coverage = 10;   // page 0: one per repo named; later pages: none
   repeated SearchHit hits = 11;       // as many as fit the steps, at most 20
   SearchCounts counts = 12;
@@ -12705,7 +12756,8 @@ message SearchCoverage {
   bytes repo_id = 1;
   bytes ref_id = 2;
   uint32 served = 3;                  // SearchServed
-  uint64 ref_version = 4;             // the (v, C_v) the cursor pinned (11.9)
+  uint64 ref_version = 4;             // the (v, C_v) the cursor pinned (11.9): the text pin when SERVED_TEXT;
+                                      //   the index pin when SERVED_INDEX and the index is in the ref; else 0
   bytes chain = 5;                    // <= 32 B
   int64 ref_time_ms = 6;              // that version's signed time
   int64 latest_from_ms = 7;           // the oldest bucket day searched
@@ -12741,11 +12793,16 @@ exchange  page 0 carries the query, scope (v1 phones send 2), repos, since, unti
           authorizes, pins a snapshot per repo and answers with coverage for every repo named and the first hits;
           later pages carry only search_version, search_id, page, supersedes, steps and pad; one page in flight a
           search, page n only after n-1 arrived, a repeat of n returning the cursor's last reply unchanged
-ranking   across SERVED_TEXT repos, candidates go newest first by (time, doc_key), buckets first, then all's shards
-          youngest first, each verified against the text before it is returned; SERVED_INDEX repos' confirmed and
-          possible hits follow, ranked as a phone ranks them; near hits come last, when a term has fewer than 3
-          exact hits or fuzzy is set; checked_through_ms is the newest candidate not yet checked, so every newer
-          one was checked and, if verified, returned; phase 1 inside the buckets, 2 inside all, 3 done
+ranking   across SERVED_TEXT repos candidates go in one order, newest first by (time, the repo's place in the
+          request, doc_key), over every partition; a page reads all's shards only when the order reaches the newest
+          row all holds, by the oldest and newest times the manifest keeps for each file; each is verified against
+          the text before it is returned, and one whose text the indexer does not hold at that version is returned
+          as a phone would judge it; checked_through_ms is the time of the newest candidate not yet accounted for, a
+          hit held back for size included, so every candidate above it was examined and returned if it matched, ties
+          at that time not claimed; phase 1 while that candidate is newer than every all row, 2 after, 3 with none
+          left; SERVED_INDEX repos' confirmed and possible hits follow, ranked as a phone ranks them, and near hits
+          come last, when a term has fewer than 3 exact hits or fuzzy is set, and these claim nothing; TOO_BROAD
+          moves no span (DESIGN-DETAILS.md section 7, 7.2.5; details/RemoteCursor.tla, §22.8)
 sizes     every request body exactly 4,016 B, one envelope, timeout_ms always 10,000; every reply body exactly steps
           x 16,384 B (steps 1-4, 1 in v1), failures after parsing included; nothing compressed, no Cancel, no early
           or short reply; errors decided before parsing are small envelope Errors that depend on the requester's
@@ -12769,8 +12826,10 @@ status    OK; PARTIAL (2 s of CPU or 1,000 verifications ended the page, more to
           it parses to, checked before its pad's zeros, while a reply failing those is no reply);
           UNSUPPORTED_VERSION, judged first, so a later version's request is never INVALID, a requester raising
           search_version to send a new field, SearchRequest's reserved 13 and 14 included, and falling back to
-          version 1's fields for an indexer answering a lower range (owner decision 390); per repo in coverage,
-          SERVED_TEXT, SERVED_INDEX or a refusal, which sends that repo on (failover, above)
+          version 1's fields for an indexer answering a lower range (owner decision 390); a request for a page other
+          than the cursor's or the next is INVALID and leaves the cursor, and a lost read, the requester's or the
+          indexer's, ends it (DESIGN-DETAILS.md section 7, 7.2.5); per repo in coverage, SERVED_TEXT, SERVED_INDEX
+          or a refusal, which sends that repo on (failover, above)
 limits    requester: at most 2 open searches an indexer, a third's page 0 superseding the oldest, 30 requests a
           minute (burst 10), 64 repos a request, a larger scope split by indexer, then by 64; indexer: per requester
           the same, else RESOURCE_EXHAUSTED before parsing; Search.RemoteSearchCount (4) computing beside §16.10's 4
@@ -12780,37 +12839,45 @@ limits    requester: at most 2 open searches an indexer, a third's page 0 supers
           RemoteCursorCount (64) cursors idle at most 10 min, each at most 16 KiB of resume state plus its last
           reply; a lost reply is retried by page and answered from the cursor, not §6.6's idempotency cache, which
           holds only mutating methods' responses, and SEARCH mutates nothing (§6.6)
-serve     the indexer authorizes in its own state, naming a refused repo in coverage, never as an error; it runs
-          this subsection's plan over the buckets, retained buckets and all it holds, plus its local overlay for
-          pushes past indexed_through that its text covers, verifying against its mirror, mounted tree or bare
-          repository (11.11, 11.13), with masks, newest wins and searchable_days; it reads nothing from evs, api or
-          gkm for a remote search, reporting in coverage what it lacks, so evs sees nothing of one on either device;
-          a daemon designated for search keeps all of every repo it reads within Search.CacheByteCount (16 GiB),
-          answers no index-off repo (REFUSED_INDEX_OFF), holds at most 8 MiB of working set a search, its masks
-          probing the version table (newest, above), and persists no query (§5.9, D-CORE-17)
+serve     the indexer authorizes in its own state, naming a refused repo in coverage, never as an error; its checks
+          run in one order, none before the third reading the body, so nothing a relay sees before then depends on a
+          query: the contract's class (bit 0), the errors before parsing, the body, the cursor table, authorization
+          in its newest verified state (each repo named at page 0; the requester and each repo the cursor serves at
+          a later page, a failure ending the cursor), the snapshot and text view pinned at page 0 and held to the
+          cursor's end, then the page, stored as the cursor's last reply before it is sent; since_ms and until_ms
+          are inclusive bounds on a row's time (DESIGN-DETAILS.md section 7, 7.2.5); it runs this subsection's plan
+          over the buckets, retained buckets and all it holds, plus its local overlay for pushes past
+          indexed_through that its text covers, verifying against its mirror, mounted tree or bare repository
+          (11.11, 11.13), with masks, newest wins and searchable_days; it reads nothing from evs, api or gkm for a
+          remote search, reporting in coverage what it lacks, so evs sees nothing of one on either device; a daemon
+          designated for search keeps all of every repo it reads within Search.CacheByteCount (16 GiB), answers no
+          index-off repo (REFUSED_INDEX_OFF), holds at most 8 MiB of working set a search, its masks probing the
+          version table (newest, above), and persists no query (§5.9, D-CORE-17)
 phones    never serve: readers ignore search on a read_only or ephemeral subject, ur indexer add refuses it on an
           app host, and app-host builds set Search.RemoteServe false and never advertise bit 0; a laptop daemon may
           serve, within the CPU window
 merge     per (repo, ref, doc_key) over the remote pages and the phone's own hits, the strongest claim by class
           first, a verified or confirmed claim before a possible one before a near one, then the higher version,
-          then verified before confirmed, then an indexer's claim before the phone's, so no indexer demotes what
-          another source claimed as a match by claiming a higher version in a weaker state, and a claim verified
-          at an older version may show above a newer possible claim of its document, opening it reading the
-          newest version and judging that, with no alarm; in a SERVED_TEXT repo a local possible or near hit with
-          time_ms above checked_through_ms that no page returned moves to a collapsed "n not matched by <device>"
-          row only when the index rides the content ref and the phone's own pin of it is at or below the leg's
-          pinned version, or its time is more than SkewGuard (40 min, evs's 10 min clock bound and 30 min for a
-          push in parts) below ref_time_ms, the only test for a companion index, whose entries trail their
-          content, so a phone ahead of the indexer keeps its possible matches of the 40 min before the indexer's
-          pin possible (owner decision 392); the phone's own confirmed hits always stay, hits newer than the pinned
-          version keep the phone's state, and SERVED_INDEX hits merge as possible, dropping nothing; a hit from a
-          repo the request did not name or the phone does not read is dropped with an alarm; the phone's ERASE
-          and erasure-set masks and read checks (§5.9) apply; an opened hit is extracted and checked against the
-          query, its doc_key and version, and a mismatch, or a local confirmed hit inside the checked span that
-          no page returned where the index rides the content ref, the leg's pinned (version, chain) equals the
-          phone's own pin, the confirming field is not cut at its cap and the repo's uncovered is 0 (owner
-          decision 392), raises SidecarEvent search_alarm {mismatch or omission, indexer, repo} (§5.4), three mismatches
-          in a day skipping that indexer for 24 h
+          then verified before confirmed, then an indexer's claim before the phone's, then the leg whose first page
+          arrived first, a leg's claim taken only for a repo that leg serves, so no indexer demotes what another
+          source claimed as a match by claiming a higher version in a weaker state, and a claim verified at an older
+          version may show above a newer possible claim of its document, opening it reading the newest version and
+          judging that, with no alarm; in a SERVED_TEXT repo whose coverage reported uncovered 0, a local possible
+          or near hit with time_ms above checked_through_ms, and at or below the request's until_ms, that no indexer
+          claims in any state moves to a collapsed "n not matched by <device>" row only when the index rides the
+          content ref and the phone's own pin of it is at or below the leg's pinned version, or its time is more
+          than SkewGuard (40 min, evs's 10 min clock bound and 30 min for a push in parts) below ref_time_ms, the
+          only test for a companion index, whose entries trail their content, so a phone ahead of the indexer keeps
+          its possible matches of the 40 min before the indexer's pin possible (owner decision 392); the phone's own
+          confirmed hits always stay, hits newer than the pinned version keep the phone's state, and SERVED_INDEX
+          hits merge as possible, dropping nothing; a hit from a repo the request did not name or the phone does not
+          read is dropped with an alarm; the phone's ERASE and erasure-set masks and read checks (§5.9) apply; an
+          opened hit is extracted and checked against the query, its doc_key and version, and a mismatch, or a local
+          confirmed hit inside the checked span that no page returned where the index rides the content ref, the
+          leg's pinned (version, chain) equals the phone's own pin, the confirming field is not cut at its cap and
+          the repo's uncovered is 0 (owner decision 392), raises SidecarEvent search_alarm {mismatch or omission,
+          indexer, repo} (§5.4), three mismatches in a day skipping that indexer for 24 h and voiding its legs'
+          claims and spans in open searches (DESIGN-DETAILS.md section 7, 7.2.6; details/RemoteMerge.tla, §22.8)
 readings  (owner decision 391, every time and count a Search setting) a personal network, for eligibility, is a
           config state with one member; candidates run newest first over every partition, all's shards read only
           when the order reaches all's newest row; a read lost mid-cursor ends the cursor, CURSOR_EXPIRED on the
@@ -15989,7 +16056,8 @@ phase 1     both latest buckets (owner decision 152), an expired one until its r
             157), a dropped one this device keeps until its cached all covers it (§5.9), and the local layer,
             the commits past indexed_through (§11.14's coverage) that this device indexed from its own
             plaintext (§5.9): answered at once
-phase 2     all, at once where this device holds it current; with more, the owner's "search more", the daemon
+phase 2     all, at once where this device holds it current, a search of the cache reading all only while it is
+            usable (§11.14's retained row; owner decision 393); with more, the owner's "search more", the daemon
             first fetches every all shard it lacks, whole, youngest first in a/m's fixed order, whatever the
             query matches, and searches each as it lands, under the cold contract (Targets, below; owner
             decisions 152, 154)
@@ -18108,15 +18176,15 @@ caps        phones keep all only below 256 MiB per network and 10% of free space
             cap searches each all shard as it lands and keeps the youngest within the cap; desktops and
             indexers keep §5.9's Search.CacheByteCount (4 GiB by default; 16 GiB on a daemon designated for
             search, which evicts no all of a repo it serves while under it)
-remote      app hosts only (owner decisions 175, 177, 178): at "search more" a repo goes to an online
-            designated search indexer that §11.14's eligibility lets answer it, this member's own first, then
-            one other member's device at a time; the core splits, fails over and merges by §11.14 and reports
-            its states and "verified by" labels (18.5); a repo none answers, every repo while none is
-            designated (the default) and every repo in off mode take the fallback: all by sync position, under
-            metered and caps, with possible matches; keystrokes never leave the device; remote-mode Sidecars
-            and browser Workers never ask; an app host sets Hello feature bit 1, in Hello and HelloResult,
-            toward each search indexer its mode (on or own) lets it ask, and none in off mode, which marks the
-            pair for C19's windows (§6.10, §6.11, §4.6)
+remote      app hosts only (owner decisions 175, 177, 178): at "search more" a repo goes to an online designated
+            search indexer that §11.14's eligibility lets answer it, this member's own first, the first two
+            asked at once and the faster answering (owner decision 391), then one other member's device at a
+            time; the core splits, fails over and merges by §11.14 and reports its states and "verified by"
+            labels (18.5); a repo none answers, every repo while none is designated (the default) and every repo
+            in off mode take the fallback: all by sync position, under metered and caps, with possible matches;
+            keystrokes never leave the device; remote-mode Sidecars and browser Workers never ask; an app host
+            sets Hello feature bit 1, in Hello and HelloResult, toward each search indexer its mode (on or own)
+            lets it ask, and none in off mode, which marks the pair for C19's windows (§6.10, §6.11, §4.6)
   setting   per device and network: on (default), own (this member's indexers only), off (the fallback only);
             kept with the notice answers in §5.9's non-derived search state, never in the config repo, never
             set through MCP; "reset notices" clears the answers
@@ -22171,7 +22239,8 @@ search   desktop p50 and p99 over the buckets and over all at five years of 100 
          mailbox; one roll-up's time, natively and in wasm
 remote   at M10 on T3 with real relays and netem (Wi-Fi at 30 ms RTT and 50 Mbit/s; LTE at 75 ms p50 and 300 ms p95
          RTT, at 10 and 2 Mbit/s): tap to first and to next page, p50 and p95, cold and pre-warmed, against §18.4's
-         remote targets, and on T4's surrogates from the later of M10's and M8's exits; the indexer's service time on
+         remote targets, the indexer's compute for page 0 and the round trip measured apart (DESIGN-DETAILS.md section
+         7, 7.2.8), and on T4's surrogates from the later of M10's and M8's exits; the indexer's service time on
          desktop amd64 and arm64 and a NAS-class arm64 host, over five years of 100 messages a day and a 50-runs-a-day
          vault; 100 and 1,000 simulated requesters at 1.5 pages a member in the peak hour and ten times it, local
          searches staying inside §16.10's targets, refusals inside the remote budget, and phones failing over within
@@ -22381,6 +22450,19 @@ model       EvsCommit.tla (TLA+, checked by TLC: https://github.com/tlaplus/tlap
             a release before the commit, a blind carve, spending past expiry, a batch planned again; no tombstone, no
             listener check at Find, no pair floor, a process admitting while behind, pages in any order) as failing
             configurations;
+            details/IndexSync.tla, RemoteAsk.tla, RemoteCursor.tla and RemoteMerge.tla (DESIGN-DETAILS.md section 7,
+            run by run-remote.sh beside them) keep one ref's index on evs and one device that syncs toward a target a
+            file at a time, swaps, retains and evicts; one search's plan over own and other members' indexers that
+            serve, fail and are revoked while it runs; one search's pages between a requester and an indexer, lost,
+            repeated, erased under and reopened; and every combination of three sources' claims of one document, and
+            TLC checks LatestWhole, NoGhost, Complete, AllBehind, Bridged and Converges, Reach, OwnerBound, OneOther,
+            TwoAtOnce, OneServes, ServedByLive, OwnModeQuiet and Settles, SpanSound, NoInvention, RepeatEqual and
+            NoLeak, and Labelled, Present, MatchesStay, FoldBounded and VerifiedShown, with the rules as landed before
+            them or done wrong (a snapshot of mixed versions, a swap before every file, a stale all searched without
+            its bucket, a stale bucket retained, all ahead; a plan made once, two other members' devices at once,
+            every own indexer at once, both replies kept, no notice, the landed eligibility; a repeat that advances, a
+            watermark past a held hit, a reply kept across an erasure, a resume below a tie, an id reopened; the
+            higher version first, a fold over a claim) as failing configurations;
             details/CertOrder.tla (DESIGN-DETAILS.md section 17, run by run-certorder.sh beside it), standing alone,
             since no other model keeps an account's lock or a custom row's recorded order, keeps one custom domain's
             account lock, each row's state, recorded order and registered order, the CA's orders, which it validates,
@@ -22501,11 +22583,12 @@ FI-17  versioning: a committed version names a kind-5 segment only as §11.7's c
 FI-18  index results: for every scope, device and sync state, the candidates for a normalized query include every
        covered document whose newest committed version in the scope contains it; a hit labeled verified or confirmed
        has a newest version whose text or display fields contain it, and a hit found through a corrected term says so;
-       no hit rests only on a masked older version; an uncovered document is searched from the device's own text where
-       it holds it, else reported not yet searchable, never silently absent; a seal, merge, slot reuse or roll-up
-       changes no search's result set, nor does a fresh cache once the purge has taken every replaced index version,
-       since every tombstone a result needs stays in the committed index and no entry rests on another (owner decision
-       584); a search's mask state stays within its working set whatever the partitions hold (§11, §16, §18)
+       no hit rests only on a masked older version, a snapshot being one version of its ref and all searched only while
+       bridged (§11.14's swap and retained rows); an uncovered document is searched from the device's own text where it
+       holds it, else reported not yet searchable, never silently absent; a seal, merge, slot reuse or roll-up changes
+       no search's result set, nor does a fresh cache once the purge has taken every replaced index version, since
+       every tombstone a result needs stays in the committed index and no entry rests on another (owner decision 584);
+       a search's mask state stays within its working set whatever the partitions hold (§11, §16, §18)
 FI-19  index erasure: once the erasure of a document completes, no committed version of an index file that a current
        reader's keys open holds its postings or display fields; every stored version that held them shares a key its
        ERASEs destroyed (one key per index path in slot-keyed repos), its ciphertext purged under FI-16 or kept
@@ -22532,15 +22615,15 @@ FI-23  fetch privacy: the index objects a search fetches, and their order, depen
        fetch rule and the results the user opens, never on the query; only a fetch's time shows that a search ran
        (§2.8, §11, §18)
 FI-24  remote search: a query leaves an app host only for a designated search indexer §11.14's rule lets answer it,
-       for repos both read, an owner-bound repo only on its owner's consented device, another member's device only
-       after that member's notice; every hit names a repo the request named, which the requester reads, and a verified
-       hit's newest version contains the query; each request body is 4,016 B and each reply steps x 16,384 B, whatever
-       the query, scope, filters, results or failure after parsing; neither device sends evs, api or gkm a request
-       because of a remote search; no query, hit, snippet or cursor persists on either device, and the served record
-       names none; for a pair §6.11's bit 1 marks, each §6.10 window and direction has one report a contract, F on
-       the first and 0 on the others, whenever its other bytes stay within the allowance and it carries at most five
-       exchanges, none sent before the window's end, and no contract of the pair is created inside a foreground
-       window but at its start, a session re-establishment or overflow (§4.6, §6.10, §11.14, §18.4, §2)
+       evaluated at each send, for repos both read, an owner-bound repo only on its owner's consented device, another
+       member's device only after that member's notice; every hit names a repo the request named, which the requester
+       reads, and a verified hit's newest version contains the query; each request body is 4,016 B and each reply steps
+       x 16,384 B, whatever the query, scope, filters, results or failure after parsing; neither device sends evs, api
+       or gkm a request because of a remote search; no query, hit, snippet or cursor persists on either device, and the
+       served record names none; for a pair §6.11's bit 1 marks, each §6.10 window and direction has one report a
+       contract, F on the first and 0 on the others, whenever its other bytes stay within the allowance and it carries
+       at most five exchanges, none sent before the window's end, and no contract of the pair is created inside a
+       foreground window but at its start, a session re-establishment or overflow (§4.6, §6.10, §11.14, §18.4, §2)
 FI-25  directory authorship: every card, notice and run or worker announce entry a reader shows or acts on was written
        and signed as §16.11's path and signing rules require, by a signer that is admitted, unrevoked, unreaped,
        unsuspended, unparked and, for a member device, consented in the reader's state, and every repo item by a signer that
@@ -23459,7 +23542,8 @@ FS-74  §11    two writers' pushes to one file-mode ref, each changing only its 
               first slot in the new current bucket; a push changing no document carries
               index_none and counts toward indexed_through, and a host with the text that
               finds such a push changed a document raises index_mismatch naming the signer and
-              backfills it
+              backfills it; a reader syncing across a merge and a slot's reuse holds one
+              version of the ref at every barrier (DESIGN-DETAILS.md section 7)
 FS-75  §11    the indexer designated for search rolls an expired bucket and is killed at each  FI-18,19,20 T2+T3  M10-out
               barrier (the lock taken, the merge built, its uploads, its batch write, its head
               CAS with the response dropped, after the commit before the purge): each rerun
@@ -23526,24 +23610,27 @@ FS-77  §11,18 an ios32 and an Android surrogate cell and a page Worker, each ho
               waits, reporting waiting=metered, until the host repeats it with AllowMetered; a
               device override holds either way, the key origin's search policy request as
               SetPolicy's; no hint, wake or mirror sync fetches all; a fetch of a replaced
-              index file answering collected rereads the head and fetches the newest; the
-              search stays within §18.4's budgets, all encrypted on disk and one 64 KiB frame
-              decrypted at a time; the page Worker keeps all within 128 MiB a network, two
-              ur.io tabs relaying to the Web Lock's holder, and the quick burner keeps its
-              buckets in memory only; an erasure hint drops the erased document from every
-              cached block before the next search; the page Worker's conditions come from the
-              key-origin frame, so a Chromium-on-Android tab on Wi-Fi while charging keeps all
-              while open, while Safari and Firefox, which hide them, count as metered and not
-              charging: all waits for "search more", and one over 25 MiB for AllowMetered; an
-              app that has not yet called SetConditions counts as metered; an iOS
-              BGProcessingTask window on cellular fetches no all; a window on Wi-Fi while
-              charging whose link turns metered after its first shard reads no further shard
-              of all, and the next allowed window resumes there (owner decision 583); ur
-              search sync --evict, DropCache and the caps' eviction keep §5.9's non-derived
-              search state (policy overrides, remote mode, notice answers and served records),
-              while a browser's whole-origin eviction loses it with the keychain, the next
-              Worker starting from defaults (§5.9's rebuild row); a phone runs its merges and
-              roll-ups only in windows, within its cap (FS-75)
+              index file answering collected restarts the round on the new head; a phone with
+              a cached all, a roll-up that carried a deletion, and the retained bucket lost to
+              an ERASE: the deleted message is in no search until all is fetched again
+              (DESIGN-DETAILS.md section 7); the search stays within §18.4's budgets, all
+              encrypted on disk and one 64 KiB frame decrypted at a time; the page Worker
+              keeps all within 128 MiB a network, two ur.io tabs relaying to the Web Lock's
+              holder, and the quick burner keeps its buckets in memory only; an erasure hint
+              drops the erased document from every cached block before the next search; the
+              page Worker's conditions come from the key-origin frame, so a
+              Chromium-on-Android tab on Wi-Fi while charging keeps all while open, while
+              Safari and Firefox, which hide them, count as metered and not charging: all
+              waits for "search more", and one over 25 MiB for AllowMetered; an app that has
+              not yet called SetConditions counts as metered; an iOS BGProcessingTask window
+              on cellular fetches no all; a window on Wi-Fi while charging whose link turns
+              metered after its first shard reads no further shard of all, and the next
+              allowed window resumes there (owner decision 583); ur search sync --evict,
+              DropCache and the caps' eviction keep §5.9's non-derived search state (policy
+              overrides, remote mode, notice answers and served records), while a browser's
+              whole-origin eviction loses it with the keychain, the next Worker starting from
+              defaults (§5.9's rebuild row); a phone runs its merges and roll-ups only in
+              windows, within its cap (FS-75)
 FS-78  §11,15 a mailbox and a vault, both indexed, at the exact storage limit and spent, the   FI-5,13c,19 T2+T3  M10-out;
               eraser at evs_closure_bytes_floor: an admin's erasure of one email first                            mailbox
               commits its CUT and an ERASE of the email's own keys, both at once, the email                       M7, holds
@@ -23630,8 +23717,11 @@ FS-83  §11,18 remote search (owner decisions 175, 178), with the member's index
               and a repo of each kind: the member's mailbox and vault, an EvsShare'd vault,                       M6 (23.6)
               the team record, the directory and a group inbox; eligibility: the mailbox and
               vault go only to the member's consented indexers, never to the other member's,
-              even with every own indexer down (they fall back); a team repo goes to an own
-              indexer that reads it, else to the network-scope one; another member's
+              even with every own indexer down (they fall back); the EvsShare'd vault is asked
+              only of its owner's indexer, never of the asker's own, which reads it too; a
+              personal network's network-scope indexer answers its owner's mailbox; an indexer
+              revoked before a search's plan runs again is never asked; a team repo goes to an
+              own indexer that reads it, else to the network-scope one; another member's
               member-scope indexer, a retired, revoked, parked or suspended one, one without
               search, an app host, a read_only or ephemeral sidecar and a forged IndexerSet
               are never asked, and each refuses a request sent anyway; the indexer refuses
@@ -23651,16 +23741,21 @@ FS-83  §11,18 remote search (owner decisions 175, 178), with the member's index
               verified set over SERVED_TEXT repos, a local possible match inside the checked
               span that no page returned collapses, one outside it or newer than the pinned
               version stays, an ERASE mid-cursor answers CURSOR_EXPIRED and the erased
-              document never shows; a fabricated hit is dropped on open with
-              search_alarm{mismatch}, and a display-field match the indexer omits inside its
-              span raises search_alarm{omission}; failover: the first own indexer killed
-              before and after page 0, the second answers; both killed, the network indexer is
-              never asked for the vault, which falls back to the download under the metered
-              rule; limits: a fifth concurrent search queues or is refused, a requester past
-              30 requests a minute gets RESOURCE_EXHAUSTED, and 100 requesters at once never
-              push local searches past §16.10's targets; logs: the query canary is in no log,
-              metric, trace, crash report or state file on either device, and the served
-              record names no query
+              document never shows; a late repeat of page 0 after an erasure is answered
+              CURSOR_EXPIRED; a search reopened after 10 min idle pays one exchange and shows
+              no hit twice; a possible match committed 30 min before the indexer's pinned
+              push, in parts, is not folded; a higher-version possible claim leaves a
+              confirmed row a match; an omission at unequal pins raises nothing; a fabricated
+              hit is dropped on open with search_alarm{mismatch}, and a display-field match
+              the indexer omits inside its span raises search_alarm{omission}; failover: two
+              own indexers asked at once, the slower one's reply dropped; the first own
+              indexer killed before and after page 0, the second answers, before page 0 with
+              no added delay; both killed, the network indexer is never asked for the vault,
+              which falls back to the download under the metered rule; limits: a fifth
+              concurrent search queues or is refused, a requester past 30 requests a minute
+              gets RESOURCE_EXHAUSTED, and 100 requesters at once never push local searches
+              past §16.10's targets; logs: the query canary is in no log, metric, trace, crash
+              report or state file on either device, and the served record names no query
 FS-84  §16,11 directory writers: a card signed or pushed by another sidecar, by a parked,      FI-25       T2     M6-out
               revoked, reaped or suspended one, with a seq not above the last or an auth pin                      (entries);
               out of range; a repo announcement by a non-admin, or for an owner-bound repo by                     later of

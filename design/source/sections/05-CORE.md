@@ -318,6 +318,25 @@ type SidecarSearchSettings struct { // §16.10's limits, 5.9's cache and §11.14
 	RemoteCursorCount      int              // 64 open remote cursors, the oldest dropped
 	RemoteRequesterRate    SidecarRate      // 30 a minute, burst 10: per requester at an indexer, and per
 	                                        // indexer at a requester
+	RemoteOwnAskCount      int              // 2 own indexers a search asks at once (§11.14's order row)
+	RemoteSkipTimeout      time.Duration    // 2 min: a failed indexer is not asked (D-SDK-27)
+	RemoteOnlineTimeout    time.Duration    // 10 min: how long a HelloResult, Pong or page keeps an indexer
+	                                        // online, and the own indexer that answered last first
+	RemoteRefusedTimeout   time.Duration    // 10 min: a repo an indexer refused in coverage is not asked of it
+	RemoteServedTimeout    time.Duration    // 24 h: 5.9's memory of which repos each indexer served
+	RemoteMismatchCount    int              // 3 mismatches from one indexer within RemoteMismatchInterval, 24 h,
+	RemoteMismatchInterval time.Duration    // void its claims and skip it for RemoteDistrustTimeout, 24 h
+	RemoteDistrustTimeout  time.Duration    // (§11.14's merge row)
+	SkewGuard              time.Duration    // 40 min: evs's time check both ways (§11.8's 5b), which bounds a
+	                                        // fold; a value of the format, changed on no side alone
+	PinRingCount           int              // 64 (version, chain) pairs kept a ref, to match a coverage's pin
+	RetainFactor           int              // 2: a retained bucket lives at most 2 of its windows past its
+	                                        // roll-up
+	ResyncInterval         time.Duration    // 1 h: §11.14's resync
+	SyncRoundCount         int              // sync rounds at once a network: 4 on daemon hosts, 1 on app hosts
+	                                        // and page Workers
+	SyncRetryInterval      time.Duration    // 30 s, doubling to ResyncInterval: a round that failed on a read
+	                                        // (these fourteen: DESIGN-DETAILS.md section 7, 7.2.1)
 	ServedRecordTimeout    time.Duration    // 30 d: an owner's indexer keeps 5.9's served records, by their day
 	ServedRecordCount      int              // 8,192 served rows at most, the oldest days dropped first: a last
 	                                        // bound that ordinary use and one abusive reader never reach (owner
@@ -794,23 +813,26 @@ socket   $XDG_RUNTIME_DIR/ur/<i>.sock; macOS DARWIN_USER_TEMP_DIR (104-byte sun_
 ```text
 holds     per indexed ref this device follows: the ref version it verified (§11.9) and each index file it
           keeps, as the sealed evs records it fetched under the repo's object keys, checked against its entry
-          version's content_sha256 before it is kept (a mirror of the ref shares its copies), and beside
-          each kept record its file id and its wrapped object key exactly as its segment header carried it,
-          sealed under the repo generation's key, about 100 B a file, so no plaintext key rests on the device
-          and the cache still holds no key: a reader that holds the repo key at that generation, from §10's
-          client as any evs read does, unwraps it per file and opens the record one 64 KiB frame at a time, so
-          searches read kept shards, postings and slots without reading evs; for a slot-keyed repo
-          (record-class repos and group inboxes, §11.14's keys row) the slot's 72 B wrapped object key block
-          exactly as the slot object carried it, that slot key's generation and the segment's generation
-          whose manifest_g seals the record header, about 80 B more a file, a reader asking gkm for both
-          generations when they differ (owner decision 289); derived data
-          sealed under HKDF(R_n, "urnetwork-sidecar-v1/local/search") with XChaCha20-Poly1305, random nonces,
-          AAD = repo || ref || path || version || part: the search manifest, each shard's dictionary block
+          version's content_sha256 before it is kept (a mirror of the ref shares its copies), and beside each
+          kept record its file id and its wrapped object key exactly as its segment header carried it, sealed
+          under the repo generation's key, about 100 B a file, so no plaintext key rests on the device and the
+          cache still holds no key: a reader that holds the repo key at that generation, from §10's client as
+          any evs read does, unwraps it per file and opens the record one 64 KiB frame at a time, so searches
+          read kept shards, postings and slots without reading evs; for a slot-keyed repo (record-class repos
+          and group inboxes, §11.14's keys row) the slot's 72 B wrapped object key block exactly as the slot
+          object carried it, that slot key's generation and the segment's generation whose manifest_g seals
+          the record header, about 80 B more a file, a reader asking gkm for both generations when they differ
+          (owner decision 289); derived data sealed under HKDF(R_n, "urnetwork-sidecar-v1/local/search") with
+          XChaCha20-Poly1305, random nonces, AAD = repo || ref || path || version || part: the search manifest
+          (the version of the index ref its bucket files are whole at, each file's version, state and the
+          oldest and newest time of its rows, all's own pin, the roll-ups between the two pins and the last
+          Search.PinRingCount pins replayed) with the sync round's plan beside it (its target, the files
+          wanted and those staged; §11.14's Reads, DESIGN-DETAILS.md section 7), each shard's dictionary block
           index and n_d array, the version table (below), and on desktops the local layer (commits past
           indexed_through this device indexed from its own plaintext, dropped once the index covers them),
           mismatched entries and the local vocabulary; a bucket a roll-up dropped, kept where a stale all is
-          cached until that all shows it rolled up (a/m's rolled_through_day), and never past two bucket lengths
-          after the roll-up, so search stays complete between a roll-up and its download
+          cached until that all shows it rolled up (a/m's rolled_through_day), and never past two bucket
+          lengths after the roll-up, so search stays complete between a roll-up and its download
 versions  the version table, per index root: for each doc key and ref id the partitions this device keeps hold
           (shards' doc and tombstone tables, sealed slots, heads, large entries), its highest version there,
           whether that is a tombstone, and the file holding it, in key order in 4 KiB sealed pages under a page
@@ -822,16 +844,16 @@ versions  the version table, per index root: for each doc key and ref id the par
           epoch row), join it as erased, the former until the rewritten files are cached; §11.14's newest row
           probes it
 state     not derived, so ur search sync --evict, DropCache and the bounds row's eviction keep it: per-device
-          policy overrides (§18.4); remote search's mode, its notice answers and, for 24 h, which repos each
-          indexer served (§18.4, §11.14); on an owner's indexer, the served record, one row per (requester
-          sidecar_id, repo_id, UTC day): {requester, repo, day, count, first time, last time}, written at page
-          0 once a search and naming no query; the first remote search an EvsShare reader makes in an
-          owner-bound repo on a day adds the row, and each later one that day raises its count and moves its
-          last time; rows are kept Search.ServedRecordTimeout (30 days) by their day, so the owner's view
-          holds exact counts for the whole 30 days in at most readers x repos x 30 rows whatever a requester's
-          rate, only the times inside a day going unkept, with Search.ServedRecordCount (8,192) a last bound,
-          the oldest days dropped first (D-CORE-17; owner decision 294); deleted with the network's local
-          state
+          policy overrides (§18.4); remote search's mode, its notice answers, which repos each indexer served,
+          for 24 h, and an indexer's distrust deadline (§18.4, §11.14's merge row); on an owner's indexer, the
+          served record, one row per (requester sidecar_id, repo_id, UTC day): {requester, repo, day, count,
+          first time, last time}, written at page 0 once a search and naming no query; the first remote search
+          an EvsShare reader makes in an owner-bound repo on a day adds the row, and each later one that day
+          raises its count and moves its last time; rows are kept Search.ServedRecordTimeout (30 days) by
+          their day, so the owner's view holds exact counts for the whole 30 days in at most readers x repos x
+          30 rows whatever a requester's rate, only the times inside a day going unkept, with
+          Search.ServedRecordCount (8,192) a last bound, the oldest days dropped first (D-CORE-17; owner
+          decision 294); deleted with the network's local state
 never     a query, query history, hit, snippet, cursor (memory only, 10 min), result count or per-query verdict,
           local or remote, on the asking phone and on the answering indexer (owner decision 175); a file no
           verified entry version named

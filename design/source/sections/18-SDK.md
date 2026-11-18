@@ -108,15 +108,15 @@ caps        phones keep all only below 256 MiB per network and 10% of free space
             cap searches each all shard as it lands and keeps the youngest within the cap; desktops and
             indexers keep §5.9's Search.CacheByteCount (4 GiB by default; 16 GiB on a daemon designated for
             search, which evicts no all of a repo it serves while under it)
-remote      app hosts only (owner decisions 175, 177, 178): at "search more" a repo goes to an online
-            designated search indexer that §11.14's eligibility lets answer it, this member's own first, then
-            one other member's device at a time; the core splits, fails over and merges by §11.14 and reports
-            its states and "verified by" labels (18.5); a repo none answers, every repo while none is
-            designated (the default) and every repo in off mode take the fallback: all by sync position, under
-            metered and caps, with possible matches; keystrokes never leave the device; remote-mode Sidecars
-            and browser Workers never ask; an app host sets Hello feature bit 1, in Hello and HelloResult,
-            toward each search indexer its mode (on or own) lets it ask, and none in off mode, which marks the
-            pair for C19's windows (§6.10, §6.11, §4.6)
+remote      app hosts only (owner decisions 175, 177, 178): at "search more" a repo goes to an online designated
+            search indexer that §11.14's eligibility lets answer it, this member's own first, the first two
+            asked at once and the faster answering (owner decision 391), then one other member's device at a
+            time; the core splits, fails over and merges by §11.14 and reports its states and "verified by"
+            labels (18.5); a repo none answers, every repo while none is designated (the default) and every repo
+            in off mode take the fallback: all by sync position, under metered and caps, with possible matches;
+            keystrokes never leave the device; remote-mode Sidecars and browser Workers never ask; an app host
+            sets Hello feature bit 1, in Hello and HelloResult, toward each search indexer its mode (on or own)
+            lets it ask, and none in off mode, which marks the pair for C19's windows (§6.10, §6.11, §4.6)
   setting   per device and network: on (default), own (this member's indexers only), off (the fallback only);
             kept with the notice answers in §5.9's non-derived search state, never in the config repo, never
             set through MCP; "reset notices" clears the answers
