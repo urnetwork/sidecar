@@ -495,6 +495,7 @@ type evsReseedContent struct {
 	kind1      map[string]bool
 }
 
+// What version's checked payload names of its kind-5 content, judged by lastChanges, nil for a format-1 mirror.
 func newEvsReseedContent(version uint64, checked *EvsCheckedPayload, lastChanges map[string]uint64) *evsReseedContent {
 	content := &evsReseedContent{version: version, lastChanges: lastChanges, kind5Paths: map[string][]string{}, kind1: map[string]bool{}}
 	for _, change := range checked.Changes {

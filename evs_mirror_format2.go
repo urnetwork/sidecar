@@ -111,6 +111,14 @@ func (self *evsMirrorRun) holdFormat2(ctx context.Context, head *EvsVerifiedHead
 			continue
 		}
 		for _, segmentId := range EvsMirrorReplacedSegmentIds(replaced, named) {
+			// a version walked again after a reread finds its replaced copies gone already, and counts nothing
+			held, err := self.mirror.store.Has(EvsMirrorSegmentKey(segmentId))
+			if err != nil {
+				return err
+			}
+			if !held {
+				continue
+			}
 			if err := self.mirror.store.Remove(EvsMirrorSegmentKey(segmentId)); err != nil {
 				return err
 			}
