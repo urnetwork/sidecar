@@ -328,6 +328,9 @@ type SearchTools struct {
 	settings  *SearchToolSettings
 	// Registers a stream with the cache's open cursors, so a lock ends it; nil registers nothing.
 	addCursor func(end func()) func()
+	// The team directory's folded view behind search_agents (DirectoryClient.SearchAgentsFold); nil in a personal
+	// network and before the directory exists.
+	agentsFold func(hits []SearchHit) []SearchHit
 }
 
 // Tools over engine, on networkId, judged for reader (nil judges every hit untrusted); nil settings take
@@ -370,6 +373,9 @@ func (self *Sidecar) SearchTools() (*SearchTools, error) {
 	}
 	if cache, err := self.SearchCache(); err == nil {
 		tools.addCursor = cache.AddCursor
+	}
+	if directory := self.Directory(); directory != nil {
+		tools.agentsFold = directory.SearchAgentsFold
 	}
 	return tools, nil
 }
@@ -892,7 +898,7 @@ func (self *SearchTools) Agents(ctx context.Context, env *SearchToolEnv, args *S
 	reader := self.reader()
 	request := &SearchAgentsRequest{
 		Task: args.Task, GroupCount: groupCount, Include: include, Taint: env.Taint, Reader: reader, Secret: env.Secret, Admit: env.Admit,
-		Wait: wait,
+		Wait: wait, Fold: self.agentsFold,
 	}
 	if request.Since, err = searchToolParseTime(args.Since); err != nil {
 		return nil, err

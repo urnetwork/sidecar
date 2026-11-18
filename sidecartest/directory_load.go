@@ -31,6 +31,18 @@
 //	          head PUT delay) latency is that model's, each ref's commits queueing behind one another; where they do
 //	          not, it is measured on the clock
 //
+// M10's form (RECORD-M10-07; DirectoryLoadSettings.Cards) runs the same plan with §16.11's pushes row as format 2
+// carries it: each run's start and end and each renewal a write of its sidecar's card on the cards ref, signed for real
+// and holding the sidecar's open runs, a start and an end changing content and so carrying an index entry, a renewal
+// carrying none; coordination, request and decision entries stay on writers' streams, and notices on the cards ref,
+// which is versionless. Its meter prices a fetched card at its stored bytes and the cards a read carried
+// CardReadCount to a request; its mutants are a reader that fetches every changed version and not each card's newest,
+// one that fetches the index head each content change wrote and derives none, and one that reads unchanged cards
+// again; and its ceilings are the cards ref's commits, whose head every push shares (CardCommits): p99, 412 reruns a
+// commit and 429 BUSY at the column's peak rate and at 3x bursts, on the store model here and on the clock where a
+// seam gives no model. No index stands behind the fakes: heads are priced, not stored, and a cold desktop's bytes
+// leave the latest index out. FOLD_BEHIND is evs's own and is T3's to count.
+//
 // The same plan and run serve a longer or a physical run: the seams name the clock, the streams and the cards, and a
 // T3 run passes T3's. The fakes here are T2's.
 
@@ -45,6 +57,7 @@ import (
 	"math"
 	"math/rand/v2"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -96,6 +109,10 @@ type DirectoryLoadSettings struct {
 	SampledReaderCount int
 	// The directory settings every reader runs with; nil takes sidecar's defaults.
 	Directory *sidecar.SidecarDirectorySettings
+	// M10's form: run items on cards on the cards ref, the directory at format 2. False is M6's, announce entries.
+	Cards bool
+	// The open runs one card holds at most, an older one dropped unended past it: 8, under a card's 16 items.
+	CardRunCount int
 }
 
 // §16.11's model at 500 members for one day, four readers measured.
@@ -125,6 +142,7 @@ func DefaultDirectoryLoadSettings() *DirectoryLoadSettings {
 		IdleSyncInterval:                directory.IdleSyncInterval,
 		ViewSyncsPerDaemonDay:           22,
 		SampledReaderCount:              4,
+		CardRunCount:                    8,
 	}
 }
 
@@ -504,6 +522,9 @@ type DirectoryLoadSeams struct {
 	// How long a push's commit took where a commit does not move Clock, as on the fakes; nil measures each commit on
 	// Clock.
 	CommitDuration func(push *DirectoryLoadPush) time.Duration
+	// The store model CommitDuration reads, by which the cards ref's shared head is queued (CardCommits); nil where
+	// commits are measured on Clock.
+	Store *DirectoryLoadStoreSettings
 }
 
 // T2's stand-in for the stores' time, which a fake has none of.
@@ -514,13 +535,29 @@ type DirectoryLoadStoreSettings struct {
 	PutDuration  time.Duration
 	// A fault's delay on every head PUT: 0 for none (FS-86's injected 200 ms).
 	HeadPutDelay time.Duration
+	// The commits waiting on one ref's head past which evs answers a push 429 BUSY, and how long its sender waits to
+	// send it again: 8 and 1 s. A stand-in as the durations are.
+	BusyQueueCount int
+	BusyRetryDelay time.Duration
 }
 
 func DefaultDirectoryLoadStoreSettings() *DirectoryLoadStoreSettings {
 	return &DirectoryLoadStoreSettings{
-		BodyPutCount: 2,
-		PutDuration:  40 * time.Millisecond,
+		BodyPutCount:   2,
+		PutDuration:    40 * time.Millisecond,
+		BusyQueueCount: 8,
+		BusyRetryDelay: time.Second,
 	}
+}
+
+// A push's time before it reaches its ref's head: its body PUTs, which wait on no other push.
+func (self *DirectoryLoadStoreSettings) BodyDuration() time.Duration {
+	return time.Duration(self.BodyPutCount) * self.PutDuration
+}
+
+// One head PUT's time, a fault's delay included: what a shared ref's commits take turns at.
+func (self *DirectoryLoadStoreSettings) HeadDuration() time.Duration {
+	return self.PutDuration + self.HeadPutDelay
 }
 
 // One commit's time on the model: its body PUTs and its head PUT, the head's delayed by a fault.
@@ -594,6 +631,10 @@ func NewDirectoryLoadFakes(ctx context.Context, plan *DirectoryLoadPlan, clock *
 	}
 	fakes.RecordAuth.Append(recordFixture)
 	fakes.DirectoryAuth.Append(directoryFixture)
+	if plan.Settings.Cards {
+		// M10's form: the directory at format 2 from its first push
+		fakes.Cards.RaiseFormat(directoryId)
+	}
 	return fakes, nil
 }
 
@@ -611,6 +652,7 @@ func (self *DirectoryLoadFakes) Seams() *DirectoryLoadSeams {
 		CommitDuration: func(push *DirectoryLoadPush) time.Duration {
 			return self.Store.CommitDuration()
 		},
+		Store: self.Store,
 	}
 }
 
@@ -735,15 +777,33 @@ func (self *directoryCostMeterCards) ReadCards(ctx context.Context, repoId sidec
 	cost := &DirectoryCost{RequestCount: 1, PathReadCount: settings.CardsPathReadCount}
 	if changes != nil {
 		statements := map[uint64]bool{}
+		fetches := int64(0)
 		for _, file := range changes.Files {
 			statements[file.PushVersion] = true
-			cost.ByteCount += int64(len(file.Content))
+			switch {
+			case file.Content == nil:
+			case directoryLoadCardPath(file.Path):
+				// a card or a repo file: a path fetched, at its stored bytes
+				fetches += 1
+				cost.ByteCount += settings.CardStoredByteCount(int64(len(file.Content)))
+			default:
+				cost.ByteCount += int64(len(file.Content))
+			}
 		}
 		cost.PathReadCount += int64(len(statements)) * settings.CardStatementPathReadCount
 		cost.ByteCount += int64(len(statements)) * settings.StatementByteCount
+		if 0 < fetches {
+			cost.RequestCount += directoryCostPages(fetches, settings.CardReadCount)
+			cost.PathReadCount += fetches * settings.CardPathReadCount
+		}
 	}
 	self.meter.charge(self.sidecarId, cost)
 	return changes, err
+}
+
+// Whether path is a card's or a repo file's on the cards ref.
+func directoryLoadCardPath(path string) bool {
+	return strings.HasPrefix(path, "d/") || strings.HasPrefix(path, "r/")
 }
 
 type directoryCostMeterStreams struct {
@@ -779,6 +839,12 @@ const (
 	DirectoryLoadMutantRereadUnmovedStreams
 	// Every sync reads the cards ref's notices again from its first statement.
 	DirectoryLoadMutantRefetchUnchangedNotices
+	// M10's form: every changed version of a card is fetched, not each card's newest alone.
+	DirectoryLoadMutantNoCardCoalescing
+	// M10's form: the index head each card content change wrote is fetched, none derived from its card.
+	DirectoryLoadMutantNoHeadReproduction
+	// M10's form: every sync reads the cards ref again from its first statement, fetching the cards it holds.
+	DirectoryLoadMutantRefetchUnchangedCards
 )
 
 func (self DirectoryLoadMutant) String() string {
@@ -791,6 +857,12 @@ func (self DirectoryLoadMutant) String() string {
 		return "re-reading unmoved streams"
 	case DirectoryLoadMutantRefetchUnchangedNotices:
 		return "refetching unchanged notices"
+	case DirectoryLoadMutantNoCardCoalescing:
+		return "no coalescing to each card's newest version"
+	case DirectoryLoadMutantNoHeadReproduction:
+		return "no head reproduction"
+	case DirectoryLoadMutantRefetchUnchangedCards:
+		return "refetching unchanged cards"
 	}
 	return fmt.Sprintf("mutant %d", int(self))
 }
@@ -804,6 +876,11 @@ type directoryLoadMutantCards struct {
 	stateLock sync.Mutex
 	// each stream's head as this reader last read it
 	held map[sidecar.Id]uint64
+	// M10's mutants charge the meter for what the mutated client would fetch beyond what the seam answered
+	meter     *DirectoryCostMeter
+	sidecarId sidecar.Id
+	// whether the card version at a path changed content, so its push wrote an index head
+	indexEntry func(path string, version uint64) bool
 }
 
 func (self *directoryLoadMutantCards) note(results []*sidecar.DirectoryStreamVersions) {
@@ -878,7 +955,38 @@ func (self *directoryLoadMutantCards) ReadStreamLog(ctx context.Context, repoId 
 }
 
 func (self *directoryLoadMutantCards) ReadCards(ctx context.Context, repoId sidecar.Id, afterVersion uint64) (*sidecar.DirectoryCardsChanges, error) {
-	if self.mutant == DirectoryLoadMutantRefetchUnchangedNotices && 0 < afterVersion {
+	switch self.mutant {
+	case DirectoryLoadMutantNoCardCoalescing, DirectoryLoadMutantNoHeadReproduction:
+		changes, err := self.DirectoryCards.ReadCards(ctx, repoId, afterVersion)
+		if err != nil || changes == nil || self.meter == nil {
+			return changes, err
+		}
+		settings := self.meter.settings
+		fetches := int64(0)
+		extra := &DirectoryCost{}
+		for _, file := range changes.Files {
+			if file.Removed || !directoryLoadCardPath(file.Path) {
+				continue
+			}
+			switch {
+			case self.mutant == DirectoryLoadMutantNoCardCoalescing && file.Content == nil:
+				// a replaced version, which this client fetches as well: a card at one pad step
+				fetches += 1
+				extra.ByteCount += settings.CardStoredByteCount(1)
+				extra.PathReadCount += settings.CardPathReadCount
+			case self.mutant == DirectoryLoadMutantNoHeadReproduction && self.indexEntry != nil && self.indexEntry(file.Path, file.Version):
+				fetches += 1
+				extra.ByteCount += settings.IndexHeadByteCount
+				extra.PathReadCount += settings.IndexHeadPathReadCount
+			}
+		}
+		if 0 < fetches {
+			extra.RequestCount = directoryCostPages(fetches, settings.CardReadCount)
+			self.meter.charge(self.sidecarId, extra)
+		}
+		return changes, nil
+	}
+	if (self.mutant == DirectoryLoadMutantRefetchUnchangedNotices || self.mutant == DirectoryLoadMutantRefetchUnchangedCards) && 0 < afterVersion {
 		// the notices this reader holds, read again
 		for after := uint64(0); after < afterVersion; {
 			changes, err := self.DirectoryCards.ReadCards(ctx, repoId, after)
@@ -906,6 +1014,24 @@ type DirectoryLoadCeilings struct {
 	NoticeRemoveDriveByteCount  int64
 	// What a measure may reach against its table row: 1.25.
 	Tolerance float64
+	// M10's form, §11.13's team directory push row on 4 KiB blocks: a card's content change about 55 KiB, its index
+	// head's entry at folds included, a renewal about 37, and from M10 a stream entry's companion push on ur/index about
+	// 28 beside the entry's 96.
+	CardChangeDriveByteCount  int64
+	CardRenewalDriveByteCount int64
+	CompanionDriveByteCount   int64
+	// §16.11's cards ref commits row (FS-86). At the column's peak rate: p99 <= 300 ms from arrival to 200, at most 0.5
+	// 412 reruns a commit on average and no 429 BUSY.
+	CardPushP99   time.Duration
+	CardRerunMean float64
+	CardBusyShare float64
+	// At CardBurstFactor times that rate, 3: p99 <= 1 s, at most 1 rerun a commit on average, 429 BUSY on at most 0.1% of
+	// pushes, and each of those committing on its retry within 5 s.
+	CardBurstFactor      float64
+	CardBurstPushP99     time.Duration
+	CardBurstRerunMean   float64
+	CardBurstBusyShare   float64
+	CardBurstRetryCommit time.Duration
 }
 
 func DefaultDirectoryLoadCeilings() *DirectoryLoadCeilings {
@@ -916,6 +1042,17 @@ func DefaultDirectoryLoadCeilings() *DirectoryLoadCeilings {
 		NoticeRewriteDriveByteCount: 37 * 1024,
 		NoticeRemoveDriveByteCount:  53 * 1024,
 		Tolerance:                   1.25,
+		CardChangeDriveByteCount:    55 * 1024,
+		CardRenewalDriveByteCount:   37 * 1024,
+		CompanionDriveByteCount:     28 * 1024,
+		CardPushP99:                 300 * time.Millisecond,
+		CardRerunMean:               0.5,
+		CardBusyShare:               0,
+		CardBurstFactor:             3,
+		CardBurstPushP99:            time.Second,
+		CardBurstRerunMean:          1,
+		CardBurstBusyShare:          0.001,
+		CardBurstRetryCommit:        5 * time.Second,
 	}
 }
 
@@ -985,6 +1122,8 @@ type DirectoryLoadOptions struct {
 	NoReaders bool
 	// Leaves out the cold desktop and the cold phone.
 	NoCold bool
+	// Leaves out the cold phone alone.
+	NoPhone bool
 }
 
 // The cold phone's view as it went.
@@ -1024,6 +1163,12 @@ type DirectoryLoadResult struct {
 	Phone *DirectoryLoadPhone
 	// The bytes every stream version costs a reader, statements included: what a cold reader fetches.
 	StreamByteCount int64
+	// M10's form: when each push on the cards ref arrived, Unix milliseconds in arrival order, and each one's latency
+	// measured on the clock where the seams give no commit duration.
+	CardPushArrivalMillis []int64
+	CardPushLatencies     []time.Duration
+	// The store model the seams' commit durations came from, nil where they gave none.
+	Store *DirectoryLoadStoreSettings
 }
 
 // One announcing sidecar's surrogate: its key, its chain and what it has announced.
@@ -1038,6 +1183,24 @@ type directoryLoadWriter struct {
 	runVersion        uint64
 	runStartedMillis  int64
 	runOpen           bool
+	// M10's form: its card's seq and path version, its open runs' items in the order they started, and the item a
+	// run's end left on the card for the one write that carries it
+	cardSeq     uint64
+	cardVersion uint64
+	cardRuns    []*directoryLoadCardRun
+}
+
+// One open run on a writer's card.
+type directoryLoadCardRun struct {
+	// the plan's run, -1 for one a renewal opened
+	run  int
+	item *protocol.Announcement
+}
+
+// One version of a path of the cards ref.
+type directoryLoadCardVersion struct {
+	path    string
+	version uint64
 }
 
 func (self *directoryLoadWriter) sign(purpose string, signedType bridge.SignedType, body []byte, agentId *sidecar.Id) (*bridge.Signed, error) {
@@ -1067,6 +1230,8 @@ type DirectoryLoad struct {
 
 	stateLock sync.Mutex
 	alarms    []*sidecar.RecordAlarm
+	// M10's form: the card versions whose push carried an index entry
+	cardIndexEntries map[directoryLoadCardVersion]bool
 }
 
 // options nil takes the defaults.
@@ -1077,7 +1242,11 @@ func NewDirectoryLoad(plan *DirectoryLoadPlan, seams *DirectoryLoadSeams, option
 	if options == nil {
 		options = &DirectoryLoadOptions{}
 	}
-	oracle := NewDirectoryCostOracle(options.Oracle)
+	oracleSettings := options.Oracle
+	if oracleSettings == nil && plan.Settings.Cards {
+		oracleSettings = DefaultDirectoryCostOracleSettingsM10()
+	}
+	oracle := NewDirectoryCostOracle(oracleSettings)
 	return &DirectoryLoad{
 		plan:               plan,
 		seams:              seams,
@@ -1089,6 +1258,7 @@ func NewDirectoryLoad(plan *DirectoryLoadPlan, seams *DirectoryLoadSeams, option
 		noticePaths:        map[int]string{},
 		noticeVersions:     map[int]uint64{},
 		noticeIds:          map[int]sidecar.Id{},
+		cardIndexEntries:   map[directoryLoadCardVersion]bool{},
 	}, nil
 }
 
@@ -1195,6 +1365,9 @@ func (self *DirectoryLoad) push(ctx context.Context, planned *DirectoryLoadPush)
 		return nil, err
 	}
 	nowMillis := self.seams.Clock.Now().UnixMilli()
+	if self.plan.Settings.Cards && DirectoryLoadPushRunStart <= planned.Kind && planned.Kind <= DirectoryLoadPushRenewal {
+		return self.pushCard(ctx, writer, planned)
+	}
 	event := &DirectoryCostEvent{TimeMillis: nowMillis, Kind: DirectoryCostEventStream, WriterSidecarId: writer.planned.SidecarId}
 	announce := func(state sidecar.DirectoryAnnouncementState) error {
 		event.ByteCount, err = self.pushEntry(ctx, writer, sidecar.RecordKindAnnounce, sidecar.RecordSourceObserved, self.runItem(writer, state))
@@ -1268,6 +1441,9 @@ func (self *DirectoryLoad) push(ctx context.Context, planned *DirectoryLoadPush)
 			State:              uint32(sidecar.DirectoryNoticeStatePending),
 		}
 		event.Kind = DirectoryCostEventNotice
+		if self.plan.Settings.Cards {
+			event.Path = self.noticePaths[planned.Request]
+		}
 		content, err := proto.MarshalOptions{Deterministic: true}.Marshal(notice)
 		if err != nil {
 			return nil, err
@@ -1287,6 +1463,9 @@ func (self *DirectoryLoad) push(ctx context.Context, planned *DirectoryLoadPush)
 		if !ok {
 			return nil, fmt.Errorf("request %d's notice is removed before it is written", planned.Request)
 		}
+		if self.plan.Settings.Cards {
+			event.Path = path
+		}
 		err := writer.cards.RemoveCard(ctx, self.seams.DirectoryId, &sidecar.DirectoryCardWrite{
 			PushId: sidecar.NewId(), Path: path, IfVersion: self.noticeVersions[planned.Request], AuthPin: pin,
 		})
@@ -1294,6 +1473,93 @@ func (self *DirectoryLoad) push(ctx context.Context, planned *DirectoryLoadPush)
 		return event, err
 	}
 	return nil, fmt.Errorf("a push of kind %d", planned.Kind)
+}
+
+// One run push of the plan in M10's form: the writer's card rewritten on the cards ref. A start adds a run's item, an
+// end raises its item's version in state ended, which the card carries for this one write, and a renewal renews every
+// open item at its version, or opens one where none is open. The event says whether the write changed content, and so
+// carried an index entry.
+func (self *DirectoryLoad) pushCard(ctx context.Context, writer *directoryLoadWriter, planned *DirectoryLoadPush) (*DirectoryCostEvent, error) {
+	nowMillis := self.seams.Clock.Now().UnixMilli()
+	expiresMillis, _ := sidecar.DirectoryAnnouncementExpiresMillis(sidecar.DirectoryAnnouncementKindRun, nowMillis)
+	open := func(run int) *directoryLoadCardRun {
+		writer.runAnnouncementId = sidecar.NewId()
+		writer.runVersion = 1
+		writer.runStartedMillis = nowMillis
+		opened := &directoryLoadCardRun{run: run, item: self.runItem(writer, sidecar.DirectoryAnnouncementStateActive)}
+		writer.cardRuns = append(writer.cardRuns, opened)
+		if limit := self.plan.Settings.CardRunCount; 0 < limit && limit < len(writer.cardRuns) {
+			writer.cardRuns = writer.cardRuns[len(writer.cardRuns)-limit:]
+		}
+		return opened
+	}
+	items := []*protocol.Announcement{}
+	indexEntry := false
+	switch planned.Kind {
+	case DirectoryLoadPushRunStart:
+		open(planned.Run)
+		indexEntry = true
+	case DirectoryLoadPushRunEnd:
+		// the run's item ended at a raised version; a run the card no longer holds ends as an item of its own
+		at := slices.IndexFunc(writer.cardRuns, func(held *directoryLoadCardRun) bool { return held.run == planned.Run })
+		if at < 0 {
+			open(planned.Run)
+			at = len(writer.cardRuns) - 1
+		}
+		ended := writer.cardRuns[at].item
+		ended.Version += 1
+		ended.State = uint32(sidecar.DirectoryAnnouncementStateEnded)
+		ended.RenewedMillis, ended.ExpiresMillis = nowMillis, expiresMillis
+		writer.cardRuns = slices.Delete(writer.cardRuns, at, at+1)
+		items = append(items, ended)
+		indexEntry = true
+	case DirectoryLoadPushRenewal:
+		if len(writer.cardRuns) == 0 {
+			open(-1)
+			indexEntry = true
+		}
+		for _, held := range writer.cardRuns {
+			held.item.RenewedMillis, held.item.ExpiresMillis = nowMillis, expiresMillis
+		}
+	}
+	for _, held := range writer.cardRuns {
+		items = append(items, held.item)
+	}
+	writer.cardSeq += 1
+	body, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.DirectoryCard{
+		NetworkId: self.seams.NetworkId.Bytes(), SidecarId: writer.planned.SidecarId.Bytes(), Seq: writer.cardSeq, At: self.seams.Auth().Pin(),
+		WrittenMillis: nowMillis, Items: items, Version: 1,
+	})
+	if err != nil {
+		return nil, err
+	}
+	signed, err := writer.sign(sidecar.DirectorySignedPurpose, bridge.SignedType_SIGNED_DIRECTORY_CARD, body, nil)
+	if err != nil {
+		return nil, err
+	}
+	content, err := proto.MarshalOptions{Deterministic: true}.Marshal(signed)
+	if err != nil {
+		return nil, err
+	}
+	path := sidecar.DirectoryCardPath(writer.planned.SidecarId)
+	version, err := writer.cards.PutCard(ctx, self.seams.DirectoryId, &sidecar.DirectoryCardWrite{
+		PushId: sidecar.NewId(), Path: path, IfVersion: writer.cardVersion, Content: content, AuthPin: self.seams.Auth().Pin(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	writer.cardVersion = version
+	if indexEntry {
+		func() {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			self.cardIndexEntries[directoryLoadCardVersion{path: path, version: version}] = true
+		}()
+	}
+	return &DirectoryCostEvent{
+		TimeMillis: nowMillis, Kind: DirectoryCostEventCard, WriterSidecarId: writer.planned.SidecarId,
+		ByteCount: self.oracle.Settings().CardStoredByteCount(int64(len(content))), Path: path, IndexEntry: indexEntry,
+	}, nil
 }
 
 // The real client of the plan's sidecar at index, behind the meter and, for a measured reader, the run's mutant.
@@ -1305,7 +1571,14 @@ func (self *DirectoryLoad) reader(index int, mutant DirectoryLoadMutant) (*sidec
 	}
 	cards := self.meter.Cards(planned.SidecarId, self.seams.Cards(planned.SidecarId))
 	if mutant != DirectoryLoadMutantNone {
-		cards = &directoryLoadMutantCards{DirectoryCards: cards, mutant: mutant, held: map[sidecar.Id]uint64{}}
+		cards = &directoryLoadMutantCards{
+			DirectoryCards: cards, mutant: mutant, held: map[sidecar.Id]uint64{}, meter: self.meter, sidecarId: planned.SidecarId,
+			indexEntry: func(path string, version uint64) bool {
+				self.stateLock.Lock()
+				defer self.stateLock.Unlock()
+				return self.cardIndexEntries[directoryLoadCardVersion{path: path, version: version}]
+			},
+		}
 	}
 	settings := self.plan.Settings.Directory
 	if settings == nil {
@@ -1348,6 +1621,7 @@ func (self *DirectoryLoad) Run(ctx context.Context) (*DirectoryLoadResult, error
 		PushCounts: map[DirectoryLoadPushKind]int{},
 		WholeTeam:  !self.options.SampleOracleOnly,
 		NoReaders:  self.options.NoReaders,
+		Store:      self.seams.Store,
 	}
 	if self.options.NoReaders && self.options.SampleOracleOnly {
 		return nil, errors.New("a run with no readers has no sample for the oracle to keep to")
@@ -1439,7 +1713,7 @@ func (self *DirectoryLoad) Run(ctx context.Context) (*DirectoryLoadResult, error
 		}
 		result.Schedule.Events = append(result.Schedule.Events, event)
 		result.PushCounts[planned.Kind] += 1
-		if planned.Kind.Stream() {
+		if event.Kind == DirectoryCostEventStream {
 			result.StreamByteCount += self.oracle.Settings().StatementByteCount + event.ByteCount
 			latency := self.seams.Clock.Now().Sub(started)
 			if self.seams.CommitDuration != nil {
@@ -1452,6 +1726,10 @@ func (self *DirectoryLoad) Run(ctx context.Context) (*DirectoryLoadResult, error
 				latency = finish.Sub(arrival)
 			}
 			result.StreamPushLatencies = append(result.StreamPushLatencies, latency)
+		} else {
+			// a push on the cards ref, whose head every such push shares
+			result.CardPushArrivalMillis = append(result.CardPushArrivalMillis, planned.TimeMillis)
+			result.CardPushLatencies = append(result.CardPushLatencies, self.seams.Clock.Now().Sub(started))
 		}
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -1482,7 +1760,8 @@ func (self *DirectoryLoad) Run(ctx context.Context) (*DirectoryLoadResult, error
 		}
 		result.ColdDesktopExpected = expected.Total()
 		result.ColdDesktopMeasured = directoryLoadReaderCost(self.meter.Costs(), desktopId)
-
+	}
+	if !self.options.NoCold && !self.options.NoPhone {
 		// the cold phone: a metered view, then the metered bytes allowed
 		phoneId := plan.Sidecars[plan.ColdPhone].SidecarId
 		phone, err := self.reader(plan.ColdPhone, DirectoryLoadMutantNone)
@@ -1540,6 +1819,13 @@ func DirectoryLoadP99(latencies []time.Duration) time.Duration {
 
 // The NVMe bytes the run's pushes cost one metadata drive, by §11.13's prices.
 func (self *DirectoryLoadResult) DriveByteCount(ceilings *DirectoryLoadCeilings) int64 {
+	if self.Plan.Settings.Cards {
+		byteCount := int64(0)
+		for _, row := range self.DrivePushes(ceilings) {
+			byteCount += int64(row.PushCount) * row.DriveByteCount
+		}
+		return byteCount
+	}
 	streamCount := 0
 	for kind, count := range self.PushCounts {
 		if kind.Stream() {
@@ -1550,6 +1836,209 @@ func (self *DirectoryLoadResult) DriveByteCount(ceilings *DirectoryLoadCeilings)
 		int64(self.PushCounts[DirectoryLoadPushNoticeCreate])*ceilings.NoticeCreateDriveByteCount +
 		int64(self.PushCounts[DirectoryLoadPushNoticeRewrite])*ceilings.NoticeRewriteDriveByteCount +
 		int64(self.PushCounts[DirectoryLoadPushNoticeRemove])*ceilings.NoticeRemoveDriveByteCount
+}
+
+// One of §11.13's rows a run's pushes price by: how many of the run's pushes it prices, and the NVMe bytes one of
+// them costs a metadata drive on 4 KiB blocks.
+type DirectoryDrivePushRow struct {
+	Name           string
+	PushCount      int
+	DriveByteCount int64
+}
+
+// The run's pushes in M10's form by §11.13's rows: what format 2's computed write gate (D-TEST-13) multiplies by the
+// measured price table. A card's content change, a renewal, a stream entry with its companion push on ur/index, and a
+// notice created, rewritten and removed. Nil in M6's form.
+func (self *DirectoryLoadResult) DrivePushes(ceilings *DirectoryLoadCeilings) []*DirectoryDrivePushRow {
+	if !self.Plan.Settings.Cards {
+		return nil
+	}
+	changes, renewals := 0, 0
+	for _, event := range self.Schedule.Events {
+		switch {
+		case event.Kind == DirectoryCostEventCard && event.IndexEntry:
+			changes += 1
+		case event.Kind == DirectoryCostEventCard:
+			renewals += 1
+		}
+	}
+	return []*DirectoryDrivePushRow{
+		{Name: "card content change", PushCount: changes, DriveByteCount: ceilings.CardChangeDriveByteCount},
+		{Name: "card renewal", PushCount: renewals, DriveByteCount: ceilings.CardRenewalDriveByteCount},
+		{Name: "stream entry", PushCount: self.PushCounts[DirectoryLoadPushEntry], DriveByteCount: ceilings.StreamEntryDriveByteCount},
+		{Name: "companion push", PushCount: self.PushCounts[DirectoryLoadPushEntry], DriveByteCount: ceilings.CompanionDriveByteCount},
+		{Name: "notice created", PushCount: self.PushCounts[DirectoryLoadPushNoticeCreate], DriveByteCount: ceilings.NoticeCreateDriveByteCount},
+		{Name: "notice rewritten", PushCount: self.PushCounts[DirectoryLoadPushNoticeRewrite], DriveByteCount: ceilings.NoticeRewriteDriveByteCount},
+		{Name: "notice removed", PushCount: self.PushCounts[DirectoryLoadPushNoticeRemove], DriveByteCount: ceilings.NoticeRemoveDriveByteCount},
+	}
+}
+
+// What the cards ref's commits did: each push's latency from arrival to its head's commit, the 412 reruns in all, and
+// the pushes evs answered 429 BUSY with each one's time from arrival to its commit on a retry.
+type DirectoryLoadCardCommits struct {
+	Latencies      []time.Duration
+	RerunCount     int
+	BusyCount      int
+	RetryLatencies []time.Duration
+}
+
+// The mean 412 reruns a commit.
+func (self *DirectoryLoadCardCommits) RerunMean() float64 {
+	if len(self.Latencies) == 0 {
+		return 0
+	}
+	return float64(self.RerunCount) / float64(len(self.Latencies))
+}
+
+// The share of pushes answered 429 BUSY.
+func (self *DirectoryLoadCardCommits) BusyShare() float64 {
+	if len(self.Latencies) == 0 {
+		return 0
+	}
+	return float64(self.BusyCount) / float64(len(self.Latencies))
+}
+
+// The cards ref's commits for pushes arriving at arrivalMillis, ascending, on the store model: a push's body PUTs wait
+// on nothing, then its head PUT takes its turn on the ref's one head; each commit that lands between a push reading the
+// head, as its bodies end, and its own head PUT is a 412 and a rerun; and a push that finds BusyQueueCount commits
+// waiting is answered 429 BUSY and sent again BusyRetryDelay later.
+func directoryLoadCardQueue(arrivalMillis []int64, store *DirectoryLoadStoreSettings) *DirectoryLoadCardCommits {
+	commits := &DirectoryLoadCardCommits{}
+	type attempt struct {
+		arrival time.Time
+		ready   time.Time
+		busy    bool
+	}
+	attempts := make([]*attempt, 0, len(arrivalMillis))
+	for _, millis := range arrivalMillis {
+		arrival := time.UnixMilli(millis)
+		attempts = append(attempts, &attempt{arrival: arrival, ready: arrival.Add(store.BodyDuration())})
+	}
+	// arrivals ascend and every body takes as long, so attempts are in the order they become ready; a retry goes back
+	// in at its place. finishes holds the head PUTs' finish times still ahead of a push as it becomes ready, ascending
+	finishes := []time.Time{}
+	for head := 0; head < len(attempts); head += 1 {
+		next := attempts[head]
+		for 0 < len(finishes) && !next.ready.Before(finishes[0]) {
+			finishes = finishes[1:]
+		}
+		waiting := len(finishes)
+		if 0 < store.BusyQueueCount && store.BusyQueueCount <= waiting && !next.busy {
+			// 429 BUSY: the sender sends it again
+			next.busy = true
+			next.ready = next.ready.Add(store.BusyRetryDelay)
+			commits.BusyCount += 1
+			rest := attempts[head+1:]
+			at, _ := slices.BinarySearchFunc(rest, next, func(a *attempt, b *attempt) int { return a.ready.Compare(b.ready) })
+			attempts = slices.Insert(attempts, head+1+at, next)
+			continue
+		}
+		begin := next.ready
+		if 0 < len(finishes) && begin.Before(finishes[len(finishes)-1]) {
+			begin = finishes[len(finishes)-1]
+		}
+		finish := begin.Add(store.HeadDuration())
+		finishes = append(finishes, finish)
+		commits.RerunCount += waiting
+		commits.Latencies = append(commits.Latencies, finish.Sub(next.arrival))
+		if next.busy {
+			commits.RetryLatencies = append(commits.RetryLatencies, finish.Sub(next.arrival))
+		}
+	}
+	return commits
+}
+
+// The cards ref's commits over each day's peak hour, its arrivals brought factor times closer together: 1 is the
+// column's peak rate and 3 FS-86's bursts. On the store model where the run has one; else, at factor 1 alone, the
+// latencies the run measured on its clock, with no rerun or BUSY counted, which evs's own counters hold on T3.
+func (self *DirectoryLoadResult) CardCommits(factor float64) *DirectoryLoadCardCommits {
+	settings := self.Plan.Settings
+	dayMillis := (24 * time.Hour).Milliseconds()
+	peakStart := (settings.WorkStart + settings.PeakStart).Milliseconds()
+	peakEnd := peakStart + settings.PeakDuration.Milliseconds()
+	commits := &DirectoryLoadCardCommits{}
+	arrivals := []int64{}
+	lastDay := int64(-1)
+	flush := func() {
+		if self.Store != nil && 0 < len(arrivals) {
+			day := directoryLoadCardQueue(arrivals, self.Store)
+			commits.Latencies = append(commits.Latencies, day.Latencies...)
+			commits.RetryLatencies = append(commits.RetryLatencies, day.RetryLatencies...)
+			commits.RerunCount += day.RerunCount
+			commits.BusyCount += day.BusyCount
+		}
+		arrivals = arrivals[:0]
+	}
+	for index, millis := range self.CardPushArrivalMillis {
+		offset := millis - self.Plan.StartMillis
+		if within := offset % dayMillis; within < peakStart || peakEnd <= within {
+			continue
+		}
+		if day := offset / dayMillis; day != lastDay {
+			flush()
+			lastDay = day
+		}
+		if self.Store == nil {
+			if factor == 1 {
+				commits.Latencies = append(commits.Latencies, self.CardPushLatencies[index])
+			}
+			continue
+		}
+		hourStart := self.Plan.StartMillis + lastDay*dayMillis + peakStart
+		arrivals = append(arrivals, hourStart+int64(float64(millis-hourStart)/factor))
+	}
+	flush()
+	return commits
+}
+
+// §16.11's cards ref commits row for M10's form: at the column's peak rate and at CardBurstFactor times it.
+func (self *DirectoryLoadResult) CheckCardCeilings(ceilings *DirectoryLoadCeilings) []error {
+	return append(self.CheckCardPeakCeilings(ceilings), self.CheckCardBurstCeilings(ceilings)...)
+}
+
+// The row's ceilings at the column's peak rate.
+func (self *DirectoryLoadResult) CheckCardPeakCeilings(ceilings *DirectoryLoadCeilings) []error {
+	errs := []error{}
+	peak := self.CardCommits(1)
+	if len(peak.Latencies) == 0 {
+		return []error{errors.New("no push on the cards ref in a peak hour")}
+	}
+	if p99 := DirectoryLoadP99(peak.Latencies); ceilings.CardPushP99 < p99 {
+		errs = append(errs, fmt.Errorf("the cards ref's commits' p99 is %s over %d pushes at the peak rate, past %s", p99, len(peak.Latencies), ceilings.CardPushP99))
+	}
+	if mean := peak.RerunMean(); ceilings.CardRerunMean < mean {
+		errs = append(errs, fmt.Errorf("the cards ref's commits rerun %.2f times on average at the peak rate, past %.2f", mean, ceilings.CardRerunMean))
+	}
+	if share := peak.BusyShare(); ceilings.CardBusyShare < share {
+		errs = append(errs, fmt.Errorf("%d of %d pushes on the cards ref were answered 429 BUSY at the peak rate", peak.BusyCount, len(peak.Latencies)))
+	}
+	return errs
+}
+
+// The row's ceilings at CardBurstFactor times the peak rate, on the store model; a physical run, which has none, bursts
+// by its own plan and checks nothing here.
+func (self *DirectoryLoadResult) CheckCardBurstCeilings(ceilings *DirectoryLoadCeilings) []error {
+	errs := []error{}
+	if self.Store == nil {
+		return errs
+	}
+	burst := self.CardCommits(ceilings.CardBurstFactor)
+	if p99 := DirectoryLoadP99(burst.Latencies); ceilings.CardBurstPushP99 < p99 {
+		errs = append(errs, fmt.Errorf("the cards ref's commits' p99 is %s at %.0fx bursts, past %s", p99, ceilings.CardBurstFactor, ceilings.CardBurstPushP99))
+	}
+	if mean := burst.RerunMean(); ceilings.CardBurstRerunMean < mean {
+		errs = append(errs, fmt.Errorf("the cards ref's commits rerun %.2f times on average at %.0fx bursts, past %.2f", mean, ceilings.CardBurstFactor, ceilings.CardBurstRerunMean))
+	}
+	if share := burst.BusyShare(); ceilings.CardBurstBusyShare < share {
+		errs = append(errs, fmt.Errorf("%d of %d pushes on the cards ref were answered 429 BUSY at %.0fx bursts, past %.1f%%", burst.BusyCount, len(burst.Latencies), ceilings.CardBurstFactor, 100*ceilings.CardBurstBusyShare))
+	}
+	for _, latency := range burst.RetryLatencies {
+		if ceilings.CardBurstRetryCommit < latency {
+			errs = append(errs, fmt.Errorf("a push answered 429 BUSY committed %s after it arrived, past %s", latency, ceilings.CardBurstRetryCommit))
+			break
+		}
+	}
+	return errs
 }
 
 // The oracle's check of what the measured readers cost, a reader that raised an alarm failing too: the load writes

@@ -7,6 +7,10 @@
 // bytes and refused a version this build does not know (RecordApprovals.Pending), so nothing is shown that was not
 // checked.
 //
+// The request's uses, the count of distinct actions its agent asks the approval to cover (QD-1010), is daemon-built
+// too and under request_sha256: it shows by that name after the request's other fields wherever the request sets it,
+// 1 for any action but a template, and the render carries it as Uses, the count an approval signs as shown.
+//
 // Two more sets of daemon-built values show as the action, by QD-740 and QD-772. The request's socket_name,
 // local_port, weight and alpn, which left CanonicalAction for the ApprovalRequest and which request_sha256 covers,
 // show by those names after the action's fields: a listen's name comes from the opened request, and the device that
@@ -72,12 +76,16 @@ type ApprovalRender struct {
 	Version  uint32
 	// A multi-use template: each use's action equals its non-empty fields, its recipients among those listed.
 	Template bool
+	// How many distinct actions the request asks the approval to cover (ApprovalRequest.uses; QD-1010), which an
+	// approval signs as shown: 1 for any action but a template, a template's 2 or more, and 0 for a version-1
+	// template, whose request names none.
+	Uses uint32
 	// What approving the action allows, in words around its daemon-built fields, for a kind whose fields alone do
 	// not say it; empty for the rest. Printable.
 	Meaning string
 	// Each field the action sets, in field order, kind, version, scope, preview and sealed_detail aside, then the
-	// request's socket_name, local_port, weight and alpn where set, then what an opened sealed_detail holds, each named
-	// sealed_detail.<name>: the action the person approves.
+	// request's socket_name, local_port, weight and alpn where set, then its uses where set, then what an opened
+	// sealed_detail holds, each named sealed_detail.<name>: the action the person approves.
 	Fields []*ApprovalRenderField
 	// The action carries a sealed_detail, and whether Fields holds what it opened to. Sealed and not opened, the
 	// device shows the rest and takes no approval.
@@ -252,6 +260,7 @@ func RenderApprovalRequestDetail(request *StoredApprovalRequest, detail *protoco
 		Tainted:            request.Request.GetTainted(),
 		NotAfter:           time.UnixMilli(request.Request.GetNotAfterMillis()),
 	}
+	render.Uses, _ = request.Uses()
 	for _, approver := range request.Request.GetApprovers() {
 		render.Approvers = append(render.Approvers, recordIdOf(approver))
 	}
@@ -273,7 +282,7 @@ func RenderApprovalRequestDetail(request *StoredApprovalRequest, detail *protoco
 	}
 	// the request's own daemon-built fields, which the parse held to the action's kind
 	requestMessage := request.Request.ProtoReflect()
-	for _, number := range approvalRequestDetailFields {
+	for _, number := range append(slices.Clone(approvalRequestDetailFields), approvalRequestFieldUses) {
 		field := requestMessage.Descriptor().Fields().ByNumber(number)
 		if requestMessage.Has(field) {
 			render.Fields = append(render.Fields, &ApprovalRenderField{
@@ -301,7 +310,10 @@ func RenderApprovalRequestDetail(request *StoredApprovalRequest, detail *protoco
 func (self *ApprovalRender) Text() string {
 	lines := []string{}
 	heading := fmt.Sprintf("request %s: %s", self.ApprovalId, self.KindName)
-	if self.Template {
+	switch {
+	case self.Template && 0 < self.Uses:
+		heading += fmt.Sprintf(", a template for up to %d uses, each of which must match it", self.Uses)
+	case self.Template:
 		heading += ", a template each use must match"
 	}
 	if self.Meaning != "" {

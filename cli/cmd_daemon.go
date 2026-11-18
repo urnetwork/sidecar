@@ -778,6 +778,10 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 	}
 	// §16's MCP, whatever the networks' states: a call on a Locked or Unenrolled one names what the person runs
 	mcpServer := mcp.NewMcpServer(mcp.DaemonOf(daemon), mcp.NewMcpServerSettings(settings, sidecar.Version))
+	if settings.Directory.SearchInstructions {
+		// §16.11's instructions from M10: search_agents as their tool, and a personal network's text
+		mcpServer.SetClaimsInstructions(mcp.DirectoryInstructionsSearch)
+	}
 	if err := daemon.RegisterMode(sidecar.DaemonModeMcp, mcpServer.Serve); err != nil {
 		daemon.Close()
 		return err

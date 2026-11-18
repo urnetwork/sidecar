@@ -314,9 +314,15 @@ type StoredApprovalRequest struct {
 	Action *StoredCanonicalAction
 }
 
+// ApprovalRequest's versions: 1, §16.8's, and 2, which adds uses and always sets it (QD-1010).
+const (
+	approvalRequestVersion1 uint32 = 1
+	approvalRequestVersion2 uint32 = 2
+)
+
 // ApprovalRequest versions this build knows.
 func approvalRequestVersionKnown(version uint32) bool {
-	return version == 1
+	return version == approvalRequestVersion1 || version == approvalRequestVersion2
 }
 
 // Parses an ApprovalRequest as stored, for the approver's device and the spender: a version this build knows and no
@@ -325,7 +331,8 @@ func approvalRequestVersionKnown(version uint32) bool {
 // passing ParseStoredCanonicalAction; and local_port, weight, alpn and socket_name set only where the action's kind
 // binds them (the kind table's request column; QD-740, QD-772), a port one a listener can bind, no ALPN empty, and a
 // listen's socket_name present and agreeing with its action's grant_dst as far as no key is needed
-// (approvalRequestDetailCheck). summary and preview stay untrusted text for the approver to show as such.
+// (approvalRequestDetailCheck); and uses as its version writes it (approvalRequestUsesCheck; QD-1010). summary and
+// preview stay untrusted text for the approver to show as such.
 func ParseStoredApprovalRequest(stored []byte) (*StoredApprovalRequest, error) {
 	request := &protocol.ApprovalRequest{}
 	if err := proto.Unmarshal(stored, request); err != nil {
@@ -374,7 +381,27 @@ func ParseStoredApprovalRequest(stored []byte) (*StoredApprovalRequest, error) {
 	if err := approvalRequestDetailCheck(request, action); err != nil {
 		return nil, err
 	}
+	if err := approvalRequestUsesCheck(request, action); err != nil {
+		return nil, err
+	}
 	return &StoredApprovalRequest{Request: request, Bytes: bytes.Clone(stored), Action: action}, nil
+}
+
+// Holds a request's uses to its version and its action (QD-1010; §16.6's multi-use row): version 1 sets none, the
+// field being version 2's; version 2 always sets it, 2 or more for a template (scope = true) and 1 for any other
+// action, so no approver renders a count its action cannot spend and none is asked to sign 0.
+func approvalRequestUsesCheck(request *protocol.ApprovalRequest, action *StoredCanonicalAction) error {
+	uses := request.GetUses()
+	if request.GetVersion() == approvalRequestVersion1 {
+		if uses != 0 {
+			return fmt.Errorf("%w: approval request field %d at version 1", ErrRecordStoredInvalid, approvalRequestFieldUses)
+		}
+		return nil
+	}
+	if uses == 0 || (1 < uses) != action.Action.GetScope() {
+		return fmt.Errorf("%w: approval request uses %d, scope %t", ErrRecordStoredInvalid, uses, action.Action.GetScope())
+	}
+	return nil
 }
 
 // Holds a request's daemon-built fields beside its action, socket_name, local_port, weight and alpn, to its action's
@@ -425,6 +452,19 @@ func (self *StoredApprovalRequest) Detail() *SidecarActionDetail {
 		Weight:     request.GetWeight(),
 		Alpn:       slices.Clone(request.GetAlpn()),
 	}
+}
+
+// How many distinct actions the request asks its approval to cover (QD-1010), and whether it names that count: a
+// version-2 request's uses, 2 or more for a template and 1 for any other action; a version-1 request, which carries
+// none, asks for 1, and a version-1 template names no count, 0 and false, which its approver gives as before the field.
+func (self *StoredApprovalRequest) Uses() (uint32, bool) {
+	if uses := self.Request.GetUses(); uses != 0 {
+		return uses, true
+	}
+	if self.Action.Action.GetScope() {
+		return 0, false
+	}
+	return 1, true
 }
 
 // request_sha256 over the stored bytes.

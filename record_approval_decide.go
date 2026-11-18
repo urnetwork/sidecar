@@ -14,12 +14,17 @@
 //	         daemon's prompt, MCP-M3-09), never device, since §16.6's host table gives a daemon its own agents'
 //	         requests by presence or harness alone; then FileDecision in the request's log
 //	fields   requester_sidecar_id the request's, auth_pin the pin the device's state stands at, request_sha256 and
-//	         payload_sha256 over the stored bytes, not_after the request's, uses 1, or for a template the person's
-//	         choice of 2 or more, evidence_sha256 empty (QD-261)
+//	         payload_sha256 over the stored bytes, not_after the request's, uses as below, evidence_sha256 empty (QD-261)
+//	uses     the count the request names (QD-1010; ApprovalRequest.uses, which the render shows): 1 for any action but
+//	         a template, a template's 2 or more, signed as shown where the person gives no count; a count the person
+//	         gives (ur approve --uses) narrows a template's to 2 or more, and one above the request's, above 1 for an
+//	         action that is no template, or below 2 for a template is refused (ErrApprovalUses). A version-1 template
+//	         names no count, so its approval takes the person's, 2 or more, as before the field, and none is refused
 //	cancel   ApprovalCancel{approval_id} by the identity key, after the same confirmation, filed in the request's log
 //	host     the row of §16.6's host table the approver side decides as (ApprovalApprover.ForHost,
 //	         record_approval_app.go): the daemon's by default, as above; an app in local mode's alike; a remote-mode
-//	         app's signs no decision on this sidecar's own request (D-SDK-9); an app host's template takes deny alone
+//	         app's signs no decision on this sidecar's own request (D-SDK-9); an app host, whose Decide carries no
+//	         count, approves a template as its request names it, and one whose request names none takes deny alone
 //	sealed   a request whose action carries a sealed_detail, a dial or route grant's prefixes and ports (QD-740), is
 //	         rendered with what the detail opens to on this device: Sidecar.OpenActionDetail, with the config repo's
 //	         keys under the context the action's own clear fields derive (QD-771), never one a caller makes; where the
@@ -62,8 +67,9 @@ var (
 	// This sidecar's own request takes presence evidence, never device (§16.6's host table), and no presence check
 	// was given.
 	ErrApprovalOwnRequest = errors.New("this sidecar's own request takes a presence key's evidence, never device")
-	// uses above 1 is for a template alone, and a template takes 2 or more.
-	ErrApprovalUses = errors.New("uses above 1 only for a template, and a template takes 2 or more")
+	// uses above 1 is for a template alone, a template takes 2 or more, and no approval covers more uses than its
+	// request asks for (QD-1010).
+	ErrApprovalUses = errors.New("uses above 1 only for a template, a template takes 2 or more, and never more than the request asks for")
 	// The action's sealed_detail did not open on this device, so it approves nothing it could not show (D-MCP-17).
 	ErrApprovalDetailSealed = errors.New("the action's sealed detail does not open on this device, so it is not approved here")
 	// A listen's socket_name did not read as its action's grant_dst on this device, which holds no K_sock to derive an
@@ -114,8 +120,32 @@ type SidecarRequestItem struct {
 type SidecarRequestDecision struct {
 	// SidecarDecisionApprove or SidecarDecisionDeny.
 	Decision string
-	// How many distinct actions an approval covers (D-MCP-11): 0 and 1 mean one; 2 or more only for a template.
+	// How many distinct actions an approval covers (D-MCP-11): 0 approves the request as shown, the count it names
+	// (QD-1010); a count narrows a template's to 2 or more, never above the request's, and above 1 only for a template.
 	Uses uint32
+}
+
+// The uses an approval of request signs, asked being the count the person gave, 0 for none (the file's uses row):
+// the request's count, or asked where it narrows a template's; a version-1 template, whose request names none, takes
+// asked alone. ErrApprovalUses for a count the request's action cannot take or one above what the request asks.
+func approvalDecisionUses(request *StoredApprovalRequest, asked uint32) (uint32, error) {
+	template := request.Action.Action.GetScope()
+	requested, named := request.Uses()
+	uses := asked
+	if uses == 0 {
+		if !named {
+			// a version-1 template: the person gives the count
+			return 0, fmt.Errorf("%w: the template's request names no count of uses, so its approval needs one", ErrApprovalUses)
+		}
+		uses = requested
+	}
+	if (1 < uses) != template {
+		return 0, fmt.Errorf("%w: uses %d, template %t", ErrApprovalUses, uses, template)
+	}
+	if named && requested < uses {
+		return 0, fmt.Errorf("%w: uses %d on a request for %d", ErrApprovalUses, uses, requested)
+	}
+	return uses, nil
 }
 
 // An approver's device's side of §16.6's requests: its sidecar, for its standing and keys, its approval log, what
@@ -331,7 +361,7 @@ func (self *ApprovalApprover) Decide(ctx context.Context, approvalId Id, decisio
 		return fmt.Errorf("%w: the request's approvers do not name this device's member", ErrSidecarApprovalNotEligible)
 	}
 	if !slices.Contains(decisions, decision.Decision) {
-		// an app host's template takes deny alone
+		// an app host takes deny alone for a template whose request names no count
 		return fmt.Errorf("%w: this host answers the request only with %v", ErrSidecarApprovalDecision, decisions)
 	}
 	if channel == protocol.ApprovalChannel_APPROVAL_CHANNEL_PRESENCE && check == nil {
@@ -339,12 +369,11 @@ func (self *ApprovalApprover) Decide(ctx context.Context, approvalId Id, decisio
 	}
 
 	verdict := protocol.ApprovalVerdict_APPROVAL_VERDICT_APPROVE
-	uses := max(1, decision.Uses)
+	uses := uint32(0)
 	if decision.Decision == SidecarDecisionDeny {
 		verdict = protocol.ApprovalVerdict_APPROVAL_VERDICT_DENY
-		uses = 0
-	} else if (1 < uses) != request.Action.Action.GetScope() {
-		return ErrApprovalUses
+	} else if uses, err = approvalDecisionUses(request, decision.Uses); err != nil {
+		return err
 	} else if _, err := self.openDetail(request); err != nil {
 		// an approval signs only what this device opened and showed
 		return err

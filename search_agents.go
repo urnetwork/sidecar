@@ -45,6 +45,10 @@ type SearchAgentsRequest struct {
 	Secret func(text []byte) bool
 	// Whether a hit may be named at all, by its repo and whole path (MCP's guard); nil admits every hit.
 	Admit func(repoId Id, path string) bool
+	// The team directory's folded view (§16.11's tools row; DirectoryClient.SearchAgentsFold): reads each run
+	// announcement hit at its item's current state and expiry, which a renewal moves and no index entry follows, and
+	// answers the hits that stand. Nil leaves every hit as its row reads.
+	Fold func(hits []SearchHit) []SearchHit
 	// How long pages after the first may take, on the engine's clock; non-positive pages only the first. What landed
 	// by then answers, incomplete.
 	Wait time.Duration
@@ -99,6 +103,9 @@ func (self *SearchEngine) Agents(ctx context.Context, session Id, networkId Id, 
 	}
 	if request.Admit != nil {
 		hits = slices.DeleteFunc(hits, func(hit SearchHit) bool { return !request.Admit(hit.Repo, hit.Path) })
+	}
+	if request.Fold != nil {
+		hits = request.Fold(hits)
 	}
 	result := &SearchAgentsResult{Counts: progress.Counts, Complete: done, hits: hits, cursor: cursor}
 	searchJudgeTrust(hits, request.Reader)

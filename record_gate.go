@@ -142,6 +142,10 @@ func (self *ApprovalGate) Authorize(ctx context.Context, action *SidecarAction, 
 	if SidecarActionKind(stored.Action.GetKind()) != action.Kind {
 		return fmt.Errorf("%w: kind %d for an action of kind %d", ErrSidecarActionInvalid, action.Kind, stored.Action.GetKind())
 	}
+	if _, err := approvalActionUses(action, stored); err != nil {
+		// before any decision is looked for, so a count its action cannot take never rides a decision already kept
+		return fmt.Errorf("%w: %w", ErrSidecarActionInvalid, err)
+	}
 	if err := self.inbox.ensureLoaded(); err != nil {
 		return err
 	}

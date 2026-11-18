@@ -3,7 +3,8 @@ package main
 // ur directory and ur admin directory (directory_cmd.go, admin_directory_cmd.go; RECORD-M6-23): ls withholds prose on a
 // non-terminal whatever it is asked, and on a terminal asks the daemon for it, which taints the caller's ancestor runs
 // before answering (FS-88); each signing command sends nothing without /dev/tty or on a no; revoke shows its erasure
-// pending and then done; --window refuses at M6 with nothing asked; every listed flag parses into its call's params.
+// pending and then done; --window refuses before format 2 with nothing asked and signs from it; every listed flag
+// parses into its call's params.
 
 import (
 	"bytes"
@@ -36,6 +37,8 @@ type testUrDirectoryStand struct {
 	revocation *sidecar.DirectoryRevocation
 	// a taint that fails
 	taintErr error
+	// whether the directory is at format 2, as admin.directory.show says it
+	windowReady bool
 }
 
 func (self *testUrDirectoryStand) record(call *sidecar.DaemonCall, name string) {
@@ -124,9 +127,15 @@ func (self *testUrDirectoryStand) methods(t *testing.T) []*sidecar.DaemonMethod 
 		answer(urMethodDirectoryRequest, true, func(call *sidecar.DaemonCall) (any, error) {
 			return &sidecar.DirectoryRequestFiled{RequestId: sidecar.NewId(), NoticeWritten: true}, nil
 		}),
-		answer(urMethodAdminDirectory, true, ok),
+		answer(urMethodAdminDirectory, true, func(call *sidecar.DaemonCall) (any, error) {
+			params := &urAdminDirectoryParams{}
+			json.Unmarshal(call.Params, params)
+			return &urAdminDirectoryReply{WindowDays: params.WindowDays, WindowRoots: 1}, nil
+		}),
 		answer(urMethodAdminDirectoryShow, false, func(call *sidecar.DaemonCall) (any, error) {
-			return &urAdminDirectoryReply{Runs: "auto", Workers: "on"}, nil
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			return &urAdminDirectoryReply{Runs: "auto", Workers: "on", WindowReady: self.windowReady}, nil
 		}),
 	}
 }
@@ -255,20 +264,60 @@ func TestUrDirectoryRevokePendingThenDone(t *testing.T) {
 	}
 }
 
-// --window refuses at M6 with needs_format 2, asking nothing and sending nothing; with no option the settings print.
-func TestUrAdminDirectoryWindowRefusedAtM6(t *testing.T) {
+// --window refuses a directory before format 2 with needs_format 2, asking nothing and signing nothing; a window
+// outside 7 to 90 days, and a --searchable outside 7 to 400, refuses as the options parse; from format 2 the window
+// goes confirmed after a yes; with no option the settings print.
+func TestUrAdminDirectoryWindow(t *testing.T) {
 	stand := &testUrDirectoryStand{}
 	cli, stdout := testUrDirectoryCli(t, stand, false)
 	asked := false
 	cli.openTty = func() (urTty, error) { asked = true; return &testTty{lines: []string{"y"}}, nil }
 	if code := cli.main(context.Background(), []string{"ur", "admin", "directory", "--window=14"}); code != urExitFailed || asked {
-		t.Fatalf("--window exited %d, the terminal asked %v", code, asked)
+		t.Fatalf("--window before format 2 exited %d, the terminal asked %v", code, asked)
 	}
-	if _, err := urAdminDirectoryParamsOf(docopt.Opts{"--window": "14"}); !errors.Is(err, sidecar.ErrDirectoryWindowFormat) || !strings.Contains(err.Error(), "needs_format 2") {
-		t.Fatalf("--window's refusal: %v", err)
+	if calls, _, _ := stand.recorded(); !slices.Equal(calls, []string{urMethodAdminDirectoryShow}) {
+		t.Fatalf("--window before format 2 sent %v", calls)
 	}
-	if calls, _, _ := stand.recorded(); len(calls) != 0 {
-		t.Fatalf("--window sent %v", calls)
+	if !strings.Contains(sidecar.ErrDirectoryWindowFormat.Error(), "needs_format 2") {
+		t.Fatalf("the format refusal reads %v", sidecar.ErrDirectoryWindowFormat)
+	}
+	for _, days := range []string{"6", "91", "0"} {
+		if _, err := urAdminDirectoryParamsOf(docopt.Opts{"--window": days}); !errors.Is(err, sidecar.ErrDirectoryIndexWindow) {
+			t.Fatalf("--window=%s: %v", days, err)
+		}
+	}
+	for _, days := range []string{"6", "401"} {
+		if _, err := urAdminDirectoryParamsOf(docopt.Opts{"--searchable": days}); !errors.Is(err, sidecar.ErrDirectoryIndexSearchable) {
+			t.Fatalf("--searchable=%s: %v", days, err)
+		}
+	}
+	if code := cli.main(context.Background(), []string{"ur", "admin", "directory", "--window=91"}); code == urExitOk || asked {
+		t.Fatalf("--window=91 exited %d, the terminal asked %v", code, asked)
+	}
+	if calls, _, _ := stand.recorded(); len(calls) != 1 {
+		t.Fatalf("a window outside its days sent %v", calls)
+	}
+	if params, err := urAdminDirectoryParamsOf(docopt.Opts{"--window": "14d"}); err != nil || params.WindowDays != 14 || params.Retention {
+		t.Fatalf("--window=14d: %+v %v", params, err)
+	}
+
+	ready := &testUrDirectoryStand{windowReady: true}
+	cli, stdout = testUrDirectoryCli(t, ready, false)
+	asked = false
+	cli.openTty = func() (urTty, error) { asked = true; return &testTty{lines: []string{"y"}}, nil }
+	if code := cli.main(context.Background(), []string{"ur", "admin", "directory", "--window=14"}); code != urExitOk || !asked {
+		t.Fatalf("--window at format 2 exited %d, the terminal asked %v", code, asked)
+	}
+	calls, confirmed, params := ready.recorded()
+	if !slices.Equal(calls, []string{urMethodAdminDirectoryShow, urMethodAdminDirectory}) || !confirmed[1] {
+		t.Fatalf("--window at format 2 sent %v, confirmed %v", calls, confirmed)
+	}
+	sent := &urAdminDirectoryParams{}
+	if err := json.Unmarshal(params[1], sent); err != nil || sent.WindowDays != 14 || sent.Retention || sent.Runs != "" {
+		t.Fatalf("--window at format 2 asked %+v %v", sent, err)
+	}
+	if text := stdout.String(); !strings.Contains(text, "index window of 14 days written on 1 index root(s)") {
+		t.Fatalf("--window at format 2 printed:\n%s", text)
 	}
 	if code := cli.main(context.Background(), []string{"ur", "admin", "directory"}); code != urExitOk || !strings.Contains(stdout.String(), "runs auto, workers on") {
 		t.Fatalf("the settings printed:\n%s", stdout.String())

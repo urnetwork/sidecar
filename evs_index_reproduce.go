@@ -563,6 +563,38 @@ func (self *IndexReproducer) closure(ctx context.Context, view *indexView, root 
 // One card document a writer's push carries.
 type indexDeriveDocument struct {
 	document *IndexDocument
+	// A withdrawal's or a revocation's tombstone (§16.11's versions row): the document gives its name and the
+	// tombstone's version, and nothing else of it is read.
+	tombstone bool
+}
+
+// The entries a writer's push carries for derived, in their order: a full entry a document at its version, a tombstone
+// for a withdrawal or a revocation and for a document D6 skips. One function for the writer and for every reader that
+// derives its head, so both enter the same entries (§11.14's determinism).
+func indexDerivePending(derived []*indexDeriveDocument, normalizer *indexNormalizer, refKey []byte, refId Id, companion bool, settings *IndexFormatSettings) ([]*indexPendingDocument, error) {
+	pending := []*indexPendingDocument{}
+	for _, one := range derived {
+		key, err := indexDocKey(refKey, refId, one.document.Name, one.document.Chunk)
+		if err != nil {
+			return nil, err
+		}
+		if one.tombstone {
+			pending = append(pending, &indexPendingDocument{kind: indexEntryTombstone, key: key, version: one.document.Version})
+			continue
+		}
+		prepared, err := one.document.prepare(normalizer, companion, refId, settings)
+		if err != nil {
+			return nil, err
+		}
+		if prepared.skipped {
+			pending = append(pending, &indexPendingDocument{kind: indexEntryTombstone, key: key, version: one.document.Version})
+			continue
+		}
+		pending = append(pending, &indexPendingDocument{
+			kind: indexEntryFull, key: key, version: one.document.Version, keys: prepared.keys, row: prepared.row,
+		})
+	}
+	return pending, nil
 }
 
 // What a team directory reader derives a card writer's next head from (§11.14's reproduce row; §16.11).
@@ -599,23 +631,9 @@ func (self *IndexReproducer) DeriveHead(ctx context.Context, args *indexDeriveHe
 	if err != nil {
 		return nil, err
 	}
-	pending := []*indexPendingDocument{}
-	for _, derived := range args.documents {
-		key, err := indexDocKey(args.refKey, args.refId, derived.document.Name, derived.document.Chunk)
-		if err != nil {
-			return nil, err
-		}
-		prepared, err := derived.document.prepare(normalizer, view.companion, args.refId, view.settings)
-		if err != nil {
-			return nil, err
-		}
-		if prepared.skipped {
-			pending = append(pending, &indexPendingDocument{kind: indexEntryTombstone, key: key, version: derived.document.Version})
-			continue
-		}
-		pending = append(pending, &indexPendingDocument{
-			kind: indexEntryFull, key: key, version: derived.document.Version, keys: prepared.keys, row: prepared.row,
-		})
+	pending, err := indexDerivePending(args.documents, normalizer, args.refKey, args.refId, view.companion, view.settings)
+	if err != nil {
+		return nil, err
 	}
 	plan, err := indexPlanHead(ctx, &indexHeadPlanArgs{
 		view:         view,

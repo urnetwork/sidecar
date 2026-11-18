@@ -463,9 +463,16 @@ func (self *directoryFiles) accept(taken *directoryAcceptedFile) error {
 	if err := self.client.store.writeDocument(directoryAcceptedPrefix+file.Path, document); err != nil {
 		return err
 	}
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	self.accepted[file.Path] = taken
+	previous := func() *directoryAcceptedFile {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		previous := self.accepted[file.Path]
+		self.accepted[file.Path] = taken
+		return previous
+	}()
+	// the index entries the version's push carries, for the reader's own derivation of its writer's head
+	// (directory_index.go)
+	self.client.indexAccepted(previous, taken)
 	return nil
 }
 

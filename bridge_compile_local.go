@@ -58,6 +58,10 @@ type BridgeCompileLocal struct {
 	ShareTables []*BridgeShareRow
 	// The share seal's limits a share's tables are opened to; nil is DefaultBridgeShareSettings.
 	ShareSettings *BridgeShareSettings
+	// Whether the compile also answers every advertiser's subnet routes in force (BridgeCompiled.ServedRoutes), which
+	// a host hands its AclEngine for ur bridge's previews (owner decision 575). No part of the state, so it changes no
+	// byte of it; a VPN component, which links no engine, leaves it false and holds none.
+	AnswerServedRoutes bool
 	// Nil is DefaultBridgeCompileSettings.
 	Settings *BridgeCompileSettings
 }

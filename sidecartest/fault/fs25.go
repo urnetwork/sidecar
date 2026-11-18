@@ -105,9 +105,9 @@ func fs25Retry(call func() error) error {
 // The recipients of the setup's template, the mail each caller sends among them.
 var fs25Recipients = []string{"a@recipient.example", "b@recipient.example", "c@recipient.example", "d@recipient.example"}
 
-// The setup step: the world, then the agent's request filed, decided by the phone for uses, until the clock's now plus
-// fs25Lifetime, and the inbox's next poll: at uses = 1 the mail to fs25Recipients[0] itself, else a template every
-// mail here falls inside, since a template binds only uses > 1.
+// The setup step: the world, then the agent's request filed for uses, which the request names (QD-1010), decided by
+// the phone for those uses, until the clock's now plus fs25Lifetime, and the inbox's next poll: at uses = 1 the mail to
+// fs25Recipients[0] itself, else a template every mail here falls inside, since a template binds only uses > 1.
 func (self *fs25State) setup(uses uint32) *Step {
 	return &Step{Actor: "setup", Action: func(ctx context.Context, net *Net) error {
 		world, err := sidecartest.NewApprovalWorld(net, fs25Daemon)
@@ -128,7 +128,7 @@ func (self *fs25State) setup(uses uint32) *Step {
 		if err != nil {
 			return err
 		}
-		approvalId, err := self.file(ctx, self.template)
+		approvalId, err := self.file(ctx, self.template, uses)
 		if err != nil {
 			return err
 		}
@@ -142,11 +142,14 @@ func (self *fs25State) setup(uses uint32) *Step {
 	}}
 }
 
-// Files stored's request through the gate, as an O tool's first call does, answering its approval.
-func (self *fs25State) file(ctx context.Context, stored *sidecar.StoredCanonicalAction) (sidecar.Id, error) {
+// Files stored's request for uses through the gate, as an O tool's first call does, answering its approval: 1 for an
+// action that is no template, a template's 2 or more, which its request names (QD-1010).
+func (self *fs25State) file(ctx context.Context, stored *sidecar.StoredCanonicalAction, uses uint32) (sidecar.Id, error) {
 	var approvalId sidecar.Id
 	err := fs25Retry(func() error {
-		err := self.world.Authorize(ctx, self.world.Action(stored))
+		action := self.world.Action(stored)
+		action.Uses = uses
+		err := self.world.Authorize(ctx, action)
 		pending := &sidecar.ApprovalPendingError{}
 		if !errors.As(err, &pending) {
 			if err == nil {
@@ -569,7 +572,7 @@ func fs25ServerGatedExpiry(late bool) *Schedule {
 				if err != nil {
 					return err
 				}
-				approvalId, err := state.file(ctx, dnsAction)
+				approvalId, err := state.file(ctx, dnsAction, 1)
 				if err != nil {
 					return err
 				}

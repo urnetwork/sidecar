@@ -81,6 +81,9 @@ type RecordRetentionSettings struct {
 	DirectoryAnnounceKeepDays uint32
 	// The directory's default keep_days for every other class: 400.
 	DirectoryKeepDays uint32
+	// The directory's default searchable_days: 90, and a class's keep_days where that is fewer (§16.11's Index and
+	// search block).
+	DirectorySearchableDays uint32
 	// The entries one expiry erasure names, at most the eraser's EntryCount: 512.
 	ExpiryEntryCount int
 	// The length of a day keep_days and searchable_days count in: 24 h.
@@ -94,6 +97,7 @@ func DefaultRecordRetentionSettings() *RecordRetentionSettings {
 		TeamSearchableFloorDays:   90,
 		DirectoryAnnounceKeepDays: 30,
 		DirectoryKeepDays:         400,
+		DirectorySearchableDays:   90,
 		ExpiryEntryCount:          512,
 		Day:                       24 * time.Hour,
 	}
@@ -249,6 +253,10 @@ func recordRetentionDefault(auth RecordAuthView, logId Id, class RecordClass, re
 		policy.KeepDays = settings.DirectoryKeepDays
 		if class == RecordClassAnnounce {
 			policy.KeepDays = settings.DirectoryAnnounceKeepDays
+		}
+		policy.SearchableDays = settings.DirectorySearchableDays
+		if policy.KeepDays != 0 {
+			policy.SearchableDays = min(policy.SearchableDays, policy.KeepDays)
 		}
 	case (teamRecordId != nil && *teamRecordId == logId) || recordIsLedger(auth, logId):
 		policy.KeepDays = uint32(max(record.TeamRecordKeepDays, 0))

@@ -11,8 +11,21 @@
 //	          the window answers behind and is paged through GET .../log
 //	erasure   one read of the erasure ref when it moved
 //
-// This is M6's form, announce entries on writers' own streams and only notices on the cards ref. The card case, its
-// cards fetched by sync position and index heads reproduced, is RECORD-M10-07's.
+// M6's form is announce entries on writers' own streams and only notices on the cards ref. M10's (RECORD-M10-07;
+// §16.11's sync row, D-MCP-31) puts run and worker items on cards and repo items on repo files, and the oracle knows of
+// it, again from the schedule alone:
+//
+//	versionless  from format 2 a d/, r/ or q/ path keeps its newest version's content alone: a statement that wrote an
+//	             older version still reads, as a statement, and carries that content only until PurgeDelay after the
+//	             path's newest version landed. So a reader that synced an hour ago fetches each changed card once, at
+//	             its newest version, however often it renewed in between (coalescing)
+//	cards        the cards a sync's statements carry content for are fetched CardReadCount paths to a read, a request
+//	             past the page of statements that named them, each a path read; a notice rides its statement
+//	heads        a card version that changed content wrote an index entry and its writer's head. A reader derives
+//	             that head from the card version it fetched, so an honest day fetches none: the oracle expects no head
+//	             bytes, and IndexHeadByteCount prices what a reader that reproduces nothing would add
+//
+// An event names its path (Path) only in M10's form; an event with none is M6's, every version's content read.
 //
 // Path reads are evs's store GETs. On T2 no store stands behind the fakes, so the oracle and the meter that measures a
 // run (DirectoryCostMeter) both price them by the settings here, whose defaults follow §16.11's table, a path read a
@@ -27,6 +40,7 @@ package sidecartest
 import (
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/urnetwork/sidecar"
 )
@@ -43,6 +57,10 @@ const (
 	DirectoryCostEventNoticeRemoved
 	// An ERASE on the erasure ref.
 	DirectoryCostEventErasure
+	// A card or a repo file written on the cards ref, from format 2.
+	DirectoryCostEventCard
+	// A card or a repo file removed from the cards ref.
+	DirectoryCostEventCardRemoved
 )
 
 // One committed push.
@@ -53,8 +71,14 @@ type DirectoryCostEvent struct {
 	// A stream version's writer; zero for any other event.
 	WriterSidecarId sidecar.Id
 	// The ciphertext bytes a reader fetching it transfers past its statement: a version's entries and slot rows, a
-	// notice's content, an ERASE's keys and note; 0 for a removal.
+	// notice's content, a card's stored bytes, an ERASE's keys and note; 0 for a removal.
 	ByteCount int64
+	// The cards ref path the event writes or removes, from format 2, where the path is versionless: see the file
+	// header's versionless row. A card event names one; a notice event names one in M10's form and none in M6's.
+	Path string
+	// A card version that changed content: its push carried an index entry and wrote its writer's index head, which a
+	// renewal's does not.
+	IndexEntry bool
 }
 
 // One reader: a following daemon and the times it syncs.
@@ -194,6 +218,19 @@ type DirectoryCostOracleSettings struct {
 	// Store GETs a read of the erasure ref costs, and each ERASE it carries: 1 and 1.
 	ErasurePathReadCount      int64
 	ErasureEntryPathReadCount int64
+	// Cards one read of changed cards names: 64 (§16.11's sync row). Non-positive names every card in one read.
+	CardReadCount int
+	// Store GETs one fetched card version costs: 1.
+	CardPathReadCount int64
+	// The step a stored card pads to: 2 KiB (§16.11's sizes row).
+	CardPadByteCount int64
+	// How long after a versionless path's newest version lands a replaced version's content still reads: 1 min, the
+	// versionless purge's delay (FakeDirectoryCardsSettings.PurgeDelay).
+	PurgeDelay time.Duration
+	// An index head's bytes and store GETs for a reader that fetches the head a card's content change wrote and does
+	// not derive it: 4 KiB and 1. The oracle expects none; these price FS-86's mutant.
+	IndexHeadByteCount     int64
+	IndexHeadPathReadCount int64
 	// What measured may reach against expected, and expected against measured: 1.25 (D-TEST-17).
 	Tolerance float64
 	// A count this far or less from its expectation passes whatever the ratio: 2, so a day of two requests is not
@@ -219,6 +256,12 @@ func DefaultDirectoryCostOracleSettings() *DirectoryCostOracleSettings {
 		CardStatementPathReadCount: 1,
 		ErasurePathReadCount:       1,
 		ErasureEntryPathReadCount:  1,
+		CardReadCount:              64,
+		CardPathReadCount:          1,
+		CardPadByteCount:           2 * 1024,
+		PurgeDelay:                 time.Minute,
+		IndexHeadByteCount:         4 * 1024,
+		IndexHeadPathReadCount:     1,
 		Tolerance:                  1.25,
 		Slack:                      2,
 	}
@@ -230,6 +273,14 @@ type DirectoryCostOracle struct {
 }
 
 // settings nil takes the defaults.
+// M10's form: the cards ref's statements past the window come as log pages (§16.11's sync row), a page one store GET
+// and a statement none of its own.
+func DefaultDirectoryCostOracleSettingsM10() *DirectoryCostOracleSettings {
+	settings := DefaultDirectoryCostOracleSettings()
+	settings.CardStatementPathReadCount = 0
+	return settings
+}
+
 func NewDirectoryCostOracle(settings *DirectoryCostOracleSettings) *DirectoryCostOracle {
 	if settings == nil {
 		settings = DefaultDirectoryCostOracleSettings()
@@ -239,6 +290,14 @@ func NewDirectoryCostOracle(settings *DirectoryCostOracleSettings) *DirectoryCos
 
 func (self *DirectoryCostOracle) Settings() *DirectoryCostOracleSettings {
 	return self.settings
+}
+
+// The bytes a card of byteCount stores as: the next multiple of CardPadByteCount.
+func (self *DirectoryCostOracleSettings) CardStoredByteCount(byteCount int64) int64 {
+	if self.CardPadByteCount <= 0 || byteCount <= 0 {
+		return byteCount
+	}
+	return (byteCount + self.CardPadByteCount - 1) / self.CardPadByteCount * self.CardPadByteCount
 }
 
 // The schedule as the oracle walks it: each stream a dense index, each event's running totals.
@@ -252,6 +311,9 @@ type directoryCostWalk struct {
 	// the first event on the cards ref and on the erasure ref, the event count for none
 	firstCard    int
 	firstErasure int
+	// each event's versionless path as a dense index, -1 for an event that names none
+	paths     []int
+	pathCount int
 }
 
 // One reader's copy as its syncs leave it.
@@ -265,6 +327,11 @@ type directoryCostReaderState struct {
 	pending      []int64
 	pendingBytes []int64
 	touched      []int
+	// the sync that last saw each versionless path, by the count of syncs so far, and the event that was then its
+	// newest
+	syncCount  int
+	pathSeenAt []int
+	pathNewest []int
 }
 
 func (self *DirectoryCostOracle) walk(schedule *DirectoryCostSchedule) (*directoryCostWalk, error) {
@@ -274,8 +341,10 @@ func (self *DirectoryCostOracle) walk(schedule *DirectoryCostSchedule) (*directo
 		streamsSeen:  make([]int, len(schedule.Events)),
 		firstCard:    len(schedule.Events),
 		firstErasure: len(schedule.Events),
+		paths:        make([]int, len(schedule.Events)),
 	}
 	indexes := map[sidecar.Id]int{}
+	pathIndexes := map[string]int{}
 	lastMillis := int64(0)
 	for i, event := range schedule.Events {
 		if event == nil {
@@ -289,6 +358,18 @@ func (self *DirectoryCostOracle) walk(schedule *DirectoryCostSchedule) (*directo
 			return nil, fmt.Errorf("event %d carries %d bytes", i, event.ByteCount)
 		}
 		walk.streams[i] = -1
+		walk.paths[i] = -1
+		if event.Path != "" {
+			if event.Kind == DirectoryCostEventStream || event.Kind == DirectoryCostEventErasure {
+				return nil, fmt.Errorf("event %d names a cards ref path and is on another ref", i)
+			}
+			index, ok := pathIndexes[event.Path]
+			if !ok {
+				index = len(pathIndexes)
+				pathIndexes[event.Path] = index
+			}
+			walk.paths[i] = index
+		}
 		switch event.Kind {
 		case DirectoryCostEventStream:
 			index, ok := indexes[event.WriterSidecarId]
@@ -299,6 +380,11 @@ func (self *DirectoryCostOracle) walk(schedule *DirectoryCostSchedule) (*directo
 			walk.streams[i] = index
 		case DirectoryCostEventNotice, DirectoryCostEventNoticeRemoved:
 			walk.firstCard = min(walk.firstCard, i)
+		case DirectoryCostEventCard, DirectoryCostEventCardRemoved:
+			if event.Path == "" {
+				return nil, fmt.Errorf("event %d is a card's and names no path", i)
+			}
+			walk.firstCard = min(walk.firstCard, i)
 		case DirectoryCostEventErasure:
 			walk.firstErasure = min(walk.firstErasure, i)
 		default:
@@ -307,7 +393,17 @@ func (self *DirectoryCostOracle) walk(schedule *DirectoryCostSchedule) (*directo
 		walk.streamsSeen[i] = len(indexes)
 	}
 	walk.streamCount = len(indexes)
+	walk.pathCount = len(pathIndexes)
 	return walk, nil
+}
+
+// Whether an event is a statement of the cards ref.
+func (self DirectoryCostEventKind) onCardsRef() bool {
+	switch self {
+	case DirectoryCostEventNotice, DirectoryCostEventNoticeRemoved, DirectoryCostEventCard, DirectoryCostEventCardRemoved:
+		return true
+	}
+	return false
 }
 
 // Requests reading count items takes at pageCount an answer, one at least.
@@ -330,6 +426,8 @@ func (self *DirectoryCostOracle) sync(walk *directoryCostWalk, state *directoryC
 	}
 	cardStatements := int64(0)
 	cardBytes := int64(0)
+	cardFetches := int64(0)
+	cardFetchRequests := int64(0)
 	erasures := int64(0)
 	erasureBytes := int64(0)
 	state.touched = state.touched[:0]
@@ -343,19 +441,62 @@ func (self *DirectoryCostOracle) sync(walk *directoryCostWalk, state *directoryC
 			}
 			state.pending[stream] += 1
 			state.pendingBytes[stream] += event.ByteCount
-		case DirectoryCostEventNotice, DirectoryCostEventNoticeRemoved:
+		case DirectoryCostEventNotice, DirectoryCostEventNoticeRemoved, DirectoryCostEventCard, DirectoryCostEventCardRemoved:
 			cardStatements += 1
-			cardBytes += settings.StatementByteCount + event.ByteCount
+			cardBytes += settings.StatementByteCount
 		case DirectoryCostEventErasure:
 			erasures += 1
 			erasureBytes += settings.StatementByteCount + event.ByteCount
 		}
 	}
 
-	// cards: the statements after the pin, a page at a time
+	// the content the cards ref's statements carry, newest statement first: every version of a path that names none
+	// (M6's form), and of a versionless path its newest version, with a replaced one while the purge has not run; a
+	// card's is a path fetched, counted in the page of statements that named it, a notice's rides its statement
+	state.syncCount += 1
+	ordinal := cardStatements
+	pageFetches := int64(0)
+	closePage := func() {
+		if 0 < pageFetches {
+			cardFetchRequests += directoryCostPages(pageFetches, settings.CardReadCount)
+		}
+		pageFetches = 0
+	}
+	for i := cut - 1; state.cut <= i; i -= 1 {
+		event := walk.events[i]
+		if !event.Kind.onCardsRef() {
+			continue
+		}
+		ordinal -= 1
+		carried := true
+		if path := walk.paths[i]; 0 <= path {
+			if state.pathSeenAt[path] != state.syncCount {
+				state.pathSeenAt[path] = state.syncCount
+				state.pathNewest[path] = i
+			} else {
+				newest := walk.events[state.pathNewest[path]]
+				carried = timeMillis < newest.TimeMillis+settings.PurgeDelay.Milliseconds()
+			}
+		}
+		switch {
+		case !carried:
+		case event.Kind == DirectoryCostEventNotice:
+			cardBytes += event.ByteCount
+		case event.Kind == DirectoryCostEventCard:
+			cardBytes += event.ByteCount
+			cardFetches += 1
+			pageFetches += 1
+		}
+		if 0 < settings.CardsPageCount && ordinal%int64(settings.CardsPageCount) == 0 {
+			closePage()
+		}
+	}
+	closePage()
+
+	// cards: the statements after the pin, a page at a time, and the changed cards CardReadCount to a read
 	cardRequests := directoryCostPages(cardStatements, settings.CardsPageCount)
-	cost.RequestCount += cardRequests
-	cost.PathReadCount += cardRequests*settings.CardsPathReadCount + cardStatements*settings.CardStatementPathReadCount
+	cost.RequestCount += cardRequests + cardFetchRequests
+	cost.PathReadCount += cardRequests*settings.CardsPathReadCount + cardStatements*settings.CardStatementPathReadCount + cardFetches*settings.CardPathReadCount
 	cost.ByteCount += cardBytes
 
 	// listing: every ref at the first sync and the first of each UTC day, else the refs that moved
@@ -448,6 +589,8 @@ func (self *DirectoryCostOracle) Expected(schedule *DirectoryCostSchedule) (*Dir
 			held:         make([]int64, walk.streamCount),
 			pending:      make([]int64, walk.streamCount),
 			pendingBytes: make([]int64, walk.streamCount),
+			pathSeenAt:   make([]int, walk.pathCount),
+			pathNewest:   make([]int, walk.pathCount),
 		}
 		lastMillis := int64(0)
 		for i, syncMillis := range reader.SyncMillis {
@@ -525,4 +668,32 @@ func (self *DirectoryCostOracle) Check(expected *DirectoryCosts, measured *Direc
 		errs = append(errs, self.compare(fmt.Sprintf("team day %d over %d readers", day, len(readerIds)), expectedCost, measuredTeam[day])...)
 	}
 	return errs
+}
+
+// §16.11's table, M10's rows: a reader-day's bytes and requests, a team-day's bytes at the range's top, where every
+// reader fetched each change, with its requests and path reads, the NVMe bytes a drive a day on 4 KiB blocks, and a cold
+// desktop's start, the latest index included.
+func DefaultDirectoryCostTableM10() []*DirectoryCostTableRow {
+	mib := int64(1024 * 1024)
+	gib := 1024 * mib
+	return []*DirectoryCostTableRow{
+		{
+			MemberCount:        500,
+			ReaderDayByteCount: 34 * mib, ReaderDayRequestCount: 520,
+			TeamDayByteCount: 27 * gib, TeamDayRequestCount: 310_000, TeamDayPathReadCount: 6_200_000,
+			DriveDayByteCount: 9 * gib / 10, ColdDesktopByteCount: 50_000_000,
+		},
+		{
+			MemberCount:        2000,
+			ReaderDayByteCount: 135 * mib, ReaderDayRequestCount: 1050,
+			TeamDayByteCount: 430 * gib, TeamDayRequestCount: 2_500_000, TeamDayPathReadCount: 99_000_000,
+			DriveDayByteCount: 36 * gib / 10, ColdDesktopByteCount: 200_000_000,
+		},
+		{
+			MemberCount:        5000,
+			ReaderDayByteCount: 338 * mib, ReaderDayRequestCount: 2130,
+			TeamDayByteCount: 2600 * gib, TeamDayRequestCount: 12_800_000, TeamDayPathReadCount: 620_000_000,
+			DriveDayByteCount: 91 * gib / 10, ColdDesktopByteCount: 490_000_000,
+		},
+	}
 }

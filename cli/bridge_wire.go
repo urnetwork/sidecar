@@ -145,6 +145,9 @@ type urBridgeWireArgs struct {
 	Rows      sidecar.ConfigRowsSource
 	RepoKeyAt func(generation uint64) *sidecar.EvsRepoKey
 	AclLocal  func() *sidecar.AclLocalPolicy
+	// Takes the subnet routes in force each compile answers, for the follower's acl engine (owner decision 575). Nil
+	// for none.
+	ServedRoutes func(servedRoutes *sidecar.AclServedRoutes)
 	// The instance's state directory: the posture's store is bridge/<network_id> under it.
 	StateDirectory  string
 	DaemonListeners func() []string
@@ -205,6 +208,7 @@ func newUrBridgeWire(ctx context.Context, args *urBridgeWireArgs) (*urBridgeWire
 		Rows:            args.Rows,
 		RepoKeyAt:       args.RepoKeyAt,
 		AclLocal:        args.AclLocal,
+		ServedRoutes:    args.ServedRoutes,
 		DaemonListeners: args.DaemonListeners,
 		Log:             args.Log,
 		OnAttach:        self.attach,
