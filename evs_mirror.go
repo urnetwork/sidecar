@@ -40,9 +40,9 @@
 // judging back, never the copy.
 //
 // Bulk state stays on disk (QD-641): objects stream from evs's reply spills into the sealed store, and the state file
-// names at most MissingNameCount missing objects, counting the rest. M10 adds a versionless path's newest-version rule
-// and a drop's statement-only rule (EVS2-M10-13); format-2 batch records answer ErrEvsFormatUnsupported here until
-// then. Safe for concurrent use: one sync or check runs at a time per mirror.
+// names at most MissingNameCount missing objects, counting the rest. Format 2's newest-version rule and executed drops
+// are evs_mirror_format2.go's (EVS2-M10-13), on a client whose format-2 reader is installed; one of format 1 alone
+// refuses a format-2 repo. Safe for concurrent use: one sync or check runs at a time per mirror.
 
 package sidecar
 
@@ -185,6 +185,8 @@ type evsMirrorState struct {
 	CheckFailures []string `json:"check_failures,omitempty"`
 	// Generations a push names whose key gkm did not give.
 	KeyGenerationsMissing []uint64 `json:"key_generations_missing,omitempty"`
+	// The DROPs held whose window has not passed or whose apply has not run (evs_mirror_format2.go).
+	PendingDrops []*EvsMirrorDrop `json:"pending_drops,omitempty"`
 }
 
 // The state the last sync and check left, empty before the first.
@@ -238,6 +240,10 @@ type EvsMirrorSyncResult struct {
 	MissingCount int
 	// Refs whose head evs answered below the mirror, kept out.
 	LowerRefIds []Id
+	// Format 2: replaced versionless versions' kind-5 segment copies the newest-version rule took out, and executed
+	// drops applied (evs_mirror_format2.go).
+	CollectedCount int
+	DropCount      int
 }
 
 // The missing objects this sync found, deduplicated by family and name.
@@ -295,6 +301,7 @@ func (self *EvsMirror) Sync(ctx context.Context) (*EvsMirrorSyncResult, error) {
 		staleSlotIds:   staleSlotIds,
 		keyGenerations: keyGenerations,
 		erasedThrough:  state.ErasedThrough,
+		drops:          state.PendingDrops,
 	}
 	// a generation gkm gave no key for at an earlier sync is asked again, so a key still missing stays named
 	for _, generation := range state.KeyGenerationsMissing {
@@ -311,6 +318,10 @@ func (self *EvsMirror) Sync(ctx context.Context) (*EvsMirrorSyncResult, error) {
 	if err := run.rereadStaleSlots(ctx); err != nil {
 		return nil, err
 	}
+	if err := run.applyDrops(ctx, refStates); err != nil {
+		return nil, err
+	}
+	state.PendingDrops = run.drops
 	state.SyncedMs = self.client.clock.Now().UnixMilli()
 	state.Refs = refStates
 	state.Missing = missing.named
@@ -359,8 +370,9 @@ func (self *EvsMirror) listHeads(ctx context.Context) ([]*protocol.EvsHeadSummar
 	if err != nil {
 		return nil, err
 	}
-	if reply.GetFormat() == 2 {
-		return nil, fmt.Errorf("%w: a format-2 repo's mirror is M10's", ErrEvsFormatUnsupported)
+	if reply.GetFormat() == 2 && self.client.format2Reader() == nil {
+		// a format-2 repo is mirrored by a format-2 reader alone (evs_mirror_format2.go)
+		return nil, fmt.Errorf("%w: a format-2 repo's mirror needs the format-2 reader", ErrEvsFormatUnsupported)
 	}
 	erasureRefId := EvsErasureRefId(self.repoId)
 	heads := []*protocol.EvsHeadSummary{}
@@ -395,6 +407,8 @@ type evsMirrorRun struct {
 	staleSlotIds   map[string]bool
 	keyGenerations map[uint64]bool
 	erasedThrough  uint64
+	// the DROPs held whose apply has not run (evs_mirror_format2.go)
+	drops []*EvsMirrorDrop
 }
 
 // One ref to its head: the statements past what the mirror holds, walked and verified, then each version's objects,
@@ -603,6 +617,11 @@ func (self *evsMirrorRun) mirrorVersion(ctx context.Context, head *EvsVerifiedHe
 			segments = append(segments, object)
 		case protocol.EvsNewObjectKind_EVS_NEW_OBJECT_SLOT:
 			slotIds = append(slotIds, object.Id)
+		case protocol.EvsNewObjectKind_EVS_NEW_OBJECT_STAGED_SEGMENT:
+			// format 2's staged segment rides in its push's record, which the mirror holds whole
+			if mirror.client.format2Reader() == nil {
+				return false, fmt.Errorf("%w: new object kind %d", ErrEvsFormatUnsupported, object.Kind)
+			}
 		default:
 			return false, fmt.Errorf("%w: new object kind %d", ErrEvsFormatUnsupported, object.Kind)
 		}
@@ -619,6 +638,12 @@ func (self *evsMirrorRun) mirrorVersion(ctx context.Context, head *EvsVerifiedHe
 	if push.GetFlags()&uint32(protocol.EvsPushFlag_EVS_PUSH_PATH_EPOCH) != 0 && 0 < len(push.GetPathMapSha256()) {
 		mapWhole, err = self.mirrorMap(ctx, head, statement)
 		if err != nil {
+			return false, err
+		}
+	}
+	if segmentsWhole && slotsWhole && mapWhole {
+		// format 2's newest-version rule and drops (evs_mirror_format2.go)
+		if err := self.holdFormat2(ctx, head, statement, checked); err != nil {
 			return false, err
 		}
 	}
@@ -703,7 +728,7 @@ func (self *evsMirrorRun) mirrorRecords(ctx context.Context, head *EvsVerifiedHe
 	if !whole {
 		return nil, false, nil
 	}
-	checked, err := evsMirrorCheckRecords(statement.Statement, records)
+	checked, err := evsMirrorCheckRecordsOf(statement.Statement, records, mirror.client.format2Reader() != nil)
 	if err != nil {
 		return nil, false, err
 	}
@@ -721,7 +746,20 @@ func (self *evsMirrorRun) mirrorRecords(ctx context.Context, head *EvsVerifiedHe
 // push's parts reseed records holding a part's body (evs_reseed_record.go), the parts' payload checked as its stored
 // seal is.
 func evsMirrorCheckRecords(statement *EvsStatement, records [][]byte) (*EvsCheckedPayload, error) {
-	first, err := ParseEvsBatchRecord(records[0])
+	return evsMirrorCheckRecordsOf(statement, records, false)
+}
+
+// evsMirrorCheckRecords of either format: with format2, a format-2 record, its staged tail matched to the push's staged
+// segments, and a format-2 payload as stored (EvsCheckStoredPayload).
+func evsMirrorCheckRecordsOf(statement *EvsStatement, records [][]byte, format2 bool) (*EvsCheckedPayload, error) {
+	parse := func(recordBytes []byte) (*EvsBatchRecord, *EvsBatchRecordTail, error) {
+		if format2 {
+			return ParseEvsBatchRecordFormat2(recordBytes)
+		}
+		record, err := ParseEvsBatchRecord(recordBytes)
+		return record, nil, err
+	}
+	first, tail, err := parse(records[0])
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrEvsMirrorRecordInvalid, err)
 	}
@@ -733,8 +771,24 @@ func evsMirrorCheckRecords(statement *EvsStatement, records [][]byte) (*EvsCheck
 		if err != nil || !bytes.Equal(statementBytes, statement.Bytes) {
 			return nil, ErrEvsMirrorRecordInvalid
 		}
-		// as evs keeps it, with no slot body: the mirror takes slots from slot reads (QD-806)
-		return EvsCheckRecordPayload(statement, payload)
+		if !format2 {
+			// as evs keeps it, with no slot body: the mirror takes slots from slot reads (QD-806)
+			return EvsCheckRecordPayload(statement, payload)
+		}
+		checked, err := EvsCheckStoredPayload(statement, payload)
+		if err != nil {
+			return nil, err
+		}
+		if tail != nil && len(tail.Staged) != 0 {
+			segments, err := tail.StagedSegments()
+			if err != nil {
+				return nil, err
+			}
+			if checked.Staged, err = evsMatchStaged(statement.Push, checked.NewObjects, segments); err != nil {
+				return nil, err
+			}
+		}
+		return checked, nil
 	}
 	if first.Type != protocol.EvsBatchRecordType_EVS_BATCH_SEAL {
 		return nil, fmt.Errorf("%w: a sealed push's part 0 of type %d", ErrEvsMirrorRecordInvalid, first.Type)
@@ -745,7 +799,7 @@ func evsMirrorCheckRecords(statement *EvsStatement, records [][]byte) (*EvsCheck
 	}
 	parts := make([][]byte, len(records)-1)
 	for index, recordBytes := range records[1:] {
-		record, err := ParseEvsBatchRecord(recordBytes)
+		record, _, err := parse(recordBytes)
 		if err != nil {
 			return nil, ErrEvsMirrorRecordInvalid
 		}
