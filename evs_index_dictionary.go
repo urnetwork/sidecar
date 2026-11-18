@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // A shard's dictionary (§11.14's dictionary row; protocol/INDEX-FORMAT.md's Shards): its keys ascending in blocks of
 // up to 64, front-coded within a block, with a block index of each block's first key and the offsets of its entries
 // and of its first list, so a phone finds a key's list by frame without reading the rest. A fresh shard blocks by 64; a

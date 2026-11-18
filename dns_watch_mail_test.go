@@ -341,14 +341,20 @@ func TestDnsWatchDefaultUrnetworkZonesComeFromTheHostList(t *testing.T) {
 	if len(zones) == 0 {
 		t.Fatalf("no platform zone")
 	}
+	serviceHostCount := 0
 	for _, entry := range list.Hosts {
-		if entry.Service == "" {
+		// the key sets' host serves static files and fills no service url: its zone is not the platform's
+		if entry.Service == "" || entry.Service == sidecar.SidecarHostServiceSmtpProofKeys {
 			continue
 		}
+		serviceHostCount += 1
 		_, zone, _ := strings.Cut(entry.Host, ".")
 		if !slices.Contains(zones, sidecar.CanonicalDnsRecordName(zone)) {
 			t.Errorf("%s's zone is not among %v", entry.Host, zones)
 		}
+	}
+	if serviceHostCount == 0 {
+		t.Fatal("the host list names no service host")
 	}
 }
 

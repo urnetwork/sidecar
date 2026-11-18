@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // SEARCH's envelope rules (§6.5's search rows, §6.6, §11.14's sizes row; D-PROTO-21, D-EVS-59), in the
 // path below SEARCH's handler and caller, so every size and time a relay sees is the requester's to set
@@ -23,6 +23,10 @@
 // The pad's length (Z1, Z2), which contents can be sized (Z3) and a failure's reply (Z7) of DESIGN-DETAILS
 // 11.2.9 are here, since this file links wherever the subprotocol does; remote search's builders and
 // parsers, Z4 to Z9, are search_remote_wire.go's.
+//
+// The ios_extension legs link no search (§18.10, §22.5's §18 row; QD-988), so this file is off them, and
+// rpc_search_leg.go stands in for the three functions Call and Handle reach here, searchRequestBodyError,
+// searchResponseBody and searchHandler, refusing SEARCH both ways.
 //
 // Who may ask whom is §11.14's, each side deciding in its own state; on a control contract SEARCH is
 // accepted only at a sidecar advertising bit 0 (rpc_contract_class.go). These rules key on the message
@@ -133,6 +137,15 @@ func searchInvalidReply(requestBody []byte, settings *SearchWireSettings) ([]byt
 		request = nil
 	}
 	return searchRemoteFailureReply(protocol.SearchStatus_SEARCH_INVALID, request, settings)
+}
+
+// What Call answers a SEARCH request body it will not send, nil for one it will: a body of any size but
+// RequestByteCount is INVALID_ARGUMENT, before anything is sent.
+func searchRequestBodyError(body []byte, settings *SearchWireSettings) error {
+	if len(body) != settings.RequestByteCount {
+		return &SubprotocolError{Code: protocol.ErrorCode_ERR_INVALID_ARGUMENT, Message: "a SEARCH body of another size"}
+	}
+	return nil
 }
 
 // SEARCH's handler beneath the one SEARCH's task registers: a request of the wrong size is answered

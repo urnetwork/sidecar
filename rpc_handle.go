@@ -89,6 +89,10 @@ func (self *Subprotocol) Handle(messageType protocol.MessageType, handler Subpro
 		// retry is answered from the indexer's cursor, and its sizes are fixed below its handler
 		handleOptions.Mutating = false
 		handler = searchHandler(handler, &self.settings.Search, self.log)
+		if handler == nil {
+			// a leg that links no search serves none (rpc_search_leg.go)
+			return nil, errHandleType
+		}
 	}
 	return self.setMessageTypeDispatch(messageType, func(ctx context.Context, message *subprotocolMessage) {
 		self.dispatchRequest(handler, &handleOptions, message)

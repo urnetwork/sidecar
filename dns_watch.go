@@ -83,7 +83,8 @@ func DefaultDnsWatchSettings() *DnsWatchSettings {
 }
 
 // The zones directly holding the host list's service hosts, canonical, each once: the platform's zone. None when the
-// list does not read, which leaves StrictChain only the zone's root.
+// list does not read, which leaves StrictChain only the zone's root. A service host is one a SidecarSettings url
+// names: the key sets' host (SidecarHostServiceSmtpProofKeys) serves static files and is no part of the platform.
 func dnsWatchPlatformZones() []string {
 	zones := []string{}
 	list, err := SidecarHostListV1()
@@ -91,7 +92,7 @@ func dnsWatchPlatformZones() []string {
 		return zones
 	}
 	for _, entry := range list.Hosts {
-		if entry.Service == "" {
+		if !slices.Contains(sidecarHostServices, entry.Service) {
 			continue
 		}
 		if _, zone, ok := strings.Cut(entry.Host, "."); ok && strings.Contains(zone, ".") {

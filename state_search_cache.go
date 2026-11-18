@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // §5.9's index cache (CORE-M10-01; R-CORE-18, D-CORE-16, I-19, FI-23): one network's sealed store of the search index
 // files this device keeps and their derived data, under file class search, which §11.14's read path, §16.10's search
 // and remote serving read and nothing else writes. 9.9's track owns the formats and the engine, which call this store;
@@ -48,7 +50,8 @@
 // Bounds, eviction and retained buckets are state_search_bounds.go's. Search.CacheByteCount 0 keeps the whole cache in
 // memory, for ephemeral sidecars, writing nothing to the medium. Browsers' Store is the host's IndexedDB backend.
 //
-// On every leg: root Id, no connect type. Safe for concurrent use.
+// On every leg but the ios_extension legs, which link no index or search code (QD-988): root Id, no connect type. Safe
+// for concurrent use.
 
 package sidecar
 
@@ -73,10 +76,9 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-// §5.9's file class of the index cache and search state, the cache's directory and its names. Its bounds are
-// SidecarSearchSettings'; a frame file holds one of evs's sealed frames.
+// The index cache's directory and its names, under file class search (SidecarSearchFileClass, state_class.go). Its
+// bounds are SidecarSearchSettings'; a frame file holds one of evs's sealed frames.
 const (
-	SidecarSearchFileClass  = "search"
 	sidecarSearchCacheDir   = "search"
 	searchCacheHoldingsName = "holdings"
 	searchCacheMetaName     = "m"
@@ -317,7 +319,7 @@ type SearchCache struct {
 	decoded      *searchDecodedCache
 	versionPages *searchDecodedCache
 	// what a deletion reaches beside the cache's files, state_search_delete.go's hook sets, held as any so this file,
-	// which every leg links, names none of their types
+	// which every leg but ios_extension links, names none of their types
 	deleteHooks atomic.Value
 
 	// one mutation at a time: a put, a removal, an eviction
