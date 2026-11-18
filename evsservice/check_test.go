@@ -938,7 +938,8 @@ func TestCheckGateFs3(t *testing.T) {
 
 // 5e: the head's current epoch; a ref's first push in an epoch from 1 to its generation, a deposit's at 1 (DESIGN-DETAILS
 // 9.2.6's first push, QD-632); a push planned on no head on a ref that has one refused before its epoch is compared; a
-// creation while due or blocked; a PATH_EPOCH push's own rules through its seam.
+// creation while a mapper's block holds the ref, and none while a due stands, whatever an earlier head recorded of it
+// (QD-1046); a PATH_EPOCH push's own rules through its seam.
 func TestCheckPathEpoch(t *testing.T) {
 	fixture := newCheckFixture(t)
 	viewOf := func(epoch uint64, create bool, flags uint32) *PushView {
@@ -998,15 +999,18 @@ func TestCheckPathEpoch(t *testing.T) {
 	requireCheckRefusal(t, "an older epoch", CheckPathEpoch(atEpoch(2, true, &protocol.EvsPathEpoch{Current: 3})), EvsCheckReasonPathEpoch)
 	requireCheckRefusal(t, "a newer epoch", CheckPathEpoch(atEpoch(4, false, &protocol.EvsPathEpoch{Current: 3})), EvsCheckReasonPathEpoch)
 
-	due := &protocol.EvsPathEpoch{Current: 1, DueGeneration: 2, DueBlocksCreation: true}
-	dueRefusal := CheckPathEpoch(atEpoch(1, true, due))
-	requireCheckRefusal(t, "a creation while due", dueRefusal, EvsCheckReasonPathEpochDue)
-	if dueRefusal != nil && (len(dueRefusal.Paths) != 1 || !dueRefusal.Paths[0].Equal(checkTestPath("new"))) {
-		t.Errorf("a creation while due names %v", dueRefusal.Paths)
-	}
+	due := &protocol.EvsPathEpoch{Current: 1, DueGeneration: 2, DueByMs: fixture.now.UnixMilli()}
+	requireCheckPass(t, "a creation while due", CheckPathEpoch(atEpoch(1, true, due)))
+	recordedBlocking := &protocol.EvsPathEpoch{Current: 1, DueGeneration: 2, DueBlocksCreation: true, DueByMs: fixture.now.UnixMilli()}
+	requireCheckPass(t, "a creation under a due an earlier head recorded blocking", CheckPathEpoch(atEpoch(1, true, recordedBlocking)))
 	requireCheckPass(t, "a write while due", CheckPathEpoch(atEpoch(1, false, due)))
-	blocked := &protocol.EvsPathEpoch{Current: 1, BlockUntilMs: fixture.now.Add(time.Minute).UnixMilli()}
-	requireCheckRefusal(t, "a creation while blocked", CheckPathEpoch(atEpoch(1, true, blocked)), EvsCheckReasonPathEpochDue)
+	blocked := &protocol.EvsPathEpoch{Current: 1, DueGeneration: 2, BlockUntilMs: fixture.now.Add(time.Minute).UnixMilli()}
+	blockRefusal := CheckPathEpoch(atEpoch(1, true, blocked))
+	requireCheckRefusal(t, "a creation while blocked", blockRefusal, EvsCheckReasonPathEpochDue)
+	if blockRefusal != nil && (!blockRefusal.Recorded() || len(blockRefusal.Paths) != 1 || !blockRefusal.Paths[0].Equal(checkTestPath("new"))) {
+		t.Errorf("a creation while blocked: %v naming %v", blockRefusal, blockRefusal.Paths)
+	}
+	requireCheckPass(t, "a write while blocked", CheckPathEpoch(atEpoch(1, false, blocked)))
 	lapsed := &protocol.EvsPathEpoch{Current: 1, BlockUntilMs: fixture.now.UnixMilli()}
 	requireCheckPass(t, "a creation once the block lapsed", CheckPathEpoch(atEpoch(1, true, lapsed)))
 
@@ -1023,48 +1027,9 @@ func TestCheckPathEpoch(t *testing.T) {
 	}
 }
 
-// DESIGN-DETAILS 9.2.6's crossing creation: a creation in a push whose own commit would record a due that blocks
-// creation gets 412 PATH_EPOCH_DUE, recorded, naming it; a modification passes, as does a creation under a due that
-// does not block; a ref with no head is exempt, since its first push must create (question
-// evs1-m2-44-new-ref-crossing).
-func TestCheckPathEpochRefusesACrossingCreation(t *testing.T) {
-	fixture := newCheckFixture(t)
-	viewOf := func(create bool, due *pathEpochDue, headed bool) *PushView {
-		plan := fixture.plan()
-		plan.BaseVersion = 3
-		if create {
-			plan.Changes = []*sidecar.EvsPlannedChange{fixture.change(plan, checkTestPath("new"), 0, 4)}
-		} else {
-			plan.Changes = []*sidecar.EvsPlannedChange{fixture.change(plan, checkTestPath("old"), 1, 2)}
-		}
-		view := fixture.view(plan)
-		if headed {
-			view.Head = checkTestHead(view, 3)
-		}
-		view.CrossingDue = due
-		return view
-	}
-	blocking := &pathEpochDue{generation: 2, immediate: true, blocks: true}
-	refusal := CheckPathEpoch(viewOf(true, blocking, true))
-	requireCheckRefusal(t, "a crossing creation", refusal, EvsCheckReasonPathEpochDue)
-	if refusal != nil && (!refusal.Recorded() || len(refusal.Paths) != 1 || !refusal.Paths[0].Equal(checkTestPath("new"))) {
-		t.Errorf("a crossing creation's refusal %v names %v", refusal, refusal.Paths)
-	}
-	requireCheckPass(t, "a crossing modification", CheckPathEpoch(viewOf(false, blocking, true)))
-	requireCheckPass(t, "a creation crossing a batched due", CheckPathEpoch(viewOf(true, &pathEpochDue{generation: 2}, true)))
-	requireCheckPass(t, "a creation crossing an immediate due that does not block",
-		CheckPathEpoch(viewOf(true, &pathEpochDue{generation: 2, immediate: true}, true)))
-	requireCheckPass(t, "a creation crossing nothing", CheckPathEpoch(viewOf(true, nil, true)))
-	// a ref's first push crossing a due that blocks, counted from the epoch it names, is refused as any crossing
-	// creation (DESIGN-DETAILS 9.2.6)
-	requireCheckRefusal(t, "a ref's first push crossing a due that blocks", CheckPathEpoch(viewOf(true, blocking, false)), EvsCheckReasonPathEpochDue)
-	requireCheckPass(t, "a ref's first push crossing a batched due", CheckPathEpoch(viewOf(true, &pathEpochDue{generation: 2}, false)))
-	requireCheckPass(t, "a ref's first push that creates nothing across a due that blocks", CheckPathEpoch(viewOf(false, blocking, false)))
-}
-
 // An overlay's first push (DESIGN-DETAILS 9.2.6's first push, QD-632): in its base ref's current epoch as step 4 read
-// the base's head, else 412 PATH_EPOCH; a creation while the base ref's head blocks creation, by its due or before its
-// block_until_ms, 412 PATH_EPOCH_DUE, recorded.
+// the base's head, else 412 PATH_EPOCH; its creations held by nothing of the base's (QD-1046): not by a due, whatever
+// an earlier head recorded of it, nor by a mapper's block, which holds the base ref's own creations alone.
 func TestCheckPathEpochOfAnOverlaysFirstPush(t *testing.T) {
 	fixture := newCheckFixture(t)
 	base := &protocol.EvsOverlay{RefId: testId("base ref").Bytes(), Version: 4}
@@ -1088,15 +1053,9 @@ func TestCheckPathEpochOfAnOverlaysFirstPush(t *testing.T) {
 	requireCheckRefusal(t, "an overlay base step 4 did not read", CheckPathEpoch(unread), EvsCheckReasonUnchecked)
 
 	due := &protocol.EvsPathEpoch{Current: 2, DueGeneration: 3, DueBlocksCreation: true}
-	refusal := CheckPathEpoch(viewOf(2, due))
-	requireCheckRefusal(t, "an overlay creating while its base blocks creation", refusal, EvsCheckReasonPathEpochDue)
-	if refusal != nil && (!refusal.Recorded() || len(refusal.Paths) != 1 || !refusal.Paths[0].Equal(checkTestPath("new"))) {
-		t.Errorf("the base's block's refusal %v names %v", refusal, refusal.Paths)
-	}
-	blocked := &protocol.EvsPathEpoch{Current: 2, BlockUntilMs: fixture.now.Add(time.Minute).UnixMilli()}
-	requireCheckRefusal(t, "an overlay creating before its base's block lapses", CheckPathEpoch(viewOf(2, blocked)), EvsCheckReasonPathEpochDue)
-	lapsed := &protocol.EvsPathEpoch{Current: 2, BlockUntilMs: fixture.now.UnixMilli()}
-	requireCheckPass(t, "an overlay creating once its base's block lapsed", CheckPathEpoch(viewOf(2, lapsed)))
+	requireCheckPass(t, "an overlay creating under its base's due, recorded blocking", CheckPathEpoch(viewOf(2, due)))
+	blocked := &protocol.EvsPathEpoch{Current: 2, DueGeneration: 3, BlockUntilMs: fixture.now.Add(time.Minute).UnixMilli()}
+	requireCheckPass(t, "an overlay creating while its base's mapper blocks the base", CheckPathEpoch(viewOf(2, blocked)))
 }
 
 // 5f: TIP and the live lease in git mode; the 63-version window in file mode; C_b; and BASE_STALE carrying the head

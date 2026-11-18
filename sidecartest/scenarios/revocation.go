@@ -310,7 +310,7 @@ func revocationEvsRun(run *sidecartest.RevocationRun) (string, error) {
 			return nil
 		}},
 		{Actor: "api", Action: world.DropReader("x")},
-		// a change, since a creation waits out the path epoch's due the shrink leaves (FS-3's, FS-4's)
+		// a change, as FS-3's are, though no due holds a creation any more (QD-1046)
 		{Actor: "writerB", Action: world.Write("writerB", "a.txt", fault.EvsWorldContent("revocation a by B", 200))},
 		{Actor: "check", Action: func(ctx context.Context, net *fault.Net) error {
 			head, err := world.Head(ctx)

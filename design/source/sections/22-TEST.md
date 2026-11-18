@@ -846,12 +846,13 @@ model       EvsCommit.tla (TLA+, checked by TLC: https://github.com/tlaplus/tlap
             segments (one shared), 1 slot and 10 versions, it adds DROP pushes (a written or removed boundary, a list,
             a window step and a cancel) and the citation fence (5h's bit-5 and drop-mark checks, a seal's rerun) as
             variables, and as processes the drop job (start, resolve, mark at one snapshot, verify at a later one,
-            delete with the hold reread and the 25 h age check, and young rounds; crashing at any step, resuming
-            stale, or running in two instances once one lease lapses), a hold placer and ender, and writers that copy
-            a listed version by reuse across refs (validated before the fence, with a late step 7), rename a path
-            holding a candidate, re-upload a candidate's bytes for a receipt and write the path after the drop, beside
-            the purge's processes; TLC checks I-EVS-15, FI-27 and I-EVS-1, and that every executing drop ends done,
-            held or refused while no hold stands (weak fairness);
+            delete with the hold reread and the horizon's age check (owner decision 397), and young rounds; crashing
+            at any step, resuming stale, or running in two instances once one lease lapses), a hold placer and ender,
+            and writers that copy a listed version by reuse across refs (validated before the fence, with a late step
+            7, on a ref with no head and on a cached head), rename a path holding a candidate, re-upload a candidate's
+            bytes for a receipt and write the path after the drop, beside the purge's processes; TLC checks I-EVS-15,
+            FI-27 and I-EVS-1, and that every executing drop ends done, held or refused while no hold stands (weak
+            fairness);
             IndexRollup.tla keeps one ref's head (its version, its index_epoch and the index files each version
             names), its erasure set, its current, previous and expired buckets, all, each writer's head and sealed
             slots with their entries (full, a tombstone, and a diff with its base, as §11.14 had them before owner
@@ -877,10 +878,13 @@ model       EvsCommit.tla (TLA+, checked by TLC: https://github.com/tlaplus/tlap
             details/Settle.tla and details/EvsGc.tla (DESIGN-DETAILS.md section 2, run by run-settle.sh beside them)
             check the store's stamp and a failed DELETE's held key against FI-30, and segment GC by evacuation's
             horizon with a first commit to a ref with no head stalled across it, with §19.6's settle row and
-            §11.13's orphans row as first written as failing configurations; details/EvsSlot.tla (section 14, run
-            by run-slot.sh), EvsCommit.tla's companion, checks each slot object's origin, a retoken's takeover and
-            evacuation's delete of a dead record's own slots, with the code as landed before them as failing
-            configurations;
+            §11.13's orphans row as first written as failing configurations; details/DropJob.tla (section 10, run by
+            run-drop.sh) checks the drop job's horizon past each covered drop's cite bound, its young rule by the
+            horizon and its scans' count of a git-mode push's new objects, against a citation on a cached head and a
+            first commit to a ref with no head, with §11.13's rules as first written as failing configurations;
+            details/EvsSlot.tla (section 14, run by run-slot.sh), EvsCommit.tla's companion, checks each slot
+            object's origin, a retoken's takeover and evacuation's delete of a dead record's own slots, with the
+            code as landed before them as failing configurations;
             StoreSettle.tla keeps one key on 8 drives at EC:4 (4 hosts of 2): each drive's version, its stamp and
             its own lock on the key, each write's coordinator, which may crash, and its drive commits, each a check
             step then a commit step, the settler and heal; writes are cancelled, pass their deadline, arrive after
@@ -1053,15 +1057,17 @@ FI-26  request soundness: every grant a directory decision produces (a RepoGrant
 FI-27  drop history: a drop deletes a segment or slot only if (1) every version that names it, committed at any time
        on any ref of the repo, is listed by a committed drop of that repo whose window passed with no cancel committed
        before its end and whose list equals its lineage's versions below its boundary; (2) the job's mark and its
-       independent verification, at snapshots after every such drop's fence, found no other committed version naming
-       it; (3) no hold covering the repo stood when the DELETE issued (a hold keeping what existed at its placement);
-       and (4) evacuation's horizon had passed the object's LastModified + 24 h + 2 min (owner decision 397); no
-       version commits naming a listed version as a base, rename or reuse source after its drop's fence; every path's
-       newest version keeps all its content, a written boundary carrying its base's oid and mode; readers show a
-       listed version as pending or dropped, never as missing or tampered, and alarm on a drop failing its checks; a
-       cancelled, refused or observed drop deletes nothing; a crash, retry, stale job instance or concurrent push
-       changes neither the delete set nor what survives; deleted content never returns, except from a stale mirror at
-       a site-loss re-seed until the re-seeded drop's job runs again, which §19.10's close report names (§11)
+       independent verification, at snapshots after evacuation's horizon had passed every such drop's cite bound,
+       found no other committed version naming it, in an entry version or a git-mode push's new-objects list; (3) no
+       hold covering the repo stood when the DELETE issued (a hold keeping what existed at its placement); and (4)
+       evacuation's horizon had passed the object's LastModified + 24 h + 2 min, and the DELETE named that
+       LastModified (owner decision 397); no version commits naming a listed version as a base, rename or reuse source
+       after its drop's fence; every path's newest version keeps all its content, a written boundary carrying its
+       base's oid and mode; readers show a listed version as pending or dropped, never as missing or tampered, for the
+       repo's life and whatever became of the path's entry, and alarm on a drop failing its checks; a cancelled,
+       refused or observed drop deletes nothing; a crash, retry, stale job instance or concurrent push changes neither
+       the delete set nor what survives; deleted content never returns, except from a stale mirror at a site-loss
+       re-seed until the re-seeded drop's job runs again, which §19.10's close report names (§11)
 FI-28  deliveries: each delivery of g has one immutable identity (group, g, C_g, recipient and the key sealed
        to), and one to a key never blocks, replaces or opens as one to another; every verifier, the oracle among
        them, judges each delivery at its own state (a staged one at its claim's) to one verdict, which no later
@@ -2165,26 +2171,33 @@ FS-89  §11    a path of 30 versions (diff chains past two checkpoints, an era o
               history verifying with dropped rows and no alarm, export writing stubs that git
               fsck passes, diff and restore reporting dropped; its twin, a live version's
               segment deleted by hand, alarms as a missing segment; --now deletes nothing
-              before evacuation's horizon has passed the drop's commit by 2 min, about 25 to
-              26 h after time_ms (owner decision 204), nor before not_before_ms + 25 min
-FS-90  §11    the job killed at each barrier (start CAS, resolve, each mark checkpoint,        FI-2,13a,27 T2+T3  M10-out
-              verify, between a HEAD and its DELETE, after half the DELETEs) and resumed by
-              another instance; a stale instance whose lease lapsed issuing a delayed DELETE
-              that the store refuses past its deadline, and one held at a drive barrier
-              that lands before the new instance's first request on its key or never; two
-              instances racing the take: one delete set, each id deleted once or 404, freed
-              bytes reported once, no live content lost; taskworker's clock 150 ms fast or
-              unknown: nothing starts or deletes
+              before evacuation's horizon has passed by 12 min the time evs saw the drop
+              committed, about 25 to 26 h after time_ms (owner decisions 204, 397), nor before
+              not_before_ms + 25 min; a version uploaded 1 h before a --now drop keeps its
+              segments until the horizon has passed its upload by 24 h 2 min
+FS-90  §11    the job killed at each barrier (start CAS, resolve, the horizon's LIST, the LIST FI-2,13a,27 T2+T3  M10-out
+              of head/, each mark checkpoint, verify, between a HEAD and its DELETE, after
+              half the DELETEs) and resumed by another instance; a stale instance whose lease
+              lapsed issuing a delayed DELETE that the store refuses past its deadline, and
+              one held at a drive barrier that lands before the new instance's first request
+              on its key or never; two instances racing the take: one delete set, each id
+              deleted once or 404, freed bytes reported once, no live content lost;
+              taskworker's clock 150 ms fast or unknown: nothing starts or deletes
 FS-91  §11    racing reuse copies: a push on ref R2 citing a listed version as reuse source,   FI-2,27     T2+T3  M10-out
               paused after its step 4, released (a) before the DROP commits: it commits, mark
               finds it and keeps the shared segments; (b) after: its step 7 past 5 s reruns 5h
               and gets 409 DROPPED; (c) validated after the commit against a cached head of
               the ref that a failed cache write left before the DROP: it commits before the
-              fence, found by mark and kept; (d) a multi-part push whose part cited the
-              version before the drop, sealed after: the seal refuses; (e) a client
-              re-uploading a young candidate's exact bytes, adopting the receipt: the
-              candidate waits for its 25 h, verify finds the adopter, nothing it names goes;
-              past 23 h the re-upload gets SEGMENT_STALE
+              fence, found by mark and kept; again creating its ref, its head write held at
+              the store past 26 h: the job waits in its horizon phase, and the write landing
+              keeps the shared segments while its revert lets the job delete them; a cache
+              entry put 11 min after its head's write is never served; (d) a multi-part push
+              whose part cited the version before the drop, sealed after: the seal refuses;
+              (e) a client re-uploading a young candidate's exact bytes, adopting the receipt:
+              the candidate waits for its bound, the next scans find the adopter, nothing it
+              names goes; again with an adopter that creates its ref and stalls; past 23 h the
+              re-upload gets SEGMENT_STALE; (f) a git-mode push carrying a young candidate's
+              bytes as a history segment: kept
 FS-92  §11,21 holds (owner decision 184): a hold placed (a) before the DROP: accepted, nothing FI-5,13c,27 T2+T3  later of
               deleted, the drop reads done, held bytes withheld (404), the stored count                           M5-out and
               falling once, when they move to held, and not again when the job deletes them                       M10-out
@@ -2198,7 +2211,8 @@ FS-93  §11    a rename chain: Z created, renamed to Y (one push removing Z and 
               one job, freeing what only they name, R2's copy keeping its segments; X live
               across a path epoch: one map-checked lineage; X removed before a cut-over and
               re-created after: two lineages; a lineage entry no committed map or tail links:
-              refused {mismatch}
+              refused {mismatch}; X live across three path epochs: one lineage linked through
+              two maps and a tail; a link named in the wrong map part: refused {mismatch}
 FS-94  §11    a shared inline record: one push writes small X and Y, Y a copy of X's bytes; X  FI-1,27     T2+T3  M10-out
               dropped: X's entry versions withheld after not_before, Y's served and verifying,
               the record's other entry versions keeping their hashes; a record-class twin: X's
@@ -2206,27 +2220,32 @@ FS-94  §11    a shared inline record: one push writes small X and Y, Y a copy o
               X's inline bytes stay in the pack, never served; compaction's stub test, of a
               pure function that returns the bytes a live version needs from a record and
               deletes nothing, since compaction is Later (owner decision 247), keeps every
-              byte Y needs
+              byte Y needs; X dropped, then its path removed, its marker collected and its
+              epoch drained: X's listed versions still read dropped with no alarm, and its
+              inline bytes stay unserved by path, by history and by push id
 FS-95  §11,8  refusals: config and mailcfg (409 DROP_KIND); git-mode and creates-only refs     FI-17,27    T2+T3  M10-out;
-              (409 REF_MODE); a path naming a directory, and ur/index's and .ur-index/'s                          format-1
-              files at versioning 2 (409 DROP_PATH, recorded); ur/lfs's objects at versioning                     cases at
-              1 and a versionless head (409 VERSIONING, recorded), each reserved name also                        M2-out
-              refused by honest clients, a modified client's DROP there raising history_drop
-              in state invalid at readers; a locked repo, and a lock filed during a window
-              voiding the drop at its start; owner-bound: an admin not the owner's consented
-              device (409 DROP_CONSENT), the owner's device accepted, its page Worker
-              refused; a non-admin (403); a written version whose oid differs (readers raise
-              SidecarEvent history_drop in state invalid, naming the signer, and list
-              nothing; §11.7, §5.4); a list missing or adding one version (refused
-              {mismatch}, nothing deleted); a cancel after not_before less 60 s (409
-              DROP_STATE); a cancel accepted at the storage limit and after the network has
-              spent its evs_drops_per_day, while its next drop gets 429; no MCP tool can
-              drop; at the storage limit an inline-head drop accepted and one needing an
-              upload refused; format-1 code given flag 256 or field 33 refusing them as
-              FORMAT_UNSUPPORTED, and ignoring window bit 5; from M2, format-1 evs refusing a
-              version naming a slot that neither its push introduced nor a version step 4
-              read names (§11.8's 5h), and a new-slot PUT meeting an equal object over 23 h
-              old with 409 SLOT_STALE (step 6)
+              (409 REF_MODE); a path naming a directory, and ur/index's and .ur-index/'s files                    format-1
+              at versioning 2 (409 DROP_PATH, recorded); ur/lfs's objects at versioning 1 and                     cases at
+              a versionless head (409 VERSIONING, recorded), each reserved name also refused                      M2-out
+              by honest clients, a modified client's DROP there raising history_drop in state
+              invalid at readers; a locked repo, and a lock filed during a window voiding the
+              drop at its start; owner-bound: an admin not the owner's consented device (409
+              DROP_CONSENT), the owner's device accepted, its page Worker refused; a non-admin
+              (403); a written version whose oid differs (readers raise SidecarEvent
+              history_drop in state invalid, naming the signer, and list nothing; §11.7,
+              §5.4); a list missing or adding one version (refused {mismatch}, nothing
+              deleted); a cancel after not_before less 60 s (409 DROP_STATE); a cancel
+              accepted at the storage limit and after the network has spent its
+              evs_drops_per_day, while its next drop gets 429; no MCP tool can drop; at the
+              storage limit an inline-head drop accepted and one needing an upload refused;
+              format-1 code given flag 256 or field 33 refusing them as FORMAT_UNSUPPORTED,
+              and ignoring window bit 5; from M2, format-1 evs refusing a version naming a
+              slot that neither its push introduced nor a version step 4 read names (§11.8's
+              5h), and a new-slot PUT meeting an equal object over 23 h old with 409
+              SLOT_STALE (step 6); a DROP whose body passes 256 KiB (400 INVALID) or whose
+              lists pass 1,048,576 values (409 DROP_LIST); a DROP in parts whose body is not
+              whole in part 1; a head-mode device's drop of a path with 5,000 versions refused
+              locally (owner decision 396)
 FS-96  §11,19 interactions: a versionless era inside the range stays collected, a              FI-5,13,16, T2+T3  M10-out
               kind-5-headed segment adopted as kind 1 and listed goes, one a live versionless  19,27
               head names stays; an ERASE meeting a slot the drop deleted counts done; the
@@ -2236,7 +2255,9 @@ FS-96  §11,19 interactions: a versionless era inside the range stays collected,
               mirrors apply and delete local copies; stored bytes fall by each deleted seg/
               object's stored size as deletes land, slots reporting nothing; observe mode
               deletes nothing and logs its delete set, verify equal to the oracle; a drive
-              returning from heal resurrects no deleted segment
+              returning from heal resurrects no deleted segment; a git-mode ref's history
+              segments stay through a drop in its repo; a re-seeded job writes its list files
+              again, equal bytes
 FS-97  §7,18  stale page Workers (D-TEAM-29) on a fake clock: a member's page Worker           I-4,15,FI-2 T2+T3  M4-out;
               re-enrolled weekly for a year, each evicted Worker's leaves removed as stale                        Team at
               about 90 days on (§10.9); with self_admit on, each admission's signer revokes,                      M6-out

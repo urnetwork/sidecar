@@ -1,8 +1,8 @@
-// EVS1-M2-16's tests: FS-4's commit half on T2. A crossing of a REMOVE generation records its due, immediate on a
-// shrink and blocking creation in a general repo, batched on expiries alone; map parts stored through
-// POST .../path-epoch; a block 10 min past due; and a PATH_EPOCH commit that makes the new epoch current, lists the
-// old one as a source and clears the due, its refusals included: the tail naming a missed creation, missing parts,
-// an old epoch after cut-over, and a fourth source.
+// EVS1-M2-16's tests: FS-4's commit half on T2. A crossing of a REMOVE generation records its due, batched whatever it
+// covers and blocking no creation (QD-1046); map parts stored through POST .../path-epoch; a block 10 min past due;
+// and a PATH_EPOCH commit that makes the new epoch current, lists the old one as a source and clears the due and the
+// block, its refusals included: the tail naming a missed creation, missing parts, an old epoch after cut-over, and a
+// third source.
 
 package evsservice
 
@@ -80,11 +80,12 @@ func (self *pushFixture) write(plan *sidecar.EvsPushPlan, base uint64, labels ..
 }
 
 // Commits a, then crosses to generation 2 under cause with a write of a, the state having shrunk or not: the head
-// then carries the due.
+// then carries the due. The state moves once the first commit's step 8, which reads the gate view, has finished.
 func (self *pushFixture) crossRemove(shrink bool) []byte {
 	plan := self.plan()
 	self.create(plan, "a")
 	self.requireCommitted(self.push(plan), 1)
+	self.awaitStepEights()
 	holdersShrunkAt := uint64(0)
 	if shrink {
 		holdersShrunkAt = self.check.firstView.Pin().GetVersion() + 1
@@ -97,36 +98,50 @@ func (self *pushFixture) crossRemove(shrink bool) []byte {
 	return commitment
 }
 
-func TestPathEpochDueImmediateBlocksCreation(t *testing.T) {
-	fixture := newPushFixture(t, nil)
-	commitment := fixture.crossRemove(true)
-	pathEpoch := fixture.head().Head.GetPathEpoch()
-	if pathEpoch.GetDueGeneration() != 2 || !pathEpoch.GetDueBlocksCreation() || pathEpoch.GetDueByMs() != fixture.clock.Now().UnixMilli() {
-		t.Fatalf("due %v", pathEpoch)
-	}
-	creation := fixture.planAtTwo(commitment)
-	fixture.create(creation, "new")
-	requireRefusal(t, fixture.push(creation), http.StatusPreconditionFailed, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH_DUE)
-	fixture.clock.Advance(fixture.settings.RefusalFenceInterval)
-	modification := fixture.planAtTwo(commitment)
-	fixture.write(modification, 2, "a")
-	fixture.requireCommitted(fixture.push(modification), 3)
-	if fixture.head().Head.GetPathEpoch().GetDueGeneration() != 2 {
-		t.Fatal("a later commit cleared the due")
+// A crossing records a batched due, 24 h on and blocking nothing, on a shrink as on expiries alone (QD-1046): a creation
+// at the new generation commits, and a later commit keeps the due and its time.
+func TestPathEpochDueBatchedOnAShrinkOrExpiries(t *testing.T) {
+	for _, shrink := range []bool{true, false} {
+		fixture := newPushFixture(t, nil)
+		commitment := fixture.crossRemove(shrink)
+		dueByMs := fixture.clock.Now().Add(fixture.settings.PathEpochBatchedDelay).UnixMilli()
+		pathEpoch := fixture.head().Head.GetPathEpoch()
+		if pathEpoch.GetDueGeneration() != 2 || pathEpoch.GetDueBlocksCreation() || pathEpoch.GetDueByMs() != dueByMs {
+			t.Fatalf("shrink %t: due %v", shrink, pathEpoch)
+		}
+		fixture.clock.Advance(time.Hour)
+		creation := fixture.planAtTwo(commitment)
+		fixture.create(creation, "new")
+		fixture.requireCommitted(fixture.push(creation), 3)
+		if pathEpoch := fixture.head().Head.GetPathEpoch(); pathEpoch.GetDueGeneration() != 2 || pathEpoch.GetDueByMs() != dueByMs {
+			t.Fatalf("shrink %t: a later commit left due %v", shrink, pathEpoch)
+		}
 	}
 }
 
-func TestPathEpochDueBatchedOnExpiriesAlone(t *testing.T) {
+// A due a head written before QD-1046 recorded blocking holds no creation, and the next crossing's commit writes
+// due_blocks_creation false, keeping the earlier due_by_ms.
+func TestPathEpochDueRecordedBlockingHoldsNothing(t *testing.T) {
 	fixture := newPushFixture(t, nil)
-	commitment := fixture.crossRemove(false)
-	pathEpoch := fixture.head().Head.GetPathEpoch()
-	if pathEpoch.GetDueGeneration() != 2 || pathEpoch.GetDueBlocksCreation() ||
-		pathEpoch.GetDueByMs() != fixture.clock.Now().Add(fixture.settings.PathEpochBatchedDelay).UnixMilli() {
-		t.Fatalf("due %v", pathEpoch)
+	commitmentTwo := fixture.crossRemove(true)
+	dueByMs := fixture.head().Head.GetPathEpoch().GetDueByMs()
+	head := fixture.head()
+	next := CloneEvsHead(head.Head)
+	next.Fence += 1
+	next.PathEpoch.DueBlocksCreation = true
+	if _, err := fixture.engine.heads.Commit(fixture.paidContext(), fixture.cluster, fixture.check.repoId, fixture.check.refId, head, next); err != nil {
+		t.Fatal(err)
 	}
-	creation := fixture.planAtTwo(commitment)
+	creation := fixture.planAtTwo(commitmentTwo)
 	fixture.create(creation, "new")
 	fixture.requireCommitted(fixture.push(creation), 3)
+	commitmentThree := fixture.putGenerationAt(3, sidecar.GkmCauseRemove, commitmentTwo)
+	crossing := fixture.planAt(3, commitmentThree)
+	fixture.create(crossing, "newer")
+	fixture.requireCommitted(fixture.push(crossing), 4)
+	if pathEpoch := fixture.head().Head.GetPathEpoch(); pathEpoch.GetDueGeneration() != 3 || pathEpoch.GetDueBlocksCreation() || pathEpoch.GetDueByMs() != dueByMs {
+		t.Fatalf("the next crossing left due %v", pathEpoch)
+	}
 }
 
 // A REQUEST rotation records nothing.
@@ -135,6 +150,7 @@ func TestPathEpochNoDueOnARequestRotation(t *testing.T) {
 	plan := fixture.plan()
 	fixture.create(plan, "a")
 	fixture.requireCommitted(fixture.push(plan), 1)
+	fixture.awaitStepEights()
 	fixture.check.appendState(0, nil)
 	commitment := fixture.putGenerationTwo(sidecar.GkmCauseRequest)
 	next := fixture.planAtTwo(commitment)
@@ -355,8 +371,8 @@ func TestPathEpochRefusesMissingParts(t *testing.T) {
 }
 
 // §11.6's block row: nothing due answers 412 PATH_EPOCH; a block before 10 min past due 429 WAIT; then one head CAS
-// raising only the fence sets block_until_ms, creation answering 412 PATH_EPOCH_DUE until it passes; another within
-// 10 min 429 WAIT.
+// raising only the fence sets block_until_ms, creation answering 412 PATH_EPOCH_DUE until it passes, whose recorded
+// refusal of a push crossing a newer REMOVE generation records no due (QD-1046); another within 10 min 429 WAIT.
 func TestPathEpochBlock(t *testing.T) {
 	fixture := newPushFixture(t, nil)
 	plan := fixture.plan()
@@ -383,37 +399,59 @@ func TestPathEpochBlock(t *testing.T) {
 	creation := fixture2.planAtTwo(commitment)
 	fixture2.create(creation, "blocked")
 	requireRefusal(t, fixture2.push(creation), http.StatusPreconditionFailed, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH_DUE)
-	fixture2.clock.Advance(time.Minute + time.Second)
+	fixture2.clock.Advance(fixture2.settings.RefusalFenceInterval)
+	commitmentThree := fixture2.putGenerationAt(3, sidecar.GkmCauseRemove, commitment)
+	crossing := fixture2.planAt(3, commitmentThree)
+	fixture2.create(crossing, "blocked crossing")
+	requireRefusal(t, fixture2.push(crossing), http.StatusPreconditionFailed, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH_DUE)
+	if pathEpoch := fixture2.head().Head.GetPathEpoch(); pathEpoch.GetDueGeneration() != 2 || pathEpoch.GetDueBlocksCreation() {
+		t.Fatalf("a refusal in the block recorded due %v", pathEpoch)
+	}
+	fixture2.clock.Advance(time.Minute + time.Second - fixture2.settings.RefusalFenceInterval)
 	requireRefusal(t, fixture2.postRoute("/path-epoch/block", block), http.StatusTooManyRequests, protocol.EvsRefusalCode_EVS_REFUSAL_WAIT)
 	unblocked := fixture2.planAtTwo(commitment)
 	fixture2.create(unblocked, "unblocked")
 	fixture2.requireCommitted(fixture2.push(unblocked), 3)
 }
 
-// The fourth source waits: 412 EPOCH_SOURCES_FULL, recorded.
-func TestPathEpochRefusesAFourthSource(t *testing.T) {
-	fixture := newPushFixture(t, nil)
-	commitment := fixture.crossRemove(false)
-	// three sources stand, as three earlier epochs' copies have not drained
-	head := fixture.head()
-	next := CloneEvsHead(head.Head)
-	next.Fence += 1
-	next.PathEpoch.Sources = []*protocol.EvsEpochSource{{Epoch: 1}, {Epoch: 1}, {Epoch: 1}}
-	if _, err := fixture.engine.heads.Commit(fixture.paidContext(), fixture.cluster, fixture.check.repoId, fixture.check.refId, head, next); err != nil {
-		t.Fatal(err)
+// A PATH_EPOCH waits while two sources stand, every epoch being batched (QD-1046), whatever an earlier head recorded of
+// its due, and while three do: 412 EPOCH_SOURCES_FULL, recorded.
+func TestPathEpochRefusesAThirdSource(t *testing.T) {
+	for _, c := range []struct {
+		sources  int
+		blocking bool
+	}{{sources: 2}, {sources: 2, blocking: true}, {sources: 3}} {
+		fixture := newPushFixture(t, nil)
+		commitment := fixture.crossRemove(false)
+		// sources stand, as earlier epochs' copies have not drained
+		head := fixture.head()
+		next := CloneEvsHead(head.Head)
+		next.Fence += 1
+		next.PathEpoch.DueBlocksCreation = c.blocking
+		for range c.sources {
+			next.PathEpoch.Sources = append(next.PathEpoch.Sources, &protocol.EvsEpochSource{Epoch: 1})
+		}
+		if _, err := fixture.engine.heads.Commit(fixture.paidContext(), fixture.cluster, fixture.check.repoId, fixture.check.refId, head, next); err != nil {
+			t.Fatal(err)
+		}
+		source := fixture.head()
+		partBytes, mapSha256 := fixture.mapPart()
+		fixture.postRoute("/path-epoch", &protocol.EvsPathMapRequest{PathMapSha256: mapSha256, Part: partBytes})
+		plan := fixture.pathEpochPlan(commitment, mapSha256, source.Version(), source.Head.GetChain())
+		requireRefusal(t, fixture.push(plan), http.StatusPreconditionFailed, protocol.EvsRefusalCode_EVS_REFUSAL_EPOCH_SOURCES_FULL)
 	}
-	source := fixture.head()
-	partBytes, mapSha256 := fixture.mapPart()
-	fixture.postRoute("/path-epoch", &protocol.EvsPathMapRequest{PathMapSha256: mapSha256, Part: partBytes})
-	plan := fixture.pathEpochPlan(commitment, mapSha256, source.Version(), source.Head.GetChain())
-	requireRefusal(t, fixture.push(plan), http.StatusPreconditionFailed, protocol.EvsRefusalCode_EVS_REFUSAL_EPOCH_SOURCES_FULL)
 }
 
-// An immediate due blocks creation until its epoch lands: once the PATH_EPOCH commits, the due and its block are
-// gone and a creation in the new epoch commits.
-func TestPathEpochClearsAnImmediateDue(t *testing.T) {
+// A due on a shrink, a mapper's block over it, and then the PATH_EPOCH, which creates nothing and so passes the block:
+// once it commits, the due and the block are gone and a creation in the new epoch commits.
+func TestPathEpochClearsTheDueAndTheBlock(t *testing.T) {
 	fixture := newPushFixture(t, nil)
 	commitment := fixture.crossRemove(true)
+	fixture.clock.Advance(fixture.settings.PathEpochBatchedDelay + fixture.settings.PathEpochBlockAfterDue)
+	block := &protocol.EvsPathEpochBlockRequest{RefId: fixture.check.refId.Bytes(), Ms: 60 * 1000}
+	if recorder := fixture.postRoute("/path-epoch/block", block); recorder.Code != http.StatusOK {
+		t.Fatalf("block answered %d (%s)", recorder.Code, refusalOf(t, recorder).GetCode())
+	}
 	source := fixture.head()
 	partBytes, mapSha256 := fixture.mapPart(pathEpochTestMove("a"))
 	if recorder := fixture.postRoute("/path-epoch", &protocol.EvsPathMapRequest{PathMapSha256: mapSha256, Part: partBytes}); recorder.Code != http.StatusOK {
@@ -431,85 +469,38 @@ func TestPathEpochClearsAnImmediateDue(t *testing.T) {
 	fixture.requireCommitted(fixture.push(creation), 4)
 }
 
-// DESIGN-DETAILS 9.2.6's crossing creation: the first push across an immediate removal that creates a path gets 412
-// PATH_EPOCH_DUE, recorded, and its refusal's fence write records the due as its commit would have, so the next
-// creation meets the due on the head; a retry of the same statement is answered from the record; a push across it
-// that only modifies commits.
-func TestPathEpochCrossingCreationIsRefusedAndRecordsTheDue(t *testing.T) {
-	fixture := newPushFixture(t, nil)
-	plan := fixture.plan()
-	fixture.create(plan, "a")
-	fixture.requireCommitted(fixture.push(plan), 1)
-	fixture.check.appendState(fixture.check.firstView.Pin().GetVersion()+1, nil)
-	commitment := fixture.putGenerationTwo(sidecar.GkmCauseRemove)
-	refusedAt := fixture.clock.Now()
-
-	crossing := fixture.planAtTwo(commitment)
-	fixture.create(crossing, "new")
-	recorder := fixture.push(crossing)
-	requireRefusal(t, recorder, http.StatusPreconditionFailed, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH_DUE)
-	if paths := refusalOf(t, recorder).GetPaths(); len(paths) != 1 {
-		t.Fatalf("the crossing creation's refusal names %d paths", len(paths))
-	}
-	head := fixture.head()
-	pathEpoch := head.Head.GetPathEpoch()
-	if head.Version() != 1 || len(head.Head.GetRefused()) == 0 {
-		t.Fatalf("head at %d with %d refusal bytes: the refusal was not recorded", head.Version(), len(head.Head.GetRefused()))
-	}
-	if pathEpoch.GetDueGeneration() != 2 || !pathEpoch.GetDueBlocksCreation() || pathEpoch.GetDueByMs() != refusedAt.UnixMilli() || pathEpoch.GetCurrent() != 1 {
-		t.Fatalf("the refusal's fence wrote path epoch %v", pathEpoch)
-	}
-
-	// the same statement again: the record answers
-	again := fixture.post(fixture.token(fixture.check.signerId), fixture.body(crossing))
-	requireRefusal(t, again, http.StatusPreconditionFailed, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH_DUE)
-	if !refusalOf(t, again).GetRecorded() {
-		t.Fatal("a retry of the refused statement was not answered from the record")
-	}
-
-	modification := fixture.planAtTwo(commitment)
-	fixture.write(modification, 1, "a")
-	fixture.requireCommitted(fixture.push(modification), 2)
-	if due := fixture.head().Head.GetPathEpoch(); due.GetDueGeneration() != 2 || !due.GetDueBlocksCreation() {
-		t.Fatalf("a modification after the refusal left path epoch %v", due)
+// The push crossing a REMOVE generation on a shrink commits its creation and records the due (QD-1046, retiring owner
+// decision 229's refusal), in a general repo as in a mailbox, with no refusal recorded.
+func TestPathEpochCrossingCreationCommitsAndRecordsTheDue(t *testing.T) {
+	for _, kind := range []protocol.RepoKind{protocol.RepoKind_REPO_KIND_GENERAL, protocol.RepoKind_REPO_KIND_MAILBOX} {
+		fixture := newPushFixture(t, nil)
+		fixture.putRepo(kind, protocol.EvsRepoState_EVS_REPO_ACTIVE)
+		plan := fixture.plan()
+		fixture.create(plan, "a")
+		fixture.requireCommitted(fixture.push(plan), 1)
+		fixture.awaitStepEights()
+		fixture.check.appendState(fixture.check.firstView.Pin().GetVersion()+1, nil)
+		commitment := fixture.putGenerationTwo(sidecar.GkmCauseRemove)
+		crossing := fixture.planAtTwo(commitment)
+		fixture.create(crossing, "new")
+		fixture.requireCommitted(fixture.push(crossing), 2)
+		head := fixture.head()
+		if pathEpoch := head.Head.GetPathEpoch(); pathEpoch.GetDueGeneration() != 2 || pathEpoch.GetDueBlocksCreation() ||
+			pathEpoch.GetDueByMs() != fixture.clock.Now().Add(fixture.settings.PathEpochBatchedDelay).UnixMilli() || len(head.Head.GetRefused()) != 0 {
+			t.Fatalf("%s: the crossing creation left path epoch %v and %d refusal bytes", kind, pathEpoch, len(head.Head.GetRefused()))
+		}
 	}
 }
 
-// The crossing creation blocks only where an immediate due does: a mailbox repo's crossing push creates and commits,
-// recording its due.
-func TestPathEpochCrossingCreationWhereCreationIsNotBlocked(t *testing.T) {
-	fixture := newPushFixture(t, nil)
-	fixture.putRepo(protocol.RepoKind_REPO_KIND_MAILBOX, protocol.EvsRepoState_EVS_REPO_ACTIVE)
-	plan := fixture.plan()
-	fixture.create(plan, "a")
-	fixture.requireCommitted(fixture.push(plan), 1)
-	fixture.check.appendState(fixture.check.firstView.Pin().GetVersion()+1, nil)
-	commitment := fixture.putGenerationTwo(sidecar.GkmCauseRemove)
-	crossing := fixture.planAtTwo(commitment)
-	fixture.create(crossing, "new")
-	fixture.requireCommitted(fixture.push(crossing), 2)
-	if pathEpoch := fixture.head().Head.GetPathEpoch(); pathEpoch.GetDueGeneration() != 2 || pathEpoch.GetDueBlocksCreation() {
-		t.Fatalf("a mailbox's crossing recorded %v", pathEpoch)
-	}
-}
-
-// DESIGN-DETAILS 9.2.6's first push (QD-632): on a ref with no head across an immediate removal its pin covers, a first
-// push naming the crossed generation commits with the head in that epoch, no source and no due; one naming 1 crosses
-// the removal and answers 412 PATH_EPOCH_DUE, recorded in a placeholder head that carries no due, so the next attempt
-// computes it again; across a batched removal a first push naming 1 commits and records the due; and a first push
-// naming an epoch past its generation is 412 PATH_EPOCH.
+// DESIGN-DETAILS 9.2.6's first push (QD-632): on a ref with no head across a removal its pin covers, a first push
+// naming the crossed generation commits with the head in that epoch, no source and no due; one naming 1 commits too,
+// across a shrink as across expiries alone, and records the batched due it crosses (QD-1046); and a first push naming
+// an epoch past its generation is 412 PATH_EPOCH.
 func TestPathEpochARefsFirstPushNamesTheEpochItStartsIn(t *testing.T) {
 	fixture := newPushFixture(t, nil)
 	fixture.check.appendState(fixture.check.firstView.Pin().GetVersion()+1, nil)
 	commitment := fixture.putGenerationTwo(sidecar.GkmCauseRemove)
 
-	low := fixture.planAtTwo(commitment)
-	fixture.create(low, "a")
-	requireRefusal(t, fixture.push(low), http.StatusPreconditionFailed, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH_DUE)
-	head := fixture.head()
-	if head.Version() != 0 || head.Head.GetPathEpoch().GetDueGeneration() != 0 || len(head.Head.GetRefused()) == 0 {
-		t.Fatalf("a first push across the removal left head %d with path epoch %v and %d refusal bytes", head.Version(), head.Head.GetPathEpoch(), len(head.Head.GetRefused()))
-	}
 	past := fixture.planAtTwo(commitment)
 	past.PathEpoch = 3
 	fixture.create(past, "a")
@@ -523,19 +514,25 @@ func TestPathEpochARefsFirstPushNamesTheEpochItStartsIn(t *testing.T) {
 		t.Fatalf("the first push in the crossed generation's epoch left path epoch %v", pathEpoch)
 	}
 
-	batched := newPushFixture(t, nil)
-	batchedCommitment := batched.putGenerationTwo(sidecar.GkmCauseRemove)
-	plan := batched.planAtTwo(batchedCommitment)
-	batched.create(plan, "a")
-	batched.requireCommitted(batched.push(plan), 1)
-	if pathEpoch := batched.head().Head.GetPathEpoch(); pathEpoch.GetCurrent() != 1 || pathEpoch.GetDueGeneration() != 2 || pathEpoch.GetDueBlocksCreation() {
-		t.Fatalf("a first push across a batched removal left path epoch %v", pathEpoch)
+	for _, shrink := range []bool{true, false} {
+		low := newPushFixture(t, nil)
+		if shrink {
+			low.check.appendState(low.check.firstView.Pin().GetVersion()+1, nil)
+		}
+		lowCommitment := low.putGenerationTwo(sidecar.GkmCauseRemove)
+		plan := low.planAtTwo(lowCommitment)
+		low.create(plan, "a")
+		low.requireCommitted(low.push(plan), 1)
+		if pathEpoch := low.head().Head.GetPathEpoch(); pathEpoch.GetCurrent() != 1 || pathEpoch.GetDueGeneration() != 2 || pathEpoch.GetDueBlocksCreation() ||
+			pathEpoch.GetDueByMs() != low.clock.Now().Add(low.settings.PathEpochBatchedDelay).UnixMilli() {
+			t.Fatalf("shrink %t: a first push naming 1 across the removal left path epoch %v", shrink, pathEpoch)
+		}
 	}
 }
 
 // An overlay's first push (DESIGN-DETAILS 9.2.6): its base ref created in epoch 2, the overlay's first push in epoch 2
-// commits with its head in epoch 2, and one in epoch 1 is 412 PATH_EPOCH; while the base ref's head blocks creation, a
-// creating first push of the overlay is 412 PATH_EPOCH_DUE.
+// commits with its head in epoch 2, and one in epoch 1 is 412 PATH_EPOCH; a creating first push of an overlay commits
+// while a mapper's block holds its base ref, which holds the base's own creations alone (QD-1046).
 func TestPathEpochAnOverlaysFirstPushTakesItsBaseRefsEpoch(t *testing.T) {
 	fixture := newPushFixture(t, nil)
 	fixture.check.appendState(fixture.check.firstView.Pin().GetVersion()+1, nil)
@@ -559,13 +556,14 @@ func TestPathEpochAnOverlaysFirstPushTakesItsBaseRefsEpoch(t *testing.T) {
 		t.Fatalf("the overlay's head starts in %v", pathEpoch)
 	}
 
-	// a second overlay of a base whose head blocks creation
+	// a second overlay of a base a mapper's block holds, under a due an earlier head recorded blocking
 	fixture.rewriteHeadOf(baseRefId, func(head *protocol.EvsHead) {
+		head.PathEpoch.DueGeneration, head.PathEpoch.DueBlocksCreation = 3, true
 		head.PathEpoch.BlockUntilMs = fixture.clock.Now().Add(time.Hour).UnixMilli()
 	})
 	blocked := atTwo(fixture.gitPlanOn(testId("second overlay"), "second-file", 2), 2)
 	blocked.Base = base
-	requireRefusal(t, fixture.push(blocked), http.StatusPreconditionFailed, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH_DUE)
+	fixture.requireCommitted(fixture.push(blocked), 1)
 }
 
 // 5e's once line (DESIGN-DETAILS 9.2.6): a push planned on no head, on a ref that has one, is 409 before its epoch is

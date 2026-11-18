@@ -6,13 +6,11 @@
 //	    path epoch, an older or other one getting final 412 PATH_EPOCH, on which the client re-tokenizes. A ref with
 //	    no head starts in the epoch its first push names (9.2.6's first push, QD-632): 1 on a deposit or erasure
 //	    ref, an overlay's base ref's current epoch as step 4 read its head, and otherwise any epoch from 1 to the
-//	    push's generation, else 412 PATH_EPOCH. A push creating a path (a change on base 0, or a directory add)
-//	    while the head's due_blocks_creation holds, or before its block_until_ms, or whose own commit would record a
-//	    due that blocks creation (9.2.6's crossing creation, PushView.CrossingDue, counted on a ref with no head from
-//	    the epoch its push names), gets 412 PATH_EPOCH_DUE, recorded, the refusal's fence write recording that due as
-//	    the commit would have (refuse.go), where there is a head to carry one; an overlay's first push creating a
-//	    path while its base ref's head blocks creation is refused the same way. A PATH_EPOCH push's own rules (map
-//	    parts, source binding, tail, fold) are EVS1-M2-16's, through PushView.PathEpochRules.
+//	    push's generation, else 412 PATH_EPOCH. No due blocks creation, every due being batched (QD-1046): the one
+//	    creation 5e holds is a push creating a path (a change on base 0, or a directory add) before the head's
+//	    block_until_ms, a mapper's block on this ref (§11.6's block row, which stays: QD-1057), which gets 412
+//	    PATH_EPOCH_DUE, recorded. A PATH_EPOCH push's own rules (map parts, source binding, tail, fold) are
+//	    EVS1-M2-16's, through PushView.PathEpochRules.
 //	5f  git mode: b = v (TIP), else final 409 non-fast-forward, and no other push's live seal lease, else 429 with
 //	    the lease's remaining time, refusing nothing; file mode: v - 63 <= b <= v, so the push lands within
 //	    (b, b+64], else final 409 BASE_STALE, which on the caller's own deposit ref carries its head
@@ -71,13 +69,8 @@ func CheckPathEpoch(view *PushView) *EvsCheckRefusal {
 	if epoch := push.GetPathEpoch(); epoch != current {
 		return newEvsCheckRefusal(EvsCheckReasonPathEpoch, fmt.Sprintf("path epoch %d, the head's %d", epoch, current))
 	}
-	if !view.Payload.CreatesPath {
-		return nil
-	}
-	pathEpoch := view.Head.GetPathEpoch()
-	crossing := view.CrossingDue != nil && view.CrossingDue.blocks
-	if crossing || pathEpoch.GetDueBlocksCreation() || view.Now.UnixMilli() < pathEpoch.GetBlockUntilMs() {
-		return creationRefusal(view, "a creation while the path epoch is due or blocked, or crossing a due that blocks it")
+	if view.Payload.CreatesPath && view.Now.UnixMilli() < view.Head.GetPathEpoch().GetBlockUntilMs() {
+		return creationRefusal(view, "a creation while a mapper's block holds the ref")
 	}
 	return nil
 }
@@ -89,21 +82,19 @@ var evsFirstPushOnceSkipped bool
 
 // 5e on a ref with no head, absent or a placeholder a refusal or evacuation left (DESIGN-DETAILS 9.2.6's first push,
 // QD-632): the epoch its first push names, 1 on a deposit or erasure ref, its base ref's current epoch on an overlay,
-// and within 1 to its generation on any other ref, else 412 PATH_EPOCH; then a creation crossing a due that blocks
-// it, counted from that epoch, or an overlay's while its base ref's head blocks creation, 412 PATH_EPOCH_DUE,
-// recorded in the placeholder head with no due, there being no head to carry one.
+// and within 1 to its generation on any other ref, else 412 PATH_EPOCH. Its creations are held by nothing: no due
+// blocks creation (QD-1046), and a ref with no head carries no mapper's block.
 func checkFirstPushEpoch(view *PushView) *EvsCheckRefusal {
 	push := view.Statement.Push
 	epoch, generation := push.GetPathEpoch(), push.GetGeneration()
 	refKind := protocol.EvsRefKind(push.GetRefKind())
-	var base *protocol.EvsHead
 	switch {
 	case refKind == protocol.EvsRefKind_EVS_REF_DEPOSIT || refKind == protocol.EvsRefKind_EVS_REF_ERASURE:
 		if epoch != 1 {
 			return newEvsCheckRefusal(EvsCheckReasonPathEpoch, fmt.Sprintf("path epoch %d on a deposit or erasure ref, which stays at 1", epoch))
 		}
 	case view.Payload.Base != nil:
-		base = view.OverlayBase
+		base := view.OverlayBase
 		if base == nil {
 			return newEvsCheckRefusal(EvsCheckReasonUnchecked, "an overlay base step 4 did not read")
 		}
@@ -113,18 +104,6 @@ func checkFirstPushEpoch(view *PushView) *EvsCheckRefusal {
 	default:
 		if epoch == 0 || generation < epoch {
 			return newEvsCheckRefusal(EvsCheckReasonPathEpoch, fmt.Sprintf("path epoch %d on a ref with no head, at generation %d", epoch, generation))
-		}
-	}
-	if !view.Payload.CreatesPath {
-		return nil
-	}
-	if view.CrossingDue != nil && view.CrossingDue.blocks {
-		return creationRefusal(view, "a ref's first push creating across a due that blocks creation, counted from the epoch it names")
-	}
-	if base != nil {
-		basePathEpoch := base.GetPathEpoch()
-		if basePathEpoch.GetDueBlocksCreation() || view.Now.UnixMilli() < basePathEpoch.GetBlockUntilMs() {
-			return creationRefusal(view, "an overlay's first push creating while its base ref blocks creation")
 		}
 	}
 	return nil

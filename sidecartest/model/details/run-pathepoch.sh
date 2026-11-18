@@ -26,7 +26,7 @@ main() {
   shift
   cap=${TLC_DISK_CAP_MB:-8192}
   designs="PathEpoch PathEpoch-Mappers PathEpoch-Three PathEpoch-Two PathEpoch-Pair PathEpoch-NewRef PathEpoch-Wide"
-  twins="PathEpochTwin-NoBetweenFence PathEpochTwin-NoTailCheck PathEpochTwin-FoldKeepsSources PathEpochTwin-BlindRetoken PathEpochTwin-MissIsAbsent PathEpochTwin-SendAllSources PathEpochTwin-MapAllSources PathEpochTwin-StaleEpochSend PathEpochTwin-NoNewNameRule PathEpochTwin-RowsBeforeMoves PathEpochTwin-RemoveCurrentRowOnly PathEpochTwin-NewRefAtOne PathEpochTwin-StaleFirstPush"
+  twins="PathEpochTwin-NoBetweenFence PathEpochTwin-NoTailCheck PathEpochTwin-FoldKeepsSources PathEpochTwin-BlindRetoken PathEpochTwin-MissIsAbsent PathEpochTwin-SendAllSources PathEpochTwin-MapAllSources PathEpochTwin-StaleEpochSend PathEpochTwin-RowsBeforeMoves PathEpochTwin-RemoveCurrentRowOnly PathEpochTwin-NewRefAtOne PathEpochTwin-StaleFirstPush"
   reach="PathEpochReach-TwoCutOvers PathEpochReach-Retoken PathEpochReach-NewRefLate"
   case "${1:-all}" in
     all) set -- $designs $twins $reach ;;

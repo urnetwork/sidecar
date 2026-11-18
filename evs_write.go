@@ -13,10 +13,10 @@
 // (evs_push.go), and re-tokenized on 412 PATH_EPOCH with what it sealed kept (DESIGN-DETAILS 9.2.5). A refusal asking
 // for a rebuild runs the attempt again under a new push id from a fresh read; rebuilds and retokens together at most
 // PushRebuildCount times; a creation refused 409 is planned once more, since the removal a fresh read shows sets its
-// version (§11.7's versions row), unless the path now stands, whose 409 then goes back; a creation the ref's coming
-// path epoch holds, 412 PATH_EPOCH_DUE or the planner's ErrEvsPathEpochDue, is planned again after its wait or at
-// the ref's next verified head, at most PushRetryCount times, then ErrEvsPathEpochDue (DESIGN-DETAILS 9.2.5); every
-// other refusal, a file-mode 409 with paths among them, goes back to the caller.
+// version (§11.7's versions row), unless the path now stands, whose 409 then goes back; a creation a mapper's block
+// holds, 412 PATH_EPOCH_DUE (§11.6's block row), is planned again after its wait or at the ref's next verified head,
+// at most PushRetryCount times, then ErrEvsPathEpochDue (DESIGN-DETAILS 9.2.5); no due holds a creation, every due
+// being batched (QD-1046); every other refusal, a file-mode 409 with paths among them, goes back to the caller.
 //
 // A write held to the version its caller read (EvsPathWrite.IfVersion; QD-721) is checked by every plan, the first
 // and each made again, so a rebuild or a creation's second plan never puts a caller's older bytes over a version
@@ -171,11 +171,8 @@ func (self *EvsRepo) writePathsPlanned(ctx context.Context, args *EvsWritePathsA
 		case errors.Is(err, errEvsWriteSplits):
 			// its new slots' bodies pass one push's (QD-819): its halves, each its own write (evs_write_split.go)
 			return self.writeSplit(ctx, args)
-		case errors.Is(err, ErrEvsPathEpochDue) || IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH_DUE):
+		case IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH_DUE):
 			if self.client.settings.PushRetryCount <= dueWaits {
-				if errors.Is(err, ErrEvsPathEpochDue) {
-					return nil, plan, err
-				}
 				return nil, plan, fmt.Errorf("%w: %w", ErrEvsPathEpochDue, err)
 			}
 			dueWaits += 1
@@ -301,9 +298,9 @@ func (self *EvsRepo) writeOnce(ctx context.Context, args *EvsWritePathsArgs, ref
 	return result, plan, nil
 }
 
-// Waits out a creation the ref's coming path epoch holds: its retry_after_ms, else PathEpochDueWait, at most
-// PushRetryMaxWait, or the ref's next verified head, whichever comes first (DESIGN-DETAILS 9.2.5's 412
-// PATH_EPOCH_DUE row). A mapper on this device maps meanwhile on its own ticks (evs_epoch_map.go).
+// Waits out a creation a mapper's block holds: its retry_after_ms, else PathEpochDueWait, at most PushRetryMaxWait, or
+// the ref's next verified head, whichever comes first (DESIGN-DETAILS 9.2.5's 412 PATH_EPOCH_DUE row). A mapper on
+// this device maps meanwhile on its own ticks (evs_epoch_map.go).
 func (self *EvsRepo) waitPathEpoch(ctx context.Context, refId Id, refusal error) error {
 	wait := self.client.settings.PathEpochDueWait
 	if evsError, ok := EvsErrorOf(refusal); ok && 0 < evsError.RetryAfter {

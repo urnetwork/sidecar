@@ -11,70 +11,7 @@ import (
 	"time"
 
 	"github.com/urnetwork/sidecar/protocol"
-	"github.com/urnetwork/sidecar/protocol/bridge"
 )
-
-// One classification for evs and its clients, on a view that reads no entry, which is no ConfigState: batched when the
-// state shows no shrink after the earlier pin, so only expiries passed, and immediate on any shrink after it, which such
-// a view cannot class (option 1's reading, which option 3 keeps for such a view; QD-949); immediate too for pins out of
-// order, a pin missing and no view, and once the holders shrank since the earlier pin, for a later pin the view does
-// not reach, which it need not reach when nothing shrank.
-func TestEvsClassifyPathEpochDue(t *testing.T) {
-	pin := func(version uint64) *bridge.AuthPin {
-		return &bridge.AuthPin{Version: version, Chain: evsTestBytes("auth chain", 32)}
-	}
-	cases := []struct {
-		holdersShrunkAt uint64
-		fromAuthVersion uint64
-		immediate       bool
-	}{
-		{holdersShrunkAt: 0, fromAuthVersion: 0, immediate: false},
-		{holdersShrunkAt: 0, fromAuthVersion: 7, immediate: false},
-		{holdersShrunkAt: 7, fromAuthVersion: 7, immediate: false},
-		{holdersShrunkAt: 7, fromAuthVersion: 9, immediate: false},
-		{holdersShrunkAt: 8, fromAuthVersion: 7, immediate: true},
-		{holdersShrunkAt: 1, fromAuthVersion: 0, immediate: true},
-	}
-	for _, c := range cases {
-		view := &evsTestConfig{repo: &protocol.AclRepo{Kind: protocol.RepoKind_REPO_KIND_GENERAL, HoldersShrunkAt: c.holdersShrunkAt}}
-		toAuth := pin(max(c.holdersShrunkAt, c.fromAuthVersion))
-		if immediate := EvsClassifyPathEpochDue(view, evsTestId("repo"), pin(c.fromAuthVersion), toAuth); immediate != c.immediate {
-			t.Errorf("shrunk at %d from %d: immediate %t", c.holdersShrunkAt, c.fromAuthVersion, immediate)
-		}
-	}
-	view := &evsTestConfig{repo: &protocol.AclRepo{Kind: protocol.RepoKind_REPO_KIND_GENERAL}}
-	if !EvsClassifyPathEpochDue(view, evsTestId("repo"), pin(7), pin(6)) {
-		t.Error("a later pin below the earlier one classes batched")
-	}
-	if !EvsClassifyPathEpochDue(view, evsTestId("repo"), nil, pin(6)) || !EvsClassifyPathEpochDue(nil, evsTestId("repo"), pin(6), pin(7)) {
-		t.Error("a missing pin or no view classes batched")
-	}
-	view.atErr = ErrGkmAuthNotRetained
-	if EvsClassifyPathEpochDue(view, evsTestId("repo"), pin(6), pin(7)) {
-		t.Error("a later pin the view does not reach, nothing shrunk since the earlier one, classes immediate")
-	}
-	view.repo.HoldersShrunkAt = 7
-	if !EvsClassifyPathEpochDue(view, evsTestId("repo"), pin(6), pin(7)) {
-		t.Error("a later pin the view does not reach, the holders shrunk since the earlier one, classes batched")
-	}
-}
-
-// Creation blocks on shared and owned refs of general, config and mailcfg repos alone (plan-EVS1-epoch-kinds #1, #2).
-func TestEvsRefBlocksCreation(t *testing.T) {
-	blockingKinds := map[protocol.RepoKind]bool{
-		protocol.RepoKind_REPO_KIND_GENERAL: true, protocol.RepoKind_REPO_KIND_CONFIG: true, protocol.RepoKind_REPO_KIND_MAILCFG: true,
-	}
-	blockingRefs := map[protocol.EvsRefKind]bool{protocol.EvsRefKind_EVS_REF_SHARED: true, protocol.EvsRefKind_EVS_REF_OWNED: true}
-	for repoKindValue := range protocol.RepoKind_name {
-		for refKindValue := range protocol.EvsRefKind_name {
-			repoKind, refKind := protocol.RepoKind(repoKindValue), protocol.EvsRefKind(refKindValue)
-			want := blockingKinds[repoKind] && blockingRefs[refKind]
-			if got := EvsRefBlocksCreation(repoKind, refKind); got != want {
-				t.Errorf("%s %s: blocks %t", repoKind, refKind, got)
-			}
-		}
-	}
-}
 
 // path_map_sha256 is SHA-256 over the parts' signed bytes in part order (DESIGN-DETAILS 9.2.2): the hasher one part at
 // a time equals the hash of the parts joined, and another order is another hash.
@@ -112,9 +49,9 @@ func TestIsEvsMapSource(t *testing.T) {
 }
 
 // The two token rules (DESIGN-DETAILS 9.2.3) as a table over (floor, cur, sources, the record's PinEpoch, the
-// verifier's asks, quiet, fresh): a path with a floor is named in cur and each source, PinEpoch and ask at or above
-// it, never below; one with none is named in cur alone on a fresh state with no source standing and no immediate
-// pressure, else looked up, and waits for a fresh state where only freshness is missing.
+// verifier's asks, fresh): a path with a floor is named in cur and each source, PinEpoch and ask at or above it, never
+// below; one with none is named in cur alone on a fresh state with no source standing, else looked up, and waits for
+// a fresh state where only freshness is missing. No due holds a new name (QD-1046).
 func TestEvsEpochTokensRules(t *testing.T) {
 	epochOf := func(current uint64, sources ...uint64) *protocol.EvsPathEpoch {
 		epoch := &protocol.EvsPathEpoch{Current: current}
@@ -129,17 +66,16 @@ func TestEvsEpochTokensRules(t *testing.T) {
 		floor     uint64
 		pinEpoch  uint64
 		more      []uint64
-		quiet     bool
 		fresh     bool
 		epochs    []uint64
 		lookup    bool
 		needFresh bool
 	}{
-		{name: "a new name, no source, quiet, fresh", epoch: epochOf(1), quiet: true, fresh: true, epochs: []uint64{1}},
-		{name: "a new name on a stale state", epoch: epochOf(1), quiet: true, needFresh: true},
-		{name: "a new name while a source stands", epoch: epochOf(2, 1), quiet: true, fresh: true, lookup: true},
-		{name: "a new name under immediate pressure", epoch: epochOf(1), fresh: true, lookup: true},
-		{name: "a floor at the current epoch", epoch: epochOf(3, 2, 1), floor: 3, quiet: true, epochs: []uint64{3}},
+		{name: "a new name, no source, fresh", epoch: epochOf(1), fresh: true, epochs: []uint64{1}},
+		{name: "a new name on a stale state", epoch: epochOf(1), needFresh: true},
+		{name: "a new name while a source stands", epoch: epochOf(2, 1), fresh: true, lookup: true},
+		{name: "a new name under a due", epoch: &protocol.EvsPathEpoch{Current: 1, DueGeneration: 2, DueByMs: 1}, fresh: true, epochs: []uint64{1}},
+		{name: "a floor at the current epoch", epoch: epochOf(3, 2, 1), floor: 3, epochs: []uint64{3}},
 		{name: "a floor in a source", epoch: epochOf(3, 2, 1), floor: 2, epochs: []uint64{3, 2}},
 		{name: "a floor below every source", epoch: epochOf(3, 2, 1), floor: 1, epochs: []uint64{3, 2, 1}},
 		{name: "a record's pin epoch at the floor", epoch: epochOf(4), floor: 1, pinEpoch: 1, epochs: []uint64{4, 1}},
@@ -147,7 +83,7 @@ func TestEvsEpochTokensRules(t *testing.T) {
 		{name: "asks for epochs, one below the floor", epoch: epochOf(4), floor: 2, more: []uint64{1, 3}, epochs: []uint64{4, 3}},
 	}
 	for _, c := range cases {
-		epochs, lookup, needFresh := evsEpochTokens(c.epoch, c.floor, c.pinEpoch, c.more, c.quiet, c.fresh)
+		epochs, lookup, needFresh := evsEpochTokens(c.epoch, c.floor, c.pinEpoch, c.more, c.fresh)
 		if !slices.Equal(epochs, c.epochs) || lookup != c.lookup || needFresh != c.needFresh {
 			t.Errorf("%s: epochs %v lookup %t fresh %t", c.name, epochs, lookup, needFresh)
 		}
@@ -162,17 +98,14 @@ func evsTestRefEpoch(version uint64, generation uint64, epoch *protocol.EvsPathE
 	return &evsRefEpoch{refId: evsTestId("pressure ref"), epoch: epoch, version: version, generation: generation, refKind: protocol.EvsRefKind_EVS_REF_SHARED}
 }
 
-// pressure as evs classifies the same crossing (EvsClassifyPathEpochDue, question evs1-m2-16-due-classification): a
-// recorded due by its block; else the newest REMOVE generation this device holds above the head's, the crossing to the
-// newest one classed on the device's verified state between the two auth pins, which on this world's view, no
-// ConfigState, is immediate unless the holders shrank at or below the earlier pin; none for a REQUEST rotation or a ref
-// with no head; and quiet holds new names only on a blocking ref under immediate pressure.
-func TestEvsPressureMatchesEvsClassification(t *testing.T) {
+// The due a ref is under, every due batched (QD-1046): a recorded due's generation, whether or not a head written
+// before QD-1046 set due_blocks_creation; else the newest REMOVE generation this device holds above the head's, noted
+// from when it first held it, whatever shrank the holders; a generation gkm does not answer for; none for a REQUEST
+// rotation or a ref with no head.
+func TestEvsDueGeneration(t *testing.T) {
 	writer := newEvsTestWriter(t)
 	repo := writer.repo
 	ctx := context.Background()
-	writer.gkm.auths[1] = 3
-	writer.gkm.auths[2] = 5
 	due := func(blocks bool) *protocol.EvsPathEpoch {
 		return &protocol.EvsPathEpoch{Current: 1, DueGeneration: 2, DueBlocksCreation: blocks, DueByMs: 1}
 	}
@@ -182,44 +115,54 @@ func TestEvsPressureMatchesEvsClassification(t *testing.T) {
 		newest   uint64
 		cause    GkmCause
 		shrunkAt uint64
-		pressure evsPressure
+		due      uint64
+		held     bool
 	}{
-		{name: "a due recorded that blocks", state: evsTestRefEpoch(4, 2, due(true)), newest: 2, pressure: evsPressureImmediate},
-		{name: "a due recorded that does not", state: evsTestRefEpoch(4, 2, due(false)), newest: 2, pressure: evsPressureBatched},
+		{name: "a due recorded", state: evsTestRefEpoch(4, 2, due(false)), newest: 2, due: 2},
+		{name: "a due an earlier head recorded blocking", state: evsTestRefEpoch(4, 2, due(true)), newest: 2, due: 2},
 		{name: "no newer generation", state: evsTestRefEpoch(4, 1, &protocol.EvsPathEpoch{Current: 1}), newest: 1},
 		{name: "a REMOVE after a shrink", state: evsTestRefEpoch(4, 1, &protocol.EvsPathEpoch{Current: 1}), newest: 2,
-			cause: GkmCauseRemove, shrunkAt: 5, pressure: evsPressureImmediate},
+			cause: GkmCauseRemove, shrunkAt: 5, due: 2, held: true},
 		{name: "a REMOVE of expiries alone", state: evsTestRefEpoch(4, 1, &protocol.EvsPathEpoch{Current: 1}), newest: 2,
-			cause: GkmCauseRemove, shrunkAt: 3, pressure: evsPressureBatched},
+			cause: GkmCauseRemove, shrunkAt: 3, due: 2, held: true},
 		{name: "a REQUEST rotation", state: evsTestRefEpoch(4, 1, &protocol.EvsPathEpoch{Current: 1}), newest: 2, cause: GkmCauseRequest},
 		{name: "a ref with no head", state: evsTestRefEpoch(0, 0, &protocol.EvsPathEpoch{Current: 1}), newest: 2,
 			cause: GkmCauseRemove, shrunkAt: 5},
 	}
 	for _, c := range cases {
+		writer.test.client.epochs = newEvsClientEpochs()
 		writer.gkm.newest = c.newest
 		writer.gkm.causes[2] = c.cause
 		writer.world.config.repo.HoldersShrunkAt = c.shrunkAt
-		pressure, _, err := repo.pressure(ctx, c.state)
-		if err != nil || pressure != c.pressure {
-			t.Errorf("%s: pressure %d %v", c.name, pressure, err)
+		generation, err := repo.dueGeneration(ctx, c.state)
+		if err != nil || generation != c.due {
+			t.Errorf("%s: due %d %v", c.name, generation, err)
 		}
-		if c.cause == GkmCauseRemove && c.state.version != 0 {
-			fromKey, _ := writer.gkm.RepoKey(ctx, writer.world.repoId, 1)
-			toKey, _ := writer.gkm.RepoKey(ctx, writer.world.repoId, 2)
-			if immediate := EvsClassifyPathEpochDue(writer.world.config, writer.world.repoId, fromKey.Auth(), toKey.Auth()); immediate != (c.pressure == evsPressureImmediate) {
-				t.Errorf("%s: evs classes it immediate %t", c.name, immediate)
-			}
-		}
-		quiet, err := repo.quiet(ctx, c.state)
-		if err != nil || quiet != (c.pressure != evsPressureImmediate) {
-			t.Errorf("%s: quiet %t %v", c.name, quiet, err)
+		if held := writer.test.client.epochs.heldRemovalSince(writer.world.repoId, 2); held.IsZero() == c.held {
+			t.Errorf("%s: held since %v", c.name, held)
 		}
 	}
-	// a mailbox never holds creation (plan-EVS1-epoch-kinds #1)
-	writer.world.config.repo.Kind = protocol.RepoKind_REPO_KIND_MAILBOX
-	if quiet, err := repo.quiet(ctx, evsTestRefEpoch(4, 2, due(true))); err != nil || !quiet {
-		t.Errorf("a mailbox ref under a due: quiet %t %v", quiet, err)
+	// a generation gkm does not answer for is taken as due, so the status shows it and a mapper waits for its key
+	writer.test.client.epochs = newEvsClientEpochs()
+	unanswered := &evsTestUnansweredGkm{evsTestWriteGkm: writer.gkm, missing: 2}
+	writer.test.client.args.Gkm = unanswered
+	writer.gkm.newest = 3
+	if generation, err := repo.dueGeneration(ctx, evsTestRefEpoch(4, 1, &protocol.EvsPathEpoch{Current: 1})); err != nil || generation != 2 {
+		t.Errorf("a generation gkm does not answer for: due %d %v", generation, err)
 	}
+}
+
+// The fake gkm with one generation it does not answer for.
+type evsTestUnansweredGkm struct {
+	*evsTestWriteGkm
+	missing uint64
+}
+
+func (self *evsTestUnansweredGkm) RepoKey(ctx context.Context, repoId Id, generation uint64) (*EvsRepoKey, error) {
+	if generation == self.missing {
+		return nil, ErrGkmKeyMissing
+	}
+	return self.evsTestWriteGkm.RepoKey(ctx, repoId, generation)
 }
 
 // Notes head as the client's verified head of the world's main ref.
@@ -250,14 +193,19 @@ func TestEvsPathEpochStatus(t *testing.T) {
 		class string
 	}{
 		{name: "no due", epoch: &protocol.EvsPathEpoch{Current: 2}, state: EvsPathEpochStateNone},
-		{name: "an immediate due", epoch: &protocol.EvsPathEpoch{Current: 1, DueGeneration: 2, DueBlocksCreation: true, DueByMs: now.UnixMilli()},
-			state: EvsPathEpochStateWaitingMapper, class: "immediate"},
-		{name: "an overdue one", epoch: &protocol.EvsPathEpoch{Current: 1, DueGeneration: 2, DueBlocksCreation: true, DueByMs: now.Add(-2 * time.Hour).UnixMilli()},
-			state: EvsPathEpochStateOverdue, class: "immediate"},
-		{name: "three sources standing", epoch: &protocol.EvsPathEpoch{Current: 4, Sources: sources(3, 2, 1), DueGeneration: 5, DueBlocksCreation: true, DueByMs: now.UnixMilli()},
-			state: EvsPathEpochStateWaitingSources, class: "immediate"},
-		{name: "a batched due and two sources", epoch: &protocol.EvsPathEpoch{Current: 3, Sources: sources(2, 1), DueGeneration: 4, DueByMs: now.UnixMilli()},
-			state: EvsPathEpochStateWaitingSources, class: "batched"},
+		{name: "a due", epoch: &protocol.EvsPathEpoch{Current: 1, DueGeneration: 2, DueByMs: now.Add(time.Hour).UnixMilli()},
+			state: EvsPathEpochStateWaitingMapper, class: EvsPathEpochClassBatched},
+		{name: "an overdue one", epoch: &protocol.EvsPathEpoch{Current: 1, DueGeneration: 2, DueByMs: now.Add(-2 * time.Hour).UnixMilli()},
+			state: EvsPathEpochStateOverdue, class: EvsPathEpochClassBatched},
+		// a head written before QD-1046 may carry due_blocks_creation, which reads as nothing
+		{name: "a due an earlier head recorded blocking", epoch: &protocol.EvsPathEpoch{Current: 1, DueGeneration: 2, DueBlocksCreation: true, DueByMs: now.Add(time.Hour).UnixMilli()},
+			state: EvsPathEpochStateWaitingMapper, class: EvsPathEpochClassBatched},
+		{name: "one source standing", epoch: &protocol.EvsPathEpoch{Current: 2, Sources: sources(1), DueGeneration: 3, DueByMs: now.UnixMilli()},
+			state: EvsPathEpochStateWaitingMapper, class: EvsPathEpochClassBatched},
+		{name: "two sources standing", epoch: &protocol.EvsPathEpoch{Current: 3, Sources: sources(2, 1), DueGeneration: 4, DueByMs: now.UnixMilli()},
+			state: EvsPathEpochStateWaitingSources, class: EvsPathEpochClassBatched},
+		{name: "two sources and a due an earlier head recorded blocking", epoch: &protocol.EvsPathEpoch{Current: 3, Sources: sources(2, 1), DueGeneration: 4, DueBlocksCreation: true, DueByMs: now.UnixMilli()},
+			state: EvsPathEpochStateWaitingSources, class: EvsPathEpochClassBatched},
 	}
 	for _, c := range cases {
 		writer.noteHead(head(c.epoch))
@@ -266,9 +214,31 @@ func TestEvsPathEpochStatus(t *testing.T) {
 			t.Errorf("%s: %+v %v", c.name, status, err)
 		}
 	}
-	status := &EvsPathEpochStatus{Current: 1, DueGeneration: 2, DueBy: time.Date(2026, time.November, 8, 9, 0, 0, 0, time.UTC), Class: "immediate", State: EvsPathEpochStateOverdue}
-	if line := status.StatusLine("work", "main"); line != "work main: path epoch 1 -> 2, due 2026-11-08T09:00:00Z (immediate): overdue" {
+	status := &EvsPathEpochStatus{Current: 1, DueGeneration: 2, DueBy: time.Date(2026, time.November, 8, 9, 0, 0, 0, time.UTC), Class: EvsPathEpochClassBatched, State: EvsPathEpochStateOverdue}
+	if line := status.StatusLine("work", "main"); line != "work main: path epoch 1 -> 2, due 2026-11-08T09:00:00Z (batched): overdue" {
 		t.Errorf("ur status's line %q", line)
+	}
+}
+
+// A REMOVE generation this device holds and no head records shows as a batched due 24 h after it first held it,
+// whatever shrank the holders (QD-1046): ur status's DueBy and class, the same on a later look.
+func TestEvsPathEpochStatusOfAnUnrecordedRemoval(t *testing.T) {
+	writer := newEvsTestWriter(t)
+	ctx := context.Background()
+	heldAt := writer.test.clock.Now()
+	writer.gkm.newest = 2
+	writer.gkm.causes[2] = GkmCauseRemove
+	// a member device's removal, which once made the crossing immediate
+	writer.world.config.repo.HoldersShrunkAt = 5
+	writer.gkm.auths[1] = 3
+	writer.noteHead(&protocol.EvsHeadSummary{Version: 4, Generation: 1, RefKind: protocol.EvsRefKind_EVS_REF_SHARED, PathEpoch: &protocol.EvsPathEpoch{Current: 1}})
+	for _, advance := range []time.Duration{0, time.Hour} {
+		writer.test.clock.advance(advance)
+		status, err := writer.repo.PathEpochStatus(ctx, nil)
+		if err != nil || status.Class != EvsPathEpochClassBatched || status.DueGeneration != 2 || !status.DueBy.Equal(heldAt.Add(24*time.Hour)) ||
+			status.State != EvsPathEpochStateWaitingMapper {
+			t.Fatalf("%v on: %+v %v", advance, status, err)
+		}
 	}
 }
 
@@ -283,75 +253,72 @@ func (self *evsTestWriter) overdueAlarms() int {
 	return count
 }
 
-// The writer's overdue alarm (DESIGN-DETAILS 9.2.8): once an hour past due_by_ms, once per due generation in 24 h; not
-// while a batched due waits on two sources, nor within the hour after the head first lists fewer; and from when this
-// device first held a REMOVE generation no head records.
+// The writer's overdue alarm (DESIGN-DETAILS 9.2.8), every due batched (QD-1046): once an hour past due_by_ms, once
+// per due generation in 24 h; not while the due waits on two sources, a due an earlier head recorded blocking
+// included, nor within the hour after the head first lists fewer; and 25 h from when this device first held a REMOVE
+// generation no head records.
 func TestEvsEpochOverdueAlarm(t *testing.T) {
 	writer := newEvsTestWriter(t)
 	now := writer.test.clock.Now()
 	head := func(version uint64, epoch *protocol.EvsPathEpoch) *protocol.EvsHeadSummary {
 		return &protocol.EvsHeadSummary{Version: version, Generation: 2, RefKind: protocol.EvsRefKind_EVS_REF_SHARED, PathEpoch: epoch}
 	}
-	immediate := &protocol.EvsPathEpoch{Current: 1, DueGeneration: 2, DueBlocksCreation: true, DueByMs: now.Add(-30 * time.Minute).UnixMilli()}
-	writer.noteHead(head(1, immediate))
+	due := &protocol.EvsPathEpoch{Current: 1, DueGeneration: 2, DueByMs: now.Add(-30 * time.Minute).UnixMilli()}
+	writer.noteHead(head(1, due))
 	if writer.overdueAlarms() != 0 {
 		t.Fatal("an alarm under an hour past due")
 	}
 	writer.test.clock.advance(31 * time.Minute)
-	writer.noteHead(head(2, immediate))
-	writer.noteHead(head(3, immediate))
+	writer.noteHead(head(2, due))
+	writer.noteHead(head(3, due))
 	if writer.overdueAlarms() != 1 {
 		t.Fatalf("%d alarms an hour past due", writer.overdueAlarms())
 	}
 	writer.test.clock.advance(24 * time.Hour)
-	writer.noteHead(head(4, immediate))
+	writer.noteHead(head(4, due))
 	if writer.overdueAlarms() != 2 {
 		t.Fatalf("%d alarms a day later", writer.overdueAlarms())
 	}
 
-	// a batched due waiting on two sources, then the hour after the head lists fewer
+	// a due waiting on two sources, then the hour after the head lists fewer
 	writer = newEvsTestWriter(t)
 	now = writer.test.clock.Now()
 	twoSources := &protocol.EvsPathEpoch{Current: 3, Sources: []*protocol.EvsEpochSource{{Epoch: 2}, {Epoch: 1}}, DueGeneration: 4, DueByMs: now.Add(-48 * time.Hour).UnixMilli()}
 	writer.noteHead(head(1, twoSources))
+	// the same two sources under a due a head written before QD-1046 recorded blocking, which waits alike
+	blockingTwoSources := &protocol.EvsPathEpoch{Current: 3, Sources: twoSources.GetSources(), DueGeneration: 4, DueBlocksCreation: true, DueByMs: twoSources.GetDueByMs()}
+	writer.noteHead(head(2, blockingTwoSources))
+	if writer.overdueAlarms() != 0 {
+		t.Fatalf("%d alarms while two sources stand", writer.overdueAlarms())
+	}
 	oneSource := &protocol.EvsPathEpoch{Current: 3, Sources: []*protocol.EvsEpochSource{{Epoch: 2}}, DueGeneration: 4, DueByMs: twoSources.GetDueByMs()}
-	writer.noteHead(head(2, oneSource))
-	writer.test.clock.advance(59 * time.Minute)
 	writer.noteHead(head(3, oneSource))
+	writer.test.clock.advance(59 * time.Minute)
+	writer.noteHead(head(4, oneSource))
 	if writer.overdueAlarms() != 0 {
 		t.Fatalf("%d alarms in the deferral or the hour after it", writer.overdueAlarms())
 	}
 	writer.test.clock.advance(2 * time.Minute)
-	writer.noteHead(head(4, oneSource))
+	writer.noteHead(head(5, oneSource))
 	if writer.overdueAlarms() != 1 {
 		t.Fatalf("%d alarms past the hour after the deferral", writer.overdueAlarms())
 	}
 
-	// a REMOVE generation this device holds and no head records, the crossing to it classed immediate
+	// a REMOVE generation this device holds and no head records: due 24 h after this device first held it, so the
+	// alarm waits 25 h, whatever shrank the holders; holding it again later keeps the first time
 	writer = newEvsTestWriter(t)
-	writer.test.client.epochs.noteHeldRemoval(writer.world.repoId, 2, writer.test.clock.Now(), false)
+	writer.test.client.epochs.noteHeldRemoval(writer.world.repoId, 2, writer.test.clock.Now())
 	unrecorded := &protocol.EvsPathEpoch{Current: 1}
 	writer.noteHead(head(1, unrecorded))
 	writer.test.clock.advance(61 * time.Minute)
-	writer.noteHead(&protocol.EvsHeadSummary{Version: 2, Generation: 1, RefKind: protocol.EvsRefKind_EVS_REF_SHARED, PathEpoch: unrecorded})
-	if writer.overdueAlarms() != 1 {
-		t.Fatalf("%d alarms an hour after holding an unrecorded removal", writer.overdueAlarms())
-	}
-
-	// the same classed batched (QD-949): due 24 h after this device first held it, so the alarm waits 25 h; a later
-	// pressure that classes it batched again keeps the first time
-	writer = newEvsTestWriter(t)
-	writer.test.client.epochs.noteHeldRemoval(writer.world.repoId, 2, writer.test.clock.Now(), true)
-	writer.noteHead(head(1, unrecorded))
-	writer.test.clock.advance(61 * time.Minute)
-	writer.test.client.epochs.noteHeldRemoval(writer.world.repoId, 2, writer.test.clock.Now(), true)
+	writer.test.client.epochs.noteHeldRemoval(writer.world.repoId, 2, writer.test.clock.Now())
 	writer.noteHead(&protocol.EvsHeadSummary{Version: 2, Generation: 1, RefKind: protocol.EvsRefKind_EVS_REF_SHARED, PathEpoch: unrecorded})
 	if writer.overdueAlarms() != 0 {
-		t.Fatalf("%d alarms an hour after holding a removal classed batched", writer.overdueAlarms())
+		t.Fatalf("%d alarms an hour after holding an unrecorded removal", writer.overdueAlarms())
 	}
 	writer.test.clock.advance(24 * time.Hour)
 	writer.noteHead(&protocol.EvsHeadSummary{Version: 3, Generation: 1, RefKind: protocol.EvsRefKind_EVS_REF_SHARED, PathEpoch: unrecorded})
 	if writer.overdueAlarms() != 1 {
-		t.Fatalf("%d alarms 25 h after holding a removal classed batched", writer.overdueAlarms())
+		t.Fatalf("%d alarms 25 h after holding an unrecorded removal", writer.overdueAlarms())
 	}
 }

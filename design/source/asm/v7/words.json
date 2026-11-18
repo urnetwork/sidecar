@@ -12,7 +12,7 @@
   "num": 2,
   "code": "TRUST",
   "words": 9316,
-  "code_words": 20405,
+  "code_words": 20616,
   "ceiling": 3000,
   "over": 6316,
   "over_pct": 210.5
@@ -92,11 +92,11 @@
  {
   "num": 11,
   "code": "EVS",
-  "words": 21668,
-  "code_words": 50899,
+  "words": 21732,
+  "code_words": 51642,
   "ceiling": 5000,
-  "over": 16668,
-  "over_pct": 333.4
+  "over": 16732,
+  "over_pct": 334.6
  },
  {
   "num": 12,
@@ -156,7 +156,7 @@
   "num": 18,
   "code": "SDK",
   "words": 10405,
-  "code_words": 10666,
+  "code_words": 10700,
   "ceiling": 3000,
   "over": 7405,
   "over_pct": 246.8
@@ -164,11 +164,11 @@
  {
   "num": 19,
   "code": "OPS",
-  "words": 9693,
-  "code_words": 10788,
+  "words": 9735,
+  "code_words": 10837,
   "ceiling": 3500,
-  "over": 6193,
-  "over_pct": 176.9
+  "over": 6235,
+  "over_pct": 178.1
  },
  {
   "num": 20,
@@ -192,7 +192,7 @@
   "num": 22,
   "code": "TEST",
   "words": 7756,
-  "code_words": 37616,
+  "code_words": 37958,
   "ceiling": 2500,
   "over": 5256,
   "over_pct": 210.2

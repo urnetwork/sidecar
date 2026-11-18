@@ -138,9 +138,9 @@ type EvsSettings struct {
 	// A retoken keeps a segment's receipt while it is under this old, 22 h, and uploads the segment again past it,
 	// since evs adopts an upload only under 24 h old (DESIGN-DETAILS 9.2.5).
 	RetokenReceiptMaxAge time.Duration
-	// A creation that a ref's coming path epoch holds (412 PATH_EPOCH_DUE, or the planner's ErrEvsPathEpochDue) is
-	// planned again after its retry_after_ms, or this long when it names none, 10 s, or at the ref's next verified
-	// head, whichever comes first, at most PushRetryCount times before the caller gets EVS_PATH_EPOCH_DUE.
+	// A creation a mapper's block holds (412 PATH_EPOCH_DUE, §11.6's block row) is planned again after its
+	// retry_after_ms, or this long when it names none, 10 s, or at the ref's next verified head, whichever comes first,
+	// at most PushRetryCount times before the caller gets EVS_PATH_EPOCH_DUE.
 	PathEpochDueWait time.Duration
 
 	// DESIGN-DETAILS 9.2.2's client settings. A new name is tokenized only on a head verified this recently: 5 s,
@@ -160,8 +160,8 @@ type EvsSettings struct {
 	// The most rounds one read takes across epoch moves, lookups and second asks before it gives up: 8.
 	ReadEpochRoundCount int
 	// §11.6's commit and due rows as the format sets them (EvsFormatSettings): the sources a head lists at most and
-	// those a batched epoch waits while, which the status, the alarm and the mapper wait by, and how long after it is
-	// first held a REMOVE generation no head records falls due when its crossing classes batched.
+	// those every epoch waits while, all being batched (QD-1046), which the status, the alarm and the mapper wait by,
+	// and how long after it is first held a REMOVE generation no head records falls due.
 	PathEpochMaxSourceCount        int
 	PathEpochBatchedMaxSourceCount int
 	PathEpochBatchedDelay          time.Duration

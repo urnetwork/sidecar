@@ -14,9 +14,8 @@ package fault
 //	         or more sources (150); all of it within the copies' part of A_U
 //	order    the ref holding the most sources first, then the one with the oldest source
 //	sources  a cut-over lists the old epoch as a source and gives the newest map's moves, 3 an entry; they empty
-//	         together when those moves are made; at most 3: a fourth is refused (EPOCH_SOURCES_FULL), a batched
-//	         epoch waits while two stand, covering every expiry due when it lands, and an immediate one takes the
-//	         third
+//	         together when those moves are made; at most 2: every epoch is batched (QD-1046) and waits while two
+//	         stand, covering every expiry due when it lands, so none takes a third
 //
 // §19.8's copy liability, drain time, deferrals and source counts are read from the model and from the oracle's own
 // ledger of the same events, and compared each interval.
@@ -37,10 +36,9 @@ const (
 	// moves an entry's copy makes (§22.8: live entries times epochs times 3)
 	copyMovesPerEntry = 3
 	// §11.6's rates, scaled by 1/100, in moves an interval
-	copyRepoRate      = 0.5 * 5
-	copyRepoBusyRate  = 1.5 * 5
-	copyStepsPerDay   = 24 * budgetStepsPerHour
-	copyThreeSourceOk = 10 * 60 / 5
+	copyRepoRate     = 0.5 * 5
+	copyRepoBusyRate = 1.5 * 5
+	copyStepsPerDay  = 24 * budgetStepsPerHour
 )
 
 // One ref with a rotating path epoch, in a repo of its own.
@@ -55,12 +53,8 @@ type copyRef struct {
 	credit float64
 	// a batched epoch is due and waiting
 	deferred bool
-	// when its batched epoch falls due each day, and its immediate one every other day, as steps into the day;
-	// negative for none
-	batchedOffset   int
-	immediateOffset int
-	// the step it came to hold three sources
-	threeSince int
+	// when its batched epoch falls due each day, as steps into the day
+	batchedOffset int
 }
 
 // See the file header.
@@ -72,14 +66,9 @@ type copyModel struct {
 	intervalMoveCounts []int64
 
 	// what the clauses read
-	sourcesFullCount    int
-	deferredCount       int
-	longestSourceSteps  int
-	longestThreeSteps   int
-	immediateThirdCount int
-	// an immediate epoch that took a third source, and whether its ref's copy ran first in the same interval
-	immediateRanFirst bool
-	gaugeMismatch     error
+	deferredCount      int
+	longestSourceSteps int
+	gaugeMismatch      error
 }
 
 // Commits a PATH_EPOCH on ref at step: the old epoch joins the sources and the newest map's moves replace what was
@@ -88,9 +77,6 @@ func (self *copyModel) cutOver(world *budgetWorld, ref *copyRef) {
 	ref.sources = append(ref.sources, world.step)
 	ref.moveCount = ref.entries * copyMovesPerEntry
 	ref.deferred = false
-	if len(ref.sources) == 3 {
-		ref.threeSince = world.step
-	}
 	world.oracle.CopyCutOver(ref.name, ref.moveCount)
 }
 
@@ -98,21 +84,7 @@ func (self *copyModel) cutOver(world *budgetWorld, ref *copyRef) {
 // world's unfunded levels and answers the priced units issued.
 func (self *copyModel) step(world *budgetWorld, budgetLeft int64) int64 {
 	dayStep := world.step % copyStepsPerDay
-	day := world.step / copyStepsPerDay
-	var immediateThird *copyRef
 	for _, ref := range self.refs {
-		if ref.immediateOffset == dayStep && day%2 == 0 {
-			// an immediate epoch commits at once, onto the third source if two stand; a fourth is refused
-			if 3 <= len(ref.sources) {
-				self.sourcesFullCount += 1
-			} else {
-				if len(ref.sources) == 2 {
-					self.immediateThirdCount += 1
-					immediateThird = ref
-				}
-				self.cutOver(world, ref)
-			}
-		}
 		if ref.batchedOffset == dayStep {
 			ref.deferred = true
 		}
@@ -149,9 +121,6 @@ func (self *copyModel) step(world *budgetWorld, budgetLeft int64) int64 {
 		}
 		return a.sources[0] - b.sources[0]
 	})
-	if immediateThird != nil {
-		self.immediateRanFirst = 0 < len(working) && working[0] == immediateThird
-	}
 	var moved int64
 	for _, ref := range working {
 		rate := copyRepoRate
@@ -172,9 +141,6 @@ func (self *copyModel) step(world *budgetWorld, budgetLeft int64) int64 {
 			for _, cutOverStep := range ref.sources {
 				self.longestSourceSteps = max(self.longestSourceSteps, world.step-cutOverStep)
 			}
-			if 3 <= len(ref.sources) {
-				self.longestThreeSteps = max(self.longestThreeSteps, world.step-ref.threeSince)
-			}
 			ref.sources = nil
 		}
 	}
@@ -192,9 +158,6 @@ func (self *copyModel) step(world *budgetWorld, budgetLeft int64) int64 {
 				rate = copyRepoBusyRate
 			}
 			demand += math.Min(float64(ref.moveCount), rate)
-		}
-		if 3 <= len(ref.sources) {
-			self.longestThreeSteps = max(self.longestThreeSteps, world.step-ref.threeSince)
 		}
 	}
 	world.unfundedBacklog = int64(liability) * copyMovePrice
@@ -247,27 +210,20 @@ func (self *copyModel) compareGauges(world *budgetWorld) error {
 }
 
 // A world of FS-61's mix with the planned copy load: 360 refs of 100 entries (36,000 scaled, 3.6M unscaled) whose
-// batched epoch falls due daily, and an immediate one every other day on a third of them: 108,000 scaled moves a
-// day, half the cluster's 216,000, and 36,000 more on the immediate epochs' days.
+// epoch falls due daily, every epoch being batched (QD-1046): 108,000 scaled moves a day, half the cluster's 216,000.
 func newCopyWorld(t *testing.T) (*budgetWorld, *copyModel) {
 	world := newBudgetWorldWithFolds(t, 0.8, 8, 20)
 	world.setP0(50)
 	copies := &copyModel{}
 	for i := 0; i < 360; i += 1 {
-		ref := &copyRef{name: fmt.Sprintf("ref-%03d", i), entries: 100, batchedOffset: i * copyStepsPerDay / 360, immediateOffset: -1}
-		if i%3 == 0 {
-			// half a day off its batched epoch, so the two meet only when a copy runs long
-			ref.immediateOffset = (ref.batchedOffset + copyStepsPerDay/2) % copyStepsPerDay
-		}
-		copies.refs = append(copies.refs, ref)
+		copies.refs = append(copies.refs, &copyRef{name: fmt.Sprintf("ref-%03d", i), entries: 100, batchedOffset: i * copyStepsPerDay / 360})
 	}
 	world.copies = copies
 	return world, copies
 }
 
-// The planned load for 7 days: each source empties within 30 h of its cut-over, no ref holds three sources 10 min,
-// no PATH_EPOCH meets EPOCH_SOURCES_FULL, no batched epoch waits, the copies stay within A_U, P1's admission is
-// unchanged, and the copy figures equal the oracle's with no drain warning.
+// The planned load for 7 days: each source empties within 30 h of its cut-over, no batched epoch waits, the copies stay
+// within A_U, P1's admission is unchanged, and the copy figures equal the oracle's with no drain warning.
 func TestFs118PlannedCopyLoadForSevenDays(t *testing.T) {
 	world, copies := newCopyWorld(t)
 	intervals := world.run(7 * copyStepsPerDay)
@@ -278,16 +234,12 @@ func TestFs118PlannedCopyLoadForSevenDays(t *testing.T) {
 		t.Error(copies.gaugeMismatch)
 	}
 	longest := time.Duration(copies.longestSourceSteps) * world.settings.Interval
-	t.Logf("longest source %s; EPOCH_SOURCES_FULL %d; batched epochs deferred %d intervals; three sources at most %s", longest,
-		copies.sourcesFullCount, copies.deferredCount, time.Duration(copies.longestThreeSteps)*world.settings.Interval)
+	t.Logf("longest source %s; batched epochs deferred %d intervals", longest, copies.deferredCount)
 	if 30*time.Hour < longest {
 		t.Errorf("a source stood %s after its cut-over, past 30 h", longest)
 	}
-	if copyThreeSourceOk <= copies.longestThreeSteps {
-		t.Errorf("a ref held three sources %s", time.Duration(copies.longestThreeSteps)*world.settings.Interval)
-	}
-	if copies.sourcesFullCount != 0 || copies.deferredCount != 0 {
-		t.Errorf("EPOCH_SOURCES_FULL %d times, batched epochs waited %d intervals", copies.sourcesFullCount, copies.deferredCount)
+	if copies.deferredCount != 0 {
+		t.Errorf("batched epochs waited %d intervals", copies.deferredCount)
 	}
 	var copied int64
 	for i, interval := range intervals {
@@ -303,9 +255,8 @@ func TestFs118PlannedCopyLoadForSevenDays(t *testing.T) {
 		}
 		copied += interval.unfundedIssued
 	}
-	// seven days of the planned load were made, less what stands at the end: a batched epoch a day on each of 360
-	// refs, and an immediate one on a third of them on each of the four even days
-	planned := int64(7*360+4*120) * 100 * copyMovesPerEntry * copyMovePrice
+	// seven days of the planned load were made, less what stands at the end: an epoch a day on each of 360 refs
+	planned := int64(7*360) * 100 * copyMovesPerEntry * copyMovePrice
 	if copied < planned*97/100 || planned < copied {
 		t.Errorf("copies issued %d of the planned %d", copied, planned)
 	}
@@ -315,15 +266,15 @@ func TestFs118PlannedCopyLoadForSevenDays(t *testing.T) {
 }
 
 // Then 30 one-million-entry refs, 10,000 scaled, with a batched epoch due daily each: a copy outlasts its day, so
-// batched epochs wait while two sources stand, with no block and nothing refused, and no ref reaches a fourth
-// source; an immediate epoch on such a ref commits at once onto its third source and its copy runs first; P1's
-// admission is unchanged, the copies stay within A_U, and §19.8's drain time warns past 24 h.
+// batched epochs wait while two sources stand, with no block and nothing refused, and no ref reaches a third source,
+// every epoch being batched (QD-1046); P1's admission is unchanged, the copies stay within A_U, and §19.8's drain time
+// warns past 24 h.
 func TestFs118MillionEntryRefsDeferBatchedEpochs(t *testing.T) {
 	world, copies := newCopyWorld(t)
 	world.run(copyStepsPerDay)
 	large := []*copyRef{}
 	for i := 0; i < 30; i += 1 {
-		ref := &copyRef{name: fmt.Sprintf("large-%02d", i), entries: 10000, batchedOffset: i * copyStepsPerDay / 30, immediateOffset: -1}
+		ref := &copyRef{name: fmt.Sprintf("large-%02d", i), entries: 10000, batchedOffset: i * copyStepsPerDay / 30}
 		large = append(large, ref)
 		copies.refs = append(copies.refs, ref)
 	}
@@ -351,33 +302,9 @@ func TestFs118MillionEntryRefsDeferBatchedEpochs(t *testing.T) {
 	if !warned {
 		t.Error("the drain time never warned past 24 h")
 	}
-	// an immediate epoch on a ref holding two sources: it commits at once onto the third, and its copy runs first
-	var twoSources *copyRef
-	for _, ref := range large {
-		if len(ref.sources) == 2 {
-			twoSources = ref
-			break
-		}
+	if 2 != maxSources {
+		t.Errorf("after three days the large refs hold %d sources at most, not the two a deferral waits on", maxSources)
 	}
-	if twoSources == nil {
-		t.Fatal("no large ref holds two sources after three days")
-	}
-	before := copies.immediateThirdCount
-	twoSources.immediateOffset = (world.step + 1) % copyStepsPerDay
-	if ((world.step+1)/copyStepsPerDay)%2 != 0 {
-		// immediate epochs fall on even days: wait for the next
-		run(copyStepsPerDay)
-		twoSources.immediateOffset = (world.step + 1) % copyStepsPerDay
-		for len(twoSources.sources) != 2 {
-			run(1)
-			twoSources.immediateOffset = (world.step + 1) % copyStepsPerDay
-		}
-	}
-	run(1)
-	if copies.immediateThirdCount != before+1 || len(twoSources.sources) != 3 || !copies.immediateRanFirst {
-		t.Errorf("the immediate epoch: took a third source %t, %d sources, ran first %t", copies.immediateThirdCount == before+1, len(twoSources.sources), copies.immediateRanFirst)
-	}
-	twoSources.immediateOffset = -1
 	run(2 * copyStepsPerDay)
 
 	if err := world.err(); err != nil {
@@ -386,9 +313,9 @@ func TestFs118MillionEntryRefsDeferBatchedEpochs(t *testing.T) {
 	if copies.gaugeMismatch != nil {
 		t.Error(copies.gaugeMismatch)
 	}
-	// nothing was refused or blocked: a batched epoch only waits, and no ref reached a fourth source
-	if copies.sourcesFullCount != 0 || 3 < maxSources {
-		t.Errorf("EPOCH_SOURCES_FULL %d times, a ref at %d sources", copies.sourcesFullCount, maxSources)
+	// nothing was refused or blocked: a batched epoch only waits, and no ref reached a third source
+	if 2 < maxSources {
+		t.Errorf("a ref at %d sources", maxSources)
 	}
 	gauges := copies.gauges(world)
 	t.Logf("after six days: liability %d moves, drain %.0f h, %d refs deferring, sources %v; batched epochs deferred %d intervals",
