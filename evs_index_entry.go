@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // An entry (§11.14's entry row; protocol/INDEX-FORMAT.md): one document version's change to the index, or a deletion.
 // An entry is encoded from its own document alone, since nothing here may compress across documents: inbound mail
 // and collaborators' commits can inject probes (§11.14's codes row). Its version and time are passed in, never read

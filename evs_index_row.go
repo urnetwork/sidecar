@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // A row (§11.14's row; protocol/INDEX-FORMAT.md): what a device shows of a document without its body, the same bytes
 // in an entry and in a shard's doc table. Display fields spare every device a query-dependent fetch (owner decision
 // 155), so a row carries them cut to their caps and to its own 2 KiB, and encoded from its own document only: no row

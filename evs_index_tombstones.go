@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // A bucket shard's tombstone table (§11.14's tombstones row; protocol/INDEX-FORMAT.md's Shards): the deletions a
 // bucket keeps for older partitions until its roll-up, since an empty posting set cannot say a document went
 // (D-EVS-44). Each is a kind, a key, a version and a time, with no postings. A ref tombstone sits only on ur/index, and

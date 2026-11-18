@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // A shard's pad (§11.14's pad row; protocol/INDEX-FORMAT.md's Shards). A shard's dictionary and lists are the only
 // structures shared across documents, so its length would show which trigrams a probe document shares with others;
 // the pad hides that, even at a padding boundary, by a count of zero bytes drawn from K_index_g and the shard's own

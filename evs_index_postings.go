@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // Posting lists (§11.14's postings row; protocol/INDEX-FORMAT.md's Shards): for one trigram key, the docids of a
 // shard's live documents holding it, document-level and with no positions. A list is VByte gaps between ascending
 // docids, the first gap docid + 1, or a bitset of ⌈N/8⌉ bytes over the shard's N documents, whichever is shorter,

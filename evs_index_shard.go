@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // Shards (§11.14's shard, doc table, shrink and caps rows; protocol/INDEX-FORMAT.md's Shards): a bucket's merged
 // entries, or the all partition's, as one file of at most 1,032,192 B before its pad and 1 MiB with it, so every
 // index file is one ?closure=1 upload:
