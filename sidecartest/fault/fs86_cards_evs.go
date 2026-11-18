@@ -2,8 +2,10 @@
 
 // FS-86's card commits on the evs world (§22.8, D-TEST-17; §16.11's cards ref commits row, D-MCP-31; RECORD-M10-07):
 // the load the row's trap names, a team's pushes landing on the one cards ref's head, on the real engine and the real
-// client's DirectoryEvsCards, so server's T3 test runs it on T3's stores in physical time
-// (sidecar_directory_load_t3_test.go).
+// client's DirectoryEvsCards, so server's T3 tests run it on T3's stores in physical time: on the local stack's one
+// MinIO at reduced scale, logging what misses the row (sidecar_directory_load_t3_test.go), and nightly on T3's 4-host
+// file-cluster layouts for a whole peak hour at the Team limit's rate, the row's reading (QD-1068;
+// sidecar_directory_load_layout_t3_test.go).
 //
 //	world     one directory repo, format 1, on one instance. WriterCount devices each write their own card,
 //	          d/<h>/<sidecar_id>, by path CAS on the cards ref; a reader reads the ref
@@ -23,9 +25,10 @@
 // A phase counts its latencies; the pushes evs answered 429 BUSY, as each device's transport saw the answer, with the
 // time each took to commit; FOLD_BEHIND answers; and 412 reruns as the Net's store history has them, a conditional PUT
 // of one of the repo's heads the store refused. The default rate is the Team limit's peak, 2.3 pushes a second, the
-// column whose miss blocks the gate (D-TEST-17); the stress case's 5.8 is a run its caller sets, with Ceilings nil and
-// Misses read for the record. T2 runs it with no ceiling: its fakes' store takes no time, so only what was written and
-// read is held there.
+// column whose miss blocks the gate (D-TEST-17); the stress case's 5.8 is a run its caller sets. A run that is no gate
+// reading sets Ceilings nil and reads Misses for the record: the stress case, and every run on the local stack, which
+// is one MinIO on a machine running whatever else it runs (QD-1068). T2 runs it with no ceiling: its fakes' store takes
+// no time, so only what was written and read is held there.
 //
 // Not here: format 2, so every card version keeps its content and no push carries an index entry or writes an index
 // head; the year-one mix beside the directory's pushes; writers' streams and the companion pushes, which never contend
@@ -46,6 +49,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -469,6 +473,29 @@ func fs86CardsEvsFileVersion(file *sidecar.DirectoryCardFile) uint64 {
 func Fs86CardsEvsCommits(net *Net) *Schedule {
 	schedule, _ := Fs86CardsEvsCommitsOf(net, nil)
 	return schedule
+}
+
+// Runs FS-86's card commits under settings, nil for the defaults, on a Net built from netSettings, closed before this
+// returns, and logs each phase to tb: the state the phases are read from, and how the run ended. Each phase is one step
+// whose actor waits on the wall clock between arrivals, so netSettings's barriers wait a step out twice over and read
+// a waiting actor as no stalled one.
+func RunFs86CardsEvs(tb testing.TB, netSettings *sidecartest.NetSettings, settings *Fs86CardsEvsSettings) (*Fs86CardsEvs, error) {
+	if settings == nil {
+		settings = DefaultFs86CardsEvsSettings()
+	}
+	ctx := tb.Context()
+	barriers := *netSettings.Barriers
+	barriers.AwaitTimeout = max(barriers.AwaitTimeout, 2*(settings.PeakDuration+settings.BurstDuration))
+	barriers.StallTimeout = 0
+	netSettings.Barriers = &barriers
+	net := sidecartest.NewNet(ctx, netSettings)
+	defer net.Close()
+	schedule, state := Fs86CardsEvsCommitsOf(net, settings)
+	result := Run(ctx, schedule, net)
+	for _, phase := range state.Phases() {
+		tb.Log(phase)
+	}
+	return state, result.Err
 }
 
 // FS-86's card commits under settings, nil for the defaults, and the state its phases are read from.
