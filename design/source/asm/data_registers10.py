@@ -83,3 +83,8 @@ assert D['D-EVS-46'].startswith('Each writer appends to a staged head') and D['D
     'Merges and roll-ups are functions of base files'), 'EVS index rows moved'
 D['D-EVS-46'] = "Writers append full entries to a staged head ≤16,208 B, sealing into ≤8 reused slots that merges absorb into shards."
 D['D-EVS-47'] = "Merges, reading no head, and roll-ups are functions of base files; a lock-fenced roll-up moves its bucket into all."
+# The fold of DESIGN-DETAILS.md sections 2 and 14 (2026-11-17): segment GC waits for evacuation's horizon and raises no
+# fence (owner decision 203), and evacuation deletes only a dead record's own slots, by their origin (399).
+assert D['D-EVS-25'].endswith('die only after ref fences.') and D['D-EVS-34'].endswith('GC fences idle refs first.'), 'EVS GC rows moved'
+D['D-EVS-25'] = "Orphans are found without the log: evacuation settles batch records, deleting dead records' own slots; GC waits for its horizon."
+D['D-EVS-34'] = "Segment uploads write nothing to the metadata cluster: a MAC'd receipt rides the push; GC waits for evacuation's horizon."

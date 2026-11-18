@@ -9,7 +9,7 @@ Status values: `pending`, `in progress`, `complete (date)`, or `complete pending
 | # | Problem | Tasks held | Status |
 |---|---|---|---|
 | 1 | Search index merges, roll-ups and the journal (§11.14) | 7 | complete (2026-11-10; amended 2026-11-12, QD-760, QD-775 and section 15); folded into DESIGN.md 2026-11-17 (dr4-details-a) |
-| 2 | Storage consistency under stalled writes: segment GC and the MinIO settle rules (§11.13, §19.6) | 4 | complete (2026-11-10) |
+| 2 | Storage consistency under stalled writes: segment GC and the MinIO settle rules (§11.13, §19.6) | 4 | complete (2026-11-10); folded into DESIGN.md 2026-11-17 (dr4-details-b) |
 | 3 | Zero-knowledge proofs of TLS delivery for outbound mail (smtpproof; §14.5) | 5 | complete (2026-11-11) |
 | 4 | Forwarding in the apps' VPN component: key, verification and size (owner decision 197) | 40 | complete (2026-11-10) |
 | 5 | Authorization-log verdicts across folds (§7.9) | 13 | complete (2026-11-09; amended 2026-11-13, section 16) |
@@ -21,7 +21,7 @@ Status values: `pending`, `in progress`, `complete (date)`, or `complete pending
 | 11 | Canonical text extraction and exact body sizes for search | 2 | complete (2026-11-10; amended 2026-11-12, QD-760); folded into DESIGN.md 2026-11-17 (dr4-details-a) |
 | 12 | Bridge compiler and NAT engine (§17) | 4 | complete (2026-11-11; amended 2026-11-12, QD-761, built on the recommendations of open questions details-amend-2-late-generation and details-amend-2-fold-holds) |
 | 13 | Smaller scheduling problems: closure pacing, quota leases, socket registration | 4 | complete (2026-11-10) |
-| 14 | Slot objects that a dead record and a committed push both list (§11.6, §11.8, §11.13) | 0 | complete (2026-11-12; amended 2026-11-16, QD-870) |
+| 14 | Slot objects that a dead record and a committed push both list (§11.6, §11.8, §11.13) | 0 | complete (2026-11-12; amended 2026-11-16, QD-870); folded into DESIGN.md 2026-11-17 (dr4-details-b) |
 | 15 | Index erasure and derived documents under section 1's rules (§11.12, §11.14, §16.8, §16.10) | 2 | complete (2026-11-12; §22.8 row added 2026-11-13); folded into DESIGN.md 2026-11-17 (dr4-details-a) |
 | 16 | Client-checked prefix write rules (§8.8, §8.12, §11.7, §11.9) | 0 | complete (2026-11-13; amendments 16-A to 16-D written 2026-11-13; amended 2026-11-13, QD-801, QD-802 and QD-803) |
 | 17 | Team custom-domain certificates: one ACME account, several ordering desktops, a certificate per device (§13.8, §13.15, §12.8) | 1 | complete (2026-11-13; §22.8 row added 2026-11-13) |

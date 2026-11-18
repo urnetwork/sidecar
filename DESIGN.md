@@ -526,7 +526,7 @@ Every entry of the owner's record (owner/DECISIONS.md), by number: 1-111 from th
 | <a id="od-396"></a>396 | 2026-11-11 | A DROP's body, bounds and signer | Membership comes from a DROP's body alone, a DROP holds at most 256 KiB and 2^20 listed values, and a phone signs only a history it walked. | §11 |
 | <a id="od-397"></a>397 | 2026-11-11 | Drop waits | A drop job marks 12 min past each drop's seen_ms, and a candidate is young until the horizon passes LastModified + 24 h + 2 min, amending [owner decision 204](#od-204). | §11, §22 |
 | <a id="od-398"></a>398 | 2026-11-15 | Drop records kept | A drop job's listed entry hashes stay for the repo's life, the table's entry carries its end day, and a dry run keeps its request and reply. | §2, §11 |
-| <a id="od-399"></a>399 | 2026-11-15 | Slot origins | A slot object names its creating statement, which governs step 6, a retoken's takeover, a deposit's slots and evacuation's deletes. | §11, §22 |
+| <a id="od-399"></a>399 | 2026-11-15 | Slot origins | A slot object names its creating statement, which governs step 6, a retoken's takeover, a deposit's slots and evacuation's deletes. | §11, §19, §22 |
 | <a id="od-400"></a>400 | 2026-11-15 | No slot bodies in records | Step 6 writes slots before the record, which keeps no slot body, and a push in parts carries its slot bodies in its seal. | §11, §22 |
 | <a id="od-401"></a>401 | 2026-11-12 | Record slot rows | A record-class slot holds an entry's key and salt in one 104 B wrapped block. | §11 |
 | <a id="od-402"></a>402 | 2026-11-15 | The reseed route | POST .../reseed takes one EvsReseedRequest a call and runs the push path in a reseed mode, with 5f's window and slots only under re-seeded versions. | §11 |
@@ -9413,7 +9413,11 @@ object key      random 32 B, wrapped under fek_g. General repos: one per segment
                 a deletable slot/ object; in group inboxes and record-class repos, one per versionless path, in a
                 slot only that path's versions name (11.7). Deposits: one per deposit, HPKE to the drop key, in a
                 slot/ object CONSUME deletes. Slot ids are 16 random bytes drawn per statement: a push rebuilt
-                after a refusal draws new ones, and a retry of the same statement keeps them (11.8)
+                after a refusal draws new ones, and a retry of the same statement keeps them (11.8); a retoken,
+                which sends a statement refused 412 PATH_EPOCH again in the new epoch with its sealed bytes kept
+                (the PATH_EPOCH row), keeps them too, and evs gives it the object by a takeover (11.8's step 6). A
+                slot object carries the statement that created it as its origin, in object metadata, and is that
+                statement's for as long as it stands (owner decision 399; DESIGN-DETAILS.md section 14)
 statements      §6 Signed by the §5 identity key only: EvsPush (purpose evs-push; a DROP by a repo admin, in an
                 owner-bound repo only by a consented, not-read-only device of its owner, 11.7), EvsPathMap
                 (evs-path-epoch, by a writer), EvsImport (evs-import, by a repo admin, one per push over the commits
@@ -10100,10 +10104,10 @@ idx/<repo>/<ref>/<p>/<t1>/.../<tn>.e       index entry in path epoch p: folded c
                                            versions, or a removal's marker, its state in    If-None-Match                  marker until
                                            object metadata (11.7); orphan markers at                                       collected (11.7)
                                            idx/<repo>/<ref>/_o/ (11.7's orphan row)
-slot/<repo>/<slot_id>                      up to 64 sealed object keys: under fek_g, or     If-None-Match;      <= 8 KiB   until erased, consumed,
-                                           HPKE to the drop key for deposits, 72 B blocks,  rewritten If-Match             shredded or dropped
-                                           or 104 B for a record entry's key and salt                                      (11.13); a dead
-                                           (11.6's Bytes; owner decision 401), one width a                                 push's own, <= ~26 h
+slot/<repo>/<slot_id>                      up to 64 sealed object keys: under fek_g, or     If-None-Match, with <= 8 KiB   until erased, consumed,
+                                           HPKE to the drop key for deposits, 72 B blocks,  its origin;                    shredded or dropped
+                                           or 104 B for a record entry's key and salt       rewritten If-Match,            (11.13); a dead
+                                           (11.6's Bytes; owner decision 401), one width a  origin kept                    push's own, <= ~26 h
                                            slot; its origin in object metadata (11.8's step                                once evacuation's
                                            6; owner decision 399)                                                          delete of them is on
                                                                                                                            (owner decision 399); a
@@ -10164,11 +10168,13 @@ immutable place/ log/ pb/ hp/ pmap/ pidx/ spidx/ seg/ pack/ dropscan/: created o
 cache     idx/: If-Match (owner decision 2), written only by folds of committed versions and removals (markers), each
           also in its push record, and deleted only by a copy (its sources), 11.7's collection or a shred; none
           decides an outcome
-fences    repo/ (lifecycle CAS, 11.12), slot/ (created If-None-Match, equal bytes on 412 success, from M2 only on an
-          object under 23 h old, step 6, and on a re-seed bytes compared after stripping erased keys, 11.13;
-          rewritten only to drop erased keys; a versionless path's deleted by the purge or a marker's collection,
-          11.7, 11.13; deleted by a drop's job when only listed versions name it), drops/ (the drop job's state,
-          If-Match, 11.13)
+fences    repo/ (lifecycle CAS, 11.12), slot/ (created If-None-Match with its creating statement as its origin; a
+          412 success only on that statement's own object, from M2 only under 23 h old, or after a retoken's
+          takeover of its refused statement's object, step 6, and on a re-seed bytes compared after stripping
+          erased keys, 11.13; rewritten only to drop erased keys, its origin kept; deleted for a dead record only
+          as that record's own, 11.13 (owner decision 399); a versionless path's deleted by the purge or a
+          marker's collection, 11.7, 11.13; deleted by a drop's job when only listed versions name it), drops/
+          (the drop job's state, If-Match, 11.13)
 keys      no key is a path prefix of another, an existing key followed by / at the new key's next byte or the
           reverse, which MinIO's directory-object listing needs (11.3; owner decision 234), so a byte prefix such
           as §10.6's gkm/kp/<sidecar_id>/<ref>.claim beside gkm/kp/<sidecar_id>/<ref> stands: entries end in .e
@@ -10527,8 +10533,9 @@ unknown   a timeout (evs waits at least the store's request deadline), EOF or 5x
           and issue step 7 anew if they pass, or refuse by the refuse row, whose recording CAS on that ETag also
           fails the first PUT; another ETag -> as 412; the store unreachable -> 503 {push_id, outcome: unknown};
           the client's retry resolves it
-cleanup   none at answer time: a refused or unknown push's record and new slots stay until evacuation's Resolve finds
-          it dead, which no attempt, earlier or later, survives (11.13); nothing in idx/ was written
+cleanup   none at answer time: a refused or unknown push's record and the slots it created stay until evacuation's
+          Resolve finds it dead, which no attempt, earlier or later, survives (11.13), and a slot it listed and
+          did not create is not its to clean up (owner decision 399); nothing in idx/ was written
 evacuate  hourly, 11.13's evacuation resolves every record of batches over 25 h old, fencing a ref, one with no head
           by a placeholder head, before it drops a pending record, and finds orphan pushes without trusting the log
 Resolve   head window, then at most two log pages of (b, b+64]: P is committed at u, with its place, iff they name P
@@ -10547,8 +10554,9 @@ I-EVS-1  a committed head's dependency closure (statements, payloads, entry vers
          readable, except keys a committed ERASE or a shred destroyed, the content of versionless versions that a
          committed version replaced (11.13's purge), and the content of versions an executed drop lists (11.13's
          drop job)
-I-EVS-2  no answer deletes anything: a push's new slots go only once Resolve finds it dead, and a batch record only
-         once Resolve finds its push dead or committed at another place
+I-EVS-2  no answer deletes anything: a slot goes with a push only once Resolve finds that push dead and only if
+         that push's statement is the slot's origin (owner decision 399), and a batch record only once Resolve
+         finds its push dead or committed at another place
 I-EVS-3  a push id commits at most once; its retry returns the original version; once any attempt of it is
          answered a refusal, no attempt of it commits, however late it reaches evs, save one validated before
          its repo's shred began, which the shred destroys (11.12): the head settles the refusal for good, or
@@ -10610,6 +10618,12 @@ I-EVS-17 a CUT, or a push other than a CLOSURE creating or replacing an index fi
          head's index_epoch, which only a CUT moves, to its own version: so no such push built before a CUT commits
          after it, its honest builder has applied the ref's erasure set at that epoch, and a CLOSURE, which only
          replaces committed versions, never puts a document into a file whose replaced version lacked it
+I-EVS-18 a slot object has one origin for its life, the statement whose create stored it; an attempt passes step 6
+         only on an object of its own statement's origin, a retoken taking over its refused statement's object by a
+         settled DELETE and a create of its own; so no two committed pushes introduce one slot object, and a slot
+         is deleted only when its origin's statement is dead or can never commit, when the version that
+         statement committed is removed by a CONSUME, purge, marker collection or drop, or with its repo's shred
+         (owner decision 399; DESIGN-DETAILS.md section 14)
 ```
 
 **Refs.** evs (step 5) and replaying readers check:
@@ -11104,10 +11118,10 @@ push      POST .../slots/delete (admin) commits an ERASE push on the repo's `era
           each document whose last key it destroys (reconcile, below); it changes nothing on the ref, a creates-only
           push of no change (owner decision 384); evs reads the named slots in step 4, refuses one naming no key they
           still hold (409 NOTHING_TO_ERASE, once recorded, 11.8), commits it (steps 4-7), then rewrites each named
-          slot object without those keys (If-Match) before answering 200, under a preservation hold too (owner
-          decision 133); a crash between leaves the client's retry, then taskworker's reconciler, to finish the
-          rewrites; a network's ERASE, CUT and CLOSURE pushes past 60 a minute queue as P1, their slot rewrites
-          staying P0 (11.13)
+          slot object without those keys (If-Match, its origin kept) before answering 200, under a preservation
+          hold too (owner decision 133); a crash between leaves the client's retry, then taskworker's reconciler,
+          to finish the rewrites; a network's ERASE, CUT and CLOSURE pushes past 60 a minute queue as P1, their
+          slot rewrites staying P0 (11.13)
 closure   the erasing device names every key of the entry's representations: each retained version's slot keys;
           each derived-field chain (§15.7's i/ segment holding the message's IndexEntry, and each search-index file
           holding the entry's postings, 11.14), which it first re-checkpoints without the entry under a fresh
@@ -11326,7 +11340,9 @@ push of k = 3 entry writes          k + 2, + the   1 head; 1 batch share; -     
                                                                                           one statement range a receiver,
                                                                                           outside the GET/s below
   evacuating it after 25-26 h       1 batch share  ~0.01 parcels, pidx/   -      1 batch  a pack PUT on the HDDs per ~300
-                                                                                 share    pushes
+                                    + a HEAD per                                 share    pushes
+                                    slot of a dead
+                                    record
 a part of a large push              <= 1,029       1 batch record         -      -        steps 4-6; the seal reads parts by
                                                                                           place
 a segment upload                    -              -                      -      -        a receipt; nothing on this cluster
@@ -11502,20 +11518,23 @@ when      hourly (so each day everything older than 24 h leaves the batches; own
           batches pass 26 h within the hour; it restarts as the P0 storm ends, oldest minute first, while the bucket
           refills (owner decisions 186, 190; 11.21)
 resolve   per batch, GET it whole; per record, Resolve its push id on its ref (11.8): committed at this place ->
-          keep; committed at another place -> drop; dead -> drop, deleting of the new slots its record lists only
-          those whose origin is that record's statement, an absent or unparseable origin never deleted, and only
-          once EvacuatorSettings.DeleteDeadSlots is on, off in the release that brings origins until one release
-          after every process writes them, a dead record's slots staying meanwhile, at most 8 KiB each (owner
-          decision 399); pending -> raise the ref's fence (one head CAS, or for a ref with no head one
-          placeholder head created with its fence raised, 11.8's first row), then Resolve again; parts follow
-          their seal; a reseed record, a one-part push's, a re-seeded part's or a reseed seal's (re-seed, below),
-          resolves by its statement as a push record does, the fence in place of the time clause: committed at
-          this place -> keep, at another -> drop as a duplicate, else pending, the ref's fence raised, and dead ->
-          drop if the push is still not committed on the fenced head, a head whose fence_ms is at or past the time
-          this run held the record, never because the statement's time_ms + 35 min has passed, a reseed record
-          listing no slot (owner decisions 404, 564); Resolve tells a reseed seal from a pushed one by its parts'
-          record type, or takes the fence rule for every seal, which only moves a pushed seal's drop from its time
-          clause to a fence, and FI-6's oracle takes the same rule
+          keep; committed at another place -> drop; dead -> drop, deleting of the slots its record lists only
+          those whose origin, read by a HEAD after the repo recheck, is that record's statement and whose
+          LastModified is SlotSettleAge (2 s) old by the run's checked clock, each by a DELETE naming that
+          LastModified (a 412: changed since the HEAD, kept), the only cleanup (11.8), a slot of another origin,
+          of none or of an unparseable one, an unsettled one and a held one staying, and only once
+          EvacuatorSettings.DeleteDeadSlots is on, off in the release that brings origins until one release after
+          every process writes them, a dead record's slots staying meanwhile, at most 8 KiB each (owner decision
+          399); pending -> raise the ref's fence (one head CAS, or for a ref with no head one placeholder head
+          created with its fence raised, 11.8's first row), then Resolve again; parts follow their seal; a reseed
+          record, a one-part push's, a re-seeded part's or a reseed seal's (re-seed, below), resolves by its
+          statement as a push record does, the fence in place of the time clause: committed at this place -> keep,
+          at another -> drop as a duplicate, else pending, the ref's fence raised, and dead -> drop if the push is
+          still not committed on the fenced head, a head whose fence_ms is at or past the time this run held the
+          record, never because the statement's time_ms + 35 min has passed, a reseed record listing no slot
+          (owner decisions 404, 564); Resolve tells a reseed seal from a pushed one by its parts' record type, or
+          takes the fence rule for every seal, which only moves a pushed seal's drop from its time clause to a
+          fence, and FI-6's oracle takes the same rule
 move      per repo, the kept records, one pack or parcel per repo a run across all the minute directories it
           evacuates: once its aged material (these, its parcels, and its log pages older than 24 h, which wait at
           log/ until a pack takes them) reaches 256 KiB, one pack/<repo>/<pack_id> on the segment cluster
@@ -12898,7 +12917,7 @@ never     a query, which documents match it, or which trigrams documents share: 
 
 **D-EVS-24 (proposed).** Log pages hold the signed statements (at most 1 KiB each), and the head window names each recent one's place and hash; head readers verify every statement after their pin and the one behind each entry they read. *Why:* [owner decision 7](#od-7) for every reader (Q-EVS-6), at one block per head write.
 
-**D-EVS-25 (proposed).** Orphans are found without the log: hourly evacuation resolves every batch record, which names every slot its push wrote, fencing a pending record's ref, one with no head by a placeholder head; and an unadopted segment or path map, found by the nightly LIST, is deleted only once evacuation's horizon has passed every batch that could adopt it ([owner decision 203](#od-203)). *Why:* an upload that never reached the log is otherwise invisible; a grace period cannot fence a late commit, and a fence cannot reach a ref that does not exist yet, but every commit leaves its record first.
+**D-EVS-25 (proposed).** Orphans are found without the log: hourly evacuation resolves every batch record, which names every slot its push listed, fencing a pending record's ref, one with no head by a placeholder head; and an unadopted segment or path map, found by the nightly LIST, is deleted only once evacuation's horizon has passed every batch that could adopt it ([owner decision 203](#od-203)). A dead record's slots are deleted only as that record's own, by the origin each slot object carries ([owner decision 399](#od-399); DESIGN-DETAILS.md section 14). *Why:* an upload that never reached the log is otherwise invisible; a grace period cannot fence a late commit, and a fence cannot reach a ref that does not exist yet, but every commit leaves its record first.
 
 **D-EVS-26 (proposed).** Erasure is a committed ERASE push that destroys every key of every representation: each retained version, each derived-field chain, the search index's files included (re-keyed first, by a CLOSURE push that only replaces committed file versions, each new chain within Padmé of the one it replaces, taken at the storage limit with size-bounded uploads within its eraser's own rate and daily allowance, which has a floor §21 cannot lower) and the deposit, which is slot-keyed; with the index, a CUT on each index ref first fences its publication (D-EVS-66), and its first ERASE takes the entry's own keys, which re-key nothing. *Why:* owner decisions [61](#od-61), [133](#od-133), [146](#od-146); a shared index or live deposit would otherwise outlive the erasure, and no admin's closures spend another's.
 
@@ -19217,7 +19236,9 @@ MinIO     unversioned metadata bucket with no lifecycle, replication or notifica
           two's rate (30 s if it helps, else the 5 min default); MINIO_FS_OSYNC off; objects carry content-type
           application/octet-stream and no user metadata, but for an idx/ entry's state while its head lists
           sources (§11.7): the key entry-state, valued carried:<source epoch in decimal>, fresh or removed and
-          read by HEAD, so a prefix check stays a HEAD; no other family carries any
+          read by HEAD, so a prefix check stays a HEAD, and a slot/ object's origin (§11.8's step 6): the key
+          origin, at most 190 B, written by the object's If-None-Match create and kept by an ERASE's rewrite
+          (owner decision 399); no other family carries any
 deadline  the store request deadline §10.6 and §11.8 cite is 10 s on both clusters: the Blobs client cancels a
           request with no response 10 s after its last byte (a response body then streams), or earlier at the
           request's own deadline: evs's fold and taskworker's copy writes 15 s after issuing the head read they
@@ -22000,6 +22021,13 @@ model       EvsCommit.tla (TLA+, checked by TLC: https://github.com/tlaplus/tlap
             cards, their version by epoch, the CUT's fence and their second fold, with the rules as landed before
             them as failing configurations; neither keeps the diff, base and re-entry configurations owner decision
             584 retired;
+            details/Settle.tla and details/EvsGc.tla (DESIGN-DETAILS.md section 2, run by run-settle.sh beside them)
+            check the store's stamp and a failed DELETE's held key against FI-30, and segment GC by evacuation's
+            horizon with a first commit to a ref with no head stalled across it, with §19.6's settle row and
+            §11.13's orphans row as first written as failing configurations; details/EvsSlot.tla (section 14, run
+            by run-slot.sh), EvsCommit.tla's companion, checks each slot object's origin, a retoken's takeover and
+            evacuation's delete of a dead record's own slots, with the code as landed before them as failing
+            configurations;
             StoreSettle.tla keeps one key on 8 drives at EC:4 (4 hosts of 2): each drive's version, its stamp and
             its own lock on the key, each write's coordinator, which may crash, and its drive commits, each a check
             step then a commit step, the settler and heal; writes are cancelled, pass their deadline, arrive after
@@ -22299,12 +22327,12 @@ FS-7   §11    five writers push one path from one base: one commits and the oth
               reader sees the committed version throughout, folded or in the window, across
               the losers' evacuation and a restart
 FS-8   §11    kills after a segment upload, between parts, before a seal, and between a push's FI-6,13c    T2+T3  M2-out
-              slot PUTs and its batch record (owner decision 400); the fake clock passes 26
-              h, 2 d and 3 d: evacuation has dropped every dead record at 26 h, its slots
-              staying until its delete of them is on (owner decision 399), and GC has
-              deleted every orphan segment at 3 d (owner decision 203), leaving a committed
-              and an unknown commit beside them; a delayed step-7 PUT after a fence write
-              fails
+              slot PUTs and its batch record (owner decision 400); the fake clock passes 26 h,
+              2 d and 3 d: evacuation has dropped every dead record at 26 h and, once its
+              delete of them is on, the slots each created, a slot a dead record listed and
+              did not create standing (owner decision 399), and GC has deleted every orphan
+              segment at 3 d (owner decision 203), leaving a committed and an unknown commit
+              beside them; a delayed step-7 PUT after a fence write fails
 FS-9   §11    a directory at its bound, built from real sealed names with nonce and tag, so    FI-1        T2     M2-out
               the 448 KiB of name table binds before the 4,096-child count (at 3,584 children
               with names under 64 B, sooner with longer ones), plus a concurrent child add,
@@ -24637,7 +24665,7 @@ Every D- item, in section order: 460 items, 16 of them withdrawn and 1 decided b
 | D-EVS-22 | Refs have a mode fixed at creation: git-mode refs commit only on their tip; file-mode refs use path-level CAS. *(decided; [owner decision 141](#od-141))* | [§11](#1117-decisions-proposed) |
 | D-EVS-23 | A push id names one statement; retries return its version; the head resolves unknown outcomes and records unsettled refusals. | [§11](#1117-decisions-proposed) |
 | D-EVS-24 | Log pages hold ≤1 KiB signed statements; head readers verify every one after their pin and each read entry's. | [§11](#1117-decisions-proposed) |
-| D-EVS-25 | Orphans are found without the log: hourly evacuation resolves batch records; unadopted segments or maps die only after ref fences. | [§11](#1117-decisions-proposed) |
+| D-EVS-25 | Orphans are found without the log: evacuation settles batch records, deleting dead records' own slots; GC waits for its horizon. | [§11](#1117-decisions-proposed) |
 | D-EVS-26 | Erasure is a committed ERASE push destroying every key of every representation: retained versions, derived-field chains and the deposit. | [§11](#1117-decisions-proposed) |
 | D-EVS-27 | Segments are addressed by content id; locators reserve two kinds and `spidx/` is reserved, so packing needs no format change. | [§11](#1117-decisions-proposed) |
 | D-EVS-28 | The local tier publishes through git's proc-receive hook with per-ref statuses, no atomic pushes and a durable push-id journal. | [§11](#1117-decisions-proposed) |
@@ -24646,7 +24674,7 @@ Every D- item, in section order: 460 items, 16 of them withdrawn and 1 decided b
 | D-EVS-31 | `idx/` holds only committed versions, folded lazily; reads and the CAS merge the unfolded window. | [§11](#1117-decisions-proposed) |
 | D-EVS-32 | Hourly, history older than 24 h packs onto HDD once 256 KiB, else into NVMe parcels packed within 7 d. | [§11](#1117-decisions-proposed) |
 | D-EVS-33 | One write budget per metadata cluster (0.8 DWPD, 50% write IOPS) but P0; P1 prepays P2's wallet; heaviest refused first. | [§11](#1117-decisions-proposed) |
-| D-EVS-34 | Segment uploads write nothing to the metadata cluster: a MAC'd receipt rides the push; GC fences idle refs first. | [§11](#1117-decisions-proposed) |
+| D-EVS-34 | Segment uploads write nothing to the metadata cluster: a MAC'd receipt rides the push; GC waits for evacuation's horizon. | [§11](#1117-decisions-proposed) |
 | D-EVS-35 | Per-version versioning: 0 keeps all, 1 newest only, 2 index files; config, mailcfg, git-mode, creates-only refuse 1-2; locks refuse 1. | [§11](#1117-decisions-proposed) |
 | D-EVS-36 | Versionless content: one-record kind-5 segments cited only by the path's next version or rename; ≤16 KiB staged; per-path slot keys. | [§11](#1117-decisions-proposed) |
 | D-EVS-37 | Committing evs processes delete replaced versionless content 60 s after commit, evacuation by ~26 h; holds keep only pre-placement content. | [§11](#1117-decisions-proposed) |

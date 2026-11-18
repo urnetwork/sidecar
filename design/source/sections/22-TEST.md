@@ -874,6 +874,13 @@ model       EvsCommit.tla (TLA+, checked by TLC: https://github.com/tlaplus/tlap
             cards, their version by epoch, the CUT's fence and their second fold, with the rules as landed before
             them as failing configurations; neither keeps the diff, base and re-entry configurations owner decision
             584 retired;
+            details/Settle.tla and details/EvsGc.tla (DESIGN-DETAILS.md section 2, run by run-settle.sh beside them)
+            check the store's stamp and a failed DELETE's held key against FI-30, and segment GC by evacuation's
+            horizon with a first commit to a ref with no head stalled across it, with §19.6's settle row and
+            §11.13's orphans row as first written as failing configurations; details/EvsSlot.tla (section 14, run
+            by run-slot.sh), EvsCommit.tla's companion, checks each slot object's origin, a retoken's takeover and
+            evacuation's delete of a dead record's own slots, with the code as landed before them as failing
+            configurations;
             StoreSettle.tla keeps one key on 8 drives at EC:4 (4 hosts of 2): each drive's version, its stamp and
             its own lock on the key, each write's coordinator, which may crash, and its drive commits, each a check
             step then a commit step, the settler and heal; writes are cancelled, pass their deadline, arrive after
@@ -1173,12 +1180,12 @@ FS-7   §11    five writers push one path from one base: one commits and the oth
               reader sees the committed version throughout, folded or in the window, across
               the losers' evacuation and a restart
 FS-8   §11    kills after a segment upload, between parts, before a seal, and between a push's FI-6,13c    T2+T3  M2-out
-              slot PUTs and its batch record (owner decision 400); the fake clock passes 26
-              h, 2 d and 3 d: evacuation has dropped every dead record at 26 h, its slots
-              staying until its delete of them is on (owner decision 399), and GC has
-              deleted every orphan segment at 3 d (owner decision 203), leaving a committed
-              and an unknown commit beside them; a delayed step-7 PUT after a fence write
-              fails
+              slot PUTs and its batch record (owner decision 400); the fake clock passes 26 h,
+              2 d and 3 d: evacuation has dropped every dead record at 26 h and, once its
+              delete of them is on, the slots each created, a slot a dead record listed and
+              did not create standing (owner decision 399), and GC has deleted every orphan
+              segment at 3 d (owner decision 203), leaving a committed and an unknown commit
+              beside them; a delayed step-7 PUT after a fence write fails
 FS-9   §11    a directory at its bound, built from real sealed names with nonce and tag, so    FI-1        T2     M2-out
               the 448 KiB of name table binds before the 4,096-child count (at 3,584 children
               with names under 64 B, sooner with longer ones), plus a concurrent child add,

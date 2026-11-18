@@ -4,9 +4,11 @@
 // list is not inline and whose covering prefixes reach the path or a prefix holding it, the adjacent-leaf proofs
 // that it is not among the changes (§11.6's merkle row), or, for a prefix the statement changed by a delta, which
 // does not end the path, that delta's inclusion proof in the absence's present; a directory's deltas after its table
-// each carry their own proof (QD-681). A removal is proven by its own change, or by the change removing the prefix
-// that ended the path. A change of an older path epoch is found by the leaf place its fold
-// recorded (changeAt), since evs is never sent that epoch's token of a path it did not hold (read.go).
+// each carry their own proof (QD-681). For a path served plain absent, the statement's change of the path itself, a
+// write or a removal, and its removal of a prefix are shown by their inclusion proofs in present too (QD-1043). A
+// removal is proven by its own change, or by the change removing the prefix that ended the path. A change of an older
+// path epoch is found by the leaf place its fold recorded (changeAt), since evs is never sent that epoch's token of a
+// path it did not hold (read.go).
 //
 // Pushes are read by version: a window version's record at the place its entry names, an older one's statement
 // from its log page and its record at the place the page's entry names, each read once a request and the records
@@ -457,20 +459,24 @@ func (self *readPushes) absenceProof(push *readPush, tokenPath sidecar.EvsTokenP
 	return absence, nil
 }
 
-// For a prefix of a path a reply speaks for that the push changed by a delta, which does not end the path (§11.7's
-// newest row): that change's inclusion proof in an absence's present, in place of below and above (QD-681). nil when
-// the push did not change prefix or removed it, and nil for an inline list.
-func (self *readPushes) presentProof(push *readPush, prefix sidecar.EvsTokenPath) (*protocol.EvsAbsenceProof, error) {
+// The change the push made to changed, the path a reply speaks for or a strict prefix holding it (prefix), shown by
+// that change's inclusion proof in an absence's present, in place of below and above: a strict prefix's delta, which
+// does not end the path (§11.7's newest row; QD-681), for any reply; and for a path served plain absent (absent), with
+// no version, removal or base, the path's own change, a write or a removal, and a strict prefix's removal as well,
+// which the reader judges in its walk's order (QD-979, QD-1043). nil when the push did not change it, when its change
+// is none of these, which ends the version or removal served, and for an inline list. The change lies in the part the
+// absence's position read, so this reads nothing more.
+func (self *readPushes) presentProof(push *readPush, changed sidecar.EvsTokenPath, prefix bool, absent bool) (*protocol.EvsAbsenceProof, error) {
 	if !push.rooted() {
 		return nil, nil
 	}
-	change, part, index, err := self.changeOf(push, prefix)
-	if err != nil || change == nil || !change.WritesEntry() {
+	change, part, index, err := self.changeOf(push, changed)
+	if err != nil || change == nil || !(absent || (prefix && change.WritesEntry())) {
 		return nil, err
 	}
 	present, err := self.inclusionProof(push, part, index)
 	if err != nil {
 		return nil, err
 	}
-	return &protocol.EvsAbsenceProof{Version: push.version, TokenPath: prefix.Components(), Present: present}, nil
+	return &protocol.EvsAbsenceProof{Version: push.version, TokenPath: changed.Components(), Present: present}, nil
 }
