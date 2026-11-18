@@ -53,6 +53,10 @@ const evsSlotMinSettleAge = sidecar.BlobUnmodifiedSlack + time.Second
 type EvsSettings struct {
 	// place/'s resolution: a 404 cached 5 s, the placements a process keeps (§11.8's resolve row).
 	Place *sidecar.EvsRepoPlaceSettings
+	// How many times PUT /evs/v1/repos/<id> sends one create of place/ or repo/ (place.go): once, and once more
+	// after a read shows an unknown outcome never landed, §11.8's write row's "404 written again with the same
+	// bytes", 2. Past it the outcome stays unknown and the route answers 503. Positive.
+	CreateWriteCount int
 	// The drop table's, the drop job's and the dry runs' (drop_table.go; EVSB-M10-03): the routes read the table's
 	// bounds and the dry runs' request bounds here.
 	Drop *DropSettings
@@ -355,6 +359,7 @@ type EvsSettings struct {
 func DefaultEvsSettings() *EvsSettings {
 	return &EvsSettings{
 		Place:                       sidecar.DefaultEvsRepoPlaceSettings(),
+		CreateWriteCount:            2,
 		Drop:                        DefaultDropSettings(),
 		InstanceFormat:              sidecar.EvsRepoFormat2,
 		RepoCacheTtl:                5 * time.Second,
@@ -505,6 +510,9 @@ func (self *EvsSettings) Validate() error {
 	}
 	if self.Place.NotFoundTtl < 0 {
 		return fmt.Errorf("%w: a negative place/ 404 ttl", ErrEvsSettings)
+	}
+	if self.CreateWriteCount <= 0 {
+		return fmt.Errorf("%w: a create of place/ or repo/ sent %d times, not positive", ErrEvsSettings, self.CreateWriteCount)
 	}
 	if evsHeadCacheMaxServeAge < self.HeadCacheServeAge {
 		return fmt.Errorf("%w: a cached head served %s, past §11.9's %s", ErrEvsSettings, self.HeadCacheServeAge, evsHeadCacheMaxServeAge)
