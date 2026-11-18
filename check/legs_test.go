@@ -82,19 +82,25 @@ var iosExtensionPatterns = []string{".", "./protocol", "./protocol/bridge", "./d
 // Everything in a module, for the legs that build or test all of it.
 var allPatterns = []string{"./..."}
 
-// The tag gomobile adds for the iPhone and simulator slices beside a bind's own (golang.org/x/mobile's
-// cmd/gomobile/env.go, platformTags). Android's is android, which GOOS=android sets itself, so the
-// Android legs carry none, and the macOS compile legs carry none, their archives compiling without it.
-const gomobileIosTag = "ios"
+// The tags gomobile adds beside a bind's own (golang.org/x/mobile's cmd/gomobile/env.go, platformTags): ios
+// on the iPhone and simulator slices, and macos on a macOS slice's binding step, which gobind runs with
+// GOOS=ios. Android's is android, which GOOS=android sets itself, so the Android legs carry none, and the
+// macOS compile legs carry none, their archives compiling without it.
+const (
+	gomobileIosTag   = "ios"
+	gomobileMacosTag = "macos"
+)
 
-// Every leg. This mirrors sdk/dependency_boundary_test.go:97-118, which
+// Every leg. This mirrors sdk/dependency_boundary_test.go:98-123, which
 // sdkLegRowFindings holds both ways for the gomobile legs, and adds §4.7's sidecar_http js leg and
 // the CLI's six release targets, then a leg for each module nothing else reads. The gomobile legs are
 // every target sdk/build/Makefile binds (QD-908): the Android bind's, the Apple bind's and the network
-// extension's, each with gomobile's tag for its platform. A macOS slice builds in two configurations
-// (QD-997), and its legs here are the compile's, named so: GOOS=darwin with the bind's tags alone, as
-// its archive compiles. Each row's cgo is explicit where sdk leaves it to the host, because a leg is
-// what it names on any machine.
+// extension's, each with gomobile's tag for its platform. gomobile runs a macOS slice in two
+// configurations and fails the bind if either fails (QD-997), so each has two legs, named for the step
+// each models: the binding step's, gobind's type-check with GOOS=ios and the bind's tags plus macos,
+// on which desktop files also select (QD-991), and the compile's, GOOS=darwin with the bind's tags
+// alone, as the archive the slice links compiles. Each row's cgo is explicit where sdk leaves it to the
+// host, because a leg is what it names on any machine.
 func defaultBuildLegs() []*buildLeg {
 	clientLeg := func(name string, goos string, goarch string, cgoEnabled bool, tags ...string) *buildLeg {
 		return &buildLeg{
@@ -145,11 +151,15 @@ func defaultBuildLegs() []*buildLeg {
 		clientLeg("gomobile android/amd64", "android", "amd64", true, mobileBindTag),
 		clientLeg("gomobile ios/arm64", "ios", "arm64", true, mobileBindTag, gomobileIosTag),
 		simulatorLeg(clientLeg("gomobile iossimulator/arm64", "ios", "arm64", true, mobileBindTag, gomobileIosTag)),
+		clientLeg("gomobile macos/arm64 binding step", "ios", "arm64", true, mobileBindTag, gomobileMacosTag),
 		clientLeg("gomobile macos/arm64 compile", "darwin", "arm64", true, mobileBindTag),
+		clientLeg("gomobile macos/amd64 binding step", "ios", "amd64", true, mobileBindTag, gomobileMacosTag),
 		clientLeg("gomobile macos/amd64 compile", "darwin", "amd64", true, mobileBindTag),
 		deviceLeg("gomobile ios/arm64 extension", "ios", "arm64", gomobileIosTag),
 		simulatorLeg(deviceLeg("gomobile iossimulator/arm64 extension", "ios", "arm64", gomobileIosTag)),
+		deviceLeg("gomobile macos/arm64 extension binding step", "ios", "arm64", gomobileMacosTag),
 		deviceLeg("gomobile macos/arm64 extension compile", "darwin", "arm64"),
+		deviceLeg("gomobile macos/amd64 extension binding step", "ios", "amd64", gomobileMacosTag),
 		deviceLeg("gomobile macos/amd64 extension compile", "darwin", "amd64"),
 
 		// §4.7's page Worker leg, over the root and protocol, which §18.10's main imports

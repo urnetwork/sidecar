@@ -252,7 +252,7 @@ func (self *DirectoryView) planWithLock() []*directoryViewStream {
 	batch := []*directoryViewStream{}
 	estimate := int64(0)
 	for _, stream := range self.queue {
-		if len(batch) == DirectoryStreamReadCount {
+		if len(batch) == DefaultEvsFormatSettings().ReadStreamMaxRefCount {
 			break
 		}
 		cost := int64(stream.headVersion-stream.pinVersion) * self.maxVersionByteCount

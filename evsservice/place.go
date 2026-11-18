@@ -7,12 +7,17 @@
 //     cannot reach answers a new repo 503 before anything is written, so no place/ ever names it; a repo already
 //     placed goes on to step 2's rule.
 //  2. On 412, or an unknown outcome, it reads place/: the same creator continues on the cluster place/ names,
-//     whatever place_new says now, and any other gets 409 REPO_PLACED and picks another id (owner decision 411), so
-//     of two racing creates exactly one places the repo and a retry never moves it. An unknown outcome whose read
-//     finds no place/ never landed and never will (§19.6's settle rule), and the same bytes go once more.
+//     whatever place_new says now. For the config kind alone, whose id the Genesis fixes, so does any sidecar whose
+//     config admin the guard honored (every config writer, QD-894), place/ keeping the cluster and creator it names
+//     (QD-982, owner decision 567): so another config writer places a config repo whose creator is gone with its
+//     repo/ unwritten, its create stopped between place/ and repo/ or a restore having brought back place/ alone.
+//     Any other gets 409 REPO_PLACED and picks another id (owner decision 411), so of two racing creates exactly one
+//     writes place/, and a retry never moves it. An unknown outcome whose read finds no place/ never landed and
+//     never will (§19.6's settle rule), and the same bytes go once more.
 //  3. Only then repo/<id> there, If-None-Match, `keying` until §10's KF1, format 1, with the creating token's
-//     network (plan-EVSB-repo-network). A 412 whose repo/ is this repo, network, kind and owner is a retry, and
-//     answers 200 as the first did; any other is a fault that alarms, and answers 409 REPO_PLACED as well, since the
+//     network (plan-EVSB-repo-network). A 412 whose repo/ is this repo, network, kind and owner is a retry, or a
+//     config writer meeting another's create of the config repo, and answers 200 as the first did, so racing config
+//     writers converge on one repo/; any other is a fault that alarms, and answers 409 REPO_PLACED as well, since the
 //     id holds a repo other than the one this create makes and only another id gets the creator on.
 //
 // Both writes are P1 for the creating network (plan-EVSB-write-classes). The projection's kind must be one of §11.12's
@@ -47,10 +52,6 @@ func (self *EvsEngine) placeRoutes() []*EvsRoute {
 	}
 }
 
-// How many times a create of place/ or repo/ is sent: once, and once more after a read shows an unknown outcome
-// never landed. A protocol step, as PutImmutable's.
-const evsCreateWriteCount = 2
-
 // PUT /evs/v1/repos/<id>.
 func (self *EvsEngine) servePutRepo(request *EvsRequest) {
 	facts, answer := self.deps.AuthState.Repo(request.Principal, request.RepoId)
@@ -75,7 +76,7 @@ func (self *EvsEngine) servePutRepo(request *EvsRequest) {
 		request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
 		return
 	}
-	place, ok := self.placeRepo(request)
+	place, ok := self.placeRepo(request, facts)
 	if !ok {
 		return
 	}
@@ -92,14 +93,15 @@ func (self *EvsEngine) servePutRepo(request *EvsRequest) {
 	request.Reply(nil)
 }
 
-// Steps 1 and 2: the placement this create continues on. false once it has answered the refusal.
-func (self *EvsEngine) placeRepo(request *EvsRequest) (*sidecar.EvsRepoPlace, bool) {
+// Steps 1 and 2 for the repo the projection's facts describe: the placement this create continues on. false once it
+// has answered the refusal.
+func (self *EvsEngine) placeRepo(request *EvsRequest, facts *EvsRepoFacts) (*sidecar.EvsRepoPlace, bool) {
 	repoId := request.RepoId
 	newClusterId := self.blobs.NewRepoClusterId()
 	if _, err := self.blobs.Cluster(newClusterId); err != nil {
 		// a repo already placed continues where place/ names, and a new one waits, so no place/ names this cluster
 		if held, err := self.places.Resolve(request.Ctx, repoId); err == nil {
-			return self.continuePlace(request, held)
+			return self.continuePlace(request, facts, held)
 		}
 		self.log.Warningf("[evs] place_new names cluster %s, which this process cannot reach", newClusterId)
 		request.Unavailable(nil)
@@ -127,7 +129,7 @@ func (self *EvsEngine) placeRepo(request *EvsRequest) (*sidecar.EvsRepoPlace, bo
 		held, err := sidecar.ReadEvsRepoPlace(request.Ctx, firstCluster, repoId)
 		switch {
 		case err == nil:
-			return self.continuePlace(request, held)
+			return self.continuePlace(request, facts, held)
 		case errors.Is(err, sidecar.ErrEvsRepoPlaceInvalid):
 			self.alarm("place_invalid", "repo %s: place/ holds no placement", sidecar.EvsKeyId(repoId))
 		}
@@ -149,8 +151,8 @@ func (self *EvsEngine) placeRepo(request *EvsRequest) (*sidecar.EvsRepoPlace, bo
 			held, readErr := sidecar.ReadEvsRepoPlace(request.Ctx, firstCluster, repoId)
 			switch {
 			case readErr == nil:
-				return self.continuePlace(request, held)
-			case errors.Is(readErr, sidecar.ErrEvsRepoNotPlaced) && writeCount < evsCreateWriteCount:
+				return self.continuePlace(request, facts, held)
+			case errors.Is(readErr, sidecar.ErrEvsRepoNotPlaced) && writeCount < self.settings.CreateWriteCount:
 				// it never landed, and by the settle rule it never will: the same bytes again
 				continue
 			case errors.Is(readErr, sidecar.ErrEvsRepoPlaceInvalid):
@@ -164,10 +166,17 @@ func (self *EvsEngine) placeRepo(request *EvsRequest) (*sidecar.EvsRepoPlace, bo
 	}
 }
 
-// Step 2's rule for a placement that stands: its creator continues on its cluster, any other gets 409 REPO_PLACED,
-// final, and picks another id (QD-927), where a lifecycle 409 such as STATEMENT_MISSING keeps the id.
-func (self *EvsEngine) continuePlace(request *EvsRequest, held *sidecar.EvsRepoPlace) (*sidecar.EvsRepoPlace, bool) {
-	if held.CreatorSidecarId != request.SidecarId {
+// Step 2's rule for a placement that stands: its creator continues on its cluster, and for the config kind alone so
+// does any sidecar whose config admin the guard honored (QD-982): the config repo's id is the Genesis's, so no other id
+// can be picked, and every config writer administers it (QD-894). place/ keeps the cluster and creator it names, never
+// rewritten, so a config writer continues on the creator's placement and step 3's If-None-Match leaves racing config
+// writers one repo/. Any other gets 409 REPO_PLACED, final, and picks another id (QD-927), where a lifecycle 409 such
+// as STATEMENT_MISSING keeps the id.
+func (self *EvsEngine) continuePlace(request *EvsRequest, facts *EvsRepoFacts, held *sidecar.EvsRepoPlace) (*sidecar.EvsRepoPlace, bool) {
+	creator := held.CreatorSidecarId == request.SidecarId
+	// the route takes admin, so the guard honored it; held to it here all the same, as the rule's own condition
+	configWriter := facts.Kind == protocol.RepoKind_REPO_KIND_CONFIG && request.Rights.Has(sidecar.AclEvsAdmin)
+	if !creator && !configWriter {
 		request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_REPO_PLACED)
 		return nil, false
 	}
@@ -246,7 +255,7 @@ func (self *EvsEngine) createRepoObject(request *EvsRequest, cluster sidecar.Blo
 			switch {
 			case readErr == nil && same:
 				return true
-			case readErr == nil && !found && writeCount < evsCreateWriteCount:
+			case readErr == nil && !found && writeCount < self.settings.CreateWriteCount:
 				continue
 			case readErr == nil && found:
 				self.alarm("repo_mismatch", "repo %s: repo/ holds another kind, owner or network than the projection's", sidecar.EvsKeyId(repoId))

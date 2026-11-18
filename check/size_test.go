@@ -230,14 +230,19 @@ func (self *repository) iosBuildEnvironment(leg *buildLeg) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	flags := "-isysroot " + sdkPath + " -arch " + clangArch + " " + versionFlag + self.settings.iosMinimumVersion
+	flags := "-isysroot " + sdkPath + " -arch " + clangArch
+	if versionFlag != "" {
+		flags += " " + versionFlag + self.settings.iosMinimumVersion
+	}
 	return append(leg.environment(), "CC="+clang, "CGO_CFLAGS="+flags, "CGO_LDFLAGS="+flags), nil
 }
 
 // The Apple SDK an ios leg's cgo builds against, the clang flag that sets its minimum version, and
 // clang's name for its GOARCH, as gomobile builds the slice (cmd/gomobile/env.go): the simulator's SDK
-// for an iossimulator slice, the iPhone's for any other. A GOARCH clang is not named for here is an
-// error, rather than a build for another arch.
+// for an iossimulator slice; the Mac's, with no minimum version, for a macOS slice's binding step,
+// which gobind runs with GOOS=ios and the host's own clang, no flag set (bind_iosapp.go; QD-997); and
+// the iPhone's for any other. A GOARCH clang is not named for here is an error, rather than a build
+// for another arch.
 func (self *buildLeg) iosSdk() (sdk string, versionFlag string, clangArch string, err error) {
 	switch self.goarch {
 	case "arm64":
@@ -249,6 +254,9 @@ func (self *buildLeg) iosSdk() (sdk string, versionFlag string, clangArch string
 	}
 	if self.iosSimulator {
 		return "iphonesimulator", "-mios-simulator-version-min=", clangArch, nil
+	}
+	if self.hasTag(gomobileMacosTag) {
+		return "macosx", "", clangArch, nil
 	}
 	return "iphoneos", "-miphoneos-version-min=", clangArch, nil
 }
