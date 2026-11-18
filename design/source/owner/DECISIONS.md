@@ -3900,6 +3900,13 @@ The design-records track that swept up every answer still pending on 2026-11-18 
     - Not taken: for QD-1053, (2) leaving default egress always the person's choice; for QD-1060, carrying the requirement only in the sealed statement, which an approver would not see and a gate would not bind.
     - Raised by the owner's follow-up to owner decision 606 and the build (the ur-tun-default-egress-option track; the build's ledger, QD-1053 and QD-1060).
 
+608. **Presence keys verify no WebAuthn attestation: clients request attestation none, `KeyRegister.attestation` stays in the format empty, and every presence key shows one label, presence (option 1, the recommendation, 2026-11-17).**
+    - Question: owner decisions 327, 455 and 553 had the registering device verify a presence key's attestation over the create ceremony's client data against vendor roots each release pins, label each key attested, asserted or attestation refused, and disclose in api-7 the attestation object with the authenticator's model and its vendor's certificate chain, for a label that changes no authorization; the complexity review asked whether the verifier, its vectors, the pinned root list and its release step and the labels earn their cost.
+    - Answer: presence keys no longer verify WebAuthn attestation. Clients request attestation none; `KeyRegister.attestation` stays in the format, empty; and every presence key shows one label, presence. The key's own proof in `KeyRegister`, which the log checks (QD-086), is unchanged. In the review phase the attestation verifier (record_presence_attest*), its vectors, the pinned vendor-root list and its release step, and the attestation refused and asserted labels are removed. §23.7's counsel item on the FIDO metadata terms is dropped, and §2.8's api-7 row no longer discloses the authenticator model or the vendor's chain. It reverses owner decisions 327, 455 and 553, and the answers to QD-137, QD-730, QD-885, QD-924 and QD-983 (§16.6's register, labels and registration rows; §7.9's `KeyRegister`; §18.5's `SidecarPresenceSigner`; §2.8's api-7, list v56; §23.7's counsel).
+    - Cost: a future attested label on approver screens is lost; nothing about authorization changes, and servers see less.
+    - Not taken: (2) keeping attestation as owner decisions 327, 455 and 553 had it.
+    - Raised by the complexity review of 2026-11-17 (the build's ledger, QD-1035).
+
 ## Owner instructions after the v1 build (2026-11-05)
 
 These are instructions, not design decisions, so they carry no number.

@@ -125,6 +125,9 @@ Q['Q-EVS-3'] = (Q['Q-EVS-3'][0], "Separate repos at launch; sidecar-enforced pre
 # The dr4-late-sweep fold (2026-11-18): sockets' routes take service tokens (owner decision 588).
 assert D['D-SOCK-10'].startswith('Host the engine as server/cli/sockets with Client-class routes'), 'D-SOCK-10 row moved'
 D['D-SOCK-10'] = "Host the engine as server/cli/sockets, its routes under service tokens of audience sockets, keeping registration load off api."
+# The dr4-late-sweep fold (2026-11-18): presence keys with no attestation (owner decision 608).
+assert D['D-MCP-19'] == "Presence evidence follows 16.6's profiles: WebAuthn with UP and UV per use; Secure Enclave keys labeled asserted.", 'D-MCP-19 row moved'
+D['D-MCP-19'] = "Presence evidence follows 16.6's profiles: WebAuthn with UP and UV per use, and Secure Enclave keys; one label, presence."
 # The dr4-late-sweep fold (2026-11-18): sidecar's server-hosted packages (owner decisions 593, 594).
 assert D['D-REPO-3'].startswith("Engines live in sidecar over operator-core's Env"), 'D-REPO-3 row moved'
 D['D-REPO-3'] = "Engines live in sidecar over operator-core's Env; sidecar owns its SQL and server-hosted packages (owner decisions 19, 251, 594)."

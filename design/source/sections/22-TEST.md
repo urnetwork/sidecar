@@ -576,9 +576,9 @@ devices    each host pairing (one CLI, two CLIs, a CLI with a page Worker or a q
            desktops, a phone app with a CLI), with and without a presence key, reaches every allowed channel; a
            self-signed device decision is refused; admitting a Worker keeps harness_ok, a second CLI clears it, and
            ur approve there signs device evidence the first daemon accepts
-presence   each profile refuses a wrong key or another key's attestation, a replayed challenge or a counter
-           regression, UP or UV clear, another RP's rpIdHash or an unlisted origin, a software key as apple
-           attestation, an ES256 assertion as ecdsa-p256-sha256, an app-integrity assertion without UV and an
+presence   each profile refuses a wrong key, a replayed challenge or a counter regression, UP or UV clear,
+           another RP's rpIdHash or an unlisted origin, an ES256 assertion as ecdsa-p256-sha256, an app-integrity
+           assertion without UV and an
            assertion over another action's bytes, and passes its positive vector; its countersign check (§7.9's
            presence row) refuses the same faults but the counter regression, and a path that misses its leaf,
            another act's root, another signer's act and an act over 65,535 statements, ignores

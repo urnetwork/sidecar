@@ -174,7 +174,7 @@ type SidecarSecret struct { // json in the C ABI and js
 	ValueBase64 string // set only when Present
 }
 type SidecarPresenceSigner interface { // app-implemented: a Secure Enclave or platform FIDO key, per §16.6's profiles; nil: another device approves
-	GetAttestation() string                       // public key and attestation, registered per §16.6
+	GetAttestation() string                       // the public key, registered per §16.6, its attestation none
 	SignWithPresence(messageBase64 string) string // after a presence check with UV over the message (webauthn-es256: its
 	                                              // SHA-256 as the challenge), base64 of §6.9's WebAuthnEvidence: key_id
 	                                              // and DER signature, with authenticator_data and client_data_json for

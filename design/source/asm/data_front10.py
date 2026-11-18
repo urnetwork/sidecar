@@ -1761,3 +1761,23 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     _D605, "and a renewed announcement's row (605); the owner's instruction on `ur tun` makes its default routes the "
     "person's choice (606), amending @@OD:479@@, @@OD:480@@ and @@OD:482@@, and a network may require default egress "
     "(607), extending @@OD:462@@. ")
+INDEX += [
+    (608, 'No presence attestation',
+     'Presence keys verify no WebAuthn attestation: clients request none, `KeyRegister.attestation` stays empty, '
+     'and every key shows one label, presence.'),
+]
+for _n, _note in [
+        (327, ' Reversed by @@OD:608@@: no attestation is verified.'),
+        (455, ' Reversed by @@OD:608@@: no roots are pinned and every key shows presence.'),
+        (553, ' Reversed by @@OD:608@@: api-7 shows an empty attestation.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 609))
+DATES.update({608: '2026-11-17'})
+_D607 = "and a network may require default egress (607), extending @@OD:462@@. "
+assert DECISIONS_INTRO.count(_D607) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D607, "and a network may require default egress (607), extending @@OD:462@@. The complexity review's last answers "
+    "number presence keys with no attestation (608), reversing @@OD:327@@, @@OD:455@@ and @@OD:553@@. ")

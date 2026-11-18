@@ -188,15 +188,16 @@ ephemeral or cloud sidecar
 register                  a consented, approval-capable device signs KeyRegister after a device or presence
                           decision, never harness; a presence key's KeyRegister also carries the new key's own
                           signature over its body (WebAuthn: UP and UV set; fields 9 and 10 under purpose
-                          key-proof, §7.9's record bytes) and, from a device that registered a live presence
-                          key, that key's countersignature (countersign, below); the device about to sign
-                          refuses a key whose present attestation fails and never downgrades it to asserted;
-                          a P-256 key's public_key, in KeyRegister and KeyRow alike, is a SEC 1 uncompressed
-                          point, 65 bytes, for both profiles below, a host converting a COSE key's x and y to
-                          it, anything else being ErrSignedKey; ur keys add-ssh <path> reads one OpenSSH
-                          ssh-ed25519 public key file, shows its fingerprint and signs KeyRegister{alg:
-                          ssh-ed25519, purpose: sshsig} under this row, a /dev/tty-confirmed method refused
-                          from MCP, any other key type refused and the private key never reaching ur
+                          key-proof, §7.9's record bytes) and, from a device that registered a live presence key,
+                          that key's countersignature (countersign, below); clients request attestation none, so
+                          KeyRegister.attestation stays in the format empty and no device or reader verifies an
+                          attestation (owner decision 608); a P-256 key's public_key, in KeyRegister and KeyRow
+                          alike, is a SEC 1 uncompressed point, 65 bytes, for both profiles below, a host
+                          converting a COSE key's x and y to it, anything else being ErrSignedKey; ur keys add-ssh
+                          <path> reads one OpenSSH ssh-ed25519 public key file, shows its fingerprint and signs
+                          KeyRegister{alg: ssh-ed25519, purpose: sshsig} under this row, a /dev/tty-confirmed
+                          method refused from MCP, any other key type refused and the private key never reaching
+                          ur
 remove                    ur keys rm <key_id> signs KeyRevoke of the member's SSH key, or of a presence key only
                           from a device that registered a live presence key of its own, under countersign, for a
                           /dev/tty-confirmed command; ur keys ls lists the member's keys with each one's
@@ -205,28 +206,17 @@ first key                 a member's first presence key may register from a /dev
                           add-presence, in ur login, or in the app at the network's first admission (§18); every
                           member device lists it with its host and time; it is only as strong as that session
                           (owner decision 47)
-labels                    records and approver screens show presence (attested) or presence (asserted), both
-                          channel presence; the policy grammar is unchanged; each reader computes the label
-                          locally, at the carrying entry's time, and for a logged key whose attestation fails
-                          under its own roots shows presence (attestation refused), neither attested nor
-                          asserted, the log's KeyRegister rule reading no attestation (§7.9; owner decision 327);
-                          a label changes no authorization, and an asserted key's label rises to attested when
-                          a release pins its root, with no re-registration (owner decision 455)
+labels                    records and approver screens show every presence key under one label, presence, its
+                          channel presence; the policy grammar is unchanged, the log's KeyRegister rule reads no
+                          attestation (§7.9), and a label changes no authorization (owner decision 608, which
+                          reverses owner decisions 327 and 455)
 webauthn-es256 (COSE -7)  FIDO2 keys and Windows Hello through the platform WebAuthn API; passkeys in the iOS
                           and Android apps
-  registration            KeyRegister.attestation is a canonical CBOR map of two byte strings, {"attObj": the
-                          attestation object, "clientDataJSON": the create ceremony's client data}, a CTAP2
-                          client writing the JSON it hashed; the verifier checks the client data's type is
-                          webauthn.create and its origin is on per use's table, and packed, tpm, android-key
-                          or apple over SHA-256 of the client data against the vendor roots the release pins
-                          (Apple's WebAuthn root for apple, Google's hardware attestation roots for android-key,
-                          a short hand-kept vendor list for packed and tpm, in one data file a release step
-                          refreshes; never FIDO MDS data), leaving the challenge unchecked, since authData's
-                          credential key, which must equal public_key, binds the attestation to the
-                          registration: a statement that does not verify is refused, as is an apple or
-                          android-key chain that fails once its root is pinned; a packed or tpm statement that
-                          verifies and chains to no listed root, any format with no root pinned, fmt none and
-                          an empty attestation label asserted; any other attested (owner decision 455)
+  registration            the create ceremony requests attestation none, and KeyRegister.attestation is empty:
+                          no verifier, vendor root list or release step for roots, the key's own proof in
+                          fields 9 and 10 being what the log checks; the drafted verifier, its vectors, the
+                          pinned root list and its release step and the extra labels go in the review phase
+                          (owner decision 608)
   per use                 authenticatorData: rpIdHash = SHA-256("ur.io"), UP and UV set, signCount above the
                           stored one when either is non-zero; clientDataJSON: type webauthn.get, challenge =
                           base64url(SHA-256(§6.9's signed bytes)), origin exactly one the origins row lists; DER
@@ -242,7 +232,7 @@ webauthn-es256 (COSE -7)  FIDO2 keys and Windows Hello through the platform WebA
 ecdsa-p256-sha256         Secure Enclave keys created with kSecAccessControlUserPresence: the iOS app, and the
                           macOS ur bundle through purego (D-CORE-12)
   registration            no remote attestation of a Secure Enclave key's access control exists on an unmanaged
-                          device: asserted
+                          device, and none is asked; its label is presence, as every key's is (owner decision 608)
   per use                 DER ECDSA P-256 over §6.9's signed bytes; presence is the registering device's assertion
 countersign               (§7.9's presence row; owner decisions 185, 187) a key's per-use check over an act's
                           countersigned bytes in place of §6.9's signed bytes, the webauthn-es256 challenge being
@@ -1925,7 +1915,7 @@ sdk           GetDirectory() *SidecarDirectory, nil outside a team network: List
 
 **D-MCP-18 (proposed).** Read receipts are budgeted deposits made before decryption, a first read that cannot deposit fails closed, and ingest refuses, with an alarm, a receipt-only depositor's other entries. *Why:* a read-only reader cannot write the author's vault or inject into it, the author sees an attempt, and receipts must not need the author online.
 
-**D-MCP-19 (proposed).** Presence evidence follows 16.6's profiles: WebAuthn with UP and UV per use, attested or asserted, and Secure Enclave keys labeled asserted; a presence countersignature (§7.9's presence row) runs the same check over its act's countersigned bytes, UV required and signCount not compared (owner decisions 185, 187). *Why:* a P-256 signature alone proves no person was present; a countersignature stops a thief only if it needs the person, and a verifier of one statement holds no counter.
+**D-MCP-19 (proposed).** Presence evidence follows 16.6's profiles: WebAuthn with UP and UV per use, and Secure Enclave keys, every key labeled presence with no attestation verified (owner decision 608); a presence countersignature (§7.9's presence row) runs the same check over its act's countersigned bytes, UV required and signCount not compared (owner decisions 185, 187). *Why:* a P-256 signature alone proves no person was present; a countersignature stops a thief only if it needs the person, and a verifier of one statement holds no counter.
 
 **D-MCP-20 (proposed).** Search is local and query-blind: one engine on the device serves `ur search`, `ur agents` and the three MCP tools on daemon hosts, an app host's remote search being §11.14's, writes nothing to evs but 16.10's read receipts, and fetches index objects only by sync position, `more` taking every missing all object whole, newest first (16.10; I-19). *Why:* the server then learns only object sizes, rewrite times, writers and sync positions; fetching by query, or stopping at enough hits, would leak a query's terms or selectivity (owner decisions 151, 152).
 
