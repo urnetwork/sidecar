@@ -260,6 +260,14 @@ func TestTaintedRestoreNeedsDecision(t *testing.T) {
 	if len(actions) != 1 || actions[0].Kind != sidecar.SidecarActionRestore || actions[0].RunId == nil || *actions[0].RunId != env.runId {
 		t.Fatalf("actions %+v", actions)
 	}
+	// the decision binds the session's agent beside the calling run (owner decision 470)
+	agentId, err := env.network.ResolveAgentId("builder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actions[0].AgentId == nil || *actions[0].AgentId != agentId {
+		t.Errorf("the restore binds agent %v, not the session's %s", actions[0].AgentId, agentId)
+	}
 	stored, err := sidecar.ParseStoredCanonicalAction(actions[0].Canonical)
 	if err != nil {
 		t.Fatal(err)

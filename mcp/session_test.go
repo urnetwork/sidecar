@@ -476,3 +476,36 @@ func mcpErrorCode(t *testing.T, err error) (int64, bool) {
 func responseError(response *testMcpResponse) error {
 	return &jsonrpc.Error{Code: response.Error.Code, Message: response.Error.Message, Data: response.Error.Data}
 }
+
+// tls_publish and the bridge tools bind a decision through the settings and origin from which the daemon's gate builds
+// its action: each carries the session's agent id beside the call's run, as the other outward tools' actions do, and a
+// session with no agent binds none.
+func TestTlsAndBridgeBindTheSessionsAgentId(t *testing.T) {
+	env := newTestTlsToolEnv(t)
+	env.network.publishErr = &sidecar.ApprovalPendingError{ApprovalId: sidecar.NewId()}
+	conn := env.conn("2025-06-18")
+	if response := env.callTool(conn, "2025-06-18", "tls_publish", map[string]any{"host": "blog", "local_port": 8080}); response.Error != nil {
+		t.Fatal(response.Error.Message)
+	}
+	agentId, err := env.network.ResolveAgentId("builder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(env.network.published) != 1 {
+		t.Fatalf("%d publishes asked", len(env.network.published))
+	}
+	if settings := env.network.published[0]; settings.RunId == nil || settings.AgentId == nil || *settings.AgentId != agentId {
+		t.Errorf("tls_publish binds run %v and agent %v, not the session's %s", settings.RunId, settings.AgentId, agentId)
+	}
+
+	session := testSessionOf(t, env.server, "builder")
+	runId := sidecar.NewId()
+	origin := mcpBridgeOrigin(&McpCall{Session: session, NetworkId: env.networkId, RunId: runId})
+	if origin.RunId == nil || *origin.RunId != runId || origin.AgentId == nil || *origin.AgentId != agentId {
+		t.Errorf("the bridge tools' origin binds run %v and agent %v, not %s and %s", origin.RunId, origin.AgentId, runId, agentId)
+	}
+	none := env.server.newSession(&sidecar.DaemonHello{Mode: sidecar.DaemonModeMcp})
+	if origin := mcpBridgeOrigin(&McpCall{Session: none, NetworkId: env.networkId, RunId: runId}); origin.AgentId != nil {
+		t.Errorf("a session with no agent binds %s", origin.AgentId)
+	}
+}
