@@ -403,6 +403,8 @@ barrier harness.evidence.after mcp/harness_evidence.go
 barrier harness.evidence.before mcp/harness_evidence.go
 barrier hold.list.after host_hold.go
 barrier hold.list.before host_hold.go
+barrier identity.agent_label.register.after identity_agent.go
+barrier identity.agent_label.register.before identity_agent.go
 barrier identity.agent_subkey.mint.after identity_agent.go
 barrier identity.agent_subkey.mint.before identity_agent.go
 barrier identity.agent_subkey.revoke.after identity_agent.go

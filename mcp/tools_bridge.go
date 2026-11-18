@@ -247,11 +247,11 @@ func mcpSidecarOf(network McpNetwork) *sidecar.Sidecar {
 	return nil
 }
 
-// Who a tool's filing files as (§5.8, I-8, I-9): MCP, bound to the call's run, so the gate judges the run's taint and
-// a decision binds the run that asked.
+// Who a tool's filing files as (§5.8, I-8, I-9): MCP, bound to the call's run and its session's agent (owner decision
+// 470), so the gate judges the run's taint and a decision binds the run and agent that asked.
 func mcpBridgeOrigin(call *McpCall) *sidecar.BridgeFileOrigin {
 	runId := call.RunId
-	return &sidecar.BridgeFileOrigin{Act: sidecar.SidecarActMcp, RunId: &runId, AgentRisk: sidecar.SidecarRiskNormal}
+	return &sidecar.BridgeFileOrigin{Act: sidecar.SidecarActMcp, RunId: &runId, AgentId: mcpCallAgentId(call), AgentRisk: sidecar.SidecarRiskNormal}
 }
 
 // An own-resource statement the guard hears of: the filer derives each from this sidecar's identity and refuses

@@ -162,7 +162,7 @@ func mcpSocketTargetPort(target string) int {
 // it.
 type mcpSocketListenActionFunction func(call *McpCall, name string, grantDst string) (*sidecar.SidecarAction, error)
 
-// The production action: NewCanonicalAction, then NewSidecarAction bound to the call's run.
+// The production action: NewCanonicalAction, then NewSidecarAction bound to the call's run and its session's agent.
 func mcpSocketListenAction(call *McpCall, name string, grantDst string) (*sidecar.SidecarAction, error) {
 	stored, err := sidecar.NewCanonicalAction(&protocol.CanonicalAction{
 		Kind:     uint32(sidecar.SidecarActionListen),
@@ -172,7 +172,7 @@ func mcpSocketListenAction(call *McpCall, name string, grantDst string) (*sideca
 		return nil, err
 	}
 	runId := call.RunId
-	return sidecar.NewSidecarAction(stored, sidecar.SidecarRiskNormal, sidecar.SidecarRiskNormal, &runId, nil)
+	return sidecar.NewSidecarAction(stored, sidecar.SidecarRiskNormal, sidecar.SidecarRiskNormal, &runId, mcpCallAgentId(call))
 }
 
 // What an outward socket_listen passes: the network's §5.4 gate, *sidecar.Sidecar's Authorize.

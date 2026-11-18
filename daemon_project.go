@@ -475,6 +475,9 @@ type daemonSession struct {
 	projectRead bool
 	project     *SidecarProject
 	projectErr  error
+	// the agent's id in each network the session's calls acted in, taken at its first call there and kept for its life
+	// (daemon_agent.go)
+	networkIdAgentIds map[Id]Id
 	// closed once the caller is gone (DaemonCall.SessionDone); nil for a session no reader watches, which never ends
 	done <-chan struct{}
 	// the request being answered's notifier (DaemonCall.Notify), set before each request of a control session; nil

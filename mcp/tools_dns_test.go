@@ -138,6 +138,8 @@ type fakeMcpDnsNetwork struct {
 	world  *sidecartest.ApprovalWorld
 	// the run the tools' calls must bind
 	runId sidecar.Id
+	// the agent id they must bind beside it: the session's agent's registration in the network (owner decision 470)
+	agentId sidecar.Id
 
 	stateLock sync.Mutex
 	standing  bool
@@ -169,8 +171,8 @@ func (self *fakeMcpDnsNetwork) Authorize(ctx context.Context, action *sidecar.Si
 	if noGate != nil {
 		return noGate
 	}
-	if action.RunId == nil || *action.RunId != self.runId || action.AgentId != nil {
-		self.t.Errorf("the action's run binding: %v %v", action.RunId, action.AgentId)
+	if action.RunId == nil || *action.RunId != self.runId || action.AgentId == nil || *action.AgentId != self.agentId {
+		self.t.Errorf("the action's run and agent binding: %v %v, want %s %s", action.RunId, action.AgentId, self.runId, self.agentId)
 	}
 	if standing {
 		effectRef, err := action.Effect.Run(ctx, nil)
@@ -251,12 +253,19 @@ func newTestDnsToolEnv(t *testing.T) *testDnsToolEnv {
 	}
 	env.runId = env.runOf("claude-code", "dns session")
 	env.dns.runId = env.runId
+	// the agent the relay's sessions act as, whose registration the network keeps from here on
+	if env.dns.agentId, err = env.dns.ResolveAgentId(testDnsAgentLabel); err != nil {
+		t.Fatal(err)
+	}
 	return env
 }
 
+// The agent every session of the env's relay acts as.
+const testDnsAgentLabel = "builder"
+
 func (self *testDnsToolEnv) conn(version string) *testMcpConn {
 	self.t.Helper()
-	conn := startTestMcpConn(self.t, self.server, self.claude.RelayHello("builder"))
+	conn := startTestMcpConn(self.t, self.server, self.claude.RelayHello(testDnsAgentLabel))
 	if version != "2026-07-28" {
 		conn.initialize(version)
 	}
@@ -472,7 +481,10 @@ func TestDnsGateViewHoldsNoRunAgentOrPreview(t *testing.T) {
 	for name, values := range writes[0].header {
 		seen = append(seen, []byte(name+": "+strings.Join(values, ",")))
 	}
-	hidden := map[string]sidecar.Id{"the session's run id": env.runId, "the gate's run id": env.world.RunId, "the agent id": env.world.AgentId}
+	hidden := map[string]sidecar.Id{
+		"the session's run id": env.runId, "the gate's run id": env.world.RunId, "the agent id": env.world.AgentId,
+		"the session's agent id": env.dns.agentId,
+	}
 	for what, id := range hidden {
 		forms := [][]byte{
 			id.Bytes(), []byte(id.String()), []byte(hex.EncodeToString(id.Bytes())),
@@ -491,14 +503,23 @@ func TestDnsGateViewHoldsNoRunAgentOrPreview(t *testing.T) {
 			t.Errorf("the write's body holds %q", word)
 		}
 	}
-	// the run rides the request this daemon filed, which the approver's device reads and no server does
+	// the run and the session's agent ride the request this daemon filed, which the approver's device reads and no
+	// server does: the approval binding (approval_id, run_id, agent_id) the decision spent on
 	filed := env.world.Log().Request(approvalId)
 	if filed == nil || sidecar.Id(filed.Request.GetRunId()) != env.world.RunId {
-		t.Errorf("the filed request's run: %v", filed)
+		t.Fatalf("the filed request's run: %v", filed)
+	}
+	if filedAgentId, err := sidecar.IdFromBytes(filed.Request.GetAgentId()); err != nil || filedAgentId != env.dns.agentId {
+		t.Errorf("the filed request binds agent %x, not the session's %s", filed.Request.GetAgentId(), env.dns.agentId)
 	}
 	actions := env.dns.taken()
 	if len(actions) != 2 {
 		t.Fatalf("%d actions", len(actions))
+	}
+	for _, action := range actions {
+		if action.AgentId == nil || *action.AgentId != env.dns.agentId {
+			t.Errorf("an action of the session binds agent %v, not %s", action.AgentId, env.dns.agentId)
+		}
 	}
 }
 

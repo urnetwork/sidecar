@@ -317,3 +317,235 @@ func TestAgentSubkeyStaysInTheKeychain(t *testing.T) {
 		t.Fatalf("no agent: %v", err)
 	}
 }
+
+// A sidecar holding an identity on an instance over backend and keyStore, as a daemon starts one on its durable state:
+// first draws and persists the identity, and otherwise the instance opens again on what a first start left there, as
+// after a restart.
+func newAgentRegistryTestSidecar(t *testing.T, backend SidecarStoreBackend, keyStore SidecarKeyStore, first bool) (*Sidecar, *SidecarInstance) {
+	t.Helper()
+	binding := testBindingFields()
+	instance := newInstanceOn(t, backend, keyStore)
+	if first {
+		if err := instance.Unlock(testPass); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := instance.createKeychain(binding.NetworkId); err != nil {
+			t.Fatal(err)
+		}
+		keys, err := newSidecarIdentityKeys(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer keys.erase()
+		signedBinding, err := NewSidecarIdentityBinding(binding, keys.identitySeed, keys.clientKeySeed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := persistSidecarIdentity(instance.secrets(binding.NetworkId, sidecarCoreSecretsNamespace), keys, signedBinding); err != nil {
+			t.Fatal(err)
+		}
+	} else if err := instance.Unlock(nil); err != nil {
+		t.Fatal(err)
+	}
+	sidecar := newSidecarBase(nil, cheapKeychainSettings())
+	if !sidecar.applyTransition(sidecarTransition{to: SidecarStateUnenrolled}) {
+		t.Fatal("no move to unenrolled")
+	}
+	if err := sidecar.adoptIdentity(instance.secrets(binding.NetworkId, sidecarCoreSecretsNamespace)); err != nil {
+		t.Fatal(err)
+	}
+	return sidecar, instance
+}
+
+// QD-981's registry (owner decision 470): one agent_id per (sidecar, label), drawn at random at the label's first ask
+// and kept in keychain.ur beside the agent's record, so the next ask, and an ask after a restart over the same state,
+// answer it; another label answers another, and the same label on another sidecar another again, so no reader of a
+// label can derive its id.
+func TestAgentIdOnePerSidecarLabel(t *testing.T) {
+	backend, keyStore := NewSidecarMemoryBackend(), newFakeKeyStore()
+	sidecar, instance := newAgentRegistryTestSidecar(t, backend, keyStore, true)
+	builderId, err := sidecar.ResolveAgentId("builder")
+	if err != nil || builderId == (Id{}) {
+		t.Fatalf("a first ask: %s %v", builderId, err)
+	}
+	if again, err := sidecar.ResolveAgentId("builder"); err != nil || again != builderId {
+		t.Fatalf("a second ask answers %s, not %s: %v", again, builderId, err)
+	}
+	reviewerId, err := sidecar.ResolveAgentId("reviewer")
+	if err != nil || reviewerId == builderId || reviewerId == (Id{}) {
+		t.Fatalf("another label answers %s beside %s: %v", reviewerId, builderId, err)
+	}
+	encoded, err := sidecar.coreSecrets.Get(sidecarAgentLabelRecordName("builder"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recorded, err := decodeSidecarAgentLabelRecord(encoded); err != nil || recorded != builderId {
+		t.Fatalf("keychain.ur's registration names %s: %v", recorded, err)
+	}
+	if !bytes.Equal(encoded, encodeSidecarAgentLabelRecord(builderId)) || len(encoded) != 4+1+len(Id{}) {
+		t.Errorf("the registration is %x", encoded)
+	}
+	other, _, _ := newIdentityTestSidecar(t)
+	if otherId, err := other.ResolveAgentId("builder"); err != nil || otherId == builderId {
+		t.Errorf("another sidecar's builder answers %s, the first's %s: %v", otherId, builderId, err)
+	}
+
+	// a restart: the instance opens again on its backend and key store, and each label names the agent it named
+	instance.Close()
+	restarted, _ := newAgentRegistryTestSidecar(t, backend, keyStore, false)
+	if again, err := restarted.ResolveAgentId("builder"); err != nil || again != builderId {
+		t.Errorf("after a restart builder answers %s, not %s: %v", again, builderId, err)
+	}
+	if again, err := restarted.ResolveAgentId("reviewer"); err != nil || again != reviewerId {
+		t.Errorf("after a restart reviewer answers %s, not %s: %v", again, reviewerId, err)
+	}
+}
+
+// Once AgentRevoke tombstones a label's agent_id, the label's next ask draws a new one, the new registration's
+// (QD-232): its subkey signs while the old id stays revoked, and it holds until it is revoked in turn. A registration
+// revoked before its agent ever signed ends all the same, and another label's registration is untouched.
+func TestAgentIdAfterRevokeIsNew(t *testing.T) {
+	sidecar, _, _ := newAgentTestSidecar(t)
+	message := []byte("synthetic push provenance")
+	first, err := sidecar.ResolveAgentId("builder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewerId, err := sidecar.ResolveAgentId("reviewer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sidecar.SignProvenance(first, AgentProvenancePurposeEvsAgent, message); err != nil {
+		t.Fatal(err)
+	}
+	if err := sidecar.AgentRevoke(first); err != nil {
+		t.Fatal(err)
+	}
+	second, err := sidecar.ResolveAgentId("builder")
+	if err != nil || second == first || second == (Id{}) {
+		t.Fatalf("after the revocation builder answers %s beside %s: %v", second, first, err)
+	}
+	if again, err := sidecar.ResolveAgentId("builder"); err != nil || again != second {
+		t.Fatalf("the new registration does not hold: %s, then %s: %v", second, again, err)
+	}
+	if _, err := sidecar.SignProvenance(first, AgentProvenancePurposeEvsAgent, message); !errors.Is(err, ErrAgentSubkeyRevoked) {
+		t.Errorf("the revoked id signed: %v", err)
+	}
+	if _, err := sidecar.SignProvenance(second, AgentProvenancePurposeEvsAgent, message); err != nil {
+		t.Errorf("the new registration's subkey: %v", err)
+	}
+	if again, err := sidecar.ResolveAgentId("reviewer"); err != nil || again != reviewerId {
+		t.Errorf("another label's registration moved: %s, then %s: %v", reviewerId, again, err)
+	}
+	// reviewer's agent never signed: its revocation ends its registration all the same
+	if err := sidecar.AgentRevoke(reviewerId); err != nil {
+		t.Fatal(err)
+	}
+	if again, err := sidecar.ResolveAgentId("reviewer"); err != nil || again == reviewerId || again == second {
+		t.Errorf("a registration revoked before it signed answers %s: %v", again, err)
+	}
+}
+
+// The registry refuses what it cannot hold: a label that is not one, a Locked sidecar and one with no identity, and a
+// registration or agent record that does not decode, a failure and never absence, so no id is drawn over it. Racing
+// first asks of one label draw one id.
+func TestAgentIdRegistryRefusals(t *testing.T) {
+	sidecar, _, _ := newAgentTestSidecar(t)
+	for _, label := range []string{"", "-x", "two words", "a/b", "x\n", string(make([]byte, 65))} {
+		if _, err := sidecar.ResolveAgentId(label); !errors.Is(err, ErrSidecarAgentLabel) {
+			t.Errorf("%q: %v", label, err)
+		}
+	}
+	if names, err := sidecar.coreSecrets.List(sidecarAgentLabelRecordPrefix); err != nil || len(names) != 0 {
+		t.Fatalf("a refused label was registered: %v %v", names, err)
+	}
+	if _, err := newSidecarBase(nil, cheapKeychainSettings()).ResolveAgentId("builder"); !errors.Is(err, ErrSidecarStoreLocked) {
+		t.Errorf("a Locked sidecar: %v", err)
+	}
+	if _, err := (&Sidecar{}).ResolveAgentId("builder"); !errors.Is(err, ErrSidecarNoIdentity) {
+		t.Errorf("a sidecar with no identity: %v", err)
+	}
+
+	builderId, err := sidecar.ResolveAgentId("builder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := sidecarAgentLabelRecordName("builder")
+	encoded := encodeSidecarAgentLabelRecord(builderId)
+	otherMagic := bytes.Clone(encoded)
+	otherMagic[0] ^= 1
+	otherVersion := bytes.Clone(encoded)
+	otherVersion[4] = sidecarAgentLabelRecordVersion + 1
+	for _, bad := range [][]byte{
+		nil,
+		encoded[:len(encoded)-1],
+		append(bytes.Clone(encoded), 0),
+		otherMagic,
+		otherVersion,
+		encodeSidecarAgentLabelRecord(Id{}),
+	} {
+		if err := sidecar.coreSecrets.Put(name, bad); err != nil {
+			t.Fatal(err)
+		}
+		if agentId, err := sidecar.ResolveAgentId("builder"); !errors.Is(err, ErrSidecarStoreFailed) {
+			t.Errorf("a registration of %x answered %s: %v", bad, agentId, err)
+		}
+		if kept, err := sidecar.coreSecrets.Get(name); err != nil || !bytes.Equal(kept, bad) {
+			t.Errorf("an id was drawn over a registration of %x: %x", bad, kept)
+		}
+	}
+	if err := sidecar.coreSecrets.Put(name, encoded); err != nil {
+		t.Fatal(err)
+	}
+	// an agent record that does not decode fails the ask as well, rather than reading as no tombstone
+	if err := sidecar.coreSecrets.Put(sidecarAgentRecordName(builderId), []byte("not an agent record")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sidecar.ResolveAgentId("builder"); !errors.Is(err, ErrSidecarStoreFailed) {
+		t.Errorf("an agent record that does not decode: %v", err)
+	}
+
+	// racing first asks of one label draw one id
+	agentIds := make(chan Id, 8)
+	errs := make(chan error, 8)
+	for i := 0; i < cap(agentIds); i += 1 {
+		go func() {
+			agentId, err := sidecar.ResolveAgentId("racer")
+			agentIds <- agentId
+			errs <- err
+		}()
+	}
+	racerIds := map[Id]bool{}
+	for i := 0; i < cap(agentIds); i += 1 {
+		racerIds[<-agentIds] = true
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(racerIds) != 1 {
+		t.Errorf("racing first asks drew %d ids", len(racerIds))
+	}
+}
+
+// An agent label's bound is a setting (QD-702): the default holds labels to 64 bytes, as §5.5 names, and a form of
+// another bound holds them to it.
+func TestAgentLabelBoundIsASetting(t *testing.T) {
+	settings := DefaultSidecarAgentLabelSettings()
+	if settings.MaxByteCount != 64 {
+		t.Fatalf("MaxByteCount is %d", settings.MaxByteCount)
+	}
+	longest := string(bytes.Repeat([]byte("a"), 64))
+	if err := settings.Check(longest); err != nil {
+		t.Errorf("a 64-byte label: %v", err)
+	}
+	if err := settings.Check(longest + "a"); !errors.Is(err, ErrSidecarAgentLabel) {
+		t.Errorf("a 65-byte label: %v", err)
+	}
+	shorter := &SidecarAgentLabelSettings{MaxByteCount: 8}
+	if err := shorter.Check("builder"); err != nil {
+		t.Errorf("a label inside a shorter bound: %v", err)
+	}
+	if err := shorter.Check("reviewers"); !errors.Is(err, ErrSidecarAgentLabel) {
+		t.Errorf("a label past a shorter bound: %v", err)
+	}
+}

@@ -31,7 +31,7 @@
 // order a caller takes its CUT and first ERASE in is the caller's: mail CUTs first; a record erasure ERASEs the bodies,
 // reads the stream heads again, then CUTs (QD-781). evs takes a CUT only from an admin, in the directory too (§11.12's
 // directory row), and readers ignore and alarm a set version from a signer who may not erase (evs_index_view.go,
-// search_fetch.go). No indexer takes part. Barriers evs.index.cut.built and .pushed, keyed <repo>/<ref>. Not safe for
+// search_fetch.go). No indexer takes part. Barriers evs.index.cut.built and .pushed, keyed <repo>:<ref>. Not safe for
 // concurrent use: one CUT at a time an eraser.
 
 package sidecar
@@ -235,9 +235,9 @@ func indexNewEraser(args *indexEraserArgs) (*IndexEraser, error) {
 	return &IndexEraser{args: *args, settings: settings, clock: clockOrReal(args.clock), log: loggerOrDefault(args.log)}, nil
 }
 
-// The barrier key of this ref: <repo>/<ref>.
+// The barrier key of this ref: <repo>:<ref>, an opaque id with no slash (testhook.go; I-13).
 func (self *IndexEraser) barrierKey() string {
-	return self.args.repoId.String() + "/" + self.args.refId.String()
+	return self.args.repoId.String() + ":" + self.args.refId.String()
 }
 
 // The ref's index at its head.
