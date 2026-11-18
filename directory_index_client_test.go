@@ -1,4 +1,4 @@
-//go:build !ios_extension
+//go:build !ios_extension && !sidecar_http
 
 // The directory client's index surface over its own copy (directory_index.go, directory_admin.go; RECORD-M10-04): the
 // cards source giving the announcements a synced copy holds, a renewal changing no version; the content the copy

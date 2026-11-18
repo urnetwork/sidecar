@@ -495,7 +495,7 @@ type SidecarDirectorySettings struct {
 	// Whether sessions read §16.11's instructions as they are from M10: <tool> is search_agents and a personal
 	// network's session takes its text. False, the default until M10's rollout reaches a deployment, keeps M6's texts,
 	// whose tool is directory_list.
-	SearchInstructions bool `settings:"zero"`
+	SearchInstructions bool
 }
 
 // §13.8's device key and the self-signed leaf a device presents until §13 issues it (§15.5, §11.11). The
