@@ -1,13 +1,17 @@
-// ur admin directory (§16.11's Surfaces and admins rows, D-CORE-13; plan-RECORD-small-readings #14; RECORD-M6-23):
+// ur admin directory (§16.11's Surfaces, admins and Index and search rows, D-CORE-13; plan-RECORD-small-readings #14;
+// RECORD-M6-23, RECORD-M10-04):
 //
 //	ur admin directory [--runs=<runs>] [--workers=<workers>] [--window=<days>] [--keep=<days>] [--searchable=<days>]
 //
 // With no option it prints the team's settings as this device honors them. Otherwise it signs, only after a yes on
 // /dev/tty, through a Confirm method: --runs and --workers file ServiceSettings.directory into the config head (an
 // Owner's or Admin's device that runs the network's config writer), and --keep and --searchable a RetentionPolicy for
-// the directory's coordination and request classes (a directory admin's device). --window is format 2's and refuses at
-// M6 with needs_format 2 before anything is asked or signed. The daemon refuses a caller with a harness process among
-// its ancestors, by the pid it read off the socket, and no MCP tool reaches any of it.
+// the directory's coordination and request classes (a directory admin's device), --searchable within the directory's
+// 7 to 400 days. --window sets the directory's index window, 7 to 90 days, a directory admin's act from format 2: a
+// window outside its days refuses as the options parse, and a directory before format 2 refuses with needs_format 2
+// before anything is asked or signed, by what the daemon's show method says of the directory; the daemon refuses the
+// same again before it signs anything of the call. The daemon refuses a caller with a harness process among its
+// ancestors, by the pid it read off the socket, and no MCP tool reaches any of it.
 
 package main
 
@@ -47,7 +51,7 @@ type urAdminDirectoryParams struct {
 	Runs string `json:"runs,omitempty"`
 	// on or off.
 	Workers string `json:"workers,omitempty"`
-	// Days; always refused at M6.
+	// Days of the directory's index window, format 2's; 0 leaves it.
 	WindowDays uint32 `json:"window_days,omitempty"`
 	// Days, for the coordination and request classes; 0 with Retention set keeps entries with no limit.
 	KeepDays       uint32 `json:"keep_days,omitempty"`
@@ -63,6 +67,12 @@ type urAdminDirectoryReply struct {
 	Unknown bool `json:"unknown,omitempty"`
 	// The retention entries a change wrote, one a class.
 	RetentionEntries []sidecar.Id `json:"retention_entries,omitempty"`
+	// Whether this device's directory is at format 2, so it takes an index window.
+	WindowReady bool `json:"window_ready,omitempty"`
+	// The index window a change wrote, the index roots that took it, and whether the write waits at the storage limit.
+	WindowDays    uint32 `json:"window_days,omitempty"`
+	WindowRoots   int    `json:"window_roots,omitempty"`
+	WindowWaiting bool   `json:"window_waiting,omitempty"`
 }
 
 // ServiceSettings.directory's runs as the head carries it.
@@ -112,10 +122,14 @@ func urAdminDirectoryMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
 				if err != nil {
 					return nil, err
 				}
+				directory := call.Sidecar.Directory()
+				reply := &urAdminDirectoryReply{WindowReady: directory != nil && directory.Format2()}
 				if !known {
-					return &urAdminDirectoryReply{Unknown: true}, nil
+					reply.Unknown = true
+					return reply, nil
 				}
-				return &urAdminDirectoryReply{Runs: urAdminDirectoryModeName(settings.Runs.String()), Workers: urAdminDirectoryModeName(settings.Workers.String())}, nil
+				reply.Runs, reply.Workers = urAdminDirectoryModeName(settings.Runs.String()), urAdminDirectoryModeName(settings.Workers.String())
+				return reply, nil
 			},
 		},
 		{
@@ -127,13 +141,18 @@ func urAdminDirectoryMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
 				if err := decodeUrParams(call, params); err != nil {
 					return nil, err
 				}
-				if params.WindowDays != 0 {
-					return nil, sidecar.ErrDirectoryWindowFormat
-				}
 				if call.Sidecar.HarnessAncestor(ctx, urCallPid(call)) {
 					return nil, errors.New("ur admin directory is refused under a harness process")
 				}
 				reply := &urAdminDirectoryReply{}
+				if params.WindowDays != 0 {
+					// first, so a directory before format 2 refuses the whole call with nothing signed
+					window, err := call.Sidecar.SetDirectoryIndexWindow(ctx, &sidecar.DirectoryIndexWindowArgs{WindowDays: params.WindowDays, Confirmed: true})
+					if err != nil {
+						return nil, err
+					}
+					reply.WindowDays, reply.WindowRoots, reply.WindowWaiting = window.WindowDays, window.RootCount, window.Waiting
+				}
 				if params.Runs != "" || params.Workers != "" {
 					change := &sidecar.DirectoryServiceSettingsChange{}
 					if params.Runs != "" {
@@ -187,7 +206,8 @@ func parseUrAdminDirectoryDays(options docopt.Opts, key string) (uint32, bool, e
 	return uint32(days), true, nil
 }
 
-// The params the options ask for: --window refuses here, before anything is asked or signed.
+// The params the options ask for: a --window or a --searchable outside the directory's days refuses here, before
+// anything is asked or signed.
 func urAdminDirectoryParamsOf(options docopt.Opts) (*urAdminDirectoryParams, error) {
 	params := &urAdminDirectoryParams{
 		Network: urOptionString(options, "--network"),
@@ -204,10 +224,14 @@ func urAdminDirectoryParamsOf(options docopt.Opts) (*urAdminDirectoryParams, err
 			return nil, err
 		}
 	}
-	if _, window, err := parseUrAdminDirectoryDays(options, "--window"); err != nil {
+	index := sidecar.DefaultDirectoryIndexSettings()
+	if window, windowSet, err := parseUrAdminDirectoryDays(options, "--window"); err != nil {
 		return nil, err
-	} else if window {
-		return nil, sidecar.ErrDirectoryWindowFormat
+	} else if windowSet {
+		if err := index.CheckWindowDays(window); err != nil {
+			return nil, err
+		}
+		params.WindowDays = window
 	}
 	keep, keepSet, err := parseUrAdminDirectoryDays(options, "--keep")
 	if err != nil {
@@ -216,6 +240,11 @@ func urAdminDirectoryParamsOf(options docopt.Opts) (*urAdminDirectoryParams, err
 	searchable, searchableSet, err := parseUrAdminDirectoryDays(options, "--searchable")
 	if err != nil {
 		return nil, err
+	}
+	if searchableSet {
+		if err := index.CheckSearchableDays(searchable); err != nil {
+			return nil, err
+		}
 	}
 	params.KeepDays, params.SearchableDays, params.Retention = keep, searchable, keepSet || searchableSet
 	return params, nil
@@ -227,7 +256,17 @@ func runUrAdminDirectory(ctx context.Context, cli *urCli, options docopt.Opts) e
 	if err != nil {
 		return err
 	}
-	if params.Runs == "" && params.Workers == "" && !params.Retention {
+	if params.WindowDays != 0 {
+		// the window is format 2's: a directory before it refuses before anything is asked
+		shown := &urAdminDirectoryReply{}
+		if err := cli.callDaemon(ctx, urMethodAdminDirectoryShow, &urAdminDirectoryParams{Network: params.Network}, false, shown); err != nil {
+			return err
+		}
+		if !shown.WindowReady {
+			return sidecar.ErrDirectoryWindowFormat
+		}
+	}
+	if params.Runs == "" && params.Workers == "" && !params.Retention && params.WindowDays == 0 {
 		reply := &urAdminDirectoryReply{}
 		if err := cli.callDaemon(ctx, urMethodAdminDirectoryShow, params, false, reply); err != nil {
 			return err
@@ -240,6 +279,9 @@ func runUrAdminDirectory(ctx context.Context, cli *urCli, options docopt.Opts) e
 		return nil
 	}
 	changes := []string{}
+	if params.WindowDays != 0 {
+		changes = append(changes, fmt.Sprintf("index window of %d days", params.WindowDays))
+	}
 	if params.Runs != "" {
 		changes = append(changes, "runs "+params.Runs)
 	}
@@ -254,6 +296,12 @@ func runUrAdminDirectory(ctx context.Context, cli *urCli, options docopt.Opts) e
 	question := fmt.Sprintf("Sign the team directory's %s?", strings.Join(changes, "; "))
 	if err := urDirectoryConfirmedCall(ctx, cli, urMethodAdminDirectory, params, question, reply); err != nil {
 		return err
+	}
+	switch {
+	case reply.WindowWaiting:
+		cli.printf("index window of %d days waits at the storage limit and is written when it clears\n", reply.WindowDays)
+	case reply.WindowDays != 0:
+		cli.printf("index window of %d days written on %d index root(s), from the next bucket\n", reply.WindowDays, reply.WindowRoots)
 	}
 	if reply.Runs != "" {
 		cli.printf("ServiceSettings.directory filed: runs %s, workers %s\n", reply.Runs, reply.Workers)
