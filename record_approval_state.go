@@ -125,11 +125,11 @@ func (self *ConfigApprovalStates) RuleNamesHarness(action *StoredCanonicalAction
 	return request != nil && request.NamesHarness
 }
 
-// The members of memberIds rule names, and the Owners and Admins among them whose decision meets §8.6's admin clause
-// only where the named ones cannot meet it themselves (rule.AdminClauseMet over them fails: the clause applies, none
-// of them is an admin, and no destination's one owner among them approves as autogroup:dst-owner for reach to its own
-// devices). Sorted and once each, or an error where the rule names no member, since no set could then make its k and
-// an admin asked alone would approve nothing the log counts.
+// The members of memberIds rule names, and the Owners and Admins among memberIds whose decision meets §8.6's admin
+// clause only where the named ones cannot meet it themselves, rule.AdminClauseMet over them failing: the clause
+// applies, none of them is an admin, and none is the destinations' one owner named as autogroup:dst-owner for reach to
+// its own devices (owner decision 180). Sorted and once each, or an error where the rule names no member, since no set
+// could then make its k and an admin asked alone would approve nothing the log counts.
 func approvalEligibleMembers(rule SpendRule, memberIds []Id) ([]Id, error) {
 	named := []Id{}
 	clauseAdmins := []Id{}
