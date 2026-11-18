@@ -1484,6 +1484,11 @@ func ReadDropListFiles(ctx context.Context, segmentCluster sidecar.BlobCluster, 
 	}
 }
 
+// A reindex was handed no drops and none of the job's list files reads whole to give them. Nothing was read past the
+// list files and nothing written, so the caller may take the drops from elsewhere, as sidecarctl's evs drop-reindex
+// takes them from the job's snap-0 (owner decision 570), and ask again.
+var ErrDropReindexNoDrops = errors.New("evs drop reindex has no drops")
+
 // What a reindex is asked: one job's list files to write again (DESIGN-DETAILS 10.5's corrupt row).
 type DropReindexRequest struct {
 	Cluster        sidecar.BlobCluster
@@ -1548,7 +1553,7 @@ func (self *DropResolve) Reindex(ctx context.Context, request *DropReindexReques
 		}
 	}
 	if len(drops) == 0 {
-		return result, fmt.Errorf("%w: no list file of job %s reads whole; name its drops", ErrDropJobState, sidecar.EvsKeyId(request.JobId))
+		return result, fmt.Errorf("%w: %w: no list file of job %s reads whole; name its drops", ErrDropJobState, ErrDropReindexNoDrops, sidecar.EvsKeyId(request.JobId))
 	}
 	covered := make([]*DropCovered, 0, len(drops))
 	for _, drop := range drops {
