@@ -27,7 +27,8 @@
 //     PairWriteInterval; a pair below its floor hands the floor to the gate as evidence, and the Find answers
 //     unavailable
 //  9. sign each: policy_version S''s position, the grant of the dial verdict, the publish verdict on tls/,
-//     or the receiver's own listen verdict on smtp/ and, standing in, on the system publish
+//     or the receiver's own listen verdict on smtp/ and, standing in, on the system publish; on ur/, the
+//     caller's sidecar as dialer_sidecar_id, its listener's subject (QD-989), and on no other name
 //
 // Who may Find what (§9.4's table). tls/ and smtp/ names are their edges' to dial, so a sidecar's Find of one
 // is denied; a blinded name is dialed within its own network (§6.4), so an edge's Find of one, or a sidecar's
@@ -259,9 +260,12 @@ func (self *SocketsService) find(r *http.Request) (*sidecar.SocketFindResult, *s
 
 	// 9
 	policyVersion := position
+	var dialerSidecarId *connect.Id
 	if name.namespace == sidecar.SocketNamespacePlatform {
 		// nothing of §8 allowed a ur/ ticket (namespace_ur.go)
 		policyVersion = 0
+		// the token's ur_sidecar_id, which authenticate requires of every caller but an edge, and no edge Finds ur/
+		dialerSidecarId = caller.principal.SidecarId
 	}
 	result := &sidecar.SocketFindResult{}
 	for index, passed := range ticketed {
@@ -271,6 +275,7 @@ func (self *SocketsService) find(r *http.Request) (*sidecar.SocketFindResult, *s
 			listener:        passed.listener,
 			dialerClientId:  dialerClientIdOf(passed.listener),
 			dialerNetworkId: caller.principal.NetworkId,
+			dialerSidecarId: dialerSidecarId,
 			policyVersion:   policyVersion,
 			grant:           passed.grant,
 			backup:          0 < index,

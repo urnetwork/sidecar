@@ -71,6 +71,11 @@ type SocketTicketKey struct {
 // of name and name_token says what is dialed. A plaintext name is an edge name, tls/, smtp/ or ur/, in
 // canonical form (D-SOCK-13), and only the first segment decides that: which ports and hosts a
 // namespace takes is §9.4's to refuse at registration and Find, so a later port needs no ticket change.
+//
+// dialer_sidecar_id is a whole id or none, and only a ur/ ticket carries one (QD-989, owner decision 560):
+// the service names the dialer's sidecar there alone, for a ur/ listener to read its subject from, while
+// tls/, smtp/, blinded and edge tickets name none. A ur/ ticket with none is well formed, and what its
+// subject then is, none, is its listener's to refuse.
 func checkSocketTicket(ticket *protocol.SocketTicket) error {
 	if ticket == nil {
 		return fmt.Errorf("%w: no ticket", ErrSocketTicketMalformed)
@@ -90,6 +95,10 @@ func checkSocketTicket(ticket *protocol.SocketTicket) error {
 	if ticket.GetExpireTimeMillis() <= ticket.GetIssueTimeMillis() {
 		return fmt.Errorf("%w: it expires before it issues", ErrSocketTicketMalformed)
 	}
+	dialerSidecarId := ticket.GetDialerSidecarId()
+	if len(dialerSidecarId) != 0 && len(dialerSidecarId) != socketTicketIdByteCount {
+		return fmt.Errorf("%w: a dialer_sidecar_id of %d bytes", ErrSocketTicketMalformed, len(dialerSidecarId))
+	}
 
 	name := ticket.GetName()
 	nameToken := ticket.GetNameToken()
@@ -101,6 +110,9 @@ func checkSocketTicket(ticket *protocol.SocketTicket) error {
 		if len(nameToken)%socketTokenByteCount != 0 || segmentCount < 1 || socketNameMaxSegmentCount < segmentCount {
 			return fmt.Errorf("%w: a token path of %d bytes", ErrSocketTicketMalformed, len(nameToken))
 		}
+		if len(dialerSidecarId) != 0 {
+			return fmt.Errorf("%w: a dialer sidecar on a token path", ErrSocketTicketMalformed)
+		}
 		return nil
 	}
 	segments, err := socketSegments(name)
@@ -108,7 +120,12 @@ func checkSocketTicket(ticket *protocol.SocketTicket) error {
 		return fmt.Errorf("%w: not a canonical name", ErrSocketTicketMalformed)
 	}
 	switch socketFirstSegmentNamespace(segments[0]) {
-	case SocketNamespaceTls, SocketNamespaceSmtp, SocketNamespacePlatform:
+	case SocketNamespacePlatform:
+		return nil
+	case SocketNamespaceTls, SocketNamespaceSmtp:
+		if len(dialerSidecarId) != 0 {
+			return fmt.Errorf("%w: a dialer sidecar outside ur/", ErrSocketTicketMalformed)
+		}
 		return nil
 	}
 	return fmt.Errorf("%w: a plaintext name outside the edge namespaces", ErrSocketTicketMalformed)

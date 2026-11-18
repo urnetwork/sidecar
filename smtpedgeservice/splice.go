@@ -3,10 +3,12 @@
 //
 // Serve listens as ur/smtpedge through a SocketPlatformListener on the host's platform clients in
 // urnetwork-edge (SOCK-M9-01), registers the SMTP_PROOF and SMTP_HANDSHAKE handlers on each client's dispatcher
-// in the edge role (proof_rpc.go), and serves each admitted stream: the network and client come from its ticket,
-// never from the sidecar, and the sidecar from SmtpDialerSource. A preamble that is not answered OK ends its
-// stream after the result frame; an OK one becomes a connection (connection.go), registered by its send_id until
-// it ends.
+// in the edge role (proof_rpc.go), and serves each admitted stream: its network, client and sidecar come from the
+// ticket admission verified, never from the sidecar. The sidecar, the §8 subject mail_send is judged for, is the
+// ticket's dialer_sidecar_id, which sockets filled at Find from the caller's token and signed with the rest, so the
+// edge needs no client-to-sidecar lookup or cache (QD-989, owner decision 560); a ticket naming none answers
+// TRY_LATER. A preamble that is not answered OK ends its stream after the result frame; an OK one becomes a
+// connection (connection.go), registered by its send_id until it ends.
 //
 // Drain stops new tickets and new streams, lets connections finish up to DrainTimeout on the engine's clock, and
 // resets the rest; mail then waits at its sender, never at the edge (§14.9). Close joins every goroutine.
@@ -29,12 +31,12 @@ import (
 // The platform name the engine listens on (§9.4, §14.4): an identifier.
 const SmtpEdgeSocketName = "ur/smtpedge"
 
-// The sidecar a dialing client is, from memory the host fills off the path: the §8 subject of mail_send. A ur/
-// ticket names the dialer's network and client and no sidecar, so until the ticket or the gate's feed carries
-// the binding (question smtp-m9-13-dialer-sidecar) the host gives this, and a miss answers TRY_LATER. Safe for
-// concurrent use; no method does I/O.
-type SmtpDialerSource interface {
-	SidecarForClient(networkId sidecar.Id, clientId sidecar.Id) (sidecarId sidecar.Id, ok bool)
+// One stream as the listener hands it over: its bytes, and the ticket admission verified it on. *sidecar.SocketConn
+// is one.
+type smtpAdmittedConn interface {
+	io.ReadWriteCloser
+	// A copy of the admitted ticket.
+	Ticket() *protocol.SocketTicket
 }
 
 // A cut or an outcome for the ladder, with the send record a cut writes first.
@@ -162,20 +164,20 @@ func (self *SmtpEdgeService) startStream() bool {
 	return true
 }
 
-// One admitted stream: its dialer from the ticket, then its preamble and connection.
-func (self *SmtpEdgeService) serveSocket(conn *sidecar.SocketConn) {
+// One admitted stream: its dialer from the ticket alone, then its preamble and connection. The ticket's
+// dialer_sidecar_id is the subject (QD-989); a ticket naming none leaves it zero, which the preamble answers
+// TRY_LATER, failing closed: mail waits at its sender.
+func (self *SmtpEdgeService) serveSocket(conn smtpAdmittedConn) {
 	ticket := conn.Ticket()
 	networkId, networkErr := sidecar.IdFromBytes(ticket.GetDialerNetworkId())
 	clientId, clientErr := sidecar.IdFromBytes(ticket.GetDialerClientId())
 	if networkErr != nil || clientErr != nil {
-		conn.Abort()
+		smtpAbortStream(conn)
 		return
 	}
 	stream := &smtpPreambleStream{NetworkId: networkId, ClientId: clientId}
-	if self.deps.Dialers != nil {
-		if sidecarId, ok := self.deps.Dialers.SidecarForClient(networkId, clientId); ok {
-			stream.SidecarId = sidecarId
-		}
+	if sidecarId, err := sidecar.IdFromBytes(ticket.GetDialerSidecarId()); err == nil {
+		stream.SidecarId = sidecarId
 	}
 	self.serveStream(conn, stream)
 }
