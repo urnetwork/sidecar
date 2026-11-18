@@ -86,7 +86,7 @@ func (self *sinkTestStates) RuleNamesHarness(action *sidecar.StoredCanonicalActi
 	return false
 }
 
-// The member alone approves, on any channel.
+// The member alone approves, on the device channel, and no admin clause applies.
 type sinkTestRule struct {
 	member sidecar.Id
 }
@@ -95,7 +95,8 @@ func (self *sinkTestRule) Evidence() []protocol.ApprovalChannel {
 	return []protocol.ApprovalChannel{protocol.ApprovalChannel_APPROVAL_CHANNEL_DEVICE}
 }
 func (self *sinkTestRule) ApproverCount() int                         { return 1 }
-func (self *sinkTestRule) Eligible(memberId sidecar.Id) bool          { return memberId == self.member }
+func (self *sinkTestRule) Names(memberId sidecar.Id) bool             { return memberId == self.member }
+func (self *sinkTestRule) ClauseAdmin(memberId sidecar.Id) bool       { return false }
 func (self *sinkTestRule) AdminClauseMet(memberIds []sidecar.Id) bool { return true }
 
 // No run is tainted.

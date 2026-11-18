@@ -30,7 +30,7 @@ Stage: Built at M6, off until an owner call
 
 ### proto-v1: §6's v1 set
 Stage: v1 (M6, M10)
-- **Deferred:** §6.18's v1 rows. At M6: FriendsAndFamily shares with C18, and same-network P2P built behind its switch. At M10 (owner decision 169): the SEARCH pair, Hello's feature bits 0 and 1, the control class's acceptance of SEARCH, and C19's window accounting with the app hosts' keepalive (owner decisions 176, 188).
+- **Deferred:** §6.18's v1 rows. At M6: FriendsAndFamily shares with C18, and same-network P2P built behind its switch. At M10 (owner decision 169): the SEARCH pair, Hello's feature bits 0 and 1, and the control class's acceptance of SEARCH, the pair's contracts accounted like any peer's (owner decision 609, which withdrew C19's window accounting and the app hosts' keepalive).
 - **Why:** Shares belong to M6 and remote search to M10 (owner decisions 86, 163, 169, 175).
 - **Launch instead:** v0's wire is M1's and M2's, with M4's seals and control contracts and M5's streams; it freezes at M2, and M10's bytes are additive to it.
 - **Lost:** Until M6 and M10: cross-network shares and remote search.

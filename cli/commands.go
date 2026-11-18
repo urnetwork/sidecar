@@ -112,6 +112,12 @@ type urSettings struct {
 	// the longest link's 161 B (a 63-character label, share/, a 26-character token and a 64-character fragment), so a
 	// file piped in by mistake is not read whole. A longer line is refused; zero or less refuses every line.
 	ShareLinkByteCount int
+	// How long ur search waits for a page where it names no --wait and stdout is a terminal: 10 s (§16.10's wire row);
+	// off a terminal it names none, and the daemon takes the MCP tool's default. Positive.
+	SearchTerminalWait time.Duration
+	// The most pages ur search --format jsonl reads, each a control call of at most its wait, before it prints its
+	// summary as it stands: 64, past a search's ten-minute cursor at 10 s a page. Positive.
+	SearchPageCount int
 }
 
 // The defaults, a fresh value each call.
@@ -130,6 +136,8 @@ func defaultUrSettings() *urSettings {
 		RelayReconnectInterval:     1 * time.Second,
 		CloseTimeout:               30 * time.Second,
 		ShareLinkByteCount:         1024,
+		SearchTerminalWait:         10 * time.Second,
+		SearchPageCount:            64,
 	}
 }
 
@@ -146,6 +154,9 @@ type urCli struct {
 	stderr   io.Writer
 	// whether stdin is a terminal, which decides what bare ur does
 	stdinIsTerminal func() bool
+	// whether stdout is a terminal, which decides whether ur search shows untrusted text and drops control characters
+	// (cmd_search.go)
+	stdoutIsTerminal func() bool
 	// opens the controlling terminal for a pass or a confirmation, never stdin
 	openTty func() (urTty, error)
 	// the instance's socket or pipe
@@ -214,6 +225,7 @@ func newUrCli() *urCli {
 		pid:              os.Getpid(),
 	}
 	cli.openSocketSession = cli.socketSession
+	cli.stdoutIsTerminal = func() bool { return isTerminal(os.Stdout) }
 	return cli
 }
 

@@ -188,15 +188,16 @@ ephemeral or cloud sidecar
 register                  a consented, approval-capable device signs KeyRegister after a device or presence
                           decision, never harness; a presence key's KeyRegister also carries the new key's own
                           signature over its body (WebAuthn: UP and UV set; fields 9 and 10 under purpose
-                          key-proof, §7.9's record bytes) and, from a device that registered a live presence
-                          key, that key's countersignature (countersign, below); the device about to sign
-                          refuses a key whose present attestation fails and never downgrades it to asserted;
-                          a P-256 key's public_key, in KeyRegister and KeyRow alike, is a SEC 1 uncompressed
-                          point, 65 bytes, for both profiles below, a host converting a COSE key's x and y to
-                          it, anything else being ErrSignedKey; ur keys add-ssh <path> reads one OpenSSH
-                          ssh-ed25519 public key file, shows its fingerprint and signs KeyRegister{alg:
-                          ssh-ed25519, purpose: sshsig} under this row, a /dev/tty-confirmed method refused
-                          from MCP, any other key type refused and the private key never reaching ur
+                          key-proof, §7.9's record bytes) and, from a device that registered a live presence key,
+                          that key's countersignature (countersign, below); clients request attestation none, so
+                          KeyRegister.attestation stays in the format empty and no device or reader verifies an
+                          attestation (owner decision 608); a P-256 key's public_key, in KeyRegister and KeyRow
+                          alike, is a SEC 1 uncompressed point, 65 bytes, for both profiles below, a host
+                          converting a COSE key's x and y to it, anything else being ErrSignedKey; ur keys add-ssh
+                          <path> reads one OpenSSH ssh-ed25519 public key file, shows its fingerprint and signs
+                          KeyRegister{alg: ssh-ed25519, purpose: sshsig} under this row, a /dev/tty-confirmed
+                          method refused from MCP, any other key type refused and the private key never reaching
+                          ur
 remove                    ur keys rm <key_id> signs KeyRevoke of the member's SSH key, or of a presence key only
                           from a device that registered a live presence key of its own, under countersign, for a
                           /dev/tty-confirmed command; ur keys ls lists the member's keys with each one's
@@ -205,28 +206,17 @@ first key                 a member's first presence key may register from a /dev
                           add-presence, in ur login, or in the app at the network's first admission (§18); every
                           member device lists it with its host and time; it is only as strong as that session
                           (owner decision 47)
-labels                    records and approver screens show presence (attested) or presence (asserted), both
-                          channel presence; the policy grammar is unchanged; each reader computes the label
-                          locally, at the carrying entry's time, and for a logged key whose attestation fails
-                          under its own roots shows presence (attestation refused), neither attested nor
-                          asserted, the log's KeyRegister rule reading no attestation (§7.9; owner decision 327);
-                          a label changes no authorization, and an asserted key's label rises to attested when
-                          a release pins its root, with no re-registration (owner decision 455)
+labels                    records and approver screens show every presence key under one label, presence, its
+                          channel presence; the policy grammar is unchanged, the log's KeyRegister rule reads no
+                          attestation (§7.9), and a label changes no authorization (owner decision 608, which
+                          reverses owner decisions 327 and 455)
 webauthn-es256 (COSE -7)  FIDO2 keys and Windows Hello through the platform WebAuthn API; passkeys in the iOS
                           and Android apps
-  registration            KeyRegister.attestation is a canonical CBOR map of two byte strings, {"attObj": the
-                          attestation object, "clientDataJSON": the create ceremony's client data}, a CTAP2
-                          client writing the JSON it hashed; the verifier checks the client data's type is
-                          webauthn.create and its origin is on per use's table, and packed, tpm, android-key
-                          or apple over SHA-256 of the client data against the vendor roots the release pins
-                          (Apple's WebAuthn root for apple, Google's hardware attestation roots for android-key,
-                          a short hand-kept vendor list for packed and tpm, in one data file a release step
-                          refreshes; never FIDO MDS data), leaving the challenge unchecked, since authData's
-                          credential key, which must equal public_key, binds the attestation to the
-                          registration: a statement that does not verify is refused, as is an apple or
-                          android-key chain that fails once its root is pinned; a packed or tpm statement that
-                          verifies and chains to no listed root, any format with no root pinned, fmt none and
-                          an empty attestation label asserted; any other attested (owner decision 455)
+  registration            the create ceremony requests attestation none, and KeyRegister.attestation is empty:
+                          no verifier, vendor root list or release step for roots, the key's own proof in
+                          fields 9 and 10 being what the log checks; the drafted verifier, its vectors, the
+                          pinned root list and its release step and the extra labels go in the review phase
+                          (owner decision 608)
   per use                 authenticatorData: rpIdHash = SHA-256("ur.io"), UP and UV set, signCount above the
                           stored one when either is non-zero; clientDataJSON: type webauthn.get, challenge =
                           base64url(SHA-256(§6.9's signed bytes)), origin exactly one the origins row lists; DER
@@ -242,7 +232,7 @@ webauthn-es256 (COSE -7)  FIDO2 keys and Windows Hello through the platform WebA
 ecdsa-p256-sha256         Secure Enclave keys created with kSecAccessControlUserPresence: the iOS app, and the
                           macOS ur bundle through purego (D-CORE-12)
   registration            no remote attestation of a Secure Enclave key's access control exists on an unmanaged
-                          device: asserted
+                          device, and none is asked; its label is presence, as every key's is (owner decision 608)
   per use                 DER ECDSA P-256 over §6.9's signed bytes; presence is the registering device's assertion
 countersign               (§7.9's presence row; owner decisions 185, 187) a key's per-use check over an act's
                           countersigned bytes in place of §6.9's signed bytes, the webauthn-es256 challenge being
@@ -278,14 +268,14 @@ k approvers  a rule asking for k needs k decisions with one request_sha256 from 
              admin clause where that applies, never one of the k (owner decision 471); the budget is the
              smallest uses, the expiry the earliest not_after
 multi-use    a decision with uses > 1 binds a template, a CanonicalAction with scope = true whose non-empty
-             fields every use equals, recipients a subset; each use's full action is what D-MCP-11 hashes;
-             the request names the uses its agent asks for a template, 1 for any other action, daemon-built,
-             under request_sha256 and rendered beside the action's other daemon-built fields, and the approver
-             signs that count as uses: an app's Decide (§18.5) approves the request as shown, and ur approve
-             --uses defaults to it, another count refused or narrowed as before, above 1 only for a template
-             and never above the request's; the field is a record.proto change after M3's freeze, taking the
-             version bump RECORD.md's rules give, and until it lands an app lists deny alone for a template
-             request (owner decision 574)
+             fields every use equals, recipients a subset; each use's full action is what D-MCP-11 hashes; the
+             request names the uses its agent asks for a template, 1 for any other action, daemon-built, under
+             request_sha256 and rendered beside the action's other daemon-built fields, and the approver signs
+             that count as uses: an app's Decide (§18.5) approves the request as shown, and ur approve --uses
+             defaults to it, another count refused or narrowed as before, above 1 only for a template and never
+             above the request's; the field is ApprovalRequest.uses = 18 at the request's version 2, which every
+             request is filed at, an approver that knows only version 1 refusing version 2 whole, and a
+             version-1 template names no count, so an app lists deny alone for it (owner decision 574)
 grants       an approval activates one grant, by §8.8's GrantActivate under the grant_id the approval fixes,
              or, for bridge_expose, at most uses BridgeRoute or BridgeMap rules, each under the rule id §17.8
              derives from its use's effect_key; a replay adds none, and a revoked grant_id or withdrawn rule id
@@ -680,6 +670,12 @@ message CanonicalAction {                   // built by the daemon; hashed as st
                                             // route grant alone, beside its subject, the requesting sidecar; an
                                             // admin's approval covers it as it covers every field (§8.8; owner
                                             // decision 346)
+  bool require_default_egress = 41;         // egress_change under exits alone: the subject's devices keep default
+                                            // egress on, as its BridgeEgressBody seals (§17.11), optional in kind
+                                            // 5 and required by no template, rendered as its own clause, "and
+                                            // require its devices to keep default egress on"; refused under auto
+                                            // or none and on any other kind, version 1, on no server path; an
+                                            // approver that cannot name it refuses the action (owner decision 607)
 }
 // Rendering (D-MCP-17): approver devices render only these daemon-built fields as the action, with the
 // request's daemon-built 14 to 17 and an opened sealed_detail, and ApprovalRequest.summary and preview as
@@ -690,15 +686,20 @@ message ApprovalRequest {                   // body of an approval entry
   string summary = 7;                       // agent text, shown as untrusted
   uint32 risk = 8;                          // SidecarRisk: 1 normal for every action (owner decision 279)
   bytes requester_sidecar_id = 9; bool tainted = 10; repeated bytes approvers = 11; int64 not_after_millis = 12;
-  uint32 version = 13;                      // 1
+  uint32 version = 13;                      // 1, or 2, which adds uses (18) and always sets it; an approver
+                                            // that does not know a version refuses it (owner decision 574)
   uint32 local_port = 14; int32 weight = 15; repeated string alpn = 16;  // daemon-built and rendered by
                                             // approvers, under request_sha256: the local port a socket_listen,
                                             // tls_publish, bridge_forward or bridge_expose binds, a listen's
                                             // weight and a publish's ALPNs (owner decision 457)
   string socket_name = 17;                  // a socket_listen's name, which agrees with its action's one sock:
                                             // entry in grant_dst; no server sees it (owner decision 457)
-  // the uses an agent requests for a template, daemon-built and rendered (16.6's multi-use row), join this
-  // fence with record.proto's field and its version bump (owner decision 574)
+  uint32 uses = 18;                         // version 2's: how many distinct actions the agent asks the
+                                            // approval to cover, daemon-built and rendered, 2 or more for a
+                                            // template (scope = true), 1 for any other action, never 0; signed
+                                            // as ApprovalDecision.uses, or for a template a smaller count of 2
+                                            // or more, never a larger one; a version-1 request sets none
+                                            // (16.6's multi-use row; owner decision 574)
 }
 message ApprovalDecision {                  // inside §6 Signed, purpose approval; holds no run or agent id
   bytes approval_id = 1;
@@ -1232,7 +1233,10 @@ documents   derived (§11.14): one per announcement, registered as a/ || writer_
             entries folding into it; one per stream entry
 versions    an announcement document's version is Announcement.version: a content change raises it; a renewal
             keeps it and writes no index entry, nor does an ended item dropped from its card; only a withdrawal
-            or a revocation writes a tombstone
+            or a revocation writes a tombstone; since a renewal writes no entry, an announcement's row keeps the
+            times the content-changing version held, search_agents reading the current expiry from the fold, and
+            a check by rebuild of the cards ref's index compares an announcement row less its expires, its other
+            bytes, keys and version matching (§11.14's determinism row; owner decision 605)
 fields      §11.14's registry for this class: 4 a run's title or a repo's display name; 5 prose, with the
             identifier values harness, host label, service names, topics and claim targets; 6 announcement kind
             (run, worker, repo) or entry kind; 7 sidecar_id; 8 agent_id; 9 agent label; 10 run_id; 11 member_id;
@@ -1460,23 +1464,28 @@ revoke      the owner (a repo admin; owner-bound, a consented device of its owne
             directory revoke <repo>, or the app): (1) it writes the private marker over the item (from format 2
             an r/ overwrite, purged about a minute later, owner decision 161; at M6 a newer announce entry), so
             every honest reader stops showing the name at once; (2) it appends to its stream an erasure_request
-            entry, DirectoryErasureRequest (Requests), journaled before the marker so a restart files it once, in
-            the marker's push at M6; (3) the directory's erasure runner (Erasure and removal) checks that the
+            entry, DirectoryErasureRequest (Requests), journaled before the marker so a restart files it once,
+            in the marker's push at M6; (3) the directory's erasure runner (Erasure and removal) checks that the
             entry's signer is a repo admin of the repo at its push's pin (owner-bound: its owner's consented
-            device) and that the marker is still the repo's newest item, then erases every copy holding the name,
-            the repo's and its runs': a per-entry ERASE of each earlier announce entry for the repo or a run
-            naming it (16.8) and, from format 2, a CUT on the cards ref and on ur/index listing the documents
-            that name it (§11.12), a CLOSURE rewriting under fresh keys the index files holding them, then the
-            ERASE of the old slots' keys (§11.12, §11.14), each ERASE's sealed note naming the request; at each
-            later sync while the marker stands, for 30 days, it erases any copy naming the repo that a daemon
-            wrote after the request; a request whose check fails erases nothing and alarms, naming its signer; a
-            request that lapsed because its repo was announced again stays lapsed, the runner comparing its
-            marker_version with the version of the announcement that replaced its marker, which it keeps per
-            request in the fold, not only with the standing marker, so a later revocation's marker revives none
-            and each ERASE names the revocation a person just made (owner decision 472); (4) until an ERASE names
-            the request, the revoking device, ur directory revoke and ur status show the erasure pending with its
-            age, and past 24 h every directory admin's device raises directory_erasure (§5.4); a reader that
-            syncs the copies meanwhile keeps them, as §2.8 discloses
+            device) and that the marker is still the repo's newest item, then erases every copy holding the
+            name, the repo's and its runs': a per-entry ERASE of each earlier announce entry for the repo or a
+            run naming it (16.8) and, from format 2, a CUT on the cards ref and on ur/index listing the
+            documents that name it (§11.12), a CLOSURE rewriting under fresh keys the index files holding them,
+            then the ERASE of the old slots' keys (§11.12, §11.14), each ERASE's sealed note naming the request;
+            at each later sync while the marker stands, for 30 days, it erases any copy naming the repo that a
+            daemon wrote after the request; a request whose check fails erases nothing and alarms, naming its
+            signer; a request that lapsed because its repo was announced again stays lapsed, the runner
+            comparing its marker_version with the version of the announcement that replaced its marker, which it
+            keeps per request in the fold, not only with the standing marker, so a later revocation's marker
+            revives none and each ERASE names the revocation a person just made (owner decision 472); a copy
+            that no longer opens a request's own marker entry, while a later marker of the repo stands, takes
+            the request as superseded, from what every copy holds: its runner works none of it, shows it as no
+            pending erasure and raises no directory_erasure for it, later copies going under the newer request,
+            whose ERASEs cover every copy the older could name, and its revoker reads it as lapsed, with no
+            format change (owner decision 604); (4) until an ERASE names the request, the revoking device, ur
+            directory revoke and ur status show the erasure pending with its age, and past 24 h every directory
+            admin's device raises directory_erasure (§5.4); a reader that syncs the copies meanwhile keeps them,
+            as §2.8 discloses
 runs        a run in an evs repo with no live, non-private item (private, revoked, not announced by default, or
             not yet) announces its repo_id with private true and project and branch empty, its daemon rewriting a
             live item so once it reads the repo's marker; readers that read the repo show its name from their own
@@ -1911,7 +1920,7 @@ sdk           GetDirectory() *SidecarDirectory, nil outside a team network: List
 
 **D-MCP-18 (proposed).** Read receipts are budgeted deposits made before decryption, a first read that cannot deposit fails closed, and ingest refuses, with an alarm, a receipt-only depositor's other entries. *Why:* a read-only reader cannot write the author's vault or inject into it, the author sees an attempt, and receipts must not need the author online.
 
-**D-MCP-19 (proposed).** Presence evidence follows 16.6's profiles: WebAuthn with UP and UV per use, attested or asserted, and Secure Enclave keys labeled asserted; a presence countersignature (§7.9's presence row) runs the same check over its act's countersigned bytes, UV required and signCount not compared (owner decisions 185, 187). *Why:* a P-256 signature alone proves no person was present; a countersignature stops a thief only if it needs the person, and a verifier of one statement holds no counter.
+**D-MCP-19 (proposed).** Presence evidence follows 16.6's profiles: WebAuthn with UP and UV per use, and Secure Enclave keys, every key labeled presence with no attestation verified (owner decision 608); a presence countersignature (§7.9's presence row) runs the same check over its act's countersigned bytes, UV required and signCount not compared (owner decisions 185, 187). *Why:* a P-256 signature alone proves no person was present; a countersignature stops a thief only if it needs the person, and a verifier of one statement holds no counter.
 
 **D-MCP-20 (proposed).** Search is local and query-blind: one engine on the device serves `ur search`, `ur agents` and the three MCP tools on daemon hosts, an app host's remote search being §11.14's, writes nothing to evs but 16.10's read receipts, and fetches index objects only by sync position, `more` taking every missing all object whole, newest first (16.10; I-19). *Why:* the server then learns only object sizes, rewrite times, writers and sync positions; fetching by query, or stopping at enough hits, would leak a query's terms or selectivity (owner decisions 151, 152).
 

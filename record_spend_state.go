@@ -19,16 +19,22 @@
 //	                 S(n)'s time (§7.9's presence row, config_keys.go)
 //	governing rule   a grant action, one naming rule_id (QD-064's fields 8, 10, 11, 28 and 29): the requests rule
 //	                 MatchAclRequest finds for it at S(n), its approvers resolved for the grant's subject and
-//	                 destinations, §8.6's admin clause counting an admin wherever the grant touches another member's
-//	                 devices, a share or autogroup:public, its evidence the row's effective list (the format's three
-//	                 channels where the row lists none), k its approvers; any other action, which no requests rule
-//	                 names (dns_set, dns_delete, bridge_expose): the requester's owner or sponsor (§8.6's default,
-//	                 autogroup:self, autogroup:admin where none stands), k = 1, and the document's evidenceDefault
-//	                 as the rows carry it, AclRows.evidence_default, which each base compiles (QD-727), the
-//	                 format's three channels where the rows list none, as a state before its first base does
+//	                 destinations, who alone count toward k, its evidence the row's effective list (the format's
+//	                 three channels where the row lists none), k its approvers, and §8.6's admin clause wherever
+//	                 the grant touches another member's devices, a share or autogroup:public, which an Owner's or
+//	                 Admin's decision meets whether or not the rule names it; any other action, which no requests
+//	                 rule names (dns_set, dns_delete, bridge_expose): the requester's owner or sponsor (§8.6's
+//	                 default, autogroup:self, autogroup:admin where none stands), k = 1, no admin clause, and the
+//	                 document's evidenceDefault as the rows carry it, AclRows.evidence_default, which each base
+//	                 compiles (QD-727), the format's three channels where the rows list none, as a state before its
+//	                 first base does
 //
-// So the daemon, a gate and a reader, each from rows alone, give one verdict for either kind of action (D-MCP-12), and
-// a document that narrows evidenceDefault, to device alone, say, is held to at every one of them.
+// An Owner's or Admin's decision the governing rule does not name meets only the admin clause, where that applies,
+// and is never one of the k, as the authorization log's quorum counts it (acl_grant.go's grantQuorum; owner decisions
+// 349 and 471): SpendRule tells the two apart, Names for the members who count toward k and ClauseAdmin for the
+// Owners and Admins whose decision meets the clause. So the daemon, a gate and a reader, each from rows alone, give
+// one verdict for either kind of action and for any decision set (D-MCP-12), and a document that narrows
+// evidenceDefault, to device alone, say, is held to at every one of them.
 //
 // AD4: neither type takes a run id, an agent id, a recipient or a preview, since a gate holds none of them.
 //
@@ -71,15 +77,21 @@ type SpendState interface {
 	Govern(action *StoredCanonicalAction, spender Id, now time.Time) (SpendRule, error)
 }
 
-// The rule that governs one action at P, as the spend check reads it (§16.6, §8.6).
+// The rule that governs one action at P, as the spend check reads it (§16.6, §8.6). A member's decision spends under
+// it where Names or ClauseAdmin holds, and counts toward k only where Names does (owner decision 471).
 type SpendRule interface {
 	// The governing evidence list: the matching requests rule's, else the document's evidenceDefault. A channel
 	// outside it is refused, so an empty list refuses every channel.
 	Evidence() []protocol.ApprovalChannel
-	// k: how many distinct eligible approvers a decision set needs, at least 1.
+	// k: how many distinct approvers the rule names a decision set needs, at least 1.
 	ApproverCount() int
-	// Whether the member approves under the rule at P.
-	Eligible(memberId Id) bool
+	// Whether the rule's approvers name the member at P, so its decision is one of the k: autogroup:admin or another
+	// role autogroup it holds, a user or group listing it, or an owner slot (autogroup:self, autogroup:sponsor,
+	// autogroup:dst-owner) naming it or standing in as autogroup:admin where no one owner or sponsor stands (D-ACL-23).
+	Names(memberId Id) bool
+	// Whether the member is an Owner or Admin whose decision meets §8.6's admin clause at P, named or not: false
+	// wherever the rule asks no clause. Such a decision spends, and is one of the k only where Names holds too.
+	ClauseAdmin(memberId Id) bool
 	// Whether distinct approvers meet §8.6's admin clause, true where the rule asks none.
 	AdminClauseMet(memberIds []Id) bool
 }
@@ -236,6 +248,7 @@ type configSpendRule struct {
 	ask     *AclGrantAsk
 	now     time.Time
 
+	// the approvers the rule names, who alone count toward k
 	approvers *AclApprovers
 	count     int
 	// §8.6's admin clause for a grant: only an admin meets it, or it reaches these other members' devices
@@ -256,12 +269,14 @@ func (self *configSpendRule) ApproverCount() int {
 	return self.count
 }
 
-// The rule's resolved approvers, and an admin wherever §8.6's admin clause asks one, since an admin's approval counts
-// toward k there even where the rule names no admin (acl_grant.go's quorum).
-func (self *configSpendRule) Eligible(memberId Id) bool {
-	if self.acl.Approves(self.approvers, memberId) {
-		return true
-	}
+// The rule's resolved approvers, as acl_grant.go's quorum counts them (QD-863).
+func (self *configSpendRule) Names(memberId Id) bool {
+	return self.acl.Approves(self.approvers, memberId)
+}
+
+// An Owner or Admin wherever §8.6's admin clause applies, as acl_grant.go's quorum takes one's decision for the
+// clause whether or not the rule names it.
+func (self *configSpendRule) ClauseAdmin(memberId Id) bool {
 	return self.adminNeeded() && self.acl.memberAdmin(memberId)
 }
 

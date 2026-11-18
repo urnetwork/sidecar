@@ -1666,3 +1666,171 @@ assert DECISIONS_INTRO.count(_D591) == 1, 'decisions lead moved'
 DECISIONS_INTRO = DECISIONS_INTRO.replace(
     _D591, "the idle reap leaves edge clients alone (591); and a cascade's void of a recovery binding restores no "
     "earlier one (592), reversing @@OD:556@@ and the restore clause of @@OD:149@@. ")
+INDEX += [
+    (593, 'A process-wide Env',
+     "operator-core's `SetGlobalEnv` and `GlobalEnv` hold one process-wide `Env`, which every service process "
+     'server launches sets at startup; code with no `Env` of its own reads it.'),
+    (594, "sidecar's server-hosted packages",
+     'sidecar/model, sidecar/controller, sidecar/work and sidecar/handler hold its server-hosted code: model and '
+     'controller take the `Env` first, work and handler read the global one.'),
+    (595, "The release fixture's base and limits",
+     "The real fixture's copies name their one commit main for X9's rule, and the real fixture runs under a 3 h "
+     "limit of its own in run.sh's BUILD_TEST and at sidecar-gate."),
+    (596, "The leg closure's reviewed seams",
+     "The `ios_extension` leg's closure skips seven reviewed registration seams, `evs_read_provenance.go` first, so "
+     'its list names only what the leg links.'),
+    (597, "smtpedge's file capability",
+     "A static Go helper sets `CAP_NET_ADMIN` on smtpedge's binary in a build stage, and a release check refuses an "
+     'image whose binary lacks it.'),
+    (598, "FS-86's card commits on quiet T3",
+     "FS-86's card commits are judged on T3's 4-host file-cluster layout with nothing else running; the local "
+     "stack's run is a reduced-scale form."),
+    (599, 'A cache drop resets the sync',
+     "`DropCache` resets the sync engine's loaded manifest, plan and versions of each ref it drops, so the next "
+     'round fetches again.'),
+]
+for _n, _note in [
+        (251,
+         ' Amended by @@OD:593@@ for one process-wide `Env`, which @@OD:594@@\'s work and handler packages read.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 600))
+DATES.update({593: '2026-11-17', 594: '2026-11-17', 595: '2026-11-17', 596: '2026-11-18', 597: '2026-11-18',
+              598: '2026-11-18', 599: '2026-11-17'})
+_D592 = "and the restore clause of @@OD:149@@. "
+assert DECISIONS_INTRO.count(_D592) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D592, "and the restore clause of @@OD:149@@. The owner's instructions on operator-core give it one process-wide "
+    "`Env` (593), amending @@OD:251@@, and sidecar its model, controller, work and handler packages (594); the "
+    "build's answers number the release fixture's base and limits (595), the leg closure's reviewed seams (596), "
+    "smtpedge's file capability (597), FS-86's card commits judged on quiet T3 (598) and a cache drop that resets "
+    "the sync (599). ")
+INDEX += [
+    (600, "A gap head drops a path's record",
+     "On a gap head a reader takes a recorded path that evs serves absent, or serves its removal, with no alarm "
+     'and drops its record.'),
+    (601, "Presents beside an absent reply",
+     "For a path it serves no version, removal or base, evs sends the present of the path's own change and of a "
+     "prefix's removal in each rooted walked statement."),
+    (602, 'A re-seed as deleted shows deleted',
+     "Under reseed evs's place route writes `repo/` deleted at creation for a repo re-seeded as deleted, and the "
+     'groups step mends a keying `repo/` by activate and DELETE.'),
+    (603, "Only a page judges a durable fall",
+     "A reset that shows a durable topic below the version held sends the client to `versions` once, whose page "
+     'alarms if the fall is real.'),
+    (604, 'A superseded erasure request',
+     "A copy that no longer opens a request's own marker entry, while a later marker stands, takes the request "
+     'as superseded.'),
+    (605, "A renewed announcement's row",
+     "An announcement's index row keeps its content version's times, and a check by rebuild compares it less "
+     'its `expires`.'),
+]
+assert [r[0] for r in INDEX] == list(range(1, 606))
+DATES.update({600: '2026-11-17', 601: '2026-11-17', 602: '2026-11-17', 603: '2026-11-17', 604: '2026-11-17',
+              605: '2026-11-18'})
+_D599 = "and a cache drop that resets the sync (599). "
+assert DECISIONS_INTRO.count(_D599) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D599, "a cache drop that resets the sync (599), a gap head that drops a path's record (600), presents beside an "
+    "absent reply (601), a re-seed as deleted that shows deleted from its placement (602), a durable fall judged by "
+    "a `versions` page alone (603), a superseded erasure request (604) and a renewed announcement's row (605). ")
+INDEX += [
+    (606, "`ur tun`'s default routes optional",
+     '`ur tun` takes the default routes only with default egress on and an egress destination; route local '
+     'traffic decides with no destination.'),
+    (607, 'A required default egress',
+     "Under `exits` a network may require default egress on, sealed in the exits body; `egress_change` carries "
+     'the requirement in field 41.'),
+]
+for _n, _note in [
+        (479, ' Amended by @@OD:606@@: the capture is the person\'s choice.'),
+        (480, ' Amended by @@OD:606@@: only while `ur tun` takes the default routes.'),
+        (482, ' Amended by @@OD:606@@: only while `ur tun` takes the default routes.'),
+        (462, ' Extended by @@OD:607@@: `require_default_egress = 41` under exits.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 608))
+DATES.update({606: '2026-11-17', 607: '2026-11-17'})
+_D605 = "and a renewed announcement's row (605). "
+assert DECISIONS_INTRO.count(_D605) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D605, "and a renewed announcement's row (605); the owner's instruction on `ur tun` makes its default routes the "
+    "person's choice (606), amending @@OD:479@@, @@OD:480@@ and @@OD:482@@, and a network may require default egress "
+    "(607), extending @@OD:462@@. ")
+INDEX += [
+    (608, 'No presence attestation',
+     'Presence keys verify no WebAuthn attestation: clients request none, `KeyRegister.attestation` stays empty, '
+     'and every key shows one label, presence.'),
+]
+for _n, _note in [
+        (327, ' Reversed by @@OD:608@@: no attestation is verified.'),
+        (455, ' Reversed by @@OD:608@@: no roots are pinned and every key shows presence.'),
+        (553, ' Reversed by @@OD:608@@: api-7 shows an empty attestation.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 609))
+DATES.update({608: '2026-11-17'})
+_D607 = "and a network may require default egress (607), extending @@OD:462@@. "
+assert DECISIONS_INTRO.count(_D607) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D607, "and a network may require default egress (607), extending @@OD:462@@. The complexity review's last answers "
+    "number presence keys with no attestation (608), reversing @@OD:327@@, @@OD:455@@ and @@OD:553@@. ")
+INDEX += [
+    (609, "C19's windows withdrawn",
+     "Remote search's pair is accounted like any peer's: no window ledger, floor, withheld report, bit-1 marking, "
+     'warm pair or keepalive.'),
+]
+for _n, _note in [
+        (176, ' Reversed by @@OD:609@@: C19 is withdrawn.'),
+        (188, ' Reversed by @@OD:609@@: no windows or floor.'),
+        (191, ' Reversed by @@OD:609@@: no keepalive holds the session.'),
+        (268, ' Its FS-125 gate is reversed by @@OD:609@@.'),
+        (391, ' Its warm pairs are reversed by @@OD:609@@.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 610))
+DATES.update({609: '2026-11-17'})
+_D608 = "number presence keys with no attestation (608), reversing @@OD:327@@, @@OD:455@@ and @@OD:553@@. "
+assert DECISIONS_INTRO.count(_D608) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D608, "number presence keys with no attestation (608), reversing @@OD:327@@, @@OD:455@@ and @@OD:553@@, and C19's "
+    "windows withdrawn (609), reversing @@OD:176@@, @@OD:188@@ and @@OD:191@@ and the warm pairs of @@OD:391@@. ")
+INDEX += [
+    (610, 'MLS Later, wraps in v0',
+     "v0 distributes every group key by `KeyDelivery` wraps alone; MLS is Later, its drafted code dark, and the "
+     'review phase reworks key formation onto deliveries.'),
+]
+for _n, _note in [
+        (1, ' Reversed by @@OD:610@@: v0 distributes keys by wraps alone, and MLS is Later.'),
+        (60, ' Reversed by @@OD:610@@ for v0: every reader holds wraps until MLS returns.'),
+        (144, ' Moot in v0 by @@OD:610@@: every member device reads by wraps.'),
+        (182, ' Moot in v0 by @@OD:610@@: the directory is read by wraps.'),
+        (361, ' Moot by @@OD:610@@ until MLS returns.'),
+        (363, ' Moot by @@OD:610@@ until MLS returns.'),
+        (366, ' Moot by @@OD:610@@ until MLS returns.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 611))
+DATES.update({610: '2026-11-17'})
+_ix = [r[0] for r in X_ROWS].index('X12')
+_x = X_ROWS[_ix]
+_old12 = "MLS in v0 (@@OD:1@@), built in house as 10.4's subset, its audit deferred (@@OD:43@@, @@OD:99@@),"
+assert _x[2].startswith(_old12), 'X12 row moved'
+X_ROWS[_ix] = (_x[0], _x[1], "Wraps alone in v0, every group key by §10.5's deliveries, and MLS Later (@@OD:610@@, amending "
+               "@@OD:1@@): built in house as 10.4's subset, its drafted code dark and its audit deferred (@@OD:43@@, @@OD:99@@),"
+               + _x[2][len(_old12):]) + tuple(_x[3:])
+_D609 = "and the warm pairs of @@OD:391@@. "
+assert DECISIONS_INTRO.count(_D609) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D609, "and the warm pairs of @@OD:391@@, and MLS set aside for Later, every group key going by wraps in v0 (610), "
+    "amending @@OD:1@@ and @@OD:60@@. ")

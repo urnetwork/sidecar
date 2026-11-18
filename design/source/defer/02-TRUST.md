@@ -30,7 +30,7 @@ Stage: Later
 
 ### trust-external-audit: An external security review and audit
 Stage: Later, unless the owner reinstates it
-- **Deferred:** An independent review or audit of the cryptography: the in-house MLS subset whose audit owner decision 43 planned, the key ladder, the storage format and path tokens, and the zero-knowledge mail proofs (owner decisions 99 and 119; Q-TEST-3, Q-TRUST-8, Q-KEYS-1).
+- **Deferred:** An independent review or audit of the cryptography: the in-house MLS subset whose audit owner decision 43 planned, which is Later with MLS itself (owner decision 610), the key ladder, the storage format and path tokens, and the zero-knowledge mail proofs (owner decisions 99 and 119; Q-TEST-3, Q-TRUST-8, Q-KEYS-1).
 - **Why:** The owner's words (owner decision 99): "No review at the moment, just get it working."
 - **Launch instead:** The mlswg vectors and differential tests (owner decision 43), fuzzing (owner decision 101), and the outbound-mail gate as owner decision 99 restates it: sound by design analysis, working, fast enough and interop-tested. Product copy may say "end-to-end encrypted" with §2.18's unaudited-cryptography disclosure on the security page, no audit gating it (owner decision 119).
 - **Lost:** Independent assurance. §2.18's risk row rates unaudited novel cryptography Medium likelihood and Critical impact, and the security page discloses it.
