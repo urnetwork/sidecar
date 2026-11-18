@@ -118,3 +118,104 @@ together by simulation in `three-faults`. The two stopped runs ended:
   a crash or a host failure. Liveness beyond the two rows: two writes of either kind beside a host
   failure, without symmetry, was stopped unfinished at 4.2 M states to free the host. A simulation
   shows only that the behaviors it drew kept every invariant.
+
+## IndexRollup.tla
+
+§22.8's model of the search index's upkeep on one ref, on DESIGN-DETAILS.md section 1's rules under
+owner decision 584's full entries (QD-1036): every entry is full or a tombstone and is taken as it
+stands, a writer reuses any absorbed slot that is not its head and removes every absorbed large entry
+at its next push, and the erasure's CLOSUREs rewrite each file that held a listed version, absorbed
+slots included, in no order. The diff, its base, kept slots, composed merges and roll-ups went with
+the invariant that held them, ChainsResolve, its twins (DiffOnListed, ReusePinned, CleanupReferenced,
+MergeRemovesLarge) and three reach states. The cfg's CUT now lists d1 as its eraser read it
+(CutVersion "read"); a CUT listing d1 as committed when it lands is the `cut-commit` ground. Every run
+was on 2026-11-18 on 6 workers, on a host the build lanes were loading at a load average between 70
+and 105 on 14 cores, so a time here is several times an idle host's. A breadth-first run on several
+workers may count a few states more or fewer from one run to the next, and a twin's count is what TLC
+had explored when it met its violation.
+
+### The gate's run
+
+`run-tlc.sh twins IndexRollup`, as model_test.go's TestIndexRollupMutantsFailTlc ran it at 68a26f8c.
+modelled.yml records it. The model at its cfg's bounds and its liveness there (`run-tlc.sh model` and
+`live`) were not run: the cfg's bounds do not finish breadth-first on a shared host, and the design
+grounds below stand in for them.
+
+```text
+== PASS twin-NoEpochCheck: CutFences violated as it must, exit 12, 39 distinct states, depth 11, a trace of 6 states, 03s
+== PASS twin-BuildIgnoresSet: CutFences violated as it must, exit 12, 44 distinct states, depth 9, a trace of 6 states, 04s
+== PASS twin-EraseLiveFirst: ResultsHold violated as it must, exit 12, 195 distinct states, depth 11, a trace of 10 states, 03s
+== PASS twin-EarlyComplete: ErasedUnreadable violated as it must, exit 12, 43 distinct states, depth 11, a trace of 10 states, 02s
+== PASS twin-ClosureNoCas: ResultsHold violated as it must, exit 12, 224 distinct states, depth 12, a trace of 11 states, 03s
+== PASS twin-EraseSkipsAbsorbed: ErasedUnreadable violated as it must, exit 12, 84 distinct states, depth 15, a trace of 12 states, 02s
+== PASS twin-MergeIgnoresEpoch: EpochHolds violated as it must, exit 12, 84 distinct states, depth 16, a trace of 8 states, 03s
+== PASS twin-MergeDropsTombstone: ResultsHold violated as it must, exit 12, 2006 distinct states, depth 11, a trace of 9 states, 05s
+== PASS twin-ReuseUnabsorbed: ResultsHold violated as it must, exit 12, 208 distinct states, depth 8, a trace of 7 states, 03s
+== PASS twin-RollupForgetsHeads: ResultsHold violated as it must, exit 12, 4502 distinct states, depth 12, a trace of 12 states, 08s
+== PASS twin-MergeKeepsOld: OneVersionEach violated as it must, exit 12, 46 distinct states, depth 11, a trace of 11 states, 03s
+== PASS twin-NoLockFence: RollsOnce violated as it must, exit 12, 92 distinct states, depth 16, a trace of 15 states, 02s
+== PASS twin-NoOwnCas: ResultsHold violated as it must, exit 12, 38675 distinct states, depth 15, a trace of 13 states, 28s
+== PASS twin-CleanupUnabsorbed: ResultsHold violated as it must, exit 12, 78 distinct states, depth 7, a trace of 7 states, 02s
+== PASS twin-NoPromote: ResultsHold violated as it must, exit 12, 10189 distinct states, depth 15, a trace of 15 states, 08s
+== PASS twin-NoPromoteLive: BucketsExact violated as it must, exit 12, 5436 distinct states, depth 17, a trace of 15 states, 04s
+== PASS twin-PromoteBlind: ResultsHold violated as it must, exit 12, 1327403 distinct states, depth 20, a trace of 20 states, 13min 24s
+== PASS twin-IndexSupersede: ResultsHold violated as it must, exit 12, 8486 distinct states, depth 15, a trace of 15 states, 07s
+== PASS twin-LongLife: ResultsHold violated as it must, exit 12, 26257 distinct states, depth 15, a trace of 15 states, 07s
+```
+
+### Each twin's ground as its control
+
+`run-tlc.sh control IndexRollup <Twin>`: the design at the twin's bounds, every invariant of the cfg
+holding, so a twin's refusal is its broken rule's and not its ground's.
+
+```text
+== PASS control-NoEpochCheck: exit 0, 41 distinct states, depth 11, 02s
+== PASS control-BuildIgnoresSet: exit 0, 41 distinct states, depth 11, 02s
+== PASS control-EraseLiveFirst: exit 0, 250 distinct states, depth 14, 01s
+== PASS control-EarlyComplete: exit 0, 41 distinct states, depth 11, 02s
+== PASS control-ClosureNoCas: exit 0, 250 distinct states, depth 14, 02s
+== PASS control-EraseSkipsAbsorbed: exit 0, 91 distinct states, depth 16, 02s
+== PASS control-MergeIgnoresEpoch: exit 0, 91 distinct states, depth 16, 02s
+== PASS control-MergeDropsTombstone: exit 0, 16803 distinct states, depth 23, 10s
+== PASS control-ReuseUnabsorbed: exit 0, 1971 distinct states, depth 19, 02s
+== PASS control-RollupForgetsHeads: exit 0, 16803 distinct states, depth 23, 12s
+== PASS control-MergeKeepsOld: exit 0, 46 distinct states, depth 11, 02s
+== PASS control-NoLockFence: exit 0, 96 distinct states, depth 17, 01s
+== PASS control-NoOwnCas: exit 0, 286561 distinct states, depth 29, 07min 28s
+== PASS control-CleanupUnabsorbed: exit 0, 2824 distinct states, depth 19, 03s
+== PASS control-NoPromote: exit 0, 16803 distinct states, depth 23, 19s
+== PASS control-NoPromoteLive: exit 0, 12203 distinct states, depth 24, 15s
+```
+
+### The design grounds
+
+`run-tlc.sh ground IndexRollup <ground>` for rows of `run-tlc.sh list-grounds IndexRollup`: the two
+reach states, each ending violated with its trace the witness; `cut-commit`; the erasure's narrow
+grounds; liveness (BucketRolls and ErasureFinishes under weak fairness, without symmetry); two rollers
+with a crash, a lapse and a foreign CUT; and the cfg's own bounds by seeded simulation, which shows
+only that the behaviors it drew kept every invariant.
+
+```text
+== PASS ground-reach-absorbed-closure: NeverAbsorbedClosure violated as it must, exit 12, 82 distinct states, depth 14, a trace of 10 states, 01s
+== PASS ground-reach-survives: NeverSurvives violated as it must, exit 12, 491 distinct states, depth 17, a trace of 14 states, 01s
+== PASS ground-cut-commit: exit 0, 1787 distinct states, depth 24, 02s
+== PASS ground-erase-restart-merge: exit 0, 46097 distinct states, depth 29, 16s
+== PASS ground-erase-shared: exit 0, 51672 distinct states, depth 34, 18s
+== PASS ground-erase-windows-unedited: exit 0, 61182 distinct states, depth 34, 37s
+== PASS ground-erase-crash-backfill: exit 0, 214963 distinct states, depth 30, 57s
+== PASS ground-live-rolls: exit 0, 3558 distinct states, depth 26, 17s
+== PASS ground-live-erase: exit 0, 23757 distinct states, depth 27, 01min 20s
+== PASS ground-live-windows: exit 0, 61182 distinct states, depth 34, 01min 51s
+== PASS ground-rollers-epoch: exit 0, 1130471 distinct states, depth 35, 08min 32s
+== PASS ground-cfg-simulation: exit 0, simulation, 1571928 states generated, 11min 44s
+```
+
+### The probe of details/IndexMerge.tla
+
+`details/run-indexmerge.sh <track> IndexMergeProbe-RaceFenced`, at b6062207: step 4 in place with the
+newer bucket's manifest replaced (question rollup-merge-race's option 1), which is not the design and
+no part of the script's `all`, on full entries. It must pass.
+
+```text
+== PASS IndexMergeProbe-RaceFenced: tlc d8fb231, exit 0, 16838 distinct states, depth 24, 04s, 0 MB on disk at most
+```
