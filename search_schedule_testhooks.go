@@ -257,7 +257,7 @@ func (self *SearchTestWorld) PushDocuments(ctx context.Context, writer Id, at ti
 	store := self.ref.store(writer)
 	view, err := indexLoadView(ctx, &indexViewArgs{
 		store: store, repoId: self.repoId, refId: self.refId, repoKind: protocol.RepoKind_REPO_KIND_GENERAL,
-		isAdmin: func(file *indexFileVersion) bool { return false }, settings: self.format,
+		isAdmin: self.isAdmin, settings: self.format,
 	})
 	if err != nil {
 		return err

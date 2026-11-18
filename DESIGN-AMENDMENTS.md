@@ -34,13 +34,13 @@ Sections 1, 11 and 15 are folded whole (2026-11-17, track dr4-details-a): their 
 
 Sections 2, 10 and 14 are folded whole (2026-11-17, track dr4-details-b): their proposed DESIGN.md text as amended, their owner answers being owner decisions 203, 204, 225, 226 and 501 (section 2), 396 to 398 (section 10) and 399 and 400 (section 14) already. Section 10's amendment from section 16 to §11.7's boundary row goes with section 16's fold, the prefix rules moving to Later (QD-1032). Section 14's new schedule rows wait for sidecartest/fault's catalog to take them in the same commit, since its tests hold §22.8's table to the catalog row for row, and its Amendments 14-B and 14-C, to DESIGN-DETAILS section 9's own text, went with that section's fold, which found them carried (2026-11-17, track dr4-details-c).
 
-Sections 5 and 6 are folded (2026-11-17, track dr4-details-d): their proposed DESIGN.md text (5.8 and 6.8) as amended, their owner answers being owner decisions 205 and 262 (QD-629, QD-627) and 201, 234 and 360 to 363 (QD-614, QD-613, QD-615 to QD-618) already, and §2.8's api-7, gkm-1 and gkm-5 already holding their words. Section 5's amendments from section 16 (`AclRepo.prefix_rules`) wait with section 16. Section 6's MLS rules wait with QD-1040, which sets MLS aside for Later and which dr4-late-sweep folds with DESIGN-DEFER.md's MLS entry: the roster rule with its committer and member clauses (6.8's §10.9 rows and its D-KEYS-27), KF2's and KF5's commits, the dropped-leaf and waiting-leaf hints, D-KEYS-24's Welcome pointer clause, §10.6's note on the claim key, and the commit legs of FS-15, FS-24, FS-97 and FS-104. 6.8's D-KEYS-28, a group's one repo, is D-KEYS-27 in DESIGN.md, the next free number.
+Sections 5 and 6 are folded (2026-11-17, track dr4-details-d): their proposed DESIGN.md text (5.8 and 6.8) as amended, their owner answers being owner decisions 205 and 262 (QD-629, QD-627) and 201, 234 and 360 to 363 (QD-614, QD-613, QD-615 to QD-618) already, and §2.8's api-7, gkm-1 and gkm-5 already holding their words. Section 5's amendments from section 16 (`AclRepo.prefix_rules`) wait with section 16. Section 6's MLS rules went with QD-1040, which sets MLS aside for Later, folded by track dr4-late-sweep (2026-11-18) as owner decision 610: DESIGN-DEFER.md's keys-mls entry lists them as what returns with MLS, the roster rule with its committer and member clauses (6.8's §10.9 rows and its D-KEYS-27), KF2's and KF5's commits, the dropped-leaf and waiting-leaf hints, D-KEYS-24's Welcome pointer clause, §10.6's note on the claim key, and the commit legs of FS-15, FS-24, FS-97 and FS-104, and none of them enters DESIGN.md as live design. 6.8's D-KEYS-28, a group's one repo, is D-KEYS-27 in DESIGN.md, the next free number.
 
 Section 4 is folded (2026-11-17, track dr4-details-d): its proposed DESIGN.md text (4.8) as amended, its owner answers being owner decisions 202, 215 and 216 (QD-622, QD-619, QD-620 with QD-621) and 487 (QD-696) already, with 485, 490 and 491's amendments, and §2.8's api-7 and gkm-1 already holding its words; `Pending.forward_delegation_id = 5` and `BridgeIdentity`'s fields 6 and 7 joined §17.8's fences, their three `testFenceAdditions` entries leaving in the same commit. FS-38's schedule now states its forwarding cases at app hosts; the M8-out case they need in its gate column and in §23.6's M8 row waits for sidecartest/fault's catalog to take it in the same commit (the forwarding schedules in sidecartest/fault/fs_bridge_forwarding_m8.go run outside the catalog until then). 4.8's lines for RESOLUTIONS.md are outside this file's folds.
 
 Sections 3, 13 and 17 are folded (2026-11-17, track dr4-details-e): their proposed DESIGN.md text (3.8, 13.8 and 17.8) as amended, their owner answers being owner decisions 253, 266 and 433 to 435 (section 3), 337, 338 and 516 to 518 (section 13) and 424 to 427 and 571 (section 17) already, and §2.8's smtp-2, smtp-7, sock-1 to sock-4, api-8, api-13, cert-1 and cert-2 already holding their words. Section 17's eleven schedules (17.6) are stated in §22.5's §13 row and wait, as numbered rows of §22.8's table, for sidecartest/fault's catalog to take them in the same commit. 17.2.8's A10 and two-window replay stay the design agent's open item in DESIGN-DETAILS.md: DESIGN.md carries owner decision 571's quiet-window replay and 16 d of spends (QD-994, QD-996). Section 3's readings and its SPEC.md draft belong to smtpproof/SPEC.md.
 
-Section 7 is folded (2026-11-18, track dr4-details-e): its proposed DESIGN.md text (7.8) as amended, its owner answers being owner decisions 391 to 393 (QD-707 to QD-711) already, with owner decision 450 (QD-048) for the hints. Not folded, because QD-1038 (owner, 2026-11-17) removes the keep-warm pairs, the bit-1 marking and C19's window accounting and is folded by its own track: the three warm pairs of §6.10's and §18.7's foreground rows, `MarkedPeerMaxCount` and `Search.RemoteOtherWarmCount`, §18.4's cost of a second and third pair's floor, D-SDK-27's third pair and FS-83's clause on no contract opening at a search. The rows that owner decisions 188, 191 and 391 gave warm pairs and windows keep them until that fold.
+Section 7 is folded (2026-11-18, track dr4-details-e): its proposed DESIGN.md text (7.8) as amended, its owner answers being owner decisions 391 to 393 (QD-707 to QD-711) already, with owner decision 450 (QD-048) for the hints. Not folded, because QD-1038 (owner, 2026-11-17) removes the keep-warm pairs, the bit-1 marking and C19's window accounting: the three warm pairs of §6.10's and §18.7's foreground rows, `MarkedPeerMaxCount` and `Search.RemoteOtherWarmCount`, §18.4's cost of a second and third pair's floor, D-SDK-27's third pair and FS-83's clause on no contract opening at a search. Track dr4-late-sweep folded QD-1038 as owner decision 609 (2026-11-18): the rows that owner decisions 188, 191 and 391 gave warm pairs and windows lose them, so none of these enters DESIGN.md.
 
 Section 12 is folded (2026-11-17, track dr4-details-d): its proposed DESIGN.md text (12.8) as amended for QD-761, its owner answers being owner decisions 473 to 478 and 483 already, and §17.9's fences already holding its share pins and seal bodies (track dr4-fences).
 
@@ -364,6 +364,8 @@ Owner decision 265's file, which waits on the owner: the copy of cli/UI.md at si
 
 Changes: sidecar/design/UI.md (owner step); HANDOFF section 2.
 
+Not folded (2026-11-18): sidecar/design/UI.md is still absent, and the copy is the owner's step; HANDOFF.md is outside design/source/.
+
 ### QD-864: How does a reader of an Opening, a packet or an export line learn that its body is a version-2 AgentSignedBody?
 *Decided by the owner on 2026-11-15, asked one question at a time; owner decision 466. Folds into §16 The local MCP server and record primitives.*
 
@@ -372,6 +374,8 @@ RECORD.md's part, which waits on RECORD.md's own change: section 5.5's `Opening`
 Changes: RECORD.md 5.5, 9 and 11.
 
 Questions: `record-m6-03-opening-entry-version.md`.
+
+Not folded (2026-11-18): RECORD.md 5.5's `Opening` fence, its section 9 and 11, which only a RECORD.md track edits, outside design/source/; record.proto declares `Opening.version = 4`, and protocol/design_unfenced_test.go's `testFenceAdditions` holds it until RECORD.md's fence writes it.
 
 ### QD-899: Which source kinds give a run card the fields RECORD.md 7.4 reads from claims, coverage and approval decisions?
 *Decided by the owner on 2026-11-15, asked one question at a time; owner decision 467. Folds into §16 The local MCP server and record primitives.*
@@ -382,6 +386,8 @@ Changes: RECORD.md 7.3 and 7.4; DESIGN-DETAILS.md 15.2.2.
 
 Questions: `search-m10-28-vault-card-sources.md`.
 
+Not folded (2026-11-18): RECORD.md 7.3 and 7.4, outside design/source/, and DESIGN-DETAILS.md 15.2.2, the design agent's.
+
 ### QD-900: How does record extractor 1 find a run's user prompts, for a vault card's title fallback and its prompt text?
 *Decided by the owner on 2026-11-15, asked one question at a time; owner decision 467. Folds into §16 The local MCP server and record primitives.*
 
@@ -391,13 +397,4 @@ Changes: RECORD.md 5's ContextBody and 7.4; record.proto.
 
 Questions: `search-m10-28-transcript-prompts.md`.
 
-### QD-1010: How does an app approve a multi-use template request, when SidecarApprovals.Decide carries no uses?
-*Decided by the owner on 2026-11-16, asked one question at a time; owner decision 574. Folds into §16 The local MCP server and record primitives.*
-
-The wire, which waits on the code: §16.8's `ApprovalRequest` fence takes the field holding the uses an agent requests for a template once record.proto declares it, with the version bump RECORD.md's rules give a format change after M3's freeze, a design-records fold writing the line and dropping its `testFenceAdditions` entry in one commit (owner decision 273). The rest is folded (2026-11-17): the decision, §16.6's multi-use row, §18.5's `Decide` and a comment in the fence naming what joins it.
-
-Changes: §16.8's fence; record.proto.
-
-Questions: `mcp-m8-01-app-template-uses.md`.
-
-Waits on: the fix track approval-request-uses.
+Not folded (2026-11-18): RECORD.md's `ContextBody` fence and 7.4's prompt row, outside design/source/; record.proto declares `ContextBody.prompts = 17`, and protocol/design_unfenced_test.go's `testFenceAdditions` holds it until RECORD.md's fence writes it.

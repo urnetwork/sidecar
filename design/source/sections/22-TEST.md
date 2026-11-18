@@ -79,7 +79,8 @@ not       canary, which has no hosts (§19.11; owner decision 499); a one-node R
 release   build/all/run.sh's rewrite functions on a fixture copy, the tags served through GOPROXY=file:// with
 fixture   GOWORK=off, an empty module cache and no replaces: root, protocol and an engine package import at the tag;
           ur builds from cli/; go list -m all shows one sidecar path; each protocol/<name>.proto registers once; sdk's
-          go mod graph holds no smtpproof or prover dependency
+          go mod graph holds no smtpproof or prover dependency; X9's rule holds against the copy's main; the real
+          run under a 3 h limit of its own (§4.9's fixture row; owner decision 595)
 ```
 
 ### 22.5 Component matrix and hot-path gates
@@ -98,7 +99,7 @@ Parentheses hold T1 tests; the rest run in T2 and T3. Inline server paths (contr
       empty in v0) lossy streams; PEER_TIMEOUT; nothing before a verified Hello; ControlId push dropped over p2p, kept
       over h1; team hints to acl_enforcing device clients; long-poll hints within 25 s, the 200 body round-tripping; a
       complete=false reset followed by a dropped tail applies nothing until versions are refetched; receive allocs;
-      witnesses: FS-17, FS-21; C19's remote-search windows: FS-125; the P2P schedule D-PROTO-10 waits on, at
+      witnesses: FS-17, FS-21; the P2P schedule D-PROTO-10 waits on, at
       M6-out with C3 on and EnablePeerP2p set: a forged ControlId frame over P2P dropped, a same-network pair moving
       from relay to P2P and back under a live RPC and stream, its session key unchanged, Hello and HeadCheck holding
       across each move, and bytes on P2P debiting nothing (§20.6)
@@ -386,7 +387,7 @@ assert every stored commit but an external commit parses as PrivateMessage, and 
          frames to an indexer FI-24 allows (FI-21); a relay capture of remote searches shows
          one frame-size sequence per kind across ten queries with 0-20 hits and every
          post-parse failure (FI-24); both parties' close reports for the pair, both
-         directions, are each window's floor and zeros, sent at its end (C19; FS-125)
+         directions, carry its bytes as any peer's do (owner decision 609)
        the directory's plaintext, decrypted with a member's keys, holds no canary from a
          prompt past the first line, a tool input or output, a touched path or a diff (I-20);
          title canaries reach it only in its sealed cards, entries and index files, and never
@@ -575,9 +576,9 @@ devices    each host pairing (one CLI, two CLIs, a CLI with a page Worker or a q
            desktops, a phone app with a CLI), with and without a presence key, reaches every allowed channel; a
            self-signed device decision is refused; admitting a Worker keeps harness_ok, a second CLI clears it, and
            ur approve there signs device evidence the first daemon accepts
-presence   each profile refuses a wrong key or another key's attestation, a replayed challenge or a counter
-           regression, UP or UV clear, another RP's rpIdHash or an unlisted origin, a software key as apple
-           attestation, an ES256 assertion as ecdsa-p256-sha256, an app-integrity assertion without UV and an
+presence   each profile refuses a wrong key, a replayed challenge or a counter regression, UP or UV clear,
+           another RP's rpIdHash or an unlisted origin, an ES256 assertion as ecdsa-p256-sha256, an app-integrity
+           assertion without UV and an
            assertion over another action's bytes, and passes its positive vector; its countersign check (§7.9's
            presence row) refuses the same faults but the counter regression, and a path that misses its leaf,
            another act's root, another signer's act and an act over 65,535 statements, ignores
@@ -778,7 +779,8 @@ directory
          FS-86's load (D-TEST-17), its M6 case at M6's exit and its card case at the later of M10's and M6's: 500
          members in physical time, and the Team limit (2,000 members) and 5,000 as fake-clock days with a
          physical peak hour at 3x bursts beside the 1x year-one mix; the cards ref's commit p99, 412 reruns and
-         429s, priced NVMe bytes per push per drive, and readers' requests, path reads and bytes per reader-day
+         429s, on T3's 4-host file-cluster layout with nothing else running (owner decision 598), priced NVMe
+         bytes per push per drive, and readers' requests, path reads and bytes per reader-day
          and team-day against the golden schedule and §16.11's cost table, with a cold phone past 8 MiB
 drop     at M10 on T3: dry-run and job scan rates, HDD drive operations, HEAD and DELETE costs, NVMe writes per job
          and per drop, and a 60 GB history's job time; the directory and drop rows' NVMe operations, priced by M2's
@@ -1149,10 +1151,8 @@ FI-24  remote search: a query leaves an app host only for a designated search in
        reads, and a verified hit's newest version contains the query; each request body is 4,016 B and each reply steps
        x 16,384 B, whatever the query, scope, filters, results or failure after parsing; neither device sends evs, api
        or gkm a request because of a remote search; no query, hit, snippet or cursor persists on either device, and the
-       served record names none; for a pair §6.11's bit 1 marks, each §6.10 window and direction has one report a
-       contract, F on the first and 0 on the others, whenever its other bytes stay within the allowance and it carries
-       at most five exchanges, none sent before the window's end, and no contract of the pair is created inside a
-       foreground window but at its start, a session re-establishment or overflow (§4.6, §6.10, §11.14, §18.4, §2)
+       served record names none; the pair's contracts report its bytes as any peer's do (§6.10, §11.14, §18.4, §2;
+       owner decision 609)
 FI-25  directory authorship: every card, notice and run or worker announce entry a reader shows or acts on was written
        and signed as §16.11's path and signing rules require, by a signer that is admitted, unrevoked, unreaped,
        unsuspended, unparked and, for a member device, consented in the reader's state, and every repo item by a signer that
@@ -2155,12 +2155,16 @@ FS-77  §11,18 an ios32 and an Android surrogate cell and a page Worker, each ho
               not yet called SetConditions counts as metered; an iOS BGProcessingTask window
               on cellular fetches no all; a window on Wi-Fi while charging whose link turns
               metered after its first shard reads no further shard of all, and the next
-              allowed window resumes there (owner decision 583); ur search sync --evict,
-              DropCache and the caps' eviction keep §5.9's non-derived search state (policy
-              overrides, remote mode, notice answers and served records), while a browser's
-              whole-origin eviction loses it with the keychain, the next Worker starting from
-              defaults (§5.9's rebuild row); a phone runs its merges and roll-ups only in
-              windows, within its cap (FS-75)
+              allowed window resumes there (owner decision 583); a DropCache resets the sync
+              engine's loaded manifest, plan and version table for each ref it drops, under
+              the ref's round lock, so the next round reloads from the emptied cache and
+              fetches the latest set, and all where it is kept, and a cached search of that
+              ref finds its hits again (owner decision 599); ur search sync --evict, DropCache
+              and the caps' eviction keep §5.9's non-derived search state (policy overrides,
+              remote mode, notice answers and served records), while a browser's whole-origin
+              eviction loses it with the keychain, the next Worker starting from defaults
+              (§5.9's rebuild row); a phone runs its merges and roll-ups only in windows,
+              within its cap (FS-75)
 FS-78  §11,15 a mailbox and a vault, both indexed, at the exact storage limit and spent, the   FI-5,13c,19 T2+T3  M10-out;
               eraser at evs_closure_bytes_floor: an admin's erasure of one email first                            mailbox
               commits its CUT and an ERASE of the email's own keys, both at once, the email                       M7, holds
@@ -2263,18 +2267,17 @@ FS-83  §11,18 remote search (owner decisions 175, 178), with the member's index
               none, and every reply steps x 16,384 B in one frame sequence, for queries with
               0, 1 and 20 hits, TOO_BROAD, INVALID, CURSOR_EXPIRED, UNSUPPORTED_VERSION and a
               two-step reply whose content sits on the 16,387 B gap, and no Cancel is sent;
-              connect: the pair's close reports follow C19's windows in both directions
-              whatever ran in them (FS-125), and a pair whose Hellos carried no bit 1 reports
-              its bytes exactly; evs: both devices' evs request logs are identical with and
-              without the remote search, the indexer issuing no read at search time even with
-              a hint pending; merge: against SearchOracle, the merged list equals the oracle's
-              verified set over SERVED_TEXT repos, a local possible match inside the checked
-              span that no page returned collapses, one outside it or newer than the pinned
-              version stays, an ERASE mid-cursor answers CURSOR_EXPIRED and the erased
-              document never shows; a late repeat of page 0 after an erasure is answered
-              CURSOR_EXPIRED; a search reopened after 10 min idle pays one exchange and shows
-              no hit twice; a possible match committed 30 min before the indexer's pinned
-              push, in parts, is not folded; a higher-version possible claim leaves a
+              connect: the pair's close reports carry its bytes exactly in both directions, as
+              any peer's do (owner decision 609); evs: both devices' evs request logs are
+              identical with and without the remote search, the indexer issuing no read at
+              search time even with a hint pending; merge: against SearchOracle, the merged
+              list equals the oracle's verified set over SERVED_TEXT repos, a local possible
+              match inside the checked span that no page returned collapses, one outside it or
+              newer than the pinned version stays, an ERASE mid-cursor answers CURSOR_EXPIRED
+              and the erased document never shows; a late repeat of page 0 after an erasure is
+              answered CURSOR_EXPIRED; a search reopened after 10 min idle pays one exchange
+              and shows no hit twice; a possible match committed 30 min before the indexer's
+              pinned push, in parts, is not folded; a higher-version possible claim leaves a
               confirmed row a match; an omission at unequal pins raises nothing; a fabricated
               hit is dropped on open with search_alarm{mismatch}, and a display-field match
               the indexer omits inside its span raises search_alarm{omission}; failover: two
@@ -2329,15 +2332,19 @@ FS-86  §16,11 scale (D-TEST-17), against §16.11's cost table: 500 members' dae
               them per reader-day and per team-day, and three mutants, run one at a time, fail
               that check: no coalescing to each card's newest version, no head reproduction,
               and refetching unchanged cards; the cards ref's commits meet the table's
-              ceilings (p99, 412 reruns, 429 BUSY, no FOLD_BEHIND), and injected 200 ms delays
-              on head PUTs, or conflicts past those ceilings, fail the run; priced NVMe bytes
-              per push per drive within the directory rows of §11.13's price table; heads
-              reproduced with no head download on an honest stream; a cold desktop within the
-              table's bytes; a cold phone whose current state passes 8 MiB on a metered link
-              shows partial coverage naming what is left, and continues with AllowMetered or
-              on Wi-Fi from where it stopped, never a complete or empty view; the M6 case runs
-              the same on announce entries against the M6 rows, streams read 64 to a request;
-              a miss at the Team limit blocks the gate, and the owner hears then
+              ceilings (p99, 412 reruns, 429 BUSY, no FOLD_BEHIND), judged on T3's 4-host
+              file-cluster layout with nothing else running on the machine, over a whole peak
+              hour at the Team limit's rate in sidecar-t3.sh nightly, the local stack's run
+              being the reduced-scale form, whose Team-limit test logs a p99 miss and fails
+              nothing (owner decision 598), and injected 200 ms delays on head PUTs, or
+              conflicts past those ceilings, fail the run; priced NVMe bytes per push per
+              drive within the directory rows of §11.13's price table; heads reproduced with
+              no head download on an honest stream; a cold desktop within the table's bytes; a
+              cold phone whose current state passes 8 MiB on a metered link shows partial
+              coverage naming what is left, and continues with AllowMetered or on Wi-Fi from
+              where it stopped, never a complete or empty view; the M6 case runs the same on
+              announce entries against the M6 rows, streams read 64 to a request; a miss at
+              the Team limit blocks the gate, and the owner hears then
 FS-87  §7,10, removal and retention: a MemberRevoke masks the member's cards, notices and      FI-19,25    T2+T3  M6-out;
        16     pending requests at its position in every reader; the directory group's Removes                     later of
               and rotation reach leaves and wraps (owner decision 182), and the removed                           M6-out and
@@ -2983,34 +2990,10 @@ FS-124 §7,16  presence countersignatures (owner decisions 185, 187, 189, 192; D
               each refused without it (Team); SignWithPresence on each app host, Decide's
               admission and alarm answers included, in remote mode by 5.8's two calls, and
               both profiles' vectors byte-equal on every leg (app hosts)
-FS-125 §4,6   C19's windows (owner decisions 176, 188) on a fake clock, with a fake            FI-24       T2+T3  M10-out;
-              contract service that keeps every report and its time: a requester surrogate and             +T4    app hosts
-              its indexer, on a control and on a data contract. Sweep: each direction's                           at M8-out
-              background from 0 to its allowance (178,419 B down, 241,709 B up) through every
-              multiple of 128 KiB and F, each ±1 B, then 0 to 5 exchanges of exact envelope
-              sizes added, both directions, the bytes split across the window's first
-              contract, a session re-establishment's contract and an overflow successor, and
-              windows ending mid-exchange: both clients report F on the first contract, the
-              lowest contract id a frame rode (§6.10's first row), and 0
-              on the others, identical across the sweep, at the window's end and never before;
-              past the allowance, and at a sixth exchange, F plus 128 KiB steps; the review's
-              case, 120 KiB of background and one 16 KiB page, reports F both ways. Root
-              cause: a receive sequence idling out mid-window sends no checkpoint and an idle
-              send sequence no close, and no search opens a contract in either direction,
-              30 min into a foreground window or 10 s after a window's end, the next window
-              opening with the contract connect took at that end. Lifecycle: the Ping grid
-              holds every sequence open for 55 min; a 3-min suspension re-establishes by a
-              Hello at the next foreground, its contract inside the window reporting 0; a
-              3-min network drop in the foreground re-establishes by the search that comes
-              before the next tick, its contract inside the window reporting 0 and created,
-              with its successor, at that search (owner decision 191); a failover search opens
-              its own window then; a window ending in the background clears the mode, and the
-              next foreground's Hello opens a new one; a suspended requester's reports go out
-              at its next run, and the deadline close settles from the indexer's; marking
-              retires the contracts each side already sent on, reported exactly; a pair whose
-              Hellos carried no bit 1 reports its bytes exactly. Sizes: every frame kind's
-              counted bytes are at most §6.10's table, a HeadCheck at its list caps (four
-              vetoes, four unverified pins with 8-hop paths) within two envelopes
+FS-125 §4,6   held with PROTO-M10-05 (owner decision 609): C19's window accounting, which this FI-24       T2+T3  M10-out;
+              row swept on a fake clock with a fake contract service, is withdrawn, the                    +T4    app hosts
+              remote-search pair's contracts being accounted like any peer's, as FS-83 checks;                    at M8-out
+              the row keeps its number, and its sweep runs only if the windows return
 FS-126 §6     D-PROTO-10's P2P schedule (owner decision 296), with C3 on and                   I-3,FI-10,  T2+T3  M6-out
               SidecarProtocolSettings.EnablePeerP2p set: a forged ControlId frame over P2P is  13a,
               dropped; a same-network pair moves from relay to P2P and back under a live RPC   D-PROTO-8
@@ -3168,7 +3151,7 @@ gaps      any other step tmc/mls lacks is named in the artifact as a gap; mlswg 
 
 **D-TEST-16 (proposed).** Remote search is checked against `SearchOracle` as local search is, and its privacy by a relay capture: one frame-size sequence per kind whatever the query, results or post-parse failure, and equal evs request logs on both devices with and without it (FS-83, FI-24). Its stored accounting is checked by FS-125's sweep: a window's reports are the same for zero to five exchanges over every background within its allowance, both directions, across its contracts. *Why:* fixed sizes and evs's blindness are owner decision 175's whole privacy claim, and one optimization would break either silently: an early short reply, or a sync before answering. Owner decision 176's claim fails just as silently when a fixture's background sits far from a multiple of 128 KiB (meta review F18).
 
-**D-TEST-17 (proposed).** FS-86 gates the directory against §16.11's cost table: its M6 case on announce entries at M6's Gn-out, and its card case at the later of M6's and M10's, each at 500 members in physical time on T3 and, as fake-clock days with one physical peak hour at 3x bursts beside §22.8's 1x year-one mix, at the Team limit (2,000 members, 5,000 admissions) and at a 5,000-member stress case; a golden schedule (`DirectoryCostOracle`) computes each reader's expected requests, path reads and ciphertext bytes from the events and sync times alone, the measured ones staying within 1.25 times them per reader-day and per team-day, and disabling coalescing, head reproduction or unchanged-card suppression fails that check; the cards ref's commits meet the table's p99, rerun and 429 ceilings, and injected store delays fail them; the year-one mix keeps its p99; a cold phone past 8 MiB on a metered link shows partial coverage it can continue; priced NVMe bytes per push per drive meet §11.13's price table, and the directory's pushes join format 2's computed write gate, which production confirms after the freeze (D-TEST-13; owner decision 174). A miss at the Team limit blocks its gate, and the owner hears then. *Why:* reader transfer, per-stream reads and one ref's head are the directory's binding terms, and a number recorded with no ceiling cannot fail.
+**D-TEST-17 (proposed).** FS-86 gates the directory against §16.11's cost table: its M6 case on announce entries at M6's Gn-out, and its card case at the later of M6's and M10's, each at 500 members in physical time on T3 and, as fake-clock days with one physical peak hour at 3x bursts beside §22.8's 1x year-one mix, at the Team limit (2,000 members, 5,000 admissions) and at a 5,000-member stress case; a golden schedule (`DirectoryCostOracle`) computes each reader's expected requests, path reads and ciphertext bytes from the events and sync times alone, the measured ones staying within 1.25 times them per reader-day and per team-day, and disabling coalescing, head reproduction or unchanged-card suppression fails that check; the cards ref's commits meet the table's p99, rerun and 429 ceilings on T3's 4-host file-cluster layout with nothing else running on the machine, over a whole peak hour at the Team limit's rate, the local stack's run being a reduced-scale form that logs a miss and fails nothing (owner decision 598), and injected store delays fail them; the year-one mix keeps its p99; a cold phone past 8 MiB on a metered link shows partial coverage it can continue; priced NVMe bytes per push per drive meet §11.13's price table, and the directory's pushes join format 2's computed write gate, which production confirms after the freeze (D-TEST-13; owner decision 174). A miss at the Team limit blocks its gate, and the owner hears then. *Why:* reader transfer, per-stream reads and one ref's head are the directory's binding terms, and a number recorded with no ceiling cannot fail.
 
 **D-TEST-18 (proposed).** Drop deletes ship in observe mode (§19.11's `drop: observe`): jobs run every phase and record their delete sets, deleting nothing, while the drop oracle (taskworker's verify, written apart from mark) checks each set against every retained version. Deletes turn on only once FS-89 to FS-96 pass on their tiers, TLC checks I-EVS-15 and FI-27, and a production soak on internal networks and design partners of at least 30 days and 200 jobs, half of them on repos with renames and cross-ref copies, finds no delete-set member that a retained version names. *Why:* a drop deletes keep-forever content (owner decision 173), the costliest bug class, and observe mode shows its sets on real histories first.
 
