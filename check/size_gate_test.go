@@ -18,7 +18,7 @@ import (
 func TestSizeGateIosExtension(t *testing.T) {
 	repository := openThisCheckout(t)
 	baselineByteCount, withSidecarByteCount := repository.measureIosExtension(t)
-	t.Logf("ios_extension leg, stripped (%s): %d B without the forwarding leg, %d B with it, %d B added, limit %d B (proposed)",
+	t.Logf("ios_extension leg, stripped (%s): %d B without the forwarding leg, %d B with it, %d B added, limit %d B",
 		repository.settings.iosExtensionLinkerFlags, baselineByteCount, withSidecarByteCount, withSidecarByteCount-baselineByteCount,
 		repository.settings.iosExtensionAddedMaxByteCount)
 	findings := repository.settings.iosExtensionSizeFindings(baselineByteCount, withSidecarByteCount)
@@ -54,8 +54,8 @@ func plantedTable(byteCount int) string {
 	return hex.EncodeToString(table)
 }
 
-// Text one byte past the limit and a little more, which only stripping cannot shrink.
-const plantedPastTheLimitByteCount = 6*1024*1024 + 512*1024
+// Text past the limit by a little more than a byte, which only stripping cannot shrink.
+const plantedPastTheLimitByteCount = 7864320 + 512*1024
 
 // A table reached only through an exported function: a blank import of device would drop it and
 // call the leg clean, so this is what shows the probe measures the role's real cost.
@@ -65,7 +65,7 @@ func TestSizeGateFindsATablePlantedInDevice(t *testing.T) {
 	repository := fixture.open()
 	baselineByteCount, withSidecarByteCount := repository.measureIosExtension(t)
 	t.Logf("%d B added", withSidecarByteCount-baselineByteCount)
-	wantFindings(t, repository.settings.iosExtensionSizeFindings(baselineByteCount, withSidecarByteCount), "to the ios_extension leg, stripped, over the 6291456 B limit")
+	wantFindings(t, repository.settings.iosExtensionSizeFindings(baselineByteCount, withSidecarByteCount), "to the ios_extension leg, stripped, over the 7864320 B limit")
 }
 
 // Plants a table in config_table.go, a root file on the fixture's list, read by an exported function of reader, and
@@ -86,7 +86,7 @@ func plantRootTable(t *testing.T, reader string) (*fixture, int64, int64) {
 // through a forwarding file, counts.
 func TestSizeGateFindsATablePlantedInAListedRootFile(t *testing.T) {
 	fixture, baselineByteCount, withSidecarByteCount := plantRootTable(t, "bridge_forward.go")
-	wantFindings(t, fixture.settings.iosExtensionSizeFindings(baselineByteCount, withSidecarByteCount), "to the ios_extension leg, stripped, over the 6291456 B limit")
+	wantFindings(t, fixture.settings.iosExtensionSizeFindings(baselineByteCount, withSidecarByteCount), "to the ios_extension leg, stripped, over the 7864320 B limit")
 }
 
 // Its twin: the same table read only through another root file's export is code the VPN component never calls, which

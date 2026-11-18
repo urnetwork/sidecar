@@ -842,7 +842,7 @@ func (self *directoryLoadMutantCards) Refs(ctx context.Context, repoId sidecar.I
 		return reads
 	}()
 	for 0 < len(unmoved) {
-		batch := unmoved[:min(len(unmoved), sidecar.DirectoryStreamReadCount)]
+		batch := unmoved[:min(len(unmoved), sidecar.DefaultEvsFormatSettings().ReadStreamMaxRefCount)]
 		unmoved = unmoved[len(batch):]
 		if _, err := self.DirectoryCards.ReadStreams(ctx, repoId, batch); err != nil {
 			return nil, err
