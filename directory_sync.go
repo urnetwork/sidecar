@@ -1,9 +1,12 @@
 // §16.11's desktops row: how a daemon keeps its copy of the team directory, on format 1's streams at M6 (D-PHASE-11),
 // and DirectoryCards, the seam to evs that the sync and every later directory task build on (RECORD-M6-13). It adds to
 // RecordStreams what the directory needs: the shared cards ref's versioned files with path CAS, a read of up to 64
-// streams in one request, the moved listing and leases on notice prefixes (§11.9, §11.10). RECORD-M3-12 and EVS1-M6-01
-// bind it to EvsRepo's ReadStreams and GET .../refs?moved_after; sidecartest's FakeDirectoryCards stands in until then,
-// and DirectoryCardsUnavailable refuses everything while nothing is bound.
+// streams in one request, the moved listing and leases on notice prefixes (§11.9, §11.10). DirectoryEvsCards
+// (directory_evs.go, RECORD-M6-28; QD-986) binds it to the directory repo's EvsRepo: ListRefs for the moved listing,
+// ReadStreams and the log route for the streams, the cards ref's statements and path CAS writes, and Subscribe for
+// notice leases. sidecartest's FakeDirectoryCards stands in for it on the fakes, and DirectoryCardsUnavailable refuses
+// everything while nothing is bound. A binding that finds the cards ref's files by their tokens learns the paths the
+// copy holds before its first read (DirectoryCardsCopyPaths).
 //
 // One sync, in this order:
 //
@@ -185,7 +188,18 @@ type DirectoryCards interface {
 	Lease(repoId Id, prefix string, callback func(repoId Id)) (func(), error)
 }
 
-// The directory's evs until RECORD-M3-12 and EVS1-M6-01 bind one: every call refuses, so nothing reads as synced.
+// What a DirectoryCards binding that finds the cards ref's files by their tokens learns from the copy
+// (DirectoryEvsCards): the paths the copy holds, so a statement past the copy's version that rewrites or removes one
+// names it though no row the binding read since does. The sync hands them over before its read whenever the binding
+// does not hold them.
+type DirectoryCardsCopyPaths interface {
+	// Whether the binding holds the copy's paths of the directory.
+	CopyPathsKnown(repoId Id) bool
+	// The cards ref's paths the copy holds.
+	KnowCopyPaths(repoId Id, paths []string)
+}
+
+// The directory's evs until a DirectoryEvsCards is bound: every call refuses, so nothing reads as synced.
 type DirectoryCardsUnavailable struct{}
 
 // Refuses.
@@ -285,6 +299,14 @@ func (self *DirectoryClient) Sync(ctx context.Context) error {
 
 // The cards ref, the listing and the moved streams, then the reader's verification over the store.
 func (self *DirectoryClient) syncFrom(ctx context.Context, cards DirectoryCards, directoryId Id) error {
+	// a binding that names the cards ref's files by their tokens learns the paths this copy holds
+	if copyPaths, ok := cards.(DirectoryCardsCopyPaths); ok && !copyPaths.CopyPathsKnown(directoryId) {
+		paths := []string{}
+		for _, file := range self.store.Cards() {
+			paths = append(paths, file.Path)
+		}
+		copyPaths.KnowCopyPaths(directoryId, paths)
+	}
 	// cards: the ref's statements after its pin, page by page, each page kept before the next is asked
 	for {
 		held := self.store.State().CardsVersion
