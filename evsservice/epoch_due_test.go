@@ -214,15 +214,15 @@ func (self *epochDueFixture) laterBases() {
 	self.admission.Fold(true)
 }
 
-// The spans that shrink the repo's holders before the crossing, each of which once made it immediate but the first.
-func epochDueSpans() []struct {
+// What lands on the network before the crossing, shrinking the repo's holders.
+type epochDueSpan struct {
 	name string
 	span func(fixture *epochDueFixture)
-} {
-	return []struct {
-		name string
-		span func(fixture *epochDueFixture)
-	}{
+}
+
+// The spans before the crossing, each of which once made it immediate but the first.
+func epochDueSpans() []*epochDueSpan {
+	return []*epochDueSpan{
 		{name: "an agent's ordinary revocation", span: func(fixture *epochDueFixture) {
 			fixture.revokeAgent()
 		}},

@@ -286,8 +286,8 @@ func (self *EvsRepo) readHeadPast(ctx context.Context, refId Id, epoch uint64) (
 
 // The generation the ref whose verified state is state is due for, from its head's due, else from the REMOVE
 // generations this device holds above it; 0 for none (see the file header's due row). A generation gkm does not
-// answer for is taken as due, as evs's crossing would read it for a REMOVE it cannot rule out, so the status shows it
-// and a mapper waits for its key.
+// answer for is taken as due, whose cause this device cannot rule out: the status shows it, and a mapper waits for its
+// key.
 func (self *EvsRepo) dueGeneration(ctx context.Context, state *evsRefEpoch) (uint64, error) {
 	epoch := state.epoch
 	current := evsCurrentEpoch(epoch)
