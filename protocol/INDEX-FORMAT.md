@@ -118,9 +118,26 @@ A key set's first gap is its first key + 1, and each later gap the difference fr
 A slot's entries sort ascending by their 16-byte key, doc_key or ref_id, then by kind, with one entry a key, so a key repeated under another kind is refused too. A replaced entry goes and its successor takes its sorted place, so a head is a function of its entry set and not of arrival order, which §16.11's head reproduction rests on.
 
 - **Slot, type 1.** The whole file is at most 16,208 B, each entry at most 8,192 B. `count` entries fill `body_length` exactly, and zero entries is a slot an erasure emptied.
-- **Large entry, type 2.** The whole file is at most 1,048,576 B, and its one entry is over 8,192 B. A large entry's one entry is full.
+- **Large entry, type 2.** The whole file is at most 1,048,576 B, and its one entry is over 8,192 B. A large entry's one entry is full, or it holds none once a CLOSURE emptied it (Erasure, below): `count` 0, `body_length` 0 and the rest pad. A large entry with no entry and no pad is refused, so a writer never writes one.
 - **Headers.** Both carry `bucket_start_day`, `bucket_days` (at least 1), `writer_sidecar_id`, `seq` and the table fields, and `pad_generation` and `tombstones` stay zero. `coverage` ascends by ref_id, then horizon false before true, with at most one row of each a ref (QD-689, reading 4). One counter a writer a bucket, from 1, numbers both slots and large entries, so `IndexManifest.absorbed` reads as one watermark.
 - **Pad.** A slot or large entry has no pad of its own. A CLOSURE or a DROP's rewrite pads to the replaced length with zero bytes (a roll-up rewrites no newer bucket's file in place: it promotes into that bucket's shards, DESIGN-DETAILS 1.2.5; QD-686), and those are the only bytes allowed after `body_length`, on any file type. A decoder accepts any count of them inside the file's cap, re-encoding takes the pad's length from the file, and a writer's next head rewrite writes no pad.
+
+## Erasure
+
+A CLOSURE (§11.14's erase row; DESIGN-DETAILS 15.2.5, with full entries only) replaces each file it names by `clean` of the version it replaces, at that version's exact length, and nothing else. L(k) is the highest version at which the erasure set at the CLOSURE's base lists doc_key k, over every erasure the set lists:
+
+```text
+clean(slot)         the slot without each entry e with e.version <= L(e.key), its tombstones included; the rest in key
+                    order as before; header count and body_length set, coverage, seq and window kept; zero entries is
+                    a slot an erasure emptied
+clean(large entry)  its one entry gone where it is listed: count 0, body_length 0, the rest pad
+clean(shard)        without each row and tombstone of a listed version, by Shards' rewrite rule below, the replaced
+                    pad_generation kept
+pad                 zero bytes to the replaced version's length; a rewrite that would come out longer is refused
+unchanged           a file holding nothing listed is its replaced bytes, rewritten only for its key (the history below)
+```
+
+A ref tombstone names a ref_id, never a document, so no rewrite takes one. `clean` is a function of the replaced file and the set at the base, so a reproducer rebuilds a CLOSURE's files and raises `index_mismatch` naming its signer on one that left a listed entry in a file it rewrote. The erasure's list is every live slot, large entry and shard holding an entry, row or tombstone of one of its documents at or below L(k), and every path whose retained version holds one (a version a hold kept, a slot reused after a merge, a shard the document left, a removed bucket): a live one is rewritten, its live bytes where they hold nothing listed, and a removed one only loses its keys to the ERASE.
 
 ## Shards
 
@@ -510,4 +527,5 @@ The resolutions settle the rest. These readings are this file's, each changing n
 | Entry times | An entry's time is its content push's signed time; its bucket follows its index push's (QD-689, reading 5) |
 | Merges | The tie order at one version and `take`'s search above (QD-689, readings 6 and 7); a merge with nothing to add still commits its manifest (reading 8) |
 | DirectBytes | A push past 256 KiB of entries also writes its writer's head (QD-689, reading 9) |
+| An emptied large entry | A CLOSURE leaves a large entry whose one entry is listed with no entry and all pad, since a CLOSURE replaces a version and never removes it; its writer removes it once absorbed, as any large entry (SEARCH-M10-17; QD-443's pad on a large entry presumes it) |
 | Rewrites at the cap | A CLOSURE's or a DROP's rebuild by 64 that passes 1,032,192 B keeps the replaced partition, as one that outgrows the replaced length does: a removal from a full shard can lengthen it through the re-blocking, the case QD-775 settles for a merge's layout |
