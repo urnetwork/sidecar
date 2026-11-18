@@ -122,3 +122,6 @@ D['D-BRIDGE-21'] = "Engine order: commit, publish, close; flows register rule an
 # The design-defer-doc fold (2026-11-18): Q-EVS-3's prefix rules are Later (owner decision 586).
 assert Q['Q-EVS-3'][1] == "Separate repos in v0; sidecar-enforced prefix rules in v1.", 'Q-EVS-3 row moved'
 Q['Q-EVS-3'] = (Q['Q-EVS-3'][0], "Separate repos at launch; sidecar-enforced prefix rules are Later (owner decision 586).")
+# The dr4-late-sweep fold (2026-11-18): sockets' routes take service tokens (owner decision 588).
+assert D['D-SOCK-10'].startswith('Host the engine as server/cli/sockets with Client-class routes'), 'D-SOCK-10 row moved'
+D['D-SOCK-10'] = "Host the engine as server/cli/sockets, its routes under service tokens of audience sockets, keeping registration load off api."
