@@ -824,10 +824,8 @@ holds     per indexed ref this device follows: the ref version it verified (§11
           the record header, about 80 B more a file, a reader asking gkm for both generations when they differ
           (owner decision 289); derived data sealed under HKDF(R_n, "urnetwork-sidecar-v1/local/search") with
           XChaCha20-Poly1305, random nonces, AAD = repo || ref || path || version || part: the search manifest
-          (the version of the index ref its bucket files are whole at, each file's version, state and the
-          oldest and newest time of its rows, all's own pin, the roll-ups between the two pins and the last
-          Search.PinRingCount pins replayed) with the sync round's plan beside it (its target, the files
-          wanted and those staged; §11.14's Reads, DESIGN-DETAILS.md section 7), each shard's dictionary block
+          (what §11.14's pin row records, and the last Search.PinRingCount pins replayed) with the sync
+          round's plan beside it (§11.14's Reads, DESIGN-DETAILS.md section 7), each shard's dictionary block
           index and n_d array, the version table (below), and on desktops the local layer (commits past
           indexed_through this device indexed from its own plaintext, dropped once the index covers them),
           mismatched entries and the local vocabulary; a bucket a roll-up dropped, kept where a stale all is

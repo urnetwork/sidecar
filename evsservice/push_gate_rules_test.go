@@ -1,40 +1,18 @@
-// DESIGN-DETAILS 16.6's second gate bullet (EVS1-M6-07; QD-803): the rules clause's refusal through the engine on
-// FakeBlobs, and why its fate is recorded. A stale-pin push creating a shared ref leaves a placeholder head holding
-// its refusal record and no version; a second attempt of the same push id is answered from the record, by this engine
-// and by a sibling whose state does not hold the set yet; that sibling commits the same update on a ref whose head
-// holds no record, which is what a final, unrecorded refusal would have let it do on this one; the update built again
-// at the set's position commits as version 1 over the placeholder. On a deleted head the record goes into the
-// tombstone and the next version follows the DELETE's. A part of a creating push in parts is refused with no record,
-// and the push's seal, which alone commits, is refused and recorded.
+// QD-803's clause reverted (QD-1032), through the engine on FakeBlobs: with the engine's state holding a rule set for
+// the repo above the push's pin, a push that creates a shared ref commits as version 1 with no placeholder and no
+// refusal record, a re-creation on a deleted head at the DELETE's pin commits at the version after the DELETE's, and a
+// creating push in parts has every part taken and its seal committed. Before the revert each was refused 412
+// GATE_CLOSED and recorded (6d143f14).
 
 package evsservice
 
 import (
-	"bytes"
-	"net/http"
-	"net/http/httptest"
 	"testing"
-
-	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
-
-// Gate views holding one state whatever the check fixture appends after it: a sibling process that has not loaded
-// the newest state.
-type pushRulesHeldGateViews struct {
-	networkId sidecar.Id
-	view      sidecar.GkmAuthView
-}
-
-func (self *pushRulesHeldGateViews) View(networkId sidecar.Id) (sidecar.GkmAuthView, EvsAuthAnswer) {
-	if networkId != self.networkId {
-		return nil, EvsAuthUnknown
-	}
-	return self.view, EvsAuthAllowed
-}
 
 // Files a rule set for the fixture's repo: the next position of the engine's state holds the repo's row with a set at
 // that position. Its pin, the set's own, is returned.
@@ -43,112 +21,28 @@ func (self *pushFixture) fileRuleSet() *bridge.AuthPin {
 	return self.check.appendRepoState(self.check.rulesRepo(at)).Pin()
 }
 
-// A second engine on the fixture's host and cluster, its gate views holding view: a sibling process of the fixture's
-// engine, sharing its store.
-func (self *pushFixture) sibling(view sidecar.GkmAuthView) *EvsEngine {
-	self.t.Helper()
-	engine, err := NewEvsEngine(self.ctx, self.host.ServiceHost(), self.settings, &EvsEngineDeps{
-		AuthState: self.auth,
-		Uploads:   &EvsUploadDeps{Keys: self.check.receiptKeys, Quota: self.check.quota.gate},
-		GateViews: &pushRulesHeldGateViews{networkId: self.check.networkId, view: view},
-	})
-	if err != nil {
-		self.t.Fatal(err)
-	}
-	self.t.Cleanup(engine.Close)
-	return engine
-}
-
-// One POST .../push of body under token, served by engine.
-func (self *pushFixture) postTo(engine *EvsEngine, token string, body *protocol.EvsPushRequest) *httptest.ResponseRecorder {
-	bodyBytes, err := proto.Marshal(body)
-	if err != nil {
-		self.t.Fatal(err)
-	}
-	request := httptest.NewRequestWithContext(self.ctx, http.MethodPost, "/evs/v1/repos/"+sidecar.EvsKeyId(self.check.repoId)+"/push", bytes.NewReader(bodyBytes))
-	request.Header.Set("Authorization", "Bearer "+token)
-	recorder := httptest.NewRecorder()
-	engine.Handler().ServeHTTP(recorder, request)
-	return recorder
-}
-
-// Holds an answer to the clause's 412 GATE_CLOSED, recorded as asked: false on the attempt that records it, true on
-// one the record answers.
-func requireRulesAnswer(t *testing.T, name string, recorder *httptest.ResponseRecorder, recorded bool) {
-	t.Helper()
-	requireRefusal(t, recorder, http.StatusPreconditionFailed, protocol.EvsRefusalCode_EVS_REFUSAL_GATE_CLOSED)
-	if got := refusalOf(t, recorder).GetRecorded(); got != recorded {
-		t.Fatalf("%s: answered recorded %t, want %t", name, got, recorded)
-	}
-}
-
-// The head's refusal records: exactly one, of pushId and GATE_CLOSED.
-func requireOneRulesRecord(t *testing.T, name string, head *protocol.EvsHead, pushId sidecar.Id) {
-	t.Helper()
-	records, err := sidecar.DecodeEvsRefusals(head.GetRefused())
-	if err != nil || len(records) != 1 || !records[0].RecordsPush(pushId) || records[0].Code != protocol.EvsRefusalCode_EVS_REFUSAL_GATE_CLOSED {
-		t.Fatalf("%s: records %v (%v), want one GATE_CLOSED of the push", name, records, err)
-	}
-}
-
-// On no head: the stale-pin creation is recorded in a placeholder, answered from the record by this engine and by a
-// sibling that has not loaded the set, which commits the same update where no record stands; built again at the set's
-// position it commits as version 1 over the placeholder, keeping the record.
-func TestPushRecordsAStalePinCreationInAPlaceholderHead(t *testing.T) {
+// On no head: a creation pinned below the set commits as version 1, its head holding no refusal record.
+func TestPushCommitsACreationPinnedBelowARuleSet(t *testing.T) {
 	fixture := newPushFixture(t, nil)
-	unset := fixture.check.auth
 	setPin := fixture.fileRuleSet()
 	token := fixture.token(fixture.check.signerId)
 
-	// pinned at 1, below the set at 2
 	plan := fixture.plan()
 	fixture.create(plan, "a")
-	body := fixture.body(plan)
-	requireRulesAnswer(t, "the stale-pin creation", fixture.post(token, body), false)
-	placeholder := fixture.head()
-	if placeholder.Absent() || placeholder.Version() != 0 || placeholder.Head.GetRefKind() != 0 || placeholder.Head.GetRefMode() != 0 ||
-		len(placeholder.Head.GetWindow()) != 0 || placeholder.Head.GetFence() != 1 || len(placeholder.Head.GetRefused()) != sidecar.EvsRefusalByteCount {
-		t.Fatalf("placeholder %v", placeholder.Head)
+	if setPin.GetVersion() <= plan.Auth.GetVersion() {
+		t.Fatalf("the push pinned at %d, the set at %d", plan.Auth.GetVersion(), setPin.GetVersion())
 	}
-	requireOneRulesRecord(t, "the placeholder", placeholder.Head, plan.PushId)
-
-	// a second attempt of the same push id, at this engine and at a sibling whose state does not hold the set yet
-	requireRulesAnswer(t, "a second attempt", fixture.post(token, body), true)
-	sibling := fixture.sibling(unset)
-	requireRulesAnswer(t, "a second attempt at the sibling", fixture.postTo(sibling, token, body), true)
-	if head := fixture.head(); head.Etag != placeholder.Etag {
-		t.Fatal("an attempt the record answered wrote the head")
-	}
-
-	// why the fate is recorded: where no record stands, the sibling commits the same update at the same stale pin
-	elsewhere := *plan
-	elsewhere.RefId = testId("rules elsewhere ref")
-	elsewhere.BaseChain = sidecar.EvsChainStart(fixture.check.repoId, elsewhere.RefId)
-	fixture.requireCommitted(fixture.postTo(sibling, token, fixture.body(&elsewhere)), 1)
-	fixture.awaitStepEights()
-	if head := fixture.headOf(elsewhere.RefId); head.Version() != 1 || head.Head.GetAuth().GetVersion() != plan.Auth.GetVersion() {
-		t.Fatalf("the sibling's commit at %d under pin %d", head.Version(), head.Head.GetAuth().GetVersion())
-	}
-
-	// the same update built again at the set's position commits as version 1 over the placeholder, keeping its record
-	rebuilt := fixture.plan()
-	rebuilt.Auth = setPin
-	fixture.create(rebuilt, "a")
-	fixture.requireCommitted(fixture.post(token, fixture.body(rebuilt)), 1)
+	fixture.requireCommitted(fixture.post(token, fixture.body(plan)), 1)
 	fixture.awaitStepEights()
 	head := fixture.head()
-	if head.Version() != 1 || sidecar.Id(head.Head.GetPushId()) != rebuilt.PushId || head.Head.GetAuth().GetVersion() != setPin.GetVersion() ||
-		!bytes.Equal(head.Head.GetRefused(), placeholder.Head.GetRefused()) {
-		t.Fatalf("the rebuilt commit: version %d, pin %d, records kept %t", head.Version(), head.Head.GetAuth().GetVersion(),
-			bytes.Equal(head.Head.GetRefused(), placeholder.Head.GetRefused()))
+	if head.Version() != 1 || head.Head.GetAuth().GetVersion() != plan.Auth.GetVersion() || len(head.Head.GetRefused()) != 0 {
+		t.Fatalf("the creation: version %d, pin %d, %d B of records", head.Version(), head.Head.GetAuth().GetVersion(), len(head.Head.GetRefused()))
 	}
-	// and the held attempt is still answered from its record
-	requireRulesAnswer(t, "the held attempt after the commit", fixture.post(token, body), true)
 }
 
-// On a deleted head, at the DELETE's pin and below the set: the record goes into the tombstone, and the push built
-// again at the set's position commits at the version after the DELETE's.
-func TestPushRecordsAStalePinRecreationInTheTombstone(t *testing.T) {
+// On a deleted head, at the DELETE's pin and below the set: the re-creation commits at the version after the DELETE's,
+// and the tombstone took no record.
+func TestPushCommitsARecreationPinnedBelowARuleSet(t *testing.T) {
 	fixture := newPushFixture(t, nil)
 	// a shared ref's DELETE needs admin
 	fixture.auth.grant(fixture.check.signerId, fixture.check.repoId, sidecar.AclEvsAdmin)
@@ -162,72 +56,28 @@ func TestPushRecordsAStalePinRecreationInTheTombstone(t *testing.T) {
 	deletion.Flags = uint32(protocol.EvsPushFlag_EVS_PUSH_DELETE)
 	fixture.requireCommitted(fixture.post(token, fixture.body(deletion)), 2)
 	fixture.awaitStepEights()
-	tombstone := fixture.head()
-	if !tombstone.Head.GetDeleted() || tombstone.Version() != 2 || len(tombstone.Head.GetRefused()) != 0 {
-		t.Fatalf("the tombstone %v", tombstone.Head)
-	}
 
-	setPin := fixture.fileRuleSet()
-	// re-created at the DELETE's pin, 1, below the set at 2
+	fixture.fileRuleSet()
 	again := fixture.plan()
 	fixture.create(again, "b")
-	body := fixture.body(again)
-	requireRulesAnswer(t, "the stale-pin re-creation", fixture.post(token, body), false)
-	recorded := fixture.head()
-	if !recorded.Head.GetDeleted() || recorded.Version() != 2 || recorded.Etag == tombstone.Etag || !bytes.Equal(recorded.Head.GetChain(), tombstone.Head.GetChain()) {
-		t.Fatalf("the tombstone after the refusal %v", recorded.Head)
-	}
-	requireOneRulesRecord(t, "the tombstone", recorded.Head, again.PushId)
-	requireRulesAnswer(t, "a second attempt", fixture.post(token, body), true)
-
-	// built again at the set's position: the next version follows the DELETE's
-	rebuilt := fixture.plan()
-	rebuilt.Auth = setPin
-	fixture.create(rebuilt, "b")
-	fixture.requireCommitted(fixture.post(token, fixture.body(rebuilt)), 3)
+	fixture.requireCommitted(fixture.post(token, fixture.body(again)), 3)
 	fixture.awaitStepEights()
-	if head := fixture.head(); head.Head.GetDeleted() || head.Version() != 3 || head.Head.GetAuth().GetVersion() != setPin.GetVersion() {
-		t.Fatalf("the re-created head: deleted %t at %d under pin %d", head.Head.GetDeleted(), head.Version(), head.Head.GetAuth().GetVersion())
+	if head := fixture.head(); head.Head.GetDeleted() || head.Version() != 3 || len(head.Head.GetRefused()) != 0 {
+		t.Fatalf("the re-created head: deleted %t at %d, %d B of records", head.Head.GetDeleted(), head.Version(), len(head.Head.GetRefused()))
 	}
 }
 
-// A part of a creating push in parts, pinned below the set, is refused with no record: only its push's seal commits.
-func TestPushRefusesAStalePinPartWithNoRecord(t *testing.T) {
+// A creating push in parts whose parts this engine took before its state held the set: a part posted again after it is
+// taken, and the seal commits.
+func TestPushSealsACreationInPartsPinnedBelowARuleSet(t *testing.T) {
 	fixture := newPushFixture(t, nil)
-	fixture.fileRuleSet()
 	token := fixture.token(fixture.check.signerId)
 	built := fixture.built(fixture.partsPlan(protocol.EvsRefMode_EVS_REF_FILE, 1100))
 	if len(built.Parts) < 2 {
 		t.Fatalf("a push in %d parts", len(built.Parts))
 	}
-	requireRulesAnswer(t, "a part", fixture.postPart(token, built, 0), false)
-	if !fixture.head().Absent() {
-		t.Fatal("a part's refusal wrote a head")
-	}
-}
-
-// A creating push in parts whose parts this engine took before its state held the set: a part posted after it is
-// refused with no record, and the seal, which alone commits, is refused and recorded in a placeholder head, so an
-// attempt of the seal at a sibling that has not loaded the set meets the record.
-func TestPushRecordsAStalePinSealInAPlaceholderHead(t *testing.T) {
-	fixture := newPushFixture(t, nil)
-	unset := fixture.check.auth
-	token := fixture.token(fixture.check.signerId)
-	built := fixture.built(fixture.partsPlan(protocol.EvsRefMode_EVS_REF_FILE, 1100))
 	places := fixture.postParts(token, built)
 	fixture.fileRuleSet()
-	requireRulesAnswer(t, "a part posted after the set", fixture.postPart(token, built, 0), false)
-	if !fixture.head().Absent() {
-		t.Fatal("a part's refusal wrote a head")
-	}
-	requireRulesAnswer(t, "the seal", fixture.seal(token, built, places), false)
-	placeholder := fixture.head()
-	if placeholder.Absent() || placeholder.Version() != 0 || len(placeholder.Head.GetWindow()) != 0 {
-		t.Fatalf("placeholder %v", placeholder.Head)
-	}
-	requireOneRulesRecord(t, "the placeholder", placeholder.Head, sidecar.Id(built.Statement.Push.GetPushId()))
-	requireRulesAnswer(t, "the seal again", fixture.seal(token, built, places), true)
-	sibling := fixture.sibling(unset)
-	requireRulesAnswer(t, "the seal at the sibling", fixture.postTo(sibling, token,
-		&protocol.EvsPushRequest{Statement: built.Statement.Bytes, PartPlaces: places, SlotBodies: built.SlotBodies}), true)
+	fixture.requirePlace(fixture.postPart(token, built, 0))
+	fixture.requireCommitted(fixture.seal(token, built, places), 1)
 }

@@ -22,6 +22,14 @@
 //	OwnerConfirm    a consented device of the confirmed sidecar's member
 //	the access log  acl_statement_repo.go, RepoPrefixRules among them (DESIGN-DETAILS 16.2.2)
 //
+// RepoPrefixRules is dark at launch (QD-1032): the client-checked prefix write rules moved to Later, and the log's
+// wiring below refuses each at its position, before ACL's rule is asked and again before any fold, by config_apply.go's
+// rule for a type whose rule this release does not carry (ErrConfigRuleMissing), unless the log's
+// ConfigLogSettings.AclPrefix runs the rules. No other rule fits: the type is one this release parses, since its number
+// stays reserved, and a refused statement keeps its position, so api and every reader refuse it alike and the log goes
+// on (FS-102), where a fork would stop it. CheckStatement's rule for it stays on the branch for Later, and its tests
+// call it directly.
+//
 // Every signer is a sidecar the state admits, standing at the entry's time (not revoked, expired, parked or
 // suspended, an untagged one's member still a member) and not read_only (D-TEAM-24). A k-of-n statement, a completed
 // AuthorityProposal, comes with its signers counted by TEAM's authority rows, and only Suspend, Unsuspend, AuditOptIn
@@ -475,8 +483,22 @@ func configAclStatement(statement *configStatement) *AclStatement {
 	}
 }
 
-// CheckStatement at state, keeping the verdict on the statement.
+// The log's verdict on a RepoPrefixRules while its prefix rules are dark (QD-1032; the file header): refused at its
+// position as a type whose rule this release does not carry, the closed direction, so no repo's rows gain a set. Nil
+// for every other type, and for a RepoPrefixRules where state's log runs the rules.
+func configAclPrefixRulesDark(state *ConfigState, statement *configStatement) error {
+	if statement.signedType != bridge.SignedType_SIGNED_REPO_PREFIX_RULES || state.aclPrefixSettings().Enabled {
+		return nil
+	}
+	return fmt.Errorf("%w: %s is deferred to Later (QD-1032), and this release takes no prefix rule set", ErrConfigRuleMissing, statement.signedType)
+}
+
+// CheckStatement at state, keeping the verdict on the statement. A RepoPrefixRules is refused first while the log's
+// prefix rules are dark.
 func (self configAclStatementRules) check(state *ConfigState, statement *configStatement) error {
+	if err := configAclPrefixRulesDark(state, statement); err != nil {
+		return err
+	}
 	acl, err := state.Acl()
 	if err != nil {
 		return fmt.Errorf("%w: the state's acl rows do not build", ErrConfigRule)
@@ -502,8 +524,13 @@ func (self configAclStatementRules) reapply(next *configStateBuilder, statement 
 // Writes a statement's fold to next's AclRows and its effect to next's rows: ApplyStatement's fold on the verdict its
 // check found, or, over a new base, ReapplyStatement's on the state being rebuilt, which derives there what the body's
 // verdict lacks. A statement a base's re-application reaches through a proposal, a cosign or a tick that completes or
-// activates it applies rather than re-applies, so its verdict, the body's, says which.
+// activates it applies rather than re-applies, so its verdict, the body's, says which. A RepoPrefixRules folds nothing
+// while the log's prefix rules are dark, whatever verdict a base's tail_verdicts gave it: the error drops its effect
+// there and keeps the verdict, so a new device starting at such a base gains no set either.
 func (self configAclStatementRules) fold(next *configStateBuilder, statement *configStatement, reapply bool) error {
+	if err := configAclPrefixRulesDark(next.state, statement); err != nil {
+		return err
+	}
 	verdict := statement.aclVerdict
 	if verdict == nil {
 		return fmt.Errorf("%w: %s applied without its check", ErrConfigRule, statement.signedType)
@@ -600,6 +627,14 @@ func (self *ConfigState) aclSpendCheck() AclSpendCheck {
 		return AclSpendCheckUnbuilt{}
 	}
 	return self.history.settings.AclSpendCheck
+}
+
+// The prefix rules' settings this state's log runs: its settings', else the defaults, whose rules are off (QD-1032).
+func (self *ConfigState) aclPrefixSettings() *AclPrefixSettings {
+	if self.history == nil || self.history.settings == nil || self.history.settings.AclPrefix == nil {
+		return DefaultAclPrefixSettings()
+	}
+	return self.history.settings.AclPrefix
 }
 
 // The time entry k was sequenced at, from the states this state's log keeps, false when k is above this state or

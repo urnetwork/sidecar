@@ -112,6 +112,7 @@ func TestEvsLocalPinPushCommitsNoChangeAndMovesNoLocalRef(t *testing.T) {
 		Sets: func(ctx context.Context, repoId Id) ([]*AclPrefixRuleSet, error) {
 			return []*AclPrefixRuleSet{set}, nil
 		},
+		Settings: testAclPrefixSettingsOn(),
 	})
 	status, err := client.PrefixRulesStatus(ctx, repoWorld.repoId)
 	if err != nil {

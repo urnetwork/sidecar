@@ -87,10 +87,11 @@ func (self *evsPrefixTest) reader(label string) *evsTestClient {
 	return reader
 }
 
-// Enables the rules on a client, its sets the test's.
+// Enables the rules on a client, its sets the test's, with the switch on that keeps them dark at launch (QD-1032).
 func (self *evsPrefixTest) enable(reader *evsTestClient) {
 	reader.client.EnablePrefixRules(&EvsPrefixRulesArgs{
-		Sets: func(ctx context.Context, repoId Id) ([]*AclPrefixRuleSet, error) { return slices.Clone(self.sets), nil },
+		Sets:     func(ctx context.Context, repoId Id) ([]*AclPrefixRuleSet, error) { return slices.Clone(self.sets), nil },
+		Settings: testAclPrefixSettingsOn(),
 	})
 }
 
@@ -230,7 +231,7 @@ func TestEvsPrefixWalksBackAtMostItsDepth(t *testing.T) {
 	}
 	// a smaller depth is a setting, not a constant
 	shallow := test.world.reader(t, evsTestId("shallow reader"))
-	settings := DefaultAclPrefixSettings()
+	settings := testAclPrefixSettingsOn()
 	settings.WalkBackVersionCount = 0
 	shallow.client.EnablePrefixRules(&EvsPrefixRulesArgs{
 		Sets:     func(ctx context.Context, repoId Id) ([]*AclPrefixRuleSet, error) { return test.sets, nil },
@@ -417,11 +418,15 @@ func TestEvsPrefixListLeavesOutAnIgnoredDelta(t *testing.T) {
 	if row := reader.client.epochs.cachedListing(world.repoId, world.refId, listing.HeadVersion, "src").rows["planted.go"]; row == nil {
 		t.Errorf("the lookup's table lost a row evs holds")
 	}
-	// a reader with no rules sees evs's table
+	// a reader no composition enabled the rules on keeps them dark, the launch default (QD-1032): it sees evs's table,
+	// the breach's row in it, and alarms nothing
 	plain := newEvsTestWorldCopyReader(t, world)
 	plainListing, err := plain.client.Repo(world.repoId).List(context.Background(), &EvsReadArgs{Path: "src"})
-	if evsPrefixTestDetail(err) != EvsPrefixDetailPending || plainListing != nil {
-		t.Errorf("a client with no judge on a ruled repo: %v %v", plainListing, err)
+	if err != nil || names(plainListing) != "main.go,planted.go" {
+		t.Errorf("a client with the rules dark on a ruled repo: %v %v", plainListing, err)
+	}
+	if alarms := evsPrefixTestAlarms(plain); len(alarms) != 0 {
+		t.Errorf("a client with the rules dark alarmed %+v", alarms)
 	}
 }
 

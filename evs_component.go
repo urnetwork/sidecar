@@ -13,7 +13,9 @@
 // The repo's prefix write rules (EVS1-M6-04, EVS1-M6-05): each generation runs the prefix timer, which on a device
 // whose composition repairs passes the repair runner and the owed pin pushes every RepairPassInterval; the Sidecar
 // files a next rule set through `ur evs rules` (FilePrefixRules), reading the subjects it names against its verified
-// state and config head, and sends the filer's pin pushes once its log holds the set.
+// state and config head, and sends the filer's pin pushes once its log holds the set. All of it is dark at launch
+// (QD-1032): with the client's prefix settings off, the defaults, no timer runs and FilePrefixRules files nothing,
+// answering ErrAclPrefixRulesDeferred.
 //
 // connect legs only: the sidecar_http leg runs no component (§18.10). Safe for concurrent use.
 
@@ -41,9 +43,10 @@ type EvsComponent struct {
 
 // The component of client, which AddComponent or NewSidecar attaches. A client the composition did not enable the
 // repo's prefix write rules on is enabled here with the defaults (EVS1-M6-04; DESIGN-DETAILS 16.2.5): a ruled repo is
-// read through the judge on every composition that runs evs.
+// read through the judge on every composition that runs evs once the rules run, and the defaults keep them dark
+// (QD-1032). A judge a composition installed stays as it was, its settings and repairs with it.
 func NewEvsComponent(client *EvsClient) *EvsComponent {
-	if client.prefixJudge() == nil {
+	if client.installedPrefixJudge() == nil {
 		client.EnablePrefixRules(nil)
 	}
 	return &EvsComponent{client: client}
@@ -325,7 +328,11 @@ type EvsPrefixRulesFiling struct {
 // AclPrefixRulesFiler, sealed under client's current repo key and built from the sets client holds, then sends the
 // filer's pin push to each shared ref of the repo once this device's log holds the set (EvsClient.PinPushRules). A
 // pin push that fails stays owed in the journal, and the filing stands: its error is the ref's, not the filing's.
+// While client's prefix rules are dark, the launch default, nothing is filed: ErrAclPrefixRulesDeferred (QD-1032).
 func (self *Sidecar) FilePrefixRules(ctx context.Context, client *EvsClient, request *AclPrefixRulesRequest, origin SidecarActOrigin) (*EvsPrefixRulesFiling, error) {
+	if !client.PrefixRulesEnabled() {
+		return nil, ErrAclPrefixRulesDeferred
+	}
 	follower := self.ConfigFollower()
 	if follower == nil || follower.Client() == nil {
 		return nil, ErrSidecarActNoAuthority
@@ -365,7 +372,8 @@ func (self *Sidecar) FilePrefixRules(ctx context.Context, client *EvsClient, req
 
 // The prefix rules' loop until ctx ends (DESIGN-DETAILS 16.2.8, 16.2.9): every RepairPassInterval, on a device whose
 // composition repairs, one pass of the repair runner over each repo whose mirror journalled an ignored event, and the
-// pin pushes the journal owes. What a pass leaves waits for the next.
+// pin pushes the journal owes. What a pass leaves waits for the next. None runs while the client's rules are dark
+// (QD-1032), since prefixJudge answers no judge.
 func (self *EvsComponent) runPrefixRepair(ctx context.Context) {
 	judge := self.client.prefixJudge()
 	if judge == nil || !judge.args.Repair || judge.settings.RepairPassInterval <= 0 {

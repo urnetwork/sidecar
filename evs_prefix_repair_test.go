@@ -48,6 +48,7 @@ func newEvsPrefixWriterTest(t *testing.T) *evsPrefixWriterTest {
 			}
 			return AclPrefixWriteDecision{AclDecision: AclDecision{Allowed: true, Reason: AclReasonPrefixRule}}
 		},
+		Settings: testAclPrefixSettingsOn(),
 	})
 	return test
 }
@@ -93,7 +94,7 @@ func TestEvsPrefixWriteRefusedBeforeAnyRequest(t *testing.T) {
 	bare.client.args.Gkm, bare.client.args.Sign = writer.gkm, writer.world.signer.sign
 	bare.client.args.Config = func() GkmAuthView { return writer.world.config }
 	bare.client.args.Identity = writer.test.client.args.Identity
-	bare.client.EnablePrefixRules(nil)
+	bare.client.EnablePrefixRules(&EvsPrefixRulesArgs{Settings: testAclPrefixSettingsOn()})
 	_, err := bare.client.Repo(writer.world.repoId).Write(context.Background(), &EvsWriteArgs{Path: "src/bare.go", Content: bytes.NewReader([]byte("x")), Size: 1})
 	if evsPrefixTestDetail(err) != EvsPrefixDetailPending {
 		t.Errorf("a device with no seam: %v", err)
@@ -244,8 +245,10 @@ func TestEvsPrefixFollowAfterAClosedGateMeetsTheNewerSet(t *testing.T) {
 	}
 }
 
-// Enables the rules on the writer again with settings and the repair runner on, as a desktop's composition does.
+// Enables the rules on the writer again with settings and the repair runner on, as a desktop's composition does, the
+// settings' switch turned on, which keeps them dark at launch (QD-1032).
 func (self *evsPrefixWriterTest) enableRepairs(settings *AclPrefixSettings) *evsPrefixJudge {
+	settings.Enabled = true
 	self.writer.test.client.EnablePrefixRules(&EvsPrefixRulesArgs{
 		Sets: func(ctx context.Context, repoId Id) ([]*AclPrefixRuleSet, error) { return slices.Clone(self.sets), nil },
 		AllowWrite: func(write *AclPrefixWrite) AclPrefixWriteDecision {
