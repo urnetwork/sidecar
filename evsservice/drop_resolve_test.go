@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"slices"
 	"strconv"
@@ -956,8 +957,12 @@ func TestDropResolveReindexWritesACorruptListFileAgain(t *testing.T) {
 		t.Fatalf("a corrupt file read: %v", err)
 	}
 	request := &DropReindexRequest{Cluster: world.cluster, SegmentCluster: world.segment, RepoId: world.repoId, JobId: world.jobId}
-	if _, err := world.resolver().Reindex(world.ctx, request); !errors.Is(err, ErrDropJobState) {
+	before := world.host.Blobs.Dump()
+	if _, err := world.resolver().Reindex(world.ctx, request); !errors.Is(err, ErrDropJobState) || !errors.Is(err, ErrDropReindexNoDrops) {
 		t.Fatalf("a reindex with no readable file and no drops named: %v", err)
+	}
+	if !maps.EqualFunc(world.host.Blobs.Dump(), before, bytes.Equal) {
+		t.Fatal("a reindex with no drops changed the store")
 	}
 	request.Drops = []*DropListDrop{{DropId: covered.DropId, RefId: covered.RefId, Version: covered.Version, PushId: covered.PushId}}
 	world.clock.Advance(time.Minute)
