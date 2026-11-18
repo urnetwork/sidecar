@@ -29,6 +29,33 @@ import (
 // and the repo placed afresh and active, as §19.10 has it before its history returns. The devices, their stores and
 // the authorization log stand.
 func (self *epochWorld) loseSite() {
+	self.t.Helper()
+	lost := self.loseSiteUnplaced(&depositAuthState{networkId: self.networkId, kind: self.kind})
+	placeBytes, err := (&sidecar.EvsRepoPlace{ClusterId: "meta-1", CreatorSidecarId: self.signers["w"].SidecarId}).Marshal()
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	if _, err := self.cluster.PutIfNoneMatch(self.ctx, sidecar.EvsPlaceKey(self.repoId), placeBytes, nil); err != nil {
+		self.t.Fatal(err)
+	}
+	repoBytes, err := proto.Marshal(&protocol.EvsRepoObject{
+		RepoId: self.repoId.Bytes(), Kind: self.kind, State: protocol.EvsRepoState_EVS_REPO_ACTIVE,
+		Format: sidecar.EvsRepoFormat1, NetworkId: self.networkId.Bytes(),
+	})
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	if _, err := self.cluster.PutIfNoneMatch(self.ctx, evsservice.RepoKey(self.repoId), repoBytes, nil); err != nil {
+		self.t.Fatal(err)
+	}
+	// §19.10 returns the groups before any repo's history
+	self.returnGroups(lost)
+}
+
+// The site loss alone: the new host, empty, evs on it with reseed on and authState its view of the projection, and
+// nothing of the repo there yet, neither its placement nor its group, which the groups step returns (§19.10). The
+// answer is the lost site's cluster, which holds what this world's fake gkm kept there.
+func (self *epochWorld) loseSiteUnplaced(authState evsservice.EvsAuthState) sidecar.BlobCluster {
 	t := self.t
 	t.Helper()
 	hostSettings := DefaultFakeHostSettings()
@@ -65,7 +92,7 @@ func (self *epochWorld) loseSite() {
 	settings.PushUnknownRereadInterval = 0
 	settings.RepoCacheTtl = 0
 	engine, err := evsservice.NewEvsEngine(self.ctx, host.ServiceHost(), settings, &evsservice.EvsEngineDeps{
-		AuthState: &depositAuthState{networkId: self.networkId, kind: self.kind},
+		AuthState: authState,
 		Uploads:   &evsservice.EvsUploadDeps{Keys: receiptKeys, Quota: quota, Usage: usage},
 		GateViews: self.gate,
 	})
@@ -73,31 +100,23 @@ func (self *epochWorld) loseSite() {
 		t.Fatal(err)
 	}
 	t.Cleanup(engine.Close)
-	placeBytes, err := (&sidecar.EvsRepoPlace{ClusterId: "meta-1", CreatorSidecarId: self.signers["w"].SidecarId}).Marshal()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := cluster.PutIfNoneMatch(self.ctx, sidecar.EvsPlaceKey(self.repoId), placeBytes, nil); err != nil {
-		t.Fatal(err)
-	}
-	repoBytes, err := proto.Marshal(&protocol.EvsRepoObject{
-		RepoId: self.repoId.Bytes(), Kind: self.kind, State: protocol.EvsRepoState_EVS_REPO_ACTIVE,
-		Format: sidecar.EvsRepoFormat1, NetworkId: self.networkId.Bytes(),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := cluster.PutIfNoneMatch(self.ctx, evsservice.RepoKey(self.repoId), repoBytes, nil); err != nil {
-		t.Fatal(err)
-	}
-	// §19.10 returns the groups before any repo: gkm's objects, which this world's fake gkm keeps on the lost site
+	lost := self.cluster
+	self.host, self.cluster, self.engine = host, cluster, engine
+	return lost
+}
+
+// The groups' return (§19.10's groups row): gkm's objects, which this world's fake gkm kept on the lost site's
+// cluster, copied to the new site's as a re-form would leave them.
+func (self *epochWorld) returnGroups(lost sidecar.BlobCluster) {
+	t := self.t
+	t.Helper()
 	for startAfter := ""; ; {
-		objects, more, err := self.cluster.List(self.ctx, "gkm/", startAfter, 1000)
+		objects, more, err := lost.List(self.ctx, "gkm/", startAfter, 1000)
 		if err != nil {
 			t.Fatal(err)
 		}
 		for _, info := range objects {
-			object, err := self.cluster.Get(self.ctx, info.Key)
+			object, err := lost.Get(self.ctx, info.Key)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -105,7 +124,7 @@ func (self *epochWorld) loseSite() {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := cluster.PutIfNoneMatch(self.ctx, info.Key, body, nil); err != nil {
+			if _, err := self.cluster.PutIfNoneMatch(self.ctx, info.Key, body, nil); err != nil {
 				t.Fatal(err)
 			}
 			startAfter = info.Key
@@ -114,7 +133,6 @@ func (self *epochWorld) loseSite() {
 			break
 		}
 	}
-	self.host, self.cluster, self.engine = host, cluster, engine
 }
 
 // A slot's bytes as the world's cluster holds them, nil for one it does not hold.

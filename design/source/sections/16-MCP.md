@@ -875,7 +875,8 @@ phase 1     both latest buckets (owner decision 152), an expired one until its r
             157), a dropped one this device keeps until its cached all covers it (§5.9), and the local layer,
             the commits past indexed_through (§11.14's coverage) that this device indexed from its own
             plaintext (§5.9): answered at once
-phase 2     all, at once where this device holds it current; with more, the owner's "search more", the daemon
+phase 2     all, at once where this device holds it current, a search of the cache reading all only while it is
+            usable (§11.14's retained row; owner decision 393); with more, the owner's "search more", the daemon
             first fetches every all shard it lacks, whole, youngest first in a/m's fixed order, whatever the
             query matches, and searches each as it lands, under the cold contract (Targets, below; owner
             decisions 152, 154)

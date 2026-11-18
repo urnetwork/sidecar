@@ -29,6 +29,26 @@
 //
 // Nothing here reads evs: a head below this device's pin is what a re-seed mends, and the verifier refuses it until
 // the EvsReseed is filed. The walk starts each ref at version 1 and lets 5a answer what evs already holds.
+//
+// Before a repo's walk comes its groups step (§19.10's groups row; QD-1062), EvsRepo.ReseedPlace, which the repo's
+// first admin device to reach the new site runs once:
+//
+//	place     PUT /evs/v1/repos/<id>, as a create resuming its id sends it. In a recovery evs writes repo/ keying for
+//	          a repo its projection lists live, and deleted{deletion_id, its entry's time, signer} for one whose
+//	          projection ends in an unrestored RepoDelete inside the restore window, so such a repo is deleted from
+//	          its first object and the walk's segment uploads, which come before a version's first reseed call, meet
+//	          the deleted repo/ that §11.12's re-seed exception takes them into (QD-977); one past restoring answers
+//	          409 SHREDDING, and the step ends with it. 409 REPO_PLACED says another admin's device placed the repo:
+//	          that device re-forms and activates it, and this one goes on to its walk
+//	group     the re-form (GkmGroupClient.ReformGroup), for a repo re-seeded as deleted its form and ladder alone,
+//	          which is all gkm takes while repo/ reads deleted
+//	activate  POST .../activate for a live repo. A repo re-seeded as deleted is never activated: activate answers a
+//	          deleted repo/ 409 REPO_DELETED, and it stays deleted until its RepoRestore, after which a second
+//	          ReformGroup finishes its group
+//
+// Which of the two a repo is, the step reads from this device's verified config state, the newest RepoDelete of the
+// repo's row with no RepoRestore of it, as Restore reads it; whether the deletion is still inside the restore window
+// is evs's to judge, at place. A repo whose RepoDelete carries now is never placed.
 
 package sidecar
 
@@ -52,7 +72,34 @@ var (
 	ErrEvsReseedMirrorPartial = errors.New("evs: the mirror does not hold the version whole")
 	// evs answered a version another than the one the mirror holds the statement at.
 	ErrEvsReseedVersion = errors.New("evs: a re-seeded push committed at another version")
+	// A repo this device's verified state shows no re-seed can return: one it does not hold, or one shredded by a
+	// RepoDelete with now.
+	ErrEvsReseedNotRestorable = errors.New("evs: the repo is not one a re-seed returns")
 )
+
+// What a repo's groups step is asked.
+type EvsReseedPlaceArgs struct {
+	// Re-forms the repo's group once the repo is placed: GkmGroupClient.ReformGroup, asked with Reseed for a repo
+	// re-seeded as deleted. Nil re-forms through the client's key client where that re-forms groups, and where it
+	// does not the step stops after the place with ErrGkmUnavailable, activating nothing.
+	ReformGroup func(ctx context.Context, args *GkmReformArgs) (Id, error)
+}
+
+// What a repo's groups step did.
+type EvsReseedPlaced struct {
+	// The repo is re-seeded as deleted: placed with repo/ deleted, its group's form and ladder returned, and never
+	// activated.
+	Deleted bool
+	// Another admin's device placed the repo first, so this one re-formed and activated nothing.
+	PlacedByAnother bool
+	// The re-formed group; the zero id when another device placed the repo.
+	GroupId Id
+}
+
+// A key client that re-forms a repo's group after a site loss: GkmGroupClient.
+type evsReseedGroupReformer interface {
+	ReformGroup(ctx context.Context, args *GkmReformArgs) (Id, error)
+}
 
 // What a re-seed is asked.
 type EvsReseedArgs struct {
@@ -103,6 +150,63 @@ func (self *EvsReseedResult) Whole() bool {
 		}
 	}
 	return len(self.Slots) == 0
+}
+
+// The repo's groups step, before its walk: placed afresh, its group re-formed, and activated unless it is re-seeded
+// as deleted. See the file header. ErrEvsNoConfig with no verified state; ErrEvsReseedNotRestorable, with nothing
+// sent, for a repo the state does not hold or whose RepoDelete carries now. evs's refusal of the place, 409 SHREDDING
+// for a repo past its restore window among them, is the error. A step cut short runs again whole: the place answers
+// its creator's retry as the first did, and a re-form under way resumes from the keychain's record.
+func (self *EvsRepo) ReseedPlace(ctx context.Context, args *EvsReseedPlaceArgs) (*EvsReseedPlaced, error) {
+	if args == nil {
+		args = &EvsReseedPlaceArgs{}
+	}
+	client := self.client
+	if client.args.Config == nil {
+		return nil, ErrEvsNoConfig
+	}
+	state := client.args.Config()
+	if state == nil {
+		return nil, ErrEvsNoConfig
+	}
+	repo := state.Repo(self.repoId)
+	if repo == nil {
+		return nil, fmt.Errorf("%w: this device's verified state holds no such repo", ErrEvsReseedNotRestorable)
+	}
+	deletion := repo.GetDeletion()
+	deleted := deletion != nil && deletion.GetDeletedAt() != 0 && deletion.GetRestoredAt() == 0
+	if deleted && deletion.GetNow() {
+		// evs's projection may trail this device's state: never placed on the chance it still reads the repo live
+		return nil, fmt.Errorf("%w: its RepoDelete carries now", ErrEvsReseedNotRestorable)
+	}
+	placed := &EvsReseedPlaced{Deleted: deleted}
+	if err := self.callLifecycle(ctx, evsPlaceCall(self.repoId)); err != nil {
+		if IsEvsRepoPlaced(err) {
+			placed.PlacedByAnother = true
+			return placed, nil
+		}
+		return nil, err
+	}
+	reformGroup := args.ReformGroup
+	if reformGroup == nil {
+		reformer, ok := client.args.Gkm.(evsReseedGroupReformer)
+		if !ok {
+			return placed, fmt.Errorf("%w: this key client re-forms no group", ErrGkmUnavailable)
+		}
+		reformGroup = reformer.ReformGroup
+	}
+	groupId, err := reformGroup(ctx, &GkmReformArgs{RepoId: self.repoId, Reseed: deleted})
+	if err != nil {
+		return placed, fmt.Errorf("evs: the repo's group: %w", err)
+	}
+	placed.GroupId = groupId
+	if deleted {
+		return placed, nil
+	}
+	if err := self.callLifecycle(ctx, evsActivateCall(self.repoId)); err != nil {
+		return placed, err
+	}
+	return placed, nil
 }
 
 // One walk.

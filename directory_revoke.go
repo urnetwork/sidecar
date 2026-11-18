@@ -18,6 +18,13 @@
 //	          the version that replaced the marker is read from the fold, which keeps it past its entry, and kept per
 //	          request in the store once found (requestLapsed), so a later revocation's marker, a higher version,
 //	          revives none, though the runner's own ERASEs take the entry that showed it
+//	          A copy that never opened the item that lapsed a request cannot find the lapse, and a later request's
+//	          ERASEs may take an older request's marker before it was worked. So a request whose own marker this
+//	          copy no longer opens, while a later marker of its repo stands, is superseded (QD-1061,
+//	          requestSuperseded): the runner does not work it, name it or raise for it, later copies go under the
+//	          newer request, and its revoker reads it lapsed, once this copy holds the request's entry, so it has
+//	          read the push that carried the marker. A revoke of a repo whose journaled revocation is superseded
+//	          files a new request above the marker that stands, as one after a lapse does
 //	readers   a directory ERASE counts only from a sidecar the state names a directory admin: the reader takes no
 //	          other, and alarms bad_erasure naming its signer, which only a server breaching the scope rule can
 //	          commit. One whose note names an erasure_request is shown as that repo owner's revocation (ErasureOf)
@@ -71,7 +78,8 @@ const (
 	DirectoryRevocationPending DirectoryRevocationState = "pending"
 	// An ERASE names its request.
 	DirectoryRevocationDone DirectoryRevocationState = "done"
-	// A full item at a higher version replaced its marker: the request erases nothing.
+	// A full item at a higher version replaced its marker, or a later marker stands over a marker this copy no longer
+	// opens (DirectoryRevocation.Superseded): the request erases nothing.
 	DirectoryRevocationLapsed DirectoryRevocationState = "lapsed"
 )
 
@@ -96,6 +104,9 @@ type DirectoryRevocation struct {
 	MarkerEntryId  *Id
 	RequestEntryId *Id
 	State          DirectoryRevocationState
+	// Lapsed by the superseded rule alone: this copy no longer opens its marker and a later marker of the repo stands,
+	// with no full item found above its marker (QD-1061).
+	Superseded bool
 	// Pending: how long it has waited.
 	Age time.Duration
 	// Done: evs's time of the first ERASE naming it, and its eraser.
@@ -337,7 +348,7 @@ func (self *DirectoryClient) RevokeRepo(ctx context.Context, args *DirectoryRevo
 		return nil, err
 	}
 	standing := self.standingRepoItem(auth, args.RepoId, nowMillis)
-	if journal != nil && journal.Filed && !self.revokeLapsed(auth, journal, standing, nowMillis) {
+	if journal != nil && journal.Filed && !self.revokeLapsed(auth, journal, standing, nowMillis) && !self.revokeSuperseded(journal, standing) {
 		// filed once: the marker stands, or the copy has not read it back yet
 		return self.revocationOf(auth, journal, standing, nowMillis), nil
 	}
@@ -443,6 +454,66 @@ func (self *DirectoryClient) revokeLapsed(auth DirectoryAuthView, journal *direc
 	return lapsedVersion != 0
 }
 
+// Whether a journaled revocation is superseded: a later marker of its repo stands, this copy no longer opens the
+// journaled one, and it holds the request's entry, so it has read the push that carried the marker and reads no
+// marker of its own that has not come back yet as gone (QD-1061).
+func (self *DirectoryClient) revokeSuperseded(journal *directoryRevokeDocument, standing *DirectoryItem) bool {
+	if !self.requestSuperseded(standing, journal.RepoId, journal.MarkerVersion) {
+		return false
+	}
+	return slices.ContainsFunc(self.erasureRequestViews(), func(view *DirectoryErasureRequestView) bool {
+		return view.RequestId == journal.RequestId
+	})
+}
+
+// The local superseded rule for one erasure request of repoId, its marker at markerVersion, under the item that stands
+// for the repo in this copy (QD-1061): a later marker stands, and this copy no longer opens the request's own. The
+// later marker's request erases every copy the older one could name, each version below a higher marker and each run
+// naming the repo, so the older one has nothing left that is its own. A copy derives it from what it holds, with no
+// item above the marker ever opened: one admitted after the ERASEs, one whose read was lost, a revoker's that was
+// offline throughout.
+func (self *DirectoryClient) requestSuperseded(standing *DirectoryItem, repoId Id, markerVersion uint64) bool {
+	if standing == nil || standing.Display != DirectoryItemPrivate || standing.Announcement.GetVersion() <= markerVersion {
+		return false
+	}
+	return !self.opensRepoMarker(repoId, markerVersion)
+}
+
+// Whether this copy opens a private marker of repoId at markerVersion: an announce entry with its key and a body that
+// decodes (repoMarkerEntryIds), or from format 2 the repo's file as the fold holds it. An erased or expired entry
+// opens nothing.
+func (self *DirectoryClient) opensRepoMarker(repoId Id, markerVersion uint64) bool {
+	if 0 < len(self.repoMarkerEntryIds(repoId, markerVersion)) {
+		return true
+	}
+	key := DirectoryItemKey{Kind: DirectoryAnnouncementKindRepo, AnnouncementId: DirectoryRepoAnnouncementId(repoId)}
+	fold := self.currentFold()
+	fold.stateLock.Lock()
+	defer fold.stateLock.Unlock()
+	return slices.ContainsFunc(fold.keyVersions[key], func(version *directoryVersion) bool {
+		return version.item.GetWhere().GetPrivate() && version.item.GetVersion() == markerVersion
+	})
+}
+
+// The announce entries of this copy that open as a private marker of repoId at markerVersion, live or archived: the
+// request's own marker, and another revoker's at the same version.
+func (self *DirectoryClient) repoMarkerEntryIds(repoId Id, markerVersion uint64) []Id {
+	entryIds := []Id{}
+	for _, entry := range self.entriesOfKinds(RecordKindAnnounce) {
+		if (entry.State != RecordEntryLive && entry.State != RecordEntryArchived) || entry.Body == nil || entry.BodyInvalid {
+			continue
+		}
+		item, err := DirectoryDecodeAnnouncement(entry.Body)
+		if err != nil || DirectoryAnnouncementKind(item.GetKind()) != DirectoryAnnouncementKindRepo || !item.GetWhere().GetPrivate() {
+			continue
+		}
+		if recordIdOf(item.GetWhere().GetRepoId()) == repoId && item.GetVersion() == markerVersion {
+			entryIds = append(entryIds, entry.EntryId)
+		}
+	}
+	return entryIds
+}
+
 // The version of the full item that replaced a request's marker, 0 while none has: the one kept for requestId once
 // found, else the lowest the fold accepted for repoId above markerVersion, then held in memory and true, for the
 // caller to keep it in the store (keepLapsed), since the entry that carried it may be erased, by the runner's ERASEs
@@ -500,6 +571,11 @@ func (self *DirectoryClient) revocationOf(auth DirectoryAuthView, journal *direc
 	}
 	if self.revokeLapsed(auth, journal, standing, nowMillis) {
 		revocation.State = DirectoryRevocationLapsed
+		return revocation
+	}
+	if self.revokeSuperseded(journal, standing) {
+		revocation.State = DirectoryRevocationLapsed
+		revocation.Superseded = true
 		return revocation
 	}
 	revocation.Age = max(0, time.Duration(nowMillis-journal.TimeMillis)*time.Millisecond)

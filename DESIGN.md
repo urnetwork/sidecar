@@ -518,9 +518,9 @@ Every entry of the owner's record (owner/DECISIONS.md), by number: 1-111 from th
 | <a id="od-388"></a>388 | 2026-11-11 | Index readings | Fourteen readings of §11.14 stand as section 1 of the design details writes them. | §11 |
 | <a id="od-389"></a>389 | 2026-11-11 | Extractor 1's own rules | Extractor 1's decoders are the format's rules, a header is cut at 16,384 B, and thirteen readings stand. | §11 |
 | <a id="od-390"></a>390 | 2026-11-11 | One body encoding | A remote-search body that is not its message's one deterministic encoding, or holds an unknown field, is refused. | §11 |
-| <a id="od-391"></a>391 | 2026-11-11 | Two own indexers | A remote search asks the first two own indexers at once, both kept warm, with no hedge delay; eleven readings stand. | §11, §18 |
+| <a id="od-391"></a>391 | 2026-11-11 | Two own indexers | A remote search asks the first two own indexers at once, both kept warm, with no hedge delay; eleven readings stand. | §7, §11, §18 |
 | <a id="od-392"></a>392 | 2026-11-11 | Remote merge | A phone's merged row is the strongest claim by class first, and it folds its possible matches only where the indexer saw their push. | §11 |
-| <a id="od-393"></a>393 | 2026-11-11 | A stale all | A device searches a cached all only while a bridge vouches for it, else its buckets until it fetches all's changes. | §11 |
+| <a id="od-393"></a>393 | 2026-11-11 | A stale all | A device searches a cached all only while a bridge vouches for it, else its buckets until it fetches all's changes. | §11, §16 |
 | <a id="od-394"></a>394 | 2026-11-12 | Documents past a shard | A document that alone would not fit a shard is skipped at extraction, and a layout tests joins and removals against the bound. | §11 |
 | <a id="od-395"></a>395 | 2026-11-13 | Resting diffs at erasure | An erasure re-enters an edit whose diff rests on an erased version, and at the limit only those two files wait. Reversed by [owner decision 584](#od-584): no entry is a diff; the re-entry folds run cards alone, and nothing waits for it. | §11 |
 | <a id="od-396"></a>396 | 2026-11-11 | A DROP's body, bounds and signer | Membership comes from a DROP's body alone, a DROP holds at most 256 KiB and 2^20 listed values, and a phone signs only a history it walked. | §2, §11, §18, §22 |
@@ -553,14 +553,14 @@ Every entry of the owner's record (owner/DECISIONS.md), by number: 1-111 from th
 | <a id="od-423"></a>423 | 2026-11-12 | Published names | taskworker lists a network's published names from ACL's `AclState.PublishedNames`, one reading of the rules with the gates. | §13 |
 | <a id="od-424"></a>424 | 2026-11-16 | Custom-domain budgets | One host for one device, the CA's limits as settings, half a registered domain's limit, budgets replayed from two windows back. Amended by [owner decision 571](#od-571): from the key's latest quiet window, its spends kept 16 d. | §13 |
 | <a id="od-425"></a>425 | 2026-11-13 | Custom account key | An admin's devices and its shared ordering desktops hold a custom domain's account key; an admin's desktop rolls it at once. | §13 |
-| <a id="od-426"></a>426 | 2026-11-13 | Custom rows and ALPN | Every custom certificate is a row claimed under the account's lock, and TLS-ALPN-01 needs the host's port 443 grant. | §13 |
+| <a id="od-426"></a>426 | 2026-11-13 | Custom rows and ALPN | Every custom certificate is a row claimed under the account's lock, and TLS-ALPN-01 needs the host's port 443 grant. | §12, §13 |
 | <a id="od-427"></a>427 | 2026-11-13 | Custom-domain readings | Section 17's eleven readings for Team custom-domain certificates stand as built. | §13 |
 | <a id="od-428"></a>428 | 2026-11-15 | Edge clients | An edge block mounts the `edge` class's bearer; api mints fixed client jwts by environment, host, block, slot and index. Amended by [owner decision 577](#od-577): slots 0 to 3, none held by another process of the block's service on the host. | §13, §14 |
 | <a id="od-429"></a>429 | 2026-11-16 | certs' installs | certs installs behind sidecar.yml's `certs` switch; holders of `devices` revoke; cert-order asks the gate one question. | §13, §19 |
 | <a id="od-430"></a>430 | 2026-11-15 | Name failure backoff | certs backs a URnetwork-zone name off at a CA where it keeps failing, doubling up to a day, across restarts. | §13 |
 | <a id="od-431"></a>431 | 2026-11-15 | Members-device readings | §13.7's members-device logins and the front's reach receipts take the build's nine readings. | §13, §16 |
 | <a id="od-432"></a>432 | 2026-11-15 | ACME account rollover | Account keys are in vault before any CA knows them, and certs rolls over yearly only to a next key placed there. | §13, §19 |
-| <a id="od-433"></a>433 | 2026-11-11 | One key part | Part 1 proves the key schedule once and publishes a perfectly hiding commitment; D-SMTP-16's m5.large rows take the bench's numbers. | §3, §14 |
+| <a id="od-433"></a>433 | 2026-11-11 | One key part | Part 1 proves the key schedule once and publishes a perfectly hiding commitment; D-SMTP-16's m5.large rows take the bench's numbers. | §3, §4, §14 |
 | <a id="od-434"></a>434 | 2026-11-11 | Envelope groups | Many recipients at one domain go as envelope groups on one connection, each group's replies proven with the next. | §14 |
 | <a id="od-435"></a>435 | 2026-11-11 | Ceremony re-runs | The proofs' setup runs again only on a circuit or catalog change or a suspected exposure of its host. | §14 |
 | <a id="od-436"></a>436 | 2026-11-12 | TL4 allowance action | §14.4's TL4 allowance for a recipient domain is `SidecarActionKind` 18, `mail_tls_unauthenticated`. | §14, §16 |
@@ -577,7 +577,7 @@ Every entry of the owner's record (owner/DECISIONS.md), by number: 1-111 from th
 | <a id="od-447"></a>447 | 2026-11-06 | Approval deliveries | A decision no vault carries back reaches its requester as an `ApprovalDelivery`, sealed to the requester's ReaderKey. | §2, §6, §7, §8, §16 |
 | <a id="od-448"></a>448 | 2026-11-06 | A harness process's taint | Every run of a harness process takes the union of its runs' taint, so a forged SessionStart opens no clean run. | §2, §16, §22 |
 | <a id="od-449"></a>449 | 2026-11-06 | The cloud key file | A cloud VM's `ur` takes its auth key from a file the setup writes and its first hook unlinks, never the environment. | §5, §16 |
-| <a id="od-450"></a>450 | 2026-11-06 | No fetch at search time | Hints coalesce on the leading edge, a search reads only the cache, and a hinted version not yet fetched is uncovered. | §5, §16 |
+| <a id="od-450"></a>450 | 2026-11-06 | No fetch at search time | Hints coalesce on the leading edge, a search reads only the cache, and a hinted version not yet fetched is uncovered. | §5, §11, §16 |
 | <a id="od-451"></a>451 | 2026-11-06 | Worker items by deployment | A tagged sidecar's worker announcement is set on its own host by whoever controls its deployment, with no record. | §16 |
 | <a id="od-452"></a>452 | 2026-11-06 | Harness config keys | PII hashing from M3 and `claims` from M6 act; capture narrowing, `reach`, `models` and `identity` wait. | §1, §8, §16 |
 | <a id="od-453"></a>453 | 2026-11-06 | Attestation entries | A person's statement about a change is an `attestation` entry, never an approval. | §16 |
@@ -3304,7 +3304,7 @@ fixture    the tags, operator-core's among them, served through GOPROXY=file:// 
 - **Artifacts.** `ur-<version>-<os>-<arch>.tar.gz` and `.pkg`, `ur_<version>_<arch>.deb`, `ur-<version>.<rpmarch>.rpm`, `ur-<version>-<pkgarch>.pkg.tar.zst` and `ur-<version>-windows-<arch>.zip`, following build/all/linux/README.md's spellings: 14 files for the six targets.
 - **Build.** `CGO_ENABLED=0 -trimpath` with `GOEXPERIMENT=greenteagc` and `-ldflags "-w -s"`, as run.sh's `sn_cli_release` builds release binaries, from `cli/`'s module, archive times from `SOURCE_DATE_EPOCH` (server/cli/api/Makefile:1, 4); macOS's keychain goes through purego (D-CORE-12).
 - **Release integrity.** Signing is the gate ([owner decision 77](#od-77)), and a release is promoted, not every build signed ([owner decision 264](#od-264)). Every release runs a VirusTotal scan (run.sh's `virustotal`) and builds `ur`'s artifacts and an unsigned `SHA256SUMS` as ordinary assets of its GitHub release, run.sh waiting for no one. When both holders of the offline two-person Ed25519 key (§2.6) pick a release, they SSH-sign its sums offline, under namespace and identity `ur-release`, and a commit on mmm publishes `SHA256SUMS`, `SHA256SUMS.sig` and `latest.json` under `https://ur.io/recurd/ur/`; `latest.json` is listed in the signed sums, and `ur-promote.zsh` never moves it backward. No private key touches the build host, a repo or vault. The public key is published at `sidecar/RELEASE-KEY.pub` and `https://ur.io/recurd/release-key.pub`; before the key exists neither file does, and `install.sh` refuses. `install.sh` on ur.io (mmm's branch from M0, §23.4; owner decisions [15](#od-15), [16](#od-16), [196](#od-196)) pins the key, reads `latest.json`, verifies signature and checksum (`ssh-keygen -Y verify`, OpenSSH 8.1+), fetches the artifacts from the GitHub release and refuses on any failure. What holds: GitHub alone cannot ship a client, but ur.io serves both the script and its pin, so ur.io alone can, to a new script install (§2.8 EX7), and a fresh install cannot tell an older signed pair from the newest, so ur.io could roll a new install back to an older signed release. `install.sh` prints the key's fingerprint and the repository path that publishes it, so a careful user can compare, and nothing more is built; notarization and Authenticode remain second checks on the macOS and Windows artifacts. From M4 the sums also list the key origin's loader and `sidecar.wasm`, which `sidecar.ur.io` serves only from a promoted build (§18.8; [owner decision 221](#od-221)).
-- **Proving key sets ([owner decision 266](#od-266)).** `smtpproof`'s proving keys and setup transcripts, about 0.9 GiB a key set, ship in no package: a prover host fetches its key set as §14.5 says, with no token and no account. §2.8's smtp-7 lists what that path's host sees, the fetching address above all, which marks a prover host ([owner decision 253](#od-253)). The proof's 20 shapes are cut to what M7's census justifies before the first production setup.
+- **Proving key sets ([owner decision 266](#od-266)).** `smtpproof`'s setup transcripts, about 0.9 GiB a key set, ship in no package, and its proving keys are published nowhere: a host that sends mail fetches the key set its release pins, by hash, from ur.io at idle, as §14.5 says, with no token and no account, checks the transcripts against the circuits its own build compiles and derives its proving keys from them before it uses one (§14.9; DESIGN-DETAILS.md section 3, 3.2.7), about 0.9 GiB fetched and 4 GiB kept. §2.8's smtp-7 lists what that path's host sees, the fetching address above all, which marks a prover host ([owner decision 253](#od-253)). The cut of the proof's 20 shapes to what M7's census justifies is met without the census: eleven shapes of one domain size, none sized by a guess about recipients ([owner decision 433](#od-433)).
 - **Harness configs (§16)** use `ur`'s absolute path, since GUI-launched hosts lack the shell PATH ([MCP debugging](https://modelcontextprotocol.io/docs/2025-03-26/tools/debugging.md)). v0 has no self-updater.
 
 ### 4.11 The documents in the sidecar checkout
@@ -3667,9 +3667,12 @@ type SidecarSettings struct { // validate refuses every number that is not posit
 	                             // queues; 1 MiB, 256 envelopes in their 4 KiB pool class, a reassembled body
 	                             // counting by its size, so one 256 KiB body takes a quarter of the queue
 	MemoryBudgetByteCount int64 // contains §6's process-wide reassembly, idempotency and credit caps; proving
-	                            // (§14) sits outside it: SmtpSenderSettings.ProverConcurrency defaults to 1, and a
-	                            // host records p/ only after Prover.Measure finishes its largest shape, one that
-	                            // cannot recording none and only queueing
+	                            // (§14) sits outside it, under the injected prover's own MemoryMaxByteCount
+	                            // (2,240 MiB: two loaded shapes and one proof in flight, kept by counting and a
+	                            // collection after each proof; DESIGN-DETAILS.md section 3, 3.2.8):
+	                            // SmtpSenderSettings.ProverConcurrency defaults to 1, and a host records p/ only
+	                            // after Prover.Measure finishes inside that bound, one that cannot recording
+	                            // none and only queueing
 	StreamChunkByteCount  int
 	Log                   Logger // nil: connect.DefaultLogger() (glog), adapted; sidecar_http: none unless set
 }
@@ -3713,6 +3716,25 @@ type SidecarSearchSettings struct { // §16.10's limits, 5.9's cache and §11.14
 	RemoteCursorCount      int              // 64 open remote cursors, the oldest dropped
 	RemoteRequesterRate    SidecarRate      // 30 a minute, burst 10: per requester at an indexer, and per
 	                                        // indexer at a requester
+	RemoteOwnAskCount      int              // 2 own indexers a search asks at once (§11.14's order row)
+	RemoteSkipTimeout      time.Duration    // 2 min: a failed indexer is not asked (D-SDK-27)
+	RemoteOnlineTimeout    time.Duration    // 10 min: how long a HelloResult, Pong or page keeps an indexer
+	                                        // online, and the own indexer that answered last first
+	RemoteRefusedTimeout   time.Duration    // 10 min: a repo an indexer refused in coverage is not asked of it
+	RemoteServedTimeout    time.Duration    // 24 h: 5.9's memory of which repos each indexer served
+	RemoteMismatchCount    int              // 3 mismatches from one indexer within RemoteMismatchInterval, 24 h,
+	RemoteMismatchInterval time.Duration    // void its claims and skip it for RemoteDistrustTimeout, 24 h
+	RemoteDistrustTimeout  time.Duration    // (§11.14's merge row)
+	SkewGuard              time.Duration    // 40 min: evs's time check both ways (§11.8's 5b), which bounds a
+	                                        // fold; a value of the format, changed on no side alone
+	PinRingCount           int              // 64 (version, chain) pairs kept a ref, to match a coverage's pin
+	RetainFactor           int              // 2: a retained bucket lives at most 2 of its windows past its
+	                                        // roll-up
+	ResyncInterval         time.Duration    // 1 h: §11.14's resync
+	SyncRoundCount         int              // sync rounds at once a network: 4 on daemon hosts, 1 on app hosts
+	                                        // and page Workers
+	SyncRetryInterval      time.Duration    // 30 s, doubling to ResyncInterval: a round that failed on a read
+	                                        // (these fourteen: DESIGN-DETAILS.md section 7, 7.2.1)
 	ServedRecordTimeout    time.Duration    // 30 d: an owner's indexer keeps 5.9's served records, by their day
 	ServedRecordCount      int              // 8,192 served rows at most, the oldest days dropped first: a last
 	                                        // bound that ordinary use and one abusive reader never reach (owner
@@ -4189,23 +4211,26 @@ socket   $XDG_RUNTIME_DIR/ur/<i>.sock; macOS DARWIN_USER_TEMP_DIR (104-byte sun_
 ```text
 holds     per indexed ref this device follows: the ref version it verified (§11.9) and each index file it
           keeps, as the sealed evs records it fetched under the repo's object keys, checked against its entry
-          version's content_sha256 before it is kept (a mirror of the ref shares its copies), and beside
-          each kept record its file id and its wrapped object key exactly as its segment header carried it,
-          sealed under the repo generation's key, about 100 B a file, so no plaintext key rests on the device
-          and the cache still holds no key: a reader that holds the repo key at that generation, from §10's
-          client as any evs read does, unwraps it per file and opens the record one 64 KiB frame at a time, so
-          searches read kept shards, postings and slots without reading evs; for a slot-keyed repo
-          (record-class repos and group inboxes, §11.14's keys row) the slot's 72 B wrapped object key block
-          exactly as the slot object carried it, that slot key's generation and the segment's generation
-          whose manifest_g seals the record header, about 80 B more a file, a reader asking gkm for both
-          generations when they differ (owner decision 289); derived data
-          sealed under HKDF(R_n, "urnetwork-sidecar-v1/local/search") with XChaCha20-Poly1305, random nonces,
-          AAD = repo || ref || path || version || part: the search manifest, each shard's dictionary block
+          version's content_sha256 before it is kept (a mirror of the ref shares its copies), and beside each
+          kept record its file id and its wrapped object key exactly as its segment header carried it, sealed
+          under the repo generation's key, about 100 B a file, so no plaintext key rests on the device and the
+          cache still holds no key: a reader that holds the repo key at that generation, from §10's client as
+          any evs read does, unwraps it per file and opens the record one 64 KiB frame at a time, so searches
+          read kept shards, postings and slots without reading evs; for a slot-keyed repo (record-class repos
+          and group inboxes, §11.14's keys row) the slot's 72 B wrapped object key block exactly as the slot
+          object carried it, that slot key's generation and the segment's generation whose manifest_g seals
+          the record header, about 80 B more a file, a reader asking gkm for both generations when they differ
+          (owner decision 289); derived data sealed under HKDF(R_n, "urnetwork-sidecar-v1/local/search") with
+          XChaCha20-Poly1305, random nonces, AAD = repo || ref || path || version || part: the search manifest
+          (the version of the index ref its bucket files are whole at, each file's version, state and the
+          oldest and newest time of its rows, all's own pin, the roll-ups between the two pins and the last
+          Search.PinRingCount pins replayed) with the sync round's plan beside it (its target, the files
+          wanted and those staged; §11.14's Reads, DESIGN-DETAILS.md section 7), each shard's dictionary block
           index and n_d array, the version table (below), and on desktops the local layer (commits past
           indexed_through this device indexed from its own plaintext, dropped once the index covers them),
           mismatched entries and the local vocabulary; a bucket a roll-up dropped, kept where a stale all is
-          cached until that all shows it rolled up (a/m's rolled_through_day), and never past two bucket lengths
-          after the roll-up, so search stays complete between a roll-up and its download
+          cached until that all shows it rolled up (a/m's rolled_through_day), and never past two bucket
+          lengths after the roll-up, so search stays complete between a roll-up and its download
 versions  the version table, per index root: for each doc key and ref id the partitions this device keeps hold
           (shards' doc and tombstone tables, sealed slots, heads, large entries), its highest version there,
           whether that is a tombstone, and the file holding it, in key order in 4 KiB sealed pages under a page
@@ -4217,16 +4242,16 @@ versions  the version table, per index root: for each doc key and ref id the par
           epoch row), join it as erased, the former until the rewritten files are cached; §11.14's newest row
           probes it
 state     not derived, so ur search sync --evict, DropCache and the bounds row's eviction keep it: per-device
-          policy overrides (§18.4); remote search's mode, its notice answers and, for 24 h, which repos each
-          indexer served (§18.4, §11.14); on an owner's indexer, the served record, one row per (requester
-          sidecar_id, repo_id, UTC day): {requester, repo, day, count, first time, last time}, written at page
-          0 once a search and naming no query; the first remote search an EvsShare reader makes in an
-          owner-bound repo on a day adds the row, and each later one that day raises its count and moves its
-          last time; rows are kept Search.ServedRecordTimeout (30 days) by their day, so the owner's view
-          holds exact counts for the whole 30 days in at most readers x repos x 30 rows whatever a requester's
-          rate, only the times inside a day going unkept, with Search.ServedRecordCount (8,192) a last bound,
-          the oldest days dropped first (D-CORE-17; owner decision 294); deleted with the network's local
-          state
+          policy overrides (§18.4); remote search's mode, its notice answers, which repos each indexer served,
+          for 24 h, and an indexer's distrust deadline (§18.4, §11.14's merge row); on an owner's indexer, the
+          served record, one row per (requester sidecar_id, repo_id, UTC day): {requester, repo, day, count,
+          first time, last time}, written at page 0 once a search and naming no query; the first remote search
+          an EvsShare reader makes in an owner-bound repo on a day adds the row, and each later one that day
+          raises its count and moves its last time; rows are kept Search.ServedRecordTimeout (30 days) by
+          their day, so the owner's view holds exact counts for the whole 30 days in at most readers x repos x
+          30 rows whatever a requester's rate, only the times inside a day going unkept, with
+          Search.ServedRecordCount (8,192) a last bound, the oldest days dropped first (D-CORE-17; owner
+          decision 294); deleted with the network's local state
 never     a query, query history, hit, snippet, cursor (memory only, 10 min), result count or per-query verdict,
           local or remote, on the asking phone and on the answering indexer (owner decision 175); a file no
           verified entry version named
@@ -5831,7 +5856,7 @@ sealed  u64be(g) || nonce (24 random B) || XChaCha20-Poly1305(K, nonce, pt, aad)
 
 **Authority statements** ([owner decision 110](#od-110)) need `authority`: one signature (7.5) admits or revokes only members outside the AdminSet and their devices, and no lone signer mints or removes a config-signing key, though n ≤ 2 forces k = 1 (7.18).
 
-**Indexers** (owner decisions [150](#od-150), [175](#od-175), [177](#od-177), [178](#od-178); D-TEAM-27). A network starts with no `IndexerSet`; an indexer exists only once an Owner or Admin designates one at network scope, or a member's consented device at member scope, and every service keeps its fallback until then, a phone's "search more" downloading all and searching its own index (§3.6; [owner decision 177](#od-177)). An `IndexerSet` designates one of §3.6's indexers, its subject a sidecar that is neither ephemeral nor read_only and, at member scope, a consented device of the signer's member; readers ignore a designation of any other subject. The newest one per (sidecar_id, scope) holds, a device designated at both scopes running their union; `retire` ends it, as does the subject's revocation, and a parked subject serves nothing until lifted. Scope `network` covers network services within the subject's access: a personal network's mail or, under `team_mail: indexers`, a Team's on a `tag:mail` device (§8.5, §15.5); mirrors of the team record, the team directory, `record` ledgers and the config on an admin's device, or of the team record on an auditor's; search upkeep of the indexes it reads outside members' own repos (§11.14), the team directory's roll-ups included; removal of revoked sidecars' directory cards and notices (§16.11). Scope `member` covers its member's own repos ([owner decision 126](#od-126)) and, in a Team member scope ([owner decision 58](#od-58)), that scope's mail; a Team's network mail indexers only deposit, so members' own indexers keep their mailboxes' mirrors and indexes. A personal network's designations are network scope and also cover its owner's repos. For remote search (§11.14), `search` also answers app hosts' "search more": at network scope, any member's app hosts over the team repos the subject reads; at member scope, its own member's over any repo it reads and an `EvsShare` reader's over the repo shared. So an owner-bound repo reaches only a consented device of its owner ([owner decision 126](#od-126)), and a tagged subject, never consented, answers only team repos, the asking app naming its sponsor. No app host answers (`ur indexer add` refuses `search` there and app builds never serve it), nor a browser Worker, which is read_only or ephemeral; the subject retires the designation to stop answering. A designation grants no key, grant or read, and readers ignore a service value they do not know. It enters the log at once, api seeing its signer, subject, scope and `retire`, while `services` is sealed to the config's current generation as §17.8 seals rule bodies; each designation that holds is also a row of `ProjectionRows.indexers` (sidecar_id, scope, signer, position and the sealed services, ordered by sidecar_id then scope), so it survives every fold and a new device, a rows-only gate and a long-running reader read the same designations ([owner decision 330](#od-330)). `ur indexer add|rm [--services mail,mirror,search]` signs only for a /dev/tty-confirmed command or in an app's UI, never through MCP (§5.8), since an indexer's mirror and index downloads spend the transfer balance ([owner decision 10](#od-10)), and at network scope `--services search` warns when the host has harness hooks installed, since its same-user agents could read members' queries (§2.4's TB1); `ur indexer ls` lists the network's indexers.
+**Indexers** (owner decisions [150](#od-150), [175](#od-175), [177](#od-177), [178](#od-178); D-TEAM-27). A network starts with no `IndexerSet`; an indexer exists only once an Owner or Admin designates one at network scope, or a member's consented device at member scope, and every service keeps its fallback until then, a phone's "search more" downloading all and searching its own index (§3.6; [owner decision 177](#od-177)). An `IndexerSet` designates one of §3.6's indexers, its subject a sidecar that is neither ephemeral nor read_only and, at member scope, a consented device of the signer's member; readers ignore a designation of any other subject. The newest one per (sidecar_id, scope) holds, a device designated at both scopes running their union; `retire` ends it, as does the subject's revocation, and a parked subject serves nothing until lifted. Scope `network` covers network services within the subject's access: a personal network's mail or, under `team_mail: indexers`, a Team's on a `tag:mail` device (§8.5, §15.5); mirrors of the team record, the team directory, `record` ledgers and the config on an admin's device, or of the team record on an auditor's; search upkeep of the indexes it reads outside members' own repos (§11.14), the team directory's roll-ups included; removal of revoked sidecars' directory cards and notices (§16.11). Scope `member` covers its member's own repos ([owner decision 126](#od-126)) and, in a Team member scope ([owner decision 58](#od-58)), that scope's mail; a Team's network mail indexers only deposit, so members' own indexers keep their mailboxes' mirrors and indexes. A personal network's designations are network scope and also cover its owner's repos. For remote search (§11.14), `search` also answers app hosts' "search more": at network scope, any member's app hosts over the team repos the subject reads; at member scope, its own member's over any repo it reads and an `EvsShare` reader's over the repo shared. So an owner-bound repo is answered only by a consented device of its owner ([owner decision 126](#od-126)), designated at member scope, or at network scope in a network of one member, which is what a personal network is for this rule ([owner decision 391](#od-391); DESIGN-DETAILS.md section 7, 7.2.2), and a tagged subject, never consented, answers only team repos, the asking app naming its sponsor. No app host answers (`ur indexer add` refuses `search` there and app builds never serve it), nor a browser Worker, which is read_only or ephemeral; the subject retires the designation to stop answering. A designation grants no key, grant or read, and readers ignore a service value they do not know. It enters the log at once, api seeing its signer, subject, scope and `retire`, while `services` is sealed to the config's current generation as §17.8 seals rule bodies; each designation that holds is also a row of `ProjectionRows.indexers` (sidecar_id, scope, signer, position and the sealed services, ordered by sidecar_id then scope), so it survives every fold and a new device, a rows-only gate and a long-running reader read the same designations ([owner decision 330](#od-330)). `ur indexer add|rm [--services mail,mirror,search]` signs only for a /dev/tty-confirmed command or in an app's UI, never through MCP (§5.8), since an indexer's mirror and index downloads spend the transfer balance ([owner decision 10](#od-10)), and at network scope `--services search` warns when the host has harness hooks installed, since its same-user agents could read members' queries (§2.4's TB1); `ur indexer ls` lists the network's indexers.
 
 **Versioning rules** ([owner decision 164](#od-164)). A network's VersioningRules set the versioning an honest writer gives each path it creates, existing paths keeping theirs (§11.7; [owner decision 167](#od-167)); without the record the platform rule holds, versionless above 64 MiB of plaintext; Owners, Admins and Network admins write the record with `ur admin versioning`. The rules cover file-mode refs of every repo kind but config and mailcfg, never git-mode or creates-only refs, the search index's files or git-lfs's store. A repo's own rules in its RepoVersioning (§8.8) replace them for that repo; an owner-bound repo's rules are sealed to that repo's own generation, so only its readers open them, not every admitted sidecar, while the network's record and other repos' rules are sealed to the config's generation (§8.8; [owner decision 126](#od-126)); either way the server never sees a glob. A locked repo takes no versioning off; in an owner-bound repo the owner's devices apply the rules like any writer, and the owner may lock it.
 
@@ -7503,7 +7528,7 @@ message Unsuspend { StatementHeader header = 1; bytes subject = 2; bytes suspend
 
 **Clients.** Every admitted sidecar follows the config repo and §7's `team` hints, verifies config heads and the authorization log (§7.9) and evaluates its own rules in `AclEngine`, with no always-on compiler ([owner decision 6](#od-6)). The engine swaps compiled state through an `atomic.Pointer`, checks without locks or allocation, and compares its auth pin (n, A_n) in HeadCheck (§6.4), which any admitted reader, agents included, may witness ([owner decision 129](#od-129)): it refuses a lower pin, and reconciles, alarms, relays (`proven`) and stops sealing in shared groups as §6.4's auth rules say. For a host, §17.8's compiler reads through the engine every rule and activated grant by which each subject may dial it, route through it or exit through it, and the same for what the host may reach (DESIGN-DETAILS.md section 12). An app's forwarding role follows them itself in its VPN component, by its forwarding Delegation's reader key, through the same engine (§18.6; [owner decision 197](#od-197)), and between its compiles `sidecar/device`'s posture checks the chain and bases' signatures and applies at once, as denials, the revocations it can check by their signers' keys in the rows it holds, opening nothing (§17.8's forwarding roles).
 
-**Gates.** api's verifier (§7.9) keeps each network's newest base and the entries after it, which api, evs and gkm read from §7.9's verified Redis cache `{acl_<networkId>}e` when it reaches `{acl_}v` and every pin they hold, else from `proj/` on the first metadata cluster ([owner decision 136](#od-136)); only api writes that cache, which decides nothing, and other gate services fetch from api, as only those three and taskworker reach the metadata tier (§2.8 evs-10). Each process caches them per (network, n), loading asynchronously outside packet locks on api's `INCR {acl_<networkId>}v` (class `$`, xops/redis-set-notify-keyspace-events.sh:23) after every entry it appends and on a 5-min poll; a network without a config repo costs one map miss (R-ACL-8). Gates check every entry's chain from their own pin wherever they read it, and refuse a lower n, or a second A_n at one n, with an alarm. Taskworker's gkm reconciler tells its cache of the networks §10.6's networks row names, at its runtime's start and again for one the bounded cache evicted, so a quiet network's hints, key deletions and sweeps run after a restart; gkm and the reconciler read their state through this cache ([owner decision 371](#od-371)).
+**Gates.** api's verifier (§7.9) keeps each network's newest base and the entries after it, which api, evs and gkm read from §7.9's verified Redis cache `{acl_<networkId>}e` when it reaches `{acl_}v` and every pin they hold, else from `proj/` on the first metadata cluster ([owner decision 136](#od-136)); only api writes that cache, which decides nothing, and other gate services fetch from api, as only those three and taskworker reach the metadata tier (§2.8 evs-10). Each process caches them per (network, n), loading asynchronously outside packet locks on api's `INCR {acl_<networkId>}v` (class `$`, xops/redis-set-notify-keyspace-events.sh:23) after every entry it appends and on a 5-min poll; a network without a config repo costs one map miss (R-ACL-8). Gates check every entry's chain from their own pin wherever they read it, and refuse a lower n, or a second A_n at one n, with an alarm. A sockets process that learns a network's log moved (the `{acl_}v` event, a position in its own store above the one it holds, or after a resubscription a `{acl_}v` that differs from the one its state was loaded at) and has not verified the new entries within 5 s refuses for that network until it has (§9.8); with no such evidence the last verified state serves, an api outage included, since api is the log's only writer ([owner decision 337](#od-337); DESIGN-DETAILS.md section 13). Taskworker's gkm reconciler tells its cache of the networks §10.6's networks row names, at its runtime's start and again for one the bounded cache evicted, so a quiet network's hints, key deletions and sweeps run after a restart; gkm and the reconciler read their state through this cache ([owner decision 371](#od-371)).
 
 **The internal gate surface ([owner decision 340](#od-340)).** Services with no database read rules, facts and quotas from one read surface on api under `/internal/gate/`, a prefix the lb refuses from outside. Each caller class holds its own bearer in `secret_files`, one vault file per gate caller class, connect's first, which api verifies by its SHA-256 in constant time (§19.4, §19.16). `GET /internal/gate/projection/<network_id>?after=<n>` answers the body of the Client route `GET /network/config/projection` (§7.9): `{genesis, entries, rows, tip: {n, chain}, more}`, each message verbatim in base64, paged, from the retention point when `after` is before it; `GET /internal/gate/rows/<network_id>/<rows_sha256>` answers the ProjectionRows bytes verbatim (`application/octet-stream`), which the caller holds to their hash; `GET /internal/gate/listen-facts/<network_id>` answers `network_verified`, whether a `mail_network` row exists, and each `network_tls_cert` row's name and expiry; and `GET /internal/gate/over-limit` answers §20.7's list, spent and storage-over networks apart. One encoding serves devices and gates, and gates verify entries' chain and signatures as they do from `proj/`, so api stays a carrier. A gate refreshes a network's projection on `{acl_<networkId>}v` and the 5-min poll, its facts at most every 60 s off the inline path, and the over-limit list every 5 s. A process that has never loaded them stays not ready, and a `tls/` entry with no cached facts answers `unavailable`. Other gates' reads and §20.14's quota routes join the prefix under the same rules.
 
@@ -7791,11 +7816,18 @@ type SocketRegistration struct {
     Claim      []byte      `json:"claim"`       // §6 Signed by the identity key, purpose socket-registration, over
                                                  // (network_id, name or token path, listen_id, protocol, app_mode);
                                                  // Find returns it with tickets for the dialer's check (9.6)
+    CertifiedNames []string          `json:"certified_names"` // tls/: the custom hosts and aliases mapped to this
+                                                 // name for which the listener has an unexpired certificate
+                                                 // installed; outside the signed claim, since they only route
+    AcmeNames      []*SocketAcmeName `json:"acme_names"`      // tls/: the names it holds a pending TLS-ALPN-01
+                                                 // challenge for, each {name, claim_seq}: the account lock's
+                                                 // claim it answers under (§13.8)
 }
 ```
 
 - **Pages.** A call carries at most 1,024 entries and takes one bucket token (9.10); a larger set, unlimited in size ([owner decision 66](#od-66)), goes as pages over consecutive key ranges under one `set_version`. Each page is the whole set within its range (an entry outside it refuses the page), so entries it lacks there unlisten at once, and an eager report sends only its own page.
-- **Re-check.** Each call re-checks the projection (9.10) and quota per entry and recreates missing state, so Redis loss heals in one heartbeat; an entry answered `revoked` closes with its streams.
+- **Re-check.** Each call re-checks the projection (9.10) and quota per entry and recreates missing state, so Redis loss heals in one heartbeat; an entry answered `revoked` closes with its streams. The service judges a page on one verified state and stamps each lease with the listener's `sidecar_id`, the authorization log position it was admitted at and the page's `set_version`. A removal for cause leaves a tombstone in the group for 10 min, and an unlisten one for 60 s: a later write admitted below the tombstone's position, or from an older set, is refused, and the caller of a write fenced by a position its process has not reached is answered `unavailable` with `retry_after_ms`, its page's other entries applied (DESIGN-DETAILS.md section 13).
+- **Certified and ACME names.** A `tls/` registration may list the custom hosts and aliases it is certified for and the names it holds an ACME claim for. §13.9's `ValidateListen` holds both to rows, a certified name to the sidecar's unexpired certificate row and an ACME name to the account lock's claim that sidecar holds, drops what the rows do not bear out and never refuses the entry for them, so a listener keeps its network names; a list past its count, a setting, is malformed (DESIGN-DETAILS.md section 17, 17.2.10).
 - **Lease.** Heartbeats every 15 s ± 20% carry load, and eager reports follow in-flight moves ≥ max(8, 25% of `max_streams`), at most every 2 s; leases are 45 s hash-field TTLs whose expiry stops tickets, not streams.
 - **Unlisten** stops tickets at once (a racing ticket gets `retry`, the `tcp_migrate_req` analog); **drain** ends at zero in-flight or after 30 s (cloudflared's default, [R:ext-edge](design/design-research/ext-edge.md) §2.8), resetting the rest.
 
@@ -7836,7 +7868,11 @@ step  check (service)                                                           
       the group is read, so refusals hide names
 3     the paying network (§20.6: the listener's for edge Finds, else the        quota
       caller's) is not spent in §20.7's OverLimit set, re-read every 5 s
-4     pick (9.7)                                                                no_listener; busy
+4     pick (9.7), then the listener check: the service signs only for a         no_listener; busy;
+      listener its own newest state allows, judged on its lease's stored        unavailable
+      sidecar_id, removing one it refuses for cause, and gives no ticket for
+      one admitted at a position above its own: unavailable when none of the
+      picked can be judged (DESIGN-DETAILS.md section 13)
 5     sign the primary and backup tickets; edge and ur/ Finds write the {svc_} pair, a tls/ or smtp/
       pair only at or above the floor a removal left
 ```
@@ -7869,6 +7905,8 @@ message SignedSocketTicket {     // in StreamOpen.ticket (<= 512 B); §6's Signe
 }
 ```
 
+**Find's request.** `POST /socket/find` carries `protocol`, `min_version` and `alpn`, 9.7's filter, and, for a dial tlsedge resolved through the custom-host map or the alias table, `server_name`, the hello's server name, empty for a name under the network's own zone; §2.8's sock-2 lists them (DESIGN-DETAILS.md section 17, 17.2.10).
+
 **`ur/` tickets ([owner decision 560](#od-560)).** A `ur/` ticket names its dialer's sidecar in `dialer_sidecar_id = 16`, 16 bytes, which the service fills at Find from the caller's `sidecar_id` claim it has already authenticated (9.8's client tokens) and signs with the rest; `tls/`, `smtp/` and edge tickets leave it empty, edges naming no sidecar. smtpedge reads the stream's subject from the admitted ticket, with no client-to-sidecar lookup or cache, and judges §8's `mail_send` for it (§14.5), a `ur/` stream whose ticket names no dialer sidecar answering TRY_LATER, failing closed; every `ur/` listener may read its subject the same way. The field adds about 18 B, within `StreamOpen.ticket`'s 512 B.
 
 **Edge Finds.** A `urnetwork-edge` caller sends its K client ids, and each ticket's `dialer_client_id` is `ids[h(listener_client_id) mod K]`, so a listener's edge streams share one client (§13.6). Edge and `ur/` Finds set §6.10.1's pair, field `<dialer_client_id>` of `{svc_<listener_client_id>}`, under one of two rules. A `tls/` or `smtp/` pair is written with a TTL of the lesser of the grant's remaining life and 15 min; a registration call that accepts an edge entry of the client renews its pairs, at most every 5 min a process; and a removal leaves a floor that refuses a write allowed at an older position, so a revoked, removed or dead listener's pairs end within 15 min whatever any sweep did ([owner decision 338](#od-338)). A `ur/` pair lives its service's grant length, refreshed per Find: grant length is per `ur/` service, 60 min by default, and `ur/smtpedge`'s is 125 min, `grant_expire_time_millis` = issue + 125 min with a `{svc_}` TTL of 125 min, §14.4's 2 h of DATA plus 5 min for the ticket's 30 s, the pre-TLS exchange and `SmtpOutcome`. Contracts keep §6.10.1's rule and roll at their 60-minute deadline while the pair lives, and the edge's own timers still end the connection at §14.4's 30 min, or 2 h in DATA mode, so the longer grant adds no longer session. Revocation or the last edge unlisten deletes a pair.
@@ -7896,7 +7934,7 @@ step  check                                                                     
 ### 9.7 The scheduler
 
 Each Find runs weighted power of two choices (P2C; [owner decision 65](#od-65)), which stays effective on stale load where least-loaded herds (Mitzenmacher, IEEE TPDS 11(1), 2000, https://www.eecs.harvard.edu/~michaelm/abstracts/tpds2000.html):
-1. Filter to live, `serving` listeners not draining, ejected or excluded for this dialer, matching protocol, version and ALPN (an offered id the listener serves, or none, which §13.7 dispatches by `AppMode`), with `reported_inflight < max_streams`, the listener's own report alone, `est` staying for step 3's comparison; if none remain, ignore ejections and exclusions. Without affinity, groups above 64 listeners filter a random 64 (`ZRANDMEMBER`, Redis ≥6.2, https://redis.io/docs/latest/commands/zrandmember/), bounding a Find's cost.
+1. Filter to live, `serving` listeners not draining, ejected or excluded for this dialer, matching protocol, version and ALPN (an offered id the listener serves, or none, which §13.7 dispatches by `AppMode`), with `reported_inflight < max_streams`, the listener's own report alone, `est` staying for step 3's comparison; if none remain, ignore ejections and exclusions. A dial with a server name matches only listeners certified for it; a dial offering `acme-tls/1` matches only listeners holding a claim for the name, whatever their load, and takes the one with the newest claim, with no backup and no draw; and a listener that lists only `acme-tls/1` matches no other dial (DESIGN-DETAILS.md section 17, 17.2.10). Without affinity, groups above 64 listeners filter a random 64 (`ZRANDMEMBER`, Redis ≥6.2, https://redis.io/docs/latest/commands/zrandmember/), bounding a Find's cost.
 2. Sample two distinct candidates in proportion to `weight`.
 3. Pick the lower `(est + 1) / weight`; the other is the backup.
 4. `est = reported_inflight + issued`, where `issued` sums, over dialers, each dialer's primary tickets since the listener's last report, each counted for at most 30 s (unredeemed tickets expire), and clamped per dialer at c = max(4, ⌊10% of `max_streams`⌋). The clamp bounds the estimate only: Find never refuses or delays a ticket for it, so a dialer's tickets are limited by step 1's `reported_inflight < max_streams`, its control-plane bucket (9.10) and the listener's admission (9.6, step 5).
@@ -7910,16 +7948,18 @@ Each Find runs weighted power of two choices (P2C; [owner decision 65](#od-65)),
 Stateless processes keep all state in Redis Cluster, with no Postgres tables; §2.8's sock-1 to sock-5 give fields and TTLs, and `sock` hints are connect-4.
 
 ```text
-{sg_<network_id>_<h16(name)>}  group HASH: per listener m: registration, r: in-flight, i: issued, e: ejection;
+{sg_<network_id>_<h16(name)>}  group HASH: per listener m: registration, r: in-flight, i: issued, e: ejection,
+                               x: a removal's tombstone (9.5);
                                per dialer shares and exclusions; v: version; ZSET …ix orders the leases;
                                h16 is the first 16 hex digits of SHA-256
-{svc_<listener_client_id>}     Service pairs (9.6)
-{sn_<network_id>}names         the listing index; entries leave with their leases
+{svc_<listener_client_id>}     Service pairs (9.6), with the floor their last removal left
+{sn_<network_id>}names         the listing index; entries leave with their leases; one field, which a listing
+                               skips, holds the newest revocation sweep's claim
 {sc_<client_id>}set            each client's set, ordered by name key for pages (9.5); expires 5 min after
                                the client's last call
 ```
 
-Hash tags are per group (D-SOCK-7). A Find is one group-key script (check `v`, filter or sample, read two loads, increment one) plus a `{svc_}` write per edge ticket; counters are advisory, the listener cap authoritative. `server/cli/sockets` runs on every lb host, since each lb proxies only to its own; 100,000 listeners make about 6,700 registration calls/s. Only the service signs (vault `secret_files`, 30-day rotation with overlap; keys at `GET /socket/keys`). The ticket key file is written by `sidecarctl sockets ticket-keygen -out <file> [-in <file>]` (§19.4): it reads the existing file if `-in` names one, adds a new Ed25519 key that expires RotationInterval (30 days) plus KeyOverlap (1 day) after its creation, drops expired keys, writes the file 0600, refusing to overwrite unless `-in` names the same file, and prints no key; the operator runs it every 30 days and places the file in vault, and the block rereads it every minute ([owner decision 354](#od-354)). Every listed key verifies until its expiry, and the newest settled key signs while it outlives `SignMargin`: a key settles `SettleTime` (10 min) after the later of its `created_millis` and the first read in which this process saw it, a per-process map keeping each key's first sight, so however long the hand placement takes it only delays the switch, and no ticket names a key a listener has not been given; a restarted process sees every key as new, so for its first `SettleTime` the oldest live key that outlives `SignMargin` signs, one every listener already holds, and blocks may sign under different keys for up to a reread interval, each of which every listener verifies; the command prints no placement deadline ([owner decision 562](#od-562)). Each process caches each network's newest base and the entries after it from api (§8.9) and, on `{X}c_removed` (`server/model/client_close_model.go:64`), a projection revocation or a §21 suspension, deletes entries and pairs and sends `SocketHint`. A process acts on a network's state only while it has no evidence older than 5 s that the authorization log passed it; past that it answers `unavailable` for that network until it has verified the new entries, and with no such evidence its last verified state serves without limit (§8.9; [owner decision 337](#od-337)).
+Hash tags are per group (D-SOCK-7). A Find is one group-key script (check `v`, filter or sample, read two loads, increment one) plus a `{svc_}` write per edge ticket; counters are advisory, the listener cap authoritative. `server/cli/sockets` runs on every lb host, since each lb proxies only to its own; 100,000 listeners make about 6,700 registration calls/s. Only the service signs (vault `secret_files`, 30-day rotation with overlap; keys at `GET /socket/keys`). The ticket key file is written by `sidecarctl sockets ticket-keygen -out <file> [-in <file>]` (§19.4): it reads the existing file if `-in` names one, adds a new Ed25519 key that expires RotationInterval (30 days) plus KeyOverlap (1 day) after its creation, drops expired keys, writes the file 0600, refusing to overwrite unless `-in` names the same file, and prints no key; the operator runs it every 30 days and places the file in vault, and the block rereads it every minute ([owner decision 354](#od-354)). Every listed key verifies until its expiry, and the newest settled key signs while it outlives `SignMargin`: a key settles `SettleTime` (10 min) after the later of its `created_millis` and the first read in which this process saw it, a per-process map keeping each key's first sight, so however long the hand placement takes it only delays the switch, and no ticket names a key a listener has not been given; a restarted process sees every key as new, so for its first `SettleTime` the oldest live key that outlives `SignMargin` signs, one every listener already holds, and blocks may sign under different keys for up to a reread interval, each of which every listener verifies; the command prints no placement deadline ([owner decision 562](#od-562)). Each process caches each network's newest base and the entries after it from api (§8.9) and acts on what narrows it. On `{X}c_removed` (`server/model/client_close_model.go:64`) every process refuses the client's leases from memory at once and removes them with its pairs; after an entry that can narrow, which every statement kind is but those that only grant or admit, one process a network and position, by a claim in `{sn_}names`, sweeps the network's leases against its state, removes for cause those it refuses, with the pairs of a listener left with no edge entry, and sends `SocketHint`; a §21 suspension is refused from the kill set in memory. A sweep that dies leaves nothing wrong: each lease it did not reach is judged at its listener's next heartbeat and at any Find that picks it, and its pair ends by its TTL (DESIGN-DETAILS.md section 13). A process acts on a network's state only while it has no evidence older than 5 s that the authorization log passed it; past that it answers `unavailable` for that network until it has verified the new entries, and with no such evidence its last verified state serves without limit (§8.9; [owner decision 337](#od-337)).
 
 **Client tokens ([owner decision 347](#od-347)).** The `/socket/*` routes take Client-class tokens for the sockets audience, checked by `sidecarhost`'s Authenticator over `server/session`'s verify-only by_jwt keyring, mounted from `secret_files`, and the revocation record with no SQL: a valid record passes; a tombstone or a rotation answers 401; a Redis failure answers `unavailable`, and a miss `unavailable` with `retry_after_ms`, except that a miss within 120 s of a valid check counts as valid (`{sc_<client_id>}ok`; §2.8 sock-5). The listener's subject is the token's `sidecar_id` claim, which by_client_jwt carries from `POST /sidecar/bind`'s re-mint and refresh keeps (§5.15, §7.4); a token with no root claim is refused, one with no `sidecar_id` claim is `denied` unless its network is `urnetwork-edge`, and a revocation within a miss's 120 s shows as a tombstone, which lives 10 min, so sockets runs through about an hour of Postgres loss, until clients' projected fields lapse, and then answers `unavailable` (§19.10; [owner decision 497](#od-497)). A team member's token, which carries `member_id` (§7.5), is checked by the record too: the network's record keeps `m:<member_id>`, holding `a <user_id> <reauth_deadline_ms>` (0 for no deadline) for a joined, admitted membership, which session's SQL fallback projects with the positive ttl as it projects `c:` and `r:`, never for a pending member, a removal and the end of a membership a re-join replaces writing the tombstone `x` before they commit, as client removals do; and `u:<user_id>`, the member user's credential_change_time, written wherever `n:cred` is (a reset, sign-out-all). For a token carrying `member_id`, the verifier and api's own record path read `m:` and `u:` in place of `n:user` and `n:cred` and refuse a tombstone, another user, a passed reauth deadline or a cutoff after the token's creation, so a team member's sidecar uses sockets with the same outage behavior ([owner decision 561](#od-561)). A credential descending from an API key stays outside this: the record keeps no key, so sockets answers it `unavailable`. `revocation_record_enabled`, which session reads from `config/<env>/sidecar.yml` beside the owner's other switches, so api and sockets read one value and sockets mounts no auth.yml, moves there before it is turned on and is on in production before M5; until it is, every Client-class call answers `unavailable` (§19.11; [owner decision 497](#od-497)).
 
@@ -12457,20 +12497,29 @@ readings  (owner decision 388) a slot other than the head, or a large entry, at 
 
 ```text
 pin       per (repo, ref): the reader's 11.9 pin (v, C_v) and a search manifest of the index files it holds (path,
-          version, content_sha256, padded size, partition, state)
+          version, content_sha256, padded size, partition, a state of held or bad, and the oldest and newest time of
+          its rows), which records the version of the index ref its bucket files are whole at, all's own pin and the
+          roll-ups between the two, with a round's plan beside it (its target, the files wanted and those staged;
+          DESIGN-DETAILS.md section 7, 7.2.7)
 trigger   a hint (11.10) or wake (§18.7), the app coming to the foreground, the hourly resync, "search more", or a
-          background window (§18.4); a search reads only the cache and triggers no fetch, except "search more"
-          for the all files the device lacks in repos no designated search indexer answers (remote search, below)
+          background window (§18.4); a search reads only the cache and triggers no fetch, except "search more" for
+          the all files the device lacks in repos no designated search indexer answers (remote search, below); one
+          round runs at a time a ref, a trigger that arrives during it running another after it; the first hint or
+          wake for a repo in a quiet Search.HintCoalesce (1 min) starts a round at once and later ones in that
+          interval start one at its end (owner decision 450); a round that fails on a read keeps its plan and staged
+          files and is tried again after Search.SyncRetryInterval (30 s, doubling to the hourly resync) or at the
+          next trigger (DESIGN-DETAILS.md section 7, 7.2.7)
 replay    POST .../read from the pin returns the statements after it; a change under the index's token prefix marks
           that file; past the 4 MiB catch-up budget the reader re-pins and lists the index directories instead (one
           read per partition directory)
 fetch     whole files by sync position, never a range or file a query chose: each marked file the device keeps, up
           to 64 paths and 32 MiB of ranges a read (11.9), buckets first, then all's shards youngest first, the most
-          recently searched repos first; every device keeps the buckets of the repos it syncs (phones too, the
-          exception to 11.11's versionless fetch rule, but the team directory's only desktops keep, §16.11), and
-          each index ref's erasure set wherever it keeps or writes that ref's index, and
-          desktops, the daemon and indexers keep all in the background, others at "search more" where no
-          designated search indexer answers, or on Wi-Fi while charging (owner decisions 154, 178; §18.4)
+          recently searched repos first; settings, the erasure set and a/m belong to the latest set every device
+          keeps, and a round fetches them before the buckets; every device keeps the buckets of the repos it syncs
+          (phones too, the exception to 11.11's versionless fetch rule, but the team directory's only desktops keep,
+          §16.11), and each index ref's erasure set wherever it keeps or writes that ref's index, and desktops, the
+          daemon and indexers keep all in the background, others at "search more" where no designated search indexer
+          answers, or on Wi-Fi while charging (owner decisions 154, 178; §18.4)
 verify    11.9's checks (signed statement, entry hash), then content_sha256 after decryption; a file that breaks the
           format (past 1 MiB, a dictionary out of order, a docid out of range, a tombstone table out of order or
           naming a key its doc table holds, a tombstone in an all shard, an entry of the reserved kind 2, a
@@ -12479,9 +12528,13 @@ verify    11.9's checks (signed statement, entry hash), then content_sha256 afte
           IndexShard.docs is an upper bound and its first_day to last_day a covering range, which no step compares
           with the shard's header and the next merge or roll-up recomputes, an eraser still finding a document by
           a/m's days and the shard's doc table
-swap      the new manifest replaces the old one atomically once every kept file of the new pin is cached and the
-          version table (§5.9) covers it; running searches keep their snapshot; files no manifest names are
-          deleted once no search holds them
+swap      the manifest of a new pin replaces the old one, atomically, only when every bucket file that pin lists is
+          held at the listed version and the version table (§5.9) covers it, so a snapshot is one version of the
+          ref; all is swapped separately and only at the snapshot's pin, so it is never ahead; a file that fails its
+          checks is listed bad, holds nothing for search and does not hold the swap, or one writer could keep every
+          reader's index at an old version, and a host with the text serves that repo from the index, not from text,
+          until its local layer covers what the file held; running searches keep their snapshot; files no manifest,
+          plan or open snapshot names are deleted (DESIGN-DETAILS.md section 7, 7.2.7; details/IndexSync.tla, §22.8)
 reproduce a device holding every input of a merge, roll-up or CLOSURE at its push's base version (the new manifest's
           absorbed seqs and the files the push replaces name them) builds the result and compares content_sha256
           with each new file's entry version: equal, it caches its own output and fetches nothing; unequal, it
@@ -12500,14 +12553,15 @@ retained  readers search every bucket present, expired ones included, so search 
           keeping only latest drops it, its instant coverage the last W to 2W days; a device searches its cached all
           only while it is usable, its pin the snapshot's, or every roll-up between the two pins bridged by the
           rolled bucket held as the roll-up read it, which it knows from the statements it replayed; with a bridge
-          lost or not vouched for (an ERASE, two windows passed, a roll-up slept through, or a bucket copy older
-          than the roll-up's input) it searches its buckets only, reports its coverage from the oldest bucket and
-          fetches all's changed files (a/m and the youngest shards, usually a few MiB) at its next window or at
-          "search more", which fetches before it answers, so no deleted document is found again (owner decision
-          393)
-collected a fetch of a replaced index file that answers `collected` (11.9) rereads the head, drops what it fetched of
-          that file and fetches the newest version; only writers' heads change often, each one read, and all's
-          shards change only at roll-ups and erasures
+          lost or not vouched for (an ERASE or an executed drop in the repo, two windows passed, a roll-up slept
+          through, or a bucket copy older than the roll-up's input) it searches its buckets only, reports its
+          coverage from the oldest bucket and fetches all's changed files (a/m and the youngest shards, usually a
+          few MiB) at its next window or at "search more", which fetches before it answers, so no deleted document
+          is found again (owner decision 393)
+collected a fetch of a replaced index file that answers `collected` (11.9) restarts the round on the new head, which
+          brings every file to it, so no snapshot mixes two versions of the ref (DESIGN-DETAILS.md section 7,
+          7.2.7); only writers' heads change often, each one read, and all's shards change only at roll-ups and
+          erasures
 subscribe file-mode refs need no new lease, since index files change in the same push as content; a repo whose
           git-mode refs or record streams are indexed adds one whole-ref lease on its ur/index ref (11.10)
 traffic   at 100 messages a day a phone's heads and sealed slots cost ~4-6 MB a month at about ten syncs a day, and
@@ -12601,33 +12655,47 @@ who       per repo, first an own search indexer (a device of the requester's mem
           search indexer; a team repo (general, record, team_record, the directory) otherwise on one network-scope
           search indexer that reads it, a tagged one answering only team repos, its sponsor named; in a personal
           network every indexer is own; never secret, config, mailcfg or deposit-only repos
-eligible  eligible(d, R, p), which each side evaluates in its own newest verified state, so a stale or forged view
-          reaches nothing the other refuses: d's newest IndexerSet at some scope names search, unretired, and d is
-          not revoked, parked or suspended; d is a ur daemon host advertising Hello feature bit 0; p is an admitted
-          member device, untagged and not ephemeral, revoked, parked or suspended (in v1 an app host); d and p are
-          in RepoReaders(R) (§8.12); for R owner-bound to M, consented(d, M) (§8.5) and p reads R as M's consented
-          device or by an EvsShare; for a team R, d is a device of p's member or its designation is network scope;
-          d holds R's all current under its background policy (§18.4), with R's index on in a format d reads
+eligible  eligible(d, R, p), which each side evaluates in its own newest verified state at every send and every
+          page, never from a list made earlier, so a stale or forged view reaches nothing the other refuses: d's
+          newest IndexerSet at some scope names search, unretired, and d is not revoked, parked or suspended; d is
+          a ur daemon host advertising Hello feature bit 0; p is an admitted member device, untagged and not
+          ephemeral, revoked, parked or suspended (in v1 an app host); d and p are in RepoReaders(R) (§8.12); for R
+          owner-bound to M, consented(d, M) (§8.5), d's designation at member scope, or at network scope where the
+          config state holds one member, and p reads R as M's consented device or by an EvsShare; for a team R, d
+          is a device of p's member or its designation is network scope; d holds a whole snapshot of R's index
+          under its background policy (§18.4), its all usable (retained, above) where the request's scope is all,
+          with R's index on in a format and normalizer d reads; the indexer's verdict for a repo is the first that
+          holds of REFUSED_NOT_READER, REFUSED_NOT_CONSENTED, REFUSED_SCOPE, REFUSED_INDEX_OFF, REFUSED_FORMAT,
+          REFUSED_ALL_ABSENT, SERVED_INDEX (no text of the ref, or a bad file its local layer does not cover) and
+          SERVED_TEXT (DESIGN-DETAILS.md section 7, 7.2.2)
 auth      the phone checks d's IndexerSet, admission and consent evidence in its own config (owner decision 6) and,
           before the first request, §6.4's identity binding with HelloResult's bit 0, a failure alarming and
           dropping d until its admission changes; each reply's coverage carries the (v, C_v) its cursor pinned,
           matched at the phone's own version (else §6.4's FORK alarm) or at its next sync, never prompting a read
 order     the first two own search indexers asked at once, for the repos each may answer (first the one that
-          answered last within 10 min, then by rendezvous hash of the two sidecar_ids), both own pairs kept warm
-          from each foreground, so no contract opens at a search on either; the first page 0 to serve a repo wins
-          it and the other reply is dropped, with no hedge delay, at two exchanges and two indexers' CPU a search
-          and a second own pair's window floor, 512 KiB of transfer balance an hour, a foreground (owner decision
-          391); then, where `who` allows, other members' by rendezvous hash of
-          (member_id, indexer sidecar_id), one at a time and sticky until it fails, so a member's queries reach at
-          most one other device for a set of repos; repos sharing a first choice go in one request of at most 64,
-          and the phone remembers for 24 h which repos each indexer served
+          answered last within 10 min, then by rendezvous hash of the two sidecar_ids, the first 8 bytes of SHA-256
+          over a label and the two ids, ascending), both own pairs kept warm from each foreground, so no contract
+          opens at a search on either; the first page 0 to serve a repo wins it and the other reply is dropped,
+          with no hedge delay, at two exchanges and two indexers' CPU a search and a second own pair's window
+          floor, 512 KiB of transfer balance an hour, a foreground (owner decision 391); a further own indexer is
+          asked alone, and only when neither of those two can be; then, where `who` allows, other members', the one
+          that served this member's repos within 24 h first, else by rendezvous hash of (member_id, indexer
+          sidecar_id), one at a time and sticky until it fails, so a member's queries reach at most one other
+          device for a set of repos; repos sharing a first choice go in one request of at most 64, and the phone
+          remembers for 24 h which repos each indexer served (DESIGN-DETAILS.md section 7, 7.2.3;
+          details/RemoteAsk.tla, §22.8)
 failover  no first page within Search.RemoteTimeout (3 s, 5 s metered), RESOURCE_EXHAUSTED, UNIMPLEMENTED or a repo
-          refused in coverage sends those repos to the next eligible indexer; liveness comes from the foreground
-          Hello and §6.10's keepalive (online 10 min after a HelloResult or Pong within 3 s, a failed indexer
-          skipped for 2 min; D-SDK-27); an indexer first asked on failover gets its bit-1 Hello then, which opens
-          its §6.10 window at that search; a repo no indexer answers, in off mode or behind an unanswered notice
-          follows owner decision 155's download; an indexer seen again while the search screen is open is asked
-          once more for the repos that fell back
+          refused in coverage sends those repos to the next eligible indexer, read from the config state then; a
+          later page with no reply by its deadline is asked once more, the same search_id and page, before its leg
+          fails, and page 0 is never sent twice under one search_id, so no late copy of it opens a cursor again;
+          CURSOR_EXPIRED reopens the search once, under a new search_id; an open leg is judged again whenever the
+          config state moves, and one whose indexer may no longer be asked ends with no skip, its reply in flight
+          dropped (DESIGN-DETAILS.md section 7, 7.2.4); liveness comes from the foreground Hello and §6.10's
+          keepalive (online 10 min after a HelloResult or Pong within 3 s, a failed indexer skipped for 2 min;
+          D-SDK-27); an indexer first asked on failover gets its bit-1 Hello then, which opens its §6.10 window at
+          that search; a repo no indexer answers, in off mode or behind an unanswered notice follows owner decision
+          155's download; an indexer seen again while the search screen is open is asked once more for the repos
+          that fell back
 ```
 
 ```proto
@@ -12645,7 +12713,7 @@ message SearchRequest {
                                       //   the indexer normalizes it with each index's normalizer
   repeated SearchRepo repos = 8;      // page 0 only: <= 64 repos the requester reads and asks of this indexer
   int64 since_ms = 9;                 // page 0 only; 0 unbounded
-  int64 until_ms = 10;
+  int64 until_ms = 10;                // inclusive, as since_ms; a reopened search narrows it to resume
   SearchFilters filters = 11;         // page 0 only: §16.10's filters
   bool fuzzy = 12;                    // page 0 only: near hits even with 3 or more exact hits
   reserved 13, 14;                    // group_by and withhold_untrusted, for later requesters
@@ -12672,8 +12740,9 @@ message SearchReply {
   uint32 status = 6;                  // SearchStatus
   uint32 phase = 7;                   // 1 latest, 2 all, 3 done
   bool complete = 8;                  // no later page holds a hit
-  int64 checked_through_ms = 9;       // SERVED_TEXT repos: every candidate newer than this was checked, and
-                                      //   returned on this or an earlier page if it matched
+  int64 checked_through_ms = 9;       // SERVED_TEXT repos: the time of the newest candidate not yet accounted
+                                      //   for, so every newer one was checked and returned on this or an
+                                      //   earlier page if it matched; 0: none is left
   repeated SearchCoverage coverage = 10;   // page 0: one per repo named; later pages: none
   repeated SearchHit hits = 11;       // as many as fit the steps, at most 20
   SearchCounts counts = 12;
@@ -12687,7 +12756,8 @@ message SearchCoverage {
   bytes repo_id = 1;
   bytes ref_id = 2;
   uint32 served = 3;                  // SearchServed
-  uint64 ref_version = 4;             // the (v, C_v) the cursor pinned (11.9)
+  uint64 ref_version = 4;             // the (v, C_v) the cursor pinned (11.9): the text pin when SERVED_TEXT;
+                                      //   the index pin when SERVED_INDEX and the index is in the ref; else 0
   bytes chain = 5;                    // <= 32 B
   int64 ref_time_ms = 6;              // that version's signed time
   int64 latest_from_ms = 7;           // the oldest bucket day searched
@@ -12723,11 +12793,16 @@ exchange  page 0 carries the query, scope (v1 phones send 2), repos, since, unti
           authorizes, pins a snapshot per repo and answers with coverage for every repo named and the first hits;
           later pages carry only search_version, search_id, page, supersedes, steps and pad; one page in flight a
           search, page n only after n-1 arrived, a repeat of n returning the cursor's last reply unchanged
-ranking   across SERVED_TEXT repos, candidates go newest first by (time, doc_key), buckets first, then all's shards
-          youngest first, each verified against the text before it is returned; SERVED_INDEX repos' confirmed and
-          possible hits follow, ranked as a phone ranks them; near hits come last, when a term has fewer than 3
-          exact hits or fuzzy is set; checked_through_ms is the newest candidate not yet checked, so every newer
-          one was checked and, if verified, returned; phase 1 inside the buckets, 2 inside all, 3 done
+ranking   across SERVED_TEXT repos candidates go in one order, newest first by (time, the repo's place in the
+          request, doc_key), over every partition; a page reads all's shards only when the order reaches the newest
+          row all holds, by the oldest and newest times the manifest keeps for each file; each is verified against
+          the text before it is returned, and one whose text the indexer does not hold at that version is returned
+          as a phone would judge it; checked_through_ms is the time of the newest candidate not yet accounted for, a
+          hit held back for size included, so every candidate above it was examined and returned if it matched, ties
+          at that time not claimed; phase 1 while that candidate is newer than every all row, 2 after, 3 with none
+          left; SERVED_INDEX repos' confirmed and possible hits follow, ranked as a phone ranks them, and near hits
+          come last, when a term has fewer than 3 exact hits or fuzzy is set, and these claim nothing; TOO_BROAD
+          moves no span (DESIGN-DETAILS.md section 7, 7.2.5; details/RemoteCursor.tla, §22.8)
 sizes     every request body exactly 4,016 B, one envelope, timeout_ms always 10,000; every reply body exactly steps
           x 16,384 B (steps 1-4, 1 in v1), failures after parsing included; nothing compressed, no Cancel, no early
           or short reply; errors decided before parsing are small envelope Errors that depend on the requester's
@@ -12751,8 +12826,10 @@ status    OK; PARTIAL (2 s of CPU or 1,000 verifications ended the page, more to
           it parses to, checked before its pad's zeros, while a reply failing those is no reply);
           UNSUPPORTED_VERSION, judged first, so a later version's request is never INVALID, a requester raising
           search_version to send a new field, SearchRequest's reserved 13 and 14 included, and falling back to
-          version 1's fields for an indexer answering a lower range (owner decision 390); per repo in coverage,
-          SERVED_TEXT, SERVED_INDEX or a refusal, which sends that repo on (failover, above)
+          version 1's fields for an indexer answering a lower range (owner decision 390); a request for a page other
+          than the cursor's or the next is INVALID and leaves the cursor, and a lost read, the requester's or the
+          indexer's, ends it (DESIGN-DETAILS.md section 7, 7.2.5); per repo in coverage, SERVED_TEXT, SERVED_INDEX
+          or a refusal, which sends that repo on (failover, above)
 limits    requester: at most 2 open searches an indexer, a third's page 0 superseding the oldest, 30 requests a
           minute (burst 10), 64 repos a request, a larger scope split by indexer, then by 64; indexer: per requester
           the same, else RESOURCE_EXHAUSTED before parsing; Search.RemoteSearchCount (4) computing beside §16.10's 4
@@ -12762,37 +12839,45 @@ limits    requester: at most 2 open searches an indexer, a third's page 0 supers
           RemoteCursorCount (64) cursors idle at most 10 min, each at most 16 KiB of resume state plus its last
           reply; a lost reply is retried by page and answered from the cursor, not §6.6's idempotency cache, which
           holds only mutating methods' responses, and SEARCH mutates nothing (§6.6)
-serve     the indexer authorizes in its own state, naming a refused repo in coverage, never as an error; it runs
-          this subsection's plan over the buckets, retained buckets and all it holds, plus its local overlay for
-          pushes past indexed_through that its text covers, verifying against its mirror, mounted tree or bare
-          repository (11.11, 11.13), with masks, newest wins and searchable_days; it reads nothing from evs, api or
-          gkm for a remote search, reporting in coverage what it lacks, so evs sees nothing of one on either device;
-          a daemon designated for search keeps all of every repo it reads within Search.CacheByteCount (16 GiB),
-          answers no index-off repo (REFUSED_INDEX_OFF), holds at most 8 MiB of working set a search, its masks
-          probing the version table (newest, above), and persists no query (§5.9, D-CORE-17)
+serve     the indexer authorizes in its own state, naming a refused repo in coverage, never as an error; its checks
+          run in one order, none before the third reading the body, so nothing a relay sees before then depends on a
+          query: the contract's class (bit 0), the errors before parsing, the body, the cursor table, authorization
+          in its newest verified state (each repo named at page 0; the requester and each repo the cursor serves at
+          a later page, a failure ending the cursor), the snapshot and text view pinned at page 0 and held to the
+          cursor's end, then the page, stored as the cursor's last reply before it is sent; since_ms and until_ms
+          are inclusive bounds on a row's time (DESIGN-DETAILS.md section 7, 7.2.5); it runs this subsection's plan
+          over the buckets, retained buckets and all it holds, plus its local overlay for pushes past
+          indexed_through that its text covers, verifying against its mirror, mounted tree or bare repository
+          (11.11, 11.13), with masks, newest wins and searchable_days; it reads nothing from evs, api or gkm for a
+          remote search, reporting in coverage what it lacks, so evs sees nothing of one on either device; a daemon
+          designated for search keeps all of every repo it reads within Search.CacheByteCount (16 GiB), answers no
+          index-off repo (REFUSED_INDEX_OFF), holds at most 8 MiB of working set a search, its masks probing the
+          version table (newest, above), and persists no query (§5.9, D-CORE-17)
 phones    never serve: readers ignore search on a read_only or ephemeral subject, ur indexer add refuses it on an
           app host, and app-host builds set Search.RemoteServe false and never advertise bit 0; a laptop daemon may
           serve, within the CPU window
 merge     per (repo, ref, doc_key) over the remote pages and the phone's own hits, the strongest claim by class
           first, a verified or confirmed claim before a possible one before a near one, then the higher version,
-          then verified before confirmed, then an indexer's claim before the phone's, so no indexer demotes what
-          another source claimed as a match by claiming a higher version in a weaker state, and a claim verified
-          at an older version may show above a newer possible claim of its document, opening it reading the
-          newest version and judging that, with no alarm; in a SERVED_TEXT repo a local possible or near hit with
-          time_ms above checked_through_ms that no page returned moves to a collapsed "n not matched by <device>"
-          row only when the index rides the content ref and the phone's own pin of it is at or below the leg's
-          pinned version, or its time is more than SkewGuard (40 min, evs's 10 min clock bound and 30 min for a
-          push in parts) below ref_time_ms, the only test for a companion index, whose entries trail their
-          content, so a phone ahead of the indexer keeps its possible matches of the 40 min before the indexer's
-          pin possible (owner decision 392); the phone's own confirmed hits always stay, hits newer than the pinned
-          version keep the phone's state, and SERVED_INDEX hits merge as possible, dropping nothing; a hit from a
-          repo the request did not name or the phone does not read is dropped with an alarm; the phone's ERASE
-          and erasure-set masks and read checks (§5.9) apply; an opened hit is extracted and checked against the
-          query, its doc_key and version, and a mismatch, or a local confirmed hit inside the checked span that
-          no page returned where the index rides the content ref, the leg's pinned (version, chain) equals the
-          phone's own pin, the confirming field is not cut at its cap and the repo's uncovered is 0 (owner
-          decision 392), raises SidecarEvent search_alarm {mismatch or omission, indexer, repo} (§5.4), three mismatches
-          in a day skipping that indexer for 24 h
+          then verified before confirmed, then an indexer's claim before the phone's, then the leg whose first page
+          arrived first, a leg's claim taken only for a repo that leg serves, so no indexer demotes what another
+          source claimed as a match by claiming a higher version in a weaker state, and a claim verified at an older
+          version may show above a newer possible claim of its document, opening it reading the newest version and
+          judging that, with no alarm; in a SERVED_TEXT repo whose coverage reported uncovered 0, a local possible
+          or near hit with time_ms above checked_through_ms, and at or below the request's until_ms, that no indexer
+          claims in any state moves to a collapsed "n not matched by <device>" row only when the index rides the
+          content ref and the phone's own pin of it is at or below the leg's pinned version, or its time is more
+          than SkewGuard (40 min, evs's 10 min clock bound and 30 min for a push in parts) below ref_time_ms, the
+          only test for a companion index, whose entries trail their content, so a phone ahead of the indexer keeps
+          its possible matches of the 40 min before the indexer's pin possible (owner decision 392); the phone's own
+          confirmed hits always stay, hits newer than the pinned version keep the phone's state, and SERVED_INDEX
+          hits merge as possible, dropping nothing; a hit from a repo the request did not name or the phone does not
+          read is dropped with an alarm; the phone's ERASE and erasure-set masks and read checks (§5.9) apply; an
+          opened hit is extracted and checked against the query, its doc_key and version, and a mismatch, or a local
+          confirmed hit inside the checked span that no page returned where the index rides the content ref, the
+          leg's pinned (version, chain) equals the phone's own pin, the confirming field is not cut at its cap and
+          the repo's uncovered is 0 (owner decision 392), raises SidecarEvent search_alarm {mismatch or omission,
+          indexer, repo} (§5.4), three mismatches in a day skipping that indexer for 24 h and voiding its legs'
+          claims and spans in open searches (DESIGN-DETAILS.md section 7, 7.2.6; details/RemoteMerge.tla, §22.8)
 readings  (owner decision 391, every time and count a Search setting) a personal network, for eligibility, is a
           config state with one member; candidates run newest first over every partition, all's shards read only
           when the order reaches all's newest row; a read lost mid-cursor ends the cursor, CURSOR_EXPIRED on the
@@ -13607,7 +13692,7 @@ DKIM comes only through §14's `POST /smtp/dkim-keys`, TLSA only through `/dns/k
 Custom domains, Team only (D-DNS-9):
 1. Verify TXT `_urnetwork-challenge.<domain>` (§7.6 `network_domain`).
 2. **Strong mode** (the default, and every apex): `<host>.<domain>` answers A and AAAA itself, statically with the lb addresses (§19.5; these miss 12.6's health drops) or through a customer-side ALIAS (flattening) of the host owner it maps to, `<host>.<net>.<root>` (an apex host's too; never `@`, whose CAA would govern the zone's device certificates, RFC 8659 §3), that keeps the queried name, synthesizes only A and AAAA, and answers every other type, CAA included, from the customer's zone. **Weak mode:** a CNAME into `<root>`, active at once, accepted only with §2.8 EX1's exception disclosed at setup: CAA discovery follows the CNAME and stops at the first non-empty set (RFC 8659 §3), so URnetwork could publish a CAA at the target admitting its own account.
-3. The customer's CAA pins its own ACME account (`accounturi`, RFC 8657; [owner decision 39](#od-39); custody per §13.8); devices pass DNS-01 through a one-time CNAME `_acme-challenge.<domain>` → `<acme_token>.acme.<root>`, where certs writes their challenges, or TLS-ALPN-01. `network_domain.acme_token` is 16 bytes from crypto/rand, lowercase base32 with no padding, minted by api when the domain first verifies (§7.6), fixed for the row's life and shown to admins in `GET /network/dns` as the CNAME's target. An ordering desktop posts the 43-character base64url DNS-01 digest to `POST /tls/custom-challenge` (§13.15), and certs, still the only writer, writes it there through `POST /dns/internal/acme-challenge`; `GET /tls/custom-challenge/<id>` passes on `ready`'s answers, `stale` and `canary_failing` included, so the desktop asks the CA only on `ready` and posts the value again on `stale`. DNS-01 orders never wait on map readiness (§13.4). A strong-mode host commits `pending`, unmapped with `effective_caa_chain_ok` false, while a certs taskworker chain walks its CAA discovery and runs the probe below: both passing make it active, and a walk meeting a name in a URnetwork zone, or a failed probe, refuses it (`custom_host_caa_operator_alias`), each as an admin event. certs repeats both on §13.8's schedule; a failure there clears `effective_caa_chain_ok` until a check passes and records §2.8 EX1's exception in an admin event that alarms the network's admins, the host staying mapped, exposed as a weak-mode one is. The ordering desktops repeat the walk before each order (§13.8).
+3. The customer's CAA pins its own ACME account (`accounturi`, RFC 8657; [owner decision 39](#od-39); custody per §13.8); devices pass DNS-01 through a one-time CNAME at `_acme-challenge.<custom host>`, one for each custom host, since a custom certificate names its one host (§13.8), → `<acme_token>.acme.<root>`, where certs writes their challenges, or TLS-ALPN-01, which needs the ordering desktop to hold a publish grant on port 443 of the host's owner ([owner decision 426](#od-426); DESIGN-DETAILS.md section 17). `network_domain.acme_token` is 16 bytes from crypto/rand, lowercase base32 with no padding, minted by api when the domain first verifies (§7.6), fixed for the row's life and shown to admins in `GET /network/dns` as the CNAME's target. An ordering desktop posts the 43-character base64url DNS-01 digest to `POST /tls/custom-challenge` (§13.15), and certs, still the only writer, writes it there through `POST /dns/internal/acme-challenge`; `GET /tls/custom-challenge/<id>` passes on `ready`'s answers, `stale` and `canary_failing` included, so the desktop asks the CA only on `ready` and posts the value again on `stale`. DNS-01 orders never wait on map readiness (§13.4). A strong-mode host commits `pending`, unmapped with `effective_caa_chain_ok` false, while a certs taskworker chain walks its CAA discovery and runs the probe below: both passing make it active, and a walk meeting a name in a URnetwork zone, or a failed probe, refuses it (`custom_host_caa_operator_alias`), each as an admin event. certs repeats both on §13.8's schedule; a failure there clears `effective_caa_chain_ok` until a check passes and records §2.8 EX1's exception in an admin event that alarms the network's admins, the host staying mapped, exposed as a weak-mode one is. The ordering desktops repeat the walk before each order (§13.8).
 4. §13.4's split sends each active custom host's SNI to tlsedge, which maps it via `network_dns_custom_host`; mail uses MX `mx.<net>.<root>`, §14.6's selectors (CNAMEd or delegated to `dns`) and the customer's `_dmarc` with `adkim=s`. In strict mode (§15.4; [owner decision 98](#od-98)) the MX is the customer's `<mx>.<domain>` in its own signed zone, with TLSA at `_25._tcp.<mx>.<domain>` and A and AAAA to the router interfaces, mapped in `network_dns_custom_host` for mxedge (§2.8 mx-3). Only this path, with every MX host the recipient domain lists and its TLSA customer-signed, carries strict mode's exclusion of URnetwork; an MX host or TLSA in a URnetwork zone stays under §2.8 EX2.
 5. A downgrade's withholding (§20.7) sets each active TLS web host of a custom domain `withheld`, which takes it out of the custom-host map, raising its version, and out of tlsedge's routing, while its row, verification and CAA mode stay (D-QUOTA-6); a release after a renewal sets it `active` with `map_version` 0, so it re-enters the map at the next version and is pending until every interface is current, as a new host is, with no re-verification and no new CAA walk. certs' result never turns a withheld host active, and a strict-mode MX host is never withheld, mail hosts keeping MX, TLSA and routing; §14's From-domain gate withholds the domain's mail From beside it ([owner decision 420](#od-420)).
 
@@ -13938,7 +14023,7 @@ message TlsEdgeLogin {           // SIGNED_TLS_EDGE_LOGIN 0x1502, purpose edge-l
 | Key | P-256 per listening device, sealed in its keychain (§5): never exported, in evs or on a server. One certificate per device, so I-15 is one revocation. Rotated every 180 days, on suspicion, or on request |
 | Ordering (Q-TLS-2) | `POST /tls/cert-order`: the CSR plus a `Signed` attestation (purpose `tls-key`, `SIGNED_TLS_KEY_ATTESTATION` 0x1501, §6.9) by the device's identity key, of `TlsKeyAttestation {network_id, sidecar_id, spki_sha256, identifier_set_sha256, issue_time_millis}`, `identifier_set_sha256` the SHA-256 over the set's lowercase ASCII names, a wildcard written `*.x`, sorted bytewise, each followed by one 0x00 byte. certs checks the caller's §8 grant (13.15), orders under URnetwork's ACME accounts, deactivated on compromise, and alone writes DNS-01 records (§12). Every account key is in vault before any CA knows it, and certs never writes a key: it reads one YAML file per CA from taskworker's `secret_files` (`ca`, `private_key`, an optional `next_private_key`, `key_create_time`, `eab_key_id`, `eab_mac_key`, `contact`), and once `key_create_time` is a year old, the rollover age a setting, and the file holds a `next_private_key`, it signs RFC 8555 §7.3.5's key change with both keys and orders with the next from then on. Restarted with both keys in the file, it finds the account under whichever key the CA holds, so the operator promotes `next_private_key` to `private_key`, with a new `key_create_time`, at leisure, and the account's URI, which the CAA row pins, never changes; without a next key nothing rolls over, and certs reports the account due but not ready (`rollover_due_cas`; §19.10; [owner decision 432](#od-432)) |
 | Challenge | DNS-01 in URnetwork zones, the only wildcard method; never HTTP-01. Orders wait for `GET /dns/internal/ready`, which answers `stale`, `ready` or `canary_failing` (§12.6), and `CertsDns.CanaryClean` reads that answer: `stale` as below, and `canary_failing`, a §12.6 canary that is not clean, keeps an order waiting with no rewrite and no new serial, since CAs validate DNSSEC once the DS exists (CA/B SC-085v2, from 2026-03-15) and LE allows 5 failed authorizations per identifier per hour; a strong-mode probe counts `canary_failing` as ready, and the delegated challenge route passes all three answers on (§12.8) |
-| Custom domains (Team, v1; [owner decision 39](#od-39)) | One ACME account per domain, pinned by the customer's CAA `issue "letsencrypt.org; accounturi=<uri>"`. CAA discovery follows a CNAME and stops at the first non-empty RRset (RFC 8659 §3), so the pin excludes URnetwork only in strong mode, where the host has customer A/AAAA or a customer-side ALIAS that synthesizes only A and AAAA (§12.8). certs walks the whole discovery chain and publishes §12.8's canary CAA, with a per-check nonce, at the ALIAS target, a host owner `<host>.<net>.<root>` and never `@`, an apex host's too: at setup, the host pending until walk and probe pass (§12.8), and again at half the lifetime of the host's newest registered chain, before the desktops renew at two thirds. Only a CAA-flattening ALIAS returns the nonce at the host. The ordering desktops repeat the walk, not the canary, before each order: the walk does not rest on certs, but the canary does, so a compelled operator can pass a CAA-flattening ALIAS (§2.8 EX1; 13.16). A strong-mode host whose walk reaches an operator-controlled name (`custom_host_caa_operator_alias`) or returns the nonce is refused at setup and takes §12.8's failure effect at renewal. A host CNAMEd into an operator zone is weak mode, its setup disclosing §2.8 EX1's operator-issuance exception. An admin's desktop makes the account key in a `secret` repo of its own, one per domain (§11.12's owner-bound kind; never the config repo, [owner decision 6](#od-6), nor the admin's vault, since an `EvsShare` opens a whole repo), and shares it by `EvsShare` with the desktops holding the domain's publish grants ([owner decision 126](#od-126)); every MCP evs tool and `ur://evs` resource refuses the kind (§16.6). They order with acmez (TLS-ALPN-01, only while `GET /dns/zone` shows the host ready (13.4), or §12.8's delegated DNS-01), for mobile devices too, registering chains at `POST /tls/cert-register`; one must be online by two thirds of the lifetime. A holder's or the repo owner's removal rolls the key over (RFC 8555 §7.3.5) into a repo the remaining holders read, keeping the pin (below) |
+| Custom domains (Team, v1; [owner decision 39](#od-39)) | One ACME account per domain, pinned by the customer's CAA `issue "letsencrypt.org; accounturi=<uri>"`. CAA discovery follows a CNAME and stops at the first non-empty RRset (RFC 8659 §3), so the pin excludes URnetwork only in strong mode, where the host has customer A/AAAA or a customer-side ALIAS that synthesizes only A and AAAA (§12.8). certs walks the whole discovery chain and publishes §12.8's canary CAA, with a per-check nonce, at the ALIAS target, a host owner `<host>.<net>.<root>` and never `@`, an apex host's too: at setup, the host pending until walk and probe pass (§12.8), and again at half the lifetime of the host's newest registered chain, before the desktops renew at two thirds. Only a CAA-flattening ALIAS returns the nonce at the host. The ordering desktops repeat the walk, not the canary, before each order: the walk does not rest on certs, but the canary does, so a compelled operator can pass a CAA-flattening ALIAS (§2.8 EX1; 13.16). A strong-mode host whose walk reaches an operator-controlled name (`custom_host_caa_operator_alias`) or returns the nonce is refused at setup and takes §12.8's failure effect at renewal. A host CNAMEd into an operator zone is weak mode, its setup disclosing §2.8 EX1's operator-issuance exception. An admin's desktop makes the account key in a `secret` repo of its own, one per domain (§11.12's owner-bound kind; never the config repo, [owner decision 6](#od-6), nor the admin's vault, since an `EvsShare` opens a whole repo), and shares it by `EvsShare` with the desktops holding the domain's publish grants ([owner decision 126](#od-126)); every MCP evs tool and `ur://evs` resource refuses the kind (§16.6). They order with acmez (TLS-ALPN-01, only while `GET /dns/zone` shows the host ready (13.4), or §12.8's delegated DNS-01), for mobile devices too, registering chains at `POST /tls/cert-register`; one must be online by two thirds of the lifetime. When the key repo's holders shrink, or its owner leaves, a network admin's ordering desktop changes the account key (RFC 8555 §7.3.5) under the account's lock: the new key is committed to a secret repo the remaining holders read before the CA is asked to require it, and the row's key sequence moves last; the pin is kept. Until that request a removed holder still signs as the account (below) |
 | CAA | At `<root>`: `issue` and `issuewild` for `letsencrypt.org`, `pki.goog` (GTS, Google Trust Services; https://developers.google.com/public-key-infrastructure/faq/configure-caa) and `sectigo.com` (ZeroSSL; https://help.zerossl.com/hc/en-us/articles/360060119753), each with every URnetwork account URI and `validationmethods=dns-01`. No per-label URnetwork `accounturi` |
 | CA, profile | LE `tlsserver`: 45 days, 25 names, 7 h authorization reuse (https://letsencrypt.org/docs/profiles/, 2026-10-04). GTS (100 new orders per hour per project), then ZeroSSL (unlimited 90-day certificates; [R:ext-edge](design/design-research/ext-edge.md) §2.4), when LE refuses on a limit, and first for ephemeral sidecars (CI, cloud agents) |
 | Renewal | ARI (RFC 9773) via acmez v3 in the engine (Apache-2.0; https://github.com/mholt/acmez), using the stored CSR so devices may be offline; else at two thirds of the lifetime |
@@ -13981,7 +14066,7 @@ enum TlsHintKind { TLS_HINT_KIND_UNSPECIFIED = 0; TLS_HINT_ORDER = 1; TLS_HINT_I
 
 **Budget.** LE allows 50 new certificates per registered domain per 7 days across accounts (https://letsencrypt.org/docs/rate-limits/, 2026-08-05): each network's or scope's first certificate spends a unit of `<root>`'s shared budget, a repeated set gets 5 per 7 days (refill 1 per 34 h, no overrides), and ARI renewals skip all limits. certs (`certsservice`, taskworker chains) reimplements the extender pattern, which sidecar cannot import: a `network_tls_cert` queue, a weekly new-set cap below the CA's, counted in Redis `{tcb_}` (13.15), Retry-After holds, the row written before the order; a row keeps its issued chain, which `GET /tls/cert-order/<id>` answers after a restart or to a device that was offline, a requested revocation's reason (`keyCompromise` from `POST /tls/cert-revoke`, `cessationOfOperation` for §21.6's takedowns) until the sweep's revocation reaches the CA, and `state_time`, the time of its latest state; rows stay 30 days, a setting, past expiry, read from `not_after`, or past revocation or failure, read from `state_time`, from which the rebuild of a lost `{tcb_}` key may read an order's admission (cert-1; [owner decision 254](#od-254)); budget entries 7 days. certs backs a URnetwork-zone name whose authorizations keep failing at a CA off, doubling from a start to a day, both settings, so it fails at most about once a day there, which Let's Encrypt's daily refill of the 1,152 consecutive failures after which it pauses a name for an account hands back, and one broken name no longer holds LE's new orders for every other network; the backoff survives a restart in `network_tls_name_backoff` (cert-1), and a success at that CA resets it ([owner decision 430](#od-430)).
 
-**Custom-domain orders (Team, v1; owner decisions [424](#od-424)-[427](#od-427)).** A custom-domain certificate names exactly one custom host and carries one device's key, so a host's devices share the CA's exact-set limit: its first 4 devices are certified at once, one certificate kept back for a compromised key, and each further device 34 h after the one before, both settings, and a device without a certificate for a custom host is not routed that host's visitors. URnetwork's orders for a customer's registered domain are held at the server to a bucket of 25 new certificates, one back each 6 h 43 min (`CertsCustomSettings`' `DomainCap` and `DomainRefill`), half the CA's assumed 50 in 7 days, counted before any request reaches the CA, ARI renewals outside it; a value the customer's admin sets per domain is a later product setting. The CA's numbers (a 45-day lifetime, 7 h authorization reuse, 50 certificates a registered domain in 7 days, 5 an exact set in 7 days with one back each 34 h, 300 new orders an account in 3 h, 5 failed authorizations an hour, an ARI renewal counting against no limit) stay assumptions held as `CertsCustomSettings` defaults, which the owner corrects from the CA's rate-limits and profiles pages; if the ARI exemption fails in any part, a host's ceiling of about 21 certified devices becomes the product's stated limit. Budgets are rows of spends replayed as buckets, never counters: a bucket's replay starts full at its key's latest quiet window, the newest instant t at or before now with no spend of the key in (t − cap × refill, t], where the CA's bucket is full whatever came before, and replays the spends after it, or, where no such instant lies within the retained spends, starts empty at the retention's start; spends are kept 16 d (`SpendRetention`), and a grant reads all of its key's, at most a few dozen rows for the set and domain buckets. So the level never reads above the truth, and it is exact for any number of a host's devices while the host's busy stretch is shorter than the retention less one window, 214 h: after a burst of four each device comes 34 h after the one before, the 10th at 8.5 d and the 11th after a window's pause, and a refused claim's wait, (need − level) × refill, is answered by a grant ([owner decision 571](#od-571)). Every custom certificate is a `network_tls_cert` row first, in states of its own (`custom_queued`, `custom_ordering`, `custom_issued`, `custom_revoking`) that no other certs pass takes: `POST /tls/cert-register` takes a chain only for a queued row whose account lock the caller holds, so a desktop's own CSR is queued by `POST /tls/cert-order` like a phone's and claimed like any row. The lock is one an account, since the CA may hand two newOrders for one host the same order and the key change needs the same exclusion. An ordering desktop answers TLS-ALPN-01 for a custom host only where it holds an approved port 443 publish grant on the host's owner, 13.9's gate taking no exception; without one it uses the customer's DNS-01 CNAME for that host or leaves the row to a desktop that holds the grant, and a row no online desktop can serve waits and raises `tls_custom_queue_stalled` after 24 h, a setting. Before asking the CA to validate, a desktop probes its own challenge through public DNS and the edge, twice, and a failed probe asks the CA nothing. A 429 on an ordinary order holds ordinary orders and lets ARI renewals through, and one on an ARI renewal holds everything. The plan orders revocations, the row in flight, replacements of revoked certificates, renewals by expiry, then first certificates, the least-served host first. A device presents the newest installed certificate whose row is `custom_issued`, falling back to its predecessor, and for a custom name with none it fails the handshake, never presenting another certificate. A row that ends while an order is recorded for it goes to `custom_revoking`, and the account orders nothing until that order is killed at the CA or its certificate revoked. The account key is held by an admin's devices and the ordering desktops it is shared with, each keeping the key file's last good bytes in its local secret store; any holder orders, but only a network admin's ordering desktop changes the key or writes the account row. The change is due the moment the key repo's holders shrink or its owner leaves, and the first admin desktop online makes it within one poll, committing the new key where the remaining holders read it before the CA is asked to require it; a desktop that sees it due and may not make it raises `tls_account_rollover_due`, and fewer than two admins' desktops seen in 7 days is a warning. Until the CA takes the change, a removed holder still signs as the account (13.16).
+**Custom-domain orders (Team, v1; owner decisions [424](#od-424)-[427](#od-427)).** A custom-domain certificate names exactly one custom host and carries one device's key, so a host's devices share the CA's exact-set limit: its first 4 devices are certified at once, one certificate kept back for a compromised key, and each further device 34 h after the one before, both settings, and a device without a certificate for a custom host is not routed that host's visitors. URnetwork's orders for a customer's registered domain are held at the server to a bucket of 25 new certificates, one back each 6 h 43 min (`CertsCustomSettings`' `DomainCap` and `DomainRefill`), half the CA's assumed 50 in 7 days, counted before any request reaches the CA, ARI renewals outside it; a value the customer's admin sets per domain is a later product setting. The CA's numbers (a 45-day lifetime, 7 h authorization reuse, 50 certificates a registered domain in 7 days, 5 an exact set in 7 days with one back each 34 h, 300 new orders an account in 3 h, 5 failed authorizations an hour, an ARI renewal counting against no limit) stay assumptions held as `CertsCustomSettings` defaults, which the owner corrects from the CA's rate-limits and profiles pages; if the ARI exemption fails in any part, a host's ceiling of about 21 certified devices becomes the product's stated limit. Budgets are rows of spends replayed as buckets, never counters: a bucket's replay starts full at its key's latest quiet window, the newest instant t at or before now with no spend of the key in (t − cap × refill, t], where the CA's bucket is full whatever came before, and replays the spends after it, or, where no such instant lies within the retained spends, starts empty at the retention's start; spends are kept 16 d (`SpendRetention`), and a grant reads all of its key's, at most a few dozen rows for the set and domain buckets. So the level never reads above the truth, and it is exact for any number of a host's devices while the host's busy stretch is shorter than the retention less one window, 214 h: after a burst of four each device comes 34 h after the one before, the 10th at 8.5 d and the 11th after a window's pause, and a refused claim's wait, (need − level) × refill, is answered by a grant ([owner decision 571](#od-571)). Every custom certificate is a `network_tls_cert` row first, in states of its own (`custom_queued`, `custom_ordering`, `custom_issued`, `custom_revoking`) that no other certs pass takes: `POST /tls/cert-register` takes a chain only for a queued row whose account lock the caller holds, so a desktop's own CSR is queued by `POST /tls/cert-order` like a phone's and claimed like any row. The lock is one an account, since the CA may hand two newOrders for one host the same order and the key change needs the same exclusion. An ordering desktop touches the CA for an account only while it holds that lock, `network_tls_account`'s sequence, holder and lease on the database's clock and no other, one order in flight an account, and every server write it makes names the sequence its claim returned, a write under an older one refused. It sends one newOrder a grant and finalizes only an order whose URL the server recorded under that sequence; a takeover resumes the recorded order and starts another only when the CA itself calls it invalid or gone, never on a timeout or a 5xx, so a row yields at most one certificate, and a holder that must give a live order up kills it by deactivating its authorizations, since an order left recorded keeps its row first in line. The server grants each newOrder in the claim's transaction, after checking and spending the account's budgets (the exact-set, registered-domain, new-order and failed-authorization limits, each a setting, one certificate of the exact set kept back), and records a CA's 429 as a hold on the account row that every desktop honors (DESIGN-DETAILS.md section 17, 17.2.6 to 17.2.8; `details/CertOrder.tla`, §22.8). An ordering desktop answers TLS-ALPN-01 for a custom host only where it holds an approved port 443 publish grant on the host's owner, 13.9's gate taking no exception; without one it uses the customer's DNS-01 CNAME for that host or leaves the row to a desktop that holds the grant, and a row no online desktop can serve waits and raises `tls_custom_queue_stalled` after 24 h, a setting. Before asking the CA to validate, a desktop probes its own challenge through public DNS and the edge, twice, and a failed probe asks the CA nothing. A 429 on an ordinary order holds ordinary orders and lets ARI renewals through, and one on an ARI renewal holds everything. The plan orders revocations, the row in flight, replacements of revoked certificates, renewals by expiry, then first certificates, the least-served host first. A device presents the newest installed certificate whose row is `custom_issued`, falling back to its predecessor, and for a custom name with none it fails the handshake, never presenting another certificate. A renewal is a successor row the server queues with the stored CSR, so a phone need not wake for it, at a uniform point of the certificate's ARI window, or at two thirds of its life where the CA gave none, and its order carries `replaces`; ordering desktops keep the windows fresh from the CA's renewalInfo. A revocation is marked by the server, which from that commit certifies the name for that listener no longer, and sent by an ordering desktop under the account key, spending no budget and waiting on no hold (DESIGN-DETAILS.md section 17, 17.2.11, 17.2.12). A row that ends while an order is recorded for it goes to `custom_revoking`, and the account orders nothing until that order is killed at the CA or its certificate revoked. The account key is held by an admin's devices and the ordering desktops it is shared with, each keeping the key file's last good bytes in its local secret store; any holder orders, but only a network admin's ordering desktop changes the key or writes the account row. The change is due the moment the key repo's holders shrink or its owner leaves, and the first admin desktop online makes it within one poll, under the account's lock, committing the new key where the remaining holders read it before the CA is asked to require it, the account row's key sequence moving last, so at every instant some holder reads whichever key the CA accepts and an order in flight resumes under the new key (DESIGN-DETAILS.md section 17, 17.2.13); a desktop that sees it due and may not make it raises `tls_account_rollover_due`, and fewer than two admins' desktops seen in 7 days is a warning. Until the CA takes the change, a removed holder still signs as the account (13.16).
 
 ### 13.9 Endpoints, caps, metering, abuse
 
@@ -14003,7 +14088,9 @@ ValidateListen(tls/<port>/<host>) refuses
            (7 d) or in probation or restricted state (24 h); Pro and Team may hold standing names, and
            a network whose tier fell keeps a standing grant until §20.7's 14-day clock ends
   cert     no unexpired certificate row, except an acme-tls/1-only registration before its first order;
-           a certified or ACME name the rows do not bear out is dropped, and the registration stands
+           a custom host or alias is listed for a listener only while its sidecar holds an unexpired
+           certificate row for it: a certified or ACME name the rows do not bear out is dropped, and
+           the registration stands
   facts    an unknown fact, of the ones above that TlsListenFactsSource brings (§8.9)
 system publish tls/443/mta-sts (§15.5): AppMode http, audience public, no tls/ grant of its own
   only     a receiver (an approved smtp/25/mx listen grant, §15.4) holding an unexpired certificate row
@@ -14111,7 +14198,8 @@ Flags: `--port` (443, or a listed port), `--expires`, `--audience`, `--alpn`, `-
 - **Subprotocol messages:** `TlsEdgeOpen` (0x1501; StreamOpen metadata, edge→listener); `TlsHint` (0x1502; push `tls`, whose version is the writer's clock in ms, per client, with no durable sequence; §6.8): `{TlsHintKind kind = 1; bytes cert_id = 2}`, kinds 1 order, 2 issued, 3 revoked, `cert_id` the 16-byte row id; the client refetches `GET /tls/certs`, so a hint is never authoritative.
 - **API routes** (api; bringyour.yml, route_authz.go):
   - `POST /tls/cert-order` (service token, aud `certs`; caller holds a §8 `tls/` or `smtp/` grant, which api's subject asks the gate in one call, `AclGateView.HoldsPublicGrant(networkId, subject, now)`, true when a rule in force gives the subject publish with listen on any `tls/` name or listen on `smtp/25/mx`; until that call lands, api grants a caller the view allows listen on `smtp/25/mx`, or one `PublishGrant` grants, in http or raw mode, a host and port `AclState.PublishedNames` lists for the network, each `*` asked as the letter `x` and a dotted Team scope host skipped until M6, every answer the gate's own, the closed direction ([owner decision 429](#od-429)); CSR, attestation); `GET /tls/cert-order/<id>` (state, retry_after, chain, ARI window).
-  - `POST /tls/cert-register` (Client; a custom domain's chains, v1, each only for a queued row whose account lock the caller holds, its leaf carrying the row's key and exactly its one name); `GET /tls/certs` (Client; certificates, attestations and queued custom-domain CSRs; `?work=1` only accounts and waiting rows, so a desktop's poll carries no chains).
+  - `POST /tls/cert-register` (service token, aud `certs`, as every custom-domain route here; a custom domain's chains, v1, each only for a queued row whose account lock the caller holds, under that claim's sequence, its leaf carrying the row's key and exactly its one name); `GET /tls/certs` (Client; certificates, attestations and queued custom-domain CSRs; `?work=1`, which an ordering desktop asks with its `certs` service token, only accounts and waiting rows, so a desktop's poll carries no chains).
+  - `POST /tls/custom-claim` (service token, aud `certs`; an ordering desktop, a sidecar holding an active approved publish grant on a `tls/` name of the owner of an active custom host of the domain, takes or renews the account's lock for one row, purpose `order` or `revoke`, or, a network admin's desktop only, for a key change, `rollover`; the answer carries the claim's sequence, its lease, the row, the recorded order's URL to resume or the grant of one newOrder, its budgets checked and spent in that transaction, and the predecessor's leaf where the order names it in `replaces`; refused 403 `orderer`, 404 `no_account`, 409 `key_seq`, `locked`, `in_flight` or `state`, and 429 `budget` or `hold` with `retry_after_ms`, never waiting on the lock); `POST /tls/custom-progress` (service token, aud `certs`; what the holder learned at the CA, applied only while the lock's sequence is its claim's, else 409 `claim`: `order_recorded`, `order_invalid`, `authz_failed`, `rate_limited`, `not_exempt`, `release`, `failed` and `revoked`, and with no claim `ari`, the certificates' renewal windows, and `rollover_due`); `POST /tls/custom-account` (service token, aud `certs`; a network admin's desktop creates the account row or begins, ends, aborts or repairs a key change: `create`, `roll_begin`, `roll_end`, `roll_abort`, `repair`). Durations on these routes are milliseconds from the answer, never a time of day, so no desktop clock is compared with the server's (DESIGN-DETAILS.md section 17, 17.2.5; v1).
   - Bodies are JSON from 13.8 and §2.8's cert-1: a stored field cert-1 lacks needs its row first (I-18), and a request-only value, such as `replaces`, is stored nowhere.
   - `POST /tls/custom-challenge` (service token, aud `certs`; the caller holds an active §8 publish grant on a host mapped under the domain; `{domain, value}`, the value the 43-character base64url DNS-01 digest) and `GET /tls/custom-challenge/<id>` (§12.8's ready answers, `stale` and `canary_failing` included): a custom domain's delegated DNS-01 at its `<acme_token>.acme.<root>`, which certs alone writes (§12.8 step 3; v1).
   - `POST /tls/cert-revoke` (OwnClient: a client token revokes its own client's certificates; Network admin for any of its network's, meaning a personal network's owner's token, a team member's token whose role holds `devices`, a role that cannot be read holding nothing, or an API key whose scopes reach `devices`, since revoking a device's certificate is part of removing the device; an OAuth identity or admin token revokes nothing there; [owner decision 429](#od-429)); `POST /tls/suspend` (§21), a model call inside api and taskworker, its route built only once a caller outside them exists ([owner decision 417](#od-417)).
@@ -14132,7 +14220,7 @@ Flags: `--port` (443, or a listed port), `--expires`, `--audience`, `--alpn`, `-
 | A dns-edge signing fault after the DS, or a site or Hurricane Electric outage that also stops the lbs ([R:ext-edge](design/design-research/ext-edge.md) §5; accepted, [owner decision 123](#od-123)), fails DNS-01 and CAA | Medium | High | Orders pause on §12.6's canary, which pages at any hour ([owner decision 143](#od-143)); renewal at day 30 of 45 leaves 15 days |
 | Compelled mis-issuance enables MITM of a name, of a weak-mode custom host, or of a strong-mode one behind a CAA-flattening ALIAS, which only URnetwork's own canary checks (13.8) | Low | High | Two-source CT watch (D-TLS-8), the remaining control for those hosts; customer CAA in strong mode (13.8) |
 | Same-user agents read the device key and impersonate names | High | High | Accepted ([owner decision 47](#od-47)); removal revokes (I-15) |
-| A custom domain's certificates lapse with no ordering desktop online | Medium | Medium | Two ordering desktops; warnings from half-life; fewer than two admins' desktops seen in 7 days warns ([owner decision 425](#od-425)) |
+| A custom domain's certificates lapse with no ordering desktop online | Medium | Medium | Two ordering desktops; warnings from half-life name the host and device; fewer than two ordering desktops seen in 7 days is itself a warning, as fewer than two admins' desktops is ([owner decision 425](#od-425)) |
 | A removed holder of a custom domain's account key signs as the account, revoking its certificates or deactivating or taking the account, until the CA takes the key change (accepted, [owner decision 425](#od-425)) | Low | High | The change is due at once and made by the first admin desktop online within one poll; `tls_account_rollover_due` where a desktop may not make it; only the CA's key change ends the exposure |
 | The CA's limits differ from `CertsCustomSettings`' assumed defaults; if an ARI renewal counts against a limit, a host keeps at most about 21 certified devices ([owner decision 424](#od-424)) | Medium | Medium | The owner corrects the defaults from the CA's pages; a wrong number costs waits and refused requests, never a certificate too many, since a 429 becomes a hold |
 | Raw clients lack TLS 1.3 or client certificates for a `link` endpoint | Medium | Low | `public` with the service's own authentication; members' overlay access (§17) |
@@ -14388,7 +14476,7 @@ sidecar                                   smtpedge                              
 - **Outcomes.** Each send records, per recipient domain, one of: `sent`; `queued` (in the outbox for a prover host); `deferred` (TRY_LATER, QUOTA or HALTED, with `retry_after_ms`); `too_large` (bytes and cap); `refused` (the MX's reply code); `tls_refused` (TL4, below a pin, or a REQUIRETLS message without TL1 or TL2 and the post-TLS REQUIRETLS keyword, TL3 not qualifying, its DSN `5.7.30` for the missing keyword and `5.7.10` for missing TLS authentication); or `failed`. A phone's outbox entry goes to the prover host the rendezvous hash of its `effect_key` picks among the consented hosts in `p/`, which writes `or/<h>/<effect_key>` with outcome `queued` as it starts and rewrites it at least every 5 min while the send runs; the next host takes over only after 10 min with no change to `or/`, so a crash can still send twice, which §22.7 allows. `too_large` is decided before MAIL, once the post-TLS EHLO reply lacks CHUNKING: a prover host whose cap is under the bytes leaves the message, as `deferred`, to one whose recorded cap fits, and records `too_large` when none does. The outcome and the mode go to the outbox entry's result (§15.7), so every device of the member learns the domain's mode. Each domain's outcome also carries `tls_level`, the TLS level the send reached (1-4 for TL1-TL4, 0 for none), its I-11 label, and `or/` holds one `MailOutcome` a domain in a `MailOutcomeRecord`, whose bytes, as `o/`'s `SmtpOutboxEntry`'s, are §15.7's ([owner decision 445](#od-445)).
 - **Copy.** Only `too_large` cites the DATA cap, naming that domain, the size and the cap. Other recipient domains keep their own outcomes, and no outcome points to an inbound indexer, receiver or coverage setting (§18.5).
 
-**Key sets ([owner decision 266](#od-266)).** A prover host's proving keys and setup transcripts come in no package: it downloads its key set on first send from a public path on ur.io, pinned by hash in the release, with no token and no account, verifies the transcripts once per release and caches them (§4.10); §2.8's smtp-7 lists what the path's host sees. Until a key set loads, no prover is injected, a host only queues, and the verifier refuses every part. With the key schedule proven once (D-SMTP-22), every circuit fills one 2^20 domain, a unit, in eleven shapes of two families, none sized by a guess about recipients, a proof taking about 1.3 GiB ([owner decision 433](#od-433)). The setup ceremony runs again, and a new key set replaces the old, only when a circuit changes, when the shape catalog changes, or when the ceremony host is suspected exposed, never on a schedule or with each release, and a set may gain shapes without replacing the rest; a leaked ceremony secret lets its holder forge proof parts under that set, which defeats abuse control for forged sends, §14.8's DKIM joins still attributing them, and exposes no mail, since prover hosts check every key against the setup's transcript ([owner decision 435](#od-435)). Who runs the production ceremony, and on which host, is the owner's.
+**Key sets ([owner decision 266](#od-266)).** A prover host's proving keys and setup transcripts come in no package: it downloads its key set on first send from a public path on ur.io, pinned by hash in the release, with no token and no account, verifies the transcripts once per release and caches them (§4.10); §2.8's smtp-7 lists what the path's host sees. The fetch runs at idle, only on a host that has sent mail or is a consented prover host, and brings the set's `keyset.json` and transcripts: the host compiles each shape, refuses for that set one whose circuit digest is not the set's, derives the proving key itself, none being published, and caches it under the circuit's digest and the key's hash, so a build takes only its own circuit's entry and a torn write is no entry; a TLS family's suites are offered only once every shape of it is ready, a release may pin an older set beside its newest, and the edge holds each set `smtpedge.yml` lists until its `not_after`, a connection keeping the one set its preamble names (DESIGN-DETAILS.md section 3, 3.2.7). Until a key set loads, no prover is injected, a host only queues, and the verifier refuses every part. With the key schedule proven once (D-SMTP-22), every circuit fills one 2^20 domain, a unit, in eleven shapes of two families, none sized by a guess about recipients, a proof taking about 1.3 GiB ([owner decision 433](#od-433)). The setup ceremony runs again, and a new key set replaces the old, only when a circuit changes, when the shape catalog changes, or when the ceremony host is suspected exposed, never on a schedule or with each release, and a set may gain shapes without replacing the rest; a leaked ceremony secret lets its holder forge proof parts under that set, which defeats abuse control for forged sends, §14.8's DKIM joins still attributing them, and exposes no mail, since prover hosts check every key against the setup's transcript ([owner decision 435](#od-435)). Who runs the production ceremony, and on which host, is the owner's.
 
 **The M9 gate (D-SMTP-16)** turns owner decisions [35](#od-35), [99](#od-99) and [125](#od-125) into tests, in both modes:
 - **Soundness.** `smtpproof/SPEC.md`, frozen at M9's entry review, states the relation (D-SMTP-22), public inputs, E1-E3, soundness against a malicious sidecar (a colluding MX gets only its own mail) and zero knowledge against a malicious edge that ran the setup, and names the sidecar's TLS client, whose TLS 1.3 handshake yields the HS that Go's `KeyLogWriter` never exports (14.3). Two engineers who did not write the circuits argue soundness in writing. Through that client, in both TLS versions and modes, §22's adversarial corpus must fail before any effect while honest controls pass: key substitution, record splits, replayed server replies, a pipelined second transaction, smuggled headers, an early or bare-LF DATA end, and scripted MXs with no CHUNKING, CHUNKING only before TLS, no PIPELINING, a refused MAIL or RCPT, mixed recipient outcomes, no 354, a late NewSessionTicket, or a second transaction in the alleged BDAT body; padded or KeyUpdate BDAT body records may fail the send but smuggle nothing.
@@ -15968,7 +16056,8 @@ phase 1     both latest buckets (owner decision 152), an expired one until its r
             157), a dropped one this device keeps until its cached all covers it (§5.9), and the local layer,
             the commits past indexed_through (§11.14's coverage) that this device indexed from its own
             plaintext (§5.9): answered at once
-phase 2     all, at once where this device holds it current; with more, the owner's "search more", the daemon
+phase 2     all, at once where this device holds it current, a search of the cache reading all only while it is
+            usable (§11.14's retained row; owner decision 393); with more, the owner's "search more", the daemon
             first fetches every all shard it lacks, whole, youngest first in a/m's fixed order, whatever the
             query matches, and searches each as it lands, under the cold contract (Targets, below; owner
             decisions 152, 154)
@@ -18087,15 +18176,15 @@ caps        phones keep all only below 256 MiB per network and 10% of free space
             cap searches each all shard as it lands and keeps the youngest within the cap; desktops and
             indexers keep §5.9's Search.CacheByteCount (4 GiB by default; 16 GiB on a daemon designated for
             search, which evicts no all of a repo it serves while under it)
-remote      app hosts only (owner decisions 175, 177, 178): at "search more" a repo goes to an online
-            designated search indexer that §11.14's eligibility lets answer it, this member's own first, then
-            one other member's device at a time; the core splits, fails over and merges by §11.14 and reports
-            its states and "verified by" labels (18.5); a repo none answers, every repo while none is
-            designated (the default) and every repo in off mode take the fallback: all by sync position, under
-            metered and caps, with possible matches; keystrokes never leave the device; remote-mode Sidecars
-            and browser Workers never ask; an app host sets Hello feature bit 1, in Hello and HelloResult,
-            toward each search indexer its mode (on or own) lets it ask, and none in off mode, which marks the
-            pair for C19's windows (§6.10, §6.11, §4.6)
+remote      app hosts only (owner decisions 175, 177, 178): at "search more" a repo goes to an online designated
+            search indexer that §11.14's eligibility lets answer it, this member's own first, the first two
+            asked at once and the faster answering (owner decision 391), then one other member's device at a
+            time; the core splits, fails over and merges by §11.14 and reports its states and "verified by"
+            labels (18.5); a repo none answers, every repo while none is designated (the default) and every repo
+            in off mode take the fallback: all by sync position, under metered and caps, with possible matches;
+            keystrokes never leave the device; remote-mode Sidecars and browser Workers never ask; an app host
+            sets Hello feature bit 1, in Hello and HelloResult, toward each search indexer its mode (on or own)
+            lets it ask, and none in off mode, which marks the pair for C19's windows (§6.10, §6.11, §4.6)
   setting   per device and network: on (default), own (this member's indexers only), off (the fallback only);
             kept with the notice answers in §5.9's non-derived search state, never in the config repo, never
             set through MCP; "reset notices" clears the answers
@@ -21496,19 +21585,22 @@ Parentheses hold T1 tests; the rest run in T2 and T3. Inline server paths (contr
       rules; §8.10's legacy-client rule, and its reply step: the gate's verdict reads no Postgres
       (DenyPostgresForTest), the origin read being contract creation's, run only with a head row and only when
       reach(a,b) fails; gate < 1 us, 0 allocs; the ephemeral ceiling: FS-19
-§9    (P2C vs a stale-load oracle; admission; fixed vectors for 9.4's K_tok, K_seal, tokens and 152 B seals, a moved
-      or mismatched seal dropped) replay refused; drain; one script per Find; a 3,000-name set registers
-      as three pages under one set_version, none refused for size, each unlistening only names in its own key range;
-      an entry outside its page's range, or an older set_version, refuses the page; after Redis loss one interval
-      of pages rebuilds the set; a client looping registrations or Finds is shed with unavailable before signing,
-      one with many established streams never limited; a spent network's Find answers quota with no ticket; an
-      unused edge ticket from another source, or an edge-marked ticket for an application name, is refused invalid
-      before any application byte, a valid edge splice working; ur share: an omitted --count is one use; no get
-      or resume at or past expire_millis, a live stream reset there, a sharer restarted past it serving nothing,
-      --expires over 30 days refused, uses never exceeded across a crash after a Reserve; on a fake clock, one
-      dialer's 100 ms connections to one 256-stream listener: Find issues the bucket's 50 tickets a second after
-      its burst of 500, none refused or delayed by 9.7's clamp or by est, that dialer adding at most 25 to est
-      between reports, and a second dialer that redeems none moving est by at most 25
+§9    (P2C vs a stale-load oracle; admission; fixed vectors for 9.4's K_tok, K_seal, tokens and 152 B seals, a moved or
+      mismatched seal dropped) replay refused; drain; one script per Find; a 3,000-name set registers as three pages
+      under one set_version, none refused for size, each unlistening only names in its own key range; an entry outside
+      its page's range, or an older set_version, refuses the page; after Redis loss one interval of pages rebuilds the
+      set; a client looping registrations or Finds is shed with unavailable before signing, one with many established
+      streams never limited; a spent network's Find answers quota with no ticket; an unused edge ticket from another
+      source, or an edge-marked ticket for an application name, is refused invalid before any application byte, a valid
+      edge splice working; ur share: an omitted --count is one use; no get or resume at or past expire_millis, a live
+      stream reset there, a sharer restarted past it serving nothing, --expires over 30 days refused, uses never
+      exceeded across a crash after a Reserve; on a fake clock, one dialer's 100 ms connections to one 256-stream
+      listener: Find issues the bucket's 50 tickets a second after its burst of 500, none refused or delayed by 9.7's
+      clamp or by est, that dialer adding at most 25 to est between reports, and a second dialer that redeems none
+      moving est by at most 25; a put stalled at a barrier across a revocation and its sweep is fenced and answers
+      unavailable, then revoked; a Find that picked before the sweep signs nothing and writes no pair; a process whose
+      event is withheld serves until its resubscription check and then stops within the grace; a process whose source
+      fails after evidence answers unavailable for that network alone (DESIGN-DETAILS.md section 13)
 §10   (§10.4's mapped vectors; X-Wing KATs; ladder; missing key refused) KF1-KF7 (one commit per epoch, one claim
       per KeyPackage, no early Welcome, retention by acks, which live in Redis: FS-62); path-only self-updates by
       any leaf, an Update proposal refused; no commit past the projection; once every ack has expired the newest
@@ -21545,13 +21637,26 @@ Parentheses hold T1 tests; the rest run in T2 and T3. Inline server paths (contr
       dropped from *, @, every copy of *'s records and each mx on both; a key set failing self-check never serves;
       §12.5's label uniqueness; §12.8's verification gate
 §13   (ClientHello parser; 421) §13.9's kill switch and ValidateListen refusals, network_verified, the time box, a
-      screened host and an unread fact among them; mta-sts served only as a receiver's system publish; §13.4's
-      bench; tlsedge on 443, 8443, 8883 and 5671 only (owner decision 121); CAA, audiences and custom hosts: FS-32,
-      FS-34, FS-35; custom-host readiness: FS-122; a hello offering ur-route-probe gets unrecognized_name with no
-      lookup or Find
-§14   (X-UR-Ref MAC; header-only report parse) every §14.8 halt row, burner labels included; a report replaying
-      network A's X-UR-Ref under network B's verifying d= halts nothing, while a genuine one halts A; Redis loss
-      fails open <= 1 day's quota; the preamble proof: FS-31; outbound DATA size outcomes: FS-123
+      screened host and an unread fact among them; mta-sts served only as a receiver's system publish; §13.4's bench;
+      tlsedge on 443, 8443, 8883 and 5671 only (owner decision 121); CAA, audiences and custom hosts: FS-32, FS-34,
+      FS-35; custom-host readiness: FS-122; a hello offering ur-route-probe gets unrecognized_name with no lookup or
+      Find; custom-domain orders on a scripted ACME client and the fake clock (DESIGN-DETAILS.md section 17, 17.6): two
+      ordering desktops polling together end with one certificate at the CA and one custom_issued row, the loser's
+      claim refused locked; a holder killed after finalize, the second desktop registering the same serial with no
+      newOrder; a holder frozen before finalize past its lease and thawed after the takeover registered, one
+      certificate and its register refused; six devices of one host, the fifth and sixth granted 34 h apart with no
+      request reaching the CA before; a 429 held by both desktops; every acme-tls/1 hello for a host reaching the
+      listener holding the newest claim, and one for a network name finding no listener; visitors' hellos reaching only
+      certified listeners, none inside the margin, and with none no_listener and never a certificate for another name;
+      a removed device's row revoked at the CA and unrouted after its next page; a renewal's successor ordered with
+      replaces and no certificate spend; a row ended under its order settled at the CA before the next row is claimed;
+      a key change killed at each step and resumed by a second desktop, at no instant a CA key that no committed file
+      holds
+§14   (X-UR-Ref MAC; header-only report parse) every §14.8 halt row, burner labels included; a report replaying network
+      A's X-UR-Ref under network B's verifying d= halts nothing, while a genuine one halts A; Redis loss fails open <=
+      1 day's quota; the preamble proof: FS-31, with smtpproof's own tests of parts bound to one key part (key
+      substitution between parts, a forged carry, a short reply count) and of the key-set cache (another circuit's
+      entry, a torn write, a retired set; DESIGN-DETAILS.md section 3); outbound DATA size outcomes: FS-123
 §15   (every §15.4 dialog row) 250 only after a durable deposit; 451, not 530, after a closed handshake anywhere or
       under a closed gate; §15.4's direct-MX checks; erasure, strict MX and reports: FS-13, FS-33, FS-39;
       MailAuthEvidence at maximal identifiers within 8,192 B, and authentication bounds: FS-121
@@ -21601,11 +21706,13 @@ Parentheses hold T1 tests; the rest run in T2 and T3. Inline server paths (contr
       through connect's golang.org/x/net/idna (connect/net_http_doh.go:26;
       .gomodcache/golang.org/x/net@v0.57.0/idna/idna.go:26), so only the sidecar_http leg pays them in full;
       push-token projections in revision order: FS-120
-§20   (Spend atomic, no I/O) all-or-none debits per debit_id; 402 and 429; §20.6's payers; relayed contracts reserve
-      at CreateContract and debit once per contract_id, P2P none after C3 (FS-45); a usage batch retried after a
-      lost response debits once, and a drained producer loses nothing (FS-44); meter rows re-sent after Stripe's
-      24 h dedup window replace, never add, and a correction is a new version (FS-43); declared sidecars get no
-      Public contract, only sidecar_clients
+§20   (Spend atomic, no I/O) all-or-none debits per debit_id; 402 and 429; §20.6's payers; relayed contracts reserve at
+      CreateContract and debit once per contract_id, P2P none after C3 (FS-45); a usage batch retried after a lost
+      response debits once, and a drained producer loses nothing (FS-44); two hosts on one balance, one holding a 30 s
+      old reading and the other's debit flushed between: the second reservation is clamped by the balance's floor in
+      Redis and the balance ends at zero, never below (DESIGN-DETAILS.md section 13); meter rows re-sent after Stripe's
+      24 h dedup window replace, never add, and a correction is a new version (FS-43); declared sidecars get no Public
+      contract, only sidecar_clients
 §21   TTL sweeps on an injected clock; an access-log row per read; holds pause only sweeps, GC and a drop's deletions,
       the last silently (owner decision 184; FS-92), each kind to its deadline (FS-48); abuse clocks on a fake clock
       across a weekend, every registrar or registry notice paging (FS-49); FS-48's and FS-49's T2 are pure tests of
@@ -22012,7 +22119,8 @@ after members write at generation g+1:
     every file of the repo opens only under the current generation, git-mode refs included,
     whose rekey is a git-mode push with no commit that keeps the tip and only re-checkpoints
     files, each new entry's sealed mode, oid and name the standing one's (owner decision 540)
-  X's sockets, publishes, forwards, DKIM selector and certificate end; a removed member's
+  X's sockets, publishes, forwards, DKIM selector and certificate end, its sockets within the
+    bounds DESIGN-DETAILS.md section 13 states (13.2.3); a removed member's
     tagged agents keep their tags' grants, and autogroup:sponsor resolves to autogroup:admin
     until an admin's SponsorSet (owner decision 83)
 five ephemeral agents keep writing through one's reap with no member device online, any
@@ -22131,7 +22239,8 @@ search   desktop p50 and p99 over the buckets and over all at five years of 100 
          mailbox; one roll-up's time, natively and in wasm
 remote   at M10 on T3 with real relays and netem (Wi-Fi at 30 ms RTT and 50 Mbit/s; LTE at 75 ms p50 and 300 ms p95
          RTT, at 10 and 2 Mbit/s): tap to first and to next page, p50 and p95, cold and pre-warmed, against §18.4's
-         remote targets, and on T4's surrogates from the later of M10's and M8's exits; the indexer's service time on
+         remote targets, the indexer's compute for page 0 and the round trip measured apart (DESIGN-DETAILS.md section
+         7, 7.2.8), and on T4's surrogates from the later of M10's and M8's exits; the indexer's service time on
          desktop amd64 and arm64 and a NAS-class arm64 host, over five years of 100 messages a day and a 50-runs-a-day
          vault; 100 and 1,000 simulated requesters at 1.5 pages a member in the peak hour and ten times it, local
          searches staying inside §16.10's targets, refusals inside the remote budget, and phones failing over within
@@ -22323,6 +22432,45 @@ model       EvsCommit.tla (TLA+, checked by TLC: https://github.com/tlaplus/tlap
             details/BridgeVoid.tla (run by run-bridgevoid.sh) a body sealed to a generation that never forms,
             checking NoFork, Equal, FoldedStays, NoPendingRow, Bounded, VoidsAgree and HonestValid, each with
             the rules as first written or as landed before it as failing configurations;
+            details/ProofParts.tla and ProofKeys.tla (DESIGN-DETAILS.md section 3, run by run-proof.sh beside them)
+            keep one mail connection's proof parts at the edge's gate against an adversarial sidecar, an MX that
+            answers late and two parts verifying at once, and one prover host's keys over two key sets, two circuits
+            and every build, with crashes mid-write and an edge that adds and retires sets, and TLC checks
+            ContentSound, HeaderSound, EnvelopeProven, HeldUntilCovered and OneKey, and ZkSafe, AcceptedAtOpen and
+            OneSet, with the rules done wrong (keys or a carry taken from the part, no reply total, a release past an
+            uncovered record, no recheck at commit; a published key trusted, a partial file standing, a retired set
+            accepted, sets mixed) and the cache as landed before it, keyed by no circuit, as failing configurations;
+            details/Pacing.tla, Lease.tla and SockReg.tla (DESIGN-DETAILS.md section 13, run by run-sched.sh beside
+            them) keep one network's closure pacing by seats among obedient and wild erasers, one balance's edge
+            leases across hosts that reserve, spend, carve, post, crash and expire with a flush in two steps, and one
+            listener's registration against a log that revokes and grants again at processes with their own positions,
+            and TLC checks Rate, Cells, Turn and Ghost, NoOverdraw, BilledOnce and Backed, and TicketSound,
+            FencedLease, SetOrder, PairFenced and EvidenceBound, with the rules as landed before them or done wrong
+            (admission by arrival, a refusal sent to the tail; no floor, a floor that expires under an older reading,
+            a release before the commit, a blind carve, spending past expiry, a batch planned again; no tombstone, no
+            listener check at Find, no pair floor, a process admitting while behind, pages in any order) as failing
+            configurations;
+            details/IndexSync.tla, RemoteAsk.tla, RemoteCursor.tla and RemoteMerge.tla (DESIGN-DETAILS.md section 7,
+            run by run-remote.sh beside them) keep one ref's index on evs and one device that syncs toward a target a
+            file at a time, swaps, retains and evicts; one search's plan over own and other members' indexers that
+            serve, fail and are revoked while it runs; one search's pages between a requester and an indexer, lost,
+            repeated, erased under and reopened; and every combination of three sources' claims of one document, and
+            TLC checks LatestWhole, NoGhost, Complete, AllBehind, Bridged and Converges, Reach, OwnerBound, OneOther,
+            TwoAtOnce, OneServes, ServedByLive, OwnModeQuiet and Settles, SpanSound, NoInvention, RepeatEqual and
+            NoLeak, and Labelled, Present, MatchesStay, FoldBounded and VerifiedShown, with the rules as landed before
+            them or done wrong (a snapshot of mixed versions, a swap before every file, a stale all searched without
+            its bucket, a stale bucket retained, all ahead; a plan made once, two other members' devices at once,
+            every own indexer at once, both replies kept, no notice, the landed eligibility; a repeat that advances, a
+            watermark past a held hit, a reply kept across an erasure, a resume below a tie, an id reopened; the
+            higher version first, a fold over a claim) as failing configurations;
+            details/CertOrder.tla (DESIGN-DETAILS.md section 17, run by run-certorder.sh beside it), standing alone,
+            since no other model keeps an account's lock or a custom row's recorded order, keeps one custom domain's
+            account lock, each row's state, recorded order and registered order, the CA's orders, which it validates,
+            fails, expires or hands back for a second newOrder as it likes, and what each ordering desktop remembers
+            across crashes, a lapsed lease whose holder goes on and a device's removal at any step, and TLC checks
+            OneInFlight, OneCert, KeyMatch, Tracked, Served and NoForeign, with the rules done wrong (an unrecorded
+            order finalized, a takeover that orders again, a live order replaced on a timeout, two rows in flight with
+            and without the leaf check, a row failed with its order live) as failing configurations;
             StoreSettle.tla keeps one key on 8 drives at EC:4 (4 hosts of 2): each drive's version, its stamp and
             its own lock on the key, each write's coordinator, which may crash, and its drive commits, each a check
             step then a commit step, the settler and heal; writes are cancelled, pass their deadline, arrive after
@@ -22435,11 +22583,12 @@ FI-17  versioning: a committed version names a kind-5 segment only as §11.7's c
 FI-18  index results: for every scope, device and sync state, the candidates for a normalized query include every
        covered document whose newest committed version in the scope contains it; a hit labeled verified or confirmed
        has a newest version whose text or display fields contain it, and a hit found through a corrected term says so;
-       no hit rests only on a masked older version; an uncovered document is searched from the device's own text where
-       it holds it, else reported not yet searchable, never silently absent; a seal, merge, slot reuse or roll-up
-       changes no search's result set, nor does a fresh cache once the purge has taken every replaced index version,
-       since every tombstone a result needs stays in the committed index and no entry rests on another (owner decision
-       584); a search's mask state stays within its working set whatever the partitions hold (§11, §16, §18)
+       no hit rests only on a masked older version, a snapshot being one version of its ref and all searched only while
+       bridged (§11.14's swap and retained rows); an uncovered document is searched from the device's own text where it
+       holds it, else reported not yet searchable, never silently absent; a seal, merge, slot reuse or roll-up changes
+       no search's result set, nor does a fresh cache once the purge has taken every replaced index version, since
+       every tombstone a result needs stays in the committed index and no entry rests on another (owner decision 584);
+       a search's mask state stays within its working set whatever the partitions hold (§11, §16, §18)
 FI-19  index erasure: once the erasure of a document completes, no committed version of an index file that a current
        reader's keys open holds its postings or display fields; every stored version that held them shares a key its
        ERASEs destroyed (one key per index path in slot-keyed repos), its ciphertext purged under FI-16 or kept
@@ -22466,15 +22615,15 @@ FI-23  fetch privacy: the index objects a search fetches, and their order, depen
        fetch rule and the results the user opens, never on the query; only a fetch's time shows that a search ran
        (§2.8, §11, §18)
 FI-24  remote search: a query leaves an app host only for a designated search indexer §11.14's rule lets answer it,
-       for repos both read, an owner-bound repo only on its owner's consented device, another member's device only
-       after that member's notice; every hit names a repo the request named, which the requester reads, and a verified
-       hit's newest version contains the query; each request body is 4,016 B and each reply steps x 16,384 B, whatever
-       the query, scope, filters, results or failure after parsing; neither device sends evs, api or gkm a request
-       because of a remote search; no query, hit, snippet or cursor persists on either device, and the served record
-       names none; for a pair §6.11's bit 1 marks, each §6.10 window and direction has one report a contract, F on
-       the first and 0 on the others, whenever its other bytes stay within the allowance and it carries at most five
-       exchanges, none sent before the window's end, and no contract of the pair is created inside a foreground
-       window but at its start, a session re-establishment or overflow (§4.6, §6.10, §11.14, §18.4, §2)
+       evaluated at each send, for repos both read, an owner-bound repo only on its owner's consented device, another
+       member's device only after that member's notice; every hit names a repo the request named, which the requester
+       reads, and a verified hit's newest version contains the query; each request body is 4,016 B and each reply steps
+       x 16,384 B, whatever the query, scope, filters, results or failure after parsing; neither device sends evs, api
+       or gkm a request because of a remote search; no query, hit, snippet or cursor persists on either device, and the
+       served record names none; for a pair §6.11's bit 1 marks, each §6.10 window and direction has one report a
+       contract, F on the first and 0 on the others, whenever its other bytes stay within the allowance and it carries
+       at most five exchanges, none sent before the window's end, and no contract of the pair is created inside a
+       foreground window but at its start, a session re-establishment or overflow (§4.6, §6.10, §11.14, §18.4, §2)
 FI-25  directory authorship: every card, notice and run or worker announce entry a reader shows or acts on was written
        and signed as §16.11's path and signing rules require, by a signer that is admitted, unrevoked, unreaped,
        unsuspended, unparked and, for a member device, consented in the reader's state, and every repo item by a signer that
@@ -22877,11 +23026,15 @@ FS-30  §16    an EvsShare reader's first read of a vault with the author offlin
 FS-31  §14    a scripted MX with no CHUNKING, pre-TLS-only CHUNKING, no PIPELINING, MAIL or    FI-11       T2+T3  M9-out
               RCPT refused, no 354, mixed recipients, a late NewSessionTicket, a second
               transaction in the body, record splits, replayed server replies, and a smuggled
-              or bare-LF DATA terminator; padded and KeyUpdate BDAT body records, which may
-              fail the send but smuggle nothing; both TLS versions and modes: every mismatch
-              between proved and accepted fails before any effect, positive controls passing;
-              an honest TLS 1.2 MX answers 451 while the edge forges 250 and EHLO replies: the
-              sender keeps and retries the message, and the edge reads no MX reply
+              or bare-LF DATA terminator; a later part under other keys than the key part
+              committed, a header or body record scanned from a forged state, a reply count
+              the records do not hold, and a message record before the envelope's replies are
+              proven (DESIGN-DETAILS.md section 3); padded and KeyUpdate BDAT body records,
+              which may fail the send but smuggle nothing; both TLS versions and modes: every
+              mismatch between proved and accepted fails before any effect, positive controls
+              passing, a 100-recipient send and a 16 KiB header block among them; an honest
+              TLS 1.2 MX answers 451 while the edge forges 250 and EHLO replies: the sender
+              keeps and retries the message, and the edge reads no MX reply
 FS-32  §13    a customer pin, an empty alias target, then an operator CAA at the exact         FI-11       T2     M6-out
               target, wildcard and delegated-challenge cases included: strong mode refuses
               the topology; a customer-side ALIAS that also flattens CAA: certs' canary at
@@ -23026,8 +23179,11 @@ FS-43  §20    a fake Stripe accepts an event, then drops the response; the 24 h
               original; a period boundary at 00:00 UTC; finalization at +72 h; a missed row
 FS-44  §20    a producer killed before ReportUsage; a ReportUsage response lost and retried; a FI-13a      T2+T3  M2-out
               SIGTERM drain: zero loss on a drain, at most one window on a kill, never double;
-              api unavailable for 11 min: the batch is dropped, counted and alerted, and never
-              applied
+              a host killed between a carve and its post: no debit, the carved token gone at
+              24 h on the fake clock; a carve whose answer is lost, retried, with a third copy
+              delivered after the flush: one debit, the lease token moved once
+              (DESIGN-DETAILS.md section 13); api unavailable for 11 min: the batch is
+              dropped, counted and alerted, and never applied
 FS-45  §20    a network near empty with N relayed pairs: grants shrink and spending stops at   FI-13a      T2+T3  M2-out
               the balance; spent refuses CreateContract; a P2P-bound pair is unaffected; one
               debit per contract_id; Redis loss over-admits at most as for leases
@@ -23055,24 +23211,24 @@ FS-47  §20    at the exact storage limit, and spent: each maintenance push kind
               retry_after_ms (the allowance's at the next 00:00 UTC); admin A past its rate,
               its ERASEs past the network's, or its allowance spent on CLOSUREs no ERASE
               follows leaves admin B's closure uploads passing and its erasures committing; k
-              erasers asking at once, as when allowances reset at 00:00 UTC, are each served
-              once every k/4 s, none starved, the network taking at most 4 uploads a second,
-              and erasers obeying a retry_after_ms over a minute get equal turns against
-              erasers re-asking every second; a §21 row below the floor or changing the pacing
-              is refused, and one written directly is clamped to the floor or, for the pacing,
-              ignored (§11.12's rekey row, §20.4, §20.7; owner decision 146); at M7, a mail
-              erasure whose IndexEntry shares an i/ segment with other messages, its
-              re-checkpoint crossing a Padmé step, and a 30-day trash shred spanning several
-              i/ segments complete with no reader opening their index fields, and at the floor
-              a shred of n full i/ segments, refused past its eraser's allowance, completes in
-              CLOSURE and ERASE parts resuming at retry_after_ms, its last committing within
-              ⌈n/3⌉ days of fake clock (§20.7's wait), the messages' bodies unreadable from
-              its first ERASE, which spends no allowance; from M5, the abuse worker opens a
-              case with no machine action for a network whose closure bytes taken at the
-              storage limit grow its stored bytes past it, and a reviewed tightening row takes
-              its erasers' allowances to the 4 MiB floor and lowers its
-              config_statements_per_day, while revocations still append (§21.7); the nightly
-              count corrects an injected drift
+              erasers asking at once, as when allowances reset at 00:00 UTC, in a fixed
+              hostile order, are each served once every k/4 s, none starved, the network
+              taking at most 4 uploads a second, and erasers obeying a retry_after_ms over a
+              minute get equal turns against erasers re-asking every second; a §21 row below
+              the floor or changing the pacing is refused, and one written directly is clamped
+              to the floor or, for the pacing, ignored (§11.12's rekey row, §20.4, §20.7;
+              owner decision 146); at M7, a mail erasure whose IndexEntry shares an i/ segment
+              with other messages, its re-checkpoint crossing a Padmé step, and a 30-day trash
+              shred spanning several i/ segments complete with no reader opening their index
+              fields, and at the floor a shred of n full i/ segments, refused past its
+              eraser's allowance, completes in CLOSURE and ERASE parts resuming at
+              retry_after_ms, its last committing within ⌈n/3⌉ days of fake clock (§20.7's
+              wait), the messages' bodies unreadable from its first ERASE, which spends no
+              allowance; from M5, the abuse worker opens a case with no machine action for a
+              network whose closure bytes taken at the storage limit grow its stored bytes
+              past it, and a reviewed tightening row takes its erasers' allowances to the 4
+              MiB floor and lowers its config_statements_per_day, while revocations still
+              append (§21.7); the nightly count corrects an injected drift
 FS-48  §21    a §2258A hold across days 180-364 while §2703(f) holds expire at 90 and 180;     holds       T2     M5-out
               sweeps resume at expiry; --now and erasure proceed under both
 FS-49  §21    abuse clocks on a fake clock across a weekend; every registrar or registry       clocks      T2     M5-out
@@ -23386,7 +23542,8 @@ FS-74  §11    two writers' pushes to one file-mode ref, each changing only its 
               first slot in the new current bucket; a push changing no document carries
               index_none and counts toward indexed_through, and a host with the text that
               finds such a push changed a document raises index_mismatch naming the signer and
-              backfills it
+              backfills it; a reader syncing across a merge and a slot's reuse holds one
+              version of the ref at every barrier (DESIGN-DETAILS.md section 7)
 FS-75  §11    the indexer designated for search rolls an expired bucket and is killed at each  FI-18,19,20 T2+T3  M10-out
               barrier (the lock taken, the merge built, its uploads, its batch write, its head
               CAS with the response dropped, after the commit before the purge): each rerun
@@ -23453,24 +23610,27 @@ FS-77  §11,18 an ios32 and an Android surrogate cell and a page Worker, each ho
               waits, reporting waiting=metered, until the host repeats it with AllowMetered; a
               device override holds either way, the key origin's search policy request as
               SetPolicy's; no hint, wake or mirror sync fetches all; a fetch of a replaced
-              index file answering collected rereads the head and fetches the newest; the
-              search stays within §18.4's budgets, all encrypted on disk and one 64 KiB frame
-              decrypted at a time; the page Worker keeps all within 128 MiB a network, two
-              ur.io tabs relaying to the Web Lock's holder, and the quick burner keeps its
-              buckets in memory only; an erasure hint drops the erased document from every
-              cached block before the next search; the page Worker's conditions come from the
-              key-origin frame, so a Chromium-on-Android tab on Wi-Fi while charging keeps all
-              while open, while Safari and Firefox, which hide them, count as metered and not
-              charging: all waits for "search more", and one over 25 MiB for AllowMetered; an
-              app that has not yet called SetConditions counts as metered; an iOS
-              BGProcessingTask window on cellular fetches no all; a window on Wi-Fi while
-              charging whose link turns metered after its first shard reads no further shard
-              of all, and the next allowed window resumes there (owner decision 583); ur
-              search sync --evict, DropCache and the caps' eviction keep §5.9's non-derived
-              search state (policy overrides, remote mode, notice answers and served records),
-              while a browser's whole-origin eviction loses it with the keychain, the next
-              Worker starting from defaults (§5.9's rebuild row); a phone runs its merges and
-              roll-ups only in windows, within its cap (FS-75)
+              index file answering collected restarts the round on the new head; a phone with
+              a cached all, a roll-up that carried a deletion, and the retained bucket lost to
+              an ERASE: the deleted message is in no search until all is fetched again
+              (DESIGN-DETAILS.md section 7); the search stays within §18.4's budgets, all
+              encrypted on disk and one 64 KiB frame decrypted at a time; the page Worker
+              keeps all within 128 MiB a network, two ur.io tabs relaying to the Web Lock's
+              holder, and the quick burner keeps its buckets in memory only; an erasure hint
+              drops the erased document from every cached block before the next search; the
+              page Worker's conditions come from the key-origin frame, so a
+              Chromium-on-Android tab on Wi-Fi while charging keeps all while open, while
+              Safari and Firefox, which hide them, count as metered and not charging: all
+              waits for "search more", and one over 25 MiB for AllowMetered; an app that has
+              not yet called SetConditions counts as metered; an iOS BGProcessingTask window
+              on cellular fetches no all; a window on Wi-Fi while charging whose link turns
+              metered after its first shard reads no further shard of all, and the next
+              allowed window resumes there (owner decision 583); ur search sync --evict,
+              DropCache and the caps' eviction keep §5.9's non-derived search state (policy
+              overrides, remote mode, notice answers and served records), while a browser's
+              whole-origin eviction loses it with the keychain, the next Worker starting from
+              defaults (§5.9's rebuild row); a phone runs its merges and roll-ups only in
+              windows, within its cap (FS-75)
 FS-78  §11,15 a mailbox and a vault, both indexed, at the exact storage limit and spent, the   FI-5,13c,19 T2+T3  M10-out;
               eraser at evs_closure_bytes_floor: an admin's erasure of one email first                            mailbox
               commits its CUT and an ERASE of the email's own keys, both at once, the email                       M7, holds
@@ -23557,8 +23717,11 @@ FS-83  §11,18 remote search (owner decisions 175, 178), with the member's index
               and a repo of each kind: the member's mailbox and vault, an EvsShare'd vault,                       M6 (23.6)
               the team record, the directory and a group inbox; eligibility: the mailbox and
               vault go only to the member's consented indexers, never to the other member's,
-              even with every own indexer down (they fall back); a team repo goes to an own
-              indexer that reads it, else to the network-scope one; another member's
+              even with every own indexer down (they fall back); the EvsShare'd vault is asked
+              only of its owner's indexer, never of the asker's own, which reads it too; a
+              personal network's network-scope indexer answers its owner's mailbox; an indexer
+              revoked before a search's plan runs again is never asked; a team repo goes to an
+              own indexer that reads it, else to the network-scope one; another member's
               member-scope indexer, a retired, revoked, parked or suspended one, one without
               search, an app host, a read_only or ephemeral sidecar and a forged IndexerSet
               are never asked, and each refuses a request sent anyway; the indexer refuses
@@ -23578,16 +23741,21 @@ FS-83  §11,18 remote search (owner decisions 175, 178), with the member's index
               verified set over SERVED_TEXT repos, a local possible match inside the checked
               span that no page returned collapses, one outside it or newer than the pinned
               version stays, an ERASE mid-cursor answers CURSOR_EXPIRED and the erased
-              document never shows; a fabricated hit is dropped on open with
-              search_alarm{mismatch}, and a display-field match the indexer omits inside its
-              span raises search_alarm{omission}; failover: the first own indexer killed
-              before and after page 0, the second answers; both killed, the network indexer is
-              never asked for the vault, which falls back to the download under the metered
-              rule; limits: a fifth concurrent search queues or is refused, a requester past
-              30 requests a minute gets RESOURCE_EXHAUSTED, and 100 requesters at once never
-              push local searches past §16.10's targets; logs: the query canary is in no log,
-              metric, trace, crash report or state file on either device, and the served
-              record names no query
+              document never shows; a late repeat of page 0 after an erasure is answered
+              CURSOR_EXPIRED; a search reopened after 10 min idle pays one exchange and shows
+              no hit twice; a possible match committed 30 min before the indexer's pinned
+              push, in parts, is not folded; a higher-version possible claim leaves a
+              confirmed row a match; an omission at unequal pins raises nothing; a fabricated
+              hit is dropped on open with search_alarm{mismatch}, and a display-field match
+              the indexer omits inside its span raises search_alarm{omission}; failover: two
+              own indexers asked at once, the slower one's reply dropped; the first own
+              indexer killed before and after page 0, the second answers, before page 0 with
+              no added delay; both killed, the network indexer is never asked for the vault,
+              which falls back to the download under the metered rule; limits: a fifth
+              concurrent search queues or is refused, a requester past 30 requests a minute
+              gets RESOURCE_EXHAUSTED, and 100 requesters at once never push local searches
+              past §16.10's targets; logs: the query canary is in no log, metric, trace, crash
+              report or state file on either device, and the served record names no query
 FS-84  §16,11 directory writers: a card signed or pushed by another sidecar, by a parked,      FI-25       T2     M6-out
               revoked, reaped or suspended one, with a seq not above the last or an auth pin                      (entries);
               out of range; a repo announcement by a non-admin, or for an owner-bound repo by                     later of
@@ -24334,7 +24502,7 @@ Beyond the schedules:
 - **File clusters** (D-OPS-20's in-house MinIO build, every cluster, each build, upgrade and new cluster; D-OPS-4): stale conditions refused with a host or quorum lost (§11.3); §19.6's deadline and settle rules, by FS-114's late-drive cases: a request past its x-ur-deadline-ms, sent late by the clock rule's margin (sidecartest/blobsuite's `Settle.LateBy`, 200 ms by default; [owner decision 545](#od-545)), refused where it takes its key's lock, no drive commit begun past it, and a PUT or DELETE whose drive commits are held after their checks past the 30 s drive timeout, its coordinator killed, taking effect before the next request on its key or never, the newer acknowledged state surviving release and a full heal, since a removal marker's collection deletes unconditionally ([owner decision 148](#od-148)), as from v1 do the versionless purge's and the marker collection's kind-5 and slot DELETEs and a drop job's DELETEs; the lag from a cancel to a write's last drive answer, measured and reported, which no margin relies on; no heal resurrects a deleted object or spreads a version fewer than a read quorum of drives hold; read-after-write consistency, and a LIST answered whole or 503 ([owner decision 226](#od-226)); a read answering 404 only on a read quorum's absence: a DriveMiss'd object with two hosts down reads 503, and while a host reconnects every host serves it or answers 503, never 404 ([owner decision 511](#od-511)); checksums; ranged GET; Delete, and a DELETE naming its object's LastModified refused 412 for a newer one ([owner decision 225](#od-225)); no lifecycle rule set on either bucket; one pool per cluster (FS-63).
 - **MTAs** (Postfix (may, dane), Exim; Gmail, Outlook.com, Microsoft 365, Yahoo, iCloud, SES, Proton, Fastmail): in, D-MAIL-9's census with nothing lost; out, §14.4 levels, DKIM, strict DMARC, which B's selector fails for A's network and burners, FCrDNS, JMRP and CFL joins; aggregate reports as FS-39, a one-connection, ten-recipient send raising no alarm.
 - **ZK preamble** (`smtpproof`, BDAT and DATA ([owner decision 125](#od-125)), on D-SMTP-16's hardware; census MXs): D-SMTP-16's adversarial corpus, FS-31's server-state cases included, fails before any effect; p95 times, coverage, interop.
-- **ACME** (Pebble with 5% bad nonces in T2 and T3; LE staging; GTS, ZeroSSL): §13.8's challenges, ARI, CAA, an operator CAA at a custom host's exact target refused (FS-32); custom-domain desktops order and renew on Pebble, the test leg's release one that finds its own certificates for replacement, else sidecartest's Pebble harness issuing a leaf it can replace ([owner decision 546](#od-546)); LE staging refuses URnetwork's account under a customer `accounturi`, which Pebble never checks (https://github.com/letsencrypt/pebble/blob/main/va/va.go, 2026-11-04); CT watch on a fixture (staging CT is unreliable: https://letsencrypt.org/docs/staging-environment/, 2026-04-10).
+- **ACME** (Pebble with 5% bad nonces in T2 and T3; LE staging; GTS, ZeroSSL): §13.8's challenges, ARI, CAA, an operator CAA at a custom host's exact target refused (FS-32); custom-domain desktops order and renew on Pebble, the test leg's release one that finds its own certificates for replacement, else sidecartest's Pebble harness issuing a leaf it can replace ([owner decision 546](#od-546)); Pebble neither reuses orders nor limits, so order reuse, the limits and the 429 are tested on a scripted client (DESIGN-DETAILS.md section 17, 17.6); LE staging refuses URnetwork's account under a customer `accounturi`, which Pebble never checks (https://github.com/letsencrypt/pebble/blob/main/va/va.go, 2026-11-04); CT watch on a fixture (staging CT is unreliable: https://letsencrypt.org/docs/staging-environment/, 2026-04-10).
 - **DNS** (zonemaster; Unbound, BIND, Knot Resolver; two public resolvers): R-DNS-7; compact denial and wildcards validate; before the DS, Unbound validates against the KSK as a trust anchor; a broken canary signature pages.
 - **Browsers** (Chrome, Firefox, Safari, curl; Playwright on ur.io's page Worker and the native companion): 421 on coalescing; split PQ hellos; other origins' POST, subresource GET and WebSocket arrive sessionless, and login works without Fetch Metadata (§13.7); private audiences without a usable ALPN (FS-34) and custom hosts through the split (FS-35); another origin, a framed copy and localhost are refused the key origin, no key or token crosses postMessage, and a script injected on ur.io finds neither the Worker's key nor its token; IndexedDB survives a reload, and after Safari's 7-day storage cap evicts the key origin its page Worker re-enrolls through a consented device, the old leaf leaving by §10.9's stale-leaf rule; a storage-pressure eviction of a non-persistent bucket does the same, the re-enrollment's admitting device, an admin's in a Team with self_admit off, revoking each Worker it saw removed as stale from every group it is a leaf of that seated it, at least one, and no other, a Worker no group of that device seated never being revoked in that act, and the member's consented device, in that act or at its OwnerConfirm, offering to revoke the evicted one (§7.10's stale row; FS-97); the key-origin frame calls navigator.storage.persist(), and the page tells the person what an eviction costs (§18.8); in two ur.io tabs on one network only the Web Lock's holder loads state, refreshes, commits and writes the keychain, the other Worker relaying, and closing the holder's tab hands over the lock, relayed requests retrying; a vault record opens with C4 absent; no ICE candidate in the overlay block (§17.17), the check `ur tun ip auto` waits for, and a CGNAT fixture whose WAN address lies in the block keeps its carrier path and overlay reachability; no torn writes; no network `by_jwt` in the worker.
 - **Memory, size** (darwin/arm64 iOS settings in T4; ios32 surrogate cells, one with a link; §18.4's other hosts): §18.4's budgets, and forwarding's within owner decisions [215](#od-215), [216](#od-216) and [491](#od-491)'s on an ios32 cell whose forwarding role compiles a 3,000-device team's config within its 10 MiB cap and refuses a 5,000-device one with bridge_alarm (owner decisions [197](#od-197), [216](#od-216)), a hooked NAT's per-flow UDP loop re-measured on constrained provider profiles at M8 (§17.6), in every LOWBAR phase on iOS, the link cell deciding links and holding an app-device host's NAT with bridge flows at §17.5's idles through C5's per-flow IdleTimeout, while its public egress flows keep the NAT's own; sizes as §18.10 measures them, the ios_extension leg's stripped (owner decisions [215](#od-215), [491](#od-491)) and the sidecar_http leg's unstripped; `make check` fails an HTTP-only file importing connect; the mobile sender's 1,024-slot pin table, churned past 1,024 live pairs, routes the excess unpinned and refuses none (§17.5).
