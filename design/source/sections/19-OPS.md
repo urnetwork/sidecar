@@ -677,13 +677,13 @@ drive writes                 0.40 DWPD (0.31 on 1     3.3 DWPD on one set at   �
                                                                                1 KiB blocks (in parentheses), one every
                                                                                5 minutes on 4 KiB, about +2 KiB a push
                                                                                there instead of +6
-path-epoch copies            each REMOVE generation brings a path epoch (§11.6), at once for a member's removal or a
-                             compromise, else batched to at most one per repo a day, whose copy moves each live idx/
+path-epoch copies            each REMOVE generation brings a path epoch (§11.6), batched, whatever the removal, to at
+                             most one per repo a day (owner decision 585), whose copy moves each live idx/
                              entry at 3 operations, a create and a delete writing ~12.5 KiB a drive on 4 KiB blocks: ~13
                              GB for a 1M-file ref, ~17 h at 50 a second; a cluster's copies share 250 operations a
                              second, 21.6M a day, so its copy load, the live entries of each rotating ref times that
                              ref's epochs a day times 3, is planned under half of that, never by counting rotations
-                             alone; past it batched epochs wait while two sources stand (§11.6), and the cohorts row
+                             alone; past it epochs wait while two sources stand (§11.6), and the cohorts row
                              counts it; §22.8's fixture of 1 h requested grants on large repos counts rotations, full
                              checkpoints, copy operations and live entries per rotating ref a day for the triggers'
                              projection
