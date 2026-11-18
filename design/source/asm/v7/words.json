@@ -138,7 +138,7 @@
   "num": 16,
   "code": "MCP",
   "words": 14980,
-  "code_words": 19887,
+  "code_words": 19885,
   "ceiling": 3500,
   "over": 11480,
   "over_pct": 328.0
@@ -182,11 +182,11 @@
  {
   "num": 21,
   "code": "ABUSE",
-  "words": 5938,
+  "words": 5941,
   "code_words": 1403,
   "ceiling": 2500,
-  "over": 3438,
-  "over_pct": 137.5
+  "over": 3441,
+  "over_pct": 137.6
  },
  {
   "num": 22,

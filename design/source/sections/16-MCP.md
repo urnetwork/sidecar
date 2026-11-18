@@ -273,14 +273,14 @@ k approvers  a rule asking for k needs k decisions with one request_sha256 from 
              admin clause where that applies, never one of the k (owner decision 471); the budget is the
              smallest uses, the expiry the earliest not_after
 multi-use    a decision with uses > 1 binds a template, a CanonicalAction with scope = true whose non-empty
-             fields every use equals, recipients a subset, and whose fields its kind binds every use equals set
-             or empty: an egress_change's require_default_egress, so a template that leaves it empty covers only
-             uses that leave it unset and one under exits covers one distinct action (owner decision 614); each
-             use's full action is what D-MCP-11 hashes; the request names the uses its agent asks for a
-             template, 1 for any other action, daemon-built, under request_sha256 and rendered beside the
-             action's other daemon-built fields, and the approver signs that count as uses: an app's Decide
-             (§18.5) approves the request as shown, and ur approve --uses defaults to it, another count refused
-             or narrowed as before, above 1 only for a template and never above the request's; the field is
+             fields every use equals, recipients a subset, and the fields its kind binds too, set or empty: an
+             egress_change's require_default_egress, so a template that leaves it empty covers only uses that
+             leave it unset and one under exits covers one distinct action (owner decision 614); each use's full
+             action is what D-MCP-11 hashes; the request names the uses its agent asks for a template, 1 for any
+             other action, daemon-built, under request_sha256 and rendered beside the action's other
+             daemon-built fields, and the approver signs that count as uses: an app's Decide (§18.5) approves
+             the request as shown, and ur approve --uses defaults to it, another count refused or narrowed as
+             before, above 1 only for a template and never above the request's; the field is
              ApprovalRequest.uses = 18 at the request's version 2, which every request is filed at, an approver
              that knows only version 1 refusing version 2 whole, and a version-1 template names no count, so an
              app lists deny alone for it (owner decision 574); an agent asks for a template only through

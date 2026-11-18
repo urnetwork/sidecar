@@ -805,7 +805,7 @@ The design-records track dr5-late-sweep (wave f45d) folds the owner's answers th
 - **No deferral.** None of the six defers anything, and QD-1074's file class for the subprotocol store is review-phase work, which DESIGN-DEFER.md does not hold, so DESIGN-DEFER.md is unchanged. QD-1042's reading for ruled repos is in its acl-prefix-write-rules entry already.
 - **"Later decisions".** All eight items still wait on files outside design/source/ and keep their Not folded lines: QD-779, QD-780, QD-782 and QD-783 on RECORD.md 7.1, 7.4 and section 8; QD-024 on the owner's copy of cli/UI.md at sidecar/design/UI.md and on HANDOFF.md; QD-864 on RECORD.md 5.5's `Opening` fence and its sections 9 and 11; QD-899 on RECORD.md 7.3 and 7.4 and DESIGN-DETAILS.md 15.2.2; QD-900 on RECORD.md's `ContextBody` fence and 7.4.
 
-`build.sh` on this folder reproduces DESIGN.md (SHA-256 `721e5fc536e46e664024b82facf2dce15b52658317696c1665e2b913feeb4d9b`) and DESIGN-DEFER.md (SHA-256 `cf6095e4246abc02ba00374353292f6f7b4fec316a4e429a82e8e45277b1622b`, unchanged), and the validation shows:
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `0d0d1c88697787df9e8fae278a98fd52397f65f1132060a93bcb72f9ce90bc28`) and DESIGN-DEFER.md (SHA-256 `cf6095e4246abc02ba00374353292f6f7b4fec316a4e429a82e8e45277b1622b`, unchanged), and the validation shows:
 
 - **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item; two new §2.8 rows, ext-14 and ext-15, with their guard lines.
 - **Owner decisions.** All 616 rows are present and cited; APPLY.md's section pairs hold.
