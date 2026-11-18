@@ -10,9 +10,14 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"mime/quotedprintable"
+	"os"
+	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -127,10 +132,14 @@ func testAssembleSplit(t *testing.T, signed []byte) ([]string, []byte) {
 	return strings.Split(string(signed[:index]), "\r\n"), signed[index+4:]
 }
 
+// SPEC.md Z5.5's prefix, written here apart from smtp_dkim_sign.go's.
+const testFixedPrefix = "DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; h=from:date:message-id:x-ur-ref:feedback-id; "
+
 // SPEC.md Z5's rules, restated here apart from smtpproof's relation.go: the octet class, one each of
-// From, Message-ID, X-UR-Ref and Feedback-ID in their literal forms with no continuation, and exactly
-// one line bearing the fixed prefix with the declared d= and s=.
-func checkTestZ5(t *testing.T, signed []byte, selector string) {
+// From, Message-ID, X-UR-Ref, Feedback-ID and, on a BULK message, List-Unsubscribe-Post in their
+// literal forms with no continuation, and exactly one line bearing the fixed prefix with the declared
+// d= and s=. Then the head's placement (checkTestHead), at the test's domain and Message-ID.
+func checkTestZ5(t *testing.T, signed []byte, selector string, flags uint32) {
 	t.Helper()
 	lines, _ := testAssembleSplit(t, signed)
 	for _, octet := range signed[:bytes.Index(signed, []byte("\r\n\r\n"))] {
@@ -143,6 +152,11 @@ func checkTestZ5(t *testing.T, signed []byte, selector string) {
 		"message-id":  "Message-ID: <" + testAssembleMessageId + ">",
 		"x-ur-ref":    "X-UR-Ref: " + issued.XUrRef,
 		"feedback-id": "Feedback-ID: " + issued.FeedbackId,
+	}
+	singleNames := []string{"from", "message-id", "x-ur-ref", "feedback-id"}
+	if flags&SmtpFlagBulk != 0 {
+		literals["list-unsubscribe-post"] = "List-Unsubscribe-Post: List-Unsubscribe=One-Click"
+		singleNames = append(singleNames, "list-unsubscribe-post")
 	}
 	counts := map[string]int{}
 	fixedCount := 0
@@ -171,14 +185,14 @@ func checkTestZ5(t *testing.T, signed []byte, selector string) {
 				t.Errorf("from is %q", line)
 			}
 		}
-		if strings.HasPrefix(line, "DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; h=from:date:message-id:x-ur-ref:feedback-id; ") {
+		if strings.HasPrefix(line, testFixedPrefix) {
 			fixedCount += 1
-			if !strings.HasPrefix(line, "DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; h=from:date:message-id:x-ur-ref:feedback-id; d="+testAssembleDomain+"; s="+selector+"; ") {
+			if !strings.HasPrefix(line, testFixedPrefix+"d="+testAssembleDomain+"; s="+selector+"; ") {
 				t.Errorf("fixed signature %q", line)
 			}
 		}
 	}
-	for _, name := range []string{"from", "message-id", "x-ur-ref", "feedback-id"} {
+	for _, name := range singleNames {
 		if counts[name] != 1 {
 			t.Errorf("%d %s lines", counts[name], name)
 		}
@@ -186,24 +200,122 @@ func checkTestZ5(t *testing.T, signed []byte, selector string) {
 	if fixedCount != 1 {
 		t.Errorf("%d fixed signatures", fixedCount)
 	}
+	checkTestHead(t, signed, testAssembleDomain, testAssembleMessageId, selector, flags)
 }
 
-// The message the relation accepts: Z5's header block, Bcc gone, and a body ending CRLF.
+// DESIGN-DETAILS 3.2.3's head and 3.2.4's placement, restated apart from smtpproof: the header block's
+// first lines are X-UR-Ref, Feedback-ID, From, Message-ID, a BULK message's List-Unsubscribe-Post and
+// the fixed signature's first line, in that order and in their forms, and the first
+// HeaderHeadMaxByteCount octets hold each of them whole, CRLF included, as the first record must.
+func checkTestHead(t *testing.T, signed []byte, domain string, messageId string, selector string, flags uint32) {
+	t.Helper()
+	issued := testAssembleIssued()
+	head := string(signed[:min(DefaultSmtpSenderSettings().HeaderHeadMaxByteCount, len(signed))])
+	// each whole line, CRLF and all; the last piece is what of a line the bound cuts
+	pieces := strings.SplitAfter(head, "\r\n")
+	whole := pieces[:len(pieces)-1]
+	forms := []func(line string) bool{
+		func(line string) bool { return line == "X-UR-Ref: "+issued.XUrRef+"\r\n" },
+		func(line string) bool { return line == "Feedback-ID: "+issued.FeedbackId+"\r\n" },
+		func(line string) bool {
+			return strings.HasPrefix(line, "From: ") && strings.HasSuffix(line, "@"+domain+">\r\n") && strings.Count(line, "\r\n") == 1
+		},
+		func(line string) bool { return line == "Message-ID: <"+messageId+">\r\n" },
+	}
+	if flags&SmtpFlagBulk != 0 {
+		forms = append(forms, func(line string) bool { return line == "List-Unsubscribe-Post: List-Unsubscribe=One-Click\r\n" })
+	}
+	forms = append(forms, func(line string) bool {
+		return strings.HasPrefix(line, testFixedPrefix+"d="+domain+"; s="+selector+"; t=") && strings.HasSuffix(line, ";\r\n")
+	})
+	// one form a line, in order, so no single field is continued: the next line is the next form
+	if len(whole) < len(forms) {
+		t.Fatalf("the first %d octets hold %d whole lines, want %d at least:\n%s", len(head), len(whole), len(forms), head)
+	}
+	for i, form := range forms {
+		if !form(whole[i]) {
+			t.Errorf("the head's line %d is %q", i, whole[i])
+		}
+	}
+}
+
+// The header block's field names in order, each DKIM-Signature named fixed or full by how it opens.
+func testAssembleFieldNames(t *testing.T, signed []byte) []string {
+	t.Helper()
+	lines, _ := testAssembleSplit(t, signed)
+	var names []string
+	for _, line := range lines {
+		switch {
+		case line[0] == ' ' || line[0] == '\t':
+		case strings.HasPrefix(line, testFixedPrefix):
+			names = append(names, "DKIM-Signature fixed")
+		case strings.HasPrefix(line, "DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d="):
+			names = append(names, "DKIM-Signature full")
+		default:
+			name, _, _ := strings.Cut(line, ":")
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// The message the relation accepts: Z5's header block, the head first, Bcc gone, and a body ending
+// CRLF.
 func TestAssembleSmtpMessageReachesZ5(t *testing.T) {
 	wire, signed := testAssembleSigned(t, testAssembleArgs(testAssembleMessage()))
-	checkTestZ5(t, signed, newTestAssembleSigner().selector)
+	checkTestZ5(t, signed, newTestAssembleSigner().selector, 0)
 	if bytes.Contains(signed, []byte("hidden@other.example")) || bytes.Contains(bytes.ToLower(signed), []byte("bcc:")) {
 		t.Error("Bcc reached the wire")
 	}
 	if wire.MessageId() != testAssembleMessageId || wire.HeaderFromDomain() != testAssembleDomain {
 		t.Errorf("%s %s", wire.MessageId(), wire.HeaderFromDomain())
 	}
-	lines, body := testAssembleSplit(t, signed)
-	if !strings.HasPrefix(lines[0], "DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=") {
-		t.Errorf("the full signature opens %q", lines[0])
+	want := []string{"X-UR-Ref", "Feedback-ID", "From", "Message-ID", "DKIM-Signature fixed", "DKIM-Signature full", "To", "Subject", "Date"}
+	if names := testAssembleFieldNames(t, signed); !slices.Equal(names, want) {
+		t.Errorf("fields %q", names)
 	}
+	_, body := testAssembleSplit(t, signed)
 	if !bytes.HasSuffix(body, []byte("Joe.\r\n")) {
 		t.Errorf("body %q", body)
+	}
+}
+
+// DESIGN-DETAILS 3.2.3's order, whatever the message's: the head, the fixed signature, the full one,
+// then every other field as the message had it. A BULK message's one-click field is the head's; any
+// other message's stays where it was, since Z5 counts it only on a BULK message.
+func TestAssembleHeadLeadsTheHeaderBlock(t *testing.T) {
+	id := "Message-ID: <" + testAssembleMessageId + ">"
+	for _, c := range []struct {
+		message []byte
+		flags   uint32
+		want    []string
+	}{
+		{
+			message: testAssembleCrlf("To: <b@x.example>", "Subject: s", "List-Unsubscribe: <https://u.example/x>", "X-Mailer: m", "From: a@n1.root.example",
+				"Cc: <c@x.example>", id, "List-Unsubscribe-Post: List-Unsubscribe=One-Click", "Date: Fri, 06 Nov 2026 12:00:00 +0000", "", "b", ""),
+			flags: SmtpFlagBulk,
+			want: []string{"X-UR-Ref", "Feedback-ID", "From", "Message-ID", "List-Unsubscribe-Post", "DKIM-Signature fixed", "DKIM-Signature full",
+				"To", "Subject", "List-Unsubscribe", "X-Mailer", "Cc", "Date"},
+		},
+		{
+			message: testAssembleCrlf("To: <b@x.example>", "List-Unsubscribe-Post: List-Unsubscribe=One-Click", id, "Subject: s", "From: a@n1.root.example", "", "b", ""),
+			want: []string{"X-UR-Ref", "Feedback-ID", "From", "Message-ID", "DKIM-Signature fixed", "DKIM-Signature full",
+				"To", "List-Unsubscribe-Post", "Subject", "Date"},
+		},
+		{
+			// an 8-bit body gains its MIME fields after the message's own
+			message: testAssembleCrlf("Subject: s", id, "From: a@n1.root.example", "", "caf\xc3\xa9", ""),
+			want: []string{"X-UR-Ref", "Feedback-ID", "From", "Message-ID", "DKIM-Signature fixed", "DKIM-Signature full",
+				"Subject", "Date", "Content-Transfer-Encoding", "MIME-Version", "Content-Type"},
+		},
+	} {
+		args := testAssembleArgs(c.message)
+		args.Flags = c.flags
+		_, signed := testAssembleSigned(t, args)
+		if names := testAssembleFieldNames(t, signed); !slices.Equal(names, c.want) {
+			t.Errorf("fields %q, want %q", names, c.want)
+		}
+		checkTestZ5(t, signed, newTestAssembleSigner().selector, c.flags)
 	}
 }
 
@@ -418,8 +530,9 @@ func TestAssembleWrapsALongLine(t *testing.T) {
 	}
 }
 
-// The header block is one record: 17 KiB of it fails before the preamble, and 14 KiB, with the
-// signatures and issued fields added, passes.
+// The header block's bound is SmtpSenderSettings.HeaderBlockMaxByteCount, 16 KiB: 17 KiB of it fails
+// before the preamble, and 14 KiB, with the signatures and issued fields added, passes. A narrower
+// bound in the settings is the one assembly holds to.
 func TestAssembleRefusesASeventeenKibHeaderBlock(t *testing.T) {
 	header := func(byteCount int) []byte {
 		var words []string
@@ -428,12 +541,151 @@ func TestAssembleRefusesASeventeenKibHeaderBlock(t *testing.T) {
 		}
 		return testAssembleCrlf("From: joe@n1.root.example", "Message-ID: <"+testAssembleMessageId+">", "X-Notes: "+strings.Join(words, " "), "", "body", "")
 	}
+	settings := DefaultSmtpSenderSettings()
+	if settings.HeaderBlockMaxByteCount != 16*1024 {
+		t.Fatalf("a %d-octet bound", settings.HeaderBlockMaxByteCount)
+	}
 	if _, err := AssembleSmtpMessage(testAssembleArgs(header(17 * 1024))); !errors.Is(err, ErrSmtpAssemble) {
 		t.Errorf("17 KiB: %v", err)
 	}
 	_, signed := testAssembleSigned(t, testAssembleArgs(header(14*1024)))
-	if headerEnd := bytes.Index(signed, []byte("\r\n\r\n")) + 4; SmtpHeaderBlockMaxByteCount < headerEnd || headerEnd < 15*1024 {
+	headerEnd := bytes.Index(signed, []byte("\r\n\r\n")) + 4
+	if settings.HeaderBlockMaxByteCount < headerEnd || headerEnd < 15*1024 {
 		t.Errorf("a %d-octet header block", headerEnd)
+	}
+	narrow := testAssembleArgs(header(14 * 1024))
+	narrow.Settings = DefaultSmtpSenderSettings()
+	narrow.Settings.HeaderBlockMaxByteCount = headerEnd - 1
+	if _, err := AssembleSmtpMessage(narrow); !errors.Is(err, ErrSmtpAssemble) {
+		t.Errorf("a bound one octet short: %v", err)
+	}
+	narrow.Settings.HeaderBlockMaxByteCount = headerEnd
+	if _, err := AssembleSmtpMessage(narrow); err != nil {
+		t.Errorf("a bound of exactly the block: %v", err)
+	}
+}
+
+// The first HeaderHeadMaxByteCount octets, 720, hold every single field and the fixed signature's
+// first line, whatever else the message holds and wherever it put them: many fields and recipients
+// ahead of From, a burner's longer Message-ID domain, a Team domain, encoded words in the phrase,
+// BULK, and a display name that fills the head to its last octet.
+func TestAssembleHeadLiesInTheFirst720Octets(t *testing.T) {
+	if bound := DefaultSmtpSenderSettings().HeaderHeadMaxByteCount; bound != 720 {
+		t.Fatalf("a %d-octet head", bound)
+	}
+	var recipients []string
+	for i := range 40 {
+		recipients = append(recipients, fmt.Sprintf("<r%d@shopping.example>", i))
+	}
+	team := "mail.a-team-domain-of-some-length.example"
+	burner := "quietfox.n1.root.example"
+	for _, c := range []struct {
+		name      string
+		message   []byte
+		domain    string
+		messageId string
+		flags     uint32
+	}{
+		{name: "the RFC 8463 message", message: testAssembleMessage()},
+		{
+			name: "From and Message-ID after forty recipients and a long subject",
+			message: testAssembleCrlf("To: "+strings.Join(recipients, ", "), "Subject: "+strings.Repeat("long subject ", 60), "Cc: <c@x.example>",
+				"From: Joe SixPack <joe@n1.root.example>", "Message-ID: <"+testAssembleMessageId+">", "", "b", ""),
+		},
+		{
+			name:    "a bulk message",
+			message: testAssembleCrlf("List-Unsubscribe: <https://u.example/x>", "Subject: s", "From: Shop <news@n1.root.example>", "Message-ID: <"+testAssembleMessageId+">", "", "b", ""),
+			flags:   SmtpFlagBulk,
+		},
+		{
+			name:      "a burner",
+			message:   testAssembleCrlf("From: Quiet Fox <me@"+burner+">", "Message-ID: <aaaaaaaaaaaaaaaaaaaaaaaaaa@"+burner+">", "", "b", ""),
+			domain:    burner,
+			messageId: "aaaaaaaaaaaaaaaaaaaaaaaaaa@" + burner,
+		},
+		{
+			name:    "a team domain, bulk, with an 8-bit phrase",
+			message: testAssembleCrlf("From: J\xc3\xbcrgen M\xc3\xbcller <juergen@"+team+">", "Message-ID: <"+testAssembleMessageId+">", "List-Unsubscribe: <https://u.example/x>", "", "b", ""),
+			domain:  team,
+			flags:   SmtpFlagBulk,
+		},
+		{
+			name:    "a display name filling the head",
+			message: testAssembleCrlf("From: "+strings.Repeat("n", testAssembleLongestPlainName(t))+" <a@n1.root.example>", "Message-ID: <"+testAssembleMessageId+">", "", "b", ""),
+		},
+	} {
+		domain, messageId := testAssembleDomain, testAssembleMessageId
+		if c.domain != "" {
+			domain = c.domain
+		}
+		if c.messageId != "" {
+			messageId = c.messageId
+		}
+		messageIdDomain := messageId[strings.IndexByte(messageId, '@')+1:]
+		wire, err := AssembleSmtpMessage(&SmtpAssembleArgs{Message: c.message, HeaderFromDomain: domain, MessageIdDomain: messageIdDomain, Flags: c.flags, Now: testAssembleNow})
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		signer := &testAssembleSigner{selector: newTestAssembleSigner().selector, domain: domain}
+		signed, err := SmtpDkimSign(wire, &SmtpDkimSignArgs{Signer: signer, Issued: testAssembleIssued(), SignTime: testAssembleNow, ExpireTimeout: 7 * 24 * time.Hour})
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		checkTestHead(t, signed, domain, messageId, signer.selector, c.flags)
+	}
+}
+
+// The longest plain display name whose From still leaves the head at most HeaderHeadMaxByteCount, for
+// a From at a@n1.root.example: a plain phrase costs its octets and one space.
+func testAssembleLongestPlainName(t *testing.T) int {
+	t.Helper()
+	wire, err := AssembleSmtpMessage(testAssembleArgs(testAssembleCrlf("From: a@n1.root.example", "Message-ID: <"+testAssembleMessageId+">", "", "b", "")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, headByteCount, err := wire.render(smtpDkimPlaceholderValues(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return DefaultSmtpSenderSettings().HeaderHeadMaxByteCount - headByteCount - len(" ")
+}
+
+// A display name one octet past what the head holds is refused before the preamble, and the refusal
+// names its length, never its text (DESIGN-DETAILS 3.5); one octet shorter fills the head exactly. A
+// narrower bound in the settings is the one assembly holds to.
+func TestAssembleRefusesAFromNamePastTheHead(t *testing.T) {
+	longest := testAssembleLongestPlainName(t)
+	message := func(nameByteCount int) []byte {
+		return testAssembleCrlf("From: "+strings.Repeat("n", nameByteCount)+" <a@n1.root.example>", "Message-ID: <"+testAssembleMessageId+">", "", "b", "")
+	}
+	wire, err := AssembleSmtpMessage(testAssembleArgs(message(longest)))
+	if err != nil {
+		t.Fatalf("a %d-octet name: %v", longest, err)
+	}
+	if _, headByteCount, err := wire.render(smtpDkimPlaceholderValues(), nil); err != nil || headByteCount != DefaultSmtpSenderSettings().HeaderHeadMaxByteCount {
+		t.Errorf("a %d-octet name fills %d octets: %v", longest, headByteCount, err)
+	}
+	_, err = AssembleSmtpMessage(testAssembleArgs(message(longest + 1)))
+	if !errors.Is(err, ErrSmtpAssemble) {
+		t.Fatalf("a %d-octet name: %v", longest+1, err)
+	}
+	if !strings.Contains(err.Error(), fmt.Sprintf("a %d-octet From display name", longest+1)) || strings.Contains(err.Error(), "nnnn") {
+		t.Errorf("refusal %q", err)
+	}
+	// encoded words count as written: a non-ASCII name of the same octets takes more of the head
+	if _, err := AssembleSmtpMessage(testAssembleArgs(testAssembleCrlf("From: "+strings.Repeat("\xc3\xa9", longest/2)+" <a@n1.root.example>",
+		"Message-ID: <"+testAssembleMessageId+">", "", "b", ""))); !errors.Is(err, ErrSmtpAssemble) {
+		t.Errorf("an encoded name: %v", err)
+	}
+	narrow := testAssembleArgs(message(0))
+	narrow.Settings = DefaultSmtpSenderSettings()
+	narrow.Settings.HeaderHeadMaxByteCount = DefaultSmtpSenderSettings().HeaderHeadMaxByteCount - longest - 2
+	if _, err := AssembleSmtpMessage(narrow); !errors.Is(err, ErrSmtpAssemble) {
+		t.Errorf("a nameless From past a narrower head: %v", err)
+	}
+	narrow.Settings.HeaderHeadMaxByteCount += 1
+	if _, err := AssembleSmtpMessage(narrow); err != nil {
+		t.Errorf("a nameless From at a narrower head: %v", err)
 	}
 }
 
@@ -484,6 +736,7 @@ func TestAssembleBulkAddsOneClickUnsubscribe(t *testing.T) {
 	if !bytes.Contains(signed, []byte(":list-unsubscribe:list-unsubscribe-post:")) {
 		t.Error("the full signature does not cover the unsubscribe fields")
 	}
+	checkTestZ5(t, signed, newTestAssembleSigner().selector, SmtpFlagBulk)
 }
 
 // What the edge issues and the fixed signature's prefix are the sidecar's alone to add.
@@ -499,7 +752,7 @@ func TestAssembleDropsWhatTheEdgeIssues(t *testing.T) {
 	if !bytes.Contains(signed, []byte("s=kept")) {
 		t.Error("another signature was dropped")
 	}
-	checkTestZ5(t, signed, newTestAssembleSigner().selector)
+	checkTestZ5(t, signed, newTestAssembleSigner().selector, 0)
 }
 
 // Z5.4's phrase: words of atext stand, and anything else becomes encoded words.
@@ -526,7 +779,7 @@ func TestAssembleFromPhraseForms(t *testing.T) {
 		if !found {
 			t.Errorf("%q: no From", c.from)
 		}
-		checkTestZ5(t, signed, newTestAssembleSigner().selector)
+		checkTestZ5(t, signed, newTestAssembleSigner().selector, 0)
 	}
 }
 
@@ -538,7 +791,7 @@ func TestAssembleEncodesEightBitHeaders(t *testing.T) {
 	if !bytes.Contains(signed, []byte("\r\nSubject: =?utf-8?b?Y2Fmw6k=?=\r\n")) || !bytes.Contains(signed, []byte("\r\nTo: =?utf-8?b?Sm9zw6k=?= <j@x.example>, <k@y.example>\r\n")) {
 		t.Errorf("headers in\n%s", signed)
 	}
-	checkTestZ5(t, signed, newTestAssembleSigner().selector)
+	checkTestZ5(t, signed, newTestAssembleSigner().selector, 0)
 }
 
 // A multipart message keeps its boundary and its 7-bit parts, and an 8-bit part is re-encoded.
@@ -673,6 +926,66 @@ func base64StdDecode(text string) ([]byte, error) {
 		}
 	}
 	return out, nil
+}
+
+var updateSmtpAssembleVectors = flag.Bool("update-smtp-assemble-vectors", false, "rewrite testdata/smtp/assemble")
+
+// testdata/smtp/assemble's header blocks, octet for octet but b='s value, which is a function of the
+// run's key: the head, both signatures' layout and the other fields after them, as the prover and the
+// checker read them (README.md there).
+func TestAssembledHeaderBlocksAreTheVectors(t *testing.T) {
+	issued := testAssembleIssued()
+	values := &smtpDkimValues{
+		selector:   newTestAssembleSigner().selector,
+		xUrRef:     issued.XUrRef,
+		feedbackId: issued.FeedbackId,
+		signTime:   strconv.FormatInt(testAssembleNow.Unix(), 10),
+		expireTime: strconv.FormatInt(testAssembleNow.Add(7*24*time.Hour).Unix(), 10),
+	}
+	for _, c := range []struct {
+		name    string
+		message []byte
+		flags   uint32
+	}{
+		{name: "plain.txt", message: testAssembleMessage()},
+		{
+			name: "bulk.txt",
+			message: testAssembleCrlf("To: Suzie Q <suzie@shopping.example>", "Subject: This week's offers", "List-Unsubscribe: <https://u.example/x>",
+				"From: Joe SixPack <joe@n1.root.example>", "Date: Fri, 11 Jul 2003 21:00:37 -0700", "Message-ID: <"+testAssembleMessageId+">", "", "Offers.", ""),
+			flags: SmtpFlagBulk,
+		},
+	} {
+		args := testAssembleArgs(c.message)
+		args.Flags = c.flags
+		wire, err := AssembleSmtpMessage(args)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		rendered, _, err := wire.render(values, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		block := string(rendered[:bytes.Index(rendered, []byte("\r\n\r\n"))+4])
+		text := strings.ReplaceAll(block, "\r\n", "\n")
+		if strings.ContainsRune(text, '\r') || strings.Count(block, "\n") != strings.Count(block, "\r\n") {
+			t.Fatalf("%s: a bare CR or LF", c.name)
+		}
+		path := filepath.Join("testdata", "smtp", "assemble", c.name)
+		if *updateSmtpAssembleVectors {
+			if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		want, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if text != string(want) {
+			t.Errorf("%s:\n%s\nwant\n%s", c.name, text, want)
+		}
+		checkTestHead(t, rendered, testAssembleDomain, testAssembleMessageId, values.selector, c.flags)
+	}
 }
 
 // The published key's form, which a key record's p= carries.

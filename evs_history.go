@@ -189,6 +189,10 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 			}
 			state = "collected"
 		}
+		if name := verified.Drop.Name(self.client.clock.Now()); name != "" && !verified.Collected {
+			// a version a checked DROP lists (evs_drop_verify.go); a replaced versionless one stays collected
+			state = name
+		}
 		info := evsFileInfoOf(refId, result.head, verified)
 		slotIds := []Id{}
 		for _, slotIdBytes := range entry.GetSlotIds() {
@@ -211,6 +215,8 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 			Versioning:      entry.GetVersioning(),
 			Ignored:         ignored,
 			State:           state,
+			DropId:          evsDropIdOf(verified.Drop),
+			DropNotBefore:   evsDropNotBeforeOf(verified.Drop),
 			SlotIds:         slotIds,
 			EntrySha256:     evsHistoryEntrySha256(verified),
 			Epoch:           verified.Statement.Push.GetPathEpoch(),
@@ -230,6 +236,13 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 			if result.head.Head.GetBase() == nil && verified.Statement.Push.GetBaseVersion()+1 < entry.GetVersion() {
 				impliedRemoval = entry.GetVersion() - 1
 			}
+			continue
+		}
+		if verified.Drop != nil && verified.Drop.Withheld {
+			// evs withheld a dropped version's entry, and with it the version it replaces: below it by number alone
+			version = entry.GetVersion() - 1
+			expectPushId, expectCommit = nil, 0
+			below, belowCommit, impliedRemoval = true, verified.CommitVersion, 0
 			continue
 		}
 		if len(entry.GetPrevPushId()) == 0 {

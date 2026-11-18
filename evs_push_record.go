@@ -124,8 +124,15 @@ func (self *EvsRepo) pushPayload(ctx context.Context, head *EvsVerifiedHead, sta
 		return nil, fmt.Errorf("%w: a push record evs did not serve", ErrEvsObjectMissing)
 	}
 	// the batch record as its place holds it: its header, then the push's statement and payload, a re-seeded push's
-	// under the reseed type (QD-725)
-	batchRecord, err := ParseEvsBatchRecord(record)
+	// under the reseed type (QD-725); a format-2 reader takes a format-2 record, its staged tail beside it
+	format2 := self.client.format2Reader() != nil
+	var batchRecord *EvsBatchRecord
+	var tail *EvsBatchRecordTail
+	if format2 {
+		batchRecord, tail, err = ParseEvsBatchRecordFormat2(record)
+	} else {
+		batchRecord, err = ParseEvsBatchRecord(record)
+	}
 	if err != nil || (batchRecord.Type != protocol.EvsBatchRecordType_EVS_BATCH_PUSH && batchRecord.Type != protocol.EvsBatchRecordType_EVS_BATCH_RESEED) {
 		return nil, fmt.Errorf("%w: a push record that is not one push's", ErrEvsEntryRefused)
 	}
@@ -133,6 +140,22 @@ func (self *EvsRepo) pushPayload(ctx context.Context, head *EvsVerifiedHead, sta
 	if err != nil || !bytes.Equal(statementBytes, statement.Statement.Bytes) {
 		return nil, fmt.Errorf("%w: a push record of another statement", ErrEvsEntryRefused)
 	}
-	// as evs keeps it, with no slot body: keys come from slot reads alone (QD-806)
-	return EvsCheckRecordPayload(statement.Statement, payload)
+	if !format2 {
+		// as evs keeps it, with no slot body: keys come from slot reads alone (QD-806)
+		return EvsCheckRecordPayload(statement.Statement, payload)
+	}
+	checked, err := EvsCheckStoredPayload(statement.Statement, payload)
+	if err != nil {
+		return nil, err
+	}
+	if tail != nil && len(tail.Staged) != 0 {
+		segments, err := tail.StagedSegments()
+		if err != nil {
+			return nil, err
+		}
+		if checked.Staged, err = evsMatchStaged(statement.Statement.Push, checked.NewObjects, segments); err != nil {
+			return nil, err
+		}
+	}
+	return checked, nil
 }

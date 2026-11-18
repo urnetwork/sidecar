@@ -24,6 +24,9 @@ const evsExportNotesRef = "refs/notes/ur"
 type evsExportNote struct {
 	commit    EvsGitOid
 	statement *EvsVerifiedStatement
+	// format 2's: a line for each blob of the commit that is a replaced version's pointer or a dropped version's stub
+	// (evs_export_format2.go)
+	lines []string
 }
 
 // The note blob of one push.
@@ -51,7 +54,7 @@ func (self *evsGitObjectWriter) writeNotes(notes []*evsExportNote) error {
 			continue
 		}
 		seen[note.commit] = true
-		blob, err := self.write("blob", evsExportNoteBody(note.statement))
+		blob, err := self.write("blob", append(evsExportNoteBody(note.statement), evsExportNoteLines(note.lines)...))
 		if err != nil {
 			return err
 		}
