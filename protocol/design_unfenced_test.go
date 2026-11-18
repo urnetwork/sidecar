@@ -672,6 +672,12 @@ var testFenceAdditions = []struct {
 		field:    testFenceField{name: "require_default_egress", number: 4, typeName: "bool"},
 		question: "ur-tun-default-egress-admin-lock",
 	},
+	// QD-1060: an egress_change's requirement of default egress under exits, so its approval shows and binds it
+	{
+		message:  "CanonicalAction",
+		field:    testFenceField{name: "require_default_egress", number: 41, typeName: "bool"},
+		question: "ur-tun-default-egress-option-lock-action",
+	},
 	// QD-989 (owner decision 560): a ur/ ticket names its dialer's sidecar, signed with the rest, so a ur/ listener reads
 	// its subject from the admitted ticket; §2.8's sock-2 row names it (list v45)
 	{

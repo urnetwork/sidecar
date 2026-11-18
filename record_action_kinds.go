@@ -33,8 +33,9 @@
 // Kind 5, egress_change, is the owner's answer to bridge-m4-19-egress-change-action (QD-799): §17.9's egress spec, an
 // outward act that only a person's confirmed command asks for. It names its subject and egress_mode, 39, a
 // BridgeEgressMode, and under exits its exits in grant_dst, sidecar:<id> entries or one tag:<id>, each id in
-// lowercase hex; auto and none name none, a shape every parser holds (checkEgressChangeAction). A template names its
-// subject and mode too, so no
+// lowercase hex, and require_default_egress, 41, where the spec requires the subject's devices to keep default egress
+// on (QD-1053, QD-1060); auto and none name neither, a shape every parser holds (checkEgressChangeAction). A template
+// names its subject and mode too, so no
 // multi-use decision sets every subject's route. No server path takes it: its BridgeEgress rides the log as its own
 // statement, which no GrantActivate or gate carries.
 //
@@ -171,11 +172,11 @@ var canonicalActionKindRows = []*CanonicalActionKindFields{
 		Request:  []protoreflect.FieldNumber{approvalRequestFieldLocalPort},
 	},
 	{
-		// egress_change (QD-799): the subject and its mode, and under exits the exits in grant_dst; a template names
-		// the subject and the mode too. No server path takes it
+		// egress_change (QD-799): the subject and its mode, and under exits the exits in grant_dst and the requirement
+		// of default egress (QD-1060); a template names the subject and the mode too. No server path takes it
 		Kind:             SidecarActionEgressChange,
 		Required:         []protoreflect.FieldNumber{29, canonicalActionFieldEgressMode},
-		Optional:         []protoreflect.FieldNumber{canonicalActionFieldGrantDst},
+		Optional:         []protoreflect.FieldNumber{canonicalActionFieldGrantDst, canonicalActionFieldRequireDefaultEgress},
 		Versions:         []uint32{1},
 		TemplateRequired: []protoreflect.FieldNumber{29, canonicalActionFieldEgressMode},
 	},
