@@ -8,6 +8,8 @@ barrier acl_contract.heads.after acl_contract.go
 barrier acl_contract.heads.before acl_contract.go
 barrier acl_engine.install.after acl_engine.go
 barrier acl_engine.install.before acl_engine.go
+barrier acl_engine.install_routes.after acl_engine.go
+barrier acl_engine.install_routes.before acl_engine.go
 barrier acl_gate.install acl_gate.go
 barrier acl_gate.install.after acl_gate.go
 barrier acl_gate.install.before acl_gate.go

@@ -20,9 +20,9 @@
 // A route rule that names no ip: destination and no autogroup:internet holds no prefix of its own: it reaches, through
 // each advertiser its via subjects hold for the source that is also among its subject destinations for that source,
 // every prefix of that advertiser's subnet routes in force, whole (§8.4's readings; owner decision 575, QD-1019). So
-// RouteRules answers ViaDestination beside each rule, the compile and AclEngine.AllowRoute read a rule's detail through
-// aclRouteBySubject, and StandingCovers covers a subnet route by such a rule whose via and destinations both name its
-// advertiser. An exit is never reached this way, and a rule whose detail the device does not hold, an activated
+// RouteRules answers ViaDestination beside each rule, the compile, AclEngine.AllowRoute and Check's ip ranges read a
+// rule's detail through aclRouteBySubject, and StandingCovers covers a subnet route by such a rule whose via and
+// destinations both name its advertiser. An exit is never reached this way, and a rule whose detail the device does not hold, an activated
 // grant's (QD-003), reaches nothing by it.
 //
 // EgressMode exports the mode the contract gate's egressRestricted reads (§17.9's egress spec, D-BRIDGE-13), and
@@ -78,8 +78,8 @@ type AclServedRoute struct {
 // The subnet routes in force by advertiser, which a route rule that names no ip: destination and no autogroup:internet
 // reaches whole through an advertiser its destinations name (§8.4's readings; owner decision 575). Rows carry no prefix
 // (D-BRIDGE-6), so an AclState holds none: BRIDGE's compile answers these from its ledger at the state it compiled
-// (BridgeCompiled.ServedRoutes), and AclEngine.AllowRoute reads them. Never changed once built, so safe for concurrent
-// use; a nil one serves nothing.
+// (BridgeCompiled.ServedRoutes), and AclEngine.AllowRoute and Check's ip ranges read them. Never changed once built, so
+// safe for concurrent use; a nil one serves nothing.
 type AclServedRoutes struct {
 	// in advertiser order, one an advertiser, its prefixes in address then length order, none twice
 	routes []AclServedRoute
@@ -140,6 +140,23 @@ func (self *AclServedRoutes) serves(advertiser Id, address netip.Addr) bool {
 		}
 	}
 	return false
+}
+
+// The advertisers one of whose subnet routes in force holds the whole of prefix, in advertiser order; none for an
+// invalid prefix or a nil set.
+func (self *AclServedRoutes) advertisersHolding(prefix netip.Prefix) []Id {
+	if self == nil || !prefix.IsValid() {
+		return nil
+	}
+	advertisers := []Id{}
+	for _, route := range self.routes {
+		if slices.ContainsFunc(route.Prefixes, func(served netip.Prefix) bool {
+			return served.Bits() <= prefix.Bits() && served.Contains(prefix.Addr())
+		}) {
+			advertisers = append(advertisers, route.Advertiser)
+		}
+	}
+	return advertisers
 }
 
 // Whether a route rule reaches its subject destinations' routes in force rather than prefixes of its own (§8.4's

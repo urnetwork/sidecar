@@ -5,8 +5,8 @@
 // member's laptop an entry for each prefix its own desktop's approved route serves and the desktop a route row for the
 // laptop, another member's device's prefix is not reached, an exit is not opened, a rule of tag:db through tag:router
 // reaches only a device carrying both tags, an activated grant with no local detail stays closed, a remapped route is
-// reached by its exposed prefix, the engine answers a preview from the routes the compile answers, and the filer names
-// grant 1 for its own device's route.
+// reached by its exposed prefix, the engine answers a preview and MCP's acl_check of an ip range from the routes the
+// compile answers, and the filer names grant 1 for its own device's route.
 
 package sidecar
 
@@ -502,6 +502,49 @@ func TestAllowRouteAnswersByTheRoutesTheCompileHoldsInForce(t *testing.T) {
 	engine.InstallRoutes(nil)
 	if allows(home, desktop) {
 		t.Error("with the routes cleared the engine routes to a prefix")
+	}
+}
+
+// MCP's acl_check by the same reading: Check's ip range for route, through any via, takes by grant 1 a range a subnet
+// route in force of the laptop's own desktop holds whole, and refuses a range wider than that route, one another
+// member's device serves, one no route serves and a public one, and every range before the engine holds the routes.
+func TestCheckRoutesToARangeAMembersOwnDeviceServes(t *testing.T) {
+	net := newTestBridgeRouteSelfNet(t)
+	net.approvedRouteInForce(net.peer, net.member, "home", testBridgePrefix(192, 168, 7, 0, 24))
+	net.approvedRouteInForce(net.other, net.other.memberId, "away", testBridgePrefix(192, 168, 8, 0, 24))
+	policy := testBridgeCompilePolicy(t, net.log.State(), net.networkId, string(AclTeamStartDocument()), map[string]Id{"recurd": testConfigId("tag recurd")})
+	grant1 := policy.grantId(0)
+	view := net.policyView(policy)
+	local := net.local()
+	local.AnswerServedRoutes = true
+	compiled, _ := testBridgeCompile(t, view, local)
+	engine := NewAclEngine(net.host.sidecarId, nil, nil, nil)
+	if err := engine.Install(view.acl, policy.local); err != nil {
+		t.Fatal(err)
+	}
+	now := time.UnixMilli(view.state.TimeMs())
+	routes := func(cidr string) bool {
+		t.Helper()
+		resource := AclResource{Kind: AclResourceIp, Cidr: netip.MustParsePrefix(cidr)}
+		check := engine.Check(AclSidecarSubject(net.host.sidecarId), protocol.AclAction_ACL_ACTION_ROUTE, resource, now)
+		if check.Allowed && !bytes.Equal(check.GrantId, grant1.Bytes()) {
+			t.Fatalf("%s allowed by another rule: %+v", cidr, check)
+		}
+		return check.Allowed
+	}
+	if routes("192.168.7.0/24") {
+		t.Error("Check routes to a range before the engine holds the routes in force")
+	}
+	engine.InstallRoutes(compiled.ServedRoutes)
+	for _, held := range []string{"192.168.7.0/24", "192.168.7.128/25", "192.168.7.9/32"} {
+		if !routes(held) {
+			t.Errorf("Check refuses %s, which the laptop's own desktop serves", held)
+		}
+	}
+	for _, refused := range []string{"192.168.0.0/16", "192.168.8.0/24", "10.20.0.0/16", "203.0.113.0/24"} {
+		if routes(refused) {
+			t.Errorf("Check routes to %s", refused)
+		}
 	}
 }
 

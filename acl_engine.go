@@ -175,13 +175,16 @@ func (self *AclEngine) Install(state *AclState, local *AclLocalPolicy) error {
 	return err
 }
 
-// Swaps in the subnet routes in force by advertiser, which AllowRoute reads for a route rule that names no prefix
-// (owner decision 575): BRIDGE's compile answers them at the state it compiled (BridgeCompiled.ServedRoutes), so they
-// are as new as the rows the device's hook enforces, which that compile gave it too. Before the first call, and after a
-// nil one, such a rule routes to nothing here, the closed direction. No signed statement, so no pin is checked: the
-// routes only narrow which addresses a rule the installed state already holds takes.
+// Swaps in the subnet routes in force by advertiser, which AllowRoute and Check's ip ranges read for a route rule that
+// names no prefix (owner decision 575): BRIDGE's compile answers them at the state it compiled (BridgeCompiled.
+// ServedRoutes), which the component hands on once the device role holds that state, so they are as new as the rows
+// the device's hook enforces. Before the first call, and after a nil one, such a rule routes to nothing here, the
+// closed direction. No signed statement, so no pin is checked: the routes only narrow which addresses a rule the
+// installed state already holds takes.
 func (self *AclEngine) InstallRoutes(servedRoutes *AclServedRoutes) {
+	testHookBarrier("acl_engine.install_routes.before", self.sidecarId.String())
 	self.servedRoutes.Store(servedRoutes)
+	testHookBarrier("acl_engine.install_routes.after", self.sidecarId.String())
 }
 
 // The installed state's (n, A_n), nil before the first Install.
@@ -365,7 +368,8 @@ type AclCheck struct {
 // Sidecar.Authorize's active-grant test, through CORE's SidecarGate, and MCP's acl_check: whether the subject holds
 // an active grant for action on resource at now, on the installed state. A subject resource is dialed or routed to, a
 // socket dialed or listened on by name, a repo read, written, administered or deposited to, a dns host published, an
-// alias sent to or listened on; an ip range routed to through any via.
+// alias sent to or listened on; an ip range routed to through any via, by a rule's prefixes or, for a rule that names
+// none, by the subnet routes in force InstallRoutes last took (findRouteToPrefix).
 func (self *AclEngine) Check(subject AclSubject, action protocol.AclAction, resource AclResource, now time.Time) AclCheck {
 	installed := self.installed.Load()
 	if installed == nil {
@@ -433,7 +437,7 @@ func (self *AclEngine) Check(subject AclSubject, action protocol.AclAction, reso
 		return answer(self.AllowAlias(subject, action, resource.Name, now))
 	case AclResourceIp:
 		if action == protocol.AclAction_ACL_ACTION_ROUTE {
-			return answer(state.findRouteToPrefix(subject, resource.Cidr, nowMs, installed.localRules))
+			return answer(state.findRouteToPrefix(subject, resource.Cidr, nowMs, installed.localRules, self.servedRoutes.Load()))
 		}
 	}
 	return AclCheck{Reason: AclReasonNoGrant}
@@ -450,11 +454,39 @@ func (self *AclEngine) checkSubject(state *AclState, selector AclSelector) (AclS
 	return AclSubject{}, false
 }
 
-// The first route rule in force whose prefixes hold the whole of cidr, through any via.
-func (self *AclState) findRouteToPrefix(subject AclSubject, cidr netip.Prefix, nowMs int64, localRules []*AclLocalRule) AclDecision {
-	return self.resourceDecision(subject, nowMs, protocol.AclAction_ACL_ACTION_ROUTE, func(rule *aclRule) bool {
+// The first route rule in force that reaches the whole of cidr through some via: one whose prefixes hold it, or one that
+// names no ip: destination and no autogroup:internet through an advertiser its via subjects hold for the subject that is
+// also among its subject destinations for it, one of whose subnet routes in force holds the whole of cidr (§8.4's
+// readings; owner decision 575), by servedRoutes, so by none while it is nil. A rule whose detail the device does not
+// hold, an activated grant's, reaches no range here (QD-003), and a hard-denied advertiser is no via.
+func (self *AclState) findRouteToPrefix(subject AclSubject, cidr netip.Prefix, nowMs int64, localRules []*AclLocalRule,
+	servedRoutes *AclServedRoutes) AclDecision {
+	resolved := self.resolve(&subject, nowMs)
+	if resolved.deny != 0 {
+		return aclDeny(resolved.deny)
+	}
+	// the advertisers that serve the whole of cidr, as vias at nowMs; each subject stays where its resolution points
+	advertisers := servedRoutes.advertisersHolding(cidr)
+	viaSubjects := make([]AclSubject, len(advertisers))
+	vias := []aclResolved{}
+	for i, advertiser := range advertisers {
+		viaSubjects[i] = AclSidecarSubject(advertiser)
+		if via := self.resolve(&viaSubjects[i], nowMs); via.deny == 0 && via.sidecar != nil {
+			vias = append(vias, via)
+		}
+	}
+	rule := self.findResourceRule(&resolved, nowMs, protocol.AclAction_ACL_ACTION_ROUTE, func(rule *aclRule) bool {
 		local := localRules[rule.index]
 		if local == nil || !cidr.IsValid() {
+			return false
+		}
+		if aclRouteBySubject(local, rule.internetTarget) {
+			// no prefix of its own: the subnet routes in force of a via its destinations name
+			for i := range vias {
+				if self.routeTakes(&resolved, &vias[i], rule) && self.targetsSubject(&resolved, &vias[i], rule) {
+					return true
+				}
+			}
 			return false
 		}
 		for _, held := range local.Cidrs {
@@ -464,6 +496,10 @@ func (self *AclState) findRouteToPrefix(subject AclSubject, cidr netip.Prefix, n
 		}
 		return false
 	})
+	if rule != nil {
+		return aclAllowRule(rule)
+	}
+	return aclDeny(AclReasonNoGrant)
 }
 
 // ACL-M2-08's CheckRepoMember at the pin a push or delivery carries (§10.9, FS-104): every Add and wrap judged at its
