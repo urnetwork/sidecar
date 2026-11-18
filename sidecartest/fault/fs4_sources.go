@@ -1,13 +1,15 @@
-// FS-4's three-source reads (§22.8's "two removals during a paused copy, reads finding every path across three
-// sources"; DESIGN-DETAILS 9.2.4 and 9.6's reads row; EVS1-M2-41) on the evs world, against EVS1-M2-47's mapper and
-// EVS1-M2-44's and EVS1-M2-45's fences and reads, as a clause beside fs4.go's registered case.
+// FS-4's multi-source reads (§22.8's "removals during a paused copy, reads finding every path across the sources";
+// DESIGN-DETAILS 9.2.4 and 9.6's reads row; EVS1-M2-41) on the evs world, against EVS1-M2-47's mapper and EVS1-M2-44's
+// and EVS1-M2-45's fences and reads, as a clause beside fs4.go's registered case. Every epoch being batched, a head
+// lists two sources at most (QD-1046): a third PATH_EPOCH waits while two stand, so the clause that read across three
+// sources reads across two.
 //
-// Fs4ThreeSources: in each of epochs 1, 2 and 3 writerA creates a file in a directory of that epoch's own and the
-// fold takes it into that epoch's entries; then a reader leaves, writerA's next write rotates to a REMOVE generation
-// and records the due, and writerA's mapper commits the next PATH_EPOCH, no copy running between, so the head ends at
-// epoch 4 over sources 3, 2 and 1, each source holding one file's entry. The reader reads every file and lists every
-// directory across the three sources and the current epoch, and after evs's copy into epoch 4 drops all three
-// sources, reads and lists them again.
+// Fs4TwoSources: in each of epochs 1 and 2 writerA creates a file in a directory of that epoch's own and the fold takes
+// it into that epoch's entries; then a reader leaves, writerA's next write rotates to a REMOVE generation and records
+// the due, and writerA's mapper commits the next PATH_EPOCH, no copy running between, so the head ends at epoch 3 over
+// sources 2 and 1, each source holding one file's entry. The reader reads every file and lists every directory across
+// the two sources and the current epoch, and after evs's copy into epoch 3 drops both sources, reads and lists them
+// again.
 
 package fault
 
@@ -22,10 +24,10 @@ import (
 )
 
 // The readers that leave in turn, one a cut-over.
-var fs4SourcesLeavers = []string{"leaver1", "leaver2", "leaver3"}
+var fs4SourcesLeavers = []string{"leaver1", "leaver2"}
 
 // See the file header.
-func Fs4ThreeSources(net *Net) *Schedule {
+func Fs4TwoSources(net *Net) *Schedule {
 	settings := DefaultEvsWorldSettings()
 	for _, name := range fs4SourcesLeavers {
 		settings.Devices = append(settings.Devices, &EvsWorldDeviceSettings{Name: name, Instances: []string{"evsr"}})
@@ -64,13 +66,14 @@ func Fs4ThreeSources(net *Net) *Schedule {
 		directory := fmt.Sprintf("e%d", index+1)
 		steps = append(steps, &Step{Actor: "reader", Action: world.VerifyListing("reader", directory, "f.txt")})
 	}
-	steps = append(steps, &Step{Actor: "copier", Action: world.CopyInto(4)}, &Step{Actor: "check", Action: world.ExpectEpoch(4)})
+	last := uint64(len(fs4SourcesLeavers) + 1)
+	steps = append(steps, &Step{Actor: "copier", Action: world.CopyInto(last)}, &Step{Actor: "check", Action: world.ExpectEpoch(last)})
 	steps = append(steps, &Step{Actor: "reader", Action: world.Verify("reader", files...)})
 	for index := range fs4SourcesLeavers {
 		directory := fmt.Sprintf("e%d", index+1)
 		steps = append(steps, &Step{Actor: "reader", Action: world.VerifyListing("reader", directory, "f.txt")})
 	}
-	return &Schedule{Id: "FS-4 three sources", Steps: steps, Check: world.Checks(), Tiers: []Tier{TierT2, TierT3}}
+	return &Schedule{Id: "FS-4 two sources", Steps: steps, Check: world.Checks(), Tiers: []Tier{TierT2, TierT3}}
 }
 
 // A step action: main's head stands at path epoch current with exactly the sources listed, in whatever order the head
