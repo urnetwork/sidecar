@@ -367,7 +367,7 @@ func (self *fakeDirectoryCardsClient) ReadStreams(ctx context.Context, repoId si
 		self.fake.counts.StreamReads += 1
 		self.fake.counts.StreamsNamed += len(reads)
 	}()
-	if len(reads) == 0 || sidecar.DirectoryStreamReadCount < len(reads) {
+	if len(reads) == 0 || sidecar.DefaultEvsFormatSettings().ReadStreamMaxRefCount < len(reads) {
 		return nil, fakeRecordReadRefusal(protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
 	}
 	if err := self.checkRead(repoId); err != nil {
