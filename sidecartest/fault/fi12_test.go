@@ -7,15 +7,10 @@ package fault
 
 import (
 	"bytes"
-	"context"
-	"errors"
 	"strings"
 	"testing"
 
-	"google.golang.org/protobuf/proto"
-
 	"github.com/urnetwork/sidecar"
-	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/sidecartest"
 )
 
@@ -275,84 +270,27 @@ func TestFi12AssumesNeitherDumpOrder(t *testing.T) {
 	if err := CheckRecovery(before, after, incident); err != nil {
 		t.Fatalf("the main dump newer: %v", err)
 	}
+	// a row the sidecar dump does not name, deleted after the main dump, comes back at the main dump's age: its copy
+	// excuses the return, and without it the return fails
+	deletedMember := sidecar.NewId().String()
+	mainDumpMember := &RecoveryIdentity{Kind: RecoveryKindMember, Id: deletedMember, Active: true, Fields: map[string]string{RecoveryFieldLogin: "gone@example.com", RecoveryFieldNetwork: world.networkId}}
+	before.AddGone(mainDumpMember.Key(), "deleted after the main dump")
+	after.AddIdentity(mainDumpMember)
+	incident.MainDump[mainDumpMember.Key()] = mainDumpMember
+	if err := CheckRecovery(before, after, incident); err != nil {
+		t.Fatalf("a deletion after the main dump undone at its age: %v", err)
+	}
+	delete(incident.MainDump, mainDumpMember.Key())
+	if err := CheckRecovery(before, after, incident); err == nil || !strings.Contains(err.Error(), "deleted after the main dump before the loss, came back active") {
+		t.Fatalf("a deleted row back with no main-dump copy: %v", err)
+	}
+	incident.MainDump[mainDumpMember.Key()] = mainDumpMember
 	// held to the main dump's copy: the sidecar's copy is no longer what it must equal
 	after.Identities[RecoveryIdentityKey(RecoveryKindNetwork, world.networkId)].Fields[RecoveryFieldName] = "fi12-network"
 	if err := CheckRecovery(before, after, incident); err == nil || !strings.Contains(err.Error(), "the main dump holds") {
 		t.Fatalf("a main-dump row back at the sidecar's copy: %v", err)
 	}
 }
-
-// Writes place/<repo> and head/<repo>/<ref> at version on net's first metadata cluster, as evs writes them, over
-// any head there: the stores a T2 schedule loses and restores.
-func fi12PutHead(ctx context.Context, net *Net, repoId sidecar.Id, refId sidecar.Id, version uint64) error {
-	first, err := net.Host().Blobs.FirstCluster()
-	if err != nil {
-		return err
-	}
-	if _, err := sidecar.ReadEvsRepoPlace(ctx, first, repoId); err != nil {
-		placeBytes, err := (&sidecar.EvsRepoPlace{ClusterId: first.ClusterId(), CreatorSidecarId: sidecar.NewId()}).Marshal()
-		if err != nil {
-			return err
-		}
-		if _, err := first.PutIfNoneMatch(ctx, sidecar.EvsPlaceKey(repoId), placeBytes, nil); err != nil {
-			return err
-		}
-	}
-	headBytes, err := proto.Marshal(&protocol.EvsHead{Version: version, Chain: bytes.Repeat([]byte{byte(version)}, 32)})
-	if err != nil {
-		return err
-	}
-	key := "head/" + sidecar.EvsKeyId(repoId) + "/" + sidecar.EvsKeyId(refId)
-	if err := first.Delete(ctx, key); err != nil && !errors.Is(err, sidecar.ErrBlobNotFound) {
-		return err
-	}
-	_, err = first.PutIfNoneMatch(ctx, key, headBytes, nil)
-	return err
-}
-
-// A schedule naming FI(12): a head at 7 snapshotted, the site lost, the head restored at restoredVersion, and what came
-// back recorded. record false records nothing, as a schedule naming FI-12 and showing nothing would.
-func fi12Schedule(restoredVersion uint64, record bool) Builder {
-	return func(net *Net) *Schedule {
-		repoId, refId := sidecar.NewId(), sidecar.NewId()
-		snapshotOf := func(ctx context.Context) (*RecoverySnapshot, error) {
-			snapshot := NewRecoverySnapshot()
-			err := snapshot.AddHeadsFrom(ctx, NewStoreView(net, nil), repoId, refId)
-			return snapshot, err
-		}
-		steps := []*Step{
-			{Actor: "evs", Action: func(ctx context.Context, net *Net) error {
-				return fi12PutHead(ctx, net, repoId, refId, 7)
-			}},
-			{Actor: "ops", Action: func(ctx context.Context, net *Net) error {
-				if !record {
-					return nil
-				}
-				snapshot, err := snapshotOf(ctx)
-				if err == nil && len(snapshot.Heads) != 1 {
-					return errSnapshotTookNoHead
-				}
-				RecordRecoverySnapshot(net, "site", snapshot)
-				return err
-			}},
-			{Actor: "ops", Action: func(ctx context.Context, net *Net) error {
-				return fi12PutHead(ctx, net, repoId, refId, restoredVersion)
-			}},
-			{Actor: "ops", Action: func(ctx context.Context, net *Net) error {
-				if !record {
-					return nil
-				}
-				after, err := snapshotOf(ctx)
-				RecordRecovered(net, "site", after, &RecoveryIncident{Id: sidecar.NewId()})
-				return err
-			}},
-		}
-		return &Schedule{Id: "FI-12's own schedule", Steps: steps, Check: []Invariant{FI(12)}, Tiers: []Tier{TierT2}}
-	}
-}
-
-// What a schedule's snapshot step fails with when it read no head, which the schedule's own write put there.
-var errSnapshotTookNoHead = errors.New("the snapshot read no head")
 
 // As fault.FI(12), the check runs after each step of a schedule on T2: a head restored at its (v, C_v) reads clean,
 // one restored lower fails after the step that recorded it, and a schedule that names FI-12 and records nothing
@@ -363,35 +301,38 @@ func TestFi12RunsAfterEveryStepAndFailsClosed(t *testing.T) {
 		defer net.Close()
 		return Run(t.Context(), builder(net), net)
 	}
-	if result := run(fi12Schedule(7, true)); result.Err != nil {
+	if result := run(Fi12HeadRestoreSchedule(7, true)); result.Err != nil {
 		t.Fatalf("a head restored at its C_v: %s", result)
 	}
-	result := run(fi12Schedule(6, true))
+	result := run(Fi12HeadRestoreSchedule(6, true))
 	if result.Err == nil || !strings.Contains(result.Err.Error(), "came back at 6") || result.FailedStep != 3 {
 		t.Fatalf("a head restored below its C_v: %s", result)
 	}
-	result = run(fi12Schedule(7, false))
+	result = run(Fi12HeadRestoreSchedule(7, false))
 	if result.Err == nil || !strings.Contains(result.Err.Error(), "FI-12 read no recovery") {
 		t.Fatalf("a schedule that shows nothing: %s", result)
 	}
 }
 
 // A snapshot taken before the fault with nothing recorded as recovered fails at the end, and what came back recorded
-// with no snapshot before it fails at once.
+// with no snapshot before it fails at once. Each runs on a Net of its own, one open at a time, as the test hooks a Net
+// installs require.
 func TestFi12FailsAHalfRecordedRecovery(t *testing.T) {
+	func() {
+		net := sidecartest.NewNet(t.Context(), nil)
+		defer net.Close()
+		RecordRecoverySnapshot(net, "postgres", NewRecoverySnapshot())
+		if err := checkFi12(&Oracle{Net: net}); err != nil {
+			t.Fatalf("mid-run, before the recovery: %v", err)
+		}
+		if err := checkFi12(&Oracle{Net: net, Final: true}); err == nil || !strings.Contains(err.Error(), "nothing recorded as recovered") {
+			t.Fatalf("at the end with no recovery: %v", err)
+		}
+	}()
 	net := sidecartest.NewNet(t.Context(), nil)
 	defer net.Close()
-	RecordRecoverySnapshot(net, "postgres", NewRecoverySnapshot())
-	if err := checkFi12(&Oracle{Net: net}); err != nil {
-		t.Fatalf("mid-run, before the recovery: %v", err)
-	}
-	if err := checkFi12(&Oracle{Net: net, Final: true}); err == nil || !strings.Contains(err.Error(), "nothing recorded as recovered") {
-		t.Fatalf("at the end with no recovery: %v", err)
-	}
-	other := sidecartest.NewNet(t.Context(), nil)
-	defer other.Close()
-	RecordRecovered(other, "postgres", NewRecoverySnapshot(), nil)
-	if err := checkFi12(&Oracle{Net: other}); err == nil || !strings.Contains(err.Error(), "no snapshot before its fault") {
+	RecordRecovered(net, "postgres", NewRecoverySnapshot(), nil)
+	if err := checkFi12(&Oracle{Net: net}); err == nil || !strings.Contains(err.Error(), "no snapshot before its fault") {
 		t.Fatalf("a recovery with no snapshot: %v", err)
 	}
 }

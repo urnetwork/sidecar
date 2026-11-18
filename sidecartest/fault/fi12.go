@@ -27,7 +27,8 @@
 //	content    each named object still opens to its plaintext, unless its repo is listed as above; a second host's
 //	           loss is a row's snapshot of the objects whose every shard existed, each of which must still open
 //	gone       an identity kept gone does not come back active, a gone ref has no head, and gone content opens to
-//	           nothing, whatever the incident lists
+//	           nothing, whatever the incident lists, but for a row the sidecar dump does not name, which comes back
+//	           at the main dump's age, its deletion after that dump undone (§19.3)
 //
 // A check before the row records its recovery reads nothing, since nothing has come back yet. At the end a snapshot
 // with no recovery recorded fails, and so does a Net on which nothing was recorded at all: a schedule that names FI-12
@@ -45,7 +46,10 @@ import (
 	"strings"
 	"sync"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/protocol"
 )
 
 var _ = RegisterInvariant(12, func(ctx context.Context, oracle *Oracle) error {
@@ -374,6 +378,11 @@ func CheckRecovery(before *RecoverySnapshot, after *RecoverySnapshot, incident *
 	}
 	for _, key := range sortedKeys(goneKeys) {
 		why := before.Gone[key]
+		// a row the sidecar dump does not name comes back as the main dump holds it, a deletion after the main
+		// dump's snapshot undone (§19.3), which only the main dump's copy the incident carries excuses
+		if _, ok := incident.mainDumpCopy(key); ok {
+			continue
+		}
 		if identity := after.Identities[key]; identity != nil && identity.Active {
 			fail("%s, %s before the loss, came back active", key, why)
 		}
@@ -482,4 +491,79 @@ func checkFi12(oracle *Oracle) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// What a recovery fixture's snapshot step fails with when it read no head, which its own first step wrote.
+var errFi12FixtureNoHead = errors.New("the snapshot read no head, which the fixture's first step wrote")
+
+// FI-12's own schedule, a fixture both tiers run (sidecart3 on T3's stores): a head written at 7 and snapshotted
+// through the oracle's store view, the site lost and the head restored at restoredVersion, and what came back
+// recorded as recovered, FI(12) checked after every step. At 7 it reads clean; below it fails after the step that
+// records the recovery. record false records nothing, as a schedule naming FI-12 and showing nothing would, which
+// fails at the end.
+func Fi12HeadRestoreSchedule(restoredVersion uint64, record bool) Builder {
+	return func(net *Net) *Schedule {
+		repoId, refId := sidecar.NewId(), sidecar.NewId()
+		snapshotOf := func(ctx context.Context) (*RecoverySnapshot, error) {
+			snapshot := NewRecoverySnapshot()
+			err := snapshot.AddHeadsFrom(ctx, NewStoreView(net, nil), repoId, refId)
+			return snapshot, err
+		}
+		steps := []*Step{
+			{Actor: "evs", Action: func(ctx context.Context, net *Net) error {
+				return fi12PutHead(ctx, net, repoId, refId, 7)
+			}},
+			{Actor: "ops", Action: func(ctx context.Context, net *Net) error {
+				if !record {
+					return nil
+				}
+				snapshot, err := snapshotOf(ctx)
+				if err == nil && len(snapshot.Heads) != 1 {
+					err = errFi12FixtureNoHead
+				}
+				RecordRecoverySnapshot(net, "site", snapshot)
+				return err
+			}},
+			{Actor: "ops", Action: func(ctx context.Context, net *Net) error {
+				return fi12PutHead(ctx, net, repoId, refId, restoredVersion)
+			}},
+			{Actor: "ops", Action: func(ctx context.Context, net *Net) error {
+				if !record {
+					return nil
+				}
+				after, err := snapshotOf(ctx)
+				RecordRecovered(net, "site", after, &RecoveryIncident{Id: sidecar.NewId()})
+				return err
+			}},
+		}
+		return &Schedule{Id: "FI-12's head restore", Steps: steps, Check: []Invariant{FI(12)}, Tiers: []Tier{TierT2, TierT3}}
+	}
+}
+
+// Writes place/<repo> once and head/<repo>/<ref> at version, its chain the version's byte, on net's first metadata
+// cluster, over any head there: the stores the fixture loses and restores.
+func fi12PutHead(ctx context.Context, net *Net, repoId sidecar.Id, refId sidecar.Id, version uint64) error {
+	first, err := net.Host().Blobs.FirstCluster()
+	if err != nil {
+		return err
+	}
+	if _, err := sidecar.ReadEvsRepoPlace(ctx, first, repoId); err != nil {
+		placeBytes, err := (&sidecar.EvsRepoPlace{ClusterId: first.ClusterId(), CreatorSidecarId: sidecar.NewId()}).Marshal()
+		if err != nil {
+			return err
+		}
+		if _, err := first.PutIfNoneMatch(ctx, sidecar.EvsPlaceKey(repoId), placeBytes, nil); err != nil {
+			return err
+		}
+	}
+	headBytes, err := proto.Marshal(&protocol.EvsHead{Version: version, Chain: bytes.Repeat([]byte{byte(version)}, 32)})
+	if err != nil {
+		return err
+	}
+	key := "head/" + sidecar.EvsKeyId(repoId) + "/" + sidecar.EvsKeyId(refId)
+	if err := first.Delete(ctx, key); err != nil && !errors.Is(err, sidecar.ErrBlobNotFound) {
+		return err
+	}
+	_, err = first.PutIfNoneMatch(ctx, key, headBytes, nil)
+	return err
 }
