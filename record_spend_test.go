@@ -1,11 +1,14 @@
 //go:build !ios_extension
 
 // MCP-M3-03's tests. On TEAM's real log: §22.7's decisions row (another requester's decision, an auth_pin off the
-// chain, an approver revoked after signing, k = 2), AD3, FS-29's unit form, a self-signed device decision, the
-// harness and presence channels, the document's evidenceDefault as each base's rows carry it at the daemon, a gate and
-// a reader (QD-727), and the spend check installed as AclSpendCheck activating a GrantActivate. Then the gate's field comparison and clock, AD4 by reflection over the
-// gate's inputs, every refusal's code on a fixture state, and testdata/record/spend/vectors.json. Pure, on every leg but
-// the ios_extension legs.
+// chain, an approver revoked after signing, k = 2), §8.6's admin clause and owner decision 471's count (only the
+// approvers a rule names make its k, an Owner's or Admin's decision it does not name meeting the clause alone, as the
+// log's quorum counts them: under autogroup:self, under the directory's rule for a member's device, a sponsored worker
+// and one whose sponsor is gone, and at a gate's own check on a public publish), AD3, FS-29's unit form, a self-signed
+// device decision, the harness and presence channels, the document's evidenceDefault as each base's rows carry it at
+// the daemon, a gate and a reader (QD-727), and the spend check installed as AclSpendCheck activating a GrantActivate.
+// Then the gate's field comparison and clock, AD4 by reflection over the gate's inputs, every refusal's code on a
+// fixture state, and testdata/record/spend/vectors.json. Pure, on every leg but the ios_extension legs.
 
 package sidecar
 
@@ -356,10 +359,15 @@ func TestSpendNeedsTwoEligibleApproversAtTwo(t *testing.T) {
 }
 
 // §8.6's admin clause on the log: a grant reaching another member's device needs an admin's approval whatever the
-// rule says, the owner's counting though the rule names only the requester's owner, unless the touched member approves
-// as autogroup:dst-owner for reach to its own device (owner decision 180).
+// rule says, unless the touched member approves as autogroup:dst-owner for reach to its own device (owner decision
+// 180). Under a rule naming only the requester's owner, autogroup:self, the Owner's decision meets the clause and is
+// never one of the k (owner decisions 349 and 471): the requester's owner's decision alone and the Owner's alone do not
+// spend as a set, the two together do, and the Owner's judged alone spends, as the log takes it for the clause; so
+// with §16.6's check installed as AclSpendCheck the GrantActivate takes effect on the two, as
+// TestAclGrantActivateAdminClause's autogroup:self case does on its fake check, and on neither alone.
 func TestSpendAdminClauseOnTheLog(t *testing.T) {
 	net := newTestSpendNet(t)
+	net.log.settings.AclSpendCheck = NewSpendCheck(nil)
 	selfRule := testConfigId("spend admin clause rule").Bytes()
 	net.withDialRuleTo(selfRule, protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER, []Id{AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_SELF)}, 1)
 	grant := testSpendGrantAction(t, selfRule, net.laptop.sidecarId, aclTestDst(net.otherDevice.sidecarId))
@@ -370,9 +378,25 @@ func TestSpendAdminClauseOnTheLog(t *testing.T) {
 	owner := net.deviceDecision(net.owner, grant, approvalId, net.ownerMemberId, net.laptop.sidecarId)
 	_, err := SpendableSet([]*StoredApprovalDecision{own}, input, state, nil)
 	testSpendExpect(t, "the requester's owner alone", err, SpendRefusalQuorum)
-	_, err = SpendableSet([]*StoredApprovalDecision{own, owner}, input, state, nil)
-	testSpendExpect(t, "with the owner's", err, "")
-	testSpendExpect(t, "the owner's alone, eligible by the clause", Spendable(owner, input, state, nil), "")
+	_, err = SpendableSet([]*StoredApprovalDecision{owner}, input, state, nil)
+	testSpendExpect(t, "the Owner's alone, which the rule does not name", err, SpendRefusalQuorum)
+	budget, err := SpendableSet([]*StoredApprovalDecision{own, owner}, input, state, nil)
+	testSpendExpect(t, "with the Owner's", err, "")
+	if budget == nil || len(budget.ApproverMemberIds) != 2 {
+		t.Errorf("the budget %+v", budget)
+	}
+	testSpendExpect(t, "the Owner's judged alone, eligible by the clause", Spendable(owner, input, state, nil), "")
+
+	// the log, its spend check §16.6's: the two activate the grant, neither does alone
+	activate := func(decisions ...*StoredApprovalDecision) *protocol.GrantActivate {
+		return testSpendGrantActivate(net.header(), grant, decisions...)
+	}
+	net.mustRefuse(net.laptop, bridge.SignedType_SIGNED_GRANT_ACTIVATE, activate(own), ErrConfigAuthority)
+	net.mustRefuse(net.laptop, bridge.SignedType_SIGNED_GRANT_ACTIVATE, activate(owner), ErrConfigAuthority)
+	net.mustPost(net.laptop, bridge.SignedType_SIGNED_GRANT_ACTIVATE, activate(own, owner))
+	if !net.acl().Reach(AclSidecarSubject(net.laptop.sidecarId), AclSidecarSubject(net.otherDevice.sidecarId), time.UnixMilli(net.timeMs)).Allowed {
+		t.Error("the activated grant does not reach")
+	}
 
 	dstOwnerRule := testConfigId("spend dst-owner rule").Bytes()
 	net.withDialRuleTo(dstOwnerRule, protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER, []Id{AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_DST_OWNER)}, 1)
@@ -380,6 +404,210 @@ func TestSpendAdminClauseOnTheLog(t *testing.T) {
 	touched := net.deviceDecision(net.otherDevice, reach, NewId(), net.other, net.laptop.sidecarId)
 	_, err = SpendableSet([]*StoredApprovalDecision{touched}, net.input(reach, net.laptop.sidecarId), net.spendState(false), nil)
 	testSpendExpect(t, "the destination's owner as autogroup:dst-owner", err, "")
+}
+
+// A GrantActivate of action at header under its decisions, one approval's, and the grant_id that approval fixes.
+func testSpendGrantActivate(header *bridge.StatementHeader, action *StoredCanonicalAction, decisions ...*StoredApprovalDecision) *protocol.GrantActivate {
+	grantId := AclGrantId(recordIdOf(decisions[0].Decision.GetApprovalId()), action.PayloadSha256())
+	activate := &protocol.GrantActivate{Header: header, GrantId: grantId[:], CanonicalAction: action.Bytes}
+	for _, decision := range decisions {
+		activate.Decisions = append(activate.Decisions, decision.Signed)
+	}
+	return activate
+}
+
+// A member and its consented first device, the member then made an Admin by an AdminSet the owner signs alone, as
+// the threshold of 1 takes it while the set holds two.
+func (self *testSpendNet) adminMember(label string) (Id, testConfigDevice) {
+	self.t.Helper()
+	admin, device := self.consentedMember(label)
+	self.mustPost(self.owner, bridge.SignedType_SIGNED_ADMIN_SET, &protocol.AdminSet{
+		Header: self.header(), Owners: [][]byte{self.ownerMemberId.Bytes()}, Admins: [][]byte{admin.Bytes()},
+	})
+	if role := self.log.State().Member(admin).GetRole(); role != bridge.MemberRole_MEMBER_ROLE_ADMIN {
+		self.t.Fatalf("the admin is %s", role)
+	}
+	acl := self.acl()
+	if !acl.memberAdmin(admin) || !acl.ApprovalCapable(device.sidecarId) || !acl.ConsentedFor(device.sidecarId, admin) {
+		self.t.Fatal("the admin's device is not an approval-capable device of an admin")
+	}
+	return admin, device
+}
+
+// A tagged worker the other member's device admits under a tag that member owns, so that member sponsors it.
+func (self *testSpendNet) otherWorker(label string) testConfigDevice {
+	self.t.Helper()
+	tagId := testConfigId(label + " tag")
+	self.withTagOwner(tagId, self.other)
+	worker := self.device(label, Id{})
+	self.mustPost(self.otherDevice, bridge.SignedType_SIGNED_SIDECAR_ADMIT, self.admission(worker, []Id{tagId}, false, self.timeMs+24*testConfigHourMs, 0))
+	if sponsor, ok := self.acl().destinationOwner([]*protocol.AclTarget{{SidecarId: worker.sidecarId.Bytes()}}, time.UnixMilli(self.timeMs)); !ok || sponsor != self.other {
+		self.t.Fatal("the other member does not sponsor its worker")
+	}
+	return worker
+}
+
+// The team directory's reach rule as Team's starting document and the implicit document carry it (D-ACL-23): dial on
+// members' devices and tagged sidecars, approved by autogroup:dst-owner, k = 1, on device or presence evidence, by a
+// base at the tip.
+func (self *testSpendNet) withDirectoryRule(ruleId []byte) {
+	self.t.Helper()
+	member := protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER
+	tagged := protocol.AclAutogroup_ACL_AUTOGROUP_TAGGED
+	rule := &protocol.AclRequestRule{
+		RuleId:        ruleId,
+		SrcAtoms:      [][]byte{AclAutogroupAtom(member).Bytes(), AclAutogroupAtom(tagged).Bytes()},
+		Targets:       []*protocol.AclTarget{aclAutogroupTarget(member), aclAutogroupTarget(tagged)},
+		Actions:       []uint32{uint32(protocol.AclAction_ACL_ACTION_DIAL)},
+		ApproverAtoms: [][]byte{AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_DST_OWNER).Bytes()},
+		Evidence: []uint32{uint32(protocol.ApprovalChannel_APPROVAL_CHANNEL_DEVICE),
+			uint32(protocol.ApprovalChannel_APPROVAL_CHANNEL_PRESENCE)},
+		MaxExpirySeconds: 30 * 24 * 60 * 60,
+	}
+	self.withAclRows(func(rows *protocol.AclRows) {
+		rows.Requests = slices.DeleteFunc(rows.Requests, func(existing *protocol.AclRequestRule) bool {
+			return bytes.Equal(existing.GetRuleId(), ruleId)
+		})
+		rows.Requests = append(rows.Requests, rule)
+	})
+}
+
+// Owner decision 471 (QD-972) on TEAM's log: under the directory's rule, autogroup:dst-owner at k = 1, a set holding
+// only an Admin's decision, or only the Owner's, on reach to another member's device or to a worker another member
+// sponsors does not spend through SpendableSet, as the requesting daemon's gate and a server gate spending under a
+// template run it, nor through SpendableAtGate, whose field check takes no forward; and the log refuses its
+// GrantActivate. Each lone decision still spends judged alone, which is how the log takes it for §8.6's admin clause.
+// The device's owner's or the worker's sponsor's decision spends, with the Admin's or without, and activates the grant.
+func TestSpendAnAdminAloneUnderTheDirectoryRule(t *testing.T) {
+	net := newTestSpendNet(t)
+	net.log.settings.AclSpendCheck = NewSpendCheck(nil)
+	admin, adminDevice := net.adminMember("spend directory admin")
+	worker := net.otherWorker("spend directory worker")
+	ruleId := testConfigId("spend directory rule").Bytes()
+	net.withDirectoryRule(ruleId)
+	destinations := []struct {
+		name   string
+		device testConfigDevice
+	}{
+		{name: "another member's device", device: net.otherDevice},
+		{name: "a worker another member sponsors", device: worker},
+	}
+	for _, destination := range destinations {
+		// every decision at the tip's pin, before any activation moves the tip past the state judged
+		grant := testSpendGrantAction(t, ruleId, net.laptop.sidecarId, aclTestDst(destination.device.sidecarId))
+		state := net.spendState(false)
+		input := net.input(grant, net.laptop.sidecarId)
+		decide := func(device testConfigDevice, approver Id, approvalId Id) *StoredApprovalDecision {
+			return net.deviceDecision(device, grant, approvalId, approver, net.laptop.sidecarId)
+		}
+		lones := []struct {
+			name     string
+			decision *StoredApprovalDecision
+		}{
+			{name: "an Admin's decision alone", decision: decide(adminDevice, admin, NewId())},
+			{name: "the Owner's decision alone", decision: decide(net.owner, net.ownerMemberId, NewId())},
+		}
+		approvalId := NewId()
+		sponsor := decide(net.otherDevice, net.other, approvalId)
+		beside := decide(adminDevice, admin, approvalId)
+		sponsorAlone := decide(net.otherDevice, net.other, NewId())
+
+		for _, lone := range lones {
+			name := lone.name + ", reaching " + destination.name
+			_, err := SpendableSet([]*StoredApprovalDecision{lone.decision}, input, state, nil)
+			testSpendExpect(t, name+", as a set", err, SpendRefusalQuorum)
+			_, err = SpendableAtGate([]*StoredApprovalDecision{lone.decision}, input, &SpendGateFields{Kind: SidecarActionForward}, state)
+			testSpendExpect(t, name+", at a gate", err, SpendRefusalGateField)
+			testSpendExpect(t, name+", judged alone", Spendable(lone.decision, input, state, nil), "")
+		}
+		_, err := SpendableSet([]*StoredApprovalDecision{sponsorAlone}, input, state, nil)
+		testSpendExpect(t, "the owner's or sponsor's decision, reaching "+destination.name, err, "")
+		_, err = SpendableSet([]*StoredApprovalDecision{sponsor, beside}, input, state, nil)
+		testSpendExpect(t, "the owner's or sponsor's decision with an Admin's, reaching "+destination.name, err, "")
+
+		// the log, its spend check §16.6's, agrees on each set
+		for _, lone := range lones {
+			net.mustRefuse(net.laptop, bridge.SignedType_SIGNED_GRANT_ACTIVATE, testSpendGrantActivate(net.header(), grant, lone.decision), ErrConfigAuthority)
+		}
+		net.mustPost(net.laptop, bridge.SignedType_SIGNED_GRANT_ACTIVATE, testSpendGrantActivate(net.header(), grant, sponsor, beside))
+		net.mustPost(net.laptop, bridge.SignedType_SIGNED_GRANT_ACTIVATE, testSpendGrantActivate(net.header(), grant, sponsorAlone))
+		if !net.acl().Reach(AclSidecarSubject(net.laptop.sidecarId), AclSidecarSubject(destination.device.sidecarId), time.UnixMilli(net.timeMs)).Allowed {
+			t.Errorf("the activated grant does not reach %s", destination.name)
+		}
+	}
+}
+
+// D-ACL-23 under the directory's rule: where no sponsor stands, the worker's sponsor removed, autogroup:dst-owner
+// resolves to autogroup:admin, so an Admin's lone decision is one of the k as well as meeting §8.6's admin clause:
+// it spends as a set and activates the grant (owner decision 349).
+func TestSpendDirectoryRuleCountsAnAdminWhereNoSponsorStands(t *testing.T) {
+	net := newTestSpendNet(t)
+	net.log.settings.AclSpendCheck = NewSpendCheck(nil)
+	admin, adminDevice := net.adminMember("spend orphan admin")
+	worker := net.otherWorker("spend orphan worker")
+	ruleId := testConfigId("spend orphan directory rule").Bytes()
+	net.withDirectoryRule(ruleId)
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_MEMBER_REVOKE, &bridge.MemberRevoke{Header: net.header(), MemberId: net.other.Bytes()})
+	if _, ok := net.acl().destinationOwner([]*protocol.AclTarget{{SidecarId: worker.sidecarId.Bytes()}}, time.UnixMilli(net.timeMs)); ok {
+		t.Fatal("the worker's sponsor still stands")
+	}
+	grant := testSpendGrantAction(t, ruleId, net.laptop.sidecarId, aclTestDst(worker.sidecarId))
+	decision := net.deviceDecision(adminDevice, grant, NewId(), admin, net.laptop.sidecarId)
+	_, err := SpendableSet([]*StoredApprovalDecision{decision}, net.input(grant, net.laptop.sidecarId), net.spendState(false), nil)
+	testSpendExpect(t, "an Admin's decision where autogroup:dst-owner resolves to autogroup:admin", err, "")
+	net.mustPost(net.laptop, bridge.SignedType_SIGNED_GRANT_ACTIVATE, testSpendGrantActivate(net.header(), grant, decision))
+}
+
+// Owner decision 471 at a server gate's own check, SpendableAtGate, on a kind it compares: a publish whose audience is
+// autogroup:public, which §8.6's admin clause holds to an admin's approval, under a rule naming only the requester's
+// owner. An Admin's lone decision meets the clause and is no approver the rule names, so it does not spend; nor does
+// the requester's owner's alone, the clause unmet; the two together spend. For an audience of members, where no clause
+// applies, the requester's owner's decision spends alone and the Admin's is no approver at all.
+func TestSpendAtGateCountsOnlyNamedApprovers(t *testing.T) {
+	net := newTestSpendNet(t)
+	admin, adminDevice := net.adminMember("spend gate admin")
+	ruleId := testConfigId("spend publish rule").Bytes()
+	host := "blog.example"
+	socket := "tls/443/" + host
+	net.withAclRows(func(rows *protocol.AclRows) {
+		rows.Requests = append(rows.Requests, &protocol.AclRequestRule{
+			RuleId:        ruleId,
+			SrcAtoms:      [][]byte{AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER).Bytes()},
+			Targets:       []*protocol.AclTarget{{PublicName: host}, {PublicName: socket}},
+			Actions:       []uint32{uint32(protocol.AclAction_ACL_ACTION_PUBLISH), uint32(protocol.AclAction_ACL_ACTION_LISTEN)},
+			ApproverAtoms: [][]byte{AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_SELF).Bytes()},
+		})
+	})
+	expiresMillis := net.timeMs + 2*testConfigHourMs
+	state := net.spendState(false)
+	for _, audience := range []protocol.AclAudience{protocol.AclAudience_ACL_AUDIENCE_PUBLIC, protocol.AclAudience_ACL_AUDIENCE_MEMBERS} {
+		publish, err := NewCanonicalAction(&protocol.CanonicalAction{
+			Kind: uint32(SidecarActionPublish), Host: host, Port: 443, Audience: uint32(audience),
+			AppMode: uint32(protocol.AclAppMode_ACL_APP_MODE_HTTP), ExpiresMillis: expiresMillis,
+			RuleId: ruleId, Subject: net.laptop.sidecarId.Bytes(), GrantDst: []string{"dns:" + host, "sock:" + socket},
+			GrantAllow: []string{"publish", "listen"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		fields := &SpendGateFields{Kind: SidecarActionPublish, Host: host, Port: 443, Audience: uint32(audience), ExpiresMillis: expiresMillis}
+		input := net.input(publish, net.laptop.sidecarId)
+		approvalId := NewId()
+		own := net.deviceDecision(net.phone, publish, approvalId, net.member, net.laptop.sidecarId)
+		adminDecision := net.deviceDecision(adminDevice, publish, approvalId, admin, net.laptop.sidecarId)
+		spend := func(decisions ...*StoredApprovalDecision) error {
+			_, err := SpendableAtGate(decisions, input, fields, state)
+			return err
+		}
+		if audience == protocol.AclAudience_ACL_AUDIENCE_PUBLIC {
+			testSpendExpect(t, "an Admin's decision alone, the audience public", spend(adminDecision), SpendRefusalQuorum)
+			testSpendExpect(t, "the requester's owner's alone, the audience public", spend(own), SpendRefusalQuorum)
+			testSpendExpect(t, "the two, the audience public", spend(own, adminDecision), "")
+			continue
+		}
+		testSpendExpect(t, "the requester's owner's alone, the audience members", spend(own), "")
+		testSpendExpect(t, "an Admin's decision alone, the audience members", spend(adminDecision), SpendRefusalApprover)
+	}
 }
 
 // AD3: a decision evaluated on a projection the spender knows to be forked is refused, before anything else.
@@ -871,12 +1099,13 @@ type testSpendFixtureState struct {
 	rule            *testSpendFixtureRule
 }
 
-// The fixture's governing rule.
+// The fixture's governing rule: the members it names, who alone count toward k, and the admins whose decision meets
+// the admin clause where it applies, named or not.
 type testSpendFixtureRule struct {
 	refused     bool
 	evidence    []protocol.ApprovalChannel
 	count       int
-	eligible    []Id
+	named       []Id
 	admins      []Id
 	adminNeeded bool
 }
@@ -935,9 +1164,14 @@ func (self *testSpendFixtureRule) ApproverCount() int {
 	return self.count
 }
 
-// Listed eligible, or an admin where the clause applies.
-func (self *testSpendFixtureRule) Eligible(memberId Id) bool {
-	return slices.Contains(self.eligible, memberId) || (self.adminNeeded && slices.Contains(self.admins, memberId))
+// Listed named.
+func (self *testSpendFixtureRule) Names(memberId Id) bool {
+	return slices.Contains(self.named, memberId)
+}
+
+// An admin where the clause applies.
+func (self *testSpendFixtureRule) ClauseAdmin(memberId Id) bool {
+	return self.adminNeeded && slices.Contains(self.admins, memberId)
 }
 
 // An admin among them where the clause applies.
@@ -1023,7 +1257,7 @@ func (self *testSpendWorld) state() *testSpendFixtureState {
 			PublicKey: bytes.Clone(self.presence.publicKey), Purpose: bridge.KeyPurpose_KEY_PURPOSE_PRESENCE,
 			Signer: self.phone.Bytes(), At: 6, NotAfter: self.nowMs + 24*testConfigHourMs,
 		}},
-		rule: &testSpendFixtureRule{evidence: slices.Clone(spendAllChannels), count: 1, eligible: []Id{self.member}},
+		rule: &testSpendFixtureRule{evidence: slices.Clone(spendAllChannels), count: 1, named: []Id{self.member}},
 	}
 	for sidecarId, key := range self.keys {
 		state.identityKeys[sidecarId] = key.Public().(ed25519.PublicKey)
@@ -1127,7 +1361,7 @@ func testSpendVectorCases(t testing.TB) []*testSpendVectorCase {
 	ruleRefused.rule.refused = true
 	cases = append(cases, one("no rule governs", ruleRefused, phoneSigned, SpendRefusalRule))
 	notEligible := world.state()
-	notEligible.rule.eligible = nil
+	notEligible.rule.named = nil
 	cases = append(cases, one("approver not eligible", notEligible, phoneSigned, SpendRefusalApprover))
 	deviceOutside := world.state()
 	deviceOutside.rule.evidence = []protocol.ApprovalChannel{presence}
@@ -1139,7 +1373,7 @@ func testSpendVectorCases(t testing.TB) []*testSpendVectorCase {
 	// sets at k = 2, with the admin clause
 	quorum := world.state()
 	quorum.rule.count = 2
-	quorum.rule.eligible = []Id{world.member, world.other}
+	quorum.rule.named = []Id{world.member, world.other}
 	set := func(name string, state *testSpendFixtureState, refusal SpendRefusalCode, signeds ...*bridge.Signed) *testSpendVectorCase {
 		vector := one(name, state, nil, refusal)
 		vector.decisions = signeds
@@ -1150,7 +1384,7 @@ func testSpendVectorCases(t testing.TB) []*testSpendVectorCase {
 	adminSigned := world.signed(t, world.adminDevice, world.body(world.admin, device))
 	adminClause := world.state()
 	adminClause.rule.count = 2
-	adminClause.rule.eligible = []Id{world.member, world.other}
+	adminClause.rule.named = []Id{world.member, world.other}
 	adminClause.rule.admins = []Id{world.admin}
 	adminClause.rule.adminNeeded = true
 	otherRequestBody := world.body(world.other, device)
@@ -1161,7 +1395,31 @@ func testSpendVectorCases(t testing.TB) []*testSpendVectorCase {
 		set("an approver twice", quorum, SpendRefusalSet, phoneSigned, world.signed(t, world.phone, world.body(world.member, device))),
 		set("two requests", quorum, SpendRefusalSet, phoneSigned, world.signed(t, world.otherDevice, otherRequestBody)),
 		set("the admin clause unmet", adminClause, SpendRefusalQuorum, phoneSigned, otherSigned),
-		set("the admin clause met", adminClause, "", phoneSigned, adminSigned),
+		// an admin the rule does not name meets the clause and is never one of the k (owner decision 471)
+		set("an admin the rule does not name, at k = 2", adminClause, SpendRefusalQuorum, phoneSigned, adminSigned),
+		set("the admin clause met beside k named approvers", adminClause, "", phoneSigned, otherSigned, adminSigned),
+	)
+
+	// at k = 1: the clause met by an admin the rule does not name, beside the one it names; that admin's decision alone
+	// makes no k, though judged alone it spends for the clause, as the log judges each decision it embeds; and an admin
+	// the rule names is one of the k and meets the clause at once
+	clauseOne := world.state()
+	clauseOne.rule.admins = []Id{world.admin}
+	clauseOne.rule.adminNeeded = true
+	namedAdmin := world.state()
+	namedAdmin.rule.count = 2
+	namedAdmin.rule.named = []Id{world.member, world.admin}
+	namedAdmin.rule.admins = []Id{world.admin}
+	namedAdmin.rule.adminNeeded = true
+	noClause := world.state()
+	noClause.rule.admins = []Id{world.admin}
+	cases = append(cases,
+		set("the admin clause met by an admin the rule does not name", clauseOne, "", phoneSigned, adminSigned),
+		set("an admin the rule does not name, alone", clauseOne, SpendRefusalQuorum, adminSigned),
+		set("the approver the rule names alone, the admin clause unmet", clauseOne, SpendRefusalQuorum, phoneSigned),
+		one("an admin the rule does not name, judged alone for the clause", clauseOne, adminSigned, ""),
+		set("an admin the rule names, at k = 2", namedAdmin, "", phoneSigned, adminSigned),
+		one("an admin the rule does not name, where no clause applies", noClause, adminSigned, SpendRefusalApprover),
 	)
 	return cases
 }
@@ -1262,12 +1520,13 @@ type testSpendDeviceJson struct {
 	MemberId  string `json:"member_id"`
 }
 
-// The governing rule in the file.
+// The governing rule in the file: named the members who count toward k, admins those whose decision meets the admin
+// clause where admin_needed, named or not.
 type testSpendRuleJson struct {
 	Refused     bool     `json:"refused"`
 	Evidence    []uint32 `json:"evidence"`
 	Count       int      `json:"count"`
-	Eligible    []string `json:"eligible"`
+	Named       []string `json:"named"`
 	Admins      []string `json:"admins"`
 	AdminNeeded bool     `json:"admin_needed"`
 }
@@ -1290,7 +1549,7 @@ func testSpendVectorToJson(t testing.TB, vector *testSpendVectorCase) testSpendV
 		Forked: state.forked,
 		Rule: testSpendRuleJson{
 			Refused: state.rule.refused, Count: state.rule.count,
-			Eligible: testSpendHexIds(state.rule.eligible), Admins: testSpendHexIds(state.rule.admins), AdminNeeded: state.rule.adminNeeded,
+			Named: testSpendHexIds(state.rule.named), Admins: testSpendHexIds(state.rule.admins), AdminNeeded: state.rule.adminNeeded,
 		},
 	}
 	for _, channel := range state.rule.evidence {
@@ -1375,8 +1634,8 @@ func testSpendVectorFromJson(t testing.TB, vectorJson testSpendVectorJson) *test
 	for _, channel := range stateJson.Rule.Evidence {
 		state.rule.evidence = append(state.rule.evidence, protocol.ApprovalChannel(channel))
 	}
-	for _, member := range stateJson.Rule.Eligible {
-		state.rule.eligible = append(state.rule.eligible, id(member))
+	for _, member := range stateJson.Rule.Named {
+		state.rule.named = append(state.rule.named, id(member))
 	}
 	for _, member := range stateJson.Rule.Admins {
 		state.rule.admins = append(state.rule.admins, id(member))
@@ -1399,11 +1658,12 @@ func testSpendVectorFromJson(t testing.TB, vectorJson testSpendVectorJson) *test
 func testComputeSpendVectors(t testing.TB) []byte {
 	file := &testSpendVectorFile{
 		Comment: "MCP-M3-03's spend check vectors: each case's state (P's pin and retained chains, whether it is known " +
-			"forked, identity keys, approval-capable devices, presence key rows as stored and the governing rule), its " +
-			"Signed ApprovalDecisions and CanonicalAction as stored, the spender, the verifier's time in ms, whether a " +
-			"use is reserved, whether it is judged as a k-approver set, and the SpendRefusalCode it ends in, empty when " +
-			"it spends. Synthetic keys from fixed seeds; signatures are deterministic. go test -run TestSpendVectors " +
-			"-update-spend-vectors rewrites this file.",
+			"forked, identity keys, approval-capable devices, presence key rows as stored and the governing rule: the " +
+			"members it names, who alone count toward its k, and the admins whose decision meets the admin clause " +
+			"where admin_needed, named or not), its Signed ApprovalDecisions and CanonicalAction as stored, the " +
+			"spender, the verifier's time in ms, whether a use is reserved, whether it is judged as a k-approver set, " +
+			"and the SpendRefusalCode it ends in, empty when it spends. Synthetic keys from fixed seeds; signatures are " +
+			"deterministic. go test -run TestSpendVectors -update-spend-vectors rewrites this file.",
 	}
 	for _, vector := range testSpendVectorCases(t) {
 		file.Vectors = append(file.Vectors, testSpendVectorToJson(t, vector))

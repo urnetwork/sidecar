@@ -4,7 +4,9 @@
 // RecordApprovals, which picks the log a request goes to and reads a decision back, so this file holds no second
 // route table:
 //
-//	file    ApprovalRouter: the approvers P names for the action (ApprovalStates.Approvers), then the ApprovalRequest,
+//	file    ApprovalRouter: the approvers P names for the action (ApprovalStates.Approvers: the members the governing
+//	        rule names, and its Owners and Admins only where §8.6's admin clause needs one none of those meets), then
+//	        the ApprovalRequest,
 //	        tainted as the run file reads at this moment and not_after ApprovalRequestTimeout away, or the action's
 //	        own expiry where sooner (MCP.md's reading 3), written as stored into the ledger and fsynced before
 //	        FileRequest files it; a filed row then notes that the log took it, so a request the log refused (no team
@@ -77,8 +79,10 @@ var (
 type ApprovalStates interface {
 	SpendState
 	// The members who approve action for requester at P at time now (§8.6's approvers, ApprovalRequest.approvers):
-	// every member the governing rule finds eligible, a role autogroup's members listed out, sorted. An error where
-	// a rule should govern and none takes the action, or where no member approves.
+	// every member the governing rule names, a role autogroup's members listed out, and the Owners and Admins whose
+	// decision meets §8.6's admin clause only where the clause needs one and no member the rule names is an admin,
+	// sorted (owner decision 471), so the flow asks no one for a decision the log would not count. An error where a
+	// rule should govern and none takes the action, or where the rule names no member.
 	Approvers(action *StoredCanonicalAction, requester Id, now time.Time) ([]Id, error)
 	// Whether the requests rule governing action names harness in its own evidence list, the one place a harness
 	// decision counts in a tainted run (owner decision 142): false for an action no rule names, and where the state
@@ -103,7 +107,7 @@ func NewConfigApprovalStates(config *ConfigState, forked bool, local *AclLocalPo
 	return &ConfigApprovalStates{ConfigSpendState: spendState, local: local}, nil
 }
 
-// Every member of the state the governing rule finds eligible, sorted.
+// The members of the state the governing rule names, and its admins where the clause needs one, sorted.
 func (self *ConfigApprovalStates) Approvers(action *StoredCanonicalAction, requester Id, now time.Time) ([]Id, error) {
 	rule, err := self.Govern(action, requester, now)
 	if err != nil {
@@ -121,20 +125,33 @@ func (self *ConfigApprovalStates) RuleNamesHarness(action *StoredCanonicalAction
 	return request != nil && request.NamesHarness
 }
 
-// The members of memberIds rule finds eligible, sorted and once each, or an error where none is.
+// The members of memberIds rule names, and the Owners and Admins among them whose decision meets §8.6's admin clause
+// only where the named ones cannot meet it themselves (rule.AdminClauseMet over them fails: the clause applies, none
+// of them is an admin, and no destination's one owner among them approves as autogroup:dst-owner for reach to its own
+// devices). Sorted and once each, or an error where the rule names no member, since no set could then make its k and
+// an admin asked alone would approve nothing the log counts.
 func approvalEligibleMembers(rule SpendRule, memberIds []Id) ([]Id, error) {
-	approvers := []Id{}
+	named := []Id{}
+	clauseAdmins := []Id{}
 	for _, memberId := range memberIds {
-		if rule.Eligible(memberId) {
-			approvers = append(approvers, memberId)
+		switch {
+		case rule.Names(memberId):
+			named = append(named, memberId)
+		case rule.ClauseAdmin(memberId):
+			clauseAdmins = append(clauseAdmins, memberId)
 		}
 	}
-	slices.SortFunc(approvers, Id.Cmp)
-	approvers = slices.Compact(approvers)
-	if len(approvers) == 0 {
-		return nil, fmt.Errorf("%w: no member approves the action", ErrAclRequestNoMatch)
+	slices.SortFunc(named, Id.Cmp)
+	named = slices.Compact(named)
+	if len(named) == 0 {
+		return nil, fmt.Errorf("%w: no member the rule names approves the action", ErrAclRequestNoMatch)
 	}
-	return approvers, nil
+	if rule.AdminClauseMet(named) {
+		return named, nil
+	}
+	approvers := slices.Concat(named, clauseAdmins)
+	slices.SortFunc(approvers, Id.Cmp)
+	return slices.Compact(approvers), nil
 }
 
 // The approval family's log as the requester uses it: RecordApprovals (RECORD-M3-07), or a test's.

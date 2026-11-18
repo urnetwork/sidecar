@@ -1,7 +1,8 @@
 //go:build !ios_extension
 
 // MCP-M3-05: the requester's half of §16.6 on a fake approval log, the spend tests' fixture state and a real ledger
-// and run store: the same action, run and agent find their waiting request, across a restart too; the request's taint
+// and run store: the same action, run and agent find their waiting request, across a restart too; the request's
+// approvers on TEAM's real log are the ones the authorization log counts (owner decision 471); the request's taint
 // is the run file's; a decision for an unknown request is ignored and a forged one is not kept; a presence decision's
 // signCount is compared once, durably; the status walks its states; each Outcome files its approval_use; and no log
 // line carries a summary or a preview.
@@ -546,6 +547,80 @@ func TestSameActionFindsPendingRequest(t *testing.T) {
 	wantNotAfter := world.clock.Now().Add(defaultSidecarMcpSettings().ApprovalRequestTimeout).UnixMilli()
 	if request.GetNotAfterMillis() != wantNotAfter {
 		t.Errorf("not_after %d, want %d", request.GetNotAfterMillis(), wantNotAfter)
+	}
+}
+
+// ConfigApprovalStates.Approvers on TEAM's log names the approvers the authorization log counts (owner decision 471,
+// QD-972). Under the directory's rule, autogroup:dst-owner, a reach request to another member's device names that
+// member alone, neither an Admin nor the Owner, whose decisions would count for nothing there. Under a rule naming
+// only the requester's owner, reach to another member's device names the requester's owner and, the admin clause then
+// needing an admin that no named approver is, every Owner and Admin; reach to the requester's own device asks no
+// clause and names the requester's owner alone; a rule naming a group that holds an Admin names that group alone,
+// its Admin meeting the clause; an action no requests rule names takes the requester's owner; and a rule naming no
+// member files nothing, since no admin asked alone could make its k.
+func TestApproversAreTheOnesTheLogCounts(t *testing.T) {
+	net := newTestSpendNet(t)
+	admin, _ := net.adminMember("approvers admin")
+	directoryRule := testConfigId("approvers directory rule").Bytes()
+	net.withDirectoryRule(directoryRule)
+	selfRule := testConfigId("approvers self rule").Bytes()
+	net.withDialRuleTo(selfRule, protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER, []Id{AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_SELF)}, 1)
+	groupRule := testConfigId("approvers group rule").Bytes()
+	group := testConfigId("approvers group")
+	net.withDialRuleTo(groupRule, protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER, []Id{group}, 1,
+		&protocol.AclAtom{Atom: group.Bytes(), MemberIds: [][]byte{admin.Bytes(), net.other.Bytes()}})
+	emptyRule := testConfigId("approvers empty group rule").Bytes()
+	emptyGroup := testConfigId("approvers empty group")
+	net.withDialRuleTo(emptyRule, protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER, []Id{emptyGroup}, 1, &protocol.AclAtom{Atom: emptyGroup.Bytes()})
+	states, err := NewConfigApprovalStates(net.log.State(), false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.UnixMilli(net.timeMs)
+	sorted := func(memberIds ...Id) []Id {
+		slices.SortFunc(memberIds, Id.Cmp)
+		return memberIds
+	}
+	cases := []struct {
+		name   string
+		action *StoredCanonicalAction
+		want   []Id
+	}{
+		{
+			name:   "the directory's rule, reach to another member's device",
+			action: testSpendGrantAction(t, directoryRule, net.laptop.sidecarId, aclTestDst(net.otherDevice.sidecarId)),
+			want:   []Id{net.other},
+		},
+		{
+			name:   "autogroup:self, reach to another member's device",
+			action: testSpendGrantAction(t, selfRule, net.laptop.sidecarId, aclTestDst(net.otherDevice.sidecarId)),
+			want:   sorted(net.member, net.ownerMemberId, admin),
+		},
+		{
+			name:   "autogroup:self, reach to the requester's own device",
+			action: testSpendGrantAction(t, selfRule, net.laptop.sidecarId, aclTestDst(net.phone.sidecarId)),
+			want:   []Id{net.member},
+		},
+		{
+			name:   "a group holding an Admin, reach to another member's device",
+			action: testSpendGrantAction(t, groupRule, net.laptop.sidecarId, aclTestDst(net.otherDevice.sidecarId)),
+			want:   sorted(admin, net.other),
+		},
+		{
+			name:   "an action no requests rule names",
+			action: testSpendDnsAction(t, "192.0.2.30"),
+			want:   []Id{net.member},
+		},
+	}
+	for _, c := range cases {
+		approvers, err := states.Approvers(c.action, net.laptop.sidecarId, now)
+		if err != nil || !slices.Equal(approvers, c.want) {
+			t.Errorf("%s: %v, %v, want %v", c.name, approvers, err, c.want)
+		}
+	}
+	empty := testSpendGrantAction(t, emptyRule, net.laptop.sidecarId, aclTestDst(net.otherDevice.sidecarId))
+	if approvers, err := states.Approvers(empty, net.laptop.sidecarId, now); !errors.Is(err, ErrAclRequestNoMatch) {
+		t.Errorf("a rule naming no member: %v, %v", approvers, err)
 	}
 }
 
