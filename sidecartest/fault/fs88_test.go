@@ -17,7 +17,7 @@ package fault
 // After every step, FI-26 as the directory world holds it. Not here: the MCP tools' taint fsync and its failure
 // (mcp/tools_directory_test.go, RECORD-M6-22), ur directory ls on a non-terminal (cli/directory_cmd_test.go,
 // RECORD-M6-23), .ur's narrowing and widening (CORE-M6-02's daemon claims tests), FI-21 itself (TEST-M10-02's oracle),
-// and the search_agents cases at the later of M6-out and M10-out.
+// and the search_agents cases at the later of M6-out and M10-out (fs88_search_test.go, on the sidecar_testhooks build).
 
 import (
 	"bytes"

@@ -1160,11 +1160,16 @@ func (self *searchWorldSource) Fetch(ctx context.Context, files []*indexFileVers
 // file's plaintext sealed as evs seals a general repo's kind-5 record under generation 1: its header under
 // manifest_1 and its object key's 72 B block under fek_1 (QD-524), with what opens it for the cache's check.
 func (self *SearchTestWorld) seal(file *indexFileVersion, plaintext []byte) (*SearchCacheRecord, error) {
-	manifestKey, err := NewEvsManifestKey(self.repoKey)
+	return searchTestSeal(self.repoKey, self.repoId, self.refId, file, plaintext)
+}
+
+// seal under repoKey, a generation of repoId's key, for a file of its ref refId.
+func searchTestSeal(repoKey *EvsRepoKey, repoId Id, refId Id, file *indexFileVersion, plaintext []byte) (*SearchCacheRecord, error) {
+	manifestKey, err := NewEvsManifestKey(repoKey)
 	if err != nil {
 		return nil, err
 	}
-	fekKey, err := NewEvsFekKey(self.repoKey)
+	fekKey, err := NewEvsFekKey(repoKey)
 	if err != nil {
 		return nil, err
 	}
@@ -1175,7 +1180,7 @@ func (self *SearchTestWorld) seal(file *indexFileVersion, plaintext []byte) (*Se
 	}
 	fileId := NewId()
 	header := &EvsRecordHeader{
-		RecordId: NewId(), Generation: 1, BodyLength: uint64(len(plaintext)), Kind: protocol.EvsRecordKind_EVS_RECORD_CHECKPOINT,
+		RecordId: NewId(), Generation: repoKey.generation, BodyLength: uint64(len(plaintext)), Kind: protocol.EvsRecordKind_EVS_RECORD_CHECKPOINT,
 		KeyRefKind: protocol.EvsKeyRefKind_EVS_KEY_REF_CONTAINER, OidKind: protocol.EvsOidKind_EVS_OID_SHA1,
 	}
 	oid := sha256.Sum256([]byte(file.path))
@@ -1194,7 +1199,7 @@ func (self *SearchTestWorld) seal(file *indexFileVersion, plaintext []byte) (*Se
 	sealed := out.Bytes()
 	opened := writer.Header()
 	return &SearchCacheRecord{
-		Key:              SearchCacheKey{RepoId: self.repoId, RefId: self.refId, Path: file.path, Version: file.version},
+		Key:              SearchCacheKey{RepoId: repoId, RefId: refId, Path: file.path, Version: file.version},
 		RefVersion:       file.commitVersion,
 		ContentSha256:    sha256.Sum256(plaintext),
 		SealedHeader:     sealed[:EvsRecordHeaderByteCount],

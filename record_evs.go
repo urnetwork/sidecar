@@ -89,9 +89,10 @@ const (
 	recordEvsJournalErase     = "erase"
 	// a stream's ref name after its writer's ur/<Id.String()>/, the dashed id every ur/ name spells (QD-926, QD-485)
 	recordStreamRefNameRest = "record"
-	// the repo/ format whose streams this binding reads, format 1's (§11.6's format row); repo/'s own constant lives
-	// off the sidecar_http leg
-	evsRecordStreamsFormat = 1
+	// the newest repo/ format whose streams this binding reads (§11.6's format row): format 2's, where a log's
+	// streams stay creates-only pushes with their slot, as format 1's are, beside the versionless files the team
+	// directory's cards ref gains (§16.11's ref cards row); repo/'s own constant lives off the sidecar_http leg
+	evsRecordStreamsFormat = 2
 	// the digests' labels
 	recordEvsPushDigestLabel    = "urnetwork-sidecar-v1/record-stream-push\x00"
 	recordEvsDepositDigestLabel = "urnetwork-sidecar-v1/record-stream-deposit\x00"
@@ -520,7 +521,7 @@ func (self *RecordEvsStreams) listHeads(ctx context.Context, repoId Id) ([]*prot
 		return nil, recordEvsRefusal(err)
 	}
 	if evsRecordStreamsFormat < reply.GetFormat() {
-		return nil, fmt.Errorf("%w: a format-%d log's streams are M10's", ErrEvsFormatUnsupported, reply.GetFormat())
+		return nil, fmt.Errorf("%w: a format-%d log's streams are past this build", ErrEvsFormatUnsupported, reply.GetFormat())
 	}
 	return reply.GetRefs(), nil
 }

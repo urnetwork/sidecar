@@ -283,7 +283,8 @@ func (self *indexEvsStore) History(ctx context.Context, path string, refVersion 
 	return files, nil
 }
 
-// See indexRefStore.
+// See indexRefStore. A version Retained named carries no hash: its history gives none, and evs's reader has held the
+// bytes to the entry's own sealed fields.
 func (self *indexEvsStore) Read(ctx context.Context, file *indexFileVersion) ([]byte, error) {
 	refId, err := self.refId(ctx)
 	if err != nil {
@@ -293,7 +294,7 @@ func (self *indexEvsStore) Read(ctx context.Context, file *indexFileVersion) ([]
 	if err != nil {
 		return nil, err
 	}
-	if sha256.Sum256(plaintext) != file.contentSha256 {
+	if file.contentSha256 != ([sha256.Size]byte{}) && sha256.Sum256(plaintext) != file.contentSha256 {
 		return nil, fmt.Errorf("%w: plaintext hash mismatch", ErrEvsSealInvalid)
 	}
 	return plaintext, nil
@@ -420,6 +421,34 @@ func (self *indexEvsStore) Retained(ctx context.Context) (*indexRetained, error)
 		return nil, err
 	}
 	retained := &indexRetained{}
+	// the slots a committed ERASE names a key of, read once a path shows a version beside its newest: a version whose
+	// every slot is among them opens under no key, its staged bytes with it, so it is none the ref still stores
+	var erasedSlots map[Id]bool
+	keyErased := func(version *EvsHistoryVersion) (bool, error) {
+		if len(version.SlotIds) == 0 {
+			return false, nil
+		}
+		if erasedSlots == nil {
+			erasures, err := self.repo.ReadErasures(ctx, 0)
+			if err != nil {
+				return false, err
+			}
+			erasedSlots = map[Id]bool{}
+			for _, erasure := range erasures {
+				for _, key := range erasure.Keys {
+					if key.KeyIndex == evsChainSlotKeyIndex {
+						erasedSlots[key.SlotId] = true
+					}
+				}
+			}
+		}
+		for _, slotId := range version.SlotIds {
+			if !erasedSlots[slotId] {
+				return false, nil
+			}
+		}
+		return true, nil
+	}
 	for _, file := range listing.files {
 		parsed, ok := indexParsePath(file.path, self.companion)
 		if !ok || !indexPathHoldsDocuments(parsed.kind) {
@@ -433,6 +462,11 @@ func (self *indexEvsStore) Retained(ctx context.Context) (*indexRetained, error)
 		for index := 1; index < len(history.Versions); index += 1 {
 			version, replacer := history.Versions[index], history.Versions[index-1]
 			if version.Removed {
+				continue
+			}
+			if erased, err := keyErased(version); err != nil {
+				return nil, err
+			} else if erased {
 				continue
 			}
 			retained.versions = append(retained.versions, &indexRetainedVersion{
