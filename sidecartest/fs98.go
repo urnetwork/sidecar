@@ -193,6 +193,9 @@ type Fs98Settings struct {
 	// How long a statement a host signs lives, so when a proposal it files expires: SidecarSettings.StatementTimeout
 	// of every host. Zero keeps the Sidecar's default.
 	StatementTimeout time.Duration
+	// The network's acl compile (AdmissionTier.AclCompile): nil for the suite's stand-in, AclAdmissionCompile for a
+	// world whose policy document grants what its rows say (MAIL-M8-10's receivers and aliases).
+	AclCompile sidecar.ConfigAclCompiler
 }
 
 // The defaults, a fresh value each call.
@@ -231,6 +234,7 @@ func NewFs98World(t AdmissionT, net *Net, settings *Fs98Settings) *Fs98World {
 	context.AfterFunc(net.Context(), func() {
 		os.RemoveAll(directory)
 	})
+	tier.AclCompile = settings.AclCompile
 	self.admission = NewAdmissionNet(t, tier)
 	return self
 }

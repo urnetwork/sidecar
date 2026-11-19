@@ -112,7 +112,10 @@ func scenarioRows() []*ScenarioRow {
 		}},
 		{Id: "S8", Flow: "F7", Tiers: t2t3t6, Gates: []string{"M4-out"}, Owners: []string{"BRIDGE-M4-22"}},
 		{Id: "S9", Flow: "F8", Tiers: t2t3, Gates: []string{"M3-out"}, Owners: []string{"MCP-M3-26"}},
-		{Id: "S10", Flow: "F10", Tiers: t2t3t6, Gates: []string{"M9-out"}, Owners: []string{"MAIL-M9-06"}},
+		{Id: "S10", Flow: "F10", Tiers: t2t3t6, Gates: []string{"M9-out"}, Owners: []string{"MAIL-M8-10", "MAIL-M9-06"}, Clauses: []string{
+			"burned-label-550-no-dns-change", "receive-only-burner-creates-no-child",
+			"first-selector-keeps-blabel-mx-and-a", "last-selector-restores-wildcard-only",
+		}},
 		{Id: "S11", Flow: "F11", Tiers: t2t3, Gates: []string{"M10-out"}, Owners: []string{"SEARCH-M10-39"}},
 		{Id: "S12", Flow: "F12", Tiers: t2t3, Gates: []string{"M10-out"}, Owners: []string{"SEARCH-M10-39"}},
 		{Id: "S13", Flow: "F13", Tiers: t2t3, Gates: []string{"M6-out"}, Owners: []string{"RECORD-M6-26"}},
