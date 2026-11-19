@@ -52,6 +52,9 @@ type BenchCorpusSettings struct {
 	// The common words, and the Zipf law's exponent they are drawn by.
 	VocabularyCount int
 	ZipfExponent    float64
+	// A pseudo-word's letters: at least WordMinLength, and up to WordLengthSpread more.
+	WordMinLength    int
+	WordLengthSpread int
 	// Words in a subject and in a body.
 	SubjectWordCount int
 	BodyWordCount    int
@@ -62,6 +65,7 @@ type BenchCorpusSettings struct {
 	ShardDocumentCount int
 }
 
+// §22.8's mailbox: five years at 100 a day.
 func DefaultBenchCorpusSettings() *BenchCorpusSettings {
 	return &BenchCorpusSettings{
 		Seed:               1,
@@ -69,6 +73,8 @@ func DefaultBenchCorpusSettings() *BenchCorpusSettings {
 		MessagesPerDay:     100,
 		VocabularyCount:    20000,
 		ZipfExponent:       1.1,
+		WordMinLength:      5,
+		WordLengthSpread:   5,
 		SubjectWordCount:   5,
 		BodyWordCount:      60,
 		RareWordCount:      200,
@@ -107,15 +113,16 @@ type BenchCorpus struct {
 // A corpus of settings ending at now.
 func NewBenchCorpus(settings *BenchCorpusSettings, now time.Time) (*BenchCorpus, error) {
 	if settings.Days <= 0 || settings.MessagesPerDay <= 0 || settings.VocabularyCount <= 1 || settings.ShardDocumentCount <= 0 ||
-		settings.SubjectWordCount <= 0 || settings.BodyWordCount <= 0 || settings.ZipfExponent <= 1 {
-		return nil, errors.New("bench corpus: days, messages, a vocabulary, words, a shard size and an exponent past 1")
+		settings.SubjectWordCount <= 0 || settings.BodyWordCount <= 0 || settings.ZipfExponent <= 1 || settings.WordMinLength < 3 ||
+		settings.WordLengthSpread <= 0 {
+		return nil, errors.New("bench corpus: days, messages, a vocabulary, words of 3 letters or more, a shard size and an exponent past 1")
 	}
 	random := rand.New(rand.NewPCG(uint64(settings.Seed), 0x5eed5eed))
 	words := map[string]bool{}
 	pseudoWord := func() string {
 		for {
 			const consonants, vowels = "bcdfghjklmnprstvwz", "aeiou"
-			length := 5 + random.IntN(5)
+			length := settings.WordMinLength + random.IntN(settings.WordLengthSpread)
 			word := make([]byte, length)
 			for index := range word {
 				if index%2 == 0 {
@@ -262,6 +269,7 @@ type benchTextSource struct {
 	corpus *BenchCorpus
 }
 
+// See sidecar.SearchTextSource: the message at the version the index names, never fetched.
 func (self *benchTextSource) SearchDocuments(ctx context.Context, request *sidecar.SearchTextRequest) ([]*sidecar.IndexDocument, bool, error) {
 	message := self.corpus.Message(string(request.Name))
 	if message == nil || request.Version != 1 {
@@ -307,6 +315,7 @@ type SearchBenchSettings struct {
 	EvidenceDays int
 }
 
+// §22.8's run: both rates over five years, production's settings.
 func DefaultSearchBenchSettings() *SearchBenchSettings {
 	return &SearchBenchSettings{
 		Corpus:            DefaultBenchCorpusSettings(),
@@ -366,6 +375,7 @@ func benchLatencyOf(durations []time.Duration, errs []error, targetP50 time.Dura
 	return figure
 }
 
+// A duration in milliseconds, as the reports give them.
 func benchMillis(duration time.Duration) float64 {
 	return float64(duration) / float64(time.Millisecond)
 }

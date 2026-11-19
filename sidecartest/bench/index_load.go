@@ -102,6 +102,7 @@ type IndexLoadSettings struct {
 	Seed          int64
 }
 
+// The row's load.
 func DefaultIndexLoadSettings() *IndexLoadSettings {
 	return &IndexLoadSettings{
 		WriterCount:       8,
@@ -218,6 +219,7 @@ type indexLoadWriter struct {
 	planIndexed bool
 }
 
+// A leg's world over store: see the file header. A world that fails half built is closed.
 func newIndexLoadWorld(ctx context.Context, settings *IndexLoadSettings, store sidecar.BlobStore, indexed bool) (world *indexLoadWorld, returnErr error) {
 	worldCtx, cancel := context.WithCancel(ctx)
 	clock := sidecar.RealClock{}
@@ -374,6 +376,7 @@ func newIndexLoadWorld(ctx context.Context, settings *IndexLoadSettings, store s
 	return world, nil
 }
 
+// Ends the world: its devices, its engine and what they run on.
 func (self *indexLoadWorld) close() {
 	for index := len(self.closers) - 1; 0 <= index; index -= 1 {
 		self.closers[index]()
@@ -458,14 +461,17 @@ type indexLoadAuthState struct {
 	repoId    sidecar.Id
 }
 
+// See evsservice's auth state: nothing is revoked.
 func (self *indexLoadAuthState) CheckRevocation(ctx context.Context, principal *sidecar.Principal) error {
 	return nil
 }
 
+// See evsservice's auth state: every binding matches.
 func (self *indexLoadAuthState) MatchBinding(principal *sidecar.Principal) evsservice.EvsAuthAnswer {
 	return evsservice.EvsAuthAllowed
 }
 
+// See evsservice's auth state: the world's network on its repo.
 func (self *indexLoadAuthState) HonorScope(principal *sidecar.Principal, repoId sidecar.Id, rights sidecar.AclEvsRights, now time.Time) evsservice.EvsAuthAnswer {
 	if repoId != self.repoId || connect.Id(self.networkId) != principal.NetworkId {
 		return evsservice.EvsAuthDenied
@@ -473,6 +479,7 @@ func (self *indexLoadAuthState) HonorScope(principal *sidecar.Principal, repoId 
 	return evsservice.EvsAuthAllowed
 }
 
+// See evsservice's auth state: the world's repo, general, in its network.
 func (self *indexLoadAuthState) Repo(principal *sidecar.Principal, repoId sidecar.Id) (*evsservice.EvsRepoFacts, evsservice.EvsAuthAnswer) {
 	if repoId != self.repoId {
 		return nil, evsservice.EvsAuthDenied
@@ -486,6 +493,7 @@ type indexLoadGateViews struct {
 	view      sidecar.GkmAuthView
 }
 
+// See evsservice's gate views: the world's network's.
 func (self *indexLoadGateViews) View(networkId sidecar.Id) (sidecar.GkmAuthView, evsservice.EvsAuthAnswer) {
 	if networkId != self.networkId {
 		return nil, evsservice.EvsAuthUnknown
