@@ -21,8 +21,15 @@
 //	             nothing (D-PHASE-9; DESIGN-DETAILS 16.2.3). At launch none is folded: the rules moved to Later
 //	             (QD-1032), and the log refuses every RepoPrefixRules before it reaches this fold
 //	             (acl_statement.go's configAclPrefixRulesDark), so the list stays empty unless a log runs the rules
-//	consented    an owner-bound repo's owner's devices consented at its RepoCreate, and each its owner's
-//	             OwnerConfirm adds; a device consented any other way between bases waits for the next base's compile
+//	owner        RepoCreate's signer's member for an owner-bound kind (vault, mailbox, secret), and for a mailcfg
+//	             whose signer is a member device that writes no config heads: a Team scope's own, its creator's
+//	             member's, as a mailbox is its member's (QD-1093). A config writer's mailcfg names no owner and is
+//	             the network's. Every such mailcfg is owned, a member's second too, so none of them ever reads as
+//	             the network's; which of a member's is its scope's, the first in log order, is the reader's
+//	             (MailRepos.ScopeMailConfigRepo)
+//	consented    an owner-bound repo's owner's devices consented at its RepoCreate, an owned mailcfg's too, and each
+//	             its owner's OwnerConfirm adds; a device consented any other way between bases waits for the next
+//	             base's compile
 //	shrunk time  RepoCreate's entry time_ms as holders_shrunk_time_ms, the repo's t_s while holders_shrunk_at is 0,
 //	             which §7.9's shrink row compares its holders at (QD-883); TEAM's configSetShrunkAt writes both
 //	             fields at each shrink after, and bases carry them, so a verifier that starts at a base reads the
@@ -101,7 +108,17 @@ func FoldAclRepos(repos []*protocol.AclRepo, entries []AclAccessLogEntry) ([]*pr
 				// the making is the repo's t_s until its first shrink (QD-1015)
 				HoldersShrunkTimeMs: statement.TimeMs,
 			}
-			if aclRepoKindOwnerBound(body.GetKind()) {
+			ownerBound := aclRepoKindOwnerBound(body.GetKind())
+			if body.GetKind() == protocol.RepoKind_REPO_KIND_MAILCFG && !verdict.ConfigWriter {
+				// a member device's that writes no config heads: a Team scope's own, its creator's member's (QD-1093).
+				// A verdict naming neither a config writer nor a member is one no check gives, and folds to nothing:
+				// read as unowned it would stand as the network's
+				if verdict.MemberId == (Id{}) {
+					return nil, ErrAclAccessLogFold
+				}
+				ownerBound = true
+			}
+			if ownerBound {
 				repo.OwnerMemberId = verdict.MemberId.Bytes()
 				for _, sidecarId := range verdict.ConsentedSidecarIds {
 					repo.ConsentedSidecarIds = append(repo.ConsentedSidecarIds, sidecarId.Bytes())
@@ -208,7 +225,7 @@ func FoldAclRepos(repos []*protocol.AclRepo, entries []AclAccessLogEntry) ([]*pr
 			repo.PrefixRules = append(repo.PrefixRules, &protocol.AclRepoPrefixRulesRow{Signer: signer, At: at})
 		case *protocol.OwnerConfirm:
 			for _, repo := range next {
-				if !aclRepoKindOwnerBound(repo.GetKind()) || !bytes.Equal(repo.GetOwnerMemberId(), verdict.MemberId.Bytes()) ||
+				if !aclRepoRowOwnerBound(repo) || !bytes.Equal(repo.GetOwnerMemberId(), verdict.MemberId.Bytes()) ||
 					slices.ContainsFunc(repo.GetConsentedSidecarIds(), func(listed []byte) bool { return bytes.Equal(listed, body.GetSidecarId()) }) {
 					continue
 				}
