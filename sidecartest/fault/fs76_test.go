@@ -36,12 +36,18 @@ package fault
 // holding both worlds' text and a phone, each following both refs (NewSearchTestNetworkDevice), search every repo of
 // the network, held to a ledger holding both repos, judged at network and at all breadth alike.
 //
-// Not here, each named for what it waits on: a writer's push omitting a document or dropping or adding trigrams caught by a host with the
-// text (head reproduction from the push's documents and the coverage row's live-entry check, SEARCH-M10-21's, are not
-// fed content on the search world); a build whose uploaded bytes differ (a forged build); an uncovered document found
-// from a desktop's own text (the local layer's journal and overlay, SEARCH-M10-25 and SEARCH-M10-14, are not wired
-// to a device); FS-76 on real engines and T3 (a device's search over EvsRepo, SEARCH-M10-19's source); and the corpus
-// at production scale (this run writes the corpus's default 300 commits).
+// A writer's entries that drop or add a word of the version beside them, hide a live document behind a tombstone or
+// sit at a version the path never held are caught by a host with the text, which raises index_mismatch naming the
+// signer and keeps its own entry (TestFs76ForgedEntriesAreCaughtByAHostWithTheText, on a world of its own, since a
+// device does not serve the host's own entry yet and the forged ones would break the corpus's equality).
+//
+// Not here, each named for what it waits on: a writer's push omitting a document caught by a host with the text (the
+// check judges added entries alone: question search-m10-36-omitted-document-check); the host's own entry served in a
+// mismatched one's place (the local layer, SEARCH-M10-25's, is not wired to a device); a build whose uploaded bytes
+// differ (a forged build); an uncovered document found from a desktop's own text (the local layer's journal and
+// overlay, SEARCH-M10-25 and SEARCH-M10-14, are not wired to a device); FS-76 on real engines and T3 (a device's
+// search over EvsRepo, SEARCH-M10-19's source); and the corpus at production scale (this run writes the corpus's
+// default 300 commits).
 
 import (
 	"context"
@@ -1138,4 +1144,165 @@ func fs76Reproduce(ctx context.Context, repo *fs76Repo, label string) error {
 // FS-76's M10 case on T2: see the file header.
 func TestFs76(t *testing.T) {
 	wantPass(t, runFresh(t, fs76Schedule(t, defaultFs76Settings())))
+}
+
+// FS-76's forged-entries clause (§11.14's coverage row; D-EVS-56; SEARCH-M10-21's check by hosts with the text): every
+// writer of a ref writes its index, so a writer can lie in its own head about the content its push commits. On a notes
+// world an honest writer's pushes check clean on a host holding the text; then another writer's in-ref pushes carry an
+// entry that drops a word of the version it commits, one that adds a word the version never held and a tombstone over
+// a document the push keeps live, and its index-only push plants an entry at a version the path never held. Each is a
+// lie a search shows (a fresh phone misses the dropped word and the hidden document, which the oracle matches), and
+// each is caught by the host with the text: the entry mismatched, index_mismatch raised once naming the index file and
+// the push's signer, and the host's own entry of the document's true version standing in its place. A desktop
+// verifying against its own text finds no hit for the added word. An honest writer's push after them checks clean.
+//
+// Not here: a push that changes its writer's head and leaves a document it commits out of it, the row's "omits a
+// document". The check judges the entries a push adds and coverage counts such a push indexed, so nothing catches it
+// yet (question search-m10-36-omitted-document-check).
+func TestFs76ForgedEntriesAreCaughtByAHostWithTheText(t *testing.T) {
+	world := newFsResultsWorld(t, "forged", protocol.RepoKind_REPO_KIND_GENERAL)
+	ctx := t.Context()
+	honest, mallory := searchId("writer honest"), searchId("writer mallory")
+	keyOf := func(path string) [16]byte {
+		key, err := world.index.DocKey(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return key
+	}
+	checked := func(label string, refVersion uint64) *sidecar.SearchTestTextCheck {
+		check, err := world.index.CheckPushWithText(ctx, refVersion)
+		if err != nil {
+			t.Fatalf("%s: %v", label, err)
+		}
+		return check
+	}
+	clean := func(label string, refVersion uint64, count int) {
+		check := checked(label, refVersion)
+		if check.Checked != count || len(check.Mismatched) != 0 || len(check.Own) != 0 || len(check.Events) != 0 || len(check.Repairs) != 0 {
+			t.Fatalf("%s: a host with the text made %+v of an honest push of %d entries", label, check, count)
+		}
+	}
+	// the one entry of path the push at refVersion lied in: mismatched at entryVersion, the host's own entry of
+	// ownVersion in its place, and one index_mismatch naming the forger's index file
+	caught := func(label string, refVersion uint64, path string, entryVersion uint64, ownVersion uint64) {
+		check := checked(label, refVersion)
+		key := keyOf(path)
+		if version, ok := check.Mismatched[key]; !ok || version != entryVersion || len(check.Mismatched) != 1 {
+			t.Fatalf("%s: the host with the text mismatched %v, not %s at %d alone", label, check.Mismatched, path, entryVersion)
+		}
+		if version, ok := check.Own[key]; !ok || version != ownVersion || len(check.Own) != 1 {
+			t.Fatalf("%s: the host's own entries are %v, not %s at %d alone", label, check.Own, path, ownVersion)
+		}
+		if len(check.Events) != 1 {
+			t.Fatalf("%s: %d events raised", label, len(check.Events))
+		}
+		event := check.Events[0]
+		if event.Kind != sidecar.SidecarEventIndexMismatch || event.SidecarId == nil || *event.SidecarId != mallory ||
+			event.RepoId == nil || *event.RepoId != world.index.RepoId() || event.RefId == nil || *event.RefId != world.index.RefId() ||
+			!strings.HasPrefix(event.Path, ".ur-index/") {
+			t.Fatalf("%s: the event raised is %+v", label, event)
+		}
+	}
+	search := func(host string, query string) *fsResultsSearch {
+		device, err := world.fresh(ctx, searchHostNamed(host), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer device.Close()
+		found, err := fsResultsRun(ctx, device, host, query, sidecar.SearchAll)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return found
+	}
+	// a lie a search shows: a fresh phone does not find query's document, which the oracle matches and holds covered
+	shown := func(label string, query string) {
+		found := search("ios32", query)
+		if len(found.hits) != 0 {
+			t.Fatalf("%s: a fresh phone found %v for %q, so the forged entry hides nothing", label, found.hits, query)
+		}
+		if err := world.hold(found); err == nil {
+			t.Fatalf("%s: the oracle holds nothing against a phone finding nothing for %q", label, query)
+		}
+	}
+	note := func(name string, title string, body string) *sidecar.SearchTestChange {
+		return &sidecar.SearchTestChange{Path: "notes/" + name + ".md", Content: []byte(title + "\n" + body + "\n")}
+	}
+	lie := func(change *sidecar.SearchTestChange, claim *sidecar.SearchTestClaim) *sidecar.SearchTestCommit {
+		commit, err := world.index.CommitIndexedClaiming(ctx, mallory, world.clock.Now(), []*sidecar.SearchTestChange{change}, []*sidecar.SearchTestClaim{claim})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := world.recordContent(mallory, commit, []*sidecar.SearchTestChange{change}); err != nil {
+			t.Fatal(err)
+		}
+		world.clock.Advance(time.Minute)
+		return commit
+	}
+
+	first := []*sidecar.SearchTestChange{
+		note("a", "Field log", "kestrel heron"), note("b", "Tide table", "plover curlew"),
+		note("c", "Hedge walk", "wren dunnock"), note("d", "Garden list", "siskin linnet"),
+		note("e", "Shore list", "turnstone knot"),
+	}
+	commit, err := world.commit(ctx, honest, first...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	world.clock.Advance(time.Minute)
+	firstVersions := commit.Versions
+	clean("the honest writer's first push", commit.RefVersion, len(first))
+	queries := []string{"kestrel", "plover", "wren", "siskin", "turnstone"}
+	if err := world.checkFresh(ctx, nil, nil, "before any forgery", sidecar.SearchAll, queries...); err != nil {
+		t.Fatal(err)
+	}
+
+	// dropped: the version committed holds gannet, and the entry beside it is the old text's
+	edit := note("a", "Field log", "kestrel heron gannet")
+	commit = lie(edit, &sidecar.SearchTestClaim{Path: edit.Path, Content: first[0].Content})
+	caught("an entry dropping a word", commit.RefVersion, edit.Path, commit.Versions[edit.Path], commit.Versions[edit.Path])
+	shown("an entry dropping a word", "gannet")
+
+	// added: the entry holds bittern, which the version committed does not
+	edit = note("b", "Tide table", "plover curlew dunlin")
+	commit = lie(edit, &sidecar.SearchTestClaim{Path: edit.Path, Content: note("b", "Tide table", "plover curlew dunlin bittern").Content})
+	caught("an entry adding a word", commit.RefVersion, edit.Path, commit.Versions[edit.Path], commit.Versions[edit.Path])
+	found := search("desktop", "bittern")
+	if len(found.hits) != 0 {
+		t.Fatalf("a desktop holding the text found %v for a word no document holds", found.hits)
+	}
+	if err := world.hold(found); err != nil {
+		t.Fatal(err)
+	}
+
+	// hidden: a tombstone over a document the push keeps live
+	edit = note("c", "Hedge walk", "wren dunnock firecrest")
+	commit = lie(edit, &sidecar.SearchTestClaim{Path: edit.Path})
+	caught("a tombstone hiding a live document", commit.RefVersion, edit.Path, commit.Versions[edit.Path], commit.Versions[edit.Path])
+	shown("a tombstone hiding a live document", "firecrest")
+
+	// planted: an index-only push's entry at a version the path never held
+	standing := firstVersions["notes/d.md"]
+	plantedVersion := standing + 5
+	planned, err := world.index.PlanPush(ctx, mallory, world.clock.Now(), []*sidecar.SearchTestDocument{
+		{Path: "notes/d.md", Version: plantedVersion, Title: "Garden list", Text: "smew goosander", Time: world.clock.Now()},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plantedAt, err := planned.Commit(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	world.clock.Advance(time.Minute)
+	caught("an entry planted at a version never held", plantedAt, "notes/d.md", plantedVersion, standing)
+
+	// an honest push after them checks clean, the forger's entries standing in the index beside it
+	edit = note("e", "Shore list", "turnstone knot sanderling")
+	commit, err = world.commit(ctx, honest, edit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clean("the honest writer's push after the forgeries", commit.RefVersion, 1)
 }
