@@ -1126,6 +1126,7 @@ type directoryErasureWork struct {
 	remove bool
 }
 
+// A work with nothing found yet.
 func newDirectoryErasureWork() *directoryErasureWork {
 	return &directoryErasureWork{cardsDocuments: map[string]uint64{}, streamDocuments: map[string]uint64{}}
 }
@@ -1517,7 +1518,10 @@ func (self *DirectoryClient) eraseFiles(ctx context.Context, work *directoryEras
 		found map[string]uint64
 		index func(ctx context.Context, repoId Id) (DirectoryErasureIndex, error)
 		cards bool
-	}{{uncutCards, work.cardsDocuments, files.CardsIndex, true}, {uncutStreams, work.streamDocuments, files.StreamsIndex, false}} {
+	}{
+		{names: uncutCards, found: work.cardsDocuments, index: files.CardsIndex, cards: true},
+		{names: uncutStreams, found: work.streamDocuments, index: files.StreamsIndex, cards: false},
+	} {
 		if err := cut(each.names, each.found, each.index, each.cards); err != nil {
 			if errors.Is(err, ErrIndexErasureSetFull) {
 				// the CUT waits while pending erasures finish, and with it everything it fences (§11.12's cut row)
