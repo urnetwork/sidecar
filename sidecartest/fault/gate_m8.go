@@ -94,7 +94,7 @@ func gateM8OutItems(catalog *Catalog) []*GateItem {
 	}
 	items = append(items,
 		&GateItem{
-			Item: "the ledger's T4-16 closed (HANDOFF §10; TEST-M8-01; §17.4, D-BRIDGE-12): on BridgeNet's CGNAT fixture a carrier resolver inside 100.64/10 keeps its /32 carve over UDP and TCP, also at the overlay resolver's own address, and a mutant dropping the carve fails; BRIDGE-M8-03's T6 form of the case is the tests repo's and is not run here",
+			Item: "the ledger's T4-16 closed (HANDOFF §10; TEST-M8-01; §17.4, D-BRIDGE-12): on BridgeNet's CGNAT fixture a carrier resolver inside 100.64/10 keeps its /32 carve over UDP and TCP, also at the overlay resolver's own address, and a mutant dropping the carve fails; BRIDGE-M8-03's T6 form, tests/bridge-cgnat-fixture.sh, takes a system resolver among its carrier addresses and runs on T6's host, never here",
 			Tests: []*GateTest{
 				{Repo: "sidecar", Package: "./sidecartest", Names: []string{
 					"TestBridgeCgnatCarrierResolverKeepsItsCarve", "TestBridgeCgnatDroppingTheResolverCarveFails", "TestBridgeCgnatCarrierResolverAtTheOverlayResolversAddress",

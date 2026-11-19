@@ -12,6 +12,8 @@ import (
 	"testing"
 )
 
+// M8's rows: FS-36 on both tiers and FS-120 on server's rows by their owners' tests, FS-82's coverage case where MAIL
+// wrote it, FS-41's and FS-42's push-token steps, and every other case by the convention, a T4 part reading open.
 func TestGateM8NamesEachRowsTestsWhereTheyRun(t *testing.T) {
 	catalog := DefaultCatalog()
 	data, err := GateFile(catalog)
@@ -67,6 +69,9 @@ func TestGateM8NamesEachRowsTestsWhereTheyRun(t *testing.T) {
 	}
 }
 
+// M8's items: the rules and FI bindings, §22.7's wake row by its two tests and its MX scope row, T4-16 closed on the
+// fixture, the forwarding cases, the indexer paths and prompt, the foreground-only trap waiting on nothing, and T4,
+// the vendors and the census gate open.
 func TestGateM8ItemsSayWhatDevicesAndProductionOwe(t *testing.T) {
 	items, find := gateItemsForTest(t, "M8")
 	find("§22.8's rules on every row")

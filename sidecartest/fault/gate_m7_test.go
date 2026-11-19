@@ -12,6 +12,9 @@ import (
 	"testing"
 )
 
+// M7's rows: FS-13, FS-33, FS-39's labels case and FS-41's and FS-42's M7 steps by their owners' tests alone, FS-47's
+// and FS-82's mail cases and FS-121 by their T2 tests beside the convention's T3 entry, and every other case by the
+// convention, the later-of mailbox cases open on M10's exit.
 func TestGateM7NamesEachRowsTestsWhereTheyRun(t *testing.T) {
 	catalog := DefaultCatalog()
 	data, err := GateFile(catalog)
@@ -87,6 +90,9 @@ func TestGateM7NamesEachRowsTestsWhereTheyRun(t *testing.T) {
 	}
 }
 
+// M7's items: the rules and FI bindings, §22.7's four rows at M7, T4-05 closed by the mixed arrangements, the mailbox
+// re-form with nothing to run, the census harness, and the census and DANE on real senders open on production; the
+// census run once, moved from gate_m1.go, and nothing for the SNI loss.
 func TestGateM7ItemsSayWhatProductionOwes(t *testing.T) {
 	items, find := gateItemsForTest(t, "M7")
 	find("§22.8's rules on every row")
