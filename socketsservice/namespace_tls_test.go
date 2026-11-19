@@ -1514,3 +1514,38 @@ func TestTlsListenNarrowsACertifiedAlias(t *testing.T) {
 		t.Fatalf("tls/443/@ kept %v", got)
 	}
 }
+
+// TLS-M6-03's alias row on T2: an alias's visitor, whose dial carries the alias's name as server_name (TLS-M6-02),
+// finds no listener while no certificate names the alias's pair, every listener's listing of it dropped with its entry
+// kept, a network name's dial reaching them all the same; once one listener's certificate names the pair, every dial
+// for the alias reaches that listener alone.
+func TestTlsListenRoutesAnAliasOnlyToListenersCertifiedForIt(t *testing.T) {
+	scene := newTestTlsRouteScene(t, 3)
+	aliasName := "web.shop.root.example"
+	for index := range scene.listeners {
+		scene.heartbeat(t, index, []string{"h2", "http/1.1"}, []string{aliasName}, nil)
+	}
+	if _, _, code := scene.find(t, []string{"h2"}, aliasName); code != sidecar.SocketErrorCodeNoListener {
+		t.Fatalf("an alias no certificate names answered %q", code)
+	}
+	if primary, _, code := scene.find(t, []string{"h2"}, ""); code != "" || primary < 0 {
+		t.Fatalf("a network name's dial answered %d, %q", primary, code)
+	}
+
+	scene.facts.CustomCertified = []*socketsservice.TlsListenCustomName{{
+		SidecarId: scene.listeners[1].sidecarId,
+		Owner:     socketsservice.TlsListenCustomNameAnyOwner,
+		Name:      "shop.root.example",
+		NotAfter:  scene.world.clock.Now().Add(30 * 24 * time.Hour),
+	}}
+	scene.loadFacts(t)
+	for index := range scene.listeners {
+		scene.heartbeat(t, index, []string{"h2", "http/1.1"}, []string{aliasName}, nil)
+	}
+	for range 50 {
+		primary, backup, code := scene.find(t, []string{"h2"}, aliasName)
+		if code != "" || primary != 1 || (backup != -1 && backup != 1) {
+			t.Fatalf("an alias's dial reached %d and %d, %q", primary, backup, code)
+		}
+	}
+}
