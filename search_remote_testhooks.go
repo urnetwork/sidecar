@@ -24,6 +24,8 @@ import (
 	"errors"
 	"slices"
 	"time"
+
+	"github.com/urnetwork/sidecar/protocol"
 )
 
 // One world a network device follows, and how.
@@ -169,7 +171,8 @@ func NewSearchTestNetworkDevice(ctx context.Context, args *SearchTestNetworkDevi
 			return fail(err)
 		}
 		scope.repos = append(scope.repos, &SearchScopeRepo{
-			RepoId: world.repoId, Kind: world.kind, Readable: true, Refs: []*SearchScopeRef{{RefId: world.refId, Default: true}},
+			RepoId: world.repoId, Kind: world.kind, Readable: true, ReceiptRequired: ref.NonWriter,
+			Refs: []*SearchScopeRef{{RefId: world.refId, Default: true}},
 		})
 	}
 	gkm := &searchTestNetworkGkm{repoKeys: keys, onRecord: args.OnRecord}
@@ -209,14 +212,31 @@ func (self *SearchTestNetworkDevice) State() *SidecarSearchState {
 	return self.state
 }
 
-// One round of every ref now, in the order the device follows them.
+// One round of every ref now, in the order the device follows them; a round that fails leaves the rest to run, and
+// every failure is in the answer.
 func (self *SearchTestNetworkDevice) Sync(ctx context.Context) error {
+	errs := []error{}
 	for _, world := range self.worlds {
 		if err := self.sync.RunRound(ctx, world.repoId, world.refId, false); err != nil && !errors.Is(err, ErrSearchSyncUnfollowed) {
-			return err
+			errs = append(errs, err)
 		}
 	}
-	return nil
+	return errors.Join(errs...)
+}
+
+// Ends every open search and snapshot of repoId, as CORE-M10-04's ApplyErase, ApplyCut and an executed drop do once
+// the device has applied one (SearchSync.EndRepo); the sync's round alone does not.
+func (self *SearchTestNetworkDevice) EndRepo(repoId Id) {
+	self.sync.EndRepo(repoId)
+}
+
+// The repos the device follows, in its order.
+func (self *SearchTestNetworkDevice) RepoIds() []Id {
+	repoIds := []Id{}
+	for _, world := range self.worlds {
+		repoIds = append(repoIds, world.repoId)
+	}
+	return repoIds
 }
 
 // What the device fetched of repoId's ref so far, in order.
@@ -304,6 +324,15 @@ type SearchTestRemoteTransport interface {
 	SetForeground(foreground bool)
 	// Bit 1 toward each indexer asksSearch names.
 	SetAsksSearch(asksSearch func(indexerId Id) bool) error
+}
+
+// SEARCH's search_version this build speaks, which a test's request names.
+const SearchTestRemoteVersion = searchVersion
+
+// A SEARCH request body as a requester's leg builds it (search_remote_wire.go's Z5): request at the wire's one size,
+// its pad filled. A request past the wire's caps is an error.
+func SearchTestRemoteRequestBody(wire *SearchWireSettings, request *protocol.SearchRequest) ([]byte, error) {
+	return searchRemoteBuildRequest(request, wire)
 }
 
 var (
