@@ -122,16 +122,10 @@ var gateEverySweep = RegisterGateSweep(&GateSweep{
 	},
 })
 
-// The items OPS-M1-07's hand-written gates.yml held for later gates, kept until TEST-M5-02 and TEST-M7-01 move each
-// into its own sweep. M2's went into gate_m2_out.go (TEST-M2-19): the nvme run, and the 0x0010 interop artifact,
-// which left the gate with MLS (owner decision 610); M3's into gate_m3.go (TEST-M3-02).
-var (
-	gateM5CarriedSweep = RegisterGateSweep(&GateSweep{
-		Gate:  "M5",
-		Items: []*GateItem{{Item: "S7's SNI-less abuse@<root> case"}},
-	})
-	gateM7CarriedSweep = RegisterGateSweep(&GateSweep{
-		Gate:  "M7",
-		Items: []*GateItem{{Item: "D-MAIL-9's census run, with §14's outbound probe", External: "production: the production edges"}},
-	})
-)
+// The item OPS-M1-07's hand-written gates.yml held for M5, kept until TEST-M5-02 moves it into its own sweep. M2's went
+// into gate_m2_out.go (TEST-M2-19): the nvme run, and the 0x0010 interop artifact, which left the gate with MLS (owner
+// decision 610); M3's into gate_m3.go (TEST-M3-02); M7's census run into gate_m7.go (TEST-M7-01).
+var gateM5CarriedSweep = RegisterGateSweep(&GateSweep{
+	Gate:  "M5",
+	Items: []*GateItem{{Item: "S7's SNI-less abuse@<root> case"}},
+})

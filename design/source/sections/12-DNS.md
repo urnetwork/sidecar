@@ -201,12 +201,15 @@ _dmarc             TXT "v=DMARC1; p=reject; sp=reject; np=reject; adkim=s; aspf=
 <blabel>           a copy of *'s MX, A, AAAA, written in the same journal         D-DNS-11
                    write as its first _domainkey child (RFC 4592 §2.2.1) and
                    deleted with the last selector
-_mta-sts           TXT "v=STSv1; id=<n>"                                          §15; mail on
+_mta-sts           TXT "v=STSv1; id=<n>"                                          §15; mail on, verified
 _smtp._tls         TXT "v=TLSRPTv1; rua=mailto:<report_token>@rpt.bringyour.com"  §15
 ; a copy is one row that dnsedge answers with *'s current records and TTLs, so writes to * and
 ; health drops (12.6) reach it with no further write
 ; an alias zone and each Team scope <scope>.<net>.<root> (owner decisions 40, 58) repeat this set,
 ; with their own mx host and TLSA
+; _mta-sts is published only for a network with network_verified, the zone's mail policy carrying it
+; for no other, and a verification change reconciles the zone (owner decision 630); the review phase
+; adds the receivers' certificates as a condition (DESIGN-DEFER.md's dns-mta-sts-certificate-gate entry)
 
 <root>:
 @                  SOA; NS ns1, ns2; CAA per §13.8 + iodef; below @, only         §12, §13.8

@@ -1,9 +1,12 @@
 //go:build !ios_extension
 
-// §15.7's erasure of mail in format 1 (R-MAIL-5, D-MAIL-5, FS-13, FS-47; §11.12's closure, rekey and reconcile rows;
-// MAIL-M7-16): an admin of a mailbox or a group repo destroys messages' keys, then re-keys every i/ segment that
-// lists them, in parts that a refusal or a crash leaves resumable from what evs holds.
+// §15.7's erasure of mail (R-MAIL-5, D-MAIL-5, FS-13, FS-47; §11.12's closure, rekey and reconcile rows; MAIL-M7-16,
+// and MAIL-M10-02 for a format-2 mailbox): an admin of a mailbox or a group repo destroys messages' keys, then re-keys
+// every i/ segment that lists them, in parts that a refusal or a crash leaves resumable from what evs holds.
 //
+//	cut      in a format-2 mailbox, one where the network is in the format2 gate, the erasure's CUT on the mailbox's
+//	         ref comes before everything below, and the search index's files holding the messages are rewritten
+//	         before the i/ parts (mail_erase_index.go). A format-1 mailbox has neither
 //	first    one ERASE takes each message's own keys, the slot of every retained version of its m/ path, and the slot
 //	         of any deposit of it not yet consumed, so its body is gone at once and a deposit never brings it back
 //	         (FS-13: ingest then consumes that deposit with no message). Its note names the messages by path
@@ -107,6 +110,25 @@ type MailEraseSettings struct {
 	// The closure bytes a day the estimate counts on while an erasure waits: §20.4's evs_closure_bytes_floor, 3
 	// full segments, which no tightening goes under, so the estimate is §11.13's bound. Non-positive gives none.
 	ClosureFloorByteCountPerDay int64
+	// A format-2 mailbox's (mail_erase_index.go). The most bytes of one m/ file the eraser reads to count its chunk
+	// documents: a message at pro.yml's highest mail_inbound_message_bytes with ingest's headers. A file past it is
+	// listed to the bound this size gives. Non-positive reads none.
+	MessageMaxByteCount int
+	// The most a message's extracted text outgrows its bytes by, which bounds its chunk documents where they are not
+	// counted: 4, past a single-byte charset's 3 UTF-8 bytes a byte. Non-positive takes 1.
+	TextGrowthFactor int
+	// The most documents one erasure's CUT lists: 256, about 6 KiB of the erasure set's 16,208 B, so pending erasures
+	// share the set. An erasure of more refuses with ErrMailEraseBatchTooLarge before anything is destroyed.
+	CutDocumentMaxCount int
+	// The messages one trash shred's erasure takes in a format-2 mailbox, each batch one CUT: 64. Non-positive takes 1.
+	ShredBatchMessageCount int
+	// Between tries of a CUT a full erasure set made wait: 10 min, a reading, as the index's re-entry retry.
+	CutRetryInterval time.Duration
+	// The most bytes of one journaled erasure's file. Non-positive journals none.
+	JournalMaxByteCount int64
+	// The index's eraser's and extractor 1's; nil takes DefaultIndexEraseSettings and DefaultIndexFormatSettings.
+	Index       *IndexEraseSettings
+	IndexFormat *IndexFormatSettings
 	// The store's; nil takes DefaultMailStoreSettings.
 	Store *MailStoreSettings
 }
@@ -117,6 +139,12 @@ func DefaultMailEraseSettings() *MailEraseSettings {
 		TrashRetention:              30 * 24 * time.Hour,
 		SegmentRetryCount:           8,
 		ClosureFloorByteCountPerDay: 3008 * 1024,
+		MessageMaxByteCount:         int(DefaultMailIngestSettings().DepositMaxByteCount),
+		TextGrowthFactor:            4,
+		CutDocumentMaxCount:         256,
+		ShredBatchMessageCount:      64,
+		CutRetryInterval:            10 * time.Minute,
+		JournalMaxByteCount:         64 * 1024,
 	}
 }
 
@@ -148,6 +176,14 @@ type MailErasure struct {
 	// The i/ segments still listing a message of it, and their bytes: §11.13's wait row.
 	SegmentsLeft int
 	BytesLeft    int64
+	// A format-2 mailbox's: whether the erasure's CUT stands, so its documents are masked and unpublishable; the
+	// search index's rekey objects still to rewrite and their closure bytes, as the index's eraser counts them while
+	// it waits; and whether its rewrite left a file unproven, so no ERASE said complete and the erasure stays
+	// rewriting (mail_erase_index.go).
+	Fenced           bool
+	IndexObjectsLeft int64
+	IndexBytesLeft   int64
+	Unproven         bool
 	// When evs takes the next part, from the 429's retry_after_ms. Zero unless waiting.
 	NextTry time.Time
 	// §11.13's bound on its end at the allowance's floor. Zero unless waiting.
@@ -157,8 +193,8 @@ type MailErasure struct {
 // The erasure as §5.4's erasure event carries it.
 func (self *MailErasure) Event() *SidecarErasure {
 	return &SidecarErasure{
-		ErasureId: self.ErasureId, State: self.State, ObjectsLeft: int64(self.SegmentsLeft), BytesLeft: self.BytesLeft,
-		NextTry: self.NextTry, Finish: self.Finish,
+		ErasureId: self.ErasureId, State: self.State, ObjectsLeft: int64(self.SegmentsLeft) + self.IndexObjectsLeft,
+		BytesLeft: self.BytesLeft + self.IndexBytesLeft, NextTry: self.NextTry, Finish: self.Finish,
 	}
 }
 
@@ -172,8 +208,12 @@ type MailEraserArgs struct {
 	Authority MailEraseAuthority
 	// Nil purges nothing: a device with no decrypted copies.
 	Purge MailLocalPurge
-	// Called with each erasure's standing as a call leaves it, on the caller's goroutine: §5.4's erasure event.
+	// Called with each erasure's standing as a call leaves it, on the caller's goroutine: §5.4's erasure event. In a
+	// format-2 mailbox the index's eraser raises its own steps through it too, fenced among them.
 	Progress func(erasure *SidecarErasure)
+	// Where a format-2 mailbox's eraser journals an erasure between its CUT and its first ERASE: a directory of the
+	// mail component's sealed store. Nil journals none, and a device killed there leaves a CUT no device finishes.
+	Journal SidecarStore
 	// Nil is real time.
 	Clock Clock
 	// Nil logs nothing.
@@ -196,6 +236,11 @@ type MailEraser struct {
 	clock     Clock
 	log       Logger
 	settings  *MailEraseSettings
+	// A format-2 mailbox's index side (mail_erase_index.go): opened at its first use and kept, nil from indexOpen in
+	// a format-1 mailbox, and a nil indexOpen where the eraser was built over no EvsRepo. Under eraseLock.
+	indexOpen func(ctx context.Context) (*mailEraseIndex, error)
+	index     *mailEraseIndex
+	journal   *mailEraseJournal
 
 	// Held over an erasure step, so one runs at a time.
 	eraseLock sync.Mutex
@@ -211,7 +256,16 @@ func NewMailEraser(args *MailEraserArgs) (*MailEraser, error) {
 		settings = DefaultMailEraseSettings()
 	}
 	store := &mailEraseEvsStore{mailVaultEvsStore: &mailVaultEvsStore{mailEvsStore: newMailEvsStore(args.Repo, nil, settings.Store)}}
-	return newMailEraser(args.Repo.RepoId(), store, &mailIngestEvsRepo{repo: args.Repo}, args), nil
+	eraser := newMailEraser(args.Repo.RepoId(), store, &mailIngestEvsRepo{repo: args.Repo}, args)
+	repo := args.Repo
+	eraser.indexOpen = func(ctx context.Context) (*mailEraseIndex, error) {
+		if !repo.client.Format2Admitted() {
+			// a format-1 mailbox: no CUT, and no index to rewrite
+			return nil, nil
+		}
+		return mailNewEraseIndex(ctx, repo, args, settings)
+	}
+	return eraser, nil
 }
 
 // An eraser of repoId over store's files and deposits' refs.
@@ -236,6 +290,7 @@ func newMailEraser(repoId Id, store mailEraseStore, deposits mailIngestRepo, arg
 		clock:     clockOrReal(args.Clock),
 		log:       log,
 		settings:  settings,
+		journal:   &mailEraseJournal{store: args.Journal, maxByteCount: settings.JournalMaxByteCount},
 	}
 }
 
@@ -278,20 +333,28 @@ func (self *MailEraser) allowed() bool {
 // The slot keys of every retained version of path: what an ERASE names to destroy it. None where the path never
 // stood; ErrMailNotShreddable where a version names no slot.
 func (self *MailEraser) pathKeys(ctx context.Context, path string) ([]*EvsErasedKey, error) {
+	keys, _, err := self.pathKeysAt(ctx, path)
+	return keys, err
+}
+
+// pathKeys, with the path's newest standing version, 0 where none stands.
+func (self *MailEraser) pathKeysAt(ctx context.Context, path string) ([]*EvsErasedKey, uint64, error) {
 	versions, err := self.store.Versions(ctx, path)
 	if errors.Is(err, ErrEvsPathAbsent) {
-		return nil, nil
+		return nil, 0, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	keys := []*EvsErasedKey{}
+	newest := uint64(0)
 	for _, version := range versions {
 		if version.Removed {
 			continue
 		}
+		newest = max(newest, version.Version)
 		if len(version.SlotIds) == 0 {
-			return nil, ErrMailNotShreddable
+			return nil, 0, ErrMailNotShreddable
 		}
 		for _, slotId := range version.SlotIds {
 			if !slices.ContainsFunc(keys, func(key *EvsErasedKey) bool { return key.SlotId == slotId }) {
@@ -299,19 +362,21 @@ func (self *MailEraser) pathKeys(ctx context.Context, path string) ([]*EvsErased
 			}
 		}
 	}
-	return keys, nil
+	return keys, newest, nil
 }
 
 // The slot of each standing deposit whose id is one of messageIds, by message: a deposit not yet consumed, which the
-// first ERASE takes. A deposit that does not open has no key left to take and is passed over.
-func (self *MailEraser) depositKeys(ctx context.Context, messageIds []Id) (map[Id][]*EvsErasedKey, error) {
+// first ERASE takes, and the largest such deposit's size by message. A deposit that does not open has no key left to
+// take and is passed over.
+func (self *MailEraser) depositKeys(ctx context.Context, messageIds []Id) (map[Id][]*EvsErasedKey, map[Id]uint64, error) {
 	keys := map[Id][]*EvsErasedKey{}
+	byteCounts := map[Id]uint64{}
 	if self.deposits == nil {
-		return keys, nil
+		return keys, byteCounts, nil
 	}
 	depositorIds, err := self.deposits.Depositors(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	for _, depositorId := range depositorIds {
 		afterVersion := uint64(0)
@@ -321,6 +386,7 @@ func (self *MailEraser) depositKeys(ctx context.Context, messageIds []Id) (map[I
 				messageId := Id(deposit.EntryId)
 				if slices.Contains(messageIds, messageId) && deposit.SlotId != (Id{}) {
 					keys[messageId] = append(keys[messageId], &EvsErasedKey{SlotId: deposit.SlotId, KeyIndex: mailVaultSlotKeyIndex})
+					byteCounts[messageId] = max(byteCounts[messageId], deposit.Size)
 				}
 				return nil
 			})
@@ -330,19 +396,20 @@ func (self *MailEraser) depositKeys(ctx context.Context, messageIds []Id) (map[I
 				continue
 			}
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			break
 		}
 	}
-	return keys, nil
+	return keys, byteCounts, nil
 }
 
 // Erases the messages of one month: see the file header. A message an ERASE named already is passed over, since
 // Resume finishes its erasure; one with no version and no deposit refuses the call before anything is destroyed,
 // as does one whose versions name no slot. The first ERASE destroys every message's body or none. The result says
 // where the erasure stands: done, or waiting with the time to call Resume, and an error after the first ERASE
-// leaves the erasure for Resume.
+// leaves the erasure for Resume. In a format-2 mailbox the erasure's CUT comes first, an erasure this device journaled
+// and did not begin runs before this one, and an error once the CUT is sent leaves the erasure journaled for Resume.
 func (self *MailEraser) Erase(ctx context.Context, month MailYearMonth, messageIds []Id) (*MailErasure, error) {
 	self.eraseLock.Lock()
 	defer self.eraseLock.Unlock()
@@ -352,46 +419,102 @@ func (self *MailEraser) Erase(ctx context.Context, month MailYearMonth, messageI
 	if _, err := self.Refresh(ctx); err != nil {
 		return nil, err
 	}
+	index, err := self.indexOf(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if index != nil {
+		// an erasure a kill left between its CUT and its first ERASE takes its messages under its own id
+		if _, err := self.resumeJournaled(ctx, index); err != nil {
+			return nil, err
+		}
+	}
 	fresh := []Id{}
 	for _, messageId := range messageIds {
 		if _, erased := self.erased.erased(messageId); !erased && !slices.Contains(fresh, messageId) {
 			fresh = append(fresh, messageId)
 		}
 	}
-	erasure := &MailErasure{MessageIds: fresh, State: MailErasureDone}
 	if len(fresh) == 0 {
-		return erasure, nil
+		return &MailErasure{MessageIds: fresh, State: MailErasureDone}, nil
 	}
-	depositKeys, err := self.depositKeys(ctx, fresh)
+	return self.begin(ctx, NewId(), month, fresh, index)
+}
+
+// Begins the erasure of fresh, none of which an ERASE named, under erasureId: its CUT in a format-2 mailbox, its
+// first ERASE, then its parts. Nil with an error where nothing was destroyed.
+func (self *MailEraser) begin(ctx context.Context, erasureId Id, month MailYearMonth, fresh []Id, index *mailEraseIndex) (*MailErasure, error) {
+	erasure := &MailErasure{MessageIds: fresh, State: MailErasureDone}
+	depositKeys, depositByteCounts, err := self.depositKeys(ctx, fresh)
 	if err != nil {
 		return nil, err
 	}
 	keys := []*EvsErasedKey{}
 	messages := []mailErasedMessage{}
+	// whether any message's m/ file stands: only such a message can be in the search index
+	standing := false
+	documentCount := 0
 	for _, messageId := range fresh {
-		messageKeys, err := self.pathKeys(ctx, MailMessagePath(month, messageId))
+		path := MailMessagePath(month, messageId)
+		messageKeys, version, err := self.pathKeysAt(ctx, path)
 		if err != nil {
 			return nil, err
 		}
+		standing = standing || 0 < version
 		messageKeys = append(messageKeys, depositKeys[messageId]...)
 		if len(messageKeys) == 0 {
 			return nil, ErrMailMessageAbsent
 		}
+		message := mailErasedMessage{Month: month, MessageId: messageId}
+		if index != nil {
+			message.Version, message.ChunkCount, err = self.documentOf(ctx, index, path, version, depositByteCounts[messageId])
+			if err != nil {
+				return nil, err
+			}
+			documentCount += int(message.ChunkCount)
+		}
 		keys = append(keys, messageKeys...)
-		messages = append(messages, mailErasedMessage{Month: month, MessageId: messageId})
+		messages = append(messages, message)
+	}
+	if index != nil && self.settings.CutDocumentMaxCount < documentCount {
+		return nil, ErrMailEraseBatchTooLarge
 	}
 	segments, err := self.segmentsListing(ctx, messages)
 	if err != nil {
 		return nil, err
 	}
-	erasure.ErasureId = NewId()
+	erasure.ErasureId = erasureId
+	if index != nil {
+		if err := self.journal.begin(erasureId, month, fresh); err != nil {
+			return nil, err
+		}
+		erasure.Fenced, err = self.cut(ctx, index, erasureId, messages)
+		if err != nil {
+			if mailEraseCutRefused(err) {
+				// evs committed nothing of it: the erasure never began
+				if doneErr := self.journal.done(erasureId); doneErr != nil {
+					self.log.Warningf("[mail]erase %s: a refused erasure stays journaled: %v", self.repoId, doneErr)
+				}
+			}
+			return nil, err
+		}
+	}
+	// with no i/ row to re-key, this ERASE ends a format-1 erasure, and a format-2 one of messages no m/ file stands
+	// for, which the index never held; any other format-2 erasure ends with its index files' rewrite
+	complete := len(segments) == 0 && (index == nil || !standing)
 	testHookBarrier("mail.erase.message.before", "")
 	err = self.store.Erase(ctx, &EvsEraseArgs{
-		ErasureId: erasure.ErasureId, Keys: keys, Complete: len(segments) == 0, Note: mailErasureNote(messages, nil),
+		ErasureId: erasure.ErasureId, Keys: keys, Complete: complete, Note: mailErasureNote(messages, nil),
 	})
 	testHookBarrier("mail.erase.message.after", "")
 	if err != nil {
 		return nil, err
+	}
+	if index != nil {
+		if err := self.journal.done(erasureId); err != nil {
+			// the next step finds its ERASE in evs's state and drops the entry
+			self.log.Warningf("[mail]erase %s: a begun erasure stays journaled: %v", self.repoId, err)
+		}
 	}
 	for _, message := range messages {
 		self.erased.note(message.Month, message.MessageId, erasure.ErasureId)
@@ -400,14 +523,53 @@ func (self *MailEraser) Erase(ctx context.Context, month MailYearMonth, messageI
 		// the bodies are gone from evs; this device's copies go at its next Refresh or restart
 		self.log.Warningf("[mail]erase %s: the local purge failed: %v", self.repoId, err)
 	}
-	err = self.rewrite(ctx, erasure, messages)
+	if complete {
+		self.report(erasure)
+		return erasure, nil
+	}
+	err = self.parts(ctx, erasure, messages, index, IndexResumeEraser, nil)
 	self.report(erasure)
 	return erasure, err
 }
 
+// An erasure's parts after its first ERASE: in a format-2 mailbox the search index's files first
+// (mail_erase_index.go), then an ERASE for each orphaned CLOSURE a resume found, then the i/ segments' parts, the
+// last ERASE of them completing the erasure where the index's rewrite left nothing unproven. Fills erasure with
+// where it stands.
+func (self *MailEraser) parts(ctx context.Context, erasure *MailErasure, messages []mailErasedMessage, index *mailEraseIndex, role IndexResumeRole, orphans []*EvsClosure) error {
+	segments, err := self.segmentsListing(ctx, messages)
+	if err != nil {
+		erasure.State = MailErasureRewriting
+		return err
+	}
+	mayComplete := true
+	if index != nil && mailErasureDocumented(messages) {
+		ended, err := self.indexParts(ctx, index, erasure, messages, segments, role, len(segments) == 0 && len(orphans) == 0)
+		if err != nil || ended {
+			return err
+		}
+		mayComplete = !erasure.Unproven
+	}
+	// a CLOSURE no ERASE followed: its replaced chain's keys still stand
+	for index, closure := range orphans {
+		testHookBarrier("mail.erase.orphan.before", "")
+		err := self.store.Erase(ctx, &EvsEraseArgs{
+			ErasureId: erasure.ErasureId, Keys: closure.Keys, Complete: mayComplete && len(segments) == 0 && index == len(orphans)-1,
+		})
+		testHookBarrier("mail.erase.orphan.after", "")
+		if err != nil {
+			erasure.State = MailErasureRewriting
+			return err
+		}
+	}
+	return self.rewrite(ctx, erasure, segments, messages, mayComplete)
+}
+
 // Finishes every erasure of the repo no ERASE completed: see the file header's resume row. Each erasure it took up is
 // returned with where it stands; the first that waits or fails ends the call, since the next would meet the same
-// allowance.
+// allowance. In a format-2 mailbox an erasure this device journaled and did not begin runs first, and an erasure
+// another device began is taken up by the index's role rule (mail_erase_index.go), one not yet this device's left
+// rewriting with the time it becomes so.
 func (self *MailEraser) Resume(ctx context.Context) ([]*MailErasure, error) {
 	self.eraseLock.Lock()
 	defer self.eraseLock.Unlock()
@@ -417,22 +579,36 @@ func (self *MailEraser) Resume(ctx context.Context) ([]*MailErasure, error) {
 	if _, err := self.Refresh(ctx); err != nil {
 		return nil, err
 	}
-	erasures, err := self.store.Erasures(ctx, 0)
+	index, err := self.indexOf(ctx)
 	if err != nil {
 		return nil, err
+	}
+	resumed := []*MailErasure{}
+	if index != nil {
+		journaled, err := self.resumeJournaled(ctx, index)
+		resumed = append(resumed, journaled...)
+		if err != nil || slices.ContainsFunc(journaled, func(erasure *MailErasure) bool { return erasure.State != MailErasureDone }) {
+			return resumed, err
+		}
+	}
+	erasures, err := self.store.Erasures(ctx, 0)
+	if err != nil {
+		return resumed, err
 	}
 	type standing struct {
 		complete bool
 		messages []mailErasedMessage
 		// the keys its ERASEs destroyed
 		erasedSlotIds map[Id]bool
+		// the device whose ERASE began it
+		eraserId Id
 	}
 	byId := map[Id]*standing{}
 	order := []Id{}
 	for _, erasure := range erasures {
 		state := byId[erasure.ErasureId]
 		if state == nil {
-			state = &standing{erasedSlotIds: map[Id]bool{}}
+			state = &standing{erasedSlotIds: map[Id]bool{}, eraserId: erasure.EraserSidecarId}
 			byId[erasure.ErasureId] = state
 			order = append(order, erasure.ErasureId)
 		}
@@ -446,13 +622,17 @@ func (self *MailEraser) Resume(ctx context.Context) ([]*MailErasure, error) {
 	}
 	closures, err := self.store.Closures(ctx)
 	if err != nil {
-		return nil, err
+		return resumed, err
 	}
-	resumed := []*MailErasure{}
+	began := slices.Clone(resumed)
 	for _, erasureId := range order {
 		state := byId[erasureId]
 		if state.complete || len(state.messages) == 0 {
 			// done, or another writer's erasure, a vault entry's among them
+			continue
+		}
+		if slices.ContainsFunc(began, func(erasure *MailErasure) bool { return erasure.ErasureId == erasureId }) {
+			// a journaled erasure this call just ran
 			continue
 		}
 		erasure := &MailErasure{ErasureId: erasureId, State: MailErasureRewriting}
@@ -460,10 +640,6 @@ func (self *MailEraser) Resume(ctx context.Context) ([]*MailErasure, error) {
 			erasure.MessageIds = append(erasure.MessageIds, message.MessageId)
 		}
 		resumed = append(resumed, erasure)
-		segments, err := self.segmentsListing(ctx, state.messages)
-		if err != nil {
-			return resumed, err
-		}
 		// a CLOSURE no ERASE followed: its replaced chain's keys still stand
 		orphans := []*EvsClosure{}
 		for _, closure := range closures {
@@ -471,18 +647,7 @@ func (self *MailEraser) Resume(ctx context.Context) ([]*MailErasure, error) {
 				orphans = append(orphans, closure)
 			}
 		}
-		for index, closure := range orphans {
-			testHookBarrier("mail.erase.orphan.before", "")
-			err := self.store.Erase(ctx, &EvsEraseArgs{
-				ErasureId: erasureId, Keys: closure.Keys, Complete: len(segments) == 0 && index == len(orphans)-1,
-			})
-			testHookBarrier("mail.erase.orphan.after", "")
-			if err != nil {
-				self.report(erasure)
-				return resumed, err
-			}
-		}
-		err = self.rewrite(ctx, erasure, state.messages)
+		err = self.parts(ctx, erasure, state.messages, index, self.resumeRole(state.eraserId), orphans)
 		self.report(erasure)
 		if err != nil || erasure.State != MailErasureDone {
 			return resumed, err

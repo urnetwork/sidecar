@@ -133,7 +133,9 @@ directory   the team directory (§16.11; owner decisions 171, 177): phones fetch
             changes, and search them on the device; past the cap List reports partial coverage with
             waiting=metered and the bytes left, continuing on an unmetered link or when the host repeats it
             with AllowMetered; "search more" asks a designated indexer that reads it, fetching buckets and all
-            only for the fallback (remote, above), so phones keep no directory buckets synced; phones lease
+            only for the fallback (remote, above), so phones keep no directory buckets synced; a directory
+            view scopes it to the directory alone by the repo id SidecarDirectory binds (18.5), through the
+            one search entry point (D-SDK-22; owner decision 628); phones lease
             notices for their member's targets and each own pending request's notice path (18.7); ur daemon
             hosts sync cards every 15 min while serving a harness session in the network, at each view or
             search (coalesced to 30 s), else hourly, with the moved streams 64 to a read (§11.9), reproduce
@@ -442,6 +444,10 @@ func (self *SidecarDirectory) List(filter *SidecarDirectoryFilter, listener Side
 	// continues from where it stopped
 func (self *SidecarDirectory) Get(announcementId *Id) *SidecarAnnouncement // attested and identifier fields; prose as
 	// untrusted text for people
+func (self *SidecarDirectory) GetRepoId() *Id // the directory's own repo id, nil while the network has none: a
+	// directory view scopes its "search more" to the directory alone by naming it in SidecarSearchQuery.RepoIds
+	// with Scope "all"; on the remote backend it is nil until the daemon's directory status carries it, the
+	// view's "search more" covering every repo meanwhile (owner decision 628)
 func (self *SidecarDirectory) SetRuns(projectKey string, value string, callback SidecarResultCallback) // this member's
 	// claims, auto | prompt | off, per project ("": its default; owner decision 170)
 func (self *SidecarDirectory) SetWorker(enabled bool, callback SidecarResultCallback) // this sidecar's worker item

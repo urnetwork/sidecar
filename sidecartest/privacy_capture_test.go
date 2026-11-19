@@ -20,6 +20,7 @@ import (
 	"github.com/urnetwork/connect"
 	"github.com/urnetwork/connect/protocol"
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/pushservice"
 )
 
 // A toy HttpEngine with a server's honest shape: it stores what it is given under an opaque id, logs
@@ -205,6 +206,16 @@ func TestEachCaptureClassNamesItsLeak(t *testing.T) {
 			net.Host().Tasks.Schedule(t.Context(), &sidecar.TaskRequest{Name: "job", OnceKey: canary})
 		},
 		PrivacyClassInterceptingProxy: leakThroughInterceptingProxy,
+		PrivacyClassEdgeRecord:        leakThroughEdgeSource(PrivacyClassEdgeRecord),
+		PrivacyClassReportParse:       leakThroughEdgeSource(PrivacyClassReportParse),
+		PrivacyClassFind:              leakThroughEdgeSource(PrivacyClassFind),
+		PrivacyClassDnsEdgeQuery:      leakThroughEdgeSource(PrivacyClassDnsEdgeQuery),
+		PrivacyClassUpstreamResolver:  leakThroughEdgeSource(PrivacyClassUpstreamResolver),
+		PrivacyClassWake: func(t *testing.T, net *Net, canary string) {
+			vendor := NewFakeWakeVendor(pushservice.WakePlatformFcm, net.Clock())
+			net.Capture().AddWakeVendor(vendor)
+			vendor.Send(t.Context(), "synthetic-fcm-token-leak", &pushservice.WakePayload{TopicClass: canary, Version: 1})
+		},
 	}
 	for _, class := range PrivacyClasses() {
 		if _, ok := leaks[class]; !ok && class != PrivacyClassMx4Input {

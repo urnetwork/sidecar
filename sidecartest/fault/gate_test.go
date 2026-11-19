@@ -105,9 +105,11 @@ func TestGateFileNamesEachCasesConventionalTests(t *testing.T) {
 		{gate: "M2", rowId: "FS-9", t2: "TestFs9"},
 		// forged: T2 alone, and its twin on T3
 		{gate: "M2", rowId: "FS-17", t2: "TestFs17", t3: "TestFs17OnT3"},
-		// T3 alone (FS-5 was the example until M2's sweep named its test in evshost)
-		{gate: "M6", rowId: "FS-35", t3: "TestFs35OnT3"},
-		{gate: "M6-in", rowId: "FS-46", t2: "TestFs46", t3: "TestFs46OnT3"},
+		// T3 alone (FS-5 was the example until M2's sweep named its test in evshost, FS-35 until M6's named its test
+		// in tlsedge)
+		{gate: "M5", rowId: "FS-52", t3: "TestFs52OnT3"},
+		// FS-46 at M6's entry was the example until M6's sweep named its owners' tests
+		{gate: "M6", rowId: "FS-98", caseName: "team", t2: "TestFs98Team", t3: "TestFs98TeamOnT3"},
 	} {
 		row := gateFileRow(file, want.gate, want.rowId, want.caseName)
 		if row == nil {

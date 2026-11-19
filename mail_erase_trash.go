@@ -64,15 +64,39 @@ func (self *MailEraser) ShredTrash(ctx context.Context) (*MailTrashShred, error)
 		if len(due) == 0 {
 			continue
 		}
-		erasure, err := self.Erase(ctx, month, due)
-		if erasure != nil {
-			shred.Erasures = append(shred.Erasures, erasure)
-		}
-		if err != nil || (erasure != nil && erasure.State != MailErasureDone) {
-			return shred, err
+		for _, batch := range self.shredBatches(ctx, due) {
+			erasure, err := self.Erase(ctx, month, batch)
+			if erasure != nil {
+				shred.Erasures = append(shred.Erasures, erasure)
+			}
+			if err != nil || (erasure != nil && erasure.State != MailErasureDone) {
+				return shred, err
+			}
 		}
 	}
 	return shred, nil
+}
+
+// A month's due messages as the erasures that take them: all in one in a format-1 mailbox, and in a format-2 mailbox
+// ShredBatchMessageCount an erasure, since each erasure's one CUT lists its messages' documents in the erasure set's
+// bounded room (mail_erase_index.go). A batch whose documents pass one CUT's bound refuses before it destroys
+// anything, and the shred's next call meets it again: a batch of large messages wants a smaller
+// ShredBatchMessageCount.
+func (self *MailEraser) shredBatches(ctx context.Context, due []Id) [][]Id {
+	format2 := func() bool {
+		self.eraseLock.Lock()
+		defer self.eraseLock.Unlock()
+		index, err := self.indexOf(ctx)
+		return err != nil || index != nil
+	}()
+	if !format2 {
+		return [][]Id{due}
+	}
+	batches := [][]Id{}
+	for batch := range slices.Chunk(due, max(self.settings.ShredBatchMessageCount, 1)) {
+		batches = append(batches, batch)
+	}
+	return batches
 }
 
 // The messages of month whose trash has run its retention at now, and how many in trash have not.

@@ -23,11 +23,8 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
-	"net/textproto"
 	"slices"
-	"strings"
 	"sync"
-	"time"
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapserver"
@@ -708,114 +705,4 @@ func (self *mailImapSession) Copy(numSet imap.NumSet, dest string) (*imap.CopyDa
 	self.commandLock.Lock()
 	defer self.commandLock.Unlock()
 	return nil, errMailImapNotSupported
-}
-
-// SEARCH over i/ until MAIL-M10-03: the snapshot's entries against the criteria a list entry can answer, never a
-// message's body. A body or text term matches the entry's subject, sender and snippet alone, and a header term only
-// Subject, From, To and Message-Id, so a client is told no more than i/ holds.
-func (self *mailImapSession) Search(kind imapserver.NumKind, criteria *imap.SearchCriteria, options *imap.SearchOptions) (*imap.SearchData, error) {
-	self.commandLock.Lock()
-	defer self.commandLock.Unlock()
-	data := &imap.SearchData{}
-	if self.snapshot == nil {
-		return data, nil
-	}
-	var seqSet imap.SeqSet
-	var uidSet imap.UIDSet
-	for index, message := range self.snapshot.Messages {
-		if !self.matchesWithLock(uint32(index+1), message, criteria, 0) {
-			continue
-		}
-		data.Count += 1
-		if kind == imapserver.NumKindUID {
-			uidSet.AddNum(imap.UID(message.Uid))
-		} else {
-			seqSet.AddNum(uint32(index + 1))
-		}
-	}
-	if kind == imapserver.NumKindUID {
-		data.All = uidSet
-	} else {
-		data.All = seqSet
-	}
-	return data, nil
-}
-
-// Whether message matches criteria on what its entry holds. Past SearchMaxDepth a nested criterion matches nothing.
-func (self *mailImapSession) matchesWithLock(seqNum uint32, message *MailImapMessage, criteria *imap.SearchCriteria, depth int) bool {
-	if self.server.settings.SearchMaxDepth < depth {
-		return false
-	}
-	for _, seqSet := range criteria.SeqNum {
-		if seqNums, _ := self.selectedWithLock(seqSet); !slices.Contains(seqNums, seqNum) {
-			return false
-		}
-	}
-	for _, uidSet := range criteria.UID {
-		if _, messages := self.selectedWithLock(uidSet); !slices.Contains(messages, message) {
-			return false
-		}
-	}
-	date := message.InternalDate()
-	day := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, time.UTC)
-	if !criteria.Since.IsZero() && day.Before(criteria.Since) {
-		return false
-	}
-	if !criteria.Before.IsZero() && !day.Before(criteria.Before) {
-		return false
-	}
-	flags := message.ImapFlags()
-	for _, flag := range criteria.Flag {
-		if !slices.Contains(flags, string(flag)) {
-			return false
-		}
-	}
-	for _, flag := range criteria.NotFlag {
-		if slices.Contains(flags, string(flag)) {
-			return false
-		}
-	}
-	if 0 < criteria.Larger && int64(message.Size()) <= criteria.Larger {
-		return false
-	}
-	if 0 < criteria.Smaller && criteria.Smaller <= int64(message.Size()) {
-		return false
-	}
-	contains := func(text string, term string) bool {
-		return strings.Contains(strings.ToLower(text), strings.ToLower(term))
-	}
-	for _, field := range criteria.Header {
-		value := ""
-		switch textproto.CanonicalMIMEHeaderKey(field.Key) {
-		case "Subject":
-			value = message.Entry.GetSubject()
-		case "From":
-			value = message.Entry.GetFrom()
-		case "To":
-			value = message.Entry.GetAddress()
-		case "Message-Id":
-			value = message.Entry.GetMessageId()
-		default:
-			return false
-		}
-		if !contains(value, field.Value) {
-			return false
-		}
-	}
-	for _, term := range append(slices.Clone(criteria.Body), criteria.Text...) {
-		if !contains(message.Entry.GetSubject(), term) && !contains(message.Entry.GetFrom(), term) && !contains(message.Entry.GetSnippet(), term) {
-			return false
-		}
-	}
-	for _, not := range criteria.Not {
-		if self.matchesWithLock(seqNum, message, &not, depth+1) {
-			return false
-		}
-	}
-	for _, or := range criteria.Or {
-		if !self.matchesWithLock(seqNum, message, &or[0], depth+1) && !self.matchesWithLock(seqNum, message, &or[1], depth+1) {
-			return false
-		}
-	}
-	return true
 }
