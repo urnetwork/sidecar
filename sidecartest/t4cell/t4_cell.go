@@ -4,9 +4,13 @@
 //
 //	profile   ios32: the iOS app's 32 MiB Go soft limit and sidecar budget, forwarding's 4 MiB steady heap and 10 MiB
 //	          compile cap (§18.4, §18.10's memory row, QD-620); android: the app's 64 MiB limit, the sidecar role's
-//	          16 MiB added and forwarding's 16 MiB compile cap. A cell runs on this host under the profile's limit; the
-//	          surrogate devices' own runs (a phone holding the profile, tests/runner/perf's ios32 and android) are the
-//	          same harness there, and external
+//	          16 MiB added and forwarding's 16 MiB compile cap; pageworker: sidecar.wasm in a key-origin tab, its 64 MiB
+//	          heap above wasm data and no forwarding. A cell runs on this host under the profile's limit; the surrogate
+//	          devices' own runs (a phone holding the profile, tests/runner/perf's ios32 and android) are the same
+//	          harness there, and external
+//	search    §18.4's working set a search holds, its frames, lists and pending candidates: 4 MiB on phones and 8 MiB
+//	          in the page Worker, beside the process's 256 KiB of version-table pages (§5.9), so a search's heap growth
+//	          is held to their sum (SearchByteCount), sampled as FS-109 says (SDK-M10-06)
 //	measure   a step runs under the profile's Go memory limit; the heap's live objects are sampled every
 //	          HeapSampleInterval while it runs and at each Sample the step calls where it holds the most, the peak
 //	          taken over the heap at the step's start, then after the step and runtime/debug.FreeOSMemory the steady
@@ -41,8 +45,9 @@ const heapMetric = "/memory/classes/heap/objects:bytes"
 
 // The surrogate profiles, as cells and reports name them.
 const (
-	ProfileIos32   = "ios32"
-	ProfileAndroid = "android"
+	ProfileIos32      = "ios32"
+	ProfileAndroid    = "android"
+	ProfilePageWorker = "pageworker"
 )
 
 // What one surrogate profile holds a cell to.
@@ -50,12 +55,18 @@ type Profile struct {
 	Name string
 	// The Go memory limit a cell's steps run under: the app's soft limit on the device.
 	GoMemoryLimitByteCount int64
-	// §18.4's budget for the sidecar role in the app: iOS 32 MiB; Android 16 MiB added.
+	// §18.4's budget for the sidecar role in the app: iOS 32 MiB; Android 16 MiB added; the page Worker's 64 MiB heap.
 	SidecarBudgetByteCount int64
-	// §18.10's memory row: forwarding's Go heap steady.
+	// §18.10's memory row: forwarding's Go heap steady. Zero where no forwarding runs, as in the page Worker.
 	ForwardingSteadyByteCount int64
-	// The forwarding compile's cap on this class (QD-620's 10 MiB in the Apple extensions; 16 MiB on Android).
+	// The forwarding compile's cap on this class (QD-620's 10 MiB in the Apple extensions; 16 MiB on Android). Zero
+	// where no forwarding runs.
 	CompileMemoryMaxByteCount int64
+	// §18.4's working set one search holds, its frames, lists and pending candidates: 4 MiB on phones, 8 MiB in the
+	// page Worker.
+	SearchWorkingSetByteCount int64
+	// The process's version-table pages beside a search's working set (§5.9's Search.VersionCacheByteCount): 256 KiB.
+	VersionPageByteCount int64
 	// How often a running step's heap is sampled.
 	HeapSampleInterval time.Duration
 }
@@ -68,6 +79,8 @@ func Ios32Profile() *Profile {
 		SidecarBudgetByteCount:    32 * 1024 * 1024,
 		ForwardingSteadyByteCount: 4 * 1024 * 1024,
 		CompileMemoryMaxByteCount: 10 * 1024 * 1024,
+		SearchWorkingSetByteCount: 4 * 1024 * 1024,
+		VersionPageByteCount:      256 * 1024,
 		HeapSampleInterval:        200 * time.Microsecond,
 	}
 }
@@ -80,15 +93,37 @@ func AndroidProfile() *Profile {
 		SidecarBudgetByteCount:    16 * 1024 * 1024,
 		ForwardingSteadyByteCount: 4 * 1024 * 1024,
 		CompileMemoryMaxByteCount: 16 * 1024 * 1024,
+		SearchWorkingSetByteCount: 4 * 1024 * 1024,
+		VersionPageByteCount:      256 * 1024,
 		HeapSampleInterval:        200 * time.Microsecond,
 	}
+}
+
+// The page Worker (§18.4's Extension and ur.io pages row, §22.9): sidecar.wasm in a key-origin tab, its 64 MiB heap
+// above wasm data, one search's 8 MiB working set, and no forwarding. On js/wasm the timed samples run only when the
+// step yields, so a step there calls Sample where it holds the most.
+func PageWorkerProfile() *Profile {
+	return &Profile{
+		Name:                      ProfilePageWorker,
+		GoMemoryLimitByteCount:    64 * 1024 * 1024,
+		SidecarBudgetByteCount:    64 * 1024 * 1024,
+		SearchWorkingSetByteCount: 8 * 1024 * 1024,
+		VersionPageByteCount:      256 * 1024,
+		HeapSampleInterval:        200 * time.Microsecond,
+	}
+}
+
+// The heap growth one search may hold: its working set beside the version-table pages (§18.4's targets row).
+func (self *Profile) SearchByteCount() int64 {
+	return self.SearchWorkingSetByteCount + self.VersionPageByteCount
 }
 
 // One measured step.
 type Row struct {
 	Profile string
 	Step    string
-	// The sampled peak over the heap at the step's start.
+	// The sampled peak over the heap at the step's start: for a search (MeasureSearch), the most the live heap grew
+	// over its start at a sample taken after a forced collection.
 	PeakByteCount int64
 	// After the step and FreeOSMemory, over the cell's baseline.
 	SteadyByteCount int64
@@ -97,6 +132,8 @@ type Row struct {
 	// Which figure the budget holds: peak or steady.
 	Holds    string
 	Duration time.Duration
+	// A search's samples (MeasureSearch); 0 for any other step.
+	SampleCount int
 }
 
 // The figure a row's budget holds.
@@ -223,6 +260,53 @@ func (self *Cell) Measure(step string, budgetByteCount int64, holds string, run 
 	return row, err
 }
 
+// Runs one search as step under the profile's Go memory limit and records FS-109's measure of it: the heap's live
+// objects after a forced collection, at each frame and page the search calls sample at, less their value at the
+// search's start, the most it grew held to budgetByteCount, which a cell passes as the profile's SearchByteCount
+// (§18.4's working set beside the version-table pages), or 0 for a row only reported. The forced collection at each
+// sample is the point: without it, a search that collects the buckets' keys per search hides in the collector's slack
+// (FS-109's trap). sample is safe from any goroutine. A search that sampled nothing answers an error, having measured
+// nothing. Answers run's error otherwise, the row recorded either way.
+func (self *Cell) MeasureSearch(step string, budgetByteCount int64, run func(sample func()) error) (*Row, error) {
+	previousLimit := debug.SetMemoryLimit(self.profile.GoMemoryLimitByteCount)
+	defer debug.SetMemoryLimit(previousLimit)
+	startByteCount := settledHeap()
+
+	stateLock := sync.Mutex{}
+	growthByteCount := int64(0)
+	sampleCount := 0
+	sample := func() {
+		runtime.GC()
+		live := heap()
+		stateLock.Lock()
+		defer stateLock.Unlock()
+		growthByteCount = max(growthByteCount, live-startByteCount)
+		sampleCount += 1
+	}
+	started := time.Now()
+	err := run(sample)
+	duration := time.Since(started)
+	steady := settledHeap() - self.baselineByteCount
+
+	stateLock.Lock()
+	defer stateLock.Unlock()
+	row := &Row{
+		Profile:         self.profile.Name,
+		Step:            step,
+		PeakByteCount:   max(0, growthByteCount),
+		SteadyByteCount: max(0, steady),
+		BudgetByteCount: budgetByteCount,
+		Holds:           HoldsPeak,
+		Duration:        duration,
+		SampleCount:     sampleCount,
+	}
+	self.rows = append(self.rows, row)
+	if err == nil && sampleCount == 0 {
+		err = fmt.Errorf("%s %s: the search took no sample, so it measured nothing", self.profile.Name, step)
+	}
+	return row, err
+}
+
 // Samples the heap into the step Measure runs now: a step calls it where it holds the most, so a transient's peak is
 // measured whatever the timed samples' luck. Between steps it does nothing.
 func (self *Cell) Sample() {
@@ -257,9 +341,9 @@ func (self *Cell) CheckWithin() error {
 // The rows as a table, for a report.
 func (self *Cell) Table() string {
 	var table strings.Builder
-	fmt.Fprintf(&table, "%-8s %-40s %12s %12s %12s %-6s %s\n", "profile", "step", "peak B", "steady B", "budget B", "holds", "within")
+	fmt.Fprintf(&table, "%-10s %-40s %12s %12s %12s %-6s %-6s %s\n", "profile", "step", "peak B", "steady B", "budget B", "holds", "within", "samples")
 	for _, row := range self.rows {
-		fmt.Fprintf(&table, "%-8s %-40s %12d %12d %12d %-6s %v\n", row.Profile, row.Step, row.PeakByteCount, row.SteadyByteCount, row.BudgetByteCount, row.Holds, row.Within())
+		fmt.Fprintf(&table, "%-10s %-40s %12d %12d %12d %-6s %-6v %d\n", row.Profile, row.Step, row.PeakByteCount, row.SteadyByteCount, row.BudgetByteCount, row.Holds, row.Within(), row.SampleCount)
 	}
 	return table.String()
 }

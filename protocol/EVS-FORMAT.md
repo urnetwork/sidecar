@@ -459,7 +459,7 @@ Bit 4 (`EVS_WINDOW_VERSIONLESS_REPLACED`) marks a push that replaces or removes 
 
 ## DROP pushes
 
-A DROP's statement sets flag 256 and no other flag, and `drop_sha256`, the SHA-256 of its body's bytes; `index_epoch` stays 0. Its payload adds:
+A DROP's statement sets flag 256 and no other flag, and `drop_sha256`, the SHA-256 of its body's bytes. Its `index_epoch` is any push's: the head's when it carries §11.14's drop row's index rewrites, which 5d holds to the head's as any push writing an index file, else 0 (QD-1078). Its payload adds:
 
 | Type | Section | Its bytes | Hashed by |
 |---|---|---|---|
@@ -470,7 +470,7 @@ A cancel carries section 9 and no section 10. In a push in parts both ride in `E
 
 **Bounds** (DESIGN-DETAILS 10.2.2, QD-700). A body, `EvsDropHistory`'s bytes, is at most 262,144 B: a longer one is INVALID, checked on the received length before any hashing, as a body off `drop_sha256` is. The counts of a DROP's paths sum to at most 1,048,576 (409 DROP_LIST), so section 10 is at most 32 MiB; a path's own count keeps its bound, the same number. A client cuts a larger drop into several DROP pushes at lineage boundaries, each previewed, and refuses locally a lineage that alone passes either bound (`EVS_DROP_TOO_LARGE`). The bounds are `EvsFormatSettings`' fields, whose defaults are these values.
 
-**Parts** (DESIGN-DETAILS 10.2.5). A DROP goes in parts when its one-part payload would pass 1 MiB. Its parts that hold changes are cut as any push's, a DROP having at most 1,024 changes, one per written boundary; part 1's run is cut to leave room for section 9, which rides whole in part 1's `sections` slice; section 10's values fill each part's room left in part order from part 1 on, a value never split; then parts with no change take at most 32,000 values (1,024,000 B; `DropListPartValueCount`) each until the lists end, so a DROP is at most 51 parts. A DROP with no change at all, removed boundaries alone or a cancel, that passes one part states the empty change list of QD-658: `change_count` 0, `changes_root` the SHA-256 of the empty string, no `changed_prefixes`, every part changeless, part 1 holding section 9 and the first values. A checker takes a section-10 slice cut anywhere; a DROP in parts whose section 9 is not whole in part 1 is INVALID. A part runs no body or list check, which only the seal can, holding every part.
+**Parts** (DESIGN-DETAILS 10.2.5). A DROP goes in parts when its one-part payload would pass 1 MiB. Its parts that hold changes are cut as any push's, a DROP having one change per written boundary, at most 1,024, and one per index file its index rewrites write again (QD-1078); part 1's run is cut to leave room for section 9, which rides whole in part 1's `sections` slice; section 10's values fill each part's room left in part order from part 1 on, a value never split; then parts with no change take at most 32,000 values (1,024,000 B; `DropListPartValueCount`) each until the lists end, so a DROP without index rewrites is at most 51 parts. A DROP with no change at all, removed boundaries alone or a cancel, that passes one part states the empty change list of QD-658: `change_count` 0, `changes_root` the SHA-256 of the empty string, no `changed_prefixes`, every part changeless, part 1 holding section 9 and the first values. A checker takes a section-10 slice cut anywhere; a DROP in parts whose section 9 is not whole in part 1 is INVALID. A part runs no body or list check, which only the seal can, holding every part.
 
 The body's rules, which `EvsCheckDropPayload` runs before anything needs the head:
 
@@ -539,7 +539,7 @@ For design-records, each a reading that changes no D- item:
 | Record format | The record header's byte 1 is 2, and the body ends with the staged and purge-list items; other records keep format 1's form in a batch of either format; a batch is format 2 when it holds one |
 | `EvsPurgeList` | Staged and unstaged ids in two lists, in V's chain order; a candidate with no id left out; the cap counting every id; `marked` listing nothing |
 | Window bit 4 | Every push replacing or removing a versionless version, candidates left or not |
-| DROP statement | Flag 256 alone, `index_epoch` 0 |
+| DROP statement | Flag 256 alone; `index_epoch` the head's when it carries §11.14's index rewrites, else 0 (QD-1078, which replaced this chapter's reading of 0 alone) |
 | DROP paths' order | Strictly ascending by the newest lineage entry's token path bytes, then its epoch |
 | DROP shape | `through_version` at least 2, `count` below it; a cancel's `not_before_ms` 0 and no `preview_id`; the newest lineage epoch at most the push's |
 | DROP codes | Shape, `drop_sha256` and a body past 262,144 B INVALID; lists and counts past 1,048,576 in all DROP_LIST; `not_before_ms` DROP_STATE |
