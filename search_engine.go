@@ -240,6 +240,17 @@ func (self *SearchEngine) Resume(session Id, token string) (*SearchStream, error
 	return NewSearchStream(stream), nil
 }
 
+// Ends what session holds here: every cursor, its stream closed and its snapshots released, its hit ids with it, and
+// the session's limits. The session ended (D-MCP-25; MCP-M10-02's session_search.go), so a token or a hit id of it
+// opens nothing after. The daemon's own session is never ended.
+func (self *SearchEngine) EndSession(session Id) {
+	if session == searchLocalSession {
+		return
+	}
+	self.cursors.endSession(session)
+	self.limits.forget(session)
+}
+
 // One OS window of background sync (SidecarSearchBackgroundSync): the policy's, where one is given.
 func (self *SearchEngine) RunBackgroundSync(ctx context.Context) error {
 	if self.background == nil {

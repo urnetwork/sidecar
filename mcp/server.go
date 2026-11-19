@@ -137,6 +137,10 @@ type McpServerSettings struct {
 	Mcp *sidecar.SidecarMcpSettings
 	// §16.7's hook and capture bounds (hook*.go).
 	Ingest *sidecar.SidecarIngestSettings
+	// §16.10's session limits for search (session_search.go).
+	Search *sidecar.SidecarSearchSettings
+	// The search tools' bounds, whose wait a session's search admission waits within (tools_search.go).
+	SearchTools *sidecar.SearchToolSettings
 	// The longest line a session reads, the daemon's request bound (SidecarLocalSettings.RequestByteCount): a line
 	// past it closes the session, as a control session's does.
 	RequestByteCount int64
@@ -154,9 +158,12 @@ type McpServerSettings struct {
 func NewMcpServerSettings(settings *sidecar.SidecarSettings, version string) *McpServerSettings {
 	mcpSettings := *settings.Mcp
 	ingest := *settings.Ingest
+	search := *settings.Search
 	return &McpServerSettings{
 		Mcp:              &mcpSettings,
 		Ingest:           &ingest,
+		Search:           &search,
+		SearchTools:      sidecar.DefaultSearchToolSettings(),
 		RequestByteCount: settings.LocalSettings.RequestByteCount,
 		Version:          version,
 		Clock:            settings.Clock,
@@ -192,6 +199,9 @@ type McpServer struct {
 	restorePoints *RestorePoints
 	// the bridge tools' filings and listing (tools_bridge.go); nil answers unavailable
 	bridges McpBridges
+	// the search the installed search tools reach, which a hit argument resolves through (tools_hit.go); nil while no
+	// search tool is installed, which opens no hit
+	searchOf mcpSearchOfFunction
 }
 
 // A server for daemon.
@@ -369,6 +379,7 @@ func (self *McpServer) newSessionAt(ctx context.Context, hello *sidecar.DaemonHe
 		server:            self,
 		hello:             *hello,
 		limits:            newMcpSessionLimits(self.settings.Mcp, self.clock),
+		search:            newMcpSessionSearch(self.settings.Search, self.clock),
 		networkIdBindings: map[sidecar.Id]*mcpSessionBinding{},
 	}
 	// the relay's place in the process tree, read once: a session's ancestry does not change
@@ -426,6 +437,8 @@ func (self *McpServer) Serve(ctx context.Context, hello *sidecar.DaemonHello, st
 			delete(self.serverSessions, serverSession)
 		}()
 		session.close()
+		// its cursors end with it (D-MCP-25)
+		session.endSearch()
 	}()
 	close(gate)
 	waited := make(chan error, 1)
