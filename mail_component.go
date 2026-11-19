@@ -14,6 +14,8 @@
 //	          smtp/25/mx, one receiver (mail_receiver.go) with its sessions (mail_session.go) on the legs that build
 //	          them (mail_component_receive.go): started once, retrying its listen itself, ended with the generation or
 //	          once mail turns off or the grant goes. Revoking the receiver ends its listen at once
+//	mta-sts   while the receiver listens and the device holds a §13 certificate for the network's pair, §15.5's
+//	          MTA-STS policy as this receiver's system publish (mail_mta_sts.go), ended with the receiver
 //	idle      Active while mail is on, so a daemon with mail on never idles out (§5.8); `ur status` says so and
 //	          prompts for a mail indexer until one stands (§15.6)
 //
@@ -25,7 +27,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
+	"time"
 )
 
 var (
@@ -86,6 +90,9 @@ type mailComponentRun struct {
 	receiver       *MailReceiver
 	receiverCancel context.CancelFunc
 	receiverClose  func()
+	// the receiver's MTA-STS system publish while it serves one, and when a refused one is tried again
+	mtaSts          io.Closer
+	mtaStsRetryTime time.Time
 }
 
 // What the component keeps on the client beside its run: a test's seams.
@@ -96,6 +103,8 @@ type mailComponentSeams struct {
 	factory mailReceiverFactory
 	// whether this device registers a listener by its own choice (MailReceiverEligible); nil asks the bound config
 	eligible func() bool
+	// serves the receiver's MTA-STS system publish; nil serves through the client's Sidecar
+	mtaSts mailMtaStsPublisher
 }
 
 // "mail".
@@ -190,8 +199,9 @@ func (self *MailClient) runGeneration(run *mailComponentRun) {
 	}
 }
 
-// Stops what run started: its ingestor and its receiver, whose parts close after.
+// Stops what run started: its MTA-STS publish, its ingestor and its receiver, whose parts close after.
 func (self *MailClient) stopRun(run *mailComponentRun) {
+	self.stopMtaSts(run)
 	ingestCancel, receiverCancel, receiverClose := func() (context.CancelFunc, context.CancelFunc, func()) {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
@@ -227,6 +237,7 @@ func (self *MailClient) pass(run *mailComponentRun) bool {
 	}
 	self.passIngest(run, binding)
 	self.passReceive(run, binding)
+	self.passMtaSts(run, binding)
 	return true
 }
 
@@ -505,8 +516,9 @@ func (self *MailClient) startReceiver(run *mailComponentRun, binding *MailBindin
 	return receiver, nil
 }
 
-// Ends run's receiver and closes its parts.
+// Ends run's receiver, and with it its MTA-STS publish, and closes its parts.
 func (self *MailClient) stopReceiver(run *mailComponentRun) {
+	self.stopMtaSts(run)
 	receiverCancel, receiverClose := func() (context.CancelFunc, func()) {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
