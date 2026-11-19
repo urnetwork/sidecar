@@ -17,6 +17,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"net/http"
 	"slices"
 	"testing"
 	"time"
@@ -1003,5 +1004,55 @@ func TestIndexDropHookReadsTheIndexAgainWhenItMoves(t *testing.T) {
 	}
 	if after := testIndexDropEvsSlot(t, writer, path); len(after.slot.entries) != 1 {
 		t.Fatalf("the slot holds %d entries", len(after.slot.entries))
+	}
+}
+
+// evs's 403 QUOTA_LIMIT at the storage limit, as its quota gate answers a push that uploads past it.
+func testIndexDropQuotaRefusal() *evsTestRefusal {
+	return &evsTestRefusal{status: http.StatusForbidden, reply: &protocol.EvsRefusalReply{
+		Code: protocol.EvsRefusalCode_EVS_REFUSAL_QUOTA_LIMIT, Quota: &protocol.EvsQuotaRefusal{LimitKey: "evs_storage_bytes", Limit: 1, Used: 2},
+	}}
+}
+
+// QD-1088: at the storage limit evs refuses the DROP for its rewrites' uploads, and the DROP goes again once without
+// them, left to the backfill, and commits; the slot keeps its listed version, masked, for the backfill to take.
+func TestIndexDropAtTheLimitGoesWithoutItsRewrites(t *testing.T) {
+	writer, _, capture, path := testIndexDropEvsWorld(t)
+	before := testIndexDropEvsSlot(t, writer, path)
+	t.Cleanup(testIndexDropEvsRewriter(t, writer, true).Install())
+	writer.server.stateLock.Lock()
+	writer.server.pushRefusals = []*evsTestRefusal{testIndexDropQuotaRefusal()}
+	writer.server.stateLock.Unlock()
+	result := testIndexDropEvsDrop(t, writer)
+	if len(result.Pushes) != 1 || result.Pushes[0].IndexRewritten {
+		t.Fatalf("the DROP's pushes %+v", result.Pushes)
+	}
+	drops := capture.drops(t)
+	if len(drops) != 2 || len(drops[0].Changes) != 2 || len(drops[1].Changes) != 1 {
+		t.Fatalf("%d DROP pushes", len(drops))
+	}
+	if after := testIndexDropEvsSlot(t, writer, path); after.file.version != before.file.version {
+		t.Fatal("the slot moved with a DROP sent without rewrites")
+	}
+}
+
+// A quota refusal the DROP meets again without its rewrites, its own kept head's upload, goes back to the person as it
+// is: the DROP is sent once with them and once without, never more.
+func TestIndexDropAtTheLimitRefusedAgainGoesBack(t *testing.T) {
+	writer, _, capture, _ := testIndexDropEvsWorld(t)
+	t.Cleanup(testIndexDropEvsRewriter(t, writer, true).Install())
+	writer.server.stateLock.Lock()
+	writer.server.pushRefusals = []*evsTestRefusal{testIndexDropQuotaRefusal(), testIndexDropQuotaRefusal()}
+	writer.server.stateLock.Unlock()
+	preview, err := writer.repo.DropHistoryPreview(context.Background(), &EvsDropPreviewArgs{Paths: []string{"a.txt"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = writer.repo.DropHistory(context.Background(), &EvsDropHistoryArgs{PreviewId: preview.PreviewId, ConfirmPath: "a.txt"})
+	if !IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_QUOTA_LIMIT) {
+		t.Fatalf("a DROP refused at the limit without its rewrites too: %v", err)
+	}
+	if drops := capture.drops(t); len(drops) != 2 || len(drops[0].Changes) != 2 || len(drops[1].Changes) != 1 {
+		t.Fatalf("%d DROP pushes", len(drops))
 	}
 }

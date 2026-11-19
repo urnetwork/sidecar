@@ -866,10 +866,9 @@ rows:
   tls-4: {server: [network_tls_suspension]}
   cert-1: {server: [network_tls_cert]}
   dns-2: {planned: M5}
-  smtp-3: {planned: M9}
-  smtp-4: {planned: M9}
-  smtp-5: {planned: M9}
-  smtp-6: {planned: M9}
+  smtp-3: {server: [smtp_send]}
+  smtp-5: {server: [smtp_complaint, smtp_dmarc_daily]}
+  smtp-6: {server: [smtp_dkim_key]}
   mx-2: {planned: M7}
   mx-3: {planned: M7}
   mx-4: {planned: M5}

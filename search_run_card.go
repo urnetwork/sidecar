@@ -94,6 +94,12 @@ func indexRunCardSources(logKind protocol.RepoKind) []RecordKind {
 	return nil
 }
 
+// The kinds a card of a log of logKind folds, a copy, nil for a log with no cards: what a capturing daemon counts as a
+// run's moving its card (MCP-M10-02's ingest cadence).
+func IndexRunCardSources(logKind protocol.RepoKind) []RecordKind {
+	return slices.Clone(indexRunCardSources(logKind))
+}
+
 // A card's version: epoch * 2^bits + c, errIndexCardVersionSpace where either passes its bits.
 func indexRunCardVersion(epoch uint64, c uint64, bits int) (uint64, error) {
 	if bits <= 0 || 64 <= bits {

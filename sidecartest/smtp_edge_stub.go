@@ -6,6 +6,7 @@
 // whole TLS records through a SmtpProofSession, so nothing reaches the MX that the session did not
 // clear. SubmitProof and Handshake are SMTP_PROOF's and SMTP_HANDSHAKE's handlers, and ProofChannel
 // lands a sender's calls on them as smtpProofChannel's RPCs would, every SmtpProof field included.
+// Dialer gives a sidecar.SmtpEdgeDialer whose streams the stub serves, keeping each SmtpOutcome.
 //
 // A preamble naming a key set the verifier does not hold is answered KEYS before any MX is dialed
 // (DESIGN-DETAILS 3.2.5).
@@ -31,6 +32,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
@@ -117,6 +120,7 @@ type StubSmtpEdge struct {
 	preambles   []*protocol.SmtpPreamble
 	results     []*protocol.SmtpPreambleResult
 	connections map[string]*stubSmtpConnection
+	outcomes    []*protocol.SmtpOutcome
 }
 
 // A nil settings takes DefaultStubSmtpEdgeSettings.
@@ -522,4 +526,81 @@ func (self *stubSmtpProofChannel) SubmitPart(ctx context.Context, part *sidecar.
 		return fmt.Errorf("%w: part %d answered %d", errStubSmtpEdgeNoSend, part.Index, result.GetCode())
 	}
 	return nil
+}
+
+// One stream a sender dialed to the stub: the sidecar's end of a pipe whose far end the stub serves, its channel
+// landing on the stub's handlers.
+type stubSmtpEdgeStream struct {
+	net.Conn
+	edge *StubSmtpEdge
+}
+
+func (self *stubSmtpEdgeStream) ProofChannel(sendId []byte) sidecar.SmtpProofChannel {
+	return self.edge.ProofChannel(sendId)
+}
+
+func (self *stubSmtpEdgeStream) SendOutcome(ctx context.Context, outcome *protocol.SmtpOutcome) error {
+	self.edge.stateLock.Lock()
+	defer self.edge.stateLock.Unlock()
+	self.edge.outcomes = append(self.edge.outcomes, proto.CloneOf(outcome))
+	return nil
+}
+
+func (self *stubSmtpEdgeStream) Abort() error {
+	return self.Conn.Close()
+}
+
+// A sidecar.SmtpEdgeDialer onto the stub, as SMTP-M9-07's driver dials ur/smtpedge. Wait joins every stream the
+// dialer opened.
+type StubSmtpEdgeDialer struct {
+	edge    *StubSmtpEdge
+	serving sync.WaitGroup
+
+	stateLock sync.Mutex
+	dialCount int
+}
+
+var _ sidecar.SmtpEdgeDialer = (*StubSmtpEdgeDialer)(nil)
+
+// A dialer whose every stream the stub serves.
+func (self *StubSmtpEdge) Dialer() *StubSmtpEdgeDialer {
+	return &StubSmtpEdgeDialer{edge: self}
+}
+
+// See sidecar.SmtpEdgeDialer.
+func (self *StubSmtpEdgeDialer) DialSmtpEdge(ctx context.Context) (sidecar.SmtpEdgeStream, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.dialCount += 1
+	}()
+	sidecarEnd, edgeEnd := NewMxPipe(&net.TCPAddr{}, &net.TCPAddr{})
+	self.serving.Add(1)
+	go func() {
+		defer self.serving.Done()
+		self.edge.Serve(context.Background(), edgeEnd)
+	}()
+	return &stubSmtpEdgeStream{Conn: sidecarEnd, edge: self.edge}, nil
+}
+
+// How many streams were dialed.
+func (self *StubSmtpEdgeDialer) DialCount() int {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.dialCount
+}
+
+// Returns once the stub has served every stream this dialer opened to its end.
+func (self *StubSmtpEdgeDialer) Wait() {
+	self.serving.Wait()
+}
+
+// Every SmtpOutcome a sender handed the stub, in order.
+func (self *StubSmtpEdge) Outcomes() []*protocol.SmtpOutcome {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return append([]*protocol.SmtpOutcome(nil), self.outcomes...)
 }

@@ -179,6 +179,8 @@ func (self *Ingest) fileChanged(ctx context.Context, root string, change *Ingest
 				coverageSource: sidecar.RecordCoverageSourceFileEvents,
 			})
 		}()
+		// the scan's change entry moves the run's card (ingest_runcard.go)
+		self.deliverCardDues(ctx, run)
 	}
 }
 
