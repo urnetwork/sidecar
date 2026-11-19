@@ -1,8 +1,8 @@
 // MAIL-M10-02's erasure in a format-2 mailbox, on MAIL-M7-16's store stand-in with the search index's eraser faked at
 // mail's seam (mailIndexEraser): the CUT before the first ERASE; a batch's one CUT; the documents a CUT lists and the
 // note that carries them; a full erasure set, an allowance and an unproven rewrite; who resumes when; the journal
-// between a CUT and its first ERASE; and the refusals that destroy nothing. The index's own eraser runs under mail's
-// in mail_erase_index_hooks_test.go.
+// between a CUT and its first ERASE; and the refusals that destroy nothing. The index's own eraser takes mail's CUT in
+// mail_erase_index_evs_test.go.
 
 package sidecar
 
