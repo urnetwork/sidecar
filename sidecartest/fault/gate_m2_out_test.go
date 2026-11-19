@@ -62,7 +62,8 @@ func TestGateInvariantsBoundReadsEachOutcome(t *testing.T) {
 // The rules item says what §22.8's rules run every row with, and they do: 10 explorer seeds a merge on T2 and 100 a
 // night on T3 (T3's settings are server's sidecart3's, whose TestGateT3RunsTheNightlySeeds holds them), the default
 // rules taking the merge seeds and refusing a run with none, the unknown list as catalog.yml marks it, and every case
-// at each gate whose sweep carries the item given a test on each tier it runs on, a forged case's twin on T3.
+// at each gate whose sweep carries the item given a test on each tier it runs on, a forged case's twin on T3; FS-48's
+// and FS-49's T2 tests are server's, pure tests of its abuse policy and clock, as §22.5's §21 row puts them.
 func TestGateRunsItsRowsUnderSection228sRules(t *testing.T) {
 	catalog := DefaultCatalog()
 	if count := len(MergeSeeds()); count != 10 {
@@ -121,7 +122,12 @@ func TestGateRunsItsRowsUnderSection228sRules(t *testing.T) {
 				repos = append(repos, test.Repo)
 			}
 			tiers := testCase.TwinTiers()
-			if slices.Contains(tiers, TierT2) && !slices.Contains(repos, "sidecar") {
+			if slices.Contains(tiers, TierT2) && slices.Contains(gateServerPolicyT2Rows, testCase.Row.Id) {
+				// §22.5's §21 row: the row's T2 is a pure test of server's policy, on no store
+				if !slices.ContainsFunc(row.Tests, func(test *GateTest) bool { return test.Repo == "server" && !test.Stores }) {
+					t.Errorf("%s at %s runs on T2 as a pure test of server's policy and names none: %s", testCase, gate, gateTestsStringForTest(row.Tests))
+				}
+			} else if slices.Contains(tiers, TierT2) && !slices.Contains(repos, "sidecar") {
 				t.Errorf("%s at %s runs on T2 and names no T2 test: %s", testCase, gate, gateTestsStringForTest(row.Tests))
 			}
 			if slices.Contains(tiers, TierT3) && !slices.Contains(repos, "server") {

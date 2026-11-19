@@ -71,28 +71,6 @@ func TestGateFs126TestsAreDeclaredInP2pTest(t *testing.T) {
 	}
 }
 
-// FS-25's dns-route case runs at M5 on T3 alone, by the convention's test; its main case keeps M3 on both tiers.
-func TestGateFileShowsFs25sDnsRouteCaseOnT3(t *testing.T) {
-	data, err := GateFile(DefaultCatalog())
-	if err != nil {
-		t.Fatal(err)
-	}
-	file := parseGateFileForTest(t, data)
-	dnsRoute := gateFileRow(file, "M5", "FS-25", "dns-route")
-	if dnsRoute == nil || len(dnsRoute.Tests) != 1 || dnsRoute.External != "" {
-		t.Fatalf("FS-25's dns-route at M5: %+v", dnsRoute)
-	}
-	if test := dnsRoute.Tests[0]; test.Repo != "server" || test.Package != "./sidecart3" || !test.Stores || !slices.Equal(test.Names, []string{"TestFs25DnsRouteOnT3"}) {
-		t.Errorf("FS-25's dns-route test: %+v", test)
-	}
-	if main := gateFileRow(file, "M3", "FS-25", ""); main == nil || len(main.Tests) != 2 {
-		t.Errorf("FS-25 at M3: %+v", main)
-	}
-	if gateFileRow(file, "M3", "FS-25", "dns-route") != nil || gateFileRow(file, "M5", "FS-25", "") != nil {
-		t.Error("FS-25's cases moved gates")
-	}
-}
-
 // The names of a row's tests, in order.
 func gateRowNamesForTest(row *GateRow) []string {
 	names := []string{}

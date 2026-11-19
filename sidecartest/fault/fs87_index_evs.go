@@ -376,9 +376,10 @@ func Fs87IndexOnEvsOf(net *Net, settings *Fs87IndexSettings) *Schedule {
 			if held, err := world.KeysHeld(ctx, net, state.noted, state.repoPath()); err != nil || held != 0 {
 				return fmt.Errorf("%d keys of P's file's old versions remain: %v", held, err)
 			}
-			if err := state.noErasedDocumentLive(ctx, fs87IndexAdmin, true); err != nil {
-				return err
-			}
+			return state.noErasedDocumentLive(ctx, fs87IndexAdmin, true)
+		}},
+		// a step of its own: on T3's stores a pass and its checks are most of what one step's wait allows
+		{Actor: fs87IndexAdmin, Action: func(ctx context.Context, net *Net) error {
 			// a pass with nothing new sends nothing
 			erasures, err := world.Erasures(ctx, fs87IndexAdmin)
 			if err != nil {
@@ -388,7 +389,7 @@ func Fs87IndexOnEvsOf(net *Net, settings *Fs87IndexSettings) *Schedule {
 			if err != nil {
 				return err
 			}
-			if pass, err = world.Pass(ctx, fs87IndexAdmin); err != nil {
+			if _, err := world.Pass(ctx, fs87IndexAdmin); err != nil {
 				return fmt.Errorf("D's idle pass: %w", err)
 			}
 			erasuresAfter, err := world.Erasures(ctx, fs87IndexAdmin)

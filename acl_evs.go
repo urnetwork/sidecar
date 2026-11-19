@@ -88,6 +88,29 @@ func aclRepoKindOwnerBound(kind protocol.RepoKind) bool {
 	return false
 }
 
+// Whether a repo of kind may stand with an owner member or without one: an owner-bound kind always names one; a
+// mailcfg names one where it is a Team scope's own, its creator's member (§8.5's mailcfg row; QD-1093), and none where
+// it is the network's; every other kind names none. What CreateRepo asks for, evs places and the fold writes agree on
+// this one rule.
+func AclRepoKindOwnerFits(kind protocol.RepoKind, owned bool) bool {
+	switch {
+	case aclRepoKindOwnerBound(kind):
+		return owned
+	case kind == protocol.RepoKind_REPO_KIND_MAILCFG:
+		return true
+	}
+	return !owned
+}
+
+// Whether a repo row binds its owner member's consent: an owner-bound kind's, or a mailcfg's that names an owner, a
+// Team scope's own, whose consented_sidecar_ids the fold keeps as it keeps a mailbox's (QD-1093).
+func aclRepoRowOwnerBound(repo *protocol.AclRepo) bool {
+	if aclRepoKindOwnerBound(repo.GetKind()) {
+		return true
+	}
+	return repo.GetKind() == protocol.RepoKind_REPO_KIND_MAILCFG && len(repo.GetOwnerMemberId()) != 0
+}
+
 // The kinds * and evs:* reach.
 func aclRepoKindGeneral(kind protocol.RepoKind) bool {
 	return kind == protocol.RepoKind_REPO_KIND_GENERAL || kind == protocol.RepoKind_REPO_KIND_RECORD
@@ -230,7 +253,9 @@ func (self *AclState) sidecarEvsAccess(sidecar *aclSidecarState, repoId Id, audi
 		accumulator.add(AclEvsDeposit, kindDefault)
 	case protocol.RepoKind_REPO_KIND_MAILCFG:
 		// members write the records they sign, so member devices are its writers; a Team scope's is read
-		// only by its member's consented devices (§15.8). tag:mail's read comes as a rule.
+		// only by its member's consented devices (§15.8). tag:mail's read comes as a rule. Beyond the kind
+		// default a scope's own takes what any mailcfg takes: a config writer's RepoGrant and RepoAdmin and a
+		// rule naming it still add to it below (question scope-mailcfg-owner-bound-admin-reach)
 		if repo.ownerId == (Id{}) && memberDevice {
 			accumulator.add(AclEvsWrite, kindDefault)
 		} else if repo.ownerId != (Id{}) && sidecar.memberId == repo.ownerId && consented {

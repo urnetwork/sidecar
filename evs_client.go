@@ -317,7 +317,10 @@ type EvsSignProvenanceFunction func(agentId Id, purpose string, message []byte) 
 type EvsCreateRepoArgs struct {
 	// Fixed at creation and bound into §10's ur_group (§11.12).
 	Kind protocol.RepoKind
-	// An owner-bound kind's owner member (vault, mailbox, secret); nil for any other.
+	// An owner-bound kind's owner member (vault, mailbox, secret), or the member whose Team scope a mailcfg is the
+	// own of, which only that member's consented device that writes no config heads creates (QD-1093); nil for the
+	// network's mailcfg and any other kind. RepoCreate carries no owner: the access log's fold binds the creator's
+	// member, so this names the caller's own member, and its group's ur_group.
 	OwnerMemberId *Id
 	// A create already filed and cut short: its repo id, to resume at the route without filing a second
 	// RepoCreate. Nil draws a new random id and files.
@@ -353,8 +356,8 @@ func (self *EvsClient) CreateRepo(ctx context.Context, args *EvsCreateRepoArgs) 
 	if args == nil || args.Kind == protocol.RepoKind_REPO_KIND_UNSPECIFIED {
 		return nil, fmt.Errorf("%w: a repo of no kind", errInvalidSettings)
 	}
-	if aclRepoKindOwnerBound(args.Kind) != (args.OwnerMemberId != nil) {
-		return nil, fmt.Errorf("%w: an owner member exactly for an owner-bound kind", errInvalidSettings)
+	if !AclRepoKindOwnerFits(args.Kind, args.OwnerMemberId != nil) {
+		return nil, fmt.Errorf("%w: an owner member for an owner-bound kind and a Team scope's mailcfg alone", errInvalidSettings)
 	}
 	if self.args.FileStatement == nil {
 		return nil, ErrEvsNoStatementPoster
