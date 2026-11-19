@@ -287,7 +287,7 @@ func (self *runner) check(step int, final bool) error {
 // An actor the driver found blocked out of its sight past the stall timeout lost the baton and let another
 // run while it ran on, in an order the schedule did not choose and a seed cannot repeat, so the run proves
 // nothing it can be held to (§22.8's determinism row). An actor only slow there kept the baton and fails
-// nothing here: the wait behind it fails the run if it outlasts §22.8's 10 s.
+// nothing here: the wait behind it fails the run if it outlasts §22.8's 60 s.
 func (self *runner) stalled() error {
 	actorNames := []string{}
 	for _, event := range self.barriers.Trace() {

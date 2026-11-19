@@ -279,6 +279,8 @@ func (self *MailClient) bindFromSidecar(ctx context.Context, env *SidecarEnv) {
 		return sidecar.Sign(purpose, signedType, body, nil)
 	}
 	binding.RunTainted = sidecar.RunTainted
+	// a mail search and IMAP SEARCH run on the Sidecar's engine, which answers unavailable until a host installs one
+	binding.Search = sidecar.Search
 	if dns, err := sidecar.Dns(); err == nil {
 		if zone, err := dns.Zone(ctx); err == nil {
 			self.setNetworkRow(NetworkLabelRow{
@@ -416,6 +418,7 @@ func (self *MailClient) invalidateMonth(repoId Id, month MailYearMonth) {
 			view.InvalidateMonth(month)
 		}
 	}()
+	self.invalidateSearchJoin()
 	// a message written here is IDLE's hint (mail_imap.go)
 	self.imapHints.Update(func(revision uint64) uint64 { return revision + 1 })
 }

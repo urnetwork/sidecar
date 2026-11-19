@@ -113,6 +113,19 @@ func TestBarrierReleaseOfNothingFails(t *testing.T) {
 	}
 }
 
+// §22.8's determinism row: a barrier wait is bounded at 60 s of real time (QD-1101), and the stall
+// check's readings end well inside it, so a blocked holder fails a run long before the bound does.
+func TestBarrierAwaitDefaultIsTheDeterminismRowsBound(t *testing.T) {
+	settings := DefaultBarrierDriverSettings()
+	if settings.AwaitTimeout != 60*time.Second {
+		t.Errorf("a barrier wait of %s", settings.AwaitTimeout)
+	}
+	stall := settings.StallTimeout + time.Duration(settings.StallSampleCount)*settings.StallSampleInterval
+	if stall <= 0 || settings.AwaitTimeout < 10*stall {
+		t.Errorf("the stall check takes %s of a barrier wait of %s", stall, settings.AwaitTimeout)
+	}
+}
+
 func TestBarrierAwaitFailsNamingItsSite(t *testing.T) {
 	settings := DefaultBarrierDriverSettings()
 	settings.AwaitTimeout = 1 * time.Millisecond

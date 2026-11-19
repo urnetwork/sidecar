@@ -114,6 +114,10 @@ type SearchRequest struct {
 	Remote string
 	// Hits a page. Zero: Search.PageHitCount.
 	PageSize int
+	// Mail the default leaves out (§15.7; QD-898): a message this device joins as spam, or as in trash, is a hit only
+	// when its flag here asks for it. The join is this device's (search_join.go), so neither reaches an indexer.
+	IncludeSpam  bool
+	IncludeTrash bool
 }
 
 // §5.4's hit.

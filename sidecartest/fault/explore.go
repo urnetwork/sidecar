@@ -23,7 +23,7 @@ type RuleSettings struct {
 	// The tier the runs are on, for reports: T2, or T3 when Net's Engines are server's (sidecart3).
 	// Empty is T2.
 	Tier Tier
-	// Each run's Net. Its barriers' AwaitTimeout is §22.8's 10 s, and CheckRow refuses a longer one:
+	// Each run's Net. Its barriers' AwaitTimeout is §22.8's 60 s, and CheckRow refuses a longer one:
 	// a slow row is fixed, never given more time. Its Engines decide the tier: nil is T2's fakes, and
 	// server's sidecart3 sets T3's.
 	Net *sidecartest.NetSettings

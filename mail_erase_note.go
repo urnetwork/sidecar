@@ -4,7 +4,11 @@
 // row; MAIL-M7-15, MAIL-M7-16): the caller's part of an ERASE's sealed note (evs_erase.go), which mail writes as
 // paths, one a line, as the vault writes its entries' (mail_vault.go), so a reader tells the two by the path.
 //
-//	m/<yyyymm>/<h>/<id>   a message whose own keys this ERASE destroys: its body's, and an unconsumed deposit's
+//	m/<yyyymm>/<h>/<id>   a message whose own keys this ERASE destroys: its body's, and an unconsumed deposit's. In a
+//	                      format-2 mailbox the line goes on " <version> <chunks>", decimal: the m/ path's version and
+//	                      how many chunk documents the search index holds of it at most, which is what the erasure's
+//	                      CUT lists (§11.14; MAIL-M10-02), so a device that resumes the erasure with the body gone
+//	                      can still commit a CUT a full erasure set made wait
 //	i/<yyyymm>/<n>        an i/ segment whose replaced chain's keys this ERASE destroys, after the CLOSURE that wrote
 //	                      the segment again without the erasure's messages
 //
@@ -18,6 +22,7 @@ package sidecar
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -26,6 +31,49 @@ import (
 type mailErasedMessage struct {
 	Month     MailYearMonth
 	MessageId Id
+	// A format-2 mailbox's: the m/ path's version and the most chunk documents the search index holds of it, which
+	// the erasure's CUT lists. Both 0 in a format-1 mailbox, whose note names the path alone.
+	Version    uint64
+	ChunkCount uint32
+}
+
+// The message's line of a note: its path, and in a format-2 mailbox its version and chunk count after it.
+func (self mailErasedMessage) noteLine() string {
+	path := MailMessagePath(self.Month, self.MessageId)
+	if self.ChunkCount == 0 {
+		return path
+	}
+	return path + " " + strconv.FormatUint(self.Version, 10) + " " + strconv.FormatUint(uint64(self.ChunkCount), 10)
+}
+
+// A note's message line read back, false for any other line: the path alone, or the path, a version and a chunk
+// count, each a canonical decimal above zero.
+func parseMailErasedMessage(line string) (mailErasedMessage, bool) {
+	fields := strings.Split(line, " ")
+	if len(fields) != 1 && len(fields) != 3 {
+		return mailErasedMessage{}, false
+	}
+	month, messageId, ok := parseMailMessagePath(fields[0])
+	if !ok {
+		return mailErasedMessage{}, false
+	}
+	message := mailErasedMessage{Month: month, MessageId: messageId}
+	if len(fields) == 1 {
+		return message, true
+	}
+	version, err := strconv.ParseUint(fields[1], 10, 64)
+	if err != nil || version == 0 {
+		return mailErasedMessage{}, false
+	}
+	chunkCount, err := strconv.ParseUint(fields[2], 10, 32)
+	if err != nil || chunkCount == 0 {
+		return mailErasedMessage{}, false
+	}
+	message.Version, message.ChunkCount = version, uint32(chunkCount)
+	if message.noteLine() != line {
+		return mailErasedMessage{}, false
+	}
+	return message, true
 }
 
 // One i/ segment a mail ERASE's note names.
@@ -77,11 +125,11 @@ func parseMailIndexPath(path string) (MailYearMonth, uint64, bool) {
 }
 
 // The caller's note of a mail ERASE: each message whose own keys it destroys, then each i/ segment whose replaced
-// chain's keys it destroys, one path a line.
+// chain's keys it destroys, one a line.
 func mailErasureNote(messages []mailErasedMessage, segments []mailErasedSegment) []byte {
 	lines := make([]string, 0, len(messages)+len(segments))
 	for _, message := range messages {
-		lines = append(lines, MailMessagePath(message.Month, message.MessageId))
+		lines = append(lines, message.noteLine())
 	}
 	for _, segment := range segments {
 		lines = append(lines, MailIndexPath(segment.Month, segment.N))
@@ -98,8 +146,8 @@ func parseMailErasureNote(note []byte) ([]mailErasedMessage, []mailErasedSegment
 	messages := []mailErasedMessage{}
 	segments := []mailErasedSegment{}
 	for _, line := range strings.Split(string(note), "\n") {
-		if month, messageId, ok := parseMailMessagePath(line); ok {
-			messages = append(messages, mailErasedMessage{Month: month, MessageId: messageId})
+		if message, ok := parseMailErasedMessage(line); ok {
+			messages = append(messages, message)
 			continue
 		}
 		if month, n, ok := parseMailIndexPath(line); ok {

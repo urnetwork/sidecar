@@ -157,10 +157,15 @@ func fsDropStorageLimit(world *EvsWorld, limited bool) func(ctx context.Context,
 	}
 }
 
-// A check of a refused drop's error: any error at all, which a clause names where the limit's own answer reaches the
-// client through more than one route.
-func fsDropAnyRefusal() func(err error) error {
-	return func(err error) error { return nil }
+// A check of a refused drop's error: evs's refusal at the network's storage limit, QUOTA_LIMIT, whichever of the
+// drop's requests met it, the kept head's upload or the DROP push.
+func fsDropStorageRefusal() func(err error) error {
+	return func(err error) error {
+		if !EvsWorldRefusedWith(err, protocol.EvsRefusalCode_EVS_REFUSAL_QUOTA_LIMIT) {
+			return errors.New("not evs's QUOTA_LIMIT")
+		}
+		return nil
+	}
 }
 
 // The history every general-repo clause of FS-95 starts from: x.txt, three versions each needing an upload; s.txt,
@@ -215,7 +220,7 @@ func Fs95Refusals(net *Net) *Schedule {
 		// the next day, still at the storage limit: an inline head's drop is accepted, one needing an upload refused
 		{Advance: 25 * time.Hour},
 		{Actor: "admin", Action: world.Drop("admin", "s.txt", false)},
-		{Actor: "admin", Action: world.DropRefused("admin", "x.txt", false, fsDropAnyRefusal())},
+		{Actor: "admin", Action: world.DropRefused("admin", "x.txt", false, fsDropStorageRefusal())},
 		{Actor: "owner", Action: fsDropStorageLimit(world, false)},
 		// within 60 s of b.txt's not_before its cancel is refused, and the drop executes
 		{Advance: 7*24*time.Hour - 25*time.Hour - 30*time.Second},

@@ -913,6 +913,26 @@ func (self *EvsWorld) CommittedEntries(path string) ([]*EvsWorldCommittedEntry, 
 	return entries, nil
 }
 
+// The push of path's first committed write on main as the lb carried it, its statement and its payload, which is what
+// its batch record stores (sidecar.EvsCheckStoredPayload).
+func (self *EvsWorld) FirstPush(path string) (*sidecar.EvsStatement, []byte, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	writes := slices.Clone(self.pathWrites[path])
+	slices.SortStableFunc(writes, func(a *evsWorldWrite, b *evsWorldWrite) int { return cmp.Compare(a.version, b.version) })
+	for _, write := range writes {
+		if write.state != evsWorldWriteCommitted || write.content == nil {
+			continue
+		}
+		statement := self.pushStatements[write.pushId]
+		if statement == nil {
+			return nil, nil, fmt.Errorf("push %s did not pass the world's lb", write.pushId)
+		}
+		return statement, bytes.Clone(self.pushPayloads[write.pushId]), nil
+	}
+	return nil, nil, fmt.Errorf("%q has no committed write", path)
+}
+
 // The one file version the push pushId wrote, as the lb carried it.
 func (self *EvsWorld) pushEntry(pushId sidecar.Id) (*EvsWorldCommittedEntry, error) {
 	self.stateLock.Lock()

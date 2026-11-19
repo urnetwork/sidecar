@@ -36,7 +36,7 @@ import (
 
 var Fs1 = Register("FS-1", "", []Tier{TierT2, TierT3}, Fs1LostAnswerRetriedOnEvs2)
 
-// A step writing count paths in steps of at most 16 pushes each, so each step stays well inside §22.8's 10 s and the
+// A step writing count paths in steps of at most 16 pushes each, so each step stays well inside §22.8's 60 s and the
 // outcome check reads every version in the window.
 func evsWorldWriteSteps(world *EvsWorld, device string, pattern string, first int, count int) []*Step {
 	steps := []*Step{}
