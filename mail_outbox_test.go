@@ -288,6 +288,59 @@ func TestMailSmtpMailboxRemovesExpiredOutcomes(t *testing.T) {
 	}
 }
 
+// The component's pass sweeps the member's or/ while mail is on, once an OutcomeSweepInterval: a record past its 30
+// days goes at the first pass, one that expires later stays until the interval has passed, and a pass before then
+// lists nothing.
+func TestMailComponentSweepsExpiredOutcomesOnceAnInterval(t *testing.T) {
+	world, _, _ := newMailSendTestWorld(t)
+	clock := newTestMailCredentialClock(time.UnixMilli(testMailIngestPushMillis))
+	world.client.clock = clock
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	run := &mailComponentRun{ctx: ctx, cancel: cancel}
+	mailbox, err := world.client.SmtpMailbox()
+	if err != nil {
+		t.Fatal(err)
+	}
+	keep := world.client.outboxSettings().OutcomeKeepDuration
+	interval := world.client.outboxSettings().OutcomeSweepInterval
+	old, young := testMailOutboxEffectKey(), testMailOutboxEffectKey()
+	write := func(effectKey []byte, updateTime time.Time) {
+		t.Helper()
+		if err := mailbox.WriteOutcomes(ctx, effectKey, []*SmtpDomainOutcome{{Domain: "outside.example", Outcome: SmtpOutcomeSent, UpdateTime: updateTime}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stands := func(effectKey []byte) bool {
+		t.Helper()
+		_, err := mailbox.ReadOutcomes(ctx, effectKey)
+		if err != nil && !errors.Is(err, ErrSmtpMailboxNotFound) {
+			t.Fatal(err)
+		}
+		return err == nil
+	}
+	write(old, clock.Now().Add(-keep-time.Hour))
+	write(young, clock.Now().Add(-keep+time.Hour))
+	world.client.passOutcomes(run)
+	if stands(old) || !stands(young) {
+		t.Fatalf("after the first pass: old %t, young %t", stands(old), stands(young))
+	}
+	// the young record's days end, and a pass within the interval does not look
+	clock.Advance(2 * time.Hour)
+	world.client.passOutcomes(run)
+	if !stands(young) {
+		t.Fatal("a pass within the interval swept")
+	}
+	clock.Advance(interval)
+	world.client.passOutcomes(run)
+	if stands(young) {
+		t.Fatal("a record past its days outlived the next interval's pass")
+	}
+	if removed, err := world.client.RemoveExpiredOutcomes(ctx); err != nil || removed != 0 {
+		t.Fatalf("a sweep of an empty or/: %d %v", removed, err)
+	}
+}
+
 // The send world bound with an outbox: a signer and the network's standing.
 func testMailSendBindOutbox(world *mailClientTestWorld, signer *testMailOutboxSigner, standing MailOutboxStanding) {
 	binding, _, err := world.client.bound()

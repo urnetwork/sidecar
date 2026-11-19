@@ -100,6 +100,9 @@ type urNetworkStatus struct {
 	Config       string `json:"config,omitempty"`
 	ConfigReason string `json:"config_reason,omitempty"`
 	ConfigPin    uint64 `json:"config_pin,omitempty"`
+	// The search index's share of the network's storage as the Sidecar last read it (D-QUOTA-10): counts and a time,
+	// nothing secret. Absent before any read.
+	IndexShare *sidecar.SidecarIndexShare `json:"index_share,omitempty"`
 }
 
 // A pass, from the terminal, in a request: a request may carry one, a reply never does.
@@ -223,6 +226,7 @@ func (self *urDaemonNetwork) networkStatuses() []urNetworkStatus {
 			State:      string(status.State),
 			Reason:     string(status.Reason),
 			Generation: status.Generation,
+			IndexShare: status.IndexShare,
 		}
 		if identity := network.Sidecar.Identity(); identity != nil {
 			networkStatus.SidecarId = &identity.SidecarId

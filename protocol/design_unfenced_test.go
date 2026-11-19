@@ -592,6 +592,10 @@ message VaultUsedAt { string registrable_domain = 1; uint64 first = 2; uint64 la
 // §15.7's forward and ra/ rows.
 message MailForward { string address = 1; repeated string burners = 2; uint64 verified_time_ms = 3; }
 message MailReverseAlias { string original_sender = 1; string burner_address = 2; }
+// The reverse aliases' key in vault/ and rcpt/'s record, which the answers to mail-m9-04-reverse-alias-key (QD-1095)
+// and mail-m9-01-recipient-approval-bytes (QD-1094) give with their numbers.
+message MailReverseAliasKey { bytes key = 1; }
+message MailRecipientApproval { string alias = 1; string recipient = 2; bytes decision = 3; bytes action = 4; }
 // §15.7's o/ row, §14's D-SMTP-18 and plan-SMTP-wire-gaps#4, with mail-proto-format-readings' approval_not_after.
 message SmtpOutboxEntry {
   bytes effect_key = 1; bytes message_sha256 = 2; string sender = 3; repeated string recipients = 4;

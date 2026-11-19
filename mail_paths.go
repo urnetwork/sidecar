@@ -6,8 +6,9 @@
 //
 //	mailcfg          addr/<h>/<address>   burner/<h>/<blabel>
 //	mailbox, group   m/<yyyymm>/<h>/<id>   i/<yyyymm>/<n>   f/<yyyymm>/<n>
-//	mailbox          vault/<h>/<entry_id>   r/<yyyymm>/<h>/<id>   o/<h>/<effect_key>   or/<h>/<effect_key>
-//	                 p/<sidecar_id>   forward   ra/<h>/<token>   s/model
+//	mailbox          vault/<h>/<entry_id>   vault/<h>/reverse-alias-key   r/<yyyymm>/<h>/<id>   o/<h>/<effect_key>
+//	                 or/<h>/<effect_key>   p/<sidecar_id>   forward   ra/<h>/<token>   s/model
+//	mailbox, group   rcpt/<h>/<name>
 //
 // <h> shards a family into 256 directories (MailShard). <yyyymm> is the UTC month of the sealed receive time
 // (MailDepositReceiveTime), so readers racing one deposit write one path. A binary name is lowercase RFC 4648 base32
@@ -45,7 +46,12 @@ const (
 	mailOutcomeFamily      = "or"
 	mailProverFamily       = "p"
 	mailReverseAliasFamily = "ra"
+	// approved recipients (§15.10, owner decision 280)
+	mailRecipientApprovalFamily = "rcpt"
 )
+
+// The reverse aliases' MAC key's name in vault/ (QD-1095): no entry id spells it, so the vault's listing passes it over.
+const mailVaultReverseAliasKeyName = "reverse-alias-key"
 
 // The mailbox's two single files (§15.7).
 const (
@@ -257,6 +263,22 @@ func MailReverseAliasPath(token string) (string, error) {
 		return "", fmt.Errorf("%w: not a reverse alias token", ErrMailPathInvalid)
 	}
 	return mailShardedPath(mailReverseAliasFamily, token), nil
+}
+
+// vault/<h>/reverse-alias-key: the mailbox's reverse-alias MAC key, a MailReverseAliasKey (QD-1095).
+func MailReverseAliasKeyPath() string {
+	return mailShardedPath(mailVaultFamily, mailVaultReverseAliasKeyName)
+}
+
+// rcpt/<h>/<name>: the record approving recipient for alias (owner decision 280, QD-1094), <name> the lowercase base32
+// of SHA-256(alias ‖ 0x00 ‖ recipient), 52 characters, so one repo holding several aliases' mail keeps one a pair and
+// its listing names neither.
+func MailRecipientApprovalPath(alias string, recipient string) string {
+	hash := sha256.New()
+	hash.Write([]byte(alias))
+	hash.Write([]byte{0})
+	hash.Write([]byte(recipient))
+	return mailShardedPath(mailRecipientApprovalFamily, mailBinaryName(hash.Sum(nil)))
 }
 
 // addr/<h>/<address>: one MailAddress in mailcfg, created only if absent (§15.8). address is lowercase, as

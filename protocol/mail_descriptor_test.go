@@ -117,6 +117,9 @@ var testMailMessageFields = map[string][]string{
 	"VaultUsedAt":      {"1 string registrable_domain", "2 uint64 first", "3 uint64 last"},
 	"MailForward":      {"1 string address", "2 repeated string burners", "3 uint64 verified_time_ms"},
 	"MailReverseAlias": {"1 string original_sender", "2 string burner_address"},
+	// QD-1095's and QD-1094's answers
+	"MailReverseAliasKey":   {"1 bytes key"},
+	"MailRecipientApproval": {"1 string alias", "2 string recipient", "3 bytes decision", "4 bytes action"},
 	"SmtpOutboxEntry": {
 		"1 bytes effect_key", "2 bytes message_sha256", "3 string sender", "4 repeated string recipients",
 		"5 uint32 flags", "6 repeated string tl4_domains", "7 uint64 create_time_ms", "8 uint64 approval_not_after",
