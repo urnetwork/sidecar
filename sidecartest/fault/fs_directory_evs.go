@@ -6,7 +6,8 @@
 // (sidecar.DirectoryEvsCards), the record's (sidecar.RecordEvsStreams) and, through them, the erasure's
 // (sidecar.DirectoryEvsErasure) and the in-ref index writer (search_evs_testhooks.go), so FS-87's and FS-99's
 // format-2 cases run their cards, their index documents, their CUTs, CLOSUREs and ERASEs through evsservice's engine
-// on T2's fakes and, through server's evshost, on T3's stores.
+// on T2's fakes and, through server's evshost, on T3's stores, and FS-88's searches case and S13's search_agents step
+// search the cards ref's index through a search device over a reader's evs client (SearchDevice).
 //
 //	devices   each device's sidecar is its evs world device's, its identity key the one its evs pushes sign with, so
 //	          a card's Signed and the push that carries it verify under one key. A device that is a directory admin
@@ -86,11 +87,25 @@ type DirEvsDevice struct {
 
 	stateLock sync.Mutex
 	alarms    []*sidecar.RecordAlarm
+	// the runs TaintRun marked, which outlive a restart as a run's taint file does
+	taintedRuns map[sidecar.Id]bool
 }
 
-// RecordRunView: every run of the world's is untainted.
+// RecordRunView: a run of the device's is untainted until TaintRun marks it.
 func (self *DirEvsDevice) RunTainted(runId sidecar.Id) bool {
-	return false
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.taintedRuns[runId]
+}
+
+// Marks a run of the device's tainted from now.
+func (self *DirEvsDevice) TaintRun(runId sidecar.Id) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.taintedRuns == nil {
+		self.taintedRuns = map[sidecar.Id]bool{}
+	}
+	self.taintedRuns[runId] = true
 }
 
 // The alarms the device's directory raised for reason naming sidecarId.
@@ -474,6 +489,43 @@ func (self *DirEvsWorld) IsAdmin(signer sidecar.Id) bool {
 // The cards ref's index at its head as device reads it through EvsRepo's verifying reader.
 func (self *DirEvsWorld) CardsIndex(ctx context.Context, device string) (*sidecar.SearchTestEvsIndex, error) {
 	return sidecar.ReadSearchTestEvsIndex(ctx, self.devices[device].device.Repo, sidecar.DirectoryCardsRefName(), self.IsAdmin)
+}
+
+// The plaintext of every index file the cards ref holds at its head, by path, as device reads them.
+func (self *DirEvsWorld) CardsIndexFiles(ctx context.Context, device string) (map[string][]byte, error) {
+	return sidecar.ReadSearchTestEvsIndexFiles(ctx, self.devices[device].device.Repo, sidecar.DirectoryCardsRefName())
+}
+
+// A search device following the cards ref's index through device's evs client (sidecar's
+// directory_search_testhooks.go), under a host's settings and conditions. The caller closes it.
+func (self *DirEvsWorld) SearchDevice(ctx context.Context, device string, settings *sidecar.SidecarSearchSettings, conditions sidecar.SearchConditions) (*sidecar.SearchTestEvsDevice, error) {
+	return sidecar.NewSearchTestEvsDevice(ctx, &sidecar.SearchTestEvsDeviceArgs{
+		Repo: self.devices[device].device.Repo, RefName: sidecar.DirectoryCardsRefName(),
+		Settings: settings, Conditions: func() sidecar.SearchConditions { return conditions },
+		IsAdmin: self.IsAdmin, ReadByteCount: sidecar.EvsReadMaxRangeByteCount,
+	})
+}
+
+// The reader device's searches are judged for: its member, each device's member as the fixtures name it, and the
+// directory's kind.
+func (self *DirEvsWorld) SearchReader(device string) *sidecar.SearchTrustReader {
+	return &sidecar.SearchTrustReader{
+		MemberId: self.devices[device].MemberId,
+		MemberOf: func(sidecarId sidecar.Id) (sidecar.Id, bool) {
+			for _, held := range self.devices {
+				if held.SidecarId == sidecarId {
+					return held.MemberId, true
+				}
+			}
+			return sidecar.Id{}, false
+		},
+		RepoKind: func(repoId sidecar.Id) protocol.RepoKind {
+			if repoId == self.DirectoryId {
+				return protocol.RepoKind_REPO_KIND_DIRECTORY
+			}
+			return protocol.RepoKind_REPO_KIND_GENERAL
+		},
+	}
 }
 
 // The runner's delay drawn as none: every pass works what its sync showed.
