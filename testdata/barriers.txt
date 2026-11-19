@@ -464,6 +464,8 @@ barrier keys.unlock.after keys_unlock.go
 barrier keys.unlock.before keys_unlock.go
 barrier mail.approved.record.after mail_approved.go
 barrier mail.approved.record.before mail_approved.go
+barrier mail.approved.remove.after mail_approved.go
+barrier mail.approved.remove.before mail_approved.go
 barrier mail.auth.check.after mail_auth.go
 barrier mail.auth.check.before mail_auth.go
 barrier mail.auth.slots.take.after mail_auth_slots.go

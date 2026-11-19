@@ -121,11 +121,27 @@ func TestMailApprovedRecipientSparesTheGate(t *testing.T) {
 	if _, err := world.client.Send(ctx, &MailSendArgs{From: testMailSendFrom, To: []string{recipient}, Text: "x", Action: MailConfigActionArgs{RunId: &tainted}}); err == nil {
 		t.Fatal("a tainted run's send went on a record")
 	}
-	if err := approved.Remove(ctx, testMailSendFrom, recipient); err != nil {
-		t.Fatal(err)
+	// a person's removal, the pair as typed: another alias's or another network's removes nothing
+	if removed, err := approved.Remove(ctx, "ann@other.root.example", recipient); err == nil || removed {
+		t.Fatalf("another network's alias removed a record: %v %v", removed, err)
+	}
+	if removed, err := approved.Remove(ctx, testMailSendFrom, "not an address"); err == nil || removed {
+		t.Fatalf("a recipient that is no address removed a record: %v %v", removed, err)
+	}
+	if removed, err := approved.Remove(ctx, testMailSendFrom, "third@outside.example"); err != nil || removed {
+		t.Fatalf("a pair with no record: %v %v", removed, err)
+	}
+	if !approved.ApprovedAll(ctx, testMailSendFrom, []string{recipient}) {
+		t.Fatal("a removal of another pair took this one's record")
+	}
+	if removed, err := approved.Remove(ctx, " Ann@ACME.root.example ", " Someone@Outside.Example"); err != nil || !removed {
+		t.Fatalf("the pair as a person types it: %v %v", removed, err)
 	}
 	if approved.ApprovedAll(ctx, testMailSendFrom, []string{recipient}) {
 		t.Fatal("a removed record approves")
+	}
+	if removed, err := approved.Remove(ctx, testMailSendFrom, recipient); err != nil || removed {
+		t.Fatalf("a second removal: %v %v", removed, err)
 	}
 }
 

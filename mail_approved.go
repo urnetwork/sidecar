@@ -15,8 +15,10 @@
 //	         that governs the action now (spendUnderRule), so a file an agent wrote, or one whose approver was revoked,
 //	         approves nothing. The decision's own not_after bounds its use, not the record, which lasts until a person
 //	         removes it. With no SpendState bound nothing is approved, the closed direction
-//	remove   a person removes a record with `ur mail recipients rm` on /dev/tty or in an app (Remove); MCP's evs tools
-//	         refuse rcpt/
+//	remove   a person removes a record with `ur mail recipients rm` on /dev/tty or in an app (Remove). §15.10 has
+//	         MCP's evs tools refuse rcpt/, which mcp's guard does not do yet (question mail-m9-01-mcp-rcpt-guard): a
+//	         record an agent writes approves nothing, but until that row lands an agent that kept a removed record's
+//	         bytes could write them back, and they would verify again
 //
 // On every leg but the extension's. Nothing here logs an address (I-13). Safe for concurrent use.
 
@@ -28,6 +30,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -152,25 +155,47 @@ func (self *MailApprovedRecipients) Record(ctx context.Context, alias string, re
 	}
 }
 
-// Removes the record approving recipient for alias, as `ur mail recipients rm` asks: absent is no error.
-func (self *MailApprovedRecipients) Remove(ctx context.Context, alias string, recipient string) error {
+// Removes the record approving recipient for alias, as `ur mail recipients rm` asks, and says whether one stood. alias
+// and recipient are as a person types them: each is put in the one form a send records it under, the alias this
+// network's address and the recipient lowercase. ErrMailRecipientApproval for an alias that is no address of this
+// network's with a mailbox, or a recipient that is no address.
+func (self *MailApprovedRecipients) Remove(ctx context.Context, alias string, recipient string) (bool, error) {
+	client := self.client
+	row := client.networkRow()
+	if binding, _, err := client.bound(); err == nil && binding.Network != nil {
+		row = binding.Network()
+	}
+	from, own := mailSendOwnRecipient(row, strings.TrimSpace(alias))
+	if !own {
+		return false, ErrMailRecipientApproval
+	}
+	recipients, err := mailSendAddressList(client.sendSettings(), []string{recipient})
+	if err != nil || len(recipients) != 1 {
+		return false, ErrMailRecipientApproval
+	}
+	alias, recipient = from.Address(), recipients[0]
 	store, err := self.store(ctx, alias)
 	if err != nil {
-		return err
+		return false, err
 	}
 	settings := self.settings()
 	path := MailRecipientApprovalPath(alias, recipient)
 	for attempt := 0; ; attempt += 1 {
 		_, version, err := store.Read(ctx, path, settings.OutcomeRecordMaxByteCount)
 		if errors.Is(err, ErrEvsPathAbsent) {
-			return nil
+			return false, nil
 		}
 		if err != nil {
-			return err
+			return false, err
 		}
+		testHookBarrier("mail.approved.remove.before", "")
 		_, err = store.Write(ctx, []*mailStoreWrite{{Path: path, Remove: true, IfVersion: version}})
-		if err == nil || !mailStoreConflictOn(err, path) || settings.WriteRetryCount <= attempt {
-			return err
+		testHookBarrier("mail.approved.remove.after", "")
+		if err == nil {
+			return true, nil
+		}
+		if !mailStoreConflictOn(err, path) || settings.WriteRetryCount <= attempt {
+			return false, err
 		}
 	}
 }
