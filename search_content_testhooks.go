@@ -167,7 +167,8 @@ type searchTestExtraction struct {
 	text    bool
 }
 
-// Extracts content as the in-ref writer does, in one pass, a chunk a document; nil content extracts nothing.
+// Extracts content as the in-ref writer does, in one pass, a chunk a document: mail for a mailbox's m/ messages, files
+// for the rest (indexExtractorKind); nil content extracts nothing.
 func (self *SearchTestWorld) extract(path string, version uint64, content []byte) (*searchTestExtraction, error) {
 	extraction := &searchTestExtraction{}
 	if content == nil {
@@ -175,8 +176,9 @@ func (self *SearchTestWorld) extract(path string, version uint64, content []byte
 	}
 	self.normalizerLock.Lock()
 	defer self.normalizerLock.Unlock()
+	kind := indexExtractorKind(indexPlace{repoKind: self.kind, path: path})
 	streamArgs := &indexStreamArgs{
-		template:   &IndexDocument{Kind: IndexDocFile, Name: []byte(path), Version: version},
+		template:   &IndexDocument{Kind: kind, Name: []byte(path), Version: version},
 		byteCount:  uint64(len(content)),
 		normalizer: self.normalizer,
 		refId:      self.refId,
@@ -190,6 +192,18 @@ func (self *SearchTestWorld) extract(path string, version uint64, content []byte
 			extraction.full = append(extraction.full, document)
 			return nil
 		},
+	}
+	if kind == IndexDocMail {
+		// a message is always text, written to the extractor in one piece
+		stream := indexExtractMailStream(streamArgs)
+		if _, err := stream.Write(content); err != nil {
+			return nil, err
+		}
+		if err := stream.Close(); err != nil {
+			return nil, err
+		}
+		extraction.text = true
+		return extraction, nil
 	}
 	text, err := indexExtractFileStream(streamArgs, bytes.NewReader(content))
 	if err != nil {
@@ -266,6 +280,51 @@ func (self *SearchTestWorld) CommitIndexedMerging(ctx context.Context, writer Id
 
 // See CommitIndexed; mergeInPush merges a push past DirectBytes in the push rather than refusing it.
 func (self *SearchTestWorld) commitIndexed(ctx context.Context, writer Id, at time.Time, changes []*SearchTestChange, mergeInPush bool) (*SearchTestCommit, error) {
+	planned, err := self.planIndexed(ctx, writer, at, changes, mergeInPush)
+	if err != nil {
+		return nil, err
+	}
+	return planned.Commit(ctx)
+}
+
+// A writer's in-ref push planned at a head and not yet committed: its content and the writer's head, as CommitIndexed
+// builds them.
+type SearchTestPlannedContentPush struct {
+	world   *SearchTestWorld
+	writer  Id
+	at      time.Time
+	push    *indexPush
+	content []*searchTestContentChange
+}
+
+// writer's in-ref push of changes planned at the head now, as CommitIndexed plans it, and not committed: what a schedule
+// lands a merge or another push of the writer's before.
+func (self *SearchTestWorld) PlanIndexed(ctx context.Context, writer Id, at time.Time, changes []*SearchTestChange) (*SearchTestPlannedContentPush, error) {
+	return self.planIndexed(ctx, writer, at, changes, false)
+}
+
+// Commits the planned push at the base it was planned at, content and head under one CAS: ErrSearchTestConflict where
+// a push changed a path it writes since, ErrSearchTestIndexEpoch where a CUT did.
+func (self *SearchTestPlannedContentPush) Commit(ctx context.Context) (*SearchTestCommit, error) {
+	ref := self.world.ref
+	committed, err := func() (*indexCommitted, error) {
+		ref.stateLock.Lock()
+		defer ref.stateLock.Unlock()
+		return ref.commitWithLock(self.writer, self.push, self.content)
+	}()
+	switch {
+	case isIndexRefusal(err, indexRefusalConflict):
+		return nil, ErrSearchTestConflict
+	case isIndexRefusal(err, indexRefusalIndexEpoch):
+		return nil, ErrSearchTestIndexEpoch
+	case err != nil:
+		return nil, err
+	}
+	return searchTestCommitOf(committed.version, self.at, self.content, len(self.push.files)+len(self.push.removals)), nil
+}
+
+// See PlanIndexed; mergeInPush merges a push past DirectBytes in the push rather than refusing it.
+func (self *SearchTestWorld) planIndexed(ctx context.Context, writer Id, at time.Time, changes []*SearchTestChange, mergeInPush bool) (*SearchTestPlannedContentPush, error) {
 	view, err := self.view(ctx, writer)
 	if err != nil {
 		return nil, err
@@ -325,20 +384,7 @@ func (self *SearchTestWorld) commitIndexed(ctx context.Context, writer Id, at ti
 			}
 		}
 	}
-	committed, err := func() (*indexCommitted, error) {
-		ref.stateLock.Lock()
-		defer ref.stateLock.Unlock()
-		return ref.commitWithLock(writer, push, content)
-	}()
-	switch {
-	case isIndexRefusal(err, indexRefusalConflict):
-		return nil, ErrSearchTestConflict
-	case isIndexRefusal(err, indexRefusalIndexEpoch):
-		return nil, ErrSearchTestIndexEpoch
-	case err != nil:
-		return nil, err
-	}
-	return searchTestCommitOf(committed.version, at, content, len(push.files)+len(push.removals)), nil
+	return &SearchTestPlannedContentPush{world: self, writer: writer, at: at, push: push, content: content}, nil
 }
 
 // --- the content ref, as SEARCH-M10-12 reads one ---

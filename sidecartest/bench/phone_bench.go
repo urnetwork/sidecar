@@ -45,19 +45,9 @@ type PhoneBenchHost struct {
 	TypoTopFive float64
 }
 
-// The phones' settings over the core's defaults (sdk's phone host class; sidecartest/fault's searchPhoneSettings).
+// The phones' settings over the core's defaults (sdk's phone host class), as the remote team's phones take them.
 func benchPhoneSettings() *sidecar.SidecarSearchSettings {
-	settings := sidecar.DefaultSidecarSettings().Search
-	settings.AllPolicy = sidecar.SearchPolicyWifiCharging
-	settings.MemoryByteCount = 4*1024*1024 + 256*1024
-	settings.DaemonSearchCount = 1
-	settings.AllCacheByteCount = 256 * 1024 * 1024
-	settings.UnusedAllAge = 30 * 24 * time.Hour
-	settings.DirectoryBuckets = false
-	settings.SyncRoundCount = 1
-	settings.RemoteServe = false
-	settings.RemoteAsk = true
-	return settings
+	return sidecartest.SearchRemotePhoneSettings()
 }
 
 // The page Worker's (§18.4's caps and targets rows).
@@ -94,6 +84,7 @@ type PhoneBenchSettings struct {
 	EvidenceDays int
 }
 
+// §22.8's run: five years of mail on the three phone classes.
 func DefaultPhoneBenchSettings() *PhoneBenchSettings {
 	return &PhoneBenchSettings{
 		Corpus: DefaultBenchCorpusSettings(),
@@ -214,7 +205,7 @@ func runPhoneBenchHost(ctx context.Context, settings *PhoneBenchSettings, host *
 	if err := device.Sync(ctx); err != nil {
 		return nil, fmt.Errorf("the phone's sync: %w", err)
 	}
-	figures.BudgetByteCount = host.WorkingSetByteCount + 256*1024
+	figures.BudgetByteCount = host.WorkingSetByteCount + host.Settings().VersionCacheByteCount
 	sampler = sidecartest.NewSearchHeapSamplerLeavingOut(device.CacheByteCount)
 	durations, errs := []time.Duration{}, []error{}
 	for _, query := range corpus.Rare[:min(settings.MemoryQueryCount, len(corpus.Rare))] {
