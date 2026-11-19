@@ -567,10 +567,10 @@ func TestAHungBarrierFailsInsideTheBoundWithItsTrace(t *testing.T) {
 	}
 }
 
-// A slow row is fixed, never given longer than §22.8's 10 s.
+// A slow row is fixed, never given longer than §22.8's 60 s.
 func TestCheckRowRefusesARaisedBarrierWait(t *testing.T) {
 	settings := toyRuleSettings(t)
-	settings.Net.Barriers.AwaitTimeout = 20 * time.Second
+	settings.Net.Barriers.AwaitTimeout = 2 * sidecartest.DefaultBarrierDriverSettings().AwaitTimeout
 	report := CheckRow(t.Context(), &Registration{Row: "FS-2", Tiers: []Tier{TierT2}, Build: toyCounterBuilder(&toyCounter{})}, settings)
 	if !report.Failed() || !strings.Contains(fmt.Sprint(report.Errors), "never raised for a slow row") {
 		t.Errorf("%s", report)

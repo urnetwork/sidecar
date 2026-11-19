@@ -21,7 +21,7 @@
 // the fixed order takes over and ScriptDeparture says where.
 //
 // Every hook call is checked against the naming rule, and a violation fails the schedule. Waits here
-// bound real time only to fail with a trace (§22.8's 10 s); nothing here sleeps. Safe for concurrent
+// bound real time only to fail with a trace (§22.8's 60 s); nothing here sleeps. Safe for concurrent
 // use.
 
 package sidecartest
@@ -102,7 +102,10 @@ func (self *BarrierEvent) String() string {
 }
 
 type BarrierDriverSettings struct {
-	// §22.8: a schedule waiting this long in real time for a barrier fails with its trace.
+	// §22.8: a schedule waiting this long in real time for a barrier fails with its trace. The stall
+	// check below fails a run whose holder is blocked within seconds, so this bound only has to catch
+	// a holder that works without end, and its default is long enough that a schedule merely slow on
+	// a loaded host does not fail by it (60 s, from 10 s, QD-1101).
 	AwaitTimeout time.Duration
 	// How long in real time an actor may keep the baton while others wait or a schedule wants to
 	// settle, before the driver asks whether it is blocked on something it cannot see. A holder found
@@ -122,7 +125,7 @@ type BarrierDriverSettings struct {
 
 func DefaultBarrierDriverSettings() *BarrierDriverSettings {
 	return &BarrierDriverSettings{
-		AwaitTimeout:        10 * time.Second,
+		AwaitTimeout:        60 * time.Second,
 		StallTimeout:        2 * time.Second,
 		StallSampleInterval: 200 * time.Millisecond,
 		StallSampleCount:    3,

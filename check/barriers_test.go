@@ -4,7 +4,7 @@
 // in every module's non-test code, by name and file, in testdata/barriers.txt, generated and committed.
 // A site not in the file fails until it is regenerated, which shows a reviewer each new linearization
 // point and each new hooked key in the diff; a schedule's Await or Release naming a barrier no site
-// holds fails here, statically, where at run time it would only be a 10 s timeout.
+// holds fails here, statically, where at run time it would only be a 60 s timeout.
 //
 // A barrier's name is a string literal or a constant holding one, in the call's package or another of
 // this repository's, as the contract for schedule authors asks; a name the inventory cannot read is a

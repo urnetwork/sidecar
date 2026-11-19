@@ -76,7 +76,7 @@ func (self *RowReport) String() string {
 	return text.String()
 }
 
-// A slow row is fixed, never given longer than §22.8's 10 s for a barrier.
+// A slow row is fixed, never given longer than §22.8's 60 s for a barrier.
 func checkRuleSettings(settings *RuleSettings) error {
 	if settings.Net == nil || settings.Net.Barriers == nil {
 		return errors.New("rule settings name no barrier settings")
