@@ -119,6 +119,9 @@ type MailOutboxSettings struct {
 	WriteRetryCount int
 	// How long an or/ record is kept from its last outcome's update (§15.7's 30 days).
 	OutcomeKeepDuration time.Duration
+	// How often the mail component sweeps the member's or/ for records past OutcomeKeepDuration: a day, so a record
+	// outlives its 30 days by at most one more, and a listing of or/'s shards runs once a day a device.
+	OutcomeSweepInterval time.Duration
 }
 
 // The one default.
@@ -130,6 +133,7 @@ func DefaultMailOutboxSettings() *MailOutboxSettings {
 		ProverRecordMaxByteCount:  4 * 1024,
 		WriteRetryCount:           8,
 		OutcomeKeepDuration:       30 * 24 * time.Hour,
+		OutcomeSweepInterval:      24 * time.Hour,
 	}
 }
 
@@ -137,7 +141,7 @@ func DefaultMailOutboxSettings() *MailOutboxSettings {
 func (self *MailOutboxSettings) valid() bool {
 	return self != nil && 0 < self.OutboxSignedMaxByteCount && self.OutboxSignedMaxByteCount < self.OutboxFileMaxByteCount &&
 		0 < self.OutcomeRecordMaxByteCount && 0 < self.ProverRecordMaxByteCount && 0 < self.WriteRetryCount &&
-		0 < self.OutcomeKeepDuration
+		0 < self.OutcomeKeepDuration && 0 < self.OutcomeSweepInterval
 }
 
 // What forwarding is held to (MAIL-M9-04; §15.10's forwarding, owner decision 53). Every value must be positive.

@@ -218,6 +218,18 @@ func (self *mailSendEffect) Run(ctx context.Context, effectKey []byte) ([]byte, 
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrSidecarEffectNotDone, err)
 	}
+	// a use on a device or presence decision approves its internet recipients from now on (owner decision 280)
+	if spend, ok := ApprovalSpendFromContext(ctx); ok {
+		queued := []string{}
+		for _, recipient := range result.Recipients {
+			if recipient.Outcome == MailSendQueued {
+				queued = append(queued, recipient.Address)
+			}
+		}
+		if 0 < len(queued) {
+			self.client.ApprovedRecipients().Record(ctx, plan.fromAddress, queued, spend.Decisions, spend.Action)
+		}
+	}
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()

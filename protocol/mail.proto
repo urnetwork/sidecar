@@ -321,6 +321,22 @@ message MailReverseAlias {         // ra/<h>/<token>, mailboxes only (15.10)
   string burner_address = 2;
 }
 
+// The reverse aliases' MAC key (15.10's forwarding step 3; QD-1095): vault/<h>/reverse-alias-key in a mailbox, created
+// only if absent by the first forwarding device and read only by the owner's consented devices, as vault entries are.
+message MailReverseAliasKey {
+  bytes key = 1;                   // 32 B, HMAC-SHA-256's
+}
+
+// An approved recipient (15.10; owner decision 280, QD-1094): rcpt/<h>/<name> in the repo holding the sending alias's
+// mail, <name> the lowercase base32 of SHA-256(alias || 0x00 || recipient), created only if absent, kept until a person
+// removes it, its decision re-verified at each use.
+message MailRecipientApproval {
+  string alias = 1;                // the sending alias, the From in its one form
+  string recipient = 2;            // the approved recipient, lowercase
+  bytes decision = 3;              // the ApprovalDecision's stored Signed, on channel device or presence
+  bytes action = 4;                // the stored CanonicalAction of kind mail_send that lists the recipient
+}
+
 // The body of o/<h>/<effect_key>'s Signed, as SIGNED_SMTP_OUTBOX (D-SMTP-18), the message's bytes following that
 // Signed in the file (plan-SMTP-wire-gaps#4). MAIL writes o/, so this file declares it.
 message SmtpOutboxEntry {

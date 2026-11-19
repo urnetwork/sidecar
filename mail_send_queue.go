@@ -166,3 +166,44 @@ func (self *MailClient) SmtpMailbox() (SmtpMailbox, error) {
 	}
 	return newMailSmtpMailbox(parts.store(mailboxId), deposit, self.BounceRecipient, self.outboxSettings(), self.clock), nil
 }
+
+// Removes the member's or/ records past their 30 days (§15.7; mailSmtpMailbox.RemoveExpiredOutcomes) and answers the
+// count removed. A device with no mailbox of its own removes nothing.
+func (self *MailClient) RemoveExpiredOutcomes(ctx context.Context) (int, error) {
+	_, parts, err := self.bound()
+	if err != nil {
+		return 0, err
+	}
+	mailboxId, err := self.mailboxId()
+	if errors.Is(err, ErrMailNoMailbox) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return newMailSmtpMailbox(parts.store(mailboxId), nil, nil, self.outboxSettings(), self.clock).RemoveExpiredOutcomes(ctx)
+}
+
+// The component's sweep of or/ (mail_component.go's outcomes row): while mail is on, once an OutcomeSweepInterval a
+// run. A sweep that fails is logged and tried again at the next interval.
+func (self *MailClient) passOutcomes(run *mailComponentRun) {
+	if !self.Enabled() {
+		return
+	}
+	now := self.clock.Now()
+	due := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if now.Before(run.outcomeSweepTime) {
+			return false
+		}
+		run.outcomeSweepTime = now.Add(self.outboxSettings().OutcomeSweepInterval)
+		return true
+	}()
+	if !due {
+		return
+	}
+	if _, err := self.RemoveExpiredOutcomes(run.ctx); err != nil {
+		self.log.Warningf("[mail]expired send outcomes were not all removed: %v", err)
+	}
+}

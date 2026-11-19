@@ -436,6 +436,48 @@ func (self *MailVault) ResumeVaultDeletions(ctx context.Context) error {
 	return nil
 }
 
+// The mailbox's reverse-alias MAC key (§15.10's forwarding step 3; QD-1095): vault/<h>/reverse-alias-key, drawn and
+// created only if absent by the first forwarding device, so every device of the member gives one sender one reverse
+// alias, and read only by the owner's consented devices, as entries are (owner decision 440). 32 bytes; a file of
+// another shape refuses and is never replaced.
+func (self *MailVault) ReverseAliasKey(ctx context.Context) ([]byte, error) {
+	if err := self.consented(); err != nil {
+		return nil, err
+	}
+	path := MailReverseAliasKeyPath()
+	for attempt := 0; ; attempt += 1 {
+		content, _, err := self.store.Read(ctx, path, max(1, self.settings.EntryMaxByteCount))
+		if err == nil {
+			record := &protocol.MailReverseAliasKey{}
+			if err := proto.Unmarshal(content, record); err != nil || len(record.GetKey()) != mailReverseAliasKeyByteCount {
+				return nil, fmt.Errorf("%w: a reverse alias key of another shape", ErrMailVaultEntryInvalid)
+			}
+			testHookSecret("mail_reverse_alias_key", record.GetKey())
+			return bytes.Clone(record.GetKey()), nil
+		}
+		if !errors.Is(err, ErrEvsPathAbsent) {
+			return nil, err
+		}
+		first, second := NewEvsRandomToken(), NewEvsRandomToken()
+		key := append(first[:], second[:]...)
+		testHookSecret("mail_reverse_alias_key", key)
+		content, err = proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.MailReverseAliasKey{Key: key})
+		if err != nil {
+			return nil, err
+		}
+		testHookBarrier("mail.vault.reverse_alias_key.before", "")
+		_, err = self.store.Write(ctx, []*mailStoreWrite{{Path: path, Content: content, IfVersion: 0}})
+		testHookBarrier("mail.vault.reverse_alias_key.after", "")
+		if err == nil {
+			return key, nil
+		}
+		// a racing device's key stands: the next read takes it
+		if !mailStoreConflictOn(err, path) || self.settings.WriteRetryCount <= attempt {
+			return nil, err
+		}
+	}
+}
+
 // ErrMailVaultNotConsented unless the authority holds this sidecar a consented device of the mailbox's owner.
 func (self *MailVault) consented() error {
 	if self.authority == nil || !self.authority.Consented(self.sidecarId, self.ownerMemberId) {
@@ -704,6 +746,9 @@ func (self *MailVault) stands(ctx context.Context, entryId Id) (bool, error) {
 	}
 	return slices.Contains(names, name), nil
 }
+
+// The reverse-alias key's bytes: HMAC-SHA-256's 32.
+const mailReverseAliasKeyByteCount = 32
 
 // The entries the index holds for address, read again where it holds none and is older than
 // AddressIndexRefreshInterval.

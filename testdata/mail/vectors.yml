@@ -349,6 +349,19 @@ messages:
     text: |
       original_sender: "someone@sender.example"
       burner_address: "shop@otter-4821.acme.root.example"
+  - name: reverse-alias-key
+    type: MailReverseAliasKey
+    hex: "0a206b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b"
+    text: |
+      key: "\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b"
+  - name: recipient-approval
+    type: MailRecipientApproval
+    hex: "0a15616e6e4061636d652e726f6f742e6578616d706c651217736f6d656f6e65406f7574736964652e6578616d706c651a050a03010203221b08051217736f6d656f6e65406f7574736964652e6578616d706c65"
+    text: |
+      alias: "ann@acme.root.example"
+      recipient: "someone@outside.example"
+      decision: "\x0a\x03\x01\x02\x03"
+      action: "\x08\x05\x12\x17someone@outside.example"
   - name: outbox-entry
     type: SmtpOutboxEntry
     hex: "0a20eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee1220a79df8f2d5240dd888a3239e3c86d2338d5972ef5372be1a8244bd1a87ccd2581a21626f756e6365732b74306b656e40622e61636d652e726f6f742e6578616d706c652216736f6d656f6e654073656e6465722e6578616d706c65221668696464656e406f7574736964652e6578616d706c652804320f6f7574736964652e6578616d706c653880e89ef19a344080c5faf29a34"

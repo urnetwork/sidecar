@@ -15,8 +15,10 @@
 //	gate      §15.10's step 1: mail to members alone, in a run that is not tainted, is W and goes at once. An internet
 //	          recipient, or a tainted run's send (I-9), makes the send an outward action (I-8): the whole message waits
 //	          on §5.4's gate as one mail_send action (mail_send_gate.go), and nothing is kept, deposited or queued, its
-//	          member part included, until the gate passes it. MailApprovedRecipients would let records spare the gate,
-//	          and approves none until rcpt/'s bytes are settled, the closed direction (mail_approved.go)
+//	          member part included, until the gate passes it. A send whose every internet recipient has an approval
+//	          record that verifies now, in a run that is not tainted, is W as well (MailApprovedRecipients, owner
+//	          decision 280): it goes at once, queued under a key of its own, and a device with no SpendState bound
+//	          reads no record as approving, the closed direction (mail_approved.go)
 //	resolve   a same-network recipient goes through the signed mailcfg (MailConfig.Resolve): unknown, burned and
 //	          paused alike are MailSendUnknown; a known one's repo is judged by MailSendAuthority.MayDeposit
 //	copy      step 2: the message is kept in this device's member's mailbox as an ordinary m/ and i/ entry labeled sent
