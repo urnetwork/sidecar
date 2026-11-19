@@ -279,6 +279,8 @@ type testRouterOptions struct {
 	noRoute bool
 	// the network's lease balance; 0 takes testRouteBalance, negative none
 	balance int64
+	// the host's Push in place of the fake host's
+	push sidecar.Push
 }
 
 // Router settings that pass ValidateRouter, the STARTTLS quiet period apart from every other timer.
@@ -375,7 +377,11 @@ func newTestRouter(t *testing.T, options *testRouterOptions) *testRouter {
 	case 0 < options.balance:
 		host.Quota.SetBalance(connect.Id(self.networkId), options.balance)
 	}
-	service, err := mxedgeservice.NewMxEdgeRouterService(ctx, host.ServiceHost(), self.store, deps, routerDeps, settings)
+	serviceHost := host.ServiceHost()
+	if options.push != nil {
+		serviceHost.Push = options.push
+	}
+	service, err := mxedgeservice.NewMxEdgeRouterService(ctx, serviceHost, self.store, deps, routerDeps, settings)
 	if err != nil {
 		t.Fatal(err)
 	}
