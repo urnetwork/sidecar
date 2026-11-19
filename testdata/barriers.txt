@@ -462,6 +462,8 @@ barrier keys.rotate.after keys_rotate.go
 barrier keys.rotate.before keys_rotate.go
 barrier keys.unlock.after keys_unlock.go
 barrier keys.unlock.before keys_unlock.go
+barrier mail.approved.record.after mail_approved.go
+barrier mail.approved.record.before mail_approved.go
 barrier mail.auth.check.after mail_auth.go
 barrier mail.auth.check.before mail_auth.go
 barrier mail.auth.slots.take.after mail_auth_slots.go
@@ -522,6 +524,8 @@ barrier mail.vault.erase.after mail_vault.go
 barrier mail.vault.erase.before mail_vault.go
 barrier mail.vault.remove.after mail_vault.go
 barrier mail.vault.remove.before mail_vault.go
+barrier mail.vault.reverse_alias_key.after mail_vault.go
+barrier mail.vault.reverse_alias_key.before mail_vault.go
 barrier mail.vault.write.after mail_vault.go
 barrier mail.vault.write.before mail_vault.go
 barrier mxedge.closed_handshake_read.after mxedgeservice/closed_handshake.go
@@ -860,7 +864,7 @@ secret invite_join_secret config_invite.go
 secret joiner_secret mls_welcome.go
 secret mail_forward_code mail_forward.go
 secret mail_local_credential mail_local_credential.go
-secret mail_reverse_alias_key mail_reverse_alias.go
+secret mail_reverse_alias_key mail_vault.go
 secret mail_spool_key mail_spool.go
 secret measure_client_iv smtpproof/prover_measure.go
 secret measure_client_key smtpproof/prover_measure.go
