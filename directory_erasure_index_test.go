@@ -1139,3 +1139,13 @@ func TestDirectoryFormat2ClosurePushRules(t *testing.T) {
 	}
 	requireOne("after an admin's own card")
 }
+
+// The evs binding of format 2's erasure is made only over the directory's evs binding and its admins.
+func TestDirectoryEvsErasureNeedsItsBinding(t *testing.T) {
+	if _, err := sidecar.NewDirectoryEvsErasure(nil); !errors.Is(err, sidecar.ErrDirectoryCardsUnavailable) {
+		t.Fatalf("a binding on nothing: %v", err)
+	}
+	if _, err := sidecar.NewDirectoryEvsErasure(&sidecar.DirectoryEvsErasureArgs{IsAdmin: func(sidecar.Id) bool { return true }}); !errors.Is(err, sidecar.ErrDirectoryCardsUnavailable) {
+		t.Fatalf("a binding with no evs binding: %v", err)
+	}
+}

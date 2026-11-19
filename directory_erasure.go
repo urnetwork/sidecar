@@ -456,15 +456,8 @@ func (self *Sidecar) DirectoryErasureRunner() (*DirectoryErasureRunner, error) {
 	var made error
 	runner, _ := client.part(directoryErasureRunnerPart, func() any {
 		client.BindEraser(record.Eraser().Erase)
-		if cards, ok := client.boundCards().(*DirectoryEvsCards); ok {
-			// format 2's half over the directory's own evs binding; any other binding leaves it unbound, and it waits
-			files, err := NewDirectoryEvsErasure(&DirectoryEvsErasureArgs{Cards: cards, IsAdmin: client.erasureAdmin})
-			if err != nil {
-				made = err
-				return nil
-			}
-			client.BindErasureFiles(files)
-		}
+		// format 2's half runs over the directory's own evs binding, which the client takes where none is bound
+		// (erasureFiles); any other cards binding leaves it unbound, and it waits
 		runner, err := NewDirectoryErasureRunner(&DirectoryErasureRunnerArgs{
 			Client: client,
 			Expire: func(ctx context.Context, directoryId Id, hold func(entry *RecordReadEntry) bool) error {
@@ -1002,8 +995,11 @@ type directoryErasureFilesState struct {
 
 	stateLock sync.Mutex
 	files     DirectoryErasureFiles
-	rows      map[Id]*directoryErasureLedgerRow
-	loaded    bool
+	// the binding made over the client's own evs cards binding, and the binding it was made over
+	evsFiles DirectoryErasureFiles
+	evsCards *DirectoryEvsCards
+	rows     map[Id]*directoryErasureLedgerRow
+	loaded   bool
 	// the erasures whose state at evs this process has read
 	resumed map[Id]bool
 	// DirectoryErasureSettings.LedgerHold, the runner's where one is built
@@ -1019,8 +1015,9 @@ func (self *DirectoryClient) erasureFilesState() *directoryErasureFilesState {
 	}).(*directoryErasureFilesState)
 }
 
-// Binds format 2's erasure to the directory's evs, nil for none: until one is bound nothing of the cards ref or the
-// index is cut, rewritten or erased.
+// Binds format 2's erasure to the directory's evs. With none bound, or nil, a client whose cards binding is the
+// directory's own evs binding (DirectoryEvsCards) runs over that; any other client cuts, rewrites and erases nothing
+// of the cards ref or the index.
 func (self *DirectoryClient) BindErasureFiles(files DirectoryErasureFiles) {
 	state := self.erasureFilesState()
 	state.stateLock.Lock()
@@ -1028,21 +1025,27 @@ func (self *DirectoryClient) BindErasureFiles(files DirectoryErasureFiles) {
 	state.files = files
 }
 
-// The bound binding, else the client's cards binding where it is one, else nil.
+// The bound binding, else one over the client's cards binding where that is the directory's evs binding, else nil.
 func (self *DirectoryClient) erasureFiles() DirectoryErasureFiles {
 	state := self.erasureFilesState()
-	bound := func() DirectoryErasureFiles {
-		state.stateLock.Lock()
-		defer state.stateLock.Unlock()
+	cards := self.boundCards()
+	state.stateLock.Lock()
+	defer state.stateLock.Unlock()
+	if state.files != nil {
 		return state.files
-	}()
-	if bound != nil {
-		return bound
 	}
-	if files, ok := self.boundCards().(DirectoryErasureFiles); ok {
-		return files
+	evsCards, ok := cards.(*DirectoryEvsCards)
+	if !ok || evsCards == nil {
+		return nil
 	}
-	return nil
+	if state.evsFiles == nil || state.evsCards != evsCards {
+		files, err := NewDirectoryEvsErasure(&DirectoryEvsErasureArgs{Cards: evsCards, IsAdmin: self.erasureAdmin})
+		if err != nil {
+			return nil
+		}
+		state.evsFiles, state.evsCards = files, evsCards
+	}
+	return state.evsFiles
 }
 
 // Whether signer is a directory admin at the state now: which erasure set and settings versions the index's eraser
