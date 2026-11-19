@@ -37,6 +37,13 @@
 //	          the head (EvsRepo.List). A change no name places is no file the copy holds or will hold: its path was
 //	          never one the copy kept, and it stands nowhere at the head, so it is left out. A removed directory
 //	          removes each file the names hold below it
+//	format 2  a format-2 repo's push records are read as format 2 keeps them (ParseEvsBatchRecordFormat2: the record
+//	          and its tail, whose staged segments answer the payload's new objects), each payload checked as stored
+//	          (EvsCheckStoredPayload). A versionless file's version names its path to evs's reader in its push's
+//	          epoch, and a replaced one answers collected: the statement stands in the changes with no content. A
+//	          version whose slots hold no key reads the same way where a committed ERASE names each slot, as an
+//	          erasure's CLOSURE and ERASE leave every version the path held before them (§11.12's closure row); with
+//	          no such ERASE the key was withheld, which alarms tamper, and the version is left out
 //	writes    PutCard, RemoveCard and RemoveCards by path CAS on the cards ref (EvsRepo.WritePaths, each write's
 //	          IfVersion), as the directory's reserved writer (EvsReservedDirectory), so format 2's d/, r/ and q/ files
 //	          are versionless and format 1's keep every version; only a directory path (directoryCardPathKept) is
@@ -690,7 +697,7 @@ func (self *DirectoryEvsCards) rebuildStreamFiles(ctx context.Context, repo *Evs
 			files = append(files, &EvsStreamFileRead{TokenPath: change.TokenPath, EntryBytes: change.EntryVersion, Entry: entry, Erased: true})
 			continue
 		}
-		content, err := self.rebuild(ctx, repo, readResult, statement, change, entry)
+		content, err := self.rebuild(ctx, repo, readResult, statement, change, entry, "")
 		if err != nil {
 			return nil, err
 		}
@@ -699,11 +706,26 @@ func (self *DirectoryEvsCards) rebuildStreamFiles(ctx context.Context, repo *Evs
 	return files, nil
 }
 
-// One file version's content, rebuilt and checked against its sealed fields.
-func (self *DirectoryEvsCards) rebuild(ctx context.Context, repo *EvsRepo, readResult *evsReadResult, statement *EvsVerifiedStatement, change *EvsCheckedChange, entry *protocol.EvsEntryVersion) ([]byte, error) {
+// One file version's content, rebuilt and checked against its sealed fields. path is the file's plaintext path where
+// the binding knows it, a cards ref file's: a versionless version's rounds name its path at that version, which is how
+// evs finds a staged segment in its push's record and answers a replaced version collected (§11.7's reads row;
+// evs_read_versionless.go), so the read result is given the path the version answers, in its push's epoch. A replaced
+// version answers ErrEvsCollected, after the fresh read that shows its replacement.
+func (self *DirectoryEvsCards) rebuild(ctx context.Context, repo *EvsRepo, readResult *evsReadResult, statement *EvsVerifiedStatement, change *EvsCheckedChange, entry *protocol.EvsEntryVersion, path string) ([]byte, error) {
 	verified := &EvsVerifiedPath{
 		TokenPath: change.TokenPath, EntryBytes: change.EntryVersion, Entry: entry, Statement: statement.Statement,
 		CommitVersion: statement.Version,
+	}
+	if entry.GetVersioning() != 0 && path != "" && len(readResult.paths) == len(readResult.replies) {
+		readResult.paths = append(readResult.paths, &evsReadPath{
+			path:          path,
+			version:       entry.GetVersion(),
+			commitVersion: statement.Version,
+			current:       change.TokenPath,
+			epochPaths:    []*protocol.EvsSourcePath{{Epoch: statement.Statement.Push.GetPathEpoch(), TokenPath: change.TokenPath.Components()}},
+			verified:      verified,
+		})
+		readResult.replies = append(readResult.replies, verified)
 	}
 	spill, _, _, err := repo.reconstructContent(ctx, readResult, verified, nil)
 	if err != nil {
@@ -716,8 +738,9 @@ func (self *DirectoryEvsCards) rebuild(ctx context.Context, repo *EvsRepo, readR
 // Reads what the entries' rebuilds need that the read result does not hold yet, together: each format-1 version's
 // segment ranges, as EvsRepo.fetchVersionMissing names them (a keyed segment's header and the record's range, a staged
 // one's prefix), at most EvsReadMaxRangeCount ranges and EvsReadMaxRangeByteCount bytes a read, and the slots their
-// chains keep keys in, ReadObjectCount a read: what each file's rebuild would otherwise ask alone. Anything left out, a
-// versionless version's above all, its rebuild reads itself.
+// chains keep keys in, ReadObjectCount a read, a versionless version's slots among them, which show a version whose
+// key an ERASE destroyed before its rebuild is tried: what each file's rebuild would otherwise ask alone. Anything
+// left out, a versionless version's segments above all, its rebuild reads itself.
 func (self *DirectoryEvsCards) prefetchVersions(ctx context.Context, readResult *evsReadResult, entries []*protocol.EvsEntryVersion) error {
 	ranges := []*protocol.EvsReadRange{}
 	slotIds := [][]byte{}
@@ -731,6 +754,13 @@ func (self *DirectoryEvsCards) prefetchVersions(ctx context.Context, readResult 
 		ranges = append(ranges, &protocol.EvsReadRange{SegmentId: segmentId, Offset: offset, Length: length})
 	}
 	for _, entry := range entries {
+		for _, slotId := range entry.GetSlotIds() {
+			if _, ok := readResult.objects.slot(slotId); ok || seen[string(slotId)] {
+				continue
+			}
+			seen[string(slotId)] = true
+			slotIds = append(slotIds, slotId)
+		}
 		if entry.GetVersioning() != 0 {
 			continue
 		}
@@ -747,13 +777,6 @@ func (self *DirectoryEvsCards) prefetchVersions(ctx context.Context, readResult 
 			}
 			wantRange(locator.GetId(), 0, evsSegmentKeyedHeaderByteCount)
 			wantRange(locator.GetId(), locator.GetOffset(), locator.GetLength())
-		}
-		for _, slotId := range entry.GetSlotIds() {
-			if _, ok := readResult.objects.slot(slotId); ok || seen[string(slotId)] {
-				continue
-			}
-			seen[string(slotId)] = true
-			slotIds = append(slotIds, slotId)
 		}
 	}
 	requests := []*protocol.EvsReadRequest{}
@@ -811,6 +834,7 @@ func (self *DirectoryEvsCards) pushPayloads(ctx context.Context, repo *EvsRepo, 
 		onePart = append(onePart, i)
 	}
 	count := max(1, self.settings.ReadObjectCount)
+	format2 := self.client.format2Reader() != nil
 	for start := 0; start < len(onePart); start += count {
 		batch := onePart[start:min(len(onePart), start+count)]
 		request := &protocol.EvsReadRequest{RefId: head.RefId.Bytes(), PinVersion: head.Version}
@@ -840,8 +864,16 @@ func (self *DirectoryEvsCards) pushPayloads(ctx context.Context, repo *EvsRepo, 
 				if !ok {
 					return fmt.Errorf("%w: the push record of version %d", ErrEvsObjectMissing, statement.Version)
 				}
-				// the batch record as its place holds it, a re-seeded push's under the reseed type (QD-725)
-				batchRecord, err := ParseEvsBatchRecord(record)
+				// the batch record as its place holds it, a re-seeded push's under the reseed type (QD-725); a format-2
+				// reader takes a format-2 record, its staged tail beside it, as EvsRepo.pushPayload reads one
+				var batchRecord *EvsBatchRecord
+				var tail *EvsBatchRecordTail
+				var err error
+				if format2 {
+					batchRecord, tail, err = ParseEvsBatchRecordFormat2(record)
+				} else {
+					batchRecord, err = ParseEvsBatchRecord(record)
+				}
 				if err != nil || (batchRecord.Type != protocol.EvsBatchRecordType_EVS_BATCH_PUSH && batchRecord.Type != protocol.EvsBatchRecordType_EVS_BATCH_RESEED) {
 					return fmt.Errorf("%w: a push record that is not one push's", ErrEvsEntryRefused)
 				}
@@ -849,9 +881,22 @@ func (self *DirectoryEvsCards) pushPayloads(ctx context.Context, repo *EvsRepo, 
 				if err != nil || !bytes.Equal(statementBytes, statement.Statement.Bytes) {
 					return fmt.Errorf("%w: a push record of another statement", ErrEvsEntryRefused)
 				}
-				// as evs keeps it, with no slot body: keys come from slot reads alone (QD-806)
-				payload, err := EvsCheckRecordPayload(statement.Statement, payloadBytes)
-				if err != nil {
+				var payload *EvsCheckedPayload
+				if format2 {
+					if payload, err = EvsCheckStoredPayload(statement.Statement, payloadBytes); err != nil {
+						return err
+					}
+					if tail != nil && len(tail.Staged) != 0 {
+						segments, err := tail.StagedSegments()
+						if err != nil {
+							return err
+						}
+						if payload.Staged, err = evsMatchStaged(statement.Statement.Push, payload.NewObjects, segments); err != nil {
+							return err
+						}
+					}
+				} else if payload, err = EvsCheckRecordPayload(statement.Statement, payloadBytes); err != nil {
+					// as evs keeps it, with no slot body: keys come from slot reads alone (QD-806)
 					return err
 				}
 				payloads[i] = payload
@@ -1300,6 +1345,7 @@ func (self *DirectoryEvsCards) cardFiles(ctx context.Context, read *directoryEvs
 		return nil, err
 	}
 	files := []*DirectoryCardFile{}
+	erasures := &evsStreamErasures{}
 	for _, placedChange := range placed {
 		statement := placedChange.statement
 		push := statement.Statement.Push
@@ -1335,7 +1381,29 @@ func (self *DirectoryEvsCards) cardFiles(ctx context.Context, read *directoryEvs
 			}))
 			continue
 		}
-		content, err := self.rebuild(ctx, read.repo, read.readResult, statement, change.change, change.entry)
+		if evsStreamFileEmptied(read.readResult.objects, change.entry) {
+			// the version's slots hold no key. Where a committed ERASE names each slot it is an erased version, as a
+			// CLOSURE's ERASE leaves every version the path held before it (§11.12's closure row): the statement
+			// stands with no content, as a collected version's does. With no such ERASE the key was withheld, which
+			// alarms, and the version is ignored as one that does not open
+			named, err := erasures.named(ctx, read.repo, change.entry)
+			if err != nil {
+				return nil, recordEvsRefusal(err)
+			}
+			if named {
+				files = append(files, stamp(&DirectoryCardFile{Path: placedChange.path, Version: change.entry.GetVersion()}))
+			} else {
+				self.client.alarm(repoId, read.readResult.refId, SidecarEvsAlarmTamper, "", nil)
+			}
+			continue
+		}
+		content, err := self.rebuild(ctx, read.repo, read.readResult, statement, change.change, change.entry, placedChange.path)
+		if errors.Is(err, ErrEvsCollected) {
+			// a versionless file's replaced version, its content purged: the statement stands with no content, which
+			// the copy reads as a version it holds nothing of (§16.11's ref cards row)
+			files = append(files, stamp(&DirectoryCardFile{Path: placedChange.path, Version: change.entry.GetVersion()}))
+			continue
+		}
 		if err != nil {
 			code, refused := RecordStreamRefusalCode(err)
 			if errors.Is(err, ErrEvsSealInvalid) || errors.Is(err, ErrEvsObjectMissing) || errors.Is(err, ErrEvsEntryRefused) ||

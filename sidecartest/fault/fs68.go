@@ -20,7 +20,8 @@
 //	              (EvsWorldSettings.PlatformVersioning): an honest client writes 65 KiB versionless and 63 KiB
 //	              versioned; under a present record that matches no rule a new 65 KiB file is versioned. The 64 MiB
 //	              itself is sidecar's TestVersioningRulesFirstMatchAndThePlatformRule's: three steps of 63 MiB or
-//	              more overran the driver's 10 s wait on a loaded machine, and §22.8 raises that wait for no row
+//	              more overran the driver's wait, 10 s then (60 s since QD-1101), on a loaded machine, and §22.8
+//	              raises that wait for no row
 //	kind          Fs68Kind(config or mailcfg): under a record turning every path off, an honest client's new path is
 //	              versioned, and a writer that sends a file's turn to versioning off anyway (EvsWorld.VersioningFill)
 //	              gets 409 VERSIONING. The twin, Fs68KindGeneral, is a general repo: the same record makes the new path

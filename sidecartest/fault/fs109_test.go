@@ -14,9 +14,9 @@ package fault
 // build D-EVS-52 forbids, fails the phone's working set at 80,000 keys, which shows the check catches its return.
 //
 // Scale: the sync engine stages a shard by reading each document through a one-frame cursor, some 65 µs a document of
-// this row's on this host, so 500,000 updates take some 33 s a device and 1,000,000 a minute, past §22.8's 10 s for a
-// step; the counts here are 20,000 and 80,000, each device's sync a step of its own, and the full counts wait on the
-// staging's cost (SEARCH-M10-38's report).
+// this row's on this host, so 500,000 updates take some 33 s a device and 1,000,000 a minute, past the 10 s §22.8 gave
+// a step when these were sized (60 s since QD-1101); the counts here are 20,000 and 80,000, each device's sync a step
+// of its own, and the full counts wait on the staging's cost (SEARCH-M10-38's report).
 //
 // Readings: the updates are new files in the previous bucket and then the current one, written as merged shards, since
 // a writer's push of them would merge inside the push anyway; SearchOracle's ledger holds every
@@ -340,7 +340,7 @@ func cutVersion(name string) (string, string, bool) {
 }
 
 // FS-109's schedule: each device's sync, its search alone and its searches at once steps of their own, each within
-// §22.8's 10 s.
+// §22.8's 60 s.
 func Fs109MaskMemory(net *Net) *Schedule {
 	state := &fs109State{devices: map[string]*fs109Device{}}
 	steps := []*Step{{Actor: "writer", Action: func(ctx context.Context, net *Net) error {

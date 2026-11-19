@@ -30,7 +30,7 @@
 // Every site a schedule awaits is armed before its first step, so an actor that gets there early stops
 // there and cannot slip past it. Actors run one at a time, under the driver's baton, so a schedule
 // repeats exactly. A Seed turns each barrier an actor passes into a seeded choice of who runs next,
-// which is §22.8's explorer. Waiting over 10 s of real time for a barrier fails with the trace.
+// which is §22.8's explorer. Waiting over 60 s of real time for a barrier fails with the trace.
 //
 // A schedule that names a site reached through testHookBarrier needs the sidecar_testhooks tag.
 

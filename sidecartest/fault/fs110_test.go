@@ -15,9 +15,9 @@ package fault
 // the bound fails the arrival clause (TestFs110FailsAHitPastTheArrivalBound).
 //
 // Scale: the sync engine stages each shard by reading every document through a one-frame cursor, so 165 MB of all, some
-// 235,000 documents, takes some 15 s a search on this host, past §22.8's 10 s for a step; the partition here is 16.5 MB
-// in some 17 shards, the contract's bound B / R + 1 s scaling with it, and the full size waits on the staging's cost
-// (SEARCH-M10-38's report).
+// 235,000 documents, takes some 15 s a search on this host, past the 10 s §22.8 gave a step when this was sized (60 s
+// since QD-1101); the partition here is 16.5 MB in some 17 shards, the contract's bound B / R + 1 s scaling with it,
+// and the full size waits on the staging's cost (SEARCH-M10-38's report).
 //
 // Readings: a desktop here holds all on demand (AllPolicy on_demand), standing for a desktop before its first round
 // of all, since a desktop that keeps all has nothing to fetch; the boundary is MoreByteCount at 4 MiB, under this

@@ -10,12 +10,14 @@
 //	(b)  Fs91ReleasedAfterTheDrop, the registered case: the DROP commits while the copy is held; released more than
 //	     §11.8's 5 s after its validation, the copy's step 7 reruns 5h and is refused 409 DROPPED. Nothing names the
 //	     listed versions' segments beyond the drop's list, and the job deletes both. Its twin is (a)
+//	     Fs91ReleasedWithinTheWindow: the DROP commits while the copy is held; released 2 s on, within the window, its
+//	     step 7 reruns nothing and it commits after the DROP, naming a listed version as its reuse source (QD-1105).
+//	     mark, run past evacuation's horizon, finds r2's version and keeps the shared segment, as in (a), and FI-27
+//	     lets the copy through on its arrival before the DROP's head write and its own within the window; read with a
+//	     window of 1 s the same run is a violation (fs91_test.go)
 //
 // The copy is a hand-built push (EvsWorld.PostPlan, ReuseFill): the client's planner writes a reuse list only from a
-// git tier's publish. A copy released within 5 s of its validation after the DROP committed commits, which the design
-// leaves to mark (§11.13's mark row waits evacuation's horizon past the DROP for it), and FI-27's fence clause reads
-// any reuse of a listed version first found after its DROP as a violation, so no schedule here runs that order: a
-// finding in EVS2-M10-31's report. Races (c) to (f) are not built: the cached head a failed cache write left and a
+// git tier's publish. Races (c) to (f) are not built: the cached head a failed cache write left and a
 // creating head write held past 26 h, a push in parts sealed after the drop (evsservice's
 // TestPushDroppedRefusesASealAfterTheDrop holds the seal's refusal on the engine), a re-upload adopting a young
 // candidate's receipt, and a git-mode push carrying a candidate's bytes.
@@ -39,9 +41,18 @@ var Fs91Case = Register("FS-91", "", []Tier{TierT2, TierT3}, Fs91ReleasedAfterTh
 // The ref the copy is pushed on.
 var fs91CopyRef = []byte("r2")
 
+// When the held copy is released, against the DROP that lists its source.
+type fs91Release int
+
+const (
+	fs91ReleaseBeforeTheDrop fs91Release = iota + 1
+	fs91ReleaseWithinTheWindow
+	fs91ReleasePastTheWindow
+)
+
 // See the file header.
 func Fs91ReleasedAfterTheDrop(net *Net) *Schedule {
-	schedule := fs91Schedule(net, false)
+	schedule := fs91Schedule(net, fs91ReleasePastTheWindow)
 	schedule.Refuses = "a reuse copy of a version a DROP lists, released past 5 s after the DROP committed"
 	schedule.Twin = Fs91ReleasedBeforeTheDrop
 	return schedule
@@ -49,10 +60,15 @@ func Fs91ReleasedAfterTheDrop(net *Net) *Schedule {
 
 // See the file header.
 func Fs91ReleasedBeforeTheDrop(net *Net) *Schedule {
-	return fs91Schedule(net, true)
+	return fs91Schedule(net, fs91ReleaseBeforeTheDrop)
 }
 
-func fs91Schedule(net *Net, before bool) *Schedule {
+// See the file header.
+func Fs91ReleasedWithinTheWindow(net *Net) *Schedule {
+	return fs91Schedule(net, fs91ReleaseWithinTheWindow)
+}
+
+func fs91Schedule(net *Net, released fs91Release) *Schedule {
 	world := NewEvsWorld(net, fsDropWorldSettings(protocol.RepoKind_REPO_KIND_GENERAL, false))
 	posted := &EvsWorldPosted{}
 	// x.txt's versions as each write committed them, kept for the segments they name
@@ -98,25 +114,29 @@ func fs91Schedule(net *Net, before bool) *Schedule {
 		{Actor: "writer", Action: world.PostPlan("writer", fs91CopyRef, posted, world.ReuseFill("copy of x.txt", version(1))), Background: true},
 		{Actor: "evs2", Await: evsservice.BarrierPushStep4After, AwaitSkip: 1},
 	}...)
-	if before {
-		steps = append(steps, release, join,
-			&Step{Actor: "check", Action: EvsWorldExpectPosted(posted, http.StatusOK, 0)},
-			drop)
-	} else {
+	committed := &Step{Actor: "check", Action: EvsWorldExpectPosted(posted, http.StatusOK, 0)}
+	switch released {
+	case fs91ReleaseBeforeTheDrop:
+		steps = append(steps, release, join, committed, drop)
+	case fs91ReleaseWithinTheWindow:
+		steps = append(steps, drop, &Step{Advance: 2 * time.Second}, release, join, committed)
+	default:
 		steps = append(steps, drop, &Step{Advance: 6 * time.Second}, release, join,
 			&Step{Actor: "check", Action: EvsWorldExpectPosted(posted, http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_DROPPED)})
 	}
+	// a copy that committed keeps the segment it shares with x.txt's first version
+	copied := released != fs91ReleasePastTheWindow
 	steps = append(steps, &Step{Actor: "reader", Action: world.HistoryStates("reader", "x.txt", map[int]string{1: sidecar.EvsVersionStateDropped, 2: sidecar.EvsVersionStateDropped})})
 	steps = append(steps, fsDropExecute(net, world, []*Step{
 		{Actor: "check", Action: world.ExpectDropState("x.txt", evsservice.DropStateDone)},
 		// what r2's copy names stays; what only listed versions name goes
-		{Actor: "check", Action: world.ExpectSegments("x.txt's first version, which r2's copy cites", before, segments(1))},
+		{Actor: "check", Action: world.ExpectSegments("x.txt's first version, which r2's copy cites", copied, segments(1))},
 		{Actor: "check", Action: world.ExpectSegments("x.txt's second version", false, segments(2))},
 		// the head the drop keeps is its own rewrite, uploaded again: the version it replaced is listed, and goes
 		{Actor: "check", Action: world.ExpectSegments("x.txt's third version", false, segments(3))},
 		{Actor: "reader", Action: world.Verify("reader", "x.txt")},
 		{Actor: "reader", Action: world.ReadVersionEnds("reader", "x.txt", 1, EvsWorldReadsDropped())},
-		// the evacuation fenced r2's head for the refused copy's record: a push arriving within the fence's margin of
+		// the evacuation fenced r2's head for a refused copy's record: a push arriving within the fence's margin of
 		// it ends unknown, so the ref's next write comes after it
 		{Advance: time.Hour},
 		{Actor: "writer", Action: world.WriteRef("writer", fs91CopyRef, "after.txt", fsDropUploadContent("fs91 after"))},
