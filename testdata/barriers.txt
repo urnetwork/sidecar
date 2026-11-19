@@ -481,6 +481,10 @@ barrier mail.deposit.repo.after mail_deposit.go
 barrier mail.deposit.repo.before mail_deposit.go
 barrier mail.erase.closure.after mail_erase_closure.go
 barrier mail.erase.closure.before mail_erase_closure.go
+barrier mail.erase.cut.after mail_erase_index.go
+barrier mail.erase.cut.before mail_erase_index.go
+barrier mail.erase.index.after mail_erase_index.go
+barrier mail.erase.index.before mail_erase_index.go
 barrier mail.erase.keys.after mail_erase_closure.go
 barrier mail.erase.keys.before mail_erase_closure.go
 barrier mail.erase.message.after mail_erase.go
