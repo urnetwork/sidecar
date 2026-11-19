@@ -146,12 +146,12 @@ budgets:
     kind: path
     owner: TLS-M5-26
     module: server
-    package: ""
+    package: cli/tlsedge
     name: tlsedge.route
     settings: "the whole connection path, on server's host"
-    limits: {postgres: 0}
+    limits: {postgres: 0, redis_calls: 0}
     reviewed: ""
-    note: "redis_calls is TLS-M5-26's to set from §13's routing reads; until it does, the row reads missing"
+    note: "none: the map, the kill switch, the gate, the caps, the negative cache, the visitor keys and the lease are memory the engine's loops fill off the path, and a record leaves through its queue (§13.5, I-12); the dial's Find is the sockets block's, held by sockets.find's row. server/cli/tlsedge's TestT3TlsedgeRouteHoldsToItsInlinePathRow runs one cold and one warm visit on the private stack's Redis and Postgres"
   - id: mxedge-route
     spec: "§22.5: mxedge inline, no PostgreSQL, with an op-counting Redis"
     kind: path

@@ -23,8 +23,9 @@
 //	           new drop_id, time and slot ids. A path that moved since the dry run (a write, a removal, a new path
 //	           epoch) fails the push, the planner or evs's 5g refusing it, and the command starts again with a new dry
 //	           run (ErrEvsDropStale). A batch that committed is not sent again when the command is retried
-//	index      EvsDropIndexHook lets §11.14's DROP rewrites ride the push: a 409 INDEX_EPOCH rebuilds and signs again
-//	           once under the same confirmation, then goes without them, left to the backfill (§11.14's drop row).
+//	index      EvsDropIndexHook lets §11.14's DROP rewrites ride the push: a 409 INDEX_EPOCH, or a 409 naming only the
+//	           rewrites' own paths (another push wrote an index file they replace), rebuilds and signs again once under
+//	           the same confirmation, then goes without them, left to the backfill (§11.14's drop and conflict rows).
 //	           evs takes them beside the written lineages, each a rewrite of a standing index file within Padmé of the
 //	           length it replaces, naming the head's index_epoch (QD-1078; evsservice/check_drop.go), but an evs from
 //	           before that answer takes no change a written lineage does not name, so a push whose rewrites evs
@@ -124,6 +125,28 @@ type EvsDropIndexRewrites struct {
 // The seam §11.14's DROP rewrites come through (SEARCH's): called before each DROP push with a written or removed
 // lineage, it answers the rewrites to plan in the same push, nil for none.
 type EvsDropIndexHook func(ctx context.Context, repo *EvsRepo, args *EvsDropIndexArgs) (*EvsDropIndexRewrites, error)
+
+// A DROP refused for its index rewrites alone: another push wrote an index file one of them replaces, while every
+// lineage stands as its dry run found it, so the rewrites are built again under the same confirmation.
+var errEvsDropRewritesMoved = errors.New("evs: an index file a DROP rewrites moved under it")
+
+// Whether err is a conflict naming written paths, each one a path rewrites write.
+func evsDropRewritesMoved(err error, rewrites *EvsDropIndexRewrites) bool {
+	var conflict *EvsPathConflictError
+	if !errors.As(err, &conflict) || len(conflict.Paths) == 0 {
+		return false
+	}
+	rewritten := map[string]bool{}
+	for _, write := range rewrites.Writes {
+		rewritten[write.Path] = true
+	}
+	for _, path := range conflict.Paths {
+		if !rewritten[path] {
+			return false
+		}
+	}
+	return true
+}
 
 // The drop engine's state on a client.
 type evsDropClient struct {
@@ -312,11 +335,11 @@ func (self *EvsRepo) dropPush(ctx context.Context, refName []byte, batch *EvsDro
 				result.Paths = append(result.Paths, lineage.Path)
 			}
 			return result, nil
-		case rewritten && !rebuilt && IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_INDEX_EPOCH):
+		case rewritten && !rebuilt && (IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_INDEX_EPOCH) || errors.Is(err, errEvsDropRewritesMoved)):
 			// rebuilt and signed again once under the same confirmation (§11.14's drop row)
 			rebuilt = true
 		case rewritten && (IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_INDEX_EPOCH) ||
-			IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_DROP_BOUNDARY)):
+			IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_DROP_BOUNDARY) || errors.Is(err, errEvsDropRewritesMoved)):
 			// without its rewrites, left to the backfill
 			hook = nil
 		default:
@@ -336,9 +359,12 @@ func (self *EvsRepo) dropSend(ctx context.Context, refName []byte, spec *evsDrop
 	if len(all) == 0 {
 		return self.dropChangeless(ctx, refName, spec)
 	}
-	result, _, err := self.writePathsPlanned(ctx, &EvsWritePathsArgs{RefName: refName, Writes: all}, extras)
+	result, plan, err := self.writePathsPlanned(ctx, &EvsWritePathsArgs{RefName: refName, Writes: all}, extras)
 	var conflict *EvsPathConflictError
 	switch {
+	case err != nil && rewrites != nil && evsDropRewritesMoved(evsWrittenConflict(err, all, plan), rewrites):
+		// only an index file a rewrite replaces moved: the rewrites are built again, the lineages being as they were
+		return Id{}, 0, fmt.Errorf("%w: %w", errEvsDropRewritesMoved, err)
 	case errors.Is(err, ErrEvsPathMoved) || errors.As(err, &conflict) || IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH):
 		return Id{}, 0, fmt.Errorf("%w: %w", ErrEvsDropStale, err)
 	case err != nil:
