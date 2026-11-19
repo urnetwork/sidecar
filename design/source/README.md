@@ -831,3 +831,53 @@ The design-records track dr4-outside-docs (wave f45d) folds what sidecar/DESIGN-
 `build.sh` on this folder reproduces DESIGN.md (SHA-256 `0d0d1c88697787df9e8fae278a98fd52397f65f1132060a93bcb72f9ce90bc28`) and DESIGN-DEFER.md (SHA-256 `cf6095e4246abc02ba00374353292f6f7b4fec316a4e429a82e8e45277b1622b`), both unchanged, and the validation is as the second late sweep left it: 616 owner decisions, each cited; one open owner question, Q-REPO-6; 312 superseded-option hits, none on a changed line.
 
 Left in sidecar/DESIGN-AMENDMENTS.md's "Later decisions": QD-024, whose file `design/UI.md` the owner copies in, and QD-899's part in DESIGN-DETAILS.md 15.2.2, the design agent's. Outside these four files the track touched only the three `testFenceAdditions` entries, record_md_test.go and record_kind_test.go. record.proto's comments on `LogSettingsBody.witnesses`, `LedgerScopeBody.kinds` and `CopyBody`, and its header's note that QD-900 is declared ahead of RECORD.md's fence, are the code's to update.
+
+## Validation after owner decisions 617 to 636: the third late sweep (2026-11-19)
+
+The design-records track dr6-late-sweep (wave f48d) folds the owner's answers that the run's list of pending decisions held on 2026-11-19 after the second late sweep, QD-1075 to QD-1100, each a question of the build's that the owner answered on 2026-11-18 or 2026-11-19 as recommended, and checks the items of sidecar/DESIGN-AMENDMENTS.md's "Later decisions". It is an interim sweep: the draft's final design sweep still runs after the implementation lanes drain. It numbers each answer that changes a behavior or a rule as it folds it, a decision that groups several answers carrying its latest answer's date:
+
+| Ledger id | Owner decision | What it settles |
+|---|---|---|
+| QD-1075 | 617 | Under a flood the P1 shed refuses only networks strictly heavier than the lightest one waiting, and admission is fair over time. |
+| QD-1076, QD-1077 | 618 | A recovery's groups step re-forms a live repo's group in two calls around its activate, and sends restore for a repo its state shows restored, extending owner decision 602. |
+| QD-1078 | 619 | evs's DROP boundary rule takes a DROP push's §11.14 index rewrites. |
+| QD-1088, QD-1099 | 620 | A DROP refused for its index rewrites' upload, at the storage limit, while spent or on a full metadata cluster, is sent again once without them. |
+| QD-1098 | 621 | A host with the text catches an in-ref push that changed its signer's head but left a document out. |
+| QD-1079 | 622 | taskworker's idle marking holds off while its process has no good read of sidecar.yml, following owner decision 591. |
+| QD-1080 | 623 | §2.8's dns-1 and dns-2 name a Team network's delegated `_domainkey.<domain>` zones. |
+| QD-1089 | 624 | A sidecar's calls and NO_REPLY sends reach an edge without a Hello. |
+| QD-1081, QD-1085 | 625 | Each gate's sweep names every case whose T3 test runs outside server's sidecart3, and the convention's T3 entry carries the local stack's tag, extending owner decision 548. |
+| QD-1084 | 626 | A gate reads a case pass only when its row test and every clause registered for it pass. |
+| QD-1086 | 627 | M2's gate keeps FS-15, FS-20, FS-24 and FS-104 on their drafted schedules, their MLS legs counting toward nothing, until KEYS's review-phase rework, following owner decision 610. |
+| QD-1087 | 628 | `SidecarDirectory.GetRepoId` lets a directory view scope its "search more" to the directory alone. |
+| QD-1091 | 629 | A preservation hold binds a deleter from 5 s after api acknowledged its placement. |
+| QD-1092 | 630 | `_mta-sts` is published only for a network with network_verified; the certificate condition joins at the review phase. |
+| QD-1093 | 631 | A Team scope's mailcfg is created by a consented device of the scope's member and bound to that member by the fold. |
+| QD-1094 | 632 | `MailRecipientApproval`'s bytes and its path `rcpt/<h>/<name>`, completing owner decision 280. |
+| QD-1095 | 633 | The reverse-alias key is one `MailReverseAliasKey` a mailbox, in its `vault/` family. |
+| QD-1096 | 634 | `IndexerRow.nonce = 6`, so any reader opens a designation's sealed services, extending owner decision 330. |
+| QD-1097 | 635 | MCP's guard refuses the `rcpt/` family on mailboxes and on a general repo that is a group inbox. |
+| QD-1100 | 636 | An eraser's CLOSURE rewrites a card or repo file only once its writer dropped the item; moderation removes a card whole; the fresh-reader check waits for the review phase. |
+
+- **Folded with no number.** Three accepted defect fixes went in as text: QD-1082, a gate's list check running nothing (§23.8's Gn-out); QD-1083, the two sentences that still described C19 as live after owner decision 609, §6.10's debit clause and §23.9 item 2's FS-125 sweep clause, both dropped, FS-125's row and its §23.6 and §22.17 naming staying as the first late sweep left them; and QD-1090, a store's adapter answering an ended context as an error (§4.5). owner/DECISIONS.md names them in the lead of its new part.
+- **evs (617 to 621).** §11.13's queue and shed rows and FI-14 (d); §19.10's groups row, §10.8's after row and §11.12's restore row; §11.7's boundary row and §11.14's drop and limit rows, with §19.9's cohorts row; §11.14's coverage row of its reads and D-EVS-56.
+- **Operations, the list and the subprotocol (622 to 624).** §13.6's edge clients and §19.4's lead; §2.8's dns-1 and dns-2, list v60; §6.4's identity check and §14.14's message list.
+- **The gates (625 to 627).** §22.8's rules gain a gates line and a clauses line under its builders line, and §23.8's Gn-out and Freezes cite them. Owner decision 627 leaves one fold of owner decision 610 for the review phase: §22.8's FS-15, FS-20, FS-24 and FS-104 rows, §22.10's table, §23.6's M2 row, §23.8's freezes and D-KEYS-10 keep their MLS wording until KEYS reworks the rows onto deliveries, since sidecartest/fault's catalog is held to §22.8's text and the rework has not landed. DESIGN-DEFER.md's keys-mls entry lists that fold under Held, and §23.8's Freezes line points at it.
+- **The sdk, holds and `_mta-sts` (628 to 630).** §18.5's `SidecarDirectory` and §18.4's directory row; §21.9's preservation holds, FI-16 and FI-27; §12.7's `_mta-sts` row and §15.5's MTA-STS.
+- **Mail, the rows and MCP (631 to 636).** §8.8's `RepoCreate` row, §8.5's kind defaults and §15.7's mailcfg row; §15.7's `rcpt/` and `vault/` rows and §15.10's approved recipients and forwarding; §7.9's Indexers and §2.8's api-7, list v61; §16.6's refused row and D-MCP-17; §16.11's Erasure and removal gains a closure row, and its path rules name it.
+- **In text, ahead of the code.** `IndexerRow.nonce = 6` is written in §7.9's prose and in a comment of its fence: auth.proto does not declare the field yet, so the fence keeps the five fields the code has, and the wire part waits in DESIGN-AMENDMENTS.md's "Later decisions" for the indexer-row-nonce fix track. `MailRecipientApproval` and `MailReverseAliasKey` are declared in mail.proto and stay in protocol's `testUnfencedFence`, as §15.7's other records do: §15 writes its records as rows, with no proto fence. No proto fence changed, so no `testFenceAdditions` entry moved. `CallOptions.Edge` and `SendEdge` (624), the gates' clause registry (626) and the two reseed calls (618) are stated as decided; their fix tracks land on their own.
+- **Deferrals.** DESIGN-DEFER.md gains three entries and one amended: mcp-sshsig-approvals, for owner decision 279, which had none (§16.6 and §16.18 point at it); mcp-card-closure-replay-check, the fresh-reader check owner decision 636 leaves to the review phase (§16.11's closure row points at it); dns-mta-sts-certificate-gate, the certificate condition owner decision 630 leaves to the review phase (§12.7 and §15.5 point at it); and keys-mls's Held, for owner decision 627. The document's opening said the review phase's work has no entry; it now says the exception, a check or a fold that an owner decision itself puts off to the review phase.
+- **Index rows.** Owner decisions 280, 330, 548, 591, 602 and 610 note the decisions that extend, follow or complete them.
+- **"Later decisions".** QD-024 and QD-899 still wait on files outside design/source/ and keep their Not folded lines. Three items join them: QD-1083's HANDOFF.md lines, QD-1086's fold of owner decision 610 into §22 and §23, and QD-1096's fence field.
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `6432b0e92ed728817ed29495fb0082afce7bc35ff849fadf292211c648a2d7d2`) and DESIGN-DEFER.md (SHA-256 `3f966d9f1d4a4bef7b3d0c75745fe6ecc753831cb3b7ba1a7e12672a0e662566`), and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no new §2.8 row, so no guard line was needed.
+- **Owner decisions.** All 636 rows are present and cited; APPLY.md's section pairs hold. `validate10.py`'s row pattern takes 2026-11-19, and `LATE_DATES` each new row's date.
+- **Open owner questions.** One, Q-REPO-6.
+- **Superseded options.** 312 grep hits, every one carried with its reading; none is on a changed line and none is live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 11,868 section references, 54 more, with the one unresolved as before. `v7/words.json` and `v7/text_checks.json` were regenerated.
+- **DESIGN-DEFER.md.** 99 entries and 155 pointers, three entries and six pointers more.
+- **The metadata list** follows §2.8 at v61: v60 for owner decision 623 and v61 for 634, copied to `metadata_list.yml` by `make metadata`.
+
+Outside this folder the track touched DESIGN.md, DESIGN-DEFER.md, DESIGN-AMENDMENTS.md and metadata_list.yml. Left to the final design sweep: HANDOFF.md section 9's two FS-125 lines (QD-1083); the fold of owner decision 610 into §22.8, §22.10, §23.6, §23.8 and D-KEYS-10 (QD-1086); `IndexerRow.nonce` in §7.9's fence; and the items of the sweep's own list that wait on code, RECORD.md, DESIGN-DETAILS.md or the owner.
