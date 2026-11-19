@@ -118,6 +118,8 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 			if len(history.Versions) == 0 {
 				return nil, ErrEvsPathAbsent
 			}
+			// nothing stands below the path's first creation, unless its number named a removal evs did not show
+			history.Whole = impliedRemoval == 0
 			break
 		}
 		ignored := false
@@ -160,6 +162,7 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 			})
 			statements = append(statements, &EvsVerifiedStatement{Version: removal.GetRemovalVersion(), Statement: verified.Statement})
 			if removal.GetPathVersion() <= 1 {
+				history.Whole = true
 				break
 			}
 			// the life the removal ended: its last version, by number alone
@@ -223,6 +226,7 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 		})
 		statements = append(statements, &EvsVerifiedStatement{Version: verified.CommitVersion, Statement: verified.Statement})
 		if entry.GetVersion() <= 1 {
+			history.Whole = true
 			break
 		}
 		if created && args.NewestLife {

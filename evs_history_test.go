@@ -179,12 +179,37 @@ func TestEvsHistoryAlarmsWhereACreationNamesARemovalEvsDoesNotServe(t *testing.T
 	}
 	world.exactNumbers = true
 	history, err = reader.client.Repo(world.repoId).History(context.Background(), &EvsReadArgs{Path: "a.txt"})
-	if err != nil || evsTestHistoryVersions(history) != "[3/created]" {
-		t.Fatalf("hidden: %s %v", evsTestHistoryVersions(history), err)
+	if err != nil || evsTestHistoryVersions(history) != "[3/created]" || history.Whole {
+		t.Fatalf("hidden: %s %v, whole %v", evsTestHistoryVersions(history), err, history != nil && history.Whole)
 	}
 	alarms := reader.eventsOf(SidecarEventEvsAlarm)
 	if len(alarms) != 1 || alarms[0].EvsAlarm != SidecarEvsAlarmVersionRule || alarms[0].Path != "a.txt" {
 		t.Fatalf("alarms %v", alarms)
+	}
+}
+
+// A path first created past its ref's first push starts above version 1 (§11.7's versions row gives a creation its
+// push's base + 1): its walk is whole once evs answers that nothing stands below the creation, and an erasure's list
+// of it is a list (evs_erase.go's SlotKeysOf).
+func TestEvsHistoryIsWholeAtAFirstCreationPastVersionOne(t *testing.T) {
+	world := newEvsTestWorld(t)
+	world.push(&evsTestChange{path: "a.txt", content: []byte("one")})
+	world.push(&evsTestChange{path: "b.txt", content: []byte("two")})
+	reader := world.reader(t, evsTestId("reader"))
+	repo := reader.client.Repo(world.repoId)
+	history, err := repo.History(context.Background(), &EvsReadArgs{Path: "b.txt"})
+	if err != nil || evsTestHistoryVersions(history) != "[2/created]" || !history.Whole || history.BelowUnknown {
+		t.Fatalf("a first creation at 2: %s %v, whole %v", evsTestHistoryVersions(history), err, history != nil && history.Whole)
+	}
+	if keys, err := repo.SlotKeysOf(context.Background(), nil, []string{"b.txt"}); err != nil || len(keys) != 0 {
+		t.Fatalf("slot keys of a path first created at 2: %v %v", keys, err)
+	}
+	history, err = repo.History(context.Background(), &EvsReadArgs{Path: "a.txt"})
+	if err != nil || evsTestHistoryVersions(history) != "[1/created]" || !history.Whole {
+		t.Fatalf("a first creation at 1: %s %v", evsTestHistoryVersions(history), err)
+	}
+	if alarms := reader.eventsOf(SidecarEventEvsAlarm); len(alarms) != 0 {
+		t.Errorf("alarms %v", alarms)
 	}
 }
 
@@ -196,7 +221,7 @@ func TestEvsHistoryEndsBelowACreationEvsCannotRead(t *testing.T) {
 	reader := world.reader(t, evsTestId("reader"))
 	repo := reader.client.Repo(world.repoId)
 	history, err := repo.History(context.Background(), &EvsReadArgs{Path: "a.txt"})
-	if err != nil || evsTestHistoryVersions(history) != "[7/created]" || !history.BelowUnknown {
+	if err != nil || evsTestHistoryVersions(history) != "[7/created]" || !history.BelowUnknown || history.Whole {
 		t.Fatalf("history %s %v, below unknown %v", evsTestHistoryVersions(history), err, history != nil && history.BelowUnknown)
 	}
 	if alarms := reader.eventsOf(SidecarEventEvsAlarm); len(alarms) != 0 {
