@@ -145,6 +145,9 @@ barrier directory.decide.intent.after directory_decide.go
 barrier directory.decide.intent.before directory_decide.go
 barrier directory.decide.statement.after directory_decide.go
 barrier directory.decide.statement.before directory_decide.go
+barrier directory.erasure.closure.after directory_erasure.go
+barrier directory.erasure.closure.before directory_erasure.go
+barrier directory.erasure.cut.before directory_erasure.go
 barrier directory.erasure.erase.before directory_erasure.go
 barrier directory.fold.after directory_fold.go
 barrier directory.fold.before directory_fold.go
