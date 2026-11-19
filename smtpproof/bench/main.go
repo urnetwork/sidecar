@@ -6,7 +6,8 @@
 // -keys is a key set that smtpproof/setup made for the purpose. The bench takes it as a prover host does:
 // PrepareKeys at idle until every family is ready, each call one shape's EnsureKeys, timed; then sends through
 // smtpproof's Prover, smtpproof's Verifier holding the same set, the edge's record gate between them as smtpedge
-// splices, and a scripted MX (sidecartest's ScriptedMx) on the leg's TLS version and suite: D-SMTP-16's BDAT send,
+// splices, and a scripted MX of its own, Go's crypto/tls server on the leg's version and suite, which takes every
+// command and message whole and keeps nothing: D-SMTP-16's BDAT send,
 // a 4 KiB header block to 10 recipients, and its DATA send, a 100 KiB message, each -runs times on each leg. It
 // reports, per leg and mode, the key part's and the whole send's p50, p95 and most, with the failures beside them;
 // per shape, a unit's p50 and p95 and the edge's verification beside its constraints, public inputs and domain,
@@ -20,15 +21,21 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"os"
 	"os/exec"
@@ -46,7 +53,6 @@ import (
 	"github.com/consensys/gnark/backend/groth16"
 
 	"github.com/urnetwork/sidecar"
-	"github.com/urnetwork/sidecar/sidecartest"
 	"github.com/urnetwork/sidecar/smtpproof"
 )
 
@@ -629,16 +635,7 @@ func benchJob(mode string, options *benchOptions) *sidecar.SmtpProofJob {
 
 // One send through the edge's gate to a scripted MX on the leg, its parts timed.
 func benchSend(ctx context.Context, verifier sidecar.SmtpProofVerifier, prover sidecar.SmtpProver, leg *benchLeg, mode string, options *benchOptions) (*benchSendResult, error) {
-	mxSettings := sidecartest.DefaultScriptedMxSettings()
-	mxSettings.MinVersion, mxSettings.MaxVersion = leg.version, leg.version
-	if leg.version == tls.VersionTLS12 {
-		mxSettings.CipherSuites = []uint16{leg.suite}
-	}
-	script := sidecartest.DefaultMxScript()
-	if mode == "data" {
-		script.Keywords = slices.DeleteFunc(slices.Clone(script.Keywords), func(keyword string) bool { return keyword == "CHUNKING" })
-	}
-	mx, err := sidecartest.NewScriptedMx(benchMxHost, script, mxSettings)
+	mx, err := newBenchMx(leg, mode == "bdat")
 	if err != nil {
 		return nil, err
 	}
@@ -652,12 +649,12 @@ func benchSend(ctx context.Context, verifier sidecar.SmtpProofVerifier, prover s
 	if err != nil {
 		return nil, err
 	}
-	sidecarConn, edgeSidecarConn := net.Pipe()
-	edgeMxConn, mxConn := sidecartest.NewMxPipe(nil, nil)
+	sidecarConn, edgeSidecarConn := newBenchPipe()
+	edgeMxConn, mxConn := newBenchPipe()
 	mxDone := make(chan struct{})
 	go func() {
 		defer close(mxDone)
-		mx.ServeMx(mxConn)
+		mx.serve(mxConn)
 	}()
 	defer func() {
 		sidecarConn.Close()
@@ -898,3 +895,261 @@ func (self *benchRelay) timedParts() []*benchPart {
 }
 
 var _ sidecar.SmtpProofChannel = (*benchRelay)(nil)
+
+// The bench's MX: a banner, EHLO and STARTTLS in the clear, then Go's crypto/tls server at the leg's version and
+// suite under a certificate of its own, and inside it an SMTP machine that answers every command 2xx, CHUNKING
+// offered only in BDAT mode, and takes each message whole. It keeps nothing past the connection.
+type benchMx struct {
+	certificate tls.Certificate
+	leg         *benchLeg
+	chunking    bool
+}
+
+func newBenchMx(leg *benchLeg, chunking bool) (*benchMx, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: benchMxHost},
+		DNSNames:     []string{benchMxHost},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		return nil, err
+	}
+	return &benchMx{certificate: tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, leg: leg, chunking: chunking}, nil
+}
+
+// Serves one connection until QUIT or its end.
+func (self *benchMx) serve(conn net.Conn) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	write := func(writer io.Writer, reply string) error {
+		_, err := writer.Write([]byte(reply + "\r\n"))
+		return err
+	}
+	if write(conn, "220 "+benchMxHost+" ESMTP") != nil {
+		return
+	}
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return
+		}
+		verb := strings.ToUpper(strings.Fields(line + " ")[0])
+		switch verb {
+		case "EHLO":
+			err = write(conn, "250-"+benchMxHost+"\r\n250-PIPELINING\r\n250 STARTTLS")
+		case "STARTTLS":
+			if write(conn, "220 2.0.0 Ready to start TLS") != nil {
+				return
+			}
+			config := &tls.Config{Certificates: []tls.Certificate{self.certificate}, MinVersion: self.leg.version, MaxVersion: self.leg.version, SessionTicketsDisabled: true}
+			if self.leg.version == tls.VersionTLS12 {
+				config.CipherSuites = []uint16{self.leg.suite}
+			}
+			// nothing follows STARTTLS before the client's hello, so the reader holds nothing of it
+			secure := tls.Server(&benchBufferedConn{Conn: conn, reader: reader}, config)
+			if secure.Handshake() != nil {
+				return
+			}
+			self.serveSecure(secure)
+			return
+		case "QUIT":
+			write(conn, "221 2.0.0 Bye")
+			return
+		default:
+			err = write(conn, "500 5.5.1 Unknown command")
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+// A connection whose reads come through a reader that may hold what was read ahead of them.
+type benchBufferedConn struct {
+	net.Conn
+	reader *bufio.Reader
+}
+
+func (self *benchBufferedConn) Read(buffer []byte) (int, error) {
+	return self.reader.Read(buffer)
+}
+
+// The dialog inside TLS. Each reply is written on its own, so that each is a record of its own.
+func (self *benchMx) serveSecure(conn *tls.Conn) {
+	reader := bufio.NewReader(conn)
+	write := func(reply string) error {
+		_, err := conn.Write([]byte(reply + "\r\n"))
+		return err
+	}
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return
+		}
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			return
+		}
+		switch verb := strings.ToUpper(fields[0]); {
+		case verb == "EHLO":
+			reply := "250-" + benchMxHost + "\r\n250-PIPELINING"
+			if self.chunking {
+				reply += "\r\n250-CHUNKING"
+			}
+			err = write(reply + "\r\n250 SMTPUTF8")
+		case strings.HasPrefix(strings.ToUpper(line), "MAIL FROM:"):
+			err = write("250 2.1.0 Ok")
+		case strings.HasPrefix(strings.ToUpper(line), "RCPT TO:"):
+			err = write("250 2.1.5 Ok")
+		case verb == "BDAT" && 2 <= len(fields):
+			size, parseErr := strconv.Atoi(fields[1])
+			if parseErr != nil || size < 0 {
+				return
+			}
+			if _, err := io.CopyN(io.Discard, reader, int64(size)); err != nil {
+				return
+			}
+			err = write("250 2.0.0 Ok: queued")
+		case verb == "DATA":
+			if write("354 End data with <CR><LF>.<CR><LF>") != nil {
+				return
+			}
+			for {
+				line, err := reader.ReadString('\n')
+				if err != nil {
+					return
+				}
+				if line == ".\r\n" {
+					break
+				}
+			}
+			err = write("250 2.0.0 Ok: queued")
+		case verb == "QUIT":
+			write("221 2.0.0 Bye")
+			return
+		default:
+			err = write("500 5.5.1 Unknown command")
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+// An in-memory connection pair whose writes never wait for the reader, as a socket's buffers let them, so that
+// a pipelined group's commands and the MX's replies to them cross without waiting on each other. A deadline not
+// after now ends the reads waiting, which is how the TLS client is woken when its context ends.
+func newBenchPipe() (net.Conn, net.Conn) {
+	toServer, toClient := newBenchStream(), newBenchStream()
+	return &benchConn{reads: toClient, writes: toServer}, &benchConn{reads: toServer, writes: toClient}
+}
+
+// One direction of a pipe.
+type benchStream struct {
+	stateLock sync.Mutex
+	ready     *sync.Cond
+	buffer    []byte
+	closed    bool
+	expired   bool
+}
+
+func newBenchStream() *benchStream {
+	stream := &benchStream{}
+	stream.ready = sync.NewCond(&stream.stateLock)
+	return stream
+}
+
+func (self *benchStream) write(octets []byte) (int, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.closed {
+		return 0, io.ErrClosedPipe
+	}
+	self.buffer = append(self.buffer, octets...)
+	self.ready.Broadcast()
+	return len(octets), nil
+}
+
+func (self *benchStream) read(octets []byte) (int, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	for len(self.buffer) == 0 && !self.closed && !self.expired {
+		self.ready.Wait()
+	}
+	switch {
+	case 0 < len(self.buffer):
+		count := copy(octets, self.buffer)
+		self.buffer = self.buffer[count:]
+		return count, nil
+	case self.expired:
+		return 0, os.ErrDeadlineExceeded
+	}
+	return 0, io.EOF
+}
+
+func (self *benchStream) close() {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.closed = true
+	self.ready.Broadcast()
+}
+
+func (self *benchStream) expire(at time.Time) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.expired = !at.IsZero() && !time.Now().Before(at)
+	self.ready.Broadcast()
+}
+
+// One end of a pipe.
+type benchConn struct {
+	reads  *benchStream
+	writes *benchStream
+}
+
+func (self *benchConn) Read(octets []byte) (int, error) {
+	return self.reads.read(octets)
+}
+
+func (self *benchConn) Write(octets []byte) (int, error) {
+	return self.writes.write(octets)
+}
+
+// Ends both directions: the peer reads what was written and then the end.
+func (self *benchConn) Close() error {
+	self.reads.close()
+	self.writes.close()
+	return nil
+}
+
+func (self *benchConn) LocalAddr() net.Addr {
+	return &net.TCPAddr{}
+}
+
+func (self *benchConn) RemoteAddr() net.Addr {
+	return &net.TCPAddr{}
+}
+
+func (self *benchConn) SetDeadline(at time.Time) error {
+	self.reads.expire(at)
+	return nil
+}
+
+func (self *benchConn) SetReadDeadline(at time.Time) error {
+	self.reads.expire(at)
+	return nil
+}
+
+// Writes never wait, so a write deadline has nothing to end.
+func (self *benchConn) SetWriteDeadline(at time.Time) error {
+	return nil
+}
