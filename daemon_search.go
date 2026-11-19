@@ -166,8 +166,9 @@ type SearchToolDoc struct {
 }
 
 // The R tool that opens a hit, and its arguments: a whole file's repo, path and version, which evs_read takes as they
-// are; else the hit's id, which a stub opens by alone (§16.10's open row), and which the opening tools take once each
-// reads one through SearchTools.OpenHit.
+// are; else the hit's id, which a stub opens by alone (§16.10's open row): evs_read and record_query take it, each
+// reading it through SearchTools.OpenHit for the session (mcp/tools_hit.go), while mail_read's and directory_list's
+// wait on their tools.
 type SearchToolOpen struct {
 	Tool      string         `json:"tool"`
 	Arguments map[string]any `json:"arguments"`

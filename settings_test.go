@@ -122,6 +122,11 @@ func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 				ChangePathCount:          4096,
 				RunCardPromptByteCount:   2 * 1024,
 				RunCardPathCount:         256,
+				// MCP-M10-02: RECORD.md section 6.4's tool_name and tool paths caps, ingest_tools.go's literals before
+				// QD-702's move, and the transcript's skip buffer, ingest_transcript.go's
+				ToolNameByteCount:       64,
+				ToolPathCount:           256,
+				TranscriptSkipByteCount: 64 * 1024,
 				// RECORD.md section 6.4's ContextBody caps, ingest_context.go's constants before QD-702's move, the
 				// harness version's 64 B a reading and a truncation's file name 100 B of its 128
 				ContextTitleByteCount:               120,

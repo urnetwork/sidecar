@@ -30,6 +30,8 @@ func (self *Ingest) armIdleWithLock(run *ingestRun) {
 // The idle coverage: nothing when an event came meanwhile, which re-armed it.
 func (self *Ingest) idleTick(run *ingestRun) {
 	ctx := context.Background()
+	// once the lock below is released
+	defer self.deliverCardDues(ctx, run)
 	run.runLock.Lock()
 	defer run.runLock.Unlock()
 	defer self.saveRunWithLock(run)
@@ -89,7 +91,7 @@ func (self *Ingest) coverWithLock(ctx context.Context, run *ingestRun, redactor 
 	run.dirty = true
 	// the range the entry names, before the entry itself extends it
 	firstSeq, lastSeq := state.FirstSeq, state.LastSeq
-	self.appendWithLock(ctx, run, &ingestEntry{
+	covered := self.appendWithLock(ctx, run, &ingestEntry{
 		kind:   sidecar.RecordKindCoverage,
 		source: sidecar.RecordSourceObserved,
 		body: &protocol.Coverage{
@@ -102,6 +104,12 @@ func (self *Ingest) coverWithLock(ctx context.Context, run *ingestRun, redactor 
 			LastSeq:  lastSeq,
 		},
 	})
+	if covered {
+		// the coverage entry that ends the run: its card is due at once (ingest_runcard.go)
+		self.noteCardEndWithLock(run)
+	} else {
+		self.stopCardWithLock(run)
+	}
 	if runs, err := run.network.Runs(); err == nil {
 		if err := runs.Covered(ctx, run.runId, firstSeq, lastSeq, now); err != nil {
 			self.log.Warningf("[ingest]a run's coverage was not noted: %s", err)
@@ -127,6 +135,7 @@ func (self *Ingest) detach() {
 			run.tailStop()
 			run.tailStop = nil
 		}
+		self.stopCardWithLock(run)
 		run.runLock.Unlock()
 	}
 }
@@ -159,5 +168,6 @@ func (self *Ingest) Close(ctx context.Context) {
 			self.tailTranscriptWithLock(ctx, run, redactor)
 			self.coverWithLock(ctx, run, redactor)
 		}()
+		self.deliverCardDues(ctx, run)
 	}
 }

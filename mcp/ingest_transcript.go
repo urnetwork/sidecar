@@ -72,7 +72,7 @@ func (self *Ingest) tailTranscriptWithLock(ctx context.Context, run *ingestRun, 
 		}
 		if truncated {
 			// the rest of the long line goes unseen: skip to its end
-			skipped, err := ingestSkipLine(file, state.TranscriptAt+consumed)
+			skipped, err := ingestSkipLine(file, state.TranscriptAt+consumed, self.settings.TranscriptSkipByteCount)
 			if err != nil {
 				return
 			}
@@ -140,10 +140,11 @@ func ingestFrameLines(chunk []byte, cap int64) (lines []byte, consumed int64, li
 	return lines, int64(len(lines)), bytes.Count(lines, []byte{'\n'}), false
 }
 
-// Skips to the byte after the next newline from offset, answering how many bytes that is.
-func ingestSkipLine(file *os.File, offset int64) (int64, error) {
+// Skips to the byte after the next newline from offset, reading bufferByteCount at a time, answering how many bytes
+// that is.
+func ingestSkipLine(file *os.File, offset int64, bufferByteCount int) (int64, error) {
 	skipped := int64(0)
-	buffer := make([]byte, 64*1024)
+	buffer := make([]byte, max(bufferByteCount, 1))
 	for {
 		read, err := file.ReadAt(buffer, offset+skipped)
 		if read == 0 {
@@ -175,6 +176,8 @@ func (self *Ingest) armTailWithLock(run *ingestRun) {
 // One periodic tail: nothing once the run is covered.
 func (self *Ingest) tailTick(run *ingestRun) {
 	ctx := context.Background()
+	// once the lock below is released: a transcript entry moves the run's card
+	defer self.deliverCardDues(ctx, run)
 	run.runLock.Lock()
 	defer run.runLock.Unlock()
 	defer self.saveRunWithLock(run)
