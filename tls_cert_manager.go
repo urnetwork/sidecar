@@ -1417,8 +1417,11 @@ func (self *TlsCertManager) revokeOwedWithPass(ctx context.Context, api TlsCertA
 
 // Keeps the network's certificate once a person asked for one, with the pass lock held: sets a pending successor
 // when the key is due, and places an order, with `replaces`, when the key that should serve has no live certificate
-// and no open order, which covers a rotation's successor and a live local chain whose row a restore lost. A
-// certificate that was revoked or expired is not ordered again here: only a person's EnsureTlsCertificate does that.
+// and no open order, which covers a rotation's successor and a live local chain whose row a restore lost; and places
+// one for the set the device's names now give when the live chain names another (TLS-M6-03): an alias added or retired
+// makes a new set, which spends budget, so the order is placed once, the old chain serving until the new one installs,
+// and names no `replaces`, since it is no renewal of the old set. A certificate that was revoked or expired is not
+// ordered again here: only a person's EnsureTlsCertificate does that.
 func (self *TlsCertManager) keepNetworkWithPass(ctx context.Context, current *TlsDeviceKey, pending *TlsDeviceKey, networkSet []string, networkSetSha256 [sha256.Size]byte, now time.Time) error {
 	wanted := func() bool {
 		self.stateLock.Lock()
@@ -1441,10 +1444,11 @@ func (self *TlsCertManager) keepNetworkWithPass(ctx context.Context, current *Tl
 	}
 	orderKey := current
 	rowLost := false
+	setChanged := false
 	if pending != nil {
 		orderKey = pending
 	} else {
-		// the key serves: order only for a live chain whose row is gone
+		// the key serves: order only for a live chain whose row is gone, or one for a set the names no longer give
 		live := func() bool {
 			self.stateLock.Lock()
 			defer self.stateLock.Unlock()
@@ -1453,15 +1457,19 @@ func (self *TlsCertManager) keepNetworkWithPass(ctx context.Context, current *Tl
 				if entry.CustomHost != "" || entry.spkiSha256 != current.SpkiSha256() || !now.Before(entry.leaf.NotAfter) {
 					continue
 				}
-				if entry.RowLost {
+				switch {
+				case entry.RowLost:
 					rowLost = true
-				} else if entry.State == TlsCertStateIssued {
+				case entry.State != TlsCertStateIssued:
+				case tlsCertLeafNamesSet(entry.leaf, networkSetSha256):
 					live = true
+				default:
+					setChanged = true
 				}
 			}
 			return live
 		}()
-		if live || !rowLost {
+		if live || !rowLost && !setChanged {
 			return nil
 		}
 	}
@@ -1469,12 +1477,28 @@ func (self *TlsCertManager) keepNetworkWithPass(ctx context.Context, current *Tl
 		return nil
 	}
 	replaces := self.networkReplaces(now)
-	if rowLost {
+	switch {
+	case rowLost:
 		replaces = self.lostRowReplaces(current, now)
+	case setChanged && pending == nil:
+		replaces = ""
 	}
 	_, err := self.placeOrderWithPass(ctx, orderKey, networkSet, "", replaces)
 	self.retryNote(tlsCertNetworkTarget, now, err)
 	return err
+}
+
+// Whether leaf names exactly the set whose hash identifierSetSha256 is, as its order's attestation bound it.
+func tlsCertLeafNamesSet(leaf *x509.Certificate, identifierSetSha256 [sha256.Size]byte) bool {
+	if leaf == nil {
+		return false
+	}
+	names := make([]string, 0, len(leaf.DNSNames))
+	for _, name := range leaf.DNSNames {
+		names = append(names, strings.ToLower(strings.TrimSuffix(name, ".")))
+	}
+	hash, err := TlsIdentifierSetHash(names)
+	return err == nil && hash == identifierSetSha256
 }
 
 // RFC 9773's id of the newest live network chain on key whose row is gone, which its new order names in `replaces`

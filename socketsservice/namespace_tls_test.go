@@ -1404,3 +1404,148 @@ func TestTlsListenRoutesVisitorsOnlyToCertifiedListeners(t *testing.T) {
 		t.Fatalf("a network name's dial answered %s", code)
 	}
 }
+
+// A scope source a test scripts (TLS-M6-03): a scope's answer, nil allowing, and for a member scope the sidecars its
+// member consented.
+type testTlsScopeConsent struct {
+	stateLock sync.Mutex
+	answers   map[string]error
+	consented map[string]map[connect.Id]bool
+}
+
+func (self *testTlsScopeConsent) ConsentListen(networkId connect.Id, scope string, sidecarId *connect.Id) error {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	answer, found := self.answers[scope]
+	if !found {
+		return fmt.Errorf("%w: no such scope", socketsservice.ErrSocketListenRefused)
+	}
+	if answer != nil {
+		return answer
+	}
+	if consented, member := self.consented[scope]; member && (sidecarId == nil || !consented[*sidecarId]) {
+		return fmt.Errorf("%w: unconsented", socketsservice.ErrSocketListenRefused)
+	}
+	return nil
+}
+
+// §13.9's host row for a scope host (TLS-M6-03; Q-TLS-3, owner decision 126): with no scope source every scope host is
+// refused; a scope the projection holds passes for a sidecar whose certificate names its pair, and is refused for one
+// whose certificate names only the network's pair or another scope's; a member scope passes only for a consented
+// device; a scope the projection does not hold is refused, and one it cannot read yet is undecided.
+func TestTlsListenChecksAScopeHostsScopeAndConsent(t *testing.T) {
+	scopes := &testTlsScopeConsent{
+		answers: map[string]error{
+			"team":   nil,
+			"crew":   nil,
+			"unread": fmt.Errorf("%w: not loaded", socketsservice.ErrSocketListenUnavailable),
+		},
+		consented: map[string]map[connect.Id]bool{"crew": {}},
+	}
+	scene := func(name string, scopePairs []string) *testTlsListenScene {
+		scene := newTestTlsListenScene(t, nil)
+		scene.setName(name)
+		scene.facts.Certs[0].ScopePairs = scopePairs
+		scene.hooks.SetScopeConsent(scopes)
+		return scene
+	}
+	refused := func(what string, err error) {
+		t.Helper()
+		if !errors.Is(err, socketsservice.ErrSocketListenRefused) {
+			t.Errorf("%s: answered %v, not a refusal", what, err)
+		}
+	}
+
+	none := newTestTlsListenScene(t, nil)
+	none.setName("tls/443/app.team")
+	none.facts.Certs[0].ScopePairs = []string{"team"}
+	refused("no scope source", none.validate())
+
+	if err := scene("tls/443/app.team", []string{"team"}).validate(); err != nil {
+		t.Errorf("a scope host whose certificate names its pair: %v", err)
+	}
+	refused("a certificate naming the network pair alone", scene("tls/443/app.team", nil).validate())
+	refused("a certificate naming another scope", scene("tls/443/app.team", []string{"other"}).validate())
+	refused("a scope the projection does not hold", scene("tls/443/app.gone", []string{"gone"}).validate())
+	if err := scene("tls/443/app.unread", []string{"unread"}).validate(); !errors.Is(err, socketsservice.ErrSocketListenUnavailable) {
+		t.Errorf("a scope not read yet answered %v", err)
+	}
+	// a member scope: refused until the member consents this device
+	crew := scene("tls/443/app.crew", []string{"crew"})
+	refused("an unconsented member scope device", crew.validate())
+	scopes.stateLock.Lock()
+	scopes.consented["crew"][crew.sidecarId] = true
+	scopes.stateLock.Unlock()
+	if err := crew.validate(); err != nil {
+		t.Errorf("a consented member scope device: %v", err)
+	}
+	// the screen reads the scope host's label: a word-number label is a burner's, whatever its scope
+	refused("a word-number label under a scope", scene("tls/443/apple-1234.team", []string{"team"}).validate())
+}
+
+// A certified alias narrows as a custom host does (TLS-M6-03): its zone stands for every one-label owner as
+// <owner>.<alias>.<root> and for @ as the zone, so a listener keeps the alias names its certificate bears out, drops one
+// it does not and keeps its entry; another sidecar's alias and a scope host's name under an alias are dropped.
+func TestTlsListenNarrowsACertifiedAlias(t *testing.T) {
+	scene := newTestTlsListenScene(t, nil)
+	now := scene.clock.Now()
+	scene.facts.CustomCertified = []*socketsservice.TlsListenCustomName{
+		{SidecarId: scene.sidecarId, Owner: socketsservice.TlsListenCustomNameAnyOwner, Name: "shop.root.example", NotAfter: now.Add(48 * time.Hour)},
+		{SidecarId: testSocketId(), Owner: socketsservice.TlsListenCustomNameAnyOwner, Name: "other.root.example", NotAfter: now.Add(48 * time.Hour)},
+	}
+	scene.check.Registration.CertifiedNames = []string{"blog.shop.root.example", "blog.other.root.example", "shop.root.example"}
+	if err := scene.validate(); err != nil {
+		t.Fatalf("the alias's narrowing refused the entry: %v", err)
+	}
+	if got := scene.check.Registration.CertifiedNames; !slices.Equal(got, []string{"blog.shop.root.example"}) {
+		t.Fatalf("tls/443/blog kept %v", got)
+	}
+
+	apex := newTestTlsListenScene(t, nil)
+	apex.setName("tls/443/@")
+	apex.facts.CustomCertified = []*socketsservice.TlsListenCustomName{
+		{SidecarId: apex.sidecarId, Owner: socketsservice.TlsListenCustomNameAnyOwner, Name: "shop.root.example", NotAfter: apex.clock.Now().Add(48 * time.Hour)},
+	}
+	apex.check.Registration.CertifiedNames = []string{"shop.root.example", "blog.shop.root.example"}
+	if err := apex.validate(); err != nil {
+		t.Fatalf("the apex's narrowing refused the entry: %v", err)
+	}
+	if got := apex.check.Registration.CertifiedNames; !slices.Equal(got, []string{"shop.root.example"}) {
+		t.Fatalf("tls/443/@ kept %v", got)
+	}
+}
+
+// TLS-M6-03's alias row on T2: an alias's visitor, whose dial carries the alias's name as server_name (TLS-M6-02),
+// finds no listener while no certificate names the alias's pair, every listener's listing of it dropped with its entry
+// kept, a network name's dial reaching them all the same; once one listener's certificate names the pair, every dial
+// for the alias reaches that listener alone.
+func TestTlsListenRoutesAnAliasOnlyToListenersCertifiedForIt(t *testing.T) {
+	scene := newTestTlsRouteScene(t, 3)
+	aliasName := "web.shop.root.example"
+	for index := range scene.listeners {
+		scene.heartbeat(t, index, []string{"h2", "http/1.1"}, []string{aliasName}, nil)
+	}
+	if _, _, code := scene.find(t, []string{"h2"}, aliasName); code != sidecar.SocketErrorCodeNoListener {
+		t.Fatalf("an alias no certificate names answered %q", code)
+	}
+	if primary, _, code := scene.find(t, []string{"h2"}, ""); code != "" || primary < 0 {
+		t.Fatalf("a network name's dial answered %d, %q", primary, code)
+	}
+
+	scene.facts.CustomCertified = []*socketsservice.TlsListenCustomName{{
+		SidecarId: scene.listeners[1].sidecarId,
+		Owner:     socketsservice.TlsListenCustomNameAnyOwner,
+		Name:      "shop.root.example",
+		NotAfter:  scene.world.clock.Now().Add(30 * 24 * time.Hour),
+	}}
+	scene.loadFacts(t)
+	for index := range scene.listeners {
+		scene.heartbeat(t, index, []string{"h2", "http/1.1"}, []string{aliasName}, nil)
+	}
+	for range 50 {
+		primary, backup, code := scene.find(t, []string{"h2"}, aliasName)
+		if code != "" || primary != 1 || (backup != -1 && backup != 1) {
+			t.Fatalf("an alias's dial reached %d and %d, %q", primary, backup, code)
+		}
+	}
+}
