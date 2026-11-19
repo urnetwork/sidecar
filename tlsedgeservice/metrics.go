@@ -100,6 +100,10 @@ type tlsEdgeMetrics struct {
 	recordFlushes sidecar.MetricsCounter
 	// Reads of the label map, by result.
 	nameLoads sidecar.MetricsCounter
+	// Reads of the active custom hosts, by result.
+	customHostLoads sidecar.MetricsCounter
+	// Reads of the fleet's daily visitor key, by result.
+	visitorKeyRefreshes sidecar.MetricsCounter
 	// Reads of network_tls_suspension and of {tes_} keys, by result.
 	killLoads sidecar.MetricsCounter
 	// Negative cache entries the bound evicted before their time.
@@ -111,16 +115,18 @@ type tlsEdgeMetrics struct {
 // Declares the families. Two engines in one process share them, as Metrics allows.
 func newTlsEdgeMetrics(metrics sidecar.Metrics, settings *TlsEdgeSettings) *tlsEdgeMetrics {
 	return &tlsEdgeMetrics{
-		connections:       metrics.Counter("urnetwork_tlsedge_connections_total", "Connections, by how each ended.", "result"),
-		setupSeconds:      metrics.Histogram("urnetwork_tlsedge_setup_seconds", "Seconds from accept to the listener's stream, for connections that got one.", settings.SetupSecondsBuckets),
-		bytes:             metrics.Counter("urnetwork_tlsedge_bytes_total", "Bytes spliced, by direction.", "direction"),
-		capRefusals:       metrics.Counter("urnetwork_tlsedge_cap_refusals_total", "Connections a cap refused, by cap.", "cap"),
-		streamEnds:        metrics.Counter("urnetwork_tlsedge_stream_ends_total", "Spliced connections, by why each ended.", "reason"),
-		records:           metrics.Counter("urnetwork_tlsedge_records_total", "Connection records, by result.", "result"),
-		recordFlushes:     metrics.Counter("urnetwork_tlsedge_record_flushes_total", "Flushes of connection records, by result.", "result"),
-		nameLoads:         metrics.Counter("urnetwork_tlsedge_name_loads_total", "Reads of the label map, by result.", "result"),
-		killLoads:         metrics.Counter("urnetwork_tlsedge_kill_loads_total", "Reads of the kill switch's rows and keys, by result.", "result"),
-		negativeEvictions: metrics.Counter("urnetwork_tlsedge_negative_cache_evictions_total", "Negative cache entries evicted before their time by the bound."),
-		acceptFailures:    metrics.Counter("urnetwork_tlsedge_accept_failures_total", "Accepts that failed and were retried."),
+		connections:         metrics.Counter("urnetwork_tlsedge_connections_total", "Connections, by how each ended.", "result"),
+		setupSeconds:        metrics.Histogram("urnetwork_tlsedge_setup_seconds", "Seconds from accept to the listener's stream, for connections that got one.", settings.SetupSecondsBuckets),
+		bytes:               metrics.Counter("urnetwork_tlsedge_bytes_total", "Bytes spliced, by direction.", "direction"),
+		capRefusals:         metrics.Counter("urnetwork_tlsedge_cap_refusals_total", "Connections a cap refused, by cap.", "cap"),
+		streamEnds:          metrics.Counter("urnetwork_tlsedge_stream_ends_total", "Spliced connections, by why each ended.", "reason"),
+		records:             metrics.Counter("urnetwork_tlsedge_records_total", "Connection records, by result.", "result"),
+		recordFlushes:       metrics.Counter("urnetwork_tlsedge_record_flushes_total", "Flushes of connection records, by result.", "result"),
+		nameLoads:           metrics.Counter("urnetwork_tlsedge_name_loads_total", "Reads of the label map, by result.", "result"),
+		customHostLoads:     metrics.Counter("urnetwork_tlsedge_custom_host_loads_total", "Reads of the active custom hosts, by result.", "result"),
+		visitorKeyRefreshes: metrics.Counter("urnetwork_tlsedge_visitor_key_refreshes_total", "Reads of the fleet's daily visitor-hash key, by result.", "result"),
+		killLoads:           metrics.Counter("urnetwork_tlsedge_kill_loads_total", "Reads of the kill switch's rows and keys, by result.", "result"),
+		negativeEvictions:   metrics.Counter("urnetwork_tlsedge_negative_cache_evictions_total", "Negative cache entries evicted before their time by the bound."),
+		acceptFailures:      metrics.Counter("urnetwork_tlsedge_accept_failures_total", "Accepts that failed and were retried."),
 	}
 }
