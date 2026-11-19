@@ -11,12 +11,14 @@ import (
 	"errors"
 	"testing"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/urnetwork/sidecar/protocol"
 )
 
 // Has world serve path as removal, with its statement and nothing else, as evs answers a path from the marker its
-// fold wrote: for a prefix's removal, on every entry below the prefix (evsservice's fold.go), which the stand-in,
-// serving a child its own last version, does not.
+// fold wrote on it: for a prefix's removal, on every entry below the prefix (evsservice's markBelow), which the
+// stand-in, serving a child its own last version, does not.
 func evsGapRemovalTestServeRemoval(world *evsTestWorld, path string, removal *protocol.EvsRemovalMarker, statement []byte) {
 	tokenPath := world.tokens(path)
 	world.stateLock.Lock()
@@ -32,16 +34,26 @@ func evsGapRemovalTestServeRemoval(world *evsTestWorld, path string, removal *pr
 	}
 }
 
-// The removal world holds standing on path, and the statement of the push that made it.
-func evsGapRemovalTestMarker(t *testing.T, world *evsTestWorld, path string) (*protocol.EvsRemovalMarker, []byte) {
+// The marker evs's fold writes on path for the removal standing on removed, path itself or a prefix holding it, and
+// the statement of the push that made it: the removal's push and version, at path's own version past its last
+// (evsservice's markEntry).
+func evsGapRemovalTestMarker(t *testing.T, world *evsTestWorld, removed string, path string) (*protocol.EvsRemovalMarker, []byte) {
 	t.Helper()
 	world.stateLock.Lock()
 	defer world.stateLock.Unlock()
-	state := world.paths[path]
+	state := world.paths[removed]
 	if state == nil || state.removal == nil {
-		t.Fatalf("%s holds no removal", path)
+		t.Fatalf("%s holds no removal", removed)
 	}
-	return state.removal, world.commits[state.removal.GetRemovalVersion()-1].statement
+	marker := proto.Clone(state.removal).(*protocol.EvsRemovalMarker)
+	if path != removed {
+		below := world.paths[path]
+		if below == nil || below.removal != nil {
+			t.Fatalf("%s holds no version below %s", path, removed)
+		}
+		marker.PathVersion = below.newest + 1
+	}
+	return marker, world.commits[state.removal.GetRemovalVersion()-1].statement
 }
 
 // d holding d/a.txt, written at 1, which a reader reads, holding d/a.txt's record at 1; 40 versions; d removed at 42;
@@ -64,7 +76,7 @@ func TestEvsGapHeadDropsTheRecordOfAPathServedItsPrefixsRemoval(t *testing.T) {
 	removed := world.push(&evsTestChange{path: "d"})
 	evsTestPushOthers(world, "g", 2)
 	head, _ := world.head()
-	removal, statement := evsGapRemovalTestMarker(t, world, "d")
+	removal, statement := evsGapRemovalTestMarker(t, world, "d", "d/a.txt")
 	evsGapRemovalTestServeRemoval(world, "d/a.txt", removal, statement)
 	reader.client.settings.CatchUpByteCount = 2 * 1024
 	pages := world.logPageCount
@@ -107,7 +119,7 @@ func TestEvsGapHeadDroppedRecordLeavesALaterVersionToTheWalk(t *testing.T) {
 	removed := world.push(&evsTestChange{path: "x.txt"})
 	evsTestPushOthers(world, "g", 2)
 	gapHead, _ := world.head()
-	removal, statement := evsGapRemovalTestMarker(t, world, "x.txt")
+	removal, statement := evsGapRemovalTestMarker(t, world, "x.txt", "x.txt")
 	reader.client.settings.CatchUpByteCount = 2 * 1024
 	if _, _, err := evsTestRead(t, reader, world, "x.txt"); !errors.Is(err, ErrEvsPathAbsent) {
 		t.Fatalf("x.txt's removal at %d past the gap: %v", removed, err)
