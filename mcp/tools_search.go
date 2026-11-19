@@ -8,7 +8,10 @@
 //	describe  each description says that results are data, that untrusted text is withheld unless asked for, and that
 //	          asking taints the run; none holds a variable (D-MCP-3)
 //	session   each MCP session searches as a search session of its own, its cursors, limits and hit ids its own, so a
-//	          cursor or hit id from another session is refused
+//	          cursor or hit id from another session is refused, and its cursors end with it (session_search.go)
+//	limits    a search or search_agents call takes one of its session's searches first (McpSession.AdmitSearch),
+//	          waiting up to its wait_ms, then answering busy, retryable; the search pages for what is left of that
+//	          wait, so the call still returns by wait_ms (§16.10's limits and async rows)
 //	guard     the repos a call names go to McpGuard as search targets, path_prefix with them, so a secret repo or a
 //	          mailbox's vault/ family is refused before anything runs; a call naming none reaches the engine's scope,
 //	          which lists no secret repo; each hit is a search target too, judged on its whole path before anything
@@ -33,9 +36,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"runtime"
-	"sync"
-	"weak"
+	"time"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
@@ -100,45 +101,35 @@ func mcpSearchError(err error) error {
 	return errMcpFailed
 }
 
-// Each MCP session's search session id, minted at its first search: its cursors, limits and hit ids are its own. The
-// map holds its sessions weakly, and a session's id is forgotten once the session is collected.
-type mcpSearchSessions struct {
-	stateLock  sync.Mutex
-	sessionIds map[weak.Pointer[McpSession]]sidecar.Id
-}
-
-// The search session of session.
-func (self *mcpSearchSessions) of(session *McpSession) sidecar.Id {
-	if session == nil {
-		return sidecar.NewId()
+// Takes one of the call's session's searches (McpSession.AdmitSearch) within the call's wait_ms, its default where
+// it names none: busy, retryable, past it. Answers the release and the wait_ms left for the search to page in, so
+// the call returns by wait_ms whatever it waited for its admission. A wait_ms outside its range is refused here as
+// the search would refuse it.
+func mcpSearchAdmit(ctx context.Context, call *McpCall, waitMs *int, newSearch bool) (func(), *int, error) {
+	settings := call.Session.server.settings.SearchTools
+	if settings == nil {
+		settings = sidecar.DefaultSearchToolSettings()
 	}
-	key := weak.Make(session)
-	sessionId, added := func() (sidecar.Id, bool) {
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
-		if self.sessionIds == nil {
-			self.sessionIds = map[weak.Pointer[McpSession]]sidecar.Id{}
+	wait := settings.Wait
+	if waitMs != nil {
+		wait = time.Duration(*waitMs) * time.Millisecond
+		if *waitMs < 0 || settings.WaitMax < wait {
+			return nil, nil, errMcpSearchArguments
 		}
-		if sessionId, ok := self.sessionIds[key]; ok {
-			return sessionId, false
-		}
-		sessionId := sidecar.NewId()
-		self.sessionIds[key] = sessionId
-		return sessionId, true
-	}()
-	if added {
-		runtime.AddCleanup(session, func(key weak.Pointer[McpSession]) {
-			self.stateLock.Lock()
-			defer self.stateLock.Unlock()
-			delete(self.sessionIds, key)
-		}, key)
 	}
-	return sessionId
+	clock := call.Session.server.clock
+	start := clock.Now()
+	release, err := call.Session.AdmitSearch(ctx, wait, newSearch)
+	if err != nil {
+		return nil, nil, err
+	}
+	leftMs := int(max(wait-clock.Now().Sub(start), 0) / time.Millisecond)
+	return release, &leftMs, nil
 }
 
 // The environment one call runs a search tool in: its session, its run's taint through the result, the markers, the
 // network's credentials as the matcher, and progress through the request's token.
-func mcpSearchEnv(ctx context.Context, call *McpCall, sessions *mcpSearchSessions, result *McpResult) (*sidecar.SearchToolEnv, error) {
+func mcpSearchEnv(ctx context.Context, call *McpCall, result *McpResult) (*sidecar.SearchToolEnv, error) {
 	network, ok := mcpToolNetworkOf(call)
 	if !ok {
 		return nil, errMcpNoToolNetwork
@@ -148,7 +139,7 @@ func mcpSearchEnv(ctx context.Context, call *McpCall, sessions *mcpSearchSession
 		return nil, errMcpMatcher
 	}
 	return &sidecar.SearchToolEnv{
-		Session: sessions.of(call.Session),
+		Session: call.Session.SearchSessionId(),
 		Taint:   result.Untrusted,
 		Fence:   result.Fence,
 		Secret:  matcher.Matches,
@@ -210,9 +201,10 @@ func init() {
 	})
 }
 
-// Registers the three search tools on catalog, each reaching a call's search through searchOf.
+// Registers the three search tools on catalog, each reaching a call's search through searchOf, which a hit argument
+// of the opening tools then resolves through too (tools_hit.go).
 func addSearchTools(catalog *McpCatalog, searchOf mcpSearchOfFunction) {
-	sessions := &mcpSearchSessions{}
+	catalog.setSearchOf(searchOf)
 	searchFor := func(call *McpCall) (McpSearch, error) {
 		if call == nil {
 			return nil, errMcpNoCall
@@ -249,11 +241,22 @@ func addSearchTools(catalog *McpCatalog, searchOf mcpSearchOfFunction) {
 		if err != nil {
 			return nil, err
 		}
-		env, err := mcpSearchEnv(ctx, call, sessions, result)
+		env, err := mcpSearchEnv(ctx, call, result)
 		if err != nil {
 			return nil, err
 		}
-		out, err := search.Search(ctx, env, in)
+		// a page of a cursor starts no search, so it takes a slot and no token
+		release, leftMs, err := mcpSearchAdmit(ctx, call, in.WaitMs, in.Cursor == "")
+		if err != nil {
+			return nil, err
+		}
+		defer release()
+		// the cursors it opens end with the session, at its close, or here once it returns past the close
+		call.Session.noteSearch(call.NetworkId, search)
+		defer call.Session.noteSearch(call.NetworkId, search)
+		args := *in
+		args.WaitMs = leftMs
+		out, err := search.Search(ctx, env, &args)
 		if err != nil {
 			return nil, mcpSearchError(err)
 		}
@@ -279,11 +282,20 @@ func addSearchTools(catalog *McpCatalog, searchOf mcpSearchOfFunction) {
 		if err != nil {
 			return nil, err
 		}
-		env, err := mcpSearchEnv(ctx, call, sessions, result)
+		env, err := mcpSearchEnv(ctx, call, result)
 		if err != nil {
 			return nil, err
 		}
-		out, err := search.Agents(ctx, env, in)
+		release, leftMs, err := mcpSearchAdmit(ctx, call, in.WaitMs, true)
+		if err != nil {
+			return nil, err
+		}
+		defer release()
+		call.Session.noteSearch(call.NetworkId, search)
+		defer call.Session.noteSearch(call.NetworkId, search)
+		args := *in
+		args.WaitMs = leftMs
+		out, err := search.Agents(ctx, env, &args)
 		if err != nil {
 			return nil, mcpSearchError(err)
 		}

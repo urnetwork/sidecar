@@ -3,7 +3,7 @@
 // §16.4's bounds on one session, from SidecarMcpSettings: at most SessionCallCount calls in flight, a ninth waiting
 // for a slot rather than being refused; W calls at SessionWriteRate, one past it refused at once; and each call ended
 // at CallTimeout, under Codex's 60 s tool_timeout_sec. A call awaiting a person returns pending at once, so it never
-// holds a slot (§16.4), and search's own session limits are MCP-M10-02's.
+// holds a slot (§16.4), and search's own session limits, inside these, are session_search.go's.
 //
 // Time is the server's Clock, so a test moves it and never sleeps. A call holds its slot until its handler returns,
 // even past its timeout, so the bound is on work that actually runs; the timeout cancels the handler's context, and

@@ -36,6 +36,12 @@ type TlsEdgeStoreSuiteHooks struct {
 	AddLabel func(ctx context.Context, networkId sidecar.Id) (string, error)
 	// Gives networkId a live alias in Root (§12.5, M6).
 	AddAlias func(ctx context.Context, networkId sidecar.Id, alias string) error
+	// Maps host, a custom host under a domain of the case's own that the hook verifies for networkId
+	// (§7.6), to the owner <ownerHost>.<label>.<Root> of networkId's zone (§12.8): active as weak mode or
+	// certs' passing walk leaves it, or pending as strong mode leaves it before the walk (TLS-M6-02).
+	AddCustomHost func(ctx context.Context, networkId sidecar.Id, host string, ownerHost string, active bool) error
+	// Removes networkId's custom host, as §12.8's remove does.
+	RemoveCustomHost func(ctx context.Context, networkId sidecar.Id, host string) error
 	// Tombstones every name of networkId, as deleting the network does.
 	WithdrawNetwork func(ctx context.Context, networkId sidecar.Id) error
 	// §12.9's SuspendZone, SuspendHost and Restore. A zero until holds until a lift; Restore's host empty
@@ -67,15 +73,17 @@ func RunTlsEdgeStoreSuite(t testing.TB, store tlsedgeservice.TlsEdgeStore, hooks
 		hooks = &TlsEdgeStoreSuiteHooks{}
 	}
 	given := map[string]bool{
-		"AddLabel":        hooks.AddLabel != nil,
-		"AddAlias":        hooks.AddAlias != nil,
-		"WithdrawNetwork": hooks.WithdrawNetwork != nil,
-		"SuspendZone":     hooks.SuspendZone != nil,
-		"SuspendHost":     hooks.SuspendHost != nil,
-		"Restore":         hooks.Restore != nil,
-		"SetSuspension":   hooks.SetSuspension != nil,
-		"LiftSuspension":  hooks.LiftSuspension != nil,
-		"ReadRecords":     hooks.ReadRecords != nil,
+		"AddLabel":         hooks.AddLabel != nil,
+		"AddAlias":         hooks.AddAlias != nil,
+		"AddCustomHost":    hooks.AddCustomHost != nil,
+		"RemoveCustomHost": hooks.RemoveCustomHost != nil,
+		"WithdrawNetwork":  hooks.WithdrawNetwork != nil,
+		"SuspendZone":      hooks.SuspendZone != nil,
+		"SuspendHost":      hooks.SuspendHost != nil,
+		"Restore":          hooks.Restore != nil,
+		"SetSuspension":    hooks.SetSuspension != nil,
+		"LiftSuspension":   hooks.LiftSuspension != nil,
+		"ReadRecords":      hooks.ReadRecords != nil,
 	}
 	for _, suiteCase := range tlsEdgeSuiteCases() {
 		missing := []string{}
@@ -104,6 +112,8 @@ func tlsEdgeSuiteCases() []tlsEdgeSuiteCase {
 		{name: "changes since a serial hold what changed after it and nothing before", needs: []string{"AddLabel"}, run: caseTlsEdgeChangesSince},
 		{name: "a read past the newest change holds none of the case's names", needs: []string{"AddLabel"}, run: caseTlsEdgeNothingNew},
 		{name: "an alias reads as an alias of its network", needs: []string{"AddLabel", "AddAlias"}, run: caseTlsEdgeAlias},
+		{name: "an active custom host reads with its network and owner, and a pending one does not", needs: []string{"AddLabel", "AddCustomHost"}, run: caseTlsEdgeCustomHosts},
+		{name: "a removed custom host no longer reads", needs: []string{"AddLabel", "AddCustomHost", "RemoveCustomHost"}, run: caseTlsEdgeCustomHostRemoved},
 		{name: "a withdrawn network's names come back no longer live", needs: []string{"AddLabel", "WithdrawNetwork"}, run: caseTlsEdgeWithdrawn},
 		{name: "a zone suspension rides its network's names until restored", needs: []string{"AddLabel", "SuspendZone", "Restore"}, run: caseTlsEdgeZoneSuspension},
 		{name: "a host suspension withholds its host until restored", needs: []string{"AddLabel", "SuspendHost", "Restore"}, run: caseTlsEdgeHostSuspension},
@@ -252,6 +262,102 @@ func caseTlsEdgeAlias(ctx context.Context, store tlsedgeservice.TlsEdgeStore, ho
 	}
 	if entry.NetworkId != networkId || entry.Kind != tlsedgeservice.TlsEdgeNameKindAlias || entry.State != tlsedgeservice.TlsEdgeNameStateLive {
 		return fmt.Errorf("entry %+v", entry)
+	}
+	return nil
+}
+
+// A domain of the case's own, drawn per run, so a shared store holds no other case's hosts under it.
+func tlsEdgeSuiteCustomDomain() (string, error) {
+	suffix, err := sidecar.NewDnsLabel(rand.Reader)
+	if err != nil {
+		return "", err
+	}
+	return "corp-" + suffix + ".example", nil
+}
+
+// The read's entries for host.
+func tlsEdgeSuiteCustomEntries(entries []*tlsedgeservice.TlsEdgeCustomHostEntry, host string) []*tlsedgeservice.TlsEdgeCustomHostEntry {
+	found := []*tlsedgeservice.TlsEdgeCustomHostEntry{}
+	for _, entry := range entries {
+		if entry.Host == host {
+			found = append(found, entry)
+		}
+	}
+	return found
+}
+
+func caseTlsEdgeCustomHosts(ctx context.Context, store tlsedgeservice.TlsEdgeStore, hooks *TlsEdgeStoreSuiteHooks) error {
+	networkId := sidecar.NewId()
+	label, err := hooks.AddLabel(ctx, networkId)
+	if err != nil {
+		return err
+	}
+	domain, err := tlsEdgeSuiteCustomDomain()
+	if err != nil {
+		return err
+	}
+	activeHost := "app." + domain
+	pendingHost := "shop." + domain
+	if err := hooks.AddCustomHost(ctx, networkId, activeHost, "web", true); err != nil {
+		return err
+	}
+	if err := hooks.AddCustomHost(ctx, networkId, pendingHost, "web", false); err != nil {
+		return err
+	}
+	entries, err := store.CustomHosts(ctx, hooks.Root)
+	if err != nil {
+		return err
+	}
+	active := tlsEdgeSuiteCustomEntries(entries, activeHost)
+	if len(active) != 1 {
+		return fmt.Errorf("%d entries name the active host", len(active))
+	}
+	if entry := active[0]; entry.NetworkId != networkId || entry.OwnerHost != "web" || entry.OwnerLabel != label {
+		return fmt.Errorf("entry %+v", entry)
+	}
+	if pending := tlsEdgeSuiteCustomEntries(entries, pendingHost); 0 < len(pending) {
+		return fmt.Errorf("a pending host reads: %+v", pending[0])
+	}
+	// another root's read holds none of this root's hosts
+	others, err := store.CustomHosts(ctx, "other-"+hooks.Root)
+	if err != nil {
+		return err
+	}
+	if 0 < len(tlsEdgeSuiteCustomEntries(others, activeHost)) {
+		return fmt.Errorf("another root's read holds the host")
+	}
+	return nil
+}
+
+func caseTlsEdgeCustomHostRemoved(ctx context.Context, store tlsedgeservice.TlsEdgeStore, hooks *TlsEdgeStoreSuiteHooks) error {
+	networkId := sidecar.NewId()
+	if _, err := hooks.AddLabel(ctx, networkId); err != nil {
+		return err
+	}
+	domain, err := tlsEdgeSuiteCustomDomain()
+	if err != nil {
+		return err
+	}
+	host := "app." + domain
+	if err := hooks.AddCustomHost(ctx, networkId, host, "web", true); err != nil {
+		return err
+	}
+	entries, err := store.CustomHosts(ctx, hooks.Root)
+	if err != nil {
+		return err
+	}
+	if len(tlsEdgeSuiteCustomEntries(entries, host)) != 1 {
+		return fmt.Errorf("the host does not read before its removal")
+	}
+	if err := hooks.RemoveCustomHost(ctx, networkId, host); err != nil {
+		return err
+	}
+	entries, err = store.CustomHosts(ctx, hooks.Root)
+	if err != nil {
+		return err
+	}
+	if 0 < len(tlsEdgeSuiteCustomEntries(entries, host)) {
+		return fmt.Errorf("a removed host still reads")
 	}
 	return nil
 }

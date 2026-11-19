@@ -1,6 +1,6 @@
 // What tlsedge reads and writes outside itself, behind interfaces so the engine imports no server
-// package (§4.5): TlsEdgeStore, the label map and network_tls_suspension in Postgres and the connection
-// records, and TlsEdgeDialer, Find and the stream to a listener.
+// package (§4.5): TlsEdgeStore, the label map, the active custom hosts and network_tls_suspension in
+// Postgres and the connection records, and TlsEdgeDialer, Find and the stream to a listener.
 //
 // The store is server's model.NewTlsEdgeStore (TLS-M5-11) on DNS-M5-10's label map, as
 // plan-TLS-edge-data-source settles it: tlsedge reads Postgres through a restricted role, a full
@@ -63,6 +63,22 @@ type TlsEdgeNameEntry struct {
 	WithheldHosts []string
 }
 
+// One active custom host of §12.8 (network_dns_custom_host's active TLS rows, DNS-M6-02's
+// DnsCustomHostActiveRows) as tlsedge routes by it: the customer's name and the host owner of its
+// network's zone it maps to, whose socket names are tls/<port>/<OwnerHost> (TLS-M6-02; DESIGN-DETAILS
+// 17.2.2). A pending, withheld or strict-mode MX host is never here, so only a host certs' walk and
+// probe made active routes, and a pending one answers unrecognized_name as an unknown name does.
+type TlsEdgeCustomHostEntry struct {
+	// <host>.<domain>, or an apex <domain>: lowercase, no final dot, under no root.
+	Host      string
+	NetworkId sidecar.Id
+	// The owner <host>.<label>.<root>'s two parts: the one label below the zone's apex, the <host> of the
+	// socket name, and the network's 10-character label. A host whose owner's label is not its network's
+	// live one maps nothing.
+	OwnerHost  string
+	OwnerLabel string
+}
+
 // The label map at one moment, or its changes since a serial.
 type TlsEdgeNameMap struct {
 	// The highest change serial read: the next NamesSince's after. A read that found nothing new answers
@@ -101,6 +117,10 @@ type TlsEdgeStore interface {
 	NameSnapshot(ctx context.Context, root string) (*TlsEdgeNameMap, error)
 	// The names of root whose entry changed above after, in change serial order, each as it stands now.
 	NamesSince(ctx context.Context, root string, after uint64) (*TlsEdgeNameMap, error)
+	// Every active custom host whose owner sits under root, read whole each NameReloadInterval beside the
+	// label map's changes (§13.4, §13.5): a host that left the active rows maps nothing from the next read
+	// on, while the lb's map may still send its hellos here until its next reload.
+	CustomHosts(ctx context.Context, root string) ([]*TlsEdgeCustomHostEntry, error)
 	// Every row of network_tls_suspension, as §13.9's kill switch writes them. A row whose until has
 	// passed may still be here until the sweep deletes it, and the kill set reads it as lifted.
 	Suspensions(ctx context.Context) ([]*sidecar.TlsSuspendArgs, error)
@@ -127,10 +147,17 @@ type TlsEdgeDialRequest struct {
 	// What the visitor's name mapped to.
 	Target *TlsEdgeTarget
 	// The ids the visitor offered, in hello order, trimmed as TlsEdgeOpen's (reading 6). Find matches a
-	// listener's ALPN against them.
+	// listener's ALPN against them, and a list holding acme-tls/1 takes Find's ACME route (DESIGN-DETAILS
+	// 17.2.10).
 	AlpnIds []string
-	// §9.7's affinity key, a keyed hash of the visitor's /24 or /48. Empty until the fleet's daily key
-	// lands (plan-TLS-visitor-hash-key), and affinity waits for M6 (TLS-M6-02).
+	// Find's server_name (DESIGN-DETAILS 17.2.10): the visitor's normalized SNI, set exactly when the name
+	// resolved through the custom-host map or an alias (TlsEdgeTarget.ServerName), so Find matches only
+	// listeners certified for it and an acme-tls/1 hello only the newest claim for it. Empty for a name
+	// under the network's own zone. tlsedge routes nothing by certificate itself.
+	ServerName string
+	// §9.7's affinity key: the visitor's /24 or /48 under the day's k_affinity (TlsVisitorKeys.AffinityKey,
+	// plan-TLS-visitor-hash-key), 16 bytes, sent to Find and never stored. Empty for a visitor with no
+	// address, which picks with no affinity.
 	AffinityKey []byte
 	// StreamOpen.metadata for a ticket whose grant ends at grantExpireTimeMillis: TlsEdgeOpen, whose
 	// expire_time_millis is that time (§13.5). Called once for each ticket the dialer tries.

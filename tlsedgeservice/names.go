@@ -3,15 +3,24 @@
 // immutable view through an atomic pointer, so it takes no lock and never waits on the store (I-12): a
 // name the view does not hold is unrecognized_name, with no fallback lookup.
 //
-// What maps (§13.5, Q-TLS-6): <host>.<x>.<root> and <x>.<root>, the latter as host @, where <x> is a
-// live label or a live alias and <host> one LDH label. The target always names the network's
-// 10-character label, which SOCK's target needs, so an alias resolves to its network's label. Deeper
-// names, the scope hosts <label>.<scope>, and custom hosts map nothing until TLS-M6-02. A retiring or
-// tombstoned name, an ownerless one, a reserved label (§12.5), a suspended zone and a withheld host
-// (§12.9) map nothing either, and all of these read on the wire exactly as an unknown name does.
+// What maps (§13.5, Q-TLS-6, Q-TLS-3): <host>.<x>.<root> and <x>.<root>, the latter as host @, where <x>
+// is a live label or a live alias and <host> one LDH label; v1's scope hosts <label>.<scope>.<x>.<root>,
+// as host <label>.<scope> within one 63-byte segment of §9.4's grammar, deeper names mapping nothing; and
+// §12.8's active custom hosts, <host>.<domain> or an apex <domain>, each to the host owner of its
+// network's zone it maps to (TLS-M6-02). The target always names the network's 10-character label, which
+// SOCK's target needs, so an alias and a custom host resolve to their network's label. tlsedge holds no
+// scope table: Find denies a scope that does not exist, and the negative cache holds the denial. A
+// retiring or tombstoned name, an ownerless one, a reserved label (§12.5), a suspended zone and a
+// withheld host (§12.9), a custom host's owner among them, map nothing either, and all of these read on
+// the wire exactly as an unknown name does.
 //
-// The view is split into shards by a keyed hash, so a change copies only the shards it touches rather
-// than the whole map: a change every 5 s on a map of every labelled network stays cheap. One writer
+// A name that resolved through an alias or the custom-host map carries the visitor's name as Find's
+// server_name (DESIGN-DETAILS 17.2.10), so Find matches only listeners certified for it; a name under
+// the network's own zone carries none, since the network's wildcard covers it.
+//
+// The label view is split into shards by a keyed hash, so a change copies only the shards it touches
+// rather than the whole map: a change every 5 s on a map of every labelled network stays cheap. The
+// custom-host view is Team's alone and small, read whole at each reload and replaced whole. One writer
 // applies snapshots and changes at a time; any number of readers resolve alongside it.
 
 package tlsedgeservice
@@ -62,6 +71,21 @@ type TlsEdgeTarget struct {
 	Port int
 	// tls/<port>/<host>.
 	Name string
+	// The visitor's normalized name when it resolved through an alias or the custom-host map, which Find
+	// takes as server_name (DESIGN-DETAILS 17.2.10); empty for a name under the network's own zone.
+	ServerName string
+}
+
+// One active custom host in a view.
+type tlsEdgeCustomHostRow struct {
+	networkId  sidecar.Id
+	ownerHost  string
+	ownerLabel string
+}
+
+// One immutable state of the custom-host map, replaced whole at each read.
+type tlsEdgeCustomHostView struct {
+	hosts map[string]*tlsEdgeCustomHostRow
 }
 
 // One routable name in a view.
@@ -73,6 +97,12 @@ type tlsEdgeNameRow struct {
 	zoneSuspended    bool
 	zoneSuspendUntil time.Time
 	withheldHosts    []string
+}
+
+// Whether the zone's suspension holds at now (§12.9): until its until passes, or until a lift when it
+// has none.
+func (self *tlsEdgeNameRow) suspendedAt(now time.Time) bool {
+	return self.zoneSuspended && (self.zoneSuspendUntil.IsZero() || now.Before(self.zoneSuspendUntil))
 }
 
 // A host withheld here or below one withheld here (§12.9).
@@ -103,6 +133,7 @@ type TlsEdgeNames struct {
 	clock      sidecar.Clock
 	seed       maphash.Seed
 	view       atomic.Pointer[tlsEdgeNameView]
+	customView atomic.Pointer[tlsEdgeCustomHostView]
 
 	// serializes writers; readers never take it
 	applyLock sync.Mutex
@@ -133,6 +164,12 @@ func (self *TlsEdgeNames) labelShard(networkId sidecar.Id) int {
 // Whether a snapshot has been applied.
 func (self *TlsEdgeNames) Loaded() bool {
 	return self.view.Load() != nil
+}
+
+// Whether a read of the custom hosts has been applied, which the engine is ready only after: until
+// then a ready custom host's visitor would read as an unknown name.
+func (self *TlsEdgeNames) CustomHostsLoaded() bool {
+	return self.customView.Load() != nil
 }
 
 // The serial the next NamesSince follows from and the restore serial the view was read under, zeros
@@ -252,6 +289,45 @@ func (self *TlsEdgeNames) Apply(nameMap *TlsEdgeNameMap, snapshot bool) {
 	self.view.Store(view)
 }
 
+// Whether entry is a custom host the map may hold: a canonical name under no root of this map and not
+// the root itself, an owner host of one LDH label, a 10-character owner label, and a network.
+func (self *TlsEdgeNames) customHostRoutable(entry *TlsEdgeCustomHostEntry) bool {
+	if entry.NetworkId == (sidecar.Id{}) {
+		return false
+	}
+	if host, ok := NormalizeSni(entry.Host); !ok || host != entry.Host || host == self.root || strings.HasSuffix(host, self.rootSuffix) {
+		return false
+	}
+	if ownerHost, ok := NormalizeSni(entry.OwnerHost); !ok || ownerHost != entry.OwnerHost || strings.Contains(ownerHost, ".") {
+		return false
+	}
+	ownerLabel, ok := NormalizeSni(entry.OwnerLabel)
+	return ok && ownerLabel == entry.OwnerLabel && len(ownerLabel) == tlsEdgeLabelByteCount
+}
+
+// Replaces the custom-host map with one read of the active rows (§13.4), dropping any entry that could
+// not route, and returns how many it holds. A host the read lacks maps nothing from here on.
+func (self *TlsEdgeNames) ApplyCustomHosts(entries []*TlsEdgeCustomHostEntry) int {
+	testHookBarrier("tlsedge.custom_hosts_publish.before", "")
+	defer testHookBarrier("tlsedge.custom_hosts_publish.after", "")
+	self.applyLock.Lock()
+	defer self.applyLock.Unlock()
+
+	view := &tlsEdgeCustomHostView{hosts: make(map[string]*tlsEdgeCustomHostRow, len(entries))}
+	for _, entry := range entries {
+		if entry == nil || !self.customHostRoutable(entry) {
+			continue
+		}
+		view.hosts[entry.Host] = &tlsEdgeCustomHostRow{
+			networkId:  entry.NetworkId,
+			ownerHost:  entry.OwnerHost,
+			ownerLabel: entry.OwnerLabel,
+		}
+	}
+	self.customView.Store(view)
+	return len(view.hosts)
+}
+
 // The target a visitor's server name maps to on port, §13.5's step 2, or false. The name may be as the
 // visitor sent it: it is normalized here (lowercase, one trailing dot off, LDH). Takes no lock and does
 // no I/O.
@@ -263,43 +339,86 @@ func (self *TlsEdgeNames) Resolve(serverName string, port int) (*TlsEdgeTarget, 
 	if !ok {
 		return nil, false
 	}
-	rest, found := strings.CutSuffix(name, self.rootSuffix)
-	if !found || rest == "" {
-		return nil, false
-	}
-	host, x, deeper := strings.Cut(rest, ".")
-	if !deeper {
-		host, x = tlsEdgeApexHost, rest
-	} else if strings.Contains(x, ".") {
-		// a scope host or deeper: TLS-M6-02's
-		return nil, false
-	}
 	view := self.view.Load()
 	if view == nil {
 		return nil, false
+	}
+	rest, underRoot := strings.CutSuffix(name, self.rootSuffix)
+	if !underRoot {
+		if name == self.root {
+			return nil, false
+		}
+		return self.resolveCustomHost(view, name, port)
+	}
+	// <x>, <host>.<x> or <label>.<scope>.<x>, <x> the label or alias just below the root
+	host, x := tlsEdgeApexHost, rest
+	if cut := strings.LastIndexByte(rest, '.'); 0 <= cut {
+		host, x = rest[:cut], rest[cut+1:]
+		if scopeCut := strings.IndexByte(host, '.'); 0 <= scopeCut {
+			// a scope host: one label under one scope label, the whole within one segment of §9.4's
+			// grammar, and nothing deeper
+			if strings.Contains(host[scopeCut+1:], ".") {
+				return nil, false
+			}
+			if _, _, err := sidecar.ParseSocketName("tls/" + strconv.Itoa(port) + "/" + host); err != nil {
+				return nil, false
+			}
+		}
 	}
 	row, ok := view.nameShards[self.nameShard(x)][x]
 	if !ok {
 		return nil, false
 	}
-	if row.zoneSuspended && (row.zoneSuspendUntil.IsZero() || self.clock.Now().Before(row.zoneSuspendUntil)) {
+	if row.suspendedAt(self.clock.Now()) {
 		return nil, false
 	}
 	if host != tlsEdgeApexHost && row.withholds(host) {
 		return nil, false
 	}
-	label := row.label
-	if row.kind == TlsEdgeNameKindAlias {
-		label, ok = view.labelShards[self.labelShard(row.networkId)][row.networkId]
-		if !ok {
-			return nil, false
-		}
-	}
-	return &TlsEdgeTarget{
+	target := &TlsEdgeTarget{
 		NetworkId: row.networkId,
-		Label:     label,
+		Label:     row.label,
 		Host:      host,
 		Port:      port,
 		Name:      "tls/" + strconv.Itoa(port) + "/" + host,
+	}
+	if row.kind == TlsEdgeNameKindAlias {
+		target.Label, ok = view.labelShards[self.labelShard(row.networkId)][row.networkId]
+		if !ok {
+			return nil, false
+		}
+		// an alias is a name the network's wildcard does not cover, so Find matches only listeners
+		// certified for it (TLS-M6-03 certifies aliases; until a certificate names one, none is)
+		target.ServerName = name
+	}
+	return target, true
+}
+
+// A custom host's target: the host owner it maps to in its network's zone, while that network's live
+// label is the owner's and neither the zone's suspension nor the owner's withholding holds.
+func (self *TlsEdgeNames) resolveCustomHost(view *tlsEdgeNameView, name string, port int) (*TlsEdgeTarget, bool) {
+	customView := self.customView.Load()
+	if customView == nil {
+		return nil, false
+	}
+	customRow, ok := customView.hosts[name]
+	if !ok {
+		return nil, false
+	}
+	label, ok := view.labelShards[self.labelShard(customRow.networkId)][customRow.networkId]
+	if !ok || label != customRow.ownerLabel {
+		return nil, false
+	}
+	labelRow, ok := view.nameShards[self.nameShard(label)][label]
+	if !ok || labelRow.suspendedAt(self.clock.Now()) || labelRow.withholds(customRow.ownerHost) {
+		return nil, false
+	}
+	return &TlsEdgeTarget{
+		NetworkId:  customRow.networkId,
+		Label:      label,
+		Host:       customRow.ownerHost,
+		Port:       port,
+		Name:       "tls/" + strconv.Itoa(port) + "/" + customRow.ownerHost,
+		ServerName: name,
 	}, true
 }

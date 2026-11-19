@@ -21,6 +21,13 @@ func testTlsEdgeSuiteHooks(store *FakeTlsEdgeStore) *TlsEdgeStoreSuiteHooks {
 		AddAlias: func(ctx context.Context, networkId sidecar.Id, alias string) error {
 			return store.AddAlias(testTlsEdgeRoot, networkId, alias)
 		},
+		AddCustomHost: func(ctx context.Context, networkId sidecar.Id, host string, ownerHost string, active bool) error {
+			return store.SetCustomHost(testTlsEdgeRoot, host, networkId, ownerHost, active)
+		},
+		RemoveCustomHost: func(ctx context.Context, networkId sidecar.Id, host string) error {
+			store.RemoveCustomHost(host)
+			return nil
+		},
 		WithdrawNetwork: func(ctx context.Context, networkId sidecar.Id) error {
 			store.WithdrawNetwork(networkId)
 			return nil
