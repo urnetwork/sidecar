@@ -415,6 +415,7 @@ type tlsCertFixture struct {
 
 	stateLock   sync.Mutex
 	customHosts []string
+	aliases     []string
 	namesErr    error
 }
 
@@ -451,7 +452,14 @@ func (self *tlsCertFixture) names(ctx context.Context) (*TlsCertNames, error) {
 	if self.namesErr != nil {
 		return nil, self.namesErr
 	}
-	return &TlsCertNames{Root: tlsCertTestRoot, Label: tlsCertTestLabel, CustomHosts: slices.Clone(self.customHosts)}, nil
+	return &TlsCertNames{Root: tlsCertTestRoot, Label: tlsCertTestLabel, Aliases: slices.Clone(self.aliases), CustomHosts: slices.Clone(self.customHosts)}, nil
+}
+
+// The network's live aliases as the device's view gives them from here on.
+func (self *tlsCertFixture) setAliases(aliases ...string) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.aliases = aliases
 }
 
 func (self *tlsCertFixture) setCustomHosts(hosts ...string) {
@@ -1492,5 +1500,51 @@ func TestNewTlsCertManagerRefusesMissingParts(t *testing.T) {
 	}
 	if _, err := NewTlsCertManager(t.Context(), &TlsCertManagerArgs{NetworkId: testNetworkId}); !errors.Is(err, errInvalidSettings) {
 		t.Errorf("no sidecar: %v", err)
+	}
+}
+
+// TLS-M6-03: an alias the network gains makes a new set, so the manager orders once for it on the key that serves,
+// with no replaces, the old chain serving the old set meanwhile, and installs the new chain once it issues; another
+// pass orders nothing more, and the set's alias is in the order's CSR.
+func TestTlsCertManagerOrdersOnceForANewAliasSet(t *testing.T) {
+	fixture := newAttachedTlsCertFixture(t)
+	certificate := fixture.ensureIssued()
+	fixture.mustSync()
+	if fixture.api.orderCount() != 1 {
+		t.Fatalf("%d orders with the set unchanged", fixture.api.orderCount())
+	}
+	fixture.setAliases("shop")
+	fixture.mustSync()
+	if fixture.api.orderCount() != 2 {
+		t.Fatalf("%d orders once an alias joined the set", fixture.api.orderCount())
+	}
+	aliasSet, err := TlsIdentifierSet(tlsCertTestRoot, tlsCertTestLabel, "", []string{"shop"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	order := fixture.api.lastOrder()
+	request, err := x509.ParseCertificateRequest(order.Csr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if names := slices.Sorted(slices.Values(request.DNSNames)); !slices.Equal(names, aliasSet) || order.Replaces != "" {
+		t.Fatalf("the new set's order names %v, replaces %q", names, order.Replaces)
+	}
+	fixture.mustSync()
+	if fixture.api.orderCount() != 2 {
+		t.Fatalf("%d orders after a second pass", fixture.api.orderCount())
+	}
+	served := fixture.manager.IssuedTlsCertificate(fixture.networkSet(), fixture.clock.Now())
+	if served == nil || !bytes.Equal(served.Certificate[0], certificate.Certificate[0]) {
+		t.Fatal("the old set's chain stopped serving before the new one issued")
+	}
+	fixture.api.issue(fixture.api.lastRow().CertId, tlsCertTestLifetime)
+	fixture.mustSync()
+	if fixture.manager.IssuedTlsCertificate(aliasSet, fixture.clock.Now()) == nil {
+		t.Fatal("the new set's chain does not serve")
+	}
+	fixture.mustSync()
+	if fixture.api.orderCount() != 2 {
+		t.Fatalf("%d orders once the new set issued", fixture.api.orderCount())
 	}
 }

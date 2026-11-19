@@ -9,10 +9,13 @@
 //	client    URnetwork-run (D-TLS-1): no sidecar, which neither a platform client nor §18's hosted device holds
 //	          (SOCK.md reading 7, D-SDK-12), or a sidecar bound to a hosted device (TlsListenFacts.HostedSidecarIds)
 //	port      other than TlsNamespaceSettings.Ports, 443, 8443, 8883 and 5671 (R-TLS-9)
-//	host      mta-sts but on §13.9's system publish, below; a scope host, <label>.<scope>, until TLS-M6-03 checks
-//	          its scope and consent; a host §13.5 maps to no listener of the network's: one §12.7's owner table
-//	          keeps for the platform (b, mx, mail, mta-sts), a word-number label or one of the network's scope
-//	          labels, all of which ScreenHost denies whatever else the facts say
+//	host      mta-sts but on §13.9's system publish, below; a scope host, <label>.<scope>, whose scope the
+//	          projection does not hold or, in a member scope, whose sidecar is no consented device of the scope's
+//	          member (TLS-M6-03; Q-TLS-3, owner decision 126), as SetScopeConsent's source answers, every scope host
+//	          refused while the hooks hold none; a host §13.5 maps to no listener of the network's: one §12.7's
+//	          owner table keeps for the platform (b, mx, mail, mta-sts), a word-number label or one of the
+//	          network's scope labels, all of which ScreenHost denies whatever else the facts say, a scope host's
+//	          label screened alone
 //	grant     no active approved publish grant for the host bound to this name, the view's (§8.10, I-8); an app
 //	          mode other than the grant's app_mode; raw under an audience other than public or link; a raw link
 //	          whose grant holds no 32-byte link_spki_sha256 (§13.7, D-TLS-13). The gates report audience and pin and
@@ -21,12 +24,14 @@
 //	time box  a grant with no expiry, or more remaining life than its cap: 24 h on probation or restricted, 7 d at
 //	          Community unless its tier fell less than §20.7's 14 days ago; Pro and Team hold standing names
 //	screen    ScreenHost denies the host, or sends it to review with no screen_allow (§21.6, QD-188, QD-807)
-//	cert      the sidecar holds no unexpired certificate row naming the host (TlsListenFacts.Certified), except an
-//	          acme-tls/1-only registration, a TLS-ALPN-01 responder, before its first order
+//	cert      the sidecar holds no unexpired certificate row naming the host (TlsListenFacts.Certified), a scope
+//	          host its scope's pair and every other host the network's pair, except an acme-tls/1-only registration,
+//	          a TLS-ALPN-01 responder, before its first order
 //
 // An entry that passes is then narrowed (DESIGN-DETAILS 17.2.10, TLS-M6-08): of its certified names the hook keeps only
-// those its sidecar holds an unexpired custom_issued row for, mapped to the name's owner, past now plus
-// CertifiedMargin (TlsListenFacts.CustomCertified), and of its ACME names only those whose claim the account's lock
+// those its sidecar holds an unexpired custom_issued row for, mapped to the name's owner, or an unexpired certificate
+// naming a certified alias's pair, which every owner of the zone reaches as <owner>.<alias>.<root> (TLS-M6-03), past
+// now plus CertifiedMargin (TlsListenFacts.CustomCertified), and of its ACME names only those whose claim the account's lock
 // holds for that sidecar at that sequence (AcmeClaims). A dropped name never refuses the entry, since a listener must
 // not lose its network names over a custom one, but an acme-tls/1-only entry left with no ACME name is refused. The
 // engine stores the entry as the hook left it. An ACME name whose claim is above the one the facts hold reads the
@@ -211,11 +216,17 @@ type TlsListenFacts struct {
 // A custom host or alias a sidecar holds a certificate for, on the owner its host maps to (17.2.10).
 type TlsListenCustomName struct {
 	SidecarId connect.Id `json:"sidecar_id"`
-	// The host segment of tls/<port>/<owner>.
-	Owner    string    `json:"owner"`
+	// The host segment of tls/<port>/<owner>, or TlsListenCustomNameAnyOwner for a certified alias.
+	Owner string `json:"owner"`
+	// A custom host, or a certified alias's zone, <alias>.<root>.
 	Name     string    `json:"name"`
 	NotAfter time.Time `json:"not_after"`
 }
+
+// The Owner of a certified alias (TLS-M6-03): its certificate names the alias's pair, {*.<alias>.<root>,
+// <alias>.<root>}, so every one-label owner <host> of the network's zone is reached under it as <host>.<alias>.<root>,
+// and @ as the zone itself; a scope host rides no alias's pair. An identifier, not a host.
+const TlsListenCustomNameAnyOwner = "*"
 
 // A custom host whose account lock a sidecar holds to order, on the owner the host maps to, with the claim's sequence
 // (17.2.6, 17.2.10).
@@ -226,15 +237,29 @@ type TlsListenAcmeClaim struct {
 	ClaimSeq  uint64     `json:"claim_seq"`
 }
 
-// CustomCertified for the entry's sidecar and owner: each name with its latest not_after.
+// CustomCertified for the entry's sidecar and owner: each name with its latest not_after, a certified alias's as the
+// name owner takes under it.
 func (self *TlsListenFacts) customCertified(sidecarId connect.Id, owner string) map[string]time.Time {
 	nameNotAfters := map[string]time.Time{}
 	for _, custom := range self.CustomCertified {
-		if custom == nil || custom.SidecarId != sidecarId || custom.Owner != owner {
+		if custom == nil || custom.SidecarId != sidecarId {
 			continue
 		}
-		if notAfter, found := nameNotAfters[custom.Name]; !found || notAfter.Before(custom.NotAfter) {
-			nameNotAfters[custom.Name] = custom.NotAfter
+		name := custom.Name
+		switch custom.Owner {
+		case owner:
+		case TlsListenCustomNameAnyOwner:
+			if strings.Contains(owner, ".") {
+				continue
+			}
+			if owner != tlsNamespaceApexHost {
+				name = owner + "." + custom.Name
+			}
+		default:
+			continue
+		}
+		if notAfter, found := nameNotAfters[name]; !found || notAfter.Before(custom.NotAfter) {
+			nameNotAfters[name] = custom.NotAfter
 		}
 	}
 	return nameNotAfters
@@ -353,6 +378,8 @@ type TlsNamespaceHooks struct {
 	networkEntries map[connect.Id]*tlsListenFactsEntry
 	// When each (network, sidecar) last read its facts again for a claim above theirs.
 	sidecarRereadTimes map[tlsListenRereadKey]time.Time
+	// Where a scope host's scope and consent are read (SetScopeConsent); nil refuses every scope host.
+	scopes SocketScopeConsent
 }
 
 // Who a synchronous read is rationed to.
@@ -669,9 +696,11 @@ func (self *TlsNamespaceHooks) ValidateListen(ctx context.Context, check *Socket
 		}
 		return self.validateSystemPublish(check, sidecarId)
 	}
-	if strings.Contains(host, ".") {
-		// TLS-M6-03 checks a scope host against the projection and its member's consent
-		return tlsListenRefused("a scope host")
+	screenHost, scope, scoped := strings.Cut(host, ".")
+	if !scoped {
+		screenHost = host
+	} else if err := self.consentScope(check.NetworkId, scope, sidecarId); err != nil {
+		return err
 	}
 	// grant, on the page's view
 	if check.View == nil {
@@ -713,7 +742,7 @@ func (self *TlsNamespaceHooks) ValidateListen(ctx context.Context, check *Socket
 		return tlsListenRefused("a publish grant past its time box")
 	}
 	// screen: the apex is the network's label or alias, screened when it was drawn or claimed
-	if host != tlsNamespaceApexHost && self.screen(check.NetworkId, facts, host) != sidecar.ScreenVerdictAllow {
+	if host != tlsNamespaceApexHost && self.screen(check.NetworkId, facts, screenHost) != sidecar.ScreenVerdictAllow {
 		return tlsListenRefused("a host the screen does not allow")
 	}
 	// cert
@@ -728,6 +757,37 @@ func (self *TlsNamespaceHooks) ValidateListen(ctx context.Context, check *Socket
 	}
 	check.Registration.CertifiedNames, check.Registration.AcmeNames = certifiedNames, acmeNames
 	return nil
+}
+
+// Gives the hooks the source a scope host's scope and consent are read from (TLS-M6-03): the sockets gate, which reads
+// the network's Team scopes from its verified projection (SocketProjectionGate, SOCK-M6-01). nil, or never set,
+// refuses every scope host.
+func (self *TlsNamespaceHooks) SetScopeConsent(scopes SocketScopeConsent) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.scopes = scopes
+}
+
+// Whether a scope host's scope stands in the network and, in a member scope, sidecarId is one of the member's
+// consented devices (Q-TLS-3, owner decision 126): nil, a refusal, or ErrSocketListenUnavailable while the source
+// cannot decide yet.
+func (self *TlsNamespaceHooks) consentScope(networkId connect.Id, scope string, sidecarId connect.Id) error {
+	scopes := func() SocketScopeConsent {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.scopes
+	}()
+	if scopes == nil {
+		return tlsListenRefused("a scope host with no scope source")
+	}
+	err := scopes.ConsentListen(networkId, scope, &sidecarId)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, ErrSocketListenUnavailable):
+		return err
+	}
+	return tlsListenRefused("a scope the projection does not hold, or a device its member did not consent")
 }
 
 // 17.2.10's narrowing of the entry's two lists for sidecarId on owner: the certified names facts certify past now plus

@@ -1053,3 +1053,48 @@ func searchOracleFiltersHold(document *searchOracleDocument, name string, filter
 	}
 	return true
 }
+
+// Every document scope reaches, at its newest committed version, covered or not, in the partitions it reads and
+// within its filters, before any query: what a hit's version is held to, so none rests on a masked older version
+// (FI-18). A scope the oracle cannot judge is its error.
+func (self *SearchOracle) Documents(scope *SearchScope) ([]*DocumentKey, error) {
+	if err := searchOracleTablesErr(); err != nil {
+		return nil, err
+	}
+	if scope == nil {
+		scope = &SearchScope{}
+	}
+	candidates, err := self.candidates(scope)
+	if err != nil {
+		return nil, err
+	}
+	documents := []*DocumentKey{}
+	for _, candidate := range candidates {
+		if candidate.inPartitions && searchOracleFiltersHold(candidate.document, candidate.name, scope.Filters) {
+			documents = append(documents, candidate.key)
+		}
+	}
+	slices.SortFunc(documents, compareDocumentKeys)
+	return documents, nil
+}
+
+// The repos scope reaches by its breadth and its reader's rights, never a config, mailcfg or secret repo: where
+// every hit must come from (FI-21). A scope the oracle cannot judge is its error.
+func (self *SearchOracle) ScopeRepoIds(scope *SearchScope) ([]sidecar.Id, error) {
+	if scope == nil {
+		scope = &SearchScope{}
+	}
+	self.ledger.stateLock.Lock()
+	defer self.ledger.stateLock.Unlock()
+	pairs, err := searchOracleScopeRefs(self.ledger, scope)
+	if err != nil {
+		return nil, err
+	}
+	repoIds := []sidecar.Id{}
+	for _, pair := range pairs {
+		if !slices.Contains(repoIds, pair.repoId) {
+			repoIds = append(repoIds, pair.repoId)
+		}
+	}
+	return repoIds, nil
+}

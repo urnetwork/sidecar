@@ -321,14 +321,14 @@ func TestAFailedCheckNamesItsStep(t *testing.T) {
 	}
 }
 
-// A check nobody wrote fails the schedule that asks for it (the brief's no fake completeness). FI-19's oracle waits on
-// DESIGN-DETAILS section 1, so it stays unbuilt longest.
+// A check nobody wrote fails the schedule that asks for it (the brief's no fake completeness). FI-25's oracle is
+// RECORD-M6-25's, which binds none yet.
 func TestAnUnbuiltInvariantFailsClosed(t *testing.T) {
-	result := runFresh(t, &Schedule{Id: "toy-unbuilt", Check: []Invariant{FI(19)}})
+	result := runFresh(t, &Schedule{Id: "toy-unbuilt", Check: []Invariant{FI(25)}})
 	if !errors.Is(result.Err, ErrInvariantUnbuilt) {
 		t.Errorf("err %v", result.Err)
 	}
-	if !strings.Contains(result.Err.Error(), "FI-19 index erasure") {
+	if !strings.Contains(result.Err.Error(), "FI-25 directory authorship") {
 		t.Errorf("err %v", result.Err)
 	}
 }

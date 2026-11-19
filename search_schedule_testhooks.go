@@ -774,8 +774,9 @@ func (self *SearchTestWorld) NewDevice(ctx context.Context, args *SearchTestDevi
 	device.source = &searchWorldSource{world: self, rate: args.ReadByteRate}
 	err = device.sync.Follow(&searchSyncRefArgs{
 		repoId: self.repoId, refId: self.refId, repoKind: self.kind, source: device.source,
-		keepAll:  func() bool { return device.policy.KeepsAll(self.repoId, self.AllByteCount()) },
-		mayErase: func(signer Id, signedTimeMs int64) bool { return false },
+		keepAll: func() bool { return device.policy.KeepsAll(self.repoId, self.AllByteCount()) },
+		// the world's admin signs its CUTs (Cut), the one erasure set signer whose versions count (§11.12's cut row)
+		mayErase: func(signer Id, signedTimeMs int64) bool { return signer == self.AdminId() },
 	})
 	// a config, mailcfg or secret repo's index is never followed (FI-17): the device keeps none, and its rounds say so
 	if err != nil && !errors.Is(err, ErrSearchSyncUnfollowed) {
