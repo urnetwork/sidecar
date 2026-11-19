@@ -718,7 +718,7 @@ func (self *MailConfig) entriesWithLock(name *mailConfigName) map[string]*mailCo
 }
 
 // The table name a recipient's mail is looked up by, false for one that is no recipient of this mailcfg: another
-// root, network or scope, a label the network no longer holds, or a reverse alias.
+// root, network or scope, or a label the network no longer holds. A reverse alias is looked up by its burner's label.
 func (self *MailConfig) recipientName(recipient MailRecipient) (*mailConfigName, bool) {
 	zone, row, err := self.zone()
 	if err != nil || recipient.Zone.Root != zone.Root || recipient.Zone.Scope != zone.Scope || !recipient.Zone.OfNetwork(row) {
@@ -732,7 +732,9 @@ func (self *MailConfig) recipientName(recipient MailRecipient) (*mailConfigName,
 		return mailConfigAddressName(zone, spelled.Address())
 	case MailAddressKindName, MailAddressKindBounce:
 		return mailConfigAddressName(zone, spelled.Address())
-	case MailAddressKindBurner:
+	case MailAddressKindBurner, MailAddressKindReverseAlias:
+		// a reverse alias reaches its burner's mailbox while the burner is live: ra/ is the mailbox's, so its reader
+		// finds the alias's record (§15.10, MAIL-M9-04)
 		return mailConfigBurnerName(recipient.BurnerLabel)
 	}
 	return nil, false

@@ -1,0 +1,221 @@
+# T1 vectors for BURNER's header rules (§15.10's step 3, §15.9's replies; R-MAIL-6, D-MAIL-7; MAIL-M9-03), which
+# mail_burner_headers_test.go runs on every leg the root's tests run on, the sidecar_http Worker included. Every name
+# is synthetic, under .example. Lines are written with LF here and read with CRLF, unless a case says lf: true.
+#
+# A case applies the rules to input under message_id and now_ms, its nth boundary b<n>, and compares the result with
+# want byte for byte. A case with refused: true must be refused instead, its want empty.
+
+cases:
+  - name: received fields, client fields and the date at UTC minute precision
+    message_id: zq4m2r7xkd3c5b6n7p8q9r2s3t@otter-4821.acme.root.example
+    now_ms: 1796169600000
+    input: |
+      Received: from laptop.home.example (laptop.home.example [192.0.2.7])
+      	by mx.acme.root.example with ESMTPSA; Wed, 2 Dec 2026 09:30:12 +0100
+      Received: from localhost by laptop.home.example
+      From: Ann <shop@otter-4821.acme.root.example>
+      To: orders@store.example
+      Subject: Re: your order
+      Date: Wed, 02 Dec 2026 09:30:12 +0100
+      Message-ID: <BA5E-1234@laptop.home.example>
+      In-Reply-To: <order-77@store.example>
+      User-Agent: Example Mail/9.1 (Macintosh)
+      X-Mailer: Example Mail 9.1
+      X-Originating-IP: [192.0.2.7]
+      MIME-Version: 1.0
+      Content-Type: text/plain; charset=utf-8
+
+      Thanks, that works.
+    want: |
+      From: Ann <shop@otter-4821.acme.root.example>
+      To: orders@store.example
+      Subject: Re: your order
+      Date: Wed, 02 Dec 2026 08:30:00 +0000
+      Message-ID: <zq4m2r7xkd3c5b6n7p8q9r2s3t@otter-4821.acme.root.example>
+      In-Reply-To: <order-77@store.example>
+      MIME-Version: 1.0
+      Content-Type: text/plain; charset=utf-8
+
+      Thanks, that works.
+
+  - name: no date and no message id, both from the send
+    message_id: aaaabbbbccccddddeeeeffff22@otter-4821.acme.root.example
+    now_ms: 1796169645123
+    input: |
+      From: shop@otter-4821.acme.root.example
+      To: orders@store.example
+
+      Hello.
+    want: |
+      From: shop@otter-4821.acme.root.example
+      To: orders@store.example
+      Date: Wed, 02 Dec 2026 00:00:00 +0000
+      Message-ID: <aaaabbbbccccddddeeeeffff22@otter-4821.acme.root.example>
+
+      Hello.
+
+  - name: a date that does not parse takes the send's
+    message_id: m1@otter-4821.acme.root.example
+    now_ms: 1796173323000
+    input: |
+      From: shop@otter-4821.acme.root.example
+      Date: sometime on tuesday
+      Message-ID: <x@laptop.home.example>
+
+      Hello.
+    want: |
+      From: shop@otter-4821.acme.root.example
+      Date: Wed, 02 Dec 2026 01:02:00 +0000
+      Message-ID: <m1@otter-4821.acme.root.example>
+
+      Hello.
+
+  - name: a folded field kept byte for byte
+    message_id: m2@otter-4821.acme.root.example
+    now_ms: 1796169600000
+    input: |
+      From: shop@otter-4821.acme.root.example
+      To: orders@store.example,
+       billing@store.example
+      Subject: a long
+      	subject
+      Date: Wed, 02 Dec 2026 09:30:12 +0100
+      Message-ID: <x@laptop.home.example>
+
+      Hello.
+    want: |
+      From: shop@otter-4821.acme.root.example
+      To: orders@store.example,
+       billing@store.example
+      Subject: a long
+      	subject
+      Date: Wed, 02 Dec 2026 08:30:00 +0000
+      Message-ID: <m2@otter-4821.acme.root.example>
+
+      Hello.
+
+  - name: a multipart's boundary regenerated in its header and on each delimiter
+    message_id: m3@otter-4821.acme.root.example
+    now_ms: 1796169600000
+    input: |
+      From: shop@otter-4821.acme.root.example
+      Date: Wed, 02 Dec 2026 09:30:12 +0100
+      Message-ID: <x@laptop.home.example>
+      MIME-Version: 1.0
+      Content-Type: multipart/alternative; boundary="Apple-Mail=_LAPTOP-0001"
+
+      preamble
+      --Apple-Mail=_LAPTOP-0001
+      Content-Type: text/plain; charset=utf-8
+
+      Plain.
+      --Apple-Mail=_LAPTOP-0001
+      Content-Type: text/html; charset=utf-8
+
+      <p>Html.</p>
+      --Apple-Mail=_LAPTOP-0001--
+      epilogue
+    want: |
+      From: shop@otter-4821.acme.root.example
+      Date: Wed, 02 Dec 2026 08:30:00 +0000
+      Message-ID: <m3@otter-4821.acme.root.example>
+      MIME-Version: 1.0
+      Content-Type: multipart/alternative; boundary=b0
+
+      preamble
+      --b0
+      Content-Type: text/plain; charset=utf-8
+
+      Plain.
+      --b0
+      Content-Type: text/html; charset=utf-8
+
+      <p>Html.</p>
+      --b0--
+      epilogue
+
+  - name: nested multiparts each regenerated, parts' own headers kept
+    message_id: m4@otter-4821.acme.root.example
+    now_ms: 1796169600000
+    input: |
+      From: shop@otter-4821.acme.root.example
+      Date: Wed, 02 Dec 2026 09:30:12 +0100
+      Message-ID: <x@laptop.home.example>
+      Content-Type: multipart/mixed; boundary="----=_Part_17_laptop.1796"
+
+      ------=_Part_17_laptop.1796
+      Content-Type: multipart/alternative; boundary="----=_Part_18_laptop.1796"
+
+      ------=_Part_18_laptop.1796
+      Content-Type: text/plain
+
+      Plain.
+      ------=_Part_18_laptop.1796--
+
+      ------=_Part_17_laptop.1796
+      Content-Type: application/pdf; name="invoice.pdf"
+      Content-Disposition: attachment; filename="invoice.pdf"
+      Content-Transfer-Encoding: base64
+
+      JVBERi0=
+      ------=_Part_17_laptop.1796--
+    want: |
+      From: shop@otter-4821.acme.root.example
+      Date: Wed, 02 Dec 2026 08:30:00 +0000
+      Message-ID: <m4@otter-4821.acme.root.example>
+      Content-Type: multipart/mixed; boundary=b0
+
+      --b0
+      Content-Type: multipart/alternative; boundary=b1
+
+      --b1
+      Content-Type: text/plain
+
+      Plain.
+      --b1--
+
+      --b0
+      Content-Type: application/pdf; name="invoice.pdf"
+      Content-Disposition: attachment; filename="invoice.pdf"
+      Content-Transfer-Encoding: base64
+
+      JVBERi0=
+      --b0--
+
+  - name: a client's bare line feeds kept as its line ends
+    message_id: m5@otter-4821.acme.root.example
+    now_ms: 1796169600000
+    lf: true
+    input: |
+      From: shop@otter-4821.acme.root.example
+      User-Agent: Example Mail/9.1
+      Date: Wed, 02 Dec 2026 09:30:12 +0100
+
+      Hello.
+    want: |
+      From: shop@otter-4821.acme.root.example
+      Date: Wed, 02 Dec 2026 08:30:00 +0000
+      Message-ID: <m5@otter-4821.acme.root.example>
+
+      Hello.
+
+  - name: a multipart with no closing delimiter is refused
+    message_id: m6@otter-4821.acme.root.example
+    now_ms: 1796169600000
+    refused: true
+    input: |
+      From: shop@otter-4821.acme.root.example
+      Content-Type: multipart/mixed; boundary="xyz"
+
+      --xyz
+      Content-Type: text/plain
+
+      Plain.
+    want: ""
+
+  - name: a message with no header end is refused
+    message_id: m7@otter-4821.acme.root.example
+    now_ms: 1796169600000
+    refused: true
+    input: "From: shop@otter-4821.acme.root.example"
+    want: ""

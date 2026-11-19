@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"net/url"
 	"reflect"
 	"strings"
@@ -240,6 +241,14 @@ type MxEdgeSettings struct {
 	// How long one hint's call may take before it reads as failed. Default 5 s, off every session's path.
 	WakeHintTimeout time.Duration `yaml:"wake_hint_timeout"`
 
+	// The router's LAN listener (D-SMTP-13; lan.go): the block's port smtpedge reaches over the host LAN for an MX on
+	// the router's own interfaces, behind the same PROXY header as TCP 25. 0, the default, opens none; the router
+	// role alone opens one.
+	LanPort uint16 `yaml:"lan_port"`
+	// The prefixes smtpedge's hosts' LAN addresses are in, which alone reach the LAN port; any other peer is closed
+	// unanswered. Needed with a lan_port.
+	LanSources []netip.Prefix `yaml:"lan_sources"`
+
 	// MailIngress's bounds, the format's, which a receiver holds it to as well. Set only by the defaults.
 	Ingress *sidecar.MailIngressFormatSettings `yaml:"-"`
 	// The router's usage windows for meter mx (§20.6). Set only by the defaults.
@@ -377,6 +386,14 @@ func (self *MxEdgeSettings) Validate() error {
 	}
 	if !self.Ingress.Valid() {
 		return fmt.Errorf("%w: Ingress", ErrMxEdgeSettingsRefused)
+	}
+	if self.LanPort != 0 && len(self.LanSources) == 0 {
+		return fmt.Errorf("%w: lan_port needs lan_sources", ErrMxEdgeSettingsRefused)
+	}
+	for _, source := range self.LanSources {
+		if !source.IsValid() {
+			return fmt.Errorf("%w: lan_sources holds no prefix", ErrMxEdgeSettingsRefused)
+		}
 	}
 	if self.Usage == nil || self.Usage.WindowTimeout <= 0 || self.Usage.RetryTimeout <= 0 {
 		return fmt.Errorf("%w: Usage needs a positive window and retry timeout", ErrMxEdgeSettingsRefused)

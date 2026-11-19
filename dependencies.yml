@@ -67,7 +67,7 @@ modules:
     leg: [client, engine, cli, test]
   - module: github.com/emersion/go-sasl
     spdx: MIT
-    reason: go-smtp's AUTH mechanisms at the version go-smtp v0.25.1 requires, linked with it though no session here offers AUTH (§15.5)
+    reason: go-smtp's AUTH mechanisms at the version go-smtp v0.25.1 requires, submission's AUTH PLAIN (§15.10); no receiver session offers AUTH (§15.5)
     leg: [client, engine, cli, test]
   - module: github.com/emersion/go-smtp
     spdx: MIT
