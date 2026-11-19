@@ -895,7 +895,7 @@ func fi9LfsCommit(t *testing.T, dir string, files map[string]string) (string, st
 func fi9LfsPointer(content []byte) (string, string) {
 	digest := sha256.Sum256(content)
 	oid := hex.EncodeToString(digest[:])
-	return fmt.Sprintf("version https://git-lfs.github.com/spec/v1\noid sha256:%s\nsize %d\n", oid, len(content)), oid
+	return fmt.Sprintf("%s\noid sha256:%s\nsize %d\n", gitLfsPointerVersionLine, oid, len(content)), oid
 }
 
 // A ledger holding one acknowledged push of main at the commit, its export, and then each store in order.
@@ -984,10 +984,10 @@ func TestFi9LfsParsesPointers(t *testing.T) {
 	}
 	for _, bad := range []string{
 		strings.TrimSuffix(pointer, "\n"),
-		strings.Replace(pointer, "version https://git-lfs.github.com/spec/v1", "version 1", 1),
+		strings.Replace(pointer, gitLfsPointerVersionLine, "version 1", 1),
 		strings.Replace(pointer, "sha256:", "sha1:", 1),
 		strings.Replace(pointer, "size 1", "size 01", 1),
-		"version https://git-lfs.github.com/spec/v1\nsize 1\noid sha256:" + oid + "\n",
+		gitLfsPointerVersionLine + "\nsize 1\noid sha256:" + oid + "\n",
 	} {
 		if _, _, ok := ParseGitLfsPointer([]byte(bad)); ok {
 			t.Fatalf("%q read as a pointer", bad)

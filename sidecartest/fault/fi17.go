@@ -464,7 +464,8 @@ func fi17EntryNames(entryVersion *protocol.EvsEntryVersion, key string) bool {
 // creation of that push, may then take over as its rename target.
 func (self *evsFormat2Check) fi17RenameTarget(repo *evsFormat2Repo, ref *evsStoreRef, namer *evsNamer, key string) bool {
 	version := ref.at(namer.version)
-	if version == nil {
+	if version == nil || namer.changeIndex < 0 || version.payload.Changes[namer.changeIndex].Change.GetBaseEntryVersion() != 0 {
+		// a rename target is a version the removing push creates
 		return false
 	}
 	for i, change := range version.payload.Changes {
