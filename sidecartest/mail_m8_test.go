@@ -6,10 +6,11 @@
 // No app is a mail indexer (owner decision 197), so the plan's Android path is the act row's refusal.
 //
 //	indexer paths  a desktop ur daemon, a NAS and a VPS: each is one mechanism, a ur daemon, so each path is the same
-//	               run under its host's name. Before a designation an online receiver still takes mail, coverage reads
-//	               foreground-only and Status, which ur status and mail.status print, carries §15.6's prompt (FS-82's
-//	               M8 case); the device's IndexerSet for mail lands, coverage reads indexer and the prompt is gone; and
-//	               the designated receiver takes the next message through the router, deposited under its own identity
+//	               run under its host's name (mailworld's RunM8IndexerPath, which server's sidecart3 runs on T3).
+//	               Before a designation an online receiver still takes mail, coverage reads foreground-only and
+//	               Status, which ur status and mail.status print, carries §15.6's prompt (FS-82's M8 case); the
+//	               device's IndexerSet for mail lands, coverage reads indexer and the prompt is gone; and the
+//	               designated receiver takes the next message through the router, deposited under its own identity
 //	act            SetReceiverEnabled on a real ur daemon's Sidecar, in a real Daemon of the admission suite's world
 //	               (Fs98World), files its IndexerSet through the Sidecar's own act: once, a retry filing nothing, and
 //	               false retires it; an MCP origin and an Android or iOS app host file nothing (owner decision 197)
@@ -59,61 +60,14 @@ import (
 
 // The indexer paths (the file header's indexer paths row): a desktop ur daemon, a NAS and a VPS each take mail as a
 // designated indexer, and until one is designated an online receiver still takes it, coverage reads foreground-only
-// and Status carries the prompt (FS-82's M8 case).
+// and Status carries the prompt (FS-82's M8 case): mailworld's row, which server's sidecart3 runs on T3
+// (TestT3MailM8IndexerPathsTakeMailAndEndThePrompt).
 func TestMailM8IndexerPathsTakeMailAndEndThePrompt(t *testing.T) {
 	net := sidecartest.NewNet(t.Context(), nil)
 	t.Cleanup(net.Close)
-	for i, host := range []string{"desktop daemon", "nas", "vps"} {
+	for i, host := range mailworld.M8IndexerHosts() {
 		world := mailworld.NewM8World(t, net, &mailworld.M8WorldSettings{ReceiverName: host, Label: fmt.Sprintf("lbl%07d", i+1), Host: mailworld.NewM8FakeHost(t, net)})
-		ctx := world.Context()
-
-		status, err := world.OwnerMail.Status(ctx)
-		if err != nil || !status.Enabled || !status.MailIndexerKnown || status.MailIndexer || status.Prompt != sidecar.MailIndexerPrompt {
-			t.Fatalf("%s: before a designation, status %+v: %v", host, status, err)
-		}
-		if coverage, err := world.OwnerMail.ReceiverCoverage(ctx); err != nil || coverage != sidecar.MailCoverageForegroundOnly {
-			t.Fatalf("%s: before a designation, coverage %s: %v", host, coverage, err)
-		}
-		created, err := world.OwnerMail.CreateBurner(ctx, &sidecar.MailBurnerCreateArgs{Site: "https://" + mailworld.M8SenderDomain + "/signup"})
-		if err != nil {
-			t.Fatalf("%s: %v", host, err)
-		}
-		if created.CoverageCopy != sidecar.MailCoverageForegroundOnlyCopy {
-			t.Fatalf("%s: the first burner's copy %q", host, created.CoverageCopy)
-		}
-		world.SyncReceiver()
-		// FS-82's M8 case: with no mail indexer an online receiver still takes mail
-		if reply := world.Send(created.Address, "before a designation", "Your verification code is 482913."); !reply.Is(250) {
-			t.Fatalf("%s: mail before a designation: %s", host, reply)
-		}
-
-		world.Designate(world.Receiver, protocol.IndexerService_INDEXER_SERVICE_MAIL)
-		if indexers := world.Admission.State().Indexers(); len(indexers) != 1 || indexers[0].SidecarId != world.Receiver.SidecarId {
-			t.Fatalf("%s: the designations %+v", host, indexers)
-		}
-		if coverage, err := world.OwnerMail.ReceiverCoverage(ctx); err != nil || coverage != sidecar.MailCoverageIndexer {
-			t.Fatalf("%s: once designated, coverage %s: %v", host, coverage, err)
-		}
-		status, err = world.OwnerMail.Status(ctx)
-		if err != nil || !status.MailIndexerKnown || !status.MailIndexer || status.Prompt != "" {
-			t.Fatalf("%s: once designated, status %+v: %v", host, status, err)
-		}
-		if reply := world.Send(created.Address, "to the indexer", "Your verification code is 731004."); !reply.Is(250) {
-			t.Fatalf("%s: mail to the designated indexer: %s", host, reply)
-		}
-		// both under the designated receiver's own identity, and ingested as the burner's mail
-		for subject, depositorId := range world.Depositors() {
-			if depositorId != world.Receiver.SidecarId {
-				t.Fatalf("%s: %q was deposited by %s, not the %s", host, subject, depositorId, host)
-			}
-		}
-		messages := world.Ingest()
-		for _, subject := range []string{"before a designation", "to the indexer"} {
-			message := messages[subject]
-			if message == nil || message.DepositorId != world.Receiver.SidecarId {
-				t.Fatalf("%s: %q was not ingested from the %s: %+v", host, subject, host, message)
-			}
-		}
+		mailworld.RunM8IndexerPath(t, world, host)
 	}
 }
 
