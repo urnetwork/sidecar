@@ -1,14 +1,19 @@
 //go:build !sidecar_http
 
-// SmtpSendWorld: T2's composed outbound path (§14.4, §14.5, D-SMTP-18; SMTP-M9-31), for S6, FS-123 and the privacy
-// rows, and for MAIL's M9 rows after them: recipient domains whose MXs are ScriptedMx in an MxWorld behind
-// StubSmtpEdge, the device's own DoH a FakeMailZone that agrees with the world, a synthetic web PKI whose leaves the
-// authenticated MXs serve (TL3), and one member mailbox, FakeSmtpMailbox, that the member's devices share. Each
-// host is one of the member's devices: a phone, which only queues and signs its o/ entries, or a prover host with a
-// FakeSmtpProver, its SmtpProverHost, SmtpSender and SmtpOutboxRunner, its own pins, policy and DKIM keys.
+// SmtpSendWorld: the composed outbound path (§14.4, §14.5, D-SMTP-18; SMTP-M9-31), for S6, FS-123 and the privacy
+// rows, and for MAIL's M9 rows after them: recipient domains whose MXs are ScriptedMx in an MxWorld behind an edge,
+// the device's own DoH a FakeMailZone that agrees with the world, a synthetic web PKI whose leaves the authenticated
+// MXs serve (TL3), and one member mailbox, FakeSmtpMailbox, that the member's devices share. Each host is one of the
+// member's devices: a phone, which only queues and signs its o/ entries, or a prover host with a FakeSmtpProver, its
+// SmtpProverHost, SmtpSender and SmtpOutboxRunner, its own pins, policy and DKIM keys.
+//
+// The edge is StubSmtpEdge on T2. On T3 the settings name the real engine's instead, its dialer and how it holds a
+// preamble, and the network domain its gate knows (server/cli/smtpedge's s6_test.go), so smtp_send_rows.go's rows run
+// unchanged on either.
 //
 // Everything runs on one fake clock, so nothing here sleeps. Names are .example, addresses RFC 5737's, and the PKI
-// the test's own. Close, through t.Cleanup, closes every sender and joins every stream and MX connection.
+// the test's own. Close, through t.Cleanup, closes every sender and joins every stream and MX connection the stub
+// served.
 
 package sidecartest
 
@@ -31,7 +36,10 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
@@ -43,9 +51,29 @@ type SmtpSendWorldSettings struct {
 	Verifier *FakeSmtpProofScript
 	// Changes to DefaultSmtpSenderSettings that every host takes.
 	Sender func(settings *sidecar.SmtpSenderSettings)
+
+	// The rest name a real edge, T3's; each left empty is the stub's.
+
+	// The world's clock, which the edge's engine runs on too. nil starts one at 2026-11-08 12:00 UTC.
+	Clock *FakeClock
+	// The network's zone, <net>.<root>, which its From and Message-ID name and whose b. child is the envelope
+	// domain (§14.6). Empty is SmtpSendWorldNetworkDomain.
+	NetworkDomain string
+	// Each host's dialer, made for its sidecar, which the stream's ticket names. nil dials the stub edge.
+	Dialer func(sidecarId sidecar.Id) sidecar.SmtpEdgeDialer
+	// Holds every preamble from now on, for wait where the edge can choose, and returns the wait it answers with.
+	// nil holds the stub's with TRY_LATER for wait.
+	Hold func(wait time.Duration) time.Duration
+	// Has the edge write what it keeps, before a scan reads its stores: the last thing a row asks of the edge, which
+	// may take no send after it (T3's block closes). nil writes nothing, as the stub keeps nothing.
+	Settle func()
+
+	// A capture the edge adds what it read, answered and kept to, as §22.7's CC1 to CC4, read at each scan: on the
+	// stub its records and the verifier's sessions; a real edge's maker adds its own. nil adds nothing.
+	Capture *PrivacyCapture
 }
 
-// The envelope sender every host sends as, and the network domain its From and Message-ID name.
+// The envelope sender every host sends as on the stub, and the network domain its From and Message-ID name.
 const (
 	SmtpSendWorldSender        = "bounce-1@b.n1.root.example"
 	SmtpSendWorldNetworkDomain = "n1.root.example"
@@ -53,19 +81,27 @@ const (
 
 // One recipient domain's world.
 type SmtpSendWorld struct {
-	t        *testing.T
-	Clock    *FakeClock
-	World    *MxWorld
-	Zone     *FakeMailZone
-	Edge     *StubSmtpEdge
-	Dialer   *StubSmtpEdgeDialer
-	Verifier *FakeSmtpProofVerifier
-	Mailbox  *FakeSmtpMailbox
-	Settings *sidecar.SmtpSenderSettings
-	Anchors  *sidecar.SmtpDnssecAnchors
-	Roots    *x509.CertPool
-	rootCert *x509.Certificate
-	rootKey  *ecdsa.PrivateKey
+	t     testing.TB
+	Clock *FakeClock
+	World *MxWorld
+	Zone  *FakeMailZone
+	// The stub edge, and its dialer, which every host dials unless the settings name a real edge's.
+	Edge       *StubSmtpEdge
+	StubDialer *StubSmtpEdgeDialer
+	Verifier   *FakeSmtpProofVerifier
+	Mailbox    *FakeSmtpMailbox
+	Settings   *sidecar.SmtpSenderSettings
+	Anchors    *sidecar.SmtpDnssecAnchors
+	Roots      *x509.CertPool
+	// <net>.<root>, and the envelope sender at its b. child.
+	NetworkDomain string
+	SenderAddress string
+	rootCert      *x509.Certificate
+	rootKey       *ecdsa.PrivateKey
+	edgeSettings  *StubSmtpEdgeSettings
+	newDialer     func(sidecarId sidecar.Id) sidecar.SmtpEdgeDialer
+	hold          func(wait time.Duration) time.Duration
+	settle        func()
 
 	stateLock sync.Mutex
 	// the member's admitted devices' identity keys
@@ -89,12 +125,23 @@ type SmtpSendHost struct {
 }
 
 // A world with no domain yet: AddDomain adds them.
-func NewSmtpSendWorld(t *testing.T, settings *SmtpSendWorldSettings) *SmtpSendWorld {
+func NewSmtpSendWorld(t testing.TB, settings *SmtpSendWorldSettings) *SmtpSendWorld {
 	t.Helper()
 	if settings == nil {
 		settings = &SmtpSendWorldSettings{}
 	}
-	clock := NewFakeClock(time.Date(2026, time.November, 8, 12, 0, 0, 0, time.UTC))
+	clock := settings.Clock
+	if clock == nil {
+		clock = NewFakeClock(time.Date(2026, time.November, 8, 12, 0, 0, 0, time.UTC))
+	}
+	networkDomain := settings.NetworkDomain
+	if networkDomain == "" {
+		networkDomain = SmtpSendWorldNetworkDomain
+	}
+	edgeSettings := settings.Edge
+	if edgeSettings == nil {
+		edgeSettings = DefaultStubSmtpEdgeSettings()
+	}
 	worldSettings := DefaultMxWorldSettings()
 	worldSettings.Clock = clock
 	world, err := NewMxWorld(worldSettings)
@@ -110,29 +157,117 @@ func NewSmtpSendWorld(t *testing.T, settings *SmtpSendWorldSettings) *SmtpSendWo
 		settings.Sender(senderSettings)
 	}
 	self := &SmtpSendWorld{
-		t:        t,
-		Clock:    clock,
-		World:    world,
-		Zone:     NewFakeMailZone(clock),
-		Verifier: NewFakeSmtpProofVerifier(settings.Verifier),
-		Mailbox:  NewFakeSmtpMailbox(nil),
-		Settings: senderSettings,
-		Anchors:  anchors,
-		devices:  map[sidecar.Id]ed25519.PublicKey{},
+		t:             t,
+		Clock:         clock,
+		World:         world,
+		Zone:          NewFakeMailZone(clock),
+		Verifier:      NewFakeSmtpProofVerifier(settings.Verifier),
+		Mailbox:       NewFakeSmtpMailbox(nil),
+		Settings:      senderSettings,
+		Anchors:       anchors,
+		NetworkDomain: networkDomain,
+		SenderAddress: "bounce-1@b." + networkDomain,
+		edgeSettings:  edgeSettings,
+		newDialer:     settings.Dialer,
+		hold:          settings.Hold,
+		settle:        settings.Settle,
+		devices:       map[sidecar.Id]ed25519.PublicKey{},
 	}
 	self.rootCert, self.rootKey = self.certificate("Synthetic Send World Root", true, nil, nil)
 	self.Roots = x509.NewCertPool()
 	self.Roots.AddCert(self.rootCert)
-	self.Edge = NewStubSmtpEdge(world, world, self.Verifier, settings.Edge)
-	self.Dialer = self.Edge.Dialer()
+	self.Edge = NewStubSmtpEdge(world, world, self.Verifier, edgeSettings)
+	self.StubDialer = self.Edge.Dialer()
+	if settings.Capture != nil && settings.Dialer == nil {
+		settings.Capture.AddSource(func() []*PrivacyItem {
+			return append(self.stubPrivacyItems(), self.VerifierPrivacyItems()...)
+		})
+	}
 	t.Cleanup(func() {
 		for _, host := range self.hostList() {
 			host.Sender.Close()
 		}
-		self.Dialer.Wait()
+		self.StubDialer.Wait()
 		world.Wait()
 	})
 	return self
+}
+
+// The dialer a host of sidecarId dials its edge through.
+func (self *SmtpSendWorld) dialer(sidecarId sidecar.Id) sidecar.SmtpEdgeDialer {
+	if self.newDialer != nil {
+		return self.newDialer(sidecarId)
+	}
+	return self.StubDialer
+}
+
+// Has the edge write what it keeps, its send log on a real edge, so a scan of its stores reads it. A row's last
+// step: the edge may take no send after it.
+func (self *SmtpSendWorld) Settle() {
+	if self.settle != nil {
+		self.settle()
+	}
+}
+
+// What the stub read and answered, as CC1 items: each preamble, result and outcome.
+func (self *SmtpSendWorld) stubPrivacyItems() []*PrivacyItem {
+	items := []*PrivacyItem{}
+	add := func(name string, message proto.Message) {
+		if body, err := proto.Marshal(message); err == nil {
+			items = append(items, &PrivacyItem{Class: PrivacyClassHandler, Name: name, Body: body})
+		}
+	}
+	for _, preamble := range self.Edge.Preambles() {
+		add("smtpedge preamble", preamble)
+	}
+	for _, result := range self.Edge.Results() {
+		add("smtpedge preamble result", result)
+	}
+	for _, outcome := range self.Edge.Outcomes() {
+		add("smtpedge outcome", outcome)
+	}
+	return items
+}
+
+// What the edge's proof sessions read and released, as CC1 items: every record and SHTS it was handed, every part,
+// and every record it let through to the MX. The verifier is the edge's on either tier.
+func (self *SmtpSendWorld) VerifierPrivacyItems() []*PrivacyItem {
+	items := []*PrivacyItem{}
+	for _, session := range self.Verifier.Sessions() {
+		for _, call := range session.Calls() {
+			if 0 < len(call.Data) {
+				items = append(items, &PrivacyItem{Class: PrivacyClassHandler, Name: "smtpedge " + call.Method, Body: call.Data})
+			}
+			if part := call.Part; part != nil {
+				body, err := proto.Marshal(&protocol.SmtpProof{
+					SendId: part.SendId, Index: part.Index, Mode: part.Mode, FirstRecord: part.FirstRecord, LastRecord: part.LastRecord,
+					Proof: part.Proof, Last: part.Last, ServerRecordCount: part.ServerRecordCount, Records: part.Records,
+					KeyCommitment: part.KeyCommitment, ReplyCount: part.ReplyCount, HeaderRecordCount: part.HeaderRecordCount, Carry: part.Carry,
+				})
+				if err == nil {
+					items = append(items, &PrivacyItem{Class: PrivacyClassHandler, Name: "smtpedge part", Body: body})
+				}
+			}
+			for _, released := range call.Released {
+				items = append(items, &PrivacyItem{Class: PrivacyClassHandler, Name: "smtpedge released", Body: released})
+			}
+		}
+	}
+	return items
+}
+
+// Has the edge hold every preamble from now on, for wait where it can choose, and returns the wait it answers
+// with: the settings' Hold on a real edge, whose halt may hold for its own, else the stub's TRY_LATER for wait.
+// Called between sends, never during one.
+func (self *SmtpSendWorld) HoldPreambles(wait time.Duration) time.Duration {
+	if self.hold != nil {
+		return self.hold(wait)
+	}
+	// every stream the stub served has ended, so none reads its settings while they change
+	self.StubDialer.Wait()
+	self.edgeSettings.Code = protocol.SmtpPreambleCode_SMTP_PREAMBLE_TRY_LATER
+	self.edgeSettings.RetryAfter = wait
+	return wait
 }
 
 // A certificate for name under issuer, the root itself when issuer is nil.
@@ -264,7 +399,7 @@ func (self *SmtpSendWorld) AddHost(proverSettings *FakeSmtpProverSettings, hold 
 		host.Pins, sidecar.NewSmtpTlsAllowanceStore(store.Root(), self.Settings, self.Clock), nil, self.Zone, self.Roots,
 		self.Settings, self.Clock)
 	args := &sidecar.SmtpSenderArgs{
-		Dialer:       self.Dialer,
+		Dialer:       self.dialer(host.SidecarId),
 		Policy:       policy,
 		Pins:         host.Pins,
 		Dkim:         sidecar.NewSmtpDkimKeys(newSmtpSendWorldSecrets(), smtpSendWorldPublisher{}, self.Settings, self.Clock, log),
@@ -353,11 +488,11 @@ func (self *SmtpSendHost) Sign(purpose string, signedType bridge.SignedType, bod
 }
 
 // A message to recipients, its Bcc header naming bcc, From alice at the network domain under fromName, with subject
-// and body.
+// and body, from the envelope sender at the domain's b. child.
 func (self *SmtpSendWorld) Message(recipients []string, bcc []string, fromName string, subject string, body string) *sidecar.SmtpOutboundMessage {
 	effectKey := make([]byte, 32)
 	rand.Read(effectKey)
-	from := "<alice@" + SmtpSendWorldNetworkDomain + ">"
+	from := "<alice@" + self.NetworkDomain + ">"
 	if fromName != "" {
 		from = fromName + " " + from
 	}
@@ -366,12 +501,12 @@ func (self *SmtpSendWorld) Message(recipients []string, bcc []string, fromName s
 		text += "Bcc: " + strings.Join(bcc, ", ") + "\r\n"
 	}
 	text += "Subject: " + subject + "\r\n" +
-		"Message-ID: <qvsc2zbwd5c3m5rbnvzxjzpnay@" + SmtpSendWorldNetworkDomain + ">\r\n" +
+		"Message-ID: <qvsc2zbwd5c3m5rbnvzxjzpnay@" + self.NetworkDomain + ">\r\n" +
 		"\r\n" + body
 	return &sidecar.SmtpOutboundMessage{
 		EffectKey:  effectKey,
 		SendId:     sidecar.NewId(),
-		Sender:     SmtpSendWorldSender,
+		Sender:     self.SenderAddress,
 		Recipients: append(slices.Clone(recipients), bcc...),
 		Message:    []byte(text),
 		CreateTime: self.Clock.Now(),

@@ -255,6 +255,17 @@ func (self *SearchTestWorld) pendingOf(change *searchTestContentChange, replaced
 // writes since, ErrSearchTestIndexEpoch where a CUT did. A push the planner would merge first or inside is refused, as
 // PushDocuments refuses one.
 func (self *SearchTestWorld) CommitIndexed(ctx context.Context, writer Id, at time.Time, changes []*SearchTestChange) (*SearchTestCommit, error) {
+	return self.commitIndexed(ctx, writer, at, changes, false)
+}
+
+// As CommitIndexed, but a push whose entries pass DirectBytes merges them into the buckets' shards in the same push,
+// as the in-ref writer does (indexMergeHeadPlan): a large message's chunks land in its bucket's shards (FS-112).
+func (self *SearchTestWorld) CommitIndexedMerging(ctx context.Context, writer Id, at time.Time, changes []*SearchTestChange) (*SearchTestCommit, error) {
+	return self.commitIndexed(ctx, writer, at, changes, true)
+}
+
+// See CommitIndexed; mergeInPush merges a push past DirectBytes in the push rather than refusing it.
+func (self *SearchTestWorld) commitIndexed(ctx context.Context, writer Id, at time.Time, changes []*SearchTestChange, mergeInPush bool) (*SearchTestCommit, error) {
 	view, err := self.view(ctx, writer)
 	if err != nil {
 		return nil, err
@@ -302,10 +313,16 @@ func (self *SearchTestWorld) CommitIndexed(ctx context.Context, writer Id, at ti
 			if err != nil {
 				return nil, err
 			}
-			if plan.mergeFirst || plan.mergeInPush {
+			if plan.mergeFirst || plan.mergeInPush && !mergeInPush {
 				return nil, errors.New("search test world: a push that merges, which a schedule writes as shards")
 			}
 			push.files, push.removals = plan.files(), plan.removals()
+			if plan.mergeInPush {
+				push.files, push.removals, err = indexMergeHeadPlan(ctx, view, view.writeRoot(), plan, self.padKey, indexLinkedTables())
+				if err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
 	committed, err := func() (*indexCommitted, error) {

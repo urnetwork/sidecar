@@ -40,9 +40,31 @@ func (self *SearchTestWorld) AdminId() Id {
 	return Id(digest[:16])
 }
 
-// Whether a version's signer is the world's admin.
+// Whether a version's signer is the world's admin, or another device of an admin (AddAdmin).
 func (self *SearchTestWorld) isAdmin(file *indexFileVersion) bool {
-	return file.signerSidecarId == self.AdminId()
+	return self.mayErase(file.signerSidecarId, file.signedTimeMs)
+}
+
+// Whether signer may erase the repo's documents, as a device's sync judges an erasure set's signer: the world's admin,
+// and each device AddAdmin named.
+func (self *SearchTestWorld) mayErase(signer Id, signedTimeMs int64) bool {
+	if signer == self.AdminId() {
+		return true
+	}
+	self.adminLock.Lock()
+	defer self.adminLock.Unlock()
+	return self.adminIds[signer]
+}
+
+// Names signer an admin of the repo beside the world's own: another device of the admin's member, whose CUT and
+// settings versions count (§11.12's reconcile row).
+func (self *SearchTestWorld) AddAdmin(signer Id) {
+	self.adminLock.Lock()
+	defer self.adminLock.Unlock()
+	if self.adminIds == nil {
+		self.adminIds = map[Id]bool{}
+	}
+	self.adminIds[signer] = true
 }
 
 // A writer's push planned at a head and not yet committed.
@@ -400,6 +422,8 @@ type SearchTestPushShape struct {
 	FileCount    int
 	RemovalCount int
 	Content      bool
+	// An erasure's CUT, which is maintenance at the limit (§11.12's cut row).
+	Cut bool
 }
 
 // Refuses every push refuse names as evs refuses at the storage limit, until refuse is nil: what a push adding payload
