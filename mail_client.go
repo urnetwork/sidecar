@@ -107,6 +107,9 @@ type MailBinding struct {
 	// Whether a run read untrusted content or lost hook coverage (Sidecar.RunTainted, I-9): its sends each take the
 	// gate, records approving none. Nil reads every run untainted, as a host that runs no agents binds.
 	RunTainted func(runId Id) bool
+	// P, for re-verifying an approved recipient's record at each use (mail_approved.go): nil approves no record. A running
+	// daemon binds none until its approval gate's state source is installed (MCP-M3-06), so none approves there yet.
+	SpendState func() (SpendState, error)
 	// Retires a burner's DKIM selector at its burn (SmtpDkimKeys.Retire, MAIL-M9-03): nil retires nothing here, and
 	// the device that published the selector retires its own once it reads the burn.
 	BurnerSelectors MailBurnerSelectors

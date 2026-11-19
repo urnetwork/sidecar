@@ -8,10 +8,9 @@
 //
 //	token    the first 16 bytes of HMAC-SHA-256 over the original sender's lowercase address, in lowercase base32, 26
 //	         characters, so r-<token> is 28, under §15.8's 64. The token tells no one who the sender is
-//	key      32 random bytes in the mail component's keychain namespace, drawn on first use. The design names a vault
-//	         key and no place or bytes for it (question mail-m9-04-reverse-alias-key), so each device holds its own:
-//	         the same sender may get another reverse alias from another device's forward, and a relay finds its
-//	         record either way, since ra/ is the mailbox's
+//	key      the mailbox's one MAC key, 32 bytes at vault/<h>/reverse-alias-key (MailVault.ReverseAliasKey; QD-1095),
+//	         drawn by the first forwarding device and read only by the owner's consented devices, so every device of
+//	         the member gives one sender one reverse alias
 //	record   created only if absent, so racing readers write one record a token
 //
 // Nothing here logs an address or a token (I-13). Safe for concurrent use.
@@ -30,17 +29,11 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-// The reverse alias MAC key's name in the mail component's keychain namespace.
-const mailReverseAliasKeyName = "mail/reverse-alias-key"
-
-// The MAC's bytes a token spells, and the key's.
-const (
-	mailReverseAliasTokenByteCount = 16
-	mailReverseAliasKeyByteCount   = 32
-)
+// The MAC's bytes a token spells.
+const mailReverseAliasTokenByteCount = 16
 
 var (
-	// No keychain to hold the MAC key, or one that cannot keep it.
+	// No MAC key to make a token with: a device that may not read the vault, or one with none bound.
 	ErrMailReverseAliasKey = errors.New("mail reverse alias: no key")
 	// No reverse alias holds the token.
 	ErrMailReverseAliasAbsent = errors.New("mail reverse alias: none")
@@ -48,48 +41,29 @@ var (
 
 // A mailbox's reverse aliases: see the file header.
 type MailReverseAlias struct {
-	store   mailStore
-	secrets SidecarSecrets
+	store mailStore
+	// the mailbox's MAC key (MailVault.ReverseAliasKey), nil where none may be read, which makes no token
+	key func(ctx context.Context) ([]byte, error)
 	// the most bytes of one ra/ record
 	recordMaxByteCount int
 }
 
-// The reverse aliases of the mailbox store, the key in secrets.
-func newMailReverseAlias(store mailStore, secrets SidecarSecrets, settings *MailOutboxSettings) *MailReverseAlias {
+// The reverse aliases of the mailbox store, its MAC key read through key.
+func newMailReverseAlias(store mailStore, key func(ctx context.Context) ([]byte, error), settings *MailOutboxSettings) *MailReverseAlias {
 	if settings == nil {
 		settings = DefaultMailOutboxSettings()
 	}
-	return &MailReverseAlias{store: store, secrets: secrets, recordMaxByteCount: settings.ProverRecordMaxByteCount}
+	return &MailReverseAlias{store: store, key: key, recordMaxByteCount: settings.ProverRecordMaxByteCount}
 }
 
-// The MAC key, drawn and kept on first use.
-func (self *MailReverseAlias) key() ([]byte, error) {
-	if self.secrets == nil {
-		return nil, ErrMailReverseAliasKey
+// The token of originalSender, an addr-spec, under the mailbox's key.
+func (self *MailReverseAlias) Token(ctx context.Context, originalSender string) (string, error) {
+	if self.key == nil {
+		return "", ErrMailReverseAliasKey
 	}
-	key, err := self.secrets.Get(mailReverseAliasKeyName)
-	if err == nil && len(key) == mailReverseAliasKeyByteCount {
-		testHookSecret("mail_reverse_alias_key", key)
-		return key, nil
-	}
-	if err != nil && !errors.Is(err, ErrSidecarStoreAbsent) {
-		return nil, err
-	}
-	random := NewEvsRandomToken()
-	other := NewEvsRandomToken()
-	key = append(random[:], other[:]...)
-	testHookSecret("mail_reverse_alias_key", key)
-	if err := self.secrets.Put(mailReverseAliasKeyName, key); err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrMailReverseAliasKey, err)
-	}
-	return key, nil
-}
-
-// The token of originalSender, an addr-spec, under this device's key.
-func (self *MailReverseAlias) Token(originalSender string) (string, error) {
-	key, err := self.key()
+	key, err := self.key(ctx)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("%w: %w", ErrMailReverseAliasKey, err)
 	}
 	mac := hmac.New(sha256.New, key)
 	mac.Write([]byte(dnsAsciiLower(originalSender)))
@@ -98,7 +72,7 @@ func (self *MailReverseAlias) Token(originalSender string) (string, error) {
 
 // The token of originalSender, its record created if absent naming burnerAddress, the burner the sender wrote to.
 func (self *MailReverseAlias) Ensure(ctx context.Context, originalSender string, burnerAddress string) (string, error) {
-	token, err := self.Token(originalSender)
+	token, err := self.Token(ctx, originalSender)
 	if err != nil {
 		return "", err
 	}

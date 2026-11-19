@@ -2734,6 +2734,123 @@ func (x *MailReverseAlias) GetBurnerAddress() string {
 	return ""
 }
 
+// The reverse aliases' MAC key (15.10's forwarding step 3; QD-1095): vault/<h>/reverse-alias-key in a mailbox, created
+// only if absent by the first forwarding device and read only by the owner's consented devices, as vault entries are.
+type MailReverseAliasKey struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Key           []byte                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"` // 32 B, HMAC-SHA-256's
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MailReverseAliasKey) Reset() {
+	*x = MailReverseAliasKey{}
+	mi := &file_protocol_mail_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MailReverseAliasKey) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MailReverseAliasKey) ProtoMessage() {}
+
+func (x *MailReverseAliasKey) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_mail_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MailReverseAliasKey.ProtoReflect.Descriptor instead.
+func (*MailReverseAliasKey) Descriptor() ([]byte, []int) {
+	return file_protocol_mail_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *MailReverseAliasKey) GetKey() []byte {
+	if x != nil {
+		return x.Key
+	}
+	return nil
+}
+
+// An approved recipient (15.10; owner decision 280, QD-1094): rcpt/<h>/<name> in the repo holding the sending alias's
+// mail, <name> the lowercase base32 of SHA-256(alias || 0x00 || recipient), created only if absent, kept until a person
+// removes it, its decision re-verified at each use.
+type MailRecipientApproval struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Alias         string                 `protobuf:"bytes,1,opt,name=alias,proto3" json:"alias,omitempty"`         // the sending alias, the From in its one form
+	Recipient     string                 `protobuf:"bytes,2,opt,name=recipient,proto3" json:"recipient,omitempty"` // the approved recipient, lowercase
+	Decision      []byte                 `protobuf:"bytes,3,opt,name=decision,proto3" json:"decision,omitempty"`   // the ApprovalDecision's stored Signed, on channel device or presence
+	Action        []byte                 `protobuf:"bytes,4,opt,name=action,proto3" json:"action,omitempty"`       // the stored CanonicalAction of kind mail_send that lists the recipient
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MailRecipientApproval) Reset() {
+	*x = MailRecipientApproval{}
+	mi := &file_protocol_mail_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MailRecipientApproval) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MailRecipientApproval) ProtoMessage() {}
+
+func (x *MailRecipientApproval) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_mail_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MailRecipientApproval.ProtoReflect.Descriptor instead.
+func (*MailRecipientApproval) Descriptor() ([]byte, []int) {
+	return file_protocol_mail_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *MailRecipientApproval) GetAlias() string {
+	if x != nil {
+		return x.Alias
+	}
+	return ""
+}
+
+func (x *MailRecipientApproval) GetRecipient() string {
+	if x != nil {
+		return x.Recipient
+	}
+	return ""
+}
+
+func (x *MailRecipientApproval) GetDecision() []byte {
+	if x != nil {
+		return x.Decision
+	}
+	return nil
+}
+
+func (x *MailRecipientApproval) GetAction() []byte {
+	if x != nil {
+		return x.Action
+	}
+	return nil
+}
+
 // The body of o/<h>/<effect_key>'s Signed, as SIGNED_SMTP_OUTBOX (D-SMTP-18), the message's bytes following that
 // Signed in the file (plan-SMTP-wire-gaps#4). MAIL writes o/, so this file declares it.
 type SmtpOutboxEntry struct {
@@ -2752,7 +2869,7 @@ type SmtpOutboxEntry struct {
 
 func (x *SmtpOutboxEntry) Reset() {
 	*x = SmtpOutboxEntry{}
-	mi := &file_protocol_mail_proto_msgTypes[25]
+	mi := &file_protocol_mail_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2764,7 +2881,7 @@ func (x *SmtpOutboxEntry) String() string {
 func (*SmtpOutboxEntry) ProtoMessage() {}
 
 func (x *SmtpOutboxEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_mail_proto_msgTypes[25]
+	mi := &file_protocol_mail_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2777,7 +2894,7 @@ func (x *SmtpOutboxEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SmtpOutboxEntry.ProtoReflect.Descriptor instead.
 func (*SmtpOutboxEntry) Descriptor() ([]byte, []int) {
-	return file_protocol_mail_proto_rawDescGZIP(), []int{25}
+	return file_protocol_mail_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *SmtpOutboxEntry) GetEffectKey() []byte {
@@ -2853,7 +2970,7 @@ type MailOutcome struct {
 
 func (x *MailOutcome) Reset() {
 	*x = MailOutcome{}
-	mi := &file_protocol_mail_proto_msgTypes[26]
+	mi := &file_protocol_mail_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2865,7 +2982,7 @@ func (x *MailOutcome) String() string {
 func (*MailOutcome) ProtoMessage() {}
 
 func (x *MailOutcome) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_mail_proto_msgTypes[26]
+	mi := &file_protocol_mail_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2878,7 +2995,7 @@ func (x *MailOutcome) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MailOutcome.ProtoReflect.Descriptor instead.
 func (*MailOutcome) Descriptor() ([]byte, []int) {
-	return file_protocol_mail_proto_rawDescGZIP(), []int{26}
+	return file_protocol_mail_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *MailOutcome) GetDomain() string {
@@ -2953,7 +3070,7 @@ type MailOutcomeRecord struct {
 
 func (x *MailOutcomeRecord) Reset() {
 	*x = MailOutcomeRecord{}
-	mi := &file_protocol_mail_proto_msgTypes[27]
+	mi := &file_protocol_mail_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2965,7 +3082,7 @@ func (x *MailOutcomeRecord) String() string {
 func (*MailOutcomeRecord) ProtoMessage() {}
 
 func (x *MailOutcomeRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_mail_proto_msgTypes[27]
+	mi := &file_protocol_mail_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2978,7 +3095,7 @@ func (x *MailOutcomeRecord) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MailOutcomeRecord.ProtoReflect.Descriptor instead.
 func (*MailOutcomeRecord) Descriptor() ([]byte, []int) {
-	return file_protocol_mail_proto_rawDescGZIP(), []int{27}
+	return file_protocol_mail_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *MailOutcomeRecord) GetOutcomes() []*MailOutcome {
@@ -3009,7 +3126,7 @@ type MailProverRecord struct {
 
 func (x *MailProverRecord) Reset() {
 	*x = MailProverRecord{}
-	mi := &file_protocol_mail_proto_msgTypes[28]
+	mi := &file_protocol_mail_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3021,7 +3138,7 @@ func (x *MailProverRecord) String() string {
 func (*MailProverRecord) ProtoMessage() {}
 
 func (x *MailProverRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_mail_proto_msgTypes[28]
+	mi := &file_protocol_mail_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3034,7 +3151,7 @@ func (x *MailProverRecord) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MailProverRecord.ProtoReflect.Descriptor instead.
 func (*MailProverRecord) Descriptor() ([]byte, []int) {
-	return file_protocol_mail_proto_rawDescGZIP(), []int{28}
+	return file_protocol_mail_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *MailProverRecord) GetSmtpDataProofBytes() uint64 {
@@ -3110,7 +3227,7 @@ type MailSpamModel struct {
 
 func (x *MailSpamModel) Reset() {
 	*x = MailSpamModel{}
-	mi := &file_protocol_mail_proto_msgTypes[29]
+	mi := &file_protocol_mail_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3122,7 +3239,7 @@ func (x *MailSpamModel) String() string {
 func (*MailSpamModel) ProtoMessage() {}
 
 func (x *MailSpamModel) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_mail_proto_msgTypes[29]
+	mi := &file_protocol_mail_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3135,7 +3252,7 @@ func (x *MailSpamModel) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MailSpamModel.ProtoReflect.Descriptor instead.
 func (*MailSpamModel) Descriptor() ([]byte, []int) {
-	return file_protocol_mail_proto_rawDescGZIP(), []int{29}
+	return file_protocol_mail_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *MailSpamModel) GetVersion() uint32 {
@@ -3337,7 +3454,14 @@ const file_protocol_mail_proto_rawDesc = "" +
 	"\x10verified_time_ms\x18\x03 \x01(\x04R\x0everifiedTimeMs\"b\n" +
 	"\x10MailReverseAlias\x12'\n" +
 	"\x0foriginal_sender\x18\x01 \x01(\tR\x0eoriginalSender\x12%\n" +
-	"\x0eburner_address\x18\x02 \x01(\tR\rburnerAddress\"\x9a\x02\n" +
+	"\x0eburner_address\x18\x02 \x01(\tR\rburnerAddress\"'\n" +
+	"\x13MailReverseAliasKey\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\fR\x03key\"\x7f\n" +
+	"\x15MailRecipientApproval\x12\x14\n" +
+	"\x05alias\x18\x01 \x01(\tR\x05alias\x12\x1c\n" +
+	"\trecipient\x18\x02 \x01(\tR\trecipient\x12\x1a\n" +
+	"\bdecision\x18\x03 \x01(\fR\bdecision\x12\x16\n" +
+	"\x06action\x18\x04 \x01(\fR\x06action\"\x9a\x02\n" +
 	"\x0fSmtpOutboxEntry\x12\x1d\n" +
 	"\n" +
 	"effect_key\x18\x01 \x01(\fR\teffectKey\x12%\n" +
@@ -3482,52 +3606,54 @@ func file_protocol_mail_proto_rawDescGZIP() []byte {
 }
 
 var file_protocol_mail_proto_enumTypes = make([]protoimpl.EnumInfo, 14)
-var file_protocol_mail_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
+var file_protocol_mail_proto_msgTypes = make([]protoimpl.MessageInfo, 32)
 var file_protocol_mail_proto_goTypes = []any{
-	(SpfVerdict)(0),           // 0: urnetwork.sidecar.SpfVerdict
-	(DkimVerdict)(0),          // 1: urnetwork.sidecar.DkimVerdict
-	(DmarcVerdict)(0),         // 2: urnetwork.sidecar.DmarcVerdict
-	(ArcVerdict)(0),           // 3: urnetwork.sidecar.ArcVerdict
-	(MailHintKind)(0),         // 4: urnetwork.sidecar.MailHintKind
-	(MailAddressKind)(0),      // 5: urnetwork.sidecar.MailAddressKind
-	(MailBurnerState)(0),      // 6: urnetwork.sidecar.MailBurnerState
-	(MailTlsLabel)(0),         // 7: urnetwork.sidecar.MailTlsLabel
-	(MailTlsRule)(0),          // 8: urnetwork.sidecar.MailTlsRule
-	(MailFlagKind)(0),         // 9: urnetwork.sidecar.MailFlagKind
-	(VaultEntryState)(0),      // 10: urnetwork.sidecar.VaultEntryState
-	(VaultTotpAlgorithm)(0),   // 11: urnetwork.sidecar.VaultTotpAlgorithm
-	(MailSendMode)(0),         // 12: urnetwork.sidecar.MailSendMode
-	(MailOutcomeKind)(0),      // 13: urnetwork.sidecar.MailOutcomeKind
-	(*MailIngress)(nil),       // 14: urnetwork.sidecar.MailIngress
-	(*MailAuthEvidence)(nil),  // 15: urnetwork.sidecar.MailAuthEvidence
-	(*AuthLimits)(nil),        // 16: urnetwork.sidecar.AuthLimits
-	(*SpfResult)(nil),         // 17: urnetwork.sidecar.SpfResult
-	(*DkimResult)(nil),        // 18: urnetwork.sidecar.DkimResult
-	(*DmarcResult)(nil),       // 19: urnetwork.sidecar.DmarcResult
-	(*ArcSet)(nil),            // 20: urnetwork.sidecar.ArcSet
-	(*ArcResult)(nil),         // 21: urnetwork.sidecar.ArcResult
-	(*MailHint)(nil),          // 22: urnetwork.sidecar.MailHint
-	(*MailDeposit)(nil),       // 23: urnetwork.sidecar.MailDeposit
-	(*MailAddress)(nil),       // 24: urnetwork.sidecar.MailAddress
-	(*MailBurner)(nil),        // 25: urnetwork.sidecar.MailBurner
-	(*IndexEntry)(nil),        // 26: urnetwork.sidecar.IndexEntry
-	(*MailAttachment)(nil),    // 27: urnetwork.sidecar.MailAttachment
-	(*MailAuthResults)(nil),   // 28: urnetwork.sidecar.MailAuthResults
-	(*MailTlsBasis)(nil),      // 29: urnetwork.sidecar.MailTlsBasis
-	(*MailIndexSegment)(nil),  // 30: urnetwork.sidecar.MailIndexSegment
-	(*MailFlagOp)(nil),        // 31: urnetwork.sidecar.MailFlagOp
-	(*MailFlagSegment)(nil),   // 32: urnetwork.sidecar.MailFlagSegment
-	(*MailGroupRef)(nil),      // 33: urnetwork.sidecar.MailGroupRef
-	(*VaultEntry)(nil),        // 34: urnetwork.sidecar.VaultEntry
-	(*VaultTotp)(nil),         // 35: urnetwork.sidecar.VaultTotp
-	(*VaultUsedAt)(nil),       // 36: urnetwork.sidecar.VaultUsedAt
-	(*MailForward)(nil),       // 37: urnetwork.sidecar.MailForward
-	(*MailReverseAlias)(nil),  // 38: urnetwork.sidecar.MailReverseAlias
-	(*SmtpOutboxEntry)(nil),   // 39: urnetwork.sidecar.SmtpOutboxEntry
-	(*MailOutcome)(nil),       // 40: urnetwork.sidecar.MailOutcome
-	(*MailOutcomeRecord)(nil), // 41: urnetwork.sidecar.MailOutcomeRecord
-	(*MailProverRecord)(nil),  // 42: urnetwork.sidecar.MailProverRecord
-	(*MailSpamModel)(nil),     // 43: urnetwork.sidecar.MailSpamModel
+	(SpfVerdict)(0),               // 0: urnetwork.sidecar.SpfVerdict
+	(DkimVerdict)(0),              // 1: urnetwork.sidecar.DkimVerdict
+	(DmarcVerdict)(0),             // 2: urnetwork.sidecar.DmarcVerdict
+	(ArcVerdict)(0),               // 3: urnetwork.sidecar.ArcVerdict
+	(MailHintKind)(0),             // 4: urnetwork.sidecar.MailHintKind
+	(MailAddressKind)(0),          // 5: urnetwork.sidecar.MailAddressKind
+	(MailBurnerState)(0),          // 6: urnetwork.sidecar.MailBurnerState
+	(MailTlsLabel)(0),             // 7: urnetwork.sidecar.MailTlsLabel
+	(MailTlsRule)(0),              // 8: urnetwork.sidecar.MailTlsRule
+	(MailFlagKind)(0),             // 9: urnetwork.sidecar.MailFlagKind
+	(VaultEntryState)(0),          // 10: urnetwork.sidecar.VaultEntryState
+	(VaultTotpAlgorithm)(0),       // 11: urnetwork.sidecar.VaultTotpAlgorithm
+	(MailSendMode)(0),             // 12: urnetwork.sidecar.MailSendMode
+	(MailOutcomeKind)(0),          // 13: urnetwork.sidecar.MailOutcomeKind
+	(*MailIngress)(nil),           // 14: urnetwork.sidecar.MailIngress
+	(*MailAuthEvidence)(nil),      // 15: urnetwork.sidecar.MailAuthEvidence
+	(*AuthLimits)(nil),            // 16: urnetwork.sidecar.AuthLimits
+	(*SpfResult)(nil),             // 17: urnetwork.sidecar.SpfResult
+	(*DkimResult)(nil),            // 18: urnetwork.sidecar.DkimResult
+	(*DmarcResult)(nil),           // 19: urnetwork.sidecar.DmarcResult
+	(*ArcSet)(nil),                // 20: urnetwork.sidecar.ArcSet
+	(*ArcResult)(nil),             // 21: urnetwork.sidecar.ArcResult
+	(*MailHint)(nil),              // 22: urnetwork.sidecar.MailHint
+	(*MailDeposit)(nil),           // 23: urnetwork.sidecar.MailDeposit
+	(*MailAddress)(nil),           // 24: urnetwork.sidecar.MailAddress
+	(*MailBurner)(nil),            // 25: urnetwork.sidecar.MailBurner
+	(*IndexEntry)(nil),            // 26: urnetwork.sidecar.IndexEntry
+	(*MailAttachment)(nil),        // 27: urnetwork.sidecar.MailAttachment
+	(*MailAuthResults)(nil),       // 28: urnetwork.sidecar.MailAuthResults
+	(*MailTlsBasis)(nil),          // 29: urnetwork.sidecar.MailTlsBasis
+	(*MailIndexSegment)(nil),      // 30: urnetwork.sidecar.MailIndexSegment
+	(*MailFlagOp)(nil),            // 31: urnetwork.sidecar.MailFlagOp
+	(*MailFlagSegment)(nil),       // 32: urnetwork.sidecar.MailFlagSegment
+	(*MailGroupRef)(nil),          // 33: urnetwork.sidecar.MailGroupRef
+	(*VaultEntry)(nil),            // 34: urnetwork.sidecar.VaultEntry
+	(*VaultTotp)(nil),             // 35: urnetwork.sidecar.VaultTotp
+	(*VaultUsedAt)(nil),           // 36: urnetwork.sidecar.VaultUsedAt
+	(*MailForward)(nil),           // 37: urnetwork.sidecar.MailForward
+	(*MailReverseAlias)(nil),      // 38: urnetwork.sidecar.MailReverseAlias
+	(*MailReverseAliasKey)(nil),   // 39: urnetwork.sidecar.MailReverseAliasKey
+	(*MailRecipientApproval)(nil), // 40: urnetwork.sidecar.MailRecipientApproval
+	(*SmtpOutboxEntry)(nil),       // 41: urnetwork.sidecar.SmtpOutboxEntry
+	(*MailOutcome)(nil),           // 42: urnetwork.sidecar.MailOutcome
+	(*MailOutcomeRecord)(nil),     // 43: urnetwork.sidecar.MailOutcomeRecord
+	(*MailProverRecord)(nil),      // 44: urnetwork.sidecar.MailProverRecord
+	(*MailSpamModel)(nil),         // 45: urnetwork.sidecar.MailSpamModel
 }
 var file_protocol_mail_proto_depIdxs = []int32{
 	17, // 0: urnetwork.sidecar.MailAuthEvidence.spf:type_name -> urnetwork.sidecar.SpfResult
@@ -3563,7 +3689,7 @@ var file_protocol_mail_proto_depIdxs = []int32{
 	11, // 30: urnetwork.sidecar.VaultTotp.algorithm:type_name -> urnetwork.sidecar.VaultTotpAlgorithm
 	12, // 31: urnetwork.sidecar.MailOutcome.mode:type_name -> urnetwork.sidecar.MailSendMode
 	13, // 32: urnetwork.sidecar.MailOutcome.outcome:type_name -> urnetwork.sidecar.MailOutcomeKind
-	40, // 33: urnetwork.sidecar.MailOutcomeRecord.outcomes:type_name -> urnetwork.sidecar.MailOutcome
+	42, // 33: urnetwork.sidecar.MailOutcomeRecord.outcomes:type_name -> urnetwork.sidecar.MailOutcome
 	34, // [34:34] is the sub-list for method output_type
 	34, // [34:34] is the sub-list for method input_type
 	34, // [34:34] is the sub-list for extension type_name
@@ -3582,7 +3708,7 @@ func file_protocol_mail_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_protocol_mail_proto_rawDesc), len(file_protocol_mail_proto_rawDesc)),
 			NumEnums:      14,
-			NumMessages:   30,
+			NumMessages:   32,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

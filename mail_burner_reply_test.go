@@ -67,8 +67,6 @@ func newTestMailBurnerReplyWorld(t *testing.T) (*mailClientTestWorld, *testMailB
 		},
 	}
 	world.client.stateLock.Unlock()
-	// the mail component's keychain namespace, which a forward's reverse alias key is kept in
-	world.client.secrets = &testMailSecrets{}
 	ctx := context.Background()
 	config, err := world.client.syncedConfig(ctx)
 	if err != nil {

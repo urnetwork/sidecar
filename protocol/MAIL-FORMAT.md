@@ -21,6 +21,7 @@ Every value here but `MailIngress` and `MailHint` is sealed under §11, so none 
 | `mailcfg` | `addr/<h>/<address>` | `MailAddress` |
 | `mailcfg` | `burner/<h>/<blabel>` | `MailBurner` |
 | mailbox | `vault/<h>/<entry_id>` | `VaultEntry` |
+| mailbox | `vault/<h>/reverse-alias-key` | `MailReverseAliasKey` |
 | mailbox, group | `m/<yyyymm>/<h>/<id>` | the raw RFC 5322 bytes plus ingest headers |
 | mailbox | `r/<yyyymm>/<h>/<id>` | `MailGroupRef` |
 | mailbox, group | `i/<yyyymm>/<n>` | `MailIndexSegment` |
@@ -30,6 +31,7 @@ Every value here but `MailIngress` and `MailHint` is sealed under §11, so none 
 | mailbox | `p/<sidecar_id>` | `MailProverRecord` |
 | mailbox | `forward` | `MailForward` |
 | mailbox | `ra/<h>/<token>` | `MailReverseAlias` |
+| mailbox, group | `rcpt/<h>/<name>` | `MailRecipientApproval` |
 | mailbox | `s/model` | `MailSpamModel` |
 
 - **`<h>`** is the two lowercase hex digits of the first byte of SHA-256 over the path's last name, as spelled below: 256 directories a family.
@@ -37,6 +39,7 @@ Every value here but `MailIngress` and `MailHint` is sealed under §11, so none 
 - **`<n>`** is decimal with no leading zero, from 0.
 - **`<id>`, `<entry_id>`, `<sidecar_id>` and `<effect_key>`** are lowercase RFC 4648 base32 with no padding: 26 characters for an id and 52 for an `effect_key`. Hex would make an `effect_key` 64 B, past the "under 64 B" row of §11.7's name table that §15.7 sizes every family but `addr/` by.
 - **`<address>`, `<blabel>` and `<token>`** are as the address spells them, lowercase. A `<token>` fits `r-<token>` in §15.8's 64 characters.
+- **`<name>`** in `rcpt/` is the lowercase base32 of SHA-256(alias || 0x00 || recipient), 52 characters, the alias the sending From in its one form and the recipient lowercase (QD-1094).
 
 ## Bounds on `MailIngress` and `MailAuthEvidence`
 
@@ -112,7 +115,9 @@ The winning op's `wall` dates a trash for the 30-day shred. An op naming an eras
 - **`or/`.** A `MailOutcomeRecord` holds one `MailOutcome` per recipient domain, rewritten by the sending device as each finishes, and kept 30 days. `mode` 0 is §14.5's `unknown`. `byte_count` and `cap_byte_count` are set only on `too_large`, `retry_after_ms` on `deferred`, and `reply_code` on `refused`. `update_time_ms` is the sending device's last write of that domain's result. `tls_level` is the send's I-11 label, 1 to 4 for TL1 to TL4, or 0 if none was reached.
 - **`p/`.** `MailProverRecord` is rewritten at each measurement, and `measure_time_ms` says when.
 - **`forward`.** `burners` lists the opted-in `<blabel>`s, and `verified_time_ms` is when the address confirmed its 6-digit code (15.10). The evs push signs it, as every mailbox file.
-- **`ra/`.** `<token>` is §15.10's MAC, and the record holds what it stands for.
+- **`ra/`.** `<token>` is the lowercase base32 of the first 16 bytes of HMAC-SHA-256 over the original sender's lowercase address under the mailbox's reverse-alias key, and the record holds what it stands for. A relay's `effect_key` is SHA-256("urnetwork-sidecar-v1/mail-relay" || its message id).
+- **`vault/<h>/reverse-alias-key`.** `MailReverseAliasKey.key` is that MAC's 32-byte key, created only if absent by the first forwarding device and read only by the owner's consented devices, as vault entries are (QD-1095). No entry id spells its name, so a vault listing passes it over.
+- **`rcpt/`.** A `MailRecipientApproval` approves (`alias`, `recipient`): `decision` is the stored `Signed` of one `ApprovalDecision` on channel device or presence, and `action` the stored `CanonicalAction` of kind mail_send it approved, which lists the recipient (owner decision 280, QD-1094). Created only if absent after the use is done, kept until a person removes it, and re-verified at each use under the reader's current pin; a harness decision makes none.
 
 ## `s/model`: the spam filter
 
