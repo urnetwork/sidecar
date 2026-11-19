@@ -33,7 +33,9 @@
 //	quota      at the storage limit or while spent a DROP carrying index rewrites that evs refuses with a QuotaRefusal
 //	           goes again once without them, left to the backfill, since a DROP frees storage and its index must not
 //	           block it (QD-1088); a kept head needing an upload is refused again then, and that refusal goes back as
-//	           it is
+//	           it is. A cluster at its cohort limit refuses the same uploads 507 CLUSTER_FULL (§19.9's cohorts row),
+//	           which that answer does not name: it goes back as it is, rewrites or not, until the question
+//	           drop-quota-resend-without-rewrites-cluster-full is answered
 //
 // On every leg but ios_extension. Safe for concurrent use.
 

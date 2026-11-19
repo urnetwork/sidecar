@@ -39,13 +39,15 @@ const (
 	dropIndexClientShardByteCount = 512
 )
 
-// A general repo on one engine and its admin's device, in the format2 gate.
+// A general repo on one engine and its admin's device, in the format2 gate; quota is the engine's storage gate, which
+// a test at the limit rereads (check_drop_index_limit_test.go).
 type dropIndexClientWorld struct {
 	t         *testing.T
 	ctx       context.Context
 	clock     *sidecartest.FakeClock
 	host      *sidecartest.FakeHost
 	engine    *EvsEngine
+	quota     *QuotaGate
 	previews  *DropPreviews
 	networkId sidecar.Id
 	repoId    sidecar.Id
@@ -129,6 +131,7 @@ func newDropIndexClientWorld(t *testing.T) *dropIndexClientWorld {
 		t.Fatal(err)
 	}
 	t.Cleanup(quota.Close)
+	world.quota = quota
 	receiptKeys, err := NewReceiptKeys([]*ReceiptKey{testReceiptKey(1, clock.Now().Add(-48*time.Hour))}, nil)
 	if err != nil {
 		t.Fatal(err)
