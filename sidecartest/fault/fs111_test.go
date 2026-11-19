@@ -23,8 +23,15 @@ package fault
 //	twins     a builder that ignores the set, and an erasure whose ERASEs never commit, each fail the check above that
 //	          catches them
 //
+// The main clauses also run as a schedule under TEST-M10-02's search invariants, FI-18 to FI-23 read after every step
+// (TestFs111UnderTheSearchInvariants); and the fence of a paused in-ref push, the CLOSURE, the eraser's death and its
+// resume run on real engines as the row's registered case (fs111.go), on T2 here (TestFs111) and on T3 through server's
+// evshost (server/fs111_t3_test.go).
+//
 // No hint reaches anyone here: every device reads the index at its next round, which is FS-111's "every hint is
-// dropped". Not here, each named for what it waits on: the evs clauses (a stale index_epoch refused at once and a
+// dropped". The world's store checks no push life or signed time, so a planned push sent 20 min on reaches the epoch
+// check as a push in parts does within its 30-minute seal; a builder's own push is let go within its 5-minute life.
+// Not here, each named for what it waits on: the evs clauses (a stale index_epoch refused at once and a
 // future one once recorded, a CUT changing a file but the set or past 16,208 B, a CUT below admin), which evsservice's
 // check_cut_test.go runs on the engine (EVS2-M10-11); a multi-part push's 30-minute seal and an i2 rebuild in parts
 // (no builder writes in parts or into i2 yet, SEARCH-M10-15's draft: the build case is one push); a writer's journal
