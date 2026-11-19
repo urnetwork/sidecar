@@ -282,6 +282,25 @@ func (self *searchCursorTable) sweep() {
 	}
 }
 
+// Ends every cursor of session, its hit ids with them: the session ended (D-MCP-25), so nothing it opened stays.
+func (self *searchCursorTable) endSession(session Id) {
+	ended := func() []*searchCursor {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		ended := []*searchCursor{}
+		for id, cursor := range self.cursors {
+			if cursor.session == session {
+				delete(self.cursors, id)
+				ended = append(ended, cursor)
+			}
+		}
+		return ended
+	}()
+	for _, cursor := range ended {
+		cursor.stream.Close()
+	}
+}
+
 // Ends every cursor: the engine closes.
 func (self *searchCursorTable) closeAll() {
 	ended := func() []*searchCursor {

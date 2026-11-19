@@ -48,6 +48,9 @@ type McpCatalog struct {
 	stateLock sync.Mutex
 	tools     map[string]*mcpCatalogTool
 	installed bool
+	// the search the search tools reach, which Install hands the server for hit arguments (tools_hit.go); nil for
+	// a catalog with no search tool
+	searchOf mcpSearchOfFunction
 }
 
 // An empty catalog on settings and clock, its W calls going to sink, nil for none.
@@ -92,14 +95,26 @@ func (self *McpCatalog) Names() []string {
 	return names
 }
 
-// Puts every tool on server's go-sdk Servers, made already or later, and closes the catalog to more tools.
+// Notes the search the catalog's search tools reach, which a hit argument resolves through.
+func (self *McpCatalog) setSearchOf(searchOf mcpSearchOfFunction) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.searchOf = searchOf
+}
+
+// Puts every tool on server's go-sdk Servers, made already or later, and closes the catalog to more tools; the
+// search its search tools reach becomes the one server's hit arguments resolve through.
 func (self *McpCatalog) Install(server *McpServer) {
-	tools := func() []*mcpCatalogTool {
+	tools, searchOf := func() ([]*mcpCatalogTool, mcpSearchOfFunction) {
 		self.stateLock.Lock()
 		self.installed = true
+		searchOf := self.searchOf
 		self.stateLock.Unlock()
-		return self.sorted()
+		return self.sorted(), searchOf
 	}()
+	if searchOf != nil {
+		server.setSearchOf(searchOf)
+	}
 	server.Install(func(server *gomcp.Server) {
 		for _, tool := range tools {
 			server.AddTool(tool.tool, tool.handler)

@@ -971,16 +971,28 @@ func (self *SearchTools) OpenHit(session Id, hitId string) (*SearchHitRef, error
 	return self.engine.cursors.openHit(session, hitId)
 }
 
-// Each control session's search session: its cursors, limits and hit ids are its own. A session's id is forgotten
-// once it ends.
-type daemonSearchSessions struct {
-	stateLock  sync.Mutex
-	sessionIds map[<-chan struct{}]Id
+// Ends what session holds on this network's engine, its cursors, hit ids and limits (SearchEngine.EndSession): what
+// an MCP session's close calls in each network it searched in (D-MCP-25).
+func (self *SearchTools) EndSession(session Id) {
+	self.engine.EndSession(session)
 }
 
-// The search session of call's control session, minted at its first search; a call no session reader watches is a
-// session of its own.
-func (self *daemonSearchSessions) of(call *DaemonCall) Id {
+// Each control session's search session: its cursors, limits and hit ids are its own. Once the session ends its id is
+// forgotten, and each engine it searched in ends what it held there (SearchEngine.EndSession), as an MCP session's
+// close does (D-MCP-25).
+type daemonSearchSessions struct {
+	// called once an ended session's engines ended it: a test's seam, nil otherwise
+	endedHook func(session Id)
+
+	stateLock  sync.Mutex
+	sessionIds map[<-chan struct{}]Id
+	// the engines each session searched in
+	sessionIdEngines map[Id]map[*SearchEngine]bool
+}
+
+// The search session of call's control session, minted at its first search, which tools' engine ends at the
+// session's end; a call no session reader watches is a session of its own.
+func (self *daemonSearchSessions) of(call *DaemonCall, tools *SearchTools) Id {
 	if call.SessionDone == nil {
 		return NewId()
 	}
@@ -989,21 +1001,37 @@ func (self *daemonSearchSessions) of(call *DaemonCall) Id {
 		defer self.stateLock.Unlock()
 		if self.sessionIds == nil {
 			self.sessionIds = map[<-chan struct{}]Id{}
+			self.sessionIdEngines = map[Id]map[*SearchEngine]bool{}
 		}
-		if sessionId, ok := self.sessionIds[call.SessionDone]; ok {
-			return sessionId, false
+		sessionId, ok := self.sessionIds[call.SessionDone]
+		if !ok {
+			sessionId = NewId()
+			self.sessionIds[call.SessionDone] = sessionId
+			self.sessionIdEngines[sessionId] = map[*SearchEngine]bool{}
 		}
-		sessionId := NewId()
-		self.sessionIds[call.SessionDone] = sessionId
-		return sessionId, true
+		if tools != nil {
+			self.sessionIdEngines[sessionId][tools.engine] = true
+		}
+		return sessionId, !ok
 	}()
 	if added {
 		// forgotten when the session ends, which ends this wait
 		go func(done <-chan struct{}) {
 			<-done
-			self.stateLock.Lock()
-			defer self.stateLock.Unlock()
-			delete(self.sessionIds, done)
+			engines := func() map[*SearchEngine]bool {
+				self.stateLock.Lock()
+				defer self.stateLock.Unlock()
+				delete(self.sessionIds, done)
+				engines := self.sessionIdEngines[sessionId]
+				delete(self.sessionIdEngines, sessionId)
+				return engines
+			}()
+			for engine := range engines {
+				engine.EndSession(sessionId)
+			}
+			if self.endedHook != nil {
+				self.endedHook(sessionId)
+			}
 		}(call.SessionDone)
 	}
 	return sessionId
@@ -1018,6 +1046,8 @@ type DaemonSearchBackends struct {
 	TaintAncestors func(ctx context.Context, sidecar *Sidecar, pid int) error
 	// The daemon's credentials as a matcher (I-7): Sidecar.SecretMatcher's, an error while it cannot be read.
 	Secret func(sidecar *Sidecar) (func(text []byte) bool, error)
+	// Called once an ended control session's engines ended what it held: a test's seam, nil otherwise.
+	sessionEnded func(session Id)
 }
 
 // search's control params: the tool's arguments, the call's network, and whether to stream search.progress.
@@ -1068,7 +1098,7 @@ func DaemonSearchMethods(backends *DaemonSearchBackends) []*DaemonMethod {
 			return matcher.Matches, nil
 		}
 	}
-	sessions := &daemonSearchSessions{}
+	sessions := &daemonSearchSessions{endedHook: backends.sessionEnded}
 	decode := func(call *DaemonCall, params any) error {
 		if len(call.Params) == 0 {
 			return nil
@@ -1089,7 +1119,7 @@ func DaemonSearchMethods(backends *DaemonSearchBackends) []*DaemonMethod {
 			return nil, nil, err
 		}
 		env := &SearchToolEnv{
-			Session: sessions.of(call),
+			Session: sessions.of(call, tools),
 			// the caller's harness runs read untrusted text through this answer: they are tainted first, by the pid the
 			// system reports for the socket's peer, never the hello's, which the caller writes (§5.8)
 			Taint: func(ctx context.Context) error {

@@ -272,6 +272,9 @@ type mcpRecordQueryIn struct {
 	Untrusted string `json:"untrusted,omitempty"`
 	Archived  bool   `json:"archived,omitempty"`
 	Cursor    string `json:"cursor,omitempty"`
+	// A search hit's id, in place of log, run, entry and the filters: the entry, or the run card's run, this session's
+	// search named, while its cursor lives (§16.10's open row; tools_hit.go)
+	Hit string `json:"hit,omitempty"`
 }
 
 // One row, as record_query and ur://record write it.
@@ -532,15 +535,23 @@ func addRecordTools(catalog *McpCatalog, recordOf mcpRecordOfFunction) {
 		Name: "record_query",
 		Tier: McpTierRead,
 		Description: "Reads the record's entries as rows: log vault (the default), team, directory or a log's id, filtered by run, agent, " +
-			"kind, action, entry and time. Rows another writer's tainted run wrote, and the directory's announcements, requests and " +
-			"decisions, come back as stubs unless untrusted is include, which taints this run first. Raw capture returns its body " +
-			"only when entry names it.",
+			"kind, action, entry and time, or the entry or run a search hit names by its hit id. Rows another writer's tainted run " +
+			"wrote, and the directory's announcements, requests and decisions, come back as stubs unless untrusted is include, which " +
+			"taints this run first. Raw capture returns its body only when entry names it.",
 		Access: func(call *McpCall, in *mcpRecordQueryIn) ([]McpAccess, error) {
 			record, err := mcpRecordFor(recordOf, call)
 			if err != nil {
 				return nil, err
 			}
-			log, err := record.ResolveLog(in.Log)
+			name := in.Log
+			if in.Hit != "" {
+				hit, err := mcpRecordQueryHit(call, in)
+				if err != nil {
+					return nil, err
+				}
+				name = hit.log
+			}
+			log, err := record.ResolveLog(name)
 			if err != nil {
 				return nil, mcpRecordError(err)
 			}
@@ -552,6 +563,14 @@ func addRecordTools(catalog *McpCatalog, recordOf mcpRecordOfFunction) {
 			return nil, err
 		}
 		args := &sidecar.RecordQueryArgs{Log: in.Log, Agent: in.Agent, Archived: in.Archived, Cursor: in.Cursor}
+		var hit *mcpRecordHit
+		if in.Hit != "" {
+			// resolved again here: a hit whose cursor ended since the allow ran opens nothing
+			if hit, err = mcpRecordQueryHit(call, in); err != nil {
+				return nil, err
+			}
+			args.Log, args.Copy = hit.log, hit.copy
+		}
 		if args.RunId, err = mcpRecordId(in.Run); err != nil {
 			return nil, err
 		}
@@ -576,6 +595,10 @@ func addRecordTools(catalog *McpCatalog, recordOf mcpRecordOfFunction) {
 				return nil, errMcpRecordArgument
 			}
 			args.Kinds = []sidecar.RecordKind{kind}
+		}
+		if hit != nil && hit.runId != nil {
+			// a run card's hit opens its run's entries in the card's log
+			args.RunId = hit.runId
 		}
 		args.Taint = func() error { return result.Untrusted(ctx) }
 		page, err := record.Query(ctx, args)
