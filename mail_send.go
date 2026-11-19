@@ -1,31 +1,41 @@
 //go:build !ios_extension
 
-// MailClient.Send for same-network recipients (§15.10 steps 1 and 2, §15.8's same-network mail; R-MAIL-5, D-MAIL-8,
-// I-5, I-8, X7; MAIL-M7-18): the data behind mail_send's W tier, which needs no approval, since mail to the network's
-// own addresses crosses no edge (plan-MCP-approved-recipients: mail to members stays W).
+// MailClient.Send (§15.10's four steps, §15.8's same-network mail; R-MAIL-1, R-MAIL-5, D-MAIL-8, I-5, I-8, I-9, X7;
+// MAIL-M7-18 for members, MAIL-M9-01 for any recipient): one message to this network's own addresses and to the
+// internet's, each recipient on its own path. A draft's message is built here; a submission's comes as its client
+// wrote it (MailClient.SubmitMessage, mail_submission.go), and both take the same steps.
 //
 //	from      one of this network's own addresses (its label's, its alias's or a scope's), held to
-//	          mail:<alias>#send for this device (D-ACL-12) by the rule ingest holds the deposit's signer to, so a
-//	          message the sender may not send as its From is refused here and, if forged, shown as outside mail there.
-//	          A burner's From is a reply, which comes with M9's sending (§15.9), and a bounce or reverse alias is no
-//	          From
-//	split     each recipient is an address of this network or not. One that is not is outside mail, whose path is
-//	          §14's smtpedge from M9 (MAIL-M9-01): here it is answered MailSendInternetWaits and nothing is sent to it,
-//	          so a mixed list delivers its same-network part only. A same-network address is never routed to the
-//	          internet path, whatever form the sender's alias has outside
+//	          mail:<alias>#send for this device (D-ACL-12) by the rule ingest holds a deposit's signer to, so a message
+//	          the sender may not send as its From is refused here and, if forged, shown as outside mail there. A
+//	          burner's From is a reply, which MailClient.Reply alone sends (mail_burner_reply.go), and a bounce or
+//	          reverse alias is no From
+//	split     each recipient is an address of this network or not. A same-network one is deposited and never routed to
+//	          the internet path, whatever form the sender's alias has outside; any other is internet mail
+//	gate      §15.10's step 1: mail to members alone, in a run that is not tainted, is W and goes at once. An internet
+//	          recipient, or a tainted run's send (I-9), makes the send an outward action (I-8): the whole message waits
+//	          on §5.4's gate as one mail_send action (mail_send_gate.go), and nothing is kept, deposited or queued, its
+//	          member part included, until the gate passes it. MailApprovedRecipients would let records spare the gate,
+//	          and approves none until rcpt/'s bytes are settled, the closed direction (mail_approved.go)
 //	resolve   a same-network recipient goes through the signed mailcfg (MailConfig.Resolve): unknown, burned and
 //	          paused alike are MailSendUnknown; a known one's repo is judged by MailSendAuthority.MayDeposit
-//	copy      the message, with its headers, is kept in this device's member's mailbox as an ordinary m/ and i/ entry
-//	          labeled sent in f/ (plan-MAIL-small-readings#9), before any deposit, so a copy that cannot be kept sends
-//	          nothing. A device with no mailbox it writes, an agent's or an unconsented device's, keeps none
-//	deposit   then one deposit a repo (mail_send_local.go), each answered delivered once evs confirmed it, else failed.
-//	          A Send is no outward action and keeps no effect key: sending again after a failure deposits again to
-//	          the repos that took it, so a caller sends only the recipients that failed
-//	submit    a host's send naming any outside recipient waits on §5.4's gate first (MailClient.SubmitSend,
-//	          mail_send_gate.go), which starts from the same checks (planSend); Send itself passes no gate
+//	copy      step 2: the message is kept in this device's member's mailbox as an ordinary m/ and i/ entry labeled sent
+//	          in f/ (plan-MAIL-small-readings#9), before any deposit or queue, so a copy that cannot be kept sends
+//	          nothing. A device with no mailbox it writes, an agent's or an unconsented device's, keeps none, and
+//	          queues none
+//	deposit   then one deposit a repo (mail_send_local.go), each answered delivered once evs confirmed it, else failed
+//	burner    step 3, for a reply from a burner: BURNER's header rules (MailBurnerHeaders), applied before the copy so
+//	          the copy is what went
+//	queue     step 4: the internet recipients at o/<h>/<effect_key> under the use's effect key (mail_outbox.go), the
+//	          envelope sender the mailbox's bounce address (mail_bounce.go), each answered queued, with SMTP's
+//	          outcomes following in or/. A probation, suspended or unverified network queues nothing: its internet
+//	          recipients answer internet_refused (§21.7, D-SMTP-14). On the sidecar_http leg, which sends no mail, they
+//	          answer internet_waits
 //
-// The message is plain text, UTF-8, quoted-printable, with From, To, Cc, Subject, Date and a Message-ID under the
-// From's domain; a Bcc recipient is deposited to and named in no header. Nothing here logs an address, a subject or
+// A send is idempotent only under its gate's effect key: a member-only send keeps none, so sending again after a
+// failure deposits again to the repos that took it, and a caller sends only the recipients that failed. A draft's
+// message is plain text, UTF-8, quoted-printable, with From, To, Cc, Subject, Date and a Message-ID under the From's
+// domain; a Bcc recipient is deposited to or queued and named in no header. Nothing here logs an address, a subject or
 // a byte of a message (I-13).
 
 package sidecar
@@ -50,14 +60,14 @@ var (
 	// What Send was given is out of shape: no From, no recipient, past a bound, a header line break, or an address
 	// that does not parse. Names no address.
 	ErrMailSendInvalid = errors.New("mail send: invalid")
-	// The From is no address this device may send as: outside this network, a burner's before M9's replies, a bounce
-	// or reverse alias, or one policy grants this device no mail:<alias>#send for.
+	// The From is no address this device may send as: outside this network, a burner's sent other than as its reply,
+	// a bounce or reverse alias, or one policy grants this device no mail:<alias>#send for.
 	ErrMailSendFromRefused = errors.New("mail send: this device may not send as that From")
 	// The sent copy could not be kept in this device's mailbox, so nothing was sent.
 	ErrMailSendCopyFailed = errors.New("mail send: the sent copy was not kept, so nothing was sent")
 	// What the call asks of a send is not on this sidecar yet: a send's check (MailClient's over
-	// SmtpSender.Check) or a send's outcomes by its send_id (from or/). ur daemon's mail.check_send and
-	// mail.send_result answer it until they land (mail_send_daemon.go), and an app reads it as MAIL_UNAVAILABLE.
+	// SmtpSender.Check), which ur daemon's mail.check_send answers until it lands (mail_send_daemon.go), and an app
+	// reads as MAIL_UNAVAILABLE.
 	ErrMailSendUnavailable = errors.New("mail send: this sidecar cannot do that yet")
 	// No send of this device's member has that send_id. Names no id.
 	ErrMailSendUnknown = errors.New("mail send: no send has that id")
@@ -78,13 +88,18 @@ const (
 	MailSendMemberRefused MailSendOutcome = "member_refused"
 	// Policy gives this device no deposit or write in the recipient's repo.
 	MailSendNoDepositRight MailSendOutcome = "refused"
-	// Outside this network: §14's sending, which comes with M9 (MAIL-M9-01). Nothing was sent to it.
+	// Internet mail queued at o/ for a prover host (§15.10's step 4): §14's outcomes follow in or/.
+	MailSendQueued MailSendOutcome = "queued"
+	// Internet mail this network may not send: on probation, suspended or unverified (§21.7, D-SMTP-14).
+	MailSendInternetRefused MailSendOutcome = "internet_refused"
+	// Internet mail this sidecar has no outbox for: the page Worker's leg, or a device with no mailbox it writes, an
+	// agent's or an unconsented one. Nothing was queued.
 	MailSendInternetWaits MailSendOutcome = "internet_waits"
-	// The deposit did not commit: send to this recipient again.
+	// The deposit or the queue did not commit: send to this recipient again.
 	MailSendFailed MailSendOutcome = "failed"
 )
 
-// What a Send is held to (MAIL-M7-18). Every value must be positive.
+// What a Send is held to (MAIL-M7-18, MAIL-M9-01). Every value must be positive.
 type MailSendSettings struct {
 	// The most distinct recipients one send names: a deposit's trailer holds at most ingest's 100
 	// (MailIngestSettings.RecipientMaxCount, §20.4's mail_inbound_recipients), which a repo of all of them must pass.
@@ -96,6 +111,9 @@ type MailSendSettings struct {
 	// The most bytes of the text, before encoding: far under a deposit's 50 MiB bound
 	// (MailIngestSettings.DepositMaxByteCount), since quoted-printable may triple it.
 	TextMaxByteCount int
+	// The most bytes of a submitted message (SubmitMessage): the deposit's 50 MiB (§20.4's largest
+	// mail_inbound_message_bytes), which a same-network recipient's reader must open.
+	MessageMaxByteCount int
 	// The most bytes of the preview a send's mail_send action shows an approver (mail_send_gate.go): the canonical
 	// action's own bound, CanonicalActionSettings.PreviewMaxByteCount (§16.8's 2 KiB). A larger value builds an
 	// action NewCanonicalAction refuses, so the send is refused rather than its preview cut short.
@@ -109,6 +127,7 @@ func DefaultMailSendSettings() *MailSendSettings {
 		AddressMaxByteCount: 254,
 		SubjectMaxByteCount: 512,
 		TextMaxByteCount:    8 * 1024 * 1024,
+		MessageMaxByteCount: 50 * 1024 * 1024,
 		PreviewMaxByteCount: DefaultCanonicalActionSettings().PreviewMaxByteCount,
 	}
 }
@@ -116,7 +135,7 @@ func DefaultMailSendSettings() *MailSendSettings {
 // Whether every value is in range.
 func (self *MailSendSettings) valid() bool {
 	return self != nil && 0 < self.RecipientMaxCount && 0 < self.AddressMaxByteCount && 0 < self.SubjectMaxByteCount &&
-		0 < self.TextMaxByteCount && 0 < self.PreviewMaxByteCount
+		0 < self.TextMaxByteCount && 0 < self.MessageMaxByteCount && 0 < self.PreviewMaxByteCount
 }
 
 // What Send sends.
@@ -130,6 +149,10 @@ type MailSendArgs struct {
 	// The subject and the plain-text body, UTF-8.
 	Subject string
 	Text    string
+	// What the outward action carries to the gate (I-8) when the send needs one: the run and agent a decision binds,
+	// nil for a person's own command or a host's submission, which are no run and so untainted (§16.6's spend step
+	// 1), the agent's words and a decision in hand.
+	Action MailConfigActionArgs
 }
 
 // One recipient's outcome.
@@ -147,6 +170,8 @@ type MailSendResult struct {
 	Recipients []*MailSendRecipient
 	// Whether the sent copy was kept in this device's member's mailbox.
 	SentCopy bool
+	// The o/ entry's key, which names its or/ outcomes too; empty where nothing was queued.
+	EffectKey []byte
 }
 
 // The recipients Delivered, in order.
@@ -174,6 +199,14 @@ func (self *MailClient) sendSettings() *MailSendSettings {
 	return DefaultMailSendSettings()
 }
 
+// What a send carries: a draft whose message Send builds, or the bytes a submission handed in.
+type mailSendContent struct {
+	// A draft; nil for a submission.
+	draft *MailSendArgs
+	// A submission's message as its client wrote it; nil for a draft.
+	raw []byte
+}
+
 // What a send is held to before anything is kept or deposited: the binding and its parts, the zone's row, the
 // authority and the deposits over them, the From in its one form with its domain, and the distinct recipients.
 type mailSendPlan struct {
@@ -185,16 +218,59 @@ type mailSendPlan struct {
 	fromAddress string
 	fromDomain  string
 	recipients  []string
+	// A burner reply's <blabel>, empty for any other send: BURNER's rules and flag apply (MAIL-M9-03).
+	burnerLabel string
 }
 
-// Holds args to what a send needs before it keeps or deposits anything (see the file header): its shape and bounds,
-// the zone, and a From of this network that policy lets this device send as. Send and SubmitSend both start here,
-// so a send the gate holds was refused for none of these. An error names no address.
+// The recipients that are not this network's, in order.
+func (self *mailSendPlan) outsideRecipients() []string {
+	outside := []string{}
+	for _, address := range self.recipients {
+		if _, own := mailSendOwnRecipient(self.row, address); !own {
+			outside = append(outside, address)
+		}
+	}
+	return outside
+}
+
+// The deposit of repoId over binding and parts: a test's where its parts stand in, else the bound EvsClient's. Nil
+// where there is none.
+func mailSendDepositRepoOf(binding *MailBinding, parts mailClientParts, repoId Id) mailSendDepositRepo {
+	if sendParts, ok := parts.(mailSendParts); ok {
+		return sendParts.depositRepo(repoId)
+	}
+	if binding.Evs == nil {
+		return nil
+	}
+	if repo := binding.Evs.Repo(repoId); repo != nil {
+		return repo
+	}
+	return nil
+}
+
+// Holds args to what a draft's send needs before it keeps or deposits anything (see the file header): its shape and
+// bounds, the zone, and a From of this network that policy lets this device send as. Send and SubmitSend both start
+// here, so a send the gate holds was refused for none of these. An error names no address.
 func (self *MailClient) planSend(args *MailSendArgs) (*mailSendPlan, error) {
 	settings := self.sendSettings()
 	if args == nil {
 		return nil, fmt.Errorf("%w: no message", ErrMailSendInvalid)
 	}
+	recipients, err := mailSendRecipients(args, settings)
+	if err != nil {
+		return nil, err
+	}
+	if strings.ContainsAny(args.Subject, "\r\n") || settings.SubjectMaxByteCount < len(args.Subject) || !utf8.ValidString(args.Subject) ||
+		settings.TextMaxByteCount < len(args.Text) || !utf8.ValidString(args.Text) {
+		return nil, fmt.Errorf("%w: a subject or text out of shape", ErrMailSendInvalid)
+	}
+	return self.planSendFrom(args.From, recipients, "")
+}
+
+// What a send from fromText to recipients, distinct and lowercase, is held to: the zone, and a From of this network
+// that policy lets this device send as. burnerLabel, a reply's, holds a burner's From to its live label in this
+// member's mailbox instead (MailClient.Reply).
+func (self *MailClient) planSendFrom(fromText string, recipients []string, burnerLabel string) (*mailSendPlan, error) {
 	binding, parts, _, err := self.state()
 	if err != nil {
 		return nil, err
@@ -206,15 +282,6 @@ func (self *MailClient) planSend(args *MailSendArgs) (*mailSendPlan, error) {
 	if row.Root == "" || row.Label == "" {
 		return nil, ErrMailConfigNoZone
 	}
-	recipients, err := mailSendRecipients(args, settings)
-	if err != nil {
-		return nil, err
-	}
-	if strings.ContainsAny(args.Subject, "\r\n") || settings.SubjectMaxByteCount < len(args.Subject) || !utf8.ValidString(args.Subject) ||
-		settings.TextMaxByteCount < len(args.Text) || !utf8.ValidString(args.Text) {
-		return nil, fmt.Errorf("%w: a subject or text out of shape", ErrMailSendInvalid)
-	}
-
 	authority := MailSendAuthority(&MailSendAclAuthority{
 		Engine: binding.Engine,
 		Root:   row.Root,
@@ -223,38 +290,39 @@ func (self *MailClient) planSend(args *MailSendArgs) (*mailSendPlan, error) {
 		},
 		Clock: self.clock,
 	})
-	depositRepo := func(repoId Id) mailSendDepositRepo {
-		if binding.Evs == nil {
-			return nil
-		}
-		if repo := binding.Evs.Repo(repoId); repo != nil {
-			return repo
-		}
-		return nil
-	}
 	if sendParts, ok := parts.(mailSendParts); ok {
 		authority = sendParts.sendAuthority()
-		depositRepo = sendParts.depositRepo
 	}
 
 	// from: one of the network's own addresses, which policy lets this device send as
-	from, err := ParseMailRecipient(row.Root, args.From)
-	if err != nil || !from.Zone.OfNetwork(row) || (from.Kind != MailAddressKindName && from.Kind != MailAddressKindAdmin) {
+	from, err := ParseMailRecipient(row.Root, fromText)
+	if err != nil || !from.Zone.OfNetwork(row) {
 		return nil, ErrMailSendFromRefused
 	}
 	fromAddress := from.Address()
-	if !authority.MaySendAs(self.sidecarId, fromAddress) {
+	switch {
+	case burnerLabel != "":
+		// a reply's From is its burner's, held to the live label in this member's mailbox by the reply's caller
+		if from.Kind != MailAddressKindBurner || from.BurnerLabel != burnerLabel {
+			return nil, ErrMailSendFromRefused
+		}
+	case from.Kind != MailAddressKindName && from.Kind != MailAddressKindAdmin:
+		return nil, ErrMailSendFromRefused
+	case !authority.MaySendAs(self.sidecarId, fromAddress):
 		return nil, ErrMailSendFromRefused
 	}
 	return &mailSendPlan{
-		binding:     binding,
-		parts:       parts,
-		row:         row,
-		authority:   authority,
-		depositRepo: depositRepo,
+		binding:   binding,
+		parts:     parts,
+		row:       row,
+		authority: authority,
+		depositRepo: func(repoId Id) mailSendDepositRepo {
+			return mailSendDepositRepoOf(binding, parts, repoId)
+		},
 		fromAddress: fromAddress,
 		fromDomain:  from.Domain(),
 		recipients:  recipients,
+		burnerLabel: burnerLabel,
 	}, nil
 }
 
@@ -269,33 +337,64 @@ func mailSendOwnRecipient(row NetworkLabelRow, address string) (MailRecipient, b
 	return parsed, true
 }
 
-// Sends a message to this network's own addresses (see the file header). An error is the whole send's: nothing was
-// sent. Otherwise each recipient's outcome is in the answer, outside ones answered MailSendInternetWaits. It passes
-// no gate: mail to members is W. A host's submission, which holds mail to outside recipients for an I-8 approval,
-// is SubmitSend (mail_send_gate.go).
+// Sends a message to any recipient (see the file header): mail to members alone goes at once; one naming an internet
+// recipient, or a tainted run's, waits on §5.4's gate, answered *ApprovalPendingError with nothing kept, deposited or
+// queued while a person's decision is awaited. An error is the whole send's: nothing was sent. Otherwise each
+// recipient's outcome is in the answer.
 func (self *MailClient) Send(ctx context.Context, args *MailSendArgs) (*MailSendResult, error) {
 	plan, err := self.planSend(args)
 	if err != nil {
 		return nil, err
 	}
-	return self.deliverSend(ctx, args, plan)
+	draft := mailSendCopyArgs(args)
+	return self.sendPlanned(ctx, plan, &mailSendContent{draft: draft}, args.Action, func() (*mailSendPlan, error) {
+		return self.planSend(draft)
+	})
 }
 
-// Send's delivery of args once plan holds: the split, the resolution, the sent copy and the deposits.
-func (self *MailClient) deliverSend(ctx context.Context, args *MailSendArgs, plan *mailSendPlan) (*MailSendResult, error) {
+// A host's submission of a draft (ur daemon's mail.send, an app's Send): Send, which holds what is outward.
+func (self *MailClient) SubmitSend(ctx context.Context, args *MailSendArgs) (*MailSendResult, error) {
+	return self.Send(ctx, args)
+}
+
+// The send once planned: at once where it is W, else through the gate (the file header's gate row), whose effect
+// plans it again with replan at the spend.
+func (self *MailClient) sendPlanned(ctx context.Context, plan *mailSendPlan, content *mailSendContent, action MailConfigActionArgs, replan func() (*mailSendPlan, error)) (*MailSendResult, error) {
+	outside := plan.outsideRecipients()
+	tainted := action.RunId != nil && plan.binding.RunTainted != nil && plan.binding.RunTainted(*action.RunId)
+	if len(outside) == 0 && !tainted {
+		return self.deliverSend(ctx, plan, content, nil)
+	}
+	if 0 < len(outside) && !tainted && self.ApprovedRecipients().ApprovedAll(ctx, plan.fromAddress, outside) {
+		// W by approval records alone: no use of the gate's, so a key of its own names the entry
+		return self.deliverSend(ctx, plan, content, mailSendStandingEffectKey())
+	}
+	return self.gatedSend(ctx, plan, content, action, replan)
+}
+
+// A fresh 32-byte effect key, for a send that keeps no use of the gate's: a standing grant's, or one records approve.
+func mailSendStandingEffectKey() []byte {
+	first, second := NewEvsRandomToken(), NewEvsRandomToken()
+	return append(first[:], second[:]...)
+}
+
+// The delivery of content once plan holds: the split, the resolution, the burner rules, the sent copy, the deposits
+// and the queue. effectKey is the use's, nil for a send to members alone, which queues nothing.
+func (self *MailClient) deliverSend(ctx context.Context, plan *mailSendPlan, content *mailSendContent, effectKey []byte) (*MailSendResult, error) {
 	row, authority, fromAddress := plan.row, plan.authority, plan.fromAddress
 
 	// split and resolve
-	result := &MailSendResult{SendId: NewId()}
+	result := &MailSendResult{}
 	targets := []*mailSendTarget{}
 	targetIndexes := map[*MailSendRecipient]int{}
+	outside := []*MailSendRecipient{}
 	var config *MailConfig
 	for _, address := range plan.recipients {
 		recipient := &MailSendRecipient{Address: address, Outcome: MailSendInternetWaits}
 		result.Recipients = append(result.Recipients, recipient)
 		parsed, own := mailSendOwnRecipient(row, address)
 		if !own {
-			// outside this network: §14's path, from M9
+			outside = append(outside, recipient)
 			continue
 		}
 		var err error
@@ -324,35 +423,124 @@ func (self *MailClient) deliverSend(ctx context.Context, args *MailSendArgs, pla
 		targets[index].recipients = append(targets[index].recipients, parsed.Address())
 		targetIndexes[recipient] = index
 	}
-	if len(targets) == 0 {
-		// nothing to deposit: no copy is kept of a message that went nowhere
+
+	// the queue, where internet mail may go from here
+	var queue mailSendQueue
+	if 0 < len(outside) {
+		var refused MailSendOutcome
+		if len(effectKey) != mailEffectKeyByteCount {
+			// no use to queue under: never reached by a send the gate passed
+			refused = MailSendInternetWaits
+		} else {
+			queue, refused = self.prepareQueue(ctx, plan)
+		}
+		if queue == nil {
+			for _, recipient := range outside {
+				recipient.Outcome = refused
+			}
+			outside = nil
+		}
+	}
+	if len(targets) == 0 && len(outside) == 0 {
+		// nothing to deposit or queue: no copy is kept of a message that went nowhere
 		return result, nil
 	}
 
 	now := self.clock.Now()
-	message, err := mailSendBuildMessage(args, fromAddress, plan.fromDomain, result.SendId, now)
+	// mail that leaves the network names a random id (MailOutboxMessageId); mail to members alone keeps an id's time
+	result.SendId = NewId()
+	messageDomain := plan.fromDomain
+	messageId := strings.ToLower(result.SendId.String()) + "@" + messageDomain
+	if queue != nil {
+		result.SendId = newMailOutboxSendId()
+		messageId = MailOutboxMessageId(result.SendId, messageDomain)
+	}
+	message, err := content.message(fromAddress, messageId, now)
 	if err != nil {
 		return nil, err
 	}
-	// copy: before any deposit, so one that cannot be kept sends nothing
-	if mailboxId, err := self.mailboxId(); err == nil && authority.Writes(self.sidecarId, mailboxId) {
+	flags := uint32(0)
+	if plan.burnerLabel != "" {
+		// step 3, before the copy, so the copy is what went
+		if message, err = self.burnerHeaders().Apply(message, &MailBurnerHeadersArgs{MessageId: messageId, Now: now}); err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrMailSendInvalid, err)
+		}
+		flags |= SmtpFlagBurner
+	}
+	// what leaves this device for another reader names no Bcc
+	sendable := mailSendStripBcc(message)
+
+	// copy: before any deposit or queue, so one that cannot be kept sends nothing
+	mailboxId, mailboxErr := self.mailboxId()
+	if mailboxErr == nil && authority.Writes(self.sidecarId, mailboxId) {
 		if err := self.keepSentCopy(ctx, plan.parts.store(mailboxId), result.SendId, message, fromAddress, now); err != nil {
 			return nil, fmt.Errorf("%w: %w", ErrMailSendCopyFailed, err)
 		}
 		result.SentCopy = true
 	}
-	outcomes := mailSendDeposit(ctx, plan.depositRepo, message, fromAddress, targets)
+	outcomes := mailSendDeposit(ctx, plan.depositRepo, sendable, fromAddress, targets)
 	for recipient, index := range targetIndexes {
 		recipient.Outcome = outcomes[index]
 	}
+	if queue != nil && 0 < len(outside) {
+		addresses := make([]string, 0, len(outside))
+		for _, recipient := range outside {
+			addresses = append(addresses, recipient.Address)
+		}
+		outcome := queue.queue(ctx, &mailSendQueueArgs{
+			effectKey:  effectKey,
+			recipients: addresses,
+			message:    sendable,
+			flags:      flags,
+			notAfter:   mailSendApprovalNotAfter(ctx),
+		})
+		for _, recipient := range outside {
+			recipient.Outcome = outcome
+		}
+		if outcome == MailSendQueued {
+			result.EffectKey = append([]byte(nil), effectKey...)
+		}
+	}
 	return result, nil
+}
+
+// The Message-ID an internet send names, <id>@<domain>: id the lowercase base32 of the send's 16 bytes, which a
+// send draws at random for mail that leaves the network (§14.6's 26 base32 random characters), so the entry tells
+// Lookup its send and the id tells a recipient nothing of the device, its clock or another message.
+func MailOutboxMessageId(sendId Id, domain string) string {
+	return mailBinaryName(sendId[:]) + "@" + domain
+}
+
+// A send id drawn at random, for MailOutboxMessageId.
+func newMailOutboxSendId() Id {
+	return Id(NewEvsRandomToken())
+}
+
+// What one queue step is given.
+type mailSendQueueArgs struct {
+	effectKey  []byte
+	recipients []string
+	message    []byte
+	flags      uint32
+	notAfter   time.Time
+}
+
+// Where a send's internet mail goes: the member's outbox on the legs that send mail (mail_send_queue.go).
+type mailSendQueue interface {
+	// Queues args' message for its internet recipients: MailSendQueued, or the outcome they answer instead.
+	queue(ctx context.Context, args *mailSendQueueArgs) MailSendOutcome
 }
 
 // The distinct recipients of args, lowercase, To then Cc then Bcc, each parsing as a bare RFC 5322 address, within
 // the settings' bounds.
 func mailSendRecipients(args *MailSendArgs, settings *MailSendSettings) ([]string, error) {
+	return mailSendAddressList(settings, args.To, args.Cc, args.Bcc)
+}
+
+// The distinct addresses of lists, lowercase and in order, each a bare RFC 5322 address within settings' bounds.
+func mailSendAddressList(settings *MailSendSettings, lists ...[]string) ([]string, error) {
 	recipients := []string{}
-	for _, list := range [][]string{args.To, args.Cc, args.Bcc} {
+	for _, list := range lists {
 		for _, address := range list {
 			address = dnsAsciiLower(strings.TrimSpace(address))
 			if address == "" || settings.AddressMaxByteCount < len(address) || strings.ContainsAny(address, "\r\n<>,") {
@@ -376,8 +564,22 @@ func mailSendRecipients(args *MailSendArgs, settings *MailSendSettings) ([]strin
 	return recipients, nil
 }
 
-// The message a send deposits and keeps: plain text, UTF-8, quoted-printable, CRLF lines (see the file header).
+// The message content sends: a draft's built under messageId, or a submission's as its client wrote it.
+func (self *mailSendContent) message(fromAddress string, messageId string, now time.Time) ([]byte, error) {
+	if self.draft == nil {
+		return bytes.Clone(self.raw), nil
+	}
+	return mailSendBuildMessageWithId(self.draft, fromAddress, messageId, now)
+}
+
+// The message a send deposits and keeps: plain text, UTF-8, quoted-printable, CRLF lines (see the file header), its
+// Message-ID the send id under the From's domain.
 func mailSendBuildMessage(args *MailSendArgs, fromAddress string, fromDomain string, sendId Id, now time.Time) ([]byte, error) {
+	return mailSendBuildMessageWithId(args, fromAddress, strings.ToLower(sendId.String())+"@"+fromDomain, now)
+}
+
+// mailSendBuildMessage with its Message-ID's addr-spec.
+func mailSendBuildMessageWithId(args *MailSendArgs, fromAddress string, messageId string, now time.Time) ([]byte, error) {
 	lowerAll := func(addresses []string) []string {
 		lowered := []string{}
 		for _, address := range addresses {
@@ -405,7 +607,7 @@ func mailSendBuildMessage(args *MailSendArgs, fromAddress string, fromDomain str
 		header("Subject", mime.QEncoding.Encode("utf-8", args.Subject))
 	}
 	header("Date", now.UTC().Format(time.RFC1123Z))
-	header("Message-ID", "<"+strings.ToLower(sendId.String())+"@"+fromDomain+">")
+	header("Message-ID", "<"+messageId+">")
 	header("MIME-Version", "1.0")
 	header("Content-Type", "text/plain; charset=utf-8")
 	header("Content-Transfer-Encoding", "quoted-printable")
@@ -424,6 +626,38 @@ func mailSendBuildMessage(args *MailSendArgs, fromAddress string, fromDomain str
 		message.WriteString("\r\n")
 	}
 	return message.Bytes(), nil
+}
+
+// message without any Bcc field of its header, the rest byte for byte: what leaves this device for a recipient's
+// reader. A message with no header end is handed back whole, since it has no field to strip.
+func mailSendStripBcc(message []byte) []byte {
+	headerEnd := bytes.Index(message, []byte("\r\n\r\n"))
+	lineEnd := []byte("\r\n")
+	if headerEnd < 0 {
+		if headerEnd = bytes.Index(message, []byte("\n\n")); headerEnd < 0 {
+			return message
+		}
+		lineEnd = []byte("\n")
+	}
+	header := message[:headerEnd+len(lineEnd)]
+	stripped := make([]byte, 0, len(message))
+	inBcc := false
+	for 0 < len(header) {
+		line := header
+		if index := bytes.Index(header, lineEnd); 0 <= index {
+			line = header[:index+len(lineEnd)]
+		}
+		header = header[len(line):]
+		folded := 0 < len(line) && (line[0] == ' ' || line[0] == '\t')
+		if !folded {
+			name, _, _ := bytes.Cut(line, []byte(":"))
+			inBcc = strings.EqualFold(strings.TrimSpace(string(name)), "bcc")
+		}
+		if !inBcc {
+			stripped = append(stripped, line...)
+		}
+	}
+	return append(stripped, message[headerEnd+len(lineEnd):]...)
 }
 
 // Keeps message as the send's copy in store, this device's member's mailbox: its m/ file and i/ row in one push, then

@@ -26,6 +26,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 var (
@@ -247,7 +249,14 @@ func (self *MailClient) bindFromSidecar(ctx context.Context, env *SidecarEnv) {
 	}
 	if env != nil && env.SidecarApi != nil {
 		binding.Api = env.SidecarApi
+		// internet mail's send gate reads the standing before anything is queued (D-SMTP-14)
+		binding.Standing = env.SidecarApi.AbuseStatus
 	}
+	// an outbox entry is signed by this device's identity key (plan-SMTP-wire-gaps#4)
+	binding.Sign = func(purpose string, signedType bridge.SignedType, body []byte) (*bridge.Signed, error) {
+		return sidecar.Sign(purpose, signedType, body, nil)
+	}
+	binding.RunTainted = sidecar.RunTainted
 	if dns, err := sidecar.Dns(); err == nil {
 		if zone, err := dns.Zone(ctx); err == nil {
 			self.setNetworkRow(NetworkLabelRow{

@@ -116,6 +116,9 @@ type mailStoreWrite struct {
 	// versionless in the format2 gate and versioned in a locked mailbox; EvsReservedNone, the rest, keeping each path's
 	// setting.
 	Reserved EvsReservedWriter
+	// Removes the path instead of writing it, Content unread: an outbox entry once sent and an expired outcome record
+	// (mail_smtp_mailbox.go). Held to IfVersion as a write is, and a removed path reads absent, its version 0.
+	Remove bool
 }
 
 // One mail repo's file-mode ref, by path. Implementations are safe for concurrent use.
@@ -190,6 +193,10 @@ func (self *mailEvsStore) List(ctx context.Context, directory string) ([]string,
 func (self *mailEvsStore) Write(ctx context.Context, writes []*mailStoreWrite) ([]uint64, error) {
 	pathWrites := make([]*EvsPathWrite, len(writes))
 	for i, write := range writes {
+		if write.Remove {
+			pathWrites[i] = &EvsPathWrite{Path: write.Path, Remove: true, IfVersion: &write.IfVersion}
+			continue
+		}
 		pathWrites[i] = &EvsPathWrite{Path: write.Path, Content: bytes.NewReader(write.Content), IfVersion: &write.IfVersion, Outside: write.Outside}
 		if write.Reserved != EvsReservedNone {
 			pathWrites[i].Options = self.reservedOptions(write.Reserved)
