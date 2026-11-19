@@ -15,6 +15,7 @@
 package sidecar
 
 import (
+	"cmp"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -101,17 +102,22 @@ func (self *searchCursorTable) open(session Id, stream *searchEngineStream) (str
 	dropped := func() []*searchCursor {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		self.cursors[id] = &searchCursor{id: id, session: session, stream: stream, openedAt: now, usedAt: now}
+		// the session's other cursors, the oldest used first, the oldest opened first among those used at one instant: the
+		// one just opened is never among those dropped, though a clock that has not moved since the others opened ties
+		// it with every one of them
 		held := []*searchCursor{}
 		for _, cursor := range self.cursors {
 			if cursor.session == session {
 				held = append(held, cursor)
 			}
 		}
+		self.cursors[id] = &searchCursor{id: id, session: session, stream: stream, openedAt: now, usedAt: now}
 		dropped := []*searchCursor{}
-		if count := self.settings.SessionCursorCount; count < len(held) {
-			slices.SortFunc(held, func(a *searchCursor, b *searchCursor) int { return a.usedAt.Compare(b.usedAt) })
-			for _, cursor := range held[:len(held)-count] {
+		if count := self.settings.SessionCursorCount; count < len(held)+1 {
+			slices.SortFunc(held, func(a *searchCursor, b *searchCursor) int {
+				return cmp.Or(a.usedAt.Compare(b.usedAt), a.openedAt.Compare(b.openedAt))
+			})
+			for _, cursor := range held[:min(len(held), len(held)+1-count)] {
 				delete(self.cursors, cursor.id)
 				dropped = append(dropped, cursor)
 			}
