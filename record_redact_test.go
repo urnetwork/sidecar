@@ -235,6 +235,23 @@ func TestRedactSharedScanAndPii(t *testing.T) {
 	}
 }
 
+// An identifier field that matches anything becomes its first match's shared marker whole, its matches reported for
+// the caller's gaps; one that matches nothing, or a marker already, is left as it is (MCP-M10-02; §16.11's redaction
+// row).
+func TestRedactFieldWhole(t *testing.T) {
+	text, _, _ := expandRedactTestText(t, "src/ghp_{alnum:36}/main.go", 6)
+	redactor := newTestRedactor(t)
+	field, matches := redactor.RedactField([]byte(text))
+	if string(field) != "[REDACTED:github-pat]" || len(matches) != 1 || matches[0].Rule != "github-pat" {
+		t.Errorf("a field %q, %+v", field, matches)
+	}
+	for _, kept := range []string{"src/main.go", "claude-opus", "[REDACTED:github-pat]"} {
+		if field, matches := redactor.RedactField([]byte(kept)); string(field) != kept || len(matches) != 0 {
+			t.Errorf("%q became %q (%+v)", kept, field, matches)
+		}
+	}
+}
+
 // No match, and so no error or log built from one, carries the value it covers.
 func TestRedactMatchesCarryNoValue(t *testing.T) {
 	text, start, end := expandRedactTestText(t, "STRIPE_KEY=«sk_live_{alnum:24}»\n", 11)

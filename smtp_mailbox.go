@@ -54,11 +54,13 @@ type SmtpMailbox interface {
 	// One or/ record's outcomes, or ErrSmtpMailboxNotFound.
 	ReadOutcomes(ctx context.Context, effectKey []byte) ([]*SmtpDomainOutcome, error)
 
-	// Rewrites p/<sidecar_id> with a prover host's latest measurement (§15.10).
-	WriteProverMeasure(ctx context.Context, sidecarId Id, measure *SmtpProverMeasure) error
-	// Every p/ record, by the sidecar that wrote it. A caller picks from them only hosts it checked
-	// are the member's consented devices (§8.5; owner decision 126).
-	ListProverMeasures(ctx context.Context) (map[Id]*SmtpProverMeasure, error)
+	// Rewrites p/<sidecar_id> with a prover host's latest record: its measure, its key set and its ready
+	// suites (§15.10, DESIGN-DETAILS 3.7's SMTP-M9-09), as MailProverRecord through SmtpProverRecord's
+	// MailProverRecord.
+	WriteProverRecord(ctx context.Context, sidecarId Id, record *SmtpProverRecord) error
+	// Every p/ record, by the sidecar that wrote it, read back through SmtpProverRecordFromMail. A caller
+	// picks from them only hosts it checked are the member's consented devices (§8.5; owner decision 126).
+	ListProverRecords(ctx context.Context) (map[Id]*SmtpProverRecord, error)
 
 	// Deposits an RFC 3464 DSN for the o/ entry effectKey names into this mailbox, as a received
 	// message is deposited (§15.10's last line). One effect key may get several DSNs, one per send

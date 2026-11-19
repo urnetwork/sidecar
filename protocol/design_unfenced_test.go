@@ -609,9 +609,11 @@ message MailOutcome {
   uint32 tls_level = 9;
 }
 message MailOutcomeRecord { repeated MailOutcome outcomes = 1; }
-// §15.7's p/ row.
+// §15.7's p/ row, with DESIGN-DETAILS 3.7's fields for SMTP-M9-09 in the order it writes them.
 message MailProverRecord {
   uint64 smtp_data_proof_bytes = 1; uint64 data_bytes_per_s = 2; uint64 measure_time_ms = 3;
+  uint64 unit_millis = 4; uint64 head_byte_count = 5; uint64 header_record_byte_count = 6;
+  uint64 envelope_group_count = 7; bytes key_set_id = 8; repeated uint32 ready_suites = 9;
 }
 // §15.7's s/model row and plan-MAIL-format-bytes#5's two fields, counts MAIL-M7-12's.
 message MailSpamModel { uint32 version = 1; repeated uint32 counts = 2; }

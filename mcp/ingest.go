@@ -27,8 +27,8 @@
 // bypass mode is recorded and gapped bypass_mode; voiding its harness evidence is MCP-M3-10's.
 //
 // Run-level drafts carry the vault's fields; RECORD's RecordProjectForTeam strips them at M6, so nothing here
-// branches on team mode. RunLifecycle is the seam MCP-M6-02 wires to DirectoryRuns, and RunCapture holds
-// MCP-M10-02's run-card inputs.
+// branches on team mode. RunLifecycle is the seam MCP-M6-02 wires to DirectoryRuns; RunCapture and RunCardSchedule
+// are the run card's inputs and cadence (ingest_runcard.go), every input redacted before it is sealed.
 //
 // Safe for concurrent use: stateLock guards the run table, each run's own lock its state, and neither is held across
 // Append, a scan or a call out.
@@ -84,7 +84,8 @@ type RunLifecycleStart struct {
 	Branch  string
 }
 
-// §16.10's run-card inputs, which MCP-M10-02 hands SEARCH-M10-29: all already redacted.
+// §16.10's run-card inputs as ingest captured them, all redacted: the values the run's entries carry, which its card
+// folds from the stream (ingest_runcard.go), as of one moment.
 type RunCapture struct {
 	RunId      sidecar.Id
 	Harness    string
@@ -123,8 +124,10 @@ type IngestArgs struct {
 	Home string
 	// §16.18's file events' watch (ingest_fsevents.go), cli's fsnotify; nil watches nothing.
 	FileWatch IngestFileWatch
-	// §16.8's record settings, for CoverageIdleTimeout. Nil takes the defaults.
+	// §16.8's record settings, for CoverageIdleTimeout and CardInterval. Nil takes the defaults.
 	Record *sidecar.SidecarRecordSettings
+	// What hears each run's card dues (ingest_runcard.go): the record log's companion schedule. Nil hears nothing.
+	RunCards RunCardSchedule
 }
 
 // A network whose record writer the daemon exposes: *sidecar.Sidecar through Record().Writer().
@@ -147,6 +150,9 @@ type Ingest struct {
 	fileWatch IngestFileWatch
 	// the worktrees watched for file events
 	fileEvents ingestFileEvents
+	// the run cards' schedule, nil for none, and the kinds a vault's card folds
+	runCards    RunCardSchedule
+	cardSources []sidecar.RecordKind
 
 	stateLock sync.Mutex
 	runs      map[restorePointKey]*ingestRun
@@ -202,6 +208,8 @@ func NewIngest(args *IngestArgs) *Ingest {
 		home:         args.Home,
 		fileWatch:    args.FileWatch,
 		fileEvents:   ingestFileEvents{rootWatches: map[string]*ingestRootWatch{}},
+		runCards:     args.RunCards,
+		cardSources:  ingestCardSources(),
 		runs:         map[restorePointKey]*ingestRun{},
 		lockedEvents: map[restoreLockedKey]int{},
 	}
@@ -229,6 +237,12 @@ type ingestRun struct {
 	tailStop func() bool
 	// whether the file needs writing
 	dirty bool
+	// the card's cadence (ingest_runcard.go): the moved due's timer, when the last due was, whether a source entry
+	// came since, and the dues waiting for the lock to be released
+	cardStop      func() bool
+	cardDueMillis int64
+	cardMoved     bool
+	cardDues      []*ingestCardDue
 }
 
 // The persisted part of a run's ingest state: enough for a restart to resume the tail, keep the hour's budget and
@@ -273,6 +287,8 @@ type ingestRunState struct {
 	BlobHashes []string `json:"blob_hashes"`
 	// the transcript's missing path was counted once
 	TranscriptGapped bool `json:"transcript_gapped"`
+	// the card's start due was heard: the run's first source entry was written
+	CardStarted bool `json:"card_started"`
 }
 
 // The run's state, made or read on first use: read back from the store after a restart, which counts downtime.
@@ -436,6 +452,8 @@ func (self *Ingest) appendEntryWithLock(ctx context.Context, run *ingestRun, ent
 		self.gap(ctx, run.network, run.networkId, run.runId, sidecar.RecordCoverageGapMissedEvent)
 		return nil, false
 	}
+	// a card source moves the run's card (ingest_runcard.go)
+	self.noteCardSourceWithLock(run, entry.kind)
 	var sealed *sidecar.RecordEntryRef
 	for _, ref := range refs {
 		if ref.Spooled {
@@ -470,6 +488,8 @@ func (self *Ingest) captureHook(ctx context.Context, captured *HookCaptured) err
 		self.log.Warningf("[ingest]a run's state could not be read: %s", err)
 		return nil
 	}
+	// once the lock below is released
+	defer self.deliverCardDues(ctx, run)
 	run.runLock.Lock()
 	defer run.runLock.Unlock()
 	defer self.saveRunWithLock(run)
@@ -516,7 +536,7 @@ func (self *Ingest) captureHook(ctx context.Context, captured *HookCaptured) err
 	}
 	self.captureHookModelCallWithLock(ctx, run, redactor, event, captured.Payload)
 	if event.Kind == HookEventPermissionRequest {
-		self.capturePermissionWithLock(ctx, run, event)
+		self.capturePermissionWithLock(ctx, run, redactor, event)
 	}
 	if event.Kind == HookEventUserPrompt {
 		self.capturePromptWithLock(ctx, run, redactor, event, captured.Payload)
@@ -613,26 +633,7 @@ func (self *Ingest) Capture(networkId sidecar.Id, runId sidecar.Id) *RunCapture 
 	}
 	run.runLock.Lock()
 	defer run.runLock.Unlock()
-	state := run.state
-	counts := map[string]int{}
-	for name, count := range state.ToolCounts {
-		counts[name] = count
-	}
-	return &RunCapture{
-		RunId:              runId,
-		Harness:            state.Harness,
-		AgentLabel:         state.AgentLabel,
-		Model:              state.Model,
-		Project:            state.Project,
-		Branch:             state.Branch,
-		Title:              state.Title,
-		ToolCounts:         counts,
-		TouchedPaths:       slices.Clone(state.TouchedPaths),
-		Prompts:            state.Prompts,
-		StartedMillis:      state.StartedMillis,
-		LastActivityMillis: state.LastActivityMillis,
-		EndedMillis:        state.EndedMillis,
-	}
+	return self.captureWithLock(run)
 }
 
 // The raw JSON value at name in a payload, as a string where it is one.

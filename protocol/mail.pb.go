@@ -2993,8 +2993,18 @@ type MailProverRecord struct {
 	SmtpDataProofBytes uint64                 `protobuf:"varint,1,opt,name=smtp_data_proof_bytes,json=smtpDataProofBytes,proto3" json:"smtp_data_proof_bytes,omitempty"`
 	DataBytesPerS      uint64                 `protobuf:"varint,2,opt,name=data_bytes_per_s,json=dataBytesPerS,proto3" json:"data_bytes_per_s,omitempty"` // the measured DATA rate
 	MeasureTimeMs      uint64                 `protobuf:"varint,3,opt,name=measure_time_ms,json=measureTimeMs,proto3" json:"measure_time_ms,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// DESIGN-DETAILS 3.7's SMTP-M9-09 fields, so a phone's composer prices a send in units (3.2.6): one unit's
+	// proving time for the ready family whose unit takes longest, the header octets the first message part and
+	// each later header part open, the commands one envelope group holds after the first, the key set the host
+	// proves under (keyset.json's SHA-256), and the TLS suites whose family is ready in it
+	UnitMillis            uint64   `protobuf:"varint,4,opt,name=unit_millis,json=unitMillis,proto3" json:"unit_millis,omitempty"`
+	HeadByteCount         uint64   `protobuf:"varint,5,opt,name=head_byte_count,json=headByteCount,proto3" json:"head_byte_count,omitempty"`
+	HeaderRecordByteCount uint64   `protobuf:"varint,6,opt,name=header_record_byte_count,json=headerRecordByteCount,proto3" json:"header_record_byte_count,omitempty"`
+	EnvelopeGroupCount    uint64   `protobuf:"varint,7,opt,name=envelope_group_count,json=envelopeGroupCount,proto3" json:"envelope_group_count,omitempty"`
+	KeySetId              []byte   `protobuf:"bytes,8,opt,name=key_set_id,json=keySetId,proto3" json:"key_set_id,omitempty"`
+	ReadySuites           []uint32 `protobuf:"varint,9,rep,packed,name=ready_suites,json=readySuites,proto3" json:"ready_suites,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *MailProverRecord) Reset() {
@@ -3046,6 +3056,48 @@ func (x *MailProverRecord) GetMeasureTimeMs() uint64 {
 		return x.MeasureTimeMs
 	}
 	return 0
+}
+
+func (x *MailProverRecord) GetUnitMillis() uint64 {
+	if x != nil {
+		return x.UnitMillis
+	}
+	return 0
+}
+
+func (x *MailProverRecord) GetHeadByteCount() uint64 {
+	if x != nil {
+		return x.HeadByteCount
+	}
+	return 0
+}
+
+func (x *MailProverRecord) GetHeaderRecordByteCount() uint64 {
+	if x != nil {
+		return x.HeaderRecordByteCount
+	}
+	return 0
+}
+
+func (x *MailProverRecord) GetEnvelopeGroupCount() uint64 {
+	if x != nil {
+		return x.EnvelopeGroupCount
+	}
+	return 0
+}
+
+func (x *MailProverRecord) GetKeySetId() []byte {
+	if x != nil {
+		return x.KeySetId
+	}
+	return nil
+}
+
+func (x *MailProverRecord) GetReadySuites() []uint32 {
+	if x != nil {
+		return x.ReadySuites
+	}
+	return nil
 }
 
 type MailSpamModel struct {
@@ -3312,11 +3364,19 @@ const file_protocol_mail_proto_rawDesc = "" +
 	"\x0eupdate_time_ms\x18\b \x01(\x04R\fupdateTimeMs\x12\x1b\n" +
 	"\ttls_level\x18\t \x01(\rR\btlsLevel\"O\n" +
 	"\x11MailOutcomeRecord\x12:\n" +
-	"\boutcomes\x18\x01 \x03(\v2\x1e.urnetwork.sidecar.MailOutcomeR\boutcomes\"\x96\x01\n" +
+	"\boutcomes\x18\x01 \x03(\v2\x1e.urnetwork.sidecar.MailOutcomeR\boutcomes\"\x8b\x03\n" +
 	"\x10MailProverRecord\x121\n" +
 	"\x15smtp_data_proof_bytes\x18\x01 \x01(\x04R\x12smtpDataProofBytes\x12'\n" +
 	"\x10data_bytes_per_s\x18\x02 \x01(\x04R\rdataBytesPerS\x12&\n" +
-	"\x0fmeasure_time_ms\x18\x03 \x01(\x04R\rmeasureTimeMs\"A\n" +
+	"\x0fmeasure_time_ms\x18\x03 \x01(\x04R\rmeasureTimeMs\x12\x1f\n" +
+	"\vunit_millis\x18\x04 \x01(\x04R\n" +
+	"unitMillis\x12&\n" +
+	"\x0fhead_byte_count\x18\x05 \x01(\x04R\rheadByteCount\x127\n" +
+	"\x18header_record_byte_count\x18\x06 \x01(\x04R\x15headerRecordByteCount\x120\n" +
+	"\x14envelope_group_count\x18\a \x01(\x04R\x12envelopeGroupCount\x12\x1c\n" +
+	"\n" +
+	"key_set_id\x18\b \x01(\fR\bkeySetId\x12!\n" +
+	"\fready_suites\x18\t \x03(\rR\vreadySuites\"A\n" +
 	"\rMailSpamModel\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\rR\aversion\x12\x16\n" +
 	"\x06counts\x18\x02 \x03(\rR\x06counts*\xb0\x01\n" +
