@@ -157,8 +157,10 @@ func (self *Verifier) NewSmtpProofSession(preamble *sidecar.SmtpProofPreamble) (
 // each set's fetched files, and cache/, what this host's own checks produced. Nothing is checked here:
 // PrepareKeys does it at idle, one shape at a time, and until a family is ready in a pinned set the
 // Prover names no key set and refuses every job, and a host with it queues its mail (D-SMTP-18). With no
-// pin it never names one.
+// pin it never names one. Every set's proofs load their shapes through one loader, within the settings'
+// memory budget (DESIGN-DETAILS 3.2.8).
 func NewProver(settings *ProverSettings, keySettings *KeySettings, pins [][]byte, directory string) *Prover {
-	keys := newProverKeys(settings.Proof, keySettings, pins, directory, productionKeySetCircuits(settings.Proof), defaultTlsClientSettings().suites)
+	keys := newProverKeys(settings.Proof, keySettings, pins, directory, productionKeySetCircuits(settings.Proof), settings.SuiteOrder)
+	keys.host.loader = newProverLoader(settings, sidecar.RealClock{})
 	return &Prover{settings: settings, backend: &proverKeysBackend{keys: keys}, keys: keys}
 }

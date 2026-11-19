@@ -149,7 +149,7 @@ func TestLaterPartOpensTheKeyPartsCommitment(t *testing.T) {
 			job := testJob("one line\r\nanother line\r\nand a third\r\n", "bob", "carol")
 			if data {
 				settings.ForceData = true
-				settings.DataPartBytes = 12
+				settings.testDataRecordByteCount = 12
 			}
 			capture := testCapture(t, leg, testMxDefaults(), settings, job)
 			for index := uint32(2); int(index) <= len(capture.statements); index += 1 {

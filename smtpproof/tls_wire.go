@@ -77,8 +77,6 @@ const (
 	tlsSchemeEd25519             uint16 = 0x0807
 	tlsAlertCloseNotify          uint8  = 0
 	tlsRecordHeaderBytes                = 5
-	tlsMaxPlaintextBytes                = 16 * 1024
-	tlsMaxCiphertextBytes               = 16*1024 + 256
 	tlsAeadTagBytes                     = 16
 	tlsExplicitNonceBytes               = 8
 	tlsRandomBytes                      = 32

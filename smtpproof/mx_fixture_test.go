@@ -102,7 +102,7 @@ func testMxModeSettings(data bool) *ProverSettings {
 	settings := DefaultProverSettings()
 	if data {
 		settings.ForceData = true
-		settings.DataPartBytes = 12
+		settings.testDataRecordByteCount = 12
 	}
 	return settings
 }

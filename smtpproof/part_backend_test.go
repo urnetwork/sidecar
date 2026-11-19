@@ -126,7 +126,7 @@ func testLaterPartShapes(t *testing.T, leg *testTlsLeg) []*partShape {
 	t.Helper()
 	settings := DefaultProverSettings()
 	settings.ForceData = true
-	settings.DataPartBytes = 12
+	settings.testDataRecordByteCount = 12
 	capture := testCapture(t, leg, testMxDefaults(), settings, testJob("one line\r\nanother line\r\nand a third\r\n", "bob", "carol"))
 	var shapes []*partShape
 	for _, statement := range capture.statements {

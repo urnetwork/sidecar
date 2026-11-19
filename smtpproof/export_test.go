@@ -92,7 +92,7 @@ func ExportCapture(t *testing.T, legIndex int, data bool) *ExportedCapture {
 	job := testJob("one line\r\nanother line\r\nand a third\r\n", "bob", "carol")
 	if data {
 		settings.ForceData = true
-		settings.DataPartBytes = 12
+		settings.testDataRecordByteCount = 12
 	}
 	send := testRunSend(t, leg, testMxDefaults(), settings, job)
 	testExpectOneTransaction(t, leg, send, job)

@@ -645,7 +645,7 @@ func TestZ8RequiresThe354(t *testing.T) {
 func TestZ8RefusesAReplyDuringTheMessage(t *testing.T) {
 	settings := DefaultProverSettings()
 	settings.ForceData = true
-	settings.DataPartBytes = 64
+	settings.testDataRecordByteCount = 64
 	for _, leg := range testTlsLegs() {
 		capture := testCapture(t, leg, testMxDefaults(), settings, testJob(strings.Repeat("a body line here\r\n", 12), "bob"))
 		statement, witness := capture.part(t, 4)
