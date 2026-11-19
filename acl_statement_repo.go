@@ -2,9 +2,11 @@
 // RepoRestore, RepoVersioning and RepoPrefixRules, each checked at its position here and folded by acl_access_log.go.
 //
 //	RepoCreate      general or record: a member device that is not read_only, or a tagged or ephemeral sidecar
-//	                under a rule giving it admin on evs:* or that repo, within §8.6's ceiling; team_record and
-//	                mailcfg: a config writer; vault, mailbox and secret: a consented device of the owner, its
-//	                member; directory: a config writer, once per network, and at api alone the team tier
+//	                under a rule giving it admin on evs:* or that repo, within §8.6's ceiling; team_record: a
+//	                config writer; mailcfg: a config writer, whose mailcfg is the network's and names no owner, or
+//	                a consented device of a member that writes no config heads, whose mailcfg is a Team scope's own
+//	                and owner-bound to that member (QD-1093); vault, mailbox and secret: a consented device of the
+//	                owner, its member; directory: a config writer, once per network, and at api alone the team tier
 //	                (AclStatementNeedsTeamTier); config: none, since §7.9's bootstrap creates it
 //	                (plan-ACL-small-readings #4)
 //	RepoAdmin       a repo admin or a config writer; in an owner-bound repo an add only by a consented device of its
@@ -178,9 +180,20 @@ func (self *AclState) checkRepoCreate(statement *AclStatement, create *protocol.
 		if signer.class != AclSubjectClassMemberDevice && !self.ruleGrantsRepoAdmin(signer, repoId, statement.TimeMs) {
 			return nil, fmt.Errorf("%w: a tagged or ephemeral sidecar creates a repo only under an admin rule", ErrConfigAuthority)
 		}
-	case protocol.RepoKind_REPO_KIND_TEAM_RECORD, protocol.RepoKind_REPO_KIND_MAILCFG:
+	case protocol.RepoKind_REPO_KIND_TEAM_RECORD:
 		if !signer.configWriter {
 			return nil, fmt.Errorf("%w: only a config writer creates a %s repo", ErrConfigAuthority, kind)
+		}
+	case protocol.RepoKind_REPO_KIND_MAILCFG:
+		// a config writer's is the network's and names no owner; any other member device's is a Team scope's own,
+		// owner-bound to its member as a mailbox is, so only a consented device of that member creates it (QD-1093)
+		verdict.ConfigWriter = signer.configWriter
+		if !signer.configWriter {
+			if signer.class != AclSubjectClassMemberDevice || !self.consentedSignerAt(signer, signer.memberId, statement.N) {
+				return nil, fmt.Errorf("%w: only a config writer or a consented device of its scope's member creates a %s repo", ErrConfigAuthority, kind)
+			}
+			verdict.MemberId = signer.memberId
+			verdict.ConsentedSidecarIds = self.consentedSidecarIds(signer.memberId)
 		}
 	case protocol.RepoKind_REPO_KIND_VAULT, protocol.RepoKind_REPO_KIND_MAILBOX, protocol.RepoKind_REPO_KIND_SECRET:
 		if signer.class != AclSubjectClassMemberDevice || !self.consentedSignerAt(signer, signer.memberId, statement.N) {

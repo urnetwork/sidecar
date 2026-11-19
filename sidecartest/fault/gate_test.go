@@ -106,8 +106,8 @@ func TestGateFileNamesEachCasesConventionalTests(t *testing.T) {
 		// forged: T2 alone, and its twin on T3
 		{gate: "M2", rowId: "FS-17", t2: "TestFs17", t3: "TestFs17OnT3"},
 		// T3 alone (FS-5 was the example until M2's sweep named its test in evshost, FS-35 until M6's named its test
-		// in tlsedge)
-		{gate: "M5", rowId: "FS-52", t3: "TestFs52OnT3"},
+		// in tlsedge, FS-52 until M5's named its test in cli/dns)
+		{gate: "M2", rowId: "FS-40", t3: "TestFs40OnT3"},
 		// FS-46 at M6's entry was the example until M6's sweep named its owners' tests
 		{gate: "M6", rowId: "FS-98", caseName: "team", t2: "TestFs98Team", t3: "TestFs98TeamOnT3"},
 	} {

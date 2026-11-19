@@ -5,13 +5,19 @@ package sidecar
 // A Team scope's mail on a device (MAIL-M8-09; §22.7's scope rows): a device receives for a member scope only under
 // team_mail: member scopes and only as a consented device of the scope's member, a tag scope taking none; a reader
 // alarms on a scope deposit from any other receiver and on one whose scope it cannot resolve; the network's mailcfg is
-// never a scope's, and a scope's is its member's; and a scope's addresses are spelled and parsed under its own zone.
+// never a scope's, and a scope's is its member's; a scope member's device creates its scope's mailcfg and its receiver
+// starts on it, where a device outside the scope reads none of it (QD-1093); and a scope's addresses are spelled and
+// parsed under its own zone.
 
 import (
+	"context"
+	"errors"
+	"net/http"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
@@ -180,5 +186,166 @@ func TestMailScopeAddressesSpellUnderTheScope(t *testing.T) {
 	}
 	if _, err := ParseMailRecipient("root.example", "bo@deep.eng.acme.root.example"); err == nil {
 		t.Error("a name deeper than a scope parsed")
+	}
+}
+
+// A scope's receiver starts on its scope's own mailcfg (QD-1093): with none in the log the member's device plans no
+// receiver, though it may listen; its setup creates the mailcfg, which the log binds to the member; the receiver is then
+// planned with that mailcfg and starts on smtp/25/mx.<scope>, publishing its key under mx.<scope>. A device outside the
+// scope plans none, creates none and reads none of it, a config writer's included, and a scope whose member's devices
+// write config heads stays unplanned, nothing filed.
+func TestMailScopeReceiverStartsOnItsScopesOwnMailcfg(t *testing.T) {
+	net := newTestConfigNet(t)
+	net.setTeamMail(protocol.TeamMailMode_TEAM_MAIL_MODE_MEMBER_SCOPES)
+	memberScopes := net.log.State()
+
+	world := newMailReposTestWorld(t)
+	fixture := world.fixture
+	owner, ownerDevice := fixture.memberWithDevice(bridge.MemberRole_MEMBER_ROLE_OWNER)
+	member, memberDevice := fixture.memberWithDevice(bridge.MemberRole_MEMBER_ROLE_MEMBER)
+	other, otherDevice := fixture.memberWithDevice(bridge.MemberRole_MEMBER_ROLE_MEMBER)
+	listen := protocol.AclAction_ACL_ACTION_LISTEN
+	for _, device := range []Id{memberDevice, otherDevice, ownerDevice} {
+		fixture.rule([]Id{fixture.sidecarAtom(device)}, []*protocol.AclTarget{
+			{PublicName: "smtp/25/mx.eng"}, {PublicName: "smtp/25/mx.sales"}, {PublicName: "smtp/25/mx.adm"},
+		}, listen)
+	}
+	world.rebuild()
+	scopes := []AclScope{{Label: "eng", MemberId: member}, {Label: "adm", MemberId: owner}}
+	now := aclTestNow
+	ctx := context.Background()
+
+	// no mailcfg yet: the device may listen for its scope, and plans no receiver
+	if hosts := MailScopeReceiverHosts(memberScopes, world.state(), scopes, memberDevice, now); !slices.Equal(hosts, []string{"mx.eng"}) {
+		t.Fatalf("the member's device receives for %v", hosts)
+	}
+	if plans := MailScopeReceiverPlans(memberScopes, world.state(), scopes, memberDevice, now); len(plans) != 0 {
+		t.Fatalf("a receiver planned with no scope mailcfg: %+v", plans)
+	}
+
+	// a device outside the scope creates nothing for it and plans nothing
+	plans, err := world.repos(otherDevice).EnsureScopeReceivers(ctx, memberScopes, scopes, now)
+	if err != nil || len(plans) != 0 || world.filedCount(bridge.SignedType_SIGNED_REPO_CREATE) != 0 {
+		t.Fatalf("another member's device set the scope up: %+v, %v", plans, err)
+	}
+	// a scope whose member's devices write config heads gets no mailcfg this way: nothing is filed, since the log would
+	// read it as the network's
+	plans, err = world.repos(ownerDevice).EnsureScopeReceivers(ctx, memberScopes, scopes, now)
+	if !errors.Is(err, ErrMailReposConfigWriter) || len(plans) != 0 || world.filedCount(bridge.SignedType_SIGNED_REPO_CREATE) != 0 {
+		t.Fatalf("a config writer's scope: %+v, %v", plans, err)
+	}
+
+	// the member's device sets its scope up
+	plans, err = world.repos(memberDevice).EnsureScopeReceivers(ctx, memberScopes, scopes, now)
+	if err != nil || len(plans) != 1 {
+		t.Fatalf("the member's device's setup: %+v, %v", plans, err)
+	}
+	plan := plans[0]
+	scopeConfigId, found := world.repos(memberDevice).ScopeMailConfigRepo(member)
+	if !found || plan.MailConfigRepoId != scopeConfigId || plan.Host != "mx.eng" || plan.Scope.Label != "eng" || plan.ListenName() != "smtp/25/mx.eng" {
+		t.Fatalf("the plan %+v, the scope's mailcfg %s %t", plan, scopeConfigId, found)
+	}
+	if row := world.state().Repo(scopeConfigId); row.GetKind() != protocol.RepoKind_REPO_KIND_MAILCFG || Id(row.GetOwnerMemberId()) != member {
+		t.Fatalf("the scope mailcfg's row: %+v", row)
+	}
+	// a second pass finds it and files nothing more
+	again, err := world.repos(memberDevice).EnsureScopeReceivers(ctx, memberScopes, scopes, now)
+	if err != nil || len(again) != 1 || again[0] != plan || world.filedCount(bridge.SignedType_SIGNED_REPO_CREATE) != 1 {
+		t.Fatalf("a second setup: %+v, %v", again, err)
+	}
+	// under team_mail: indexers nothing is planned or created, the mailcfg standing or not
+	net.setTeamMail(protocol.TeamMailMode_TEAM_MAIL_MODE_INDEXERS)
+	if plans, err := world.repos(memberDevice).EnsureScopeReceivers(ctx, net.log.State(), scopes, now); err != nil || len(plans) != 0 {
+		t.Fatalf("under team_mail: indexers: %+v, %v", plans, err)
+	}
+
+	// the receiver starts on the plan: its listen is the scope host's, and its key goes out under mx.<scope>
+	receiverWorld := newMailReceiverTestWorld(t, nil)
+	listened := make(chan string, 4)
+	receiverWorld.newReceiver(func(args *MailReceiverArgs) {
+		args.Host = plan.Host
+		args.Listen = func(ctx context.Context, address string, settings *SocketListenSettings) (MailReceiverListener, error) {
+			listened <- address
+			return receiverWorld.listener, nil
+		}
+	})
+	start := receiverWorld.clock.Now()
+	if err := receiverWorld.start(); err != nil {
+		t.Fatal(err)
+	}
+	if address := <-listened; address != plan.ListenName() {
+		t.Fatalf("the scope receiver listens on %q", address)
+	}
+	receiverWorld.clock.awaitWaitAt(start.Add(600 * time.Second))
+	armed := receiverWorld.clock.armed()
+	receiverWorld.clock.Advance(600 * time.Second)
+	receiverWorld.listener.awaitServing(true)
+	receiverWorld.clock.awaitArmedPast(armed)
+	if publishes := receiverWorld.publisher.publishes(); len(publishes) != 1 || publishes[0].host != "mx.eng" {
+		t.Fatalf("the scope receiver's key records: %+v", publishes)
+	}
+	if status := receiverWorld.receiver.Status(); !status.Listening || !status.Serving {
+		t.Fatalf("the scope receiver's status %+v", status)
+	}
+
+	// a device outside the scope reads none of the scope's mailcfg: another member's, and a config writer's
+	state := world.state()
+	for name, device := range map[string]Id{"another member's device": otherDevice, "a config writer": ownerDevice} {
+		if rights := state.EvsAccess(AclSidecarSubject(device), scopeConfigId, AclTokenAudienceEvs, now).Rights; rights != 0 {
+			t.Errorf("%s holds %b on the scope's mailcfg", name, rights)
+		}
+		if rights := state.EvsAccess(AclSidecarSubject(device), scopeConfigId, AclTokenAudienceGkm, now).Rights; rights != 0 {
+			t.Errorf("%s holds %b on the scope mailcfg's group", name, rights)
+		}
+		if plans := MailScopeReceiverPlans(memberScopes, state, scopes, device, now); len(plans) != 0 {
+			t.Errorf("%s plans %+v", name, plans)
+		}
+	}
+	if readers := state.RepoReaders(scopeConfigId, now); !slices.Equal(readers, []Id{memberDevice}) {
+		t.Errorf("the scope mailcfg's readers %v", readers)
+	}
+	if rights := state.EvsAccess(AclSidecarSubject(memberDevice), scopeConfigId, AclTokenAudienceEvs, now).Rights; !rights.Has(AclEvsRead | AclEvsWrite) {
+		t.Errorf("the member's device holds %b on its scope's mailcfg", rights)
+	}
+	if _, found := world.repos(otherDevice).ScopeMailConfigRepo(other); found {
+		t.Error("another member was answered a scope mailcfg")
+	}
+}
+
+// EvsClient.CreateRepo makes a scope's own mailcfg (QD-1093): the RepoCreate it files carries the kind alone, the log's
+// fold binding the owner, and the repo's group carries the owner member in its ur_group, as a mailbox's does. The
+// network's mailcfg is made with no owner, and any other kind that takes none is refused with one, nothing filed.
+func TestEvsCreateRepoTakesAnOwnerForAScopesMailcfg(t *testing.T) {
+	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.WriteHeader(http.StatusOK)
+	})
+	test := newEvsTestClient(t, handler, newEvsTestStore(t))
+	ctx := context.Background()
+	member := NewId()
+	scopeRepo, err := test.client.CreateRepo(ctx, &EvsCreateRepoArgs{Kind: protocol.RepoKind_REPO_KIND_MAILCFG, OwnerMemberId: &member})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := test.poster.bodies[0].(*protocol.RepoCreate)
+	if Id(created.GetRepoId()) != scopeRepo.RepoId() || created.GetKind() != protocol.RepoKind_REPO_KIND_MAILCFG {
+		t.Errorf("RepoCreate %v", created)
+	}
+	if len(test.gkm.created) != 1 || test.gkm.created[0].RepoId != scopeRepo.RepoId() || test.gkm.created[0].Kind != protocol.RepoKind_REPO_KIND_MAILCFG ||
+		test.gkm.created[0].OwnerMemberId == nil || *test.gkm.created[0].OwnerMemberId != member {
+		t.Errorf("the scope mailcfg's group %+v", test.gkm.created)
+	}
+	if _, err := test.client.CreateRepo(ctx, &EvsCreateRepoArgs{Kind: protocol.RepoKind_REPO_KIND_MAILCFG}); err != nil {
+		t.Fatalf("the network's mailcfg: %v", err)
+	}
+	if len(test.gkm.created) != 2 || test.gkm.created[1].OwnerMemberId != nil {
+		t.Errorf("the network mailcfg's group %+v", test.gkm.created)
+	}
+	for _, kind := range []protocol.RepoKind{protocol.RepoKind_REPO_KIND_GENERAL, protocol.RepoKind_REPO_KIND_RECORD, protocol.RepoKind_REPO_KIND_TEAM_RECORD, protocol.RepoKind_REPO_KIND_DIRECTORY} {
+		if _, err := test.client.CreateRepo(ctx, &EvsCreateRepoArgs{Kind: kind, OwnerMemberId: &member}); !errors.Is(err, errInvalidSettings) {
+			t.Errorf("%s with an owner: %v", kind, err)
+		}
+	}
+	if len(test.poster.filed) != 2 {
+		t.Errorf("%d statements filed", len(test.poster.filed))
 	}
 }

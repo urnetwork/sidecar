@@ -15,11 +15,18 @@
 //	          is per member. Teams designate two indexers per scope as §7.9's IndexerSet at member scope, which the
 //	          designations already read (mail_indexer.go); nothing here gates on them
 //	mailcfg   a scope's own mailcfg is the mailcfg repo whose row names the scope's member as its owner
-//	          (MailRepos.ScopeMailConfigRepo), and the network's is the one whose row names none (QD-1093: a consented
-//	          device of the member creates it, and the access log's fold owner-binds a mailcfg RepoCreate from a member
-//	          device that is no config writer). Neither the fold nor EvsClient.CreateRepo does that yet, so none is
-//	          found, and a scope's receiver has no directory to resolve a recipient against: the composition that
-//	          would start one does not run
+//	          (MailRepos.ScopeMailConfigRepo), and the network's is the one whose row names none (QD-1093): a consented
+//	          device of the member that writes no config heads creates it (MailRepos.EnsureScopeMailConfig), and the
+//	          access log's fold owner-binds that RepoCreate to its creator's member, so only that member's consented
+//	          devices, and the scope's receivers by their kind default, read it. A scope whose member's devices all
+//	          write config heads, an AdminSet member's, gets none this way: the log reads each of their mailcfgs as
+//	          the network's, so its receiver stays unplanned (question scope-mailcfg-owner-bound-admin-scope)
+//	setup     a device's scope receivers are MailScopeReceiverPlans': each host it receives for whose scope's own mailcfg
+//	          stands, with that mailcfg, which the receiver's sessions resolve a recipient against. A scope with no
+//	          mailcfg plans no receiver, since it would have no directory. MailRepos.EnsureScopeReceivers is the
+//	          setup a scope member's device runs: it creates the mailcfg of each scope it receives for where the log
+//	          holds none, and answers the receivers ready to start. The mail component does not run it yet: no state
+//	          gives a scope source, and a scope's certificate pair has no composer source (TLS-M6-03)
 //	address   <name>@<scope>.<net>.<root> is MailScopeZone's: ParseMailAddress reads it as MailZone{Scope}, and a
 //	          scope's MailConfig resolves only its own scope's addresses (mail_config_read.go)
 //	alarm     a reader alarms on a scope deposit whose receiver is no consented device of the scope's member, and on
@@ -32,6 +39,8 @@
 package sidecar
 
 import (
+	"context"
+	"errors"
 	"slices"
 	"time"
 
@@ -72,17 +81,17 @@ func MailScopeZone(root string, net string, scope string) MailZone {
 	return MailZone{Root: root, Net: net, Scope: scope}
 }
 
-// The scope hosts sidecarId receives for at the verified config and acl state (the file header's receive row), in the
-// scopes' order: mx.<scope> for each member scope whose member sidecarId is a consented device of, under team_mail:
+// The member scopes sidecarId receives for at the verified config and acl state (the file header's receive row), in
+// the scopes' order, one per host: each member scope whose member sidecarId is a consented device of, under team_mail:
 // member scopes, where policy grants the listen in that scope. None under any other mode, or where the mode cannot be
 // read.
-func MailScopeReceiverHosts(config *ConfigState, acl *AclState, scopes []AclScope, sidecarId Id, now time.Time) []string {
-	hosts := []string{}
+func mailScopeReceiverScopes(config *ConfigState, acl *AclState, scopes []AclScope, sidecarId Id, now time.Time) []AclScope {
+	received := []AclScope{}
 	if config == nil || acl == nil {
-		return hosts
+		return received
 	}
 	if mode, known := mailTeamMailMode(config); !known || mode != protocol.TeamMailMode_TEAM_MAIL_MODE_MEMBER_SCOPES {
-		return hosts
+		return received
 	}
 	for _, scope := range scopes {
 		if scope.Label == "" || scope.MemberId == (Id{}) || !acl.ConsentedFor(sidecarId, scope.MemberId) {
@@ -92,9 +101,78 @@ func MailScopeReceiverHosts(config *ConfigState, acl *AclState, scopes []AclScop
 		if !acl.MayListenInScope(AclSidecarSubject(sidecarId), socket, scope, now).Allowed {
 			continue
 		}
-		if host := MailScopeHost(scope.Label); !slices.Contains(hosts, host) {
-			hosts = append(hosts, host)
+		if !slices.ContainsFunc(received, func(listed AclScope) bool { return listed.Label == scope.Label }) {
+			received = append(received, scope)
 		}
 	}
+	return received
+}
+
+// The scope hosts sidecarId receives for at the verified config and acl state (the file header's receive row), in the
+// scopes' order: mx.<scope> for each member scope whose member sidecarId is a consented device of, under team_mail:
+// member scopes, where policy grants the listen in that scope. None under any other mode, or where the mode cannot be
+// read.
+func MailScopeReceiverHosts(config *ConfigState, acl *AclState, scopes []AclScope, sidecarId Id, now time.Time) []string {
+	hosts := []string{}
+	for _, scope := range mailScopeReceiverScopes(config, acl, scopes, sidecarId, now) {
+		hosts = append(hosts, MailScopeHost(scope.Label))
+	}
 	return hosts
+}
+
+// One scope receiver a device runs: its scope, the host its MailReceiver names (MailReceiverArgs.Host), and the
+// scope's own mailcfg, which its sessions resolve a recipient against.
+type MailScopeReceiverPlan struct {
+	Scope AclScope
+	// mx.<scope>.
+	Host string
+	// The scope's own mailcfg: the first standing mailcfg whose row names the scope's member.
+	MailConfigRepoId Id
+}
+
+// The socket name the receiver listens on: smtp/25/mx.<scope>.
+func (self MailScopeReceiverPlan) ListenName() string {
+	return mailScopeListenPrefix + self.Host
+}
+
+// The scope receivers sidecarId starts at the verified config and acl state (the file header's setup row), in the
+// scopes' order: each host MailScopeReceiverHosts gives whose scope's own mailcfg stands in acl. A scope with no
+// mailcfg is left out: its receiver would have no directory to resolve a recipient against, so none starts.
+func MailScopeReceiverPlans(config *ConfigState, acl *AclState, scopes []AclScope, sidecarId Id, now time.Time) []MailScopeReceiverPlan {
+	plans := []MailScopeReceiverPlan{}
+	for _, scope := range mailScopeReceiverScopes(config, acl, scopes, sidecarId, now) {
+		repoId, found := mailScopeConfigRepo(acl, scope.MemberId)
+		if !found {
+			continue
+		}
+		plans = append(plans, MailScopeReceiverPlan{Scope: scope, Host: MailScopeHost(scope.Label), MailConfigRepoId: repoId})
+	}
+	return plans
+}
+
+// A scope member's device's setup (the file header's setup row): for each scope this device receives for at config and
+// its verified state, the scope's own mailcfg, created where the log holds none and taken up again where this device's
+// creation was cut short (EnsureScopeMailConfig), then the receivers ready to start at the state as it stands after,
+// as MailScopeReceiverPlans gives them. A creation the state does not show yet plans no receiver until it does. The
+// error joins what kept a scope's mailcfg from being made; a read_only device, which files nothing, waits for another
+// of its member's and is no error.
+func (self *MailRepos) EnsureScopeReceivers(ctx context.Context, config *ConfigState, scopes []AclScope, now time.Time) ([]MailScopeReceiverPlan, error) {
+	state, err := self.verifiedState()
+	if err != nil {
+		return nil, err
+	}
+	var ensureErr error
+	for _, scope := range mailScopeReceiverScopes(config, state, scopes, self.sidecarId, now) {
+		if _, err := self.EnsureScopeMailConfig(ctx, scope.MemberId); err != nil && !errors.Is(err, ErrMailReposNotConsented) {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			ensureErr = errors.Join(ensureErr, err)
+		}
+	}
+	state, err = self.verifiedState()
+	if err != nil {
+		return nil, err
+	}
+	return MailScopeReceiverPlans(config, state, scopes, self.sidecarId, now), ensureErr
 }

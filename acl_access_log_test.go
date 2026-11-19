@@ -2,13 +2,16 @@
 // stamped on the row it keeps (QD-743), the RepoDelete's signer in its row (QD-798), the rows a fold was given never
 // changed, a re-application over rows lacking its repo refused, VoidEvsShares listing what a cascade voids, RepoAdminAt
 // judging an admin at a position before and after its removal, and the base compile dropping a removed admin's row
-// once the retention point passes its removal. Pure, on every leg; the last tests run TEAM's log.
+// once the retention point passes its removal; and QD-1093's mailcfg rows: a member device's owner-bound to its
+// member, a config writer's unowned, a member's second leaving its first, a re-application deriving the maker on its
+// rows. Pure, on every leg; some tests run TEAM's log.
 
 package sidecar
 
 import (
 	"bytes"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -548,5 +551,213 @@ func TestAclRemovedRepoAdminJudgedBeforeAndAfterItsRemoval(t *testing.T) {
 	}
 	if rows := aclTestCheckedAdminRows(t, net, repoId, net.owner.sidecarId); len(rows) != 1 || !AclRepoAdminStands(rows[0]) {
 		t.Errorf("the creator's row: %+v", rows)
+	}
+}
+
+// A mailcfg RepoCreate signed by signer at the fixture's next position.
+func aclTestMailcfgCreate(fixture *aclTestFixture, signer Id) (Id, *AclStatement) {
+	repoId := NewId()
+	create := &protocol.RepoCreate{RepoId: repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_MAILCFG}
+	return repoId, fixture.statement(bridge.SignedType_SIGNED_REPO_CREATE, create, signer)
+}
+
+// QD-1093: a mailcfg RepoCreate from a consented device of a member that writes no config heads folds owner-bound to
+// its creator's member, listing that member's consented devices and its creator as admin, as a mailbox's does. A
+// tagged sidecar, a revoked device and one its member has not consented create none.
+func TestFoldAclReposOwnerBindsAMemberDevicesMailcfg(t *testing.T) {
+	cast := newAclStatementCast()
+	fixture := cast.fixture
+	unconsented := fixture.device(cast.member, cast.adminDevice.Bytes())
+	state := fixture.state(t)
+	for name, signer := range map[string]Id{"a tagged agent": cast.agent, "a revoked device": cast.revoked, "an unconsented device": unconsented} {
+		_, statement := aclTestMailcfgCreate(fixture, signer)
+		if _, err := state.CheckStatement(statement, nil); err == nil {
+			t.Errorf("%s created a mailcfg", name)
+		}
+	}
+	_, agentCreate := aclTestMailcfgCreate(fixture, cast.agent)
+	if _, err := state.CheckStatement(agentCreate, nil); aclTestRefusal(err) != ErrConfigAuthority {
+		t.Errorf("a tagged agent's mailcfg: %v", err)
+	}
+
+	scopeId, statement := aclTestMailcfgCreate(fixture, cast.laptop)
+	verdict, err := state.CheckStatement(statement, nil)
+	if err != nil || verdict.ConfigWriter || verdict.MemberId != cast.member {
+		t.Fatalf("the member device's verdict %+v, %v", verdict, err)
+	}
+	state, _ = fixture.apply(t, state, statement)
+	row := state.Repo(scopeId)
+	if row.GetKind() != protocol.RepoKind_REPO_KIND_MAILCFG || Id(row.GetOwnerMemberId()) != cast.member {
+		t.Fatalf("the member device's mailcfg row %+v", row)
+	}
+	if admins := row.GetAdmins(); len(admins) != 1 || !bytes.Equal(admins[0].GetSidecarId(), cast.laptop.Bytes()) {
+		t.Errorf("its admins %+v", admins)
+	}
+	consented := row.GetConsentedSidecarIds()
+	if len(consented) != 2 || !slices.ContainsFunc(consented, func(listed []byte) bool { return bytes.Equal(listed, cast.laptop.Bytes()) }) ||
+		!slices.ContainsFunc(consented, func(listed []byte) bool { return bytes.Equal(listed, cast.phone.Bytes()) }) {
+		t.Errorf("its consented devices %x", consented)
+	}
+
+	// its owner's OwnerConfirm lists a newly confirmed device in it, as in the member's other owner-bound repos
+	state, _ = fixture.apply(t, state, fixture.statement(bridge.SignedType_SIGNED_OWNER_CONFIRM, &protocol.OwnerConfirm{SidecarId: unconsented.Bytes()}, cast.laptop))
+	if listed := state.Repo(scopeId).GetConsentedSidecarIds(); len(listed) != 3 || !bytes.Equal(listed[2], unconsented.Bytes()) {
+		t.Errorf("after an OwnerConfirm its consented devices are %x", listed)
+	}
+}
+
+// QD-1093: a config writer's mailcfg stays unowned, the network's, with no consented list, an Owner's device's and an
+// Admin's alike, and an OwnerConfirm of the config writer's member adds nothing to it.
+func TestFoldAclReposKeepsAConfigWritersMailcfgUnowned(t *testing.T) {
+	cast := newAclStatementCast()
+	fixture := cast.fixture
+	ownersSecond := fixture.device(cast.owner, cast.adminDevice.Bytes())
+	state := fixture.state(t)
+	for name, signer := range map[string]Id{"the owner's device": cast.ownerDevice, "an admin's device": cast.adminDevice} {
+		repoId, statement := aclTestMailcfgCreate(fixture, signer)
+		verdict, err := state.CheckStatement(statement, nil)
+		if err != nil || !verdict.ConfigWriter || verdict.MemberId != (Id{}) {
+			t.Fatalf("%s: the verdict %+v, %v", name, verdict, err)
+		}
+		state, _ = fixture.apply(t, state, statement)
+		if row := state.Repo(repoId); len(row.GetOwnerMemberId()) != 0 || len(row.GetConsentedSidecarIds()) != 0 || len(row.GetAdmins()) != 1 {
+			t.Errorf("%s: the mailcfg row %+v", name, row)
+		}
+	}
+	before := testConfigMarshal(t, state.rows)
+	state, _ = fixture.apply(t, state, fixture.statement(bridge.SignedType_SIGNED_OWNER_CONFIRM, &protocol.OwnerConfirm{SidecarId: ownersSecond.Bytes()}, cast.ownerDevice))
+	if !bytes.Equal(before, testConfigMarshal(t, state.rows)) {
+		t.Error("an OwnerConfirm changed an unowned mailcfg's row")
+	}
+}
+
+// QD-1093: a second mailcfg from the same member is owner-bound too, so it never stands as the network's, and it
+// leaves the first's row as it was: which of a member's is its scope's is the first in log order.
+func TestFoldAclReposASecondMailcfgFromAMemberDoesNotReplaceTheFirst(t *testing.T) {
+	cast := newAclStatementCast()
+	fixture := cast.fixture
+	state := fixture.state(t)
+	firstId, first := aclTestMailcfgCreate(fixture, cast.laptop)
+	state, _ = fixture.apply(t, state, first)
+	firstRow := testConfigMarshal(t, state.Repo(firstId))
+	secondId, second := aclTestMailcfgCreate(fixture, cast.phone)
+	state, _ = fixture.apply(t, state, second)
+	if !bytes.Equal(firstRow, testConfigMarshal(t, state.Repo(firstId))) {
+		t.Error("the second mailcfg changed the first's row")
+	}
+	secondRow := state.Repo(secondId)
+	if Id(secondRow.GetOwnerMemberId()) != cast.member {
+		t.Errorf("the second mailcfg's row %+v", secondRow)
+	}
+	if first.N >= second.N || state.Repo(firstId).GetAdmins()[0].GetAt() != first.N || secondRow.GetAdmins()[0].GetAt() != second.N {
+		t.Errorf("the rows' positions: %d and %d", state.Repo(firstId).GetAdmins()[0].GetAt(), secondRow.GetAdmins()[0].GetAt())
+	}
+	for _, repoId := range state.RepoIds() {
+		if row := state.Repo(repoId); row.GetKind() == protocol.RepoKind_REPO_KIND_MAILCFG && len(row.GetOwnerMemberId()) == 0 {
+			t.Errorf("a member device's mailcfg %s names no owner", repoId)
+		}
+	}
+}
+
+// The fold takes a mailcfg RepoCreate only on a verdict that says whose it is: a config writer's, or a member's. One
+// naming neither, which no check gives, folds to nothing rather than to an unowned mailcfg, the network's.
+func TestFoldAclReposRefusesAMailcfgOfNoKnownMaker(t *testing.T) {
+	signer, member := NewId(), NewId()
+	create := &protocol.RepoCreate{RepoId: NewId().Bytes(), Kind: protocol.RepoKind_REPO_KIND_MAILCFG}
+	if _, err := FoldAclRepos(nil, []AclAccessLogEntry{aclTestLogEntry(create, bridge.SignedType_SIGNED_REPO_CREATE, signer, 1, false)}); !errors.Is(err, ErrAclAccessLogFold) {
+		t.Errorf("a mailcfg of neither a config writer nor a member: %v", err)
+	}
+	repos, err := FoldAclRepos(nil, []AclAccessLogEntry{aclTestLogEntry(create, bridge.SignedType_SIGNED_REPO_CREATE, signer, 1, true)})
+	if err != nil || len(repos) != 1 || len(repos[0].GetOwnerMemberId()) != 0 {
+		t.Errorf("a config writer's: %+v, %v", repos, err)
+	}
+	owned := aclTestLogEntry(create, bridge.SignedType_SIGNED_REPO_CREATE, signer, 1, false)
+	owned.Verdict.MemberId = member
+	owned.Verdict.ConsentedSidecarIds = []Id{signer}
+	repos, err = FoldAclRepos(nil, []AclAccessLogEntry{owned})
+	if err != nil || len(repos) != 1 || Id(repos[0].GetOwnerMemberId()) != member || len(repos[0].GetConsentedSidecarIds()) != 1 {
+		t.Errorf("a member's: %+v, %v", repos, err)
+	}
+	// a config writer's verdict that also names a member, which no check gives, is still the network's
+	both := aclTestLogEntry(create, bridge.SignedType_SIGNED_REPO_CREATE, signer, 1, true)
+	both.Verdict.MemberId = member
+	repos, err = FoldAclRepos(nil, []AclAccessLogEntry{both})
+	if err != nil || len(repos) != 1 || len(repos[0].GetOwnerMemberId()) != 0 {
+		t.Errorf("a config writer's naming a member: %+v, %v", repos, err)
+	}
+}
+
+// Over a new base a mailcfg RepoCreate folds as ApplyStatement folded it, its maker derived on the rows it folds into:
+// a member device's owner-bound, a config writer's unowned. A signer the rows no longer hold, or a tagged one, is
+// neither, and the creation ends at that base rather than standing unowned.
+func TestAclReapplyDerivesAMailcfgsMaker(t *testing.T) {
+	cast := newAclStatementCast()
+	fixture := cast.fixture
+	state := fixture.state(t)
+	for name, signer := range map[string]Id{"a member device's": cast.laptop, "a config writer's": cast.ownerDevice} {
+		_, statement := aclTestMailcfgCreate(fixture, signer)
+		verdict, err := state.CheckStatement(statement, nil)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		applied, _, err := state.ApplyStatement(statement, verdict)
+		if err != nil {
+			t.Fatalf("%s: ApplyStatement: %v", name, err)
+		}
+		reapplied, _, err := state.ReapplyStatement(statement, aclBodyVerdict(statement))
+		if err != nil {
+			t.Fatalf("%s: ReapplyStatement: %v", name, err)
+		}
+		if !bytes.Equal(testConfigMarshal(t, applied), testConfigMarshal(t, reapplied)) {
+			t.Errorf("%s: ReapplyStatement's rows differ from ApplyStatement's", name)
+		}
+	}
+	for name, signer := range map[string]Id{"a signer the rows do not hold": NewId(), "a tagged signer": cast.agent} {
+		_, statement := aclTestMailcfgCreate(fixture, signer)
+		if _, _, err := state.ReapplyStatement(statement, aclBodyVerdict(statement)); !errors.Is(err, ErrConfigRule) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+// What a Team scope's own mailcfg gives by its kind default, with no grant or rule naming it (§15.7, §8.5's mailcfg
+// row): its member's consented devices read and write it, its creator administers it, and no device outside the scope
+// reads it: not another member's, not a config writer's, not the member's own agent. The network's mailcfg stays every
+// member device's. What a config writer's RepoGrant, RepoAdmin or rule may add to it is not settled (question
+// scope-mailcfg-owner-bound-admin-reach) and not asserted here.
+func TestAclScopeMailcfgIsReadOnlyByItsMembersConsentedDevices(t *testing.T) {
+	cast := newAclStatementCast()
+	fixture := cast.fixture
+	state := fixture.state(t)
+	scopeId, scope := aclTestMailcfgCreate(fixture, cast.laptop)
+	state, _ = fixture.apply(t, state, scope)
+	networkId, network := aclTestMailcfgCreate(fixture, cast.ownerDevice)
+	state, _ = fixture.apply(t, state, network)
+	cases := []struct {
+		name      string
+		sidecarId Id
+		repoId    Id
+		rights    AclEvsRights
+	}{
+		{name: "the creating device in its scope's", sidecarId: cast.laptop, repoId: scopeId, rights: AclEvsRead | AclEvsWrite | AclEvsAdmin},
+		{name: "the member's other consented device", sidecarId: cast.phone, repoId: scopeId, rights: AclEvsRead | AclEvsWrite},
+		{name: "another member's device", sidecarId: cast.stranger, repoId: scopeId},
+		{name: "the owner's config writer", sidecarId: cast.ownerDevice, repoId: scopeId},
+		{name: "an admin's config writer", sidecarId: cast.adminDevice, repoId: scopeId},
+		{name: "the member's agent", sidecarId: cast.agent, repoId: scopeId},
+		{name: "the member's revoked device", sidecarId: cast.revoked, repoId: scopeId},
+		{name: "another member's device in the network's", sidecarId: cast.stranger, repoId: networkId, rights: AclEvsRead | AclEvsWrite},
+		{name: "the member's device in the network's", sidecarId: cast.laptop, repoId: networkId, rights: AclEvsRead | AclEvsWrite},
+	}
+	for _, c := range cases {
+		if rights := aclTestRights(state, c.sidecarId, c.repoId, AclTokenAudienceEvs); rights != c.rights {
+			t.Errorf("%s: %b, want %b", c.name, rights, c.rights)
+		}
+	}
+	readers := state.RepoReaders(scopeId, aclTestNow)
+	want := []Id{cast.laptop, cast.phone}
+	slices.SortFunc(want, Id.Cmp)
+	if !slices.Equal(readers, want) {
+		t.Errorf("the scope mailcfg's readers %v, want %v", readers, want)
 	}
 }
