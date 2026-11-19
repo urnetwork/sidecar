@@ -99,7 +99,7 @@ Stage: Later, until a customer asks
 - **To bring back:** A customer asks. Then an owner decision on what makes an action high risk, a fixed classifier, a policy field on request rules or both, as owner decision 279's options not taken describe; `AclRequestRule` gains its risk field, and verifiers check the SSHSIG under the member's registered key.
 
 ### mcp-card-closure-replay-check: The fresh-reader check on a directory admin's CLOSURE of a card or repo file
-Stage: Review phase, before M10's exit
+Stage: Review phase
 - **Deferred:** A reader-side check that holds a directory admin's push at a `d/` or `r/` path to the `cards` ref's own log: evs marks a CLOSURE's path versions, and a reader accepts an admin's push there only where the log shows a CLOSURE at that version whose content hash equals the version before it (§16.11's closure row; owner decision 636; ledger id QD-1100; the plan's RECORD-M10-05).
 - **Why:** The owner accepted the draft's rule for an erasure's CLOSURE and left this check to the review phase: it is a reader-side check, with no format change if the cards read already exposes a push's kind.
 - **Launch instead:** A reader accepts a directory admin's push at a `d/` or `r/` path only when its bytes are the very bytes its copy already accepted there, or else verify as the rightful writer's own Signed under every other rule, whose seq must rise (§16.11's closure row).

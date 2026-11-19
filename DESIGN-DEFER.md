@@ -110,7 +110,7 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 |  | [A per-team setting for prose at member trust](#mcp-member-prose-setting) | Later | §16.12 |
 |  | [The harness config's waiting keys](#mcp-harness-config-keys) | Later | §8.5, §16.7 |
 |  | [SSH-signed approvals for high-risk actions](#mcp-sshsig-approvals) | Later, until a customer asks | §16.6, §16.18 |
-|  | [The fresh-reader check on a directory admin's CLOSURE of a card or repo file](#mcp-card-closure-replay-check) | Review phase, before M10's exit | §16.11 |
+|  | [The fresh-reader check on a directory admin's CLOSURE of a card or repo file](#mcp-card-closure-replay-check) | Review phase | §16.11 |
 |  | [§16's v1 set](#mcp-v1) | v1 (M6, M10) | §16.18 |
 | [§17 IP addresses, subnet routing, and port forwarding](#s17) | [L3 delivery](#bridge-l3-delivery) | Later | §17.18 |
 |  | [Multi-hop maps](#bridge-multi-hop-maps) | Later | §17.18 |
@@ -1131,7 +1131,7 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 <a id="mcp-card-closure-replay-check"></a>
 ### The fresh-reader check on a directory admin's CLOSURE of a card or repo file
 
-*Review phase, before M10's exit. DESIGN.md: §16.11.*
+*Review phase. DESIGN.md: §16.11.*
 
 - **Deferred.** A reader-side check that holds a directory admin's push at a `d/` or `r/` path to the `cards` ref's own log: evs marks a CLOSURE's path versions, and a reader accepts an admin's push there only where the log shows a CLOSURE at that version whose content hash equals the version before it (§16.11's closure row; owner decision 636; ledger id QD-1100; the plan's RECORD-M10-05).
 - **Why.** The owner accepted the draft's rule for an erasure's CLOSURE and left this check to the review phase: it is a reader-side check, with no format change if the cards read already exposes a push's kind.
