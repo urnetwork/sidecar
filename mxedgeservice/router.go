@@ -12,14 +12,16 @@
 //  5. its lease on meter mx (splice.go): spent, internal_error;
 //  6. Find <network_id>:smtp/25/<host> with the process's K client ids and open StreamOpen{ticket,
 //     MailIngress, early_data} through MxEdgeDialer, the hello's first 2,048 B in early_data and the
-//     rest in StreamData right behind it: no receiver, sockets down, busy or denied, internal_error;
+//     rest in StreamData right behind it: no receiver, sockets down, busy or denied, internal_error; with
+//     MxEdgeSettings.WakeHold on, a miss is first held up to 30 s while the network's receivers are woken
+//     and the Find is asked again (wake_hold.go, §15.6's step 5);
 //  7. splice (splice.go) until it ends.
 //
-// Every failure before the stream closes in the handshake with one WriteTlsAlert, writes the sender's
-// /24 or /48 to the closed-handshake memory first, so its plaintext retry gets 451, and holds nothing:
-// M8's wake hold (MAIL-M8-05) is not built, so a miss closes at once (owner decision 12). The router never
-// answers SMTP after the 220, and no byte past the hello reaches a receiver before its accept (FI-11): the
-// sender's next bytes stay in its socket until the splice starts.
+// Every failure before the stream closes in the handshake with one WriteTlsAlert, and writes the sender's
+// /24 or /48 to the closed-handshake memory first, so its plaintext retry gets 451. With the wake hold off,
+// as it is by default until plan-KEYS-hint-addressing lands, a miss closes at once (owner decision 12). The
+// router never answers SMTP after the 220, and no byte past the hello reaches a receiver before its accept
+// (FI-11): the sender's next bytes stay in its socket until the splice starts.
 //
 // A session whose SNI named a network leaves one record through mxConnectionRecords at its end (mx-2),
 // its result a word of the closed set in metrics.go; one that named none leaves none (QD-352). Nothing on
@@ -117,6 +119,8 @@ type mxRouter struct {
 	lookups *mxPtrLookups
 	// nil with no source
 	listings *mxListings
+	// §15.6's wake holds and their hints (wake_hold.go)
+	holds *mxWakeHolds
 	// the limits loop and the listings'
 	loopGroup sync.WaitGroup
 	// splices registered, so a drain's wait and a test can see one start or end
@@ -168,6 +172,7 @@ func NewMxEdgeRouterService(
 			limits:           newMxMessageLimits(settings, host.Quota, self.clock),
 			usage:            usage,
 			lookups:          newMxPtrLookups(self, routerDeps),
+			holds:            newMxWakeHolds(self.ctx, host.Push, settings, self.clock, self.metrics),
 			spliceCount:      sidecar.NewMonitorValue(0),
 			networkIdSplices: map[sidecar.Id]map[*mxSplice]bool{},
 		}
@@ -301,10 +306,11 @@ func (self *mxRouter) drained() {
 	self.usage.Drain(flushCtx)
 }
 
-// What the engine's release does for the router once every session has ended: waits for the lookups and
-// the limits loop, then stops the usage batcher, as a kill would.
+// What the engine's release does for the router once every session has ended: waits for the lookups, the
+// wake hints in flight and the limits loop, then stops the usage batcher, as a kill would.
 func (self *mxRouter) close() {
 	self.lookups.group.Wait()
+	self.holds.close()
 	self.loopGroup.Wait()
 	if self.usage != nil {
 		self.usage.Close()
@@ -458,8 +464,8 @@ func (self *MxEdgeService) routeNetwork(session *mxSession, hello *MxClientHello
 		self.closeRouterHandshake(session, MxTlsAlertInternalError)
 		return mxSessionResultSetupFailed, 0
 	}
-	stream, grantExpireTimeMillis, err := func() (MxEdgeStream, uint64, error) {
-		dialCtx, done := self.boundedContext(self.settings.AcceptSetupTimeout)
+	dial := func(timeout time.Duration) (MxEdgeStream, uint64, error) {
+		dialCtx, done := self.boundedContext(timeout)
 		defer done()
 		stream, grantExpireTimeMillis, err := router.dialer.Dial(dialCtx, &MxEdgeDialRequest{
 			NetworkId:    networkId,
@@ -474,7 +480,12 @@ func (self *MxEdgeService) routeNetwork(session *mxSession, hello *MxClientHello
 			err = errors.New("the dialer answered no stream")
 		}
 		return stream, grantExpireTimeMillis, err
-	}()
+	}
+	stream, grantExpireTimeMillis, err := dial(self.settings.AcceptSetupTimeout)
+	if err != nil {
+		// §15.6's step 5: a miss waits for a woken receiver, when the hold is on
+		stream, grantExpireTimeMillis, err = self.holdForReceiver(route, err, dial)
+	}
 	if err != nil {
 		self.closeRouterHandshake(session, MxTlsAlertInternalError)
 		switch {

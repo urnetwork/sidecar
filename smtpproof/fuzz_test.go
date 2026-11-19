@@ -162,7 +162,7 @@ func TestTheGateSurvivesMutatedParts(t *testing.T) {
 		settings := DefaultProverSettings()
 		settings.ForceData = true
 		// parts short of the last, since only the last has its octet count compared before it verifies
-		settings.DataPartBytes = 12
+		settings.testDataRecordByteCount = 12
 		fixture := testGateCapture(t, leg, testMxDefaults(), settings, testJob("one line\r\nanother line\r\nand a third\r\n", "bob", "carol"))
 		if len(fixture.parts) < 5 {
 			t.Fatalf("%s: %d parts, too few to reach a later DATA part", leg.name, len(fixture.parts))

@@ -204,11 +204,9 @@ func tls13Nonce(iv []byte, seq uint64) []byte {
 
 // Seals content into a whole record at the next sequence number. In 1.3 the inner type is appended
 // with no padding, and the outer type is application_data; in 1.2 recordType is the outer type and
-// the explicit nonce is the sequence number.
+// the explicit nonce is the sequence number. The caller holds content to TLS's bound
+// (ProofSettings.RecordContentMaxByteCount), as tlsClient.sealApplication does.
 func (self *tlsCipher) seal(recordType uint8, content []byte) ([]byte, error) {
-	if tlsMaxPlaintextBytes < len(content) {
-		return nil, errors.New("record content too long")
-	}
 	seq := self.seq
 	self.seq += 1
 	if self.version == tlsVersion13 {

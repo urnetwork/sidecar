@@ -35,7 +35,7 @@ func testCachedFixture(t *testing.T, legIndex int, data bool) *testGateFixture {
 	job := testJob("one line\r\nanother line\r\nand a third\r\n", "bob", "carol")
 	if data {
 		settings.ForceData = true
-		settings.DataPartBytes = 12
+		settings.testDataRecordByteCount = 12
 	}
 	fixture := testGateCapture(t, leg, testMxDefaults(), settings, job)
 	testFixtures.byKey[key] = fixture
@@ -90,7 +90,7 @@ func testExpectGateBounds(t *testing.T, gate *edgeSession) {
 	gate.stateLock.Lock()
 	defer gate.stateLock.Unlock()
 	settings := gate.settings
-	slack := tlsRecordHeaderBytes + tlsMaxCiphertextBytes
+	slack := tlsRecordHeaderBytes + DefaultProofSettings().RecordCiphertextMaxByteCount
 	for name, held := range map[string][2]int{
 		"transcript":      {len(gate.transcript), settings.maxHandshakeBytes + slack},
 		"client buffer":   {len(gate.clientBuffer.pending), settings.maxHandshakeBytes + slack},

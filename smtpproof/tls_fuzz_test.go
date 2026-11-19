@@ -43,8 +43,8 @@ func testCryptoTlsAnswersServerHello(t *testing.T, message []byte) *testCryptoTl
 	clientConn, serverConn := testPipe()
 	defer clientConn.Close()
 	defer serverConn.Close()
-	for offset := 0; offset < len(message); offset += tlsMaxPlaintextBytes {
-		serverConn.Write(tlsFrameRecord(tlsRecordHandshake, tlsVersion12, message[offset:min(offset+tlsMaxPlaintextBytes, len(message))]))
+	for offset := 0; offset < len(message); offset += DefaultProofSettings().RecordContentMaxByteCount {
+		serverConn.Write(tlsFrameRecord(tlsRecordHandshake, tlsVersion12, message[offset:min(offset+DefaultProofSettings().RecordContentMaxByteCount, len(message))]))
 	}
 	// the stream is buffered, so the flight waits for the client, and its end stops the client at the
 	// message after the ServerHello
@@ -133,8 +133,8 @@ func testCryptoTlsReadsClientHello(t *testing.T, message []byte) (*tls.ClientHel
 	clientConn, serverConn := testPipe()
 	defer clientConn.Close()
 	defer serverConn.Close()
-	for offset := 0; offset < len(message); offset += tlsMaxPlaintextBytes {
-		clientConn.Write(tlsFrameRecord(tlsRecordHandshake, 0x0301, message[offset:min(offset+tlsMaxPlaintextBytes, len(message))]))
+	for offset := 0; offset < len(message); offset += DefaultProofSettings().RecordContentMaxByteCount {
+		clientConn.Write(tlsFrameRecord(tlsRecordHandshake, 0x0301, message[offset:min(offset+DefaultProofSettings().RecordContentMaxByteCount, len(message))]))
 	}
 	// the server reads what was written and then end of stream, so a message it waits on cannot hang it
 	clientConn.writeStream.close()

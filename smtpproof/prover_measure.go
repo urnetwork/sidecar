@@ -5,62 +5,45 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"errors"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/urnetwork/sidecar"
 )
 
-// The host's own DATA speed (D-SMTP-20). A body part's circuit is fixed, so proving one costs the same
-// whatever it carries: the host proves one full body record per family it holds keys for, over a session
-// made up for the purpose, and the slowest family sets smtp_data_proof_bytes and whether DATA is open to
-// this host at all. The host records the result at p/ (§15.7), and later sends use it. Before any of that
-// it proves one msg part of each family, so that a host whose memory cannot hold a unit's proof records
-// nothing and only queues (plan-SMTP-small-readings #19). Every catalog shape fills one domain, so any
-// shape stands for the rest (DESIGN-DETAILS 3.2.6); measuring by unit is SMTP-M9-39's.
-
-// The index a measuring body part takes: any part past the message's first.
-const measurePartIndex = 5
+// The host's own speed (D-SMTP-20; DESIGN-DETAILS 3.2.6, 3.2.8). Every catalog shape fills one 2^20 domain,
+// a unit, so a unit of any shape stands for the rest: the host proves one body unit per ready family, a
+// DATA body record that fills its shape, over a session made up for the purpose, and the family whose unit
+// takes longest prices a send here, in units at its UnitTime, and sets smtp_data_proof_bytes and whether
+// DATA is open to this host at all. A unit's proof needs a unit's memory, so a host whose budget cannot
+// hold one fails here, records nothing and only queues (QD-483). The host records the result at p/
+// (§15.7), and later sends use it.
 
 // One line of the filler a measuring part carries. Its content does not change the cost.
 const measureLine = "a line of DATA text as a later part carries it, whole and ending CRLF\r\n"
 
-// What a Prover's last Measure found, which overrides its settings' DATA limits.
+// What a Prover's last Measure found, which overrides its settings' DATA cap.
 type proverMeasured struct {
-	measure       *sidecar.SmtpProverMeasure
-	dataPartBytes int
+	measure *sidecar.SmtpProverMeasure
 }
 
-// Measure of sidecar.SmtpProver. It proves a msg part, then a body part, per family with keys, which
-// takes seconds to minutes, so a host runs it at idle and when its keys or hardware change. With no keys
-// at all it fails, and the settings' limits stand. A proof that fails ends it with no result; one the host
-// has no memory for ends the process, and so leaves none.
+// Measure of sidecar.SmtpProver. It proves a body unit per ready family, which takes seconds to minutes,
+// so a host runs it at idle and when its keys or hardware change. With no family ready it fails, and the
+// settings' cap stands. A proof that fails ends it with no result.
 func (self *Prover) Measure(ctx context.Context) (*sidecar.SmtpProverMeasure, error) {
-	proof := self.settings.Proof
-	for _, shape := range partShapes(proof) {
-		if shape.kind != partKindMessage {
-			continue
-		}
-		statement, witness, err := newMeasureMessagePart(proof, shape)
-		if err != nil {
-			return nil, err
-		}
-		if failures := relationCheckPart(statement, witness); 0 < len(failures) {
-			return nil, failures[0]
-		}
-		// a family with no keys sends nothing, so its shape is no bar
-		if _, err := self.backend.provePart(ctx, statement, witness); err != nil && !errors.Is(err, errNoKeys) {
-			return nil, err
-		}
-	}
+	proof, families := self.measureFamilies()
 	var slowest time.Duration
+	var slowestFamily ShapeFamily
 	capacity := 0
 	measured := false
-	for _, shape := range partShapes(proof) {
-		if shape.kind != partKindBody {
+	for _, family := range families {
+		entry := proof.shape(ShapeKindBody, family, 0)
+		if entry == nil {
 			continue
 		}
-		statement, witness, err := newMeasurePart(proof, shape)
+		statement, witness, err := newMeasurePart(proof, newPartShape(proof, entry))
 		if err != nil {
 			return nil, err
 		}
@@ -71,16 +54,18 @@ func (self *Prover) Measure(ctx context.Context) (*sidecar.SmtpProverMeasure, er
 		_, err = self.backend.provePart(ctx, statement, witness)
 		elapsed := self.now().Sub(start)
 		if errors.Is(err, errNoKeys) {
+			// a family with no keys sends nothing, so its unit is no bar
 			continue
 		}
 		if err != nil {
 			return nil, err
 		}
-		// what one body record of this shape carries under 1.3, which a part costs the same however much
-		// it uses
-		contentBytes := shape.bodyBlocks*shape.blockBytes() - tlsInnerTypeBytes
+		// what one body record of this shape carries under 1.3, which a part costs the same however much it
+		// uses
+		contentBytes := entry.recordContentBytes(entry.BodyBlocks, tlsVersion13)
 		if !measured || slowest < elapsed {
 			slowest = elapsed
+			slowestFamily = family
 		}
 		if !measured || contentBytes < capacity {
 			capacity = contentBytes
@@ -92,33 +77,76 @@ func (self *Prover) Measure(ctx context.Context) (*sidecar.SmtpProverMeasure, er
 	}
 
 	// a part must prove inside the MX's timeout, or this host sends nothing in DATA mode
-	slowest = max(slowest, time.Millisecond)
-	bytesPerSecond := uint64(float64(capacity) / slowest.Seconds())
+	unitTime := max(slowest, time.Millisecond)
+	bytesPerSecond := uint64(float64(capacity) / unitTime.Seconds())
 	result := &sidecar.SmtpProverMeasure{
 		DataBytesPerSecond: bytesPerSecond,
 		MeasureTime:        self.now(),
+		UnitTime:           slowest,
 	}
-	dataPartBytes := 0
+	if message := proof.shape(ShapeKindMessage, slowestFamily, 0); message != nil {
+		result.HeadByteCount = uint64(message.recordContentBytes(message.HeadBlocks, tlsVersion13))
+	}
+	if header := proof.shape(ShapeKindHeader, slowestFamily, 0); header != nil {
+		result.HeaderRecordByteCount = uint64(header.recordContentBytes(header.RestBlocks, tlsVersion13))
+	}
+	if envelope := proof.shape(ShapeKindEnvelope, slowestFamily, 0); envelope != nil {
+		// a later group's commands, each a RCPT of the measuring session's form, under the first group's
+		// estimate
+		preamble := newMeasurePreamble(proof)
+		commandByteCounts := make([]int, 0, proof.RecipientMaxCount)
+		for i := range proof.RecipientMaxCount {
+			command := literalRcptPrefix + "r" + strconv.Itoa(i) + "@" + preamble.recipientDomain + ">" + literalCrlf
+			commandByteCounts = append(commandByteCounts, len(command))
+		}
+		result.EnvelopeGroupCount = uint64(envelopeGroupSize(envelope, tlsVersion13, commandByteCounts, self.settings.ReplyEstimateByteCount, self.settings.EnvelopeGroupMaxCount))
+	}
 	if slowest <= self.settings.DataPartTime {
-		dataPartBytes = capacity
 		result.DataProofBytes = uint64(float64(bytesPerSecond) * self.settings.DataConnectionTime.Seconds())
 	}
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		self.measured = &proverMeasured{measure: result, dataPartBytes: dataPartBytes}
+		self.measured = &proverMeasured{measure: result}
 	}()
 	return result, nil
 }
 
-// The settings a send runs under: the Prover's own, with the last Measure's limits over them.
+// The catalog a Measure proves under and the families it measures: with keys, the newest pinned set's,
+// and its ready families; with a test's backend and no keys, the settings' catalog and every family in it.
+func (self *Prover) measureFamilies() (*ProofSettings, []ShapeFamily) {
+	if self.keys == nil {
+		var families []ShapeFamily
+		for _, entry := range self.settings.Proof.Shapes {
+			if !slices.Contains(families, entry.Family) {
+				families = append(families, entry.Family)
+			}
+		}
+		return self.settings.Proof, families
+	}
+	keySet := self.keys.current()
+	if keySet == nil {
+		return self.settings.Proof, nil
+	}
+	var families []ShapeFamily
+	for _, entry := range keySet.proof.Shapes {
+		if slices.Contains(families, entry.Family) {
+			continue
+		}
+		if ready, _ := keySet.familyReady(entry.Family); ready {
+			families = append(families, entry.Family)
+		}
+	}
+	return keySet.proof, families
+}
+
+// The settings a send runs under: the Prover's own, with the last Measure's cap over them.
 func (self *Prover) sendSettings() *ProverSettings {
 	settings := *self.settings
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	if self.measured != nil {
 		settings.DataProofBytes = int(min(self.measured.measure.DataProofBytes, uint64(1<<31-1)))
-		settings.DataPartBytes = self.measured.dataPartBytes
 	}
 	return &settings
 }
@@ -258,7 +286,8 @@ func newMeasurePreamble(proof *ProofSettings) *sessionPreamble {
 }
 
 // A body part filling a body shape, one record of whole lines after a one-record header block, over a
-// session made up for it.
+// session made up for it: the made-up connection's fourth part, after its key part, one env part (MAIL,
+// one RCPT and DATA, over the EHLO reply) and its msg part (header record 1, over the three replies).
 func newMeasurePart(proof *ProofSettings, shape *partShape) (*partStatement, *partWitness, error) {
 	content := strings.Repeat(measureLine, (shape.bodyBlocks*shape.blockBytes()-tlsInnerTypeBytes)/len(measureLine))
 	preamble := newMeasurePreamble(proof)
@@ -267,8 +296,9 @@ func newMeasurePart(proof *ProofSettings, shape *partShape) (*partStatement, *pa
 	if err != nil {
 		return nil, nil, err
 	}
-	// EHLO, MAIL, RCPT, DATA and the header block's one record came before
-	firstRecord := uint64(measurePartIndex)
+	// EHLO, MAIL, the RCPT, DATA and the header block's one record came before
+	headerRecordCount := uint32(1)
+	firstRecord := firstApplicationSeq(tlsVersion13) + 3 + uint64(preamble.recipientCount) + uint64(headerRecordCount)
 	records, plaintexts, err := newMeasureRecords(session, witness.clientKey, witness.clientIv, firstRecord, content)
 	if err != nil {
 		return nil, nil, err
@@ -293,74 +323,15 @@ func newMeasurePart(proof *ProofSettings, shape *partShape) (*partStatement, *pa
 	statement := &partStatement{
 		session:           session,
 		keyCommitment:     keyCommitment,
-		index:             measurePartIndex,
+		index:             4,
 		mode:              partModeData,
 		firstRecord:       firstRecord,
 		lastRecord:        firstRecord,
-		repliesProven:     4,
-		headerRecordCount: 1,
+		repliesProven:     3 + preamble.recipientCount,
+		headerRecordCount: headerRecordCount,
 		carryIn:           in.commitment,
 		carryOut:          out.commitment,
 		clientRecords:     records,
-	}
-	return statement, witness, nil
-}
-
-// The msg part in DATA mode: a header block of Z5's form in one record, over the replies to MAIL, one
-// RCPT and DATA in one server record, in a session made up for it.
-func newMeasureMessagePart(proof *ProofSettings, shape *partShape) (*partStatement, *partWitness, error) {
-	preamble := newMeasurePreamble(proof)
-	headerBlock := literalFromPrefix + "<measure@" + measureDomain + ">" + literalCrlf +
-		literalMessageIdPrefix + measureMessageId + ">" + literalCrlf +
-		literalXUrRefPrefix + preamble.xUrRef + literalCrlf +
-		literalFeedbackPrefix + preamble.feedbackId + literalCrlf +
-		literalDkimPrefix + literalDkimDomain + measureDomain + literalDkimSelector + measureSelector + literalDkimEnd + "b=" + literalCrlf +
-		literalCrlf
-	preamble.messageByteCount = uint64(len(headerBlock))
-	session, witness, err := newMeasureSession(tlsVersion13, measureSuite(shape.family), preamble)
-	if err != nil {
-		return nil, nil, err
-	}
-	// as if part 1 had opened EHLO and part 2 MAIL, RCPT and DATA over the EHLO reply
-	firstRecord := uint64(4)
-	clientRecords, clientPlaintexts, err := newMeasureRecords(session, witness.clientKey, witness.clientIv, firstRecord, headerBlock)
-	if err != nil {
-		return nil, nil, err
-	}
-	serverRecords, serverPlaintexts, err := newMeasureRecords(session, witness.serverKey, witness.serverIv, 1, "250 2.1.0 Ok\r\n250 2.1.5 Ok\r\n354 Go ahead\r\n")
-	if err != nil {
-		return nil, nil, err
-	}
-	witness.clientPlaintexts = clientPlaintexts
-	witness.serverPlaintexts = serverPlaintexts
-	keyCommitment, err := newMeasureKeyCommitment(witness)
-	if err != nil {
-		return nil, nil, err
-	}
-	state, err := scanHeaderRecord(preamble, []byte(headerBlock), scanStart, true, true)
-	if err != nil {
-		return nil, nil, err
-	}
-	out, err := newProverCarry(state)
-	if err != nil {
-		return nil, nil, err
-	}
-	witness.carryOutBlind = out.blind
-	statement := &partStatement{
-		session:                   session,
-		keyCommitment:             keyCommitment,
-		index:                     3,
-		mode:                      partModeData,
-		firstRecord:               firstRecord,
-		lastRecord:                firstRecord,
-		previousServerRecordCount: 1,
-		serverRecordCount:         2,
-		replyCount:                3,
-		repliesProven:             1,
-		headerRecordCount:         1,
-		carryOut:                  out.commitment,
-		clientRecords:             clientRecords,
-		serverRecords:             serverRecords,
 	}
 	return statement, witness, nil
 }

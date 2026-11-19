@@ -120,7 +120,7 @@ func ExportMessageCapture(t *testing.T, legIndex int, data bool, message string,
 	settings := DefaultProverSettings()
 	if data {
 		settings.ForceData = true
-		settings.DataPartBytes = 12
+		settings.testDataRecordByteCount = 12
 	}
 	job := testMessageJob(message, data)
 	send := testRunSend(t, leg, testMxDefaults(), settings, job)

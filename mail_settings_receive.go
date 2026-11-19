@@ -13,6 +13,8 @@ type MailReceiveSettings struct {
 	Receiver *MailReceiverSettings
 	Session  *MailSessionSettings
 	Auth     *MailAuthSettings
+	// The receiver's MTA-STS system publish (mail_mta_sts.go).
+	MtaSts *MailMtaStsSettings
 }
 
 // The receiver's defaults: on, as a daemon runs.
@@ -22,6 +24,7 @@ func defaultMailReceiveSettings() *MailReceiveSettings {
 		Receiver: DefaultMailReceiverSettings(),
 		Session:  DefaultMailSessionSettings(),
 		Auth:     DefaultMailAuthSettings(),
+		MtaSts:   DefaultMailMtaStsSettings(),
 	}
 }
 
