@@ -87,6 +87,8 @@ type MailBinding struct {
 	Config func() (*ConfigState, error)
 	// Opens a designation's sealed services; nil opens none, so the designations are unknown (mail_indexer.go).
 	IndexerServices MailIndexerServices
+	// The network's Team scopes in the verified state (mail_scope.go); nil knows none, so every scope deposit alarms.
+	Scopes MailScopeSource
 	// Raises an event on the Sidecar, mail_receiver_alarm's; nil only logs it.
 	Event func(event SidecarEvent)
 	// What SetReceiverEnabled files a designation through, and the config generation's key its services are sealed

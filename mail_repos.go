@@ -8,8 +8,10 @@
 //	          consented device of that member that is not read_only, the only signer §8.8 takes a mailbox's
 //	          RepoCreate from. Where the log holds more than one for a member, two devices having raced, every
 //	          device takes the one created first in log order, the lowest id breaking a tie, so all agree
-//	mailcfg   one mailcfg repo per network, created by a config writer (§8.8's RepoCreate row); a device that is
-//	          none is refused by the log, not here. A Team scope's own mailcfg is MAIL-M8-09's
+//	mailcfg   one mailcfg repo per network, created by a config writer (§8.8's RepoCreate row), its row naming no
+//	          owner; a device that is none is refused by the log, not here. A Team scope's own mailcfg is the mailcfg
+//	          whose row names the scope's member (§8.5's mailcfg row; QD-1093; MAIL-M8-09), never taken as the
+//	          network's; its creation, a member device's RepoCreate the fold owner-binds, is not built yet
 //	admins    ERASE and CLOSURE pushes take repo:<id>:admin (§11.8, §11.12), so each consented device of the owner
 //	          that is not read_only files RepoAdmin{add} for itself once it holds the repo's key (§8.8), and any of
 //	          them erases whether or not the device that created the mailbox survives. A read_only device, a parked
@@ -201,13 +203,33 @@ func (self *MailRepos) Mailbox(memberId Id) (Id, bool) {
 	return repoId, found
 }
 
-// The network's mailcfg as the state holds it, false for none.
+// Whether a mailcfg row is the network's own: one that names no owner, as a Team scope's names its member.
+func mailRepoNetworkConfig(repo *protocol.AclRepo) bool {
+	return len(repo.GetOwnerMemberId()) == 0
+}
+
+// The network's mailcfg as the state holds it, false for none: never a Team scope's.
 func (self *MailRepos) MailConfigRepo() (Id, bool) {
 	state, err := self.verifiedState()
 	if err != nil {
 		return Id{}, false
 	}
-	repoId, _, found := mailRepoOfKind(state, protocol.RepoKind_REPO_KIND_MAILCFG, nil)
+	repoId, _, found := mailRepoOfKind(state, protocol.RepoKind_REPO_KIND_MAILCFG, mailRepoNetworkConfig)
+	return repoId, found
+}
+
+// A Team scope's own mailcfg as the state holds it (MAIL-M8-09): the mailcfg whose row names the scope's member,
+// read only by that member's consented devices and the scope's receivers. False for none, which is every scope's
+// today: QD-1093's owner-bound mailcfg RepoCreate is neither folded nor made by EvsClient.CreateRepo yet.
+func (self *MailRepos) ScopeMailConfigRepo(memberId Id) (Id, bool) {
+	state, err := self.verifiedState()
+	if err != nil || memberId == (Id{}) {
+		return Id{}, false
+	}
+	repoId, _, found := mailRepoOfKind(state, protocol.RepoKind_REPO_KIND_MAILCFG, func(repo *protocol.AclRepo) bool {
+		ownerMemberId, err := IdFromBytes(repo.GetOwnerMemberId())
+		return err == nil && ownerMemberId == memberId
+	})
 	return repoId, found
 }
 
@@ -334,7 +356,7 @@ func (self *MailRepos) EnsureMailConfig(ctx context.Context) (*EvsRepo, error) {
 		defer self.stateLock.Unlock()
 		return self.createdMailConfig
 	}()
-	repoId, repo, found := mailRepoOfKind(state, protocol.RepoKind_REPO_KIND_MAILCFG, nil)
+	repoId, repo, found := mailRepoOfKind(state, protocol.RepoKind_REPO_KIND_MAILCFG, mailRepoNetworkConfig)
 	if found {
 		if !self.created(repo) {
 			return self.evs.Repo(repoId), nil

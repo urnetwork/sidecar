@@ -3,7 +3,8 @@
 // NewSocketSmtpNamespace) wraps these hooks, so a host opens smtp/ with RegisterSmtpNamespace(NewSmtpListenHooks(...),
 // scopes).
 //
-//	name     port 25 and host `mx` or `mx.<scope>`, nothing else: the name mxedge splices a network's sessions to
+//	name     port 25 and host `mx` or `mx.<scope>`, the scope one LDH label (a Team scope's sublabel, owner decision
+//	         40), nothing else: the name mxedge splices a network's sessions to
 //	caller   a sidecar, since a receiver's deposits are signed as one; a client with no sidecar is refused
 //	network  one with a mail_network row. A source that cannot tell yet leaves the listen undecided
 //	         (ErrSocketListenUnavailable), which refuses the page as unavailable rather than the entry for good
@@ -48,10 +49,25 @@ func SmtpListenScope(name string) (scope string, ok bool) {
 		return "", false
 	}
 	label, scope, scoped := strings.Cut(parts[2], ".")
-	if label != smtpListenHostLabel || (scoped && scope == "") {
+	if label != smtpListenHostLabel || (scoped && !smtpListenScopeLabel(scope)) {
 		return "", false
 	}
 	return scope, true
+}
+
+// Whether scope is one LDH label, as a Team scope is (§12.7; DNS's ValidateDnsScopeLabel holds its length): lowercase,
+// as a socket name is spelled, with no dot and no hyphen at either end.
+func smtpListenScopeLabel(scope string) bool {
+	if scope == "" || scope[0] == '-' || scope[len(scope)-1] == '-' {
+		return false
+	}
+	for i := range len(scope) {
+		c := scope[i]
+		if !('a' <= c && c <= 'z' || '0' <= c && c <= '9' || c == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 // §15's check of one smtp/ listen: see the file header. nil admits it, ErrSocketListenRefused refuses the entry,

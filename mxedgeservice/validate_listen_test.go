@@ -60,7 +60,7 @@ func testSmtpListenCheck(networkId connect.Id, sidecarId *connect.Id, name strin
 }
 
 func TestSmtpListenScopeReadsOnlyAReceiversName(t *testing.T) {
-	for name, want := range map[string]string{"smtp/25/mx": "", "smtp/25/mx.team": "team", "smtp/25/mx.a.b": "a.b"} {
+	for name, want := range map[string]string{"smtp/25/mx": "", "smtp/25/mx.team": "team", "smtp/25/mx.eng-2": "eng-2"} {
 		if scope, ok := mxedgeservice.SmtpListenScope(name); !ok || scope != want {
 			t.Errorf("%s: %q, %t", name, scope, ok)
 		}
@@ -68,6 +68,8 @@ func TestSmtpListenScopeReadsOnlyAReceiversName(t *testing.T) {
 	for _, name := range []string{
 		"smtp/587/mx", "smtp/25/mail", "smtp/25/mx.", "smtp/25/", "smtp/25", "smtp/25/mx/extra", "tls/25/mx", "25/mx", "mx", "",
 		"smtp/25/MX", "smtp/025/mx", "smtp/25/mxx",
+		// a scope is one label (MAIL-M8-09): two, a cased one, or one with a hyphen at an end, is no receiver's
+		"smtp/25/mx.a.b", "smtp/25/mx.Team", "smtp/25/mx.-eng", "smtp/25/mx.eng-", "smtp/25/mx.e_g",
 	} {
 		if _, ok := mxedgeservice.SmtpListenScope(name); ok {
 			t.Errorf("%q read as a receiver's name", name)
