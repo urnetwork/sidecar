@@ -28,9 +28,10 @@
 //
 // Not here: whether B's other run is searchable again once its card is back: the removal's push left its document a
 // tombstone one version above the item's, which the card written again at the item's own version does not pass
-// (question record-m10-06-moderated-card-index-tombstone), so the case holds that run to the fold alone; the mask itself, which a search applies and the search rows hold (FS-76; search_mask.go's tests); FI-19
-// through the search oracle, whose ledger this world does not feed: the case holds the same rule on the slot objects
-// and the index's own files; a runner killed mid-erasure, which FS-99's cards case runs (fs99_cards_evs.go).
+// (question record-m10-06-moderated-card-index-tombstone), so the case holds that run to the fold alone; the mask
+// itself, which a search applies and the search rows hold (FS-76; search_mask.go's tests); FI-19 through the search
+// oracle, whose ledger this world does not feed: the case holds the same rule on the slot objects and the index's own
+// files; a runner killed mid-erasure, which FS-99's cards case runs (fs99_cards_evs.go).
 
 package fault
 

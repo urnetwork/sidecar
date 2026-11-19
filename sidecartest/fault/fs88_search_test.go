@@ -2,8 +2,8 @@
 
 package fault
 
-// FS-88's searches case on T2 (§22.8; §16.11's Taint block and tools row, §16.10's stubs, D-MCP-16, D-MCP-29, I-9, I-20,
-// FI-21; RECORD-M10-06), at the later of M6-out and M10-out, on real engines: the directory world on evs
+// FS-88's searches case on T2 (§22.8; §16.11's Taint block and tools row, §16.10's stubs, D-MCP-16, D-MCP-29, I-9,
+// I-20, FI-21; RECORD-M10-06), at the later of M6-out and M10-out, on real engines: the directory world on evs
 // (fs_directory_evs.go) at format 2, where a daemon's runs ride its card and each card push carries its index entries,
 // and a search device following the cards ref's index through its reader's evs client (sidecar's
 // directory_search_testhooks.go). It extends RECORD-M6-26's case (fs88_test.go), whose canaries and starts it uses.
