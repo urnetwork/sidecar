@@ -6,8 +6,8 @@
 //
 // Two exit criteria have production halves, stage 1 enforced and the daemon on darwin, linux and windows in
 // preview_networks only, and they read open, never pass, whatever their local tests do. So does every item a
-// person reviews. This file also keeps, until each later sweep's task moves them into its own file, the items
-// OPS-M1-07's hand-written gates.yml held for later gates.
+// person reviews. The items OPS-M1-07's hand-written gates.yml held for later gates each went into
+// its own sweep's file: M2's into gate_m2_out.go, M3's into gate_m3.go, M5's into gate_m5.go and M7's into gate_m7.go.
 
 package fault
 
@@ -120,12 +120,4 @@ var gateEverySweep = RegisterGateSweep(&GateSweep{
 			{Repo: "server", Package: "./local/fs55", Stores: true, Names: []string{"TestFs55OnServerBinaries"}, Args: []string{"-fs55.base={base}", "-fs55.group={group}"}},
 		},
 	},
-})
-
-// The item OPS-M1-07's hand-written gates.yml held for M5, kept until TEST-M5-02 moves it into its own sweep. M2's went
-// into gate_m2_out.go (TEST-M2-19): the nvme run, and the 0x0010 interop artifact, which left the gate with MLS (owner
-// decision 610); M3's into gate_m3.go (TEST-M3-02); M7's census run into gate_m7.go (TEST-M7-01).
-var gateM5CarriedSweep = RegisterGateSweep(&GateSweep{
-	Gate:  "M5",
-	Items: []*GateItem{{Item: "S7's SNI-less abuse@<root> case"}},
 })
