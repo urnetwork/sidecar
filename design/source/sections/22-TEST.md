@@ -1023,6 +1023,20 @@ builders    a row on T2 and T3 is one exported fault.Builder in a non-test file,
             row's fsN_test.go holding only the thin T2 test; a T3 test that drives stock git and git-lfs through
             evsgit's world, which needs a testing.TB, runs in server's evshost rather than sidecart3 (FS-5's,
             FS-73's and FS-72's rollback case), and each gate's sweep names it there (owner decision 548)
+gates       a gate names a case's T3 test by convention in server's sidecart3, under tags that carry
+            sidecar_localstack, since a T3 Net hosts its stores on the local stack's MinIO, so no sweep names a
+            sidecart3 case; a sweep names, with its package's tags, each case whose T3 test runs elsewhere: M2's in
+            server's evshost (FS-1 to FS-4, FS-6, FS-7, FS-12, FS-57, FS-58, FS-62, FS-63 and FS-113, and FS-10's
+            twins by their own names), M4's in server's controller (FS-38, its forged case and FS-56), M6's in
+            server's api (FS-19's team and invite cases and the team cases of FS-21, FS-97 and FS-124) and M10's
+            (FS-72's migration case in evshost, FS-74 and FS-75 in server's root package); a T2+T3 case keeps its
+            convention T2 test, no test moves, and a server test holds every test a sweep or the convention names
+            to its declaration in its package under its tags (owner decision 625)
+clauses     a case's further schedules, run through fault.RunClause under the row's rules, are registered against
+            their row and case, and the convention names each clause's test too, by a name derived from the row,
+            the case and the clause, with an OnT3 twin where the clause has one, so a gate reads a case pass only
+            when its row's test and every registered clause pass; a row whose tests are clauses alone registers
+            its builder with them (owner decision 626)
 ```
 
 ```text

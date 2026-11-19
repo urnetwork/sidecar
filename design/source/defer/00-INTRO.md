@@ -24,7 +24,7 @@ Under each entry's title are its stage and the subsections of DESIGN.md that poi
 
 - What the design rules out. §1.7's non-goals and each section's rejected alternatives are decisions, not deferrals.
 - App, console and extension screens. Owner rule 6 puts the apps' UI out of scope, and the design gives the seams it uses.
-- Work the build's review phase finishes before launch. That work is inside M0-M10.
+- Work the build's review phase finishes before launch. That work is inside M0-M10. The exception is a check or a fold that an owner decision itself puts off to the review phase: it has an entry, with that stage, until the review phase lands it.
 - A reversal. A mechanism the owner removes has no entry; the owner decision that removes it says what went.
 
 ## Adding an entry

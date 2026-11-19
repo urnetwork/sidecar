@@ -32,7 +32,7 @@ This section maps §9-§15, §18, §20 and §21's services to warp blocks, lb ro
 
 ### 19.4 Service blocks
 
-Blocks are `beta 1 + g1 99` on every lb host unless noted. Each lb host so runs a beta and a g1 process of tlsedge, and of mxedge's router, side by side, and every process of an edge service holds its own `urnetwork-edge` client slot, one of 4 that no other running process of that service on the host holds, so no two connect one client (§13.6; owner decision 577), and taskworker's idle client reap leaves these clients alone, so an unused slot stays deployable (§13.6; owner decision 591); running those blocks as g1 alone is the fallback should they ever need no canary.
+Blocks are `beta 1 + g1 99` on every lb host unless noted. Each lb host so runs a beta and a g1 process of tlsedge, and of mxedge's router, side by side, and every process of an edge service holds its own `urnetwork-edge` client slot, one of 4 that no other running process of that service on the host holds, so no two connect one client (§13.6; owner decision 577), and taskworker's idle client reap leaves these clients alone, so an unused slot stays deployable, and marks nothing while its process has no good read of sidecar.yml (§13.6; owner decisions 591, 622); running those blocks as g1 alone is the fallback should they ever need no canary.
 
 | Service (§), blocks | Name, routes, ports | State; ready also needs | `secret_files` |
 |---|---|---|---|

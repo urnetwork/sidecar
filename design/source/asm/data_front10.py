@@ -1947,3 +1947,39 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     _D616, _D616 + "A third sweep, on 2026-11-19, numbers the answers of 2026-11-18 and 2026-11-19: evs's fair P1 admission "
     "(617), a recovery's groups step (618), extending @@OD:602@@, a DROP's index rewrites and its resend "
     'without them (619, 620) and the omitted-document check (621). ')
+INDEX += [
+    (622, 'The idle marking and a broken first read',
+     "taskworker's idle marking holds off while its process has no good read of sidecar.yml."),
+    (623, 'dns-1 and dns-2 name delegated zones',
+     "§2.8's dns-1 and dns-2 name a Team network's delegated `_domainkey.<domain>` apexes and selector names."),
+    (624, 'Calls to an edge without a Hello',
+     "A sidecar's calls and NO_REPLY sends reach an edge with no Hello, on the signed `ur/` ticket's basis."),
+    (625, 'Gate sweeps and the T3 convention',
+     "Each sweep names every case whose T3 test runs outside sidecart3, and the convention's T3 entry carries "
+     "the local stack's tag."),
+    (626, 'Clause tests at the gates',
+     'A gate reads a case pass only when its row test and every clause registered for it pass.'),
+    (627, "M2's gate and the MLS legs",
+     'FS-15, FS-20, FS-24 and FS-104 stay at M2 on their drafted schedules, their MLS legs counting toward '
+     "nothing, until KEYS's rework."),
+]
+for _n, _note in [
+        (591, ' Followed by @@OD:622@@: the marking holds off without a good read of sidecar.yml.'),
+        (548, ' Extended by @@OD:625@@ to every case whose T3 test runs outside sidecart3.'),
+        (610, " Followed by @@OD:627@@: M2's gate keeps four rows on their drafted schedules meanwhile."),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 628))
+DATES.update({622: '2026-11-18', 623: '2026-11-18', 624: '2026-11-18', 625: '2026-11-18', 626: '2026-11-18', 627: '2026-11-18'})
+_D621 = ("A third sweep, on 2026-11-19, numbers the answers of 2026-11-18 and 2026-11-19: evs's fair P1 admission "
+         "(617), a recovery's groups step (618), extending @@OD:602@@, a DROP's index rewrites and its resend "
+         'without them (619, 620) and the omitted-document check (621). ')
+assert DECISIONS_INTRO.count(_D621) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D621, "A third sweep, on 2026-11-19, numbers the answers of 2026-11-18 and 2026-11-19: evs's fair P1 admission "
+    "(617), a recovery's groups step (618), extending @@OD:602@@, a DROP's index rewrites and its resend "
+    "without them (619, 620) and the omitted-document check (621); the idle marking's hold (622), following "
+    "@@OD:591@@, the dns rows' delegated zones (623) and calls to an edge with no Hello (624); what the gates "
+    'name and run (625 to 627), extending @@OD:548@@ and following @@OD:610@@. ')
