@@ -313,3 +313,47 @@ func (self *MxEdgeService) AwaitSpliceCount(want int) {
 		<-update
 	}
 }
+
+// The router's wake holds on settings' bounds, hinting through push, which may be nil.
+type WakeHolds = mxWakeHolds
+
+// Holds with nothing held.
+func NewWakeHolds(ctx context.Context, push sidecar.Push, settings *MxEdgeSettings, clock sidecar.Clock, metrics sidecar.Metrics) *WakeHolds {
+	return newMxWakeHolds(ctx, push, settings, clock, newMxMetrics(metrics))
+}
+
+// Takes one hold for networkId, false past a bound; first is the network's only hold.
+func (self *mxWakeHolds) Acquire(networkId sidecar.Id) (first bool, ok bool) {
+	return self.acquire(networkId)
+}
+
+// Gives back one hold.
+func (self *mxWakeHolds) Release(networkId sidecar.Id) {
+	self.release(networkId)
+}
+
+// Hints route's receivers, as a network's first hold does.
+func (self *mxWakeHolds) Hint(route *MailRoute) {
+	self.hint(route)
+}
+
+// Waits for every hint in flight.
+func (self *mxWakeHolds) AwaitHints() {
+	self.hintGroup.Wait()
+}
+
+// Returns once this many sessions are held for a receiver.
+func (self *MxEdgeService) AwaitWakeHoldCount(want int) {
+	for {
+		count, update := self.router.holds.holdCount.Get()
+		if count == want {
+			return
+		}
+		<-update
+	}
+}
+
+// Waits for every wake hint the router has in flight.
+func (self *MxEdgeService) AwaitWakeHints() {
+	self.router.holds.hintGroup.Wait()
+}

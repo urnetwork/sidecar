@@ -114,6 +114,13 @@ listing_refresh_interval: 4m
 listing_stale_timeout: 12m
 listing_load_timeout: 90s
 listing_prefixes: 14
+wake_hold: true
+wake_hold_timeout: 40s
+wake_holds: 15
+wake_holds_per_network: 3
+wake_hold_find_interval: 3s
+wake_hints: 16
+wake_hint_timeout: 7s
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -178,11 +185,19 @@ listing_prefixes: 14
 		ListingStaleTimeout:         12 * time.Minute,
 		ListingLoadTimeout:          90 * time.Second,
 		ListingPrefixCount:          14,
+		WakeHold:                    true,
+		WakeHoldTimeout:             40 * time.Second,
+		WakeHoldCount:               15,
+		WakeHoldNetworkCount:        3,
+		WakeHoldFindInterval:        3 * time.Second,
+		WakeHintCount:               16,
+		WakeHintTimeout:             7 * time.Second,
 		Ingress:                     defaults.Ingress,
 		Usage:                       defaults.Usage,
 		HostNameMaxByteCount:        defaults.HostNameMaxByteCount,
 		HostLabelMaxByteCount:       defaults.HostLabelMaxByteCount,
 		ReplyUrlMaxByteCount:        defaults.ReplyUrlMaxByteCount,
+		RouteReceiverCount:          defaults.RouteReceiverCount,
 	}
 	if !reflect.DeepEqual(settings, want) {
 		t.Errorf("loaded %+v, want %+v", settings, want)
