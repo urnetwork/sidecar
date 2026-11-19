@@ -4,16 +4,18 @@
 // nothing in it lifts a halt, raises a limit or feeds attribution (§14.8). Its other fields are counted as
 // metrics with closed labels, and nothing of it is stored.
 //
-// The outcome travels as a NO_REPLY envelope of type SMTP_OUTCOME to the ticket's listener, and the subprotocol
-// hands a NO_REPLY envelope to no engine handler yet (rpc_handle.go answers only requests), so the listener
-// registers nothing for it: AcceptOutcome is what such a handler calls, and until PROTO gives engines NO_REPLY
-// messages no outcome reaches it.
+// The outcome travels as a NO_REPLY envelope of type SMTP_OUTCOME to the ticket's listener, which the sidecar sends
+// with Subprotocol.SendEdge and no Hello (§6.4, owner decision 624). Serve registers handleOutcome for it on each
+// platform client's dispatcher with HandleNoReply (proof_rpc.go's registerHandlers), and it hands the body to
+// AcceptOutcome with the source connect authenticated, which must be the connection's dialer, the ticket's
+// dialer_client_id. Nothing answers it, so a refusal is its metric alone.
 //
 // Safe for concurrent use.
 
 package smtpedgeservice
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"sync"
@@ -94,6 +96,14 @@ var errSmtpOutcomeRefused = errors.New("smtp outcome refused")
 // end, once. A refusal is an error and changes nothing.
 func (self *SmtpEdgeService) AcceptOutcome(sourceId sidecar.Id, body []byte) error {
 	return self.outcomes.accept(sourceId, body)
+}
+
+// SMTP_OUTCOME's NO_REPLY function on a platform client's dispatcher: the envelope to AcceptOutcome, from its source
+// as connect authenticated it. It runs on that source's worker and does no I/O: the halt rule's event goes to its
+// queue with zero wait. The body is borrowed, and AcceptOutcome keeps nothing of it.
+func (self *SmtpEdgeService) handleOutcome(ctx context.Context, message *sidecar.SubprotocolNoReply) {
+	// a refusal is counted by AcceptOutcome's metric, and nothing answers a NO_REPLY envelope
+	self.AcceptOutcome(message.SourceId, message.Body)
 }
 
 func (self *smtpOutcomes) accept(sourceId sidecar.Id, body []byte) error {
