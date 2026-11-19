@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -238,4 +239,44 @@ func TestFi19CatchesAnErasedDocumentReturnedPastTheCut(t *testing.T) {
 		run.Hits = append(run.Hits, sidecar.SearchHit{Repo: world.index.RepoId(), Ref: world.index.RefId(), Path: "notes/lighthouse.md", Version: 1, DocKey: key, State: sidecar.SearchPossible})
 	}
 	wantFailure(t, runFresh(t, schedule), "which erasure")
+}
+
+// A source whose roll-up wrote all's shard with a byte more pad than its keyed pad: the shard decodes and encodes again
+// to its bytes, since a decoder takes any zero pad, and only the keyed pad's check sees it (§22.7's shards row).
+type searchWorldMispadded struct {
+	*searchWorldIndex
+}
+
+func (self *searchWorldMispadded) IndexPushes(ctx context.Context) ([]*SearchIndexPush, error) {
+	pushes, err := self.searchWorldIndex.IndexPushes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	mispadded := []*SearchIndexPush{}
+	for _, push := range pushes {
+		copied := *push
+		copied.Written = nil
+		for _, file := range push.Written {
+			if strings.HasSuffix(file.Path, "/a/0") {
+				changed := *file
+				changed.Plaintext = append(slices.Clone(file.Plaintext), 0)
+				changed.ContentSha256 = nil
+				file = &changed
+			}
+			copied.Written = append(copied.Written, file)
+		}
+		mispadded = append(mispadded, &copied)
+	}
+	return mispadded, nil
+}
+
+func TestFi22CatchesAShardWithoutItsKeyedPad(t *testing.T) {
+	schedule, world := fiSearchWorldSchedule(t, nil)
+	source := &searchWorldMispadded{searchWorldIndex: newSearchWorldIndex("the mispadded ref", world.index)}
+	schedule.Steps = append([]*Step{{Actor: "oracle", Action: func(ctx context.Context, net *Net) error {
+		SearchRecordOf(net).AddIndex(source)
+		return nil
+	}}}, schedule.Steps...)
+	schedule.Check = []Invariant{FI(22)}
+	wantFailure(t, runFresh(t, schedule), "not its keyed pad of")
 }

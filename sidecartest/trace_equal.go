@@ -32,6 +32,16 @@ var (
 	_                   = RegisterPrivacyAssert("request-traces", &PrivacyAssertTest{Repo: "sidecar", Package: "github.com/urnetwork/sidecar/sidecartest", Name: "TestARequestTraceThatDependsOnTheQueryFails"})
 )
 
+// §22.7's shards row (TEST-M10-03): the DBREACH fixture on the index and on its two mutants (dbreach_fixture.go), and
+// FI-22 holding every fresh shard a search world writes to §11.14's keyed pad and to a canonical encoding nothing
+// compresses, which a shard without its keyed pad fails.
+var (
+	_ = RegisterPrivacyAssert("shards-dbreach", &PrivacyAssertTest{Repo: "sidecar", Package: "github.com/urnetwork/sidecar/sidecartest", Name: "TestDbreachFixtureRecoversNoCodeOnTheIndex", Tags: traceEqualTestHooks})
+	_ = RegisterPrivacyAssert("shards-dbreach", &PrivacyAssertTest{Repo: "sidecar", Package: "github.com/urnetwork/sidecar/sidecartest", Name: "TestDbreachFixtureRecoversTheCodeWithoutTheKeyedPad", Tags: traceEqualTestHooks})
+	_ = RegisterPrivacyAssert("shards-dbreach", &PrivacyAssertTest{Repo: "sidecar", Package: "github.com/urnetwork/sidecar/sidecartest", Name: "TestDbreachFixtureRecoversTheCodeWithCompressionOn", Tags: traceEqualTestHooks})
+	_ = RegisterPrivacyAssert("shards-dbreach", &PrivacyAssertTest{Repo: "sidecar", Package: traceEqualFault, Name: "TestFi22CatchesAShardWithoutItsKeyedPad", Tags: traceEqualTestHooks})
+)
+
 // One search's server-visible requests, and the sync state it ran from.
 type RequestTrace struct {
 	// What the trace is of, for a failure: the host and a label for the query, never the query itself.
