@@ -206,6 +206,11 @@ func TestEachCaptureClassNamesItsLeak(t *testing.T) {
 			net.Host().Tasks.Schedule(t.Context(), &sidecar.TaskRequest{Name: "job", OnceKey: canary})
 		},
 		PrivacyClassInterceptingProxy: leakThroughInterceptingProxy,
+		PrivacyClassEdgeRecord:        leakThroughEdgeSource(PrivacyClassEdgeRecord),
+		PrivacyClassReportParse:       leakThroughEdgeSource(PrivacyClassReportParse),
+		PrivacyClassFind:              leakThroughEdgeSource(PrivacyClassFind),
+		PrivacyClassDnsEdgeQuery:      leakThroughEdgeSource(PrivacyClassDnsEdgeQuery),
+		PrivacyClassUpstreamResolver:  leakThroughEdgeSource(PrivacyClassUpstreamResolver),
 		PrivacyClassWake: func(t *testing.T, net *Net, canary string) {
 			vendor := NewFakeWakeVendor(pushservice.WakePlatformFcm, net.Clock())
 			net.Capture().AddWakeVendor(vendor)

@@ -113,6 +113,9 @@ type MailBinding struct {
 	// Retires a burner's DKIM selector at its burn (SmtpDkimKeys.Retire, MAIL-M9-03): nil retires nothing here, and
 	// the device that published the selector retires its own once it reads the burn.
 	BurnerSelectors MailBurnerSelectors
+	// §5.4's search, which *Sidecar answers on its installed engine (Sidecar.Search): nil searches nothing, so a mail
+	// search and IMAP's text terms answer unavailable (mail_search.go).
+	Search func(ctx context.Context, request *SearchRequest) (*SearchStream, error)
 }
 
 // A replying burner's selectors on this device (§15.9, D-DNS-11): SmtpDkimKeys is one.
@@ -228,6 +231,8 @@ type MailClient struct {
 	config       *MailConfig
 	configRepoId Id
 	views        map[Id]*MailView
+	// the search join of each mailbox's view, built at first use and made again when its view is (mail_search.go)
+	searchJoins map[Id]*MailSearchJoin
 	// the mailbox's store as IMAP sees it, by mailbox, built at first use over the binding (mail_imap_store.go)
 	imapStores map[Id]*MailImapStore
 	// the member's vault, by mailbox, built at first use over the binding (mail_codes.go)
@@ -349,6 +354,7 @@ func (self *MailClient) Bind(binding *MailBinding) {
 		self.config = nil
 		self.configRepoId = Id{}
 		self.views = map[Id]*MailView{}
+		self.searchJoins = nil
 		self.imapStores = map[Id]*MailImapStore{}
 		self.vaults = map[Id]*MailVault{}
 		self.notifyWithLock()
@@ -810,6 +816,7 @@ func (self *MailClient) closeParts() {
 		self.config = nil
 		self.repos = nil
 		self.views = map[Id]*MailView{}
+		self.searchJoins = nil
 		self.imapStores = map[Id]*MailImapStore{}
 		self.vaults = map[Id]*MailVault{}
 		self.notifyWithLock()

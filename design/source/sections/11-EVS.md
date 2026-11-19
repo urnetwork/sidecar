@@ -723,7 +723,12 @@ boundary  1 written: the DROP writes through_version, the path's next version, w
           checks one locator naming an upload or inline record of this push, or chunk locators each an upload of
           this push or a kind-1 locator its base names, all but the last a whole 4 MiB chunk, and versioning 0;
           readers check record kinds, oid and mode; 2 removed: through_version is the path's standing removal,
-          which stays, nothing is written, and a re-creation continues from it (owner decision 148)
+          which stays, nothing is written, and a re-creation continues from it (owner decision 148); beside the
+          written lineages' changes evs takes a DROP's index rewrites (11.14's drop row): changes of versioning-2
+          versions under .ur-index/ on the DROP's own file-mode ref, each a rewrite of a standing index file,
+          never a creation or a removal, held to 11.14's own rules (5d's index_epoch, padding to the replaced
+          length); ur/index is another ref and never rides the push; every other change is 409 DROP_BOUNDARY
+          (owner decision 619)
 why       a diff chain's checkpoint and early diffs are older versions' content, so a head still citing them would
           keep listed versions reconstructable; the fresh checkpoint leaves those records named only by listed
           versions, and chunk records hold only the head's bytes
@@ -2170,7 +2175,10 @@ re-seed    PUT .../segments, the one route of the exception that takes more than
            other route keeps the whole-set rule, so that admin reads, writes and deposits nothing, and a repo
            re-seeded as deleted takes its segments back in a recovery (11.13; owner decision 565)
 restore    POST /evs/v1/repos/<id>/restore (admin; ur evs restore): deleted -> active by If-Match on the deleted
-           object read; a repo past deleted answers 409 SHREDDING
+           object read; a repo past deleted answers 409 SHREDDING; §19.10's groups step sends it, the route alone,
+           for a repo its state shows restored, so a repo/ a recovery's place created deleted while evs's
+           projection trailed the RepoRestore returns without waiting for the reconciler's daily walk (owner
+           decision 618)
 start      taskworker, 7 d 10 min after the RepoDelete's entry, once the newest projection holds no RepoRestore of its
            deletion_id, which api takes only within 7 d (§8.8): deleted -> shredding by If-Match; exactly one of
            restore and start wins, as the log says; members get a hint, drop RK_g and caches, and mirrors drop the
@@ -2379,9 +2387,16 @@ order    P2 runs by deadline: evacuation, oldest minute directory first; the fol
          record with its request
 queue    each evs, gkm and taskworker process queues P1 work per network (the token's) and serves the queues by
          weighted fair queuing on priced bytes, with tier weights in pro.yml (<tier>.sidecar: store_weight; 1, 4 and
-         16), within its A1 share
+         16), within its A1 share; admission is fair over time too: a write admitted at once, the queue empty,
+         advances its network's virtual finish tag as a queued one does, and a network past its weighted share of
+         the interval's P1 queues behind the others even while the queue is empty, so a flood cannot spend the
+         share before the lighter networks' pushes arrive (owner decision 617)
 shed     past 100 ms of queueing delay it refuses first the network with the most queued priced bytes per weight:
-         429 RESOURCE_EXHAUSTED with retry_after_ms (§6.5's codes)
+         429 RESOURCE_EXHAUSTED with retry_after_ms (§6.5's codes); it refuses only a network strictly heavier than
+         the lightest one waiting, so equal light loads are kept, and among equal loads it refuses by id only when
+         every waiting network is equally loaded past the delay, so a uniform overload still sheds: a light network
+         is never refused while a flood holds more than its weighted share, and its pushes are served within the
+         interval (owner decision 617)
 fallback a process without a fresh allowance for 60 s runs P1 and unfunded P2 at half its last shares and funded P2 at
          most at its last minute's rate, and one that never had an allowance, at start, runs them within the refill
          over twice the process count unless the loop's saved state shows B at zero; P0 runs at once throughout;
@@ -3370,7 +3385,14 @@ coverage  a content version newer than the index's coverage is not yet searchabl
           history and each live entry against its path, one whose content ref holds the path removed or at a higher
           version, with nothing above it in the index, being a mismatch they backfill, and reproduce merges and
           roll-ups, on a mismatch using their own result and raising SidecarEvent index_mismatch {repo, ref, path,
-          signer} (§5.4), indexers for every repo they read (owner decision 150); phones compare an opened document
+          signer} (§5.4), indexers for every repo they read (owner decision 150); for an in-ref push that changed
+          its signer's head they also re-extract every document the content push at that version changed, as the
+          writer extracts it (a binary version, a path under the never row and a chunk D6 skips yield no doc_key),
+          skipping what the erasure set at the push's epoch lists, and hold that the index at that version holds
+          each resulting doc_key at that version or above, in any of the signer's files or the bucket's shards; a
+          missing one is a mismatch, the host's own entry standing for it, the path queued for a backfill and
+          index_mismatch naming the signer and the head file the push wrote, so a writer cannot hide a document
+          it commits behind a changed head (owner decision 621); phones compare an opened document
           with its row; every writer of a ref writes its index, so an agent could otherwise hide a document or plant
           hits
 off       a ref with no index: hosts with the text scan it (exact, linear), phones and browsers match names and,
@@ -3677,7 +3699,11 @@ limit     at the storage limit or while spent, heads ride content pushes and sto
           one ?closure=1 upload; an eraser's re-entry push adds payload and waits as builds do, holding back no file
           of its erasure, every object of which is rewritten and destroyed on schedule, and a listed run card stays
           out of search until a fold of it lands (erase, above; owner decision 584, which reversed owner decision
-          395's hold-back of a resting diff's files)
+          395's hold-back of a resting diff's files); a DROP whose index rewrites need an upload is sent again
+          once without them, the rewrites left to the backfill, which adds payload and waits as builds do, the
+          listed versions' postings staying in the index files, masked by the kept version's newer entry (newest
+          wins), until it runs under the limit, the gap the drop row accepts for a signer that does not hold the
+          index; the same holds on a metadata cluster at §19.9's cohort limit (drop, below; owner decision 620)
 drop      a DROP push also rewrites in place, without the listed versions, each index file holding a listed version
           of a dropped path, padded to the replaced length as erase's rewrite is, with no ERASE or CLOSURE flag,
           replacing in the same push the head of each writer whose file it rewrites and the manifest of each bucket
@@ -3688,7 +3714,13 @@ drop      a DROP push also rewrites in place, without the listed versions, each 
           the older version meanwhile (newest wins); the rewrite lands at commit, so a cancel loses nothing; hosts
           with the text reproduce it and raise index_mismatch on one that left a listed version's postings; a DROP
           refused 409 INDEX_EPOCH is rebuilt and signed again by its device under the person's same confirmation, or
-          sent without its index rewrites, left to that backfill
+          sent without its index rewrites, left to that backfill; evs's boundary rule admits the rewrites (11.7's
+          boundary row; owner decision 619), and a client sends the DROP again without them on 409 DROP_BOUNDARY,
+          for an evs older than that rule; a DROP that carried rewrites and is refused for their upload, a bucket
+          or all shard, with a QuotaRefusal at the storage limit or while spent, or 507 CLUSTER_FULL on a metadata
+          cluster at §19.9's cohort limit, is sent again once without them, so a DROP, which frees storage, is
+          never blocked by its index, while a refusal of the DROP without rewrites, its kept head's own upload,
+          goes to the person (limit, above; owner decision 620)
 off       an admin's settings version turns the index off (never the team directory's); that device, or an
           indexer, removes <root> but settings in one push listing each file, whose content the purge deletes,
           the ref's erasure set staying for a later build to apply, and never DELETEing ur/index, which would
@@ -3935,7 +3967,7 @@ never     a query, which documents match it, or which trigrams documents share: 
 
 **D-EVS-55 (proposed).** Terms under 3 bytes match as whole words through boundary trigrams, and CJK runs are substring terms. *Why:* short words would match nothing, and a CJK character is one trigram (owner decision 151).
 
-**D-EVS-56 (proposed).** Hosts with the text re-extract each new document, check each tombstone against its path's history and reproduce merges and roll-ups, raising `index_mismatch` naming the signer and using their own result; indexers do so for every repo they read. *Why:* every writer of a ref writes its index (owner decisions 150, 151).
+**D-EVS-56 (proposed).** Hosts with the text re-extract each new document, check each tombstone against its path's history and reproduce merges and roll-ups, raising `index_mismatch` naming the signer and using their own result; indexers do so for every repo they read. For a push that changed its signer's head they hold that the index holds every document the push changed, an omitted one being a mismatch that names the head file the push wrote (owner decision 621). *Why:* every writer of a ref writes its index (owner decisions 150, 151).
 
 **D-EVS-57 (proposed).** An app host's "search more" asks one of its network's designated search indexers (none by default) over §6.6's RPC on the pair's Network contract; the indexer authorizes the requester and each repo in its own state, pins its cached snapshot, verifies candidates newest first against its text and answers pages with each repo's coverage and pinned (v, C_v), fetching nothing from evs, api or gkm; with none answering, owner decision 155 applies. *Why:* owner decisions 175 and 177; evs stays blind on both devices, and a forged or stale requester view reaches nothing the indexer refuses.
 

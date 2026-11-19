@@ -297,6 +297,12 @@ func s10Run(t testing.TB, settings *S10Settings) func(ctx context.Context, run *
 		if err := capture.Declare("mx-1", "K_mxc_day", sidecartest.PrivacyClassRedis); err != nil {
 			return err
 		}
+		// a dns edge is sent the label in an MX lookup, a sender's and this flow's own zone reads, and answers it from
+		// the wildcard with no query kept (dns-2; §15.9), so the label passes in the queries an edge was sent and in
+		// no other class, the edges' records and the upstream resolver's queries included
+		if err := capture.Declare("dns-2", "a burner's label", sidecartest.PrivacyClassDnsEdgeQuery); err != nil {
+			return err
+		}
 		for _, line := range world.Mail.LogLines() {
 			capture.AddItem(&sidecartest.PrivacyItem{Class: sidecartest.PrivacyClassLog, Name: "mail log", Body: []byte(line)})
 		}
