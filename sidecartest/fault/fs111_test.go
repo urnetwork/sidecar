@@ -790,3 +790,134 @@ func TestFs111SweepCatchesAnErasureWithoutItsErases(t *testing.T) {
 		t.Fatal("the sweep did not catch an erasure whose ERASE never committed")
 	}
 }
+
+// FS-111's registered case on real engines (fs111.go), under every rule §22.8 gives the row: the conventional T2 test.
+func TestFs111(t *testing.T) {
+	RunRow(t, "FS-111", "", nil)
+}
+
+// FS-111's main clauses as a schedule on a Net, so TEST-M10-02's search invariants read the world's index history and
+// every recorded search after every step (FI-18 to FI-23): writer W's head holds D, writer L's large entry holds Dl and
+// writer S's sealed slots hold Dm; a hold; a companion push to a fresh head and one to a large entry are planned at the
+// old epoch and a merge is held at its built barrier; eraser B's CUT lists the three; a desktop searches; the merge is
+// released and rebuilds; B dies right after its first CLOSURE; 20 min pass; the planned pushes are refused 409
+// INDEX_EPOCH and rebuilt; B's device starts again and finishes; the erasure is recorded complete, and the desktop
+// searches again.
+func TestFs111UnderTheSearchInvariants(t *testing.T) {
+	world := newFsEraseWorld(t, "fs111 invariants", nil)
+	source := newSearchWorldIndex("the search world's ref", world.index)
+	erasureId := searchId("fs111 invariants erasure")
+	var d, large *sidecar.SearchTestDocument
+	var phrase string
+	var erased []*fsErased
+	var companion, largeCompanion *sidecar.SearchTestPlannedPush
+	e := fsIndexDocument("notes/lighthouse.md", 1, "lighthouse", world.clock.Now())
+	search := func(label string, query string) func(ctx context.Context, net *Net) error {
+		return func(ctx context.Context, net *Net) error {
+			return world.recordedSearch(source, label, query, nil)(ctx, net)
+		}
+	}
+	eraser := func() (*sidecar.IndexEraser, error) {
+		return world.erasure.NewEraser(&sidecar.SearchTestEraserArgs{})
+	}
+	steps := []*Step{
+		{Actor: "oracle", Action: func(ctx context.Context, net *Net) error {
+			SearchRecordOf(net).AddIndex(source)
+			return nil
+		}},
+		{Actor: "writers", Action: func(ctx context.Context, net *Net) error {
+			d, large, phrase, erased = fs111Kinds(t, world)
+			world.erasure.SetHold(true)
+			return nil
+		}},
+		{Actor: "desktop", Action: search("cormorant before the CUT", "cormorant")},
+		{Actor: "writers", Action: func(ctx context.Context, net *Net) error {
+			var err error
+			if companion, err = world.index.PlanPush(ctx, searchId("writer a"), world.clock.Now(), []*sidecar.SearchTestDocument{d, e}); err != nil {
+				return err
+			}
+			largeCompanion, err = world.index.PlanPush(ctx, searchId("writer a2"), world.clock.Now(), []*sidecar.SearchTestDocument{large})
+			return err
+		}},
+		{Actor: "merger", Action: func(ctx context.Context, net *Net) error {
+			result, err := world.index.MergeResult(ctx, searchId("merger"), 0)
+			if err == nil && (result.Version == 0 || result.Attempts < 2) {
+				err = fmt.Errorf("the merge built before the CUT: %+v", result)
+			}
+			return err
+		}, Background: true},
+		{Actor: "merger", Await: "evs.index.merge.built"},
+		{Actor: "eraserB", Action: func(ctx context.Context, net *Net) error {
+			b, err := eraser()
+			if err != nil {
+				return err
+			}
+			if _, err := b.Cut(ctx, &sidecar.IndexCutArgs{ErasureId: erasureId, Documents: fsCutDocuments(erased)}); err != nil {
+				return err
+			}
+			for _, document := range erased {
+				if err := world.ledger.Erase(world.index.RepoId(), world.index.RefId(), document.path, document.version); err != nil {
+					return err
+				}
+			}
+			return nil
+		}},
+		{Actor: "desktop", Action: search("cormorant after the CUT", "cormorant")},
+		{Actor: "desktop", Action: func(ctx context.Context, net *Net) error {
+			return search("the large document after the CUT", phrase)(ctx, net)
+		}},
+		{Release: []string{"evs.index.merge.built"}},
+		{Actor: "merger", Join: true},
+		{Actor: "desktop", Action: search("marker0007 after the merge", "marker0007")},
+		{Actor: "eraserB", Action: func(ctx context.Context, net *Net) error {
+			b, err := eraser()
+			if err != nil {
+				return err
+			}
+			_, err = b.Rewrite(ctx, &sidecar.IndexRewriteArgs{ErasureId: erasureId, Complete: true, Note: []byte("note")})
+			return err
+		}, Background: true},
+		{Actor: "eraserB", Await: "evs.index.erase.closed"},
+		{Actor: "eraserB", Kill: true},
+		{Actor: "writers", Action: func(ctx context.Context, net *Net) error {
+			world.clock.Advance(20 * time.Minute)
+			for _, planned := range []*sidecar.SearchTestPlannedPush{companion, largeCompanion} {
+				if _, err := planned.Commit(ctx); !errors.Is(err, sidecar.ErrSearchTestIndexEpoch) {
+					return fmt.Errorf("a push built before the CUT: %v", err)
+				}
+			}
+			if err := world.index.PushDocuments(ctx, searchId("writer a"), world.clock.Now(), []*sidecar.SearchTestDocument{d, e}); err != nil {
+				return err
+			}
+			if err := world.record(world.clock.Now(), e); err != nil {
+				return err
+			}
+			return world.index.PushDocuments(ctx, searchId("writer a2"), world.clock.Now(), []*sidecar.SearchTestDocument{large})
+		}},
+		{Actor: "desktop", Action: search("lighthouse after the rebuilt push", "lighthouse")},
+		{Actor: "eraserB", Action: func(ctx context.Context, net *Net) error {
+			restarted, err := eraser()
+			if err != nil {
+				return err
+			}
+			resumed, err := restarted.Resume(ctx, &sidecar.IndexResumeArgs{ErasureId: erasureId, Role: sidecar.IndexResumeEraser, Complete: true, Note: []byte("note")})
+			if err != nil {
+				return err
+			}
+			if resumed.Rewrite == nil || !resumed.Rewrite.Completed {
+				return fmt.Errorf("the restarted eraser did not finish: %+v", resumed.Rewrite)
+			}
+			SearchRecordOf(net).CompleteErasure(source.Name(), erasureId)
+			return fsEraseSweep(world.erasure, erased, true)
+		}},
+		{Actor: "desktop", Action: search("cormorant after the erasure", "cormorant")},
+		{Actor: "desktop", Action: func(ctx context.Context, net *Net) error {
+			return search("the large document after the erasure", phrase)(ctx, net)
+		}},
+	}
+	schedule := &Schedule{Id: "fs111-search-invariants", Steps: steps}
+	for _, n := range []int{18, 19, 20, 21, 22, 23} {
+		schedule.Check = append(schedule.Check, FI(n))
+	}
+	wantPass(t, runFresh(t, schedule))
+}
