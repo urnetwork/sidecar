@@ -17,7 +17,10 @@
 //	        signer holding the right at that push pin's position by retained history, as directory_repo.go's repo file
 //	        row judges an announce entry at its push's pin; never for a config, mailcfg or directory repo. Removed by a
 //	        repo admin at its push's pin, or by any writer once the repo is deleted. Any other version is ignored with
-//	        an alarm, once, and the copy goes on showing the version it accepted last
+//	        an alarm, once, and the copy goes on showing the version it accepted last. A directory admin's push of
+//	        the repo admin's own Signed file is an erasure's CLOSURE (directory_card.go's closurePush; RECORD-M10-05):
+//	        the bytes this copy accepted last are taken again in silence, and a version it never accepted is judged at
+//	        the position its signer named, the rewrite's own pin being no part of what was signed
 //
 // Barriers: directory.repo_file.before and .after around a put, keyed by the repo's id, with no lock held. Safe for
 // concurrent use.
@@ -136,9 +139,29 @@ func (self *directoryFiles) judgeRepoFile(auth DirectoryAuthView, recordAuth Rec
 	}
 	repoFile := stored.File
 	signerId := recordIdOf(stored.Signed.GetSignerId())
-	if recordIdOf(repoFile.GetRepoId()) != repoId || signerId != file.SignerSidecarId {
-		// another repo's file at this path, or one the push's signer did not sign
+	if recordIdOf(repoFile.GetRepoId()) != repoId {
+		// another repo's file at this path
 		return directoryFileRefusal(SidecarRecordAlarmPathRule)
+	}
+	closure := false
+	if signerId != file.SignerSidecarId {
+		// one the push's signer did not sign: only a directory admin's CLOSURE of the repo admin's own file counts
+		closurePush, pending := self.closurePush(auth, file)
+		switch {
+		case pending:
+			return directoryFileJudgement{verdict: directoryFilePending}
+		case !closurePush:
+			return directoryFileRefusal(SidecarRecordAlarmPathRule)
+		}
+		if taken := self.closureOfAccepted(file); taken != nil {
+			return directoryFileJudgement{verdict: directoryFileAccepted, taken: taken}
+		}
+		// a rewrite of a version this copy never accepted: its own push's pin is not the rewrite's, so the file is
+		// judged at the position its signer named, at most 4,096 before the push that first carried it
+		rewritten := *file
+		rewritten.AuthPin = &bridge.AuthPin{Version: repoFile.GetAt().GetVersion(), Chain: bytes.Clone(repoFile.GetAt().GetChain())}
+		file = &rewritten
+		closure = true
 	}
 	networkId := self.client.networkId
 	if networkId == (Id{}) {
@@ -180,7 +203,7 @@ func (self *directoryFiles) judgeRepoFile(auth DirectoryAuthView, recordAuth Rec
 	case directoryVerdictRefused:
 		return directoryFileRefusal(judgement.alarm)
 	}
-	return directoryFileJudgement{verdict: directoryFileAccepted, taken: &directoryAcceptedFile{file: file, seq: repoFile.GetSeq(), repo: stored}}
+	return directoryFileJudgement{verdict: directoryFileAccepted, taken: &directoryAcceptedFile{file: file, seq: repoFile.GetSeq(), repo: stored, closure: closure}}
 }
 
 // An r/ path's removal by its path rule: by a repo admin of the repo at its push's pin, or by any writer once the repo
