@@ -99,8 +99,6 @@ type SearchTestErasure struct {
 	holdVersion uint64
 	holdAt      time.Time
 	held        bool
-	// refusals the next CLOSUREs answer, before anything else
-	closureRefusals []error
 }
 
 // One (path, version) pair.
@@ -302,18 +300,6 @@ func (self *SearchTestErasure) SetHold(on bool) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.held, self.holdVersion, self.holdAt = on, version, self.world.clock.Now()
-}
-
-// The next CLOSUREs answer refusals, in order, before anything else.
-func (self *SearchTestErasure) RefuseClosures(refusals ...error) {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	self.closureRefusals = append(self.closureRefusals, refusals...)
-}
-
-// A 409 for a path another push changed, as a CLOSURE refusal.
-func SearchTestClosureConflict() error {
-	return &indexRefusal{kind: indexRefusalConflict}
 }
 
 // What the CLOSUREs took: closure bytes, ?closure=1 uploads and staged records.
@@ -604,11 +590,6 @@ func (self *searchTestEraseStore) Closure(ctx context.Context, closure *indexClo
 	err := func() error {
 		erasure.stateLock.Lock()
 		defer erasure.stateLock.Unlock()
-		if 0 < len(erasure.closureRefusals) {
-			refusal := erasure.closureRefusals[0]
-			erasure.closureRefusals = erasure.closureRefusals[1:]
-			return refusal
-		}
 		named := map[Id]bool{}
 		for _, key := range closure.erased {
 			named[key.SlotId] = true
