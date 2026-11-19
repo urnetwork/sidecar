@@ -34,9 +34,11 @@
 // whose signer the reader's ref rules take there (§11.8's refs table: a repo admin on the erasure ref, the owner on a
 // record-class owned ref); a whole repo only by repo/ in shredding or shredded under the deletion id of the access
 // log's RepoDelete, not restored. Both read the network's authorization state from the view a schedule names with
-// SetAuthorizationView; with none named, nothing is excused, so an erasure or shred reads as missing objects. A
-// format-2 executed drop (FI-27, TEST-M10-01) and a consumed deposit's deleted content excuse nothing yet, so a
-// schedule meeting either fails closed.
+// SetAuthorizationView; with none named, nothing is excused, so an erasure or shred reads as missing objects. In a
+// format-2 repo, two more, each read from the walk as fi16.go reads format 2 (TEST-M10-01): an object whose every
+// namer is a versionless version a later version of its ref replaced, a purge's candidate, whose going FI-16 judges;
+// and one whose every namer an exact, uncancelled drop of the repo lists, whose going FI-27 judges. A consumed
+// deposit's deleted content excuses nothing yet, so a schedule meeting it fails closed.
 //
 // What the walk could not read or decode is FI-1's own violation. Cost: a repo is walked again only at a check after
 // a step that wrote one of its keys, a batch one of its records was read from, or a gkm/ key of its group; decoded
@@ -47,6 +49,7 @@ package fault
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -351,6 +354,10 @@ type evsStoreVersion struct {
 	payload   *sidecar.EvsCheckedPayload
 	// each change's entry version decoded, nil for a removal, in change order
 	entryVersions []*protocol.EvsEntryVersion
+	// format 2: the ids, hex, of the staged segments its record's tail, or its parts' records' tails, carries; none
+	// for a record read from a container, which evacuation wrote without its staged bytes (§11.7's staged row), so
+	// FI-16 finds a staged locator here or at seg/
+	stagedIds map[string]bool
 }
 
 // The walk of one check: every placed repo, each walked anew when a step changed what it reads and kept otherwise.
@@ -869,10 +876,29 @@ func (self *evsStoreWalker) readVersion(repo *evsStoreRepo, refId sidecar.Id, ve
 		return nil, err
 	}
 	// a record of either format: a format-2 record's tail, its staged segments and purge list, is no part of its
-	// statement or payload (EVS2-M10-30)
-	record, _, err := sidecar.ParseEvsBatchRecordFormat2(recordBytes)
+	// statement or payload (EVS2-M10-30); its staged segments are kept by id for FI-16, the purge list never read
+	record, tail, err := sidecar.ParseEvsBatchRecordFormat2(recordBytes)
 	if err != nil {
 		return nil, fmt.Errorf("its record: %w", err)
+	}
+	stagedIds := map[string]bool{}
+	addStaged := func(tail *sidecar.EvsBatchRecordTail) error {
+		if tail.Empty() {
+			return nil
+		}
+		segments, err := tail.StagedSegments()
+		if err != nil {
+			return fmt.Errorf("its record's staged segments: %w", err)
+		}
+		for _, segment := range segments {
+			// a segment's id is the SHA-256 of its bytes (§11.6's segment row)
+			id := sha256.Sum256(segment)
+			stagedIds[hex.EncodeToString(id[:])] = true
+		}
+		return nil
+	}
+	if err := addStaged(tail); err != nil {
+		return nil, err
 	}
 	if record.RepoId != repo.repoId || record.RefId != refId || record.PushId != entry.PushId {
 		return nil, errors.New("its place holds a record of another repo, ref or push")
@@ -908,8 +934,11 @@ func (self *evsStoreWalker) readVersion(repo *evsStoreRepo, refId sidecar.Id, ve
 			if err != nil {
 				return nil, fmt.Errorf("part %d: %w", k+1, err)
 			}
-			partRecord, _, err := sidecar.ParseEvsBatchRecordFormat2(partRecordBytes)
+			partRecord, partTail, err := sidecar.ParseEvsBatchRecordFormat2(partRecordBytes)
 			if err != nil {
+				return nil, fmt.Errorf("part %d: %w", k+1, err)
+			}
+			if err := addStaged(partTail); err != nil {
 				return nil, fmt.Errorf("part %d: %w", k+1, err)
 			}
 			if partRecord.PushId != entry.PushId {
@@ -934,7 +963,7 @@ func (self *evsStoreWalker) readVersion(repo *evsStoreRepo, refId sidecar.Id, ve
 	if !entry.Names(record.PushId, statement.Sha256) || !bytes.Equal(statement.Push.GetPushId(), record.PushId.Bytes()) {
 		return nil, errors.New("its record's statement is not the one its entry names")
 	}
-	storeVersion := &evsStoreVersion{version: version, entry: entry, statement: statement, payload: payload}
+	storeVersion := &evsStoreVersion{version: version, entry: entry, statement: statement, payload: payload, stagedIds: stagedIds}
 	for _, change := range payload.Changes {
 		if !change.WritesEntry() {
 			storeVersion.entryVersions = append(storeVersion.entryVersions, nil)
@@ -1126,18 +1155,32 @@ func checkFi1(ctx context.Context, oracle *Oracle) error {
 		errs = append(errs, repo.missing...)
 		erased, eraseErrs := fi1ErasedKeys(repo, view)
 		errs = append(errs, eraseErrs...)
-		errs = append(errs, fi1CheckContent(ctx, oracle, repo, segmentCluster.ClusterId(), erased)...)
+		excused := fi1Format2Excuse(ctx, oracle, repo)
+		errs = append(errs, fi1CheckContent(ctx, oracle, repo, segmentCluster.ClusterId(), erased, excused)...)
 		errs = append(errs, fi1CheckMaps(ctx, oracle, repo)...)
 		errs = append(errs, fi1CheckGenerations(ctx, oracle, memory, repo)...)
-		errs = append(errs, fi1CheckDecrypt(ctx, oracle, repo, erased)...)
+		errs = append(errs, fi1CheckDecrypt(ctx, oracle, repo, erased, excused)...)
 	}
 	errs = append(errs, fi1CheckHeadsStay(memory, repos)...)
 	return errors.Join(errs...)
 }
 
+// What a format-2 repo's walk excuses gone, by "<cluster id> <key>": a purge's candidate, whose going FI-16 judges, or
+// what an exact, uncancelled drop lists, whose going FI-27 judges (fi16.go's reading). Nothing in a repo below format
+// 2, which holds neither.
+func fi1Format2Excuse(ctx context.Context, oracle *Oracle, repo *evsStoreRepo) func(name string) bool {
+	if repo.object.GetFormat() < sidecar.EvsRepoFormat2 {
+		return func(name string) bool { return false }
+	}
+	format2 := evsFormat2Of(ctx, oracle)
+	return func(name string) bool {
+		return format2.purgeCandidate(repo.repoId, name) || format2.dropListed(repo.repoId, name)
+	}
+}
+
 // Every committed entry version's segments and slots are stored, and each slot keeps the keys its introducing push
-// gave it but what an authorized ERASE destroyed.
-func fi1CheckContent(ctx context.Context, oracle *Oracle, repo *evsStoreRepo, segmentClusterId string, erased map[string]bool) []error {
+// gave it but what an authorized ERASE destroyed, and what excused names gone.
+func fi1CheckContent(ctx context.Context, oracle *Oracle, repo *evsStoreRepo, segmentClusterId string, erased map[string]bool, excused func(name string) bool) []error {
 	errs := []error{}
 	checkedSlots := map[string]bool{}
 	for _, ref := range repo.refs {
@@ -1157,7 +1200,7 @@ func fi1CheckContent(ctx context.Context, oracle *Oracle, repo *evsStoreRepo, se
 							continue
 						}
 						key := evsOracleSegmentKey(repo.repoId, locator.GetId())
-						if repo.segmentInfos[key] == nil {
+						if repo.segmentInfos[key] == nil && !excused(segmentClusterId+" "+key) {
 							errs = append(errs, fmt.Errorf("repo %s ref %s: version %d of %s names %s, which %s does not hold", repo.repoId, ref.refId, version.version, path.KeyString(), key, segmentClusterId))
 						}
 					case protocol.EvsLocatorKind_EVS_LOCATOR_INLINE:
@@ -1172,7 +1215,7 @@ func fi1CheckContent(ctx context.Context, oracle *Oracle, repo *evsStoreRepo, se
 						continue
 					}
 					checkedSlots[slotHex] = true
-					errs = append(errs, fi1CheckSlot(ctx, oracle, repo, slotId, erased)...)
+					errs = append(errs, fi1CheckSlot(ctx, oracle, repo, slotId, erased, excused)...)
 				}
 			}
 		}
@@ -1180,7 +1223,7 @@ func fi1CheckContent(ctx context.Context, oracle *Oracle, repo *evsStoreRepo, se
 	return errs
 }
 
-func fi1CheckSlot(ctx context.Context, oracle *Oracle, repo *evsStoreRepo, slotId []byte, erased map[string]bool) []error {
+func fi1CheckSlot(ctx context.Context, oracle *Oracle, repo *evsStoreRepo, slotId []byte, erased map[string]bool, excused func(name string) bool) []error {
 	key := evsOracleSlotKey(repo.repoId, slotId)
 	introduction := repo.slotIntroductions[hex.EncodeToString(slotId)]
 	if repo.slotInfos[key] != nil && introduction == nil {
@@ -1194,6 +1237,9 @@ func fi1CheckSlot(ctx context.Context, oracle *Oracle, repo *evsStoreRepo, slotI
 		return []error{err}
 	}
 	if object == nil {
+		if excused(repo.clusterId + " " + key) {
+			return nil
+		}
 		return []error{fmt.Errorf("repo %s: %s, which a committed version names, is gone", repo.repoId, key)}
 	}
 	if introduction == nil {
@@ -1461,7 +1507,7 @@ func fi1CurrentReader(oracle *Oracle, ladder []*sidecar.GkmGeneration) (string, 
 }
 
 // Where a current reader's keys exist, every committed file version decrypts for it.
-func fi1CheckDecrypt(ctx context.Context, oracle *Oracle, repo *evsStoreRepo, erased map[string]bool) []error {
+func fi1CheckDecrypt(ctx context.Context, oracle *Oracle, repo *evsStoreRepo, erased map[string]bool, excused func(name string) bool) []error {
 	if !sidecartest.HooksLinked {
 		return nil
 	}
@@ -1523,7 +1569,7 @@ func fi1CheckDecrypt(ctx context.Context, oracle *Oracle, repo *evsStoreRepo, er
 				if entryVersion == nil || protocol.EvsEntryKind(entryVersion.GetKind()) != protocol.EvsEntryKind_EVS_ENTRY_FILE {
 					continue
 				}
-				if err := fi1DecryptFile(ctx, oracle, repo, keys, manifest, fek, entryVersion, erased); err != nil {
+				if err := fi1DecryptFile(ctx, oracle, repo, keys, manifest, fek, entryVersion, erased, excused); err != nil {
 					errs = append(errs, fmt.Errorf("repo %s ref %s: version %d of %s does not decrypt for %s: %w", repo.repoId, ref.refId, version.version, version.payload.Changes[i].TokenPath.KeyString(), keys.reader, err))
 				}
 			}
@@ -1532,8 +1578,9 @@ func fi1CheckDecrypt(ctx context.Context, oracle *Oracle, repo *evsStoreRepo, er
 	return errs
 }
 
-// A file version's sealed fields and every record of its chain, each header opened and every frame read.
-func fi1DecryptFile(ctx context.Context, oracle *Oracle, repo *evsStoreRepo, keys *fi1Keys, manifest *sidecar.EvsManifestKey, fek *sidecar.EvsFekKey, entryVersion *protocol.EvsEntryVersion, erased map[string]bool) error {
+// A file version's sealed fields and every record of its chain, each header opened and every frame read; a version
+// whose segment or slot excused names gone (a drop's or a purge's) is read no further.
+func fi1DecryptFile(ctx context.Context, oracle *Oracle, repo *evsStoreRepo, keys *fi1Keys, manifest *sidecar.EvsManifestKey, fek *sidecar.EvsFekKey, entryVersion *protocol.EvsEntryVersion, erased map[string]bool, excused func(name string) bool) error {
 	// a versionless version's fields are format 2's, content_sha256 among them (EVS2-M10-30)
 	open := sidecar.EvsOpenFields
 	if versioning := entryVersion.GetVersioning(); versioning != uint32(protocol.EvsVersioning_EVS_VERSIONING_KEPT) {
@@ -1573,9 +1620,12 @@ func fi1DecryptFile(ctx context.Context, oracle *Oracle, repo *evsStoreRepo, key
 				return err
 			}
 			if object == nil {
+				if excused(segmentCluster.ClusterId() + " " + evsOracleSegmentKey(repo.repoId, locator.GetId())) {
+					return nil
+				}
 				return fmt.Errorf("segment %x is gone", locator.GetId())
 			}
-			skipped, err := fi1DecryptSegmentRecord(ctx, oracle, repo, keys, object.Body, locator, fileId, erased)
+			skipped, err := fi1DecryptSegmentRecord(ctx, oracle, repo, keys, object.Body, locator, fileId, erased, excused)
 			if err != nil {
 				return fmt.Errorf("its record %d in segment %x: %w", index, locator.GetId(), err)
 			}
@@ -1584,15 +1634,16 @@ func fi1DecryptFile(ctx context.Context, oracle *Oracle, repo *evsStoreRepo, key
 				return nil
 			}
 		default:
-			// a kind-5 segment is format 2's, whose decrypt clause is TEST-M10-01's
+			// a kind-5 segment is format 2's, which this clause does not open yet: a gap TEST-M10-01's report names
 			return nil
 		}
 	}
 	return nil
 }
 
-// One segment record opened as a current reader opens it; skipped when an authorized ERASE took its slot key.
-func fi1DecryptSegmentRecord(ctx context.Context, oracle *Oracle, repo *evsStoreRepo, keys *fi1Keys, segment []byte, locator *protocol.EvsLocator, fileId sidecar.Id, erased map[string]bool) (bool, error) {
+// One segment record opened as a current reader opens it; skipped when an authorized ERASE took its slot key, or
+// excused names its slot gone.
+func fi1DecryptSegmentRecord(ctx context.Context, oracle *Oracle, repo *evsStoreRepo, keys *fi1Keys, segment []byte, locator *protocol.EvsLocator, fileId sidecar.Id, erased map[string]bool, excused func(name string) bool) (bool, error) {
 	if len(segment) < sidecar.EvsSegmentHeaderByteCount {
 		return false, errors.New("a segment shorter than its header")
 	}
@@ -1636,6 +1687,9 @@ func fi1DecryptSegmentRecord(ctx context.Context, oracle *Oracle, repo *evsStore
 			return false, err
 		}
 		if object == nil {
+			if excused(repo.clusterId + " " + slotKeyName) {
+				return true, nil
+			}
 			return false, fmt.Errorf("%s is gone", slotKeyName)
 		}
 		slot, err := sidecar.EvsDecodeSlotObject(object.Body)
