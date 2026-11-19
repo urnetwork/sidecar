@@ -43,10 +43,10 @@ type SearchJoinAsk struct {
 	Trash bool
 }
 
-// What a request asks of the join. §5.4's request and §16.10's arguments name no way to ask for spam or trash yet
-// (question search-m10-28-mail-join-ask), so every search takes the default.
+// What a request asks of the join: its explicit include of spam and of trash (QD-898), which IMAP SEARCH sets from the
+// selected folder and a member's mail search from what the person asked (MAIL-M10-03).
 func searchJoinAskOf(request *SearchRequest) SearchJoinAsk {
-	return SearchJoinAsk{}
+	return SearchJoinAsk{Spam: request.IncludeSpam, Trash: request.IncludeTrash}
 }
 
 // A mail document's locator read back as its month and message id: m/<yyyymm>/<h>/<id>, as MailMessagePath writes
