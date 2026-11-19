@@ -314,6 +314,7 @@ type mailClientSearchJoin struct {
 	client *MailClient
 }
 
+// See SearchJoinSource: the first of the client's tables that holds the message answers.
 func (self *mailClientSearchJoin) MailFlags(ctx context.Context, repoId Id, month MailYearMonth, messageId Id) (*SearchMailFlags, bool, error) {
 	joins := func() []*MailSearchJoin {
 		self.client.stateLock.Lock()
@@ -380,6 +381,7 @@ type mailSearchSource struct {
 	stream *SearchStream
 }
 
+// The engine's next page with every hit that is not mail left out, its progress and its end as the engine gave them.
 func (self *mailSearchSource) Next() ([]SearchHit, SearchProgress, bool, error) {
 	page, progress, done, err := self.stream.Next()
 	if err != nil {
@@ -394,6 +396,7 @@ func (self *mailSearchSource) Next() ([]SearchHit, SearchProgress, bool, error) 
 	return kept, progress, done, nil
 }
 
+// Ends the engine's search.
 func (self *mailSearchSource) Close() {
 	self.stream.Close()
 }
