@@ -86,6 +86,13 @@ type TlsEdgeSettings struct {
 	RedisTimeout time.Duration
 	// The pause after a failed Accept, which keeps a run of them from spinning. Default 100 ms.
 	AcceptRetryDelay time.Duration
+	// How often the fleet's daily visitor key {vhk}tls:<yyyymmdd> is read again, beside the read at each
+	// UTC date's turn (plan-TLS-visitor-hash-key: each minute).
+	VisitorKeyRefreshInterval time.Duration
+	// The fleet key's life from its creation, its SET NX's ttl: plan-TLS-visitor-hash-key's EX 90000, a
+	// UTC day and the hour past it, the bound tls-2's row, §19.7's {vhk} tag and D-OPS-16's filter promise
+	// no such key outlives, so Validate refuses a longer one.
+	VisitorKeyTtl time.Duration
 
 	// The caps' (§13.9).
 
@@ -135,42 +142,44 @@ type TlsEdgeSettings struct {
 // The design's numbers. Root and Blocks stay unset, so these alone do not pass Validate.
 func DefaultTlsEdgeSettings() *TlsEdgeSettings {
 	return &TlsEdgeSettings{
-		Clients:                 4,
-		MaxConnectionCount:      50000,
-		ProxyHeader:             DefaultProxyHeaderSettings(),
-		ClientHelloTimeout:      10 * time.Second,
-		ClientHelloMaxByteCount: 16 * 1024,
-		FindTimeout:             2 * time.Second,
-		FindMaxCount:            3,
-		AcceptTicketTimeout:     5 * time.Second,
-		AcceptSetupTimeout:      15 * time.Second,
-		IdleTimeout:             900 * time.Second,
-		DrainTimeout:            600 * time.Second,
-		NegativeCacheTtl:        30 * time.Second,
-		NegativeCacheMaxCount:   64 * 1024,
-		NameReloadInterval:      5 * time.Second,
-		KillReloadInterval:      60 * time.Second,
-		KillRetryDelay:          1 * time.Second,
-		StoreTimeout:            30 * time.Second,
-		RedisTimeout:            1 * time.Second,
-		AcceptRetryDelay:        100 * time.Millisecond,
-		ColdLimits:              DefaultColdTlsEndpointLimits(),
-		LimitsRefreshInterval:   5 * time.Second,
-		LimitsActiveWindow:      10 * time.Minute,
-		LimitsMaxNetworkCount:   64 * 1024,
-		VisitorRateMaxCount:     64 * 1024,
-		EndpointRateMaxCount:    64 * 1024,
-		BandwidthBurst:          1 * time.Second,
-		AlertTimeout:            2 * time.Second,
-		SpliceBufferByteCount:   16 * 1024,
-		LeaseTimeout:            2 * time.Second,
-		Usage:                   sidecar.DefaultQuotaUsageBatcherSettings(),
-		FlushTimeout:            10 * time.Second,
-		RecordFlushInterval:     10 * time.Second,
-		RecordBatchCount:        1000,
-		RecordQueueCount:        64 * 1024,
-		RecordWriteTimeout:      10 * time.Second,
-		SetupSecondsBuckets:     []float64{0.025, 0.05, 0.1, 0.2, 0.3, 0.5, 1, 1.5, 2.5, 5, 10, 15},
+		Clients:                   4,
+		MaxConnectionCount:        50000,
+		ProxyHeader:               DefaultProxyHeaderSettings(),
+		ClientHelloTimeout:        10 * time.Second,
+		ClientHelloMaxByteCount:   16 * 1024,
+		FindTimeout:               2 * time.Second,
+		FindMaxCount:              3,
+		AcceptTicketTimeout:       5 * time.Second,
+		AcceptSetupTimeout:        15 * time.Second,
+		IdleTimeout:               900 * time.Second,
+		DrainTimeout:              600 * time.Second,
+		NegativeCacheTtl:          30 * time.Second,
+		NegativeCacheMaxCount:     64 * 1024,
+		NameReloadInterval:        5 * time.Second,
+		KillReloadInterval:        60 * time.Second,
+		KillRetryDelay:            1 * time.Second,
+		StoreTimeout:              30 * time.Second,
+		RedisTimeout:              1 * time.Second,
+		AcceptRetryDelay:          100 * time.Millisecond,
+		VisitorKeyRefreshInterval: 1 * time.Minute,
+		VisitorKeyTtl:             25 * time.Hour,
+		ColdLimits:                DefaultColdTlsEndpointLimits(),
+		LimitsRefreshInterval:     5 * time.Second,
+		LimitsActiveWindow:        10 * time.Minute,
+		LimitsMaxNetworkCount:     64 * 1024,
+		VisitorRateMaxCount:       64 * 1024,
+		EndpointRateMaxCount:      64 * 1024,
+		BandwidthBurst:            1 * time.Second,
+		AlertTimeout:              2 * time.Second,
+		SpliceBufferByteCount:     16 * 1024,
+		LeaseTimeout:              2 * time.Second,
+		Usage:                     sidecar.DefaultQuotaUsageBatcherSettings(),
+		FlushTimeout:              10 * time.Second,
+		RecordFlushInterval:       10 * time.Second,
+		RecordBatchCount:          1000,
+		RecordQueueCount:          64 * 1024,
+		RecordWriteTimeout:        10 * time.Second,
+		SetupSecondsBuckets:       []float64{0.025, 0.05, 0.1, 0.2, 0.3, 0.5, 1, 1.5, 2.5, 5, 10, 15},
 	}
 }
 
@@ -281,43 +290,48 @@ func (self *TlsEdgeSettings) Validate() error {
 		return fmt.Errorf("%w: proxy_header: %w", ErrTlsEdgeSettingsRefused, err)
 	}
 	for name, value := range map[string]int64{
-		"clients":                 int64(self.Clients),
-		"max_connections":         int64(self.MaxConnectionCount),
-		"blocks":                  int64(self.Blocks),
-		"client_hello.timeout_s":  int64(self.ClientHelloTimeout),
-		"client_hello.max_bytes":  int64(self.ClientHelloMaxByteCount),
-		"find.timeout_s":          int64(self.FindTimeout),
-		"find.max_finds":          int64(self.FindMaxCount),
-		"accept.ticket_timeout_s": int64(self.AcceptTicketTimeout),
-		"accept.setup_timeout_s":  int64(self.AcceptSetupTimeout),
-		"idle_timeout_s":          int64(self.IdleTimeout),
-		"drain_s":                 int64(self.DrainTimeout),
-		"NegativeCacheTtl":        int64(self.NegativeCacheTtl),
-		"NegativeCacheMaxCount":   int64(self.NegativeCacheMaxCount),
-		"NameReloadInterval":      int64(self.NameReloadInterval),
-		"KillReloadInterval":      int64(self.KillReloadInterval),
-		"KillRetryDelay":          int64(self.KillRetryDelay),
-		"StoreTimeout":            int64(self.StoreTimeout),
-		"RedisTimeout":            int64(self.RedisTimeout),
-		"AcceptRetryDelay":        int64(self.AcceptRetryDelay),
-		"LimitsRefreshInterval":   int64(self.LimitsRefreshInterval),
-		"LimitsActiveWindow":      int64(self.LimitsActiveWindow),
-		"LimitsMaxNetworkCount":   int64(self.LimitsMaxNetworkCount),
-		"VisitorRateMaxCount":     int64(self.VisitorRateMaxCount),
-		"EndpointRateMaxCount":    int64(self.EndpointRateMaxCount),
-		"BandwidthBurst":          int64(self.BandwidthBurst),
-		"AlertTimeout":            int64(self.AlertTimeout),
-		"SpliceBufferByteCount":   int64(self.SpliceBufferByteCount),
-		"LeaseTimeout":            int64(self.LeaseTimeout),
-		"FlushTimeout":            int64(self.FlushTimeout),
-		"RecordFlushInterval":     int64(self.RecordFlushInterval),
-		"RecordBatchCount":        int64(self.RecordBatchCount),
-		"RecordQueueCount":        int64(self.RecordQueueCount),
-		"RecordWriteTimeout":      int64(self.RecordWriteTimeout),
+		"clients":                   int64(self.Clients),
+		"max_connections":           int64(self.MaxConnectionCount),
+		"blocks":                    int64(self.Blocks),
+		"client_hello.timeout_s":    int64(self.ClientHelloTimeout),
+		"client_hello.max_bytes":    int64(self.ClientHelloMaxByteCount),
+		"find.timeout_s":            int64(self.FindTimeout),
+		"find.max_finds":            int64(self.FindMaxCount),
+		"accept.ticket_timeout_s":   int64(self.AcceptTicketTimeout),
+		"accept.setup_timeout_s":    int64(self.AcceptSetupTimeout),
+		"idle_timeout_s":            int64(self.IdleTimeout),
+		"drain_s":                   int64(self.DrainTimeout),
+		"NegativeCacheTtl":          int64(self.NegativeCacheTtl),
+		"NegativeCacheMaxCount":     int64(self.NegativeCacheMaxCount),
+		"NameReloadInterval":        int64(self.NameReloadInterval),
+		"KillReloadInterval":        int64(self.KillReloadInterval),
+		"KillRetryDelay":            int64(self.KillRetryDelay),
+		"StoreTimeout":              int64(self.StoreTimeout),
+		"RedisTimeout":              int64(self.RedisTimeout),
+		"AcceptRetryDelay":          int64(self.AcceptRetryDelay),
+		"VisitorKeyRefreshInterval": int64(self.VisitorKeyRefreshInterval),
+		"VisitorKeyTtl":             int64(self.VisitorKeyTtl),
+		"LimitsRefreshInterval":     int64(self.LimitsRefreshInterval),
+		"LimitsActiveWindow":        int64(self.LimitsActiveWindow),
+		"LimitsMaxNetworkCount":     int64(self.LimitsMaxNetworkCount),
+		"VisitorRateMaxCount":       int64(self.VisitorRateMaxCount),
+		"EndpointRateMaxCount":      int64(self.EndpointRateMaxCount),
+		"BandwidthBurst":            int64(self.BandwidthBurst),
+		"AlertTimeout":              int64(self.AlertTimeout),
+		"SpliceBufferByteCount":     int64(self.SpliceBufferByteCount),
+		"LeaseTimeout":              int64(self.LeaseTimeout),
+		"FlushTimeout":              int64(self.FlushTimeout),
+		"RecordFlushInterval":       int64(self.RecordFlushInterval),
+		"RecordBatchCount":          int64(self.RecordBatchCount),
+		"RecordQueueCount":          int64(self.RecordQueueCount),
+		"RecordWriteTimeout":        int64(self.RecordWriteTimeout),
 	} {
 		if value <= 0 {
 			return fmt.Errorf("%w: %s is not positive", ErrTlsEdgeSettingsRefused, name)
 		}
+	}
+	if DefaultTlsEdgeSettings().VisitorKeyTtl < self.VisitorKeyTtl {
+		return fmt.Errorf("%w: VisitorKeyTtl is past the 25 h no {vhk} key outlives", ErrTlsEdgeSettingsRefused)
 	}
 	if self.Usage == nil || self.Usage.WindowTimeout <= 0 || self.Usage.RetryTimeout <= 0 {
 		return fmt.Errorf("%w: Usage needs a positive window and retry timeout", ErrTlsEdgeSettingsRefused)

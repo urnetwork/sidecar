@@ -3,12 +3,15 @@
 // state, its loops and its lifecycle. names.go maps a name, kill_set.go holds the kill switch and
 // negative_cache.go absorbs scans, all in memory, so a connection's path reads no store (I-12).
 //
-// Two loops feed that memory off every connection's path. The names loop reads the label map, a
+// Three loops feed that memory off every connection's path. The names loop reads the label map, a
 // snapshot at start and its changes every NameReloadInterval, a new snapshot when the root's restore
-// serial moves (plan-TLS-edge-data-source). The kills loop reads network_tls_suspension every
-// KillReloadInterval with each named network's {tes_} hash, and in between the hash of each network a
-// key event names (KillChanged). A failed read keeps the last answer, so a running process outlives a
-// store outage on what it holds, while one started then stays not ready.
+// serial moves (plan-TLS-edge-data-source), and beside it the active custom hosts whole (TLS-M6-02).
+// The kills loop reads network_tls_suspension every KillReloadInterval with each named network's {tes_}
+// hash, and in between the hash of each network a key event names (KillChanged). The visitor keys' loop
+// reads the fleet's daily key each VisitorKeyRefreshInterval and at the date change
+// (plan-TLS-visitor-hash-key). A failed read keeps the last answer, so a running process outlives a
+// store outage on what it holds, while one started then stays not ready; a failed key read only leaves
+// the process on its own key for the day.
 //
 // The connection path itself, §13.5's steps in order, is conn.go's and splice.go's, with lease.go's
 // accounting and records.go's connection records; drain.go ends the engine.
@@ -63,6 +66,8 @@ type TlsEdgeService struct {
 	// wait can see one land and then move a fake clock past the next.
 	nameLoadCount *sidecar.MonitorValue[uint64]
 	killLoadCount *sidecar.MonitorValue[uint64]
+	// Rises at each finished read of the fleet's visitor key, failed or not.
+	visitorKeyRefreshCount *sidecar.MonitorValue[uint64]
 	// Whether a kill reload has read the rows and every key they and the last reads named.
 	killsLoaded *sidecar.MonitorValue[bool]
 	// Rises as each connection ends, after it is counted.
@@ -114,39 +119,41 @@ func NewTlsEdgeService(
 		}
 	}
 	self := &TlsEdgeService{
-		ctx:                   cancelCtx,
-		cancel:                cancel,
-		host:                  host,
-		store:                 store,
-		dialer:                dialer,
-		settings:              settings,
-		clock:                 clock,
-		metrics:               metrics,
-		usage:                 usage,
-		records:               newTlsConnectionRecords(store, settings, clock, metrics),
-		names:                 NewTlsEdgeNames(settings.Root, clock),
-		kills:                 NewTlsKillSet(clock),
-		negativeCache:         newTlsNegativeCache(settings.NegativeCacheTtl, settings.NegativeCacheMaxCount, clock),
-		visitorKeys:           visitorKeys,
-		caps:                  NewTlsEdgeCaps(settings, clock, visitorKeys),
-		limits:                newTlsEndpointLimitsCache(settings, host.Quota, clock),
-		killWake:              make(chan struct{}, 1),
-		killChangeCount:       sidecar.NewMonitorValue(uint64(0)),
-		nameLoadCount:         sidecar.NewMonitorValue(uint64(0)),
-		killLoadCount:         sidecar.NewMonitorValue(uint64(0)),
-		killsLoaded:           sidecar.NewMonitorValue(false),
-		connectionEndCount:    sidecar.NewMonitorValue(uint64(0)),
-		killPendingNetworkIds: map[sidecar.Id]bool{},
-		liveListeners:         map[net.Listener]bool{},
-		liveConnections:       map[net.Conn]bool{},
-		networkIdSplices:      map[sidecar.Id]map[*tlsEdgeConnection]bool{},
+		ctx:                    cancelCtx,
+		cancel:                 cancel,
+		host:                   host,
+		store:                  store,
+		dialer:                 dialer,
+		settings:               settings,
+		clock:                  clock,
+		metrics:                metrics,
+		usage:                  usage,
+		records:                newTlsConnectionRecords(store, settings, clock, metrics),
+		names:                  NewTlsEdgeNames(settings.Root, clock),
+		kills:                  NewTlsKillSet(clock),
+		negativeCache:          newTlsNegativeCache(settings.NegativeCacheTtl, settings.NegativeCacheMaxCount, clock),
+		visitorKeys:            visitorKeys,
+		caps:                   NewTlsEdgeCaps(settings, clock, visitorKeys),
+		limits:                 newTlsEndpointLimitsCache(settings, host.Quota, clock),
+		killWake:               make(chan struct{}, 1),
+		killChangeCount:        sidecar.NewMonitorValue(uint64(0)),
+		nameLoadCount:          sidecar.NewMonitorValue(uint64(0)),
+		killLoadCount:          sidecar.NewMonitorValue(uint64(0)),
+		visitorKeyRefreshCount: sidecar.NewMonitorValue(uint64(0)),
+		killsLoaded:            sidecar.NewMonitorValue(false),
+		connectionEndCount:     sidecar.NewMonitorValue(uint64(0)),
+		killPendingNetworkIds:  map[sidecar.Id]bool{},
+		liveListeners:          map[net.Listener]bool{},
+		liveConnections:        map[net.Conn]bool{},
+		networkIdSplices:       map[sidecar.Id]map[*tlsEdgeConnection]bool{},
 	}
 	self.leases = newTlsEdgeLeases(cancelCtx, host.Quota, usage, settings, clock, self.resetSpent)
-	self.loopGroup.Add(1)
+	self.loopGroup.Add(2)
 	go func() {
 		defer self.loopGroup.Done()
 		self.limits.run(cancelCtx)
 	}()
+	go self.runVisitorKeys()
 	if store != nil {
 		self.loopGroup.Add(3)
 		go self.runNames()
@@ -208,8 +215,8 @@ func (self *TlsEdgeService) ConnectionEnds() (count uint64, changed chan struct{
 	return self.connectionEndCount.Get()
 }
 
-// See sidecar.Engine: the store and the dialer given, the label map's first snapshot read, the kill
-// switch read, and the dialer holding K clients.
+// See sidecar.Engine: the store and the dialer given, the label map's first snapshot and the custom
+// hosts read, the kill switch read, and the dialer holding K clients.
 func (self *TlsEdgeService) Ready() bool {
 	if self.store == nil || self.dialer == nil {
 		return false
@@ -219,10 +226,37 @@ func (self *TlsEdgeService) Ready() bool {
 		defer self.stateLock.Unlock()
 		return self.closed
 	}()
-	if closed || !self.names.Loaded() || !self.killsLoaded.Value() {
+	if closed || !self.names.Loaded() || !self.names.CustomHostsLoaded() || !self.killsLoaded.Value() {
 		return false
 	}
 	return self.settings.Clients <= len(self.dialer.ClientIds())
+}
+
+// Finished reads of the fleet's visitor key, failed or not, and a channel that closes at the next.
+func (self *TlsEdgeService) VisitorKeyRefreshes() (count uint64, changed chan struct{}) {
+	return self.visitorKeyRefreshCount.Get()
+}
+
+// Reads the fleet's daily visitor key until the engine ends: at once, then each
+// VisitorKeyRefreshInterval, and at the turn of each UTC date, whichever comes first.
+func (self *TlsEdgeService) runVisitorKeys() {
+	defer self.loopGroup.Done()
+	for {
+		func() {
+			callCtx, cancel := self.callContext(self.settings.RedisTimeout)
+			defer cancel()
+			result, _ := self.visitorKeys.Refresh(callCtx, self.host.Redis, self.settings.VisitorKeyTtl)
+			self.metrics.visitorKeyRefreshes.Add(1, result)
+		}()
+		// armed before the pass is counted, as runNames does
+		next := self.clock.After(min(self.settings.VisitorKeyRefreshInterval, self.visitorKeys.untilNextDay()))
+		self.visitorKeyRefreshCount.Update(func(count uint64) uint64 { return count + 1 })
+		select {
+		case <-self.ctx.Done():
+			return
+		case <-next:
+		}
+	}
 }
 
 // A context ended by StoreTimeout or RedisTimeout on the engine's clock, and the call that ends it.
@@ -252,8 +286,23 @@ func (self *TlsEdgeService) runNames() {
 	}
 }
 
-// One read of the label map, applied.
+// One read of the label map and one of the custom hosts, each applied. A failed read of either keeps
+// what that one held.
 func (self *TlsEdgeService) loadNames() {
+	self.loadLabels()
+	callCtx, cancel := self.callContext(self.settings.StoreTimeout)
+	defer cancel()
+	customHosts, err := self.store.CustomHosts(callCtx, self.settings.Root)
+	if err != nil {
+		self.metrics.customHostLoads.Add(1, tlsNameLoadResultFailed)
+		return
+	}
+	self.names.ApplyCustomHosts(customHosts)
+	self.metrics.customHostLoads.Add(1, tlsNameLoadResultSnapshot)
+}
+
+// One read of the label map, applied.
+func (self *TlsEdgeService) loadLabels() {
 	callCtx, cancel := self.callContext(self.settings.StoreTimeout)
 	defer cancel()
 	if self.names.Loaded() {

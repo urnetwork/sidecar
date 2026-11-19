@@ -1,6 +1,7 @@
 package tlsedgeservice
 
 import (
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -124,7 +125,9 @@ func TestTlsEdgeNamesUnmappedTable(t *testing.T) {
 		{serverName: "", port: 443},
 		{serverName: "blog." + world.plainLabel + ".other.example", port: 443},
 		{serverName: world.plainLabel + "x." + testRoot, port: 443},
-		{serverName: "a.team." + world.plainLabel + "." + testRoot, port: 443},
+		// deeper than a scope host, and a scope host past one 63-byte segment
+		{serverName: "a.b.team." + world.plainLabel + "." + testRoot, port: 443},
+		{serverName: strings.Repeat("a", 40) + "." + strings.Repeat("b", 30) + "." + world.plainLabel + "." + testRoot, port: 443},
 		{serverName: "blog." + world.plainLabel + "." + testRoot, port: 80},
 		{serverName: "blog." + world.plainLabel + "." + testRoot, port: 8080},
 		{serverName: "blog." + world.plainLabel + "." + testRoot + "..", port: 443},
@@ -292,4 +295,174 @@ func TestTlsEdgeNamesConcurrentReadersAndWriter(t *testing.T) {
 	}
 	close(done)
 	readers.Wait()
+}
+
+// v1's scope hosts (Q-TLS-3): <label>.<scope> under a label or an alias maps to that host with no scope
+// table here, a withheld scope withholding its hosts, and only an alias's carries Find's server name.
+func TestTlsEdgeNamesScopeHosts(t *testing.T) {
+	world := newTestNamesWorld()
+	target, ok := world.names.Resolve("blog.team."+world.plainLabel+"."+testRoot, 443)
+	if !ok {
+		t.Fatal("a scope host did not map")
+	}
+	if target.NetworkId != world.plainId || target.Host != "blog.team" || target.Name != "tls/443/blog.team" || target.ServerName != "" {
+		t.Fatalf("the scope host mapped to %+v", target)
+	}
+	aliased, ok := world.names.Resolve("blog.team."+world.alias+"."+testRoot, 8443)
+	if !ok {
+		t.Fatal("a scope host under an alias did not map")
+	}
+	if aliased.Label != world.aliasLabel || aliased.Name != "tls/8443/blog.team" || aliased.ServerName != "blog.team."+world.alias+"."+testRoot {
+		t.Fatalf("the alias's scope host mapped to %+v", aliased)
+	}
+
+	withheldId := sidecar.NewId()
+	world.names.Apply(&TlsEdgeNameMap{Serial: 4, Entries: []*TlsEdgeNameEntry{
+		{Name: "m4withheld", NetworkId: withheldId, Kind: TlsEdgeNameKindLabel, State: TlsEdgeNameStateLive, WithheldHosts: []string{"team"}},
+	}}, false)
+	if target, ok := world.names.Resolve("blog.team.m4withheld."+testRoot, 443); ok {
+		t.Fatalf("a host of a withheld scope mapped to %+v", target)
+	}
+	if _, ok := world.names.Resolve("blog.other.m4withheld."+testRoot, 443); !ok {
+		t.Fatal("a host of another scope stopped mapping")
+	}
+}
+
+// A name under the network's own zone carries no server name for Find, and an alias's carries the
+// visitor's normalized name (DESIGN-DETAILS 17.2.10).
+func TestTlsEdgeNamesServerNameOnlyForAliases(t *testing.T) {
+	world := newTestNamesWorld()
+	if target, _ := world.names.Resolve("blog."+world.plainLabel+"."+testRoot, 443); target == nil || target.ServerName != "" {
+		t.Fatalf("a network name carries a server name: %+v", target)
+	}
+	if target, _ := world.names.Resolve(world.aliasLabel+"."+testRoot, 443); target == nil || target.ServerName != "" {
+		t.Fatalf("a label's apex carries a server name: %+v", target)
+	}
+	target, _ := world.names.Resolve("API."+world.alias+"."+testRoot+".", 443)
+	if target == nil || target.ServerName != "api."+world.alias+"."+testRoot {
+		t.Fatalf("an alias's name carries %+v", target)
+	}
+}
+
+// The world's custom hosts: one under a domain and one at a domain's apex, both of the plain network.
+func (self *testNamesWorld) applyCustomHosts() int {
+	return self.names.ApplyCustomHosts([]*TlsEdgeCustomHostEntry{
+		{Host: "app.corp.example", NetworkId: self.plainId, OwnerHost: "web", OwnerLabel: self.plainLabel},
+		{Host: "corp.example", NetworkId: self.plainId, OwnerHost: "shop", OwnerLabel: self.plainLabel},
+	})
+}
+
+// §12.8's custom hosts (TLS-M6-02): <host>.<domain> and an apex <domain> map to tls/<port>/<owner> of
+// their network's zone, naming its label, with the visitor's name as Find's server name.
+func TestTlsEdgeNamesCustomHostTable(t *testing.T) {
+	world := newTestNamesWorld()
+	if world.names.CustomHostsLoaded() {
+		t.Fatal("custom hosts read as loaded before any read")
+	}
+	if _, ok := world.names.Resolve("app.corp.example", 443); ok {
+		t.Fatal("a custom host mapped before the custom hosts were read")
+	}
+	if held := world.applyCustomHosts(); held != 2 {
+		t.Fatalf("%d hosts held", held)
+	}
+	if !world.names.CustomHostsLoaded() {
+		t.Fatal("custom hosts not loaded after a read")
+	}
+	cases := []struct {
+		serverName string
+		port       int
+		host       string
+		name       string
+	}{
+		{serverName: "app.corp.example", port: 443, host: "web", name: "tls/443/web"},
+		{serverName: "App.Corp.Example.", port: 8443, host: "web", name: "tls/8443/web"},
+		{serverName: "corp.example", port: 443, host: "shop", name: "tls/443/shop"},
+	}
+	for _, c := range cases {
+		target, ok := world.names.Resolve(c.serverName, c.port)
+		if !ok {
+			t.Errorf("%s:%d did not map", c.serverName, c.port)
+			continue
+		}
+		normalized, _ := NormalizeSni(c.serverName)
+		if target.NetworkId != world.plainId || target.Label != world.plainLabel || target.Host != c.host ||
+			target.Name != c.name || target.Port != c.port || target.ServerName != normalized {
+			t.Errorf("%s:%d mapped to %+v", c.serverName, c.port, target)
+		}
+	}
+	for _, serverName := range []string{"www.app.corp.example", "other.corp.example", "corp.example.org", "example"} {
+		if target, ok := world.names.Resolve(serverName, 443); ok {
+			t.Errorf("%s mapped to %+v", serverName, target)
+		}
+	}
+
+	// a read without a host drops it at once: the lb may still send its hellos until its next reload
+	world.names.ApplyCustomHosts([]*TlsEdgeCustomHostEntry{
+		{Host: "corp.example", NetworkId: world.plainId, OwnerHost: "shop", OwnerLabel: world.plainLabel},
+	})
+	if target, ok := world.names.Resolve("app.corp.example", 443); ok {
+		t.Fatalf("a host the read lacks mapped to %+v", target)
+	}
+	if _, ok := world.names.Resolve("corp.example", 443); !ok {
+		t.Fatal("a host the read holds stopped mapping")
+	}
+}
+
+// What the custom-host map never routes: a host under the root or the root, an owner that is no one
+// label of the network's zone, another network's label, no network; and a host of a suspended zone or a
+// withheld owner while that holds.
+func TestTlsEdgeNamesCustomHostsRefused(t *testing.T) {
+	world := newTestNamesWorld()
+	held := world.names.ApplyCustomHosts([]*TlsEdgeCustomHostEntry{
+		{Host: "blog." + world.plainLabel + "." + testRoot, NetworkId: world.plainId, OwnerHost: "web", OwnerLabel: world.plainLabel},
+		{Host: testRoot, NetworkId: world.plainId, OwnerHost: "web", OwnerLabel: world.plainLabel},
+		{Host: "a.corp.example", NetworkId: world.plainId, OwnerHost: "web.team", OwnerLabel: world.plainLabel},
+		{Host: "b.corp.example", NetworkId: world.plainId, OwnerHost: "@", OwnerLabel: world.plainLabel},
+		{Host: "c.corp.example", NetworkId: world.plainId, OwnerHost: "web", OwnerLabel: "short"},
+		{Host: "d.corp.example", OwnerHost: "web", OwnerLabel: world.plainLabel},
+		{Host: "E.corp.example", NetworkId: world.plainId, OwnerHost: "web", OwnerLabel: world.plainLabel},
+		{Host: "*.corp.example", NetworkId: world.plainId, OwnerHost: "web", OwnerLabel: world.plainLabel},
+		// held, but the owner's label is another network's, so it maps nothing
+		{Host: "f.corp.example", NetworkId: world.plainId, OwnerHost: "web", OwnerLabel: world.aliasLabel},
+		nil,
+	})
+	if held != 1 {
+		t.Fatalf("%d entries held", held)
+	}
+	for _, serverName := range []string{"a.corp.example", "b.corp.example", "c.corp.example", "d.corp.example", "e.corp.example", "f.corp.example"} {
+		if target, ok := world.names.Resolve(serverName, 443); ok {
+			t.Errorf("%s mapped to %+v", serverName, target)
+		}
+	}
+	// a name under the root resolves through the label map whatever the custom map holds
+	if target, _ := world.names.Resolve("blog."+world.plainLabel+"."+testRoot, 443); target == nil || target.ServerName != "" {
+		t.Fatalf("a network name read through the custom map: %+v", target)
+	}
+
+	world.applyCustomHosts()
+	world.names.Apply(&TlsEdgeNameMap{Serial: 4, Entries: []*TlsEdgeNameEntry{
+		{
+			Name: world.plainLabel, NetworkId: world.plainId, Kind: TlsEdgeNameKindLabel, State: TlsEdgeNameStateLive,
+			ZoneSuspended: true, ZoneSuspendUntil: world.clock.Now().Add(time.Hour),
+		},
+	}}, false)
+	if target, ok := world.names.Resolve("app.corp.example", 443); ok {
+		t.Fatalf("a custom host of a suspended zone mapped to %+v", target)
+	}
+	world.names.Apply(&TlsEdgeNameMap{Serial: 5, Entries: []*TlsEdgeNameEntry{
+		{Name: world.plainLabel, NetworkId: world.plainId, Kind: TlsEdgeNameKindLabel, State: TlsEdgeNameStateLive, WithheldHosts: []string{"web"}},
+	}}, false)
+	if target, ok := world.names.Resolve("app.corp.example", 443); ok {
+		t.Fatalf("a custom host of a withheld owner mapped to %+v", target)
+	}
+	if _, ok := world.names.Resolve("corp.example", 443); !ok {
+		t.Fatal("a custom host of another owner stopped mapping")
+	}
+	// the network's label tombstoned takes its custom hosts with it
+	world.names.Apply(&TlsEdgeNameMap{Serial: 6, Entries: []*TlsEdgeNameEntry{
+		{Name: world.plainLabel, NetworkId: world.plainId, Kind: TlsEdgeNameKindLabel, State: TlsEdgeNameStateTombstoned},
+	}}, false)
+	if target, ok := world.names.Resolve("corp.example", 443); ok {
+		t.Fatalf("a custom host of a network with no live label mapped to %+v", target)
+	}
 }
