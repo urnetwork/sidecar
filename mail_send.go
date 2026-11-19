@@ -114,6 +114,8 @@ type MailSendSettings struct {
 	// The most bytes of a submitted message (SubmitMessage): the deposit's 50 MiB (§20.4's largest
 	// mail_inbound_message_bytes), which a same-network recipient's reader must open.
 	MessageMaxByteCount int
+	// The most bytes of the Message-ID a reply names: 256, the bound ingest's walk keeps an id to (MailParsed).
+	MessageIdMaxByteCount int
 	// The most bytes of the preview a send's mail_send action shows an approver (mail_send_gate.go): the canonical
 	// action's own bound, CanonicalActionSettings.PreviewMaxByteCount (§16.8's 2 KiB). A larger value builds an
 	// action NewCanonicalAction refuses, so the send is refused rather than its preview cut short.
@@ -123,19 +125,20 @@ type MailSendSettings struct {
 // The one default.
 func DefaultMailSendSettings() *MailSendSettings {
 	return &MailSendSettings{
-		RecipientMaxCount:   DefaultMailIngestSettings().RecipientMaxCount,
-		AddressMaxByteCount: 254,
-		SubjectMaxByteCount: 512,
-		TextMaxByteCount:    8 * 1024 * 1024,
-		MessageMaxByteCount: 50 * 1024 * 1024,
-		PreviewMaxByteCount: DefaultCanonicalActionSettings().PreviewMaxByteCount,
+		RecipientMaxCount:     DefaultMailIngestSettings().RecipientMaxCount,
+		AddressMaxByteCount:   254,
+		SubjectMaxByteCount:   512,
+		TextMaxByteCount:      8 * 1024 * 1024,
+		MessageMaxByteCount:   50 * 1024 * 1024,
+		MessageIdMaxByteCount: 256,
+		PreviewMaxByteCount:   DefaultCanonicalActionSettings().PreviewMaxByteCount,
 	}
 }
 
 // Whether every value is in range.
 func (self *MailSendSettings) valid() bool {
 	return self != nil && 0 < self.RecipientMaxCount && 0 < self.AddressMaxByteCount && 0 < self.SubjectMaxByteCount &&
-		0 < self.TextMaxByteCount && 0 < self.MessageMaxByteCount && 0 < self.PreviewMaxByteCount
+		0 < self.TextMaxByteCount && 0 < self.MessageMaxByteCount && 0 < self.MessageIdMaxByteCount && 0 < self.PreviewMaxByteCount
 }
 
 // What Send sends.
@@ -149,6 +152,8 @@ type MailSendArgs struct {
 	// The subject and the plain-text body, UTF-8.
 	Subject string
 	Text    string
+	// The Message-ID replied to, without its brackets, which In-Reply-To and References name; empty for none.
+	InReplyTo string
 	// What the outward action carries to the gate (I-8) when the send needs one: the run and agent a decision binds,
 	// nil for a person's own command or a host's submission, which are no run and so untainted (§16.6's spend step
 	// 1), the agent's words and a decision in hand.
@@ -252,6 +257,11 @@ func mailSendDepositRepoOf(binding *MailBinding, parts mailClientParts, repoId I
 // bounds, the zone, and a From of this network that policy lets this device send as. Send and SubmitSend both start
 // here, so a send the gate holds was refused for none of these. An error names no address.
 func (self *MailClient) planSend(args *MailSendArgs) (*mailSendPlan, error) {
+	return self.planSendDraft(args, "")
+}
+
+// planSend for a draft from burnerLabel's burner, a reply's (MailClient.Reply), or "" for any other.
+func (self *MailClient) planSendDraft(args *MailSendArgs, burnerLabel string) (*mailSendPlan, error) {
 	settings := self.sendSettings()
 	if args == nil {
 		return nil, fmt.Errorf("%w: no message", ErrMailSendInvalid)
@@ -264,7 +274,11 @@ func (self *MailClient) planSend(args *MailSendArgs) (*mailSendPlan, error) {
 		settings.TextMaxByteCount < len(args.Text) || !utf8.ValidString(args.Text) {
 		return nil, fmt.Errorf("%w: a subject or text out of shape", ErrMailSendInvalid)
 	}
-	return self.planSendFrom(args.From, recipients, "")
+	if args.InReplyTo != "" && (settings.MessageIdMaxByteCount < len(args.InReplyTo) || strings.ContainsAny(args.InReplyTo, "<>\r\n \t") ||
+		!strings.Contains(args.InReplyTo, "@") || !utf8.ValidString(args.InReplyTo)) {
+		return nil, fmt.Errorf("%w: a reply's id out of shape", ErrMailSendInvalid)
+	}
+	return self.planSendFrom(args.From, recipients, burnerLabel)
 }
 
 // What a send from fromText to recipients, distinct and lowercase, is held to: the zone, and a From of this network
@@ -447,11 +461,12 @@ func (self *MailClient) deliverSend(ctx context.Context, plan *mailSendPlan, con
 	}
 
 	now := self.clock.Now()
-	// mail that leaves the network names a random id (MailOutboxMessageId); mail to members alone keeps an id's time
+	// mail that leaves the network, and every burner's, names a random id (MailOutboxMessageId); mail to members
+	// alone keeps an id's time
 	result.SendId = NewId()
 	messageDomain := plan.fromDomain
 	messageId := strings.ToLower(result.SendId.String()) + "@" + messageDomain
-	if queue != nil {
+	if queue != nil || plan.burnerLabel != "" {
 		result.SendId = newMailOutboxSendId()
 		messageId = MailOutboxMessageId(result.SendId, messageDomain)
 	}
@@ -608,6 +623,10 @@ func mailSendBuildMessageWithId(args *MailSendArgs, fromAddress string, messageI
 	}
 	header("Date", now.UTC().Format(time.RFC1123Z))
 	header("Message-ID", "<"+messageId+">")
+	if args.InReplyTo != "" {
+		header("In-Reply-To", "<"+args.InReplyTo+">")
+		header("References", "<"+args.InReplyTo+">")
+	}
 	header("MIME-Version", "1.0")
 	header("Content-Type", "text/plain; charset=utf-8")
 	header("Content-Transfer-Encoding", "quoted-printable")
