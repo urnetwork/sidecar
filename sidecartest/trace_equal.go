@@ -19,6 +19,19 @@ import (
 // A comparison that would show nothing.
 var ErrTraceNotCompared = errors.New("trace: nothing compared")
 
+// §22.7's request-traces row, shown by FS-77's and FS-110's traces on the phone surrogates and the page Worker, FI-23
+// over a desktop's recorded searches, and these checks' own mutants. The remote half, a relay's frame sizes with an
+// indexer answering, is FS-83's (SEARCH-M10-39), which registers itself.
+var (
+	traceEqualFault     = "github.com/urnetwork/sidecar/sidecartest/fault"
+	traceEqualTestHooks = "sidecar_testhooks"
+	_                   = RegisterPrivacyAssert("request-traces", &PrivacyAssertTest{Repo: "sidecar", Package: traceEqualFault, Name: "TestFs77", Tags: traceEqualTestHooks})
+	_                   = RegisterPrivacyAssert("request-traces", &PrivacyAssertTest{Repo: "sidecar", Package: traceEqualFault, Name: "TestFs110", Tags: traceEqualTestHooks})
+	_                   = RegisterPrivacyAssert("request-traces", &PrivacyAssertTest{Repo: "sidecar", Package: traceEqualFault, Name: "TestFiSearchReadsAHealthyRunOfFs74sShapeClean", Tags: traceEqualTestHooks})
+	_                   = RegisterPrivacyAssert("request-traces", &PrivacyAssertTest{Repo: "sidecar", Package: traceEqualFault, Name: "TestFi23CatchesAFetchThatDependsOnTheQuery"})
+	_                   = RegisterPrivacyAssert("request-traces", &PrivacyAssertTest{Repo: "sidecar", Package: "github.com/urnetwork/sidecar/sidecartest", Name: "TestARequestTraceThatDependsOnTheQueryFails"})
+)
+
 // One search's server-visible requests, and the sync state it ran from.
 type RequestTrace struct {
 	// What the trace is of, for a failure: the host and a label for the query, never the query itself.
