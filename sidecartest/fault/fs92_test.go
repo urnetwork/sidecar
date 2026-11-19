@@ -22,7 +22,7 @@ import (
 // Places a hold covering the world's network.
 func (self *fsDropWorld) placeHold(caseLabel string) {
 	self.t.Helper()
-	if err := sidecartest.PlaceHold(self.ctx, self.host.Blobs, &sidecar.HoldRecord{
+	if err := sidecartest.PlaceHold(self.ctx, self.serviceHost.Blobs, &sidecar.HoldRecord{
 		NetworkId: self.networkId, CaseId: fsDropId16(caseLabel), Kind: sidecar.HoldKindPreserve2703f,
 		Scope: sidecar.HoldScopeNetwork(), PlaceTime: self.clock.Now(), ExpireTime: self.clock.Now().Add(90 * 24 * time.Hour),
 	}); err != nil {

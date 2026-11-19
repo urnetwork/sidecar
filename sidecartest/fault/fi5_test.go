@@ -631,8 +631,9 @@ func TestFi5CatchesAStartBeforeItsTime(t *testing.T) {
 	fiRequireViolation(t, result, 3, "FI-5", "the shred's start claimed deletion", "before §11.12's")
 }
 
-// A drop table fails closed: FI-5's dropped-object clause waits for FI-27's bound.
-func TestFi5FailsClosedOnADropTable(t *testing.T) {
+// A drop table alone fails nothing now that FI-5's dropped-object clause reads FI-27's bound (TEST-M10-01): a format-1
+// repo, which runs no drop, holds none to it, and fi_format2_test.go's drop world holds a returned dropped object.
+func TestFi5ReadsADropTableThroughFi27(t *testing.T) {
 	world := newFiHandWorld(t)
 	main := sidecar.NewId()
 	steps := []*Step{
@@ -646,8 +647,7 @@ func TestFi5FailsClosedOnADropTable(t *testing.T) {
 		}},
 	}
 	result := fi5Run(t, world, "fi5-drop-table", steps)
-	fiRequireViolation(t, result, 1, "FI-5", "FI-27's bound (TEST-M10-01)")
-	if !errors.Is(result.Err, ErrInvariantUnbuilt) {
-		t.Fatalf("the drop clause's failure does not name ErrInvariantUnbuilt: %v", result.Err)
+	if result.Err != nil {
+		t.Fatalf("a drop table alone failed FI-5: %v", result.Err)
 	}
 }

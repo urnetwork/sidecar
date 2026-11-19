@@ -1,7 +1,7 @@
 // FI-9, git (§22.8; §11.11, §11.12's export row, R-EVS-10, D-EVS-22; D-TEST-10): an acknowledged push has the declared
 // ref, tree, ancestry and per-ref outcome, and stock clients see standard non-fast-forward errors. Its git-lfs clauses
 // (a git-mode tip commits only once ur/lfs holds every object it requires, and no prune removes one a current tip
-// requires) wait for format 2 and are TEST-M10-01's.
+// requires) are fi9_lfs.go's (TEST-M10-01), over the store records a world adds to the same ledger.
 //
 // The oracle holds what stock clients were told to what an export of the repo holds:
 //
@@ -111,11 +111,19 @@ type GitLedger struct {
 	checkedThrough int
 	// each export's parse, by event index
 	repositories map[int]*GitRepository
+	// fi9_lfs.go's: the store records before this one are checked, and the pushes whose git-lfs clause is, under
+	// the bounds named, nil for the defaults
+	lfsCheckedThrough int
+	lfsPushesChecked  map[int]bool
+	lfsSettings       *GitLfsSettings
 }
 
 type gitLedgerEvent struct {
 	push   *GitPush
 	export string
+	// a store record (RecordLfsStore): what ur/lfs held, by oid
+	lfs         map[string][]byte
+	lfsRecorded bool
 }
 
 func NewGitLedger() *GitLedger {
@@ -179,6 +187,7 @@ func (self *GitLedger) check(final bool) error {
 		errs = append(errs, gitCheckExport(events, index, repository)...)
 		self.checkedThrough = index + 1
 	}
+	errs = append(errs, self.checkLfsWithLock(events, final)...)
 	if final {
 		for index := self.checkedThrough; index < len(events); index += 1 {
 			push := events[index].push
