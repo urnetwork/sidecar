@@ -8,14 +8,15 @@
 // and its vault entry, in a second local part, a subject and a body. Burner create and burn, the vault entry and the
 // one-time code run through MailClient, the root calls the bound API wraps (SidecarMail, SDK-M8-04):
 //
-//   - create: CreateBurner makes <name>@<blabel>.<net>.<root>, its label word-number and not replying, with its vault
-//     entry live, and neither the zone's serial nor any row moves: the wildcard MX answers the label, and no owner
-//     sits at or under it, so a receive-only burner makes no child (D-MAIL-7, D-DNS-11);
+//   - create: CreateBurner, an outward action through the gate (I-8), makes <name>@<blabel>.<net>.<root>, its label
+//     word-number and not replying, with its vault entry live, and neither the zone's serial nor any row moves: the
+//     wildcard MX answers the label, and no owner sits at or under it, so a receive-only burner makes no child
+//     (D-MAIL-7, D-DNS-11);
 //   - receive: a sign-up message through the router to the burner, and one to another local part at its label, each
 //     250 once deposited; the owner's ingest takes both, and OneTimeCodes gives the message's code;
-//   - burn: Burn calls api not at all; the receiver, its mailcfg read again as a hint of the change has it, answers
-//     550 5.1.1 for the label at RCPT, any local part alike, with the zone's serial and rows as before, and the vault
-//     entry and the burner read burned;
+//   - burn: Burn asks no approval and calls api not at all (owner decision 32); the receiver, its mailcfg read again as
+//     a hint of the change has it, answers 550 5.1.1 for the label at RCPT, any local part alike, with the zone's
+//     serial and rows as before, and the vault entry and the burner read burned;
 //   - never: the label and the burner's address reach no store a server holds in the clear, which the capture's
 //     scan reads (I-13), nor the router's log.
 //
@@ -134,11 +135,14 @@ func s10Run(t *testing.T) func(ctx context.Context, run *sidecartest.ScenarioRun
 			return err
 		}
 
-		// create: one burner, no record of its own anywhere but mailcfg
+		// create: an outward action through the gate (I-8), one burner, no record of its own anywhere but mailcfg
 		site := "https://" + siteName + ".example/signup"
 		created, err := world.ownerMail.CreateBurner(ctx, &sidecar.MailBurnerCreateArgs{Site: site})
 		if err != nil {
 			return fmt.Errorf("create: %w", err)
+		}
+		if actions := world.gate.ActionCount(); actions != 1 {
+			return fmt.Errorf("create: %d actions reached the gate, not one", actions)
 		}
 		if !s10BurnerLabelPattern.MatchString(created.Label) || created.Address != siteName+"@"+created.Label+"."+mailM8Label+"."+mailM8Root ||
 			created.Info == nil || created.Info.Replying || created.EntryId == (sidecar.Id{}) {
@@ -186,13 +190,17 @@ func s10Run(t *testing.T) func(ctx context.Context, run *sidecartest.ScenarioRun
 			return fmt.Errorf("the burner's vault entry %+v: %v", entries, err)
 		}
 
-		// burn: local, with no call to api, and the label refused at RCPT from then on
+		// burn: local, with no approval and no call to api (owner decision 32), and the label refused at RCPT from then on
 		callsBefore := world.api.Calls()
+		actionsBefore := world.gate.ActionCount()
 		if err := world.ownerMail.Burn(ctx, created.Address); err != nil {
 			return fmt.Errorf("burn: %w", err)
 		}
 		if calls := world.api.Calls(); fmt.Sprint(calls) != fmt.Sprint(callsBefore) {
 			return fmt.Errorf("a burn called api: %v, after %v", calls, callsBefore)
+		}
+		if actions := world.gate.ActionCount(); actions != actionsBefore {
+			return fmt.Errorf("a burn reached the gate: %d actions after %d", actions, actionsBefore)
 		}
 		world.SyncReceiver()
 		for _, recipient := range []string{created.Address, other} {
