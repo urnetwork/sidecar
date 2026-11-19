@@ -466,6 +466,8 @@ barrier mail.auth.check.after mail_auth.go
 barrier mail.auth.check.before mail_auth.go
 barrier mail.auth.slots.take.after mail_auth_slots.go
 barrier mail.auth.slots.take.before mail_auth_slots.go
+barrier mail.burner.retire.after mail_burner_reply.go
+barrier mail.burner.retire.before mail_burner_reply.go
 barrier mail.config.remove.after mail_config_write.go
 barrier mail.config.remove.before mail_config_write.go
 barrier mail.config.write.after mail_config_write.go
@@ -483,6 +485,8 @@ barrier mail.erase.orphan.after mail_erase.go
 barrier mail.erase.orphan.before mail_erase.go
 barrier mail.flags.write.after mail_flags.go
 barrier mail.flags.write.before mail_flags.go
+barrier mail.forward.queue.after mail_forward.go
+barrier mail.forward.queue.before mail_forward.go
 barrier mail.group.ref.remove.after mail_ingest_group.go
 barrier mail.group.ref.remove.before mail_ingest_group.go
 barrier mail.group.ref.write.after mail_ingest_group.go
@@ -496,6 +500,12 @@ barrier mail.ingest.consume.after mail_ingest.go
 barrier mail.ingest.consume.before mail_ingest.go
 barrier mail.ingest.push.after mail_ingest.go
 barrier mail.ingest.push.before mail_ingest.go
+barrier mail.outbox.dsn.after mail_smtp_mailbox.go
+barrier mail.outbox.dsn.before mail_smtp_mailbox.go
+barrier mail.outbox.queue.after mail_outbox.go
+barrier mail.outbox.queue.before mail_outbox.go
+barrier mail.outbox.remove.after mail_smtp_mailbox.go
+barrier mail.outbox.remove.before mail_smtp_mailbox.go
 barrier mail.receiver.publish.after mail_receiver.go
 barrier mail.receiver.publish.before mail_receiver.go
 barrier mail.receiver.retire.after mail_receiver.go
@@ -847,7 +857,9 @@ secret identity_key identity_keys.go
 secret init_secret mls_keyschedule.go
 secret invite_join_secret config_invite.go
 secret joiner_secret mls_welcome.go
+secret mail_forward_code mail_forward.go
 secret mail_local_credential mail_local_credential.go
+secret mail_reverse_alias_key mail_reverse_alias.go
 secret mail_spool_key mail_spool.go
 secret measure_client_iv smtpproof/prover_measure.go
 secret measure_client_key smtpproof/prover_measure.go
