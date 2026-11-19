@@ -21,6 +21,20 @@
 //	ingest    the owner's consented device reads the deposits with MailIngestor (MAIL-M7-15) on its own EvsClient,
 //	          writing m/ and i/ in one push and consuming them, under an authority that reads the world's rows
 //
+// What M8's composed runs add (MAIL-M8-10), each off unless a test's settings ask for it:
+//
+//	identity  the network, the member, the mailbox and the owner's and receiver's keys a test gives, so the world lines
+//	          up with a network of the test's own, an AdmissionNet's log whose devices hold those keys
+//	mailcfg   the network's mailcfg repo beside the mailbox, which the owner's device writes and every reader and the
+//	          receiver read, and the session's Resolve a test gives, as the mail component resolves over mailcfg
+//	hold      the router's own settings, such as its wake hold, the Push its host gives it, and a dialer that answers
+//	          a refusal first, as a lapsed receiver's missing registration does; the route names the receiver, as
+//	          model.ProjectMailRoutes writes it once the receiver's key is published (plan-MAIL-hints #2)
+//	devices   DeviceOf: an evs client of a device whose key the world does not hold, a running Sidecar's
+//
+// Several worlds may share one clock, each on a host of its own: each step waits for every wait it means, its own and
+// none another world's (AwaitTimerCountAt).
+//
 // The session runs on a clock of its own that a test moves only on purpose, so the world's clock moving for a check, a
 // STARTTLS's quiet time or the evs engine never ends a session for idleness. Nothing sleeps: a step waits on a pipe, a
 // timer it saw armed, or the session's reply.
@@ -91,6 +105,27 @@ type MailWorldSettings struct {
 	Auth *sidecar.MailAuthSettings
 	// How long one step may wait in real time before the test fails: a bound on a hang, never a pause.
 	StepTimeout time.Duration
+	// The network, the mailbox's owner and the mailbox, and the owner's device and the receiver, which a test sets to
+	// line the world up with a network of its own, an AdmissionNet's log whose devices hold these keys; zero or nil
+	// makes fresh ones.
+	NetworkId sidecar.Id
+	MemberId  sidecar.Id
+	RepoId    sidecar.Id
+	Owner     *sidecartest.FakeGkmSigner
+	Receiver  *sidecartest.FakeGkmSigner
+	// The network's mailcfg repo (§15.7), which the owner's device writes and every reader and the receiver read; zero
+	// for none, as S7's world has.
+	MailConfigRepoId sidecar.Id
+	// How the receiver's session resolves a recipient, as the mail component resolves it over mailcfg; nil resolves
+	// Addresses alone, each to the mailbox.
+	Resolve func(ctx context.Context, address string) (*sidecar.MailSessionRecipient, error)
+	// The router's settings past the world's own, such as its wake hold (§15.6's step 5); nil changes none.
+	Router func(settings *mxedgeservice.MxEdgeSettings)
+	// The Push the router's host gives it, which its wake hold hints through; nil keeps the host's.
+	Push sidecar.Push
+	// What the router's Find and open answer before a stream opens, a *sidecar.SocketCodeError as the dialer answers
+	// one, as a lapsed receiver's missing registration does; nil, or a nil answer, opens.
+	DialRefusal func(request *mxedgeservice.MxEdgeDialRequest) error
 }
 
 func DefaultMailWorldSettings() *MailWorldSettings {
@@ -130,6 +165,8 @@ type MailWorld struct {
 	RepoId    sidecar.Id
 	MemberId  sidecar.Id
 	ClientId  sidecar.Id
+	// The network's mailcfg repo, zero where the world has none.
+	MailConfigRepoId sidecar.Id
 	// The urnetwork-edge network the router's tickets name.
 	EdgeNetworkId sidecar.Id
 
@@ -255,17 +292,20 @@ func (self *mailWorldEvsAuth) MatchBinding(principal *sidecar.Principal) evsserv
 }
 
 func (self *mailWorldEvsAuth) HonorScope(principal *sidecar.Principal, repoId sidecar.Id, rights sidecar.AclEvsRights, now time.Time) evsservice.EvsAuthAnswer {
-	if repoId != self.world.RepoId {
+	if repoId != self.world.RepoId && (repoId != self.world.MailConfigRepoId || repoId == (sidecar.Id{})) {
 		return evsservice.EvsAuthDenied
 	}
 	return evsservice.EvsAuthAllowed
 }
 
 func (self *mailWorldEvsAuth) Repo(principal *sidecar.Principal, repoId sidecar.Id) (*evsservice.EvsRepoFacts, evsservice.EvsAuthAnswer) {
-	if repoId != self.world.RepoId {
-		return nil, evsservice.EvsAuthDenied
+	switch {
+	case repoId == self.world.RepoId:
+		return &evsservice.EvsRepoFacts{Kind: protocol.RepoKind_REPO_KIND_MAILBOX, NetworkId: self.world.NetworkId, OwnerMemberId: self.world.MemberId}, evsservice.EvsAuthAllowed
+	case repoId == self.world.MailConfigRepoId && repoId != (sidecar.Id{}):
+		return &evsservice.EvsRepoFacts{Kind: protocol.RepoKind_REPO_KIND_MAILCFG, NetworkId: self.world.NetworkId}, evsservice.EvsAuthAllowed
 	}
-	return &evsservice.EvsRepoFacts{Kind: protocol.RepoKind_REPO_KIND_MAILBOX, NetworkId: self.world.NetworkId, OwnerMemberId: self.world.MemberId}, evsservice.EvsAuthAllowed
+	return nil, evsservice.EvsAuthDenied
 }
 
 // evs's push gate's view: the world's newest rows.
@@ -360,6 +400,11 @@ func (self *mailWorldDialer) Dial(ctx context.Context, request *mxedgeservice.Mx
 	world := self.world
 	if request.NetworkId != world.NetworkId || request.Name != "smtp/25/mx" {
 		return nil, 0, &sidecar.SocketCodeError{Err: sidecar.ErrSocketUnavailable}
+	}
+	if refusal := world.settings.DialRefusal; refusal != nil {
+		if err := refusal(request); err != nil {
+			return nil, 0, err
+		}
 	}
 	metadata, err := request.Metadata(0)
 	if err != nil {
@@ -479,9 +524,21 @@ func NewMailWorld(t testing.TB, host *sidecartest.FakeHost, clock *sidecartest.F
 	t.Cleanup(cancel)
 	world := &MailWorld{
 		t: t, ctx: ctx, settings: settings, Clock: clock, SessionClock: sidecartest.NewFakeClock(clock.Now()), Host: host,
-		NetworkId: sidecar.NewId(), RepoId: sidecar.NewId(), MemberId: sidecar.NewId(), ClientId: sidecar.NewId(), EdgeNetworkId: sidecar.NewId(),
-		Owner: sidecartest.NewFakeGkmSigner(), Receiver: sidecartest.NewFakeGkmSigner(), Zone: sidecartest.NewFakeMailZone(clock), Records: sidecartest.NewFakeMxEdgeStore(nil),
+		NetworkId: settings.NetworkId, RepoId: settings.RepoId, MemberId: settings.MemberId, ClientId: sidecar.NewId(), EdgeNetworkId: sidecar.NewId(),
+		MailConfigRepoId: settings.MailConfigRepoId,
+		Owner:            settings.Owner, Receiver: settings.Receiver, Zone: sidecartest.NewFakeMailZone(clock), Records: sidecartest.NewFakeMxEdgeStore(nil),
 		log: &mailWorldLog{}, listener: &mailWorldListener{conns: make(chan net.Conn), closed: make(chan struct{})},
+	}
+	for _, id := range []*sidecar.Id{&world.NetworkId, &world.RepoId, &world.MemberId} {
+		if *id == (sidecar.Id{}) {
+			*id = sidecar.NewId()
+		}
+	}
+	if world.Owner == nil {
+		world.Owner = sidecartest.NewFakeGkmSigner()
+	}
+	if world.Receiver == nil {
+		world.Receiver = sidecartest.NewFakeGkmSigner()
 	}
 	world.readerIds = []sidecar.Id{world.Owner.SidecarId}
 	world.buildEvs()
@@ -512,6 +569,12 @@ func (self *MailWorld) buildEvs() {
 	if _, err := ownerGkm.CreateGroup(self.ctx, &sidecar.GkmCreateGroupArgs{RepoId: self.RepoId, Kind: protocol.RepoKind_REPO_KIND_MAILBOX, OwnerMemberId: &memberId}); err != nil {
 		t.Fatal(err)
 	}
+	if self.MailConfigRepoId != (sidecar.Id{}) {
+		// mailcfg names no owner (§8.8's RepoCreate row): its first generation goes to every reader the view names
+		if _, err := ownerGkm.CreateGroup(self.ctx, &sidecar.GkmCreateGroupArgs{RepoId: self.MailConfigRepoId, Kind: protocol.RepoKind_REPO_KIND_MAILCFG}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	usage, err := evsservice.NewUsageBatcher(self.ctx, host.ServiceHost(), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -540,37 +603,55 @@ func (self *MailWorld) buildEvs() {
 		t.Fatal(err)
 	}
 	t.Cleanup(self.Engine.Close)
+	self.putRepo(self.RepoId, protocol.RepoKind_REPO_KIND_MAILBOX, self.MemberId.Bytes())
+	if self.MailConfigRepoId != (sidecar.Id{}) {
+		self.putRepo(self.MailConfigRepoId, protocol.RepoKind_REPO_KIND_MAILCFG, nil)
+	}
+}
+
+// A repo's place and repo objects on the world's cluster, as evs's create writes them, the owner's device its creator.
+func (self *MailWorld) putRepo(repoId sidecar.Id, kind protocol.RepoKind, ownerMemberIdBytes []byte) {
+	t := self.t
 	inspect := sidecartest.InspectContext(self.ctx)
-	placeBytes, err := (&sidecar.EvsRepoPlace{ClusterId: cluster.ClusterId(), CreatorSidecarId: self.Owner.SidecarId}).Marshal()
+	placeBytes, err := (&sidecar.EvsRepoPlace{ClusterId: self.Cluster.ClusterId(), CreatorSidecarId: self.Owner.SidecarId}).Marshal()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := cluster.PutIfNoneMatch(inspect, sidecar.EvsPlaceKey(self.RepoId), placeBytes, nil); err != nil {
+	if _, err := self.Cluster.PutIfNoneMatch(inspect, sidecar.EvsPlaceKey(repoId), placeBytes, nil); err != nil {
 		t.Fatal(err)
 	}
 	repoBytes, err := proto.Marshal(&protocol.EvsRepoObject{
-		RepoId: self.RepoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_MAILBOX, State: protocol.EvsRepoState_EVS_REPO_ACTIVE,
-		Format: sidecar.EvsRepoFormat1, NetworkId: self.NetworkId.Bytes(), OwnerMemberId: self.MemberId.Bytes(),
+		RepoId: repoId.Bytes(), Kind: kind, State: protocol.EvsRepoState_EVS_REPO_ACTIVE,
+		Format: sidecar.EvsRepoFormat1, NetworkId: self.NetworkId.Bytes(), OwnerMemberId: ownerMemberIdBytes,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := cluster.PutIfNoneMatch(inspect, evsservice.RepoKey(self.RepoId), repoBytes, nil); err != nil {
+	if _, err := self.Cluster.PutIfNoneMatch(inspect, evsservice.RepoKey(repoId), repoBytes, nil); err != nil {
 		t.Fatal(err)
 	}
 }
 
 // The rows the world's view compiles: the mailbox, its owner's devices, every reader one, the owner its admin and the
-// receiver a device of the member that only deposits.
+// receiver a device of the member that only deposits; and where the world has one, mailcfg, which the readers write
+// and the receiver reads too, as a member device policy grants the receiver's listen reads it (§15.7).
 func (self *MailWorld) fixture() *sidecartest.FakeGkmAuthFixture {
 	self.stateLock.Lock()
 	readerIds := slices.Clone(self.readerIds)
 	readerSigners := slices.Clone(self.readerSigners)
 	self.stateLock.Unlock()
-	rows := sidecartest.FakeGkmAuthRows(&protocol.AclRepo{
+	repos := []*protocol.AclRepo{{
 		RepoId: self.RepoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_MAILBOX, OwnerMemberId: self.MemberId.Bytes(),
 		Admins: []*protocol.AclRepoAdminRow{{SidecarId: self.Owner.SidecarId.Bytes()}},
-	})
+	}}
+	repoReaders := map[sidecar.Id][]sidecar.Id{self.RepoId: readerIds}
+	repoWriters := map[sidecar.Id][]sidecar.Id{self.RepoId: readerIds}
+	if self.MailConfigRepoId != (sidecar.Id{}) {
+		repos = append(repos, &protocol.AclRepo{RepoId: self.MailConfigRepoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_MAILCFG})
+		repoReaders[self.MailConfigRepoId] = append(slices.Clone(readerIds), self.Receiver.SidecarId)
+		repoWriters[self.MailConfigRepoId] = slices.Clone(readerIds)
+	}
+	rows := sidecartest.FakeGkmAuthRows(repos...)
 	sidecarRows, member := sidecartest.FakeGkmAuthMemberDevices(self.MemberId, append(slices.Clone(readerIds), self.Receiver.SidecarId)...)
 	rows.Sidecars = sidecarRows
 	rows.Members = []*bridge.MemberRow{member}
@@ -582,8 +663,8 @@ func (self *MailWorld) fixture() *sidecartest.FakeGkmAuthFixture {
 	return &sidecartest.FakeGkmAuthFixture{
 		Rows:         rows,
 		IdentityKeys: identityKeys,
-		RepoReaders:  map[sidecar.Id][]sidecar.Id{self.RepoId: readerIds},
-		RepoWriters:  map[sidecar.Id][]sidecar.Id{self.RepoId: readerIds},
+		RepoReaders:  repoReaders,
+		RepoWriters:  repoWriters,
 	}
 }
 
@@ -618,17 +699,25 @@ func (self *MailWorld) RoundTrip(request *http.Request) (*http.Response, error) 
 // mints a deposit-only sidecar's, on clock, the world's when nil, over store.
 func (self *MailWorld) Device(signer *sidecartest.FakeGkmSigner, depositOnly bool, store sidecar.SidecarStore, clock sidecar.Clock) *sidecar.EvsClient {
 	self.t.Helper()
+	return self.DeviceOf(signer.SidecarId, signer.PublicKey(), signer.Sign, depositOnly, store, clock)
+}
+
+// An evs client as Device makes one, for a device whose key the world does not hold: a running Sidecar of the test,
+// which sign is (Sidecar.Sign), its identity key's public half publicKey. The world's view names only its own devices,
+// so such a client's pushes and gkm calls are judged as a stranger's.
+func (self *MailWorld) DeviceOf(sidecarId sidecar.Id, publicKey []byte, sign sidecar.GkmSignFunction, depositOnly bool, store sidecar.SidecarStore, clock sidecar.Clock) *sidecar.EvsClient {
+	self.t.Helper()
 	if clock == nil {
 		clock = self.Clock
 	}
-	gkmClient := self.Gkm.Client(signer.SidecarId, signer.Sign)
+	gkmClient := self.Gkm.Client(sidecarId, sign)
 	gkmClient.AuthAdvanced(self.view())
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		self.gkmClients = append(self.gkmClients, gkmClient)
 	}()
-	identity := &sidecar.SidecarIdentity{NetworkId: self.NetworkId, SidecarId: signer.SidecarId, ClientId: self.ClientId, Generation: 1, IdentityPublicKey: signer.PublicKey()}
+	identity := &sidecar.SidecarIdentity{NetworkId: self.NetworkId, SidecarId: sidecarId, ClientId: self.ClientId, Generation: 1, IdentityPublicKey: publicKey}
 	client, err := sidecar.NewEvsClient(&sidecar.EvsClientArgs{
 		NetworkId: self.NetworkId,
 		EvsUrl:    "https://evs.example",
@@ -637,13 +726,13 @@ func (self *MailWorld) Device(signer *sidecartest.FakeGkmSigner, depositOnly boo
 			if depositOnly {
 				scopes = []string{"repo:" + self.RepoId.String() + ":deposit"}
 			}
-			connectSidecarId := connect.Id(signer.SidecarId)
+			connectSidecarId := connect.Id(sidecarId)
 			return self.Host.Authenticator.Issue(&sidecar.Principal{
 				NetworkId: connect.Id(self.NetworkId), ClientId: connect.Id(self.ClientId), SidecarId: &connectSidecarId,
 				Audience: evsservice.EvsAudience, Scopes: scopes, IssuedAt: self.Clock.Now(), ExpiresAt: self.Clock.Now().Add(15 * time.Minute),
 			}), nil
 		},
-		Sign:     sidecar.EvsSignFunction(signer.Sign),
+		Sign:     sidecar.EvsSignFunction(sign),
 		Identity: func() *sidecar.SidecarIdentity { return identity },
 		Gkm:      gkmClient,
 		Store:    store,
@@ -676,14 +765,18 @@ func (self *MailWorld) buildSession() {
 	for _, address := range self.settings.Addresses {
 		addresses[strings.ToLower(address)] = true
 	}
-	self.Session, err = sidecar.NewMailSessionServer(&sidecar.MailSessionArgs{
-		ReceiverSidecarId: self.Receiver.SidecarId,
-		Resolve: func(ctx context.Context, address string) (*sidecar.MailSessionRecipient, error) {
+	resolve := self.settings.Resolve
+	if resolve == nil {
+		resolve = func(ctx context.Context, address string) (*sidecar.MailSessionRecipient, error) {
 			if !addresses[strings.ToLower(address)] {
 				return &sidecar.MailSessionRecipient{}, nil
 			}
 			return &sidecar.MailSessionRecipient{Known: true, Address: strings.ToLower(address), RepoId: self.RepoId}, nil
-		},
+		}
+	}
+	self.Session, err = sidecar.NewMailSessionServer(&sidecar.MailSessionArgs{
+		ReceiverSidecarId: self.Receiver.SidecarId,
+		Resolve:           resolve,
 		PostmasterDomain: func(ctx context.Context) (string, error) {
 			return self.settings.Label + "." + self.settings.Root, nil
 		},
@@ -746,11 +839,17 @@ func (self *MailWorld) buildRouter() {
 	settings.ReadyProbeInterval = self.settings.ProbeInterval
 	// the batches wait for the engine's last write, at its close, or a test's Advance past it
 	settings.RecordFlushInterval = 1000 * time.Hour
+	if self.settings.Router != nil {
+		self.settings.Router(settings)
+	}
 	dialer := &mailWorldDialer{world: self}
 	for range settings.Clients {
 		dialer.clientIds = append(dialer.clientIds, sidecar.NewId())
 	}
-	routeValue, err := json.Marshal(&mxedgeservice.MailRoute{NetworkId: self.NetworkId, Label: self.settings.Label, Host: "mx"})
+	// the receiver's key is published, so the route names it (plan-MAIL-hints #2), as model.ProjectMailRoutes writes it
+	routeValue, err := json.Marshal(&mxedgeservice.MailRoute{
+		NetworkId: self.NetworkId, Label: self.settings.Label, Host: "mx", ReceiverSidecarIds: []sidecar.Id{self.Receiver.SidecarId},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -758,6 +857,9 @@ func (self *MailWorld) buildRouter() {
 		t.Fatal(err)
 	}
 	serviceHost := host.ServiceHost()
+	if self.settings.Push != nil {
+		serviceHost.Push = self.settings.Push
+	}
 	gates := serviceHost.GatesOrClosed()
 	deps := &mxedgeservice.MxEdgeDeps{
 		ReadClientHello: func(conn net.Conn, maxByteCount int) (*mxedgeservice.MxClientHello, error) {
@@ -781,6 +883,14 @@ func (self *MailWorld) buildRouter() {
 		Log:   self.log,
 	}
 	start := self.Clock.Now()
+	// the first probe has found the store and made today's k once its next wait is armed
+	// at the interval, or the UTC date change if that comes first: one more wait there than before the router, since
+	// another world's router on the same clock may wait there already
+	nextProbe := start.Add(self.settings.ProbeInterval)
+	if dayChange := start.UTC().Truncate(24 * time.Hour).Add(24 * time.Hour); dayChange.Before(nextProbe) {
+		nextProbe = dayChange
+	}
+	waitsBefore := self.timerCountAt(nextProbe)
 	self.Router, err = mxedgeservice.NewMxEdgeRouterService(self.ctx, serviceHost, self.Records, deps, &mxedgeservice.MxEdgeRouterDeps{
 		Dialer: dialer,
 		// a documentation address has no PTR; the lookups still run, as the host's resolver's would
@@ -791,13 +901,7 @@ func (self *MailWorld) buildRouter() {
 		t.Fatal(err)
 	}
 	t.Cleanup(self.Router.Close)
-	// the first probe has found the store and made today's k once its next wait is armed
-	// at the interval, or the UTC date change if that comes first
-	nextProbe := start.Add(self.settings.ProbeInterval)
-	if dayChange := start.UTC().Truncate(24 * time.Hour).Add(24 * time.Hour); dayChange.Before(nextProbe) {
-		nextProbe = dayChange
-	}
-	self.AwaitTimerAt(nextProbe)
+	self.AwaitTimerCountAt(nextProbe, waitsBefore+1)
 	if !self.Router.Ready() {
 		t.Fatal("the router is not ready")
 	}
@@ -825,6 +929,42 @@ func (self *MailWorld) AwaitTimerAt(at time.Time) {
 		case <-added:
 		case <-ctx.Done():
 			self.t.Fatalf("no timer was set for %v", at)
+		}
+	}
+}
+
+// How many of the clock's timers are set for at.
+func (self *MailWorld) timerCountAt(at time.Time) int {
+	pending, _ := self.Clock.WatchTimers()
+	count := 0
+	for _, timer := range pending {
+		if timer.Equal(at) {
+			count += 1
+		}
+	}
+	return count
+}
+
+// Waits until count of the clock's timers are set for at: a step that moves the clock waits for every wait it means.
+func (self *MailWorld) AwaitTimerCountAt(at time.Time, count int) {
+	self.t.Helper()
+	ctx, cancel := context.WithTimeout(self.ctx, self.settings.StepTimeout)
+	defer cancel()
+	for {
+		pending, added := self.Clock.WatchTimers()
+		found := 0
+		for _, timer := range pending {
+			if timer.Equal(at) {
+				found += 1
+			}
+		}
+		if count <= found {
+			return
+		}
+		select {
+		case <-added:
+		case <-ctx.Done():
+			self.t.Fatalf("%d of %d timers were set for %v", found, count, at)
 		}
 	}
 }
