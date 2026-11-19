@@ -337,26 +337,32 @@ type searchTestRemoteTransport struct {
 	inner SearchTestRemoteTransport
 }
 
+// See searchRemoteTransport: the test transport's.
 func (self *searchTestRemoteTransport) Call(ctx context.Context, indexerId Id, body []byte) ([]byte, error) {
 	return self.inner.Call(ctx, indexerId, body)
 }
 
+// See searchRemoteTransport: the test transport's.
 func (self *searchTestRemoteTransport) Peer(indexerId Id) (bool, bool) {
 	return self.inner.Peer(indexerId)
 }
 
+// See searchRemoteTransport: the test transport's.
 func (self *searchTestRemoteTransport) SeenSince(indexerId Id, at time.Time) bool {
 	return self.inner.SeenSince(indexerId, at)
 }
 
+// See searchRemoteTransport: the test transport's.
 func (self *searchTestRemoteTransport) SetSearchIndexer(indexerId Id) {
 	self.inner.SetSearchIndexer(indexerId)
 }
 
+// See searchRemoteTransport: the test transport's.
 func (self *searchTestRemoteTransport) SetForeground(foreground bool) {
 	self.inner.SetForeground(foreground)
 }
 
+// See searchRemoteTransport: the test transport's.
 func (self *searchTestRemoteTransport) SetAsksSearch(asksSearch func(indexerId Id) bool) error {
 	return self.inner.SetAsksSearch(asksSearch)
 }
