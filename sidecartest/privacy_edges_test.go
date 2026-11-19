@@ -494,6 +494,44 @@ func TestFakeUpstreamResolverHoldsEveryQuery(t *testing.T) {
 	}
 }
 
+// A value dns-2 names in a query an edge answers, a burner's label in an MX lookup, passes in the queries a dns edge
+// was sent once a test declares it against that row, and is found as before in the upstream resolver's queries, which
+// no row gives it to.
+func TestEdgeQueryValueDeclaredAgainstDns2PassesAtAnEdgeAlone(t *testing.T) {
+	net := NewNet(t.Context(), nil)
+	defer net.Close()
+	capture := net.Capture()
+	label := "b7k2m9q4x1c8"
+	capture.Forbid("a burner's label", []byte(label))
+	capture.DnsEdgeQueries("dns").AddDatagram("ns1", edgeQueryBytes(t, label+".net.example", dns.TypeMX))
+	classes := func() []PrivacyClass {
+		found := []PrivacyClass{}
+		for _, finding := range capture.Scan() {
+			if finding.Needle != "a burner's label" {
+				t.Errorf("%s", finding)
+			}
+			found = append(found, finding.Class)
+		}
+		return found
+	}
+	if found := classes(); !slices.Equal(found, []PrivacyClass{PrivacyClassDnsEdgeQuery}) {
+		t.Fatalf("undeclared, the label was found in %v", found)
+	}
+	if err := capture.Declare("dns-2", "a burner's label", PrivacyClassDnsEdgeQuery); err != nil {
+		t.Fatal(err)
+	}
+	if found := classes(); len(found) != 0 {
+		t.Errorf("declared against dns-2, the label was found in %v", found)
+	}
+	resolver := NewFakeUpstreamResolver(net, "the host's resolver")
+	if _, err := resolver.Resolve(t.Context(), edgeQueryBytes(t, label+".net.example", dns.TypeMX)); err != nil {
+		t.Fatal(err)
+	}
+	if found := classes(); !slices.Equal(found, []PrivacyClass{PrivacyClassUpstreamResolver}) {
+		t.Errorf("handed to the upstream resolver, the label was found in %v", found)
+	}
+}
+
 // Every query a harness's edge is sent is captured as it was sent, over TCP, through the harness's resolver and over
 // UDP, whatever the edge answered: a private name queried at a dns edge is found under the dns edge's class, and the
 // queries a test makes for its public names leave nothing the scan finds.
