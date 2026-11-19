@@ -463,6 +463,8 @@ func (self *SmtpConnectionResult) describe() string {
 		return "keys refused"
 	case self.Err != nil && self.PreambleCode == protocol.SmtpPreambleCode_SMTP_PREAMBLE_CODE_UNSPECIFIED:
 		return fmt.Sprintf("before the preamble's answer: %v", self.Err)
+	case self.Err != nil:
+		return fmt.Sprintf("preamble %s, then: %v", self.PreambleCode, self.Err)
 	}
 	return fmt.Sprintf("preamble %s", self.PreambleCode)
 }

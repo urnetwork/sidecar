@@ -82,6 +82,7 @@ func (self *SmtpStatusHold) Apply(status *protocol.SmtpStatus) {
 	}
 }
 
+// Counts one hint dropped as a protocol error.
 func (self *SmtpStatusHold) drop() {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()

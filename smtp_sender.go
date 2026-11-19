@@ -373,6 +373,7 @@ func (self *SmtpSender) startSend(effectKey []byte) (started bool, closed bool) 
 	return true, false
 }
 
+// Gives back startSend's place.
 func (self *SmtpSender) endSend(effectKey []byte) {
 	func() {
 		self.stateLock.Lock()
