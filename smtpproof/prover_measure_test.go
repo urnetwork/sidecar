@@ -68,21 +68,13 @@ func testMeasureCapacity(family ShapeFamily) int {
 }
 
 func TestMeasurePartsFillTheirShapesAndSatisfyTheRelation(t *testing.T) {
-	// a measuring part is a real body part of its shape, so its cost is that shape's, and its msg part a
-	// real one of the msg shape's
+	// a measuring part is a real body part of its shape, so its cost is that shape's unit
 	proof := DefaultProofSettings()
 	for _, shape := range partShapes(proof) {
-		var statement *partStatement
-		var witness *partWitness
-		var err error
-		switch shape.kind {
-		case partKindBody:
-			statement, witness, err = newMeasurePart(proof, shape)
-		case partKindMessage:
-			statement, witness, err = newMeasureMessagePart(proof, shape)
-		default:
+		if shape.kind != partKindBody {
 			continue
 		}
+		statement, witness, err := newMeasurePart(proof, shape)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -96,7 +88,8 @@ func TestMeasurePartsFillTheirShapesAndSatisfyTheRelation(t *testing.T) {
 	}
 }
 
-func TestMeasureProvesEachFamilysMessagePartFirst(t *testing.T) {
+func TestMeasureProvesOneBodyUnitPerFamily(t *testing.T) {
+	// every shape fills one domain, so a body unit of each family stands for the rest (DESIGN-DETAILS 3.2.6)
 	prover, backend := testMeasuringProver(map[uint16]time.Duration{
 		tlsSuiteAes128GcmSha256:        10 * time.Second,
 		tlsSuiteChacha20Poly1305Sha256: 5 * time.Second,
@@ -104,42 +97,42 @@ func TestMeasureProvesEachFamilysMessagePartFirst(t *testing.T) {
 	if _, err := prover.Measure(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(backend.statements) != 4 {
-		t.Fatalf("proved %d parts, want each family's msg part and then its body part", len(backend.statements))
+	if len(backend.statements) != 2 {
+		t.Fatalf("proved %d parts, want one body unit a family", len(backend.statements))
 	}
-	for i, statement := range backend.statements {
-		want := uint32(measurePartIndex)
-		if i < 2 {
-			want = 3
+	families := map[ShapeFamily]bool{}
+	for _, statement := range backend.statements {
+		shape, err := partShapeFor(DefaultProofSettings(), statement)
+		if err != nil || shape.kind != partKindBody || statement.mode != partModeData || statement.index != 4 {
+			t.Errorf("part %d mode %d: %v", statement.index, statement.mode, err)
+			continue
 		}
-		if statement.index != want || statement.mode != partModeData {
-			t.Errorf("part %d: index %d mode %d", i, statement.index, statement.mode)
-		}
+		families[shape.family] = true
+	}
+	if !families[ShapeFamilyAes128Gcm] || !families[ShapeFamilyChacha20] {
+		t.Errorf("families %v", families)
 	}
 }
 
 func TestMeasureRecordsNothingWhereAUnitCannotProve(t *testing.T) {
-	// plan-SMTP-small-readings #19: a host that cannot prove a unit records no p/ and only queues. A host
-	// out of memory dies in the attempt; any other failure ends Measure with no result
+	// a host that cannot prove a unit records no p/ and only queues (QD-483); a host out of memory dies in
+	// the attempt, and any other failure ends Measure with no result
 	prover, backend := testMeasuringProver(map[uint16]time.Duration{tlsSuiteAes128GcmSha256: time.Second})
 	backend.refuse = func(statement *partStatement) error {
-		if statement.index == 3 {
-			return errors.New("out of memory")
-		}
-		return nil
+		return errors.New("out of memory")
 	}
 	if measure, err := prover.Measure(context.Background()); err == nil {
 		t.Fatalf("measured %+v", measure)
 	}
 	if len(backend.statements) != 1 {
-		t.Errorf("proved %d parts after the msg part failed", len(backend.statements))
+		t.Errorf("proved %d parts after the first failed", len(backend.statements))
 	}
-	if settings := prover.sendSettings(); settings.DataProofBytes != DefaultProverSettings().DataProofBytes || settings.DataPartBytes != DefaultProverSettings().DataPartBytes {
-		t.Errorf("a failed measure set part %d and cap %d", settings.DataPartBytes, settings.DataProofBytes)
+	if settings := prover.sendSettings(); settings.DataProofBytes != DefaultProverSettings().DataProofBytes {
+		t.Errorf("a failed measure set the cap %d", settings.DataProofBytes)
 	}
 }
 
-func TestMeasureSetsTheDataLimitsByTheSlowestFamily(t *testing.T) {
+func TestMeasureSetsTheLimitsAndThePriceByTheSlowestFamily(t *testing.T) {
 	prover, backend := testMeasuringProver(map[uint16]time.Duration{
 		tlsSuiteAes128GcmSha256:        20 * time.Second,
 		tlsSuiteChacha20Poly1305Sha256: 5 * time.Second,
@@ -147,9 +140,6 @@ func TestMeasureSetsTheDataLimitsByTheSlowestFamily(t *testing.T) {
 	measure, err := prover.Measure(context.Background())
 	if err != nil {
 		t.Fatal(err)
-	}
-	if len(backend.statements) != 4 {
-		t.Errorf("proved %d parts, want each family's msg part and body part", len(backend.statements))
 	}
 	// the smaller family's body record, AES-128-GCM's, and the slowest family's 20 s for one
 	capacity := min(testMeasureCapacity(ShapeFamilyAes128Gcm), testMeasureCapacity(ShapeFamilyChacha20))
@@ -162,19 +152,42 @@ func TestMeasureSetsTheDataLimitsByTheSlowestFamily(t *testing.T) {
 	if !measure.MeasureTime.Equal(backend.clock.read()) {
 		t.Errorf("measured at %v", measure.MeasureTime)
 	}
+	// a send is priced in AES-128-GCM's units: 3.2.6's head and rest, and 13 commands a group after the first
+	proof := DefaultProofSettings()
+	message := proof.shape(ShapeKindMessage, ShapeFamilyAes128Gcm, 0)
+	header := proof.shape(ShapeKindHeader, ShapeFamilyAes128Gcm, 0)
+	if measure.UnitTime != 20*time.Second || measure.HeadByteCount != uint64(message.recordContentBytes(message.HeadBlocks, tlsVersion13)) ||
+		measure.HeaderRecordByteCount != uint64(header.recordContentBytes(header.RestBlocks, tlsVersion13)) || measure.EnvelopeGroupCount != 13 {
+		t.Errorf("unit %v, head %d, rest %d, group %d", measure.UnitTime, measure.HeadByteCount, measure.HeaderRecordByteCount, measure.EnvelopeGroupCount)
+	}
+	if measure.HeadByteCount != 831 {
+		t.Errorf("head %d, want 3.2.6's 831", measure.HeadByteCount)
+	}
 	settings := prover.sendSettings()
-	if settings.DataPartBytes != capacity || uint64(settings.DataProofBytes) != measure.DataProofBytes {
-		t.Errorf("a send would run with part %d and cap %d", settings.DataPartBytes, settings.DataProofBytes)
+	if uint64(settings.DataProofBytes) != measure.DataProofBytes {
+		t.Errorf("a send would run with cap %d", settings.DataProofBytes)
 	}
 	// the Prover's own settings are untouched: only its sends see the measure
 	if prover.settings.DataProofBytes != DefaultProverSettings().DataProofBytes {
 		t.Error("Measure wrote into the settings it was given")
 	}
+
+	// where ChaCha20's unit is the slower, a send is priced in its: 19 commands a group
+	prover, _ = testMeasuringProver(map[uint16]time.Duration{
+		tlsSuiteAes128GcmSha256:        5 * time.Second,
+		tlsSuiteChacha20Poly1305Sha256: 8 * time.Second,
+	})
+	if measure, err = prover.Measure(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if measure.UnitTime != 8*time.Second || measure.HeadByteCount != 1215 || measure.HeaderRecordByteCount != 2239 || measure.EnvelopeGroupCount != 19 {
+		t.Errorf("unit %v, head %d, rest %d, group %d", measure.UnitTime, measure.HeadByteCount, measure.HeaderRecordByteCount, measure.EnvelopeGroupCount)
+	}
 }
 
-func TestMeasureClosesDataWhereAPartCannotProveInTime(t *testing.T) {
+func TestMeasureClosesDataWhereAUnitCannotProveInTime(t *testing.T) {
 	// a part past 2 minutes would outlast the MX's timeout, so this host sends no DATA at all, and a
-	// message to an MX without CHUNKING is too_large before MAIL
+	// message to an MX without CHUNKING is too_large before MAIL, naming the cap it passed
 	prover, _ := testMeasuringProver(map[uint16]time.Duration{
 		tlsSuiteAes128GcmSha256:        3 * time.Minute,
 		tlsSuiteChacha20Poly1305Sha256: time.Second,
@@ -187,14 +200,14 @@ func TestMeasureClosesDataWhereAPartCannotProveInTime(t *testing.T) {
 		t.Errorf("cap %d", measure.DataProofBytes)
 	}
 	settings := prover.sendSettings()
-	if settings.DataPartBytes != 0 || settings.DataProofBytes != 0 {
-		t.Fatalf("part %d, cap %d", settings.DataPartBytes, settings.DataProofBytes)
+	if settings.DataProofBytes != 0 {
+		t.Fatalf("cap %d", settings.DataProofBytes)
 	}
 	mxSettings := testMxDefaults()
 	mxSettings.keywords = []string{"PIPELINING"}
 	job := testJob("a small body\r\n", "bob")
 	send := testRunSend(t, testTlsLegs()[0], mxSettings, settings, job)
-	if send.err != nil || send.result == nil || !send.result.TooLarge {
+	if send.err != nil || send.result == nil || !send.result.TooLarge || send.result.DataProofByteCount != 0 {
 		t.Fatalf("result %+v, %v", send.result, send.err)
 	}
 	if commands := send.mx.seen(); len(commands) != 1 {
@@ -208,7 +221,7 @@ func TestMeasureSkipsFamiliesWithoutKeysAndFailsWithNone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(backend.statements) != 2 || measure.DataBytesPerSecond != uint64(testMeasureCapacity(ShapeFamilyChacha20)/4) {
+	if len(backend.statements) != 1 || measure.DataBytesPerSecond != uint64(testMeasureCapacity(ShapeFamilyChacha20)/4) {
 		t.Errorf("%d parts, rate %d", len(backend.statements), measure.DataBytesPerSecond)
 	}
 
@@ -219,5 +232,23 @@ func TestMeasureSkipsFamiliesWithoutKeysAndFailsWithNone(t *testing.T) {
 	}
 	if settings := unloaded.sendSettings(); settings.DataProofBytes != DefaultProverSettings().DataProofBytes {
 		t.Errorf("cap %d", settings.DataProofBytes)
+	}
+}
+
+func TestMeasureTakesOnlyTheCurrentSetsReadyFamilies(t *testing.T) {
+	// a host with keys measures the families ready in the set it would prove under, and no other
+	circuits := testFamilyKeySetCircuits(t)
+	made := testMakeKeySet(t, testFamilyOf(circuits, ShapeFamilyChacha20))
+	prover := testProverOver(t, circuits, made)
+	if proof, families := prover.measureFamilies(); len(families) != 0 || proof != prover.settings.Proof {
+		t.Errorf("before any check: %v", families)
+	}
+	testPrepareAll(t, prover)
+	proof, families := prover.measureFamilies()
+	if len(families) != 1 || families[0] != ShapeFamilyChacha20 {
+		t.Errorf("families %v", families)
+	}
+	if proof.shape(ShapeKindBody, ShapeFamilyChacha20, 0) == nil {
+		t.Error("the set's catalog holds no body shape")
 	}
 }

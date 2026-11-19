@@ -19,7 +19,7 @@ func testLaterPartCapture(t *testing.T, leg *testTlsLeg) *testCapturedParts {
 	t.Helper()
 	settings := DefaultProverSettings()
 	settings.ForceData = true
-	settings.DataPartBytes = 12
+	settings.testDataRecordByteCount = 12
 	return testCapture(t, leg, testMxDefaults(), settings, testJob("one line\r\nanother line\r\nand a third\r\n", "bob", "carol"))
 }
 
@@ -178,7 +178,15 @@ func TestATicketReadDuringTheBodyTakesAPartBeforeTheNext(t *testing.T) {
 		for _, record := range next.clientRecords {
 			spec.sealed = append(spec.sealed, &tlsSealedRecord{seq: record.seq, raw: record.raw})
 		}
-		if err := run.proveAfterLateRecords(context.Background(), spec); err != nil {
+		// as the message's loop goes before each part after the first: a reply ends the send, and a ticket
+		// takes a part of its own
+		if reply, err := run.drainServerRecords(); err != nil || reply != nil {
+			t.Fatalf("%s: reply %v, %v", leg.name, reply, err)
+		}
+		if err := run.proveLateRecords(context.Background()); err != nil {
+			t.Fatalf("%s: %v", leg.name, err)
+		}
+		if err := run.prove(context.Background(), spec, run.covered); err != nil {
 			t.Fatalf("%s: %v", leg.name, err)
 		}
 		if len(channel.parts) != 2 {
@@ -211,7 +219,7 @@ func TestAReplyDuringTheBodyEndsTheSendWithItsCode(t *testing.T) {
 }
 
 func TestSendDataOf100KiBInPartsThroughTheGate(t *testing.T) {
-	// D-SMTP-16's DATA size: every octet opened, in parts of DataPartBytes, leading dots stuffed, through
+	// D-SMTP-16's DATA size: every octet opened, in parts of a body record each, leading dots stuffed, through
 	// the real gate with the relation as its verifier, to the MX as one transaction of the message
 	// itself. Every part finds a production shape, so the circuits as built hold such a send
 	var body strings.Builder

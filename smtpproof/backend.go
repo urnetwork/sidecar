@@ -102,6 +102,11 @@ type groth16Backend struct {
 	// The catalog and limits the shapes come from.
 	proof *ProofSettings
 
+	// On a prover host, how a proof takes its shape's keys: from the key set's cache through the host's
+	// loader, which charges them against its memory budget (prover_load.go). Nil takes them from keys, then
+	// source, as they are.
+	loading *shapeLoading
+
 	stateLock sync.Mutex
 	keys      map[partShape]*shapeKeys
 	source    shapeKeySource
@@ -139,11 +144,22 @@ func (self *groth16Backend) provePart(ctx context.Context, statement *partStatem
 	if err != nil {
 		return nil, err
 	}
+	prove := func(keys *shapeKeys) ([]byte, error) {
+		return proveWithKeys(keys, shape, statement, witness)
+	}
+	if self.loading != nil {
+		return self.loading.prove(ctx, shape, prove)
+	}
 	keys, err := self.keysFor(shape)
 	if err != nil {
 		return nil, err
 	}
-	if keys.provingKey == nil || keys.compiled == nil {
+	return prove(keys)
+}
+
+// One proof of a statement under a shape's keys.
+func proveWithKeys(keys *shapeKeys, shape *partShape, statement *partStatement, witness *partWitness) ([]byte, error) {
+	if keys == nil || keys.provingKey == nil || keys.compiled == nil {
 		return nil, errNoKeys
 	}
 	circuit, err := partAssignment(shape, statement)

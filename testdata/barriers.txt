@@ -541,6 +541,7 @@ barrier posture_store.rename.after device/posture_store.go
 barrier posture_store.rename.before device/posture_store.go
 barrier posture_store.sync.after device/posture_store.go
 barrier posture_store.sync.before device/posture_store.go
+barrier prover_load.wait smtpproof/prover_load.go
 barrier pushservice.hint.after pushservice/hint_writer.go
 barrier pushservice.hint.before pushservice/hint_writer.go
 barrier pushservice.long_poll.hold pushservice/long_poll.go

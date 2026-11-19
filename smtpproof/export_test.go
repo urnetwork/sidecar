@@ -92,7 +92,27 @@ func ExportCapture(t *testing.T, legIndex int, data bool) *ExportedCapture {
 	job := testJob("one line\r\nanother line\r\nand a third\r\n", "bob", "carol")
 	if data {
 		settings.ForceData = true
-		settings.DataPartBytes = 12
+		settings.testDataRecordByteCount = 12
+	}
+	send := testRunSend(t, leg, testMxDefaults(), settings, job)
+	testExpectOneTransaction(t, leg, send, job)
+	fixture := &testGateFixture{leg: leg, preamble: newSessionPreamble(job.Preamble, DefaultProofSettings()), trace: send.edge.trace, parts: send.edge.parts}
+	return exportCapture(t, fixture, job, send.backend)
+}
+
+// As ExportCapture, with the envelope one command a group (DESIGN-DETAILS 3.2.4), as the sender's retry after
+// EnvelopeRetry sends it: part 2 opens MAIL over the EHLO reply, each env part after it covers the reply to
+// the command before and opens the next, so its reply_count is the gate's to bound and the relation's to
+// hold, and the msg part covers the last command's reply.
+func ExportGroupsCapture(t *testing.T, legIndex int, data bool) *ExportedCapture {
+	t.Helper()
+	leg := testTlsLegs()[legIndex%len(testTlsLegs())]
+	settings := DefaultProverSettings()
+	job := testJob("one line\r\nanother line\r\nand a third\r\n", "bob", "carol")
+	job.EnvelopeGroupMaxCount = 1
+	if data {
+		settings.ForceData = true
+		settings.testDataRecordByteCount = 12
 	}
 	send := testRunSend(t, leg, testMxDefaults(), settings, job)
 	testExpectOneTransaction(t, leg, send, job)

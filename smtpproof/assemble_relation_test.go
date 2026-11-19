@@ -109,7 +109,7 @@ func TestAssembledMessagesSatisfyTheRelation(t *testing.T) {
 		if bdat != uint64(len(signed)) || data != uint64(len(dotStuffed(signed))) {
 			t.Errorf("message %d: declared %d and %d, prover counts %d and %d", i, bdat, data, len(signed), len(dotStuffed(signed)))
 		}
-		if DefaultProverSettings().MaxRecordContentBytes < headerEnd {
+		if DefaultProofSettings().RecordContentMaxByteCount < headerEnd {
 			t.Errorf("message %d: a %d-octet header block", i, headerEnd)
 		}
 	}

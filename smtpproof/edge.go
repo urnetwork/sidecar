@@ -198,14 +198,14 @@ func (self *edgeSession) addTranscriptWithLock(message []byte) error {
 	return nil
 }
 
-func edgeCheckFraming(record []byte) error {
+func edgeCheckFraming(record []byte, ciphertextMaxByteCount int) error {
 	if len(record) < tlsRecordHeaderBytes {
 		return edgeRefuse(checkE1, "short record")
 	}
 	if len(record) != tlsRecordHeaderBytes+(int(record[3])<<8|int(record[4])) {
 		return edgeRefuse(checkE1, "record length does not match its framing")
 	}
-	if tlsMaxCiphertextBytes < len(record)-tlsRecordHeaderBytes {
+	if ciphertextMaxByteCount < len(record)-tlsRecordHeaderBytes {
 		return edgeRefuse(checkE1, "record too long")
 	}
 	return nil
@@ -243,7 +243,7 @@ func (self *edgeSession) ClientRecord(record []byte) ([][]byte, error) {
 }
 
 func (self *edgeSession) clientRecordWithLock(record []byte) ([][]byte, error) {
-	if err := edgeCheckFraming(record); err != nil {
+	if err := edgeCheckFraming(record, self.settings.proof.RecordCiphertextMaxByteCount); err != nil {
 		return nil, err
 	}
 	switch self.phase {
@@ -323,7 +323,7 @@ func (self *edgeSession) ServerRecord(record []byte) error {
 }
 
 func (self *edgeSession) serverRecordWithLock(record []byte) error {
-	if err := edgeCheckFraming(record); err != nil {
+	if err := edgeCheckFraming(record, self.settings.proof.RecordCiphertextMaxByteCount); err != nil {
 		return err
 	}
 	switch self.phase {
@@ -950,7 +950,7 @@ func (self *edgeSession) preparePartWithLock(part *sidecar.SmtpProofPart) (*edge
 			return nil, edgeRefuse(checkE3, "a part opens at most %d records", proof.PartRecordMaxCount)
 		}
 		for i, record := range part.Records {
-			if err := edgeCheckFraming(record); err != nil {
+			if err := edgeCheckFraming(record, self.settings.proof.RecordCiphertextMaxByteCount); err != nil {
 				return nil, err
 			}
 			// the outer type is public and the circuit sees only ciphertext, so this is the gate's to check

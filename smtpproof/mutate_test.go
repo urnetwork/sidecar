@@ -47,6 +47,9 @@ type testMutation struct {
 	// Whether the break starts from a send whose header block takes two records, the first cut inside a
 	// field's name (ExportSplitNameCapture), rather than ExportCapture's one-record block.
 	splitName bool
+	// Whether the break starts from a send whose envelope goes one command a group (ExportGroupsCapture), so
+	// that an env part covers replies of its own.
+	groups bool
 	// The part a Z break's circuit refuses. Unused for an E break, which the gate refuses itself.
 	part   func(c *testLegCase) *testRefusedPart
 	mutate func(t *testing.T, c *testLegCase, capture *smtpproof.ExportedCapture)
@@ -148,6 +151,9 @@ func testMutationCapture(t *testing.T, m *testMutation, c *testLegCase) *smtppro
 	t.Helper()
 	if m.splitName {
 		return smtpproof.ExportSplitNameCapture(t, c.leg, c.data)
+	}
+	if m.groups {
+		return smtpproof.ExportGroupsCapture(t, c.leg, c.data)
 	}
 	return smtpproof.ExportCapture(t, c.leg, c.data)
 }
@@ -465,6 +471,13 @@ func testMutations() []*testMutation {
 			two := "250 x\r\n" + "250 " + text[:len(text)-len("250 x\r\n")] + "\r\n"
 			testRewriteServerRecord(t, c, capture, message, 1, testServerPlaintext(c, two))
 		}},
+		{check: "Z8", cell: testCellReplyCount, name: "an env part's own reply_count one fewer on the wire than its records hold, the envelope one command a group", groups: true, part: testPartAt(3, "env"), mutate: func(t *testing.T, c *testLegCase, capture *smtpproof.ExportedCapture) {
+			envelope := capture.Events[testPartEvents(capture)[3]].Part
+			if envelope.ReplyCount != 1 {
+				t.Fatalf("part 3 covers %d replies", envelope.ReplyCount)
+			}
+			envelope.ReplyCount = 0
+		}},
 
 		// Z9
 		{check: "Z9", name: "an EHLO reply whose CHUNKING line is misspelled CHUNKINX", applies: testBdatOnly, part: testPartAt(2, "env"), mutate: func(t *testing.T, c *testLegCase, capture *smtpproof.ExportedCapture) {
@@ -539,17 +552,21 @@ func testRunMutation(t *testing.T, m *testMutation, c *testLegCase) {
 }
 
 // Every honest capture the breaks start from passes the gate, the checker and every part's circuit, the
-// key part's with Z1's derivation in it: ExportCapture's, and ExportSplitNameCapture's, whose header block
-// takes two records.
+// key part's with Z1's derivation in it: ExportCapture's, ExportSplitNameCapture's, whose header block
+// takes two records, and ExportGroupsCapture's, whose envelope goes one command a group.
 func TestMutatedWitnessHonestTwins(t *testing.T) {
 	t.Parallel()
-	for _, splitName := range []bool{false, true} {
+	for _, start := range []string{"", "split name", "groups"} {
 		for _, c := range testLegCases() {
 			name := c.name
 			capture := smtpproof.ExportCapture
-			if splitName {
+			switch start {
+			case "split name":
 				name += ", the header block in two records"
 				capture = smtpproof.ExportSplitNameCapture
+			case "groups":
+				name += ", the envelope one command a group"
+				capture = smtpproof.ExportGroupsCapture
 			}
 			honest := capture(t, c.leg, c.data)
 			if verdict := testGateVerdict(honest); len(verdict) != 0 {
@@ -605,6 +622,7 @@ func testMutationTable() string {
 	table.WriteString("The solver takes each part on a test shape sized to it, which holds every check of its kind and the opening of the key commitment but not the key part's derivation; Z1's rows take part 1 on its production shape, which holds that too. ")
 	table.WriteString("Every record keeps its length, so a break's part fits the shape its honest twin's does, and the part named has the kind named in the honest connection. ")
 	table.WriteString("The header-record rows of DESIGN-DETAILS 3.6's cells start from a send whose header block takes two records, the first ending inside a field's name; the forged-scan rows also hold that the record scans from the forged state on its own, so that the carry alone refuses. ")
+	table.WriteString("The row of an env part's own reply_count starts from a send whose envelope goes one command a group (DESIGN-DETAILS 3.2.4), each env part after part 2 covering the reply to the command before, where the gate's order bounds a part's reply_count and only the relation fixes it. ")
 	table.WriteString("The test named runs the row on every run of the package; its circuit half runs in the leg without `sidecar_testhooks`.\n\n")
 	table.WriteString("| Check | TLS | Mode | Refused at | Mutation | Test |\n")
 	table.WriteString("|---|---|---|---|---|---|\n")

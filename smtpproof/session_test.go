@@ -31,6 +31,8 @@ type testMxSettings struct {
 	mailReply string
 	// The reply to the RCPT of this local part. Absent is 250.
 	rcptReplies map[string]string
+	// The reply to an RCPT it takes, each a record of its own. Empty is "250 2.1.5 Ok".
+	rcptTaken string
 	// The reply to DATA. Empty is 354.
 	dataReply string
 	// Treats a bare-LF "." line as the end of DATA, like receivers vulnerable to SMTP smuggling.
@@ -134,6 +136,10 @@ func (self *testMx) serve(conn *tls.Conn) {
 				continue
 			}
 			transaction.recipients = append(transaction.recipients, path)
+			if self.settings.rcptTaken != "" {
+				write(self.settings.rcptTaken)
+				continue
+			}
 			write("250 2.1.5 Ok")
 		case verb == "BDAT":
 			if !strings.Contains(strings.Join(self.settings.keywords, " "), "CHUNKING") {
@@ -588,11 +594,10 @@ func TestSendThroughTheGateAfterAHelloRetryRequest(t *testing.T) {
 }
 
 func TestSendBdatBodyLongerThanOneRecord(t *testing.T) {
-	settings := DefaultProverSettings()
-	settings.MaxRecordContentBytes = 1024
+	// a body past TLS's record bound streams in records of it, unopened
 	for _, leg := range testTlsLegs() {
-		job := testJob(strings.Repeat("0123456789abcde\r\n", 400), "bob")
-		send := testRunSend(t, leg, testMxDefaults(), settings, job)
+		job := testJob(strings.Repeat("0123456789abcde\r\n", 2000), "bob")
+		send := testRunSend(t, leg, testMxDefaults(), DefaultProverSettings(), job)
 		testExpectOneTransaction(t, leg, send, job)
 	}
 }
@@ -601,7 +606,7 @@ func TestSendDataWhereTheMxLacksChunking(t *testing.T) {
 	mxSettings := testMxDefaults()
 	mxSettings.keywords = []string{"PIPELINING"}
 	settings := DefaultProverSettings()
-	settings.DataPartBytes = 256
+	settings.testDataRecordByteCount = 256
 	for _, leg := range testTlsLegs() {
 		job := testJob(strings.Repeat("a body line\r\n", 100), "bob")
 		send := testRunSend(t, leg, mxSettings, settings, job)
