@@ -378,8 +378,8 @@ func TestGateM6NamesEachRowsTestsWhereTheyRun(t *testing.T) {
 // M6's items say what its exit shows and what production and people owe: the rules and the FI bindings, FI-25 and
 // FI-26 where RECORD's worlds check them, directory.proto's freeze with its vectors and fuzz seeds, §22.7's rows at
 // M6 with the directory's, the scenarios and the revocation suite's member form on both tiers, what is written of
-// FS-43, FS-51 and the directory rows' T3 legs apart from their rows, Team billing, the benchmark again, FS-86's miss
-// with nothing to run, and the live IdP, Stripe, real CAs and the rota open.
+// FS-43, FS-51 and the directory rows' T3 legs apart from their rows, Team billing, the benchmark again, FS-86's day at
+// the Team limit as an item of its own, and the live IdP, Stripe, real CAs and the rota open.
 func TestGateM6ItemsSayWhatProductionOwes(t *testing.T) {
 	items, find := gateItemsForTest(t, "M6")
 	find("§22.8's rules on every row")
@@ -426,9 +426,14 @@ func TestGateM6ItemsSayWhatProductionOwes(t *testing.T) {
 	if row := find("§20.9's escrow benchmark again at M6's exit"); !strings.HasPrefix(row.External, "production") || len(row.Tests) != 1 {
 		t.Errorf("the benchmark's rerun: %+v", row)
 	}
-	// D-TEST-17: apart from every other failure, and nothing of its own to run
-	if row := find("FS-86's M6 case against §16.11's cost table at the Team limit (D-TEST-17)"); 0 < len(row.Tests) || 0 < len(row.Commands) || row.External != "" {
-		t.Errorf("FS-86's miss: %+v", row)
+	// D-TEST-17: the Team limit's day as an item of its own, in the gate's form with a real following daemon
+	teamLimit := find("FS-86's M6 case against §16.11's cost table at the Team limit")
+	if len(teamLimit.Tests) != 1 || teamLimit.External != "" || !strings.Contains(teamLimit.Item, "D-TEST-17") {
+		t.Fatalf("FS-86's day at the Team limit: %+v", teamLimit)
+	}
+	if test := teamLimit.Tests[0]; test.Repo != "sidecar" || test.Package != "./sidecartest" ||
+		!slices.Equal(test.Names, []string{"TestDirectoryLoadDayAtTheTeamLimit"}) || !slices.Equal(test.Args, []string{"-directory-load-full"}) {
+		t.Errorf("FS-86's day at the Team limit runs %+v", test)
 	}
 	for prefix, waits := range map[string]string{
 		"a live IdP run of SCIM and SSO":      "production and people",

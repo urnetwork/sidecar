@@ -38,10 +38,10 @@
 // holding across each move is asserted by no test yet: p2p_test.go checks each side's view of the other's Hello.
 //
 // Beside the rows, at the exit: §22.8's rules and FI bindings, FI-25 and FI-26 as RECORD's worlds check them after every
-// step, neither bound as an oracle yet, §22.10's directory.proto freeze, §22.7's assertions at M6 with S3b, S4b, S13 and the revocation suite's member
-// form, Team billing under FS-46's order, §20.9's benchmark again, FS-86's miss at the Team limit apart from every
-// other failure (D-TEST-17), and what production and people owe. At the entry: the benchmark, directory.proto's
-// specification, and D-PHASE-6's pilot measures, which read open.
+// step, neither bound as an oracle yet, §22.10's directory.proto freeze, §22.7's assertions at M6 with S3b, S4b, S13 and
+// the revocation suite's member form, Team billing under FS-46's order, §20.9's benchmark again, FS-86's day at the
+// Team limit apart from every other failure (D-TEST-17), and what production and people owe. At the entry: the
+// benchmark, directory.proto's specification, and D-PHASE-6's pilot measures, which read open.
 
 package fault
 
@@ -316,7 +316,10 @@ func gateM6OutItems(catalog *Catalog) []*GateItem {
 			External: gateEscrowBenchmarkExternal,
 		},
 		&GateItem{
-			Item: "FS-86's M6 case against §16.11's cost table at the Team limit (D-TEST-17): a miss blocks this gate and the owner hears then, so it is read apart from every other failure here; its T3 run at that scale takes hours, runs in this gate's form alone, and is the row's T3 test above, which nothing has written",
+			Item: "FS-86's M6 case against §16.11's cost table at the Team limit, 2,000 members and 5,000 admissions (D-TEST-17; RECORD-M6-24): a miss here blocks this gate and the owner hears then, so it is an item of its own, read apart from every other failure; the day runs in this gate's form alone, with a following daemon on the real client, since it outlasts a merge's run, and the row's T3 run at that scale is the row's T3 test above, which nothing has written",
+			Tests: []*GateTest{
+				{Repo: "sidecar", Package: "./sidecartest", Tags: "sidecar_testhooks", Names: []string{"TestDirectoryLoadDayAtTheTeamLimit"}, Args: []string{"-directory-load-full"}},
+			},
 		},
 		&GateItem{
 			Item:     "a live IdP run of SCIM and SSO against a Team (§23.6's M6 row)",
