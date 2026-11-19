@@ -30,7 +30,9 @@
 //
 // and that it did not issue while §19.11's drop mode read observe throughout its step; a cancelled, refused or
 // observed drop deletes nothing. At every check besides: no version first found after a drop's DROP commits naming a
-// version it lists through its reuse list; and an object a drop's DELETE removed, once a check found it gone, never
+// version it lists through its reuse list, but one whose push reached evs before the DROP's head write and whose own
+// head write came within §11.8's 5 s of it, which was validated before the fence and reran nothing at step 7
+// (QD-1105; reuseInsideTheWindow); and an object a drop's DELETE removed, once a check found it gone, never
 // comes back, except where §19.10's close report names the drop as re-seeded from a stale mirror (CloseReport.Drops),
 // which FI-5's dropped clause reads too.
 //
@@ -77,6 +79,9 @@ type Fi27Settings struct {
 	UnmodifiedSlack time.Duration
 	// How old a deleter's read of hold/ may be: §11.13's 5 s.
 	HoldReadAge time.Duration
+	// How long after a push's validation its step 7 commits it with no rerun of 5h: §11.8's 5 s. A reuse copy
+	// validated before a DROP committed may commit that long after it (QD-1105).
+	StepSevenWindow time.Duration
 }
 
 func DefaultFi27Settings() *Fi27Settings {
@@ -86,6 +91,7 @@ func DefaultFi27Settings() *Fi27Settings {
 		EvacuationMinuteAge: 25 * time.Hour,
 		UnmodifiedSlack:     sidecar.BlobUnmodifiedSlack,
 		HoldReadAge:         5 * time.Second,
+		StepSevenWindow:     5 * time.Second,
 	}
 }
 
@@ -358,7 +364,7 @@ func checkFi27(ctx context.Context, oracle *Oracle) error {
 		errs = append(errs, check.judgeDrop(index, &settings)...)
 	}
 	errs = append(errs, check.droppedStayGone("FI-27", nil, fi5ReseededDrops(oracle.Net))...)
-	errs = append(errs, check.fencesHold()...)
+	errs = append(errs, check.fencesHold(&settings)...)
 	return errors.Join(errs...)
 }
 
@@ -488,8 +494,8 @@ func fi27NamedAnew(namers []*evsNamer, deletion *evsDeletion) bool {
 }
 
 // No version a check first finds after a drop's DROP was first found commits naming a version the drop lists in its
-// reuse list (§11.7's fence).
-func (self *evsFormat2Check) fencesHold() []error {
+// reuse list (§11.7's fence), but one §11.8's window lets commit (reuseInsideTheWindow).
+func (self *evsFormat2Check) fencesHold(settings *Fi27Settings) []error {
 	errs := []error{}
 	for _, repo := range self.repos {
 		drops, _ := self.dropsOf(repo)
@@ -525,7 +531,7 @@ func (self *evsFormat2Check) fencesHold() []error {
 						continue
 					}
 					listedVersion := drop.listsPathVersion(repo, reuse)
-					if listedVersion != 0 {
+					if listedVersion != 0 && !self.reuseInsideTheWindow(repo, found.ref.refId, found.version, drop, settings) {
 						errs = append(errs, fmt.Errorf("repo %s: version %d of ref %s, first found after %s, reuses version %d of %s, which the drop lists: no version commits naming a listed version as a reuse source after its fence", repo.store.repoId, found.version.version, found.ref.refId, drop, listedVersion, reuse.TokenPath.KeyString()))
 					}
 				}
@@ -533,6 +539,60 @@ func (self *evsFormat2Check) fencesHold() []error {
 		}
 	}
 	return errs
+}
+
+// Whether version of refId, a reuse of a version drop lists that a check first found after the DROP, is one §11.8's
+// window lets commit (QD-1105). Its push reached evs before the DROP's head write was issued, as the store arrival of
+// the ledger's attempt that committed it says, so it may have been validated before the fence; and its own head write
+// was issued within the window of the DROP's being answered, so its step 7 reran nothing. mark, waiting evacuation's
+// horizon past the DROP, finds such a copy and keeps what it shares (§11.13), which conditions (1) and (2) hold every
+// DELETE of the drop to. A push the ledger does not hold, an attempt of no known store arrival and a head write whose
+// ETag no check read are not let through.
+func (self *evsFormat2Check) reuseInsideTheWindow(repo *evsFormat2Repo, refId sidecar.Id, version *evsStoreVersion, drop *fi27Drop, settings *Fi27Settings) bool {
+	dropIndex, dropWrite := self.headWrite(repo, drop.refId, drop.version)
+	_, copyWrite := self.headWrite(repo, refId, version.version)
+	if dropWrite == nil || copyWrite == nil {
+		return false
+	}
+	if copyWrite.Invoked.After(dropWrite.Returned.Add(settings.StepSevenWindow)) {
+		return false
+	}
+	pushId, err := sidecar.IdFromBytes(version.statement.Push.GetPushId())
+	if err != nil {
+		return false
+	}
+	for _, push := range LedgerOf(self.oracle.Net).Pushes() {
+		if push.PushId != pushId {
+			continue
+		}
+		for _, attempt := range push.Attempts {
+			if attempt.Outcome == OutcomeCommitted && attempt.Version == version.version && 0 < attempt.StoreArrival && attempt.StoreArrival <= dropIndex {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// The head write that committed version of refId and its index in the blob history: the answered conditional PUT of
+// the ref's head whose ETag a check read at that version; nil when no check read it there.
+func (self *evsFormat2Check) headWrite(repo *evsFormat2Repo, refId sidecar.Id, version uint64) (int, *sidecartest.BlobHistoryEntry) {
+	clusterId := repo.store.clusterId
+	key := evsOracleRepoPrefix("head/", repo.store.repoId) + sidecar.EvsKeyId(refId)
+	self.memory.stateLock.Lock()
+	defer self.memory.stateLock.Unlock()
+	for index, entry := range self.history {
+		if entry.ClusterId != clusterId || entry.Key != key || entry.Outcome != sidecartest.BlobOutcomeOk || entry.ReturnSeq == 0 {
+			continue
+		}
+		if entry.Op != sidecartest.BlobHistoryPutIfNoneMatch && entry.Op != sidecartest.BlobHistoryPutIfMatch {
+			continue
+		}
+		if headVersion, ok := self.memory.headEtagVersions[clusterId+" "+key+" "+entry.WriteEtag]; ok && headVersion == version {
+			return index, entry
+		}
+	}
+	return 0, nil
 }
 
 // The ref version a reuse source names when the drop lists it, else 0: the source's path version is an entry
