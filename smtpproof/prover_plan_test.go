@@ -353,6 +353,8 @@ type testConcurrentBackend struct {
 	stateLock   sync.Mutex
 	inFlight    int
 	maxInFlight int
+	// reached is closed the first time target run at once: a part that starts as another ends reaches it again
+	reachedOnce bool
 }
 
 func (self *testConcurrentBackend) provePart(ctx context.Context, statement *partStatement, witness *partWitness) ([]byte, error) {
@@ -370,7 +372,8 @@ func (self *testConcurrentBackend) provePart(ctx context.Context, statement *par
 			defer self.stateLock.Unlock()
 			self.inFlight += 1
 			self.maxInFlight = max(self.maxInFlight, self.inFlight)
-			if self.inFlight == self.target {
+			if self.inFlight == self.target && !self.reachedOnce {
+				self.reachedOnce = true
 				close(self.reached)
 			}
 		}()

@@ -325,6 +325,12 @@ func (self *SearchTestPlannedContentPush) Commit(ctx context.Context) (*SearchTe
 
 // See PlanIndexed; mergeInPush merges a push past DirectBytes in the push rather than refusing it.
 func (self *SearchTestWorld) planIndexed(ctx context.Context, writer Id, at time.Time, changes []*SearchTestChange, mergeInPush bool) (*SearchTestPlannedContentPush, error) {
+	return self.planIndexedClaiming(ctx, writer, at, changes, mergeInPush, nil)
+}
+
+// See planIndexed; a path claimed names takes its entries from the claim in place of the bytes the push commits
+// (SearchTestClaim): a writer lying in its own head.
+func (self *SearchTestWorld) planIndexedClaiming(ctx context.Context, writer Id, at time.Time, changes []*SearchTestChange, mergeInPush bool, claimed map[string]*SearchTestClaim) (*SearchTestPlannedContentPush, error) {
 	view, err := self.view(ctx, writer)
 	if err != nil {
 		return nil, err
@@ -358,7 +364,13 @@ func (self *SearchTestWorld) planIndexed(ctx context.Context, writer Id, at time
 			if indexExcluded(indexPlace{repoKind: self.kind, path: change.path}) {
 				continue
 			}
-			documents, err := self.pendingOf(change, replaced[index])
+			entered := change
+			if claim := claimed[change.path]; claim != nil {
+				forged := *change
+				forged.content = claim.Content
+				entered = &forged
+			}
+			documents, err := self.pendingOf(entered, replaced[index])
 			if err != nil {
 				return nil, err
 			}

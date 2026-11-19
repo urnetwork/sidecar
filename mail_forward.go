@@ -355,12 +355,11 @@ func (self *MailClient) ConfirmForward(ctx context.Context, code string) (*proto
 	return forward, nil
 }
 
-// A forward's or a relay's effect key: SHA-256 over its label and the message's id, so every reader of the message
-// derives the one key and queues one entry.
+// A forward's or a relay's effect key: SHA-256 over its label and the message's id, as MAIL-FORMAT.md's o/ row spells
+// a forward's, so every reader of the message derives the one key and queues one entry.
 func mailForwardEffectKey(label string, messageId Id) []byte {
 	hash := sha256.New()
 	io.WriteString(hash, label)
-	hash.Write([]byte{0})
 	hash.Write(messageId[:])
 	return hash.Sum(nil)
 }
@@ -419,8 +418,20 @@ func (self *MailClient) considerForward(ctx context.Context, message *MailMessag
 			parsed.Header.Get(MailForwardedHeader) != "" || !mailForwardAddressAllowed(row.Root, forward.GetAddress()) {
 			return mailForwardRefused, nil
 		}
-		aliases := newMailReverseAlias(store, self.secrets, self.outboxSettings())
+		vault, err := self.Vault()
+		if errors.Is(err, ErrMailVaultNotConsented) || errors.Is(err, ErrMailNoMailbox) {
+			// a reader that may not open the vault, an agent's or an unconsented device, forwards nothing
+			return mailForwardNone, nil
+		}
+		if err != nil {
+			return mailForwardNone, err
+		}
+		aliases := newMailReverseAlias(store, vault.ReverseAliasKey, self.outboxSettings())
 		token, err := aliases.Ensure(ctx, sender, recipient.Address())
+		if errors.Is(err, ErrMailVaultNotConsented) {
+			// the key is the owner's consented devices' alone (QD-1095): this reader leaves the forward to one of them
+			return mailForwardNone, nil
+		}
 		if err != nil {
 			return mailForwardNone, err
 		}
@@ -432,7 +443,7 @@ func (self *MailClient) considerForward(ctx context.Context, message *MailMessag
 		return mailForwardForwarded, self.queueForward(ctx, mailForwardEffectKey(mailForwardEffectKeyLabel, message.Id), forward.GetAddress(), outgoing)
 	default:
 		// the relay row: from the confirmed address, passing DMARC as received, to a sender ra/ names
-		record, err := newMailReverseAlias(store, self.secrets, self.outboxSettings()).Find(ctx, recipient.Token)
+		record, err := newMailReverseAlias(store, nil, self.outboxSettings()).Find(ctx, recipient.Token)
 		if errors.Is(err, ErrMailReverseAliasAbsent) {
 			return mailForwardRefused, nil
 		}
