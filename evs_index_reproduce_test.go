@@ -395,6 +395,100 @@ func TestIndexCheckWithTextCatchesForgedEntries(t *testing.T) {
 	}
 }
 
+// QD-1098 by a host with the text: a push that changed its signer's head enters every document the content push
+// beside it changed. With an entry for one of two text files, the other is a document left out: a mismatch against the
+// head the push wrote, naming its signer, the host's own entry standing for it and its path going to a backfill. A
+// binary file beside them and a path the push removed are no omission, and the same head holding both entries checks
+// clean; a push whose content did not ride with its signer's head is not held to it.
+func TestIndexCheckWithTextCatchesAnOmittedDocument(t *testing.T) {
+	world := testNewBackfillWorld(false)
+	alice, mallory := evsTestId("writer a"), evsTestId("writer m")
+	inRef := func(push *indexContentPush) { push.changesHead = true }
+	world.commit(t, alice, inRef, testContentChange{path: "gone.txt", content: []byte("a page soon removed")})
+	committed := world.commit(t, mallory, inRef,
+		testContentChange{path: "a.txt", content: []byte("honest ledger of turnips")},
+		testContentChange{path: "b.txt", content: []byte("radishes and parsnips")},
+		testContentChange{path: "c.bin", content: []byte{0x00, 0x01, 0x02, 0x00, 0xff, 0xfe}},
+		testContentChange{path: "gone.txt"},
+	)
+	normalizer, err := indexNewNormalizer(indexLinkedTables())
+	if err != nil {
+		t.Fatal(err)
+	}
+	honest := func(path string) *indexEntry {
+		state, err := world.content.State(context.Background(), path, committed.version)
+		if err != nil {
+			t.Fatal(err)
+		}
+		extractor := &indexBuildExtractor{view: world.view(t), normalizer: normalizer, refId: world.content.refId, refKey: world.refKey, keepErased: true}
+		if err := extractor.extract(path, state, world.now.UnixMilli()); err != nil {
+			t.Fatal(err)
+		}
+		return extractor.entries[0]
+	}
+	// mallory's head with entries, checked as the index push that rode with the content push
+	check := func(asInRef bool, entries ...*indexEntry) (*indexTextCheckOutcome, []SidecarEvent) {
+		view := world.view(t)
+		pending := []*indexPendingDocument{}
+		for _, entry := range entries {
+			pending = append(pending, &indexPendingDocument{kind: indexEntryFull, key: entry.key, version: entry.version, keys: entry.keys, row: entry.row})
+		}
+		plan, err := indexPlanHead(context.Background(), &indexHeadPlanArgs{
+			view: view, root: view.writeRoot(), writer: mallory, signedTimeMs: world.now.UnixMilli(), tables: testHeadTables,
+			pending: pending,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		push := &indexPush{pushId: NewId(), baseVersion: view.head.version, indexEpoch: view.head.indexEpoch, signedTimeMs: world.now.UnixMilli(), files: plan.files()}
+		landed, err := world.index.store(mallory).Commit(context.Background(), push)
+		if err != nil {
+			t.Fatal(err)
+		}
+		replay := testReproducePush(push, landed, mallory, 2)
+		if asInRef {
+			replay.version = committed.version
+		}
+		raised := []SidecarEvent{}
+		outcome, err := indexCheckWithText(context.Background(), &indexTextCheckArgs{
+			view: world.view(t), push: replay, content: world.content, pin: committed.version,
+			refKey: world.refKey, events: func(event SidecarEvent) { raised = append(raised, event) },
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return outcome, raised
+	}
+	a, b := honest("a.txt"), honest("b.txt")
+
+	outcome, raised := check(false, a)
+	if len(outcome.mismatches) != 0 || len(raised) != 0 {
+		t.Fatalf("a push apart from the content push is held to its documents: %d mismatched", len(outcome.mismatches))
+	}
+	outcome, raised = check(true, a)
+	if len(outcome.mismatches) != 1 || outcome.mismatches[0].key != b.key || outcome.mismatches[0].version != b.version {
+		t.Fatalf("the omitted document mismatched: %+v", outcome.mismatches)
+	}
+	if len(outcome.own) != 1 || outcome.own[0].key != b.key || !slices.Equal(outcome.own[0].keys, b.keys) {
+		t.Fatalf("the host's own entries: %d", len(outcome.own))
+	}
+	if !slices.Equal(outcome.repairs, []string{"b.txt"}) {
+		t.Fatalf("repairs: %v", outcome.repairs)
+	}
+	if len(raised) != 1 || raised[0].Kind != SidecarEventIndexMismatch || *raised[0].SidecarId != mallory ||
+		raised[0].Path != outcome.mismatches[0].path || !strings.HasPrefix(raised[0].Path, indexFileModePrefix) {
+		t.Fatalf("the mismatch raised: %+v", raised)
+	}
+	head := world.view(t).writeRoot().buckets[0].writer(mallory).head()
+	if head == nil || head.file.path != raised[0].Path {
+		t.Fatalf("the event names %s, not the head the push wrote", raised[0].Path)
+	}
+	outcome, raised = check(true, a, b)
+	if len(outcome.mismatches) != 0 || len(raised) != 0 || len(outcome.repairs) != 0 {
+		t.Fatalf("a push entering both documents: %d mismatched, repairs %v", len(outcome.mismatches), outcome.repairs)
+	}
+}
+
 // FS-75's reproduce clause for a roll-up: its runner's push rebuilt at the head after its lock, all's shards, a/m, the
 // runner's head and the freed lock matching, nothing fetched; the same push replayed as signed before the bucket's
 // expiry is a runner rolling early, every output fetched and alarmed (1.5).

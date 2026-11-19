@@ -41,9 +41,13 @@ package fault
 // signer and keeps its own entry (TestFs76ForgedEntriesAreCaughtByAHostWithTheText, on a world of its own, since a
 // device does not serve the host's own entry yet and the forged ones would break the corpus's equality).
 //
-// Not here, each named for what it waits on: a writer's push omitting a document caught by a host with the text (the
-// check judges added entries alone: question search-m10-36-omitted-document-check); the host's own entry served in a
-// mismatched one's place (the local layer, SEARCH-M10-25's, is not wired to a device); a build whose uploaded bytes
+// A push that leaves a document it commits out of its head is caught there too (QD-1098). Every push the corpus's
+// writers commit here, the conformance vectors' and the canonical messages' among them, is held to the same check as
+// it lands and bears out: no entry mismatched and no document left out.
+//
+// Not here, each named for what it waits on: the host's own entry served in a mismatched one's place and a mismatched
+// path's backfill run from the check (the local layer, SEARCH-M10-25's, is not wired to a device, and nothing runs
+// the check at a sync yet, SEARCH-M10-21's adapter); a build whose uploaded bytes
 // differ (a forged build); an uncovered document found from a desktop's own text (the local layer's journal and
 // overlay, SEARCH-M10-25 and SEARCH-M10-14, are not wired to a device); FS-76 on real engines and T3 (a device's
 // search over EvsRepo, SEARCH-M10-19's source); and the corpus at production scale (this run writes the corpus's
@@ -135,6 +139,8 @@ type fs76Repo struct {
 	changedPathVersions map[string]uint64
 	// the network's ledger, which every write to the world's ledger is written to as well
 	network *fs76Network
+	// the entries of its writers' pushes a host with the text judged, each bearing out
+	checkedWithText int
 }
 
 // A clock skewed from the world's by offset: what a reader whose clock runs apart from the writers' reads.
@@ -234,6 +240,17 @@ func (self *fs76Repo) commit(ctx context.Context, writer sidecar.Id, changes []*
 	}
 	if err := world.recordContent(writer, commit, changes); err != nil {
 		return nil, err
+	}
+	if 0 < commit.IndexWriteCount {
+		// an honest writer's push: a host with the text holds nothing against it
+		check, err := world.index.CheckPushWithText(ctx, commit.RefVersion)
+		if err != nil {
+			return nil, fmt.Errorf("%s: the check with the text of the push at %d: %w", self.label, commit.RefVersion, err)
+		}
+		if len(check.Mismatched) != 0 || len(check.Events) != 0 || len(check.Repairs) != 0 {
+			return nil, fmt.Errorf("%s: a host with the text mismatched %d entries of the honest push at %d, repairs %v", self.label, len(check.Mismatched), commit.RefVersion, check.Repairs)
+		}
+		self.checkedWithText += check.Checked
 	}
 	if self.network != nil {
 		networkCommit := &sidecartest.SearchCommit{
@@ -1101,6 +1118,9 @@ func fs76Schedule(t *testing.T, settings *fs76Settings) *Schedule {
 			if !network.hitRepoIds[repo.world.index.RepoId()] {
 				return fmt.Errorf("the network's devices found nothing of the %s", repo.label)
 			}
+			if repo.checkedWithText == 0 {
+				return fmt.Errorf("a host with the text judged no entry of the %s's pushes", repo.label)
+			}
 		}
 		return nil
 	}})
@@ -1154,11 +1174,11 @@ func TestFs76(t *testing.T) {
 // lie a search shows (a fresh phone misses the dropped word and the hidden document, which the oracle matches), and
 // each is caught by the host with the text: the entry mismatched, index_mismatch raised once naming the index file and
 // the push's signer, and the host's own entry of the document's true version standing in its place. A desktop
-// verifying against its own text finds no hit for the added word. An honest writer's push after them checks clean.
-//
-// Not here: a push that changes its writer's head and leaves a document it commits out of it, the row's "omits a
-// document". The check judges the entries a push adds and coverage counts such a push indexed, so nothing catches it
-// yet (question search-m10-36-omitted-document-check).
+// verifying against its own text finds no hit for the added word. A push that enters one of the two documents it
+// commits and leaves the other out counts as indexed, so no search reports the omitted document not yet searchable;
+// the host with the text holds every document the push committed to an entry (QD-1098), mismatches the missing one
+// against the head the push wrote, keeps its own entry and names the path for a backfill. An honest writer's push
+// after them checks clean.
 func TestFs76ForgedEntriesAreCaughtByAHostWithTheText(t *testing.T) {
 	world := newFsResultsWorld(t, "forged", protocol.RepoKind_REPO_KIND_GENERAL)
 	ctx := t.Context()
@@ -1297,6 +1317,26 @@ func TestFs76ForgedEntriesAreCaughtByAHostWithTheText(t *testing.T) {
 	}
 	world.clock.Advance(time.Minute)
 	caught("an entry planted at a version never held", plantedAt, "notes/d.md", plantedVersion, standing)
+
+	// omitted: a push changing its head with an entry for one of the two documents it commits
+	reeds, flats := note("f", "Reed bed", "bearded reedling"), note("g", "Mud flat", "avocet shelduck")
+	omitting := []*sidecar.SearchTestChange{reeds, flats}
+	commit, err = world.index.CommitIndexedClaiming(ctx, mallory, world.clock.Now(), omitting, []*sidecar.SearchTestClaim{{Path: reeds.Path, Omit: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := world.recordContent(mallory, commit, omitting); err != nil {
+		t.Fatal(err)
+	}
+	world.clock.Advance(time.Minute)
+	caught("a push omitting a document", commit.RefVersion, reeds.Path, commit.Versions[reeds.Path], commit.Versions[reeds.Path])
+	if repairs := checked("a push omitting a document", commit.RefVersion).Repairs; !slices.Equal(repairs, []string{reeds.Path}) {
+		t.Fatalf("the omitted document's path is not the one named for a backfill: %v", repairs)
+	}
+	shown("a push omitting a document", "reedling")
+	if err := world.checkFresh(ctx, nil, nil, "the document entered beside the omitted one", sidecar.SearchAll, "avocet"); err != nil {
+		t.Fatal(err)
+	}
 
 	// an honest push after them checks clean, the forger's entries standing in the index beside it
 	edit = note("e", "Shore list", "turnstone knot sanderling")
