@@ -23,6 +23,9 @@
 //	read    a d/ version counts only by its push's signer and auth pin (I-EVS-14): written by <sid> alone, whose Signed
 //	        signs it and names the path's sidecar and this network, seq above the last version this copy accepted
 //	        there, at within 4,096 positions of the reader's state with its signer standing at at, and within its caps;
+//	        or pushed by a directory admin at its push's pin, an erasure's CLOSURE (closurePush; RECORD-M10-05), which
+//	        counts only as <sid>'s own Signed card: the bytes this copy accepted last, taken again in silence, or a
+//	        version it never accepted, held to every rule above but the pusher's;
 //	        removed by <sid>, by any writer once <sid> is revoked or reaped, or by a directory admin, whose moderation
 //	        alarms <sid>'s member's own devices. Any other version is ignored with an alarm, once, and the reader goes
 //	        on showing the version it accepted last (§16.11's repair row), which a/<path> in the copy keeps across
@@ -304,6 +307,9 @@ type directoryAcceptedFile struct {
 	seq  uint64
 	card *StoredDirectoryCard
 	repo *StoredDirectoryRepoFile
+	// taken from an erasure's CLOSURE, a directory admin's push that rewrites the file in place under a fresh key
+	// (closurePush): its push carries no index entry of the file's
+	closure bool
 }
 
 // The document a/<path> holds.
@@ -470,10 +476,48 @@ func (self *directoryFiles) accept(taken *directoryAcceptedFile) error {
 		self.accepted[file.Path] = taken
 		return previous
 	}()
-	// the index entries the version's push carries, for the reader's own derivation of its writer's head
-	// (directory_index.go)
-	self.client.indexAccepted(previous, taken)
+	if !taken.closure {
+		// the index entries the version's push carries, for the reader's own derivation of its writer's head
+		// (directory_index.go)
+		self.client.indexAccepted(previous, taken)
+	}
 	return nil
+}
+
+// Whether file's push, by another sidecar than its path's rightful writer, is a directory admin's at its push's pin: an
+// erasure's CLOSURE, which rewrites a card or a repo file in place under a fresh key and signs nothing of its own
+// (§16.11's readers row, §11.12's versionless row; RECORD-M10-05). The file it carries is still judged as its rightful
+// writer's, whose signature it must hold, so an admin's push shows nothing that writer did not sign. The second answer
+// is true where the pin is ahead of the reader's state, and the version waits.
+func (self *directoryFiles) closurePush(auth DirectoryAuthView, file *DirectoryCardFile) (bool, bool) {
+	at := auth
+	judged, err := auth.At(file.AuthPin)
+	switch {
+	case err == nil:
+		at = judged
+	case errors.Is(err, ErrDirectoryAuthAhead), errors.Is(err, ErrDirectoryAuthUnavailable):
+		return false, true
+	case !errors.Is(err, ErrDirectoryAuthNotRetained):
+		// a pin off the reader's chain
+		return false, false
+	}
+	admins, err := at.DirectoryAdmins(at.Pin())
+	return err == nil && slices.Contains(admins, file.SignerSidecarId), false
+}
+
+// The version this copy accepted last at file's path, taken again where file is a CLOSURE's rewrite of its very
+// bytes: the content's own push still stands for its pin and its time, the rewrite's for the path's version, its push
+// and its signer. Nil where the copy accepted other bytes, a removal or nothing.
+func (self *directoryFiles) closureOfAccepted(file *DirectoryCardFile) *directoryAcceptedFile {
+	accepted := self.acceptedAt(file.Path)
+	if accepted == nil || accepted.file.Removed || !bytes.Equal(accepted.file.Content, file.Content) {
+		return nil
+	}
+	closed := *accepted.file
+	closed.Version = file.Version
+	closed.PushVersion = file.PushVersion
+	closed.SignerSidecarId = file.SignerSidecarId
+	return &directoryAcceptedFile{file: &closed, seq: accepted.seq, card: accepted.card, repo: accepted.repo, closure: true}
 }
 
 // The version this copy accepted last at path, nil for none.
@@ -678,9 +722,21 @@ func (self *DirectoryCardSettings) shows(item *protocol.Announcement, nowMillis 
 // A d/ path's written version by §16.11's path rules and card row: see the file's header's read row.
 func (self *directoryFiles) judgeCard(auth DirectoryAuthView, recordAuth RecordAuthView, file *DirectoryCardFile) directoryFileJudgement {
 	sidecarId, _ := directoryCardPathSidecar(file.Path)
+	closure := false
 	if file.SignerSidecarId != sidecarId {
-		// written by another sidecar than the path's
-		return directoryFileRefusal(SidecarRecordAlarmPathRule)
+		// pushed by another sidecar than the path's: only a directory admin's CLOSURE of the sidecar's own card counts
+		closurePush, pending := self.closurePush(auth, file)
+		switch {
+		case pending:
+			return directoryFileJudgement{verdict: directoryFilePending}
+		case !closurePush:
+			return directoryFileRefusal(SidecarRecordAlarmPathRule)
+		}
+		if taken := self.closureOfAccepted(file); taken != nil {
+			return directoryFileJudgement{verdict: directoryFileAccepted, taken: taken}
+		}
+		// a rewrite of a version this copy never accepted: judged below as the sidecar's card
+		closure = true
 	}
 	settings := self.client.cardSettings()
 	stored, err := DirectoryDecodeCard(file.Content, settings)
@@ -726,7 +782,7 @@ func (self *directoryFiles) judgeCard(auth DirectoryAuthView, recordAuth RecordA
 	case standing != DirectoryStandingStanding:
 		return directoryFileRefusal(SidecarRecordAlarmBadEntry)
 	}
-	return directoryFileJudgement{verdict: directoryFileAccepted, taken: &directoryAcceptedFile{file: file, seq: card.GetSeq(), card: stored}}
+	return directoryFileJudgement{verdict: directoryFileAccepted, taken: &directoryAcceptedFile{file: file, seq: card.GetSeq(), card: stored, closure: closure}}
 }
 
 // A d/ path's removal by its path rule: by <sid>; by any writer once <sid> is revoked or reaped; by a directory admin,

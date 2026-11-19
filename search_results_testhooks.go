@@ -25,8 +25,8 @@
 //	decoder  SearchTestValidateIndexFile is the reading a device's sync judges a fetched file by (indexValidateFile),
 //	         which FS-108 holds to refuse what SearchOracle's canonical decoder refuses
 //	claims   CommitIndexedClaiming is an in-ref writer's push whose head lies about the content beside it: for a path
-//	         a SearchTestClaim names, its entries are extracted from the claim's bytes, or are a tombstone over a
-//	         document the push keeps live
+//	         a SearchTestClaim names, its entries are extracted from the claim's bytes, are a tombstone over a document
+//	         the push keeps live, or are left out
 //	checked  CheckPushWithText is SEARCH-M10-21's check by hosts with the text (indexCheckWithText) on one push: the
 //	         entries it added judged against the world's content at the push's version, what mismatched, the host's
 //	         own entries in their place, and index_mismatch as raised
@@ -361,10 +361,11 @@ func (self *SearchTestWorld) ForgeReservedKindSlot(ctx context.Context, writer I
 
 // What a writer's in-ref push claims of one path it changes, where it lies: the index entries it carries for the path
 // are extracted from Content in place of the bytes it commits, a nil Content hiding behind a tombstone a document the
-// push keeps live.
+// push keeps live; with Omit it carries no entry for the path at all.
 type SearchTestClaim struct {
 	Path    string
 	Content []byte
+	Omit    bool
 }
 
 // writer's in-ref push of changes as CommitIndexed plans and commits it, but for the paths claims names, whose entries
