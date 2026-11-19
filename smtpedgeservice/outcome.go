@@ -1,8 +1,14 @@
 // SmtpOutcome at the edge (§14.4's step 5, §14.8's self-reports, plan-SMTP-wire-gaps#1; SMTP-M9-13): a sidecar's
-// self-report of a send, taken from the connection's dialer for OutcomeAcceptTimeout after its stream ends, once
-// per send, and then forgotten. It only tightens: its hard_bounce_count goes to §14.8's hard-bounce rule, and
-// nothing in it lifts a halt, raises a limit or feeds attribution (§14.8). Its other fields are counted as
-// metrics with closed labels, and nothing of it is stored.
+// self-report of a send, taken from the connection's dialer once per send, from when its connection registers until
+// OutcomeAcceptTimeout after its stream ends, and then forgotten. It only tightens: its hard_bounce_count goes to
+// §14.8's hard-bounce rule, and nothing in it lifts a halt, raises a limit or feeds attribution (§14.8). Its other
+// fields are counted as metrics with closed labels, and nothing of it is stored.
+//
+// The window opens at registration, not at the end (QD-1112): the driver sends its outcome at its own close, which
+// this edge sees end only after its QUIT, 221 and close round trip with the MX and the connection's settling, so an
+// outcome from a live connection's dialer is taken, with the connection's network for the hard-bounce rule, and the
+// end keeps it taken. Each live connection's send is held here from its registration (started) to its end (ended),
+// so the two cannot pass each other.
 //
 // The outcome travels as a NO_REPLY envelope of type SMTP_OUTCOME to the ticket's listener, which the sidecar sends
 // with Subprotocol.SendEdge and no Hello (§6.4, owner decision 624). Serve registers handleOutcome for it on each
@@ -37,16 +43,19 @@ const (
 	smtpOutcomeDialer    = "not_dialer"
 )
 
-// A send whose stream ended, waiting for its outcome.
-type smtpEndedSend struct {
+// A send waiting for its outcome: its connection's, while it is live, then its window's.
+type smtpOutcomeSend struct {
 	networkId sidecar.Id
 	// the stream's dialer, from its ticket: the only source taken
 	clientId sidecar.Id
-	endTime  time.Time
-	taken    bool
+	// its connection is registered and has not ended
+	live bool
+	// when the stream ended, from which the window runs; zero while live
+	endTime time.Time
+	taken   bool
 }
 
-// The ended sends of this edge. See the file header.
+// The live and ended sends of this edge. See the file header.
 type smtpOutcomes struct {
 	settings *SmtpEdgeSettings
 	clock    sidecar.Clock
@@ -55,9 +64,11 @@ type smtpOutcomes struct {
 	outcomes sidecar.MetricsCounter
 
 	stateLock sync.Mutex
-	// by send_id, and the ids in the order they ended, for the bound
-	sendIdEnded map[string]*smtpEndedSend
-	endedOrder  []string
+	// by send_id: every live connection's send, and the ended ones within their window and the bound
+	sendIdSends map[string]*smtpOutcomeSend
+	// the ended sends' ids in the order they ended, for the window and the bound; a live send counts toward
+	// neither, since its connection bounds it
+	endedOrder []string
 }
 
 func newSmtpOutcomes(settings *SmtpEdgeSettings, clock sidecar.Clock, metrics sidecar.Metrics, halt func(event *SmtpHaltEvent)) *smtpOutcomes {
@@ -66,34 +77,51 @@ func newSmtpOutcomes(settings *SmtpEdgeSettings, clock sidecar.Clock, metrics si
 		clock:       clock,
 		halt:        halt,
 		outcomes:    metrics.Counter("urnetwork_smtpedge_outcomes_total", "SmtpOutcomes received, by what became of each, and the TLS level and mode a taken one reports.", "result", "tls_level", "mode"),
-		sendIdEnded: map[string]*smtpEndedSend{},
+		sendIdSends: map[string]*smtpOutcomeSend{},
 	}
 }
 
-// Remembers a send whose stream ended, forgetting the ones past their window or past OutcomeMaxCount.
+// Holds a send from its connection's registration, so its dialer's outcome is taken before this edge has seen the
+// stream end (QD-1112). Every registered connection ends, and its end moves the send to its window (ended).
+func (self *smtpOutcomes) started(sendId []byte, networkId sidecar.Id, clientId sidecar.Id) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.sendIdSends[string(sendId)] = &smtpOutcomeSend{networkId: networkId, clientId: clientId, live: true}
+}
+
+// Starts a send's window at its stream's end, keeping an outcome its live connection took, and forgets the ended
+// sends past their window or past OutcomeMaxCount.
 func (self *smtpOutcomes) ended(sendId []byte, networkId sidecar.Id, clientId sidecar.Id, endTime time.Time) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	now := self.clock.Now()
 	forget := 0
 	for forget < len(self.endedOrder) {
-		oldest := self.sendIdEnded[self.endedOrder[forget]]
+		oldest := self.sendIdSends[self.endedOrder[forget]]
 		if oldest != nil && now.Sub(oldest.endTime) < self.settings.OutcomeAcceptTimeout && len(self.endedOrder)-forget < self.settings.OutcomeMaxCount {
 			break
 		}
-		delete(self.sendIdEnded, self.endedOrder[forget])
+		delete(self.sendIdSends, self.endedOrder[forget])
 		forget += 1
 	}
 	self.endedOrder = slices.Clone(self.endedOrder[forget:])
-	self.sendIdEnded[string(sendId)] = &smtpEndedSend{networkId: networkId, clientId: clientId, endTime: endTime}
-	self.endedOrder = append(self.endedOrder, string(sendId))
+	key := string(sendId)
+	send := self.sendIdSends[key]
+	if send == nil || !send.live {
+		// a send whose connection held no place here
+		send = &smtpOutcomeSend{networkId: networkId, clientId: clientId}
+		self.sendIdSends[key] = send
+	}
+	send.live = false
+	send.endTime = endTime
+	self.endedOrder = append(self.endedOrder, key)
 }
 
 // An outcome not taken, by why.
 var errSmtpOutcomeRefused = errors.New("smtp outcome refused")
 
-// Takes an SmtpOutcome body from sourceId: from its send's dialer, within OutcomeAcceptTimeout of the stream's
-// end, once. A refusal is an error and changes nothing.
+// Takes an SmtpOutcome body from sourceId: from its send's dialer, once, while the send's connection is live or
+// within OutcomeAcceptTimeout of its stream's end. A refusal is an error and changes nothing.
 func (self *SmtpEdgeService) AcceptOutcome(sourceId sidecar.Id, body []byte) error {
 	return self.outcomes.accept(sourceId, body)
 }
@@ -120,20 +148,20 @@ func (self *smtpOutcomes) accept(sourceId sidecar.Id, body []byte) error {
 	why := func() string {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		ended, ok := self.sendIdEnded[string(outcome.GetSendId())]
+		send, ok := self.sendIdSends[string(outcome.GetSendId())]
 		switch {
 		case !ok:
 			return smtpOutcomeUnknown
-		case ended.clientId != sourceId:
+		case send.clientId != sourceId:
 			return smtpOutcomeDialer
-		case self.settings.OutcomeAcceptTimeout <= now.Sub(ended.endTime):
+		case !send.live && self.settings.OutcomeAcceptTimeout <= now.Sub(send.endTime):
 			return smtpOutcomeLate
-		case ended.taken:
+		case send.taken:
 			return smtpOutcomeRepeated
 		}
-		ended.taken = true
+		send.taken = true
 		if 0 < outcome.GetHardBounceCount() {
-			event = &SmtpHaltEvent{Kind: SmtpHaltEventHardBounces, NetworkId: ended.networkId, Time: now, HardBounceCount: outcome.GetHardBounceCount()}
+			event = &SmtpHaltEvent{Kind: SmtpHaltEventHardBounces, NetworkId: send.networkId, Time: now, HardBounceCount: outcome.GetHardBounceCount()}
 		}
 		return ""
 	}()

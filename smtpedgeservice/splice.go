@@ -230,6 +230,9 @@ func (self *SmtpEdgeService) serveStream(conn io.ReadWriteCloser, stream *smtpPr
 		smtpAbortStream(conn)
 		return
 	}
+	// the dialer's outcome is taken from here on, before this edge has seen the stream end (QD-1112); the
+	// connection's end moves it to its window
+	self.outcomes.started(connection.send.SendId, stream.NetworkId, stream.ClientId)
 	connection.run()
 }
 

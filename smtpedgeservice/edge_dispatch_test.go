@@ -6,9 +6,9 @@
 // another sidecar and a second time. The root's TestSmtpConnectionSendsOverARealEdgeStream runs the daemon's own
 // stream and channel; this runs the engine's own functions.
 //
-// The engine takes an outcome only once it has ended the connection (§14.14's window, outcome.go), and the driver
-// sends it right after its own close, so here the sidecar's stream sends it once the engine's serve of that stream has
-// returned: which end's view of the stream's end governs is question smtp-edge-outcome-before-the-edge-ends.
+// The sidecar's stream sends its outcome right at its own close, as the driver does, with nothing to order it after
+// the engine's end of the connection: the engine takes it from a live connection's dialer too (QD-1112), so it is
+// taken whichever end sees the stream end first.
 //
 // Every wait is on what the run delivers, bounded by the world's context so a broken run fails rather than hangs.
 
@@ -149,21 +149,20 @@ type testDispatchStream struct {
 	*sidecar.SubprotocolStream
 	subprotocol *sidecar.Subprotocol
 	edgeId      sidecar.Id
-	// closed once the engine's serve of this stream has returned, its connection ended
-	served <-chan struct{}
+	dialer      *testDispatchDialer
 }
 
 func (self *testDispatchStream) ProofChannel(sendId []byte) sidecar.SmtpProofChannel {
 	return &testDispatchProofChannel{subprotocol: self.subprotocol, edgeId: self.edgeId, sendId: bytes.Clone(sendId)}
 }
 
-// SendEdge, once the engine has ended the connection: see the file header.
+// SendEdge at once, as the daemon's stream sends it, kept for the test.
 func (self *testDispatchStream) SendOutcome(ctx context.Context, outcome *protocol.SmtpOutcome) error {
-	select {
-	case <-self.served:
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	func() {
+		self.dialer.stateLock.Lock()
+		defer self.dialer.stateLock.Unlock()
+		self.dialer.outcomes = append(self.dialer.outcomes, proto.CloneOf(outcome))
+	}()
 	body, err := proto.Marshal(outcome)
 	if err != nil {
 		return err
@@ -181,22 +180,15 @@ type testDispatchDialer struct {
 	edgeId      sidecar.Id
 
 	stateLock sync.Mutex
-	// what closes once the engine's serve of each stream returns, by stream id; one sidecar dials, so ids do not collide
-	streamIdServed map[uint64]chan struct{}
+	// every outcome a stream sent, in order
+	outcomes []*protocol.SmtpOutcome
 }
 
-func (self *testDispatchDialer) servedOf(streamId uint64) chan struct{} {
+// Every outcome sent so far.
+func (self *testDispatchDialer) sentOutcomes() []*protocol.SmtpOutcome {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	if self.streamIdServed == nil {
-		self.streamIdServed = map[uint64]chan struct{}{}
-	}
-	served := self.streamIdServed[streamId]
-	if served == nil {
-		served = make(chan struct{})
-		self.streamIdServed[streamId] = served
-	}
-	return served
+	return append([]*protocol.SmtpOutcome(nil), self.outcomes...)
 }
 
 func (self *testDispatchDialer) DialSmtpEdge(ctx context.Context) (sidecar.SmtpEdgeStream, error) {
@@ -204,7 +196,7 @@ func (self *testDispatchDialer) DialSmtpEdge(ctx context.Context) (sidecar.SmtpE
 	if err != nil {
 		return nil, err
 	}
-	return &testDispatchStream{SubprotocolStream: stream, subprotocol: self.subprotocol, edgeId: self.edgeId, served: self.servedOf(stream.StreamId())}, nil
+	return &testDispatchStream{SubprotocolStream: stream, subprotocol: self.subprotocol, edgeId: self.edgeId, dialer: self}, nil
 }
 
 // Waits until source's earlier envelopes to the edge have been dispatched there: a call marked for the edge, which
@@ -246,11 +238,9 @@ func TestSmtpSenderOverRealDispatchersReachesAcceptOutcome(t *testing.T) {
 		serving.Wait()
 	})
 	removeListen, err := edgeNet.edge.Listen(smtpedgeservice.SmtpEdgeSocketName, func(ctx context.Context, incoming *sidecar.StreamIncoming) error {
-		served := dialer.servedOf(incoming.Stream.StreamId())
 		serving.Add(1)
 		go func() {
 			defer serving.Done()
-			defer close(served)
 			w.service.ServeTestStream(w.networkId, incoming.SourceId, w.sidecarId, incoming.Stream)
 		}()
 		return nil
@@ -287,7 +277,11 @@ func TestSmtpSenderOverRealDispatchersReachesAcceptOutcome(t *testing.T) {
 		t.Error("no part reached the session")
 	}
 
-	// the sender's outcome went by SendEdge once the engine ended the connection, and AcceptOutcome took it
+	// the sender's outcome went by SendEdge at its close, and AcceptOutcome took it, live or ended
+	sentOutcomes := dialer.sentOutcomes()
+	if len(sentOutcomes) != 1 || len(sentOutcomes[0].GetSendId()) != smtpedgeservice.SmtpSendIdByteCount {
+		t.Fatalf("outcomes sent %v", sentOutcomes)
+	}
 	testEdgeDispatchBarrier(t, w.ctx, laptop, edgeId)
 	mode := "bdat"
 	if outcome.Mode == sidecar.SmtpModeData {
@@ -298,11 +292,7 @@ func TestSmtpSenderOverRealDispatchersReachesAcceptOutcome(t *testing.T) {
 	}
 
 	// the same report from another sidecar, then from the dialer again: refused, each counted
-	sends := w.loggedSends()
-	if len(sends) != 1 {
-		t.Fatalf("%d sends logged", len(sends))
-	}
-	again, err := proto.Marshal(&protocol.SmtpOutcome{SendId: sends[0].SendId, TlsLevel: uint32(sidecar.SmtpTlsLevelUnauthenticated), Mode: uint32(outcome.Mode)})
+	again, err := proto.Marshal(sentOutcomes[0])
 	if err != nil {
 		t.Fatal(err)
 	}
