@@ -187,6 +187,13 @@ type EvsWorldSettings struct {
 	// Each instance's EvsSettings.InstanceFormat at its first start, 1 for an instance it does not name: the format
 	// M2's rows run every instance at. SetInstanceFormat changes it for the instance's next start.
 	InstanceFormats map[string]uint32
+	// The network's drop limits as Setup gives them to the fake Quota, and what taskworker's drop job runs with, nil
+	// giving the network no limit, so evs refuses every DROP and dry run, as M2's rows run (evs_world_drop.go).
+	Drops *EvsWorldDropSettings
+	// The rules that hold where neither the repo nor the network has a VersioningRules record, nil for the platform's
+	// own (sidecar.ConfigPlatformVersioningRules, off above 64 MiB). A schedule sets a rule of the same shape at a
+	// smaller size, since a step that moves 64 MiB does not end within the driver's wait on a loaded machine.
+	PlatformVersioning *protocol.VersioningRules
 }
 
 // One device of a world.
@@ -206,6 +213,9 @@ type EvsWorldDeviceSettings struct {
 	// the format-2 reader and core's gates; its EvsSettings.MaxFormat, which AdjustClient may set to 1, still holds
 	// it to format 1 (evs_world_format2.go).
 	Format2 bool
+	// The repo's row lists it among the consented devices of the repo's owner, the world's member, as an owner-bound
+	// repo's drop needs of its signer (D-ACL-25; evs_world_drop.go).
+	Consented bool
 }
 
 // Two writers, each with an instance of its own and a second the lb re-sends to, and a reader on an instance no
@@ -374,6 +384,15 @@ type EvsWorld struct {
 	// with the network out of it (evs_world_format2.go)
 	instanceFormats map[string]uint32
 	format2         *EvsWorldFormat2Settings
+	// each path's committed drop, whether the repo's lock stands in the newest authorization state, the network's
+	// VersioningRules record and the repo's own rules, nil for none, and each push's statement as the lb carried
+	// it, by push id (evs_world_drop.go)
+	drops          map[string]*EvsWorldDrop
+	locked         bool
+	networkRules   *protocol.VersioningRules
+	repoRules      *protocol.VersioningRules
+	pushStatements map[sidecar.Id]*sidecar.EvsStatement
+	pushPayloads   map[sidecar.Id][]byte
 }
 
 // One attempt of a push as an instance took it, for a history check of §11.8's commit rule (Porcupine, EVS1-M2-42):
@@ -419,6 +438,9 @@ func NewEvsWorld(net *Net, settings *EvsWorldSettings) *EvsWorld {
 		lifecycleEnds:   map[string][]error{},
 		readerExpiries:  map[string]time.Time{},
 		instanceFormats: maps.Clone(settings.InstanceFormats),
+		drops:           map[string]*EvsWorldDrop{},
+		pushStatements:  map[sidecar.Id]*sidecar.EvsStatement{},
+		pushPayloads:    map[sidecar.Id][]byte{},
 	}
 	if self.instanceFormats == nil {
 		self.instanceFormats = map[string]uint32{}
@@ -528,6 +550,11 @@ func (self *EvsWorld) Setup(ctx context.Context, net *Net) error {
 		return err
 	}
 	fakes.Quota.SetBalance(connect.Id(self.NetworkId), self.settings.QuotaBalanceByteCount)
+	if drops := self.settings.Drops; drops != nil {
+		fakes.Quota.SetLimits(connect.Id(self.NetworkId), &sidecar.QuotaLimits{Tier: "pro", Limits: map[string]int64{
+			"evs_drops_per_day": drops.DropsPerDay, "evs_drop_previews_per_day": drops.DropPreviewsPerDay,
+		}})
+	}
 	sidecartest.RegisterEvsTwins(fakes.Redis)
 	view := self.appendView()
 	SetAuthorizationView(net, self.NetworkId, view)
@@ -624,6 +651,7 @@ func (self *EvsWorld) appendView() *sidecartest.FakeGkmAuthView {
 	}
 	shrunkAt := self.shrunkAt
 	deletionRow := self.deletionRowWithLock()
+	locked := self.locked
 	readerExpiries := map[string]time.Time{}
 	for name, at := range self.readerExpiries {
 		readerExpiries[name] = at
@@ -632,9 +660,19 @@ func (self *EvsWorld) appendView() *sidecartest.FakeGkmAuthView {
 	repoRow := &protocol.AclRepo{
 		RepoId: self.RepoId.Bytes(), Kind: self.settings.Kind, HoldersShrunkAt: shrunkAt, Deletion: deletionRow,
 	}
+	if locked {
+		repoRow.Lock = protocol.RepoVersioningLock_REPO_VERSIONING_LOCK_LOCKED
+	}
+	if sidecar.EvsRepoKindOwnerBound(self.settings.Kind) {
+		repoRow.OwnerMemberId = self.MemberId.Bytes()
+	}
 	for _, name := range self.deviceNames {
-		if device := self.devices[name]; device.settings.Admin {
+		device := self.devices[name]
+		if device.settings.Admin {
 			repoRow.Admins = append(repoRow.Admins, &protocol.AclRepoAdminRow{SidecarId: device.Signer.SidecarId.Bytes()})
+		}
+		if device.settings.Consented {
+			repoRow.ConsentedSidecarIds = append(repoRow.ConsentedSidecarIds, device.Signer.SidecarId.Bytes())
 		}
 	}
 	fixture := &sidecartest.FakeGkmAuthFixture{
@@ -1049,6 +1087,7 @@ func (self *EvsWorld) startDevice(device *EvsWorldDevice, view *sidecartest.Fake
 	}
 	if device.settings.Format2 {
 		self.enableFormat2(client)
+		client.SetVersioningRules(self.versioningFor)
 	}
 	device.Client = client
 	device.Repo = client.Repo(self.RepoId)
@@ -1147,13 +1186,18 @@ func (self *evsWorldGateViews) View(networkId sidecar.Id) (sidecar.GkmAuthView, 
 	}
 	self.world.stateLock.Lock()
 	defer self.world.stateLock.Unlock()
-	if view := self.world.staleViews[self.instance]; view != nil {
-		return view, evsservice.EvsAuthAllowed
+	view := self.world.view
+	if stale := self.world.staleViews[self.instance]; stale != nil {
+		view = stale
 	}
-	if self.world.view == nil {
+	if view == nil {
 		return nil, evsservice.EvsAuthUnknown
 	}
-	return self.world.view, evsservice.EvsAuthAllowed
+	if sidecar.EvsRepoKindOwnerBound(self.world.settings.Kind) {
+		// D-ACL-25 answered from the repo's row (evs_world_drop.go)
+		return &evsWorldConsentView{GkmAuthView: view}, evsservice.EvsAuthAllowed
+	}
+	return view, evsservice.EvsAuthAllowed
 }
 
 // A step action: the instance's projection stops taking the scope of device's sidecar, as a projection that has
@@ -1196,6 +1240,12 @@ func (self *EvsWorld) roundTrip(device *EvsWorldDevice, request *http.Request) (
 		self.stateLock.Lock()
 		self.blockRequestCount += 1
 		self.stateLock.Unlock()
+	}
+	if evsWorldReadsDropPreview(request) {
+		// taskworker's dry runs, run before the device's poll reads its own (evs_world_drop.go)
+		if err := self.runDropPreviews(request.Context()); err != nil {
+			return nil, fmt.Errorf("the repo's dry runs: %w", err)
+		}
 	}
 	pushId, isPush := evsWorldPushIdOf(request, body)
 	if isPush {
@@ -1257,7 +1307,7 @@ func (self *EvsWorld) roundTrip(device *EvsWorldDevice, request *http.Request) (
 		// what evs served the device, for FI-15's read clause (TEST-M2-04); a reply that does not parse is the client's
 		// to refuse, and records nothing
 		if reads, err := LedgerReadsOf(device.Name, tried[len(tried)-1], self.RepoId, last.Body.Bytes()); err == nil {
-			for _, read := range reads {
+			for _, read := range evsWorldNewestReads(body, reads) {
 				LedgerOf(self.net).RecordRead(read)
 			}
 		}
@@ -1448,7 +1498,7 @@ func evsWorldPushIdOf(request *http.Request, body []byte) (sidecar.Id, bool) {
 	if err := proto.Unmarshal(body, pushRequest); err != nil {
 		return sidecar.Id{}, false
 	}
-	statement, err := sidecar.ParseEvsStatement(pushRequest.GetStatement())
+	statement, err := evsOracleParseStatement(pushRequest.GetStatement())
 	if err != nil || len(statement.Push.GetPushId()) != 16 {
 		return sidecar.Id{}, false
 	}
@@ -1490,7 +1540,7 @@ func (self *EvsWorld) notePushRef(pushId sidecar.Id, body []byte) {
 	if err := proto.Unmarshal(body, pushRequest); err != nil {
 		return
 	}
-	statement, err := sidecar.ParseEvsStatement(pushRequest.GetStatement())
+	statement, err := evsOracleParseStatement(pushRequest.GetStatement())
 	if err != nil {
 		return
 	}
@@ -1502,6 +1552,10 @@ func (self *EvsWorld) notePushRef(pushId sidecar.Id, body []byte) {
 	defer self.stateLock.Unlock()
 	if _, ok := self.pushRefIds[pushId]; !ok && refId != self.refId {
 		self.pushRefIds[pushId] = refId
+	}
+	if _, ok := self.pushStatements[pushId]; !ok {
+		self.pushStatements[pushId] = statement
+		self.pushPayloads[pushId] = bytes.Clone(pushRequest.GetPayload())
 	}
 }
 

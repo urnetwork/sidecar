@@ -93,6 +93,8 @@ type authorWorld struct {
 	compromised map[sidecar.Id]uint64
 	// entries an ERASE from outside the directory's admins named
 	uncounted []sidecar.Id
+	// format 2's files as the cards ref held them (fs84_card_test.go), nil until a schedule writes one
+	fileLedger *fileLedger
 }
 
 func newAuthorWorld(ctx context.Context) (*authorWorld, error) {

@@ -125,6 +125,8 @@ type s13World struct {
 	privateId        sidecar.Id
 	announcedId      sidecar.Id
 	a, b, d          *s13Device
+	// each device's directory client's logger, for a test that captures the logs; nil logs nothing
+	logs func(device *s13Device) sidecar.Logger
 
 	stateLock  sync.Mutex
 	statements map[string]uint64
@@ -181,8 +183,12 @@ func (self *s13World) open(device *s13Device) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var log sidecar.Logger
+	if self.logs != nil {
+		log = self.logs(device)
+	}
 	client, err := sidecar.NewDirectoryClient(&sidecar.DirectoryClientArgs{
-		SidecarId: device.sidecarId, Store: store, Cards: self.cards.For(device.sidecarId),
+		SidecarId: device.sidecarId, Store: store, Cards: self.cards.For(device.sidecarId), Log: log,
 		Streams:    func() sidecar.RecordStreams { return self.streams.For(device.sidecarId) },
 		Auth:       func() sidecar.DirectoryAuthView { return self.directoryAuth.Tip() },
 		RecordAuth: func() sidecar.RecordAuthView { return self.recordAuth.Tip() },

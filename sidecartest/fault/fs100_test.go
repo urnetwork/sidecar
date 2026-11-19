@@ -26,8 +26,20 @@ var Fs100Format1 = Register("FS-100", "format-1", []Tier{TierT2}, Fs100DenialRea
 // FS-100's format-1 case: see the file header.
 func Fs100DenialReachesItsRequester(net *Net) *Schedule {
 	state := &wakeState{}
-	return wakeSchedule(state, []*Step{
+	return wakeSchedule(state, fs100DenialSteps(state, nil, nil))
+}
+
+// The denial's steps over state: before runs first in the step that files R's requests, and decided, where set, is a
+// step of its own between A's denial's hint and R's resync, so format 2's case (fs100_format2_test.go) runs the same
+// steps on versionless notices.
+func fs100DenialSteps(state *wakeState, before func(ctx context.Context, world *wakeWorld) error, decided func(ctx context.Context, world *wakeWorld) error) []*Step {
+	steps := []*Step{
 		wakeStep(state, "surrogateR", func(ctx context.Context, world *wakeWorld) error {
+			if before != nil {
+				if err := before(ctx, world); err != nil {
+					return err
+				}
+			}
 			if err := world.file(ctx); err != nil {
 				return err
 			}
@@ -59,6 +71,11 @@ func Fs100DenialReachesItsRequester(net *Net) *Schedule {
 			}
 			return nil
 		}),
+	}
+	if decided != nil {
+		steps = append(steps, wakeStep(state, "judge", decided))
+	}
+	return append(steps,
 		wakeStep(state, "surrogateR", func(ctx context.Context, world *wakeWorld) error {
 			resynced, err := world.requester.phone.Resync(ctx)
 			if err != nil {
@@ -95,7 +112,7 @@ func Fs100DenialReachesItsRequester(net *Net) *Schedule {
 			})
 			return err
 		}),
-	})
+	)
 }
 
 func TestFs100Format1(t *testing.T) {
