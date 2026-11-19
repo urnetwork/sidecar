@@ -530,6 +530,9 @@ barrier mxedge.splice.end mxedgeservice/splice.go
 barrier mxedge.splice.start mxedgeservice/splice.go
 barrier mxedge.starttls.after mxedgeservice/service.go
 barrier mxedge.starttls.before mxedgeservice/service.go
+barrier mxedge.wake_hint.after mxedgeservice/wake_hold.go
+barrier mxedge.wake_hint.before mxedgeservice/wake_hold.go
+barrier mxedge.wake_hold.begin mxedgeservice/wake_hold.go
 barrier posture.commit.after device/posture_apply.go
 barrier posture.commit.before device/posture_apply.go
 barrier posture.floor.after device/posture_apply.go

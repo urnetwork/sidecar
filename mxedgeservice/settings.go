@@ -218,6 +218,28 @@ type MxEdgeSettings struct {
 	// that grows past what this process should hold never half-loads. Default 16,777,216, a few bytes each.
 	ListingPrefixCount int `yaml:"listing_prefixes"`
 
+	// §15.6's wake hold (M8; owner decision 88; wake_hold.go). Whether a session whose Find misses is held
+	// while its network's receivers are woken, rather than closed in the handshake at once. Default false:
+	// until plan-KEYS-hint-addressing's internal route lets a host turn a sidecar into its client with no
+	// Postgres, every wake hint is lost, and plan-MAIL-hints' interim keeps M7's close.
+	WakeHold bool `yaml:"wake_hold"`
+	// How long a held session waits for a receiver, from its miss, before it closes in the handshake.
+	// Default 30 s, §15.6's, well inside the 300 s Postfix gives a TLS handshake.
+	WakeHoldTimeout time.Duration `yaml:"wake_hold_timeout"`
+	// Sessions held at once in this process, past which a miss closes at once. Default 1,000 (§15.6).
+	WakeHoldCount int `yaml:"wake_holds"`
+	// Sessions held at once for one network in this process, past which a miss closes at once. Default 4
+	// (§15.6).
+	WakeHoldNetworkCount int `yaml:"wake_holds_per_network"`
+	// How often a held session asks for its receiver again, each Find and open bounded by what is left of
+	// the hold. Default 2 s: a full process asks 500 times a second, a quarter of W2's edge Find limit.
+	WakeHoldFindInterval time.Duration `yaml:"wake_hold_find_interval"`
+	// Wake hints in flight at once in this process, past which a hold's hint is dropped and counted, the
+	// hold going on: a hint is lossy, and a receiver's hourly resync covers it. Default 64.
+	WakeHintCount int `yaml:"wake_hints"`
+	// How long one hint's call may take before it reads as failed. Default 5 s, off every session's path.
+	WakeHintTimeout time.Duration `yaml:"wake_hint_timeout"`
+
 	// MailIngress's bounds, the format's, which a receiver holds it to as well. Set only by the defaults.
 	Ingress *sidecar.MailIngressFormatSettings `yaml:"-"`
 	// The router's usage windows for meter mx (§20.6). Set only by the defaults.
@@ -232,6 +254,9 @@ type MxEdgeSettings struct {
 	// The longest url a reply carries: 400, so a 530's line fits RFC 5321's 512 B, CRLF included, with its
 	// fixed text around the url.
 	ReplyUrlMaxByteCount int `yaml:"-"`
+	// The most receivers a {mxr_} value lists, newest first, and so the most one wake hint names:
+	// plan-MAIL-hints #2's 64, the projection's own bound (server's MailRouteSettings.ReceiverMaxCount).
+	RouteReceiverCount int `yaml:"-"`
 }
 
 // The defaults every number here is read from. BannerHostName and DeviationUrl stay empty, so these
@@ -290,11 +315,19 @@ func DefaultMxEdgeSettings() *MxEdgeSettings {
 		ListingStaleTimeout:         15 * time.Minute,
 		ListingLoadTimeout:          2 * time.Minute,
 		ListingPrefixCount:          16 * 1024 * 1024,
+		WakeHold:                    false,
+		WakeHoldTimeout:             30 * time.Second,
+		WakeHoldCount:               1000,
+		WakeHoldNetworkCount:        4,
+		WakeHoldFindInterval:        2 * time.Second,
+		WakeHintCount:               64,
+		WakeHintTimeout:             5 * time.Second,
 		Ingress:                     sidecar.DefaultMailIngressFormatSettings(),
 		Usage:                       sidecar.DefaultQuotaUsageBatcherSettings(),
 		HostNameMaxByteCount:        253,
 		HostLabelMaxByteCount:       63,
 		ReplyUrlMaxByteCount:        400,
+		RouteReceiverCount:          64,
 	}
 }
 

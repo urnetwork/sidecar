@@ -322,8 +322,10 @@ func (self *MxEdgeService) Drain() {
 		self.draining = true
 	}()
 	timedOut := self.clock.After(self.settings.DrainTimeout)
-	// the router resets what is still spliced and sends its last usage window once the wait is over
+	// the router resets what is still spliced and sends its last usage window once the wait is over; a session
+	// held for a woken receiver closes in the handshake now, since its sender retries another process sooner
 	if self.router != nil {
+		self.router.holds.drain()
 		defer self.router.drained()
 	}
 	for {

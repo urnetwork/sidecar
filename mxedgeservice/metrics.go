@@ -102,6 +102,10 @@ type mxMetrics struct {
 	ptrLookups sidecar.MetricsCounter
 	// The router's loads of the listing mirror, by how each went.
 	listingLoads sidecar.MetricsCounter
+	// The router's wake holds, by how each ended (wake_hold.go).
+	wakeHolds sidecar.MetricsCounter
+	// The router's wake hints, by how each went.
+	wakeHints sidecar.MetricsCounter
 }
 
 // Declares the families. Two engines in one process share them, as Metrics allows.
@@ -122,5 +126,7 @@ func newMxMetrics(metrics sidecar.Metrics) *mxMetrics {
 		spliceBytes:        metrics.Counter("urnetwork_mxedge_splice_bytes_total", "The router's spliced bytes, by direction.", "direction"),
 		ptrLookups:         metrics.Counter("urnetwork_mxedge_ptr_lookups_total", "The router's forward-confirmed PTR lookups, by how each went.", "result"),
 		listingLoads:       metrics.Counter("urnetwork_mxedge_listing_loads_total", "The router's loads of the IP listing mirror, by how each went.", "result"),
+		wakeHolds:          metrics.Counter("urnetwork_mxedge_wake_holds_total", "The router's wake holds, by how each ended.", "result"),
+		wakeHints:          metrics.Counter("urnetwork_mxedge_wake_hints_total", "The router's wake hints to a network's receivers, by how each went.", "result"),
 	}
 }
