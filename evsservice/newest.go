@@ -526,7 +526,8 @@ func ReadRecordLocated(ctx context.Context, cache *RecordCache, locator *RecordL
 	case err != nil:
 		return nil, err
 	}
-	record, err = sidecar.ParseEvsBatchRecord(recordBytes)
+	// as the cache's instance reads a record in its batch: a format-2 instance reads a packed format-2 record too
+	record, err = cache.parseRecord(recordBytes)
 	if err != nil {
 		return nil, err
 	}
