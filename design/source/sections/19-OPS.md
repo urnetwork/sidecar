@@ -742,7 +742,9 @@ cohorts   a cluster's repos (its cohort) keep growing after place_new moves on, 
           cluster at 80% raw or 70% inodes, which evs reads from {nvb_<set>}'s at_limit flag (19.6's budget row),
           takes only what §20.7's storage limit accepts: evs refuses
           payload-adding pushes and segment uploads for its repos with 507 CLUSTER_FULL and Retry-After, while
-          deletion, erasure, shreds, CONSUME, BASE, drops and config and mailcfg pushes pass, and the rota is
+          deletion, erasure, shreds, CONSUME, BASE, drops and config and mailcfg pushes pass, a DROP refused 507
+          for its index rewrites' upload going again once without them, left to the backfill, which waits while
+          the cluster is full (§11.14's drop and limit rows; owner decision 620), and the rota is
           paged (19.8); FS-119 drills a saturating cohort beside a mostly empty cluster
 pools     never on a metadata cluster: §22's conformance suite, run per build and per new cluster, refuses one
           with more than one pool (FS-63), and monitor warns on one
@@ -958,7 +960,18 @@ groups     repo admins'   place each repo they hold afresh (§11.8), evs's place
                           REPO_DELETED as the answer it expects, and mends a 200, from a repo/ that stood keying
                           and is now active, by DELETE alone, with no new statement, which moves repo/ to
                           deleted{...} under the projected RepoDelete, waiting out STATEMENT_MISSING while evs's
-                          projection trails (owner decision 602); writer leaves re-add member leaves,
+                          projection trails (owner decision 602); a live repo's group it re-forms in two calls
+                          around its activate: first the form, epoch 0 and the ladder alone, which is all gkm
+                          takes while repo/ reads keying or deleted (§10.6's checks row), then activate, which
+                          finds the GroupForm and gen/1, then the re-form's resume from the keychain's record,
+                          which rotates and adds now that repo/ is active, as a restored repo's second call
+                          does (§10.8's after row); and for a repo its state shows restored, a RepoDelete with
+                          a RepoRestore of it, it sends restore after the place and before the re-form, the
+                          route alone, with no new statement, taking 409 REPO_KEYING as the answer it expects,
+                          a 200 meaning repo/ stood deleted, placed so while evs's projection trailed the
+                          device's state, and is now active under the projected RepoRestore, and waiting out
+                          STATEMENT_MISSING within a bound its settings hold (owner decision 618); writer
+                          leaves re-add member leaves,
                           ReaderWraps and RecoveryWraps, keeping recovery-code-only members (owner decisions
                           113, 114), for a deleted repo only once it is restored (§10.8)
 repos      devices        first the ERASE pushes (§11.12) each device signed in the last 30 days, then the signed

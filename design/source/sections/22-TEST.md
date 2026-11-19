@@ -1084,7 +1084,8 @@ FI-14  write budget: (a) with the budget on, on each metadata set's busiest driv
        measured and reported by kind (§19.8), not bounded (owner decision 186); (b) conservation: each interval's P1
        and unfunded P2 debits stay within T, funded P2 spends only the wallet W, W never exceeds the priced funded
        backlog, and each push's deferred work is paid once, from W or as unfunded P2; (c) no P0 write waits or is
-       refused; (d) a network is refused only while one with less queued priced bytes per weight is served (§11, §19)
+       refused; (d) a network is refused only while one with less queued priced bytes per weight is served, or,
+       every waiting network equally loaded past the shed's delay, by id (owner decision 617) (§11, §19)
 FI-15  file-mode CAS (I-EVS-8): a file-mode push commits at u only if each file path it changes has, in the head
        history through u-1, newest version equal to its base_entry_version, 0 naming the path absent (never
        written, or removed), a removal being one of its versions, one past its last, which its marker keeps, and

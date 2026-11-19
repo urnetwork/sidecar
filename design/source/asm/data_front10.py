@@ -1915,3 +1915,35 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "(613), extending @@OD:574@@; an `egress_change` template's binding of its requirement (614), extending "
     "@@OD:607@@; a policy's `ip:` deny tests failing at save against a prefixless route rule (615), which follows "
     "@@OD:575@@; and a generation refused once on a failed store (616). ")
+# The third late sweep (dr6-late-sweep, 2026-11-19): the build's answers recorded after the second.
+INDEX += [
+    (617, 'The P1 shed and fair admission',
+     'Under a flood the shed refuses only networks strictly heavier than the lightest one waiting, and '
+     'admission is fair over time.'),
+    (618, "A recovery's groups step around activate",
+     "The groups step re-forms a live repo's group in two calls around its activate, and sends restore for a "
+     'repo its state shows restored.'),
+    (619, "A DROP's index rewrites at evs",
+     "evs's DROP boundary rule takes a DROP push's §11.14 index rewrites, each a rewrite of a standing index "
+     'file.'),
+    (620, 'A DROP sent again without its rewrites',
+     "A DROP refused for its index rewrites' upload, at the storage limit, while spent or on a full cluster, "
+     'goes again once without them.'),
+    (621, 'An omitted document at an index check',
+     'A host with the text holds that the index holds every document a head-changing push changed; a missing '
+     'one is a mismatch.'),
+]
+for _n, _note in [
+        (602, " Extended by @@OD:618@@: a live repo's two-call re-form and a restored repo's restore."),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 622))
+DATES.update({617: '2026-11-18', 618: '2026-11-18', 619: '2026-11-18', 620: '2026-11-19', 621: '2026-11-19'})
+_D616 = ('@@OD:575@@; and a generation refused once on a failed store (616). ')
+assert DECISIONS_INTRO.count(_D616) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D616, _D616 + "A third sweep, on 2026-11-19, numbers the answers of 2026-11-18 and 2026-11-19: evs's fair P1 admission "
+    "(617), a recovery's groups step (618), extending @@OD:602@@, a DROP's index rewrites and its resend "
+    'without them (619, 620) and the omitted-document check (621). ')
