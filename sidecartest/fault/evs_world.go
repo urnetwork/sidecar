@@ -190,6 +190,10 @@ type EvsWorldSettings struct {
 	// The network's drop limits as Setup gives them to the fake Quota, and what taskworker's drop job runs with, nil
 	// giving the network no limit, so evs refuses every DROP and dry run, as M2's rows run (evs_world_drop.go).
 	Drops *EvsWorldDropSettings
+	// The rules that hold where neither the repo nor the network has a VersioningRules record, nil for the platform's
+	// own (sidecar.ConfigPlatformVersioningRules, off above 64 MiB). A schedule sets a rule of the same shape at a
+	// smaller size, since a step that moves 64 MiB does not end within the driver's wait on a loaded machine.
+	PlatformVersioning *protocol.VersioningRules
 }
 
 // One device of a world.

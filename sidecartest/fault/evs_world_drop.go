@@ -682,7 +682,10 @@ func (self *EvsWorld) versioningFor(repoId sidecar.Id, filePath string, size uin
 	self.stateLock.Lock()
 	network, repo, locked := self.networkRules, self.repoRules, self.locked
 	self.stateLock.Unlock()
-	rules := sidecar.ConfigPlatformVersioningRules()
+	rules := self.settings.PlatformVersioning
+	if rules == nil {
+		rules = sidecar.ConfigPlatformVersioningRules()
+	}
 	switch {
 	case repo != nil:
 		rules = repo

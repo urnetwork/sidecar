@@ -15,8 +15,12 @@
 //	              versionless and one created elsewhere versioned, while media/old.bin, created before the record,
 //	              keeps its setting through a later write (owner decision 167); the repo's own rules, turning logs/
 //	              off, then replace the network's: a new path under media/ is versioned and one under logs/ versionless
-//	platform      Fs68PlatformRule: under no VersioningRules record an honest client writes 65 MiB versionless and 63
-//	              MiB versioned; under a present record that matches no rule a new 65 MiB file is versioned
+//	platform      Fs68PlatformRule: under no VersioningRules record the rule that holds is the platform's, off above
+//	              a size, which the world gives at 64 KiB in place of the platform's 64 MiB
+//	              (EvsWorldSettings.PlatformVersioning): an honest client writes 65 KiB versionless and 63 KiB
+//	              versioned; under a present record that matches no rule a new 65 KiB file is versioned. The 64 MiB
+//	              itself is sidecar's TestVersioningRulesFirstMatchAndThePlatformRule's: three steps of 63 MiB or
+//	              more overran the driver's 10 s wait on a loaded machine, and §22.8 raises that wait for no row
 //	kind          Fs68Kind(config or mailcfg): under a record turning every path off, an honest client's new path is
 //	              versioned, and a writer that sends a file's turn to versioning off anyway (EvsWorld.VersioningFill)
 //	              gets 409 VERSIONING. The twin, Fs68KindGeneral, is a general repo: the same record makes the new path
@@ -226,23 +230,29 @@ func Fs68Rules(net *Net) *Schedule {
 	return &Schedule{Id: "FS-68 rules", Steps: steps, Check: fsDropChecks(world), Tiers: []Tier{TierT2, TierT3}}
 }
 
+// The size above which fs68's stand-in for the platform rule turns versioning off.
+const fs68PlatformSizeAbove = 64 * 1024
+
 // See the file header.
 func Fs68PlatformRule(net *Net) *Schedule {
-	world := NewEvsWorld(net, fsDropWorldSettings(protocol.RepoKind_REPO_KIND_GENERAL, false))
+	settings := fsDropWorldSettings(protocol.RepoKind_REPO_KIND_GENERAL, false)
+	settings.PlatformVersioning = &protocol.VersioningRules{Rules: []*protocol.VersioningRule{
+		{SizeAboveBytes: fs68PlatformSizeAbove, Versioning: protocol.VersioningMode_VERSIONING_MODE_OFF},
+	}}
+	world := NewEvsWorld(net, settings)
+	above := fs68PlatformSizeAbove + 1024
+	below := fs68PlatformSizeAbove - 1024
 	steps := []*Step{
 		{Actor: "admin", Action: world.Setup},
-		{Actor: "admin", Action: world.WriteVersioning("admin", "above.bin", EvsWorldContent("fs68 above", 65*fs68MiB), "")},
+		{Actor: "admin", Action: world.WriteVersioning("admin", "above.bin", EvsWorldContent("fs68 above", above), "")},
 		{Actor: "admin", Action: world.ExpectVersioning("admin", "above.bin", 1)},
-		{Actor: "admin", Action: world.WriteVersioning("admin", "below.bin", EvsWorldContent("fs68 below", 63*fs68MiB), "")},
+		{Actor: "admin", Action: world.WriteVersioning("admin", "below.bin", EvsWorldContent("fs68 below", below), "")},
 		{Actor: "admin", Action: world.ExpectVersioning("admin", "below.bin", 0)},
 		// a present record that matches no rule here
 		{Actor: "owner", Action: world.SetVersioningRules(fs68RulesOff("never/**"), nil)},
-		{Actor: "admin", Action: world.WriteVersioning("admin", "above-under-rules.bin", EvsWorldContent("fs68 above under rules", 65*fs68MiB), "")},
+		{Actor: "admin", Action: world.WriteVersioning("admin", "above-under-rules.bin", EvsWorldContent("fs68 above under rules", above), "")},
 		{Actor: "admin", Action: world.ExpectVersioning("admin", "above-under-rules.bin", 0)},
-		// one read a step: each is 63 MiB or more through a real store on T3
-		{Actor: "reader", Action: world.Verify("reader", "above.bin")},
-		{Actor: "reader", Action: world.Verify("reader", "below.bin")},
-		{Actor: "reader", Action: world.Verify("reader", "above-under-rules.bin")},
+		{Actor: "reader", Action: world.Verify("reader", "above.bin", "below.bin", "above-under-rules.bin")},
 	}
 	return &Schedule{Id: "FS-68 platform rule", Steps: steps, Check: fsDropChecks(world), Tiers: []Tier{TierT2, TierT3}}
 }
