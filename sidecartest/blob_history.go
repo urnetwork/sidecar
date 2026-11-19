@@ -87,6 +87,9 @@ type BlobHistoryEntry struct {
 	Returned  time.Time
 	// When the store stops taking this request. Zero: no deadline.
 	Deadline time.Time
+	// A DELETE that names its object (sidecar.WithBlobUnmodified): the LastModified it names, which FI-27's fourth
+	// condition reads. Zero for an unconditional DELETE and for every other request.
+	Unmodified time.Time
 }
 
 func (self *BlobHistoryEntry) String() string {
@@ -322,6 +325,9 @@ func (self *recordedBlobCluster) List(ctx context.Context, keyPrefix string, sta
 
 func (self *recordedBlobCluster) Delete(ctx context.Context, key string) error {
 	entry := self.entry(ctx, BlobHistoryDelete, key)
+	if lastModified, ok := sidecar.BlobUnmodified(ctx); ok {
+		entry.Unmodified = lastModified
+	}
 	self.recorder.begin(ctx, entry)
 	err := self.BlobCluster.Delete(ctx, key)
 	self.recorder.end(entry, blobOutcomeOf(err, true), "")
