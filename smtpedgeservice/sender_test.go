@@ -117,6 +117,113 @@ func (self testEnginePublisher) SmtpDkimKeys(ctx context.Context, args *sidecar.
 	return result, nil
 }
 
+// A sender of the world's network on the fake prover, whose MX the message's own allowance lets go at TL4.
+func newTestEngineSender(t *testing.T, w *edgeWorld, dialer *testEngineDialer) (*sidecar.SmtpSender, *sidecartest.FakeSmtpProver, *captureLogger) {
+	t.Helper()
+	settings := sidecar.DefaultSmtpSenderSettings()
+	store := sidecartest.NewFakeStore()
+	anchors, err := sidecar.NewSmtpDnssecAnchors(w.world.TrustAnchorDs())
+	if err != nil {
+		t.Fatal(err)
+	}
+	zone := sidecartest.NewFakeMailZone(w.clock)
+	pins := sidecar.NewSmtpPinStore(store.Root(), settings, w.clock, nil)
+	policy := sidecar.NewSmtpTlsPolicy(sidecar.NewSmtpDane(anchors, w.clock, nil),
+		sidecar.NewSmtpMtaSts(zone, w.world.MtaStsTransport(), store.Root(), settings, w.clock), pins,
+		sidecar.NewSmtpTlsAllowanceStore(store.Root(), settings, w.clock), nil, zone, nil, settings, w.clock)
+	prover := sidecartest.NewFakeSmtpProver(nil)
+	senderLog := &captureLogger{}
+	sender, err := sidecar.NewSmtpSender(&sidecar.SmtpSenderArgs{
+		Dialer: dialer, Prover: prover, Policy: policy, Pins: pins,
+		Dkim:    sidecar.NewSmtpDkimKeys(&testEngineSecrets{values: map[string][]byte{}}, testEnginePublisher{}, settings, w.clock, nil),
+		Mailbox: sidecartest.NewFakeSmtpMailbox(nil), Settings: settings, Clock: w.clock, Log: senderLog,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(sender.Close)
+	return sender, prover, senderLog
+}
+
+// One message from the world's network to bob at dest.example, its MX let go at TL4 by the message's own allowance.
+func testEngineMessage(w *edgeWorld, effectKey byte) *sidecar.SmtpOutboundMessage {
+	return &sidecar.SmtpOutboundMessage{
+		EffectKey:  bytes.Repeat([]byte{effectKey}, 32),
+		SendId:     sidecar.NewId(),
+		Sender:     "bounce-1@b." + testLabel + "." + testRoot,
+		Recipients: []string{"bob@" + testRecipientDomain},
+		Message: []byte("From: alice@" + testLabel + "." + testRoot + "\r\nTo: bob@" + testRecipientDomain + "\r\nSubject: through the engine\r\n" +
+			"Message-ID: <qvsc2zbwd5c3m5rbnvzxjzpnay@" + testLabel + "." + testRoot + ">\r\n\r\nA body line.\r\n"),
+		// the scripted MX's certificate is its own, so only the message's allowance lets it through
+		Tl4Domains: []string{testRecipientDomain},
+		CreateTime: w.clock.Now(),
+	}
+}
+
+// A world whose network's report token is in its one spelling, 16 octets' base32, as the root holds Feedback-ID to.
+func newTestEngineWorld(t *testing.T, change func(world *edgeWorld)) *edgeWorld {
+	t.Helper()
+	return newEdgeWorld(t, func(world *edgeWorld) {
+		world.gate.SetFacts(world.networkId, &smtpedgeservice.SmtpGateFacts{
+			MailEnableTime: world.clock.Now().Add(-48 * time.Hour),
+			Label:          testLabel,
+			ReportToken:    strings.Repeat("a", 26),
+			Limits:         proLimits(),
+		})
+		if change != nil {
+			change(world)
+		}
+	})
+}
+
+// A halt the ladder applies reaches the sender's next preamble within one HaltReloadInterval (§14.8's 60 s), and the
+// sender holds the message as deferred with the halt's wait, never failed.
+func TestSmtpSenderHaltReachesTheNextSendWithinAReload(t *testing.T) {
+	w := newTestEngineWorld(t, nil)
+	dialer := &testEngineDialer{w: w}
+	sender, _, _ := newTestEngineSender(t, w, dialer)
+	result, err := sender.Send(context.Background(), testEngineMessage(w, 0x41))
+	if err != nil || result.Domains[0].Outcome != sidecar.SmtpOutcomeSent {
+		t.Fatalf("before the halt: %+v, %v", result, err)
+	}
+	dialer.serving.Wait()
+	ladder, err := smtpedgeservice.NewSmtpHaltLadder(w.host.ServiceHost(), &smtpedgeservice.SmtpHaltLadderDeps{Store: w.store, Lookups: w.store, Halts: w.store, Sink: sidecartest.NewFakeSmtpAbuseSink()}, w.settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	complaint := &smtpedgeservice.SmtpComplaint{
+		ComplaintId:   sidecar.NewId(),
+		NetworkId:     w.networkId,
+		Type:          smtpedgeservice.SmtpComplaintTypeFraud,
+		ArrivalTime:   w.clock.Now(),
+		Domain:        testLabel + "." + testRoot,
+		MessageIdHash: smtpedgeservice.SmtpMessageIdHash("<qvsc2zbwd5c3m5rbnvzxjzpnay@" + testLabel + "." + testRoot + ">"),
+		JoinResult:    string(smtpedgeservice.SmtpConfidenceHigh),
+	}
+	if err := w.store.InsertComplaint(w.ctx, complaint); err != nil {
+		t.Fatal(err)
+	}
+	if halts, err := ladder.Apply(w.ctx, &smtpedgeservice.SmtpHaltEvent{Kind: smtpedgeservice.SmtpHaltEventComplaint, NetworkId: w.networkId, Time: complaint.ArrivalTime, Complaint: complaint}); err != nil || len(halts) != 1 {
+		t.Fatalf("halts %v, %v", halts, err)
+	}
+	if w.settings.HaltReloadInterval > time.Minute {
+		t.Fatalf("a reload interval of %v passes §14.8's 60 s", w.settings.HaltReloadInterval)
+	}
+	w.clock.Advance(w.settings.HaltReloadInterval)
+	w.awaitProbes(2)
+	held := testEngineMessage(w, 0x42)
+	result, err = sender.Send(context.Background(), held)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome := result.Domains[0]; outcome.Outcome != sidecar.SmtpOutcomeDeferred || outcome.RetryAfter <= 0 {
+		t.Errorf("a halted send: %+v", outcome)
+	}
+	if len(w.mx.Transactions()) != 1 {
+		t.Errorf("%d transactions", len(w.mx.Transactions()))
+	}
+}
+
 func TestSmtpSenderThroughTheEngine(t *testing.T) {
 	w := newEdgeWorld(t, func(world *edgeWorld) {
 		world.verifier = sidecartest.NewFakeSmtpProofVerifier(&sidecartest.FakeSmtpProofScript{HoldAfterClientRecords: 3, MailForwardedAtClientRecord: 5})
