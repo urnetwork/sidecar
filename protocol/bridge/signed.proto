@@ -113,7 +113,9 @@ enum SignedType {
   SIGNED_TLS_EDGE_LOGIN = 0x1502;
   SIGNED_TLS_LINK = 0x1503;
 
-  // 0x16xx §14, 0x17xx §15, 0x1Bxx §12
+  // 0x16xx §14: §15.7's o/ entry, purpose smtp-outbox, by the composing device's identity key (D-SMTP-18, owner
+  // decision 445), its body SmtpOutboxEntry. 0x17xx §15, 0x1Bxx §12
+  SIGNED_SMTP_OUTBOX = 0x1601;
 
   // 0x1Axx §5: the identity binding (plan-CORE-binding-wire #1), purposes binding-client by the ClientKey and
   // binding-identity by the identity key over one SignedSidecarIdentityBinding's body; then an agent subkey's

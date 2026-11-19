@@ -260,6 +260,19 @@ func (self *Redactor) RedactShared(text []byte) ([]byte, []RedactMatch) {
 	}), matches
 }
 
+// An identifier field (a model, a project, a branch, a tool name, a path) redacted whole, as §16.11's redaction row
+// redacts one: text as it is where nothing matches, else its first match's [REDACTED:<rule>], with no HMAC, since such
+// fields project to logs a network's members share; and what was covered. A match is a coverage gap for the caller to
+// record, and a field that is a marker already is left as it is.
+func (self *Redactor) RedactField(text []byte) ([]byte, []RedactMatch) {
+	_, pii := self.state()
+	matches, _ := findRedactMatches(text, pii)
+	if len(matches) == 0 {
+		return text, nil
+	}
+	return []byte("[REDACTED:" + matches[0].Rule + "]"), matches
+}
+
 // The secrets in text, rewriting nothing: what a shared write refuses on, and what Sidecar.SecretMatcher takes as
 // the redactor's token forms. PII is no credential, so it is never reported here.
 func (self *Redactor) Scan(text []byte) []RedactMatch {

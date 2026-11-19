@@ -17,7 +17,6 @@ import (
 	"maps"
 	"slices"
 	"sync"
-	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -207,46 +206,46 @@ func (self *FakeSmtpMailbox) ReadOutcomes(ctx context.Context, effectKey []byte)
 }
 
 // Encodes as p/ holds it.
-func (self *FakeSmtpMailbox) WriteProverMeasure(ctx context.Context, sidecarId sidecar.Id, measure *sidecar.SmtpProverMeasure) error {
-	if measure == nil || measure.MeasureTime.UnixMilli() < 0 {
+func (self *FakeSmtpMailbox) WriteProverRecord(ctx context.Context, sidecarId sidecar.Id, record *sidecar.SmtpProverRecord) error {
+	if record == nil {
 		return errFakeSmtpMailboxNoMeasure
 	}
-	encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.MailProverRecord{
-		SmtpDataProofBytes: measure.DataProofBytes,
-		DataBytesPerS:      measure.DataBytesPerSecond,
-		MeasureTimeMs:      uint64(measure.MeasureTime.UnixMilli()),
-	})
+	mailRecord, err := record.MailProverRecord()
+	if err != nil {
+		return errors.Join(errFakeSmtpMailboxNoMeasure, err)
+	}
+	encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(mailRecord)
 	if err != nil {
 		return err
 	}
-	return self.call(ctx, "WriteProverMeasure", func() error {
+	return self.call(ctx, "WriteProverRecord", func() error {
 		self.proverRecords[sidecarId] = encoded
 		return nil
 	})
 }
 
-func (self *FakeSmtpMailbox) ListProverMeasures(ctx context.Context) (map[sidecar.Id]*sidecar.SmtpProverMeasure, error) {
+func (self *FakeSmtpMailbox) ListProverRecords(ctx context.Context) (map[sidecar.Id]*sidecar.SmtpProverRecord, error) {
 	encodedRecords := map[sidecar.Id][]byte{}
-	err := self.call(ctx, "ListProverMeasures", func() error {
+	err := self.call(ctx, "ListProverRecords", func() error {
 		maps.Copy(encodedRecords, self.proverRecords)
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	sidecarIdMeasures := map[sidecar.Id]*sidecar.SmtpProverMeasure{}
+	sidecarIdRecords := map[sidecar.Id]*sidecar.SmtpProverRecord{}
 	for sidecarId, encoded := range encodedRecords {
-		record := &protocol.MailProverRecord{}
-		if err := proto.Unmarshal(encoded, record); err != nil {
+		mailRecord := &protocol.MailProverRecord{}
+		if err := proto.Unmarshal(encoded, mailRecord); err != nil {
 			return nil, err
 		}
-		sidecarIdMeasures[sidecarId] = &sidecar.SmtpProverMeasure{
-			DataProofBytes:     record.GetSmtpDataProofBytes(),
-			DataBytesPerSecond: record.GetDataBytesPerS(),
-			MeasureTime:        time.UnixMilli(int64(record.GetMeasureTimeMs())),
+		record, err := sidecar.SmtpProverRecordFromMail(mailRecord)
+		if err != nil {
+			return nil, err
 		}
+		sidecarIdRecords[sidecarId] = record
 	}
-	return sidecarIdMeasures, nil
+	return sidecarIdRecords, nil
 }
 
 func (self *FakeSmtpMailbox) DepositDsn(ctx context.Context, effectKey []byte, dsn []byte) error {

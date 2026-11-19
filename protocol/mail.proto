@@ -371,6 +371,16 @@ message MailProverRecord {         // p/<sidecar_id>, rewritten at each measurem
   uint64 smtp_data_proof_bytes = 1;
   uint64 data_bytes_per_s = 2;     // the measured DATA rate
   uint64 measure_time_ms = 3;
+  // DESIGN-DETAILS 3.7's SMTP-M9-09 fields, so a phone's composer prices a send in units (3.2.6): one unit's
+  // proving time for the ready family whose unit takes longest, the header octets the first message part and
+  // each later header part open, the commands one envelope group holds after the first, the key set the host
+  // proves under (keyset.json's SHA-256), and the TLS suites whose family is ready in it
+  uint64 unit_millis = 4;
+  uint64 head_byte_count = 5;
+  uint64 header_record_byte_count = 6;
+  uint64 envelope_group_count = 7;
+  bytes key_set_id = 8;
+  repeated uint32 ready_suites = 9;
 }
 
 message MailSpamModel {            // s/model (§15.9), a mailbox's naive Bayes filter its people's verdicts train

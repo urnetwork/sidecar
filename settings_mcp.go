@@ -90,6 +90,9 @@ type SidecarIngestSettings struct {
 	SpoolCursorRecordCount int
 	// A transcript is tailed this often, and at Stop, SubagentStop, PreCompact and SessionEnd: 30 s.
 	TranscriptTailInterval time.Duration
+	// How much of a transcript line past PayloadByteCount one read skips, until its newline: 64 KiB, a read buffer's
+	// size and no bound on the line, which is skipped whole. Non-positive reads a byte at a time.
+	TranscriptSkipByteCount int
 	// `ur hook` passes its stdin to the daemon and exits 0 within this: 300 ms.
 	HookExitTimeout time.Duration
 	// How long the daemon's presence prompt may wait for the person, and ur hook on a PermissionRequest it answers by
@@ -153,6 +156,12 @@ type SidecarIngestSettings struct {
 	RunCardPromptByteCount int
 	// The most touched paths a run card keeps: 256 (§16.10).
 	RunCardPathCount int
+	// A tool's name a tool_call or permission entry carries, after redaction, cut on a code point: 64 B, RECORD.md
+	// section 6.4's tool_name cap, which capture may set lower, never higher.
+	ToolNameByteCount int64
+	// The paths one tool_call entry carries, past which the rest are left out and the call is truncated: 256, RECORD.md
+	// section 6.4's cap.
+	ToolPathCount int
 	// The run title a context entry carries, its first line after redaction, cut on a code point: 120 B,
 	// ContextBody.title's cap. This and the caps below are RECORD.md section 6.4's format values, which capture may set
 	// lower, never higher, since the writer refuses a body past the format's caps (QD-702).
@@ -358,6 +367,9 @@ func defaultSidecarIngestSettings() *SidecarIngestSettings {
 		ChangePathCount:          4096,
 		RunCardPromptByteCount:   2 * 1024,
 		RunCardPathCount:         256,
+		ToolNameByteCount:        64,
+		ToolPathCount:            256,
+		TranscriptSkipByteCount:  64 * 1024,
 		// ContextBody's caps, and the project's ChangeBody shares (RECORD.md section 6.4)
 		ContextTitleByteCount:               120,
 		ContextSessionIdCount:               4,

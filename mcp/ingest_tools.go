@@ -96,35 +96,35 @@ func (self *Ingest) captureToolCallWithLock(ctx context.Context, run *ingestRun,
 	if event.ToolServer != "" {
 		name = event.ToolServer + "/" + event.ToolName
 	}
+	// the name and paths a card reads, redacted before they are counted, kept or sealed (ingest_runcard.go)
+	name = self.redactFieldWithLock(ctx, run, redactor, name, self.settings.ToolNameByteCount)
 	if name != "" {
 		state.ToolCounts[name] += 1
 	}
+	paths := []string{}
 	for _, path := range event.Paths {
+		path = self.cardPathWithLock(ctx, run, redactor, path)
 		self.touchWithLock(run, path)
+		paths = append(paths, path)
 	}
 	input, output := ingestToolInputOutput(event, payload)
 	input = self.redact(ctx, run, redactor, input)
 	output = self.redact(ctx, run, redactor, output)
 	input, output, truncated := self.cutToolBodyWithLock(ctx, run, input, output)
-	paths := []string{}
-	for _, path := range event.Paths {
-		paths = append(paths, self.relativeToCwd(state.Cwd, path))
-	}
-	if 256 < len(paths) {
-		paths = paths[:256]
+	if pathCount := max(self.settings.ToolPathCount, 0); pathCount < len(paths) {
+		paths = paths[:pathCount]
 		if !truncated {
 			self.gap(ctx, run.network, run.networkId, run.runId, sidecar.RecordCoverageGapTruncation)
 		}
 		truncated = true
 	}
 	now := self.clock.Now().UnixMilli()
-	toolName, _ := ingestCut([]byte(name), 64)
 	self.appendWithLock(ctx, run, &ingestEntry{
 		kind:     sidecar.RecordKindToolCall,
 		source:   sidecar.RecordSourceHook,
 		actionId: self.toolActionIdWithLock(ctx, run, event.ToolUseId, true),
 		body: &protocol.ToolCallBody{
-			ToolName:      string(toolName),
+			ToolName:      name,
 			ToolUseId:     event.ToolUseId,
 			ToolClass:     ingestToolClass(event.ToolKind),
 			Input:         input,
@@ -164,7 +164,7 @@ func ingestToolInputOutput(event *HookEvent, payload []byte) ([]byte, []byte) {
 func (self *Ingest) captureHookEventWithLock(ctx context.Context, run *ingestRun, redactor *sidecar.Redactor, event *HookEvent, payload []byte) []byte {
 	if event.Kind == HookEventPreToolUse {
 		for _, path := range event.Paths {
-			self.touchWithLock(run, path)
+			self.touchWithLock(run, self.cardPathWithLock(ctx, run, redactor, path))
 		}
 	}
 	redacted := self.redact(ctx, run, redactor, payload)
@@ -189,10 +189,11 @@ func (self *Ingest) captureHookEventWithLock(ctx context.Context, run *ingestRun
 	return append([]byte(nil), sealed.Leaf[:]...)
 }
 
-// A PermissionRequest as a permission entry: a harness's own step, never an I-8 decision.
-func (self *Ingest) capturePermissionWithLock(ctx context.Context, run *ingestRun, event *HookEvent) {
-	toolName, _ := ingestCut([]byte(event.ToolName), 64)
-	mode, _ := ingestCut([]byte(event.PermissionMode), 32)
+// A PermissionRequest as a permission entry: a harness's own step, never an I-8 decision. The tool's name is redacted
+// as a tool_call's is.
+func (self *Ingest) capturePermissionWithLock(ctx context.Context, run *ingestRun, redactor *sidecar.Redactor, event *HookEvent) {
+	toolName := self.redactFieldWithLock(ctx, run, redactor, event.ToolName, self.settings.ToolNameByteCount)
+	mode, _ := ingestCut([]byte(event.PermissionMode), self.settings.ContextPermissionModeByteCount)
 	self.appendWithLock(ctx, run, &ingestEntry{
 		kind:   sidecar.RecordKindPermission,
 		source: sidecar.RecordSourceHook,
@@ -201,7 +202,7 @@ func (self *Ingest) capturePermissionWithLock(ctx context.Context, run *ingestRu
 			DecidedBy:       ingestPermissionUndecided,
 			PermissionMode:  string(mode),
 			ToolClass:       ingestToolClass(event.ToolKind),
-			ToolName:        string(toolName),
+			ToolName:        toolName,
 			ArgumentsSha256: event.ToolInputSha256,
 		},
 		coverageSource: sidecar.RecordCoverageSourceHooks,
@@ -227,6 +228,8 @@ func (self *Ingest) RecordMcpCall(ctx context.Context, call *McpCall, toolName s
 	if err != nil {
 		return
 	}
+	// once the lock below is released: the tool_call entry moves the run's card (ingest_runcard.go)
+	defer self.deliverCardDues(ctx, run)
 	run.runLock.Lock()
 	defer run.runLock.Unlock()
 	defer self.saveRunWithLock(run)
@@ -235,7 +238,9 @@ func (self *Ingest) RecordMcpCall(ctx context.Context, call *McpCall, toolName s
 		self.gap(ctx, run.network, run.networkId, run.runId, sidecar.RecordCoverageGapMissedEvent)
 		return
 	}
-	run.state.ToolCounts[urMcpServerName+"/"+toolName] += 1
+	// counted as the entry names it, the catalog's own constant name, so the capture holds what the card folds
+	name, _ := ingestCut([]byte(urMcpServerName+"/"+toolName), self.settings.ToolNameByteCount)
+	run.state.ToolCounts[string(name)] += 1
 	run.state.LastActivityMillis = self.clock.Now().UnixMilli()
 	run.dirty = true
 	input := self.redact(ctx, run, redactor, arguments)
@@ -245,7 +250,6 @@ func (self *Ingest) RecordMcpCall(ctx context.Context, call *McpCall, toolName s
 	if callErr != nil {
 		exitCode = 1
 	}
-	name, _ := ingestCut([]byte(urMcpServerName+"/"+toolName), 64)
 	self.appendWithLock(ctx, run, &ingestEntry{
 		kind:     sidecar.RecordKindToolCall,
 		source:   sidecar.RecordSourceObserved,
@@ -265,16 +269,15 @@ func (self *Ingest) RecordMcpCall(ctx context.Context, call *McpCall, toolName s
 	})
 }
 
-// Notes a touched path for the run card, relative to the worktree, up to RunCardPathCount.
+// Notes a touched path for the run card, as cardPathWithLock gives it, up to RunCardPathCount.
 func (self *Ingest) touchWithLock(run *ingestRun, path string) {
-	relative := self.relativeToCwd(run.state.Cwd, path)
-	if relative == "" || slices.Contains(run.state.TouchedPaths, relative) {
+	if path == "" || slices.Contains(run.state.TouchedPaths, path) {
 		return
 	}
 	if self.settings.RunCardPathCount <= len(run.state.TouchedPaths) {
 		return
 	}
-	run.state.TouchedPaths = append(run.state.TouchedPaths, relative)
+	run.state.TouchedPaths = append(run.state.TouchedPaths, path)
 	run.dirty = true
 }
 

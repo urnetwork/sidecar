@@ -33,6 +33,18 @@ func TestDefaultSmtpSenderSettingsMatchDesign(t *testing.T) {
 		// DESIGN-DETAILS 3.2.8
 		HeaderHeadMaxByteCount:  720,
 		HeaderBlockMaxByteCount: 16384,
+		KeysRetryTimeout:        6 * time.Hour,
+		ProverMeasureInterval:   7 * 24 * time.Hour,
+		EnvelopeRetryGroupCount: 1,
+		// the driver's and the outbox's readings
+		ProofCallTimeout:      30 * time.Second,
+		ProofCallAttemptCount: 2,
+		PreambleResultTimeout: 10 * time.Minute,
+		EdgeResetRetryCount:   1,
+		OutcomeSendTimeout:    15 * time.Second,
+		OutboxPollInterval:    time.Minute,
+		ProverIdleInterval:    time.Minute,
+		StatusHoldTimeout:     24 * time.Hour,
 	}
 	if !reflect.DeepEqual(settings, want) {
 		t.Errorf("%+v", settings)

@@ -142,6 +142,8 @@ type SmtpProofResult struct {
 	RefusedCode string
 	// DATA mode and over the prover's smtp_data_proof_bytes, decided before MAIL (§14.5).
 	TooLarge bool
+	// TooLarge: the smtp_data_proof_bytes the message passed, which its too_large outcome and DSN cite.
+	DataProofByteCount uint64
 	// Set when the mode the MX's EHLO reply selects cannot meet the declared count, BDAT's being the
 	// message's length and DATA's its dot-stuffed length. Nothing was sent past EHLO, and one new
 	// connection declares this count, after which a second mismatch is deferred
@@ -151,6 +153,15 @@ type SmtpProofResult struct {
 	// connection ended before any message record (DESIGN-DETAILS 3.2.4, 3.5). MAIL went, so a unit was
 	// spent. The sender retries once with EnvelopeGroupMaxCount at its retry count, and a second is failed.
 	EnvelopeRetry bool
+	// Each RCPT's reply code, in RecipientLocals' order, as the MX gave it inside TLS: 250 took the
+	// recipient, a 4xx or 5xx refused it, and 0 is a recipient whose RCPT got no reply before the send
+	// ended. §14.5 retries or files a DSN per recipient, and RefusedCode holds one reply, so a prover
+	// fills this whenever it read any RCPT's reply; empty when it read none, and then RefusedCode
+	// speaks for every recipient.
+	RecipientReplyCodes []uint32
+	// Every reply code the MX gave inside TLS, in the order read, which SmtpOutcome.reply_codes
+	// carries (§14.5's self-report). No reply text: a reply can quote a recipient.
+	ReplyCodes []uint32
 }
 
 // Where a prover sends what the edge must see beside the stream.
