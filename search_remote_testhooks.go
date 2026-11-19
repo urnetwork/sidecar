@@ -233,6 +233,20 @@ func (self *SearchTestNetworkDevice) CacheByteCount() int64 {
 	return self.cache.ByteCount()
 }
 
+// The device's own index of repoId's ref refId as its sync engine holds it: the pin its latest set is whole at, whether
+// the index is a companion's, and the ring of versions it replayed; false before its first swap. What a requester's
+// remote client reads as its own index (SearchRemoteClientArgs.OwnIndex), and what an indexer holding the ref's text at
+// that version gives as its text pin (SearchRemoteServerArgs.TextPin).
+func (self *SearchTestNetworkDevice) OwnIndex(repoId Id, refId Id) (SearchSyncPin, bool, []SearchSyncPinPair, bool) {
+	self.sync.stateLock.Lock()
+	defer self.sync.stateLock.Unlock()
+	ref := self.sync.refs[[2]Id{repoId, refId}]
+	if ref == nil || ref.manifest == nil {
+		return SearchSyncPin{}, false, nil, false
+	}
+	return ref.manifest.Pin, searchRootCompanion(ref.manifest.Root), slices.Clone(ref.manifest.Pins), true
+}
+
 // gkm as a reader of each world's repo holds it: RK_1 of each, at each record it opens.
 type searchTestNetworkGkm struct {
 	gkmRefusingClient
