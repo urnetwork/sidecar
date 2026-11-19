@@ -1,9 +1,10 @@
 //go:build sidecar_testhooks && !ios_extension && !js
 
 // What FS-76's, FS-107's and FS-108's schedules add to a search world (SEARCH-M10-36; §11.14's confirm, drop, tombstone
-// and verify rows; owner decision 584): a desktop's own text of the world's content, where a document's versions sit,
-// a DROP's index rewrite at the head, a writer's racing tombstones, a slot holding an entry of the reserved kind 2, and
-// the index's own decoder on a file's bytes.
+// and verify rows, and its coverage row's check by hosts with the text; owner decision 584): a desktop's own text of
+// the world's content, where a document's versions sit, a DROP's index rewrite at the head, a writer's racing
+// tombstones, a slot holding an entry of the reserved kind 2, the index's own decoder on a file's bytes, a writer's
+// push whose head lies about its content, and the check that catches one.
 //
 //	text     a device made with SearchTestDeviceArgs.Text verifies its candidates against the bytes the world's
 //	         content pushes wrote (SearchContentTextSource over every content version the ref holds), as a desktop
@@ -23,6 +24,12 @@
 //	         index_malformed naming that writer
 //	decoder  SearchTestValidateIndexFile is the reading a device's sync judges a fetched file by (indexValidateFile),
 //	         which FS-108 holds to refuse what SearchOracle's canonical decoder refuses
+//	claims   CommitIndexedClaiming is an in-ref writer's push whose head lies about the content beside it: for a path
+//	         a SearchTestClaim names, its entries are extracted from the claim's bytes, or are a tombstone over a
+//	         document the push keeps live
+//	checked  CheckPushWithText is SEARCH-M10-21's check by hosts with the text (indexCheckWithText) on one push: the
+//	         entries it added judged against the world's content at the push's version, what mismatched, the host's
+//	         own entries in their place, and index_mismatch as raised
 //
 // Only the sidecar_testhooks build has it, which no release leg is (§22.4). Safe for concurrent use as the world is.
 
@@ -350,4 +357,122 @@ func (self *SearchTestWorld) ForgeReservedKindSlot(ctx context.Context, writer I
 		return "", 0, searchTestErr(err)
 	}
 	return path, committed.version, nil
+}
+
+// What a writer's in-ref push claims of one path it changes, where it lies: the index entries it carries for the path
+// are extracted from Content in place of the bytes it commits, a nil Content hiding behind a tombstone a document the
+// push keeps live.
+type SearchTestClaim struct {
+	Path    string
+	Content []byte
+}
+
+// writer's in-ref push of changes as CommitIndexed plans and commits it, but for the paths claims names, whose entries
+// are the claims': the content a reader fetches is changes', and the head beside it says otherwise. What FS-76 holds
+// hosts with the text to catch (§11.14's coverage row; D-EVS-56).
+func (self *SearchTestWorld) CommitIndexedClaiming(ctx context.Context, writer Id, at time.Time, changes []*SearchTestChange, claims []*SearchTestClaim) (*SearchTestCommit, error) {
+	claimed := map[string]*SearchTestClaim{}
+	for _, claim := range claims {
+		claimed[claim.Path] = claim
+	}
+	planned, err := self.planIndexedClaiming(ctx, writer, at, changes, false, claimed)
+	if err != nil {
+		return nil, err
+	}
+	return planned.Commit(ctx)
+}
+
+// What a host holding the world's text made of one writer's push (SEARCH-M10-21's check by hosts with the text).
+type SearchTestTextCheck struct {
+	// Entries judged.
+	Checked int
+	// Each entry the text did not bear out: its version, by doc_key.
+	Mismatched map[[indexIdByteCount]byte]uint64
+	// The host's own entries, which stand in the mismatched ones' place: each one's version, by doc_key.
+	Own map[[indexIdByteCount]byte]uint64
+	// Paths whose deleted document a backfill repairs.
+	Repairs []string
+	// index_mismatch as raised: the index file's path and the push's signer.
+	Events []SidecarEvent
+}
+
+// The push that committed refVersion, as a host holding the ref's text checks the entries it added (indexCheckWithText):
+// the index read at that version from the files standing there, the versions the push replaced decoded so that entries
+// carried over are not judged again, and the content read at the push's own version as its pin.
+func (self *SearchTestWorld) CheckPushWithText(ctx context.Context, refVersion uint64) (*SearchTestTextCheck, error) {
+	ref := self.ref
+	ref.stateLock.Lock()
+	if refVersion == 0 || uint64(len(ref.states)) <= refVersion {
+		ref.stateLock.Unlock()
+		return nil, errors.New("search test world: no push at that version")
+	}
+	base, after := ref.states[refVersion-1], ref.states[refVersion]
+	ref.stateLock.Unlock()
+	head := *after.head
+	listing := &indexListing{head: &head}
+	for _, stored := range after.files {
+		file := *stored.version
+		listing.files = append(listing.files, &file)
+	}
+	slices.SortFunc(listing.files, func(a *indexFileVersion, b *indexFileVersion) int { return strings.Compare(a.path, b.path) })
+	view, err := indexLoadView(ctx, &indexViewArgs{
+		store: &indexHeldStore{base: &indexReproduceBase{
+			listing: listing,
+			held: func(ctx context.Context, file *indexFileVersion) ([]byte, bool, error) {
+				stored := after.files[file.path]
+				if stored == nil || stored.version.version != file.version {
+					return nil, false, nil
+				}
+				return bytes.Clone(stored.plaintext), true, nil
+			},
+		}},
+		repoId: self.repoId, refId: self.refId, repoKind: self.kind, isAdmin: self.isAdmin, settings: self.format,
+	})
+	if err != nil {
+		return nil, err
+	}
+	push := &indexReproducePush{
+		version: refVersion, baseVersion: refVersion - 1, signer: after.signer, signedTimeMs: after.head.signedTimeMs,
+		generation: self.padKey.generation,
+	}
+	replaced := map[string]*indexSlot{}
+	for path, stored := range after.files {
+		old := base.files[path]
+		if old != nil && old.version.version == stored.version.version {
+			continue
+		}
+		file := *stored.version
+		written := &indexReproduceFile{file: &file}
+		if old != nil {
+			written.replaces = old.version.version
+			if parsed, ok := indexParsePath(path, false); ok && (parsed.kind == indexPathSlot || parsed.kind == indexPathLargeEntry) {
+				slot, err := indexDecodeSlot(old.plaintext, old.version.contentSha256[:], false, self.format)
+				if err != nil {
+					return nil, err
+				}
+				replaced[path] = slot
+			}
+		}
+		push.files = append(push.files, written)
+	}
+	slices.SortFunc(push.files, func(a *indexReproduceFile, b *indexReproduceFile) int {
+		return strings.Compare(a.file.path, b.file.path)
+	})
+	outcome, err := indexCheckWithText(ctx, &indexTextCheckArgs{
+		view: view, push: push, replaced: replaced, content: self.contentRef(), pin: refVersion, refKey: self.refKey,
+	})
+	if err != nil {
+		return nil, err
+	}
+	checked := &SearchTestTextCheck{
+		Checked: outcome.checked, Mismatched: map[[indexIdByteCount]byte]uint64{}, Own: map[[indexIdByteCount]byte]uint64{},
+		Repairs: outcome.repairs, Events: outcome.events,
+	}
+	for _, mismatch := range outcome.mismatches {
+		checked.Mismatched[mismatch.key] = mismatch.version
+	}
+	for _, own := range outcome.own {
+		checked.Own[own.key] = own.version
+	}
+	return checked, nil
 }

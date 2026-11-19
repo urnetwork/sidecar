@@ -31,6 +31,9 @@
 //	          a refusal first, as a lapsed receiver's missing registration does; the route names the receiver, as
 //	          model.ProjectMailRoutes writes it once the receiver's key is published (plan-MAIL-hints #2)
 //	devices   DeviceOf: an evs client of a device whose key the world does not hold, a running Sidecar's
+//	stores    the Redis and blob clusters the router, evs's engine, the mailbox's group objects and the world's own
+//	          writes run on, by service, which a scenario's run gives so one builder runs on T2's fakes and on T3's
+//	          real stores (MailWorldSettings.Stores); every other part of the host stays the fake host's
 //
 // Several worlds may share one clock, each on a host of its own: each step waits for every wait it means, its own and
 // none another world's (AwaitTimerCountAt).
@@ -126,7 +129,21 @@ type MailWorldSettings struct {
 	// What the router's Find and open answer before a stream opens, a *sidecar.SocketCodeError as the dialer answers
 	// one, as a lapsed receiver's missing registration does; nil, or a nil answer, opens.
 	DialRefusal func(request *mxedgeservice.MxEdgeDialRequest) error
+	// The host whose Redis and blob clusters a service of the world runs on: MailWorldServiceEvs for evs's engine,
+	// MailWorldServiceMxedge for the router, and MailWorldServiceWorld for what the world writes itself in another's
+	// stead, the route as model's projection writes it and each repo's place and repo objects and the mailbox's
+	// group objects as evs's create and gkm write them. nil, or a nil answer, keeps the fake host's own, T2's; a
+	// scenario gives its run's hosts, which are server's stores on T3. Every other part of a host stays the fake
+	// host's: its gates, quota, authenticator, push and metrics.
+	Stores func(service string) *sidecar.ServiceHost
 }
+
+// The services MailWorldSettings.Stores is asked for.
+const (
+	MailWorldServiceEvs    = "evs"
+	MailWorldServiceMxedge = "mxedge"
+	MailWorldServiceWorld  = ""
+)
 
 func DefaultMailWorldSettings() *MailWorldSettings {
 	return &MailWorldSettings{
@@ -258,6 +275,19 @@ type mailWorldVerbose struct {
 func (self *mailWorldVerbose) Enabled() bool                    { return true }
 func (self *mailWorldVerbose) Info(args ...any)                 { self.log.Info(args...) }
 func (self *mailWorldVerbose) Infof(format string, args ...any) { self.log.Infof(format, args...) }
+
+// The fake host as service's engine takes it, its Redis and blob clusters those MailWorldSettings.Stores names for
+// the service.
+func (self *MailWorld) serviceHost(service string) *sidecar.ServiceHost {
+	host := self.Host.ServiceHost()
+	if self.settings.Stores != nil {
+		if stores := self.settings.Stores(service); stores != nil {
+			host.Blobs = stores.Blobs
+			host.Redis = stores.Redis
+		}
+	}
+	return host
+}
 
 // The host's urnetwork_mxedge_ metric lines.
 func (self *MailWorld) mxedgeMetrics() []string {
@@ -554,14 +584,16 @@ func (self *MailWorld) buildEvs() {
 	sidecartest.RegisterEvsTwins(host.Redis)
 	host.Gates.OpenService(sidecar.ServiceGateEvs, connect.Id(self.NetworkId))
 	host.Quota.SetBalance(connect.Id(self.NetworkId), self.settings.QuotaBalanceByteCount)
-	cluster, err := host.Blobs.Cluster(host.Blobs.MetadataClusterIds()[0])
+	evsHost := self.serviceHost(MailWorldServiceEvs)
+	worldHost := self.serviceHost(MailWorldServiceWorld)
+	cluster, err := worldHost.Blobs.FirstCluster()
 	if err != nil {
 		t.Fatal(err)
 	}
 	self.Cluster = cluster
 	self.authLog = sidecartest.NewFakeGkmAuthLog()
 	self.View = self.authLog.Append(self.fixture())
-	self.Gkm = sidecartest.NewFakeGkm(self.Clock, host.Blobs, nil)
+	self.Gkm = sidecartest.NewFakeGkm(self.Clock, worldHost.Blobs, nil)
 	ownerGkm := self.Gkm.Client(self.Owner.SidecarId, self.Owner.Sign)
 	ownerGkm.AuthAdvanced(self.View)
 	self.gkmClients = append(self.gkmClients, ownerGkm)
@@ -575,12 +607,12 @@ func (self *MailWorld) buildEvs() {
 			t.Fatal(err)
 		}
 	}
-	usage, err := evsservice.NewUsageBatcher(self.ctx, host.ServiceHost(), nil)
+	usage, err := evsservice.NewUsageBatcher(self.ctx, evsHost, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(usage.Close)
-	quota, err := evsservice.NewQuotaGate(self.ctx, host.ServiceHost(), nil)
+	quota, err := evsservice.NewQuotaGate(self.ctx, evsHost, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -594,7 +626,7 @@ func (self *MailWorld) buildEvs() {
 	evsSettings.BatchFlushDelay = 0
 	evsSettings.PushUnknownRereadInterval = 0
 	evsSettings.RepoCacheTtl = 0
-	self.Engine, err = evsservice.NewEvsEngine(self.ctx, host.ServiceHost(), evsSettings, &evsservice.EvsEngineDeps{
+	self.Engine, err = evsservice.NewEvsEngine(self.ctx, evsHost, evsSettings, &evsservice.EvsEngineDeps{
 		AuthState: &mailWorldEvsAuth{world: self},
 		Uploads:   &evsservice.EvsUploadDeps{Keys: receiptKeys, Quota: quota, Usage: usage},
 		GateViews: &mailWorldGateViews{world: self},
@@ -853,10 +885,10 @@ func (self *MailWorld) buildRouter() {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := host.Redis.Set(sidecartest.InspectContext(self.ctx), mxedgeservice.MailRouteKey(self.settings.Label), routeValue, 0); err != nil {
+	if err := self.serviceHost(MailWorldServiceWorld).Redis.Set(sidecartest.InspectContext(self.ctx), mxedgeservice.MailRouteKey(self.settings.Label), routeValue, 0); err != nil {
 		t.Fatal(err)
 	}
-	serviceHost := host.ServiceHost()
+	serviceHost := self.serviceHost(MailWorldServiceMxedge)
 	if self.settings.Push != nil {
 		serviceHost.Push = self.settings.Push
 	}
