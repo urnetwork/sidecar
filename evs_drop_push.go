@@ -30,7 +30,10 @@
 //	           length it replaces, naming the head's index_epoch (QD-1078; evsservice/check_drop.go), but an evs from
 //	           before that answer takes no change a written lineage does not name, so a push whose rewrites evs
 //	           refuses 409 DROP_BOUNDARY goes again without them too; no hook is set until SEARCH's composition sets one
-//	quota      at the storage limit a kept head needing an upload gets evs's QuotaRefusal, which goes back as it is
+//	quota      at the storage limit or while spent a DROP carrying index rewrites that evs refuses with a QuotaRefusal
+//	           goes again once without them, left to the backfill, since a DROP frees storage and its index must not
+//	           block it (QD-1088); a kept head needing an upload is refused again then, and that refusal goes back as
+//	           it is
 //
 // On every leg but ios_extension. Safe for concurrent use.
 
@@ -339,8 +342,10 @@ func (self *EvsRepo) dropPush(ctx context.Context, refName []byte, batch *EvsDro
 			// rebuilt and signed again once under the same confirmation (§11.14's drop row)
 			rebuilt = true
 		case rewritten && (IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_INDEX_EPOCH) ||
-			IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_DROP_BOUNDARY) || errors.Is(err, errEvsDropRewritesMoved)):
-			// without its rewrites, left to the backfill
+			IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_DROP_BOUNDARY) || errors.Is(err, errEvsDropRewritesMoved) ||
+			IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_QUOTA_LIMIT) || IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_QUOTA_PAYMENT)):
+			// without its rewrites, left to the backfill: at the storage limit or while spent a shard's rewrite is an
+			// upload evs refuses, which must not block a DROP (QD-1088)
 			hook = nil
 		default:
 			return nil, err

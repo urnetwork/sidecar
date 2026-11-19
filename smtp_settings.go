@@ -88,6 +88,43 @@ type SmtpSenderSettings struct {
 	// ProofSettings.HeaderBlockMaxByteCount has it (DESIGN-DETAILS 3.2.8). Assembly refuses a message
 	// past it before the preamble.
 	HeaderBlockMaxByteCount int
+	// How long a send the edge answered KEYS for, with no older ready key set to try, is held before it is
+	// tried again: 6 h, leaving its outbox entry for a host whose proofs the edge accepts (DESIGN-DETAILS
+	// 3.2.7, 3.5).
+	KeysRetryTimeout time.Duration
+	// How often a prover host measures itself again with its key set unchanged: 7 days. It also measures
+	// when a family becomes ready and when the key set changes (DESIGN-DETAILS 3.7's SMTP-M9-09).
+	ProverMeasureInterval time.Duration
+	// The envelope group's most commands on the one retry after the MX's replies overflowed every shape:
+	// 1, each command proven alone, and kept for the MX host beside its mode (DESIGN-DETAILS 3.2.4, 3.5).
+	EnvelopeRetryGroupCount int
+	// How long one SMTP_PROOF or SMTP_HANDSHAKE call to the edge waits for its answer: 30 s, inside
+	// §6.6's 55 s, where a part verifies in milliseconds.
+	ProofCallTimeout time.Duration
+	// Calls one part or handshake gets before the send fails: 2. A part resent under its send_id and
+	// index, byte for byte, is idempotent at the edge (§14.5), so a call that timed out goes again with
+	// its request_id.
+	ProofCallAttemptCount int
+	// How long the sender waits for SmtpPreambleResult once its preamble is written: 10 min, past the
+	// edge's own MX resolution, dial and pre-TLS dialog, each of whose replies an MX may take 5 min over
+	// (RFC 5321 §4.5.3.2). The stream is reset past it, and the send held for its next retry.
+	PreambleResultTimeout time.Duration
+	// How many more streams a send opens at once after one that ended before its preamble's answer,
+	// as an edge crash ends it: 1, the §9 backup ticket (§14.9's failure row). One that ends later holds
+	// the send for its next retry, since the MX may have seen MAIL.
+	EdgeResetRetryCount int
+	// How long the sender's self-report of a send, SmtpOutcome, may take to hand off: 15 s (§14.4's
+	// step 5). It only tightens, so one that cannot go is dropped.
+	OutcomeSendTimeout time.Duration
+	// How often a prover host lists the member's o/ when nothing wakes it sooner: 1 min, under the 10 min
+	// another host waits before taking over an entry (D-SMTP-18).
+	OutboxPollInterval time.Duration
+	// How often a prover host runs its idle work, the key checks and measures, when no send's end wakes it
+	// sooner: 1 min (DESIGN-DETAILS 3.7's SMTP-M9-09).
+	ProverIdleInterval time.Duration
+	// How long a SmtpStatus of HALTED or QUOTA that names no retry_after_ms holds the queue: 24 h, a halt's
+	// length (§14.8). One that names it holds that long.
+	StatusHoldTimeout time.Duration
 }
 
 // A fresh value each call, sharing nothing mutable with any other (connect/CODESTYLE.md:151).
@@ -113,6 +150,17 @@ func DefaultSmtpSenderSettings() *SmtpSenderSettings {
 		DkimExpireTimeout:          7 * 24 * time.Hour,
 		HeaderHeadMaxByteCount:     720,
 		HeaderBlockMaxByteCount:    16 * 1024,
+		KeysRetryTimeout:           6 * time.Hour,
+		ProverMeasureInterval:      7 * 24 * time.Hour,
+		EnvelopeRetryGroupCount:    1,
+		ProofCallTimeout:           30 * time.Second,
+		ProofCallAttemptCount:      2,
+		PreambleResultTimeout:      10 * time.Minute,
+		EdgeResetRetryCount:        1,
+		OutcomeSendTimeout:         15 * time.Second,
+		OutboxPollInterval:         time.Minute,
+		ProverIdleInterval:         time.Minute,
+		StatusHoldTimeout:          24 * time.Hour,
 	}
 }
 
@@ -134,6 +182,9 @@ func (self *SmtpSenderSettings) validate() error {
 	}
 	if self.HeaderBlockMaxByteCount < self.HeaderHeadMaxByteCount {
 		return fmt.Errorf("%w: Connect.SmtpSender's header head passes its header block", errInvalidSettings)
+	}
+	if MaxCallTimeout < self.ProofCallTimeout {
+		return fmt.Errorf("%w: Connect.SmtpSender's proof calls wait past §6.6's maximum", errInvalidSettings)
 	}
 	return nil
 }

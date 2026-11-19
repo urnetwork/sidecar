@@ -678,6 +678,9 @@ barrier smtp.mta_sts_write.after smtp_mtasts.go
 barrier smtp.mta_sts_write.before smtp_mtasts.go
 barrier smtp.pin_write.after smtp_pins.go
 barrier smtp.pin_write.before smtp_pins.go
+barrier smtp.preamble smtp_connection.go
+barrier smtp.send smtp_connection.go
+barrier smtp.send.after smtp_connection.go
 barrier smtp.tls_allowance_write.after smtp_tls_allowance.go
 barrier smtp.tls_allowance_write.before smtp_tls_allowance.go
 barrier smtpedge.debit_mail.after smtpedgeservice/connection.go

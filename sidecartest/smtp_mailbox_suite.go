@@ -53,7 +53,7 @@ func smtpMailboxSuiteCases() []smtpMailboxSuiteCase {
 		{name: "outcomes read back as written, and a write replaces them", run: caseSmtpMailboxOutcomesReplace},
 		{name: "a missing or/ record is not found", run: caseSmtpMailboxOutcomesNotFound},
 		{name: "an outcome the wire cannot carry is refused and changes nothing", run: caseSmtpMailboxOutcomesRefused},
-		{name: "a prover measure lists by its sidecar and a rewrite replaces it", run: caseSmtpMailboxProverMeasure},
+		{name: "a prover record lists by its sidecar, every field kept, and a rewrite replaces it", run: caseSmtpMailboxProverMeasure},
 		{name: "a dsn is taken, and one with no bytes is refused", run: caseSmtpMailboxDsn},
 	}
 }
@@ -210,25 +210,38 @@ func caseSmtpMailboxOutcomesRefused(ctx context.Context, mailbox sidecar.SmtpMai
 
 func caseSmtpMailboxProverMeasure(ctx context.Context, mailbox sidecar.SmtpMailbox, plant SmtpMailboxPlantOutbox) error {
 	sidecarId := sidecar.NewId()
-	measure := &sidecar.SmtpProverMeasure{DataProofBytes: 1024 * 1024, DataBytesPerSecond: 150, MeasureTime: time.UnixMilli(time.Now().UnixMilli())}
-	if err := mailbox.WriteProverMeasure(ctx, sidecarId, measure); err != nil {
+	record := &sidecar.SmtpProverRecord{
+		Measure: sidecar.SmtpProverMeasure{
+			DataProofBytes: 1024 * 1024, DataBytesPerSecond: 150, MeasureTime: time.UnixMilli(time.Now().UnixMilli()),
+			UnitTime: 5 * time.Second, HeadByteCount: 831, HeaderRecordByteCount: 1199, EnvelopeGroupCount: 13,
+		},
+		KeySet:      bytes.Repeat([]byte{0x6b}, 32),
+		ReadySuites: []uint16{0x1301, 0xc02b},
+	}
+	same := func(got *sidecar.SmtpProverRecord, want *sidecar.SmtpProverRecord) bool {
+		return got != nil && got.Measure == want.Measure && bytes.Equal(got.KeySet, want.KeySet) && slices.Equal(got.ReadySuites, want.ReadySuites)
+	}
+	if err := mailbox.WriteProverRecord(ctx, sidecarId, record); err != nil {
 		return err
 	}
-	measures, err := mailbox.ListProverMeasures(ctx)
+	records, err := mailbox.ListProverRecords(ctx)
 	if err != nil {
 		return err
 	}
-	if got := measures[sidecarId]; got == nil || *got != *measure {
-		return fmt.Errorf("listed %+v, want %+v", got, measure)
+	if got := records[sidecarId]; !same(got, record) {
+		return fmt.Errorf("listed %+v, want %+v", got, record)
 	}
-	rewritten := &sidecar.SmtpProverMeasure{DataProofBytes: 600 * 1024, DataBytesPerSecond: 90, MeasureTime: measure.MeasureTime.Add(time.Hour)}
-	if err := mailbox.WriteProverMeasure(ctx, sidecarId, rewritten); err != nil {
+	rewritten := &sidecar.SmtpProverRecord{
+		Measure: sidecar.SmtpProverMeasure{DataProofBytes: 600 * 1024, DataBytesPerSecond: 90, MeasureTime: record.Measure.MeasureTime.Add(time.Hour)},
+		KeySet:  bytes.Repeat([]byte{0x6c}, 32),
+	}
+	if err := mailbox.WriteProverRecord(ctx, sidecarId, rewritten); err != nil {
 		return err
 	}
-	if measures, err = mailbox.ListProverMeasures(ctx); err != nil {
+	if records, err = mailbox.ListProverRecords(ctx); err != nil {
 		return err
 	}
-	if got := measures[sidecarId]; got == nil || *got != *rewritten {
+	if got := records[sidecarId]; !same(got, rewritten) {
 		return fmt.Errorf("after a rewrite listed %+v, want %+v", got, rewritten)
 	}
 	return nil

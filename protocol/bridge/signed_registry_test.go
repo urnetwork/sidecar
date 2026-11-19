@@ -82,6 +82,8 @@ func TestSignedTypeNumbersStable(t *testing.T) {
 		{signedType: SignedType_SIGNED_TLS_EDGE_LOGIN, number: 0x1502},
 		{signedType: SignedType_SIGNED_TLS_LINK, number: 0x1503},
 
+		{signedType: SignedType_SIGNED_SMTP_OUTBOX, number: 0x1601},
+
 		{signedType: SignedType_SIGNED_RECORD_HEADER, number: 0x1801},
 		{signedType: SignedType_SIGNED_APPROVAL_DECISION, number: 0x1802},
 		{signedType: SignedType_SIGNED_APPROVAL_CANCEL, number: 0x1803},

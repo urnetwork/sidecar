@@ -5,7 +5,9 @@
 // host that reached it, below which nothing is sent to the domain through the host while it holds.
 // Beside them each MX host's post-TLS mode from its last session, and each recipient domain's last
 // session, its host and mode, which SmtpSender.Check reports as the domain's mode for as long as a pin
-// would hold (§14.5).
+// would hold (§14.5); and the envelope group count an MX host needed on the one retry after its replies
+// overflowed every shape, kept beside its mode as long, so later sends to it start there (DESIGN-DETAILS
+// 3.5, 3.7's SMTP-M9-08).
 //
 // A pin is keyed by the pair (recipient domain, MX host), both lowercase with no trailing dot, since TL1
 // and TL2 are properties of the recipient domain: its MX RRset validating under DNSSEC before the host's
@@ -24,7 +26,8 @@
 //
 // Layout: one sealed file, tls-pins, in the sender's directory of the store (§5.9's <component>/), as
 // JSON rewritten whole by Commit, so a kill leaves the old pins or the new ones: each pair's level
-// (pins, domain beside mx_host), each host's mode (modes) and each domain's last session (domains).
+// (pins, domain beside mx_host), each host's mode (modes), each domain's last session (domains) and each
+// host's envelope group count (group_counts, which a file written before it lacks, read as none).
 // Hosts and domains are names this device mails, so they live inside the sealed file and never in a
 // file's name, which the store keeps in the clear. A file that fails to open or parse is
 // ErrSidecarStoreFailed, never read as no pins, since a pin read as absent would let a downgrade through
@@ -86,6 +89,9 @@ type SmtpPin struct {
 	Mode SmtpMode
 	// When Mode was seen. It reads as unknown PinTimeout after.
 	ModeTime time.Time
+	// The most commands one envelope group held on the host's last retry after its replies overflowed every
+	// shape, 0 for none: SmtpProofJob.EnvelopeGroupMaxCount for later sends through it (DESIGN-DETAILS 3.5).
+	EnvelopeGroupMaxCount int
 }
 
 // When the pin stops holding.
@@ -129,6 +135,12 @@ type smtpPinMode struct {
 	time time.Time
 }
 
+// One MX host's envelope group count, from the retry that needed it.
+type smtpPinGroupCount struct {
+	count int
+	time  time.Time
+}
+
 // One recipient domain's last session.
 type smtpPinDomain struct {
 	mxHost string
@@ -138,10 +150,11 @@ type smtpPinDomain struct {
 
 // The stored file.
 type smtpPinFile struct {
-	Version int                    `json:"version"`
-	Pins    []*smtpPinRecord       `json:"pins"`
-	Modes   []*smtpPinModeRecord   `json:"modes"`
-	Domains []*smtpPinDomainRecord `json:"domains"`
+	Version     int                        `json:"version"`
+	Pins        []*smtpPinRecord           `json:"pins"`
+	Modes       []*smtpPinModeRecord       `json:"modes"`
+	Domains     []*smtpPinDomainRecord     `json:"domains"`
+	GroupCounts []*smtpPinGroupCountRecord `json:"group_counts,omitempty"`
 }
 
 // A pin's stored form: one pair's level, and when the pair last reached it.
@@ -159,6 +172,13 @@ type smtpPinModeRecord struct {
 	ModeTimeMs int64  `json:"mode_time_ms"`
 }
 
+// A host's envelope group count's stored form.
+type smtpPinGroupCountRecord struct {
+	MxHost string `json:"mx_host"`
+	Count  int    `json:"count"`
+	TimeMs int64  `json:"time_ms"`
+}
+
 // A domain's stored form.
 type smtpPinDomainRecord struct {
 	Domain string `json:"domain"`
@@ -169,26 +189,29 @@ type smtpPinDomainRecord struct {
 
 // Every pin, mode and domain session, as memory holds them.
 type smtpPinState struct {
-	pairLevels     map[smtpPinPair]smtpPinLevel
-	mxHostModes    map[string]smtpPinMode
-	domainSessions map[string]smtpPinDomain
+	pairLevels        map[smtpPinPair]smtpPinLevel
+	mxHostModes       map[string]smtpPinMode
+	domainSessions    map[string]smtpPinDomain
+	mxHostGroupCounts map[string]smtpPinGroupCount
 }
 
 // No pins, no modes and no sessions.
 func newSmtpPinState() *smtpPinState {
 	return &smtpPinState{
-		pairLevels:     map[smtpPinPair]smtpPinLevel{},
-		mxHostModes:    map[string]smtpPinMode{},
-		domainSessions: map[string]smtpPinDomain{},
+		pairLevels:        map[smtpPinPair]smtpPinLevel{},
+		mxHostModes:       map[string]smtpPinMode{},
+		domainSessions:    map[string]smtpPinDomain{},
+		mxHostGroupCounts: map[string]smtpPinGroupCount{},
 	}
 }
 
 // A copy whose maps share nothing with this one.
 func (self *smtpPinState) clone() *smtpPinState {
 	return &smtpPinState{
-		pairLevels:     maps.Clone(self.pairLevels),
-		mxHostModes:    maps.Clone(self.mxHostModes),
-		domainSessions: maps.Clone(self.domainSessions),
+		pairLevels:        maps.Clone(self.pairLevels),
+		mxHostModes:       maps.Clone(self.mxHostModes),
+		domainSessions:    maps.Clone(self.domainSessions),
+		mxHostGroupCounts: maps.Clone(self.mxHostGroupCounts),
 	}
 }
 
@@ -197,6 +220,9 @@ func (self *smtpPinState) pin(pair smtpPinPair, level smtpPinLevel) *SmtpPin {
 	pin := &SmtpPin{RecipientDomain: pair.recipientDomain, MxHost: pair.mxHost, Level: level.level, PinTime: level.pinTime}
 	if mode, ok := self.mxHostModes[pair.mxHost]; ok {
 		pin.Mode, pin.ModeTime = mode.mode, mode.time
+	}
+	if groupCount, ok := self.mxHostGroupCounts[pair.mxHost]; ok {
+		pin.EnvelopeGroupMaxCount = groupCount.count
 	}
 	return pin
 }
@@ -341,6 +367,19 @@ func decodeSmtpPinFile(data []byte) (*smtpPinState, int, error) {
 		}
 		state.domainSessions[pair.recipientDomain] = smtpPinDomain{mxHost: pair.mxHost, mode: mode, time: time.UnixMilli(record.TimeMs)}
 	}
+	for _, record := range file.GroupCounts {
+		if record == nil {
+			return nil, 0, fmt.Errorf("%w: an smtp host group count is malformed", ErrSidecarStoreFailed)
+		}
+		mxHost, ok := smtpTlsName(record.MxHost)
+		if !ok || mxHost != record.MxHost || record.Count <= 0 || record.TimeMs <= 0 {
+			return nil, 0, fmt.Errorf("%w: an smtp host group count is malformed", ErrSidecarStoreFailed)
+		}
+		if _, ok := state.mxHostGroupCounts[mxHost]; ok {
+			return nil, 0, fmt.Errorf("%w: an smtp host group count is stored twice", ErrSidecarStoreFailed)
+		}
+		state.mxHostGroupCounts[mxHost] = smtpPinGroupCount{count: record.Count, time: time.UnixMilli(record.TimeMs)}
+	}
 	return state, droppedCount, nil
 }
 
@@ -374,6 +413,10 @@ func (self *smtpPinState) encode() ([]byte, error) {
 			TimeMs: session.time.UnixMilli(),
 		})
 	}
+	for _, mxHost := range slices.Sorted(maps.Keys(self.mxHostGroupCounts)) {
+		groupCount := self.mxHostGroupCounts[mxHost]
+		file.GroupCounts = append(file.GroupCounts, &smtpPinGroupCountRecord{MxHost: mxHost, Count: groupCount.count, TimeMs: groupCount.time.UnixMilli()})
+	}
 	return json.Marshal(file)
 }
 
@@ -400,6 +443,9 @@ func (self *smtpPinState) prune(now time.Time, timeout time.Duration, maxCount i
 	maps.DeleteFunc(self.domainSessions, func(domain string, session smtpPinDomain) bool {
 		return !now.Before(session.time.Add(timeout))
 	})
+	maps.DeleteFunc(self.mxHostGroupCounts, func(mxHost string, groupCount smtpPinGroupCount) bool {
+		return !now.Before(groupCount.time.Add(timeout))
+	})
 	smtpPinEvict(self.pairLevels, maxCount, func(a smtpPinPair, b smtpPinPair) int {
 		return cmp.Or(self.pairLevels[a].pinTime.Compare(self.pairLevels[b].pinTime), a.compare(b))
 	})
@@ -408,6 +454,9 @@ func (self *smtpPinState) prune(now time.Time, timeout time.Duration, maxCount i
 	})
 	smtpPinEvict(self.domainSessions, maxCount, func(a string, b string) int {
 		return cmp.Or(self.domainSessions[a].time.Compare(self.domainSessions[b].time), strings.Compare(a, b))
+	})
+	smtpPinEvict(self.mxHostGroupCounts, maxCount, func(a string, b string) int {
+		return cmp.Or(self.mxHostGroupCounts[a].time.Compare(self.mxHostGroupCounts[b].time), strings.Compare(a, b))
 	})
 }
 
@@ -550,6 +599,43 @@ func (self *SmtpPinStore) RecordMode(recipientDomain string, mxHost string, mode
 		state.domainSessions[pair.recipientDomain] = smtpPinDomain{mxHost: pair.mxHost, mode: mode, time: now}
 		return nil
 	})
+}
+
+// Keeps count, the envelope group bound a retry to mxHost needed after its replies overflowed every shape,
+// beside the host's mode, for PinTimeout (DESIGN-DETAILS 3.5): recipientDomain's later sends start there.
+func (self *SmtpPinStore) RecordEnvelopeGroupCount(recipientDomain string, mxHost string, count int) error {
+	pair, ok := smtpPinPairOf(recipientDomain, mxHost)
+	if !ok || count <= 0 {
+		return errSmtpPinArgument
+	}
+	return self.update(func(state *smtpPinState, now time.Time) error {
+		state.mxHostGroupCounts[pair.mxHost] = smtpPinGroupCount{count: count, time: now}
+		return nil
+	})
+}
+
+// The envelope group bound kept for the MX host of recipientDomain's last session, 0 when none is: what a send
+// to the domain starts with, since the edge names its MX only after the preamble.
+func (self *SmtpPinStore) EnvelopeGroupMaxCount(recipientDomain string) (int, error) {
+	domain, ok := smtpTlsName(recipientDomain)
+	if !ok {
+		return 0, errSmtpPinArgument
+	}
+	if err := self.load(); err != nil {
+		return 0, err
+	}
+	now := self.clock.Now()
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	session, ok := self.state.domainSessions[domain]
+	if !ok || !now.Before(session.time.Add(self.settings.PinTimeout)) {
+		return 0, nil
+	}
+	groupCount, ok := self.state.mxHostGroupCounts[session.mxHost]
+	if !ok || !now.Before(groupCount.time.Add(self.settings.PinTimeout)) {
+		return 0, nil
+	}
+	return groupCount.count, nil
 }
 
 // The mode of recipientDomain's last session, BDAT or DATA, while it is younger than PinTimeout, else

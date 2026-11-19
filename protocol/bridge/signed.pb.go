@@ -100,6 +100,9 @@ const (
 	SignedType_SIGNED_TLS_KEY_ATTESTATION SignedType = 5377
 	SignedType_SIGNED_TLS_EDGE_LOGIN      SignedType = 5378
 	SignedType_SIGNED_TLS_LINK            SignedType = 5379
+	// 0x16xx §14: §15.7's o/ entry, purpose smtp-outbox, by the composing device's identity key (D-SMTP-18, owner
+	// decision 445), its body SmtpOutboxEntry. 0x17xx §15, 0x1Bxx §12
+	SignedType_SIGNED_SMTP_OUTBOX SignedType = 5633
 	// 0x1Axx §5: the identity binding (plan-CORE-binding-wire #1), purposes binding-client by the ClientKey and
 	// binding-identity by the identity key over one SignedSidecarIdentityBinding's body; then an agent subkey's
 	// certificate, purpose agent-cert by the identity key (QD-159), which rides only inside the sealed provenance it
@@ -183,6 +186,7 @@ var (
 		5377: "SIGNED_TLS_KEY_ATTESTATION",
 		5378: "SIGNED_TLS_EDGE_LOGIN",
 		5379: "SIGNED_TLS_LINK",
+		5633: "SIGNED_SMTP_OUTBOX",
 		6657: "SIGNED_SIDECAR_BINDING",
 		6658: "SIGNED_AGENT_CERT",
 		6145: "SIGNED_RECORD_HEADER",
@@ -255,6 +259,7 @@ var (
 		"SIGNED_TLS_KEY_ATTESTATION": 5377,
 		"SIGNED_TLS_EDGE_LOGIN":      5378,
 		"SIGNED_TLS_LINK":            5379,
+		"SIGNED_SMTP_OUTBOX":         5633,
 		"SIGNED_SIDECAR_BINDING":     6657,
 		"SIGNED_AGENT_CERT":          6658,
 		"SIGNED_RECORD_HEADER":       6145,
@@ -504,7 +509,7 @@ const file_protocol_bridge_signed_proto_rawDesc = "" +
 	"\tsignature\x18\x04 \x01(\fR\tsignature\x12\x19\n" +
 	"\bact_size\x18\x05 \x01(\rR\aactSize\x12\x1b\n" +
 	"\tact_index\x18\x06 \x01(\rR\bactIndex\x12\x19\n" +
-	"\bact_path\x18\a \x03(\fR\aactPath*\xd9\x0e\n" +
+	"\bact_path\x18\a \x03(\fR\aactPath*\xf2\x0e\n" +
 	"\n" +
 	"SignedType\x12\x14\n" +
 	"\x10SIGNED_TYPE_NONE\x10\x00\x12\x1f\n" +
@@ -559,7 +564,8 @@ const file_protocol_bridge_signed_proto_rawDesc = "" +
 	"\x11SIGNED_EVS_IMPORT\x10\x84(\x12\x1f\n" +
 	"\x1aSIGNED_TLS_KEY_ATTESTATION\x10\x81*\x12\x1a\n" +
 	"\x15SIGNED_TLS_EDGE_LOGIN\x10\x82*\x12\x14\n" +
-	"\x0fSIGNED_TLS_LINK\x10\x83*\x12\x1b\n" +
+	"\x0fSIGNED_TLS_LINK\x10\x83*\x12\x17\n" +
+	"\x12SIGNED_SMTP_OUTBOX\x10\x81,\x12\x1b\n" +
 	"\x16SIGNED_SIDECAR_BINDING\x10\x814\x12\x16\n" +
 	"\x11SIGNED_AGENT_CERT\x10\x824\x12\x19\n" +
 	"\x14SIGNED_RECORD_HEADER\x10\x810\x12\x1d\n" +
