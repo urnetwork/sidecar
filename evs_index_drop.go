@@ -39,10 +39,11 @@
 //	holds      a hold keeps the index content that existed at its placement, the versions a rewrite replaces among
 //	           it, and never refuses the DROP or pauses an ERASE (§11.14's holds row; owner decision 184): nothing here
 //	           reads a hold, and an erasure under one finds the held versions in the ref's history (evs_index_erase.go)
-//	limit      at the storage limit heads ride content pushes and stop with them: a DROP whose rewrites upload a shard
-//	           is refused as one whose kept head needs an upload is, evs's QuotaRefusal surfacing (EVS2-M10-21), and a
-//	           backfill's rewrite comes back to its schedule unsent and waits, search answering from the partitions as
-//	           they stand
+//	limit      at the storage limit or while spent heads ride content pushes and stop with them: a DROP whose rewrites
+//	           upload a shard is refused, and goes again once without them, left to the backfill, since a DROP frees
+//	           storage and its index must not block it (QD-1088; EVS2-M10-21's loop); a backfill's rewrite comes back to
+//	           its schedule unsent and waits, search answering from the partitions as they stand, the listed versions
+//	           masked by the kept one
 //
 // K_ref is derived here, from the repo key as every doc_key is (EvsRepoKey.DeriveKey hooks it); no other key is
 // created, derived or unwrapped. Barriers evs.index.drop.built and evs.index.drop.pushed, keyed <repo>:<ref>. A path is
