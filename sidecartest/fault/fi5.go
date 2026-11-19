@@ -28,8 +28,10 @@
 //	            surviving reader's pin under an EvsReseed, where §19.10 says a lost ERASE may let a stale mirror's slot
 //	            keys return. The residual is a named exception: an unnamed return fails, and so does a return the
 //	            store's history still erases, close report or not
-//	dropped     a format-2 drop table (drops/<repo>/_) means a drop ran, and its clause needs FI-27's bound
-//	            (TEST-M10-01), so FI-5 fails closed on one rather than pass a returned dropped object
+//	dropped     an object a drop's DELETE removed (fi16.go's reading classes it, FI-27 judges the DELETE), once a check
+//	            finds it gone, is never stored again, a stale re-seed included, but as FI-27 bounds it: where a close
+//	            report names the repo's drop as re-seeded from a stale mirror (CloseReport.Drops), until that drop's
+//	            job runs again (TEST-M10-01)
 //
 // Readings and gaps, each in TEST-M2-06's report: the restore's closure is held at the check that finds the restore,
 // not after, since CONSUME, ERASE and rotation change a live repo's closure, which FI-1 holds from then on; a deletion
@@ -91,6 +93,16 @@ type CloseReport struct {
 	// The repos that came back only below a surviving reader's pin, under an EvsReseed: where a lost ERASE may let a
 	// stale mirror's slot keys return (§11.12's residual).
 	BelowPin []*CloseReportBelowPin
+	// The drops whose re-seed came from a stale mirror, so their deleted objects may return until each re-seeded
+	// drop's job runs again (FI-27's last clause).
+	Drops []*CloseReportDrop
+}
+
+// One drop a close report names as re-seeded from a stale mirror.
+type CloseReportDrop struct {
+	RepoId sidecar.Id
+	// The drop's 16 B drop_id.
+	DropId []byte
 }
 
 // One repo's ref a close report names as come back below a surviving reader's pin.
@@ -108,6 +120,9 @@ func RecordCloseReport(net *Net, report *CloseReport) {
 	for _, belowPin := range report.BelowPin {
 		belowPinCopy := *belowPin
 		copied.BelowPin = append(copied.BelowPin, &belowPinCopy)
+	}
+	for _, drop := range report.Drops {
+		copied.Drops = append(copied.Drops, &CloseReportDrop{RepoId: drop.RepoId, DropId: slices.Clone(drop.DropId)})
 	}
 	memory.stateLock.Lock()
 	defer memory.stateLock.Unlock()
@@ -274,7 +289,7 @@ func (self *fi5Memory) checkRepo(ctx context.Context, oracle *Oracle, evsMemory 
 	if repo.walkedBy == oracle {
 		// nothing of a repo whose walk an earlier check made has changed since that check
 		errs = append(errs, self.checkErased(ctx, oracle, evsMemory, known, repo)...)
-		errs = append(errs, fi5CheckDrops(ctx, oracle, repo)...)
+		errs = append(errs, fi5CheckDrops(ctx, oracle, repo, self.reseededDropsWithLock())...)
 	}
 	return errs
 }
@@ -895,17 +910,11 @@ func (self *fi5Memory) closeReportNames(repoId sidecar.Id) bool {
 	return false
 }
 
-// A drop table means a format-2 drop ran, whose dropped objects FI-27 bounds (TEST-M10-01): fail closed until then.
-func fi5CheckDrops(ctx context.Context, oracle *Oracle, repo *evsStoreRepo) []error {
-	if repo.clusterId == "" {
+// A dropped object never returns, a stale re-seed included, but as FI-27 bounds it: fi27.go's droppedStayGone over
+// the objects fi16.go's reading classed a drop's, in a repo of format 2, which alone runs drops.
+func fi5CheckDrops(ctx context.Context, oracle *Oracle, repo *evsStoreRepo, reseeded map[sidecar.Id]bool) []error {
+	if repo.object.GetFormat() < sidecar.EvsRepoFormat2 {
 		return nil
 	}
-	object, err := oracle.View.Object(ctx, repo.clusterId, evsOracleRepoPrefix("drops/", repo.repoId)+"_")
-	if err != nil {
-		return []error{err}
-	}
-	if object == nil {
-		return nil
-	}
-	return []error{fmt.Errorf("repo %s holds a drop table, and FI-5's dropped-object clause needs FI-27's bound (TEST-M10-01): %w", repo.repoId, ErrInvariantUnbuilt)}
+	return evsFormat2Of(ctx, oracle).droppedStayGone("FI-5", &repo.repoId, reseeded)
 }

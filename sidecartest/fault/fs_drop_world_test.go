@@ -4,7 +4,9 @@ package fault
 // refs on fake clusters, written as evs writes it, each kind-1 segment and slot its versions name stored, and a drop
 // job over the real resolve, mark, verify (dropverify, injected as taskworker injects it) and deletes. DROP pushes are
 // committed by hand and reach the table through DropSink as step 8 appends them, since the DROP push route is
-// EVS2-M10-09's.
+// EVS2-M10-09's. newFsDropWorldOn builds the same world on a Net's stores, so the FI oracles read it (TEST-M10-01):
+// every request through the Net's blob recorder, the repo placed, the Net's gates admitting its network to format 2
+// with both modes on, and the job's horizon the nightly pass's own, read from the store.
 
 import (
 	"bytes"
@@ -18,6 +20,8 @@ import (
 	"time"
 
 	"google.golang.org/protobuf/proto"
+
+	"github.com/urnetwork/connect"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/evsservice"
@@ -138,20 +142,39 @@ type fsDropWorld struct {
 	format2      *fsDropFormat2
 	pushSeq      int
 	entrySeq     int
+	// what engines run on: the fake host's own, or a Net's, whose Blobs record every request
+	serviceHost *sidecar.ServiceHost
+	// the Net it was built on, nil for its own fakes
+	net *Net
+	// the job's horizon read from the store, nil for the schedule's own (horizon)
+	storeHorizon evsservice.DropHorizonSource
 }
 
 func newFsDropWorld(t *testing.T) *fsDropWorld {
+	return newFsDropWorldOn(t, nil)
+}
+
+// See the file header: on net's stores, or on fakes of its own when net is nil.
+func newFsDropWorldOn(t *testing.T, net *Net) *fsDropWorld {
 	ctx := t.Context()
-	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
-	host := sidecartest.NewFakeHost(ctx, clock, nil, nil, nil)
+	var clock *sidecartest.FakeClock
+	var host *sidecartest.FakeHost
+	var serviceHost *sidecar.ServiceHost
+	if net == nil {
+		clock = sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
+		host = sidecartest.NewFakeHost(ctx, clock, nil, nil, nil)
+		serviceHost = host.ServiceHost()
+	} else {
+		clock, host, serviceHost = net.Clock(), net.Fakes(), net.Host()
+	}
 	sidecartest.RegisterEvsTwins(host.Redis)
 	settings := evsservice.DefaultEvsSettings()
 	settings.BatchFlushDelay = 0
-	cluster, err := host.Blobs.Cluster("meta-1")
+	cluster, err := serviceHost.Blobs.Cluster("meta-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	segment, err := host.Blobs.SegmentCluster()
+	segment, err := serviceHost.Blobs.SegmentCluster()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,12 +191,13 @@ func newFsDropWorld(t *testing.T) *fsDropWorld {
 	world := &fsDropWorld{
 		t: t, ctx: ctx, clock: clock, host: host, cluster: cluster, segment: segment, settings: settings, dropSettings: dropSettings,
 		heads:   evsservice.NewHeadStore(clock, host.ClockCheck, host.Redis, settings, sidecar.NewNoopLogger()),
-		batches: evsservice.NewBatchWriter(ctx, clock, host.ClockCheck, host.Blobs, nil, settings, sidecar.NewNoopLogger()),
+		batches: evsservice.NewBatchWriter(ctx, clock, host.ClockCheck, serviceHost.Blobs, nil, settings, sidecar.NewNoopLogger()),
 		builder: sidecar.NewEvsStatementBuilder(func(purpose string, signedType bridge.SignedType, body []byte, agentId *sidecar.Id) (*bridge.Signed, error) {
 			return &bridge.Signed{Body: bytes.Clone(body), SignerId: signerId.Bytes(), Signature: make([]byte, 64), Type: uint32(signedType)}, nil
 		}),
 		paidCtx: grant.Context(), repoId: fsDropId16("repo"), networkId: fsDropId16("network"), signerId: signerId,
 		refs: map[sidecar.Id]*fsDropRef{}, horizon: &fsDropHorizon{}, format2: &fsDropFormat2{mode: sidecar.Format2On},
+		serviceHost: serviceHost, net: net,
 	}
 	repoBytes, err := proto.Marshal(&protocol.EvsRepoObject{
 		RepoId: world.repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL, State: protocol.EvsRepoState_EVS_REPO_ACTIVE, Format: 2,
@@ -184,6 +208,31 @@ func newFsDropWorld(t *testing.T) *fsDropWorld {
 	}
 	if _, err := cluster.PutIfNoneMatch(world.paidCtx, evsservice.RepoKey(world.repoId), repoBytes, nil); err != nil {
 		t.Fatal(err)
+	}
+	if net != nil {
+		// placed, as the oracle's walk finds a repo, and admitted to format 2 with both modes on, as the oracle reads
+		// the modes from the Net's gates
+		placeBytes, err := (&sidecar.EvsRepoPlace{ClusterId: cluster.ClusterId(), CreatorSidecarId: signerId}).Marshal()
+		if err != nil {
+			t.Fatal(err)
+		}
+		first, err := serviceHost.Blobs.FirstCluster()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := first.PutIfNoneMatch(world.paidCtx, sidecar.EvsPlaceKey(world.repoId), placeBytes, nil); err != nil {
+			t.Fatal(err)
+		}
+		network := connect.Id(world.networkId).String()
+		gates := fmt.Sprintf("sidecar:\n  evs: {enabled: true, networks: [%q]}\n  format2: {enabled: true, networks: [%q], percent: 0, purge: \"on\", drop: \"on\"}\n", network, network)
+		if err := host.Gates.Set(gates); err != nil {
+			t.Fatal(err)
+		}
+		nightly, err := evsservice.NewNightlyPass(serviceHost, &evsservice.NightlyPassDeps{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		world.storeHorizon = nightly
 	}
 	return world
 }
@@ -465,7 +514,7 @@ func (self *fsDropWorld) drop(refId sidecar.Id, dropId sidecar.Id, paths []*prot
 		self.t.Fatal(err)
 	}
 	entry := window[len(window)-1]
-	table, err := evsservice.NewDropTable(self.host.ServiceHost(), evsservice.NewBudgetedBlobs(self.host.Blobs), self.dropSettings, nil)
+	table, err := evsservice.NewDropTable(self.serviceHost, evsservice.NewBudgetedBlobs(self.serviceHost.Blobs), self.dropSettings, nil)
 	if err != nil {
 		self.t.Fatal(err)
 	}
@@ -479,7 +528,7 @@ func (self *fsDropWorld) drop(refId sidecar.Id, dropId sidecar.Id, paths []*prot
 // A drop job instance over the real seams.
 func (self *fsDropWorld) job(instance string) *evsservice.DropJob {
 	self.t.Helper()
-	host := self.host.ServiceHost()
+	host := self.serviceHost
 	resolver, err := evsservice.NewDropResolve(host, &evsservice.DropResolveDeps{Settings: self.dropSettings, EvsSettings: self.settings})
 	if err != nil {
 		self.t.Fatal(err)
@@ -498,8 +547,12 @@ func (self *fsDropWorld) job(instance string) *evsservice.DropJob {
 // A drop job instance over the seams given.
 func (self *fsDropWorld) jobWith(instance string, resolver evsservice.DropResolver, marker evsservice.DropMarker, verifier evsservice.DropVerifier, deleter evsservice.DropDeleter) *evsservice.DropJob {
 	self.t.Helper()
-	job, err := evsservice.NewDropJob(self.host.ServiceHost(), &evsservice.DropJobDeps{
-		Resolver: resolver, Marker: marker, Verifier: verifier, Deleter: deleter, Locks: fsDropNoLock{}, Horizon: self.horizon,
+	var horizon evsservice.DropHorizonSource = self.horizon
+	if self.storeHorizon != nil {
+		horizon = self.storeHorizon
+	}
+	job, err := evsservice.NewDropJob(self.serviceHost, &evsservice.DropJobDeps{
+		Resolver: resolver, Marker: marker, Verifier: verifier, Deleter: deleter, Locks: fsDropNoLock{}, Horizon: horizon,
 		Format2: self.format2, Settings: self.dropSettings, EvsSettings: self.settings, Instance: fsDropId16("instance " + instance),
 	})
 	if err != nil {
@@ -554,7 +607,7 @@ func (self *fsDropWorld) runToEnd(job *evsservice.DropJob, runCount int) *evsser
 // The table's state of dropId.
 func (self *fsDropWorld) dropState(dropId sidecar.Id) evsservice.DropState {
 	self.t.Helper()
-	table, err := evsservice.NewDropTable(self.host.ServiceHost(), evsservice.NewBudgetedBlobs(self.host.Blobs), self.dropSettings, nil)
+	table, err := evsservice.NewDropTable(self.serviceHost, evsservice.NewBudgetedBlobs(self.serviceHost.Blobs), self.dropSettings, nil)
 	if err != nil {
 		self.t.Fatal(err)
 	}

@@ -37,7 +37,9 @@ type testEnvelopeClockWait struct {
 // unless the clock was made to fire them, which only a test of run asks for: run drops a group only once
 // a wait fires, so on any other clock it drops nothing, and the one sweep is the expire a test calls.
 // awaitWaitCount is how a test learns that a goroutine has reached its next wait, with no sleep, and
-// awaitWaitDue how it learns that one goroutine has while others set waits on the same clock.
+// awaitWaitDue how it learns that one goroutine has while others set waits on the same clock; waitAt finds
+// the wait for an instant one goroutine alone waits for, and onAfter holds a goroutine between timing its
+// wait and setting it.
 type testEnvelopeClock struct {
 	stateLock sync.Mutex
 	now       time.Time
@@ -46,6 +48,8 @@ type testEnvelopeClock struct {
 	waits      []testEnvelopeClockWait
 	// After calls so far
 	waitCount *MonitorValue[int]
+	// called by each After with its timeout before the wait is set, with no lock held; nil for none
+	onAfter func(timeout time.Duration)
 }
 
 // Starts at a fixed time, so a trace repeats.
@@ -63,8 +67,18 @@ func (self *testEnvelopeClock) Now() time.Time {
 	return self.now
 }
 
-// Fires when the test moves the clock past timeout from now.
+// Fires when the test moves the clock past timeout from now, the time as it reads once onAfter returns.
 func (self *testEnvelopeClock) After(timeout time.Duration) <-chan time.Time {
+	var onAfter func(timeout time.Duration)
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		onAfter = self.onAfter
+	}()
+	if onAfter != nil {
+		// unlocked, so a hook that holds its caller leaves the clock to the test
+		onAfter(timeout)
+	}
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	fire := make(chan time.Time, 1)
@@ -153,6 +167,27 @@ func (self *testEnvelopeClock) awaitWaitDue(count int, at time.Time) {
 		}
 		<-notify
 	}
+}
+
+// Whether a wait set after the clock's first count ends at exactly at and no Advance has fired it, with a
+// channel that closes at the next After. Where one goroutine alone waits for at, this is its own wait,
+// however many waits other loops set on the clock meanwhile.
+func (self *testEnvelopeClock) waitAt(count int, at time.Time) (bool, chan struct{}) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	// After counts under stateLock, so a wait set after this read closes the channel
+	_, notify := self.waitCount.Get()
+	set := slices.ContainsFunc(self.waits, func(wait testEnvelopeClockWait) bool {
+		return count < wait.ordinal && wait.at.Equal(at)
+	})
+	return set, notify
+}
+
+// Has each After from now on call onAfter with its timeout before it sets its wait, nil for none.
+func (self *testEnvelopeClock) setOnAfter(onAfter func(timeout time.Duration)) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.onAfter = onAfter
 }
 
 // What a test reaches into: a running reassembler, its budget and its clock.
