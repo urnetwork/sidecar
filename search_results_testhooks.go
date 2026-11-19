@@ -55,6 +55,12 @@ func (self *SearchTestWorld) textSource(repoId Id, refId Id) SearchTextSource {
 	}
 }
 
+// The world's content as a text source, as SearchTestDeviceArgs.Text gives one: what a device following several
+// worlds' refs answers a ref's documents from (SearchTestNetworkDeviceArgs.Text).
+func (self *SearchTestWorld) TextSource() SearchTextSource {
+	return self.textSource(self.repoId, self.refId)
+}
+
 // See SearchContentTextSource.Content: never a fetch, only what the world's content pushes wrote.
 func (self *SearchTestWorld) contentOf(ctx context.Context, repoId Id, refId Id, path []byte, version uint64) ([]byte, bool, error) {
 	if repoId != self.repoId || refId != self.refId {
