@@ -88,6 +88,26 @@ Stage: Later
 - **Held:** Nothing: no task or track waits on it.
 - **To bring back:** A design for each key. For capture: a person-only path and a Team refusal. For `reach`: how a block becomes requests under §8.5.
 
+### mcp-sshsig-approvals: SSH-signed approvals for high-risk actions
+Stage: Later, until a customer asks
+- **Deferred:** The member's SSHSIG on a high-risk approval, and with it a second risk level: a classifier or a policy field that marks an action high risk, and SSH-signed receipts (R-MCP-7; §16.6's approval channels; owner decision 279, which declined the build's recommendation of two risk levels; ledger id QD-014; the plan's MCP-M4-03).
+- **Why:** §16.6 added the SSHSIG to a high-risk approval, and nothing said what makes an action high risk or who computes it. The owner dropped it from v0 and every milestone until a customer asks (owner decision 279).
+- **Launch instead:** Every action's risk is normal. A decision carries its evidence channel, device, presence or harness, and a network's `requests` rules and `evidenceDefault` say which channels it accepts (§16.6, §8.5).
+- **Lost:** No second factor separates a public publish or a wide mailing from any other approved action.
+- **Dark in code:** `ApprovalDecision.sshsig` stays a reserved field, ignored wherever it is presented and never trusted; `SidecarRisk` keeps its two values, every action normal, and no policy field or classifier raises one (§16.8, §5.4). `KeyRegister` still takes a key of purpose `KEY_PURPOSE_SSHSIG` (§7.9), which nothing verifies a decision under.
+- **Held:** MCP-M4-03, the plan's task for the SSHSIG on high-risk decisions, is void while this stands.
+- **To bring back:** A customer asks. Then an owner decision on what makes an action high risk, a fixed classifier, a policy field on request rules or both, as owner decision 279's options not taken describe; `AclRequestRule` gains its risk field, and verifiers check the SSHSIG under the member's registered key.
+
+### mcp-card-closure-replay-check: The fresh-reader check on a directory admin's CLOSURE of a card or repo file
+Stage: Review phase, before M10's exit
+- **Deferred:** A reader-side check that holds a directory admin's push at a `d/` or `r/` path to the `cards` ref's own log: evs marks a CLOSURE's path versions, and a reader accepts an admin's push there only where the log shows a CLOSURE at that version whose content hash equals the version before it (§16.11's closure row; owner decision 636; ledger id QD-1100; the plan's RECORD-M10-05).
+- **Why:** The owner accepted the draft's rule for an erasure's CLOSURE and left this check to the review phase: it is a reader-side check, with no format change if the cards read already exposes a push's kind.
+- **Launch instead:** A reader accepts a directory admin's push at a `d/` or `r/` path only when its bytes are the very bytes its copy already accepted there, or else verify as the rightful writer's own Signed under every other rule, whose seq must rise (§16.11's closure row).
+- **Lost:** Until the check lands, a reader that has accepted nothing at a path, a fresh device or one whose copy was reset, has no seq to hold a rewrite to: a directory admin that kept the bytes of a writer's earlier Signed file could push them as a CLOSURE, and such a reader would show them as the writer's, a card within the 4,096-position bound of its `at`, a repo file at whatever position its signer named, until the writer's next write or its repair replaces them.
+- **Dark in code:** Nothing is built. The reader rule above is drafted and held by its tests.
+- **Held:** The review phase's work on the directory's erasure. An admin-signed eraser card, option 2 of the question, is the one to design if the owner later wants moderation to keep a writer's other runs, or a revoked run gone before its daemon wakes.
+- **To bring back:** evs marks the path versions a CLOSURE writes; the cards read exposes each push's kind; readers apply the check; and a test replays an earlier Signed card to a fresh reader and sees it refused.
+
 ### mcp-v1: §16's v1 set
 Stage: v1 (M6, M10)
 - **Deferred:** §16.18's v1 rows. At M6: the team record and the team directory as the coordination log, mirrored on admins' indexers (owner decisions 102, 150, 171, 177); reach receipts; agent subkeys; filesystem events; model calls (owner decision 463); retention policies; the `audit` reader (owner decision 63); RECORD.md's verifiable log and client disclosure packets. At M10 (owner decisions 163, 169): the evs tools' versioning argument; `ur search`, `ur agents`, `search`, `search_agents` and `search_status`; run cards; the directory's cards and index; `evs_drop_preview` and the drop states; remote serving on indexers.

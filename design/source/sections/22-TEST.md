@@ -1112,7 +1112,9 @@ FI-15  file-mode CAS (I-EVS-8): a file-mode push commits at u only if each file 
 FI-16  purge: the content of a versionless version (a kind-5 segment, a staged record, a slot only that path's
        versions name) is deleted only after its replacing version is committed and a process saw that commit (its own
        200, a head reread or a Resolve), the 60 s in-flight allowance has passed on a checked clock, no hold keeps it
-       when the delete issues (a hold covering the repo keeps what existed at its placement), and no version committed
+       when the delete issues (a hold covering the repo keeps what existed at its placement, and binds a deleter
+       from 5 s after api acknowledged its placement, the bound of §11.13's hold/ cache; owner decision 629), and
+       no version committed
        later names it; unknown and refused pushes purge nothing; every path's newest committed version keeps all its
        content; each candidate goes within the sweep's period once those conditions hold, and purged content never
        returns, a stale re-seed included (§11)
@@ -1192,7 +1194,8 @@ FI-27  drop history: a drop deletes a segment or slot only if (1) every version 
        before its end and whose list equals its lineage's versions below its boundary; (2) the job's mark and its
        independent verification, at snapshots after evacuation's horizon had passed every such drop's cite bound,
        found no other committed version naming it, in an entry version or a git-mode push's new-objects list; (3) no
-       hold covering the repo stood when the DELETE issued (a hold keeping what existed at its placement); and (4)
+       hold covering the repo stood when the DELETE issued (a hold keeping what existed at its placement, and
+       standing for a deleter from 5 s after api acknowledged its placement, as FI-16's; owner decision 629); and (4)
        evacuation's horizon had passed the object's LastModified + 24 h + 2 min, and the DELETE named that
        LastModified (owner decision 397); no version commits naming a listed version as a base, rename or reuse source
        after its drop's fence; every path's newest version keeps all its content, a written boundary carrying its

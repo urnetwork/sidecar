@@ -1983,3 +1983,55 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "without them (619, 620) and the omitted-document check (621); the idle marking's hold (622), following "
     "@@OD:591@@, the dns rows' delegated zones (623) and calls to an edge with no Hello (624); what the gates "
     'name and run (625 to 627), extending @@OD:548@@ and following @@OD:610@@. ')
+INDEX += [
+    (628, "The directory's repo id in the sdk",
+     '`SidecarDirectory.GetRepoId` lets a directory view scope its "search more" to the directory alone.'),
+    (629, 'When a hold binds a deleter',
+     "A preservation hold binds a deleter from 5 s after api acknowledged its placement, the `hold/` cache's "
+     'bound.'),
+    (630, '`_mta-sts` for verified networks',
+     '`_mta-sts` is published only for a network with network_verified; the certificate condition joins at the '
+     'review phase.'),
+    (631, "A Team scope's mailcfg",
+     "A consented device of the scope's member creates it, and the fold binds it to that member; the network's "
+     'names no owner.'),
+    (632, "An approved recipient's record bytes",
+     '`MailRecipientApproval` at `rcpt/<h>/<name>`, the name a hash of the alias and recipient, one record a '
+     'pair.'),
+    (633, 'The reverse-alias key',
+     "One key a mailbox, `MailReverseAliasKey` in the mailbox's `vault/` family, so a sender sees one reverse "
+     'alias.'),
+    (634, "An indexer row's nonce",
+     "`IndexerRow.nonce = 6` carries the IndexerSet header's nonce, so any reader opens a designation's sealed "
+     'services.'),
+    (635, "MCP's `rcpt/` refusal",
+     "MCP's guard refuses the `rcpt/` family on mailboxes and on a general repo that is a group inbox."),
+    (636, "An eraser's CLOSURE of a card",
+     'A CLOSURE rewrites a card or repo file only once its writer dropped the item; moderation removes a card '
+     'whole; the fresh-reader check waits for the review phase.'),
+]
+for _n, _note in [
+        (280, " Completed by @@OD:632@@, the record's bytes, and @@OD:635@@, MCP's refusal."),
+        (330, ' Extended by @@OD:634@@: an indexer row carries its nonce.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 637))
+DATES.update({628: '2026-11-18', 629: '2026-11-19', 630: '2026-11-19', 631: '2026-11-19', 632: '2026-11-19', 633: '2026-11-19', 634: '2026-11-19', 635: '2026-11-19', 636: '2026-11-19'})
+_D627 = ("A third sweep, on 2026-11-19, numbers the answers of 2026-11-18 and 2026-11-19: evs's fair P1 admission "
+         "(617), a recovery's groups step (618), extending @@OD:602@@, a DROP's index rewrites and its resend "
+         "without them (619, 620) and the omitted-document check (621); the idle marking's hold (622), following "
+         "@@OD:591@@, the dns rows' delegated zones (623) and calls to an edge with no Hello (624); what the gates "
+         'name and run (625 to 627), extending @@OD:548@@ and following @@OD:610@@. ')
+assert DECISIONS_INTRO.count(_D627) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D627, "A third sweep, on 2026-11-19, numbers the answers of 2026-11-18 and 2026-11-19: evs's fair P1 admission "
+    "(617), a recovery's groups step (618), extending @@OD:602@@, a DROP's index rewrites and its resend "
+    "without them (619, 620) and the omitted-document check (621); the idle marking's hold (622), following "
+    "@@OD:591@@, the dns rows' delegated zones (623) and calls to an edge with no Hello (624); what the gates "
+    "name and run (625 to 627), extending @@OD:548@@ and following @@OD:610@@; the directory's repo id in the "
+    "sdk (628), when a hold binds a deleter (629) and `_mta-sts` for verified networks (630); a Team scope's "
+    "mailcfg (631), an approved recipient's bytes (632) and MCP's refusal of them (635), completing "
+    "@@OD:280@@, the reverse-alias key (633) and an indexer row's nonce (634); and an eraser's CLOSURE of a "
+    'card (636). ')

@@ -115,7 +115,7 @@ The policy is HuJSON in the config repo, parsed in-repo: `aclStandardizeHujson` 
 | `directory` (one per team network, §16.11; owner decision 171) | every admitted sidecar of the team; every one that is not read_only writes only its own paths and stream, and a device KF2 parks for consent writes nothing that counts (I-EVS-14); documents neither add nor remove readers (D-ACL-24) | — |
 | `vault`, `mailbox`, `secret` (owner-bound to member M; group inboxes stay general; each `secret` holds one secret, such as §13.8's ACME account key or §17.9's ShareKey, and §16.6 refuses `secret` repos to MCP's evs tools) | M's consented devices (below), which also write; their `EvsShare`s' subjects (§8.8); the `audit` reader where its block names the kind or repo | receipts from readers that do not write (§16.8); in `vault` and `mailbox` also M's other untagged subjects, the tagged subjects M sponsors, `tag:mail` mail indexers (owner decision 150); in `mailbox` also any subject of the network that the projection marks `mail_send`, for §15.8's same-network mail (D-MAIL-8; owner decision 333) |
 | Team record | `autogroup:admin`, `:auditor`; no row 8.6's ceiling counts, so an ephemeral sidecar only deposits there | `autogroup:member`, tagged subjects |
-| `mailcfg` | `tag:mail` mail indexers; members write the records they sign (§15.8): its writers are member devices, or, where its row names an owner (a Team scope's member), that member's consented devices | — |
+| `mailcfg` | `tag:mail` mail indexers; members write the records they sign (§15.8): its writers are member devices, or, where its row names an owner (a Team scope's member, whose consented device created it; 8.8's RepoCreate row, owner decision 631), that member's consented devices | — |
 
 A group inbox stays a `general` repo, marked at its creation: `RepoCreate`'s `inbox` is `group`, or `admin` for the network's admin address (8.8). Rotators set a marked repo's drop key as they do for a kind that takes deposits (§10.5, D-KEYS-17), and writers use §11.6's per-message slot rule for it. `ur id group-create` files its deposit grant beside the marker (§15.7); an untagged receiver in a network with no document already reaches its deposit ref through the implicit document's `autogroup:member` write on `evs:*` (§15.7). A member's deposit into another member's mailbox is bounded by §20's storage limits, and the recipient's readers show it as from a member by the push's signer; `vault` and `secret` take no such deposit, and 8.8's "never in an owner-bound repo" stands for `RepoGrant`.
 
@@ -435,10 +435,18 @@ RepoCreate{repo_id, kind, inbox}                                   a sidecar the
   second; the marker is server-visible in the log (§2.8            only under a rule giving it admin on evs:* or
   api-7); acl.proto takes it as field 4, before M2's freeze        that repo, within 8.6's ceiling; owner-bound
                                                                    kinds, a consented device of the owner;
-  a tagged or ephemeral creator's repo stays keying until a        directory, team_record and mailcfg, a config
-  config writer that reads it and holds its admin forms its        writer (D-TEAM-28); config, none (§7.9's
-  group (§10.7's KF1; owner decision 365), which §8.5's            bootstrap); no create action exists, so a
-  implicit document always allows                                  policy cannot stop a member creating repos
+  a tagged or ephemeral creator's repo stays keying until a        directory, team_record and the network's
+  config writer that reads it and holds its admin forms its        mailcfg, a config writer (D-TEAM-28); a Team
+  group (§10.7's KF1; owner decision 365), which §8.5's            scope's mailcfg, a consented device of the
+  implicit document always allows                                  scope's member; config, none (§7.9's
+  a mailcfg RepoCreate from a member device that is no config      bootstrap); no create action exists, so a
+  writer is a Team scope's: the fold binds its row to its          policy cannot stop a member creating repos
+  creator's member as an owner-bound repo's, one a member, the
+  first in log order, while the network's mailcfg, a config
+  writer's, names no owner; a device takes as the network's
+  the first standing mailcfg whose row names no owner and as
+  a scope's the first whose row names that scope's member;
+  no field is added (owner decision 631)
 RepoAdmin{repo_id, sidecar_id, add | remove}                       a repo admin or a config writer; in an
   a remove keeps the admin's row, stamped with its position        owner-bound repo an add only by a consented
   (Repo rows, above)                                               device of its owner (8.5), any of which
