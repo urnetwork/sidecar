@@ -37,10 +37,9 @@
 //	           written to seg/, every newest version reads through evsr and evs1, and both writers commit again. The
 //	           twin, Fs72RollbackForwardOnly, runs the same data on format 2 throughout and evacuates it alike
 //
-// The forward run keeps purge in observe because FI-1's oracle holds every committed version's segments to the
-// closure and does not yet excuse a replaced versionless version's purged ones, which FI-16 governs (TEST-M10-01).
-// FI-17 is TEST-M10-01's oracle (fault.FI(17)); the schedules name it once it is bound (fs72Checks) and meanwhile
-// check its format clause through FormatHolds and the world's NoAlarms.
+// FI-1 excuses a replaced versionless version's purged content, whose going FI-16 judges (TEST-M10-01), but the evs
+// world builds no purger, as no evs host does yet, so the forward run keeps purge in observe, which deletes nothing.
+// FI-17 is TEST-M10-01's oracle (fault.FI(17)), bound, and fs72Checks names it beside FormatHolds and NoAlarms.
 
 package fault
 
@@ -105,7 +104,7 @@ func fs72WorldSettings() *EvsWorldSettings {
 	return settings
 }
 
-// The world's checks, FS-72's format clause among them, and FI-17 once its oracle is bound.
+// The world's checks, FS-72's format clause among them, and FI-17, whose oracle is bound.
 func fs72Checks(world *EvsWorld) []Invariant {
 	checks := world.Checks(world.FormatHolds())
 	if slices.Contains(BuiltInvariants(), 17) {
