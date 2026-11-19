@@ -74,6 +74,8 @@ type Sidecar struct {
 	cleanups sidecarCleanups
 	// §6.4's state Status reads witnessed_at and the UNVERIFIED pins from (sidecar_status.go).
 	headCheckStatuses sidecarHeadCheckStatuses
+	// The search index's share Status shows, as the last ReadIndexShare left it (sidecar_status_index.go).
+	indexShares sidecarIndexShares
 	// §16's ledger and spend check behind Authorize (sidecar_gate.go).
 	gates sidecarGates
 	// A core hint's revocation claim being checked (identity_revoke_self.go).
@@ -713,6 +715,54 @@ type SidecarStatus struct {
 	ZoneWatchDegraded bool
 	// "CT watch degraded": D-TLS-8's CT watch could not read a source, the rows or verified config at its last pass.
 	CtWatchDegraded bool
+	// The search index's share of the network's storage, shown apart from content (D-QUOTA-10), as this device last
+	// read it from its repos' index status (Sidecar.ReadIndexShare). nil: none read yet.
+	IndexShare *SidecarIndexShare
+}
+
+// The search index's files across the repos one read covered (D-QUOTA-10; §11.14's status row). They count toward the
+// network's storage like any evs bytes (§20.7's stored row), which is why `ur status` shows them apart from content.
+type SidecarIndexShare struct {
+	// The repos asked, and of them those whose index this build could not read: an error, or a root in a newer
+	// format. A repo of a kind that holds no index (config, mailcfg, secret) counts in neither.
+	RepoCount       int64
+	UnreadRepoCount int64
+	// The index files at each index ref's head and their bytes, pads included, over every root of every repo read.
+	// Replaced index versions still in their batch count toward storage for up to 26 h too (owner decision 165),
+	// and no head lists them, so this is a floor on the index's stored bytes, never more than them.
+	FileCount int64
+	ByteCount int64
+	// When the read ended, on the Sidecar's clock.
+	ReadAt time.Time
+}
+
+// The share Status shows, under its own lock: a read's result, replaced whole by the next read.
+type sidecarIndexShares struct {
+	stateLock sync.Mutex
+	share     *SidecarIndexShare
+}
+
+// The last share read, a copy sharing nothing; nil before any read.
+func (self *sidecarIndexShares) get() *SidecarIndexShare {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.share == nil {
+		return nil
+	}
+	share := *self.share
+	return &share
+}
+
+// Keeps a copy of share as what Status shows.
+func (self *sidecarIndexShares) set(share *SidecarIndexShare) {
+	var kept *SidecarIndexShare
+	if share != nil {
+		copied := *share
+		kept = &copied
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.share = kept
 }
 
 // One client generation of a sidecar (§5.5), signed by the ClientKey and the identity key. Its wire

@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/docopt/docopt-go"
 
@@ -70,6 +71,7 @@ func printUrStatus(cli *urCli, reply *urStatusReply) {
 		}
 		fmt.Fprintf(out, "network:    %s  %s, generation %d\n", network.NetworkId, state, network.Generation)
 		printUrNetworkConfig(cli, &network)
+		printUrNetworkIndexShare(cli, &network)
 	}
 	for _, listener := range reply.LocalListeners {
 		exposure := "loopback only"
@@ -94,6 +96,20 @@ func printUrStatus(cli *urCli, reply *urStatusReply) {
 	if reply.Stats != nil {
 		printUrStats(cli, reply.Stats)
 	}
+}
+
+// The search index's share of a network's storage, under its network line, apart from content (D-QUOTA-10): nothing
+// before the Sidecar read one.
+func printUrNetworkIndexShare(cli *urCli, network *urNetworkStatus) {
+	share := network.IndexShare
+	if share == nil {
+		return
+	}
+	line := fmt.Sprintf("  index:    %d bytes in %d files across %d repos", share.ByteCount, share.FileCount, share.RepoCount)
+	if 0 < share.UnreadRepoCount {
+		line += fmt.Sprintf(", %d of them unread", share.UnreadRepoCount)
+	}
+	fmt.Fprintf(cli.stdout, "%s, read %s\n", line, share.ReadAt.UTC().Format(time.RFC3339))
 }
 
 // A network's config follower, under its network line: the log position it stands at, what it waits for, or why it
