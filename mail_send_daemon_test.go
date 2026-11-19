@@ -272,7 +272,7 @@ func TestDaemonMailSendWaitsOnTheGateAndSendsNothingWithoutIt(t *testing.T) {
 		outcomes = append(outcomes, recipient.Address+" "+recipient.Outcome)
 	}
 	if !slices.Equal(outcomes, []string{
-		testMailIngestRecipient + " delivered", "someone@outside.example internet_waits", "hidden@elsewhere.example internet_waits",
+		testMailIngestRecipient + " delivered", "someone@outside.example queued", "hidden@elsewhere.example queued",
 	}) {
 		t.Fatalf("outcomes %v", outcomes)
 	}

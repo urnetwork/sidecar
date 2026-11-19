@@ -30,6 +30,8 @@ import (
 	"io"
 	"strings"
 	"time"
+
+	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 var (
@@ -238,6 +240,12 @@ func (self *MailClient) pass(run *mailComponentRun) bool {
 	self.passIngest(run, binding)
 	self.passReceive(run, binding)
 	self.passMtaSts(run, binding)
+	if binding.BurnerSelectors != nil {
+		// a burn another device made retires this device's selectors for the label too (MAIL-M9-03)
+		if _, err := self.RetireBurnedSelectors(ctx); err != nil {
+			self.log.Warningf("[mail]burned labels' selectors did not all retire: %v", err)
+		}
+	}
 	return true
 }
 
@@ -258,7 +266,14 @@ func (self *MailClient) bindFromSidecar(ctx context.Context, env *SidecarEnv) {
 	}
 	if env != nil && env.SidecarApi != nil {
 		binding.Api = env.SidecarApi
+		// internet mail's send gate reads the standing before anything is queued (D-SMTP-14)
+		binding.Standing = env.SidecarApi.AbuseStatus
 	}
+	// an outbox entry is signed by this device's identity key (plan-SMTP-wire-gaps#4)
+	binding.Sign = func(purpose string, signedType bridge.SignedType, body []byte) (*bridge.Signed, error) {
+		return sidecar.Sign(purpose, signedType, body, nil)
+	}
+	binding.RunTainted = sidecar.RunTainted
 	if dns, err := sidecar.Dns(); err == nil {
 		if zone, err := dns.Zone(ctx); err == nil {
 			self.setNetworkRow(NetworkLabelRow{
@@ -353,6 +368,10 @@ func (self *MailClient) passIngest(run *mailComponentRun, binding *MailBinding) 
 		Message: func(message *MailMessage) {
 			self.invalidateMonth(message.RepoId, message.Month)
 			self.judgeReceiver(binding, message)
+			// an opted-in burner's mail forwarded, and a reply to a reverse alias relayed (MAIL-M9-04)
+			if _, err := self.considerForward(run.ctx, message); err != nil {
+				self.log.Warningf("[mail]a forward was not queued: %v", err)
+			}
 		},
 		Alarm: func(alarm *MailIngestAlarm) {
 			self.log.Warningf("[mail]ingest alarm %s on %s", alarm.Kind, alarm.RepoId)
