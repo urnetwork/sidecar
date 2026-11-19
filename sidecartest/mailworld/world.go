@@ -136,6 +136,9 @@ type MailWorldSettings struct {
 	// scenario gives its run's hosts, which are server's stores on T3. Every other part of a host stays the fake
 	// host's: its gates, quota, authenticator, push and metrics.
 	Stores func(service string) *sidecar.ServiceHost
+	// Told of each request a device's client sent evs and the answer it took, its status and body, on the device's
+	// goroutine, as M10's rows read a push's refusal (m10_rows.go); nil for none.
+	EvsAnswered func(request *http.Request, status int, body []byte)
 }
 
 // The services MailWorldSettings.Stores is asked for.
@@ -723,6 +726,9 @@ func (self *MailWorld) RoundTrip(request *http.Request) (*http.Response, error) 
 				return nil, self.ctx.Err()
 			}
 		}
+	}
+	if answered := self.settings.EvsAnswered; answered != nil {
+		answered(request, recorder.Code, recorder.Body.Bytes())
 	}
 	return recorder.Result(), nil
 }
