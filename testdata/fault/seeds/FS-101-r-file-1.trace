@@ -1,0 +1,33 @@
+# fault trace
+# id FS-101's r-file
+# seed 1
+# failed actor="daemonF" action=true await="" release=[] fault=<nil> advance=0s kill=false restart="" background=false join=false: actor daemonF: 1 bad_entry alarms naming E on a fresh device
+ran authority -
+ran daemonE -
+passed daemonE directory.sync.before@01a1f5478f8b2bedefdbff6c9c34193d
+passed daemonE directory.fold.before@01a1f5478f8b2bedefdbff6c9c34193d
+passed daemonE directory.fold.after@01a1f5478f8b2bedefdbff6c9c34193d
+passed daemonE directory.sync.after@01a1f5478f8b2bedefdbff6c9c34193d
+passed daemonE directory.repo_file.before@01a1f5478f8ca039298d002aa670f713
+passed daemonE directory.repo_file.after@01a1f5478f8ca039298d002aa670f713
+passed daemonE directory.sync.before@01a1f5478f8b2bedefdbff6c9c34193d
+passed daemonE directory.fold.before@01a1f5478f8b2bedefdbff6c9c34193d
+passed daemonE directory.fold.after@01a1f5478f8b2bedefdbff6c9c34193d
+passed daemonE directory.sync.after@01a1f5478f8b2bedefdbff6c9c34193d
+passed daemonE directory.card.before@01a1f5478f8ca039298d002a048dec79
+passed daemonE directory.card.after@01a1f5478f8ca039298d002a048dec79
+passed daemonE directory.sync.before@01a1f5478f8b2bedefdbff6c9c34193d
+passed daemonE directory.fold.before@01a1f5478f8b2bedefdbff6c9c34193d
+passed daemonE directory.fold.after@01a1f5478f8b2bedefdbff6c9c34193d
+passed daemonE directory.sync.after@01a1f5478f8b2bedefdbff6c9c34193d
+ran authority -
+passed authority directory.sync.before@01a1f5478f8b2bedefdbff6c9c34193d
+passed authority directory.fold.before@01a1f5478f8b2bedefdbff6c9c34193d
+passed authority directory.fold.after@01a1f5478f8b2bedefdbff6c9c34193d
+passed authority directory.sync.after@01a1f5478f8b2bedefdbff6c9c34193d
+ran authority -
+ran daemonF -
+passed daemonF directory.sync.before@01a1f5478f8b2bedefdbff6c9c34193d
+passed daemonF directory.fold.before@01a1f5478f8b2bedefdbff6c9c34193d
+passed daemonF directory.fold.after@01a1f5478f8b2bedefdbff6c9c34193d
+passed daemonF directory.sync.after@01a1f5478f8b2bedefdbff6c9c34193d

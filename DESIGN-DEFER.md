@@ -24,7 +24,7 @@ Under each entry's title are its stage and the subsections of DESIGN.md that poi
 
 - What the design rules out. §1.7's non-goals and each section's rejected alternatives are decisions, not deferrals.
 - App, console and extension screens. Owner rule 6 puts the apps' UI out of scope, and the design gives the seams it uses.
-- Work the build's review phase finishes before launch. That work is inside M0-M10.
+- Work the build's review phase finishes before launch. That work is inside M0-M10. The exception is a check or a fold that an owner decision itself puts off to the review phase: it has an entry, with that stage, until the review phase lands it.
 - A reversal. A mechanism the owner removes has no entry; the owner decision that removes it says what went.
 
 ## Adding an entry
@@ -33,7 +33,7 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 
 ## Index
 
-96 entries, grouped by the DESIGN.md section that owns the deferred thing. "Described in" lists the subsections of DESIGN.md that point at the entry.
+99 entries, grouped by the DESIGN.md section that owns the deferred thing. "Described in" lists the subsections of DESIGN.md that point at the entry.
 
 | Section | Entry | Stage | Described in |
 |---|---|---|---|
@@ -62,7 +62,7 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 |  | [Edge-delegated ticket keys](#sock-edge-delegated-ticket-keys) | Later | §9.11, §9.17 |
 |  | [Registration over push](#sock-registration-over-push) | Later | §9.17 |
 |  | [§9's v1 set](#sock-v1) | v1 (M6) | §9.17 |
-| [§10 Group keys for evs: MLS and the GKM service](#s10) | [MLS](#keys-mls) | Later | §10.4, §10.9, §10.12, §10.16, §23.4 |
+| [§10 Group keys for evs: MLS and the GKM service](#s10) | [MLS](#keys-mls) | Later | §10.4, §10.9, §10.12, §10.16, §23.4, §23.8 |
 |  | [Suite 0x0020 with hybrid authority signatures](#keys-suite-0x0020-hybrid-signatures) | Later | §10.16 |
 |  | [SafeExportSecret](#keys-safe-export-secret) | Later | §10.16 |
 |  | [Gen packs](#keys-gen-packs) | Later, at §19.9's gen trigger | §10.16, §19.18, §23.4 |
@@ -86,6 +86,7 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 | [§12 DNS: the ur.network zone and per-network zones](#s12) | [The Public Suffix List listing and the mail cut-over](#dns-psl-listing) | Later, once eligible | §12.16, §13.17, §14.16, §15.17, §23.4 |
 |  | [Bring-your-own nameservers](#dns-bring-your-own-ns) | Later | §12.16 |
 |  | [HTTPS and SVCB records](#dns-https-svcb-records) | Later | §12.16 |
+|  | [`_mta-sts` waiting for every receiver's certificate](#dns-mta-sts-certificate-gate) | Review phase, once §13's issuance for receivers settles | §12.7, §15.5 |
 |  | [§12's v1 set](#dns-v1) | v1 (M6, M7, M8) | §12.16 |
 | [§13 The TLS edge and certificates](#s13) | [ECH in split mode](#tls-ech-split-mode) | Later | §2.19, §13.17 |
 |  | [HTTP/3 on the edge's UDP 443](#tls-h3-edge) | Later | §13.17 |
@@ -108,6 +109,8 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 |  | [A guest view of the directory for cross-network shares](#mcp-directory-guest-view) | Later | §16.18 |
 |  | [A per-team setting for prose at member trust](#mcp-member-prose-setting) | Later | §16.12 |
 |  | [The harness config's waiting keys](#mcp-harness-config-keys) | Later | §8.5, §16.7 |
+|  | [SSH-signed approvals for high-risk actions](#mcp-sshsig-approvals) | Later, until a customer asks | §16.6, §16.18 |
+|  | [The fresh-reader check on a directory admin's CLOSURE of a card or repo file](#mcp-card-closure-replay-check) | Review phase | §16.11 |
 |  | [§16's v1 set](#mcp-v1) | v1 (M6, M10) | §16.18 |
 | [§17 IP addresses, subnet routing, and port forwarding](#s17) | [L3 delivery](#bridge-l3-delivery) | Later | §17.18 |
 |  | [Multi-hop maps](#bridge-multi-hop-maps) | Later | §17.18 |
@@ -486,14 +489,14 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 <a id="keys-mls"></a>
 ### MLS
 
-*Later. DESIGN.md: §10.4, §10.9, §10.12, §10.16, §23.4.*
+*Later. DESIGN.md: §10.4, §10.9, §10.12, §10.16, §23.4, §23.8.*
 
 - **Deferred.** MLS as v0's key distributor: §10.4's RFC 9420 subset on ciphersuite 0x0010, one group per repo with member devices as leaves, PrivateMessage commits, KeyPackages and Welcomes, external commits, epochs and their KEK_e, GenWrap and LeafWrap, sealed GroupInfo, acks, resync and the config and directory groups' leaves rule (owner decisions 1, 43, 44, 60, 113, 128, 144, 182, 361, 363 and 366; D-KEYS-1, -2, -3, -12, -14, -18 and -23; Q-KEYS-9; ledger ids QD-002, QD-074, QD-442, QD-464, QD-526, QD-616 to QD-618, QD-638, QD-641, QD-659, QD-747, QD-956 and QD-1040; DESIGN-DETAILS.md section 6's MLS rules, which wait with it: the roster rule with its committer and member clauses, its D-KEYS-27 row, KF2's and KF5's commits, the dropped-leaf and waiting-leaf hints, D-KEYS-24's Welcome pointer clause, §10.6's note on the claim key, and the commit legs of FS-15, FS-24, FS-97 and FS-104).
 - **Why.** The complexity review of 2026-11-17 counted about 42.5k MLS-only lines, 15.9k of them production, about 23 decisions, 98 KB of DESIGN-DETAILS.md section 6, about 14 of KEYS' 36 tasks and 27-63 MB of heap at 1,000 leaves; and MLS kept an agent's repo keyless until a member device formed its group, and made recovery above 16 leaves wait for a leaf online. Wraps had grown into a full distributor already, serving agents, member devices past the first 1,000, Delegations and recovery codes. The owner chose wraps only (owner decision 610).
 - **Launch instead.** Every group key RK_g goes by §10.5's `KeyDelivery` wraps: a join is a LATE delivery, a removal the REMOVE rotation, a resync fetches deliveries; gkm keeps no epochs, Welcomes, KeyPackages, GroupInfo or acks, so `gkm:<group_id>` is versioned by generation alone, and the format's epoch fields, GenRotate's `leaf_wrap` among them, stay unset.
 - **Lost.** TreeKEM's post-compromise healing of the key-encryption keys: a copied keychain heals by §10.5's bounds, a reader at its ReaderKey's not_after plus the next generation, where a leaf healed in about 37 days (60 above 50 leaves). Each rotation costs about 1.37 KB a holder, about 1.37 MB and 1,000 objects at 1,000 holders, against one 72 B leaf wrap a leaf.
 - **Dark in code.** The root's `mls_*` files, mlsinterop/, gkm's MLS files, gkmservice's epochs, groupinfo, keypackages, welcomes, acks and reform, and sidecartest's fake_mls, mlssuite and bench_groups stay on the branch, dark, for Later, with owner decision 99's deferred audit; the review phase reworks key formation (KF1 to KF7) onto deliveries and removes gkm's MLS routes and state or leaves them dark.
-- **Held.** The MLS interop freeze (KEYS-M2-11's 0x0010), fuzzing of the `mls_*` decoders, and the MLS legs of FS-15, FS-20, FS-24, FS-97 and FS-104 leave the gates; QD-641's MLS engine rewrite is dropped; the core lane's gkm-guard-right-set is re-briefed to the routes wraps-only keeps.
+- **Held.** The MLS interop freeze (KEYS-M2-11's 0x0010), fuzzing of the `mls_*` decoders, and the MLS legs of FS-15, FS-20, FS-24, FS-97 and FS-104 leave the gates; QD-641's MLS engine rewrite is dropped; the core lane's gkm-guard-right-set is re-briefed to the routes wraps-only keeps. One fold of owner decision 610 waits for the review phase: §22.8's FS-15, FS-20, FS-24 and FS-104 rows, §22.10's table, §23.6's M2 row, §23.8's freezes and D-KEYS-10 still put the MLS legs and the 0x0010 interop at M2's exit, because the fault catalog is held to §22.8's text and KEYS reworks the four rows onto deliveries in the review phase; until then M2's gate runs the rows' drafted schedules, its sweep saying in an open item that their MLS legs count toward nothing (owner decision 627; ledger id QD-1086).
 - **To bring back.** An owner decision that reverses owner decision 610. Then: freeze the MLS wire and suite 0x0010 on §22.10's interop artifact; return KF1-KF7's MLS steps, §7.9's leaves rule and DESIGN-DETAILS.md section 6's MLS rules; restore the interop, fuzzing and FS legs to their gates; and move existing groups onto MLS by a GroupForm under the ladder, which the generations carry unchanged.
 
 <a id="keys-suite-0x0020-hybrid-signatures"></a>
@@ -801,6 +804,19 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 - **Held.** Nothing: no task or track waits on it.
 - **To bring back.** ECH split mode or h3 at the edge (§13's entries), then the record types and what they publish.
 
+<a id="dns-mta-sts-certificate-gate"></a>
+### `_mta-sts` waiting for every receiver's certificate
+
+*Review phase, once §13's issuance for receivers settles. DESIGN.md: §12.7, §15.5.*
+
+- **Deferred.** The certificate condition on §12.7's `_mta-sts` record: the record is published only while every published `mail_host_key` row for host `mx` has an unexpired certificate on the same key, a certificate's issuance and a host-key change each reconciling the zone (§15.5's MTA-STS; owner decision 630, whose answer takes this part of the question's option 1 at the review phase; ledger id QD-1092).
+- **Why.** The verified gate is what owner decision 96 names and is cheap to hold now. The per-key join waits for the receivers' issuance path (the plan's TLS-M8-01) to settle, since it adds two callers of the zone's reconcile on that path.
+- **Launch instead.** `_mta-sts` is published for a network with network_verified and mail on, and a verification change reconciles the zone (§12.7). Each receiver serves the policy only once it holds its own §13 certificate (§15.5).
+- **Lost.** While one of a network's receivers is still uncertified, a sender that cached the `mode: enforce` policy refuses that receiver (RFC 8461 §5): some deliveries fail temporarily, until the router's backup ticket or the sender's retry reaches a certified receiver. A receiver is certified minutes after its key is posted.
+- **Dark in code.** Nothing is built. The zone's mail policy is computed in one place, where the condition joins.
+- **Held.** The review phase's two reconcile callers, at a receiver certificate's issuance and at a host-key change.
+- **To bring back.** The receivers' issuance path settles; then the zone's mail policy takes the per-key certificate condition, the two write paths call the zone's reconcile, and a test shows the record withheld while one receiver is uncertified.
+
 <a id="dns-v1"></a>
 ### §12's v1 set
 
@@ -1098,6 +1114,32 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 - **Dark in code.** The keys are kept in the format: `record.capture` is read and ignored, and `reach`, `models` and `identity` are ignored and warned about, so a `reach:` block files no request.
 - **Held.** Nothing: no task or track waits on it.
 - **To bring back.** A design for each key. For capture: a person-only path and a Team refusal. For `reach`: how a block becomes requests under §8.5.
+
+<a id="mcp-sshsig-approvals"></a>
+### SSH-signed approvals for high-risk actions
+
+*Later, until a customer asks. DESIGN.md: §16.6, §16.18.*
+
+- **Deferred.** The member's SSHSIG on a high-risk approval, and with it a second risk level: a classifier or a policy field that marks an action high risk, and SSH-signed receipts (R-MCP-7; §16.6's approval channels; owner decision 279, which declined the build's recommendation of two risk levels; ledger id QD-014; the plan's MCP-M4-03).
+- **Why.** §16.6 added the SSHSIG to a high-risk approval, and nothing said what makes an action high risk or who computes it. The owner dropped it from v0 and every milestone until a customer asks (owner decision 279).
+- **Launch instead.** Every action's risk is normal. A decision carries its evidence channel, device, presence or harness, and a network's `requests` rules and `evidenceDefault` say which channels it accepts (§16.6, §8.5).
+- **Lost.** No second factor separates a public publish or a wide mailing from any other approved action.
+- **Dark in code.** `ApprovalDecision.sshsig` stays a reserved field, ignored wherever it is presented and never trusted; `SidecarRisk` keeps its two values, every action normal, and no policy field or classifier raises one (§16.8, §5.4). `KeyRegister` still takes a key of purpose `KEY_PURPOSE_SSHSIG` (§7.9), which nothing verifies a decision under.
+- **Held.** MCP-M4-03, the plan's task for the SSHSIG on high-risk decisions, is void while this stands.
+- **To bring back.** A customer asks. Then an owner decision on what makes an action high risk, a fixed classifier, a policy field on request rules or both, as owner decision 279's options not taken describe; `AclRequestRule` gains its risk field, and verifiers check the SSHSIG under the member's registered key.
+
+<a id="mcp-card-closure-replay-check"></a>
+### The fresh-reader check on a directory admin's CLOSURE of a card or repo file
+
+*Review phase. DESIGN.md: §16.11.*
+
+- **Deferred.** A reader-side check that holds a directory admin's push at a `d/` or `r/` path to the `cards` ref's own log: evs marks a CLOSURE's path versions, and a reader accepts an admin's push there only where the log shows a CLOSURE at that version whose content hash equals the version before it (§16.11's closure row; owner decision 636; ledger id QD-1100; the plan's RECORD-M10-05).
+- **Why.** The owner accepted the draft's rule for an erasure's CLOSURE and left this check to the review phase: it is a reader-side check, with no format change if the cards read already exposes a push's kind.
+- **Launch instead.** A reader accepts a directory admin's push at a `d/` or `r/` path only when its bytes are the very bytes its copy already accepted there, or else verify as the rightful writer's own Signed under every other rule, whose seq must rise (§16.11's closure row).
+- **Lost.** Until the check lands, a reader that has accepted nothing at a path, a fresh device or one whose copy was reset, has no seq to hold a rewrite to: a directory admin that kept the bytes of a writer's earlier Signed file could push them as a CLOSURE, and such a reader would show them as the writer's, a card within the 4,096-position bound of its `at`, a repo file at whatever position its signer named, until the writer's next write or its repair replaces them.
+- **Dark in code.** Nothing is built. The reader rule above is drafted and held by its tests.
+- **Held.** The review phase's work on the directory's erasure. An admin-signed eraser card, option 2 of the question, is the one to design if the owner later wants moderation to keep a writer's other runs, or a revoked run gone before its daemon wakes.
+- **To bring back.** evs marks the path versions a CLOSURE writes; the cards read exposes each push's kind; readers apply the check; and a test replays an earlier Signed card to a fresh reader and sees it refused.
 
 <a id="mcp-v1"></a>
 ### §16's v1 set
