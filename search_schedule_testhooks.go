@@ -782,7 +782,8 @@ func (self *SearchTestWorld) NewDevice(ctx context.Context, args *SearchTestDevi
 	err = device.sync.Follow(&searchSyncRefArgs{
 		repoId: self.repoId, refId: self.refId, repoKind: self.kind, source: device.source,
 		keepAll: func() bool { return device.policy.KeepsAll(self.repoId, self.AllByteCount()) },
-		// the repo's admins, as the composition's AclState judges an erasure set's signer
+		// the world's admin signs its CUTs (Cut), and each other device of an admin AddAdmin names: the erasure set
+		// signers whose versions count (§11.12's cut and reconcile rows)
 		mayErase: self.mayErase,
 	})
 	// a config, mailcfg or secret repo's index is never followed (FI-17): the device keeps none, and its rounds say so
