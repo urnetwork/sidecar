@@ -394,11 +394,18 @@ messages:
       }
   - name: prover-record
     type: MailProverRecord
-    hex: "088080401092011880e89ef19a34"
+    hex: "088080401092011880e89ef19a3420c02528bf0630af09380d42206b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b4a0483268126"
     text: |
       smtp_data_proof_bytes: 1048576
       data_bytes_per_s: 146
       measure_time_ms: 1793923200000
+      unit_millis: 4800
+      head_byte_count: 831
+      header_record_byte_count: 1199
+      envelope_group_count: 13
+      key_set_id: "\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b\x6b"
+      ready_suites: 4867
+      ready_suites: 4865
   - name: spam-model-wire
     type: MailSpamModel
     hex: "0801120807030002ffff3f00"
