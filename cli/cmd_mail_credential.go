@@ -81,12 +81,20 @@ func (self *urDaemonNetwork) mailCredential(network string) (*sidecar.MailLocalC
 	return client.LocalCredential()
 }
 
-// The daemon's IMAP, opened once a network serves it.
+// The daemon's IMAP, opened once a network serves it, and submission beside it, which takes the same credential
+// (MAIL-M9-01): the status answered is IMAP's, and a submission port that cannot open is reported while IMAP stays open.
 func (self *urDaemonNetwork) startMailImap() (*sidecar.DaemonLocalListenerStatus, error) {
 	if self.daemon == nil {
 		return nil, fmt.Errorf("no sidecar runs: %s", self.noSidecar)
 	}
-	return self.daemon.MailImap().Start()
+	status, err := self.daemon.MailImap().Start()
+	if err != nil {
+		return nil, err
+	}
+	if _, err := self.daemon.MailSubmission().Start(); err != nil && !errors.Is(err, sidecar.ErrMailSubmissionNoAccount) {
+		fmt.Fprintf(os.Stderr, "ur: submission did not start: %v\n", err)
+	}
+	return status, nil
 }
 
 // Opens IMAP where a hosted network already serves it, as the daemon starts or unlocks; with none it stays closed.

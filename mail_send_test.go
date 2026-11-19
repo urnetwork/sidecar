@@ -144,6 +144,8 @@ func newMailSendTestWorld(t *testing.T) (*mailClientTestWorld, *mailSendTestPart
 	world.client.stateLock.Unlock()
 	// ingest holds the deposit's signer to the same rule
 	world.ingest.authority.maySend[world.device.String()+" "+testMailSendFrom] = true
+	// internet mail queues at o/, signed by the device, on a standard network (MAIL-M9-02)
+	testMailSendBindOutbox(world, newTestMailOutboxSigner(world.device), testMailOutboxStanding(AbuseStandingStandard, true))
 	return world, parts, mailboxId
 }
 
@@ -312,9 +314,10 @@ func TestMailSendCrossMemberRefusedUntilTheQuestionLands(t *testing.T) {
 	}
 }
 
-// A mixed list delivers its same-network part only, until M9's sending: the outside address is answered
-// internet_waits, named in no deposit's trailer, and sent nowhere.
-func TestMailSendMixedListDeliversItsLocalPartOnly(t *testing.T) {
+// A mixed list deposits its same-network part and queues the rest for the internet (MAIL-M9-01): the outside address
+// is queued at o/, named in no deposit's trailer, and an unknown member address answered unknown. An all-outside list
+// deposits nothing, queues its one recipient and keeps a copy of what went.
+func TestMailSendMixedListDepositsItsLocalPartAndQueuesTheRest(t *testing.T) {
 	world, parts, _ := newMailSendTestWorld(t)
 	result, err := world.client.Send(context.Background(), &MailSendArgs{
 		From: testMailSendFrom, To: []string{testMailIngestRecipient, "Someone@Outside.Example"}, Cc: []string{"nobody@acme.root.example"}, Text: "x",
@@ -326,7 +329,7 @@ func TestMailSendMixedListDeliversItsLocalPartOnly(t *testing.T) {
 	for _, recipient := range result.Recipients {
 		outcomes[recipient.Address] = recipient.Outcome
 	}
-	if outcomes[testMailIngestRecipient] != MailSendDelivered || outcomes["someone@outside.example"] != MailSendInternetWaits ||
+	if outcomes[testMailIngestRecipient] != MailSendDelivered || outcomes["someone@outside.example"] != MailSendQueued ||
 		outcomes["nobody@acme.root.example"] != MailSendUnknown {
 		t.Fatalf("outcomes %v", outcomes)
 	}
@@ -334,10 +337,13 @@ func TestMailSendMixedListDeliversItsLocalPartOnly(t *testing.T) {
 	if len(deposits) != 1 || !slices.Equal(deposits[0].deposit.GetRecipients(), []string{testMailIngestRecipient}) {
 		t.Fatalf("deposits %+v", deposits)
 	}
-	// an all-outside list deposits nothing and keeps no copy
+	// an all-outside list deposits nothing, queues, and keeps the copy
 	result, err = world.client.Send(context.Background(), &MailSendArgs{From: testMailSendFrom, To: []string{"a@outside.example"}, Text: "x"})
-	if err != nil || result.Recipients[0].Outcome != MailSendInternetWaits || result.SentCopy || len(parts.snapshot()) != 1 {
+	if err != nil || result.Recipients[0].Outcome != MailSendQueued || !result.SentCopy || len(parts.snapshot()) != 1 {
 		t.Fatalf("an outside-only send %+v: %v", result, err)
+	}
+	if count := len(testMailSendOutbox(t, world)); count != 2 {
+		t.Fatalf("%d entries for two sends", count)
 	}
 }
 

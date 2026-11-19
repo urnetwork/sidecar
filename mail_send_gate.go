@@ -1,45 +1,43 @@
 //go:build !ios_extension
 
-// §15.10's step 1 for a send a host submits (QD-853, owner decision 288; R-MAIL-1, I-8, I-9, I-13): what ur daemon's
-// mail.send runs (mail_send_daemon.go), the daemon's gate holding a message for an I-8 approval as a submission is
-// held. MailClient.SubmitSend starts where Send starts (planSend), so a send the gate holds was refused for no shape,
-// zone or From, and then:
+// §15.10's step 1 for a send that is an outward action (QD-853, owner decision 288; R-MAIL-1, I-8, I-9, I-13;
+// MAIL-M9-01): a send naming any internet recipient, or a tainted run's (mail_send.go's gate row), waits on §5.4's gate
+// as one mail_send action, whether Send's draft, a host's submission through ur daemon's mail.send
+// (mail_send_daemon.go) or a mail client's on the submission port (MailClient.SubmitMessage). Each starts from the
+// same plan, so a send the gate holds was refused for no shape, zone or From, and then:
 //
-//	members   a message to this network's own addresses alone is W: Send at once, with no approval
-//	          (plan-MCP-approved-recipients: mail to members stays W)
-//	outside   a message naming any other recipient is an outward action (I-8): the whole message waits on §5.4's gate
-//	          as one mail_send action, and nothing is kept or deposited, its member part included, until the gate
-//	          passes it. MAIL-M9-01's approval records (§15.10's rcpt/, MailApprovedRecipients) are not on sidecar,
-//	          so every outside recipient takes the gate, the closed direction of QD-034's interim
 //	action    MCP-M3-02's mail_send row: every recipient, Bcc included, distinct and lowercase in the order Send names
-//	          them (To, Cc, Bcc); the From in its one form as from_alias; body_sha256, SHA-256 over the subject, a CRLF
-//	          and the text as the draft gives them (a subject holds no line break, so its first CRLF ends it); and a
-//	          preview of both within MailSendSettings.PreviewMaxByteCount, which an approver renders as untrusted text.
-//	          The same draft builds the same bytes, so the call sent again after `ur approve <id>` meets its decision,
-//	          and a draft that changes anything is another action
-//	effect    once the gate passes it, Send of the same draft: the member part deposits, and each outside recipient
-//	          answers internet_waits, nothing sent to it, until MAIL-M9-01 and MAIL-M9-02 queue internet mail at o/
-//	          under the use's effect key. Send keeps no effect key, so a run the gate repeats after an uncertain
-//	          outcome (AU4) deposits again. The real gate (record_gate.go) refuses kind mail before its Reserve until
-//	          MAIL-M9-02's MailOutbox.Lookup is registered for it, so before then only a standing grant's run, which
-//	          keeps no ledger row, reaches the effect
-//	answer    the effect's MailSendResult; *ApprovalPendingError while a person's decision is awaited; a retry of a
+//	          them (To, Cc, Bcc; a submission's envelope order); the From in its one form as from_alias; body_sha256,
+//	          for a draft SHA-256 over the subject, a CRLF and the text as the draft gives them (a subject holds no line
+//	          break, so its first CRLF ends it), for a submission SHA-256 over the message's bytes as submitted; and a
+//	          preview of the subject and text within MailSendSettings.PreviewMaxByteCount, which an approver renders as
+//	          untrusted text. The same draft or the same submitted bytes build the same action, so a send made again
+//	          after `ur approve <id>` meets its decision, and one that changes anything is another action
+//	gate      the run and agent a decision binds, the agent's words and a decision in hand, from the send's
+//	          MailConfigActionArgs; a submission and a host's call carry none, which is no run and so untainted
+//	          (§16.6's spend step 1). A same-uid process may submit as ur does (owner decision 47), and the gate still
+//	          holds what is outward
+//	effect    once the gate passes it, the send planned again, so a From that policy no longer grants at the spend is
+//	          refused there, and then its delivery under the use's effect key: the member part deposits and the
+//	          internet part queues at o/<h>/<effect_key> (mail_outbox.go), created only if absent, so a run the gate
+//	          repeats after an uncertain outcome (AU4) queues no second entry, though it deposits again. The outbox's
+//	          Lookup, which the client registers on its gate for kind mail, reconciles a reserved use at a restart
+//	answer    the delivery's MailSendResult; *ApprovalPendingError while a person's decision is awaited; a retry of a
 //	          send whose use is done answers its send_id alone, the effect not run again (AU4)
 //
-// The call carries no run binding: a host's submission, an app's call or a typed ur command, is no run and so
-// untainted (§16.6's spend step 1); MCP's mail_send (MCP-M7-01) carries its run's own and the tainted run's rule. A
-// same-uid process may submit as ur does (owner decision 47), and the gate still holds what is outward. Nothing here
-// logs an address, a subject or a byte of the text (I-13). Safe for concurrent use.
+// Nothing here logs an address, a subject or a byte of the text (I-13). Safe for concurrent use.
 
 package sidecar
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"fmt"
 	"io"
 	"slices"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"github.com/urnetwork/sidecar/protocol"
@@ -48,38 +46,35 @@ import (
 // The mark a preview cut at its bound ends with, so an approver knows more follows.
 const mailSendPreviewCutMark = "…"
 
-// Sends args as a host's submission (see the file header): at once when every recipient is this network's own, else
-// only once §5.4's gate passes the send's mail_send action. *ApprovalPendingError while it waits for a person, with
-// nothing kept or deposited; the gate's refusal, or the effect's, otherwise.
-func (self *MailClient) SubmitSend(ctx context.Context, args *MailSendArgs) (*MailSendResult, error) {
-	plan, err := self.planSend(args)
-	if err != nil {
-		return nil, err
-	}
-	outside := slices.ContainsFunc(plan.recipients, func(address string) bool {
-		_, own := mailSendOwnRecipient(plan.row, address)
-		return !own
-	})
-	if !outside {
-		return self.deliverSend(ctx, args, plan)
-	}
+// Runs a planned send through the gate (see the file header), answering its delivery once the gate passes it.
+func (self *MailClient) gatedSend(ctx context.Context, plan *mailSendPlan, content *mailSendContent, actionArgs MailConfigActionArgs, replan func() (*mailSendPlan, error)) (*MailSendResult, error) {
 	gate := plan.binding.Gate
 	if gate == nil {
 		return nil, ErrSidecarGateDenied
 	}
-	stored, err := mailSendAction(args, plan, self.sendSettings())
+	self.registerOutboxLookup(gate)
+	var stored *StoredCanonicalAction
+	var err error
+	if content.draft != nil {
+		stored, err = mailSendAction(content.draft, plan, self.sendSettings())
+	} else {
+		stored, err = self.mailSubmitAction(content.raw, plan)
+	}
 	if err != nil {
 		return nil, err
 	}
-	effect := &mailSendEffect{client: self, args: mailSendCopyArgs(args)}
+	effect := &mailSendEffect{client: self, replan: replan, content: content}
 	action := &SidecarAction{
 		Kind:      SidecarActionMail,
 		Canonical: stored.Bytes,
-		Risk:      CanonicalActionRisk(stored, SidecarRiskNormal, SidecarRiskNormal),
+		Risk:      CanonicalActionRisk(stored, SidecarRiskNormal, actionArgs.Risk),
+		RunId:     actionArgs.RunId,
+		AgentId:   actionArgs.AgentId,
+		Summary:   actionArgs.Summary,
 		Effect:    effect,
 	}
 	testHookBarrier("mail.send.gate.before", "")
-	err = gate.Authorize(ctx, action, nil)
+	err = gate.Authorize(ctx, action, actionArgs.Decision)
 	testHookBarrier("mail.send.gate.after", "")
 	if err != nil {
 		return nil, err
@@ -93,6 +88,10 @@ func (self *MailClient) SubmitSend(ctx context.Context, args *MailSendArgs) (*Ma
 			return result, nil
 		}
 		// a retry the gate answered from the recorded outcome: the effect did not run again
+		if len(outcome.EffectRef) == 0 {
+			// a restart's Lookup that found the send's outcomes alone, its entry sent and removed
+			return &MailSendResult{}, nil
+		}
 		sendId, err := IdFromBytes(outcome.EffectRef)
 		if err != nil {
 			return nil, fmt.Errorf("%w: the recorded outcome names no send", ErrMailSendUncertain)
@@ -125,6 +124,27 @@ func mailSendAction(args *MailSendArgs, plan *mailSendPlan, settings *MailSendSe
 	})
 }
 
+// The mail_send action of a submitted message (the file header's action row): its bytes hashed whole, its subject
+// and first text part previewed.
+func (self *MailClient) mailSubmitAction(message []byte, plan *mailSendPlan) (*StoredCanonicalAction, error) {
+	parseSettings := self.settings.Ingest.Parse
+	if parseSettings == nil {
+		parseSettings = DefaultMailParseSettings()
+	}
+	parsed, err := MailParseMessage(bytes.NewReader(message), parseSettings)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrMailSendInvalid, err)
+	}
+	bodySha256 := sha256.Sum256(message)
+	return NewCanonicalAction(&protocol.CanonicalAction{
+		Kind:       uint32(SidecarActionMail),
+		Recipients: slices.Clone(plan.recipients),
+		BodySha256: bodySha256[:],
+		Preview:    mailSendPreview(&MailSendArgs{Subject: parsed.Subject, Text: parsed.Text}, self.sendSettings().PreviewMaxByteCount),
+		Alias:      plan.fromAddress,
+	})
+}
+
 // What an approver sees of the message: its subject, a blank line and its text, cut at a rune within maxByteCount
 // bytes and then ending with mailSendPreviewCutMark where the mark fits.
 func mailSendPreview(args *MailSendArgs, maxByteCount int) string {
@@ -150,20 +170,51 @@ func mailSendCopyArgs(args *MailSendArgs) *MailSendArgs {
 	return &copied
 }
 
-// A submitted send's effect, which the gate runs once it passes the action (plan-MCP-effect-seam): Send of the draft
-// the action was built over, its answer kept for SubmitSend. Safe for concurrent use.
+// The latest not_after among the decisions a use spends under, whence its o/ entry's retry window: zero under a
+// standing grant or a send records approve, which spend none.
+func mailSendApprovalNotAfter(ctx context.Context) time.Time {
+	spend, ok := ApprovalSpendFromContext(ctx)
+	if !ok {
+		return time.Time{}
+	}
+	notAfter := time.Time{}
+	for _, storedSigned := range spend.Decisions {
+		decision, err := ParseStoredApprovalDecision(storedSigned)
+		if err != nil || decision.Decision == nil {
+			continue
+		}
+		if decisionNotAfter := time.UnixMilli(decision.Decision.GetNotAfterMillis()); notAfter.Before(decisionNotAfter) {
+			notAfter = decisionNotAfter
+		}
+	}
+	return notAfter
+}
+
+// A gated send's effect, which the gate runs once it passes the action (plan-MCP-effect-seam): the delivery of the
+// content the action was built over under the use's effect key, its answer kept for gatedSend. Safe for concurrent
+// use.
 type mailSendEffect struct {
 	client *MailClient
-	args   *MailSendArgs
+	// the send's plan made again at the spend, held to policy as it stands then
+	replan  func() (*mailSendPlan, error)
+	content *mailSendContent
 
 	stateLock sync.Mutex
 	result    *MailSendResult
 }
 
-// See SidecarEffect. The effect key is unused until MAIL-M9-02's o/ entries carry it (the file header's effect row).
-// Send's error is the whole send's, nothing deposited, so it proves the effect did not happen.
+// See SidecarEffect. Under a standing grant the key is empty, and a fresh one names the entry, since such a use keeps
+// no ledger row to retry under. An error is the whole send's, nothing deposited or queued, so it proves the effect did
+// not happen.
 func (self *mailSendEffect) Run(ctx context.Context, effectKey []byte) ([]byte, error) {
-	result, err := self.client.Send(ctx, self.args)
+	if len(effectKey) == 0 {
+		effectKey = mailSendStandingEffectKey()
+	}
+	plan, err := self.replan()
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrSidecarEffectNotDone, err)
+	}
+	result, err := self.client.deliverSend(ctx, plan, self.content, effectKey)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrSidecarEffectNotDone, err)
 	}

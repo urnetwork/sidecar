@@ -9,6 +9,7 @@ require (
 	github.com/andybalholm/brotli v1.2.7
 	github.com/emersion/go-imap/v2 v2.0.0-beta.9
 	github.com/emersion/go-message v0.18.2
+	github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6
 	github.com/emersion/go-smtp v0.25.1
 	github.com/klauspost/compress v1.20.2
 	github.com/letsencrypt/pebble/v2 v2.10.3
@@ -30,7 +31,6 @@ require (
 
 require (
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.1 // indirect
-	github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.8 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/google/btree v1.1.3 // indirect

@@ -285,7 +285,9 @@ func (self *MailClient) burnerLabelOf(addressOrLabel string) (string, error) {
 }
 
 // Burns a burner, named by its address or label (the file header's burn row): local, with no approval, and for
-// good. Its vault entries read burned; one this device may not write is left as it was.
+// good. Its vault entries read burned; one this device may not write is left as it was. A replying burner's
+// selectors on this device retire (mail_burner_reply.go); one that does not retire now is logged, naming no label,
+// and the component's next pass retires it.
 func (self *MailClient) Burn(ctx context.Context, addressOrLabel string) error {
 	label, err := self.burnerLabelOf(addressOrLabel)
 	if err != nil {
@@ -297,6 +299,9 @@ func (self *MailClient) Burn(ctx context.Context, addressOrLabel string) error {
 	}
 	if err := config.SetBurnerState(ctx, label, protocol.MailBurnerState_MAIL_BURNER_BURNED); err != nil {
 		return err
+	}
+	if err := self.retireBurnerSelectors(ctx, label); err != nil {
+		self.log.Warningf("[mail]a burned label's selectors did not retire yet: %v", err)
 	}
 	return self.burnVaultEntries(ctx, label)
 }

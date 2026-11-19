@@ -67,9 +67,9 @@ func TestMailSubmitSendToMembersPassesNoGate(t *testing.T) {
 }
 
 // A send naming an outside recipient waits on the gate as one mail_send action, and nothing is kept or deposited,
-// its member part included, until a decision passes it; a refusal sends nothing either. Once the gate passes it, Send
-// runs once: the member part deposits and each outside recipient waits for internet sending. A retry of the done use
-// answers its send_id and deposits nothing again.
+// its member part included, until a decision passes it. Once the gate passes it, the delivery runs once: the member
+// part deposits and each outside recipient is queued at o/. A retry of the done use answers its send_id and deposits
+// nothing again.
 func TestMailSubmitSendOutsideWaitsOnTheGate(t *testing.T) {
 	world, parts, mailboxId := newMailSendTestWorld(t)
 	ctx := context.Background()
@@ -107,18 +107,16 @@ func TestMailSubmitSendOutsideWaitsOnTheGate(t *testing.T) {
 		t.Fatalf("the action's from %q, body hash %x, preview %q", action.GetAlias(), action.GetBodySha256(), action.GetPreview())
 	}
 
-	// the gate refuses kind mail before its reserve while no lookup is registered for it: nothing is sent
-	testMailSubmitHold(world.gate, false)
-	if _, err := world.client.SubmitSend(ctx, testMailSubmitDraft()); err == nil {
-		t.Fatal("the gate's refusal sent")
-	}
-	if len(parts.snapshot()) != 0 {
-		t.Fatal("a refused send deposited")
+	// the client registered the outbox's Lookup for kind mail when it was bound, so the gate reserves its uses
+	world.gate.stateLock.Lock()
+	registered := world.gate.lookups[SidecarActionMail] != nil
+	world.gate.stateLock.Unlock()
+	if !registered {
+		t.Fatal("no Lookup for kind mail on the gate")
 	}
 
 	// a decision passes it: Send once
-	removeLookup := world.gate.RegisterEffectLookup(SidecarActionMail, testMailSubmitLookup)
-	defer removeLookup()
+	testMailSubmitHold(world.gate, false)
 	result, err := world.client.SubmitSend(ctx, testMailSubmitDraft())
 	if err != nil {
 		t.Fatal(err)
@@ -127,8 +125,8 @@ func TestMailSubmitSendOutsideWaitsOnTheGate(t *testing.T) {
 	for _, recipient := range result.Recipients {
 		outcomes[recipient.Address] = recipient.Outcome
 	}
-	if outcomes[testMailIngestRecipient] != MailSendDelivered || outcomes["someone@outside.example"] != MailSendInternetWaits ||
-		outcomes["hidden@elsewhere.example"] != MailSendInternetWaits || !result.SentCopy {
+	if outcomes[testMailIngestRecipient] != MailSendDelivered || outcomes["someone@outside.example"] != MailSendQueued ||
+		outcomes["hidden@elsewhere.example"] != MailSendQueued || !result.SentCopy {
 		t.Fatalf("outcomes %v, sent copy %t", outcomes, result.SentCopy)
 	}
 	deposits := parts.snapshot()
