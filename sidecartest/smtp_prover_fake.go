@@ -16,7 +16,8 @@
 //
 // It names fixed key sets, ready after a scripted number of PrepareKeys calls, and refuses a job naming
 // any other with ErrSmtpProofKeySet. A script can end a send after the envelope with EnvelopeRetry.
-// It records every send. Safe for concurrent use.
+// Each result carries every reply code read inside TLS and each RCPT's, by the recipient's position, as
+// SmtpProofResult asks of a prover. It records every send. Safe for concurrent use.
 
 package sidecartest
 
@@ -287,6 +288,9 @@ type fakeSmtpProverRun struct {
 	// application records written so far
 	recordCount uint64
 	nextIndex   uint32
+	// every reply code read inside TLS, and each RCPT's by the recipient's position, 0 for none read
+	replyCodes     []uint32
+	recipientCodes []uint32
 }
 
 func (self *FakeSmtpProver) SendSmtp(ctx context.Context, conn net.Conn, job *sidecar.SmtpProofJob, channel sidecar.SmtpProofChannel) (*sidecar.SmtpProofResult, error) {
@@ -308,6 +312,12 @@ func (self *FakeSmtpProver) SendSmtp(ctx context.Context, conn net.Conn, job *si
 		err = sidecar.ErrSmtpProofKeySet
 	} else {
 		result, err = run.run(ctx, conn)
+	}
+	if result != nil {
+		result.ReplyCodes = slices.Clone(run.replyCodes)
+		if slices.ContainsFunc(run.recipientCodes, func(code uint32) bool { return code != 0 }) {
+			result.RecipientReplyCodes = slices.Clone(run.recipientCodes)
+		}
 	}
 	func() {
 		self.stateLock.Lock()
@@ -414,7 +424,7 @@ func (self *fakeSmtpProverRun) run(ctx context.Context, conn net.Conn) (*sidecar
 	if mode == sidecar.SmtpModeData {
 		count = uint64(len(stuffed))
 		if self.prover.settings.DataProofByteCount < count {
-			return &sidecar.SmtpProofResult{Mode: uint32(mode), TooLarge: true}, nil
+			return &sidecar.SmtpProofResult{Mode: uint32(mode), TooLarge: true, DataProofByteCount: self.prover.settings.DataProofByteCount}, nil
 		}
 	}
 	if declared != count {
@@ -441,7 +451,12 @@ func (self *fakeSmtpProverRun) run(ctx context.Context, conn net.Conn) (*sidecar
 	if err := self.submit(ctx, &fakeSmtpPart{mode: mode, recordCount: envelopeRecords, replyCount: 1}); err != nil {
 		return nil, err
 	}
+	self.recipientCodes = make([]uint32, len(job.RecipientLocals))
 	refuses := func(i int, reply *fakeSmtpReply) bool {
+		if 1 <= i && i <= len(job.RecipientLocals) {
+			code, _ := strconv.ParseUint(reply.code, 10, 32)
+			self.recipientCodes[i-1] = uint32(code)
+		}
 		if mode == sidecar.SmtpModeData && i == len(commands)-1 {
 			return reply.code != "354"
 		}
@@ -596,6 +611,9 @@ func (self *fakeSmtpProverRun) reply() (*fakeSmtpReply, error) {
 	reply, err := readFakeSmtpReply(self.reader)
 	if err != nil {
 		return nil, err
+	}
+	if code, err := strconv.ParseUint(reply.code, 10, 32); err == nil {
+		self.replyCodes = append(self.replyCodes, uint32(code))
 	}
 	func() {
 		self.prover.stateLock.Lock()

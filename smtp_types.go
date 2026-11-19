@@ -119,6 +119,9 @@ type SmtpOutboundMessage struct {
 	// D-MCP-11's key of the use. It names the o/ and or/ entries, so a replay finds the earlier
 	// outcome; mail claims no exactly-once SMTP (§22.7).
 	EffectKey []byte
+	// The send's id, MAIL's MailSendResult.SendId and its sent copy's, which each mail_send event names
+	// so §18.5's GetSendResult can read the outcomes it reports. The zero Id raises no event.
+	SendId Id
 	// The envelope sender's address at b.<net>.<root> (§14.6).
 	Sender string
 	// Every recipient, BCC included, as addr-specs. A ReachReceipt lists them all (§16.8).
@@ -141,6 +144,10 @@ type SmtpSendResult struct {
 	EffectKey []byte
 	// In the order each domain first appears among the recipients.
 	Domains []*SmtpDomainOutcome
+	// The domains this Send sent to again after an earlier attempt began and never wrote its result, as a
+	// crash between MAIL and the result leaves or/: the MX may have taken that attempt, so the message may
+	// arrive twice there, which §22.7 allows. Each is sent at most once more.
+	ResentDomains []string
 }
 
 // One recipient domain's outcome, as §15.7's or/ keeps it and every device of the member reads it.
