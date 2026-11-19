@@ -7,13 +7,28 @@
 package smtpproof
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"runtime"
 	"slices"
+	"strconv"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/consensys/gnark-crypto/ecc"
+	"github.com/consensys/gnark/backend/groth16"
+	gnarkwitness "github.com/consensys/gnark/backend/witness"
+	"github.com/consensys/gnark/frontend"
+
+	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/sidecartest"
 )
 
@@ -298,4 +313,175 @@ func TestProofsOfOneShapeShareItsLoad(t *testing.T) {
 	if loader.loadCount("a") != 1 {
 		t.Errorf("%d loads", loader.loadCount("a"))
 	}
+}
+
+// What a proof takes over its loaded shape under the loader's rule, a collection after each proof
+// (DESIGN-DETAILS 3.2.8), held to PartMemoryByteCount, and what the loaded shape takes, held to
+// ShapeMemoryByteCount: either over its default fails, which says to raise it. One unit, the body shape of the
+// family SMTPPROOF_BENCH_MEMORY names (aes128gcm or chacha20), is set up in a process of its own; a fresh
+// process then loads its compiled circuit and its proving key's dump as a prover host's cache holds them,
+// streamed, and proves at least three times back to back through a loader, reading its peak resident memory
+// after the load and after each proof. The setup takes minutes, so this runs only when asked for:
+// SMTPPROOF_BENCH_MEMORY=aes128gcm go test -run '^$' -bench BenchmarkPartMemory.
+func BenchmarkPartMemory(b *testing.B) {
+	if os.Getenv("SMTPPROOF_BENCH_MEMORY") == "" {
+		b.Skip("set SMTPPROOF_BENCH_MEMORY to aes128gcm or chacha20 to run")
+	}
+	directory := b.TempDir()
+	prepare := exec.Command(os.Args[0], "-test.run=^TestPreparePartMemory$", "-test.v", "-test.timeout=0")
+	prepare.Env = append(os.Environ(), "SMTPPROOF_PREPARE_DIR="+directory)
+	if output, err := prepare.CombinedOutput(); err != nil {
+		b.Fatalf("preparing a unit: %v: %s", err, output)
+	}
+	b.ResetTimer()
+	command := exec.Command(os.Args[0], "-test.run=^TestPartMemoryProofs$", "-test.v", "-test.timeout=0")
+	command.Env = append(os.Environ(), "SMTPPROOF_PROVE_DIR="+directory, "SMTPPROOF_PROOF_COUNT="+strconv.Itoa(max(b.N, 3)))
+	output, err := command.CombinedOutput()
+	b.StopTimer()
+	if err != nil {
+		b.Fatalf("proving: %v: %s", err, output)
+	}
+	match := regexp.MustCompile(`part-memory: shape (\d+) MiB, proof (\d+) MiB`).FindSubmatch(output)
+	if match == nil {
+		b.Fatalf("no figures in %s", output)
+	}
+	shapeMebibytes, _ := strconv.ParseInt(string(match[1]), 10, 64)
+	proofMebibytes, _ := strconv.ParseInt(string(match[2]), 10, 64)
+	b.ReportMetric(float64(shapeMebibytes), "shape-MiB")
+	b.ReportMetric(float64(proofMebibytes), "proof-MiB")
+	settings := DefaultProverSettings()
+	if settings.ShapeMemoryByteCount < shapeMebibytes*1024*1024 {
+		b.Errorf("a loaded shape took %d MiB, past ShapeMemoryByteCount's %d MiB: raise its default", shapeMebibytes, settings.ShapeMemoryByteCount/1024/1024)
+	}
+	if settings.PartMemoryByteCount < proofMebibytes*1024*1024 {
+		b.Errorf("a proof took %d MiB over its shape, past PartMemoryByteCount's %d MiB: raise its default", proofMebibytes, settings.PartMemoryByteCount/1024/1024)
+	}
+}
+
+// This process's peak resident memory so far, in octets: getrusage's maxrss, in octets on darwin and KiB
+// elsewhere.
+func testPeakResidentBytes(t *testing.T) int64 {
+	t.Helper()
+	var usage syscall.Rusage
+	if err := syscall.Getrusage(syscall.RUSAGE_SELF, &usage); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS == "darwin" {
+		return int64(usage.Maxrss)
+	}
+	return int64(usage.Maxrss) * 1024
+}
+
+// BenchmarkPartMemory's preparation, in a process of its own so that its memory is not the prover's: a unit
+// of the family's body shape, set up by gnark's one-party test setup, written as a host's cache holds it, the
+// compiled circuit and the proving key's dump, beside a measuring part's full witness.
+func TestPreparePartMemory(t *testing.T) {
+	directory := os.Getenv("SMTPPROOF_PREPARE_DIR")
+	if directory == "" {
+		t.Skip("run by BenchmarkPartMemory")
+	}
+	proof := DefaultProofSettings()
+	entry := proof.shape(ShapeKindBody, ShapeFamily(os.Getenv("SMTPPROOF_BENCH_MEMORY")), 0)
+	if entry == nil {
+		t.Fatalf("no body shape of family %q", os.Getenv("SMTPPROOF_BENCH_MEMORY"))
+	}
+	shape := newPartShape(proof, entry)
+	statement, witness, err := newMeasurePart(proof, shape)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := testSetup(t, shape)
+	circuit, err := partAssignment(shape, statement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assignWitness(circuit, statement, witness)
+	full, err := frontend.NewWitness(circuit, ecc.BN254.ScalarField())
+	if err != nil {
+		t.Fatal(err)
+	}
+	write := func(name string, write func(writer io.Writer) error) {
+		file, err := os.Create(filepath.Join(directory, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		writer := bufio.NewWriterSize(file, 1024*1024)
+		if err := write(writer); err != nil {
+			t.Fatal(err)
+		}
+		if err := writer.Flush(); err != nil {
+			t.Fatal(err)
+		}
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("compiled", func(writer io.Writer) error {
+		_, err := keys.compiled.WriteTo(writer)
+		return err
+	})
+	write("dump", keys.provingKey.WriteDump)
+	write("witness", func(writer io.Writer) error {
+		_, err := full.WriteTo(writer)
+		return err
+	})
+}
+
+// BenchmarkPartMemory's prover: the shape loaded as keyCache.loadShape reads it, then its proofs through a
+// loader on the default budget, reading the peak resident memory after the load and after each proof.
+func TestPartMemoryProofs(t *testing.T) {
+	directory := os.Getenv("SMTPPROOF_PROVE_DIR")
+	if directory == "" {
+		t.Skip("run by BenchmarkPartMemory")
+	}
+	count, err := strconv.Atoi(os.Getenv("SMTPPROOF_PROOF_COUNT"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := func(name string, read func(reader io.Reader) error) {
+		file, err := os.Open(filepath.Join(directory, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer file.Close()
+		if err := read(bufio.NewReaderSize(file, 1024*1024)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := testPeakResidentBytes(t)
+	compiled := groth16.NewCS(ecc.BN254)
+	read("compiled", func(reader io.Reader) error {
+		_, err := compiled.ReadFrom(reader)
+		return err
+	})
+	provingKey := groth16.NewProvingKey(ecc.BN254)
+	read("dump", provingKey.ReadDump)
+	full, err := gnarkwitness.New(ecc.BN254.ScalarField())
+	if err != nil {
+		t.Fatal(err)
+	}
+	read("witness", func(reader io.Reader) error {
+		_, err := full.ReadFrom(reader)
+		return err
+	})
+	runtime.GC()
+	loaded := testPeakResidentBytes(t)
+	keys := &shapeKeys{compiled: compiled, provingKey: provingKey}
+	loader := newProverLoader(DefaultProverSettings(), sidecar.RealClock{})
+	peak := loaded
+	for range count {
+		_, err := loader.prove(context.Background(), "unit", func() (*shapeKeys, error) {
+			return keys, nil
+		}, func(keys *shapeKeys) ([]byte, error) {
+			if _, err := groth16.Prove(keys.compiled, keys.provingKey, full); err != nil {
+				return nil, err
+			}
+			return []byte("proved"), nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		peak = max(peak, testPeakResidentBytes(t))
+	}
+	t.Logf("part-memory: shape %d MiB, proof %d MiB", (loaded-before)/1024/1024, (peak-loaded)/1024/1024)
 }

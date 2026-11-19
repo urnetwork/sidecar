@@ -652,7 +652,8 @@ func TestAFamilyIsOfferedOnlyWhenReady(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if suites := keySet.readySuites(clientSuites); !slices.Equal(suites, []uint16{tlsSuiteAes128GcmSha256, tlsSuiteChacha20Poly1305Sha256}) {
+	// in the client's order, ChaCha20 first (DESIGN-DETAILS 3.2.6)
+	if suites := keySet.readySuites(clientSuites); !slices.Equal(suites, []uint16{tlsSuiteChacha20Poly1305Sha256, tlsSuiteAes128GcmSha256}) {
 		t.Errorf("TLS 1.3 ready: %x", suites)
 	}
 	if err := keySet.EnsureKeys(context.Background(), ShapeFamilyAes128Gcm); err != nil {
