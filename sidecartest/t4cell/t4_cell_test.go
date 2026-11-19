@@ -51,6 +51,68 @@ func TestSampleCatchesATransientTheTimedSamplesMiss(t *testing.T) {
 	}
 }
 
+// §18.4's search working sets: 4 MiB a search on both phone profiles and 8 MiB in the page Worker, each beside the
+// 256 KiB of version-table pages, which no forwarding shares in the page Worker.
+func TestProfilesHoldTheSearchWorkingSets(t *testing.T) {
+	const mib = 1024 * 1024
+	for _, c := range []struct {
+		profile    *Profile
+		workingSet int64
+	}{
+		{profile: Ios32Profile(), workingSet: 4 * mib},
+		{profile: AndroidProfile(), workingSet: 4 * mib},
+		{profile: PageWorkerProfile(), workingSet: 8 * mib},
+	} {
+		if c.profile.SearchWorkingSetByteCount != c.workingSet || c.profile.VersionPageByteCount != 256*1024 ||
+			c.profile.SearchByteCount() != c.workingSet+256*1024 {
+			t.Errorf("%s: a search holds %d B beside %d B", c.profile.Name, c.profile.SearchWorkingSetByteCount, c.profile.VersionPageByteCount)
+		}
+	}
+	if worker := PageWorkerProfile(); worker.ForwardingSteadyByteCount != 0 || worker.CompileMemoryMaxByteCount != 0 || worker.SidecarBudgetByteCount != 64*mib {
+		t.Errorf("the page Worker's profile: %+v", worker)
+	}
+}
+
+// FS-109's measure catches a search that holds a per-search collection of keys past its working set, which a sample
+// without a forced collection could miss, and passes one that keeps nothing; a search that samples nothing is no
+// measure.
+func TestMeasureSearchCatchesAPerSearchKeyCollection(t *testing.T) {
+	profile := Ios32Profile()
+	cell := NewCell(profile)
+	search := func(collect bool) *Row {
+		row, err := cell.MeasureSearch("a search", profile.SearchByteCount(), func(sample func()) error {
+			sample()
+			var keys [][16]byte
+			if collect {
+				// the bug FS-109 exists to catch: every bucket key collected per search, here 500,000 of them
+				keys = make([][16]byte, 500000)
+				for i := range keys {
+					keys[i][0], keys[i][1], keys[i][2] = byte(i), byte(i>>8), byte(i>>16)
+				}
+			}
+			sample()
+			runtime.KeepAlive(keys)
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return row
+	}
+	if clean := search(false); !clean.Within() || clean.SampleCount != 2 || clean.BudgetByteCount != profile.SearchByteCount() {
+		t.Errorf("CONTROL FAILED: a search that keeps nothing measured %+v", clean)
+	}
+	if collected := search(true); collected.Within() || collected.PeakByteCount < 7*1024*1024 {
+		t.Errorf("a per-search key collection measured %+v", collected)
+	}
+	if cell.CheckWithin() == nil {
+		t.Error("CheckWithin passed a cell holding a per-search key collection")
+	}
+	if _, err := NewCell(profile).MeasureSearch("nothing sampled", profile.SearchByteCount(), func(sample func()) error { return nil }); err == nil {
+		t.Error("a search that sampled nothing measured something")
+	}
+}
+
 // What a step keeps counts in its steady figure, held to its budget, and CheckWithin names the step past it.
 func TestKeptBytesCountSteady(t *testing.T) {
 	cell := NewCell(Ios32Profile())

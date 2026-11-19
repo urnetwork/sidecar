@@ -336,8 +336,9 @@ func TestPushDropCommitsWithItsIndexRewrites(t *testing.T) {
 }
 
 // Each change beside the lineages that is no index rewrite is 409 DROP_BOUNDARY, recorded, the head unmoved: a
-// creation, a removal, a write of no index file, a rewrite past Padmé of the chain it replaces, and a rewrite of an
-// index file that stands on another ref alone, whose base names that ref's version 5g refuses 409 PATH_CONFLICT,
+// creation under the index root, a removal of an index file, a versioned write over one, a rewrite past Padmé of the
+// chain it replaces, and a rewrite of an index file that stands on another ref alone, the companion index's place,
+// which is a creation on the DROP's own ref and, naming that ref's version as its base, 5g's 409 PATH_CONFLICT,
 // final; the DROP with its rewrites alone then commits.
 func TestPushDropRefusesWhatIsNoIndexRewrite(t *testing.T) {
 	fixture := newDropIndexTestFixture(t, 2)
@@ -369,8 +370,10 @@ func TestPushDropRefusesWhatIsNoIndexRewrite(t *testing.T) {
 			plan.Changes = append(plan.Changes, &sidecar.EvsPlannedChange{TokenPath: fixture.indexShard, BaseEntryVersion: fixture.indexVersion})
 			return nil
 		}},
-		{name: "a write of no index file", status: http.StatusConflict, code: protocol.EvsRefusalCode_EVS_REFUSAL_DROP_BOUNDARY, build: func(plan *sidecar.EvsPushPlan) [][]byte {
-			plan.Changes = append(plan.Changes, fixture.check.change(plan, checkTestPath("y"), 0, plan.BaseVersion+1))
+		{name: "a versioned write over an index file", status: http.StatusConflict, code: protocol.EvsRefusalCode_EVS_REFUSAL_DROP_BOUNDARY, build: func(plan *sidecar.EvsPushPlan) [][]byte {
+			plan.Changes = append(plan.Changes, &sidecar.EvsPlannedChange{
+				TokenPath: fixture.indexShard, BaseEntryVersion: fixture.indexVersion, EntryVersion: fixture.check.fileEntry(plan, fixture.indexVersion+1, nil),
+			})
 			return nil
 		}},
 		{name: "a rewrite past Padmé of the chain it replaces", status: http.StatusConflict, code: protocol.EvsRefusalCode_EVS_REFUSAL_DROP_BOUNDARY, build: func(plan *sidecar.EvsPushPlan) [][]byte {
