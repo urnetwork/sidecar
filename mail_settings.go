@@ -24,8 +24,12 @@ type MailSettings struct {
 	Receive *MailReceiveSettings
 	// What IMAP's store lists and keeps (mail_imap_store.go).
 	Imap *MailImapSettings
-	// What a same-network send is held to (mail_send.go).
+	// What a send is held to (mail_send.go).
 	Send *MailSendSettings
+	// The outbox and the sender's way into the mailbox (mail_outbox.go, mail_smtp_mailbox.go).
+	Outbox *MailOutboxSettings
+	// Forwarding and its codes (mail_forward.go).
+	Forward *MailForwardSettings
 	// The member's vault (mail_vault.go) and what OneTimeCodes reads (mail_codes.go).
 	Vault *MailVaultSettings
 	Codes *MailCodeSettings
@@ -61,6 +65,8 @@ func DefaultMailSettings() *MailSettings {
 		Receive:                     defaultMailReceiveSettings(),
 		Imap:                        DefaultMailImapSettings(),
 		Send:                        DefaultMailSendSettings(),
+		Outbox:                      DefaultMailOutboxSettings(),
+		Forward:                     DefaultMailForwardSettings(),
 		Vault:                       DefaultMailVaultSettings(),
 		Codes:                       DefaultMailCodeSettings(),
 		Burner:                      DefaultMailBurnerSettings(),
@@ -77,7 +83,7 @@ func DefaultMailSettings() *MailSettings {
 // Whether every value is in range.
 func (self *MailSettings) valid() bool {
 	return self != nil && self.Config != nil && self.Ingest != nil && self.Store != nil && self.Receive != nil && self.Imap != nil &&
-		self.Send.valid() && self.Vault != nil && self.Codes.valid() && self.Burner.valid() &&
+		self.Send.valid() && self.Outbox.valid() && self.Forward.valid() && self.Vault != nil && self.Codes.valid() && self.Burner.valid() &&
 		0 < self.ReadMaxByteCount && 0 < self.ReadHeaderValueMaxByteCount && 0 < self.ReadHeaderMaxCount &&
 		0 < self.AddressScanMaxCount && 0 < self.CheckInterval && 0 < self.UnboundCheckInterval
 }
@@ -93,4 +99,69 @@ func ApplyMobileMailSettings(settings *MailSettings, profile MailHostProfile) {
 	}
 	settings.Profile = profile
 	applyMobileMailSettings(settings)
+}
+
+// The u32be length that leads an o/ file (plan-SMTP-wire-gaps#4): a format value.
+const mailOutboxLengthByteCount = 4
+
+// What the outbox and the sender's way into the mailbox are held to (MAIL-M9-02). Every value must be positive.
+type MailOutboxSettings struct {
+	// The most bytes of an o/ entry's Signed: a SmtpOutboxEntry of 100 recipients of at most 254 bytes, its TL4
+	// domains and a signature fit 32 KiB, and 64 KiB leaves room for a newer writer's fields.
+	OutboxSignedMaxByteCount int
+	// The most bytes of an o/ file: the largest message a send takes, the deposit's 50 MiB (§20.4), with its Signed.
+	OutboxFileMaxByteCount int
+	// The most bytes of an or/ record: one MailOutcome a recipient domain, at most 100, each under 320 bytes.
+	OutcomeRecordMaxByteCount int
+	// The most bytes of a p/ record.
+	ProverRecordMaxByteCount int
+	// How many times a replacing write, of or/ or p/, or a removal reads again after another writer moved its path.
+	WriteRetryCount int
+	// How long an or/ record is kept from its last outcome's update (§15.7's 30 days).
+	OutcomeKeepDuration time.Duration
+}
+
+// The one default.
+func DefaultMailOutboxSettings() *MailOutboxSettings {
+	return &MailOutboxSettings{
+		OutboxSignedMaxByteCount:  64 * 1024,
+		OutboxFileMaxByteCount:    50*1024*1024 + 64*1024 + mailOutboxLengthByteCount,
+		OutcomeRecordMaxByteCount: 64 * 1024,
+		ProverRecordMaxByteCount:  4 * 1024,
+		WriteRetryCount:           8,
+		OutcomeKeepDuration:       30 * 24 * time.Hour,
+	}
+}
+
+// Whether every value is in range.
+func (self *MailOutboxSettings) valid() bool {
+	return self != nil && 0 < self.OutboxSignedMaxByteCount && self.OutboxSignedMaxByteCount < self.OutboxFileMaxByteCount &&
+		0 < self.OutcomeRecordMaxByteCount && 0 < self.ProverRecordMaxByteCount && 0 < self.WriteRetryCount &&
+		0 < self.OutcomeKeepDuration
+}
+
+// What forwarding is held to (MAIL-M9-04; §15.10's forwarding, owner decision 53). Every value must be positive.
+type MailForwardSettings struct {
+	// The digits of the code that confirms a forwarding address: §15.10's 6.
+	CodeDigitCount int
+	// How long a code sent to an address stays good: 1 h, long enough for a person to read their mail, short enough
+	// that a code found later confirms nothing.
+	CodeLifetime time.Duration
+	// How many wrong codes a pending address takes before its code is spent and another must be sent: 5, so a guesser
+	// reaches at most 5 of the 10^6 codes a code sent.
+	CodeAttemptMaxCount int
+}
+
+// The one default.
+func DefaultMailForwardSettings() *MailForwardSettings {
+	return &MailForwardSettings{
+		CodeDigitCount:      6,
+		CodeLifetime:        time.Hour,
+		CodeAttemptMaxCount: 5,
+	}
+}
+
+// Whether every value is in range: a code of 4 to 9 digits, which a uint32 holds.
+func (self *MailForwardSettings) valid() bool {
+	return self != nil && 4 <= self.CodeDigitCount && self.CodeDigitCount <= 9 && 0 < self.CodeLifetime && 0 < self.CodeAttemptMaxCount
 }

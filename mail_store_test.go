@@ -109,6 +109,12 @@ func (self *mailTestStore) Write(ctx context.Context, writes []*mailStoreWrite) 
 	}
 	versions := []uint64{}
 	for _, write := range writes {
+		if write.Remove {
+			// a removed path reads absent, its version 0, as evs's does
+			delete(self.files, write.Path)
+			versions = append(versions, 0)
+			continue
+		}
 		file := self.files[write.Path]
 		if file == nil {
 			file = &mailTestFile{}

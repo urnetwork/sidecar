@@ -387,6 +387,13 @@ rows:
     targets:
       - {name: FuzzMailImap, package: "."}
 
+  - id: mail-submission
+    spec: "MAIL-M9-01's Tests line: FuzzMailSubmission, no panic and replies bounded over a submission session's bytes"
+    owner: MAIL-M9-01
+    milestone: M9
+    targets:
+      - {name: FuzzMailSubmission, package: "."}
+
   - id: mta-sts
     spec: "SMTP-M9-06's Tests line: the MTA-STS policy and TXT grammars"
     owner: SMTP-M9-06

@@ -109,6 +109,8 @@ type Daemon struct {
 	sockets *DaemonSockets
 	// the IMAP server and its listener (mail_imap.go), made on first use: a *DaemonMailImap on the legs that build it
 	mailImap any
+	// the submission server and its listener (mail_submission.go), made on first use: a *DaemonMailSubmission
+	mailSubmission any
 	// the ring of the attached Sidecars' events, which the events method long-polls (daemon_events.go), made on first
 	// use
 	events *DaemonEvents

@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/urnetwork/sidecar/protocol"
+	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 // The mail component's name, its keychain namespace and its sealed directory (§5.4, §5.9).
@@ -98,6 +99,24 @@ type MailBinding struct {
 	// The labels directly under the network's apex it publishes a host at, which a burner label must not shadow
 	// (mail_burner_labels.go); nil for none.
 	PublishedHosts func() []string
+	// This device's identity key's signature over an outbox entry (Sidecar.Sign): nil queues no internet mail, its
+	// recipients answered failed (mail_outbox.go).
+	Sign func(purpose string, signedType bridge.SignedType, body []byte) (*bridge.Signed, error)
+	// The network's §21.7 standing (GET /abuse/status), read before internet mail is queued; nil queues none.
+	Standing func(ctx context.Context) (*AbuseStatus, error)
+	// Whether a run read untrusted content or lost hook coverage (Sidecar.RunTainted, I-9): its sends each take the
+	// gate, records approving none. Nil reads every run untainted, as a host that runs no agents binds.
+	RunTainted func(runId Id) bool
+	// Retires a burner's DKIM selector at its burn (SmtpDkimKeys.Retire, MAIL-M9-03): nil retires nothing here, and
+	// the device that published the selector retires its own once it reads the burn.
+	BurnerSelectors MailBurnerSelectors
+}
+
+// A replying burner's selectors on this device (§15.9, D-DNS-11): SmtpDkimKeys is one.
+type MailBurnerSelectors interface {
+	// Retires this device's selectors for domain, a burner's <blabel>.<net>.<root>, through POST /smtp/dkim-keys,
+	// whose server write deletes the label's copies with its last selector. No selector is no error.
+	Retire(ctx context.Context, domain string) error
 }
 
 // How a MailClient reaches a repo's parts: over the bound EvsClient, or a test's stand-ins.
@@ -225,6 +244,9 @@ type MailClient struct {
 	// the component's running generation and a test's seams, on the legs that run a component (mail_component.go)
 	componentRun   any
 	componentSeams any
+	// the gate kind mail's Lookup is registered on, and what removes it (mail_outbox.go)
+	outboxLookupGate   MailConfigGate
+	outboxLookupRemove func()
 }
 
 // A client over args, bound to nothing yet.
@@ -330,6 +352,10 @@ func (self *MailClient) Bind(binding *MailBinding) {
 	}()
 	if closeConfig != nil {
 		closeConfig.Close()
+	}
+	if copied.Gate != nil {
+		// so a restart reconciles a reserved send with no caller alive
+		self.registerOutboxLookup(copied.Gate)
 	}
 }
 
@@ -788,5 +814,15 @@ func (self *MailClient) closeParts() {
 	}()
 	if config != nil {
 		config.Close()
+	}
+	remove := func() func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		remove := self.outboxLookupRemove
+		self.outboxLookupGate, self.outboxLookupRemove = nil, nil
+		return remove
+	}()
+	if remove != nil {
+		remove()
 	}
 }
