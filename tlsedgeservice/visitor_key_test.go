@@ -189,7 +189,7 @@ func TestTlsVisitorKeysFleetKeyIsShared(t *testing.T) {
 	if !bytes.Equal(affinityKey, first.AffinityKey(netip.MustParseAddr("203.0.113.200"))) {
 		t.Fatal("two addresses of one /24 have different affinity keys")
 	}
-	if bytes.Equal(affinityKey, first.AffinityKey(netip.MustParseAddr("203.0.114.9"))) {
+	if bytes.Equal(affinityKey, first.AffinityKey(netip.MustParseAddr("198.51.100.9"))) {
 		t.Fatal("two /24s share an affinity key")
 	}
 	if bytes.Equal(affinityKey, first.RecordHash(visitor)) {

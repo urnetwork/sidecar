@@ -755,6 +755,8 @@ barrier tls.front_target.after tls_front.go
 barrier tls.front_target.before tls_front.go
 barrier tls.handshake.after smtpproof/tls_client.go
 barrier tls.handshake.before smtpproof/tls_client.go
+barrier tlsedge.custom_hosts_publish.after tlsedgeservice/names.go
+barrier tlsedge.custom_hosts_publish.before tlsedgeservice/names.go
 barrier tlsedge.kill_publish.after tlsedgeservice/kill_set.go
 barrier tlsedge.kill_publish.before tlsedgeservice/kill_set.go
 barrier tlsedge.kill_read.after tlsedgeservice/service.go
@@ -763,6 +765,10 @@ barrier tlsedge.names_publish.after tlsedgeservice/names.go
 barrier tlsedge.names_publish.before tlsedgeservice/names.go
 barrier tlsedge.splice_register.after tlsedgeservice/conn.go
 barrier tlsedge.splice_register.before tlsedgeservice/conn.go
+barrier tlsedge.visitor_key_create.after tlsedgeservice/visitor_key.go
+barrier tlsedge.visitor_key_create.before tlsedgeservice/visitor_key.go
+barrier tlsedge.visitor_key_read.after tlsedgeservice/visitor_key.go
+barrier tlsedge.visitor_key_read.before tlsedgeservice/visitor_key.go
 barrier token.refresh.after api_token_manager.go
 barrier token.refresh.before api_token_manager.go
 secret * gkm_keys.go
@@ -899,8 +905,12 @@ secret tls_front_reach_key tls_reach_receipt.go
 secret tls_front_session_key tls_session.go
 secret tls_front_session_root tls_session.go
 secret tls_link_client_key tls_publish.go
+secret tls_visitor_affinity tlsedgeservice/visitor_key.go
 secret tls_visitor_cap tlsedgeservice/visitor_key.go
 secret tls_visitor_daily tlsedgeservice/visitor_key.go
+secret tls_visitor_fleet_affinity tlsedgeservice/visitor_key.go
+secret tls_visitor_fleet_daily tlsedgeservice/visitor_key.go
+secret tls_visitor_fleet_record tlsedgeservice/visitor_key.go
 secret tls_visitor_record tlsedgeservice/visitor_key.go
 secret vault_password mail_vault.go
 secret vault_totp_secret mail_totp.go
