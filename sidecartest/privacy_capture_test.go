@@ -205,6 +205,11 @@ func TestEachCaptureClassNamesItsLeak(t *testing.T) {
 			net.Host().Tasks.Schedule(t.Context(), &sidecar.TaskRequest{Name: "job", OnceKey: canary})
 		},
 		PrivacyClassInterceptingProxy: leakThroughInterceptingProxy,
+		PrivacyClassEdgeRecord:        leakThroughEdgeSource(PrivacyClassEdgeRecord),
+		PrivacyClassReportParse:       leakThroughEdgeSource(PrivacyClassReportParse),
+		PrivacyClassFind:              leakThroughEdgeSource(PrivacyClassFind),
+		PrivacyClassDnsEdgeQuery:      leakThroughEdgeSource(PrivacyClassDnsEdgeQuery),
+		PrivacyClassUpstreamResolver:  leakThroughEdgeSource(PrivacyClassUpstreamResolver),
 	}
 	for _, class := range PrivacyClasses() {
 		if _, ok := leaks[class]; !ok && class != PrivacyClassMx4Input {
