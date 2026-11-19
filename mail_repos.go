@@ -9,9 +9,14 @@
 //	          RepoCreate from. Where the log holds more than one for a member, two devices having raced, every
 //	          device takes the one created first in log order, the lowest id breaking a tie, so all agree
 //	mailcfg   one mailcfg repo per network, created by a config writer (§8.8's RepoCreate row), its row naming no
-//	          owner; a device that is none is refused by the log, not here. A Team scope's own mailcfg is the mailcfg
-//	          whose row names the scope's member (§8.5's mailcfg row; QD-1093; MAIL-M8-09), never taken as the
-//	          network's; its creation, a member device's RepoCreate the fold owner-binds, is not built yet
+//	          owner: the first such in log order. A Team scope's own mailcfg is the mailcfg whose row names the
+//	          scope's member (§8.5's mailcfg row; QD-1093; MAIL-M8-09), never taken as the network's: a consented
+//	          device of that member that writes no config heads creates it, and the access log's fold owner-binds it
+//	          to the creator's member, one per member, the first in log order, as a mailbox. Which of the two a
+//	          RepoCreate makes is its signer's standing at its log position, not a field, so each creation is refused
+//	          here first: a device that writes no config heads creates no network mailcfg, and a config writer no
+//	          scope's (EnsureMailConfig, EnsureScopeMailConfig). A creation whose signer's standing changed before
+//	          it landed folds as the other and is answered ErrMailReposAbsent, never read as what was asked for
 //	admins    ERASE and CLOSURE pushes take repo:<id>:admin (§11.8, §11.12), so each consented device of the owner
 //	          that is not read_only files RepoAdmin{add} for itself once it holds the repo's key (§8.8), and any of
 //	          them erases whether or not the device that created the mailbox survives. A read_only device, a parked
@@ -50,6 +55,9 @@ var (
 	ErrMailReposNotConsented = errors.New("mail repos: not a consented device of the owner that may write")
 	// No mailbox, or no mailcfg, stands for what was asked.
 	ErrMailReposAbsent = errors.New("mail repos: no such repo")
+	// The mailcfg asked for is not this device's to create: the network's is a config writer's, and a Team scope's
+	// own is a device's that writes no config heads, since the log reads a config writer's as the network's (QD-1093).
+	ErrMailReposConfigWriter = errors.New("mail repos: not this device's mailcfg to create")
 )
 
 // What MailRepos needs of evs, which *EvsClient is.
@@ -87,9 +95,11 @@ type MailRepos struct {
 	createToken chan struct{}
 
 	stateLock sync.Mutex
-	// repos this process created that the state may not show yet: each member's mailbox, and the mailcfg
-	createdMailboxIds map[Id]Id
-	createdMailConfig *Id
+	// repos this process created that the state may not show yet: each member's mailbox, the network's mailcfg, and
+	// each member's scope's own
+	createdMailboxIds     map[Id]Id
+	createdMailConfig     *Id
+	createdScopeConfigIds map[Id]Id
 	// repos this process filed its own RepoAdmin for, which the state may not show yet
 	adminFiledRepoIds map[Id]bool
 }
@@ -109,15 +119,16 @@ func newMailRepos(evs mailReposEvs, args *MailReposArgs) *MailRepos {
 		log = NewNoopLogger()
 	}
 	return &MailRepos{
-		evs:               evs,
-		state:             args.State,
-		fileStatement:     args.FileStatement,
-		gkm:               args.Gkm,
-		sidecarId:         args.SidecarId,
-		log:               log,
-		createToken:       make(chan struct{}, 1),
-		createdMailboxIds: map[Id]Id{},
-		adminFiledRepoIds: map[Id]bool{},
+		evs:                   evs,
+		state:                 args.State,
+		fileStatement:         args.FileStatement,
+		gkm:                   args.Gkm,
+		sidecarId:             args.SidecarId,
+		log:                   log,
+		createToken:           make(chan struct{}, 1),
+		createdMailboxIds:     map[Id]Id{},
+		createdScopeConfigIds: map[Id]Id{},
+		adminFiledRepoIds:     map[Id]bool{},
 	}
 }
 
@@ -197,8 +208,7 @@ func (self *MailRepos) Mailbox(memberId Id) (Id, bool) {
 		return Id{}, false
 	}
 	repoId, _, found := mailRepoOfKind(state, protocol.RepoKind_REPO_KIND_MAILBOX, func(repo *protocol.AclRepo) bool {
-		ownerMemberId, err := IdFromBytes(repo.GetOwnerMemberId())
-		return err == nil && ownerMemberId == memberId
+		return mailRepoOwnedBy(repo, memberId)
 	})
 	return repoId, found
 }
@@ -206,6 +216,29 @@ func (self *MailRepos) Mailbox(memberId Id) (Id, bool) {
 // Whether a mailcfg row is the network's own: one that names no owner, as a Team scope's names its member.
 func mailRepoNetworkConfig(repo *protocol.AclRepo) bool {
 	return len(repo.GetOwnerMemberId()) == 0
+}
+
+// Whether a row names memberId as its owner.
+func mailRepoOwnedBy(repo *protocol.AclRepo, memberId Id) bool {
+	ownerMemberId, err := IdFromBytes(repo.GetOwnerMemberId())
+	return err == nil && ownerMemberId == memberId
+}
+
+// Whether this device writes config heads at state, so the log reads a mailcfg it creates as the network's.
+func (self *MailRepos) configWriter(state *AclState) bool {
+	sidecar := state.sidecarState(self.sidecarId)
+	return sidecar != nil && sidecar.configWriter
+}
+
+// Whether a mailcfg this process created folded as another than it asked for: the state holds its row, and the row is
+// not what matches takes. Its signer's standing changed between the filing and its log position (the file header's
+// mailcfg row).
+func mailRepoFoldedAsAnother(state *AclState, remembered *Id, matches func(repo *protocol.AclRepo) bool) bool {
+	if remembered == nil {
+		return false
+	}
+	repo := state.Repo(*remembered)
+	return repo != nil && !matches(repo)
 }
 
 // The network's mailcfg as the state holds it, false for none: never a Team scope's.
@@ -218,17 +251,24 @@ func (self *MailRepos) MailConfigRepo() (Id, bool) {
 	return repoId, found
 }
 
-// A Team scope's own mailcfg as the state holds it (MAIL-M8-09): the mailcfg whose row names the scope's member,
-// read only by that member's consented devices and the scope's receivers. False for none, which is every scope's
-// today: QD-1093's owner-bound mailcfg RepoCreate is neither folded nor made by EvsClient.CreateRepo yet.
+// A Team scope's own mailcfg as the state holds it (MAIL-M8-09; QD-1093): the mailcfg whose row names the scope's
+// member, read only by that member's consented devices and the scope's receivers. Of several a member's devices made,
+// the first in log order, the lowest id breaking a tie, so a later one never replaces it. False for none.
 func (self *MailRepos) ScopeMailConfigRepo(memberId Id) (Id, bool) {
 	state, err := self.verifiedState()
-	if err != nil || memberId == (Id{}) {
+	if err != nil {
+		return Id{}, false
+	}
+	return mailScopeConfigRepo(state, memberId)
+}
+
+// ScopeMailConfigRepo at state.
+func mailScopeConfigRepo(state *AclState, memberId Id) (Id, bool) {
+	if state == nil || memberId == (Id{}) {
 		return Id{}, false
 	}
 	repoId, _, found := mailRepoOfKind(state, protocol.RepoKind_REPO_KIND_MAILCFG, func(repo *protocol.AclRepo) bool {
-		ownerMemberId, err := IdFromBytes(repo.GetOwnerMemberId())
-		return err == nil && ownerMemberId == memberId
+		return mailRepoOwnedBy(repo, memberId)
 	})
 	return repoId, found
 }
@@ -338,7 +378,9 @@ func (self *MailRepos) EnsureMailbox(ctx context.Context, memberId Id) (*EvsRepo
 }
 
 // The network's mailcfg, created when the log holds none: its RepoCreate is a config writer's (§8.8), so a device
-// that is none gets the log's refusal. One this device created and did not finish keying is taken up again.
+// that is none creates nothing, ErrMailReposConfigWriter, since the log would take its RepoCreate as its member's
+// scope's own (QD-1093). One this device created and did not finish keying is taken up again; one that folded as a
+// scope's own, this device a config writer no more when it landed, is ErrMailReposAbsent.
 func (self *MailRepos) EnsureMailConfig(ctx context.Context) (*EvsRepo, error) {
 	select {
 	case self.createToken <- struct{}{}:
@@ -362,11 +404,80 @@ func (self *MailRepos) EnsureMailConfig(ctx context.Context) (*EvsRepo, error) {
 			return self.evs.Repo(repoId), nil
 		}
 		remembered = &repoId
+	} else if mailRepoFoldedAsAnother(state, remembered, mailRepoNetworkConfig) {
+		// forgotten, so the next call judges this device's standing anew
+		func() {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			self.createdMailConfig = nil
+		}()
+		return nil, fmt.Errorf("%w: the mailcfg this device created is no network's", ErrMailReposAbsent)
+	} else if remembered == nil && !self.configWriter(state) {
+		return nil, ErrMailReposConfigWriter
 	}
 	return self.createOrResume(ctx, &EvsCreateRepoArgs{Kind: protocol.RepoKind_REPO_KIND_MAILCFG}, remembered, func(repoId Id) {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		self.createdMailConfig = &repoId
+	})
+}
+
+// The own mailcfg of the Team scope that is memberId's, created when the log holds none (MAIL-M8-09; QD-1093): by a
+// consented device of that member that is not read_only, else ErrMailReposNotConsented, and that writes no config
+// heads, else ErrMailReposConfigWriter, since the log reads a config writer's mailcfg as the network's. The access
+// log's fold binds it to its creator's member, so its readers are that member's consented devices and the scope's
+// receivers alone (§15.7). One this device created and did not finish keying is taken up again; another device's is
+// answered as it stands, this device waiting for its seat in it; one that folded as the network's, this device a
+// config writer by the time it landed, is ErrMailReposAbsent.
+func (self *MailRepos) EnsureScopeMailConfig(ctx context.Context, memberId Id) (*EvsRepo, error) {
+	if memberId == (Id{}) {
+		return nil, fmt.Errorf("%w: no member", ErrMailReposInvalid)
+	}
+	select {
+	case self.createToken <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { <-self.createToken }()
+
+	state, err := self.verifiedState()
+	if err != nil {
+		return nil, err
+	}
+	remembered := func() *Id {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if repoId, ok := self.createdScopeConfigIds[memberId]; ok {
+			return &repoId
+		}
+		return nil
+	}()
+	owned := func(repo *protocol.AclRepo) bool { return mailRepoOwnedBy(repo, memberId) }
+	repoId, repo, found := mailRepoOfKind(state, protocol.RepoKind_REPO_KIND_MAILCFG, owned)
+	switch {
+	case found:
+		if !self.created(repo) || !self.consentedWriter(state, memberId) {
+			return self.evs.Repo(repoId), nil
+		}
+		// this device's own: finished where a crash cut it short
+		remembered = &repoId
+	case !self.consentedWriter(state, memberId):
+		return nil, ErrMailReposNotConsented
+	case mailRepoFoldedAsAnother(state, remembered, owned):
+		// forgotten, so the next call judges this device's standing anew
+		func() {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			delete(self.createdScopeConfigIds, memberId)
+		}()
+		return nil, fmt.Errorf("%w: the mailcfg this device created is no scope's", ErrMailReposAbsent)
+	case remembered == nil && self.configWriter(state):
+		return nil, ErrMailReposConfigWriter
+	}
+	return self.createOrResume(ctx, &EvsCreateRepoArgs{Kind: protocol.RepoKind_REPO_KIND_MAILCFG, OwnerMemberId: &memberId}, remembered, func(repoId Id) {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.createdScopeConfigIds[memberId] = repoId
 	})
 }
 

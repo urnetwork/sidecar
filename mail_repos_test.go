@@ -119,6 +119,9 @@ func (self *mailReposTestEvs) CreateRepo(ctx context.Context, args *EvsCreateRep
 		copied := *args
 		self.world.creations = append(self.world.creations, &copied)
 	}()
+	if !AclRepoKindOwnerFits(args.Kind, args.OwnerMemberId != nil) {
+		return nil, errInvalidSettings
+	}
 	repoId := NewEvsRepoId()
 	if args.ResumeRepoId != nil {
 		repoId = *args.ResumeRepoId
@@ -352,8 +355,8 @@ func TestMailReposEachOwnerDeviceFilesItsOwnRepoAdmin(t *testing.T) {
 	}
 }
 
-// The network's mailcfg is created once, by a config writer: the log refuses any other device's RepoCreate, and a
-// refused creation is not remembered.
+// The network's mailcfg is created once, by a config writer: any other device files no RepoCreate for it, since the log
+// would take one as its member's scope's own (QD-1093), and a refused creation is not remembered.
 func TestMailReposEnsureMailConfig(t *testing.T) {
 	world := newMailReposTestWorld(t)
 	ownerId, ownerDevice := world.fixture.memberWithDevice(bridge.MemberRole_MEMBER_ROLE_OWNER)
@@ -364,8 +367,8 @@ func TestMailReposEnsureMailConfig(t *testing.T) {
 		t.Fatal("a mailcfg before any was created")
 	}
 	memberRepos := world.repos(memberDevice)
-	if _, err := memberRepos.EnsureMailConfig(ctx); err == nil {
-		t.Fatal("a mailcfg created by a device that writes no config")
+	if _, err := memberRepos.EnsureMailConfig(ctx); !errors.Is(err, ErrMailReposConfigWriter) {
+		t.Fatalf("a mailcfg created by a device that writes no config: %v", err)
 	}
 	if world.filedCount(bridge.SignedType_SIGNED_REPO_CREATE) != 0 {
 		t.Fatal("the log took a member device's mailcfg")
@@ -528,5 +531,205 @@ func TestMailReposNetworkMailKeyRepo(t *testing.T) {
 	authority.grant(ownerDevice)
 	if _, err := repos.NetworkMailKeyRepo(ctx, owner.config); !errors.Is(err, ErrMailReposAbsent) {
 		t.Fatalf("once the admin record is not honored: %v", err)
+	}
+}
+
+// A Team scope's own mailcfg is created once, by a consented device of the scope's member that writes no config heads
+// (QD-1093): the log binds it to that member; a config writer, another member's device and a read_only one file
+// nothing; the member's other devices are answered the one that stands; a creation cut short is taken up again under
+// its id; and it is never read as the network's, nor the network's as it.
+func TestMailReposEnsureScopeMailConfig(t *testing.T) {
+	world := newMailReposTestWorld(t)
+	ownerId, ownerDevice := world.fixture.memberWithDevice(bridge.MemberRole_MEMBER_ROLE_OWNER)
+	memberId := world.fixture.member(bridge.MemberRole_MEMBER_ROLE_MEMBER)
+	phone := world.fixture.invitedDevice(memberId)
+	desktop := world.fixture.device(memberId, phone.Bytes())
+	worker := world.fixture.device(memberId, phone.Bytes())
+	world.fixture.admission(worker).Row.Capabilities |= uint32(bridge.SidecarCapability_SIDECAR_CAPABILITY_READ_ONLY)
+	otherId, otherDevice := world.fixture.memberWithDevice(bridge.MemberRole_MEMBER_ROLE_MEMBER)
+	ctx := context.Background()
+
+	if _, err := world.repos(phone).EnsureScopeMailConfig(ctx, memberId); !errors.Is(err, ErrMailReposNoState) {
+		t.Fatalf("with no verified state: %v", err)
+	}
+	world.rebuild()
+	if _, err := world.repos(phone).EnsureScopeMailConfig(ctx, Id{}); !errors.Is(err, ErrMailReposInvalid) {
+		t.Fatalf("no member: %v", err)
+	}
+	// a config writer's RepoCreate would be the network's, so it files none for its own scope
+	if _, err := world.repos(ownerDevice).EnsureScopeMailConfig(ctx, ownerId); !errors.Is(err, ErrMailReposConfigWriter) {
+		t.Fatalf("a config writer's scope mailcfg: %v", err)
+	}
+	// the fold would bind another member's device's creation to that other member, and a read_only device files nothing
+	for _, sidecarId := range []Id{otherDevice, ownerDevice, worker} {
+		if _, err := world.repos(sidecarId).EnsureScopeMailConfig(ctx, memberId); !errors.Is(err, ErrMailReposNotConsented) {
+			t.Fatalf("a device that may not create the member's scope mailcfg: %v", err)
+		}
+	}
+	if world.filedCount(bridge.SignedType_SIGNED_REPO_CREATE) != 0 {
+		t.Fatal("a refused creation filed a RepoCreate")
+	}
+
+	// a crash after the RepoCreate landed: the next call takes the same repo up again
+	world.failCreation = errors.New("synthetic failure: the group was not formed")
+	phoneRepos := world.repos(phone)
+	if _, err := phoneRepos.EnsureScopeMailConfig(ctx, memberId); err == nil {
+		t.Fatal("a creation cut short answered a repo")
+	}
+	scopeConfigId, found := phoneRepos.ScopeMailConfigRepo(memberId)
+	if !found {
+		t.Fatal("the log holds no scope mailcfg after its RepoCreate")
+	}
+	row := world.state().Repo(scopeConfigId)
+	if row.GetKind() != protocol.RepoKind_REPO_KIND_MAILCFG || Id(row.GetOwnerMemberId()) != memberId || len(row.GetConsentedSidecarIds()) != 3 {
+		t.Fatalf("the scope mailcfg's row: %+v", row)
+	}
+	repo, err := phoneRepos.EnsureScopeMailConfig(ctx, memberId)
+	if err != nil || repo.RepoId() != scopeConfigId {
+		t.Fatalf("the creation taken up again: %v", err)
+	}
+	if last := world.creations[len(world.creations)-1]; last.ResumeRepoId == nil || *last.ResumeRepoId != scopeConfigId ||
+		last.OwnerMemberId == nil || *last.OwnerMemberId != memberId {
+		t.Fatalf("the resumed creation: %+v", last)
+	}
+	// the member's other devices, and a fresh process on the creating one, are answered the one that stands
+	for _, sidecarId := range []Id{desktop, worker, phone} {
+		repo, err := world.repos(sidecarId).EnsureScopeMailConfig(ctx, memberId)
+		if err != nil || repo.RepoId() != scopeConfigId {
+			t.Fatalf("the scope mailcfg as another device finds it: %v", err)
+		}
+	}
+	if world.filedCount(bridge.SignedType_SIGNED_REPO_CREATE) != 1 {
+		t.Fatalf("%d RepoCreates for one scope mailcfg", world.filedCount(bridge.SignedType_SIGNED_REPO_CREATE))
+	}
+
+	// it is no network's mailcfg, which a config writer still creates, and the network's is no scope's
+	if _, found := world.repos(ownerDevice).MailConfigRepo(); found {
+		t.Fatal("a scope's mailcfg was read as the network's")
+	}
+	networkRepo, err := world.repos(ownerDevice).EnsureMailConfig(ctx)
+	if err != nil || networkRepo.RepoId() == scopeConfigId {
+		t.Fatalf("the network's mailcfg beside a scope's: %v", err)
+	}
+	if found, ok := world.repos(phone).MailConfigRepo(); !ok || found != networkRepo.RepoId() {
+		t.Fatal("MailConfigRepo does not name the network's")
+	}
+	if found, ok := world.repos(ownerDevice).ScopeMailConfigRepo(memberId); !ok || found != scopeConfigId {
+		t.Fatal("the scope's mailcfg changed once the network's was made")
+	}
+	for _, other := range []Id{ownerId, otherId} {
+		if _, ok := world.repos(phone).ScopeMailConfigRepo(other); ok {
+			t.Fatal("a member with no scope mailcfg was answered one")
+		}
+	}
+
+	// a second mailcfg a device of the member raced in is owned too and replaces nothing: the first in log order
+	// stays the scope's
+	second := NewEvsRepoId()
+	if err := world.file(desktop, bridge.SignedType_SIGNED_REPO_CREATE, &protocol.RepoCreate{RepoId: second.Bytes(), Kind: protocol.RepoKind_REPO_KIND_MAILCFG}); err != nil {
+		t.Fatal(err)
+	}
+	if row := world.state().Repo(second); Id(row.GetOwnerMemberId()) != memberId {
+		t.Fatalf("the second mailcfg's row: %+v", row)
+	}
+	for _, sidecarId := range []Id{phone, desktop, ownerDevice} {
+		if found, ok := world.repos(sidecarId).ScopeMailConfigRepo(memberId); !ok || found != scopeConfigId {
+			t.Fatal("a second mailcfg from the member replaced the first")
+		}
+		if found, ok := world.repos(sidecarId).MailConfigRepo(); !ok || found != networkRepo.RepoId() {
+			t.Fatal("a second mailcfg from the member was read as the network's")
+		}
+	}
+}
+
+// A scope mailcfg whose creator had become a config writer by the time its RepoCreate landed folds as a network's: the
+// device is answered no scope mailcfg, never that repo, and then creates none as a config writer. The other way, a
+// network mailcfg whose creator wrote no config heads when it landed folds as its member's scope's, and is never
+// answered as the network's.
+func TestMailReposCreationThatFoldedAsTheOtherMailcfgIsNotReadAsAsked(t *testing.T) {
+	world := newMailReposTestWorld(t)
+	memberId, device := world.fixture.memberWithDevice(bridge.MemberRole_MEMBER_ROLE_MEMBER)
+	world.rebuild()
+	ctx := context.Background()
+	// what the device reads while it decides, which the log has moved past
+	var viewLock sync.Mutex
+	view := world.state()
+	setView := func(state *AclState) {
+		viewLock.Lock()
+		defer viewLock.Unlock()
+		view = state
+	}
+	repos := newMailRepos(&mailReposTestEvs{world: world, sidecarId: device}, &MailReposArgs{
+		State: func() *AclState {
+			viewLock.Lock()
+			defer viewLock.Unlock()
+			return view
+		},
+		Gkm:       &mailReposTestGkm{world: world, sidecarId: device},
+		SidecarId: device,
+	})
+
+	world.fixture.view.configWriters[device] = true
+	world.rebuild()
+	created, err := repos.EnsureScopeMailConfig(ctx, memberId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row := world.state().Repo(created.RepoId()); len(row.GetOwnerMemberId()) != 0 {
+		t.Fatalf("a config writer's mailcfg folded owned: %+v", row)
+	}
+	setView(world.state())
+	if _, err := repos.EnsureScopeMailConfig(ctx, memberId); !errors.Is(err, ErrMailReposAbsent) {
+		t.Fatalf("a creation that folded as the network's: %v", err)
+	}
+	if _, found := repos.ScopeMailConfigRepo(memberId); found {
+		t.Fatal("the network's mailcfg was read as the member's scope's")
+	}
+	if _, err := repos.EnsureScopeMailConfig(ctx, memberId); !errors.Is(err, ErrMailReposConfigWriter) {
+		t.Fatalf("a config writer's scope mailcfg after: %v", err)
+	}
+	if world.filedCount(bridge.SignedType_SIGNED_REPO_CREATE) != 1 {
+		t.Fatalf("%d RepoCreates", world.filedCount(bridge.SignedType_SIGNED_REPO_CREATE))
+	}
+
+	// the other way: a second member's device believes it writes config heads, and no longer does when its RepoCreate
+	// lands
+	otherId, otherDevice := world.fixture.memberWithDevice(bridge.MemberRole_MEMBER_ROLE_MEMBER)
+	world.fixture.view.configWriters[otherDevice] = true
+	// the first network mailcfg is deleted, so none stands and a config writer would create one
+	deletion := &protocol.RepoDelete{RepoId: created.RepoId().Bytes(), DeletionId: NewId().Bytes(), Now: true}
+	if err := world.file(device, bridge.SignedType_SIGNED_REPO_DELETE, deletion); err != nil {
+		t.Fatal(err)
+	}
+	world.rebuild()
+	stale := world.state()
+	otherRepos := newMailRepos(&mailReposTestEvs{world: world, sidecarId: otherDevice}, &MailReposArgs{
+		State: func() *AclState {
+			viewLock.Lock()
+			defer viewLock.Unlock()
+			return view
+		},
+		Gkm:       &mailReposTestGkm{world: world, sidecarId: otherDevice},
+		SidecarId: otherDevice,
+	})
+	setView(stale)
+	delete(world.fixture.view.configWriters, otherDevice)
+	world.rebuild()
+	misfiled, err := otherRepos.EnsureMailConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row := world.state().Repo(misfiled.RepoId()); Id(row.GetOwnerMemberId()) != otherId {
+		t.Fatalf("a member device's mailcfg folded unowned: %+v", row)
+	}
+	setView(world.state())
+	if _, found := otherRepos.MailConfigRepo(); found {
+		t.Fatal("a member's scope mailcfg was read as the network's")
+	}
+	if _, err := otherRepos.EnsureMailConfig(ctx); !errors.Is(err, ErrMailReposAbsent) {
+		t.Fatalf("a creation that folded as a scope's: %v", err)
+	}
+	if _, err := otherRepos.EnsureMailConfig(ctx); !errors.Is(err, ErrMailReposConfigWriter) {
+		t.Fatalf("a network mailcfg from a device that writes no config heads: %v", err)
 	}
 }
