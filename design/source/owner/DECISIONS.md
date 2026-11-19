@@ -4111,6 +4111,13 @@ The design-records track that swept up the answers recorded after the second lat
     - Not taken: (2) an admin-signed eraser card that readers accept as erased by an admin, which adds a signed type, a path rule and a reader rule to format 2 and stays the one to design if the owner later wants moderation to keep a writer's other runs or a revoked run gone before its daemon wakes; (3) removal always, which takes down every run of every daemon that named a revoked repo until each writes again.
     - Raised by the build (the record-m10-05 track; the build's ledger, QD-1100).
 
+637. **A schedule fails when it has waited 60 s of real time for a barrier, not 10 s (option 2, the recommendation, 2026-11-19).**
+    - Question: §22.8's determinism row failed a schedule that waited over 10 s of real time for a barrier, the barrier driver's default bound. The driver's stall check already tells a blocked holder from a working one within seconds: a holder found blocked loses the baton and its run fails, while a holder found working keeps it until the bound. On a host running five implementation lanes with their builds, a working schedule's compile step ran past the bound twice, at 10.03 s and 10.13 s, and failed a check that passes on a quiet host; each rerun of that check costs 4 to 20 minutes.
+    - Answer: the bound is 60 s. It is the barrier driver's default, a settings field, and a test that sets its own bound keeps it. A blocked holder still fails its run at the stall check within seconds, with its trace, so the bound only has to catch a holder that works without end, and a loaded host stops failing schedules that are merely slow (§22.8's determinism row).
+    - Cost: a schedule whose holder works on without end, a livelock or a runaway, waits 60 s before it fails with its trace.
+    - Not taken: (1) keeping 10 s, with a lane rerunning the check a loaded host fails; (3) 10 s as the bound on time the holder is not found working with 60 s as the cap on all of it, closest to the row's intent but an accounting per reading in the harness every schedule runs on.
+    - Raised by the build (the orchestrator, from the search-m10-36 track's report; the build's ledger, QD-1101).
+
 ## Owner instructions after the v1 build (2026-11-05)
 
 These are instructions, not design decisions, so they carry no number.

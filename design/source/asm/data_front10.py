@@ -2035,3 +2035,15 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "mailcfg (631), an approved recipient's bytes (632) and MCP's refusal of them (635), completing "
     "@@OD:280@@, the reverse-alias key (633) and an indexer row's nonce (634); and an eraser's CLOSURE of a "
     'card (636). ')
+INDEX += [
+    (637, "A schedule's real-time bound on a barrier wait",
+     'A schedule fails when it has waited 60 s of real time for a barrier, not 10 s; the stall check still '
+     'fails a blocked holder within seconds.'),
+]
+assert [r[0] for r in INDEX] == list(range(1, 638))
+DATES.update({637: '2026-11-19'})
+_D636 = "@@OD:280@@, the reverse-alias key (633) and an indexer row's nonce (634); and an eraser's CLOSURE of a card (636). "
+assert DECISIONS_INTRO.count(_D636) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D636, "@@OD:280@@, the reverse-alias key (633) and an indexer row's nonce (634); an eraser's CLOSURE of a card "
+    "(636); and a schedule's real-time bound on a barrier wait (637). ")

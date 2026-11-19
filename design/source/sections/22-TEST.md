@@ -827,13 +827,15 @@ barriers    each owning section names a barrier at every linearization point and
             DELETE, and a remote search's page replies
 unknown     ApplyThenDrop applies a write and shows the caller a transport error; every write in FS-1, FS-3, FS-15,
             FS-25, FS-43 to FS-45, FS-57, FS-63, FS-65, FS-72 and FS-75 also runs with it
-determinism fake clocks and barriers only, no sleeps; a schedule waiting over 10 s of real time for a barrier fails
-            with its trace; WARP_TEST_ENV_FAIL_FAST=1, so a failed attempt fails the run (R-TEST-9); the clock
-            is §4.5's Clock, which ServiceHost.Clock and SidecarSettings.Clock carry into the engines and the
-            core, nil meaning real time, and make check refuses a wall-clock call outside it (§4.7); a test that
-            advances the fake clock past a timer the code arms after a step first waits until the clock holds
-            that timer, since an advance between the step and the arming leaves nothing to fire (owner decision
-            549)
+determinism fake clocks and barriers only, no sleeps; a schedule waiting over 60 s of real time for a barrier fails
+            with its trace, the barrier driver's default, which a test that sets its own bound replaces
+            (owner decision 637): a holder the driver's stall check finds blocked fails its run within seconds, so
+            the bound catches only a holder that works without end; WARP_TEST_ENV_FAIL_FAST=1, so a failed attempt
+            fails the run (R-TEST-9); the clock is §4.5's Clock, which ServiceHost.Clock and SidecarSettings.Clock
+            carry into the engines and the core, nil meaning real time, and make check refuses a wall-clock call
+            outside it (§4.7); a test that advances the fake clock past a timer the code arms after a step first
+            waits until the clock holds that timer, since an advance between the step and the arming leaves nothing
+            to fire (owner decision 549)
 twins       every refusal schedule has a twin that must succeed, so a disabled feature fails
 real        T3 runs each T3 row through server's real handlers and stores (api, evs, gkm, the token exchange,
             Postgres, the 3-master Redis Cluster, D-OPS-20's MinIO build), never fixtures that pre-authorize; the
