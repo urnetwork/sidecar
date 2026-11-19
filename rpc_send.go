@@ -11,10 +11,17 @@
 // without, since a lost refusal or Pong fails the call at its own deadline, which the caller retries
 // with its request_id (§6.6). A reply goes to the request's source, on the request's lane and
 // encryption session (peer.TransferKey), as a non-companion contract.
+//
+// SendEdge is a sidecar's one initiated NO_REPLY send with a body (owner decision 624): an envelope to an
+// edge, the listener a ur/ ticket named, as §14.14's SmtpOutcome goes to smtpedge, under CallOptions.Edge's
+// rule (rpc_call.go): no Hello and no HeadCheck, refused on an edge's dispatcher, for a peer this dispatcher
+// knows as a sidecar and for a type an edge drops. It waits for connect as a call's send does, from its
+// caller's goroutine, never from a receive callback.
 
 package sidecar
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -145,6 +152,53 @@ func (self *Subprotocol) sendReply(reply subprotocolReply) {
 		return
 	}
 	self.stats.replySentCount.Add(1)
+}
+
+// Sends clientId, an edge, a NO_REPLY envelope of messageType carrying body (§6.4, owner decision 624). See the
+// file header for what refuses it, each refusal a *SubprotocolError before anything is sent: FAILED_PRECONDITION
+// for the peer or this dispatcher's role, INVALID_ARGUMENT for the type, TOO_LARGE past the reassembly maximum. A
+// body past 4,016 B rides chunks under one random request_id, the chunk group's name; the envelope carries no
+// timeout_ms, which only requests do (§6.5). Waits for connect at most until ctx's deadline and never past
+// DefaultCallTimeout, sending again what connect refuses before then after CallSendRetryInterval; a Required peer
+// with no session is UNAVAILABLE with reason encryption. Nothing answers it and no ack is read (R-PROTO-10): nil
+// says connect took every envelope, never that the edge acted on it.
+func (self *Subprotocol) SendEdge(ctx context.Context, clientId Id, messageType protocol.MessageType, body []byte) error {
+	if !edgeMessageType(messageType) {
+		return &SubprotocolError{Code: protocol.ErrorCode_ERR_INVALID_ARGUMENT, Message: "a type an edge does not take"}
+	}
+	peerId := connect.Id(clientId)
+	if refusal := self.edgeSendRefusal(peerId); refusal != nil {
+		return refusal
+	}
+	requestId := newRequestId()
+	start := self.clock.Now()
+	timeout := self.settings.DefaultCallTimeout
+	if ctxDeadline, ok := ctx.Deadline(); ok {
+		timeout = min(timeout, ctxDeadline.Sub(start))
+	}
+	if err := ctx.Err(); err != nil || timeout <= 0 {
+		if errors.Is(err, context.Canceled) {
+			return &SubprotocolError{Code: protocol.ErrorCode_ERR_CANCELLED, RequestId: requestId}
+		}
+		return &SubprotocolError{Code: protocol.ErrorCode_ERR_DEADLINE_EXCEEDED, RequestId: requestId}
+	}
+	envelopes, err := chunkBody(&protocol.Envelope{
+		Version:   WireVersionMajor,
+		Type:      uint32(messageType),
+		RequestId: requestId,
+		Flags:     EnvelopeFlagNoReply,
+	}, body)
+	if err != nil {
+		return &SubprotocolError{Code: protocol.ErrorCode_ERR_TOO_LARGE, RequestId: requestId}
+	}
+	barrierKey := peerId.String()
+	return self.sendEnvelopesUntil(ctx, peerId, envelopes, ignoreSubprotocolAck, start.Add(timeout), requestId, func(before bool) {
+		if before {
+			testHookBarrier("rpc.send_edge.before", barrierKey)
+		} else {
+			testHookBarrier("rpc.send_edge.after", barrierKey)
+		}
+	})
 }
 
 // The one place this layer hands connect an envelope: to destinationId, waiting at most timeout for

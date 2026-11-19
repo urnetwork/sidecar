@@ -27,8 +27,9 @@
 // worker per active source drains its queue in order, reassembles chunked bodies
 // (envelope_reassembly.go) and dispatches by Envelope.type: a Ping
 // gets its Pong here, a Hello its check (rpc_hello.go), a Cancel the run it names (rpc_handle.go), a
-// response the request it echoes (rpc_call.go), and a request the function its type registered
-// (Handle), or UNIMPLEMENTED.
+// response the request it echoes (rpc_call.go), a request the function its type registered (Handle), or
+// UNIMPLEMENTED, and at an edge a sidecar's NO_REPLY envelope the function its type registered
+// (HandleNoReply; owner decision 624).
 //
 // ControlId's frames are the platform's hints, not a peer's (§6.8). Only push types pass the guard, and
 // they skip steps 4 to 7, which ask about peers and contracts. Nothing is ever sent to ControlId.

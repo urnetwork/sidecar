@@ -11,6 +11,12 @@
 // RESPONSE with the request's type + 1, chunked past 4,016 B, on the request's lane; a failure goes back
 // as RESPONSE, ERROR, type ERROR and an Error body. A mutating handler's answers are kept by
 // rpc_idempotency.go, so a retry runs nothing twice.
+//
+// An edge's dispatcher also takes NO_REPLY envelopes from sidecars, which SendEdge sends (owner decision 624),
+// as §14.14's SmtpOutcome reaches smtpedge: HandleNoReply registers a function for one type, which the
+// source's worker calls with each whole envelope of it, in the order they came, and nothing answers. A
+// sidecar's dispatcher registers none, since a sidecar's peers send it no NO_REPLY envelope but the
+// dispatcher's own, Cancel and stream frames.
 
 package sidecar
 
@@ -34,7 +40,23 @@ var (
 	errHandlerDeadline = errors.New("subprotocol: the request's deadline passed")
 	// Why a handler's ctx ended: its caller sent Cancel.
 	errHandlerCancelled = errors.New("subprotocol: the caller cancelled")
+	// HandleNoReply on a sidecar's dispatcher: only an edge takes NO_REPLY envelopes from its peers.
+	errHandleNoReplyRole = errors.New("subprotocol: only an edge's dispatcher takes no-reply envelopes")
 )
+
+// One NO_REPLY envelope, as an edge's function gets it (owner decision 624). Borrowed for the call: Body is valid
+// until the function returns, so a function that keeps it copies it (R-PROTO-7).
+type SubprotocolNoReply struct {
+	// The sidecar that sent it, as connect authenticated it. It showed the edge no binding: the ticket its stream
+	// opened on, which the engine holds, says who it is.
+	SourceId    Id
+	MessageType protocol.MessageType
+	Body        []byte
+}
+
+// Takes one NO_REPLY envelope. It runs on its source's worker, so it holds up that source's later envelopes,
+// its Pings among them, and no one else's: it does no I/O and returns at once, and returns once ctx ends.
+type SubprotocolNoReplyHandler func(ctx context.Context, message *SubprotocolNoReply)
 
 // One request, as a handler gets it. Borrowed for the call: Body is valid until the handler returns, so
 // a handler that keeps it copies it (R-PROTO-7).
@@ -96,6 +118,42 @@ func (self *Subprotocol) Handle(messageType protocol.MessageType, handler Subpro
 	}
 	return self.setMessageTypeDispatch(messageType, func(ctx context.Context, message *subprotocolMessage) {
 		self.dispatchRequest(handler, &handleOptions, message)
+	})
+}
+
+// Hands every NO_REPLY envelope of messageType from a sidecar to handler, on an edge's dispatcher alone (owner
+// decision 624); remove takes it away. One function per type, this or Handle's, so a request of the type is
+// answered UNIMPLEMENTED, as one of a type nothing serves is. A type a sidecar may not send an edge is refused
+// (edgeMessageType), and so is a sidecar's dispatcher.
+func (self *Subprotocol) HandleNoReply(messageType protocol.MessageType, handler SubprotocolNoReplyHandler) (remove func(), err error) {
+	if handler == nil || !edgeMessageType(messageType) {
+		return nil, errHandleType
+	}
+	if self.role != SubprotocolRoleEdge {
+		return nil, errHandleNoReplyRole
+	}
+	return self.setMessageTypeDispatch(messageType, func(ctx context.Context, message *subprotocolMessage) {
+		self.dispatchNoReply(ctx, handler, message)
+	})
+}
+
+// On the source's worker: a whole NO_REPLY envelope to handler, borrowing its body; a request of the type answered
+// UNIMPLEMENTED; anything else, NO_REPLY with ERROR or from ControlId, counted and dropped.
+func (self *Subprotocol) dispatchNoReply(ctx context.Context, handler SubprotocolNoReplyHandler, message *subprotocolMessage) {
+	envelope := message.envelope
+	if message.answerable() {
+		self.stats.unimplementedCount.Add(1)
+		self.offerReply(refusalReply(message.sourceId, message.transferKey, envelope.RequestId, envelope.StreamId, protocol.ErrorCode_ERR_UNIMPLEMENTED))
+		return
+	}
+	if message.sourceId == connect.ControlId || envelope.Flags != EnvelopeFlagNoReply {
+		self.stats.unroutedCount.Add(1)
+		return
+	}
+	handler(ctx, &SubprotocolNoReply{
+		SourceId:    Id(message.sourceId),
+		MessageType: protocol.MessageType(envelope.Type),
+		Body:        envelope.Body,
 	})
 }
 

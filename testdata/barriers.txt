@@ -666,6 +666,8 @@ barrier rpc.hello_pin.before rpc_admission.go
 barrier rpc.hello_pin.before rpc_pins.go
 barrier rpc.peer_take.before rpc_peer.go
 barrier rpc.seal_stop rpc_headcheck_stop.go
+barrier rpc.send_edge.after rpc_send.go
+barrier rpc.send_edge.before rpc_send.go
 barrier rpc.witness_refresh rpc_headcheck_witness.go
 barrier search.cache.cut.applied state_search_delete.go
 barrier search.cache.erase.applied state_search_delete.go

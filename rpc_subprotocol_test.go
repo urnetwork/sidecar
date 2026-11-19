@@ -1,7 +1,9 @@
 //go:build !sidecar_http && !js
 
 // §6's dispatcher: construction on a sidecar's Required client and nothing else, the inline order's
-// version, identity and hook steps, dispatch by type, the answers it gives itself, and Close. Frames
+// version, identity and hook steps, dispatch by type, the answers it gives itself, and Close; and a
+// sidecar's NO_REPLY envelopes to an edge (owner decision 624), SendEdge's and the edge's HandleNoReply
+// function's. Frames
 // enter where connect hands them over, the registered handler, on a real Required client whose C15 key
 // and send are the fixture's: a test frame's key is named by its Peer's Principal, which nothing here
 // reads otherwise, and every send is recorded. The guard's table is rpc_guard_test.go's and overload
@@ -1077,4 +1079,171 @@ func TestCloseJoinsWithWorkQueued(t *testing.T) {
 	if stats.closedDroppedCount.Load() != 1 || stats.heldBufferCount.Load() != 0 {
 		t.Errorf("after Close: dropped %d, held %d", stats.closedDroppedCount.Load(), stats.heldBufferCount.Load())
 	}
+}
+
+// A sidecar's frames as an edge's dispatcher gets them: on a Service contract (§6.10.1), under the C15 key keyName
+// names.
+func testServicePeer(keyName string) connect.Peer {
+	peer := testNetworkPeer(keyName)
+	peer.ProvideMode = connectprotocol.ProvideMode_Service
+	return peer
+}
+
+// A NO_REPLY envelope of messageType carrying body with a fresh request_id, as SendEdge sends one: no timeout_ms.
+func testNoReply(messageType protocol.MessageType, body []byte) *protocol.Envelope {
+	envelope := testRequest(messageType, body)
+	envelope.Flags = EnvelopeFlagNoReply
+	envelope.TimeoutMs = 0
+	return envelope
+}
+
+// SendEdge (owner decision 624), as §14.14's SmtpOutcome goes to smtpedge: a NO_REPLY envelope to an edge with no
+// Hello, under a random request_id and no timeout_ms, in chunks past 4,016 B; the edge's HandleNoReply function takes
+// each one whole, from the sidecar, and nothing answers either way. Before it a sidecar had no way to send an edge a
+// NO_REPLY envelope, and an edge's engine no function to take one.
+func TestSendEdgeReachesTheEdgesNoReplyFunction(t *testing.T) {
+	pair := newTestRpcPair(t)
+	a := pair.add(nil, nil)
+	edge := pair.addEdge(nil)
+	taken := make(chan *SubprotocolNoReply, 4)
+	remove, err := edge.subprotocol.HandleNoReply(testFreeMessageType, func(ctx context.Context, message *SubprotocolNoReply) {
+		taken <- &SubprotocolNoReply{SourceId: message.SourceId, MessageType: message.MessageType, Body: slices.Clone(message.Body)}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer remove()
+	bodies := [][]byte{[]byte("an outcome"), testEnvelopeBody(2*MaxEnvelopeBodyByteCount + 9)}
+	wantSentCount := 0
+	for _, body := range bodies {
+		chunks, err := chunkBody(&protocol.Envelope{Version: WireVersionMajor, Type: uint32(testFreeMessageType), Flags: EnvelopeFlagNoReply}, body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantSentCount += len(chunks)
+		if err := a.subprotocol.SendEdge(t.Context(), Id(edge.clientId), testFreeMessageType, body); err != nil {
+			t.Fatal(err)
+		}
+		message := testAwait(t, taken, "the edge's NO_REPLY envelope")
+		if message.SourceId != Id(a.clientId) || message.MessageType != testFreeMessageType || !slices.Equal(message.Body, body) {
+			t.Errorf("taken from %s: type %v, %d B", message.SourceId, message.MessageType, len(message.Body))
+		}
+	}
+	sent := testSentOfType(a, testFreeMessageType)
+	if len(sent) != wantSentCount || wantSentCount < 3 {
+		t.Fatalf("%d envelopes sent, want %d", len(sent), wantSentCount)
+	}
+	for _, envelope := range sent {
+		if envelope.Flags&^EnvelopeFlagMore != EnvelopeFlagNoReply || envelope.TimeoutMs != 0 || envelope.RequestId == 0 || envelope.StreamId != 0 {
+			t.Errorf("sent %+v", envelope)
+		}
+	}
+	// each send is its own chunk group
+	if sent[0].RequestId == sent[1].RequestId || sent[1].RequestId != sent[len(sent)-1].RequestId {
+		t.Errorf("request ids %d, %d, %d", sent[0].RequestId, sent[1].RequestId, sent[len(sent)-1].RequestId)
+	}
+	if types := testSentTypes(a); len(types) != len(sent) {
+		t.Errorf("the sidecar sent %v", types)
+	}
+	if answers := edge.sent(); len(answers) != 0 {
+		t.Errorf("the edge answered %v", answers)
+	}
+	if a.subprotocol.peerVerified(edge.clientId) {
+		t.Error("a Hello stands with the edge")
+	}
+}
+
+// HandleNoReply registers on an edge's dispatcher alone, for a type a sidecar may send an edge, one function a type
+// shared with Handle, which remove frees.
+func TestHandleNoReplyRegistration(t *testing.T) {
+	pair := newTestRpcPair(t)
+	a := pair.add(nil, nil)
+	edge := pair.addEdge(nil)
+	function := func(ctx context.Context, message *SubprotocolNoReply) {}
+	if _, err := a.subprotocol.HandleNoReply(testFreeMessageType, function); !errors.Is(err, errHandleNoReplyRole) {
+		t.Errorf("a sidecar's dispatcher: err %v", err)
+	}
+	if _, err := edge.subprotocol.HandleNoReply(testFreeMessageType, nil); !errors.Is(err, errHandleType) {
+		t.Errorf("no function: err %v", err)
+	}
+	for _, messageType := range []protocol.MessageType{
+		protocol.MessageType_MESSAGE_TYPE_NONE, protocol.MessageType_HELLO, protocol.MessageType_PING, protocol.MessageType_CANCEL,
+		protocol.MessageType_ERROR, protocol.MessageType_PUSH_HINT, protocol.MessageType_STREAM_DATA, protocol.MessageType_HEAD_CHECK,
+		protocol.MessageType_SEARCH,
+	} {
+		if _, err := edge.subprotocol.HandleNoReply(messageType, function); !errors.Is(err, errHandleType) {
+			t.Errorf("%v: err %v", messageType, err)
+		}
+	}
+	remove, err := edge.subprotocol.HandleNoReply(testFreeMessageType, function)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := edge.subprotocol.HandleNoReply(testFreeMessageType, function); !errors.Is(err, errSubprotocolDispatchTaken) {
+		t.Errorf("a second function: err %v", err)
+	}
+	handler := func(ctx context.Context, request *SubprotocolRequest) ([]byte, error) {
+		return nil, nil
+	}
+	if _, err := edge.subprotocol.Handle(testFreeMessageType, handler, nil); !errors.Is(err, errSubprotocolDispatchTaken) {
+		t.Errorf("a handler beside it: err %v", err)
+	}
+	remove()
+	removeHandle, err := edge.subprotocol.Handle(testFreeMessageType, handler, nil)
+	if err != nil {
+		t.Fatalf("after remove: %v", err)
+	}
+	removeHandle()
+}
+
+// At an edge, HandleNoReply's function takes a sidecar's NO_REPLY envelope of its type and nothing else: a request
+// of the type is answered UNIMPLEMENTED, a NO_REPLY with ERROR is dropped, and a NO_REPLY envelope of a type Handle
+// serves runs no handler. The drops are counted, and every pool buffer comes back.
+func TestNoReplyFunctionTakesOnlyNoReply(t *testing.T) {
+	fixture := newTestSubprotocol(t, func(env *SubprotocolEnv) {
+		env.Role = SubprotocolRoleEdge
+		env.Store = nil
+	})
+	sourceId := connect.NewId()
+	peer := testServicePeer("a")
+	taken := make(chan []byte, 8)
+	remove, err := fixture.subprotocol.HandleNoReply(testFreeMessageType, func(ctx context.Context, message *SubprotocolNoReply) {
+		taken <- slices.Clone(message.Body)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer remove()
+	var runCount atomic.Int64
+	removeHandle, err := fixture.subprotocol.Handle(testHeldMessageType, func(ctx context.Context, request *SubprotocolRequest) ([]byte, error) {
+		runCount.Add(1)
+		return nil, nil
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer removeHandle()
+
+	request := testRequest(testFreeMessageType, []byte("asked"))
+	fixture.receive(sourceId, request, peer)
+	if sent := fixture.nextSent(t); sent.errorCode(t) != protocol.ErrorCode_ERR_UNIMPLEMENTED || sent.envelope.RequestId != request.RequestId {
+		t.Errorf("a request of a NO_REPLY type: %+v", sent.envelope)
+	}
+	withError := testNoReply(testFreeMessageType, []byte("error"))
+	withError.Flags |= EnvelopeFlagError
+	fixture.receive(sourceId, withError, peer)
+	fixture.receive(sourceId, testNoReply(testHeldMessageType, []byte("held")), peer)
+	fixture.receive(sourceId, testNoReply(testFreeMessageType, []byte("marker")), peer)
+	// a worker drains in order, so everything before the marker has been dispatched once it is taken
+	if body := testAwait(t, taken, "the marker"); string(body) != "marker" {
+		t.Errorf("taken %q", body)
+	}
+	stats := &fixture.subprotocol.stats
+	if stats.unroutedCount.Load() != 2 || stats.unimplementedCount.Load() != 1 || runCount.Load() != 0 || len(taken) != 0 {
+		t.Errorf("unrouted %d, unimplemented %d, runs %d, taken %d", stats.unroutedCount.Load(), stats.unimplementedCount.Load(), runCount.Load(), len(taken))
+	}
+	if len(fixture.sent) != 0 {
+		t.Errorf("%d sends for what asked nothing", len(fixture.sent))
+	}
+	fixture.closeBalanced(t)
 }
