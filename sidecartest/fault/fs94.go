@@ -56,8 +56,7 @@ func Fs94(net *Net) *Schedule {
 		{Actor: "reader", Action: world.Verify("reader", "x.txt", "y.txt")},
 		{Actor: "reader", Action: world.ReadVersionEnds("reader", "y.txt", 1, EvsWorldReadsContent(fs94SharedContent))},
 	}
-	steps = append(steps, fsDropExecute(world)...)
-	steps = append(steps, []*Step{
+	steps = append(steps, fsDropExecute(net, world, []*Step{
 		{Actor: "check", Action: world.ExpectDropState("x.txt", evsservice.DropStateDone)},
 		// a general repo's inline bytes are in its packs, which a drop never rewrites
 		{Actor: "check", Action: world.NoSegmentDeletesSince(mark)},
@@ -71,7 +70,7 @@ func Fs94(net *Net) *Schedule {
 		{Actor: "reader", Action: world.HistoryStates("reader", "x.txt", map[int]string{1: sidecar.EvsVersionStateDropped})},
 		{Actor: "reader", Action: world.ReadVersionEnds("reader", "x.txt", 1, EvsWorldReadsDropped())},
 		{Actor: "reader", Action: world.Verify("reader", "x.txt", "y.txt")},
-	}...)
+	}...)...)
 	return &Schedule{Id: "FS-94", Steps: steps, Check: fsDropChecks(world), Tiers: []Tier{TierT2, TierT3}}
 }
 
@@ -90,8 +89,7 @@ func Fs94RecordClass(net *Net) *Schedule {
 		{Actor: "reader", Action: world.ReadVersionEnds("reader", "x.txt", 1, EvsWorldReadsDropped())},
 		{Actor: "reader", Action: world.ReadVersionEnds("reader", "y.txt", 1, EvsWorldReadsContent(fs94SharedContent))},
 	}
-	steps = append(steps, fsDropExecute(world)...)
-	steps = append(steps, []*Step{
+	steps = append(steps, fsDropExecute(net, world, []*Step{
 		{Actor: "check", Action: world.ExpectDropState("x.txt", evsservice.DropStateDone)},
 		{Actor: "check", Action: fs94SlotDeletes(mark, 2)},
 		{Actor: "reader", Action: world.ReadVersionEnds("reader", "x.txt", 1, EvsWorldReadsDropped())},
@@ -99,7 +97,7 @@ func Fs94RecordClass(net *Net) *Schedule {
 		{Actor: "admin", Action: world.Write("admin", "y.txt", fsDropInlineContent("fs94 y second"))},
 		{Actor: "reader", Action: world.Verify("reader", "x.txt", "y.txt")},
 		{Actor: "reader", Action: world.ReadVersionEnds("reader", "y.txt", 1, EvsWorldReadsContent(fs94SharedContent))},
-	}...)
+	}...)...)
 	return &Schedule{Id: "FS-94 record class", Steps: steps, Check: fsDropChecks(world), Tiers: []Tier{TierT2, TierT3}}
 }
 

@@ -107,8 +107,7 @@ func fs91Schedule(net *Net, before bool) *Schedule {
 			&Step{Actor: "check", Action: EvsWorldExpectPosted(posted, http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_DROPPED)})
 	}
 	steps = append(steps, &Step{Actor: "reader", Action: world.HistoryStates("reader", "x.txt", map[int]string{1: sidecar.EvsVersionStateDropped, 2: sidecar.EvsVersionStateDropped})})
-	steps = append(steps, fsDropExecute(world)...)
-	steps = append(steps, []*Step{
+	steps = append(steps, fsDropExecute(net, world, []*Step{
 		{Actor: "check", Action: world.ExpectDropState("x.txt", evsservice.DropStateDone)},
 		// what r2's copy names stays; what only listed versions name goes
 		{Actor: "check", Action: world.ExpectSegments("x.txt's first version, which r2's copy cites", before, segments(1))},
@@ -121,6 +120,6 @@ func fs91Schedule(net *Net, before bool) *Schedule {
 		// it ends unknown, so the ref's next write comes after it
 		{Advance: time.Hour},
 		{Actor: "writer", Action: world.WriteRef("writer", fs91CopyRef, "after.txt", fsDropUploadContent("fs91 after"))},
-	}...)
+	}...)...)
 	return &Schedule{Id: "FS-91", Steps: steps, Check: fsDropChecks(world), Tiers: []Tier{TierT2, TierT3}}
 }

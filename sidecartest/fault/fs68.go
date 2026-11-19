@@ -170,7 +170,13 @@ func Fs68(net *Net) *Schedule {
 			if len(alarms) != 0 {
 				return fmt.Errorf("it alarmed: %v", alarms)
 			}
-			if result.Swept.DeletedCount == 0 {
+			switch {
+			case !fsDropSettled(net):
+				// the sweep's deletes wait on the clusters' settle flag, as a drop job's do (fsDropSettled)
+				if result.Swept.DeletedCount != 0 {
+					return fmt.Errorf("the sweep purged on clusters that have not passed settle: %+v", result.Swept)
+				}
+			case result.Swept.DeletedCount == 0:
 				return fmt.Errorf("the sweep purged nothing, p.bin's replaced segment included: %+v", result.Swept)
 			}
 			return nil
@@ -233,7 +239,10 @@ func Fs68PlatformRule(net *Net) *Schedule {
 		{Actor: "owner", Action: world.SetVersioningRules(fs68RulesOff("never/**"), nil)},
 		{Actor: "admin", Action: world.WriteVersioning("admin", "above-under-rules.bin", EvsWorldContent("fs68 above under rules", 65*fs68MiB), "")},
 		{Actor: "admin", Action: world.ExpectVersioning("admin", "above-under-rules.bin", 0)},
-		{Actor: "reader", Action: world.Verify("reader", "above.bin", "below.bin", "above-under-rules.bin")},
+		// one read a step: each is 63 MiB or more through a real store on T3
+		{Actor: "reader", Action: world.Verify("reader", "above.bin")},
+		{Actor: "reader", Action: world.Verify("reader", "below.bin")},
+		{Actor: "reader", Action: world.Verify("reader", "above-under-rules.bin")},
 	}
 	return &Schedule{Id: "FS-68 platform rule", Steps: steps, Check: fsDropChecks(world), Tiers: []Tier{TierT2, TierT3}}
 }

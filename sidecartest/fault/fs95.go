@@ -48,9 +48,6 @@ import (
 
 var Fs95Case = Register("FS-95", "", []Tier{TierT2, TierT3}, Fs95Refusals)
 
-// What an FS-95 world's drops cost a day (EvsWorldDropSettings.DropsPerDay), which Fs95Refusals spends.
-const fs95DropsPerDay = 2
-
 // A file whose versions each need an upload: 40 KiB, past what a record holds inline.
 func fsDropUploadContent(label string) []byte {
 	return EvsWorldContent(label, 40*1024)
@@ -107,13 +104,45 @@ func fsDropWritten(path string, version int, content func(label string) []byte) 
 	return content(fmt.Sprintf("%s %d", path, version))
 }
 
-// Steps: the hours a now drop's job waits for evacuation's horizon pass, an evacuation, and the drop job to its end.
-func fsDropExecute(world *EvsWorld) []*Step {
-	return []*Step{
+// Whether the Net's clusters passed the settle suite (FS-114's flag, BlobCluster.SettlePassed), which a drop job's
+// start and a purge sweep's deletes wait on. T2's fakes have. A T3 stack whose sidecar.yml names no
+// settle_passed_build for its clusters has not, so there a drop stays pending and nothing is purged, whatever the
+// schedule's clock says: the schedules hold the commit side on such a Net and the job to that wait.
+func fsDropSettled(net *Net) bool {
+	first, err := net.Host().Blobs.FirstCluster()
+	if err != nil {
+		return false
+	}
+	segments, err := net.Host().Blobs.SegmentCluster()
+	if err != nil {
+		return false
+	}
+	return first.SettlePassed() && segments.SettlePassed()
+}
+
+// Steps: the hours a now drop's job waits for evacuation's horizon pass, an evacuation, the drop job to its end, and
+// then executed, what a schedule holds once its drops ran. On a Net whose clusters have not passed settle
+// (fsDropSettled) the job must wait on settle with no drop moved and no segment deleted, and none of executed runs.
+func fsDropExecute(net *Net, world *EvsWorld, executed ...*Step) []*Step {
+	steps := []*Step{
 		{Advance: 50 * time.Hour},
 		{Actor: "taskworker", Action: world.EvacuateAt(sidecar.EvsRepoFormat2, nil)},
-		{Actor: "taskworker", Action: world.RunDropJob("taskworker", nil)},
 	}
+	if fsDropSettled(net) {
+		steps = append(steps, &Step{Actor: "taskworker", Action: world.RunDropJob("taskworker", nil)})
+		return append(steps, executed...)
+	}
+	mark := &EvsWorldStoreMark{}
+	return append(steps, []*Step{
+		{Actor: "check", Action: world.MarkStore(mark)},
+		{Actor: "taskworker", Action: world.RunDropJob("taskworker", func(result *evsservice.DropJobResult) error {
+			if result.Waiting != evsservice.DropWaitSettle || result.Ended || len(result.Moved) != 0 {
+				return errors.New("the clusters have not passed settle, and the job did not wait on it")
+			}
+			return nil
+		})},
+		{Actor: "check", Action: world.NoSegmentDeletesSince(mark)},
+	}...)
 }
 
 // A step action: the world's network stands at its storage limit, or with limited false below it again.
@@ -155,7 +184,8 @@ var fs95Paths = []string{"x.txt", "s.txt", "a.txt", "b.txt", "c.txt", "v.bin", "
 
 func fs95Settings() *EvsWorldSettings {
 	settings := fsDropWorldSettings(protocol.RepoKind_REPO_KIND_GENERAL, false)
-	settings.Drops.DropsPerDay = fs95DropsPerDay
+	// two drops a day, which Fs95Refusals spends
+	settings.Drops.DropsPerDay = 2
 	return settings
 }
 
@@ -192,8 +222,7 @@ func Fs95Refusals(net *Net) *Schedule {
 		{Actor: "admin", Action: world.CancelDropRefused("admin", "b.txt", EvsWorldExpectError(sidecar.ErrEvsDropState))},
 		{Actor: "reader", Action: world.HistoryStates("reader", "b.txt", map[int]string{1: sidecar.EvsVersionStateDropPending})},
 	}...)
-	steps = append(steps, fsDropExecute(world)...)
-	steps = append(steps, []*Step{
+	steps = append(steps, fsDropExecute(net, world, []*Step{
 		{Actor: "check", Action: world.ExpectDropState("b.txt", evsservice.DropStateDone)},
 		{Actor: "check", Action: world.ExpectDropState("s.txt", evsservice.DropStateDone)},
 		{Actor: "reader", Action: world.Verify("reader", fs95Paths...)},
@@ -203,7 +232,7 @@ func Fs95Refusals(net *Net) *Schedule {
 		{Actor: "reader", Action: world.ReadVersionEnds("reader", "c.txt", 1, EvsWorldReadsContent(fsDropWritten("c.txt", 1, fsDropUploadContent)))},
 		{Actor: "reader", Action: world.ReadVersionEnds("reader", "x.txt", 1, EvsWorldReadsContent(fsDropWritten("x.txt", 1, fsDropUploadContent)))},
 		{Actor: "reader", Action: world.ReadVersionEnds("reader", "x.txt", 2, EvsWorldReadsContent(fsDropWritten("x.txt", 2, fsDropUploadContent)))},
-	}...)
+	}...)...)
 	return &Schedule{
 		Id: "FS-95", Steps: steps, Check: fsDropChecks(world), Tiers: []Tier{TierT2, TierT3},
 		Refuses: "a non-admin's drop, a directory's, an index file's and a versionless head's, a drop past the day's limit, one needing an upload at the storage limit, and a cancel within 60 s of not_before",
@@ -220,14 +249,13 @@ func Fs95Accepted(net *Net) *Schedule {
 		{Actor: "admin", Action: world.Drop("admin", "s.txt", true)},
 		{Actor: "reader", Action: world.HistoryStates("reader", "x.txt", map[int]string{1: sidecar.EvsVersionStateDropped, 2: sidecar.EvsVersionStateDropped})},
 	}...)
-	steps = append(steps, fsDropExecute(world)...)
-	steps = append(steps, []*Step{
+	steps = append(steps, fsDropExecute(net, world, []*Step{
 		{Actor: "check", Action: world.ExpectDropState("x.txt", evsservice.DropStateDone)},
 		{Actor: "check", Action: world.ExpectDropState("s.txt", evsservice.DropStateDone)},
 		{Actor: "reader", Action: world.Verify("reader", fs95Paths...)},
 		{Actor: "reader", Action: world.ReadVersionEnds("reader", "x.txt", 1, EvsWorldReadsDropped())},
 		{Actor: "reader", Action: world.ReadVersionEnds("reader", "s.txt", 2, EvsWorldReadsDropped())},
-	}...)
+	}...)...)
 	return &Schedule{Id: "FS-95 accepted", Steps: steps, Check: fsDropChecks(world), Tiers: []Tier{TierT2, TierT3}}
 }
 
@@ -268,28 +296,26 @@ func fs95LockSchedule(net *Net, locked bool) *Schedule {
 			{Actor: "check", Action: EvsWorldExpectPosted(posted, http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_VERSIONING)},
 			{Advance: 6 * 24 * time.Hour},
 		}...)
-		steps = append(steps, fsDropExecute(world)...)
-		steps = append(steps, []*Step{
+		steps = append(steps, fsDropExecute(net, world, []*Step{
 			{Actor: "check", Action: world.ExpectDropState("w.txt", evsservice.DropStateRefusedLocked)},
 			{Actor: "check", Action: world.NoSegmentDeletesSince(mark)},
 			{Actor: "reader", Action: world.ReadVersionEnds("reader", "w.txt", 1, firstOf("w.txt", fsDropUploadContent))},
 			{Actor: "reader", Action: world.ReadVersionEnds("reader", "x.txt", 1, firstOf("x.txt", fsDropUploadContent))},
 			{Actor: "reader", Action: world.ReadVersionEnds("reader", "z.txt", 1, firstOf("z.txt", fsDropInlineContent))},
-		}...)
+		}...)...)
 	} else {
 		steps = append(steps, []*Step{
 			{Actor: "admin", Action: world.Drop("admin", "x.txt", true)},
 			{Actor: "admin", Action: world.Drop("admin", "z.txt", true)},
 			{Advance: 6 * 24 * time.Hour},
 		}...)
-		steps = append(steps, fsDropExecute(world)...)
-		steps = append(steps, []*Step{
+		steps = append(steps, fsDropExecute(net, world, []*Step{
 			{Actor: "check", Action: world.ExpectDropState("w.txt", evsservice.DropStateDone)},
 			{Actor: "check", Action: world.ExpectDropState("x.txt", evsservice.DropStateDone)},
 			{Actor: "reader", Action: world.ReadVersionEnds("reader", "w.txt", 1, EvsWorldReadsDropped())},
 			{Actor: "reader", Action: world.ReadVersionEnds("reader", "x.txt", 1, EvsWorldReadsDropped())},
 			{Actor: "reader", Action: world.ReadVersionEnds("reader", "z.txt", 1, EvsWorldReadsDropped())},
-		}...)
+		}...)...)
 	}
 	steps = append(steps, &Step{Actor: "reader", Action: world.Verify("reader", "w.txt", "x.txt", "z.txt")})
 	return &Schedule{Id: "FS-95 lock", Steps: steps, Check: fsDropChecks(world), Tiers: []Tier{TierT2, TierT3}}
@@ -348,11 +374,11 @@ func fs95OwnerBoundSchedule(net *Net, consented bool) *Schedule {
 	}
 	// the owner's consented device is accepted either way
 	steps = append(steps, &Step{Actor: "owner", Action: world.Drop("owner", "z.txt", true)})
-	steps = append(steps, fsDropExecute(world)...)
-	steps = append(steps, &Step{Actor: "check", Action: world.ExpectDropState("z.txt", evsservice.DropStateDone)})
+	executed := []*Step{{Actor: "check", Action: world.ExpectDropState("z.txt", evsservice.DropStateDone)}}
 	if consented {
-		steps = append(steps, &Step{Actor: "check", Action: world.ExpectDropState("x.txt", evsservice.DropStateDone)})
+		executed = append(executed, &Step{Actor: "check", Action: world.ExpectDropState("x.txt", evsservice.DropStateDone)})
 	}
+	steps = append(steps, fsDropExecute(net, world, executed...)...)
 	return &Schedule{Id: "FS-95 owner-bound", Steps: steps, Check: fsDropChecks(world), Tiers: []Tier{TierT2, TierT3}}
 }
 
@@ -368,8 +394,7 @@ func Fs95ListMismatch(adding bool) Builder {
 		}
 		steps := fs95History(world)
 		steps = append(steps, &Step{Actor: "admin", Action: world.DropWithWrongList("admin", path, true, adding)})
-		steps = append(steps, fsDropExecute(world)...)
-		steps = append(steps, []*Step{
+		steps = append(steps, fsDropExecute(net, world, []*Step{
 			{Actor: "check", Action: world.ExpectDropState(path, evsservice.DropStateRefusedMismatch)},
 			{Actor: "reader", Action: world.Verify("reader", fs95Paths...)},
 			{Actor: "check", Action: func(ctx context.Context, net *Net) error {
@@ -389,7 +414,7 @@ func Fs95ListMismatch(adding bool) Builder {
 				return errors.Join(errs...)
 			}},
 			{Actor: "reader", Action: world.ReadVersionEnds("reader", path, 1, EvsWorldReadsContent(fsDropWritten(path, 1, fsDropUploadContent)))},
-		}...)
+		}...)...)
 		return &Schedule{
 			Id: "FS-95 list mismatch", Steps: steps, Check: fsDropChecks(world), Tiers: []Tier{TierT2, TierT3},
 			Refuses: "a drop whose list is not its path's versions", Twin: Fs95Accepted,
