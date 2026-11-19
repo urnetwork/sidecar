@@ -794,3 +794,170 @@ func TestTlsEdgeConnLongHelloArrivesWhole(t *testing.T) {
 		t.Fatalf("TlsEdgeOpen's hello is %d B and it ends at %d", open.GetClientHelloByteCount(), open.GetExpireTimeMillis())
 	}
 }
+
+// Reads the store again on the engine's clock and waits for the pass: what a custom host's or an alias's
+// change needs before a visitor sees it.
+func (self *testPathWorld) reloadNames(t *testing.T) {
+	t.Helper()
+	count := self.service.NameLoadCountForTest().Value()
+	self.clock.Advance(testServiceSettings().NameReloadInterval)
+	testAwaitCount(t, self.service.NameLoadCountForTest(), count+1)
+}
+
+// Opens a connection for serverName through to its listener's stream, offering alpnIds, and returns the
+// dial's request.
+func (self *testPathWorld) openName(t *testing.T, serverName string, alpnIds []string) *tlsedgeservice.TlsEdgeDialRequest {
+	t.Helper()
+	hello := testEdgeHello(serverName, alpnIds, 0)
+	conn := self.dial(t)
+	if _, err := conn.Write(hello); err != nil {
+		t.Fatal(err)
+	}
+	stream := self.dialer.awaitOpened(t)
+	if read := stream.listenerRead(t, len(hello)); !bytes.Equal(read, hello) {
+		t.Fatal("the listener's hello is not the visitor's")
+	}
+	stream.listenerCloseWrite()
+	conn.Close()
+	return self.dialer.lastRequest()
+}
+
+// TLS-M6-02: a custom host's dial and an alias's carry the visitor's name as Find's server name, beside
+// the hello's ALPN ids, and a name under the network's own zone carries none; an acme-tls/1 hello for a
+// custom host carries the name and the id, and one for a network name the id with no name, which Find's
+// ACME route then matches to no listener (DESIGN-DETAILS 17.2.10). Every dial carries the visitor's
+// affinity key, the same for each, and no record holds it.
+func TestTlsEdgeConnServerNameForCustomHostsAndAliases(t *testing.T) {
+	world := newTestPathWorld(t, nil)
+	if err := world.store.SetCustomHost(testServiceRoot, "app.corp.example", world.networkId, "web", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := world.store.SetCustomHost(testServiceRoot, "corp.example", world.networkId, "shop", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := world.store.AddAlias(testServiceRoot, world.networkId, "my-shop"); err != nil {
+		t.Fatal(err)
+	}
+	world.reloadNames(t)
+
+	cases := []struct {
+		serverName     string
+		alpnIds        []string
+		name           string
+		wantServerName string
+	}{
+		{serverName: "app.corp.example", alpnIds: []string{"h2", "http/1.1"}, name: "tls/443/web", wantServerName: "app.corp.example"},
+		{serverName: "corp.example", alpnIds: []string{"http/1.1"}, name: "tls/443/shop", wantServerName: "corp.example"},
+		{serverName: "blog.my-shop." + testServiceRoot, alpnIds: []string{"h2"}, name: "tls/443/blog", wantServerName: "blog.my-shop." + testServiceRoot},
+		{serverName: world.name("blog"), alpnIds: []string{"h2"}, name: "tls/443/blog", wantServerName: ""},
+		{serverName: "app.corp.example", alpnIds: []string{"acme-tls/1"}, name: "tls/443/web", wantServerName: "app.corp.example"},
+		{serverName: world.name("web"), alpnIds: []string{"acme-tls/1"}, name: "tls/443/web", wantServerName: ""},
+	}
+	affinityKeys := map[string]bool{}
+	for _, c := range cases {
+		request := world.openName(t, c.serverName, c.alpnIds)
+		if request.Target.Name != c.name || request.Target.NetworkId != world.networkId || request.Target.Label != world.label {
+			t.Errorf("%s dialed %+v", c.serverName, request.Target)
+		}
+		if request.ServerName != c.wantServerName {
+			t.Errorf("%s dialed with server name %q", c.serverName, request.ServerName)
+		}
+		if !slices.Equal(request.AlpnIds, c.alpnIds) {
+			t.Errorf("%s dialed with ALPN %v", c.serverName, request.AlpnIds)
+		}
+		if len(request.AffinityKey) != 16 {
+			t.Errorf("%s dialed with an affinity key of %d bytes", c.serverName, len(request.AffinityKey))
+		}
+		affinityKeys[string(request.AffinityKey)] = true
+	}
+	if len(affinityKeys) != 1 {
+		t.Fatalf("one visitor's dials carried %d affinity keys", len(affinityKeys))
+	}
+	world.awaitEnded(t, uint64(len(cases)))
+	flushCount := world.service.RecordFlushCountForTest().Value()
+	world.clock.Advance(testServiceSettings().RecordFlushInterval)
+	testAwaitCount(t, world.service.RecordFlushCountForTest(), flushCount+1)
+	records := world.store.Records()
+	if len(records) != len(cases) {
+		t.Fatalf("%d records", len(records))
+	}
+	for affinityKey := range affinityKeys {
+		for _, record := range records {
+			if bytes.Contains(record.VisitorHash, []byte(affinityKey)) || record.Host == "app.corp.example" || record.Host == "corp.example" {
+				t.Fatalf("a record holds the affinity key or the custom name: %+v", record)
+			}
+		}
+	}
+}
+
+// A pending custom host and one that left the active rows answer unrecognized_name with no Find, as an
+// unknown name does, the latter from the engine's next read on.
+func TestTlsEdgeConnPendingAndRemovedCustomHostsAreUnknown(t *testing.T) {
+	world := newTestPathWorld(t, nil)
+	unrecognized := testAlertBytes(tlsedgeservice.TlsAlertUnrecognizedName)
+	if err := world.store.SetCustomHost(testServiceRoot, "pending.corp.example", world.networkId, "web", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := world.store.SetCustomHost(testServiceRoot, "app.corp.example", world.networkId, "web", true); err != nil {
+		t.Fatal(err)
+	}
+	world.reloadNames(t)
+	if answer := world.answer(t, testEdgeHello("pending.corp.example", []string{"h2"}, 0)); !bytes.Equal(answer, unrecognized) {
+		t.Fatalf("a pending host answered %x", answer)
+	}
+	world.openName(t, "app.corp.example", []string{"h2"})
+
+	world.store.RemoveCustomHost("app.corp.example")
+	world.reloadNames(t)
+	dialCount := world.dialer.dialCount.Load()
+	if answer := world.answer(t, testEdgeHello("app.corp.example", []string{"h2"}, 0)); !bytes.Equal(answer, unrecognized) {
+		t.Fatalf("a removed host answered %x", answer)
+	}
+	if got := world.dialer.dialCount.Load(); got != dialCount {
+		t.Fatal("an unmapped custom host reached Find")
+	}
+}
+
+// A custom host whose listeners hold no certificate for it is Find's no_listener: internal_error, held by
+// the negative cache for the name, port and ALPN set as for any name, and never a splice. A scope host
+// Find denies, a scope that does not exist, is held the same way as a denial.
+func TestTlsEdgeConnUncertifiedCustomHostAndUnknownScope(t *testing.T) {
+	world := newTestPathWorld(t, nil)
+	if err := world.store.SetCustomHost(testServiceRoot, "app.corp.example", world.networkId, "web", true); err != nil {
+		t.Fatal(err)
+	}
+	world.reloadNames(t)
+	internal := testAlertBytes(tlsedgeservice.TlsAlertInternalError)
+	unrecognized := testAlertBytes(tlsedgeservice.TlsAlertUnrecognizedName)
+
+	world.dialer.refuseNext(&sidecar.SocketCodeError{Err: sidecar.ErrSocketNoListener})
+	if answer := world.answer(t, testEdgeHello("app.corp.example", []string{"h2"}, 0)); !bytes.Equal(answer, internal) {
+		t.Fatalf("an uncertified custom host answered %x", answer)
+	}
+	if request := world.dialer.lastRequest(); request.ServerName != "app.corp.example" {
+		t.Fatalf("the dial carried server name %q", request.ServerName)
+	}
+	dialCount := world.dialer.dialCount.Load()
+	if answer := world.answer(t, testEdgeHello("app.corp.example", []string{"h2"}, 0)); !bytes.Equal(answer, internal) {
+		t.Fatalf("a cached no listener answered %x", answer)
+	}
+	if got := world.dialer.dialCount.Load(); got != dialCount {
+		t.Fatal("a cached no listener asked Find again")
+	}
+
+	world.dialer.refuseNext(&sidecar.SocketCodeError{Err: sidecar.ErrSocketDenied})
+	scopeName := "blog.noscope." + world.label + "." + testServiceRoot
+	if answer := world.answer(t, testEdgeHello(scopeName, []string{"h2"}, 0)); !bytes.Equal(answer, unrecognized) {
+		t.Fatalf("an unknown scope answered %x", answer)
+	}
+	if request := world.dialer.lastRequest(); request.Target.Name != "tls/443/blog.noscope" || request.ServerName != "" {
+		t.Fatalf("the scope host dialed %+v with server name %q", request.Target, request.ServerName)
+	}
+	dialCount = world.dialer.dialCount.Load()
+	if answer := world.answer(t, testEdgeHello(scopeName, []string{"h2"}, 0)); !bytes.Equal(answer, unrecognized) {
+		t.Fatalf("a cached denial answered %x", answer)
+	}
+	if got := world.dialer.dialCount.Load(); got != dialCount {
+		t.Fatal("a cached denial asked Find again")
+	}
+}

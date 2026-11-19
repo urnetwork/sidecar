@@ -119,6 +119,8 @@ type indexBackfillArgs struct {
 	padKey func(ctx context.Context) (*indexPadKey, error)
 	// A record log's run cards, nil on every other ref.
 	cards indexBackfillCards
+	// The DROPs a file-mode ref's own index is rewritten for (evs_index_drop.go); nil rewrites none.
+	drops *indexDropBackfill
 }
 
 // One index ref's backfiller, which the schedule calls each tick.
@@ -186,10 +188,12 @@ type indexBackfillOutcome struct {
 	attempts int
 }
 
-// The schedule's call (indexer_search.go): one backfill of every due content ref.
+// The schedule's call (indexer_search.go): the rewrites of every due DROP (evs_index_drop.go), then one backfill of
+// every due content ref.
 func (self *IndexBackfiller) Backfill(ctx context.Context) error {
+	_, dropErr := self.backfillDrops(ctx)
 	_, err := self.backfill(ctx)
-	return err
+	return errors.Join(dropErr, err)
 }
 
 // The barrier key of this ref: <repo>:<ref>, an opaque id with no slash (testhook.go; I-13).

@@ -324,6 +324,11 @@ func tlsPrivacyPlant(t *testing.T, edge *tlsSuiteEdge) *tlsPrivacyCanaries {
 			t.Fatal(err)
 		}
 	}
+	// tls-2 keeps the fleet's daily visitor key in Redis at {vhk}tls:<yyyymmdd> (plan-TLS-visitor-hash-key),
+	// which testHookSecret hands the capture; what derives from it, k_record and k_affinity, is held nowhere
+	if err := capture.Declare("tls-2", "tls_visitor_fleet_daily", sidecartest.PrivacyClassRedis); err != nil {
+		t.Fatal(err)
+	}
 	capture.AddSource(edge.socketSuiteWorld.store.PrivacyItems)
 	capture.AddSource(func() []*sidecartest.PrivacyItem {
 		items := []*sidecartest.PrivacyItem{}

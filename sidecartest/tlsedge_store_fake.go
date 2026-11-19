@@ -1,7 +1,8 @@
-// T2's TlsEdgeStore: §12's label map, network_tls_suspension and tls_connection_record in memory, until
-// TLS-M5-11's model.NewTlsEdgeStore. The map keeps DNS-M5-10's rules: every change takes the root's next
-// serial, a change to a network's suspensions moves every name of that network (DNS-M5-14), names are
-// never deleted, only tombstoned, and a restore moves the root's restore serial. Calls go through
+// T2's TlsEdgeStore: §12's label map, §12.8's custom hosts, network_tls_suspension and
+// tls_connection_record in memory, until TLS-M5-11's model.NewTlsEdgeStore. The map keeps DNS-M5-10's
+// rules: every change takes the root's next serial, a change to a network's suspensions moves every name
+// of that network (DNS-M5-14), names are never deleted, only tombstoned, and a restore moves the root's
+// restore serial. A custom host is active or pending, and only an active one reads back. Calls go through
 // hostCall, so a plan under FaultOpHost with the key "tlsedge.<Method>" reaches them, and each is
 // counted, so a test can show a connection's path made none (§22.5). Safe for concurrent use.
 
@@ -33,6 +34,17 @@ type fakeTlsEdgeName struct {
 	changeSerial uint64
 }
 
+// A custom host row as the fake keeps it (network_dns_custom_host).
+type fakeTlsEdgeCustomHost struct {
+	root      string
+	host      string
+	networkId sidecar.Id
+	ownerHost string
+	// the network's label in root when the host was mapped, as its owner names it
+	ownerLabel string
+	active     bool
+}
+
 // One network's §12.9 suspensions.
 type fakeTlsEdgeZone struct {
 	suspended     bool
@@ -51,9 +63,11 @@ type FakeTlsEdgeStore struct {
 	rootSerials        map[string]uint64
 	rootRestoreSerials map[string]uint64
 	networkZones       map[sidecar.Id]*fakeTlsEdgeZone
-	suspensions        []*sidecar.TlsSuspendArgs
-	records            []*tlsedgeservice.TlsConnectionRecord
-	opCounts           map[string]int
+	// by host
+	customHosts map[string]*fakeTlsEdgeCustomHost
+	suspensions []*sidecar.TlsSuspendArgs
+	records     []*tlsedgeservice.TlsConnectionRecord
+	opCounts    map[string]int
 }
 
 // A nil faults takes a fresh queue.
@@ -67,8 +81,46 @@ func NewFakeTlsEdgeStore(faults *FaultQueue) *FakeTlsEdgeStore {
 		rootSerials:        map[string]uint64{},
 		rootRestoreSerials: map[string]uint64{},
 		networkZones:       map[sidecar.Id]*fakeTlsEdgeZone{},
+		customHosts:        map[string]*fakeTlsEdgeCustomHost{},
 		opCounts:           map[string]int{},
 	}
+}
+
+// Maps host, a custom host of §12.8, to the owner <ownerHost>.<label>.<root> of networkId's zone, active
+// or pending as certs' walk would leave it. The network must hold a label in root, and a host another
+// network maps is refused, as network_dns_custom_host's key refuses it. Mapping a host again replaces its
+// row, which is how a pending host turns active.
+func (self *FakeTlsEdgeStore) SetCustomHost(root string, host string, networkId sidecar.Id, ownerHost string, active bool) error {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if existing, ok := self.customHosts[host]; ok && existing.networkId != networkId {
+		return errors.New("the custom host is mapped already")
+	}
+	label := ""
+	for _, row := range self.rootNames[root] {
+		if row.networkId == networkId && row.kind == tlsedgeservice.TlsEdgeNameKindLabel {
+			label = row.name
+		}
+	}
+	if label == "" {
+		return errors.New("the network has no label in the root")
+	}
+	self.customHosts[host] = &fakeTlsEdgeCustomHost{
+		root:       root,
+		host:       host,
+		networkId:  networkId,
+		ownerHost:  ownerHost,
+		ownerLabel: label,
+		active:     active,
+	}
+	return nil
+}
+
+// Removes the custom host's row, as §12.8's remove does.
+func (self *FakeTlsEdgeStore) RemoveCustomHost(host string) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	delete(self.customHosts, host)
 }
 
 // One call through the fake's fault and count, under its lock.
@@ -345,6 +397,28 @@ func (self *FakeTlsEdgeStore) NamesSince(ctx context.Context, root string, after
 		return nil
 	})
 	return nameMap, err
+}
+
+// See tlsedgeservice.TlsEdgeStore: root's active custom hosts, in host order.
+func (self *FakeTlsEdgeStore) CustomHosts(ctx context.Context, root string) ([]*tlsedgeservice.TlsEdgeCustomHostEntry, error) {
+	entries := []*tlsedgeservice.TlsEdgeCustomHostEntry{}
+	err := self.call(ctx, "CustomHosts", func() error {
+		for _, row := range self.customHosts {
+			if row.root == root && row.active {
+				entries = append(entries, &tlsedgeservice.TlsEdgeCustomHostEntry{
+					Host:       row.host,
+					NetworkId:  row.networkId,
+					OwnerHost:  row.ownerHost,
+					OwnerLabel: row.ownerLabel,
+				})
+			}
+		}
+		return nil
+	})
+	slices.SortFunc(entries, func(a *tlsedgeservice.TlsEdgeCustomHostEntry, b *tlsedgeservice.TlsEdgeCustomHostEntry) int {
+		return strings.Compare(a.Host, b.Host)
+	})
+	return entries, err
 }
 
 // See tlsedgeservice.TlsEdgeStore.

@@ -3,10 +3,12 @@
 //  1. take a process slot, then read the ClientHello inside client_hello.timeout_s. A hello that does not
 //     parse answers decode_error. A hello offering ur-route-probe answers unrecognized_name at once,
 //     whatever its SNI, with no lookup, Find, record or lease (§13.4's route probe);
-//  2. normalize the SNI and map it with the listener's port to (network, tls/<port>/<host>);
+//  2. normalize the SNI and map it with the listener's port to (network, tls/<port>/<host>), through the
+//     label map, a scope host or the custom-host map (names.go);
 //  3. check, all in memory, the kill switch, sidecar.yml's tlsedge gate, the caps and the negative cache;
-//  4. Find and 5. open, through the dialer, as autogroup:public with the offered ALPN list, handing it the
-//     hello's bytes whole, so the listener reads one contiguous stream;
+//  4. Find and 5. open, through the dialer, as autogroup:public with the offered ALPN list, the visitor's
+//     name as server_name for an alias or a custom host (DESIGN-DETAILS 17.2.10) and the keyed affinity
+//     key, handing it the hello's bytes whole, so the listener reads one contiguous stream;
 //  6. splice (splice.go);
 //  7. on any failure before the stream, one plaintext alert and close: unrecognized_name for an unmapped,
 //     killed or denied name, which a visitor cannot tell apart, and internal_error for no listener, busy,
@@ -220,6 +222,10 @@ func (self *tlsEdgeConnection) serve() string {
 	request := &TlsEdgeDialRequest{
 		Target:  target,
 		AlpnIds: alpnIds,
+		// Find's server_name only for an alias or a custom host (DESIGN-DETAILS 17.2.10), and the
+		// affinity key under the day's k_affinity, never stored (§9.7)
+		ServerName:  target.ServerName,
+		AffinityKey: service.visitorKeys.AffinityKey(visitor.Addr()),
 		Metadata: func(ticketGrantExpireTimeMillis uint64) ([]byte, error) {
 			// tickets are tried in turn, so the last asked for is the one that opened
 			grantExpireTimeMillis.Store(ticketGrantExpireTimeMillis)
