@@ -8,6 +8,8 @@
 //	ur mail credential [--network=<net>]
 //	                                   the network's IMAP and submission credential, shown once on the terminal
 //	                                   (cmd_mail_credential.go)
+//	ur mail recipients rm <alias> <recipient> [--network=<net>]
+//	                                   removes an approved recipient, asked on /dev/tty (cmd_mail_recipients.go)
 //
 // `ur status` prints a mail line from the same method for each hosted network, and the prompt while it holds. The
 // design names the commands' flags nowhere: --network is this file's, as cli/UI.md records (plan-CORE-cli-ui-missing).
@@ -35,9 +37,10 @@ const (
 
 func init() {
 	registerUrCommand(&urCommand{
-		name:    "mail",
-		usage:   "  ur mail enable [--network=<net>]\n  ur mail status [--network=<net>]\n  ur mail credential [--network=<net>]",
-		summary: "turn mail on for the network, show its status, or make its IMAP credential",
+		name: "mail",
+		usage: "  ur mail enable [--network=<net>]\n  ur mail status [--network=<net>]\n  ur mail credential [--network=<net>]\n" +
+			"  ur mail recipients rm <alias> <recipient> [--network=<net>]",
+		summary: "turn mail on for the network, show its status, make its IMAP credential, or remove an approved recipient",
 		run:     runUrMail,
 	})
 	urDaemonMethodExtensions = append(urDaemonMethodExtensions, urMailMethods)
@@ -202,8 +205,10 @@ func runUrMail(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		return nil
 	case options["credential"] == true:
 		return runUrMailCredential(ctx, cli, network)
+	case options["recipients"] == true && options["rm"] == true:
+		return runUrMailRecipientsRemove(ctx, cli, network, urOptionString(options, "<alias>"), urOptionString(options, "<recipient>"))
 	}
-	return errors.New("ur mail takes enable, status or credential")
+	return errors.New("ur mail takes enable, status, credential or recipients rm")
 }
 
 // The status as a person reads it.
