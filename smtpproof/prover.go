@@ -9,7 +9,6 @@ import (
 	"math/big"
 	"net"
 	"slices"
-	"strconv"
 	"sync"
 	"time"
 
@@ -32,19 +31,42 @@ type partProver interface {
 type ProverSettings struct {
 	// The proofs' catalog and limits, which the verifier's must equal (DESIGN-DETAILS 3.2.8).
 	Proof *ProofSettings
-	// Largest content of one client record. The protocol's limit is 16 KiB.
-	MaxRecordContentBytes int
-	// DATA octets proven per part at most: a body record is cut at this or at what the family's body
-	// shape holds, whichever is less. A part's circuit is fixed, so it costs the same however much it
-	// carries: Measure sets this to a whole body record, or 0 when a part cannot prove within
-	// DataPartTime. Until a Measure, this default stands.
-	DataPartBytes int
-	// smtp_data_proof_bytes: a larger message to an MX without CHUNKING is too_large before MAIL
-	// (§14.5). Measure replaces this unmeasured default with the host's own figure. Non-positive refuses
-	// every DATA send.
+	// The TLS suites the client offers, in its order, less those whose family has no ready keys (DESIGN-DETAILS
+	// 3.2.6, 3.2.7): ChaCha20-Poly1305 first, since an octet under it costs 341 constraints of keystream
+	// against AES-128-GCM's 729 and an MX that follows the client's preference then halves a header's cost,
+	// then TLS 1.3's AES-128-GCM and TLS 1.2's two AES-128-GCM suites.
+	SuiteOrder []uint16
+	// The memory proving may take (DESIGN-DETAILS 3.2.8), kept by charging: loaded shapes times
+	// ShapeMemoryByteCount plus proofs in flight times PartMemoryByteCount stay at or under it. 2,240 MiB:
+	// two loaded shapes, the one proving and the next, and one proof, which an 8 GB host can give. A budget
+	// that cannot hold one shape and one proof refuses every part, and the host only queues.
+	MemoryMaxByteCount int64
+	// What a loaded shape is charged, its compiled circuit and its proving key's dump: 768 MiB, above the
+	// 617 to 737 MiB measured for a unit's.
+	ShapeMemoryByteCount int64
+	// What a proof in flight is charged over its loaded shape: 704 MiB, the first proof's 662 MiB measured
+	// with a collection after each. BenchmarkPartMemory holds it to the peak it finds.
+	PartMemoryByteCount int64
+	// Proofs at once in one send, each PartMemoryByteCount more: 1. Non-positive is 1.
+	ProveConcurrency int
+	// A loaded shape no proof has used for this long is unloaded, and when the last goes the heap is
+	// returned to the system: 2 min, longer than the gap between a send's parts. Non-positive unloads a
+	// shape once no proof holds it.
+	ShapeIdleTimeout time.Duration
+	// Commands one envelope group holds at most, below what fits the env shape: 0 for what fits. A job's
+	// own EnvelopeGroupMaxCount, the sender's retry after EnvelopeRetry, bounds it too.
+	EnvelopeGroupMaxCount int
+	// What each reply to the first envelope group is taken to fill, a record of its own, when the group is
+	// sized: 40 octets. Later groups take the mean reply of the records that held the group before's
+	// replies, a public value, plus ReplyMarginByteCount, 8 octets (DESIGN-DETAILS 3.2.4).
+	ReplyEstimateByteCount int
+	ReplyMarginByteCount   int
+	// smtp_data_proof_bytes: a larger message to an MX without CHUNKING is too_large before MAIL (§14.5). Measure
+	// replaces this unmeasured default with the host's own figure, 0 where a unit cannot prove within
+	// DataPartTime. Non-positive refuses every DATA send.
 	DataProofBytes int
 	// How long one DATA part may take to prove: §14.5's 2 minutes, inside the MX's 5-minute timeout. A
-	// host whose part takes longer sends nothing in DATA mode.
+	// host whose unit takes longer sends nothing in DATA mode.
 	DataPartTime time.Duration
 	// How long a DATA connection proves for: §14.4's 2 h. With the measured rate it gives
 	// smtp_data_proof_bytes.
@@ -54,17 +76,27 @@ type ProverSettings struct {
 	MaxServerBytes int
 	// Sends in DATA mode even where the MX offers CHUNKING, as D-SMTP-16's interop runs do.
 	ForceData bool
+
+	// A test's cut of DATA's body below what the body shape holds, so that a short body takes several
+	// parts. 0, the only value outside tests, cuts each body record at the shape's capacity.
+	testDataRecordByteCount int
 }
 
 func DefaultProverSettings() *ProverSettings {
 	return &ProverSettings{
-		Proof:                 DefaultProofSettings(),
-		MaxRecordContentBytes: 16 * 1024,
-		DataPartBytes:         16 * 1024,
-		DataProofBytes:        1024 * 1024,
-		DataPartTime:          2 * time.Minute,
-		DataConnectionTime:    2 * time.Hour,
-		MaxServerBytes:        256 * 1024,
+		Proof:                  DefaultProofSettings(),
+		SuiteOrder:             defaultTlsSuiteOrder(),
+		MemoryMaxByteCount:     2240 * 1024 * 1024,
+		ShapeMemoryByteCount:   768 * 1024 * 1024,
+		PartMemoryByteCount:    704 * 1024 * 1024,
+		ProveConcurrency:       1,
+		ShapeIdleTimeout:       2 * time.Minute,
+		ReplyEstimateByteCount: 40,
+		ReplyMarginByteCount:   8,
+		DataProofBytes:         1024 * 1024,
+		DataPartTime:           2 * time.Minute,
+		DataConnectionTime:     2 * time.Hour,
+		MaxServerBytes:         256 * 1024,
 	}
 }
 
@@ -92,7 +124,8 @@ type proverServerRecord struct {
 	plaintext []byte
 }
 
-// What one send holds. Not safe for concurrent use, except that the reader goroutine owns serverIn.
+// What one send holds. Not safe for concurrent use, except that the reader goroutine owns serverIn and
+// the message's proofs run beside the submitting goroutine, reading only what is fixed by then.
 type proverRun struct {
 	settings *ProverSettings
 	backend  partProver
@@ -121,9 +154,33 @@ type proverRun struct {
 	repliesProven     uint32
 	mode              uint32
 	headerRecordCount uint32
-	// Whether the message's first part was proven, after which a late server record is covered by a part
-	// of its own, since the message's parts hold none.
+	// The replies to the envelope's last group, and the server records read once they were whole, which
+	// the message's first part, or env parts before it, cover.
+	envelopeReplyCount uint32
+	envelopeEnd        uint64
+	// Whether the message's first part was submitted, after which a late server record is covered by a
+	// part of its own, since the message's parts hold none.
 	messageStarted bool
+	// Every reply code read inside TLS, in order, and each RCPT's, once any was read, for the result.
+	replyCodes          []uint32
+	recipientReplyCodes []uint32
+}
+
+// The gate's state when a part reaches it, as this prover mirrors it, which the part's statement takes.
+type proverGateState struct {
+	index             uint32
+	covered           uint64
+	repliesProven     uint32
+	headerRecordCount uint32
+}
+
+func (self *proverRun) gateState() proverGateState {
+	return proverGateState{
+		index:             self.nextPart,
+		covered:           self.covered,
+		repliesProven:     self.repliesProven,
+		headerRecordCount: self.headerRecordCount,
+	}
 }
 
 // A record from the reader goroutine, or how it ended.
@@ -197,13 +254,18 @@ func (self *Prover) PrepareKeys(ctx context.Context) (*sidecar.SmtpProverReadine
 }
 
 // What a job proves under: the backend, the catalog and the suites of the key set it names, which must be
-// a pinned set with a ready family. A Prover with no keys proves a job naming none under its own backend.
+// a pinned set with a ready family, the suites SuiteOrder's that it can prove. A Prover with no keys proves
+// a job naming none under its own backend, offering SuiteOrder.
 func (self *Prover) jobKeys(keySet []byte) (partProver, *ProofSettings, []uint16, error) {
 	if self.keys == nil {
 		if len(keySet) != 0 {
 			return nil, nil, nil, sidecar.ErrSmtpProofKeySet
 		}
-		return self.backend, self.settings.Proof, self.tlsSuites, nil
+		suites := self.settings.SuiteOrder
+		if self.tlsSuites != nil {
+			suites = self.tlsSuites
+		}
+		return self.backend, self.settings.Proof, suites, nil
 	}
 	set, suites, ok := self.keys.forJob(keySet)
 	if !ok {
@@ -240,9 +302,12 @@ func (self *Prover) SendSmtp(ctx context.Context, conn net.Conn, job *sidecar.Sm
 	settings := defaultTlsClientSettings()
 	settings.serverName = job.Preamble.MxHost
 	settings.verifyPeer = job.VerifyPeer
-	if suites != nil {
-		settings.suites = suites
+	settings.recordContentMaxByteCount = proof.RecordContentMaxByteCount
+	settings.recordCiphertextMaxByteCount = proof.RecordCiphertextMaxByteCount
+	if len(suites) == 0 {
+		return nil, errors.New("smtpproof: no TLS suite to offer")
 	}
+	settings.suites = suites
 	sendSettings := self.sendSettings()
 	sendSettings.Proof = proof
 	run := &proverRun{
@@ -255,7 +320,12 @@ func (self *Prover) SendSmtp(ctx context.Context, conn net.Conn, job *sidecar.Sm
 		serverIn: make(chan *proverServerEvent),
 		nextPart: 1,
 	}
-	return run.run(ctx)
+	result, err := run.run(ctx)
+	if result != nil {
+		result.ReplyCodes = run.replyCodes
+		result.RecipientReplyCodes = run.recipientReplyCodes
+	}
+	return result, err
 }
 
 func (self *proverRun) run(ctx context.Context) (*sidecar.SmtpProofResult, error) {
@@ -304,7 +374,7 @@ func (self *proverRun) run(ctx context.Context) (*sidecar.SmtpProofResult, error
 		return nil, err
 	}
 	self.nextRecord = ehlo.seq
-	if err := self.prove(ctx, &proverPart{sealed: []*tlsSealedRecord{ehlo}, plaintexts: [][]byte{self.opened(ehlo, ehloCommand)}}); err != nil {
+	if err := self.prove(ctx, &proverPart{sealed: []*tlsSealedRecord{ehlo}, plaintexts: [][]byte{self.opened(ehlo, ehloCommand)}}, 0); err != nil {
 		return nil, err
 	}
 	if err := self.client.writeSealed(ehlo); err != nil {
@@ -314,6 +384,7 @@ func (self *proverRun) run(ctx context.Context) (*sidecar.SmtpProofResult, error
 	if err != nil {
 		return nil, err
 	}
+	self.noteReply(-1, replies[0])
 	if replies[0].code != "250" {
 		return &sidecar.SmtpProofResult{RefusedCode: replies[0].code}, nil
 	}
@@ -344,9 +415,9 @@ func (self *proverRun) run(ctx context.Context) (*sidecar.SmtpProofResult, error
 	count := uint64(len(self.job.Message))
 	if mode == partModeData {
 		count = uint64(len(stuffed))
-		// a host whose part cannot prove within its time has no DATA part size, and sends no DATA
-		if self.settings.DataPartBytes <= 0 || uint64(max(self.settings.DataProofBytes, 0)) < count {
-			return &sidecar.SmtpProofResult{Mode: mode, TooLarge: true}, nil
+		// a host whose unit cannot prove within its time has no DATA cap, and sends no DATA
+		if uint64(max(self.settings.DataProofBytes, 0)) < count {
+			return &sidecar.SmtpProofResult{Mode: mode, TooLarge: true, DataProofByteCount: uint64(max(self.settings.DataProofBytes, 0))}, nil
 		}
 	}
 	if self.preamble.messageByteCount != count {
@@ -354,9 +425,7 @@ func (self *proverRun) run(ctx context.Context) (*sidecar.SmtpProofResult, error
 	}
 	self.mode = mode
 
-	// part 2, an env part: the EHLO reply, and the envelope's commands. SMTP-M9-39's planner sends them
-	// in groups; until then one group holds the envelope, and an envelope no env shape holds is refused
-	// here, before MAIL, as one no landed shape held was
+	// the envelope's commands go in groups, each with the part that covers the replies to the one before
 	mailSuffix := "@" + self.preamble.envelopeDomain + ">"
 	if self.preamble.flags&preambleFlagRequireTls != 0 {
 		mailSuffix += literalRequireTls
@@ -368,44 +437,8 @@ func (self *proverRun) run(ctx context.Context) (*sidecar.SmtpProofResult, error
 	if mode == partModeData {
 		commands = append(commands, literalData)
 	}
-	envelope := &proverPart{replyCount: 1}
-	for _, command := range commands {
-		record, err := self.seal([]byte(command))
-		if err != nil {
-			return nil, err
-		}
-		envelope.sealed = append(envelope.sealed, record)
-		envelope.plaintexts = append(envelope.plaintexts, self.opened(record, command))
-	}
-	if err := self.prove(ctx, envelope); err != nil {
-		return nil, err
-	}
-	// without PIPELINING each command waits for the last one's reply, still under this part (14.4)
-	var answers []*smtpReply
-	for i, record := range envelope.sealed {
-		if err := self.client.writeSealed(record); err != nil {
-			return nil, err
-		}
-		if !pipelining {
-			replies, err := self.awaitReplies(ctx, 1)
-			if err != nil {
-				return nil, err
-			}
-			answers = append(answers, replies...)
-			if smtpReplyRefuses(replies[0], mode == partModeData && i == len(envelope.sealed)-1) {
-				return &sidecar.SmtpProofResult{Mode: mode, RefusedCode: replies[0].code}, nil
-			}
-		}
-	}
-	if pipelining {
-		if answers, err = self.awaitReplies(ctx, len(envelope.sealed)); err != nil {
-			return nil, err
-		}
-		for i, reply := range answers {
-			if smtpReplyRefuses(reply, mode == partModeData && i == len(envelope.sealed)-1) {
-				return &sidecar.SmtpProofResult{Mode: mode, RefusedCode: reply.code}, nil
-			}
-		}
+	if result, err := self.sendEnvelope(ctx, commands, pipelining); result != nil || err != nil {
+		return result, err
 	}
 
 	headerEnd := bytes.Index(self.job.Message, []byte(literalCrlf+literalCrlf))
@@ -413,13 +446,11 @@ func (self *proverRun) run(ctx context.Context) (*sidecar.SmtpProofResult, error
 		return nil, errors.New("smtpproof: message has no header block")
 	}
 	headerEnd += 2 * len(literalCrlf)
-	headerBlock := self.job.Message[:headerEnd]
-	// the envelope's replies the message's first part covers: MAIL's, each RCPT's, and DATA's 354
-	envelopeReplies := uint32(len(commands))
-	if mode == partModeBdat {
-		return self.sendBdat(ctx, headerBlock, self.job.Message[headerEnd:], envelopeReplies)
+	body := self.job.Message[headerEnd:]
+	if mode == partModeData {
+		body = stuffed[headerEnd:]
 	}
-	return self.sendData(ctx, headerBlock, stuffed[headerEnd:], envelopeReplies)
+	return self.sendMessage(ctx, self.job.Message[:headerEnd], body)
 }
 
 // A message as DATA carries it: a leading dot doubled on each line (RFC 5321 §4.5.2). Z5.3 refuses a
@@ -477,6 +508,9 @@ type proverPart struct {
 	carryOut      []byte
 	carryOutBlind *big.Int
 	wireCarry     bool
+	// The records written once the part's answer is OK: what it opens, but QUIT, which waits for the
+	// message's reply, with BDAT's unopened body after the last header record and DATA's end mark.
+	writes []*tlsSealedRecord
 }
 
 // One scan record's carry: the state it leaves and a fresh blind, drawn once a carry, and the
@@ -532,273 +566,35 @@ func (self *proverRun) headerRecords(headerBlock []byte) ([][]byte, []*proverCar
 	return contents, carries, nil
 }
 
-// The part that opens the header block's first record, and any part before it that the envelope's
-// replies need: when the msg shape's server blocks cannot hold them, an env part that opens no client
-// record covers them first (DESIGN-DETAILS 3.2.4).
-func (self *proverRun) proveMessageFirst(ctx context.Context, message *proverPart, envelopeReplies uint32) error {
-	message.replyCount = envelopeReplies
-	statement, _ := self.statementOf(message)
-	if _, err := partShapeFor(self.settings.Proof, statement); err != nil {
-		if err := self.prove(ctx, &proverPart{replyCount: envelopeReplies}); err != nil {
-			return err
-		}
-		message.replyCount = 0
+// Covers every server record read since the last part by env parts that open no client record, when there
+// is one, so that the edge's hold on message records behind them lifts (E3 step 5).
+func (self *proverRun) proveLateRecords(ctx context.Context) error {
+	through := uint64(len(self.records))
+	if through == self.covered {
+		return nil
 	}
-	if err := self.prove(ctx, message); err != nil {
+	covered, err := self.coverServerRecords(ctx, through)
+	if err != nil {
 		return err
 	}
-	self.messageStarted = true
+	if !covered {
+		return errors.New("smtpproof: the MX sent a record no part can cover")
+	}
 	return nil
 }
 
-// BDAT's parts (DESIGN-DETAILS 3.2.6): the msg part opens BDAT's command and the header block's first
-// record, each later header record takes a hdr part, and the part that opens the last one also opens
-// QUIT, which fixes QUIT's sequence number, so every body record is sealed before it. The body then
-// streams unopened (SPEC.md 9.5).
-func (self *proverRun) sendBdat(ctx context.Context, headerBlock []byte, body []byte, envelopeReplies uint32) (*sidecar.SmtpProofResult, error) {
-	result, err := self.sendBdatParts(ctx, headerBlock, body, envelopeReplies)
-	var refused *proverRefused
-	if errors.As(err, &refused) {
-		return &sidecar.SmtpProofResult{Mode: partModeBdat, RefusedCode: refused.reply.code}, nil
-	}
-	return result, err
-}
-
-func (self *proverRun) sendBdatParts(ctx context.Context, headerBlock []byte, body []byte, envelopeReplies uint32) (*sidecar.SmtpProofResult, error) {
-	command := literalBdatPrefix + strconv.FormatUint(self.preamble.messageByteCount, 10) + literalBdatSuffix
-	commandRecord, err := self.seal([]byte(command))
-	if err != nil {
-		return nil, err
-	}
-	contents, carries, err := self.headerRecords(headerBlock)
-	if err != nil {
-		return nil, err
-	}
-	var headerRecords []*tlsSealedRecord
-	for _, content := range contents {
-		record, err := self.seal(content)
-		if err != nil {
-			return nil, err
-		}
-		headerRecords = append(headerRecords, record)
-	}
-	var bodyRecords []*tlsSealedRecord
-	for offset := 0; offset < len(body); offset += self.settings.MaxRecordContentBytes {
-		end := min(offset+self.settings.MaxRecordContentBytes, len(body))
-		record, err := self.seal(body[offset:end])
-		if err != nil {
-			return nil, err
-		}
-		bodyRecords = append(bodyRecords, record)
-	}
-	quitRecord, err := self.seal([]byte(literalQuit))
-	if err != nil {
-		return nil, err
-	}
-	k := len(headerRecords)
-	for i, record := range headerRecords {
-		part := &proverPart{
-			sealed:        []*tlsSealedRecord{record},
-			plaintexts:    [][]byte{self.opened(record, string(contents[i]))},
-			carryOut:      carries[i].commitment,
-			carryOutBlind: carries[i].blind,
-			wireCarry:     true,
-		}
-		if i == 0 {
-			part.sealed = append([]*tlsSealedRecord{commandRecord}, part.sealed...)
-			part.plaintexts = append([][]byte{self.opened(commandRecord, command)}, part.plaintexts...)
-			part.headerRecordCount = uint32(k)
-		} else {
-			part.carryIn = carries[i-1].commitment
-			part.carryInState = carries[i-1].state
-			part.carryInBlind = carries[i-1].blind
-		}
-		last := i == k-1
-		if last {
-			part.sealed = append(part.sealed, quitRecord)
-			part.plaintexts = append(part.plaintexts, self.opened(quitRecord, literalQuit))
-			part.last = true
-		}
-		if i == 0 {
-			err = self.proveMessageFirst(ctx, part, envelopeReplies)
-		} else {
-			err = self.proveAfterLateRecords(ctx, part)
-		}
-		if err != nil {
-			return nil, err
-		}
-		writes := part.sealed
-		if last {
-			// the body streams unopened under the last part, and QUIT waits for the chunk's reply
-			writes = append(writes[:len(writes)-1:len(writes)-1], bodyRecords...)
-		}
-		for _, record := range writes {
-			if err := self.client.writeSealed(record); err != nil {
-				return nil, err
-			}
-		}
-	}
-	return self.finish(ctx, partModeBdat, quitRecord)
-}
-
-// A later message part, after any server record read since the part before: the message's parts cover
-// none, so a late ticket takes an env part of its own first, which opens no client record (DESIGN-DETAILS
-// 3.2.6). A reply here is the MX ending the send.
-func (self *proverRun) proveAfterLateRecords(ctx context.Context, part *proverPart) error {
-	if reply, err := self.drainServerRecords(); err != nil {
-		return err
-	} else if reply != nil {
-		return &proverRefused{reply: reply}
-	}
-	if err := self.proveLateRecords(ctx); err != nil {
-		return err
-	}
-	return self.prove(ctx, part)
-}
-
-// The MX answered during the message, which ends the send with its code.
-type proverRefused struct {
-	reply *smtpReply
-}
-
-func (self *proverRefused) Error() string {
-	return "smtpproof: the MX replied during the message"
-}
-
-// Covers every server record read since the last part by an env part that opens no client record, when
-// there is one, so that the edge's hold on message records behind it lifts (E3 step 5).
-func (self *proverRun) proveLateRecords(ctx context.Context) error {
-	if uint64(len(self.records)) == self.covered {
-		return nil
-	}
-	return self.prove(ctx, &proverPart{})
-}
-
-// DATA opens every octet (D-SMTP-20): the msg part the header block's first record over the envelope's
-// replies, a hdr part each later header record, and a body part each body record, cut at what the body
-// shape holds; the last body part also opens the end mark and QUIT. An empty body's last part opens the
-// end mark and QUIT alone.
-func (self *proverRun) sendData(ctx context.Context, headerBlock []byte, body []byte, envelopeReplies uint32) (*sidecar.SmtpProofResult, error) {
-	result, err := self.sendDataParts(ctx, headerBlock, body, envelopeReplies)
-	var refused *proverRefused
-	if errors.As(err, &refused) {
-		return &sidecar.SmtpProofResult{Mode: partModeData, RefusedCode: refused.reply.code}, nil
-	}
-	return result, err
-}
-
-// The body octets one body record holds: the family's body shape's, less 1.3's type octet, and no more
-// than DataPartBytes.
+// The body octets one DATA body record holds: the family's body shape's, less 1.3's type octet, within
+// the record bound.
 func (self *proverRun) bodyRecordBytes() int {
 	shape := self.settings.Proof.shape(ShapeKindBody, suiteFamily(self.result.suite), 0)
 	if shape == nil {
 		return 0
 	}
-	return min(shape.recordContentBytes(shape.BodyBlocks, self.result.version), self.settings.DataPartBytes, self.settings.MaxRecordContentBytes)
-}
-
-func (self *proverRun) sendDataParts(ctx context.Context, headerBlock []byte, body []byte, envelopeReplies uint32) (*sidecar.SmtpProofResult, error) {
-	contents, carries, err := self.headerRecords(headerBlock)
-	if err != nil {
-		return nil, err
+	recordBytes := min(shape.recordContentBytes(shape.BodyBlocks, self.result.version), self.settings.Proof.RecordContentMaxByteCount)
+	if 0 < self.settings.testDataRecordByteCount {
+		recordBytes = min(recordBytes, self.settings.testDataRecordByteCount)
 	}
-	recordBytes := self.bodyRecordBytes()
-	if recordBytes <= 0 {
-		return nil, errors.New("smtpproof: no body shape holds a DATA body record")
-	}
-	var bodyContents [][]byte
-	for offset := 0; offset < len(body); offset += recordBytes {
-		bodyContents = append(bodyContents, body[offset:min(offset+recordBytes, len(body))])
-	}
-	k := len(contents)
-	for i, content := range contents {
-		record, err := self.seal(content)
-		if err != nil {
-			return nil, err
-		}
-		part := &proverPart{
-			sealed:        []*tlsSealedRecord{record},
-			plaintexts:    [][]byte{self.opened(record, string(content))},
-			carryOut:      carries[i].commitment,
-			carryOutBlind: carries[i].blind,
-			wireCarry:     true,
-		}
-		if i == 0 {
-			part.headerRecordCount = uint32(k)
-			err = self.proveMessageFirst(ctx, part, envelopeReplies)
-		} else {
-			part.carryIn = carries[i-1].commitment
-			part.carryInState = carries[i-1].state
-			part.carryInBlind = carries[i-1].blind
-			err = self.proveAfterLateRecords(ctx, part)
-		}
-		if err != nil {
-			return nil, err
-		}
-		if err := self.client.writeSealed(record); err != nil {
-			return nil, err
-		}
-	}
-	// the body scans from the start again: the gate's carry after the header block's last record
-	carry := proverStartCarry()
-	for i := 0; i < len(bodyContents) || i == 0; i += 1 {
-		last := len(bodyContents) <= i+1
-		part := &proverPart{carryIn: carry.commitment, carryInState: carry.state, carryInBlind: carry.blind}
-		if i < len(bodyContents) {
-			record, err := self.seal(bodyContents[i])
-			if err != nil {
-				return nil, err
-			}
-			state, err := scanBodyRecord(bodyContents[i], carry.state, last)
-			if err != nil {
-				// the relation refuses this body; the part that opens it says so
-				state = 0
-			}
-			next, err := newProverCarry(state)
-			if err != nil {
-				return nil, err
-			}
-			part.sealed = []*tlsSealedRecord{record}
-			part.plaintexts = [][]byte{self.opened(record, string(bodyContents[i]))}
-			part.carryOut = next.commitment
-			part.carryOutBlind = next.blind
-			part.wireCarry = true
-			carry = next
-		} else {
-			// an empty body's last part leaves the start state as it was, and carries none
-			part.carryOut = carry.commitment
-			part.carryOutBlind = carry.blind
-		}
-		var quitRecord *tlsSealedRecord
-		if last {
-			endRecord, err := self.seal([]byte(literalEndMark))
-			if err != nil {
-				return nil, err
-			}
-			if quitRecord, err = self.seal([]byte(literalQuit)); err != nil {
-				return nil, err
-			}
-			part.sealed = append(part.sealed, endRecord, quitRecord)
-			part.plaintexts = append(part.plaintexts, self.opened(endRecord, literalEndMark), self.opened(quitRecord, literalQuit))
-			part.last = true
-		}
-		if err := self.proveAfterLateRecords(ctx, part); err != nil {
-			return nil, err
-		}
-		writes := part.sealed
-		if last {
-			writes = writes[:len(writes)-1]
-		}
-		for _, record := range writes {
-			if err := self.client.writeSealed(record); err != nil {
-				return nil, err
-			}
-		}
-		if last {
-			return self.finish(ctx, partModeData, quitRecord)
-		}
-	}
-	return nil, errors.New("smtpproof: a DATA send with no last part")
+	return recordBytes
 }
 
 // Waits for the message's reply, then sends the proven QUIT.
@@ -807,6 +603,7 @@ func (self *proverRun) finish(ctx context.Context, mode uint32, quitRecord *tlsS
 	if err != nil {
 		return nil, err
 	}
+	self.noteReply(-1, replies[0])
 	if replies[0].code[0] != '2' {
 		return &sidecar.SmtpProofResult{Mode: mode, RefusedCode: replies[0].code}, nil
 	}
@@ -939,17 +736,17 @@ func (self *proverRun) plaintextOf(record *tlsServerRecord) ([]byte, error) {
 	return append(plaintext, record.recordType), nil
 }
 
-// The part on the wire and its statement and witness, from the gate's state as this prover mirrors it:
-// the next index and record, the server records read since the last part, the replies proven, and k.
-func (self *proverRun) statementOf(spec *proverPart) (*partStatement, *sidecar.SmtpProofPart) {
+// The part on the wire and its statement, from the gate's state as this prover mirrors it when the part
+// reaches it, covering the server records from that state's to serverRecordCount.
+func (self *proverRun) statementOf(spec *proverPart, state proverGateState, serverRecordCount uint64) (*partStatement, *sidecar.SmtpProofPart) {
 	part := &sidecar.SmtpProofPart{
 		SendId:            self.job.SendId,
-		Index:             self.nextPart,
+		Index:             state.index,
 		Mode:              self.mode,
 		FirstRecord:       self.nextRecord,
 		LastRecord:        self.nextRecord - 1,
 		Last:              spec.last,
-		ServerRecordCount: uint64(len(self.records)),
+		ServerRecordCount: serverRecordCount,
 		ReplyCount:        spec.replyCount,
 		HeaderRecordCount: spec.headerRecordCount,
 	}
@@ -960,7 +757,7 @@ func (self *proverRun) statementOf(spec *proverPart) (*partStatement, *sidecar.S
 	if spec.wireCarry {
 		part.Carry = spec.carryOut
 	}
-	headerRecordCount := self.headerRecordCount
+	headerRecordCount := state.headerRecordCount
 	if spec.headerRecordCount != 0 {
 		headerRecordCount = spec.headerRecordCount
 	}
@@ -970,10 +767,10 @@ func (self *proverRun) statementOf(spec *proverPart) (*partStatement, *sidecar.S
 		index:                     part.Index,
 		mode:                      part.Mode,
 		last:                      part.Last,
-		previousServerRecordCount: self.covered,
+		previousServerRecordCount: state.covered,
 		serverRecordCount:         part.ServerRecordCount,
 		replyCount:                part.ReplyCount,
-		repliesProven:             self.repliesProven,
+		repliesProven:             state.repliesProven,
 		headerRecordCount:         headerRecordCount,
 		carryIn:                   spec.carryIn,
 		carryOut:                  spec.carryOut,
@@ -988,16 +785,17 @@ func (self *proverRun) statementOf(spec *proverPart) (*partStatement, *sidecar.S
 	}
 	statement.firstRecord = part.FirstRecord
 	statement.lastRecord = part.LastRecord
-	for _, record := range self.records[self.covered:part.ServerRecordCount] {
-		statement.serverRecords = append(statement.serverRecords, record.public)
+	if state.covered <= serverRecordCount && serverRecordCount <= uint64(len(self.records)) {
+		for _, record := range self.records[state.covered:serverRecordCount] {
+			statement.serverRecords = append(statement.serverRecords, record.public)
+		}
 	}
 	return statement, part
 }
 
-// Checks a part against the relation, proves it and submits it, then advances the gate's state as the
-// gate will once the part is verified.
-func (self *proverRun) prove(ctx context.Context, spec *proverPart) error {
-	statement, part := self.statementOf(spec)
+// A part's witness: the connection's keys and blind, the part's plaintexts and carries, and the plaintext
+// of each server record its statement covers.
+func (self *proverRun) witnessOf(spec *proverPart, statement *partStatement) *partWitness {
 	witness := &partWitness{
 		handshakeSecret:  self.result.handshakeSecret,
 		clientKey:        self.result.clientKey,
@@ -1013,21 +811,28 @@ func (self *proverRun) prove(ctx context.Context, spec *proverPart) error {
 	if self.result.version == tlsVersion12 {
 		witness.masterSecret = self.result.masterSecret
 	}
-	for _, record := range self.records[self.covered:part.ServerRecordCount] {
-		witness.serverPlaintexts = append(witness.serverPlaintexts, record.plaintext)
+	if statement.previousServerRecordCount <= statement.serverRecordCount && statement.serverRecordCount <= uint64(len(self.records)) {
+		for _, record := range self.records[statement.previousServerRecordCount:statement.serverRecordCount] {
+			witness.serverPlaintexts = append(witness.serverPlaintexts, record.plaintext)
+		}
 	}
+	return witness
+}
+
+// Checks a part against the relation and proves it. A part no catalog shape holds is refused at the edge
+// before it verifies, so it is never sent.
+func (self *proverRun) proveStatement(ctx context.Context, statement *partStatement, witness *partWitness) ([]byte, error) {
 	if failures := relationCheckPart(statement, witness); 0 < len(failures) {
-		return fmt.Errorf("smtpproof: part %d does not satisfy the relation: %w", part.Index, failures[0])
+		return nil, fmt.Errorf("smtpproof: part %d does not satisfy the relation: %w", statement.index, failures[0])
 	}
-	// a part no catalog shape holds is refused at the edge before verification, so it is not sent
 	if _, err := partShapeFor(self.settings.Proof, statement); err != nil {
-		return fmt.Errorf("smtpproof: part %d: %w", part.Index, err)
+		return nil, fmt.Errorf("smtpproof: part %d: %w", statement.index, err)
 	}
-	proof, err := self.backend.provePart(ctx, statement, witness)
-	if err != nil {
-		return err
-	}
-	part.Proof = proof
+	return self.backend.provePart(ctx, statement, witness)
+}
+
+// Submits a proven part, then advances the gate's state as the gate does once the part is verified.
+func (self *proverRun) submit(ctx context.Context, spec *proverPart, part *sidecar.SmtpProofPart) error {
 	if err := self.channel.SubmitPart(ctx, part); err != nil {
 		return err
 	}
@@ -1041,4 +846,15 @@ func (self *proverRun) prove(ctx context.Context, spec *proverPart) error {
 		self.headerRecordCount = spec.headerRecordCount
 	}
 	return nil
+}
+
+// Proves a part over the server records from the last covered to serverRecordCount, and submits it.
+func (self *proverRun) prove(ctx context.Context, spec *proverPart, serverRecordCount uint64) error {
+	statement, part := self.statementOf(spec, self.gateState(), serverRecordCount)
+	proof, err := self.proveStatement(ctx, statement, self.witnessOf(spec, statement))
+	if err != nil {
+		return err
+	}
+	part.Proof = proof
+	return self.submit(ctx, spec, part)
 }

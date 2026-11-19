@@ -39,17 +39,31 @@ type tlsClientSettings struct {
 	// Refuses a handshake whose messages exceed this many octets, so a hostile MX cannot grow the
 	// transcript without bound. 256 KiB holds any real certificate chain.
 	maxHandshakeBytes int
+	// TLS's bounds on a record (ProofSettings.RecordContentMaxByteCount and RecordCiphertextMaxByteCount): no
+	// longer content is sealed, and a longer record from the MX ends the connection.
+	recordContentMaxByteCount    int
+	recordCiphertextMaxByteCount int
 }
 
 func defaultTlsClientSettings() *tlsClientSettings {
+	proof := DefaultProofSettings()
 	return &tlsClientSettings{
-		suites: []uint16{
-			tlsSuiteAes128GcmSha256,
-			tlsSuiteChacha20Poly1305Sha256,
-			tlsSuiteEcdheEcdsaAes128GcmSha256,
-			tlsSuiteEcdheRsaAes128GcmSha256,
-		},
-		maxHandshakeBytes: 256 * 1024,
+		suites:                       defaultTlsSuiteOrder(),
+		maxHandshakeBytes:            256 * 1024,
+		recordContentMaxByteCount:    proof.RecordContentMaxByteCount,
+		recordCiphertextMaxByteCount: proof.RecordCiphertextMaxByteCount,
+	}
+}
+
+// E1's suites in the order a client offers them (DESIGN-DETAILS 3.2.6), ProverSettings.SuiteOrder's
+// default: ChaCha20-Poly1305 first, whose octet costs 341 constraints of keystream against AES-128-GCM's
+// 729, then TLS 1.3's AES-128-GCM and TLS 1.2's two AES-128-GCM suites. A fresh slice each call.
+func defaultTlsSuiteOrder() []uint16 {
+	return []uint16{
+		tlsSuiteChacha20Poly1305Sha256,
+		tlsSuiteAes128GcmSha256,
+		tlsSuiteEcdheEcdsaAes128GcmSha256,
+		tlsSuiteEcdheRsaAes128GcmSha256,
 	}
 }
 
@@ -288,7 +302,7 @@ func (self *tlsClient) readRawRecord() ([]byte, error) {
 		return nil, err
 	}
 	size := int(header[3])<<8 | int(header[4])
-	if tlsMaxCiphertextBytes < size {
+	if self.settings.recordCiphertextMaxByteCount < size {
 		return nil, errors.New("record too long")
 	}
 	record := make([]byte, tlsRecordHeaderBytes+size)
@@ -844,6 +858,9 @@ func (self *tlsClient) runHandshake12(serverHello *tlsServerHello) error {
 // the ciphertext first. 1.3 records are unpadded (Z3). Each call consumes a sequence number, so
 // records must go out in the order they were sealed.
 func (self *tlsClient) sealApplication(content []byte) (*tlsSealedRecord, error) {
+	if self.settings.recordContentMaxByteCount < len(content) {
+		return nil, errors.New("record content too long")
+	}
 	seq := self.clientCipher.seq
 	raw, err := self.clientCipher.seal(tlsRecordApplicationData, content)
 	if err != nil {

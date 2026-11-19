@@ -211,18 +211,23 @@ func (self *MailClient) raiseReceiverAlarm(reason SidecarMailReceiverAlarm, side
 
 // The alarm a reader raises over one message its ingest wrote (the file header's alarm row): internet mail an
 // undesignated receiver took, or a member scope's deposit from a receiver that is no consented device of the scope's
-// member. A scope's member is resolved by no source yet (team_mail's member scopes, MAIL-M10-04), so every scope
-// deposit alarms until one is: no scope routes either (MAIL-M7-22), so none is expected.
+// member, the member read through the binding's MailScopeSource (mail_scope.go). A scope the source does not list,
+// and every scope while no source can tell its member, alarms: no state carries TeamScopeRow yet, so in production
+// none is expected, and a scope's route waits on the same source server side.
 func (self *MailClient) judgeReceiver(binding *MailBinding, message *MailMessage) {
 	if binding == nil || message == nil || !message.ReceiverDeposit {
 		return
 	}
-	if _, scoped := mailSniScope(self.networkRow().Root, message.Sni); scoped {
+	if label, scoped := mailSniScope(self.networkRow().Root, message.Sni); scoped {
 		var acl *AclState
 		if binding.Engine != nil {
 			acl = binding.Engine.State()
 		}
-		if reason := MailScopeReceiver(acl, Id{}, message.DepositorId); reason != "" {
+		memberId := Id{}
+		if scope, ok := mailScopeOf(binding.Scopes, acl, label); ok {
+			memberId = scope.MemberId
+		}
+		if reason := MailScopeReceiver(acl, memberId, message.DepositorId); reason != "" {
 			self.raiseReceiverAlarm(reason, message.DepositorId, message.RepoId)
 		}
 		return

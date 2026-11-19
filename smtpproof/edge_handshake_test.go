@@ -183,11 +183,11 @@ func TestE1BoundsAServerHelloThatNeverEnds(t *testing.T) {
 	var err error
 	sent := 0
 	for err == nil && sent < 2*defaultEdgeSettings().maxHandshakeBytes {
-		err = gate.ServerRecord(tlsFrameRecord(tlsRecordHandshake, tlsVersion12, make([]byte, tlsMaxPlaintextBytes)))
-		sent += tlsMaxPlaintextBytes
+		err = gate.ServerRecord(tlsFrameRecord(tlsRecordHandshake, tlsVersion12, make([]byte, DefaultProofSettings().RecordContentMaxByteCount)))
+		sent += DefaultProofSettings().RecordContentMaxByteCount
 	}
 	testExpectCheck(t, "an endless ServerHello", err, checkE1)
-	if pending := len(gate.serverBuffer.pending); defaultEdgeSettings().maxHandshakeBytes+tlsMaxPlaintextBytes < pending {
+	if pending := len(gate.serverBuffer.pending); defaultEdgeSettings().maxHandshakeBytes+DefaultProofSettings().RecordContentMaxByteCount < pending {
 		t.Errorf("held %d octets", pending)
 	}
 }
