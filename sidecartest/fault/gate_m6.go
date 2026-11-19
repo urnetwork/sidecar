@@ -22,11 +22,12 @@ var gateFs126T2Test = &GateTest{
 	Names:   []string{"TestP2pOffByDefault", "TestP2pPairMovesAndBackUnderALiveRpcAndStream", "TestP2pForgedControlIdStaysDroppedWithP2pOn"},
 }
 
-// FS-126 on T3, the convention's test, which reads missing until it is written or a sweep names another.
+// FS-126 on T3, the convention's test under the convention's tags (QD-1085), which reads missing until it is written
+// or a sweep names another.
 var gateFs126T3Test = &GateTest{
 	Repo:    "server",
 	Package: "./sidecart3",
-	Tags:    "sidecar_testhooks,sidecar_pending",
+	Tags:    gateT3Tags,
 	Stores:  true,
 	Names:   []string{"TestFs126OnT3"},
 }

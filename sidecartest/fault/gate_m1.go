@@ -122,23 +122,10 @@ var gateEverySweep = RegisterGateSweep(&GateSweep{
 	},
 })
 
-// The items OPS-M1-07's hand-written gates.yml held for later gates, kept until TEST-M2-19, TEST-M3-02,
-// TEST-M5-02 and TEST-M7-01 move each into its own sweep.
+// The items OPS-M1-07's hand-written gates.yml held for later gates, kept until TEST-M5-02 and TEST-M7-01 move each
+// into its own sweep. M2's went into gate_m2_out.go (TEST-M2-19): the nvme run, and the 0x0010 interop artifact,
+// which left the gate with MLS (owner decision 610); M3's into gate_m3.go (TEST-M3-02).
 var (
-	gateM2CarriedSweep = RegisterGateSweep(&GateSweep{
-		Gate: "M2",
-		Items: []*GateItem{
-			{Item: "the nvme run (D-TEST-11)", External: "hardware: the production hosts' PM9A3 staging set, before M2's exit"},
-			{Item: "§22.10's 0x0010 interop artifact"},
-		},
-	})
-	gateM3CarriedSweep = RegisterGateSweep(&GateSweep{
-		Gate: "M3",
-		Items: []*GateItem{
-			{Item: "the nvme and hdd runs on production, the hdd run's admitted mix included", External: "production: the production hosts"},
-			{Item: "one restore of a real dump generation", External: "production and people: a real sidecar dump generation and the owner's drill"},
-		},
-	})
 	gateM5CarriedSweep = RegisterGateSweep(&GateSweep{
 		Gate:  "M5",
 		Items: []*GateItem{{Item: "S7's SNI-less abuse@<root> case"}},

@@ -25,9 +25,10 @@
 //	           run (ErrEvsDropStale). A batch that committed is not sent again when the command is retried
 //	index      EvsDropIndexHook lets §11.14's DROP rewrites ride the push: a 409 INDEX_EPOCH rebuilds and signs again
 //	           once under the same confirmation, then goes without them, left to the backfill (§11.14's drop row).
-//	           evs's boundary rule as landed takes no change a written lineage does not name, so a push whose rewrites
-//	           evs refuses 409 DROP_BOUNDARY goes again without them too (question
-//	           evs2-m10-21-drop-index-rewrites); no hook is set until SEARCH's composition sets one
+//	           evs takes them beside the written lineages, each a rewrite of a standing index file within Padmé of the
+//	           length it replaces, naming the head's index_epoch (QD-1078; evsservice/check_drop.go), but an evs from
+//	           before that answer takes no change a written lineage does not name, so a push whose rewrites evs
+//	           refuses 409 DROP_BOUNDARY goes again without them too; no hook is set until SEARCH's composition sets one
 //	quota      at the storage limit a kept head needing an upload gets evs's QuotaRefusal, which goes back as it is
 //
 // On every leg but ios_extension. Safe for concurrent use.
