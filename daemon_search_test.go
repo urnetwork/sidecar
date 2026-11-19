@@ -143,6 +143,77 @@ func TestSearchToolsPageByCursorInOneSession(t *testing.T) {
 	t.Fatal("the search never completed")
 }
 
+// D-MCP-25 (MCP-M10-02): ending a session ends what it holds on the engine, its cursor's next page answering
+// cursor_expired and its hit ids opening nothing, and forgets its limits, while another session's cursor and hit ids
+// stay; the daemon's own session is never ended.
+func TestSearchToolsEndSessionEndsCursors(t *testing.T) {
+	documents := []*indexPendingDocument{}
+	for index := range 6 {
+		documents = append(documents, testEngineDocument(t, "doc", index, 1, fmt.Sprintf("notes/%d.md", index), "rate limiter notes"))
+	}
+	world := newTestEngineWorld(t, nil, documents...)
+	tools := testSearchTools(t, world)
+	mine, theirs := &SearchToolEnv{Session: NewId()}, &SearchToolEnv{Session: NewId()}
+	minePage, err := tools.Search(context.Background(), mine, &SearchToolArgs{Query: "limiter", Limit: 2})
+	if err != nil || minePage.Status.NextCursor == "" || len(minePage.Hits) == 0 {
+		t.Fatalf("a first page: %v %+v", err, minePage)
+	}
+	theirPage, err := tools.Search(context.Background(), theirs, &SearchToolArgs{Query: "limiter", Limit: 2})
+	if err != nil || theirPage.Status.NextCursor == "" || len(theirPage.Hits) == 0 {
+		t.Fatalf("their first page: %v %+v", err, theirPage)
+	}
+	if _, err := tools.OpenHit(mine.Session, minePage.Hits[0].HitId); err != nil {
+		t.Fatalf("a hit before the session ended: %v", err)
+	}
+	limitsKept := func(session Id) bool {
+		world.engine.limits.stateLock.Lock()
+		defer world.engine.limits.stateLock.Unlock()
+		_, kept := world.engine.limits.sessions[session]
+		return kept
+	}
+	if !limitsKept(mine.Session) {
+		t.Fatal("no limits kept for a searching session")
+	}
+
+	tools.EndSession(mine.Session)
+	if _, err := tools.Search(context.Background(), mine, &SearchToolArgs{Cursor: minePage.Status.NextCursor}); !errors.Is(err, ErrSearchCursorExpired) {
+		t.Fatalf("an ended session's cursor: %v", err)
+	}
+	if _, err := tools.OpenHit(mine.Session, minePage.Hits[0].HitId); !errors.Is(err, ErrSearchHitUnknown) {
+		t.Fatalf("an ended session's hit opened: %v", err)
+	}
+	if limitsKept(mine.Session) {
+		t.Error("an ended session's limits are kept")
+	}
+	if _, err := tools.OpenHit(theirs.Session, theirPage.Hits[0].HitId); err != nil {
+		t.Fatalf("the other session's hit after one ended: %v", err)
+	}
+	if _, err := tools.Search(context.Background(), theirs, &SearchToolArgs{Cursor: theirPage.Status.NextCursor}); err != nil {
+		t.Fatalf("the other session's cursor after one ended: %v", err)
+	}
+	// the daemon's own session stays whatever is asked
+	local, _, err := world.engine.SearchIn(context.Background(), searchLocalSession, &SearchRequest{Text: "limiter", Scope: SearchCached, PageSize: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer local.Close()
+	world.engine.EndSession(searchLocalSession)
+	localCount := func() int {
+		world.engine.cursors.stateLock.Lock()
+		defer world.engine.cursors.stateLock.Unlock()
+		count := 0
+		for _, cursor := range world.engine.cursors.cursors {
+			if cursor.session == searchLocalSession {
+				count += 1
+			}
+		}
+		return count
+	}()
+	if localCount == 0 {
+		t.Fatal("the daemon's own session was ended")
+	}
+}
+
 // FS-80: a tainted run's entry comes back as a stub, counted, the run untainted and nothing fenced; include taints the
 // run before its text is in the result, fenced; a failed taint fails the call and returns nothing.
 func TestSearchToolsIncludeTaintsTheRunFirst(t *testing.T) {

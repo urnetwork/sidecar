@@ -36,8 +36,9 @@
 //	secrets    a shared repo's write whose content Redactor.Scan matches is refused (R-MCP-5); owner-bound vault
 //	           writes keep their bytes, as the vault's own redaction is the record's
 //
-// Format 2's versioning, drop states and collected versions are MCP-M10-01's. A version's search hit (evs_read's
-// hit) is SEARCH-M10-30's.
+// Format 2's versioning, drop states and collected versions are MCP-M10-01's. evs_read's hit, a file's search hit in
+// place of repo, path and version, resolves through the session's cursors and then reads as those named would
+// (tools_hit.go).
 
 package mcp
 
@@ -347,12 +348,15 @@ type mcpEvsHistoryOut struct {
 	Versions    []*mcpEvsVersionOut `json:"versions"`
 }
 
-// evs_read's arguments.
+// evs_read's arguments: repo and path, or a search hit standing for them.
 type mcpEvsReadIn struct {
-	Repo string `json:"repo"`
-	Path string `json:"path"`
+	Repo string `json:"repo,omitempty"`
+	Path string `json:"path,omitempty"`
 	// An older version of the path, 0 the newest.
 	Version uint64 `json:"version,omitempty"`
+	// A file's search hit, its hit_id, in place of repo, path and version: the version this session's search named,
+	// while its cursor lives (§16.10's open row).
+	Hit string `json:"hit,omitempty"`
 }
 
 // evs_read's data, and ur://evs's.
@@ -750,32 +754,32 @@ func addEvsTools(catalog *McpCatalog) {
 	AddTool(catalog, &McpToolSpec[mcpEvsReadIn]{
 		Name:        "evs_read",
 		Tier:        McpTierRead,
-		Description: "Reads a file of a repo, its newest version or an older one; content a tainted run wrote, or an import brought in from outside, comes back marked untrusted, and reading it taints the run.",
+		Description: "Reads a file of a repo, its newest version or an older one, or the file a search hit names by its hit id; content a tainted run wrote, or an import brought in from outside, comes back marked untrusted, and reading it taints the run.",
 		Targets: func(call *McpCall, in *mcpEvsReadIn) ([]McpTarget, error) {
-			repoId, err := mcpEvsRepoId(in.Repo)
-			if err != nil {
-				return nil, err
-			}
-			path, err := mcpEvsPath(in.Path, false)
+			repoId, path, _, err := mcpEvsReadOf(call, in)
 			if err != nil {
 				return nil, err
 			}
 			return []McpTarget{mcpEvsTarget(call, repoId, McpRepoRead, path)}, nil
 		},
 		Access: func(call *McpCall, in *mcpEvsReadIn) ([]McpAccess, error) {
-			repoId, err := mcpEvsRepoId(in.Repo)
+			repoId, _, _, err := mcpEvsReadOf(call, in)
 			if err != nil {
 				return nil, err
 			}
 			return mcpEvsAccess(repoId, protocol.AclAction_ACL_ACTION_READ), nil
 		},
 	}, func(ctx context.Context, call *McpCall, in *mcpEvsReadIn, result *McpResult) (*mcpEvsReadOut, error) {
-		repoId, _ := mcpEvsRepoId(in.Repo)
+		// a hit resolves again here: one whose cursor ended since the guard ran opens nothing
+		repoId, path, version, err := mcpEvsReadOf(call, in)
+		if err != nil {
+			return nil, err
+		}
 		_, repo, err := mcpEvsRepoOf(call, repoId)
 		if err != nil {
 			return nil, err
 		}
-		return mcpEvsRead(ctx, call, repoId, repo, in.Path, in.Version, result)
+		return mcpEvsRead(ctx, call, repoId, repo, path, version, result)
 	})
 
 	writeTargets := func(call *McpCall, repoText string, pathText string, operation McpRepoOperation) ([]McpTarget, error) {

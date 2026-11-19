@@ -69,6 +69,17 @@ func (self *searchLimits) sessionOf(session Id) *searchSessionLimits {
 	return limits
 }
 
+// Forgets the limits of a session that ended, so a daemon's sessions leave none behind. A call of it still running
+// releases what it holds as before.
+func (self *searchLimits) forget(session Id) {
+	if session == searchLocalSession {
+		return
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	delete(self.sessions, session)
+}
+
 // Takes one of the rate's tokens for a new search of session, or answers how long until one comes.
 func (self *searchLimits) takeToken(limits *searchSessionLimits) (bool, time.Duration) {
 	self.stateLock.Lock()

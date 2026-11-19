@@ -58,6 +58,8 @@ type McpSession struct {
 	claims      McpSessionClaims
 	startClaims *sidecar.SidecarClaimsResolution
 	limits      *mcpSessionLimits
+	// its search session, limits and cursors' end (session_search.go)
+	search *mcpSessionSearch
 	// the relay's harness process and ancestry, by the pid the system reports; empty when it cannot be read
 	caller mcpCallerProcess
 
