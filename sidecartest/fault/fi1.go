@@ -1648,6 +1648,13 @@ func fi1DecryptSegmentRecord(ctx context.Context, oracle *Oracle, repo *evsStore
 		return false, errors.New("a segment shorter than its header")
 	}
 	segmentHeader, err := sidecar.ParseEvsSegmentHeader(segment[:sidecar.EvsSegmentHeaderByteCount])
+	if errors.Is(err, sidecar.ErrEvsFormatUnsupported) && sidecar.EvsRepoFormat2 <= repo.object.GetFormat() {
+		if _, kind5Err := sidecar.ParseEvsKind5SegmentHeader(segment); kind5Err == nil {
+			// a kind-5 chunk a write with versioning on adopted, named as kind 1 from then on (§11.7's on row; FS-68):
+			// its header stays kind 5's, which this clause does not open yet, as a kind-5 locator's is not
+			return true, nil
+		}
+	}
 	if err != nil {
 		return false, err
 	}

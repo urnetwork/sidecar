@@ -28,6 +28,16 @@ Stage: Later
 - **Held:** Nothing: no task or track waits on it.
 - **To bring back:** ECH split mode or h3 at the edge (§13's entries), then the record types and what they publish.
 
+### dns-mta-sts-certificate-gate: `_mta-sts` waiting for every receiver's certificate
+Stage: Review phase, once §13's issuance for receivers settles
+- **Deferred:** The certificate condition on §12.7's `_mta-sts` record: the record is published only while every published `mail_host_key` row for host `mx` has an unexpired certificate on the same key, a certificate's issuance and a host-key change each reconciling the zone (§15.5's MTA-STS; owner decision 630, whose answer takes this part of the question's option 1 at the review phase; ledger id QD-1092).
+- **Why:** The verified gate is what owner decision 96 names and is cheap to hold now. The per-key join waits for the receivers' issuance path (the plan's TLS-M8-01) to settle, since it adds two callers of the zone's reconcile on that path.
+- **Launch instead:** `_mta-sts` is published for a network with network_verified and mail on, and a verification change reconciles the zone (§12.7). Each receiver serves the policy only once it holds its own §13 certificate (§15.5).
+- **Lost:** While one of a network's receivers is still uncertified, a sender that cached the `mode: enforce` policy refuses that receiver (RFC 8461 §5): some deliveries fail temporarily, until the router's backup ticket or the sender's retry reaches a certified receiver. A receiver is certified minutes after its key is posted.
+- **Dark in code:** Nothing is built. The zone's mail policy is computed in one place, where the condition joins.
+- **Held:** The review phase's two reconcile callers, at a receiver certificate's issuance and at a host-key change.
+- **To bring back:** The receivers' issuance path settles; then the zone's mail policy takes the per-key certificate condition, the two write paths call the zone's reconcile, and a test shows the record withheld while one receiver is uncertified.
+
 ### dns-v1: §12's v1 set
 Stage: v1 (M6, M7, M8)
 - **Deferred:** §12.16's v1 row: aliases, custom domains in both CAA modes and Team scopes at M6; direct MX and strict-mode MX hosts at M7; scope mail hosts with §15 at M8.

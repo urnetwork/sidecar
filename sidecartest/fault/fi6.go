@@ -248,7 +248,7 @@ func checkFi6(ctx context.Context, oracle *Oracle) error {
 		held[fi6StatementOf(read.record.PushId, read.statement.Sha256)] = true
 	}
 	errs = append(errs, fi6CheckOrphanSlots(ctx, oracle, settings, repos, records, held)...)
-	errs = append(errs, fi6CheckReclaims(oracle, settings, memory, repoById, records, oldestBatch, held)...)
+	errs = append(errs, fi6CheckReclaims(ctx, oracle, settings, memory, repoById, records, oldestBatch, held)...)
 	return errors.Join(errs...)
 }
 
@@ -731,7 +731,9 @@ func (self *fi6BatchRecord) decode() error {
 		if len(sectionsBytes) == 0 {
 			return nil
 		}
-		payload, err := sidecar.ParseEvsPayload(sectionsBytes)
+		// either format's sections: a DROP's record rides a batch of format 1's layout, its payload holding format 2's
+		// DROP sections, which list nothing new (EVS2-M10-31)
+		payload, err := sidecar.ParseEvsPayloadFormat2(sectionsBytes)
 		if err != nil {
 			return err
 		}
@@ -1031,7 +1033,7 @@ func fi6NamedObjects(repo *evsStoreRepo) map[string]bool {
 // Nothing committed or unknown is reclaimed between the last check and this one, and no segment goes before GC's
 // horizon could pass it; then what this check found is kept for the next, with held, every statement a batch held
 // at this check or an earlier one.
-func fi6CheckReclaims(oracle *Oracle, settings *Fi6Settings, memory *evsOracleMemory, repoById map[sidecar.Id]*evsStoreRepo, records []*fi6BatchRecord, oldestBatch time.Time, held map[fi6Statement]bool) []error {
+func fi6CheckReclaims(ctx context.Context, oracle *Oracle, settings *Fi6Settings, memory *evsOracleMemory, repoById map[sidecar.Id]*evsStoreRepo, records []*fi6BatchRecord, oldestBatch time.Time, held map[fi6Statement]bool) []error {
 	segmentCluster, err := oracle.Net.Host().Blobs.SegmentCluster()
 	if err != nil {
 		return []error{err}
@@ -1068,7 +1070,15 @@ func fi6CheckReclaims(oracle *Oracle, settings *Fi6Settings, memory *evsOracleMe
 				}
 			}
 			if committed {
-				errs = append(errs, fmt.Errorf("%s deleted %s on %s, which %s names: a committed object reclaimed", entry.Actor, entry.Key, entry.ClusterId, namedBy))
+				// in a format-2 repo a purge's candidate and what an exact, uncancelled drop lists go by FI-16's and
+				// FI-27's rules, which judge each such DELETE, as FI-1 excuses them gone (fi1Format2Excuse)
+				excused := false
+				if repo := repoById[repoId]; hasRepo && repo != nil && repo.object != nil {
+					excused = fi1Format2Excuse(ctx, oracle, repo)(entry.ClusterId + " " + entry.Key)
+				}
+				if !excused {
+					errs = append(errs, fmt.Errorf("%s deleted %s on %s, which %s names: a committed object reclaimed", entry.Actor, entry.Key, entry.ClusterId, namedBy))
+				}
 			}
 			// each record that was pending at the last check and listed the object or stood in it, judged again by its
 			// own rule on this check's history, whether or not it is still in its batch: a re-seed's records and

@@ -1915,3 +1915,135 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "(613), extending @@OD:574@@; an `egress_change` template's binding of its requirement (614), extending "
     "@@OD:607@@; a policy's `ip:` deny tests failing at save against a prefixless route rule (615), which follows "
     "@@OD:575@@; and a generation refused once on a failed store (616). ")
+# The third late sweep (dr6-late-sweep, 2026-11-19): the build's answers recorded after the second.
+INDEX += [
+    (617, 'The P1 shed and fair admission',
+     'Under a flood the shed refuses only networks strictly heavier than the lightest one waiting, and '
+     'admission is fair over time.'),
+    (618, "A recovery's groups step around activate",
+     "The groups step re-forms a live repo's group in two calls around its activate, and sends restore for a "
+     'repo its state shows restored.'),
+    (619, "A DROP's index rewrites at evs",
+     "evs's DROP boundary rule takes a DROP push's §11.14 index rewrites, each a rewrite of a standing index "
+     'file.'),
+    (620, 'A DROP sent again without its rewrites',
+     "A DROP refused for its index rewrites' upload, at the storage limit, while spent or on a full cluster, "
+     'goes again once without them.'),
+    (621, 'An omitted document at an index check',
+     'A host with the text holds that the index holds every document a head-changing push changed; a missing '
+     'one is a mismatch.'),
+]
+for _n, _note in [
+        (602, " Extended by @@OD:618@@: a live repo's two-call re-form and a restored repo's restore."),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 622))
+DATES.update({617: '2026-11-18', 618: '2026-11-18', 619: '2026-11-18', 620: '2026-11-19', 621: '2026-11-19'})
+_D616 = ('@@OD:575@@; and a generation refused once on a failed store (616). ')
+assert DECISIONS_INTRO.count(_D616) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D616, _D616 + "A third sweep, on 2026-11-19, numbers the answers of 2026-11-18 and 2026-11-19: evs's fair P1 admission "
+    "(617), a recovery's groups step (618), extending @@OD:602@@, a DROP's index rewrites and its resend "
+    'without them (619, 620) and the omitted-document check (621). ')
+INDEX += [
+    (622, 'The idle marking and a broken first read',
+     "taskworker's idle marking holds off while its process has no good read of sidecar.yml."),
+    (623, 'dns-1 and dns-2 name delegated zones',
+     "§2.8's dns-1 and dns-2 name a Team network's delegated `_domainkey.<domain>` apexes and selector names."),
+    (624, 'Calls to an edge without a Hello',
+     "A sidecar's calls and NO_REPLY sends reach an edge with no Hello, on the signed `ur/` ticket's basis."),
+    (625, 'Gate sweeps and the T3 convention',
+     "Each sweep names every case whose T3 test runs outside sidecart3, and the convention's T3 entry carries "
+     "the local stack's tag."),
+    (626, 'Clause tests at the gates',
+     'A gate reads a case pass only when its row test and every clause registered for it pass.'),
+    (627, "M2's gate and the MLS legs",
+     'FS-15, FS-20, FS-24 and FS-104 stay at M2 on their drafted schedules, their MLS legs counting toward '
+     "nothing, until KEYS's rework."),
+]
+for _n, _note in [
+        (591, ' Followed by @@OD:622@@: the marking holds off without a good read of sidecar.yml.'),
+        (548, ' Extended by @@OD:625@@ to every case whose T3 test runs outside sidecart3.'),
+        (610, " Followed by @@OD:627@@: M2's gate keeps four rows on their drafted schedules meanwhile."),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 628))
+DATES.update({622: '2026-11-18', 623: '2026-11-18', 624: '2026-11-18', 625: '2026-11-18', 626: '2026-11-18', 627: '2026-11-18'})
+_D621 = ("A third sweep, on 2026-11-19, numbers the answers of 2026-11-18 and 2026-11-19: evs's fair P1 admission "
+         "(617), a recovery's groups step (618), extending @@OD:602@@, a DROP's index rewrites and its resend "
+         'without them (619, 620) and the omitted-document check (621). ')
+assert DECISIONS_INTRO.count(_D621) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D621, "A third sweep, on 2026-11-19, numbers the answers of 2026-11-18 and 2026-11-19: evs's fair P1 admission "
+    "(617), a recovery's groups step (618), extending @@OD:602@@, a DROP's index rewrites and its resend "
+    "without them (619, 620) and the omitted-document check (621); the idle marking's hold (622), following "
+    "@@OD:591@@, the dns rows' delegated zones (623) and calls to an edge with no Hello (624); what the gates "
+    'name and run (625 to 627), extending @@OD:548@@ and following @@OD:610@@. ')
+INDEX += [
+    (628, "The directory's repo id in the sdk",
+     '`SidecarDirectory.GetRepoId` lets a directory view scope its "search more" to the directory alone.'),
+    (629, 'When a hold binds a deleter',
+     "A preservation hold binds a deleter from 5 s after api acknowledged its placement, the `hold/` cache's "
+     'bound.'),
+    (630, '`_mta-sts` for verified networks',
+     '`_mta-sts` is published only for a network with network_verified; the certificate condition joins at the '
+     'review phase.'),
+    (631, "A Team scope's mailcfg",
+     "A consented device of the scope's member creates it, and the fold binds it to that member; the network's "
+     'names no owner.'),
+    (632, "An approved recipient's record bytes",
+     '`MailRecipientApproval` at `rcpt/<h>/<name>`, the name a hash of the alias and recipient, one record a '
+     'pair.'),
+    (633, 'The reverse-alias key',
+     "One key a mailbox, `MailReverseAliasKey` in the mailbox's `vault/` family, so a sender sees one reverse "
+     'alias.'),
+    (634, "An indexer row's nonce",
+     "`IndexerRow.nonce = 6` carries the IndexerSet header's nonce, so any reader opens a designation's sealed "
+     'services.'),
+    (635, "MCP's `rcpt/` refusal",
+     "MCP's guard refuses the `rcpt/` family on mailboxes and on a general repo that is a group inbox."),
+    (636, "An eraser's CLOSURE of a card",
+     'A CLOSURE rewrites a card or repo file only once its writer dropped the item; moderation removes a card '
+     'whole; the fresh-reader check waits for the review phase.'),
+]
+for _n, _note in [
+        (280, " Completed by @@OD:632@@, the record's bytes, and @@OD:635@@, MCP's refusal."),
+        (330, ' Extended by @@OD:634@@: an indexer row carries its nonce.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 637))
+DATES.update({628: '2026-11-18', 629: '2026-11-19', 630: '2026-11-19', 631: '2026-11-19', 632: '2026-11-19', 633: '2026-11-19', 634: '2026-11-19', 635: '2026-11-19', 636: '2026-11-19'})
+_D627 = ("A third sweep, on 2026-11-19, numbers the answers of 2026-11-18 and 2026-11-19: evs's fair P1 admission "
+         "(617), a recovery's groups step (618), extending @@OD:602@@, a DROP's index rewrites and its resend "
+         "without them (619, 620) and the omitted-document check (621); the idle marking's hold (622), following "
+         "@@OD:591@@, the dns rows' delegated zones (623) and calls to an edge with no Hello (624); what the gates "
+         'name and run (625 to 627), extending @@OD:548@@ and following @@OD:610@@. ')
+assert DECISIONS_INTRO.count(_D627) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D627, "A third sweep, on 2026-11-19, numbers the answers of 2026-11-18 and 2026-11-19: evs's fair P1 admission "
+    "(617), a recovery's groups step (618), extending @@OD:602@@, a DROP's index rewrites and its resend "
+    "without them (619, 620) and the omitted-document check (621); the idle marking's hold (622), following "
+    "@@OD:591@@, the dns rows' delegated zones (623) and calls to an edge with no Hello (624); what the gates "
+    "name and run (625 to 627), extending @@OD:548@@ and following @@OD:610@@; the directory's repo id in the "
+    "sdk (628), when a hold binds a deleter (629) and `_mta-sts` for verified networks (630); a Team scope's "
+    "mailcfg (631), an approved recipient's bytes (632) and MCP's refusal of them (635), completing "
+    "@@OD:280@@, the reverse-alias key (633) and an indexer row's nonce (634); and an eraser's CLOSURE of a "
+    'card (636). ')
+INDEX += [
+    (637, "A schedule's real-time bound on a barrier wait",
+     'A schedule fails when it has waited 60 s of real time for a barrier, not 10 s; the stall check still '
+     'fails a blocked holder within seconds.'),
+]
+assert [r[0] for r in INDEX] == list(range(1, 638))
+DATES.update({637: '2026-11-19'})
+_D636 = "@@OD:280@@, the reverse-alias key (633) and an indexer row's nonce (634); and an eraser's CLOSURE of a card (636). "
+assert DECISIONS_INTRO.count(_D636) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D636, "@@OD:280@@, the reverse-alias key (633) and an indexer row's nonce (634); an eraser's CLOSURE of a card "
+    "(636); and a schedule's real-time bound on a barrier wait (637). ")

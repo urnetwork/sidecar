@@ -6,11 +6,11 @@ Every design decision made since DESIGN.md was last rebuilt and not yet folded i
 
 **Folding.** Only a design-records track edits `design/source/` and rebuilds DESIGN.md with `design/source/build.sh`. Each design-records track takes one DESIGN.md section, applies its items below (and the matching "Proposed DESIGN.md text" of DESIGN-DETAILS.md), and in the same commit deletes those items from this file. When this file holds no items it is deleted. Owner decisions that change behavior go into `design/source/owner/DECISIONS.md` as numbered owner decisions, after decision 197, as decision 197 was.
 
-Generated from the ledger on 2026-11-10, it holds no item under a DESIGN.md section now: the last were folded on 2026-11-18 by track dr4-outside-docs, their parts in RECORD.md, the review ledger, pitch5.html and HANDOFF.md with them. "Later decisions", below, holds two items, each waiting on a file outside the design-records tracks' reach. QD-597 (owner decision 197) is already folded, and QD-336 went into §4.5 with owner decision 251 (QD-841 to QD-843), which DESIGN.md carries directly.
+Generated from the ledger on 2026-11-10, it holds no item under a DESIGN.md section now: the last were folded on 2026-11-18 by track dr4-outside-docs, their parts in RECORD.md, the review ledger, pitch5.html and HANDOFF.md with them. "Later decisions", below, holds five items: two wait on a file outside the design-records tracks' reach, and three are what track dr6-late-sweep left of the answers it folded on 2026-11-19 as owner decisions 617 to 636, each waiting on HANDOFF.md, on KEYS's review-phase rework or on a field the code does not declare yet. QD-597 (owner decision 197) is already folded, and QD-336 went into §4.5 with owner decision 251 (QD-841 to QD-843), which DESIGN.md carries directly.
 
 ## Index
 
-No section holds an item. "Later decisions" holds QD-024 (§4) and QD-899 (§16).
+No section holds an item. "Later decisions" holds QD-024 (§4), QD-899 (§16), QD-1083 (§6), QD-1086 (§22) and QD-1096 (§7).
 
 ## DESIGN-DETAILS.md sections to fold
 
@@ -54,6 +54,8 @@ Not folded (2026-11-18): sidecar/design/UI.md is still absent, and the copy is t
 
 Not folded (2026-11-18, track dr4-outside-docs): sidecar/design/UI.md is still absent, and HANDOFF section 2's line would name that copy, so it waits with it.
 
+Not folded (2026-11-19, track dr6-late-sweep): sidecar/design/UI.md is still absent; the copy is the owner's step.
+
 ### QD-899: Which source kinds give a run card the fields RECORD.md 7.4 reads from claims, coverage and approval decisions?
 *Decided by the owner on 2026-11-15, asked one question at a time; owner decision 467. Folds into §16 The local MCP server and record primitives.*
 
@@ -67,3 +69,37 @@ Not folded (2026-11-18): RECORD.md 7.3 and 7.4, outside design/source/, and DESI
 
 Not folded (2026-11-18, track dr4-outside-docs): DESIGN-DETAILS.md 15.2.2's source entry, which still names a vault's sources without coverage, claim and handoff, the design agent's to amend; RECORD.md 7.3 and 7.4 are folded (the vault card's sources, fields 13 and 14 and its row's expires, and the team card's line of action kinds asked for approval).
 
+Not folded (2026-11-19, track dr6-late-sweep): DESIGN-DETAILS.md 15.2.2 is unchanged, and it is the design agent's.
+
+### QD-1083: Should design-records drop the two places DESIGN.md still describes C19 as live, §6.10's opening debit list and §23.9's merge rule?
+*Decided by the owner on 2026-11-18, asked one question at a time. Folds into §6 The sidecar subprotocol.*
+
+HANDOFF.md's part, which waits on a track that edits HANDOFF.md: section 9's two lines that still name FS-125's C19 windows and its sweep in connect's tests before connect's `main` merge, which owner decision 609 reversed. The rest is folded (2026-11-19): §6.10's first paragraph no longer debits a marked remote-search pair at C19's floor, and §23.9 item 2 no longer makes connect's merge wait on FS-125's sweep. FS-125's catalog row and its §23.6 and §22.17 naming stay, as track dr4-late-sweep left them on purpose.
+
+Changes: HANDOFF.md section 9's two FS-125 lines.
+
+Questions: `c19-windows-removed-design-leftovers.md`.
+
+Not folded (2026-11-19, track dr6-late-sweep): HANDOFF.md is outside this track's files; the final design sweep's list holds the two lines.
+
+### QD-1086: How should M2's gate show FS-15, FS-20, FS-24 and FS-104, whose MLS legs owner decision 610 took off the gates?
+*Decided by the owner on 2026-11-18, asked one question at a time; owner decision 627. Folds into §22 Testing and verification.*
+
+The fold of owner decision 610 that this answer puts with KEYS's review-phase rework: §22.8's FS-15, FS-20, FS-24 and FS-104 rows, §22.10's table, §23.6's M2 row, §23.8's freezes and D-KEYS-10 still put the MLS legs and the 0x0010 interop at M2's exit, and sidecartest/fault's catalog.yml is held to §22.8's text. The rest is folded (2026-11-19): owner decision 627, §23.8's Freezes line, which says the MLS legs count toward nothing at M2 and that the four rows run their drafted schedules meanwhile, and DESIGN-DEFER.md's keys-mls entry, whose Held field lists this fold.
+
+Changes: §22.8's four rows, §22.10's table, §23.6's M2 row, §23.8's freezes and D-KEYS-10, with sidecartest/fault/catalog.yml in the same commit.
+
+Questions: `test-m2-19-mls-legs-at-m2.md`.
+
+Not folded (2026-11-19, track dr6-late-sweep): KEYS's review-phase rework of the four rows onto deliveries has not landed, and the catalog's tests hold §22.8's table row for row.
+
+### QD-1096: Should IndexerRow and ConfigIndexer carry the IndexerSet header's nonce, so any reader can open a designation's sealed services after a fold?
+*Decided by the owner on 2026-11-19, asked one question at a time; owner decision 634. Folds into §7 Networks, teams, members, enrollment, and SSO.*
+
+The wire part, which waits on the code: `IndexerRow`'s `bytes nonce = 6` in §7.9's proto fence, which protocol's fence test holds to protocol/bridge/auth.proto, and auth.proto does not declare the field yet (fix track indexer-row-nonce). The fence carries a comment naming the decision. The rest is folded (2026-11-19): owner decision 634, §7.9's Indexers paragraph and §2.8's api-7, list v61.
+
+Changes: §7.9's `IndexerRow` fence, with the field's `testFenceAdditions` entry leaving protocol/design_unfenced_test.go in the same commit if the fix track adds one.
+
+Questions: `mail-m8-10-indexer-services-seal-context.md`.
+
+Not folded (2026-11-19, track dr6-late-sweep): auth.proto declares no `IndexerRow.nonce`, and a fence never moves ahead of the code (owner decision 273).

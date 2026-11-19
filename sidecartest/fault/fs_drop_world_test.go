@@ -2,7 +2,8 @@ package fault
 
 // The drop rows' T2 world (FS-90, FS-92, FS-93, FS-96; EVSB-M10-04, EVSB-M10-06): a repo's committed history across
 // refs on fake clusters, written as evs writes it, each kind-1 segment and slot its versions name stored, and a drop
-// job over the real resolve, mark, verify (dropverify, injected as taskworker injects it) and deletes. DROP pushes are
+// job over the real resolve, mark, verify (dropverify, injected as taskworker injects it: evs_world_drop.go's
+// fsDropVerifier) and deletes. DROP pushes are
 // committed by hand and reach the table through DropSink as step 8 appends them, since the DROP push route is
 // EVS2-M10-09's. newFsDropWorldOn builds the same world on a Net's stores, so the FI oracles read it (TEST-M10-01):
 // every request through the Net's blob recorder, the repo placed, the Net's gates admitting its network to format 2
@@ -25,7 +26,6 @@ import (
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/evsservice"
-	"github.com/urnetwork/sidecar/evsservice/dropverify"
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 	"github.com/urnetwork/sidecar/sidecartest"
@@ -92,32 +92,6 @@ type fsDropNoLock struct{}
 
 func (self fsDropNoLock) LockStanding(networkId sidecar.Id, repoId sidecar.Id) (bool, evsservice.EvsAuthAnswer) {
 	return false, evsservice.EvsAuthAllowed
-}
-
-// dropverify.Verify behind evsservice.DropVerifier, as taskworker injects it.
-type fsDropVerifier struct{}
-
-func (self fsDropVerifier) Verify(ctx context.Context, request *evsservice.DropVerifyRequest) (*evsservice.DropVerifyResult, error) {
-	drops := make([]*dropverify.Drop, 0, len(request.Drops))
-	for _, drop := range request.Drops {
-		drops = append(drops, &dropverify.Drop{DropId: drop.DropId, RefId: drop.RefId, Version: drop.Version})
-	}
-	result, err := dropverify.Verify(ctx, &dropverify.Request{
-		Cluster: request.Cluster, SegmentCluster: request.SegmentCluster, RepoId: request.RepoId, JobId: request.JobId,
-		Round: request.Round, Marked: request.Marked, Since: request.Since, Drops: drops,
-		Executed: request.Liveness.Executed, LockStanding: request.LockStanding, Pace: request.Pace,
-	})
-	if err != nil {
-		return nil, err
-	}
-	lateMarks := make([]evsservice.DropScanId, 0, len(result.LateMarks))
-	for _, id := range result.LateMarks {
-		lateMarks = append(lateMarks, evsservice.DropScanId{Id: id.Id, Kind: evsservice.DropIdKind(id.Kind)})
-	}
-	return &evsservice.DropVerifyResult{
-		Snapshot: result.Snapshot, Disagree: result.Disagree, Detail: result.Detail, LateMarks: lateMarks,
-		Cancelled: result.Cancelled, Locked: result.Locked, ScanByteCount: result.ScanByteCount,
-	}, nil
 }
 
 // The world.

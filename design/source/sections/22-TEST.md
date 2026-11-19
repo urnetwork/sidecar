@@ -827,13 +827,15 @@ barriers    each owning section names a barrier at every linearization point and
             DELETE, and a remote search's page replies
 unknown     ApplyThenDrop applies a write and shows the caller a transport error; every write in FS-1, FS-3, FS-15,
             FS-25, FS-43 to FS-45, FS-57, FS-63, FS-65, FS-72 and FS-75 also runs with it
-determinism fake clocks and barriers only, no sleeps; a schedule waiting over 10 s of real time for a barrier fails
-            with its trace; WARP_TEST_ENV_FAIL_FAST=1, so a failed attempt fails the run (R-TEST-9); the clock
-            is §4.5's Clock, which ServiceHost.Clock and SidecarSettings.Clock carry into the engines and the
-            core, nil meaning real time, and make check refuses a wall-clock call outside it (§4.7); a test that
-            advances the fake clock past a timer the code arms after a step first waits until the clock holds
-            that timer, since an advance between the step and the arming leaves nothing to fire (owner decision
-            549)
+determinism fake clocks and barriers only, no sleeps; a schedule waiting over 60 s of real time for a barrier fails
+            with its trace, the barrier driver's default, which a test that sets its own bound replaces
+            (owner decision 637): a holder the driver's stall check finds blocked fails its run within seconds, so
+            the bound catches only a holder that works without end; WARP_TEST_ENV_FAIL_FAST=1, so a failed attempt
+            fails the run (R-TEST-9); the clock is §4.5's Clock, which ServiceHost.Clock and SidecarSettings.Clock
+            carry into the engines and the core, nil meaning real time, and make check refuses a wall-clock call
+            outside it (§4.7); a test that advances the fake clock past a timer the code arms after a step first
+            waits until the clock holds that timer, since an advance between the step and the arming leaves nothing
+            to fire (owner decision 549)
 twins       every refusal schedule has a twin that must succeed, so a disabled feature fails
 real        T3 runs each T3 row through server's real handlers and stores (api, evs, gkm, the token exchange,
             Postgres, the 3-master Redis Cluster, D-OPS-20's MinIO build), never fixtures that pre-authorize; the
@@ -1023,6 +1025,20 @@ builders    a row on T2 and T3 is one exported fault.Builder in a non-test file,
             row's fsN_test.go holding only the thin T2 test; a T3 test that drives stock git and git-lfs through
             evsgit's world, which needs a testing.TB, runs in server's evshost rather than sidecart3 (FS-5's,
             FS-73's and FS-72's rollback case), and each gate's sweep names it there (owner decision 548)
+gates       a gate names a case's T3 test by convention in server's sidecart3, under tags that carry
+            sidecar_localstack, since a T3 Net hosts its stores on the local stack's MinIO, so no sweep names a
+            sidecart3 case; a sweep names, with its package's tags, each case whose T3 test runs elsewhere: M2's in
+            server's evshost (FS-1 to FS-4, FS-6, FS-7, FS-12, FS-57, FS-58, FS-62, FS-63 and FS-113, and FS-10's
+            twins by their own names), M4's in server's controller (FS-38, its forged case and FS-56), M6's in
+            server's api (FS-19's team and invite cases and the team cases of FS-21, FS-97 and FS-124) and M10's
+            (FS-72's migration case in evshost, FS-74 and FS-75 in server's root package); a T2+T3 case keeps its
+            convention T2 test, no test moves, and a server test holds every test a sweep or the convention names
+            to its declaration in its package under its tags (owner decision 625)
+clauses     a case's further schedules, run through fault.RunClause under the row's rules, are registered against
+            their row and case, and the convention names each clause's test too, by a name derived from the row,
+            the case and the clause, with an OnT3 twin where the clause has one, so a gate reads a case pass only
+            when its row's test and every registered clause pass; a row whose tests are clauses alone registers
+            its builder with them (owner decision 626)
 ```
 
 ```text
@@ -1084,7 +1100,8 @@ FI-14  write budget: (a) with the budget on, on each metadata set's busiest driv
        measured and reported by kind (§19.8), not bounded (owner decision 186); (b) conservation: each interval's P1
        and unfunded P2 debits stay within T, funded P2 spends only the wallet W, W never exceeds the priced funded
        backlog, and each push's deferred work is paid once, from W or as unfunded P2; (c) no P0 write waits or is
-       refused; (d) a network is refused only while one with less queued priced bytes per weight is served (§11, §19)
+       refused; (d) a network is refused only while one with less queued priced bytes per weight is served, or,
+       every waiting network equally loaded past the shed's delay, by id (owner decision 617) (§11, §19)
 FI-15  file-mode CAS (I-EVS-8): a file-mode push commits at u only if each file path it changes has, in the head
        history through u-1, newest version equal to its base_entry_version, 0 naming the path absent (never
        written, or removed), a removal being one of its versions, one past its last, which its marker keeps, and
@@ -1097,7 +1114,9 @@ FI-15  file-mode CAS (I-EVS-8): a file-mode push commits at u only if each file 
 FI-16  purge: the content of a versionless version (a kind-5 segment, a staged record, a slot only that path's
        versions name) is deleted only after its replacing version is committed and a process saw that commit (its own
        200, a head reread or a Resolve), the 60 s in-flight allowance has passed on a checked clock, no hold keeps it
-       when the delete issues (a hold covering the repo keeps what existed at its placement), and no version committed
+       when the delete issues (a hold covering the repo keeps what existed at its placement, and binds a deleter
+       from 5 s after api acknowledged its placement, the bound of §11.13's hold/ cache; owner decision 629), and
+       no version committed
        later names it; unknown and refused pushes purge nothing; every path's newest committed version keeps all its
        content; each candidate goes within the sweep's period once those conditions hold, and purged content never
        returns, a stale re-seed included (§11)
@@ -1177,7 +1196,8 @@ FI-27  drop history: a drop deletes a segment or slot only if (1) every version 
        before its end and whose list equals its lineage's versions below its boundary; (2) the job's mark and its
        independent verification, at snapshots after evacuation's horizon had passed every such drop's cite bound,
        found no other committed version naming it, in an entry version or a git-mode push's new-objects list; (3) no
-       hold covering the repo stood when the DELETE issued (a hold keeping what existed at its placement); and (4)
+       hold covering the repo stood when the DELETE issued (a hold keeping what existed at its placement, and
+       standing for a deleter from 5 s after api acknowledged its placement, as FI-16's; owner decision 629); and (4)
        evacuation's horizon had passed the object's LastModified + 24 h + 2 min, and the DELETE named that
        LastModified (owner decision 397); no version commits naming a listed version as a base, rename or reuse source
        after its drop's fence; every path's newest version keeps all its content, a written boundary carrying its
