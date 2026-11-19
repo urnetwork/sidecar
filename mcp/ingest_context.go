@@ -73,10 +73,13 @@ func (self *Ingest) captureContextWithLock(ctx context.Context, run *ingestRun, 
 		if !state.Started {
 			state.StartedMillis = self.clock.Now().UnixMilli()
 			state.Started = true
-			state.Project, state.Branch = self.projectAndBranch(ctx, event.Cwd)
-			state.AgentLabel = self.agentLabel(event.Cwd)
+			// a card's inputs, redacted before they are kept or sealed (ingest_runcard.go)
+			project, branch := self.projectAndBranch(ctx, event.Cwd)
+			state.Project = self.redactFieldWithLock(ctx, run, redactor, project, self.settings.ProjectByteCount)
+			state.Branch = self.redactFieldWithLock(ctx, run, redactor, branch, self.settings.ContextBranchByteCount)
+			state.AgentLabel = self.cardLabelWithLock(ctx, run, redactor, self.agentLabel(event.Cwd))
 		}
-		state.Model = event.Model
+		state.Model = self.redactFieldWithLock(ctx, run, redactor, event.Model, self.settings.ContextModelByteCount)
 		state.PermissionMode = event.PermissionMode
 		run.dirty = true
 		self.appendContextWithLock(ctx, run, redactor, stage, event, payload, nil)
@@ -85,8 +88,8 @@ func (self *Ingest) captureContextWithLock(ctx context.Context, run *ingestRun, 
 		}
 	default:
 		changed := false
-		if event.Model != "" && event.Model != state.Model {
-			state.Model = event.Model
+		if model := self.redactFieldWithLock(ctx, run, redactor, event.Model, self.settings.ContextModelByteCount); model != "" && model != state.Model {
+			state.Model = model
 			changed = true
 		}
 		if event.PermissionMode != "" && event.PermissionMode != state.PermissionMode {
@@ -127,7 +130,8 @@ func (self *Ingest) lifecycleStartWithLock(ctx context.Context, run *ingestRun) 
 func (self *Ingest) appendContextWithLock(ctx context.Context, run *ingestRun, redactor *sidecar.Redactor, stage uint32, event *HookEvent, payload []byte, prompts []string) {
 	state := run.state
 	if event.Harness == cursorHookHarness {
-		if version := ingestPayloadString(payload, ingestCursorVersionField); version != "" && version != state.HarnessVersion {
+		version := self.redactFieldWithLock(ctx, run, redactor, ingestPayloadString(payload, ingestCursorVersionField), self.settings.ContextHarnessVersionByteCount)
+		if version != "" && version != state.HarnessVersion {
 			state.HarnessVersion = version
 			run.dirty = true
 		}
@@ -421,9 +425,11 @@ func (self *Ingest) captureScanResultWithLock(ctx context.Context, run *ingestRu
 		Capture:    ingestChangeCaptureHooks | ingestChangeCaptureScan,
 	}
 	for _, change := range scan.Changes {
-		self.touchWithLock(run, change.Path)
+		// the path a card reads, redacted once for the row, its blob and the run's touched paths (ingest_runcard.go)
+		path := self.cardPathWithLock(ctx, run, redactor, change.Path)
+		self.touchWithLock(run, path)
 		row := &protocol.ChangedPath{
-			Path:        change.Path,
+			Path:        path,
 			AfterSha256: change.After.Sha256,
 			Mode:        change.After.Mode,
 			Attribution: uint32(change.Attribution),
@@ -443,7 +449,7 @@ func (self *Ingest) captureScanResultWithLock(ctx context.Context, run *ingestRu
 			if change.AfterBytes == nil {
 				// past FileByteCount: by hash alone, its bytes cut
 				self.gap(ctx, run.network, run.networkId, run.runId, sidecar.RecordCoverageGapOversize)
-			} else if entryId := self.captureBlobWithLock(ctx, run, redactor, change); entryId != nil {
+			} else if entryId := self.captureBlobWithLock(ctx, run, redactor, change, path); entryId != nil {
 				row.BlobEntryId = entryId
 			}
 		}
@@ -457,8 +463,9 @@ func (self *Ingest) captureScanResultWithLock(ctx context.Context, run *ingestRu
 	})
 }
 
-// A changed file's after bytes as a blob, once per hash: its entry id for the change row, nil where none was written.
-func (self *Ingest) captureBlobWithLock(ctx context.Context, run *ingestRun, redactor *sidecar.Redactor, change *RestoreChange) []byte {
+// A changed file's after bytes as a blob, once per hash, under path, the change row's redacted path: its entry id for
+// the change row, nil where none was written.
+func (self *Ingest) captureBlobWithLock(ctx context.Context, run *ingestRun, redactor *sidecar.Redactor, change *RestoreChange, path string) []byte {
 	state := run.state
 	hashHex := hex.EncodeToString(change.After.Sha256)
 	if slices.Contains(state.BlobHashes, hashHex) {
@@ -484,7 +491,7 @@ func (self *Ingest) captureBlobWithLock(ctx context.Context, run *ingestRun, red
 		RunId:      &runId,
 		TimeMillis: self.clock.Now().UnixMilli(),
 		Body: &protocol.BlobBody{
-			Path:     change.Path,
+			Path:     path,
 			Content:  redacted,
 			Sha256:   change.After.Sha256,
 			Redacted: len(matches) != 0,
