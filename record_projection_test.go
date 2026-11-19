@@ -143,6 +143,63 @@ func TestRecordQueryFilters(t *testing.T) {
 	}
 }
 
+// record_query by a search hit's copy (MCP-M10-02; §16.10's open row): the copy's stream ref and stream path name the
+// one entry holding it, read as one EntryId names, so a raw kind's body comes back; a path of another stream's ref, or
+// a ref the log holds no stream of, names none.
+func TestRecordQueryByCopy(t *testing.T) {
+	world := newTestRecordWorld(t)
+	device := world.device(true)
+	record := device.open()
+	runId := sidecar.NewId()
+	world.runs.StartRun(runId)
+	start := world.clock.Now().UnixMilli()
+	testRecordAppend(t, record, testRecordDraftAt(sidecar.RecordKindNote, &runId, start, &protocol.CoordinationBody{Text: "first note"}))
+	noteRef := testRecordAppend(t, record, testRecordDraftAt(sidecar.RecordKindNote, &runId, start+1000, &protocol.CoordinationBody{Text: "second note"}))
+	toolRef := testRecordAppend(t, record, testRecordDraftAt(sidecar.RecordKindToolCall, &runId, start+2000, &protocol.ToolCallBody{ToolName: "Bash", Input: []byte("ls")}))
+	if err := record.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	projection := testRecordProjection(t, record, 10)
+	// a query syncs the reader, which then holds each entry's copies and each stream's ref
+	testRecordQueryAll(t, projection, &sidecar.RecordQueryArgs{})
+	streams, ok := record.Reader().Streams(noteRef.LogId)
+	if !ok || len(streams) == 0 {
+		t.Fatal("the vault holds no stream")
+	}
+	copyOf := func(ref *sidecar.RecordEntryRef) *sidecar.RecordQueryCopy {
+		entry, ok := record.Reader().Entry(ref.LogId, ref.EntryId)
+		if !ok || len(entry.Copies) == 0 {
+			t.Fatalf("no copy of entry %s", ref.EntryId)
+		}
+		for _, stream := range streams {
+			if stream.StreamSidecarId == entry.Copies[0].StreamSidecarId && stream.RefId != (sidecar.Id{}) {
+				return &sidecar.RecordQueryCopy{RefId: stream.RefId, Path: entry.Copies[0].Path}
+			}
+		}
+		t.Fatalf("no ref for the stream of entry %s", ref.EntryId)
+		return nil
+	}
+
+	noteCopy := copyOf(noteRef)
+	rows := testRecordQueryAll(t, projection, &sidecar.RecordQueryArgs{Copy: noteCopy})
+	if len(rows) != 1 || rows[0].EntryId != noteRef.EntryId || rows[0].Stub || rows[0].Fields["text"] != "second note" {
+		t.Fatalf("the note by its copy: %+v", rows)
+	}
+	toolRows := testRecordQueryAll(t, projection, &sidecar.RecordQueryArgs{Copy: copyOf(toolRef)})
+	if len(toolRows) != 1 || toolRows[0].EntryId != toolRef.EntryId || toolRows[0].Stub || toolRows[0].Fields["tool_name"] != "Bash" {
+		t.Fatalf("a raw entry by its copy: %+v", toolRows)
+	}
+	for _, other := range []*sidecar.RecordQueryCopy{
+		{RefId: sidecar.NewId(), Path: noteCopy.Path},
+		{RefId: noteCopy.RefId, Path: noteCopy.Path + "0"},
+		{Path: noteCopy.Path},
+	} {
+		if rows := testRecordQueryAll(t, projection, &sidecar.RecordQueryArgs{Copy: other}); len(rows) != 0 {
+			t.Errorf("copy %+v names %d rows", other, len(rows))
+		}
+	}
+}
+
 // A tainted run's entry reads untrusted: a stub, and the taint untaken, until include, which calls Taint before its
 // text is in a row; a Taint that fails fails the query, and include with no Taint is refused.
 func TestRecordQueryUntrustedRowsAreStubsUntilInclude(t *testing.T) {

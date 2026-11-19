@@ -201,8 +201,10 @@ func init() {
 	})
 }
 
-// Registers the three search tools on catalog, each reaching a call's search through searchOf.
+// Registers the three search tools on catalog, each reaching a call's search through searchOf, which a hit argument
+// of the opening tools then resolves through too (tools_hit.go).
 func addSearchTools(catalog *McpCatalog, searchOf mcpSearchOfFunction) {
+	catalog.setSearchOf(searchOf)
 	searchFor := func(call *McpCall) (McpSearch, error) {
 		if call == nil {
 			return nil, errMcpNoCall

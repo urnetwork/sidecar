@@ -199,6 +199,9 @@ type McpServer struct {
 	restorePoints *RestorePoints
 	// the bridge tools' filings and listing (tools_bridge.go); nil answers unavailable
 	bridges McpBridges
+	// the search the installed search tools reach, which a hit argument resolves through (tools_hit.go); nil while no
+	// search tool is installed, which opens no hit
+	searchOf mcpSearchOfFunction
 }
 
 // A server for daemon.

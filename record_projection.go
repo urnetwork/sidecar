@@ -20,6 +20,8 @@
 //	            was; a raw kind (48-53) carries its body only when entry names it; copy entries are always stubs; an
 //	            erased or invalid entry has no body to show
 //	pages       PageRowCount rows a call, in the log's read order; the cursor names the log and the next index
+//	hits        a search hit names an entry by its copy, a stream's ref and the copy's stream path there (§16.10's
+//	            open row; MCP-M10-02): Copy keeps the one entry holding it, named as an entry is
 //	append      record_append's kinds only (claim, handoff, ask, answer, check, note), held to section 6.4's targets
 //	            grammar, their text and targets normalized and redacted whole by §16.11's rule before the writer seals;
 //	            a personal network's vault takes them; in team mode the writer sends ask, answer, check and note to
@@ -302,6 +304,29 @@ func (self *RecordProjection) entries(ctx context.Context, log *RecordProjection
 	return reader.Entries(log.LogId), stale, nil
 }
 
+// The streams of log whose ref is wanted's, by their sidecar, as the reader that holds log's entries holds them; nil
+// for no copy, and none where no stream of that ref is held, so the copy names no entry.
+func (self *RecordProjection) copyStreamIds(log *RecordProjectionLog, wanted *RecordQueryCopy) map[Id]bool {
+	if wanted == nil {
+		return nil
+	}
+	var streams []*RecordReadStream
+	if log.Directory {
+		if directory := self.directory(); directory != nil {
+			streams = directory.Streams()
+		}
+	} else {
+		streams, _ = self.record.reader.Streams(log.LogId)
+	}
+	streamIds := map[Id]bool{}
+	for _, stream := range streams {
+		if stream.RefId == wanted.RefId && wanted.RefId != (Id{}) {
+			streamIds[stream.StreamSidecarId] = true
+		}
+	}
+	return streamIds
+}
+
 // An entry's writer's member, or a tagged sidecar's sponsor.
 func recordProjectionAuthor(auth RecordAuthView, sidecarId Id) (Id, bool) {
 	if memberId, ok := auth.Member(sidecarId); ok {
@@ -354,8 +379,18 @@ type RecordQueryArgs struct {
 	// Archived entries too (section 8).
 	Archived bool
 	Cursor   string
+	// The one entry holding this copy, as a search hit names an entry document (§16.10's open row; MCP-M10-02): named
+	// as EntryId names one, so its raw body and its archived state read as an EntryId's do. Nil for none.
+	Copy *RecordQueryCopy
 	// Taints the calling run, write-ahead, before any untrusted text is put in a row (D-MCP-16); nil refuses include.
 	Taint func() error
+}
+
+// One copy of an entry: the stream whose ref is RefId, and the copy's stream path there (§11.14's record documents,
+// named by their copy's stream path under the stream's ref).
+type RecordQueryCopy struct {
+	RefId Id
+	Path  string
 }
 
 // One row of record_query, ur://record/{log} streaming the same.
@@ -442,13 +477,17 @@ func recordProjectionAgentLabels(entries []*RecordReadEntry) map[Id]string {
 	return labels
 }
 
-// Whether an entry is one args keep, before paging.
-func (self *RecordProjection) queryKeeps(args *RecordQueryArgs, entry *RecordReadEntry, labels map[Id]string) bool {
+// Whether an entry is one args keep, before paging; copyStreamIds are the streams whose ref args.Copy names.
+func (self *RecordProjection) queryKeeps(args *RecordQueryArgs, entry *RecordReadEntry, labels map[Id]string, copyStreamIds map[Id]bool) bool {
 	header := entry.Header.Header
 	switch {
 	case args.EntryId != nil && entry.EntryId != *args.EntryId:
 		return false
-	case entry.State == RecordEntryArchived && !args.Archived && args.EntryId == nil:
+	case args.Copy != nil && !slices.ContainsFunc(entry.Copies, func(entryCopy *RecordEntryCopy) bool {
+		return entryCopy.Path == args.Copy.Path && copyStreamIds[entryCopy.StreamSidecarId]
+	}):
+		return false
+	case entry.State == RecordEntryArchived && !args.Archived && args.EntryId == nil && args.Copy == nil:
 		return false
 	case args.RunId != nil && !bytes.Equal(header.GetRunId(), args.RunId.Bytes()):
 		return false
@@ -494,6 +533,7 @@ func (self *RecordProjection) Query(ctx context.Context, args *RecordQueryArgs) 
 	auth := self.record.writer.auth()
 	sidecarId := self.record.writer.sidecarId
 	labels := recordProjectionAgentLabels(entries)
+	copyStreamIds := self.copyStreamIds(log, args.Copy)
 	pageRowCount := max(self.settings.PageRowCount, 1)
 	page := &RecordQueryPage{Log: log, Stale: stale}
 	type picked struct {
@@ -504,7 +544,7 @@ func (self *RecordProjection) Query(ctx context.Context, args *RecordQueryArgs) 
 	index := min(start, len(entries))
 	for ; index < len(entries) && len(picks) < pageRowCount; index += 1 {
 		entry := entries[index]
-		if !self.queryKeeps(args, entry, labels) {
+		if !self.queryKeeps(args, entry, labels, copyStreamIds) {
 			continue
 		}
 		header := entry.Header.Header
@@ -536,7 +576,7 @@ func (self *RecordProjection) Query(ctx context.Context, args *RecordQueryArgs) 
 			row.Stub, row.StubReason = true, RecordStubNoBody
 		case row.Kind == RecordKindCopy:
 			row.Stub, row.StubReason = true, RecordStubCopy
-		case recordKindRaw(row.Kind) && args.EntryId == nil:
+		case recordKindRaw(row.Kind) && args.EntryId == nil && args.Copy == nil:
 			row.Stub, row.StubReason = true, RecordStubRaw
 		case row.Trust == RecordTrustUntrusted && !args.Untrusted:
 			row.Stub, row.StubReason = true, RecordStubUntrusted

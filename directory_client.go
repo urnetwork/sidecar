@@ -394,6 +394,20 @@ func (self *DirectoryClient) Entries() []*RecordReadEntry {
 	return reader.Entries(directoryId)
 }
 
+// The directory's streams this copy holds, each with its ref (RecordReader.Streams): what a search hit's copy is named
+// under (record_query by hit, RecordQueryArgs.Copy).
+func (self *DirectoryClient) Streams() []*RecordReadStream {
+	directoryId, ok := self.DirectoryId()
+	if !ok {
+		return nil
+	}
+	self.syncLock.Lock()
+	reader := self.reader
+	self.syncLock.Unlock()
+	streams, _ := reader.Streams(directoryId)
+	return streams
+}
+
 // The cards ref's files this copy holds, in path order: the notices at M6.
 func (self *DirectoryClient) Cards() []*DirectoryCardFile {
 	return self.store.Cards()
