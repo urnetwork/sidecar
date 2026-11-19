@@ -545,7 +545,9 @@ func TestCheckerAndTheGateNameTheSameChecksOnTheDetailsCellsThroughARecordMx(t *
 		for _, data := range []bool{false, true} {
 			c := &testLegCase{name: fmt.Sprintf("%s record data=%t", leg.Name, data), data: data, tls12: leg.Version == tls.VersionTLS12}
 			for _, m := range testMutations() {
-				if m.cell == "" || (m.applies != nil && !m.applies(c)) {
+				// a row that starts from an envelope sent in groups starts from this package's own MX
+				// (ExportGroupsCapture), and the gate and the checker are held to it there
+				if m.cell == "" || m.groups || (m.applies != nil && !m.applies(c)) {
 					continue
 				}
 				mx, err := sidecartest.NewRecordMx("mx.recipient.example", nil, &sidecartest.RecordMxSettings{Version: leg.Version, Suite: leg.Suite, Certificate: &certificate})
