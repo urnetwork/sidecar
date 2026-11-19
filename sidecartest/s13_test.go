@@ -10,8 +10,8 @@ package sidecartest
 // removal masks them at once.
 //
 // What is not here: the request by B's agent through directory_request with its harness endorsement (CanonicalAction
-// version 3's gate lookup is not bound), the worker reach and its GrantActivate, phones woken from M8, and
-// search_agents from M10; B's request here is a person's.
+// version 3's gate lookup is not bound), the worker reach and its GrantActivate, and phones woken from M8; B's
+// request here is a person's. search_agents from M10 runs on the evs world, in fault's s13_search_test.go.
 
 import (
 	"bytes"
