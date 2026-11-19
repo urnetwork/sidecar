@@ -32,9 +32,11 @@ package fault
 // document a hold kept from before a REMOVE generation re-keyed it, or after a merge and a roll-up moved it) for
 // M5-out's holds.
 //
-// Not here, each named for what it waits on: scopes network and all merging repos as the oracle does (each world's
-// devices follow its one repo; a device following several worlds' refs is search-m10-40's NewSearchTestNetworkDevice,
-// not on sidecar yet); a writer's push omitting a document or dropping or adding trigrams caught by a host with the
+// Scopes network and all merge the two repos as the oracle does: at every bucket boundary and at the end a desktop
+// holding both worlds' text and a phone, each following both refs (NewSearchTestNetworkDevice), search every repo of
+// the network, held to a ledger holding both repos, judged at network and at all breadth alike.
+//
+// Not here, each named for what it waits on: a writer's push omitting a document or dropping or adding trigrams caught by a host with the
 // text (head reproduction from the push's documents and the coverage row's live-entry check, SEARCH-M10-21's, are not
 // fed content on the search world); a build whose uploaded bytes differ (a forged build); an uncovered document found
 // from a desktop's own text (the local layer's journal and overlay, SEARCH-M10-25 and SEARCH-M10-14, are not wired
@@ -109,6 +111,7 @@ type fs76Device struct {
 // One repo of the corpus on a search world of its own.
 type fs76Repo struct {
 	label   string
+	kind    protocol.RepoKind
 	world   *fsResultsWorld
 	erasure *sidecar.SearchTestErasure
 	source  *fsResultsIndex
@@ -124,6 +127,8 @@ type fs76Repo struct {
 	onSearch func(found *fsResultsSearch)
 	// the ref version each path was last changed at, removals included
 	changedPathVersions map[string]uint64
+	// the network's ledger, which every write to the world's ledger is written to as well
+	network *fs76Network
 }
 
 // A clock skewed from the world's by offset: what a reader whose clock runs apart from the writers' reads.
@@ -156,7 +161,7 @@ func (self *fs76SkewedClock) Advance(timeout time.Duration) {
 func newFs76Repo(t *testing.T, label string, kind protocol.RepoKind, clock *sidecartest.FakeClock) *fs76Repo {
 	world := newFsResultsWorldOn(t, "fs76 "+label, kind, clock)
 	repo := &fs76Repo{
-		label: label, world: world, erasure: world.index.NewErasure(nil), source: world.source("the fs76 " + label + " world's ref"),
+		label: label, kind: kind, world: world, erasure: world.index.NewErasure(nil), source: world.source("the fs76 " + label + " world's ref"),
 		indexer: searchId("fs76 indexer " + label), worldRefVersions: map[uint64]uint64{}, livePathVersions: map[string]uint64{},
 		changedPathVersions: map[string]uint64{},
 	}
@@ -224,6 +229,20 @@ func (self *fs76Repo) commit(ctx context.Context, writer sidecar.Id, changes []*
 	if err := world.recordContent(writer, commit, changes); err != nil {
 		return nil, err
 	}
+	if self.network != nil {
+		networkCommit := &sidecartest.SearchCommit{
+			RepoId: world.index.RepoId(), RefId: world.index.RefId(), RefVersion: commit.RefVersion, Time: commit.Time,
+			WriterId: writer, Indexed: 0 < commit.IndexWriteCount,
+		}
+		for _, change := range changes {
+			networkCommit.Changes = append(networkCommit.Changes, &sidecartest.SearchChange{
+				Path: change.Path, Version: commit.Versions[change.Path], Content: change.Content,
+			})
+		}
+		if err := self.network.ledger.Commit(networkCommit); err != nil {
+			return nil, err
+		}
+	}
 	for _, change := range changes {
 		if change.Content == nil {
 			delete(self.livePathVersions, change.Path)
@@ -250,19 +269,21 @@ func (self *fs76Repo) learnRolled(ctx context.Context, rolling uint32) error {
 		}
 	}
 	self.rolled = rolling
+	if self.network != nil {
+		if err := self.network.ledger.RolledThrough(self.world.index.RepoId(), self.world.index.RefId(), rolling); err != nil {
+			return err
+		}
+	}
 	return self.world.ledger.RolledThrough(self.world.index.RepoId(), self.world.index.RefId(), rolling)
 }
 
-// Every query on every device of the world, synced first, on the buckets and on buckets plus all, each held to the
-// oracle and recorded for FI-18. rolling names a roll-up in flight, whose commit the ledger learns of first.
-func (self *fs76Repo) check(ctx context.Context, net *Net, label string, rolling uint32, queries []string, coverage bool) error {
-	return self.checkAs(ctx, net, label, rolling, queries, coverage, false)
-}
-
-// See check; staleUncovered leaves out of each search's holding the paths a commit above indexed_through changed
-// (fsResultsSearch.waitingPaths), and records none for FI-18, whose masked-version clause does not tell an older
-// version shown while its path's change waits for the backfill from a masked one.
-func (self *fs76Repo) checkAs(ctx context.Context, net *Net, label string, rolling uint32, queries []string, coverage bool, staleUncovered bool) error {
+// Every query on the world's device of index, synced first, on the buckets and on buckets plus all, each held to the
+// oracle and recorded for FI-18; a step of its own each, so none passes the driver's bound on a step. rolling names a
+// roll-up in flight, whose commit the ledger learns of first. staleUncovered leaves out of each search's holding the
+// paths a commit above indexed_through changed (fsResultsSearch.waitingPaths), and records none for FI-18, whose
+// masked-version clause does not tell an older version shown while its path's change waits for the backfill from a
+// masked one.
+func (self *fs76Repo) check(ctx context.Context, net *Net, label string, rolling uint32, queries []string, coverage bool, staleUncovered bool, index int) error {
 	if err := self.learnRolled(ctx, rolling); err != nil {
 		return err
 	}
@@ -278,7 +299,7 @@ func (self *fs76Repo) checkAs(ctx context.Context, net *Net, label string, rolli
 			}
 		}
 	}
-	for _, device := range self.devices {
+	for _, device := range self.devices[index : index+1] {
 		if err := device.device.Sync(ctx); err != nil {
 			return fmt.Errorf("%s: the %s's sync: %w", label, device.label, err)
 		}
@@ -369,6 +390,11 @@ func (self *fs76Repo) cut(ctx context.Context, label string) (*fs76Erasure, erro
 	if err := self.world.ledger.Erase(self.world.index.RepoId(), self.world.index.RefId(), erasure.path, erasure.version); err != nil {
 		return nil, err
 	}
+	if self.network != nil {
+		if err := self.network.ledger.Erase(self.world.index.RepoId(), self.world.index.RefId(), erasure.path, erasure.version); err != nil {
+			return nil, err
+		}
+	}
 	delete(self.livePathVersions, erasure.path)
 	return erasure, nil
 }
@@ -392,6 +418,215 @@ func (self *fs76Repo) rewrite(ctx context.Context, erasure *fs76Erasure, label s
 	}
 	if held, err := self.world.index.FilesHolding(erasure.path, 0); err != nil || 0 < len(held) {
 		return fmt.Errorf("%s: after the erasure of %s@%d, %v hold it (%v)", label, erasure.path, erasure.version, held, err)
+	}
+	return nil
+}
+
+// The corpus's network as one device reads it: a ledger holding both repos, which SearchOracle judges at network and at
+// all breadth, and a desktop holding both worlds' text and a phone, each following both refs.
+type fs76Network struct {
+	ledger    *sidecartest.SearchLedger
+	oracle    *sidecartest.SearchOracle
+	networkId sidecar.Id
+	readerId  sidecar.Id
+	repos     []*fs76Repo
+	devices   []*fs76NetworkDevice
+	// the repos the network devices' hits came from, so a run shows the repos merged
+	hitRepoIds map[sidecar.Id]bool
+}
+
+// One device of the network, following every repo's ref.
+type fs76NetworkDevice struct {
+	label  string
+	host   *searchHost
+	device *sidecar.SearchTestNetworkDevice
+}
+
+// The network of repos: its ledger holds each repo, every later write mirrored there (fs76Repo.network).
+func newFs76Network(repos []*fs76Repo) (*fs76Network, error) {
+	network := &fs76Network{
+		ledger: sidecartest.NewSearchLedger(), networkId: searchId("fs76 network"), readerId: searchId("fs76 network reader"),
+		repos: repos, hitRepoIds: map[sidecar.Id]bool{},
+	}
+	for _, repo := range repos {
+		err := network.ledger.AddRepo(&sidecartest.SearchLedgerRepo{
+			RepoId: repo.world.index.RepoId(), NetworkId: network.networkId, Kind: repo.kind,
+			DefaultRefId: repo.world.index.RefId(), Key: repo.world.index.RepoKey(), ReaderIds: []sidecar.Id{network.readerId},
+		})
+		if err != nil {
+			return nil, err
+		}
+		repo.network = network
+	}
+	network.oracle = sidecartest.NewSearchOracle(network.ledger)
+	return network, nil
+}
+
+// Makes the network's devices: a desktop holding every world's text, and a phone.
+func (self *fs76Network) makeDevices(ctx context.Context) error {
+	refs := []*sidecar.SearchTestNetworkRef{}
+	texts := map[sidecar.Id]sidecar.SearchTextSource{}
+	for _, repo := range self.repos {
+		refs = append(refs, &sidecar.SearchTestNetworkRef{World: repo.world.index})
+		texts[repo.world.index.RepoId()] = repo.world.index.TextSource()
+	}
+	for _, made := range []struct {
+		label string
+		host  string
+	}{{"network desktop", "desktop"}, {"network phone", "ios32"}} {
+		host := searchHostNamed(made.host)
+		conditions := host.conditions
+		settings := host.settings()
+		settings.SessionCursorCount = 1 << 20
+		settings.SessionSearchRate = sidecar.SidecarRate{Count: 1 << 20, Burst: 1 << 20, Interval: time.Second}
+		args := &sidecar.SearchTestNetworkDeviceArgs{
+			Settings: settings, Conditions: func() sidecar.SearchConditions { return conditions },
+			ReadByteCount: 32 * 1024 * 1024, Refs: refs,
+		}
+		if made.host == "desktop" {
+			args.Text = func(repoId sidecar.Id, refId sidecar.Id) sidecar.SearchTextSource { return texts[repoId] }
+		}
+		device, err := sidecar.NewSearchTestNetworkDevice(ctx, args)
+		if err != nil {
+			return err
+		}
+		self.devices = append(self.devices, &fs76NetworkDevice{label: made.label, host: host, device: device})
+	}
+	return nil
+}
+
+// Ends the network's devices.
+func (self *fs76Network) close() {
+	for _, device := range self.devices {
+		device.device.Close()
+	}
+}
+
+// A key across repos: the repo, then the document as one world keys it.
+func fs76NetworkKey(repoId sidecar.Id, path string, docKey [16]byte, version uint64) string {
+	return repoId.String() + "/" + fs79Key(path, docKey, version)
+}
+
+// Every query on the network's device of index, synced first, over every repo of the network on the buckets and on buckets plus
+// all, held to the network's oracle: the oracle's network and all breadth give one set, merging the repos; every
+// covered match is a hit, no hit twice; a desktop's hits are matches, verified against its text; a phone's each a
+// document's newest live version; a match not covered yet found, or above the indexed_through its ref's coverage gave.
+func (self *fs76Network) check(ctx context.Context, label string, queries []string, index int) error {
+	repoOf := map[sidecar.Id]*fs76Repo{}
+	for _, repo := range self.repos {
+		repoOf[repo.world.index.RepoId()] = repo
+	}
+	for _, device := range self.devices[index : index+1] {
+		if err := device.device.Sync(ctx); err != nil {
+			return fmt.Errorf("%s: the %s's sync: %w", label, device.label, err)
+		}
+		for _, scope := range []sidecar.SearchScope{sidecar.SearchLatest, sidecar.SearchAll} {
+			for _, query := range queries {
+				at := fmt.Sprintf("%s: the %s's search for %q in scope %d", label, device.label, query, scope)
+				stream, err := device.device.Engine().Search(ctx, &sidecar.SearchRequest{Text: query, Scope: scope, Remote: "off"})
+				if err != nil {
+					return fmt.Errorf("%s: %w", at, err)
+				}
+				hits := []sidecar.SearchHit{}
+				var progress sidecar.SearchProgress
+				for done := false; !done; {
+					page, pageProgress, pageDone, err := stream.Next()
+					if err != nil {
+						stream.Close()
+						return fmt.Errorf("%s: %w", at, err)
+					}
+					hits, progress, done = append(hits, page...), pageProgress, pageDone
+				}
+				stream.Close()
+				indexedThrough := map[sidecar.Id]uint64{}
+				for _, coverage := range progress.Coverage {
+					indexedThrough[coverage.RepoId] = coverage.IndexedThrough
+				}
+				if err := self.hold(at, device.host.name, query, scope, hits, indexedThrough, repoOf); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// See check.
+func (self *fs76Network) hold(at string, host string, query string, scope sidecar.SearchScope, found []sidecar.SearchHit, indexedThrough map[sidecar.Id]uint64, repoOf map[sidecar.Id]*fs76Repo) error {
+	judge := func(breadth sidecartest.SearchBreadth) ([]*sidecartest.DocumentKey, []*sidecartest.DocumentKey, []*sidecartest.DocumentKey, error) {
+		oracleScope := &sidecartest.SearchScope{
+			Partitions: fsResultsPartitions(scope), Breadth: breadth, NetworkIds: []sidecar.Id{self.networkId}, ReaderId: self.readerId,
+		}
+		matches, covered, err := self.oracle.Judge(query, oracleScope)
+		if err != nil && !errors.Is(err, sidecartest.ErrSearchOracleQueryRefused) {
+			return nil, nil, nil, err
+		}
+		documents, err := self.oracle.Documents(oracleScope)
+		return matches, covered, documents, err
+	}
+	matches, covered, documents, err := judge(sidecartest.SearchBreadthNetwork)
+	if err != nil {
+		return fmt.Errorf("%s: the oracle cannot judge it: %w", at, err)
+	}
+	allMatches, _, _, err := judge(sidecartest.SearchBreadthAll)
+	if err != nil {
+		return fmt.Errorf("%s: the oracle cannot judge it at all breadth: %w", at, err)
+	}
+	keysOf := func(keys []*sidecartest.DocumentKey) []string {
+		named := []string{}
+		for _, key := range keys {
+			named = append(named, fs76NetworkKey(key.RepoId, key.Name, key.DocKey, key.Version))
+		}
+		slices.Sort(named)
+		return named
+	}
+	if !slices.Equal(keysOf(matches), keysOf(allMatches)) {
+		return fmt.Errorf("%s: the oracle's network breadth matched %v and its all breadth %v", at, keysOf(matches), keysOf(allMatches))
+	}
+	isCovered, live, matching := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	for _, key := range keysOf(covered) {
+		isCovered[key] = true
+	}
+	for _, key := range keysOf(documents) {
+		live[key] = true
+	}
+	for _, key := range keysOf(matches) {
+		matching[key] = true
+	}
+	hits := []string{}
+	for _, hit := range found {
+		if hit.State == sidecar.SearchNear {
+			continue
+		}
+		key := fs76NetworkKey(hit.Repo, hit.Path, hit.DocKey, hit.Version)
+		if slices.Contains(hits, key) {
+			return fmt.Errorf("%s shows %s twice", at, key)
+		}
+		self.hitRepoIds[hit.Repo] = true
+		hits = append(hits, key)
+		switch {
+		case host == "desktop" && !matching[key]:
+			return fmt.Errorf("%s found %s, which the oracle does not match", at, key)
+		case host == "desktop" && hit.State != sidecar.SearchVerified:
+			return fmt.Errorf("%s left %s unverified, state %d, though it holds the text", at, key, hit.State)
+		case !live[key]:
+			return fmt.Errorf("%s found %s, which is no document's newest live version", at, key)
+		}
+	}
+	for _, match := range matches {
+		key := fs76NetworkKey(match.RepoId, match.Name, match.DocKey, match.Version)
+		if slices.Contains(hits, key) {
+			continue
+		}
+		if isCovered[key] {
+			return fmt.Errorf("%s left out %s, covered and matching", at, key)
+		}
+		repo := repoOf[match.RepoId]
+		through, reported := indexedThrough[match.RepoId]
+		refVersion, ok := repo.world.refVersions[fmt.Sprintf("%s@%d", match.Name, match.Version)]
+		if !ok || !reported || refVersion <= through {
+			return fmt.Errorf("%s leaves %s silently absent: its push at %d, indexed through %d", at, key, refVersion, through)
+		}
 	}
 	return nil
 }
@@ -568,10 +803,15 @@ func fs76Schedule(t *testing.T, settings *fs76Settings) *Schedule {
 	mailbox := newFs76Repo(t, "mailbox", protocol.RepoKind_REPO_KIND_MAILBOX, clock)
 	notes := newFs76Repo(t, "notes", protocol.RepoKind_REPO_KIND_GENERAL, clock)
 	repos := []*fs76Repo{mailbox, notes}
+	network, err := newFs76Network(repos)
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
 		for _, repo := range repos {
 			repo.close()
 		}
+		network.close()
 	})
 	corpus := sidecartest.NewSearchCorpus(settings.corpus)
 	queries := []string{}
@@ -653,25 +893,34 @@ func fs76Schedule(t *testing.T, settings *fs76Settings) *Schedule {
 			clock.Advance(at.Sub(now))
 		}
 	}
-	checkAll := func(label string, extra []string, coverage bool) func(ctx context.Context, net *Net) error {
-		return func(ctx context.Context, net *Net) error {
-			for _, repo := range repos {
-				if err := repo.check(ctx, net, label, 0, slices.Concat(queries, extra), coverage); err != nil {
-					return err
-				}
+	// a check point's steps: each repo's devices, a step each, and but at a stale check the network's
+	deviceCount, networkDeviceCount := 3, 2
+	checkSteps := func(label string, extra []string, coverage bool, staleUncovered bool) []*Step {
+		steps := []*Step{}
+		for _, repo := range repos {
+			for index := range deviceCount {
+				steps = append(steps, &Step{Actor: "check", Action: func(ctx context.Context, net *Net) error {
+					return repo.check(ctx, net, label, 0, slices.Concat(queries, extra), coverage, staleUncovered, index)
+				}})
 			}
-			return nil
 		}
+		if !staleUncovered {
+			for index := range networkDeviceCount {
+				steps = append(steps, &Step{Actor: "check", Action: func(ctx context.Context, net *Net) error {
+					return network.check(ctx, label, slices.Concat(queries, extra), index)
+				}})
+			}
+		}
+		return steps
 	}
-	checkUncovered := func(label string) func(ctx context.Context, net *Net) error {
-		return func(ctx context.Context, net *Net) error {
-			for _, repo := range repos {
-				if err := repo.checkAs(ctx, net, label, 0, queries, false, true); err != nil {
-					return err
-				}
-			}
-			return nil
+	repoSteps := func(repo *fs76Repo, label string, rolling uint32) []*Step {
+		steps := []*Step{}
+		for index := range deviceCount {
+			steps = append(steps, &Step{Actor: "check", Action: func(ctx context.Context, net *Net) error {
+				return repo.check(ctx, net, label, rolling, queries, false, false, index)
+			}})
 		}
+		return steps
 	}
 	// searches that reported a change not yet searchable, which an uncovered check holds above zero
 	uncoveredSearches := 0
@@ -696,7 +945,7 @@ func fs76Schedule(t *testing.T, settings *fs76Settings) *Schedule {
 				return err
 			}
 		}
-		return nil
+		return network.makeDevices(ctx)
 	}}}
 	rollCount := 0
 	for _, event := range events {
@@ -732,6 +981,9 @@ func fs76Schedule(t *testing.T, settings *fs76Settings) *Schedule {
 				if backfill.Horizon < through {
 					return fmt.Errorf("%s's backfill at %s raised the horizon to %d, below the skipped push at %d: %+v", repo.label, event.at, backfill.Horizon, through, backfill)
 				}
+				if err := repo.network.ledger.Cover(repo.world.index.RepoId(), repo.world.index.RefId(), backfill.Horizon, clock.Now()); err != nil {
+					return err
+				}
 				return repo.world.ledger.Cover(repo.world.index.RepoId(), repo.world.index.RefId(), backfill.Horizon, clock.Now())
 			}})
 		case "documents":
@@ -743,25 +995,25 @@ func fs76Schedule(t *testing.T, settings *fs76Settings) *Schedule {
 			}})
 			if event.label == "vectors" && event.at.Equal(lastVector) && !vectorsDone {
 				vectorsDone = true
-				steps = append(steps, &Step{Actor: "check", Action: checkAll("after the last vectors", vectorQueries, false)})
+				steps = append(steps, checkSteps("after the last vectors", vectorQueries, false, false)...)
 			}
 		case "check":
 			coverage := !event.uncovered && !event.at.Before(time.UnixMilli(first+2*windowMs).Add(2*time.Hour))
-			steps = append(steps, &Step{Actor: "check", Action: func(ctx context.Context, net *Net) error {
+			before := 0
+			steps = append(steps, &Step{Actor: "clock", Action: func(ctx context.Context, net *Net) error {
 				advanceTo(event.at)
-				before := uncoveredSearches
-				check := checkAll(event.label, nil, coverage)
-				if event.uncovered {
-					check = checkUncovered(event.label)
-				}
-				if err := check(ctx, net); err != nil {
-					return err
-				}
-				if event.uncovered && uncoveredSearches == before {
-					return fmt.Errorf("%s at %s: no search reported a change not yet searchable", event.label, event.at)
-				}
+				before = uncoveredSearches
 				return nil
 			}})
+			steps = append(steps, checkSteps(event.label, nil, coverage, event.uncovered)...)
+			if event.uncovered {
+				steps = append(steps, &Step{Actor: "check", Action: func(ctx context.Context, net *Net) error {
+					if uncoveredSearches == before {
+						return fmt.Errorf("%s at %s: no search reported a change not yet searchable", event.label, event.at)
+					}
+					return nil
+				}})
+			}
 		case "rollup":
 			repo := event.repo
 			rollCount += 1
@@ -779,14 +1031,9 @@ func fs76Schedule(t *testing.T, settings *fs76Settings) *Schedule {
 				return err
 			}, Background: true})
 			for _, barrier := range fs108RollUpBarriers() {
-				barrier := barrier
-				steps = append(steps,
-					&Step{Actor: actor, Await: barrier},
-					&Step{Actor: "check", Action: func(ctx context.Context, net *Net) error {
-						return repo.check(ctx, net, label+" at "+barrier, event.startDay, queries, false)
-					}},
-					&Step{Release: []string{barrier}},
-				)
+				steps = append(steps, &Step{Actor: actor, Await: barrier})
+				steps = append(steps, repoSteps(repo, label+" at "+barrier, event.startDay)...)
+				steps = append(steps, &Step{Release: []string{barrier}})
 			}
 			steps = append(steps,
 				&Step{Actor: actor, Join: true},
@@ -810,23 +1057,26 @@ func fs76Schedule(t *testing.T, settings *fs76Settings) *Schedule {
 					erasure, err = repo.cut(ctx, event.label)
 					return err
 				}},
-				&Step{Actor: "check", Action: func(ctx context.Context, net *Net) error {
-					return repo.check(ctx, net, "after the CUT of "+event.label, 0, queries, false)
-				}},
+			)
+			steps = append(steps, repoSteps(repo, "after the CUT of "+event.label, 0)...)
+			steps = append(steps,
 				&Step{Actor: "eraser", Action: func(ctx context.Context, net *Net) error {
 					return repo.rewrite(ctx, erasure, event.label)
 				}},
 				&Step{Actor: "eraser", Action: func(ctx context.Context, net *Net) error {
 					SearchRecordOf(net).CompleteErasure(repo.source.Name(), erasure.erasureId)
-					return repo.check(ctx, net, "after the erasure of "+event.label, 0, queries, false)
+					return nil
 				}},
 			)
+			steps = append(steps, repoSteps(repo, "after the erasure of "+event.label, 0)...)
 		}
 	}
-	steps = append(steps, &Step{Actor: "check", Action: func(ctx context.Context, net *Net) error {
+	steps = append(steps, &Step{Actor: "clock", Action: func(ctx context.Context, net *Net) error {
 		advanceTo(end)
-		return checkAll("at the end", vectorQueries, true)(ctx, net)
-	}}, &Step{Actor: "check", Action: func(ctx context.Context, net *Net) error {
+		return nil
+	}})
+	steps = append(steps, checkSteps("at the end", vectorQueries, true, false)...)
+	steps = append(steps, &Step{Actor: "check", Action: func(ctx context.Context, net *Net) error {
 		// the equalities above found something: each canonical term matches its message, and each vector word a
 		// conformance document, so the desktops' verified hits held those documents
 		for _, query := range slices.Concat(canonicalQueries, vectorQueries) {
@@ -840,6 +1090,11 @@ func fs76Schedule(t *testing.T, settings *fs76Settings) *Schedule {
 		}
 		if len(vectorQueries) == 0 {
 			return errors.New("the vectors gave no query")
+		}
+		for _, repo := range repos {
+			if !network.hitRepoIds[repo.world.index.RepoId()] {
+				return fmt.Errorf("the network's devices found nothing of the %s", repo.label)
+			}
 		}
 		return nil
 	}})
