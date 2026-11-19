@@ -657,6 +657,10 @@ func fi18CheckSearch(record *SearchRecord, run *SearchRun) []error {
 	for _, document := range documents {
 		newest[searchDocumentOf(document)] = document
 	}
+	repoIds, err := searchOracle.ScopeRepoIds(run.Scope)
+	if err != nil {
+		return []error{fmt.Errorf("%s: the oracle cannot judge its scope: %w", run.Label, err)}
+	}
 	matching := map[searchDocument]*sidecartest.DocumentKey{}
 	for _, match := range matches {
 		matching[searchDocumentOf(match)] = match
@@ -672,8 +676,12 @@ func fi18CheckSearch(record *SearchRecord, run *SearchRun) []error {
 		hit[document] = true
 		standing := newest[document]
 		switch {
+		case standing == nil && !slices.Contains(repoIds, found.Repo):
+			// a hit outside the scope's readable repos is FI-21's
 		case standing == nil:
-			// a hit outside the scope's readable repos is FI-21's; any other document the scope does not hold is this
+			// a document the scope holds no live version of: removed, a tombstone masking every version it had, erased,
+			// or outside the scope's partitions or filters (FS-108)
+			errs = append(errs, fmt.Errorf("%s: a hit on %s at version %d rests on a masked version: the scope holds no live version of it", run.Label, found.Path, found.Version))
 		case standing.Version != found.Version:
 			errs = append(errs, fmt.Errorf("%s: a hit on %s at version %d rests on a masked version, the newest being %d", run.Label, found.Path, found.Version, standing.Version))
 		}

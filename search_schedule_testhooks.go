@@ -714,6 +714,15 @@ type SearchTestDeviceArgs struct {
 	// The device reads indexed_through from the world's content, as SEARCH-M10-12's coverage reader does
 	// (search_content_testhooks.go); false reads none, which claims nothing.
 	Coverage bool
+	// The device holds the text of every content version the world's pushes wrote, as a desktop mirroring the ref
+	// does, and verifies its candidates against it (SearchEngineArgs.Text; search_results_testhooks.go); false holds
+	// none, so its hits are confirmed from their fields or possible.
+	Text bool
+	// Where the device's index_malformed and the engine's other events go (Sidecar.searchEvents); nil drops them.
+	Events func(event SidecarEvent)
+	// The device's own clock, a reader skewed from the writers; nil reads the world's. Its reads still move the
+	// world's clock as they take their bytes.
+	Clock SearchTestClock
 }
 
 // One device following the world's ref for search.
@@ -762,15 +771,20 @@ func (self *SearchTestWorld) NewDevice(ctx context.Context, args *SearchTestDevi
 	if _, err := instance.createKeychain(networkId); err != nil {
 		return fail(err)
 	}
-	if device.cache, err = NewSearchCache(ctx, instance.Store(&networkId), args.Settings, self.clock, NewNoopLogger()); err != nil {
+	var clock SearchTestClock = self.clock
+	if args.Clock != nil {
+		clock = args.Clock
+	}
+	if device.cache, err = NewSearchCache(ctx, instance.Store(&networkId), args.Settings, clock, NewNoopLogger()); err != nil {
 		return fail(err)
 	}
-	if device.policy, err = NewSearchPolicy(&SearchPolicyArgs{Settings: args.Settings, Conditions: args.Conditions, Clock: self.clock}); err != nil {
+	if device.policy, err = NewSearchPolicy(&SearchPolicyArgs{Settings: args.Settings, Conditions: args.Conditions, Clock: clock}); err != nil {
 		return fail(err)
 	}
 	syncArgs := &searchSyncArgs{
-		cache: device.cache, settings: args.Settings, format: self.format, clock: self.clock, log: NewNoopLogger(),
+		cache: device.cache, settings: args.Settings, format: self.format, clock: clock, log: NewNoopLogger(),
 		readPathCount: DefaultEvsFormatSettings().ReadMaxPathCount, readByteCount: args.ReadByteCount, budget: device.policy,
+		events: args.Events,
 	}
 	if args.Coverage {
 		syncArgs.coverage = self.contentCoverage
@@ -791,10 +805,15 @@ func (self *SearchTestWorld) NewDevice(ctx context.Context, args *SearchTestDevi
 		return fail(err)
 	}
 	gkm := &searchTestGkm{repoKey: self.repoKey, onRecord: args.OnRecord}
-	device.engine, err = NewSearchEngine(&SearchEngineArgs{
-		Settings: args.Settings, Cache: device.cache, Sync: device.sync, Policy: device.policy, Gkm: gkm, Clock: self.clock,
+	engineArgs := &SearchEngineArgs{
+		Settings: args.Settings, Cache: device.cache, Sync: device.sync, Policy: device.policy, Gkm: gkm, Clock: clock,
 		Log: NewNoopLogger(), Scope: &searchTestScope{repoId: self.repoId, refId: self.refId, kind: self.kind},
-	})
+		Events: args.Events,
+	}
+	if args.Text {
+		engineArgs.Text = self.textSource
+	}
+	device.engine, err = NewSearchEngine(engineArgs)
 	if err != nil {
 		return fail(err)
 	}
