@@ -195,7 +195,7 @@ func TestMailForwardForwardsOptedInBurnerMail(t *testing.T) {
 	}
 	mailboxId, _ := world.client.mailboxId()
 	_, parts, _ := world.client.bound()
-	record, err := newMailReverseAlias(parts.store(mailboxId), world.client.secrets, nil).Find(ctx, strings.TrimPrefix(fromLine[1], "r-"))
+	record, err := newMailReverseAlias(parts.store(mailboxId), nil, nil).Find(ctx, strings.TrimPrefix(fromLine[1], "r-"))
 	if err != nil || record.GetOriginalSender() != "store@shop.example" || record.GetBurnerAddress() != burner {
 		t.Fatalf("the reverse alias %+v: %v", record, err)
 	}
@@ -235,7 +235,11 @@ func TestMailForwardRelaysTheConfirmedAddressesReply(t *testing.T) {
 	}
 	mailboxId, _ := world.client.mailboxId()
 	_, parts, _ := world.client.bound()
-	token, err := newMailReverseAlias(parts.store(mailboxId), world.client.secrets, nil).Token("store@shop.example")
+	vault, err := world.client.Vault()
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := newMailReverseAlias(parts.store(mailboxId), vault.ReverseAliasKey, nil).Token(ctx, "store@shop.example")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,5 +289,40 @@ func TestMailForwardReverseAliasResolvesToItsBurner(t *testing.T) {
 	mailboxId, _ := world.client.mailboxId()
 	if lookup, err := config.Resolve(ctx, recipient); err != nil || !lookup.Known || lookup.MailboxRepoId != mailboxId {
 		t.Fatalf("the reverse alias resolves %+v: %v", lookup, err)
+	}
+}
+
+// The reverse aliases' key is the mailbox's, in vault/ (QD-1095): every consented device of the owner reads the one key,
+// so one sender gets one reverse alias from any of them, and a device the owner has not consented reads none.
+func TestMailForwardReverseAliasKeyIsTheMailboxes(t *testing.T) {
+	world, _, _, _ := newTestMailBurnerReplyWorld(t)
+	ctx := context.Background()
+	vault, err := world.client.Vault()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := vault.ReverseAliasKey(ctx)
+	if err != nil || len(key) != 32 {
+		t.Fatalf("the key %d bytes: %v", len(key), err)
+	}
+	parts := world.client.partsOverride.(*testMailBurnerReplyParts).vaultParts
+	other := testMailId(0x6a)
+	parts.authority.set(other, world.member, true)
+	otherVault := newMailVault(parts.vaultStore, world.member, other, parts.authority, parts.clock, nil, DefaultMailVaultSettings())
+	otherKey, err := otherVault.ReverseAliasKey(ctx)
+	if err != nil || !bytes.Equal(otherKey, key) {
+		t.Fatalf("another device's key: %v", err)
+	}
+	mine, err := newMailReverseAlias(newMailTestStore(), vault.ReverseAliasKey, nil).Token(ctx, "store@shop.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	theirs, err := newMailReverseAlias(newMailTestStore(), otherVault.ReverseAliasKey, nil).Token(ctx, "Store@Shop.Example")
+	if err != nil || theirs != mine {
+		t.Fatalf("two devices' tokens for one sender differ: %v", err)
+	}
+	stranger := newMailVault(parts.vaultStore, world.member, testMailId(0x6b), parts.authority, parts.clock, nil, DefaultMailVaultSettings())
+	if _, err := stranger.ReverseAliasKey(ctx); !errors.Is(err, ErrMailVaultNotConsented) {
+		t.Fatalf("an unconsented device read the key: %v", err)
 	}
 }
