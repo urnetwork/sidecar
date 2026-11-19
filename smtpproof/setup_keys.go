@@ -587,6 +587,9 @@ type keyHost struct {
 	// Nil fetches nothing.
 	fetch  *keyFetch
 	checks chan struct{}
+	// The Prover's loader, through which every set's backend proves, so one memory budget bounds them all
+	// (prover_load.go). Nil, as tests of the check hold a host, loads each shape once and keeps it.
+	loader *proverLoader
 	// The clock and the wait, which tests replace.
 	now  func() time.Time
 	wait func(ctx context.Context, duration time.Duration) error
@@ -736,7 +739,12 @@ func (self *keyHost) openKeySet(ctx context.Context, id []byte, proof *ProofSett
 	}
 	keySet.host = self
 	keySet.backend = newGroth16Backend(keySet.proof)
-	keySet.backend.source = newCachedProvingKeys(keySet)
+	cached := newCachedProvingKeys(keySet)
+	if self.loader != nil {
+		keySet.backend.loading = &shapeLoading{loader: self.loader, prefix: hex.EncodeToString(id) + "/", load: cached.load}
+	} else {
+		keySet.backend.source = cached
+	}
 	return keySet, nil
 }
 

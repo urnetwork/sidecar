@@ -111,6 +111,43 @@ func TestCheckerAgreesThatEveryHonestSendPasses(t *testing.T) {
 	}
 }
 
+func TestCheckerAgreesOverSeveralEnvelopeGroups(t *testing.T) {
+	// the envelope one command a group (DESIGN-DETAILS 3.2.4): every honest send passes both, and each env
+	// part's own reply_count one fewer on the wire than its records hold, which the gate's order allows, is
+	// refused by Z8 alone on both
+	for _, c := range testLegCases() {
+		honest := smtpproof.ExportGroupsCapture(t, c.leg, c.data)
+		if verdict := testGateVerdict(honest); len(verdict) != 0 {
+			t.Fatalf("%s: the gate refuses an honest send: %v", c.name, verdict)
+		}
+		if verdict := testCheckerVerdict(honest); len(verdict) != 0 {
+			t.Fatalf("%s: the checker refuses an honest send: %v", c.name, verdict)
+		}
+		kinds := smtpproof.ExportPartKinds(honest)
+		broken := 0
+		for index := uint32(3); kinds[index] == "env"; index += 1 {
+			capture := smtpproof.ExportGroupsCapture(t, c.leg, c.data)
+			part := capture.Events[testPartEvents(capture)[index]].Part
+			if part.ReplyCount != 1 || len(part.Records) != 1 {
+				t.Fatalf("%s: env part %d covers %d replies and opens %d records", c.name, index, part.ReplyCount, len(part.Records))
+			}
+			part.ReplyCount -= 1
+			want := []string{"Z8"}
+			if gate := testGateVerdict(capture); !slices.Equal(gate, want) {
+				t.Errorf("%s: env part %d's reply_count one fewer: the gate names %v", c.name, index, gate)
+			}
+			if ours := testCheckerVerdict(capture); !slices.Equal(ours, want) {
+				t.Errorf("%s: env part %d's reply_count one fewer: the checker names %v", c.name, index, ours)
+			}
+			broken += 1
+		}
+		// a part for each RCPT, and in DATA mode one for DATA
+		if want := map[bool]int{false: 2, true: 3}[c.data]; broken != want {
+			t.Errorf("%s: %d env parts after part 2, want %d", c.name, broken, want)
+		}
+	}
+}
+
 // The event of each part, by index, in its order: a capture names each once.
 func testPartEvents(capture *smtpproof.ExportedCapture) map[uint32]int {
 	events := map[uint32]int{}
@@ -508,7 +545,9 @@ func TestCheckerAndTheGateNameTheSameChecksOnTheDetailsCellsThroughARecordMx(t *
 		for _, data := range []bool{false, true} {
 			c := &testLegCase{name: fmt.Sprintf("%s record data=%t", leg.Name, data), data: data, tls12: leg.Version == tls.VersionTLS12}
 			for _, m := range testMutations() {
-				if m.cell == "" || (m.applies != nil && !m.applies(c)) {
+				// a row that starts from an envelope sent in groups starts from this package's own MX
+				// (ExportGroupsCapture), and the gate and the checker are held to it there
+				if m.cell == "" || m.groups || (m.applies != nil && !m.applies(c)) {
 					continue
 				}
 				mx, err := sidecartest.NewRecordMx("mx.recipient.example", nil, &sidecartest.RecordMxSettings{Version: leg.Version, Suite: leg.Suite, Certificate: &certificate})
