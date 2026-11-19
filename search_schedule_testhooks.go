@@ -72,6 +72,10 @@ type SearchTestWorld struct {
 	// the normalizer is one document at a time
 	normalizerLock sync.Mutex
 	normalizer     *indexNormalizer
+
+	// admins beside the world's own (AddAdmin)
+	adminLock sync.Mutex
+	adminIds  map[Id]bool
 }
 
 // A world over an empty ref, its RK_1 derived from its repo's id.
@@ -594,7 +598,10 @@ func (self *searchTestRef) commitWithLock(signer Id, push *indexPush, content []
 	if (0 < len(push.files) || 0 < len(push.removals) || push.kind == indexPushCut) && push.indexEpoch != head.head.indexEpoch {
 		return nil, &indexRefusal{kind: indexRefusalIndexEpoch}
 	}
-	if self.refuse != nil && self.refuse(SearchTestPushShape{FileCount: len(push.files), RemovalCount: len(push.removals), Content: 0 < len(content)}) {
+	shape := SearchTestPushShape{
+		FileCount: len(push.files), RemovalCount: len(push.removals), Content: 0 < len(content), Cut: push.kind == indexPushCut,
+	}
+	if self.refuse != nil && self.refuse(shape) {
 		return nil, &indexRefusal{kind: indexRefusalQuota}
 	}
 	conflicts := []string{}
@@ -774,8 +781,9 @@ func (self *SearchTestWorld) NewDevice(ctx context.Context, args *SearchTestDevi
 	device.source = &searchWorldSource{world: self, rate: args.ReadByteRate}
 	err = device.sync.Follow(&searchSyncRefArgs{
 		repoId: self.repoId, refId: self.refId, repoKind: self.kind, source: device.source,
-		keepAll:  func() bool { return device.policy.KeepsAll(self.repoId, self.AllByteCount()) },
-		mayErase: func(signer Id, signedTimeMs int64) bool { return false },
+		keepAll: func() bool { return device.policy.KeepsAll(self.repoId, self.AllByteCount()) },
+		// the repo's admins, as the composition's AclState judges an erasure set's signer
+		mayErase: self.mayErase,
 	})
 	// a config, mailcfg or secret repo's index is never followed (FI-17): the device keeps none, and its rounds say so
 	if err != nil && !errors.Is(err, ErrSearchSyncUnfollowed) {
