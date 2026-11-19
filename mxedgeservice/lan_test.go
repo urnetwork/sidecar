@@ -4,9 +4,12 @@ package mxedgeservice_test
 // once its PROXY line names the sending address, gets the lb's banner and dialog and spends the same per-sender caps.
 // The PROXY line itself is tlsedgeservice's listener's, which the host stacks over this one (server/mxedgehost), so
 // here a conn carries the address its line would name.
+// A routed LAN session splices as an lb one does, the receiver seeing the hello and every TLS byte after it unchanged.
 
 import (
 	"bufio"
+	"bytes"
+	"io"
 	"net"
 	"net/netip"
 	"testing"
@@ -55,9 +58,14 @@ func newTestLanWorld(t *testing.T) *testLanWorld {
 	if err := settings.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	engine := newTestEngine(t, &testEngineOptions{settings: settings})
+	return serveTestLan(t, newTestEngine(t, &testEngineOptions{settings: settings}))
+}
+
+// engine, whose settings name a lan_port and its sources, serving a LAN listener beside its lb one.
+func serveTestLan(t *testing.T, engine *testEngine) *testLanWorld {
+	t.Helper()
 	raw := newTestListener()
-	lan, err := mxedgeservice.NewMxLanListener(raw, settings)
+	lan, err := mxedgeservice.NewMxLanListener(raw, engine.settings)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,5 +142,59 @@ func TestLanPortNeedsItsSources(t *testing.T) {
 	settings.LanPort = 0
 	if err := settings.Validate(); err != nil {
 		t.Fatalf("no lan_port: %v", err)
+	}
+}
+
+// A routed LAN session splices as an lb one does (X6, X7): the receiver's first bytes are the hello verbatim, every TLS
+// byte after it arrives unchanged in both directions, and MailIngress names the sending address the PROXY line named,
+// never the smtpedge host's.
+func TestLanSessionSplicesTlsBytesUnchanged(t *testing.T) {
+	router := newTestRouter(t, &testRouterOptions{settings: func(settings *mxedgeservice.MxEdgeSettings) {
+		settings.LanPort = 2526
+		settings.LanSources = []netip.Prefix{netip.MustParsePrefix("10.20.0.0/24")}
+	}})
+	world := serveTestLan(t, router.testEngine)
+	client := world.dial(t, "10.20.0.5", testSender)
+	client.expect("220 " + testBannerHostName + " ESMTP")
+	client.write("EHLO " + testRouteEhlo + "\r\n")
+	client.expectEhlo()
+	quietAt := router.clock.Now().Add(router.settings.StartTlsQuietTimeout)
+	client.write("STARTTLS\r\n")
+	router.awaitTimerAt(quietAt)
+	router.clock.Advance(router.settings.StartTlsQuietTimeout)
+	client.expect("220 2.0.0 Ready to start TLS")
+	hello := testRouterHello(testRouteSni, 64)
+	client.write(string(hello))
+	var receiver *testReceiver
+	select {
+	case receiver = <-router.dialer.dialing:
+	case <-router.ctx.Done():
+		t.Fatal("no dial")
+	}
+	if !bytes.Equal(receiver.request.HelloBytes, hello) {
+		t.Errorf("the hello reached the dial as %x", receiver.request.HelloBytes)
+	}
+	ingress := receiver.ingress
+	if !bytes.Equal(ingress.GetSenderIp(), netip.MustParseAddr(testSender).AsSlice()) || ingress.GetSenderPort() != 2525 ||
+		ingress.GetSni() != testRouteSni || ingress.GetEhloName() != testRouteEhlo {
+		t.Errorf("MailIngress %v", ingress)
+	}
+
+	toReceiver := testRouteCapture(100 * 1024)
+	go client.conn.Write(toReceiver)
+	if got := receiver.readFull(t, len(toReceiver)); !bytes.Equal(got, toReceiver) {
+		t.Error("the sender's bytes reached the receiver changed")
+	}
+	toSender := testRouteCapture(70 * 1024)[3:]
+	go receiver.writer.Write(toSender)
+	got := make([]byte, len(toSender))
+	if _, err := io.ReadFull(client.reader, got); err != nil || !bytes.Equal(got, toSender) {
+		t.Errorf("the receiver's bytes reached the sender changed: %v", err)
+	}
+	receiver.writer.Close()
+	client.expectEnd()
+	router.service.AwaitSessionCount(0)
+	if count := world.lan.RefusedCount(); count != 0 {
+		t.Errorf("refused %d", count)
 	}
 }
