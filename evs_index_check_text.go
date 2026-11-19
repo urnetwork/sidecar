@@ -15,6 +15,12 @@
 //	tombstone  a tombstone of a path's chunk at version v: the path at v must be removed, binary, skipped by D6 or
 //	           without that chunk; a chunk the text keeps live is a document hidden, and the host's own entry stands
 //	           for it
+//	omitted    a push that changed its signer's head enters every document the content push beside it changed
+//	           (QD-1098): each doc_key the path's text gives at the push's version, extracted as the writer extracts
+//	           it (a binary version, a path under the never row and a chunk D6 skips give none) and the erasure set's
+//	           documents left out, stands at that version or above in the signer's files or the buckets' shards; a
+//	           missing one is a document left out, the host's own entry stands for it, the path goes to a backfill, and
+//	           the event names the head the push wrote
 //	unknown    a doc_key that no path the host walks names (a registered class's derived document, a chunk of a removed
 //	           path past its first) is not judged here
 //
@@ -22,7 +28,8 @@
 // use.
 //
 // Memory and reads: this draft walks every push of the content ref to its pin and every standing path's doc_keys in
-// RAM for each check, where an indexer's steady state wants them kept between checks (QD-641).
+// RAM for each check, and the omitted row reads every bucket's entries, its shards decoded, where an indexer's steady
+// state wants them kept between checks (QD-641).
 
 package sidecar
 
@@ -128,7 +135,11 @@ func indexCheckWithText(ctx context.Context, args *indexTextCheckArgs) (*indexTe
 	view := args.view
 	outcome := &indexTextCheckOutcome{}
 	added := indexTextAddedEntries(view, args.push, args.replaced)
-	if len(added) == 0 {
+	committed, err := indexTextContentPush(ctx, args)
+	if err != nil {
+		return nil, err
+	}
+	if len(added) == 0 && committed == nil {
 		return outcome, nil
 	}
 	refId := args.content.RefId()
@@ -203,22 +214,26 @@ func indexCheckWithText(ctx context.Context, args *indexTextCheckArgs) (*indexTe
 		return entries, nil
 	}
 	var held *indexHeldKeys
-	mismatch := func(added *indexTextAdded, own *indexEntry) {
-		outcome.mismatches = append(outcome.mismatches, &indexTextMismatch{path: added.file.file.path, key: added.entry.key, version: added.entry.version})
+	mismatchAt := func(filePath string, key [indexIdByteCount]byte, version uint64, own *indexEntry) {
+		outcome.mismatches = append(outcome.mismatches, &indexTextMismatch{path: filePath, key: key, version: version})
 		if own != nil {
 			outcome.own = append(outcome.own, own)
 		}
 		for _, event := range outcome.events {
-			if event.Path == added.file.file.path {
+			if event.Path == filePath {
 				return
 			}
 		}
 		repoId, refIdOfView, signer := view.repoId, view.refId, args.push.signer
-		event := SidecarEvent{Kind: SidecarEventIndexMismatch, RepoId: &repoId, RefId: &refIdOfView, Path: added.file.file.path, SidecarId: &signer}
+		event := SidecarEvent{Kind: SidecarEventIndexMismatch, RepoId: &repoId, RefId: &refIdOfView, Path: filePath, SidecarId: &signer}
 		outcome.events = append(outcome.events, event)
 		if args.events != nil {
 			args.events(event)
 		}
+	}
+
+	mismatch := func(added *indexTextAdded, own *indexEntry) {
+		mismatchAt(added.file.file.path, added.entry.key, added.entry.version, own)
 	}
 
 	for _, one := range added {
@@ -287,9 +302,108 @@ func indexCheckWithText(ctx context.Context, args *indexTextCheckArgs) (*indexTe
 			}
 		}
 	}
+	// omitted: each document the content push changed, which rode with its signer's head, held to an entry
+	if committed != nil {
+		entered, err := indexTextEntered(ctx, view, view.writeRoot(), args.push.signer)
+		if err != nil {
+			return nil, err
+		}
+		writtenPath := indexTextWrittenHead(view, args.push)
+		for _, change := range committed.changes {
+			if change.path == "" || indexCoverageExcluded(view, args.groupInbox, change) {
+				continue
+			}
+			state, err := args.content.State(ctx, change.path, committed.version)
+			if err != nil {
+				return nil, err
+			}
+			if state.version == 0 || state.removed || state.unopenable {
+				continue
+			}
+			// as the writer extracts it: what the erasure set lists is left out, as a writer must leave it
+			extractor := &indexBuildExtractor{view: view, normalizer: normalizer, refId: refId, refKey: args.refKey, groupInbox: args.groupInbox}
+			if err := extractor.extract(change.path, state, args.push.signedTimeMs); err != nil {
+				return nil, err
+			}
+			for _, expected := range extractor.entries {
+				if version, ok := entered[expected.key]; ok && expected.version <= version {
+					continue
+				}
+				mismatchAt(writtenPath, expected.key, expected.version, expected)
+				outcome.repairs = append(outcome.repairs, change.path)
+			}
+		}
+	}
 	slices.Sort(outcome.repairs)
 	outcome.repairs = slices.Compact(outcome.repairs)
 	return outcome, nil
+}
+
+// The content push an index push rode with, where it wrote its signer's head in the ref's own index in the same
+// statement: the push every document of which the head must enter. Nil for a companion push, whose content is another
+// ref's, and for a push that carried no content beside its head.
+func indexTextContentPush(ctx context.Context, args *indexTextCheckArgs) (*indexContentPush, error) {
+	if args.view.companion || args.push.version == 0 {
+		return nil, nil
+	}
+	pushes, err := args.content.Pushes(ctx, args.push.version-1, args.push.version)
+	if err != nil {
+		return nil, err
+	}
+	for _, push := range pushes {
+		if push.version == args.push.version && push.changesHead && push.signer == args.push.signer {
+			return push, nil
+		}
+	}
+	return nil, nil
+}
+
+// The path of the head the push wrote, which a document it left out is named against: its signer's head in a bucket,
+// among the files the push wrote, the last bucket's where it wrote several; the first file it wrote where the view
+// holds no such head.
+func indexTextWrittenHead(view *indexView, push *indexReproducePush) string {
+	written := map[string]bool{}
+	first := ""
+	for _, file := range push.files {
+		written[file.file.path] = true
+		if first == "" || file.file.path < first {
+			first = file.file.path
+		}
+	}
+	head := first
+	for _, root := range view.roots {
+		for _, bucket := range root.buckets {
+			writer := bucket.writer(push.signer)
+			if writer == nil {
+				continue
+			}
+			if slot := writer.head(); slot != nil && written[slot.file.path] {
+				head = slot.file.path
+			}
+		}
+	}
+	return head
+}
+
+// The newest version of each doc_key that signer's own files and the buckets' shards hold, live or tombstone: where a
+// push's entries stand once it lands, a push past DirectBytes merging its own into the shards in the same push.
+func indexTextEntered(ctx context.Context, view *indexView, root *indexViewRoot, signer Id) (map[[indexIdByteCount]byte]uint64, error) {
+	entered := map[[indexIdByteCount]byte]uint64{}
+	for _, bucket := range root.buckets {
+		documents, err := view.bucketDocuments(ctx, bucket)
+		if err != nil {
+			return nil, err
+		}
+		for key, entries := range documents.entries {
+			for _, entry := range entries {
+				if entry.kind == indexEntryRefTombstone || !entry.shard && entry.writer != signer {
+					continue
+				}
+				entered[key] = max(entered[key], entry.version)
+			}
+		}
+	}
+	return entered, nil
 }
 
 // Whether two rows encode alike.

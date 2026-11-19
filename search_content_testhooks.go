@@ -366,6 +366,9 @@ func (self *SearchTestWorld) planIndexedClaiming(ctx context.Context, writer Id,
 			}
 			entered := change
 			if claim := claimed[change.path]; claim != nil {
+				if claim.Omit {
+					continue
+				}
 				forged := *change
 				forged.content = claim.Content
 				entered = &forged
