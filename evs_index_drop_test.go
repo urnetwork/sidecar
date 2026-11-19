@@ -902,12 +902,12 @@ func TestIndexDropHookRidesTheDropPush(t *testing.T) {
 	}
 	after := testIndexDropEvsSlot(t, writer, path)
 	if after.file.byteCount != before.file.byteCount || after.file.version == before.file.version || len(after.slot.entries) != 1 ||
-		after.slot.entries[0].key != before.slot.entries[slices.IndexFunc(before.slot.entries, func(entry *indexEntry) bool { return entry.key != testIndexDropEvsKey(t, writer, "a.txt") })].key {
+		after.slot.entries[0].key != testIndexDropEvsKey(t, writer, "b.txt") {
 		t.Fatalf("the slot after the DROP: %d B at %d, %d entries", after.file.byteCount, after.file.version, len(after.slot.entries))
 	}
 }
 
-// a.txt's doc_key on the stand-in's main ref.
+// path's doc_key on the stand-in's main ref, chunk 0.
 func testIndexDropEvsKey(t testing.TB, writer *evsTestWriter, path string) [indexIdByteCount]byte {
 	t.Helper()
 	key, err := indexDocKey(testIndexDropEvsRefKey(t, writer), writer.world.refId, []byte(path), 0)
