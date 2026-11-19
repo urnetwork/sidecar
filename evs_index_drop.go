@@ -80,8 +80,9 @@ type IndexDropSettings struct {
 	// (DESIGN-DETAILS 11's extraction bounds), so no version of a file the format holds gives a chunk past it. One HMAC a
 	// chunk a path, some milliseconds a path at the default. Non-positive looks for none, so nothing is rewritten.
 	ChunkScanCount int
-	// Builds of one backfill's rewrite, the first included, before it gives up on the refusals it rebuilds after: 8, as a
-	// backfill's own (IndexBackfillSettings.AttemptCount). Non-positive is one.
+	// Builds of one backfill's rewrite, the first included, before it gives up on the refusals it rebuilds after, and
+	// reads of the index a signer's rewrite makes while pushes move the head under it: 8, as a backfill's own
+	// (IndexBackfillSettings.AttemptCount). Non-positive is one.
 	AttemptCount int
 }
 
@@ -562,16 +563,24 @@ func (self *IndexDropRewriter) Hook(ctx context.Context, repo *EvsRepo, args *Ev
 	if err != nil {
 		return leave("the ref's id", err)
 	}
-	view, err := indexLoadView(ctx, &indexViewArgs{
-		store: self.args.store(repo, refName), repoId: repo.repoId, refId: refId, repoKind: repoKind,
-		isAdmin: self.args.isAdmin(repo.repoId), settings: self.args.format,
-	})
-	if err != nil {
-		return leave("the index did not read", err)
-	}
-	result, err := indexDropRewrite(ctx, &indexDropRewriteArgs{view: view, refKey: refKey, paths: paths, settings: self.settings})
-	if err != nil {
-		return leave("the rewrite did not build", err)
+	// the index at one head: a push landing while it is read moves it, and it is read again, AttemptCount times at most
+	var view *indexView
+	var result *indexDropRewriteResult
+	for attempt := 0; ; attempt += 1 {
+		view, err = indexLoadView(ctx, &indexViewArgs{
+			store: self.args.store(repo, refName), repoId: repo.repoId, refId: refId, repoKind: repoKind,
+			isAdmin: self.args.isAdmin(repo.repoId), settings: self.args.format,
+		})
+		if err == nil {
+			result, err = indexDropRewrite(ctx, &indexDropRewriteArgs{view: view, refKey: refKey, paths: paths, settings: self.settings})
+		}
+		if errors.Is(err, errIndexCollected) && attempt+1 < max(1, self.settings.AttemptCount) {
+			continue
+		}
+		if err != nil {
+			return leave("the index did not read whole or the rewrite did not build", err)
+		}
+		break
 	}
 	if len(result.files) == 0 {
 		return nil, nil

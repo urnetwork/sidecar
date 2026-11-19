@@ -611,6 +611,42 @@ func TestIndexDropLeftToTheBackfill(t *testing.T) {
 	}
 }
 
+// §11.14's limit row: at the storage limit the backfill's rewrite is refused as payload, comes back to the schedule
+// unsent, the floor where it was and search answering from the files as they stand, and the next look after the limit
+// lifts rewrites them.
+func TestIndexDropBackfillWaitsAtTheLimit(t *testing.T) {
+	world := testNewHeadWorld()
+	a := evsTestId("writer a")
+	refKey := testIndexDropRefKey()
+	plan := testIndexDropKey(t, refKey, "notes/plan.md", 0)
+	world.push(t, a, testIndexDropLive(plan, 1, testIndexDropKeys(1)))
+	world.fillUntilSealed(t, a, "fill", 0)
+	world.push(t, a, testIndexDropLive(plan, 2, testIndexDropKeys(2)))
+	head, err := world.ref.store(a).Head(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := &testIndexDropContent{refId: evsTestId("view ref"), head: head.version, drops: []*indexContentDrop{{
+		version: head.version, signedTimeMs: world.at.UnixMilli(), paths: []*indexDroppedPath{testIndexDroppedPath("notes/plan.md", 2, 1, 2)},
+	}}}
+	backfiller := testIndexDropBackfiller(t, world, refKey, evsTestId("indexer"), content)
+	world.at = world.at.Add(DefaultIndexBackfillSettings().BackfillAge)
+	world.ref.refuseNext(&indexRefusal{kind: indexRefusalQuota, quota: &QuotaRefusal{LimitKey: "evs_storage_bytes"}}, false)
+	if _, err := backfiller.backfillDrops(context.Background()); !isIndexRefusal(err, indexRefusalQuota) {
+		t.Fatalf("a rewrite at the limit: %v", err)
+	}
+	held := world.view(t, evsTestId("reader"))
+	testIndexDropHeldLive(t, held, plan, 1)
+	if hits := testIndexDropSearch(t, held, testIndexDropVersionKey(2)); hits[plan] != 2 {
+		t.Fatalf("search at the limit: %v", hits)
+	}
+	outcome, err := backfiller.backfillDrops(context.Background())
+	if err != nil || outcome.committedCount != 1 {
+		t.Fatalf("the look after the limit: %+v, %v", outcome, err)
+	}
+	testIndexDropNoneHeld(t, world.view(t, evsTestId("reader")), plan, 1)
+}
+
 // R3 has no manifest to fence a bucket's first merge with: a merge built before the DROP from a's sealed slot commits
 // after it, creating the manifest and a shard holding the listed version again. The backfill's look takes it out.
 func TestIndexDropBackfillMendsARacingMerge(t *testing.T) {
@@ -931,5 +967,41 @@ func TestIndexDropRewritesRebuiltWhenTheirFileMoves(t *testing.T) {
 	after := testIndexDropEvsSlot(t, writer, path)
 	if len(after.slot.entries) != 1 || after.slot.entries[0].key == testIndexDropEvsKey(t, writer, "a.txt") {
 		t.Fatal("the rebuilt rewrite left a.txt's listed version")
+	}
+}
+
+// An index store whose first listing finds the head moved under it, as a push landing during the walk leaves it.
+type testIndexDropMovingStore struct {
+	indexRefStore
+	moves *int
+}
+
+func (self *testIndexDropMovingStore) List(ctx context.Context, refVersion uint64) (*indexListing, error) {
+	if 0 < *self.moves {
+		*self.moves -= 1
+		return nil, indexEvsMoved(1, 2)
+	}
+	return self.indexRefStore.List(ctx, refVersion)
+}
+
+// A push moving the head while the hook reads the index sends it to read again, not to leave the rewrite to the
+// backfill: the rewrite built on the second read rides the DROP.
+func TestIndexDropHookReadsTheIndexAgainWhenItMoves(t *testing.T) {
+	writer, _, capture, path := testIndexDropEvsWorld(t)
+	rewriter := testIndexDropEvsRewriter(t, writer, true)
+	moves := 1
+	rewriter.args.store = func(repo *EvsRepo, refName []byte) indexRefStore {
+		return &testIndexDropMovingStore{indexRefStore: newIndexEvsStore(repo, refName, false), moves: &moves}
+	}
+	t.Cleanup(rewriter.Install())
+	result := testIndexDropEvsDrop(t, writer)
+	if moves != 0 || !result.Pushes[0].IndexRewritten {
+		t.Fatalf("moves left %d, rewritten %v", moves, result.Pushes[0].IndexRewritten)
+	}
+	if drops := capture.drops(t); len(drops) != 1 || len(drops[0].Changes) != 2 {
+		t.Fatal("the DROP does not carry its rewrite")
+	}
+	if after := testIndexDropEvsSlot(t, writer, path); len(after.slot.entries) != 1 {
+		t.Fatalf("the slot holds %d entries", len(after.slot.entries))
 	}
 }
