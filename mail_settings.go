@@ -35,6 +35,8 @@ type MailSettings struct {
 	Codes *MailCodeSettings
 	// Burners' labels, limits and sites (mail_burner.go, mail_burner_labels.go).
 	Burner *MailBurnerSettings
+	// Mail's search join (mail_search.go); nil takes DefaultMailSearchSettings.
+	Search *MailSearchSettings
 	// The host this runs on, which says when it receives and whether it may be a mail indexer (mail_host.go): a daemon
 	// unless ApplyMobileMailSettings names an app.
 	Profile MailHostProfile
@@ -70,6 +72,7 @@ func DefaultMailSettings() *MailSettings {
 		Vault:                       DefaultMailVaultSettings(),
 		Codes:                       DefaultMailCodeSettings(),
 		Burner:                      DefaultMailBurnerSettings(),
+		Search:                      DefaultMailSearchSettings(),
 		Profile:                     MailHostProfileDaemon,
 		ReadMaxByteCount:            int(ingest.DepositMaxByteCount),
 		ReadHeaderValueMaxByteCount: 4 * 1024,

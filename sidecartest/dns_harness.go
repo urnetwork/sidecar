@@ -13,7 +13,9 @@
 //     fails or drains one, or fails a router's banner alone.
 //   - A query reaches an edge over in-memory TCP or UDP, through the edge's own Serve and ServePacket,
 //     so it meets the edge's admission, RRL and signing as a resolver's would. Resolver gives TLS's and
-//     MAIL's T2 tests a net.Resolver that resolves <net>.<root> names the same way.
+//     MAIL's T2 tests a net.Resolver that resolves <net>.<root> names the same way. Every query sent
+//     this way is in the Net's privacy capture as its bytes left the querier, under CC4/dns-edge-query
+//     (privacy_edges.go), so a private name asked of an edge is found whatever the edge answered.
 //
 // Nothing listens on a socket, and the keys, bearers, store, gates and metrics are each harness's own,
 // so two harnesses on one Net share only what the Net is: its clock, fault queue and privacy capture.
@@ -225,6 +227,8 @@ type DnsHarness struct {
 	apiUrl string
 	// Each query's source port, so in-memory connections are told apart in a trace.
 	sourcePort atomic.Uint32
+	// Every query sent to an edge, for the Net's privacy capture.
+	edgeQueries *PrivacyDnsEdgeQueries
 	// Bumped at each start and end of a process, so a wait reads again.
 	instances *sidecar.MonitorValue[uint64]
 
@@ -275,6 +279,7 @@ func NewDnsHarness(ctx context.Context, net *Net, settings *DnsHarnessSettings) 
 		classBearers:      map[dnsservice.DnsCallerClass]string{},
 		apiUrl:            "http://" + settings.Name + "-api.invalid",
 		instances:         sidecar.NewMonitorValue[uint64](0),
+		edgeQueries:       net.Capture().DnsEdgeQueries(settings.Name),
 		nsEdges:           map[string]*dnsHarnessEdge{},
 		interfaces:        slices.Clone(settings.Interfaces),
 		failedNames:       map[string]bool{},
@@ -1029,7 +1034,11 @@ func (self *DnsHarness) dialEdge(ctx context.Context, ns string) (net.Conn, erro
 	if edge == nil {
 		return nil, fmt.Errorf("%w: %s", ErrDnsHarnessDown, ns)
 	}
-	return edge.listener.dial(ctx, self.querySource())
+	conn, err := edge.listener.dial(ctx, self.querySource())
+	if err != nil {
+		return nil, err
+	}
+	return self.edgeQueries.WrapConn(ns, conn), nil
 }
 
 // message to ns's edge over TCP, as a resolver retrying after TC does, and its answer. An edge that
@@ -1070,6 +1079,7 @@ func (self *DnsHarness) QueryUdp(ctx context.Context, ns string, message *dns.Ms
 	if err != nil {
 		return nil, err
 	}
+	self.edgeQueries.AddDatagram(ns, packed)
 	conn := &dnsHarnessPacketConn{
 		localAddr: &net.UDPAddr{IP: edge.listener.addr.IP, Port: 53},
 		source:    net.UDPAddrFromAddrPort(netip.AddrPortFrom(source, uint16(self.querySource().Port))),

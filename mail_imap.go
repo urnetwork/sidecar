@@ -18,8 +18,8 @@
 //	bounds    at most ConnectionMaxCount sessions at once, a further one answered BYE and closed; each command's store
 //	          calls end at CommandTimeout; go-imap holds a command line to 50 KiB and a literal outside APPEND, which
 //	          is refused, to 4 KiB
-//	search    until MAIL-M10-03 SEARCH scans i/: each message's entry, its subject, sender, snippet, date, size and
-//	          flags, never its body (mail_imap_session.go)
+//	search    SEARCH's text terms run on the network's search engine, verified, and everything else on the folder's
+//	          entries (mail_imap_search.go)
 //	logs      go-imap's logger writes nothing and its debug writer is unset, since either would carry a session's
 //	          text, a credential among it (I-7)
 //
@@ -57,6 +57,13 @@ type MailImapServerSettings struct {
 	// How deep SEARCH's NOT and OR nest before a nested criterion matches nothing: 32, deeper than any client writes,
 	// so a crafted command's recursion stays bounded.
 	SearchMaxDepth int
+	// The distinct BODY and TEXT strings one SEARCH may carry, each an engine search: 16, the engine's own bound on a
+	// query's terms. A command with more answers NO.
+	SearchTermMaxCount int
+	// The most messages one text term may match, and the most pages read of its search, before SEARCH answers NO
+	// rather than part of an answer: 65,536 and 4,096.
+	SearchHitMaxCount  int
+	SearchPageMaxCount int
 }
 
 // The defaults, a fresh value each call.
@@ -66,6 +73,9 @@ func DefaultMailImapServerSettings() *MailImapServerSettings {
 		CommandTimeout:     60 * time.Second,
 		ConnectionMaxCount: 64,
 		SearchMaxDepth:     32,
+		SearchTermMaxCount: 16,
+		SearchHitMaxCount:  64 * 1024,
+		SearchPageMaxCount: 4096,
 	}
 }
 
@@ -80,6 +90,9 @@ type MailImapAccount struct {
 	// The mailbox's hint: a revision and a channel that closes at its next change, which IDLE waits on beside the
 	// store's own. Nil waits on the store and IdlePollInterval alone.
 	Hints func() (uint64, chan struct{})
+	// The network's search engine, as Sidecar.Search answers it, which SEARCH's text terms run on. Nil, and an engine
+	// that answers unavailable, leave them to the folder's entries (mail_imap_search.go).
+	Search func(ctx context.Context, request *SearchRequest) (*SearchStream, error)
 }
 
 // What NewMailImapServer builds on.
@@ -130,7 +143,8 @@ func newMailImapServer(ctx context.Context, args *MailImapServerArgs, imapLog im
 	if settings == nil {
 		settings = DefaultMailImapServerSettings()
 	}
-	if settings.IdlePollInterval <= 0 || settings.CommandTimeout <= 0 || settings.ConnectionMaxCount <= 0 || settings.SearchMaxDepth < 0 {
+	if settings.IdlePollInterval <= 0 || settings.CommandTimeout <= 0 || settings.ConnectionMaxCount <= 0 || settings.SearchMaxDepth < 0 ||
+		settings.SearchTermMaxCount <= 0 || settings.SearchHitMaxCount <= 0 || settings.SearchPageMaxCount <= 0 {
 		return nil, errors.New("mail imap: the server's bounds are positive")
 	}
 	clock := clockOrReal(args.Clock)
@@ -320,6 +334,7 @@ func (self *MailClient) ImapAccount() (*MailImapAccount, bool) {
 		Credential: credential,
 		Store:      self.ImapStore,
 		Hints:      self.ImapHints,
+		Search:     self.imapSearch,
 	}, true
 }
 

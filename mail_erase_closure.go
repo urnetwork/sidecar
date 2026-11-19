@@ -88,13 +88,10 @@ func mailSegmentWithout(segment []byte, month MailYearMonth, messages []mailEras
 	return kept, removedCount
 }
 
-// The erasure's parts, a segment at a time, the last one's ERASE completing it. Fills erasure with where it stands.
-func (self *MailEraser) rewrite(ctx context.Context, erasure *MailErasure, messages []mailErasedMessage) error {
-	segments, err := self.segmentsListing(ctx, messages)
-	if err != nil {
-		erasure.State = MailErasureRewriting
-		return err
-	}
+// The erasure's i/ parts over segments, the segments listing its messages, one at a time, the last one's ERASE
+// completing it where mayComplete says nothing else of it is left unproven. Fills erasure with where it stands: done
+// once every part ran, but rewriting where no ERASE may say complete.
+func (self *MailEraser) rewrite(ctx context.Context, erasure *MailErasure, segments []*mailEraseSegment, messages []mailErasedMessage, mayComplete bool) error {
 	left := func(from int) {
 		erasure.SegmentsLeft = len(segments) - from
 		erasure.BytesLeft = 0
@@ -104,7 +101,7 @@ func (self *MailEraser) rewrite(ctx context.Context, erasure *MailErasure, messa
 	}
 	for index, segment := range segments {
 		left(index)
-		err := self.part(ctx, erasure.ErasureId, segment.segment, messages, index == len(segments)-1)
+		err := self.part(ctx, erasure.ErasureId, segment.segment, messages, mayComplete && index == len(segments)-1)
 		if wait, refused := mailEraseRefusedForNow(err); refused {
 			erasure.State = MailErasureWaiting
 			erasure.NextTry = self.clock.Now().Add(wait)
@@ -117,8 +114,13 @@ func (self *MailEraser) rewrite(ctx context.Context, erasure *MailErasure, messa
 		}
 	}
 	left(len(segments))
-	erasure.State = MailErasureDone
 	erasure.NextTry, erasure.Finish = time.Time{}, time.Time{}
+	if !mayComplete {
+		// every key found is destroyed, and none of its ERASEs said complete (mail_erase_index.go)
+		erasure.State = MailErasureRewriting
+		return nil
+	}
+	erasure.State = MailErasureDone
 	return nil
 }
 

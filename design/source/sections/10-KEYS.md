@@ -805,7 +805,9 @@ delivery  for g <= the form's generation, 10.9's delivery checks compare a body'
 pins      generation pins compare (g, C_g); a new group_id at an equal (g, C_g), and a new epoch pin from
           epoch 0, are taken only along a verified GroupForm chain, and evs and readers resolve a statement's
           gen/<g> through the repo's newest GroupForm (§11.8)
-after     later rotations run as usual
+after     later rotations run as usual; in §19.10's groups step a re-seeded live repo's first rotation and its
+          Adds come in a second call, once repo/ is active, since the form, epoch 0 and the ladder are all gkm
+          takes while repo/ reads keying or deleted (10.6's checks row; owner decision 618)
 ```
 
 A repo re-seeded as deleted (§11.13) takes only that GroupForm, with its epoch 0 and ladder, while deleted (owner decision 82): devices open its files from their cached RK_g once it is restored, its readers rejoin by KF2 and late wraps, and a shred deletes the group. Slots return from owner devices' mirrors (§11.13). Repos no device holds are lost (§2.18).
