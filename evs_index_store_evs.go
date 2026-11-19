@@ -304,7 +304,9 @@ func (self *indexEvsStore) Commit(ctx context.Context, push *indexPush) (*indexC
 	extras := &evsPushExtras{indexEpoch: push.indexEpoch, signedTimeMs: push.signedTimeMs}
 	switch push.kind {
 	case indexPushCut:
-		extras.flags = uint32(protocol.EvsPushFlag_EVS_PUSH_CUT)
+		// evs takes a CUT only from an admin, refusing one below it 403 before any write (§11.12's cut and directory
+		// rows), so it goes under the admin scope, as a CLOSURE does (EvsRepo.Closure)
+		extras.flags, extras.scope = uint32(protocol.EvsPushFlag_EVS_PUSH_CUT), evsScopeAdmin
 	case indexPushClosure:
 		return nil, fmt.Errorf("%w: a CLOSURE goes through the eraser", ErrEvsWriteInvalid)
 	}
