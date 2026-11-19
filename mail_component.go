@@ -16,6 +16,8 @@
 //	          once mail turns off or the grant goes. Revoking the receiver ends its listen at once
 //	mta-sts   while the receiver listens and the device holds a §13 certificate for the network's pair, §15.5's
 //	          MTA-STS policy as this receiver's system publish (mail_mta_sts.go), ended with the receiver
+//	outcomes  while mail is on, once an OutcomeSweepInterval, the member's or/ records past their 30 days are removed
+//	          (§15.7; MAIL-M9-02)
 //	idle      Active while mail is on, so a daemon with mail on never idles out (§5.8); `ur status` says so and
 //	          prompts for a mail indexer until one stands (§15.6)
 //
@@ -95,6 +97,8 @@ type mailComponentRun struct {
 	// the receiver's MTA-STS system publish while it serves one, and when a refused one is tried again
 	mtaSts          io.Closer
 	mtaStsRetryTime time.Time
+	// when the member's or/ is next swept for records past their days
+	outcomeSweepTime time.Time
 }
 
 // What the component keeps on the client beside its run: a test's seams.
@@ -240,6 +244,7 @@ func (self *MailClient) pass(run *mailComponentRun) bool {
 	self.passIngest(run, binding)
 	self.passReceive(run, binding)
 	self.passMtaSts(run, binding)
+	self.passOutcomes(run)
 	if binding.BurnerSelectors != nil {
 		// a burn another device made retires this device's selectors for the label too (MAIL-M9-03)
 		if _, err := self.RetireBurnedSelectors(ctx); err != nil {

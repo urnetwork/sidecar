@@ -20,7 +20,8 @@
 //	          (MailOutboxMessageId); an or/ record with no o/, an entry sent and removed past its approval's window,
 //	          is done with no ref; neither, both read whole, is not_done; a read that fails is uncertain
 //	removal   o/ goes once sent and past its approval's retry window, which SmtpOutboxRunner decides through
-//	          SmtpMailbox.RemoveOutbox; or/ is kept 30 days (mailSmtpMailbox.RemoveExpiredOutcomes)
+//	          SmtpMailbox.RemoveOutbox; or/ is kept 30 days (mailSmtpMailbox.RemoveExpiredOutcomes, which the
+//	          mail component's pass runs once an OutcomeSweepInterval)
 //
 // SmtpMailbox is the sender's only way into these paths: nothing outside MAIL builds one. Nothing here logs an
 // address, a domain or a byte of a message (I-13). Safe for concurrent use.
