@@ -9,12 +9,12 @@
 //
 //	src, dst subject   one subject the selector names: user:<email> a new member device of that member, tag:<name> a
 //	                   tagged sidecar carrying it and no other tag, autogroup:<name> a new subject of that class (a
-//	                   member device of a new member of the role, a tagged sidecar, an untagged ephemeral one, an app
-//	                   device, an anonymous visitor), sidecar:<id> and client:<id> the subject itself, network:<net>
-//	                   that network, role: and principal: an app device holding it; group:<name> every member of the
-//	                   group, each as a user, so an accept holds for all of them and a deny for none; as a destination,
-//	                   autogroup:self another new device of the source's own member. A new subject is admitted by no
-//	                   one's consent, so an owner-bound read never passes on one
+//	                   member device of a new member of the role, a tagged sidecar carrying one tag no table names, an
+//	                   untagged ephemeral one, an app device, an anonymous visitor), sidecar:<id> and client:<id> the
+//	                   subject itself, network:<net> that network, role: and principal: an app device holding it;
+//	                   group:<name> every member of the group, each as a user, so an accept holds for all of them and a
+//	                   deny for none; as a destination, autogroup:self another new device of the source's own member. A
+//	                   new subject is admitted by no one's consent, so an owner-bound read never passes on one
 //	names              a socket, repo, host or alias check names one: a glob or a bare * fails the test, since a deny
 //	                   over a set checked at any one name would pass unseen
 //	ip                 a CIDR is a set an accept must hold whole and a deny must not touch at any address
@@ -551,15 +551,20 @@ func (self *aclTestProbeView) memberDevice(label string, memberId Id, ephemeral 
 	return AclSidecarSubject(sidecarId)
 }
 
-// A new tagged sidecar carrying exactly tagIds, sponsored by no member, so autogroup:admin stands in.
+// A new tagged sidecar carrying exactly tagIds, or with none one tag no table names, so it holds autogroup:tagged and no
+// tag's atom: an admission names tags or a member, and one naming neither is no admission at all. Sponsored by no
+// member, so autogroup:admin stands in.
 func (self *aclTestProbeView) tagged(label string, tagIds []Id) AclSubject {
 	sidecarId := aclTestProbeId(label + ".tagged")
 	if self.sidecars[sidecarId] == nil {
+		if len(tagIds) == 0 {
+			tagIds = []Id{aclTestProbeId(label + ".tag")}
+		}
 		row := &bridge.SidecarRow{SidecarId: sidecarId.Bytes(), AdmittedAt: self.nextPosition()}
 		for _, tagId := range tagIds {
 			row.TagIds = append(row.TagIds, tagId.Bytes())
 		}
-		self.sidecars[sidecarId] = &AclSidecar{Row: row, TagIds: tagIds}
+		self.sidecars[sidecarId] = &AclSidecar{Row: row, TagIds: slices.Clone(tagIds)}
 		self.order = append(self.order, sidecarId)
 	}
 	return AclSidecarSubject(sidecarId)

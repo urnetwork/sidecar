@@ -182,6 +182,29 @@ func TestAclPolicyTestOverTheDocumentAlone(t *testing.T) {
 	}
 }
 
+// autogroup:tagged stands for an admitted tagged sidecar, as a source and as a destination: its accepts pass and its
+// denies fail where a grant takes the class. Its stand-in once carried no tag and no member, which is no admission, so
+// every such deny passed unseen.
+func TestAclPolicyTestRunStandsATaggedSidecarForAutogroupTagged(t *testing.T) {
+	policy := `{
+  "grants": [
+    { "src": ["autogroup:tagged"], "dst": ["sock:db"], "allow": ["dial"] },
+    { "src": ["autogroup:member"], "dst": ["autogroup:tagged"], "allow": ["dial"] },
+  ],
+  "tests": [
+    { "src": "autogroup:tagged", "accept": ["sock:db#dial"] },
+    { "src": "autogroup:tagged", "deny": ["sock:db#dial"] },
+    { "src": "autogroup:member", "accept": ["autogroup:tagged#dial"] },
+    { "src": "autogroup:member", "deny": ["autogroup:tagged#dial"] },
+  ],
+}`
+	report := newAclTestsWorld(t, policy).run(t)
+	want := []string{"tests[1].deny[0]: allowed by rule", "tests[3].deny[0]: allowed by rule"}
+	if got := aclTestsFailureLines(report); !slices.Equal(got, want) {
+		t.Errorf("failures %q", got)
+	}
+}
+
 // A random source that never repeats: each read the next counter, for ids a test can tell apart.
 type aclTestCounterReader struct {
 	next uint64
