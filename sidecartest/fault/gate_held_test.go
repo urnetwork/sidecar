@@ -153,10 +153,11 @@ func TestGateM10AndTheEarlierExitsReadEachHeldCaseAsTheHeldGate(t *testing.T) {
 	}
 }
 
-// The held gate names each case's tests where they run: the hold cases' T3 runs in server's model with every clause
-// their owners wrote beside the registered run, FS-87's and FS-99's in server's root package, FS-101's r-file case by
-// its thin test's own name, FS-86's card commits beside its card case, and the owners' tests of the mailbox cases and
-// FS-78's hold clause beside the convention's entries, which no builder answers; every other case keeps the convention.
+// The held gate names each case's tests where they run: the hold cases' T3 runs in server's model with what their
+// owners wrote beside the registered run that the clause registry does not hold, FS-87's and FS-99's in server's root
+// package, FS-101's r-file case by its thin test's own name, FS-86's card commits beside its card case, and the owners'
+// tests of the mailbox cases and FS-78's hold clause beside the convention's entries, which no builder answers; every
+// other case keeps the convention; and after each case's own tests, its registered clauses' (QD-1084).
 func TestGateHeldNamesEachCasesTestsWhereTheyRun(t *testing.T) {
 	catalog := DefaultCatalog()
 	data, err := GateFile(catalog)
@@ -181,17 +182,16 @@ func TestGateHeldNamesEachCasesTestsWhereTheyRun(t *testing.T) {
 		"FS-66's hold": {t2("TestFs66Hold"), t3("./model", "TestFs66HoldPlacedByApiOnT3")},
 		"FS-69": {
 			t2("TestFs69"),
-			t3("./model", "TestFs69HoldsPlacedByApiOnT3", "TestFs69HoldBetweenSweepDeletesOnT3", "TestFs69EraseUnderTheHoldOnT3", "TestFs6NowShredUnderAHoldOnT3"),
-			t2("TestFs69HoldBetweenSweepDeletes", "TestFs69EraseUnderTheHold", "TestFs6NowShredUnderAHold"),
+			t3("./model", "TestFs69HoldsPlacedByApiOnT3", "TestFs6ANowShredUnderAHoldOnT3"),
+			t2("TestFs6ANowShredUnderAHold"),
 		},
 		"FS-78's hold": {t2("TestFs78Hold"), t3("./sidecart3", "TestFs78HoldOnT3"), t2("TestFs78UnderAHoldTheKeysGoAtOnceAndTheCiphertextStays")},
 		"FS-92": {
 			t2("TestFs92"),
-			t3("./model", "TestFs92HoldsPlacedByApiOnT3", "TestFs92HoldBetweenVerifyAndDeleteOnT3", "TestFs92HoldBetweenDeletesOnT3", "TestFs92DeleteInFlightOnT3", "TestFs92SealedHoldAnswersEqualANoHoldTwinOnT3"),
+			t3("./model", "TestFs92HoldsPlacedByApiOnT3", "TestFs92SealedHoldAnswersEqualANoHoldTwinOnT3"),
 			t2(
-				"TestFs92HoldBetweenVerifyAndDelete", "TestFs92HoldBetweenDeletes", "TestFs92DeleteInFlight", "TestFs92HoldOutlastsTheDropTable",
-				"TestFs92SecondDropDuringTheHold", "TestFs92SecondDropListsAsItsTwin", "TestFs92SealedHoldAnswersEqualANoHoldTwin",
-				"TestFs92AHoldKeepsWhatTheDropWouldDeleteUntilItEnds", "TestFs92ASealedHoldsAnswersEqualANoHoldTwin",
+				"TestFs92SecondDropListsAsItsTwin", "TestFs92SealedHoldAnswersEqualANoHoldTwin", "TestFs92AHoldKeepsWhatTheDropWouldDeleteUntilItEnds",
+				"TestFs92ASealedHoldsAnswersEqualANoHoldTwin",
 			),
 		},
 		"FS-86's cards":    {t2("TestFs86Cards"), t3("./sidecart3", "TestFs86CardsOnT3"), t2("TestFs86CardsEvsCommits", "TestFs86CardsEvsCommitsFailPastTheirCeiling")},
@@ -226,6 +226,7 @@ func TestGateHeldNamesEachCasesTestsWhereTheyRun(t *testing.T) {
 		if !ok {
 			tests = gateConventionalTests(testCase)
 		}
+		tests = gateWithClausesForTest(testCase, tests)
 		if !reflect.DeepEqual(row.Tests, tests) {
 			t.Errorf("%s at held runs %s, want %s", testCase, gateTestsStringForTest(row.Tests), gateTestsStringForTest(tests))
 		}

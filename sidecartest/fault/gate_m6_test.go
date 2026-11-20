@@ -288,10 +288,16 @@ func TestGateM6NamesEachRowsTestsWhereTheyRun(t *testing.T) {
 			t.Errorf("M6 has no %s", testCase)
 			continue
 		}
-		if t2 := row.Tests[0]; t2.Repo != "sidecar" || t2.Package != "./sidecartest/fault" || t2.Tags != "sidecar_testhooks" || !slices.Contains(t2.Names, want.name) {
+		// its own tests, before its registered clauses'
+		own, ok := gateRowOwnTestsForTest(testCase, row)
+		if !ok || len(own) == 0 {
+			t.Errorf("%s at M6 runs %s, which does not end in its clauses' tests", testCase, gateTestsStringForTest(row.Tests))
+			continue
+		}
+		if t2 := own[0]; t2.Repo != "sidecar" || t2.Package != "./sidecartest/fault" || t2.Tags != "sidecar_testhooks" || !slices.Contains(t2.Names, want.name) {
 			t.Errorf("%s at M6 runs %+v on T2", testCase, t2)
 		}
-		t3 := row.Tests[1:]
+		t3 := own[1:]
 		if want.t3 {
 			if len(t3) != 1 || !reflect.DeepEqual(t3[0], &GateTest{Repo: "server", Package: "./sidecart3", Tags: gateT3Tags, Stores: true, Names: []string{GateT3TestName(testCase)}}) {
 				t.Errorf("%s at M6 runs %s on T3, not the convention's test alone", testCase, gateTestsStringForTest(t3))
@@ -339,7 +345,7 @@ func TestGateM6NamesEachRowsTestsWhereTheyRun(t *testing.T) {
 			continue
 		}
 		conventional += 1
-		if tests := gateConventionalTests(testCase); !reflect.DeepEqual(row.Tests, tests) {
+		if tests := gateConventionWithClausesForTest(testCase); !reflect.DeepEqual(row.Tests, tests) {
 			t.Errorf("%s at M6 runs %s, the convention %s", testCase, gateTestsStringForTest(row.Tests), gateTestsStringForTest(tests))
 		}
 	}
@@ -395,8 +401,25 @@ func TestGateM6ItemsSayWhatProductionOwes(t *testing.T) {
 	if row := find("FS-51 as QUOTA-M6-05 and DNS-M6-07 wrote it"); !slices.Contains(gateRowNamesForTest(row), "TestApplyNetworkDowngradesTeamLapse") {
 		t.Errorf("FS-51's item: %+v", row)
 	}
-	if row := find("what is written of the directory rows' T3 runs"); !slices.Contains(gateRowNamesForTest(row), "TestFs85AclRepoRequestOnT3") || !slices.Contains(gateRowNamesForTest(row), "TestFs99EvsScopeOnT3") {
+	if row := find("what is written of the directory rows' T3 runs"); !slices.Contains(gateRowNamesForTest(row), "TestFs99EvsScopeMutantExchangeMintingXAdminFailsOnT3") {
 		t.Errorf("the directory rows' T3 legs: %+v", row)
+	}
+	// the ACL legs and the evs scope run with their rows, registered clauses
+	for _, want := range []struct {
+		rowId    string
+		caseName string
+		names    []string
+	}{
+		{rowId: "FS-85", names: []string{"TestFs85AclRepoRequest", "TestFs85AclRepoRequestOnT3", "TestFs85AclCopiedDecisionOnT3"}},
+		{rowId: "FS-99", caseName: "entries", names: []string{"TestFs99EntriesEvsScope", "TestFs99EntriesEvsScopeOnT3"}},
+	} {
+		rows := GateRows(DefaultCatalog(), "M6")
+		index := slices.IndexFunc(rows, func(row *GateRow) bool { return row.Row == want.rowId && row.Case == want.caseName })
+		for _, name := range want.names {
+			if index < 0 || !slices.Contains(gateRowNamesForTest(rows[index]), name) {
+				t.Errorf("%s %q at M6 does not run its clause test %s", want.rowId, want.caseName, name)
+			}
+		}
 	}
 	if row := find("Team billing under FS-46's order"); !slices.Contains(gateRowNamesForTest(row), "TestTeamBillingFs46T3") {
 		t.Errorf("Team billing's item: %+v", row)

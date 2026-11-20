@@ -13,10 +13,10 @@ func TestFs1(t *testing.T) {
 	RunRow(t, "FS-1", "", nil)
 }
 
-func TestFs1ConcurrentRetriesCommitOnce(t *testing.T) {
-	RunClause(t, "FS-1", "concurrent retries", Fs1ConcurrentRetries, nil)
+func TestFs1ConcurrentRetries(t *testing.T) {
+	RunRegisteredClause(t, "FS-1", "concurrent retries", nil)
 }
 
 func TestFs1UnknownDeletesNothing(t *testing.T) {
-	RunClause(t, "FS-1", "unknown deletes nothing", Fs1UnknownDeletesNothing, nil)
+	RunRegisteredClause(t, "FS-1", "unknown deletes nothing", nil)
 }

@@ -163,7 +163,7 @@ func TestGateM2NamesEachT3TestWhereItRuns(t *testing.T) {
 		{rowId: "FS-5", packagePath: "./evshost", names: []string{"TestFs5OnT3"}},
 		{rowId: "FS-6", packagePath: "./evshost", names: []string{"TestFs6OnT3"}},
 		{rowId: "FS-7", packagePath: "./evshost", names: []string{"TestFs7OnT3"}},
-		{rowId: "FS-10", packagePath: "./evshost", names: []string{"TestFs10TwinOnT3", "TestFs10RollbackTwinOnT3"}},
+		{rowId: "FS-10", packagePath: "./evshost", names: []string{"TestFs10TwinOnT3"}},
 		{rowId: "FS-12", packagePath: "./evshost", names: []string{"TestFs12OnT3"}},
 		{rowId: "FS-57", packagePath: "./evshost", names: []string{"TestFs57OnT3"}},
 		{rowId: "FS-58", packagePath: "./evshost", names: []string{"TestFs58OnT3"}},
@@ -192,6 +192,7 @@ func TestGateM2NamesEachT3TestWhereItRuns(t *testing.T) {
 			wantTests = append(wantTests, &GateTest{Repo: "sidecar", Package: "./sidecartest/fault", Tags: "sidecar_testhooks", Names: []string{GateT2TestName(testCase)}})
 		}
 		wantTests = append(wantTests, &GateTest{Repo: "server", Package: want.packagePath, Tags: gateT3Tags, Stores: true, Names: want.names})
+		wantTests = gateWithClausesForTest(testCase, wantTests)
 		if !reflect.DeepEqual(row.Tests, wantTests) {
 			t.Errorf("%s at M2 runs %s, want %s", testCase, gateTestsStringForTest(row.Tests), gateTestsStringForTest(wantTests))
 		}
