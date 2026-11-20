@@ -17,10 +17,20 @@ package fault
 // governor, and is compared with what the governor published at every step: B, W, T, A1, A_U, A2, k, P0's forgiven
 // excess by kind and the P0 ratio that pages. It holds FI-14 (a) to (d) on the events themselves. Three mutants, of
 // the governor's T, of P0's issue and of the bucket's floor, each fail it.
+//
+// The main run is the row's registered case (Fs117Case; QD-1084), a schedule a step each for the run-up, every hour of
+// the storm, its end and every hour after it, and the run's clauses, which TestFs117 runs under every rule §22.8 gives
+// the row: the world and its oracle checked after every step as the world reads them (FI-14/fs117), FI-14's own
+// oracle binding being EVSB-M2-16's. The world runs on a fake clock of its own and touches no store and no barrier, so
+// the explorer's seeds each take the one order there is. The governor-killed and state-lost runs, the control day and
+// the mutants stay plain tests: a clause registers from a non-test file (register_clause.go), and this world is a test
+// file's.
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -202,10 +212,16 @@ func newBudgetWorld(t *testing.T, refillDwpd float64, pushes int) *budgetWorld {
 
 // newBudgetWorld with foldDeferred of each push's 37 deferred units its fold's, due a minute after it.
 func newBudgetWorldWithFolds(t *testing.T, refillDwpd float64, pushes int, foldDeferred int64) *budgetWorld {
+	world := newBudgetWorldOf(refillDwpd, pushes, foldDeferred)
+	world.t = t
+	return world
+}
+
+// newBudgetWorldWithFolds' world, for a schedule, which has no test of its own.
+func newBudgetWorldOf(refillDwpd float64, pushes int, foldDeferred int64) *budgetWorld {
 	settings := budgetWorldSettings(refillDwpd)
 	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
 	world := &budgetWorld{
-		t:            t,
 		settings:     settings,
 		clock:        clock,
 		pushesWanted: pushes,
@@ -690,24 +706,43 @@ func budgetCheckResume(after []*budgetInterval) error {
 // The storm and the day after it, with an optional fault in the storm's middle: the clauses every variant holds.
 // It reports what §22.8 asks the run to report.
 func budgetRunStormDwpd(t *testing.T, world *budgetWorld, stormSteps int, afterSteps int, fault func(world *budgetWorld)) (storm []*budgetInterval, after []*budgetInterval) {
-	world.run(200)
-	world.setP0(2 * budgetIntervalRefill)
-	world.mislabeledArrival = 60
-	stormStart := world.step
+	stormStart := budgetStartStorm(world)
 	storm = world.run(stormSteps / 2)
 	if fault != nil {
 		fault(world)
 	}
 	storm = append(storm, world.run(stormSteps-stormSteps/2)...)
+	shedInStorm := budgetEndStorm(world, stormSteps)
+	after = world.run(afterSteps)
+	for _, line := range budgetStormFindings(world, stormStart, shedInStorm, storm, after) {
+		t.Log(line)
+	}
+	return storm, after
+}
+
+// The storm's start, after 200 intervals of the ordinary load: every P0 kind at twice the refill, and the mislabeled
+// rotations arriving as P1. Returns the step it starts at.
+func budgetStartStorm(world *budgetWorld) int {
+	world.run(200)
+	world.setP0(2 * budgetIntervalRefill)
+	world.mislabeledArrival = 60
+	return world.step
+}
+
+// The storm's end after stormSteps intervals: what its run found as it ended, then P0 back at its ordinary rate.
+// Returns the pushes shed in it.
+func budgetEndStorm(world *budgetWorld, stormSteps int) int {
 	shedInStorm := world.pushesShed
 	world.stormMislabeledShed = world.mislabeledShed
 	world.stormDwpd = world.oracle.Dwpd(time.Duration(stormSteps)*world.settings.Interval, world.settings.DriveByteCount)
-
-	// the storm stops: P0 back at its ordinary rate
 	world.setP0(50)
 	world.mislabeledArrival = 0
-	after = world.run(afterSteps)
+	return shedInStorm
+}
 
+// What the storm and the day after it found, the ramp after the storm's evacuation backlog is spent written to world,
+// and the lines §22.8 asks the run to report.
+func budgetStormFindings(world *budgetWorld, stormStart int, shedInStorm int, storm []*budgetInterval, after []*budgetInterval) []string {
 	pageStep := -1
 	var maxAge time.Duration
 	for i, interval := range storm {
@@ -741,26 +776,26 @@ func budgetRunStormDwpd(t *testing.T, world *budgetWorld, stormSteps int, afterS
 	if 0 <= spentAt {
 		world.backlogSpent = time.Duration(spentAt) * world.settings.Interval
 	}
-	t.Logf("storm from step %d: P0 page after %s; forgiven excess by kind %v", stormStart, time.Duration(pageStep)*world.settings.Interval, world.oracle.ForgivenByteCounts())
-	t.Logf("busiest drive over the storm: %.2f DWPD; pushes shed in the storm %d; mislabeled P1 shed %d units",
-		world.stormDwpd, shedInStorm, world.stormMislabeledShed)
-	t.Logf("after the storm: evacuation's backlog spent in %s, then T at half of r after %s and 90%% after %s; oldest batch at most %s old",
-		world.backlogSpent, halfAt, ninetyAt, maxAge)
-	return storm, after
+	return []string{
+		fmt.Sprintf("storm from step %d: P0 page after %s; forgiven excess by kind %v", stormStart, time.Duration(pageStep)*world.settings.Interval, world.oracle.ForgivenByteCounts()),
+		fmt.Sprintf("busiest drive over the storm: %.2f DWPD; pushes shed in the storm %d; mislabeled P1 shed %d units",
+			world.stormDwpd, shedInStorm, world.stormMislabeledShed),
+		fmt.Sprintf("after the storm: evacuation's backlog spent in %s, then T at half of r after %s and 90%% after %s; oldest batch at most %s old",
+			world.backlogSpent, halfAt, ninetyAt, maxAge),
+	}
 }
 
-// FS-117's main run: 24 h of P0 at twice the refill, then 24 h after it.
-func TestFs117P0PastTheRefillForADayThenTheDayAfter(t *testing.T) {
-	world := newBudgetWorld(t, 0.768, 12)
-	storm, after := budgetRunStormDwpd(t, world, 24*budgetStepsPerHour, 24*budgetStepsPerHour, nil)
-	if err := world.err(); err != nil {
-		t.Fatal(err)
-	}
+// The main run's clauses over its storm and the day after it, beside the world's own: P0 takes the refill within the
+// hour the bucket lasts and nothing else issues after it, the page within the hour, P0's excess forgiven by kind and
+// never repaid, the mislabeled rotations shed, the ramp after the backlog, evacuation's batches past 26 h in the storm
+// and caught up after, and T following its factor of B. nil when every clause holds.
+func budgetMainRunErr(world *budgetWorld, storm []*budgetInterval, after []*budgetInterval) error {
+	found := []error{}
 	if err := budgetCheckStorm(storm); err != nil {
-		t.Error(err)
+		found = append(found, err)
 	}
 	if err := budgetCheckResume(after); err != nil {
-		t.Error(err)
+		found = append(found, err)
 	}
 	// P0 takes the refill within the hour the bucket lasts: after it nothing but P0 issues
 	emptied := -1
@@ -771,12 +806,13 @@ func TestFs117P0PastTheRefillForADayThenTheDayAfter(t *testing.T) {
 		}
 	}
 	if emptied < 0 || budgetStepsPerHour < emptied {
-		t.Errorf("the bucket emptied at storm interval %d, not within an hour", emptied)
+		found = append(found, fmt.Errorf("the bucket emptied at storm interval %d, not within an hour", emptied))
 	}
 	for i, interval := range storm[emptied+1:] {
 		if interval.pushesAdmitted != 0 || interval.fundedIssued != 0 || interval.unfundedIssued != 0 || interval.p1Debit != 0 {
-			t.Fatalf("storm interval %d past the empty bucket: %d pushes, %d P1, %d funded, %d unfunded", emptied+1+i,
-				interval.pushesAdmitted, interval.p1Debit, interval.fundedIssued, interval.unfundedIssued)
+			found = append(found, fmt.Errorf("storm interval %d past the empty bucket: %d pushes, %d P1, %d funded, %d unfunded", emptied+1+i,
+				interval.pushesAdmitted, interval.p1Debit, interval.fundedIssued, interval.unfundedIssued))
+			break
 		}
 	}
 	// the page: within an hour of P0 passing the refill
@@ -788,15 +824,15 @@ func TestFs117P0PastTheRefillForADayThenTheDayAfter(t *testing.T) {
 		}
 	}
 	if paged < 0 || budgetStepsPerHour < paged {
-		t.Errorf("the P0 page fired at storm interval %d, not within an hour", paged)
+		found = append(found, fmt.Errorf("the P0 page fired at storm interval %d, not within an hour", paged))
 	}
 	// P0 wrote past the budget and past the drive's rating while it lasted, forgiven by kind and never repaid
 	if world.stormDwpd <= 1 {
-		t.Errorf("the storm's last 24 h wrote %.2f DWPD, not past the drive's rating", world.stormDwpd)
+		found = append(found, fmt.Errorf("the storm's last 24 h wrote %.2f DWPD, not past the drive's rating", world.stormDwpd))
 	}
 	forgiven := world.oracle.ForgivenByteCounts()
 	if len(forgiven) != len(sidecar.WriteP0Kinds) {
-		t.Errorf("forgiven excess names %d kinds: %v", len(forgiven), forgiven)
+		found = append(found, fmt.Errorf("forgiven excess names %d kinds: %v", len(forgiven), forgiven))
 	}
 	var forgivenSum int64
 	for _, byteCount := range forgiven {
@@ -804,19 +840,19 @@ func TestFs117P0PastTheRefillForADayThenTheDayAfter(t *testing.T) {
 	}
 	// 24 h at twice the refill, less the hour the bucket held and the refill P0 took: about 23 h of r
 	if forgivenSum < 22*budgetStepsPerHour*budgetIntervalRefill || 24*budgetStepsPerHour*budgetIntervalRefill < forgivenSum {
-		t.Errorf("forgiven excess %d", forgivenSum)
+		found = append(found, fmt.Errorf("forgiven excess %d", forgivenSum))
 	}
 	if forgiven[string(sidecar.WriteP0KindRotation)] < forgiven[string(sidecar.WriteP0KindLifecycle)] {
-		t.Errorf("forgiven excess not in proportion to P0's bytes: %v", forgiven)
+		found = append(found, fmt.Errorf("forgiven excess not in proportion to P0's bytes: %v", forgiven))
 	}
 	// the mislabeled rotations were charged as P1 and shed with the pushes: none issued past the empty bucket
 	if world.stormMislabeledShed < int64(23*budgetStepsPerHour)*60 {
-		t.Errorf("mislabeled rotations shed %d units: some issued while P0 took the refill", world.stormMislabeledShed)
+		found = append(found, fmt.Errorf("mislabeled rotations shed %d units: some issued while P0 took the refill", world.stormMislabeledShed))
 	}
 	// with pushes then taking all of T, T reaches half of r ~18 minutes after the backlog is spent and 90% after
 	// ~78, a little sooner here since a whole push leaves part of T unspent (§11.13's gates row)
 	if world.rampHalf < 10*time.Minute || 30*time.Minute < world.rampHalf || world.rampNinety < 40*time.Minute || 110*time.Minute < world.rampNinety {
-		t.Errorf("T at half of r %s after the backlog was spent and 90%% after %s", world.rampHalf, world.rampNinety)
+		found = append(found, fmt.Errorf("T at half of r %s after the backlog was spent and 90%% after %s", world.rampHalf, world.rampNinety))
 	}
 	// evacuation stopped with every class but P0, so batches passed 26 h, and it caught up after
 	var stormAge, endAge time.Duration
@@ -825,19 +861,106 @@ func TestFs117P0PastTheRefillForADayThenTheDayAfter(t *testing.T) {
 	}
 	endAge = after[len(after)-1].oldestBatchAge
 	if stormAge <= 26*time.Hour {
-		t.Errorf("the oldest batch reached %s in the storm: evacuation did not stop", stormAge)
+		found = append(found, fmt.Errorf("the oldest batch reached %s in the storm: evacuation did not stop", stormAge))
 	}
 	if 26*time.Hour < endAge {
-		t.Errorf("the oldest batch is still %s old a day after the storm", endAge)
+		found = append(found, fmt.Errorf("the oldest batch is still %s old a day after the storm", endAge))
 	}
 	// T follows its factor of B each interval after the storm: it only rises while pushes take all of it
 	for i := 2; i < len(after); i += 1 {
 		if after[i].allowance.BucketByteCount < budgetDepth/2 && after[i].allowance.TotalByteCount+1 < after[i-1].allowance.TotalByteCount && after[i-1].fundedIssued == 0 && after[i].fundedIssued == 0 {
-			t.Fatalf("T fell from %d to %d at interval %d after the storm, with B at %d", after[i-1].allowance.TotalByteCount, after[i].allowance.TotalByteCount, i, after[i].allowance.BucketByteCount)
+			found = append(found, fmt.Errorf("T fell from %d to %d at interval %d after the storm, with B at %d", after[i-1].allowance.TotalByteCount, after[i].allowance.TotalByteCount, i, after[i].allowance.BucketByteCount))
+			break
 		}
 	}
 	if last := after[len(after)-1].allowance; last.TotalByteCount < budgetIntervalRefill*9/10-50 {
-		t.Errorf("T is %d a day after the storm", last.TotalByteCount)
+		found = append(found, fmt.Errorf("T is %d a day after the storm", last.TotalByteCount))
+	}
+	return errors.Join(found...)
+}
+
+// FS-117's main run: 24 h of P0 at twice the refill, then 24 h after it, reporting what §22.8 asks it to.
+func TestFs117P0PastTheRefillForADayThenTheDayAfter(t *testing.T) {
+	world := newBudgetWorld(t, 0.768, 12)
+	storm, after := budgetRunStormDwpd(t, world, 24*budgetStepsPerHour, 24*budgetStepsPerHour, nil)
+	if err := world.err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := budgetMainRunErr(world, storm, after); err != nil {
+		t.Error(err)
+	}
+}
+
+// The main run, FS-117's registered case: the run-up, each hour of the storm, its end, each hour after it, and the
+// run's clauses, with the world and its oracle checked after every step.
+var Fs117Case = Register("FS-117", "", []Tier{TierT2}, fs117MainRun(nil))
+
+// The main run's builder, mutate applied to each run's world before the run-up where not nil.
+func fs117MainRun(mutate func(world *budgetWorld)) Builder {
+	return func(net *Net) *Schedule {
+		var world *budgetWorld
+		var storm, after []*budgetInterval
+		stormStart, shedInStorm := 0, 0
+		governor := func(action func() error) *Step {
+			return &Step{Actor: "governor", Action: func(ctx context.Context, net *Net) error { return action() }}
+		}
+		steps := []*Step{governor(func() error {
+			world = newBudgetWorldOf(0.768, 12, 0)
+			if mutate != nil {
+				mutate(world)
+			}
+			stormStart = budgetStartStorm(world)
+			return nil
+		})}
+		for range 24 {
+			steps = append(steps, governor(func() error {
+				storm = append(storm, world.run(budgetStepsPerHour)...)
+				return nil
+			}))
+		}
+		steps = append(steps, governor(func() error {
+			shedInStorm = budgetEndStorm(world, len(storm))
+			return nil
+		}))
+		for range 24 {
+			steps = append(steps, governor(func() error {
+				after = append(after, world.run(budgetStepsPerHour)...)
+				return nil
+			}))
+		}
+		steps = append(steps, governor(func() error {
+			budgetStormFindings(world, stormStart, shedInStorm, storm, after)
+			return budgetMainRunErr(world, storm, after)
+		}))
+		return &Schedule{
+			Steps: steps,
+			Check: []Invariant{NewInvariant("FI-14/fs117", func(ctx context.Context, oracle *Oracle) error {
+				if world == nil {
+					return nil
+				}
+				return world.err()
+			})},
+		}
+	}
+}
+
+func TestFs117(t *testing.T) {
+	RunRow(t, "FS-117", "", nil)
+}
+
+// The registered case fails what its world breaks: the mutant flooring T at a fifth of the refill while B is empty
+// fails the run, by the oracle after a storm step or by the run's clauses.
+func TestFs117CaseFailsAMutant(t *testing.T) {
+	net := sidecartest.NewNet(t.Context(), nil)
+	defer net.Close()
+	schedule := fs117MainRun(func(world *budgetWorld) { world.mutantFloorT = true })(net)
+	schedule.Id = "FS-117 T floored"
+	result := Run(t.Context(), schedule, net)
+	if result.Err == nil {
+		t.Fatalf("the mutant passed: %s", result)
+	}
+	if !strings.Contains(result.Err.Error(), "FI-14/fs117") && !strings.Contains(result.Err.Error(), "storm") {
+		t.Errorf("the mutant failed elsewhere: %v", result.Err)
 	}
 }
 
