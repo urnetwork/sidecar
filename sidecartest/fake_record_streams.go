@@ -875,19 +875,25 @@ func (self *fakeRecordStreamsClient) Erase(ctx context.Context, repoId sidecar.I
 }
 
 // Whether erase is a completion ERASE evs takes (QD-1132): it says complete, every key it names an earlier ERASE of
-// its erasure destroyed, and no completion ERASE ended that erasure before.
+// its erasure destroyed, the erasure's newest ERASE does not say complete already, and no completion ERASE ended that
+// erasure before. A racing runner's complete ERASE of keys its twin's complete ERASE took stays NOTHING_TO_ERASE.
 func (self *fakeRecordRepo) completionWithLock(erase *sidecar.RecordStreamErase) bool {
 	if !erase.Complete || self.completedErasureIds[erase.ErasureId] {
 		return false
 	}
 	destroyed := map[sidecar.RecordSlotKey]bool{}
+	complete := false
 	for _, erasure := range self.erasures {
 		if erasure.ErasureId != erase.ErasureId {
 			continue
 		}
+		complete = erasure.Complete
 		for _, key := range erasure.Keys {
 			destroyed[*key] = true
 		}
+	}
+	if complete {
+		return false
 	}
 	for _, key := range erase.Keys {
 		if !destroyed[*key] {

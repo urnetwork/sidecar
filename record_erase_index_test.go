@@ -272,7 +272,7 @@ func TestRecordEraseOrder(t *testing.T) {
 			t.Fatalf("an ERASE before the CUT said complete, or named another erasure: %+v", erase)
 		}
 	}
-	if completion := erases[2]; !completion.Complete || completion.ErasureId != result.ErasureId || !testEraseIndexSameKeys(completion.Keys, erases[0].Keys) {
+	if completion := erases[2]; !completion.Complete || completion.ErasureId != result.ErasureId || !testEraseIndexSameKeys(completion.Keys, erases[0].Keys[:1]) {
 		t.Fatalf("the completion ERASE: %+v", completion)
 	}
 	if _, complete := index.Erases(result.ErasureId); !complete || !result.Index.Completed {
@@ -652,7 +652,7 @@ func TestRecordEraseLateCopy(t *testing.T) {
 	if len(erases) != 3 || erases[1].ErasureId != result.ErasureId || erases[1].Complete || len(erases[1].Keys) != 1 {
 		t.Fatalf("the late copy's ERASE: %d ERASEs", len(erases))
 	}
-	if completion := erases[2]; !completion.Complete || !testEraseIndexSameKeys(completion.Keys, erases[1].Keys) || !lates[0].Index.Completed {
+	if completion := erases[2]; !completion.Complete || !testEraseIndexSameKeys(completion.Keys, erases[0].Keys[:1]) || !lates[0].Index.Completed {
 		t.Fatal("no completion ERASE ended the erasure after its late copy's rewrite")
 	}
 	if state := lates[0].Index.Erasure; state == nil || state.State == sidecar.SidecarErasureDone {

@@ -1129,6 +1129,22 @@ func (self *RecordEraser) runSteps(ctx context.Context, journal *recordEraseJour
 	return result, nil
 }
 
+// A key an ERASE of erasureId destroyed, as the log's erasure ref holds it: what a completion ERASE names. Nil where
+// no ERASE of it names one.
+func (self *RecordEraser) erasedKeyOf(ctx context.Context, logId Id, erasureId Id) (*RecordSlotKey, error) {
+	erasures, err := self.record.writer.boundStreams().ReadErasures(ctx, logId, 0)
+	if err != nil {
+		return nil, err
+	}
+	for _, erasure := range erasures {
+		if erasure.ErasureId == erasureId && 0 < len(erasure.Keys) {
+			key := *erasure.Keys[0]
+			return &key, nil
+		}
+	}
+	return nil, nil
+}
+
 // Step 5: each of cards folded at its stream's head as this device's reader reads it, without what the log's ERASEs
 // and the set at the push's base say is erased at its epoch, and entered in this device's own index head.
 func (self *RecordEraser) reenter(ctx context.Context, logId Id, index RecordEraseIndex, erasureId Id, cards []*recordEraseJournalCard) (*IndexReenterResult, error) {
@@ -1210,8 +1226,13 @@ func (self *RecordEraser) indexParts(ctx context.Context, journal *recordEraseJo
 	if rewritten.Erasure != nil && rewritten.Erasure.State == SidecarErasureWaiting {
 		owe(rewritten.Erasure.NextTry)
 	}
-	if recordEraseRewriteEndedUnsaid(rewritten) && 0 < len(journal.Erases) {
-		// no file held a listed version, so no ERASE with a key was left to say complete (QD-1132)
+	if recordEraseRewriteEndedUnsaid(rewritten) {
+		// no file held a listed version, so no ERASE with a key was left to say complete (QD-1132): a completion ERASE
+		// names a key an ERASE of this erasure destroyed, as evs's erasure ref holds it
+		key, err := self.erasedKeyOf(ctx, logId, journal.ErasureId)
+		if err != nil || key == nil {
+			return owed, err
+		}
 		if journal.CompletionPushId == (Id{}) {
 			pushId, err := writer.drawId()
 			if err != nil {
@@ -1223,7 +1244,7 @@ func (self *RecordEraser) indexParts(ctx context.Context, journal *recordEraseJo
 			}
 		}
 		completed, err := self.sendErases(ctx, logId, journal.ErasureId, note, []*recordEraseJournalPush{{
-			PushId: journal.CompletionPushId, Keys: journal.Erases[0].Keys, Complete: true,
+			PushId: journal.CompletionPushId, Keys: []*RecordSlotKey{key}, Complete: true,
 		}})
 		if err != nil {
 			return owed, err
