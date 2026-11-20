@@ -4,7 +4,8 @@
 // stores), and T6, whose run is the main test environment's.
 //
 // And what MAIL-M8-10 composes for BS1's receive-only launch: S10's receive-only half on T2 and, the same builder
-// (mailworld's S10ReceiveOnly) on server's stores, on T3. Its replying half is MAIL-M9-06's.
+// (mailworld's S10ReceiveOnly) on server's stores, on T3; and MAIL-M9-06's replying half (mailworld's S10Replying) on
+// both tiers, so S10 is whole on T2 and T3, T6 being the main test environment's.
 
 package sidecartest
 
@@ -42,6 +43,16 @@ var (
 	// evs's and the router's stores real, and the zone in Postgres through model's writes and dnshost.Store
 	_ = registerMailScenario("S10", ScenarioTierT3, &ScenarioTest{Repo: "server", Package: mailRegistrationsServerT3, Name: "TestScenarioS10ReceiveOnlyOnT3", Tags: mailRegistrationsT3Scenario},
 		"burned-label-550-no-dns-change", "receive-only-burner-creates-no-child")
+
+	// S10's replying half on T2 (mail_m9_test.go, MAIL-M9-06): a replying burner's first selector keeping its <blabel>
+	// MX and A, its burn refused at RCPT with no DNS change, and its last selector restoring the wildcard-only state,
+	// through MailClient's calls and the laptop's sender, with POST /smtp/dkim-keys's write over the DNS harness's store
+	_ = registerMailScenario("S10", ScenarioTierT2, &ScenarioTest{Repo: "sidecar", Package: mailRegistrationsSidecar, Name: "TestScenarioS10ReplyingBurner", Tags: mailRegistrationsTestHooks},
+		"burned-label-550-no-dns-change", "first-selector-keeps-blabel-mx-and-a", "last-selector-restores-wildcard-only")
+	// and on T3 (server's sidecart3/scenario_mail_s10_t3_test.go): the same builder, the selectors written through
+	// model.PublishSmtpDkimKeys and taken out by model.ExpireSmtpDkimKeys into the zone in Postgres
+	_ = registerMailScenario("S10", ScenarioTierT3, &ScenarioTest{Repo: "server", Package: mailRegistrationsServerT3, Name: "TestScenarioS10ReplyingOnT3", Tags: mailRegistrationsT3Scenario},
+		"burned-label-550-no-dns-change", "first-selector-keeps-blabel-mx-and-a", "last-selector-restores-wildcard-only")
 
 	// strict mode (FS-33; MAIL-M7-24's mechanism): refused URnetwork-zone splices and the claim only from a sealed
 	// strict_chain, on MxWorld's signed zones and through the receiver's admission and session
