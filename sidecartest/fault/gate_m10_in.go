@@ -177,11 +177,13 @@ type gateModelledFile struct {
 	Models []*gateModelledModel `yaml:"models"`
 }
 
+// One model by its spec, with its recorded runs, newest last.
 type gateModelledModel struct {
 	Spec string             `yaml:"spec"`
 	Runs []*gateModelledRun `yaml:"runs"`
 }
 
+// One recorded run: its mode, its result, and the digest of the sources it ran at, which it stands at alone.
 type gateModelledRun struct {
 	Mode          string `yaml:"mode"`
 	Result        string `yaml:"result"`
