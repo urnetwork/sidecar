@@ -30,11 +30,21 @@
 //
 // and that it did not issue while §19.11's drop mode read observe throughout its step; a cancelled, refused or
 // observed drop deletes nothing. At every check besides: no version first found after a drop's DROP commits naming a
-// version it lists through its reuse list, but one whose push reached evs before the DROP's head write and whose own
-// head write came within §11.8's 5 s of it, which was validated before the fence and reran nothing at step 7
-// (QD-1105; reuseInsideTheWindow); and an object a drop's DELETE removed, once a check found it gone, never
-// comes back, except where §19.10's close report names the drop as re-seeded from a stale mirror (CloseReport.Drops),
-// which FI-5's dropped clause reads too.
+// version it lists through its reuse list unless its push was validated against a head of the source ref below the
+// DROP, the fence being the head step 4 read (QD-1146), which the oracle reads two ways:
+//
+//	window   its push reached evs before the DROP's head write and its own head write came within §11.8's 5 s of
+//	         the DROP's answer, so it was validated before the fence and reran nothing at step 7 (QD-1105;
+//	         reuseInsideTheWindow)
+//	cached   its push read the source ref's head from the head cache, which the Net records beside the blob history:
+//	         a get of that ref's entry after the push arrived answered a head below the DROP, written less than
+//	         §11.9's 10 min before that read, and its own head write came within the 5 s of it (QD-701's cached reuse
+//	         read, FS-91 (c); reuseOnACachedHead)
+//
+// so a push validated on a head showing the DROP, the cluster's or the cache's, that commits anyway is still a
+// violation; and an object a drop's DELETE removed, once a check found it gone, never comes back, except where
+// §19.10's close report names the drop as re-seeded from a stale mirror (CloseReport.Drops), which FI-5's dropped
+// clause reads too.
 //
 // Readings and gaps, in TEST-M10-01's report: the horizon is the one at the DELETE, not the one the job's round read,
 // which can only be later, so a job that read its horizon too early is not caught by it; a base or rename source
@@ -49,11 +59,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"slices"
 	"strings"
 	"time"
+
+	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
@@ -80,8 +93,13 @@ type Fi27Settings struct {
 	// How old a deleter's read of hold/ may be: §11.13's 5 s.
 	HoldReadAge time.Duration
 	// How long after a push's validation its step 7 commits it with no rerun of 5h: §11.8's 5 s. A reuse copy
-	// validated before a DROP committed may commit that long after it (QD-1105).
+	// validated before a DROP committed may commit that long after it (QD-1105), and one validated on a cached head
+	// below the DROP that long after its read of it (QD-1146).
 	StepSevenWindow time.Duration
+	// How long after its write a head cache entry serves: §11.9's 10 min (owner decision 397), from the earliest of
+	// its head's write and the entry's put (DESIGN-DETAILS 10.2.7's cache stamp). A reuse copy validated on a cached
+	// head below its DROP is let through only on an entry younger than this when the push read it (QD-1146).
+	HeadCacheServeAge time.Duration
 }
 
 func DefaultFi27Settings() *Fi27Settings {
@@ -92,6 +110,7 @@ func DefaultFi27Settings() *Fi27Settings {
 		UnmodifiedSlack:     sidecar.BlobUnmodifiedSlack,
 		HoldReadAge:         5 * time.Second,
 		StepSevenWindow:     5 * time.Second,
+		HeadCacheServeAge:   10 * time.Minute,
 	}
 }
 
@@ -494,9 +513,20 @@ func fi27NamedAnew(namers []*evsNamer, deletion *evsDeletion) bool {
 }
 
 // No version a check first finds after a drop's DROP was first found commits naming a version the drop lists in its
-// reuse list (§11.7's fence), but one §11.8's window lets commit (reuseInsideTheWindow).
+// reuse list (§11.7's fence), but one validated against a head of the source ref below the DROP: one §11.8's window
+// lets commit (reuseInsideTheWindow), or one validated on a cached head below it (reuseOnACachedHead).
 func (self *evsFormat2Check) fencesHold(settings *Fi27Settings) []error {
 	errs := []error{}
+	// the Net's record of the head cache, read once, and only for a copy the window does not let through
+	var cacheHistory []*sidecartest.HeadCacheHistoryEntry
+	cacheHistoryRead := false
+	cached := func() []*sidecartest.HeadCacheHistoryEntry {
+		if !cacheHistoryRead {
+			cacheHistory = self.oracle.Net.HeadCacheHistory()
+			cacheHistoryRead = true
+		}
+		return cacheHistory
+	}
 	for _, repo := range self.repos {
 		drops, _ := self.dropsOf(repo)
 		if len(drops) == 0 {
@@ -531,9 +561,13 @@ func (self *evsFormat2Check) fencesHold(settings *Fi27Settings) []error {
 						continue
 					}
 					listedVersion := drop.listsPathVersion(repo, reuse)
-					if listedVersion != 0 && !self.reuseInsideTheWindow(repo, found.ref.refId, found.version, drop, settings) {
-						errs = append(errs, fmt.Errorf("repo %s: version %d of ref %s, first found after %s, reuses version %d of %s, which the drop lists: no version commits naming a listed version as a reuse source after its fence", repo.store.repoId, found.version.version, found.ref.refId, drop, listedVersion, reuse.TokenPath.KeyString()))
+					if listedVersion == 0 || self.reuseInsideTheWindow(repo, found.ref.refId, found.version, drop, settings) {
+						continue
 					}
+					if self.reuseOnACachedHead(repo, found.ref.refId, found.version, drop, cached(), settings) {
+						continue
+					}
+					errs = append(errs, fmt.Errorf("repo %s: version %d of ref %s, first found after %s, reuses version %d of %s, which the drop lists, and no head of its ref below the DROP validated it, read from the cluster before the DROP's head write or from the cache: no version commits naming a listed version as a reuse source after its fence", repo.store.repoId, found.version.version, found.ref.refId, drop, listedVersion, reuse.TokenPath.KeyString()))
 				}
 			}
 		}
@@ -557,21 +591,209 @@ func (self *evsFormat2Check) reuseInsideTheWindow(repo *evsFormat2Repo, refId si
 	if copyWrite.Invoked.After(dropWrite.Returned.Add(settings.StepSevenWindow)) {
 		return false
 	}
+	for _, attempt := range self.committedAttempts(version) {
+		if attempt.StoreArrival <= dropIndex {
+			return true
+		}
+	}
+	return false
+}
+
+// The ledger's attempts of version's push, the push id its statement names, that answered it committed at its
+// version, each of a known store arrival.
+func (self *evsFormat2Check) committedAttempts(version *evsStoreVersion) []*Operation {
 	pushId, err := sidecar.IdFromBytes(version.statement.Push.GetPushId())
 	if err != nil {
-		return false
+		return nil
 	}
+	attempts := []*Operation{}
 	for _, push := range LedgerOf(self.oracle.Net).Pushes() {
 		if push.PushId != pushId {
 			continue
 		}
 		for _, attempt := range push.Attempts {
-			if attempt.Outcome == OutcomeCommitted && attempt.Version == version.version && 0 < attempt.StoreArrival && attempt.StoreArrival <= dropIndex {
-				return true
+			if attempt.Outcome == OutcomeCommitted && attempt.Version == version.version && 0 < attempt.StoreArrival {
+				attempts = append(attempts, attempt)
 			}
 		}
 	}
+	return attempts
+}
+
+// Whether version of refId, a reuse of a version drop lists that a check first found after the DROP, is one whose
+// push was validated against a head of the source ref below the DROP that the head cache served (QD-1146; §11.7's
+// fence row, §11.9's cache row, QD-701): §11.8's step 4 may take a reuse source's head from the cache, which serves
+// it for 10 min after that head's own write, so a copy validated after the DROP committed against a cached head from
+// before it commits, as FS-91 (c) has it, and the job's mark, waiting DESIGN-DETAILS 10.2.7's cite bound past the
+// DROP, finds it and keeps what it names. For some attempt the ledger holds that answered it committed, cacheHistory,
+// the Net's record of the cache, holds a read that lets it through (fi27CachedRead). A push validated on a head
+// showing the DROP, from the cluster or from the cache, made no such read, so one that commits anyway is still a
+// violation, and so is one validated on an entry past the cache's age. A push the ledger does not hold and a head
+// write whose ETag no check read are not let through.
+func (self *evsFormat2Check) reuseOnACachedHead(repo *evsFormat2Repo, refId sidecar.Id, version *evsStoreVersion, drop *fi27Drop, cacheHistory []*sidecartest.HeadCacheHistoryEntry, settings *Fi27Settings) bool {
+	copyIndex, copyWrite := self.headWrite(repo, refId, version.version)
+	if copyWrite == nil {
+		return false
+	}
+	for _, attempt := range self.committedAttempts(version) {
+		terms := &fi27CachedReadTerms{
+			instance:     attempt.Instance,
+			cacheArrival: attempt.CacheArrival,
+			cacheKey:     fi27HeadCacheKey(repo.store.repoId),
+			cacheField:   sidecar.EvsKeyId(drop.refId),
+			clusterId:    repo.store.clusterId,
+			headKey:      evsOracleRepoPrefix("head/", repo.store.repoId) + sidecar.EvsKeyId(drop.refId),
+			dropVersion:  drop.version,
+			copyIndex:    copyIndex,
+			copyWrite:    copyWrite,
+		}
+		if fi27CachedRead(cacheHistory, self.history, terms, settings) != nil {
+			return true
+		}
+	}
 	return false
+}
+
+// A repo's head cache key as §11.9's cache row names it, {evsh_<repo_id>}, the id as evs's keys spell it.
+func fi27HeadCacheKey(repoId sidecar.Id) string {
+	return "{evsh_" + sidecar.EvsKeyId(repoId) + "}"
+}
+
+// What a copy's cached read is looked for by (fi27CachedRead).
+type fi27CachedReadTerms struct {
+	// the instance of the attempt that committed the copy, and how many head cache requests the Net's record held
+	// when that attempt arrived
+	instance     string
+	cacheArrival int
+	// the source ref's entry: the repo's {evsh_} key and the ref's field
+	cacheKey   string
+	cacheField string
+	// the source ref's head on the repo's metadata cluster
+	clusterId string
+	headKey   string
+	// the DROP's version of the source ref
+	dropVersion uint64
+	// the copy's head write and its index in the blob history
+	copyIndex int
+	copyWrite *sidecartest.BlobHistoryEntry
+}
+
+// The read in cacheHistory that lets a copy through by QD-1146's three conditions, nil for none, with blobHistory the
+// history the cached head's own write is found in:
+//
+//	read     a get of the source ref's entry by the copy's instance, called once the attempt had arrived (an index at
+//	         or past cacheArrival) and answered before the copy's head write was issued, that answered an entry whose
+//	         head, at the entry's own version, is below the DROP's version
+//	age      that entry was written less than HeadCacheServeAge before the get's answer (fi27CacheEntryWritten)
+//	window   the copy's head write was issued within StepSevenWindow of the get's call, as §11.8's step 7 issues only
+//	         within 5 s of step 4's reads
+//
+// The entry is decoded with the format's own decoders and none of evs's behaviour, as every oracle reads (fi1.go).
+func fi27CachedRead(cacheHistory []*sidecartest.HeadCacheHistoryEntry, blobHistory []*sidecartest.BlobHistoryEntry, terms *fi27CachedReadTerms, settings *Fi27Settings) *sidecartest.HeadCacheHistoryEntry {
+	for index := max(terms.cacheArrival, 0); index < len(cacheHistory); index += 1 {
+		read := cacheHistory[index]
+		if read.Op != sidecartest.HeadCacheHistoryGet || read.Outcome != sidecartest.HeadCacheOutcomeOk {
+			continue
+		}
+		if read.Actor != terms.instance || read.Key != terms.cacheKey || read.Field != terms.cacheField {
+			continue
+		}
+		if terms.copyIndex < read.StoreReturned {
+			// answered after the copy's head write was issued
+			continue
+		}
+		entry, ok := fi27ParseCacheEntry(read.Entry)
+		if !ok || entry.version != entry.head.GetVersion() || terms.dropVersion <= entry.version {
+			continue
+		}
+		written, ok := fi27CacheEntryWritten(cacheHistory, blobHistory, read, entry, terms)
+		if !ok || !read.Returned.Before(written.Add(settings.HeadCacheServeAge)) {
+			continue
+		}
+		if terms.copyWrite.Invoked.After(read.Invoked.Add(settings.StepSevenWindow)) {
+			continue
+		}
+		return read
+	}
+	return nil
+}
+
+// A head cache entry as FI-27 reads it: its version and ETag fields and its head.
+type fi27CacheEntry struct {
+	version uint64
+	etag    string
+	head    *protocol.EvsHead
+}
+
+// The entry encoded holds, in evsservice/head_cache.go's layout: version, push sequence and cached_ms, 8 bytes each,
+// the ETag's length, 2, all big-endian, then the ETag and the head's bytes. false for bytes too short for their
+// lengths or a head that does not parse. cached_ms, the cache's own stamp, is not read: the entry's age is the
+// oracle's to work out (fi27CacheEntryWritten).
+func fi27ParseCacheEntry(encoded []byte) (*fi27CacheEntry, bool) {
+	// the fixed part's byte count: the three 8-byte fields and the ETag's length
+	fixedByteCount := 8 + 8 + 8 + 2
+	if len(encoded) < fixedByteCount {
+		return nil, false
+	}
+	etagByteCount := int(binary.BigEndian.Uint16(encoded[fixedByteCount-2 : fixedByteCount]))
+	if len(encoded) < fixedByteCount+etagByteCount {
+		return nil, false
+	}
+	head := &protocol.EvsHead{}
+	if err := proto.Unmarshal(encoded[fixedByteCount+etagByteCount:], head); err != nil {
+		return nil, false
+	}
+	return &fi27CacheEntry{
+		version: binary.BigEndian.Uint64(encoded[0:8]),
+		etag:    string(encoded[fixedByteCount : fixedByteCount+etagByteCount]),
+		head:    head,
+	}, true
+}
+
+// When the entry read answered was written, DESIGN-DETAILS 10.2.7's cache stamp read from outside: the earliest of its
+// head's write, the blob history's conditional PUT of the source ref's head that wrote the entry's ETag; the head's
+// own written_ms; and the call of the first put the record holds of the entry's bytes, so a put that came late serves
+// no longer, and a head with no written_ms never. false where the history holds no such head write, so the entry
+// names no head the store was given, or the record no such put, so it came from no write the record holds.
+func fi27CacheEntryWritten(cacheHistory []*sidecartest.HeadCacheHistoryEntry, blobHistory []*sidecartest.BlobHistoryEntry, read *sidecartest.HeadCacheHistoryEntry, entry *fi27CacheEntry, terms *fi27CachedReadTerms) (time.Time, bool) {
+	var headWrite *sidecartest.BlobHistoryEntry
+	for _, blob := range blobHistory {
+		if blob.ClusterId != terms.clusterId || blob.Key != terms.headKey || blob.WriteEtag != entry.etag {
+			continue
+		}
+		if blob.Op != sidecartest.BlobHistoryPutIfNoneMatch && blob.Op != sidecartest.BlobHistoryPutIfMatch {
+			continue
+		}
+		// a write that may have taken effect
+		if blob.Outcome == sidecartest.BlobOutcomeOk || blob.Outcome == sidecartest.BlobOutcomeUnknown || blob.Outcome == "" {
+			headWrite = blob
+			break
+		}
+	}
+	if headWrite == nil {
+		return time.Time{}, false
+	}
+	var put *sidecartest.HeadCacheHistoryEntry
+	for _, request := range cacheHistory {
+		if request.Op != sidecartest.HeadCacheHistoryPut || request.Outcome == sidecartest.HeadCacheOutcomeKept {
+			continue
+		}
+		if request.Key == read.Key && request.Field == read.Field && bytes.Equal(request.Entry, read.Entry) {
+			put = request
+			break
+		}
+	}
+	if put == nil {
+		return time.Time{}, false
+	}
+	written := headWrite.Invoked
+	if stamped := time.UnixMilli(entry.head.GetWrittenMs()); stamped.Before(written) {
+		written = stamped
+	}
+	if put.Invoked.Before(written) {
+		written = put.Invoked
+	}
+	return written, true
 }
 
 // The head write that committed version of refId and its index in the blob history: the answered conditional PUT of

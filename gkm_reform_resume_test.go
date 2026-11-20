@@ -9,7 +9,7 @@
 // involved, a's next sync rotates to generation 3 with every delivery, the RecoveryWrap of the member who reads by its
 // code among them, and adds every reader, who return by their Welcomes. While gkm refuses the rotation's writes, repo/
 // still deleted, a's syncs try at most once a ReformResumeInterval, a restart included, and a rotation draft a refused
-// try left is drawn afresh once it is older than ReformDraftMaxAge, as is one a rotation of the old group left. A sync
+// try left is drawn afresh once it is older than RotateDraftMaxAge, as is one a rotation of the old group left. A sync
 // drafts no re-form: none where no record stands, none of a record cut short before its ladder stood. And a live repo's
 // groups step whose second call comes after a sync finished its re-form drafts no second one, nor does the step run
 // again after the group is finished.
@@ -447,7 +447,7 @@ func TestARepoReseededAsDeletedFinishesItsGroupAtTheSyncAfterItsRestore(t *testi
 // the vault restored, so its next sync tries the rotation, and gkm refuses its first write, the staged RecoveryWrap of
 // the member who reads by its code, while repo/ reads deleted (every other reader is a member device, which returns by
 // the Adds rather than a wrap); a's syncs try again only a ReformResumeInterval after the last try, a restart over the
-// same keychain included, each refused try's draft drawn afresh at the next, past ReformDraftMaxAge. Once the
+// same keychain included, each refused try's draft drawn afresh at the next, past RotateDraftMaxAge. Once the
 // reconciler has taken repo/ to active, a's first sync past the interval finishes the group with a generation drawn at
 // that try, and every member returns, a having sent evs nothing since its groups step.
 func TestARepoTheReconcilerRestoresFinishesItsGroupAtTheReformersSyncsWithinTheirInterval(t *testing.T) {
@@ -519,7 +519,8 @@ func TestARepoTheReconcilerRestoresFinishesItsGroupAtTheReformersSyncsWithinThei
 // its draft carries no leaf wrap (R5), leaves a draft that names the old group and chains on generation 2; the
 // re-form's rotation, at a's sync, claims no such draft in the new group but draws afresh, so generation 3 names the
 // new group, and every member still reading takes it. Here the draft's delivery count, made on the old tree, already
-// differs from the new tree's; finishReformInFlow drops one naming another group whatever its count.
+// differs from the new tree's; rotateDraft drops one naming another group whatever its count (QD-1147), which
+// gkm_rotate_draft_test.go shows where the counts match.
 func TestAReformDrawsItsRotationAfreshOverADraftOfTheOldGroup(t *testing.T) {
 	world := newGkmReformWorld(t)
 	a := world.flows[world.a]

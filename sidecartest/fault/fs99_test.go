@@ -601,8 +601,8 @@ func TestFs99MutantEvsWithoutTheAdminScopeRuleFails(t *testing.T) {
 
 // FS-99's evs clause on T2 (fs99_evs.go): the directory's ERASE, ?closure=1 upload and slots/delete below admin, on
 // the real engine and client, before a preservation hold and under it.
-func TestFs99EvsScope(t *testing.T) {
-	RunClause(t, "FS-99", "evs scope", Fs99EvsScope, nil)
+func TestFs99EntriesEvsScope(t *testing.T) {
+	RunRegisteredClause(t, "FS-99", "evs scope", nil)
 }
 
 // §7.8's directory rule gone: an exchange that mints X what its client asks for lets its ERASE of A's entry slots

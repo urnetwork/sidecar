@@ -4,7 +4,8 @@
 // prompt or off; renewal keeping the version, its jitter inside ±5 min, and no renewal for an idle run; a private
 // repo's run; a repo's marker read mid-run rewritten once; the end and a withdrawal; Resume ending a run that ended
 // meanwhile at a version above the kept one; SetRuns' off withdrawing a project's runs; and FS-88's canaries absent
-// from every entry. The claims are directory_claim_test.go's.
+// from every entry. The claims are directory_claim_test.go's. QD-1144's moderated run, on format 2's carrier through a
+// device's own client: once an erasure took it, its writer announces it no more, across a restart too.
 
 package sidecar_test
 
@@ -507,4 +508,106 @@ func TestDirectoryRunFs88CanariesNeverAnnounced(t *testing.T) {
 	if strings.Join(fields, ",") != want {
 		t.Fatalf("DirectoryRunStart's fields %v, want %s", fields, want)
 	}
+}
+
+// A run a directory admin erased while it still runs (QD-1144), on format 2's carrier through the device's own client:
+// the next card, its return, written as another run starts, leaves it out though the carrier hands it, and carries the
+// run it kept two above. The run writer then meets the card writer's journal before it writes: a claim on the erased run
+// is refused, the renewal after both runs moved renews the kept one at its version and writes nothing of the erased
+// one, and the erased run's end writes nothing and forgets it.
+func TestDirectoryRunModeratedIsAnnouncedNoMore(t *testing.T) {
+	world := newTestDirectoryWorld(t, nil)
+	device := world.format2Device(sidecar.NewId())
+	writerId := device.writer.sidecarId
+	runs := device.client.Runs()
+	erasedRunId := world.startRun(device.client, "ship the launch plan")
+	keptRunId := world.startRun(device.client, "tidy the changelog")
+	shown := world.shownRuns(writerId)
+	erased, kept := shown[erasedRunId], shown[keptRunId]
+	if erased == nil || kept == nil || erased.GetVersion() != 1 || kept.GetVersion() != 1 {
+		t.Fatalf("the runs before the erasure: %v", shown)
+	}
+	world.eraseFromCard(writerId, sidecar.Id(erased.GetAnnouncementId()), 1)
+	device.mustSync(t)
+
+	startedRunId := world.startRun(device.client, "review the loader")
+	shown = world.shownRuns(writerId)
+	if len(shown) != 2 || shown[erasedRunId] != nil || shown[keptRunId].GetVersion() != 3 || shown[startedRunId].GetVersion() != 3 {
+		t.Fatalf("the runs after the return: %v", shown)
+	}
+
+	writes := world.counts().CardWrites
+	if _, err := testRunsClaim(t, runs, erasedRunId, []string{"src/launch"}, 0); !errors.Is(err, sidecar.ErrDirectoryRunModerated) || !errors.Is(err, sidecar.ErrDirectoryRunUnknown) {
+		t.Fatalf("a claim on the erased run: %v", err)
+	}
+	if world.counts().CardWrites != writes {
+		t.Fatal("a refused claim wrote a card")
+	}
+	// the renewal is due an hour after the first announcement, within the jitter: every run moves inside the hour
+	// before it
+	jitter := sidecar.DefaultSidecarSettings().Directory.RenewJitter
+	world.clock.Advance(sidecar.DefaultDirectoryRunsSettings().RenewInterval - 2*jitter)
+	for _, runId := range []sidecar.Id{erasedRunId, keptRunId, startedRunId} {
+		runs.Moved(runId)
+	}
+	world.clock.Advance(4 * jitter)
+	if world.counts().CardWrites == writes {
+		t.Fatal("no renewal was written")
+	}
+	shown = world.shownRuns(writerId)
+	if len(shown) != 2 || shown[erasedRunId] != nil || shown[keptRunId].GetVersion() != 3 || shown[keptRunId].GetRenewedMillis() <= kept.GetRenewedMillis() {
+		t.Fatalf("the runs after the renewal: %v", shown)
+	}
+
+	writes = world.counts().CardWrites
+	if err := runs.Ended(erasedRunId); err != nil {
+		t.Fatalf("the erased run's end: %v", err)
+	}
+	if world.counts().CardWrites != writes {
+		t.Fatal("the erased run's end wrote a card")
+	}
+	if _, err := testRunsClaim(t, runs, erasedRunId, []string{"src/launch"}, 0); !errors.Is(err, sidecar.ErrDirectoryRunUnknown) || errors.Is(err, sidecar.ErrDirectoryRunModerated) {
+		t.Fatalf("a claim on the erased run once it ended: %v", err)
+	}
+	runs.Close()
+}
+
+// A restart of the daemon after the return brings the erased run back by no path: the restarted client's carrier seeds
+// from the card put last, its run writer meets the journal and keeps the run as erased, so a claim on it is refused and
+// its withdrawal has nothing left to do, and the next run's card carries the kept and the started runs at their raised
+// versions beside it, reading the erasure set no more.
+func TestDirectoryRunModeratedStaysOutAcrossARestart(t *testing.T) {
+	world := newTestDirectoryWorld(t, nil)
+	device := world.format2Device(sidecar.NewId())
+	writerId := device.writer.sidecarId
+	erasedRunId := world.startRun(device.client, "ship the launch plan")
+	keptRunId := world.startRun(device.client, "tidy the changelog")
+	world.eraseFromCard(writerId, sidecar.Id(world.shownRuns(writerId)[erasedRunId].GetAnnouncementId()), 1)
+	device.mustSync(t)
+	startedRunId := world.startRun(device.client, "review the loader")
+	reads := world.counts().ErasedReads
+
+	restarted := world.restartClient(device)
+	runs := restarted.Runs()
+	if err := runs.Resume(func(runId sidecar.Id) bool { return false }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testRunsClaim(t, runs, erasedRunId, []string{"src/launch"}, 0); !errors.Is(err, sidecar.ErrDirectoryRunModerated) {
+		t.Fatalf("a claim on the erased run after the restart: %v", err)
+	}
+	if err := restarted.Withdraw(sidecar.Id(world.shownRuns(writerId)[keptRunId].GetAnnouncementId())); err != nil {
+		t.Fatalf("a withdrawal of the kept run: %v", err)
+	}
+	if err := runs.Withdraw(erasedRunId); err != nil {
+		t.Fatalf("a withdrawal of the erased run: %v", err)
+	}
+	nextRunId := world.startRun(restarted, "write the release notes")
+	shown := world.shownRuns(writerId)
+	if len(shown) != 2 || shown[erasedRunId] != nil || shown[keptRunId] != nil || shown[startedRunId].GetVersion() != 3 || shown[nextRunId].GetVersion() != 3 {
+		t.Fatalf("the runs after the restart: %v", shown)
+	}
+	if world.counts().ErasedReads != reads {
+		t.Fatal("a card after the restart read the erasure set again")
+	}
+	runs.Close()
 }

@@ -27,6 +27,11 @@
 //	platform   this build's, DirectoryPlatformOfGoos of its GOOS (owner decision 468); a GOOS §16.11 names no platform
 //	           for leaves the field out, which readers show as unknown. A build that wrote none before sees its
 //	           content change, so its next upkeep raises the version once
+//	moderated  an item an erasure took, which this sidecar's card leaves out from its return on
+//	           (directory_cards_erasure.go; QD-1144), is announced no more: each upkeep first asks the card writer's
+//	           journal (DirectoryWorkerArgs.Moderated), and a carried draft the card left out answers so too. The kept
+//	           state then holds no item and is marked so, which the team's setting does not clear: only the device's
+//	           own on, a person's act, announces again, under a new announcement_id
 //
 // Barriers: directory.worker.before and .after around each append, keyed by the announcement's id. Safe for concurrent
 // use. Locks: writeLock, then stateLock; stateLock is never held across a call out, an append or a store write.
@@ -151,9 +156,13 @@ type DirectoryWorkerArgs struct {
 	// §16.7's redactor; nil makes one of the worker's own.
 	Redactor *Redactor
 	// Where the item's state is kept: the directory's store; nil keeps nothing, so a restart starts afresh.
-	Store    SidecarStore
-	Clock    Clock
-	Settings *DirectoryWorkerSettings
+	Store SidecarStore
+	// Whether this sidecar's card leaves an announcement out, an erasure having taken it: the card writer's journal
+	// (the directory client's), which each upkeep asks first. Nil reads none, and only a carried draft the card left
+	// out tells the item so.
+	Moderated func(announcementId Id) (bool, error)
+	Clock     Clock
+	Settings  *DirectoryWorkerSettings
 	// crypto/rand's reader when nil: the announcement's id.
 	Random io.Reader
 	Log    Logger
@@ -182,6 +191,9 @@ type directoryWorkerState struct {
 	RenewedMillis  int64  `json:"renewed_millis"`
 	// SHA-256 over the content last written: its who, what and where with every time and its version left out.
 	ContentSha256 []byte `json:"content_sha256,omitempty"`
+	// An erasure took the item last written, which this sidecar's card leaves out: none is announced until the
+	// device's own on (the file's header's moderated row).
+	Moderated bool `json:"moderated,omitempty"`
 }
 
 // The store's document of the worker item.
@@ -193,6 +205,16 @@ type directoryWorkerDocument struct {
 // Whether an item stands written: announced and not withdrawn.
 func (self *directoryWorkerState) announced() bool {
 	return 0 < self.Version && self.AnnouncementId != (Id{})
+}
+
+// The item an erasure took, held no more: none stands, and none is announced until the device's own on.
+func (self *directoryWorkerState) leftOut() {
+	self.Moderated = true
+	self.AnnouncementId = Id{}
+	self.Version = 0
+	self.StartedMillis = 0
+	self.RenewedMillis = 0
+	self.ContentSha256 = nil
 }
 
 // What one upkeep did.
@@ -207,6 +229,9 @@ const (
 	DirectoryWorkerRenewed DirectoryWorkerWrite = "renewed"
 	// A withdrawal.
 	DirectoryWorkerWithdrawn DirectoryWorkerWrite = "withdrawn"
+	// Nothing was written: an erasure took the item, which this sidecar's card leaves out, and none is announced
+	// until the device's own on.
+	DirectoryWorkerModerated DirectoryWorkerWrite = "moderated"
 )
 
 // This sidecar's worker item in one network's team directory.
@@ -220,6 +245,7 @@ type DirectoryWorker struct {
 	identity    func() *DirectoryWorkerIdentity
 	redactor    *Redactor
 	store       SidecarStore
+	moderated   func(announcementId Id) (bool, error)
 	clock       Clock
 	settings    *DirectoryWorkerSettings
 	random      io.Reader
@@ -278,6 +304,7 @@ func NewDirectoryWorker(args *DirectoryWorkerArgs) (*DirectoryWorker, error) {
 		identity:    args.Identity,
 		redactor:    redactor,
 		store:       args.Store,
+		moderated:   args.Moderated,
 		clock:       clockOrReal(args.Clock),
 		settings:    settings,
 		random:      random,
@@ -320,10 +347,12 @@ func (self *DirectoryClient) BindWorker(binding *DirectoryWorkerBinding) *Direct
 			Identity:    binding.Identity,
 			Redactor:    self.redactor,
 			Store:       store,
-			Clock:       self.clock,
-			Settings:    binding.Settings,
-			Random:      binding.Random,
-			Log:         self.log,
+			// what this sidecar's card leaves out, an erasure having taken it (directory_cards_erasure.go)
+			Moderated: self.cardItemModerated,
+			Clock:     self.clock,
+			Settings:  binding.Settings,
+			Random:    binding.Random,
+			Log:       self.log,
 		})
 		if err != nil {
 			// a redactor is passed, so nothing above can fail; a nil answer leaves the worker unbound
@@ -425,6 +454,8 @@ type DirectoryWorkerShown struct {
 	// The item last written; zero before any and after a withdrawal.
 	AnnouncementId Id
 	Version        uint64
+	// An erasure took the item last written: none is announced until the device's own on.
+	Moderated bool
 }
 
 // What `ur directory worker` shows: the kept setting and item.
@@ -435,6 +466,7 @@ func (self *DirectoryWorker) Shown() (*DirectoryWorkerShown, error) {
 	state := self.stateNow()
 	shown := &DirectoryWorkerShown{
 		On: !state.Off, Description: state.Description, Requests: DirectoryRequestsOpen, AnnouncementId: state.AnnouncementId, Version: state.Version,
+		Moderated: state.Moderated,
 	}
 	if DirectoryRequests(state.Requests) == DirectoryRequestsClosed {
 		shown.Requests = DirectoryRequestsClosed
@@ -490,6 +522,10 @@ func (self *DirectoryWorker) Set(ctx context.Context, setting *DirectoryWorkerSe
 	write, err := self.maintain(ctx, func(state *directoryWorkerState) {
 		if setting.On != nil {
 			state.Off = !*setting.On
+			if *setting.On {
+				// the person's on announces again, under a new id, once an erasure took the item
+				state.Moderated = false
+			}
 		}
 		if setting.Description != nil {
 			state.Description = *setting.Description
@@ -510,7 +546,8 @@ func (self *DirectoryWorker) Set(ctx context.Context, setting *DirectoryWorkerSe
 // The item's upkeep, which a sync and the renewal's timer call: announced when it is due and none stands, rewritten at
 // a raised version when its content changed, renewed at its version once RenewInterval has passed, and withdrawn when
 // the team's or the device's setting turned off. On a host that announces none it writes nothing, and withdraws an
-// item a kept state says stands.
+// item a kept state says stands. An item an erasure took is announced no more (DirectoryWorkerModerated; the file's
+// header's moderated row).
 func (self *DirectoryWorker) Maintain(ctx context.Context) (DirectoryWorkerWrite, error) {
 	if err := self.load(); err != nil {
 		return DirectoryWorkerUnchanged, err
@@ -526,12 +563,17 @@ func (self *DirectoryWorker) maintain(ctx context.Context, change func(state *di
 		return DirectoryWorkerUnchanged, ErrDirectoryWorkerClosed
 	}
 	state := self.stateNow()
+	// before any change, so the device's own on in the same call announces again
+	moderatedNow, err := self.moderatedItem(state)
+	if err != nil {
+		return DirectoryWorkerUnchanged, err
+	}
 	if change != nil {
 		change(state)
 	}
 	teamOn, teamKnown := self.teamWorkers()
 	hostAnnounces := self.hostAnnounces()
-	wanted := hostAnnounces && teamKnown && teamOn && !state.Off
+	wanted := hostAnnounces && teamKnown && teamOn && !state.Off && !state.Moderated
 	// a setting not known yet withdraws nothing: only a known off, the device's off or a host that announces none does
 	unwanted := !hostAnnounces || state.Off || (teamKnown && !teamOn)
 	nowMillis := self.clock.Now().UnixMilli()
@@ -560,7 +602,7 @@ func (self *DirectoryWorker) maintain(ctx context.Context, change func(state *di
 			write = DirectoryWorkerRenewed
 		}
 		if write == DirectoryWorkerUnchanged {
-			if change != nil {
+			if change != nil || moderatedNow {
 				if err := self.persist(state); err != nil {
 					return DirectoryWorkerUnchanged, err
 				}
@@ -583,7 +625,15 @@ func (self *DirectoryWorker) maintain(ctx context.Context, change func(state *di
 			return DirectoryWorkerUnchanged, err
 		}
 		if err := self.append(state.AnnouncementId, content); err != nil {
-			return DirectoryWorkerUnchanged, err
+			if !errors.Is(err, ErrDirectoryItemModerated) {
+				return DirectoryWorkerUnchanged, err
+			}
+			// the card this append wrote left the item out, an erasure having taken it
+			state.leftOut()
+			if err := self.persist(state); err != nil {
+				return DirectoryWorkerUnchanged, err
+			}
+			return DirectoryWorkerModerated, nil
 		}
 		self.scheduleRenew()
 		return write, nil
@@ -617,12 +667,29 @@ func (self *DirectoryWorker) maintain(ctx context.Context, change func(state *di
 		}
 		return DirectoryWorkerWithdrawn, nil
 	}
-	if change != nil {
+	if change != nil || moderatedNow {
 		if err := self.persist(state); err != nil {
 			return DirectoryWorkerUnchanged, err
 		}
 	}
+	if moderatedNow {
+		return DirectoryWorkerModerated, nil
+	}
 	return DirectoryWorkerUnchanged, nil
+}
+
+// Whether an erasure took the item state holds, which this sidecar's card writer's journal says: state then holds none
+// and is marked so (leftOut), for the caller to keep. The caller holds writeLock.
+func (self *DirectoryWorker) moderatedItem(state *directoryWorkerState) (bool, error) {
+	if self.moderated == nil || !state.announced() {
+		return false, nil
+	}
+	moderated, err := self.moderated(state.AnnouncementId)
+	if err != nil || !moderated {
+		return false, err
+	}
+	state.leftOut()
+	return true, nil
 }
 
 // The item's who by the state now: this sidecar, its member or its sponsor, and its tags.

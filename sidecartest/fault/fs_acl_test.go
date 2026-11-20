@@ -13,28 +13,28 @@ func TestFs19ConfigRead(t *testing.T) {
 	RunRow(t, "FS-19", "config-read", nil)
 }
 
-func TestFs14AclSuspendAndUnsuspendInBothOrders(t *testing.T) {
-	RunClause(t, "FS-14", "acl suspend orders", Fs14AclSuspendOrders, nil)
+func TestFs14AclSuspendOrders(t *testing.T) {
+	RunRegisteredClause(t, "FS-14", "acl suspend orders", nil)
 }
 
-func TestFs14AclConfigWritersRepoRevokeStands(t *testing.T) {
-	RunClause(t, "FS-14", "acl repo revoke", Fs14AclRepoRevoke, nil)
+func TestFs14AclRepoRevoke(t *testing.T) {
+	RunRegisteredClause(t, "FS-14", "acl repo revoke", nil)
 }
 
-func TestFs14AclOwnerConfirmAtEveryReader(t *testing.T) {
-	RunClause(t, "FS-14", "acl owner confirm", Fs14AclOwnerConfirm, nil)
+func TestFs14AclOwnerConfirm(t *testing.T) {
+	RunRegisteredClause(t, "FS-14", "acl owner confirm", nil)
 }
 
-func TestFs14AclRotationCoveringOneOfTwoRemovals(t *testing.T) {
-	RunClause(t, "FS-14", "acl two removals", Fs14AclTwoRemovals, nil)
+func TestFs14AclTwoRemovals(t *testing.T) {
+	RunRegisteredClause(t, "FS-14", "acl two removals", nil)
 }
 
-func TestFs14AclForkedReadersReportBothChains(t *testing.T) {
-	RunClause(t, "FS-14", "acl forked readers", Fs14AclForkedReaders, nil)
+func TestFs14AclForkedReaders(t *testing.T) {
+	RunRegisteredClause(t, "FS-14", "acl forked readers", nil)
 }
 
-func TestFs62AclGateReadsProjWhenTheCacheDoesNotServe(t *testing.T) {
-	RunClause(t, "FS-62", "acl gate", Fs62AclGate, nil)
+func TestFs62AclGate(t *testing.T) {
+	RunRegisteredClause(t, "FS-62", "acl gate", nil)
 }
 
 // One schedule fixed on a Net of its own, failing t with the trace if it fails: §22.5's and §22.7's acl rows, which no

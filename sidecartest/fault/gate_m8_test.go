@@ -54,7 +54,7 @@ func TestGateM8NamesEachRowsTestsWhereTheyRun(t *testing.T) {
 		if _, ok := swept[testCase.String()]; ok {
 			continue
 		}
-		if tests := gateConventionalTests(testCase); !reflect.DeepEqual(row.Tests, tests) {
+		if tests := gateConventionWithClausesForTest(testCase); !reflect.DeepEqual(row.Tests, tests) {
 			t.Errorf("%s at M8 runs %s, the convention %s", testCase, gateTestsStringForTest(row.Tests), gateTestsStringForTest(tests))
 		}
 	}

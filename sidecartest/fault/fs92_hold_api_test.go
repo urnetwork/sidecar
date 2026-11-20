@@ -23,30 +23,30 @@ func TestFs92(t *testing.T) {
 	RunRow(t, "FS-92", "", nil)
 }
 
-func TestFs92HoldBetweenVerifyAndDelete(t *testing.T) {
-	RunClause(t, "FS-92", "between verify and delete", Fs92HoldBetweenVerifyAndDelete, nil)
+func TestFs92BetweenVerifyAndDelete(t *testing.T) {
+	RunRegisteredClause(t, "FS-92", "between verify and delete", nil)
 }
 
-func TestFs92HoldBetweenDeletes(t *testing.T) {
-	RunClause(t, "FS-92", "between deletes", Fs92HoldBetweenDeletes, nil)
+func TestFs92BetweenDeletes(t *testing.T) {
+	RunRegisteredClause(t, "FS-92", "between deletes", nil)
 }
 
-func TestFs92DeleteInFlight(t *testing.T) {
-	RunClause(t, "FS-92", "a delete in flight", Fs92DeleteInFlight, nil)
+func TestFs92ADeleteInFlight(t *testing.T) {
+	RunRegisteredClause(t, "FS-92", "a delete in flight", nil)
 }
 
 // (a) with a 90-day §2703(f) order, which outlasts the 30 days the drop table keeps an ended drop's entry: the held
 // entry stays, unlisted past them as its twin's would be, and the job deletes what it held once the order ends (owner
 // decision 643; QD-1113).
-func TestFs92HoldOutlastsTheDropTable(t *testing.T) {
-	RunClause(t, "FS-92", "a hold that outlasts the drop table", Fs92HoldOutlastsTheDropTable, nil)
+func TestFs92AHoldThatOutlastsTheDropTable(t *testing.T) {
+	RunRegisteredClause(t, "FS-92", "a hold that outlasts the drop table", nil)
 }
 
 // (a) with a second DROP made while the order stands (QD-1127; fs92_hold_second_drop.go): the held job gives up the
 // slot, so the second drop runs to held as its no-hold twin's runs to done, and at the order's end each held job
 // deletes what it held, the stored count falling once for each.
-func TestFs92SecondDropDuringTheHold(t *testing.T) {
-	RunClause(t, "FS-92", "a second drop during the hold", Fs92SecondDropDuringTheHold, nil)
+func TestFs92ASecondDropDuringTheHold(t *testing.T) {
+	RunRegisteredClause(t, "FS-92", "a second drop during the hold", nil)
 }
 
 // The admin's listings of both drops, pending, executing and done, and the bill while the order stands, equal the
@@ -75,20 +75,20 @@ func TestFs69(t *testing.T) {
 	RunRow(t, "FS-69", "", nil)
 }
 
-func TestFs69HoldBetweenSweepDeletes(t *testing.T) {
-	RunClause(t, "FS-69", "between sweep deletes", Fs69HoldBetweenSweepDeletes, nil)
+func TestFs69BetweenSweepDeletes(t *testing.T) {
+	RunRegisteredClause(t, "FS-69", "between sweep deletes", nil)
 }
 
-func TestFs69EraseUnderTheHold(t *testing.T) {
-	RunClause(t, "FS-69", "an erase under the hold", Fs69EraseUnderTheHold, nil)
+func TestFs69AnEraseUnderTheHold(t *testing.T) {
+	RunRegisteredClause(t, "FS-69", "an erase under the hold", nil)
 }
 
 func TestFs66Hold(t *testing.T) {
 	RunRow(t, "FS-66", "hold", nil)
 }
 
-func TestFs6NowShredUnderAHold(t *testing.T) {
-	RunClause(t, "FS-6", "a --now shred under a hold", Fs6NowShredUnderAHold, nil)
+func TestFs6ANowShredUnderAHold(t *testing.T) {
+	RunRegisteredClause(t, "FS-6", "a --now shred under a hold", nil)
 }
 
 // FS-92 (c): a sealed hold's network takes the answers its no-hold twin takes, listing and bill included, while the

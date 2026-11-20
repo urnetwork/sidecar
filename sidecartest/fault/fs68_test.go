@@ -7,8 +7,6 @@ package fault
 
 import (
 	"testing"
-
-	"github.com/urnetwork/sidecar/protocol"
 )
 
 func TestFs68(t *testing.T) {
@@ -16,21 +14,21 @@ func TestFs68(t *testing.T) {
 }
 
 func TestFs68Rules(t *testing.T) {
-	RunClause(t, "FS-68", "rules", Fs68Rules, nil)
+	RunRegisteredClause(t, "FS-68", "rules", nil)
 }
 
 func TestFs68PlatformRule(t *testing.T) {
-	RunClause(t, "FS-68", "platform rule", Fs68PlatformRule, nil)
+	RunRegisteredClause(t, "FS-68", "platform rule", nil)
 }
 
 func TestFs68Config(t *testing.T) {
-	RunClause(t, "FS-68", "config", Fs68Kind(protocol.RepoKind_REPO_KIND_CONFIG), nil)
+	RunRegisteredClause(t, "FS-68", "config", nil)
 }
 
 func TestFs68Mailcfg(t *testing.T) {
-	RunClause(t, "FS-68", "mailcfg", Fs68Kind(protocol.RepoKind_REPO_KIND_MAILCFG), nil)
+	RunRegisteredClause(t, "FS-68", "mailcfg", nil)
 }
 
 func TestFs68Lock(t *testing.T) {
-	RunClause(t, "FS-68", "lock", Fs68LockedPastTheWindow, nil)
+	RunRegisteredClause(t, "FS-68", "lock", nil)
 }

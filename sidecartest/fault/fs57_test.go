@@ -12,6 +12,6 @@ func TestFs57(t *testing.T) {
 	RunRow(t, "FS-57", "", nil)
 }
 
-func TestFs57StoreUnreachableCommitsNothing(t *testing.T) {
-	RunClause(t, "FS-57", "store unreachable", Fs57StoreUnreachable, nil)
+func TestFs57StoreUnreachable(t *testing.T) {
+	RunRegisteredClause(t, "FS-57", "store unreachable", nil)
 }

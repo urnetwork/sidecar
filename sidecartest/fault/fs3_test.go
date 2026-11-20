@@ -16,6 +16,6 @@ func TestFs3(t *testing.T) {
 // A's step 7 past 5 s of its step 4, held 25 s while a reader leaves with no other commit: its rerun judges 5d
 // against the newest gate view evs holds and refuses GATE_CLOSED (§11.8's timing row; QD-660). With the view bound
 // at arrival the rerun commits under the excluded generation.
-func TestFs3StepSevenPastFiveSeconds(t *testing.T) {
-	RunClause(t, "FS-3", "step 7 past 5 s", Fs3StepSevenPastFiveSeconds, nil)
+func TestFs3Step7Past5S(t *testing.T) {
+	RunRegisteredClause(t, "FS-3", "step 7 past 5 s", nil)
 }

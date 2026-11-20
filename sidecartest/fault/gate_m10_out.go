@@ -24,8 +24,10 @@
 //     r-file case's TestFs101File; and beside the convention's entries, the tests MAIL-M10-04 and SEARCH-M10-37 wrote
 //     of the mailbox cases and FS-78's hold case, which no builder answers.
 //
-// Every other case keeps the convention, so a case nobody registered a builder for reads missing, whatever clause or
-// world tests of it exist, until QD-1084's clause registry names those: FS-64, FS-65, FS-66, FS-67, FS-70, FS-71,
+// Every case's registered clauses run with it by the convention (QD-1084): FS-68's, FS-89's, FS-94's and FS-95's,
+// FS-72's migration killed at each step, and the hold cases', each on T3 in the package its clause names. Every other
+// case keeps the convention, so a case nobody registered a builder for reads missing, whatever clause or world tests
+// of it exist, since a clause counts only beside a registered case: FS-64, FS-65, FS-66, FS-67, FS-70, FS-71,
 // FS-79, FS-81, FS-90, FS-93 and FS-96, and the later-of cases no owner wrote a test of. Three rows carry tests under
 // the convention's T2 names that run no registered builder, FS-76's, FS-78's and FS-112's, and read missing on their
 // unwritten T3 runs; the written item names them, so none passes on a test §22.8's rules never ran. FS-125 is held
@@ -410,12 +412,13 @@ func gateM10OutEvidenceItems() []*GateItem {
 			Item: "a migration of a format-1 repo and a rollback to format-1 binaries (§22.10's format 2 row; FS-72's M10 cases; R-TEST-10; EVS2-M10-30, QD-854): a repo migrated while a format-1 client pushes and reads, the migration killed at each step, and evs and taskworker rolled back with format-2 data, on T2 and on T3 through the block's config and on the binaries testdata/evs/format1_build.txt pins",
 			Tests: []*GateTest{
 				gateFaultTests(
-					"TestFs72Migration", "TestFs72MigrationKilledAtStepSix", "TestFs72MigrationKilledBeforeTheRaise", "TestFs72MigrationKilledAfterTheRaise",
-					"TestFs72MigrationKilledBeforeTheHeadCas", "TestFs72MigrationKilledAfterTheHeadCas", "TestFs72Rollback",
+					"TestFs72Migration", "TestFs72MigrationMigrationKilledAfterStep6", "TestFs72MigrationMigrationKilledBeforeTheRaise",
+					"TestFs72MigrationMigrationKilledAfterTheRaise", "TestFs72MigrationMigrationKilledBeforeTheHeadCas", "TestFs72MigrationMigrationKilledAfterTheHeadCas",
+					"TestFs72Rollback",
 				),
 				{Repo: "server", Package: "./evshost", Tags: gateT3Tags, Stores: true, Names: []string{
-					"TestFs72MigrationOnT3", "TestFs72MigrationKilledAtStepSixOnT3", "TestFs72MigrationKilledBeforeTheRaiseOnT3", "TestFs72MigrationKilledAfterTheRaiseOnT3",
-					"TestFs72MigrationKilledBeforeTheHeadCasOnT3", "TestFs72MigrationKilledAfterTheHeadCasOnT3",
+					"TestFs72MigrationOnT3", "TestFs72MigrationMigrationKilledAfterStep6OnT3", "TestFs72MigrationMigrationKilledBeforeTheRaiseOnT3",
+					"TestFs72MigrationMigrationKilledAfterTheRaiseOnT3", "TestFs72MigrationMigrationKilledBeforeTheHeadCasOnT3", "TestFs72MigrationMigrationKilledAfterTheHeadCasOnT3",
 					"TestFs72RollbackOnT3", "TestFs72RollbackThroughTheBlockConfigOnT3", "TestFs72RollbackOnThePinnedBuildOnT3",
 				}},
 			},
