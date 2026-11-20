@@ -311,7 +311,7 @@ func TestAclEvsShareMustBeTheOwnersAndInForce(t *testing.T) {
 }
 
 // * and evs:* reach general and record repos only, never a kind §8.5 fixes, and a rule naming one of
-// those outright adds readers only to team_record and mailcfg.
+// those outright adds readers only to team_record and the network's mailcfg, nothing to a Team scope's own (QD-1107).
 func TestAclWildcardNeverReachesKindDefaults(t *testing.T) {
 	fixture := newAclTestFixture()
 	owner := fixture.member(bridge.MemberRole_MEMBER_ROLE_MEMBER)
@@ -335,10 +335,20 @@ func TestAclWildcardNeverReachesKindDefaults(t *testing.T) {
 	tagId = explicit.tag(owner)
 	agent = explicit.agent(explicit.member(bridge.MemberRole_MEMBER_ROLE_MEMBER), tagId)
 	for kind := protocol.RepoKind_REPO_KIND_GENERAL; kind <= protocol.RepoKind_REPO_KIND_SECRET; kind += 1 {
-		repoIds[kind] = aclTestKindRepo(explicit, kind, owner)
+		repoOwner := owner
+		if kind == protocol.RepoKind_REPO_KIND_MAILCFG {
+			// the network's, whose row names no owner: a Team scope's own takes no rule (QD-1107), below
+			repoOwner = Id{}
+		}
+		repoIds[kind] = aclTestKindRepo(explicit, kind, repoOwner)
 		explicit.rule([]Id{tagId}, []*protocol.AclTarget{aclRepoTarget(repoIds[kind])}, protocol.AclAction_ACL_ACTION_READ, protocol.AclAction_ACL_ACTION_DEPOSIT)
 	}
+	scopeMailcfgId := aclTestKindRepo(explicit, protocol.RepoKind_REPO_KIND_MAILCFG, owner)
+	explicit.rule([]Id{tagId}, []*protocol.AclTarget{aclRepoTarget(scopeMailcfgId)}, protocol.AclAction_ACL_ACTION_READ, protocol.AclAction_ACL_ACTION_DEPOSIT)
 	state = explicit.state(t)
+	if rights := aclTestRights(state, agent, scopeMailcfgId, AclTokenAudienceEvs); rights != 0 {
+		t.Errorf("explicit, a Team scope's own mailcfg: rights %b", rights)
+	}
 	for kind, repoId := range repoIds {
 		var want AclEvsRights
 		switch kind {
@@ -494,7 +504,9 @@ func aclSortedIds(ids ...Id) []Id {
 	return ids
 }
 
-// The kind defaults of the team record and mailcfg (§8.5, §15.8).
+// The kind defaults of the team record and mailcfg (§8.5, §15.8): a Team scope's own mailcfg, owner-bound as a
+// mailbox is (QD-1107), is read and written by the owner's devices its row lists as consented, and by no other device
+// of the owner's, consented or not, until its owner's OwnerConfirm lists it.
 func TestAclTeamRecordAndMailcfgDefaults(t *testing.T) {
 	fixture := newAclTestFixture()
 	owner := fixture.member(bridge.MemberRole_MEMBER_ROLE_OWNER)
@@ -502,13 +514,18 @@ func TestAclTeamRecordAndMailcfgDefaults(t *testing.T) {
 	member := fixture.member(bridge.MemberRole_MEMBER_ROLE_MEMBER)
 	tagId := fixture.tag(owner)
 	ownerDevice := fixture.invitedDevice(owner)
+	ownerUnlisted := fixture.device(owner, ownerDevice.Bytes())
 	auditorDevice := fixture.device(auditor)
 	memberDevice := fixture.device(member)
 	agent := fixture.agent(member, tagId)
 	teamRecordId, _ := fixture.repo(protocol.RepoKind_REPO_KIND_TEAM_RECORD, Id{})
 	mailcfgId, _ := fixture.repo(protocol.RepoKind_REPO_KIND_MAILCFG, Id{})
-	scopeMailcfgId, _ := fixture.repo(protocol.RepoKind_REPO_KIND_MAILCFG, owner)
+	scopeMailcfgId, scopeMailcfg := fixture.repo(protocol.RepoKind_REPO_KIND_MAILCFG, owner)
+	scopeMailcfg.ConsentedSidecarIds = [][]byte{ownerDevice.Bytes()}
 	state := fixture.state(t)
+	if !state.ConsentedFor(ownerUnlisted, owner) {
+		t.Fatal("the owner's second device is not consented")
+	}
 	cases := []struct {
 		sidecarId Id
 		repoId    Id
@@ -521,12 +538,25 @@ func TestAclTeamRecordAndMailcfgDefaults(t *testing.T) {
 		{sidecarId: memberDevice, repoId: mailcfgId, rights: AclEvsRead | AclEvsWrite},
 		{sidecarId: agent, repoId: mailcfgId, rights: 0},
 		{sidecarId: ownerDevice, repoId: scopeMailcfgId, rights: AclEvsRead | AclEvsWrite},
+		{sidecarId: ownerUnlisted, repoId: scopeMailcfgId, rights: 0},
+		{sidecarId: ownerUnlisted, repoId: mailcfgId, rights: AclEvsRead | AclEvsWrite},
 		{sidecarId: memberDevice, repoId: scopeMailcfgId, rights: 0},
+		{sidecarId: agent, repoId: scopeMailcfgId, rights: 0},
 	}
 	for i, c := range cases {
 		if rights := aclTestRights(state, c.sidecarId, c.repoId, AclTokenAudienceEvs); rights != c.rights {
 			t.Errorf("case %d: %b, want %b", i, rights, c.rights)
 		}
+	}
+	// a holder of the scope mailcfg's key that its owner has not listed is unconsented there, as in a mailbox, and
+	// another member's device holds no grant
+	wrap := AclRepoMember{SidecarId: ownerUnlisted, Form: AclRepoMemberWrap}
+	if decision := state.CheckRepoMember(scopeMailcfgId, wrap, aclTestNow); decision.Allowed || decision.Reason != AclReasonUnconsented {
+		t.Errorf("the owner's unlisted device in its scope's mailcfg: %+v", decision)
+	}
+	wrap.SidecarId = memberDevice
+	if decision := state.CheckRepoMember(scopeMailcfgId, wrap, aclTestNow); decision.Allowed || decision.Reason != AclReasonNoGrant {
+		t.Errorf("another member's device in the scope's mailcfg: %+v", decision)
 	}
 }
 

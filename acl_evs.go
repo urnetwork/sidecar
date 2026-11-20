@@ -4,10 +4,18 @@
 //
 // Kind defaults are the binary's, §8.5's table, and come ahead of every document; no document narrows one
 // (plan-ACL-small-readings #2). A rule's * and evs:* (the wildcard repo target) reach only general and
-// record repos. A rule naming a repo outright adds readers only to team_record and mailcfg, besides general
-// and record; one naming a vault or mailbox adds only deposit, the form the compile gives a kind default's
-// tag:mail mail indexers, whose atom only the config head knows (acl-m2-02-state-readings #3); and rules
-// add nothing to config, directory or secret repos (D-ACL-13, D-ACL-24).
+// record repos. A rule naming a repo outright adds readers only to team_record and the network's mailcfg,
+// besides general and record; one naming a vault or mailbox adds only deposit, the form the compile gives a
+// kind default's tag:mail mail indexers, whose atom only the config head knows (acl-m2-02-state-readings #3);
+// and rules add nothing to config, directory or secret repos (D-ACL-13, D-ACL-24), nor to a Team scope's own
+// mailcfg.
+//
+// A mailcfg whose row names an owner, a Team scope's own (QD-1093), follows the owner-bound rules as a mailbox does
+// (QD-1107; aclRepoState.ownerBound): its owner's consented devices read and write it, the admins among them
+// administer it, and no RepoGrant, rule or tag:mail kind default adds to it, so a member's scope directory is out of
+// an admin's reach as its mail key is (owner decision 126, §15.7's "only"). It takes no EvsShare either, which
+// checkEvsShare keeps to the owner-bound kinds. The network's mailcfg, whose row names none, keeps every right a
+// mailcfg has.
 //
 // The config repo's row is the state's own where the rows hold none (acl_state.go, QD-719), so its kind default
 // answers in every state. Its admins are the config writers, each a member device of an AdminSet member that is not
@@ -105,10 +113,30 @@ func AclRepoKindOwnerFits(kind protocol.RepoKind, owned bool) bool {
 // Whether a repo row binds its owner member's consent: an owner-bound kind's, or a mailcfg's that names an owner, a
 // Team scope's own, whose consented_sidecar_ids the fold keeps as it keeps a mailbox's (QD-1093).
 func aclRepoRowOwnerBound(repo *protocol.AclRepo) bool {
-	if aclRepoKindOwnerBound(repo.GetKind()) {
+	return aclRepoKindOwnerBound(repo.GetKind()) || aclRepoRowScopeMailcfg(repo)
+}
+
+// Whether a repo row is a Team scope's own mailcfg: a mailcfg whose row names an owner, its scope's member (QD-1093),
+// which follows the owner-bound rules though its kind is not one of theirs (QD-1107).
+func aclRepoRowScopeMailcfg(repo *protocol.AclRepo) bool {
+	return repo.GetKind() == protocol.RepoKind_REPO_KIND_MAILCFG && len(repo.GetOwnerMemberId()) != 0
+}
+
+// Whether the repo follows the owner-bound rules (§8.5, owner decision 126): an owner-bound kind's, or a Team scope's
+// own mailcfg, whose row names its member, which follows them as a mailbox does (QD-1107). The statement rules, the
+// rights and the deleted repo's admins read this one predicate, as aclRepoRowOwnerBound is its row's.
+func (self *aclRepoState) ownerBound() bool {
+	if aclRepoKindOwnerBound(self.kind) {
 		return true
 	}
-	return repo.GetKind() == protocol.RepoKind_REPO_KIND_MAILCFG && len(repo.GetOwnerMemberId()) != 0
+	return self.kind == protocol.RepoKind_REPO_KIND_MAILCFG && self.ownerId != (Id{})
+}
+
+// Whether the repo's access log adds RepoGrants and admins by their rows alone: a kind that takes grants, unless the
+// repo follows the owner-bound rules, a Team scope's own mailcfg (QD-1107), whose admins count only while consented
+// devices of its owner.
+func (self *aclRepoState) takesGrants() bool {
+	return aclRepoKindTakesGrants(self.kind) && !self.ownerBound()
 }
 
 // The kinds * and evs:* reach.
@@ -117,7 +145,8 @@ func aclRepoKindGeneral(kind protocol.RepoKind) bool {
 }
 
 // The kinds whose access log adds admins and RepoGrants: every kind but the config, the directory, whose
-// RepoAdmin adds and RepoGrants every reader refuses (§8.8), and the owner-bound ones, which take EvsShares.
+// RepoAdmin adds and RepoGrants every reader refuses (§8.8), and the owner-bound ones, which take EvsShares. Of the
+// mailcfgs only the network's does: a Team scope's own takes none (aclRepoState.takesGrants; QD-1107).
 func aclRepoKindTakesGrants(kind protocol.RepoKind) bool {
 	switch kind {
 	case protocol.RepoKind_REPO_KIND_GENERAL, protocol.RepoKind_REPO_KIND_RECORD,
@@ -252,13 +281,14 @@ func (self *AclState) sidecarEvsAccess(sidecar *aclSidecarState, repoId Id, audi
 		}
 		accumulator.add(AclEvsDeposit, kindDefault)
 	case protocol.RepoKind_REPO_KIND_MAILCFG:
-		// members write the records they sign, so member devices are its writers; a Team scope's is read
-		// only by its member's consented devices (§15.8). tag:mail's read comes as a rule. Beyond the kind
-		// default a scope's own takes what any mailcfg takes: a config writer's RepoGrant and RepoAdmin and a
-		// rule naming it still add to it below (question scope-mailcfg-owner-bound-admin-reach)
-		if repo.ownerId == (Id{}) && memberDevice {
-			accumulator.add(AclEvsWrite, kindDefault)
-		} else if repo.ownerId != (Id{}) && sidecar.memberId == repo.ownerId && consented {
+		if repo.ownerBound() {
+			// a Team scope's own, owner-bound to its member as a mailbox is (QD-1093, QD-1107): read only by that
+			// member's consented devices (§15.7), the admins among them administering it; no RepoGrant, rule or
+			// tag:mail default adds to it below
+			self.addOwnerBoundRights(&accumulator, sidecar, repoId, repo, consented, nowMs)
+		} else if memberDevice {
+			// the network's: members write the records they sign, so member devices are its writers (§15.8);
+			// tag:mail's read comes as a rule
 			accumulator.add(AclEvsWrite, kindDefault)
 		}
 	case protocol.RepoKind_REPO_KIND_GENERAL, protocol.RepoKind_REPO_KIND_RECORD:
@@ -268,7 +298,7 @@ func (self *AclState) sidecarEvsAccess(sidecar *aclSidecarState, repoId Id, audi
 	}
 
 	self.addRuleRights(&accumulator, sidecar, repoId, repo, nowMs)
-	if aclRepoKindTakesGrants(repo.kind) {
+	if repo.takesGrants() {
 		self.addAccessLogRights(&accumulator, sidecar, repo, nowMs)
 	}
 	self.addAuditRights(&accumulator, sidecar, repoId, repo, nowMs)
@@ -311,10 +341,11 @@ func (self *AclState) deletedRepoAccess(sidecar *aclSidecarState, repo *aclRepoS
 }
 
 // Whether §8.8's access log counts the sidecar as one of the repo's admins now, read_only never: in its standing
-// admins; in the directory those and every config writer, each while consented (D-ACL-24); in an owner-bound repo
-// only an admin that is a consented device of its owner. This is the admin right the live table gives from the
-// access log alone, with no rule and no kind default in it, so the config, whose admins are its config writers by
-// kind default (QD-894), has none here, and neither has a kind this code does not know.
+// admins; in the directory those and every config writer, each while consented (D-ACL-24); in an owner-bound repo,
+// a Team scope's own mailcfg among them (QD-1107), only an admin that is a consented device of its owner. This is the
+// admin right the live table gives from the access log alone, with no rule and no kind default in it, so the config,
+// whose admins are its config writers by kind default (QD-894), has none here, and neither has a kind this code does
+// not know.
 func (self *AclState) standingRepoAdmin(sidecar *aclSidecarState, repo *aclRepoState) bool {
 	if sidecar.readOnly {
 		return false
@@ -322,7 +353,7 @@ func (self *AclState) standingRepoAdmin(sidecar *aclSidecarState, repo *aclRepoS
 	switch {
 	case repo.kind == protocol.RepoKind_REPO_KIND_DIRECTORY:
 		return (repo.admins[sidecar.id] || sidecar.configWriter) && self.sidecarConsented(sidecar)
-	case aclRepoKindOwnerBound(repo.kind):
+	case repo.ownerBound():
 		return repo.admins[sidecar.id] && sidecar.memberId == repo.ownerId && repo.consents[sidecar.id] && self.sidecarConsented(sidecar)
 	case aclRepoKindTakesGrants(repo.kind):
 		return repo.admins[sidecar.id]
@@ -344,7 +375,8 @@ func aclStandingAdminAt(repo *aclRepoState, sidecarId Id) uint64 {
 
 // An owner-bound repo's rights: its owner's consented devices read and write, and those of them in its
 // admins administer; its EvsShares' subjects read; in a vault or mailbox the owner's other untagged
-// subjects and the tagged subjects it sponsors deposit (§8.5).
+// subjects and the tagged subjects it sponsors deposit (§8.5). A Team scope's own mailcfg takes the first part
+// alone (QD-1107): no EvsShare stands on it, and nobody deposits there.
 func (self *AclState) addOwnerBoundRights(accumulator *aclEvsAccumulator, sidecar *aclSidecarState, repoId Id, repo *aclRepoState, consented bool, nowMs int64) {
 	kindDefault := AclDecision{Reason: AclReasonKindDefault}
 	ownerDevice := consented && sidecar.memberId == repo.ownerId && repo.consents[sidecar.id]
@@ -373,14 +405,15 @@ func (self *AclState) addOwnerBoundRights(accumulator *aclEvsAccumulator, sideca
 }
 
 // The rights the rows' rules give the sidecar on the repo, by kind as the file's header says, within the
-// ceiling.
+// ceiling: none on a Team scope's own mailcfg, whatever names it, the tag:mail kind rule of an older compile included
+// (QD-1107).
 func (self *AclState) addRuleRights(accumulator *aclEvsAccumulator, sidecar *aclSidecarState, repoId Id, repo *aclRepoState, nowMs int64) {
 	explicit := self.repoRules[repoId]
 	wildcard := aclRepoKindGeneral(repo.kind)
 	allowed := AclEvsRights(0)
 	switch {
 	case aclRepoKindGeneral(repo.kind), repo.kind == protocol.RepoKind_REPO_KIND_TEAM_RECORD,
-		repo.kind == protocol.RepoKind_REPO_KIND_MAILCFG:
+		repo.kind == protocol.RepoKind_REPO_KIND_MAILCFG && !repo.ownerBound():
 		allowed = AclEvsDeposit | AclEvsRead | AclEvsWrite | AclEvsAdmin
 	case repo.kind == protocol.RepoKind_REPO_KIND_VAULT, repo.kind == protocol.RepoKind_REPO_KIND_MAILBOX:
 		allowed = AclEvsDeposit
@@ -546,7 +579,8 @@ func (self *AclState) RepoWriters(repoId Id, now time.Time) []Id {
 
 // The repos a read, write or admin grant naming one of the atoms reads at now, sorted: rules whose src
 // names an atom, and RepoGrants of reader or writer whose subject is one. This is the part of §10.5's
-// reach(d) the rows decide for a Delegation's tags; the config and a team's directory are §10.5's own.
+// reach(d) the rows decide for a Delegation's tags; the config and a team's directory are §10.5's own. A Team
+// scope's own mailcfg, which neither adds to (QD-1107), is never among them.
 func (self *AclState) ReposGrantedToAtoms(atoms []Id, now time.Time) []Id {
 	nowMs := now.UnixMilli()
 	atomIndexes := []int32{}
@@ -557,7 +591,7 @@ func (self *AclState) ReposGrantedToAtoms(atoms []Id, now time.Time) []Id {
 	}
 	readable := func(repoId Id) bool {
 		repo := self.repos[repoId]
-		return repo != nil && !repo.deleted && aclRepoKindTakesGrants(repo.kind)
+		return repo != nil && !repo.deleted && repo.takesGrants()
 	}
 	granted := map[Id]bool{}
 	readActions := uint32(1)<<uint32(protocol.AclAction_ACL_ACTION_READ) | uint32(1)<<uint32(protocol.AclAction_ACL_ACTION_WRITE) |

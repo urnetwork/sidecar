@@ -13,7 +13,9 @@
 //	overruns      the tier's acl_rules, acl_groups, acl_requests and acl_network_shares (§20.4)
 //	paths         an evs: resource that is a path (X2), which the parser refuses as well
 //	owner-bound   a read, write or admin on a vault, mailbox or secret repo, which only its owner's EvsShare or the
-//	              audit block adds (D-ACL-13, owner decision 126); a deposit to a vault or mailbox stands
+//	              audit block adds (D-ACL-13, owner decision 126); a deposit to a vault or mailbox stands; any
+//	              grant on a Team scope's own mailcfg, a mailcfg whose row names an owner, to which no rule adds
+//	              (QD-1107), while the network's mailcfg takes every grant
 //	config        any grant on the config repo or the directory (D-ACL-13, D-ACL-24)
 //	audit         an audit block while no k-of-n AuditOptIn stands at the head's time (ACL-M6-02)
 //	publishes     a standing publish outside a Pro or Team document (§8.5); a publish request past the tier's
@@ -99,10 +101,10 @@ func ValidateAclPolicy(input *AclValidateInput) error {
 	if err != nil {
 		return err
 	}
-	validator := &aclValidator{input: input, tables: tables, policy: tables.policy, repoKinds: map[Id]protocol.RepoKind{}}
+	validator := &aclValidator{input: input, tables: tables, policy: tables.policy, repos: map[Id]*protocol.AclRepo{}}
 	for _, repo := range input.Compile.Statements.GetRepos() {
 		if repoId, err := IdFromBytes(repo.GetRepoId()); err == nil {
-			validator.repoKinds[repoId] = repo.GetKind()
+			validator.repos[repoId] = repo
 		}
 	}
 	validator.validate()
@@ -114,11 +116,12 @@ func ValidateAclPolicy(input *AclValidateInput) error {
 
 // One validation's working state.
 type aclValidator struct {
-	input     *AclValidateInput
-	tables    *aclCompiler
-	policy    *AclPolicy
-	repoKinds map[Id]protocol.RepoKind
-	refusals  []AclValidationRefusal
+	input  *AclValidateInput
+	tables *aclCompiler
+	policy *AclPolicy
+	// the log's repo rows by id: a repo's kind, and whether a mailcfg names an owner
+	repos    map[Id]*protocol.AclRepo
+	refusals []AclValidationRefusal
 	// the network: selectors named, for acl_network_shares
 	networkCount int
 }
@@ -356,11 +359,11 @@ func (self *aclValidator) resource(rule string, field string, resource AclResour
 			return
 		}
 		for _, repoId := range self.repoIds(rule, field, resource) {
-			kind, known := self.repoKinds[repoId]
+			repo, known := self.repos[repoId]
 			if !known {
 				continue
 			}
-			self.repoKind(rule, field, kind, actions)
+			self.repoRow(rule, field, repo, actions)
 		}
 	}
 }
@@ -410,17 +413,25 @@ func (self *aclValidator) repoIds(rule string, field string, resource AclResourc
 	return repoIds
 }
 
-// A grant on one repo of a kind.
-func (self *aclValidator) repoKind(rule string, field string, kind protocol.RepoKind, actions []protocol.AclAction) {
+// A grant on one repo, by its row: its kind, and for a mailcfg whether its row names an owner.
+func (self *aclValidator) repoRow(rule string, field string, repo *protocol.AclRepo, actions []protocol.AclAction) {
+	kind := repo.GetKind()
 	switch kind {
 	case protocol.RepoKind_REPO_KIND_CONFIG, protocol.RepoKind_REPO_KIND_DIRECTORY:
 		self.refuse(rule, field, "a grant on the config or the directory, whose readers the binary fixes (D-ACL-13, D-ACL-24)")
 		return
 	}
-	if !aclRepoKindOwnerBound(kind) {
+	if !aclRepoRowOwnerBound(repo) {
 		return
 	}
 	kindDefault, _ := aclKindDefault(kind)
+	documentRights := kindDefault.DocumentRights
+	reason := "an owner-bound repo's readers, which only its owner's EvsShare or the audit block add (owner decision 126)"
+	if aclRepoRowScopeMailcfg(repo) {
+		// a Team scope's own mailcfg, owner-bound as a mailbox is, to which no rule adds, deposit included (QD-1107)
+		documentRights = 0
+		reason = "a Team scope's own mailcfg, which its member's consented devices alone read and no rule reaches (QD-1107)"
+	}
 	for _, action := range actions {
 		var rights AclEvsRights
 		switch action {
@@ -431,8 +442,8 @@ func (self *aclValidator) repoKind(rule string, field string, kind protocol.Repo
 		default:
 			continue
 		}
-		if !kindDefault.DocumentRights.Has(rights) {
-			self.refuse(rule, field, "an owner-bound repo's readers, which only its owner's EvsShare or the audit block add (owner decision 126)")
+		if !documentRights.Has(rights) {
+			self.refuse(rule, field, reason)
 			return
 		}
 	}

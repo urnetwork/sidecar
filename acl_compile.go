@@ -841,7 +841,10 @@ func (self *aclCompiler) compileRequest(ruleId Id, request *AclRequest) (*protoc
 }
 
 // The kind defaults the head's tags give: tag:mail's read of every mailcfg repo and deposit to every vault and mailbox
-// the log's rows hold (owner decision 150), none when the tags file holds no mail.
+// the log's rows hold (owner decision 150), none when the tags file holds no mail. A mailcfg whose row names an owner,
+// a Team scope's own, is no target: the tag:mail kind default reads no scope's mailcfg, whose receivers are its
+// member's own consented devices (owner decision 58), and a network mail indexer never resolves a scope's addresses
+// (QD-1107), so the read names the network's mailcfg alone.
 func (self *aclCompiler) compileKindRules() ([]*protocol.AclRule, error) {
 	if _, found := self.tagIds[aclMailIndexerTag]; !found {
 		return nil, nil
@@ -863,9 +866,13 @@ func (self *aclCompiler) compileKindRules() ([]*protocol.AclRule, error) {
 		}
 		for _, repo := range self.input.Statements.GetRepos() {
 			kindDefault, known := aclKindDefault(repo.GetKind())
-			if known && kindDefault.MailIndexers == want {
-				rule.Targets = append(rule.Targets, &protocol.AclTarget{RepoId: bytes.Clone(repo.GetRepoId())})
+			if !known || kindDefault.MailIndexers != want {
+				continue
 			}
+			if aclRepoRowScopeMailcfg(repo) {
+				continue
+			}
+			rule.Targets = append(rule.Targets, &protocol.AclTarget{RepoId: bytes.Clone(repo.GetRepoId())})
 		}
 		if len(rule.Targets) == 0 {
 			continue

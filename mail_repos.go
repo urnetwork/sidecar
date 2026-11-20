@@ -9,14 +9,18 @@
 //	          RepoCreate from. Where the log holds more than one for a member, two devices having raced, every
 //	          device takes the one created first in log order, the lowest id breaking a tie, so all agree
 //	mailcfg   one mailcfg repo per network, created by a config writer (§8.8's RepoCreate row), its row naming no
-//	          owner: the first such in log order. A Team scope's own mailcfg is the mailcfg whose row names the
-//	          scope's member (§8.5's mailcfg row; QD-1093; MAIL-M8-09), never taken as the network's: a consented
-//	          device of that member that writes no config heads creates it, and the access log's fold owner-binds it
-//	          to the creator's member, one per member, the first in log order, as a mailbox. Which of the two a
-//	          RepoCreate makes is its signer's standing at its log position, not a field, so each creation is refused
-//	          here first: a device that writes no config heads creates no network mailcfg, and a config writer no
-//	          scope's (EnsureMailConfig, EnsureScopeMailConfig). A creation whose signer's standing changed before
-//	          it landed folds as the other and is answered ErrMailReposAbsent, never read as what was asked for
+//	          owner: the first such standing in log order. A Team scope's own mailcfg is the mailcfg whose row names
+//	          the scope's member (§8.5's mailcfg row; QD-1093; MAIL-M8-09), never taken as the network's: a consented
+//	          device of that member creates it, and the access log's fold owner-binds it to the creator's member, one
+//	          per member, the first in log order, as a mailbox. Which of the two a RepoCreate makes is read from the
+//	          log alone, not a field: a config writer's while no network mailcfg stands is the network's, and every
+//	          other is its signer's member's scope's own, an AdminSet member's device's once the network's stands
+//	          included (QD-1108). So each creation is refused here first where the log would read it as the other:
+//	          a device that writes no config heads creates no network mailcfg, and a config writer no scope's while
+//	          the network's does not stand (EnsureMailConfig, EnsureScopeMailConfig). A creation whose signer's
+//	          standing, or the network mailcfg's, changed before it landed folds as the other and is answered
+//	          ErrMailReposAbsent, never read as what was asked for. Two config writers racing to make the network's
+//	          leave one network mailcfg, the first to land, and the other's member's scope's own, which is harmless
 //	admins    ERASE and CLOSURE pushes take repo:<id>:admin (§11.8, §11.12), so each consented device of the owner
 //	          that is not read_only files RepoAdmin{add} for itself once it holds the repo's key (§8.8), and any of
 //	          them erases whether or not the device that created the mailbox survives. A read_only device, a parked
@@ -56,7 +60,8 @@ var (
 	// No mailbox, or no mailcfg, stands for what was asked.
 	ErrMailReposAbsent = errors.New("mail repos: no such repo")
 	// The mailcfg asked for is not this device's to create: the network's is a config writer's, and a Team scope's
-	// own is a device's that writes no config heads, since the log reads a config writer's as the network's (QD-1093).
+	// own is a device's that writes no config heads, or a config writer's once the network's stands, since the log
+	// reads a config writer's as the network's while none stands (QD-1093, QD-1108).
 	ErrMailReposConfigWriter = errors.New("mail repos: not this device's mailcfg to create")
 )
 
@@ -144,10 +149,10 @@ func (self *MailRepos) verifiedState() (*AclState, error) {
 	return state, nil
 }
 
-// Whether a repo row stands: not deleted, or deleted and restored.
+// Whether a repo row stands: not deleted, or deleted and restored, as the access log's fold reads it when it asks
+// whether the network's mailcfg stands (aclNetworkMailcfgStands).
 func mailRepoStands(repo *protocol.AclRepo) bool {
-	deletion := repo.GetDeletion()
-	return deletion == nil || deletion.GetDeletedAt() == 0 || deletion.GetRestoredAt() != 0
+	return aclRepoRowStands(repo)
 }
 
 // The log position a repo was created at, as its rows tell it: its earliest standing admin row, the creator's, which a
@@ -224,10 +229,17 @@ func mailRepoOwnedBy(repo *protocol.AclRepo, memberId Id) bool {
 	return err == nil && ownerMemberId == memberId
 }
 
-// Whether this device writes config heads at state, so the log reads a mailcfg it creates as the network's.
+// Whether this device writes config heads at state, so the log reads a mailcfg it creates as the network's while none
+// stands.
 func (self *MailRepos) configWriter(state *AclState) bool {
 	sidecar := state.sidecarState(self.sidecarId)
 	return sidecar != nil && sidecar.configWriter
+}
+
+// Whether the network's mailcfg stands at state, so the log reads every mailcfg created now as its signer's member's
+// scope's own, a config writer's included (QD-1108): the fold's own rule, on the same rows.
+func mailNetworkConfigStands(state *AclState) bool {
+	return aclNetworkMailcfgStands(state.Rows().GetRepos())
 }
 
 // Whether a mailcfg this process created folded as another than it asked for: the state holds its row, and the row is
@@ -380,7 +392,8 @@ func (self *MailRepos) EnsureMailbox(ctx context.Context, memberId Id) (*EvsRepo
 // The network's mailcfg, created when the log holds none: its RepoCreate is a config writer's (§8.8), so a device
 // that is none creates nothing, ErrMailReposConfigWriter, since the log would take its RepoCreate as its member's
 // scope's own (QD-1093). One this device created and did not finish keying is taken up again; one that folded as a
-// scope's own, this device a config writer no more when it landed, is ErrMailReposAbsent.
+// scope's own, this device a config writer no more when it landed, or another config writer's network mailcfg having
+// landed first (QD-1108), is ErrMailReposAbsent where no network mailcfg stands, and the one that stands otherwise.
 func (self *MailRepos) EnsureMailConfig(ctx context.Context) (*EvsRepo, error) {
 	select {
 	case self.createToken <- struct{}{}:
@@ -423,12 +436,13 @@ func (self *MailRepos) EnsureMailConfig(ctx context.Context) (*EvsRepo, error) {
 }
 
 // The own mailcfg of the Team scope that is memberId's, created when the log holds none (MAIL-M8-09; QD-1093): by a
-// consented device of that member that is not read_only, else ErrMailReposNotConsented, and that writes no config
-// heads, else ErrMailReposConfigWriter, since the log reads a config writer's mailcfg as the network's. The access
-// log's fold binds it to its creator's member, so its readers are that member's consented devices and the scope's
-// receivers alone (§15.7). One this device created and did not finish keying is taken up again; another device's is
-// answered as it stands, this device waiting for its seat in it; one that folded as the network's, this device a
-// config writer by the time it landed, is ErrMailReposAbsent.
+// consented device of that member that is not read_only, else ErrMailReposNotConsented. A config writer, an AdminSet
+// member's device, creates it once the network's mailcfg stands (QD-1108), and while none stands is
+// ErrMailReposConfigWriter, since the log would read its mailcfg as the network's. The access log's fold binds it to
+// its creator's member, so its readers are that member's consented devices and the scope's receivers alone (§15.7).
+// One this device created and did not finish keying is taken up again; another device's is answered as it stands,
+// this device waiting for its seat in it; one that folded as the network's, this device a config writer and no network
+// mailcfg standing by the time it landed, is ErrMailReposAbsent.
 func (self *MailRepos) EnsureScopeMailConfig(ctx context.Context, memberId Id) (*EvsRepo, error) {
 	if memberId == (Id{}) {
 		return nil, fmt.Errorf("%w: no member", ErrMailReposInvalid)
@@ -471,7 +485,8 @@ func (self *MailRepos) EnsureScopeMailConfig(ctx context.Context, memberId Id) (
 			delete(self.createdScopeConfigIds, memberId)
 		}()
 		return nil, fmt.Errorf("%w: the mailcfg this device created is no scope's", ErrMailReposAbsent)
-	case remembered == nil && self.configWriter(state):
+	case remembered == nil && self.configWriter(state) && !mailNetworkConfigStands(state):
+		// the log would read it as the network's: an AdminSet member's scope waits for the network's to stand
 		return nil, ErrMailReposConfigWriter
 	}
 	return self.createOrResume(ctx, &EvsCreateRepoArgs{Kind: protocol.RepoKind_REPO_KIND_MAILCFG, OwnerMemberId: &memberId}, remembered, func(repoId Id) {

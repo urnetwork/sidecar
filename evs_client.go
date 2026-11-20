@@ -318,9 +318,10 @@ type EvsCreateRepoArgs struct {
 	// Fixed at creation and bound into §10's ur_group (§11.12).
 	Kind protocol.RepoKind
 	// An owner-bound kind's owner member (vault, mailbox, secret), or the member whose Team scope a mailcfg is the
-	// own of, which only that member's consented device that writes no config heads creates (QD-1093); nil for the
-	// network's mailcfg and any other kind. RepoCreate carries no owner: the access log's fold binds the creator's
-	// member, so this names the caller's own member, and its group's ur_group.
+	// own of, which only that member's consented device creates: one that writes no config heads (QD-1093), or a
+	// config writer once the network's mailcfg stands (QD-1108); nil for the network's mailcfg and any other kind.
+	// RepoCreate carries no owner: the access log's fold binds the creator's member, so this names the caller's own
+	// member, and its group's ur_group.
 	OwnerMemberId *Id
 	// A create already filed and cut short: its repo id, to resume at the route without filing a second
 	// RepoCreate. Nil draws a new random id and files.

@@ -22,11 +22,14 @@
 //	             (QD-1032), and the log refuses every RepoPrefixRules before it reaches this fold
 //	             (acl_statement.go's configAclPrefixRulesDark), so the list stays empty unless a log runs the rules
 //	owner        RepoCreate's signer's member for an owner-bound kind (vault, mailbox, secret), and for a mailcfg
-//	             whose signer is a member device that writes no config heads: a Team scope's own, its creator's
-//	             member's, as a mailbox is its member's (QD-1093). A config writer's mailcfg names no owner and is
-//	             the network's. Every such mailcfg is owned, a member's second too, so none of them ever reads as
-//	             the network's; which of a member's is its scope's, the first in log order, is the reader's
-//	             (MailRepos.ScopeMailConfigRepo)
+//	             that is a Team scope's own, its creator's member's, as a mailbox is its member's: one whose signer
+//	             is a member device that writes no config heads (QD-1093), or a config writer's while a network
+//	             mailcfg stands (QD-1108). A config writer's mailcfg while none stands names no owner and is the
+//	             network's, so the first standing unowned mailcfg is the network's, and once the network's is deleted
+//	             the next config writer's creation is the network's again (aclNetworkMailcfgStands reads the rows the
+//	             fold holds at the entry, which every reader holds alike). Every other mailcfg is owned, a member's
+//	             second too, so none of them ever reads as the network's; which of a member's is its scope's, the
+//	             first in log order, is the reader's (MailRepos.ScopeMailConfigRepo)
 //	consented    an owner-bound repo's owner's devices consented at its RepoCreate, an owned mailcfg's too, and each
 //	             its owner's OwnerConfirm adds; a device consented any other way between bases waits for the next
 //	             base's compile
@@ -109,10 +112,10 @@ func FoldAclRepos(repos []*protocol.AclRepo, entries []AclAccessLogEntry) ([]*pr
 				HoldersShrunkTimeMs: statement.TimeMs,
 			}
 			ownerBound := aclRepoKindOwnerBound(body.GetKind())
-			if body.GetKind() == protocol.RepoKind_REPO_KIND_MAILCFG && !verdict.ConfigWriter {
-				// a member device's that writes no config heads: a Team scope's own, its creator's member's (QD-1093).
-				// A verdict naming neither a config writer nor a member is one no check gives, and folds to nothing:
-				// read as unowned it would stand as the network's
+			if body.GetKind() == protocol.RepoKind_REPO_KIND_MAILCFG && (!verdict.ConfigWriter || aclNetworkMailcfgStands(next)) {
+				// a Team scope's own, its creator's member's: a member device's that writes no config heads (QD-1093),
+				// or a config writer's while the network's stands (QD-1108). A verdict naming no member here is one no
+				// check gives, and folds to nothing: read as unowned it would stand as the network's, or beside it
 				if verdict.MemberId == (Id{}) {
 					return nil, ErrAclAccessLogFold
 				}
@@ -235,6 +238,22 @@ func FoldAclRepos(repos []*protocol.AclRepo, entries []AclAccessLogEntry) ([]*pr
 		}
 	}
 	return next, nil
+}
+
+// Whether a repo row stands: no RepoDelete, or its newest one restored.
+func aclRepoRowStands(repo *protocol.AclRepo) bool {
+	deletion := repo.GetDeletion()
+	return deletion == nil || deletion.GetDeletedAt() == 0 || deletion.GetRestoredAt() != 0
+}
+
+// Whether the network's mailcfg stands among repos: a standing mailcfg whose row names no owner. The first such in log
+// order is the network's (QD-1093), and while one stands every mailcfg RepoCreate is its signer's member's Team scope's
+// own, a config writer's included (QD-1108). checkRepoCreate, its re-application over a base and the fold all ask it of
+// the rows at the entry's position, which every reader holds alike, so each reads the same creation the same way.
+func aclNetworkMailcfgStands(repos []*protocol.AclRepo) bool {
+	return slices.ContainsFunc(repos, func(repo *protocol.AclRepo) bool {
+		return repo.GetKind() == protocol.RepoKind_REPO_KIND_MAILCFG && len(repo.GetOwnerMemberId()) == 0 && aclRepoRowStands(repo)
+	})
 }
 
 // The revokes without the subject's.
