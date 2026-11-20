@@ -63,10 +63,12 @@ type evsSlotKeyGoneError struct {
 	keyIndex uint16
 }
 
+// The bad seal's text, naming no slot.
 func (self *evsSlotKeyGoneError) Error() string {
 	return fmt.Sprintf("%v: a slot without the record's key", ErrEvsSealInvalid)
 }
 
+// ErrEvsSealInvalid, so a caller that does not judge the key finds the bad seal it always found.
 func (self *evsSlotKeyGoneError) Unwrap() error {
 	return ErrEvsSealInvalid
 }
