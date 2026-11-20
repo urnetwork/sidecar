@@ -152,9 +152,10 @@ func gkmListingNetworks(labels ...string) ([]sidecar.Id, map[sidecar.Id]*sidecar
 	return networkIds, views
 }
 
-// Waits, a pass at a time, until done holds.
+// Waits, a pass at a time, until done holds, failing the test past §22.8's real-time bound.
 func awaitGkmReconcilerPasses(t *testing.T, ctx context.Context, reconciler *GkmReconciler, what string, done func() bool) {
 	t.Helper()
+	timeout := time.After(sidecartest.DefaultBarrierDriverSettings().AwaitTimeout)
 	for {
 		_, changed := reconciler.Passes()
 		if done() {
@@ -164,14 +165,20 @@ func awaitGkmReconcilerPasses(t *testing.T, ctx context.Context, reconciler *Gkm
 		case <-changed:
 		case <-ctx.Done():
 			t.Fatalf("never %s", what)
+		case <-timeout:
+			t.Fatalf("never %s within §22.8's real-time bound", what)
 		}
 	}
 }
 
-// Moves the clock by step once the loop waits, then waits for the pass the move starts. step is at most the gate's hint
-// interval, so the loop's timer falls within it, and the clock never moves while a pass runs (GkmReconciler.Idle).
+// Moves the clock by step once the loop waits, then waits for the pass the move starts, failing the test past §22.8's
+// real-time bound. step must end at the loop's timer, as it does where every wake falls on the grid of the gate's hint
+// interval and step is that interval: the move then fires the timer as it ends, and the clock stands while the pass
+// runs (GkmReconciler.Idle). A step past an earlier timer would let the pass that timer starts arm its next past the
+// step's end (gkmReconcilerWorld's header), which advance on the world does not.
 func stepGkmReconciler(t *testing.T, ctx context.Context, clock *sidecartest.FakeClock, reconciler *GkmReconciler, step time.Duration) {
 	t.Helper()
+	timeout := time.After(sidecartest.DefaultBarrierDriverSettings().AwaitTimeout)
 	for {
 		idle, changed := reconciler.Idle()
 		if idle {
@@ -181,6 +188,8 @@ func stepGkmReconciler(t *testing.T, ctx context.Context, clock *sidecartest.Fak
 		case <-changed:
 		case <-ctx.Done():
 			t.Fatal("the reconciler never waited")
+		case <-timeout:
+			t.Fatal("the reconciler did not wait within §22.8's real-time bound")
 		}
 	}
 	count, changed := reconciler.Passes()
@@ -190,6 +199,8 @@ func stepGkmReconciler(t *testing.T, ctx context.Context, clock *sidecartest.Fak
 		case <-changed:
 		case <-ctx.Done():
 			t.Fatal("no pass after the clock moved")
+		case <-timeout:
+			t.Fatal("no pass after the clock moved, within §22.8's real-time bound")
 		}
 		var passed int
 		passed, changed = reconciler.Passes()
@@ -199,15 +210,18 @@ func stepGkmReconciler(t *testing.T, ctx context.Context, clock *sidecartest.Fak
 	}
 }
 
-// Waits until the listing has read count pages.
+// Waits until the listing has read count pages, failing the test past §22.8's real-time bound.
 func awaitGkmListing(t *testing.T, ctx context.Context, reconciler *GkmReconciler, count int) GkmNetworkListing {
 	t.Helper()
+	timeout := time.After(sidecartest.DefaultBarrierDriverSettings().AwaitTimeout)
 	for {
 		listing, changed := reconciler.NetworkListing()
 		if count <= listing.PageCount {
 			return listing
 		}
 		select {
+		case <-timeout:
+			t.Fatalf("the listing did not read %d pages within §22.8's real-time bound: %+v", count, listing)
 		case <-changed:
 		case <-ctx.Done():
 			t.Fatalf("the listing never read %d pages: %+v", count, listing)
@@ -369,12 +383,7 @@ func (self *gkmReconcilerWorld) restartLoading(settings *GkmReconcilerSettings) 
 	self.t.Helper()
 	self.reconciler.Close()
 	state := newFakeGkmLoadingState(self.state)
-	reconciler, err := NewGkmReconciler(self.fixture.ctx, self.fixture.host.ServiceHost(), settings, &GkmReconcilerDeps{State: state})
-	if err != nil {
-		self.t.Fatal(err)
-	}
-	self.t.Cleanup(reconciler.Close)
-	self.reconciler = reconciler
+	self.startReconciler(self.fixture.host.ServiceHost(), settings, &GkmReconcilerDeps{State: state})
 	return state
 }
 

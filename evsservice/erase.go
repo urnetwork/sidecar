@@ -4,7 +4,8 @@
 //	         repo's erasure ref, as POST .../push takes any push: a token below admin gets 403 SCOPE at arrival,
 //	         before any read, commit or slot rewrite (I-EVS-16), and a statement that is no ERASE is refused
 //	step 4   reads each slot the ERASE's erased list names
-//	5h       a list naming no key those slots still hold gets 409 NOTHING_TO_ERASE, recorded (§11.8's refuse row)
+//	5h       a list naming no key those slots still hold gets 409 NOTHING_TO_ERASE, recorded (§11.8's refuse row), a
+//	         completion ERASE's among them until its question is answered (QD-1132; eraseRules)
 //	after    once the ERASE commits, and again whenever an attempt of it finds it committed, each named slot is
 //	         rewritten without those keys, If-Match the slot it read and keeping its origin (DESIGN-DETAILS 14.2.6),
 //	         before the 200, under a preservation hold too: a slot answering 404 is done, since every key it held is
@@ -120,6 +121,12 @@ func (self *pushAttempt) erasureRules(view *PushView) *EvsCheckRefusal {
 }
 
 // An ERASE names at least one key its slots still hold, else 409 NOTHING_TO_ERASE.
+//
+// A completion ERASE (QD-1132; the root's evs_erase_completion.go) names only keys an earlier ERASE of its erasure
+// destroyed and says complete, but its erasure id and complete byte ride its sealed metadata (QD-682), which evs cannot
+// open (I-1), so evs cannot tell one from a racing duplicate ERASE. Until question
+// erasure-completion-erase-evs-cannot-read-complete settles what evs reads it by, it is refused here as any list naming
+// no held key: its erasure stays listed in its ref's set, fail closed, as before QD-1132.
 func (self *pushAttempt) eraseRules(view *PushView) *EvsCheckRefusal {
 	if self.erasureSlots == nil {
 		return newEvsCheckRefusal(EvsCheckReasonUnchecked, "no slots read")

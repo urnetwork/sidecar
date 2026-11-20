@@ -71,6 +71,9 @@ type searchOpenedRef struct {
 	// Where RK_g comes from in place of the engine's GkmClient: an indexer's serving, which asks gkm for nothing
 	// (search_remote_corpus.go). Nil asks the engine's.
 	keys GkmClient
+	// The repo's searchable_days as its masks read it, taken at the search's open (searchSearchableSinceSeconds), so
+	// the shards "search more" lands are masked by the same cut as the rest; 0 masks none.
+	searchableSinceSeconds uint64
 }
 
 // What a snapshot offers a plan: its buckets, the retained ones among them, and all's shards held where all is usable.
@@ -555,7 +558,10 @@ func (self *searchOpenedRef) matchLanded(query *SearchQuery, source *searchParti
 	if self.local != nil {
 		localNewest = self.local.newest
 	}
-	mask, err := newSearchMask(&searchMaskArgs{probe: probe, companion: self.source.companion, refId: self.refId, local: localNewest})
+	mask, err := newSearchMask(&searchMaskArgs{
+		probe: probe, companion: self.source.companion, refId: self.refId, local: localNewest,
+		searchableSinceSeconds: self.searchableSinceSeconds,
+	})
 	if err != nil {
 		return nil, err
 	}

@@ -3,6 +3,7 @@ package gkmservice
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"testing"
@@ -79,42 +80,134 @@ func (self *fakeGkmReconcilerState) set(networkId sidecar.Id, view sidecar.GkmAu
 }
 
 // One network, one repo on the second cluster with its group, and a reconciler on the fixture's host.
+//
+// The world moves the fake clock only while the reconciler's hint loop waits, and only as far as the timer the loop
+// waits on (advance), the rule of §22.8's determinism row (owner decision 549): the loop sets its next timer from the
+// clock's time when a pass ends, so a move that runs on while the pass an earlier timer started is still arming sets
+// that timer past the move's end, and a wake the move passed is left unrun until the clock moves again. One move of
+// an hour hung TestGkmReconcilerAfterARestartSweepsAnObjectWhoseRowLeft so (tip-check's red at 59e5b8f2). Every wait
+// fails the test after awaitTimeout of real time, saying what it waited for.
 type gkmReconcilerWorld struct {
 	t          *testing.T
 	fixture    *gkmFixture
 	state      *fakeGkmReconcilerState
 	reconciler *GkmReconciler
-	log        *sidecartest.FakeGkmAuthLog
-	networkId  sidecar.Id
-	repoId     sidecar.Id
-	groupId    sidecar.Id
-	memberId   sidecar.Id
-	signer     *gkmTestSidecar
-	key1       *sidecar.EvsRepoKey
+	// the clock reconciler reads, which notes each timer its hint loop arms
+	loopClock *gkmLoopClock
+	// how long in real time one wait may take before it fails the test: §22.8's bound, the barrier driver's (QD-1101)
+	awaitTimeout time.Duration
+	log          *sidecartest.FakeGkmAuthLog
+	networkId    sidecar.Id
+	repoId       sidecar.Id
+	groupId      sidecar.Id
+	memberId     sidecar.Id
+	signer       *gkmTestSidecar
+	key1         *sidecar.EvsRepoKey
 }
 
 func newGkmReconcilerWorld(t *testing.T) *gkmReconcilerWorld {
 	fixture := newGkmFixture(t)
 	world := &gkmReconcilerWorld{
-		t:         t,
-		fixture:   fixture,
-		state:     newFakeGkmReconcilerState(),
-		log:       sidecartest.NewFakeGkmAuthLog(),
-		networkId: testId("network-a"),
-		repoId:    testId("repo-g"),
-		groupId:   testId("group-g"),
-		memberId:  testId("member-a"),
+		t:            t,
+		fixture:      fixture,
+		state:        newFakeGkmReconcilerState(),
+		awaitTimeout: sidecartest.DefaultBarrierDriverSettings().AwaitTimeout,
+		log:          sidecartest.NewFakeGkmAuthLog(),
+		networkId:    testId("network-a"),
+		repoId:       testId("repo-g"),
+		groupId:      testId("group-g"),
+		memberId:     testId("member-a"),
 	}
 	fixture.placeRepo(world.repoId, "meta-2", protocol.EvsRepoState_EVS_REPO_ACTIVE)
 	fixture.fileForm(world.repoId, "meta-2", 1, world.groupId)
 	world.signer = fixture.newSidecar("sc-signer", memberDeviceFacts(world.memberId))
-	reconciler, err := NewGkmReconciler(fixture.ctx, fixture.host.ServiceHost(), DefaultGkmReconcilerSettings(), &GkmReconcilerDeps{State: world.state})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(reconciler.Close)
-	world.reconciler = reconciler
+	world.startReconciler(fixture.host.ServiceHost(), DefaultGkmReconcilerSettings(), &GkmReconcilerDeps{State: world.state})
 	return world
+}
+
+// Starts a reconciler on host that reads the fixture's clock through a loop clock of its own, and makes it the
+// world's. The world closes none: a restart closes the one it replaces first.
+func (self *gkmReconcilerWorld) startReconciler(host *sidecar.ServiceHost, settings *GkmReconcilerSettings, deps *GkmReconcilerDeps) {
+	self.t.Helper()
+	if deps.Networks != nil {
+		// the listing arms timers of its own, which the loop clock would take for the loop's
+		self.t.Fatal("the world's reconciler runs no listing")
+	}
+	loopClock := newGkmLoopClock(self.fixture.clock)
+	host.Clock = loopClock
+	reconciler, err := NewGkmReconciler(self.fixture.ctx, host, settings, deps)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	self.t.Cleanup(reconciler.Close)
+	self.reconciler = reconciler
+	self.loopClock = loopClock
+}
+
+// The fake clock as one reconciler reads it, noting each timer the hint loop arms with the time it is set for, so the
+// world knows the timer the loop waits on. With no listing, the loop is the only caller of After among the
+// reconciler's goroutines: a hint's timeout is an AfterFunc. Safe for concurrent use.
+type gkmLoopClock struct {
+	clock  *sidecartest.FakeClock
+	arming *sidecar.MonitorValue[gkmLoopArming]
+
+	stateLock sync.Mutex
+	// runs once, on the loop's goroutine, as the loop arms its next timer, after the loop read the clock for it and
+	// before the clock holds it; nil for none
+	beforeArming func()
+}
+
+// The timers the hint loop has armed.
+type gkmLoopArming struct {
+	// timers armed, one each pass
+	count int
+	// the newest one's time, at or before the clock's time when it was armed for a timer that fires at once
+	at time.Time
+}
+
+func newGkmLoopClock(clock *sidecartest.FakeClock) *gkmLoopClock {
+	return &gkmLoopClock{
+		clock:  clock,
+		arming: sidecar.NewMonitorValue(gkmLoopArming{}),
+	}
+}
+
+func (self *gkmLoopClock) Now() time.Time {
+	return self.clock.Now()
+}
+
+func (self *gkmLoopClock) After(timeout time.Duration) <-chan time.Time {
+	beforeArming := func() func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		beforeArming := self.beforeArming
+		self.beforeArming = nil
+		return beforeArming
+	}()
+	if beforeArming != nil {
+		beforeArming()
+	}
+	// the world moves the clock only while the loop waits, so nothing moves it between this read and the arming
+	at := self.clock.Now().Add(max(0, timeout))
+	fired := self.clock.After(timeout)
+	self.arming.Update(func(arming gkmLoopArming) gkmLoopArming {
+		return gkmLoopArming{count: arming.count + 1, at: at}
+	})
+	return fired
+}
+
+func (self *gkmLoopClock) AfterFunc(timeout time.Duration, function func()) (stop func() bool) {
+	return self.clock.AfterFunc(timeout, function)
+}
+
+// Has fn run on the loop's goroutine as the loop arms its next timer, once: a barrier that holds the loop between its
+// reading of the clock and its arming while a test moves the clock, where a move that ran on while the loop armed
+// landed. fn moves no clock itself: the fake clock takes one mover at a time, and an Advance ending while another
+// runs sets the clock back to its own end.
+func (self *gkmLoopClock) setBeforeArming(fn func()) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.beforeArming = fn
 }
 
 // A log position at which readers read the repo, writers write it, holders_shrunk_at is shrunkAt, and each reader in
@@ -164,65 +257,145 @@ func (self *gkmReconcilerWorld) putGeneration(parent *sidecar.EvsRepoKey, pin *b
 	return key
 }
 
-// Runs fn, then waits until the reconciler holds view for the network: the pass that read it has finished.
-func (self *gkmReconcilerWorld) awaitState(view sidecar.GkmAuthView, fn func()) {
+// Waits until check holds, reading it again each time the channel it gives closes, which it takes before it reads.
+// Past awaitTimeout of real time it fails the test with what it waited for, what it saw last and where the clock and
+// the loop stand, so a wait that cannot end costs seconds rather than the package's timeout (§22.8's determinism row).
+func (self *gkmReconcilerWorld) await(what string, check func() (done bool, changed chan struct{}, seen string)) {
 	self.t.Helper()
-	_, changed := self.reconciler.Passes()
-	fn()
+	timeout := time.After(self.awaitTimeout)
 	for {
+		done, changed, seen := check()
+		if done {
+			return
+		}
+		select {
+		case <-changed:
+		case <-self.fixture.ctx.Done():
+			self.t.Fatalf("the test ended while waiting for %s: %s", what, seen)
+		case <-timeout:
+			self.t.Fatalf("waited %s of real time for %s: %s; %s", self.awaitTimeout, what, seen, self.loopState())
+		}
+	}
+}
+
+// A time on the fixture's clock as its distance from the clock's start, "none" for the zero time.
+func (self *gkmReconcilerWorld) clockTime(at time.Time) string {
+	if at.IsZero() {
+		return "none"
+	}
+	return "+" + at.Sub(sidecartest.DefaultClockStart()).String()
+}
+
+// Where the clock and the loop stand, for a wait that fails.
+func (self *gkmReconcilerWorld) loopState() string {
+	idle, _ := self.reconciler.Idle()
+	passes, _ := self.reconciler.Passes()
+	arming := self.loopClock.arming.Value()
+	earliest, _ := self.reconciler.earliestWake()
+	finished, _ := self.reconciler.DelegationKeyDeletes()
+	timerTimes := []string{}
+	for _, at := range self.fixture.clock.PendingTimers() {
+		timerTimes = append(timerTimes, self.clockTime(at))
+	}
+	return fmt.Sprintf(
+		"the clock at %s; the loop idle %t after %d passes, its timer %d at %s, its earliest wake at %s; %d key deletions finished; the clock's timers at %v",
+		self.clockTime(self.fixture.clock.Now()), idle, passes, arming.count, self.clockTime(arming.at), self.clockTime(earliest), finished, timerTimes,
+	)
+}
+
+// Notes a change with fn once the loop waits, then waits until the reconciler holds view for the network: the pass
+// that read it has read it. Noted while the loop waits, the change's wake starts the pass that reads it, and none is
+// left over to start a pass the world does not see coming.
+func (self *gkmReconcilerWorld) awaitNetworkState(networkId sidecar.Id, view sidecar.GkmAuthView, fn func()) {
+	self.t.Helper()
+	self.awaitIdle()
+	fn()
+	self.await("the reconciler to read the network's state", func() (bool, chan struct{}, string) {
+		_, changed := self.reconciler.Passes()
 		held := func() sidecar.GkmAuthView {
 			self.reconciler.stateLock.Lock()
 			defer self.reconciler.stateLock.Unlock()
-			if entry, ok := self.reconciler.networkEntries[self.networkId]; ok && entry.state != nil {
+			if entry, ok := self.reconciler.networkEntries[networkId]; ok && entry.state != nil {
 				return entry.state.View
 			}
 			return nil
 		}()
-		if held == view {
-			return
-		}
-		select {
-		case <-changed:
-			_, changed = self.reconciler.Passes()
-		case <-self.fixture.ctx.Done():
-			self.t.Fatal("the reconciler never read the state")
-		}
-	}
+		return held == view, changed, fmt.Sprintf("it holds another view, nil %t", held == nil)
+	})
 }
 
-// Waits until the loop waits with its timer set, so a move of the fake clock reaches that timer.
-func (self *gkmReconcilerWorld) awaitIdle() {
+// awaitNetworkState for the world's network.
+func (self *gkmReconcilerWorld) awaitState(view sidecar.GkmAuthView, fn func()) {
 	self.t.Helper()
-	for {
-		idle, changed := self.reconciler.idle.Get()
-		if idle {
-			return
-		}
-		select {
-		case <-changed:
-		case <-self.fixture.ctx.Done():
-			self.t.Fatal("the reconciler never waited")
-		}
-	}
+	self.awaitNetworkState(self.networkId, view, fn)
 }
 
-// Runs fn, which moves the clock, once the loop waits, and waits for the pass that move starts to finish.
-func (self *gkmReconcilerWorld) awaitPass(fn func()) {
+// Waits until the loop has finished count passes in all.
+func (self *gkmReconcilerWorld) awaitPasses(count int, what string) {
 	self.t.Helper()
-	self.awaitIdle()
-	count, changed := self.reconciler.Passes()
-	fn()
+	self.await(what, func() (bool, chan struct{}, string) {
+		passes, changed := self.reconciler.Passes()
+		return count <= passes, changed, fmt.Sprintf("%d passes of %d", passes, count)
+	})
+}
+
+// Waits until the loop waits on the timer it armed after its last pass, a timer the clock holds past its time, with no
+// state change noted for it and no wake signalled, and returns what it armed. Until the clock reaches that timer or a
+// test notes a change, nothing moves the loop.
+func (self *gkmReconcilerWorld) awaitArming() gkmLoopArming {
+	self.t.Helper()
+	var arming gkmLoopArming
+	self.await("the loop to wait on a timer the clock holds", func() (bool, chan struct{}, string) {
+		// every move of the loop closes this: a pass sets idle false, its arming sets it true
+		idle, changed := self.reconciler.Idle()
+		passes, _ := self.reconciler.Passes()
+		arming = self.loopClock.arming.Value()
+		now := self.fixture.clock.Now()
+		pending := func() bool {
+			self.reconciler.stateLock.Lock()
+			defer self.reconciler.stateLock.Unlock()
+			return 0 < len(self.reconciler.pendingChanges) || self.reconciler.resyncPending || 0 < len(self.reconciler.wake)
+		}()
+		held := slices.ContainsFunc(self.fixture.clock.PendingTimers(), arming.at.Equal)
+		done := idle && arming.count == passes && now.Before(arming.at) && held && !pending
+		return done, changed, fmt.Sprintf("idle %t, %d timers armed for %d passes, the newest at %s, held %t, a change or wake pending %t", idle, arming.count, passes, self.clockTime(arming.at), held, pending)
+	})
+	return arming
+}
+
+// awaitArming, held to the loop's own schedule: the timer it waits on is no later than its earliest network wake or
+// sweep, which a move of the clock while it armed would leave behind (the type's header). Returns the timer's time.
+func (self *gkmReconcilerWorld) awaitIdle() time.Time {
+	self.t.Helper()
+	arming := self.awaitArming()
+	if earliest, found := self.reconciler.earliestWake(); found && earliest.Before(arming.at) {
+		self.t.Fatalf("the loop waits on a timer at %s, past its earliest wake at %s: the clock moved while it armed", self.clockTime(arming.at), self.clockTime(earliest))
+	}
+	return arming.at
+}
+
+// Moves the clock forward by timeout, as advanceTo does.
+func (self *gkmReconcilerWorld) advance(timeout time.Duration) {
+	self.t.Helper()
+	self.advanceTo(self.fixture.clock.Now().Add(timeout))
+}
+
+// Moves the clock forward to target one timer of the loop at a time (§22.8's determinism row; owner decision 549):
+// each move ends at the timer the loop waits on, once the clock holds it, and the next starts only once the pass that
+// timer starts has ended and the loop waits on its next, so no move passes a timer the loop has not yet armed. Returns
+// with the loop waiting on a timer past target: every network's wake and sweep, every retry and every gate's hint due
+// by target has run in its own pass, whichever network it was.
+func (self *gkmReconcilerWorld) advanceTo(target time.Time) {
+	self.t.Helper()
 	for {
-		select {
-		case <-changed:
-		case <-self.fixture.ctx.Done():
-			self.t.Fatal("no pass")
-		}
-		var now int
-		now, changed = self.reconciler.Passes()
-		if count < now {
+		armedAt := self.awaitIdle()
+		if target.Before(armedAt) {
+			self.fixture.clock.AdvanceTo(target)
 			return
 		}
+		passes, _ := self.reconciler.Passes()
+		self.fixture.clock.AdvanceTo(armedAt)
+		self.awaitPasses(passes+1, "the pass the loop's timer at "+self.clockTime(armedAt)+" starts")
 	}
 }
 
@@ -264,15 +437,15 @@ func TestGkmReconcilerHintsAShrinkAndAnExpiryWithinOneInterval(t *testing.T) {
 	if count := world.pendingHints(readerB); count != 0 {
 		t.Errorf("a reader that writes nothing was hinted: %d", count)
 	}
-	world.awaitPass(func() { fixture.clock.Advance(world.reconciler.settings.PendingHintInterval) })
+	world.advance(world.reconciler.settings.PendingHintInterval)
 	if count := world.pendingHints(writer); count != 2 {
 		t.Errorf("pending hints one interval into a closed gate: %d", count)
 	}
 
 	// a rotation covering the shrink reopens the gate, and the hints stop
 	key2 := world.putGeneration(world.key1, view2.Pin())
-	world.awaitPass(func() { fixture.clock.Advance(world.reconciler.settings.PendingHintInterval) })
-	world.awaitPass(func() { fixture.clock.Advance(world.reconciler.settings.PendingHintInterval) })
+	world.advance(world.reconciler.settings.PendingHintInterval)
+	world.advance(world.reconciler.settings.PendingHintInterval)
 	if count := world.pendingHints(writer); count != 2 {
 		t.Errorf("pending hints once a generation covers the shrink: %d", count)
 	}
@@ -286,7 +459,7 @@ func TestGkmReconcilerHintsAShrinkAndAnExpiryWithinOneInterval(t *testing.T) {
 		t.Fatalf("a change with no shrink hinted: %d", count)
 	}
 	for fixture.clock.Now().Before(expiry) {
-		world.awaitPass(func() { fixture.clock.Advance(world.reconciler.settings.PendingHintInterval) })
+		world.advance(world.reconciler.settings.PendingHintInterval)
 	}
 	if count := world.pendingHints(writer); count != 3 {
 		t.Errorf("pending hints within an interval of the expiry: %d", count)
@@ -324,16 +497,16 @@ func TestGkmReconcilerHintsWhileADroppedHolderPrecedesTheNewestEpochsPin(t *test
 		t.Fatalf("no pending hint at the shrink")
 	}
 	// epoch 0's pin is below the drop: the hint repeats though the gate is open
-	world.awaitPass(func() { fixture.clock.Advance(world.reconciler.settings.DroppedLeafHintInterval) })
+	world.advance(world.reconciler.settings.DroppedLeafHintInterval)
 	if count := world.pendingHints(writer); count != hinted+1 {
 		t.Errorf("pending hints one interval into a dropped holder before the newest epoch: %d, was %d", count, hinted)
 	}
 	// a writer leaf's Remove lands at a pin past the drop: the hints stop
 	putEpoch(1, view2.Pin())
-	world.awaitPass(func() { fixture.clock.Advance(world.reconciler.settings.DroppedLeafHintInterval) })
+	world.advance(world.reconciler.settings.DroppedLeafHintInterval)
 	stopped := world.pendingHints(writer)
-	world.awaitPass(func() { fixture.clock.Advance(world.reconciler.settings.DroppedLeafHintInterval) })
-	world.awaitPass(func() { fixture.clock.Advance(world.reconciler.settings.DroppedLeafHintInterval) })
+	world.advance(world.reconciler.settings.DroppedLeafHintInterval)
+	world.advance(world.reconciler.settings.DroppedLeafHintInterval)
 	if count := world.pendingHints(writer); count != stopped {
 		t.Errorf("pending hints after an epoch whose pin passes the drop: %d, was %d", count, stopped)
 	}
@@ -406,21 +579,21 @@ func TestGkmReconcilerHintsTheConfigWritersOfAKeyingRepoAnAgentCreated(t *testin
 	if count := world.formlessHints(agent); count != 0 {
 		t.Errorf("the agent was hinted: %d", count)
 	}
-	world.awaitPass(func() { fixture.clock.Advance(world.reconciler.settings.PendingHintInterval) })
+	world.advance(world.reconciler.settings.PendingHintInterval)
 	if count := world.formlessHints(configWriter); count != 2 {
 		t.Errorf("the config writer's hints one interval on: %d", count)
 	}
 	// the later repo is placed by the agent: watched since its row appeared, it is hinted at the next interval
 	fixture.placeRepoBy(laterRepoId, "meta-2", agent)
-	world.awaitPass(func() { fixture.clock.Advance(world.reconciler.settings.PendingHintInterval) })
+	world.advance(world.reconciler.settings.PendingHintInterval)
 	if count := world.formlessHints(configWriter); count != 4 {
 		t.Errorf("the config writer's hints once the later repo is placed: %d", count)
 	}
 	// a member device forms the agent's repos' groups: the hints stop
 	fixture.fileForm(agentRepoId, "meta-2", 1, testId("group-agent"))
 	fixture.fileForm(laterRepoId, "meta-2", 1, testId("group-later"))
-	world.awaitPass(func() { fixture.clock.Advance(world.reconciler.settings.PendingHintInterval) })
-	world.awaitPass(func() { fixture.clock.Advance(world.reconciler.settings.PendingHintInterval) })
+	world.advance(world.reconciler.settings.PendingHintInterval)
+	world.advance(world.reconciler.settings.PendingHintInterval)
 	if count := world.formlessHints(configWriter); count != 4 {
 		t.Errorf("the config writer's hints once the groups stand: %d", count)
 	}
