@@ -38,13 +38,17 @@
 //	         eraser's own head, in a push built in a companion push's order that carries no other document and names
 //	         the epoch; a quota refusal waits, holding back no file of the erasure, whose listed card versions the
 //	         pairs remove whether or not it was folded again (§11.14's erase and limit rows)
+//	limit    on a metadata cluster at §19.9's cohort limit evs's 507 CLUSTER_FULL is the storage limit's refusal to
+//	         the index (QD-1118): the pairs and the re-entry wait on it as at the storage limit, the pairs until its
+//	         Retry-After, and go on once there is room; the erasure event shows waiting, never a failure
 //
 // Hints only speed this: every step reads evs's state at the head, so a lost hint publishes nothing, and no indexer
 // takes part. No watch follows an ERASE, since the CUT fences. A hold never pauses an ERASE. Not built here: ?closure=1
-// uploads at the limit, which EvsRepo.Closure refuses for now (evs_closure.go), and an eraser's own walk of a removed
-// index path's history on EvsRepo (indexEvsStore.Retained answers incomplete). Barriers evs.index.erase.listed, .closed
-// and .erased, and evs.index.reenter.built and .pushed, keyed <repo>:<ref>. Paths and documents stay on the device
-// (I-13). Not safe for concurrent use: one rewrite or re-entry of an erasure at a time.
+// uploads, which EvsRepo.Closure does not send yet (evs_closure.go), so at the storage limit or on a full cluster a
+// CLOSURE's upload is refused as any upload is and its pair waits on that refusal; and an eraser's own walk of a
+// removed index path's history on EvsRepo (indexEvsStore.Retained answers incomplete). Barriers evs.index.erase.listed,
+// .closed and .erased, and evs.index.reenter.built and .pushed, keyed <repo>:<ref>. Paths and documents stay on the
+// device (I-13). Not safe for concurrent use: one rewrite or re-entry of an erasure at a time.
 
 package sidecar
 
@@ -79,7 +83,8 @@ var (
 type indexEraseStore interface {
 	// Commits a CLOSURE on the index's ref: each file replacing the version it names, at that version's exact length,
 	// its sealed note the erasure's id, its payload erased, which the ERASE after it destroys. Refused as a push is,
-	// with an *indexRefusal: 409 for a path another push changed, 429 or a quota at the eraser's allowance.
+	// with an *indexRefusal: 409 for a path another push changed, 429 or a quota at the eraser's allowance, a quota too
+	// for a full cluster's 507, with its Retry-After (QD-1118).
 	Closure(ctx context.Context, closure *indexClosurePush) (*indexCommitted, error)
 	// Commits an ERASE of keys on the repo's erasure ref; one naming only keys already gone answers done.
 	Erase(ctx context.Context, erase *indexErasePush) error
@@ -508,8 +513,8 @@ func (self *IndexEraser) history(ctx context.Context, view *indexView, own index
 	return nil
 }
 
-// The erasure's state while a refusal of its allowance holds its pairs, and true where err is one. A refusal naming
-// the allowance is remembered, so the next pairs stay within it.
+// The erasure's state while a refusal of its allowance, or a full cluster's 507 (QD-1118), holds its pairs, and true
+// where err is one. A refusal naming the allowance is remembered, so the next pairs stay within it; a 507 names none.
 func (self *IndexEraser) waitingOf(erasureId Id, err error, objects []*indexRekeyObject) (*SidecarErasure, bool) {
 	allowance, ok := indexEraseAllowanceOf(err)
 	if !ok {
@@ -807,7 +812,8 @@ type IndexReenterResult struct {
 	// Cards with nothing to enter: an empty fold, blocked, past the version's bits or the fetch bound, one D6 skips,
 	// or one already standing above the list.
 	SkippedCount int
-	// A quota refused the push: the cards wait, tried again from NextTry.
+	// A quota refused the push, the storage limit's or a full cluster's 507 (QD-1118): the cards wait, tried again
+	// from NextTry.
 	Waiting bool
 	NextTry time.Time
 	// Builds made, the committed one included.
@@ -1015,7 +1021,8 @@ func (self *IndexEraser) reenterAttempt(ctx context.Context, args *IndexReenterA
 		// built again from step 1, never resent as built
 		return indexReenterRefused, nil
 	case isIndexRefusal(err, indexRefusalQuota):
-		// the re-entry adds payload and waits as builds do, holding back no file of the erasure
+		// the re-entry adds payload and waits as builds do, at the storage limit and on a full cluster alike, holding
+		// back no file of the erasure
 		waiting := indexReenterWaiting(args.ErasureId, self.clock.Now(), len(pending), self.settings)
 		result.Waiting, result.NextTry = true, waiting.NextTry
 		self.raise(waiting)

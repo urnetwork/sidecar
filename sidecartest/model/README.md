@@ -65,6 +65,16 @@ instances, at the state counts EVSB-M10-07 reported for them.
 == PASS story-dropC: exit 0, 8849512 distinct states, depth 31, 11min 39s
 ```
 
+`run-tlc.sh live-drop EvsCommit` (QD-1119), on its own from 2026-11-20 00:10 at 047aec69, which added
+it, whose sources digest, 9718f020, modelled.yml records with it: F2DropsEnd, with the spec's other
+properties, holds under weak fairness on each drop story on one instance.
+
+```text
+== PASS live-dropA: exit 0, 1766093 distinct states, depth 36, 29min 51s
+== PASS live-dropB: exit 0, 1131554 distinct states, depth 34, 17min 39s
+== PASS live-dropC: exit 0, 1436738 distinct states, depth 31, 17min 29s
+```
+
 ### The M2 part's twins (M2's gates)
 
 `run-tlc.sh twins EvsCommit`: each of the M2 part's 21 twins is refused with its invariant violated,
@@ -98,7 +108,6 @@ StaleHorizon and CachedRefusal by seeded simulation, in 1 h 15 min.
 
 - `model` and `live` at the cfg's bounds, as above, so M2's and M10's TLC items read open for
   EvsCommit whatever its other modes show.
-- `live-drop` beside these five, which predate it: it runs on its own at 047aec69, which added it.
 - F2DropsEnd on two instances, which QD-1119 leaves to the review phase, and what EVSB-M10-07's report
   lists the stories leaving out.
 

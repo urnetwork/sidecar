@@ -196,13 +196,12 @@ func testDropLimitGoesBack(t testing.TB, err error, limit evsTestDropLimit) {
 	}
 }
 
-// Whether err is a backfill's look waiting under limit: the index's quota refusal at the storage limit or while spent,
-// and evs's 507 on a full cluster, which the index store hands on as it is.
+// Whether err is a backfill's look waiting under limit: the index's quota refusal, at the storage limit or while spent
+// and on a full cluster alike, whose 507 the index store reads as the storage limit's refusal with its wait (QD-1118).
 func testDropLimitBackfillWaits(limit evsTestDropLimit, err error) bool {
-	if limit == evsTestDropLimitClusterFull {
-		return IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_CLUSTER_FULL)
-	}
-	return isIndexRefusal(err, indexRefusalQuota)
+	refusal, ok := indexRefusalOf(err)
+	return ok && refusal.kind == indexRefusalQuota &&
+		refusal.retryAfter == time.Duration(evsTestDropLimitRefusal(limit).reply.GetRetryAfterMs())*time.Millisecond
 }
 
 // The index of the stand-in's main ref as a reader of its head loads it.
