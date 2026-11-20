@@ -92,9 +92,11 @@ func indexRefusalOfEvs(err error) error {
 		return &indexRefusal{kind: indexRefusalIndexEpoch}
 	case protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT:
 		return &indexRefusal{kind: indexRefusalConflict}
-	case protocol.EvsRefusalCode_EVS_REFUSAL_QUOTA_LIMIT, protocol.EvsRefusalCode_EVS_REFUSAL_QUOTA_PAYMENT,
-		protocol.EvsRefusalCode_EVS_REFUSAL_CLUSTER_FULL:
+	case protocol.EvsRefusalCode_EVS_REFUSAL_QUOTA_LIMIT, protocol.EvsRefusalCode_EVS_REFUSAL_QUOTA_PAYMENT:
 		return &indexRefusal{kind: indexRefusalQuota, retryAfter: evsError.RetryAfter}
+	case protocol.EvsRefusalCode_EVS_REFUSAL_CLUSTER_FULL:
+		// the storage limit's refusal to the index, its Retry-After the wait, its text naming the cluster
+		return &indexRefusal{kind: indexRefusalQuota, retryAfter: evsError.RetryAfter, clusterFull: true}
 	}
 	if evsError.Status == http.StatusTooManyRequests {
 		return &indexRefusal{kind: indexRefusalRetry, retryAfter: evsError.RetryAfter}

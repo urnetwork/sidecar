@@ -1248,35 +1248,36 @@ func TestIndexRewriteTakesAnAllShardAndARolledBucket(t *testing.T) {
 }
 
 // QD-1118's mapping: evs's 507 CLUSTER_FULL is the index's quota refusal, its retry delay the wait, 0 where it names
-// none, and the eraser reads that wait from it and no allowance; the storage limit's QuotaRefusal reads as it did; and
-// a 507 that is no evs refusal, with no CLUSTER_FULL code, passes as it is.
+// none, its text naming the full cluster rather than a quota, and the eraser reads that wait from it and no allowance;
+// the storage limit's own QuotaRefusal stays the quota refusal it was, its record and wait with it; and a 507 that is
+// no evs refusal, with no CLUSTER_FULL code, passes as it is.
 func TestIndexRefusalOfEvsTakesAFullClusterAsTheLimit(t *testing.T) {
-	cases := []struct {
-		err   *EvsError
-		wait  time.Duration
-		limit int64
-		used  int64
-	}{
-		{err: &EvsError{Status: http.StatusInsufficientStorage, Code: protocol.EvsRefusalCode_EVS_REFUSAL_CLUSTER_FULL, RetryAfter: 7 * time.Minute}, wait: 7 * time.Minute},
-		{err: &EvsError{Status: http.StatusInsufficientStorage, Code: protocol.EvsRefusalCode_EVS_REFUSAL_CLUSTER_FULL}, wait: 0},
-		{err: &EvsError{Status: http.StatusForbidden, Code: protocol.EvsRefusalCode_EVS_REFUSAL_QUOTA_LIMIT, Quota: &protocol.EvsQuotaRefusal{
-			LimitKey: "evs_closure_bytes_per_day", Limit: 9000, Used: 4000, RetryAfterMs: 1000,
-		}}, wait: time.Second, limit: 9000, used: 4000},
+	for _, wait := range []time.Duration{7 * time.Minute, 0} {
+		full := &EvsError{Status: http.StatusInsufficientStorage, Code: protocol.EvsRefusalCode_EVS_REFUSAL_CLUSTER_FULL, RetryAfter: wait}
+		refusal, ok := indexRefusalOf(indexRefusalOfEvs(full))
+		if !ok || refusal.kind != indexRefusalQuota || refusal.retryAfter != wait || refusal.quota != nil || !refusal.clusterFull ||
+			refusal.Error() != "index push refused: storage cluster full" {
+			t.Fatalf("a 507 waiting %s: the index's refusal %+v", wait, refusal)
+		}
+		allowance, ok := indexEraseAllowanceOf(indexEraseRefusalOfEvs(full))
+		if !ok || allowance.retryAfter != wait || allowance.limit != 0 || allowance.used != 0 {
+			t.Fatalf("a 507 waiting %s: the eraser's allowance %+v", wait, allowance)
+		}
 	}
-	for _, c := range cases {
-		refusal, ok := indexRefusalOf(indexRefusalOfEvs(c.err))
-		if !ok || refusal.kind != indexRefusalQuota || refusal.retryAfter != c.err.RetryAfter || refusal.quota != nil {
-			t.Errorf("%v: the index's refusal %+v", c.err, refusal)
-			continue
-		}
-		allowance, ok := indexEraseAllowanceOf(indexEraseRefusalOfEvs(c.err))
-		if !ok || allowance.retryAfter != c.wait || allowance.limit != c.limit || allowance.used != c.used {
-			t.Errorf("%v: the eraser's allowance %+v", c.err, allowance)
-		}
+	storage := &EvsError{Status: http.StatusForbidden, Code: protocol.EvsRefusalCode_EVS_REFUSAL_QUOTA_LIMIT, Quota: &protocol.EvsQuotaRefusal{
+		LimitKey: "evs_storage_bytes", Limit: 9000, Used: 12000, RetryAfterMs: 1000,
+	}}
+	refusal, ok := indexRefusalOf(indexEraseRefusalOfEvs(storage))
+	if !ok || refusal.kind != indexRefusalQuota || refusal.clusterFull || refusal.quota == nil || refusal.quota.LimitKey != "evs_storage_bytes" ||
+		refusal.Error() != "index push refused: quota" {
+		t.Fatalf("the storage limit's refusal: %+v", refusal)
+	}
+	if allowance, ok := indexEraseAllowanceOf(refusal); !ok || allowance.retryAfter != time.Second {
+		t.Fatalf("the storage limit's wait: %+v", allowance)
 	}
 	bare := error(&EvsError{Status: http.StatusInsufficientStorage})
 	if indexRefusalOfEvs(bare) != bare || indexEraseRefusalOfEvs(bare) != bare {
-		t.Error("a 507 that is no evs refusal was read as one")
+		t.Fatal("a 507 that is no evs refusal was read as one")
 	}
 }
 
@@ -1334,8 +1335,9 @@ func testIndexErasureStates(events []*SidecarErasure) []string {
 
 // On a full cluster an erasure's CLOSURE of a bucket shard, an upload, is refused 507 there: the erasure waits as at
 // the storage limit, its next try the 507's Retry-After, or now where it names none, with the objects and bytes the
-// list holds and the floor's finish, since a 507 names no allowance; nothing is committed and the event goes
-// rewriting, waiting. At its next try, with room, the pair commits and the shard no longer holds the listed version.
+// list holds and the floor's finish, since a 507 names no allowance; nothing is committed and the events go fenced
+// (the CUT), rewriting, waiting. At its next try, with room, the pair commits and the shard no longer holds the listed
+// version.
 func testIndexRewriteOnAFullCluster(t *testing.T, noWait bool) {
 	writer, capture, gate, key := testDropLimitShardWorld(t)
 	if noWait {
