@@ -17,8 +17,11 @@
 //	         never a state other than the one asked for under its name
 //	History  a path's versions at the head, newest first, those a push after the ref version asked for wrote left
 //	         out, each read and hashed the same way
-//	Read     one version's plaintext, reconstructed and verified by evs's reader, then held to its content_sha256;
-//	         a replaced versionless version answers errIndexCollected
+//	Read     one version's plaintext, reconstructed and verified by evs's reader, then held to its content_sha256
+//	         where the version carries one; a replaced versionless version answers errIndexCollected. A version the
+//	         eraser's Retained names from History carries none, and is held to what evs's reader held it to, its
+//	         entry's own sealed size, git oid and content_sha256 (QD-1110), so a writer's head file at its second
+//	         version reads its first
 //	Commit   one push of index files and removals through EvsRepo's sender, each write the index's reserved
 //	         writer's (versioning 2, staged under 16 KiB; the settings versioning 0) held to the version its builder
 //	         read (IfVersion, so 5g's path CAS spans the build to the commit), naming the push's index_epoch, its
@@ -350,6 +353,9 @@ func (self *indexEvsStore) Commit(ctx context.Context, push *indexPush) (*indexC
 // erasure's progress from the ref's CLOSUREs and the erasure ref's ERASEs, by their notes. Retained walks each live
 // index path's history for the versions it keeps beside its newest, but names no removed path, since EvsRepo walks no
 // ref's removed paths by name yet: it answers incomplete, so no erasure on the real store says complete until it does.
+// A version whose every slot a committed ERASE named opens under no key, its staged bytes with it, and evs still lists
+// it kept and refuses its read for the key: Retained leaves it out, nothing being left there to hold, so the walk of
+// an erasure resumed after another's ERASE goes on (QD-1110; question mail-m10-04-index-eraser-history-reads).
 var _ indexEraseStore = (*indexEvsStore)(nil)
 
 // A refusal of an eraser's push as the index reads it, with the allowance a 429 or a quota names.
