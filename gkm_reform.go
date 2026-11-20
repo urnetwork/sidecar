@@ -516,11 +516,12 @@ func (self *gkmGroupManager) reformInFlow(ctx context.Context, args *GkmReformAr
 				return Id{}, err
 			}
 			if forms := reply.GetForms(); 0 < len(forms) {
-				form, err := gkmParseGroupForm(state, self.repoId, forms[len(forms)-1])
-				if err != nil {
-					return Id{}, err
-				}
-				if form.groupId == pins.groupId {
+				newest := &protocol.GroupForm{}
+				if err := proto.Unmarshal(forms[len(forms)-1].GetBody(), newest); err == nil && bytes.Equal(newest.GetGroupId(), pins.groupId.Bytes()) {
+					// held to its signer's admitted key before it stands for this device's group
+					if _, err := gkmParseGroupForm(state, self.repoId, forms[len(forms)-1]); err != nil {
+						return Id{}, err
+					}
 					return pins.groupId, nil
 				}
 			}
