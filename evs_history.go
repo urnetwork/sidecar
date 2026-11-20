@@ -118,8 +118,10 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 			if len(history.Versions) == 0 {
 				return nil, ErrEvsPathAbsent
 			}
-			// nothing stands below the path's first creation, unless its number named a removal evs did not show
-			history.Whole = impliedRemoval == 0
+			// nothing stands below the path's first creation, unless its number named a removal evs did not show;
+			// nothing below a removal, whose ended life stands below it, or below a version that names the one it
+			// replaced reaches no first version
+			history.Whole = impliedRemoval == 0 && history.Versions[len(history.Versions)-1].Created
 			break
 		}
 		ignored := false
