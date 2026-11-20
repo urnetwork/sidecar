@@ -1,10 +1,11 @@
-// ur record erase (RECORD.md section 8, §16.8's Erasure; RECORD-M3-06).
+// ur record erase (RECORD.md section 8, §16.8's Erasure; RECORD-M3-06, RECORD-M10-01).
 //
 //	ur record erase --log=<log> --entry=<id>... [--reason=<reason>] [--dry-run]
 //
 // A log admin's erasure of entries by key destruction, which cannot be undone, so a person does it: the command lists
 // what it will destroy on the terminal and erases only on a yes there, and --dry-run prints the list and erases
-// nothing. The daemon refuses a caller with a harness process among its ancestors, by the pid it read off the socket,
+// nothing. For a context entry in a format-2 log the list says how many search documents of its run's other entries
+// keep its agent label and session ids, which a person who wants those gone erases too (DESIGN-DETAILS 15.2.8). The daemon refuses a caller with a harness process among its ancestors, by the pid it read off the socket,
 // and no MCP tool reaches it. --reason is person, the default, or moderation. The answer names the one log the
 // erasure reached: a copy or twin in another log is not reached, and an erasure there is its own.
 
@@ -51,6 +52,9 @@ type urRecordEraseItem struct {
 	TimeMillis int64      `json:"time_millis"`
 	CopyCount  int        `json:"copy_count"`
 	Erased     bool       `json:"erased,omitempty"`
+	// For a context entry in a format-2 log, the documents of its run's other entries that keep its agent label and
+	// session ids (RecordErasePlanItem.KeptContextCount).
+	KeptContextCount int `json:"kept_context_count,omitempty"`
 }
 
 // A plan, and once erased, the erasure.
@@ -116,6 +120,7 @@ func (self *urDaemonNetwork) recordErasePlan(ctx context.Context, params *urReco
 	for _, item := range plan.Items {
 		reply.Items = append(reply.Items, &urRecordEraseItem{
 			EntryId: item.EntryId, Kind: item.Kind.String(), TimeMillis: item.TimeMillis, CopyCount: item.CopyCount, Erased: item.Erased,
+			KeptContextCount: item.KeptContextCount,
 		})
 	}
 	return reply, nil
@@ -183,6 +188,10 @@ func printUrRecordErasePlan(out interface{ Write([]byte) (int, error) }, reply *
 			state = "erased already"
 		}
 		fmt.Fprintf(out, "  %s  %s  %s  %s\n", item.EntryId, item.Kind, when, state)
+		if 0 < item.KeptContextCount {
+			// DESIGN-DETAILS 15.2.8 (QD-782): rows written before the erasure keep what this context gave them
+			fmt.Fprintf(out, "    %d search documents of its run's other entries keep this context's agent label and session ids; erase those entries too to remove them\n", item.KeptContextCount)
+		}
 	}
 	for _, entryId := range reply.Missing {
 		fmt.Fprintf(out, "  %s  not in this log\n", entryId)

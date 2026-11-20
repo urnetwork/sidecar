@@ -24,8 +24,13 @@ type testUrRecordEraseTarget struct {
 func (self *testUrRecordEraseTarget) recordErasePlan(ctx context.Context, params *urRecordEraseParams, pid int) (*urRecordEraseReply, error) {
 	self.plans = append(self.plans, params)
 	reply := &urRecordEraseReply{LogId: sidecar.NewId()}
-	for _, entryId := range params.Entries {
-		reply.Items = append(reply.Items, &urRecordEraseItem{EntryId: entryId, Kind: "note", CopyCount: 1})
+	for index, entryId := range params.Entries {
+		item := &urRecordEraseItem{EntryId: entryId, Kind: "note", CopyCount: 1}
+		if index == 1 {
+			// a context entry whose run's other entries keep its label in their documents
+			item.Kind, item.KeptContextCount = "context", 2
+		}
+		reply.Items = append(reply.Items, item)
 	}
 	return reply, nil
 }
@@ -84,5 +89,20 @@ func TestRecordEraseMethodsConfirm(t *testing.T) {
 	}
 	if methods := urRecordEraseMethods(&testUrDaemonTarget{}); len(methods) != 0 {
 		t.Error("a target with no record serves the erase methods")
+	}
+}
+
+// A context entry's line in the plan (DESIGN-DETAILS 15.2.8; QD-782): the run's other documents that keep its agent
+// label and session ids, named before the question, and no such line for another kind.
+func TestRecordErasePlanNamesTheContextFieldsKept(t *testing.T) {
+	target := &testUrRecordEraseTarget{}
+	daemon := startTestControlDaemon(t, target, nil)
+	cli, stdout, stderr := newTestUrCli(daemon.socketPath)
+	args := []string{"ur", "record", "erase", "--log=vault", "--entry=" + sidecar.NewId().String(), "--entry=" + sidecar.NewId().String(), "--dry-run"}
+	if code := cli.main(context.Background(), args); code != urExitOk {
+		t.Fatalf("a dry run: exit %d: %s", code, stderr.String())
+	}
+	if lines := strings.Count(stdout.String(), "keep this context's agent label and session ids"); lines != 1 || !strings.Contains(stdout.String(), "2 search documents") {
+		t.Fatalf("the plan names the kept fields %d times: %q", lines, stdout.String())
 	}
 }

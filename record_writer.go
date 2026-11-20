@@ -212,6 +212,9 @@ type SidecarRecord struct {
 	retention any
 	// one erasure at a time (record_erase.go, which no ios_extension leg links)
 	eraseLock sync.Mutex
+	// the erasures' format-2 index side and the logs a sync found that may hold a late copy (record_erase.go), made
+	// at the first use: held as any, as retention is
+	erasing any
 	// a deposit may wait in this device's vault: set at each loop's start, at a commit there and at a hint
 	ingestDue bool
 	// the reach receipts (record_reach.go, which no ios_extension leg links), made at the first Reach: held as any, so
