@@ -604,8 +604,8 @@ func (self *M10World) eraseHeld(label string, message *M10Message) (*m10Erased, 
 		return nil, fmt.Errorf("%s: evs holds no CLOSURE of the erasure", label)
 	}
 	// each file that held it rewritten by a CLOSURE of the erasure, and every earlier version of it under keys the
-	// mailbox's committed ERASEs destroyed, so it opens for no device: refused for its key, or, where evs no longer
-	// serves a replaced versionless version's content, collected
+	// mailbox's committed ERASEs destroyed, so it opens for no device: erased, its key gone by a committed ERASE, or,
+	// where evs no longer serves a replaced versionless version's content, collected
 	destroyed := map[sidecar.Id]bool{}
 	for _, erased := range erasures {
 		for _, key := range erased.Keys {
@@ -628,7 +628,7 @@ func (self *M10World) eraseHeld(label string, message *M10Message) (*m10Erased, 
 				return nil, fmt.Errorf("%s: %s at %d, which a CLOSURE of the erasure replaced, names slots %v not all destroyed", label, path, version.Version, version.SlotIds)
 			}
 			for _, device := range []*M10Device{owner, self.Reader} {
-				if err := self.versionOpens(device, path, version.Version); !errors.Is(err, sidecar.ErrEvsSealInvalid) && !errors.Is(err, sidecar.ErrEvsCollected) {
+				if err := self.versionOpens(device, path, version.Version); !errors.Is(err, sidecar.ErrEvsErased) && !errors.Is(err, sidecar.ErrEvsCollected) {
 					return nil, fmt.Errorf("%s: %s at %d, which a CLOSURE of the erasure replaced, is not refused for the %s: %v", label, path, version.Version, device.Name, err)
 				}
 			}
