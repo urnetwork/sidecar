@@ -29,9 +29,10 @@
 #     commit    the sidecar commit
 #     tlc       TLC's revision, as its banner prints it
 #     mode      the run-tlc.sh mode it ran, its twins read as mutants: model, mutants (twins) or live, and
-#               for each part of the spec (run-tlc.sh list-parts) mutants-<part> (twins-<part>) and
-#               stories-<part>, a part being a group of twins and stories a gate needs apart from the rest;
-#               a run's mode is what run-tlc.sh's mode ran at the commit it names
+#               for each part of the spec (run-tlc.sh list-parts) mutants-<part> (twins-<part>),
+#               stories-<part> and, where the part has liveness runs, live-<part>, a part being a group of
+#               runs a gate needs apart from the rest; a run's mode is what run-tlc.sh's mode ran at the
+#               commit it names
 #     result    pass or fail
 #     sources_sha256  the digest of the sources when it ran, as modelled_test.go computes it
 #     states, depth, seconds  what TLC reported, summed over the mode's runs
@@ -58,12 +59,12 @@
 models:
   - spec: EvsCommit
     owners: [EVS1-M2-02, EVSB-M10-07]
-    # the M2 part from M2's entry; the M10 part's purger from M10's entry and its drop extension only from its
-    # exit (§22.10's format 2 row, §22.17's blocking line)
+    # the M2 part from M2's entry; the M10 part's purger from M10's entry and its drop extension, its liveness
+    # among its modes (QD-1119), only from its exit (§22.10's format 2 row, §22.17's blocking line)
     milestones:
       - {gate: M2-in, modes: [model, mutants, live]}
       - {gate: M10-in, modes: [mutants-purge, stories-purge]}
-      - {gate: M10, modes: [mutants-drop, stories-drop]}
+      - {gate: M10, modes: [mutants-drop, stories-drop, live-drop]}
     objects: "head (its fence, refusal records, seal lease and collect window), batch records, packs and parcels with their pidx/ entries, index entries, segments with their upload receipts, slot, pmap, log, gen, epoch, repo, proj and rev; from M10 versionless versions, kind-5 and staged content, holds, DROP pushes and the citation fence"
     companions: [details/EvsSlot]
     sources:

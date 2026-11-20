@@ -397,7 +397,7 @@ func TestGateM10InTlcOutcomeReadsThePurgersModes(t *testing.T) {
 	}
 	// a drop extension test the item does not name, failing or skipped, is not read
 	for _, verdict := range []string{"FAIL", "SKIP"} {
-		dropped := gateM10InTlcFixtureOutput(nil, nil, map[string]string{"TestEvsCommitDropStoriesPassTlc": verdict, "TestEvsCommitDropMutantsFailTlc": verdict})
+		dropped := gateM10InTlcFixtureOutput(nil, nil, map[string]string{"TestEvsCommitDropStoriesPassTlc": verdict, "TestEvsCommitDropMutantsFailTlc": verdict, "TestEvsCommitDropLivenessHolds": verdict})
 		if outcome, reason := GateM10InTlcOutcome(dropped, nil); outcome != GateOutcomePass || strings.Contains(reason, "Drop") {
 			t.Errorf("the drop extension's tests at %s: %s %q", verdict, outcome, reason)
 		}
@@ -421,7 +421,7 @@ func TestGateM10InTlcItemNeedsThePurgerNotTheDrops(t *testing.T) {
 			t.Errorf("M10-in's TLC item does not run %s", want)
 		}
 	}
-	for _, unwanted := range []string{"TestEvsCommitDropMutantsFailTlc", "TestEvsCommitDropStoriesPassTlc", "TestEvsCommitStoriesPassTlc", "TestModelledNamesEachModelsSources"} {
+	for _, unwanted := range []string{"TestEvsCommitDropMutantsFailTlc", "TestEvsCommitDropStoriesPassTlc", "TestEvsCommitDropLivenessHolds", "TestEvsCommitStoriesPassTlc", "TestModelledNamesEachModelsSources"} {
 		if slices.Contains(gateM10InTlcTests, unwanted) {
 			t.Errorf("M10-in's TLC item runs %s", unwanted)
 		}
