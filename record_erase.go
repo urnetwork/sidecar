@@ -39,7 +39,10 @@
 //	          no file and is tried again from ReentryRetryInterval
 //	rewrite   step 6: IndexEraser.Rewrite's CLOSURE and ERASE pairs over every index file holding a listed version,
 //	          its last ERASE saying complete with the ErasureBody as its note; a wait on an allowance or the limit, or
-//	          a list it could not prove whole, keeps the erasure journaled and tried again
+//	          a list it could not prove whole, keeps the erasure journaled and tried again. A rewrite that finds no
+//	          file to rewrite leaves no ERASE with a key to say complete, so a completion ERASE does (QD-1132): it
+//	          names keys an earlier ERASE of the erasure destroyed, which evs takes once an erasure and readers read
+//	          as destroying nothing new
 //	entry     step 7: the erasure entry, RECORD.md's ErasureBody, in this device's own stream of the log, which the
 //	          writer retries while §11.13's limit refuses it; until it lands the committed ERASE is the record. Headers
 //	          and chains still verify: only keys go, and the entry files stay
@@ -221,6 +224,9 @@ type RecordEraseIndex interface {
 	Reenter(ctx context.Context, args *IndexReenterArgs) (*IndexReenterResult, error)
 	// IndexEraser.Rewrite, from evs's state.
 	Rewrite(ctx context.Context, args *IndexRewriteArgs) (*IndexRewriteResult, error)
+	// IndexEraser.Resume: for another device's erasure, the CUT where it is missing, then the rewrite, each only once
+	// it is this device's by §11.12's reconcile row.
+	Resume(ctx context.Context, args *IndexResumeArgs) (*IndexResumeResult, error)
 }
 
 // Opens a log's format-2 index side for its erasures: nil and no error where the log has none, in format 1 or for a
@@ -250,6 +256,12 @@ type recordEraseJournal struct {
 	// Step 3's read was taken and its ERASEs drawn, from Erases[RereadFrom:].
 	Reread     bool `json:"reread,omitempty"`
 	RereadFrom int  `json:"reread_from,omitempty"`
+	// An ERASE of steps 2 and 3 (or a late copy's) committed: one whose every ERASE found its keys gone already, as
+	// when another admin's pass took them first, committed nothing and never began (§11.12's reconcile row), so it
+	// lists nothing, the erasure that took the keys listing their documents.
+	Began bool `json:"began,omitempty"`
+	// The completion ERASE's push id, drawn and journaled before it first goes (QD-1132).
+	CompletionPushId Id `json:"completion_push_id,omitempty"`
 	// The erasure entry was appended (step 7).
 	Entered bool `json:"entered,omitempty"`
 	// A late copy's erasure: its ERASEs' note is Note, the erasure's own as its first ERASE carried it, and no erasure
@@ -291,13 +303,31 @@ type recordEraseJournalCard struct {
 	RunId           Id     `json:"run_id"`
 }
 
-// The erasures' state beside the eraser, which SidecarRecord holds: the format-2 index side SetEraseIndex binds, and
-// the logs a sync read since the record's loop last looked for late copies.
+// The erasures' state beside the eraser, which SidecarRecord holds: the format-2 index side SetEraseIndex binds, the
+// logs a sync read since the record's loop last looked at them, when it last looked for others' erasures in each, and
+// the erasures this process ran or took up to their end, which a look passes over though no ERASE says complete (a
+// rewrite with no file to rewrite has no key left to say so).
 type recordErasing struct {
-	stateLock  sync.Mutex
-	open       RecordEraseIndexOpen
-	hooked     bool
-	lateLogIds map[Id]bool
+	stateLock         sync.Mutex
+	open              RecordEraseIndexOpen
+	hooked            bool
+	lateLogIds        map[Id]bool
+	othersLogIdLooks  map[Id]time.Time
+	settledErasureIds map[Id]bool
+}
+
+// Whether erasureId ran to its end in this process.
+func (self *recordErasing) settled(erasureId Id) bool {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.settledErasureIds[erasureId]
+}
+
+// Notes that erasureId ran to its end here.
+func (self *recordErasing) settle(erasureId Id) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.settledErasureIds[erasureId] = true
 }
 
 // The record's erasures' state, made at its first use.
@@ -306,7 +336,7 @@ func (self *SidecarRecord) erasingState() *recordErasing {
 	defer self.stateLock.Unlock()
 	erasing, _ := self.erasing.(*recordErasing)
 	if erasing == nil {
-		erasing = &recordErasing{lateLogIds: map[Id]bool{}}
+		erasing = &recordErasing{lateLogIds: map[Id]bool{}, othersLogIdLooks: map[Id]time.Time{}, settledErasureIds: map[Id]bool{}}
 		self.erasing = erasing
 	}
 	return erasing
@@ -554,8 +584,26 @@ func (self *RecordEraser) tend(ctx context.Context) {
 	slices.SortFunc(logIds, Id.Cmp)
 	log := self.record.writer.log
 	for _, logId := range logIds {
-		if _, err := self.EraseLateCopies(ctx, logId); err != nil && log.V(1).Enabled() {
+		// the sync that marked the log is the one this look reads: another would mark it again
+		if _, err := self.eraseLateCopies(ctx, logId, false); err != nil && log.V(1).Enabled() {
 			log.Infof("[record]a look for late copies in %s stopped: %s", logId, err)
+		}
+		// others' erasures, which become this device's 25 h on at the soonest, at most once a RetryInterval
+		now := self.record.writer.clock.Now()
+		looked := func() bool {
+			erasing.stateLock.Lock()
+			defer erasing.stateLock.Unlock()
+			if lookedAt, ok := erasing.othersLogIdLooks[logId]; ok && now.Before(lookedAt.Add(self.settings.RetryInterval)) {
+				return true
+			}
+			erasing.othersLogIdLooks[logId] = now
+			return false
+		}()
+		if looked {
+			continue
+		}
+		if _, err := self.ResumeOthers(ctx, logId); err != nil && log.V(1).Enabled() {
+			log.Infof("[record]a look for erasures to take up in %s stopped: %s", logId, err)
 		}
 	}
 	if err := self.resumeDue(ctx); err != nil && log.V(1).Enabled() {
@@ -813,9 +861,11 @@ func (self *RecordEraser) plan(ctx context.Context, journal *recordEraseJournal,
 	return self.writeJournal(journal)
 }
 
-// Sends pushes, each again under its push id where it went before; NOTHING_TO_ERASE is done.
-func (self *RecordEraser) sendErases(ctx context.Context, logId Id, erasureId Id, note []byte, pushes []*recordEraseJournalPush) error {
+// Sends pushes, each again under its push id where it went before; NOTHING_TO_ERASE is done. True where one committed,
+// a retry evs answers with its commit included.
+func (self *RecordEraser) sendErases(ctx context.Context, logId Id, erasureId Id, note []byte, pushes []*recordEraseJournalPush) (bool, error) {
 	streams := self.record.writer.boundStreams()
+	committed := false
 	for _, push := range pushes {
 		testHookBarrier("record.erase.before", recordChainIdText(logId))
 		_, err := streams.Erase(ctx, logId, &RecordStreamErase{
@@ -824,13 +874,14 @@ func (self *RecordEraser) sendErases(ctx context.Context, logId Id, erasureId Id
 		testHookBarrier("record.erase.after", recordChainIdText(logId))
 		if code, ok := RecordStreamRefusalCode(err); ok && code == protocol.EvsRefusalCode_EVS_REFUSAL_NOTHING_TO_ERASE {
 			// every key it names is gone already: done
-			err = nil
+			continue
 		}
 		if err != nil {
-			return err
+			return committed, err
 		}
+		committed = true
 	}
-	return nil
+	return committed, nil
 }
 
 // Step 3: reads the log's streams again and draws an ERASE for each copy of a named entry found now, journaled before
@@ -904,8 +955,8 @@ func (self *RecordEraser) deferJournal(journal *recordEraseJournal, nextTry time
 // One erasure from its journal's step to its end: see the file header's rows.
 func (self *RecordEraser) run(ctx context.Context, journal *recordEraseJournal) (*RecordEraseResult, error) {
 	result, err := self.runSteps(ctx, journal)
-	if err != nil && journal.Step != recordEraseStepPlanned {
-		// past its first ERASE an erasure is never left for a restart alone
+	if err != nil && (journal.Step != recordEraseStepPlanned || 0 < len(journal.Erases)) {
+		// once its ERASEs are drawn an erasure is never left for a restart alone
 		self.deferJournal(journal, time.Time{})
 	}
 	return result, err
@@ -945,7 +996,9 @@ func (self *RecordEraser) runSteps(ctx context.Context, journal *recordEraseJour
 	}
 	if journal.Step == recordEraseStepPlanned {
 		// step 2
-		if err := self.sendErases(ctx, logId, journal.ErasureId, note, journal.Erases); err != nil {
+		began, err := self.sendErases(ctx, logId, journal.ErasureId, note, journal.Erases)
+		journal.Began = journal.Began || began
+		if err != nil {
 			return nil, err
 		}
 		streams := writer.boundStreams()
@@ -975,8 +1028,23 @@ func (self *RecordEraser) runSteps(ctx context.Context, journal *recordEraseJour
 				return nil, err
 			}
 		}
-		if err := self.sendErases(ctx, logId, journal.ErasureId, note, journal.Erases[journal.RereadFrom:]); err != nil {
+		began, err := self.sendErases(ctx, logId, journal.ErasureId, note, journal.Erases[journal.RereadFrom:])
+		journal.Began = journal.Began || began
+		if err != nil {
 			return nil, err
+		}
+		if journal.Listing && !journal.Began {
+			// every ERASE found its keys gone: evs's erasure ref says whether one of this erasure committed all the same,
+			// as a retry past evs's memory of its push id answers
+			erasures, err := writer.boundStreams().ReadErasures(ctx, logId, 0)
+			if err != nil {
+				return nil, err
+			}
+			journal.Began = slices.ContainsFunc(erasures, func(erasure *RecordStreamErasure) bool { return erasure.ErasureId == journal.ErasureId })
+			if !journal.Began {
+				// another erasure took every key, and its CUT lists the documents: this one never began
+				journal.Listing = false
+			}
 		}
 		journal.Step = recordEraseStepReread
 		if err := self.writeJournal(journal); err != nil {
@@ -1057,7 +1125,47 @@ func (self *RecordEraser) runSteps(ctx context.Context, journal *recordEraseJour
 	if err := self.store.Remove(recordEraseJournalName(journal.ErasureId)); err != nil {
 		return result, err
 	}
+	self.record.erasingState().settle(journal.ErasureId)
 	return result, nil
+}
+
+// Step 5: each of cards folded at its stream's head as this device's reader reads it, without what the log's ERASEs
+// and the set at the push's base say is erased at its epoch, and entered in this device's own index head.
+func (self *RecordEraser) reenter(ctx context.Context, logId Id, index RecordEraseIndex, erasureId Id, cards []*recordEraseJournalCard) (*IndexReenterResult, error) {
+	reader := self.record.reader
+	erasures, err := self.record.writer.boundStreams().ReadErasures(ctx, logId, 0)
+	if err != nil {
+		return nil, err
+	}
+	args := &IndexReenterArgs{ErasureId: erasureId, Erasures: erasures}
+	for _, card := range cards {
+		if len(card.Key) != indexIdByteCount {
+			return nil, fmt.Errorf("%w: erasure journal %s", ErrRecordChainCorrupt, erasureId)
+		}
+		streamSidecarId := card.StreamSidecarId
+		args.Cards = append(args.Cards, &IndexReenterCard{
+			Key:    [indexIdByteCount]byte(card.Key),
+			Stream: newIndexRecordReaderStream(reader, logId, index.LogKind(), streamSidecarId, card.RefId),
+			RunId:  card.RunId,
+			Head: func(ctx context.Context) (uint64, error) {
+				// the stream's head from evs, read after the index's
+				if err := reader.Sync(ctx, logId); err != nil {
+					return 0, err
+				}
+				streams, _ := reader.Streams(logId)
+				for _, stream := range streams {
+					if stream.StreamSidecarId == streamSidecarId && 0 < len(stream.Pushes) {
+						return stream.Pushes[len(stream.Pushes)-1].Version, nil
+					}
+				}
+				return 0, nil
+			},
+		})
+	}
+	testHookBarrier("record.erase.reenter.before", recordChainIdText(logId))
+	reentered, err := index.Reenter(ctx, args)
+	testHookBarrier("record.erase.reenter.after", recordChainIdText(logId))
+	return reentered, err
 }
 
 // Steps 5 and 6 on the log's index: the listed cards folded again, then the rewrite. Answers when the erasure's index
@@ -1065,7 +1173,6 @@ func (self *RecordEraser) runSteps(ctx context.Context, journal *recordEraseJour
 // whole.
 func (self *RecordEraser) indexParts(ctx context.Context, journal *recordEraseJournal, index RecordEraseIndex, note []byte, indexResult *RecordEraseIndexResult) (time.Time, error) {
 	writer := self.record.writer
-	reader := self.record.reader
 	logId := journal.LogId
 	owed := time.Time{}
 	owe := func(at time.Time) {
@@ -1077,40 +1184,8 @@ func (self *RecordEraser) indexParts(ctx context.Context, journal *recordEraseJo
 		}
 	}
 	if 0 < len(journal.Cards) {
-		// step 5: each card folded at its stream's head as this device's reader reads it, without what the log's
-		// ERASEs and the set at the push's base say is erased at its epoch
-		erasures, err := writer.boundStreams().ReadErasures(ctx, logId, 0)
-		if err != nil {
-			return owed, err
-		}
-		args := &IndexReenterArgs{ErasureId: journal.ErasureId, Erasures: erasures}
-		for _, card := range journal.Cards {
-			if len(card.Key) != indexIdByteCount {
-				return owed, fmt.Errorf("%w: erasure journal %s", ErrRecordChainCorrupt, journal.ErasureId)
-			}
-			streamSidecarId := card.StreamSidecarId
-			args.Cards = append(args.Cards, &IndexReenterCard{
-				Key:    [indexIdByteCount]byte(card.Key),
-				Stream: newIndexRecordReaderStream(reader, logId, index.LogKind(), streamSidecarId, card.RefId),
-				RunId:  card.RunId,
-				Head: func(ctx context.Context) (uint64, error) {
-					// the stream's head from evs, read after the index's
-					if err := reader.Sync(ctx, logId); err != nil {
-						return 0, err
-					}
-					streams, _ := reader.Streams(logId)
-					for _, stream := range streams {
-						if stream.StreamSidecarId == streamSidecarId && 0 < len(stream.Pushes) {
-							return stream.Pushes[len(stream.Pushes)-1].Version, nil
-						}
-					}
-					return 0, nil
-				},
-			})
-		}
-		testHookBarrier("record.erase.reenter.before", recordChainIdText(logId))
-		reentered, err := index.Reenter(ctx, args)
-		testHookBarrier("record.erase.reenter.after", recordChainIdText(logId))
+		// step 5
+		reentered, err := self.reenter(ctx, logId, index, journal.ErasureId, journal.Cards)
 		switch {
 		case errors.Is(err, ErrIndexEraseNotCut):
 			// complete, and its set entry dropped since: a card left out is folded by its stream's again unit
@@ -1135,6 +1210,26 @@ func (self *RecordEraser) indexParts(ctx context.Context, journal *recordEraseJo
 	if rewritten.Erasure != nil && rewritten.Erasure.State == SidecarErasureWaiting {
 		owe(rewritten.Erasure.NextTry)
 	}
+	if recordEraseRewriteEndedUnsaid(rewritten) && 0 < len(journal.Erases) {
+		// no file held a listed version, so no ERASE with a key was left to say complete (QD-1132)
+		if journal.CompletionPushId == (Id{}) {
+			pushId, err := writer.drawId()
+			if err != nil {
+				return owed, err
+			}
+			journal.CompletionPushId = pushId
+			if err := self.writeJournal(journal); err != nil {
+				return owed, err
+			}
+		}
+		completed, err := self.sendErases(ctx, logId, journal.ErasureId, note, []*recordEraseJournalPush{{
+			PushId: journal.CompletionPushId, Keys: journal.Erases[0].Keys, Complete: true,
+		}})
+		if err != nil {
+			return owed, err
+		}
+		indexResult.Completed = completed
+	}
 	if rewritten.Unproven {
 		owe(time.Time{})
 	}
@@ -1148,6 +1243,11 @@ func (self *RecordEraser) indexParts(ctx context.Context, journal *recordEraseJo
 // steps 4 to 6 for its copies in a format-2 log. Nothing where this sidecar does not erase in the log, and an erasure
 // this device still journals is left to its own steps. A result an erasure taken up.
 func (self *RecordEraser) EraseLateCopies(ctx context.Context, logId Id) ([]*RecordEraseResult, error) {
+	return self.eraseLateCopies(ctx, logId, true)
+}
+
+// EraseLateCopies, the log read to its head first where sync says.
+func (self *RecordEraser) eraseLateCopies(ctx context.Context, logId Id, sync bool) ([]*RecordEraseResult, error) {
 	self.record.eraseLock.Lock()
 	defer self.record.eraseLock.Unlock()
 	writer := self.record.writer
@@ -1155,8 +1255,10 @@ func (self *RecordEraser) EraseLateCopies(ctx context.Context, logId Id) ([]*Rec
 	if recordEraseAdmin(writer.auth(), writer.sidecarId, logId) != nil {
 		return nil, nil
 	}
-	if err := reader.Sync(ctx, logId); err != nil {
-		return nil, err
+	if sync {
+		if err := reader.Sync(ctx, logId); err != nil {
+			return nil, err
+		}
 	}
 	erasures, err := writer.boundStreams().ReadErasures(ctx, logId, 0)
 	if err != nil {
@@ -1269,6 +1371,175 @@ func (self *RecordEraser) EraseLateCopies(ctx context.Context, logId Id) ([]*Rec
 		}
 	}
 	return results, nil
+}
+
+// Takes up, in a format-2 log, each erasure another device began and did not end (§11.12's reconcile row; §16.8's
+// Erasure: should the eraser die between its ERASE and its CUT, another device resumes with the CUT): one a record
+// ERASE's note names, not journaled here, whose newest ERASE does not say complete. The eraser's own device takes it up
+// at once, its journal lost; another device of the eraser's member ResumeAfter (25 h) past its CUT or its last ERASE;
+// any device that erases in the log once the eraser no longer does; a device of another member never while the eraser
+// erases. The CUT is committed where it is missing, listing the documents of the note's entries as this device reads
+// their copies now, the index files are rewritten, and the listed cards are folded again. No erasure entry is written:
+// the committed ERASE stands as the record until the eraser's own lands. A result an erasure taken up or not yet this
+// device's, the latter waiting until its NextTry.
+func (self *RecordEraser) ResumeOthers(ctx context.Context, logId Id) ([]*RecordEraseResult, error) {
+	self.record.eraseLock.Lock()
+	defer self.record.eraseLock.Unlock()
+	writer := self.record.writer
+	reader := self.record.reader
+	auth := writer.auth()
+	if recordEraseAdmin(auth, writer.sidecarId, logId) != nil {
+		return nil, nil
+	}
+	index, err := self.indexOf(ctx, logId)
+	if err != nil || index == nil {
+		// in format 1 an erasure ends with its own ERASEs
+		return nil, err
+	}
+	if err := reader.Sync(ctx, logId); err != nil {
+		return nil, err
+	}
+	erasures, err := writer.boundStreams().ReadErasures(ctx, logId, 0)
+	if err != nil {
+		return nil, err
+	}
+	journals, err := self.readJournals()
+	if err != nil {
+		return nil, err
+	}
+	journaled := map[Id]bool{}
+	for _, journal := range journals {
+		journaled[journal.ErasureId] = true
+	}
+	complete := recordEraseCompleteByNewest(erasures, func(erasure *RecordStreamErasure) (Id, bool) {
+		return erasure.ErasureId, erasure.Complete
+	})
+	// each record erasure's first ERASE: its eraser and its note
+	erasureIds := []Id{}
+	firstErasures := map[Id]*RecordStreamErasure{}
+	for _, erasure := range erasures {
+		if _, held := firstErasures[erasure.ErasureId]; held {
+			continue
+		}
+		if _, ok := recordErasureNoteBody(erasure); !ok {
+			continue
+		}
+		firstErasures[erasure.ErasureId] = erasure
+		erasureIds = append(erasureIds, erasure.ErasureId)
+	}
+	erasing := self.record.erasingState()
+	results := []*RecordEraseResult{}
+	for _, erasureId := range erasureIds {
+		first := firstErasures[erasureId]
+		if journaled[erasureId] || complete[erasureId] || erasing.settled(erasureId) {
+			continue
+		}
+		role, ok := self.resumeRole(auth, logId, first.EraserSidecarId)
+		if !ok {
+			continue
+		}
+		body, _ := recordErasureNoteBody(first)
+		entryIds := []Id{}
+		for _, entryId := range body.GetEntryIds() {
+			if len(entryId) == len(Id{}) {
+				entryIds = append(entryIds, Id(entryId))
+			}
+		}
+		documents, cards, err := self.documentsOf(index, logId, entryIds, nil)
+		if err != nil {
+			return results, err
+		}
+		if len(documents) == 0 {
+			// nothing to list: its own ERASEs end it
+			continue
+		}
+		journal := &recordEraseJournal{ErasureId: erasureId, Documents: documents}
+		cutDocuments, err := journal.cutDocuments()
+		if err != nil {
+			return results, err
+		}
+		result := &RecordEraseResult{
+			ErasureId: erasureId, LogId: logId, Erased: entryIds,
+			Index: &RecordEraseIndexResult{DocumentCount: len(documents), CardCount: journal.cardCount()},
+		}
+		testHookBarrier("record.erase.resume.before", recordChainIdText(logId))
+		resumed, err := index.Resume(ctx, &IndexResumeArgs{
+			ErasureId: erasureId, Role: role, Documents: cutDocuments, Complete: true, Note: bytes.Clone(first.SealedNote),
+		})
+		testHookBarrier("record.erase.resume.after", recordChainIdText(logId))
+		switch {
+		case errors.Is(err, ErrIndexErasureSetFull):
+			// the CUT waits while pending erasures finish
+			result.Index.Waiting, result.Index.NextTry = true, writer.clock.Now().Add(self.settings.RetryInterval)
+			results = append(results, result)
+			continue
+		case err != nil:
+			return results, err
+		case !resumed.NotBefore.IsZero():
+			// not this device's yet
+			result.Index.Waiting, result.Index.NextTry = true, resumed.NotBefore
+			results = append(results, result)
+			continue
+		}
+		result.Index.Fenced = true
+		if rewritten := resumed.Rewrite; rewritten != nil {
+			result.Index.Erasure, result.Index.Completed, result.Index.Unproven = rewritten.Erasure, rewritten.Completed, rewritten.Unproven
+			if rewritten.Erasure != nil && rewritten.Erasure.State == SidecarErasureWaiting {
+				result.Index.Waiting, result.Index.NextTry = true, rewritten.Erasure.NextTry
+			}
+		}
+		if resumed.Rewrite != nil && recordEraseRewriteEndedUnsaid(resumed.Rewrite) && 0 < len(first.Keys) {
+			// no file held a listed version: a completion ERASE ends it, naming keys its first ERASE destroyed (QD-1132)
+			pushId, err := writer.drawId()
+			if err != nil {
+				return results, err
+			}
+			completed, err := self.sendErases(ctx, logId, erasureId, first.SealedNote, []*recordEraseJournalPush{{
+				PushId: pushId, Keys: first.Keys[:1], Complete: true,
+			}})
+			if err != nil {
+				return results, err
+			}
+			result.Index.Completed = completed
+		}
+		if !result.Index.Waiting && !result.Index.Unproven {
+			// its pairs ran to their end here
+			erasing.settle(erasureId)
+		}
+		// a listed card's files never wait for its re-entry, which follows here
+		if 0 < len(cards) {
+			reentered, err := self.reenter(ctx, logId, index, erasureId, cards)
+			switch {
+			case errors.Is(err, ErrIndexEraseNotCut):
+				// complete, and its set entry dropped since
+			case err != nil:
+				return results, err
+			default:
+				result.Index.EnteredCount, result.Index.SkippedCount = reentered.EnteredCount, reentered.SkippedCount
+			}
+		}
+		results = append(results, result)
+	}
+	return results, nil
+}
+
+// Who this device is to an erasure eraserId began, by §11.12's reconcile row: the eraser itself; another device of its
+// member while it erases in the log; any device that erases there once it does not. False for a device of another
+// member while the eraser erases.
+func (self *RecordEraser) resumeRole(auth RecordAuthView, logId Id, eraserId Id) (IndexResumeRole, bool) {
+	sidecarId := self.record.writer.sidecarId
+	switch {
+	case eraserId == sidecarId:
+		return IndexResumeEraser, true
+	case eraserId == (Id{}) || recordEraseAdmin(auth, eraserId, logId) != nil:
+		return IndexResumeAny, true
+	}
+	memberId, ok := auth.Member(sidecarId)
+	eraserMemberId, eraserOk := auth.Member(eraserId)
+	if ok && eraserOk && memberId == eraserMemberId {
+		return IndexResumeMember, true
+	}
+	return 0, false
 }
 
 // A dry run of args: what an erasure would take, nothing written. The same refusals as Erase but a person's
@@ -1475,6 +1746,15 @@ func NewRecordEvsEraseIndex(args *RecordEvsEraseIndexArgs) (RecordEraseIndexOpen
 			refKey: refKey, padKey: padKey, events: args.Events, clock: client.clock, log: client.log,
 		})
 	}, nil
+}
+
+// Whether a rewrite ran to its end with nothing left to rewrite and no ERASE of it saying complete: not waiting, its
+// list proven whole, and the erasure not complete already.
+func recordEraseRewriteEndedUnsaid(rewritten *IndexRewriteResult) bool {
+	if rewritten == nil || rewritten.Completed || rewritten.Unproven {
+		return false
+	}
+	return rewritten.Erasure == nil || (rewritten.Erasure.State != SidecarErasureWaiting && rewritten.Erasure.State != SidecarErasureDone)
 }
 
 // Whether a log of kind holds the record class's documents, which a record erasure's CUT lists.

@@ -13,10 +13,12 @@ package sidecar
 import (
 	"bytes"
 	"context"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/urnetwork/sidecar/protocol"
 )
@@ -83,7 +85,7 @@ func (self *RecordEraseTestIndex) NoteStreamErase(erasureId Id, complete bool) {
 	})
 }
 
-// Fails the next call of method, "cut", "reenter" or "rewrite", with err before it reaches the index.
+// Fails the next call of method, "cut", "reenter", "rewrite" or "resume", with err before it reaches the index.
 func (self *RecordEraseTestIndex) FailNext(method string, err error) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
@@ -148,6 +150,18 @@ func (self *recordEraseTestIndexHandle) Rewrite(ctx context.Context, args *Index
 		return nil, err
 	}
 	return self.RecordEraseIndex.Rewrite(ctx, args)
+}
+
+func (self *recordEraseTestIndexHandle) Resume(ctx context.Context, args *IndexResumeArgs) (*IndexResumeResult, error) {
+	if err := self.bridge.call("resume"); err != nil {
+		return nil, err
+	}
+	return self.RecordEraseIndex.Resume(ctx, args)
+}
+
+// Moves the index's clock, which its erasers read, on by duration.
+func (self *RecordEraseTestIndex) Advance(duration time.Duration) {
+	self.world.at = self.world.at.Add(duration)
 }
 
 // The doc_key of name in the stream whose ref is refId.
@@ -399,4 +413,31 @@ func RecordEraseTestIndexEpochRefused(err error) bool {
 // Sets settings on the eraser, for a test of one of its bounds.
 func (self *RecordEraser) SetSettingsForTest(settings *RecordEraserSettings) {
 	self.settings = settings
+}
+
+// The rule both index sides judge complete by (record_erase.go's complete row): an erasure is complete while its newest
+// ERASE says so, so a late copy's ERASE after a complete one opens it again, and a completion ERASE after that ends it.
+func TestRecordEraseCompleteByNewest(t *testing.T) {
+	type erase struct {
+		erasureId Id
+		complete  bool
+	}
+	first, second := evsTestId("first erasure"), evsTestId("second erasure")
+	cases := []struct {
+		erases []erase
+		want   map[Id]bool
+	}{
+		{erases: []erase{{erasureId: first}, {erasureId: first, complete: true}}, want: map[Id]bool{first: true}},
+		{erases: []erase{{erasureId: first, complete: true}, {erasureId: first}}, want: map[Id]bool{}},
+		{
+			erases: []erase{{erasureId: first, complete: true}, {erasureId: second}, {erasureId: first}, {erasureId: first, complete: true}},
+			want:   map[Id]bool{first: true},
+		},
+	}
+	for index, c := range cases {
+		got := recordEraseCompleteByNewest(c.erases, func(erase erase) (Id, bool) { return erase.erasureId, erase.complete })
+		if !maps.Equal(got, c.want) {
+			t.Errorf("case %d: complete %v, want %v", index, got, c.want)
+		}
+	}
 }

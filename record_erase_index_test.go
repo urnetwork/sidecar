@@ -23,6 +23,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
@@ -100,6 +101,11 @@ func (self *testTeamWorld) teamEraser() *testRecordDevice {
 	repo.Admins = append(repo.Admins, device.sidecarId)
 	self.publish()
 	return device
+}
+
+// Whether two lists name the same keys in order.
+func testEraseIndexSameKeys(a []*sidecar.RecordSlotKey, b []*sidecar.RecordSlotKey) bool {
+	return slices.EqualFunc(a, b, func(x *sidecar.RecordSlotKey, y *sidecar.RecordSlotKey) bool { return *x == *y })
 }
 
 // Whether every key of a word is among keys: whether a search finds the word there.
@@ -185,7 +191,8 @@ func testEraseIngest(t *testing.T, record *sidecar.SidecarRecord, logId sidecar.
 // streams, the second stream's copies landing only after the first ERASE: the ERASE of step 2 and the ERASE of step 3,
 // which takes the copies found at the second read, both commit before the CUT is built and neither says complete; the
 // CUT lists the note's document in each stream at its path's entry version and the run's card in each stream through
-// the epoch it names, and steps 5 and 6 follow it.
+// the epoch it names, and steps 5 and 6 follow it; the index holding none of them, a completion ERASE naming the first
+// ERASE's keys ends the erasure (QD-1132).
 func TestRecordEraseOrder(t *testing.T) {
 	ctx := t.Context()
 	world := newTestRecordWorld(t)
@@ -228,13 +235,19 @@ func TestRecordEraseOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	erases := tap.committed()
-	if len(erases) != 2 || erasesAtCut != 2 {
+	if len(erases) != 3 || erasesAtCut != 2 {
 		t.Fatalf("%d ERASEs, %d of them before the CUT", len(erases), erasesAtCut)
 	}
-	for _, erase := range erases {
+	for _, erase := range erases[:2] {
 		if erase.Complete || erase.ErasureId != result.ErasureId {
 			t.Fatalf("an ERASE before the CUT said complete, or named another erasure: %+v", erase)
 		}
+	}
+	if completion := erases[2]; !completion.Complete || completion.ErasureId != result.ErasureId || !testEraseIndexSameKeys(completion.Keys, erases[0].Keys) {
+		t.Fatalf("the completion ERASE: %+v", completion)
+	}
+	if _, complete := index.Erases(result.ErasureId); !complete || !result.Index.Completed {
+		t.Fatal("the erasure did not end")
 	}
 	if calls := index.Calls(); !slices.Equal(calls, []string{"cut", "reenter", "rewrite"}) {
 		t.Fatalf("the index was called %v", calls)
@@ -327,6 +340,10 @@ func TestRecordEraseFoldsTheCardAgainWithoutTheEntry(t *testing.T) {
 		t.Fatal("the card folded again holds the erased change, or lost the context")
 	}
 	index.Sweep()
+	// the re-entry rewrote the one file holding the card in place, so a completion ERASE ended the erasure
+	if _, complete := index.Erases(result.ErasureId); !complete || !result.Index.Completed {
+		t.Fatal("the erasure did not end")
+	}
 	if err := record.Flush(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -537,10 +554,11 @@ func TestRecordEraseResumesFromEvsState(t *testing.T) {
 // DESIGN-DETAILS 15.6's TestRecordEraseLateCopy: a copy of the erased change that a second ingester lands after the
 // erasure's second read is a late copy. The erasure had ended, a third ingester's indexed card rewritten and its last
 // ERASE saying complete; the next look of a log admin's daemon ERASEs the late copy's key row under the same erasure,
-// saying nothing complete, which opens the erasure again, CUTs again so the erasure's set entry lists the copy's
-// stream's card through the new epoch, and folds that card again without the change into its own head above the
-// list, writing no second erasure entry. The copy no longer opens, a look after that finds nothing, and a later
-// erasure's CUT keeps the reopened erasure listed, since its newest ERASE does not say complete.
+// saying nothing complete, which opens the erasure again, so its rewrite runs rather than reading it done; CUTs again
+// so the erasure's set entry lists the copy's stream's card through the new epoch; folds that card again without the
+// change into its own head above the list; and, no file holding a listed version of the copy's, ends the erasure again
+// with a completion ERASE (QD-1132), writing no second erasure entry. The copy no longer opens, a look after that finds
+// nothing, and a later erasure's CUT drops the erasure, complete again.
 func TestRecordEraseLateCopy(t *testing.T) {
 	ctx := t.Context()
 	world := newTestTeamWorld(t)
@@ -602,14 +620,17 @@ func TestRecordEraseLateCopy(t *testing.T) {
 		t.Fatalf("the late copies' erasures: %+v", lates)
 	}
 	erases := tap.committed()
-	if len(erases) != 2 || erases[1].ErasureId != result.ErasureId || erases[1].Complete || len(erases[1].Keys) != 1 {
+	if len(erases) != 3 || erases[1].ErasureId != result.ErasureId || erases[1].Complete || len(erases[1].Keys) != 1 {
 		t.Fatalf("the late copy's ERASE: %d ERASEs", len(erases))
 	}
-	if _, complete := index.Erases(result.ErasureId); complete {
-		t.Fatal("the erasure reads complete with its late copy's rewrite owed")
+	if completion := erases[2]; !completion.Complete || !testEraseIndexSameKeys(completion.Keys, erases[1].Keys) || !lates[0].Index.Completed {
+		t.Fatal("no completion ERASE ended the erasure after its late copy's rewrite")
 	}
 	if state := lates[0].Index.Erasure; state == nil || state.State == sidecar.SidecarErasureDone {
 		t.Fatal("the late copy's rewrite read the erasure done from its earlier complete ERASE")
+	}
+	if _, complete := index.Erases(result.ErasureId); !complete {
+		t.Fatal("the erasure does not read complete after its late copy")
 	}
 	listed := index.ErasureDocs(result.ErasureId)
 	if version, ok := listed[otherCardKey]; len(listed) != 3 || !ok || version != epoch<<32|(1<<32-1) {
@@ -646,15 +667,15 @@ func TestRecordEraseLateCopy(t *testing.T) {
 		}
 	}
 	index.Sweep()
-	// a later erasure's CUT drops only a complete erasure: the reopened one stays listed
+	// a later erasure's CUT drops the erasure, complete again
 	later, err := eraserRecord.Eraser().Erase(ctx, &sidecar.RecordEraseArgs{
 		LogId: world.teamRecordId, EntryIds: []sidecar.Id{contextRef.EntryId}, Reason: sidecar.RecordErasureReasonModeration, Confirmed: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if index.ErasureDocs(later.ErasureId) == nil || index.ErasureDocs(result.ErasureId) == nil {
-		t.Fatal("a later CUT dropped the reopened erasure")
+	if index.ErasureDocs(later.ErasureId) == nil || index.ErasureDocs(result.ErasureId) != nil {
+		t.Fatal("a later CUT kept the completed erasure, or listed nothing of its own")
 	}
 	index.Sweep()
 }
@@ -763,4 +784,158 @@ func TestRecordEraseRefusesACutPastItsBound(t *testing.T) {
 			t.Fatal("a refused erasure took a body")
 		}
 	}
+}
+
+// An erasure that took no key, every ERASE of it finding the keys gone already, as when two admins' passes race and the
+// first commit wins (RECORD.md section 8's expiry row), committed nothing and never began (§11.12's reconcile row): it
+// lists nothing and asks nothing of the index, the first erasure's CUT listing the documents.
+func TestRecordEraseThatTookNoKeyListsNothing(t *testing.T) {
+	ctx := t.Context()
+	world := newTestTeamWorld(t)
+	member := world.memberDevice(true)
+	eraser, other := world.teamEraser(), world.teamEraser()
+	index := sidecar.NewRecordEraseTestIndex(t, protocol.RepoKind_REPO_KIND_TEAM_RECORD, eraser.sidecarId, other.sidecarId)
+	testEraseIndexTapOn(eraser, index)
+	otherTap := testEraseIndexTapOn(other, index)
+	runId := sidecar.NewId()
+	world.runs.StartRun(runId)
+	memberRecord := member.open()
+	drafts := testEraseTeamRunDrafts(&runId, "c0ffeequokka")
+	testRecordAppendAll(t, memberRecord, drafts[0])
+	change := testEraseIndexRefIn(t, testRecordAppendAll(t, memberRecord, drafts[1]), world.teamRecordId)
+	if err := memberRecord.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	eraserRecord := testEraseIndexOpen(eraser, index)
+	otherRecord := testEraseIndexOpen(other, index)
+	for _, flush := range []bool{true, false} {
+		for _, record := range []*sidecar.SidecarRecord{eraserRecord, otherRecord} {
+			testEraseIngest(t, record, world.teamRecordId, flush)
+		}
+	}
+	// the other admin's reader holds both copies' keys before the first erasure takes them
+	if err := otherRecord.Reader().Sync(ctx, world.teamRecordId); err != nil {
+		t.Fatal(err)
+	}
+	args := &sidecar.RecordEraseArgs{LogId: world.teamRecordId, EntryIds: []sidecar.Id{change.EntryId}, Reason: sidecar.RecordErasureReasonRetention}
+	first, err := eraserRecord.Eraser().Erase(ctx, args)
+	if err != nil || first.Index == nil || !first.Index.Fenced {
+		t.Fatalf("the first erasure: %+v, %v", first, err)
+	}
+	calls := len(index.Calls())
+	second, err := otherRecord.Eraser().Erase(ctx, args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Index != nil || len(index.Calls()) != calls || len(otherTap.committed()) != 0 || index.ErasureDocs(second.ErasureId) != nil {
+		t.Fatalf("an erasure that took no key listed %+v, called the index %v", second.Index, index.Calls()[calls:])
+	}
+}
+
+// §16.8's Erasure and §11.12's reconcile row: an eraser killed between its ERASE and its CUT, never to start again,
+// has its erasure taken up by another device: not by an admin of another member while the eraser still erases, and by
+// another device of the eraser's member only 25 h after its last ERASE, which then commits the CUT, rewrites the index
+// file holding a listed card, its last ERASE saying complete, and folds the listed cards again; once the eraser no
+// longer erases in the log, an admin of another member takes up its next such erasure at once. (In this world the
+// index side's ERASEs are not on the record streams' erasure ref, as they are on evs's, so a later look runs the
+// index's Resume again, which finds the erasure complete and does nothing.)
+func TestRecordEraseResumedByAnotherDevice(t *testing.T) {
+	ctx := t.Context()
+	world := newTestTeamWorld(t)
+	member := world.memberDevice(true)
+	eraser, sibling, stranger := world.teamEraser(), world.teamEraser(), world.teamEraser()
+	// the sibling is another device of the eraser's member
+	world.fixture.Members[sibling.sidecarId] = world.fixture.Members[eraser.sidecarId]
+	world.publish()
+	index := sidecar.NewRecordEraseTestIndex(t, protocol.RepoKind_REPO_KIND_TEAM_RECORD, eraser.sidecarId, sibling.sidecarId, stranger.sidecarId)
+	tap := testEraseIndexTapOn(eraser, index)
+	runId := sidecar.NewId()
+	world.runs.StartRun(runId)
+	memberRecord := member.open()
+	drafts := testEraseTeamRunDrafts(&runId, "c0ffeequokka")
+	contextRef := testEraseIndexRefIn(t, testRecordAppendAll(t, memberRecord, drafts[0]), world.teamRecordId)
+	change := testEraseIndexRefIn(t, testRecordAppendAll(t, memberRecord, drafts[1]), world.teamRecordId)
+	if err := memberRecord.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	eraserRecord := testEraseIndexOpen(eraser, index)
+	siblingRecord := testEraseIndexOpen(sibling, index)
+	strangerRecord := testEraseIndexOpen(stranger, index)
+	records := []*sidecar.SidecarRecord{eraserRecord, siblingRecord, strangerRecord}
+	for _, flush := range []bool{true, false} {
+		for _, record := range records {
+			testEraseIngest(t, record, world.teamRecordId, flush)
+		}
+	}
+	if err := strangerRecord.Reader().Sync(ctx, world.teamRecordId); err != nil {
+		t.Fatal(err)
+	}
+	strangerRef := sidecartest.FakeRecordStreamRefId(world.teamRecordId, stranger.sidecarId)
+	indexed := index.PrepareCard(strangerRecord.Reader(), world.teamRecordId, stranger.sidecarId, strangerRef, runId, stranger.sidecarId, nil)
+	if indexed == nil {
+		t.Fatal("no card to index")
+	}
+	if err := indexed.Send(); err != nil {
+		t.Fatal(err)
+	}
+	index.FailNext("cut", errTestEraseIndexKilled)
+	if _, err := eraserRecord.Eraser().Erase(ctx, &sidecar.RecordEraseArgs{
+		LogId: world.teamRecordId, EntryIds: []sidecar.Id{change.EntryId}, Reason: sidecar.RecordErasureReasonModeration, Confirmed: true,
+	}); !errors.Is(err, errTestEraseIndexKilled) {
+		t.Fatalf("the erasure killed before its CUT: %v", err)
+	}
+	erasureId := tap.committed()[0].ErasureId
+	if results, err := strangerRecord.Eraser().ResumeOthers(ctx, world.teamRecordId); err != nil || len(results) != 0 {
+		t.Fatalf("an admin of another member took up a live eraser's erasure: %d, %v", len(results), err)
+	}
+	results, err := siblingRecord.Eraser().ResumeOthers(ctx, world.teamRecordId)
+	if err != nil || len(results) != 1 || results[0].Index == nil || !results[0].Index.Waiting || results[0].Index.Fenced {
+		t.Fatalf("the sibling before 25 h: %+v, %v", results, err)
+	}
+	if index.ErasureDocs(erasureId) != nil {
+		t.Fatal("a CUT was committed before 25 h")
+	}
+	index.Advance(25*time.Hour + time.Minute)
+	if results, err = siblingRecord.Eraser().ResumeOthers(ctx, world.teamRecordId); err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].ErasureId != erasureId || results[0].Index == nil || !results[0].Index.Fenced ||
+		!results[0].Index.Completed || results[0].Index.CardCount != 3 || results[0].Index.EnteredCount != 3 {
+		t.Fatalf("the sibling after 25 h: %+v", results)
+	}
+	listed := index.ErasureDocs(erasureId)
+	if len(listed) != 3 {
+		t.Fatalf("the CUT lists %d documents", len(listed))
+	}
+	for key, version := range listed {
+		if card := testEraseIndexOneAbove(t, index, key, version); card.Writer != sibling.sidecarId {
+			t.Fatal("a card was folded again by another device")
+		}
+	}
+	if _, complete := index.Erases(erasureId); !complete || index.Closures(erasureId) == 0 {
+		t.Fatal("the taken-up erasure did not end")
+	}
+	index.Sweep()
+
+	// the eraser no longer erases in the log: its next erasure killed before the CUT is any admin's at once
+	index.FailNext("cut", errTestEraseIndexKilled)
+	if _, err := eraserRecord.Eraser().Erase(ctx, &sidecar.RecordEraseArgs{
+		LogId: world.teamRecordId, EntryIds: []sidecar.Id{contextRef.EntryId}, Reason: sidecar.RecordErasureReasonModeration, Confirmed: true,
+	}); !errors.Is(err, errTestEraseIndexKilled) {
+		t.Fatalf("the second erasure killed before its CUT: %v", err)
+	}
+	later := tap.committed()[1].ErasureId
+	repo := world.fixture.Repos[world.teamRecordId]
+	repo.Admins = removeTestId(repo.Admins, eraser.sidecarId)
+	world.publish()
+	if results, err = strangerRecord.Eraser().ResumeOthers(ctx, world.teamRecordId); err != nil {
+		t.Fatal(err)
+	}
+	taken := slices.ContainsFunc(results, func(result *sidecar.RecordEraseResult) bool {
+		return result.ErasureId == later && result.Index != nil && result.Index.Fenced
+	})
+	if !taken || index.ErasureDocs(later) == nil {
+		t.Fatalf("an admin did not take up a revoked eraser's erasure: %+v", results)
+	}
+	index.Sweep()
 }
