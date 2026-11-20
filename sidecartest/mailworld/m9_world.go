@@ -16,8 +16,9 @@
 //	dkim       POST /smtp/dkim-keys: what a row gives, S10's server half that writes the zone, or by default an answer to
 //	           every publish and retire, each call kept for the row to read
 //	component  when a row asks (M9WorldSettings.Component), the client's own component (MailClient.Attach): its ingest
-//	           pass is the one that runs a reader's forwarding and relay (mail_forward.go), so S6's forwarding rows run
-//	           through it, a wake (MailClient.Resync) starting a pass and the pass's CONSUME barrier showing it ended
+//	           pass is the member's reader, which files what the receiver or the sender's DSNs deposited and runs
+//	           forwarding and relay (mail_forward.go), so S6's forwarding rows and FS-123's DSNs run through it, a wake
+//	           (MailClient.Resync) starting a pass and the pass's CONSUME barrier showing its messages handed on (Ingest)
 //
 // One stand-in is this file's, the component's alone: the MailWorld's evs pins every push and deposit at its own fake
 // auth log's positions (world.go), which the admission log never held, so the laptop's engine, which judges a deposit's
@@ -43,6 +44,7 @@ import (
 	"time"
 
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 	"github.com/urnetwork/sidecar/sidecartest"
 )
@@ -53,13 +55,13 @@ const M9PolicySend = `{"grants": [
 	{"src": ["autogroup:member"], "dst": ["sock:smtp/25/mx"], "allow": ["listen"]}
 ]}`
 
-// What a M9World is built with.
+// What a M9World is built with: DefaultM9WorldSettings, changed.
 type M9WorldSettings struct {
 	// The network's M8World: nil takes M8's defaults with M9PolicySend.
 	M8 *M8WorldSettings
 	// POST /smtp/dkim-keys's server half; nil answers every publish and retire (M9WorldDkim).
 	Dkim sidecar.SmtpDkimPublisher
-	// The prover host's measured smtp_data_proof_bytes: zero takes M9DataProofByteCount.
+	// The prover host's measured smtp_data_proof_bytes. Positive.
 	DataProofByteCount uint64
 	// Changes to the sending client's settings once the world has set its own; nil changes none.
 	Mail func(settings *sidecar.MailSettings)
@@ -69,8 +71,12 @@ type M9WorldSettings struct {
 	Component bool
 }
 
-// The prover host's DATA cap by default: a mebibyte, past every message a row sends but FS-123's.
-const M9DataProofByteCount = 1024 * 1024
+func DefaultM9WorldSettings() *M9WorldSettings {
+	return &M9WorldSettings{
+		// a mebibyte, past every message a row sends but one meant to pass a cap
+		DataProofByteCount: 1024 * 1024,
+	}
+}
 
 // One network whose owner's laptop sends (the file header's world). Its exported fields are set once, by NewM9World.
 type M9World struct {
@@ -98,11 +104,11 @@ type M9World struct {
 	events []sidecar.SidecarEvent
 }
 
-// The world on net (the file header's world).
+// The world on net (the file header's world), settings nil taking DefaultM9WorldSettings.
 func NewM9World(t testing.TB, net *sidecartest.Net, settings *M9WorldSettings) *M9World {
 	t.Helper()
 	if settings == nil {
-		settings = &M9WorldSettings{}
+		settings = DefaultM9WorldSettings()
 	}
 	m8Settings := &M8WorldSettings{}
 	if settings.M8 != nil {
@@ -225,9 +231,6 @@ func (self *M9World) buildProver(settings *M9WorldSettings) {
 		pins, sidecar.NewSmtpTlsAllowanceStore(store.Root(), send.Settings, clock), nil, send.Zone, send.Roots,
 		send.Settings, clock)
 	capByteCount := settings.DataProofByteCount
-	if capByteCount == 0 {
-		capByteCount = M9DataProofByteCount
-	}
 	proverSettings := sidecartest.SmtpSendWorldProver(capByteCount)
 	proverSettings.Measure = &sidecar.SmtpProverMeasure{
 		DataProofBytes: capByteCount, DataBytesPerSecond: 512, MeasureTime: clock.Now(), UnitTime: 5 * time.Second,
@@ -297,6 +300,37 @@ func (self *M9World) attach() {
 	if err != nil {
 		self.t.Fatal(err)
 	}
+}
+
+// The barrier a pass of the client's ingest reaches once each message it wrote of one depositor's deposits has been
+// handed to forwarding: their CONSUME (mail_ingest.go), after every message's callback.
+const m9WorldIngestedSite = "mail.ingest.consume.after"
+
+// Runs step, which leaves one depositor's deposits standing in the mailbox, then the client's ingest over them (the file
+// header's component row): a wake (MailClient.Resync), and the pass's CONSUME held at its barrier, so the pass has
+// written each message and run its forwarding before this returns, then let go. The barrier is armed before step, so a
+// pass that a hint starts takes it too. Only with the component, and only for a step that leaves a deposit standing.
+func (self *M9World) Ingest(step func()) {
+	self.t.Helper()
+	barriers := self.M8.Net.Barriers()
+	if err := barriers.Arm(m9WorldIngestedSite, "", 0); err != nil {
+		self.t.Fatal(err)
+	}
+	step()
+	self.Owner.Resync()
+	if err := barriers.AwaitHeld(self.ctx, m9WorldIngestedSite, ""); err != nil {
+		self.t.Fatal(err)
+	}
+	if err := barriers.Release(m9WorldIngestedSite); err != nil {
+		self.t.Fatal(err)
+	}
+}
+
+// Files device's IndexerSet as M8World.Designate does, and keeps the laptop's engine at the tip with M8's.
+func (self *M9World) Designate(device *sidecartest.AdmissionDevice, services ...protocol.IndexerService) {
+	self.t.Helper()
+	self.M8.Designate(device, services...)
+	self.install(self.OwnerEngine)
 }
 
 // What the world's network and its contexts end with.
