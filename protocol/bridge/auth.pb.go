@@ -1245,7 +1245,8 @@ func (x *CascadeSpanRow) GetUntil() uint64 {
 }
 
 // One IndexerSet designation that holds (§7.9's Indexers; question team-m2-07-indexer-rows): what api sees of its
-// entry, its services sealed as there.
+// entry, its services sealed as there, with the header's nonce they are sealed under, so every reader opens them
+// after a fold (owner decision 634; question mail-m8-10-indexer-services-seal-context).
 type IndexerRow struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	SidecarId      []byte                 `protobuf:"bytes,1,opt,name=sidecar_id,json=sidecarId,proto3" json:"sidecar_id,omitempty"`                // the subject
@@ -1253,6 +1254,7 @@ type IndexerRow struct {
 	Signer         []byte                 `protobuf:"bytes,3,opt,name=signer,proto3" json:"signer,omitempty"`                                       // a sidecar_id
 	At             uint64                 `protobuf:"varint,4,opt,name=at,proto3" json:"at,omitempty"`                                              // the IndexerSet's entry
 	SealedServices []byte                 `protobuf:"bytes,5,opt,name=sealed_services,json=sealedServices,proto3" json:"sealed_services,omitempty"` // IndexerSet.sealed_services, verbatim
+	Nonce          []byte                 `protobuf:"bytes,6,opt,name=nonce,proto3" json:"nonce,omitempty"`                                         // the IndexerSet header's 16-byte nonce, copied at the fold
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -1318,6 +1320,13 @@ func (x *IndexerRow) GetAt() uint64 {
 func (x *IndexerRow) GetSealedServices() []byte {
 	if x != nil {
 		return x.SealedServices
+	}
+	return nil
+}
+
+func (x *IndexerRow) GetNonce() []byte {
+	if x != nil {
+		return x.Nonce
 	}
 	return nil
 }
@@ -2700,7 +2709,7 @@ const file_protocol_bridge_auth_proto_rawDesc = "" +
 	"liftedPark\":\n" +
 	"\x0eCascadeSpanRow\x12\x12\n" +
 	"\x04from\x18\x01 \x01(\x04R\x04from\x12\x14\n" +
-	"\x05until\x18\x02 \x01(\x04R\x05until\"\x92\x01\n" +
+	"\x05until\x18\x02 \x01(\x04R\x05until\"\xa8\x01\n" +
 	"\n" +
 	"IndexerRow\x12\x1d\n" +
 	"\n" +
@@ -2708,7 +2717,8 @@ const file_protocol_bridge_auth_proto_rawDesc = "" +
 	"\x05scope\x18\x02 \x01(\rR\x05scope\x12\x16\n" +
 	"\x06signer\x18\x03 \x01(\fR\x06signer\x12\x0e\n" +
 	"\x02at\x18\x04 \x01(\x04R\x02at\x12'\n" +
-	"\x0fsealed_services\x18\x05 \x01(\fR\x0esealedServices\"\xce\x01\n" +
+	"\x0fsealed_services\x18\x05 \x01(\fR\x0esealedServices\x12\x14\n" +
+	"\x05nonce\x18\x06 \x01(\fR\x05nonce\"\xce\x01\n" +
 	"\tMemberRow\x12\x1b\n" +
 	"\tmember_id\x18\x01 \x01(\fR\bmemberId\x121\n" +
 	"\x04role\x18\x02 \x01(\x0e2\x1d.urnetwork.sidecar.MemberRoleR\x04role\x12.\n" +
