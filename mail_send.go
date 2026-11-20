@@ -67,9 +67,9 @@ var (
 	ErrMailSendFromRefused = errors.New("mail send: this device may not send as that From")
 	// The sent copy could not be kept in this device's mailbox, so nothing was sent.
 	ErrMailSendCopyFailed = errors.New("mail send: the sent copy was not kept, so nothing was sent")
-	// What the call asks of a send is not on this sidecar yet: a send's check (MailClient's over
-	// SmtpSender.Check), which ur daemon's mail.check_send answers until it lands (mail_send_daemon.go), and an app
-	// reads as MAIL_UNAVAILABLE.
+	// What the call asks of a send is not on this sidecar: a check or a send's result on the page Worker's leg, which
+	// sends no mail (mail_send_result_http.go), a DSN deposit into a mailbox this device may deposit nothing to, or a
+	// daemon backend that answered nothing. An app reads it as MAIL_UNAVAILABLE.
 	ErrMailSendUnavailable = errors.New("mail send: this sidecar cannot do that yet")
 	// No send of this device's member has that send_id. Names no id.
 	ErrMailSendUnknown = errors.New("mail send: no send has that id")
