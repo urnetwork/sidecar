@@ -79,9 +79,10 @@ func (self *EvsEngine) servePutRepo(request *EvsRequest) {
 		request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE)
 		return
 	}
-	if !sidecar.EvsRepoKindKnown(facts.Kind) || sidecar.EvsRepoKindOwnerBound(facts.Kind) != (facts.OwnerMemberId != sidecar.Id{}) {
-		// §11.12's kinds table: a kind this build does not know, or an owner exactly for the owner-bound kinds, is a
-		// projection this build cannot keep, never a repo it creates
+	if !sidecar.EvsRepoKindKnown(facts.Kind) || !sidecar.AclRepoKindOwnerFits(facts.Kind, facts.OwnerMemberId != sidecar.Id{}) {
+		// §11.12's kinds table: a kind this build does not know, an owner-bound kind with no owner, or an owner on a
+		// kind that takes none (only a Team scope's own mailcfg names one beside them, QD-1093), is a projection this
+		// build cannot keep, never a repo it creates
 		self.alarm("repo_kind", "repo %s: the projection holds kind %d with owner %t", sidecar.EvsKeyId(request.RepoId), facts.Kind, facts.OwnerMemberId != sidecar.Id{})
 		request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
 		return

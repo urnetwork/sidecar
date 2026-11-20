@@ -84,10 +84,11 @@ type AclStatementVerdict struct {
 	Signer Id
 	// A Suspend's or Unsuspend's class, AclSuspendClass*.
 	Class uint32
-	// Whether the signer wrote config heads at the statement's position, so its RepoRevoke stands and its RepoGrant
-	// lifts a standing one (§8.8).
+	// Whether the signer wrote config heads at the statement's position, so its RepoRevoke stands, its RepoGrant
+	// lifts a standing one (§8.8), and its mailcfg RepoCreate is the network's, naming no owner (QD-1093).
 	ConfigWriter bool
-	// RepoCreate of an owner-bound kind: the owner, the signer's member, and the owner's devices consented there,
+	// RepoCreate of an owner-bound kind, or of a mailcfg by a member device that writes no config heads (a Team
+	// scope's own): the owner, the signer's member, and the owner's devices consented there,
 	// AclRepo.consented_sidecar_ids. OwnerConfirm: the confirmed sidecar's member.
 	MemberId            Id
 	ConsentedSidecarIds []Id
@@ -255,7 +256,8 @@ func aclBodyVerdict(statement *AclStatement) *AclStatementVerdict {
 //	Unsuspend       the class, as a Suspend's, and whether it lifts: a Suspend of its id these rows hold
 //	RepoGrant       whether the signer writes config heads here
 //	RepoRevoke      the same
-//	RepoCreate      of an owner-bound kind: the owner, the signer's member, and that member's devices consented here
+//	RepoCreate      of an owner-bound kind: the owner, the signer's member, and that member's devices consented here;
+//	                of a mailcfg: whether the signer writes config heads here, and where it does not, the same
 //	OwnerConfirm    the confirmed sidecar's member
 //
 // A Suspend whose signer holds no class over its subject here still folds, at class 0: the statement took effect, so
@@ -292,7 +294,14 @@ func (self *AclState) reapplyVerdict(statement *AclStatement, verdict *AclStatem
 	case *protocol.RepoGrant, *protocol.RepoRevoke:
 		derived.ConfigWriter = signer != nil && signer.configWriter
 	case *protocol.RepoCreate:
-		if aclRepoKindOwnerBound(body.GetKind()) {
+		ownerBound := aclRepoKindOwnerBound(body.GetKind())
+		if body.GetKind() == protocol.RepoKind_REPO_KIND_MAILCFG {
+			// the network's where its signer writes config heads here, else a Team scope's own, its signer's
+			// member's (QD-1093); a signer these rows do not hold is neither, and the creation ends at this base
+			derived.ConfigWriter = signer != nil && signer.configWriter
+			ownerBound = !derived.ConfigWriter
+		}
+		if ownerBound {
 			if signer == nil || signer.tagged || signer.memberId == (Id{}) {
 				return nil, fmt.Errorf("%w: an owner-bound RepoCreate whose signer these rows hold no member device of", ErrConfigRule)
 			}
