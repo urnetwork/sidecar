@@ -1,9 +1,10 @@
 //go:build sidecar_testhooks
 
-// FS-92's hold cases on T2 (ABUSE-M10-01): fs92_hold.go's schedules, each hold placed and ended through the Net's api
-// for holds, which on T2 is the fixture (sidecartest.FixtureHoldApi), writing the bytes and keeping the deadlines
-// server's api does. Server's abuse_fs92_t3_test.go runs the same builders on T3 with api's own placement and pass.
-// The schedules hold the drop job at barriers, so this needs the sidecar_testhooks tag.
+// The hold cases on T2 (ABUSE-M10-01): FS-92's (fs92_hold.go) and FS-69's, FS-66's and FS-6's (hold_cases.go), each
+// hold placed and ended through the Net's api for holds, which on T2 is the fixture (sidecartest.FixtureHoldApi),
+// writing the bytes and keeping the deadlines server's api does. Server's abuse_fs92_t3_test.go and
+// abuse_hold_format2_t3_test.go run the same builders on T3 with api's own placement and pass. The schedules hold the
+// drop job, the sweep and the shred at barriers, so this needs the sidecar_testhooks tag.
 
 package fault
 
@@ -35,10 +36,30 @@ func TestFs92DeleteInFlight(t *testing.T) {
 }
 
 // (a) with a 90-day §2703(f) order: the drop table evicts the held drop's entry 30 days after it moved to held, and
-// its deletions never resume. Run once the question is answered and its fix lands.
+// its deletions never resume. Run once QD-1113's change to the drop table lands.
 func TestFs92HoldOutlastsTheDropTable(t *testing.T) {
-	t.Skip("waits on question abuse-m10-01-held-drop-outlives-its-table-entry: evsservice's drop table evicts a held drop's entry 30 days after it moved to held")
+	t.Skip("waits on QD-1113's change to evsservice's drop table (question abuse-m10-01-held-drop-outlives-its-table-entry): it evicts a held drop's entry 30 days after the drop moved to held")
 	RunClause(t, "FS-92", "a hold that outlasts the drop table", Fs92HoldOutlastsTheDropTable, nil)
+}
+
+func TestFs69(t *testing.T) {
+	RunRow(t, "FS-69", "", nil)
+}
+
+func TestFs69HoldBetweenSweepDeletes(t *testing.T) {
+	RunClause(t, "FS-69", "between sweep deletes", Fs69HoldBetweenSweepDeletes, nil)
+}
+
+func TestFs69EraseUnderTheHold(t *testing.T) {
+	RunClause(t, "FS-69", "an erase under the hold", Fs69EraseUnderTheHold, nil)
+}
+
+func TestFs66Hold(t *testing.T) {
+	RunRow(t, "FS-66", "hold", nil)
+}
+
+func TestFs6NowShredUnderAHold(t *testing.T) {
+	RunClause(t, "FS-6", "a --now shred under a hold", Fs6NowShredUnderAHold, nil)
 }
 
 // FS-92 (c): a sealed hold's network takes the answers its no-hold twin takes, listing and bill included, while the

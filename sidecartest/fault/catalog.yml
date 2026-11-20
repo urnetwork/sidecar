@@ -239,10 +239,10 @@ rows:
     tiers: [T2, T3]
     cases:
       - {gates: [M10-out]}
-      - {name: hold, gates: [M5-out, M10-out], later_of: true}
+      - {name: hold, gates: [M5-out, M10-out], later_of: true, store_clock: true}
   - {id: FS-67, sections: [11], checks: [FI-16], tiers: [T2], cases: [{gates: [M10-out]}]}
   - {id: FS-68, sections: [11, 7], checks: [FI-1, FI-17], tiers: [T2, T3], cases: [{gates: [M10-out]}]}
-  - {id: FS-69, sections: [11, 21], checks: [FI-5, FI-16], tiers: [T2, T3], cases: [{gates: [M5-out, M10-out], later_of: true}]}
+  - {id: FS-69, sections: [11, 21], checks: [FI-5, FI-16], tiers: [T2, T3], cases: [{gates: [M5-out, M10-out], later_of: true, store_clock: true}]}
   - {id: FS-70, sections: [11, 19], checks: [FI-5, FI-12, FI-16], tiers: [T2], cases: [{gates: [M10-out]}]}
   - {id: FS-71, sections: [11, 20], checks: [FI-13c, FI-16], tiers: [T2, T3], cases: [{gates: [M10-out], store_clock: true}]}
   - id: FS-72

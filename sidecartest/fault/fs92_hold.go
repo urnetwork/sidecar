@@ -15,7 +15,8 @@
 //	     the stored count not moving again. Its twin, Fs92NoHold, places no hold: the job deletes the three at once. The
 //	     hold is a §2258A hold whose year ends 10 days on: Fs92HoldOutlastsTheDropTable, the same with a 90-day
 //	     §2703(f) order, finds the held drop's table entry evicted 30 days after it moved to held, so its deletions
-//	     never resume (question abuse-m10-01-held-drop-outlives-its-table-entry), and runs once that is answered
+//	     never resume (question abuse-m10-01-held-drop-outlives-its-table-entry, answered as QD-1113), and runs once
+//	     evsservice's drop table keeps a held entry as that answer says
 //	(b)  Fs92HoldBetweenVerifyAndDelete: the job held after its verify, a hold placed, the clock moved past §11.13's 5 s
 //	     cache (owner decision 629), the job released: nothing is deleted. Fs92HoldBetweenDeletes: held after its first
 //	     DELETE, the hold placed and the clock moved past the cache: that DELETE stands, none issues after the reread,
@@ -744,7 +745,9 @@ func Fs92DeleteInFlight(net *Net) *Schedule {
 }
 
 // See the file header: (a) with a 90-day §2703(f) hold, which outlasts the drop table's 30 days for an ended drop.
-// Its run waits on question abuse-m10-01-held-drop-outlives-its-table-entry.
+// Its run waits on QD-1113's change to evsservice's drop table (question
+// abuse-m10-01-held-drop-outlives-its-table-entry): a held entry neither expires nor is evicted, nor listed past an
+// ended drop's 30 days.
 func Fs92HoldOutlastsTheDropTable(net *Net) *Schedule {
 	schedule := fs92Schedule(net, fs92OutlastsTheDropTable)
 	schedule.Twin = Fs92NoHold
