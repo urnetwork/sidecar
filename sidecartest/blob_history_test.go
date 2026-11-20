@@ -3,6 +3,8 @@ package sidecartest
 import (
 	"crypto/sha256"
 	"errors"
+	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -401,6 +403,122 @@ func TestRecorderKeepsWhatAListAnswered(t *testing.T) {
 	list.ListedKeyEtags = map[string]string{"head/a/_": history[0].WriteEtag, "head/b/_": list.ListedKeyEtags["head/b/_"]}
 	if err := CheckBlobHistory(history, nil); err == nil {
 		t.Error("a LIST showing a deleted key passed")
+	}
+}
+
+// A copy History hands out is the caller's own, down to what a LIST listed: a caller building a mutant
+// from its copy, as a check's twin does, changes no other copy.
+func TestHistoryCopiesAreTheCallersOwn(t *testing.T) {
+	fixture := newRecordedFixture(t)
+	ctx := t.Context()
+	if _, err := fixture.recorded.PutIfNoneMatch(ctx, "head/a/_", []byte("v1"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := fixture.recorded.List(ctx, "head/", "", 10); err != nil {
+		t.Fatal(err)
+	}
+	mutated := fixture.recorder.History()
+	mutated[1].ListedKeyEtags["head/b/_"] = "e9"
+	if listed := fixture.recorder.History()[1].ListedKeyEtags; len(listed) != 1 {
+		t.Errorf("a change to one copy's LIST reached the recorder: %v", listed)
+	}
+}
+
+// An oracle reads History while requests are in flight, as fault's Run does after every step, so a
+// request's entry changes in two steps, each under the recorder's lock: begin publishes it with
+// everything its call holds, and end writes its whole answer. Between them History holds each request
+// as called, with none of its answer. A LIST's StartAfter once went in after begin had published it,
+// which FS-1's T2 rows met under -race as a History copy read it.
+func TestRecorderHoldsEachRequestWholeBetweenItsSteps(t *testing.T) {
+	fixture := newRecordedFixture(t)
+	driver := NewBarrierDriver(nil)
+	t.Cleanup(driver.Close)
+	ctx := NewActorTable(fixture.clock, driver).Actor(t.Context(), "evs1").Context()
+	// what History held of each request at each of its steps, by InvokeSeq
+	stepEntries := map[uint64][]*BlobHistoryEntry{}
+	fixture.recorder.stepHook = func(invokeSeq uint64) {
+		for _, entry := range fixture.recorder.History() {
+			if entry.InvokeSeq == invokeSeq {
+				stepEntries[invokeSeq] = append(stepEntries[invokeSeq], entry)
+			}
+		}
+	}
+
+	// every op, each with every field its call sets
+	etag, err := fixture.recorded.PutIfNoneMatch(ctx, "head/a/_", []byte("v1"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.recorded.PutIfMatch(ctx, "head/a/_", etag, []byte("v2"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.recorded.PutStream(ctx, "seg/r/s", strings.NewReader("v1"), 2, sha256Of([]byte("v1"))); err != nil {
+		t.Fatal(err)
+	}
+	object, err := fixture.recorded.Get(ctx, "head/a/_")
+	if err != nil {
+		t.Fatal(err)
+	}
+	object.Body.Close()
+	object, err = fixture.recorded.GetRange(ctx, "head/a/_", 0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	object.Body.Close()
+	if _, err := fixture.recorded.Head(ctx, "head/a/_"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := fixture.recorded.List(ctx, "head/", "head/0/_", 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.recorded.Delete(sidecar.WithBlobUnmodified(ctx, fixture.clock.Now()), "seg/r/s"); err != nil {
+		t.Fatal(err)
+	}
+
+	history := fixture.recorder.History()
+	ops := []BlobHistoryOp{}
+	for _, entry := range history {
+		ops = append(ops, entry.Op)
+	}
+	wantOps := []BlobHistoryOp{
+		BlobHistoryPutIfNoneMatch, BlobHistoryPutIfMatch, BlobHistoryPutStream, BlobHistoryGet,
+		BlobHistoryGetRange, BlobHistoryHead, BlobHistoryList, BlobHistoryDelete,
+	}
+	if !slices.Equal(ops, wantOps) {
+		t.Fatalf("ops %v, want %v", ops, wantOps)
+	}
+	// the fields a late write could miss are set, so a step missing one differs from the call
+	for _, entry := range history {
+		if entry.Actor != "evs1" || entry.Invoked.IsZero() || entry.Deadline.IsZero() != (entry.Op == BlobHistoryPutStream) {
+			t.Errorf("%s: actor %q, invoked %v, deadline %v", entry, entry.Actor, entry.Invoked, entry.Deadline)
+		}
+	}
+	if history[1].IfEtag != etag || history[6].StartAfter != "head/0/_" || len(history[6].ListedKeyEtags) != 1 || history[7].Unmodified.IsZero() {
+		t.Errorf("if %q, start after %q, listed %v, unmodified %v", history[1].IfEtag, history[6].StartAfter, history[6].ListedKeyEtags, history[7].Unmodified)
+	}
+
+	for _, entry := range history {
+		// the request as called: everything but its answer
+		called := *entry
+		called.ReadEtag = ""
+		called.Outcome = ""
+		called.ListedKeyEtags = nil
+		called.ListTruncated = false
+		called.ReturnSeq = 0
+		called.Returned = time.Time{}
+		steps := stepEntries[entry.InvokeSeq]
+		if len(steps) != 2 {
+			t.Errorf("%s: History looked at %d times, want at both its steps", entry, len(steps))
+			continue
+		}
+		for index, step := range steps {
+			if !reflect.DeepEqual(step, &called) {
+				t.Errorf("%s at its step %d: History held\n  %+v\nwant\n  %+v", entry.Op, index+1, *step, called)
+			}
+		}
+	}
+	if err := CheckBlobHistory(history, nil); err != nil {
+		t.Error(err)
 	}
 }
 

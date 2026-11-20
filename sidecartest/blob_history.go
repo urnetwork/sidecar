@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -103,10 +104,18 @@ func (self *BlobHistoryEntry) String() string {
 // Wraps store so every request through it is kept. Hand engines the recorder, and read the history
 // from the recorder too. etagOf is what the store's ETag for a body is, so a write whose answer was
 // lost can be recognized when a read finds it; nil means an MD5, which MinIO's and the fake's are.
+//
+// An oracle reads History while requests are in flight, so a request's entry changes in two steps,
+// each under the lock: begin publishes it holding everything its call does, and end writes its whole
+// answer. History copies each request as called or as answered, never part of either.
 type BlobRecorder struct {
 	store  sidecar.BlobStore
 	clock  Clock
 	etagOf func(body []byte) string
+	// nil, or set before the first request and never after: called outside the lock with a request's
+	// InvokeSeq once begin has published it and again as end is about to answer it, where a test looks
+	// at what History holds of a request between its two steps
+	stepHook func(invokeSeq uint64)
 
 	stateLock sync.Mutex
 	seq       uint64
@@ -150,13 +159,15 @@ func (self *BlobRecorder) NewRepoClusterId() string {
 	return self.store.NewRepoClusterId()
 }
 
-// Every request so far, in call order, each a copy, so a request still in flight changes nothing here.
+// Every request so far, in call order, each a copy with its own map of what a LIST listed: a request
+// still in flight changes nothing here, and a caller's change to its copy reaches no one else.
 func (self *BlobRecorder) History() []*BlobHistoryEntry {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	entries := make([]*BlobHistoryEntry, 0, len(self.entries))
 	for _, entry := range self.entries {
 		entryCopy := *entry
+		entryCopy.ListedKeyEtags = maps.Clone(entry.ListedKeyEtags)
 		entries = append(entries, &entryCopy)
 	}
 	return entries
@@ -169,25 +180,50 @@ func (self *BlobRecorder) Count() int {
 	return len(self.entries)
 }
 
+// Publishes entry, which already holds everything its call does: History copies it from here on, so
+// nothing but end writes it again.
 func (self *BlobRecorder) begin(ctx context.Context, entry *BlobHistoryEntry) {
 	entry.Actor = ActorName(ctx)
 	entry.Invoked = self.clock.Now()
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	self.seq += 1
-	entry.InvokeSeq = self.seq
-	self.entries = append(self.entries, entry)
+	invokeSeq := func() uint64 {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.seq += 1
+		entry.InvokeSeq = self.seq
+		self.entries = append(self.entries, entry)
+		return self.seq
+	}()
+	if self.stepHook != nil {
+		self.stepHook(invokeSeq)
+	}
 }
 
-func (self *BlobRecorder) end(entry *BlobHistoryEntry, outcome BlobOutcome, readEtag string) {
+// What an answer writes into its request's entry.
+type blobHistoryAnswer struct {
+	outcome BlobOutcome
+	// a read's
+	readEtag string
+	// a LIST's
+	listedKeyEtags map[string]string
+	listTruncated  bool
+}
+
+// Writes answer into entry with its return seq in one step, so History copies all of an answer or none
+// of it.
+func (self *BlobRecorder) end(entry *BlobHistoryEntry, answer *blobHistoryAnswer) {
+	if self.stepHook != nil {
+		self.stepHook(entry.InvokeSeq)
+	}
 	returned := self.clock.Now()
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.seq += 1
 	entry.ReturnSeq = self.seq
 	entry.Returned = returned
-	entry.Outcome = outcome
-	entry.ReadEtag = readEtag
+	entry.Outcome = answer.outcome
+	entry.ReadEtag = answer.readEtag
+	entry.ListedKeyEtags = answer.listedKeyEtags
+	entry.ListTruncated = answer.listTruncated
 }
 
 func blobOutcomeOf(err error, isWrite bool) BlobOutcome {
@@ -225,7 +261,7 @@ func (self *recordedBlobCluster) PutIfNoneMatch(ctx context.Context, key string,
 	entry.WriteEtag = self.recorder.etagOf(body)
 	self.recorder.begin(ctx, entry)
 	newEtag, err := self.BlobCluster.PutIfNoneMatch(ctx, key, body, options)
-	self.recorder.end(entry, blobOutcomeOf(err, true), "")
+	self.recorder.end(entry, &blobHistoryAnswer{outcome: blobOutcomeOf(err, true)})
 	return newEtag, err
 }
 
@@ -235,7 +271,7 @@ func (self *recordedBlobCluster) PutIfMatch(ctx context.Context, key string, eta
 	entry.WriteEtag = self.recorder.etagOf(body)
 	self.recorder.begin(ctx, entry)
 	newEtag, err := self.BlobCluster.PutIfMatch(ctx, key, etag, body, options)
-	self.recorder.end(entry, blobOutcomeOf(err, true), "")
+	self.recorder.end(entry, &blobHistoryAnswer{outcome: blobOutcomeOf(err, true)})
 	return newEtag, err
 }
 
@@ -248,7 +284,7 @@ func (self *recordedBlobCluster) PutStream(ctx context.Context, key string, body
 	entry.WriteEtag = self.recorder.etagOf(bodyBytes)
 	self.recorder.begin(ctx, entry)
 	newEtag, err := self.BlobCluster.PutStream(ctx, key, strings.NewReader(string(bodyBytes)), byteCount, checksumSha256)
-	self.recorder.end(entry, blobOutcomeOf(err, true), "")
+	self.recorder.end(entry, &blobHistoryAnswer{outcome: blobOutcomeOf(err, true)})
 	return newEtag, err
 }
 
@@ -264,7 +300,7 @@ func (self *recordedBlobCluster) Get(ctx context.Context, key string) (*sidecar.
 	if err == nil {
 		readEtag = object.Etag
 	}
-	self.recorder.end(entry, blobOutcomeOf(err, false), readEtag)
+	self.recorder.end(entry, &blobHistoryAnswer{outcome: blobOutcomeOf(err, false), readEtag: readEtag})
 	return object, err
 }
 
@@ -280,7 +316,7 @@ func (self *recordedBlobCluster) GetRange(ctx context.Context, key string, offse
 	if err == nil {
 		readEtag = object.Etag
 	}
-	self.recorder.end(entry, blobOutcomeOf(err, false), readEtag)
+	self.recorder.end(entry, &blobHistoryAnswer{outcome: blobOutcomeOf(err, false), readEtag: readEtag})
 	return object, err
 }
 
@@ -296,7 +332,7 @@ func (self *recordedBlobCluster) Head(ctx context.Context, key string) (*sidecar
 	if err == nil {
 		readEtag = info.Etag
 	}
-	self.recorder.end(entry, blobOutcomeOf(err, false), readEtag)
+	self.recorder.end(entry, &blobHistoryAnswer{outcome: blobOutcomeOf(err, false), readEtag: readEtag})
 	return info, err
 }
 
@@ -306,20 +342,14 @@ func (self *recordedBlobCluster) List(ctx context.Context, keyPrefix string, sta
 		return self.BlobCluster.List(ctx, keyPrefix, startAfter, limit)
 	}
 	entry := self.entry(ctx, BlobHistoryList, keyPrefix)
-	self.recorder.begin(ctx, entry)
 	entry.StartAfter = startAfter
+	self.recorder.begin(ctx, entry)
 	objects, more, err := self.BlobCluster.List(ctx, keyPrefix, startAfter, limit)
 	listedKeyEtags := map[string]string{}
 	for _, object := range objects {
 		listedKeyEtags[object.Key] = object.Etag
 	}
-	func() {
-		self.recorder.stateLock.Lock()
-		defer self.recorder.stateLock.Unlock()
-		entry.ListedKeyEtags = listedKeyEtags
-		entry.ListTruncated = more
-	}()
-	self.recorder.end(entry, blobOutcomeOf(err, false), "")
+	self.recorder.end(entry, &blobHistoryAnswer{outcome: blobOutcomeOf(err, false), listedKeyEtags: listedKeyEtags, listTruncated: more})
 	return objects, more, err
 }
 
@@ -330,7 +360,7 @@ func (self *recordedBlobCluster) Delete(ctx context.Context, key string) error {
 	}
 	self.recorder.begin(ctx, entry)
 	err := self.BlobCluster.Delete(ctx, key)
-	self.recorder.end(entry, blobOutcomeOf(err, true), "")
+	self.recorder.end(entry, &blobHistoryAnswer{outcome: blobOutcomeOf(err, true)})
 	return err
 }
 
