@@ -15,7 +15,10 @@
 //	           and the keys are gone (owner decision 133)
 //	         5 delete idx/ head/ log/ pmap/ pidx/ spidx/ hp/ drops/ on the repo's cluster, its Redis families
 //	           {evsq_} {evsl_} {evsh_}, and seg/ pack/ dropscan/ on the segment cluster; its records in shared
-//	           batches go with their batches, at most 26 h on (§11.13)
+//	           batches go with their batches, at most 26 h on (§11.13). Step 4's read of hold/ is held to its bound at
+//	           each of these deletes (owner decision 629): once it has aged past the bound it is read again
+//	           (HoldSet.CoveringAtDelete), and a hold placed since stops the step there as step 4 would, the rest of
+//	           the ciphertext kept and the job queued again at the hold's end
 //	         6 the first pass queues the final one 10 min after its step 5, which repeats 2, 3 (forms included) and
 //	           5 for stragglers
 //	         7 the final pass rewrites repo/ as the shredded tombstone, kept with place/ for the network's life
@@ -231,7 +234,16 @@ type evsShredRun struct {
 	repoId     sidecar.Id
 	deletionId sidecar.Id
 	final      bool
+	// step 4's cover and the network it was read for, which step 5's deletes read again at each DELETE once aged
+	// past the bound; nil before step 4, whose key deletes go under a hold too
+	holdCover     *sidecar.HoldCover
+	holdNetworkId sidecar.Id
+	// when to look again at a hold a step 5 read found
+	heldUntil time.Time
 }
+
+// A hold step 5's read at a DELETE found (owner decision 629): the step stops there, the rest of the ciphertext kept.
+var errShredHeld = errors.New("evs shred: a hold covers the repo at a DELETE of its ciphertext")
 
 // The run: the start where repo/ is deleted, then the pass's steps while repo/ shows shredding under the deletion.
 func (self *evsShredRun) run(ctx context.Context) (EvsShredOutcome, error) {
@@ -279,8 +291,12 @@ func (self *evsShredRun) run(ctx context.Context) (EvsShredOutcome, error) {
 		self.log.Infof("[evs] repo %s: shred stopped under a hold, keys gone, ciphertext kept", sidecar.EvsKeyId(self.repoId))
 		return EvsShredHeld, self.queue(ctx, self.final, until)
 	}
-	// step 5
+	// step 5, each DELETE on step 4's read held to its bound
 	if ok, err := self.step(ctx, "families", func() error { return self.deleteFamilies(ctx) }); !ok {
+		if errors.Is(err, errShredHeld) {
+			self.log.Infof("[evs] repo %s: shred stopped under a hold placed during its deletes, keys gone, ciphertext kept", sidecar.EvsKeyId(self.repoId))
+			return EvsShredHeld, self.queue(ctx, self.final, self.heldUntil)
+		}
 		return EvsShredStale, err
 	}
 	if !self.final {
@@ -370,24 +386,51 @@ func (self *evsShredRun) start(ctx context.Context, object *protocol.EvsRepoObje
 }
 
 // Whether a hold covers the repo, and when to look again: the hold's end, or ShredHoldRecheckInterval on. A repo/
-// naming no network reads as held (plan-EVSB-repo-network), and a hold read that fails is the caller's error.
+// naming no network reads as held (plan-EVSB-repo-network), and a hold read that fails is the caller's error. A cover
+// that keeps nothing stays with the run, for step 5's reads at each DELETE.
 func (self *evsShredRun) held(ctx context.Context, object *protocol.EvsRepoObject) (bool, time.Time, error) {
-	recheck := self.clock.Now().Add(self.settings.ShredHoldRecheckInterval)
 	networkId, err := sidecar.IdFromBytes(object.GetNetworkId())
 	if err != nil {
-		return true, recheck, nil
+		return true, self.clock.Now().Add(self.settings.ShredHoldRecheckInterval), nil
 	}
 	cover, err := self.holds.Covering(ctx, networkId, self.repoId)
 	if err != nil {
 		return false, time.Time{}, err
 	}
 	if !cover.Covered() {
+		self.holdCover, self.holdNetworkId = cover, networkId
 		return false, time.Time{}, nil
 	}
+	return true, self.lookAgainAt(cover), nil
+}
+
+// When to look again at a hold that covers the repo: the latest end of the holds covering it, or
+// ShredHoldRecheckInterval on, whichever comes first.
+func (self *evsShredRun) lookAgainAt(cover *sidecar.HoldCover) time.Time {
+	recheck := self.clock.Now().Add(self.settings.ShredHoldRecheckInterval)
 	if until, bounded := cover.ExpireTime(); bounded && until.Before(recheck) {
-		return true, until, nil
+		return until
 	}
-	return true, recheck, nil
+	return recheck
+}
+
+// Step 4's read held to its bound at a step 5 DELETE (owner decision 629): its cover while the read is younger than
+// the bound, else hold/ read again; errShredHeld, heldUntil set, when a hold now covers the repo, and a read that
+// fails or comes back past the bound is the caller's error. Before step 4 nothing is read: keys go under a hold too.
+func (self *evsShredRun) holdsAtDelete(ctx context.Context) error {
+	if self.holdCover == nil {
+		return nil
+	}
+	cover, err := self.holds.CoveringAtDelete(ctx, self.holdCover, self.holdNetworkId, self.repoId)
+	if err != nil {
+		return err
+	}
+	if cover.Covered() {
+		self.heldUntil = self.lookAgainAt(cover)
+		return errShredHeld
+	}
+	self.holdCover = cover
+	return nil
 }
 
 // Step 5's families: the repo's metadata objects but repo/ and its keys' families, its Redis families, and its
@@ -403,6 +446,9 @@ func (self *evsShredRun) deleteFamilies(ctx context.Context) error {
 		return err
 	}
 	if self.host.Redis != nil {
+		if err := self.holdsAtDelete(ctx); err != nil {
+			return err
+		}
 		// one hash tag a call (§11.10's slots row)
 		if err := self.host.Redis.Delete(ctx, []string{PushSequenceKey(self.repoId)}); err != nil {
 			return err
@@ -446,10 +492,14 @@ func (self *evsShredRun) deletePrefix(ctx context.Context, cluster sidecar.BlobC
 	}
 }
 
-// Deletes key, P0 of kind shred on a metadata cluster; a key already gone is no error.
+// Deletes key, P0 of kind shred on a metadata cluster; a key already gone is no error. After step 4 it issues only on
+// a hold/ read held to its bound (holdsAtDelete).
 func (self *evsShredRun) deleteKey(ctx context.Context, cluster sidecar.BlobCluster, key string) error {
 	price, err := self.priceTable.Price(WriteOperation{Kind: WriteOperationDelete, Count: 1})
 	if err != nil {
+		return err
+	}
+	if err := self.holdsAtDelete(ctx); err != nil {
 		return err
 	}
 	return cluster.Delete(self.host.Budget.IssueP0(ctx, cluster.ClusterId(), sidecar.WriteP0KindShred, price), key)

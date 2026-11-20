@@ -3,6 +3,8 @@ package evsservice
 import (
 	"context"
 	"errors"
+	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -218,10 +220,12 @@ func TestDropDeleteStallCostsOneHoldRead(t *testing.T) {
 	}
 }
 
-// A store whose segment cluster is a stalling one; its other clusters are the store's own.
+// A store whose segment cluster is a stalling one, and one metadata cluster too when metadata is set; its other
+// clusters, its first among them, are the store's own.
 type holdStallingBlobs struct {
 	sidecar.BlobStore
-	segment *holdStallingCluster
+	segment  *holdStallingCluster
+	metadata *holdStallingCluster
 }
 
 func (self *holdStallingBlobs) SegmentCluster() (sidecar.BlobCluster, error) {
@@ -231,6 +235,9 @@ func (self *holdStallingBlobs) SegmentCluster() (sidecar.BlobCluster, error) {
 func (self *holdStallingBlobs) Cluster(clusterId string) (sidecar.BlobCluster, error) {
 	if clusterId == self.segment.ClusterId() {
 		return self.segment, nil
+	}
+	if self.metadata != nil && clusterId == self.metadata.ClusterId() {
+		return self.metadata, nil
 	}
 	return self.BlobStore.Cluster(clusterId)
 }
@@ -554,5 +561,124 @@ func TestNightlyPassKeepsAnUnnamedContainerOnAHoldReadPastItsBound(t *testing.T)
 	}
 	if !fixture.stands(parcelCluster, parcel) {
 		t.Fatal("the container went on a read that missed the hold")
+	}
+}
+
+// Owner decision 629 at evacuation's batch DELETE: a shredding repo's records go with their batch, and a hold
+// acknowledged while the run waited past the bound before that DELETE keeps the batch: the minute waits, and the next
+// run moves the records for the hold and then deletes the batch.
+func TestEvacuationKeepsAShredsBatchForAHoldAcknowledgedBeforeItsDelete(t *testing.T) {
+	fixture := newEvacuateFixture(t, nil)
+	fixture.commit("a")
+	fixture.putRepo(protocol.RepoKind_REPO_KIND_GENERAL, protocol.EvsRepoState_EVS_REPO_SHREDDING)
+	fixture.age()
+	stalled := false
+	evacuator, err := NewEvacuator(fixture.host.ServiceHost(), &EvacuatorDeps{
+		Settings: fixture.settings, EvsSettings: fixture.settings2(),
+		atStep: func(name string, key string) error {
+			if name == BarrierEvacuateBatchDeleteBefore && !stalled {
+				stalled = true
+				stallPastTheBound(t, fixture.ctx, fixture.host.Blobs, fixture.clock, fixture.check.networkId, true)
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := evacuator.Run(fixture.ctx, "meta-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ShreddedCount != 1 || result.BatchDeletedCount != 0 || len(fixture.keys("meta-1", batchKeyPrefix)) != 1 {
+		t.Fatalf("a shred's batch went past a hold acknowledged before its DELETE: %+v", result)
+	}
+	fixture.clock.Advance(time.Hour)
+	if again := fixture.mustRun(); again.KeptCount != 1 || again.BatchDeletedCount != 1 {
+		t.Fatalf("the next run under the hold: %+v", again)
+	}
+}
+
+// Owner decision 629 at evacuation's batch DELETE for a staged segment it dropped: a hold acknowledged after the
+// decision, the run back past the bound before the DELETE, keeps the batch, whose minute predates the hold; with no
+// hold the batch goes.
+func TestEvacuationKeepsABatchWhoseDroppedStagedSegmentAHoldNowKeeps(t *testing.T) {
+	for _, hold := range []bool{false, true} {
+		fixture := newEvacuateFixture(t, nil)
+		newest := &fakePurgeNewest{}
+		record, tail, _, id := fixture.stagedRecord("dropped", nil)
+		path := checkTestPath("dropped")
+		newest.name(path)
+		// replaced ten minutes ago: the segment is dropped
+		newest.committed(path, fixture.clock.Now().Add(-10*time.Minute))
+		run := fixture.format2Run(newest, &testFormat2Gate{purge: sidecar.Format2On}, &fakeStoredDeltas{})
+		minute := &evacuateMinute{minute: BatchMinute(fixture.clock.Now().Add(-25 * time.Hour))}
+		if why, err := run.decideStaged(minute, &protocol.EvsPlace{Minute: minute.minute}, record, tail); why != "" {
+			t.Fatalf("hold %t: the decision waits: %s %v", hold, why, err)
+		}
+		if fixture.segmentAt(id) != nil || !minute.stagedDropRepoIds[fixture.check.repoId] {
+			t.Fatalf("hold %t: the segment was not dropped, or its repo not noted", hold)
+		}
+		batchKey := BatchKey(minute.minute, 1, 1)
+		if _, err := fixture.cluster.PutIfNoneMatch(fixture.ctx, batchKey, []byte("the minute's batch"), nil); err != nil {
+			t.Fatal(err)
+		}
+		minute.batches = []*evacuateBatch{{key: batchKey, header: sidecar.EvsBatchHeader{Minute: minute.minute, Instance: 1, Seq: 1}}}
+		stallPastTheBound(t, fixture.ctx, fixture.host.Blobs, fixture.clock, fixture.check.networkId, hold)
+		run.deleteMinute(minute)
+		stands := fixture.object("meta-1", batchKey) != nil
+		if stands != hold || (minute.waiting != "") != hold || run.firstErr != nil {
+			t.Fatalf("hold %t: the batch stands %t, the minute waits %q, the run's error %v", hold, stands, minute.waiting, run.firstErr)
+		}
+	}
+}
+
+// Owner decision 629 at the shred's step 5: a hold acknowledged while a DELETE of the repo's ciphertext stalled past
+// the bound stops every DELETE after it; the shred reads as held, queued again a recheck interval on, and the rest of
+// the ciphertext stays.
+func TestRepoShredStopsStepFiveAtAHoldAcknowledgedDuringAStall(t *testing.T) {
+	fixture := newEvsFixture(t)
+	repoId, admin := testId("repo"), testId("sidecar-a")
+	fixture.activeRepo(repoId, admin)
+	fixture.plantRepoObjects(repoId)
+	deletion := &EvsRepoDeletionFacts{DeletionId: testId("deletion"), Now: true, Time: fixture.clock.Now(), SignerSidecarId: admin}
+	fixture.projectDeletion(repoId, deletion)
+	if status := fixture.lifecycle(http.MethodDelete, repoId, "?now=1", admin); status != http.StatusOK {
+		t.Fatalf("delete now: %d", status)
+	}
+	fixture.clock.Advance(evsShredSettleWait)
+	metadata, err := fixture.host.Blobs.Cluster("meta-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	segment, err := fixture.host.Blobs.SegmentCluster()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stalling := &holdStallingCluster{BlobCluster: metadata}
+	host := fixture.host.ServiceHost()
+	host.Blobs = &holdStallingBlobs{BlobStore: fixture.host.Blobs, segment: &holdStallingCluster{BlobCluster: segment}, metadata: stalling}
+	stalled := false
+	stalling.onDelete = func(count int, key string) {
+		if strings.HasPrefix(key, indexKeyPrefix) && !stalled {
+			stalled = true
+			stallPastTheBound(t, fixture.ctx, fixture.host.Blobs, fixture.clock, sidecar.Id(fixture.networkId), true)
+		}
+	}
+	probe := &shredProbe{}
+	outcome, err := RunShred(fixture.ctx, host, probe.deps(nil), EvsShredArgs(repoId, deletion.DeletionId, false))
+	if err != nil || outcome != EvsShredHeld {
+		t.Fatalf("a step 5 stall under a new hold: %v %v", outcome, err)
+	}
+	families := fixture.repoFamilies(repoId)
+	if !stalled || slices.Contains(families, "idx") || !slices.Contains(families, "head") || !slices.Contains(families, "seg") {
+		t.Fatalf("the ciphertext after the stall: %v", families)
+	}
+	requeued := false
+	for _, request := range fixture.host.Tasks.AllRequests() {
+		requeued = requeued || (request.Name == EvsShredTaskName && request.RunAt.Equal(fixture.clock.Now().Add(DefaultEvsSettings().ShredHoldRecheckInterval)))
+	}
+	if !requeued {
+		t.Errorf("not queued again: %v", fixture.host.Tasks.AllRequests())
 	}
 }

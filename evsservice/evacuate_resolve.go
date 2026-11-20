@@ -4,7 +4,9 @@
 //	repo/      read first, cached at most 5 s, with the holds covering it: an unheld repo in shredding or shredded
 //	           loses its records here with nothing else read; a repo this run cannot judge (no repo/, a keying
 //	           repo, a format past this instance's, a place/ naming another cluster, a shredded repo under a hold)
-//	           keeps its records in their batch
+//	           keeps its records in their batch. hold/ is read last and held to its bound as it returns
+//	           (HoldCache.CoveringRepoAtDelete; owner decision 629), since the same read is each delete's recheck
+//	           as it issues: a read that came back past the bound is unread, and the minute waits
 //	committed  at this record's place: kept, to be moved. A part follows its seal: it is kept when the committed
 //	           seal's record names its place. At another place, a second copy of its push: dropped, nothing else
 //	           deleted
@@ -147,8 +149,9 @@ func (self *evacuateSpool) close() {
 	os.Remove(self.file.Name())
 }
 
-// The repo as repo/ and hold/ show it now, each cached at most 5 s (§11.13's skip row). An error comes with a
-// waiting state, so a caller that reads only the state still deletes nothing.
+// The repo as repo/ and hold/ show it now, each cached at most 5 s (§11.13's skip row), hold/ read last and held to
+// its bound as it returns, so a delete whose recheck this is acts on no older read (owner decision 629). An error
+// comes with a waiting state, so a caller that reads only the state still deletes nothing.
 func (self *evacuateRun) repoState(repoId sidecar.Id) (*evacuateRepoState, error) {
 	evacuator := self.evacuator
 	read, err := evacuator.repos.Read(self.ctx, self.cluster, repoId)
@@ -158,8 +161,8 @@ func (self *evacuateRun) repoState(repoId sidecar.Id) (*evacuateRepoState, error
 	case err != nil:
 		return &evacuateRepoState{action: evacuateRepoWait, held: true, why: "repo/ unread"}, err
 	}
-	cover, err := evacuator.holds.CoveringRepo(self.ctx, repoId, read.Object)
-	// a hold/ that cannot be read covers, with the error (hold_cache.go)
+	cover, err := evacuator.holds.CoveringRepoAtDelete(self.ctx, nil, repoId, read.Object)
+	// a hold/ that cannot be read, or whose read came back past its bound, covers, with the error (hold_cache.go)
 	held := cover.Covered()
 	if err != nil {
 		return &evacuateRepoState{action: evacuateRepoWait, held: true, why: "hold/ unread"}, err
@@ -203,6 +206,39 @@ func (self *evacuateRun) recheckDelete(ctx context.Context, repoId sidecar.Id) e
 		return errEvacuateHeld
 	case state.action == evacuateRepoWait:
 		return fmt.Errorf("%w: %s", errEvacuateRepoWaits, state.why)
+	}
+	return nil
+}
+
+// The skip row for a minute's batches as each DELETE issues, on hold/ read and held to its bound then (owner decision
+// 629): every repo whose records the minute dropped as an unheld shred's still drops them, and no hold now keeps a
+// staged segment a record of the minute dropped, its batch from before the hold's placement. errEvacuateHeld, or
+// errEvacuateRepoWaits, when either changed: the batches stay, and the next run moves what a hold keeps.
+func (self *evacuateRun) recheckBatchDelete(ctx context.Context, minute *evacuateMinute) error {
+	for repoId := range minute.shredRepoIds {
+		state, err := self.repoState(repoId)
+		switch {
+		case err != nil:
+			return err
+		case state.held:
+			return fmt.Errorf("%w: a shred's dropped records", errEvacuateHeld)
+		case state.action != evacuateRepoDrop:
+			return fmt.Errorf("%w: %s", errEvacuateRepoWaits, state.why)
+		}
+	}
+	minuteTime := batchMinuteTime(minute.minute)
+	for repoId := range minute.stagedDropRepoIds {
+		read, err := self.evacuator.repos.Read(ctx, self.cluster, repoId)
+		if err != nil {
+			return err
+		}
+		cover, err := self.evacuator.holds.CoveringRepoAtDelete(ctx, nil, repoId, read.Object)
+		if err != nil {
+			return err
+		}
+		if cover.Keeps(minuteTime) {
+			return fmt.Errorf("%w: a staged segment its record dropped", errEvacuateHeld)
+		}
 	}
 	return nil
 }
