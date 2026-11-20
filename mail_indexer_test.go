@@ -512,12 +512,15 @@ func TestMailIndexerServicesOverTheKeyClientAskTheConfigRepo(t *testing.T) {
 
 // The component binds its opener over the evs component's key client (owner decision 634), the config read from the
 // Sidecar's verified state: with the designation folded past, a covered device's MailIndexer stands and its Status
-// carries no prompt, the designated tag:mail device's client registers and the undesignated one's does not. A Sidecar
-// with no evs component binds none, so the designation reads unknown and the tag:mail device registers nothing.
+// carries no prompt, the designated tag:mail device's client registers and the undesignated one's does not, and mail
+// the undesignated one took raises mail_receiver_alarm on the Sidecar while the designated one's raises none. A
+// Sidecar with no evs component binds none, so the designation reads unknown: the tag:mail device registers nothing
+// and nothing alarms.
 func TestMailIndexerTheComponentBindsTheOpenerOverItsKeyClient(t *testing.T) {
 	team := newTestMailIndexerSealedTeam(t, protocol.TeamMailMode_TEAM_MAIL_MODE_INDEXERS)
 	team.net.foldPast(team.at)
 	sidecar := newTestSidecar(t)
+	events := recordEvents(sidecar)
 	leg := &sidecarConnectLeg{sidecar: sidecar, tls: newTlsDeviceState(sidecar.settings.Tls)}
 	sidecar.leg = leg
 	configClient := &ConfigClient{}
@@ -527,6 +530,10 @@ func TestMailIndexerTheComponentBindsTheOpenerOverItsKeyClient(t *testing.T) {
 		defer sidecar.authorities.stateLock.Unlock()
 		sidecar.authorities.authority = configClient.Authority()
 	}()
+	repoId := NewId()
+	internetMail := func(depositor testConfigDevice) *MailMessage {
+		return &MailMessage{RepoId: repoId, Id: NewId(), DepositorId: depositor.sidecarId, ReceiverDeposit: true, Sni: "mx.acme.root.example"}
+	}
 	bind := func(device testConfigDevice) (*MailClient, *MailBinding) {
 		t.Helper()
 		client, err := NewMailClient(&MailClientArgs{NetworkId: team.net.networkId, SidecarId: device.sidecarId, Store: newTestMemoryStore()})
@@ -562,8 +569,16 @@ func TestMailIndexerTheComponentBindsTheOpenerOverItsKeyClient(t *testing.T) {
 	if designated.receiverEligible(designatedBinding) {
 		t.Error("a tag:mail device registers while its designation cannot open")
 	}
+	laptop.judgeReceiver(binding, internetMail(team.other))
+	if len(*events) != 0 {
+		t.Errorf("an unknown list alarms: %+v", *events)
+	}
 
-	leg.components = append(leg.components, &EvsComponent{client: &EvsClient{args: &EvsClientArgs{Gkm: team.gkm}}})
+	func() {
+		leg.stateLock.Lock()
+		defer leg.stateLock.Unlock()
+		leg.components = append(leg.components, &EvsComponent{client: &EvsClient{args: &EvsClientArgs{Gkm: team.gkm}}})
+	}()
 	laptop, binding = bind(team.laptop)
 	if standing, err := binding.MailIndexer(); !standing || err != nil {
 		t.Errorf("no mail indexer stands: %t, %v", standing, err)
@@ -578,6 +593,12 @@ func TestMailIndexerTheComponentBindsTheOpenerOverItsKeyClient(t *testing.T) {
 	other, otherBinding := bind(team.other)
 	if other.receiverEligible(otherBinding) {
 		t.Error("an undesignated tag:mail device registers")
+	}
+	laptop.judgeReceiver(binding, internetMail(team.designated))
+	laptop.judgeReceiver(binding, internetMail(team.other))
+	if len(*events) != 1 || (*events)[0].Kind != SidecarEventMailReceiverAlarm || (*events)[0].MailReceiverAlarm != SidecarMailReceiverAlarmUndesignated ||
+		*(*events)[0].SidecarId != team.other.sidecarId || *(*events)[0].RepoId != repoId {
+		t.Errorf("the alarms %+v", *events)
 	}
 	configRepoId := Id(team.net.log.State().Genesis().GetConfigRepoId())
 	for _, ask := range team.gkm.asked() {
