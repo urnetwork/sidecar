@@ -1239,12 +1239,19 @@ type searchTestScope struct {
 	repoId Id
 	refId  Id
 	kind   protocol.RepoKind
+	// The repo's searchable_days as an age, asked at each search as a composition's scope source reads the governing
+	// policy then; nil masks none.
+	searchableAge func() time.Duration
 }
 
 // See SearchScopeSource.
 func (self *searchTestScope) Repos(ctx context.Context) ([]*SearchScopeRepo, error) {
-	return []*SearchScopeRepo{{
+	repo := &SearchScopeRepo{
 		RepoId: self.repoId, Kind: self.kind, Readable: true,
 		Refs: []*SearchScopeRef{{RefId: self.refId, Default: true}},
-	}}, nil
+	}
+	if self.searchableAge != nil {
+		repo.SearchableAge = self.searchableAge()
+	}
+	return []*SearchScopeRepo{repo}, nil
 }
