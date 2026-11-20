@@ -116,7 +116,7 @@ Feedback (sidecar/FEEDBACK-SYSTEM.md:11) and hosted models are out of scope.
 **The list** (the only TTL table; I-18):
 
 ```yaml
-# metadata_list.yml v61; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
+# metadata_list.yml v62; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
 # §7.9, §10, §11). v6 adds to v5 (2026-11-04) connect-1's ShareCert, api-6's push-token slot sentinels, api-7's
 # {acl_}q, cascade signers, recovery bindings, restored bindings' recovery windows and orphaned networks, api-13's
 # per-eraser closure counters, evs-1's secret kind and orphans, evs-3's creation block, fence time, deleted flag
@@ -335,6 +335,9 @@ Feedback (sidecar/FEEDBACK-SYSTEM.md:11) and hosted models are out of scope.
 # delegated selector names among the query names an edge answers; no column, family or proto field changes.
 # v61, updated 2026-11-19 for the owner's answer QD-1096 (owner decision 634), adds no row: api-7's folded indexer
 # designations carry their IndexerSet header's nonce, 16 random bytes api already sees in the entry.
+# v62, updated 2026-11-19 for the owner's answer QD-1113 (owner decision 643), adds no row: evs-28's held drop keeps
+# its drops/ entry until its deletions finish, outside the table's 64 KiB, unlisted once the 30 days an ended drop's
+# entry is kept have passed from its move to held.
 # Each row gives service, store (tables, Redis families, object families, logs or memory),
 # sees, why, ttl, and owner: the section that designs the value and states its ttl. Withdrawn rows keep
 # their ids so citations resolve. Public: this list ships in DESIGN.md on the public sidecar repo (owner
@@ -718,10 +721,10 @@ evs-27:
   owner: §16.11
 evs-28:
   service: evs appends; taskworker runs the dry runs and jobs (§11.13)
-  store: drops/<repo>/_ (the repo's metadata cluster, at most 64 KiB); dropscan/<repo>/<id>/<f> (segment cluster; f one of snap, cand, list, mark, del, held, ask, res); Redis {evsd_<repo_id>}
+  store: drops/<repo>/_ (the repo's metadata cluster, at most 64 KiB beside held drops' entries); dropscan/<repo>/<id>/<f> (segment cluster; f one of snap, cand, list, mark, del, held, ask, res); Redis {evsd_<repo_id>}
   sees: "per drop: its id, ref, DROP push id, version and place, not_before_ms, the time evs saw it committed, state (pending, cancelled, executing with phase and progress, held, observed, done, refused with reason), freed and held bytes, and the dry run it names; per dry run: the token paths and lists it was asked about, its snapshot and results (candidate segment and slot ids with sizes, which of them other versions name, inline and packed bytes), its state and progress, and per path whether the client's list matched, whether its lineage is linked and by which map parts, the resolved count, and young bytes; per job: its owner instance and lease, the drops it covers, its round and that round's horizon, its snapshots (each ref's version), cursor, counters, and candidate, mark, delete and held sets, per covered drop the entry hashes of its listed versions, sorted, each with a flag for an inline record, in its list files, and in its first snapshot file whether a listed version renamed a path (its push removed one path and created another citing its kind-5 content) and whether one copied across refs (its chain named a reuse source of another ref), two booleans the observe report counts (owner decision 513); for format 2, what a read answers for a version a drop holds or took or collection removed: its read state (collected, drop pending, dropped), the drop's id, not_before_ms and version; per cancelled or refused drop, a 17 B void record {drop_id, state}"
   why: a resumable deletion job and a dry run for the drop-history action, after its cancellable window, with no metadata write per push (owner decisions 173, 183)
-  ttl: drops/ entries at most 30 d after their drop or dry run ends, ended ones leaving sooner, oldest first, when a write would pass 64 KiB, but never one whose DROP committed under 27 h ago; a void record for the repo's life; dropscan/ files 30 d after their job or dry run ends, but a job's list files, its listed versions' entry hashes, and its first snapshot file, snap-0, its covered drops' ids, versions, places and seen_ms, which stay for the repo's life (§11.13; owner decisions 398, 570); {evsd_} hints until taken, outside the rdb bundles; all three deleted with the repo at its shred (§11.12's phase 5)
+  ttl: drops/ entries at most 30 d after their drop or dry run ends, ended ones leaving sooner, oldest first, when a write would pass 64 KiB, but never one whose DROP committed under 27 h ago, and a held drop's entry staying until its deletions finish, unlisted once 30 d have passed from its move to held (owner decision 643); a void record for the repo's life; dropscan/ files 30 d after their job or dry run ends, but a job's list files, its listed versions' entry hashes, and its first snapshot file, snap-0, its covered drops' ids, versions, places and seen_ms, which stay for the repo's life (§11.13; owner decisions 398, 570); {evsd_} hints until taken, outside the rdb bundles; all three deleted with the repo at its shred (§11.12's phase 5)
   owner: §11.13
 evs-29:
   service: evs

@@ -193,11 +193,16 @@ The edge cannot queue: with no key holder online, no TLS session exists (owner d
 
 ```text
 mailcfg             one per network and one per Team scope (kind mailcfg), always fully versioned (§11.7);
-                    members write signed records (I-4); tag:mail mail indexers read, by ReaderWrap (owner
-                    decisions 114, 150); a scope's is created by a consented device of the scope's member and
-                    bound to that member by the access log's fold, as a mailbox is, so it is read only by its
-                    member's consented devices (§8.5) and receivers, and a device tells the two apart by their
-                    rows, the network's naming no owner (§8.8's RepoCreate row; owner decision 631);
+                    members write signed records (I-4); tag:mail mail indexers read the network's, by
+                    ReaderWrap (owner decisions 114, 150); a scope's is created by a consented device of the
+                    scope's member, a config writer's included once the network's stands, so an AdminSet
+                    member's scope has its own, and bound to that member by the access log's fold, as a mailbox
+                    is, and a device tells the two apart by their rows, the network's naming no owner (§8.8's
+                    RepoCreate row; owner decision 631); a scope's follows the owner-bound rules: only its
+                    member's consented devices read it, its receivers among them (owner decision 58), no
+                    tag:mail indexer, RepoGrant or rule adding a reader, a RepoAdmin add or RepoDelete taking
+                    effect only from those devices and no RepoRevoke removing the member, so it is out of the
+                    network's admins' reach as the member's mail key is (§8.5, §8.8; owner decisions 126, 644);
                     member devices hold at most 1,000 leaves, as in any data repo but the team
                     directory, and an unseated one waits keyless, creating no address until seated (§8.12;
                     owner decisions 144, 182)

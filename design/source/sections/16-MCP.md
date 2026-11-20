@@ -1253,7 +1253,8 @@ documents   derived (§11.14): one per announcement, registered as a/ || writer_
             a run or worker item, so a copied id shadows no other writer's, and as a/ || announcement_id for a
             repo item, which folds across its admins, from the card or repo file holding it, M6's announce
             entries folding into it; one per stream entry
-versions    an announcement document's version is Announcement.version: a content change raises it; a renewal
+versions    an announcement document's version is Announcement.version: a content change raises it, as does a
+            card's return after another signer removed it (closure row; owner decision 645); a renewal
             keeps it and writes no index entry, nor does an ended item dropped from its card; only a withdrawal
             or a revocation writes a tombstone; since a renewal writes no entry, an announcement's row keeps the
             times the content-changing version held, search_agents reading the current expiry from the fold, and
@@ -1317,7 +1318,8 @@ message RepoAnnouncement {                  // r/<h>/<repo_id>, from format 2
 message Announcement {
   bytes announcement_id = 1;                // runs and workers: random 16 B, fixed for the item's life
   uint32 kind = 2;                          // 1 run, 2 worker, 3 repo
-  uint64 version = 3;                       // +1 at each content change; a renewal keeps it
+  uint64 version = 3;                       // +1 at each content change and at a card's return after another
+                                            // signer removed it (owner decision 645); a renewal keeps it
   int64 started_millis = 4; int64 renewed_millis = 5;
   int64 expires_millis = 6;                 // runs: renewed + 90 min; workers: renewed + 26 h; repos: none (0)
   uint32 state = 7;                         // 1 active, 2 ended, 3 handed_off, 4 withdrawn (runs and workers:
@@ -1801,7 +1803,11 @@ closure     the eraser holds neither a card's key nor a repo admin's, and reader
             it out, a card that still names the repo having its document CUT from both indexes at once and
             waiting for its writer, caught at each later sync for 30 days; for a directory admin's own erase, a
             card that still holds the item is removed whole by moderation's removal and its keys erased, its
-            writer's other runs coming back with its next card, and an announcement that stands on an r/ file is
+            writer's other runs coming back with its next card, which, as the first card a writer writes after
+            another signer removed its path (read at its sync, as its moderation notice shows), raises every
+            item's version with no content change, so its push enters each run's document above the removal's
+            tombstone and §11.14's newest wins reads it live, as for any card that returns with unchanged items
+            under another signer's removal (owner decision 645); an announcement that stands on an r/ file is
             refused, since only its owner's revocation overwrites it; a reader accepts a directory admin's push
             at a d/ or r/ path only when its bytes are the very bytes its copy already accepted there, or else
             verify as the rightful writer's own Signed under every other rule, whose seq must rise; a reader
