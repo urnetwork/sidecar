@@ -54,6 +54,10 @@ var registeredClauses = []*ClauseRegistration{
 	RegisterClause("FS-58", "", "folds killed and raced", Fs58FoldKilledAndRaced, ClauseOnT3("./evshost")),
 	RegisterClause("FS-58", "", "re-created after a collection", Fs58RecreatedAfterCollection),
 
+	// a pending record and a small repo's parcels at 7 d, beside the registered kills (fs60.go)
+	RegisterClause("FS-60", "", "pending record fenced then dropped", Fs60PendingRecordFencedThenDropped, ClauseOnT3("./evshost")),
+	RegisterClause("FS-60", "", "parcels pack at seven days", Fs60ParcelsPackAtSevenDays, ClauseOnT3("./evshost")),
+
 	RegisterClause("FS-62", "", "lease holder resync", Fs62LeaseHolderResync, ClauseOnT3("./evshost")),
 	RegisterClause("FS-62", "", "acl gate", Fs62AclGate, ClauseOnT3("./sidecart3")),
 
