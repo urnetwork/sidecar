@@ -204,7 +204,7 @@ RecoveryVeto.proposal_id: {number: 2, type: bytes, row: api-7, sees: "authority 
 
 # DESIGN-DETAILS 5.2.2's fields (section 5, complete 2026-11-09), whose api-7 words its 5.8 proposes and the owner's
 # details-5-settings-in-rows holds, each pending until api-7 names it; the cascade spans and indexer rows quote the
-# words owner decision 330 gave api-7.
+# words owner decision 330 gave api-7, and an indexer row's nonce those owner decision 634 gave it (QD-1096).
 ProjectionHeader.tail_verdicts: {number: 10, type: bytes, row: api-7, pending: "DESIGN-DETAILS 5.8: api-7 gains each base header's tail verdicts"}
 ProjectionRows.proposals: {number: 7, type: repeated ProposalRow, row: api-7, pending: "DESIGN-DETAILS 5.8: api-7 gains open authority proposals with their signers, windows and kinds"}
 ProjectionRows.settings: {number: 8, type: ProjectionSettings, row: api-7, pending: "details-5-settings-in-rows: api-7 gains the id-level settings self_admit and scim_signer"}
@@ -238,3 +238,4 @@ IndexerRow.scope: {number: 2, type: uint32, row: api-7, sees: "each indexer desi
 IndexerRow.signer: {number: 3, type: bytes, row: api-7, sees: "each indexer designation folded into the projection rows while it holds, with its signer and position"}
 IndexerRow.at: {number: 4, type: uint64, row: api-7, sees: "each indexer designation folded into the projection rows while it holds, with its signer and position"}
 IndexerRow.sealed_services: {number: 5, type: bytes, row: api-7, sees: "each indexer designation folded into the projection rows while it holds, with its signer and position"}
+IndexerRow.nonce: {number: 6, type: bytes, row: api-7, sees: "its IndexerSet header's nonce, 16 random bytes the entry already shows (owner decision 634)"}

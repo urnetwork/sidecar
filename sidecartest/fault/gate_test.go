@@ -237,9 +237,8 @@ func TestGateFileNamesFs5Fs73AndFs72RollbackInEvshost(t *testing.T) {
 }
 
 // Apart from the cases their sweeps name, M2's and M10's rows follow the convention. Each case no sweep names runs
-// its conventional tests and nothing else: M2's sweep names the cases whose T3 tests run outside the convention
-// (gate_m2_out.go; QD-995, QD-1081), and gate_m10_out.go names only QD-995's and adds no item. TEST-M10-05 extends
-// its sweep, and this test with it; gate_m2_out_test.go holds M2's items.
+// its conventional tests and nothing else: M2's and M10's sweeps name the cases whose tests run outside the convention
+// (gate_m2_out.go, gate_m10_out.go; QD-995, QD-1081); gate_m2_out_test.go and gate_m10_out_test.go hold their items.
 func TestGateM2AndM10KeepTheConventionForEveryOtherCase(t *testing.T) {
 	catalog := DefaultCatalog()
 	wantM2 := []string{}
@@ -247,7 +246,12 @@ func TestGateM2AndM10KeepTheConventionForEveryOtherCase(t *testing.T) {
 		wantM2 = append(wantM2, caseName)
 	}
 	slices.Sort(wantM2)
-	wantSwept := map[string][]string{"M2": wantM2, "M10": {"FS-72's rollback", "FS-73"}}
+	wantM10 := []string{}
+	for caseName := range gateM10Cases(catalog) {
+		wantM10 = append(wantM10, caseName)
+	}
+	slices.Sort(wantM10)
+	wantSwept := map[string][]string{"M2": wantM2, "M10": wantM10}
 	for _, gate := range []string{"M2", "M10"} {
 		sweep := gateSweep(gate)
 		swept := []string{}
@@ -279,9 +283,6 @@ func TestGateM2AndM10KeepTheConventionForEveryOtherCase(t *testing.T) {
 		if want := len(catalog.GateCases(gateCatalogName(gate))); caseCount != want {
 			t.Errorf("%s holds %d cases, the catalog %d", gate, caseCount, want)
 		}
-	}
-	if len(gateM10Sweep.Items) != 0 {
-		t.Errorf("M10's exit sweep adds %d items", len(gateM10Sweep.Items))
 	}
 }
 

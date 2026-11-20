@@ -637,6 +637,11 @@ var testFenceAdditions = []struct {
 	field    testFenceField
 	question string
 }{
+	{
+		message:  "IndexerRow",
+		field:    testFenceField{name: "nonce", number: 6, typeName: "bytes"},
+		question: "mail-m8-10-indexer-services-seal-context",
+	},
 }
 
 // One field an owner's answer takes out of a message the design fences, its number reserved.
