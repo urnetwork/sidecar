@@ -25,15 +25,18 @@
 //	          then rewrites each index file holding a listed document in CLOSURE and ERASE pairs, whose wait and finish
 //	          are its own arithmetic (§11.13). Then mail's parts re-key each i/ segment (mail_erase_closure.go), the
 //	          last one's ERASE completing the erasure where the index's rewrite left nothing unproven. An erasure with
-//	          no i/ segment left ends with the index's rewrite, whose last ERASE completes it. While the index's side
-//	          waits, on a full set, an allowance or another device's 25 h, the i/ parts wait with it, so an ERASE that
-//	          destroys a key is always left to carry complete
+//	          no i/ segment and no orphaned CLOSURE left ends with the index's rewrite: its last ERASE completes it,
+//	          or, where it finds no index file to rewrite, its completion ERASE (IndexRewriteArgs.Completion; QD-1132).
+//	          While the index's side waits, on a full set, an allowance or another device's 25 h, the i/ parts wait
+//	          with it
 //	resume    by role: the device whose first ERASE began the erasure at once, another admin's device ResumeAfter
 //	          (25 h) after its CUT or last ERASE, any admin's once the eraser no longer administers the repo
 //
 // An ERASE that names only keys already gone is refused and commits nothing (evs's NOTHING_TO_ERASE), so complete
-// rides only an ERASE that destroys a key. An erasure whose index rewrite is unproven (a history the store could not
-// walk whole) therefore ends with every key it could find destroyed and no complete: it stays rewriting, fail closed.
+// rides an ERASE that destroys a key, or a completion ERASE (evs_erase_completion.go), which evs refuses so too until
+// question erasure-completion-erase-evs-cannot-read-complete is answered. An erasure whose index rewrite is unproven
+// (a history the store could not walk whole) ends with every key it could find destroyed and no complete, sending no
+// completion: it stays rewriting, fail closed.
 //
 // On every leg but the extension's. The types here are used under MailEraser's lock.
 
@@ -283,8 +286,9 @@ func (self *MailEraser) indexParts(ctx context.Context, index *mailEraseIndex, e
 		}
 	}
 	testHookBarrier("mail.erase.index.before", "")
+	// with nothing left after it, a rewrite that finds no file to rewrite ends the erasure by a completion ERASE
 	resumed, err := index.eraser.Resume(ctx, &IndexResumeArgs{
-		ErasureId: erasure.ErasureId, Role: role, Documents: documents, Complete: last,
+		ErasureId: erasure.ErasureId, Role: role, Documents: documents, Complete: last, Completion: last,
 	})
 	testHookBarrier("mail.erase.index.after", "")
 	switch {
