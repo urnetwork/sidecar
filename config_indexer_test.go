@@ -3,6 +3,11 @@
 // what it serves, no key or grant added, and the designation surviving a fold at every reader; a SponsorSet by an admin
 // naming a tagged sidecar's member.
 //
+// QD-1096 (owner decision 634): a designation's row carries its IndexerSet header's nonce, so a designation folded past
+// its entry opens its sealed services at a new device started at a base and at a rows-only gate as at the long-running
+// reader, a re-designation's row its own header's; and the services open under no other nonce or network, and wait for
+// a generation the reader does not hold.
+//
 // TEAM-M10-02: SearchIndexersFor as DESIGN-DETAILS 7.2.2's E1 to E6, the rows of 7.6's TestEligibleTable this function
 // decides, over a Team with two members, an EvsShare'd vault, a tagged indexer and an audit reader, and over a personal
 // network. SEARCH-M10-32's verdict table has its own tests of the same names, so these carry the function's.
@@ -29,6 +34,171 @@ func (self *testConfigNet) indexerSet(subject testConfigDevice, scope protocol.I
 		designation.SealedServices = []byte("sealed services: opened only by a config reader")
 	}
 	return designation
+}
+
+// An IndexerSet at the tip whose services are sealed to key under the statement's own header, as
+// Sidecar.DesignateIndexer files one.
+func (self *testConfigNet) sealedIndexerSet(subject testConfigDevice, scope protocol.IndexerScope, key *EvsRepoKey, services ...protocol.IndexerService) *protocol.IndexerSet {
+	self.t.Helper()
+	header := self.header()
+	sealed, err := SealConfigBody(key, NewConfigSealContext(bridge.SignedType_SIGNED_INDEXER_SET, header), &protocol.IndexerServices{Services: services}, nil)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	return &protocol.IndexerSet{Header: header, SidecarId: subject.sidecarId.Bytes(), Scope: scope, SealedServices: sealed}
+}
+
+// Two bases folding the tip at its config version, the second folding the first, so the retention point passes every
+// entry through at: no reader started from what the net's reader retains holds those entries, only the rows.
+func (self *testConfigNet) foldPast(at uint64) {
+	self.t.Helper()
+	configVersion := self.log.State().Base().GetConfigVersion()
+	for range 2 {
+		if verdict := self.fold(self.owner, self.n, configVersion); !verdict.Accepted() {
+			self.t.Fatalf("the base at %d: %v", verdict.Pin.GetVersion(), verdict.Refusal)
+		}
+	}
+	for _, entryBytes := range self.log.Retained().Entries {
+		entry := &bridge.AuthEntry{}
+		if err := proto.Unmarshal(entryBytes, entry); err != nil {
+			self.t.Fatal(err)
+		}
+		if entry.GetN() <= at {
+			self.t.Fatalf("the reader still retains entry %d", entry.GetN())
+		}
+	}
+}
+
+// A new device and a rows-only gate, each started from what the net's reader retains, as everyReaderAgrees starts them.
+func (self *testConfigNet) startedReaders() (*ConfigLog, *ConfigLog) {
+	self.t.Helper()
+	retained := self.log.Retained()
+	restored, err := RestoreConfigLog(testConfigLogSettings(), retained, self.source)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	gate, err := RestoreConfigLogRowsOnly(testConfigLogSettings(), retained, self.rowsOnlySource(), nil)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	return restored, gate
+}
+
+// QD-1096: the designation's row carries its IndexerSet header's nonce, so once its entry is folded past every reader,
+// the long-running one, a new device started at the newest base and a rows-only gate open its sealed services alike
+// with the config key; a newer designation of the subject at the scope holds with its own header's nonce.
+func TestAFoldedIndexerDesignationOpensAtEveryReader(t *testing.T) {
+	net := newTestConfigNet(t)
+	member, laptop := net.consentedMember("m")
+	desktop := net.device("m desktop", member)
+	net.admitDevice(laptop, desktop, 0)
+	key := testConfigSealKey(3)
+	mail, search := protocol.IndexerService_INDEXER_SERVICE_MAIL, protocol.IndexerService_INDEXER_SERVICE_SEARCH
+	designation := net.sealedIndexerSet(desktop, protocol.IndexerScope_INDEXER_SCOPE_MEMBER, key, mail, search)
+	at := net.mustPost(laptop, bridge.SignedType_SIGNED_INDEXER_SET, designation).Pin.GetVersion()
+	if rows := net.log.State().Rows().GetIndexers(); len(rows) != 1 || !bytes.Equal(rows[0].GetNonce(), designation.GetHeader().GetNonce()) {
+		t.Fatalf("the folded row: %v", rows)
+	}
+	net.foldPast(at)
+
+	expectOpens := func(label string, state *ConfigState, nonce []byte, want ...protocol.IndexerService) {
+		t.Helper()
+		indexers := state.Indexers()
+		if len(indexers) != 1 || indexers[0].SidecarId != desktop.sidecarId || indexers[0].NetworkId != net.networkId || !bytes.Equal(indexers[0].Nonce, nonce) {
+			t.Fatalf("%s: the designations %+v", label, indexers)
+		}
+		services, err := indexers[0].OpenServices(testConfigSealKeyAt(key))
+		if err != nil || !slices.Equal(services, want) {
+			t.Errorf("%s: services %v, err %v", label, services, err)
+		}
+		if offered, opened := ConfigIndexerServicesOpener(testConfigSealKeyAt(key))(indexers[0]); !opened || !slices.Equal(offered, want) {
+			t.Errorf("%s: the opener's services %v, opened %t", label, offered, opened)
+		}
+	}
+	type testReader struct {
+		label string
+		log   *ConfigLog
+	}
+	readers := func() []testReader {
+		restored, gate := net.startedReaders()
+		return []testReader{{label: "the long-running reader", log: net.log}, {label: "a new device", log: restored}, {label: "a rows-only gate", log: gate}}
+	}
+	for _, reader := range readers() {
+		if reader.log.keptEntry(at) != nil {
+			t.Fatalf("%s holds the designation's entry", reader.label)
+		}
+		expectOpens(reader.label, reader.log.State(), designation.GetHeader().GetNonce(), mail, search)
+	}
+	net.everyReaderAgrees()
+
+	// the newest designation of (sidecar_id, scope) holds, its row with its own header's nonce
+	redesignation := net.sealedIndexerSet(desktop, protocol.IndexerScope_INDEXER_SCOPE_MEMBER, key, search)
+	at = net.mustPost(laptop, bridge.SignedType_SIGNED_INDEXER_SET, redesignation).Pin.GetVersion()
+	if bytes.Equal(redesignation.GetHeader().GetNonce(), designation.GetHeader().GetNonce()) {
+		t.Fatal("two headers with one nonce")
+	}
+	net.foldPast(at)
+	for _, reader := range readers() {
+		expectOpens(reader.label+" after the re-designation", reader.log.State(), redesignation.GetHeader().GetNonce(), search)
+	}
+	net.everyReaderAgrees()
+}
+
+// A designation's services open only under the network id and nonce its seal is bound to, and only with the key of the
+// generation the seal names: a tampered nonce, another network's id, a nonce of the wrong length and a key of another
+// generation each open nothing, and the opener reads each as unopened.
+func TestADesignationsServicesOpenUnderNoOtherNonce(t *testing.T) {
+	net := newTestConfigNet(t)
+	member, laptop := net.consentedMember("m")
+	desktop := net.device("m desktop", member)
+	net.admitDevice(laptop, desktop, 0)
+	key := testConfigSealKey(3)
+	net.mustPost(laptop, bridge.SignedType_SIGNED_INDEXER_SET, net.sealedIndexerSet(desktop, protocol.IndexerScope_INDEXER_SCOPE_MEMBER, key, protocol.IndexerService_INDEXER_SERVICE_MAIL))
+	indexers := net.log.State().Indexers()
+	if len(indexers) != 1 {
+		t.Fatalf("the designations %+v", indexers)
+	}
+	indexer := indexers[0]
+	if services, err := indexer.OpenServices(testConfigSealKeyAt(key)); err != nil || !slices.Equal(services, []protocol.IndexerService{protocol.IndexerService_INDEXER_SERVICE_MAIL}) {
+		t.Fatalf("the designation as folded: %v, %v", services, err)
+	}
+
+	tamperedNonce := indexer
+	tamperedNonce.Nonce = bytes.Clone(indexer.Nonce)
+	tamperedNonce.Nonce[0] ^= 0x01
+	otherNetwork := indexer
+	otherNetwork.NetworkId = testConfigId("another network")
+	shortNonce := indexer
+	shortNonce.Nonce = indexer.Nonce[:configNonceByteCount-1]
+	noNonce := indexer
+	noNonce.Nonce = nil
+	cases := []struct {
+		label   string
+		indexer ConfigIndexer
+	}{
+		{label: "a tampered nonce", indexer: tamperedNonce},
+		{label: "another network", indexer: otherNetwork},
+		{label: "a short nonce", indexer: shortNonce},
+		{label: "no nonce", indexer: noNonce},
+	}
+	for _, c := range cases {
+		if services, err := c.indexer.OpenServices(testConfigSealKeyAt(key)); !errors.Is(err, ErrConfigSealInvalid) || services != nil {
+			t.Errorf("%s: services %v, err %v", c.label, services, err)
+		}
+		if _, opened := ConfigIndexerServicesOpener(testConfigSealKeyAt(key))(c.indexer); opened {
+			t.Errorf("%s: the opener opened it", c.label)
+		}
+	}
+	// a reader that holds another generation, or none, waits for the seal's
+	if _, err := indexer.OpenServices(testConfigSealKeyAt(testConfigSealKey(2))); !errors.Is(err, ErrConfigSealGenerationMissing) {
+		t.Errorf("another generation's key: %v", err)
+	}
+	if _, err := indexer.OpenServices(nil); !errors.Is(err, ErrConfigSealGenerationMissing) {
+		t.Errorf("no keys: %v", err)
+	}
+	if ConfigIndexerServicesOpener(nil) != nil {
+		t.Error("an opener over no keys")
+	}
 }
 
 // FS-82: a network designation by an Owner's device, a member designation by a consented device of the subject's

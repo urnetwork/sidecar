@@ -5,9 +5,10 @@ package sidecar
 // mail.check_send, mail.send_result and mail.send (QD-853, owner decision 288) on the dispatcher with no socket, over a
 // Sidecar holding an identity and the test's backends: three network methods, none a Confirm one; check_send answering
 // a draft's domains as JSON in the root's numbers; send_result answering a known send and refusing an unknown or a
-// missing id; both reads answering ErrMailSendUnavailable while their calls are not on MailClient; params read
-// strictly; and mail.send over MAIL-M7-18's send world answering the approval the gate holds it for, nothing kept or
-// deposited, then the send_id once a decision passes it.
+// missing id; the composition's backends taking the call's Sidecar's MailClient (QD-1122), unbound while it binds
+// nothing, and end to end over MAIL-M7-17's client world a check by its bound sender and a send's result by its id from
+// or/; params read strictly; and mail.send over MAIL-M7-18's send world answering the approval the gate holds it for,
+// nothing kept or deposited, then the send_id once a decision passes it.
 
 import (
 	"context"
@@ -21,6 +22,7 @@ import (
 // A daemon hosting one network's Sidecar, the send methods over backends registered.
 type mailSendDaemonTestWorld struct {
 	daemon    *Daemon
+	sidecar   *Sidecar
 	networkId Id
 }
 
@@ -37,7 +39,7 @@ func newMailSendDaemonTestWorld(t *testing.T, backends *DaemonMailSendBackends) 
 			t.Fatal(err)
 		}
 	}
-	return &mailSendDaemonTestWorld{daemon: daemon, networkId: identity.NetworkId}
+	return &mailSendDaemonTestWorld{daemon: daemon, sidecar: sidecar, networkId: identity.NetworkId}
 }
 
 // One control request for method, its params params encoded, or as given where they are a string; its response.
@@ -204,23 +206,72 @@ func TestDaemonMailSendResultAnswersAKnownSendAndRefusesAnUnknownId(t *testing.T
 	}
 }
 
-// With the composition's backends, both reads answer ErrMailSendUnavailable naming what they wait on, which an app
-// reads as MAIL_UNAVAILABLE, and mail.send on a Sidecar whose mail is bound to nothing is unbound, unavailable too.
-func TestDaemonMailReadsAnswerUnavailableUntilTheirCallsLand(t *testing.T) {
+// With the composition's backends every method takes the call's Sidecar's MailClient, so on a Sidecar whose mail binds
+// nothing yet each answers ErrMailUnbound, which an app reads as MAIL_UNAVAILABLE.
+func TestDaemonMailMethodsAnswerUnboundOnASidecarWithNoMail(t *testing.T) {
 	world := newMailSendDaemonTestWorld(t, nil)
 	draft := &DaemonMailDraftParams{From: "ann@acme.root.example", To: []string{"a@outside.example"}, Text: "t"}
-	check := world.call(t, DaemonMethodMailCheckSend, draft)
-	testMailSendDaemonRefused(t, "check_send", check, ErrMailSendUnavailable)
-	if check.Error == nil || !strings.Contains(check.Error.Message, "check a send") {
-		t.Errorf("check_send names nothing it waits on: %+v", check.Error)
-	}
+	testMailSendDaemonRefused(t, "check_send", world.call(t, DaemonMethodMailCheckSend, draft), ErrMailUnbound)
 	sendId := NewId()
-	result := world.call(t, DaemonMethodMailSendResult, &DaemonMailSendResultParams{SendId: &sendId})
-	testMailSendDaemonRefused(t, "send_result", result, ErrMailSendUnavailable)
-	if result.Error == nil || !strings.Contains(result.Error.Message, "result") {
-		t.Errorf("send_result names nothing it waits on: %+v", result.Error)
-	}
+	testMailSendDaemonRefused(t, "send_result", world.call(t, DaemonMethodMailSendResult, &DaemonMailSendResultParams{SendId: &sendId}), ErrMailUnbound)
 	testMailSendDaemonRefused(t, "send", world.call(t, DaemonMethodMailSend, draft), ErrMailUnbound)
+}
+
+// End to end over the composition's backends, the Sidecar's mail on MAIL-M7-17's client world: check_send is the check
+// of the message Send would make by the bound sender, as JSON; a send through the outbox reads queued by its send_id,
+// then the outcomes a prover host wrote to or/, as JSON in or/'s numbers; and an id no send of the member has is
+// refused as unknown.
+func TestDaemonMailReadsOverTheSidecarsMailClient(t *testing.T) {
+	mail := newMailSendResultTestWorld(t)
+	checker := &testMailSendChecker{}
+	binding, _, _ := mail.client.bound()
+	copied := *binding
+	copied.Sender = checker
+	mail.client.Bind(&copied)
+	world := newMailSendDaemonTestWorld(t, nil)
+	world.sidecar.mail.Store(mail.client)
+
+	check := world.call(t, DaemonMethodMailCheckSend, &DaemonMailDraftParams{
+		Network: world.networkId.String(), From: testMailSendFrom, To: []string{testMailIngestRecipient, "someone@outside.example"}, Text: "Dinner at eight.",
+	})
+	if check.Error != nil {
+		t.Fatal(check.Error.Message)
+	}
+	want := `{"domains":[{"domain":"outside.example","mode":1,"byte_count":1,"cap_byte_count":2,"expected_delay_ms":0,"prediction":1}]}`
+	if string(check.Result) != want || len(checker.messages) != 1 || !slices.Equal(checker.messages[0].Recipients, []string{"someone@outside.example"}) {
+		t.Errorf("check_send answered %s over %d checks", check.Result, len(checker.messages))
+	}
+
+	sent, err := mail.client.Send(context.Background(), testMailSubmitDraft())
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := func() string {
+		t.Helper()
+		response := world.call(t, DaemonMethodMailSendResult, &DaemonMailSendResultParams{Network: world.networkId.String(), SendId: &sent.SendId})
+		if response.Error != nil {
+			t.Fatal(response.Error.Message)
+		}
+		return string(response.Result)
+	}
+	queued := read()
+	if !strings.Contains(queued, `"domain":"outside.example","mode":0,"byte_count":0,"cap_byte_count":0,"outcome":2`) ||
+		!strings.Contains(queued, `"domain":"elsewhere.example","mode":0,"byte_count":0,"cap_byte_count":0,"outcome":2`) {
+		t.Errorf("before any host send_result answered %s", queued)
+	}
+	updateTime := time.UnixMilli(1_700_000_000_000)
+	mail.writeOutcomes(sent.EffectKey,
+		&SmtpDomainOutcome{Domain: "outside.example", Mode: SmtpModeBdat, Outcome: SmtpOutcomeSent, UpdateTime: updateTime, TlsLevel: SmtpTlsLevelDane},
+		&SmtpDomainOutcome{Domain: "elsewhere.example", Outcome: SmtpOutcomeRefused, ReplyCode: 550, UpdateTime: updateTime},
+	)
+	want = `{"domains":[` +
+		`{"domain":"outside.example","mode":1,"byte_count":0,"cap_byte_count":0,"outcome":1,"reply_code":0,"retry_after_ms":0,"update_time_ms":1700000000000,"tls_level":1},` +
+		`{"domain":"elsewhere.example","mode":0,"byte_count":0,"cap_byte_count":0,"outcome":5,"reply_code":550,"retry_after_ms":0,"update_time_ms":1700000000000,"tls_level":0}]}`
+	if got := read(); got != want {
+		t.Errorf("send_result answered %s", got)
+	}
+	unknown := NewId()
+	testMailSendDaemonRefused(t, "an unknown send", world.call(t, DaemonMethodMailSendResult, &DaemonMailSendResultParams{SendId: &unknown}), ErrMailSendUnknown)
 }
 
 // mail.send of a draft naming an outside recipient answers the approval the gate holds it for, and nothing is kept or

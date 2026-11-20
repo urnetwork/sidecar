@@ -129,7 +129,7 @@ var testMailMessageFields = map[string][]string{
 		"5 MailOutcomeKind outcome", "6 uint32 reply_code", "7 uint32 retry_after_ms", "8 uint64 update_time_ms",
 		"9 uint32 tls_level",
 	},
-	"MailOutcomeRecord": {"1 repeated MailOutcome outcomes"},
+	"MailOutcomeRecord": {"1 repeated MailOutcome outcomes", "2 bytes send_id"},
 	"MailProverRecord": {
 		"1 uint64 smtp_data_proof_bytes", "2 uint64 data_bytes_per_s", "3 uint64 measure_time_ms",
 		"4 uint64 unit_millis", "5 uint64 head_byte_count", "6 uint64 header_record_byte_count",

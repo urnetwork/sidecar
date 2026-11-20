@@ -18,6 +18,8 @@
 //	          created only if absent and carrying its use's effect_key (§15.8)
 //	read      List and Read on every leg (mail_read.go)
 //	status    GET /mail/status, this device's receiver, and whether a mail indexer stands, with §15.6's prompt
+//	sends     Send (mail_send.go), CheckSend and SendResult (§14.5, §18.5; QD-1122), and the component's mail_send from
+//	          the member's or/ (mail_send_result.go)
 //
 // Nothing here logs an address, an alias or a label (I-13), and no credential leaves through Read or Status (I-7).
 // Safe for concurrent use.
@@ -116,6 +118,15 @@ type MailBinding struct {
 	// §5.4's search, which *Sidecar answers on its installed engine (Sidecar.Search): nil searches nothing, so a mail
 	// search and IMAP's text terms answer unavailable (mail_search.go).
 	Search func(ctx context.Context, request *SearchRequest) (*SearchStream, error)
+	// The sender this host sends the member's internet mail with (§14's SmtpSender, a host's composition of it), whose
+	// Check prices a send at this host's own cap and measure where it proves (CheckSend). Nil, as on a phone or any
+	// host that composes no sender: CheckSend checks through the member's p/ records instead (mail_send_result.go).
+	Sender MailSendChecker
+}
+
+// What checks the message a send would make, per recipient domain (§14.5's Check): SmtpSender is one.
+type MailSendChecker interface {
+	Check(ctx context.Context, message *SmtpOutboundMessage) (*SmtpSendCheck, error)
 }
 
 // A replying burner's selectors on this device (§15.9, D-DNS-11): SmtpDkimKeys is one.
@@ -255,6 +266,9 @@ type MailClient struct {
 	// the gate kind mail's Lookup is registered on, and what removes it (mail_outbox.go)
 	outboxLookupGate   MailConfigGate
 	outboxLookupRemove func()
+	// the send watch, which raises mail_send from the member's or/, on the legs that run a component
+	// (mail_send_result.go)
+	sendWatch any
 }
 
 // A client over args, bound to nothing yet.
@@ -804,6 +818,27 @@ func (self *MailClient) Status(ctx context.Context) (*MailClientStatus, error) {
 		status.Prompt = MailIndexerPrompt
 	}
 	return status, nil
+}
+
+// The check of the message Send would make of args (§14.5's Check, §18.5's CheckSend; QD-1122): per recipient domain
+// of its internet recipients, in the order each first appears, its mode, the message's encoded bytes, the DATA cap, the
+// expected delay and ok, too_large or unknown. The bound sender (MailBinding.Sender) checks it at this host's own cap
+// where it proves; a host with none checks through the member's p/ records, as a phone prices a send on its prover
+// hosts' (mail_send_result.go). It signs, keeps, deposits and queues nothing and asks no gate, so an app may call it on
+// each change of a draft; a draft Send would refuse is refused alike, and mail to the network's own addresses alone
+// answers no domain, since none of it goes through §14. ErrMailSendUnavailable on the page Worker's leg, which sends
+// no mail.
+func (self *MailClient) CheckSend(ctx context.Context, args *MailSendArgs) (*SmtpSendCheck, error) {
+	return self.checkSend(ctx, args)
+}
+
+// The outcomes of the send sendId names (§14.5's outcomes, §18.5's GetSendResult; QD-1122), per recipient domain as the
+// member's or/ holds them, found by the send_id its record names, so every device of the member answers alike, after
+// the send's o/ entry is gone too. A send still in o/ that no prover host has written outcomes for answers queued at
+// each of its domains (mail_send_result.go). ErrMailSendUnknown where the member's mailbox holds neither, as for mail
+// to the network's own addresses alone, which queues nothing; ErrMailSendUnavailable on the page Worker's leg.
+func (self *MailClient) SendResult(ctx context.Context, sendId Id) (*SmtpSendResult, error) {
+	return self.sendResult(ctx, sendId)
 }
 
 // Ends what the client built: mailcfg's follower. The component's Close calls it.

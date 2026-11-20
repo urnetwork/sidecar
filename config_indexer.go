@@ -11,9 +11,13 @@
 // A designation grants no key, grant or read: it names who runs a service within what it already reads. api sees its
 // signer, subject, scope and retire; services is sealed to the config's current generation (IndexerServices,
 // plan-TEAM-sealed-field-format), and readers ignore a value they do not know. Rows carry each designation that holds
-// (question team-m2-07-indexer-rows), so it survives a fold at every reader.
+// (question team-m2-07-indexer-rows), so it survives a fold at every reader, with its IndexerSet header's nonce, which
+// the services are sealed under (owner decision 634): every reader, a new device started at a base and a gate
+// included, opens them with the network id it holds and that nonce (ConfigIndexer.OpenServices), never needing the
+// entry itself.
 //
-// Nothing here creates, derives or unwraps a key, so nothing calls testHookSecret. On every leg.
+// Nothing here creates or unwraps a key; OpenServices derives one through OpenConfigBody, whose EvsRepoKey.DeriveKey
+// calls testHookSecret. On every leg.
 
 package sidecar
 
@@ -120,6 +124,8 @@ func configApplyIndexerSet(next *configStateBuilder, statement *configStatement)
 		Signer:         statement.signers[0].RowsSigner(),
 		At:             statement.n,
 		SealedServices: bytes.Clone(designation.GetSealedServices()),
+		// the services are sealed under the designation's own header, whose nonce the replay row held to 16 bytes
+		Nonce: bytes.Clone(designation.GetHeader().GetNonce()),
 	})
 	return nil
 }
@@ -132,8 +138,47 @@ type ConfigIndexer struct {
 	Signer Id
 	At     uint64
 	// IndexerServices, sealed to the config's generation as the entry carried it, which a config reader opens
-	// (OpenConfigBody); a value it does not know it ignores.
+	// (OpenServices); a value it does not know it ignores.
 	SealedServices []byte
+	// What the seal is bound to besides its key (ConfigSealContext): the network the state holds, and the
+	// IndexerSet header's 16-byte nonce its row carries (owner decision 634).
+	NetworkId Id
+	Nonce     []byte
+}
+
+// Opens the designation's sealed services under the one format every sealed field uses (config_seal.go), the context
+// being the IndexerSet's type, the network id and the nonce the row carries (owner decision 634), with the config
+// repo's key of the generation the seal names, which repoKeyAt answers, nil for one this device does not hold. So a
+// reader that never held the entry opens them as one that did. ErrConfigSealGenerationMissing while that generation is
+// not held, nil repoKeyAt holding none; ErrConfigSealInvalid where the seal does not open in this context, under a
+// nonce or network that is not its entry's among them. A value this build does not know is kept for the caller to
+// ignore.
+func (self ConfigIndexer) OpenServices(repoKeyAt func(generation uint64) *EvsRepoKey) ([]protocol.IndexerService, error) {
+	if repoKeyAt == nil {
+		return nil, fmt.Errorf("%w: no config key is held", ErrConfigSealGenerationMissing)
+	}
+	sealContext := NewConfigSealContext(bridge.SignedType_SIGNED_INDEXER_SET, &bridge.StatementHeader{NetworkId: self.NetworkId.Bytes(), Nonce: self.Nonce})
+	services := &protocol.IndexerServices{}
+	if _, err := OpenConfigBody(self.SealedServices, sealContext, repoKeyAt, services); err != nil {
+		return nil, err
+	}
+	return services.GetServices(), nil
+}
+
+// The opener of designations' services that SearchIndexersFor, mail, remote search and the mirrors take, over the
+// config repo's keys repoKeyAt answers (OpenServices): false for a designation whose services do not open. Nil for
+// nil repoKeyAt, which those callers read as opening none.
+func ConfigIndexerServicesOpener(repoKeyAt func(generation uint64) *EvsRepoKey) func(indexer ConfigIndexer) ([]protocol.IndexerService, bool) {
+	if repoKeyAt == nil {
+		return nil
+	}
+	return func(indexer ConfigIndexer) ([]protocol.IndexerService, bool) {
+		services, err := indexer.OpenServices(repoKeyAt)
+		if err != nil {
+			return nil, false
+		}
+		return services, true
+	}
 }
 
 // Every designation that holds and whose subject serves at this state: not retired, the subject not revoked, not
@@ -151,7 +196,15 @@ func (self *ConfigState) Indexers() []ConfigIndexer {
 		if subject == nil || subject.GetRevokedAt() != 0 || subject.GetParkedAt() != 0 || acl.Suspended(key.sidecarId) {
 			continue
 		}
-		indexer := ConfigIndexer{SidecarId: key.sidecarId, Scope: key.scope, At: row.GetAt(), SealedServices: row.GetSealedServices()}
+		// copies, so no caller writes through to this immutable state's rows
+		indexer := ConfigIndexer{
+			SidecarId:      key.sidecarId,
+			Scope:          key.scope,
+			At:             row.GetAt(),
+			SealedServices: bytes.Clone(row.GetSealedServices()),
+			NetworkId:      self.networkId,
+			Nonce:          bytes.Clone(row.GetNonce()),
+		}
 		if signerId, err := IdFromBytes(row.GetSigner()); err == nil {
 			indexer.Signer = signerId
 		}
@@ -253,7 +306,7 @@ func configApplySponsorSet(next *configStateBuilder, statement *configStatement)
 // answers none.
 //
 // services opens a designation's sealed services, the caller holding the key of the config's generation
-// (OpenConfigBody); a designation it cannot open serves no search.
+// (ConfigIndexerServicesOpener); a designation it cannot open serves no search.
 func (self *ConfigState) SearchIndexersFor(searcherId Id, repoId Id, services func(indexer ConfigIndexer) ([]protocol.IndexerService, bool)) []Id {
 	acl, err := self.Acl()
 	if err != nil || services == nil {

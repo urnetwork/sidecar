@@ -6,8 +6,9 @@
 //
 //	bind      what the Sidecar holds as it stands (MailBinding): the evs component's EvsClient, with its key client
 //	          and statement poster, the config follower's AclEngine, the zone's row from the DnsClient, the Sidecar as
-//	          the outward-action gate, and the generation's SidecarApi for the mail routes. A host that bound its own
-//	          (MailClient made without a Sidecar) keeps it
+//	          the outward-action gate, the generation's SidecarApi for the mail routes, and the opener of the
+//	          designations' sealed services over the key client's config keys (owner decision 634). A host that bound
+//	          its own (MailClient made without a Sidecar) keeps it
 //	follow    mailcfg, through MailConfig, which follows its repo itself once built
 //	ingest    the member's mailbox: one MailIngestor running while the generation lives (MAIL-M7-15)
 //	receive   once mail is on, the receive settings say receive, and policy grants this device the listen on
@@ -17,7 +18,8 @@
 //	mta-sts   while the receiver listens and the device holds a §13 certificate for the network's pair, §15.5's
 //	          MTA-STS policy as this receiver's system publish (mail_mta_sts.go), ended with the receiver
 //	outcomes  while mail is on, once an OutcomeSweepInterval, the member's or/ records past their 30 days are removed
-//	          (§15.7; MAIL-M9-02)
+//	          (§15.7; MAIL-M9-02); and a send watch reads or/ as it changes, raising mail_send for each outcome that
+//	          changed (§15.10's step 4; QD-1122, mail_send_result.go)
 //	idle      Active while mail is on, so a daemon with mail on never idles out (§5.8); `ur status` says so and
 //	          prompts for a mail indexer until one stands (§15.6)
 //
@@ -315,9 +317,11 @@ func (self *MailClient) bindFromSidecar(ctx context.Context, env *SidecarEnv) {
 		}
 	}
 	binding.Event = sidecar.emitEvent
-	// no host opens a designation's sealed services yet: its statement's header, which they are sealed under, is not
-	// in ConfigIndexer, so the designations stay unknown (mail_indexer.go) and nothing gates or alarms on them
-	binding.IndexerServices = nil
+	// a designation's services open with the config repo's keys the evs component's GkmClient holds, under the network
+	// id and the nonce its row carries (owner decision 634), so coverage, the prompt, the undesignated-receiver alarm
+	// and a tag:mail device's registration read them; with no key client none open, and the designations stay unknown
+	// (mail_indexer.go)
+	binding.IndexerServices = mailIndexerServicesOver(ctx, binding.Gkm, binding.Config, self.settings.IndexerKeyTimeout)
 	binding.MailIndexer = func() (bool, error) {
 		state, err := sidecar.configState()
 		if err != nil {
@@ -562,7 +566,8 @@ func (self *MailClient) stopReceiver(run *mailComponentRun) {
 }
 
 // An app's wake (§15.6 step 5; owner decision 197): the mailbox's ingest runs now, and nothing listens for it, so a
-// wake only resyncs mail a receiver took. Nothing while no generation runs the ingestor.
+// wake only resyncs mail a receiver took; the send watch reads or/ now too (mail_send_result.go). Nothing while no
+// generation runs them.
 func (self *MailClient) Resync() {
 	ingestor := func() *MailIngestor {
 		self.stateLock.Lock()
@@ -575,4 +580,5 @@ func (self *MailClient) Resync() {
 	if ingestor != nil {
 		ingestor.Wake()
 	}
+	self.wakeSends()
 }

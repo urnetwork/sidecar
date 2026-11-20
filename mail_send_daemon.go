@@ -7,14 +7,13 @@
 //
 //	check_send    the draft's fields in, the root's SmtpSendCheck out as JSON: per recipient domain the mode, the
 //	              encoded bytes, the DATA cap, the expected delay in ms and the prediction, each enum by its number.
-//	              A plain read that signs and sends nothing, so no Confirm (D-CORE-13). MailClient's check (MAIL-M9-01
-//	              over SMTP-M9-08's SmtpSender.Check) is not on sidecar yet, so the default backend answers
-//	              ErrMailSendUnavailable, which an app reads as MAIL_UNAVAILABLE, until it lands and the default
-//	              takes it
+//	              A plain read that signs and sends nothing, so no Confirm (D-CORE-13). The default backend is the
+//	              call's Sidecar's MailClient.CheckSend (QD-1122): the daemon's bound sender's check, or through the
+//	              member's p/ where it binds none
 //	send_result   a send_id in, the root's SmtpSendResult out as JSON: per recipient domain the outcome with what it
 //	              carries, in or/'s MailOutcome names and numbers, and a send no device of the member wrote is
-//	              ErrMailSendUnknown. A plain read too. A send's outcomes by send_id (MAIL-M9-02, from or/) are not on
-//	              sidecar yet, so the default backend answers ErrMailSendUnavailable until they land
+//	              ErrMailSendUnknown. A plain read too. The default backend is MailClient.SendResult, or/'s record by
+//	              the send_id it names, so a desktop app's daemon follows its phone's sends as its own (§18.5)
 //	send          the draft's fields in, through MailClient.SubmitSend (mail_send_gate.go): a send to the network's own
 //	              addresses deposits at once, and one naming any outside recipient waits on the daemon's gate as a
 //	              submission waits (§15.10's step 1), answered with the approval it waits on and nothing kept or sent;
@@ -142,9 +141,9 @@ type DaemonMailSendRecipient struct {
 	Outcome string `json:"outcome"`
 }
 
-// What the send methods act through, for the call's Sidecar. A nil Send takes the Sidecar's MailClient.SubmitSend. A
-// nil Check or Result answers ErrMailSendUnavailable, naming what it waits on, until MailClient carries MAIL-M9-01's
-// check and MAIL-M9-02's outcomes and the defaults here take them.
+// What the send methods act through, for the call's Sidecar: a nil Check, Result or Send takes the Sidecar's
+// MailClient.CheckSend, SendResult or SubmitSend, and a Sidecar with no network or identity yet answers ErrMailUnbound,
+// which an app reads as unavailable.
 type DaemonMailSendBackends struct {
 	// The check of the message a send of args would make (§14.5's Check).
 	Check func(ctx context.Context, sidecar *Sidecar, args *MailSendArgs) (*SmtpSendCheck, error)
@@ -160,25 +159,40 @@ func DaemonMailSendMethods(backends *DaemonMailSendBackends) []*DaemonMethod {
 	if backends == nil {
 		backends = &DaemonMailSendBackends{}
 	}
+	// the call's Sidecar's mail; no network or identity yet is unbound, which an app reads as unavailable
+	mailOf := func(sidecar *Sidecar) (*MailClient, error) {
+		client, err := sidecar.Mail()
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrMailUnbound, err)
+		}
+		return client, nil
+	}
 	checkOf := backends.Check
 	if checkOf == nil {
 		checkOf = func(ctx context.Context, sidecar *Sidecar, args *MailSendArgs) (*SmtpSendCheck, error) {
-			return nil, fmt.Errorf("%w: check a send (MailClient's check over SmtpSender.Check)", ErrMailSendUnavailable)
+			client, err := mailOf(sidecar)
+			if err != nil {
+				return nil, err
+			}
+			return client.CheckSend(ctx, args)
 		}
 	}
 	resultOf := backends.Result
 	if resultOf == nil {
 		resultOf = func(ctx context.Context, sidecar *Sidecar, sendId Id) (*SmtpSendResult, error) {
-			return nil, fmt.Errorf("%w: read a send's result (MailClient's outcomes from or/)", ErrMailSendUnavailable)
+			client, err := mailOf(sidecar)
+			if err != nil {
+				return nil, err
+			}
+			return client.SendResult(ctx, sendId)
 		}
 	}
 	sendOf := backends.Send
 	if sendOf == nil {
 		sendOf = func(ctx context.Context, sidecar *Sidecar, args *MailSendArgs) (*MailSendResult, error) {
-			client, err := sidecar.Mail()
+			client, err := mailOf(sidecar)
 			if err != nil {
-				// no network or identity yet, which an app reads as unavailable
-				return nil, fmt.Errorf("%w: %w", ErrMailUnbound, err)
+				return nil, err
 			}
 			return client.SubmitSend(ctx, args)
 		}

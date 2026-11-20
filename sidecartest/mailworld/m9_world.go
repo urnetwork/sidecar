@@ -18,7 +18,12 @@
 //	component  when a row asks (M9WorldSettings.Component), the client's own component (MailClient.Attach): its ingest
 //	           pass is the member's reader, which files what the receiver or the sender's DSNs deposited and runs
 //	           forwarding and relay (mail_forward.go), so S6's forwarding rows and FS-123's DSNs run through it, a wake
-//	           (MailClient.Resync) starting a pass and the pass's CONSUME barrier showing its messages handed on (Ingest)
+//	           (MailClient.Resync) starting a pass and the pass's CONSUME barrier showing its messages handed on (Ingest);
+//	           and its send watch, which raises mail_send from the member's or/ as the composing device does (QD-1122,
+//	           mail_send_result.go), its first read, a baseline, waited for at attach, and each later one a row asks
+//	           for held at its start until the row's step has written or/ (FollowSends)
+//	events     the mail_send events the prover host's sender raised (MailSendEvents) and those the client's component
+//	           raised (ComponentMailSendEvents), apart
 //
 // One stand-in is this file's, the component's alone: the MailWorld's evs pins every push and deposit at its own fake
 // auth log's positions (world.go), which the admission log never held, so the laptop's engine, which judges a deposit's
@@ -102,6 +107,8 @@ type M9World struct {
 	stateLock sync.Mutex
 	// every mail_send event the sender raised
 	events []sidecar.SidecarEvent
+	// every event the client's component raised
+	componentEvents []sidecar.SidecarEvent
 }
 
 // The world on net (the file header's world), settings nil taking DefaultM9WorldSettings.
@@ -152,6 +159,11 @@ func NewM9World(t testing.TB, net *sidecartest.Net, settings *M9WorldSettings) *
 		sign:      self.sign,
 		standing:  m9WorldStanding,
 		selectors: self.Dkim,
+		event: func(event sidecar.SidecarEvent) {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			self.componentEvents = append(self.componentEvents, event)
+		},
 	})
 	self.buildProver(settings)
 	if settings.Component {
@@ -287,10 +299,15 @@ func (self *M9World) buildProver(settings *M9WorldSettings) {
 	}
 }
 
-// Runs the client's component (the file header's component row) until the world ends.
+// Runs the client's component (the file header's component row) until the world ends, once its send watch has taken
+// its baseline read of or/, so no row's send is in that read.
 func (self *M9World) attach() {
 	self.t.Helper()
 	owner := self.M8.Owner
+	barriers := self.M8.Net.Barriers()
+	if err := barriers.Arm(m9WorldSendWatchAfterSite, "", 0); err != nil {
+		self.t.Fatal(err)
+	}
 	err := self.Owner.Attach(&sidecar.SidecarEnv{
 		Ctx:      self.ctx,
 		Identity: &sidecar.SidecarIdentity{NetworkId: self.M8.Admission.NetworkId(), SidecarId: owner.SidecarId},
@@ -300,6 +317,63 @@ func (self *M9World) attach() {
 	if err != nil {
 		self.t.Fatal(err)
 	}
+	if err := barriers.AwaitHeld(self.ctx, m9WorldSendWatchAfterSite, ""); err != nil {
+		self.t.Fatal(err)
+	}
+	if err := barriers.Release(m9WorldSendWatchAfterSite); err != nil {
+		self.t.Fatal(err)
+	}
+}
+
+// The barriers around one read of the client's send watch (mail_send_result.go).
+const (
+	m9WorldSendWatchBeforeSite = "mail.send.watch.before"
+	m9WorldSendWatchAfterSite  = "mail.send.watch.after"
+)
+
+// Runs step, then one read of the client's send watch over what step left in or/ (the file header's component row):
+// the watch is held at its read's start from before step until step is done, so no read sees or/ midway and the
+// mail_send events it raises are those of step's changes, then a wake (MailClient.Resync) and that read waited for to
+// its end. A read a change starts after this returns finds nothing changed. Only with the component.
+func (self *M9World) FollowSends(step func()) {
+	self.t.Helper()
+	barriers := self.M8.Net.Barriers()
+	if err := barriers.Arm(m9WorldSendWatchBeforeSite, "", 0); err != nil {
+		self.t.Fatal(err)
+	}
+	step()
+	self.Owner.Resync()
+	for _, site := range []string{m9WorldSendWatchBeforeSite, m9WorldSendWatchAfterSite} {
+		if err := barriers.AwaitHeld(self.ctx, site, ""); err != nil {
+			self.t.Fatal(err)
+		}
+		if site == m9WorldSendWatchBeforeSite {
+			// armed before the read it holds goes on, so that read stops at its end too
+			if err := barriers.Arm(m9WorldSendWatchAfterSite, "", 0); err != nil {
+				self.t.Fatal(err)
+			}
+		}
+		if err := barriers.Release(site); err != nil {
+			self.t.Fatal(err)
+		}
+	}
+}
+
+// The outcomes of the send sendId names as the client's GetSendResult reads them (MailClient.SendResult), by domain,
+// and in their order.
+func (self *M9World) SendResult(sendId sidecar.Id) (map[string]*sidecar.SmtpDomainOutcome, []string) {
+	self.t.Helper()
+	result, err := self.Owner.SendResult(self.ctx, sendId)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	byDomain := map[string]*sidecar.SmtpDomainOutcome{}
+	domains := []string{}
+	for _, outcome := range result.Domains {
+		byDomain[outcome.Domain] = outcome
+		domains = append(domains, outcome.Domain)
+	}
+	return byDomain, domains
 }
 
 // The barrier a pass of the client's ingest reaches once each message it wrote of one depositor's deposits has been
@@ -392,6 +466,19 @@ func (self *M9World) MailSendEvents() []sidecar.SidecarEvent {
 	return slices.Clone(self.events)
 }
 
+// Every mail_send event the client's component raised: its send watch's, from the member's or/.
+func (self *M9World) ComponentMailSendEvents() []sidecar.SidecarEvent {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	events := []sidecar.SidecarEvent{}
+	for _, event := range self.componentEvents {
+		if event.Kind == sidecar.SidecarEventMailSend {
+			events = append(events, event)
+		}
+	}
+	return events
+}
+
 // A recipient domain whose one MX, at address, serves script, authenticated to TL3 under the world's PKI or, with
 // authenticated false, reachable only at TL4 (SmtpSendWorld.AddDomain).
 func (self *M9World) AddDomain(domain string, address netip.Addr, script *sidecartest.MxScript, authenticated bool) *sidecartest.ScriptedMx {
@@ -445,11 +532,13 @@ func (self *M9WorldDkim) Published(domain string) []*sidecar.SmtpDkimKeyPublish 
 	return published
 }
 
-// What sending binds on the laptop's client beside M8's binding (the file header's client row).
+// What sending binds on the laptop's client beside M8's binding (the file header's client row), and where its
+// component's events go.
 type m8SendingParts struct {
 	sign      func(purpose string, signedType bridge.SignedType, body []byte) (*bridge.Signed, error)
 	standing  func(ctx context.Context) (*sidecar.AbuseStatus, error)
 	selectors sidecar.MailBurnerSelectors
+	event     func(event sidecar.SidecarEvent)
 }
 
 // A client of device bound as M8World.MailClient binds one, on engine and settings, with parts' sending binding.
@@ -484,6 +573,7 @@ func (self *M8World) sendingClient(device *sidecartest.AdmissionDevice, engine *
 		Sign:            parts.sign,
 		Standing:        parts.standing,
 		BurnerSelectors: parts.selectors,
+		Event:           parts.event,
 	})
 	return client
 }
