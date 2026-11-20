@@ -899,7 +899,7 @@ TLS 1.2 holds one octet more a record, which is why its 832-octet header block t
 | ChaCha20 | 14 | 546 MiB | 853 to 935 MiB over three runs |
 | ChaCha20 | 8 | | 834 MiB |
 
-AES-128-GCM's unit is within both charges. ChaCha20's proof is past `PartMemoryByteCount` by 130 MiB at 8 cores and 149 to 231 MiB at 14, and its shape under `ShapeMemoryByteCount` by 222 MiB, so the benchmark fails on that family as written, which DESIGN-DETAILS 3.2.8 says is the sign to raise the default. Two loaded shapes and one proof, the default budget's case, still fit 2,240 MiB in both families, at about 2,000 MiB under ChaCha20 and 2,034 under AES-128-GCM; one shape and two proofs, which a host that raises `ProveConcurrency` gets charged 2,176 MiB for, would take about 2,350 MiB under ChaCha20. The default is the owner's question `smtp-m9-33-part-memory-default` (section 14); until it is answered the defaults stand.
+AES-128-GCM's unit is within both charges. ChaCha20's proof is past `PartMemoryByteCount` by 130 MiB at 8 cores and 149 to 231 MiB at 14, and its shape under `ShapeMemoryByteCount` by 222 MiB, so the benchmark fails on that family as written, which DESIGN-DETAILS 3.2.8 says is the sign to raise the default. Two loaded shapes and one proof, the default budget's case, still fit 2,240 MiB in both families, at about 2,000 MiB under ChaCha20 and 2,034 under AES-128-GCM; one shape and two proofs, which a host that raises `ProveConcurrency` gets charged 2,176 MiB for, would take about 2,350 MiB under ChaCha20. The owner answered the question this raised, `smtp-m9-33-part-memory-default` (QD-1115): `PartMemoryByteCount` rises to 960 MiB, the largest proof measured rounded up, and `MemoryMaxByteCount` to 2,496 MiB, two loaded shapes at 768 MiB and one proof, `ShapeMemoryByteCount` staying 768 MiB. `prover.go` holds 704 and 2,240 MiB until that change lands (section 12), and DESIGN.md §5.4's 2,240 MiB until design-records takes it.
 
 ### 11.5 The retired catalog, measured
 
@@ -1009,6 +1009,7 @@ Not built, each failing closed as stated:
 - **Keys.** No production setup has run, so no release pins a key set and the edge lists none: ur injects no prover, hosts only queue, and every preamble gets KEYS. The fetch is built; it fetches nothing until OPS-M9-02 gives `SmtpProofKeysUrl` and a release pins a set (section 14).
 - **The reference machines.** D-SMTP-16's runs on the M1 and the m5.large, `EnsureKeys` per shape on each, and the memory of a proof on an 8 GB M1: 11.4's figures are the shared M4 Pro's (section 14).
 - **Mapping the key dump.** The loader reads a cached proving key's dump into the heap, where mapping the cache file would take about 261 MiB a shape out of it (DESIGN-DETAILS 3.2.8, in the spirit of QD-641); and a cancelled proof runs to its end inside gnark, holding its charge until then.
+- **QD-1115's memory defaults.** `prover.go` still sets `PartMemoryByteCount` to 704 MiB and `MemoryMaxByteCount` to 2,240 MiB, which QD-1115 raises to 960 and 2,496 MiB, a change to SMTP-M9-39's file. Until it lands `BenchmarkPartMemory` fails on the chacha20 family, and a host that raises `ProveConcurrency` is charged up to 231 MiB short for each ChaCha20 proof; the default case, two loaded shapes and one proof, fits 2,240 MiB in both families (11.4). This bound is a resource limit, not a check, so nothing here fails open.
 - **Witness edits end to end.** FS-31's rows that change a witness, its RecordMx rows and its forging-edge rows run at T2 alone, the circuits on test shapes sized to each part (the key part on its production shape); the scripted MX runs over `crypto/tls`, which cannot send a late ticket, a KeyUpdate or a padded record on demand, so those cases are held at the relation, the gate and through RecordMx, not through real Groth16 proofs.
 
 **Names.** The plan's tasks SMTP-M0-03 to SMTP-M9-25, and SMTP-M9-35 to SMTP-M9-40 after them, name their Provides before the code existed; the code took these names, and where the two differ this document's are the ones that stand:
@@ -1104,9 +1105,9 @@ Raised to the owner (`.stack/questions/`, one file each), and answered in `.stac
 - `plan-SMTP-preamble-byte-count`: applied in `prover.go` (reading 14).
 - `plan-SMTP-data-connection-lifetime`: grants become per `ur/` service, SOCK-M9-01's, with nothing in this module.
 
-Raised by this draft and not yet answered:
+- `smtp-m9-33-part-memory-default` (QD-1115), raised by this draft: `BenchmarkPartMemory` found a ChaCha20 body unit's proof taking 834 to 935 MiB over its loaded shape, past `PartMemoryByteCount`'s 704 MiB, at 8 and at 14 cores, while its shape took 546 MiB of `ShapeMemoryByteCount`'s 768 (11.4). Option 1: `PartMemoryByteCount` rises to 960 MiB and `MemoryMaxByteCount` to 2,496 MiB, so the budget keeps DESIGN.md §5.4's meaning of two loaded shapes and one proof. Not yet applied in `prover.go` (section 12).
 
-- `smtp-m9-33-part-memory-default`: `BenchmarkPartMemory` found a ChaCha20 body unit's proof taking 834 to 935 MiB over its loaded shape, past `PartMemoryByteCount`'s 704 MiB, at 8 and at 14 cores, while its shape took 546 MiB of `ShapeMemoryByteCount`'s 768 (11.4). DESIGN-DETAILS 3.2.8 says the default is then raised, and DESIGN.md §5.4 quotes `MemoryMaxByteCount`'s 2,240 MiB as two loaded shapes and one proof, which a raise that keeps that meaning changes. Until it is answered the defaults stand: the default case of two shapes and one proof fits 2,240 MiB in both families, and a host that raises `ProveConcurrency` undercounts each ChaCha20 proof by up to about 230 MiB.
+Raised and not yet answered: none.
 
 For the reviewers, and raised to no one:
 
