@@ -55,6 +55,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/urnetwork/sidecar/sidecartest"
 )
@@ -514,7 +515,7 @@ func gateM10OutLedgerItems() []*GateItem {
 			External: "hardware: the index row's run on T3's clusters and on M2's staging PM9A3 set, whose counts are the projection's evidence; this report runs neither",
 		},
 		{
-			Item: "§22.8's directory row with FS-86's card case against §16.11's cost table (D-TEST-17; RECORD-M10-07): DirectoryCostOracle's cards, its three mutants failing, a fake-clock day at 500, 2,000 and 5,000 members within the table's M10 row and the cards ref's ceilings, priced bytes within §11.13's directory rows, and the cards ref's commits on T3's local stack at reduced scale; a miss at the Team limit blocks this gate and the owner hears then, so it is an item of its own, read apart from every other failure",
+			Item: "§22.8's directory row with FS-86's card case against §16.11's cost table (D-TEST-17; RECORD-M10-07): DirectoryCostOracle's cards, its three mutants failing, fake-clock days at 500, 2,000 and 5,000 members within the table's M10 row and the cards ref's ceilings, the Team limit's with a following daemon on the real client, each push priced on §11.13's directory rows, and the cards ref's commits on T3's local stack at reduced scale, whose p99 misses are logged and fail nothing (owner decision 598)",
 			Tests: []*GateTest{
 				{Repo: "sidecar", Package: "./sidecartest", Tags: "sidecar_testhooks", Names: []string{
 					"TestDirectoryCostOracleFetchesEachChangedCardsNewestVersion", "TestDirectoryCostOracleReadsCardsSixtyFourToARequest", "TestDirectoryCostOracleCardRemovalsAndVersionlessNotices",
@@ -528,7 +529,19 @@ func gateM10OutLedgerItems() []*GateItem {
 					"TestFs86CardCommitsAtTheTeamLimitOnT3", "TestFs86CardCommitsAtTheStressCaseOnT3", "TestFs86CardCommitsOnTheLocalStackLogTheirP99MissesAndHoldTheRest",
 				}},
 			},
-			External: "hardware: the reading is a whole peak hour at the Team limit's rate on T3's 4-host file-cluster layouts with nothing else running on the machine (owner decision 598; server's TestFs86CardCommitsAtTheTeamLimitOnTheLayouts under sidecar_filecluster_t3), which a shared build host cannot give, and the local stack's run logs a p99 miss and fails nothing",
+			External: "hardware and production: the price table those bytes are priced on is §11.13's inferred one until M2's nvme run measures it (D-TEST-11), and the directory's pushes join D-TEST-13's projection only once filecluster-bench takes their rows",
+		},
+		{
+			Item: "D-TEST-17's reading at the Team limit: FS-86's card case for a whole peak hour at the Team limit's rate on T3's 4-host file-cluster layouts, then 15 s at three times it, held to the cards ref's p99, rerun, 429 and FOLD_BEHIND ceilings; a miss blocks this gate and the owner hears then, so it is an item of its own, read apart from every other failure (QD-1068; RECORD-M10-07)",
+			Tests: []*GateTest{
+				// the hour is real time, so the run has a bound of its own past the tool's default (QD-1058)
+				{Repo: "server", Package: ".", Tags: "sidecar_testhooks,sidecar_pending,sidecar_filecluster_t3", Timeout: 2 * time.Hour, Stores: true, Names: []string{"TestFs86CardCommitsAtTheTeamLimitOnTheLayouts"}},
+			},
+			External: "hardware: a host running nothing else for the hour (owner decision 598), with local/file-cluster-t3's layouts up; the test logs the machine's load average, and on a shared build host a pass is no reading",
+		},
+		{
+			// nothing to run: not built
+			Item: "D-TEST-17's runs in physical time beyond the Team limit's hour: the 26 h run at 500 members on T3, and the stress case's physical hour beside §22.8's year-one mix; neither is built (RECORD-M10-07's report), so no test shows it yet",
 		},
 		{
 			Item: "§22.8's drop row: drop scan rates and a 60 GB history's job time from the drop mode's windows, the load's pause holding past its line (EVSB-M10-08)",
