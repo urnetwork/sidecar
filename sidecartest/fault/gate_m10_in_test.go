@@ -88,36 +88,54 @@ func TestGateM10InRowWritten(t *testing.T) {
 	t.Logf("M10's entry looks for %d cases: %d written, %d missing, %d open, %d failing", len(cases), counts[GateOutcomePass], counts[GateOutcomeMissing], counts[GateOutcomeOpen], counts[GateOutcomeFail])
 }
 
-// M10-in's TLC item: TEST-M2-08's tests of EvsCommit and IndexRollup in gate mode, with no TLC, so each passes only on
-// the runs modelled.yml records at the models' sources, beside modelled.yml's own check, whose digest of EvsCommit's
-// sources says whether the purger's stories stand. Runs only under the flag, since it builds and runs another
-// package's tests.
+// The environment a gate's TLC item runs TEST-M2-08's tests in: environ's, but with no TLC, so the tests read the
+// recorded runs and start none, and in gate mode at gate (SIDECAR_TLC_GATE), whose modes each test takes from its
+// model's milestones in modelled.yml. M2-in's item and M10-in's both run their tests so.
+func gateTlcEnviron(environ []string, gate string) []string {
+	kept := slices.DeleteFunc(slices.Clone(environ), func(variable string) bool {
+		return strings.HasPrefix(variable, "TLC=") || strings.HasPrefix(variable, "SIDECAR_TLC_MODE=") || strings.HasPrefix(variable, "SIDECAR_TLC_GATE=")
+	})
+	return append(kept, "SIDECAR_TLC_MODE=gate", "SIDECAR_TLC_GATE="+gate)
+}
+
+// M10-in's TLC item: TEST-M2-08's tests of EvsCommit, the purger's modes among them, and of IndexRollup in gate mode at
+// M10's entry, with no TLC, so each passes only on the runs modelled.yml records at its model's sources of every mode
+// M10's entry needs of it. Runs only under the flag, since it builds and runs another package's tests.
 func TestGateM10InModelsPassTlc(t *testing.T) {
 	if !*gateM10InTlcFlagValue {
 		t.Skip("runs from sidecar-gate M10-in's TLC item, under -" + GateM10InTlcFlag)
 	}
 	quoted := []string{}
-	for _, name := range append(slices.Clone(gateM10InTlcTests), gateModelledSourcesTest) {
+	for _, name := range gateM10InTlcTests {
 		quoted = append(quoted, regexp.QuoteMeta(name))
 	}
 	command := exec.CommandContext(t.Context(), "go", "test", "-count=1", "-v", "-tags", "sidecar_tlc", "-run", "^("+strings.Join(quoted, "|")+")$", ".")
 	command.Dir = filepath.Join("..", "model")
-	// gate mode, and no TLC: this report reads recorded runs and starts none
-	command.Env = slices.DeleteFunc(os.Environ(), func(variable string) bool {
-		return strings.HasPrefix(variable, "TLC=") || strings.HasPrefix(variable, "SIDECAR_TLC_MODE=")
-	})
-	command.Env = append(command.Env, "SIDECAR_TLC_MODE=gate")
+	command.Env = gateTlcEnviron(os.Environ(), gateM10InTlcGate)
 	output, runErr := command.CombinedOutput()
 	t.Logf("%s", output)
-	modelled, err := os.ReadFile(filepath.Join("..", "model", "modelled.yml"))
-	if err != nil {
-		fmt.Printf("modelled.yml: %v\n%s%s\n", err, GateOutcomeLinePrefix, GateOutcomeFail)
-		t.Fatal(err)
-	}
-	outcome, reason := GateM10InTlcOutcome(output, runErr, modelled, nil)
+	outcome, reason := GateM10InTlcOutcome(output, runErr)
 	fmt.Printf("%s\n%s%s\n", reason, GateOutcomeLinePrefix, outcome)
 	if outcome == GateOutcomeFail {
 		t.Fail()
+	}
+}
+
+// A gate's TLC item runs the model tests with no TLC, in gate mode at its own gate, whatever the environment it was
+// started in names: a TLC, another mode or another gate there would start TLC from a report or read another gate's
+// modes. M10-in asks for M10's entry's.
+func TestGateTlcEnvironNamesItsGateAndNoTlc(t *testing.T) {
+	environ := []string{"HOME=/home/fixture", "TLC=java -cp tla2tools.jar tlc2.TLC", "SIDECAR_TLC_MODE=merge", "SIDECAR_TLC_GATE=M10", "TLC_HEAP=8g"}
+	got := gateTlcEnviron(environ, gateM10InTlcGate)
+	want := []string{"HOME=/home/fixture", "TLC_HEAP=8g", "SIDECAR_TLC_MODE=gate", "SIDECAR_TLC_GATE=M10-in"}
+	if !slices.Equal(got, want) {
+		t.Errorf("M10-in's environment %v, want %v", got, want)
+	}
+	if environ[1] != "TLC=java -cp tla2tools.jar tlc2.TLC" {
+		t.Errorf("the environment it was given changed: %v", environ)
+	}
+	if gateM10InTlcGate != "M10-in" {
+		t.Errorf("M10-in's TLC item asks for %s's modes", gateM10InTlcGate)
 	}
 }
 
@@ -293,10 +311,15 @@ func TestGateM10InWrittenCommandNamesItsCase(t *testing.T) {
 	}
 }
 
-// go test -v's output of M10-in's TLC run, each test given its verdict and lines, and modelled.yml's check logging
-// EvsCommit's and IndexRollup's digests.
-func gateM10InTlcFixtureOutput(verdicts map[string]string, lines map[string]string, evsCommitDigest string) []byte {
+// go test -v's output of M10-in's TLC run, each of the item's tests given its verdict and line, then the extra tests'
+// own verdicts, as go test prints a test's lines before its verdict.
+func gateM10InTlcFixtureOutput(verdicts map[string]string, lines map[string]string, extra map[string]string) []byte {
 	var output strings.Builder
+	write := func(name string, verdict string, line string) {
+		output.WriteString("=== RUN   " + name + "\n")
+		output.WriteString("    " + line + "\n")
+		output.WriteString(fmt.Sprintf("--- %s: %s (0.01s)\n", verdict, name))
+	}
 	for _, name := range gateM10InTlcTests {
 		verdict, ok := verdicts[name]
 		if !ok {
@@ -305,95 +328,106 @@ func gateM10InTlcFixtureOutput(verdicts map[string]string, lines map[string]stri
 		if verdict == "" {
 			continue
 		}
-		output.WriteString("=== RUN   " + name + "\n")
 		line, ok := lines[name]
 		if !ok {
-			line = "model_test.go:66: its sources are unchanged since its passing runs, which stand; TLC need not rerun it"
+			line = "model_test.go:73: EvsCommit's sources are unchanged since its passing runs, which stand; TLC need not rerun it"
 		}
-		output.WriteString("    " + line + "\n")
-		output.WriteString(fmt.Sprintf("--- %s: %s (0.01s)\n", verdict, name))
+		write(name, verdict, line)
 	}
-	modelledVerdict, ok := verdicts[gateModelledSourcesTest]
-	if !ok {
-		modelledVerdict = "PASS"
+	for name, verdict := range extra {
+		write(name, verdict, "model_test.go:77: a test M10-in's item does not name")
 	}
-	output.WriteString("=== RUN   " + gateModelledSourcesTest + "\n")
-	if evsCommitDigest != "-" {
-		output.WriteString("    modelled_test.go:478: EvsCommit: 121 source files, digest " + evsCommitDigest + ", 2 runs recorded\n")
-	}
-	output.WriteString("    modelled_test.go:478: StoreSettle: 9 source files, digest 5c09, 7 runs recorded\n")
-	output.WriteString("    modelled_test.go:478: IndexRollup: 40 source files, digest 3835, 3 runs recorded\n")
-	output.WriteString(fmt.Sprintf("--- %s: %s (0.02s)\n", modelledVerdict, gateModelledSourcesTest))
 	output.WriteString("PASS\n")
 	return []byte(output.String())
 }
 
-// M10-in's TLC item reads the recorded runs: each test passing and the purger's stories standing at EvsCommit's
-// sources passes; the stories missing, recorded at other sources or failed reads open, never fail, as TLC not run at
-// a model's sources does; any other failure, a test with no verdict, modelled.yml's check failing, no digest, or a run
-// that never built fails. Nothing the drop extension owes reads fail here: its pass is M10's exit's.
-func TestGateM10InTlcOutcomeReadsTheRecordedRuns(t *testing.T) {
-	digest := "aa01"
-	modelled := func(runs string) []byte {
-		return []byte("models:\n  - spec: EvsCommit\n    owners: [EVS1-M2-02, EVSB-M10-07]\n    runs:\n" + runs + "  - spec: IndexRollup\n    runs: []\n")
+// M10-in's TLC item reads the purger's modes through TEST-M2-08's tests: every test passing, each mode the entry needs
+// standing, passes; the purger's stories test failing because no stories-purge run stands and TLC has not run reads
+// open, naming it, never pass, as TLC not run for another model's modes does; the purger's mutants failing under TLC,
+// any other failure, a test with no verdict, or a run that never built fails. A drop extension test, which the item
+// does not run, changes nothing it reads.
+func TestGateM10InTlcOutcomeReadsThePurgersModes(t *testing.T) {
+	passing := gateM10InTlcFixtureOutput(nil, nil, nil)
+	if outcome, reason := GateM10InTlcOutcome(passing, nil); outcome != GateOutcomePass || !strings.Contains(reason, "TestEvsCommitPurgerStoriesPassTlc") || !strings.Contains(reason, "TestEvsCommitPurgerMutantsFailTlc") {
+		t.Errorf("every mode standing: %s %q", outcome, reason)
 	}
-	standing := modelled("      - {at: 2026-11-19, mode: model, result: pass, sources_sha256: aa01}\n      - {at: 2026-11-19, mode: stories, result: pass, sources_sha256: aa01, states: 9}\n")
-	passing := gateM10InTlcFixtureOutput(nil, nil, digest)
-	if outcome, reason := GateM10InTlcOutcome(passing, nil, standing, nil); outcome != GateOutcomePass || !strings.Contains(reason, "stand at its sources too") {
-		t.Errorf("all standing: %s %q", outcome, reason)
+	// no passing stories-purge run at EvsCommit's sources, which EvsCommit's every test reports at M10's entry
+	notRunLine := "model_test.go:77: EvsCommit has no passing stories-purge run at these sources: they changed since its last passing runs, or none is recorded, and TLC has not run: no tla2tools.jar (set TLC to a command that runs tlc2.TLC)"
+	evsCommitTests := []string{"TestEvsCommitPassesTlcAtItsBounds", "TestEvsCommitMutantsFailTlc", "TestEvsCommitLivenessHolds", "TestEvsCommitPurgerMutantsFailTlc", "TestEvsCommitPurgerStoriesPassTlc"}
+	verdicts := map[string]string{}
+	lines := map[string]string{}
+	for _, name := range evsCommitTests {
+		verdicts[name] = "FAIL"
+		lines[name] = notRunLine
 	}
-	// the gate's three modes stand and the purger's stories do not: open, saying why, never pass and never fail
-	for name, runs := range map[string][]byte{
-		"none recorded":         modelled("      - {at: 2026-11-19, mode: model, result: pass, sources_sha256: aa01}\n"),
-		"at other sources":      modelled("      - {at: 2026-11-18, mode: stories, result: pass, sources_sha256: bb02}\n"),
-		"failed at the sources": modelled("      - {at: 2026-11-19, mode: stories, result: fail, sources_sha256: aa01}\n"),
-		"another model's":       []byte("models:\n  - spec: IndexRollup\n    runs:\n      - {mode: stories, result: pass, sources_sha256: aa01}\n"),
-	} {
-		outcome, reason := GateM10InTlcOutcome(passing, nil, runs, nil)
-		if outcome != GateOutcomeOpen || !strings.Contains(reason, "no passing stories run of EvsCommit") || !strings.Contains(reason, "digest aa01") {
-			t.Errorf("stories %s: %s %q", name, outcome, reason)
-		}
+	stories := gateM10InTlcFixtureOutput(verdicts, lines, nil)
+	if outcome, reason := GateM10InTlcOutcome(stories, errors.New("exit status 1")); outcome != GateOutcomeOpen || !strings.Contains(reason, "TLC has not run") || !strings.Contains(reason, "TestEvsCommitPurgerStoriesPassTlc") {
+		t.Errorf("the purger's stories not standing: %s %q", outcome, reason)
 	}
-	// TLC not run at a model's sources reads open, whatever the stories
+	// IndexRollup's modes not standing reads open the same way
 	notRun := gateM10InTlcFixtureOutput(
 		map[string]string{"TestIndexRollupPassesTlcAtItsBounds": "FAIL"},
-		map[string]string{"TestIndexRollupPassesTlcAtItsBounds": "model_test.go:71: IndexRollup's sources changed since its last passing runs, or none is recorded, and TLC has not run: no tla2tools.jar"},
-		digest)
-	if outcome, reason := GateM10InTlcOutcome(notRun, errors.New("exit status 1"), standing, nil); outcome != GateOutcomeOpen || !strings.Contains(reason, "TLC has not run") || !strings.Contains(reason, "TestIndexRollupPassesTlcAtItsBounds") {
+		map[string]string{"TestIndexRollupPassesTlcAtItsBounds": "model_test.go:77: IndexRollup has no passing model run at these sources: they changed since its last passing runs, or none is recorded, and TLC has not run: no tla2tools.jar"},
+		nil)
+	if outcome, reason := GateM10InTlcOutcome(notRun, errors.New("exit status 1")); outcome != GateOutcomeOpen || !strings.Contains(reason, "TLC has not run") || !strings.Contains(reason, "TestIndexRollupPassesTlcAtItsBounds") {
 		t.Errorf("IndexRollup not run: %s %q", outcome, reason)
+	}
+	// a purger's twin TLC did not refuse fails
+	twin := gateM10InTlcFixtureOutput(
+		map[string]string{"TestEvsCommitPurgerMutantsFailTlc": "FAIL"},
+		map[string]string{"TestEvsCommitPurgerMutantsFailTlc": "model_test.go:91: TLC d8fb231: EvsCommit twin-PurgeUnseen: expected F2Closure violated, got exit 0"},
+		nil)
+	if outcome, reason := GateM10InTlcOutcome(twin, errors.New("exit status 1")); outcome != GateOutcomeFail || !strings.Contains(reason, "TestEvsCommitPurgerMutantsFailTlc") {
+		t.Errorf("a purger's twin not refused: %s %q", outcome, reason)
 	}
 	// a failure that is not TLC's absence fails
 	failing := gateM10InTlcFixtureOutput(
 		map[string]string{"TestEvsCommitMutantsFailTlc": "FAIL"},
-		map[string]string{"TestEvsCommitMutantsFailTlc": "model_test.go:52: modelled.yml has no EvsCommit"},
-		digest)
-	if outcome, reason := GateM10InTlcOutcome(failing, errors.New("exit status 1"), standing, nil); outcome != GateOutcomeFail || !strings.Contains(reason, "TestEvsCommitMutantsFailTlc") {
+		map[string]string{"TestEvsCommitMutantsFailTlc": "model_test.go:59: modelled.yml has no EvsCommit"},
+		nil)
+	if outcome, reason := GateM10InTlcOutcome(failing, errors.New("exit status 1")); outcome != GateOutcomeFail || !strings.Contains(reason, "TestEvsCommitMutantsFailTlc") {
 		t.Errorf("a failure: %s %q", outcome, reason)
 	}
-	// IndexRollup's liveness with no verdict fails: each of its modes is the entry's
-	noVerdict := gateM10InTlcFixtureOutput(map[string]string{"TestIndexRollupLivenessHolds": ""}, nil, digest)
-	if outcome, _ := GateM10InTlcOutcome(noVerdict, nil, standing, nil); outcome != GateOutcomeFail {
-		t.Errorf("a test with no verdict: %s", outcome)
-	}
-	// modelled.yml's own check failing
-	refused := gateM10InTlcFixtureOutput(map[string]string{gateModelledSourcesTest: "FAIL"}, nil, digest)
-	if outcome, reason := GateM10InTlcOutcome(refused, errors.New("exit status 1"), standing, nil); outcome != GateOutcomeFail || !strings.Contains(reason, gateModelledSourcesTest) {
-		t.Errorf("modelled.yml's check failing: %s %q", outcome, reason)
-	}
-	// no digest logged for EvsCommit, or an empty one
-	for _, logged := range []string{"-", ""} {
-		output := gateM10InTlcFixtureOutput(nil, nil, logged)
-		if outcome, reason := GateM10InTlcOutcome(output, nil, standing, nil); outcome != GateOutcomeFail || !strings.Contains(reason, "no sources digest") {
-			t.Errorf("digest %q: %s %q", logged, outcome, reason)
+	// the purger's stories with no verdict fails: each of the entry's modes is its own test
+	for _, name := range []string{"TestEvsCommitPurgerStoriesPassTlc", "TestIndexRollupLivenessHolds"} {
+		noVerdict := gateM10InTlcFixtureOutput(map[string]string{name: ""}, nil, nil)
+		if outcome, reason := GateM10InTlcOutcome(noVerdict, nil); outcome != GateOutcomeFail || !strings.Contains(reason, name) {
+			t.Errorf("%s with no verdict: %s %q", name, outcome, reason)
 		}
 	}
-	// a modelled.yml that does not parse
-	if outcome, reason := GateM10InTlcOutcome(passing, nil, []byte("models: [\n"), nil); outcome != GateOutcomeFail || !strings.Contains(reason, "does not parse") {
-		t.Errorf("an unparsed modelled.yml: %s %q", outcome, reason)
+	// a drop extension test the item does not name, failing or skipped, is not read
+	for _, verdict := range []string{"FAIL", "SKIP"} {
+		dropped := gateM10InTlcFixtureOutput(nil, nil, map[string]string{"TestEvsCommitDropStoriesPassTlc": verdict, "TestEvsCommitDropMutantsFailTlc": verdict})
+		if outcome, reason := GateM10InTlcOutcome(dropped, nil); outcome != GateOutcomePass || strings.Contains(reason, "Drop") {
+			t.Errorf("the drop extension's tests at %s: %s %q", verdict, outcome, reason)
+		}
 	}
 	// a run that never built
-	if outcome, reason := GateM10InTlcOutcome([]byte("# github.com/urnetwork/sidecar/sidecartest/model\nsyntax error\nFAIL\n"), errors.New("exit status 1"), standing, nil); outcome != GateOutcomeFail || !strings.Contains(reason, "did not build or run") {
+	if outcome, reason := GateM10InTlcOutcome([]byte("# github.com/urnetwork/sidecar/sidecartest/model\nsyntax error\nFAIL\n"), errors.New("exit status 1")); outcome != GateOutcomeFail || !strings.Contains(reason, "did not build or run") {
 		t.Errorf("no build: %s %q", outcome, reason)
+	}
+}
+
+// M10-in's TLC item names TEST-M2-08's tests of every mode M10's entry needs, the purger's mutants and stories among
+// them, and none of the drop extension's, which M10's exit names; nor the retired stories test that ran the purger's
+// stories with the drop extension's.
+func TestGateM10InTlcItemNeedsThePurgerNotTheDrops(t *testing.T) {
+	for _, want := range []string{
+		"TestEvsCommitPassesTlcAtItsBounds", "TestEvsCommitMutantsFailTlc", "TestEvsCommitLivenessHolds",
+		"TestEvsCommitPurgerMutantsFailTlc", "TestEvsCommitPurgerStoriesPassTlc",
+		"TestIndexRollupPassesTlcAtItsBounds", "TestIndexRollupMutantsFailTlc", "TestIndexRollupLivenessHolds",
+	} {
+		if !slices.Contains(gateM10InTlcTests, want) {
+			t.Errorf("M10-in's TLC item does not run %s", want)
+		}
+	}
+	for _, unwanted := range []string{"TestEvsCommitDropMutantsFailTlc", "TestEvsCommitDropStoriesPassTlc", "TestEvsCommitStoriesPassTlc", "TestModelledNamesEachModelsSources"} {
+		if slices.Contains(gateM10InTlcTests, unwanted) {
+			t.Errorf("M10-in's TLC item runs %s", unwanted)
+		}
+	}
+	if len(gateM10InTlcTests) != 8 {
+		t.Errorf("M10-in's TLC item runs %d tests: %v", len(gateM10InTlcTests), gateM10InTlcTests)
 	}
 }
 
@@ -503,7 +537,7 @@ func TestGateM10InNamesSidecarTestsDeclaredUnderTheirTags(t *testing.T) {
 	}
 	tests := []*GateTest{
 		{Repo: "sidecar", Package: "./sidecartest/fault", Tags: "sidecar_testhooks", Names: []string{"TestGateM10InRowWritten", "TestGateM10InModelsPassTlc"}},
-		{Repo: "sidecar", Package: "./sidecartest/model", Tags: "sidecar_tlc", Names: append(slices.Clone(gateM10InTlcTests), gateModelledSourcesTest)},
+		{Repo: "sidecar", Package: "./sidecartest/model", Tags: "sidecar_tlc", Names: slices.Clone(gateM10InTlcTests)},
 	}
 	for _, row := range GateRows(DefaultCatalog(), "M10-in") {
 		tests = append(tests, row.Tests...)

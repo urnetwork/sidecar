@@ -7,8 +7,14 @@
 # models        one per spec in this directory.
 #   spec        EvsCommit, StoreSettle or IndexRollup.
 #   owners      the tasks that write the model.
-#   milestones  the gates whose freeze needs it passing (§22.10), or Later for a model of a design the owner moved
-#               past launch, which no gate's freeze needs and which still runs, and stays runnable, by its script.
+#   milestones  the gates whose freeze needs its modes passing (§22.10), each the first gate that needs the
+#               modes it names: a gate needs the modes of every milestone at or before it, milestone by
+#               milestone and each one's entry before its exit, and none a later one adds, so each gate needs
+#               what §22.10 names of the model by then and no more (QD-1116). model_test.go takes a gate's
+#               modes from here (gateModes), and in gate mode a mode the gate does not need is not run.
+#     gate      the gate tool's name: Mn-in, milestone n's entry review, or Mn, its exit review.
+#     modes     the modes it adds, recorded modes as a run names them (mode below), each named once in the
+#               model's milestones, which together name every mode run-tlc.sh runs of the spec.
 #   objects     what the model keeps, as §22.8 lists it.
 #   companions  models of the same objects under details/, as §22.8's row names them beside the spec,
 #               each run by its own script there: details/IndexMerge.tla is DESIGN-DETAILS.md section
@@ -22,7 +28,10 @@
 #     at        yyyy-mm-dd
 #     commit    the sidecar commit
 #     tlc       TLC's revision, as its banner prints it
-#     mode      model, mutants, live or stories, as run-tlc.sh's modes
+#     mode      the run-tlc.sh mode it ran, its twins read as mutants: model, mutants (twins) or live, and
+#               for each part of the spec (run-tlc.sh list-parts) mutants-<part> (twins-<part>) and
+#               stories-<part>, a part being a group of twins and stories a gate needs apart from the rest;
+#               a run's mode is what run-tlc.sh's mode ran at the commit it names
 #     result    pass or fail
 #     sources_sha256  the digest of the sources when it ran, as modelled_test.go computes it
 #     states, depth, seconds  what TLC reported, summed over the mode's runs
@@ -38,15 +47,23 @@
 #               ROOT/.stack/scratch by the track's name: design, the configurations that must pass; twins,
 #               each of which must end with the invariant its cfg names violated; and reach, each of which
 #               must reach the state its cfg's last invariant denies.
-#   owners, milestones, objects, sources, exclude and runs as a model's. The spec, its cfgs and its run
-#               script count among the sources, and every glob matches a file. A run's mode is the group it
-#               ran, its tlc the revision the script's verdict lines name, and its states and depth what
-#               those lines report, summed and at most.
+#   milestones  the milestones whose gates need it, or Later for a model of a design the owner moved past
+#               launch, which no gate's freeze needs and which still runs, and stays runnable, by its script; a
+#               gate runs each details model's three groups whatever its milestones.
+#   owners, objects, sources, exclude and runs as a model's. The spec, its cfgs and its run script count
+#               among the sources, and every glob matches a file. A run's mode is the group it ran, its tlc
+#               the revision the script's verdict lines name, and its states and depth what those lines
+#               report, summed and at most.
 
 models:
   - spec: EvsCommit
     owners: [EVS1-M2-02, EVSB-M10-07]
-    milestones: [M2, M10]
+    # the M2 part from M2's entry; the M10 part's purger from M10's entry and its drop extension only from its
+    # exit (§22.10's format 2 row, §22.17's blocking line)
+    milestones:
+      - {gate: M2-in, modes: [model, mutants, live]}
+      - {gate: M10-in, modes: [mutants-purge, stories-purge]}
+      - {gate: M10, modes: [mutants-drop, stories-drop]}
     objects: "head (its fence, refusal records, seal lease and collect window), batch records, packs and parcels with their pidx/ entries, index entries, segments with their upload receipts, slot, pmap, log, gen, epoch, repo, proj and rev; from M10 versionless versions, kind-5 and staged content, holds, DROP pushes and the citation fence"
     companions: [details/EvsSlot]
     sources:
@@ -67,7 +84,8 @@ models:
 
   - spec: StoreSettle
     owners: [EVS1-M2-02]
-    milestones: [M2]
+    milestones:
+      - {gate: M2-in, modes: [model, mutants, live]}
     objects: "one key on 8 drives at EC:4 (4 hosts of 2): each drive's version, its stamp and its own lock on the key, each write's coordinator and its drive commits, a failed DELETE's key held until each of its commits has answered and each that landed is reverted (QD-744), the settler and heal, whose commit is checked at its drive like any other (D-OPS-20's settle rule)"
     sources:
       - sidecar/sidecartest/model/StoreSettle.tla
@@ -86,7 +104,8 @@ models:
 
   - spec: IndexRollup
     owners: [SEARCH-M10-02, SEARCH-M10-46]
-    milestones: [M10]
+    milestones:
+      - {gate: M10-in, modes: [model, mutants, live]}
     objects: "one ref's head with its index_epoch and index files, its erasure set, current, previous and expired buckets, all, each writer's head, sealed and absorbed slots and large entries, every entry full or a tombstone (owner decision 584), under the head rule, merges that read no head, the roll-up lock and its promotions, the journal's pin and push life, and each document's newest version and erasure state (DESIGN-DETAILS.md section 1); details/IndexMerge.tla keeps the same rules, without the erasure, beside §11.14's as written, and details/IndexErase.tla keeps an erasure under them, of a path document whose edit may land beside the CUT at a version it does not list and of a run card, beside the writers that keep pushing (DESIGN-DETAILS.md section 15)"
     companions: [details/IndexMerge, details/IndexErase]
     sources:

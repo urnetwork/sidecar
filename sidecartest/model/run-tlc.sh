@@ -4,16 +4,23 @@
 # protects; the liveness properties under weak fairness; and, for a model whose cfg's bounds do not
 # finish breadth-first on a shared host, the design grounds that do, each ending as its row says.
 #
-#   run-tlc.sh model <Spec> [Name=value ...]          the model, at its cfg's bounds or these
-#   run-tlc.sh twins <Spec> [Name=value ...]          every twin of the model, in turn
-#   run-tlc.sh twin <Spec> <Twin> [Name=value ...]    one twin
-#   run-tlc.sh control <Spec> <Twin> [Name=value ...] the model at that twin's bounds, to pass
-#   run-tlc.sh live <Spec> [Name=value ...]           liveness, without symmetry or view
-#   run-tlc.sh stories <Spec> [Name=value ...]        EvsCommit's M10 stories, each at its bounds
-#   run-tlc.sh grounds <Spec> [Name=value ...]        a model's design grounds, each as it must end
-#   run-tlc.sh ground <Spec> <Ground> [Name=value ...] one of them
-#   run-tlc.sh list <Spec>                            the twins and the invariant each must break
-#   run-tlc.sh list-grounds <Spec>                    the grounds and what each must show
+#   run-tlc.sh model <Spec> [Name=value ...]            the model, at its cfg's bounds or these
+#   run-tlc.sh twins <Spec> [Name=value ...]            every twin of the model outside its parts, in turn
+#   run-tlc.sh twins-<part> <Spec> [Name=value ...]     every twin of one of its parts, in turn
+#   run-tlc.sh twin <Spec> <Twin> [Name=value ...]      one twin, of any part
+#   run-tlc.sh control <Spec> <Twin> [Name=value ...]   the model at that twin's bounds, to pass
+#   run-tlc.sh live <Spec> [Name=value ...]             liveness, without symmetry or view
+#   run-tlc.sh stories-<part> <Spec> [Name=value ...]   one part's stories, each at its bounds
+#   run-tlc.sh grounds <Spec> [Name=value ...]          a model's design grounds, each as it must end
+#   run-tlc.sh ground <Spec> <Ground> [Name=value ...]  one of them
+#   run-tlc.sh list <Spec>                              every twin, of any part, and the invariant it must break
+#   run-tlc.sh list-grounds <Spec>                      the grounds and what each must show
+#   run-tlc.sh list-parts <Spec>                        each part's twins and stories, a line each
+#
+# A part is a group of a model's twins and stories that a gate needs apart from its other runs, so each
+# of its groups is a mode of its own, which modelled.yml records on its own: EvsCommit's M10 part runs as
+# the purger's (purge), which M10's entry needs, and the drop extension's (drop), which only its exit
+# needs (§22.10; QD-1116; parts_EvsCommit below). StoreSettle and IndexRollup have no parts.
 #
 # <Spec> is EvsCommit, StoreSettle or IndexRollup. A Name=value replaces a constant of the spec's
 # cfg; Quiet=a+b leaves the named processes out (quiet_EvsCommit below; IndexRollup and StoreSettle
@@ -31,7 +38,7 @@ set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 
 usage() {
-  sed -n '7,16p' "$0" | sed 's/^# //' >&2
+  sed -n '7,18p' "$0" | sed 's/^# //' >&2
   exit 64
 }
 
@@ -54,14 +61,6 @@ usage() {
 # nothing, so no invariant here sees step 6 take another's object, or evacuation's origin, settle
 # age or named DELETE broken.
 seq_EvsCommit="Writers={w1} Instances={i1} Segments={s1} MaxAttempts=1 MaxFaults=0 MaxHour=0 MaxGeneration=1 MaxVersion=4"
-# The M10 part's twins run its stories (F2Run): a purge story on the committing instance alone, which
-# holds the purge's queue, and a drop story on two, whose late step 7s race the fence. PurgeUnseen
-# breaks two rules at once, queueing a push's candidates before its commit is seen and deleting them
-# with no reread of the newest version: either alone deletes nothing a version needs, since the reread
-# keeps what a push that never committed did not replace, and a queue of seen commits holds only what
-# they replaced.
-purge_EvsCommit="F2Run=\"purgeA\" Instances={i1} F2MaxHour=3"
-drop_EvsCommit="F2Run=\"dropB\""
 tiny_EvsCommit="FoldTrigger=1 FoldSize=1 BaseRange=0 WindowLimit=2 WindowMax=3"
 quiet_but() {
   local part kept out=""
@@ -72,7 +71,7 @@ quiet_but() {
   echo "Quiet=$out"
 }
 twins_EvsCommit() {
-  local seq=$seq_EvsCommit tiny=$tiny_EvsCommit m10purge=$purge_EvsCommit m10drop=$drop_EvsCommit
+  local seq=$seq_EvsCommit tiny=$tiny_EvsCommit
   cat <<EOF
 RestoreAfterShred      LifecycleHolds        $seq MaxPush=1 $(quiet_but lifecycle)
 VersionRestarts        VersionsRise          $seq MaxPush=3 $(quiet_but)+gitref
@@ -95,14 +94,74 @@ NoWindowWait           NewestFound           $seq MaxPush=5 MaxVersion=6 $tiny $
 FoldIgnoresWindow      NewestFound           $seq MaxPush=5 MaxVersion=6 $tiny $(quiet_but fold collect)+gitref Script=X.create:X.remove:D.create:X.create:D.remove
 CachedRefusal          OutcomesHold          $seq Writers={w1,w2} MaxAttempts=2 MaxGeneration=2 MaxPush=3 MaxVersion=4 $(quiet_but authority epoch cache stale fold)+gitref Script=X.create:epoch:X.write Simulate=150 Traces=40000 Seed=1
 CopyOverwrites         NewestFound           $seq Writers={w1,w2} MaxGeneration=2 MaxPush=4 MaxVersion=5 $(quiet_but authority epoch fold)+gitref+gkm+block Script=X.create:epoch:X.write:D.create
-PurgeNoAllowance       F2DeletesKeepRules    $m10purge
-PurgeIgnoresHold       F2DeletesKeepRules    $m10purge
-PurgeUnseen            F2Closure             $m10purge
-EvacDropsNewest        F2Closure             $m10purge
-DropNoFence            F2FenceHolds          $m10drop
-DropNoAgeCheck         F2Closure             $m10drop
-DropIgnoresHold        F2DeletesKeepRules    $m10drop
 EOF
+}
+
+# EvsCommit's parts (QD-1116). Its M10 part, run story by story (F2Run) with the M2 part held at its
+# start, splits between §22.10's gates for format 2: M10's entry needs "EvsCommit.tla with the purger"
+# passing TLC, and its exit "the model's drop extension". So the purger's twins and stories (purge) and
+# the drop extension's (drop) are parts, each group run by a mode of its own (twins-purge, stories-purge,
+# twins-drop, stories-drop), which modelled.yml records apart, and twins runs the M2 part's alone.
+parts_EvsCommit="purge drop"
+
+# A part's twins run its stories: a purge story on the committing instance alone, which holds the
+# purge's queue, and a drop story on two, whose late step 7s race the fence. PurgeUnseen breaks two
+# rules at once, queueing a push's candidates before its commit is seen and deleting them with no
+# reread of the newest version: either alone deletes nothing a version needs, since the reread keeps
+# what a push that never committed did not replace, and a queue of seen commits holds only what they
+# replaced.
+purge_EvsCommit="F2Run=\"purgeA\" Instances={i1} F2MaxHour=3"
+drop_EvsCommit="F2Run=\"dropB\""
+twins_EvsCommit_purge() {
+  cat <<EOF
+PurgeNoAllowance       F2DeletesKeepRules    $purge_EvsCommit
+PurgeIgnoresHold       F2DeletesKeepRules    $purge_EvsCommit
+PurgeUnseen            F2Closure             $purge_EvsCommit
+EvacDropsNewest        F2Closure             $purge_EvsCommit
+EOF
+}
+twins_EvsCommit_drop() {
+  cat <<EOF
+DropNoFence            F2FenceHolds          $drop_EvsCommit
+DropNoAgeCheck         F2Closure             $drop_EvsCommit
+DropIgnoresHold        F2DeletesKeepRules    $drop_EvsCommit
+EOF
+}
+
+# A part's stories, each small enough for breadth-first search: the purge stories on the committing
+# instance alone and three long marks, enough for a record's evacuation, and the drop stories on two
+# instances, whose late step 7s race the fence, and the cfg's four marks.
+stories_EvsCommit_purge() {
+  cat <<'STORIES'
+purgeA   F2Run="purgeA" Instances={i1} F2MaxHour=3
+purgeB   F2Run="purgeB" Instances={i1} F2MaxHour=3
+purgeC   F2Run="purgeC" Instances={i1} F2MaxHour=3
+purgeD   F2Run="purgeD" Instances={i1} F2MaxHour=3
+purgeE   F2Run="purgeE" Instances={i1} F2MaxHour=3
+STORIES
+}
+stories_EvsCommit_drop() {
+  cat <<'STORIES'
+dropA    F2Run="dropA"
+dropB    F2Run="dropB"
+dropC    F2Run="dropC"
+STORIES
+}
+
+# The spec's parts, empty for a spec with none.
+spec_parts() {
+  local parts=parts_$spec
+  echo "${!parts:-}"
+}
+
+# Every twin of the spec, each of its parts' after its own, as list prints them and twin and control
+# find them.
+all_twins() {
+  local part
+  "twins_$spec"
+  for part in $(spec_parts); do
+    "twins_${spec}_$part"
+  done
 }
 
 # StoreSettle's twins run breadth-first with PUTs and DELETEs mixed, at 4 drives on 2 hosts, 2 writes
@@ -268,22 +327,6 @@ EOF
 }
 
 properties_EvsCommit="RemovalGates DueEpochCommits F2DropsEnd"
-
-# EvsCommit's M10 part runs story by story (F2Run), each small enough for breadth-first search: the
-# purge stories on the committing instance alone and three long marks, enough for a record's
-# evacuation, the drop stories on two instances, whose late step 7s race the fence, and four marks.
-stories_EvsCommit() {
-  cat <<'STORIES'
-purgeA   F2Run="purgeA" Instances={i1} F2MaxHour=3
-purgeB   F2Run="purgeB" Instances={i1} F2MaxHour=3
-purgeC   F2Run="purgeC" Instances={i1} F2MaxHour=3
-purgeD   F2Run="purgeD" Instances={i1} F2MaxHour=3
-purgeE   F2Run="purgeE" Instances={i1} F2MaxHour=3
-dropA    F2Run="dropA"
-dropB    F2Run="dropB"
-dropC    F2Run="dropC"
-STORIES
-}
 properties_StoreSettle="HeldKeyReleased"
 properties_IndexRollup="BucketRolls ErasureFinishes"
 
@@ -488,12 +531,26 @@ main() {
   shift 2
   case $spec in EvsCommit|StoreSettle|IndexRollup) ;; *) usage ;; esac
   if [ "$mode" = list ]; then
-    "twins_$spec"
+    all_twins
+    exit 0
+  fi
+  if [ "$mode" = list-parts ]; then
+    for part in $(spec_parts); do
+      "twins_${spec}_$part" | awk -v p="$part" '{ names = names " " $1 } END { print p " twins" names }'
+      "stories_${spec}_$part" | awk -v p="$part" '{ names = names " " $1 } END { print p " stories" names }'
+    done
     exit 0
   fi
   case $mode in
     list-grounds|grounds|ground)
       declare -F "grounds_$spec" > /dev/null || { echo "run-tlc.sh: $spec has no design grounds" >&2; exit 64; }
+      ;;
+    twins-*|stories-*)
+      part=${mode#*-}
+      case " $(spec_parts) " in
+        *" $part "*) ;;
+        *) echo "run-tlc.sh: $spec has no part $part" >&2; exit 64 ;;
+      esac
       ;;
   esac
   if [ "$mode" = list-grounds ]; then
@@ -537,7 +594,7 @@ main() {
       [ $# -ge 1 ] || usage
       want=$1
       shift
-      line=$("twins_$spec" | awk -v t="$want" '$1 == t')
+      line=$(all_twins | awk -v t="$want" '$1 == t')
       [ -n "$line" ] || { echo "run-tlc.sh: $spec has no twin $want" >&2; exit 64; }
       read -r _ invariant bounds <<< "$line"
       if [ "$mode" = twin ]; then
@@ -551,8 +608,7 @@ main() {
         check "control-$want" "$cfg" pass || failed=1
       fi
       ;;
-    stories)
-      [ "$spec" = EvsCommit ] || usage
+    stories-*)
       while read -r story bounds; do
         quiet_parts="" sim_depth="" sim_traces="" sim_seed="" script=""
         cfg=$work/story-$story.cfg
@@ -560,13 +616,15 @@ main() {
         # shellcheck disable=SC2086
         with_constants "$cfg" $bounds "$@"
         check "story-$story" "$cfg" pass || failed=1
-      done < <(stories_EvsCommit)
+      done < <("stories_${spec}_$part")
       ;;
-    twins)
+    twins|twins-*)
+      table=twins_$spec
+      [ "$mode" = twins ] || table=twins_${spec}_$part
       while read -r twin invariant bounds; do
         # shellcheck disable=SC2086
         run_twin "$twin" "$invariant" $bounds "$@" || failed=1
-      done < <("twins_$spec")
+      done < <("$table")
       ;;
     grounds|ground)
       rows=$("grounds_$spec")
