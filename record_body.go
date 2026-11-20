@@ -30,62 +30,127 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-// Section 6.4's caps, as record.proto's comments write them.
-const (
-	recordClaimTextByteCount        = 512
-	recordCoordinationTextByteCount = 1024
-	recordTargetCount               = 16
-	recordAgentLabelByteCount       = 64
-	recordSessionIdCount            = 4
-	recordSessionIdByteCount        = 64
-	recordModelByteCount            = 64
-	recordPermissionModeByteCount   = 32
-	recordProjectByteCount          = 128
-	recordBranchByteCount           = 128
-	recordTitleByteCount            = 120
-	recordInstructionFileCount      = 64
-	recordFileNameByteCount         = 128
-	recordTruncationCount           = 16
-	recordTruncationByteCount       = 128
-	recordCommitCount               = 64
-	recordChangedPathCount          = 4096
-	recordToolNameByteCount         = 64
-	recordRestoredPathCount         = 4096
-	recordRestoredCopyCount         = 2
-	recordReadObjectCount           = 64
-	recordErasureEntryCount         = 1024
-	recordInventoryAgentCount       = 64
-	recordInventoryHarnessCount     = 8
-	recordInventoryModelCount       = 16
-	recordInventoryRepoCount        = 64
-	recordModelFieldByteCount       = 128
-	recordCostUsageCount            = 16
-	recordLedgerRepoCount           = 256
-	recordLedgerProjectCount        = 256
-	recordCopyEntryCount            = 64
-	recordCaptureByteCount          = 1024 * 1024
-	recordBlobByteCount             = 8 * 1024 * 1024
-	recordToolPathCount             = 256
-)
-
 // A body breaks one of section 6.4's rules: a cap, a length, or a value its field does not take. A writer refuses
 // it; a reader shows the entry with no body and raises over_cap.
 var ErrRecordBodyOverCap = errors.New("record body over its caps")
 
-// Section 6.4's caps as settings (QD-702): format values, which a writer holds a body to before it seals and every
-// reader holds a stored body to after it opens, so no device sets one on its own; this object holds them and its
-// defaults stay here. §16.7's capture settings may cut lower, never higher. The section's older caps are still the
-// constants above, which join this object as QD-706's sweep reaches them; QD-900's prompts are the first cap here.
+// Section 6.4's caps, as record.proto's comments write them, as settings (QD-702): format values, which a writer holds
+// a body to before it seals and every reader holds a stored body to after it opens, so no device sets one on its own;
+// this object holds them and its defaults stay here. §16.7's capture settings may cut lower, never higher. A count is
+// entries, a byte count bytes.
 type RecordBodySettings struct {
 	// ContextBody.prompts in one entry, the prompts' bytes together: 2,048 B, §16.10's "first 2 KiB of user prompts",
 	// all a run card reads of them (QD-900). Each prompt is non-empty.
 	ContextPromptByteCount int
+	// A claim's or handoff's text, in bytes: 512.
+	ClaimTextByteCount int
+	// An ask's, answer's, check's or note's text, in bytes: 1,024.
+	CoordinationTextByteCount int
+	// A coordination entry's targets: 16.
+	TargetCount int
+	// An agent label's bytes: 64, which ContextBody's label pattern holds.
+	AgentLabelByteCount int
+	// ContextBody's session ids: 4.
+	SessionIdCount int
+	// One session id's bytes: 64.
+	SessionIdByteCount int
+	// ContextBody's model, in bytes: 64.
+	ModelByteCount int
+	// A permission mode's bytes: 32.
+	PermissionModeByteCount int
+	// A project key's bytes, §16.11's rule: 128.
+	ProjectByteCount int
+	// A branch's bytes, a git ref name: 128.
+	BranchByteCount int
+	// A run title's bytes after redaction, §16.10's: 120.
+	TitleByteCount int
+	// ContextBody's instruction files: 64.
+	InstructionFileCount int
+	// An instruction file name's bytes: 128.
+	FileNameByteCount int
+	// ContextBody's truncation warnings: 16.
+	TruncationCount int
+	// One truncation warning's bytes: 128.
+	TruncationByteCount int
+	// A change's commits: 64.
+	CommitCount int
+	// A change's paths: 4,096.
+	ChangedPathCount int
+	// A permission's tool name, in bytes: 64.
+	ToolNameByteCount int
+	// A restore's paths: 4,096.
+	RestoredPathCount int
+	// A restored path's copies: 2.
+	RestoredCopyCount int
+	// A read receipt's object ids: 64.
+	ReadObjectCount int
+	// An erasure's entries: 1,024.
+	ErasureEntryCount int
+	// An inventory's agents: 64.
+	InventoryAgentCount int
+	// An inventory agent's harnesses: 8.
+	InventoryHarnessCount int
+	// An inventory agent's models: 16.
+	InventoryModelCount int
+	// An inventory agent's repo ids, and its projects: 64 each.
+	InventoryRepoCount int
+	// A model manifest field's bytes, an identifier: 128.
+	ModelFieldByteCount int
+	// A cost entry's usages, by model: 16 (section 13.1).
+	CostUsageCount int
+	// A ledger_scope's repo ids: 256.
+	LedgerRepoCount int
+	// A ledger_scope's projects: 256.
+	LedgerProjectCount int
+	// A copy entry's openings: 64.
+	CopyEntryCount int
+	// A transcript chunk's lines, a tool call's input and output together, and a hook payload, in bytes after
+	// redaction: 1 MiB (§16.7).
+	CaptureByteCount int
+	// A blob's content after redaction, in bytes: 8 MiB (§16.7).
+	BlobByteCount int
+	// The paths a tool call names: 256.
+	ToolPathCount int
 }
 
 // RECORD.md's values, the only source of their defaults. A fresh value each call.
 func DefaultRecordBodySettings() *RecordBodySettings {
 	return &RecordBodySettings{
-		ContextPromptByteCount: 2 * 1024,
+		ContextPromptByteCount:    2 * 1024,
+		ClaimTextByteCount:        512,
+		CoordinationTextByteCount: 1024,
+		TargetCount:               16,
+		AgentLabelByteCount:       64,
+		SessionIdCount:            4,
+		SessionIdByteCount:        64,
+		ModelByteCount:            64,
+		PermissionModeByteCount:   32,
+		ProjectByteCount:          128,
+		BranchByteCount:           128,
+		TitleByteCount:            120,
+		InstructionFileCount:      64,
+		FileNameByteCount:         128,
+		TruncationCount:           16,
+		TruncationByteCount:       128,
+		CommitCount:               64,
+		ChangedPathCount:          4096,
+		ToolNameByteCount:         64,
+		RestoredPathCount:         4096,
+		RestoredCopyCount:         2,
+		ReadObjectCount:           64,
+		ErasureEntryCount:         1024,
+		InventoryAgentCount:       64,
+		InventoryHarnessCount:     8,
+		InventoryModelCount:       16,
+		InventoryRepoCount:        64,
+		ModelFieldByteCount:       128,
+		CostUsageCount:            16,
+		LedgerRepoCount:           256,
+		LedgerProjectCount:        256,
+		CopyEntryCount:            64,
+		CaptureByteCount:          1024 * 1024,
+		BlobByteCount:             8 * 1024 * 1024,
+		ToolPathCount:             256,
 	}
 }
 
@@ -196,6 +261,7 @@ func recordBodyLength(value []byte, length int, optional bool) bool {
 // of what it opened. body must be kind's one message (record_kind.go); a Signed kind's body is checked by its own
 // parser (record_hash.go), and a kind without rules here passes.
 func RecordBodyValidate(kind RecordKind, body proto.Message) error {
+	settings := DefaultRecordBodySettings()
 	if body == nil {
 		return recordBodyRule(false, "no body")
 	}
@@ -217,9 +283,9 @@ func RecordBodyValidate(kind RecordKind, body proto.Message) error {
 		return errors.Join(
 			recordBodyRule(typed.GetDecision() <= 3, "permission decision %d", typed.GetDecision()),
 			recordBodyRule(typed.GetDecidedBy() <= 4, "permission decided_by %d", typed.GetDecidedBy()),
-			recordBodyRule(len(typed.GetPermissionMode()) <= recordPermissionModeByteCount, "permission_mode of %d bytes", len(typed.GetPermissionMode())),
+			recordBodyRule(len(typed.GetPermissionMode()) <= settings.PermissionModeByteCount, "permission_mode of %d bytes", len(typed.GetPermissionMode())),
 			recordBodyRule(typed.GetToolClass() <= 5, "tool_class %d", typed.GetToolClass()),
-			recordBodyRule(len(typed.GetToolName()) <= recordToolNameByteCount, "tool_name of %d bytes", len(typed.GetToolName())),
+			recordBodyRule(len(typed.GetToolName()) <= settings.ToolNameByteCount, "tool_name of %d bytes", len(typed.GetToolName())),
 			recordBodyRule(recordBodyLength(typed.GetArgumentsSha256(), recordHashByteCount, true), "arguments_sha256 of %d bytes", len(typed.GetArgumentsSha256())),
 		)
 	case *protocol.ApprovalUseBody:
@@ -238,10 +304,10 @@ func RecordBodyValidate(kind RecordKind, body proto.Message) error {
 			recordBodyRule(recordBodyLength(typed.GetRestoredRunId(), recordIdByteCount, false), "restored_run_id of %d bytes", len(typed.GetRestoredRunId())),
 			recordBodyRule(recordBodyLength(typed.GetPreviewId(), recordIdByteCount, true), "preview_id of %d bytes", len(typed.GetPreviewId())),
 			recordBodyRule(recordBodyLength(typed.GetApprovalId(), recordIdByteCount, true), "approval_id of %d bytes", len(typed.GetApprovalId())),
-			recordBodyRule(len(typed.GetPaths()) <= recordRestoredPathCount, "%d restored paths", len(typed.GetPaths())),
+			recordBodyRule(len(typed.GetPaths()) <= settings.RestoredPathCount, "%d restored paths", len(typed.GetPaths())),
 		}
 		for _, path := range typed.GetPaths() {
-			checks = append(checks, recordBodyRule(len(path.GetCopies()) <= recordRestoredCopyCount, "%d copies of a restored path", len(path.GetCopies())))
+			checks = append(checks, recordBodyRule(len(path.GetCopies()) <= settings.RestoredCopyCount, "%d copies of a restored path", len(path.GetCopies())))
 		}
 		return errors.Join(checks...)
 	case *protocol.MembershipBody:
@@ -254,7 +320,7 @@ func RecordBodyValidate(kind RecordKind, body proto.Message) error {
 		)
 	case *protocol.ReadBody:
 		checks := []error{
-			recordBodyRule(1 <= len(typed.GetObjectIds()) && len(typed.GetObjectIds()) <= recordReadObjectCount, "%d object ids", len(typed.GetObjectIds())),
+			recordBodyRule(1 <= len(typed.GetObjectIds()) && len(typed.GetObjectIds()) <= settings.ReadObjectCount, "%d object ids", len(typed.GetObjectIds())),
 			recordBodyRule(1 <= typed.GetPurpose() && typed.GetPurpose() <= 4, "read purpose %d", typed.GetPurpose()),
 			recordBodyRule(recordBodyLength(typed.GetReadLogId(), recordIdByteCount, true), "read_log_id of %d bytes", len(typed.GetReadLogId())),
 		}
@@ -265,7 +331,7 @@ func RecordBodyValidate(kind RecordKind, body proto.Message) error {
 	case *protocol.ErasureBody:
 		checks := []error{
 			recordBodyRule(recordBodyLength(typed.GetErasureId(), recordIdByteCount, false), "erasure_id of %d bytes", len(typed.GetErasureId())),
-			recordBodyRule(1 <= len(typed.GetEntryIds()) && len(typed.GetEntryIds()) <= recordErasureEntryCount, "%d erased entries", len(typed.GetEntryIds())),
+			recordBodyRule(1 <= len(typed.GetEntryIds()) && len(typed.GetEntryIds()) <= settings.ErasureEntryCount, "%d erased entries", len(typed.GetEntryIds())),
 			recordBodyRule(1 <= typed.GetReason() && typed.GetReason() <= 4, "erasure reason %d", typed.GetReason()),
 			recordBodyRule((typed.GetReason() == 4) == (len(typed.GetRequestId()) == recordIdByteCount), "request_id of %d bytes for reason %d", len(typed.GetRequestId()), typed.GetReason()),
 		}
@@ -274,40 +340,40 @@ func RecordBodyValidate(kind RecordKind, body proto.Message) error {
 		}
 		return errors.Join(checks...)
 	case *protocol.InventoryBody:
-		checks := []error{recordBodyRule(len(typed.GetAgents()) <= recordInventoryAgentCount, "%d inventory agents", len(typed.GetAgents()))}
+		checks := []error{recordBodyRule(len(typed.GetAgents()) <= settings.InventoryAgentCount, "%d inventory agents", len(typed.GetAgents()))}
 		for _, agent := range typed.GetAgents() {
 			checks = append(checks,
-				recordBodyRule(len(agent.GetHarnesses()) <= recordInventoryHarnessCount, "%d harnesses", len(agent.GetHarnesses())),
-				recordBodyRule(len(agent.GetModels()) <= recordInventoryModelCount, "%d models", len(agent.GetModels())),
-				recordBodyRule(len(agent.GetRepoIds()) <= recordInventoryRepoCount, "%d repo ids", len(agent.GetRepoIds())),
-				recordBodyRule(len(agent.GetProjects()) <= recordInventoryRepoCount, "%d projects", len(agent.GetProjects())),
+				recordBodyRule(len(agent.GetHarnesses()) <= settings.InventoryHarnessCount, "%d harnesses", len(agent.GetHarnesses())),
+				recordBodyRule(len(agent.GetModels()) <= settings.InventoryModelCount, "%d models", len(agent.GetModels())),
+				recordBodyRule(len(agent.GetRepoIds()) <= settings.InventoryRepoCount, "%d repo ids", len(agent.GetRepoIds())),
+				recordBodyRule(len(agent.GetProjects()) <= settings.InventoryRepoCount, "%d projects", len(agent.GetProjects())),
 			)
 		}
 		return errors.Join(checks...)
 	case *protocol.ModelManifest:
 		return recordModelManifestValidate(typed, false)
 	case *protocol.RunCostBody:
-		return recordBodyRule(len(typed.GetUsage()) <= recordCostUsageCount, "%d model usages", len(typed.GetUsage()))
+		return recordBodyRule(len(typed.GetUsage()) <= settings.CostUsageCount, "%d model usages", len(typed.GetUsage()))
 	case *protocol.LedgerScopeBody:
 		return recordLedgerScopeValidate(typed)
 	case *protocol.CopyBody:
-		return recordBodyRule(len(typed.GetEntries()) <= recordCopyEntryCount, "%d copied entries", len(typed.GetEntries()))
+		return recordBodyRule(len(typed.GetEntries()) <= settings.CopyEntryCount, "%d copied entries", len(typed.GetEntries()))
 	case *protocol.TranscriptBody:
-		return recordBodyRule(len(typed.GetLines()) <= recordCaptureByteCount, "transcript lines of %d bytes", len(typed.GetLines()))
+		return recordBodyRule(len(typed.GetLines()) <= settings.CaptureByteCount, "transcript lines of %d bytes", len(typed.GetLines()))
 	case *protocol.ToolCallBody:
 		return errors.Join(
-			recordBodyRule(len(typed.GetInput())+len(typed.GetOutput()) <= recordCaptureByteCount, "tool input and output of %d bytes", len(typed.GetInput())+len(typed.GetOutput())),
-			recordBodyRule(len(typed.GetPaths()) <= recordToolPathCount, "%d tool paths", len(typed.GetPaths())),
+			recordBodyRule(len(typed.GetInput())+len(typed.GetOutput()) <= settings.CaptureByteCount, "tool input and output of %d bytes", len(typed.GetInput())+len(typed.GetOutput())),
+			recordBodyRule(len(typed.GetPaths()) <= settings.ToolPathCount, "%d tool paths", len(typed.GetPaths())),
 			recordBodyRule(typed.GetToolClass() <= 5, "tool_class %d", typed.GetToolClass()),
 		)
 	case *protocol.HookEventBody:
 		return errors.Join(
-			recordBodyRule(len(typed.GetPayload()) <= recordCaptureByteCount, "hook payload of %d bytes", len(typed.GetPayload())),
+			recordBodyRule(len(typed.GetPayload()) <= settings.CaptureByteCount, "hook payload of %d bytes", len(typed.GetPayload())),
 			recordBodyRule(recordBodyLength(typed.GetArgumentsSha256(), recordHashByteCount, true), "arguments_sha256 of %d bytes", len(typed.GetArgumentsSha256())),
 		)
 	case *protocol.BlobBody:
 		return errors.Join(
-			recordBodyRule(len(typed.GetContent()) <= recordBlobByteCount, "blob content of %d bytes", len(typed.GetContent())),
+			recordBodyRule(len(typed.GetContent()) <= settings.BlobByteCount, "blob content of %d bytes", len(typed.GetContent())),
 			recordBodyRule(recordBodyLength(typed.GetSha256(), recordHashByteCount, true), "blob sha256 of %d bytes", len(typed.GetSha256())),
 		)
 	case *protocol.Coverage:
@@ -338,6 +404,7 @@ const (
 // field marked attested, which a later writer with hardware evidence may set; writer holds a v1 writer's own, which
 // refuses attested, an empty value, and measured on anything but the weights digest (D-RECORD-11).
 func recordModelManifestValidate(body *protocol.ModelManifest, writer bool) error {
+	settings := DefaultRecordBodySettings()
 	checks := []error{recordBodyRule(1 <= body.GetPort() && body.GetPort() <= 0xffff, "model port %d", body.GetPort())}
 	fields := []struct {
 		name     string
@@ -356,7 +423,7 @@ func recordModelManifestValidate(body *protocol.ModelManifest, writer bool) erro
 		}
 		evidence := item.field.GetEvidence()
 		checks = append(checks,
-			recordBodyRule(len(item.field.GetValue()) <= recordModelFieldByteCount, "%s of %d bytes", item.name, len(item.field.GetValue())),
+			recordBodyRule(len(item.field.GetValue()) <= settings.ModelFieldByteCount, "%s of %d bytes", item.name, len(item.field.GetValue())),
 			recordBodyRule(RecordModelEvidenceDeclared <= evidence && evidence <= RecordModelEvidenceAttested, "%s evidence %d", item.name, evidence),
 		)
 		if writer {
@@ -392,16 +459,17 @@ func RecordKindLedgerCopied(kind RecordKind) bool {
 
 // ledger_scope: repos by id and projects by key within their counts, and kinds only among those a ledger copies.
 func recordLedgerScopeValidate(body *protocol.LedgerScopeBody) error {
+	settings := DefaultRecordBodySettings()
 	checks := []error{
-		recordBodyRule(len(body.GetRepoIds()) <= recordLedgerRepoCount, "%d ledger repos", len(body.GetRepoIds())),
-		recordBodyRule(len(body.GetProjects()) <= recordLedgerProjectCount, "%d ledger projects", len(body.GetProjects())),
+		recordBodyRule(len(body.GetRepoIds()) <= settings.LedgerRepoCount, "%d ledger repos", len(body.GetRepoIds())),
+		recordBodyRule(len(body.GetProjects()) <= settings.LedgerProjectCount, "%d ledger projects", len(body.GetProjects())),
 		recordBodyRule(len(body.GetKinds()) <= len(recordKindsLedgerCopied), "%d ledger kinds", len(body.GetKinds())),
 	}
 	for _, repoId := range body.GetRepoIds() {
 		checks = append(checks, recordBodyRule(len(repoId) == recordIdByteCount, "a ledger repo id of %d bytes", len(repoId)))
 	}
 	for _, project := range body.GetProjects() {
-		checks = append(checks, recordBodyRule(1 <= len(project) && len(project) <= recordProjectByteCount, "a ledger project of %d bytes", len(project)))
+		checks = append(checks, recordBodyRule(1 <= len(project) && len(project) <= settings.ProjectByteCount, "a ledger project of %d bytes", len(project)))
 	}
 	seen := map[uint32]bool{}
 	for _, kind := range body.GetKinds() {
@@ -433,13 +501,14 @@ func RecordBodyValidateStored(kind RecordKind, stored []byte) error {
 
 // claim, handoff, ask, answer, check and note. The targets' grammar is the record_append handler's (RECORD-M3-09).
 func recordCoordinationValidate(kind RecordKind, body *protocol.CoordinationBody) error {
-	textCap := recordCoordinationTextByteCount
+	settings := DefaultRecordBodySettings()
+	textCap := settings.CoordinationTextByteCount
 	if kind == RecordKindClaim || kind == RecordKindHandoff {
-		textCap = recordClaimTextByteCount
+		textCap = settings.ClaimTextByteCount
 	}
 	return errors.Join(
 		recordBodyRule(len(body.GetText()) <= textCap, "%s text of %d bytes", kind, len(body.GetText())),
-		recordBodyRule(len(body.GetTargets()) <= recordTargetCount, "%d targets", len(body.GetTargets())),
+		recordBodyRule(len(body.GetTargets()) <= settings.TargetCount, "%d targets", len(body.GetTargets())),
 		recordBodyRule(body.GetExpiresMillis() == 0 || kind == RecordKindClaim || kind == RecordKindAsk, "expires on a %s", kind),
 		recordBodyRule(recordBodyLength(body.GetClaimId(), recordIdByteCount, true) && (len(body.GetClaimId()) == 0 || kind == RecordKindClaim), "claim_id of %d bytes on a %s", len(body.GetClaimId()), kind),
 		recordBodyRule(body.GetClaimState() == 0 || (kind == RecordKindClaim && body.GetClaimState() <= 2), "claim_state %d on a %s", body.GetClaimState(), kind),
@@ -449,37 +518,37 @@ func recordCoordinationValidate(kind RecordKind, body *protocol.CoordinationBody
 
 // context.
 func recordContextValidate(body *protocol.ContextBody) error {
+	settings := DefaultRecordBodySettings()
 	checks := []error{
 		recordBodyRule(body.GetStage() == 1 || body.GetStage() == 2, "context stage %d", body.GetStage()),
 		recordBodyRule(body.GetAgentLabel() == "" || recordAgentLabelPattern.MatchString(body.GetAgentLabel()), "an agent label outside [a-z0-9-]{1,64}"),
-		recordBodyRule(len(body.GetSessionIds()) <= recordSessionIdCount, "%d session ids", len(body.GetSessionIds())),
-		recordBodyRule(len(body.GetModel()) <= recordModelByteCount, "model of %d bytes", len(body.GetModel())),
-		recordBodyRule(len(body.GetPermissionMode()) <= recordPermissionModeByteCount, "permission_mode of %d bytes", len(body.GetPermissionMode())),
+		recordBodyRule(len(body.GetSessionIds()) <= settings.SessionIdCount, "%d session ids", len(body.GetSessionIds())),
+		recordBodyRule(len(body.GetModel()) <= settings.ModelByteCount, "model of %d bytes", len(body.GetModel())),
+		recordBodyRule(len(body.GetPermissionMode()) <= settings.PermissionModeByteCount, "permission_mode of %d bytes", len(body.GetPermissionMode())),
 		recordBodyRule(recordBodyLength(body.GetRepoId(), recordIdByteCount, true), "repo_id of %d bytes", len(body.GetRepoId())),
-		recordBodyRule(len(body.GetProject()) <= recordProjectByteCount, "project of %d bytes", len(body.GetProject())),
-		recordBodyRule(len(body.GetBranch()) <= recordBranchByteCount, "branch of %d bytes", len(body.GetBranch())),
-		recordBodyRule(len(body.GetTitle()) <= recordTitleByteCount, "title of %d bytes", len(body.GetTitle())),
-		recordBodyRule(len(body.GetInstructionFiles()) <= recordInstructionFileCount, "%d instruction files", len(body.GetInstructionFiles())),
-		recordBodyRule(len(body.GetTruncations()) <= recordTruncationCount, "%d truncations", len(body.GetTruncations())),
+		recordBodyRule(len(body.GetProject()) <= settings.ProjectByteCount, "project of %d bytes", len(body.GetProject())),
+		recordBodyRule(len(body.GetBranch()) <= settings.BranchByteCount, "branch of %d bytes", len(body.GetBranch())),
+		recordBodyRule(len(body.GetTitle()) <= settings.TitleByteCount, "title of %d bytes", len(body.GetTitle())),
+		recordBodyRule(len(body.GetInstructionFiles()) <= settings.InstructionFileCount, "%d instruction files", len(body.GetInstructionFiles())),
+		recordBodyRule(len(body.GetTruncations()) <= settings.TruncationCount, "%d truncations", len(body.GetTruncations())),
 		recordBodyRule(recordBodyLength(body.GetConfigSha256(), recordHashByteCount, true), "config_sha256 of %d bytes", len(body.GetConfigSha256())),
 		recordBodyRule(recordBodyLength(body.GetContinuesRunId(), recordIdByteCount, true), "continues_run_id of %d bytes", len(body.GetContinuesRunId())),
 		recordBodyRule(recordBodyLength(body.GetContinuesEntryId(), recordIdByteCount, true), "continues_entry_id of %d bytes", len(body.GetContinuesEntryId())),
 	}
 	for _, sessionId := range body.GetSessionIds() {
-		checks = append(checks, recordBodyRule(len(sessionId) <= recordSessionIdByteCount, "a session id of %d bytes", len(sessionId)))
+		checks = append(checks, recordBodyRule(len(sessionId) <= settings.SessionIdByteCount, "a session id of %d bytes", len(sessionId)))
 	}
 	for _, file := range body.GetInstructionFiles() {
 		checks = append(checks,
 			recordBodyRule(1 <= file.GetScope() && file.GetScope() <= 3, "instruction file scope %d", file.GetScope()),
-			recordBodyRule(len(file.GetName()) <= recordFileNameByteCount, "an instruction file name of %d bytes", len(file.GetName())),
+			recordBodyRule(len(file.GetName()) <= settings.FileNameByteCount, "an instruction file name of %d bytes", len(file.GetName())),
 			recordBodyRule(recordBodyLength(file.GetSha256(), recordHashByteCount, true), "an instruction file sha256 of %d bytes", len(file.GetSha256())),
 		)
 	}
 	for _, truncation := range body.GetTruncations() {
-		checks = append(checks, recordBodyRule(len(truncation) <= recordTruncationByteCount, "a truncation of %d bytes", len(truncation)))
+		checks = append(checks, recordBodyRule(len(truncation) <= settings.TruncationByteCount, "a truncation of %d bytes", len(truncation)))
 	}
 	// QD-900's prompts: none empty, and together within the cap
-	settings := DefaultRecordBodySettings()
 	promptByteCount := 0
 	for _, prompt := range body.GetPrompts() {
 		promptByteCount += len(prompt)
@@ -491,11 +560,12 @@ func recordContextValidate(body *protocol.ContextBody) error {
 
 // change.
 func recordChangeValidate(body *protocol.ChangeBody) error {
+	settings := DefaultRecordBodySettings()
 	checks := []error{
 		recordBodyRule(recordBodyLength(body.GetRepoId(), recordIdByteCount, true), "repo_id of %d bytes", len(body.GetRepoId())),
-		recordBodyRule(len(body.GetProject()) <= recordProjectByteCount, "project of %d bytes", len(body.GetProject())),
-		recordBodyRule(len(body.GetCommits()) <= recordCommitCount, "%d commits", len(body.GetCommits())),
-		recordBodyRule(len(body.GetPaths()) <= recordChangedPathCount, "%d changed paths", len(body.GetPaths())),
+		recordBodyRule(len(body.GetProject()) <= settings.ProjectByteCount, "project of %d bytes", len(body.GetProject())),
+		recordBodyRule(len(body.GetCommits()) <= settings.CommitCount, "%d commits", len(body.GetCommits())),
+		recordBodyRule(len(body.GetPaths()) <= settings.ChangedPathCount, "%d changed paths", len(body.GetPaths())),
 		recordBodyRule(body.GetCapture()&^7 == 0, "capture bits %#x", body.GetCapture()),
 	}
 	for _, path := range body.GetPaths() {

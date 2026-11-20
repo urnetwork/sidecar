@@ -107,7 +107,7 @@ func (self *RecordOpened) KindBody(identityPublicKey []byte, settings *SidecarAg
 // A CopyBody of the entries given, each its sealed entry's Signed with the salt and body it was sealed with, and
 // its entry's version where that is above 1.
 func NewRecordCopyBody(entries []*RecordOpened) (*protocol.CopyBody, error) {
-	if len(entries) == 0 || recordCopyEntryCount < len(entries) {
+	if len(entries) == 0 || DefaultRecordBodySettings().CopyEntryCount < len(entries) {
 		return nil, fmt.Errorf("%w: a copy of %d entries", ErrRecordBodyOverCap, len(entries))
 	}
 	body := &protocol.CopyBody{}
