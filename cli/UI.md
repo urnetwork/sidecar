@@ -193,3 +193,27 @@ ur mail recipients rm <alias> <recipient> [--network=<net>]
 - A receiver whose listen waits on a person shows `ur approve <id>` for another approval-capable device.
 - `recipients rm` asks on /dev/tty first, never through MCP: mail from `<alias>` to `<recipient>` then waits on a
   person again. The design names the command and no arguments, so the pair is this file's.
+
+## ur admin settings (§7.9)
+
+ServiceSettings' Settings fields, each network-wide and signed by an Owner's or Admin's device (owner decisions 302
+and 305; QD-204). §7.9 names no command; this one is the owner's answer to question
+service-settings-7-9-admin-settings-command (QD-1131), in the shape `ur admin directory` has.
+
+```text
+ur admin settings [--network=<name>]    the three as this device honors them
+ur admin settings [--mail-strict=on|off] [--record-cost=on|off] [--record-required=on|off] [--network=<name>]
+                                        sign the options given into the config head, after a yes on /dev/tty
+```
+
+- `mail_strict` is §15.4's `mail.strict`, off by default. `record_cost` says whether per-run cost totals go to the
+  team record as well as each member's vault, on by default. `record_required` says whether each member's
+  `ur install-harness` writes fail-closed hooks, off by default.
+- The options given go into one Signed ServiceSettings, the head's other fields kept, through this device's config
+  writer. The daemon refuses before anything is signed: a device that is no Owner's or Admin's, any call a person did
+  not confirm, and a caller with a harness process among its ancestors. No MCP tool reaches it, so `record_required`
+  is never set through MCP.
+- Every member's `ur status` names `record_cost` in a Team, and `record_required` while it is set. A member's
+  `ur install-harness` reads `record_required` from its running daemon and writes the fail-closed form while it is
+  set; while it is set, the daemon reads a fail-open install as changed, so its runs taint until the install runs
+  again.
