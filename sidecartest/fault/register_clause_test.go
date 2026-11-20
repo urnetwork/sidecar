@@ -263,6 +263,7 @@ func TestEveryRegisteredClauseHasItsTests(t *testing.T) {
 // so QD-1084's sweep left the registration to its owner. A clause here that is registered fails, to come off.
 var clauseUnregisteredRuns = map[string]string{
 	"FS-91 within the window": "fs91_test.go is fi27-cached-head-clause's, in the ops lane",
+	"FS-91 on a cached head":  "fs91_test.go is fi27-cached-head-clause's, in the ops lane, which added it as QD-1084's registry landed",
 }
 
 // The RunClause and CheckClause calls the test files of directory make with a literal row and clause, each as "<row>
