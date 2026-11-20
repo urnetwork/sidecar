@@ -8,8 +8,8 @@
 // document left out it names against the head the push wrote. Each case is also run with a document left out, so a
 // check that holds nothing to an entry cannot pass it. Beside them, the rows and tombstones a push past DirectBytes
 // merges into the shards are judged against the text as a head's entries are, and the rows its merge carried over
-// are not; and an entry above the effective ref version at the pin, which no path version exceeds, enters nothing
-// and, as a tombstone over a live chunk, hides a document (QD-1153).
+// are not; and an entry above the effective ref version at the pin, which no path version exceeds, enters nothing,
+// and as a tombstone is planted whatever the path holds at the pin, over a live chunk a document hidden (QD-1153).
 
 package sidecar
 
@@ -672,4 +672,72 @@ func TestIndexCheckWithTextBoundsEntriesByTheEffectiveRefVersion(t *testing.T) {
 	}
 	_, check, _ = leaving(overlay)
 	check.clean(t, "the tombstone at or below an overlay's bound, entering c.txt")
+}
+
+// QD-1153's bound holds whatever the path holds at the pin. A tombstone of a path's chunk above it where the chunk is
+// not live there (a path removed at the pin, a binary one, a chunk past a text's end) hides nothing yet, but readers
+// take it over every version the path reaches below it, so the path's next text would read hidden with no check
+// raising anything. It is planted: a mismatch with no own entry, nothing live standing for it, and no repair, raised
+// naming the signer and the head its push wrote. On an overlay whose bound covers the same version it is one the path
+// never held, which passes, as the honest removal's tombstone at its own version does.
+func TestIndexCheckWithTextPlantsATombstoneAboveTheBoundOverNoLiveChunk(t *testing.T) {
+	mallory := evsTestId("writer m")
+	overlay := func(world *testBackfillWorld) indexContentRef {
+		return &testOverlayContent{testIndexContent: world.content, baseVersions: 1000}
+	}
+	// mallory enters a.txt and b.txt honestly beside c.bin and removes b.txt honestly; then its push changing a.txt
+	// alone carries a tombstone of path's chunk far above any version path can hold
+	planting := func(content func(world *testBackfillWorld) indexContentRef, path string, chunk uint32) (*testBackfillWorld, *testInRefCheck, *indexEntry) {
+		world := testNewBackfillWorld(false)
+		first := world.commit(t, mallory, testInRefPush,
+			testContentChange{path: "a.txt", content: []byte("honest ledger of turnips")},
+			testContentChange{path: "b.txt", content: []byte("radishes and parsnips")},
+			testContentChange{path: "c.bin", content: []byte{0x00, 0x01, 0x02, 0x00, 0xff, 0xfe}},
+		)
+		testCheckInRef(t, world, mallory, first, false, testOneEntryEach(t, world, first, "a.txt", "b.txt")...).clean(t, "the honest push")
+		b := testOneEntryEach(t, world, first, "b.txt")[0]
+		removing := world.commit(t, mallory, testInRefPush, testContentChange{path: "b.txt"})
+		removal, err := world.content.State(context.Background(), "b.txt", removing.version)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !removal.removed {
+			t.Fatal("b.txt stands after its removal")
+		}
+		gone := &indexEntry{kind: indexEntryTombstone, key: b.key, version: removal.version, timeSeconds: b.timeSeconds}
+		testCheckInRef(t, world, mallory, removing, false, gone).clean(t, "the honest removal")
+		next := world.commit(t, mallory, testInRefPush, testContentChange{path: "a.txt", content: []byte("honest ledger of turnips, kept")})
+		key, err := indexDocKey(world.refKey, world.content.refId, []byte(path), chunk)
+		if err != nil {
+			t.Fatal(err)
+		}
+		planted := &indexEntry{kind: indexEntryTombstone, key: key, version: next.version + 100, timeSeconds: b.timeSeconds}
+		check := testCheckInRefOf(t, world, content(world), mallory, next, false, append(testOneEntryEach(t, world, next, "a.txt"), planted)...)
+		return world, check, planted
+	}
+	for _, at := range []struct {
+		label string
+		path  string
+		chunk uint32
+	}{
+		{label: "removed at the pin", path: "b.txt"},
+		{label: "binary at the pin", path: "c.bin"},
+		{label: "a chunk past its text", path: "a.txt", chunk: 1},
+	} {
+		world, check, planted := planting(func(world *testBackfillWorld) indexContentRef { return world.content }, at.path, at.chunk)
+		head := world.view(t).writeRoot().newestBucket().writer(mallory).head()
+		if len(check.outcome.mismatches) != 1 || check.outcome.mismatches[0].key != planted.key ||
+			check.outcome.mismatches[0].version != planted.version || check.outcome.mismatches[0].path != head.file.path {
+			t.Fatalf("a tombstone above the bound, %s: mismatched %v", at.label, check.mismatched())
+		}
+		if len(check.outcome.own) != 0 || len(check.outcome.repairs) != 0 {
+			t.Fatalf("a tombstone above the bound, %s: %d own entries, repairs %v", at.label, len(check.outcome.own), check.outcome.repairs)
+		}
+		if len(check.raised) != 1 || check.raised[0].Kind != SidecarEventIndexMismatch || check.raised[0].SidecarId == nil ||
+			*check.raised[0].SidecarId != mallory || check.raised[0].Path != head.file.path {
+			t.Fatalf("a tombstone above the bound, %s: raised %+v", at.label, check.raised)
+		}
+		_, check, _ = planting(overlay, at.path, at.chunk)
+		check.clean(t, "a tombstone at or below an overlay's bound, "+at.label)
+	}
 }

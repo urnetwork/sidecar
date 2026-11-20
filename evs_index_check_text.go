@@ -22,8 +22,10 @@
 //	           (DESIGN-DETAILS 16.2.5) may be, but for one above the bound
 //	bound      no path version exceeds the effective ref version it commits at (§11.7's versions row, which evs and
 //	           replaying readers hold), so an entry of a path's chunk above the effective ref version at the pin is
-//	           never honest (QD-1153): a tombstone there over a chunk the text keeps live at the pin is a document
-//	           hidden, and a live one is planted as the live row finds it; a content ref that does not give the bound
+//	           never honest, and is planted (QD-1153): a live one as the live row finds it, and a tombstone whatever
+//	           the path holds at the pin, since newest-wins takes it over every version the path reaches below it, a
+//	           path removed or binary now among them; over a chunk the text keeps live at the pin it is a document
+//	           hidden, and the host's own entry stands for it; a content ref that does not give the bound
 //	           (indexContentVersionBound) is read as no overlay, its pin the bound
 //	omitted    a push that changed its signer's head enters every document the content push beside it changed
 //	           (QD-1098): each doc_key the path's text gives at the push's version, extracted as the writer extracts
@@ -388,18 +390,18 @@ func indexCheckWithText(ctx context.Context, args *indexTextCheckArgs) (*indexTe
 			}
 		case indexEntryTombstone:
 			if bound < entry.version {
-				// above every version the path can hold at the pin: over a chunk the text keeps live there, a document
-				// hidden until the path's version passes it
-				if pinState.version == 0 || pinState.removed || pinState.unopenable {
-					continue
+				// above every version the path can hold at the pin, so planted whatever the path holds there: readers
+				// take it over every version the path reaches below it. Over a chunk the text keeps live at the pin, a
+				// document hidden now, the host's own entry standing for it
+				var own *indexEntry
+				if pinState.version != 0 && !pinState.removed && !pinState.unopenable {
+					entries, err := extract(place.path, pinState, timeMs)
+					if err != nil {
+						return nil, err
+					}
+					own = entries[entry.key]
 				}
-				entries, err := extract(place.path, pinState, timeMs)
-				if err != nil {
-					return nil, err
-				}
-				if live := entries[entry.key]; live != nil {
-					mismatch(one, live)
-				}
+				mismatch(one, own)
 				continue
 			}
 			if state == nil || state.removed || state.unopenable {
