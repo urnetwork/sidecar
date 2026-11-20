@@ -3,8 +3,9 @@
 // The keyless-slot rule (§11.12's push, closure and after rows; owner decisions 61, 400): what a read makes of a key
 // its slot no longer holds. An ERASE's statement names the keys it destroys, and evs commits it before it rewrites
 // any slot it names (§11.12's push row; evsservice's afterCommitted), so a key gone from its slot is either one a
-// committed ERASE destroyed, which reads as erased, or one evs withheld, which alarms tamper. A slot holds the one
-// stored copy of each key (owner decision 400), so nothing else takes a key out of a slot that stands.
+// committed ERASE destroyed, which reads as erased, or one evs withheld, which alarms tamper: a slot that stands is
+// rewritten only to drop erased keys (§11.8's fences row), and it holds the one stored copy of each key (owner decision
+// 400).
 //
 //	judge     each read's keys (evsReadKeys) carry one judge, made at the first key gone, which reads the repo's
 //	          committed ERASEs (EvsRepo.ReadErasures, a fresh read of the erasure ref) when it first judges one. A
