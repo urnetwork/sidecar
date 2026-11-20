@@ -6,11 +6,15 @@
 //
 // --place runs the repo's groups step first (§19.10's groups row; sidecar.EvsRepo.ReseedPlace; QD-1062), which the
 // repo's first admin device to reach the new site runs once: the repo is placed afresh, its group re-formed from this
-// device's keychain, and the repo activated, unless its newest RepoDelete stands unrestored, in which case evs creates
-// it deleted, only its group's form and ladder return, and nothing activates it: it takes its history back while
-// deleted and stays so until `ur evs restore`, after which --place run once more finishes its group, the rotation and
-// the members' return, from the keychain's record. A repo past its restore window is refused there, and nothing is
-// walked. Where another admin's device placed the repo first, this one goes straight on to its walk.
+// device's keychain, and the repo activated, a repo this device's state shows restored being sent its restore first.
+// A repo whose newest RepoDelete stands unrestored is created deleted instead, only its group's form and ladder
+// return, and nothing activates it: it takes its history back while deleted and stays so until it is restored, by
+// `ur evs restore` on any admin's device or by taskworker's reconciler, after which this device's own group client
+// finishes its group, the rotation and the members' return, from the keychain's record at its next sync once gkm
+// takes them (QD-1143), with nothing to run here again. A repo past its restore window is refused there, and nothing
+// is walked. Where another admin's device placed the repo first, this one goes straight on to its walk. The line the
+// step prints says which of these it did, and the mend it made where evs placed repo/ otherwise than this device's
+// state shows (sidecar.EvsReseedPlaced.Mended).
 //
 // --sign also signs and files an EvsReseed over each ref's returned head, naming the recovery by --incident: the
 // admin's statement that the history evs now serves is all that survived, under which a device pinned above it accepts
@@ -91,13 +95,21 @@ type urEvsReseedReply struct {
 	Whole bool     `json:"whole"`
 }
 
-// A groups step's result as a line.
+// A groups step's result as a line: what it did, its restore and its mend among them.
 func urEvsReseedPlacedLine(repoId sidecar.Id, placed *sidecar.EvsReseedPlaced) string {
+	// what comes of a repo placed as deleted once it is restored, which nothing here runs
+	afterRestore := "after which this device finishes its group at its next sync"
 	switch {
 	case placed.PlacedByAnother:
 		return fmt.Sprintf("repo %s: placed by another admin's device, which re-forms its group", repoId)
+	case placed.Deleted && placed.Mended:
+		return fmt.Sprintf("repo %s: placed as deleted, a DELETE mending a place that left repo/ keying, its group's form and ladder returned; it stays deleted until its restore, %s", repoId, afterRestore)
 	case placed.Deleted:
-		return fmt.Sprintf("repo %s: placed as deleted, its group's form and ladder returned; it stays deleted until its restore", repoId)
+		return fmt.Sprintf("repo %s: placed as deleted, its group's form and ladder returned; it stays deleted until its restore, %s", repoId, afterRestore)
+	case placed.Restored && placed.Mended:
+		return fmt.Sprintf("repo %s: placed and restored, its restore mending a place that left repo/ deleted, its group re-formed, active", repoId)
+	case placed.Restored:
+		return fmt.Sprintf("repo %s: placed afresh as restored, its group re-formed, active", repoId)
 	}
 	return fmt.Sprintf("repo %s: placed afresh, its group re-formed, active", repoId)
 }
