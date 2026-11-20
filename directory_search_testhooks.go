@@ -1,8 +1,10 @@
 //go:build sidecar_testhooks && !ios_extension && !js
 
 // A search device following one ref's index on a real evs engine, for the directory's search cases (FS-88's searches
-// case and S13's search_agents step; RECORD-M10-06): the cards ref's index as the directory's writers pushed it beside
-// their cards, read by the search cache, sync engine, policy and engine a composition will run. No composition gives
+// case, S13's search_agents step and FS-87's index case's roll-up leg; RECORD-M10-06): the cards ref's index as the
+// directory's writers pushed it beside their cards, read by the search cache, sync engine, policy and engine a
+// composition will run, the scope carrying the searchable_days a case gives it, as a composition's scope source will
+// read it from the policy that governs the log. No composition gives
 // the sync engine its adapter over EvsRepo yet (search_sync.go's searchSyncSource names it), so this hook stands in
 // for that adapter alone, and in the plainest way one may answer: the head by listing, as a device past its catch-up
 // budget takes it, each file read through EvsRepo's verifying reader (evs_index_store_evs.go) and sealed again for
@@ -14,6 +16,7 @@ package sidecar
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 // What a search device over an evs ref is made of.
@@ -30,6 +33,10 @@ type SearchTestEvsDeviceArgs struct {
 	ReadByteCount int64
 	// The engine's events; nil drops them.
 	Events func(event SidecarEvent)
+	// The repo's searchable_days as an age (SearchScopeRepo.SearchableAge), asked at each search as a composition's
+	// scope source reads the policy that governs the log then, so a rise takes effect at the next search with nothing
+	// fetched or built; nil masks none.
+	SearchableAge func() time.Duration
 }
 
 // One device following an evs ref for search.
@@ -107,7 +114,8 @@ func NewSearchTestEvsDevice(ctx context.Context, args *SearchTestEvsDeviceArgs) 
 	}
 	device.engine, err = NewSearchEngine(&SearchEngineArgs{
 		Settings: args.Settings, Format: format, Cache: device.cache, Sync: device.sync, Policy: device.policy, Gkm: client.args.Gkm,
-		Clock: client.clock, Log: NewNoopLogger(), Scope: &searchTestScope{repoId: repo.repoId, refId: refId, kind: kind},
+		Clock: client.clock, Log: NewNoopLogger(),
+		Scope:  &searchTestScope{repoId: repo.repoId, refId: refId, kind: kind, searchableAge: args.SearchableAge},
 		Events: args.Events,
 	})
 	if err != nil {

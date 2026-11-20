@@ -480,7 +480,7 @@ func (self *searchEngineStream) open(ctx context.Context, scoped []*searchScoped
 		companion := searchRootCompanion(snapshot.manifest.Root)
 		opened := &searchOpenedRef{
 			engine: engine, scoped: entry, repoId: repoId, refId: refId, snap: snapshot, holding: holding, plan: plan,
-			probe: searchProbeOf(snapshot.Versions()),
+			probe: searchProbeOf(snapshot.Versions()), searchableSinceSeconds: searchSearchableSinceSeconds(nowMs, entry.repo.SearchableAge),
 		}
 		if engine.args.Local != nil {
 			opened.local = engine.args.Local(repoId, refId)
@@ -495,7 +495,10 @@ func (self *searchEngineStream) open(ctx context.Context, scoped []*searchScoped
 			probe = func(key [indexIdByteCount]byte) (searchVersionRecord, error) { return searchVersionRecord{}, nil }
 			opened.probe = probe
 		}
-		mask, err := newSearchMask(&searchMaskArgs{probe: probe, companion: companion, refId: refId, local: localNewest})
+		// §16.10's merge row: entries past their log's searchable_days are masked, all's included
+		mask, err := newSearchMask(&searchMaskArgs{
+			probe: probe, companion: companion, refId: refId, local: localNewest, searchableSinceSeconds: opened.searchableSinceSeconds,
+		})
 		if err != nil {
 			snapshot.Release()
 			return err
