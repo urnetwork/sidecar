@@ -407,7 +407,9 @@ func (self *indexEvsStore) Closure(ctx context.Context, closure *indexClosurePus
 
 // See indexEraseStore.
 func (self *indexEvsStore) Erase(ctx context.Context, erase *indexErasePush) error {
-	_, err := self.repo.Erase(ctx, &EvsEraseArgs{ErasureId: erase.erasureId, Keys: erase.keys, Complete: erase.complete, Note: erase.note})
+	_, err := self.repo.Erase(ctx, &EvsEraseArgs{
+		ErasureId: erase.erasureId, Keys: erase.keys, Complete: erase.complete, Note: erase.note, Completion: erase.completion,
+	})
 	if err != nil {
 		return indexEraseRefusalOfEvs(err)
 	}

@@ -154,6 +154,7 @@ relies_on:
   EvsReadRequest.held_drops: 11
   EvsPushFlag.EVS_PUSH_DROP: 256
   EvsPushFlag.EVS_PUSH_CUT: 512
+  EvsPushFlag.EVS_PUSH_COMPLETION: 1024
   EvsLocatorKind.EVS_LOCATOR_SEGMENT: 1
   EvsLocatorKind.EVS_LOCATOR_INLINE: 2
   EvsLocatorKind.EVS_LOCATOR_VERSIONLESS_SEGMENT: 5

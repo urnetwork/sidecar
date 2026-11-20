@@ -96,8 +96,7 @@ type testEraseEvs struct {
 	// Refusals the next CLOSUREs and ERASEs answer.
 	closureRefusals []error
 	eraseRefusals   []error
-	// Takes no completion ERASE, answering it NOTHING_TO_ERASE as evsservice does until question
-	// erasure-completion-erase-evs-cannot-read-complete is answered.
+	// Takes no completion ERASE, answering it NOTHING_TO_ERASE as evs does one whose key a completion named last.
 	refusesCompletions bool
 	// The world's time at each committed ERASE.
 	eraseTimes []time.Time
@@ -276,9 +275,9 @@ func (self *testEraseStore) Progress(ctx context.Context, erasureId Id) (*indexE
 			progress.closures = append(progress.closures, closure.closed)
 		}
 	}
-	for _, erase := range self.evs.erases {
+	for index, erase := range self.evs.erases {
 		if erase.erasureId == erasureId {
-			progress.erases = append(progress.erases, erase.erased)
+			progress.erases = append(progress.erases, self.evs.readErasedWithLock(index))
 		}
 	}
 	return progress, nil
@@ -389,6 +388,9 @@ func (self *testEraseStore) Erase(ctx context.Context, erase *indexErasePush) er
 	for _, key := range erase.keys {
 		live = live || !evs.destroyed[key.SlotId]
 	}
+	if erase.completion && live {
+		return fmt.Errorf("test erase store: INVALID, a completion naming a key still held")
+	}
 	if !live && !(erase.completion && evs.takesCompletionWithLock(erase)) {
 		// NOTHING_TO_ERASE: done, and nothing commits
 		return nil
@@ -406,37 +408,50 @@ func (self *testEraseStore) Erase(ctx context.Context, erase *indexErasePush) er
 	return nil
 }
 
-// Whether the fake takes erase, naming only keys gone, as a completion ERASE (QD-1132): it says complete; an earlier
-// ERASE of its erasure named each key it names, and the newest ERASE naming each is no completion, which is what evs
-// can see of it (question erasure-completion-erase-evs-cannot-read-complete's option 1); and the erasure's newest ERASE
-// does not say complete already, which only a reader of the note can. The lock held.
+// Whether evs takes erase, a completion ERASE naming only keys gone, as QD-1137 has it: it says complete, an earlier
+// ERASE named each key it names, and the newest such is no completion. The lock held.
 func (self *testEraseEvs) takesCompletionWithLock(erase *indexErasePush) bool {
 	if self.refusesCompletions || !erase.complete || len(erase.keys) == 0 {
 		return false
 	}
-	ownKeys := map[EvsErasedKey]bool{}
 	newestCompletion := map[EvsErasedKey]bool{}
-	complete := false
 	for _, committed := range self.erases {
 		for _, key := range committed.erased.keys {
 			newestCompletion[*key] = committed.completion
-			if committed.erasureId == erase.erasureId {
-				ownKeys[*key] = true
-			}
 		}
-		if committed.erasureId == erase.erasureId {
-			complete = committed.erased.complete
-		}
-	}
-	if complete {
-		return false
 	}
 	for _, key := range erase.keys {
-		if !ownKeys[*key] || newestCompletion[*key] {
+		if completion, named := newestCompletion[*key]; !named || completion {
 			return false
 		}
 	}
 	return true
+}
+
+// The committed ERASE at index as a reader reads it (QD-1137's readers): a completion ends its erasure only where an
+// earlier ERASE of its erasure named each key it names, and reads as completing nothing otherwise. The lock held.
+func (self *testEraseEvs) readErasedWithLock(index int) *indexEraseErased {
+	committed := self.erases[index]
+	if !committed.completion {
+		return committed.erased
+	}
+	named := map[EvsErasedKey]bool{}
+	for _, earlier := range self.erases[:index] {
+		if earlier.erasureId != committed.erasureId {
+			continue
+		}
+		for _, key := range earlier.erased.keys {
+			named[*key] = true
+		}
+	}
+	for _, key := range committed.erased.keys {
+		if !named[*key] {
+			read := *committed.erased
+			read.complete = false
+			return &read
+		}
+	}
+	return committed.erased
 }
 
 // FS-78's sweep: no stored version under a key a reader can obtain holds an entry listed takes. Stored versions are the
@@ -1636,9 +1651,9 @@ func TestIndexResumeEndsAnErasureWithItsOrphanedClosuresErase(t *testing.T) {
 	world.evs.sweep(t, world.listed(t))
 }
 
-// QD-1132's question: evs cannot read an ERASE's note, and until the question is answered it refuses a completion
-// as NOTHING_TO_ERASE, as any ERASE whose keys are gone. The rewrite reads evs's state back after it, finds the
-// erasure incomplete, and leaves it rewriting: nothing reads done that evs does not show complete.
+// A completion evs does not take, as one whose key a completion named last (QD-1137), is answered NOTHING_TO_ERASE as
+// any ERASE whose keys are gone. The rewrite reads evs's state back after it, finds the erasure incomplete, and leaves
+// it rewriting: nothing reads done that evs does not show complete.
 func TestIndexRewriteLeavesAnErasureRewritingWhereEvsTakesNoCompletion(t *testing.T) {
 	ctx := context.Background()
 	world := testEraseWorldWithCopies(t)

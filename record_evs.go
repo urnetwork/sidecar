@@ -1197,6 +1197,10 @@ func recordEvsEraseDigest(repoId Id, erase *RecordStreamErase) []byte {
 	for _, key := range erase.Keys {
 		recordEvsDigestWrite(digest, key.SlotId[:], binary.BigEndian.AppendUint32(nil, key.KeyIndex))
 	}
+	if erase.Completion {
+		// a completion's statement is another (QD-1137); every other ERASE's digest stays as journals hold it
+		recordEvsDigestWrite(digest, []byte("completion"))
+	}
 	return digest.Sum(nil)
 }
 
@@ -1212,7 +1216,7 @@ func (self *RecordEvsStreams) Erase(ctx context.Context, repoId Id, erase *Recor
 		return nil, err
 	}
 	if journal == nil {
-		args := &EvsEraseArgs{ErasureId: erase.ErasureId, Complete: erase.Complete, Note: erase.SealedNote}
+		args := &EvsEraseArgs{ErasureId: erase.ErasureId, Complete: erase.Complete, Note: erase.SealedNote, Completion: erase.Completion}
 		slotMaxKeyCount := DefaultEvsFormatSettings().SlotMaxKeyCount
 		for _, key := range erase.Keys {
 			if uint64(slotMaxKeyCount) <= uint64(key.KeyIndex) {

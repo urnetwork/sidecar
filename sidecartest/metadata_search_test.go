@@ -20,7 +20,7 @@ var searchMetadataValues = []struct {
 }{
 	{value: "EvsHead.index_epoch", row: "evs-3", words: []string{"index_epoch, the version of its newest CUT"}},
 	{value: "EvsPush.index_epoch", row: "evs-12", words: []string{"an index push's or CUT's index_epoch"}},
-	{value: "EvsPushFlag.EVS_PUSH_CUT", row: "evs-12", words: []string{"CLOSURE, DROP or CUT"}},
+	{value: "EvsPushFlag.EVS_PUSH_CUT", row: "evs-12", words: []string{"CLOSURE, DROP, CUT or COMPLETION"}},
 	{value: "EvsEntryVersion.versioning", row: "evs-11", words: []string{"versioning setting (0 kept, 1 versionless, 2 the search index's"}},
 	{value: "EvsVersioning.EVS_VERSIONING_INDEX", row: "evs-11", words: []string{"2 the search index's"}},
 }

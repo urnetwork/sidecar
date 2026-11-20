@@ -64,7 +64,10 @@ const (
 		uint32(protocol.EvsPushFlag_EVS_PUSH_BASE) | uint32(protocol.EvsPushFlag_EVS_PUSH_IMMUTABLE) |
 		uint32(protocol.EvsPushFlag_EVS_PUSH_CONSUME) | uint32(protocol.EvsPushFlag_EVS_PUSH_PATH_EPOCH) |
 		uint32(protocol.EvsPushFlag_EVS_PUSH_ERASE) | uint32(protocol.EvsPushFlag_EVS_PUSH_CLOSURE)
-	evsFormat2PushFlags = uint32(protocol.EvsPushFlag_EVS_PUSH_DROP) | uint32(protocol.EvsPushFlag_EVS_PUSH_CUT)
+	evsFormat2PushFlags = uint32(protocol.EvsPushFlag_EVS_PUSH_DROP) | uint32(protocol.EvsPushFlag_EVS_PUSH_CUT) |
+		uint32(protocol.EvsPushFlag_EVS_PUSH_COMPLETION)
+	// A completion ERASE's flags: ERASE with COMPLETION and no other (§11.12's push row; QD-1137).
+	evsCompletionPushFlags = uint32(protocol.EvsPushFlag_EVS_PUSH_ERASE) | uint32(protocol.EvsPushFlag_EVS_PUSH_COMPLETION)
 )
 
 // A Signed EvsPush as received, held to format 1's shape: its bytes and their hash, the Signed wrapper, the push, its
@@ -173,7 +176,7 @@ func (self *EvsStatement) checkShape(format2 bool) error {
 	flags := push.GetFlags()
 	knownFlags := evsFormat1PushFlags
 	if !format2 && (flags&evsFormat2PushFlags != 0 || len(push.GetDropSha256()) != 0 || push.GetIndexEpoch() != 0) {
-		return fmt.Errorf("%w: DROP, CUT or their fields", ErrEvsFormatUnsupported)
+		return fmt.Errorf("%w: DROP, CUT, COMPLETION or their fields", ErrEvsFormatUnsupported)
 	}
 	if format2 {
 		knownFlags |= evsFormat2PushFlags
@@ -186,6 +189,9 @@ func (self *EvsStatement) checkShape(format2 bool) error {
 		}
 		if drop && flags != uint32(protocol.EvsPushFlag_EVS_PUSH_DROP) {
 			return fmt.Errorf("%w: a DROP with other flags", ErrEvsPushInvalid)
+		}
+		if flags&uint32(protocol.EvsPushFlag_EVS_PUSH_COMPLETION) != 0 && flags != evsCompletionPushFlags {
+			return fmt.Errorf("%w: COMPLETION without ERASE, or with another flag", ErrEvsPushInvalid)
 		}
 	}
 	if flags&^knownFlags != 0 {
