@@ -126,6 +126,10 @@ type Operation struct {
 	// later came after it: what FI-2 orders an attempt against a store write by, such as the repo/ CAS that began a
 	// shred (TEST-M2-04). 0 where the recorder does not know it, which no check takes as before anything.
 	StoreArrival int
+	// How many head cache requests the Net's record of them held when it was called (Net.HeadCacheHistory), so every
+	// one at that index or later came after it: what FI-27 finds a push's cached read of a reuse source's head by
+	// (QD-1146). Known where StoreArrival is, and 0 then only for a call before the cache's first request.
+	CacheArrival int
 }
 
 // nil for an operation a check can read; otherwise what is wrong with it.
@@ -313,6 +317,7 @@ func (self *EvsWorld) History(name string) *History {
 			Call:         attempt.Call,
 			Return:       attempt.Return,
 			StoreArrival: attempt.StoreArrival,
+			CacheArrival: attempt.CacheArrival,
 		}
 		answer := attempt.Answer
 		switch {
