@@ -851,6 +851,8 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		StateDirectory: stateDirectory,
 		Executable:     urHarnessExecutable,
 		Ingest:         settings.Ingest,
+		// while a hosted network's record_required is set, a fail-open install reads changed (status_settings.go)
+		RecordRequired: func() bool { return urDaemonRecordRequired(daemon.Sidecars()) },
 	}).Check)
 	// ur hook's hook.event, which shares the server's run bindings (§16.7)
 	for _, method := range mcpServer.DaemonMethods() {
