@@ -3063,7 +3063,8 @@ func (x *MailOutcome) GetTlsLevel() uint32 {
 
 type MailOutcomeRecord struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Outcomes      []*MailOutcome         `protobuf:"bytes,1,rep,name=outcomes,proto3" json:"outcomes,omitempty"` // one a recipient domain
+	Outcomes      []*MailOutcome         `protobuf:"bytes,1,rep,name=outcomes,proto3" json:"outcomes,omitempty"`           // one a recipient domain
+	SendId        []byte                 `protobuf:"bytes,2,opt,name=send_id,json=sendId,proto3" json:"send_id,omitempty"` // the send's 16-byte id, its o/ entry's Message-ID left side (QD-1122), which
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3101,6 +3102,13 @@ func (*MailOutcomeRecord) Descriptor() ([]byte, []int) {
 func (x *MailOutcomeRecord) GetOutcomes() []*MailOutcome {
 	if x != nil {
 		return x.Outcomes
+	}
+	return nil
+}
+
+func (x *MailOutcomeRecord) GetSendId() []byte {
+	if x != nil {
+		return x.SendId
 	}
 	return nil
 }
@@ -3486,9 +3494,10 @@ const file_protocol_mail_proto_rawDesc = "" +
 	"reply_code\x18\x06 \x01(\rR\treplyCode\x12$\n" +
 	"\x0eretry_after_ms\x18\a \x01(\rR\fretryAfterMs\x12$\n" +
 	"\x0eupdate_time_ms\x18\b \x01(\x04R\fupdateTimeMs\x12\x1b\n" +
-	"\ttls_level\x18\t \x01(\rR\btlsLevel\"O\n" +
+	"\ttls_level\x18\t \x01(\rR\btlsLevel\"h\n" +
 	"\x11MailOutcomeRecord\x12:\n" +
-	"\boutcomes\x18\x01 \x03(\v2\x1e.urnetwork.sidecar.MailOutcomeR\boutcomes\"\x8b\x03\n" +
+	"\boutcomes\x18\x01 \x03(\v2\x1e.urnetwork.sidecar.MailOutcomeR\boutcomes\x12\x17\n" +
+	"\asend_id\x18\x02 \x01(\fR\x06sendId\"\x8b\x03\n" +
 	"\x10MailProverRecord\x121\n" +
 	"\x15smtp_data_proof_bytes\x18\x01 \x01(\x04R\x12smtpDataProofBytes\x12'\n" +
 	"\x10data_bytes_per_s\x18\x02 \x01(\x04R\rdataBytesPerS\x12&\n" +

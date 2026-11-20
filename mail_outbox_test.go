@@ -421,7 +421,7 @@ func TestMailSendQueuesTheInternetPartAtTheOutbox(t *testing.T) {
 	if bytes.Contains(file.Message, []byte("hidden@")) {
 		t.Fatal("the queued message names its Bcc")
 	}
-	if sendId, ok := mailOutboxSendIdOf(file.Message); !ok || sendId != result.SendId {
+	if sendId, ok := MailOutboxSendIdOf(file.Message); !ok || sendId != result.SendId {
 		t.Fatal("the message's id is not the send's")
 	}
 	deposits := parts.snapshot()
