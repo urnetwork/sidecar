@@ -20,7 +20,12 @@
 //	send      SendSmtp over the same stream, its parts and SHTS through the stream's SmtpProofChannel; ctx
 //	          ends it at any point, the stream reset under it, so a 2 h DATA send stays cancellable
 //	report    the post-TLS mode goes to the pin store, and SmtpOutcome (§14.4's step 5) to the edge's listener
-//	          after the stream ends
+//	          after the stream ends, a NO_REPLY envelope
+//
+// A daemon's stream reaches its edge's listener, the client its ur/ ticket names, through §6's dispatcher with no
+// Hello, which an edge carries no binding to answer (§6.4, owner decision 624): the parts and SHTS as calls marked
+// for the edge (smtp_channel.go) and the outcome by Subprotocol.SendEdge. The verified ticket is the edge's identity,
+// as for the stream.
 //
 // An empty key set makes no connection: the host has no ready family, and the send reports NoProver, which the
 // sender queues (DESIGN-DETAILS 3.7). An edge crash ends the stream: one that ends before the preamble's answer
@@ -43,6 +48,8 @@ import (
 	"net"
 	"sync/atomic"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/urnetwork/sidecar/protocol"
 )
 
@@ -55,9 +62,6 @@ const (
 )
 
 var (
-	// The send's SmtpOutcome could not go: it rides a NO_REPLY envelope to the ticket's listener, which no
-	// dispatcher method sends yet, so a daemon's stream drops it. The outcome only tightens (§14.8).
-	errSmtpOutcomeUnsent = errors.New("smtp outcome: no way to send it yet")
 	// The edge issued values outside their forms: a send_id, MX host or HELO name a send cannot use.
 	errSmtpPreambleIssued = errors.New("smtp preamble: the edge issued values outside their forms")
 	// What a connection was handed does not hold together.
@@ -83,6 +87,15 @@ type SmtpEdgeDialer interface {
 	DialSmtpEdge(ctx context.Context) (SmtpEdgeStream, error)
 }
 
+// What a daemon's stream reaches its edge's listener through: §6's dispatcher of the generation the stream opened on
+// (Subprotocol), or a test's.
+type smtpEdgeSubprotocol interface {
+	smtpEdgeCaller
+	SendEdge(ctx context.Context, clientId Id, messageType protocol.MessageType, body []byte) error
+}
+
+var _ smtpEdgeSubprotocol = (*Subprotocol)(nil)
+
 // SmtpEdgeDialer over a Sidecar: Sidecar.Dial of ur/smtpedge, whose ticket names the edge's client, and the
 // RPCs to that client through the dispatcher of the generation the stream opened on.
 type sidecarSmtpEdgeDialer struct {
@@ -101,42 +114,57 @@ func (self *sidecarSmtpEdgeDialer) DialSmtpEdge(ctx context.Context) (SmtpEdgeSt
 	if err != nil {
 		return nil, err
 	}
-	edgeClientId, err := IdFromBytes(conn.Ticket().GetListenerClientId())
-	if err != nil {
-		conn.Abort()
-		return nil, err
-	}
-	var caller smtpEdgeCaller
+	var subprotocol smtpEdgeSubprotocol
 	if component := self.sidecar.socketComponent(); component != nil {
 		if generation, _, _ := component.current(); generation != nil && generation.subprotocol != nil {
-			caller = generation.subprotocol
+			subprotocol = generation.subprotocol
 		}
 	}
-	if caller == nil {
+	if subprotocol == nil {
 		conn.Abort()
 		return nil, &SocketCodeError{Err: ErrSocketUnavailable}
 	}
-	return &sidecarSmtpEdgeStream{SocketConn: conn, caller: caller, edgeClientId: edgeClientId, settings: self.settings}, nil
+	stream, err := newSidecarSmtpEdgeStream(conn, subprotocol, self.settings)
+	if err != nil {
+		// a nil interface, never one holding a nil stream
+		return nil, err
+	}
+	return stream, nil
 }
 
 // One ur/smtpedge stream of a Sidecar.
 type sidecarSmtpEdgeStream struct {
 	*SocketConn
-	caller       smtpEdgeCaller
+	subprotocol smtpEdgeSubprotocol
+	// the listener conn's ticket names: the edge that holds the connection
 	edgeClientId Id
 	settings     *SmtpSenderSettings
 }
 
-// See SmtpEdgeStream. The calls go to the ticket's listener. Subprotocol.Call runs §6.4's Hello first, which
-// an edge never answers, so until Call admits a ur/ listener's client as OpenStream's Edge does, each call
-// fails and nothing past the handshake reaches the MX.
-func (self *sidecarSmtpEdgeStream) ProofChannel(sendId []byte) SmtpProofChannel {
-	return newSmtpProofChannel(self.caller, self.edgeClientId, sendId, self.settings)
+// The stream over conn, a dialed ur/smtpedge stream, reaching the listener its ticket names through subprotocol,
+// under settings. A ticket that names no listener aborts conn.
+func newSidecarSmtpEdgeStream(conn *SocketConn, subprotocol smtpEdgeSubprotocol, settings *SmtpSenderSettings) (*sidecarSmtpEdgeStream, error) {
+	edgeClientId, err := IdFromBytes(conn.Ticket().GetListenerClientId())
+	if err != nil {
+		conn.Abort()
+		return nil, err
+	}
+	return &sidecarSmtpEdgeStream{SocketConn: conn, subprotocol: subprotocol, edgeClientId: edgeClientId, settings: settings}, nil
 }
 
-// See SmtpEdgeStream: not yet, so the outcome is dropped (errSmtpOutcomeUnsent).
+// See SmtpEdgeStream. The calls go to the ticket's listener, marked for an edge, so they run no Hello.
+func (self *sidecarSmtpEdgeStream) ProofChannel(sendId []byte) SmtpProofChannel {
+	return newSmtpProofChannel(self.subprotocol, self.edgeClientId, sendId, self.settings)
+}
+
+// See SmtpEdgeStream: a NO_REPLY envelope of type SMTP_OUTCOME to the ticket's listener (SendEdge), which waits for
+// connect until ctx ends. nil says connect took it, never that the edge did.
 func (self *sidecarSmtpEdgeStream) SendOutcome(ctx context.Context, outcome *protocol.SmtpOutcome) error {
-	return errSmtpOutcomeUnsent
+	body, err := proto.Marshal(outcome)
+	if err != nil {
+		return err
+	}
+	return self.subprotocol.SendEdge(ctx, self.edgeClientId, protocol.MessageType_SMTP_OUTCOME, body)
 }
 
 // One send a connection runs.
@@ -448,7 +476,7 @@ func (self *smtpConnection) runStream(
 	stopOutcome()
 	outcomeCancel()
 	result.OutcomeSent = err == nil
-	if err != nil && !errors.Is(err, errSmtpOutcomeUnsent) && self.log.V(1).Enabled() {
+	if err != nil && self.log.V(1).Enabled() {
 		self.log.Infof("[smtp]send %s: the outcome did not go: %v\n", barrierKey, err)
 	}
 	return false
