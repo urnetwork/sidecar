@@ -182,6 +182,195 @@ func TestAclPolicyTestOverTheDocumentAlone(t *testing.T) {
 	}
 }
 
+// Team's starting document's grant 1 (acl_team_start.hujson): a member's own devices dial each other and route through
+// each other, and it names no prefix.
+const aclTestsGrant1 = `{ "src": ["autogroup:member", "autogroup:untagged"], "dst": ["autogroup:self"], "via": ["autogroup:self"],
+    "allow": ["dial", "route"] }`
+
+// The line a deny of an ip: range fails with under a route rule that names no prefix (owner decision 615).
+func aclTestsNoPrefixFailure(test int, check int, grant int) string {
+	return fmt.Sprintf("tests[%d].deny[%d]: allowed by grants[%d], which names no prefix: a sidecar among both its via "+
+		"subjects and its destinations could serve any range by its routes in force", test, check, grant)
+}
+
+// Owner decision 615 under grant 1, which names no prefix: a member's ip: deny fails naming grant 1, for a member with a
+// device, a new member and an app device alike, since a device of the member's own could serve any range; an accept of
+// the range still fails; a tagged source, which grant 1 does not take, passes; and grant 1's subject checks judge as
+// before. The failures name no value.
+func TestAclPolicyTestRunFailsAMembersIpDenyUnderGrant1(t *testing.T) {
+	policy := `{
+  "grants": [ ` + aclTestsGrant1 + ` ],
+  "tests": [
+    { "src": "dana@tests.example", "deny": ["ip:192.0.2.0/24#route"] },
+    { "src": "dana@tests.example", "accept": ["ip:192.0.2.0/24#route"] },
+    { "src": "autogroup:member", "deny": ["ip:198.51.100.0/24#route"] },
+    { "src": "autogroup:untagged", "deny": ["ip:203.0.113.0/24#route"] },
+    { "src": "tag:db", "deny": ["ip:192.0.2.0/24#route"] },
+    { "src": "dana@tests.example", "accept": ["autogroup:self#route"], "deny": ["autogroup:member#route"] },
+  ],
+}`
+	report := newAclTestsWorld(t, policy).run(t)
+	want := []string{
+		aclTestsNoPrefixFailure(0, 0, 0),
+		"tests[1].accept[0]: refused: no_grant",
+		aclTestsNoPrefixFailure(2, 0, 0),
+		aclTestsNoPrefixFailure(3, 0, 0),
+	}
+	if got := aclTestsFailureLines(report); !slices.Equal(got, want) {
+		t.Errorf("failures %q", got)
+	}
+	if err := report.Err(); !errors.Is(err, ErrAclPolicyTests) || strings.Contains(err.Error(), "tests.example") || strings.Contains(err.Error(), "192.0.2") {
+		t.Errorf("the error names a value: %v", err)
+	}
+}
+
+// Grant 1 narrowed, by an ip: destination, which it is then judged by, or to no route, passes a member's ip: deny of
+// another range.
+func TestAclPolicyTestRunPassesAnIpDenyOnceGrant1IsNarrowed(t *testing.T) {
+	tests := `"tests": [
+    { "src": "dana@tests.example", "deny": ["ip:192.0.2.0/24#route"] },
+    { "src": "autogroup:member", "deny": ["ip:192.0.2.0/24#route"] },
+    { "src": "autogroup:untagged", "deny": ["ip:192.0.2.0/24#route"] },
+  ]`
+	for _, grant := range []string{
+		`{ "src": ["autogroup:member", "autogroup:untagged"], "dst": ["autogroup:self", "ip:198.51.100.0/24"], "via": ["autogroup:self"],
+    "allow": ["dial", "route"] }`,
+		`{ "src": ["autogroup:member", "autogroup:untagged"], "dst": ["autogroup:self"], "allow": ["dial"] }`,
+	} {
+		report := newAclTestsWorld(t, `{ "grants": [ `+grant+` ], `+tests+` }`).run(t)
+		if !report.Passed() || report.CheckCount != 3 {
+			t.Errorf("under %s: %d checks, failures %q", grant, report.CheckCount, aclTestsFailureLines(report))
+		}
+	}
+}
+
+// A route rule with prefixes is judged by them as before: an accept they hold whole passes and a wider one fails, a deny
+// they overlap fails, naming no grant, one they miss passes, and a source the rule does not take passes every deny.
+func TestAclPolicyTestRunJudgesARouteRuleWithPrefixesByThem(t *testing.T) {
+	policy := `{
+  "groups": { "group:eng": ["dana@tests.example"] },
+  "grants": [ { "src": ["group:eng"], "dst": ["ip:198.51.100.0/25"], "via": ["user:amir@tests.example"], "allow": ["route"] } ],
+  "tests": [
+    { "src": "dana@tests.example", "accept": ["ip:198.51.100.0/26#route"], "deny": ["ip:198.51.100.128/25#route", "ip:192.0.2.0/24#route"] },
+    { "src": "dana@tests.example", "accept": ["ip:198.51.100.0/24#route"] },
+    { "src": "dana@tests.example", "deny": ["ip:198.51.100.64/26#route", "ip:198.51.100.0/24#route"] },
+    { "src": "amir@tests.example", "deny": ["ip:198.51.100.0/25#route"] },
+  ],
+}`
+	report := newAclTestsWorld(t, policy).run(t)
+	want := []string{
+		"tests[1].accept[0]: refused: no_grant",
+		"tests[2].deny[0]: allowed by rule",
+		"tests[2].deny[1]: allowed by rule",
+	}
+	if got := aclTestsFailureLines(report); !slices.Equal(got, want) {
+		t.Errorf("failures %q", got)
+	}
+}
+
+// A route rule that names no prefix, but names for the source no sidecar among both its via subjects and its
+// destinations, opens nothing new (§8.4's readings), so a deny passes: dana routes through her own devices to amir's,
+// never hers, and through group:eng's devices to tag:db's, which carry no member's atoms.
+func TestAclPolicyTestRunPassesAnIpDenyWhereNoSidecarIsBothViaAndDestination(t *testing.T) {
+	policy := `{
+  "groups": { "group:eng": ["dana@tests.example"] },
+  "tagOwners": { "tag:db": ["autogroup:admin"] },
+  "grants": [
+    { "src": ["user:dana@tests.example"], "dst": ["user:amir@tests.example"], "via": ["autogroup:self"], "allow": ["route"] },
+    { "src": ["user:dana@tests.example"], "dst": ["tag:db"], "via": ["group:eng"], "allow": ["route"] },
+  ],
+  "tests": [ { "src": "dana@tests.example", "deny": ["ip:192.0.2.0/24#route"] } ],
+}`
+	if report := newAclTestsWorld(t, policy).run(t); !report.Passed() {
+		t.Errorf("failures %q", aclTestsFailureLines(report))
+	}
+}
+
+// A sidecar of a class the writer's state holds none of still fails a deny (owner decision 615), since one may be
+// admitted after the save: a tag:router sidecar, through itself to itself; one carrying both tag:router and tag:db,
+// through the one to the other; a device of mei's, whose route may name a rule that names no via; and a tag:router
+// sidecar noor sponsors, through noor's own devices.
+func TestAclPolicyTestRunFailsAnIpDenyThroughASidecarNoneHoldsYet(t *testing.T) {
+	policy := `{
+  "tagOwners": { "tag:db": ["autogroup:admin"], "tag:router": ["autogroup:admin"] },
+  "grants": [
+    { "src": ["user:dana@tests.example"], "dst": ["tag:router"], "via": ["tag:router"], "allow": ["route"] },
+    { "src": ["user:amir@tests.example"], "dst": ["tag:db"], "via": ["tag:router"], "allow": ["route"] },
+    { "src": ["user:mei@tests.example"], "dst": ["autogroup:self"], "allow": ["route"] },
+    { "src": ["user:noor@tests.example"], "dst": ["tag:router"], "via": ["autogroup:self"], "allow": ["route"] },
+  ],
+  "tests": [
+    { "src": "dana@tests.example", "deny": ["ip:192.0.2.0/24#route"] },
+    { "src": "amir@tests.example", "deny": ["ip:192.0.2.0/24#route"] },
+    { "src": "mei@tests.example", "deny": ["ip:192.0.2.0/24#route"] },
+    { "src": "noor@tests.example", "deny": ["ip:192.0.2.0/24#route"] },
+  ],
+}`
+	world := newAclTestsWorld(t, policy)
+	world.world.tag("router")
+	world.world.member("mei@tests.example", bridge.MemberRole_MEMBER_ROLE_MEMBER)
+	world.world.member("noor@tests.example", bridge.MemberRole_MEMBER_ROLE_MEMBER)
+	report := world.run(t)
+	want := []string{
+		aclTestsNoPrefixFailure(0, 0, 0),
+		aclTestsNoPrefixFailure(1, 0, 1),
+		aclTestsNoPrefixFailure(2, 0, 2),
+		aclTestsNoPrefixFailure(3, 0, 3),
+	}
+	if got := aclTestsFailureLines(report); !slices.Equal(got, want) {
+		t.Errorf("failures %q", got)
+	}
+}
+
+// A tagged source's member is its sponsor: autogroup:self names, for an agent mei sponsors, another device of mei's,
+// which may serve any range though mei has none yet, and is the one sidecar both a via and a member destination.
+func TestAclPolicyTestRunFailsAnIpDenyThroughAnotherDeviceOfASponsor(t *testing.T) {
+	world := newAclTestsWorld(t, `{}`)
+	mei := world.world.member("mei@tests.example", bridge.MemberRole_MEMBER_ROLE_MEMBER)
+	agent := world.world.agent("mei router", mei, "router")
+	world.world.setPolicy(t, `{
+  "tagOwners": { "tag:router": ["autogroup:member"] },
+  "grants": [ { "src": ["tag:router"], "dst": ["autogroup:member"], "via": ["autogroup:self"], "allow": ["route"] } ],
+  "tests": [ { "src": "sidecar:`+agent.String()+`", "deny": ["ip:192.0.2.0/24#route"] } ],
+}`)
+	report := world.run(t)
+	if got := aclTestsFailureLines(report); !slices.Equal(got, []string{aclTestsNoPrefixFailure(0, 0, 0)}) {
+		t.Errorf("failures %q", got)
+	}
+}
+
+// A route rule's ports meet a check's before its prefixes do: grant 1 limited to tcp:22 passes a deny at port 443 and
+// fails one at port 22 or at every port.
+func TestAclPolicyTestRunMeetsPortsBeforeARuleNamingNoPrefix(t *testing.T) {
+	policy := `{
+  "grants": [ { "src": ["autogroup:member"], "dst": ["autogroup:self"], "via": ["autogroup:self"], "allow": ["route"], "ip": ["tcp:22"] } ],
+  "tests": [
+    { "src": "dana@tests.example", "deny": ["ip:192.0.2.0/24#route:tcp:443"] },
+    { "src": "dana@tests.example", "deny": ["ip:192.0.2.0/24#route:tcp:22", "ip:192.0.2.0/24#route"] },
+  ],
+}`
+	report := newAclTestsWorld(t, policy).run(t)
+	want := []string{aclTestsNoPrefixFailure(1, 0, 0), aclTestsNoPrefixFailure(1, 1, 0)}
+	if got := aclTestsFailureLines(report); !slices.Equal(got, want) {
+		t.Errorf("failures %q", got)
+	}
+}
+
+// With no state a member the document names has no device, and another of the member's own may still serve any range.
+func TestAclPolicyTestOverTheDocumentAloneFailsAnIpDenyUnderGrant1(t *testing.T) {
+	policy := `{
+  "grants": [ ` + aclTestsGrant1 + ` ],
+  "tests": [ { "src": "dana@tests.example", "deny": ["ip:192.0.2.0/24#route"] } ],
+}`
+	report, err := AclPolicyTestOver([]byte(policy), nil, nil, aclTestNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := aclTestsFailureLines(report); !slices.Equal(got, []string{aclTestsNoPrefixFailure(0, 0, 0)}) {
+		t.Errorf("failures %q", got)
+	}
+}
+
 // autogroup:tagged stands for an admitted tagged sidecar, as a source and as a destination: its accepts pass and its
 // denies fail where a grant takes the class. Its stand-in once carried no tag and no member, which is no admission, so
 // every such deny passed unseen.
