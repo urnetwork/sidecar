@@ -71,9 +71,9 @@ type closureSeam struct {
 	reason string
 }
 
-// The legs' deliberate seams, in the order they were reviewed (QD-1063, QD-1065). Each hook exists so that the file
-// setting it can stay off a leg, and none of these serves the forwarding role, which runs only IP and port forwarding
-// (owner decision 197). An entry joins in the commit that reviews its seam, never to quiet the closure.
+// The legs' deliberate seams, in the order they were reviewed (QD-1063, QD-1065, QD-1145). Each hook exists so that
+// the file setting it can stay off a leg, and none of these serves the forwarding role, which runs only IP and port
+// forwarding (owner decision 197). An entry joins in the commit that reviews its seam, never to quiet the closure.
 var iosExtensionLegSeams = []*closureSeam{
 	{
 		name:   "evs_read_provenance.go",
@@ -102,6 +102,10 @@ var iosExtensionLegSeams = []*closureSeam{
 	{
 		name:   "record_agent_body.go",
 		reason: "init sets record_seal.go's recordAgentBodySealer, record_reader.go's recordAgentBodyOpener and record_writer.go's recordSidecarAgentSigner (QD-1065): on the legs every record entry seals version 1, and a version-2 entry reads generically, its agent body unopened",
+	},
+	{
+		name:   "evs_read_erased.go",
+		reason: "init sets evs_reconstruct.go's newEvsErasureJudge (QD-1145): the legs read no erasure ref, so there a key gone from its slot alarms tamper as it did before, and the forwarding role links no ERASE reader",
 	},
 }
 

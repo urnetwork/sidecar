@@ -26,7 +26,9 @@
 //	(c)  Fs92SealedHold, a sealed hold placed before the DROP in a record repo, run held and not
 //	     (Fs92SealedHoldTwins): every answer the network's devices took from evs, the admin's listing, the listed
 //	     versions' states and reads, and the bill equal the twin's (HoldAnswers). An ERASE of y.txt's keys under the
-//	     hold destroys them at once, its slots rewritten without them when the ERASE answers and its ciphertext stored
+//	     hold destroys them at once, its slots rewritten without them when the ERASE answers and its ciphertext stored;
+//	     the reader reads y.txt's version as erased, nothing shown and no alarm, right after the ERASE and again at the
+//	     run's end, as the twin's reader does (EvsWorldReadsErased; evs_read_erased.go's keyless-slot rule)
 //
 // FI-5, FI-16, FI-17 and FI-27 are checked after every step with the world's own checks. FI-13's oracle is not bound
 // (QUOTA-M2-13), so FI(13) fails closed and is not named: its (c) clause here is the schedules' own steps on the fake
@@ -525,6 +527,20 @@ func (self *EvsWorld) BillAnswers(mark *EvsWorldStoredMark, answers *HoldAnswers
 
 // ----- the ERASE under a hold -----
 
+// A ReadVersionEnds check: the version reads as erased, its key destroyed by a committed ERASE, nothing of it shown
+// (sidecar.ErrEvsErased). The world's checks hold that the read raised no alarm.
+func EvsWorldReadsErased() func(read []byte, err error) error {
+	return func(read []byte, err error) error {
+		if !errors.Is(err, sidecar.ErrEvsErased) {
+			return errors.New("not erased")
+		}
+		if len(read) != 0 {
+			return fmt.Errorf("%d bytes of an erased version shown", len(read))
+		}
+		return nil
+	}
+}
+
 // A step action: device erases every key path's versions name (EvsRepo.SlotKeysOf, then Erase), which must commit;
 // when it answers, each slot holds none of the erased keys, and every segment of the repo stored before stays.
 func (self *EvsWorld) EraseAtOnce(device string, path string) func(ctx context.Context, net *Net) error {
@@ -894,8 +910,10 @@ func Fs92SealedHold(held bool, answers *HoldAnswers, tier Fs92TierAnswers) Build
 			{Actor: "admin", Action: world.Drop("admin", "x.txt", true)},
 			{Actor: "reader", Action: world.HistoryStates("reader", "x.txt", map[int]string{1: sidecar.EvsVersionStateDropped, 2: sidecar.EvsVersionStateDropped})},
 			{Actor: "reader", Action: world.ReadVersionEnds("reader", "x.txt", 1, EvsWorldReadsDropped())},
-			// the ERASE goes at once under the hold, and the ciphertext stays
+			// the ERASE goes at once under the hold, and the ciphertext stays; the reader reads the version erased,
+			// its key gone by a committed ERASE, with no tamper alarm
 			{Actor: "admin", Action: world.EraseAtOnce("admin", "y.txt")},
+			{Actor: "reader", Action: world.ReadVersionEnds("reader", "y.txt", 1, EvsWorldReadsErased())},
 			{Advance: 50 * time.Hour},
 			{Actor: "taskworker", Action: world.EvacuateAt(sidecar.EvsRepoFormat2, nil)},
 			{Actor: "check", Action: world.MarkStored(stored, history.listed)},
@@ -920,6 +938,7 @@ func Fs92SealedHold(held bool, answers *HoldAnswers, tier Fs92TierAnswers) Build
 			{Actor: "reader", Action: world.ReadVersionEnds("reader", "x.txt", 1, EvsWorldReadsDropped())},
 			{Actor: "reader", Action: world.ReadVersionEnds("reader", "x.txt", 2, EvsWorldReadsDropped())},
 			{Actor: "reader", Action: world.Verify("reader", "x.txt")},
+			{Actor: "reader", Action: world.ReadVersionEnds("reader", "y.txt", 1, EvsWorldReadsErased())},
 			{Actor: "check", Action: world.BillAnswers(stored, answers)},
 		}...)
 		if tier != nil {

@@ -251,6 +251,8 @@ type evsReadKeys struct {
 	// a deposit's slot key and K_dep, set once its slot is opened, which take manifest's and the slot's place for
 	// its generation (evs_consume.go)
 	deposit *evsDepositKeys
+	// the read's judge of keys gone from their slots, made at the first one (evs_reconstruct.go's erasureJudge)
+	erasures evsErasureJudge
 }
 
 // A deposit's keys for one read: its slot's object key and the K_dep it derives, which take the slot's and

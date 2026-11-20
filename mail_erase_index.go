@@ -225,8 +225,8 @@ func (self *MailEraser) documentOf(ctx context.Context, index *mailEraseIndex, p
 	content, _, err := self.store.Read(ctx, path, self.settings.MessageMaxByteCount)
 	switch {
 	case errors.Is(err, ErrMailStoreTooLarge), errors.Is(err, ErrEvsObjectMissing), errors.Is(err, ErrEvsSealInvalid),
-		errors.Is(err, ErrEvsEntryRefused), errors.Is(err, ErrEvsPathAbsent):
-		// not readable here: every chunk a message at the read's bound could have
+		errors.Is(err, ErrEvsErased), errors.Is(err, ErrEvsEntryRefused), errors.Is(err, ErrEvsPathAbsent):
+		// not readable here, its key erased among the rest: every chunk a message at the read's bound could have
 		return version, mailIndexChunkBound(uint64(max(self.settings.MessageMaxByteCount, 0)), growthFactor, index.format), nil
 	case err != nil:
 		return 0, 0, err
