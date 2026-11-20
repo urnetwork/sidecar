@@ -10,6 +10,10 @@
 // ErrSmtpRecordCut names is §14.7's cut. Neither handler keeps a proof, a record or the SHTS past the call
 // (D-SMTP-10), and neither logs anything of one.
 //
+// The sidecar sends both as calls marked for an edge, with no Hello (CallOptions.Edge; §6.4, owner decision 624):
+// the dialer the ticket names is who the caller is. registerHandlers puts both, and SMTP_OUTCOME's NO_REPLY
+// function (outcome.go), on one platform client's dispatcher, as Serve does for each.
+//
 // Safe for concurrent use: the dispatcher runs each request on a goroutine of its own.
 
 package smtpedgeservice
@@ -23,6 +27,37 @@ import (
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
 )
+
+// Registers the engine's functions on subprotocol, one platform client's dispatcher in the edge role: SMTP_PROOF's and
+// SMTP_HANDSHAKE's handlers, mutating, so a part or SHTS sent again under its request_id runs once, and SMTP_OUTCOME's
+// NO_REPLY function. remove takes all three away; on an error nothing stays registered.
+func (self *SmtpEdgeService) registerHandlers(subprotocol *sidecar.Subprotocol) (remove func(), err error) {
+	removes := []func(){}
+	remove = func() {
+		for _, remove := range removes {
+			remove()
+		}
+	}
+	for _, register := range []func() (func(), error){
+		func() (func(), error) {
+			return subprotocol.Handle(protocol.MessageType_SMTP_PROOF, self.handleProof, &sidecar.HandleOptions{Mutating: true})
+		},
+		func() (func(), error) {
+			return subprotocol.Handle(protocol.MessageType_SMTP_HANDSHAKE, self.handleHandshake, &sidecar.HandleOptions{Mutating: true})
+		},
+		func() (func(), error) {
+			return subprotocol.HandleNoReply(protocol.MessageType_SMTP_OUTCOME, self.handleOutcome)
+		},
+	} {
+		removeOne, err := register()
+		if err != nil {
+			remove()
+			return nil, err
+		}
+		removes = append(removes, removeOne)
+	}
+	return remove, nil
+}
 
 // SmtpProof's and SmtpHandshake's send_id field, which both put first: an identifier of the wire.
 const smtpProofSendIdField = 1

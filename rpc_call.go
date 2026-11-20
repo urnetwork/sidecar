@@ -13,6 +13,16 @@
 // with CallOptions.RequestId. A Required peer with no session surfaces as UNAVAILABLE with reason
 // encryption.
 //
+// A call to an edge (CallOptions.Edge; §6.4, owner decision 624), as §14.5's SmtpProof and SmtpHandshake
+// to smtpedge, runs no Hello and no HeadCheck, since an edge shows no binding and drops every Hello
+// (stream_edge.go): the signed ur/ ticket its dialer verified is the edge's identity, the basis its stream
+// rests on. It is refused before anything is sent on an edge's own dispatcher, for a peer this dispatcher
+// knows as a sidecar, by a stream or a standing Hello, and for a type an edge drops (edgeSendRefusal); its
+// answer comes as a Service-mode source's, which the inline guard admits (serviceMessageAdmits), and an
+// UNAUTHENTICATED from it is the answer, never a cue for a Hello. The other way round, a call not so marked
+// to a peer this dispatcher knows as an edge is refused before its Hello, which the edge would only drop,
+// as OpenStream refuses the other kind.
+//
 // The answer is the request's type + 1, or RESPONSE, ERROR, type ERROR and an Error body. Any other type
 // fails the call without retry, as does an Error whose code is OK or one no sender sets (§6.5).
 
@@ -89,6 +99,10 @@ type CallOptions struct {
 	Timeout time.Duration
 	// The request_id to send, which a retry keeps (§6.6). Zero draws a random one.
 	RequestId uint64
+	// The destination is a platform client in urnetwork-edge, the listener a ur/ ticket named, which shows no
+	// binding: the call runs no Hello and no HeadCheck, as StreamOpenRequest.Edge's open does (§6.4, owner
+	// decision 624). See the file header for what refuses it.
+	Edge bool
 }
 
 // One request this side waits on, a Hello or a call: the response that echoes its request_id from its
@@ -226,11 +240,44 @@ func (self *Subprotocol) forgetPeerOnAckError(clientId connect.Id) connect.AckFu
 	}
 }
 
+// Whether a sidecar may send an edge messageType, as a request or a NO_REPLY envelope (owner decision 624):
+// never a type the dispatcher answers itself or a push type (handleTypeReserved), a stream frame, which rides
+// its stream, or one only sidecars of one network exchange (Hello's, HeadCheck's and SEARCH's), all of which
+// an edge's guard drops (serviceMessageAdmits).
+func edgeMessageType(messageType protocol.MessageType) bool {
+	return !handleTypeReserved(messageType) && !streamMessageType(uint32(messageType)) && !sidecarOnlyMessageType(uint32(messageType))
+}
+
+// Why this dispatcher may not send peerId a call or a NO_REPLY envelope marked for an edge, nil when it may:
+// an edge's dispatcher sends an edge nothing; ControlId is the platform's and takes no send; and a peer this
+// dispatcher knows as a sidecar, by a stream or a standing Hello, is one, never both (stream_edge.go). A peer
+// it knows by neither goes as an edge, whose identity is the ur/ ticket its dialer verified.
+func (self *Subprotocol) edgeSendRefusal(peerId connect.Id) *SubprotocolError {
+	if self.role == SubprotocolRoleEdge {
+		return &SubprotocolError{Code: protocol.ErrorCode_ERR_FAILED_PRECONDITION, Message: errSubprotocolEdgeSender.Error()}
+	}
+	if peerId == connect.ControlId {
+		return &SubprotocolError{Code: protocol.ErrorCode_ERR_FAILED_PRECONDITION, Message: errSubprotocolEdgeSender.Error()}
+	}
+	if known, edge := self.streamPeerKind(peerId); known && !edge {
+		return &SubprotocolError{Code: protocol.ErrorCode_ERR_FAILED_PRECONDITION, Message: errStreamPeerKind.Error()}
+	}
+	if self.peerVerified(peerId) {
+		return &SubprotocolError{Code: protocol.ErrorCode_ERR_FAILED_PRECONDITION, Message: errStreamPeerKind.Error()}
+	}
+	return nil
+}
+
 // Sends a request of messageType carrying body to clientId and answers the response's body, after
-// §6.4's Hello. See the file header. A *SubprotocolError carries every coded failure with its request_id.
+// §6.4's Hello unless options mark it for an edge. See the file header. A *SubprotocolError carries every
+// coded failure with its request_id.
 func (self *Subprotocol) Call(ctx context.Context, clientId Id, messageType protocol.MessageType, body []byte, options *CallOptions) ([]byte, error) {
 	if options == nil {
 		options = &CallOptions{}
+	}
+	if options.Edge && !edgeMessageType(messageType) {
+		// an edge would drop it unanswered, so it never goes
+		return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_INVALID_ARGUMENT, Message: "a type an edge does not take"}
 	}
 	timeout := options.Timeout
 	if timeout == 0 {
@@ -262,6 +309,20 @@ func (self *Subprotocol) Call(ctx context.Context, clientId Id, messageType prot
 	}
 	deadline := start.Add(timeout)
 
+	if options.Edge {
+		if refusal := self.edgeSendRefusal(peerId); refusal != nil {
+			refusal.RequestId = requestId
+			return nil, refusal
+		}
+		// no Hello and no HeadCheck (owner decision 624), and so nothing to run again: an UNAUTHENTICATED
+		// from an edge is its answer
+		return self.callOnce(ctx, peerId, messageType, body, requestId, deadline, true)
+	}
+	// a peer is an edge or a sidecar for the dispatcher's life, never both: an edge would only drop the Hello
+	if known, edge := self.streamPeerKind(peerId); known && edge {
+		return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_FAILED_PRECONDITION, Message: errStreamPeerKind.Error(), RequestId: requestId}
+	}
+
 	// a peer that refused at its gate holds no Hello with this side any more: one fresh Hello, then the
 	// same request again, which no handler can have run
 	for attempt := 0; ; attempt += 1 {
@@ -281,7 +342,7 @@ func (self *Subprotocol) Call(ctx context.Context, clientId Id, messageType prot
 		}
 		// the first RPC with a peer each HeadCheckInterval starts a HeadCheck beside it (rpc_headcheck_rounds.go)
 		self.headCheckOnExchange(peerId, messageType)
-		response, err := self.callOnce(ctx, peerId, messageType, body, requestId, deadline)
+		response, err := self.callOnce(ctx, peerId, messageType, body, requestId, deadline, false)
 		if code, ok := SubprotocolErrorCode(err); ok && code == protocol.ErrorCode_ERR_UNAUTHENTICATED && attempt == 0 {
 			self.forgetPeer(peerId)
 			continue
@@ -291,7 +352,8 @@ func (self *Subprotocol) Call(ctx context.Context, clientId Id, messageType prot
 }
 
 // One send of the request and its wait. A send connect refuses before the deadline goes again, with the
-// same request_id, after CallSendRetryInterval; ctx ends the wait, and a cancel sends Cancel.
+// same request_id, after CallSendRetryInterval; ctx ends the wait, and a cancel sends Cancel. A call to an
+// edge has no Hello to bound its body or to end on an ack's error.
 func (self *Subprotocol) callOnce(
 	ctx context.Context,
 	peerId connect.Id,
@@ -299,9 +361,12 @@ func (self *Subprotocol) callOnce(
 	body []byte,
 	requestId uint64,
 	deadline time.Time,
+	edge bool,
 ) ([]byte, error) {
-	if peer, ok := self.PeerIdentity(Id(peerId)); ok && 0 < peer.MaxBodyByteCount && int64(peer.MaxBodyByteCount) < int64(len(body)) {
-		return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_TOO_LARGE, RequestId: requestId}
+	if !edge {
+		if peer, ok := self.PeerIdentity(Id(peerId)); ok && 0 < peer.MaxBodyByteCount && int64(peer.MaxBodyByteCount) < int64(len(body)) {
+			return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_TOO_LARGE, RequestId: requestId}
+		}
 	}
 	timeout := deadline.Sub(self.clock.Now())
 	if timeout <= 0 {
@@ -328,32 +393,20 @@ func (self *Subprotocol) callOnce(
 	}
 	defer remove()
 
-	ack := self.forgetPeerOnAckError(peerId)
-	for _, envelope := range envelopes {
-		for {
-			remaining := deadline.Sub(self.clock.Now())
-			if remaining <= 0 {
-				return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_DEADLINE_EXCEEDED, RequestId: requestId}
-			}
-			testHookBarrier("rpc.call_send.before", peerId.String())
-			err := self.sendEnvelopeAcked(peerId, envelope, ack, remaining)
-			testHookBarrier("rpc.call_send.after", peerId.String())
-			if err == nil {
-				break
-			}
-			if errors.Is(err, connect.ErrEncryptionRequiredNotEstablished) || deadline.Sub(self.clock.Now()) <= 0 {
-				return nil, sendFailure(err, requestId)
-			}
-			// refused before the deadline: the same envelope, the same request_id, after a pause
-			self.stats.callSendRetryCount.Add(1)
-			select {
-			case <-self.clock.After(self.settings.CallSendRetryInterval):
-			case <-ctx.Done():
-				return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_CANCELLED, RequestId: requestId}
-			case <-self.ctx.Done():
-				return nil, errSubprotocolClosed
-			}
+	ack := ignoreSubprotocolAck
+	if !edge {
+		ack = self.forgetPeerOnAckError(peerId)
+	}
+	barrierKey := peerId.String()
+	err = self.sendEnvelopesUntil(ctx, peerId, envelopes, ack, deadline, requestId, func(before bool) {
+		if before {
+			testHookBarrier("rpc.call_send.before", barrierKey)
+		} else {
+			testHookBarrier("rpc.call_send.after", barrierKey)
 		}
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	response, err := self.awaitPending(ctx, pending, deadline.Sub(self.clock.Now()), requestId)
@@ -377,6 +430,48 @@ func (self *Subprotocol) callOnce(
 		return nil, responseError(response.envelope, requestId)
 	}
 	return nil, ErrSubprotocolResponse
+}
+
+// Hands connect envelopes for peerId in order, each with ack, until deadline on this side's clock: a send
+// connect refuses before then goes again after CallSendRetryInterval, the same envelope under the same
+// request_id, and is counted. barrier runs before and after each send, at its linearization point. A Required
+// peer with no session, or a refusal at the deadline, is sendFailure's; ctx's end CANCELLED.
+func (self *Subprotocol) sendEnvelopesUntil(
+	ctx context.Context,
+	peerId connect.Id,
+	envelopes []*protocol.Envelope,
+	ack connect.AckFunction,
+	deadline time.Time,
+	requestId uint64,
+	barrier func(before bool),
+) error {
+	for _, envelope := range envelopes {
+		for {
+			remaining := deadline.Sub(self.clock.Now())
+			if remaining <= 0 {
+				return &SubprotocolError{Code: protocol.ErrorCode_ERR_DEADLINE_EXCEEDED, RequestId: requestId}
+			}
+			barrier(true)
+			err := self.sendEnvelopeAcked(peerId, envelope, ack, remaining)
+			barrier(false)
+			if err == nil {
+				break
+			}
+			if errors.Is(err, connect.ErrEncryptionRequiredNotEstablished) || deadline.Sub(self.clock.Now()) <= 0 {
+				return sendFailure(err, requestId)
+			}
+			// refused before the deadline: the same envelope, the same request_id, after a pause
+			self.stats.callSendRetryCount.Add(1)
+			select {
+			case <-self.clock.After(self.settings.CallSendRetryInterval):
+			case <-ctx.Done():
+				return &SubprotocolError{Code: protocol.ErrorCode_ERR_CANCELLED, RequestId: requestId}
+			case <-self.ctx.Done():
+				return errSubprotocolClosed
+			}
+		}
+	}
+	return nil
 }
 
 // Tells peerId to stop the call requestId names, best effort: Cancel carries no body and expects no

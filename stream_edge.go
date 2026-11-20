@@ -8,14 +8,18 @@
 // it (§9.6's step 3), so a Service-mode source's open is admitted on its ticket by the acceptor's function
 // (SOCK-M5-11), never by Hello's identity check, and that open's stream takes frames only from a
 // Service-mode source. A sidecar opening to an edge, as §14's stream to smtpedge does, runs no Hello
-// either (StreamOpenRequest.Edge). Edges never run HeadCheck.
+// either (StreamOpenRequest.Edge), nor do its calls and NO_REPLY sends to one (owner decision 624):
+// CallOptions.Edge and SendEdge, as §14.5's SmtpProof and SmtpHandshake and §14.14's SmtpOutcome go to the
+// ticket's listener, whose identity is the signed ur/ ticket the dialer verified. An edge's engine takes
+// those through Handle and, for the NO_REPLY envelopes, HandleNoReply, which only an edge's dispatcher
+// registers. Edges never run HeadCheck.
 //
 // The inline handler's step 4 (rpc_guard.go) admits a Service-mode source only for the 21842 traffic an
 // edge's relationship carries: at a sidecar, an edge's stream frames, Ping and Pong and its answers to calls
-// the sidecar made of it; at an edge, a sidecar's stream frames, Ping, Pong, Cancel and the requests the
-// edge's engine handles, never Hello, HeadCheck or SEARCH, which only sidecars of one network exchange.
-// Every other mode is dropped: FriendsAndFamily reaches a sidecar only by IP until PROTO-M6-01, and Public
-// never (D-PROTO-6).
+// the sidecar made of it; at an edge, a sidecar's stream frames, Ping, Pong, Cancel, the requests the
+// edge's engine handles and its NO_REPLY envelopes, never Hello, HeadCheck or SEARCH, which only sidecars of
+// one network exchange. Every other mode is dropped: FriendsAndFamily reaches a sidecar only by IP until
+// PROTO-M6-01, and Public never (D-PROTO-6).
 
 package sidecar
 
@@ -36,6 +40,9 @@ var (
 	errProvideModeRefused = errors.New("subprotocol: provide mode refused")
 	// An edge runs no Hello and no HeadCheck, with anyone.
 	errSubprotocolEdgeRole = errors.New("subprotocol: an edge runs no hello or head check")
+	// A call or NO_REPLY send marked for an edge from an edge's own dispatcher, or to ControlId: only a sidecar
+	// sends one, and only to a platform client (owner decision 624).
+	errSubprotocolEdgeSender = errors.New("subprotocol: only a sidecar sends to an edge")
 )
 
 // Which side of §6.10.1's relationships a dispatcher runs as.
