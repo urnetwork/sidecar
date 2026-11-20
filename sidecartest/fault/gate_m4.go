@@ -42,10 +42,8 @@ package fault
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	stdnet "net"
-	"slices"
 	"strings"
 	"time"
 
@@ -134,30 +132,7 @@ func gateM4Cases(catalog *Catalog) map[string][]*GateTest {
 
 // The later cases of M4's rows, which catalog.yml holds at a later gate: each as its case and that gate.
 func gateM4LaterCases(catalog *Catalog) []string {
-	rowIds := []string{}
-	for _, testCase := range catalog.GateCases(gateM4OutGate) {
-		if !slices.Contains(rowIds, testCase.Row.Id) {
-			rowIds = append(rowIds, testCase.Row.Id)
-		}
-	}
-	later := []string{}
-	for _, rowId := range rowIds {
-		for _, testCase := range catalog.Row(rowId).Cases {
-			if slices.Contains(testCase.Gates, gateM4OutGate) {
-				continue
-			}
-			due := false
-			for _, gate := range testCase.Gates {
-				if gateOrder(gateM4OutGate) < gateOrder(gate) {
-					due = true
-				}
-			}
-			if due {
-				later = append(later, fmt.Sprintf("%s at %s", testCase, strings.Join(testCase.Gates, " and ")))
-			}
-		}
-	}
-	return later
+	return gateLaterCases(catalog, gateM4OutGate)
 }
 
 // Every item of M4's exit: the rules and the oracles, the privacy rows, the fixtures and scenario, the dark escrow
