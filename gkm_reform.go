@@ -14,8 +14,11 @@
 //	           3  POST ladder: gen/1 to gen/<g>, the old Signed GenRotates byte for byte, ascending, 64 a call
 //	           4  moves its own pins to the new group, epoch 0, with epoch 1's floor at gen/<g>'s auth, its
 //	              generation pin (g, C_g) unchanged
-//	           5  unless the repo is re-seeded as deleted, which takes the form and the ladder and nothing else:
-//	              rotates to g+1, the first generation that names the new group, which stages every delivery as any
+//	           5  unless asked with Reseed, which takes the form and the ladder and nothing else, all gkm takes while
+//	              repo/ reads keying or deleted, as §19.10's groups step asks first for every repo it places, a live
+//	              repo's second call coming once activate has taken repo/ to active and a deleted one's once it is
+//	              restored (owner decision 618): rotates to g+1, the first generation that names the new group, which
+//	              stages every delivery as any
 //	              rotation does, ReaderWraps, DelegationWraps and each reading member's RecoveryWrap, so a member
 //	              whose devices are lost keeps its recovery code's access; then the pending engine adds every
 //	              member device that has a KeyPackage (KF2)
@@ -357,9 +360,11 @@ func (self *GkmGroupClient) parseServedGeneration(ctx context.Context, state Gkm
 // What a re-form reads.
 type GkmReformArgs struct {
 	RepoId Id
-	// §19.10's re-seed of a repo that stands deleted (owner decision 82): the form, its epoch 0 and the ladder,
-	// and nothing else, since gkm refuses every other route of a deleted repo. The rotation and the Adds follow
-	// once the repo is restored, by a second call without it.
+	// The form, its epoch 0 and the ladder, and nothing else: all gkm takes while repo/ reads keying or deleted
+	// (§10.6's checks row), since the generation claim and the Adds' commits are writes it takes only for an active
+	// repo/. §19.10's groups step asks it first for every repo it places (owner decisions 82 and 618). The rotation
+	// and the Adds follow by a second call without it, which resumes from the keychain's record: a live repo's once
+	// activate has taken repo/ to active, and a repo re-seeded as deleted's once it is restored.
 	Reseed bool
 }
 
@@ -518,7 +523,7 @@ func (self *gkmGroupManager) reformInFlow(ctx context.Context, args *GkmReformAr
 		}
 	}
 	if args.Reseed {
-		// a deleted repo takes nothing more: the record stays, and a call once the repo is restored finishes
+		// repo/ keying or deleted takes nothing more: the record stays, and a call once repo/ is active finishes
 		return record.groupId, nil
 	}
 	// the first generation that names the new group, with every delivery; then the Adds, whose epochs carry it
