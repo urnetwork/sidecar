@@ -5,7 +5,10 @@
 //
 //	judge    for each candidate the path's newest version does not name (read from the cluster now) and no hold
 //	         keeps (an uploaded segment or a slot by its LastModified; a staged one, whose batch time a seg/ copy no
-//	         longer carries, under any covering hold), one HEAD, staged ones at seg/, slots on the metadata cluster
+//	         longer carries, under any covering hold), one HEAD, staged ones at seg/, slots on the metadata cluster;
+//	         the hold/ read is held to its bound as the DELETE issues (owner decision 629): after the HEAD and a
+//	         slot's budget turn, a read past the bound is read again (HoldCache.CoveringAtDelete) and the candidate
+//	         judged on it
 //	delete   only a present one, naming that HEAD's LastModified (sidecar.WithBlobUnmodified), so a later upload of
 //	         the same id is never taken; a 404, or a 412 for a newer object, counts absent, and only a 204 counts
 //	         deleted (§19.8's urnetwork_evs_versionless_sweep_deletes_total{pass,result} and
@@ -389,9 +392,9 @@ func (self *Sweep) sweepCandidates(ctx context.Context, cluster sidecar.BlobClus
 			barrierKey := fmt.Sprintf("%s:%d:%d", refKey, index, j)
 			var outcome string
 			if sweepId.slot {
-				outcome, err = self.sweepSlot(ctx, cluster, target.RepoId, sweepId.id, cover, rank, funded, due, barrierKey, result)
+				outcome, err = self.sweepSlot(ctx, cluster, networkId, target.RepoId, sweepId.id, cover, rank, funded, due, barrierKey, result)
 			} else {
-				outcome, err = self.sweepSegment(ctx, segmentCluster, target.RepoId, sweepId.id, sweepId.staged, cover, barrierKey, result)
+				outcome, err = self.sweepSegment(ctx, segmentCluster, networkId, target.RepoId, sweepId.id, sweepId.staged, cover, barrierKey, result)
 			}
 			if err != nil {
 				return err
@@ -412,9 +415,20 @@ func (self *Sweep) sweepCandidates(ctx context.Context, cluster sidecar.BlobClus
 	return nil
 }
 
-// One candidate segment at seg/: HEAD, then a DELETE naming its LastModified. outcome is deleted, absent, or "" for
-// one a hold keeps.
-func (self *Sweep) sweepSegment(ctx context.Context, segmentCluster sidecar.BlobCluster, repoId sidecar.Id, id []byte, staged bool, cover *sidecar.HoldCover, barrierKey string, result *SweepResult) (string, error) {
+// The cover a DELETE acts on (owner decision 629): cover while its read is younger than the bound, else hold/ read
+// again. A read that fails, or one already past the bound, is unknown, which keeps everything, as the read before
+// the HEAD's does.
+func (self *Sweep) coverAtDelete(ctx context.Context, networkId sidecar.Id, repoId sidecar.Id, cover *sidecar.HoldCover) *sidecar.HoldCover {
+	atDelete, err := self.holds.CoveringAtDelete(ctx, cover, networkId, repoId)
+	if err != nil {
+		return &sidecar.HoldCover{Unknown: true}
+	}
+	return atDelete
+}
+
+// One candidate segment at seg/: HEAD, then a DELETE naming its LastModified, judged on the cover held to its bound
+// after the HEAD. outcome is deleted, absent, or "" for one a hold keeps.
+func (self *Sweep) sweepSegment(ctx context.Context, segmentCluster sidecar.BlobCluster, networkId sidecar.Id, repoId sidecar.Id, id []byte, staged bool, cover *sidecar.HoldCover, barrierKey string, result *SweepResult) (string, error) {
 	if len(id) != 32 {
 		return versionlessSweepAbsent, nil
 	}
@@ -426,6 +440,8 @@ func (self *Sweep) sweepSegment(ctx context.Context, segmentCluster sidecar.Blob
 	case err != nil:
 		return "", fmt.Errorf("%w: %v", ErrSweepRetry, err)
 	}
+	// the HEAD may have stalled past the bound: nothing more is waited on after this read
+	cover = self.coverAtDelete(ctx, networkId, repoId, cover)
 	if (staged && cover.Covered()) || cover.Keeps(info.LastModified) {
 		return "", nil
 	}
@@ -457,8 +473,9 @@ func (self *Sweep) countFreed(byteCount int64, result *SweepResult) {
 	}
 }
 
-// One candidate slot on the metadata cluster, as P2 of rank: HEAD, then a DELETE naming its LastModified.
-func (self *Sweep) sweepSlot(ctx context.Context, cluster sidecar.BlobCluster, repoId sidecar.Id, id []byte, cover *sidecar.HoldCover, rank sidecar.WriteP2Rank, funded bool, due time.Time, barrierKey string, result *SweepResult) (string, error) {
+// One candidate slot on the metadata cluster, as P2 of rank: HEAD, then a DELETE naming its LastModified, judged again
+// after the budget's turn on the cover held to its bound.
+func (self *Sweep) sweepSlot(ctx context.Context, cluster sidecar.BlobCluster, networkId sidecar.Id, repoId sidecar.Id, id []byte, cover *sidecar.HoldCover, rank sidecar.WriteP2Rank, funded bool, due time.Time, barrierKey string, result *SweepResult) (string, error) {
 	slotId, err := sidecar.IdFromBytes(id)
 	if err != nil {
 		return versionlessSweepAbsent, nil
@@ -483,6 +500,10 @@ func (self *Sweep) sweepSlot(ctx context.Context, cluster sidecar.BlobCluster, r
 		return "", err
 	}
 	defer grant.Close()
+	// the HEAD and the budget's turn may have outlasted the bound: nothing more is waited on after this read
+	if self.coverAtDelete(ctx, networkId, repoId, cover).Keeps(info.LastModified) {
+		return "", nil
+	}
 	testHookBarrier(BarrierSweepDeleteBefore, barrierKey)
 	if err := self.step(BarrierSweepDeleteBefore, barrierKey); err != nil {
 		return "", err
