@@ -5,10 +5,12 @@
 // hot-path gate):
 //
 //   - IssueP0 adds to a counter and returns: no queue, no wait, no refusal (owner decision 186);
-//   - AdmitP1 waits in the network's fair queue within the P1 share, or is refused past the shed delay
-//     (budget_queue.go). Admission debits the whole price and moves the deferred part into the credit
-//     the process reports, which the wallet gains; an abort lets that credit lapse through W's clamp, and
-//     a retry is priced only for the writes it repeats, by its caller;
+//   - AdmitP1 is admitted at once while it is the next its account's fair queue serves and the P1 share
+//     covers it, its network below its weighted share of the interval's P1, and otherwise waits in the
+//     network's fair queue or is refused past the shed delay (budget_queue.go). Admission debits the whole
+//     price and moves the deferred part into the credit the process reports, which the wallet gains; an
+//     abort lets that credit lapse through W's clamp, and a retry is priced only for the writes it
+//     repeats, by its caller;
 //   - AcquireP2 and TryAcquireP2 serve by rank within the funded and unfunded shares (budget_p2.go).
 //
 // Its own goroutine, every Interval, reads each cluster's allowance, takes the next interval's shares
@@ -415,7 +417,7 @@ func newWriteBudgetAccount(client *WriteBudgetClient, clusterId string) *writeBu
 		clusterId:        clusterId,
 		p0KindByteCounts: map[sidecar.WriteP0Kind]*atomic.Int64{},
 		ownerBacklogs:    map[string]*[2][sidecar.WriteP2RankCount]int64{},
-		p1:               newWriteBudgetP1Queue(),
+		p1:               newWriteBudgetP1Queue(client.settings.intervalCount(client.settings.ShareWindow)),
 		p2:               &writeBudgetP2Queue{},
 		exported:         writeBudgetExported{p0KindByteCounts: map[sidecar.WriteP0Kind]int64{}},
 	}
@@ -432,22 +434,23 @@ func (self *writeBudgetAccount) admitP1WithLock(cost sidecar.WriteCost) {
 	self.inFlightByteCount += cost.ImmediateByteCount
 }
 
-// Admits waiter at once when nothing waits ahead and the share covers it, else queues it and runs the
-// shed rule. Returns where it stands.
+// Queues waiter and serves the queue, which admits it at once when it is the next the fair queue serves
+// and the share covers it, its tag advancing as any admission's; then runs the shed rule, which a network
+// served at once can make refuse a flood waiting past the delay. Returns where it stands.
 func (self *writeBudgetAccount) offerP1(waiter *writeBudgetP1Waiter) writeBudgetWaiterState {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	if self.closed {
 		return writeBudgetAbandoned
 	}
-	price := waiter.cost.ByteCount()
-	if price == 0 || (self.p1.emptyWithLock() && price <= self.p1Left) {
-		self.p1Left -= price
+	if waiter.cost.ByteCount() == 0 {
+		// nothing to spend, queue or weigh
 		self.admitP1WithLock(waiter.cost)
 		waiter.state = writeBudgetAdmitted
 		return waiter.state
 	}
 	self.p1.enqueueWithLock(waiter)
+	self.dispatchP1WithLock()
 	now := self.client.clock.Now()
 	self.shedWithLock(now)
 	self.armShedWithLock(now)
@@ -470,12 +473,15 @@ func (self *writeBudgetAccount) abandonP1(waiter *writeBudgetP1Waiter) writeBudg
 		waiter.state = writeBudgetAbandoned
 		self.p1.removeWithLock(waiter)
 		close(waiter.decided)
+		// it may have held back the waiters behind it
+		self.dispatchP1WithLock()
 		self.armShedWithLock(self.client.clock.Now())
 	}
 	return waiter.state
 }
 
-// Admits waiters in fair order while the P1 share covers the next.
+// Admits waiters in fair order, each network's while it is below its weighted share of the interval's P1,
+// while the P1 share covers the next.
 func (self *writeBudgetAccount) dispatchP1WithLock() {
 	for {
 		waiter := self.p1.nextWithLock()
@@ -494,15 +500,15 @@ func (self *writeBudgetAccount) dispatchP1WithLock() {
 	}
 }
 
-// §11.13's shed row: while the oldest waiter has waited ShedDelay, refuses every waiter of the
-// heaviest network, never the last network waiting.
+// §11.13's shed row: while the oldest waiter has waited ShedDelay, refuses every waiter of the network
+// the queue's shed rule names, one network at a time (budget_queue.go).
 func (self *writeBudgetAccount) shedWithLock(now time.Time) {
 	for {
 		oldest, ok := self.p1.oldestEnqueueTimeWithLock()
 		if !ok || now.Sub(oldest) < self.client.settings.ShedDelay {
 			return
 		}
-		networkId, ok := self.p1.heaviestNetworkWithLock()
+		networkId, ok := self.p1.shedNetworkWithLock()
 		if !ok {
 			return
 		}
@@ -512,11 +518,13 @@ func (self *writeBudgetAccount) shedWithLock(now time.Time) {
 			close(waiter.decided)
 			self.shedCount.Add(1)
 		}
+		// a refused waiter may have held back the waiters behind it
+		self.dispatchP1WithLock()
 	}
 }
 
 // Arms the shed check for when the oldest waiter reaches ShedDelay, once: a waiter already past it is
-// checked again when another network queues.
+// checked again at the next P1 ask.
 func (self *writeBudgetAccount) armShedWithLock(now time.Time) {
 	oldest, ok := self.p1.oldestEnqueueTimeWithLock()
 	if !ok {
@@ -797,6 +805,7 @@ func (self *writeBudgetAccount) tick(ctx context.Context) {
 		self.uncoveredLeft = min(max(0, share.UncoveredByteCount), share.UnfundedByteCount)
 		self.unfundedLeft = share.UnfundedByteCount - self.uncoveredLeft
 		self.fundedLeft = share.FundedByteCount
+		self.p1.startIntervalWithLock(share.P1ByteCount)
 		self.dispatchP1WithLock()
 		self.dispatchP2WithLock()
 		self.armShedWithLock(input.now)
@@ -851,8 +860,7 @@ func (self *writeBudgetAccount) close() {
 		return
 	}
 	self.closed = true
-	for !self.p1.emptyWithLock() {
-		waiter := self.p1.nextWithLock()
+	for _, waiter := range self.p1.waitersWithLock() {
 		waiter.state = writeBudgetAbandoned
 		self.p1.removeWithLock(waiter)
 		close(waiter.decided)

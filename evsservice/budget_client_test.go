@@ -115,7 +115,7 @@ func (self *budgetFixture) left() *WriteBudgetShare {
 	}
 }
 
-// Sets the pools as a share would, for tests of what spends them.
+// Sets the pools as a share would, starting an interval, for tests of what spends them.
 func (self *budgetFixture) setPools(share *WriteBudgetShare) {
 	self.account.stateLock.Lock()
 	defer self.account.stateLock.Unlock()
@@ -124,8 +124,36 @@ func (self *budgetFixture) setPools(share *WriteBudgetShare) {
 	self.account.uncoveredLeft = share.UncoveredByteCount
 	self.account.unfundedLeft = share.UnfundedByteCount - share.UncoveredByteCount
 	self.account.fundedLeft = share.FundedByteCount
+	self.account.p1.startIntervalWithLock(share.P1ByteCount)
 	self.account.dispatchP1WithLock()
 	self.account.dispatchP2WithLock()
+}
+
+// Asks for a P1 admission and returns once it has been decided or has started to wait, and which. The clock stands
+// still meanwhile, so no shed decides it between the two.
+func (self *budgetFixture) admitSettled(ctx context.Context, networkId connect.Id, cost sidecar.WriteCost) (*pendingAdmission, bool) {
+	self.t.Helper()
+	pending := self.admitAsync(ctx, networkId, cost)
+	select {
+	case <-pending.done:
+		return pending, false
+	case <-self.waits:
+		self.waitSeen += 1
+		return pending, true
+	case <-self.ctx.Done():
+		self.t.Fatal(self.ctx.Err())
+		return nil, false
+	}
+}
+
+// Sets each network's store_weight and reads it into the client's cache.
+func (self *budgetFixture) setWeights(networkIdWeights map[connect.Id]int64) {
+	self.t.Helper()
+	for networkId, weight := range networkIdWeights {
+		self.host.Quota.SetLimits(networkId, &sidecar.QuotaLimits{Tier: "test", Limits: map[string]int64{"store_weight": weight}})
+		self.client.weights.weight(networkId, self.clock.Now())
+	}
+	self.client.weights.refresh(self.ctx, self.clock)
 }
 
 // The process's report as the next tick would write it.
@@ -400,6 +428,208 @@ func TestWriteBudgetShedsByQueuedBytesPerWeight(t *testing.T) {
 		if pending.err != nil {
 			t.Error(pending.err)
 		}
+	}
+}
+
+// FI-14 (d) with §11.13's queue and shed rows (owner decision 617): three Community networks that asked in the last
+// interval have their weighted shares held, so a Pro network's flood takes only its own share at once and waits for
+// the rest; each Community push, asked behind the flood, is admitted at once, within the interval; past the shed delay
+// the flood's waiters are refused, 429 with retry_after_ms, while the lighter networks are served, and no light push is
+// refused.
+func TestWriteBudgetSeveralLightNetworksBehindAFloodKeepEveryPush(t *testing.T) {
+	fixture := newBudgetFixture(t)
+	pro := connect.NewId()
+	lights := []connect.Id{connect.NewId(), connect.NewId(), connect.NewId()}
+	networkIdWeights := map[connect.Id]int64{pro: 4}
+	for _, light := range lights {
+		networkIdWeights[light] = 1
+	}
+	fixture.setWeights(networkIdWeights)
+	cost := sidecar.WriteCost{ImmediateByteCount: 60, DeferredByteCount: 40}
+	fixture.setPools(&WriteBudgetShare{P1ByteCount: 1000})
+	for _, light := range lights {
+		grant, err := fixture.client.AdmitP1(t.Context(), "meta-1", light, cost)
+		if err != nil {
+			t.Fatal(err)
+		}
+		grant.Close()
+	}
+	for round := range 3 {
+		fixture.setPools(&WriteBudgetShare{P1ByteCount: 1000})
+		// the Pro network's share is 1,000 x 4/7: six pushes at once, the sixth past it, and the rest wait
+		floods := []*pendingAdmission{}
+		atOnce := 0
+		for range 30 {
+			pending, waiting := fixture.admitSettled(t.Context(), pro, cost)
+			if !waiting {
+				atOnce += 1
+			}
+			floods = append(floods, pending)
+		}
+		if atOnce != 6 {
+			t.Fatalf("round %d: the flood took %d pushes at once, want 6", round, atOnce)
+		}
+		for _, light := range lights {
+			pending, waiting := fixture.admitSettled(t.Context(), light, cost)
+			if waiting || pending.err != nil {
+				t.Fatalf("round %d: a light push behind the flood waited %v or ended %v", round, waiting, pending.err)
+			}
+			pending.grant.Close()
+		}
+		fixture.clock.Advance(fixture.settings.ShedDelay)
+		for i, pending := range floods {
+			pending.wait(t)
+			refusal := &sidecar.WriteRefusal{}
+			switch {
+			case i < atOnce && pending.err == nil:
+				pending.grant.Close()
+			case atOnce <= i && errors.As(pending.err, &refusal) && refusal.RetryAfterMs() == 5000:
+			default:
+				t.Fatalf("round %d: flood push %d ended %v", round, i, pending.err)
+			}
+		}
+	}
+	fixture.account.export(&WriteBudgetReport{})
+	if value := fixture.host.Metrics.Value(writeBudgetShedMetricName, "meta-1"); value != 3*24 {
+		t.Errorf("%v shed, want the flood's 72", value)
+	}
+}
+
+// The question's schedule (owner decision 617): two Community networks new to the share window ask behind a flood
+// that took the whole share before they came. Past the shed delay the flood is refused, and both equal light pushes
+// are kept, where the shed before refused one of them by id, and both are admitted at the next share.
+func TestWriteBudgetShedKeepsEqualLightNetworksBehindAFlood(t *testing.T) {
+	fixture := newBudgetFixture(t)
+	pro := connect.NewId()
+	lights := []connect.Id{connect.NewId(), connect.NewId()}
+	fixture.setWeights(map[connect.Id]int64{pro: 4, lights[0]: 1, lights[1]: 1})
+	cost := sidecar.WriteCost{ImmediateByteCount: 100}
+	fixture.setPools(&WriteBudgetShare{P1ByteCount: 1000})
+	floods := []*pendingAdmission{}
+	for range 20 {
+		pending, waiting := fixture.admitSettled(t.Context(), pro, cost)
+		if waiting {
+			floods = append(floods, pending)
+		}
+	}
+	if len(floods) != 10 {
+		t.Fatalf("%d flood pushes wait, want 10 past the whole share", len(floods))
+	}
+	behind := []*pendingAdmission{}
+	for _, light := range lights {
+		pending, waiting := fixture.admitSettled(t.Context(), light, cost)
+		if !waiting {
+			t.Fatal("a light push was decided from a spent share")
+		}
+		behind = append(behind, pending)
+	}
+	fixture.clock.Advance(fixture.settings.ShedDelay)
+	for _, pending := range floods {
+		pending.wait(t)
+		if refusal := (&sidecar.WriteRefusal{}); !errors.As(pending.err, &refusal) {
+			t.Fatalf("a flood push ended %v", pending.err)
+		}
+	}
+	// a later ask runs the shed again, and the equal light loads stay kept
+	if _, waiting := fixture.admitSettled(t.Context(), pro, cost); !waiting {
+		t.Fatal("the flood's next push was decided")
+	}
+	for _, pending := range behind {
+		if pending.decided() {
+			t.Fatalf("a light push was decided at the shed: %v", pending.err)
+		}
+	}
+	fixture.setPools(&WriteBudgetShare{P1ByteCount: 1000})
+	for _, pending := range behind {
+		pending.wait(t)
+		if pending.err != nil {
+			t.Errorf("a light push at the next share: %v", pending.err)
+		}
+	}
+}
+
+// A uniform overload still sheds: four networks past their equal shares, each with one push waiting, none lighter
+// served. Past the shed delay three are refused by id, the larger first, and the last waits for the next share.
+func TestWriteBudgetUniformOverloadStillSheds(t *testing.T) {
+	fixture := newBudgetFixture(t)
+	networkIds := []connect.Id{connect.NewId(), connect.NewId(), connect.NewId(), connect.NewId()}
+	cost := sidecar.WriteCost{ImmediateByteCount: 100}
+	fixture.setPools(&WriteBudgetShare{P1ByteCount: 400})
+	for _, networkId := range networkIds {
+		if _, waiting := fixture.admitSettled(t.Context(), networkId, cost); waiting {
+			t.Fatal("a network's first push waited")
+		}
+	}
+	fixture.setPools(&WriteBudgetShare{P1ByteCount: 400})
+	waiters := map[connect.Id]*pendingAdmission{}
+	for _, networkId := range networkIds {
+		if _, waiting := fixture.admitSettled(t.Context(), networkId, cost); waiting {
+			t.Fatal("a network's first push of the interval waited")
+		}
+		pending, waiting := fixture.admitSettled(t.Context(), networkId, cost)
+		if !waiting {
+			t.Fatal("a network past its share was admitted")
+		}
+		waiters[networkId] = pending
+	}
+	fixture.clock.Advance(fixture.settings.ShedDelay)
+	smallest := networkIds[0]
+	for _, networkId := range networkIds[1:] {
+		if networkId.LessThan(smallest) {
+			smallest = networkId
+		}
+	}
+	for networkId, pending := range waiters {
+		if networkId == smallest {
+			continue
+		}
+		pending.wait(t)
+		if refusal := (&sidecar.WriteRefusal{}); !errors.As(pending.err, &refusal) {
+			t.Errorf("a uniform overload's push ended %v", pending.err)
+		}
+	}
+	if waiters[smallest].decided() {
+		t.Fatalf("the last network waiting was decided: %v", waiters[smallest].err)
+	}
+	fixture.setPools(&WriteBudgetShare{P1ByteCount: 400})
+	waiters[smallest].wait(t)
+	if err := waiters[smallest].err; err != nil {
+		t.Errorf("the last network at the next share: %v", err)
+	}
+}
+
+// A network past its weighted share of the interval's P1 queues though nothing else waits and the share covers it,
+// so the share held for a quieter network is there when its push comes, and is admitted at once; the waiting push
+// is served at the next interval.
+func TestWriteBudgetANetworkPastItsShareQueuesWhileNothingWaits(t *testing.T) {
+	fixture := newBudgetFixture(t)
+	busy := connect.NewId()
+	quiet := connect.NewId()
+	cost := sidecar.WriteCost{ImmediateByteCount: 100}
+	fixture.setPools(&WriteBudgetShare{P1ByteCount: 1000})
+	if _, err := fixture.client.AdmitP1(t.Context(), "meta-1", quiet, cost); err != nil {
+		t.Fatal(err)
+	}
+	fixture.setPools(&WriteBudgetShare{P1ByteCount: 1000})
+	for range 5 {
+		if _, err := fixture.client.AdmitP1(t.Context(), "meta-1", busy, cost); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pending, waiting := fixture.admitSettled(t.Context(), busy, cost)
+	if !waiting {
+		t.Fatal("a network past its share was admitted at once")
+	}
+	if left := fixture.left(); left.P1ByteCount != 500 {
+		t.Fatalf("P1 left %d", left.P1ByteCount)
+	}
+	if _, waiting := fixture.admitSettled(t.Context(), quiet, cost); waiting {
+		t.Fatal("the quiet network's push waited")
+	}
+	fixture.setPools(&WriteBudgetShare{P1ByteCount: 1000})
+	pending.wait(t)
+	if pending.err != nil {
+		t.Errorf("the waiting push at the next share: %v", pending.err)
 	}
 }
 
