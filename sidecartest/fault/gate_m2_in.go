@@ -279,7 +279,7 @@ func GateWritten(ctx context.Context, testCase *Case, lookup func(rowId string, 
 		}
 	}
 	if 0 < len(unnamed) {
-		result.Reason += fmt.Sprintf("; of the row's checks it names no %s by id, which M2's exit sweep reads", strings.Join(unnamed, ", "))
+		result.Reason += fmt.Sprintf("; of the row's checks it names no %s by id, which the milestone's exit sweep reads", strings.Join(unnamed, ", "))
 	}
 	return result
 }
