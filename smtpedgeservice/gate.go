@@ -8,9 +8,12 @@
 //
 // The rows, in order, the first that refuses answering:
 //
-//	standing           probation, suspended and any standing this build does not know: DENIED (same-network
-//	                   deposits never reach an edge); restricted sends at Community caps, its halt being the
-//	                   halts' to answer (SmtpQuota)
+//	standing           probation and any standing this build does not know: DENIED (same-network deposits
+//	                   never reach an edge); suspended: HALTED for SuspendedRetryTimeout, §21.7's mail halt, so
+//	                   the mail waits at its sender until the lift and is never failed for it (QD-1124), and
+//	                   no smtp_halt row is written, so the halt ladder's 3 network halts in 30 days does not
+//	                   count it; restricted sends at Community caps, its halt being the halts' to answer
+//	                   (SmtpQuota)
 //	verified           an unverified, anonymous-only network: DENIED
 //	mail enabled       never enabled: DENIED; enabled less than MailEnableDelay ago: TRY_LATER until then
 //	mail_send          §8's send grant for the ticket's sidecar (AclGateView.MaySendMail): DENIED, or QUOTA
@@ -153,6 +156,7 @@ type SmtpGateDecision struct {
 const (
 	smtpGateReasonUnloaded   = "unloaded"
 	smtpGateReasonStanding   = "standing"
+	smtpGateReasonSuspended  = "suspended"
 	smtpGateReasonUnverified = "unverified"
 	smtpGateReasonMailOff    = "mail_off"
 	smtpGateReasonMailNew    = "mail_new"
@@ -226,8 +230,11 @@ func checkSmtpGate(gate SmtpGate, abuse sidecar.AbuseGate, request *SmtpGateRequ
 	case sidecar.AbuseStandingStandard, sidecar.AbuseStandingTrusted:
 	case sidecar.AbuseStandingRestricted:
 		restricted = true
+	case sidecar.AbuseStandingSuspended:
+		// §21.7's mail halt: held at the sender until the lift, and no smtp_halt row (QD-1124)
+		return smtpGateRefusal(protocol.SmtpPreambleCode_SMTP_PREAMBLE_HALTED, settings.SuspendedRetryTimeout, smtpGateReasonSuspended)
 	default:
-		// probation, suspended, and a standing this build does not know
+		// probation, and a standing this build does not know
 		return smtpGateRefusal(protocol.SmtpPreambleCode_SMTP_PREAMBLE_DENIED, 0, smtpGateReasonStanding)
 	}
 
