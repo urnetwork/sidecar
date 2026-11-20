@@ -52,8 +52,9 @@ func TestEveryRegisteredActorFitsATrace(t *testing.T) {
 	}
 }
 
-// The acl rows' Team schedules run outside the registry, FS-14's and FS-85's clauses (RunClause) and S3a's, S4a's and
-// S13's checks: each named its actors for the devices they act as, "m first" and "b first" among them.
+// The acl rows' Team schedules no case registration holds, FS-14's and FS-85's clauses, which the clause registry
+// holds too (register_clause_actor_test.go), FS-14's connected readers and S3a's, S4a's and S13's checks: each named its
+// actors for the devices they act as, "m first" and "b first" among them.
 func TestAclTeamActorsFitATrace(t *testing.T) {
 	for name, builder := range map[string]Builder{
 		"FS-14's acl suspend orders":    Fs14AclSuspendOrders,

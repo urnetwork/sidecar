@@ -379,7 +379,7 @@ func TestGateM10NamesEachRowsTestsWhereTheyRun(t *testing.T) {
 			t.Errorf("M10 has no %s", caseName)
 			continue
 		}
-		if !reflect.DeepEqual(row.Tests, tests) {
+		if tests := gateWithClausesForTest(testCase, tests); !reflect.DeepEqual(row.Tests, tests) {
 			t.Errorf("%s at M10 runs %s, want %s", caseName, gateTestsStringForTest(row.Tests), gateTestsStringForTest(tests))
 		}
 		if row.External != gateCaseExternal(testCase, gateM10OutGate) || row.StoreClock != testCase.StoreClock {

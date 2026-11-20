@@ -15,8 +15,8 @@ func TestFs19QuickBurner(t *testing.T) {
 	RunRow(t, "FS-19", "quick-burner", nil)
 }
 
-func TestFs85AclWakes(t *testing.T) {
-	RunClause(t, "FS-85", "acl wakes", Fs85AclWakes, nil)
+func TestFs85WakesAclWakes(t *testing.T) {
+	RunRegisteredClause(t, "FS-85", "acl wakes", nil)
 }
 
 // FS-85's acl wakes run outside the registry, which TestEveryRegisteredActorFitsATrace walks: each actor is one word,
