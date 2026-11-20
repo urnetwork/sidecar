@@ -270,7 +270,7 @@ DKIM comes only through §14's `POST /smtp/dkim-keys`, TLSA only through `/dns/k
 
 **Gates.** Upserts creating a public name (A, AAAA, CNAME, MX or SRV owners) and alias claims need §21.7's `network_verified`, else `QuotaRefusal{limit_key: verification}` (owner decision 96). A name `ScreenName` sends to review is refused with `QuotaRefusal{limit_key: screen_review}` and the case's id, nothing stored in §12's tables and nothing reserved; once a reviewer's `screen_allow` action names the network and the name, the caller's retry passes, and on probation such a name is refused with no case (§21.6; owner decision 534).
 
-**Direct MX (owner decision 33; Team).** Once mxedge has verified each mail indexer of §15.4's `POST /mail/direct-mx` against 12.7's A rules and its `mail_host_key`, `mx.<net>.<root>`'s A and AAAA name their addresses and the TLSA set stays; `DELETE` restores the router interfaces. Its MX, A and TLSA stay in URnetwork's zone, so a direct MX does not exclude URnetwork (§2.8 EX2).
+**Direct MX (owner decisions 33, 639; Team).** Once mxedge has verified each mail indexer of §15.4's `POST /mail/direct-mx` against 12.7's A rules and its `mail_host_key` and posted the result to api, which repoints the zone itself, `mx.<net>.<root>`'s A and AAAA name their addresses and the TLSA set stays; `DELETE` restores the router interfaces. Its MX, A and TLSA stay in URnetwork's zone, so a direct MX does not exclude URnetwork (§2.8 EX2).
 
 Custom domains, Team only (D-DNS-9):
 1. Verify TXT `_urnetwork-challenge.<domain>` (§7.6 `network_domain`).

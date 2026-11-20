@@ -845,9 +845,13 @@ real        T3 runs each T3 row through server's real handlers and stores (api, 
             nothing; T3 keeps each row whole and moves time in one reviewed file, server/sidecart3/clock.go: its
             Blobs wrapper records each key's write on the schedule's clock and returns it as LastModified, Advance
             shortens by PEXPIRE the Redis TTLs of the families a row names, and api takes the clock through a test
-            seam beside DenyPostgresForTest; a clause that depends on Postgres now() or a script's Redis TIME after
-            an Advance runs on T2 alone, since neither moves; the catalog's store_clock flag marks each translated
-            clause, gate reports say so, and FS-114 and 22.9's file-cluster suite never use the wrapper
+            seam beside DenyPostgresForTest; after an Advance the Net rereads its file clusters' admin info once,
+            holding every later blob request until that reread has finished, so none after a move goes on with
+            stale admin info, whatever their order, to a 503 and a retry on a clock no one moves
+            (server/sidecart3/faults.go; owner decision 646); a clause that depends on Postgres now() or a
+            script's Redis TIME after an Advance runs on T2 alone, since neither moves; the catalog's store_clock
+            flag marks each translated clause, gate reports say so, and FS-114 and 22.9's file-cluster suite
+            never use the wrapper
 explorer    each schedule also runs with seeded random barrier orders: 10 seeds a merge for T2 rows, 100 a night for
             T3 rows; a failing seed becomes a fixed schedule
 model       EvsCommit.tla (TLA+, checked by TLC: https://github.com/tlaplus/tlaplus) keeps head (its fence, refusal
@@ -1199,8 +1203,10 @@ FI-27  drop history: a drop deletes a segment or slot only if (1) every version 
        hold covering the repo stood when the DELETE issued (a hold keeping what existed at its placement, and
        standing for a deleter from 5 s after api acknowledged its placement, as FI-16's; owner decision 629); and (4)
        evacuation's horizon had passed the object's LastModified + 24 h + 2 min, and the DELETE named that
-       LastModified (owner decision 397); no version commits naming a listed version as a base, rename or reuse source
-       after its drop's fence; every path's newest version keeps all its content, a written boundary carrying its
+       LastModified (owner decision 397); no version whose push was validated after its drop's fence commits naming
+       a listed version as a base, rename or reuse source, while a reuse copy validated before the DROP committed
+       may commit after it within §11.8's 5 s window, its step 7 not rerunning 5h, mark finding it and keeping what
+       it names; every path's newest version keeps all its content, a written boundary carrying its
        base's oid and mode; readers show a listed version as pending or dropped, never as missing or tampered, for the
        repo's life and whatever became of the path's entry, and alarm on a drop failing its checks; a cancelled,
        refused or observed drop deletes nothing; a crash, retry, stale job instance or concurrent push changes neither
@@ -2375,7 +2381,9 @@ FS-87  §7,10, removal and retention: a MemberRevoke masks the member's cards, n
               entries 30 days after a newer entry or file for their item or after the item's
               expiry, keeping a live repo item's newest copy, its last M6 entry until the
               format-2 r/ file supersedes it, since repo items carry no expiry (§16.11's
-              retention row), and roll-ups drop documents past searchable_days; after an
+              retention row), and after a roll-up a document past searchable_days is masked:
+              no search returns it, it is still read by id, and a later rise of
+              searchable_days finds it again with no rebuild; after an
               admin's erasure of an announcement, no stored index or card version holding it
               has a readable key; a revoke, seeded with run items naming the repo (M6 announce
               entries; from M10 cards and index documents) and a daemon that renews its run
@@ -2415,8 +2423,10 @@ FS-90  §11    the job killed at each barrier (start CAS, resolve, the horizon's
               taskworker's clock 150 ms fast or unknown: nothing starts or deletes
 FS-91  §11    racing reuse copies: a push on ref R2 citing a listed version as reuse source,   FI-2,27     T2+T3  M10-out
               paused after its step 4, released (a) before the DROP commits: it commits, mark
-              finds it and keeps the shared segments; (b) after: its step 7 past 5 s reruns 5h
-              and gets 409 DROPPED; (c) validated after the commit against a cached head of
+              finds it and keeps the shared segments; (b) after: its step 7 within 5 s of
+              its validation commits it, naming the listed version, mark finding it and
+              keeping the shared segments, and past 5 s reruns 5h and gets 409 DROPPED;
+              (c) validated after the commit against a cached head of
               the ref that a failed cache write left before the DROP: it commits before the
               fence, found by mark and kept; again creating its ref, its head write held at
               the store past 26 h: the job waits in its horizon phase, and the write landing

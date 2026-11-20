@@ -2030,7 +2030,11 @@ push      POST .../slots/delete (admin) commits an ERASE push on the repo's `era
           hold too (owner decision 133); a crash between leaves the client's retry, then taskworker's reconciler,
           to finish the rewrites; a network's ERASE, CUT and CLOSURE pushes past 60 a minute queue as P1, their
           slot rewrites staying P0 (11.13)
-closure   the erasing device names every key of the entry's representations: each retained version's slot keys;
+closure   the erasing device names every key of the entry's representations: each retained version's slot keys,
+          from a walk of the path's history taken as whole only where its last version is 1 or a creation below
+          which evs answered nothing, the walk neither ending at BelowUnknown nor cut at
+          EvsSettings.HistoryVersionCount, since a path first created by a ref's Nth push starts at version N
+          (11.7), any other walk refusing the list, so the erasure fails closed (owner decision 642);
           each derived-field chain (§15.7's i/ segment holding the message's IndexEntry, and each search-index file
           holding the entry's postings, 11.14), which it first re-checkpoints without the entry under a fresh
           object key by a CLOSURE push, then lists the old chain's keys; and an unconsumed deposit's slot (the
@@ -2590,8 +2594,12 @@ table     drops/<repo>/_ holds fixed-size records within 64 KiB: a drop at most 
           nothing (§19.8; owner decision 570); an entry leaves 30 d
           after its ended_day, or sooner when a write would pass 64 KiB, ended entries oldest first but never one
           whose DROP committed under 27 h ago, since evacuation re-appends a committed DROP the table lacks; pending,
-          executing and observed entries never leave; a held entry occupies, lists and leaves the table exactly as its
-          done twin would, its resume state in the job's held files, so no count or listing shows a hold; a cancelled
+          executing and observed entries never leave; a held entry leaves neither by age nor by the bound until its
+          deletions finish, since the job resumes a held drop from its entry and its held files, and sits outside
+          the bound's count, so it never makes a later DROP fail, which would reveal a hold; GET .../drops lists it
+          as its done twin, leaving it out once the retention an ended drop gets, counted from the day it moved to
+          held, has passed, and its move to done counts its retention from that same day, so it goes at once past
+          those 30 days and no count or listing shows a hold (owner decision 643); a cancelled
           or refused drop leaves a 17 B void record {drop_id, state} for the repo's life, so an absent entry with no
           void record reads executed; 5c answers a drop 429 when pending, executing and observed entries and void
           records would pass 48 KiB, held entries never counting, a cancel never refused, and dry runs only evicting
@@ -3670,9 +3678,12 @@ erase     at a head at or after its CUT the eraser lists every index file holdin
           and every stored version of those files, staged bytes still in a batch included, shares one of them; the
           purge deletes the old ciphertext and slots a minute later; the ERASEs also name the key of every index
           path whose retained version still holds the document (a version a hold kept, a writer slot reused after a
-          merge, a shard the document left, a bucket a roll-up removed, found from the ref's history), a live one
-          rewritten under a fresh key by a CLOSURE first, so no stored version keeps an openable key (owner
-          decisions 61, 133; FI-19); a CLOSURE refused 409 for a path another push changed after the list rereads
+          merge, a shard the document left, a bucket a roll-up removed, found from the ref's history, whose walk
+          reads each retained version under the content hash its sealed fields carry and takes one whose slot key
+          an earlier ERASE destroyed as unreadable, with nothing left to hold, so a resume after a later erasure
+          goes on; owner decision 642), a live one rewritten under a fresh key by a CLOSURE first, so no stored
+          version keeps an openable key (owner decisions 61, 133; FI-19); a CLOSURE refused 409 for a path
+          another push changed after the list rereads
           that path's history and rebuilds; no watch follows an ERASE, and no indexer takes part; after its CUT the
           eraser folds each run card the CUT lists again from its stream's head and enters it full in its own head,
           in a re-entry push built in a companion push's order that carries no other document, since every entry is
@@ -4089,7 +4100,8 @@ never     a query, which documents match it, or which trigrams documents share: 
        drop now would keep} -> 202 {preview_id}; 429 past evs_drop_previews_per_day; one at a time a repo, P2
   GET  /evs/v1/repos/<id>/drops/preview/<preview_id> (admin) -> state, progress, list_match per path, versions,
        frees, shared, inline, packed, young, snapshot;  GET /evs/v1/repos/<id>/drops (r) -> each drop's state,
-       progress and freed bytes, a held drop reading done; DROP pushes and cancels go through POST .../push
+       progress and freed bytes, a held drop reading done and leaving the list when its done twin would (owner
+       decision 643); DROP pushes and cancels go through POST .../push
   push refusals, each with the push id: 403 SCOPE; 402 QUOTA_PAYMENT and 403 QUOTA_LIMIT; 409 TIME_STALE,
        REPO_KEYING, REPO_DELETED, MAP_PARTS, MAP_SOURCE, SLOT_UNKNOWN, FORMAT_UNSUPPORTED {needs_format: 2}, REF_MODE,
        PUSH_ID_REUSED, SEGMENT_GONE, SEGMENT_STALE, SLOT_STALE, PARTS_MISSING, VERSIONING, DIRECTORY_FULL,
