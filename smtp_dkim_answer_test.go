@@ -658,10 +658,10 @@ func TestSmtpDkimAwaitingSelectorOutlivesARestart(t *testing.T) {
 	testDkimAnswerSigns(t, current)
 }
 
-// Through the sender: a device's first send From a CNAME-mode custom domain is deferred before any edge stream, with
-// the selector published; once the customer's CNAME answers, the retry sends it signed under that selector for the
-// domain.
-func TestSmtpSenderHoldsACnameDomainsFirstSendUntilTheDomainAnswers(t *testing.T) {
+// A sender world whose keys await a custom domain's answer over the world's own device DoH, and a message to bob From
+// the custom domain.
+func newTestDkimAnswerSenderWorld(t *testing.T) (*testSenderWorld, *testDkimAnswerPublisher, *sidecar.SmtpOutboundMessage) {
+	t.Helper()
 	publisher := newTestDkimAnswerPublisher()
 	world := newTestSenderWorld(t, &testSenderOptions{
 		dkim: func(zone *sidecartest.FakeMailZone, clock *sidecartest.FakeClock, settings *sidecar.SmtpSenderSettings) *sidecar.SmtpDkimKeys {
@@ -674,7 +674,14 @@ func TestSmtpSenderHoldsACnameDomainsFirstSendUntilTheDomainAnswers(t *testing.T
 		"Subject: The spring catalog\r\n" +
 		"Message-ID: <qvsc2zbwd5c3m5rbnvzxjzpnay@" + testCustomDomainName + ">\r\n" +
 		"\r\nThe catalog is out.\r\n")
+	return world, publisher, message
+}
 
+// Through the sender: a device's first send From a CNAME-mode custom domain is deferred before any edge stream, with
+// the selector published; once the customer's CNAME answers, the retry sends it signed under that selector for the
+// domain.
+func TestSmtpSenderHoldsACnameDomainsFirstSendUntilTheDomainAnswers(t *testing.T) {
+	world, publisher, message := newTestDkimAnswerSenderWorld(t)
 	held := testDomainOutcome(t, world.send(message), testTlsDomain)
 	if held.Outcome != sidecar.SmtpOutcomeDeferred || held.RetryAfter <= 0 {
 		t.Fatalf("the first send: %+v", held)
@@ -703,5 +710,30 @@ func TestSmtpSenderHoldsACnameDomainsFirstSendUntilTheDomainAnswers(t *testing.T
 	}
 	if len(publisher.callList()) != 1 {
 		t.Error("the retry published again")
+	}
+}
+
+// A domain that never answers holds the first send to the message's give-up time, never signing under the selector
+// nor dialing the edge, and the message then fails with a DSN saying the domain does not publish the device's key.
+func TestSmtpSenderGivesUpOnACnameDomainThatNeverAnswers(t *testing.T) {
+	world, _, message := newTestDkimAnswerSenderWorld(t)
+	held := testDomainOutcome(t, world.send(message), testTlsDomain)
+	if held.Outcome != sidecar.SmtpOutcomeDeferred {
+		t.Fatalf("the first send: %+v", held)
+	}
+	world.tls.clock.AdvanceTo(message.CreateTime.Add(world.settings.RetryGiveUpTimeout))
+	ended := testDomainOutcome(t, world.send(message), testTlsDomain)
+	if ended.Outcome != sidecar.SmtpOutcomeFailed {
+		t.Fatalf("past the give-up time: %+v", ended)
+	}
+	if world.stub.DialCount() != 0 || len(world.mx.Transactions()) != 0 {
+		t.Fatalf("%d edge dials, %d transactions", world.stub.DialCount(), len(world.mx.Transactions()))
+	}
+	dsns := world.mailbox.Dsns()
+	if len(dsns) != 1 || !bytes.Contains(dsns[0].Dsn, []byte("does not publish this device's signing key yet")) {
+		t.Fatalf("dsns %s", testDsnText(dsns))
+	}
+	if bytes.Contains(dsns[0].Dsn, []byte("._domainkey.")) {
+		t.Errorf("the dsn names a selector's record: %s", testDsnText(dsns))
 	}
 }
