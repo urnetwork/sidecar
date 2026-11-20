@@ -34,36 +34,65 @@ import (
 var errTestEraseIndexKilled = errors.New("the eraser was killed here")
 
 // The eraser's streams as these tests watch them: each committed ERASE told to the index's fake in the order the
-// record's evs took it, kept by push id, and a hook after each.
+// record's evs took it, kept by push id, and a hook after each; and, where a test asks, the next commit's answer lost
+// and a retry of its push id answered as evs answers one past its memory of the push id, the keys gone.
 type testEraseIndexTap struct {
 	sidecar.RecordStreams
 	index *sidecar.RecordEraseTestIndex
 
-	stateLock  sync.Mutex
-	erases     []*sidecar.RecordStreamErase
-	afterErase func(count int)
+	stateLock     sync.Mutex
+	erases        []*sidecar.RecordStreamErase
+	afterErase    func(count int)
+	loseAndForget bool
+	forgotten     map[sidecar.Id]bool
 }
 
 func (self *testEraseIndexTap) Erase(ctx context.Context, repoId sidecar.Id, erase *sidecar.RecordStreamErase) (*sidecar.RecordStreamCommit, error) {
+	forgotten := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.forgotten[erase.PushId]
+	}()
+	if forgotten {
+		return nil, &sidecar.RecordStreamRefusal{Code: protocol.EvsRefusalCode_EVS_REFUSAL_NOTHING_TO_ERASE, Recorded: true}
+	}
 	commit, err := self.RecordStreams.Erase(ctx, repoId, erase)
 	if err != nil {
 		return commit, err
 	}
-	count, hook := func() (int, func(count int)) {
+	count, hook, lost := func() (int, func(count int), bool) {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		if slices.ContainsFunc(self.erases, func(held *sidecar.RecordStreamErase) bool { return held.PushId == erase.PushId }) {
 			// a retry evs answered as the commit it made
-			return len(self.erases), nil
+			return len(self.erases), nil, false
 		}
 		self.erases = append(self.erases, erase)
 		self.index.NoteStreamErase(erase.ErasureId, erase.Complete)
-		return len(self.erases), self.afterErase
+		lost := self.loseAndForget
+		if lost {
+			self.loseAndForget = false
+			if self.forgotten == nil {
+				self.forgotten = map[sidecar.Id]bool{}
+			}
+			self.forgotten[erase.PushId] = true
+		}
+		return len(self.erases), self.afterErase, lost
 	}()
 	if hook != nil {
 		hook(count)
 	}
+	if lost {
+		return nil, errTestEraseIndexKilled
+	}
 	return commit, nil
+}
+
+// Loses the next committed ERASE's answer, a retry of it then answered as evs past its memory of the push id.
+func (self *testEraseIndexTap) setLoseAndForget() {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.loseAndForget = true
 }
 
 // The committed ERASEs, by push id, in order.
@@ -938,4 +967,37 @@ func TestRecordEraseResumedByAnotherDevice(t *testing.T) {
 		t.Fatalf("an admin did not take up a revoked eraser's erasure: %+v", results)
 	}
 	index.Sweep()
+}
+
+// An erasure whose ERASE committed though its answer was lost, resumed after evs has forgotten the push id, so the
+// retry answers NOTHING_TO_ERASE: evs's erasure ref shows the ERASE of this erasure, so it began, and it CUTs and lists
+// its documents rather than reading as one another erasure took the keys of.
+func TestRecordEraseResumedPastEvsMemoryStillCuts(t *testing.T) {
+	ctx := t.Context()
+	world := newTestRecordWorld(t)
+	eraser, _ := world.eraserDevice()
+	index := sidecar.NewRecordEraseTestIndex(t, protocol.RepoKind_REPO_KIND_VAULT, eraser.sidecarId)
+	tap := testEraseIndexTapOn(eraser, index)
+	record := testEraseIndexOpen(eraser, index)
+	note := testRecordAppend(t, record, testRecordNote(nil, "the rotation plan"))
+	if err := record.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	tap.setLoseAndForget()
+	if _, err := record.Eraser().Erase(ctx, &sidecar.RecordEraseArgs{
+		LogId: world.vaultId, EntryIds: []sidecar.Id{note.EntryId}, Reason: sidecar.RecordErasureReasonPerson, Confirmed: true,
+	}); !errors.Is(err, errTestEraseIndexKilled) {
+		t.Fatalf("the erasure whose answer was lost: %v", err)
+	}
+	erasureId := tap.committed()[0].ErasureId
+	if index.ErasureDocs(erasureId) != nil {
+		t.Fatal("a CUT before the ERASE's answer")
+	}
+	restarted := testEraseIndexOpen(eraser, index)
+	if err := restarted.Eraser().Resume(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if index.ErasureDocs(erasureId) == nil || !slices.Contains(index.Calls(), "cut") {
+		t.Fatal("the resumed erasure read as one that never began, and listed nothing")
+	}
 }
