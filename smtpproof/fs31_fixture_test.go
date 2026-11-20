@@ -45,8 +45,176 @@ import (
 // (plan-SMTP-small-readings #5).
 const fs31Selector = "fsaaaaaaaaaaaaaaaaaaaaaaaa"
 
-// A guard on what a connection waits for, never a pause: each wait ends at the event it waits on.
-const fs31GuardTimeout = 60 * time.Second
+// How long an FS-31 connection may wait: a guard, never a pause, since each wait ends at the event it waits on. The
+// connection's work is its parts': the prover submits each once the one before it is answered, and the edge's
+// verification of it, in the leg that compiles circuits, compiles the part's shape, queued behind every other test's
+// compile (testCompiledLock), and solves it. That takes seconds a part alone and grows with the package's tests and
+// the lanes' running beside it, so one bound on the whole connection failed a send of seven parts under load that
+// was only slow. The bound follows the parts the case runs instead, as QD-1101's barrier bound follows its holder:
+// each part's answer has PartTimeout from its submission, and every other wait, before the first part, between two
+// and after the last, has ConnectionTimeout. A hang ends at the first allowance it passes, with a cause naming the
+// wait. Start from defaultFs31GuardSettings.
+type fs31GuardSettings struct {
+	// A wait with no part at the edge: the preamble, the MX's dialog and handshake, a part's proof, here a handle
+	// on its witness, the replies and the close after QUIT, each well under a second: 60 s.
+	ConnectionTimeout time.Duration
+	// One part's answer from the edge, from its submission: 10 min, well past the 13 s the slowest part took with
+	// the whole package running at load averages of 24 to 35 and the 4 s it took alone, and inside make check's
+	// 30 min for the package, so a hang in the edge's verification still fails the cell it hangs.
+	PartTimeout time.Duration
+}
+
+func defaultFs31GuardSettings() *fs31GuardSettings {
+	return &fs31GuardSettings{
+		ConnectionTimeout: 60 * time.Second,
+		PartTimeout:       10 * time.Minute,
+	}
+}
+
+// One connection's guard: its context ends, with a cause naming the wait, once a wait passes its allowance
+// (fs31GuardSettings). The connection's recording channel tells it of each part's submission and answer. Each
+// wait's allowance is a generation of its own, so a timer left from one wait never ends the next. Safe for
+// concurrent use.
+type fs31Guard struct {
+	settings *fs31GuardSettings
+	clock    sidecar.Clock
+	ctx      context.Context
+	cancel   context.CancelCauseFunc
+
+	stateLock  sync.Mutex
+	generation uint64
+	// stops the timer of the allowance running now
+	stopTimer func() bool
+	// parts submitted and answered, and the index of the last submitted
+	submitted     int
+	answered      int
+	lastPartIndex uint32
+	// the wait that passed its allowance, once one has
+	expiredErr error
+	ended      bool
+}
+
+func newFs31Guard(settings *fs31GuardSettings, clock sidecar.Clock) *fs31Guard {
+	ctx, cancel := context.WithCancelCause(context.Background())
+	guard := &fs31Guard{settings: settings, clock: clock, ctx: ctx, cancel: cancel}
+	guard.arm()
+	return guard
+}
+
+// What every wait of the connection takes.
+func (self *fs31Guard) context() context.Context {
+	return self.ctx
+}
+
+// A part went to the edge: its answer has PartTimeout.
+func (self *fs31Guard) partSubmitted(index uint32) {
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.submitted += 1
+		self.lastPartIndex = index
+	}()
+	self.arm()
+}
+
+// The edge answered a part, taking or refusing it: the wait after it has its own allowance.
+func (self *fs31Guard) partAnswered() {
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.answered += 1
+	}()
+	self.arm()
+}
+
+// Starts the allowance of the wait the connection is in now, in place of the last one's. The clock may call back at
+// once, so no lock is held across it.
+func (self *fs31Guard) arm() {
+	var generation uint64
+	var timeout time.Duration
+	var wait string
+	var stopLast func() bool
+	over := false
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.generation += 1
+		generation = self.generation
+		stopLast, self.stopTimer = self.stopTimer, nil
+		over = self.ended || self.expiredErr != nil
+		switch {
+		case self.answered < self.submitted:
+			timeout = self.settings.PartTimeout
+			wait = fmt.Sprintf("part %d's answer from the edge", self.lastPartIndex)
+		case self.submitted == 0:
+			timeout = self.settings.ConnectionTimeout
+			wait = "the connection before its first part"
+		default:
+			timeout = self.settings.ConnectionTimeout
+			wait = fmt.Sprintf("the connection after part %d's answer", self.lastPartIndex)
+		}
+	}()
+	if stopLast != nil {
+		stopLast()
+	}
+	if over {
+		return
+	}
+	stop := self.clock.AfterFunc(timeout, func() {
+		self.expire(generation, fmt.Errorf("FS-31's guard: %s waited past %s", wait, timeout))
+	})
+	current := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if generation != self.generation || self.ended {
+			return false
+		}
+		self.stopTimer = stop
+		return true
+	}()
+	if !current {
+		stop()
+	}
+}
+
+// A wait's allowance passed: unless a later wait has begun, the connection's context ends with err as its cause.
+func (self *fs31Guard) expire(generation uint64, err error) {
+	current := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if generation != self.generation || self.ended || self.expiredErr != nil {
+			return false
+		}
+		self.expiredErr = err
+		return true
+	}()
+	if current {
+		self.cancel(err)
+	}
+}
+
+// The wait that passed its allowance, nil while none has.
+func (self *fs31Guard) expired() error {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.expiredErr
+}
+
+// Ends the guard with its connection: its timer stops and its context ends.
+func (self *fs31Guard) end() {
+	var stop func() bool
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.ended = true
+		self.generation += 1
+		stop, self.stopTimer = self.stopTimer, nil
+	}()
+	if stop != nil {
+		stop()
+	}
+	self.cancel(nil)
+}
 
 // The circuit's answer on a part, where it was asked.
 const (
@@ -608,8 +776,10 @@ func fs31Run(t *testing.T, connection *fs31Connection) *fs31Outcome {
 		recipientLimit:  connection.recipientLimit,
 	})
 	outcome := &fs31Outcome{cell: cell, edgeName: edge.name(), mx: connection.mx}
-	ctx, cancel := context.WithTimeout(context.Background(), fs31GuardTimeout)
-	defer cancel()
+	guardSettings := defaultFs31GuardSettings()
+	guard := newFs31Guard(guardSettings, sidecar.RealClock{})
+	defer guard.end()
+	ctx := guard.context()
 
 	message := connection.message
 	declared := &fs31Declared{
@@ -623,7 +793,7 @@ func fs31Run(t *testing.T, connection *fs31Connection) *fs31Outcome {
 	}
 	opened, err := edge.open(ctx, declared)
 	if err != nil {
-		t.Fatalf("%s: the edge: %v", cell, err)
+		t.Fatalf("%s: the edge: %v", cell, errors.Join(err, guard.expired()))
 	}
 	if opened.code != 0 {
 		outcome.preambleCode = opened.code
@@ -664,7 +834,7 @@ func fs31Run(t *testing.T, connection *fs31Connection) *fs31Outcome {
 		connection.settings(settings)
 	}
 	conn := opened.conn
-	recorder := &fs31RecordingChannel{inner: opened.channel}
+	recorder := &fs31RecordingChannel{inner: opened.channel, guard: guard}
 	var channel sidecar.SmtpProofChannel = recorder
 	if connection.adversary != nil {
 		outcome.attack = newFs31Attack(t, cell, backend, connection.adversary)
@@ -689,13 +859,17 @@ func fs31Run(t *testing.T, connection *fs31Connection) *fs31Outcome {
 		opened.conn.Close()
 		<-proved
 	}
+	// a wait past its allowance is a hang, whatever the row expects of the send
+	if err := guard.expired(); err != nil {
+		t.Errorf("%s on %s: %v", cell, edge.name(), err)
+	}
 	accepted := outcome.err == nil && outcome.result != nil && outcome.result.Accepted
 	if accepted && !connection.endAtQuit {
 		// an accepted send's connection ends at the MX's close after QUIT, and the sidecar closes its end after
 		// that
 		select {
 		case <-edge.done():
-		case <-time.After(fs31GuardTimeout):
+		case <-time.After(guardSettings.ConnectionTimeout):
 			t.Errorf("%s: the connection did not end after an accepted send's QUIT", cell)
 		}
 	}
@@ -709,9 +883,11 @@ func fs31Run(t *testing.T, connection *fs31Connection) *fs31Outcome {
 	return outcome
 }
 
-// The channel as the edge answers it, the parts it took and the first it refused kept.
+// The channel as the edge answers it, the parts it took and the first it refused kept, each part's submission and
+// answer told to the connection's guard.
 type fs31RecordingChannel struct {
 	inner sidecar.SmtpProofChannel
+	guard *fs31Guard
 
 	stateLock     sync.Mutex
 	refusedIndex  uint32
@@ -723,7 +899,9 @@ func (self *fs31RecordingChannel) DiscloseShts(ctx context.Context, shts []byte)
 }
 
 func (self *fs31RecordingChannel) SubmitPart(ctx context.Context, part *sidecar.SmtpProofPart) error {
+	self.guard.partSubmitted(part.Index)
 	err := self.inner.SubmitPart(ctx, part)
+	self.guard.partAnswered()
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	switch {
