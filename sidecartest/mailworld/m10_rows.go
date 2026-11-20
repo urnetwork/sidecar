@@ -15,41 +15,45 @@
 //
 //	RunM10Fs76Mailbox   FS-76's corpus mail (SearchCorpus's MIME forms and edge classes, and four messages only the
 //	                    canonical reading finds a word of), delivered over the corpus's 200 days and ingested by two
-//	                    devices in turn; at every bucket boundary 1 s before and after, after every roll-up, after
-//	                    the erasure and at the end the mailbox's index holds live exactly the oracle's documents; and
-//	                    the query set runs on a desktop and a phone against the oracle over the same messages'
-//	                    stored bytes on a search world (the file's second half), since no device searches an index
-//	                    over EvsRepo yet
-//	RunM10Fs78Mailbox   an admin's erasure of one email among three: its CUT first, the ref's index_epoch at the
-//	                    CUT's version, the email's own keys gone with the first ERASE so its body opens for no
-//	                    device, a fresh one included, then the CLOSUREs of the index file and the i/ segment holding
-//	                    it, after which no index file holds its postings and the others' stand
-//	RunM10Fs111Mailbox  writer A's ingest, planned with document D in its head, paused before its head CAS; eraser
-//	                    B's CUT, first ERASE and CLOSUREs commit; the paused push gets 409 INDEX_EPOCH and the ingest
-//	                    plans again, committing the new message without D; a fresh device opens none of D's copies
-//	RunM10Fs112Mailbox  one message with 5 MiB of text, five chunk documents: the index holds the oracle's five, the
-//	                    erasure's CUT lists them all, its body no longer opens, and the CLOSUREs leave no chunk live
+//	                    devices in turn, the mailbox's first message erased early and, once a roll-up has moved a
+//	                    standing message into an all shard, that message; at every bucket boundary 1 s before and after,
+//	                    after every roll-up, after each erasure and at the end the mailbox's index holds live exactly
+//	                    the oracle's documents; and the query set runs on a desktop and a phone against the oracle over
+//	                    the same messages' stored bytes on a search world (the file's second half), since no device
+//	                    searches an index over EvsRepo yet
+//	RunM10Fs78Mailbox   four emails ingested by the owner's laptop and the member's second device in turn, so each
+//	                    device's head file stands at a second version, the second device's first created by the
+//	                    mailbox's second push; the admin erases the second device's first email, then the laptop's
+//	                    first, which the second device has ingested twice since, then resumes the first erasure. Each
+//	                    erasure: its CUT first, the ref's index_epoch at the CUT's version, the email's own keys gone
+//	                    with its first ERASE so its body opens for no device, a fresh one included, then a CLOSURE of
+//	                    every index file holding it, whichever push first created the file, no version a CLOSURE
+//	                    replaced opening for any device, after which no index file holds its postings and the others'
+//	                    stand
+//	RunM10Fs111Mailbox  writer A's ingest of document D in the mailbox's second push, then its next ingest, planned
+//	                    with D in its head, paused before its head CAS; eraser B's CUT, first ERASE and CLOSUREs
+//	                    commit; the paused push gets 409 INDEX_EPOCH and the ingest plans again, committing the new
+//	                    message without D; a fresh device opens none of D's copies; then B erases A's new message too,
+//	                    and B's device, restarting, resumes the first erasure from evs's state past the versions the
+//	                    second's ERASE took the keys of
+//	RunM10Fs112Mailbox  one message with 5 MiB of text, five chunk documents, ingested by the second device in the
+//	                    mailbox's second push: the index holds the oracle's five, the erasure's CUT lists them all,
+//	                    its body no longer opens, and the CLOSUREs leave no chunk live
+//
+// An index file first created past the mailbox's first push starts above version 1 (§11.7's versions row), and an
+// erasure's CLOSURE of it names the slots of a history that ends at that creation (QD-1109); the eraser's walk reads
+// a writer's head file's earlier version, and passes over one whose key an ERASE destroyed (QD-1110). Every row
+// leans on both.
 //
 // What a real mailbox does not carry yet, each named for the task it goes back to. None of it is asserted here, and
 // none of these rows shows an erasure complete:
 //
-//   - an index file first created above the ref's version 1 cannot be rewritten in a slot-keyed repo: EvsRepo's
-//     SlotKeysOf refuses a history that does not end at version 1 (ErrEvsSlotKeysIncomplete), and under §11.7 every
-//     path created after the ref's first push starts above it. Such an erasure stops after its CUT and first ERASE
-//     with the postings still under a standing key. Every erasure here is therefore of a message the mailbox's first
-//     push ingested, whose index files and i/ segment begin at version 1, before any roll-up moved it (question
-//     mail-m10-04-closure-of-a-file-born-past-version-1; EVS2-M10-12's SlotKeysOf, SEARCH-M10-17's eraser);
-//   - an erasure fails outright, after its CUT and first ERASE, where an index file it does not rewrite stands at a
-//     second version: the eraser's history walk reads each retained version through the EvsRepo store, whose Retained
-//     names it without its content hash, and whose Read then refuses it as ErrEvsSealInvalid, a plaintext hash
-//     mismatch. So in every row the only index file past its first version when the erasure runs is the one the
-//     erased message's own writer rewrote (question mail-m10-04-index-eraser-history-reads, part a; SEARCH-M10-17's
-//     seam);
-//   - no erasure says complete: the EvsRepo store answers its retained history incomplete, as SEARCH-M10-17 left
-//     it, so each stays rewriting and unproven. And once a mailbox holds a second erasure a resume of the first
-//     fails, the walk reading a version whose key the second's ERASE destroyed, which EvsRepo answers as
-//     ErrEvsSealInvalid and the walk takes as a failure, not as collected (the same question, part b). So no row
-//     resumes, and FS-111's killed eraser, its restart and the member's other device after 25 h do not run;
+//   - no erasure says complete: the EvsRepo store names no removed index path among the versions the ref retains
+//     (SEARCH-M10-17's indexEvsStore.Retained), so it answers that history incomplete and each erasure stays
+//     rewriting and unproven. That reaches FI-19 after a roll-up: the bucket files the roll-up removed still hold the
+//     message FS-76 erases after it, in versions under keys no ERASE names;
+//   - FS-111's eraser killed after its first CLOSURE and restarted, and the member's other device after 25 h: not run
+//     here, and the mailbox's member has one device that may erase, the owner's laptop;
 //   - the exact storage limit, the closure allowance's floor, the 429s and the finish estimate (FS-78's and FS-112's
 //     wait): ?closure=1 uploads at the limit are not built on the client (EVS2-M10-12), so those clauses stay
 //     MAIL-M10-02's and SEARCH-M10-37's, on their fakes;
@@ -498,18 +502,56 @@ type m10Erased struct {
 	cutVersion uint64
 }
 
+// Whether version of path opens for device: read by number through EvsRepo, verified, with its content.
+func (self *M10World) versionOpens(device *M10Device, path string, version uint64) error {
+	_, err := device.Repo.ReadHead(self.ctx, &sidecar.EvsReadArgs{Path: path, Version: version, Fresh: true}, io.Discard)
+	return err
+}
+
 // The owner's erasure of message, held to §15.7's order as far as a real mailbox carries it (the file header): the
 // CUT commits first, moving the ref's index_epoch to its version and raising fenced before any other standing; the
-// first ERASE destroys the message's own keys, so its body opens for no device; CLOSUREs of the erasure commit; and no
-// index file holds a posting of the message live afterwards. The ledger forgets the message from its CUT.
+// first ERASE destroys the message's own keys, so its body opens for no device; a CLOSURE of the erasure rewrites
+// every index file that held one of its documents at the head, a chunk's each, whichever device's push first created
+// the file and at whatever version it stood (FI-19's current files), after which every other version of such a file
+// names only slots the mailbox's committed ERASEs destroyed and opens for no device; and no index file holds a posting
+// of the message live afterwards. An earlier erasure's set may stand, which the CUT writes again. The ledger forgets
+// the message from its CUT.
 func (self *M10World) eraseHeld(label string, message *M10Message) (*m10Erased, error) {
 	owner := self.Owner
 	before, err := self.Index(owner)
 	if err != nil {
 		return nil, err
 	}
-	if _, cut := before.Files[m10ErasureSetPath]; cut {
-		return nil, fmt.Errorf("%s: the mailbox holds an erasure set before its first erasure", label)
+	// the message's documents, a chunk each, as the oracle derives their doc_keys, and the index files holding any of
+	// them, each at the version the erasure replaces, which opens before it
+	documents, err := self.Oracle.Documents(self.scope())
+	if err != nil {
+		return nil, err
+	}
+	docKeys := [][16]byte{}
+	for _, document := range documents {
+		if document.Name == message.Path {
+			docKeys = append(docKeys, document.DocKey)
+		}
+	}
+	holding := []string{}
+	for _, docKey := range docKeys {
+		held, err := sidecar.SearchTestEvsFilesHoldingKey(self.ctx, owner.Repo, nil, docKey)
+		if err != nil {
+			return nil, err
+		}
+		for _, file := range held {
+			if slices.Contains(holding, file.Path) {
+				continue
+			}
+			holding = append(holding, file.Path)
+			if err := self.versionOpens(owner, file.Path, before.Files[file.Path]); err != nil {
+				return nil, fmt.Errorf("%s: %s at %d, holding the message, does not open before its erasure: %w", label, file.Path, before.Files[file.Path], err)
+			}
+		}
+	}
+	if len(docKeys) == 0 || len(holding) == 0 {
+		return nil, fmt.Errorf("%s: %s is %d documents of the oracle's, which %d index files hold, before its erasure", label, message.Path, len(docKeys), len(holding))
 	}
 	eventsBefore := len(owner.ErasureEvents())
 	erasure, err := self.Eraser(owner).Erase(self.ctx, message.Month, []sidecar.Id{message.Id})
@@ -526,17 +568,18 @@ func (self *M10World) eraseHeld(label string, message *M10Message) (*m10Erased, 
 	if len(events) == 0 || events[0].State != sidecar.SidecarErasureFenced || events[0].ErasureId != erasure.ErasureId {
 		return nil, fmt.Errorf("%s: the erasure's first standing is not fenced: %+v", label, events)
 	}
-	after, err := self.Index(owner)
+	// the set as the CUT wrote it, at the ref version it committed at, a second erasure's over the first's
+	set, err := owner.Repo.History(self.ctx, &sidecar.EvsReadArgs{Path: m10ErasureSetPath, Fresh: true})
 	if err != nil {
 		return nil, err
 	}
-	cutVersion := after.Files[m10ErasureSetPath]
+	cutVersion := set.Versions[0].CommitVersion
 	epoch, err := sidecar.SearchTestEvsIndexEpoch(self.ctx, owner.Repo, nil)
 	if err != nil {
 		return nil, err
 	}
 	if cutVersion <= before.Version || epoch != cutVersion {
-		return nil, fmt.Errorf("%s: the CUT's set stands at %d over a head at %d, the ref's index_epoch at %d", label, cutVersion, before.Version, epoch)
+		return nil, fmt.Errorf("%s: the CUT's set committed at %d over a head at %d, the ref's index_epoch at %d", label, cutVersion, before.Version, epoch)
 	}
 	// the first ERASE names the message's path in its note and destroys its keys
 	erasures, err := owner.Repo.ReadErasures(self.ctx, 0)
@@ -553,39 +596,108 @@ func (self *M10World) eraseHeld(label string, message *M10Message) (*m10Erased, 
 			return nil, fmt.Errorf("%s: the erased message's body still opens for the %s", label, device.Name)
 		}
 	}
-	closures, err := sidecar.SearchTestEvsClosureCount(self.ctx, owner.Repo, nil, erasure.ErasureId)
+	closures, err := owner.Repo.ReadClosures(self.ctx, sidecar.EvsMainRefName, 0)
 	if err != nil {
 		return nil, err
 	}
-	if closures == 0 {
+	closed := map[uint64]bool{}
+	for _, closure := range closures {
+		if closure.ErasureId == erasure.ErasureId {
+			closed[closure.Version] = true
+		}
+	}
+	if len(closed) == 0 {
 		return nil, fmt.Errorf("%s: evs holds no CLOSURE of the erasure", label)
 	}
-	held, err := sidecar.SearchTestEvsFilesHolding(self.ctx, owner.Repo, nil, message.Path)
-	if err != nil {
-		return nil, err
+	// each file that held it rewritten by a CLOSURE of the erasure, and every earlier version of it under keys the
+	// mailbox's committed ERASEs destroyed, so it opens for no device: refused for its key, or, where evs no longer
+	// serves a replaced versionless version's content, collected
+	destroyed := map[sidecar.Id]bool{}
+	for _, erased := range erasures {
+		for _, key := range erased.Keys {
+			destroyed[key.SlotId] = true
+		}
 	}
-	for _, file := range held {
-		if file.Live {
-			return nil, fmt.Errorf("%s: %s still holds the erased message live at %d", label, file.Path, file.Version)
+	for _, path := range holding {
+		history, err := owner.Repo.History(self.ctx, &sidecar.EvsReadArgs{Path: path, Fresh: true})
+		if err != nil {
+			return nil, err
+		}
+		if len(history.Versions) == 0 || !closed[history.Versions[0].CommitVersion] {
+			return nil, fmt.Errorf("%s: %s held the message and no CLOSURE of the erasure rewrote it", label, path)
+		}
+		for _, version := range history.Versions[1:] {
+			if version.Removed {
+				continue
+			}
+			if len(version.SlotIds) == 0 || slices.ContainsFunc(version.SlotIds, func(slotId sidecar.Id) bool { return !destroyed[slotId] }) {
+				return nil, fmt.Errorf("%s: %s at %d, which a CLOSURE of the erasure replaced, names slots %v not all destroyed", label, path, version.Version, version.SlotIds)
+			}
+			for _, device := range []*M10Device{owner, self.Reader} {
+				if err := self.versionOpens(device, path, version.Version); !errors.Is(err, sidecar.ErrEvsSealInvalid) && !errors.Is(err, sidecar.ErrEvsCollected) {
+					return nil, fmt.Errorf("%s: %s at %d, which a CLOSURE of the erasure replaced, is not refused for the %s: %v", label, path, version.Version, device.Name, err)
+				}
+			}
+		}
+	}
+	for _, docKey := range docKeys {
+		held, err := sidecar.SearchTestEvsFilesHoldingKey(self.ctx, owner.Repo, nil, docKey)
+		if err != nil {
+			return nil, err
+		}
+		for _, file := range held {
+			if file.Live {
+				return nil, fmt.Errorf("%s: %s still holds the erased message live at %d", label, file.Path, file.Version)
+			}
 		}
 	}
 	return &m10Erased{erasure: erasure, cutVersion: cutVersion}, nil
 }
 
-// Holds a device admitted after an erasure to FS-111's last clause as a real mailbox carries it: it opens none of
-// the erased message's copies, neither its body nor a posting in any index file, and reads the index the oracle
-// describes.
-func (self *M10World) holdFresh(label string, erased *M10Message, standing ...*M10Message) error {
-	fresh := self.FreshDevice("fresh device")
-	if self.BodyOpens(fresh, erased) {
-		return fmt.Errorf("%s: the erased message's body opens for a fresh device", label)
-	}
-	held, err := sidecar.SearchTestEvsFilesHolding(self.ctx, fresh.Repo, nil, erased.Path)
+// The owner's laptop restarting after a later erasure: a fresh eraser's Resume of every erasure no ERASE completed
+// goes on from evs's state, first taking up first, the oldest, whose walk now meets versions whose keys a later
+// erasure's ERASE destroyed and passes over them (QD-1110), and leaves it rewriting and unproven, as every erasure here
+// (the file header). Nothing was left to rewrite, so the mailbox's ref does not move.
+func (self *M10World) resumeHeld(label string, first *m10Erased) error {
+	before, err := self.Index(self.Owner)
 	if err != nil {
 		return err
 	}
-	if slices.ContainsFunc(held, func(file sidecar.SearchTestHeld) bool { return file.Live }) {
-		return fmt.Errorf("%s: a fresh device finds the erased message live in %+v", label, held)
+	resumed, err := self.Eraser(self.Owner).Resume(self.ctx)
+	if err != nil {
+		return fmt.Errorf("%s: the resume: %w", label, err)
+	}
+	if len(resumed) == 0 || resumed[0].ErasureId != first.erasure.ErasureId {
+		return fmt.Errorf("%s: the resume took up %+v, not the first erasure", label, resumed)
+	}
+	if resumed[0].State != sidecar.MailErasureRewriting || !resumed[0].Unproven {
+		return fmt.Errorf("%s: the first erasure after the resume: %+v", label, resumed[0])
+	}
+	after, err := self.Index(self.Owner)
+	if err != nil {
+		return err
+	}
+	if after.Version != before.Version {
+		return fmt.Errorf("%s: the resume moved the mailbox's ref from %d to %d", label, before.Version, after.Version)
+	}
+	return nil
+}
+
+// Holds a device admitted after erasures to FS-111's last clause as a real mailbox carries it: it opens none of the
+// erased messages' copies, neither a body nor a posting in any index file, and reads the index the oracle describes.
+func (self *M10World) holdFresh(label string, erased []*M10Message, standing ...*M10Message) error {
+	fresh := self.FreshDevice("fresh device")
+	for _, message := range erased {
+		if self.BodyOpens(fresh, message) {
+			return fmt.Errorf("%s: the erased %s's body opens for a fresh device", label, message.Path)
+		}
+		held, err := sidecar.SearchTestEvsFilesHolding(self.ctx, fresh.Repo, nil, message.Path)
+		if err != nil {
+			return err
+		}
+		if slices.ContainsFunc(held, func(file sidecar.SearchTestHeld) bool { return file.Live }) {
+			return fmt.Errorf("%s: a fresh device finds the erased %s live in %+v", label, message.Path, held)
+		}
 	}
 	for _, message := range standing {
 		if !self.BodyOpens(fresh, message) {
@@ -595,54 +707,75 @@ func (self *M10World) holdFresh(label string, erased *M10Message, standing ...*M
 	return self.HoldIndex(fresh, label+", a fresh device")
 }
 
-// FS-78's mailbox case (the file header's row): three emails in an indexed mailbox, the first ingested by the
-// owner's laptop in the mailbox's first push, the others by the member's second device and the laptop; the admin
-// erases the first.
+// FS-78's mailbox case (the file header's row): four emails in an indexed mailbox, ingested in turn by the owner's
+// laptop, in the mailbox's first push, and the member's second device, so each device's head file stands at a second
+// version and the second device's was first created by the mailbox's second push; the admin erases the second
+// device's first email, then the laptop's, which the second device has ingested twice since, then resumes the first
+// erasure.
 func RunM10Fs78Mailbox(t testing.TB, world *M10World) {
 	t.Helper()
 	sender := "signup@" + M8SenderDomain
-	erased := world.DeliverAndIngest(world.Owner, sender, M8Message(world.Address, "cormorant ledger", "The cormorant ledger closes at noon."))
-	// one more by each device, so no index file but the erased email's own stands at a second version (the file
-	// header's gaps)
+	early := world.DeliverAndIngest(world.Owner, sender, M8Message(world.Address, "cormorant ledger", "The cormorant ledger closes at noon."))
+	later := world.DeliverAndIngest(world.Reader, sender, M8Message(world.Address, "lighthouse rota", "The lighthouse rota for the spring tides."))
 	standing := []*M10Message{
-		world.DeliverAndIngest(world.Reader, sender, M8Message(world.Address, "lighthouse rota", "The lighthouse rota for the spring tides.")),
 		world.DeliverAndIngest(world.Owner, sender, M8Message(world.Address, "harbor notice", "The harbor notice lists the dredging days.")),
+		world.DeliverAndIngest(world.Reader, sender, M8Message(world.Address, "pilot schedule", "The pilot schedule for the bar crossing.")),
 	}
-	if err := world.HoldIndex(world.Owner, "before the erasure"); err != nil {
+	if err := world.HoldIndex(world.Owner, "before the erasures"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := world.eraseHeld("FS-78's erasure", erased); err != nil {
-		t.Fatal(err)
-	}
-	// masked and rewritten: the index the owner and the other device read holds the two standing emails alone
-	for _, device := range []*M10Device{world.Owner, world.Reader} {
-		if err := world.HoldIndex(device, "after the erasure, the "+device.Name); err != nil {
-			t.Fatal(err)
-		}
-		for _, message := range standing {
-			if !world.BodyOpens(device, message) {
-				t.Fatalf("%s, which the erasure did not name, no longer opens for the %s", message.Path, device.Name)
+	// masked and rewritten: the index the owner and the other device read holds the standing emails alone
+	holdStanding := func(label string) {
+		t.Helper()
+		for _, device := range []*M10Device{world.Owner, world.Reader} {
+			if err := world.HoldIndex(device, label+", the "+device.Name); err != nil {
+				t.Fatal(err)
+			}
+			for _, message := range standing {
+				if !world.BodyOpens(device, message) {
+					t.Fatalf("%s: %s, which no erasure named, no longer opens for the %s", label, message.Path, device.Name)
+				}
 			}
 		}
 	}
+	// the second device's email: its head file the mailbox's second push first created, and the eraser's walk reading
+	// the laptop's head file's replaced version
+	first, err := world.eraseHeld("FS-78's erasure of the second device's email", later)
+	if err != nil {
+		t.Fatal(err)
+	}
+	holdStanding("after the first erasure")
+	// the laptop's email of the first push, the second device having ingested twice since: the walk meets the second
+	// device's head file's versions whose key the first erasure's ERASE destroyed
+	if _, err := world.eraseHeld("FS-78's erasure of the laptop's email", early); err != nil {
+		t.Fatal(err)
+	}
+	holdStanding("after the second erasure")
+	if err := world.resumeHeld("FS-78's resume of the first erasure", first); err != nil {
+		t.Fatal(err)
+	}
+	holdStanding("after the resume")
 	// a companion to the erased email's writer: its next ingest, planned from the rewritten head, indexes as before
 	standing = append(standing, world.DeliverAndIngest(world.Owner, sender, M8Message(world.Address, "tide tables", "The tide tables for the estuary.")))
 	if err := world.HoldIndex(world.Owner, "after the eraser's next ingest"); err != nil {
 		t.Fatal(err)
 	}
-	if err := world.holdFresh("FS-78", erased, standing...); err != nil {
+	if err := world.holdFresh("FS-78", []*M10Message{later, early}, standing...); err != nil {
 		t.Fatal(err)
 	}
 }
 
 // FS-111's mailbox case (the file header's row): writer A is the member's second device and eraser B the owner's
-// laptop, the mailbox's admin. A's ingest of D is the mailbox's first push; A's ingest of the next message, planned
-// with D in its head, is paused at evs just before its head CAS while B's erasure of D commits.
+// laptop, the mailbox's admin. B's own email is the mailbox's first push and A's ingest of D its second, into a head
+// file that push first created; A's ingest of the next message, planned with D in its head, is paused at evs just
+// before its head CAS while B's erasure of D commits. Then B erases A's next message, and B's device, restarting,
+// resumes the first erasure.
 func RunM10Fs111Mailbox(t testing.TB, world *M10World) {
 	t.Helper()
 	ctx := world.Context()
 	sender := "signup@" + M8SenderDomain
 	writerA := world.Reader
+	own := world.DeliverAndIngest(world.Owner, sender, M8Message(world.Address, "harbor notice", "The harbor notice lists the dredging days."))
 	erased := world.DeliverAndIngest(writerA, sender, M8Message(world.Address, "cormorant ledger", "The cormorant ledger closes at noon."))
 	if err := world.HoldIndex(world.Owner, "before the paused push"); err != nil {
 		t.Fatal(err)
@@ -708,7 +841,24 @@ func RunM10Fs111Mailbox(t testing.TB, world *M10World) {
 	}
 	// the fake clock passes 20 min, and what a device reads has not changed
 	world.Advance(20 * time.Minute)
-	if err := world.holdFresh("FS-111", erased, kept); err != nil {
+	if err := world.holdFresh("FS-111", []*M10Message{erased}, own, kept); err != nil {
+		t.Fatal(err)
+	}
+	// B erases A's rebuilt message, whose ERASE takes the key of the first erasure's CLOSURE of A's head file; B's
+	// device restarting then resumes the first erasure from evs's state, its walk passing over the versions that key
+	// opened
+	if _, err := world.eraseHeld("FS-111's second erasure", kept); err != nil {
+		t.Fatal(err)
+	}
+	if err := world.resumeHeld("FS-111's resume of the first erasure", cut); err != nil {
+		t.Fatal(err)
+	}
+	for _, device := range []*M10Device{world.Owner, writerA} {
+		if err := world.HoldIndex(device, "after the resume, the "+device.Name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := world.holdFresh("FS-111, after the resume", []*M10Message{erased, kept}, own); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -760,32 +910,35 @@ func m10LongMessage(recipient string, byteCount int, seed uint64) []byte {
 	return message.Bytes()
 }
 
-// FS-112's mailbox case (the file header's row): one admitted message with 5 MiB of text, ingested by the owner's
-// laptop in the mailbox's first push, and its erasure.
+// FS-112's mailbox case (the file header's row): one admitted message with 5 MiB of text, ingested by the member's
+// second device in the mailbox's second push, so the files holding its chunks were first created there, after a
+// short message of the owner's laptop, and its erasure.
 func RunM10Fs112Mailbox(t testing.TB, world *M10World, settings *M10Fs112Settings) {
 	t.Helper()
 	if settings == nil {
 		settings = DefaultM10Fs112Settings()
 	}
-	long := world.DeliverAndIngest(world.Owner, "archive@"+M8SenderDomain, m10LongMessage(world.Address, settings.TextByteCount, settings.Seed))
+	standing := world.DeliverAndIngest(world.Owner, "signup@"+M8SenderDomain, M8Message(world.Address, "harbor notice", "The harbor notice lists the dredging days."))
+	long := world.DeliverAndIngest(world.Reader, "archive@"+M8SenderDomain, m10LongMessage(world.Address, settings.TextByteCount, settings.Seed))
 	// five chunk documents, each the oracle's
 	documents, err := world.Oracle.Documents(world.scope())
 	if err != nil {
 		t.Fatal(err)
 	}
+	longCount := 0
 	chunks := map[uint32]bool{}
 	for _, document := range documents {
 		if document.Name == long.Path {
+			longCount += 1
 			chunks[document.Chunk] = true
 		}
 	}
-	if len(documents) != settings.ChunkCount || len(chunks) != settings.ChunkCount {
-		t.Fatalf("a message of %d bytes is %d documents of the oracle's, chunks %v, not %d", len(long.Content), len(documents), chunks, settings.ChunkCount)
+	if longCount != settings.ChunkCount || len(chunks) != settings.ChunkCount {
+		t.Fatalf("a message of %d bytes is %d documents of the oracle's, chunks %v, not %d", len(long.Content), longCount, chunks, settings.ChunkCount)
 	}
 	if err := world.HoldIndex(world.Owner, "the long message's chunks"); err != nil {
 		t.Fatal(err)
 	}
-	standing := world.DeliverAndIngest(world.Reader, "signup@"+M8SenderDomain, M8Message(world.Address, "harbor notice", "The harbor notice lists the dredging days."))
 	if err := world.HoldIndex(world.Reader, "before the erasure"); err != nil {
 		t.Fatal(err)
 	}
@@ -798,7 +951,7 @@ func RunM10Fs112Mailbox(t testing.TB, world *M10World, settings *M10Fs112Setting
 			t.Fatal(err)
 		}
 	}
-	if err := world.holdFresh("FS-112", long, standing); err != nil {
+	if err := world.holdFresh("FS-112", []*M10Message{long}, standing); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -817,6 +970,9 @@ type M10Fs76Settings struct {
 	// After how many of the corpus's messages the first message is erased, and the canonical-reading messages land.
 	EraseAfterCount     int
 	CanonicalAfterCount int
+	// From how many of the mailbox's roll-ups on a standing message they moved into an all shard is erased: after the
+	// first roll-up from then that has moved one, since a roll-up of a bucket holding only erased documents moves none.
+	RolledEraseAfterRollUpCount int
 	// The most roll-ups one boundary may owe, a bound on a loop.
 	RollUpMaxCount int
 	// The mailbox's bucket window in days: §11.14's default, which stands where no settings version says otherwise.
@@ -830,7 +986,7 @@ type M10Fs76Settings struct {
 func DefaultM10Fs76Settings() *M10Fs76Settings {
 	return &M10Fs76Settings{
 		Seed: 76, MessageCount: 40, PerClass: 2, QuerySeed: 76, EraseAfterCount: 3, CanonicalAfterCount: 5,
-		RollUpMaxCount: 8, WindowDays: 30, PageCount: 4096, ReadByteCount: 32 * 1024 * 1024,
+		RolledEraseAfterRollUpCount: 1, RollUpMaxCount: 8, WindowDays: 30, PageCount: 4096, ReadByteCount: 32 * 1024 * 1024,
 	}
 }
 
@@ -1113,15 +1269,52 @@ func RunM10Fs76Mailbox(t testing.TB, world *M10World, settings *M10Fs76Settings)
 	}
 	// a message delivered and ingested by the next device in turn, the same bytes then committed to the search world
 	delivered := 0
+	messages := []*M10Message{}
 	deliver := func(from string, content []byte) *M10Message {
 		t.Helper()
 		message := world.DeliverAndIngest(devices[delivered%len(devices)], from, content)
 		delivered += 1
+		messages = append(messages, message)
 		if err := search.commit(message); err != nil {
 			t.Fatal(err)
 		}
 		return message
 	}
+	// message erased from the mailbox and the search world alike, after which both hold to the oracle
+	erased := map[string]bool{}
+	erase := func(label string, message *M10Message) {
+		t.Helper()
+		if _, err := world.eraseHeld(label, message); err != nil {
+			t.Fatal(err)
+		}
+		erased[message.Path] = true
+		if err := search.cut(message); err != nil {
+			t.Fatal(err)
+		}
+		check("after " + label)
+	}
+	var first *M10Message
+	// the earliest standing message a roll-up moved into an all shard (.ur-index/i<n>/a/...), other than the first
+	// erasure's, nil for none
+	rolledMessage := func() *M10Message {
+		t.Helper()
+		for _, message := range messages {
+			if erased[message.Path] || message == first {
+				continue
+			}
+			held, err := sidecar.SearchTestEvsFilesHolding(ctx, world.Owner.Repo, nil, message.Path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, file := range held {
+				if parts := strings.Split(file.Path, "/"); file.Live && 2 < len(parts) && parts[2] == "a" {
+					return message
+				}
+			}
+		}
+		return nil
+	}
+	var rolledErased *M10Message
 	// every expired bucket of the mailbox rolled into all by the owner's laptop, through EvsRepo
 	rollUp := func(label string) int {
 		t.Helper()
@@ -1144,7 +1337,6 @@ func RunM10Fs76Mailbox(t testing.TB, world *M10World, settings *M10Fs76Settings)
 		}
 		return rolled
 	}
-	var first *M10Message
 	boundaries, rollUps, forms := 0, 0, map[string]bool{}
 	for _, step := range corpus.Steps {
 		if step.Commit == nil || len(step.Commit.Changes) != 1 {
@@ -1169,6 +1361,13 @@ func RunM10Fs76Mailbox(t testing.TB, world *M10World, settings *M10Fs76Settings)
 			if rolled := rollUp(fmt.Sprintf("the boundary at day %d", nextStartDay)); 0 < rolled {
 				rollUps += rolled
 				check(fmt.Sprintf("after the roll-ups at day %d", nextStartDay))
+				if rolledErased == nil && settings.RolledEraseAfterRollUpCount <= rollUps {
+					// a message a roll-up moved into an all shard, which the roll-up's push first created; none yet
+					// where the roll-ups so far rolled only an erased message's bucket, so a later one is waited for
+					if rolledErased = rolledMessage(); rolledErased != nil {
+						erase("FS-76's erasure after a roll-up", rolledErased)
+					}
+				}
 			}
 		}
 		if wait := step.At.Sub(clock.Now()); 0 < wait {
@@ -1191,14 +1390,8 @@ func RunM10Fs76Mailbox(t testing.TB, world *M10World, settings *M10Fs76Settings)
 			check("after the canonical-reading messages")
 		}
 		if delivered == settings.EraseAfterCount {
-			// the erasure, of the message the mailbox's first push ingested (the file header's first gap)
-			if _, err := world.eraseHeld("FS-76's erasure", first); err != nil {
-				t.Fatal(err)
-			}
-			if err := search.cut(first); err != nil {
-				t.Fatal(err)
-			}
-			check("after the erasure")
+			// the first erasure, of the message the mailbox's first push ingested
+			erase("FS-76's first erasure", first)
 		}
 	}
 	check("at the end")
@@ -1206,8 +1399,11 @@ func RunM10Fs76Mailbox(t testing.TB, world *M10World, settings *M10Fs76Settings)
 		t.Fatalf("the run delivered %d messages across %d boundaries and %d roll-ups, its %d searches held to %d matches",
 			delivered, boundaries, rollUps, search.searchCount, search.matchCount)
 	}
-	t.Logf("FS-76's mailbox case: %d messages, %d bucket boundaries, %d roll-ups on the mailbox, 1 erasure; %d queries, %d searches on the search world held to %d matches",
-		delivered, boundaries, rollUps, len(queries), search.searchCount, search.matchCount)
+	if rolledErased == nil {
+		t.Fatalf("none of the run's %d roll-ups moved a standing message into an all shard, so none was erased after one", rollUps)
+	}
+	t.Logf("FS-76's mailbox case: %d messages, %d bucket boundaries, %d roll-ups on the mailbox, %d erasures; %d queries, %d searches on the search world held to %d matches",
+		delivered, boundaries, rollUps, len(erased), len(queries), search.searchCount, search.matchCount)
 	for _, form := range []string{"base64", "quoted-printable", "text/html"} {
 		if !forms[form] {
 			t.Fatalf("the corpus's mail holds no %s part: %v", form, forms)
