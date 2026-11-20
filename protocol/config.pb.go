@@ -339,6 +339,58 @@ func (DirectoryWorkersMode) EnumDescriptor() ([]byte, []int) {
 	return file_protocol_config_proto_rawDescGZIP(), []int{5}
 }
 
+// Whether per-run cost totals go to the team record as well as the vault (owner decision 302; RECORD.md
+// sections 6.3 and 13.1): on by default, which a bool's zero cannot say, so the zero reads as on, as
+// SelfAdmitMode's does.
+type RecordCostMode int32
+
+const (
+	RecordCostMode_RECORD_COST_MODE_UNSPECIFIED RecordCostMode = 0 // on
+	RecordCostMode_RECORD_COST_MODE_ON          RecordCostMode = 1
+	RecordCostMode_RECORD_COST_MODE_OFF         RecordCostMode = 2
+)
+
+// Enum value maps for RecordCostMode.
+var (
+	RecordCostMode_name = map[int32]string{
+		0: "RECORD_COST_MODE_UNSPECIFIED",
+		1: "RECORD_COST_MODE_ON",
+		2: "RECORD_COST_MODE_OFF",
+	}
+	RecordCostMode_value = map[string]int32{
+		"RECORD_COST_MODE_UNSPECIFIED": 0,
+		"RECORD_COST_MODE_ON":          1,
+		"RECORD_COST_MODE_OFF":         2,
+	}
+)
+
+func (x RecordCostMode) Enum() *RecordCostMode {
+	p := new(RecordCostMode)
+	*p = x
+	return p
+}
+
+func (x RecordCostMode) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (RecordCostMode) Descriptor() protoreflect.EnumDescriptor {
+	return file_protocol_config_proto_enumTypes[6].Descriptor()
+}
+
+func (RecordCostMode) Type() protoreflect.EnumType {
+	return &file_protocol_config_proto_enumTypes[6]
+}
+
+func (x RecordCostMode) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use RecordCostMode.Descriptor instead.
+func (RecordCostMode) EnumDescriptor() ([]byte, []int) {
+	return file_protocol_config_proto_rawDescGZIP(), []int{6}
+}
+
 type VersioningMode int32
 
 const (
@@ -372,11 +424,11 @@ func (x VersioningMode) String() string {
 }
 
 func (VersioningMode) Descriptor() protoreflect.EnumDescriptor {
-	return file_protocol_config_proto_enumTypes[6].Descriptor()
+	return file_protocol_config_proto_enumTypes[7].Descriptor()
 }
 
 func (VersioningMode) Type() protoreflect.EnumType {
-	return &file_protocol_config_proto_enumTypes[6]
+	return &file_protocol_config_proto_enumTypes[7]
 }
 
 func (x VersioningMode) Number() protoreflect.EnumNumber {
@@ -385,7 +437,7 @@ func (x VersioningMode) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use VersioningMode.Descriptor instead.
 func (VersioningMode) EnumDescriptor() ([]byte, []int) {
-	return file_protocol_config_proto_rawDescGZIP(), []int{6}
+	return file_protocol_config_proto_rawDescGZIP(), []int{7}
 }
 
 type BridgeLedgerDisposition int32
@@ -427,11 +479,11 @@ func (x BridgeLedgerDisposition) String() string {
 }
 
 func (BridgeLedgerDisposition) Descriptor() protoreflect.EnumDescriptor {
-	return file_protocol_config_proto_enumTypes[7].Descriptor()
+	return file_protocol_config_proto_enumTypes[8].Descriptor()
 }
 
 func (BridgeLedgerDisposition) Type() protoreflect.EnumType {
-	return &file_protocol_config_proto_enumTypes[7]
+	return &file_protocol_config_proto_enumTypes[8]
 }
 
 func (x BridgeLedgerDisposition) Number() protoreflect.EnumNumber {
@@ -440,7 +492,7 @@ func (x BridgeLedgerDisposition) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use BridgeLedgerDisposition.Descriptor instead.
 func (BridgeLedgerDisposition) EnumDescriptor() ([]byte, []int) {
-	return file_protocol_config_proto_rawDescGZIP(), []int{7}
+	return file_protocol_config_proto_rawDescGZIP(), []int{8}
 }
 
 type AdminSet struct {
@@ -1636,7 +1688,9 @@ func (x *ServiceDirectorySettings) GetWorkers() DirectoryWorkersMode {
 
 // An owner or admin. A zero value means the default each comment gives, but for team_mail, whose default no
 // section writes: there zero is no choice made, which grants nothing, so an undesignated tag:mail device
-// registers no listener as it would under indexers (D-MAIL-15).
+// registers no listener as it would under indexers (D-MAIL-15). §7.9's Settings fields take 7 to 9 in the
+// order written, each network-wide, reserved before M2's freeze as directory was, so older readers ignore
+// them (D-PHASE-9).
 type ServiceSettings struct {
 	state             protoimpl.MessageState    `protogen:"open.v1"`
 	TeamMail          TeamMailMode              `protobuf:"varint,1,opt,name=team_mail,json=teamMail,proto3,enum=urnetwork.sidecar.TeamMailMode" json:"team_mail,omitempty"`
@@ -1645,8 +1699,12 @@ type ServiceSettings struct {
 	WitnessBoundHours uint32                    `protobuf:"varint,4,opt,name=witness_bound_hours,json=witnessBoundHours,proto3" json:"witness_bound_hours,omitempty"` // 72, 24 to 168 (D-TRUST-10, owner decision 129)
 	ScimSigner        []byte                    `protobuf:"bytes,5,opt,name=scim_signer,json=scimSigner,proto3" json:"scim_signer,omitempty"`                         // none, or the sidecar_id of an admin's indexer (7.6)
 	Directory         *ServiceDirectorySettings `protobuf:"bytes,6,opt,name=directory,proto3" json:"directory,omitempty"`                                             // from v1 (M6), reserved here at M2: older readers ignore it (D-PHASE-9)
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	MailStrict        bool                      `protobuf:"varint,7,opt,name=mail_strict,json=mailStrict,proto3" json:"mail_strict,omitempty"`                        // false: §15.4's mail.strict; a reader that does not know it never claims
+	// strict_custom_mx (QD-204)
+	RecordCost     RecordCostMode `protobuf:"varint,8,opt,name=record_cost,json=recordCost,proto3,enum=urnetwork.sidecar.RecordCostMode" json:"record_cost,omitempty"` // on (owner decision 302)
+	RecordRequired bool           `protobuf:"varint,9,opt,name=record_required,json=recordRequired,proto3" json:"record_required,omitempty"`                           // false; read from M6 and never set through MCP: each member's
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *ServiceSettings) Reset() {
@@ -1719,6 +1777,27 @@ func (x *ServiceSettings) GetDirectory() *ServiceDirectorySettings {
 		return x.Directory
 	}
 	return nil
+}
+
+func (x *ServiceSettings) GetMailStrict() bool {
+	if x != nil {
+		return x.MailStrict
+	}
+	return false
+}
+
+func (x *ServiceSettings) GetRecordCost() RecordCostMode {
+	if x != nil {
+		return x.RecordCost
+	}
+	return RecordCostMode_RECORD_COST_MODE_UNSPECIFIED
+}
+
+func (x *ServiceSettings) GetRecordRequired() bool {
+	if x != nil {
+		return x.RecordRequired
+	}
+	return false
 }
 
 // An empty selector matches all.
@@ -3713,7 +3792,7 @@ const file_protocol_config_proto_rawDesc = "" +
 	"\atag_ids\x18\a \x03(\fR\x06tagIds\"\x97\x01\n" +
 	"\x18ServiceDirectorySettings\x128\n" +
 	"\x04runs\x18\x01 \x01(\x0e2$.urnetwork.sidecar.DirectoryRunsModeR\x04runs\x12A\n" +
-	"\aworkers\x18\x02 \x01(\x0e2'.urnetwork.sidecar.DirectoryWorkersModeR\aworkers\"\xd4\x02\n" +
+	"\aworkers\x18\x02 \x01(\x0e2'.urnetwork.sidecar.DirectoryWorkersModeR\aworkers\"\xe2\x03\n" +
 	"\x0fServiceSettings\x12<\n" +
 	"\tteam_mail\x18\x01 \x01(\x0e2\x1f.urnetwork.sidecar.TeamMailModeR\bteamMail\x12&\n" +
 	"\x0fstale_leaf_days\x18\x02 \x01(\rR\rstaleLeafDays\x12?\n" +
@@ -3722,7 +3801,12 @@ const file_protocol_config_proto_rawDesc = "" +
 	"\x13witness_bound_hours\x18\x04 \x01(\rR\x11witnessBoundHours\x12\x1f\n" +
 	"\vscim_signer\x18\x05 \x01(\fR\n" +
 	"scimSigner\x12I\n" +
-	"\tdirectory\x18\x06 \x01(\v2+.urnetwork.sidecar.ServiceDirectorySettingsR\tdirectory\"\xcb\x01\n" +
+	"\tdirectory\x18\x06 \x01(\v2+.urnetwork.sidecar.ServiceDirectorySettingsR\tdirectory\x12\x1f\n" +
+	"\vmail_strict\x18\a \x01(\bR\n" +
+	"mailStrict\x12B\n" +
+	"\vrecord_cost\x18\b \x01(\x0e2!.urnetwork.sidecar.RecordCostModeR\n" +
+	"recordCost\x12'\n" +
+	"\x0frecord_required\x18\t \x01(\bR\x0erecordRequired\"\xcb\x01\n" +
 	"\x0eVersioningRule\x12\x14\n" +
 	"\x05kinds\x18\x01 \x03(\rR\x05kinds\x12\x19\n" +
 	"\brepo_ids\x18\x02 \x03(\fR\arepoIds\x12\x1b\n" +
@@ -3892,7 +3976,11 @@ const file_protocol_config_proto_rawDesc = "" +
 	"\x14DirectoryWorkersMode\x12&\n" +
 	"\"DIRECTORY_WORKERS_MODE_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19DIRECTORY_WORKERS_MODE_ON\x10\x01\x12\x1e\n" +
-	"\x1aDIRECTORY_WORKERS_MODE_OFF\x10\x02*b\n" +
+	"\x1aDIRECTORY_WORKERS_MODE_OFF\x10\x02*e\n" +
+	"\x0eRecordCostMode\x12 \n" +
+	"\x1cRECORD_COST_MODE_UNSPECIFIED\x10\x00\x12\x17\n" +
+	"\x13RECORD_COST_MODE_ON\x10\x01\x12\x18\n" +
+	"\x14RECORD_COST_MODE_OFF\x10\x02*b\n" +
 	"\x0eVersioningMode\x12\x1f\n" +
 	"\x1bVERSIONING_MODE_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12VERSIONING_MODE_ON\x10\x01\x12\x17\n" +
@@ -3916,7 +4004,7 @@ func file_protocol_config_proto_rawDescGZIP() []byte {
 	return file_protocol_config_proto_rawDescData
 }
 
-var file_protocol_config_proto_enumTypes = make([]protoimpl.EnumInfo, 8)
+var file_protocol_config_proto_enumTypes = make([]protoimpl.EnumInfo, 9)
 var file_protocol_config_proto_msgTypes = make([]protoimpl.MessageInfo, 47)
 var file_protocol_config_proto_goTypes = []any{
 	(IndexerScope)(0),                // 0: urnetwork.sidecar.IndexerScope
@@ -3925,125 +4013,127 @@ var file_protocol_config_proto_goTypes = []any{
 	(SelfAdmitMode)(0),               // 3: urnetwork.sidecar.SelfAdmitMode
 	(DirectoryRunsMode)(0),           // 4: urnetwork.sidecar.DirectoryRunsMode
 	(DirectoryWorkersMode)(0),        // 5: urnetwork.sidecar.DirectoryWorkersMode
-	(VersioningMode)(0),              // 6: urnetwork.sidecar.VersioningMode
-	(BridgeLedgerDisposition)(0),     // 7: urnetwork.sidecar.BridgeLedgerDisposition
-	(*AdminSet)(nil),                 // 8: urnetwork.sidecar.AdminSet
-	(*MemberAdmit)(nil),              // 9: urnetwork.sidecar.MemberAdmit
-	(*SidecarAdmit)(nil),             // 10: urnetwork.sidecar.SidecarAdmit
-	(*AdmissionConfirm)(nil),         // 11: urnetwork.sidecar.AdmissionConfirm
-	(*SponsorSet)(nil),               // 12: urnetwork.sidecar.SponsorSet
-	(*IndexerSet)(nil),               // 13: urnetwork.sidecar.IndexerSet
-	(*IndexerServices)(nil),          // 14: urnetwork.sidecar.IndexerServices
-	(*RecoveryBind)(nil),             // 15: urnetwork.sidecar.RecoveryBind
-	(*RecoveryBindBody)(nil),         // 16: urnetwork.sidecar.RecoveryBindBody
-	(*RecoveryRebind)(nil),           // 17: urnetwork.sidecar.RecoveryRebind
-	(*KeyRegister)(nil),              // 18: urnetwork.sidecar.KeyRegister
-	(*KeyRevoke)(nil),                // 19: urnetwork.sidecar.KeyRevoke
-	(*Delegation)(nil),               // 20: urnetwork.sidecar.Delegation
-	(*DelegationRevoke)(nil),         // 21: urnetwork.sidecar.DelegationRevoke
-	(*AuthKeyBundle)(nil),            // 22: urnetwork.sidecar.AuthKeyBundle
-	(*ServiceDirectorySettings)(nil), // 23: urnetwork.sidecar.ServiceDirectorySettings
-	(*ServiceSettings)(nil),          // 24: urnetwork.sidecar.ServiceSettings
-	(*VersioningRule)(nil),           // 25: urnetwork.sidecar.VersioningRule
-	(*SocketKeyFile)(nil),            // 26: urnetwork.sidecar.SocketKeyFile
-	(*VersioningRules)(nil),          // 27: urnetwork.sidecar.VersioningRules
-	(*AuthorityProposal)(nil),        // 28: urnetwork.sidecar.AuthorityProposal
-	(*AuthorityCosign)(nil),          // 29: urnetwork.sidecar.AuthorityCosign
-	(*RecoveryVeto)(nil),             // 30: urnetwork.sidecar.RecoveryVeto
-	(*ConfigRecord)(nil),             // 31: urnetwork.sidecar.ConfigRecord
-	(*ConfigFold)(nil),               // 32: urnetwork.sidecar.ConfigFold
-	(*ConfigNameTable)(nil),          // 33: urnetwork.sidecar.ConfigNameTable
-	(*ConfigName)(nil),               // 34: urnetwork.sidecar.ConfigName
-	(*ConfigAtomTable)(nil),          // 35: urnetwork.sidecar.ConfigAtomTable
-	(*ConfigAtomName)(nil),           // 36: urnetwork.sidecar.ConfigAtomName
-	(*ConfigRuleTable)(nil),          // 37: urnetwork.sidecar.ConfigRuleTable
-	(*ConfigRuleId)(nil),             // 38: urnetwork.sidecar.ConfigRuleId
-	(*ConfigLabelTable)(nil),         // 39: urnetwork.sidecar.ConfigLabelTable
-	(*ConfigRepoLabel)(nil),          // 40: urnetwork.sidecar.ConfigRepoLabel
-	(*ConfigResolution)(nil),         // 41: urnetwork.sidecar.ConfigResolution
-	(*ConfigMemberResolution)(nil),   // 42: urnetwork.sidecar.ConfigMemberResolution
-	(*ConfigNetworkResolution)(nil),  // 43: urnetwork.sidecar.ConfigNetworkResolution
-	(*ConfigClientResolution)(nil),   // 44: urnetwork.sidecar.ConfigClientResolution
-	(*BridgeLedgerManifest)(nil),     // 45: urnetwork.sidecar.BridgeLedgerManifest
-	(*BridgeLedgerFile)(nil),         // 46: urnetwork.sidecar.BridgeLedgerFile
-	(*BridgeLedgerAddresses)(nil),    // 47: urnetwork.sidecar.BridgeLedgerAddresses
-	(*BridgeLedgerAddressRow)(nil),   // 48: urnetwork.sidecar.BridgeLedgerAddressRow
-	(*BridgeLedgerRules)(nil),        // 49: urnetwork.sidecar.BridgeLedgerRules
-	(*BridgeLedgerRuleRow)(nil),      // 50: urnetwork.sidecar.BridgeLedgerRuleRow
-	(*BridgeLedgerEgressSpecs)(nil),  // 51: urnetwork.sidecar.BridgeLedgerEgressSpecs
-	(*BridgeLedgerEgressRow)(nil),    // 52: urnetwork.sidecar.BridgeLedgerEgressRow
-	(*BridgeLedgerAliases)(nil),      // 53: urnetwork.sidecar.BridgeLedgerAliases
-	(*BridgeLedgerAliasRow)(nil),     // 54: urnetwork.sidecar.BridgeLedgerAliasRow
-	(*bridge.StatementHeader)(nil),   // 55: urnetwork.sidecar.StatementHeader
-	(bridge.MemberRole)(0),           // 56: urnetwork.sidecar.MemberRole
-	(bridge.RecoveryRebindReason)(0), // 57: urnetwork.sidecar.RecoveryRebindReason
-	(bridge.KeyAlg)(0),               // 58: urnetwork.sidecar.KeyAlg
-	(bridge.KeyPurpose)(0),           // 59: urnetwork.sidecar.KeyPurpose
-	(*bridge.WebAuthnEvidence)(nil),  // 60: urnetwork.sidecar.WebAuthnEvidence
-	(*bridge.ForwardScope)(nil),      // 61: urnetwork.sidecar.ForwardScope
-	(*bridge.AuthPin)(nil),           // 62: urnetwork.sidecar.AuthPin
-	(*bridge.BridgeRouteBody)(nil),   // 63: urnetwork.sidecar.BridgeRouteBody
-	(*bridge.BridgeMapBody)(nil),     // 64: urnetwork.sidecar.BridgeMapBody
-	(bridge.BridgeWithdrawMode)(0),   // 65: urnetwork.sidecar.BridgeWithdrawMode
-	(bridge.BridgeEgressMode)(0),     // 66: urnetwork.sidecar.BridgeEgressMode
-	(*bridge.BridgeAliasBody)(nil),   // 67: urnetwork.sidecar.BridgeAliasBody
+	(RecordCostMode)(0),              // 6: urnetwork.sidecar.RecordCostMode
+	(VersioningMode)(0),              // 7: urnetwork.sidecar.VersioningMode
+	(BridgeLedgerDisposition)(0),     // 8: urnetwork.sidecar.BridgeLedgerDisposition
+	(*AdminSet)(nil),                 // 9: urnetwork.sidecar.AdminSet
+	(*MemberAdmit)(nil),              // 10: urnetwork.sidecar.MemberAdmit
+	(*SidecarAdmit)(nil),             // 11: urnetwork.sidecar.SidecarAdmit
+	(*AdmissionConfirm)(nil),         // 12: urnetwork.sidecar.AdmissionConfirm
+	(*SponsorSet)(nil),               // 13: urnetwork.sidecar.SponsorSet
+	(*IndexerSet)(nil),               // 14: urnetwork.sidecar.IndexerSet
+	(*IndexerServices)(nil),          // 15: urnetwork.sidecar.IndexerServices
+	(*RecoveryBind)(nil),             // 16: urnetwork.sidecar.RecoveryBind
+	(*RecoveryBindBody)(nil),         // 17: urnetwork.sidecar.RecoveryBindBody
+	(*RecoveryRebind)(nil),           // 18: urnetwork.sidecar.RecoveryRebind
+	(*KeyRegister)(nil),              // 19: urnetwork.sidecar.KeyRegister
+	(*KeyRevoke)(nil),                // 20: urnetwork.sidecar.KeyRevoke
+	(*Delegation)(nil),               // 21: urnetwork.sidecar.Delegation
+	(*DelegationRevoke)(nil),         // 22: urnetwork.sidecar.DelegationRevoke
+	(*AuthKeyBundle)(nil),            // 23: urnetwork.sidecar.AuthKeyBundle
+	(*ServiceDirectorySettings)(nil), // 24: urnetwork.sidecar.ServiceDirectorySettings
+	(*ServiceSettings)(nil),          // 25: urnetwork.sidecar.ServiceSettings
+	(*VersioningRule)(nil),           // 26: urnetwork.sidecar.VersioningRule
+	(*SocketKeyFile)(nil),            // 27: urnetwork.sidecar.SocketKeyFile
+	(*VersioningRules)(nil),          // 28: urnetwork.sidecar.VersioningRules
+	(*AuthorityProposal)(nil),        // 29: urnetwork.sidecar.AuthorityProposal
+	(*AuthorityCosign)(nil),          // 30: urnetwork.sidecar.AuthorityCosign
+	(*RecoveryVeto)(nil),             // 31: urnetwork.sidecar.RecoveryVeto
+	(*ConfigRecord)(nil),             // 32: urnetwork.sidecar.ConfigRecord
+	(*ConfigFold)(nil),               // 33: urnetwork.sidecar.ConfigFold
+	(*ConfigNameTable)(nil),          // 34: urnetwork.sidecar.ConfigNameTable
+	(*ConfigName)(nil),               // 35: urnetwork.sidecar.ConfigName
+	(*ConfigAtomTable)(nil),          // 36: urnetwork.sidecar.ConfigAtomTable
+	(*ConfigAtomName)(nil),           // 37: urnetwork.sidecar.ConfigAtomName
+	(*ConfigRuleTable)(nil),          // 38: urnetwork.sidecar.ConfigRuleTable
+	(*ConfigRuleId)(nil),             // 39: urnetwork.sidecar.ConfigRuleId
+	(*ConfigLabelTable)(nil),         // 40: urnetwork.sidecar.ConfigLabelTable
+	(*ConfigRepoLabel)(nil),          // 41: urnetwork.sidecar.ConfigRepoLabel
+	(*ConfigResolution)(nil),         // 42: urnetwork.sidecar.ConfigResolution
+	(*ConfigMemberResolution)(nil),   // 43: urnetwork.sidecar.ConfigMemberResolution
+	(*ConfigNetworkResolution)(nil),  // 44: urnetwork.sidecar.ConfigNetworkResolution
+	(*ConfigClientResolution)(nil),   // 45: urnetwork.sidecar.ConfigClientResolution
+	(*BridgeLedgerManifest)(nil),     // 46: urnetwork.sidecar.BridgeLedgerManifest
+	(*BridgeLedgerFile)(nil),         // 47: urnetwork.sidecar.BridgeLedgerFile
+	(*BridgeLedgerAddresses)(nil),    // 48: urnetwork.sidecar.BridgeLedgerAddresses
+	(*BridgeLedgerAddressRow)(nil),   // 49: urnetwork.sidecar.BridgeLedgerAddressRow
+	(*BridgeLedgerRules)(nil),        // 50: urnetwork.sidecar.BridgeLedgerRules
+	(*BridgeLedgerRuleRow)(nil),      // 51: urnetwork.sidecar.BridgeLedgerRuleRow
+	(*BridgeLedgerEgressSpecs)(nil),  // 52: urnetwork.sidecar.BridgeLedgerEgressSpecs
+	(*BridgeLedgerEgressRow)(nil),    // 53: urnetwork.sidecar.BridgeLedgerEgressRow
+	(*BridgeLedgerAliases)(nil),      // 54: urnetwork.sidecar.BridgeLedgerAliases
+	(*BridgeLedgerAliasRow)(nil),     // 55: urnetwork.sidecar.BridgeLedgerAliasRow
+	(*bridge.StatementHeader)(nil),   // 56: urnetwork.sidecar.StatementHeader
+	(bridge.MemberRole)(0),           // 57: urnetwork.sidecar.MemberRole
+	(bridge.RecoveryRebindReason)(0), // 58: urnetwork.sidecar.RecoveryRebindReason
+	(bridge.KeyAlg)(0),               // 59: urnetwork.sidecar.KeyAlg
+	(bridge.KeyPurpose)(0),           // 60: urnetwork.sidecar.KeyPurpose
+	(*bridge.WebAuthnEvidence)(nil),  // 61: urnetwork.sidecar.WebAuthnEvidence
+	(*bridge.ForwardScope)(nil),      // 62: urnetwork.sidecar.ForwardScope
+	(*bridge.AuthPin)(nil),           // 63: urnetwork.sidecar.AuthPin
+	(*bridge.BridgeRouteBody)(nil),   // 64: urnetwork.sidecar.BridgeRouteBody
+	(*bridge.BridgeMapBody)(nil),     // 65: urnetwork.sidecar.BridgeMapBody
+	(bridge.BridgeWithdrawMode)(0),   // 66: urnetwork.sidecar.BridgeWithdrawMode
+	(bridge.BridgeEgressMode)(0),     // 67: urnetwork.sidecar.BridgeEgressMode
+	(*bridge.BridgeAliasBody)(nil),   // 68: urnetwork.sidecar.BridgeAliasBody
 }
 var file_protocol_config_proto_depIdxs = []int32{
-	55, // 0: urnetwork.sidecar.AdminSet.header:type_name -> urnetwork.sidecar.StatementHeader
-	55, // 1: urnetwork.sidecar.MemberAdmit.header:type_name -> urnetwork.sidecar.StatementHeader
-	56, // 2: urnetwork.sidecar.MemberAdmit.role:type_name -> urnetwork.sidecar.MemberRole
-	55, // 3: urnetwork.sidecar.SidecarAdmit.header:type_name -> urnetwork.sidecar.StatementHeader
-	55, // 4: urnetwork.sidecar.AdmissionConfirm.header:type_name -> urnetwork.sidecar.StatementHeader
-	55, // 5: urnetwork.sidecar.SponsorSet.header:type_name -> urnetwork.sidecar.StatementHeader
-	55, // 6: urnetwork.sidecar.IndexerSet.header:type_name -> urnetwork.sidecar.StatementHeader
+	56, // 0: urnetwork.sidecar.AdminSet.header:type_name -> urnetwork.sidecar.StatementHeader
+	56, // 1: urnetwork.sidecar.MemberAdmit.header:type_name -> urnetwork.sidecar.StatementHeader
+	57, // 2: urnetwork.sidecar.MemberAdmit.role:type_name -> urnetwork.sidecar.MemberRole
+	56, // 3: urnetwork.sidecar.SidecarAdmit.header:type_name -> urnetwork.sidecar.StatementHeader
+	56, // 4: urnetwork.sidecar.AdmissionConfirm.header:type_name -> urnetwork.sidecar.StatementHeader
+	56, // 5: urnetwork.sidecar.SponsorSet.header:type_name -> urnetwork.sidecar.StatementHeader
+	56, // 6: urnetwork.sidecar.IndexerSet.header:type_name -> urnetwork.sidecar.StatementHeader
 	0,  // 7: urnetwork.sidecar.IndexerSet.scope:type_name -> urnetwork.sidecar.IndexerScope
 	1,  // 8: urnetwork.sidecar.IndexerServices.services:type_name -> urnetwork.sidecar.IndexerService
-	55, // 9: urnetwork.sidecar.RecoveryBind.header:type_name -> urnetwork.sidecar.StatementHeader
-	55, // 10: urnetwork.sidecar.RecoveryRebind.header:type_name -> urnetwork.sidecar.StatementHeader
-	57, // 11: urnetwork.sidecar.RecoveryRebind.reason:type_name -> urnetwork.sidecar.RecoveryRebindReason
-	55, // 12: urnetwork.sidecar.KeyRegister.header:type_name -> urnetwork.sidecar.StatementHeader
-	58, // 13: urnetwork.sidecar.KeyRegister.alg:type_name -> urnetwork.sidecar.KeyAlg
-	59, // 14: urnetwork.sidecar.KeyRegister.purpose:type_name -> urnetwork.sidecar.KeyPurpose
-	60, // 15: urnetwork.sidecar.KeyRegister.key_webauthn:type_name -> urnetwork.sidecar.WebAuthnEvidence
-	55, // 16: urnetwork.sidecar.KeyRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
-	55, // 17: urnetwork.sidecar.Delegation.header:type_name -> urnetwork.sidecar.StatementHeader
-	61, // 18: urnetwork.sidecar.Delegation.forward:type_name -> urnetwork.sidecar.ForwardScope
-	55, // 19: urnetwork.sidecar.DelegationRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
-	62, // 20: urnetwork.sidecar.AuthKeyBundle.head:type_name -> urnetwork.sidecar.AuthPin
+	56, // 9: urnetwork.sidecar.RecoveryBind.header:type_name -> urnetwork.sidecar.StatementHeader
+	56, // 10: urnetwork.sidecar.RecoveryRebind.header:type_name -> urnetwork.sidecar.StatementHeader
+	58, // 11: urnetwork.sidecar.RecoveryRebind.reason:type_name -> urnetwork.sidecar.RecoveryRebindReason
+	56, // 12: urnetwork.sidecar.KeyRegister.header:type_name -> urnetwork.sidecar.StatementHeader
+	59, // 13: urnetwork.sidecar.KeyRegister.alg:type_name -> urnetwork.sidecar.KeyAlg
+	60, // 14: urnetwork.sidecar.KeyRegister.purpose:type_name -> urnetwork.sidecar.KeyPurpose
+	61, // 15: urnetwork.sidecar.KeyRegister.key_webauthn:type_name -> urnetwork.sidecar.WebAuthnEvidence
+	56, // 16: urnetwork.sidecar.KeyRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
+	56, // 17: urnetwork.sidecar.Delegation.header:type_name -> urnetwork.sidecar.StatementHeader
+	62, // 18: urnetwork.sidecar.Delegation.forward:type_name -> urnetwork.sidecar.ForwardScope
+	56, // 19: urnetwork.sidecar.DelegationRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
+	63, // 20: urnetwork.sidecar.AuthKeyBundle.head:type_name -> urnetwork.sidecar.AuthPin
 	4,  // 21: urnetwork.sidecar.ServiceDirectorySettings.runs:type_name -> urnetwork.sidecar.DirectoryRunsMode
 	5,  // 22: urnetwork.sidecar.ServiceDirectorySettings.workers:type_name -> urnetwork.sidecar.DirectoryWorkersMode
 	2,  // 23: urnetwork.sidecar.ServiceSettings.team_mail:type_name -> urnetwork.sidecar.TeamMailMode
 	3,  // 24: urnetwork.sidecar.ServiceSettings.self_admit:type_name -> urnetwork.sidecar.SelfAdmitMode
-	23, // 25: urnetwork.sidecar.ServiceSettings.directory:type_name -> urnetwork.sidecar.ServiceDirectorySettings
-	6,  // 26: urnetwork.sidecar.VersioningRule.versioning:type_name -> urnetwork.sidecar.VersioningMode
-	25, // 27: urnetwork.sidecar.VersioningRules.rules:type_name -> urnetwork.sidecar.VersioningRule
-	55, // 28: urnetwork.sidecar.AuthorityProposal.header:type_name -> urnetwork.sidecar.StatementHeader
-	55, // 29: urnetwork.sidecar.AuthorityCosign.header:type_name -> urnetwork.sidecar.StatementHeader
-	55, // 30: urnetwork.sidecar.RecoveryVeto.header:type_name -> urnetwork.sidecar.StatementHeader
-	31, // 31: urnetwork.sidecar.ConfigFold.records:type_name -> urnetwork.sidecar.ConfigRecord
-	34, // 32: urnetwork.sidecar.ConfigNameTable.names:type_name -> urnetwork.sidecar.ConfigName
-	36, // 33: urnetwork.sidecar.ConfigAtomTable.atoms:type_name -> urnetwork.sidecar.ConfigAtomName
-	38, // 34: urnetwork.sidecar.ConfigRuleTable.rules:type_name -> urnetwork.sidecar.ConfigRuleId
-	40, // 35: urnetwork.sidecar.ConfigLabelTable.labels:type_name -> urnetwork.sidecar.ConfigRepoLabel
-	42, // 36: urnetwork.sidecar.ConfigResolution.members:type_name -> urnetwork.sidecar.ConfigMemberResolution
-	43, // 37: urnetwork.sidecar.ConfigResolution.networks:type_name -> urnetwork.sidecar.ConfigNetworkResolution
-	44, // 38: urnetwork.sidecar.ConfigResolution.clients:type_name -> urnetwork.sidecar.ConfigClientResolution
-	46, // 39: urnetwork.sidecar.BridgeLedgerManifest.files:type_name -> urnetwork.sidecar.BridgeLedgerFile
-	48, // 40: urnetwork.sidecar.BridgeLedgerAddresses.rows:type_name -> urnetwork.sidecar.BridgeLedgerAddressRow
-	50, // 41: urnetwork.sidecar.BridgeLedgerRules.rows:type_name -> urnetwork.sidecar.BridgeLedgerRuleRow
-	7,  // 42: urnetwork.sidecar.BridgeLedgerRuleRow.disposition:type_name -> urnetwork.sidecar.BridgeLedgerDisposition
-	63, // 43: urnetwork.sidecar.BridgeLedgerRuleRow.route:type_name -> urnetwork.sidecar.BridgeRouteBody
-	64, // 44: urnetwork.sidecar.BridgeLedgerRuleRow.map:type_name -> urnetwork.sidecar.BridgeMapBody
-	65, // 45: urnetwork.sidecar.BridgeLedgerRuleRow.withdraw_mode:type_name -> urnetwork.sidecar.BridgeWithdrawMode
-	52, // 46: urnetwork.sidecar.BridgeLedgerEgressSpecs.rows:type_name -> urnetwork.sidecar.BridgeLedgerEgressRow
-	66, // 47: urnetwork.sidecar.BridgeLedgerEgressRow.mode:type_name -> urnetwork.sidecar.BridgeEgressMode
-	54, // 48: urnetwork.sidecar.BridgeLedgerAliases.rows:type_name -> urnetwork.sidecar.BridgeLedgerAliasRow
-	67, // 49: urnetwork.sidecar.BridgeLedgerAliasRow.body:type_name -> urnetwork.sidecar.BridgeAliasBody
-	50, // [50:50] is the sub-list for method output_type
-	50, // [50:50] is the sub-list for method input_type
-	50, // [50:50] is the sub-list for extension type_name
-	50, // [50:50] is the sub-list for extension extendee
-	0,  // [0:50] is the sub-list for field type_name
+	24, // 25: urnetwork.sidecar.ServiceSettings.directory:type_name -> urnetwork.sidecar.ServiceDirectorySettings
+	6,  // 26: urnetwork.sidecar.ServiceSettings.record_cost:type_name -> urnetwork.sidecar.RecordCostMode
+	7,  // 27: urnetwork.sidecar.VersioningRule.versioning:type_name -> urnetwork.sidecar.VersioningMode
+	26, // 28: urnetwork.sidecar.VersioningRules.rules:type_name -> urnetwork.sidecar.VersioningRule
+	56, // 29: urnetwork.sidecar.AuthorityProposal.header:type_name -> urnetwork.sidecar.StatementHeader
+	56, // 30: urnetwork.sidecar.AuthorityCosign.header:type_name -> urnetwork.sidecar.StatementHeader
+	56, // 31: urnetwork.sidecar.RecoveryVeto.header:type_name -> urnetwork.sidecar.StatementHeader
+	32, // 32: urnetwork.sidecar.ConfigFold.records:type_name -> urnetwork.sidecar.ConfigRecord
+	35, // 33: urnetwork.sidecar.ConfigNameTable.names:type_name -> urnetwork.sidecar.ConfigName
+	37, // 34: urnetwork.sidecar.ConfigAtomTable.atoms:type_name -> urnetwork.sidecar.ConfigAtomName
+	39, // 35: urnetwork.sidecar.ConfigRuleTable.rules:type_name -> urnetwork.sidecar.ConfigRuleId
+	41, // 36: urnetwork.sidecar.ConfigLabelTable.labels:type_name -> urnetwork.sidecar.ConfigRepoLabel
+	43, // 37: urnetwork.sidecar.ConfigResolution.members:type_name -> urnetwork.sidecar.ConfigMemberResolution
+	44, // 38: urnetwork.sidecar.ConfigResolution.networks:type_name -> urnetwork.sidecar.ConfigNetworkResolution
+	45, // 39: urnetwork.sidecar.ConfigResolution.clients:type_name -> urnetwork.sidecar.ConfigClientResolution
+	47, // 40: urnetwork.sidecar.BridgeLedgerManifest.files:type_name -> urnetwork.sidecar.BridgeLedgerFile
+	49, // 41: urnetwork.sidecar.BridgeLedgerAddresses.rows:type_name -> urnetwork.sidecar.BridgeLedgerAddressRow
+	51, // 42: urnetwork.sidecar.BridgeLedgerRules.rows:type_name -> urnetwork.sidecar.BridgeLedgerRuleRow
+	8,  // 43: urnetwork.sidecar.BridgeLedgerRuleRow.disposition:type_name -> urnetwork.sidecar.BridgeLedgerDisposition
+	64, // 44: urnetwork.sidecar.BridgeLedgerRuleRow.route:type_name -> urnetwork.sidecar.BridgeRouteBody
+	65, // 45: urnetwork.sidecar.BridgeLedgerRuleRow.map:type_name -> urnetwork.sidecar.BridgeMapBody
+	66, // 46: urnetwork.sidecar.BridgeLedgerRuleRow.withdraw_mode:type_name -> urnetwork.sidecar.BridgeWithdrawMode
+	53, // 47: urnetwork.sidecar.BridgeLedgerEgressSpecs.rows:type_name -> urnetwork.sidecar.BridgeLedgerEgressRow
+	67, // 48: urnetwork.sidecar.BridgeLedgerEgressRow.mode:type_name -> urnetwork.sidecar.BridgeEgressMode
+	55, // 49: urnetwork.sidecar.BridgeLedgerAliases.rows:type_name -> urnetwork.sidecar.BridgeLedgerAliasRow
+	68, // 50: urnetwork.sidecar.BridgeLedgerAliasRow.body:type_name -> urnetwork.sidecar.BridgeAliasBody
+	51, // [51:51] is the sub-list for method output_type
+	51, // [51:51] is the sub-list for method input_type
+	51, // [51:51] is the sub-list for extension type_name
+	51, // [51:51] is the sub-list for extension extendee
+	0,  // [0:51] is the sub-list for field type_name
 }
 
 func init() { file_protocol_config_proto_init() }
@@ -4056,7 +4146,7 @@ func file_protocol_config_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_protocol_config_proto_rawDesc), len(file_protocol_config_proto_rawDesc)),
-			NumEnums:      8,
+			NumEnums:      9,
 			NumMessages:   47,
 			NumExtensions: 0,
 			NumServices:   0,
