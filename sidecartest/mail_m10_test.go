@@ -26,23 +26,25 @@ func newMailM10World(t *testing.T) *mailworld.M10World {
 }
 
 // FS-76's mailbox case: the corpus's delivered mail, its index held to the oracle at every bucket boundary, roll-up
-// and erasure, and the query set on a desktop and a phone.
+// and erasure, one of them after a roll-up, and the query set on a desktop and a phone.
 func TestFs76MailboxCase(t *testing.T) {
 	mailworld.RunM10Fs76Mailbox(t, newMailM10World(t), nil)
 }
 
-// FS-78's mailbox case: an admin's erasure of one email, its CUT, first ERASE and CLOSUREs.
+// FS-78's mailbox case: an admin's erasure of the second device's email, in a head file first created past the
+// mailbox's first push, then of the laptop's, each by its CUT, first ERASE and CLOSUREs, then a resume of the first.
 func TestFs78MailboxCase(t *testing.T) {
 	mailworld.RunM10Fs78Mailbox(t, newMailM10World(t))
 }
 
 // FS-111's mailbox case: an ingest paused before its head CAS across an erasure's CUT is refused 409 INDEX_EPOCH and
-// commits without the erased message.
+// commits without the erased message; a second erasure, then a resume of the first.
 func TestFs111MailboxCase(t *testing.T) {
 	mailworld.RunM10Fs111Mailbox(t, newMailM10World(t))
 }
 
-// FS-112's mailbox case: a 5 MiB message's five chunk documents, and their erasure.
+// FS-112's mailbox case: a 5 MiB message's five chunk documents, ingested in the mailbox's second push, and their
+// erasure.
 func TestFs112MailboxCase(t *testing.T) {
 	mailworld.RunM10Fs112Mailbox(t, newMailM10World(t), nil)
 }
