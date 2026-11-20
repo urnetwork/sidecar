@@ -3,7 +3,8 @@
 // RECORD-M6-09: a ledger's scope governs which runs a writing sidecar copies there; a scoped run's team-bound entries
 // land in the ledger as entries of their own, T's projection and never a vault body, and an out-of-scope run's, a
 // note's and a run's that began before the scope do not; a scope pushed by a writer that was no admin at its push's
-// pin is ignored; and erasing the ledger's copy leaves the team record's entry.
+// pin is ignored; erasing the ledger's copy leaves the team record's entry; and a scoped run's cost is copied only
+// while the Team's record_cost sends it to T (owner decision 302).
 
 package sidecar_test
 
@@ -300,5 +301,62 @@ func TestRecordLedgerIgnoresAScopeFromANonAdmin(t *testing.T) {
 				t.Fatal("a non-admin's scope copied a run")
 			}
 		}
+	}
+}
+
+// A scope may name cost among its kinds (RECORD.md section 6.5): a scoped run's cost entry is copied to the ledger, T's
+// projection under its own entry, while the Team's record_cost sends it to T, and once a later position turns that off
+// the next cost entry reaches neither T nor the ledger.
+func TestRecordLedgerCopiesCostOnlyWhileItReachesT(t *testing.T) {
+	ctx := t.Context()
+	world := newTestLedgerWorld(t)
+	world.fixture.Logs.TeamCost = true
+	world.publish()
+	admin := world.adminDevice()
+	world.ledgerWriter(admin, true)
+	member := world.memberDevice(true)
+	world.ledgerWriter(member, false)
+	adminRecord := admin.open()
+	memberRecord := member.open()
+	if _, err := adminRecord.Ledgers().SetScope(&sidecar.RecordLedgerScopeArgs{
+		LogId: world.ledgerId, Projects: []string{"github.com/example/in"},
+		Kinds: []sidecar.RecordKind{sidecar.RecordKindContext, sidecar.RecordKindCost}, Confirmed: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := adminRecord.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := memberRecord.Ledgers().Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	runId := sidecar.NewId()
+	world.runs.StartRun(runId)
+	testLedgerRef(t, testRecordAppendAll(t, memberRecord, testLedgerRunDrafts(&runId, "github.com/example/in")[0]), world.ledgerId)
+	on := testTeamCostBody(10)
+	refs := testRecordAppendAll(t, memberRecord, sidecar.RecordRunCostDraft(runId, on))
+	ledgerRef := testLedgerRef(t, refs, world.ledgerId)
+	teamRef := testLedgerRef(t, refs, world.teamRecordId)
+	if ledgerRef.EntryId == teamRef.EntryId {
+		t.Fatal("the ledger's copy shares the team entry's id")
+	}
+
+	world.fixture.Logs.TeamCost = false
+	world.publish()
+	for _, ref := range testRecordAppendAll(t, memberRecord, sidecar.RecordRunCostDraft(runId, testTeamCostBody(20))) {
+		if ref.LogId == world.ledgerId || ref.LogId == world.teamRecordId {
+			t.Fatalf("a cost entry reached log %s with record_cost off", ref.LogId)
+		}
+	}
+	if err := memberRecord.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	entries := world.ledgerEntries(member.sidecarId)
+	if len(entries) != 2 || entries[1].Kind() != sidecar.RecordKindCost || entries[1].EntryId != ledgerRef.EntryId {
+		t.Fatalf("%d entries of the member in the ledger", len(entries))
+	}
+	copied := &protocol.RunCostBody{}
+	if err := proto.Unmarshal(entries[1].Body, copied); err != nil || !proto.Equal(copied, on) {
+		t.Fatalf("the ledger's cost entry holds %v: %v", copied, err)
 	}
 }
