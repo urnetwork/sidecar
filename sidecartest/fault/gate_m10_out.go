@@ -406,8 +406,15 @@ func gateM10OutEvidenceItems() []*GateItem {
 		{
 			Item: "a migration of a format-1 repo and a rollback to format-1 binaries (§22.10's format 2 row; FS-72's M10 cases; R-TEST-10; EVS2-M10-30, QD-854): a repo migrated while a format-1 client pushes and reads, the migration killed at each step, and evs and taskworker rolled back with format-2 data, on T2 and on T3 through the block's config and on the binaries testdata/evs/format1_build.txt pins",
 			Tests: []*GateTest{
-				gateFaultTests("TestFs72Migration", "TestFs72Rollback"),
-				{Repo: "server", Package: "./evshost", Tags: gateT3Tags, Stores: true, Names: []string{"TestFs72MigrationOnT3", "TestFs72RollbackOnT3", "TestFs72RollbackThroughTheBlockConfigOnT3", "TestFs72RollbackOnThePinnedBuildOnT3"}},
+				gateFaultTests(
+					"TestFs72Migration", "TestFs72MigrationKilledAtStepSix", "TestFs72MigrationKilledBeforeTheRaise", "TestFs72MigrationKilledAfterTheRaise",
+					"TestFs72MigrationKilledBeforeTheHeadCas", "TestFs72MigrationKilledAfterTheHeadCas", "TestFs72Rollback",
+				),
+				{Repo: "server", Package: "./evshost", Tags: gateT3Tags, Stores: true, Names: []string{
+					"TestFs72MigrationOnT3", "TestFs72MigrationKilledAtStepSixOnT3", "TestFs72MigrationKilledBeforeTheRaiseOnT3", "TestFs72MigrationKilledAfterTheRaiseOnT3",
+					"TestFs72MigrationKilledBeforeTheHeadCasOnT3", "TestFs72MigrationKilledAfterTheHeadCasOnT3",
+					"TestFs72RollbackOnT3", "TestFs72RollbackThroughTheBlockConfigOnT3", "TestFs72RollbackOnThePinnedBuildOnT3",
+				}},
 			},
 		},
 		{
