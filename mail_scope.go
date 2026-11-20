@@ -15,12 +15,14 @@
 //	          is per member. Teams designate two indexers per scope as §7.9's IndexerSet at member scope, which the
 //	          designations already read (mail_indexer.go); nothing here gates on them
 //	mailcfg   a scope's own mailcfg is the mailcfg repo whose row names the scope's member as its owner
-//	          (MailRepos.ScopeMailConfigRepo), and the network's is the one whose row names none (QD-1093): a consented
-//	          device of the member that writes no config heads creates it (MailRepos.EnsureScopeMailConfig), and the
-//	          access log's fold owner-binds that RepoCreate to its creator's member, so only that member's consented
-//	          devices, and the scope's receivers by their kind default, read it. A scope whose member's devices all
-//	          write config heads, an AdminSet member's, gets none this way: the log reads each of their mailcfgs as
-//	          the network's, so its receiver stays unplanned (question scope-mailcfg-owner-bound-admin-scope)
+//	          (MailRepos.ScopeMailConfigRepo), and the network's is the first standing one whose row names none
+//	          (QD-1093): a consented device of the member creates it (MailRepos.EnsureScopeMailConfig), and the access
+//	          log's fold owner-binds that RepoCreate to its creator's member, so only that member's consented devices,
+//	          and the scope's receivers by their kind default, read it; it follows the owner-bound rules as a mailbox
+//	          does, out of every admin's reach and the tag:mail indexers' (QD-1107). A scope whose member is in the
+//	          AdminSet, whose devices all write config heads, gets its own once the network's stands, since the fold
+//	          reads a config writer's mailcfg created then as its member's scope's (QD-1108); until the network's
+//	          stands its receiver stays unplanned
 //	setup     a device's scope receivers are MailScopeReceiverPlans': each host it receives for whose scope's own mailcfg
 //	          stands, with that mailcfg, which the receiver's sessions resolve a recipient against. A scope with no
 //	          mailcfg plans no receiver, since it would have no directory. MailRepos.EnsureScopeReceivers is the
