@@ -1,29 +1,28 @@
 package fault
 
-// FS-60 (§22.8, FI-1; EVSB-M2-11), every clause but the nightly ones, on T2: the hourly evacuation over one repo's
-// history on the fake file clusters and one fake clock. The history is written as evs writes it, through the
-// formats' own codecs: signed statements, batch records in pb/ batches, heads committed If-Match through HeadStore
-// with each push's window entry, and a log page built from the head's oldest versions. A kill is a store request
-// that never applies, at the request a schedule names: the run dies there with nothing more written, and the next
-// run resumes from the store.
+// FS-60 (§22.8, FI-1; EVSB-M2-11) on T2, the clauses the registry does not hold yet: the hourly evacuation over one
+// repo's history on the fake file clusters and one fake clock of its own, outside the Net, so no explorer seed, FI
+// check or T3 run reaches them. The history is written as evs writes it, through the formats' own codecs: signed
+// statements, batch records in pb/ batches, heads committed If-Match through HeadStore with each push's window entry,
+// and a log page built from the head's oldest versions. A kill is a store request that never applies, at the request a
+// test names: the run dies there with nothing more written, and the next run resumes from the store.
 //
 // A reader is a fresh RecordLocator at every check, so it finds each record where the store holds it at that
 // moment: in its batch, in a parcel or in a pack (FI-1's closure, for the records and log pages evacuation moves).
 //
-// Here: a run killed after its pack, after its pidx/ entry and before the batch delete, a reader finding every
-// record at each step; a pending record on an idle ref fenced, then dropped; a shredded repo's records dropped and
-// a deleted repo's kept; a held network's records, a shredding repo's included, packed and nothing deleted; a small
-// repo's parcels packed at 7 d with the replacement killed between the pack's entries and the parcel's delete; a
-// seal evacuated a run after its parts, each container holding its entry; and a run killed after a container and its
-// entries, restarted once a log page has turned 24 h old, moving only what no container holds. The nightly clauses
-// are EVSB-M2-12's (fs60_nightly_test.go), and T3's run on the real store is EVSB-M2-17's suite.
+// Here: a shredded repo's records dropped and a deleted repo's kept; a held network's records, a shredding repo's
+// included, packed and nothing deleted; a seal evacuated a run after its parts, each container holding its entry; and
+// a run killed after a container and its entries, restarted once a log page has turned 24 h old, moving only what no
+// container holds. The row's registered case and its other clauses run on the evs world (fs60.go): the run killed
+// after its pack, after its pidx/ entry and before the batch delete; a pending record on an idle ref fenced, then
+// dropped; and a small repo's parcels packed at 7 d with the replacement killed. The nightly clauses are EVSB-M2-12's
+// (fs60_nightly_test.go), on this file's world.
 
 import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
-	"errors"
 	"fmt"
 	"slices"
 	"testing"
@@ -396,72 +395,6 @@ func (self *evacuationWorld) placeHold() {
 	}
 }
 
-// Evacuation killed after a pack, then after its pidx/ entry and before the batch delete: a reader at each step
-// finds every record, and the run after them leaves one pack, one entry and no batch.
-func TestFs60KilledAfterThePackAndBeforeTheBatchDelete(t *testing.T) {
-	world := newEvacuationWorld(t)
-	world.settings.PackByteCount = 1
-	for i := 0; i < 3; i += 1 {
-		world.commit()
-	}
-	world.age()
-	world.requireEveryRecord("before any run")
-
-	// the pack lands and the run dies before its pidx/ entry
-	world.killAt(sidecartest.FaultOpPut, "pidx/", 1)
-	world.killedRun()
-	if packs := world.keys("seg-1", "pack/"); len(packs) != 1 {
-		t.Fatalf("packs after the first kill: %v", packs)
-	}
-	if entries := world.keys("meta-1", "pidx/"); len(entries) != 0 {
-		t.Fatalf("an entry was written past the kill: %v", entries)
-	}
-	world.requireEveryRecord("killed after the pack")
-
-	// the entry lands and the run dies before the first batch delete
-	world.killAt(sidecartest.FaultOpDelete, "pb/", 1)
-	world.killedRun()
-	if entries := world.keys("meta-1", "pidx/"); len(entries) != 1 {
-		t.Fatalf("entries after the second kill: %v", entries)
-	}
-	if batches := world.keys("meta-1", "pb/"); len(batches) != 3 {
-		t.Fatalf("a batch went past the kill: %v", batches)
-	}
-	world.requireEveryRecord("killed after the pidx/ entry")
-
-	result := world.mustRun()
-	if result.PackCount != 0 || result.BatchDeletedCount != 3 || result.HasBatches {
-		t.Fatalf("the run after the kills: %+v", result)
-	}
-	if packs, entries := world.keys("seg-1", "pack/"), world.keys("meta-1", "pidx/"); len(packs) != 1 || len(entries) != 1 {
-		t.Fatalf("packs %v entries %v", packs, entries)
-	}
-	world.requireEveryRecord("after the batches went")
-}
-
-// A pending record on an idle ref is fenced, then dropped: the head's fence rises with fence_ms set and no version
-// changes, and the record's batch goes while the committed records beside it are kept.
-func TestFs60PendingRecordOnAnIdleRefIsFencedThenDropped(t *testing.T) {
-	world := newEvacuationWorld(t)
-	world.commit()
-	pending := world.build()
-	world.writeRecord(pending)
-	before := world.head()
-	world.age()
-	result := world.mustRun()
-	if result.FenceCount != 1 || result.DeadCount != 1 || result.KeptCount != 1 || result.HasBatches {
-		t.Fatalf("result %+v", result)
-	}
-	after := world.head()
-	if after.Version() != before.Version() || after.Head.GetFence() != before.Head.GetFence()+1 || after.Head.GetFenceMs() != world.clock.Now().UnixMilli() {
-		t.Fatalf("the fence wrote version %d, fence %d, fence_ms %d", after.Version(), after.Head.GetFence(), after.Head.GetFenceMs())
-	}
-	if _, err := evsservice.NewRecordLocator(world.host.Blobs, nil).ReadRecord(world.ctx, world.cluster, world.repoId, world.refId, pending.place); !errors.Is(err, sidecar.ErrBlobNotFound) {
-		t.Fatalf("the dead record still reads: %v", err)
-	}
-	world.requireEveryRecord("after the fence")
-}
-
 // A shredded repo's records are dropped with nothing written for it, and a deleted, restorable repo's are kept.
 func TestFs60ShreddedReposRecordsDroppedAndDeletedReposKept(t *testing.T) {
 	for _, state := range []protocol.EvsRepoState{protocol.EvsRepoState_EVS_REPO_SHREDDING, protocol.EvsRepoState_EVS_REPO_SHREDDED} {
@@ -515,47 +448,6 @@ func TestFs60HeldNetworksRecordsArePackedAndNotDeleted(t *testing.T) {
 		}
 	}
 	world.requireEveryRecord("under the hold")
-}
-
-// A small repo's parcels pack at 7 d. The replacement is killed between the pack's entries and the parcel's delete:
-// both stand, readers find every record, taking the pack's entry over the parcel's, and the next run deletes the
-// parcel and its entry without packing again.
-func TestFs60ParcelsPackAtSevenDaysWithTheReplacementKilled(t *testing.T) {
-	world := newEvacuationWorld(t)
-	first := world.commit()
-	world.age()
-	if result := world.mustRun(); result.ParcelCount != 1 || result.PackCount != 0 {
-		t.Fatalf("first run %+v", result)
-	}
-	parcels := world.keys("meta-1", "hp/")
-	// a second push late enough that its evacuation comes as the first record nears 7 d
-	firstTime := time.Unix(int64(first.place.GetMinute())*60, 0)
-	world.clock.AdvanceTo(firstTime.Add(7*24*time.Hour - 26*time.Hour))
-	world.commit()
-	world.age()
-
-	// the pack and its entry land, and the run dies at the parcel's delete: its entry's DELETE is the first
-	world.killAt(sidecartest.FaultOpDelete, "pidx/", 1)
-	world.killedRun()
-	if packs := world.keys("seg-1", "pack/"); len(packs) != 1 {
-		t.Fatalf("packs after the kill: %v", packs)
-	}
-	if kept := world.keys("meta-1", "hp/"); !slices.Equal(kept, parcels) {
-		t.Fatalf("the parcel went past the kill: %v", kept)
-	}
-	world.requireEveryRecord("the pack and the parcel both standing")
-
-	result := world.mustRun()
-	if result.PackCount != 0 || result.ReplacedParcelCount != 1 || result.HasBatches {
-		t.Fatalf("the run after the kill: %+v", result)
-	}
-	if left := world.keys("meta-1", "hp/"); len(left) != 0 {
-		t.Fatalf("parcels left: %v", left)
-	}
-	if entries := world.keys("meta-1", "pidx/"); len(entries) != 1 {
-		t.Fatalf("entries left: %v", entries)
-	}
-	world.requireEveryRecord("after the parcel went")
 }
 
 // A seal evacuated a run after its parts: each part is kept at the seal's version in the first run's container, the

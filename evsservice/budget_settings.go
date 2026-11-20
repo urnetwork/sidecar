@@ -60,6 +60,10 @@ type WriteBudgetSettings struct {
 
 	// The queueing delay past which a process refuses the heaviest network (§11.13's shed row): 100 ms.
 	ShedDelay time.Duration
+	// How long after a network last asked for P1 its weighted share of each interval's P1 stays held for it, so a
+	// flood cannot spend the share before its next push arrives (§11.13's queue row, owner decision 617): 10 s,
+	// the interval it asked in and the next.
+	ShareWindow time.Duration
 	// A refusal's retry_after_ms: one interval, when the next shares arrive.
 	RefusalRetryAfter time.Duration
 	// How old a network's store_weight may be before it reads DefaultStoreWeight: 5 s, Quota's own
@@ -109,6 +113,7 @@ func DefaultWriteBudgetSettings() *WriteBudgetSettings {
 		FallbackFundedWindow:  1 * time.Minute,
 		FallbackProcessFactor: 2,
 		ShedDelay:             100 * time.Millisecond,
+		ShareWindow:           10 * time.Second,
 		RefusalRetryAfter:     5 * time.Second,
 		WeightMaxAge:          5 * time.Second,
 		WeightRefreshInterval: 2500 * time.Millisecond,

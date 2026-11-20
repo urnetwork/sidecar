@@ -5,9 +5,9 @@ package fault
 //
 //	flood    on the real loop and a real process budget (FS-61's world), a network whose background index work
 //	         (roll-ups, merges, backfills, full builds) floods its queue is refused first, 429 with retry_after_ms,
-//	         while a light network's indexed pushes are each admitted within an interval and the shed delay of
-//	         asking, so its p99 holds; erasures' CLOSURE pushes and slot rewrites issue at once as P0 of kind
-//	         erasure, their bytes reported under it
+//	         while two light networks' indexed pushes, both asked behind the flood, are each admitted within an
+//	         interval and the shed delay of asking, so their p99 holds; erasures' CLOSURE pushes and slot rewrites
+//	         issue at once as P0 of kind erasure, their bytes reported under it
 //	26 h     at 2x year one with the index on in every eligible repo and the budget refilled at 0.8 DWPD, the real
 //	         governor stepped every 5 s beside modeled processes at exact prices (k = 1), as FS-61's 26 h tail is,
 //	         and the oracle beside it: no push is refused once the governor has seen each process's demand, no fold
@@ -103,16 +103,15 @@ func (self *fs61World) tickAt(at time.Time, byteCount uint64) *evsservice.WriteB
 }
 
 // FS-81's flood: with the drives at 0.9 DWPD's rate, a Pro network's background index work, each item a push that
-// stages a roll-up's or full build's rewritten files, asks past its process's share every interval, between two
-// Community networks' indexed content pushes, the one before it and the other after, turn by turn. The push before it
-// is admitted at once from the fresh share. Past the shed delay the flood's waiters are refused whole, 429 with
-// retry_after_ms, never the Community push queued behind it, which is admitted at the next share, within an interval
-// and the shed delay of asking. The erasures' CLOSURE pushes and slot rewrites asked beside them issue at once as P0.
-//
-// Two light networks both queued behind the flood are not this test's: past the delay the shed refuses every waiting
-// network but the last, heaviest first and equal loads by id, so one of them is refused too
-// (questions/evsb-m10-08-shed-several-light-networks).
-func TestFs81IndexWorkFloodIsRefusedFirstWhileALightNetworkKeepsItsP99(t *testing.T) {
+// stages a roll-up's or full build's rewritten files, asks past its process's share every interval, and two Community
+// networks' indexed content pushes ask behind it, both, every interval. Past the shed delay the flood's waiters are
+// refused whole, 429 with retry_after_ms, never a Community push (owner decision 617). The first interval the flood
+// meets both Community networks outside the process's share window, so it may spend the share before they ask, and a
+// push it leaves waiting is kept, equal light loads, and admitted at the next share; from then on their weighted
+// shares are held from the flood, and both pushes behind it are admitted at once. Each is so admitted within an
+// interval and the shed delay of asking. The erasures' CLOSURE pushes and slot rewrites asked beside them issue at
+// once as P0.
+func TestFs81IndexWorkFloodIsRefusedFirstWhileLightNetworksKeepTheirP99(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		settings := evsservice.DefaultBudgetLoopSettings()
 		depth := int64(settings.Budget.RefillDwpd * float64(settings.Budget.DriveByteCount) / 24)
@@ -156,15 +155,6 @@ func TestFs81IndexWorkFloodIsRefusedFirstWhileALightNetworkKeepsItsP99(t *testin
 		var p0Issued int64
 		waits := []time.Duration{}
 		for round := range 8 {
-			first, last := communities[round%2], communities[(round+1)%2]
-			before := fs81Admit(world, client, first, content)
-			synctest.Wait()
-			if !before.isDone() || before.err != nil {
-				t.Fatalf("round %d: the push asked at the fresh share was not admitted at once: %v", round, before.err)
-			}
-			before.grant.Close()
-			waits = append(waits, before.decided.Sub(before.asked))
-
 			pros := []*fs81Admission{}
 			for range floodCount {
 				pros = append(pros, fs81Admit(world, client, pro, background))
@@ -179,10 +169,18 @@ func TestFs81IndexWorkFloodIsRefusedFirstWhileALightNetworkKeepsItsP99(t *testin
 			if pending == 0 {
 				t.Fatalf("round %d: the share admitted the whole flood of %d", round, floodCount)
 			}
-			after := fs81Admit(world, client, last, content)
-			synctest.Wait()
-			if after.isDone() {
-				t.Fatalf("round %d: the push behind the flood was decided before the next share: %v", round, after.err)
+			// both Community networks behind the flood, the first nearer it
+			behind := []*fs81Admission{}
+			for _, community := range communities {
+				behind = append(behind, fs81Admit(world, client, community, content))
+				synctest.Wait()
+			}
+			if 0 < round {
+				for i, admission := range behind {
+					if !admission.isDone() || admission.err != nil {
+						t.Fatalf("round %d: Community push %d behind the flood was not admitted at once: done %v, %v", round, i, admission.isDone(), admission.err)
+					}
+				}
 			}
 
 			// P0 never waits: the erasures' work issues on arrival, with the flood queued and B draining
@@ -195,7 +193,7 @@ func TestFs81IndexWorkFloodIsRefusedFirstWhileALightNetworkKeepsItsP99(t *testin
 				p0Issued += closure + slotRewrite
 			}
 
-			// past the shed delay the heaviest network by queued bytes per weight is refused whole
+			// past the shed delay the flood is refused whole, and no Community push with it
 			world.clock.Advance(world.settings.Budget.ShedDelay)
 			synctest.Wait()
 			for i, admission := range pros {
@@ -213,19 +211,23 @@ func TestFs81IndexWorkFloodIsRefusedFirstWhileALightNetworkKeepsItsP99(t *testin
 					t.Fatalf("round %d: a flood push ended %v", round, admission.err)
 				}
 			}
-			if after.isDone() {
-				t.Fatalf("round %d: the Community push behind the flood was decided at the shed: %v", round, after.err)
+			for i, admission := range behind {
+				if admission.isDone() && admission.err != nil {
+					t.Fatalf("round %d: Community push %d behind the flood was refused at the shed: %v", round, i, admission.err)
+				}
 			}
 
-			// the next share admits it
+			// the next share admits any still waiting
 			next = next.Add(world.settings.Budget.Interval)
 			world.tickAt(next, busy)
 			synctest.Wait()
-			if !after.isDone() || after.err != nil {
-				t.Fatalf("round %d: the Community push behind the flood after the next share: done %v, %v", round, after.isDone(), after.err)
+			for i, admission := range behind {
+				if !admission.isDone() || admission.err != nil {
+					t.Fatalf("round %d: Community push %d behind the flood after the next share: done %v, %v", round, i, admission.isDone(), admission.err)
+				}
+				admission.grant.Close()
+				waits = append(waits, admission.decided.Sub(admission.asked))
 			}
-			after.grant.Close()
-			waits = append(waits, after.decided.Sub(after.asked))
 		}
 		if proAdmitted == 0 || proRefused == 0 {
 			t.Fatalf("the flood: %d admitted and %d refused", proAdmitted, proRefused)

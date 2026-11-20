@@ -15,12 +15,21 @@
 // js/wasm runs one thread (§18.10's threads row): the poll's fetch is asynchronous, so the poll loop holds the thread
 // only while it applies a reply, and nothing here waits on the keychain under a lock the poll needs. Long keychain or
 // MLS work yields between steps (sidecar_yield.go), so a poll's reply and a page's requests interleave with it.
+//
+// The poll keeps its topic versions in the network's subprotocol store, as every leg does, and a sealed file there that
+// fails decoding is §5.9's Failed (owner decision 616). The generation's start reads the versions the poll client
+// will start from, so such a file fails the start as the connect leg's does, wrapped in errSidecarSubprotocolStoreFailed:
+// the core keeps the sidecar Offline at the generation with subprotocol_store_failed, raises refused once and retries
+// at the next wake. A poll client started again later in the generation, after a 401, that finds the file failed
+// raises the same through the core, the poll loop trying again at the next install or RetryMaxInterval, so a damaged
+// store never spins it; the next poll client that reads the store ends the reason before it polls.
 
 package sidecar
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -36,11 +45,19 @@ type sidecarHttpLeg struct {
 	sidecar *Sidecar
 }
 
-// Starts nothing yet: the poll starts once the run loop publishes the generation (start). See sidecarLeg.
+// Starts nothing yet: the poll starts once the run loop publishes the generation (start). It reads the topic versions
+// the poll client will start from, so a sealed file there that fails decoding fails the start, as the file header says.
+// See sidecarLeg.
 func (self *sidecarHttpLeg) startGeneration(generation *sidecarGeneration) (sidecarLegGeneration, error) {
 	networkId := generation.networkId
 	store, err := self.sidecar.instance.Store(&networkId).Directory(sidecarHttpPushStoreName, sidecarHttpPushStoreName)
 	if err != nil {
+		return nil, err
+	}
+	if _, err := loadPushVersions(store); err != nil {
+		if errors.Is(err, ErrSidecarStoreFailed) {
+			return nil, fmt.Errorf("%w: %w", errSidecarSubprotocolStoreFailed, err)
+		}
 		return nil, err
 	}
 	settings := DefaultPushClientSettings()
@@ -186,8 +203,45 @@ func (self *sidecarHttpGeneration) newPollClient() (*PushPollClient, error) {
 		pollClient.Close()
 		return nil, err
 	}
+	// it read the store: a reason an earlier poll client's failure raised ends before this one's first poll reports
+	sidecar.subprotocolStoreRead(generationNumber)
 	close(subscribed)
 	return pollClient, nil
+}
+
+// Ends generation's subprotocol_store_failed once a poll client of it has read the store: Offline at generation with no
+// reason, only while the sidecar stands at that reason, checked and moved under stateLock, so nothing the poll or the
+// refresher moved meanwhile is undone. Raises the state event as applyTransition does.
+func (self *Sidecar) subprotocolStoreRead(generation int64) {
+	storeFailed := sidecarLifecycle{
+		state:      SidecarStateOffline,
+		reason:     SidecarReasonSubprotocolStoreFailed,
+		generation: generation,
+	}
+	var next sidecarLifecycle
+	moved := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if self.lifecycle != storeFailed {
+			return false
+		}
+		var result sidecarTransitionResult
+		next, result = nextSidecarLifecycle(self.lifecycle, sidecarTransition{to: SidecarStateOffline, generation: generation})
+		if result != sidecarTransitionApplied {
+			return false
+		}
+		self.lifecycle = next
+		self.state.Set(next.state)
+		return true
+	}()
+	if moved {
+		self.emitEvent(SidecarEvent{
+			Kind:       SidecarEventState,
+			Generation: next.generation,
+			State:      next.state,
+			Reason:     next.reason,
+		})
+	}
 }
 
 // The generation's poll, until its ctx ends: a poll client, and after a 401 the refresher's next token. See the file
@@ -202,9 +256,14 @@ func (self *sidecarHttpGeneration) run() {
 		_, installed := self.installs.Get()
 		pollClient, err := self.newPollClient()
 		if err != nil {
-			// the store is locked or failed: the run loop sees the instance's state and ends the generation
+			// a locked, lost or failed instance: the run loop sees its state and ends the generation. A sealed file that
+			// fails decoding while the instance stands open is §5.9's Failed, raised once, as at the generation's start
+			// (owner decision 616)
 			sidecar.log.Warningf("[sidecar]generation %d's poll did not start: %s", generation.generation, err)
 			self.report(false)
+			if errors.Is(err, ErrSidecarStoreFailed) && sidecar.instance.stateError() == nil {
+				sidecar.subprotocolStoreFailed(generation.generation)
+			}
 			select {
 			case <-generation.ctx.Done():
 			case <-installed:
