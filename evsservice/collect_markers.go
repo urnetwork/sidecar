@@ -16,7 +16,10 @@
 //	         (kind-5 segments and slots, from format 2; a 404 is done) unless a hold covers the repo, which leaves the
 //	         marker for a later window, then is DELETEd once, unconditionally, each DELETE carrying a deadline
 //	         DeleteMargin (50 ms) before until_ms by this clock and cancelled at once if the clock turns unsure; a
-//	         held key or an unknown outcome leaves the marker to be read again in a later window
+//	         held key or an unknown outcome leaves the marker to be read again in a later window. A marker that
+//	         carries ids reads hold/ held to its bound at each of its DELETEs (owner decision 629): a DELETE before it,
+//	         or a slot's budget turn, that outlasts the bound reads the cover again (HoldCache.CoveringRepoAtDelete),
+//	         and a hold it shows, or a read that fails, stops the marker's DELETEs there, leaving it
 //	close    another fence-only CAS setting done to through, or below the oldest marker left
 //
 // A fold that reads a head whose window is open writes over no marker it covers until FoldCollectMargin past
@@ -630,13 +633,29 @@ func (self *MarkerCollector) deleteMarkers(
 			continue
 		}
 		carried := 0 < len(marker.GetSegmentIds()) || 0 < len(marker.GetSlotIds())
+		var cover *sidecar.HoldCover
 		if carried {
-			cover, err := self.holds.CoveringRepo(ctx, repoId, object)
+			cover, err = self.holds.CoveringRepo(ctx, repoId, object)
 			if err != nil || cover.Covered() {
 				// a hold keeps what it carries, and the marker with it
 				leave(marker.GetRemovalVersion())
 				continue
 			}
+		}
+		// the hold/ read held to its bound at each DELETE of a marker that carries ids: one before it, or a slot's
+		// budget turn, may have outlasted the bound
+		held := false
+		atDelete := func() error {
+			if !carried {
+				return nil
+			}
+			next, err := self.holds.CoveringRepoAtDelete(ctx, cover, repoId, object)
+			if err != nil || next.Covered() {
+				held = true
+				return fmt.Errorf("%w: a hold, or a read of hold/ that did not answer within its bound", errCollectRepoStops)
+			}
+			cover = next
+			return nil
 		}
 		if err := self.step(BarrierCollectDeleteBefore, barrierKey); err != nil {
 			return oldestLeft, err
@@ -647,6 +666,9 @@ func (self *MarkerCollector) deleteMarkers(
 				left = true
 				continue
 			}
+			if atDelete() != nil {
+				break
+			}
 			err := segmentCluster.Delete(deleteCtx, SegmentKey(repoId, [32]byte(segmentId)))
 			if err != nil {
 				left = true
@@ -655,20 +677,23 @@ func (self *MarkerCollector) deleteMarkers(
 			result.CarriedDeletedCount += 1
 		}
 		for _, slotIdBytes := range marker.GetSlotIds() {
+			if held {
+				break
+			}
 			slotId, err := sidecar.IdFromBytes(slotIdBytes)
 			if err != nil {
 				left = true
 				continue
 			}
-			if err := self.deleteMetadata(deleteCtx, cluster, repoId, SlotKey(repoId, slotId)); err != nil {
+			if err := self.deleteMetadata(deleteCtx, cluster, repoId, SlotKey(repoId, slotId), atDelete); err != nil {
 				left = true
 				continue
 			}
 			result.CarriedDeletedCount += 1
 		}
-		if left {
+		if left || held {
 			leave(marker.GetRemovalVersion())
-		} else if err := self.deleteMetadata(deleteCtx, cluster, repoId, IndexEntryKey(repoId, refId, read.Epoch, candidate.tokenPath)); err != nil {
+		} else if err := self.deleteMetadata(deleteCtx, cluster, repoId, IndexEntryKey(repoId, refId, read.Epoch, candidate.tokenPath), atDelete); err != nil {
 			// held, unknown, past the deadline or cancelled: read again in a later window
 			leave(marker.GetRemovalVersion())
 		} else {
@@ -681,13 +706,17 @@ func (self *MarkerCollector) deleteMarkers(
 	return oldestLeft, nil
 }
 
-// One DELETE on the metadata cluster, unconditional (§11.3), unfunded P2 of rank GC. A 404 is done.
-func (self *MarkerCollector) deleteMetadata(ctx context.Context, cluster sidecar.BlobCluster, repoId sidecar.Id, key string) error {
+// One DELETE on the metadata cluster, unconditional (§11.3), unfunded P2 of rank GC. A 404 is done. check runs after
+// the budget's turn, with nothing between it and the DELETE, and its error issues nothing.
+func (self *MarkerCollector) deleteMetadata(ctx context.Context, cluster sidecar.BlobCluster, repoId sidecar.Id, key string, check func() error) error {
 	grant, err := self.acquire(ctx, cluster, repoId, WriteOperation{Kind: WriteOperationDelete, Count: 1})
 	if err != nil {
 		return err
 	}
 	defer grant.Close()
+	if err := check(); err != nil {
+		return err
+	}
 	return cluster.Delete(grant.Context(), key)
 }
 

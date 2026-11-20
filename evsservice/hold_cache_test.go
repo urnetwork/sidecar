@@ -2,12 +2,16 @@ package evsservice
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/sidecartest"
 )
 
@@ -17,11 +21,14 @@ var (
 	holdTestStall = holdTestBound + time.Second
 )
 
-// A store whose first cluster counts the LISTs of hold/ a HoldCache makes, its reads of the holds.
+// A store whose first cluster counts the LISTs of hold/ a HoldCache makes, its reads of the holds, and runs afterList,
+// when set, once each LIST has read the store and before its answer comes back: a LIST slow to answer, during which
+// the hook can place a hold the answer does not show.
 type holdReadCountingBlobs struct {
 	sidecar.BlobStore
 	stateLock sync.Mutex
 	listCount int
+	afterList func(count int)
 }
 
 func (self *holdReadCountingBlobs) FirstCluster() (sidecar.BlobCluster, error) {
@@ -44,23 +51,49 @@ type holdReadCountingCluster struct {
 }
 
 func (self *holdReadCountingCluster) List(ctx context.Context, keyPrefix string, startAfter string, limit int) ([]*sidecar.BlobInfo, bool, error) {
+	objects, more, err := self.BlobCluster.List(ctx, keyPrefix, startAfter, limit)
 	if strings.HasPrefix(keyPrefix, "hold/") {
-		func() {
+		count := func() int {
 			self.blobs.stateLock.Lock()
 			defer self.blobs.stateLock.Unlock()
 			self.blobs.listCount += 1
+			return self.blobs.listCount
 		}()
+		if self.blobs.afterList != nil {
+			self.blobs.afterList(count)
+		}
 	}
-	return self.BlobCluster.List(ctx, keyPrefix, startAfter, limit)
+	return objects, more, err
 }
 
-// A cluster whose HEADs first run a hook: a store whose HEAD stalls, the hook moving the clock on and placing what
-// the stall's time brings.
+// A cluster whose HEADs and DELETEs first run a hook: a store whose HEAD, or a DELETE before the next, stalls, the
+// hook moving the clock on and placing what the stall's time brings.
 type holdStallingCluster struct {
 	sidecar.BlobCluster
-	stateLock sync.Mutex
-	headCount int
-	onHead    func(count int, key string)
+	stateLock   sync.Mutex
+	headCount   int
+	deleteCount int
+	onHead      func(count int, key string)
+	onDelete    func(count int, key string)
+}
+
+func (self *holdStallingCluster) Delete(ctx context.Context, key string) error {
+	count := func() int {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.deleteCount += 1
+		return self.deleteCount
+	}()
+	if self.onDelete != nil {
+		self.onDelete(count, key)
+	}
+	return self.BlobCluster.Delete(ctx, key)
+}
+
+func (self *holdStallingCluster) deletes() int {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.deleteCount
 }
 
 func (self *holdStallingCluster) Head(ctx context.Context, key string) (*sidecar.BlobInfo, error) {
@@ -388,5 +421,138 @@ func TestSweepStallCostsOneHoldRead(t *testing.T) {
 	}
 	if got := counting.reads(); got != 2 {
 		t.Fatalf("%d hold/ reads, want 2: the first, which the quick HEAD's DELETE used, and one after the stall", got)
+	}
+}
+
+// Owner decision 629 at a collection's DELETEs: a marker carrying two segments, whose first DELETE stalls past the
+// bound while a hold is acknowledged. That DELETE, issued before the hold bound it, completes; the second issues
+// nothing, and the marker stays for a later window.
+func TestMarkerCollectionStopsAMarkersDeletesAtAHoldAcknowledgedDuringAStall(t *testing.T) {
+	world, marked, _ := newCollectWorld(t)
+	carrier := marked[0]
+	segment, err := world.host.Blobs.SegmentCluster()
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, second := make([]byte, 32), make([]byte, 32)
+	copy(first, "carried first")
+	copy(second, "carried second")
+	for _, id := range [][]byte{first, second} {
+		if _, err := segment.PutIfNoneMatch(world.ctx, SegmentKey(world.repoId, [32]byte(id)), []byte("carried"), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stored := func(id []byte) bool {
+		_, err := segment.Head(world.ctx, SegmentKey(world.repoId, [32]byte(id)))
+		return err == nil
+	}
+	read := world.entryOf(carrier)
+	carrying := proto.Clone(read.Entry).(*protocol.EvsIndexEntry)
+	carrying.Marker.SegmentIds = [][]byte{first, second}
+	carryingBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(carrying)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := world.cluster.PutIfMatch(sidecartest.InspectContext(world.ctx), IndexEntryKey(world.repoId, world.refId, read.Epoch, carrier), read.Etag, carryingBytes, nil); err != nil {
+		t.Fatal(err)
+	}
+	serviceHost, holds, _, stalling := newHoldStallHost(t, world.host, world.clock)
+	collector, err := NewMarkerCollector(serviceHost, &MarkerCollectorDeps{
+		EvsSettings: world.settings, Holds: holds,
+		wait: func(wait time.Duration) { world.clock.Advance(wait) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stalling.onDelete = func(count int, key string) {
+		if count == 1 {
+			stallPastTheBound(t, world.ctx, world.host.Blobs, world.clock, testId("network-a"), true)
+		}
+	}
+	result := world.collect(collector)
+	if stalling.deletes() != 1 || stored(first) || !stored(second) {
+		t.Fatalf("%d segment DELETEs; first stored %t, second stored %t", stalling.deletes(), stored(first), stored(second))
+	}
+	if result.CarriedDeletedCount != 1 || result.MarkerLeftCount != 1 || world.entryOf(carrier).Entry.GetMarker() == nil {
+		t.Fatalf("result %+v", result)
+	}
+}
+
+// The nightly fixture's pass with its own HoldCache over a store that counts its reads of hold/ and can slow them.
+func (self *nightlyFixture) passWithHolds(holds *HoldCache) *NightlyPass {
+	self.t.Helper()
+	deps := self.deps()
+	deps.Holds = holds
+	pass, err := NewNightlyPass(self.host.ServiceHost(), deps)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	return pass
+}
+
+// Arms a slow read: the next LIST of hold/ after arm reads the store, then a hold of networkId is acknowledged and the
+// answer comes back past the bound, without it.
+func slowNextHoldRead(t *testing.T, ctx context.Context, blobs sidecar.BlobStore, clock *sidecartest.FakeClock, counting *holdReadCountingBlobs, networkId sidecar.Id) (arm func()) {
+	armed := false
+	counting.afterList = func(count int) {
+		if armed {
+			armed = false
+			stallPastTheBound(t, ctx, blobs, clock, networkId, true)
+		}
+	}
+	return func() { armed = true }
+}
+
+// Owner decision 629 at orphan GC's DELETE: its read of hold/ just before a DELETE, made after the cached one aged
+// past the bound, answers past the bound itself and misses a hold acknowledged while it was out; the DELETE does not
+// issue, and the repo stops for the night as a repo whose hold/ read fails does.
+func TestOrphanGcStopsOnAHoldReadPastItsBound(t *testing.T) {
+	fixture := newNightlyFixture(t)
+	first, firstId, _ := fixture.putSegment("first")
+	fixture.clock.Advance(time.Minute)
+	second, _, _ := fixture.putSegment("second")
+	fixture.pastTheHorizon()
+	counting := &holdReadCountingBlobs{BlobStore: fixture.host.Blobs}
+	arm := slowNextHoldRead(t, fixture.ctx, fixture.host.Blobs, fixture.clock, counting, fixture.check.networkId)
+	fixture.onStep = func(name string, key string) {
+		if name == BarrierGcDeleteAfter && key == barrierSegmentKey(fixture.check.repoId, firstId[:]) {
+			// the cached read ages past the bound before the next DELETE's read
+			fixture.clock.Advance(holdTestStall)
+			arm()
+		}
+	}
+	result, err := fixture.passWithHolds(NewHoldCache(counting, fixture.clock, nil)).Run(fixture.ctx, "meta-1", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seg := fixture.segmentCluster()
+	if result.Orphans.DeletedCount != 1 || fixture.stands(seg, first) || !fixture.stands(seg, second) || result.OrphanSkippedRepoCount != 1 {
+		t.Fatalf("result %+v", result)
+	}
+}
+
+// Owner decision 629 at the nightly pass's container DELETE: the budget's recheck, its last read before the DELETE,
+// answers past the bound and misses a hold acknowledged while it was out; the container stays, and the read is the
+// pass's error, as one that fails is.
+func TestNightlyPassKeepsAnUnnamedContainerOnAHoldReadPastItsBound(t *testing.T) {
+	fixture := newNightlyFixture(t)
+	parcelCluster, parcel := fixture.putUnnamed("parcel", false)
+	fixture.clock.Advance(25*time.Hour + time.Minute)
+	counting := &holdReadCountingBlobs{BlobStore: fixture.host.Blobs}
+	arm := slowNextHoldRead(t, fixture.ctx, fixture.host.Blobs, fixture.clock, counting, fixture.check.networkId)
+	fixture.onStep = func(name string, key string) {
+		if name == BarrierGcDeleteBefore && key == barrierRepoKey(fixture.check.repoId) {
+			fixture.onStep = nil
+			// the cached read ages past the bound before the delete's recheck
+			fixture.clock.Advance(holdTestStall)
+			arm()
+		}
+	}
+	_, err := fixture.passWithHolds(NewHoldCache(counting, fixture.clock, nil)).Run(fixture.ctx, "meta-1", "", "")
+	if !errors.Is(err, sidecar.ErrHoldReadStale) {
+		t.Fatalf("the pass's error %v", err)
+	}
+	if !fixture.stands(parcelCluster, parcel) {
+		t.Fatal("the container went on a read that missed the hold")
 	}
 }
