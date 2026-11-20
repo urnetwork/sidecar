@@ -224,6 +224,12 @@ func fs31Rows() []*fs31Row {
 				return message
 			},
 			expect: fs31Delivered,
+			check: func(t *testing.T, name string, outcome *fs31Outcome) {
+				headerEnd := bytes.Index(outcome.job.Message, []byte("\r\n\r\n")) + len("\r\n\r\n")
+				if headerEnd != DefaultProofSettings().HeaderBlockMaxByteCount {
+					t.Errorf("%s: a header block of %d octets", name, headerEnd)
+				}
+			},
 		},
 		{
 			name: "an honest send through RecordMx", group: "control", clause: "positive controls passing", applies: fs31Every,
