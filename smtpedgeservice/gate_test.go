@@ -301,8 +301,11 @@ func TestSmtpGateDeniesAFromInAnotherNetworksZone(t *testing.T) {
 	g.expect("other.example", 0, protocol.SmtpPreambleCode_SMTP_PREAMBLE_DENIED, "from_domain")
 }
 
+// A verified domain's rows are gate_custom_domain_test.go's: it sends only on the team tier.
 func TestSmtpGatePassesAliasScopeAndVerifiedDomain(t *testing.T) {
 	g := newGateWorld(t)
+	g.facts.Limits.Tier = "team"
+	g.reload()
 	for _, from := range []string{"quiet-net.root.example", "sales.n1.root.example", "brand.example"} {
 		decision := g.expect(from, 0, protocol.SmtpPreambleCode_SMTP_PREAMBLE_OK, "")
 		if decision.EnvelopeDomain != "b.n1.root.example" {

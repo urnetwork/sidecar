@@ -19,11 +19,15 @@
 //	mail_send          §8's send grant for the ticket's sidecar (AclGateView.MaySendMail): DENIED, or QUOTA
 //	                   for a spent network
 //	from domain        a zone of the network (<net>.<root>, an alias's <alias>.<root>, a scope's
-//	                   <scope>.<net>.<root>) or one of its verified network_domain names; a burner's From is
-//	                   <blabel>.<zone> with the BURNER flag, and the flag only with one, and its label's word
-//	                   is screened (ScreenName): DENIED
+//	                   <scope>.<net>.<root>), or one of its verified network_domain names while it may send
+//	                   From them (gate_custom_domain.go: DENIED custom_domain_withheld past §20.7's 14 days
+//	                   off the team tier); a burner's From is <blabel>.<zone> with the BURNER flag, and the flag
+//	                   only with one, and its label's word is screened (ScreenName): DENIED
 //	breaker            §21.5: restricted networks pause at level 1, Community at 2, all but trusted Team at
 //	                   3: HALTED
+//
+// An OK names the envelope domain the proofs hold MAIL FROM to (Z4): b.<net>.<root>, or b.<domain> for a
+// custom domain in strict mode (gate_custom_domain.go), derived from the network and never from the sidecar.
 //
 // The edge reads the network and sidecar from the ticket, never from the sidecar (§14.5). A live name,
 // the network's label, an alias or a scope label, was screened when it was made and is never screened
@@ -88,8 +92,20 @@ type SmtpGateFacts struct {
 	Aliases []string
 	// Its Team scope labels, each a zone <scope>.<net>.<root> (§12.7; none before M6).
 	ScopeLabels []string
-	// Its verified network_domain names (§7.6), which a Team may send From (D-SMTP-15).
+	// Its verified network_domain names (§7.6), lowercase: a Team sends From them (D-SMTP-15;
+	// gate_custom_domain.go), and ScreenName reads them as the network's own brands.
 	VerifiedDomains []string
+	// Those of VerifiedDomains in strict mode (§14.6, §15.4), whose envelope is b.<domain>, with the
+	// customer's MX and SPF include, in place of b.<net>.<root>: each at or above an active strict-mode MX host
+	// the network maps (QD-1129). The production feed names them only once the sender reads the same set
+	// (GET /mail/status) and its bounce address follows it, since an envelope the edge does not expect fails
+	// its part and cuts the connection; until then it names none, and every custom domain's envelope is
+	// b.<net>.<root>, as the sender's bounce address is.
+	StrictDomains []string
+	// When a network that has left the team tier stops sending From its verified domains: its downgrade
+	// time plus §20.7's 14 days (owner decision 420). Zero while it has left no tier, so off the team tier it
+	// sends From none of them.
+	CustomDomainWithholdTime time.Time
 	// Names a reviewer allowed this network (ABUSE-M5-08's screen_allow), which turn a review into an
 	// allow.
 	ReviewAllowedNames []string
@@ -142,7 +158,8 @@ type SmtpGateDecision struct {
 	Burner bool
 	// QuotaLimits.Tier, which Feedback-ID names.
 	Tier string
-	// b.<net>.<root> (§14.6): the envelope domain the proofs hold MAIL FROM to (Z4).
+	// The envelope domain the proofs hold MAIL FROM to (Z4): b.<net>.<root> (§14.6), or b.<domain> for a
+	// custom domain in strict mode (gate_custom_domain.go).
 	EnvelopeDomain string
 	// What the quota applies: the network's limits, at Community caps when restricted (§14.7), with
 	// Community's rate caps halved at breaker level 1 (§21.5).
@@ -257,20 +274,17 @@ func checkSmtpGate(gate SmtpGate, abuse sidecar.AbuseGate, request *SmtpGateRequ
 		return smtpGateRefusal(protocol.SmtpPreambleCode_SMTP_PREAMBLE_DENIED, 0, smtpGateReasonMailSend)
 	}
 
-	if !settings.ldhLabel(facts.Label) {
-		return unloaded
-	}
-	label, reason := checkSmtpFromDomain(facts, standing, request, settings)
-	if reason != "" {
-		return smtpGateRefusal(protocol.SmtpPreambleCode_SMTP_PREAMBLE_DENIED, 0, reason)
-	}
-
-	if facts.Limits == nil {
+	// the tier is a fact the From row reads too, for a custom domain
+	if !settings.ldhLabel(facts.Label) || facts.Limits == nil {
 		return unloaded
 	}
 	tier := facts.Limits.Tier
 	if _, ok := smtpFeedbackTierLetters[tier]; !ok {
 		return unloaded
+	}
+	from, reason := checkSmtpFromDomain(facts, standing, request, now, settings)
+	if reason != "" {
+		return smtpGateRefusal(protocol.SmtpPreambleCode_SMTP_PREAMBLE_DENIED, 0, reason)
 	}
 	community := tier == smtpTierCommunity || restricted
 
@@ -313,19 +327,27 @@ func checkSmtpGate(gate SmtpGate, abuse sidecar.AbuseGate, request *SmtpGateRequ
 		Code:           protocol.SmtpPreambleCode_SMTP_PREAMBLE_OK,
 		Facts:          facts,
 		Standing:       standing,
-		Label:          label,
-		Burner:         label != "",
+		Label:          from.label,
+		Burner:         from.label != "",
 		Tier:           tier,
-		EnvelopeDomain: "b." + strings.ToLower(facts.Label) + "." + strings.ToLower(settings.Root),
+		EnvelopeDomain: from.envelopeDomain,
 		Limits:         limits,
 		Community:      community,
 	}
 }
 
-// The From domain's row: whether it is the network's to send from, and a burner's label when it is one.
-// A non-empty reason refuses.
-func checkSmtpFromDomain(facts *SmtpGateFacts, standing sidecar.AbuseStanding, request *SmtpGateRequest, settings *SmtpEdgeSettings) (label string, reason string) {
-	from := strings.ToLower(request.HeaderFromDomain)
+// What the From domain's row found of a From it passes.
+type smtpGateFrom struct {
+	// A burner's <blabel>; empty for network mail.
+	label string
+	// Where MAIL FROM is (Z4): b.<net>.<root>, or b.<domain> for a custom domain in strict mode.
+	envelopeDomain string
+}
+
+// The From domain's row: whether it is the network's to send from at now, a burner's label when it is
+// one, and the envelope its mail takes. A non-empty reason refuses.
+func checkSmtpFromDomain(facts *SmtpGateFacts, standing sidecar.AbuseStanding, request *SmtpGateRequest, now time.Time, settings *SmtpEdgeSettings) (from *smtpGateFrom, reason string) {
+	fromDomain := strings.ToLower(request.HeaderFromDomain)
 	root := strings.ToLower(settings.Root)
 	burner := request.Flags&sidecar.SmtpFlagBurner != 0
 
@@ -336,23 +358,25 @@ func checkSmtpFromDomain(facts *SmtpGateFacts, standing sidecar.AbuseStanding, r
 	for _, scopeLabel := range facts.ScopeLabels {
 		zones = append(zones, strings.ToLower(scopeLabel)+"."+zones[0])
 	}
+	// every zone's mail, a burner's and an alias's included, takes the network's own envelope (§14.6)
+	networkEnvelopeDomain := sidecar.SmtpEnvelopeDomain(zones[0], "")
 
 	if !burner {
-		if slices.Contains(zones, from) {
-			return "", ""
+		if slices.Contains(zones, fromDomain) {
+			return &smtpGateFrom{envelopeDomain: networkEnvelopeDomain}, ""
 		}
-		for _, domain := range facts.VerifiedDomains {
-			if strings.TrimSuffix(strings.ToLower(domain), ".") == from {
-				return "", ""
-			}
+		// a burner's From without the flag, in no verified domain, would issue it network mail's
+		// Feedback-ID class: from_domain
+		envelopeDomain, reason := checkSmtpCustomDomain(facts, fromDomain, zones[0], now, settings)
+		if reason != "" {
+			return nil, reason
 		}
-		// a burner's From without the flag would issue it network mail's Feedback-ID class
-		return "", smtpGateReasonFrom
+		return &smtpGateFrom{envelopeDomain: envelopeDomain}, ""
 	}
 
-	burnerLabel, zone, found := strings.Cut(from, ".")
+	burnerLabel, zone, found := strings.Cut(fromDomain, ".")
 	if !found || !slices.Contains(zones, zone) || !smtpBurnerLabelPattern.MatchString(burnerLabel) {
-		return "", smtpGateReasonFrom
+		return nil, smtpGateReasonFrom
 	}
 	word := burnerLabel[:strings.LastIndexByte(burnerLabel, '-')]
 	screenFacts := &sidecar.ScreenFacts{
@@ -362,7 +386,7 @@ func checkSmtpFromDomain(facts *SmtpGateFacts, standing sidecar.AbuseStanding, r
 		ScopeLabels:     facts.ScopeLabels,
 	}
 	if sidecar.ScreenName(word, screenFacts) != sidecar.ScreenVerdictAllow {
-		return "", smtpGateReasonScreen
+		return nil, smtpGateReasonScreen
 	}
-	return burnerLabel, ""
+	return &smtpGateFrom{label: burnerLabel, envelopeDomain: networkEnvelopeDomain}, ""
 }
