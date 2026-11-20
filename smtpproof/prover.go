@@ -37,15 +37,16 @@ type ProverSettings struct {
 	// then TLS 1.3's AES-128-GCM and TLS 1.2's two AES-128-GCM suites.
 	SuiteOrder []uint16
 	// The memory proving may take (DESIGN-DETAILS 3.2.8), kept by charging: loaded shapes times
-	// ShapeMemoryByteCount plus proofs in flight times PartMemoryByteCount stay at or under it. 2,240 MiB:
-	// two loaded shapes, the one proving and the next, and one proof, which an 8 GB host can give. A budget
-	// that cannot hold one shape and one proof refuses every part, and the host only queues.
+	// ShapeMemoryByteCount plus proofs in flight times PartMemoryByteCount stay at or under it. 2,496 MiB:
+	// two loaded shapes, the one proving and the next, and one proof, which an 8 GB host can give (QD-1115).
+	// A budget that cannot hold one shape and one proof refuses every part, and the host only queues.
 	MemoryMaxByteCount int64
 	// What a loaded shape is charged, its compiled circuit and its proving key's dump: 768 MiB, above the
 	// 617 to 737 MiB measured for a unit's.
 	ShapeMemoryByteCount int64
-	// What a proof in flight is charged over its loaded shape: 704 MiB, the first proof's 662 MiB measured
-	// with a collection after each. BenchmarkPartMemory holds it to the peak it finds.
+	// What a proof in flight is charged over its loaded shape, with a collection after each: 960 MiB, the
+	// largest BenchmarkPartMemory measured, a ChaCha20 body unit's 935 MiB, rounded up (QD-1115), where an
+	// AES-128-GCM unit's took up to 666 MiB. BenchmarkPartMemory holds it to the peak it finds.
 	PartMemoryByteCount int64
 	// Proofs at once in one send, each PartMemoryByteCount more: 1. Non-positive is 1.
 	ProveConcurrency int
@@ -109,9 +110,9 @@ func DefaultProverSettings() *ProverSettings {
 	return &ProverSettings{
 		Proof:                  DefaultProofSettings(),
 		SuiteOrder:             defaultTlsSuiteOrder(),
-		MemoryMaxByteCount:     2240 * 1024 * 1024,
+		MemoryMaxByteCount:     2496 * 1024 * 1024,
 		ShapeMemoryByteCount:   768 * 1024 * 1024,
-		PartMemoryByteCount:    704 * 1024 * 1024,
+		PartMemoryByteCount:    960 * 1024 * 1024,
 		ProveConcurrency:       1,
 		ShapeIdleTimeout:       2 * time.Minute,
 		ReplyEstimateByteCount: 40,
