@@ -204,6 +204,8 @@ type pushAttempt struct {
 	pathEpoch *pathEpochReads
 	// EVS1-M2-20's: the slots an ERASE names, as step 4 read them
 	erasureSlots map[sidecar.Id]*erasureSlotRead
+	// QD-1137's: for a completion ERASE, the newest earlier ERASE naming each key it names, over the head step 4 read
+	completion *completionReads
 
 	// EVS1-M2-13's: a seal's parts, read before step 4 (push_seal.go), or the one part this attempt is of
 	// (push_part.go). At most one is set; both nil for a one-part push.
