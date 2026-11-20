@@ -53,8 +53,8 @@
 // uploads, which EvsRepo.Closure does not send yet (evs_closure.go), so at the storage limit or on a full cluster a
 // CLOSURE's upload is refused as any upload is and its pair waits on that refusal; and an eraser's own walk of a
 // removed index path's history on EvsRepo (indexEvsStore.Retained answers incomplete). Barriers evs.index.erase.listed,
-// .closed, .erased and .completed, and evs.index.reenter.built and .pushed, keyed <repo>:<ref>. Paths and documents stay on the
-// device (I-13). Not safe for concurrent use: one rewrite or re-entry of an erasure at a time.
+// .closed, .erased and .completed, and evs.index.reenter.built and .pushed, keyed <repo>:<ref>. Paths and documents
+// stay on the device (I-13). Not safe for concurrent use: one rewrite or re-entry of an erasure at a time.
 
 package sidecar
 
