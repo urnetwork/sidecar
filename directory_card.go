@@ -15,8 +15,20 @@
 //	        leaving the item out, an ended or handed-off item 24 h after its renewal, an active one past its stale 24 h.
 //	        Each passes DirectoryCheckItem with this sidecar as who; past a cap the writer refuses
 //	        (ErrDirectoryCardOverCap) and signs nothing. seq is one above the last this device wrote or this copy
-//	        accepted at the path, journaled before the put so a kill never reuses one; a path conflict syncs once and
-//	        puts again from the version read. One write carries every item, so one write renews every moving run
+//	        accepted at the path, journaled before the put so a kill never reuses one. The put names the newest version
+//	        this device knows at its path, its own last put where the copy has not read it back, so a removal that came
+//	        after it fails the put rather than going unread; a path conflict syncs once and puts again from the version
+//	        read. One write carries every item, so one write renews every moving run
+//	version each item rides the card at its writer's version, which a content change raises and a renewal keeps, plus
+//	        this device's raise, 0 until another signer first removes its path. The first card it writes once its copy
+//	        shows such a removal at the path's newest version, read at its sync whatever the path rules make of it (a
+//	        directory admin's moderation, which its moderation notice shows, a cleanup once it was revoked, a breach),
+//	        is a return: the raise grows so that every item comes back above the tombstone the removal's push wrote for
+//	        it, one above the version the removal took, which wins a tie, so by two for an item carried unchanged, with
+//	        no content change (§16.11's versions and closure rows, owner decision 645). The raise is journaled with the
+//	        seq, before the put, and never falls, so later cards carry their items on the raised line: a renewal keeps
+//	        its version and a content change still raises it. Items read back from the card this device put last (the
+//	        format 2 carrier's seed, the repair) go back to their writers' versions first (cardWrittenItems)
 //	binding the DirectoryCards binding writes d/ and r/ as the directory's reserved writer (EvsReservedDirectory,
 //	        versionless from format 2) and seals each file padded to FileStepByteCount steps, so a card's size shows at
 //	        most whether its sidecar has more than about two runs; the plaintext is the Signed's own bytes
@@ -831,18 +843,55 @@ func (self *directoryFiles) judgeCardRemoval(auth DirectoryAuthView, file *Direc
 // The cards ref's file at path as this copy holds it: its version, 0 where the path holds none or a removal, which is
 // what a path CAS write from it names.
 func (self *DirectoryClient) cardPathVersion(path string) uint64 {
-	for _, file := range self.store.Cards() {
-		if file.Path == path && !file.Removed {
-			return file.Version
-		}
+	if file := self.cardPathFile(path); file != nil && !file.Removed {
+		return file.Version
 	}
 	return 0
 }
 
+// The newest version this copy holds at path, a removal among them; nil where it holds none.
+func (self *DirectoryClient) cardPathFile(path string) *DirectoryCardFile {
+	for _, file := range self.store.Cards() {
+		if file.Path == path {
+			return file
+		}
+	}
+	return nil
+}
+
+// The push version of newest, the newest version a copy holds at sidecarId's card path, where it is a removal another
+// signer pushed, whatever the path rules made of it: see the file's header's version row. 0 for the sidecar's own
+// removal, a file, or nothing there.
+func directoryCardForeignRemoval(newest *DirectoryCardFile, sidecarId Id) uint64 {
+	if newest == nil || !newest.Removed || newest.SignerSidecarId == sidecarId {
+		return 0
+	}
+	return newest.PushVersion
+}
+
+// The path version a card put names, the newest this device knows at its path: 0 over a removal by another signer no
+// card of its stands over yet (over), whose return the put is; the copy's newest where it holds one past this device's
+// last put, 0 for a removal; else the version this device put last, though its copy has not read it back. Never 0
+// merely because the copy holds nothing or an older removal: a create-only put passes over any removal (EvsPathWrite's
+// IfVersion), so a removal that came after this device's last put would go unread and its return unmade.
+func directoryCardIfVersion(newest *DirectoryCardFile, written *directoryCardWrittenDocument, over bool) uint64 {
+	switch {
+	case over:
+		return 0
+	case newest != nil && written.PathVersion < newest.Version && newest.Removed:
+		return 0
+	case newest != nil && written.PathVersion < newest.Version:
+		return newest.Version
+	}
+	return written.PathVersion
+}
+
 // What WriteCard puts.
 type DirectoryCardWriteArgs struct {
-	// This sidecar's items as they stand: its worker item, if it announces one, and its runs, each at its current
-	// version and renewed as the caller renewed it. Those that show no more are left off the card.
+	// This sidecar's items as they stand: its worker item, if it announces one, and its runs, each at its writer's
+	// version, which a content change raises, and renewed as the caller renewed it. The card carries each at that
+	// version plus this device's raise (the file's header's version row). Those that show no more are left off the
+	// card.
 	Items []*protocol.Announcement
 }
 
@@ -851,19 +900,99 @@ type DirectoryCardWritten struct {
 	Path        string
 	Seq         uint64
 	PathVersion uint64
-	// The items the card holds, worker first.
+	// The items the card holds, worker first, at the versions it carries them at: their writers' plus the raise.
 	Items []*protocol.Announcement
 	// The Signed's bytes, and the size the binding stores them at, a whole number of steps.
 	ByteCount       int
 	StoredByteCount int
 }
 
-// The card this device last put, and the seq it journaled before its newest put.
+// The card this device last put, and the seq and the raise it journaled before its newest put (the file's header's
+// version row).
 type directoryCardWrittenDocument struct {
 	Version     int    `json:"version"`
 	Seq         uint64 `json:"seq"`
 	Content     []byte `json:"content,omitempty"`
 	PathVersion uint64 `json:"path_version,omitempty"`
+	// What every item's version on a card stands above its writer's, the sum of every return's rise; it never falls.
+	Raise uint64 `json:"raise,omitempty"`
+	// Raise as it stood when Content was put, so an item read back from Content returns to its writer's version.
+	ContentRaise uint64 `json:"content_raise,omitempty"`
+	// The push version of the newest removal of the path by another signer that Raise has risen for, journaled with
+	// it, so a put that fails, or a kill after the journal, raises it no further for that removal.
+	RaisedFor uint64 `json:"raised_for,omitempty"`
+	// The push version of the newest removal of the path by another signer that a card of this device was put over,
+	// kept after the put: until then the put names the removal, and after it the version it put (cardIfVersion).
+	PutOver uint64 `json:"put_over,omitempty"`
+}
+
+// The card this document keeps as put last, nil before the first put or where its content does not parse as sidecarId's
+// card. The bytes this device signed and put, so read as they are.
+func (self *directoryCardWrittenDocument) card(sidecarId Id) *protocol.DirectoryCard {
+	if len(self.Content) == 0 {
+		return nil
+	}
+	signed := &bridge.Signed{}
+	card := &protocol.DirectoryCard{}
+	if proto.Unmarshal(self.Content, signed) != nil || proto.Unmarshal(signed.GetBody(), card) != nil ||
+		!bytes.Equal(card.GetSidecarId(), sidecarId[:]) {
+		return nil
+	}
+	return card
+}
+
+// items, read from a card put at raise, at their writers' versions: each version less raise, and at least 1.
+func directoryCardHandedItems(items []*protocol.Announcement, raise uint64) []*protocol.Announcement {
+	handed := make([]*protocol.Announcement, 0, len(items))
+	for _, item := range items {
+		item = proto.Clone(item).(*protocol.Announcement)
+		item.Version = max(item.GetVersion(), raise+1) - raise
+		handed = append(handed, item)
+	}
+	return handed
+}
+
+// The items of the card this device put last, each at its writer's version, for a writer that hands them to WriteCard
+// again; none before its first put.
+func (self *DirectoryClient) cardWrittenItems() ([]*protocol.Announcement, error) {
+	written, err := self.readCardWritten()
+	if err != nil {
+		return nil, err
+	}
+	return directoryCardHandedItems(written.card(self.sidecarId).GetItems(), written.ContentRaise), nil
+}
+
+// How far a return raises the line under items, at their writers' versions, as written stands before it. The removal's
+// push tombstoned each active item of the card it took one above that card's version of it (directoryIndexCardChange),
+// and a tombstone wins a tie (searchVersionSupersedes), so an item carried unchanged comes back two above: the least
+// rise, which also covers a card put whose document was not kept before a kill, since a writer's versions only rise.
+// More where an item stands below the version the card put last held it at.
+func directoryCardReturnRaise(items []*protocol.Announcement, written *directoryCardWrittenDocument, sidecarId Id) uint64 {
+	// the removal's tombstone stands one above the version it took, and the item comes back one above the tombstone
+	tombstone, above := uint64(1), uint64(1)
+	rise := tombstone + above
+	took := map[Id]uint64{}
+	for _, item := range written.card(sidecarId).GetItems() {
+		took[recordIdOf(item.GetAnnouncementId())] = item.GetVersion()
+	}
+	for _, item := range items {
+		version, ok := took[recordIdOf(item.GetAnnouncementId())]
+		if carried := item.GetVersion() + written.Raise; ok && carried+rise < version+tombstone+above {
+			rise = version + tombstone + above - carried
+		}
+	}
+	return rise
+}
+
+// items at their writers' versions as a card carries them: each raised by raise.
+func directoryCardCarried(items []*protocol.Announcement, raise uint64) []*protocol.Announcement {
+	carried := make([]*protocol.Announcement, 0, len(items))
+	for _, item := range items {
+		item = proto.Clone(item).(*protocol.Announcement)
+		item.Version += raise
+		carried = append(carried, item)
+	}
+	return carried
 }
 
 // The client's card writer.
@@ -927,21 +1056,30 @@ func (self *DirectoryClient) cardItems(items []*protocol.Announcement, settings 
 			bytes.Compare(a.GetAnnouncementId(), b.GetAnnouncementId()),
 		)
 	})
+	if err := settings.checkWrittenItems(held); err != nil {
+		return nil, err
+	}
+	return held, nil
+}
+
+// ErrDirectoryCardOverCap where a writer's items pass a card's caps: more than ItemCount, more than WorkerItemCount
+// worker items, or past ItemsByteCount.
+func (self *DirectoryCardSettings) checkWrittenItems(items []*protocol.Announcement) error {
 	workerCount := 0
-	for _, item := range held {
+	for _, item := range items {
 		if DirectoryAnnouncementKind(item.GetKind()) == DirectoryAnnouncementKindWorker {
 			workerCount += 1
 		}
 	}
-	switch byteCount := directoryCardItemsByteCount(held); {
-	case settings.ItemCount < len(held):
-		return nil, fmt.Errorf("%w: %d items, past %d", ErrDirectoryCardOverCap, len(held), settings.ItemCount)
-	case settings.WorkerItemCount < workerCount:
-		return nil, fmt.Errorf("%w: %d worker items", ErrDirectoryCardOverCap, workerCount)
-	case settings.ItemsByteCount < byteCount:
-		return nil, fmt.Errorf("%w: items of %d bytes, past %d", ErrDirectoryCardOverCap, byteCount, settings.ItemsByteCount)
+	switch byteCount := directoryCardItemsByteCount(items); {
+	case self.ItemCount < len(items):
+		return fmt.Errorf("%w: %d items, past %d", ErrDirectoryCardOverCap, len(items), self.ItemCount)
+	case self.WorkerItemCount < workerCount:
+		return fmt.Errorf("%w: %d worker items", ErrDirectoryCardOverCap, workerCount)
+	case self.ItemsByteCount < byteCount:
+		return fmt.Errorf("%w: items of %d bytes, past %d", ErrDirectoryCardOverCap, byteCount, self.ItemsByteCount)
 	}
-	return held, nil
+	return nil
 }
 
 // Puts this sidecar's card with args' items: see the file's header's write row. A read_only client, one with no
@@ -970,8 +1108,9 @@ func (self *DirectoryClient) WriteCard(ctx context.Context, args *DirectoryCardW
 	return self.putCard(ctx, items, settings)
 }
 
-// Signs and puts a card of items at a seq above every one written or accepted, journaling the seq first; a path
-// conflict syncs once and puts again. The caller holds the card writer's writeLock.
+// Signs and puts a card of items, at their writers' versions, at a seq above every one written or accepted and on this
+// device's raise, a return raising it first (the file's header's version row), journaling the seq and the raise first;
+// a path conflict syncs once and puts again. The caller holds the card writer's writeLock.
 func (self *DirectoryClient) putCard(ctx context.Context, items []*protocol.Announcement, settings *DirectoryCardSettings) (*DirectoryCardWritten, error) {
 	path := DirectoryCardPath(self.sidecarId)
 	written, err := self.readCardWritten()
@@ -982,7 +1121,21 @@ func (self *DirectoryClient) putCard(ctx context.Context, items []*protocol.Anno
 	for attempt := 0; ; attempt += 1 {
 		seq := max(written.Seq, self.files().seqAt(path)) + 1
 		written.Seq = seq
-		// the seq is kept before anything carries it, so a kill after the put never puts it again
+		pathFile := self.cardPathFile(path)
+		// a removal of the path by another signer that no card of this device stands over yet
+		removal := directoryCardForeignRemoval(pathFile, self.sidecarId)
+		over := written.PutOver < removal
+		if over && written.RaisedFor < removal {
+			// the first card since another signer removed the path: every item comes back above the removal's tombstones
+			written.Raise += directoryCardReturnRaise(items, written, self.sidecarId)
+			written.RaisedFor = removal
+		}
+		carried := directoryCardCarried(items, written.Raise)
+		if err := settings.checkWrittenItems(carried); err != nil {
+			return nil, err
+		}
+		// the seq and the raise are kept before anything carries them, so a kill after the put never puts the seq again,
+		// and every card after a return carries its raise
 		if err := self.store.writeDocument(directoryCardWrittenName, written); err != nil {
 			return nil, err
 		}
@@ -1004,7 +1157,7 @@ func (self *DirectoryClient) putCard(ctx context.Context, items []*protocol.Anno
 			Seq:           seq,
 			At:            &bridge.AuthPin{Version: pin.GetVersion(), Chain: bytes.Clone(pin.GetChain())},
 			WrittenMillis: self.clock.Now().UnixMilli(),
-			Items:         items,
+			Items:         carried,
 			Version:       directoryCardFormatVersion,
 		}
 		if err := DirectoryCheckCard(card, settings); err != nil {
@@ -1025,9 +1178,10 @@ func (self *DirectoryClient) putCard(ctx context.Context, items []*protocol.Anno
 		if settings.CardFileByteCount < len(content) {
 			return nil, fmt.Errorf("%w: a card of %d bytes", ErrDirectoryCardOverCap, len(content))
 		}
+		ifVersion := directoryCardIfVersion(pathFile, written, over)
 		testHookBarrier("directory.card.before", hookKey)
 		pathVersion, err := self.PutCard(ctx, &DirectoryCardWrite{
-			PushId: NewId(), Path: path, IfVersion: self.cardPathVersion(path), Content: content, AuthPin: card.GetAt(),
+			PushId: NewId(), Path: path, IfVersion: ifVersion, Content: content, AuthPin: card.GetAt(),
 		})
 		testHookBarrier("directory.card.after", hookKey)
 		if err != nil && directoryPathConflict(err) && attempt == 0 {
@@ -1042,11 +1196,15 @@ func (self *DirectoryClient) putCard(ctx context.Context, items []*protocol.Anno
 		}
 		written.Content = content
 		written.PathVersion = pathVersion
+		written.ContentRaise = written.Raise
+		if over {
+			written.PutOver = removal
+		}
 		if err := self.store.writeDocument(directoryCardWrittenName, written); err != nil {
 			return nil, err
 		}
 		return &DirectoryCardWritten{
-			Path: path, Seq: seq, PathVersion: pathVersion, Items: items, ByteCount: len(content),
+			Path: path, Seq: seq, PathVersion: pathVersion, Items: carried, ByteCount: len(content),
 			StoredByteCount: settings.StoredByteCount(len(content)),
 		}, nil
 	}

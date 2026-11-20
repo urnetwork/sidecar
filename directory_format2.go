@@ -38,7 +38,6 @@
 package sidecar
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"sync"
@@ -47,7 +46,6 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar/protocol"
-	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 const (
@@ -229,8 +227,8 @@ func (self *DirectoryClient) carryItem(ctx context.Context, item *protocol.Annou
 	return nil
 }
 
-// Seeds the carrier's items once from the last card this device wrote, so a restart's first card keeps the items the
-// last one carried.
+// Seeds the carrier's items once from the last card this device wrote, at their writers' versions, so a restart's first
+// card keeps the items the last one carried at the versions it carried them.
 func (self *DirectoryClient) seedCarrier(carrier *directoryCarrier) error {
 	carrier.stateLock.Lock()
 	seeded := carrier.seeded
@@ -238,18 +236,9 @@ func (self *DirectoryClient) seedCarrier(carrier *directoryCarrier) error {
 	if seeded {
 		return nil
 	}
-	written, err := self.readCardWritten()
+	items, err := self.cardWrittenItems()
 	if err != nil {
 		return err
-	}
-	items := []*protocol.Announcement{}
-	if 0 < len(written.Content) {
-		signed := &bridge.Signed{}
-		card := &protocol.DirectoryCard{}
-		if proto.Unmarshal(written.Content, signed) == nil && proto.Unmarshal(signed.GetBody(), card) == nil &&
-			bytes.Equal(card.GetSidecarId(), self.sidecarId[:]) {
-			items = card.GetItems()
-		}
 	}
 	carrier.stateLock.Lock()
 	defer carrier.stateLock.Unlock()
