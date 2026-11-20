@@ -5,7 +5,9 @@
 //
 // Locked → Unenrolled ⇄ Offline ⇄ Online, a locked store → Locked (§5.9), and only a verified
 // SidecarRevoke → Revoked (D-CORE-8). A move is between neighbors, so a client refused while Online
-// reports Offline, as its connection drops, and then Unenrolled, as its refresh is refused.
+// reports Offline, as its connection drops, and then Unenrolled, as its refresh is refused. A
+// generation whose subprotocol store failed as it started stays Offline with that store's reason
+// (§5.9's Failed; owner decision 616).
 
 package sidecar
 
@@ -42,6 +44,9 @@ const (
 	// Unenrolled: the key store's item or keychain.wrap is lost, and only the pass, a recovery code
 	// or the person's confirmation goes on from here (D-CORE-15).
 	SidecarReasonKeystoreLost SidecarStateReason = "keystore_lost"
+	// Offline: a sealed file of the network's subprotocol store failed decoding as the generation
+	// started, so no client runs until a later wake retries it (§5.9's Failed; owner decision 616).
+	SidecarReasonSubprotocolStoreFailed SidecarStateReason = "subprotocol_store_failed"
 	// Revoked: a SidecarRevoke verified.
 	SidecarReasonSigned SidecarStateReason = "signed"
 )
@@ -101,7 +106,9 @@ func nextSidecarLifecycle(current sidecarLifecycle, transition sidecarTransition
 			return false
 		case SidecarStateRevoked:
 			return transition.reason == SidecarReasonSigned
-		case SidecarStateLocked, SidecarStateOffline, SidecarStateOnline:
+		case SidecarStateOffline:
+			return transition.reason == "" || transition.reason == SidecarReasonSubprotocolStoreFailed
+		case SidecarStateLocked, SidecarStateOnline:
 			return transition.reason == ""
 		}
 		return false
@@ -137,7 +144,8 @@ func nextSidecarLifecycle(current sidecarLifecycle, transition sidecarTransition
 			case SidecarStateLocked, SidecarStateUnenrolled, SidecarStateOnline, SidecarStateRevoked:
 				return true
 			case SidecarStateOffline:
-				// a new client while the old one was offline: next != current, so its generation rose
+				// next != current: a new client while the old one was offline, its generation risen, or the
+				// subprotocol store's reason set or cleared at the same generation
 				return true
 			}
 		case SidecarStateOnline:

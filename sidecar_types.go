@@ -611,8 +611,10 @@ type SidecarEvent struct {
 	// of an older generation is dropped (D-SDK-14). Zero is an event no client raised, such as a
 	// config alarm, which emitEvent stamps with the current generation.
 	Generation int64
-	State      SidecarState
-	// §18.5's GetStateReason.
+	// state: the state moved to; refused: offline, for a generation whose subprotocol store failed as it started.
+	State SidecarState
+	// state: §18.5's GetStateReason; refused: subprotocol_store_failed beside that State (§5.9's Failed; owner
+	// decision 616).
 	Reason SidecarStateReason
 	// Membership kinds: the §10 group.
 	GroupId *Id
