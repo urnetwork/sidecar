@@ -512,16 +512,21 @@ func TestOldGenerationEventsDropped(t *testing.T) {
 	platform.connected.Set(true)
 	awaitSidecarStatus(t, sidecar, atStatus(SidecarStateOnline, 2))
 
+	// Status reads Online as applyTransition moves, before it raises generation 2's Online state event, so that event
+	// can reach a callback added now. The callback takes only what the checks are about: any event of generation 1,
+	// which must never come, and the member_added raised below, which events' order puts after both of generation 1's.
 	seen := make(chan SidecarEvent, 8)
 	remove := sidecar.AddEventCallback(func(event SidecarEvent) {
-		seen <- event
+		if event.Generation < 2 || event.Kind == SidecarEventMemberAdded {
+			seen <- event
+		}
 	})
 	defer remove()
 	sidecar.tokenRefused(1, SidecarReasonRefused)
 	sidecar.emitEvent(SidecarEvent{Kind: SidecarEventKeyChanged, Generation: 1})
 	sidecar.emitEvent(SidecarEvent{Kind: SidecarEventMemberAdded, Generation: 2})
-	if event := <-seen; event.Kind != SidecarEventMemberAdded {
-		t.Errorf("an older generation's %s event was delivered", event.Kind)
+	if event := <-seen; event.Kind != SidecarEventMemberAdded || event.Generation != 2 {
+		t.Errorf("generation %d's %s event was delivered", event.Generation, event.Kind)
 	}
 	if status := sidecar.Status(); status.State != SidecarStateOnline || status.Generation != 2 {
 		t.Errorf("an older generation's refusal moved the sidecar: %+v", status)
