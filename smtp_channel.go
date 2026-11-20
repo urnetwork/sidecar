@@ -5,6 +5,10 @@
 // calls, each answered by its result's code. SubmitPart encodes every field of SmtpProofPart, the four of
 // DESIGN-DETAILS 3.2.5 among them, and decodes nothing but the code.
 //
+// Each call is marked for an edge (CallOptions.Edge; §6.4, owner decision 624): it runs no Hello, which the edge
+// carries no binding to answer and drops, and no HeadCheck, and the edge's answer comes as a Service-mode
+// source's. The ticket the dialer verified is the edge's identity, as for the stream.
+//
 // A call that timed out goes again with its request_id, up to ProofCallAttemptCount calls: a part resent
 // under its send_id and index, byte for byte, is idempotent at the edge, and a verified part is never
 // replaced (§14.5), so a retry can only find the first answer. INVALID is the edge's refusal, after which it
@@ -60,9 +64,9 @@ func newSmtpProofChannel(caller smtpEdgeCaller, edgeClientId Id, sendId []byte, 
 	return &smtpProofChannel{caller: caller, edgeClientId: edgeClientId, sendId: bytes.Clone(sendId), settings: settings}
 }
 
-// One call, sent again with its request_id while it times out, up to ProofCallAttemptCount calls.
+// One call to the edge, sent again with its request_id while it times out, up to ProofCallAttemptCount calls.
 func (self *smtpProofChannel) call(ctx context.Context, messageType protocol.MessageType, body []byte) ([]byte, error) {
-	options := &CallOptions{Timeout: self.settings.ProofCallTimeout}
+	options := &CallOptions{Timeout: self.settings.ProofCallTimeout, Edge: true}
 	for attempt := 1; ; attempt += 1 {
 		answer, err := self.caller.Call(ctx, self.edgeClientId, messageType, body, options)
 		if err == nil {
@@ -73,7 +77,7 @@ func (self *smtpProofChannel) call(ctx context.Context, messageType protocol.Mes
 		if !timedOut || self.settings.ProofCallAttemptCount <= attempt || ctx.Err() != nil {
 			return nil, err
 		}
-		options = &CallOptions{Timeout: self.settings.ProofCallTimeout, RequestId: subprotocolError.RequestId}
+		options = &CallOptions{Timeout: self.settings.ProofCallTimeout, RequestId: subprotocolError.RequestId, Edge: true}
 	}
 }
 

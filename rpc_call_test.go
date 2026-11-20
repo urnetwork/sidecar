@@ -3,8 +3,10 @@
 // §6.6's peer RPC between two dispatchers: round trips plain and chunked, the timeout's default, cap and
 // refusal, an immediate send refusal sent again under its request_id, a lost response returned with its
 // id and not retried, the response shapes that fail without retry, Cancel reaching a running handler,
-// handlers' refusals, a peer's bound on runs, and a gate that closed under a call. Every wait is on the
-// sides' fake clocks.
+// handlers' refusals, a peer's bound on runs, and a gate that closed under a call. A call marked for an edge
+// (owner decision 624) runs no Hello, takes the edge's answer and its UNAUTHENTICATED as they come, and is refused
+// for a peer known as a sidecar, on an edge's dispatcher and for a type an edge drops; an unmarked call to a known
+// edge is refused before its Hello. Every wait is on the sides' fake clocks.
 
 package sidecar
 
@@ -489,5 +491,194 @@ func TestCallSurfacesAMissingSessionAsEncryption(t *testing.T) {
 	var unavailable *SubprotocolError
 	if !errors.As(err, &unavailable) || unavailable.Code != protocol.ErrorCode_ERR_UNAVAILABLE || unavailable.Reason != SubprotocolReasonEncryption || unavailable.RequestId != 7 {
 		t.Errorf("err %v", err)
+	}
+}
+
+// A call marked for an edge (owner decision 624), as §14.5's SmtpProof goes to smtpedge: no Hello and no HeadCheck
+// goes either way, the edge's handler runs it from the sidecar with no peer identity behind it, and the edge's
+// answer, a Service-mode source's, is the call's. Before the mark a call always ran a Hello the edge drops.
+func TestCallEdgeRunsNoHelloAndGetsItsAnswer(t *testing.T) {
+	pair := newTestRpcPair(t)
+	a := pair.add(nil, nil)
+	edge := pair.addEdge(nil)
+	requests := make(chan *SubprotocolRequest, 4)
+	remove, err := edge.subprotocol.Handle(testCallType, func(ctx context.Context, request *SubprotocolRequest) ([]byte, error) {
+		requests <- &SubprotocolRequest{SourceId: request.SourceId, Peer: request.Peer, RequestId: request.RequestId}
+		return append(bytes.Clone(request.Body), '!'), nil
+	}, &HandleOptions{Mutating: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer remove()
+	response, err := a.subprotocol.Call(t.Context(), Id(edge.clientId), testCallType, []byte("part"), &CallOptions{Edge: true})
+	if err != nil || string(response) != "part!" {
+		t.Fatalf("%q, %v", response, err)
+	}
+	request := testAwait(t, requests, "the edge's request")
+	if request.SourceId != Id(a.clientId) || request.Peer != nil {
+		t.Errorf("the edge's request %+v", request)
+	}
+	// the request went once, with its timeout_ms, and the answer echoed it
+	sent := testSentOfType(a, testCallType)
+	if len(sent) != 1 || sent[0].RequestId != request.RequestId || sent[0].TimeoutMs != 15000 || sent[0].Flags != 0 {
+		t.Errorf("requests %v", sent)
+	}
+	if answers := testSentOfType(edge, testCallType+1); len(answers) != 1 || answers[0].RequestId != request.RequestId {
+		t.Errorf("answers %v", answers)
+	}
+	for _, side := range []*testRpcSide{a, edge} {
+		for _, messageType := range testSentTypes(side) {
+			if sidecarOnlyMessageType(uint32(messageType)) {
+				t.Errorf("%v sent between a sidecar and an edge", messageType)
+			}
+		}
+	}
+	// no gate opened for the edge, and the guard dropped nothing either way
+	if a.subprotocol.peerVerified(edge.clientId) {
+		t.Error("a Hello stands with the edge")
+	}
+	for _, side := range []*testRpcSide{a, edge} {
+		if dropped := side.subprotocol.stats.provideModeDroppedCount.Load(); dropped != 0 {
+			t.Errorf("%d frames dropped by the provide mode", dropped)
+		}
+	}
+}
+
+// An edge call to a peer this dispatcher knows as a sidecar, by a standing Hello or by a stream, is refused
+// FAILED_PRECONDITION before anything is sent, as SendEdge is: a peer is an edge or a sidecar, never both. The same
+// peers still take a call that is not so marked.
+func TestCallEdgeRefusedForAPeerKnownAsASidecar(t *testing.T) {
+	pair := newTestRpcPair(t)
+	a := pair.add(nil, nil)
+	byHello := pair.add(nil, nil)
+	byStream := pair.add(nil, nil)
+	testEchoHandler(t, byHello, nil)
+	testEchoHandler(t, byStream, nil)
+	if err := a.subprotocol.EnsureHello(t.Context(), Id(byHello.clientId)); err != nil {
+		t.Fatal(err)
+	}
+	incomings := testStreamAccepting(t, byStream, testStreamTarget)
+	opened, accepted := testStreamOpen(t, a, byStream, incomings, nil)
+	defer opened.Close()
+	defer accepted.Close()
+	// the stream's kind outlives its Hello
+	a.subprotocol.forgetPeer(byStream.clientId)
+	for _, peer := range []*testRpcSide{byHello, byStream} {
+		before := len(a.sent())
+		_, err := a.subprotocol.Call(t.Context(), Id(peer.clientId), testCallType, []byte("part"), &CallOptions{Edge: true})
+		if code, _ := SubprotocolErrorCode(err); code != protocol.ErrorCode_ERR_FAILED_PRECONDITION {
+			t.Errorf("an edge call to a sidecar: %v", err)
+		}
+		err = a.subprotocol.SendEdge(t.Context(), Id(peer.clientId), testCallType, []byte("outcome"))
+		if code, _ := SubprotocolErrorCode(err); code != protocol.ErrorCode_ERR_FAILED_PRECONDITION {
+			t.Errorf("an edge send to a sidecar: %v", err)
+		}
+		if sent := a.sent()[before:]; len(sent) != 0 {
+			t.Errorf("sent %v", sent)
+		}
+		response, err := a.subprotocol.Call(t.Context(), Id(peer.clientId), testCallType, []byte("y"), nil)
+		if err != nil || string(response) != "y!" {
+			t.Errorf("a sidecar's call: %q, %v", response, err)
+		}
+	}
+}
+
+// A call not marked for an edge, to a peer this dispatcher knows as an edge from its stream, is refused
+// FAILED_PRECONDITION before its Hello, which the edge would only drop, rather than waiting out its deadline.
+func TestCallUnmarkedToAKnownEdgeRefusedBeforeItsHello(t *testing.T) {
+	pair := newTestRpcPair(t)
+	a := pair.add(nil, nil)
+	edge := pair.addEdge(nil)
+	testEchoHandler(t, edge, nil)
+	incomings := testStreamAccepting(t, edge, "ur/smtpedge")
+	opened, err := a.subprotocol.OpenStream(t.Context(), Id(edge.clientId), &StreamOpenRequest{Target: "ur/smtpedge", Edge: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	incoming := testAwait(t, incomings, "the sidecar's open")
+	defer opened.Close()
+	defer incoming.Stream.Close()
+	before := len(a.sent())
+	_, err = a.subprotocol.Call(t.Context(), Id(edge.clientId), testCallType, []byte("part"), nil)
+	if code, _ := SubprotocolErrorCode(err); code != protocol.ErrorCode_ERR_FAILED_PRECONDITION {
+		t.Errorf("an unmarked call to an edge: %v", err)
+	}
+	if sent := a.sent()[before:]; len(sent) != 0 {
+		t.Errorf("sent %v", sent)
+	}
+	// marked, the same call goes
+	response, err := a.subprotocol.Call(t.Context(), Id(edge.clientId), testCallType, []byte("part"), &CallOptions{Edge: true})
+	if err != nil || string(response) != "part!" {
+		t.Errorf("%q, %v", response, err)
+	}
+}
+
+// What an edge call and SendEdge refuse before anything is sent: an edge's own dispatcher, ControlId, and every type
+// an edge would drop, the dispatcher's own, push types, stream frames and what only sidecars exchange.
+func TestCallEdgeRefusesWhatAnEdgeWouldDrop(t *testing.T) {
+	pair := newTestRpcPair(t)
+	a := pair.add(nil, nil)
+	edge := pair.addEdge(nil)
+	other := pair.addEdge(nil)
+	_, err := edge.subprotocol.Call(t.Context(), Id(other.clientId), testCallType, nil, &CallOptions{Edge: true})
+	if code, _ := SubprotocolErrorCode(err); code != protocol.ErrorCode_ERR_FAILED_PRECONDITION {
+		t.Errorf("an edge's call to an edge: %v", err)
+	}
+	if code, _ := SubprotocolErrorCode(edge.subprotocol.SendEdge(t.Context(), Id(other.clientId), testCallType, nil)); code != protocol.ErrorCode_ERR_FAILED_PRECONDITION {
+		t.Errorf("an edge's send to an edge: %v", code)
+	}
+	_, err = a.subprotocol.Call(t.Context(), Id(connect.ControlId), testCallType, nil, &CallOptions{Edge: true})
+	if code, _ := SubprotocolErrorCode(err); code != protocol.ErrorCode_ERR_FAILED_PRECONDITION {
+		t.Errorf("an edge call to ControlId: %v", err)
+	}
+	for _, messageType := range []protocol.MessageType{
+		protocol.MessageType_MESSAGE_TYPE_NONE,
+		protocol.MessageType_HELLO, protocol.MessageType_HELLO_RESULT,
+		protocol.MessageType_PING, protocol.MessageType_PONG,
+		protocol.MessageType_CANCEL, protocol.MessageType_ERROR,
+		protocol.MessageType_HEAD_CHECK, protocol.MessageType_HEAD_CHECK_PROOF_REQUEST,
+		protocol.MessageType_PUSH_HINT,
+		protocol.MessageType_STREAM_OPEN, protocol.MessageType_STREAM_DATA,
+		protocol.MessageType_SEARCH,
+	} {
+		_, err := a.subprotocol.Call(t.Context(), Id(edge.clientId), messageType, nil, &CallOptions{Edge: true})
+		if code, _ := SubprotocolErrorCode(err); code != protocol.ErrorCode_ERR_INVALID_ARGUMENT {
+			t.Errorf("an edge call of %v: %v", messageType, err)
+		}
+		if code, _ := SubprotocolErrorCode(a.subprotocol.SendEdge(t.Context(), Id(edge.clientId), messageType, nil)); code != protocol.ErrorCode_ERR_INVALID_ARGUMENT {
+			t.Errorf("an edge send of %v: %v", messageType, code)
+		}
+	}
+	for _, side := range []*testRpcSide{a, edge, other} {
+		if sent := side.sent(); len(sent) != 0 {
+			t.Errorf("sent %v", sent)
+		}
+	}
+}
+
+// An edge's UNAUTHENTICATED is its answer: the request goes once and no Hello runs, where a sidecar's refusal at
+// its gate brings a fresh Hello and the request again (TestCallRunsHelloAgainWhenThePeerForgot).
+func TestCallEdgeTakesUnauthenticatedAsItsAnswer(t *testing.T) {
+	pair := newTestRpcPair(t)
+	a := pair.add(nil, nil)
+	edge := pair.addEdge(nil)
+	var runCount atomic.Int64
+	remove, err := edge.subprotocol.Handle(testCallType, func(ctx context.Context, request *SubprotocolRequest) ([]byte, error) {
+		runCount.Add(1)
+		return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_UNAUTHENTICATED}
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer remove()
+	_, err = a.subprotocol.Call(t.Context(), Id(edge.clientId), testCallType, []byte("part"), &CallOptions{Edge: true})
+	if code, _ := SubprotocolErrorCode(err); code != protocol.ErrorCode_ERR_UNAUTHENTICATED {
+		t.Errorf("err %v", err)
+	}
+	if requests := testSentOfType(a, testCallType); len(requests) != 1 || runCount.Load() != 1 {
+		t.Errorf("%d sends, %d runs", len(requests), runCount.Load())
+	}
+	if hellos := testSentOfType(a, protocol.MessageType_HELLO); len(hellos) != 0 {
+		t.Errorf("%d Hellos to an edge", len(hellos))
 	}
 }

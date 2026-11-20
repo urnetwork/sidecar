@@ -118,7 +118,7 @@ func (self testEnginePublisher) SmtpDkimKeys(ctx context.Context, args *sidecar.
 }
 
 // A sender of the world's network on the fake prover, whose MX the message's own allowance lets go at TL4.
-func newTestEngineSender(t *testing.T, w *edgeWorld, dialer *testEngineDialer) (*sidecar.SmtpSender, *sidecartest.FakeSmtpProver, *captureLogger) {
+func newTestEngineSender(t *testing.T, w *edgeWorld, dialer sidecar.SmtpEdgeDialer) (*sidecar.SmtpSender, *sidecartest.FakeSmtpProver, *captureLogger) {
 	t.Helper()
 	settings := sidecar.DefaultSmtpSenderSettings()
 	store := sidecartest.NewFakeStore()
