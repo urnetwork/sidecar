@@ -17,10 +17,15 @@ package fault
 //	           in any card, stream entry or index file the directory holds (I-20), a search for one finds nothing,
 //	           and a run under claims off is in none of them
 //
+// Its check after every step is FI-21's withhold and taint clauses, which the steps make by hand of each call, held
+// over every search_agents call the reader's agent made (fs88SearchCall): a call that asked for no text returns no
+// untrusted text, a stub no title, and taints nothing; untrusted text returns only to a call that asked for it, after
+// its taint was asked for and answered; and a taint that fails returns nothing.
+//
 // Not here: the MCP tool's own fsync of the run's taint file and ur directory ls (mcp/tools_directory_test.go,
 // cli/directory_cmd_test.go), .ur's narrowing and widening, FI-21 through TEST-M10-02's oracle, whose ledger this
-// world does not feed, and the search sync's adapter over EvsRepo, which no composition has yet: the hook answers
-// each round by listing.
+// world does not feed and which holds no directory repo, and the search sync's adapter over EvsRepo, which no
+// composition has yet: the hook answers each round by listing.
 
 import (
 	"bytes"
@@ -49,6 +54,43 @@ const (
 type dirEvsSearchTaint struct {
 	count int
 	err   error
+}
+
+// One search_agents call as FI-21's withhold and taint clauses read it: whether it asked for untrusted text, how
+// often it asked for the run's taint and whether that failed, and what it returned.
+type fs88SearchCall struct {
+	include     bool
+	taintCount  int
+	taintFailed bool
+	result      *sidecar.SearchAgentsResult
+	err         error
+}
+
+// Whether the call kept FI-21's withhold and taint clauses: see the file header.
+func (self *fs88SearchCall) withheld() error {
+	switch {
+	case self.taintFailed && (self.result != nil || self.err == nil):
+		return errors.New("a taint that failed returned a result")
+	case self.result == nil:
+		return nil
+	case self.result.Untrusted && (!self.include || self.taintCount == 0 || self.taintFailed):
+		return errors.New("untrusted text returned before the run's taint was answered, or to a call that asked for none")
+	case !self.include && self.taintCount != 0:
+		return errors.New("a call that asked for no text asked for the run's taint")
+	case self.include:
+		return nil
+	}
+	for _, group := range self.result.Groups {
+		if !group.Stub {
+			continue
+		}
+		for _, run := range group.Runs {
+			if run.Title != "" {
+				return errors.New("a stub returned a run's title")
+			}
+		}
+	}
+	return nil
 }
 
 // search_agents as device's agent calls it: task over the directory through search, a search device synced now,
@@ -90,6 +132,24 @@ func Fs88SearchAgents(net *Net) *Schedule {
 	cleanRun, taintedRun, quietRun := sidecar.NewId(), sidecar.NewId(), sidecar.NewId()
 	// every text the directory's files must not hold
 	absent := append([]string{fs88TitleCanary, fs88SearchQuietTitle}, fs88Canaries...)
+	// every search_agents call the reader's agent made, each held to FI-21's withhold and taint clauses after every step
+	calls := []*fs88SearchCall{}
+	searchAgents := func(ctx context.Context, search *sidecar.SearchTestEvsDevice, task string, include bool, taint *dirEvsSearchTaint) (*sidecar.SearchAgentsResult, error) {
+		asked := taint.count
+		result, err := dirEvsSearchAgents(ctx, world, search, fs88SearchReader, task, include, taint)
+		call := &fs88SearchCall{include: include, taintCount: taint.count - asked, result: result, err: err}
+		call.taintFailed = 0 < call.taintCount && taint.err != nil
+		calls = append(calls, call)
+		return result, err
+	}
+	withheld := NewInvariant("FI-21/withhold", func(ctx context.Context, oracle *Oracle) error {
+		for index, call := range calls {
+			if err := call.withheld(); err != nil {
+				return fmt.Errorf("search_agents call %d: %w", index, err)
+			}
+		}
+		return nil
+	})
 	steps := []*Step{
 		{Actor: fs88SearchAdmin, Action: world.Setup},
 		{Actor: fs88SearchAdmin, Action: world.InstallIndexWriters(devices...)},
@@ -148,7 +208,7 @@ func Fs88SearchAgents(net *Net) *Schedule {
 
 			// a member's run: a stub, its title withheld and counted, its identifiers shown, no taint asked for
 			taint := &dirEvsSearchTaint{}
-			result, err := dirEvsSearchAgents(ctx, world, search, fs88SearchReader, "retry path", false, taint)
+			result, err := searchAgents(ctx, search, "retry path", false, taint)
 			if err != nil {
 				return fmt.Errorf("search_agents: %w", err)
 			}
@@ -165,7 +225,7 @@ func Fs88SearchAgents(net *Net) *Schedule {
 			}
 
 			// a run written tainted: its identifiers come back withheld too
-			result, err = dirEvsSearchAgents(ctx, world, search, fs88SearchReader, "loader", false, taint)
+			result, err = searchAgents(ctx, search, "loader", false, taint)
 			if err != nil {
 				return fmt.Errorf("search_agents for the tainted run: %w", err)
 			}
@@ -177,7 +237,7 @@ func Fs88SearchAgents(net *Net) *Schedule {
 			}
 
 			// include: the taint first, then the title
-			result, err = dirEvsSearchAgents(ctx, world, search, fs88SearchReader, "retry path", true, taint)
+			result, err = searchAgents(ctx, search, "retry path", true, taint)
 			if err != nil {
 				return fmt.Errorf("search_agents with include: %w", err)
 			}
@@ -189,13 +249,13 @@ func Fs88SearchAgents(net *Net) *Schedule {
 			}
 			// a taint that fails returns nothing
 			failing := &dirEvsSearchTaint{err: errors.New("the run file is read-only")}
-			if result, err := dirEvsSearchAgents(ctx, world, search, fs88SearchReader, "retry path", true, failing); err == nil || result != nil || failing.count != 1 {
+			if result, err := searchAgents(ctx, search, "retry path", true, failing); err == nil || result != nil || failing.count != 1 {
 				return fmt.Errorf("a failing taint: %+v %v, %d taints", result, err, failing.count)
 			}
 
 			// nothing answers a search for what was never announced
 			for _, task := range append([]string{"announce nothing", "quiet"}, fs88Canaries...) {
-				result, err := dirEvsSearchAgents(ctx, world, search, fs88SearchReader, task, true, &dirEvsSearchTaint{})
+				result, err := searchAgents(ctx, search, task, true, &dirEvsSearchTaint{})
 				if err != nil {
 					return fmt.Errorf("search_agents for %q: %w", task, err)
 				}
@@ -250,7 +310,7 @@ func Fs88SearchAgents(net *Net) *Schedule {
 			return nil
 		}},
 	}
-	return &Schedule{Id: "FS-88", Steps: steps, Tiers: []Tier{TierT2}}
+	return &Schedule{Id: "FS-88", Steps: steps, Check: []Invariant{withheld}, Tiers: []Tier{TierT2}}
 }
 
 func TestFs88Searches(t *testing.T) {
