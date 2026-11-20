@@ -922,7 +922,7 @@ type directoryCardWrittenDocument struct {
 	// it, so a put that fails, or a kill after the journal, raises it no further for that removal.
 	RaisedFor uint64 `json:"raised_for,omitempty"`
 	// The push version of the newest removal of the path by another signer that a card of this device was put over,
-	// kept after the put: until then the put names the removal, and after it the version it put (cardIfVersion).
+	// kept after the put: until then a put names the removal, and after it the version it put (directoryCardIfVersion).
 	PutOver uint64 `json:"put_over,omitempty"`
 }
 
