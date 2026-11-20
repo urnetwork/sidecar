@@ -144,6 +144,8 @@ type mailEraseIndexTestEraser struct {
 
 	cuts    []*IndexCutArgs
 	resumes []*IndexResumeArgs
+	// the completion ERASEs it sent (QD-1132)
+	completions int
 }
 
 func (self *mailEraseIndexTestEraser) Cut(ctx context.Context, args *IndexCutArgs) (*IndexCutResult, error) {
@@ -203,6 +205,33 @@ func (self *mailEraseIndexTestEraser) Resume(ctx context.Context, args *IndexRes
 		}
 		result.Rewrite.PairCount, result.Rewrite.FileCount, result.Rewrite.KeyCount, result.Rewrite.Completed = 1, 1, 1, complete
 		if complete {
+			result.Rewrite.Erasure.State = SidecarErasureDone
+		}
+		return result, nil
+	}
+	if args.Complete && args.Completion && !world.unproven {
+		// no index file holds the documents, so no pair's ERASE is left to say complete: the index's eraser ends the
+		// erasure with a completion ERASE (QD-1132), complete only where the store's state then says so
+		erasures, err := self.store.Erasures(ctx, 0)
+		if err != nil {
+			return result, err
+		}
+		key, ok := evsCompletionKeyOf(erasures, args.ErasureId, func(committed *EvsErasure) (Id, []*EvsErasedKey) {
+			return committed.ErasureId, committed.Keys
+		})
+		if !ok {
+			return result, nil
+		}
+		self.completions += 1
+		err = self.store.Erase(ctx, &EvsEraseArgs{ErasureId: args.ErasureId, Keys: []*EvsErasedKey{key}, Complete: true, Note: args.Note, Completion: true})
+		if err != nil {
+			return result, err
+		}
+		if erasures, err = self.store.Erasures(ctx, 0); err != nil {
+			return result, err
+		}
+		if mailErasureComplete(erasures, args.ErasureId) {
+			result.Rewrite.Completed = true
 			result.Rewrite.Erasure.State = SidecarErasureDone
 		}
 	}
@@ -871,5 +900,79 @@ func TestMailErasureNoteCarriesAMessagesDocuments(t *testing.T) {
 	}
 	if !mailErasureDocumented(messages) || mailErasureDocumented(messages[:1]) {
 		t.Error("which notes name documents")
+	}
+}
+
+// QD-1132's mail case in a format-2 mailbox: an erasure with no i/ segment and no orphaned CLOSURE left, whose
+// messages no index file holds, asks the index's rewrite to end it, which finds no file and sends a completion ERASE
+// naming the key the first ERASE destroyed. While evs takes no completion the erasure stays rewriting, and mail sends
+// no second completion of its own; once evs takes it, the erasure is done and evs's state shows it complete.
+func TestMailEraseFormat2WithNoSegmentLeftEndsByTheIndexsCompletion(t *testing.T) {
+	world := newMailEraseIndexTestWorld(t)
+	ctx := context.Background()
+	ids := world.ingestMessages("One")
+	// the index waits, so the erasure stops after its first ERASE
+	world.waiting = &SidecarErasure{State: SidecarErasureWaiting, ObjectsLeft: 1, BytesLeft: 100, NextTry: world.clock.Now().Add(time.Hour)}
+	eraser, _ := world.format2Eraser(NewId(), world.journal, nil)
+	erasure, err := eraser.Erase(ctx, world.month, ids)
+	if err != nil || erasure.State != MailErasureWaiting {
+		t.Fatalf("erase: %+v, %v", erasure, err)
+	}
+	// another step's CLOSURE and ERASE take the row, which leaves this erasure no segment
+	testMailEraseTakeRow(t, world.mailEraseTestWorld, eraser, erasure.ErasureId, ids[0], erasure.ErasureId)
+	world.waiting = nil
+	world.eraseStore.refusesCompletions = true
+	refusing, refusingIndex := world.format2Eraser(eraser.sidecarId, world.journal, nil)
+	refused, err := refusing.Resume(ctx)
+	if err != nil || len(refused) != 1 || refused[0].State != MailErasureRewriting || world.completeCount() != 0 {
+		t.Fatalf("a resume whose completion evs refused: %+v, %v, %d complete", refused, err, world.completeCount())
+	}
+	if len(refusingIndex.resumes) != 1 || !refusingIndex.resumes[0].Complete || !refusingIndex.resumes[0].Completion ||
+		refusingIndex.completions != 1 || world.eraseStore.refusedCompletions != 1 {
+		t.Fatalf("the index was asked %+v, sent %d completions, %d refused", refusingIndex.resumes, refusingIndex.completions, world.eraseStore.refusedCompletions)
+	}
+	world.eraseStore.refusesCompletions = false
+	fresh, index := world.format2Eraser(eraser.sidecarId, world.journal, nil)
+	resumed, err := fresh.Resume(ctx)
+	if err != nil || len(resumed) != 1 || resumed[0].State != MailErasureDone || index.completions != 1 || world.completeCount() != 1 {
+		t.Fatalf("the resume: %+v, %v, %d completions, %d complete", resumed, err, index.completions, world.completeCount())
+	}
+	erasures := world.eraseStore.committedErasures()
+	completion := erasures[len(erasures)-1]
+	if !completion.Complete || completion.ErasureId != erasure.ErasureId || len(completion.Keys) != 1 || *completion.Keys[0] != *erasures[0].Keys[0] {
+		t.Fatalf("the completion ERASE: %+v", completion)
+	}
+}
+
+// QD-1137's mail case where no index is asked to end the erasure: in a format-2 mailbox an erasure whose last
+// orphaned CLOSURE's ERASE says complete but finds its keys gone, another erasure's ERASE having taken them, leaves no
+// ERASE of it saying complete though no segment is left. Mail's own completion ERASE then ends it, flagged, naming the
+// key its first ERASE destroyed, and the erasure reads done by evs's state.
+func TestMailEraseFormat2EndsByItsOwnCompletionWhereAnOrphansEraseFoundItsKeysGone(t *testing.T) {
+	world := newMailEraseIndexTestWorld(t)
+	ctx := context.Background()
+	ids := world.ingestMessages("One")
+	world.waiting = &SidecarErasure{State: SidecarErasureWaiting, ObjectsLeft: 1, BytesLeft: 100, NextTry: world.clock.Now().Add(time.Hour)}
+	eraser, _ := world.format2Eraser(NewId(), world.journal, nil)
+	erasure, err := eraser.Erase(ctx, world.month, ids)
+	if err != nil || erasure.State != MailErasureWaiting {
+		t.Fatalf("erase: %+v, %v", erasure, err)
+	}
+	// the erasure's CLOSURE of the segment stands, and another erasure's ERASE took its replaced chain's keys
+	testMailEraseTakeRow(t, world.mailEraseTestWorld, eraser, erasure.ErasureId, ids[0], NewId())
+	world.waiting = nil
+	fresh, index := world.format2Eraser(eraser.sidecarId, world.journal, nil)
+	resumed, err := fresh.Resume(ctx)
+	if err != nil || len(resumed) != 1 || resumed[0].State != MailErasureDone || index.completions != 0 || world.completeCount() != 1 {
+		t.Fatalf("the resume: %+v, %v, %d index completions, %d complete", resumed, err, index.completions, world.completeCount())
+	}
+	if len(index.resumes) != 1 || index.resumes[0].Complete || index.resumes[0].Completion {
+		t.Fatalf("the index was asked to end the erasure, an orphan left: %+v", index.resumes)
+	}
+	erasures := world.eraseStore.committedErasures()
+	completion := erasures[len(erasures)-1]
+	if !completion.Complete || !completion.Completion || completion.ErasureId != erasure.ErasureId || len(completion.Keys) != 1 ||
+		*completion.Keys[0] != *erasures[0].Keys[0] {
+		t.Fatalf("mail's completion ERASE: %+v", completion)
 	}
 }

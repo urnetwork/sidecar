@@ -740,6 +740,19 @@ type GkmSettings struct {
 	// KF1: how many group ids a creation draws while each is another repo's at the owner marker: 4. Ids are 16
 	// random bytes, so a second draw means a squatter.
 	CreateGroupDrawCount int
+	// QD-074's rule 4: the most Signed GenRotates one ladder call of a re-form carries: 64, the protocol's value,
+	// which gkm holds too. Below 1 sends one a call.
+	LadderBatchCount int
+	// QD-1143: a re-former whose own re-form stands at its finishing phase, a repo re-seeded as deleted's until it is
+	// restored, tries the rotation and the Adds at its syncs at most this often while gkm refuses them, which it takes
+	// for an active repo/ alone: 15 min, under the hourly resync, so each resync tries once while the syncs a commit
+	// hint or a restart brings between add no refused call. Non-positive tries at every sync.
+	ReformResumeInterval time.Duration
+	// A re-form's rotation draws afresh where the keychain's rotation draft is older than this and nothing of it
+	// stands at gen/, since gkm's claim check refuses a time_ms more than its 10 minutes of skew (GkmClockSkew) off
+	// its clock, and a draft an earlier try left while gkm refused the rotation would be refused at every later one:
+	// 5 min, so a device clock a few minutes off still lands the claim. Non-positive keeps a draft of any age.
+	ReformDraftMaxAge time.Duration
 }
 
 // The desktop daemon's gkm settings, the only source of their defaults.
@@ -791,11 +804,15 @@ func DefaultGkmSettings() *GkmSettings {
 		PendingPassCount:             4,
 		CommitSendCount:              3,
 		CreateGroupDrawCount:         4,
+		LadderBatchCount:             64,
+		ReformResumeInterval:         15 * time.Minute,
+		ReformDraftMaxAge:            5 * time.Minute,
 	}
 }
 
 // What the walk of numbers cannot hold: a ReaderKey valid at most GkmReaderKeyLifetime and replaced before it lapses
-// (D-KEYS-25), a refill point inside the full count, and a last-resort renewed before the set's renewal.
+// (D-KEYS-25), a refill point inside the full count, a last-resort renewed before the set's renewal, and a re-form's
+// rotation draft drawn afresh before gkm's claim check would refuse its time.
 func (self *GkmSettings) validate() error {
 	switch {
 	case GkmReaderKeyLifetime < self.ReaderKeyLifetime || self.ReaderKeyLifetime <= self.ReaderKeyReplaceAge:
@@ -808,6 +825,8 @@ func (self *GkmSettings) validate() error {
 		return fmt.Errorf("%w: Gkm.SeatCount past a tree's 1,000 leaves", errInvalidSettings)
 	case gkmWrapBatchMaxCount < self.RotateBatchSize:
 		return fmt.Errorf("%w: Gkm.RotateBatchSize past gkm's 256 a request", errInvalidSettings)
+	case GkmClockSkew <= self.ReformDraftMaxAge:
+		return fmt.Errorf("%w: Gkm.ReformDraftMaxAge not inside gkm's 10 minutes of claim skew", errInvalidSettings)
 	}
 	return nil
 }

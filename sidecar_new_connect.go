@@ -240,6 +240,14 @@ func (self *sidecarConnectLeg) startGeneration(generation *sidecarGeneration) (s
 		closePlatform()
 		return nil, err
 	}
+	// a sealed file of this store that fails decoding is §5.9's Failed, which the core reports as this store's
+	// (owner decision 616)
+	storeFailed := func(err error) error {
+		if errors.Is(err, ErrSidecarStoreFailed) {
+			return fmt.Errorf("%w: %w", errSidecarSubprotocolStoreFailed, err)
+		}
+		return err
+	}
 	subprotocol, err := NewSubprotocol(generation.ctx, &SubprotocolEnv{
 		Client:   platformClient.Client,
 		Store:    store,
@@ -259,7 +267,7 @@ func (self *sidecarConnectLeg) startGeneration(generation *sidecarGeneration) (s
 	if err != nil {
 		api.Close()
 		closePlatform()
-		return nil, err
+		return nil, storeFailed(err)
 	}
 	// §6.8's push: the resident's frames to the machine, its versions kept beside the pins, and core's
 	// notices to the core, every one a bare resync until a body carries more (plan-CORE-core-hint-body)
@@ -278,7 +286,7 @@ func (self *sidecarConnectLeg) startGeneration(generation *sidecarGeneration) (s
 		subprotocol.Close()
 		api.Close()
 		closePlatform()
-		return nil, err
+		return nil, storeFailed(err)
 	}
 	generationNumber := generation.generation
 	if _, err := subprotocol.Subscribe(PushTopicCore, func(notice PushNotice) {

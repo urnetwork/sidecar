@@ -30,10 +30,18 @@ type mailEraseTestStore struct {
 	eraseCount  int
 	pushTimes   map[string]time.Time
 	closedPaths []string
+	// the versions of the completion ERASEs taken (QD-1132), which destroyed nothing
+	completionVersions map[uint64]bool
+	// takes no completion ERASE, answering it NOTHING_TO_ERASE as evs does one whose key a completion named last, and
+	// how many it refused so
+	refusesCompletions bool
+	refusedCompletions int
 }
 
 func newMailEraseTestStore() *mailEraseTestStore {
-	return &mailEraseTestStore{mailVaultTestStore: newMailVaultTestStore(), pushTimes: map[string]time.Time{}}
+	return &mailEraseTestStore{
+		mailVaultTestStore: newMailVaultTestStore(), pushTimes: map[string]time.Time{}, completionVersions: map[uint64]bool{},
+	}
 }
 
 func (self *mailEraseTestStore) Versions(ctx context.Context, path string) ([]*EvsHistoryVersion, error) {
@@ -60,7 +68,83 @@ func (self *mailEraseTestStore) Erase(ctx context.Context, args *EvsEraseArgs) e
 	if fail != nil {
 		return fail
 	}
+	taken := func() bool {
+		self.vaultLock.Lock()
+		defer self.vaultLock.Unlock()
+		if !self.takesCompletionWithLock(args) {
+			return false
+		}
+		if self.refusesCompletions {
+			self.refusedCompletions += 1
+			return false
+		}
+		version := uint64(len(self.erasures) + 1)
+		self.erasures = append(self.erasures, &EvsErasure{
+			Version: version, ErasureId: args.ErasureId, Complete: true, Completion: true, Keys: slices.Clone(args.Keys), Note: slices.Clone(args.Note),
+		})
+		self.completionVersions[version] = true
+		return true
+	}()
+	if taken {
+		return nil
+	}
 	return self.mailVaultTestStore.Erase(ctx, args)
+}
+
+// Whether evs takes args as a completion ERASE (QD-1137), where the vault's stand-in commits only an ERASE of a held
+// key: flagged COMPLETION, saying complete, naming no key a slot holds, an earlier ERASE having named each key it names
+// and the newest such being no completion. The vault's lock held.
+func (self *mailEraseTestStore) takesCompletionWithLock(args *EvsEraseArgs) bool {
+	if !args.Completion || !args.Complete || len(args.Keys) == 0 {
+		return false
+	}
+	for _, key := range args.Keys {
+		if key.KeyIndex == 0 && self.heldSlotIds[key.SlotId] {
+			return false
+		}
+	}
+	newestCompletion := map[EvsErasedKey]bool{}
+	for _, erasure := range self.erasures {
+		for _, key := range erasure.Keys {
+			newestCompletion[*key] = self.completionVersions[erasure.Version]
+		}
+	}
+	for _, key := range args.Keys {
+		if completion, named := newestCompletion[*key]; !named || completion {
+			return false
+		}
+	}
+	return true
+}
+
+// The committed ERASEs after afterVersion as a reader reads them (QD-1137's readers): a completion ends its erasure
+// only where an earlier ERASE of its erasure named each key it names, and reads as completing nothing otherwise.
+func (self *mailEraseTestStore) Erasures(ctx context.Context, afterVersion uint64) ([]*EvsErasure, error) {
+	self.vaultLock.Lock()
+	defer self.vaultLock.Unlock()
+	erasures := []*EvsErasure{}
+	for index, erasure := range self.erasures {
+		if erasure.Version <= afterVersion {
+			continue
+		}
+		read := *erasure
+		if self.completionVersions[erasure.Version] {
+			read.Completion = true
+			named := map[EvsErasedKey]bool{}
+			for _, earlier := range self.erasures[:index] {
+				if earlier.ErasureId == erasure.ErasureId {
+					for _, key := range earlier.Keys {
+						named[*key] = true
+					}
+				}
+			}
+			for _, key := range erasure.Keys {
+				read.Complete = read.Complete && named[*key]
+			}
+		}
+		erasures = append(erasures, &read)
+	}
+	return erasures, nil
 }
 
 func (self *mailEraseTestStore) Closure(ctx context.Context, erasureId Id, path string, content []byte, ifVersion uint64, erased []*EvsErasedKey) error {
@@ -506,5 +590,56 @@ func TestMailEraseFinishIsTheFloorsBound(t *testing.T) {
 	}
 	if !mailEraseFinish(nextTry, 0, floor).IsZero() || !mailEraseFinish(nextTry, 1, 0).IsZero() {
 		t.Error("no bytes or no floor gives an estimate")
+	}
+}
+
+// QD-1132's mail case in a format-1 mailbox: an erasure whose i/ row another step took before its part ran has no
+// part's ERASE left to say complete, and format 1 has no completion ERASE (COMPLETION is format 2's flag, QD-1137). Its
+// resume once read it done on this device alone; now it reads evs's state and leaves it rewriting, sending nothing,
+// and so does every resume after, until an ERASE of it says complete.
+func TestMailEraseFormat1WithNoSegmentLeftStaysRewriting(t *testing.T) {
+	world := newMailEraseTestWorld(t)
+	ctx := context.Background()
+	ids := world.ingestMessages("One")
+	stopped := errors.New("stopped before its part")
+	world.eraseStore.failClosure = stopped
+	eraser := world.eraser()
+	erasure, err := eraser.Erase(ctx, world.month, ids)
+	if !errors.Is(err, stopped) || erasure == nil || erasure.State != MailErasureRewriting {
+		t.Fatalf("the stopped erasure: %+v, %v", erasure, err)
+	}
+	testMailEraseTakeRow(t, world, eraser, erasure.ErasureId, ids[0], erasure.ErasureId)
+	before := len(world.eraseStore.committedErasures())
+	for range 2 {
+		resumed, err := world.eraser().Resume(ctx)
+		if err != nil || len(resumed) != 1 || resumed[0].State != MailErasureRewriting || resumed[0].ErasureId != erasure.ErasureId {
+			t.Fatalf("the resume: %+v, %v", resumed, err)
+		}
+	}
+	if committed := len(world.eraseStore.committedErasures()); committed != before || world.eraseStore.refusedCompletions != 0 {
+		t.Fatalf("%d ERASEs committed after the row was taken, %d completions tried", committed-before, world.eraseStore.refusedCompletions)
+	}
+}
+
+// Takes messageId's row out of the month's first i/ segment by a CLOSURE under closureErasureId and an ERASE of the
+// replaced chain's keys under eraseErasureId, as another erasure step does, leaving the erasure no segment.
+func testMailEraseTakeRow(t *testing.T, world *mailEraseTestWorld, eraser *MailEraser, closureErasureId Id, messageId Id, eraseErasureId Id) {
+	t.Helper()
+	ctx := context.Background()
+	segmentPath := MailIndexPath(world.month, 0)
+	content, version, err := world.eraseStore.Read(ctx, segmentPath, mailIndexSegmentReadMaxByteCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	without, removedCount := mailSegmentWithout(content, world.month, []mailErasedMessage{{Month: world.month, MessageId: messageId}})
+	keys, err := eraser.pathKeys(ctx, segmentPath)
+	if err != nil || removedCount != 1 {
+		t.Fatalf("the segment's keys: %d rows, %v", removedCount, err)
+	}
+	if err := world.eraseStore.Closure(ctx, closureErasureId, segmentPath, without, version, keys); err != nil {
+		t.Fatal(err)
+	}
+	if err := world.eraseStore.mailVaultTestStore.Erase(ctx, &EvsEraseArgs{ErasureId: eraseErasureId, Keys: keys}); err != nil {
+		t.Fatal(err)
 	}
 }

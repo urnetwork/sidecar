@@ -44,6 +44,9 @@
 //	          version whose slots hold no key reads the same way where a committed ERASE names each slot, as an
 //	          erasure's CLOSURE and ERASE leave every version the path held before them (§11.12's closure row); with
 //	          no such ERASE the key was withheld, which alarms tamper, and the version is left out
+//	erased    every read here judges a key gone from its slot, the cards ref's and a stream's alike, on the repo's
+//	          ERASEs read after the slot (evs_read_erased.go): a page read a statement at a time reads them again,
+//	          once, before a slot the ERASEs it read earlier do not name alarms, since an ERASE may commit between
 //	writes    PutCard, RemoveCard and RemoveCards by path CAS on the cards ref (EvsRepo.WritePaths, each write's
 //	          IfVersion), as the directory's reserved writer (EvsReservedDirectory), so format 2's d/, r/ and q/ files
 //	          are versionless and format 1's keep every version; only a directory path (directoryCardPathKept) is
@@ -636,7 +639,9 @@ func (self *DirectoryEvsCards) ReadStreamLog(ctx context.Context, repoId Id, wri
 	readResult := &evsReadResult{refId: refId, head: head, keys: keys, objects: newEvsReadObjects(self.client)}
 	defer readResult.objects.close()
 	streamReads := []*directoryEvsStreamRead{}
-	erasures := &evsStreamErasures{}
+	// the page's one judge of emptied slots, which its versions' slot reads, a statement at a time, may pass: a slot
+	// read after the ERASEs were is judged on them read again (evs_read_erased.go)
+	erasures := evsErasedKeysOf(keys)
 	for i, statement := range walked {
 		files, err := self.rebuildStreamFiles(ctx, repo, readResult, statement, payloads[i], erasures)
 		if err != nil {
@@ -660,8 +665,9 @@ func (self *DirectoryEvsCards) ReadStreamLog(ctx context.Context, repoId Id, wri
 }
 
 // Each file a stream's push creates, rebuilt from the record the page read: as the streams read gives it, a file
-// whose every chain slot came back emptied reading as erased only where a committed ERASE names each slot.
-func (self *DirectoryEvsCards) rebuildStreamFiles(ctx context.Context, repo *EvsRepo, readResult *evsReadResult, statement *EvsVerifiedStatement, payload *EvsCheckedPayload, erasures *evsStreamErasures) ([]*EvsStreamFileRead, error) {
+// whose every chain slot came back emptied reading as erased only where a committed ERASE names each slot, on the
+// ERASEs read after the slots (evs_read_erased.go), and one whose rebuild met a key an ERASE destroyed reading so too.
+func (self *DirectoryEvsCards) rebuildStreamFiles(ctx context.Context, repo *EvsRepo, readResult *evsReadResult, statement *EvsVerifiedStatement, payload *EvsCheckedPayload, erasures *evsErasedKeys) ([]*EvsStreamFileRead, error) {
 	entries := []*protocol.EvsEntryVersion{}
 	changes := []*EvsCheckedChange{}
 	for _, change := range payload.Changes {
@@ -685,7 +691,7 @@ func (self *DirectoryEvsCards) rebuildStreamFiles(ctx context.Context, repo *Evs
 	for i, entry := range entries {
 		change := changes[i]
 		if evsStreamFileEmptied(readResult.objects, entry) {
-			named, err := erasures.named(ctx, repo, entry)
+			named, err := erasures.namesSlots(ctx, repo, entry)
 			if err != nil {
 				return nil, recordEvsRefusal(err)
 			}
@@ -698,6 +704,11 @@ func (self *DirectoryEvsCards) rebuildStreamFiles(ctx context.Context, repo *Evs
 			continue
 		}
 		content, err := self.rebuild(ctx, repo, readResult, statement, change, entry, "")
+		if errors.Is(err, ErrEvsErased) {
+			// a key of its chain a committed ERASE destroyed, in a slot the prefetch did not carry
+			files = append(files, &EvsStreamFileRead{TokenPath: change.TokenPath, EntryBytes: change.EntryVersion, Entry: entry, Erased: true})
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -1345,7 +1356,7 @@ func (self *DirectoryEvsCards) cardFiles(ctx context.Context, read *directoryEvs
 		return nil, err
 	}
 	files := []*DirectoryCardFile{}
-	erasures := &evsStreamErasures{}
+	erasures := evsErasedKeysOf(read.keys)
 	for _, placedChange := range placed {
 		statement := placedChange.statement
 		push := statement.Statement.Push
@@ -1385,8 +1396,9 @@ func (self *DirectoryEvsCards) cardFiles(ctx context.Context, read *directoryEvs
 			// the version's slots hold no key. Where a committed ERASE names each slot it is an erased version, as a
 			// CLOSURE's ERASE leaves every version the path held before it (§11.12's closure row): the statement
 			// stands with no content, as a collected version's does. With no such ERASE the key was withheld, which
-			// alarms, and the version is ignored as one that does not open
-			named, err := erasures.named(ctx, read.repo, change.entry)
+			// alarms, and the version is ignored as one that does not open. The ERASEs are read after the slots
+			// (evs_read_erased.go)
+			named, err := erasures.namesSlots(ctx, read.repo, change.entry)
 			if err != nil {
 				return nil, recordEvsRefusal(err)
 			}
@@ -1398,9 +1410,10 @@ func (self *DirectoryEvsCards) cardFiles(ctx context.Context, read *directoryEvs
 			continue
 		}
 		content, err := self.rebuild(ctx, read.repo, read.readResult, statement, change.change, change.entry, placedChange.path)
-		if errors.Is(err, ErrEvsCollected) {
-			// a versionless file's replaced version, its content purged: the statement stands with no content, which
-			// the copy reads as a version it holds nothing of (§16.11's ref cards row)
+		if errors.Is(err, ErrEvsCollected) || errors.Is(err, ErrEvsErased) {
+			// a versionless file's replaced version, its content purged, or a version a key of which a committed ERASE
+			// destroyed: the statement stands with no content, which the copy reads as a version it holds nothing of
+			// (§16.11's ref cards row)
 			files = append(files, stamp(&DirectoryCardFile{Path: placedChange.path, Version: change.entry.GetVersion()}))
 			continue
 		}

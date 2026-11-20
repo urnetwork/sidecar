@@ -14,7 +14,11 @@
 //	         races the erasure still meets a conflict on it and writes nothing
 //	parts    then one part per whole i/ segment listing any of them (mail_erase_closure.go): a CLOSURE writes the
 //	         segment again without their rows under a fresh key, and its ERASE destroys the replaced chain's keys.
-//	         The last part's ERASE completes the erasure; one with no row in any segment is complete at its first
+//	         The last part's ERASE completes the erasure; one with no row in any segment is complete at its first.
+//	         One whose parts ran with no segment left to carry complete, as when another step took its rows, ends by
+//	         a completion ERASE in a format-2 mailbox (QD-1132, QD-1137; evs_erase_completion.go) unless evs's state
+//	         shows it complete, and stays rewriting where evs does not take it or, in format 1, which has no
+//	         completion ERASE, until an ERASE of it says complete: never done on this device alone
 //	wait     a part evs refuses 429, past the eraser's closure rate, its turn or its day's allowance, stops the
 //	         erasure there with the time to try again (retry_after_ms) and §11.13's estimate of its end: the rows
 //	         still listed stay openable to key holders until their part commits, and the bodies are gone already
@@ -534,8 +538,10 @@ func (self *MailEraser) begin(ctx context.Context, erasureId Id, month MailYearM
 
 // An erasure's parts after its first ERASE: in a format-2 mailbox the search index's files first
 // (mail_erase_index.go), then an ERASE for each orphaned CLOSURE a resume found, then the i/ segments' parts, the
-// last ERASE of them completing the erasure where the index's rewrite left nothing unproven. Fills erasure with
-// where it stands.
+// last ERASE of them completing the erasure where the index's rewrite left nothing unproven. With no i/ segment left
+// to carry complete, the index's rewrite ends the erasure, by its last ERASE or a completion ERASE, or the last
+// orphan's ERASE does; one evs's state still shows incomplete then takes a completion ERASE here (QD-1132), so no
+// erasure reads done on this device alone. Fills erasure with where it stands.
 func (self *MailEraser) parts(ctx context.Context, erasure *MailErasure, messages []mailErasedMessage, index *mailEraseIndex, role IndexResumeRole, orphans []*EvsClosure) error {
 	segments, err := self.segmentsListing(ctx, messages)
 	if err != nil {
@@ -543,8 +549,11 @@ func (self *MailEraser) parts(ctx context.Context, erasure *MailErasure, message
 		return err
 	}
 	mayComplete := true
+	// whether the index's rewrite was asked to end the erasure, a completion ERASE included
+	indexEnds := false
 	if index != nil && mailErasureDocumented(messages) {
-		ended, err := self.indexParts(ctx, index, erasure, messages, segments, role, len(segments) == 0 && len(orphans) == 0)
+		indexEnds = len(segments) == 0 && len(orphans) == 0
+		ended, err := self.indexParts(ctx, index, erasure, messages, segments, role, indexEnds)
 		if err != nil || ended {
 			return err
 		}
@@ -562,7 +571,65 @@ func (self *MailEraser) parts(ctx context.Context, erasure *MailErasure, message
 			return err
 		}
 	}
-	return self.rewrite(ctx, erasure, segments, messages, mayComplete)
+	if err := self.rewrite(ctx, erasure, segments, messages, mayComplete); err != nil || erasure.State != MailErasureDone || 0 < len(segments) {
+		return err
+	}
+	// no i/ segment held a message, so no part's ERASE carried complete; an index asked to end the erasure sent its own
+	// completion, which is not sent twice, and a format-1 mailbox has none to send (COMPLETION is format 2's)
+	return self.complete(ctx, erasure, index != nil && !indexEnds)
+}
+
+// Ends an erasure whose every part ran with no i/ segment left to carry complete (QD-1132): done where an ERASE of it
+// in evs's state says complete; else, where send says a format-2 mailbox's completion was not tried yet, by a
+// completion ERASE (QD-1137) naming a key an earlier ERASE of it destroyed (evs_erase_completion.go), evs's state read
+// back after it, its note naming nothing, since it destroys nothing. One that still reads incomplete stays rewriting,
+// as when evs does not take the completion, and a refusal of the eraser's allowance waits.
+func (self *MailEraser) complete(ctx context.Context, erasure *MailErasure, send bool) error {
+	erasures, err := self.store.Erasures(ctx, 0)
+	if err != nil {
+		erasure.State = MailErasureRewriting
+		return err
+	}
+	if mailErasureComplete(erasures, erasure.ErasureId) {
+		return nil
+	}
+	erasure.State = MailErasureRewriting
+	if !send {
+		return nil
+	}
+	key, ok := evsCompletionKeyOf(erasures, erasure.ErasureId, func(committed *EvsErasure) (Id, []*EvsErasedKey) {
+		return committed.ErasureId, committed.Keys
+	})
+	if !ok {
+		return nil
+	}
+	testHookBarrier("mail.erase.completion.before", "")
+	err = self.store.Erase(ctx, &EvsEraseArgs{
+		ErasureId: erasure.ErasureId, Keys: []*EvsErasedKey{key}, Complete: true, Note: mailErasureNote(nil, nil), Completion: true,
+	})
+	testHookBarrier("mail.erase.completion.after", "")
+	if wait, refused := mailEraseRefusedForNow(err); refused {
+		erasure.State = MailErasureWaiting
+		erasure.NextTry = self.clock.Now().Add(wait)
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if erasures, err = self.store.Erasures(ctx, 0); err != nil {
+		return err
+	}
+	if mailErasureComplete(erasures, erasure.ErasureId) {
+		erasure.State = MailErasureDone
+	}
+	return nil
+}
+
+// Whether an ERASE of erasureId among erasures says complete, as Resume reads an erasure done.
+func mailErasureComplete(erasures []*EvsErasure, erasureId Id) bool {
+	return slices.ContainsFunc(erasures, func(erasure *EvsErasure) bool {
+		return erasure.ErasureId == erasureId && erasure.Complete
+	})
 }
 
 // Finishes every erasure of the repo no ERASE completed: see the file header's resume row. Each erasure it took up is

@@ -40,9 +40,12 @@
 //	rewrite   step 6: IndexEraser.Rewrite's CLOSURE and ERASE pairs over every index file holding a listed version,
 //	          its last ERASE saying complete with the ErasureBody as its note; a wait on an allowance or the limit, or
 //	          a list it could not prove whole, keeps the erasure journaled and tried again. A rewrite that finds no
-//	          file to rewrite leaves no ERASE with a key to say complete, so a completion ERASE does (QD-1132): it
-//	          names keys an earlier ERASE of the erasure destroyed, which evs takes once an erasure and readers read
-//	          as destroying nothing new
+//	          file to rewrite leaves no ERASE with a key to say complete, so a completion ERASE does (QD-1132;
+//	          evs_erase_completion.go): it names a key an ERASE of the erasure named first and no ERASE named since,
+//	          and readers read it as destroying nothing new. It goes with the record's ERASEs, journaled under its push
+//	          id, so the index's eraser is not asked for one (IndexRewriteArgs.Completion), flagged COMPLETION (QD-1137):
+//	          evs refuses one whose key a completion named last, NOTHING_TO_ERASE, and the erasure then counts not
+//	          completed, its set entry staying
 //	entry     step 7: the erasure entry, RECORD.md's ErasureBody, in this device's own stream of the log, which the
 //	          writer retries while §11.13's limit refuses it; until it lands the committed ERASE is the record. Headers
 //	          and chains still verify: only keys go, and the entry files stay
@@ -277,6 +280,8 @@ type recordEraseJournalPush struct {
 	PushId   Id               `json:"push_id"`
 	Keys     []*RecordSlotKey `json:"keys"`
 	Complete bool             `json:"complete"`
+	// A completion ERASE (QD-1137), whose statement a retry under its push id builds alike.
+	Completion bool `json:"completion,omitempty"`
 }
 
 // One CONSUME of a deposit whose slot an ERASE named.
@@ -870,7 +875,7 @@ func (self *RecordEraser) sendErases(ctx context.Context, logId Id, erasureId Id
 	for _, push := range pushes {
 		testHookBarrier("record.erase.before", recordChainIdText(logId))
 		_, err := streams.Erase(ctx, logId, &RecordStreamErase{
-			PushId: push.PushId, ErasureId: erasureId, Complete: push.Complete, Keys: push.Keys, SealedNote: note,
+			PushId: push.PushId, ErasureId: erasureId, Complete: push.Complete, Completion: push.Completion, Keys: push.Keys, SealedNote: note,
 		})
 		testHookBarrier("record.erase.after", recordChainIdText(logId))
 		if code, ok := RecordStreamRefusalCode(err); ok && code == protocol.EvsRefusalCode_EVS_REFUSAL_NOTHING_TO_ERASE {
@@ -1137,13 +1142,17 @@ func (self *RecordEraser) erasedKeyOf(ctx context.Context, logId Id, erasureId I
 	if err != nil {
 		return nil, err
 	}
-	for _, erasure := range erasures {
-		if erasure.ErasureId == erasureId && 0 < len(erasure.Keys) {
-			key := *erasure.Keys[0]
-			return &key, nil
-		}
-	}
-	return nil, nil
+	return recordEraseCompletionKey(erasures, erasureId), nil
+}
+
+// The key a completion ERASE of erasureId names among erasures, every ERASE of the log's erasure ref oldest first: one
+// an ERASE of the erasure named first and no ERASE named since (evs_erase_completion.go), so after a late copy reopened
+// an erasure a completion took a key of, the next names another. Nil where there is none.
+func recordEraseCompletionKey(erasures []*RecordStreamErasure, erasureId Id) *RecordSlotKey {
+	key, _ := evsCompletionKeyOf(erasures, erasureId, func(erasure *RecordStreamErasure) (Id, []*RecordSlotKey) {
+		return erasure.ErasureId, erasure.Keys
+	})
+	return key
 }
 
 // Step 5: each of cards folded at its stream's head as this device's reader reads it, without what the log's ERASEs
@@ -1245,7 +1254,7 @@ func (self *RecordEraser) indexParts(ctx context.Context, journal *recordEraseJo
 			}
 		}
 		completed, err := self.sendErases(ctx, logId, journal.ErasureId, note, []*recordEraseJournalPush{{
-			PushId: journal.CompletionPushId, Keys: []*RecordSlotKey{key}, Complete: true,
+			PushId: journal.CompletionPushId, Keys: []*RecordSlotKey{key}, Complete: true, Completion: true,
 		}})
 		if err != nil {
 			return owed, err
@@ -1510,14 +1519,15 @@ func (self *RecordEraser) ResumeOthers(ctx context.Context, logId Id) ([]*Record
 				result.Index.Waiting, result.Index.NextTry = true, rewritten.Erasure.NextTry
 			}
 		}
-		if resumed.Rewrite != nil && recordEraseRewriteEndedUnsaid(resumed.Rewrite) && 0 < len(first.Keys) {
-			// no file held a listed version: a completion ERASE ends it, naming keys its first ERASE destroyed (QD-1132)
+		key := recordEraseCompletionKey(erasures, erasureId)
+		if resumed.Rewrite != nil && recordEraseRewriteEndedUnsaid(resumed.Rewrite) && key != nil {
+			// no file held a listed version: a completion ERASE ends it, naming a key an ERASE of it destroyed (QD-1132)
 			pushId, err := writer.drawId()
 			if err != nil {
 				return results, err
 			}
 			completed, err := self.sendErases(ctx, logId, erasureId, first.SealedNote, []*recordEraseJournalPush{{
-				PushId: pushId, Keys: first.Keys[:1], Complete: true,
+				PushId: pushId, Keys: []*RecordSlotKey{key}, Complete: true, Completion: true,
 			}})
 			if err != nil {
 				return results, err

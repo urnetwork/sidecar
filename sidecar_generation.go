@@ -7,19 +7,30 @@
 // join: the refresher's refusal, connect's notifications and a component's call each ask the run loop, through
 // wake, rather than tear anything down themselves. Events and moves carry the generation, so an older generation's
 // are dropped (D-SDK-14).
+//
+// A start that fails on a sealed file of the network's subprotocol store is §5.9's Failed (owner decision 616): the
+// sidecar stays Offline at the generation with subprotocol_store_failed, raises refused as it enters that, and
+// waits for a wake, which retries. A retry that fails the same way raises nothing more, and nothing here wakes the
+// loop, so a damaged store never spins it.
 
 package sidecar
 
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"sync/atomic"
 )
+
+// A leg's start that failed on a sealed file of the network's subprotocol store, which the leg wraps the store's
+// ErrSidecarStoreFailed in, so the core names that store and no other as the reason (owner decision 616).
+var errSidecarSubprotocolStoreFailed = errors.New("the subprotocol store failed")
 
 // What only a leg runs beside the core. Every method is called from the run loop or a host's call, never under
 // stateLock.
 type sidecarLeg interface {
-	// Starts the leg's half of generation, which must end with generation's ctx. An error leaves nothing running.
+	// Starts the leg's half of generation, which must end with generation's ctx. An error leaves nothing running, and
+	// one from a sealed file of the network's subprotocol store wraps errSidecarSubprotocolStoreFailed.
 	startGeneration(generation *sidecarGeneration) (sidecarLegGeneration, error)
 	// The components that re-register after a restore (§19.10).
 	restorers() []SidecarRestorer
@@ -112,7 +123,9 @@ func (self *Sidecar) runningGeneration() *sidecarGeneration {
 
 // Starts args' generation: Offline at its number, then the leg's client and the refresher. The run loop calls this
 // with no generation running. A leg that cannot start leaves the sidecar Offline with no client, which the next wake
-// tries again; nothing here wakes the loop, so a failure cannot spin it.
+// tries again; nothing here wakes the loop, so a failure cannot spin it. A start that failed on the subprotocol store
+// leaves Offline with that store's reason and one refused (subprotocolStoreFailed); a retry keeps the reason until
+// the leg starts, so a store that fails again raises nothing more.
 func (self *Sidecar) startGeneration(args *sidecarGenerationArgs) {
 	defer clear(args.clientKeySeed)
 	generationNumber := args.identity.Generation
@@ -123,14 +136,26 @@ func (self *Sidecar) startGeneration(args *sidecarGenerationArgs) {
 		self.sidecarApi.setDpopSigner(signer)
 		self.sidecarApi.SetByJwt(args.byJwt)
 	}
-	moved := self.applyTransition(sidecarTransition{to: SidecarStateOffline, generation: generationNumber})
-	if !moved && self.lifecycleState() != SidecarStateOffline {
-		if signerErr == nil {
-			self.sidecarApi.SetByJwt("")
-			self.sidecarApi.setDpopSigner(nil)
+	storeFailed := sidecarLifecycle{
+		state:      SidecarStateOffline,
+		reason:     SidecarReasonSubprotocolStoreFailed,
+		generation: generationNumber,
+	}
+	retrying := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.lifecycle == storeFailed
+	}()
+	if !retrying {
+		moved := self.applyTransition(sidecarTransition{to: SidecarStateOffline, generation: generationNumber})
+		if !moved && self.lifecycleState() != SidecarStateOffline {
+			if signerErr == nil {
+				self.sidecarApi.SetByJwt("")
+				self.sidecarApi.setDpopSigner(nil)
+			}
+			self.log.Warningf("[sidecar]generation %d did not start from %s", generationNumber, self.lifecycleState())
+			return
 		}
-		self.log.Warningf("[sidecar]generation %d did not start from %s", generationNumber, self.lifecycleState())
-		return
 	}
 	if signerErr != nil {
 		self.log.Errorf("[sidecar]generation %d has no proof signer: %s", generationNumber, signerErr)
@@ -159,9 +184,16 @@ func (self *Sidecar) startGeneration(args *sidecarGenerationArgs) {
 			self.sidecarApi.SetByJwt("")
 			self.sidecarApi.setDpopSigner(nil)
 			self.log.Errorf("[sidecar]generation %d did not start: %s", generationNumber, err)
+			if errors.Is(err, errSidecarSubprotocolStoreFailed) {
+				self.subprotocolStoreFailed(generationNumber)
+			}
 			return
 		}
 		generation.leg = legGeneration
+	}
+	if retrying {
+		// the store that failed before read this time, so its reason ends before anything sees the generation run
+		self.applyTransition(sidecarTransition{to: SidecarStateOffline, generation: generationNumber})
 	}
 	var install func(byJwt string)
 	if generation.leg != nil {
@@ -226,6 +258,26 @@ func (self *Sidecar) startGeneration(args *sidecarGenerationArgs) {
 	if self.log.V(1).Enabled() {
 		self.log.Infof("[sidecar]generation %d started", generationNumber)
 	}
+}
+
+// §5.9's Failed for generation's start on the subprotocol store (owner decision 616): Offline at generation with the
+// store's reason, so Status and `ur status` say why no client runs, and one refused, raised only as the sidecar enters
+// that, so a retry that fails again raises nothing. It wakes nothing: the next wake retries. Runs on the run loop.
+func (self *Sidecar) subprotocolStoreFailed(generation int64) {
+	entered := self.applyTransition(sidecarTransition{
+		to:         SidecarStateOffline,
+		reason:     SidecarReasonSubprotocolStoreFailed,
+		generation: generation,
+	})
+	if !entered {
+		return
+	}
+	self.emitEvent(SidecarEvent{
+		Kind:       SidecarEventRefused,
+		Generation: generation,
+		State:      SidecarStateOffline,
+		Reason:     SidecarReasonSubprotocolStoreFailed,
+	})
 }
 
 // A confirmed rejection ended generation: it is not started again, and the run loop tears it down.

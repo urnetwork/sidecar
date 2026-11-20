@@ -58,6 +58,10 @@ type testEraseClosure struct {
 type testEraseErase struct {
 	erasureId Id
 	erased    *indexEraseErased
+	// A completion ERASE the fake took (QD-1132): it destroyed nothing.
+	completion bool
+	// The caller's bytes it carried.
+	note []byte
 }
 
 // One fake evs behind every eraser's handle on a ref (§11.12's rows as the fake models them): every write but a CLOSURE
@@ -92,6 +96,8 @@ type testEraseEvs struct {
 	// Refusals the next CLOSUREs and ERASEs answer.
 	closureRefusals []error
 	eraseRefusals   []error
+	// Takes no completion ERASE, answering it NOTHING_TO_ERASE as evs does one whose key a completion named last.
+	refusesCompletions bool
 	// The world's time at each committed ERASE.
 	eraseTimes []time.Time
 }
@@ -269,9 +275,9 @@ func (self *testEraseStore) Progress(ctx context.Context, erasureId Id) (*indexE
 			progress.closures = append(progress.closures, closure.closed)
 		}
 	}
-	for _, erase := range self.evs.erases {
+	for index, erase := range self.evs.erases {
 		if erase.erasureId == erasureId {
-			progress.erases = append(progress.erases, erase.erased)
+			progress.erases = append(progress.erases, self.evs.readErasedWithLock(index))
 		}
 	}
 	return progress, nil
@@ -382,7 +388,10 @@ func (self *testEraseStore) Erase(ctx context.Context, erase *indexErasePush) er
 	for _, key := range erase.keys {
 		live = live || !evs.destroyed[key.SlotId]
 	}
-	if !live {
+	if erase.completion && live {
+		return fmt.Errorf("test erase store: INVALID, a completion naming a key still held")
+	}
+	if !live && !(erase.completion && evs.takesCompletionWithLock(erase)) {
 		// NOTHING_TO_ERASE: done, and nothing commits
 		return nil
 	}
@@ -390,11 +399,59 @@ func (self *testEraseStore) Erase(ctx context.Context, erase *indexErasePush) er
 		evs.destroyed[key.SlotId] = true
 	}
 	evs.erases = append(evs.erases, &testEraseErase{
-		erasureId: erase.erasureId,
-		erased:    &indexEraseErased{keys: erase.keys, complete: erase.complete, timeMs: evs.world.at.UnixMilli()},
+		erasureId:  erase.erasureId,
+		erased:     &indexEraseErased{keys: erase.keys, complete: erase.complete, timeMs: evs.world.at.UnixMilli()},
+		completion: !live,
+		note:       bytes.Clone(erase.note),
 	})
 	evs.eraseTimes = append(evs.eraseTimes, evs.world.at)
 	return nil
+}
+
+// Whether evs takes erase, a completion ERASE naming only keys gone, as QD-1137 has it: it says complete, an earlier
+// ERASE named each key it names, and the newest such is no completion. The lock held.
+func (self *testEraseEvs) takesCompletionWithLock(erase *indexErasePush) bool {
+	if self.refusesCompletions || !erase.complete || len(erase.keys) == 0 {
+		return false
+	}
+	newestCompletion := map[EvsErasedKey]bool{}
+	for _, committed := range self.erases {
+		for _, key := range committed.erased.keys {
+			newestCompletion[*key] = committed.completion
+		}
+	}
+	for _, key := range erase.keys {
+		if completion, named := newestCompletion[*key]; !named || completion {
+			return false
+		}
+	}
+	return true
+}
+
+// The committed ERASE at index as a reader reads it (QD-1137's readers): a completion ends its erasure only where an
+// earlier ERASE of its erasure named each key it names, and reads as completing nothing otherwise. The lock held.
+func (self *testEraseEvs) readErasedWithLock(index int) *indexEraseErased {
+	committed := self.erases[index]
+	if !committed.completion {
+		return committed.erased
+	}
+	named := map[EvsErasedKey]bool{}
+	for _, earlier := range self.erases[:index] {
+		if earlier.erasureId != committed.erasureId {
+			continue
+		}
+		for _, key := range earlier.erased.keys {
+			named[*key] = true
+		}
+	}
+	for _, key := range committed.erased.keys {
+		if !named[*key] {
+			read := *committed.erased
+			read.complete = false
+			return &read
+		}
+	}
+	return committed.erased
 }
 
 // FS-78's sweep: no stored version under a key a reader can obtain holds an entry listed takes. Stored versions are the
@@ -445,6 +502,13 @@ func testNewEraseWorld() *testEraseWorld {
 // defaults).
 func (self *testEraseWorld) eraserAs(t testing.TB, signer Id, settings *IndexEraseSettings) *IndexEraser {
 	t.Helper()
+	return self.eraserJudging(t, signer, settings, nil)
+}
+
+// eraserAs whose CUTs read which erasures are complete through complete, nil for none: a CUT drops a complete one
+// from the set (§11.14's cut row).
+func (self *testEraseWorld) eraserJudging(t testing.TB, signer Id, settings *IndexEraseSettings, complete func(ctx context.Context, erasureIds []Id) (map[Id]bool, error)) *IndexEraser {
+	t.Helper()
 	store := self.evs.as(signer)
 	eraser, err := indexNewEraser(&indexEraserArgs{
 		store:      store,
@@ -457,6 +521,7 @@ func (self *testEraseWorld) eraserAs(t testing.TB, signer Id, settings *IndexEra
 		settings:   settings,
 		eraser:     signer,
 		tables:     testHeadTables,
+		complete:   complete,
 		events: func(erasure *SidecarErasure) {
 			self.events = append(self.events, erasure)
 		},
@@ -467,6 +532,18 @@ func (self *testEraseWorld) eraserAs(t testing.TB, signer Id, settings *IndexEra
 		t.Fatal(err)
 	}
 	return eraser
+}
+
+// The world's eraser, its CUTs reading an erasure complete while its newest ERASE on the fake says so.
+func (self *testEraseWorld) completingEraser(t testing.TB) *IndexEraser {
+	t.Helper()
+	return self.eraserJudging(t, evsTestId("eraser"), nil, func(ctx context.Context, erasureIds []Id) (map[Id]bool, error) {
+		self.evs.stateLock.Lock()
+		defer self.evs.stateLock.Unlock()
+		return recordEraseCompleteByNewest(self.evs.erases, func(erase *testEraseErase) (Id, bool) {
+			return erase.erasureId, erase.erased.complete
+		}), nil
+	})
 }
 
 func (self *testEraseWorld) eraser(t testing.TB, settings *IndexEraseSettings) *IndexEraser {
@@ -1485,4 +1562,113 @@ func TestIndexReenterOnAFullClusterWaitsAsAtTheLimit(t *testing.T) {
 // A 507 naming no wait keeps the re-entry's own: ReentryRetryInterval.
 func TestIndexReenterOnAFullClusterWithoutRetryAfterKeepsTheDefaultWait(t *testing.T) {
 	testIndexReenterOnAFullCluster(t, true)
+}
+
+// QD-1132: an erasure whose CUT lists documents no index file holds (the index off when they were written, a run card
+// never built) finds no file to rewrite, so no pair's ERASE is left to say complete. A rewrite whose history did not
+// walk whole sends nothing; one asked no Completion leaves the erasure rewriting for its caller to end; one asked it
+// sends a completion ERASE naming the key the erasure's first ERASE destroyed, saying complete with the caller's note,
+// and the erasure reads done and is sent nothing more. The next CUT, another erasure's, drops it from the set.
+func TestIndexRewriteEndsAnErasureWithNothingToRewriteByACompletion(t *testing.T) {
+	ctx := context.Background()
+	world := testEraseWorldWithCopies(t)
+	eraser := world.completingEraser(t)
+	erasureId := evsTestId("erasure")
+	// the caller's first ERASE took the entry's own key before the CUT, as a record erasure's does (QD-781)
+	entryKey := &EvsErasedKey{SlotId: evsTestId("entry slot")}
+	if err := world.evs.as(evsTestId("eraser")).Erase(ctx, &indexErasePush{erasureId: erasureId, keys: []*EvsErasedKey{entryKey}}); err != nil {
+		t.Fatal(err)
+	}
+	testCut(t, eraser, "erasure", &IndexCutDocument{Key: testIndexId("never indexed", 0), Version: 1},
+		&IndexCutDocument{Key: testIndexId("card never built", 0), ThroughEpoch: true})
+	rewrite := func(completion bool) *IndexRewriteResult {
+		t.Helper()
+		result, err := eraser.Rewrite(ctx, &IndexRewriteArgs{ErasureId: erasureId, Complete: true, Note: []byte("note"), Completion: completion})
+		if err != nil || result.Erasure == nil {
+			t.Fatalf("the rewrite: %+v, %v", result, err)
+		}
+		return result
+	}
+	world.evs.retainedIncomplete = true
+	if unproven := rewrite(true); unproven.Completed || !unproven.Unproven || unproven.Erasure.State != SidecarErasureRewriting || len(world.evs.erases) != 1 {
+		t.Fatalf("an unproven rewrite: %+v, %d ERASEs", unproven, len(world.evs.erases))
+	}
+	world.evs.retainedIncomplete = false
+	if left := rewrite(false); left.Completed || left.PairCount != 0 || left.Erasure.State != SidecarErasureRewriting || len(world.evs.erases) != 1 {
+		t.Fatalf("a rewrite asked no completion: %+v, %d ERASEs", left, len(world.evs.erases))
+	}
+	result := rewrite(true)
+	if !result.Completed || result.PairCount != 0 || result.Erasure.State != SidecarErasureDone || len(world.evs.erases) != 2 {
+		t.Fatalf("the completion: %+v, %d ERASEs", result, len(world.evs.erases))
+	}
+	completion := world.evs.erases[1]
+	if !completion.completion || !completion.erased.complete || completion.erasureId != erasureId || len(completion.erased.keys) != 1 ||
+		*completion.erased.keys[0] != *entryKey || string(completion.note) != "note" {
+		t.Fatalf("the completion ERASE: %+v", completion)
+	}
+	if again := rewrite(true); again.Erasure.State != SidecarErasureDone || len(world.evs.erases) != 2 {
+		t.Fatalf("a rewrite after done: %+v, %d ERASEs", again, len(world.evs.erases))
+	}
+	testCut(t, eraser, "later", &IndexCutDocument{Key: testIndexId("d", 0), Version: 1})
+	set := testErasureSetOf(t, world.view(t, evsTestId("reader")))
+	if indexErasureOf(set, erasureId) != nil || indexErasureOf(set, evsTestId("later")) == nil {
+		t.Fatal("the next CUT kept the completed erasure, or listed nothing of its own")
+	}
+}
+
+// QD-1132: a crash between the last CLOSURE and its ERASE leaves nothing else to rewrite. The resume lists first, finds
+// nothing else, and its ERASE of the orphaned CLOSURE's keys says complete with the caller's note, so the erasure
+// ends by that ERASE, with no completion ERASE after it, and no stored version a key still opens holds a listed one.
+func TestIndexResumeEndsAnErasureWithItsOrphanedClosuresErase(t *testing.T) {
+	ctx := context.Background()
+	world := testEraseWorldWithCopies(t)
+	eraser := world.eraser(t, nil)
+	testCut(t, eraser, "erasure", &IndexCutDocument{Key: testIndexId("d", 0), Version: 1})
+	crash := errors.New("the device stopped")
+	world.evs.eraseRefusals = []error{crash}
+	if _, err := eraser.Rewrite(ctx, &IndexRewriteArgs{ErasureId: evsTestId("erasure"), Complete: true}); !errors.Is(err, crash) {
+		t.Fatalf("the crashed rewrite: %v", err)
+	}
+	if len(world.evs.closures) != 1 || len(world.evs.erases) != 0 {
+		t.Fatalf("%d CLOSUREs and %d ERASEs before the resume: one pair should hold every file", len(world.evs.closures), len(world.evs.erases))
+	}
+	orphan := world.evs.closures[0].closed.keys
+	resumed, err := world.eraser(t, nil).Resume(ctx, &IndexResumeArgs{
+		ErasureId: evsTestId("erasure"), Role: IndexResumeEraser, Complete: true, Note: []byte("note"), Completion: true,
+	})
+	if err != nil || resumed.Rewrite == nil || !resumed.Rewrite.Completed || resumed.Rewrite.PairCount != 0 ||
+		resumed.Rewrite.Erasure.State != SidecarErasureDone {
+		t.Fatalf("the resume: %+v, %v", resumed, err)
+	}
+	if len(world.evs.erases) != 1 {
+		t.Fatalf("%d ERASEs after the resume", len(world.evs.erases))
+	}
+	erase := world.evs.erases[0]
+	if !erase.erased.complete || erase.completion || string(erase.note) != "note" ||
+		!slices.EqualFunc(erase.erased.keys, orphan, func(a *EvsErasedKey, b *EvsErasedKey) bool { return *a == *b }) {
+		t.Fatalf("the orphaned CLOSURE's ERASE: %+v", erase)
+	}
+	world.evs.sweep(t, world.listed(t))
+}
+
+// A completion evs does not take, as one whose key a completion named last (QD-1137), is answered NOTHING_TO_ERASE as
+// any ERASE whose keys are gone. The rewrite reads evs's state back after it, finds the erasure incomplete, and leaves
+// it rewriting: nothing reads done that evs does not show complete.
+func TestIndexRewriteLeavesAnErasureRewritingWhereEvsTakesNoCompletion(t *testing.T) {
+	ctx := context.Background()
+	world := testEraseWorldWithCopies(t)
+	world.evs.refusesCompletions = true
+	eraser := world.eraser(t, nil)
+	erasureId := evsTestId("erasure")
+	if err := world.evs.as(evsTestId("eraser")).Erase(ctx, &indexErasePush{erasureId: erasureId, keys: []*EvsErasedKey{{SlotId: evsTestId("entry slot")}}}); err != nil {
+		t.Fatal(err)
+	}
+	testCut(t, eraser, "erasure", &IndexCutDocument{Key: testIndexId("never indexed", 0), Version: 1})
+	result, err := eraser.Rewrite(ctx, &IndexRewriteArgs{ErasureId: erasureId, Complete: true, Completion: true})
+	if err != nil || result.Completed || result.Erasure == nil || result.Erasure.State != SidecarErasureRewriting {
+		t.Fatalf("the rewrite: %+v, %v", result, err)
+	}
+	if len(world.evs.erases) != 1 || world.evs.erases[0].erased.complete {
+		t.Fatalf("%d ERASEs committed", len(world.evs.erases))
+	}
 }

@@ -141,7 +141,8 @@ func (self *DirectoryClient) repairCard(ctx context.Context, files *directoryFil
 	if err != nil {
 		return nil, fmt.Errorf("%w: the card written", ErrDirectoryStoreCorrupt)
 	}
-	items, err := self.cardItems(stored.Card.GetItems(), settings, self.clock.Now().UnixMilli())
+	// at their writers' versions, which the put raises again (directory_card.go's version row)
+	items, err := self.cardItems(directoryCardHandedItems(stored.Card.GetItems(), written.ContentRaise), settings, self.clock.Now().UnixMilli())
 	if err != nil {
 		return nil, err
 	}

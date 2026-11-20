@@ -16,7 +16,10 @@ package sidecar_test
 import (
 	"bytes"
 	"errors"
+	"io"
+	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -464,6 +467,216 @@ func TestDirectoryEvsCardsReadStreamLogPagesBehind(t *testing.T) {
 	}
 }
 
+// A device's transport over the world's that runs before ahead of the first request match takes, then sends every
+// request on: what a test places between two of a read's requests.
+type directoryEvsHookTransport struct {
+	world  *recordEvsWorld
+	match  func(request *http.Request, body []byte) bool
+	before func()
+
+	stateLock sync.Mutex
+	ran       bool
+	// the bodies of the device's POST .../read requests, in order
+	reads []*protocol.EvsReadRequest
+}
+
+func (self *directoryEvsHookTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	body := []byte{}
+	if request.Body != nil {
+		read, err := io.ReadAll(request.Body)
+		if err != nil {
+			return nil, err
+		}
+		request.Body.Close()
+		body = read
+		request.Body = io.NopCloser(bytes.NewReader(body))
+	}
+	run := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/read") {
+			readRequest := &protocol.EvsReadRequest{}
+			if proto.Unmarshal(body, readRequest) == nil {
+				self.reads = append(self.reads, readRequest)
+			}
+		}
+		if self.ran || self.match == nil || !self.match(request, body) {
+			return false
+		}
+		self.ran = true
+		return true
+	}()
+	if run {
+		self.before()
+	}
+	return self.world.RoundTrip(request)
+}
+
+// Whether before ran.
+func (self *directoryEvsHookTransport) hookRan() bool {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.ran
+}
+
+// The head reads of the erasure ref the device sent, one for each read of the repo's ERASEs (EvsRepo.ReadErasures).
+func (self *directoryEvsHookTransport) erasureHeadReads(repoId sidecar.Id) int {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	erasureRefId := sidecar.EvsErasureRefId(repoId)
+	count := 0
+	for _, read := range self.reads {
+		// the head alone: no path, range, slot, map, log page, push record or stream
+		headAlone := len(read.GetPaths()) == 0 && len(read.GetRanges()) == 0 && len(read.GetSlotIds()) == 0 &&
+			len(read.GetMaps()) == 0 && len(read.GetLogPages()) == 0 && len(read.GetPushes()) == 0 && len(read.GetRefs()) == 0
+		if bytes.Equal(read.GetRefId(), erasureRefId.Bytes()) && headAlone {
+			count += 1
+		}
+	}
+	return count
+}
+
+// A POST .../read naming slotId among its slots.
+func directoryEvsReadsSlot(slotId sidecar.Id) func(request *http.Request, body []byte) bool {
+	return func(request *http.Request, body []byte) bool {
+		if request.Method != http.MethodPost || !strings.HasSuffix(request.URL.Path, "/read") {
+			return false
+		}
+		readRequest := &protocol.EvsReadRequest{}
+		if proto.Unmarshal(body, readRequest) != nil {
+			return false
+		}
+		for _, named := range readRequest.GetSlotIds() {
+			if bytes.Equal(named, slotId.Bytes()) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+// The slot keys the n-th entry of writer's stream keeps its chain in, as an ERASE of it names them
+// (EvsRepo.SlotKeysOf), read by the directory's admin.
+func (self *directoryEvsWorld) entrySlotKeys(t *testing.T, writer sidecar.Id, n uint64) []*sidecar.EvsErasedKey {
+	t.Helper()
+	path, err := sidecar.RecordStreamPath(n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin := self.world.newClient(self.world.ownerId, sidecartest.NewFakeStore().Root())
+	keys, err := admin.Repo(self.directoryId).SlotKeysOf(t.Context(), sidecar.RecordStreamRefName(writer), []string{path})
+	if err != nil || len(keys) == 0 {
+		t.Fatalf("entry %d's slot keys %v: %v", n, keys, err)
+	}
+	return keys
+}
+
+// The directory's admin destroys keys by an ERASE, which commits.
+func (self *directoryEvsWorld) erase(t *testing.T, keys []*sidecar.EvsErasedKey) {
+	t.Helper()
+	admin := self.world.newClient(self.world.ownerId, sidecartest.NewFakeStore().Root())
+	erased, err := admin.Repo(self.directoryId).Erase(t.Context(), &sidecar.EvsEraseArgs{ErasureId: sidecar.NewId(), Keys: keys, Complete: true})
+	if err != nil || erased.Version == 0 {
+		t.Fatalf("the ERASE %+v: %v", erased, err)
+	}
+}
+
+// A new reader of the directory, a member device whose transport is hook's and whose evs alarms go to alarms.
+func (self *directoryEvsWorld) hookedReader(t *testing.T, hook *directoryEvsHookTransport, alarms *[]sidecar.SidecarEvent) *sidecar.DirectoryEvsCards {
+	t.Helper()
+	readerId := self.member(t, sidecartest.RecordStreamsScope{Read: true, Write: true})
+	hook.world = self.world
+	reader := self.world.newClient(readerId, sidecartest.NewFakeStore().Root(), func(args *sidecar.EvsClientArgs) {
+		args.Transport = hook
+		args.Emit = func(event sidecar.SidecarEvent) {
+			if event.Kind == sidecar.SidecarEventEvsAlarm {
+				*alarms = append(*alarms, event)
+			}
+		}
+	})
+	return self.binding(t, reader, nil)
+}
+
+// A slot read without its key is judged on the repo's ERASEs read after the slot: evs commits an ERASE before it
+// rewrites any slot the ERASE names (§11.12's push row), so the read of a stream's log page whose first entry an ERASE
+// emptied, which reads the ERASEs there, takes the second entry, whose ERASE commits after that read and before the
+// second version's slots are read, as erased too, reading the ERASEs once more and raising no alarm.
+func TestDirectoryEvsCardsReadStreamLogTakesAnEraseCommittedMidPage(t *testing.T) {
+	directory := newDirectoryEvsWorld(t, 1)
+	writer := directory.writers[0]
+	directory.append(t, writer, 1, 1)
+	directory.append(t, writer, 2, 1)
+	first, second := directory.entrySlotKeys(t, writer, 1), directory.entrySlotKeys(t, writer, 2)
+	directory.erase(t, first)
+	hook := &directoryEvsHookTransport{
+		match:  directoryEvsReadsSlot(second[0].SlotId),
+		before: func() { directory.erase(t, second) },
+	}
+	alarms := []sidecar.SidecarEvent{}
+	cards := directory.hookedReader(t, hook, &alarms)
+	page, err := cards.ReadStreamLog(t.Context(), directory.directoryId, writer, 0)
+	if err != nil {
+		t.Fatalf("a page whose second entry an ERASE emptied as it was read: %v; alarms %+v", err, alarms)
+	}
+	if !hook.hookRan() {
+		t.Fatal("the read named the second entry's slot in no request")
+	}
+	if len(alarms) != 0 {
+		t.Fatalf("alarms %+v", alarms)
+	}
+	if len(page.Versions) != 2 || page.More {
+		t.Fatalf("%d versions, more %v", len(page.Versions), page.More)
+	}
+	for _, version := range page.Versions {
+		// each entry erased, nothing of it given; the push's own slot, whose rows no ERASE named, still opens
+		if len(version.Version.Entries) != 0 || version.Slot == nil || len(version.Slot.Rows) != 1 {
+			t.Fatalf("version %d: %d entries, slot %+v", version.Version.Version, len(version.Version.Entries), version.Slot)
+		}
+	}
+	// read at the first emptied slot, and again at the second, which the list in hand did not name
+	if reads := hook.erasureHeadReads(directory.directoryId); reads != 2 {
+		t.Fatalf("the ERASEs read %d times", reads)
+	}
+}
+
+// Its twin: the second entry's key gone from its slot with no ERASE naming it, as evs withholding it would leave it.
+// The reader reads the ERASEs once more before it judges, and the key withheld still alarms tamper and refuses the
+// page.
+func TestDirectoryEvsCardsReadStreamLogAlarmsAKeyWithheldMidPage(t *testing.T) {
+	directory := newDirectoryEvsWorld(t, 1)
+	writer := directory.writers[0]
+	directory.append(t, writer, 1, 1)
+	directory.append(t, writer, 2, 1)
+	first, second := directory.entrySlotKeys(t, writer, 1), directory.entrySlotKeys(t, writer, 2)
+	directory.erase(t, first)
+	withhold := func() {
+		key := evsservice.SlotKey(directory.directoryId, second[0].SlotId)
+		stored, err := directory.world.cluster.Get(t.Context(), key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stored.Body.Close()
+		if _, err := directory.world.cluster.PutIfMatch(t.Context(), key, stored.Etag, []byte{}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hook := &directoryEvsHookTransport{match: directoryEvsReadsSlot(second[0].SlotId), before: withhold}
+	alarms := []sidecar.SidecarEvent{}
+	cards := directory.hookedReader(t, hook, &alarms)
+	if _, err := cards.ReadStreamLog(t.Context(), directory.directoryId, writer, 0); !errors.Is(err, sidecar.ErrEvsSealInvalid) {
+		t.Fatalf("a page whose second entry's key evs withheld: %v", err)
+	}
+	if !hook.hookRan() {
+		t.Fatal("the read named the second entry's slot in no request")
+	}
+	if len(alarms) != 1 || alarms[0].EvsAlarm != sidecar.SidecarEvsAlarmTamper {
+		t.Fatalf("alarms %+v", alarms)
+	}
+	if reads := hook.erasureHeadReads(directory.directoryId); reads != 2 {
+		t.Fatalf("the ERASEs read %d times before the alarm", reads)
+	}
+}
+
 // The cards ref's statements after a version, in commit order, each file with its path's version, its plaintext
 // path and content, and its push's version, signer, pin and time; a removal with the version past the one it removed;
 // a page of CardsPageVersionCount statements answering more.
@@ -532,6 +745,57 @@ func TestDirectoryEvsCardsReadCardsInCommitOrder(t *testing.T) {
 	second, err := paged.ReadCards(ctx, directory.directoryId, 3)
 	if err != nil || second.ThroughVersion != 4 || second.More || len(second.Files) != 1 || !second.Files[0].Removed {
 		t.Fatalf("the page after: %+v %v", second, err)
+	}
+}
+
+// The cards ref's keyless-slot rule (the file header's format 2 and erased rows): a card version whose key an ERASE
+// destroyed stands in the changes with no content, raising no alarm; one whose key evs withheld, with no ERASE naming
+// it, alarms tamper once the ERASEs are read again and is left out, so the copy keeps what it last took.
+func TestDirectoryEvsCardsReadCardsTakesAnErasedVersionWithNoContent(t *testing.T) {
+	directory := newDirectoryEvsWorld(t, 1)
+	ctx := t.Context()
+	writer := directory.writers[0]
+	notices := directoryEvsNoticePaths(t, 2)
+	erasedVersion := directory.put(t, writer, notices[0], 0, "erased")
+	directory.put(t, writer, notices[1], 0, "withheld")
+	admin := directory.world.newClient(directory.world.ownerId, sidecartest.NewFakeStore().Root())
+	slotKeysOf := func(path string) []*sidecar.EvsErasedKey {
+		keys, err := admin.Repo(directory.directoryId).SlotKeysOf(ctx, sidecar.DirectoryCardsRefName(), []string{path})
+		if err != nil || len(keys) == 0 {
+			t.Fatalf("%s's slot keys %v: %v", path, keys, err)
+		}
+		return keys
+	}
+	directory.erase(t, slotKeysOf(notices[0]))
+	// evs drops the second card's key with no ERASE: its slot stored with no key, as an ERASE would leave it
+	withheld := evsservice.SlotKey(directory.directoryId, slotKeysOf(notices[1])[0].SlotId)
+	stored, err := directory.world.cluster.Get(ctx, withheld)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored.Body.Close()
+	if _, err := directory.world.cluster.PutIfMatch(ctx, withheld, stored.Etag, []byte{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	hook := &directoryEvsHookTransport{}
+	alarms := []sidecar.SidecarEvent{}
+	cards := directory.hookedReader(t, hook, &alarms)
+	changes, err := cards.ReadCards(ctx, directory.directoryId, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changes.Files) != 1 {
+		t.Fatalf("%d files", len(changes.Files))
+	}
+	if file := changes.Files[0]; file.Path != notices[0] || file.Version != erasedVersion || file.Removed || len(file.Content) != 0 {
+		t.Fatalf("the erased card: %s v%d removed %v, %d bytes", file.Path, file.Version, file.Removed, len(file.Content))
+	}
+	if len(alarms) != 1 || alarms[0].EvsAlarm != sidecar.SidecarEvsAlarmTamper {
+		t.Fatalf("alarms %+v", alarms)
+	}
+	// read at the erased card's slot, and again at the withheld one's before its alarm
+	if reads := hook.erasureHeadReads(directory.directoryId); reads != 2 {
+		t.Fatalf("the ERASEs read %d times", reads)
 	}
 }
 

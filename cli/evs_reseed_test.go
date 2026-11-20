@@ -120,8 +120,10 @@ func TestEvsReseedExitsFailedOnAPartialReseed(t *testing.T) {
 }
 
 // --place runs the repo's groups step before its walk, after the same yes, and shows what it did: a live repo placed
-// and active, one re-seeded as deleted left deleted, one another admin's device placed; a groups step that fails walks
-// nothing and exits failed; and without --place no groups step runs.
+// and active; one re-seeded as deleted left deleted, whose group this device finishes at its next sync once it is
+// restored (QD-1143), with the DELETE that mended a place leaving repo/ keying; a restored repo placed and restored,
+// with the restore that mended a place leaving repo/ deleted; one another admin's device placed; a groups step that
+// fails walks nothing and exits failed; and without --place no groups step runs.
 func TestEvsReseedPlaceRunsTheGroupsStepBeforeTheWalk(t *testing.T) {
 	repoId, refId := sidecar.NewId(), sidecar.NewId()
 	target := &testUrEvsReseedTarget{
@@ -146,7 +148,8 @@ func TestEvsReseedPlaceRunsTheGroupsStepBeforeTheWalk(t *testing.T) {
 	if len(target.placedRepoIds) != 1 || target.placedRepoIds[0] != repoId || target.placedAfterCount[0] != 0 || len(target.args) != 1 {
 		t.Fatalf("groups steps %v after %v re-seeds, %d re-seeds", target.placedRepoIds, target.placedAfterCount, len(target.args))
 	}
-	placedLine := "repo " + repoId.String() + ": placed as deleted, its group's form and ladder returned; it stays deleted until its restore"
+	placedLine := "repo " + repoId.String() + ": placed as deleted, its group's form and ladder returned; it stays deleted until its restore, " +
+		"after which this device finishes its group at its next sync\n"
 	walkedLine := "ref " + refId.String() + ": version 3 of 3"
 	shown := stdout.String()
 	if !strings.Contains(shown, placedLine) || !strings.Contains(shown, walkedLine) || strings.Index(shown, walkedLine) < strings.Index(shown, placedLine) {
@@ -156,13 +159,23 @@ func TestEvsReseedPlaceRunsTheGroupsStepBeforeTheWalk(t *testing.T) {
 		placed *sidecar.EvsReseedPlaced
 		want   string
 	}{
-		{placed: &sidecar.EvsReseedPlaced{GroupId: sidecar.NewId()}, want: "placed afresh, its group re-formed, active"},
-		{placed: &sidecar.EvsReseedPlaced{PlacedByAnother: true}, want: "placed by another admin's device, which re-forms its group"},
+		{placed: &sidecar.EvsReseedPlaced{GroupId: sidecar.NewId()}, want: ": placed afresh, its group re-formed, active\n"},
+		{
+			placed: &sidecar.EvsReseedPlaced{Deleted: true, Mended: true, GroupId: sidecar.NewId()},
+			want: ": placed as deleted, a DELETE mending a place that left repo/ keying, its group's form and ladder returned; " +
+				"it stays deleted until its restore, after which this device finishes its group at its next sync\n",
+		},
+		{placed: &sidecar.EvsReseedPlaced{Restored: true, GroupId: sidecar.NewId()}, want: ": placed afresh as restored, its group re-formed, active\n"},
+		{
+			placed: &sidecar.EvsReseedPlaced{Restored: true, Mended: true, GroupId: sidecar.NewId()},
+			want:   ": placed and restored, its restore mending a place that left repo/ deleted, its group re-formed, active\n",
+		},
+		{placed: &sidecar.EvsReseedPlaced{PlacedByAnother: true}, want: ": placed by another admin's device, which re-forms its group\n"},
 	} {
 		target.placed = c.placed
 		stdout.Reset()
 		yes()
-		if code := cli.main(context.Background(), command); code != urExitOk || !strings.Contains(stdout.String(), c.want) {
+		if code := cli.main(context.Background(), command); code != urExitOk || !strings.Contains(stdout.String(), "repo "+repoId.String()+c.want) {
 			t.Errorf("exit %d, want %q in:\n%s", code, c.want, stdout.String())
 		}
 	}
