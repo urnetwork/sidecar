@@ -744,3 +744,50 @@ func TestSmtpDkimKeysRouteRefusesAnAnswerMissingASelector(t *testing.T) {
 		t.Errorf("refusal %+v", apiErr)
 	}
 }
+
+// QD-1130's awaiting state is kept as written, and an awaiting record not made to await is a damaged one, which
+// generates nothing over it.
+func TestSmtpDkimAwaitingRecordDecodesOnlyWhenMadeToAwait(t *testing.T) {
+	_, secrets := newSmtpDkimTestSecrets(t)
+	publisher := &smtpDkimTestPublisher{}
+	keys := newSmtpDkimTestKeys(secrets, publisher, newSmtpDkimTestClock())
+	selector, err := keys.Current(context.Background(), testDkimTeamDomain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selector.Release()
+	records, err := keys.loadWithPublishLock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := records[selector.Selector]
+	record.State = smtpDkimStateAwaiting
+	record.Await = true
+	record.Replaces = []string{"aaaaaaaaaaaaaaaaaaaaaaaaaa"}
+	value, err := encodeSmtpDkimRecord(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := decodeSmtpDkimRecord(smtpDkimSelectorRecordName(record.Selector), value)
+	if err != nil || decoded.State != smtpDkimStateAwaiting || !decoded.Await || !slices.Equal(decoded.Replaces, record.Replaces) {
+		t.Fatalf("decoded %+v, %v", decoded, err)
+	}
+	record.Await = false
+	value, err = encodeSmtpDkimRecord(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := decodeSmtpDkimRecord(smtpDkimSelectorRecordName(record.Selector), value); !errors.Is(err, ErrSidecarStoreFailed) {
+		t.Fatalf("an awaiting record not made to await: %v", err)
+	}
+	if err := secrets.Put(smtpDkimSelectorRecordName(record.Selector), value); err != nil {
+		t.Fatal(err)
+	}
+	calls := publisher.callCount()
+	if _, err := keys.Current(context.Background(), testDkimNetworkDomain); !errors.Is(err, ErrSidecarStoreFailed) {
+		t.Fatalf("over a damaged record: %v", err)
+	}
+	if publisher.callCount() != calls {
+		t.Error("published over a damaged record")
+	}
+}

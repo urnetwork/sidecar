@@ -465,36 +465,41 @@ func TestBudgetLoopExportsTheBudgetSeries(t *testing.T) {
 
 // FS-61's flood clause: a Pro network flooding pushes is refused first, 429 with retry_after_ms, its refused
 // pushes moving no P2 work into the wallet, while a Community network's one push an interval is admitted
-// within the interval it asked in. Here and not in sidecartest/fault, since the schedule holds the process's
-// queue between its ticks.
+// within an interval of asking. The first time, the Community network not yet in the share window, the flood
+// spends the share before it asks, and its push behind the flood waits for the next share while the flood is
+// refused; from then on its weighted share is held, the flood takes only its own at once, and the Community
+// push behind the flood is admitted at once (owner decision 617). Here and not in sidecartest/fault, since
+// the schedule holds the process's queue between its ticks.
 func TestFs61ProFloodIsRefusedFirstWhileCommunityKeepsItsP99(t *testing.T) {
 	fixture := newBudgetFixture(t)
 	pro := connect.NewId()
 	community := connect.NewId()
-	fixture.host.Quota.SetLimits(pro, &sidecar.QuotaLimits{Tier: "pro", Limits: map[string]int64{"store_weight": 4}})
-	fixture.host.Quota.SetLimits(community, &sidecar.QuotaLimits{Tier: "free", Limits: map[string]int64{"store_weight": 1}})
-	fixture.client.weights.weight(pro, fixture.clock.Now())
-	fixture.client.weights.weight(community, fixture.clock.Now())
-	fixture.client.weights.refresh(t.Context(), fixture.clock)
+	fixture.setWeights(map[connect.Id]int64{pro: 4, community: 1})
 	fixture.warm(1000)
 	cost := sidecar.WriteCost{ImmediateByteCount: 60, DeferredByteCount: 40}
 
 	var admittedCredit int64
 	var proRefused, proAdmitted int
 	var communityWaits []time.Duration
-	for range 10 {
-		share := fixture.left().P1ByteCount
+	for round := range 10 {
 		started := fixture.clock.Now()
 		pros := []*pendingAdmission{}
+		atOnce := 0
 		for range 30 {
-			pros = append(pros, fixture.admitAsync(t.Context(), pro, cost))
+			pending, waiting := fixture.admitSettled(t.Context(), pro, cost)
+			if !waiting {
+				atOnce += 1
+			}
+			pros = append(pros, pending)
 		}
-		// the share admits its pushes at once and the rest of the flood waits
-		atOnce := int(share / cost.ByteCount())
-		fixture.awaitWaits(fixture.waitSeen + 30 - atOnce)
-		communityPush := fixture.admitAsync(t.Context(), community, cost)
-		fixture.awaitWaits(fixture.waitSeen + 1)
-		// past the shed delay the heaviest network by queued bytes per weight is refused whole
+		if atOnce == len(pros) {
+			t.Fatalf("round %d: the share admitted the whole flood", round)
+		}
+		communityPush, waiting := fixture.admitSettled(t.Context(), community, cost)
+		if waiting != (round == 0) {
+			t.Fatalf("round %d: the Community push behind the flood waiting %v", round, waiting)
+		}
+		// past the shed delay the flood is refused whole
 		fixture.clock.Advance(fixture.settings.ShedDelay)
 		for _, pending := range pros {
 			pending.wait(t)
@@ -507,20 +512,24 @@ func TestFs61ProFloodIsRefusedFirstWhileCommunityKeepsItsP99(t *testing.T) {
 			case errors.As(pending.err, &refusal) && refusal.RetryAfterMs() == 5000:
 				proRefused += 1
 			default:
-				t.Fatalf("a Pro push ended %v", pending.err)
+				t.Fatalf("round %d: a Pro push ended %v", round, pending.err)
 			}
 		}
-		if communityPush.decided() {
-			t.Fatal("the Community push was decided before the next share")
+		communityWait := time.Duration(0)
+		if waiting && communityPush.decided() {
+			t.Fatalf("round %d: the Community push was decided before the next share: %v", round, communityPush.err)
 		}
 		fixture.interval(cost.ImmediateByteCount * int64(atOnce+1))
-		communityPush.wait(t)
+		if waiting {
+			communityPush.wait(t)
+			communityWait = fixture.clock.Now().Sub(started)
+		}
 		if communityPush.err != nil {
-			t.Fatalf("the Community push was refused: %v", communityPush.err)
+			t.Fatalf("round %d: the Community push was refused: %v", round, communityPush.err)
 		}
 		communityPush.grant.Close()
 		admittedCredit += cost.DeferredByteCount
-		communityWaits = append(communityWaits, fixture.clock.Now().Sub(started))
+		communityWaits = append(communityWaits, communityWait)
 	}
 	if proRefused == 0 || proAdmitted == 0 {
 		t.Fatalf("Pro: %d admitted, %d refused", proAdmitted, proRefused)

@@ -781,7 +781,7 @@ smtp-5:
 smtp-6:
   service: smtpedge, dns
   store: smtp_dkim_key; the selectors' DNS records (dns-1)
-  sees: DKIM public keys and opaque selectors per sending sidecar, which reveal how many devices send (owner decision 36); replying and forwarding burners' selectors until the PSL listing (owner decision 79)
+  sees: DKIM public keys and opaque selectors per sending sidecar, which reveal how many devices send (owner decision 36); replying and forwarding burners' selectors until the PSL listing (owner decision 79); at each GET /network/dns, by api's own lookup of <sel>._domainkey.<domain>, whether a Team custom domain answers each of its published selectors, which the read lists as owed CNAMEs until it does and never stores (QD-1130)
   why: publish DKIM (§12.7, §14.6); check signatures in reports (§14.8)
   ttl: 30 d after the selector leaves DNS (7 d after rotation, at once on removal; §14.14)
   owner: §14.6

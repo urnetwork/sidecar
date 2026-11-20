@@ -738,6 +738,10 @@ func (self *SmtpSender) sendDomain(ctx context.Context, plan *smtpSendPlan, doma
 					Reason:     "This device's signing key for the sender's domain was refused, so the message could not be signed.",
 				})
 			}
+			if errors.Is(connectionResult.Err, ErrSmtpDkimSelectorUnanswered) {
+				// a custom domain's first selector awaits the domain's answer (QD-1130): held, and named if it ends
+				return scheduled("The sender's domain does not publish this device's signing key yet: a network admin adds the DKIM CNAME the network's DNS settings list.")
+			}
 			return scheduled("")
 		case protocol.SmtpPreambleCode_SMTP_PREAMBLE_HALTED, protocol.SmtpPreambleCode_SMTP_PREAMBLE_QUOTA,
 			protocol.SmtpPreambleCode_SMTP_PREAMBLE_TRY_LATER:
