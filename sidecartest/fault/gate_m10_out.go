@@ -268,23 +268,22 @@ func GateM10OutTlcOutcome(output []byte, runErr error) (string, string) {
 	return GateTlcOutcome(output, runErr, gateM10OutTlcTests)
 }
 
-// A scenario's test as a gate entry names it: its package from its module's root, a server one on the private stores.
-func gateScenarioTest(test *sidecartest.ScenarioTest) (*GateTest, error) {
-	modulePath, ok := gateModulePaths[test.Repo]
-	if !ok {
-		return nil, fmt.Errorf("%s names repo %q, which no gate entry reaches", test, test.Repo)
-	}
-	packagePath, ok := strings.CutPrefix(test.Package, modulePath)
-	if !ok || (packagePath != "" && !strings.HasPrefix(packagePath, "/")) {
-		return nil, fmt.Errorf("%s's package is outside %s", test, modulePath)
-	}
-	return &GateTest{Repo: test.Repo, Package: "." + packagePath, Tags: test.Tags, Stores: test.Repo == "server", Names: []string{test.Name}}, nil
-}
-
 // One item per part of each §22.7 scenario that must pass at the catalog's gate, on each tier its row names, with the
 // tests registered to it there: a part with none on a tier reads missing there (ScenarioRegistry.Missing), never pass
 // on another tier's run, and a part on T6 reads open, since T6 runs in main, dark, and never here.
 func gateScenarioItems(registry *sidecartest.ScenarioRegistry, gate string) []*GateItem {
+	// a scenario's test as a gate entry names it: its package from its module's root, a server one on the private stores
+	gateTestOf := func(test *sidecartest.ScenarioTest) (*GateTest, error) {
+		modulePath, ok := gateModulePaths[test.Repo]
+		if !ok {
+			return nil, fmt.Errorf("%s names repo %q, which no gate entry reaches", test, test.Repo)
+		}
+		packagePath, ok := strings.CutPrefix(test.Package, modulePath)
+		if !ok || (packagePath != "" && !strings.HasPrefix(packagePath, "/")) {
+			return nil, fmt.Errorf("%s's package is outside %s", test, modulePath)
+		}
+		return &GateTest{Repo: test.Repo, Package: "." + packagePath, Tags: test.Tags, Stores: test.Repo == "server", Names: []string{test.Name}}, nil
+	}
 	items := []*GateItem{}
 	for _, row := range registry.Rows() {
 		if !slices.Contains(row.Gates, gate) {
@@ -301,7 +300,7 @@ func gateScenarioItems(registry *sidecartest.ScenarioRegistry, gate string) []*G
 				}
 				errs := []string{}
 				for _, test := range registry.Tests(row.Id, clause, tier) {
-					gateTest, err := gateScenarioTest(test)
+					gateTest, err := gateTestOf(test)
 					if err != nil {
 						errs = append(errs, err.Error())
 						continue
