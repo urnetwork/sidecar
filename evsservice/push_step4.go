@@ -506,6 +506,12 @@ func (self *pushAttempt) buildView() (*pushOutcome, bool) {
 			return self.unavailableOn(err), false
 		}
 	}
+	if push.GetFlags()&uint32(protocol.EvsPushFlag_EVS_PUSH_COMPLETION) != 0 {
+		// over this head: a racing completion that moved it is found on the next read
+		if err := self.readCompletionNamings(); err != nil {
+			return self.unavailableOn(err), false
+		}
+	}
 	view.PathEpochRules = self.pathEpochRules
 	view.ErasureRules = self.erasureRules
 	reads.view = view

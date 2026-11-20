@@ -78,6 +78,8 @@ type FakeDirectoryCardsCounts struct {
 	RemovalPushes int
 	LeasesTaken   int
 	LeasesRelease int
+	// Reads of the cards ref's index erasure set (sidecar.DirectoryCardsErasureSet), a card's return each.
+	ErasedReads int
 }
 
 // One lease, as a holder took it.
@@ -110,6 +112,8 @@ type fakeDirectoryCardsRepo struct {
 	pathCounts map[string]uint64
 	statements []*fakeDirectoryCardsStatement
 	leases     map[uint64]*fakeDirectoryCardsLease
+	// the cards ref's index erasure set as CUTs left it (fake_directory_cards_erased.go)
+	erasure *fakeDirectoryCardsErasure
 }
 
 type fakeDirectoryCardsStatement struct {

@@ -33,8 +33,8 @@
 //	          (25 h) after its CUT or last ERASE, any admin's once the eraser no longer administers the repo
 //
 // An ERASE that names only keys already gone is refused and commits nothing (evs's NOTHING_TO_ERASE), so complete
-// rides an ERASE that destroys a key, or a completion ERASE (evs_erase_completion.go), which evs refuses so too until
-// question erasure-completion-erase-evs-cannot-read-complete is answered. An erasure whose index rewrite is unproven
+// rides an ERASE that destroys a key, or a completion ERASE (evs_erase_completion.go; QD-1137), flagged COMPLETION, which
+// evs takes once a key of the erasure's ERASEs no completion named since. An erasure whose index rewrite is unproven
 // (a history the store could not walk whole) ends with every key it could find destroyed and no complete, sending no
 // completion: it stays rewriting, fail closed.
 //

@@ -353,6 +353,11 @@ type EvsSettings struct {
 	// How long after an ERASE whose rewrites could not finish taskworker's evs.erasure_finish runs for its repo, 1
 	// min; the client's retry finishes them too. Positive.
 	ErasureFinishDelay time.Duration
+	// §11.12's push row for a completion ERASE (QD-1137): how many ERASEs of the erasure ref step 4 reads back from
+	// the head to find the newest ERASE naming each key a completion names, 1,024. A key no ERASE among them named
+	// answers NOTHING_TO_ERASE, so an honest completion, which names a key of its erasure's newest key-destroying
+	// ERASE, is found long before it. Positive.
+	CompletionLookbackCount int
 }
 
 // The design's values, and 4 KiB blocks until the nvme run.
@@ -470,6 +475,7 @@ func DefaultEvsSettings() *EvsSettings {
 		GenerationRecordMaxByteCount: 16 * 1024,
 		SlotRewriteRetryCount:        8,
 		ErasureFinishDelay:           time.Minute,
+		CompletionLookbackCount:      1024,
 	}
 }
 
@@ -487,8 +493,8 @@ func (self *EvsSettings) Validate() error {
 	if self.PushTimeBound <= 0 || self.SealTimeBound <= 0 || self.SlotMaxByteCount <= 0 || self.SlotExistingMaxAge <= 0 || self.GenerationRecordMaxByteCount <= 0 {
 		return fmt.Errorf("%w: a push's time bound, a slot's bound or age, or gen/<g>'s bound not positive", ErrEvsSettings)
 	}
-	if self.SlotRewriteRetryCount < 0 || self.ErasureFinishDelay <= 0 {
-		return fmt.Errorf("%w: a slot rewrite's retries negative or the erasure reconciler's delay not positive", ErrEvsSettings)
+	if self.SlotRewriteRetryCount < 0 || self.ErasureFinishDelay <= 0 || self.CompletionLookbackCount <= 0 {
+		return fmt.Errorf("%w: a slot rewrite's retries negative, or the erasure reconciler's delay or a completion's lookback not positive", ErrEvsSettings)
 	}
 	if self.SlotWriteRoundCount <= 0 {
 		return fmt.Errorf("%w: step 6's slot rounds not positive", ErrEvsSettings)

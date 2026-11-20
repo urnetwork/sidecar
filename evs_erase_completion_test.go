@@ -5,7 +5,13 @@ package sidecar
 // QD-1132's completion ERASE: the key it names (evs_erase_completion.go's key row).
 
 import (
+	"errors"
 	"testing"
+
+	"google.golang.org/protobuf/proto"
+
+	"github.com/urnetwork/sidecar/protocol"
+	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 // One committed ERASE as the key rule reads it.
@@ -62,5 +68,41 @@ func TestEvsCompletionKeyIsOneItsErasureNamedFirstAndNoEraseNamedSince(t *testin
 	}
 	if got, ok := testCompletionKey(nil, erasure); ok || got != nil {
 		t.Fatalf("an erasure with no ERASE: %v", got)
+	}
+}
+
+// QD-1137's flag: COMPLETION is format 2's, and comes with ERASE alone. A format-1 reader refuses it as needing format
+// 2; a format-2 one takes ERASE with COMPLETION and refuses COMPLETION alone or beside another flag as INVALID.
+func TestEvsStatementTakesCompletionWithEraseAlone(t *testing.T) {
+	signer := newEvsTestSigner("writer")
+	base := evsTestBuiltInline(t, signer).Statement.Push
+	resign := func(push *protocol.EvsPush) []byte {
+		body, _ := proto.MarshalOptions{Deterministic: true}.Marshal(push)
+		signed, _ := signer.sign(evsPushPurpose, bridge.SignedType_SIGNED_EVS_PUSH, body, nil)
+		statementBytes, _ := proto.Marshal(signed)
+		return statementBytes
+	}
+	erase, completion, force := uint32(protocol.EvsPushFlag_EVS_PUSH_ERASE), uint32(protocol.EvsPushFlag_EVS_PUSH_COMPLETION), uint32(protocol.EvsPushFlag_EVS_PUSH_FORCE)
+	cases := []struct {
+		name    string
+		flags   uint32
+		format2 error
+	}{
+		{name: "ERASE with COMPLETION", flags: erase | completion, format2: nil},
+		{name: "COMPLETION alone", flags: completion, format2: ErrEvsPushInvalid},
+		{name: "COMPLETION beside FORCE", flags: erase | completion | force, format2: ErrEvsPushInvalid},
+	}
+	for _, shape := range cases {
+		push := proto.Clone(base).(*protocol.EvsPush)
+		push.Flags = shape.flags
+		push.ErasedSha256 = evsTestBytes("erased", 32)
+		statementBytes := resign(push)
+		if _, err := ParseEvsStatement(statementBytes); !errors.Is(err, ErrEvsFormatUnsupported) {
+			t.Errorf("%s at format 1: %v", shape.name, err)
+		}
+		statement, err := ParseEvsStatementFormat2(statementBytes)
+		if !errors.Is(err, shape.format2) || (shape.format2 == nil && statement.Push.GetFlags() != shape.flags) {
+			t.Errorf("%s at format 2: %v", shape.name, err)
+		}
 	}
 }

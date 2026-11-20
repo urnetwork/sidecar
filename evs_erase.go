@@ -20,7 +20,10 @@
 //	          and ERASE pairs; that order is the caller's (§15.7, §16.8), which names the keys
 //	read      ReadErasures walks the erasure ref's verified statements and, for each ERASE, reads its push record for
 //	          the erased list and its sealed metadata, whose erasure note it opens; an ERASE that changes a path, or
-//	          whose note is not one, refuses the read
+//	          whose note is not one, refuses the read, as does a completion ERASE (format 2's flag COMPLETION beside
+//	          ERASE alone; QD-1137) whose note says nothing complete. A completion destroys nothing, and completes its
+//	          erasure only where an earlier ERASE of the erasure named each key it names; one that does not reads as
+//	          completing nothing
 //	reconcile Erasures gives each erasure the committed ERASEs' notes name, done once one of them completes it, else
 //	          rewriting, and stalled 25 h after its last ERASE with none since; which device resumes it, its eraser's
 //	          at its start or another of its member's after 25 h, is the caller's, from these states and from each
@@ -65,6 +68,11 @@ type EvsEraseArgs struct {
 	Complete bool
 	// The caller's note of what the keys covered, its documents and each one whose last key goes, which Erase seals.
 	Note []byte
+	// A completion ERASE (§11.12's push row; QD-1132, QD-1137; evs_erase_completion.go): Keys name only keys an earlier
+	// ERASE of the erasure destroyed, Complete is set, and the statement is format 2's, flagged COMPLETION beside ERASE
+	// alone. evs answers one it does not take NOTHING_TO_ERASE, which Erase returns as for any ERASE whose keys are
+	// gone, so the caller reads the erasure ref back to learn whether it ended the erasure.
+	Completion bool
 }
 
 // A committed ERASE.
@@ -81,9 +89,13 @@ type EvsErasure struct {
 	Time            time.Time
 	EraserSidecarId Id
 	ErasureId       Id
-	Complete        bool
-	Keys            []*EvsErasedKey
-	Note            []byte
+	// Whether the ERASE ends its erasure. False for a completion that an earlier ERASE of its erasure did not name each
+	// key of, which completes nothing (QD-1137's readers), whatever its note says.
+	Complete bool
+	// Flagged COMPLETION: it destroyed nothing (QD-1137).
+	Completion bool
+	Keys       []*EvsErasedKey
+	Note       []byte
 }
 
 // An erasure note's layout (EVS-FORMAT.md's erasure notes; QD-682): the erasure's id, 16 B, which is all of a
@@ -161,6 +173,14 @@ func (self *EvsRepo) buildErase(ctx context.Context, args *EvsEraseArgs, pushId 
 	if args == nil || len(args.Keys) == 0 {
 		return nil, fmt.Errorf("%w: an ERASE of no key", ErrEvsWriteInvalid)
 	}
+	if args.Completion && !args.Complete {
+		return nil, fmt.Errorf("%w: a completion ERASE that says nothing complete", ErrEvsWriteInvalid)
+	}
+	flags := uint32(protocol.EvsPushFlag_EVS_PUSH_ERASE)
+	if args.Completion {
+		// format 2's flag, which builds the statement as format 2 (QD-1137)
+		flags |= uint32(protocol.EvsPushFlag_EVS_PUSH_COMPLETION)
+	}
 	slotMaxKeyCount := DefaultEvsFormatSettings().SlotMaxKeyCount
 	for _, key := range args.Keys {
 		if slotMaxKeyCount <= int(key.KeyIndex) {
@@ -181,7 +201,7 @@ func (self *EvsRepo) buildErase(ctx context.Context, args *EvsEraseArgs, pushId 
 		RepoId: self.repoId, RefId: refId, RefKind: protocol.EvsRefKind_EVS_REF_ERASURE, RefMode: protocol.EvsRefMode_EVS_REF_FILE,
 		BaseVersion: head.Version, BaseChain: head.Chain, Head: head.Head, PathEpoch: 1, Generation: repoKey.Generation(),
 		keys: newEvsReadKeys(self), floors: map[string]uint64{},
-		Flags: uint32(protocol.EvsPushFlag_EVS_PUSH_ERASE), Erased: args.Keys,
+		Flags: flags, Erased: args.Keys,
 		erasureNote: EvsEraseNote(args.ErasureId, args.Complete, args.Note),
 	}
 	sealed, err := self.client.sealWrite(ctx, plan, repoKey)
@@ -228,15 +248,56 @@ func (self *EvsRepo) ReadErasures(ctx context.Context, afterVersion uint64) ([]*
 	if err != nil {
 		return nil, err
 	}
-	erasures := []*EvsErasure{}
-	for _, statement := range walked {
-		push := statement.Statement.Push
-		if statement.Version <= afterVersion || push.GetFlags()&uint32(protocol.EvsPushFlag_EVS_PUSH_ERASE) == 0 {
-			continue
+	// each ERASE read, by its index in walked, an earlier one read only where a completion needs it
+	read := map[int]*EvsErasure{}
+	readAt := func(index int) (*EvsErasure, error) {
+		if erasure, ok := read[index]; ok {
+			return erasure, nil
 		}
-		erasure, err := self.readErasure(ctx, head, statement)
+		erasure, err := self.readErasure(ctx, head, walked[index])
 		if err != nil {
 			return nil, err
+		}
+		read[index] = erasure
+		return erasure, nil
+	}
+	isErase := func(statement *EvsVerifiedStatement) bool {
+		return statement.Statement.Push.GetFlags()&uint32(protocol.EvsPushFlag_EVS_PUSH_ERASE) != 0
+	}
+	erasures := []*EvsErasure{}
+	for index, statement := range walked {
+		if statement.Version <= afterVersion || !isErase(statement) {
+			continue
+		}
+		erasure, err := readAt(index)
+		if err != nil {
+			return nil, err
+		}
+		if erasure.Completion {
+			// QD-1137's readers: a completion ends its erasure only where an earlier ERASE of the erasure named each
+			// key it names; else it completes nothing
+			unnamed := map[EvsErasedKey]bool{}
+			for _, key := range erasure.Keys {
+				unnamed[*key] = true
+			}
+			for earlier := index - 1; 0 <= earlier && 0 < len(unnamed); earlier -= 1 {
+				if !isErase(walked[earlier]) {
+					continue
+				}
+				named, err := readAt(earlier)
+				if err != nil {
+					return nil, err
+				}
+				if named.ErasureId != erasure.ErasureId {
+					continue
+				}
+				for _, key := range named.Keys {
+					delete(unnamed, *key)
+				}
+			}
+			if 0 < len(unnamed) {
+				erasure.Complete = false
+			}
 		}
 		erasures = append(erasures, erasure)
 	}
@@ -260,6 +321,11 @@ func (self *EvsRepo) readErasure(ctx context.Context, head *EvsVerifiedHead, sta
 	erasure.Keys = checked.Erased
 	if erasure.ErasureId, erasure.Complete, erasure.Note, err = ParseEvsEraseNote(note); err != nil {
 		return nil, err
+	}
+	erasure.Completion = push.GetFlags()&uint32(protocol.EvsPushFlag_EVS_PUSH_COMPLETION) != 0
+	if erasure.Completion && !erasure.Complete {
+		// its flag and its note's complete byte disagree (QD-1137)
+		return nil, fmt.Errorf("%w: a completion ERASE whose note says nothing complete", ErrEvsEntryRefused)
 	}
 	return erasure, nil
 }
