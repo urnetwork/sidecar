@@ -264,7 +264,8 @@ func m10Format2SweepCases() []*m10Format2Case {
 			},
 		},
 		{
-			rowId: "FS-89",
+			rowId:   "FS-89",
+			clauses: []*m10Format2Clause{{name: "now", build: Fs89Now}},
 			heldByTests: []*GateTest{
 				m10Format2Held("./sidecartest/fault", "TestFs89NowWaitsForTheHorizon", "TestFs89WindowPendingAndCancel"),
 				m10Format2Held("./evsservice", "TestDropJobWaitsForTheStartDelay", "TestDropJobWaitsForTheHorizon", "TestDropJobRunsADropToDone"),
@@ -273,6 +274,13 @@ func m10Format2SweepCases() []*m10Format2Case {
 				"25 h 12 min and 26 h 12 min) are T2 tests over the drop table, and the row's push, read and export clauses (EVS2-M10-19 " +
 				"to -23) each wait on the others; the path of 30 versions dropped end to end, export's stubs through git fsck, diff " +
 				"and restore reporting dropped, and the twin whose hand-deleted live segment alarms run as no schedule",
+			missingClauses: []string{
+				"export's stubs through git fsck, and diff and restore reporting dropped: the world drives no export, diff or restore (EVS2-M10-19, -23)",
+				"the head written again keeping its oid and mode: the schedule reads its content, and no world read gives a mode",
+				"the twin whose live version's segment, deleted by hand, alarms as a missing segment",
+				"--now's bounds to the minute (evacuation's horizon past seen_ms by 12 min, not_before_ms + 25 min) and a version uploaded 1 h before a --now drop kept until the horizon passes its upload by 24 h 2 min: fs89_test.go's TestFs89NowWaitsForTheHorizon holds them on the drop table, not through a world (EVSB-M10-03)",
+			},
+			openNotes: []string{m10Format2SettleNote},
 		},
 		{
 			rowId: "FS-90",
@@ -384,6 +392,16 @@ func m10Format2SweepCases() []*m10Format2Case {
 			},
 		},
 	}
+}
+
+// FS-89's T2 tests by the gate's convention, for the schedule this task closes (fs89.go): the registered case and its
+// --now clause under every rule §22.8 gives the row.
+func TestFs89(t *testing.T) {
+	RunRow(t, "FS-89", "", nil)
+}
+
+func TestFs89Now(t *testing.T) {
+	RunClause(t, "FS-89", "now", Fs89Now, nil)
 }
 
 // The case catalog.yml holds for sweepCase, or nil.

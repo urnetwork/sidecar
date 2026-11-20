@@ -2047,3 +2047,73 @@ assert DECISIONS_INTRO.count(_D636) == 1, 'decisions lead moved'
 DECISIONS_INTRO = DECISIONS_INTRO.replace(
     _D636, "@@OD:280@@, the reverse-alias key (633) and an indexer row's nonce (634); an eraser's CLOSURE of a card "
     "(636); and a schedule's real-time bound on a barrier wait (637). ")
+# The fourth late sweep (dr7-late-sweep, 2026-11-19): the answers recorded after the third.
+INDEX += [
+    (638, "An internal bearer's keygen",
+     "A `sidecarctl` command draws a caller class's internal bearer, the `edge` class's first, and prints "
+     'neither file.'),
+    (639, "The direct-MX prober's results through api",
+     'mxedge posts each direct-MX probe result to api on an internal route; api writes the state and the zone.'),
+    (640, 'An outcome taken while its connection is live',
+     "smtpedge takes a send's `SmtpOutcome` from its dialer from the connection's start until 15 min after its "
+     'end.'),
+    (641, 'Edge readers on a failed first read',
+     "api's removal owes an edge device's `rev/` object by its device spec; CreateContract's window is "
+     'accepted.'),
+]
+for _n, _note in [
+        (428, ' Followed by @@OD:638@@: a `sidecarctl` command draws the bearer.'),
+        (495, " Followed by @@OD:639@@: mxedge's role only reads and inserts its records, its probe results going "
+              'to api.'),
+        (622, " Followed by @@OD:641@@: api's edge `rev/` effect closes on such a read too."),
+        (624, " Followed by @@OD:640@@: the edge takes an outcome while its connection is live."),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 642))
+DATES.update({638: '2026-11-19', 639: '2026-11-19', 640: '2026-11-19', 641: '2026-11-19'})
+_D637 = "(636); and a schedule's real-time bound on a barrier wait (637). "
+assert DECISIONS_INTRO.count(_D637) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D637, _D637 + "A fourth sweep, later on 2026-11-19, numbers that day's last answers: an internal bearer's "
+    "keygen (638), following @@OD:428@@, the direct-MX prober's results through api (639), following @@OD:495@@, "
+    "an outcome taken while its connection is live (640), following @@OD:624@@, and the edge readers on a "
+    "failed first read of sidecar.yml (641), following @@OD:622@@. ")
+INDEX += [
+    (642, "An eraser's history walk over `EvsRepo`",
+     'A walk ending at a creation evs answered nothing below is whole; a retained version reads by its sealed '
+     "hash, a destroyed key's as unreadable."),
+    (643, "A held drop's table entry",
+     "A held drop's entry stays until its deletions finish, outside the bound's count, unlisted when its done "
+     "twin's would be."),
+    (644, "A Team scope's own mailcfg, owner-bound",
+     "It follows the owner-bound rules, out of the admins' reach; a config writer's while the network's stands is "
+     "its scope's."),
+    (645, "A card's return after a removal",
+     "A card's first write after another signer removed its path raises every item's version, so its runs are "
+     'searchable again.'),
+    (646, "T3's admin-info reread after a clock move",
+     "A T3 Net's reread of its file clusters' admin info after an Advance holds every later request until it has "
+     'finished.'),
+]
+for _n, _note in [
+        (184, " Followed by @@OD:643@@: a held drop's entry stays until its deletions finish."),
+        (380, " Followed by @@OD:642@@: an eraser takes a walk ending at such a creation as whole."),
+        (631, " Extended by @@OD:644@@: a scope's mailcfg is owner-bound, and an AdminSet member's scope gets one."),
+        (636, " Followed by @@OD:645@@: the card's return raises its items' versions."),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 647))
+DATES.update({642: '2026-11-19', 643: '2026-11-19', 644: '2026-11-19', 645: '2026-11-19', 646: '2026-11-19'})
+_D641 = ("an outcome taken while its connection is live (640), following @@OD:624@@, and the edge readers on a "
+         "failed first read of sidecar.yml (641), following @@OD:622@@. ")
+assert DECISIONS_INTRO.count(_D641) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D641, "an outcome taken while its connection is live (640), following @@OD:624@@, and the edge readers on a "
+    "failed first read of sidecar.yml (641), following @@OD:622@@; an eraser's history walk (642), following "
+    "@@OD:380@@, and a held drop's table entry (643), following @@OD:184@@; a Team scope's own mailcfg (644), "
+    "extending @@OD:631@@, and a card's return after a removal (645), following @@OD:636@@; and T3's reread of "
+    "admin info after a clock move (646). ")
