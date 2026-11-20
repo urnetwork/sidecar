@@ -186,7 +186,11 @@ type RecordStreamErase struct {
 	ErasureId Id
 	// This ERASE ends the erasure: every key of every representation it names is gone with it.
 	Complete bool
-	Keys     []*RecordSlotKey
+	// A completion ERASE (QD-1132, QD-1137; evs_erase_completion.go): Keys name only keys an earlier ERASE of the
+	// erasure destroyed, and Complete is set; it destroys nothing, and evs takes it where the newest earlier ERASE
+	// naming each key is no completion, answering NOTHING_TO_ERASE otherwise.
+	Completion bool
+	Keys       []*RecordSlotKey
 	// §11.12's note of what the keys covered, the caller's bytes of the ERASE's erasure note after its erasure id and
 	// complete byte, which the binding seals under the eraser's generation and only readers open; opaque here.
 	SealedNote []byte

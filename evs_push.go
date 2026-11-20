@@ -268,6 +268,10 @@ func (self *EvsRepo) buildPush(ctx context.Context, sealed *EvsSealedWrite, push
 		}
 		format2 = true
 	}
+	if plan.Flags&evsFormat2PushFlags != 0 {
+		// a format-2 flag the plan states, as a completion ERASE's COMPLETION (QD-1137)
+		format2 = true
+	}
 	builder := NewEvsStatementBuilder(self.client.args.Sign)
 	var built *EvsBuiltPush
 	if format2 {
