@@ -213,10 +213,22 @@ type mailConfigName struct {
 }
 
 // The name of an addr/ record: address must be one of zone's own, spelled as MailRecipient.Address spells it, an
-// admin's only as admin@. False for anything else.
+// admin's only as admin@, or, in a network's own mailcfg and never a scope's, a custom domain's bounce, which strict
+// mode's envelope stands at (ParseMailCustomBounceRecipient; QD-1129). False for anything else.
 func mailConfigAddressName(zone MailZone, address string) (*mailConfigName, bool) {
 	recipient, err := ParseMailRecipient(zone.Root, address)
-	if err != nil || recipient.Zone != zone || recipient.Address() != address {
+	if err != nil {
+		custom, customErr := ParseMailCustomBounceRecipient(zone.Root, address)
+		if customErr != nil || zone.Scope != "" || custom.Address() != address {
+			return nil, false
+		}
+		path, err := MailAddressPath(address)
+		if err != nil {
+			return nil, false
+		}
+		return &mailConfigName{key: address, alias: custom.LocalPart, path: path}, true
+	}
+	if recipient.Zone != zone || recipient.Address() != address {
 		return nil, false
 	}
 	switch recipient.Kind {
@@ -718,10 +730,20 @@ func (self *MailConfig) entriesWithLock(name *mailConfigName) map[string]*mailCo
 }
 
 // The table name a recipient's mail is looked up by, false for one that is no recipient of this mailcfg: another
-// root, network or scope, or a label the network no longer holds. A reverse alias is looked up by its burner's label.
+// root, network or scope, or a label the network no longer holds. A reverse alias is looked up by its burner's label,
+// and a custom domain's bounce by its address, in a network's own mailcfg alone.
 func (self *MailConfig) recipientName(recipient MailRecipient) (*mailConfigName, bool) {
 	zone, row, err := self.zone()
-	if err != nil || recipient.Zone.Root != zone.Root || recipient.Zone.Scope != zone.Scope || !recipient.Zone.OfNetwork(row) {
+	if err != nil || recipient.Zone.Root != zone.Root {
+		return nil, false
+	}
+	if recipient.CustomDomain != "" {
+		if recipient.Kind != MailAddressKindBounce || zone.Scope != "" {
+			return nil, false
+		}
+		return mailConfigAddressName(zone, recipient.Address())
+	}
+	if recipient.Zone.Scope != zone.Scope || !recipient.Zone.OfNetwork(row) {
 		return nil, false
 	}
 	spelled := recipient

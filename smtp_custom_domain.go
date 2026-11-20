@@ -11,9 +11,12 @@
 //	strict    strict mode (§15.4) moves a custom domain's envelope to b.<domain>, with the customer's MX and SPF
 //	          include: a verified domain at or above an active strict-mode MX host the network maps (QD-1129). The
 //	          edge's feed names the set (smtpedgeservice.SmtpGateFacts.StrictDomains) and the sender reads the same
-//	          from GET /mail/status, since an envelope the edge does not expect fails its part and cuts the
-//	          connection; until MAIL's bounce address follows it (mail_bounce.go), the feed names none and both ends
-//	          keep b.<net>.<root>
+//	          from GET /mail/status (MailNetworkStatus.StrictDomains), both through the server's one read of it,
+//	          since an envelope the edge does not expect fails its part and cuts the connection. Both ends then pick
+//	          a From's envelope by SmtpStrictCustomDomain, the edge's gate (gate_custom_domain.go) and MAIL's bounce
+//	          address (mail_bounce.go) alike, and the sender asks again at each connection (SmtpSenderArgs.Envelope),
+//	          so a strict-mode MX host mapped or unmapped after a message was queued moves its envelope with the
+//	          edge's. Mapping the MX host moves the envelope whether or not mail.strict is signed yet
 //
 // A custom domain's DKIM selectors are SmtpDkimKeys' as any domain's: d= is the header From's domain, which Z5 holds
 // literally, so a custom-domain send signs under that domain or fails, and its selectors go through POST
@@ -41,4 +44,27 @@ func SmtpEnvelopeDomain(networkDomain string, strictCustomDomain string) string 
 		domain = strictCustomDomain
 	}
 	return smtpEnvelopeLabel + "." + strings.ToLower(strings.TrimSuffix(domain, "."))
+}
+
+// The custom domain in strict mode whose b. a header From in headerFromDomain sends with, under strictDomains, the
+// network's set as the edge's feed and GET /mail/status name it (see the file header's strict row): headerFromDomain
+// itself where the set names it, case and a final dot folded, and it lies outside root; "" otherwise. So a From in
+// the network's own zones or a burner's, a custom domain the set does not name, and a subdomain of a strict domain
+// that the set does not name itself all keep b.<net>.<root>. The edge's gate and MAIL's bounce address both pick by
+// this, so on one set the two never disagree. Lowercase, with no final dot.
+func SmtpStrictCustomDomain(headerFromDomain string, strictDomains []string, root string) string {
+	canonical := func(name string) string {
+		return strings.TrimSuffix(strings.ToLower(name), ".")
+	}
+	fromDomain := canonical(headerFromDomain)
+	root = canonical(root)
+	if fromDomain == "" || fromDomain == root || strings.HasSuffix(fromDomain, "."+root) {
+		return ""
+	}
+	for _, strictDomain := range strictDomains {
+		if canonical(strictDomain) == fromDomain {
+			return fromDomain
+		}
+	}
+	return ""
 }
