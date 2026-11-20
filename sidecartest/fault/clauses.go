@@ -120,4 +120,11 @@ var registeredClauses = []*ClauseRegistration{
 	RegisterClause("FS-95", "", "list missing a version", Fs95ListMismatch(false), ClauseOnT3("./evshost")),
 	RegisterClause("FS-95", "", "list adding a version", Fs95ListMismatch(true), ClauseOnT3("./evshost")),
 
+	// EVSB-M2-05's runs of the governor alone, beside the registered steady run (fs116.go)
+	RegisterClause("FS-116", "", "paused p2 drains the wallet without stalling pushes", Fs116PausedP2DrainsTheWalletWithoutStallingPushes),
+	RegisterClause("FS-116", "", "killed processes pay deferred work once", Fs116KilledProcessesPayDeferredWorkOnce),
+	RegisterClause("FS-116", "", "lost state restarts the wallet at zero", Fs116LostStateRestartsTheWalletAtZero),
+	RegisterClause("FS-116", "", "unfunded backlog takes only its share", Fs116UnfundedBacklogTakesOnlyItsShare),
+	RegisterClause("FS-116", "", "low prices converge and hold the bound", Fs116LowPricesConvergeAndHoldTheBound),
+	RegisterClause("FS-116", "", "allowance ramps back after a storm", Fs116AllowanceRampsBackAfterAStorm),
 }
