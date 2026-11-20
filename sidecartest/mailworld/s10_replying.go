@@ -119,20 +119,20 @@ func s10ReplyingRun(t testing.TB, settings *S10ReplyingSettings) func(ctx contex
 		}
 		dkim := &s10DkimRecorder{S10Dkim: tierDkim}
 
-		world := NewM9World(t, run.Net, &M9WorldSettings{
-			M8: &M8WorldSettings{
-				Admission: admission,
-				Root:      strings.TrimSuffix(harness.Root(), "."),
-				Label:     served.Label,
-				Stores: func(service string) *sidecar.ServiceHost {
-					if service == MailWorldServiceWorld {
-						return run.Net.Host()
-					}
-					return run.Host(service)
-				},
+		worldSettings := DefaultM9WorldSettings()
+		worldSettings.M8 = &M8WorldSettings{
+			Admission: admission,
+			Root:      strings.TrimSuffix(harness.Root(), "."),
+			Label:     served.Label,
+			Stores: func(service string) *sidecar.ServiceHost {
+				if service == MailWorldServiceWorld {
+					return run.Net.Host()
+				}
+				return run.Host(service)
 			},
-			Dkim: dkim,
-		})
+		}
+		worldSettings.Dkim = dkim
+		world := NewM9World(t, run.Net, worldSettings)
 		zoneName := world.M8.Zone()
 		mxHost := world.M8.Mail.Settings().MxHost()
 		zoneAt := func(label string) (*s10Zone, error) {
@@ -393,7 +393,7 @@ func s10KeyAnswered(ctx context.Context, harness *sidecartest.DnsHarness, owner 
 // A DKIM-Signature field's tag, as d=<domain> or s=<selector>.
 var s10DkimTagPattern = regexp.MustCompile(`(?:^|;)\s*([a-z]+)=([^;]*)`)
 
-// Whether message is from as the MX took it, holding bodyCanary, its first DKIM-Signature d=domain s=selector.
+// Whether message is from as the MX took it, holding bodyCanary, every DKIM-Signature it carries d=domain s=selector.
 func s10SignedBy(message []byte, from string, domain string, selector string, bodyCanary string) error {
 	text := string(message)
 	if !strings.Contains(text, bodyCanary) {
@@ -403,11 +403,12 @@ func s10SignedBy(message []byte, from string, domain string, selector string, bo
 	// unfold, so a field reads as one line
 	header = strings.NewReplacer("\r\n ", " ", "\r\n\t", " ").Replace(header)
 	fromFound := false
+	signatureCount := 0
 	for _, field := range strings.Split(header, "\r\n") {
 		name, value, _ := strings.Cut(field, ":")
 		switch strings.ToLower(strings.TrimSpace(name)) {
 		case "from":
-			fromFound = strings.Contains(value, from)
+			fromFound = fromFound || strings.Contains(value, from)
 		case "dkim-signature":
 			tags := map[string]string{}
 			for _, match := range s10DkimTagPattern.FindAllStringSubmatch(value, -1) {
@@ -416,13 +417,16 @@ func s10SignedBy(message []byte, from string, domain string, selector string, bo
 			if tags["d"] != domain || tags["s"] != selector {
 				return fmt.Errorf("signed d=%s s=%s, not d=%s s=%s", tags["d"], tags["s"], domain, selector)
 			}
-			if !fromFound {
-				return errors.New("no From before the signature names the burner")
-			}
-			return nil
+			signatureCount += 1
 		}
 	}
-	return errors.New("no DKIM-Signature")
+	switch {
+	case !fromFound:
+		return errors.New("no From names the burner")
+	case signatureCount == 0:
+		return errors.New("no DKIM-Signature")
+	}
+	return nil
 }
 
 // Every call the tier's server half took, kept for the flow to read its selectors.
