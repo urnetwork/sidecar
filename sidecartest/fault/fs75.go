@@ -17,8 +17,8 @@
 //
 // Its checks after every step are what its reader's steps make by hand, each read as they read the index: FI-18's
 // documents clause, each note a writer committed live in the reader's view through the kill, the lapse and the
-// roll-up (fs74Written); and FI-20's one roll-up and leaving clauses (I-EVS-12): the writers' bucket stands while all is
-// rolled short of it and is gone once all is rolled through it, so it leaves only in the push that commits all, and
+// roll-up (fs74Written); and FI-20's one roll-up and leaving clauses (I-EVS-12): the writers' bucket stands while all
+// is rolled short of it and is gone once all is rolled through it, so it leaves only in the push that commits all, and
 // all's manifest, once a roll-up wrote it, is never written again, no rerun or second runner committing another
 // (fs75RollUp). Nothing here erases, so FI-19, the row's third invariant, is the search world's (fs75_test.go).
 

@@ -132,7 +132,7 @@ func Fs88SearchAgents(net *Net) *Schedule {
 	cleanRun, taintedRun, quietRun := sidecar.NewId(), sidecar.NewId(), sidecar.NewId()
 	// every text the directory's files must not hold
 	absent := append([]string{fs88TitleCanary, fs88SearchQuietTitle}, fs88Canaries...)
-	// every search_agents call the reader's agent made, each held to FI-21's withhold and taint clauses after every step
+	// every search_agents call the reader's agent made, held to FI-21's withhold and taint clauses after every step
 	calls := []*fs88SearchCall{}
 	searchAgents := func(ctx context.Context, search *sidecar.SearchTestEvsDevice, task string, include bool, taint *dirEvsSearchTaint) (*sidecar.SearchAgentsResult, error) {
 		asked := taint.count
