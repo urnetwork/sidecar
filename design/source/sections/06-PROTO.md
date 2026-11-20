@@ -297,7 +297,7 @@ window   a receiver commits StreamMinWindowByteCount (64 KiB above half of GOMEM
 ```
 
 - **Errors.** Ack errors reset with TRANSFER_FAILED; offsets leave room for a later resume.
-- **Keepalive.** While streams are open, 15 s without inbound traffic sends a Ping, and 45 s resets the peer's streams with PEER_TIMEOUT, before connect's 60 s exit.
+- **Keepalive.** While streams are open, 15 s without inbound traffic sends a Ping, and 45 s resets the peer's streams with PEER_TIMEOUT, before connect's 60 s exit. The same loop rereads, at least every 15 s while streams run, each sidecar peer's admission in this side's state, and this side's own, since a sidecar not itself admitted gets no peer (§5.6): a peer the state has revoked, parked or let expire has its streams reset with REVOKED, and a side the state revokes resets its own sidecar streams with REVOKED, each end at its own wake on its own view of the state, so either may reset first; an edge, which carries no admission, is not reread.
 - **Shared sequence.** A lost pack stalls a peer's streams until resent (300 ms floor; connect/transfer.go:883-923), but ~4 KB carriers already ride a reliable carrier whose blocking dominates (connect/transport_h3_datagram.go:22-41). A pair's 2 MiB resend queue (connect/transfer.go:961) allows about 20 MiB/s at 100 ms RTT (inference), so bulk evs data uses HTTPS.
 
 ### 6.8 Server push (X8)

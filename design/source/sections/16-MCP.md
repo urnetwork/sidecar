@@ -792,8 +792,10 @@ values     CanonicalAction.kind, ApprovalRequest.risk and ApprovalDecision.decis
            AclAudience and AclAppMode, a publish's action always writing the resolved non-zero value
            (members 1, http 1) and a gate mapping a request's 0 to 1 before it compares; an approver,
            spender or gate refuses 0 or an unknown value of any of these, the kinds row's "kept" covering
-           RecordHeader.kind only; kinds 5, 6, 7 and 16 have no O tool and no row in the kind table, so
-           NewCanonicalAction refuses each until its owner names its fields
+           RecordHeader.kind only; kinds 6, 7 and 16 have no O tool and no row in the kind table, so
+           NewCanonicalAction refuses each until its owner names its fields; kind 5, egress_change, has its row,
+           its subject, egress_mode 39, exits in grant_dst and require_default_egress 41, and a builder, but no O
+           tool, since only a person's confirmed ur bridge egress files it (§17.11; owner decisions 462, 607, 614)
 server     a CanonicalAction bound for a GrantActivate or a gate sets only kind, version, scope and the fields
            that path's gate sees: a grant 8, 10, 11, 28 and 29, version 4's also 38, sealed, and a share's
            40, a publish's also 5, 6, 7, 33 and 35; a version-3 access_request 8, 10, 11, 14, 26, 29 and 38;

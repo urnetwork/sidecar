@@ -4880,7 +4880,7 @@ window   a receiver commits StreamMinWindowByteCount (64 KiB above half of GOMEM
 ```
 
 - **Errors.** Ack errors reset with TRANSFER_FAILED; offsets leave room for a later resume.
-- **Keepalive.** While streams are open, 15 s without inbound traffic sends a Ping, and 45 s resets the peer's streams with PEER_TIMEOUT, before connect's 60 s exit.
+- **Keepalive.** While streams are open, 15 s without inbound traffic sends a Ping, and 45 s resets the peer's streams with PEER_TIMEOUT, before connect's 60 s exit. The same loop rereads, at least every 15 s while streams run, each sidecar peer's admission in this side's state, and this side's own, since a sidecar not itself admitted gets no peer (§5.6): a peer the state has revoked, parked or let expire has its streams reset with REVOKED, and a side the state revokes resets its own sidecar streams with REVOKED, each end at its own wake on its own view of the state, so either may reset first; an edge, which carries no admission, is not reread.
 - **Shared sequence.** A lost pack stalls a peer's streams until resent (300 ms floor; connect/transfer.go:883-923), but ~4 KB carriers already ride a reliable carrier whose blocking dominates (connect/transport_h3_datagram.go:22-41). A pair's 2 MiB resend queue (connect/transfer.go:961) allows about 20 MiB/s at 100 ms RTT (inference), so bulk evs data uses HTTPS.
 
 ### 6.8 Server push (X8)
@@ -16115,8 +16115,10 @@ values     CanonicalAction.kind, ApprovalRequest.risk and ApprovalDecision.decis
            AclAudience and AclAppMode, a publish's action always writing the resolved non-zero value
            (members 1, http 1) and a gate mapping a request's 0 to 1 before it compares; an approver,
            spender or gate refuses 0 or an unknown value of any of these, the kinds row's "kept" covering
-           RecordHeader.kind only; kinds 5, 6, 7 and 16 have no O tool and no row in the kind table, so
-           NewCanonicalAction refuses each until its owner names its fields
+           RecordHeader.kind only; kinds 6, 7 and 16 have no O tool and no row in the kind table, so
+           NewCanonicalAction refuses each until its owner names its fields; kind 5, egress_change, has its row,
+           its subject, egress_mode 39, exits in grant_dst and require_default_egress 41, and a builder, but no O
+           tool, since only a person's confirmed ur bridge egress files it (§17.11; owner decisions 462, 607, 614)
 server     a CanonicalAction bound for a GrantActivate or a gate sets only kind, version, scope and the fields
            that path's gate sees: a grant 8, 10, 11, 28 and 29, version 4's also 38, sealed, and a share's
            40, a publish's also 5, 6, 7, 33 and 35; a version-3 access_request 8, 10, 11, 14, 26, 29 and 38;
@@ -20593,7 +20595,7 @@ sidecar:
                              # and the hdd run's measured capacity, published in {nvb_<cluster>}
 ```
 
-A network is in when listed or when hash(network_id) mod 100 < `percent`, hash(network_id) being the first 8 bytes of SHA-256 over the id's 16 bytes, big-endian, in one function every gate shares, the format2 gate's included. No key enforces §7.4's stage 1 or D-TEAM-14, which refuse in code from M1 whatever the file holds, so it carries no `p0_enforce` ([owner decision 510](#od-510)). A disabled service stays ready and answers 503 with Retry-After; `writes: false` is the incident switch. Services reread the file every 60 s; sidecars learn their set from §6's `core` topic. A process whose first read fails, the file there but unreadable or unparsable with no earlier read to keep, marks that read until its first good one: taskworker's idle marking holds off (§13.6; [owner decision 622](#od-622)), api's removal owes each removed edge device's `rev/` object by its device spec (§9.8; [owner decision 641](#od-641)), and a connect resident settles an edge end's contract by the ordinary rules, an accepted gap (§6.10.1).
+A network is in when listed or when hash(network_id) mod 100 < `percent`, hash(network_id) being the first 8 bytes of SHA-256 over the id's 16 bytes, big-endian, in one function every gate shares, the format2 gate's included. No key enforces §7.4's stage 1 or D-TEAM-14, which refuse in code from M1 whatever the file holds, so it carries no `p0_enforce` ([owner decision 510](#od-510)). A disabled service stays ready and answers 503 with Retry-After; `writes: false` is the incident switch. Services reread the file every 60 s; sidecars learn their set from §6's `core` topic. A process whose first read fails, the file there but unreadable or unparsable with no earlier read to keep, marks that read until its first good one: taskworker's idle marking holds off (§13.6; [owner decision 622](#od-622)), api's removal owes the `rev/` object of each removed client on an edge device, found by its device spec (§9.8; [owner decision 641](#od-641)), and a connect resident settles an edge end's contract by the ordinary rules, an accepted gap (§6.10.1).
 
 **Classes (D-OPS-11).** Staged with `--only-older` (build/all/deploy-rollout.zsh:33): evs, gkm, sockets, dns (on Q-OPS-5's conditions), tlsedge, mxedge, mxedge-platform; single pass (:24): smtpedge, and the `dnsedge` class's two services one host at a time, `dnsedge-1` first, then `dnsedge-2` once Q-OPS-5's stop rule holds (the canary signature clean, the NS serials equal): server/cli/dnsedge builds one image, which build/all/run.sh imports under each name, as it does for manager to app (run.sh:3554), and warp's core does not change. Classes land at once, and each service joins `staged_services` only in the milestone its block lands, since `warpctl deploy` panics on a service with no blocks; the staged list (:87) becomes `mmm lb taskworker api connect web app mcp dns gkm evs sockets tlsedge mxedge mxedge-platform`.
 
