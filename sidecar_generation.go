@@ -262,7 +262,8 @@ func (self *Sidecar) startGeneration(args *sidecarGenerationArgs) {
 
 // §5.9's Failed for generation's start on the subprotocol store (owner decision 616): Offline at generation with the
 // store's reason, so Status and `ur status` say why no client runs, and one refused, raised only as the sidecar enters
-// that, so a retry that fails again raises nothing. It wakes nothing: the next wake retries. Runs on the run loop.
+// that, so a retry that fails again raises nothing. It wakes nothing: the next wake retries. Runs on the run loop, and
+// on the sidecar_http leg's poll loop for a poll client it starts later in a generation (sidecar_generation_http.go).
 func (self *Sidecar) subprotocolStoreFailed(generation int64) {
 	entered := self.applyTransition(sidecarTransition{
 		to:         SidecarStateOffline,

@@ -6,12 +6,12 @@
 // The rows are catalog.yml's M2-out cases, each run by convention (gate.go), whose T3 entry carries
 // sidecar_localstack (QD-1085), but where its T3 tests run in server's evshost, which drives the evs block on the
 // local stack's MinIO: FS-5's, which drives stock git through evsgit's world and has no builder (owner decision 548,
-// QD-995), and FS-1's, FS-2's, FS-3's, FS-4's, FS-6's, FS-7's, FS-12's, FS-57's, FS-58's, FS-62's, FS-63's and
-// FS-113's, each the convention's TestFs<n>OnT3 run through sidecart3.RunRow, and FS-10's twin by its real name,
-// TestFs10TwinOnT3 (QD-1081). A case run on both tiers keeps its convention T2 test, and no test moves. Each case's
+// QD-995), and FS-1's, FS-2's, FS-3's, FS-4's, FS-6's, FS-7's, FS-12's, FS-53's, FS-57's, FS-58's, FS-60's, FS-62's,
+// FS-63's and FS-113's, each the convention's TestFs<n>OnT3 run through sidecart3.RunRow, and FS-10's twin by its real
+// name, TestFs10TwinOnT3 (QD-1081). A case run on both tiers keeps its convention T2 test, and no test moves. Each case's
 // registered clauses run with it by the convention (QD-1084), on T3 where each clause names its package: FS-1's, FS-4's,
-// FS-6's, FS-10's rollback twin, FS-57's, FS-58's and FS-62's lease holder in evshost, FS-6's --now shred under a hold in
-// model, and FS-62's ACL gate in sidecart3.
+// FS-6's, FS-10's rollback twin, FS-57's, FS-58's, FS-60's and FS-62's lease holder in evshost, FS-6's --now shred under a
+// hold in model, and FS-62's ACL gate in sidecart3.
 //
 // If a named test is renamed or its tags drift, its row reads missing, never pass, and server's
 // TestGateSweepsNameServerTestsDeclaredUnderTheirTags fails first. Every other case keeps the convention, so a case
@@ -90,8 +90,10 @@ func gateM2Cases(catalog *Catalog) map[string][]*GateTest {
 		{rowId: "FS-7", packagePath: "./evshost"},
 		{rowId: "FS-10", packagePath: "./evshost", names: []string{"TestFs10TwinOnT3"}},
 		{rowId: "FS-12", packagePath: "./evshost"},
+		{rowId: "FS-53", packagePath: "./evshost"},
 		{rowId: "FS-57", packagePath: "./evshost"},
 		{rowId: "FS-58", packagePath: "./evshost"},
+		{rowId: "FS-60", packagePath: "./evshost"},
 		{rowId: "FS-62", packagePath: "./evshost"},
 		{rowId: "FS-63", packagePath: "./evshost"},
 		{rowId: "FS-113", packagePath: "./evshost"},
