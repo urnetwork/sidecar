@@ -23,8 +23,9 @@
 //	            closed in any schedule that names it (FI-13's, QUOTA-M2-13's), so the report names it instead
 //	gate list   TestM10Format2SweepGateList: what M10's Gn-out runs for each case, where each of its tests is
 //	            declared in sidecar and in server's checkout beside this one, beside what gates.yml names today, and
-//	            the gate's items for format 2 (§22.10's right column) with their tests. A test the list names that
-//	            nothing declares fails here, and a registered case whose conventional test nothing declares too
+//	            the gate's items for format 2 (§22.10's right column) with their tests. A sidecar test the list
+//	            names that nothing declares fails here; a server one is reported, so a rename in server never fails
+//	            sidecar's tip
 //
 // Which case is registered is read from the registry when the sweep runs, so a schedule registered later
 // (ABUSE-M10-01's hold cases of FS-66, FS-69 and FS-92, say) turns its case from missing to run with no edit here, and
@@ -877,11 +878,13 @@ func m10Format2GateNames(gateRow *GateRow, repo string, place string, name strin
 
 // The gate list for M10's Gn-out (EVS2-M10-35's provides): for each case of the sweep, the tests M10's exit runs where
 // they are declared, sidecar's T2 test by the convention and each T3 test wherever server declares it under T3's
-// tags, beside what gates.yml's M10 rows name today; then format 2's items with their tests. A T3 test the sweep names
-// that is not where it says, and an item's test that is not declared, fail here: the list is this task's to keep
-// true. A case that reads missing at the gate, or whose T3 tests run outside the convention's ./sidecart3 or under
-// other names, is listed as such and fails nothing here: the gate's own sweep, gate_m10_out.go, is TEST-M10-05's to
-// extend (QD-1081), and it names such tests where they run from this list.
+// tags, beside what gates.yml's M10 rows name today; then format 2's items with their tests. A sidecar test an item
+// names that is not declared fails here: the list is this task's to keep true. A server test the list names that is
+// not where it says is reported, never failed, so a rename in server cannot break sidecar's tip: server's own
+// TestGateSweepsNameServerTestsDeclaredUnderTheirTags holds each test a gate sweep names once it is there. A case
+// that reads missing at the gate, or whose T3 tests run outside the convention's ./sidecart3 or under other names, is
+// listed as such and fails nothing here: the gate's own sweep, gate_m10_out.go, is TEST-M10-05's to extend (QD-1081),
+// and it names such tests where they run from this list.
 func TestM10Format2SweepGateList(t *testing.T) {
 	catalog := DefaultCatalog()
 	sidecarDirectory, err := filepath.Abs(filepath.Join("..", ".."))
@@ -895,7 +898,7 @@ func TestM10Format2SweepGateList(t *testing.T) {
 	}
 	gateRows := GateRows(catalog, m10Format2ToolGate)
 	var list strings.Builder
-	unnamedCount, missingCount := 0, 0
+	unnamedCount, missingCount, undeclaredCount := 0, 0, 0
 	for _, sweepCase := range m10Format2SweepCases() {
 		testCase := sweepCase.catalogCase(catalog)
 		if testCase == nil {
@@ -950,7 +953,8 @@ func TestM10Format2SweepGateList(t *testing.T) {
 					for _, name := range test.Names {
 						places := m10Format2ServerPlaces(serverDirectory, namePackages, name, test.Tags)
 						if 0 < len(sweepCase.t3Tests) && !slices.Contains(places, test.Package) {
-							t.Errorf("%s's T3 test %s is not declared in server's %s under %s (declared in %v)", testCase, name, test.Package, test.Tags, places)
+							undeclaredCount += 1
+							fmt.Fprintf(&list, "  T3: NOT DECLARED where the list says: server's %s declares no %s under %s (declared in %v)\n", test.Package, name, test.Tags, places)
 							continue
 						}
 						if len(places) == 0 {
@@ -995,8 +999,16 @@ func TestM10Format2SweepGateList(t *testing.T) {
 				fmt.Fprintf(&list, "    %s, unchecked: no server checkout beside this one\n", m10Format2TestLine(test))
 				continue
 			}
-			for _, err := range GateTestDeclared(directory, test) {
-				t.Errorf("format 2's item %q: %v", item.item, err)
+			errs := GateTestDeclared(directory, test)
+			// a sidecar test is this repo's to keep where the list says; a server one is the T3 half's and server's own
+			// gate test's, so a rename in server never fails sidecar's tip, and is reported here
+			for _, err := range errs {
+				if test.Repo == "sidecar" {
+					t.Errorf("format 2's item %q: %v", item.item, err)
+				} else {
+					undeclaredCount += 1
+					fmt.Fprintf(&list, "    NOT DECLARED where the list says: %v\n", err)
+				}
 			}
 			fmt.Fprintf(&list, "    %s\n", m10Format2TestLine(test))
 		}
@@ -1007,6 +1019,6 @@ func TestM10Format2SweepGateList(t *testing.T) {
 			fmt.Fprintf(&list, "    external: %s\n", item.external)
 		}
 	}
-	t.Logf("M10's Gn-out for format 2's rows (EVS2-M10-35's gate list; gate_m10_out.go is TEST-M10-05's, QD-1081): %d T3 tests run where the gate does not name them, so it reads them missing until its sweep does; %d tests missing\n%s",
-		unnamedCount, missingCount, list.String())
+	t.Logf("M10's Gn-out for format 2's rows (EVS2-M10-35's gate list; gate_m10_out.go is TEST-M10-05's, QD-1081): %d T3 tests run where the gate does not name them, so it reads them missing until its sweep does; %d tests missing; %d server tests not declared where the list says\n%s",
+		unnamedCount, missingCount, undeclaredCount, list.String())
 }
