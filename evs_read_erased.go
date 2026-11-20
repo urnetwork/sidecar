@@ -23,7 +23,7 @@
 //	          costs none past the first, unless the list in hand is older than its slot
 //
 // The forwarding role's legs register no judge: they read no erasure ref, so there every key gone from its slot is
-// one evs withheld, as it was (evs_reconstruct.go's newEvsErasureJudge seam).
+// one evs withheld, as it was (evs_reconstruct.go's newEvsErasureJudge, a deliberate seam off the legs, QD-1145).
 //
 // On every leg but the ios_extension legs. Not safe for concurrent use: one per read, as the read's keys are.
 

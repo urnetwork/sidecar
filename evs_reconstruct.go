@@ -80,7 +80,8 @@ type evsErasureJudge interface {
 }
 
 // Makes a read's judge: evs_read_erased.go's, which its init registers. nil on the forwarding role's legs, which read
-// no erasure ref, so that there every key gone from its slot is one evs withheld, as before. Written only by init.
+// no erasure ref, so that there every key gone from its slot is one evs withheld, as before: a deliberate seam
+// (QD-1145; check/legs_closure_test.go's iosExtensionLegSeams). Written only by init.
 var newEvsErasureJudge func() evsErasureJudge
 
 // The read's judge of keys gone from their slots, made at the first one: nil on the forwarding role's legs.

@@ -555,8 +555,8 @@ func directoryEvsReadsSlot(slotId sidecar.Id) func(request *http.Request, body [
 	}
 }
 
-// The slot keys the n-th entry of writer's stream keeps its chain in, as an ERASE of it names them (EvsRepo.SlotKeysOf),
-// read by the directory's admin.
+// The slot keys the n-th entry of writer's stream keeps its chain in, as an ERASE of it names them
+// (EvsRepo.SlotKeysOf), read by the directory's admin.
 func (self *directoryEvsWorld) entrySlotKeys(t *testing.T, writer sidecar.Id, n uint64) []*sidecar.EvsErasedKey {
 	t.Helper()
 	path, err := sidecar.RecordStreamPath(n)
