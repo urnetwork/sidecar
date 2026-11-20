@@ -35,10 +35,10 @@ func TestFs92DeleteInFlight(t *testing.T) {
 	RunClause(t, "FS-92", "a delete in flight", Fs92DeleteInFlight, nil)
 }
 
-// (a) with a 90-day §2703(f) order: the drop table evicts the held drop's entry 30 days after it moved to held, and
-// its deletions never resume. Run once QD-1113's change to the drop table lands.
+// (a) with a 90-day §2703(f) order, which outlasts the 30 days the drop table keeps an ended drop's entry: the held
+// entry stays, unlisted past them as its twin's would be, and the job deletes what it held once the order ends (owner
+// decision 643; QD-1113).
 func TestFs92HoldOutlastsTheDropTable(t *testing.T) {
-	t.Skip("waits on QD-1113's change to evsservice's drop table (question abuse-m10-01-held-drop-outlives-its-table-entry): it evicts a held drop's entry 30 days after the drop moved to held")
 	RunClause(t, "FS-92", "a hold that outlasts the drop table", Fs92HoldOutlastsTheDropTable, nil)
 }
 

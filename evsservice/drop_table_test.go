@@ -381,7 +381,154 @@ func TestDropTableAdmitsDropsWithinItsLine(t *testing.T) {
 	}
 }
 
-// A held drop reads done, its held bytes as freed, so no listing shows a hold (owner decision 184).
+// The labels of state's entries, in order.
+func dropTestLabels(state *DropTableState) []string {
+	labels := []string{}
+	for _, entry := range state.Drops {
+		labels = append(labels, string(bytes.TrimRight(entry.DropId[:], " ")))
+	}
+	return labels
+}
+
+// Owner decision 643 (QD-1113): a held entry stays past the 30 d an ended entry is kept, since the job resumes its
+// deletions from it however long its hold lasts, and a table holding only such entries wants no write; a done entry
+// of the same day goes. When the job moves a held entry to done it keeps the day it moved to held, so one held over
+// 30 d back goes at that write, and one held inside them stays until they pass, exactly as its done twin would.
+func TestDropTableKeepsAHeldEntryPastItsRetention(t *testing.T) {
+	settings := DefaultDropSettings()
+	now := sidecartest.DefaultClockStart().Add(400 * 24 * time.Hour)
+	place := &protocol.EvsPlace{Minute: 1, Length: 100}
+	entry := func(label string, state DropState, endedAgo time.Duration) *DropTableEntry {
+		return &DropTableEntry{
+			DropId: testId(label), Place: place, State: state, SeenMs: now.Add(-endedAgo - 2*24*time.Hour).UnixMilli(),
+			EndedDay: dropDay(now.Add(-endedAgo)),
+		}
+	}
+	state := &DropTableState{Drops: []*DropTableEntry{
+		entry("held-90", DropStateHeld, 90*24*time.Hour),
+		entry("held-31", DropStateHeld, 31*24*time.Hour),
+		entry("done-31", DropStateDone, 31*24*time.Hour),
+		entry("held-10", DropStateHeld, 10*24*time.Hour),
+	}}
+	if !state.expiring(now, settings) {
+		t.Fatal("the aged done entry wants no write")
+	}
+	if err := state.evict(now, settings); err != nil {
+		t.Fatal(err)
+	}
+	if labels := dropTestLabels(state); !slices.Equal(labels, []string{"held-90", "held-31", "held-10"}) {
+		t.Fatalf("kept %v", labels)
+	}
+	if state.expiring(now, settings) {
+		t.Fatal("aged held entries want a write, which would evict them")
+	}
+	if !state.Drop(testId("held-90")).aged(now, settings) || state.Drop(testId("held-10")).aged(now, settings) {
+		t.Fatal("a held entry's retention does not run from the day it moved to held")
+	}
+
+	// the job's end moves each to done, keeping the day it moved to held
+	heldDay := state.Drop(testId("held-10")).EndedDay
+	for _, held := range slices.Clone(state.Drops) {
+		state.setState(held, DropStateDone, dropDay(now))
+	}
+	if state.Drop(testId("held-10")).EndedDay != heldDay || state.Drop(testId("held-90")).EndedDay != dropDay(now.Add(-90*24*time.Hour)) {
+		t.Fatal("the move to done stamped another day")
+	}
+	if err := state.evict(now, settings); err != nil {
+		t.Fatal(err)
+	}
+	if labels := dropTestLabels(state); !slices.Equal(labels, []string{"held-10"}) {
+		t.Fatalf("after the move to done kept %v", labels)
+	}
+	// the one held 10 d back goes when its 30 d from that day have passed, not 30 d from its move to done
+	retained := dropDayStart(heldDay).Add(settings.EndedRetention + 24*time.Hour)
+	if err := state.evict(retained.Add(-time.Second), settings); err != nil || len(state.Drops) != 1 {
+		t.Fatalf("a second before its retention ends: %d entries, %v", len(state.Drops), err)
+	}
+	if err := state.evict(retained, settings); err != nil || len(state.Drops) != 0 {
+		t.Fatalf("at its retention's end: %d entries, %v", len(state.Drops), err)
+	}
+}
+
+// Owner decision 643: held entries sit outside the bound's count, so a table they fill past its bound still takes the
+// next DROP, which never fails on them: the bound evicts done entries, oldest first, and never a held one even when
+// it is older, and the table passes TableByteCount by its held entries, which a read takes back. Past
+// TableReadByteCount a write is refused and a read too.
+func TestDropTableBoundLeavesHeldEntriesOut(t *testing.T) {
+	world := newDropTestWorld(t)
+	tight := DefaultDropSettings()
+	tight.TableByteCount = dropTableHeaderByteCount + dropTableTrailerByteCount + 2*dropTableEntryByteCount
+	tight.TableAdmitByteCount = tight.TableByteCount
+	table, err := NewDropTable(world.host.ServiceHost(), world.blobs, tight, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := world.clock.Now()
+	place := &protocol.EvsPlace{Minute: 1, Length: 100}
+	ended := func(label string, state DropState, endedAgo time.Duration) *DropTableEntry {
+		// its DROP seen past the eviction guard, so only its state keeps the bound from taking it
+		return &DropTableEntry{
+			DropId: testId(label), RefId: world.refId, Place: place, State: state, SeenMs: now.Add(-endedAgo - 24*time.Hour).UnixMilli(),
+			EndedDay: dropDay(now.Add(-endedAgo)),
+		}
+	}
+	// four held entries and a newer done one: twice the bound, which counted held entries would have evicted
+	if _, err := table.Update(world.paidCtx, world.cluster, world.repoId, func(state *DropTableState, now time.Time) (bool, error) {
+		state.Drops = append(state.Drops,
+			ended("held-a", DropStateHeld, 5*24*time.Hour), ended("held-b", DropStateHeld, 5*24*time.Hour),
+			ended("held-c", DropStateHeld, 4*24*time.Hour), ended("held-d", DropStateHeld, 4*24*time.Hour),
+			ended("done", DropStateDone, 24*time.Hour),
+		)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("a table of held entries past its bound: %v", err)
+	}
+	read, err := table.Read(world.ctx, world.cluster, world.repoId)
+	if err != nil {
+		t.Fatalf("a read of held entries past the bound: %v", err)
+	}
+	if !read.State.AdmitsDrop(tight) {
+		t.Fatal("held entries kept a DROP out")
+	}
+	for i, label := range []string{"drop-1", "drop-2"} {
+		if err := table.Append(world.paidCtx, world.dropCommit(label, uint64(5+i), now), now.UnixMilli()); err != nil {
+			t.Fatalf("%s beside held entries: %v", label, err)
+		}
+	}
+	read, err = table.Read(world.ctx, world.cluster, world.repoId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if labels := dropTestLabels(read.State); !slices.Equal(labels, []string{"held-a", "held-b", "held-c", "held-d", "drop-1", "drop-2"}) {
+		t.Fatalf("the bound kept %v", labels)
+	}
+	if read.State.boundByteCount() != tight.TableByteCount || read.State.byteCount() != tight.TableByteCount+4*dropTableEntryByteCount {
+		t.Fatalf("a table of %d bytes, %d counted", read.State.byteCount(), read.State.boundByteCount())
+	}
+
+	// a read that takes in fewer held bytes than the table holds refuses it, and a write past them is refused
+	capped := *tight
+	capped.TableHeldByteCount = 3 * dropTableEntryByteCount
+	cappedTable, err := NewDropTable(world.host.ServiceHost(), world.blobs, &capped, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cappedTable.Read(world.ctx, world.cluster, world.repoId); !errors.Is(err, ErrDropTableInvalid) {
+		t.Fatalf("a read past TableReadByteCount: %v", err)
+	}
+	if err := read.State.evict(now, &capped); !errors.Is(err, ErrDropTableFull) {
+		t.Fatalf("a write past TableReadByteCount: %v", err)
+	}
+	// and the count itself still refuses what is not held: a third pending drop past the bound
+	stuck := &DropTableState{Drops: slices.Clone(read.State.Drops)}
+	stuck.Drops = append(stuck.Drops, &DropTableEntry{DropId: testId("drop-3"), Place: place, State: DropStatePending, SeenMs: now.UnixMilli()})
+	if err := stuck.evict(now, tight); !errors.Is(err, ErrDropTableFull) {
+		t.Fatalf("pending drops past the bound beside held entries: %v", err)
+	}
+}
+
+// A held drop reads done, its held bytes as freed, so no listing shows a hold (owner decision 184); it ends as a done
+// one does, but its entry is not evictable, since the job resumes its deletions from it (owner decision 643).
 func TestDropStateHeldReadsDone(t *testing.T) {
 	heldStatus, heldReason := DropStateHeld.Status()
 	doneStatus, doneReason := DropStateDone.Status()
@@ -390,6 +537,9 @@ func TestDropStateHeldReadsDone(t *testing.T) {
 	}
 	if !DropStateHeld.Ended() || DropStateHeld.Void() || !DropStateHeld.Executed() {
 		t.Fatal("a held drop does not end, leave and count as a done one")
+	}
+	if DropStateHeld.Evictable() || !DropStateDone.Evictable() || !DropStateCancelled.Evictable() || DropStatePending.Evictable() {
+		t.Fatal("which ended entries the table may evict")
 	}
 	for _, state := range []DropState{DropStateRefusedLocked, DropStateRefusedMismatch, DropStateRefusedVerify} {
 		if status, reason := state.Status(); status != protocol.EvsDropState_EVS_DROP_REFUSED || reason == 0 || !state.Void() {

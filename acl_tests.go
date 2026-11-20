@@ -9,17 +9,26 @@
 //
 //	src, dst subject   one subject the selector names: user:<email> a new member device of that member, tag:<name> a
 //	                   tagged sidecar carrying it and no other tag, autogroup:<name> a new subject of that class (a
-//	                   member device of a new member of the role, a tagged sidecar, an untagged ephemeral one, an app
-//	                   device, an anonymous visitor), sidecar:<id> and client:<id> the subject itself, network:<net>
-//	                   that network, role: and principal: an app device holding it; group:<name> every member of the
-//	                   group, each as a user, so an accept holds for all of them and a deny for none; as a destination,
-//	                   autogroup:self another new device of the source's own member. A new subject is admitted by no
-//	                   one's consent, so an owner-bound read never passes on one
+//	                   member device of a new member of the role, a tagged sidecar carrying one tag no table names, an
+//	                   untagged ephemeral one, an app device, an anonymous visitor), sidecar:<id> and client:<id> the
+//	                   subject itself, network:<net> that network, role: and principal: an app device holding it;
+//	                   group:<name> every member of the group, each as a user, so an accept holds for all of them and a
+//	                   deny for none; as a destination, autogroup:self another new device of the source's own member. A
+//	                   new subject is admitted by no one's consent, so an owner-bound read never passes on one
 //	names              a socket, repo, host or alias check names one: a glob or a bare * fails the test, since a deny
 //	                   over a set checked at any one name would pass unseen
-//	ip                 a CIDR is a set an accept must hold whole and a deny must not touch at any address
+//	ip                 a CIDR is a set an accept must hold whole and a deny must not touch at any address, by each route
+//	                   rule's prefixes (§8.8's Saving). A route rule that names no ip: destination, no * and no
+//	                   autogroup:internet reaches the routes in force of a sidecar among both its via subjects and its
+//	                   subject destinations for the source (owner decision 575), which no save can see, so it holds no
+//	                   accept, and it fails every deny where it names such a sidecar for the source: one the writer's
+//	                   state holds, a test's subject, or a new one of a class its via and destinations name, as above,
+//	                   with a tagged one carrying every tag it names and, for autogroup:self, another new device of the
+//	                   source's own member and a tagged sidecar that member sponsors. The failure names the rule by its
+//	                   grant's index (owner decision 615)
 //	ports              a dial check with ports holds at every port of the range for an accept and at none for a deny,
-//	                   at a sidecar destination, whose own engine checks ports; with none it is the rows' dial alone
+//	                   at a sidecar destination, whose own engine checks ports; with none it is the rows' dial alone;
+//	                   a route check's ports meet a rule's ports before its prefixes do
 //
 // A check this runner cannot judge, a user resolve does not hold, a repo label the labels file does not hold, a set,
 // fails its test: a test passes only on what was shown. Failures name the test and its check by index, never a value
@@ -113,16 +122,33 @@ func AclPolicyTestRun(input *AclPolicyTestInput) (*AclPolicyTestReport, error) {
 		return nil, err
 	}
 	run := &aclTestRun{
-		compiler: compiler,
-		probes:   newAclTestProbeView(input.View),
-		nowMs:    input.Now.UnixMilli(),
-		report:   &AclPolicyTestReport{TestCount: len(compiler.policy.Tests)},
+		compiler:     compiler,
+		probes:       newAclTestProbeView(input.View),
+		nowMs:        input.Now.UnixMilli(),
+		report:       &AclPolicyTestReport{TestCount: len(compiler.policy.Tests)},
+		grantIndexes: map[Id]int{},
 	}
-	// every subject a test names first, since the state is built once over all of them
+	// each grant's rule id, the first of identical grants naming the rule they compile to
+	keys, err := AclPolicyRuleKeys(compiler.policy)
+	if err != nil {
+		return nil, err
+	}
+	for i := range compiler.policy.Grants {
+		ruleId, err := compiler.ruleId(keys[i], uint32(i))
+		if err != nil {
+			return nil, err
+		}
+		if _, found := run.grantIndexes[ruleId]; !found {
+			run.grantIndexes[ruleId] = i
+		}
+	}
+	// every subject a test names first, since the state is built once over all of them, then the sidecars a route rule
+	// that names no prefix could route through
 	plans := make([]aclTestPlan, len(compiler.policy.Tests))
 	for i, test := range compiler.policy.Tests {
 		plans[i] = run.plan(i, test)
 	}
+	run.addRouteStandIns(plans)
 	state, err := NewAclState(compiler.rows, run.probes)
 	if err != nil {
 		return nil, err
@@ -167,6 +193,8 @@ type aclTestRun struct {
 	engines    map[Id]*AclEngine
 	nowMs      int64
 	report     *AclPolicyTestReport
+	// the index of the first grant compiling to each rule id, by which a failure names a rule
+	grantIndexes map[Id]int
 }
 
 // The subjects a test names, made where they are none of the view's.
@@ -276,7 +304,7 @@ func (self *aclTestRun) subjects(selector AclSelector, label string) ([]AclSubje
 		if !found {
 			return nil, "a tag the tags file does not hold"
 		}
-		return []AclSubject{self.probes.tagged(label, []Id{tagId})}, ""
+		return []AclSubject{self.probes.tagged(label, []Id{tagId}, Id{})}, ""
 	case AclSelectorSidecar:
 		if self.probes.Sidecar(selector.Id) == nil {
 			return nil, "a sidecar the state does not hold"
@@ -314,7 +342,7 @@ func (self *aclTestRun) subjects(selector AclSelector, label string) ([]AclSubje
 		case protocol.AclAutogroup_ACL_AUTOGROUP_EPHEMERAL:
 			return []AclSubject{self.probes.memberDevice(label, self.probes.member(label, bridge.MemberRole_MEMBER_ROLE_MEMBER), true)}, ""
 		case protocol.AclAutogroup_ACL_AUTOGROUP_TAGGED:
-			return []AclSubject{self.probes.tagged(label, nil)}, ""
+			return []AclSubject{self.probes.tagged(label, nil, Id{})}, ""
 		case protocol.AclAutogroup_ACL_AUTOGROUP_UNTAGGED:
 			return []AclSubject{AclClientSubject(aclTestProbeId(label), self.probes.member(label, bridge.MemberRole_MEMBER_ROLE_MEMBER), nil, "")}, ""
 		case protocol.AclAutogroup_ACL_AUTOGROUP_PUBLIC:
@@ -323,6 +351,102 @@ func (self *aclTestRun) subjects(selector AclSelector, label string) ([]AclSubje
 		return nil, "an autogroup no subject stands for"
 	}
 	return nil, "a selector no subject stands for"
+}
+
+// Whether a grant is a route rule that names no prefix, which reaches the routes in force of a sidecar among both its
+// via subjects and its subject destinations (§8.4's readings; owner decision 575): it allows route and names no ip:
+// destination, no *, which gives every prefix, and no autogroup:internet, as aclRouteBySubject reads its compiled rule.
+func aclTestRoutesBySubject(grant *AclGrant) bool {
+	if !slices.Contains(grant.Allow, protocol.AclAction_ACL_ACTION_ROUTE) {
+		return false
+	}
+	for _, resource := range grant.Dst {
+		switch resource.Kind {
+		case AclResourceIp, AclResourceAll:
+			return false
+		case AclResourceSubject:
+			if resource.Subject.Kind == AclSelectorAutogroup && resource.Subject.Autogroup == protocol.AclAutogroup_ACL_AUTOGROUP_INTERNET {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// Adds the sidecars a route rule that names no prefix could route a test's source through where the writer's state may
+// hold none of their class yet (owner decision 615), as new subjects after every test's own, so they take the last
+// admission positions. Only a run with an ip: deny takes any. For each grant aclTestRoutesBySubject holds: the subjects
+// each of its via subjects and subject destinations names, as a test reads it (subjects), and a tagged sidecar carrying
+// every tag it names, since one sidecar may carry them all; and where it names autogroup:self, for each source of a test
+// with an ip: deny that has an owner, another new device of that member and a tagged sidecar the member sponsors
+// carrying those tags. routeBySubjectReaches reads every sidecar of the state, so each of these only stands for its
+// class, and one the writer's state already holds answers the same.
+func (self *aclTestRun) addRouteStandIns(plans []aclTestPlan) {
+	type testSource struct {
+		label  string
+		source AclSubject
+	}
+	sources := []testSource{}
+	for i := range plans {
+		plan := &plans[i]
+		judgesIpDeny := false
+		for j, check := range plan.test.Deny {
+			judgesIpDeny = judgesIpDeny || (check.Resource.Kind == AclResourceIp && plan.deny[j].unjudged == "")
+		}
+		if plan.srcUnjudged != "" || !judgesIpDeny {
+			continue
+		}
+		for si, source := range plan.sources {
+			sources = append(sources, testSource{label: fmt.Sprintf("tests[%d].src[%d]", plan.index, si), source: source})
+		}
+	}
+	if len(sources) == 0 {
+		return
+	}
+	for i := range self.compiler.policy.Grants {
+		grant := &self.compiler.policy.Grants[i]
+		if !aclTestRoutesBySubject(grant) {
+			continue
+		}
+		label := fmt.Sprintf("grants[%d]", i)
+		namesSelf := false
+		tagIds := []Id{}
+		standIn := func(selector AclSelector, selectorLabel string) {
+			if selector.Kind == AclSelectorAutogroup && selector.Autogroup == protocol.AclAutogroup_ACL_AUTOGROUP_SELF {
+				namesSelf = true
+				return
+			}
+			if selector.Kind == AclSelectorTag {
+				if tagId, found := self.compiler.tagIds[selector.Name]; found && !slices.Contains(tagIds, tagId) {
+					tagIds = append(tagIds, tagId)
+				}
+			}
+			// a selector that names nothing a test can stand for adds nothing
+			self.subjects(selector, selectorLabel)
+		}
+		for j, via := range grant.Via {
+			standIn(via, fmt.Sprintf("%s.via[%d]", label, j))
+		}
+		for j, resource := range grant.Dst {
+			if resource.Kind == AclResourceSubject {
+				standIn(resource.Subject, fmt.Sprintf("%s.dst[%d]", label, j))
+			}
+		}
+		if 1 < len(tagIds) {
+			self.probes.tagged(label+".tags", tagIds, Id{})
+		}
+		if !namesSelf {
+			continue
+		}
+		for _, held := range sources {
+			memberId, found := self.probes.ownerOf(held.source)
+			if !found {
+				continue
+			}
+			self.probes.memberDevice(held.label+".self", memberId, false)
+			self.probes.tagged(held.label+"."+label+".sponsored", tagIds, memberId)
+		}
+	}
 }
 
 // An engine whose own sidecar is sidecarId, over the run's state and local policy, made once: what checks a dial to that
@@ -410,9 +534,27 @@ func (self *aclTestRun) holds(source AclSubject, check AclPolicyCheck, destinati
 		result := self.engine.Check(source, check.Action, repoResource, now)
 		return answer(AclDecision{Allowed: result.Allowed, Reason: result.Reason})
 	case AclResourceIp:
-		return answer(self.routeToPrefix(source, resource.Cidr, check.Ports, want))
+		decision, bySubject := self.routeToPrefix(source, resource.Cidr, check.Ports, want)
+		if bySubject {
+			return "allowed by " + self.ruleName(decision.Rule) + ", which names no prefix: a sidecar among both its via " +
+				"subjects and its destinations could serve any range by its routes in force"
+		}
+		return answer(decision)
 	}
 	return "a check no test can judge"
+}
+
+// A rule as a failure names it, by no value (I-13): its grant's index in the document, the first of identical grants,
+// else its id, for a rule no grant of the document gave.
+func (self *aclTestRun) ruleName(rule *protocol.AclRule) string {
+	ruleId, err := IdFromBytes(rule.GetRuleId())
+	if err != nil {
+		return "a rule"
+	}
+	if index, found := self.grantIndexes[ruleId]; found {
+		return fmt.Sprintf("grants[%d]", index)
+	}
+	return "rule " + ruleId.String()
 }
 
 // One subject check at one destination: dial through the destination's own engine where it is a sidecar and the
@@ -450,8 +592,12 @@ func (self *aclTestRun) holdsSubject(source AclSubject, destination AclSubject, 
 }
 
 // A route to a prefix: for an accept, a route rule in force whose prefixes hold the whole of it, at every port of the
-// check's range; for a deny, whether any route rule in force reaches any address of it at any of those ports.
-func (self *aclTestRun) routeToPrefix(source AclSubject, cidr netip.Prefix, ports *AclPortRange, want bool) AclDecision {
+// check's range; for a deny, whether any route rule in force reaches any address of it at any of those ports, by its
+// prefixes, or, for a rule that names none, by naming for the source a sidecar among both its via subjects and its
+// subject destinations, whose routes in force could serve any range (owner decision 615). Such a rule holds no accept,
+// since no save sees what its sidecars' routes serve. The second answer is whether the decision's rule is one, which a
+// deny's failure names.
+func (self *aclTestRun) routeToPrefix(source AclSubject, cidr netip.Prefix, ports *AclPortRange, want bool) (AclDecision, bool) {
 	portsMatch := func(local *AclLocalRule) bool {
 		if ports == nil || local == nil || len(local.Ports) == 0 {
 			return true
@@ -470,10 +616,16 @@ func (self *aclTestRun) routeToPrefix(source AclSubject, cidr netip.Prefix, port
 		}
 		return false
 	}
-	return self.state.resourceDecision(source, self.nowMs, protocol.AclAction_ACL_ACTION_ROUTE, func(rule *aclRule) bool {
+	sourceResolved := self.state.resolve(&source, self.nowMs)
+	bySubject := false
+	decision := self.state.resourceDecision(source, self.nowMs, protocol.AclAction_ACL_ACTION_ROUTE, func(rule *aclRule) bool {
 		local := self.localRules[rule.index]
 		if local == nil || !portsMatch(local) {
 			return false
+		}
+		if aclRouteBySubject(local, rule.internetTarget) {
+			bySubject = !want && self.routeBySubjectReaches(&sourceResolved, rule)
+			return bySubject
 		}
 		for _, held := range local.Cidrs {
 			if want && held.Bits() <= cidr.Bits() && held.Contains(cidr.Addr()) {
@@ -485,6 +637,32 @@ func (self *aclTestRun) routeToPrefix(source AclSubject, cidr netip.Prefix, port
 		}
 		return false
 	})
+	return decision, bySubject
+}
+
+// Whether a route rule that names no prefix names, for the source, a sidecar among both its via subjects and its subject
+// destinations (owner decision 615): one whose routes in force, which no save sees, could serve any range. Every sidecar
+// the state holds stands as one, the writer's, each test's subjects and addRouteStandIns' new ones, a hard-denied one
+// too, since what counts is that the rule names it. A rule that names no via takes every advertiser whose route names
+// it, and the filer names it in the route of any sidecar among its destinations (AclLocalPolicy.routeCovered), so there
+// a destination alone is one. A sidecar the rule names by id that the state does not hold could be admitted as any, so
+// it is one too, the closed direction.
+func (self *aclTestRun) routeBySubjectReaches(source *aclResolved, rule *aclRule) bool {
+	state := self.state
+	unheld := func(sidecarIds []Id) bool {
+		return slices.ContainsFunc(sidecarIds, func(sidecarId Id) bool { return state.sidecarState(sidecarId) == nil })
+	}
+	if unheld(rule.sidecarTargets) || (rule.viaNamed && unheld(rule.viaSidecars)) {
+		return true
+	}
+	for i := range state.sidecars {
+		subject := AclSidecarSubject(state.sidecars[i].id)
+		candidate := state.resolve(&subject, self.nowMs)
+		if (!rule.viaNamed || state.routeTakes(source, &candidate, rule)) && state.targetsSubject(source, &candidate, rule) {
+			return true
+		}
+	}
+	return false
 }
 
 // A new subject's id for a test: fixed by its label, so a run made twice names the same subjects.
@@ -499,12 +677,14 @@ type aclTestProbeView struct {
 	base     AclAuthView
 	sidecars map[Id]*AclSidecar
 	members  map[Id]*bridge.MemberRow
+	// a tagged probe's sponsor, where it has one
+	sponsors map[Id]Id
 	order    []Id
 }
 
 // A probe view over base holding no probe yet.
 func newAclTestProbeView(base AclAuthView) *aclTestProbeView {
-	return &aclTestProbeView{base: base, sidecars: map[Id]*AclSidecar{}, members: map[Id]*bridge.MemberRow{}}
+	return &aclTestProbeView{base: base, sidecars: map[Id]*AclSidecar{}, members: map[Id]*bridge.MemberRow{}, sponsors: map[Id]Id{}}
 }
 
 // The next admission position a probe takes, past every one the base holds.
@@ -551,15 +731,24 @@ func (self *aclTestProbeView) memberDevice(label string, memberId Id, ephemeral 
 	return AclSidecarSubject(sidecarId)
 }
 
-// A new tagged sidecar carrying exactly tagIds, sponsored by no member, so autogroup:admin stands in.
-func (self *aclTestProbeView) tagged(label string, tagIds []Id) AclSubject {
+// A new tagged sidecar carrying exactly tagIds, or with none one tag no table names, so it holds autogroup:tagged and no
+// tag's atom: an admission names tags or a member, and one naming neither is no admission at all. Sponsored by
+// sponsorId, or with a zero one by no member, so autogroup:admin stands in.
+func (self *aclTestProbeView) tagged(label string, tagIds []Id, sponsorId Id) AclSubject {
 	sidecarId := aclTestProbeId(label + ".tagged")
 	if self.sidecars[sidecarId] == nil {
+		if len(tagIds) == 0 {
+			tagIds = []Id{aclTestProbeId(label + ".tag")}
+		}
 		row := &bridge.SidecarRow{SidecarId: sidecarId.Bytes(), AdmittedAt: self.nextPosition()}
 		for _, tagId := range tagIds {
 			row.TagIds = append(row.TagIds, tagId.Bytes())
 		}
-		self.sidecars[sidecarId] = &AclSidecar{Row: row, TagIds: tagIds}
+		if sponsorId != (Id{}) {
+			row.Sponsor = sponsorId.Bytes()
+			self.sponsors[sidecarId] = sponsorId
+		}
+		self.sidecars[sidecarId] = &AclSidecar{Row: row, TagIds: slices.Clone(tagIds)}
 		self.order = append(self.order, sidecarId)
 	}
 	return AclSidecarSubject(sidecarId)
@@ -606,10 +795,12 @@ func (self *aclTestProbeView) Parked(sidecarId Id) bool {
 	return self.sidecars[sidecarId] == nil && self.base.Parked(sidecarId)
 }
 
-// A tagged sidecar's live sponsor in the base; a probe has none, so autogroup:admin stands in for a tagged one.
+// A tagged sidecar's live sponsor in the base, or a probe's own; a probe made with none has none, so autogroup:admin
+// stands in for a tagged one.
 func (self *aclTestProbeView) Sponsor(sidecarId Id) (Id, bool) {
 	if self.sidecars[sidecarId] != nil {
-		return Id{}, false
+		sponsorId, found := self.sponsors[sidecarId]
+		return sponsorId, found
 	}
 	return self.base.Sponsor(sidecarId)
 }

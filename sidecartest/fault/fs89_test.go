@@ -229,7 +229,7 @@ func TestFs89WindowPendingAndCancel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	listing := evsservice.DropStatuses(read.State)
+	listing := evsservice.DropStatuses(read.State, read.ReadAt, world.job.Table().Settings())
 	states := map[byte]protocol.EvsDropState{}
 	for _, status := range listing.Drops {
 		states[status.DropId[2]] = status.State
