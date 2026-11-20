@@ -4,6 +4,8 @@
 // in step. The kinds QD-740 opened build here too: a publish, a listen and an expose at version 1 with no local port,
 // weight or ALPN, a listen naming its socket by grant_dst alone (QD-772), and a forward at version 4 with its port
 // sealed. QD-799's egress_change builds with its subject, mode and exits, and every parser holds its exits' shape.
+// mail_send's template (owner decision 613, QD-1071) names its alias and its allowed set, the same set in any order
+// one action, and leaves the body hash and preview empty, each use to a subset from its alias falling inside it.
 
 package sidecar
 
@@ -264,8 +266,12 @@ func TestRequiredFieldMissingRefused(t *testing.T) {
 			if _, err := NewCanonicalAction(missing); !errors.Is(err, ErrCanonicalActionInvalid) {
 				t.Errorf("%s without field %d answered %v", name, number, err)
 			}
-			// a template may leave it empty: an empty field matches anything, unless the row has a template fill it
+			// a template may leave it empty: an empty field matches anything, unless the row has a template fill it; a
+			// template leaves its row's TemplateEmpty empty too (TestMailTemplateHeldToItsRow)
 			missing.Scope = true
+			for _, empty := range row.TemplateEmpty {
+				missing.ProtoReflect().Clear(missing.ProtoReflect().Descriptor().Fields().ByNumber(empty))
+			}
 			_, err := NewCanonicalAction(missing)
 			if slices.Contains(row.TemplateRequired, number) {
 				if !errors.Is(err, ErrCanonicalActionInvalid) {
@@ -557,6 +563,92 @@ func TestTemplateFieldMismatchRefused(t *testing.T) {
 	}
 }
 
+// mail_send's template (owner decision 613) is its alias and its allowed set alone: scope set, the recipients distinct
+// and in byte order, so the same set asked in another order or with a repeat is the same action, and no body hash or
+// preview. A mail from its alias to a subset falls inside it whatever its text; one to a recipient outside the set, or
+// from another alias, does not.
+func TestMailTemplateNamesItsAliasAndAllowedSet(t *testing.T) {
+	template, err := NewMailTemplateAction("ops", []string{"bob@example.net", "alice@example.com", "bob@example.net"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	action := template.Action
+	if SidecarActionKind(action.GetKind()) != SidecarActionMail || !action.GetScope() || action.GetVersion() != 1 ||
+		action.GetAlias() != "ops" || !slices.Equal(action.GetRecipients(), []string{"alice@example.com", "bob@example.net"}) ||
+		action.GetBodySha256() != nil || action.GetPreview() != "" {
+		t.Fatalf("the template %+v", action)
+	}
+	reordered, err := NewMailTemplateAction("ops", []string{"alice@example.com", "bob@example.net"})
+	if err != nil || !bytes.Equal(reordered.Bytes, template.Bytes) {
+		t.Errorf("the same set in another order: %v", err)
+	}
+	if parsed, err := ParseStoredCanonicalAction(template.Bytes); err != nil || !proto.Equal(parsed.Action, action) {
+		t.Errorf("the template's bytes as the verifiers take them: %v", err)
+	}
+
+	use := func(alias string, recipients ...string) *StoredCanonicalAction {
+		mail := proto.Clone(testBuildableActions()["mail_send"]).(*protocol.CanonicalAction)
+		mail.Alias = alias
+		mail.Recipients = recipients
+		return buildTestAction(t, mail)
+	}
+	for _, recipients := range [][]string{{"alice@example.com"}, {"bob@example.net"}, {"bob@example.net", "alice@example.com"}} {
+		if !ActionMatchesTemplate(template, use("ops", recipients...)) {
+			t.Errorf("a mail to %v from the template's alias does not fall inside it", recipients)
+		}
+	}
+	if ActionMatchesTemplate(template, use("ops", "alice@example.com", "mallory@example.com")) {
+		t.Error("a mail naming a recipient outside the set falls inside it")
+	}
+	if ActionMatchesTemplate(template, use("other", "alice@example.com")) {
+		t.Error("a mail from another alias falls inside it")
+	}
+}
+
+// A mail template names its alias and at least one recipient, none empty, and fills no body hash or preview (the
+// mail row's TemplateRequired and TemplateEmpty), so no template covers every alias or every recipient, and none reads
+// as one message's: each refused, built by NewMailTemplateAction or directly.
+func TestMailTemplateHeldToItsRow(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		alias      string
+		recipients []string
+	}{
+		{name: "no alias", alias: "", recipients: []string{"alice@example.com"}},
+		{name: "no recipient", alias: "ops", recipients: nil},
+		{name: "an empty recipient", alias: "ops", recipients: []string{"alice@example.com", ""}},
+	} {
+		if _, err := NewMailTemplateAction(c.alias, c.recipients); !errors.Is(err, ErrCanonicalActionInvalid) {
+			t.Errorf("%s: %v", c.name, err)
+		}
+	}
+	direct := func(mutate func(template *protocol.CanonicalAction)) error {
+		template := &protocol.CanonicalAction{
+			Kind: uint32(SidecarActionMail), Scope: true, Recipients: []string{"alice@example.com"}, Alias: "ops",
+		}
+		mutate(template)
+		_, err := NewCanonicalAction(template)
+		return err
+	}
+	if err := direct(func(template *protocol.CanonicalAction) {}); err != nil {
+		t.Fatalf("the alias and the set alone: %v", err)
+	}
+	for name, mutate := range map[string]func(template *protocol.CanonicalAction){
+		"a body hash":   func(template *protocol.CanonicalAction) { template.BodySha256 = bytes.Repeat([]byte{0x42}, 32) },
+		"a preview":     func(template *protocol.CanonicalAction) { template.Preview = "the quarterly numbers" },
+		"no alias":      func(template *protocol.CanonicalAction) { template.Alias = "" },
+		"no recipients": func(template *protocol.CanonicalAction) { template.Recipients = nil },
+	} {
+		if err := direct(mutate); !errors.Is(err, ErrCanonicalActionInvalid) {
+			t.Errorf("a template with %s: %v", name, err)
+		}
+	}
+	// a full mail still fills its body hash and preview
+	if _, err := NewCanonicalAction(testBuildableActions()["mail_send"]); err != nil {
+		t.Errorf("a full mail: %v", err)
+	}
+}
+
 func TestAgentMayOnlyRaiseRisk(t *testing.T) {
 	action := buildTestAction(t, testBuildableActions()["dns_set"])
 	for _, c := range []struct {
@@ -665,6 +757,11 @@ func TestKindTableCoversTheDescriptor(t *testing.T) {
 		for _, number := range slices.Concat(row.Server, row.TemplateRequired) {
 			if !row.allows(number, row.Versions[0]) && !slices.Contains(row.Version2, number) {
 				t.Errorf("kind %d lets a server see, or has a template fill, field %d, which it never fills", row.Kind, number)
+			}
+		}
+		for _, number := range row.TemplateEmpty {
+			if !row.allows(number, row.Versions[0]) || slices.Contains(row.TemplateRequired, number) || slices.Contains(row.TemplateBound, number) {
+				t.Errorf("kind %d has a template leave field %d empty, which it never fills or a template binds", row.Kind, number)
 			}
 		}
 		// no server path sees a prefix or a target's port in the clear (owner decision 220)
