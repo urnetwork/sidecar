@@ -6,6 +6,9 @@
    "shape": "key-v0303-aes128gcm-c8",
    "public_inputs": 2466,
    "sha256": "e20787941534ff00e00a0cf0ac46677fddbdfb89c04ad0b6ef56daf80750c1db",
+   "reply_count": 0,
+   "header_record_count": 0,
+   "key_commitment": "2696a2040b9e5e46ef1b342288bf7ce2d9c29bebb6d4b0497964f605f6db9a4a0e349ccac2894c11dc449831c5618d01ff8951414c46747d40c3826b8651c68d",
    "templates": [
     "EHLO o1.out.relay.example\r\n"
    ]
@@ -16,6 +19,9 @@
    "shape": "env-aes128gcm-s40-c40",
    "public_inputs": 5887,
    "sha256": "dd97499148c60602dc515bb3cb301c022332a4d9ac3e0d194d7603274265c157",
+   "reply_count": 1,
+   "header_record_count": 0,
+   "key_commitment": "2696a2040b9e5e46ef1b342288bf7ce2d9c29bebb6d4b0497964f605f6db9a4a0e349ccac2894c11dc449831c5618d01ff8951414c46747d40c3826b8651c68d",
    "templates": [
     "MAIL FROM:<⟨local×8⟩@b.net.root.example>\r\n",
     "RCPT TO:<⟨local×3⟩@recipient.example>\r\n",
@@ -28,6 +34,10 @@
    "shape": "msg-aes128gcm-s17-c4-h52",
    "public_inputs": 6928,
    "sha256": "1956d01ba81e9b9fe8b93908c2b7ece4d0ab43bede3f7c415342eeefc8e775a0",
+   "reply_count": 3,
+   "header_record_count": 1,
+   "key_commitment": "2696a2040b9e5e46ef1b342288bf7ce2d9c29bebb6d4b0497964f605f6db9a4a0e349ccac2894c11dc449831c5618d01ff8951414c46747d40c3826b8651c68d",
+   "carry_out": "22411c833b735b7931ac3500b72d31713bea5f9c8b94377c7bb977ba5df61b8b26788a8533a78a92d19821fd5ab3ad42abae1eed802678c1cf83ad914ab38dbc",
    "templates": [
     "BDAT 497 LAST\r\n",
     "QUIT\r\n"
@@ -41,6 +51,9 @@
    "shape": "key-v0303-aes128gcm-c8",
    "public_inputs": 2466,
    "sha256": "fdc894020c62f22f4394a11f083bcc11528895c1862d28d6978a45c2eda52f4a",
+   "reply_count": 0,
+   "header_record_count": 0,
+   "key_commitment": "20f638b841078f5f284c0e6696c8485cfdd5f2dfb2f18733c3c05b6dc0fa18300ef773432c86989148aeefd2545688859b9c1083e8ab8d047df39f4d4b3c2d48",
    "templates": [
     "EHLO o1.out.relay.example\r\n"
    ]
@@ -51,6 +64,9 @@
    "shape": "env-aes128gcm-s40-c40",
    "public_inputs": 5887,
    "sha256": "96b32023afe3d1cefb41631cfc380064eb61ce0ee32796ba54e2ae338e2e3161",
+   "reply_count": 1,
+   "header_record_count": 0,
+   "key_commitment": "20f638b841078f5f284c0e6696c8485cfdd5f2dfb2f18733c3c05b6dc0fa18300ef773432c86989148aeefd2545688859b9c1083e8ab8d047df39f4d4b3c2d48",
    "templates": [
     "MAIL FROM:<⟨local×8⟩@b.net.root.example>\r\n",
     "RCPT TO:<⟨local×3⟩@recipient.example>\r\n",
@@ -63,28 +79,47 @@
    "mode": 2,
    "shape": "msg-aes128gcm-s17-c4-h52",
    "public_inputs": 6928,
-   "sha256": "090789a3cc09136c6e14ffee71f34b16277d8153d5e5e385d63cc6d1afa15ebe"
+   "sha256": "090789a3cc09136c6e14ffee71f34b16277d8153d5e5e385d63cc6d1afa15ebe",
+   "reply_count": 4,
+   "header_record_count": 1,
+   "key_commitment": "20f638b841078f5f284c0e6696c8485cfdd5f2dfb2f18733c3c05b6dc0fa18300ef773432c86989148aeefd2545688859b9c1083e8ab8d047df39f4d4b3c2d48",
+   "carry_out": "21d0b17ca3fa0b1d833f14cdc7a7f23dd0c64e890fe8c9450f96192fcfaa29750b0289210d2ce5aa87fa99b72c31a8bb32c38e1a5424a85738b19efda9ef342e"
   },
   {
    "index": 4,
    "mode": 2,
    "shape": "body-aes128gcm-c2-b81",
    "public_inputs": 6665,
-   "sha256": "cf4a4d8901f82f69ade4e3ac10040b5d4ebf96c38535ed69084d8d956238d701"
+   "sha256": "cf4a4d8901f82f69ade4e3ac10040b5d4ebf96c38535ed69084d8d956238d701",
+   "reply_count": 0,
+   "header_record_count": 1,
+   "key_commitment": "20f638b841078f5f284c0e6696c8485cfdd5f2dfb2f18733c3c05b6dc0fa18300ef773432c86989148aeefd2545688859b9c1083e8ab8d047df39f4d4b3c2d48",
+   "carry_in": "262eb3502e342ba52270f024ea36c11bb3b59b25ff28a5783f98bea96df521ff17fe5b9f5603724913a4ab0edde0f588d8be51d97f6f1e2c4c3857716c421199",
+   "carry_out": "245c6ba212c2269c4fdd2515f3e01cb29f7c8ed09dbedc08f86d7db08ceccf330e92cb52477ca5ba5c4170ae8a3422df67aa1d2e52f3ef6d68ba75c3c03c5124"
   },
   {
    "index": 5,
    "mode": 2,
    "shape": "body-aes128gcm-c2-b81",
    "public_inputs": 6665,
-   "sha256": "6187f4c6c76f5640bc89cd9a09deb8d0ee04029b2999e49ce37fba8d69046e1f"
+   "sha256": "6187f4c6c76f5640bc89cd9a09deb8d0ee04029b2999e49ce37fba8d69046e1f",
+   "reply_count": 0,
+   "header_record_count": 1,
+   "key_commitment": "20f638b841078f5f284c0e6696c8485cfdd5f2dfb2f18733c3c05b6dc0fa18300ef773432c86989148aeefd2545688859b9c1083e8ab8d047df39f4d4b3c2d48",
+   "carry_in": "245c6ba212c2269c4fdd2515f3e01cb29f7c8ed09dbedc08f86d7db08ceccf330e92cb52477ca5ba5c4170ae8a3422df67aa1d2e52f3ef6d68ba75c3c03c5124",
+   "carry_out": "220873907b08d1ff853ed997f2f31566c2a66e8cd1810e48c2751570ffec20f011315c791217c78f8a4a39f9b0b701f0a0e18c49a48550d9e54e838df1ca438e"
   },
   {
    "index": 6,
    "mode": 2,
    "shape": "body-aes128gcm-c2-b81",
    "public_inputs": 6665,
-   "sha256": "dda3456b40fa4c73931c8dcaec4db3dc740f872d2dad3c3a1f15418c285ef893"
+   "sha256": "dda3456b40fa4c73931c8dcaec4db3dc740f872d2dad3c3a1f15418c285ef893",
+   "reply_count": 0,
+   "header_record_count": 1,
+   "key_commitment": "20f638b841078f5f284c0e6696c8485cfdd5f2dfb2f18733c3c05b6dc0fa18300ef773432c86989148aeefd2545688859b9c1083e8ab8d047df39f4d4b3c2d48",
+   "carry_in": "220873907b08d1ff853ed997f2f31566c2a66e8cd1810e48c2751570ffec20f011315c791217c78f8a4a39f9b0b701f0a0e18c49a48550d9e54e838df1ca438e",
+   "carry_out": "241312140a816e199dea37547d3337b56f288991c53f2bee017dc2d99147aef624eaade7b31266fc6d11a4d5d3f89248f6ae9c3e66e36dfff2e838b682636561"
   },
   {
    "index": 7,
@@ -92,8 +127,96 @@
    "shape": "body-aes128gcm-c2-b81",
    "public_inputs": 6665,
    "sha256": "32426b6666a0087825da9df9373fdbc05efe02475a04e53bca6b569314343364",
+   "reply_count": 0,
+   "header_record_count": 1,
+   "key_commitment": "20f638b841078f5f284c0e6696c8485cfdd5f2dfb2f18733c3c05b6dc0fa18300ef773432c86989148aeefd2545688859b9c1083e8ab8d047df39f4d4b3c2d48",
+   "carry_in": "241312140a816e199dea37547d3337b56f288991c53f2bee017dc2d99147aef624eaade7b31266fc6d11a4d5d3f89248f6ae9c3e66e36dfff2e838b682636561",
+   "carry_out": "256c3592bcd9082ac0b4b0ec9bf6c2234be8a4a9f14ae52a897caea0f78f593c18942953cb70c34b9fedc1381f21a7944906329a204ee8a0584c9931f8b1e563",
    "templates": [
     ".\r\n",
+    "QUIT\r\n"
+   ]
+  }
+ ],
+ "tls12-aes-groups-bdat": [
+  {
+   "index": 1,
+   "mode": 0,
+   "shape": "key-v0303-aes128gcm-c8",
+   "public_inputs": 2466,
+   "sha256": "00810bbaf8b5ac29a98715a503b466aa51d9ce0a48f346989a61e2ad9acaf2aa",
+   "reply_count": 0,
+   "header_record_count": 0,
+   "key_commitment": "26b9b656b7742aa4784aaf526103eff62953e9c2a571dc3df60e7e229b68cdaa0d38b61173857929edbd441367b14cd27b220e693f4f59962f6674be10387637",
+   "templates": [
+    "EHLO o1.out.relay.example\r\n"
+   ]
+  },
+  {
+   "index": 2,
+   "mode": 1,
+   "shape": "env-aes128gcm-s40-c40",
+   "public_inputs": 5887,
+   "sha256": "6293010dbb83cca421b7c3466e0f7653073e381b32f463e503f3b24be1c1ffb9",
+   "reply_count": 1,
+   "header_record_count": 0,
+   "key_commitment": "26b9b656b7742aa4784aaf526103eff62953e9c2a571dc3df60e7e229b68cdaa0d38b61173857929edbd441367b14cd27b220e693f4f59962f6674be10387637",
+   "templates": [
+    "MAIL FROM:<⟨local×8⟩@b.net.root.example>\r\n"
+   ]
+  },
+  {
+   "index": 3,
+   "mode": 1,
+   "shape": "env-aes128gcm-s40-c40",
+   "public_inputs": 5887,
+   "sha256": "3ad1a8e98574146d98be4dd6a30576e1da46676e3164a298b54e5eee2c1b226c",
+   "reply_count": 1,
+   "header_record_count": 0,
+   "key_commitment": "26b9b656b7742aa4784aaf526103eff62953e9c2a571dc3df60e7e229b68cdaa0d38b61173857929edbd441367b14cd27b220e693f4f59962f6674be10387637",
+   "templates": [
+    "RCPT TO:<⟨local×3⟩@recipient.example>\r\n"
+   ]
+  },
+  {
+   "index": 4,
+   "mode": 1,
+   "shape": "env-aes128gcm-s40-c40",
+   "public_inputs": 5887,
+   "sha256": "dded393084af1ed979882ac3c6c1dd5f412323be71f4a9917a662fc10c4ad79d",
+   "reply_count": 1,
+   "header_record_count": 0,
+   "key_commitment": "26b9b656b7742aa4784aaf526103eff62953e9c2a571dc3df60e7e229b68cdaa0d38b61173857929edbd441367b14cd27b220e693f4f59962f6674be10387637",
+   "templates": [
+    "RCPT TO:<⟨local×5⟩@recipient.example>\r\n"
+   ]
+  },
+  {
+   "index": 5,
+   "mode": 1,
+   "shape": "msg-aes128gcm-s17-c4-h52",
+   "public_inputs": 6928,
+   "sha256": "2c8e7f79e3b301edebd53f3d26999e1eea4960b0911af3a76899f55ede16f162",
+   "reply_count": 1,
+   "header_record_count": 2,
+   "key_commitment": "26b9b656b7742aa4784aaf526103eff62953e9c2a571dc3df60e7e229b68cdaa0d38b61173857929edbd441367b14cd27b220e693f4f59962f6674be10387637",
+   "carry_out": "2e90c7f7d6df41415a961f978e77200dd4c2458979a387c48d785cc5a5e3c9821ad23a2ccf632170954afd9d8776ce5f0fb7576561f18b245153fb9cf254a366",
+   "templates": [
+    "BDAT 1721 LAST\r\n"
+   ]
+  },
+  {
+   "index": 6,
+   "mode": 1,
+   "shape": "hdr-aes128gcm-c2-r76",
+   "public_inputs": 6261,
+   "sha256": "cb95885ff9c71d5d1ea612b06b1bcbc83af9ce1855012a05f3f27769f281384f",
+   "reply_count": 0,
+   "header_record_count": 2,
+   "key_commitment": "26b9b656b7742aa4784aaf526103eff62953e9c2a571dc3df60e7e229b68cdaa0d38b61173857929edbd441367b14cd27b220e693f4f59962f6674be10387637",
+   "carry_in": "2e90c7f7d6df41415a961f978e77200dd4c2458979a387c48d785cc5a5e3c9821ad23a2ccf632170954afd9d8776ce5f0fb7576561f18b245153fb9cf254a366",
+   "carry_out": "2105becaf3326d887ffc5c2c51232e99b7eca92df21e12ca2292262c120f46c2076bdd8878c49bdad688b1b52e0ecf951a1b62b4a6bd4254a1e7a1a1e49cf276",
+   "templates": [
     "QUIT\r\n"
    ]
   }
@@ -105,6 +228,9 @@
    "shape": "key-v0304-aes128gcm-c8",
    "public_inputs": 1162,
    "sha256": "47f2761378edc5816eda2888d7df83392f6345c72edd77e6e04646a878fa0417",
+   "reply_count": 0,
+   "header_record_count": 0,
+   "key_commitment": "28a70574f12441b06bbdf68ddd0ec88420654e7b9079f9139e3e25f698eec47e2e52321eee170b0a29ca214fc5f6014df360c70cbd80d7a52c0cb21ed895da37",
    "templates": [
     "EHLO o1.out.relay.example\r\n\u0017"
    ]
@@ -115,6 +241,9 @@
    "shape": "env-aes128gcm-s40-c40",
    "public_inputs": 5887,
    "sha256": "611905f3336e4081efcec6b7c8f2f2f55fd861673d0fe046f8a4cadb725b4381",
+   "reply_count": 1,
+   "header_record_count": 0,
+   "key_commitment": "28a70574f12441b06bbdf68ddd0ec88420654e7b9079f9139e3e25f698eec47e2e52321eee170b0a29ca214fc5f6014df360c70cbd80d7a52c0cb21ed895da37",
    "templates": [
     "MAIL FROM:<⟨local×8⟩@b.net.root.example>\r\n\u0017",
     "RCPT TO:<⟨local×3⟩@recipient.example>\r\n\u0017",
@@ -127,6 +256,10 @@
    "shape": "msg-aes128gcm-s17-c4-h52",
    "public_inputs": 6928,
    "sha256": "193efc8d754be26393332e7cbe9cee881ad28df893b24b9fbc3d092f35902ec7",
+   "reply_count": 3,
+   "header_record_count": 1,
+   "key_commitment": "28a70574f12441b06bbdf68ddd0ec88420654e7b9079f9139e3e25f698eec47e2e52321eee170b0a29ca214fc5f6014df360c70cbd80d7a52c0cb21ed895da37",
+   "carry_out": "08c97537c0a9a4d3f1afca5479b82f067d46c1b712448f938ef9529c3c94b8082861c3facc06bd41cf6503bc780d3eb644d104212b904b86aca546d5b6a8046b",
    "templates": [
     "BDAT 497 LAST\r\n\u0017",
     "QUIT\r\n\u0017"
@@ -140,6 +273,9 @@
    "shape": "key-v0304-aes128gcm-c8",
    "public_inputs": 1162,
    "sha256": "b1b87ef5ae1b612dde5d8b07ea2c0b67db56beabe7b2ae52d6e46a8fcb8e4f42",
+   "reply_count": 0,
+   "header_record_count": 0,
+   "key_commitment": "10dd19ed6ce1fbe801727ea097b71713688e3468496bbb2e5d672b1f7f8231da035aa8305bd2d708e68bb88b5aa12d0abaa507b6630feb4167d7f09db1e029df",
    "templates": [
     "EHLO o1.out.relay.example\r\n\u0017"
    ]
@@ -150,6 +286,9 @@
    "shape": "env-aes128gcm-s40-c40",
    "public_inputs": 5887,
    "sha256": "a5a0b057a66f12964249f6c3646221f869c929548ee9a1bb2927d8abb26472f3",
+   "reply_count": 1,
+   "header_record_count": 0,
+   "key_commitment": "10dd19ed6ce1fbe801727ea097b71713688e3468496bbb2e5d672b1f7f8231da035aa8305bd2d708e68bb88b5aa12d0abaa507b6630feb4167d7f09db1e029df",
    "templates": [
     "MAIL FROM:<⟨local×8⟩@b.net.root.example>\r\n\u0017",
     "RCPT TO:<⟨local×3⟩@recipient.example>\r\n\u0017",
@@ -162,28 +301,47 @@
    "mode": 2,
    "shape": "msg-aes128gcm-s17-c4-h52",
    "public_inputs": 6928,
-   "sha256": "095057c09de4039453549eaedb29f60f2eae74bf9c4e73fba01467d212742977"
+   "sha256": "095057c09de4039453549eaedb29f60f2eae74bf9c4e73fba01467d212742977",
+   "reply_count": 4,
+   "header_record_count": 1,
+   "key_commitment": "10dd19ed6ce1fbe801727ea097b71713688e3468496bbb2e5d672b1f7f8231da035aa8305bd2d708e68bb88b5aa12d0abaa507b6630feb4167d7f09db1e029df",
+   "carry_out": "1a46eb59fcf2715746b7902bbc339ad4429f97e9fc9e7ce20670275a2230087a28bf1f33dd823daa5dabb5c26da5cc38cdf829bcdb969e08e40601c790179716"
   },
   {
    "index": 4,
    "mode": 2,
    "shape": "body-aes128gcm-c2-b81",
    "public_inputs": 6665,
-   "sha256": "0589dc173e140bc66c916303b0475b74e5b408ede64173d619356f8527cc28b4"
+   "sha256": "0589dc173e140bc66c916303b0475b74e5b408ede64173d619356f8527cc28b4",
+   "reply_count": 0,
+   "header_record_count": 1,
+   "key_commitment": "10dd19ed6ce1fbe801727ea097b71713688e3468496bbb2e5d672b1f7f8231da035aa8305bd2d708e68bb88b5aa12d0abaa507b6630feb4167d7f09db1e029df",
+   "carry_in": "262eb3502e342ba52270f024ea36c11bb3b59b25ff28a5783f98bea96df521ff17fe5b9f5603724913a4ab0edde0f588d8be51d97f6f1e2c4c3857716c421199",
+   "carry_out": "0d87291295019bfcc7b5d8b3579fd207f1d6885b835934f3ac3ed61150ec270e2809cadbc1c7589c9b0d18f58c12411422ab1002a347150836c8309e6491e3fa"
   },
   {
    "index": 5,
    "mode": 2,
    "shape": "body-aes128gcm-c2-b81",
    "public_inputs": 6665,
-   "sha256": "6c91f1917393f9600fb66315515ff28808248b0240b5df29286c617424bef191"
+   "sha256": "6c91f1917393f9600fb66315515ff28808248b0240b5df29286c617424bef191",
+   "reply_count": 0,
+   "header_record_count": 1,
+   "key_commitment": "10dd19ed6ce1fbe801727ea097b71713688e3468496bbb2e5d672b1f7f8231da035aa8305bd2d708e68bb88b5aa12d0abaa507b6630feb4167d7f09db1e029df",
+   "carry_in": "0d87291295019bfcc7b5d8b3579fd207f1d6885b835934f3ac3ed61150ec270e2809cadbc1c7589c9b0d18f58c12411422ab1002a347150836c8309e6491e3fa",
+   "carry_out": "04ea8ad250f13bcd4b4d692f9a41b839fa0208e6d1f56aa3194af327983a0e782df27ac4e17d64f2a2eb879558214ddf34d28cabbc1540c6807ff9f1db228d84"
   },
   {
    "index": 6,
    "mode": 2,
    "shape": "body-aes128gcm-c2-b81",
    "public_inputs": 6665,
-   "sha256": "e996c41d5b9021475b14eaf610bad3f9036ed3e36f74c5e7c3b7bda6ec41ad00"
+   "sha256": "e996c41d5b9021475b14eaf610bad3f9036ed3e36f74c5e7c3b7bda6ec41ad00",
+   "reply_count": 0,
+   "header_record_count": 1,
+   "key_commitment": "10dd19ed6ce1fbe801727ea097b71713688e3468496bbb2e5d672b1f7f8231da035aa8305bd2d708e68bb88b5aa12d0abaa507b6630feb4167d7f09db1e029df",
+   "carry_in": "04ea8ad250f13bcd4b4d692f9a41b839fa0208e6d1f56aa3194af327983a0e782df27ac4e17d64f2a2eb879558214ddf34d28cabbc1540c6807ff9f1db228d84",
+   "carry_out": "2a9c9cce1ab77bf229b89717d29769fe4f7a623c8239cdf8d1fd078fed6904ad2adee49f44c4a3fd8317df7369c6b68d5b167f2d1a376572e5f13d6998f87342"
   },
   {
    "index": 7,
@@ -191,8 +349,96 @@
    "shape": "body-aes128gcm-c2-b81",
    "public_inputs": 6665,
    "sha256": "5b80509c554a72fff5d1f4f044a7f5fcb2c354e4048d3c16186d543657e667b1",
+   "reply_count": 0,
+   "header_record_count": 1,
+   "key_commitment": "10dd19ed6ce1fbe801727ea097b71713688e3468496bbb2e5d672b1f7f8231da035aa8305bd2d708e68bb88b5aa12d0abaa507b6630feb4167d7f09db1e029df",
+   "carry_in": "2a9c9cce1ab77bf229b89717d29769fe4f7a623c8239cdf8d1fd078fed6904ad2adee49f44c4a3fd8317df7369c6b68d5b167f2d1a376572e5f13d6998f87342",
+   "carry_out": "22cb08118e20f45b24401aaf4947ff87b8585a11745fd48eecc15c52f7dd662718761aa332642b208f37b25d793ea2929ffeb5c1f3e3b8d2a58d2137c8490d7a",
    "templates": [
     ".\r\n\u0017",
+    "QUIT\r\n\u0017"
+   ]
+  }
+ ],
+ "tls13-aes-groups-bdat": [
+  {
+   "index": 1,
+   "mode": 0,
+   "shape": "key-v0304-aes128gcm-c8",
+   "public_inputs": 1162,
+   "sha256": "12dbff808bae02741080f6b3c4352d2c69027ed7f2e67913e620f693f35a9727",
+   "reply_count": 0,
+   "header_record_count": 0,
+   "key_commitment": "2063a7711d5a70fed5fc33a20df5958aad627cd231cdc9b42fce3688de3b26c3023261f7409eef93f62909ebe220a573995b3d09d8ddd836ee1346d969f87819",
+   "templates": [
+    "EHLO o1.out.relay.example\r\n\u0017"
+   ]
+  },
+  {
+   "index": 2,
+   "mode": 1,
+   "shape": "env-aes128gcm-s40-c40",
+   "public_inputs": 5887,
+   "sha256": "7973215cc16cd15e5c467728d4320251bae1597506628b211cb93228b109e230",
+   "reply_count": 1,
+   "header_record_count": 0,
+   "key_commitment": "2063a7711d5a70fed5fc33a20df5958aad627cd231cdc9b42fce3688de3b26c3023261f7409eef93f62909ebe220a573995b3d09d8ddd836ee1346d969f87819",
+   "templates": [
+    "MAIL FROM:<⟨local×8⟩@b.net.root.example>\r\n\u0017"
+   ]
+  },
+  {
+   "index": 3,
+   "mode": 1,
+   "shape": "env-aes128gcm-s40-c40",
+   "public_inputs": 5887,
+   "sha256": "de3ec841eacc57d6ffd820bcb788bd4f0536796e69a07de0b9b3b4f0bab94fd7",
+   "reply_count": 1,
+   "header_record_count": 0,
+   "key_commitment": "2063a7711d5a70fed5fc33a20df5958aad627cd231cdc9b42fce3688de3b26c3023261f7409eef93f62909ebe220a573995b3d09d8ddd836ee1346d969f87819",
+   "templates": [
+    "RCPT TO:<⟨local×3⟩@recipient.example>\r\n\u0017"
+   ]
+  },
+  {
+   "index": 4,
+   "mode": 1,
+   "shape": "env-aes128gcm-s40-c40",
+   "public_inputs": 5887,
+   "sha256": "48eda194429978fbc2744f47e37c75e0044369ba2ce2973ffced48b20253c0da",
+   "reply_count": 1,
+   "header_record_count": 0,
+   "key_commitment": "2063a7711d5a70fed5fc33a20df5958aad627cd231cdc9b42fce3688de3b26c3023261f7409eef93f62909ebe220a573995b3d09d8ddd836ee1346d969f87819",
+   "templates": [
+    "RCPT TO:<⟨local×5⟩@recipient.example>\r\n\u0017"
+   ]
+  },
+  {
+   "index": 5,
+   "mode": 1,
+   "shape": "msg-aes128gcm-s17-c4-h52",
+   "public_inputs": 6928,
+   "sha256": "95df8273fd5d0614960021066049ece1a363adbdff5a5b627300716403198e85",
+   "reply_count": 1,
+   "header_record_count": 2,
+   "key_commitment": "2063a7711d5a70fed5fc33a20df5958aad627cd231cdc9b42fce3688de3b26c3023261f7409eef93f62909ebe220a573995b3d09d8ddd836ee1346d969f87819",
+   "carry_out": "02dae716ac7772e7b5f37f323cc58a762a3bf538d1cd379527ad5570105e0aac032ab268deb3be5708580ba67308c6ccd24cb2ad455d7004c438a1087ad70de2",
+   "templates": [
+    "BDAT 1721 LAST\r\n\u0017"
+   ]
+  },
+  {
+   "index": 6,
+   "mode": 1,
+   "shape": "hdr-aes128gcm-c2-r76",
+   "public_inputs": 6261,
+   "sha256": "37c813704cabcf9e571a892affc9fc0aa6122cbb0d0fea9f47bc163b77ea0c04",
+   "reply_count": 0,
+   "header_record_count": 2,
+   "key_commitment": "2063a7711d5a70fed5fc33a20df5958aad627cd231cdc9b42fce3688de3b26c3023261f7409eef93f62909ebe220a573995b3d09d8ddd836ee1346d969f87819",
+   "carry_in": "02dae716ac7772e7b5f37f323cc58a762a3bf538d1cd379527ad5570105e0aac032ab268deb3be5708580ba67308c6ccd24cb2ad455d7004c438a1087ad70de2",
+   "carry_out": "106c50ad75ffe040de6f1ce9ec095e885247e3df88094022ad5de22d5a737dbd046755df01f7a7f4d52d8fcba92fcd60cbdf1c2588c722c5e2b727a2ef09db0f",
+   "templates": [
     "QUIT\r\n\u0017"
    ]
   }
@@ -204,6 +450,9 @@
    "shape": "key-v0304-chacha20-c2",
    "public_inputs": 1156,
    "sha256": "f7a185117717f6ccd49d87843e07a70adce203faed95915a61e4235675389435",
+   "reply_count": 0,
+   "header_record_count": 0,
+   "key_commitment": "247764d3e5eae78c5c2ae4360f957f04a72be70c9f1070f961527f7e5d75cc001cdd810b089467059066e2f67566a837f2c7446114e750d6158b1ef7a6d9b6d0",
    "templates": [
     "EHLO o1.out.relay.example\r\n\u0017"
    ]
@@ -214,6 +463,9 @@
    "shape": "env-chacha20-s19-c20",
    "public_inputs": 11265,
    "sha256": "ad8545e97b880e13dda29cca4c9f7fd26268392d92d39ebe02e8873eff363390",
+   "reply_count": 1,
+   "header_record_count": 0,
+   "key_commitment": "247764d3e5eae78c5c2ae4360f957f04a72be70c9f1070f961527f7e5d75cc001cdd810b089467059066e2f67566a837f2c7446114e750d6158b1ef7a6d9b6d0",
    "templates": [
     "MAIL FROM:<⟨local×8⟩@b.net.root.example>\r\n\u0017",
     "RCPT TO:<⟨local×3⟩@recipient.example>\r\n\u0017",
@@ -226,6 +478,10 @@
    "shape": "msg-chacha20-s13-c2-h19",
    "public_inputs": 11797,
    "sha256": "6b8c48494ed2158859fb01ccd340ca25f457258d55e4982c3618ccb45a7e2748",
+   "reply_count": 3,
+   "header_record_count": 1,
+   "key_commitment": "247764d3e5eae78c5c2ae4360f957f04a72be70c9f1070f961527f7e5d75cc001cdd810b089467059066e2f67566a837f2c7446114e750d6158b1ef7a6d9b6d0",
+   "carry_out": "2f1a2cd70949fdeb02fe84284bd08f11a57e2753e7bf5fb2464d37e884f2a41e20159a7e05841dc3ea9dd37146a0cab29f54f652064391547528782f0c309d95",
    "templates": [
     "BDAT 497 LAST\r\n\u0017",
     "QUIT\r\n\u0017"
@@ -239,6 +495,9 @@
    "shape": "key-v0304-chacha20-c2",
    "public_inputs": 1156,
    "sha256": "ebfdf572c4cf6aea5b2db3ba919f48e681c35c464f50f42fa255ce2c9593aabd",
+   "reply_count": 0,
+   "header_record_count": 0,
+   "key_commitment": "164d5db67b8cd19cd581fe7441f86ccec81a056319c5e080f218e0078868a4e70747e161735bcd979a685f545b5effd0488409da71320302754c989b25639e42",
    "templates": [
     "EHLO o1.out.relay.example\r\n\u0017"
    ]
@@ -249,6 +508,9 @@
    "shape": "env-chacha20-s19-c20",
    "public_inputs": 11265,
    "sha256": "90838349eafbf2fa88449e749e1bb87c701d1128ebc7b17588b68c2087933d1a",
+   "reply_count": 1,
+   "header_record_count": 0,
+   "key_commitment": "164d5db67b8cd19cd581fe7441f86ccec81a056319c5e080f218e0078868a4e70747e161735bcd979a685f545b5effd0488409da71320302754c989b25639e42",
    "templates": [
     "MAIL FROM:<⟨local×8⟩@b.net.root.example>\r\n\u0017",
     "RCPT TO:<⟨local×3⟩@recipient.example>\r\n\u0017",
@@ -261,28 +523,47 @@
    "mode": 2,
    "shape": "msg-chacha20-s13-c2-h19",
    "public_inputs": 11797,
-   "sha256": "3cafbb27311ba03c68b4186df92df01bbbcc34e5f05ca2f3a2225c7c36f3d4bc"
+   "sha256": "3cafbb27311ba03c68b4186df92df01bbbcc34e5f05ca2f3a2225c7c36f3d4bc",
+   "reply_count": 4,
+   "header_record_count": 1,
+   "key_commitment": "164d5db67b8cd19cd581fe7441f86ccec81a056319c5e080f218e0078868a4e70747e161735bcd979a685f545b5effd0488409da71320302754c989b25639e42",
+   "carry_out": "242b97f55c524a5f36e53918be2479f3d6ce03f8fb8a0cf7efdd9617981dc5c6203b9b2b7816fdf17c670754476632312c1ebc616b679a3804b663ff86ebfa1d"
   },
   {
    "index": 4,
    "mode": 2,
    "shape": "body-chacha20-c2-b40",
    "public_inputs": 13232,
-   "sha256": "7b5389307f5723f83a522cbaa8f8368460988e1829d4bd55ea9ccc9b34b91bd1"
+   "sha256": "7b5389307f5723f83a522cbaa8f8368460988e1829d4bd55ea9ccc9b34b91bd1",
+   "reply_count": 0,
+   "header_record_count": 1,
+   "key_commitment": "164d5db67b8cd19cd581fe7441f86ccec81a056319c5e080f218e0078868a4e70747e161735bcd979a685f545b5effd0488409da71320302754c989b25639e42",
+   "carry_in": "262eb3502e342ba52270f024ea36c11bb3b59b25ff28a5783f98bea96df521ff17fe5b9f5603724913a4ab0edde0f588d8be51d97f6f1e2c4c3857716c421199",
+   "carry_out": "13131e6e4b53be5ff6f6a65c7bb7fc15e5902fb73dcc6bbb6bb1934b36aaa487269ead18abf90ffd115a6a1c7d2bec9385127a7e371fa0a4239ba75975f84c9d"
   },
   {
    "index": 5,
    "mode": 2,
    "shape": "body-chacha20-c2-b40",
    "public_inputs": 13232,
-   "sha256": "5a2c14168c63560742759e7e8b4d839eeafa499e97cae98ab23d262d9abd1bdf"
+   "sha256": "5a2c14168c63560742759e7e8b4d839eeafa499e97cae98ab23d262d9abd1bdf",
+   "reply_count": 0,
+   "header_record_count": 1,
+   "key_commitment": "164d5db67b8cd19cd581fe7441f86ccec81a056319c5e080f218e0078868a4e70747e161735bcd979a685f545b5effd0488409da71320302754c989b25639e42",
+   "carry_in": "13131e6e4b53be5ff6f6a65c7bb7fc15e5902fb73dcc6bbb6bb1934b36aaa487269ead18abf90ffd115a6a1c7d2bec9385127a7e371fa0a4239ba75975f84c9d",
+   "carry_out": "28ae85993e8c8897354fdfde2d9814f0dc71752d08f4856cb1e8f41f9f6107af01d5e67913c091f0ae02a46d77b8e63187a48fe5fbc828dc5b515a0bef957398"
   },
   {
    "index": 6,
    "mode": 2,
    "shape": "body-chacha20-c2-b40",
    "public_inputs": 13232,
-   "sha256": "f6276f12363cc658d3f9eb5fbb279f22868361a8ec3fe4a10a39b4008f4dff05"
+   "sha256": "f6276f12363cc658d3f9eb5fbb279f22868361a8ec3fe4a10a39b4008f4dff05",
+   "reply_count": 0,
+   "header_record_count": 1,
+   "key_commitment": "164d5db67b8cd19cd581fe7441f86ccec81a056319c5e080f218e0078868a4e70747e161735bcd979a685f545b5effd0488409da71320302754c989b25639e42",
+   "carry_in": "28ae85993e8c8897354fdfde2d9814f0dc71752d08f4856cb1e8f41f9f6107af01d5e67913c091f0ae02a46d77b8e63187a48fe5fbc828dc5b515a0bef957398",
+   "carry_out": "0f58f5b0f3f631ec51d7349f84a6c58b5dfb5da201e73afacdbd10744dbd2a712cb0dc04e51c7c56f7b20552dc3ac7e55f12c6daf2175949e3727539cf2bc222"
   },
   {
    "index": 7,
@@ -290,8 +571,96 @@
    "shape": "body-chacha20-c2-b40",
    "public_inputs": 13232,
    "sha256": "de0c2e87c9a7145371e2d01536c9a9b8dc5b39bb6726272034dc4c93cf197061",
+   "reply_count": 0,
+   "header_record_count": 1,
+   "key_commitment": "164d5db67b8cd19cd581fe7441f86ccec81a056319c5e080f218e0078868a4e70747e161735bcd979a685f545b5effd0488409da71320302754c989b25639e42",
+   "carry_in": "0f58f5b0f3f631ec51d7349f84a6c58b5dfb5da201e73afacdbd10744dbd2a712cb0dc04e51c7c56f7b20552dc3ac7e55f12c6daf2175949e3727539cf2bc222",
+   "carry_out": "2da001f984bb2ebd32f18527cfd9cdda87d41bdec3797b15051599db559f7bdd07d92a69beda4234e8d5d72ca10f2a86c1819392fbe26d4e5b4d31c1bcb0eada",
    "templates": [
     ".\r\n\u0017",
+    "QUIT\r\n\u0017"
+   ]
+  }
+ ],
+ "tls13-chacha-groups-bdat": [
+  {
+   "index": 1,
+   "mode": 0,
+   "shape": "key-v0304-chacha20-c2",
+   "public_inputs": 1156,
+   "sha256": "a34c66fde034c198419038b70d79f5081533eecbc12ce3c620ba4a985609e449",
+   "reply_count": 0,
+   "header_record_count": 0,
+   "key_commitment": "190072eb8e41bf179d91fd0dae07f9bdefd6109bf9ef481ffa2917aff816319620c28683ca6f90d15ae98dd37ce162b23ebf5853b1055b5e4bd54504d52e0a94",
+   "templates": [
+    "EHLO o1.out.relay.example\r\n\u0017"
+   ]
+  },
+  {
+   "index": 2,
+   "mode": 1,
+   "shape": "env-chacha20-s19-c20",
+   "public_inputs": 11265,
+   "sha256": "d5f77f14738727ed3e778a0fb5997c1a202354a9bffdef56aa936ce178906e0d",
+   "reply_count": 1,
+   "header_record_count": 0,
+   "key_commitment": "190072eb8e41bf179d91fd0dae07f9bdefd6109bf9ef481ffa2917aff816319620c28683ca6f90d15ae98dd37ce162b23ebf5853b1055b5e4bd54504d52e0a94",
+   "templates": [
+    "MAIL FROM:<⟨local×8⟩@b.net.root.example>\r\n\u0017"
+   ]
+  },
+  {
+   "index": 3,
+   "mode": 1,
+   "shape": "env-chacha20-s19-c20",
+   "public_inputs": 11265,
+   "sha256": "33ea33020d8a0f34d431b2e60f0e2a41c1af632aad8190292dbdfee1c40915c0",
+   "reply_count": 1,
+   "header_record_count": 0,
+   "key_commitment": "190072eb8e41bf179d91fd0dae07f9bdefd6109bf9ef481ffa2917aff816319620c28683ca6f90d15ae98dd37ce162b23ebf5853b1055b5e4bd54504d52e0a94",
+   "templates": [
+    "RCPT TO:<⟨local×3⟩@recipient.example>\r\n\u0017"
+   ]
+  },
+  {
+   "index": 4,
+   "mode": 1,
+   "shape": "env-chacha20-s19-c20",
+   "public_inputs": 11265,
+   "sha256": "2ab7ccd557b6fc66de367e4ec341df1fd8d7cedfcdc5016b31a8da54b3fd64c9",
+   "reply_count": 1,
+   "header_record_count": 0,
+   "key_commitment": "190072eb8e41bf179d91fd0dae07f9bdefd6109bf9ef481ffa2917aff816319620c28683ca6f90d15ae98dd37ce162b23ebf5853b1055b5e4bd54504d52e0a94",
+   "templates": [
+    "RCPT TO:<⟨local×5⟩@recipient.example>\r\n\u0017"
+   ]
+  },
+  {
+   "index": 5,
+   "mode": 1,
+   "shape": "msg-chacha20-s13-c2-h19",
+   "public_inputs": 11797,
+   "sha256": "34e2d4dd24e26697652ed1374b001cbd2915195839fe1bb4ad8b8ae5d411686c",
+   "reply_count": 1,
+   "header_record_count": 2,
+   "key_commitment": "190072eb8e41bf179d91fd0dae07f9bdefd6109bf9ef481ffa2917aff816319620c28683ca6f90d15ae98dd37ce162b23ebf5853b1055b5e4bd54504d52e0a94",
+   "carry_out": "13b1057b9084b29deb4ffac07c25c41222ff661ffd891f6b0ec534deb6c897d1250c2bdc84b95b5c9ea2b8321ff770266de38a79215a52a41d83971d3ceb32c7",
+   "templates": [
+    "BDAT 1721 LAST\r\n\u0017"
+   ]
+  },
+  {
+   "index": 6,
+   "mode": 1,
+   "shape": "hdr-chacha20-c1-r35",
+   "public_inputs": 11435,
+   "sha256": "9c8b4c258a636f3a0c35107533331e6ff24c62269ef787421f353929ff6eed59",
+   "reply_count": 0,
+   "header_record_count": 2,
+   "key_commitment": "190072eb8e41bf179d91fd0dae07f9bdefd6109bf9ef481ffa2917aff816319620c28683ca6f90d15ae98dd37ce162b23ebf5853b1055b5e4bd54504d52e0a94",
+   "carry_in": "13b1057b9084b29deb4ffac07c25c41222ff661ffd891f6b0ec534deb6c897d1250c2bdc84b95b5c9ea2b8321ff770266de38a79215a52a41d83971d3ceb32c7",
+   "carry_out": "26c6469fe56a93de9a94ac9f3113dbaff43c2cfcf3dde352e94128b71cdedef62adf032594c59410bb50d733ab32234fb878759db10c2f6f365aff2943f405fd",
+   "templates": [
     "QUIT\r\n\u0017"
    ]
   }
