@@ -77,6 +77,9 @@ func checkTlc(t *testing.T, spec string, mode string) {
 		t.Fatal(reason)
 	}
 
+	// the commit whose sources the digest above read, taken before TLC runs, so a HEAD that moves during a run of
+	// hours never pairs this digest with another commit's
+	commit, _ := exec.Command("git", "rev-parse", "HEAD").Output()
 	started := time.Now()
 	command := exec.Command("bash", "run-tlc.sh", mode, spec)
 	command.Env = append(os.Environ(), "TLC="+tlcCommand)
@@ -105,7 +108,6 @@ func checkTlc(t *testing.T, spec string, mode string) {
 	if 0 < len(summary.failures) {
 		return
 	}
-	commit, _ := exec.Command("git", "rev-parse", "HEAD").Output()
 	t.Logf("record in modelled.yml under %s's runs:\n%s", spec, runRecordLine(&modelledRun{
 		At:            started.Format("2006-01-02"),
 		Commit:        strings.TrimSpace(string(commit)),
@@ -134,6 +136,8 @@ func TestDetailsModelsPassTheirRunScriptsAtAGate(t *testing.T) {
 	// One group, as <run> <track> <group>: a verdict line a configuration, each of which must pass and name
 	// TLC's revision. A passing group prints the line to record under the model's runs.
 	runGroup := func(detail *modelledDetail, group string, digest string) {
+		// the commit whose sources digest read, taken before TLC runs, as checkTlc takes it
+		commit, _ := exec.Command("git", "rev-parse", "HEAD").Output()
 		started := time.Now()
 		command := exec.Command("bash", detail.Run, track, group)
 		command.Env = os.Environ()
@@ -165,7 +169,6 @@ func TestDetailsModelsPassTheirRunScriptsAtAGate(t *testing.T) {
 		if 0 < len(summary.failures) {
 			return
 		}
-		commit, _ := exec.Command("git", "rev-parse", "HEAD").Output()
 		t.Logf("record in modelled.yml under %s's runs:\n%s", detail.Model, runRecordLine(&modelledRun{
 			At:            started.Format("2006-01-02"),
 			Commit:        strings.TrimSpace(string(commit)),
