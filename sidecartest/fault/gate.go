@@ -15,8 +15,9 @@
 // (owner decision 548; QD-1081).
 //
 // Gates are named as the tool takes them: G0; Mn-in for milestone n's entry review; Mn for its exit
-// review, Mn-out in the catalog; every for each Gn-out (FS-55), every-out in the catalog; next before
-// place_new names a new metadata cluster, next-cluster in the catalog.
+// review, Mn-out in the catalog; held for §23.6's later-of cases, case by case once both their gates have
+// passed, GateHeld in the catalog (gate_held.go); every for each Gn-out (FS-55), every-out in the catalog;
+// next before place_new names a new metadata cluster, next-cluster in the catalog.
 //
 // The file is the tool's to read, and server's TestGatesYmlIsTheCatalogsGateMap holds it equal to GateFile,
 // regenerating it on request. Safe for concurrent use: sweeps register from package-level vars.
@@ -163,6 +164,8 @@ func gateCatalogName(gate string) string {
 		return GateEveryOut
 	case "next":
 		return GateNextCluster
+	case "held":
+		return GateHeld
 	}
 	if match := catalogGatePattern.FindStringSubmatch(gate); match != nil && match[2] == "in" {
 		return gate
@@ -175,13 +178,14 @@ func gateCatalogName(gate string) string {
 	return ""
 }
 
-// The tool's gates in review order: G0; then each milestone's entry and exit; then every and next.
+// The tool's gates in review order: G0; then each milestone's entry and exit; held, whose later-of cases fall due
+// with M10's exit; then every and next.
 func GateNames() []string {
 	names := []string{"G0"}
 	for n := 0; n <= 10; n += 1 {
 		names = append(names, fmt.Sprintf("M%d-in", n), fmt.Sprintf("M%d", n))
 	}
-	return append(names, "every", "next")
+	return append(names, "held", "every", "next")
 }
 
 // A case's name in camel case, for its tests' names: config-read is ConfigRead, format-1 Format1.
@@ -225,7 +229,8 @@ func gateConventionalTests(testCase *Case) []*GateTest {
 }
 
 // What a case at gate waits on besides its tests: the catalog's open, a T4 part the tool cannot run
-// (plan-TEST-small-readings reading 10), and the later gate of a later-of case.
+// (plan-TEST-small-readings reading 10), and the later gate of a later-of case, which at the held gate is
+// passed, since that gate reports each later-of case once both its gates have passed.
 func gateCaseExternal(testCase *Case, catalogGate string) string {
 	parts := []string{}
 	if testCase.Open != "" {
@@ -234,7 +239,7 @@ func gateCaseExternal(testCase *Case, catalogGate string) string {
 	if slices.Contains(testCase.Tiers(), TierT4) {
 		parts = append(parts, "its T4 part, which SDK-M8-15's and SDK-M10-06's cells run and this tool does not")
 	}
-	if testCase.LaterOf {
+	if testCase.LaterOf && catalogGate != GateHeld {
 		later := slices.MaxFunc(testCase.Gates, func(a string, b string) int { return gateOrder(a) - gateOrder(b) })
 		if later != catalogGate {
 			parts = append(parts, "the later of "+strings.Join(testCase.Gates, " and ")+", where it passes (§23.6)")
@@ -288,8 +293,9 @@ const gateFileHeader = `# §23.8's gate sweeps (TEST-M1-11; OPS-M1-07's tool): g
 # it differs, and SIDECAR_REGENERATE_GATES=1 go test ./local/sidecar-gate -run '^TestGatesYmlIsTheCatalogsGateMap$'
 # writes it.
 #
-# Gates: G0; Mn-in, milestone n's entry review; Mn, its exit review (Mn-out); every, each Gn-out (FS-55); next,
-# before place_new names a new metadata cluster. A row is an FS row's case, or an item: repo and package name
+# Gates: G0; Mn-in, milestone n's entry review; Mn, its exit review (Mn-out); held, §23.6's later-of cases case by
+# case once both their gates have passed; every, each Gn-out (FS-55); next, before place_new names a new metadata
+# cluster. A row is an FS row's case, or an item: repo and package name
 # each test, names are the tests, each of which must report PASS, so a test that does not exist reads missing,
 # never pass; tags, a build tag; timeout, a Go duration, bounds that test's run in place of the tool's default,
 # for a test known to outlast it (QD-1058); stores: true runs it through the private-store wrapper

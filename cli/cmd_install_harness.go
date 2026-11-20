@@ -11,10 +11,17 @@
 // again changes nothing, and running it after an edit restores ur's entries. --cloud-key-file, with --project, is the
 // cloud profile (§16.9; QD-041; MCP-M4-02): the committed SessionStart step then first runs ur connect --token-file
 // <path> --ephemeral on the owner-only file a cloud environment's setup step leaves the auth key in, the path as the
-// session's VM reads it. The path is committed; no key ever is. --record-required writes the fail-closed form a Team's
-// record_required asks for (D-MCP-5; MCP-M6-04), the local flag that stands for it until a reader of
-// ServiceSettings.record_required lands: ur hook --required on every command, Claude Code's onFailure block and
-// Cursor's failClosed, and `ur status` names each harness installed so.
+// session's VM reads it. The path is committed; no key ever is.
+//
+// The fail-closed form, ur hook --required on every command, Claude Code's onFailure block and Cursor's failClosed
+// (D-MCP-5; MCP-M6-04), is written while a network the instance's running daemon hosts sets
+// ServiceSettings.record_required (§7.9's Settings fields; owner decision 305), read from that daemon's config head
+// without starting one (status.settings, status_settings.go), or where --record-required asks, the local flag a
+// personal network keeps. A daemon that does not answer, or a head it cannot open, reads no Team's, and the install
+// says so; while a Team requires the form, the daemon's config check reads a fail-open install as changed, so its runs
+// taint until the install runs again. `ur status` names each harness installed fail-closed, and each installed
+// fail-open while a Team requires otherwise. Nothing here or in MCP sets record_required: an Owner or Admin does, with
+// ur admin settings.
 //
 // While Ingest.ModelCalls is on (§16.18; M6's, off by default), a user install of Claude Code also writes the
 // exporter's settings for the daemon's telemetry listener (QD-822; mcp's harness_telemetry.go): the instance's
@@ -104,7 +111,7 @@ func runUrInstallHarness(ctx context.Context, cli *urCli, options docopt.Opts) e
 	agent, _ := options.String("--agent")
 	project, _ := options.Bool("--project")
 	cloudKeyFile, _ := options.String("--cloud-key-file")
-	// the fail-closed form, until a reader of ServiceSettings.record_required lands (plan-MCP-record-required)
+	// the fail-closed form's local flag, which a personal network keeps (plan-MCP-record-required)
 	recordRequired, _ := options.Bool("--record-required")
 	urPath, err := urHarnessExecutable()
 	if err != nil {
@@ -128,6 +135,14 @@ func runUrInstallHarness(ctx context.Context, cli *urCli, options docopt.Opts) e
 		CloudKeyFile:   cloudKeyFile,
 		RecordRequired: recordRequired,
 		Ingest:         cli.ingest,
+	}
+	// a Team's record_required, from a running daemon's config head (owner decision 305): asked only for a harness ur
+	// installs into, and said once the plan stands
+	requiredNote := ""
+	if slices.Contains(mcp.HarnessNames(), harness) {
+		teamRequired, note := urInstallHarnessTeamRequired(ctx, cli)
+		args.RecordRequired = args.RecordRequired || teamRequired
+		requiredNote = note
 	}
 	if project {
 		cwd, err := cli.cwd()
@@ -155,6 +170,7 @@ func runUrInstallHarness(ctx context.Context, cli *urCli, options docopt.Opts) e
 	if err != nil {
 		return err
 	}
+	cli.printf("%s", requiredNote)
 	changed, err := plan.Changed()
 	if err != nil {
 		return err
@@ -183,6 +199,34 @@ func runUrInstallHarness(ctx context.Context, cli *urCli, options docopt.Opts) e
 	cli.printf("%s", exporterNote)
 	urInstallHarnessReload(ctx, cli, plan.Telemetry())
 	return nil
+}
+
+// Whether a network the instance's running daemon hosts sets record_required, read without starting a daemon, and the
+// lines that say so, or what was not read.
+func urInstallHarnessTeamRequired(ctx context.Context, cli *urCli) (bool, string) {
+	reply, err := urRunningDaemonSettings(ctx, cli)
+	if err != nil {
+		return false, "no running daemon gave this instance's networks' settings, so no Team's record_required was read: " +
+			"these hooks are fail-closed only with --record-required, and while a Team this instance hosts requires them the " +
+			"daemon reads a fail-open install as changed until ur install-harness runs again with it up\n"
+	}
+	required, unknown := reply.required()
+	ids := func(networkIds []sidecar.Id) string {
+		texts := []string{}
+		for _, networkId := range networkIds {
+			texts = append(texts, networkId.String())
+		}
+		return strings.Join(texts, ", ")
+	}
+	note := ""
+	if 0 < len(required) {
+		note += fmt.Sprintf("network %s requires fail-closed hooks (record_required), so they are written fail-closed\n", ids(required))
+	}
+	if 0 < len(unknown) {
+		note += fmt.Sprintf("network %s: record_required is not known here, since this device opens no config head yet; "+
+			"run ur install-harness again once it does\n", ids(unknown))
+	}
+	return 0 < len(required), note
 }
 
 // Asks a daemon already running to serve the sealed telemetry pair, and says what it serves; nothing for an install

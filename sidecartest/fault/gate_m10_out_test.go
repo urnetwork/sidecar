@@ -316,10 +316,10 @@ func TestGateM10OutTlcOutcomeReadsTheDropExtensionsModes(t *testing.T) {
 	}
 }
 
-// M10's rows name each test where it runs: the T3 runs in evshost, model and the root package under the convention's
-// tags on the private stores, beside each case's T2 test; FS-74's and FS-75's thin tests and FS-101's r-file case's by
-// their own names; FS-73 and FS-114's purge and drop cases by their T3 tests alone, the suite on T3's clusters rather
-// than the private stores; and each keeps the catalog's external and store clock.
+// M10's rows name each test where it runs: the T3 runs in evshost and the root package under the convention's tags on
+// the private stores, beside each case's T2 test; FS-74's and FS-75's thin tests by their own names; FS-73 and FS-114's
+// purge and drop cases by their T3 tests alone, the suite on T3's clusters rather than the private stores; each later-of
+// case as the held gate names it (gate_held.go); and each keeps the catalog's external and store clock.
 func TestGateM10NamesEachRowsTestsWhereTheyRun(t *testing.T) {
 	catalog := DefaultCatalog()
 	data, err := GateFile(catalog)
@@ -335,28 +335,36 @@ func TestGateM10NamesEachRowsTestsWhereTheyRun(t *testing.T) {
 	}
 	suite := &GateTest{Repo: "server", Package: ".", Tags: "sidecar_filecluster_t3", Names: []string{"TestFileClusterSuitePassesOnT3"}}
 	want := map[string][]*GateTest{
-		"FS-66's hold":      {t2("TestFs66Hold"), t3("./model", "TestFs66HoldPlacedByApiOnT3")},
 		"FS-68":             {t2("TestFs68"), t3("./evshost", "TestFs68OnT3")},
-		"FS-69":             {t2("TestFs69"), t3("./model", "TestFs69HoldsPlacedByApiOnT3")},
 		"FS-72's migration": {t2("TestFs72Migration"), t3("./evshost", "TestFs72MigrationOnT3")},
 		"FS-72's rollback":  {t2("TestFs72Rollback"), t3("./evshost", "TestFs72RollbackOnT3")},
 		"FS-73":             {t3("./evshost", "TestFs73OnT3")},
 		"FS-74":             {t2("TestFs74OnEvs"), t3(".", "TestFs74OnT3")},
 		"FS-75":             {t2("TestFs75OnEvs"), t3(".", "TestFs75OnT3")},
 		"FS-83":             {t2("TestFs83"), t3(".", "TestFs83OnT3")},
-		"FS-87's index":     {t2("TestFs87Index"), t3(".", "TestFs87IndexOnT3")},
 		"FS-89":             {t2("TestFs89"), t3("./evshost", "TestFs89OnT3")},
 		"FS-91":             {t2("TestFs91"), t3("./evshost", "TestFs91OnT3")},
-		"FS-92":             {t2("TestFs92"), t3("./model", "TestFs92HoldsPlacedByApiOnT3")},
 		"FS-94":             {t2("TestFs94"), t3("./evshost", "TestFs94OnT3")},
 		"FS-95":             {t2("TestFs95"), t3("./evshost", "TestFs95OnT3")},
-		"FS-99's cards":     {t2("TestFs99Cards"), t3(".", "TestFs99CardsOnT3")},
-		"FS-101's r-file":   {t2("TestFs101File")},
 		"FS-107":            {t2("TestFs107"), t3(".", "TestFs107OnT3")},
 		"FS-108":            {t2("TestFs108"), t3(".", "TestFs108OnT3")},
 		"FS-111":            {t2("TestFs111"), t3(".", "TestFs111OnT3")},
 		"FS-114's purge":    {suite},
 		"FS-114's drop":     {suite},
+	}
+	// the later-of cases as the held gate names them, each of which M10's exit holds too
+	for caseName, tests := range gateHeldCases(catalog) {
+		want[caseName] = tests
+	}
+	for caseName, tests := range map[string][]*GateTest{
+		"FS-66's hold":    {t2("TestFs66Hold"), t3("./model", "TestFs66HoldPlacedByApiOnT3")},
+		"FS-87's index":   {t2("TestFs87Index"), t3(".", "TestFs87IndexOnT3")},
+		"FS-99's cards":   {t2("TestFs99Cards"), t3(".", "TestFs99CardsOnT3")},
+		"FS-101's r-file": {t2("TestFs101File")},
+	} {
+		if !reflect.DeepEqual(want[caseName], tests) {
+			t.Errorf("the held gate names %s by %s, want %s", caseName, gateTestsStringForTest(want[caseName]), gateTestsStringForTest(tests))
+		}
 	}
 	swept := slices.Sorted(maps.Keys(gateM10Cases(catalog)))
 	wantSwept := slices.Sorted(maps.Keys(want))
@@ -379,8 +387,9 @@ func TestGateM10NamesEachRowsTestsWhereTheyRun(t *testing.T) {
 		}
 	}
 	// the cases left to the convention: no builder (FS-64), world tests under the convention's names with no builder
-	// (FS-76, FS-112), a T2-only builder on a T2+T3 row (FS-80, FS-86's cards), and the later-of cases TEST-M10-06 reports
-	for _, caseName := range []string{"FS-64", "FS-76", "FS-76's mailbox", "FS-80", "FS-86's cards", "FS-100's format-2", "FS-112", "FS-125"} {
+	// (FS-76, FS-112), a T2-only builder on a T2+T3 row (FS-80, FS-100's format-2), and the later-of cases no owner wrote
+	// a test of (FS-76's hold, FS-125's app-host)
+	for _, caseName := range []string{"FS-64", "FS-76", "FS-76's hold", "FS-80", "FS-100's format-2", "FS-112", "FS-125", "FS-125's app-host"} {
 		rowId, name, _ := strings.Cut(caseName, "'s ")
 		testCase := catalog.Case(rowId, name)
 		if row := gateFileRow(file, "M10", rowId, name); testCase == nil || row == nil || !reflect.DeepEqual(row.Tests, gateConventionalTests(testCase)) {

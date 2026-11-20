@@ -24,9 +24,12 @@
 // Every delete and the pointer's move is §11.13's unfunded P2 (budget.go): epoch retention, the pointer and §2.8's
 // TTLs at rank retention, a lost claim's staged deliveries and recovery wraps at rank GC. Each waits for its turn in
 // the budget within the run's MaxTime, and when its turn comes it checks the unit's hold again (WriteP2Work.Recheck),
-// so a hold placed while it waited still pauses it. While a page runs it declares SweepBacklogByteCount as its
-// unfunded backlog on each metadata cluster, so the governor shares the unfunded allowance with it; the sweep cannot
-// know its real backlog before it lists, so this is an estimate, cleared when the page ends.
+// so a hold placed while it waited still pauses it. Every hold check reads hold/ held to its bound as it returns
+// (HoldSet.CoveringAtDelete; owner decision 629), and the recheck is the last request before the DELETE: a read of
+// hold/ that came back already past the bound keeps the unit, as one that failed does. While a page runs it declares
+// SweepBacklogByteCount as its unfunded backlog on each metadata cluster, so the governor shares the unfunded
+// allowance with it; the sweep cannot know its real backlog before it lists, so this is an estimate, cleared when
+// the page ends.
 //
 // What this does not do yet: delete a Welcome before 90 d once every recipient has acked it, since gkm keeps no list
 // of a Welcome's recipients beside their pointers (gkm-5's "until every recipient has acked"); pointers do go at their
@@ -226,7 +229,9 @@ func (self *GkmReconciler) repoHeld(ctx context.Context, cluster sidecar.BlobClu
 	if err != nil {
 		return true
 	}
-	cover, err := self.holds.Covering(ctx, networkId, repoId)
+	// a read held to its bound as this check returns, which is just before the DELETE when it is the budget's
+	// recheck (owner decision 629)
+	cover, err := self.holds.CoveringAtDelete(ctx, nil, networkId, repoId)
 	return err != nil || cover.Covered()
 }
 
@@ -239,7 +244,8 @@ func (self *GkmReconciler) sidecarHeld(ctx context.Context, sidecarId sidecar.Id
 	if !known {
 		return true, false, nil
 	}
-	cover, err := self.holds.Covering(ctx, networkId, sidecar.Id{})
+	// held to its bound as this check returns, as repoHeld's is
+	cover, err := self.holds.CoveringAtDelete(ctx, nil, networkId, sidecar.Id{})
 	return err != nil || cover.Covered(), revoked, nil
 }
 

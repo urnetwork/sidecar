@@ -1036,7 +1036,8 @@ func (self *GkmReconciler) deleteDelegationKeyObject(networkId sidecar.Id, deleg
 		return false
 	}
 	held := func(ctx context.Context) bool {
-		cover, err := self.holds.Covering(ctx, networkId, sidecar.Id{})
+		// held to its bound as the check returns: as the budget's recheck, just before the DELETE (owner decision 629)
+		cover, err := self.holds.CoveringAtDelete(ctx, nil, networkId, sidecar.Id{})
 		return err != nil || cover.Covered()
 	}
 	if held(self.ctx) {

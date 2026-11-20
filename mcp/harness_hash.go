@@ -21,7 +21,8 @@
 //	           not write; then each file's entries are extracted afresh and hashed, and any other entry that can
 //	           answer for a ur tool counts as changed: a hook on PermissionRequest, PreToolUse or beforeMCPExecution
 //	           whose matcher covers ur's server, or an allow rule naming it, in the seal's files and in the session's
-//	           working directory's own settings files
+//	           working directory's own settings files; and while a network the daemon hosts sets record_required, a
+//	           seal of the fail-open form reads changed whatever its files hold (§16.7; owner decision 305)
 //
 // Any error reads changed, the closed direction (HarnessConfigCheck). Re-running the install restores ur's entries
 // and cannot bless a widened rule, since its seal comes from the template, never from the file as found.
@@ -201,6 +202,9 @@ type HarnessConfigHashesArgs struct {
 	// ur's own absolute path: a seal naming another reads changed. Nil takes each seal's own.
 	Executable func() (string, error)
 	Ingest     *sidecar.SidecarIngestSettings
+	// Whether a network the daemon hosts sets ServiceSettings.record_required now, read at each check: while one does,
+	// a seal of the fail-open form reads changed. Nil requires nothing.
+	RecordRequired func() bool
 }
 
 // The daemon's config check over the seals `ur install-harness` wrote.
@@ -227,6 +231,14 @@ func (self *HarnessConfigHashes) Check(ctx context.Context, harness string, cwd 
 	if len(seals) == 0 {
 		// nothing installed for this harness here: no hash holds
 		return true, nil
+	}
+	if self.args.RecordRequired != nil && self.args.RecordRequired() {
+		for _, seal := range seals {
+			if !seal.RecordRequired {
+				// installed fail-open while a Team requires the fail-closed form, until ur install-harness runs again
+				return true, nil
+			}
+		}
 	}
 	for _, seal := range seals {
 		if changed, err := self.checkSeal(seal, adapter); changed || err != nil {

@@ -16,8 +16,8 @@
 // so a reader whose config.proto lacks them skips them as unknown fields and reads every other field as before.
 // record_cost is RecordCostMode, whose zero reads as on, since a bool's zero cannot say on (SelfAdmitMode's pattern).
 // Where the head cannot be opened, each reads its closed value through ConfigTeamSettings: mail_strict off, so no mail
-// claims strict_custom_mx; record_cost off, so cost stays in the vault; record_required off, which ur install-harness
-// and the daemon's config check name as not known rather than read as fail-open.
+// claims strict_custom_mx; record_cost off, so cost stays in the vault; record_required off, so nothing requires
+// fail-closed hooks on a head this device cannot read, and ur install-harness and ur status say it is not known.
 //
 // Nothing here creates, derives or unwraps a key, so nothing calls testHookSecret. On every leg.
 

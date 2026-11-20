@@ -217,7 +217,7 @@ func decodeRecordReceiptDocument(logId Id, name string, content []byte) (*record
 	}
 	valid := document.Version == recordReceiptVersion && document.LogId == logId && document.Seq != 0 &&
 		recordReceiptName(logId, document.Seq) == name && len(document.Leaf) == sha256.Size &&
-		RecordReadPurpose(document.Purpose).Known() && 0 < len(document.ObjectIds) && len(document.ObjectIds) <= recordReadObjectCount
+		RecordReadPurpose(document.Purpose).Known() && 0 < len(document.ObjectIds) && len(document.ObjectIds) <= DefaultRecordBodySettings().ReadObjectCount
 	for _, objectId := range document.ObjectIds {
 		valid = valid && (len(objectId) == recordIdByteCount || len(objectId) == recordHashByteCount)
 	}
@@ -380,8 +380,9 @@ func (self *RecordReceipts) Deposit(ctx context.Context, request *RecordReceiptR
 		}
 	}
 	missing := receiptLog.missing(objects)
-	for start := 0; start < len(missing); start += recordReadObjectCount {
-		pending, err := self.seal(receiptLog, request, missing[start:min(start+recordReadObjectCount, len(missing))])
+	objectCount := DefaultRecordBodySettings().ReadObjectCount
+	for start := 0; start < len(missing); start += objectCount {
+		pending, err := self.seal(receiptLog, request, missing[start:min(start+objectCount, len(missing))])
 		if err != nil {
 			return err
 		}

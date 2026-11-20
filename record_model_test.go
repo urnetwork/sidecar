@@ -567,3 +567,59 @@ func TestRecordInventoryRollsADayOnTheClock(t *testing.T) {
 		t.Fatalf("%d inventories after a second day with a run", len(bodies))
 	}
 }
+
+// §7.9's grouping by client, beside RECORD.md section 13.1's by project with a map: by client needs a map naming a
+// project, refused without one before anything is read; with one each run's project groups by its client, a project
+// the map names no client for and a run with no project under (no client); by project with the same map keeps section
+// 13.1's view, a mapped project showing as its client and any other as itself; and a team log folds a client fewer
+// than five members wrote into other.
+func TestRecordCostReportByClientNeedsTheMap(t *testing.T) {
+	november := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC).UnixMilli()
+	usage := func(input uint64) *protocol.ModelUsage {
+		return &protocol.ModelUsage{Model: "sonnet", InputTokens: input, Calls: 1, Complete: true}
+	}
+	entries := []*sidecar.RecordCostEntry{
+		testRecordCostEntry(1, 0xa1, 1, november, 0x01, "alpha", usage(10)),
+		testRecordCostEntry(2, 0xa2, 1, november, 0x02, "beta", usage(20)),
+		testRecordCostEntry(3, 0xa3, 1, november, 0x03, "gamma", usage(40)),
+		testRecordCostEntry(4, 0xa4, 1, november, 0x04, "", usage(80)),
+	}
+	if by, err := sidecar.ParseRecordCostBy("client"); err != nil || by != sidecar.RecordCostByClient {
+		t.Fatalf("--by client: %q %v", by, err)
+	}
+	for _, clients := range []map[string]string{nil, {}} {
+		if _, err := sidecar.RecordCostReport(entries, &sidecar.RecordCostQuery{By: sidecar.RecordCostByClient, Clients: clients}, nil); !errors.Is(err, sidecar.ErrRecordCostNoClientMap) {
+			t.Fatalf("by client with the map %v: %v", clients, err)
+		}
+	}
+	if err := sidecar.CheckRecordCostQuery(sidecar.RecordCostByProject, nil); err != nil {
+		t.Fatalf("by project needs no map: %v", err)
+	}
+	clients := map[string]string{"alpha": "acme", "beta": "acme"}
+	rows, err := sidecar.RecordCostReport(entries, &sidecar.RecordCostQuery{By: sidecar.RecordCostByClient, Clients: clients}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[0].Group != sidecar.RecordCostGroupNoClient || rows[0].InputTokens != 120 || rows[0].Runs != 2 ||
+		rows[1].Group != "acme" || rows[1].InputTokens != 30 || rows[1].Runs != 2 {
+		t.Fatalf("by client %+v", rows)
+	}
+	byProject, err := sidecar.RecordCostReport(entries, &sidecar.RecordCostQuery{By: sidecar.RecordCostByProject, Clients: clients}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups := []string{}
+	for _, row := range byProject {
+		groups = append(groups, row.Group)
+	}
+	if !slices.Equal(groups, []string{sidecar.RecordCostGroupNoProject, "acme", "gamma"}) {
+		t.Fatalf("by project with the map: %v", groups)
+	}
+	team, err := sidecar.RecordCostReport(entries, &sidecar.RecordCostQuery{By: sidecar.RecordCostByClient, Clients: clients, Team: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(team) != 1 || team[0].Group != sidecar.RecordCostGroupOther || team[0].InputTokens != 150 || team[0].Runs != 4 {
+		t.Fatalf("a team log by client %+v", team)
+	}
+}

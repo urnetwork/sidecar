@@ -8,10 +8,12 @@
 //	          price this sidecar computed would be a claim it cannot back, so a self-hosted model's amount stays 0
 //	complete  false for every model of a run whose coverage holds a gap that may hide calls
 //	report    per run only the newest cost entry by seq in its writer's chain, since a re-opened run writes a newer
-//	          entry of whole-run totals; grouped by project, model or month, a --map file turning a project into its
-//	          client; no grouping by member and no order by amount, so the report ranks no one (owner decision on
-//	          QD-019); on a team log a group fewer than GroupMemberCount members wrote shows as `other`, which shapes
-//	          the tool and is no privacy control, admins holding the entries regardless
+//	          entry of whole-run totals; grouped by project, client, model or month: a --map file of project,client
+//	          lines turns a project into its client under project, as RECORD.md section 13.1's synopsis has it, and
+//	          client, §7.9's grouping, needs one, a run whose project it names no client for showing as
+//	          `(no client)`; no grouping by member and no order by amount, so the report ranks no one (owner
+//	          decision 302); on a team log a group fewer than GroupMemberCount members wrote shows as `other`, which
+//	          shapes the tool and is no privacy control, admins holding the entries regardless
 //
 // Not a bill: §20 owns billing.
 
@@ -36,10 +38,15 @@ import (
 
 var ErrRecordCostInvalid = errors.New("record: cost query invalid")
 
-// The group a report folds small groups and uncapped models into, and the one a run with no project falls in.
+// A report by client with no --map, or one naming no project: there is no client to group by.
+var ErrRecordCostNoClientMap = fmt.Errorf("%w: --by client needs --map, a file of project,client lines", ErrRecordCostInvalid)
+
+// The group a report folds small groups and uncapped models into, the one a run with no project falls in, and the
+// one a run whose project the map names no client for falls in by client.
 const (
 	RecordCostGroupOther     = "other"
 	RecordCostGroupNoProject = "(no project)"
+	RecordCostGroupNoClient  = "(no client)"
 )
 
 // How `ur record cost` groups.
@@ -49,8 +56,10 @@ const (
 	// One row, the log's total.
 	RecordCostByNone    RecordCostBy = ""
 	RecordCostByProject RecordCostBy = "project"
-	RecordCostByModel   RecordCostBy = "model"
-	RecordCostByMonth   RecordCostBy = "month"
+	// The client --map names for each run's project; refused without a map (ErrRecordCostNoClientMap).
+	RecordCostByClient RecordCostBy = "client"
+	RecordCostByModel  RecordCostBy = "model"
+	RecordCostByMonth  RecordCostBy = "month"
 )
 
 // A report's output format.
@@ -260,7 +269,8 @@ type RecordCostQuery struct {
 	SinceMillis int64
 	UntilMillis int64
 	By          RecordCostBy
-	// --map's project to client; nil for none. With it, by project groups by client.
+	// --map's project to client; nil for none. With it, by project groups a mapped project by its client; by client
+	// needs it.
 	Clients map[string]string
 	// The log read is a team record: small groups fold into `other`.
 	Team bool
@@ -333,14 +343,26 @@ func newRecordCostRow(group string) *RecordCostRow {
 	return &RecordCostRow{Group: group, Complete: true, runs: map[Id]bool{}, members: map[Id]bool{}}
 }
 
-// Parses --by: empty, project, model or month. `member` and anything else is refused: the report groups no one by
-// person.
+// Parses --by: empty, project, client, model or month. `member` and anything else is refused: the report groups no one
+// by person.
 func ParseRecordCostBy(by string) (RecordCostBy, error) {
 	switch typed := RecordCostBy(by); typed {
-	case RecordCostByNone, RecordCostByProject, RecordCostByModel, RecordCostByMonth:
+	case RecordCostByNone, RecordCostByProject, RecordCostByClient, RecordCostByModel, RecordCostByMonth:
 		return typed, nil
 	}
-	return RecordCostByNone, fmt.Errorf("%w: --by takes project, model or month, not %q", ErrRecordCostInvalid, by)
+	return RecordCostByNone, fmt.Errorf("%w: --by takes project, client, model or month, not %q", ErrRecordCostInvalid, by)
+}
+
+// Checks what a report asks before anything is read: a grouping ParseRecordCostBy takes, and a map naming a project
+// for a report by client.
+func CheckRecordCostQuery(by RecordCostBy, clients map[string]string) error {
+	if _, err := ParseRecordCostBy(string(by)); err != nil {
+		return err
+	}
+	if by == RecordCostByClient && len(clients) == 0 {
+		return ErrRecordCostNoClientMap
+	}
+	return nil
 }
 
 // Parses --format, text when empty.
@@ -401,7 +423,7 @@ func RecordCostReport(entries []*RecordCostEntry, query *RecordCostQuery, settin
 	if query == nil {
 		query = &RecordCostQuery{}
 	}
-	if _, err := ParseRecordCostBy(string(query.By)); err != nil {
+	if err := CheckRecordCostQuery(query.By, query.Clients); err != nil {
 		return nil, err
 	}
 	type chain struct {
@@ -439,6 +461,11 @@ func RecordCostReport(entries []*RecordCostEntry, query *RecordCostQuery, settin
 			if group == "" {
 				group = RecordCostGroupNoProject
 			} else if client, ok := query.Clients[group]; ok {
+				group = client
+			}
+		case RecordCostByClient:
+			group = RecordCostGroupNoClient
+			if client, ok := query.Clients[entry.Project]; ok && entry.Project != "" {
 				group = client
 			}
 		case RecordCostByMonth:
@@ -643,7 +670,7 @@ func (self *SidecarRecord) CostReport(ctx context.Context, logId Id, query *Reco
 	if query == nil {
 		query = &RecordCostQuery{}
 	}
-	if _, err := ParseRecordCostBy(string(query.By)); err != nil {
+	if err := CheckRecordCostQuery(query.By, query.Clients); err != nil {
 		return nil, err
 	}
 	entries, err := self.CostEntries(ctx, logId)

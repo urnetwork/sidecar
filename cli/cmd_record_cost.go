@@ -4,9 +4,11 @@
 //
 // Sums one log's cost entries, the vault by default: per run only the newest, tokens and the amounts harnesses
 // reported. No price is computed, so a self-hosted model shows tokens and no amount, and this is no bill. --by is
-// project, model or month; --map is a local file of project,client lines, which groups projects by client with
-// nothing new in any log. There is no grouping by member and no order by amount: the report ranks no one. On a team
-// log a group fewer than five members wrote shows as other.
+// project, client, model or month (§7.9's project, client or month beside RECORD.md section 13.1's project, model or
+// month). --map is a local file of project,client lines, which groups projects by client with nothing new in any log:
+// under --by project a mapped project shows as its client, and --by client needs it, refused before the daemon is
+// asked without one, a project it names no client for showing as (no client). There is no grouping by member and no
+// order by amount: the report ranks no one. On a team log a group fewer than five members wrote shows as other.
 
 package main
 
@@ -75,6 +77,9 @@ func (self *urDaemonNetwork) recordCost(ctx context.Context, params *urRecordCos
 	if err != nil {
 		return nil, err
 	}
+	if err := sidecar.CheckRecordCostQuery(by, params.Clients); err != nil {
+		return nil, err
+	}
 	rows, err := record.CostReport(ctx, logId, &sidecar.RecordCostQuery{
 		SinceMillis: params.SinceMillis, UntilMillis: params.UntilMillis, By: by, Clients: params.Clients,
 	}, nil)
@@ -126,6 +131,10 @@ func runUrRecordCost(ctx context.Context, cli *urCli, options docopt.Opts) error
 		if params.Clients, err = sidecar.ParseRecordCostMap(content, nil); err != nil {
 			return err
 		}
+	}
+	// a report by client with no map is refused here, before the daemon is asked
+	if err := sidecar.CheckRecordCostQuery(sidecar.RecordCostBy(params.By), params.Clients); err != nil {
+		return err
 	}
 	reply := &urRecordCostReply{}
 	if err := cli.callDaemon(ctx, urMethodRecordCost, params, false, reply); err != nil {

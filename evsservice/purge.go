@@ -13,7 +13,10 @@
 //	reread   X's newest version from the cluster (PurgeNewestReader) and the network's hold/ objects, cached at most
 //	         5 s and read again before each DELETE: a candidate the newest version names stays, and a hold covering
 //	         the repo keeps each candidate that existed at its placement, an uploaded segment or a slot by its
-//	         LastModified (a HEAD, only then), a staged one by its version's time_ms less the statement's lead
+//	         LastModified (a HEAD, only then), a staged one by its version's time_ms less the statement's lead. The
+//	         hold/ read is held to its bound as the DELETE issues (owner decision 629): after the HEAD and a slot's
+//	         budget turn, a read past the bound is read again (HoldCache.CoveringAtDelete) and the candidate judged
+//	         on it; a slot a hold placed since covers, which had no HEAD, is left to the sweep
 //	delete   kind-5 segments at seg/ on the segment cluster, which spend no NVMe budget, and slots on the repo's
 //	         metadata cluster as funded P2 (rank GC), paid at u's admission through PricePush; a staged candidate
 //	         whose version is under 23 h old is left to its batch's evacuation, an older one deleted at seg/; at most
@@ -690,8 +693,20 @@ func (self *Purger) runDue() {
 	}
 }
 
+// The cover a DELETE acts on (owner decision 629): cover while its read is younger than the bound, else hold/ read
+// again. A read that fails, or one already past the bound, is unknown, which keeps everything, as a read before the
+// DELETE that fails is.
+func (self *Purger) coverAtDelete(commit *PurgeCommit, cover *sidecar.HoldCover) *sidecar.HoldCover {
+	atDelete, err := self.holds.CoveringAtDelete(self.ctx, cover, commit.NetworkId, commit.RepoId)
+	if err != nil {
+		return &sidecar.HoldCover{Unknown: true}
+	}
+	return atDelete
+}
+
 // A kind-5 segment at seg/: a HEAD for its size and, under a hold, its LastModified; a staged one's creation by its
-// version's time_ms less the statement's lead, so a batch that may predate a hold keeps its content.
+// version's time_ms less the statement's lead, so a batch that may predate a hold keeps its content. It is judged on
+// the cover held to its bound after the HEAD.
 func (self *Purger) deleteSegment(item *purgeItem, segmentCluster sidecar.BlobCluster, id []byte, staged bool, versionTime time.Time, cover *sidecar.HoldCover, barrierKey string) purgeOutcome {
 	commit := item.commit
 	if len(id) != 32 {
@@ -710,6 +725,8 @@ func (self *Purger) deleteSegment(item *purgeItem, segmentCluster sidecar.BlobCl
 	if staged {
 		createTime = versionTime.Add(-self.settings.StatementAheadBound)
 	}
+	// the HEAD may have stalled past the bound: nothing more is waited on after this read
+	cover = self.coverAtDelete(commit, cover)
 	if cover.Keeps(createTime) {
 		// only the hold keeps it now: it leaves the stored count (§20.7's stored row), and the hold's end deletes it
 		self.count(func(stats *PurgeStats) { stats.HeldCount += 1 })
@@ -736,7 +753,9 @@ func (self *Purger) deleteSegment(item *purgeItem, segmentCluster sidecar.BlobCl
 }
 
 // A slot on the repo's metadata cluster, as funded P2 of rank GC paid at u's admission; under a hold, its
-// LastModified by a HEAD. Slots are outside the stored count and report nothing.
+// LastModified by a HEAD. Slots are outside the stored count and report nothing. After the budget's turn it is judged
+// again on the cover held to its bound; one a hold now covers that had no HEAD is left to the sweep, which reads its
+// LastModified under that hold.
 func (self *Purger) deleteSlot(item *purgeItem, cluster sidecar.BlobCluster, id []byte, cover *sidecar.HoldCover, barrierKey string) purgeOutcome {
 	commit := item.commit
 	slotId, err := sidecar.IdFromBytes(id)
@@ -744,8 +763,9 @@ func (self *Purger) deleteSlot(item *purgeItem, cluster sidecar.BlobCluster, id 
 		return purgeOutcomeLeft
 	}
 	key := SlotKey(commit.RepoId, slotId)
+	var info *sidecar.BlobInfo
 	if cover.Covered() {
-		info, err := cluster.Head(self.ctx, key)
+		info, err = cluster.Head(self.ctx, key)
 		switch {
 		case errors.Is(err, sidecar.ErrBlobNotFound):
 			self.count(func(stats *PurgeStats) { stats.AbsentCount += 1 })
@@ -772,6 +792,16 @@ func (self *Purger) deleteSlot(item *purgeItem, cluster sidecar.BlobCluster, id 
 		return purgeOutcomeLeft
 	}
 	defer grant.Close()
+	// the HEAD and the budget's turn may have outlasted the bound: nothing more is waited on after this read
+	if atDelete := self.coverAtDelete(commit, cover); atDelete.Covered() {
+		switch {
+		case info == nil:
+			return purgeOutcomeLeft
+		case atDelete.Keeps(info.LastModified):
+			self.count(func(stats *PurgeStats) { stats.HeldCount += 1 })
+			return purgeOutcomeHeld
+		}
+	}
 	testHookBarrier(BarrierPurgeDeleteBefore, barrierKey)
 	if !self.step(item, BarrierPurgeDeleteBefore, barrierKey) {
 		return purgeOutcomeLeft

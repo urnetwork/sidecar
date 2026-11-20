@@ -293,6 +293,11 @@ type HoldCover struct {
 	// A body no reader can read as a known hold, a listing or read that failed, or a repo whose
 	// network is not known.
 	Unknown bool
+	// When the read this cover comes from began, by the HoldSet's clock: the time before its LIST, so
+	// the read is never older than this says. A DELETE acts on the cover only while this is younger
+	// than the bound (HoldSet.CoveringAtDelete). Zero for a cover no read gave: a repo whose network is
+	// not known, or a read that failed.
+	ReadTime time.Time
 }
 
 // Whether anything covers: while true, a server sweep, GC or drop deletes nothing in scope.
@@ -332,7 +337,10 @@ func (self *HoldCover) Keeps(createTime time.Time) bool {
 // Tunables of a HoldSet.
 type HoldSetSettings struct {
 	// How long one network's read answers before the next LIST: §11.13's reread rows cache hold/ at
-	// most 5 s, so a hold placed now covers within that. Non-positive rereads on every call.
+	// most 5 s, so a hold placed now covers within that. It is also the bound a DELETE acts within
+	// (owner decision 629): no DELETE issues on a read this old (CoveringAtDelete), so a hold binds every
+	// deleter from this long after api acknowledged its placement, which api's placement reports.
+	// Non-positive rereads on every call, and leaves a deleter no read young enough to delete on.
 	RereadInterval time.Duration
 	// Keys one LIST page asks for. A network's holds are few; a page bounds what one request returns.
 	// Must be positive.
@@ -362,6 +370,8 @@ type holdObject struct {
 // One read of a network's hold/ prefix, shared by the callers that wait on it.
 type holdRead struct {
 	done chan struct{}
+	// the reader's time before its LIST, set before the read is shared
+	readTime time.Time
 	// set before done closes
 	keyObjects map[string]*holdObject
 	err        error
@@ -410,12 +420,12 @@ func (self *HoldSet) Covering(ctx context.Context, networkId Id, repoId Id) (*Ho
 	if networkId == (Id{}) {
 		return &HoldCover{Unknown: true}, nil
 	}
-	keyObjects, err := self.networkObjects(ctx, networkId)
+	keyObjects, readTime, err := self.networkObjects(ctx, networkId)
 	if err != nil {
 		return &HoldCover{Unknown: true}, err
 	}
 	now := self.clock.Now()
-	cover := &HoldCover{}
+	cover := &HoldCover{ReadTime: readTime}
 	for _, object := range keyObjects {
 		switch {
 		case object.record == nil:
@@ -436,11 +446,50 @@ func (self *HoldSet) Covering(ctx context.Context, networkId Id, repoId Id) (*Ho
 	return cover, nil
 }
 
-// The network's hold objects by key: the cached read while it is fresh, the read in flight when one
-// is, else a new read, which this caller makes and others share.
-func (self *HoldSet) networkObjects(ctx context.Context, networkId Id) (map[string]*holdObject, error) {
+// A hold/ read that was already as old as RereadInterval when it came back, a LIST or GET slower than
+// the bound a DELETE acts within: CoveringAtDelete answers it as a read that failed, with an unknown
+// cover, so nothing is deleted on it.
+var ErrHoldReadStale = errors.New("hold read older than its bound")
+
+// Whether a DELETE issued now may act on cover (owner decision 629): its read is younger than
+// RereadInterval by the clock, so every hold api acknowledged that long ago or more shows in it. A
+// cover no read gave never is.
+func (self *HoldSet) Fresh(cover *HoldCover) bool {
+	return !cover.ReadTime.IsZero() && self.clock.Now().Sub(cover.ReadTime) < self.settings.RereadInterval
+}
+
+// The cover a DELETE about to issue acts on (owner decision 629: a hold binds a deleter from
+// RereadInterval after api acknowledged its placement). cover itself while it is Fresh, so a DELETE
+// after a quick HEAD acts on the read it already had; else, or for a nil cover, Covering's answer for
+// networkId and repoId, which reads hold/ again unless another caller's read is younger, so a stall
+// before a run of DELETEs costs one read, which the cache shares with every DELETE after it. That
+// answer is held to the bound too: one whose read is RereadInterval old already, a LIST or GET slower
+// than the bound, is unknown, with ErrHoldReadStale, as a read that failed is. A zero networkId is
+// covered with unknown terms, as Covering's is.
+//
+// The caller judges again on what comes back, which may be another cover than the one it gave, and
+// issues its DELETE with no wait and no other request between.
+func (self *HoldSet) CoveringAtDelete(ctx context.Context, cover *HoldCover, networkId Id, repoId Id) (*HoldCover, error) {
+	if cover != nil && self.Fresh(cover) {
+		return cover, nil
+	}
+	again, err := self.Covering(ctx, networkId, repoId)
+	if err != nil || again.ReadTime.IsZero() {
+		// a read that failed, or no network to read: unknown either way
+		return again, err
+	}
+	if !self.Fresh(again) {
+		return &HoldCover{Unknown: true, ReadTime: again.ReadTime}, ErrHoldReadStale
+	}
+	return again, nil
+}
+
+// The network's hold objects by key and the time their read began: the cached read while it is fresh,
+// the read in flight when one is, else a new read, which this caller makes and others share.
+func (self *HoldSet) networkObjects(ctx context.Context, networkId Id) (map[string]*holdObject, time.Time, error) {
 	now := self.clock.Now()
 	var cached map[string]*holdObject
+	var cachedReadTime time.Time
 	var previous map[string]*holdObject
 	var read *holdRead
 	reader := false
@@ -458,23 +507,24 @@ func (self *HoldSet) networkObjects(ctx context.Context, networkId Id) (map[stri
 			return
 		}
 		if entry.keyObjects != nil && now.Sub(entry.readTime) < self.settings.RereadInterval {
-			cached = entry.keyObjects
+			cached, cachedReadTime = entry.keyObjects, entry.readTime
 			return
 		}
 		previous = entry.keyObjects
-		read = &holdRead{done: make(chan struct{})}
+		// the time before the LIST, so a read is never older than it claims
+		read = &holdRead{done: make(chan struct{}), readTime: now}
 		entry.reading = read
 		reader = true
 	}()
 	if cached != nil {
-		return cached, nil
+		return cached, cachedReadTime, nil
 	}
 	if !reader {
 		select {
 		case <-read.done:
-			return read.keyObjects, read.err
+			return read.keyObjects, read.readTime, read.err
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, time.Time{}, ctx.Err()
 		}
 	}
 
@@ -492,15 +542,14 @@ func (self *HoldSet) networkObjects(ctx context.Context, networkId Id) (map[stri
 			entry.reading = nil
 			if read.err == nil {
 				entry.keyObjects = read.keyObjects
-				// the time before the LIST, so a read is never older than it claims
-				entry.readTime = now
+				entry.readTime = read.readTime
 			}
 		}()
 		close(read.done)
 	}()
 	read.keyObjects, read.err = self.readNetwork(ctx, networkId, previous)
 	completed = true
-	return read.keyObjects, read.err
+	return read.keyObjects, read.readTime, read.err
 }
 
 // What waiters get from a read that ended without an answer.

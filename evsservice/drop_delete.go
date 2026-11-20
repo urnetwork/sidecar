@@ -8,7 +8,10 @@
 //	       more is issued, and the ids left are unanswered
 //	F8     per id, hold/ and repo/ reread, each cached at most 5 s: a covering hold, or one whose terms no reader
 //	       can tell, moves the rest of D to held, each still stored counted at its stored size; nothing a hold keeps
-//	       is deleted, and a DELETE already issued completes
+//	       is deleted, and a DELETE already issued completes. The hold/ read is held to its bound at the DELETE too
+//	       (owner decision 629): after the HEAD, the gate and a slot's budget turn, a cover whose read has aged past
+//	       the bound is read again (HoldCache.CoveringRepoAtDelete), and a hold it shows moves this id and the rest
+//	       of D to held
 //	HEAD   seg/<repo>/<id> on the segment cluster, slot/<repo>/<id> on the metadata cluster: a segment's 404 with a
 //	       page in spidx/ is packed (withheld until a compaction, unscheduled), any other 404 absent
 //	F7     LastModified + AdoptionBound past the round's horizon: young, for a later round whose scans read only
@@ -193,7 +196,18 @@ type dropDeleteRun struct {
 	// whether spidx/ holds a page, read once a run
 	spidxRead bool
 	packed    bool
+	// the repo/ object and the hold cover the current id is judged on (F8), the cover read again at its DELETE
+	repoObject *protocol.EvsRepoObject
+	holdCover  *sidecar.HoldCover
 }
+
+var (
+	// A hold the read at a DELETE found (F8): the id and the rest of D move to held.
+	errDropDeleteHeld = errors.New("evs drop delete: a hold covers the repo at the DELETE")
+	// The read at a DELETE failed or came back past its bound: nothing is issued, and the run stops as a read before
+	// the HEAD that fails stops it.
+	errDropHoldRead = errors.New("evs drop delete: hold/ unread at the DELETE")
+)
 
 // The deletes (EVSB-M10-06): see the file header.
 func (self *DropDelete) Delete(ctx context.Context, request *DropDeleteRequest) (*DropDeleteResult, error) {
@@ -263,9 +277,11 @@ func (self *dropDeleteRun) gate() (string, error) {
 	return "", nil
 }
 
-// The repo's repo/ and the holds covering it, each read at most 5 s ago (F8): the repo's object, and whether it is
-// active and whether a hold covers it, one whose terms no reader can tell among them.
+// The repo's repo/ and the holds covering it, each read at most 5 s ago (F8): whether it is active and whether a hold
+// covers it, one whose terms no reader can tell among them. The object and the cover stay with the run for the
+// read at the DELETE.
 func (self *dropDeleteRun) cover() (active bool, held bool, err error) {
+	self.repoObject, self.holdCover = nil, nil
 	read, err := self.deleter.repos.Read(self.ctx, self.request.Cluster, self.request.RepoId)
 	if errors.Is(err, sidecar.ErrEvsRepoNotFound) {
 		return false, false, nil
@@ -280,7 +296,28 @@ func (self *dropDeleteRun) cover() (active bool, held bool, err error) {
 	if err != nil {
 		return false, false, err
 	}
+	self.repoObject, self.holdCover = read.Object, cover
 	return true, cover.Covered(), nil
+}
+
+// F8 at the DELETE (owner decision 629): the cover the id was judged on while its read is younger than the bound,
+// else hold/ read again. errDropDeleteHeld when a hold now covers the repo, or one whose terms no reader can tell; a
+// read that fails, or one already past the bound, is the caller's error. Called with nothing between it and the
+// DELETE's barrier.
+func (self *dropDeleteRun) holdsAtDelete() error {
+	if self.repoObject == nil || self.holdCover == nil {
+		return fmt.Errorf("%w: a DELETE with no hold cover read", ErrDropJobState)
+	}
+	cover, err := self.deleter.holds.CoveringRepoAtDelete(self.ctx, self.holdCover, self.request.RepoId, self.repoObject)
+	if err != nil {
+		// tagged, so the DELETE's own unknown outcomes are not read into it
+		return fmt.Errorf("%w: %w", errDropHoldRead, err)
+	}
+	self.holdCover = cover
+	if cover.Covered() {
+		return errDropDeleteHeld
+	}
+	return nil
 }
 
 // Waits so at most DeletesPerSecond requests go in each second of the clock.
@@ -378,6 +415,10 @@ func (self *dropDeleteRun) run() error {
 			return self.moveToHeld(candidates[i:])
 		}
 		if err := self.judge(candidate); err != nil {
+			if errors.Is(err, errDropDeleteHeld) {
+				// the read at its DELETE found a hold the read before its HEAD did not
+				return self.moveToHeld(candidates[i:])
+			}
 			return err
 		}
 		if self.deleter.settings.CheckpointInterval <= self.deleter.clock.Now().Sub(self.lastCheckpoint) {
@@ -437,6 +478,9 @@ func (self *dropDeleteRun) judge(candidate *DropCandidate) error {
 		}
 		err = self.delete(candidate, cluster, key, info.LastModified)
 		switch {
+		case errors.Is(err, errDropDeleteHeld), errors.Is(err, errDropHoldRead):
+			// the read at the DELETE issued nothing: a hold moves the rest of D to held, an unread one stops the run
+			return err
 		case err == nil:
 			if candidate.Kind == DropIdSegment {
 				size := uint64(max(0, info.ByteCount))
@@ -472,7 +516,8 @@ func (self *dropDeleteRun) judge(candidate *DropCandidate) error {
 
 // One DELETE naming lastModified, with the lease's deadline less DeadlineMargin, cancelled the moment the clock
 // turns unsure. A slot's, on the metadata cluster, goes as funded P2 work of rank drop, which the DROP's admission paid
-// for; a segment's, on the HDDs, spends no NVMe budget.
+// for; a segment's, on the HDDs, spends no NVMe budget. hold/ is read again first when the cover has aged past its
+// bound (holdsAtDelete), after the budget's turn: errDropDeleteHeld issues nothing.
 func (self *dropDeleteRun) delete(candidate *DropCandidate, cluster sidecar.BlobCluster, key string, lastModified time.Time) error {
 	parent := self.ctx
 	if candidate.Kind == DropIdSlot {
@@ -484,6 +529,9 @@ func (self *dropDeleteRun) delete(candidate *DropCandidate, cluster sidecar.Blob
 		}
 		defer grant.Close()
 		parent = grant.Context()
+	}
+	if err := self.holdsAtDelete(); err != nil {
+		return err
 	}
 	deadline := self.leaseUntil.Add(-self.request.DeadlineMargin)
 	deleteCtx, cancel := context.WithCancel(sidecar.WithBlobUnmodified(sidecar.WithBlobDeadline(parent, deadline), lastModified))

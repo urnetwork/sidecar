@@ -469,9 +469,10 @@ func TestRegisterGateSweepRefusesANegativeTimeout(t *testing.T) {
 }
 
 // Only the tests known to outlast the tool's default run under timeouts of their own (QD-1058), each written beside
-// its tags: §22.4's release fixture under 3h, as run.sh's BUILD_TEST runs it (QD-1056), and M10's reading of FS-86's
-// card case at the Team limit, a whole peak hour in real time on T3's layouts, under 2h (D-TEST-17; QD-1068). Every
-// other test the file names keeps the tool's default.
+// its tags: §22.4's release fixture under 3h, as run.sh's BUILD_TEST runs it (QD-1056), and the reading of FS-86's card
+// case at the Team limit, a whole peak hour in real time on T3's layouts, under 2h (D-TEST-17; QD-1068), which M10's exit
+// and the held gate carry, the card case falling due at the later of M6's and M10's exits. Every other test the file
+// names keeps the tool's default.
 func TestGateFileGivesOwnTimeoutsOnlyToTestsThatOutlastTheDefault(t *testing.T) {
 	data, err := GateFile(DefaultCatalog())
 	if err != nil {
@@ -481,10 +482,11 @@ func TestGateFileGivesOwnTimeoutsOnlyToTestsThatOutlastTheDefault(t *testing.T) 
 	bounded := map[string]struct {
 		timeout time.Duration
 		tags    string
-		gate    string
+		gates   []string
+		count   int
 	}{
-		"TestSidecarReleaseFixture":                     {timeout: 3 * time.Hour, tags: "sidecar_release_fixture"},
-		"TestFs86CardCommitsAtTheTeamLimitOnTheLayouts": {timeout: 2 * time.Hour, tags: "sidecar_testhooks,sidecar_pending,sidecar_filecluster_t3", gate: "M10"},
+		"TestSidecarReleaseFixture":                     {timeout: 3 * time.Hour, tags: "sidecar_release_fixture", count: 1},
+		"TestFs86CardCommitsAtTheTeamLimitOnTheLayouts": {timeout: 2 * time.Hour, tags: "sidecar_testhooks,sidecar_pending,sidecar_filecluster_t3", gates: []string{"M10", "held"}, count: 2},
 	}
 	found := map[string]int{}
 	for _, gate := range GateNames() {
@@ -507,14 +509,16 @@ func TestGateFileGivesOwnTimeoutsOnlyToTestsThatOutlastTheDefault(t *testing.T) 
 				if test.Timeout != want.timeout || test.Tags != want.tags || !slices.Equal(test.Names, []string{name}) {
 					t.Errorf("%s's %s runs under %s with tags %q beside %v", gate, name, test.Timeout, test.Tags, test.Names)
 				}
-				if want.gate != "" && gate != want.gate {
-					t.Errorf("%s names %s, which is %s's", gate, name, want.gate)
+				if 0 < len(want.gates) && !slices.Contains(want.gates, gate) {
+					t.Errorf("%s names %s, which is %v's", gate, name, want.gates)
 				}
 			}
 		}
 	}
-	if found["TestSidecarReleaseFixture"] != 1 || found["TestFs86CardCommitsAtTheTeamLimitOnTheLayouts"] != 1 {
-		t.Fatalf("the file names the bounded tests %v times", found)
+	for name, want := range bounded {
+		if found[name] != want.count {
+			t.Fatalf("the file names the bounded tests %v times", found)
+		}
 	}
 	for _, line := range []string{
 		"tags: sidecar_release_fixture, timeout: 3h0m0s, names: [TestSidecarReleaseFixture]",

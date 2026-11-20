@@ -1092,8 +1092,8 @@ func ParseRecordTargets(kind RecordKind, targets []string, expiresMillis int64, 
 	default:
 		return nil, ErrRecordAppendKind
 	}
-	if recordTargetCount < len(targets) {
-		return refuse(fmt.Sprintf("takes at most %d targets", recordTargetCount))
+	if targetCount := DefaultRecordBodySettings().TargetCount; targetCount < len(targets) {
+		return refuse(fmt.Sprintf("takes at most %d targets", targetCount))
 	}
 	parsed := &RecordTargets{}
 	for index, target := range targets {
@@ -1258,9 +1258,10 @@ func (self *RecordProjection) coordinationBody(args *RecordAppendArgs, now time.
 		return nil, nil, err
 	}
 	text := self.redactProse(args.Text)
-	textCap := recordCoordinationTextByteCount
+	bodySettings := DefaultRecordBodySettings()
+	textCap := bodySettings.CoordinationTextByteCount
 	if args.Kind == RecordKindClaim || args.Kind == RecordKindHandoff {
-		textCap = recordClaimTextByteCount
+		textCap = bodySettings.ClaimTextByteCount
 	}
 	if textCap < len(text) {
 		return nil, nil, fmt.Errorf("%w: %s text of %d bytes, past %d", ErrRecordTargetsInvalid, args.Kind, len(text), textCap)

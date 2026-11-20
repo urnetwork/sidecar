@@ -779,3 +779,42 @@ func TestFailOpenEntryUnderARequiredSealReadsChanged(t *testing.T) {
 		}
 	}
 }
+
+// While a network the daemon hosts sets record_required (§16.7; owner decision 305), a fail-open install reads as a
+// changed config, whatever its files hold, so its runs taint until the install runs again; a fail-closed one does
+// not; and once no network requires it, the fail-open install reads unchanged again.
+func TestFailOpenInstallReadsChangedWhileATeamRequires(t *testing.T) {
+	for _, harness := range HarnessNames() {
+		required := false
+		check := func(state string) *HarnessConfigHashes {
+			return NewHarnessConfigHashes(&HarnessConfigHashesArgs{
+				StateDirectory: state,
+				Executable:     func() (string, error) { return testHarnessUrPath, nil },
+				Ingest:         sidecar.DefaultSidecarSettings().Ingest,
+				RecordRequired: func() bool { return required },
+			})
+		}
+		home := testHarnessHome(t, harness)
+		state := t.TempDir()
+		testInstallHarness(t, testHarnessArgs(harness, home, state))
+		if testHarnessChanged(t, check(state), harness, home) {
+			t.Fatalf("%s: a fail-open install reads changed with no Team requiring", harness)
+		}
+		required = true
+		if !testHarnessChanged(t, check(state), harness, home) {
+			t.Errorf("%s: a fail-open install reads unchanged while a Team requires the fail-closed form", harness)
+		}
+		closedHome := testHarnessHome(t, harness)
+		closedState := t.TempDir()
+		args := testHarnessArgs(harness, closedHome, closedState)
+		args.RecordRequired = true
+		testInstallHarness(t, args)
+		if testHarnessChanged(t, check(closedState), harness, closedHome) {
+			t.Errorf("%s: a fail-closed install reads changed while a Team requires it", harness)
+		}
+		required = false
+		if testHarnessChanged(t, check(state), harness, home) {
+			t.Errorf("%s: a fail-open install still reads changed once no Team requires", harness)
+		}
+	}
+}
