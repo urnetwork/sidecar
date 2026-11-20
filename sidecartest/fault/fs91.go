@@ -31,10 +31,11 @@
 // segment, and that segment's bytes, which the route withholds for anything a drop's job deleted or holds.
 //
 // The copy is a hand-built push (EvsWorld.PostPlan, ReuseFill): the client's planner writes a reuse list only from a
-// git tier's publish. Not built: (c)'s creating head write held at the store past 26 h and its cache entry put 11 min
-// after its head's write; a push in parts sealed after the drop, (d) (evsservice's
-// TestPushDroppedRefusesASealAfterTheDrop holds the seal's refusal on the engine); a re-upload adopting a young
-// candidate's receipt, (e); and a git-mode push carrying a candidate's bytes, (f).
+// git tier's publish. Not built: (c)'s copy creating its ref with its head write held at the store past 26 h, and its
+// cache entry put 11 min after its head's write, never served (evsservice's TestHeadCacheStampsTheHeadsWrittenMs holds
+// that on the engine, and fi27_test.go holds FI-27's side of it); a push in parts sealed after the drop, (d)
+// (evsservice's TestPushDroppedRefusesASealAfterTheDrop holds the seal's refusal on the engine); a re-upload adopting a
+// young candidate's receipt, (e); and a git-mode push carrying a candidate's bytes, (f).
 
 package fault
 
