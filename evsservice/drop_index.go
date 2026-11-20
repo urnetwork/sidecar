@@ -24,6 +24,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -297,7 +298,7 @@ func (self *DropIndex) NoteAppended(clusterId string, repoId sidecar.Id, refId s
 }
 
 // What a process keeps of one repo's drops for serving (read_drop.go, read_withheld.go): its table and when it read
-// it, its list files and when it listed them, and the ids its job's del and held files withhold.
+// it, its list files and when it listed them, and the ids its jobs' del and held files withhold.
 type dropRepoState struct {
 	tableReadAt time.Time
 	// nil while drops/<repo>/_ is absent: the repo never had a drop
@@ -308,9 +309,10 @@ type dropRepoState struct {
 	// the list files' bytes as read, which their index entry counts
 	listByteCount int64
 
-	withheldAt  time.Time
-	withheldJob sidecar.Id
-	withheld    map[DropScanId]bool
+	withheldAt time.Time
+	// the jobs whose files the set was read from, in the table's order
+	withheldJobs []sidecar.Id
+	withheld     map[DropScanId]bool
 }
 
 // One repo's serving state's key.
@@ -371,42 +373,49 @@ func (self *DropIndex) Lists(ctx context.Context, segmentCluster sidecar.BlobClu
 	return files, nil
 }
 
-// The ids the repo's running job withholds (EVS2-M10-10's withheld-id set): every id its del files answer deleted,
-// held or packed and every id its held files keep, so no byte of one is served, a held one reading as a deleted one
-// (owner decision 184). Loaded through the table's job record from the segment cluster, again for another job or
-// each IndexRefresh; empty for a table with no job, which costs no read.
+// The ids the repo's jobs withhold (EVS2-M10-10's withheld-id set): every id the del files of its running job and of
+// each held job answer deleted, held or packed and every id their held files keep, so no byte of one is served, a held
+// one reading as a deleted one (owner decision 184), however many jobs a hold stopped since (QD-1127). Loaded through
+// the table's job records from the segment cluster, again for another set of jobs or each IndexRefresh; empty for a
+// table with no job, which costs no read.
 func (self *DropIndex) Withheld(ctx context.Context, segmentCluster sidecar.BlobCluster, clusterId string, repoId sidecar.Id, table *DropTableState, now time.Time) (map[DropScanId]bool, error) {
-	if table == nil || table.Job == nil {
+	if table == nil {
+		return nil, nil
+	}
+	jobIds := table.JobIds()
+	if len(jobIds) == 0 {
 		return nil, nil
 	}
 	state := self.repoState(clusterId, repoId)
-	if state.withheld != nil && state.withheldJob == table.Job.JobId && now.Sub(state.withheldAt) < self.settings.IndexRefresh {
+	if state.withheld != nil && slices.Equal(state.withheldJobs, jobIds) && now.Sub(state.withheldAt) < self.settings.IndexRefresh {
 		return state.withheld, nil
 	}
-	files := NewDropFiles(segmentCluster, repoId, table.Job.JobId, self.settings)
 	withheld := map[DropScanId]bool{}
-	dels, err := files.ReadAll(ctx, DropFileDel)
-	if err != nil {
-		return nil, err
-	}
-	for _, del := range dels {
-		for _, answer := range del.Answers {
-			switch answer.Outcome {
-			case DropOutcomeDeleted, DropOutcomeHeld, DropOutcomePacked:
-				withheld[answer.DropScanId] = true
+	for _, jobId := range jobIds {
+		files := NewDropFiles(segmentCluster, repoId, jobId, self.settings)
+		dels, err := files.ReadAll(ctx, DropFileDel)
+		if err != nil {
+			return nil, err
+		}
+		for _, del := range dels {
+			for _, answer := range del.Answers {
+				switch answer.Outcome {
+				case DropOutcomeDeleted, DropOutcomeHeld, DropOutcomePacked:
+					withheld[answer.DropScanId] = true
+				}
+			}
+		}
+		helds, err := files.ReadAll(ctx, DropFileHeld)
+		if err != nil {
+			return nil, err
+		}
+		for _, held := range helds {
+			for _, id := range held.Ids {
+				withheld[id] = true
 			}
 		}
 	}
-	helds, err := files.ReadAll(ctx, DropFileHeld)
-	if err != nil {
-		return nil, err
-	}
-	for _, held := range helds {
-		for _, id := range held.Ids {
-			withheld[id] = true
-		}
-	}
-	state.withheldAt, state.withheldJob, state.withheld = now, table.Job.JobId, withheld
+	state.withheldAt, state.withheldJobs, state.withheld = now, jobIds, withheld
 	self.putRepoState(clusterId, repoId, state)
 	return withheld, nil
 }

@@ -309,7 +309,8 @@ func TestReadWithholdsTheJobsHeldIds(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := fixture.engine.drops.Update(fixture.paidContext(), fixture.cluster, fixture.check.repoId, func(state *DropTableState, now time.Time) (bool, error) {
-		state.Job = &DropJobRecord{JobId: jobId, Phase: protocol.EvsDropPhase_EVS_DROP_DELETE, Held: true, StartedMs: now.UnixMilli()}
+		// a held job's record sits among the held jobs, out of the slot (QD-1127)
+		state.HeldJobs = append(state.HeldJobs, &DropJobRecord{JobId: jobId, Phase: protocol.EvsDropPhase_EVS_DROP_DELETE, Held: true, StartedMs: now.UnixMilli()})
 		return true, nil
 	}); err != nil {
 		t.Fatal(err)

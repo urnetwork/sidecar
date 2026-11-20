@@ -228,6 +228,8 @@ barrier evs.drop.head.after evsservice/drop_mark.go
 barrier evs.drop.head.after evsservice/dropverify/verify.go
 barrier evs.drop.head.before evsservice/drop_mark.go
 barrier evs.drop.head.before evsservice/dropverify/verify.go
+barrier evs.drop.held.after evsservice/drop_job.go
+barrier evs.drop.held.before evsservice/drop_job.go
 barrier evs.drop.horizon.after evsservice/drop_job.go
 barrier evs.drop.horizon.before evsservice/drop_job.go
 barrier evs.drop.mark.after evsservice/drop_job.go
@@ -240,6 +242,8 @@ barrier evs.drop.resolve.after evsservice/drop_job.go
 barrier evs.drop.resolve.before evsservice/drop_job.go
 barrier evs.drop.start.after evsservice/drop_job.go
 barrier evs.drop.start.before evsservice/drop_job.go
+barrier evs.drop.take.after evsservice/drop_job.go
+barrier evs.drop.take.before evsservice/drop_job.go
 barrier evs.drop.verify.after evsservice/drop_job.go
 barrier evs.drop.verify.before evsservice/drop_job.go
 barrier evs.entry.read.after evsservice/entry.go

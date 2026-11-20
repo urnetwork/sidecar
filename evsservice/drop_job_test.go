@@ -130,7 +130,8 @@ func (self *fakeDropVerifier) Verify(ctx context.Context, request *DropVerifyReq
 }
 
 // The deletes' stand-in until EVSB-M10-06: each candidate's outcome by outcomeOf, a del file of the answers and one
-// checkpoint; held moves the rest of D to held.
+// checkpoint; held moves the rest of D to held. As the deletes' held files make it, an id a job moved to held reports
+// its bytes then and never again, its later DELETE freeing nothing (§11.13's delete row).
 type fakeDropDeleter struct {
 	events     *dropJobEvents
 	outcomeOf  func(candidate *DropCandidate) DropOutcome
@@ -138,6 +139,7 @@ type fakeDropDeleter struct {
 	youngBound time.Time
 	freedEach  uint64
 	requests   []*DropDeleteRequest
+	heldBefore map[sidecar.Id]map[DropScanId]bool
 }
 
 // The outcome a candidate meets that the deleter leaves unanswered.
@@ -146,6 +148,14 @@ const fakeDropUnanswered DropOutcome = 0
 func (self *fakeDropDeleter) Delete(ctx context.Context, request *DropDeleteRequest) (*DropDeleteResult, error) {
 	self.events.add("delete")
 	self.requests = append(self.requests, request)
+	if self.heldBefore == nil {
+		self.heldBefore = map[sidecar.Id]map[DropScanId]bool{}
+	}
+	heldBefore := self.heldBefore[request.JobId]
+	if heldBefore == nil {
+		heldBefore = map[DropScanId]bool{}
+		self.heldBefore[request.JobId] = heldBefore
+	}
 	result := &DropDeleteResult{Held: self.held, Progress: &DropDeleteProgress{}}
 	answers := []*DropAnswer{}
 	for _, candidate := range request.Candidates {
@@ -162,12 +172,16 @@ func (self *fakeDropDeleter) Delete(ctx context.Context, request *DropDeleteRequ
 		}
 		answers = append(answers, &DropAnswer{DropScanId: candidate.DropScanId, Outcome: outcome})
 		result.Progress.Cursor = DropCursor{Sequence: candidate.Cursor.Sequence, Row: candidate.Cursor.Row + 1}
-		switch outcome {
-		case DropOutcomeDeleted:
+		switch {
+		case heldBefore[candidate.DropScanId]:
+			// its bytes went off the count when it moved to held
+		case outcome == DropOutcomeDeleted:
 			result.Progress.FreedByteCount += self.freedEach
-		case DropOutcomeHeld:
+		case outcome == DropOutcomeHeld:
 			result.Progress.HeldByteCount += self.freedEach
-		case DropOutcomeYoung:
+			heldBefore[candidate.DropScanId] = true
+		}
+		if outcome == DropOutcomeYoung {
 			result.YoungBound = self.youngBound
 		}
 	}
@@ -766,7 +780,7 @@ func TestDropJobRunsAnotherRoundForAYoungId(t *testing.T) {
 }
 
 // Owner decision 184: a covering hold moves the rest of D to held, the drop reads done, and once every covering hold
-// ends a round deletes what was held.
+// ends a round deletes what was held. The held job gives up the slot to wait (QD-1127).
 func TestDropJobWaitsOnAHold(t *testing.T) {
 	fixture := newDropJobFixture(t)
 	world := fixture.world
@@ -782,8 +796,9 @@ func TestDropJobWaitsOnAHold(t *testing.T) {
 	fixture.deleter.held = true
 	result := fixture.run()
 	table := fixture.table()
-	if result.Waiting != DropWaitHold || table.Drop(testId("drop-1")).State != DropStateHeld || table.Job == nil || !table.Job.Held {
-		t.Fatalf("the held run: %+v", result)
+	if result.Waiting != DropWaitHold || table.Drop(testId("drop-1")).State != DropStateHeld || table.Job != nil ||
+		len(table.HeldJobs) != 1 || !table.HeldJobs[0].Held || table.HeldJobs[0].Owner != (sidecar.Id{}) {
+		t.Fatalf("the held run: %+v, the slot %+v", result, table.Job)
 	}
 	status, _ := table.Drop(testId("drop-1")).State.Status()
 	if status != protocol.EvsDropState_EVS_DROP_DONE || table.Drop(testId("drop-1")).HeldByteCount != 300 {
