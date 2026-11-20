@@ -351,8 +351,9 @@ func (self *SidecarRecord) SetEraseIndex(open RecordEraseIndexOpen) {
 	erasing.open = open
 }
 
-// From here each sync of a log marks it for a look for late copies, and each pass of the record's loop erases them
-// and goes on with every journaled erasure whose next try has come. Once a record; NewRecordComponent calls it.
+// From here each sync of a log marks it for a look, and each pass of the record's loop erases the late copies it finds
+// there, takes up others' erasures there at most once a RetryInterval, and goes on with every journaled erasure whose
+// next try has come. Once a record; NewRecordComponent calls it.
 func (self *SidecarRecord) hookErasures() {
 	erasing := self.erasingState()
 	hooked := func() bool {
