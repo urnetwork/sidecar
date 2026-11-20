@@ -80,6 +80,29 @@ type ProverSettings struct {
 	// A test's cut of DATA's body below what the body shape holds, so that a short body takes several
 	// parts. 0, the only value outside tests, cuts each body record at the shape's capacity.
 	testDataRecordByteCount int
+	// A malicious sender's means on this otherwise honest prover, for FS-31's adversarial rows. Nil, the
+	// only value outside tests.
+	testAdversary *proverAdversary
+}
+
+// What FS-31's malicious sender (SMTP-M9-30, D-SMTP-16's corpus) changes in an honest prover: it proves a
+// part its own check refuses, takes a mode the EHLO reply does not offer, goes on past a refused command,
+// sends other envelope commands, each a record of its own, and seals other content into a record. Every
+// record is still sealed under the connection's real keys and every part proven over what its records
+// hold, as a sender holding its own keys can, so what refuses each one is the edge's checks alone, before
+// the MX reads any record the part opens. Only tests make one.
+type proverAdversary struct {
+	// Proves and submits a part the relation refuses, or one no shape holds, where an honest prover stops.
+	skipSelfCheck bool
+	// The mode taken, partModeBdat or partModeData, whatever the EHLO reply offers; partModeNone for the
+	// honest choice.
+	forceMode uint32
+	// Goes on past a refused envelope command, as if the MX had taken it.
+	ignoreRefusals bool
+	// The envelope's commands, MAIL's first and DATA's last in DATA mode, in place of the honest ones.
+	commands func(commands []string) []string
+	// The content sealed at a sequence number in place of the honest content.
+	content func(seq uint64, content []byte) []byte
 }
 
 func DefaultProverSettings() *ProverSettings {
@@ -164,6 +187,9 @@ type proverRun struct {
 	// Every reply code read inside TLS, in order, and each RCPT's, once any was read, for the result.
 	replyCodes          []uint32
 	recipientReplyCodes []uint32
+	// The content a test's adversary sealed in place of the honest content, by sequence number, which
+	// each part's witness then holds (proverAdversary.content). Nil outside tests.
+	adversaryContents map[uint64][]byte
 }
 
 // The gate's state when a part reaches it, as this prover mirrors it, which the part's statement takes.
@@ -399,6 +425,9 @@ func (self *proverRun) run(ctx context.Context) (*sidecar.SmtpProofResult, error
 	if offersChunking(self.result.version, received) && !self.settings.ForceData {
 		mode = partModeBdat
 	}
+	if adversary := self.settings.testAdversary; adversary != nil && adversary.forceMode != partModeNone {
+		mode = adversary.forceMode
+	}
 	pipelining := false
 	for i, text := range replies[0].lines {
 		if 0 < i && asciiLower([]byte(text)) == "pipelining" {
@@ -436,6 +465,9 @@ func (self *proverRun) run(ctx context.Context) (*sidecar.SmtpProofResult, error
 	}
 	if mode == partModeData {
 		commands = append(commands, literalData)
+	}
+	if adversary := self.settings.testAdversary; adversary != nil && adversary.commands != nil {
+		commands = adversary.commands(commands)
 	}
 	if result, err := self.sendEnvelope(ctx, commands, pipelining); result != nil || err != nil {
 		return result, err
@@ -476,9 +508,13 @@ func smtpReplyRefuses(reply *smtpReply, expectsData bool) bool {
 	return reply.code[0] != '2'
 }
 
-// The plaintext a record's witness holds: in 1.3 its content and type octet.
+// The plaintext a record's witness holds: in 1.3 its content and type octet. A test's adversary may have
+// sealed other content in the record, which the witness then holds.
 func (self *proverRun) opened(record *tlsSealedRecord, content string) []byte {
 	plaintext := []byte(content)
+	if sealed, ok := self.adversaryContents[record.seq]; ok {
+		plaintext = bytes.Clone(sealed)
+	}
 	if self.result.version == tlsVersion13 {
 		plaintext = append(plaintext, tlsRecordApplicationData)
 	}
@@ -486,6 +522,16 @@ func (self *proverRun) opened(record *tlsSealedRecord, content string) []byte {
 }
 
 func (self *proverRun) seal(content []byte) (*tlsSealedRecord, error) {
+	if adversary := self.settings.testAdversary; adversary != nil && adversary.content != nil {
+		seq := self.client.clientCipher.seq
+		if changed := adversary.content(seq, bytes.Clone(content)); !bytes.Equal(changed, content) {
+			if self.adversaryContents == nil {
+				self.adversaryContents = map[uint64][]byte{}
+			}
+			self.adversaryContents[seq] = bytes.Clone(changed)
+			content = changed
+		}
+	}
 	return self.client.sealApplication(content)
 }
 
@@ -822,11 +868,13 @@ func (self *proverRun) witnessOf(spec *proverPart, statement *partStatement) *pa
 // Checks a part against the relation and proves it. A part no catalog shape holds is refused at the edge
 // before it verifies, so it is never sent.
 func (self *proverRun) proveStatement(ctx context.Context, statement *partStatement, witness *partWitness) ([]byte, error) {
-	if failures := relationCheckPart(statement, witness); 0 < len(failures) {
-		return nil, fmt.Errorf("smtpproof: part %d does not satisfy the relation: %w", statement.index, failures[0])
-	}
-	if _, err := partShapeFor(self.settings.Proof, statement); err != nil {
-		return nil, fmt.Errorf("smtpproof: part %d: %w", statement.index, err)
+	if adversary := self.settings.testAdversary; adversary == nil || !adversary.skipSelfCheck {
+		if failures := relationCheckPart(statement, witness); 0 < len(failures) {
+			return nil, fmt.Errorf("smtpproof: part %d does not satisfy the relation: %w", statement.index, failures[0])
+		}
+		if _, err := partShapeFor(self.settings.Proof, statement); err != nil {
+			return nil, fmt.Errorf("smtpproof: part %d: %w", statement.index, err)
+		}
 	}
 	return self.backend.provePart(ctx, statement, witness)
 }

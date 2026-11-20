@@ -3,12 +3,14 @@
 package sidecartest
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"net"
 	"net/netip"
+	"strings"
 	"sync"
 	"testing"
 
@@ -226,4 +228,54 @@ func TestRecordMxSendsALateTicketAKeyUpdateAndPaddedRecords(t *testing.T) {
 		t.Fatal(errs)
 	}
 	testExpectSent(t, "ticket and key update", result, err, mx.Transactions(), job)
+}
+
+// DATA's 354 is one accepted command, and a message the connection's end cuts off before its end mark is no
+// message: the record keeps DATA once, then an unfinished message it did not accept, and no transaction.
+func TestScriptedMxRecordsAnUnfinishedDataMessageAsNothingTaken(t *testing.T) {
+	mx, err := NewScriptedMx(testMxHost, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, server := NewMxPipe(&net.TCPAddr{}, &net.TCPAddr{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		mx.ServeMx(server)
+	}()
+	reader := bufio.NewReader(client)
+	expect := func(code string) {
+		t.Helper()
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil || !strings.HasPrefix(line, code) {
+				t.Fatalf("%q, %v where %s belongs", line, err, code)
+			}
+			if len(line) < 4 || line[3] == ' ' {
+				return
+			}
+		}
+	}
+	expect("220")
+	client.Write([]byte("EHLO " + testHeloName + "\r\n"))
+	expect("250")
+	for _, command := range []string{"MAIL FROM:<bounce-1@" + testEnvelopeDomain + ">", "RCPT TO:<bob@" + testRecipientHost + ">"} {
+		client.Write([]byte(command + "\r\n"))
+		expect("250")
+	}
+	client.Write([]byte("DATA\r\n"))
+	expect("354")
+	client.Write([]byte("a line of a message that never ends\r\n"))
+	client.Close()
+	<-done
+	if accepted := mx.Accepted(); strings.Count(strings.Join(accepted, "\n"), "DATA") != 1 {
+		t.Errorf("accepted %q", accepted)
+	}
+	events := mx.Events()
+	if last := events[len(events)-1]; last.Command != "<data unfinished>" || last.Accepted {
+		t.Errorf("the last event %+v", last)
+	}
+	if transactions := mx.Transactions(); len(transactions) != 0 {
+		t.Errorf("%d transactions", len(transactions))
+	}
 }
