@@ -14,21 +14,20 @@
 //	         in, a reply from any other address or one failing DMARC go nowhere; no target is in URnetwork's zones; and
 //	         each code, forward and relay is one connection
 //	FS-123   the mail side: what a send through MailClient meets per domain, refused, tls_refused, too_large and
-//	         deferred, stands in the member's or/ as the composing device reads it, the DSNs reach the mailbox as mail,
-//	         and no copy MAIL hands a person of a send names an inbound indexer, receiver or coverage setting, nor does
-//	         GetReceiverCoverage's copy speak of sending
+//	         deferred, reaches GetSendResult (MailClient.SendResult, by the send's id from the member's or/) and
+//	         mail_send (the composing device's component, from or/, and the prover host's sender, by the runner's
+//	         send_id), each naming the send, and stands after the send's o/ entry is gone; the DSNs reach the mailbox as
+//	         mail, and no copy MAIL hands a person of a send names an inbound indexer, receiver or coverage setting, nor
+//	         does GetReceiverCoverage's copy speak of sending
 //
 // The world is mailworld's M9World (m9_world.go): M8's network, whose owner's laptop sends through MailClient and, as
 // the member's prover host, through SmtpSender to ScriptedMxs behind SMTP's stub edge; for S6 and FS-123 the laptop's
-// client runs its component, whose ingest is the reader that forwards and files DSNs. Every name and address is
-// synthetic: .example names and RFC 5737 addresses (connect/CODESTYLE.md's test data rule). Nothing sleeps: an ingest
-// pass is waited for at its CONSUME barrier.
+// client runs its component, whose ingest is the reader that forwards and files DSNs and whose send watch raises
+// mail_send from or/. Every name and address is synthetic: .example names and RFC 5737 addresses (connect/CODESTYLE.md's
+// test data rule). Nothing sleeps: an ingest pass is waited for at its CONSUME barrier, and a send watch's read at its
+// barriers, held at its start through the row's step (M9World.FollowSends).
 //
-// Not composed here, and named in MAIL-M9-06's report: GetSendResult reads a send's outcomes by its send_id, which no
-// MailClient call does yet (QD-853's "MailClient's check and results"), and a send through the outbox raises no mail_send
-// on either device, since the runner's message carries no send_id and the composing device raises none from or/; the
-// rows read or/ as the composing device's MailClient serves it instead. Mail above the spam threshold is MAIL-M9-04's
-// unit rows', since no row here trains the filter.
+// Mail above the spam threshold is MAIL-M9-04's unit rows', since no row here trains the filter.
 
 package sidecartest_test
 
@@ -410,10 +409,12 @@ func TestS6ForwardAndRelayThroughMailsCode(t *testing.T) {
 }
 
 // FS-123's mail side: a send through MailClient to a refusing, an unauthenticated and a DATA-only domain past the
-// prover host's cap stands in the member's or/ as the composing device reads it, refused with the MX's code, tls_refused,
-// and too_large with both byte counts; held at the edge, deferred with its wait; the DSNs reach the mailbox as mail, and
-// no answer MAIL gives the sender, no outcome and no DSN as the person reads it names an inbound indexer, receiver or
-// coverage setting, only too_large's DSN citing a size.
+// prover host's cap reaches GetSendResult by its send_id, refused with the MX's code, tls_refused, and too_large with
+// both byte counts, in the order its domains first appear, and mail_send names it once for each outcome that changed,
+// from the composing device's or/ and from the prover host's sender alike; held at the edge, another send reads
+// deferred with its wait and raises one more, the first raising none, and the first still reads by its id once its o/
+// entry is gone; the DSNs reach the mailbox as mail, and no answer MAIL gives the sender, no outcome and no DSN as the
+// person reads it names an inbound indexer, receiver or coverage setting, only too_large's DSN citing a size.
 func TestFs123MailOutcomesStandInTheSendingMailbox(t *testing.T) {
 	const capByteCount = 4 * 1024
 	net := sidecartest.NewNet(t.Context(), nil)
@@ -432,17 +433,19 @@ func TestFs123MailOutcomesStandInTheSendingMailbox(t *testing.T) {
 	body := strings.Repeat("A line of the body, long enough to pass a small cap.\r\n", 120)
 
 	var result *sidecar.MailSendResult
-	world.Ingest(func() {
-		var err error
-		result, err = world.Owner.Send(ctx, &sidecar.MailSendArgs{
-			From: from, To: []string{"bob@refuse.example", "carol@plain.example", "dave@data.example"}, Subject: "FS-123", Text: body,
+	world.FollowSends(func() {
+		world.Ingest(func() {
+			var err error
+			result, err = world.Owner.Send(ctx, &sidecar.MailSendArgs{
+				From: from, To: []string{"bob@refuse.example", "carol@plain.example", "dave@data.example"}, Subject: "FS-123", Text: body,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if pass := world.RunOutbox(); pass.Sent != 1 {
+				t.Fatalf("the outbox pass %+v", pass)
+			}
 		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if pass := world.RunOutbox(); pass.Sent != 1 {
-			t.Fatalf("the outbox pass %+v", pass)
-		}
 	})
 	for _, recipient := range result.Recipients {
 		if recipient.Outcome != sidecar.MailSendQueued {
@@ -452,7 +455,11 @@ func TestFs123MailOutcomesStandInTheSendingMailbox(t *testing.T) {
 			t.Errorf("a send's answer names %q", match)
 		}
 	}
-	outcomes := world.Outcomes(result.EffectKey)
+	// GetSendResult by the send's id, its domains in the order they first appear
+	outcomes, domains := world.SendResult(result.SendId)
+	if !slices.Equal(domains, []string{"refuse.example", "plain.example", "data.example"}) {
+		t.Errorf("the result's domains %v", domains)
+	}
 	if outcome := outcomes["refuse.example"]; outcome == nil || outcome.Outcome != sidecar.SmtpOutcomeRefused || outcome.ReplyCode != 550 {
 		t.Errorf("refuse.example: %+v", outcome)
 	}
@@ -465,6 +472,25 @@ func TestFs123MailOutcomesStandInTheSendingMailbox(t *testing.T) {
 	}
 	if len(data.Transactions()) != 0 || len(plain.Transactions()) != 0 {
 		t.Errorf("the DATA MX took %d and the plain one %d transactions", len(data.Transactions()), len(plain.Transactions()))
+	}
+	// mail_send: the composing device's component once a changed outcome, from or/, and the prover host's sender the
+	// same, its message naming the send by the entry's Message-ID; each naming the send
+	namesOnly := func(events []sidecar.SidecarEvent, sendIds ...sidecar.Id) bool {
+		if len(events) != len(sendIds) {
+			return false
+		}
+		for i, event := range events {
+			if event.SendId == nil || *event.SendId != sendIds[i] {
+				return false
+			}
+		}
+		return true
+	}
+	if events := world.ComponentMailSendEvents(); !namesOnly(events, result.SendId, result.SendId, result.SendId) {
+		t.Errorf("the component raised %d mail_send events: %+v", len(events), events)
+	}
+	if events := world.MailSendEvents(); !namesOnly(events, result.SendId, result.SendId, result.SendId) {
+		t.Errorf("the sender raised %d mail_send events: %+v", len(events), events)
 	}
 
 	// the DSNs as the person reads them, in the mailbox
@@ -498,15 +524,29 @@ func TestFs123MailOutcomesStandInTheSendingMailbox(t *testing.T) {
 		t.Fatalf("the mailbox holds DSNs for %v", dsnDomains)
 	}
 
-	// held at the edge: deferred, with the edge's wait
+	// held at the edge: deferred, with the edge's wait, one more mail_send naming it and none for the first send, whose
+	// outcomes did not change; the pass removes the first send's entry, which the result outlives
 	wait := world.Send.HoldPreambles(2 * time.Minute)
-	held, err := world.Owner.Send(ctx, &sidecar.MailSendArgs{From: from, To: []string{"erin@refuse.example"}, Subject: "FS-123 held", Text: "Later."})
-	if err != nil {
-		t.Fatal(err)
-	}
-	world.RunOutbox()
-	if outcome := world.Outcomes(held.EffectKey)["refuse.example"]; outcome == nil || outcome.Outcome != sidecar.SmtpOutcomeDeferred || outcome.RetryAfter != wait {
+	var held *sidecar.MailSendResult
+	world.FollowSends(func() {
+		held, err = world.Owner.Send(ctx, &sidecar.MailSendArgs{From: from, To: []string{"erin@refuse.example"}, Subject: "FS-123 held", Text: "Later."})
+		if err != nil {
+			t.Fatal(err)
+		}
+		world.RunOutbox()
+	})
+	heldOutcomes, _ := world.SendResult(held.SendId)
+	if outcome := heldOutcomes["refuse.example"]; outcome == nil || outcome.Outcome != sidecar.SmtpOutcomeDeferred || outcome.RetryAfter != wait {
 		t.Errorf("deferred for %v: %+v", wait, outcome)
+	}
+	if events := world.ComponentMailSendEvents(); !namesOnly(events, result.SendId, result.SendId, result.SendId, held.SendId) {
+		t.Errorf("after the held send the component raised %+v", events)
+	}
+	if slices.ContainsFunc(world.Outbox(), func(effectKey []byte) bool { return bytes.Equal(effectKey, result.EffectKey) }) {
+		t.Fatal("the first send's entry stands")
+	}
+	if again, _ := world.SendResult(result.SendId); again["refuse.example"] == nil || again["refuse.example"].Outcome != sidecar.SmtpOutcomeRefused {
+		t.Errorf("once its entry went, the first send reads %+v", again)
 	}
 }
 
