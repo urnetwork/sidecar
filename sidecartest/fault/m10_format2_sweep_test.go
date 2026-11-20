@@ -27,9 +27,9 @@
 //	            names that nothing declares fails here; a server one is reported, so a rename in server never fails
 //	            sidecar's tip
 //
-// Which case is registered is read from the registry when the sweep runs, so a schedule registered later
-// (ABUSE-M10-01's hold cases of FS-66, FS-69 and FS-92, say) turns its case from missing to run with no edit here, and
-// a case's lines for when nothing is registered print only while that holds. server's evshost/m10_format2_sweep_test.go
+// Which case is registered is read from the registry when the sweep runs, so a schedule registered later turns its
+// case from missing to run with no edit here, as ABUSE-M10-01's hold cases of FS-66, FS-69 and FS-92 did, and a case's
+// lines for when nothing is registered print only while that holds. server's evshost/m10_format2_sweep_test.go
 // is the T3 half: the registered cases and the clauses beside them on T3's Nets, at a merge's seeds.
 //
 // The registry and the gate's rows are this package's, so this is an internal test of it.
@@ -110,9 +110,9 @@ func m10Format2Held(packagePath string, names ...string) *GateTest {
 }
 
 // What the later of M5-out and M10-out runs on: the hold cases (§23.6).
-const m10Format2HoldOpen = "a hold case, due at the later of M5-out and M10-out (§23.6): it runs here on fixture holds " +
-	"(sidecartest.PlaceHold; ABUSE-M10-01's hold api seam once it lands), since holds in production wait on §21.9's api " +
-	"writing hold/ and counsel's confirmation of owner decision 133"
+const m10Format2HoldOpen = "a hold case, due at the later of M5-out and M10-out (§23.6): on T2 it runs on fixture holds " +
+	"(sidecartest.PlaceHold, and ABUSE-M10-01's FixtureHoldApi, which writes api's bytes on api's deadlines), on T3 against " +
+	"api's real hold/ writes (server's model), and holds in production wait on counsel's confirmation of owner decision 133"
 
 // What every drop and purge clause waits on at T3 while T3's clusters have not declared settle.
 const m10Format2SettleNote = "on T3 the local stack's clusters name no settle_passed_build, so a drop job holds at its " +
@@ -161,8 +161,8 @@ func m10Format2SweepCases() []*m10Format2Case {
 			heldByTests: []*GateTest{
 				m10Format2Held("./evsservice", "TestEvacuationWritesStagedContentAHoldKeeps"),
 			},
-			unscheduledNote: "ABUSE-M10-01 registers it against api's hold/ writes (in flight in another lane, not on this " +
-				"tree); until then evacuation's hold keep runs as the test below",
+			unscheduledNote: "ABUSE-M10-01's schedule, against api's hold/ writes; with none registered, evacuation's hold keep " +
+				"runs as the test below",
 			openNotes: []string{m10Format2HoldOpen},
 		},
 		{
@@ -198,9 +198,8 @@ func m10Format2SweepCases() []*m10Format2Case {
 				m10Format2Held("./evsservice", "TestPurgerHoldKeepsWhatExistedAtItsPlacement", "TestPurgerHoldPlacedAfterTheCertaintyStopsLaterDeletes", "TestSweepKeepsWhatAHoldKeeps", "TestEvsSweepHoldEndDeletesWhatTheHoldKept"),
 				m10Format2Held(".", "TestHoldCoverKeepsWhatExistedAtPlacement"),
 			},
-			unscheduledNote: "EVSB-M10-01's schedule (sidecartest/fault/fs69_test.go), deferred; ABUSE-M10-01 registers the row " +
-				"against api's hold/ writes (in flight in another lane, not on this tree); until then the purge's, the sweep's " +
-				"and the hold-end pass's hold rules run as the tests below",
+			unscheduledNote: "ABUSE-M10-01's schedule, against api's hold/ writes (EVSB-M10-01 deferred its fs69_test.go); with " +
+				"none registered, the purge's, the sweep's and the hold-end pass's hold rules run as the tests below",
 			openNotes: []string{m10Format2HoldOpen},
 		},
 		{
@@ -307,8 +306,8 @@ func m10Format2SweepCases() []*m10Format2Case {
 				m10Format2Held("./sidecartest/fault", "TestFs92AHoldKeepsWhatTheDropWouldDeleteUntilItEnds", "TestFs92ASealedHoldsAnswersEqualANoHoldTwin"),
 				m10Format2Held("./evsservice", "TestDropDeleteMovesTheRestToHeldUnderAHold", "TestDropJobWaitsOnAHold", "TestDropStateHeldReadsDone"),
 			},
-			unscheduledNote: "EVSB-M10-06's job-side clauses run as T2 tests on fixture holds; ABUSE-M10-01 registers the row " +
-				"against api's hold/ writes (in flight in another lane, not on this tree), and FI-13's oracle is unbound",
+			unscheduledNote: "ABUSE-M10-01's schedule, against api's hold/ writes; with none registered, EVSB-M10-06's " +
+				"job-side clauses run as T2 tests on fixture holds, and FI-13's oracle is unbound",
 			openNotes: []string{m10Format2HoldOpen},
 		},
 		{
@@ -624,7 +623,7 @@ func TestM10Format2SweepOnT2(t *testing.T) {
 		if slices.Contains(testCase.Tiers(), TierT3) {
 			switch t3Registration := Lookup(testCase.Row.Id, testCase.Name, TierT3); {
 			case t3Registration != nil:
-				fmt.Fprintf(&report, "  T3: %s, run by the T3 half (server's evshost/m10_format2_sweep_test.go) at a merge's seeds and by its own TestFs<n><Case>OnT3 at the nightly seeds\n", t3Registration)
+				fmt.Fprintf(&report, "  T3: %s, by its T3 tests where the gate list says; the T3 half (server's evshost/m10_format2_sweep_test.go) runs evshost's at a merge's seeds\n", t3Registration)
 			case 0 < len(sweepCase.t3Tests):
 				for _, test := range sweepCase.t3Tests {
 					fmt.Fprintf(&report, "  T3: no builder; %s's %s %v under %s\n", test.Repo, test.Package, test.Names, test.Tags)
