@@ -40,10 +40,10 @@
 // A job a hold stops gives up the slot (QD-1127; §11.13's table row): its record moves to the table's held jobs, with
 // no lease, so a drop made during the hold starts, runs and moves to held under it as its no-hold twin starts and ends,
 // listed, admitted and billed alike. A held job's files keep its ids withheld (DropIndex.Withheld) and stay for tidy.
-// At its retry_ms a run with the slot free reads the holds: while one covers the repo, or none can tell, every held job
-// due waits HorizonRetryInterval more; once none does, the oldest held job takes the slot back, before any new job, and
-// runs a round over what it held from its own files, its drops reading done throughout (owner decision 184), the rest
-// queued behind it, one job at a time.
+// At a held job's retry_ms a run with the slot free reads the holds: while one covers the repo, or none can tell, every
+// held job due waits HorizonRetryInterval more; once none does, the oldest held job takes the slot back, whatever its
+// own retry_ms, before any new job, and runs a round over what it held from its own files, its drops reading done
+// throughout (owner decision 184), the rest queued behind it, each due at once, one job at a time.
 //
 // Resolve and mark are EVSB-M10-04's, verify EVSB-M10-05's (server injects dropverify), and the deletes EVSB-M10-06's:
 // this file declares their seams (CONTRACTS.md C-16), and a job missing any of them starts nothing, so nothing is
@@ -925,7 +925,7 @@ func setDropPhase(state *DropTableState, job *DropJobRecord, phase protocol.EvsD
 // this job's, a held job resumed after its holds (snap-0 names them), done: the held entries of the jobs still held
 // stay theirs (QD-1127).
 func (self *dropJobRun) end(state DropState) error {
-	own := map[sidecar.Id]bool{}
+	ownDropIds := map[sidecar.Id]bool{}
 	if state == DropStateDone && self.last != nil && self.last.Job != nil && self.last.Job.JobId == self.jobId && self.last.Job.Resumed {
 		file, err := self.files.Read(self.ctx, DropFileSnap, 0)
 		if err != nil {
@@ -933,7 +933,7 @@ func (self *dropJobRun) end(state DropState) error {
 		}
 		if file != nil {
 			for _, drop := range file.Covered {
-				own[drop.DropId] = true
+				ownDropIds[drop.DropId] = true
 			}
 		}
 	}
@@ -942,7 +942,7 @@ func (self *dropJobRun) end(state DropState) error {
 		movedCount = 0
 		for _, entry := range table.Drops {
 			// an executing entry is the running job's, one job a repo; a held one ends done once its held ids are deleted
-			if entry.State == DropStateExecuting || (entry.State == DropStateHeld && own[entry.DropId]) {
+			if entry.State == DropStateExecuting || (entry.State == DropStateHeld && ownDropIds[entry.DropId]) {
 				entry.FreedByteCount, entry.HeldByteCount = job.FreedByteCount, job.HeldByteCount
 				table.setState(entry, state, dropDay(now))
 				movedCount += 1
@@ -1086,15 +1086,15 @@ func (self *dropJobRun) resume(jobId sidecar.Id) error {
 	return self.loop(read.State)
 }
 
-// With the slot free: the oldest held job whose retry_ms has come takes it back once no hold covers the repo, and while
-// one does, or none can tell, every such held job waits again; then, unless a held job took it, a new job over the
-// startable drops.
+// With the slot free: once a held job's retry_ms has come the holds are read, and once none covers the repo the oldest
+// held job takes the slot back, whatever its own retry_ms; while one does, or none can tell, every held job due waits
+// again. Then, unless a held job took it, a new job over the startable drops.
 func (self *dropJobRun) next(table *DropTableState) error {
 	now := self.job.clock.Now()
-	if due := dueHeldJobs(table, now); 0 < len(due) {
+	if 0 < len(dueHeldJobs(table, now)) {
 		cover, err := self.job.holds.CoveringRepo(self.ctx, self.repoId, self.repoObject)
 		if err == nil && cover != nil && !cover.Unknown && len(cover.Holds) == 0 {
-			return self.resumeHeld(due[0].JobId)
+			return self.resumeHeld(table.HeldJobs[0].JobId)
 		}
 		if err := self.waitHeld(); err != nil {
 			return err
@@ -1123,7 +1123,8 @@ func (self *dropJobRun) waitHeld() error {
 
 // Held job jobId, whose holds have all ended, takes the slot back (QD-1127): its record leaves the held jobs for the
 // slot, resumed, its lease this instance's, in phase horizon for a round over what it held, which its own files name;
-// its drops keep reading done (owner decision 184). ErrDropLeaseLost when the slot is taken or the held job is gone.
+// its drops keep reading done (owner decision 184). The held jobs behind it are due at once, so each takes the slot in
+// turn as soon as it is free. ErrDropLeaseLost when the slot is taken or the held job is gone.
 func (self *dropJobRun) resumeHeld(jobId sidecar.Id) error {
 	self.bind(jobId)
 	testHookBarrier(BarrierDropTakeBefore, self.key())
@@ -1137,6 +1138,9 @@ func (self *dropJobRun) resumeHeld(jobId sidecar.Id) error {
 		}
 		job := table.HeldJobs[index]
 		table.HeldJobs = slices.Delete(table.HeldJobs, index, index+1)
+		for _, queued := range table.HeldJobs {
+			queued.RetryMs = 0
+		}
 		job.Held, job.Resumed = false, true
 		job.Phase = protocol.EvsDropPhase_EVS_DROP_HORIZON
 		job.Owner = self.job.instance
@@ -1185,14 +1189,21 @@ func (self *dropJobRun) loop(table *DropTableState) error {
 }
 
 // Once the run is over with the slot free, the repo asks to run again no later than a held job's retry_ms and the
-// next pending drop's start: a drop made during a hold starts when its twin's would, and a held job meets its hold's
-// end.
+// next pending drop's start, now for one already past: a drop made during a hold starts when its twin's would, and a
+// held job meets its hold's end.
 func (self *dropJobRun) wake() {
 	if self.last == nil || self.last.Job != nil {
 		return
 	}
+	now := self.job.clock.Now()
 	for _, next := range []time.Time{self.job.nextStart(self.last), heldWake(self.last)} {
-		if !next.IsZero() && (self.result.Next.IsZero() || next.Before(self.result.Next)) {
+		if next.IsZero() {
+			continue
+		}
+		if next.Before(now) {
+			next = now
+		}
+		if self.result.Next.IsZero() || next.Before(self.result.Next) {
 			self.result.Next = next
 		}
 	}
@@ -1527,7 +1538,10 @@ func (self *dropJobRun) writeLateMarks(lateMarks []DropScanId) error {
 	return self.files.Put(self.ctx, DropFileMark, sequence, EncodeDropMarkFile(self.repoId, self.jobId, sequence, cursorRefId, cursorVersion, lateMarks))
 }
 
-// D: the candidates neither marked nor answered for good, from cursor on, in cand order.
+// D: the candidates neither marked nor answered for good, from cursor on, in cand order, less every id a held job
+// other than this one holds, its newest answer held (QD-1127). Two drops can list one segment or slot: the held job's
+// bytes for the id left the stored count when it moved it to held, and it deletes the id once its holds end, as its
+// no-hold twin deleted it at once and a later job found it absent, so no id moves to held twice or counts twice.
 func (self *dropJobRun) deleteSet(cursor DropCursor) ([]*DropCandidate, error) {
 	candidates, err := self.files.Candidates(self.ctx)
 	if err != nil {
@@ -1541,9 +1555,26 @@ func (self *dropJobRun) deleteSet(cursor DropCursor) ([]*DropCandidate, error) {
 	if err != nil {
 		return nil, err
 	}
+	heldElsewhere := map[DropScanId]bool{}
+	if self.last != nil {
+		for _, held := range self.last.HeldJobs {
+			if held.JobId == self.jobId {
+				continue
+			}
+			heldAnswers, err := NewDropFiles(self.segmentCluster, self.repoId, held.JobId, self.job.settings).Answers(self.ctx)
+			if err != nil {
+				return nil, err
+			}
+			for scanId, outcome := range heldAnswers {
+				if outcome == DropOutcomeHeld {
+					heldElsewhere[scanId] = true
+				}
+			}
+		}
+	}
 	set := []*DropCandidate{}
 	for _, candidate := range candidates {
-		if candidate.Cursor.before(cursor) || marks[candidate.DropScanId] || answers[candidate.DropScanId].Final() {
+		if candidate.Cursor.before(cursor) || marks[candidate.DropScanId] || answers[candidate.DropScanId].Final() || heldElsewhere[candidate.DropScanId] {
 			continue
 		}
 		set = append(set, candidate)

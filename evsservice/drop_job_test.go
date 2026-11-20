@@ -45,14 +45,16 @@ func (self *dropJobEvents) count(name string) int {
 	return count
 }
 
-// Resolve's stand-in until EVSB-M10-04: writes cand-0 with its candidates and refuses its mismatches.
+// Resolve's stand-in until EVSB-M10-04: writes cand-0 with its candidates, each call taking the next of
+// nextCandidates while it has one, and refuses its mismatches.
 type fakeDropResolver struct {
-	events     *dropJobEvents
-	candidates []DropScanId
-	mismatch   []sidecar.Id
-	requests   []*DropResolveRequest
-	preview    *DropPreviewResolveResult
-	previewErr error
+	events         *dropJobEvents
+	candidates     []DropScanId
+	nextCandidates [][]DropScanId
+	mismatch       []sidecar.Id
+	requests       []*DropResolveRequest
+	preview        *DropPreviewResolveResult
+	previewErr     error
 	// what it says the listed versions show, and a call before it answers
 	shape     DropListedShape
 	onResolve func(request *DropResolveRequest)
@@ -61,8 +63,12 @@ type fakeDropResolver struct {
 func (self *fakeDropResolver) Resolve(ctx context.Context, request *DropResolveRequest) (*DropResolveResult, error) {
 	self.events.add("resolve")
 	self.requests = append(self.requests, request)
+	candidates := self.candidates
+	if 0 < len(self.nextCandidates) {
+		candidates, self.nextCandidates = self.nextCandidates[0], self.nextCandidates[1:]
+	}
 	files := NewDropFiles(request.SegmentCluster, request.RepoId, request.JobId, DefaultDropSettings())
-	encoded, err := EncodeDropIdFile(DropFileCand, request.RepoId, request.JobId, 0, self.candidates)
+	encoded, err := EncodeDropIdFile(DropFileCand, request.RepoId, request.JobId, 0, candidates)
 	if err != nil {
 		return nil, err
 	}
@@ -131,7 +137,8 @@ func (self *fakeDropVerifier) Verify(ctx context.Context, request *DropVerifyReq
 
 // The deletes' stand-in until EVSB-M10-06: each candidate's outcome by outcomeOf, a del file of the answers and one
 // checkpoint; held moves the rest of D to held. As the deletes' held files make it, an id a job moved to held reports
-// its bytes then and never again, its later DELETE freeing nothing (§11.13's delete row).
+// its bytes then and never again, its later DELETE freeing nothing (§11.13's delete row); and an id any job deleted
+// is absent after, its HEAD a 404, reporting nothing.
 type fakeDropDeleter struct {
 	events     *dropJobEvents
 	outcomeOf  func(candidate *DropCandidate) DropOutcome
@@ -140,6 +147,8 @@ type fakeDropDeleter struct {
 	freedEach  uint64
 	requests   []*DropDeleteRequest
 	heldBefore map[sidecar.Id]map[DropScanId]bool
+	// each id's DELETEs that took it, whichever job's
+	deleteCounts map[DropScanId]int
 }
 
 // The outcome a candidate meets that the deleter leaves unanswered.
@@ -156,6 +165,9 @@ func (self *fakeDropDeleter) Delete(ctx context.Context, request *DropDeleteRequ
 		heldBefore = map[DropScanId]bool{}
 		self.heldBefore[request.JobId] = heldBefore
 	}
+	if self.deleteCounts == nil {
+		self.deleteCounts = map[DropScanId]int{}
+	}
 	result := &DropDeleteResult{Held: self.held, Progress: &DropDeleteProgress{}}
 	answers := []*DropAnswer{}
 	for _, candidate := range request.Candidates {
@@ -165,6 +177,12 @@ func (self *fakeDropDeleter) Delete(ctx context.Context, request *DropDeleteRequ
 		}
 		if self.held {
 			outcome = DropOutcomeHeld
+		}
+		if 0 < self.deleteCounts[candidate.DropScanId] {
+			outcome = DropOutcomeAbsent
+		}
+		if outcome == DropOutcomeDeleted {
+			self.deleteCounts[candidate.DropScanId] += 1
 		}
 		if outcome == fakeDropUnanswered {
 			result.Unanswered = len(request.Candidates) - len(answers)

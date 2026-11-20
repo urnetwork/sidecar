@@ -97,21 +97,6 @@ func (self *fs92PathVersions) expectDeleted(deletedCount int) func(ctx context.C
 	}
 }
 
-// The segments both paths' versions name.
-func fs92BothListed(paths ...*fs92PathVersions) func() ([][]byte, error) {
-	return func() ([][]byte, error) {
-		ids := [][]byte{}
-		for _, path := range paths {
-			listed, err := path.listed()
-			if err != nil {
-				return nil, err
-			}
-			ids = append(ids, listed...)
-		}
-		return ids, nil
-	}
-}
-
 // See the file header.
 func Fs92SecondDropDuringTheHold(net *Net) *Schedule {
 	schedule := fs92SecondDropSchedule(net, true, nil)
@@ -140,13 +125,25 @@ func fs92SecondDropSchedule(net *Net, held bool, answers *HoldAnswers) *Schedule
 	// both worlds' clocks alike: the order binds the deleters once this has passed
 	steps = append(steps, &Step{Advance: holds.settings.BindTimeout})
 	storedX, storedY, storedBoth := &EvsWorldStoredMark{}, &EvsWorldStoredMark{}, &EvsWorldStoredMark{}
+	// the segments both drops list
+	bothListed := func() ([][]byte, error) {
+		ids, err := x.listed()
+		if err != nil {
+			return nil, err
+		}
+		yIds, err := y.listed()
+		if err != nil {
+			return nil, err
+		}
+		return append(ids, yIds...), nil
+	}
 	steps = append(steps, []*Step{
 		{Actor: "admin", Action: world.Drop("admin", "x.txt", true)},
 		{Actor: "reader", Action: world.ReadVersionEnds("reader", "x.txt", 1, EvsWorldReadsDropped())},
 		{Advance: 50 * time.Hour},
 		{Actor: "taskworker", Action: world.EvacuateAt(sidecar.EvsRepoFormat2, nil)},
 		{Actor: "check", Action: world.MarkStored(storedX, x.listed)},
-		{Actor: "check", Action: world.MarkStored(storedBoth, fs92BothListed(x, y))},
+		{Actor: "check", Action: world.MarkStored(storedBoth, bothListed)},
 	}...)
 	if !fsDropSettled(net) {
 		// the job waits on settle, deleting nothing (fsDropExecute's reading of such a Net)

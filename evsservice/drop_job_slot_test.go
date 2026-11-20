@@ -38,6 +38,17 @@ func (self *dropJobFixture) advance(advance time.Duration, behind time.Duration)
 	self.hddKnown()
 }
 
+// Gives each job's resolve candidates of its own, as drops of different content have: the first job a, b and c, each
+// later one three segments no other job lists.
+func (self *dropJobFixture) ownCandidates(jobCount int) {
+	self.resolver.nextCandidates = [][]DropScanId{{self.a, self.b, self.c}}
+	for i := 1; i < jobCount; i += 1 {
+		self.resolver.nextCandidates = append(self.resolver.nextCandidates, []DropScanId{
+			DropSegmentId([32]byte{byte(16 * i), 1}), DropSegmentId([32]byte{byte(16 * i), 2}), DropSegmentId([32]byte{byte(16 * i), 3}),
+		})
+	}
+}
+
 // One run that must fail, as a kill at fixture.stopAt makes it.
 func (self *dropJobFixture) runKilled(job *DropJob) {
 	self.t.Helper()
@@ -84,6 +95,8 @@ func TestDropJobHeldJobGivesUpTheSlot(t *testing.T) {
 			t.Fatalf("%s: the held world admits a DROP %t, its twin %t", name, heldTable.AdmitsDrop(tight), twinTable.AdmitsDrop(tight))
 		}
 	}
+	held.ownCandidates(2)
+	twin.ownCandidates(2)
 	hold := held.placeHold()
 	held.deleter.held = true
 
@@ -199,6 +212,7 @@ func TestDropJobHeldJobGivesUpTheSlot(t *testing.T) {
 // of another job stands. Its end moves nothing of the held job's.
 func TestDropJobEndsWithItsOwnDropsBesideAHeldJob(t *testing.T) {
 	fixture := newDropJobFixture(t)
+	fixture.ownCandidates(3)
 	hold := fixture.placeHold()
 	fixture.deleter.held = true
 	fixture.appendDrop("drop-1", fixture.world.clock.Now())
@@ -251,6 +265,7 @@ func TestDropJobEndsWithItsOwnDropsBesideAHeldJob(t *testing.T) {
 // ended, takes the slot back. Each drop ends done, each held id is deleted once, nothing runs twice.
 func TestDropJobResumesACrashAtTheSlotsHandOver(t *testing.T) {
 	fixture := newDropJobFixture(t)
+	fixture.ownCandidates(2)
 	hold := fixture.placeHold()
 	fixture.deleter.held = true
 	fixture.appendDrop("drop-1", fixture.world.clock.Now())
@@ -343,6 +358,7 @@ func TestDropJobResumesACrashAtTheSlotsHandOver(t *testing.T) {
 // Tidy keeps every held job's files as it keeps the running job's, however old.
 func TestDropJobHeldMoveAsksForTheNextJob(t *testing.T) {
 	fixture := newDropJobFixture(t)
+	fixture.ownCandidates(2)
 	fixture.placeHold()
 	fixture.deleter.held = true
 	seen := fixture.world.clock.Now()
@@ -463,6 +479,122 @@ func TestDropTableKeepsTheHeldJobsOrder(t *testing.T) {
 	for i, label := range []string{"first", "second", "third"} {
 		if state.HeldJobs[i].JobId != testId(label) {
 			t.Fatalf("held job %d is not %s", i, label)
+		}
+	}
+}
+
+// QD-1127: once the holds have ended the oldest held job takes the slot back first, though only a newer one's
+// retry_ms had come, and the held jobs behind it are due at once: its end asks to run again now, and the next run
+// gives the slot to the next held job.
+func TestDropJobHeldJobsTakeTheSlotBackOldestFirst(t *testing.T) {
+	fixture := newDropJobFixture(t)
+	fixture.ownCandidates(2)
+	world := fixture.world
+	hold := fixture.placeHold()
+	fixture.deleter.held = true
+	fixture.appendDrop("drop-1", world.clock.Now())
+	fixture.ripen()
+	fixture.run()
+	fixture.appendDrop("drop-2", world.clock.Now())
+	fixture.advance(26*time.Minute, 0)
+	fixture.run()
+	table := fixture.table()
+	if len(table.HeldJobs) != 2 || table.Job != nil {
+		t.Fatalf("two held jobs: %d held, %+v in the slot", len(table.HeldJobs), table.Job)
+	}
+	jobOne, jobTwo := table.HeldJobs[0].JobId, table.HeldJobs[1].JobId
+	// only the newer one's wake has come
+	if _, err := fixture.job.Table().Update(world.paidCtx, world.cluster, world.repoId, func(state *DropTableState, now time.Time) (bool, error) {
+		state.HeldJobs[0].RetryMs = now.Add(30 * 24 * time.Hour).UnixMilli()
+		state.HeldJobs[1].RetryMs = now.UnixMilli()
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fixture.endHold(hold)
+	fixture.deleter.held = false
+	fixture.advance(time.Minute, 0)
+	result := fixture.run()
+	table = fixture.table()
+	if !result.Ended || fixture.entry("drop-1").State != DropStateDone || fixture.entry("drop-2").State != DropStateHeld {
+		t.Fatalf("the first run after the hold: %+v", result)
+	}
+	if len(table.HeldJobs) != 1 || table.HeldJobs[0].JobId != jobTwo || table.HeldJobs[0].RetryMs != 0 || !result.Next.Equal(world.clock.Now()) {
+		t.Fatalf("behind the oldest: %d held, asking again at %s", len(table.HeldJobs), result.Next)
+	}
+	if jobIds := fixture.deleter.jobIds(); jobIds[len(jobIds)-1] != jobOne {
+		t.Fatalf("the first round after the hold was %s's", sidecar.EvsKeyId(jobIds[len(jobIds)-1]))
+	}
+	result = fixture.run()
+	table = fixture.table()
+	if !result.Ended || fixture.entry("drop-2").State != DropStateDone || len(table.HeldJobs) != 0 || table.Job != nil {
+		t.Fatalf("the second run after the hold: %+v", result)
+	}
+}
+
+// QD-1127: two drops can list one segment, a copy's. A held job holds what it moved to held, its bytes off the stored
+// count then, so a job that runs during the hold leaves that id to it: no id moves to held twice or counts twice, and
+// the held job deletes it after its hold, as the twin's first job deleted it at once and its second found it absent.
+// The listing equals the twin's throughout, and each id is deleted once.
+func TestDropJobLeavesAHeldJobsIdsToIt(t *testing.T) {
+	held, twin := newDropJobFixture(t), newDropJobFixture(t)
+	settings := DefaultDropSettings()
+	shared, own := held.c, DropSegmentId([32]byte{4})
+	for _, fixture := range []*dropJobFixture{held, twin} {
+		fixture.resolver.nextCandidates = [][]DropScanId{{fixture.a, fixture.b, shared}, {shared, own}}
+	}
+	both := func(step func(fixture *dropJobFixture)) {
+		step(held)
+		step(twin)
+	}
+	same := func(name string) {
+		t.Helper()
+		now := held.world.clock.Now()
+		heldListing, twinListing := DropStatuses(held.table(), now, settings), DropStatuses(twin.table(), now, settings)
+		if !proto.Equal(heldListing, twinListing) {
+			t.Fatalf("%s: the held world lists %v, its twin %v", name, heldListing, twinListing)
+		}
+	}
+	hold := held.placeHold()
+	held.deleter.held = true
+	both(func(fixture *dropJobFixture) {
+		fixture.appendDrop("drop-1", fixture.world.clock.Now())
+		fixture.ripen()
+		fixture.run()
+		fixture.appendDrop("drop-2", fixture.world.clock.Now())
+		fixture.advance(26*time.Minute, 0)
+		fixture.run()
+	})
+	request := held.deleter.requests[len(held.deleter.requests)-1]
+	if len(request.Candidates) != 1 || request.Candidates[0].DropScanId != own {
+		t.Fatalf("drop-2's deletes under the hold took %d candidates", len(request.Candidates))
+	}
+	if entry := held.entry("drop-2"); entry.State != DropStateHeld || entry.HeldByteCount != 100 || entry.FreedByteCount != 0 {
+		t.Fatalf("drop-2 held: %+v", entry)
+	}
+	if entry := twin.entry("drop-2"); entry.State != DropStateDone || entry.FreedByteCount != 100 {
+		t.Fatalf("the twin's drop-2: %+v", entry)
+	}
+	same("both ended")
+
+	held.endHold(hold)
+	held.deleter.held = false
+	held.advance(11*time.Minute, 0)
+	twin.advance(11*time.Minute, 0)
+	for range 2 {
+		if result := held.run(); !result.Ended {
+			t.Fatalf("a run after the hold: %+v", result)
+		}
+	}
+	if table := held.table(); len(table.HeldJobs) != 0 || table.Job != nil {
+		t.Fatalf("after the hold: %d held, %+v in the slot", len(table.HeldJobs), table.Job)
+	}
+	same("after the hold")
+	for _, fixture := range []*dropJobFixture{held, twin} {
+		for _, scanId := range []DropScanId{fixture.a, fixture.b, shared, own} {
+			if count := fixture.deleter.deleteCounts[scanId]; count != 1 {
+				t.Fatalf("an id deleted %d times", count)
+			}
 		}
 	}
 }

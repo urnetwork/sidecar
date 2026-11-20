@@ -736,12 +736,35 @@ func EncodeDropTable(state *DropTableState) ([]byte, error) {
 		encoded = append(encoded, 0, 0)
 	}
 	seenJobs := map[sidecar.Id]bool{}
+	// one job record: the running job's, never held, or a held job's, always
 	appendJob := func(job *DropJobRecord, held bool) error {
 		if !dropPhaseValid(job.Phase) || job.Held != held || seenJobs[job.JobId] {
 			return fmt.Errorf("%w: a job in phase %d, held %t in the place of a held one %t", ErrDropTableInvalid, job.Phase, job.Held, held)
 		}
 		seenJobs[job.JobId] = true
-		encoded = appendDropJobRecord(encoded, job)
+		flags := uint8(0)
+		if job.Held {
+			flags |= dropJobFlagHeld
+		}
+		if job.Resumed {
+			flags |= dropJobFlagResumed
+		}
+		encoded = append(encoded, job.JobId[:]...)
+		encoded = append(encoded, job.Owner[:]...)
+		encoded = binary.BigEndian.AppendUint64(encoded, uint64(job.UntilMs))
+		encoded = append(encoded, byte(job.Phase), flags, 0, 0)
+		encoded = binary.BigEndian.AppendUint32(encoded, job.Round)
+		encoded = binary.BigEndian.AppendUint64(encoded, uint64(job.FenceMs))
+		encoded = binary.BigEndian.AppendUint64(encoded, uint64(job.HorizonMs))
+		encoded = binary.BigEndian.AppendUint32(encoded, job.Cursor.Sequence)
+		encoded = binary.BigEndian.AppendUint32(encoded, job.Cursor.Row)
+		encoded = binary.BigEndian.AppendUint64(encoded, uint64(job.RetryMs))
+		encoded = binary.BigEndian.AppendUint16(encoded, job.CoveredCount)
+		encoded = append(encoded, make([]byte, 6)...)
+		encoded = binary.BigEndian.AppendUint64(encoded, job.FreedByteCount)
+		encoded = binary.BigEndian.AppendUint64(encoded, job.HeldByteCount)
+		encoded = binary.BigEndian.AppendUint64(encoded, uint64(job.StartedMs))
+		encoded = append(encoded, make([]byte, 16)...)
 		return nil
 	}
 	if state.Job != nil {
@@ -801,33 +824,6 @@ func EncodeDropTable(state *DropTableState) ([]byte, error) {
 	}
 	trailer := sha256.Sum256(encoded)
 	return append(encoded, trailer[:]...), nil
-}
-
-// encoded with job's 128 B record after it.
-func appendDropJobRecord(encoded []byte, job *DropJobRecord) []byte {
-	flags := uint8(0)
-	if job.Held {
-		flags |= dropJobFlagHeld
-	}
-	if job.Resumed {
-		flags |= dropJobFlagResumed
-	}
-	encoded = append(encoded, job.JobId[:]...)
-	encoded = append(encoded, job.Owner[:]...)
-	encoded = binary.BigEndian.AppendUint64(encoded, uint64(job.UntilMs))
-	encoded = append(encoded, byte(job.Phase), flags, 0, 0)
-	encoded = binary.BigEndian.AppendUint32(encoded, job.Round)
-	encoded = binary.BigEndian.AppendUint64(encoded, uint64(job.FenceMs))
-	encoded = binary.BigEndian.AppendUint64(encoded, uint64(job.HorizonMs))
-	encoded = binary.BigEndian.AppendUint32(encoded, job.Cursor.Sequence)
-	encoded = binary.BigEndian.AppendUint32(encoded, job.Cursor.Row)
-	encoded = binary.BigEndian.AppendUint64(encoded, uint64(job.RetryMs))
-	encoded = binary.BigEndian.AppendUint16(encoded, job.CoveredCount)
-	encoded = append(encoded, make([]byte, 6)...)
-	encoded = binary.BigEndian.AppendUint64(encoded, job.FreedByteCount)
-	encoded = binary.BigEndian.AppendUint64(encoded, job.HeldByteCount)
-	encoded = binary.BigEndian.AppendUint64(encoded, uint64(job.StartedMs))
-	return append(encoded, make([]byte, 16)...)
 }
 
 // Whether phase is one a job or an executing drop can be in.
