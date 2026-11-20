@@ -245,6 +245,29 @@ func TestHistoryCheckStartsFromWhatAKeyHeld(t *testing.T) {
 	}
 }
 
+// A key with more requests than the settings' limit fails the check as a search it would not finish,
+// and a key at the limit is searched.
+func TestHistoryCheckTakesItsKeyLimitFromSettings(t *testing.T) {
+	heads := func(count int) []*BlobHistoryEntry {
+		entries := []*BlobHistoryEntry{}
+		for range count {
+			entries = append(entries, &BlobHistoryEntry{Op: BlobHistoryHead, Outcome: BlobOutcomeNotFound})
+		}
+		return historyAt(DefaultClockStart(), entries...)
+	}
+	settings := DefaultBlobHistoryCheckSettings()
+	settings.KeyRequestLimit = 2
+	if err := CheckBlobHistoryWithSettings(heads(2), nil, settings); err != nil {
+		t.Errorf("at the limit: %v", err)
+	}
+	if err := CheckBlobHistoryWithSettings(heads(3), nil, settings); err == nil || !strings.Contains(err.Error(), "more than one check takes") {
+		t.Errorf("past the limit: %v", err)
+	}
+	if err := CheckBlobHistory(heads(3), nil); err != nil {
+		t.Errorf("on the defaults: %v", err)
+	}
+}
+
 func TestHistoryCheckNamesTheKeyAndItsRequests(t *testing.T) {
 	entries := historyAt(DefaultClockStart(),
 		&BlobHistoryEntry{Op: BlobHistoryGet, ReadEtag: "e9", Outcome: BlobOutcomeOk, Actor: "evs1"},

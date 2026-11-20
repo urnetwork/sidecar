@@ -494,13 +494,23 @@ func blobLatestSeq(entry *BlobHistoryEntry, keyEntries []*BlobHistoryEntry) uint
 	return latest
 }
 
-// The most requests one key's check takes: a search over more says nothing it can finish saying. A
-// schedule writes one key far fewer times than this.
-const blobHistoryKeyLimit = 256
+// What FI-30's history check runs with.
+type BlobHistoryCheckSettings struct {
+	// The most requests one key's check takes: a search over more says nothing it can finish saying,
+	// so a key with more fails the check. A schedule writes one key far fewer times than the default.
+	// Non-positive fails every key with a request.
+	KeyRequestLimit int
+}
+
+func DefaultBlobHistoryCheckSettings() *BlobHistoryCheckSettings {
+	return &BlobHistoryCheckSettings{
+		KeyRequestLimit: 256,
+	}
+}
 
 // Searches for an order of one key's requests with every answer right, from a key that held initial.
-func checkBlobKeyHistory(keyEntries []*BlobHistoryEntry, initial blobModelState) error {
-	if blobHistoryKeyLimit < len(keyEntries) {
+func checkBlobKeyHistory(keyEntries []*BlobHistoryEntry, initial blobModelState, settings *BlobHistoryCheckSettings) error {
+	if settings.KeyRequestLimit < len(keyEntries) {
 		return fmt.Errorf("%d requests is more than one check takes", len(keyEntries))
 	}
 	latestSeqs := make([]uint64, len(keyEntries))
@@ -560,8 +570,16 @@ func checkBlobKeyHistory(keyEntries []*BlobHistoryEntry, initial blobModelState)
 
 // FI-30 from outside: each key's requests have an order in which every answer was right and no
 // unknown write landed past its deadline. Each key is taken to start absent, or as initialEtags gives,
-// for a history that begins after its key was written.
+// for a history that begins after its key was written. Runs on the defaults.
 func CheckBlobHistory(entries []*BlobHistoryEntry, initialEtags map[string]string) error {
+	return CheckBlobHistoryWithSettings(entries, initialEtags, nil)
+}
+
+// CheckBlobHistory's check on settings. settings nil takes the defaults.
+func CheckBlobHistoryWithSettings(entries []*BlobHistoryEntry, initialEtags map[string]string, settings *BlobHistoryCheckSettings) error {
+	if settings == nil {
+		settings = DefaultBlobHistoryCheckSettings()
+	}
 	keyEntries := map[string][]*BlobHistoryEntry{}
 	lists := []*BlobHistoryEntry{}
 	for _, entry := range entries {
@@ -610,7 +628,7 @@ func CheckBlobHistory(entries []*BlobHistoryEntry, initialEtags map[string]strin
 		if etag, ok := initialEtags[key]; ok {
 			initial = blobModelState{exists: true, etag: etag}
 		}
-		if err := checkBlobKeyHistory(keyEntries[clusterKey], initial); err != nil {
+		if err := checkBlobKeyHistory(keyEntries[clusterKey], initial, settings); err != nil {
 			lines := []string{fmt.Sprintf("key %q: %v", key, err)}
 			for _, entry := range keyEntries[clusterKey] {
 				lines = append(lines, "  "+entry.String())
