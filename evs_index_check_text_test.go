@@ -6,7 +6,9 @@
 // the push commits; a path under the never row in a general ref, a mailbox and a group inbox; a chunk D6 skips beside
 // the chunk after it; and a push past DirectBytes, whose entries the check finds in the bucket's shards and whose
 // document left out it names against the head the push wrote. Each case is also run with a document left out, so a
-// check that holds nothing to an entry cannot pass it.
+// check that holds nothing to an entry cannot pass it. Beside them, the rows and tombstones a push past DirectBytes
+// merges into the shards are judged against the text as a head's entries are, and the rows its merge carried over
+// are not.
 
 package sidecar
 
@@ -56,10 +58,24 @@ type testInRefCheck struct {
 
 // signer's head at the index's head planned with entries, merged into the bucket's shards in the push where they pass
 // DirectBytes, committed, and checked by a host with the text as the index push that rode with committed, pinned at
-// its version.
+// its version, holding every shard at the push's base.
 func testCheckInRef(t testing.TB, world *testBackfillWorld, signer Id, committed *indexContentPush, groupInbox bool, entries ...*indexEntry) *testInRefCheck {
 	t.Helper()
 	view := world.view(t)
+	baseShards := map[string]*indexShard{}
+	for _, root := range view.roots {
+		shards := slices.Clone(root.allShards)
+		for _, bucket := range root.buckets {
+			shards = append(shards, bucket.shards...)
+		}
+		for _, shard := range shards {
+			decoded, err := view.shard(context.Background(), shard)
+			if err != nil || decoded == nil {
+				t.Fatalf("shard %s does not read: %v", shard.file.path, err)
+			}
+			baseShards[shard.file.path] = decoded
+		}
+	}
 	pending := []*indexPendingDocument{}
 	for _, entry := range entries {
 		pending = append(pending, &indexPendingDocument{kind: entry.kind, key: entry.key, version: entry.version, keys: entry.keys, row: entry.row})
@@ -91,8 +107,8 @@ func testCheckInRef(t testing.TB, world *testBackfillWorld, signer Id, committed
 	replay.version = committed.version
 	check := &testInRefCheck{plan: plan, landed: landed}
 	check.outcome, err = indexCheckWithText(context.Background(), &indexTextCheckArgs{
-		view: world.view(t), push: replay, content: world.content, pin: committed.version, refKey: world.refKey,
-		groupInbox: groupInbox, events: func(event SidecarEvent) { check.raised = append(check.raised, event) },
+		view: world.view(t), push: replay, baseShards: baseShards, content: world.content, pin: committed.version,
+		refKey: world.refKey, groupInbox: groupInbox, events: func(event SidecarEvent) { check.raised = append(check.raised, event) },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -359,85 +375,215 @@ func TestIndexCheckWithTextHoldsNoSkippedChunkToAnEntry(t *testing.T) {
 	}
 }
 
+// Texts of mixed-script letters, 128 KiB each, at bulk-<label>.txt, from the seed first on: an entry of about 106 KiB
+// each, which fits a shard alone, so three pass DirectBytes together.
+func testBulkChanges(first int64, labels ...string) ([]testContentChange, []string) {
+	changes, paths := []testContentChange{}, []string{}
+	for index, label := range labels {
+		path := "bulk-" + label + ".txt"
+		changes = append(changes, testContentChange{path: path, content: testMixedScriptLetters(first+int64(index), 128*1024)})
+		paths = append(paths, path)
+	}
+	return changes, paths
+}
+
+// A world in which mallory holds a head in the bucket and then commits three bulk texts and b.txt in one content
+// push, which the caller enters in a push past DirectBytes. Returns the world, that content push and the bulk texts'
+// paths.
+func testPastDirectBytesWorld(t testing.TB, mallory Id) (*testBackfillWorld, *indexContentPush, []string) {
+	t.Helper()
+	world := testNewBackfillWorld(false)
+	seeded := world.commit(t, mallory, testInRefPush, testContentChange{path: "seed.txt", content: []byte("a first page of plums")})
+	testCheckInRef(t, world, mallory, seeded, false, testExtractedEntries(t, world, false, "seed.txt", seeded.version)...).clean(t, "the seed push")
+	changes, paths := testBulkChanges(7, "a", "b", "c")
+	committed := world.commit(t, mallory, testInRefPush, append(changes, testContentChange{path: "b.txt", content: []byte("radishes and parsnips")})...)
+	return world, committed, paths
+}
+
+// The one entry each path extracts as, at committed's version.
+func testOneEntryEach(t testing.TB, world *testBackfillWorld, committed *indexContentPush, paths ...string) []*indexEntry {
+	t.Helper()
+	entries := []*indexEntry{}
+	for _, path := range paths {
+		extracted := testExtractedEntries(t, world, false, path, committed.version)
+		if len(extracted) != 1 {
+			t.Fatalf("%s extracts as %d entries", path, len(extracted))
+		}
+		entries = append(entries, extracted...)
+	}
+	return entries
+}
+
+// The entries of path's chunk 0 the newest bucket holds: in its shards, and in signer's files.
+func testHeldOf(t testing.TB, world *testBackfillWorld, signer Id, path string) (int, int) {
+	t.Helper()
+	view := world.view(t)
+	documents, err := view.bucketDocuments(context.Background(), view.writeRoot().newestBucket())
+	if err != nil {
+		t.Fatal(err)
+	}
+	shardCount, ownCount := 0, 0
+	for _, entry := range documents.of(world.key(t, path, 0)) {
+		switch {
+		case entry.shard:
+			shardCount += 1
+		case entry.writer == signer:
+			ownCount += 1
+		}
+	}
+	return shardCount, ownCount
+}
+
+// The shard of the newest bucket holding a row or tombstone of key, and whether the push wrote it.
+func (self *testInRefCheck) shardHolding(t testing.TB, world *testBackfillWorld, key [indexIdByteCount]byte) (string, bool) {
+	t.Helper()
+	view := world.view(t)
+	for _, shard := range view.writeRoot().newestBucket().shards {
+		decoded, err := view.shard(context.Background(), shard)
+		if err != nil || decoded == nil {
+			t.Fatalf("shard %s does not read: %v", shard.file.path, err)
+		}
+		for _, entry := range indexShardEntries(decoded) {
+			if entry.key != key {
+				continue
+			}
+			written := false
+			for _, file := range self.landed.files {
+				written = written || file.path == shard.file.path
+			}
+			return shard.file.path, written
+		}
+	}
+	return "", false
+}
+
 // A push past DirectBytes merges its entries into the bucket's shards in the same push and writes its signer's head
 // without them: the check finds the document's doc_key in a shard and flags nothing. With the document's shard entry
 // left out of the merge, it is flagged, and index_mismatch names the signer and the head the push wrote.
 func TestIndexCheckWithTextFindsAnEntryMergedPastDirectBytes(t *testing.T) {
 	mallory := evsTestId("writer m")
-	// three texts of mixed-script letters whose entries, about 106 KiB each, pass DirectBytes together without b.txt,
-	// each fitting a shard alone
-	bulks := []testContentChange{}
-	bulkPaths := []string{}
-	for index := range 3 {
-		path := "bulk-" + string(rune('a'+index)) + ".txt"
-		bulks = append(bulks, testContentChange{path: path, content: testMixedScriptLetters(int64(7+index), 128*1024)})
-		bulkPaths = append(bulkPaths, path)
-	}
-	// mallory's earlier push gives it a head in the bucket, then its push past DirectBytes
-	setup := func() (*testBackfillWorld, *indexContentPush) {
-		world := testNewBackfillWorld(false)
-		seeded := world.commit(t, mallory, testInRefPush, testContentChange{path: "seed.txt", content: []byte("a first page of plums")})
-		testCheckInRef(t, world, mallory, seeded, false, testExtractedEntries(t, world, false, "seed.txt", seeded.version)...).clean(t, "the seed push")
-		committed := world.commit(t, mallory, testInRefPush, append(slices.Clone(bulks), testContentChange{path: "b.txt", content: []byte("radishes and parsnips")})...)
-		return world, committed
-	}
-	entriesOf := func(world *testBackfillWorld, committed *indexContentPush, paths ...string) []*indexEntry {
-		entries := []*indexEntry{}
-		for _, path := range paths {
-			extracted := testExtractedEntries(t, world, false, path, committed.version)
-			if len(extracted) != 1 {
-				t.Fatalf("%s extracts as %d entries", path, len(extracted))
-			}
-			entries = append(entries, extracted...)
-		}
-		return entries
-	}
-	// the entries of path's chunk 0 the bucket holds, in its shards and in mallory's files
-	held := func(world *testBackfillWorld, path string) (int, int) {
-		view := world.view(t)
-		documents, err := view.bucketDocuments(context.Background(), view.writeRoot().newestBucket())
-		if err != nil {
-			t.Fatal(err)
-		}
-		shardCount, ownCount := 0, 0
-		for _, entry := range documents.of(world.key(t, path, 0)) {
-			switch {
-			case entry.shard:
-				shardCount += 1
-			case entry.writer == mallory:
-				ownCount += 1
-			}
-		}
-		return shardCount, ownCount
-	}
 
-	world, committed := setup()
-	check := testCheckInRef(t, world, mallory, committed, false, entriesOf(world, committed, append(slices.Clone(bulkPaths), "b.txt")...)...)
+	world, committed, bulkPaths := testPastDirectBytesWorld(t, mallory)
+	check := testCheckInRef(t, world, mallory, committed, false, testOneEntryEach(t, world, committed, append(slices.Clone(bulkPaths), "b.txt")...)...)
 	if !check.plan.mergeInPush {
 		t.Fatal("the push did not pass DirectBytes")
 	}
-	if shardCount, ownCount := held(world, "b.txt"); shardCount != 1 || ownCount != 0 {
+	if shardCount, ownCount := testHeldOf(t, world, mallory, "b.txt"); shardCount != 1 || ownCount != 0 {
 		t.Fatalf("b.txt held in %d shard entries and %d of the writer's", shardCount, ownCount)
 	}
 	check.clean(t, "a push past DirectBytes entering every document")
-	// the head the push wrote again, without what it merged, is judged; the merged entries stand in the shards
-	if check.outcome.checked != 1 {
+	// the head the push wrote again without what it merged, and the four rows it merged
+	if check.outcome.checked != 5 {
 		t.Fatalf("%d entries judged", check.outcome.checked)
 	}
 
-	world, committed = setup()
-	omitted := entriesOf(world, committed, "b.txt")[0]
-	check = testCheckInRef(t, world, mallory, committed, false, entriesOf(world, committed, bulkPaths...)...)
+	world, committed, bulkPaths = testPastDirectBytesWorld(t, mallory)
+	omitted := testOneEntryEach(t, world, committed, "b.txt")[0]
+	check = testCheckInRef(t, world, mallory, committed, false, testOneEntryEach(t, world, committed, bulkPaths...)...)
 	if !check.plan.mergeInPush {
 		t.Fatal("the push without b.txt did not pass DirectBytes")
 	}
-	if shardCount, ownCount := held(world, "b.txt"); shardCount != 0 || ownCount != 0 {
+	if shardCount, ownCount := testHeldOf(t, world, mallory, "b.txt"); shardCount != 0 || ownCount != 0 {
 		t.Fatalf("b.txt held in %d shard entries and %d of the writer's", shardCount, ownCount)
 	}
 	for _, path := range bulkPaths {
-		if shardCount, _ := held(world, path); shardCount != 1 {
+		if shardCount, _ := testHeldOf(t, world, mallory, path); shardCount != 1 {
 			t.Fatalf("%s did not merge into the shards", path)
 		}
 	}
 	check.leftOut(t, world, mallory, "b.txt", omitted)
+}
+
+// A push past DirectBytes merges its entries into the bucket's shards, where its signer's head holds none of them, so a
+// host with the text judges each row and tombstone the push added to a shard against the text, as it judges a head's
+// entries (D-EVS-56's "re-extract each document version a delta adds"; DESIGN-DETAILS 1.2.8). A tombstone the push
+// merged over a document its content keeps live is a document hidden, and a row of trigrams the document never held a
+// planted one: each is a mismatch against the shard holding it, naming the signer, the host's own entry standing for
+// it. The rows the merge carried over from the shards at the push's base are not judged again, a stale one among them
+// included, which the push did not write.
+func TestIndexCheckWithTextJudgesEntriesMergedPastDirectBytes(t *testing.T) {
+	mallory, alice := evsTestId("writer m"), evsTestId("writer a")
+	// mallory's push past DirectBytes of the bulk texts as extracted and b.txt's entry as change makes it
+	push := func(change func(world *testBackfillWorld, b *indexEntry) *indexEntry) (*testBackfillWorld, *testInRefCheck, *indexEntry) {
+		world, committed, bulkPaths := testPastDirectBytesWorld(t, mallory)
+		b := testOneEntryEach(t, world, committed, "b.txt")[0]
+		check := testCheckInRef(t, world, mallory, committed, false, append(testOneEntryEach(t, world, committed, bulkPaths...), change(world, b))...)
+		if !check.plan.mergeInPush {
+			t.Fatal("the push did not pass DirectBytes")
+		}
+		return world, check, b
+	}
+	honest := func(world *testBackfillWorld, b *indexEntry) *indexEntry {
+		return b
+	}
+	// the one mismatch of b.txt's key, against the shard the push wrote holding it, the host's own entry b in its place
+	forged := func(world *testBackfillWorld, check *testInRefCheck, b *indexEntry, label string) {
+		shard, written := check.shardHolding(t, world, b.key)
+		if !written {
+			t.Fatalf("%s: no shard the push wrote holds b.txt", label)
+		}
+		if len(check.outcome.mismatches) != 1 || check.outcome.mismatches[0].key != b.key || check.outcome.mismatches[0].version != b.version || check.outcome.mismatches[0].path != shard {
+			t.Fatalf("%s: mismatched %v", label, check.mismatched())
+		}
+		if len(check.outcome.own) != 1 || check.outcome.own[0].key != b.key || !slices.Equal(check.outcome.own[0].keys, b.keys) {
+			t.Fatalf("%s: %d own entries", label, len(check.outcome.own))
+		}
+		if len(check.raised) != 1 || check.raised[0].Kind != SidecarEventIndexMismatch || check.raised[0].SidecarId == nil ||
+			*check.raised[0].SidecarId != mallory || check.raised[0].Path != shard {
+			t.Fatalf("%s: raised %+v, not one index_mismatch naming the signer and %s", label, check.raised, shard)
+		}
+	}
+
+	// honest: the head's seed entry and the four rows the push merged are judged, and bear out
+	_, check, _ := push(honest)
+	check.clean(t, "an honest push past DirectBytes")
+	if check.outcome.checked != 5 {
+		t.Fatalf("%d entries judged, not the head's one and the four merged", check.outcome.checked)
+	}
+
+	// a tombstone over b.txt, which the push's content keeps live
+	world, check, b := push(func(world *testBackfillWorld, b *indexEntry) *indexEntry {
+		return &indexEntry{kind: indexEntryTombstone, key: b.key, version: b.version, timeSeconds: b.timeSeconds}
+	})
+	forged(world, check, b, "a tombstone merged over a live document")
+
+	// b.txt's row holding seed.txt's trigrams in place of its own
+	world, check, b = push(func(world *testBackfillWorld, b *indexEntry) *indexEntry {
+		seed := testExtractedEntries(t, world, false, "seed.txt", 1)[0]
+		planted := *b
+		planted.keys, planted.row = slices.Clone(seed.keys), seed.row
+		return &planted
+	})
+	forged(world, check, b, "a row of trigrams b.txt never held")
+
+	// on an honest world, an old client's push leaves stale the row of a bulk text beside b.txt's in a shard; mallory's
+	// next push past DirectBytes changes b.txt, whose older row it drops from that shard, writing the shard again with
+	// the rows beside it carried over: only the rows the push added are judged, and the stale row it carried is not its
+	// to answer for
+	world, check, _ = push(honest)
+	beside, _ := check.shardHolding(t, world, world.key(t, "b.txt", 0))
+	stalePath := ""
+	for _, path := range []string{"bulk-a.txt", "bulk-b.txt", "bulk-c.txt"} {
+		if shard, _ := check.shardHolding(t, world, world.key(t, path, 0)); shard == beside {
+			stalePath = path
+		}
+	}
+	if stalePath == "" {
+		t.Fatal("no bulk text's row shares a shard with b.txt's")
+	}
+	stale := world.key(t, stalePath, 0)
+	world.commit(t, alice, nil, testContentChange{path: stalePath, content: []byte("a bulk text rewritten with no index")})
+	changes, paths := testBulkChanges(10, "d", "e", "f")
+	committed := world.commit(t, mallory, testInRefPush, append(changes, testContentChange{path: "b.txt", content: []byte("radishes, parsnips and leeks")})...)
+	check = testCheckInRef(t, world, mallory, committed, false, testOneEntryEach(t, world, committed, append(paths, "b.txt")...)...)
+	if !check.plan.mergeInPush {
+		t.Fatal("the next push did not pass DirectBytes")
+	}
+	if _, written := check.shardHolding(t, world, stale); !written {
+		t.Fatal("the next push did not write the shard holding the stale row again")
+	}
+	check.clean(t, "a push past DirectBytes carrying a stale row over")
+	if check.outcome.checked != 5 {
+		t.Fatalf("%d entries judged, not the head's one and the four the push added", check.outcome.checked)
+	}
 }
