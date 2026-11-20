@@ -141,8 +141,10 @@ func (self *AclState) repoMemberDecision(sidecar *aclSidecarState, repoId Id, fo
 	}
 	access := self.sidecarEvsAccess(sidecar, repoId, AclTokenAudienceEvs, nowMs)
 	if !access.Rights.Has(AclEvsRead) {
+		// in an owner-bound repo, a Team scope's own mailcfg included (QD-1107), the owner's device that does not read
+		// is one its owner has not consented
 		repo := self.repos[repoId]
-		if repo != nil && !repo.deleted && aclRepoKindOwnerBound(repo.kind) &&
+		if repo != nil && !repo.deleted && repo.ownerBound() &&
 			sidecar.class == AclSubjectClassMemberDevice && sidecar.memberId == repo.ownerId {
 			return aclDeny(AclReasonUnconsented)
 		}

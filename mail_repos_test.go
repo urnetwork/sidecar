@@ -642,10 +642,10 @@ func TestMailReposEnsureScopeMailConfig(t *testing.T) {
 	}
 }
 
-// A scope mailcfg whose creator had become a config writer by the time its RepoCreate landed folds as a network's: the
-// device is answered no scope mailcfg, never that repo, and then creates none as a config writer. The other way, a
-// network mailcfg whose creator wrote no config heads when it landed folds as its member's scope's, and is never
-// answered as the network's.
+// A scope mailcfg whose creator had become a config writer by the time its RepoCreate landed, with no network mailcfg
+// standing, folds as a network's: the device is answered no scope mailcfg, never that repo, and then, that network's
+// standing, creates its scope's own as a config writer (QD-1108). The other way, a network mailcfg whose creator wrote
+// no config heads when it landed folds as its member's scope's, and is never answered as the network's.
 func TestMailReposCreationThatFoldedAsTheOtherMailcfgIsNotReadAsAsked(t *testing.T) {
 	world := newMailReposTestWorld(t)
 	memberId, device := world.fixture.memberWithDevice(bridge.MemberRole_MEMBER_ROLE_MEMBER)
@@ -685,10 +685,23 @@ func TestMailReposCreationThatFoldedAsTheOtherMailcfgIsNotReadAsAsked(t *testing
 	if _, found := repos.ScopeMailConfigRepo(memberId); found {
 		t.Fatal("the network's mailcfg was read as the member's scope's")
 	}
-	if _, err := repos.EnsureScopeMailConfig(ctx, memberId); !errors.Is(err, ErrMailReposConfigWriter) {
-		t.Fatalf("a config writer's scope mailcfg after: %v", err)
+	// the network's now stands, so the log reads the config writer's next mailcfg as its member's scope's own
+	// (QD-1108): the device creates it, and it is never the network's
+	scope, err := repos.EnsureScopeMailConfig(ctx, memberId)
+	if err != nil || scope.RepoId() == created.RepoId() {
+		t.Fatalf("a config writer's scope mailcfg beside the network's: %v", err)
 	}
-	if world.filedCount(bridge.SignedType_SIGNED_REPO_CREATE) != 1 {
+	if row := world.state().Repo(scope.RepoId()); aclTestRowOwner(row) != memberId {
+		t.Fatalf("the config writer's scope mailcfg's row: %+v", row)
+	}
+	setView(world.state())
+	if found, ok := repos.ScopeMailConfigRepo(memberId); !ok || found != scope.RepoId() {
+		t.Fatal("the config writer's scope mailcfg is not its scope's")
+	}
+	if found, ok := repos.MailConfigRepo(); !ok || found != created.RepoId() {
+		t.Fatal("the network's mailcfg moved")
+	}
+	if world.filedCount(bridge.SignedType_SIGNED_REPO_CREATE) != 2 {
 		t.Fatalf("%d RepoCreates", world.filedCount(bridge.SignedType_SIGNED_REPO_CREATE))
 	}
 
