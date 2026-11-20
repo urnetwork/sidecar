@@ -292,6 +292,7 @@ barrier evs.index.cut.pushed evs_index_cut.go
 barrier evs.index.drop.built evs_index_drop.go
 barrier evs.index.drop.pushed evs_index_drop.go
 barrier evs.index.erase.closed evs_index_erase.go
+barrier evs.index.erase.completed evs_index_erase.go
 barrier evs.index.erase.erased evs_index_erase.go
 barrier evs.index.erase.listed evs_index_erase.go
 barrier evs.index.merge.built evs_index_merge_runner.go
@@ -488,6 +489,8 @@ barrier mail.deposit.repo.after mail_deposit.go
 barrier mail.deposit.repo.before mail_deposit.go
 barrier mail.erase.closure.after mail_erase_closure.go
 barrier mail.erase.closure.before mail_erase_closure.go
+barrier mail.erase.completion.after mail_erase.go
+barrier mail.erase.completion.before mail_erase.go
 barrier mail.erase.cut.after mail_erase_index.go
 barrier mail.erase.cut.before mail_erase_index.go
 barrier mail.erase.index.after mail_erase_index.go

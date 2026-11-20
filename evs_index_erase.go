@@ -27,11 +27,17 @@
 //	         goes with it. A general repo's versions name no slot, their keys riding segments the purge deletes, so its
 //	         CLOSUREs are followed by no ERASE
 //	complete the last ERASE a rewrite sends says complete only where the caller says the erasure ends with this ref's
-//	         rewrite and nothing here was left unproven; an erasure with nothing on this ref leaves complete to the
-//	         caller's own last ERASE
+//	         rewrite and nothing here was left unproven. Where none is left to say it, the list finding nothing to
+//	         rewrite or an orphaned CLOSURE's ERASE finding its keys gone, a caller that asks for it (Completion) gets a
+//	         completion ERASE (evs_erase_completion.go; QD-1132); any other leaves complete to its own ERASEs. An
+//	         erasure counts complete after an ERASE that could have found its keys gone only once evs's state read back
+//	         says so
 //	resume   from evs's state, never one device's memory: an ERASE first for the keys of each CLOSURE of the erasure no
-//	         ERASE of it named, then the pairs at the head; a duplicate CLOSURE's 409 lists again and finds the file
-//	         clean, and a duplicate ERASE's NOTHING_TO_ERASE counts done. The eraser's device resumes at its start,
+//	         ERASE of it named, saying complete where the list at the head finds nothing else to rewrite, so an erasure
+//	         killed between its last CLOSURE and that CLOSURE's ERASE ends with it (QD-1132), then the pairs at the head;
+//	         the list is taken before that ERASE goes and its keys go whatever the list did. A duplicate CLOSURE's 409
+//	         lists again and finds the file clean, and a duplicate ERASE's NOTHING_TO_ERASE counts done. The eraser's
+//	         device resumes at its start,
 //	         another device of its member ResumeAfter (25 h) after its CUT or last ERASE, any device that may erase once
 //	         its eraser is gone, each committing the CUT itself where a crash or a full set left it missing
 //	re-entry each run card the CUT lists through its epoch is folded again at its stream's head and entered full in the
@@ -47,8 +53,8 @@
 // uploads, which EvsRepo.Closure does not send yet (evs_closure.go), so at the storage limit or on a full cluster a
 // CLOSURE's upload is refused as any upload is and its pair waits on that refusal; and an eraser's own walk of a
 // removed index path's history on EvsRepo (indexEvsStore.Retained answers incomplete). Barriers evs.index.erase.listed,
-// .closed and .erased, and evs.index.reenter.built and .pushed, keyed <repo>:<ref>. Paths and documents stay on the
-// device (I-13). Not safe for concurrent use: one rewrite or re-entry of an erasure at a time.
+// .closed, .erased and .completed, and evs.index.reenter.built and .pushed, keyed <repo>:<ref>. Paths and documents
+// stay on the device (I-13). Not safe for concurrent use: one rewrite or re-entry of an erasure at a time.
 
 package sidecar
 
@@ -117,6 +123,10 @@ type indexErasePush struct {
 	complete  bool
 	// The caller's bytes of what the keys covered (§11.12's push row), carried by a complete ERASE.
 	note []byte
+	// A completion ERASE (evs_erase_completion.go; QD-1132): it says complete and names only a key an earlier ERASE
+	// of the erasure destroyed, so it destroys nothing. A store answers one evs did not take as done, as any ERASE
+	// whose keys are gone, and the eraser reads evs's state back to see whether it ended the erasure.
+	completion bool
 }
 
 // What the ref's history retains.
@@ -213,6 +223,10 @@ type IndexRewriteArgs struct {
 	// caller's bytes of what the keys covered (§11.12's push row), where nothing here was left unproven.
 	Complete bool
 	Note     []byte
+	// With Complete, where the rewrite ends with no ERASE of its own left to say complete and nothing unproven, end
+	// the erasure with a completion ERASE (evs_erase_completion.go; QD-1132). False leaves that to the caller, as
+	// record_erase.go sends its own, journaled with the record's ERASEs: the result then reads rewriting.
+	Completion bool
 }
 
 // What a rewrite did.
@@ -224,7 +238,8 @@ type IndexRewriteResult struct {
 	PairCount int
 	FileCount int
 	KeyCount  int
-	// This call's last ERASE said complete.
+	// This call's last ERASE said complete, a completion ERASE among them. Where an ERASE could have found its keys
+	// gone (an orphaned CLOSURE's, a completion), only once evs's state read back shows the erasure complete.
 	Completed bool
 	// The history was not walked whole, or a file that may hold a listed document did not read: nothing here said
 	// complete, and the erasure stays rewriting until it can.
@@ -302,7 +317,7 @@ func (self *IndexEraser) Rewrite(ctx context.Context, args *IndexRewriteArgs) (*
 	return result, errIndexEraseAttempts
 }
 
-// One pass: orphans erased, the list taken at the head, the pairs sent. True when done, or waiting; false with no
+// One pass: the list taken at the head, orphans erased, the pairs sent. True when done, or waiting; false with no
 // error to list again.
 func (self *IndexEraser) rewritePass(ctx context.Context, args *IndexRewriteArgs, result *IndexRewriteResult) (bool, error) {
 	store := self.args.eraseStore
@@ -314,50 +329,144 @@ func (self *IndexEraser) rewritePass(ctx context.Context, args *IndexRewriteArgs
 		result.Erasure = &SidecarErasure{ErasureId: args.ErasureId, State: SidecarErasureDone}
 		return true, nil
 	}
-	// resume: an ERASE first for each CLOSURE no ERASE followed (§11.12's reconcile row)
-	if orphans := progress.orphanKeys(); 0 < len(orphans) {
-		if err := store.Erase(ctx, &indexErasePush{erasureId: args.ErasureId, keys: orphans}); err != nil {
-			if waiting, ok := self.waitingOf(args.ErasureId, err, nil); ok {
-				result.Erasure = waiting
-				self.raise(waiting)
-				return true, nil
+	orphans := progress.orphanKeys()
+	view, listed, work, err := self.listPass(ctx, args.ErasureId, progress)
+	if err != nil || work == nil {
+		// resume: the keys of each CLOSURE no ERASE followed go whatever the list did (§11.12's reconcile row)
+		if 0 < len(orphans) {
+			if done, eraseErr := self.eraseOrphans(ctx, args, orphans, false, result); eraseErr != nil || done {
+				return done, eraseErr
 			}
-			return false, err
 		}
-		result.KeyCount += len(orphans)
-		testHookBarrier("evs.index.erase.erased", self.barrierKey())
+		return false, err
 	}
+	if 0 < len(orphans) {
+		// resume: an ERASE first for each CLOSURE no ERASE followed (§11.12's reconcile row), saying complete where
+		// nothing else of the erasure is left here (QD-1132), so one killed between its last CLOSURE and that
+		// CLOSURE's ERASE ends with it
+		last := len(work.rewrites) == 0 && len(work.keyOnly) == 0
+		done, err := self.eraseOrphans(ctx, args, orphans, last && args.Complete && !work.unproven, result)
+		if err != nil || done {
+			return done, err
+		}
+	}
+	return self.sendPairs(ctx, args, view, listed, work, result)
+}
 
+// The pass's list at the head (§11.14's erase row; DESIGN-DETAILS 15.2.3): the view, the whole set's listing, and the
+// files to rewrite for the erasure's own documents. Reads only. A nil work with no error lists again: a file moved
+// under the read.
+func (self *IndexEraser) listPass(ctx context.Context, erasureId Id, progress *indexEraseProgress) (*indexView, indexEraseListed, *indexEraseWork, error) {
 	view, err := self.loadView(ctx)
 	if errors.Is(err, errIndexCollected) {
-		return false, nil
+		return nil, nil, nil, nil
 	}
 	if err != nil {
-		return false, err
+		return nil, nil, nil, err
 	}
 	guard, err := indexNewEpochGuard(view)
 	if err != nil {
-		return false, err
+		return nil, nil, nil, err
 	}
 	if view.newerFormat {
 		// a file this build cannot rewrite may hold the document: nothing is claimed complete
-		return false, errIndexMergeNewerFormat
+		return nil, nil, nil, errIndexMergeNewerFormat
 	}
-	erasure := indexErasureOf(view.erasureSet, args.ErasureId)
+	erasure := indexErasureOf(view.erasureSet, erasureId)
 	if erasure == nil {
-		return false, ErrIndexEraseNotCut
+		return nil, nil, nil, ErrIndexEraseNotCut
 	}
 	listed := indexEraseListed(guard.listed)
 	own := indexEraseOwnListed(listed, erasure)
 	work, err := self.list(ctx, view, own)
 	if err != nil {
-		return false, indexRerunCollected(err)
+		return nil, nil, nil, indexRerunCollected(err)
 	}
 	if err := self.history(ctx, view, own, progress, work); err != nil {
-		return false, indexRerunCollected(err)
+		return nil, nil, nil, indexRerunCollected(err)
 	}
 	testHookBarrier("evs.index.erase.listed", self.barrierKey())
-	return self.sendPairs(ctx, args, view, listed, work, result)
+	return view, listed, work, nil
+}
+
+// One ERASE of the keys of each CLOSURE of the erasure no ERASE followed, saying complete with the caller's note where
+// asked. True where the call ends here: waiting on a refusal of the eraser's allowance, or done by evs's state read
+// back after it said complete, since an ERASE whose keys a racing resumer took first commits nothing.
+func (self *IndexEraser) eraseOrphans(ctx context.Context, args *IndexRewriteArgs, orphans []*EvsErasedKey, complete bool, result *IndexRewriteResult) (bool, error) {
+	erase := &indexErasePush{erasureId: args.ErasureId, keys: orphans, complete: complete}
+	if complete {
+		erase.note = args.Note
+	}
+	if err := self.args.eraseStore.Erase(ctx, erase); err != nil {
+		if waiting, ok := self.waitingOf(args.ErasureId, err, nil); ok {
+			result.Erasure = waiting
+			self.raise(waiting)
+			return true, nil
+		}
+		return false, err
+	}
+	result.KeyCount += len(orphans)
+	testHookBarrier("evs.index.erase.erased", self.barrierKey())
+	if !complete {
+		return false, nil
+	}
+	completed, err := self.completeByState(ctx, args.ErasureId, result)
+	if err != nil || !completed {
+		return false, err
+	}
+	result.Erasure = &SidecarErasure{ErasureId: args.ErasureId, State: SidecarErasureDone}
+	self.raise(result.Erasure)
+	return true, nil
+}
+
+// Whether evs's state shows the erasure complete, read back after an ERASE of this call that said so: one whose keys
+// were gone commits nothing, so it carried no complete. Marks result where it does.
+func (self *IndexEraser) completeByState(ctx context.Context, erasureId Id, result *IndexRewriteResult) (bool, error) {
+	progress, err := self.args.eraseStore.Progress(ctx, erasureId)
+	if err != nil {
+		return false, err
+	}
+	if !progress.complete() {
+		return false, nil
+	}
+	result.Completed = true
+	return true, nil
+}
+
+// Ends an erasure whose rewrite here is over with no ERASE of it saying complete by a completion ERASE
+// (evs_erase_completion.go; QD-1132): one key an earlier ERASE of the erasure destroyed, the caller's note, then evs's
+// state read back. An erasure with no such key, or whose completion evs did not take, stays rewriting. True where a
+// refusal of the eraser's allowance makes it wait.
+func (self *IndexEraser) sendCompletion(ctx context.Context, args *IndexRewriteArgs, result *IndexRewriteResult) (bool, error) {
+	store := self.args.eraseStore
+	progress, err := store.Progress(ctx, args.ErasureId)
+	if err != nil {
+		return false, err
+	}
+	if progress.complete() {
+		// another device's ERASE ended it meanwhile
+		result.Completed = true
+		return false, nil
+	}
+	key, ok := evsCompletionKeyOf(progress.erases, args.ErasureId, func(erased *indexEraseErased) (Id, []*EvsErasedKey) {
+		return args.ErasureId, erased.keys
+	})
+	if !ok {
+		// no ERASE of it destroyed a key that stands unnamed since: nothing here can say complete
+		return false, nil
+	}
+	err = store.Erase(ctx, &indexErasePush{erasureId: args.ErasureId, keys: []*EvsErasedKey{key}, complete: true, note: args.Note, completion: true})
+	if err != nil {
+		if waiting, ok := self.waitingOf(args.ErasureId, err, nil); ok {
+			result.Erasure = waiting
+			self.raise(waiting)
+			return true, nil
+		}
+		return false, err
+	}
+	testHookBarrier("evs.index.erase.completed", self.barrierKey())
+	_, err = self.completeByState(ctx, args.ErasureId, result)
+	return false, err
 }
 
 // The live files holding one of the erasure's documents at or below its listed version (§11.14's erase row).
@@ -678,6 +787,13 @@ func (self *IndexEraser) sendPairs(ctx context.Context, args *IndexRewriteArgs, 
 		result.Completed = result.Completed || mayComplete
 		testHookBarrier("evs.index.erase.erased", self.barrierKey())
 	}
+	if mayComplete && args.Completion && !result.Completed {
+		// no ERASE of this pass said complete: nothing was left to rewrite here, an orphaned CLOSURE's ERASE found its
+		// keys gone, or the last pair named no key (QD-1132)
+		if waiting, err := self.sendCompletion(ctx, args, result); err != nil || waiting {
+			return waiting, err
+		}
+	}
 	state := SidecarErasureRewriting
 	if result.Completed {
 		state = SidecarErasureDone
@@ -723,8 +839,9 @@ type IndexResumeArgs struct {
 	// full set left it missing; nil where the caller cannot, and then a missing CUT is ErrIndexEraseNotCut.
 	Documents []*IndexCutDocument
 	// As IndexRewriteArgs'.
-	Complete bool
-	Note     []byte
+	Complete   bool
+	Note       []byte
+	Completion bool
 }
 
 // What a resume did.
@@ -780,7 +897,9 @@ func (self *IndexEraser) Resume(ctx context.Context, args *IndexResumeArgs) (*In
 			return result, err
 		}
 	}
-	result.Rewrite, err = self.Rewrite(ctx, &IndexRewriteArgs{ErasureId: args.ErasureId, Complete: args.Complete, Note: args.Note})
+	result.Rewrite, err = self.Rewrite(ctx, &IndexRewriteArgs{
+		ErasureId: args.ErasureId, Complete: args.Complete, Note: args.Note, Completion: args.Completion,
+	})
 	return result, err
 }
 
