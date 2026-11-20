@@ -5,11 +5,11 @@
 // sidecar.EvsRepo.ReseedPlace, its key client re-forming the group. The test's evs places repo/ keying, as a recovery
 // does for a repo its projection lists live, and activates it once gkm holds the repo's newest GroupForm and its
 // group's gen/1. gkm refuses the device's writes that gkmservice's route table takes for an active repo/ alone, the
-// generation claim, the KeyPackage claims, the commits, the Welcomes and GroupInfo, while repo/ reads anything else,
-// as its checks row does; the form, the ladder and the deliveries' wraps, which it takes while keying too, pass. The
-// step activates between the ladder and the rotation, and every member returns by its Welcome. The whole re-form the
-// step sent before activate under its old order is refused at its claim, and the step run again finishes it from the
-// keychain's record.
+// generation claim, the KeyPackage claims, the commits, the Welcomes, GroupInfo and a member's own RecoveryWrap, while
+// repo/ reads anything else, as its checks row does; the form, the ladder and the deliveries' wraps, which it takes
+// while keying too, pass. The step activates between the ladder and the rotation, and every member returns by its
+// Welcome. The whole re-form the step sent before activate under its old order is refused at its claim, and the step
+// run again finishes it from the keychain's record.
 
 package sidecar_test
 

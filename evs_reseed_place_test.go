@@ -7,9 +7,10 @@
 // REPO_DELETED is the one refused call the honest order costs, or, where the place created repo/ keying, an activate
 // that answers 200 and a DELETE of no statement of its own that takes repo/ to deleted, waiting out a projection that
 // trails this device's state; nothing sent for a repo shredded by a RepoDelete with now or one the state does not
-// hold; and evs's answers to the place, 409 SHREDDING and 409 REPO_PLACED. The step against evsservice's route, with
-// the walk after it, is sidecartest's (evs_reseed_deleted_world_test.go, evs_reseed_mend_world_test.go), and the
-// step with GkmGroupClient's own re-form, its members returning, is evs_reseed_reform_test.go's.
+// hold; and evs's answers to the place, 409 SHREDDING and 409 REPO_PLACED. The step against evsservice's routes, with
+// the walk after it, is sidecartest's (evs_reseed_deleted_world_test.go, evs_reseed_mend_world_test.go,
+// evs_reseed_restored_world_test.go), and the step with GkmGroupClient's own re-form, its members returning, is
+// evs_reseed_reform_test.go's.
 
 package sidecar
 
