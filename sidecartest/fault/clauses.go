@@ -73,6 +73,11 @@ var registeredClauses = []*ClauseRegistration{
 	RegisterClause("FS-60", "", "pending record fenced then dropped", Fs60PendingRecordFencedThenDropped, ClauseOnT3("./evshost")),
 	RegisterClause("FS-60", "", "parcels pack at seven days", Fs60ParcelsPackAtSevenDays, ClauseOnT3("./evshost")),
 
+	// EVSB-M2-07's budget loop on the Net's host (fs61.go)
+	RegisterClause("FS-61", "", "p0 proceeds at once with its bytes by kind", Fs61P0ProceedsAtOnceWithItsBytesByKind),
+	RegisterClause("FS-61", "", "governor killed processes fall back", Fs61GovernorKilledProcessesFallBack),
+	RegisterClause("FS-61", "", "budget keys pass the schema guard", Fs61BudgetKeysPassTheSchemaGuard),
+
 	RegisterClause("FS-62", "", "lease holder resync", Fs62LeaseHolderResync, ClauseOnT3("./evshost")),
 	RegisterClause("FS-62", "", "acl gate", Fs62AclGate, ClauseOnT3("./sidecart3")),
 
