@@ -398,8 +398,9 @@ type SearchTestTextCheck struct {
 }
 
 // The push that committed refVersion, as a host holding the ref's text checks the entries it added (indexCheckWithText):
-// the index read at that version from the files standing there, the versions the push replaced decoded so that entries
-// carried over are not judged again, and the content read at the push's own version as its pin.
+// the index read at that version from the files standing there, the versions the push replaced and the shards at its
+// base of each partition whose shards it wrote decoded so that entries carried over are not judged again, and the
+// content read at the push's own version as its pin.
 func (self *SearchTestWorld) CheckPushWithText(ctx context.Context, refVersion uint64) (*SearchTestTextCheck, error) {
 	ref := self.ref
 	ref.stateLock.Lock()
@@ -459,8 +460,39 @@ func (self *SearchTestWorld) CheckPushWithText(ctx context.Context, refVersion u
 	slices.SortFunc(push.files, func(a *indexReproduceFile, b *indexReproduceFile) int {
 		return strings.Compare(a.file.path, b.file.path)
 	})
+	// a push past DirectBytes merges into its partition's shards, moving rows between them: each shard there at the base
+	type partition struct {
+		kind           indexPathKind
+		rootNumber     uint32
+		bucketStartDay uint32
+	}
+	shardPartition := func(path string) (partition, bool) {
+		parsed, ok := indexParsePath(path, false)
+		if !ok || parsed.kind != indexPathBucketShard && parsed.kind != indexPathAllShard {
+			return partition{}, false
+		}
+		return partition{kind: parsed.kind, rootNumber: parsed.rootNumber, bucketStartDay: parsed.bucketStartDay}, true
+	}
+	writtenPartitions := map[partition]bool{}
+	for _, written := range push.files {
+		if at, ok := shardPartition(written.file.path); ok {
+			writtenPartitions[at] = true
+		}
+	}
+	baseShards := map[string]*indexShard{}
+	for path, stored := range base.files {
+		if at, ok := shardPartition(path); !ok || !writtenPartitions[at] {
+			continue
+		}
+		shard, err := indexDecodeShard(stored.plaintext, stored.version.contentSha256[:], false)
+		if err != nil {
+			return nil, err
+		}
+		baseShards[path] = shard
+	}
 	outcome, err := indexCheckWithText(ctx, &indexTextCheckArgs{
-		view: view, push: push, replaced: replaced, content: self.contentRef(), pin: refVersion, refKey: self.refKey,
+		view: view, push: push, replaced: replaced, baseShards: baseShards, content: self.contentRef(), pin: refVersion,
+		refKey: self.refKey,
 	})
 	if err != nil {
 		return nil, err
