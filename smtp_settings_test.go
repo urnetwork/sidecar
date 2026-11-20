@@ -29,7 +29,10 @@ func TestDefaultSmtpSenderSettingsMatchDesign(t *testing.T) {
 		OutboxTakeoverTimeout:      10 * time.Minute,
 		DkimRotateTimeout:          90 * 24 * time.Hour,
 		DkimRetiredKeepTimeout:     7 * 24 * time.Hour,
-		DkimExpireTimeout:          7 * 24 * time.Hour,
+		// QD-1130's lookup of a custom domain's answer
+		DkimAnswerLookupTimeout: 15 * time.Second,
+		DkimAnswerRetryInterval: 10 * time.Minute,
+		DkimExpireTimeout:       7 * 24 * time.Hour,
 		// DESIGN-DETAILS 3.2.8
 		HeaderHeadMaxByteCount:  720,
 		HeaderBlockMaxByteCount: 16384,
@@ -92,6 +95,8 @@ func TestSmtpSenderSettingsRefuseSchedulesOutOfOrder(t *testing.T) {
 		func(settings *SmtpSenderSettings) { settings.RetryMaxTimeout = settings.RetryFirstTimeout - 1 },
 		func(settings *SmtpSenderSettings) { settings.RetryGiveUpTimeout = settings.RetryMaxTimeout - 1 },
 		func(settings *SmtpSenderSettings) { settings.OutboxTakeoverTimeout = settings.OutboxProgressInterval },
+		// a custom domain would rotate before its selector signed (QD-1130)
+		func(settings *SmtpSenderSettings) { settings.DkimRetiredKeepTimeout = settings.DkimRotateTimeout },
 	} {
 		settings := validSidecarSettings()
 		adjust(settings.Connect.SmtpSender)

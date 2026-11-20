@@ -7,6 +7,10 @@
 // The server takes a repeat of either as done (api_smtp.go's header), so a lost answer costs one more
 // call and never a second key.
 //
+// A Team custom domain's rotation is two calls (QD-1130, smtp_dkim_answer.go): the new selector's
+// publish alone, then, once the domain answers it, the retire of what it replaces, which stays published,
+// so in DNS, for as long as it signs.
+//
 // A refusal for good (a 4xx other than 401, 408 and 429) applied nothing on the server, so the new key
 // is deleted and the refusal returned with its code. Anything else leaves the record to be sent again.
 //
@@ -26,8 +30,9 @@ import (
 )
 
 // Publishes a new selector for domain now, retiring every selector published for it in the same call,
-// under publishLock. The key is made here and reaches the keychain before the call, so the call can
-// be sent again with the same key after a kill.
+// under publishLock; for a domain whose answer it awaits, the call retires nothing and the record comes
+// back awaiting, naming what its answer retires. The key is made here and reaches the keychain before
+// the call, so the call can be sent again with the same key after a kill.
 func (self *SmtpDkimKeys) publishNewWithPublishLock(ctx context.Context, records map[string]*smtpDkimRecord, domain string, now time.Time) (*smtpDkimRecord, error) {
 	selector, err := newSmtpDkimSelector()
 	if err != nil {
@@ -55,6 +60,7 @@ func (self *SmtpDkimKeys) publishNewWithPublishLock(ctx context.Context, records
 		Selector:     selector,
 		Domain:       domain,
 		State:        smtpDkimStatePending,
+		Await:        self.awaitsAnswer(domain),
 		CreateTimeMs: now.UnixMilli(),
 		PublicKey:    publicKey,
 	}
@@ -86,13 +92,17 @@ func smtpDkimRefusedForGood(err error) bool {
 
 // Sends a pending selector's call, under publishLock: its publish and the retire of what it replaces.
 // On the answer, the replaced selectors are written retired first and the new one published after, so
-// a kill between leaves the pending record naming them and the same call is sent again.
+// a kill between leaves the pending record naming them and the same call is sent again. A selector that
+// awaits its domain's answer publishes alone, and on the answer is written awaiting, still naming what
+// it replaces, which keeps signing.
 func (self *SmtpDkimKeys) sendPendingWithPublishLock(ctx context.Context, records map[string]*smtpDkimRecord, record *smtpDkimRecord, now time.Time) (*smtpDkimRecord, error) {
 	args := &SmtpDkimKeysArgs{
 		Publish: []*SmtpDkimKeyPublish{{Selector: record.Selector, Domain: record.Domain, PublicKey: record.PublicKey}},
 	}
-	for _, replaced := range record.Replaces {
-		args.Retire = append(args.Retire, &SmtpDkimKeyRetire{Selector: replaced, Domain: record.Domain})
+	if !record.Await {
+		for _, replaced := range record.Replaces {
+			args.Retire = append(args.Retire, &SmtpDkimKeyRetire{Selector: replaced, Domain: record.Domain})
+		}
 	}
 	testHookBarrier("smtp.dkim_publish.before", record.Selector)
 	_, err := self.publisher.SmtpDkimKeys(ctx, args)
@@ -105,6 +115,14 @@ func (self *SmtpDkimKeys) sendPendingWithPublishLock(ctx context.Context, record
 			return nil, fmt.Errorf("%w: %w", ErrSmtpDkimPublishRefused, err)
 		}
 		return nil, err
+	}
+	if record.Await {
+		record.State = smtpDkimStateAwaiting
+		record.PublishTimeMs = now.UnixMilli()
+		if err := self.putWithPublishLock(record); err != nil {
+			return nil, err
+		}
+		return record, nil
 	}
 	for _, replaced := range record.Replaces {
 		existing, ok := records[replaced]
@@ -151,7 +169,9 @@ func (self *SmtpDkimKeys) sendRetireWithPublishLock(ctx context.Context, retirin
 
 // Publishes a new selector for domain now, whatever its current one's age, and retires every selector
 // published for it in the same call. A domain with none gets its first. A send already holding the
-// old selector keeps signing under it.
+// old selector keeps signing under it. A Team custom domain's new selector awaits the domain's answer,
+// looked up at once, and its retire of the old one waits for that answer; while one awaits, it stands
+// for the rotation and is only looked up again (QD-1130).
 func (self *SmtpDkimKeys) Rotate(ctx context.Context, domain string) error {
 	domain = strings.ToLower(domain)
 	if !smtpDkimDomainForm(domain) {
@@ -170,15 +190,25 @@ func (self *SmtpDkimKeys) Rotate(ctx context.Context, domain string) error {
 			return err
 		}
 	}
-	_, err = self.publishNewWithPublishLock(ctx, records, domain, now)
+	if awaiting := smtpDkimNewest(records, domain, smtpDkimStateAwaiting); awaiting != nil {
+		_, err := self.answerWithPublishLock(ctx, records, awaiting, now)
+		return err
+	}
+	created, err := self.publishNewWithPublishLock(ctx, records, domain, now)
+	if err != nil {
+		return err
+	}
+	if created.State == smtpDkimStateAwaiting {
+		_, err = self.answerWithPublishLock(ctx, records, created, now)
+	}
 	return err
 }
 
 // Retires every selector domain has, as a burn does to its burner label (§15.9): one call, after
 // which no send pins one, and the server keeps them in DNS 7 days more. A pending selector is retired
-// too, since its answer may only have been lost. Returns once the server answered; a failed call
-// leaves them retiring, never signing again, and the next call of any kind sends the retire again. A
-// domain with no selector is no error.
+// too, since its answer may only have been lost, and so is one awaiting its domain's answer. Returns
+// once the server answered; a failed call leaves them retiring, never signing again, and the next call
+// of any kind sends the retire again. A domain with no selector is no error.
 func (self *SmtpDkimKeys) Retire(ctx context.Context, domain string) error {
 	domain = strings.ToLower(domain)
 	if !smtpDkimDomainForm(domain) {
