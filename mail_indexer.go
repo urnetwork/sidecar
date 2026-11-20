@@ -1,14 +1,17 @@
 //go:build !ios_extension
 
-// §15.5's and §15.6's mail indexers (R-MAIL-8, D-MAIL-15, I-4, FS-82; owner decisions 58, 150; MAIL-M7-25): the
+// §15.5's and §15.6's mail indexers (R-MAIL-8, D-MAIL-15, I-4, FS-82; owner decisions 58, 150, 634; MAIL-M7-25): the
 // receivers an IndexerSet designates for mail (§7.9), which a network receives reliably through, and the reader's
 // alarm on mail another receiver took.
 //
 //	designated  each IndexerSet that holds and whose subject serves (ConfigState.Indexers), its sealed services opened
-//	            by the caller's MailIndexerServices and naming mail. A designation whose services do not open leaves
-//	            the list unknown, never shorter: a reader that cannot open one cannot tell who is not designated, so
-//	            it neither gates nor alarms on the list. The designations grant no key, read or grant: a receiver
-//	            still holds only its listen and deposits to the drop key (§15.4)
+//	            by the caller's MailIndexerServices and naming mail. The component's opens them with the config repo's
+//	            keys its GkmClient holds, under the network id and the nonce the designation's row carries, so a
+//	            designation folded past its entry opens as one still in the tail (mailIndexerServicesOver). A
+//	            designation whose services do not open leaves the list unknown, never shorter: a reader that cannot
+//	            open one cannot tell who is not designated, so it neither gates nor alarms on the list. The
+//	            designations grant no key, read or grant: a receiver still holds only its listen and deposits to the
+//	            drop key (§15.4)
 //	covers      a network-scope designation covers the network's mail, a member-scope one its member's (§15.6: "in a
 //	            personal network or a member scope"), and in a personal network, whose one member is everyone, a
 //	            designation at either scope covers all of it
@@ -27,9 +30,11 @@
 package sidecar
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/urnetwork/sidecar/protocol"
 )
@@ -37,6 +42,34 @@ import (
 // Opens a designation's sealed services with the config generation's key, as ConfigState.SearchIndexersFor's argument
 // does; false where it cannot.
 type MailIndexerServices func(indexer ConfigIndexer) ([]protocol.IndexerService, bool)
+
+// The designations' services as this device opens them (ConfigIndexer.OpenServices; owner decision 634): with the
+// config repo's key of the generation each seal names, which gkm gives (RepoKey) for the config repo config's state
+// names, each ask bounded by keyTimeout within ctx. A designation whose key does not come, and every designation while
+// config holds no state, reads unknown (the file header's designated row). Nil without gkm or config, opening none.
+// Safe for concurrent use where gkm and config are.
+func mailIndexerServicesOver(ctx context.Context, gkm GkmClient, config func() (*ConfigState, error), keyTimeout time.Duration) MailIndexerServices {
+	if gkm == nil || config == nil {
+		return nil
+	}
+	return ConfigIndexerServicesOpener(func(generation uint64) *EvsRepoKey {
+		state, err := config()
+		if err != nil || state == nil {
+			return nil
+		}
+		configRepoId, err := IdFromBytes(state.Genesis().GetConfigRepoId())
+		if err != nil {
+			return nil
+		}
+		keyCtx, cancel := context.WithTimeout(ctx, keyTimeout)
+		defer cancel()
+		key, err := gkm.RepoKey(keyCtx, configRepoId, generation)
+		if err != nil {
+			return nil
+		}
+		return key
+	})
+}
 
 // One mail indexer: a designation naming mail.
 type MailDesignatedReceiver struct {
@@ -192,8 +225,8 @@ func mailIndexerCovers(state *ConfigState, sidecarId Id, services MailIndexerSer
 	return false, nil
 }
 
-// Whether a standing designation serves mail cannot be told here: its services are sealed under its statement's
-// header, which ConfigIndexer does not carry.
+// Whether a standing designation serves mail cannot be told here: its services did not open, the config key of the
+// generation they are sealed to not held, or the seal refusing the network and nonce its row carries.
 var errMailIndexerServicesSealed = errors.New("mail: an indexer's services are sealed")
 
 // Raises mail_receiver_alarm on the bound Sidecar, and logs its ids, never an address (I-13).
