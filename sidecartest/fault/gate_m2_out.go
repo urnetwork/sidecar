@@ -8,7 +8,10 @@
 // local stack's MinIO: FS-5's, which drives stock git through evsgit's world and has no builder (owner decision 548,
 // QD-995), and FS-1's, FS-2's, FS-3's, FS-4's, FS-6's, FS-7's, FS-12's, FS-53's, FS-57's, FS-58's, FS-60's, FS-62's,
 // FS-63's and FS-113's, each the convention's TestFs<n>OnT3 run through sidecart3.RunRow, and FS-10's twin by its real
-// name, TestFs10TwinOnT3 (QD-1081). A case run on both tiers keeps its convention T2 test, and no test moves. Each case's
+// name, TestFs10TwinOnT3 (QD-1081). FS-44's, FS-45's and FS-47's T3 runs are server's quotahost's own tests, on
+// NewLocalQuota's parts over the private stack's Postgres and Redis: QUOTA's hand copies of the schedules their
+// registered builders run on T2, not those builders, so no explorer seed or lost answer reaches them there; their T2
+// tests are the convention's (QD-1084). A case run on both tiers keeps its convention T2 test, and no test moves. Each case's
 // registered clauses run with it by the convention (QD-1084), on T3 where each clause names its package: FS-1's, FS-4's,
 // FS-6's, FS-10's rollback twin, FS-57's, FS-58's, FS-60's and FS-62's lease holder in evshost, FS-6's --now shred under a
 // hold in model, and FS-62's ACL gate in sidecart3.
@@ -90,6 +93,9 @@ func gateM2Cases(catalog *Catalog) map[string][]*GateTest {
 		{rowId: "FS-7", packagePath: "./evshost"},
 		{rowId: "FS-10", packagePath: "./evshost", names: []string{"TestFs10TwinOnT3"}},
 		{rowId: "FS-12", packagePath: "./evshost"},
+		{rowId: "FS-44", packagePath: "./quotahost", names: []string{"TestFs44T3Producer", "TestFs44T3LeaseRows"}},
+		{rowId: "FS-45", packagePath: "./quotahost", names: []string{"TestFs45T3RelayedPairs"}},
+		{rowId: "FS-47", packagePath: "./quotahost", names: []string{"TestFs47T3QuotaClauses"}},
 		{rowId: "FS-53", packagePath: "./evshost"},
 		{rowId: "FS-57", packagePath: "./evshost"},
 		{rowId: "FS-58", packagePath: "./evshost"},
