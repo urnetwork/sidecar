@@ -17,7 +17,9 @@
 //
 //	gates    nothing while this process's clock is unsure, nor while SettlePassed is false on the segment cluster
 //	         or on the repo's metadata cluster (§19.6); and only while repo/ shows active or deleted and no hold
-//	         covers the repo, each cached at most 5 s and read again before each DELETE
+//	         covers the repo, each cached at most 5 s and read again before each DELETE, the hold/ read last and
+//	         held to its bound as it returns (HoldCache.CoveringRepoAtDelete; owner decision 629), so a read of it
+//	         that came back past the bound stops the repo as one that failed does
 //	index    the introduced ids of every pidx/ entry whose own LastModified is at or after the oldest candidate's,
 //	         less an hour, each by one GET; a listed entry that is gone (a pack replaced its parcel) lists its ref
 //	         again and reads what was not read, once; over PidxReadCount entries nothing of the repo is deleted
@@ -291,13 +293,14 @@ func (self *OrphanGc) alarm(name string, repoId sidecar.Id, format string, args 
 }
 
 // Step 2's two reads: repo/ must show active or deleted in a format this instance reads, and no hold may cover
-// the repo. Anything unread, or a repo whose network is not known, stops the repo: its why is not empty.
+// the repo. Anything unread, or a repo whose network is not known, stops the repo: its why is not empty. hold/ is read
+// last, held to its bound as it returns, since each DELETE issues right after this.
 func (self *OrphanGc) repoWhy(ctx context.Context, repo *OrphanGcRepo) string {
 	read, err := self.repos.Read(ctx, repo.MetadataCluster, repo.RepoId)
 	if err != nil {
 		return "repo/ unread"
 	}
-	cover, err := self.holds.CoveringRepo(ctx, repo.RepoId, read.Object)
+	cover, err := self.holds.CoveringRepoAtDelete(ctx, nil, repo.RepoId, read.Object)
 	if err != nil || cover.Covered() {
 		return "held"
 	}

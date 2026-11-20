@@ -10,22 +10,26 @@
 //
 //   - A case with a registered schedule whose T3 run is in another server package is named there, under the
 //     convention's tags (QD-1081): evshost's FS-68, FS-72's migration and rollback cases, FS-89, FS-91, FS-94 and
-//     FS-95; model's FS-66's hold case, FS-69 and FS-92, ABUSE-M10-01's runs against api's real hold/ writes, each by
-//     the test that runs its registered case; and the root package's FS-74, FS-75, FS-83, FS-87's index case, FS-99's
-//     card case, FS-107, FS-108 and FS-111. A T2+T3 case keeps its T2 test, and no test moves.
+//     FS-95; and the root package's FS-74, FS-75, FS-83, FS-107, FS-108 and FS-111. A T2+T3 case keeps its T2 test,
+//     and no test moves.
 //   - A case whose thin T2 test carries another name than the convention's is named by it: FS-74's and FS-75's
-//     TestFs74OnEvs and TestFs75OnEvs, and FS-101's r-file case's TestFs101File.
+//     TestFs74OnEvs and TestFs75OnEvs.
 //   - A case no builder can cover is named by its T3 tests alone (gateM10NoBuilderCases): FS-73, whose world drives
 //     stock git and needs a testing.TB (QD-995, owner decision 548), and FS-114's purge and drop cases, which §22.9's
 //     file-cluster suite runs on T3's clusters of the minio fork's hooked build (EVSB-M10-08) as cases of its own:
 //     server's TestFileClusterSuitePassesOnT3, whole, so either case passes only when every case of the suite does.
+//   - The later-of cases are named as the held gate names them (gate_held.go, TEST-M10-06), so the two gates read each
+//     alike: model's FS-66's hold case, FS-69 and FS-92, ABUSE-M10-01's runs against api's real hold/ writes, with the
+//     clauses their owners run beside each; the root package's FS-87's index case and FS-99's card case; FS-101's
+//     r-file case's TestFs101File; and beside the convention's entries, the tests MAIL-M10-04 and SEARCH-M10-37 wrote
+//     of the mailbox cases and FS-78's hold case, which no builder answers.
 //
 // Every other case keeps the convention, so a case nobody registered a builder for reads missing, whatever clause or
 // world tests of it exist, until QD-1084's clause registry names those: FS-64, FS-65, FS-66, FS-67, FS-70, FS-71,
-// FS-79, FS-81, FS-90, FS-93 and FS-96, and the later-of cases TEST-M10-06 reports case by case. Three rows carry
-// tests under the convention's T2 names that run no registered builder, FS-76's, FS-78's and FS-112's, and read
-// missing on their unwritten T3 runs; the written item names them, so none passes on a test §22.8's rules never ran.
-// FS-125 is held with C19's windows (owner decision 609; QD-1038), and an item says why its cases read missing.
+// FS-79, FS-81, FS-90, FS-93 and FS-96, and the later-of cases no owner wrote a test of. Three rows carry tests under
+// the convention's T2 names that run no registered builder, FS-76's, FS-78's and FS-112's, and read missing on their
+// unwritten T3 runs; the written item names them, so none passes on a test §22.8's rules never ran. FS-125 is held
+// with C19's windows (owner decision 609; QD-1038), and an item says why its cases read missing.
 //
 // Beside the rows, the items, §22.10's right column's first and then §23.4's exit criteria: §22.8's rules on every row,
 // with every write's lost answer over the unknown list (FS-65, FS-72, FS-75); each case written, its schedule naming
@@ -114,12 +118,7 @@ func gateM10Cases(catalog *Catalog) map[string][]*GateTest {
 		{rowId: "FS-91", packagePath: "./evshost"},
 		{rowId: "FS-94", packagePath: "./evshost"},
 		{rowId: "FS-95", packagePath: "./evshost"},
-		{rowId: "FS-66", caseName: "hold", packagePath: "./model", names: []string{"TestFs66HoldPlacedByApiOnT3"}},
-		{rowId: "FS-69", packagePath: "./model", names: []string{"TestFs69HoldsPlacedByApiOnT3"}},
-		{rowId: "FS-92", packagePath: "./model", names: []string{"TestFs92HoldsPlacedByApiOnT3"}},
 		{rowId: "FS-83", packagePath: "."},
-		{rowId: "FS-87", caseName: "index", packagePath: "."},
-		{rowId: "FS-99", caseName: "cards", packagePath: "."},
 		{rowId: "FS-107", packagePath: "."},
 		{rowId: "FS-108", packagePath: "."},
 		{rowId: "FS-111", packagePath: "."},
@@ -142,8 +141,11 @@ func gateM10Cases(catalog *Catalog) map[string][]*GateTest {
 			{Repo: "server", Package: ".", Tags: gateT3Tags, Stores: true, Names: []string{GateT3TestName(testCase)}},
 		}
 	}
-	fs101 := caseOf("FS-101", "r-file")
-	cases[fs101.String()] = gateCaseT2Named(fs101, "TestFs101File")
+
+	// the later-of cases, as the held gate names them, so M10's exit and the held gate read each alike
+	for caseName, tests := range gateHeldCases(catalog) {
+		cases[caseName] = tests
+	}
 
 	// no builder can cover these
 	cases[caseOf("FS-73", "").String()] = []*GateTest{gateFs73T3Test}
@@ -463,7 +465,7 @@ func gateM10OutEvidenceItems() []*GateItem {
 
 // The items of the tree's checks every exit runs, §22.8's benchmark rows and what the world owes: see the file header.
 func gateM10OutLedgerItems() []*GateItem {
-	return []*GateItem{
+	items := []*GateItem{
 		{
 			Item: "the CROSSSLOT lints: every script and multi-key call keeps its keys in one slot, read from the code and from T3's engines' calls, M10's engines among them (§22.4)",
 			Tests: []*GateTest{
@@ -514,6 +516,57 @@ func gateM10OutLedgerItems() []*GateItem {
 			},
 			External: "hardware: the index row's run on T3's clusters and on M2's staging PM9A3 set, whose counts are the projection's evidence; this report runs neither",
 		},
+	}
+	items = append(items, gateFs86CardItems()...)
+	return append(items, []*GateItem{
+		{
+			Item: "§22.8's drop row: drop scan rates and a 60 GB history's job time from the drop mode's windows, the load's pause holding past its line (EVSB-M10-08)",
+			Tests: []*GateTest{
+				{Repo: "server", Package: "./cli/filecluster-bench", Names: []string{"TestDropBenchRunsEachWindowAndComputesTheRow", "TestDropFiguresComputeTheHistorysJobTime", "TestLoadPauseHoldsPastItsLineAndKeepsTheTimeHeld"}},
+			},
+			External: "hardware: the drop row on a segment cluster of production's HDDs (§22.8), which a run here stands for and is no evidence of",
+		},
+		{
+			Item: "§22.8's hdd and trash rows at M10: purges at year two's rate on synthetic objects in a bucket of their own beside the mix under the 50% pause, and slot purges beside the trash run's overwrites (EVSB-M10-08)",
+			Tests: []*GateTest{
+				{Repo: "server", Package: "./cli/filecluster-bench", Names: []string{
+					"TestHddM10RunsTheMixWithPurgesBesideIt", "TestHddM10RefusesWithoutCapacityOrABucketOfItsOwn", "TestPurgeLoadDeletesEachObjectItsAllowanceAfterItsPut", "TestPurgeLoadDefaultsAreYearTwos",
+					"TestTrashM10RunsSlotPurgesBesideTheOverwrites",
+				}},
+			},
+			External: "production: the hdd run on the production segment cluster with purges in their own bucket (TEST.md's External, M10), and the trash run on the PM9A3 set",
+		},
+		{
+			Item: "D-OPS-21's drop job bounds: one job a segment cluster, its start gated, its pause past half the HDD drives' measured capacity or while none is known (EVSB-M10-03, EVSB-M10-06)",
+			Tests: []*GateTest{
+				{Repo: "sidecar", Package: "./evsservice", Names: []string{"TestDropJobTakeIsOneInstances", "TestDropJobGatesStartNothing"}},
+			},
+		},
+		{
+			// nothing to run: the pace runs unmeasured
+			Item: "D-OPS-21's drop job pace: at most 32 MB/s of reads and 10 DELETEs a second; no test holds a job's reads to DropSettings.ReadBytesPerSecond or its DELETEs to DeletesPerSecond (EVSB-M10-03's and EVSB-M10-06's reports), so no test shows it yet",
+		},
+		gateT4SearchCellsItem(),
+		{
+			Item:     "FS-125 held with PROTO-M10-05 (owner decision 609; QD-1038): C19's window accounting is withdrawn, the remote-search pair's contracts being accounted like any peer's, as FS-83 checks; the row keeps its number and its sweep runs only if the windows return, so its cases above read missing with no test",
+			External: "people: the owner, should C19's windows return",
+		},
+		{
+			Item:     "D-TEST-12's and D-TEST-18's production soaks before deletes turn on: at least 14 days and 10,000 candidates with none a retained version names before purge: on, and at least 30 days and 200 jobs, half on repos with renames and cross-ref copies, with no delete-set member a retained version names before drop: on",
+			External: "production: internal networks and design partners after format 2's final freeze, then the owner",
+		},
+		{
+			Item:     "format 2's bytes freeze at M10's Gn-out (§23.8, §22.10's format 2 row; D-PHASE-7, D-PHASE-10, owner decision 169): the owner's approval of this report and the merge of sidecar into main in §23.9's order, production only after, dark first, where D-TEST-13 confirms the projection (owner decision 174)",
+			External: "people: the owner's sign-off at M10's Gn-out, which owner decision 194 lets the build move past",
+		},
+	}...)
+}
+
+// D-TEST-17's readings of FS-86's card case, which falls due at the later of M6's and M10's exits: §22.8's directory row
+// against §16.11's cost table, the Team limit's reading on T3's layouts, read apart from every other failure (QD-1068),
+// and the runs in physical time no one has built. M10's exit and the held gate (gate_held.go) both carry them.
+func gateFs86CardItems() []*GateItem {
+	return []*GateItem{
 		{
 			Item: "§22.8's directory row with FS-86's card case against §16.11's cost table (D-TEST-17; RECORD-M10-07): DirectoryCostOracle's cards, its three mutants failing, fake-clock days at 500, 2,000 and 5,000 members within the table's M10 row and the cards ref's ceilings, the Team limit's with a following daemon on the real client, each push priced on §11.13's directory rows, and the cards ref's commits on T3's local stack at reduced scale, whose p99 misses are logged and fail nothing (owner decision 598)",
 			Tests: []*GateTest{
@@ -543,55 +596,21 @@ func gateM10OutLedgerItems() []*GateItem {
 			// nothing to run: not built
 			Item: "D-TEST-17's runs in physical time beyond the Team limit's hour: the 26 h run at 500 members on T3, and the stress case's physical hour beside §22.8's year-one mix; neither is built (RECORD-M10-07's report), so no test shows it yet",
 		},
-		{
-			Item: "§22.8's drop row: drop scan rates and a 60 GB history's job time from the drop mode's windows, the load's pause holding past its line (EVSB-M10-08)",
-			Tests: []*GateTest{
-				{Repo: "server", Package: "./cli/filecluster-bench", Names: []string{"TestDropBenchRunsEachWindowAndComputesTheRow", "TestDropFiguresComputeTheHistorysJobTime", "TestLoadPauseHoldsPastItsLineAndKeepsTheTimeHeld"}},
-			},
-			External: "hardware: the drop row on a segment cluster of production's HDDs (§22.8), which a run here stands for and is no evidence of",
+	}
+}
+
+// T4's search cells at M10 (SDK-M10-06), through which the T4 rows of FS-77, FS-83, FS-109 and FS-110 run, their
+// app-host cases' T4 parts among them: M10's exit and the held gate both carry it, and it reads open on the devices.
+func gateT4SearchCellsItem() *GateItem {
+	return &GateItem{
+		Item: "T4 at M10 (§22.4's T4 from M10, §18.4's search working sets; SDK-M10-06): the ios32 and Android cells with search on, each searching, downloading and asking through the app's own calls within §18.4's working set, a deliberate per-search key collection failing them; the T4 rows of FS-77, FS-83, FS-109 and FS-110 run through these cells",
+		Tests: []*GateTest{
+			{Repo: "sdk", Package: ".", Tags: "sidecar_testhooks", Names: []string{
+				"TestIos32CellSearchesDownloadsAndAsks", "TestAndroidCellSearchesDownloadsAndAsks", "TestT4SearchBudgetCatchesAPerSearchKeyCollection",
+				"TestIos32CellSearchesWithinItsWorkingSet", "TestAndroidCellSearchesWithinItsWorkingSet",
+			}},
 		},
-		{
-			Item: "§22.8's hdd and trash rows at M10: purges at year two's rate on synthetic objects in a bucket of their own beside the mix under the 50% pause, and slot purges beside the trash run's overwrites (EVSB-M10-08)",
-			Tests: []*GateTest{
-				{Repo: "server", Package: "./cli/filecluster-bench", Names: []string{
-					"TestHddM10RunsTheMixWithPurgesBesideIt", "TestHddM10RefusesWithoutCapacityOrABucketOfItsOwn", "TestPurgeLoadDeletesEachObjectItsAllowanceAfterItsPut", "TestPurgeLoadDefaultsAreYearTwos",
-					"TestTrashM10RunsSlotPurgesBesideTheOverwrites",
-				}},
-			},
-			External: "production: the hdd run on the production segment cluster with purges in their own bucket (TEST.md's External, M10), and the trash run on the PM9A3 set",
-		},
-		{
-			Item: "D-OPS-21's drop job bounds: one job a segment cluster, its start gated, its pause past half the HDD drives' measured capacity or while none is known (EVSB-M10-03, EVSB-M10-06)",
-			Tests: []*GateTest{
-				{Repo: "sidecar", Package: "./evsservice", Names: []string{"TestDropJobTakeIsOneInstances", "TestDropJobGatesStartNothing"}},
-			},
-		},
-		{
-			// nothing to run: the pace runs unmeasured
-			Item: "D-OPS-21's drop job pace: at most 32 MB/s of reads and 10 DELETEs a second; no test holds a job's reads to DropSettings.ReadBytesPerSecond or its DELETEs to DeletesPerSecond (EVSB-M10-03's and EVSB-M10-06's reports), so no test shows it yet",
-		},
-		{
-			Item: "T4 at M10 (§22.4's T4 from M10, §18.4's search working sets; SDK-M10-06): the ios32 and Android cells with search on, each searching, downloading and asking through the app's own calls within §18.4's working set, a deliberate per-search key collection failing them; the T4 rows of FS-77, FS-83, FS-109 and FS-110 run through these cells",
-			Tests: []*GateTest{
-				{Repo: "sdk", Package: ".", Tags: "sidecar_testhooks", Names: []string{
-					"TestIos32CellSearchesDownloadsAndAsks", "TestAndroidCellSearchesDownloadsAndAsks", "TestT4SearchBudgetCatchesAPerSearchKeyCollection",
-					"TestIos32CellSearchesWithinItsWorkingSet", "TestAndroidCellSearchesWithinItsWorkingSet",
-				}},
-			},
-			External: "devices: T4's physical runs on the ios32 and Android surrogates and Safari's wasm engine (owner decision 100), which no figure here stands for",
-		},
-		{
-			Item:     "FS-125 held with PROTO-M10-05 (owner decision 609; QD-1038): C19's window accounting is withdrawn, the remote-search pair's contracts being accounted like any peer's, as FS-83 checks; the row keeps its number and its sweep runs only if the windows return, so its cases above read missing with no test",
-			External: "people: the owner, should C19's windows return",
-		},
-		{
-			Item:     "D-TEST-12's and D-TEST-18's production soaks before deletes turn on: at least 14 days and 10,000 candidates with none a retained version names before purge: on, and at least 30 days and 200 jobs, half on repos with renames and cross-ref copies, with no delete-set member a retained version names before drop: on",
-			External: "production: internal networks and design partners after format 2's final freeze, then the owner",
-		},
-		{
-			Item:     "format 2's bytes freeze at M10's Gn-out (§23.8, §22.10's format 2 row; D-PHASE-7, D-PHASE-10, owner decision 169): the owner's approval of this report and the merge of sidecar into main in §23.9's order, production only after, dark first, where D-TEST-13 confirms the projection (owner decision 174)",
-			External: "people: the owner's sign-off at M10's Gn-out, which owner decision 194 lets the build move past",
-		},
+		External: "devices: T4's physical runs on the ios32 and Android surrogates and Safari's wasm engine (owner decision 100), which no figure here stands for",
 	}
 }
 

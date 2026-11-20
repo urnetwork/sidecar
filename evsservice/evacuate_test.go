@@ -989,7 +989,10 @@ func TestHoldCacheCoversByTheReposNetwork(t *testing.T) {
 	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
 	blobs := sidecartest.NewFakeBlobs(clock, nil, nil, nil)
 	// a reread interval past §11.13's 5 s is held to it
-	cache := NewHoldCache(blobs, clock, &sidecar.HoldSetSettings{RereadInterval: time.Minute, ListPageCount: 10, CacheNetworkCount: 10})
+	cache := NewHoldCache(blobs, clock, &HoldCacheSettings{
+		HoldSet:           &sidecar.HoldSetSettings{RereadInterval: time.Minute, ListPageCount: 10, CacheNetworkCount: 10},
+		MaxRereadInterval: 5 * time.Second,
+	})
 	networkId, repoId, otherRepoId := testId("hold network"), testId("hold repo"), testId("hold other repo")
 	object := &protocol.EvsRepoObject{RepoId: repoId.Bytes(), NetworkId: networkId.Bytes()}
 

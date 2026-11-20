@@ -17,8 +17,10 @@
 // batches are gone and nothing rebuilds the container from them. A pass with no horizon deletes no container.
 //
 // Every delete rereads repo/ and hold/ as it issues: nothing a hold covers goes (§21.9), and nothing of a repo whose
-// repo/ is not active or deleted. A parcel's delete is unfunded P2 on the metadata cluster (§11.13's wallet row: the
-// nightly pass has no payer); a pack's is on the segment cluster, which spends no NVMe budget.
+// repo/ is not active or deleted. hold/ is read last, held to its bound as it returns (HoldCache.CoveringRepoAtDelete;
+// owner decision 629): a read that came back past the bound stops the repo, as one that failed does. A parcel's delete
+// is unfunded P2 on the metadata cluster (§11.13's wallet row: the nightly pass has no payer); a pack's is on the
+// segment cluster, which spends no NVMe budget.
 
 package evsservice
 
@@ -46,7 +48,8 @@ func (self *NightlyPass) repoDeletes(ctx context.Context, cluster sidecar.BlobCl
 	if err != nil {
 		return "repo/ unread", err
 	}
-	cover, err := self.holds.CoveringRepo(ctx, repoId, read.Object)
+	// last, and held to its bound as it returns: a delete issues right after this
+	cover, err := self.holds.CoveringRepoAtDelete(ctx, nil, repoId, read.Object)
 	if err != nil {
 		return "hold/ unread", err
 	}
