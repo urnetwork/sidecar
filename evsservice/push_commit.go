@@ -10,7 +10,8 @@
 //	        under 23 h old, older 409 SLOT_STALE, recorded; its own with other bytes sends the attempt to a cluster
 //	        read of the head, where 5a finds the push committed if an ERASE rewrote the slot, else an alarm and
 //	        SLOT_STALE. A retoken takes over the object of the statement it replaces, which can never commit (14.2.4):
-//	        a settled DELETE naming its LastModified, then the create again. Any other object, one with no origin
+//	        a settled DELETE naming its LastModified, under no hold by a read of hold/ younger than its bound as the
+//	        DELETE issues (owner decision 629), then the create again. Any other object, one with no origin
 //	        among them, is a cluster read of the head and 5a, then SLOT_STALE, recorded. So a slot object is held by
 //	        one statement. Then the record joins this process's open batch for the repo's cluster and waits for its
 //	        write (batch.go), its payload with section 7 taken out (sidecar.EvsRecordPayload), so the slot objects are
@@ -476,8 +477,8 @@ func (self *pushAttempt) writeSlot(slotId sidecar.Id, body []byte, own EvsSlotOr
 
 // DESIGN-DETAILS 14.2.4's takeover of another statement o's object: taken once the settled DELETE naming the
 // object's LastModified was sent, which sends the round to its create again; else slotForeign when o's object is not
-// this attempt's to take, and slotUnwritten when a read failed, the clock is unsure or the wait was cut short. It
-// takes over only when all of these hold:
+// this attempt's to take, and slotUnwritten when a read failed or came back past its bound, the clock is unsure or
+// the wait was cut short. It takes over only when all of these hold:
 //
 //  1. o's origin is a push's, on this ref, by this statement's signer;
 //  2. o declared a lower path epoch than this statement, a push other than a PATH_EPOCH on a ref with a head, whose
@@ -485,7 +486,7 @@ func (self *pushAttempt) writeSlot(slotId sidecar.Id, body []byte, own EvsSlotOr
 //  3. EvsPushStandingIn on that head, for o's push id, statement prefix, base version and mode, finds o neither
 //     committed nor its push id under another statement;
 //  4. the object's bytes equal the body this statement carries;
-//  5. no hold covers the repo.
+//  5. no hold covers the repo, by a read of hold/ younger than its bound as the DELETE issues (owner decision 629).
 //
 // 2 and 3 prove o can never commit: o commits only on a head whose current epoch is the one it declares, the ref's
 // epoch only rises, and a commit of o lies in (b, b+64] of its base b, below the first head of the higher epoch, so
@@ -496,6 +497,10 @@ func (self *pushAttempt) writeSlot(slotId sidecar.Id, body []byte, own EvsSlotOr
 // The wait: the DELETE goes only once evs's checked clock is SlotSettleAge past the object's LastModified, so a
 // DELETE naming that LastModified can take no object another attempt created after it (the store's second of
 // slack and the clocks' error, 14.2.4). While the clock is unsure the takeover answers 503 rather than wait on it.
+// 5 is judged again after the wait, just before the DELETE's barrier (HoldCache.CoveringRepoAtDelete): the cover
+// read before it while that read is younger than the bound, so a quick takeover deletes on it, else hold/ read again,
+// a hold that read shows leaving the object as one before the wait does and a read that fails or comes back past the
+// bound answering 503.
 func (self *pushAttempt) takeOver(key string, origin EvsSlotOrigin, stored []byte, body []byte, lastModified time.Time) (bool, slotWriteResult) {
 	push := self.statement.Push
 	switch {
@@ -545,6 +550,15 @@ func (self *pushAttempt) takeOver(key string, origin EvsSlotOrigin, stored []byt
 		case <-self.ctx.Done():
 			return false, slotUnwritten
 		}
+	}
+	// owner decision 629: the DELETE acts only on a read of hold/ younger than the bound as it issues, which the wait
+	// may have aged the first one past
+	cover, err = self.engine.holds.CoveringRepoAtDelete(self.ctx, cover, self.repoId, self.reads.repo.Object)
+	if err != nil {
+		return false, slotUnwritten
+	}
+	if cover.Covered() {
+		return false, slotForeign
 	}
 	barrierKey := barrierRefKey(self.repoId, self.refId)
 	testHookBarrier(BarrierPushSlotTakeBefore, barrierKey)
