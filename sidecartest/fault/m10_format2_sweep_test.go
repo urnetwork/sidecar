@@ -276,6 +276,7 @@ func m10Format2SweepCases() []*m10Format2Case {
 				"and restore reporting dropped, and the twin whose hand-deleted live segment alarms run as no schedule",
 			missingClauses: []string{
 				"export's stubs through git fsck, and diff and restore reporting dropped: the world drives no export, diff or restore (EVS2-M10-19, -23)",
+				"the head written again keeping its oid and mode: the schedule reads its content, and no world read gives a mode",
 				"the twin whose live version's segment, deleted by hand, alarms as a missing segment",
 				"--now's bounds to the minute (evacuation's horizon past seen_ms by 12 min, not_before_ms + 25 min) and a version uploaded 1 h before a --now drop kept until the horizon passes its upload by 24 h 2 min: fs89_test.go's TestFs89NowWaitsForTheHorizon holds them on the drop table, not through a world (EVSB-M10-03)",
 			},
