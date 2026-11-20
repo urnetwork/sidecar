@@ -4,11 +4,13 @@
 // missing or open. It reads as M2's entry does (gate_m2_in.go):
 //
 //   - peer review of format 2's schemas: people's work, open.
-//   - EvsCommit.tla with the purger and IndexRollup.tla passing TLC: TEST-M2-08's tests of both models in gate mode,
-//     which let a model's recorded runs stand while nothing it keeps has changed; the report runs no TLC of its own.
-//     The purger is EvsCommit's M10 part, run story by story, and TEST-M2-08's gate verdict needs only the model,
-//     mutants and live modes, so this item also reads modelled.yml for a passing stories run at EvsCommit's sources:
-//     without one it reads open, never pass. Where no run stands it reads open and says TLC has not run.
+//   - EvsCommit.tla with the purger and IndexRollup.tla passing TLC: TEST-M2-08's tests of both models in gate mode at
+//     M10's entry, which let a model's recorded runs stand while nothing it keeps has changed; the report runs no TLC
+//     of its own. Each test takes the modes M10's entry needs of its model from modelled.yml's milestones: EvsCommit's
+//     model, mutants and live, and its purger's mutants and stories, which run-tlc.sh runs and modelled.yml records
+//     as modes of their own (QD-1116), and IndexRollup's model, mutants and live. A test passes only where every mode
+//     its model needs here stands at its sources, so the purger's stories never stand on the other modes' runs. Where
+//     one does not stand the item reads open and says TLC has not run, never pass.
 //   - FS-64 to FS-81 and FS-83 to FS-96 written against the fakes: one item per case of those rows that M10's exit
 //     holds, its later-of cases among them, since M0-M10 build straight through and M10's exit comes last. A case is
 //     written as GateWritten finds it: registered, with a builder whose schedule steps and checks, its twin too where
@@ -24,10 +26,9 @@
 //     people's work, open.
 //
 // The drop extension's TLC pass is M10's exit's (§22.10's right column; §22.17's blocking line), so no item here
-// waits on it, and nothing here reads fail for want of it. modelled.yml records a mode's run whole, though, and
-// run-tlc.sh's mutants and stories modes each hold the purger's runs and the drop extension's together, so the TLC
-// item stands only on runs that show both: a drop run that does not pass leaves it open until the two parts are
-// recorded apart, which is TEST-M2-08's harness to do (questions/test-m10-04-tlc-modes-split-purger-from-drops.md).
+// waits on it, and nothing here reads fail or open for want of it: its mutants and stories are modes of their own,
+// which modelled.yml's milestones name only from M10's exit, so at M10's entry no test needs them and the TLC item
+// runs none of the drop extension's tests.
 //
 // No item here is an external audit (R-TEST-6; owner decisions 99, 119). Each command's last line says its outcome,
 // as server's gate tool reads it (GateOutcomeLinePrefix): the written check and the TLC check run as tests of this
@@ -38,11 +39,8 @@ package fault
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"slices"
 	"strings"
-
-	"gopkg.in/yaml.v3"
 )
 
 // The catalog's gate whose cases M10's entry review must find written, of the rows §22.10's left column names.
@@ -58,43 +56,23 @@ const (
 	GateM10InTlcFlag     = "fault.gate-m10-in-tlc"
 )
 
-// TEST-M2-08's tests of EvsCommit and IndexRollup, in gate mode at the models' sources: EvsCommit's model, mutants,
-// live and stories, the purger's stories and twins among the last two, and IndexRollup's model, mutants and live.
+// TEST-M2-08's tests of EvsCommit and IndexRollup, in gate mode at M10's entry: EvsCommit's model, mutants and live,
+// its purger's mutants and stories, and IndexRollup's model, mutants and live. The drop extension's tests,
+// TestEvsCommitDropMutantsFailTlc and TestEvsCommitDropStoriesPassTlc, are M10's exit's.
 var gateM10InTlcTests = []string{
 	"TestEvsCommitPassesTlcAtItsBounds",
 	"TestEvsCommitMutantsFailTlc",
 	"TestEvsCommitLivenessHolds",
-	"TestEvsCommitStoriesPassTlc",
+	"TestEvsCommitPurgerMutantsFailTlc",
+	"TestEvsCommitPurgerStoriesPassTlc",
 	"TestIndexRollupPassesTlcAtItsBounds",
 	"TestIndexRollupMutantsFailTlc",
 	"TestIndexRollupLivenessHolds",
 }
 
-// modelled.yml's own check in sidecartest/model, which logs each model's sources digest, the one a recorded run must
-// carry to stand.
-const gateModelledSourcesTest = "TestModelledNamesEachModelsSources"
-
-// The model whose purger M10's entry needs, and the mode its M10 part's runs are recorded under (run-tlc.sh stories).
-const (
-	gateM10InPurgerSpec = "EvsCommit"
-	gateM10InPurgerMode = "stories"
-)
-
-// The line gateModelledSourcesTest logs for each model under go test -v, with its sources digest, empty where a
-// source repository is not beside this checkout.
-var gateModelledDigestPattern = regexp.MustCompile(`(?m)^\s+\S+\.go:[0-9]+: ([A-Za-z]+): [0-9]+ source files, digest ([0-9a-f]*), [0-9]+ runs recorded$`)
-
-// How M10-in's TLC item reads its run's output.
-type GateM10InTlcSettings struct {
-	// How many of the run's last lines a failure's reason quotes, when the failure names no test of its own: enough
-	// for go test's verdict and what it printed just before.
-	ReasonLineCount int
-}
-
-// Three lines, as M2-in's TLC item quotes a run that never built.
-func DefaultGateM10InTlcSettings() *GateM10InTlcSettings {
-	return &GateM10InTlcSettings{ReasonLineCount: 3}
-}
+// The gate whose modes M10-in's TLC item asks TEST-M2-08's tests for (SIDECAR_TLC_GATE): M10's entry, whose
+// milestones in modelled.yml name EvsCommit's purger and not its drop extension.
+const gateM10InTlcGate = "M10-in"
 
 // Every case M10's exit holds of the rows §22.10's left column names, in row order: each must be written at M10's
 // entry.
@@ -172,82 +150,14 @@ func GateM10InWritten(ctx context.Context, testCase *Case, lookup func(rowId str
 	return result
 }
 
-// What modelled.yml records of a model, as far as M10-in's TLC item reads it.
-type gateModelledFile struct {
-	Models []*gateModelledModel `yaml:"models"`
-}
-
-// One model by its spec, with its recorded runs, newest last.
-type gateModelledModel struct {
-	Spec string             `yaml:"spec"`
-	Runs []*gateModelledRun `yaml:"runs"`
-}
-
-// One recorded run: its mode, its result, and the digest of the sources it ran at, which it stands at alone.
-type gateModelledRun struct {
-	Mode          string `yaml:"mode"`
-	Result        string `yaml:"result"`
-	SourcesSha256 string `yaml:"sources_sha256"`
-}
-
-// What M10-in's TLC item reports from TEST-M2-08's tests of EvsCommit and IndexRollup and modelled.yml's own check,
-// run together in gate mode with no TLC, by their go test -v output and whether that run failed, and from modelled.yml's
-// bytes. As GateTlcOutcome reads the tests: pass when each passed, its recorded runs standing; open, saying so, when
-// any failed only because TLC has not run at its model's sources; fail for any other failure, a test that gave no
-// verdict, or a modelled.yml its own check refuses. Where the tests pass, the purger's runs must stand too: a passing
-// stories run of EvsCommit recorded at the digest the check logged for its sources, without which the item reads
-// open, never pass, since TEST-M2-08's gate lets that mode stand on the other three. No outcome here comes from the
-// drop extension alone, whose own pass is M10's exit's. settings nil takes the defaults.
-func GateM10InTlcOutcome(output []byte, runErr error, modelled []byte, settings *GateM10InTlcSettings) (string, string) {
-	if settings == nil {
-		settings = DefaultGateM10InTlcSettings()
-	}
-	text := string(output)
-	verdicts := map[string]string{}
-	for _, match := range gateTestVerdictPattern.FindAllStringSubmatch(text, -1) {
-		verdicts[match[2]] = match[1]
-	}
-	if len(verdicts) == 0 {
-		return GateTlcOutcome(output, runErr, gateM10InTlcTests)
-	}
-	if verdicts[gateModelledSourcesTest] != "PASS" {
-		return GateOutcomeFail, fmt.Sprintf("modelled.yml's own check, %s, did not pass, so no recorded run can stand: %s", gateModelledSourcesTest, gateLastLines(text, settings.ReasonLineCount))
-	}
-	outcome, reason := GateTlcOutcome(output, runErr, gateM10InTlcTests)
-	if outcome != GateOutcomePass {
-		return outcome, reason
-	}
-
-	digest := ""
-	found := false
-	for _, match := range gateModelledDigestPattern.FindAllStringSubmatch(text, -1) {
-		if match[1] == gateM10InPurgerSpec {
-			digest = match[2]
-			found = true
-		}
-	}
-	if !found || digest == "" {
-		return GateOutcomeFail, fmt.Sprintf("%s logged no sources digest for %s, so whether its %s, the purger's runs, stand is unknown", gateModelledSourcesTest, gateM10InPurgerSpec, gateM10InPurgerMode)
-	}
-	file := &gateModelledFile{}
-	if err := yaml.Unmarshal(modelled, file); err != nil {
-		return GateOutcomeFail, fmt.Sprintf("modelled.yml does not parse: %v", err)
-	}
-	standing := false
-	for _, model := range file.Models {
-		if model.Spec != gateM10InPurgerSpec {
-			continue
-		}
-		for _, run := range model.Runs {
-			if run.Mode == gateM10InPurgerMode && run.Result == "pass" && run.SourcesSha256 == digest {
-				standing = true
-			}
-		}
-	}
-	if !standing {
-		return GateOutcomeOpen, fmt.Sprintf("%s; but no passing %s run of %s, which holds the purger's stories, stands at its sources (digest %s): TEST-M2-08's gate verdict needs only its model, mutants and live runs, so this item reads the purger's from modelled.yml itself; a gate's model phase runs them beside the other modes when %s's sources change, and run-tlc.sh %s %s runs them alone", reason, gateM10InPurgerMode, gateM10InPurgerSpec, digest, gateM10InPurgerSpec, gateM10InPurgerMode, gateM10InPurgerSpec)
-	}
-	return GateOutcomePass, fmt.Sprintf("%s; %s's %s, which hold the purger's, stand at its sources too", reason, gateM10InPurgerSpec, gateM10InPurgerMode)
+// What M10-in's TLC item reports from TEST-M2-08's tests of EvsCommit and IndexRollup, run together in gate mode at
+// M10's entry with no TLC, by their go test -v output and whether that run failed, as GateTlcOutcome reads them: pass
+// when each passed, every mode M10's entry needs of its model standing at its sources, the purger's mutants and
+// stories among EvsCommit's; open, saying so, when any failed only because TLC has not run there, the purger's stories
+// test failing so where no stories-purge run stands; fail for any other failure or a test that gave no verdict. The
+// tests read modelled.yml themselves, and none of the drop extension's runs: its pass is M10's exit's.
+func GateM10InTlcOutcome(output []byte, runErr error) (string, string) {
+	return GateTlcOutcome(output, runErr, gateM10InTlcTests)
 }
 
 // The items people sign at M10's entry, none of which a test shows.
@@ -323,7 +233,7 @@ func gateM10InItems(catalog *Catalog) []*GateItem {
 	people := gateM10InPeopleItems()
 	items := []*GateItem{people[0]}
 	items = append(items, &GateItem{
-		Item:     "EvsCommit.tla with the purger and IndexRollup.tla passing TLC at their bounds, their mutants refused and their liveness held, by the runs sidecartest/model/modelled.yml records at these sources, EvsCommit's stories, the purger's, among them (§22.10's M10 entry; D-PHASE-7, R-TEST-10; TEST-M2-08, EVSB-M10-07, SEARCH-M10-02); where none stands, open: this report runs no TLC itself; the drop extension's pass is M10's exit's, though its twins and stories are recorded in the same runs",
+		Item:     "EvsCommit.tla with the purger and IndexRollup.tla passing TLC at their bounds, their mutants refused and their liveness held, by the runs sidecartest/model/modelled.yml records at these sources of each mode M10's entry needs, the purger's mutants and stories, modes of their own, among them (§22.10's M10 entry; D-PHASE-7, R-TEST-10; TEST-M2-08, EVSB-M10-07, SEARCH-M10-02; QD-1116); where one does not stand, open: this report runs no TLC itself; the drop extension's pass is M10's exit's, whose modes are recorded apart",
 		Commands: []*GateCommand{{Repo: "sidecar", Command: gateM10InTlcCommand()}},
 	})
 	for _, testCase := range GateM10InCases(catalog) {

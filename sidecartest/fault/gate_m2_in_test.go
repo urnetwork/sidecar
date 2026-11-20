@@ -66,11 +66,9 @@ func TestGateM2InModelsPassTlc(t *testing.T) {
 	}
 	command := exec.CommandContext(t.Context(), "go", "test", "-count=1", "-v", "-tags", "sidecar_tlc", "-run", "^("+strings.Join(quoted, "|")+")$", ".")
 	command.Dir = filepath.Join("..", "model")
-	// gate mode, and no TLC: this report reads recorded runs and starts none
-	command.Env = slices.DeleteFunc(os.Environ(), func(variable string) bool {
-		return strings.HasPrefix(variable, "TLC=") || strings.HasPrefix(variable, "SIDECAR_TLC_MODE=")
-	})
-	command.Env = append(command.Env, "SIDECAR_TLC_MODE=gate")
+	// gate mode at M2's entry, and no TLC: this report reads recorded runs and starts none; M2's exit, whose item runs
+	// this test too, needs the same modes of both models (modelled.yml's milestones)
+	command.Env = gateTlcEnviron(os.Environ(), "M2-in")
 	output, runErr := command.CombinedOutput()
 	t.Logf("%s", output)
 	outcome, reason := GateTlcOutcome(output, runErr, gateM2InTlcTests)
