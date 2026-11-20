@@ -110,6 +110,8 @@ type fakeRecordRepo struct {
 	deposits   map[sidecar.Id]*fakeRecordDepositRef
 	slots      map[sidecar.Id]map[uint32][]byte
 	erasures   []*sidecar.RecordStreamErasure
+	// the erasures a completion ERASE ended (QD-1132): evs takes one an erasure
+	completedErasureIds map[sidecar.Id]bool
 	// what each push id came to, for its retries
 	outcomes map[sidecar.Id]*fakeRecordOutcome
 	// a receipt-only depositor's deposits by UTC day
@@ -218,15 +220,16 @@ func (self *FakeRecordStreams) NewRepo(ctx context.Context) (sidecar.Id, error) 
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.repos[repoId] = &fakeRecordRepo{
-		scopes:        map[sidecar.Id]RecordStreamsScope{},
-		streams:       map[sidecar.Id]*fakeRecordStream{},
-		deposits:      map[sidecar.Id]*fakeRecordDepositRef{},
-		slots:         map[sidecar.Id]map[uint32][]byte{},
-		outcomes:      map[sidecar.Id]*fakeRecordOutcome{},
-		receiptCounts: map[fakeRecordReceiptDay]int{},
-		sequence:      fakeRecordSequenceStart,
-		restartedAt:   fakeRecordSequenceStart,
-		refSequences:  map[FakeRecordRef]uint64{},
+		scopes:              map[sidecar.Id]RecordStreamsScope{},
+		streams:             map[sidecar.Id]*fakeRecordStream{},
+		deposits:            map[sidecar.Id]*fakeRecordDepositRef{},
+		slots:               map[sidecar.Id]map[uint32][]byte{},
+		outcomes:            map[sidecar.Id]*fakeRecordOutcome{},
+		completedErasureIds: map[sidecar.Id]bool{},
+		receiptCounts:       map[fakeRecordReceiptDay]int{},
+		sequence:            fakeRecordSequenceStart,
+		restartedAt:         fakeRecordSequenceStart,
+		refSequences:        map[FakeRecordRef]uint64{},
 	}
 	return repoId, nil
 }
@@ -845,8 +848,11 @@ func (self *fakeRecordStreamsClient) Erase(ctx context.Context, repoId sidecar.I
 				heldCount += 1
 			}
 		}
-		if heldCount == 0 {
+		if heldCount == 0 && !repo.completionWithLock(erase) {
 			return nil, repo.refuseWithLock(erase.PushId, statement, protocol.EvsRefusalCode_EVS_REFUSAL_NOTHING_TO_ERASE)
+		}
+		if heldCount == 0 {
+			repo.completedErasureIds[erase.ErasureId] = true
 		}
 		erasure := &sidecar.RecordStreamErasure{
 			Version:         uint64(len(repo.erasures) + 1),
@@ -866,6 +872,35 @@ func (self *fakeRecordStreamsClient) Erase(ctx context.Context, repoId sidecar.I
 		repo.raiseWithLock(FakeRecordRef{Kind: FakeRecordRefErasure})
 		return repo.commitWithLock(erase.PushId, statement, commit), nil
 	})
+}
+
+// Whether erase is a completion ERASE evs takes (QD-1132): it says complete, every key it names an earlier ERASE of
+// its erasure destroyed, the erasure's newest ERASE does not say complete already, and no completion ERASE ended that
+// erasure before. A racing runner's complete ERASE of keys its twin's complete ERASE took stays NOTHING_TO_ERASE.
+func (self *fakeRecordRepo) completionWithLock(erase *sidecar.RecordStreamErase) bool {
+	if !erase.Complete || self.completedErasureIds[erase.ErasureId] {
+		return false
+	}
+	destroyed := map[sidecar.RecordSlotKey]bool{}
+	complete := false
+	for _, erasure := range self.erasures {
+		if erasure.ErasureId != erase.ErasureId {
+			continue
+		}
+		complete = erasure.Complete
+		for _, key := range erasure.Keys {
+			destroyed[*key] = true
+		}
+	}
+	if complete {
+		return false
+	}
+	for _, key := range erase.Keys {
+		if !destroyed[*key] {
+			return false
+		}
+	}
+	return true
 }
 
 func (self *fakeRecordStreamsClient) ReadErasures(ctx context.Context, repoId sidecar.Id, afterVersion uint64) ([]*sidecar.RecordStreamErasure, error) {

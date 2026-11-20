@@ -31,6 +31,9 @@ func NewRecordComponent(record *SidecarRecord) SidecarComponent {
 	// and every sync marks archived entries, the loop running the daily expiry of each log this sidecar administers
 	// (record_retention.go)
 	record.Retention()
+	// and every sync looks for late copies of erased entries, the loop erasing them and going on with an erasure that
+	// waits (record_erase.go)
+	record.hookErasures()
 	return &recordComponent{record: record}
 }
 

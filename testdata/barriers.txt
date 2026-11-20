@@ -603,6 +603,14 @@ barrier record.effect.after record_gate_spend.go
 barrier record.effect.before record_gate_spend.go
 barrier record.erase.after record_erase.go
 barrier record.erase.before record_erase.go
+barrier record.erase.cut.after record_erase.go
+barrier record.erase.cut.before record_erase.go
+barrier record.erase.reenter.after record_erase.go
+barrier record.erase.reenter.before record_erase.go
+barrier record.erase.resume.after record_erase.go
+barrier record.erase.resume.before record_erase.go
+barrier record.erase.rewrite.after record_erase.go
+barrier record.erase.rewrite.before record_erase.go
 barrier record.inventory.roll.after record_inventory.go
 barrier record.inventory.roll.before record_inventory.go
 barrier record.log.entry.after record_log.go
