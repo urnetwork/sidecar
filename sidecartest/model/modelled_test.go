@@ -1,10 +1,11 @@
 // The program around §22.8's TLA+ models (TEST-M2-08; D-TEST-10, D-PHASE-7, FI-30), the part that needs
-// no TLC: modelled.yml's sources and the digest a gate compares, the rule that decides a gate's rerun,
-// mutants/mutants.yml held to run-tlc.sh's twin tables and each cfg's invariants, IndexRollup's design
-// grounds held to its spec's reach states and its cfg, and modelled.yml's details list, the models of
-// DESIGN-DETAILS.md that stand alone under details/, each held to its run script and to real files and
-// rerun at a gate by its own script. It also reads what a run script prints, which model_test.go, under
-// sidecar_tlc, records when it runs TLC itself.
+// no TLC: modelled.yml's sources and the digest a gate compares, the modes each gate needs of a model by
+// its milestones and the rule that decides a gate's rerun, run-tlc.sh's parts each run as modes of their
+// own (QD-1116), mutants/mutants.yml held to run-tlc.sh's twin tables and each cfg's invariants,
+// IndexRollup's design grounds held to its spec's reach states and its cfg, and modelled.yml's details
+// list, the models of DESIGN-DETAILS.md that stand alone under details/, each held to its run script and
+// to real files and rerun at a gate by its own script. It also reads what a run script prints, which
+// model_test.go, under sidecar_tlc, records when it runs TLC itself.
 
 package model
 
@@ -31,11 +32,9 @@ import (
 // The specs this directory holds.
 var modelSpecs = []string{"EvsCommit", "StoreSettle", "IndexRollup"}
 
-// What a gate needs passing at a model's sources before it lets the run stand.
-var modelRequiredModes = []string{"model", "mutants", "live"}
-
-// The modes a model's recorded run may name, as model_test.go records run-tlc.sh's: its twins as mutants.
-var modelRecordedModes = []string{"model", "mutants", "live", "stories"}
+// The run-tlc.sh modes every spec has, each a group of runs a recorded run names (recordedMode); a spec with
+// parts adds twins-<part> and stories-<part> for each (run-tlc.sh list-parts).
+var modelRunModes = []string{"model", "twins", "live"}
 
 // The groups of a details model's run script, each of which a gate needs passing at the model's sources
 // before it lets the runs stand, and which a recorded run names as its mode: the design configurations,
@@ -48,17 +47,26 @@ type modelledFile struct {
 	Details []*modelledDetail `yaml:"details"`
 }
 
-// One model: what it keeps, the code that implements that, and its recorded runs.
+// One model: what it keeps, the code that implements that, the gates that need it, and its recorded runs.
 type modelledModel struct {
-	Spec       string   `yaml:"spec"`
-	Owners     []string `yaml:"owners"`
-	Milestones []string `yaml:"milestones"`
-	Objects    string   `yaml:"objects"`
+	Spec       string               `yaml:"spec"`
+	Owners     []string             `yaml:"owners"`
+	Milestones []*modelledMilestone `yaml:"milestones"`
+	Objects    string               `yaml:"objects"`
 	// models of the same objects under details/, each run by its own script there
 	Companions []string       `yaml:"companions"`
 	Sources    []string       `yaml:"sources"`
 	Exclude    []string       `yaml:"exclude"`
 	Runs       []*modelledRun `yaml:"runs"`
+}
+
+// The first gate whose freeze needs a model's modes passing, and the modes it adds: that gate and every one after it
+// need them (gateModes).
+type modelledMilestone struct {
+	// the gate tool's name: Mn-in, milestone n's entry review, or Mn, its exit review
+	Gate string `yaml:"gate"`
+	// recorded modes (recordedMode), each named by one milestone of the model alone
+	Modes []string `yaml:"modes"`
 }
 
 // One model that stands alone under details/: no spec in this directory keeps its objects, so it is no
@@ -238,35 +246,142 @@ const (
 	tlcNotRun tlcAction = "not run"
 	// a gate that needs a run and cannot have one
 	tlcFail tlcAction = "fail"
+	// a mode this run does not need: a gate whose milestones do not name it, or one a merge leaves to a gate
+	tlcNotNeeded tlcAction = "not needed"
 )
 
 // §22.8's cadence for one model, by its name, its recorded runs and the modes a gate needs passing: at a
 // gate, the newest passing runs stand while the sources they ran at are unchanged, and otherwise TLC runs, or
-// the gate fails naming the missing tool; at a merge, TLC runs where it is, and is reported not run where it
-// is not. missingTool says why TLC cannot run here, and is empty where it can.
+// the gate fails naming the missing tool and each mode whose run does not stand; at a merge, TLC runs where it
+// is, and is reported not run where it is not. missingTool says why TLC cannot run here, and is empty where it
+// can.
 func tlcVerdict(name string, runs []*modelledRun, requiredModes []string, mode string, sources *sourcesState, missingTool string) (tlcAction, string) {
 	if mode == "gate" {
 		if 0 < len(sources.unreadable) {
 			return tlcFail, fmt.Sprintf("%s's sources %v are not beside this checkout, so whether they changed is unknown", name, sources.unreadable)
 		}
-		standing := 0
+		missing := []string{}
 		for _, required := range requiredModes {
-			if standingRun(runs, required, sources.digest) != nil {
-				standing += 1
+			if standingRun(runs, required, sources.digest) == nil {
+				missing = append(missing, required)
 			}
 		}
-		if standing == len(requiredModes) {
+		if len(missing) == 0 {
 			return tlcUnchanged, fmt.Sprintf("%s's sources are unchanged since its passing runs, which stand", name)
 		}
 		if missingTool != "" {
-			return tlcFail, fmt.Sprintf("%s's sources changed since its last passing runs, or none is recorded, and TLC has not run: %s", name, missingTool)
+			return tlcFail, fmt.Sprintf("%s has no passing %s run at these sources: they changed since its last passing runs, or none is recorded, and TLC has not run: %s", name, strings.Join(missing, ", "), missingTool)
 		}
-		return tlcRun, fmt.Sprintf("%s's sources changed since its last passing runs, or none is recorded", name)
+		return tlcRun, fmt.Sprintf("%s has no passing %s run at these sources: they changed since its last passing runs, or none is recorded", name, strings.Join(missing, ", "))
 	}
 	if missingTool != "" {
 		return tlcNotRun, fmt.Sprintf("%s: TLC has not run: %s", name, missingTool)
 	}
 	return tlcRun, name + "'s mutants run at each merge"
+}
+
+// A gate as the gate tool names it: Mn-in, milestone n's entry review, or Mn, its exit review, which the catalog
+// writes Mn-out.
+var tlcGatePattern = regexp.MustCompile(`^M([0-9]{1,3})(-in|-out)?$`)
+
+// Where gate falls in the build's order, milestone by milestone, each one's entry before its exit, and false for a
+// name that is no gate.
+func tlcGateOrder(gate string) (int, bool) {
+	match := tlcGatePattern.FindStringSubmatch(gate)
+	if match == nil {
+		return 0, false
+	}
+	milestone, err := strconv.Atoi(match[1])
+	if err != nil {
+		return 0, false
+	}
+	if match[2] == "-in" {
+		return 2 * milestone, true
+	}
+	return 2*milestone + 1, true
+}
+
+// The modes a gate needs passing of a model: each mode of its milestones at or before the gate, in their order, so
+// a gate needs what §22.10 names of a model by then and nothing a later gate adds (QD-1116). An empty gate, a run in
+// gate mode that names none, needs every milestone's modes, the most any gate needs. A gate or a milestone's gate that
+// is no gate's name is an error, never a gate that needs nothing.
+func gateModes(milestones []*modelledMilestone, gate string) ([]string, error) {
+	order := -1
+	if gate != "" {
+		at, ok := tlcGateOrder(gate)
+		if !ok {
+			return nil, fmt.Errorf("%q names no gate: Mn-in for milestone n's entry, or Mn or Mn-out for its exit", gate)
+		}
+		order = at
+	}
+	modes := []string{}
+	for _, milestone := range milestones {
+		at, ok := tlcGateOrder(milestone.Gate)
+		if !ok {
+			return nil, fmt.Errorf("a milestone's gate %q names no gate: Mn-in for milestone n's entry, or Mn or Mn-out for its exit", milestone.Gate)
+		}
+		if order < 0 || at <= order {
+			modes = append(modes, milestone.Modes...)
+		}
+	}
+	return modes, nil
+}
+
+// The mode a recorded run names for a run-tlc.sh mode: its twins as mutants, a part's twins (twins-<part>) as
+// mutants-<part>, and any other mode as itself.
+func recordedMode(runMode string) string {
+	if part, found := strings.CutPrefix(runMode, "twins-"); found {
+		return "mutants-" + part
+	}
+	if runMode == "twins" {
+		return "mutants"
+	}
+	return runMode
+}
+
+// What one model test does with its run-tlc.sh mode, in a run of tlcMode (gate or merge) at gate, the gate tool's
+// name or empty. At a gate the modes it needs are the model's milestones' (gateModes), and a mode it does not need is
+// not run: M10's entry needs EvsCommit's purger, and only its exit the drop extension. A mode it needs passes where
+// every mode the gate needs of the model stands at these sources, its own among them, so no mode can stand on the
+// others' runs; otherwise it runs where its own run does not stand and TLC is here, passes on its own run where that
+// stands, each other mode running in its own test, and fails, saying TLC has not run and naming each mode whose run
+// does not stand, where TLC is missing. At a merge the twin modes run where TLC is, and the rest wait for a gate.
+func modeVerdict(model *modelledModel, runMode string, tlcMode string, gate string, sources *sourcesState, missingTool string) (tlcAction, string) {
+	mode := recordedMode(runMode)
+	if tlcMode != "gate" {
+		action, reason := tlcVerdict(model.Spec, model.Runs, nil, "merge", sources, missingTool)
+		if action == tlcRun && runMode != "twins" && !strings.HasPrefix(runMode, "twins-") {
+			return tlcNotNeeded, fmt.Sprintf("%s's %s runs at a gate (SIDECAR_TLC_MODE=gate): at §22.8's bounds it takes hours", model.Spec, runMode)
+		}
+		return action, reason
+	}
+	needed, err := gateModes(model.Milestones, gate)
+	if err != nil {
+		return tlcFail, fmt.Sprintf("%s's milestones in modelled.yml: %v", model.Spec, err)
+	}
+	named := gate
+	if named == "" {
+		named = "a gate that names none, which needs every milestone's modes,"
+	}
+	if !slices.Contains(needed, mode) {
+		return tlcNotNeeded, fmt.Sprintf("%s needs no %s run of %s: no milestone of its in modelled.yml names that mode at or before it", named, mode, model.Spec)
+	}
+	action, reason := tlcVerdict(model.Spec, model.Runs, needed, "gate", sources, missingTool)
+	if action == tlcRun {
+		if run := standingRun(model.Runs, mode, sources.digest); run != nil {
+			return tlcUnchanged, fmt.Sprintf("%s; its %s run of %s stands at these sources, and each mode %s needs that does not runs in its own test", reason, mode, run.At, named)
+		}
+	}
+	return action, reason
+}
+
+// Every mode a model's milestones name, in their order: what its recorded runs may name.
+func milestoneModes(model *modelledModel) []string {
+	modes := []string{}
+	for _, milestone := range model.Milestones {
+		modes = append(modes, milestone.Modes...)
+	}
+	return modes
 }
 
 // The passing run of mode recorded at the sources' digest, or nil: a run at other sources, or one that
@@ -411,7 +526,7 @@ func runFindings(name string, runs []*modelledRun, modes []string) []string {
 
 // modelled.yml names each spec once, with owners and milestones, and its globs match real files: every
 // spec, cfg and run-tlc.sh, each companion's spec, cfgs and own run script, and code for each model. Each
-// recorded run is in a form a gate can read.
+// recorded run is in a form a gate can read, of a mode the model's milestones name.
 func TestModelledNamesEachModelsSources(t *testing.T) {
 	modelled := readModelled(t)
 	root := monoroot(t)
@@ -453,7 +568,7 @@ func TestModelledNamesEachModelsSources(t *testing.T) {
 				t.Errorf("%s's sources name no run script that runs its companion %s", model.Spec, companion)
 			}
 		}
-		for _, finding := range runFindings(model.Spec, model.Runs, modelRecordedModes) {
+		for _, finding := range runFindings(model.Spec, model.Runs, milestoneModes(model)) {
 			t.Error(finding)
 		}
 		sources, err := modelSources(root, model.Sources, model.Exclude)
@@ -501,6 +616,8 @@ func TestChangedModelledFileForcesARerunAtAGate(t *testing.T) {
 		}
 	}
 	model := &modelledModel{Spec: "Toy", Sources: []string{"sidecar/sidecartest/model/Toy.tla", "sidecar/toy_*.go"}}
+	// the modes M2's gates need of a model, as modelled.yml's milestones name them
+	required := []string{"model", "mutants", "live"}
 	noTlc := "no tla2tools.jar (set TLC to a command that runs tlc2.TLC)"
 	before, err := modelSources(root, model.Sources, model.Exclude)
 	if err != nil {
@@ -509,10 +626,10 @@ func TestChangedModelledFileForcesARerunAtAGate(t *testing.T) {
 	if !slices.Equal(before.files, []string{"sidecar/sidecartest/model/Toy.tla", "sidecar/toy_head.go"}) {
 		t.Fatalf("sources %v: a test file counted, or a source was missed", before.files)
 	}
-	for _, mode := range modelRequiredModes {
+	for _, mode := range required {
 		model.Runs = append(model.Runs, &modelledRun{Mode: mode, Result: "pass", SourcesSha256: before.digest})
 	}
-	if action, _ := tlcVerdict(model.Spec, model.Runs, modelRequiredModes, "gate", before, noTlc); action != tlcUnchanged {
+	if action, _ := tlcVerdict(model.Spec, model.Runs, required, "gate", before, noTlc); action != tlcUnchanged {
 		t.Errorf("unchanged sources at a gate: %s", action)
 	}
 
@@ -533,13 +650,13 @@ func TestChangedModelledFileForcesARerunAtAGate(t *testing.T) {
 	if after.digest == before.digest {
 		t.Fatal("a source's edit left the digest")
 	}
-	if action, reason := tlcVerdict(model.Spec, model.Runs, modelRequiredModes, "gate", after, noTlc); action != tlcFail || !strings.Contains(reason, "no tla2tools.jar") {
+	if action, reason := tlcVerdict(model.Spec, model.Runs, required, "gate", after, noTlc); action != tlcFail || !strings.Contains(reason, "no tla2tools.jar") {
 		t.Errorf("changed sources at a gate with no TLC: %s, %s", action, reason)
 	}
-	if action, _ := tlcVerdict(model.Spec, model.Runs, modelRequiredModes, "gate", after, ""); action != tlcRun {
+	if action, _ := tlcVerdict(model.Spec, model.Runs, required, "gate", after, ""); action != tlcRun {
 		t.Errorf("changed sources at a gate with TLC: %s", action)
 	}
-	if action, reason := tlcVerdict(model.Spec, model.Runs, modelRequiredModes, "merge", after, noTlc); action != tlcNotRun || !strings.Contains(reason, "has not run") {
+	if action, reason := tlcVerdict(model.Spec, model.Runs, required, "merge", after, noTlc); action != tlcNotRun || !strings.Contains(reason, "has not run") {
 		t.Errorf("a merge with no TLC: %s, %s", action, reason)
 	}
 
@@ -549,7 +666,7 @@ func TestChangedModelledFileForcesARerunAtAGate(t *testing.T) {
 		{Mode: "mutants", Result: "fail", SourcesSha256: after.digest},
 		{Mode: "live", Result: "pass", SourcesSha256: after.digest},
 	}
-	if action, _ := tlcVerdict(model.Spec, model.Runs, modelRequiredModes, "gate", after, noTlc); action != tlcFail {
+	if action, _ := tlcVerdict(model.Spec, model.Runs, required, "gate", after, noTlc); action != tlcFail {
 		t.Errorf("a failed mutants run stood at a gate: %s", action)
 	}
 
@@ -559,8 +676,418 @@ func TestChangedModelledFileForcesARerunAtAGate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if action, reason := tlcVerdict(model.Spec, model.Runs, modelRequiredModes, "gate", missing, ""); action != tlcFail || !strings.Contains(reason, "not beside") {
+	if action, reason := tlcVerdict(model.Spec, model.Runs, required, "gate", missing, ""); action != tlcFail || !strings.Contains(reason, "not beside") {
 		t.Errorf("a missing sibling at a gate: %s, %s", action, reason)
+	}
+}
+
+// A gate's place in the build's order reads the gate tool's names: each milestone's entry before its exit, milestone
+// n's gates before n+1's, so M10's come after M2's though "M10" sorts first as text, and Mn-out is Mn. Anything else is
+// no gate.
+func TestGateOrderReadsTheGateToolsNames(t *testing.T) {
+	last := -1
+	for _, gate := range []string{"M0-in", "M0", "M1-in", "M2-in", "M2", "M3-in", "M9", "M10-in", "M10"} {
+		order, ok := tlcGateOrder(gate)
+		if !ok || order <= last {
+			t.Errorf("%s reads %d, %t, after %d", gate, order, ok, last)
+		}
+		last = order
+	}
+	for _, same := range [][2]string{{"M2", "M2-out"}, {"M10", "M10-out"}} {
+		exit, _ := tlcGateOrder(same[0])
+		out, ok := tlcGateOrder(same[1])
+		if !ok || exit != out {
+			t.Errorf("%s reads %d and %s %d, %t", same[0], exit, same[1], out, ok)
+		}
+	}
+	for _, name := range []string{"", "G0", "Later", "m2", "M2-exit", "M-in", "M10in", "M2-in ", "every", "next"} {
+		if order, ok := tlcGateOrder(name); ok {
+			t.Errorf("%q reads as a gate at %d", name, order)
+		}
+	}
+}
+
+// A gate needs the modes of each milestone at or before it and none a later gate adds, and a run that names no gate
+// needs them all; a gate, or a milestone's gate, that is no gate's name is an error, never a gate that needs nothing.
+func TestGateModesNeedEachMilestoneFromItsGateOn(t *testing.T) {
+	milestones := []*modelledMilestone{
+		{Gate: "M2-in", Modes: []string{"model", "mutants", "live"}},
+		{Gate: "M10-in", Modes: []string{"mutants-purge", "stories-purge"}},
+		{Gate: "M10", Modes: []string{"mutants-drop", "stories-drop"}},
+	}
+	m2 := []string{"model", "mutants", "live"}
+	purge := append(slices.Clone(m2), "mutants-purge", "stories-purge")
+	all := append(slices.Clone(purge), "mutants-drop", "stories-drop")
+	for _, c := range []struct {
+		gate string
+		want []string
+	}{
+		{gate: "M1", want: []string{}},
+		{gate: "M2-in", want: m2},
+		{gate: "M2", want: m2},
+		{gate: "M9", want: m2},
+		{gate: "M10-in", want: purge},
+		{gate: "M10", want: all},
+		{gate: "M10-out", want: all},
+		{gate: "", want: all},
+	} {
+		got, err := gateModes(milestones, c.gate)
+		if err != nil || !slices.Equal(got, c.want) {
+			t.Errorf("gate %q needs %v, %v; want %v", c.gate, got, err, c.want)
+		}
+	}
+	if _, err := gateModes(milestones, "M10-exit"); err == nil || !strings.Contains(err.Error(), "names no gate") {
+		t.Errorf("an unknown gate: %v", err)
+	}
+	later := append(slices.Clone(milestones), &modelledMilestone{Gate: "Later", Modes: []string{"live-drop"}})
+	if _, err := gateModes(later, "M2-in"); err == nil || !strings.Contains(err.Error(), "Later") {
+		t.Errorf("a milestone at no gate: %v", err)
+	}
+}
+
+// modelled.yml's milestones give each gate what §22.10 names of each model and no more (QD-1116): EvsCommit's model,
+// mutants and live from M2's entry, the purger's mutants and stories from M10's entry and the drop extension's only
+// from its exit; StoreSettle's three from M2's entry; IndexRollup's three from M10's entry. Each model's milestones
+// are in gate order, each at a gate of the tool's, and together name every mode run-tlc.sh runs of the spec, each
+// once, so a mode no gate needs is never run unread.
+func TestModelledMilestonesNameEachGatesModes(t *testing.T) {
+	m2 := []string{"model", "mutants", "live"}
+	purge := append(slices.Clone(m2), "mutants-purge", "stories-purge")
+	drop := append(slices.Clone(purge), "mutants-drop", "stories-drop")
+	wants := map[string]map[string][]string{
+		"EvsCommit":   {"M1": {}, "M2-in": m2, "M2": m2, "M9": m2, "M10-in": purge, "M10": drop},
+		"StoreSettle": {"M1": {}, "M2-in": m2, "M2": m2, "M10-in": m2, "M10": m2},
+		"IndexRollup": {"M2-in": {}, "M2": {}, "M9": {}, "M10-in": m2, "M10": m2},
+	}
+	modelled := readModelled(t)
+	for _, model := range modelled.Models {
+		last := -1
+		named := map[string]bool{}
+		for _, milestone := range model.Milestones {
+			order, ok := tlcGateOrder(milestone.Gate)
+			if !ok {
+				t.Errorf("%s's milestone %q is at no gate of the tool's", model.Spec, milestone.Gate)
+				continue
+			}
+			if order <= last {
+				t.Errorf("%s's milestone %s is out of gate order, or a gate named twice", model.Spec, milestone.Gate)
+			}
+			last = order
+			if len(milestone.Modes) == 0 {
+				t.Errorf("%s's milestone %s names no mode", model.Spec, milestone.Gate)
+			}
+			for _, mode := range milestone.Modes {
+				if named[mode] {
+					t.Errorf("%s's milestones name %s twice", model.Spec, mode)
+				}
+				named[mode] = true
+			}
+		}
+		recorded := []string{}
+		for _, runMode := range specRunModes(t, model.Spec) {
+			recorded = append(recorded, recordedMode(runMode))
+		}
+		modes := milestoneModes(model)
+		slices.Sort(recorded)
+		slices.Sort(modes)
+		if !slices.Equal(modes, recorded) {
+			t.Errorf("%s's milestones name %v, and run-tlc.sh records %v", model.Spec, modes, recorded)
+		}
+		want, found := wants[model.Spec]
+		if !found {
+			t.Errorf("modelled.yml names %s, which this test does not hold to §22.10", model.Spec)
+		}
+		for gate, wantModes := range want {
+			got, err := gateModes(model.Milestones, gate)
+			if err != nil || !slices.Equal(got, wantModes) {
+				t.Errorf("%s at %s needs %v, %v; §22.10 names %v", model.Spec, gate, got, err, wantModes)
+			}
+		}
+	}
+	if len(modelled.Models) != len(wants) {
+		t.Errorf("modelled.yml names %d models, and this test holds %d", len(modelled.Models), len(wants))
+	}
+}
+
+// Each model test's verdict takes the modes its gate needs from the model's milestones (QD-1116). At M10's entry the
+// purger's stories stand only on a stories-purge run of their own, never on the model's other runs, and the drop
+// extension's runs are never needed, so their absence never holds the entry; at M10's exit they are needed too; at
+// M2's gates neither part is; a run that names no gate needs every mode. A mode whose own run stands passes while
+// another the gate needs reruns in its own test; with no TLC every test of the model says TLC has not run, naming each
+// mode whose run does not stand, and a failed run never stands. At a merge the twin modes run where TLC is and the
+// stories wait for a gate.
+func TestModeVerdictTakesEachGatesModes(t *testing.T) {
+	sources := &sourcesState{digest: strings.Repeat("ab", 32)}
+	noTlc := "no tla2tools.jar (set TLC to a command that runs tlc2.TLC)"
+	m2 := []string{"model", "mutants", "live"}
+	purge := append(slices.Clone(m2), "mutants-purge", "stories-purge")
+	all := append(slices.Clone(purge), "mutants-drop", "stories-drop")
+	purgeMutants := append(slices.Clone(m2), "mutants-purge")
+	model := func(standing []string, failed ...string) *modelledModel {
+		runs := []*modelledRun{}
+		for _, mode := range standing {
+			runs = append(runs, &modelledRun{At: "2026-11-19", Mode: mode, Result: "pass", SourcesSha256: sources.digest})
+		}
+		for _, mode := range failed {
+			runs = append(runs, &modelledRun{At: "2026-11-19", Mode: mode, Result: "fail", SourcesSha256: sources.digest})
+		}
+		// a passing run at other sources stands for nothing
+		runs = append(runs, &modelledRun{At: "2026-11-18", Mode: "stories-purge", Result: "pass", SourcesSha256: strings.Repeat("cd", 32)})
+		return &modelledModel{
+			Spec: "EvsCommit",
+			Milestones: []*modelledMilestone{
+				{Gate: "M2-in", Modes: m2},
+				{Gate: "M10-in", Modes: []string{"mutants-purge", "stories-purge"}},
+				{Gate: "M10", Modes: []string{"mutants-drop", "stories-drop"}},
+			},
+			Runs: runs,
+		}
+	}
+	cases := []struct {
+		name        string
+		model       *modelledModel
+		runMode     string
+		tlcMode     string
+		gate        string
+		missingTool string
+		action      tlcAction
+		reason      string
+	}{
+		{name: "the purger's stories on M2's and the purger's mutants' runs", model: model(purgeMutants), runMode: "stories-purge", tlcMode: "gate", gate: "M10-in", missingTool: noTlc, action: tlcFail, reason: "no passing stories-purge run at these sources"},
+		{name: "the same with TLC here", model: model(purgeMutants), runMode: "stories-purge", tlcMode: "gate", gate: "M10-in", action: tlcRun, reason: "no passing stories-purge run"},
+		{name: "the purger's stories failed at these sources", model: model(purgeMutants, "stories-purge"), runMode: "stories-purge", tlcMode: "gate", gate: "M10-in", missingTool: noTlc, action: tlcFail, reason: "TLC has not run"},
+		{name: "the entry's modes standing and the drop's not", model: model(purge), runMode: "stories-purge", tlcMode: "gate", gate: "M10-in", missingTool: noTlc, action: tlcUnchanged, reason: "unchanged since its passing runs"},
+		{name: "the entry's model test with the drop's missing", model: model(purge), runMode: "model", tlcMode: "gate", gate: "M10-in", missingTool: noTlc, action: tlcUnchanged, reason: "unchanged since its passing runs"},
+		{name: "the drop's stories at the entry", model: model(purge), runMode: "stories-drop", tlcMode: "gate", gate: "M10-in", missingTool: noTlc, action: tlcNotNeeded, reason: "M10-in needs no stories-drop run of EvsCommit"},
+		{name: "the drop's mutants at the entry", model: model(nil), runMode: "twins-drop", tlcMode: "gate", gate: "M10-in", missingTool: noTlc, action: tlcNotNeeded, reason: "M10-in needs no mutants-drop run"},
+		{name: "the drop's stories at the exit, not standing", model: model(purge), runMode: "stories-drop", tlcMode: "gate", gate: "M10", missingTool: noTlc, action: tlcFail, reason: "no passing mutants-drop, stories-drop run"},
+		{name: "the purger's mutants at the exit, the drop's not standing", model: model(purge), runMode: "twins-purge", tlcMode: "gate", gate: "M10", missingTool: noTlc, action: tlcFail, reason: "TLC has not run"},
+		{name: "every mode standing at the exit", model: model(all), runMode: "stories-drop", tlcMode: "gate", gate: "M10-out", missingTool: noTlc, action: tlcUnchanged},
+		{name: "the purger's mutants at M2's entry", model: model(nil), runMode: "twins-purge", tlcMode: "gate", gate: "M2-in", missingTool: noTlc, action: tlcNotNeeded, reason: "M2-in needs no mutants-purge run"},
+		{name: "the purger's stories at M2's exit", model: model(m2), runMode: "stories-purge", tlcMode: "gate", gate: "M2", missingTool: noTlc, action: tlcNotNeeded},
+		{name: "M2's mutants at M2's exit", model: model(m2), runMode: "twins", tlcMode: "gate", gate: "M2", missingTool: noTlc, action: tlcUnchanged},
+		{name: "no gate named needs the drop's too", model: model(purge), runMode: "stories-purge", tlcMode: "gate", missingTool: noTlc, action: tlcFail, reason: "mutants-drop, stories-drop"},
+		{name: "its own run standing, another not, TLC here", model: model(purgeMutants), runMode: "twins-purge", tlcMode: "gate", gate: "M10-in", action: tlcUnchanged, reason: "its mutants-purge run of 2026-11-19 stands"},
+		{name: "its own run standing, another not, no TLC", model: model(purgeMutants), runMode: "twins-purge", tlcMode: "gate", gate: "M10-in", missingTool: noTlc, action: tlcFail, reason: "no passing stories-purge run"},
+		{name: "a gate that is no gate", model: model(all), runMode: "model", tlcMode: "gate", gate: "M10-exit", missingTool: noTlc, action: tlcFail, reason: "names no gate"},
+		{name: "a merge runs the purger's mutants", model: model(nil), runMode: "twins-purge", tlcMode: "merge", action: tlcRun},
+		{name: "a merge runs the M2 part's mutants", model: model(nil), runMode: "twins", tlcMode: "merge", action: tlcRun},
+		{name: "a merge leaves the drop's stories to a gate", model: model(nil), runMode: "stories-drop", tlcMode: "merge", action: tlcNotNeeded, reason: "runs at a gate"},
+		{name: "a merge with no TLC", model: model(nil), runMode: "twins-drop", tlcMode: "merge", missingTool: noTlc, action: tlcNotRun, reason: "TLC has not run"},
+	}
+	for _, c := range cases {
+		action, reason := modeVerdict(c.model, c.runMode, c.tlcMode, c.gate, sources, c.missingTool)
+		if action != c.action || !strings.Contains(reason, c.reason) {
+			t.Errorf("%s: %s, %q; want %s with %q", c.name, action, reason, c.action, c.reason)
+		}
+	}
+}
+
+// One part of a spec, as run-tlc.sh's list-parts prints it: its twins and its stories, in their tables' order.
+type modelPart struct {
+	name    string
+	twins   []string
+	stories []string
+}
+
+// run-tlc.sh's parts of spec, as its list-parts mode prints them.
+func partsTable(t *testing.T, spec string) []*modelPart {
+	t.Helper()
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skipf("not run: this leg cannot run run-tlc.sh: %v", err)
+	}
+	output, err := exec.Command("bash", "run-tlc.sh", "list-parts", spec).Output()
+	if err != nil {
+		t.Fatalf("run-tlc.sh list-parts %s: %v", spec, err)
+	}
+	parts := []*modelPart{}
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			t.Fatalf("run-tlc.sh list-parts %s: %q", spec, line)
+		}
+		index := slices.IndexFunc(parts, func(part *modelPart) bool { return part.name == fields[0] })
+		if index < 0 {
+			parts = append(parts, &modelPart{name: fields[0]})
+			index = len(parts) - 1
+		}
+		switch fields[1] {
+		case "twins":
+			parts[index].twins = append(parts[index].twins, fields[2:]...)
+		case "stories":
+			parts[index].stories = append(parts[index].stories, fields[2:]...)
+		default:
+			t.Fatalf("run-tlc.sh list-parts %s: %q is no part's twins or stories", spec, line)
+		}
+	}
+	return parts
+}
+
+// The run-tlc.sh modes that run a group of spec's runs a recorded run names: every spec's, then each part's twins and
+// stories.
+func specRunModes(t *testing.T, spec string) []string {
+	t.Helper()
+	modes := slices.Clone(modelRunModes)
+	for _, part := range partsTable(t, spec) {
+		modes = append(modes, "twins-"+part.name, "stories-"+part.name)
+	}
+	return modes
+}
+
+// A run line run-tlc.sh prints before each TLC run it starts: "== twin-PurgeUnseen: <the cfg it runs>".
+var runTlcStartPattern = regexp.MustCompile(`(?m)^== (\S+): `)
+
+// The runs run-tlc.sh starts for args, under a stand-in for TLC that checks nothing and passes, so each run's
+// label shows what the mode runs, whatever its verdict, and its exit code.
+func runTlcLabels(t *testing.T, args ...string) ([]string, int) {
+	t.Helper()
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skipf("not run: this leg cannot run run-tlc.sh: %v", err)
+	}
+	directory := t.TempDir()
+	standIn := filepath.Join(directory, "tlc")
+	if err := os.WriteFile(standIn, []byte("#!/bin/sh\necho 'TLC2 stand-in (rev: 0000000)'\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command("bash", append([]string{"run-tlc.sh"}, args...)...)
+	command.Env = append(os.Environ(), "TLC="+standIn, "TLC_FLAGS=", "TMPDIR="+directory)
+	output, err := command.CombinedOutput()
+	if command.ProcessState == nil {
+		t.Fatalf("run-tlc.sh %v did not start: %v", args, err)
+	}
+	labels := []string{}
+	for _, match := range runTlcStartPattern.FindAllStringSubmatch(string(output), -1) {
+		labels = append(labels, match[1])
+	}
+	return labels, command.ProcessState.ExitCode()
+}
+
+// run-tlc.sh's parts (QD-1116): EvsCommit's M10 part runs as the purger's twins and stories and the drop extension's,
+// each group by a mode of its own that runs exactly its rows, and twins runs the M2 part's alone, so no part's run is
+// recorded with another's; list keeps every twin, so mutants.yml still names each, and twin and control find a part's
+// by name. StoreSettle and IndexRollup have no parts, a part no spec has is refused, and so is the stories mode that
+// ran both parts' stories as one.
+func TestRunTlcRunsEachPartApart(t *testing.T) {
+	parts := partsTable(t, "EvsCommit")
+	wants := []*modelPart{
+		{name: "purge", twins: []string{"PurgeNoAllowance", "PurgeIgnoresHold", "PurgeUnseen", "EvacDropsNewest"}, stories: []string{"purgeA", "purgeB", "purgeC", "purgeD", "purgeE"}},
+		{name: "drop", twins: []string{"DropNoFence", "DropNoAgeCheck", "DropIgnoresHold"}, stories: []string{"dropA", "dropB", "dropC"}},
+	}
+	if len(parts) != len(wants) {
+		t.Fatalf("EvsCommit's parts: %d, want %d", len(parts), len(wants))
+	}
+	for index, want := range wants {
+		part := parts[index]
+		if part.name != want.name || !slices.Equal(part.twins, want.twins) || !slices.Equal(part.stories, want.stories) {
+			t.Errorf("EvsCommit's part %d: %+v, want %+v", index, part, want)
+		}
+	}
+	for _, spec := range []string{"StoreSettle", "IndexRollup"} {
+		if others := partsTable(t, spec); len(others) != 0 {
+			t.Errorf("%s has parts %v", spec, others)
+		}
+	}
+
+	twins := twinTable(t, "EvsCommit")
+	inPart := map[string]bool{}
+	for _, part := range parts {
+		for _, twin := range part.twins {
+			if _, found := twins[twin]; !found {
+				t.Errorf("run-tlc.sh list leaves out %s, the %s part's twin", twin, part.name)
+			}
+			if inPart[twin] {
+				t.Errorf("%s is two parts' twin", twin)
+			}
+			inPart[twin] = true
+		}
+	}
+	m2 := []string{}
+	for twin := range twins {
+		if !inPart[twin] {
+			m2 = append(m2, "twin-"+twin)
+		}
+	}
+	slices.Sort(m2)
+	ran, _ := runTlcLabels(t, "twins", "EvsCommit")
+	slices.Sort(ran)
+	if len(m2) == 0 || !slices.Equal(ran, m2) {
+		t.Errorf("twins EvsCommit ran %v, want the M2 part's %v", ran, m2)
+	}
+	for _, part := range parts {
+		want := []string{}
+		for _, twin := range part.twins {
+			want = append(want, "twin-"+twin)
+		}
+		if ran, _ := runTlcLabels(t, "twins-"+part.name, "EvsCommit"); !slices.Equal(ran, want) {
+			t.Errorf("twins-%s EvsCommit ran %v, want %v", part.name, ran, want)
+		}
+		want = []string{}
+		for _, story := range part.stories {
+			want = append(want, "story-"+story)
+		}
+		ran, code := runTlcLabels(t, "stories-"+part.name, "EvsCommit")
+		if !slices.Equal(ran, want) || code != 0 {
+			t.Errorf("stories-%s EvsCommit ran %v, exit %d, want %v passing on the stand-in", part.name, ran, code, want)
+		}
+	}
+	if ran, _ := runTlcLabels(t, "twin", "EvsCommit", "DropNoFence"); !slices.Equal(ran, []string{"twin-DropNoFence"}) {
+		t.Errorf("twin EvsCommit DropNoFence ran %v", ran)
+	}
+	if ran, _ := runTlcLabels(t, "control", "EvsCommit", "PurgeUnseen"); !slices.Equal(ran, []string{"control-PurgeUnseen"}) {
+		t.Errorf("control EvsCommit PurgeUnseen ran %v", ran)
+	}
+	for _, args := range [][]string{{"twins-nope", "EvsCommit"}, {"stories-purge", "StoreSettle"}, {"twins-drop", "IndexRollup"}, {"stories", "EvsCommit"}} {
+		if ran, code := runTlcLabels(t, args...); code != 64 || len(ran) != 0 {
+			t.Errorf("run-tlc.sh %v ran %v, exit %d, want refused with 64", args, ran, code)
+		}
+	}
+}
+
+// A model test model_test.go declares under sidecar_tlc: one call of checkTlc with a spec and a run-tlc.sh mode.
+var modelTestPattern = regexp.MustCompile(`(?m)^func (Test[A-Za-z0-9]+)\(t \*testing\.T\) \{\n\tcheckTlc\(t, "([A-Za-z]+)", "([a-z-]+)"\)\n\}$`)
+
+// model_test.go has a test for each mode modelled.yml's milestones name, one each, and every test runs a mode
+// run-tlc.sh runs of its spec that a milestone names: a gate runs the model tests, so a mode with no test would never
+// run at one, and the gate would read on the other modes alone.
+func TestModelTestsRunEachModeAGateNeeds(t *testing.T) {
+	data, err := os.ReadFile("model_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runModes := map[string][]string{}
+	tests := map[string]map[string][]string{}
+	matches := modelTestPattern.FindAllStringSubmatch(string(data), -1)
+	for _, match := range matches {
+		name, spec, runMode := match[1], match[2], match[3]
+		if _, found := runModes[spec]; !found {
+			runModes[spec] = specRunModes(t, spec)
+		}
+		if !slices.Contains(runModes[spec], runMode) {
+			t.Errorf("%s runs %s of %s, which run-tlc.sh does not run", name, runMode, spec)
+		}
+		if tests[spec] == nil {
+			tests[spec] = map[string][]string{}
+		}
+		tests[spec][recordedMode(runMode)] = append(tests[spec][recordedMode(runMode)], name)
+	}
+	if calls := strings.Count(string(data), "\tcheckTlc(t, "); calls != len(matches) {
+		t.Errorf("model_test.go calls checkTlc %d times and %d tests read as one call each", calls, len(matches))
+	}
+	for _, model := range readModelled(t).Models {
+		modes := milestoneModes(model)
+		for _, mode := range modes {
+			if names := tests[model.Spec][mode]; len(names) != 1 {
+				t.Errorf("%s's %s mode, which a milestone names, has the tests %v: want one", model.Spec, mode, names)
+			}
+		}
+		for mode, names := range tests[model.Spec] {
+			if !slices.Contains(modes, mode) {
+				t.Errorf("%v run %s's %s, which no milestone names", names, model.Spec, mode)
+			}
+		}
 	}
 }
 

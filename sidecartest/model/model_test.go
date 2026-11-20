@@ -2,15 +2,20 @@
 
 // §22.8's model checks under TLC (TEST-M2-08; D-TEST-10, D-PHASE-7, FI-30): each model at its cfg's
 // bounds, its mutants, each of which TLC must refuse with its invariant violated, its liveness under
-// weak fairness, and EvsCommit's M10 stories, each through run-tlc.sh, reporting states, depth and time.
+// weak fairness, and EvsCommit's M10 part by part, the purger's mutants and stories apart from the drop
+// extension's (QD-1116), each mode its own test through run-tlc.sh, reporting states, depth and time.
 //
 // TLC is the command the TLC variable names, as run-tlc.sh reads it, such as
 // TLC="java -cp tla2tools.jar tlc2.TLC"; this repository carries no jar. SIDECAR_TLC_MODE=gate, which
-// test.sh's gate cadence sets, makes a model whose sources changed since its last passing runs in
-// modelled.yml run them all, and fails, naming the missing tool, when no TLC is set: a gate never
-// passes a model TLC has not checked. Otherwise, a merge, the mutants run where TLC is, and a missing TLC
-// reads not run (a skip, which no gate counts as a pass); the models at their bounds take hours, so a
-// merge leaves them to the gate.
+// test.sh's gate cadence and each gate's TLC item set, runs a gate: SIDECAR_TLC_GATE names it as the gate
+// tool does (Mn-in, milestone n's entry, or Mn, its exit), and its model's milestones in modelled.yml say
+// which modes it needs (gateModes), so M10's entry needs EvsCommit's purger and only its exit the drop
+// extension. A test whose mode the gate does not need skips. One it needs passes while every mode the gate
+// needs of its model has a passing run at the model's sources, its own among them; otherwise it runs its
+// mode, or fails, naming the missing tool and each mode whose run does not stand, when no TLC is set: a
+// gate never passes a model TLC has not checked. A gate mode that names no gate needs every milestone's
+// modes. Otherwise, a merge, the mutants run where TLC is, and a missing TLC reads not run (a skip, which no
+// gate counts as a pass); the models at their bounds take hours, so a merge leaves them to the gate.
 //
 // Each passing mode prints the line to record in modelled.yml, with the sources' digest, so the next
 // gate lets the run stand while nothing it modelled changed.
@@ -39,7 +44,8 @@ func tlcMode() string {
 	return "merge"
 }
 
-// One mode of one model through run-tlc.sh: model, twins (the mutants), live or stories.
+// One mode of one model through run-tlc.sh: model, twins (the mutants), live, or a part's twins-<part> or
+// stories-<part>.
 func checkTlc(t *testing.T, spec string, mode string) {
 	modelled := readModelled(t)
 	var model *modelledModel
@@ -60,22 +66,15 @@ func checkTlc(t *testing.T, spec string, mode string) {
 	if tlcCommand == "" {
 		missingTool = "no tla2tools.jar (set TLC to a command that runs tlc2.TLC)"
 	}
-	action, reason := tlcVerdict(model.Spec, model.Runs, modelRequiredModes, tlcMode(), sources, missingTool)
+	action, reason := modeVerdict(model, mode, tlcMode(), os.Getenv("SIDECAR_TLC_GATE"), sources, missingTool)
 	switch action {
 	case tlcUnchanged:
 		t.Logf("%s; TLC need not rerun %s", reason, mode)
 		return
-	case tlcNotRun:
+	case tlcNotRun, tlcNotNeeded:
 		t.Skip(reason)
 	case tlcFail:
 		t.Fatal(reason)
-	}
-	recordMode := mode
-	if mode == "twins" {
-		recordMode = "mutants"
-	}
-	if tlcMode() != "gate" && mode != "twins" {
-		t.Skipf("%s's %s runs at a gate (SIDECAR_TLC_MODE=gate): at §22.8's bounds it takes hours", spec, mode)
 	}
 
 	started := time.Now()
@@ -111,7 +110,7 @@ func checkTlc(t *testing.T, spec string, mode string) {
 		At:            started.Format("2006-01-02"),
 		Commit:        strings.TrimSpace(string(commit)),
 		Tlc:           summary.revision,
-		Mode:          recordMode,
+		Mode:          recordedMode(mode),
 		Result:        "pass",
 		SourcesSha256: sources.digest,
 		States:        summary.states,
@@ -120,9 +119,9 @@ func checkTlc(t *testing.T, spec string, mode string) {
 	}))
 }
 
-// The gate's model step for modelled.yml's details list: each model's run script, group by group, where
-// the model's sources changed since that group's newest passing run, and the gate failing, naming the
-// model not run, where the owner's tla2tools.jar is missing.
+// The gate's model step for modelled.yml's details list: each model's run script, group by group, where the
+// model's sources changed since that group's newest passing run, and the gate failing, naming the model not
+// run, where the owner's tla2tools.jar is missing.
 func TestDetailsModelsPassTheirRunScriptsAtAGate(t *testing.T) {
 	if tlcMode() != "gate" {
 		t.Skip("not run: a details model runs at a gate (SIDECAR_TLC_MODE=gate), by its own run script, and never at a merge")
@@ -210,6 +209,7 @@ func TestEvsCommitPassesTlcAtItsBounds(t *testing.T) {
 	checkTlc(t, "EvsCommit", "model")
 }
 
+// The M2 part's twins; the M10 part's are its parts' (run-tlc.sh twins-purge and twins-drop).
 func TestEvsCommitMutantsFailTlc(t *testing.T) {
 	checkTlc(t, "EvsCommit", "twins")
 }
@@ -218,9 +218,24 @@ func TestEvsCommitLivenessHolds(t *testing.T) {
 	checkTlc(t, "EvsCommit", "live")
 }
 
-// EvsCommit's M10 part, story by story (EVSB-M10-07).
-func TestEvsCommitStoriesPassTlc(t *testing.T) {
-	checkTlc(t, "EvsCommit", "stories")
+// The purger's twins, each run on a purge story (EVSB-M10-07), which M10's entry needs (§22.10).
+func TestEvsCommitPurgerMutantsFailTlc(t *testing.T) {
+	checkTlc(t, "EvsCommit", "twins-purge")
+}
+
+// The purger's stories, purgeA to purgeE (EVSB-M10-07), which M10's entry needs (§22.10).
+func TestEvsCommitPurgerStoriesPassTlc(t *testing.T) {
+	checkTlc(t, "EvsCommit", "stories-purge")
+}
+
+// The drop extension's twins, each run on a drop story (EVSB-M10-07), which only M10's exit needs (§22.10).
+func TestEvsCommitDropMutantsFailTlc(t *testing.T) {
+	checkTlc(t, "EvsCommit", "twins-drop")
+}
+
+// The drop extension's stories, dropA to dropC (EVSB-M10-07), which only M10's exit needs (§22.10).
+func TestEvsCommitDropStoriesPassTlc(t *testing.T) {
+	checkTlc(t, "EvsCommit", "stories-drop")
 }
 
 func TestStoreSettlePassesTlcAtItsBounds(t *testing.T) {
