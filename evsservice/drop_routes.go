@@ -80,8 +80,9 @@ func (self *EvsEngine) serveDrops(request *EvsRequest) {
 // The listing of a table at now (§11.20's GET .../drops): void records whose entries have left, as their drop_id and
 // state alone, then each entry oldest first, a held one as done with its held bytes counted as freed. An entry whose
 // retention has passed at now has left the listing, as the table's next write evicts it, and a held one too, though
-// the table keeps it until its deletions finish: its retention runs from the day it moved to held, so it leaves the
-// listing when its done twin's entry would (owner decisions 184, 643).
+// the table keeps it until its deletions finish: its retention runs from the day it moved to held, and has passed once
+// the bound unlisted it where it evicted its done twin (QD-1126), so it leaves the listing when that twin's entry
+// would (owner decisions 184, 643).
 func DropStatuses(state *DropTableState, now time.Time, settings *DropSettings) *protocol.EvsDropsReply {
 	reply := &protocol.EvsDropsReply{}
 	listed := map[sidecar.Id]bool{}

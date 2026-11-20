@@ -185,11 +185,13 @@ func (self *MailClient) RemoveExpiredOutcomes(ctx context.Context) (int, error) 
 }
 
 // The component's sweep of or/ (mail_component.go's outcomes row): while mail is on, once an OutcomeSweepInterval a
-// run. A sweep that fails is logged and tried again at the next interval.
+// run. A sweep that fails is logged and tried again at the next interval. While mail is on, the run's send watch, which
+// raises mail_send from or/, runs too, started at the first such pass of each run (mail_send_result.go).
 func (self *MailClient) passOutcomes(run *mailComponentRun) {
 	if !self.Enabled() {
 		return
 	}
+	self.followSends(run)
 	now := self.clock.Now()
 	due := func() bool {
 		self.stateLock.Lock()

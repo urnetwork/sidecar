@@ -450,10 +450,10 @@ func TestDropTableKeepsAHeldEntryPastItsRetention(t *testing.T) {
 	}
 }
 
-// Owner decision 643: held entries sit outside the bound's count, so a table they fill past its bound still takes the
-// next DROP, which never fails on them: the bound evicts done entries, oldest first, and never a held one even when
-// it is older, and the table passes TableByteCount by its held entries, which a read takes back. Past
-// TableReadByteCount a write is refused and a read too.
+// Owner decision 643: held entries count toward no refusal, so a table they fill past its bound still takes the next
+// DROP, which never fails on them: the bound evicts done entries and never a held one, unlisting a held one instead
+// where it would evict its done twin (QD-1126), and the table passes TableByteCount by its held entries, which a read
+// takes back. Past TableReadByteCount a write is refused and a read too.
 func TestDropTableBoundLeavesHeldEntriesOut(t *testing.T) {
 	world := newDropTestWorld(t)
 	tight := DefaultDropSettings()
@@ -505,6 +505,16 @@ func TestDropTableBoundLeavesHeldEntriesOut(t *testing.T) {
 	if read.State.boundByteCount() != tight.TableByteCount || read.State.byteCount() != tight.TableByteCount+4*dropTableEntryByteCount {
 		t.Fatalf("a table of %d bytes, %d counted", read.State.byteCount(), read.State.boundByteCount())
 	}
+	// the bound would have evicted each one's done twin, oldest first: each is unlisted, and the listing is the twin's
+	for _, label := range []string{"held-a", "held-b", "held-c", "held-d"} {
+		if entry := read.State.Drop(testId(label)); entry.State != DropStateHeld || entry.EndedDay != dropUnlistedDay {
+			t.Fatalf("%s past the bound: %+v", label, entry)
+		}
+	}
+	listing := DropStatuses(read.State, now, tight)
+	if len(listing.Drops) != 2 || sidecar.Id(listing.Drops[0].DropId) != testId("drop-1") || sidecar.Id(listing.Drops[1].DropId) != testId("drop-2") {
+		t.Fatalf("listed %d drops past the bound", len(listing.Drops))
+	}
 
 	// a read that takes in fewer held bytes than the table holds refuses it, and a write past them is refused
 	capped := *tight
@@ -524,6 +534,193 @@ func TestDropTableBoundLeavesHeldEntriesOut(t *testing.T) {
 	stuck.Drops = append(stuck.Drops, &DropTableEntry{DropId: testId("drop-3"), Place: place, State: DropStatePending, SeenMs: now.UnixMilli()})
 	if err := stuck.evict(now, tight); !errors.Is(err, ErrDropTableFull) {
 		t.Fatalf("pending drops past the bound beside held entries: %v", err)
+	}
+}
+
+// A copy of state whose records a write may change without changing state's.
+func dropTestCloneState(state *DropTableState) *DropTableState {
+	clone := &DropTableState{}
+	if state.Job != nil {
+		job := *state.Job
+		clone.Job = &job
+	}
+	for _, entry := range state.Drops {
+		copied := *entry
+		clone.Drops = append(clone.Drops, &copied)
+	}
+	for _, void := range state.Voids {
+		copied := *void
+		clone.Voids = append(clone.Voids, &copied)
+	}
+	for _, preview := range state.Previews {
+		copied := *preview
+		clone.Previews = append(clone.Previews, &copied)
+	}
+	return clone
+}
+
+// One write of state at now, as DropTable.Update makes it: changed by change, then evicted; a refused write leaves
+// state as it was.
+func dropTestWrite(state *DropTableState, now time.Time, settings *DropSettings, change func(state *DropTableState)) (*DropTableState, error) {
+	written := dropTestCloneState(state)
+	change(written)
+	if err := written.evict(now, settings); err != nil {
+		return state, err
+	}
+	return written, nil
+}
+
+// QD-1126 (owner decisions 184, 643): past its bound a table with held entries lists, evicts and admits as its no-hold
+// twin's, whose drops are done and whose job has ended. A listed held entry counts and takes its place in the eviction
+// order as its twin; where the bound evicts the twin it is unlisted, its ended_day dropUnlistedDay, and leaves the
+// listing; a held job's record counts for nothing; a write the twin's bound refuses is refused too; and once the hold
+// ends, the job's move of an unlisted entry to done evicts it at that write, leaving the twin's table.
+func TestDropTableBoundMirrorsANoHoldTwin(t *testing.T) {
+	settings := DefaultDropSettings()
+	settings.TableByteCount = dropTableHeaderByteCount + dropTableTrailerByteCount + 4*dropTableEntryByteCount + dropTablePreviewByteCount
+	settings.TableAdmitByteCount = settings.TableByteCount
+	now := sidecartest.DefaultClockStart().Add(400 * 24 * time.Hour)
+	day := 24 * time.Hour
+	place := &protocol.EvsPlace{Minute: 1, Length: 100}
+	ended := func(label string, state DropState, endedAgo time.Duration) *DropTableEntry {
+		return &DropTableEntry{
+			DropId: testId(label), Place: place, State: state, SeenMs: now.Add(-endedAgo - 2*day).UnixMilli(), EndedDay: dropDay(now.Add(-endedAgo)),
+			FreedByteCount: 7,
+		}
+	}
+	preview := func() *DropPreviewRecord {
+		// a dry run long ended, which the bound takes only once no ended entry is left to take
+		return &DropPreviewRecord{
+			PreviewId: testId("preview"), RefId: testId("ref"), State: protocol.EvsDropPreviewState_EVS_DROP_PREVIEW_DONE,
+			CreatedMs: now.Add(-21 * day).UnixMilli(), UntilMs: now.Add(-20 * day).UnixMilli(),
+		}
+	}
+	held := &DropTableState{
+		// the job that moved a and c to held keeps its record while the hold stands; the twin's ended
+		Job: &DropJobRecord{JobId: testId("job"), Phase: protocol.EvsDropPhase_EVS_DROP_DELETE, Held: true},
+		Drops: []*DropTableEntry{
+			ended("a", DropStateHeld, 10*day), ended("b", DropStateDone, 8*day), ended("c", DropStateHeld, 6*day), ended("d", DropStateDone, 4*day),
+		},
+		Previews: []*DropPreviewRecord{preview()},
+	}
+	twin := &DropTableState{
+		Drops: []*DropTableEntry{
+			ended("a", DropStateDone, 10*day), ended("b", DropStateDone, 8*day), ended("c", DropStateDone, 6*day), ended("d", DropStateDone, 4*day),
+		},
+		Previews: []*DropPreviewRecord{preview()},
+	}
+	listed := func(state *DropTableState) []string {
+		labels := []string{}
+		for _, status := range DropStatuses(state, now, settings).Drops {
+			labels = append(labels, string(bytes.TrimRight(status.DropId, " ")))
+		}
+		return labels
+	}
+	same := func(step string) {
+		t.Helper()
+		if !proto.Equal(DropStatuses(held, now, settings), DropStatuses(twin, now, settings)) {
+			t.Fatalf("%s: the held table lists %v, its twin %v", step, listed(held), listed(twin))
+		}
+		if got, want := listed(held), dropTestLabels(twin); !slices.Equal(got, want) {
+			t.Fatalf("%s: the held table lists %v, its twin keeps %v", step, got, want)
+		}
+		if held.AdmitsDrop(settings) != twin.AdmitsDrop(settings) {
+			t.Fatalf("%s: the held table admits a DROP %t, its twin %t", step, held.AdmitsDrop(settings), twin.AdmitsDrop(settings))
+		}
+	}
+	same("at the bound")
+
+	// each DROP the repo makes takes the next entry the twin's bound evicts, oldest first: a, b, c and d, the held
+	// ones unlisted in their twins' place
+	for i, label := range []string{"e", "f", "g", "h"} {
+		pending := &DropTableEntry{DropId: testId(label), Place: place, State: DropStatePending, SeenMs: now.UnixMilli()}
+		var heldErr, twinErr error
+		held, heldErr = dropTestWrite(held, now, settings, func(state *DropTableState) {
+			copied := *pending
+			state.Drops = append(state.Drops, &copied)
+		})
+		twin, twinErr = dropTestWrite(twin, now, settings, func(state *DropTableState) {
+			copied := *pending
+			state.Drops = append(state.Drops, &copied)
+		})
+		if heldErr != nil || twinErr != nil {
+			t.Fatalf("DROP %s: %v, its twin %v", label, heldErr, twinErr)
+		}
+		same("DROP " + label)
+		gone := []string{"a", "b", "c", "d"}[i]
+		if twin.Drop(testId(gone)) != nil {
+			t.Fatalf("DROP %s: the twin kept %s", label, gone)
+		}
+	}
+	for _, label := range []string{"a", "c"} {
+		if entry := held.Drop(testId(label)); entry == nil || entry.State != DropStateHeld || entry.EndedDay != dropUnlistedDay {
+			t.Fatalf("held %s past the bound: %+v", label, entry)
+		}
+	}
+	if held.Drop(testId("b")) != nil || held.Drop(testId("d")) != nil {
+		t.Fatal("the held table kept a done entry its twin evicted")
+	}
+
+	// the next DROP finds four pending entries: both take the dry run and still pass the bound, so both refuse
+	pending := &DropTableEntry{DropId: testId("i"), Place: place, State: DropStatePending, SeenMs: now.UnixMilli()}
+	_, heldErr := dropTestWrite(held, now, settings, func(state *DropTableState) { state.Drops = append(state.Drops, pending) })
+	_, twinErr := dropTestWrite(twin, now, settings, func(state *DropTableState) { state.Drops = append(state.Drops, pending) })
+	if !errors.Is(heldErr, ErrDropTableFull) || !errors.Is(twinErr, ErrDropTableFull) {
+		t.Fatalf("a write past the bound of pending entries: %v, its twin %v", heldErr, twinErr)
+	}
+
+	// the hold ends: the job's end moves a and c to done, and that write evicts both, leaving the twin's table
+	held, err := dropTestWrite(held, now, settings, func(state *DropTableState) {
+		for _, entry := range state.Drops {
+			if entry.State == DropStateHeld {
+				state.setState(entry, DropStateDone, dropDay(now))
+			}
+		}
+		state.Job = nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := dropTestLabels(held), dropTestLabels(twin); !slices.Equal(got, want) {
+		t.Fatalf("after the job's end the table holds %v, its twin %v", got, want)
+	}
+	same("after the hold")
+}
+
+// QD-1126 and owner decision 643: a write that only held entries keep past the bound, their DROPs seen under
+// EvictGuard ago so that no bound may take them, is not refused, where the twin, whose entries are done and whose job
+// has ended, refuses: held entries and a held job's record never count toward a refusal. The held table lists the new
+// DROP beside its held one.
+func TestDropTableBoundNeverRefusesAWriteForHeldEntries(t *testing.T) {
+	settings := DefaultDropSettings()
+	settings.TableByteCount = dropTableHeaderByteCount + dropTableTrailerByteCount + 2*dropTableEntryByteCount
+	settings.TableAdmitByteCount = settings.TableByteCount
+	now := sidecartest.DefaultClockStart().Add(400 * 24 * time.Hour)
+	place := &protocol.EvsPlace{Minute: 1, Length: 100}
+	entry := func(label string, state DropState) *DropTableEntry {
+		// its DROP seen two hours ago, inside the eviction guard
+		entry := &DropTableEntry{DropId: testId(label), Place: place, State: state, SeenMs: now.Add(-2 * time.Hour).UnixMilli()}
+		if state.Ended() {
+			entry.EndedDay = dropDay(now)
+		}
+		return entry
+	}
+	held := &DropTableState{
+		Job:   &DropJobRecord{JobId: testId("job"), Phase: protocol.EvsDropPhase_EVS_DROP_DELETE, Held: true},
+		Drops: []*DropTableEntry{entry("x", DropStateHeld), entry("p1", DropStatePending), entry("p2", DropStatePending)},
+	}
+	twin := &DropTableState{Drops: []*DropTableEntry{entry("x", DropStateDone), entry("p1", DropStatePending), entry("p2", DropStatePending)}}
+	if err := twin.evict(now, settings); !errors.Is(err, ErrDropTableFull) {
+		t.Fatalf("the twin's write past its bound: %v", err)
+	}
+	if err := held.evict(now, settings); err != nil {
+		t.Fatalf("a write only a held entry takes past the bound: %v", err)
+	}
+	if entry := held.Drop(testId("x")); entry == nil || entry.EndedDay == dropUnlistedDay {
+		t.Fatalf("a held entry inside the eviction guard was unlisted: %+v", entry)
+	}
+	if listing := DropStatuses(held, now, settings); len(listing.Drops) != 3 {
+		t.Fatalf("listed %d drops", len(listing.Drops))
 	}
 }
 
