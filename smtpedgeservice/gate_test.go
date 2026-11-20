@@ -1,9 +1,11 @@
 // The send gate's rows (SMTP-M9-10, §14.5, §14.7, §21.5), each with its refusal, one test each, on
-// FakeSmtpGate and FakeAbuseGate: memory only, a miss answering TRY_LATER and asking for a load.
+// FakeSmtpGate and FakeAbuseGate: memory only, a miss answering TRY_LATER and asking for a load. A suspension's
+// HALTED (QD-1124) also runs through the engine and the sidecar's own sender.
 
 package smtpedgeservice_test
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -123,10 +125,108 @@ func TestSmtpGateDeniesProbation(t *testing.T) {
 	g.expect("n1.root.example", 0, protocol.SmtpPreambleCode_SMTP_PREAMBLE_DENIED, "standing")
 }
 
-func TestSmtpGateDeniesSuspended(t *testing.T) {
+// §21.7's mail halt (QD-1124): a suspended network's preamble is held at its sender with the setting's wait, never
+// failed, a burner's From as its network's.
+func TestSmtpGateHaltsSuspended(t *testing.T) {
+	g := newGateWorld(t)
+	g.settings.SuspendedRetryTimeout = 90 * time.Minute
+	g.abuse.SetStanding(connect.Id(g.networkId), sidecar.AbuseStandingSuspended)
+	for _, c := range []struct {
+		from  string
+		flags uint32
+	}{
+		{from: "n1.root.example"},
+		{from: "otter-4821.n1.root.example", flags: sidecar.SmtpFlagBurner},
+	} {
+		decision := g.expect(c.from, c.flags, protocol.SmtpPreambleCode_SMTP_PREAMBLE_HALTED, "suspended")
+		if decision.RetryAfter != 90*time.Minute {
+			t.Fatalf("from %s: retry after %v, want the setting's", c.from, decision.RetryAfter)
+		}
+	}
+}
+
+// A lift restores mail at once (owner decision 531): the next preamble after the standing goes back to standard
+// passes, with nothing of the suspension kept.
+func TestSmtpGateLiftedSuspensionSendsAtTheNextPreamble(t *testing.T) {
 	g := newGateWorld(t)
 	g.abuse.SetStanding(connect.Id(g.networkId), sidecar.AbuseStandingSuspended)
-	g.expect("n1.root.example", 0, protocol.SmtpPreambleCode_SMTP_PREAMBLE_DENIED, "standing")
+	g.expect("n1.root.example", 0, protocol.SmtpPreambleCode_SMTP_PREAMBLE_HALTED, "suspended")
+	g.abuse.SetStanding(connect.Id(g.networkId), sidecar.AbuseStandingStandard)
+	decision := g.expect("n1.root.example", 0, protocol.SmtpPreambleCode_SMTP_PREAMBLE_OK, "")
+	if decision.Standing != sidecar.AbuseStandingStandard || decision.RetryAfter != 0 {
+		t.Fatalf("decision %+v", decision)
+	}
+}
+
+// The edge writes no smtp_halt row for a suspension, so the halt ladder's 3 network halts in 30 days does not count
+// it (QD-1124), and the HALTED goes out before any MX is dialed or Redis asked.
+func TestPreambleSuspendedHaltsWithNoHaltRow(t *testing.T) {
+	w := newEdgeWorld(t, func(w *edgeWorld) {
+		w.host.Abuse.SetStanding(connect.Id(w.networkId), sidecar.AbuseStandingSuspended)
+	})
+	w.host.Redis.ResetOpCounts()
+	outcome, result := w.send(w.preamble())
+	if result.GetCode() != uint32(protocol.SmtpPreambleCode_SMTP_PREAMBLE_HALTED) || outcome.Reason != "suspended" {
+		t.Fatalf("answered %d (%s)", result.GetCode(), outcome.Reason)
+	}
+	if want := uint32(w.settings.SuspendedRetryTimeout.Milliseconds()); result.GetRetryAfterMs() != want {
+		t.Fatalf("retry_after_ms %d, want %d", result.GetRetryAfterMs(), want)
+	}
+	if dials := w.world.Dials(); len(dials) != 0 {
+		t.Fatalf("dialed %v", dials)
+	}
+	if counts := w.host.Redis.OpCounts(); len(counts) != 0 {
+		t.Fatalf("redis calls %v", counts)
+	}
+	halts, err := w.store.ActiveHalts(w.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(halts) != 0 {
+		t.Fatalf("a suspension wrote halts %+v", halts)
+	}
+}
+
+// The sidecar's own sender holds a suspended network's message for the gate's wait, deferred and never failed, and
+// nothing reaches an MX; once the suspension lifts, the held message sends at its next try.
+func TestSmtpSenderHoldsASuspendedNetworksMail(t *testing.T) {
+	w := newTestEngineWorld(t, func(world *edgeWorld) {
+		world.host.Abuse.SetStanding(connect.Id(world.networkId), sidecar.AbuseStandingSuspended)
+	})
+	dialer := &testEngineDialer{w: w}
+	sender, _, _ := newTestEngineSender(t, w, dialer)
+	message := testEngineMessage(w, 0x43)
+	result, err := sender.Send(context.Background(), message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome := result.Domains[0]; outcome.Outcome != sidecar.SmtpOutcomeDeferred || outcome.RetryAfter != w.settings.SuspendedRetryTimeout {
+		t.Fatalf("a suspended send: %+v", outcome)
+	}
+	if dials := w.world.Dials(); len(dials) != 0 {
+		t.Fatalf("dialed %v", dials)
+	}
+	w.host.Abuse.SetStanding(connect.Id(w.networkId), sidecar.AbuseStandingStandard)
+	// the queue holds the message to its retry time, whatever happens meanwhile
+	result, err = sender.Send(context.Background(), message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome := result.Domains[0]; outcome.Outcome != sidecar.SmtpOutcomeDeferred {
+		t.Fatalf("before the retry time: %+v", outcome)
+	}
+	w.clock.Advance(w.settings.SuspendedRetryTimeout)
+	result, err = sender.Send(context.Background(), message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome := result.Domains[0]; outcome.Outcome != sidecar.SmtpOutcomeSent {
+		t.Fatalf("after the lift: %+v", outcome)
+	}
+	dialer.serving.Wait()
+	if len(w.mx.Transactions()) != 1 {
+		t.Fatalf("%d transactions", len(w.mx.Transactions()))
+	}
 }
 
 func TestSmtpGateDeniesAStandingThisBuildDoesNotKnow(t *testing.T) {
@@ -201,8 +301,11 @@ func TestSmtpGateDeniesAFromInAnotherNetworksZone(t *testing.T) {
 	g.expect("other.example", 0, protocol.SmtpPreambleCode_SMTP_PREAMBLE_DENIED, "from_domain")
 }
 
+// A verified domain's rows are gate_custom_domain_test.go's: it sends only on the team tier.
 func TestSmtpGatePassesAliasScopeAndVerifiedDomain(t *testing.T) {
 	g := newGateWorld(t)
+	g.facts.Limits.Tier = "team"
+	g.reload()
 	for _, from := range []string{"quiet-net.root.example", "sales.n1.root.example", "brand.example"} {
 		decision := g.expect(from, 0, protocol.SmtpPreambleCode_SMTP_PREAMBLE_OK, "")
 		if decision.EnvelopeDomain != "b.n1.root.example" {

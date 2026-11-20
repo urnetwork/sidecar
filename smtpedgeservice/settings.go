@@ -184,6 +184,10 @@ type SmtpEdgeSettings struct {
 	SpentRetryTimeout time.Duration `yaml:"spent_retry_timeout"`
 	// retry_after while §21.5's breaker pauses a network's tier. Default 1 h.
 	BreakerRetryTimeout time.Duration `yaml:"breaker_retry_timeout"`
+	// retry_after while §21 suspends the network: §21.7's mail halt is the gate's HALTED, so its mail waits at
+	// the sender until the lift rather than failing (QD-1124). Default 1 h, the next try after a review that
+	// lifts it within the hour.
+	SuspendedRetryTimeout time.Duration `yaml:"suspended_retry_timeout"`
 
 	// How long {smq_<networkId>} lives after its last write (§14.7). Default 48 h.
 	QuotaKeyTimeout time.Duration `yaml:"quota_key_timeout"`
@@ -321,6 +325,7 @@ func DefaultSmtpEdgeSettings() *SmtpEdgeSettings {
 		GateRetryTimeout:              60 * time.Second,
 		SpentRetryTimeout:             time.Hour,
 		BreakerRetryTimeout:           time.Hour,
+		SuspendedRetryTimeout:         time.Hour,
 
 		QuotaKeyTimeout:              48 * time.Hour,
 		QuotaMemberTimeout:           5 * time.Minute,

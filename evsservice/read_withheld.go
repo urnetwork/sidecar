@@ -2,9 +2,10 @@
 // DESIGN-DETAILS 10.2.9's content row; EVS2-M10-10, which EVSB-M10-06's deletes rely on): once a drop job's delete set
 // exists, no byte of a segment or slot it deleted, holds or packed is served: a range of such a segment and a read of
 // such a slot answer missing, as a deleted object's would, whether or not the object is still stored, so a held drop
-// reads as a finished one (owner decision 184) and nothing on the wire shows a hold. The set is the repo's running
-// job's del and held files (DropIndex.Withheld), loaded through the table and refreshed with it; a repo with no table,
-// or a table with no job, pays nothing past the table's cached GET. A set that cannot be read fails the read 503.
+// reads as a finished one (owner decision 184) and nothing on the wire shows a hold. The set is the del and held files
+// of the repo's running job and of every held job, which gave up the slot to it (QD-1127; DropIndex.Withheld), loaded
+// through the table and refreshed with it; a repo with no table, or a table naming no job, pays nothing past the
+// table's cached GET. A set that cannot be read fails the read 503.
 
 package evsservice
 
@@ -18,7 +19,7 @@ func (self *readAttempt) withheld(id DropScanId) (bool, error) {
 		return false, nil
 	}
 	table, err := self.dropTable()
-	if err != nil || table == nil || table.Job == nil {
+	if err != nil || table == nil || (table.Job == nil && len(table.HeldJobs) == 0) {
 		return false, err
 	}
 	segmentCluster, err := self.engine.blobs.SegmentCluster()
