@@ -1032,7 +1032,8 @@ func TestGkmReconcilerWorldAdvanceRunsAWakeAnOvertakenArmingSkips(t *testing.T) 
 	}
 
 	// the move that overtakes the arming: the loop's timer a minute in fires, and the clock reaches the hour as the
-	// pass that timer started arms its next
+	// pass that timer started arms its next. The loop is held at its arming while the test alone moves the clock, as
+	// the hung test's one move did; a second mover could set the clock back as its own move ended.
 	world, ended, dueAt := newWorld()
 	fixture := world.fixture
 	firstAt := world.awaitIdle()
@@ -1040,8 +1041,26 @@ func TestGkmReconcilerWorldAdvanceRunsAWakeAnOvertakenArmingSkips(t *testing.T) 
 		t.Fatalf("the loop's first timer at %s is not before the object's time %s", world.clockTime(firstAt), world.clockTime(dueAt))
 	}
 	passes, _ := world.reconciler.Passes()
-	world.loopClock.setBeforeArming(func() { fixture.clock.AdvanceTo(dueAt) })
+	armingReached := make(chan struct{})
+	armingReleased := make(chan struct{})
+	world.loopClock.setBeforeArming(func() {
+		close(armingReached)
+		select {
+		case <-armingReleased:
+		case <-fixture.ctx.Done():
+		}
+	})
 	fixture.clock.AdvanceTo(firstAt)
+	world.await("the pass the loop's first timer starts to arm its next", func() (bool, chan struct{}, string) {
+		select {
+		case <-armingReached:
+			return true, armingReached, ""
+		default:
+			return false, armingReached, "not armed yet"
+		}
+	})
+	fixture.clock.AdvanceTo(dueAt)
+	close(armingReleased)
 	world.awaitPasses(passes+1, "the pass the loop's first timer starts")
 	arming := world.awaitArming()
 	if !fixture.clock.Now().Equal(dueAt) {

@@ -152,7 +152,8 @@ type gkmLoopClock struct {
 	arming *sidecar.MonitorValue[gkmLoopArming]
 
 	stateLock sync.Mutex
-	// runs once, on the loop's goroutine, as the loop arms its next timer and before the clock holds it; nil for none
+	// runs once, on the loop's goroutine, as the loop arms its next timer, after the loop read the clock for it and
+	// before the clock holds it; nil for none
 	beforeArming func()
 }
 
@@ -199,8 +200,10 @@ func (self *gkmLoopClock) AfterFunc(timeout time.Duration, function func()) (sto
 	return self.clock.AfterFunc(timeout, function)
 }
 
-// Has fn run on the loop's goroutine as the loop arms its next timer, once: where a move of the clock that runs on
-// while the loop arms lands.
+// Has fn run on the loop's goroutine as the loop arms its next timer, once: a barrier that holds the loop between its
+// reading of the clock and its arming while a test moves the clock, where a move that ran on while the loop armed
+// landed. fn moves no clock itself: the fake clock takes one mover at a time, and an Advance ending while another
+// runs sets the clock back to its own end.
 func (self *gkmLoopClock) setBeforeArming(fn func()) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
