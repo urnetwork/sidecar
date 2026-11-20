@@ -454,12 +454,12 @@ var ErrHoldReadStale = errors.New("hold read older than its bound")
 // Whether a DELETE issued now may act on cover (owner decision 629): its read is younger than
 // RereadInterval by the clock, so every hold api acknowledged that long ago or more shows in it. A
 // cover no read gave never is.
-func (self *HoldSet) Fresh(cover *HoldCover) bool {
+func (self *HoldSet) fresh(cover *HoldCover) bool {
 	return !cover.ReadTime.IsZero() && self.clock.Now().Sub(cover.ReadTime) < self.settings.RereadInterval
 }
 
 // The cover a DELETE about to issue acts on (owner decision 629: a hold binds a deleter from
-// RereadInterval after api acknowledged its placement). cover itself while it is Fresh, so a DELETE
+// RereadInterval after api acknowledged its placement). cover itself while it is fresh, so a DELETE
 // after a quick HEAD acts on the read it already had; else, or for a nil cover, Covering's answer for
 // networkId and repoId, which reads hold/ again unless another caller's read is younger, so a stall
 // before a run of DELETEs costs one read, which the cache shares with every DELETE after it. That
@@ -470,7 +470,7 @@ func (self *HoldSet) Fresh(cover *HoldCover) bool {
 // The caller judges again on what comes back, which may be another cover than the one it gave, and
 // issues its DELETE with no wait and no other request between.
 func (self *HoldSet) CoveringAtDelete(ctx context.Context, cover *HoldCover, networkId Id, repoId Id) (*HoldCover, error) {
-	if cover != nil && self.Fresh(cover) {
+	if cover != nil && self.fresh(cover) {
 		return cover, nil
 	}
 	again, err := self.Covering(ctx, networkId, repoId)
@@ -478,7 +478,7 @@ func (self *HoldSet) CoveringAtDelete(ctx context.Context, cover *HoldCover, net
 		// a read that failed, or no network to read: unknown either way
 		return again, err
 	}
-	if !self.Fresh(again) {
+	if !self.fresh(again) {
 		return &HoldCover{Unknown: true, ReadTime: again.ReadTime}, ErrHoldReadStale
 	}
 	return again, nil

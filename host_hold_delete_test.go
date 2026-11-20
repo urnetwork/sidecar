@@ -48,10 +48,8 @@ func TestHoldSetCoveringAtDeleteKeepsAFreshCover(t *testing.T) {
 	if err := sidecartest.PlaceHold(ctx, blobs, testPreserveHold(testHoldNetworkId, testHoldCaseId1, clock.Now(), time.Hour)); err != nil {
 		t.Fatal(err)
 	}
+	// a millisecond under 5 s old
 	clock.Advance(5*time.Second - time.Second - time.Millisecond)
-	if !holds.Fresh(cover) {
-		t.Fatal("a cover under 5 s old reads as aged")
-	}
 	atDelete, err := holds.CoveringAtDelete(ctx, cover, testHoldNetworkId, testHoldRepoId1)
 	if err != nil || atDelete != cover {
 		t.Fatalf("a fresh cover was not kept: %+v %v", atDelete, err)
@@ -79,10 +77,8 @@ func TestHoldSetCoveringAtDeleteRereadsAnAgedCoverOnce(t *testing.T) {
 	if err := sidecartest.PlaceHold(ctx, blobs, testPreserveHold(testHoldNetworkId, testHoldCaseId1, clock.Now(), time.Hour)); err != nil {
 		t.Fatal(err)
 	}
+	// first's read is 5 s old: aged, by the cache's own rule
 	clock.Advance(5*time.Second - 500*time.Millisecond)
-	if holds.Fresh(first) {
-		t.Fatal("a cover 5 s old reads as fresh")
-	}
 	atDelete, err := holds.CoveringAtDelete(ctx, first, testHoldNetworkId, testHoldRepoId1)
 	if err != nil || !atDelete.Covered() || len(atDelete.Holds) != 1 || !atDelete.ReadTime.Equal(clock.Now()) {
 		t.Fatalf("the read at the DELETE: %+v %v", atDelete, err)
