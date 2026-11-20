@@ -7,16 +7,19 @@
 // sender's own SmtpProofChannel. The verifier is smtpproof's Verifier holding FS-31's key set over the row's backend,
 // so every session is edgeSession; what the engine's sessions refused is recorded as they refuse it.
 //
-// A forging edge (fs31EdgeArgs.forgeServerFrom) sits between the MX and the engine's socket: from the MX's chosen
-// application record on, each reaches the engine as a record sealed under a key the edge made up, which is all an
-// edge holding no key can send.
+// A forging edge (ExportedFs31EdgeArgs.ForgeServerFrom) sits between the MX and the engine's socket: from the MX's
+// chosen application record on, each reaches the engine as a record sealed under a key the edge made up, which is all
+// an edge holding no key can send.
+//
+// An external test, since a client package's own files may not import a <svc>service (§4.4): it registers its maker
+// with the fixture and reads the fixture's internals through fs31_export_test.go's bridge.
 
-package smtpproof
+package smtpproof_test
 
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
+	"crypto/tls"
 	"errors"
 	"net"
 	"net/netip"
@@ -34,13 +37,26 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/sidecartest"
 	"github.com/urnetwork/sidecar/smtpedgeservice"
+	"github.com/urnetwork/sidecar/smtpproof"
 )
 
 func init() {
-	fs31EngineEdge = func(args *fs31EdgeArgs) fs31Edge {
-		return &fs31EngineEdgeWorld{args: args}
-	}
+	smtpproof.SetFs31EngineEdge(func(args *smtpproof.ExportedFs31EdgeArgs) *smtpproof.ExportedFs31Edge {
+		world := &fs31EngineEdgeWorld{args: args}
+		return &smtpproof.ExportedFs31Edge{
+			Name:          "engine",
+			Open:          world.open,
+			QuitForwarded: world.quitForwarded,
+			Done:          world.done,
+			End:           world.end,
+			Wait:          world.wait,
+			Refusal:       world.refusal,
+		}
+	})
 }
+
+// A guard on what a test waits for, never a pause: each wait ends at the event it waits on.
+const fs31EngineGuardTimeout = 60 * time.Second
 
 // The engine's world for one connection: its root, network and sending address.
 const (
@@ -58,7 +74,7 @@ var (
 
 // The engine for one connection.
 type fs31EngineEdgeWorld struct {
-	args     *fs31EdgeArgs
+	args     *smtpproof.ExportedFs31EdgeArgs
 	ctx      context.Context
 	clock    *sidecartest.FakeClock
 	world    *sidecartest.MxWorld
@@ -75,10 +91,6 @@ type fs31EngineEdgeWorld struct {
 	served chan struct{}
 	// every stream's service, each done once its connection has ended
 	serving sync.WaitGroup
-}
-
-func (self *fs31EngineEdgeWorld) name() string {
-	return "engine"
 }
 
 // Pro's smtp_* numbers (§20.4), with the recipients a message may name raised where a row asks.
@@ -105,28 +117,24 @@ func fs31EngineLimits(recipientLimit int) *sidecar.QuotaLimits {
 	return limits
 }
 
-// Starts the engine in its world, its verifier smtpproof's Verifier holding FS-31's key set over the row's backend.
-func (self *fs31EngineEdgeWorld) open(ctx context.Context, declared *fs31Declared) (*fs31Opened, error) {
-	verifier := &Verifier{
-		settings: DefaultVerifierSettings(),
-		keySets: map[string]*verifierKeySet{
-			hex.EncodeToString(fs31KeySetId): {id: bytes.Clone(fs31KeySetId), proof: DefaultProofSettings(), backend: self.args.backend},
-		},
-	}
+// Starts the engine in its world, its verifier smtpproof's Verifier holding FS-31's key set over the row's backend,
+// then serves one stream to it and answers the preamble as the engine does.
+func (self *fs31EngineEdgeWorld) open(ctx context.Context, declared *smtpproof.ExportedFs31Declared) (*smtpproof.ExportedFs31Opened, error) {
+	// a session reads the clock start makes, which no session opens before
+	verifier := self.args.NewVerifier(func() time.Time { return self.clock.Now() })
 	if err := self.start(ctx, verifier); err != nil {
 		return nil, err
 	}
-	verifier.now = self.clock.Now
 	sidecarEnd := self.stream()
 	preamble := &protocol.SmtpPreamble{
 		Version:          sidecar.SmtpPreambleVersion,
-		RecipientDomain:  declared.recipientDomain,
-		RecipientCount:   declared.recipientCount,
-		MessageId:        declared.messageId,
-		HeaderFromDomain: declared.headerFromDomain,
-		DkimSelector:     declared.dkimSelector,
-		MessageByteCount: declared.messageByteCount,
-		ProofKeySet:      declared.keySet,
+		RecipientDomain:  declared.RecipientDomain,
+		RecipientCount:   declared.RecipientCount,
+		MessageId:        declared.MessageId,
+		HeaderFromDomain: declared.HeaderFromDomain,
+		DkimSelector:     declared.DkimSelector,
+		MessageByteCount: declared.MessageByteCount,
+		ProofKeySet:      declared.KeySet,
 	}
 	if err := sidecar.WriteSmtpPreamble(sidecarEnd, preamble, nil); err != nil {
 		sidecarEnd.Close()
@@ -137,29 +145,27 @@ func (self *fs31EngineEdgeWorld) open(ctx context.Context, declared *fs31Declare
 		sidecarEnd.Close()
 		return nil, err
 	}
-	opened := &fs31Opened{conn: sidecarEnd}
+	opened := &smtpproof.ExportedFs31Opened{Conn: sidecarEnd}
 	if result.GetCode() != uint32(protocol.SmtpPreambleCode_SMTP_PREAMBLE_OK) {
 		sidecarEnd.Close()
-		opened.code = result.GetCode()
-		opened.reason = protocol.SmtpPreambleCode(result.GetCode()).String()
+		opened.Code = result.GetCode()
+		opened.Reason = protocol.SmtpPreambleCode(result.GetCode()).String()
 		return opened, nil
 	}
-	opened.issued = &fs31Issued{
-		sendId:         result.GetSendId(),
-		heloName:       result.GetHeloName(),
-		xUrRef:         result.GetXUrRef(),
-		feedbackId:     result.GetFeedbackId(),
-		mxHost:         result.GetMxHost(),
-		envelopeDomain: "b." + fs31EngineLabel + "." + fs31EngineRoot,
-	}
-	opened.channel = sidecar.NewSmtpProofTestChannel(&fs31EngineCaller{edge: self}, self.edgeClientId, result.GetSendId(), sidecar.DefaultSmtpSenderSettings())
+	opened.SendId = result.GetSendId()
+	opened.HeloName = result.GetHeloName()
+	opened.XUrRef = result.GetXUrRef()
+	opened.FeedbackId = result.GetFeedbackId()
+	opened.MxHost = result.GetMxHost()
+	opened.EnvelopeDomain = "b." + fs31EngineLabel + "." + fs31EngineRoot
+	opened.Channel = sidecar.NewSmtpProofTestChannel(&fs31EngineCaller{edge: self}, self.edgeClientId, result.GetSendId(), sidecar.DefaultSmtpSenderSettings())
 	return opened, nil
 }
 
 // Starts the engine on sidecartest's fakes in an MxWorld whose recipient domain's MX is the row's, every preamble's
 // session from verifier, and waits until it can answer a preamble OK. The engine ends with the test.
 func (self *fs31EngineEdgeWorld) start(ctx context.Context, verifier sidecar.SmtpProofVerifier) error {
-	t := self.args.t
+	t := self.args.T
 	engineCtx, cancel := context.WithCancel(context.Background())
 	self.ctx = engineCtx
 	self.clock = sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
@@ -167,7 +173,7 @@ func (self *fs31EngineEdgeWorld) start(ctx context.Context, verifier sidecar.Smt
 	self.edgeClientId = sidecar.NewId()
 	self.clientId = sidecar.NewId()
 	self.sidecarId = sidecar.NewId()
-	if 0 < self.args.forgeServerFrom && !self.args.cell.tls12() {
+	if 0 < self.args.ForgeServerFrom && self.args.Version != tls.VersionTLS12 {
 		cancel()
 		return errors.New("an edge forges records only where their types are public, under TLS 1.2")
 	}
@@ -181,8 +187,8 @@ func (self *fs31EngineEdgeWorld) start(ctx context.Context, verifier sidecar.Smt
 	}
 	self.world = world
 	for _, err := range []error{
-		world.SetMx(testRecipientDomain, &sidecar.SmtpMxHost{Preference: 10, Host: testMxHost}),
-		world.AddMx(testMxHost, fs31EngineMxAddress, self.args.mx),
+		world.SetMx(self.args.RecipientDomain, &sidecar.SmtpMxHost{Preference: 10, Host: self.args.MxHost}),
+		world.AddMx(self.args.MxHost, fs31EngineMxAddress, self.args.Mx),
 		world.AddMx(fs31EngineHeloName, fs31EngineSendingAddress, nil),
 	} {
 		if err != nil {
@@ -195,7 +201,7 @@ func (self *fs31EngineEdgeWorld) start(ctx context.Context, verifier sidecar.Smt
 	host := sidecartest.NewFakeHost(engineCtx, self.clock, sidecartest.NewFaultQueue(), nil, nil)
 	sidecartest.RegisterSmtpQuotaScripts(host.Redis)
 	host.Abuse.Set(connect.Id(self.networkId), sidecar.AbuseStandingStandard, true)
-	limits := fs31EngineLimits(self.args.recipientLimit)
+	limits := fs31EngineLimits(self.args.RecipientLimit)
 	gate := sidecartest.NewFakeSmtpGate()
 	gate.SetFacts(self.networkId, &smtpedgeservice.SmtpGateFacts{
 		MailEnableTime: self.clock.Now().Add(-48 * time.Hour),
@@ -221,7 +227,7 @@ func (self *fs31EngineEdgeWorld) start(ctx context.Context, verifier sidecar.Smt
 	settings.MxRefusedPrefixes = slices.DeleteFunc(slices.Clone(settings.MxRefusedPrefixes), func(prefix netip.Prefix) bool {
 		return prefix == netip.MustParsePrefix("192.0.2.0/24")
 	})
-	dialer := &fs31EngineDialer{dialer: world, verifier: self.verifier, forgeFrom: self.args.forgeServerFrom, suite: self.args.cell.leg.suites[0]}
+	dialer := &fs31EngineDialer{dialer: world, verifier: self.verifier, forgeFrom: self.args.ForgeServerFrom, suite: self.args.Suite}
 	self.store = sidecartest.NewFakeSmtpEdgeStore(self.clock, nil)
 	service, err := smtpedgeservice.NewSmtpEdgeServiceWithDeps(engineCtx, host.ServiceHost(), self.store, self.verifier, &smtpedgeservice.SmtpEdgeDeps{
 		Gate:     gate,
@@ -386,11 +392,8 @@ type fs31Session struct {
 
 // Keeps a call's refusal, and the QUIT record once the gate hands it, the last record it ever forwards.
 func (self *fs31Session) keep(forward [][]byte, err error) {
-	if gate, ok := self.session.(*edgeSession); ok && 0 < len(forward) {
-		gate.stateLock.Lock()
-		finished := gate.finished
-		gate.stateLock.Unlock()
-		if finished {
+	if 0 < len(forward) {
+		if smtpproof.ExportSessionFinished(self.session) {
 			func() {
 				self.verifier.stateLock.Lock()
 				defer self.verifier.stateLock.Unlock()
@@ -462,7 +465,7 @@ func (self *fs31EngineDialer) DialMx(ctx context.Context, sendingAddress netip.A
 	if err != nil {
 		return nil, err
 	}
-	return newFs31MxConn(conn, self.forgeFrom, self.suite, false, self.verifier.wroteMx), nil
+	return smtpproof.ExportFs31MxConn(conn, self.forgeFrom, self.suite, false, self.verifier.wroteMx), nil
 }
 
 // The sidecar's own sender's dialer onto a world's engine: each stream as the ur/smtpedge listener hands one over, and
@@ -555,7 +558,7 @@ func (self fs31Publisher) SmtpDkimKeys(ctx context.Context, args *sidecar.SmtpDk
 // One message from the world's network to bob, sent by the sidecar's own SmtpSender through the world's engine, the
 // sender's prover this package's Prover under keySet, whose Verifier the engine holds. The MX's own certificate lets
 // it through only by the message's TL4 allowance, as an unauthenticated ScriptedMx can be sent to at all.
-func fs31SendThroughTheEngine(t *testing.T, edge *fs31EngineEdgeWorld, keySet *RelationKeySet) *sidecar.SmtpDomainOutcome {
+func fs31SendThroughTheEngine(t *testing.T, edge *fs31EngineEdgeWorld, keySet *smtpproof.RelationKeySet) *sidecar.SmtpDomainOutcome {
 	t.Helper()
 	settings := sidecar.DefaultSmtpSenderSettings()
 	store := sidecartest.NewFakeStore()
@@ -582,17 +585,17 @@ func fs31SendThroughTheEngine(t *testing.T, edge *fs31EngineEdgeWorld, keySet *R
 		t.Fatal(err)
 	}
 	t.Cleanup(sender.Close)
-	ctx, cancel := context.WithTimeout(context.Background(), fs31GuardTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), fs31EngineGuardTimeout)
 	defer cancel()
 	networkDomain := fs31EngineLabel + "." + fs31EngineRoot
 	result, err := sender.Send(ctx, &sidecar.SmtpOutboundMessage{
 		EffectKey:  bytes.Repeat([]byte{0x31}, 32),
 		SendId:     sidecar.NewId(),
 		Sender:     "bounce-1@b." + networkDomain,
-		Recipients: []string{"bob@" + testRecipientDomain},
-		Message: []byte("From: alice@" + networkDomain + "\r\nTo: bob@" + testRecipientDomain + "\r\nSubject: through the engine\r\n" +
+		Recipients: []string{"bob@" + edge.args.RecipientDomain},
+		Message: []byte("From: alice@" + networkDomain + "\r\nTo: bob@" + edge.args.RecipientDomain + "\r\nSubject: through the engine\r\n" +
 			"Message-ID: <qvsc2zbwd5c3m5rbnvzxjzpnay@" + networkDomain + ">\r\n\r\nA body line.\r\n"),
-		Tl4Domains: []string{testRecipientDomain},
+		Tl4Domains: []string{edge.args.RecipientDomain},
 		CreateTime: edge.clock.Now(),
 	})
 	if err != nil || len(result.Domains) != 1 {
@@ -608,29 +611,36 @@ func fs31SendThroughTheEngine(t *testing.T, edge *fs31EngineEdgeWorld, keySet *R
 // MX took no transaction. The control beside it, the same world with an honest edge and an MX taking the message,
 // sends it.
 func TestFs31TheSenderKeepsAMessageTheEdgeForgedSent(t *testing.T) {
-	cell := &fs31Cell{leg: testMxLegs()[2]}
 	for _, forged := range []bool{false, true} {
 		script := sidecartest.DefaultMxScript()
 		forgeFrom := 0
 		if forged {
 			script.MessageReply = "451 4.3.0 Try again later"
 			// EHLO's, MAIL's and bob's RCPT's replies, then the chunk's
-			forgeFrom = fs31MessageReplyIndex(cell, 1)
+			forgeFrom = smtpproof.ExportFs31MessageReplyIndex(false, 1)
 		}
-		mx, err := sidecartest.NewScriptedMx(testMxHost, script, &sidecartest.ScriptedMxSettings{
-			MinVersion:   cell.leg.version,
-			MaxVersion:   cell.leg.version,
-			CipherSuites: []uint16{cell.leg.suite},
+		mx, err := sidecartest.NewScriptedMx("mx.recipient.example", script, &sidecartest.ScriptedMxSettings{
+			MinVersion:   tls.VersionTLS12,
+			MaxVersion:   tls.VersionTLS12,
+			CipherSuites: []uint16{tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256},
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		keySet, err := NewRelationKeySet()
+		keySet, err := smtpproof.NewRelationKeySet()
 		if err != nil {
 			t.Fatal(err)
 		}
-		edge := &fs31EngineEdgeWorld{args: &fs31EdgeArgs{t: t, cell: cell, mx: mx, forgeServerFrom: forgeFrom}}
-		ctx, cancel := context.WithTimeout(context.Background(), fs31GuardTimeout)
+		edge := &fs31EngineEdgeWorld{args: &smtpproof.ExportedFs31EdgeArgs{
+			T:               t,
+			Mx:              mx,
+			Version:         tls.VersionTLS12,
+			Suite:           tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+			ForgeServerFrom: forgeFrom,
+			RecipientDomain: "recipient.example",
+			MxHost:          "mx.recipient.example",
+		}}
+		ctx, cancel := context.WithTimeout(context.Background(), fs31EngineGuardTimeout)
 		if err := edge.start(ctx, keySet.NewVerifier(nil)); err != nil {
 			cancel()
 			t.Fatal(err)
