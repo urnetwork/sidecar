@@ -14,9 +14,11 @@
 //	answer   evs answers a completion it does not take NOTHING_TO_ERASE, as it answers an ERASE whose keys are gone,
 //	         which counts done for any other ERASE. So an eraser reads evs's state after its completion and counts the
 //	         erasure complete only where an ERASE of it now says so
-//	evs      an ERASE's erasure id and complete byte ride its sealed metadata (QD-682), which evs cannot open, so what
-//	         evs checks of a completion is the question's. Until it is answered evsservice refuses every ERASE naming no
-//	         key a slot still holds, a completion among them, and such an erasure stays listed, fail closed
+//	evs      an ERASE's erasure id and complete byte ride its sealed metadata (QD-682), which evs cannot open, so a
+//	         completion is a format-2 statement flagged COMPLETION beside ERASE alone (QD-1137). evs takes one naming
+//	         no key a slot holds where the newest earlier ERASE naming each key, within its lookback, is no completion;
+//	         readers take it as completing its erasure only where an earlier ERASE of that erasure named each key, and
+//	         refuse one whose note says nothing complete. A format-1 repo has none
 //
 // Package-level functions are safe for concurrent use.
 

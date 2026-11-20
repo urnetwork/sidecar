@@ -1175,7 +1175,20 @@ var format2EvsDrivers = map[string]func(world *format2World) *format2EvsCase{
 		twin := world.plan()
 		world.create(twin, "cut.txt", []byte("cut"), protocol.EvsVersioning_EVS_VERSIONING_KEPT, nil)
 		return &format2EvsCase{push: world.body(plan, setCut, nil), twin: world.malformedStatementBody(twin, func(push *protocol.EvsPush) {
-			push.Flags |= 1024
+			// a flag no format names: 1024 is COMPLETION's (QD-1137)
+			push.Flags |= 2048
+		})}
+	},
+	"push-flag-1024": func(world *format2World) *format2EvsCase {
+		// a completion ERASE (QD-1137): flag 1024 beside flag 64, naming a key an earlier ERASE took
+		plan := world.plan()
+		plan.Flags = uint32(protocol.EvsPushFlag_EVS_PUSH_ERASE) | uint32(protocol.EvsPushFlag_EVS_PUSH_COMPLETION)
+		plan.Erased = []*sidecar.EvsErasedKey{{SlotId: sidecar.NewEvsSlotId(), KeyIndex: 0}}
+		twin := world.plan()
+		world.create(twin, "completion.txt", []byte("completion"), protocol.EvsVersioning_EVS_VERSIONING_KEPT, nil)
+		return &format2EvsCase{push: world.body(plan, nil, nil), twin: world.malformedStatementBody(twin, func(push *protocol.EvsPush) {
+			// COMPLETION without ERASE, which format 2 does not parse either
+			push.Flags |= uint32(protocol.EvsPushFlag_EVS_PUSH_COMPLETION)
 		})}
 	},
 	"push-field-34": func(world *format2World) *format2EvsCase {
