@@ -1,16 +1,17 @@
 //go:build !ios_extension
 
-// A DROP at the storage limit (QD-1088; §11.14's limit and drop rows, §20.7; EVS2-M10-21's loop with SEARCH-M10-18's
-// rewriter): against the stand-in evs behind a model of evs's storage gate, which refuses a segment upload and a push
-// that adds payload while a network is over its limit or spent, a DROP naming no new segment excepted. A DROP whose
-// index rewrites take a bucket shard, an upload, is refused for it and lands on its second send without them, the
-// listed versions staying in the shard, masked by the kept version's entry, while the backfill's rewrite waits at the
-// limit, and gone once it runs under it; a DROP whose rewrites are all staged lands at once with them; a DROP whose
-// kept head needs an upload is refused with or without rewrites, the QuotaRefusal going back to the person, and lands
-// with its rewrites when the command is run again under the limit; and while spent the 402 is answered the same way,
-// the hook never asked again. A cluster at its cohort limit answers 507 CLUSTER_FULL where the storage limit would
-// refuse, which QD-1088 does not name: that DROP goes back to the person as it is (question
-// drop-quota-resend-without-rewrites-cluster-full).
+// A DROP at the storage limit and on a full cluster (QD-1088, QD-1099; owner decision 620; §11.14's limit and drop
+// rows, §19.9's cohorts row, §20.7; EVS2-M10-21's loop with SEARCH-M10-18's rewriter): against the stand-in evs behind
+// a model of evs's storage gate, which refuses a segment upload and a push that adds payload while a network is over
+// its limit or spent, or while its repo's metadata cluster stands at its cohort limit, a DROP naming no new segment
+// excepted. A DROP whose index rewrites take a bucket shard, an upload, is refused for it and lands on its second send
+// without them, the listed versions staying in the shard, masked by the kept version's entry, while the backfill's
+// rewrite waits, each look refused with its floor kept, and gone once it runs with the limit lifted; a DROP whose
+// rewrites are all staged lands at once with them; a DROP whose kept head needs an upload is refused with or without
+// rewrites, evs's refusal going back to the person as it is, and lands with its rewrites when the command is run again
+// once the limit lifts. Each holds at the storage limit's 403 QUOTA_LIMIT and on a full cluster's 507 CLUSTER_FULL
+// with its wait; while spent the 402 is answered as the 403, the hook never asked again; and a 507 at the push itself,
+// step 5c's, recorded, is answered as an upload's.
 
 package sidecar
 
@@ -146,12 +147,9 @@ func (self *evsTestDropLimitGate) refusesPush(body []byte) bool {
 	if err != nil {
 		return false
 	}
-	newSegmentCount, stagedSegmentCount, inlineRecordCount := 0, 0, 0
+	newSegmentCount, stagedSegmentCount, inlineRecordCount := testDropLimitNewSegmentCount(checked), 0, 0
 	for _, object := range checked.NewObjects {
-		switch object.Kind {
-		case protocol.EvsNewObjectKind_EVS_NEW_OBJECT_SEGMENT:
-			newSegmentCount += 1
-		case protocol.EvsNewObjectKind_EVS_NEW_OBJECT_STAGED_SEGMENT:
+		if object.Kind == protocol.EvsNewObjectKind_EVS_NEW_OBJECT_STAGED_SEGMENT {
 			stagedSegmentCount += 1
 		}
 	}
@@ -174,6 +172,37 @@ func (self *evsTestDropLimitGate) refusesPush(body []byte) bool {
 		return newSegmentCount != 0
 	}
 	return newSegmentCount != 0 || stagedSegmentCount != 0 || inlineRecordCount != 0
+}
+
+// The new segments a checked push names: what the limit refuses a DROP for.
+func testDropLimitNewSegmentCount(checked *EvsCheckedPayload) int {
+	count := 0
+	for _, object := range checked.NewObjects {
+		if object.Kind == protocol.EvsNewObjectKind_EVS_NEW_OBJECT_SEGMENT {
+			count += 1
+		}
+	}
+	return count
+}
+
+// Fails t unless err is the refusal evs answers under limit, as it answered it: its status, code, quota and wait.
+func testDropLimitGoesBack(t testing.TB, err error, limit evsTestDropLimit) {
+	t.Helper()
+	want := evsTestDropLimitRefusal(limit)
+	refusal, ok := EvsErrorOf(err)
+	if !ok || refusal.Status != want.status || refusal.Code != want.reply.GetCode() || !proto.Equal(refusal.Quota, want.reply.GetQuota()) ||
+		refusal.RetryAfter != time.Duration(want.reply.GetRetryAfterMs())*time.Millisecond {
+		t.Fatalf("not evs's refusal under the limit as it answered it: %v", err)
+	}
+}
+
+// Whether err is a backfill's look waiting under limit: the index's quota refusal at the storage limit or while spent,
+// and evs's 507 on a full cluster, which the index store hands on as it is.
+func testDropLimitBackfillWaits(limit evsTestDropLimit, err error) bool {
+	if limit == evsTestDropLimitClusterFull {
+		return IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_CLUSTER_FULL)
+	}
+	return isIndexRefusal(err, indexRefusalQuota)
 }
 
 // The index of the stand-in's main ref as a reader of its head loads it.
@@ -277,11 +306,11 @@ func testDropLimitShardsHolding(t testing.TB, view *indexView, key [indexIdByteC
 	return paths
 }
 
-// QD-1088 at the storage limit: the DROP's rewrite of the shard holding a.txt's first version is an upload, which evs
-// refuses, so the DROP goes again once without its rewrites and commits. The listed version stays in the shard, masked
-// by the kept version's entry in every search, while the backfill's rewrite is refused at the limit as the payload it
-// is, and the look after the limit lifts takes it out, no search changing.
-func TestEvsDropAtTheLimitLandsWithoutAShardRewrite(t *testing.T) {
+// Under limit the DROP's rewrite of the shard holding a.txt's first version is an upload, which evs refuses, so the
+// DROP goes again once without its rewrites and commits. The listed version stays in the shard, masked by the kept
+// version's entry in every search, while the backfill's rewrite, the payload it is, is refused at each look under the
+// limit, its floor where it was, and the look after the limit lifts takes it out, no search changing.
+func testDropLimitLandsWithoutAShardRewrite(t *testing.T, limit evsTestDropLimit) {
 	writer, capture, gate, key := testDropLimitShardWorld(t)
 	before := testDropLimitView(t, writer)
 	if len(testDropLimitShardsHolding(t, before, key, 1)) != 1 {
@@ -298,7 +327,7 @@ func TestEvsDropAtTheLimitLandsWithoutAShardRewrite(t *testing.T) {
 		return rewriter.Hook(ctx, repo, args)
 	})
 	t.Cleanup(func() { writer.test.client.SetDropIndexHook(nil) })
-	gate.set(evsTestDropLimitStorage)
+	gate.set(limit)
 	result := testIndexDropEvsDrop(t, writer)
 	if len(result.Pushes) != 1 || result.Pushes[0].IndexRewritten {
 		t.Fatalf("the DROP's pushes %+v", result.Pushes)
@@ -323,7 +352,8 @@ func TestEvsDropAtTheLimitLandsWithoutAShardRewrite(t *testing.T) {
 	}
 	testIndexDropSearchesEqual(t, searches, testIndexDropSearches(t, masked))
 
-	// the backfill: refused at the limit, its floor where it was, and done by the look after the limit lifts
+	// the backfill: each look under the limit refused at the shard's upload, its floor where it was, and done by the
+	// look after the limit lifts
 	store := newIndexEvsStore(writer.repo, nil, false)
 	head, err := store.Head(context.Background())
 	if err != nil {
@@ -333,28 +363,43 @@ func TestEvsDropAtTheLimitLandsWithoutAShardRewrite(t *testing.T) {
 		version: result.Pushes[0].Version, signedTimeMs: writer.test.clock.Now().UnixMilli(),
 		paths: []*indexDroppedPath{testIndexDroppedPath("a.txt", 3, 1, 2, 3)},
 	}}}
+	drops := indexNewDropBackfill(&IndexDropSettings{ChunkScanCount: 4, AttemptCount: 2})
 	backfiller, err := indexNewBackfiller(&indexBackfillArgs{
 		store: store, repoId: writer.world.repoId, refId: writer.world.refId, repoKind: protocol.RepoKind_REPO_KIND_GENERAL,
 		isAdmin: func(*indexFileVersion) bool { return true }, format: DefaultIndexFormatSettings(), tables: testHeadTables,
 		clock: writer.test.clock, writer: writer.world.signer.sidecarId, refKey: testIndexDropEvsRefKey(t, writer),
-		contents: []indexContentRef{content}, drops: indexNewDropBackfill(&IndexDropSettings{ChunkScanCount: 4, AttemptCount: 2}),
+		contents: []indexContentRef{content}, drops: drops,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	writer.test.clock.advance(DefaultIndexBackfillSettings().BackfillAge)
-	if _, err := backfiller.backfillDrops(context.Background()); !isIndexRefusal(err, indexRefusalQuota) {
-		t.Fatalf("a backfill's rewrite at the limit: %v", err)
+	lookCount := 2
+	for look := 0; look < lookCount; look += 1 {
+		if _, err := backfiller.backfillDrops(context.Background()); !testDropLimitBackfillWaits(limit, err) {
+			t.Fatalf("look %d of the backfill under the limit: %v", look, err)
+		}
+		if floor := drops.floor(writer.world.refId); floor != 0 {
+			t.Fatalf("a refused look raised the floor to %d", floor)
+		}
+		waiting := testDropLimitView(t, writer)
+		if len(testDropLimitShardsHolding(t, waiting, key, 1)) != 1 {
+			t.Fatal("a refused backfill moved the shard")
+		}
+		testIndexDropSearchesEqual(t, searches, testIndexDropSearches(t, waiting))
+		// the schedule's next tick
+		writer.test.clock.advance(time.Minute)
 	}
-	waiting := testDropLimitView(t, writer)
-	if len(testDropLimitShardsHolding(t, waiting, key, 1)) != 1 {
-		t.Fatal("a refused backfill moved the shard")
+	if uploads, pushes := gate.refused(); uploads != 1+lookCount || pushes != 0 {
+		t.Fatalf("%d uploads and %d pushes refused after the backfill's looks", uploads, pushes)
 	}
-	testIndexDropSearchesEqual(t, searches, testIndexDropSearches(t, waiting))
 	gate.set(evsTestDropLimitNone)
 	outcome, err := backfiller.backfillDrops(context.Background())
 	if err != nil || outcome.committedCount != 1 {
 		t.Fatalf("the look after the limit: %+v, %v", outcome, err)
+	}
+	if floor := drops.floor(writer.world.refId); floor != result.Pushes[0].Version {
+		t.Fatalf("the floor after the look %d, the DROP's version %d", floor, result.Pushes[0].Version)
 	}
 	after := testDropLimitView(t, writer)
 	testIndexDropNoneHeld(t, after, key, 1, 2)
@@ -362,14 +407,29 @@ func TestEvsDropAtTheLimitLandsWithoutAShardRewrite(t *testing.T) {
 	testIndexDropSearchesEqual(t, searches, testIndexDropSearches(t, after))
 }
 
-// At the storage limit a DROP whose rewrites are all staged, a slot's here, uploads nothing and lands at once with
-// them: evs takes a DROP that names no new segment, its staged rewrites and its inline kept head with it.
-func TestEvsDropAtTheLimitLandsWithStagedRewrites(t *testing.T) {
+// QD-1088 at the storage limit: the shard's upload is refused 403 QUOTA_LIMIT, the DROP lands without its rewrites,
+// and the backfill's rewrite waits at the limit and runs under it.
+func TestEvsDropAtTheLimitLandsWithoutAShardRewrite(t *testing.T) {
+	testDropLimitLandsWithoutAShardRewrite(t, evsTestDropLimitStorage)
+}
+
+// QD-1099 on a metadata cluster at its cohort limit: the shard's upload is refused 507 CLUSTER_FULL, and the DROP,
+// which §19.9's cohorts row lets pass there, lands without its rewrites as at the storage limit; the backfill's
+// rewrite, refused 507 at each look while the cluster is full, comes in again and takes the listed version out once
+// the cluster has room.
+func TestEvsDropOnAFullClusterLandsWithoutAShardRewrite(t *testing.T) {
+	testDropLimitLandsWithoutAShardRewrite(t, evsTestDropLimitClusterFull)
+}
+
+// Under limit a DROP whose rewrites are all staged, a slot's here, uploads nothing and lands at once with them: evs
+// takes a DROP that names no new segment, its staged rewrites and its inline kept head with it. What the limit refuses
+// is still refused: a content write is payload.
+func testDropLimitLandsWithStagedRewrites(t *testing.T, limit evsTestDropLimit) {
 	writer, _, capture, path := testIndexDropEvsWorld(t)
 	gate := newEvsTestDropLimitGate(t, capture)
 	before := testIndexDropEvsSlot(t, writer, path)
 	t.Cleanup(testIndexDropEvsRewriter(t, writer, true).Install())
-	gate.set(evsTestDropLimitStorage)
+	gate.set(limit)
 	result := testIndexDropEvsDrop(t, writer)
 	if len(result.Pushes) != 1 || !result.Pushes[0].IndexRewritten {
 		t.Fatalf("the DROP's pushes %+v", result.Pushes)
@@ -385,16 +445,25 @@ func TestEvsDropAtTheLimitLandsWithStagedRewrites(t *testing.T) {
 	if after.file.version == before.file.version || len(after.slot.entries) != 1 || after.slot.entries[0].key != testIndexDropEvsKey(t, writer, "b.txt") {
 		t.Fatalf("the slot after the DROP: version %d, %d entries", after.file.version, len(after.slot.entries))
 	}
-	// and what the limit refuses is still refused: a content write is payload
-	if _, err := writer.write(t, "c.txt", []byte("payload at the limit")); !IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_QUOTA_LIMIT) {
-		t.Fatalf("a write at the limit: %v", err)
-	}
+	_, err := writer.write(t, "c.txt", []byte("payload at the limit"))
+	testDropLimitGoesBack(t, err, limit)
 }
 
-// At the storage limit a DROP whose kept head needs an upload is refused, the QuotaRefusal going back to the person:
-// at once where it carries no rewrites, and after one more send without them where it does, never a third. Nothing is
-// dropped and no index file moves, and the same command run again under the limit lands with its rewrites.
-func TestEvsDropAtTheLimitRefusedForItsKeptHead(t *testing.T) {
+// At the storage limit a DROP naming no new segment passes, its staged rewrites with it.
+func TestEvsDropAtTheLimitLandsWithStagedRewrites(t *testing.T) {
+	testDropLimitLandsWithStagedRewrites(t, evsTestDropLimitStorage)
+}
+
+// A full cluster passes a DROP that names no new segment (§19.9's cohorts row): its staged rewrites ride it, and are
+// not left to the backfill for want of a refusal.
+func TestEvsDropOnAFullClusterLandsWithStagedRewrites(t *testing.T) {
+	testDropLimitLandsWithStagedRewrites(t, evsTestDropLimitClusterFull)
+}
+
+// Under limit a DROP whose kept head needs an upload is refused, evs's refusal going back to the person as it is: at
+// once where it carries no rewrites, and after one more send without them where it does, never a third. Nothing is
+// dropped and no index file moves, and the same command run again once the limit lifts lands with its rewrites.
+func testDropLimitRefusedForItsKeptHead(t *testing.T, limit evsTestDropLimit) {
 	writer, server, capture, _ := testIndexDropEvsWorld(t)
 	gate := newEvsTestDropLimitGate(t, capture)
 	writer.server.stateLock.Lock()
@@ -436,14 +505,11 @@ func TestEvsDropAtTheLimitRefusedForItsKeptHead(t *testing.T) {
 	drop := func() (*EvsDropHistoryResult, error) {
 		return writer.repo.DropHistory(context.Background(), &EvsDropHistoryArgs{PreviewId: preview.PreviewId, ConfirmPath: "big.bin"})
 	}
-	gate.set(evsTestDropLimitStorage)
+	gate.set(limit)
 
 	// with no rewrites: one send, refused at the kept head's upload
 	_, err = drop()
-	refusal, ok := EvsErrorOf(err)
-	if !ok || refusal.Code != protocol.EvsRefusalCode_EVS_REFUSAL_QUOTA_LIMIT || refusal.Quota.GetLimitKey() != "evs_storage_bytes" {
-		t.Fatalf("a DROP whose kept head needs an upload, at the limit: %v", err)
-	}
+	testDropLimitGoesBack(t, err, limit)
 	if uploads, pushes := gate.refused(); uploads != 1 || pushes != 0 {
 		t.Fatalf("%d uploads and %d pushes refused", uploads, pushes)
 	}
@@ -457,10 +523,7 @@ func TestEvsDropAtTheLimitRefusedForItsKeptHead(t *testing.T) {
 	})
 	t.Cleanup(func() { writer.test.client.SetDropIndexHook(nil) })
 	_, err = drop()
-	refusal, ok = EvsErrorOf(err)
-	if !ok || refusal.Code != protocol.EvsRefusalCode_EVS_REFUSAL_QUOTA_LIMIT || refusal.Quota.GetLimitKey() != "evs_storage_bytes" {
-		t.Fatalf("a DROP whose kept head needs an upload, with rewrites, at the limit: %v", err)
-	}
+	testDropLimitGoesBack(t, err, limit)
 	if uploads, pushes := gate.refused(); uploads != 3 || pushes != 0 || !slices.Equal(calls, []bool{false}) {
 		t.Fatalf("%d uploads and %d pushes refused, hook calls %v", uploads, pushes, calls)
 	}
@@ -474,7 +537,7 @@ func TestEvsDropAtTheLimitRefusedForItsKeptHead(t *testing.T) {
 		t.Fatal("the slot moved with a refused DROP")
 	}
 
-	// under the limit the same dry run's command lands, its rewrites with it
+	// once the limit lifts the same dry run's command lands, its rewrites with it
 	gate.set(evsTestDropLimitNone)
 	result, err := drop()
 	if err != nil || len(result.Pushes) != 1 || !result.Pushes[0].IndexRewritten {
@@ -487,6 +550,18 @@ func TestEvsDropAtTheLimitRefusedForItsKeptHead(t *testing.T) {
 	if len(after.slot.entries) != 1 || after.slot.entries[0].key == bigKey {
 		t.Fatalf("the slot after the DROP holds %d entries", len(after.slot.entries))
 	}
+}
+
+// At the storage limit a kept head that needs an upload is refused it, and the 403 QUOTA_LIMIT goes back to the person.
+func TestEvsDropAtTheLimitRefusedForItsKeptHead(t *testing.T) {
+	testDropLimitRefusedForItsKeptHead(t, evsTestDropLimitStorage)
+}
+
+// QD-1099's other half: on a full cluster a kept head that needs an upload is refused it, 507 CLUSTER_FULL, and that
+// 507 goes back to the person with its wait, after one more send without the rewrites where the DROP carries them;
+// once the cluster has room the same command lands with its rewrites.
+func TestEvsDropOnAFullClusterRefusedForItsKeptHead(t *testing.T) {
+	testDropLimitRefusedForItsKeptHead(t, evsTestDropLimitClusterFull)
 }
 
 // While spent evs answers 402 QUOTA_PAYMENT, and the loop treats it as the storage limit's 403: a DROP whose rewrite
@@ -527,10 +602,7 @@ func TestEvsDropWhileSpentLandsWithoutAnUploadedRewrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = writer.repo.DropHistory(context.Background(), &EvsDropHistoryArgs{PreviewId: preview.PreviewId, ConfirmPath: "big.bin"})
-	refusal, ok := EvsErrorOf(err)
-	if !ok || refusal.Code != protocol.EvsRefusalCode_EVS_REFUSAL_QUOTA_PAYMENT || !refusal.Quota.GetUpgrade() {
-		t.Fatalf("a DROP whose kept head needs an upload, while spent: %v", err)
-	}
+	testDropLimitGoesBack(t, err, evsTestDropLimitSpent)
 	if !slices.Equal(calls, []bool{false, false}) {
 		t.Fatalf("hook calls %v", calls)
 	}
@@ -539,14 +611,15 @@ func TestEvsDropWhileSpentLandsWithoutAnUploadedRewrite(t *testing.T) {
 	}
 }
 
-// QD-1088 names the QuotaRefusal, the storage limit's and a spent network's. A cluster at its cohort limit refuses the
-// same upload 507 CLUSTER_FULL, which the answer does not name: until the question
-// drop-quota-resend-without-rewrites-cluster-full is answered that refusal goes back to the person as it is, the DROP
-// sent once and nothing dropped.
-func TestEvsDropOnAFullClusterGoesBackWithItsRewrite(t *testing.T) {
+// Step 5c's 507 (evsservice/check_refs.go's checkStorageLimit): where the cluster fills between a DROP's uploads and
+// its push, evs refuses the push itself, recorded, for the new segment its rewrite names, and the loop answers it as an
+// upload's 507: the DROP goes again once without its rewrites, the hook not asked again, names no new segment and
+// lands. A kept head that is a new segment itself is refused at the push again then, and that 507 goes back to the
+// person as it is, after two sends.
+func TestEvsDropOnAFullClusterRefusedAtItsPushGoesWithoutItsRewrites(t *testing.T) {
 	writer, server, capture := newEvsTestDropPusher(t)
-	gate := newEvsTestDropLimitGate(t, capture)
 	evsTestDropHistory(t, writer, server, "a.txt", 500, 2)
+	evsTestDropHistory(t, writer, server, "big.bin", 40000, 2)
 	writer.server.know(".ur-index/x")
 	calls := []bool{}
 	writer.test.client.SetDropIndexHook(func(ctx context.Context, repo *EvsRepo, args *EvsDropIndexArgs) (*EvsDropIndexRewrites, error) {
@@ -556,22 +629,60 @@ func TestEvsDropOnAFullClusterGoesBackWithItsRewrite(t *testing.T) {
 		}}}, nil
 	})
 	t.Cleanup(func() { writer.test.client.SetDropIndexHook(nil) })
-	preview, err := writer.repo.DropHistoryPreview(context.Background(), &EvsDropPreviewArgs{Paths: []string{"a.txt"}})
+	// the next count pushes posted are refused as step 5c refuses them on a full cluster, each recorded
+	refuseFull := func(count int) {
+		refusals := []*evsTestRefusal{}
+		for i := 0; i < count; i += 1 {
+			refusal := evsTestDropLimitRefusal(evsTestDropLimitClusterFull)
+			refusal.reply.Recorded = true
+			refusals = append(refusals, refusal)
+		}
+		writer.server.stateLock.Lock()
+		defer writer.server.stateLock.Unlock()
+		writer.server.pushRefusals = refusals
+	}
+	drop := func(path string) (*EvsDropHistoryResult, error) {
+		preview, err := writer.repo.DropHistoryPreview(context.Background(), &EvsDropPreviewArgs{Paths: []string{path}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return writer.repo.DropHistory(context.Background(), &EvsDropHistoryArgs{PreviewId: preview.PreviewId, ConfirmPath: path})
+	}
+
+	refuseFull(1)
+	result, err := drop("a.txt")
+	if err != nil || len(result.Pushes) != 1 || result.Pushes[0].IndexRewritten || !slices.Equal(calls, []bool{false}) {
+		t.Fatalf("a DROP refused 507 at its push: %+v, %v, hook calls %v", result, err, calls)
+	}
+	// the first push carries the kept head and the rewrite, the index directories it creates on the stand-in with it
+	drops := capture.drops(t)
+	if len(drops) != 2 || len(drops[0].Changes) < 2 || testDropLimitNewSegmentCount(drops[0].EvsCheckedPayload) == 0 ||
+		len(drops[1].Changes) != 1 || testDropLimitNewSegmentCount(drops[1].EvsCheckedPayload) != 0 {
+		t.Fatalf("%d DROP pushes posted", len(drops))
+	}
+	if _, info, err := evsTestReadFormat2(t, writer, "a.txt"); err != nil || info.Version != 3 {
+		t.Fatalf("the kept head after the DROP: %+v, %v", info, err)
+	}
+
+	// a kept head that is a new segment: refused at the push again without the rewrite, and the 507 goes back
+	_, head, err := evsTestReadFormat2(t, writer, "big.bin")
 	if err != nil {
 		t.Fatal(err)
 	}
-	gate.set(evsTestDropLimitClusterFull)
-	_, err = writer.repo.DropHistory(context.Background(), &EvsDropHistoryArgs{PreviewId: preview.PreviewId, ConfirmPath: "a.txt"})
-	if !IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_CLUSTER_FULL) {
-		t.Fatalf("a DROP whose rewrite is an upload, on a full cluster: %v", err)
+	refuseFull(2)
+	_, err = drop("big.bin")
+	testDropLimitGoesBack(t, err, evsTestDropLimitClusterFull)
+	if refusal, _ := EvsErrorOf(err); !refusal.Recorded {
+		t.Fatalf("a recorded 507 that goes back unrecorded: %v", err)
 	}
-	if uploads, pushes := gate.refused(); uploads != 1 || pushes != 0 || !slices.Equal(calls, []bool{false}) {
-		t.Fatalf("%d uploads and %d pushes refused, hook calls %v", uploads, pushes, calls)
+	if !slices.Equal(calls, []bool{false, false}) {
+		t.Fatalf("hook calls %v", calls)
 	}
-	if drops := capture.drops(t); len(drops) != 0 {
+	drops = capture.drops(t)
+	if len(drops) != 4 || len(drops[2].Changes) < 2 || len(drops[3].Changes) != 1 || testDropLimitNewSegmentCount(drops[3].EvsCheckedPayload) == 0 {
 		t.Fatalf("%d DROP pushes posted", len(drops))
 	}
-	if _, info, err := evsTestReadFormat2(t, writer, "a.txt"); err != nil || info.Version != 2 {
+	if _, info, err := evsTestReadFormat2(t, writer, "big.bin"); err != nil || info.Version != head.Version {
 		t.Fatalf("the head after a refused DROP: %+v, %v", info, err)
 	}
 }

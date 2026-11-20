@@ -30,12 +30,13 @@
 //	           length it replaces, naming the head's index_epoch (QD-1078; evsservice/check_drop.go), but an evs from
 //	           before that answer takes no change a written lineage does not name, so a push whose rewrites evs
 //	           refuses 409 DROP_BOUNDARY goes again without them too; no hook is set until SEARCH's composition sets one
-//	quota      at the storage limit or while spent a DROP carrying index rewrites that evs refuses with a QuotaRefusal
-//	           goes again once without them, left to the backfill, since a DROP frees storage and its index must not
-//	           block it (QD-1088); a kept head needing an upload is refused again then, and that refusal goes back as
-//	           it is. A cluster at its cohort limit refuses the same uploads 507 CLUSTER_FULL (§19.9's cohorts row),
-//	           which that answer does not name: it goes back as it is, rewrites or not, until the question
-//	           drop-quota-resend-without-rewrites-cluster-full is answered
+//	quota      a DROP carrying index rewrites that evs refuses for an upload, with a QuotaRefusal at the storage limit
+//	           or while spent (QD-1088) or with 507 CLUSTER_FULL on a metadata cluster at §19.9's cohort limit, which
+//	           takes only what the storage limit accepts (D-OPS-22; QD-1099), at the upload or at the push, goes again
+//	           once without them, left to the backfill, whose rewrite waits there as builds do, since a DROP frees
+//	           storage and its index must not block it (§11.14's drop and limit rows; owner decision 620). A kept head
+//	           needing an upload is refused again then, and that refusal goes back to the person as it is, a 507's
+//	           wait with it
 //
 // On every leg but ios_extension. Safe for concurrent use.
 
@@ -325,6 +326,12 @@ func (self *EvsRepo) dropPush(ctx context.Context, refName []byte, batch *EvsDro
 		}
 		rewritten := rewrites != nil && 0 < len(rewrites.Writes)
 		pushId, version, err := self.dropSend(ctx, refName, spec, writes, rewrites)
+		// evs refusing what the push uploads, at the upload or at the push: a QuotaRefusal at the storage limit or while
+		// spent, or 507 CLUSTER_FULL on a metadata cluster at its cohort limit, which refuses what the storage limit
+		// refuses (QD-1088, QD-1099)
+		uploadRefused := IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_QUOTA_LIMIT) ||
+			IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_QUOTA_PAYMENT) ||
+			IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_CLUSTER_FULL)
 		switch {
 		case err == nil:
 			body := spec.bodyOf(pushId)
@@ -344,10 +351,10 @@ func (self *EvsRepo) dropPush(ctx context.Context, refName []byte, batch *EvsDro
 			// rebuilt and signed again once under the same confirmation (§11.14's drop row)
 			rebuilt = true
 		case rewritten && (IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_INDEX_EPOCH) ||
-			IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_DROP_BOUNDARY) || errors.Is(err, errEvsDropRewritesMoved) ||
-			IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_QUOTA_LIMIT) || IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_QUOTA_PAYMENT)):
-			// without its rewrites, left to the backfill: at the storage limit or while spent a shard's rewrite is an
-			// upload evs refuses, which must not block a DROP (QD-1088)
+			IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_DROP_BOUNDARY) || errors.Is(err, errEvsDropRewritesMoved) || uploadRefused):
+			// without its rewrites, left to the backfill: at the storage limit, while spent or on a full cluster a
+			// shard's rewrite is an upload evs refuses, which must not block a DROP (owner decision 620); the refusal
+			// a DROP meets again without them, its kept head's own upload, goes back as it is, by the default
 			hook = nil
 		default:
 			return nil, err
