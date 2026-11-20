@@ -16,7 +16,7 @@
 // leaving: A's rerun past the window commits under generation 1. An attempt reads its gate view again at each run of
 // step 4 (QD-660, answering evs1-m2-40-gate-view-rerun): with the view bound once at arrival, as the engine first had
 // it, the rerun judged 5d against a state from before the reader left and committed under generation 1.
-// TestFs3StepSevenPastFiveSeconds runs the clause under FS-3's rules.
+// TestFs3Step7Past5S runs the clause under FS-3's rules.
 //
 // FS-3 also names A's PUT timing out after the gate closes, its fence and the 200 when its first PUT applied before
 // the fence, and the multipart seal, deposit, new ref, repo delete, grant expiry and evs restart before the CAS:

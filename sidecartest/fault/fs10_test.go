@@ -14,5 +14,5 @@ func TestFs10(t *testing.T) {
 }
 
 func TestFs10RollbackRefused(t *testing.T) {
-	RunClause(t, "FS-10", "rollback refused", Fs10RollbackRefused, nil)
+	RunRegisteredClause(t, "FS-10", "rollback refused", nil)
 }

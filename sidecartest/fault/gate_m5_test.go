@@ -122,7 +122,7 @@ func TestGateM5NamesEachRowsTestsWhereTheyRun(t *testing.T) {
 		if _, ok := swept[testCase.String()]; ok {
 			continue
 		}
-		if tests := gateConventionalTests(testCase); !reflect.DeepEqual(row.Tests, tests) {
+		if tests := gateConventionWithClausesForTest(testCase); !reflect.DeepEqual(row.Tests, tests) {
 			t.Errorf("%s at M5 runs %s, the convention %s", testCase, gateTestsStringForTest(row.Tests), gateTestsStringForTest(tests))
 		}
 		if !testCase.LaterOf || !strings.Contains(row.External, "M10-out") {

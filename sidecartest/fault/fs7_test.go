@@ -16,13 +16,13 @@ func TestFs7(t *testing.T) {
 
 // A window version's record that evacuation moved, read by the reader's instance's newest rule through pidx/ before
 // and after its restart (QD-664). Without the read route's fallback every run of the clause answers the reader 503.
-func TestFs7EvacuatedWindowAfterRestart(t *testing.T) {
-	RunClause(t, "FS-7", "evacuated window after a restart", Fs7EvacuatedWindowAfterRestart, nil)
+func TestFs7EvacuatedWindowAfterARestart(t *testing.T) {
+	RunRegisteredClause(t, "FS-7", "evacuated window after a restart", nil)
 }
 
 // The reader's instance folds and is restarted before any commit carries the fold's horizon: its reads after the
 // restart take the entries it wrote and the window versions after them, a moved record among them when a digest
 // matches by chance.
 func TestFs7FoldLostWithItsInstance(t *testing.T) {
-	RunClause(t, "FS-7", "fold lost with its instance", Fs7FoldLostWithItsInstance, nil)
+	RunRegisteredClause(t, "FS-7", "fold lost with its instance", nil)
 }

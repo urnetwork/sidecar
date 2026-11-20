@@ -1,8 +1,9 @@
-// FS-91's races (a) and (b) (§22.8; §11.7's fence row, §11.8's step 4 and 5h, §11.13's mark row, FI-2, FI-27;
-// EVS2-M10-31) on the evs world with its drop wiring (evs_world_drop.go): a reuse copy racing the DROP that lists its
-// source. x.txt has three versions on main, each its own segment; a writer's push on ref r2 creates a file as a copy
-// of x.txt's first version, naming it as its reuse source and citing its segment, and is held on its instance after
-// step 4 validated it (evs.push.step4.after), the DROP of x.txt's history going through the other instance.
+// FS-91's races (a), (b) and (c)'s cached head (§22.8; §11.7's fence row, §11.8's step 4 and 5h, §11.9's cache row,
+// §11.13's mark row, FI-2, FI-27; EVS2-M10-31, QD-1146) on the evs world with its drop wiring (evs_world_drop.go): a
+// reuse copy racing the DROP that lists its source. x.txt has three versions on main, each its own segment; a
+// writer's push on ref r2 creates a file as a copy of x.txt's first version, naming it as its reuse source and citing
+// its segment, and in (a) and (b) is held on its instance after step 4 validated it (evs.push.step4.after), the DROP
+// of x.txt's history going through the other instance.
 //
 //	(a)  Fs91ReleasedBeforeTheDrop: the copy is released before the DROP commits, and commits. The DROP then commits
 //	     and its job runs: mark finds r2's version and keeps the segment it shares with x.txt's first version, while
@@ -16,16 +17,25 @@
 //	     lets the copy through on its arrival before the DROP's head write and its own within the window; read with a
 //	     window of 1 s the same run is a violation, and so is it with the ledger's record of the copy's push moved
 //	     past the DROP's head write, a push validated after the fence (fs91_test.go)
+//	(c)  Fs91ValidatedOnACachedHead: the DROP's write of main's {evsh_} entry fails (a Redis write refused before it
+//	     applies), so the cache keeps main's head from before the DROP; 2 min on, within the cache's 10 min of that
+//	     head's write, the copy is posted, and its step 4 takes main's head from the cache (QD-701), validates on it
+//	     after the DROP committed and commits, naming a listed version as its reuse source. FI-27 lets it through on
+//	     the Net's record of that cached read (QD-1146), and mark, run past evacuation's horizon, finds r2's version
+//	     and keeps the shared segment, as in (a); read with a cache age of 1 min the same run is a violation where
+//	     the copy commits, and so is it with the ledger's record of the copy's arrival moved past its reads, a push
+//	     validated on the cluster's head, which shows the DROP (fs91_test.go)
 //
-// Where the copy committed, (a) and the within-window order, the reader then reads its version through evs's read
+// Where the copy committed, (a), the within-window order and (c), the reader then reads its version through evs's read
 // route after evacuation and the drop's deletes (fs91ReadsTheCopy): the entry, citing x.txt's first version's
 // segment, and that segment's bytes, which the route withholds for anything a drop's job deleted or holds.
 //
 // The copy is a hand-built push (EvsWorld.PostPlan, ReuseFill): the client's planner writes a reuse list only from a
-// git tier's publish. Races (c) to (f) are not built: the cached head a failed cache write left and a
-// creating head write held past 26 h, a push in parts sealed after the drop (evsservice's
-// TestPushDroppedRefusesASealAfterTheDrop holds the seal's refusal on the engine), a re-upload adopting a young
-// candidate's receipt, and a git-mode push carrying a candidate's bytes.
+// git tier's publish. Not built: (c)'s copy creating its ref with its head write held at the store past 26 h, and its
+// cache entry put 11 min after its head's write, never served (evsservice's TestHeadCacheStampsTheHeadsWrittenMs holds
+// that on the engine, and fi27_test.go holds FI-27's side of it); a push in parts sealed after the drop, (d)
+// (evsservice's TestPushDroppedRefusesASealAfterTheDrop holds the seal's refusal on the engine); a re-upload adopting a
+// young candidate's receipt, (e); and a git-mode push carrying a candidate's bytes, (f).
 
 package fault
 
@@ -55,13 +65,15 @@ var fs91CopyRef = []byte("r2")
 // The label of the copy's hand-built path (evsWorldHandPath).
 const fs91CopyLabel = "copy of x.txt"
 
-// When the held copy is released, against the DROP that lists its source.
+// When the held copy is released, against the DROP that lists its source, or, for fs91ValidatedOnACachedHead, that
+// it is posted after the DROP committed and is held nowhere.
 type fs91Release int
 
 const (
 	fs91ReleaseBeforeTheDrop fs91Release = iota + 1
 	fs91ReleaseWithinTheWindow
 	fs91ReleasePastTheWindow
+	fs91ValidatedOnACachedHead
 )
 
 // See the file header.
@@ -80,6 +92,11 @@ func Fs91ReleasedBeforeTheDrop(net *Net) *Schedule {
 // See the file header.
 func Fs91ReleasedWithinTheWindow(net *Net) *Schedule {
 	return fs91Schedule(net, fs91ReleaseWithinTheWindow, nil)
+}
+
+// See the file header.
+func Fs91ValidatedOnACachedHead(net *Net) *Schedule {
+	return fs91Schedule(net, fs91ValidatedOnACachedHead, nil)
 }
 
 // The schedule of the order released, with the steps afterCommit gives, when it is not nil, run right after the check
@@ -124,17 +141,32 @@ func fs91Schedule(net *Net, released fs91Release, afterCommit func(world *EvsWor
 	release := &Step{Release: []string{sidecartest.ActorBarrierSite("evs2", evsservice.BarrierPushStep4After)}}
 	join := &Step{Actor: "writer", Join: true}
 	drop := &Step{Actor: "admin", Action: world.Drop("admin", "x.txt", true)}
-	steps = append(steps, []*Step{
-		// r2's first write passes evs2's step 4 first
-		{Actor: "writer", Action: world.WriteRef("writer", fs91CopyRef, "seed.txt", fsDropUploadContent("fs91 seed"))},
-		{Actor: "writer", Action: world.PostPlan("writer", fs91CopyRef, posted, world.ReuseFill(fs91CopyLabel, version(1))), Background: true},
-		{Actor: "evs2", Await: evsservice.BarrierPushStep4After, AwaitSkip: 1},
-	}...)
+	post := world.PostPlan("writer", fs91CopyRef, posted, world.ReuseFill(fs91CopyLabel, version(1)))
 	committed := []*Step{{Actor: "check", Action: EvsWorldExpectPosted(posted, http.StatusOK, 0)}}
 	if afterCommit != nil {
 		committed = append(committed, afterCommit(world, posted)...)
 	}
+	// r2's first write, which in (a) and (b) passes evs2's step 4 first
+	steps = append(steps, &Step{Actor: "writer", Action: world.WriteRef("writer", fs91CopyRef, "seed.txt", fsDropUploadContent("fs91 seed"))})
+	if released != fs91ValidatedOnACachedHead {
+		steps = append(steps, []*Step{
+			{Actor: "writer", Action: post, Background: true},
+			{Actor: "evs2", Await: evsservice.BarrierPushStep4After, AwaitSkip: 1},
+		}...)
+	}
 	switch released {
+	case fs91ValidatedOnACachedHead:
+		steps = append(steps, []*Step{
+			// the DROP's step 8 fails its write of main's {evsh_} entry, so the cache keeps x.txt's third version's head
+			{Fault: &FaultPlan{Op: sidecartest.FaultOpRedis, KeyPrefix: evsservice.HeadCacheKey(world.RepoId), Result: FailBeforeApply, Actor: "evs1", WritesOnly: true}},
+			drop,
+			// within §11.9's 10 min of the cached head's write, so the cache serves it, and past the 1 min age
+			// fs91_test.go reads the run with to hold the cached read to its age
+			{Advance: 2 * time.Minute},
+			// validated after the DROP committed, against the cached head below it
+			{Actor: "writer", Action: post},
+		}...)
+		steps = append(steps, committed...)
 	case fs91ReleaseBeforeTheDrop:
 		steps = append(steps, release, join)
 		steps = append(steps, committed...)

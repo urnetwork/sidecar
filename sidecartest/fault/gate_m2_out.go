@@ -7,14 +7,16 @@
 // sidecar_localstack (QD-1085), but where its T3 tests run in server's evshost, which drives the evs block on the
 // local stack's MinIO: FS-5's, which drives stock git through evsgit's world and has no builder (owner decision 548,
 // QD-995), and FS-1's, FS-2's, FS-3's, FS-4's, FS-6's, FS-7's, FS-12's, FS-57's, FS-58's, FS-62's, FS-63's and
-// FS-113's, each the convention's TestFs<n>OnT3 run through sidecart3.RunRow, and FS-10's twins by their real names,
-// TestFs10TwinOnT3 and TestFs10RollbackTwinOnT3 (QD-1081). A case run on both tiers keeps its convention T2 test, and
-// no test moves.
+// FS-113's, each the convention's TestFs<n>OnT3 run through sidecart3.RunRow, and FS-10's twin by its real name,
+// TestFs10TwinOnT3 (QD-1081). A case run on both tiers keeps its convention T2 test, and no test moves. Each case's
+// registered clauses run with it by the convention (QD-1084), on T3 where each clause names its package: FS-1's, FS-4's,
+// FS-6's, FS-10's rollback twin, FS-57's, FS-58's and FS-62's lease holder in evshost, FS-6's --now shred under a hold in
+// model, and FS-62's ACL gate in sidecart3.
 //
 // If a named test is renamed or its tags drift, its row reads missing, never pass, and server's
 // TestGateSweepsNameServerTestsDeclaredUnderTheirTags fails first. Every other case keeps the convention, so a case
 // nobody registered a builder for reads missing, whatever clause tests of it exist: no gate can tell those from a
-// schedule run under §22.8's rules.
+// schedule run under §22.8's rules, and a clause counts only beside a registered case.
 //
 // Beside the rows, the items: §22.8's rules on every row, the FI oracles the rows name, the store clock, Porcupine,
 // §22.7's privacy assertions and leak leg, the schema guard, the CROSSSLOT lints, the three ledgers (budgets.yml,
@@ -86,7 +88,7 @@ func gateM2Cases(catalog *Catalog) map[string][]*GateTest {
 		{rowId: "FS-5", packagePath: "./evshost"},
 		{rowId: "FS-6", packagePath: "./evshost"},
 		{rowId: "FS-7", packagePath: "./evshost"},
-		{rowId: "FS-10", packagePath: "./evshost", names: []string{"TestFs10TwinOnT3", "TestFs10RollbackTwinOnT3"}},
+		{rowId: "FS-10", packagePath: "./evshost", names: []string{"TestFs10TwinOnT3"}},
 		{rowId: "FS-12", packagePath: "./evshost"},
 		{rowId: "FS-57", packagePath: "./evshost"},
 		{rowId: "FS-58", packagePath: "./evshost"},
@@ -393,7 +395,7 @@ func gateM2OutItems(catalog *Catalog) []*GateItem {
 		&GateItem{
 			Item: "the ledger's named gaps in this area ran (HANDOFF §10): FS-14's RepoRevoke, OwnerConfirm and rotation covering one of two same-base removals (ACL-M2-16), and FS-17's two peers advancing independently with no conflict (PROTO-M2-02)",
 			Tests: []*GateTest{
-				{Repo: "sidecar", Package: "./sidecartest/fault", Tags: "sidecar_testhooks", Names: []string{"TestFs14AclConfigWritersRepoRevokeStands", "TestFs14AclOwnerConfirmAtEveryReader", "TestFs14AclRotationCoveringOneOfTwoRemovals", "TestFs17CatchUpRefreshesAndStaleDoesNot"}},
+				{Repo: "sidecar", Package: "./sidecartest/fault", Tags: "sidecar_testhooks", Names: []string{"TestFs14AclRepoRevoke", "TestFs14AclOwnerConfirm", "TestFs14AclTwoRemovals", "TestFs17CatchUpRefreshesAndStaleDoesNot"}},
 			},
 		},
 		&GateItem{

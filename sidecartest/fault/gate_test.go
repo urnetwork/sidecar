@@ -74,6 +74,28 @@ func TestGateFileHoldsEveryCatalogCaseAtItsGate(t *testing.T) {
 	}
 }
 
+// A case's tests at a gate no sweep names it at: the convention's, then its registered clauses'.
+func gateConventionWithClausesForTest(testCase *Case) []*GateTest {
+	return gateWithClausesForTest(testCase, gateConventionalTests(testCase))
+}
+
+// A case's own tests, as the convention or a sweep names them, then its registered clauses' (QD-1084).
+func gateWithClausesForTest(testCase *Case, tests []*GateTest) []*GateTest {
+	return append(slices.Clone(tests), gateCaseClauseTests(testCase, tests)...)
+}
+
+// The case's own tests in a row whose last entries are its clauses', as GateRows appends them: the shortest leading
+// part whose clause tests are the rest of the row. false when no part is.
+func gateRowOwnTestsForTest(testCase *Case, row *GateRow) ([]*GateTest, bool) {
+	for count := 0; count <= len(row.Tests); count += 1 {
+		own := row.Tests[:count]
+		if clauses := gateCaseClauseTests(testCase, own); reflect.DeepEqual(append(slices.Clone(own), clauses...), row.Tests) {
+			return own, true
+		}
+	}
+	return nil, false
+}
+
 // The row and case at gate, or nil.
 func gateFileRow(file *gateFileForTest, gate string, rowId string, caseName string) *GateRow {
 	for _, row := range file.Gates[gate] {
@@ -85,7 +107,8 @@ func gateFileRow(file *gateFileForTest, gate string, rowId string, caseName stri
 }
 
 // A case's tests are its row's thin tests by name, on the tiers it runs on: T2 here under the hooks, T3 in
-// server's sidecart3 on the stores, a forged case's twin on T3 too.
+// server's sidecart3 on the stores, a forged case's twin on T3 too, and after them its registered clauses' tests, FS-9's
+// unfolded listing among them.
 func TestGateFileNamesEachCasesConventionalTests(t *testing.T) {
 	data, err := GateFile(DefaultCatalog())
 	if err != nil {
@@ -140,9 +163,13 @@ func TestGateFileNamesEachCasesConventionalTests(t *testing.T) {
 				wantCount += 1
 			}
 		}
-		if len(row.Tests) != wantCount {
-			t.Errorf("%s %q runs %d tests, want %d", want.rowId, want.caseName, len(row.Tests), wantCount)
+		testCase := DefaultCatalog().Case(want.rowId, want.caseName)
+		if own, ok := gateRowOwnTestsForTest(testCase, row); !ok || len(own) != wantCount {
+			t.Errorf("%s %q runs %s, want %d tests of its own and then its clauses'", want.rowId, want.caseName, gateTestsStringForTest(row.Tests), wantCount)
 		}
+	}
+	if row := gateFileRow(file, "M2", "FS-9", ""); row == nil || !slices.ContainsFunc(row.Tests, func(test *GateTest) bool { return slices.Contains(test.Names, "TestFs9UnfoldedListing") }) {
+		t.Errorf("FS-9 at M2 does not run its unfolded listing clause: %+v", row)
 	}
 }
 
@@ -292,8 +319,9 @@ func TestGateFileNamesFs5Fs73AndFs72RollbackInEvshost(t *testing.T) {
 }
 
 // Apart from the cases their sweeps name, M2's and M10's rows follow the convention. Each case no sweep names runs
-// its conventional tests and nothing else: M2's and M10's sweeps name the cases whose tests run outside the convention
-// (gate_m2_out.go, gate_m10_out.go; QD-995, QD-1081); gate_m2_out_test.go and gate_m10_out_test.go hold their items.
+// its conventional tests and its registered clauses' and nothing else: M2's and M10's sweeps name the cases whose tests
+// run outside the convention (gate_m2_out.go, gate_m10_out.go; QD-995, QD-1081); gate_m2_out_test.go and
+// gate_m10_out_test.go hold their items.
 func TestGateM2AndM10KeepTheConventionForEveryOtherCase(t *testing.T) {
 	catalog := DefaultCatalog()
 	wantM2 := []string{}
@@ -331,7 +359,7 @@ func TestGateM2AndM10KeepTheConventionForEveryOtherCase(t *testing.T) {
 			if _, ok := sweep.Cases[testCase.String()]; ok {
 				continue
 			}
-			if conventional := gateConventionalTests(testCase); !reflect.DeepEqual(row.Tests, conventional) {
+			if conventional := gateConventionWithClausesForTest(testCase); !reflect.DeepEqual(row.Tests, conventional) {
 				t.Errorf("%s at %s runs %s, the convention %s", testCase, gate, gateTestsStringForTest(row.Tests), gateTestsStringForTest(conventional))
 			}
 		}

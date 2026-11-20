@@ -8,8 +8,6 @@ package fault
 
 import (
 	"testing"
-
-	"github.com/urnetwork/sidecar/evsservice"
 )
 
 func TestFs72Migration(t *testing.T) {
@@ -20,22 +18,22 @@ func TestFs72Rollback(t *testing.T) {
 	RunRow(t, "FS-72", "rollback", nil)
 }
 
-func TestFs72MigrationKilledAtStepSix(t *testing.T) {
-	RunClause(t, "FS-72", "migration killed after step 6", Fs72MigrationKilledAt(evsservice.BarrierPushStep6After), nil)
+func TestFs72MigrationMigrationKilledAfterStep6(t *testing.T) {
+	RunRegisteredClause(t, "FS-72", "migration killed after step 6", nil)
 }
 
-func TestFs72MigrationKilledBeforeTheRaise(t *testing.T) {
-	RunClause(t, "FS-72", "migration killed before the raise", Fs72MigrationKilledAt(evsservice.BarrierMigrateRaiseBefore), nil)
+func TestFs72MigrationMigrationKilledBeforeTheRaise(t *testing.T) {
+	RunRegisteredClause(t, "FS-72", "migration killed before the raise", nil)
 }
 
-func TestFs72MigrationKilledAfterTheRaise(t *testing.T) {
-	RunClause(t, "FS-72", "migration killed after the raise", Fs72MigrationKilledAt(evsservice.BarrierMigrateRaiseAfter), nil)
+func TestFs72MigrationMigrationKilledAfterTheRaise(t *testing.T) {
+	RunRegisteredClause(t, "FS-72", "migration killed after the raise", nil)
 }
 
-func TestFs72MigrationKilledBeforeTheHeadCas(t *testing.T) {
-	RunClause(t, "FS-72", "migration killed before the head CAS", Fs72MigrationKilledAt(evsservice.BarrierHeadCasBefore), nil)
+func TestFs72MigrationMigrationKilledBeforeTheHeadCas(t *testing.T) {
+	RunRegisteredClause(t, "FS-72", "migration killed before the head CAS", nil)
 }
 
-func TestFs72MigrationKilledAfterTheHeadCas(t *testing.T) {
-	RunClause(t, "FS-72", "migration killed after the head CAS", Fs72MigrationKilledAt(evsservice.BarrierHeadCasAfter), nil)
+func TestFs72MigrationMigrationKilledAfterTheHeadCas(t *testing.T) {
+	RunRegisteredClause(t, "FS-72", "migration killed after the head CAS", nil)
 }

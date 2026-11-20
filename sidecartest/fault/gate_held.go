@@ -22,12 +22,12 @@
 //   - A case with a registered builder keeps the convention but where a run is elsewhere: FS-66's hold case, FS-69 and
 //     FS-92 on T3 in server's model against api's real hold/ writes (ABUSE-M10-01); FS-87's index case and FS-99's card
 //     case on T3 in server's root package (RECORD-M10-06); and FS-101's r-file case by its thin test's own name.
-//   - The clauses a case's owners run as fixed schedules beside its registered one (fault.RunClause) run with it, so
-//     the case reads pass only when every clause does, as QD-1084's clause registry will have the convention name
-//     them: FS-69's clauses between the sweep's deletes and of an ERASE under the hold, with FS-6's --now shred under
-//     it, which FS-69 names; FS-92's (b) and (c) clauses with (a)'s long hold and second drop (QD-1113, QD-1127), and
-//     EVSB-M10-06's drop world's (a) and (c); each on T3 where its owner wrote it there. FS-86's card commits on T2's
-//     fakes run with its card case.
+//   - The clauses registered beside a case's builder (clauses.go) run with it by the convention, so the case reads
+//     pass only when every clause does (QD-1084): FS-69's between the sweep's deletes and of an ERASE under the hold,
+//     and FS-92's (b) and (c) with (a)'s long hold and second drop (QD-1113, QD-1127), each on T3 too where its owner
+//     wrote it there, in model. The sweep names by hand only what the registry does not hold for the case: FS-6's --now
+//     shred under a hold, a clause of FS-6 that FS-69 names, on both tiers; FS-92's second drop's listing and EVSB-M10-06's
+//     drop world's (a) and (c), which are no schedule; and FS-86's card commits on T2's fakes with its card case.
 //   - A case with no registered builder keeps the convention's entries, so it reads missing whatever tests of it exist
 //     (rule 1 of TEST.md's contract for schedule authors: a row is a registered builder, and a gate finds nothing else
 //     as one), and the tests its owners wrote of it run beside them, so a failing one reads fail: the mailbox cases on
@@ -101,8 +101,8 @@ func gateHeldCases(catalog *Catalog) map[string][]*GateTest {
 		{
 			rowId:     "FS-69",
 			t3Package: "./model",
-			t3Names:   []string{"TestFs69HoldsPlacedByApiOnT3", "TestFs69HoldBetweenSweepDeletesOnT3", "TestFs69EraseUnderTheHoldOnT3", "TestFs6NowShredUnderAHoldOnT3"},
-			also:      []*GateTest{gateFaultTests("TestFs69HoldBetweenSweepDeletes", "TestFs69EraseUnderTheHold", "TestFs6NowShredUnderAHold")},
+			t3Names:   []string{"TestFs69HoldsPlacedByApiOnT3", "TestFs6ANowShredUnderAHoldOnT3"},
+			also:      []*GateTest{gateFaultTests("TestFs6ANowShredUnderAHold")},
 		},
 		{
 			rowId:    "FS-78",
@@ -112,14 +112,10 @@ func gateHeldCases(catalog *Catalog) map[string][]*GateTest {
 		{
 			rowId:     "FS-92",
 			t3Package: "./model",
-			t3Names: []string{
-				"TestFs92HoldsPlacedByApiOnT3", "TestFs92HoldBetweenVerifyAndDeleteOnT3", "TestFs92HoldBetweenDeletesOnT3", "TestFs92DeleteInFlightOnT3",
-				"TestFs92SealedHoldAnswersEqualANoHoldTwinOnT3",
-			},
+			t3Names:   []string{"TestFs92HoldsPlacedByApiOnT3", "TestFs92SealedHoldAnswersEqualANoHoldTwinOnT3"},
 			also: []*GateTest{gateFaultTests(
-				"TestFs92HoldBetweenVerifyAndDelete", "TestFs92HoldBetweenDeletes", "TestFs92DeleteInFlight", "TestFs92HoldOutlastsTheDropTable",
-				"TestFs92SecondDropDuringTheHold", "TestFs92SecondDropListsAsItsTwin", "TestFs92SealedHoldAnswersEqualANoHoldTwin",
-				"TestFs92AHoldKeepsWhatTheDropWouldDeleteUntilItEnds", "TestFs92ASealedHoldsAnswersEqualANoHoldTwin",
+				"TestFs92SecondDropListsAsItsTwin", "TestFs92SealedHoldAnswersEqualANoHoldTwin", "TestFs92AHoldKeepsWhatTheDropWouldDeleteUntilItEnds",
+				"TestFs92ASealedHoldsAnswersEqualANoHoldTwin",
 			)},
 		},
 
