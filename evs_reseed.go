@@ -131,7 +131,8 @@ type EvsReseedPlaced struct {
 	// one: for a repo re-seeded as deleted, created keying, which activate and DELETE moved through active to deleted
 	// (owner decision 602; QD-1064); for a restored repo, created deleted, evs's projection trailing its RepoRestore,
 	// which restore moved to active (owner decision 618; QD-1077). evs answers a restore of a repo/ already active 200
-	// as well, so a restored repo's step run again after an earlier run left repo/ active says so too.
+	// as well, so a restored repo's step that finds repo/ active, an earlier run or a restore since having left it
+	// so, says so too.
 	Mended bool
 	// Another admin's device placed the repo first, so this one re-formed and activated nothing.
 	PlacedByAnother bool

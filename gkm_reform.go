@@ -17,11 +17,10 @@
 //	           5  unless asked with Reseed, which takes the form and the ladder and nothing else, all gkm takes while
 //	              repo/ reads keying or deleted, as §19.10's groups step asks first for every repo it places, a live
 //	              repo's second call coming once activate has taken repo/ to active and a deleted one's once it is
-//	              restored (owner decision 618): rotates to g+1, the first generation that names the new group, which
-//	              stages every delivery as any
-//	              rotation does, ReaderWraps, DelegationWraps and each reading member's RecoveryWrap, so a member
-//	              whose devices are lost keeps its recovery code's access; then the pending engine adds every
-//	              member device that has a KeyPackage (KF2)
+//	              restored (owner decision 618): rotates to g+1, the first generation that names the new group,
+//	              which stages every delivery as any rotation does, ReaderWraps, DelegationWraps and each reading
+//	              member's RecoveryWrap, so a member whose devices are lost keeps its recovery code's access; then
+//	              the pending engine adds every member device that has a KeyPackage (KF2)
 //	           A kill at any step resumes from the keychain's record with the same bytes: every write at gkm is an
 //	           If-None-Match create that equal bytes resume.
 //	member     at each sync, and at a Welcome to a group of the repo other than its own, a device whose pinned group
