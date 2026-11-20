@@ -49,30 +49,42 @@
 //	          its first object and the walk's segment uploads, which come before a version's first reseed call, meet
 //	          the deleted repo/ that §11.12's re-seed exception takes them into (QD-977); one past restoring answers
 //	          409 SHREDDING, and the step ends with it. 409 REPO_PLACED says another admin's device placed the repo:
-//	          that device re-forms it and activates or deletes it, and this one goes on to its walk
-//	group     the re-form (GkmGroupClient.ReformGroup), for a repo re-seeded as deleted its form and ladder alone,
-//	          which is all gkm takes while repo/ reads deleted
-//	activate  POST .../activate, which takes a live repo from keying to active, and is sent for a repo re-seeded as
-//	          deleted too, whose expected answer is then 409 REPO_DELETED, the one refused call the honest order
-//	          costs: repo/ stands deleted from its creation, nothing activates, and it stays deleted until its
-//	          RepoRestore, after which a second ReformGroup finishes its group. A 200 there says the place created
-//	          repo/ keying, as it does where the reseed gate was off at the place or evs's projection did not yet hold
-//	          the RepoDelete this device's state shows (one filed after the log resumed, within §8.9's 5 s), and that
-//	          repo/ is now active, which delete mends (owner decision 602; QD-1064)
-//	delete    for that repo alone, DELETE /evs/v1/repos/<id>, the route with no statement of its own, which moves
-//	          active to deleted{deletion_id, its entry's time, signer} under the RepoDelete evs's projection holds and
-//	          answers a repo/ already deleted under it 200; while the projection trails this device's state, its 409
-//	          STATEMENT_MISSING is asked again after ReseedDeleteWait, at most ReseedDeleteWaitCount times, and past
-//	          them is the step's error with repo/ left active, which the step run again moves on, as taskworker's
-//	          reconciler does once the projection holds the RepoDelete. Where the gate's state holds the RepoDelete,
-//	          it gives the repo's admin admin alone (QD-880), so repo/ reading active between the two calls opens no
-//	          read or write there
+//	          that device re-forms it and activates, restores or deletes it, and this one goes on to its walk
+//	restore   for a repo this device's state shows restored, a RepoDelete with a RepoRestore of it, POST .../restore,
+//	          the route alone with no statement of its own, whose expected answer is 409 REPO_KEYING, the one refused
+//	          call the honest order costs: evs's projection held the RepoRestore, so the place created repo/ keying. A
+//	          200 says the place created repo/ deleted, evs's projection not yet holding the RepoRestore this device's
+//	          state shows (one filed after the log resumed, within §8.9's 5 s), and that repo/ is now active under
+//	          the projected RepoRestore; while the projection trails, its 409 STATEMENT_MISSING is waited out as
+//	          delete's is, and past the waits is the step's error with repo/ left deleted, which the step run again
+//	          moves on, as taskworker's reconciler does at its daily walk (owner decision 618; QD-1077)
+//	group     the re-form's first call (GkmGroupClient.ReformGroup with Reseed): its form, epoch 0 and the ladder
+//	          alone, which is all gkm takes while repo/ reads keying or deleted (§10.6's checks row)
+//	activate  POST .../activate, which takes a live repo from keying to active once it finds the GroupForm and gen/1,
+//	          and is sent for a repo re-seeded as deleted too, whose expected answer is then 409 REPO_DELETED, the one
+//	          refused call the honest order costs: repo/ stands deleted from its creation, nothing activates, and it
+//	          stays deleted until its RepoRestore, after which a second ReformGroup finishes its group. A 200 there
+//	          says the place created repo/ keying, as it does where the reseed gate was off at the place or evs's
+//	          projection did not yet hold the RepoDelete this device's state shows (one filed after the log resumed,
+//	          within §8.9's 5 s), and that repo/ is now active, which delete mends (owner decision 602; QD-1064)
+//	rotate    for a live repo, now active, the re-form's second call (ReformGroup without Reseed), which resumes from
+//	          the keychain's record and rotates to g+1 with its deliveries and then adds the members' devices, the
+//	          generation claim and the Adds' commits being gkm writes it takes only for an active repo/, so the
+//	          repo's members return a little after repo/ goes active (§10.8's after row; owner decision 618; QD-1076)
+//	delete    for a repo re-seeded as deleted that activate took to active, DELETE /evs/v1/repos/<id>, the route with
+//	          no statement of its own, which moves active to deleted{deletion_id, its entry's time, signer} under the
+//	          RepoDelete evs's projection holds and answers a repo/ already deleted under it 200; while the projection
+//	          trails this device's state, its 409 STATEMENT_MISSING is asked again after ReseedDeleteWait, at most
+//	          ReseedDeleteWaitCount times, and past them is the step's error with repo/ left active, which the step
+//	          run again moves on, as taskworker's reconciler does once the projection holds the RepoDelete. Where the
+//	          gate's state holds the RepoDelete, it gives the repo's admin admin alone (QD-880), so repo/ reading
+//	          active between the two calls opens no read or write there
 //
-// Which of the two a repo is, the step reads from this device's verified config state, the newest RepoDelete of the
-// repo's row with no RepoRestore of it, as Restore reads it; whether the deletion is still inside the restore window
-// is evs's to judge, at place. A repo whose RepoDelete carries now is never placed. A repo re-seeded as deleted takes
-// only §11.12's own transitions, keying to active by activate and active to deleted by DELETE, and no statement is
-// filed for it.
+// Which of the three a repo is, live, restored or deleted, the step reads from this device's verified config state,
+// the newest RepoDelete of the repo's row and whether a RepoRestore of it stands, as Restore reads it; whether the
+// deletion is still inside the restore window is evs's to judge, at place. A repo whose RepoDelete carries now is
+// never placed. Every repo takes only §11.12's own transitions, keying to active by activate, deleted to active by
+// restore and active to deleted by DELETE, and the step files no statement.
 
 package sidecar
 
@@ -103,9 +115,11 @@ var (
 
 // What a repo's groups step is asked.
 type EvsReseedPlaceArgs struct {
-	// Re-forms the repo's group once the repo is placed: GkmGroupClient.ReformGroup, asked with Reseed for a repo
-	// re-seeded as deleted. Nil re-forms through the client's key client where that re-forms groups, and where it
-	// does not the step stops after the place with ErrGkmUnavailable, activating nothing.
+	// Re-forms the repo's group once the repo is placed: GkmGroupClient.ReformGroup, asked first with Reseed, the
+	// form, epoch 0 and the ladder alone, and for a live repo asked again without it once activate has taken repo/ to
+	// active (owner decision 618). Nil re-forms through the client's key client where that re-forms groups, and where
+	// it does not the step stops after the place, and a restored repo's restore, with ErrGkmUnavailable, activating
+	// nothing.
 	ReformGroup func(ctx context.Context, args *GkmReformArgs) (Id, error)
 }
 
@@ -113,8 +127,12 @@ type EvsReseedPlaceArgs struct {
 type EvsReseedPlaced struct {
 	// The repo is re-seeded as deleted: placed, its group's form and ladder returned, and left with repo/ deleted.
 	Deleted bool
-	// For a repo re-seeded as deleted, the place created repo/ keying, and activate and DELETE moved it through active
-	// to deleted (owner decision 602; QD-1064).
+	// The place created repo/ in another state than this device's verified state shows, and the step moved it to that
+	// one: for a repo re-seeded as deleted, created keying, which activate and DELETE moved through active to deleted
+	// (owner decision 602; QD-1064); for a restored repo, created deleted, evs's projection trailing its RepoRestore,
+	// which restore moved to active (owner decision 618; QD-1077). evs answers a restore of a repo/ already active 200
+	// as well, so a restored repo's step that finds repo/ active, an earlier run or a restore since having left it
+	// so, says so too.
 	Mended bool
 	// Another admin's device placed the repo first, so this one re-formed and activated nothing.
 	PlacedByAnother bool
@@ -182,13 +200,16 @@ func (self *EvsReseedResult) Whole() bool {
 	return len(self.Slots) == 0
 }
 
-// The repo's groups step, before its walk: placed afresh, its group re-formed, and activated, or for a repo re-seeded
-// as deleted left with repo/ deleted, through activate and DELETE where the place created it keying. See the file
-// header. ErrEvsNoConfig with no verified state; ErrEvsReseedNotRestorable, with nothing sent, for a repo the state
-// does not hold or whose RepoDelete carries now. evs's refusal of the place, 409 SHREDDING for a repo past its restore
-// window among them, is the error, as is a DELETE still refused past its waits. A step cut short runs again whole: the
-// place answers its creator's retry as the first did, a re-form under way resumes from the keychain's record, and
-// activate answers a repo/ already active 200 and one already deleted 409 REPO_DELETED.
+// The repo's groups step, before its walk: placed afresh, its group's form and ladder re-formed, and activated, after
+// which its group's rotation and Adds follow, or for a repo re-seeded as deleted left with repo/ deleted, through
+// activate and DELETE where the place created it keying; a restored repo whose place created repo/ deleted is first
+// restored to active. See the file header. ErrEvsNoConfig with no verified state; ErrEvsReseedNotRestorable, with
+// nothing sent, for a repo the state does not hold or whose RepoDelete carries now. evs's refusal of the place, 409
+// SHREDDING for a repo past its restore window among them, is the error, as is a restore or a DELETE still refused
+// past its waits, and an activate refused for a live repo, after which nothing rotates. A step cut short runs again
+// whole: the place answers its creator's retry as the first did, restore answers a repo/ already active 200, a re-form
+// under way resumes from the keychain's record, and activate answers a repo/ already active 200 and one already
+// deleted 409 REPO_DELETED.
 func (self *EvsRepo) ReseedPlace(ctx context.Context, args *EvsReseedPlaceArgs) (*EvsReseedPlaced, error) {
 	if args == nil {
 		args = &EvsReseedPlaceArgs{}
@@ -207,6 +228,7 @@ func (self *EvsRepo) ReseedPlace(ctx context.Context, args *EvsReseedPlaceArgs) 
 	}
 	deletion := repo.GetDeletion()
 	deleted := deletion != nil && deletion.GetDeletedAt() != 0 && deletion.GetRestoredAt() == 0
+	restored := deletion != nil && deletion.GetDeletedAt() != 0 && deletion.GetRestoredAt() != 0
 	if deleted && deletion.GetNow() {
 		// evs's projection may trail this device's state: never placed on the chance it still reads the repo live
 		return nil, fmt.Errorf("%w: its RepoDelete carries now", ErrEvsReseedNotRestorable)
@@ -219,6 +241,24 @@ func (self *EvsRepo) ReseedPlace(ctx context.Context, args *EvsReseedPlaceArgs) 
 		}
 		return nil, err
 	}
+	if restored {
+		err := self.callReseedMend(ctx, &evsCall{
+			route:  "POST /evs/v1/repos/{repo_id}/restore",
+			method: http.MethodPost,
+			path:   "/evs/v1/repos/" + evsUrlId(self.repoId) + "/restore",
+			repoId: self.repoId,
+			role:   evsScopeAdmin,
+		})
+		switch {
+		case IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_REPO_KEYING):
+			// the honest order: the place created repo/ keying, and the refused call restored nothing
+		case err != nil:
+			return placed, fmt.Errorf("evs: the restore that takes a repo/ placed deleted to active: %w", err)
+		default:
+			// repo/ stood deleted, evs's projection having trailed the RepoRestore at the place, and is now active
+			placed.Mended = true
+		}
+	}
 	reformGroup := args.ReformGroup
 	if reformGroup == nil {
 		reformer, ok := client.args.Gkm.(evsReseedGroupReformer)
@@ -227,15 +267,25 @@ func (self *EvsRepo) ReseedPlace(ctx context.Context, args *EvsReseedPlaceArgs) 
 		}
 		reformGroup = reformer.ReformGroup
 	}
-	groupId, err := reformGroup(ctx, &GkmReformArgs{RepoId: self.repoId, Reseed: deleted})
+	// the form, epoch 0 and the ladder alone, all gkm takes while repo/ reads keying or deleted
+	groupId, err := reformGroup(ctx, &GkmReformArgs{RepoId: self.repoId, Reseed: true})
 	if err != nil {
 		return placed, fmt.Errorf("evs: the repo's group: %w", err)
 	}
 	placed.GroupId = groupId
 	err = self.callLifecycle(ctx, evsActivateCall(self.repoId))
 	switch {
-	case !deleted:
+	case !deleted && err != nil:
+		// repo/ is not active, so gkm would refuse the rotation's claim: nothing rotates
 		return placed, err
+	case !deleted:
+		// repo/ is active: the re-form resumes from the keychain's record with its rotation and its Adds
+		groupId, err := reformGroup(ctx, &GkmReformArgs{RepoId: self.repoId})
+		if err != nil {
+			return placed, fmt.Errorf("evs: the repo's group, once active: %w", err)
+		}
+		placed.GroupId = groupId
+		return placed, nil
 	case IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_REPO_DELETED):
 		// the honest order: repo/ stands deleted from its creation, and the refused call activated nothing
 		return placed, nil
@@ -243,31 +293,38 @@ func (self *EvsRepo) ReseedPlace(ctx context.Context, args *EvsReseedPlaceArgs) 
 		return placed, err
 	}
 	// repo/ stood keying and is now active: the projected RepoDelete takes it to deleted, the route alone
-	deleteCall := &evsCall{
+	err = self.callReseedMend(ctx, &evsCall{
 		route:  "DELETE /evs/v1/repos/{repo_id}",
 		method: http.MethodDelete,
 		path:   "/evs/v1/repos/" + evsUrlId(self.repoId),
 		repoId: self.repoId,
 		role:   evsScopeAdmin,
-		retry:  true,
-	}
-	for waits := 0; ; waits += 1 {
-		err = client.http.callMessage(ctx, deleteCall, nil)
-		if err == nil {
-			break
-		}
-		if !IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_STATEMENT_MISSING) || client.settings.ReseedDeleteWaitCount <= waits {
-			return placed, fmt.Errorf("evs: the DELETE that takes the activated repo/ to deleted: %w", err)
-		}
-		// evs's projection trails this device's state
-		select {
-		case <-ctx.Done():
-			return placed, ctx.Err()
-		case <-client.clock.After(client.settings.ReseedDeleteWait):
-		}
+	})
+	if err != nil {
+		return placed, fmt.Errorf("evs: the DELETE that takes the activated repo/ to deleted: %w", err)
 	}
 	placed.Mended = true
 	return placed, nil
+}
+
+// One of the groups step's mends (owner decisions 602 and 618), a lifecycle route sent alone, with no statement of its
+// own: its 409 STATEMENT_MISSING, evs's projection trailing the statement this device's state shows, is asked again
+// after ReseedDeleteWait, at most ReseedDeleteWaitCount times. Any other answer, and that refusal past the waits, is
+// the call's; a 429 or 503 that refuses nothing goes again as every lifecycle call's does.
+func (self *EvsRepo) callReseedMend(ctx context.Context, call *evsCall) error {
+	client := self.client
+	call.retry = true
+	for waits := 0; ; waits += 1 {
+		err := client.http.callMessage(ctx, call, nil)
+		if !IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_STATEMENT_MISSING) || client.settings.ReseedDeleteWaitCount <= waits {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-client.clock.After(client.settings.ReseedDeleteWait):
+		}
+	}
 }
 
 // One walk.

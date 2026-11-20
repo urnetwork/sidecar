@@ -136,6 +136,52 @@ func TestEraseBelowAdminIsRefusedAtArrival(t *testing.T) {
 	}
 }
 
+// QD-1132's completion ERASE, failing closed until question erasure-completion-erase-evs-cannot-read-complete is
+// answered: evs cannot read the sealed note that says which erasure an ERASE is of and whether it is complete, so it
+// cannot tell a completion from a duplicate. An ERASE naming only the key an earlier committed ERASE destroyed is
+// refused 409 NOTHING_TO_ERASE, the first such as well as a second, and recorded, so its retry is answered from the
+// head's records; so is one naming a key no ERASE destroyed; one below admin gets 403 SCOPE at arrival. None commits,
+// and the slot keeps its other key.
+func TestEraseRefusesACompletionUntilEvsCanTellOne(t *testing.T) {
+	fixture := newPushFixture(t, nil)
+	fixture.auth.grant(fixture.check.signerId, fixture.check.repoId, sidecar.AclEvsAdmin)
+	slotId := fixture.commitWithSlot("a", 2, "a")
+	fixture.requireCommitted(fixture.slotsDelete(fixture.erasePlan(&sidecar.EvsErasedKey{SlotId: slotId, KeyIndex: 0}), "admin"), 1)
+	refusals := []struct {
+		what   string
+		key    *sidecar.EvsErasedKey
+		roles  []string
+		status int
+		code   protocol.EvsRefusalCode
+	}{
+		{what: "a completion naming the destroyed key", key: &sidecar.EvsErasedKey{SlotId: slotId, KeyIndex: 0}, roles: []string{"admin"}, status: http.StatusConflict, code: protocol.EvsRefusalCode_EVS_REFUSAL_NOTHING_TO_ERASE},
+		{what: "a second completion", key: &sidecar.EvsErasedKey{SlotId: slotId, KeyIndex: 0}, roles: []string{"admin"}, status: http.StatusConflict, code: protocol.EvsRefusalCode_EVS_REFUSAL_NOTHING_TO_ERASE},
+		{what: "a completion naming a key no ERASE destroyed", key: &sidecar.EvsErasedKey{SlotId: slotId, KeyIndex: 5}, roles: []string{"admin"}, status: http.StatusConflict, code: protocol.EvsRefusalCode_EVS_REFUSAL_NOTHING_TO_ERASE},
+		{what: "a completion below admin", key: &sidecar.EvsErasedKey{SlotId: slotId, KeyIndex: 0}, status: http.StatusForbidden, code: protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE},
+	}
+	for _, refusal := range refusals {
+		fixture.clock.Advance(fixture.settings.RefusalFenceInterval)
+		plan := fixture.erasePlan(refusal.key)
+		recorder := fixture.slotsDelete(plan, refusal.roles...)
+		if recorder.Code != refusal.status || refusalOf(t, recorder).GetCode() != refusal.code {
+			t.Fatalf("%s: status %d, %s", refusal.what, recorder.Code, refusalOf(t, recorder).GetCode())
+		}
+		if refusal.code != protocol.EvsRefusalCode_EVS_REFUSAL_NOTHING_TO_ERASE {
+			continue
+		}
+		if retry := fixture.slotsDelete(plan, refusal.roles...); retry.Code != refusal.status || !refusalOf(t, retry).GetRecorded() {
+			t.Fatalf("%s: its retry was not answered from the head's records: status %d", refusal.what, retry.Code)
+		}
+	}
+	head, err := fixture.engine.heads.ReadCluster(fixture.ctx, fixture.cluster, fixture.check.repoId, sidecar.EvsErasureRefId(fixture.check.repoId))
+	if err != nil || head.Version() != 1 {
+		t.Fatalf("the erasure ref past its one ERASE: %v", err)
+	}
+	if indexes := fixture.slotIndexes(slotId); len(indexes) != 1 || indexes[0] != 1 {
+		t.Fatalf("slot keys %v", indexes)
+	}
+}
+
 // A rewrite that cannot finish answers 503 unknown and queues evs.erasure_finish; FinishErasures then finishes it.
 func TestEraseRewriteFinishedByTheReconciler(t *testing.T) {
 	fixture := newPushFixture(t, nil)

@@ -614,6 +614,22 @@ func (self *gkmReconcilerWorld) networkWake(networkId sidecar.Id) time.Time {
 	return time.Time{}
 }
 
+// Deletions of a network's key objects the reconciler has handed its deleter and the deleter has not finished: tracked
+// ends queued, and objects a sweep handed over, which the pass marks before it ends. The deleter works on its own
+// goroutine, so a check that no pass deleted an object reads this as none beside the count and the object: a deletion
+// handed over shows here until the object is gone, and in the count after.
+func (self *gkmReconcilerWorld) handedDelegationKeyDeletes(networkId sidecar.Id) int {
+	self.reconciler.stateLock.Lock()
+	defer self.reconciler.stateLock.Unlock()
+	handed := len(self.reconciler.delegationKeySweeps[networkId])
+	for _, end := range self.reconciler.delegationKeyEnds[networkId] {
+		if end.queued {
+			handed += 1
+		}
+	}
+	return handed
+}
+
 // A BlobStore over another that records the prefix of every LIST its clusters serve, so a test sees what a process
 // listed. Safe for concurrent use.
 type listRecordingBlobs struct {
@@ -746,8 +762,10 @@ func TestGkmReconcilerDeletesAForwardingKeyObjectADayAfterItsEnd(t *testing.T) {
 	if fixture.delegationKeyObject(revoked.delegationId) != nil {
 		t.Errorf("a revoked Delegation's object a day and an hour after its end stands")
 	}
-	if fixture.delegationKeyObject(superseded.delegationId) == nil || fixture.delegationKeyObject(live.delegationId) == nil {
-		t.Fatalf("an object deleted before its day")
+	handed := world.handedDelegationKeyDeletes(world.networkId)
+	finished, _ := world.reconciler.DelegationKeyDeletes()
+	if handed != 0 || finished != 1 || fixture.delegationKeyObject(superseded.delegationId) == nil || fixture.delegationKeyObject(live.delegationId) == nil {
+		t.Fatalf("an object deleted before its day: %d deletions handed over and %d finished", handed, finished)
 	}
 	// the superseded one's day ends in an hour: the network's wake deletes it then
 	world.advance(time.Hour)
@@ -850,6 +868,9 @@ func TestGkmReconcilerDeletesAForwardingKeyObjectWhoseRowLeftBeforeItsDay(t *tes
 	})
 	world.advanceTo(secondSweep)
 	world.awaitSweep(world.networkId, secondSweep)
+	if handed := world.handedDelegationKeyDeletes(world.networkId); handed != 0 {
+		t.Fatalf("the sweep handed the deleter %d deletions before the object's day ended", handed)
+	}
 	if finished, _ := world.reconciler.DelegationKeyDeletes(); finished != 0 {
 		t.Fatalf("%d deletions before the object's day ended", finished)
 	}
@@ -944,6 +965,9 @@ func TestGkmReconcilerAfterARestartSweepsAnObjectWhoseRowLeft(t *testing.T) {
 	if fixture.delegationKeyObject(left.delegationId) != nil {
 		t.Errorf("the object whose row left while no process ran stands after the restart's sweep")
 	}
+	if handed := world.handedDelegationKeyDeletes(world.networkId); handed != 0 {
+		t.Fatalf("the restart's first pass handed over %d deletions beside the one", handed)
+	}
 	if fixture.delegationKeyObject(ended.delegationId) == nil {
 		t.Fatalf("the ended row's object went before its day, after a restart")
 	}
@@ -964,6 +988,9 @@ func TestGkmReconcilerAfterARestartSweepsAnObjectWhoseRowLeft(t *testing.T) {
 	world.awaitDelegationKeyDeletes(2)
 	if fixture.networkDelegationKeyObject(networkB, leftB.delegationId) != nil {
 		t.Errorf("the second network's object whose row left stands after its sweep")
+	}
+	if handed := world.handedDelegationKeyDeletes(networkB); handed != 0 {
+		t.Errorf("the second network's sweep handed over %d deletions beside the one", handed)
 	}
 	if fixture.networkDelegationKeyObject(networkB, liveB.delegationId) == nil {
 		t.Errorf("the second network's live Delegation's object was deleted")
@@ -993,6 +1020,11 @@ func TestGkmReconcilerAfterARestartSweepsAnObjectWhoseRowLeft(t *testing.T) {
 	world.advance(2 * settings.DelegationKeyRetention)
 	world.awaitSweep(world.networkId, fixture.clock.Now())
 	world.awaitSweep(networkB, fixture.clock.Now())
+	for _, networkId := range []sidecar.Id{world.networkId, networkB, networkC} {
+		if handed := world.handedDelegationKeyDeletes(networkId); handed != 0 {
+			t.Errorf("%d deletions handed over at a later pass", handed)
+		}
+	}
 	if fixture.networkDelegationKeyObject(networkC, liveC.delegationId) == nil || fixture.networkDelegationKeyObject(networkC, leftC.delegationId) == nil {
 		t.Errorf("an object of a network this process never read was deleted")
 	}
@@ -1149,6 +1181,9 @@ func TestGkmReconcilerSweepKeepsAnObjectItsStateMayNotHaveReached(t *testing.T) 
 	world.awaitSweep(world.networkId, firstSweep.Add(settings.DelegationKeySweepInterval))
 	world.advance(settings.DelegationKeySweepInterval)
 	world.awaitSweep(world.networkId, firstSweep.Add(2*settings.DelegationKeySweepInterval))
+	if handed := world.handedDelegationKeyDeletes(world.networkId); handed != 0 {
+		t.Errorf("%d deletions handed over at the later sweeps", handed)
+	}
 	if fixture.delegationKeyObject(fresh.delegationId) == nil {
 		t.Errorf("a live Delegation's object went once the state named it")
 	}
@@ -1184,8 +1219,12 @@ func TestGkmReconcilerSweepsANetworkAgainEachInterval(t *testing.T) {
 	world.awaitState(laterView, func() {
 		world.setWithTimes(laterView, map[uint64]time.Time{laterView.Pin().GetVersion(): fixture.clock.Now()})
 	})
-	if fixture.delegationKeyObject(stray.delegationId) == nil {
-		t.Fatalf("an object went at a state's pass before the sweep's interval had run")
+	// the state's pass has ended: a sweep it ran would have handed the object over by then
+	world.awaitIdle()
+	handed := world.handedDelegationKeyDeletes(world.networkId)
+	finished, _ := world.reconciler.DelegationKeyDeletes()
+	if handed != 0 || finished != 0 || fixture.delegationKeyObject(stray.delegationId) == nil {
+		t.Fatalf("an object went at a state's pass before the sweep's interval had run: %d deletions handed over and %d finished", handed, finished)
 	}
 
 	// a hold covers the network when the interval's sweep comes: the deleter keeps the object
