@@ -332,3 +332,97 @@ func TestInstallHarnessReloadsRunningDaemon(t *testing.T) {
 		t.Errorf("the install's note:\n%s", tty.written.String())
 	}
 }
+
+// A daemon whose status.settings answers networks, for an install to read a Team's record_required from.
+func startTestSettingsDaemon(t *testing.T, networks ...*urNetworkSettings) string {
+	t.Helper()
+	daemon := startTestUrDaemon(t, shortTestDirectory(t), func(daemon *sidecar.Daemon) {
+		err := daemon.RegisterMethod(&sidecar.DaemonMethod{
+			Name: urMethodStatusSettings,
+			Handler: func(ctx context.Context, call *sidecar.DaemonCall) (any, error) {
+				return &urStatusSettingsReply{Networks: networks}, nil
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+	return daemon.socketPath
+}
+
+// Whether the install under home wrote Cursor's fail-closed form, and its seal under state names it.
+func testInstallHarnessFailClosed(t *testing.T, home string, state string) bool {
+	t.Helper()
+	hooks, err := os.ReadFile(filepath.Join(home, ".cursor", "hooks.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seals, _, err := mcp.ReadHarnessSeals(state, sidecar.DefaultSidecarSettings().Ingest.HarnessConfigByteCount)
+	if err != nil || len(seals) != 1 {
+		t.Fatalf("the seals: %+v %v", seals, err)
+	}
+	written := strings.Contains(string(hooks), `"failClosed": true`) && strings.Contains(string(hooks), mcp.HarnessHookRequiredFlag)
+	if written != seals[0].RecordRequired {
+		t.Fatalf("the hooks are fail-closed %v and the seal says %v", written, seals[0].RecordRequired)
+	}
+	return written
+}
+
+// While a network the running daemon hosts sets record_required (owner decision 305), the install writes the
+// fail-closed form with no flag, and says which network asks; while none does, it writes the fail-open form; and a
+// network whose head the daemon cannot open is named as not known.
+func TestInstallHarnessWritesTheFailClosedFormATeamRequires(t *testing.T) {
+	team, other := sidecar.NewId(), sidecar.NewId()
+	home, state := t.TempDir(), t.TempDir()
+	cli, tty := newTestInstallHarnessCli(t, home, state, "y")
+	socket := startTestSettingsDaemon(t, &urNetworkSettings{NetworkId: team, Team: true, RecordCost: true, RecordRequired: true}, &urNetworkSettings{NetworkId: other, Team: true, RecordCost: true})
+	cli.socketPath = func(instance string) (string, error) { return socket, nil }
+	if code := cli.main(context.Background(), []string{"ur", "install-harness", "cursor"}); code != urExitOk {
+		t.Fatalf("exit %d:\n%s", code, tty.written.String())
+	}
+	if !testInstallHarnessFailClosed(t, home, state) {
+		t.Fatal("a Team's record_required wrote the fail-open form")
+	}
+	log := tty.written.String()
+	if !strings.Contains(log, "network "+team.String()+" requires fail-closed hooks (record_required)") || strings.Index(log, "requires fail-closed") > strings.Index(log, "write these changes") {
+		t.Errorf("the install's lines:\n%s", log)
+	}
+
+	home, state = t.TempDir(), t.TempDir()
+	cli, tty = newTestInstallHarnessCli(t, home, state, "y")
+	socket = startTestSettingsDaemon(t, &urNetworkSettings{NetworkId: other, Team: true, RecordCost: true}, &urNetworkSettings{NetworkId: team, Team: true, Unknown: true})
+	cli.socketPath = func(instance string) (string, error) { return socket, nil }
+	if code := cli.main(context.Background(), []string{"ur", "install-harness", "cursor"}); code != urExitOk {
+		t.Fatalf("exit %d:\n%s", code, tty.written.String())
+	}
+	if testInstallHarnessFailClosed(t, home, state) {
+		t.Fatal("no network requiring wrote the fail-closed form")
+	}
+	if !strings.Contains(tty.written.String(), "network "+team.String()+": record_required is not known here") {
+		t.Errorf("the install's lines:\n%s", tty.written.String())
+	}
+}
+
+// With no daemon answering, the install reads no Team's record_required: the local flag alone writes the fail-closed
+// form, as a personal network keeps it, and the install says what was not read.
+func TestInstallHarnessWithNoDaemonKeepsTheLocalFlag(t *testing.T) {
+	home, state := t.TempDir(), t.TempDir()
+	cli, tty := newTestInstallHarnessCli(t, home, state, "y")
+	if code := cli.main(context.Background(), []string{"ur", "install-harness", "cursor"}); code != urExitOk {
+		t.Fatalf("exit %d:\n%s", code, tty.written.String())
+	}
+	if testInstallHarnessFailClosed(t, home, state) {
+		t.Fatal("no daemon and no flag wrote the fail-closed form")
+	}
+	if !strings.Contains(tty.written.String(), "so no Team's record_required was read") {
+		t.Errorf("the install's lines:\n%s", tty.written.String())
+	}
+	home, state = t.TempDir(), t.TempDir()
+	cli, tty = newTestInstallHarnessCli(t, home, state, "y")
+	if code := cli.main(context.Background(), []string{"ur", "install-harness", "cursor", "--record-required"}); code != urExitOk {
+		t.Fatalf("exit %d:\n%s", code, tty.written.String())
+	}
+	if !testInstallHarnessFailClosed(t, home, state) {
+		t.Fatal("--record-required wrote the fail-open form")
+	}
+}

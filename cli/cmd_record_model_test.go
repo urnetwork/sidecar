@@ -165,3 +165,37 @@ func TestRecordCostPrintsTheRowsInTheirOrder(t *testing.T) {
 		t.Errorf("--format=xml: exit %d", code)
 	}
 }
+
+// --by client needs --map: with none, or one naming no project, it is refused before the daemon is asked; with one
+// the daemon is asked by client with the map's clients (§7.9's grouping beside RECORD.md section 13.1's --by project
+// --map).
+func TestRecordCostByClientNeedsTheMap(t *testing.T) {
+	target := &testUrRecordModelTarget{}
+	daemon := startTestControlDaemon(t, target, nil)
+	cli, _, stderr := newTestUrCli(daemon.socketPath)
+	directory := t.TempDir()
+	emptyPath, mapPath := filepath.Join(directory, "empty.csv"), filepath.Join(directory, "clients.csv")
+	if err := os.WriteFile(emptyPath, []byte("# project,client\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(mapPath, []byte("alpha,acme\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"ur", "record", "cost", "--by=client"},
+		{"ur", "record", "cost", "--by=client", "--map=" + emptyPath},
+	} {
+		if code := cli.main(context.Background(), args); code == urExitOk || len(target.costs) != 0 {
+			t.Fatalf("%v: exit %d, %d reports asked", args, code, len(target.costs))
+		}
+	}
+	if !strings.Contains(stderr.String(), "--by client needs --map") {
+		t.Errorf("the refusal: %s", stderr.String())
+	}
+	if code := cli.main(context.Background(), []string{"ur", "record", "cost", "--by=client", "--map=" + mapPath}); code != urExitOk || len(target.costs) != 1 {
+		t.Fatalf("--by client with a map: exit %d: %s", code, stderr.String())
+	}
+	if asked := target.costs[0]; asked.By != "client" || len(asked.Clients) != 1 || asked.Clients["alpha"] != "acme" {
+		t.Errorf("the report's params: %+v", asked)
+	}
+}

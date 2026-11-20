@@ -14,12 +14,17 @@
 //	           else touched, so a person's settings stay byte for byte; a file already holding them is left as it is
 //	hooks      fail open by default (D-MCP-5): ur hook exits 0 whatever happens, and a lapse taints the run instead
 //	           (hook_coverage.go). The fail-closed form, which a Team's record_required asks for (plan-MCP-record-
-//	           required; MCP-M6-04), puts Claude Code's onFailure block and Cursor's failClosed on every ur hook entry
-//	           and --required on every hook command, so ur hook exits 2 when the daemon cannot take an event and the
-//	           harness stops; Codex documents no fail-closed setting, so there --required's exit 2 blocks a
-//	           PreToolUse only while the hook runs. The form is a template input, so the seal holds it and a fail-open
-//	           entry where the seal names the fail-closed one reads as a changed config, which taints. Until a reader
-//	           of ServiceSettings.record_required (config.proto field 9) lands, a local flag asks for it
+//	           required; MCP-M6-04; owner decision 305), puts Claude Code's onFailure block and Cursor's failClosed on
+//	           every ur hook entry and --required on every hook command, so ur hook exits 2 when the daemon cannot
+//	           take an event and the harness stops; Codex documents no fail-closed setting, so there --required's exit
+//	           2 blocks a PreToolUse only while the hook runs. The form is a template input, so the seal holds it and a
+//	           fail-open entry where the seal names the fail-closed one reads as a changed config, which taints. ur
+//	           install-harness writes it while a network its running daemon hosts sets ServiceSettings.record_required
+//	           (config.proto field 9), read from that daemon's config head, or where its local flag asks, which a
+//	           personal network keeps; and while a hosted network sets it, the daemon's config check reads a seal of
+//	           the fail-open form as changed too (harness_hash.go), so an install made while no daemon answered taints
+//	           until it runs again. Nothing here or in MCP sets record_required: an Owner or Admin does, with ur admin
+//	           settings
 //	write      each file by a temporary file in its own directory, synced, then renamed over it; a file the harness
 //	           rewrote between the plan and the write is planned again from its new bytes, up to
 //	           Ingest.HarnessInstallRetryCount times, since only ur's entries change and the person saw those
@@ -125,8 +130,9 @@ type HarnessInstallArgs struct {
 	// setup step leaves the auth key in, which the committed SessionStart step takes with `ur connect --token-file`.
 	// "" writes no connect step. A project install's alone, of a harness that reports a session's start.
 	CloudKeyFile string
-	// The fail-closed form (see the file header): a Team's ServiceSettings.record_required from M6, and until a reader
-	// of it lands `ur install-harness --record-required`, a local flag. False writes the fail-open form, the default.
+	// The fail-closed form (see the file header): a Team's ServiceSettings.record_required from M6, as ur
+	// install-harness reads it from a running daemon, or its local flag --record-required. False writes the fail-open
+	// form, the default.
 	RecordRequired bool
 	// The instance's telemetry pair the exporter's settings name (harness_telemetry.go; QD-822): the one sealed under
 	// StateDirectory, or one the caller drew where none is. Nil writes no exporter settings. A user install's alone,

@@ -42,6 +42,10 @@ const (
 	GateEveryOut = "every-out"
 	// Before place_new names a new metadata cluster (§23.6's last row, §19.9).
 	GateNextCluster = "next-cluster"
+	// The later of two exits (§23.6; TEST-M10-06): every later_of case, reported case by case once both its gates have
+	// passed, which with M0-M10 built straight through is at M10's exit. No case names it in catalog.yml: a case is at
+	// it by being later_of, so fault.Missing(GateHeld, tier) lists the held cases no builder covers.
+	GateHeld = "held"
 )
 
 var catalogGatePattern = regexp.MustCompile(`^M([0-9]|10)-(out|in)$`)
@@ -138,8 +142,11 @@ func (self *Case) TwinTiers() []Tier {
 	return tiers
 }
 
-// Whether the case must pass at gate.
+// Whether the case must pass at gate: at GateHeld, whether it is later_of.
 func (self *Case) AtGate(gate string) bool {
+	if gate == GateHeld {
+		return self.LaterOf
+	}
 	return slices.Contains(self.Gates, gate)
 }
 
