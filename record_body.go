@@ -371,8 +371,8 @@ func recordModelManifestValidate(body *protocol.ModelManifest, writer bool) erro
 	return errors.Join(checks...)
 }
 
-// The kinds another ledger takes a copy of (RECORD.md section 6.5): context, change, the approval family, restore and
-// coverage. Cost joins only once it goes past the vault.
+// The kinds another ledger takes a copy of (RECORD.md section 6.5): context, change, the approval family, restore,
+// coverage and cost, cost only while the Team's record_cost sends it to T, since a ledger copies T's entries alone.
 var recordKindsLedgerCopied = []RecordKind{
 	RecordKindContext,
 	RecordKindChange,
@@ -382,6 +382,7 @@ var recordKindsLedgerCopied = []RecordKind{
 	RecordKindApprovalUse,
 	RecordKindRestore,
 	RecordKindCoverage,
+	RecordKindCost,
 }
 
 // Whether another ledger takes a copy of kind's team entry.
@@ -646,13 +647,15 @@ func NewRecordPublishBody(args *RecordPublishArgs) (*protocol.PublishBody, error
 // T's entry of it is no projection, as the approval family's, which §16.8 copies whole.
 var ErrRecordProjectionNone = errors.New("record kind has no team projection")
 
-// Section 6.3's kinds that go to V and T as two entries, the T one a projection (section 4.2's twice row).
+// Section 6.3's kinds that go to V and T as two entries, the T one a projection (section 4.2's twice row): cost only
+// while the Team's record_cost is on (row 28), which routing reads (record_team.go), and RunCostBody marks no field V:.
 var recordKindsProjected = []RecordKind{
 	RecordKindContext,
 	RecordKindChange,
 	RecordKindPermission,
 	RecordKindRestore,
 	RecordKindCoverage,
+	RecordKindCost,
 }
 
 // record.proto's V: marks, by message and field name: what T's projection leaves empty. record_body_test.go holds this

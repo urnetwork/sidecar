@@ -4,9 +4,11 @@
 //	mode       team mode for T's kinds once RecordAuthView.Logs names the team record, for D's once it names the
 //	           directory; routing reads the config, never the plan (D-RECORD-4); a team record no RepoCreate made yet
 //	           routes as personal, which record-md-team-record-creation's interim and its decided rule both keep
-//	twice      context, change, permission, restore and coverage: the vault's entry sealed first, holding the body
-//	           whole, then T's: RecordProjectForTeam's projection, every V: field empty and the project too where the
-//	           run's repo may be private, with one ContentRef to the vault entry, whose salt stays in its slot row
+//	twice      context, change, permission, restore and coverage, and cost while the Team's record_cost is on, its
+//	           default (section 6.3's row 28; owner decision 302; RecordLogIds.TeamCost): the vault's entry sealed
+//	           first, holding the body whole, then T's: RecordProjectForTeam's projection, every V: field empty and the
+//	           project too where the run's repo may be private, with one ContentRef to the vault entry, whose salt
+//	           stays in its slot row
 //	same       the approval family copied to T with the same stored bytes (§16.8), and route, publish, reach, model and
 //	           inventory to T alone, their bodies holding no run text
 //	T alone    a tagged sidecar with no sponsor has no author and so no vault (§7.10): its kinds bound for T go there
@@ -18,9 +20,9 @@
 //	D          ask, answer, check and note go to the directory, its own stream; announce, request, decision and
 //	           erasure_request only there; a claim or handoff is state of the run's announcement (§16.11), which
 //	           RECORD-M6-16 changes, so Append refuses it in team mode rather than write a coordination entry
-//	vault      every other kind as in a personal network, capture kinds always; cost stays in the vault until
-//	           ServiceSettings.record_cost exists to turn the owner's team default off (record-md-run-cost-in-team-
-//	           record), and membership and key keep the vault mirror, T's copy waiting on the statement's signer
+//	vault      every other kind as in a personal network, capture kinds always; cost while the Team's record_cost is
+//	           off, or where the config head cannot be opened, so a Team that turned it off never finds cost in T; and
+//	           membership and key keep the vault mirror, T's copy waiting on the statement's signer
 //
 // T's ingest is RECORD-M3-04's, run by a device that writes T's stream: a log admin's device, or a designated indexer
 // with rw there (§11.12). Package-level functions are safe for concurrent use.
@@ -103,8 +105,13 @@ func recordIngests(auth RecordAuthView, sidecarId Id, logId Id) bool {
 	return auth.Consented(logId, sidecarId) && auth.Writes(logId, sidecarId)
 }
 
-// Section 6.3's kinds whose Team column is V and T, T's entry a projection.
-func recordKindTeamProjected(kind RecordKind) bool {
+// Section 6.3's kinds whose Team column is V and T, T's entry a projection: cost among them only while the Team's
+// record_cost is on (row 28; RecordLogIds.TeamCost), else it stays in V alone.
+func recordKindTeamProjected(auth RecordAuthView, kind RecordKind) bool {
+	if kind == RecordKindCost {
+		logs := auth.Logs()
+		return logs != nil && logs.TeamCost
+	}
 	return slices.Contains(recordKindsProjected, kind)
 }
 
@@ -189,7 +196,7 @@ func recordRoutesFor(auth RecordAuthView, sidecarId Id, kind RecordKind, teamOnl
 		return nil, fmt.Errorf("%w: %s", ErrRecordRouteTeamOnly, kind)
 	}
 
-	teamKind := recordKindTeamProjected(kind) || recordKindApprovalFamily(kind) || recordKindTeamOnlyInTeamMode(kind)
+	teamKind := recordKindTeamProjected(auth, kind) || recordKindApprovalFamily(kind) || recordKindTeamOnlyInTeamMode(kind)
 	if teamRecordId == nil || !teamKind {
 		if teamOnly {
 			return nil, fmt.Errorf("%w: %s", ErrRecordRouteNoTeamRecord, kind)
@@ -201,7 +208,7 @@ func recordRoutesFor(auth RecordAuthView, sidecarId Id, kind RecordKind, teamOnl
 		return &recordRoutes{vault: vault, vaultEntry: true}, nil
 	}
 	routes := &recordRoutes{team: teamRoute(), teamBody: recordTeamBodySame}
-	if recordKindTeamProjected(kind) {
+	if recordKindTeamProjected(auth, kind) {
 		routes.teamBody = recordTeamBodyProjection
 	}
 	if !hasAuthor {

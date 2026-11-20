@@ -93,6 +93,9 @@ message AuthKeyBundle {
   uint32 version = 1; bytes genesis_sha256 = 2; AuthPin head = 3; bytes delegation_id = 4;
   bytes delegation_signing_seed = 5; bytes delegation_reader_seed = 6; repeated bytes tag_ids = 7;
 }
+// ServiceSettings.record_cost's values (§7.9's Settings fields; owner decision 302): on by default, which a bool's zero
+// cannot say, so its zero reads as on, as SelfAdmitMode's does (question record-md-run-cost-in-team-record).
+enum RecordCostMode { RECORD_COST_MODE_UNSPECIFIED = 0; RECORD_COST_MODE_ON = 1; RECORD_COST_MODE_OFF = 2; }
 
 // sidecar/protocol/bridge/auth.proto
 // §5.5's identity binding, as plan-CORE-binding-wire #1 numbers it.
@@ -641,6 +644,22 @@ var testFenceAdditions = []struct {
 		message:  "IndexerRow",
 		field:    testFenceField{name: "nonce", number: 6, typeName: "bytes"},
 		question: "mail-m8-10-indexer-services-seal-context",
+	},
+	// §7.9's Settings fields, which its fence's comment says join it once config.proto declares them
+	{
+		message:  "ServiceSettings",
+		field:    testFenceField{name: "mail_strict", number: 7, typeName: "bool"},
+		question: "plan-MAIL-strict-setting",
+	},
+	{
+		message:  "ServiceSettings",
+		field:    testFenceField{name: "record_cost", number: 8, typeName: "RecordCostMode"},
+		question: "record-md-run-cost-in-team-record",
+	},
+	{
+		message:  "ServiceSettings",
+		field:    testFenceField{name: "record_required", number: 9, typeName: "bool"},
+		question: "plan-MCP-record-required",
 	},
 }
 

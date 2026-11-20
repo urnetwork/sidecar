@@ -4,10 +4,10 @@
 // MAIL-M7-24): under the config's signed mail.strict, a receiver takes mail only where URnetwork cannot redirect a
 // DANE-validating sender, and seals strict_chain where it can show that.
 //
-//	setting   ServiceSettings.mail_strict, field 7, signed by an owner or admin, network-wide, default false (QD-204),
-//	          read from the newest base's config head. A head this device cannot open, and a build whose
-//	          config.proto does not carry the field yet, read off: strict mode then refuses nothing and claims
-//	          nothing, ordinary mail
+//	setting   ServiceSettings.mail_strict, field 7, signed by an owner or admin, network-wide, default false (QD-204;
+//	          §7.9's Settings fields), read from the newest base's config head. A head this device cannot open reads
+//	          off, and so does every build before the field, which skips it as unknown (D-PHASE-9): strict mode then
+//	          refuses nothing and claims nothing, ordinary mail
 //	splice    under strict, a spliced session for a URnetwork-zone MX host (its SNI under the user root: mx.<net>,
 //	          an alias's, a scope's) is refused, since an operator can replace the MX, A and TLSA records there and
 //	          the sender then delivers where no receiver checks (RFC 7672 §2.2); a splice for a custom MX host is
@@ -34,30 +34,18 @@ import (
 	"strings"
 
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/urnetwork/sidecar/protocol"
 )
-
-// ServiceSettings' field for §15.4's mail.strict (QD-204): bool mail_strict = 7.
-const mailStrictSettingField protoreflect.Name = "mail_strict"
 
 // The TLS alert a refused splice sends before closing (RFC 8446 §6): a fatal handshake_failure, which a sender reads
 // as a temporary failure and retries.
 var mailStrictRefusalAlert = []byte{0x15, 0x03, 0x03, 0x00, 0x02, 0x02, 0x28}
 
-// Whether a config head's ServiceSettings turns mail.strict on: the field set true, where this build's config.proto
-// carries it. Nil settings, and a build without the field, read off.
+// Whether a config head's ServiceSettings turns mail.strict on: mail_strict set true. Nil settings, a head holding none,
+// read off.
 func MailStrictSetting(settings *protocol.ServiceSettings) bool {
-	if settings == nil {
-		return false
-	}
-	message := settings.ProtoReflect()
-	field := message.Descriptor().Fields().ByName(mailStrictSettingField)
-	if field == nil || field.Kind() != protoreflect.BoolKind {
-		return false
-	}
-	return message.Get(field).Bool()
+	return settings.GetMailStrict()
 }
 
 // What NewMailStrictPolicy builds on.
