@@ -31,14 +31,16 @@ It is a snapshot. The numbers below were true when it was written; the branches 
   recURd and burner email, built on the `sidecar` branch of each repo it touches. The owner set the run's shape on
   2026-11-07: draft the whole surface first, then a review phase for integration tests and debugging, then app UI.
   This document opens the review phase.
-- **What "drafted" means.** It does not mean reviewed by a person. For each piece of work:
-  1. An agent built the track from its brief.
-  2. A second agent reviewed it independently and adversarially.
-  3. The findings were fixed.
-  4. The track landed through `track-land`, after its tests passed: the sidecar module, plain and under
-     `sidecar_testhooks`, plus the packages it touched in other repos.
+- **What "drafted" means.** No one but its author has reviewed it, person or agent. For each piece of work:
+  1. An agent built the track from its brief and wrote its tests.
+  2. The track landed through `track-land` once it compiled and its tests and `landcheck` passed: the sidecar module,
+     plain and under `sidecar_testhooks`, plus the packages it touched in other repos.
+  3. After it landed, `tip-check` reran the module's whole check at each new sidecar tip (section 6).
 
-  Nobody has read the code line by line. Treat every claim in a commit message as the author's claim.
+  The build ran second-agent reviews only on 2026-11-06 and 2026-11-07, for about 50 early tracks, most of M0's
+  bootstrap, before the owner switched the run to drafting. Every track since then, roughly 700, is its author's work
+  alone; no reviewer read it before or after it landed. Treat every claim in a commit message or a track report as the
+  author's claim.
 - **How much.** The plan has 923 tasks across 24 areas:
 
   | State | Tasks |
