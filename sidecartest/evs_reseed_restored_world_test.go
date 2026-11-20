@@ -1,8 +1,8 @@
-// A restored repo's groups step, end to end on T2 (owner decision 618; QD-1077; §19.10's groups row, §11.12's place,
-// restore and log first rows): the epoch world's repo is deleted and then restored, its devices' state holding the
-// RepoDelete with a RepoRestore of it, and its site lost inside the restore window, as in
-// evs_reseed_deleted_world_test.go. Where evs's projection at the new site holds the RepoDelete but not yet the
-// RepoRestore, as for one filed after the log resumed, evsservice's PUT /evs/v1/repos/<id> creates repo/
+// A restored repo's groups step, end to end on T2 (owner decision 618; QD-1077; §19.10's groups row, §11.8's place
+// row, §11.12's naming paragraph and its restore and log first rows): the epoch world's repo is deleted and then
+// restored, its devices' state holding the RepoDelete with a RepoRestore of it, and its site lost inside the restore
+// window, as in evs_reseed_deleted_world_test.go. Where evs's projection at the new site holds the RepoDelete but not
+// yet the RepoRestore, as for one filed after the log resumed, evsservice's PUT /evs/v1/repos/<id> creates repo/
 // deleted{deletion_id, its entry's time, signer}; the admin's groups step (sidecar.EvsRepo.ReseedPlace) sends
 // restore, the route alone, which evsservice answers 409 STATEMENT_MISSING until the projection holds the RepoRestore
 // and then takes repo/ to active, before the re-form, so the step need not wait for taskworker's daily reconciler.
