@@ -22,7 +22,9 @@
 //	          passed (§15.7, D-MCP-11); or/ stays its 30 days
 //
 // The TL4 domains an entry names pass only from an entry whose signature verified, for that message alone
-// (plan-SMTP-small-readings#11): the runner hands them to Send as the message's own, and never keeps them.
+// (plan-SMTP-small-readings#11): the runner hands them to Send as the message's own, and never keeps them. The
+// message's SendId is the send its Message-ID names (MailOutboxSendIdOf; QD-1122), so the mail_send events this
+// host's Send raises name the send the composing device answered, as or/'s send_id does.
 //
 // Nothing here logs an address, a domain or a byte of a message (I-13). Safe for concurrent use; RunOnce passes do
 // not overlap.
@@ -81,7 +83,8 @@ type SmtpOutboxMessage struct {
 
 // Verifies one o/ entry: its Signed is SIGNED_SMTP_OUTBOX by signerKey's sidecar, over a SmtpOutboxEntry naming
 // file's effect key and its message's SHA-256. memberDeviceKey answers the identity key of an admitted device of
-// the mailbox's member, nil for any other sidecar. Everything refused is ErrSmtpOutboxEntryRefused.
+// the mailbox's member, nil for any other sidecar. Everything refused is ErrSmtpOutboxEntryRefused. The message's
+// SendId is the send its Message-ID names, the zero Id where it names none of MailOutboxMessageId's form.
 func VerifySmtpOutboxEntry(file *SmtpOutboxFile, memberDeviceKey func(sidecarId Id) ed25519.PublicKey) (*SmtpOutboxMessage, error) {
 	if file == nil || memberDeviceKey == nil {
 		return nil, ErrSmtpOutboxEntryRefused
@@ -120,6 +123,9 @@ func VerifySmtpOutboxEntry(file *SmtpOutboxFile, memberDeviceKey func(sidecarId 
 	}
 	if notAfter := entry.GetApprovalNotAfter(); notAfter != 0 {
 		message.ApprovalNotAfter = time.UnixMilli(int64(min(notAfter, uint64(1)<<62)))
+	}
+	if sendId, ok := MailOutboxSendIdOf(message.Message); ok {
+		message.SendId = sendId
 	}
 	return &SmtpOutboxMessage{Message: message, SignerId: signerId}, nil
 }

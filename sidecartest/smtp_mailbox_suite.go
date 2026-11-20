@@ -51,6 +51,7 @@ func smtpMailboxSuiteCases() []smtpMailboxSuiteCase {
 		{name: "a missing o/ entry is not found", run: caseSmtpMailboxOutboxNotFound},
 		{name: "a removed o/ entry is gone, and removing it again is no error", run: caseSmtpMailboxOutboxRemove},
 		{name: "outcomes read back as written, and a write replaces them", run: caseSmtpMailboxOutcomesReplace},
+		{name: "a record names the send its entry named at its creation, and keeps it", run: caseSmtpMailboxOutcomesNameTheirSend},
 		{name: "a missing or/ record is not found", run: caseSmtpMailboxOutcomesNotFound},
 		{name: "an outcome the wire cannot carry is refused and changes nothing", run: caseSmtpMailboxOutcomesRefused},
 		{name: "a prover record lists by its sidecar, every field kept, and a rewrite replaces it", run: caseSmtpMailboxProverMeasure},
@@ -178,6 +179,71 @@ func caseSmtpMailboxOutcomesReplace(ctx context.Context, mailbox sidecar.SmtpMai
 		return err
 	}
 	return smtpMailboxSuiteSameOutcomes(read, replaced)
+}
+
+// QD-1122: a record created while its o/ entry stands names the send its Message-ID names, a rewrite after the entry
+// is gone keeps it, and one created with no entry, or over a message naming no send, names none and reads as before.
+func caseSmtpMailboxOutcomesNameTheirSend(ctx context.Context, mailbox sidecar.SmtpMailbox, plant SmtpMailboxPlantOutbox) error {
+	reader, ok := mailbox.(sidecar.MailSendOutcomeReader)
+	if !ok {
+		return errors.New("the mailbox reads no record's send")
+	}
+	var sendId sidecar.Id
+	rand.Read(sendId[:])
+	effectKey := smtpMailboxSuiteEffectKey()
+	message := []byte("From: a@n1.root.example\r\nMessage-ID: <" + sidecar.MailOutboxMessageId(sendId, "n1.root.example") + ">\r\n\r\nbody\r\n")
+	if err := plant(ctx, effectKey, []byte("signed bytes"), message); err != nil {
+		return err
+	}
+	outcomes := smtpMailboxSuiteOutcomes()
+	if err := mailbox.WriteOutcomes(ctx, effectKey, outcomes); err != nil {
+		return err
+	}
+	named, read, err := reader.ReadSendOutcomes(ctx, effectKey)
+	if err != nil {
+		return err
+	}
+	if named != sendId {
+		return errors.New("a record created beside its entry names another send")
+	}
+	if err := smtpMailboxSuiteSameOutcomes(read, outcomes); err != nil {
+		return err
+	}
+	if err := mailbox.RemoveOutbox(ctx, effectKey); err != nil {
+		return err
+	}
+	if err := mailbox.WriteOutcomes(ctx, effectKey, outcomes[:1]); err != nil {
+		return err
+	}
+	if named, _, err := reader.ReadSendOutcomes(ctx, effectKey); err != nil || named != sendId {
+		return fmt.Errorf("a rewrite after the entry went names another send: %v", err)
+	}
+
+	for _, planted := range [][]byte{nil, []byte("From: a@n1.root.example\r\nMessage-ID: <r1@shop.example>\r\n\r\nbody\r\n")} {
+		other := smtpMailboxSuiteEffectKey()
+		if planted != nil {
+			if err := plant(ctx, other, []byte("signed bytes"), planted); err != nil {
+				return err
+			}
+		}
+		if err := mailbox.WriteOutcomes(ctx, other, outcomes); err != nil {
+			return err
+		}
+		named, read, err := reader.ReadSendOutcomes(ctx, other)
+		if err != nil {
+			return err
+		}
+		if named != (sidecar.Id{}) {
+			return errors.New("a record with no send of its entry's names one")
+		}
+		if err := smtpMailboxSuiteSameOutcomes(read, outcomes); err != nil {
+			return err
+		}
+	}
+	if _, _, err := reader.ReadSendOutcomes(ctx, smtpMailboxSuiteEffectKey()); !errors.Is(err, sidecar.ErrSmtpMailboxNotFound) {
+		return fmt.Errorf("read a missing record's send: %v", err)
+	}
+	return nil
 }
 
 func caseSmtpMailboxOutcomesNotFound(ctx context.Context, mailbox sidecar.SmtpMailbox, plant SmtpMailboxPlantOutbox) error {

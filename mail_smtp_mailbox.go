@@ -10,7 +10,11 @@
 //	         refused, never handed on in part
 //	or/      or/<h>/<effect_key>: MailOutcomeRecord, replaced at each write, its last writer winning over the version
 //	         it read; a write racing another reads again, at most WriteRetryCount times. An outcome the wire cannot
-//	         carry is refused before anything is written
+//	         carry is refused before anything is written. The record names its send (send_id, QD-1122): the write
+//	         that creates it reads the send from its o/ entry's Message-ID (MailOutboxSendIdOf), once, and every
+//	         later write keeps the send_id the record holds, so the record names its send after the entry is gone.
+//	         A record created with no entry, or one whose message names no send of that form, names none, and is
+//	         read as before (ReadSendOutcomes, which MailClient.SendResult reads by)
 //	p/       p/<sidecar_id>: MailProverRecord, rewritten as or/ is
 //	dsn      a DSN goes to this mailbox as a deposit by this device: a same-network trailer naming the null reverse path,
 //	         as RFC 3464's DSNs come, and one recipient, the DSN's To where it names one, else the mailbox's bounce
@@ -40,7 +44,19 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-var _ SmtpMailbox = (*mailSmtpMailbox)(nil)
+var (
+	_ SmtpMailbox           = (*mailSmtpMailbox)(nil)
+	_ MailSendOutcomeReader = (*mailSmtpMailbox)(nil)
+)
+
+// What reads or/ beside SmtpMailbox: each record with the send it names (the file header's or/ row), which a send's
+// result by its send_id reads (MailClient.SendResult). mailSmtpMailbox has it, and so does sidecartest.FakeSmtpMailbox,
+// which RunSmtpMailboxSuite holds to the same promise.
+type MailSendOutcomeReader interface {
+	// One or/ record's send and outcomes: the zero Id for a record that names no send, and ErrSmtpMailboxNotFound
+	// where no record stands.
+	ReadSendOutcomes(ctx context.Context, effectKey []byte) (Id, []*SmtpDomainOutcome, error)
+}
 
 var (
 	// An o/ file that is not u32be(length) ‖ Signed ‖ message within the outbox's bounds.
@@ -203,7 +219,8 @@ func (self *mailSmtpMailbox) RemoveOutbox(ctx context.Context, effectKey []byte)
 	return err
 }
 
-// See SmtpMailbox.
+// See SmtpMailbox. The record names its send as the file header's or/ row says: a write that creates it reads the send
+// from the o/ entry under effectKey, and a later one keeps what the record standing names.
 func (self *mailSmtpMailbox) WriteOutcomes(ctx context.Context, effectKey []byte, outcomes []*SmtpDomainOutcome) error {
 	path, err := MailOutcomePath(effectKey)
 	if err != nil {
@@ -220,14 +237,67 @@ func (self *mailSmtpMailbox) WriteOutcomes(ctx context.Context, effectKey []byte
 		}
 		record.Outcomes = append(record.Outcomes, mailOutcome)
 	}
-	content, err := proto.MarshalOptions{Deterministic: true}.Marshal(record)
-	if err != nil {
-		return err
+	for attempt := 0; ; attempt += 1 {
+		standing, version, err := self.store.Read(ctx, path, self.settings.OutcomeRecordMaxByteCount)
+		switch {
+		case errors.Is(err, ErrEvsPathAbsent):
+			// this write creates the record: its send is the one its entry names
+			version = 0
+			if record.SendId, err = self.outboxSendId(ctx, effectKey); err != nil {
+				return err
+			}
+		case err != nil:
+			// a file past the bound is none this side wrote, and is left as it stands
+			return err
+		default:
+			record.SendId = mailOutcomeRecordSendId(standing)
+		}
+		content, err := proto.MarshalOptions{Deterministic: true}.Marshal(record)
+		if err != nil {
+			return err
+		}
+		if self.settings.OutcomeRecordMaxByteCount < len(content) {
+			return ErrMailStoreTooLarge
+		}
+		_, err = self.store.Write(ctx, []*mailStoreWrite{{Path: path, Content: content, IfVersion: version}})
+		if err == nil {
+			return nil
+		}
+		if !mailStoreConflictOn(err, path) || self.settings.WriteRetryCount <= attempt {
+			return err
+		}
 	}
-	if self.settings.OutcomeRecordMaxByteCount < len(content) {
-		return ErrMailStoreTooLarge
+}
+
+// The send_id a record created under effectKey names: the send its o/ entry's Message-ID names, nil where no entry of
+// the outbox's format stands there or its message names no send of MailOutboxMessageId's form. An error is a read
+// that could not answer, which fails the write as any of its reads would.
+func (self *mailSmtpMailbox) outboxSendId(ctx context.Context, effectKey []byte) ([]byte, error) {
+	file, err := self.ReadOutbox(ctx, effectKey)
+	switch {
+	case errors.Is(err, ErrSmtpMailboxNotFound), errors.Is(err, ErrMailOutboxFileInvalid), errors.Is(err, ErrMailStoreTooLarge):
+		return nil, nil
+	case err != nil:
+		return nil, err
 	}
-	return self.replace(ctx, path, content, self.settings.OutcomeRecordMaxByteCount)
+	sendId, ok := MailOutboxSendIdOf(file.Message)
+	if !ok {
+		return nil, nil
+	}
+	return sendId.Bytes(), nil
+}
+
+// The send_id a record's bytes name, nil for none: one that does not decode, or a send_id of another length, which
+// names no send and is not carried into the next write.
+func mailOutcomeRecordSendId(content []byte) []byte {
+	record := &protocol.MailOutcomeRecord{}
+	if err := proto.Unmarshal(content, record); err != nil {
+		return nil
+	}
+	if _, err := IdFromBytes(record.GetSendId()); err != nil {
+		return nil
+	}
+	return bytes.Clone(record.GetSendId())
 }
 
 // See SmtpMailbox.
@@ -237,30 +307,41 @@ func (self *mailSmtpMailbox) ListOutcomes(ctx context.Context) ([][]byte, error)
 
 // See SmtpMailbox.
 func (self *mailSmtpMailbox) ReadOutcomes(ctx context.Context, effectKey []byte) ([]*SmtpDomainOutcome, error) {
+	_, outcomes, err := self.ReadSendOutcomes(ctx, effectKey)
+	return outcomes, err
+}
+
+// See MailSendOutcomeReader.
+func (self *mailSmtpMailbox) ReadSendOutcomes(ctx context.Context, effectKey []byte) (Id, []*SmtpDomainOutcome, error) {
 	path, err := MailOutcomePath(effectKey)
 	if err != nil {
-		return nil, ErrSmtpMailboxNotFound
+		return Id{}, nil, ErrSmtpMailboxNotFound
 	}
 	content, _, err := self.store.Read(ctx, path, self.settings.OutcomeRecordMaxByteCount)
 	if errors.Is(err, ErrEvsPathAbsent) {
-		return nil, ErrSmtpMailboxNotFound
+		return Id{}, nil, ErrSmtpMailboxNotFound
 	}
 	if err != nil {
-		return nil, err
+		return Id{}, nil, err
 	}
 	record := &protocol.MailOutcomeRecord{}
 	if err := proto.Unmarshal(content, record); err != nil {
-		return nil, err
+		return Id{}, nil, err
 	}
 	outcomes := make([]*SmtpDomainOutcome, 0, len(record.GetOutcomes()))
 	for _, mailOutcome := range record.GetOutcomes() {
 		outcome, err := SmtpDomainOutcomeFromMailOutcome(mailOutcome)
 		if err != nil {
-			return nil, err
+			return Id{}, nil, err
 		}
 		outcomes = append(outcomes, outcome)
 	}
-	return outcomes, nil
+	// a send_id of another length names no send
+	sendId, err := IdFromBytes(record.GetSendId())
+	if err != nil {
+		sendId = Id{}
+	}
+	return sendId, outcomes, nil
 }
 
 // Removes every or/ record whose newest outcome was last written more than OutcomeKeepDuration ago (§15.7's 30 days),

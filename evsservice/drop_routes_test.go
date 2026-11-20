@@ -13,6 +13,7 @@ import (
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
+	"github.com/urnetwork/sidecar/sidecartest"
 )
 
 // An active repo behind the engine, admin and reader tokens, and the table the routes read.
@@ -191,6 +192,60 @@ func TestDropRoutesListAHeldDropUntilItsDoneTwinLeaves(t *testing.T) {
 	}
 	if after := list(); !proto.Equal(after, at) {
 		t.Fatalf("the write moved the listing: %v, was %v", labels(after), labels(at))
+	}
+}
+
+// QD-1126: past the bound GET .../drops answers a table with a held entry as it answers its no-hold twin's. The write
+// that passes the bound unlists the held entry where the twin's bound evicts its done twin, the oldest ended entry, so
+// the reply equals the twin's listing, while the table keeps the held entry for its deletions.
+func TestDropRoutesListPastTheBoundAsANoHoldTwin(t *testing.T) {
+	fixture := &dropRoutesFixture{
+		evsFixture: newEvsFixtureWith(t, func(hostSettings *sidecartest.FakeHostSettings, settings *EvsSettings) {
+			settings.Drop.TableByteCount = dropTableHeaderByteCount + dropTableTrailerByteCount + 2*dropTableEntryByteCount
+			settings.Drop.TableAdmitByteCount = settings.Drop.TableByteCount
+		}),
+		repoId: testId("drop-repo"), admin: testId("admin"), reader: testId("reader"),
+	}
+	fixture.activeRepo(fixture.repoId, fixture.admin)
+	fixture.auth.grant(fixture.reader, fixture.repoId, sidecar.AclEvsRead)
+	settings := fixture.engine.Drops().Settings()
+	place := &protocol.EvsPlace{Minute: 1, Length: 100}
+	var twin *DropTableState
+	var wroteAt time.Time
+	fixture.setTable(func(state *DropTableState, now time.Time) {
+		wroteAt = now
+		entry := func(label string, dropState DropState, endedAgo time.Duration) *DropTableEntry {
+			entry := &DropTableEntry{
+				DropId: testId(label), RefId: testId("ref"), PushId: testId("push-" + label), Place: place, State: dropState,
+				SeenMs: now.Add(-endedAgo - 48*time.Hour).UnixMilli(), FreedByteCount: 40,
+			}
+			if dropState.Ended() {
+				entry.EndedDay = dropDay(now.Add(-endedAgo))
+			}
+			return entry
+		}
+		state.Drops = append(state.Drops,
+			entry("held", DropStateHeld, 5*24*time.Hour), entry("done", DropStateDone, 3*24*time.Hour), entry("new", DropStatePending, 0))
+		twin = &DropTableState{Drops: []*DropTableEntry{
+			entry("held", DropStateDone, 5*24*time.Hour), entry("done", DropStateDone, 3*24*time.Hour), entry("new", DropStatePending, 0),
+		}}
+	})
+	if err := twin.evict(wroteAt, settings); err != nil {
+		t.Fatal(err)
+	}
+	recorder := fixture.serve(http.MethodGet, fixture.path(""), fixture.token(fixture.reader, repoScope(fixture.repoId, "r")), nil)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status %d", recorder.Code)
+	}
+	reply := &protocol.EvsDropsReply{}
+	if err := proto.Unmarshal(recorder.Body.Bytes(), reply); err != nil {
+		t.Fatal(err)
+	}
+	if want := DropStatuses(twin, wroteAt, settings); !proto.Equal(reply, want) || len(reply.Drops) != 2 {
+		t.Fatalf("past the bound the held table lists %d drops apart from its twin's %d", len(reply.Drops), len(want.Drops))
+	}
+	if entry := fixture.table().Drop(testId("held")); entry == nil || entry.State != DropStateHeld || entry.EndedDay != dropUnlistedDay {
+		t.Fatalf("the held entry past the bound: %+v", entry)
 	}
 }
 
