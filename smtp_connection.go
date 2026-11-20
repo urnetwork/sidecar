@@ -124,7 +124,12 @@ func (self *sidecarSmtpEdgeDialer) DialSmtpEdge(ctx context.Context) (SmtpEdgeSt
 		conn.Abort()
 		return nil, &SocketCodeError{Err: ErrSocketUnavailable}
 	}
-	return newSidecarSmtpEdgeStream(conn, subprotocol, self.settings)
+	stream, err := newSidecarSmtpEdgeStream(conn, subprotocol, self.settings)
+	if err != nil {
+		// a nil interface, never one holding a nil stream
+		return nil, err
+	}
+	return stream, nil
 }
 
 // One ur/smtpedge stream of a Sidecar.

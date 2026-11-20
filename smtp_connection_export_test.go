@@ -29,5 +29,9 @@ func (self *platformSmtpEdgeDialer) DialSmtpEdge(ctx context.Context) (SmtpEdgeS
 	if err != nil {
 		return nil, err
 	}
-	return newSidecarSmtpEdgeStream(conn, self.subprotocol, self.settings)
+	stream, err := newSidecarSmtpEdgeStream(conn, self.subprotocol, self.settings)
+	if err != nil {
+		return nil, err
+	}
+	return stream, nil
 }
