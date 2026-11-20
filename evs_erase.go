@@ -333,12 +333,25 @@ var ErrEvsSlotKeysIncomplete = errors.New("evs: a path's history not walked to i
 // chain's, holding its one key at index 0 as Write seals it; a caller whose slots hold several keys, as RECORD's
 // entry slots do, names its own. refName nil is main.
 //
-// It fails closed: History walks at most HistoryVersionCount versions, across each creation into the life before it
-// (QD-888), and may end above the path's first version, at its bound or where evs could not read below a creation
-// (BelowUnknown), so a walk that did not reach the path's first version (EvsHistory.Whole) is
-// ErrEvsSlotKeysIncomplete, with no list. A path first created past its ref's first push starts above version 1
-// (§11.7's versions row), and its walk is whole once evs answers that nothing stands below that creation.
+// It fails closed, by the one rule every eraser shares (QD-1109; question
+// mail-m10-04-closure-of-a-file-born-past-version-1). History walks at most HistoryVersionCount versions, across each
+// creation into the life before it (QD-888), and a walk is whole only where its last version is the path's first:
+// version 1, or a creation (base_entry_version 0) below which evs answered that nothing stands, so neither cut at its
+// bound nor ended where evs could not read below (BelowUnknown), and not one whose number named a removal evs did not
+// show (EvsHistory.Whole). A path first created past its ref's first push starts above version 1 under §11.7's
+// versions row (a creation takes max(b, m) + 1), so that is every index file but the first push's. Any other walk,
+// such as one ending at a removal or at a version that names the one it replaced, is short: ErrEvsSlotKeysIncomplete,
+// with no list.
 func (self *EvsRepo) SlotKeysOf(ctx context.Context, refName []byte, paths []string) ([]*EvsErasedKey, error) {
+	// the walk's last version is the path's first: version 1, or a creation evs answered nothing below, the walk
+	// neither cut at its bound nor stopped where evs could not read
+	whole := func(history *EvsHistory) bool {
+		if len(history.Versions) == 0 || !history.Whole || history.BelowUnknown {
+			return false
+		}
+		last := history.Versions[len(history.Versions)-1]
+		return !last.Removed && (last.Version == 1 || last.Created)
+	}
 	keys := []*EvsErasedKey{}
 	named := map[Id]bool{}
 	for _, path := range paths {
@@ -346,7 +359,7 @@ func (self *EvsRepo) SlotKeysOf(ctx context.Context, refName []byte, paths []str
 		if err != nil {
 			return nil, err
 		}
-		if len(history.Versions) == 0 || !history.Whole {
+		if !whole(history) {
 			return nil, fmt.Errorf("%w: %d versions walked", ErrEvsSlotKeysIncomplete, len(history.Versions))
 		}
 		for _, version := range history.Versions {

@@ -213,8 +213,12 @@ func (self *proverRun) sendEnvelope(ctx context.Context, commands []string, pipe
 // each command waits for the reply before it, and a refusal sends no more (§14.4). first is the group's
 // first command's place among count commands, MAIL being 0.
 func (self *proverRun) sendGroup(ctx context.Context, records []*tlsSealedRecord, pipelining bool, first int, count int) (*smtpReply, error) {
-	// only DATA's reply is 354, and DATA ends the envelope in DATA mode
+	// only DATA's reply is 354, and DATA ends the envelope in DATA mode; a test's adversary goes on past a
+	// refusal
 	refuses := func(command int, reply *smtpReply) bool {
+		if adversary := self.settings.testAdversary; adversary != nil && adversary.ignoreRefusals {
+			return false
+		}
 		return smtpReplyRefuses(reply, self.mode == partModeData && command == count-1)
 	}
 	if !pipelining {
