@@ -296,12 +296,14 @@ func m10Format2SweepCases() []*m10Format2Case {
 			rowId: "FS-91",
 			clauses: []*m10Format2Clause{
 				{name: "within the window", build: Fs91ReleasedWithinTheWindow},
+				{name: "on a cached head", build: Fs91ValidatedOnACachedHead},
 			},
 			heldByTests: []*GateTest{
-				m10Format2Held("./sidecartest/fault", "TestFs91WithinTheWindowIsHeldToTheWindow", "TestFs91WithinTheWindowIsHeldToAPushValidatedBeforeTheFence"),
+				m10Format2Held("./sidecartest/fault", "TestFs91WithinTheWindowIsHeldToTheWindow", "TestFs91WithinTheWindowIsHeldToAPushValidatedBeforeTheFence",
+					"TestFs91OnACachedHeadIsHeldToTheCacheAge", "TestFs91OnACachedHeadIsHeldToItsRead"),
 			},
 			missingClauses: []string{
-				"(c) a cached head a failed cache write left before the DROP, and a creating head write held past 26 h (EVS2-M10-31, EVSB-M10-04)",
+				"(c) a creating head write held at the store past 26 h, and a cache entry put 11 min after its head's write never served (EVS2-M10-31, EVSB-M10-04)",
 				"(d) a push in parts sealed after the drop: evsservice's TestPushDroppedRefusesASealAfterTheDrop holds the seal's refusal on the engine (EVS2-M10-31)",
 				"(e) a re-upload adopting a young candidate's receipt, and past 23 h SEGMENT_STALE (EVS2-M10-31, EVSB-M10-05)",
 				"(f) a git-mode push carrying a young candidate's bytes as a history segment (EVS2-M10-31, EVSB-M10-04)",
