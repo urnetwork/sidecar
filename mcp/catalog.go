@@ -6,12 +6,14 @@
 // as cli/'s commands register (C-21), so no later task edits this file's code to add one, and NewDaemonMcpCatalog
 // makes the daemon's catalog from every registration linked into the build.
 //
-// mcpCatalogDesign is §16.5's table: each name, its tier, whether a W tool may act outward, and the task that owns
-// it (MCP.md's "who builds which tool"). mcpCatalogUnbuilt names the ones whose owners have not landed: the catalog
-// test fails when a design name is neither registered nor listed there, or registered while still listed, so a gap
-// between plans shows as a failing test, never as a missing tool. An owner that lands its tools removes them from
-// the list in the same change. A registered evs or search tool that reports nothing to McpGuard fails it as well
-// (mcpCatalogGuarded), since §16.6's repo rows judge only what a tool reports.
+// mcpCatalogDesign is §16.5's table: each name, its tier, whether a W tool may act outward, whether it takes uses,
+// and the task that owns it (MCP.md's "who builds which tool"). mcpCatalogUnbuilt names the ones whose owners have not
+// landed: the catalog test fails when a design name is neither registered nor listed there, or registered while still
+// listed, so a gap between plans shows as a failing test, never as a missing tool. An owner that lands its tools
+// removes them from the list in the same change. A registered evs or search tool that reports nothing to McpGuard
+// fails it as well (mcpCatalogGuarded), since §16.6's repo rows judge only what a tool reports, and so does a tool
+// whose uses differ from its row: mail_send takes uses and every other tool none (owner decision 613), so an agent asks
+// for a template through mail_send alone and every other O tool files one use.
 //
 // Safe for concurrent use; registration happens before serving.
 
@@ -33,6 +35,8 @@ type mcpCatalogTool struct {
 	tool   *gomcp.Tool
 	tier   McpTier
 	mayAct bool
+	// whether it takes uses (McpToolSpec.MultiUse)
+	multiUse bool
 	// whether it reports what a call reaches to McpGuard (McpToolSpec.Targets)
 	targeted bool
 	handler  gomcp.ToolHandler
@@ -153,12 +157,14 @@ func NewDaemonMcpCatalog(server *McpServer, sink McpCallSink) *McpCatalog {
 	return catalog
 }
 
-// One §16.5 tool: its tier, whether a W tool may run an outward action, and the task that owns it.
+// One §16.5 tool: its tier, whether a W tool may run an outward action, whether it takes uses, and the task that owns
+// it.
 type mcpCatalogDesignTool struct {
-	name   string
-	tier   McpTier
-	mayAct bool
-	owner  string
+	name     string
+	tier     McpTier
+	mayAct   bool
+	multiUse bool
+	owner    string
 }
 
 // §16.5's table, by its rows (MCP.md's "who builds which tool"; C-14, C-15).
@@ -172,7 +178,9 @@ var mcpCatalogDesign = []mcpCatalogDesignTool{
 	{name: "evs_delete", tier: McpTierWrite, mayAct: true, owner: "MCP-M3-13"},
 	{name: "mail_list", tier: McpTierRead, owner: "MCP-M7-01"},
 	{name: "mail_read", tier: McpTierRead, owner: "MCP-M7-01"},
-	{name: "mail_send", tier: McpTierWrite, mayAct: true, owner: "MCP-M7-01"},
+	// mail_send(..., uses?): the one tool an agent asks for a template by (owner decision 613), its handler handing
+	// McpUses to MailSendArgs.Uses
+	{name: "mail_send", tier: McpTierWrite, mayAct: true, multiUse: true, owner: "MCP-M7-01"},
 	{name: "mail_aliases", tier: McpTierRead, owner: "MCP-M7-01"},
 	{name: "mail_alias_create", tier: McpTierOutward, owner: "MCP-M7-01"},
 	{name: "mail_alias_delete", tier: McpTierOutward, owner: "MCP-M7-01"},
@@ -220,9 +228,9 @@ func mcpCatalogGuarded(name string) bool {
 	return strings.HasPrefix(name, "evs_") || name == "search" || strings.HasPrefix(name, "search_")
 }
 
-// Holds a catalog to §16.5: every registered tool a design name with its tier and hints, every evs and search tool
-// reporting its targets to McpGuard, and every design name registered or still unbuilt, never both. The catalog test
-// runs it on the daemon's catalog.
+// Holds a catalog to §16.5: every registered tool a design name with its tier, hints and uses, every evs and search
+// tool reporting its targets to McpGuard, and every design name registered or still unbuilt, never both. The catalog
+// test runs it on the daemon's catalog.
 func checkMcpCatalog(catalog *McpCatalog) error {
 	registered := map[string]*mcpCatalogTool{}
 	for _, tool := range catalog.sorted() {
@@ -252,6 +260,12 @@ func checkMcpCatalog(catalog *McpCatalog) error {
 		}
 		if mcpCatalogGuarded(design.name) && !tool.targeted {
 			errs = append(errs, fmt.Sprintf("%s reports nothing to the guard", design.name))
+		}
+		switch {
+		case design.multiUse && !tool.multiUse:
+			errs = append(errs, fmt.Sprintf("%s takes no uses, which §16.5 gives it (owner decision 613; McpToolSpec.MultiUse)", design.name))
+		case !design.multiUse && tool.multiUse:
+			errs = append(errs, fmt.Sprintf("%s takes uses, which §16.5 gives mail_send alone (owner decision 613)", design.name))
 		}
 	}
 	for name := range registered {
