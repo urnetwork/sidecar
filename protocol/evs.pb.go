@@ -42,7 +42,7 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// EvsPush.flags, as field 16's comment numbers them. DROP and CUT are format 2's.
+// EvsPush.flags, as field 16's comment numbers them. DROP, CUT and COMPLETION are format 2's.
 type EvsPushFlag int32
 
 const (
@@ -57,22 +57,24 @@ const (
 	EvsPushFlag_EVS_PUSH_CLOSURE    EvsPushFlag = 128
 	EvsPushFlag_EVS_PUSH_DROP       EvsPushFlag = 256
 	EvsPushFlag_EVS_PUSH_CUT        EvsPushFlag = 512
+	EvsPushFlag_EVS_PUSH_COMPLETION EvsPushFlag = 1024 // with ERASE alone: a completion ERASE (11.12; QD-1137)
 )
 
 // Enum value maps for EvsPushFlag.
 var (
 	EvsPushFlag_name = map[int32]string{
-		0:   "EVS_PUSH_FLAG_NONE",
-		1:   "EVS_PUSH_FORCE",
-		2:   "EVS_PUSH_DELETE",
-		4:   "EVS_PUSH_BASE",
-		8:   "EVS_PUSH_IMMUTABLE",
-		16:  "EVS_PUSH_CONSUME",
-		32:  "EVS_PUSH_PATH_EPOCH",
-		64:  "EVS_PUSH_ERASE",
-		128: "EVS_PUSH_CLOSURE",
-		256: "EVS_PUSH_DROP",
-		512: "EVS_PUSH_CUT",
+		0:    "EVS_PUSH_FLAG_NONE",
+		1:    "EVS_PUSH_FORCE",
+		2:    "EVS_PUSH_DELETE",
+		4:    "EVS_PUSH_BASE",
+		8:    "EVS_PUSH_IMMUTABLE",
+		16:   "EVS_PUSH_CONSUME",
+		32:   "EVS_PUSH_PATH_EPOCH",
+		64:   "EVS_PUSH_ERASE",
+		128:  "EVS_PUSH_CLOSURE",
+		256:  "EVS_PUSH_DROP",
+		512:  "EVS_PUSH_CUT",
+		1024: "EVS_PUSH_COMPLETION",
 	}
 	EvsPushFlag_value = map[string]int32{
 		"EVS_PUSH_FLAG_NONE":  0,
@@ -86,6 +88,7 @@ var (
 		"EVS_PUSH_CLOSURE":    128,
 		"EVS_PUSH_DROP":       256,
 		"EVS_PUSH_CUT":        512,
+		"EVS_PUSH_COMPLETION": 1024,
 	}
 )
 
@@ -1558,7 +1561,9 @@ type EvsPush struct {
 	Flags                uint32                 `protobuf:"varint,16,opt,name=flags,proto3" json:"flags,omitempty"` // 1 FORCE, 2 DELETE, 4 BASE, 8 IMMUTABLE, 16 CONSUME, 32 PATH_EPOCH,
 	// 64 ERASE, 128 CLOSURE (an erasure's re-checkpoint, 11.12), 256 DROP
 	// (a drop-history action or its cancel, 11.7; format 2), 512 CUT (an
-	// erasure's index cut, 11.12; format 2)
+	// erasure's index cut, 11.12; format 2), 1024 COMPLETION (with ERASE
+	// alone, an ERASE that destroys nothing and ends its erasure, 11.12;
+	// format 2; QD-1137)
 	PathMapSha256        []byte          `protobuf:"bytes,17,opt,name=path_map_sha256,json=pathMapSha256,proto3" json:"path_map_sha256,omitempty"` // PATH_EPOCH: SHA-256 over the epoch's EvsPathMap parts, in order
 	PartCount            uint32          `protobuf:"varint,18,opt,name=part_count,json=partCount,proto3" json:"part_count,omitempty"`              // 0 for a one-part push, else 2 to 1,024
 	PartsSha256          []byte          `protobuf:"bytes,19,opt,name=parts_sha256,json=partsSha256,proto3" json:"parts_sha256,omitempty"`         // SHA-256 over the parts' SHA-256s in part order (the list is in the payload)
@@ -8758,7 +8763,7 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"list_match\x18\x01 \x01(\bR\tlistMatch\x12\x14\n" +
 	"\x05count\x18\x02 \x01(\rR\x05count\x12\x1b\n" +
 	"\tmap_parts\x18\x03 \x03(\rR\bmapParts\x12\x16\n" +
-	"\x06linked\x18\x04 \x01(\bR\x06linked*\xfa\x01\n" +
+	"\x06linked\x18\x04 \x01(\bR\x06linked*\x94\x02\n" +
 	"\vEvsPushFlag\x12\x16\n" +
 	"\x12EVS_PUSH_FLAG_NONE\x10\x00\x12\x12\n" +
 	"\x0eEVS_PUSH_FORCE\x10\x01\x12\x13\n" +
@@ -8770,7 +8775,8 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"\x0eEVS_PUSH_ERASE\x10@\x12\x15\n" +
 	"\x10EVS_PUSH_CLOSURE\x10\x80\x01\x12\x12\n" +
 	"\rEVS_PUSH_DROP\x10\x80\x02\x12\x11\n" +
-	"\fEVS_PUSH_CUT\x10\x80\x04*\x94\x01\n" +
+	"\fEVS_PUSH_CUT\x10\x80\x04\x12\x18\n" +
+	"\x13EVS_PUSH_COMPLETION\x10\x80\b*\x94\x01\n" +
 	"\x0eEvsLocatorKind\x12 \n" +
 	"\x1cEVS_LOCATOR_KIND_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13EVS_LOCATOR_SEGMENT\x10\x01\x12\x16\n" +

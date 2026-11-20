@@ -787,6 +787,7 @@ enum_values:
   EvsPushFlag.EVS_PUSH_CLOSURE: evs-12
   EvsPushFlag.EVS_PUSH_DROP: evs-12
   EvsPushFlag.EVS_PUSH_CUT: evs-12
+  EvsPushFlag.EVS_PUSH_COMPLETION: evs-12
   EvsLocatorKind.EVS_LOCATOR_KIND_UNSPECIFIED: evs-11
   EvsLocatorKind.EVS_LOCATOR_SEGMENT: evs-11
   EvsLocatorKind.EVS_LOCATOR_INLINE: evs-11

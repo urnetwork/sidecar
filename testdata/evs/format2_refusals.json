@@ -124,7 +124,24 @@
       "status": 409,
       "recorded": true,
       "twin": {
-        "construct": "the same push with flag 1024, which no format holds",
+        "construct": "the same push with flag 2048, which no format holds",
+        "outcome": "refused",
+        "status": 400,
+        "code": "INVALID"
+      }
+    },
+    {
+      "name": "push-flag-1024",
+      "construct": "a completion ERASE: an EvsPush with flags 64 and 1024 (QD-1137)",
+      "numbers": [
+        "EvsPushFlag.EVS_PUSH_COMPLETION"
+      ],
+      "side": "evs",
+      "outcome": "format_unsupported",
+      "status": 409,
+      "recorded": true,
+      "twin": {
+        "construct": "a push with flag 1024 and no flag 64, which format 2 does not parse either",
         "outcome": "refused",
         "status": 400,
         "code": "INVALID"
