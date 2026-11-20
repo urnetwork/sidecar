@@ -71,8 +71,10 @@ type fs31EngineEdgeWorld struct {
 	edgeClientId sidecar.Id
 	clientId     sidecar.Id
 	sidecarId    sidecar.Id
-	// closed once the stream's connection has ended
+	// closed once the latest stream's connection has ended
 	served chan struct{}
+	// every stream's service, each done once its connection has ended
+	serving sync.WaitGroup
 }
 
 func (self *fs31EngineEdgeWorld) name() string {
@@ -265,7 +267,9 @@ func (self *fs31EngineEdgeWorld) stream() net.Conn {
 	sidecarEnd, edgeEnd := sidecartest.NewMxPipe(&net.TCPAddr{}, &net.TCPAddr{})
 	served := make(chan struct{})
 	self.served = served
+	self.serving.Add(1)
 	go func() {
+		defer self.serving.Done()
 		defer close(served)
 		self.listener.Deliver(edgeEnd, ticket)
 	}()
@@ -293,11 +297,10 @@ func (self *fs31EngineEdgeWorld) end() {
 }
 
 func (self *fs31EngineEdgeWorld) wait() {
-	if self.served == nil {
-		return
+	self.serving.Wait()
+	if self.world != nil {
+		self.world.Wait()
 	}
-	<-self.served
-	self.world.Wait()
 }
 
 func (self *fs31EngineEdgeWorld) refusal() error {
@@ -637,7 +640,7 @@ func TestFs31TheSenderKeepsAMessageTheEdgeForgedSent(t *testing.T) {
 		// the send's connection has ended by now; the MX's, once the engine closes, which an MX left waiting on a
 		// refused chunk needs
 		edge.end()
-		edge.world.Wait()
+		edge.wait()
 		transactions := mx.Transactions()
 		if !forged {
 			if outcome.Outcome != sidecar.SmtpOutcomeSent || len(transactions) != 1 || len(keySet.Refusals()) != 0 {
