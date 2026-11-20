@@ -41,7 +41,7 @@ func (self *fsDropWorld) listing() []byte {
 	if err != nil {
 		self.t.Fatal(err)
 	}
-	listing, err := proto.MarshalOptions{Deterministic: true}.Marshal(evsservice.DropStatuses(read.State))
+	listing, err := proto.MarshalOptions{Deterministic: true}.Marshal(evsservice.DropStatuses(read.State, read.ReadAt, table.Settings()))
 	if err != nil {
 		self.t.Fatal(err)
 	}
