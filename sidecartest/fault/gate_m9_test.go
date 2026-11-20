@@ -295,82 +295,57 @@ func TestGateM9WitnessesListedReadsEachDifference(t *testing.T) {
 	}
 }
 
-// S6 and S10 read from a registry part by part and tier by tier: a part with tests registered on a tier runs them, its
-// server ones on the private stores; a part with none reads missing and says so; a registration in a repo no entry
-// reaches is named and runs nothing; and T6 is one item a row, open. On the default registry S10's every part runs a
-// test on T2 and on T3, and S6, whose tests run outside RunScenario, has none on either.
-func TestGateM9ScenarioItemsReadTheRegistryPartByPart(t *testing.T) {
-	registry := sidecartest.NewScenarioRegistry()
-	for _, registration := range []struct {
-		clause string
-		tier   string
-		test   *sidecartest.ScenarioTest
-	}{
-		{clause: "burned-label-550-no-dns-change", tier: sidecartest.ScenarioTierT2, test: &sidecartest.ScenarioTest{Repo: "sidecar", Package: "github.com/urnetwork/sidecar/sidecartest", Name: "TestScenarioS10Fixture", Tags: "sidecar_testhooks"}},
-		{clause: "burned-label-550-no-dns-change", tier: sidecartest.ScenarioTierT3, test: &sidecartest.ScenarioTest{Repo: "server", Package: "github.com/urnetwork/server/sidecart3", Name: "TestScenarioS10FixtureOnT3", Tags: "sidecar_localstack"}},
-		{clause: "first-selector-keeps-blabel-mx-and-a", tier: sidecartest.ScenarioTierT2, test: &sidecartest.ScenarioTest{Repo: "sdk", Package: "github.com/urnetwork/sdk", Name: "TestScenarioS10InTheSdk"}},
-	} {
-		if err := registry.Register("S10", registration.clause, registration.tier, registration.test); err != nil {
-			t.Fatal(err)
+// S6 and S10 at M9's exit, part by part and tier by tier as the default registry ties tests to them: every part of
+// S10 runs a test on T2 and on T3, its server ones on the private stores; S6, whose tests run outside RunScenario, runs
+// none on either, so both read missing; and each part's T6 reads open.
+func TestGateM9ReadsS6AndS10PartByPart(t *testing.T) {
+	items := []*GateRow{}
+	for _, row := range GateRows(DefaultCatalog(), "M9") {
+		if strings.HasPrefix(row.Item, "§22.7's S6 on ") || strings.HasPrefix(row.Item, "§22.7's S10's ") {
+			items = append(items, row)
 		}
 	}
-	items := gateScenarioItems(registry, gateM9OutGate)
-	find := func(prefix string) *GateItem {
-		t.Helper()
-		for _, item := range items {
-			if strings.HasPrefix(item.Item, prefix) {
-				return item
-			}
-		}
-		t.Errorf("no item %q...", prefix)
-		return &GateItem{}
+	// S6, one part, on T2, T3 and T6, and S10's four parts on each
+	if len(items) != 3+4*3 {
+		t.Errorf("M9 reads %d scenario parts", len(items))
 	}
-	// S6, one part, on T2, T3 and T6; S10's four parts on T2 and T3, and T6
-	if len(items) != 3+4*2+1 {
-		t.Errorf("%d scenario items", len(items))
+	byName := map[string]*GateRow{}
+	for _, item := range items {
+		name, _, _ := strings.Cut(item.Item, " (")
+		byName[name] = item
 	}
 	for _, tier := range []string{"T2", "T3"} {
-		item := find("§22.7's S6 on " + tier + " (SMTP-M9-31; §3.7's F5)")
-		if 0 < len(item.Tests) || !strings.Contains(item.Item, "so it reads missing") || item.External != "" {
-			t.Errorf("S6 on %s: %+v", tier, item)
+		if item := byName["§22.7's S6 on "+tier]; item == nil || 0 < len(item.Tests) || item.External != "" {
+			t.Errorf("S6 on %s, whose tests run outside RunScenario: %+v", tier, item)
 		}
 	}
-	burnedT2 := find("§22.7's S10's burned-label-550-no-dns-change on T2 (MAIL-M8-10, MAIL-M9-06; §3.7's F10)")
-	if len(burnedT2.Tests) != 1 || fmt.Sprintf("%+v", *burnedT2.Tests[0]) != fmt.Sprintf("%+v", GateTest{Repo: "sidecar", Package: "./sidecartest", Tags: "sidecar_testhooks", Names: []string{"TestScenarioS10Fixture"}}) {
-		t.Errorf("S10's burned label on T2 runs %s", gateTestsStringForTest(burnedT2.Tests))
-	}
-	burnedT3 := find("§22.7's S10's burned-label-550-no-dns-change on T3")
-	if len(burnedT3.Tests) != 1 || fmt.Sprintf("%+v", *burnedT3.Tests[0]) != fmt.Sprintf("%+v", GateTest{Repo: "server", Package: "./sidecart3", Tags: "sidecar_localstack", Stores: true, Names: []string{"TestScenarioS10FixtureOnT3"}}) {
-		t.Errorf("S10's burned label on T3 runs %s", gateTestsStringForTest(burnedT3.Tests))
-	}
-	sdk := find("§22.7's S10's first-selector-keeps-blabel-mx-and-a on T2")
-	if 0 < len(sdk.Tests) || !strings.Contains(sdk.Item, "registrations no entry reaches: github.com/urnetwork/sdk.TestScenarioS10InTheSdk") || !strings.Contains(sdk.Item, "so it reads missing") {
-		t.Errorf("a registration no entry reaches: %+v", sdk)
-	}
-	if item := find("§22.7's S10's last-selector-restores-wildcard-only on T3"); 0 < len(item.Tests) {
-		t.Errorf("an unregistered part runs %s", gateTestsStringForTest(item.Tests))
-	}
-	for _, rowId := range []string{"S6", "S10"} {
-		if item := find("§22.7's " + rowId + " on T6"); !strings.HasPrefix(item.External, "production") || 0 < len(item.Tests) {
-			t.Errorf("%s on T6: %+v", rowId, item)
-		}
-	}
-
-	// the default registry, as M9's exit reads it
-	for _, part := range sidecartest.DefaultScenarioRegistry().Missing(gateM9OutGate, sidecartest.ScenarioTierT2) {
-		if part.Row.Id == "S10" {
-			t.Errorf("S10's %q reads missing on T2", part.Clause)
-		}
-	}
-	_, findItem := gateItemsForTest(t, "M9")
-	for _, tier := range []string{"T2", "T3"} {
-		if item := findItem("§22.7's S6 on " + tier); 0 < len(item.Tests) {
-			t.Errorf("S6 on %s runs %s, though its tests run outside RunScenario", tier, gateTestsStringForTest(item.Tests))
-		}
-		for _, clause := range []string{"burned-label-550-no-dns-change", "last-selector-restores-wildcard-only"} {
-			if item := findItem("§22.7's S10's " + clause + " on " + tier); len(item.Tests) == 0 {
-				t.Errorf("S10's %s on %s runs nothing", clause, tier)
+	for _, clause := range sidecartest.DefaultScenarioRegistry().Row("S10").Parts() {
+		for _, tier := range []string{"T2", "T3"} {
+			item := byName["§22.7's S10's "+clause+" on "+tier]
+			if item == nil || len(item.Tests) == 0 || item.External != "" {
+				t.Errorf("S10's %s on %s: %+v", clause, tier, item)
+				continue
 			}
+			for _, test := range item.Tests {
+				if (tier == "T3") != (test.Repo == "server" && test.Stores && test.Package == "./sidecart3") {
+					t.Errorf("S10's %s on %s runs %s", clause, tier, gateTestsStringForTest(item.Tests))
+				}
+			}
+		}
+		if item := byName["§22.7's S10's "+clause+" on T6"]; item == nil || !strings.HasPrefix(item.External, "T6:") || 0 < len(item.Tests) {
+			t.Errorf("S10's %s on T6: %+v", clause, item)
+		}
+	}
+	if item := byName["§22.7's S6 on T6"]; item == nil || !strings.HasPrefix(item.External, "T6:") {
+		t.Errorf("S6 on T6: %+v", item)
+	}
+	for _, tier := range []string{sidecartest.ScenarioTierT2, sidecartest.ScenarioTierT3} {
+		missing := []string{}
+		for _, part := range sidecartest.DefaultScenarioRegistry().Missing(gateM9OutGate, tier) {
+			missing = append(missing, part.String())
+		}
+		if !slices.Equal(missing, []string{"S6"}) {
+			t.Errorf("the registry reads %v missing on %s at M9, S6 alone until SMTP-M9-31 registers it", missing, tier)
 		}
 	}
 }
@@ -487,11 +462,13 @@ func TestGateM9InReadsItsClosureAndSpecFreeze(t *testing.T) {
 }
 
 // Every test M9's entry and exit name in this repo, smtpproof's module among them, is declared in its package in a
-// file that builds under the entry's tags, so a rename or a tag an owner adds fails here rather than only reading
-// missing at the gate.
-func TestGateM9SweepsNameSidecarTestsDeclaredUnderTheirTags(t *testing.T) {
+// file that builds under the entry's tags, and so is each the sdk names, in the sdk's checkout beside this one, so a
+// rename or a tag an owner adds fails here rather than only reading missing at the gate.
+func TestGateM9SweepsNameSidecarAndSdkTestsDeclaredUnderTheirTags(t *testing.T) {
 	catalog := DefaultCatalog()
+	declared := gateDeclaredBesideThisCheckout(t)
 	checked := 0
+	sdkNames := 0
 	for _, gate := range []string{"M9-in", "M9"} {
 		rows := GateRows(catalog, gate)
 		for _, name := range gateUndeclaredSidecarTestsForTest(t, catalog, rows) {
@@ -499,13 +476,19 @@ func TestGateM9SweepsNameSidecarTestsDeclaredUnderTheirTags(t *testing.T) {
 		}
 		for _, row := range rows {
 			for _, test := range row.Tests {
-				if test.Repo == "sidecar" {
+				switch test.Repo {
+				case "sidecar":
 					checked += len(test.Names)
+				case "sdk":
+					for _, err := range declared(test) {
+						t.Error(err)
+					}
+					sdkNames += len(test.Names)
 				}
 			}
 		}
 	}
-	if checked < 100 {
-		t.Errorf("M9's sweeps name %d tests in this repo", checked)
+	if checked < 100 || sdkNames < 3 {
+		t.Errorf("M9's sweeps name %d tests in this repo and %d in the sdk", checked, sdkNames)
 	}
 }

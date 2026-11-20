@@ -28,9 +28,10 @@
 // launches receive-only if the proofs miss D-SMTP-16 (owner decisions 9, 35), so a miss is the owner's to hear, and a
 // smoke run on this host stands for none of those rows.
 //
-// S6 and S10 are §22.7's scenarios at M9, read part by part and tier by tier from the scenario registry, so a part no
-// test is registered to reads missing, never pass. S6's tests run outside RunScenario on SmtpSendWorld and M9World, so
-// they are named in an item of their own, and S6's registry items read missing until SMTP-M9-31 registers it.
+// S6 and S10 are §22.7's scenarios at M9, read part by part and tier by tier from the scenario registry as M10's sweep
+// reads S11 and S12 (gateScenarioItems), so a part no test is registered to reads missing, never pass, and T6 reads
+// open. S6's tests run outside RunScenario on SmtpSendWorld and M9World, so they are named in an item of their own, and
+// S6's registry items read missing until SMTP-M9-31 registers it.
 //
 // Beside them: §22.8's rules and FI bindings, and FI-11's and FI-12's oracles, which none of M9's rows feeds yet; §23.4's
 // exit criteria, DANE-only MXs reached and unauthenticated ones refused, and halt, ARF and RUA joins; §14's privacy rows
@@ -397,53 +398,6 @@ func gateM9WitnessesListed(table []byte, witnesses []*gateMutatedWitness, excuse
 		return GateOutcomeFail, "gate_m9.go's witnesses differ from smtpproof's evidence table, so its items list what the suite does not run: " + strings.Join(differences, "; ")
 	}
 	return GateOutcomePass, fmt.Sprintf("every witness M9's items list is the evidence table's, %d witnesses over %d rows, and the %d excused cells are its", len(listedCells), witnessRows, len(listedExcused))
-}
-
-// One item per part of each §22.7 scenario that must pass at the catalog's gate, on T2 and on T3 where its row runs
-// there, each with the tests the scenario registry ties to that part on that tier: a part with none reads missing,
-// never pass (ScenarioRegistry.Missing), and a registration naming a repo no entry reaches is said in the item's text
-// and run as nothing. T6, the main test environment's tier, is one item a row, which reads open.
-func gateScenarioItems(registry *sidecartest.ScenarioRegistry, gate string) []*GateItem {
-	items := []*GateItem{}
-	for _, row := range registry.Rows() {
-		if !slices.Contains(row.Gates, gate) {
-			continue
-		}
-		for _, tier := range []string{sidecartest.ScenarioTierT2, sidecartest.ScenarioTierT3} {
-			if !slices.Contains(row.Tiers, tier) {
-				continue
-			}
-			for _, clause := range row.Parts() {
-				part := &sidecartest.ScenarioPart{Row: row, Clause: clause}
-				item := &GateItem{Item: fmt.Sprintf("§22.7's %s on %s (%s; §3.7's %s), run under RunScenario's canaries, scan and schema guard as the scenario registry ties tests to it",
-					part, tier, strings.Join(row.Owners, ", "), row.Flow)}
-				unreachable := []string{}
-				for _, test := range registry.Tests(row.Id, clause, tier) {
-					modulePath, ok := gateModulePaths[test.Repo]
-					packagePath, inModule := strings.CutPrefix(test.Package, modulePath)
-					if !ok || !inModule || (packagePath != "" && !strings.HasPrefix(packagePath, "/")) {
-						unreachable = append(unreachable, test.String())
-						continue
-					}
-					item.Tests = append(item.Tests, &GateTest{Repo: test.Repo, Package: "." + packagePath, Tags: test.Tags, Stores: test.Repo == "server", Names: []string{test.Name}})
-				}
-				if 0 < len(unreachable) {
-					item.Item += "; registrations no entry reaches: " + strings.Join(unreachable, ", ")
-				}
-				if len(item.Tests) == 0 {
-					item.Item += "; no test is registered to it on " + tier + ", so it reads missing"
-				}
-				items = append(items, item)
-			}
-		}
-		if slices.Contains(row.Tiers, sidecartest.ScenarioTierT6) {
-			items = append(items, &GateItem{
-				Item:     fmt.Sprintf("§22.7's %s on T6 (%s; §22.4's T6, tests/test-main.sh in main, dark)", row.Id, strings.Join(row.Owners, ", ")),
-				External: "production: the main test environment, once the sidecar branches merge to main at a Gn-out (§22.4, §23.9)",
-			})
-		}
-	}
-	return items
 }
 
 // Every item of M9's exit: see the file header.
