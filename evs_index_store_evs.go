@@ -25,7 +25,8 @@
 //	Commit   one push of index files and removals through EvsRepo's sender, each write the index's reserved
 //	         writer's (versioning 2, staged under 16 KiB; the settings versioning 0) held to the version its builder
 //	         read (IfVersion, so 5g's path CAS spans the build to the commit), naming the push's index_epoch, its
-//	         signed time the builder's own, a CUT flagged; refusals come back as *indexRefusal
+//	         signed time the builder's own, a CUT flagged; refusals come back as *indexRefusal, a full cluster's
+//	         507 as the storage limit's quota refusal (indexRefusalOfEvs; QD-1118)
 //
 // A CLOSURE goes through the eraser's seam at the end of this file (indexEraseStore's Closure, over EvsRepo.Closure,
 // which seals its erasure note), so Commit refuses one. Paths stay on the device (I-13). Safe for concurrent use as
@@ -358,7 +359,9 @@ func (self *indexEvsStore) Commit(ctx context.Context, push *indexPush) (*indexC
 // an erasure resumed after another's ERASE goes on (QD-1110; question mail-m10-04-index-eraser-history-reads).
 var _ indexEraseStore = (*indexEvsStore)(nil)
 
-// A refusal of an eraser's push as the index reads it, with the allowance a 429 or a quota names.
+// A refusal of an eraser's push or upload as the index reads it, with the allowance a 429 or the storage limit's
+// QuotaRefusal names. A full cluster's 507 CLUSTER_FULL is the index's quota refusal too (indexRefusalOfEvs; QD-1118),
+// naming its wait alone, its Retry-After, and no allowance, so the eraser waits it out as at the storage limit.
 func indexEraseRefusalOfEvs(err error) error {
 	refusal := indexRefusalOfEvs(err)
 	typed, ok := refusal.(*indexRefusal)

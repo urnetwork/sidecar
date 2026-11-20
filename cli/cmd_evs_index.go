@@ -88,7 +88,7 @@ func urEvsIndexSettingsLines(result *sidecar.EvsIndexSettingsResult) []string {
 		}
 		switch {
 		case root.Waiting:
-			lines = append(lines, fmt.Sprintf("%s: %d file(s) removed; the off version waits until the repo is under its storage limit, run the command again then", name, root.RemovedCount))
+			lines = append(lines, fmt.Sprintf("%s: %d file(s) removed; the off version waits until the repo is under its storage limit and its storage cluster has room, run the command again then", name, root.RemovedCount))
 		case root.Version == 0 && root.RemovedCount == 0:
 			lines = append(lines, fmt.Sprintf("%s: already %s", name, state))
 		case root.Off:

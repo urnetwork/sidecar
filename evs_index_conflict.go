@@ -1,8 +1,9 @@
 //go:build !ios_extension
 
-// The index's conflicts on the real push path (§11.14's conflict and epoch rows; I-EVS-17; DESIGN-DETAILS 1.2.3's R2
-// and 1.7's note for SEARCH-M10-13; SEARCH-M10-13): which refusals of a push the index writer's hook added files to
-// plan the whole push again, and what evs's refusals of an index push come to as the index's own typed refusals.
+// The index's conflicts on the real push path (§11.14's conflict, epoch and limit rows; I-EVS-17; DESIGN-DETAILS
+// 1.2.3's R2 and 1.7's note for SEARCH-M10-13; SEARCH-M10-13): which refusals of a push the index writer's hook added
+// files to plan the whole push again, and what evs's refusals of an index push come to as the index's own typed
+// refusals.
 //
 //	head 409    a 409 PATH_CONFLICT, evs's or the planner's own, naming only the index's files: another push of this
 //	            writer's, or a DROP's rewrite, changed a file of its own since the base. The push is planned again
@@ -13,6 +14,12 @@
 //	            are rebuilt with the push when the caller writes again
 //	INDEX_EPOCH a CUT moved the head's index_epoch: the push is planned again, rereading the head and the erasure set,
 //	            and leaves out every document the set lists at or above its version
+//	limit       the storage limit's QuotaRefusal (403 QUOTA_LIMIT, or 402 QUOTA_PAYMENT while spent) and a full
+//	            metadata cluster's 507 CLUSTER_FULL, which D-OPS-22 has refuse what the storage limit refuses, are one
+//	            refusal to the index, the 507's Retry-After its wait: §11.14's limit row holds whole on a cluster at
+//	            §19.9's cohort limit (owner decision 620; QD-1118), so an off goes in steps there and an eraser's
+//	            re-entry and CLOSUREs wait, a deletion never blocked for an index reason, and builds, merges, roll-ups
+//	            and the backfill leave their state for the next tick on it as on any refusal
 //
 // A refusal's text names its kind and never a path (I-13). On every leg but ios_extension.
 
@@ -61,8 +68,10 @@ func evsIndexRebuilds(err error, plan *EvsWritePlan) bool {
 }
 
 // What an index push's write through EvsRepo came to, as indexRefStore's typed refusal: a path conflict, evs's or the
-// planner's own, names the index paths that moved; 409 INDEX_EPOCH; a 429, retried after its wait; a quota; anything
-// else as it is. The sender settles an unknown outcome by push id itself (§11.8's outcomes), so none reaches here.
+// planner's own, names the index paths that moved; 409 INDEX_EPOCH; a 429, retried after its wait; a quota, the
+// storage limit's or a full cluster's 507 (the file header's limit row), its wait the refusal's retry delay, 0 where
+// it names none; anything else as it is. The sender settles an unknown outcome by push id itself (§11.8's outcomes),
+// so none reaches here.
 func indexRefusalOfEvs(err error) error {
 	if err == nil {
 		return nil
@@ -83,7 +92,8 @@ func indexRefusalOfEvs(err error) error {
 		return &indexRefusal{kind: indexRefusalIndexEpoch}
 	case protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT:
 		return &indexRefusal{kind: indexRefusalConflict}
-	case protocol.EvsRefusalCode_EVS_REFUSAL_QUOTA_LIMIT, protocol.EvsRefusalCode_EVS_REFUSAL_QUOTA_PAYMENT:
+	case protocol.EvsRefusalCode_EVS_REFUSAL_QUOTA_LIMIT, protocol.EvsRefusalCode_EVS_REFUSAL_QUOTA_PAYMENT,
+		protocol.EvsRefusalCode_EVS_REFUSAL_CLUSTER_FULL:
 		return &indexRefusal{kind: indexRefusalQuota, retryAfter: evsError.RetryAfter}
 	}
 	if evsError.Status == http.StatusTooManyRequests {

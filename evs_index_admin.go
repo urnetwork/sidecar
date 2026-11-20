@@ -13,9 +13,11 @@
 //	          whose W it fixes.
 //	off       the off version and the removal of every other file of the root, heads and the lock included, ride one
 //	          push; the erasure set beside the roots stays for a later build to apply, and ur/index itself is never
-//	          deleted, since its settings file's absence would mean on. At the storage limit or while spent a settings
-//	          version, a new inline record, is refused, so the off goes in steps: the files go first (a deletion,
-//	          accepted), then the off version, then the files writers re-created meanwhile. While the off version
+//	          deleted, since its settings file's absence would mean on. At the storage limit or while spent, and on
+//	          a metadata cluster at §19.9's cohort limit, whose 507 CLUSTER_FULL the index reads as the storage
+//	          limit's refusal (evs_index_conflict.go's limit row; QD-1118), a settings version, a new inline record,
+//	          is refused, so the off goes in steps: the files go first (a deletion, which both limits accept), then
+//	          the off version once there is room, then the files writers re-created meanwhile. While the off version
 //	          waits the call answers ErrEvsIndexWaits, and calling again resumes from what the ref holds then.
 //	on        the version that turns the index on; a device holding the text then builds it (evs_index_build.go)
 //	status    each root's state, window and format, its files' count and bytes apart from content (D-QUOTA-10), and
@@ -53,8 +55,9 @@ var (
 	ErrEvsIndexSettings = errors.New("evs index: settings this repo does not take")
 	// No reader of the repo's text is given to this call, so nothing can be built from it here.
 	ErrEvsIndexNoText = errors.New("evs index: this device holds no reader of the repo's text for a build")
-	// The off version waits until the repo is under its storage limit and not spent; its files are gone already.
-	ErrEvsIndexWaits = errors.New("evs index: the off version waits until the repo is under its storage limit")
+	// The off version waits until evs has room for it: the repo under its storage limit and not spent, and its
+	// metadata cluster below §19.9's cohort limit (QD-1118). Its files are gone already.
+	ErrEvsIndexWaits = errors.New("evs index: the off version waits until the repo is under its storage limit and its storage cluster has room")
 	// The index is in a newer format than this build reads: nothing is written over it (status update).
 	ErrEvsIndexNewerFormat = errors.New("evs index: the index is in a newer format than this build; update ur")
 	// Another device holds the index's lock and has not lapsed.
@@ -127,7 +130,8 @@ type indexSettingsOutcome struct {
 	version uint64
 	// Files an off removed, over its steps.
 	removedCount int
-	// The off version waits at the storage limit: the files are gone and the version is not written yet.
+	// The off version waits at the storage limit or on a full cluster: the files are gone and the version is not
+	// written yet.
 	waiting bool
 }
 
@@ -259,7 +263,8 @@ func indexApplyRootSettings(ctx context.Context, args *indexSettingsArgs, rootNu
 		case isIndexRefusal(err, indexRefusalConflict), isIndexRefusal(err, indexRefusalIndexEpoch), errors.Is(err, errIndexPushLifePassed):
 			continue
 		case next.Off && isIndexRefusal(err, indexRefusalQuota) && 0 < len(pushFiles):
-			// at the storage limit or while spent: the files first, then the off version, then what writers re-created
+			// at the storage limit, while spent or on a full cluster: the files first, then the off version, then what
+			// writers re-created
 			return indexOffInSteps(ctx, args, rootNumber, outcome)
 		case err != nil:
 			return outcome, err
@@ -284,9 +289,10 @@ func indexWrittenVersion(committed *indexCommitted, path string) uint64 {
 	return 0
 }
 
-// §11.14's off at the storage limit: (1) the root's files but its settings go, a deletion the limit accepts; (2) the
-// off version, once a push of it is taken, which while it is refused leaves the outcome waiting; (3) the files writers
-// re-created between the two go.
+// §11.14's off at the storage limit, or on a metadata cluster at §19.9's cohort limit (QD-1118): (1) the root's files
+// but its settings go, a deletion either limit accepts; (2) the off version, once a push of it is taken, which while
+// it is refused, a quota or a 507 alike, or a 429, leaves the outcome waiting; (3) the files writers re-created
+// between the two go.
 func indexOffInSteps(ctx context.Context, args *indexSettingsArgs, rootNumber uint32, outcome *indexSettingsOutcome) (*indexSettingsOutcome, error) {
 	clock := clockOrReal(args.clock)
 	remove := func() error {
@@ -460,7 +466,8 @@ type EvsIndexRootSettings struct {
 	Version uint64
 	// Files an off removed.
 	RemovedCount int
-	// The off version waits at the storage limit: its files are gone, and calling again writes it.
+	// The off version waits at the storage limit or on a full cluster: its files are gone, and calling again once
+	// there is room writes it.
 	Waiting bool
 }
 
@@ -624,8 +631,8 @@ func (self *EvsRepo) indexRepoKind() (protocol.RepoKind, error) {
 
 // Writes the next settings version on every index root of the repo (§11.14's settings, on, off and limit rows), as
 // one of its admins. on leaves the build to a device holding the text (IndexRebuild, or an indexer); off removes every
-// other file of each root in the same push, or in steps at the storage limit, answering ErrEvsIndexWaits beside the
-// result while the off version waits.
+// other file of each root in the same push, or in steps at the storage limit or on a full cluster (QD-1118), answering
+// ErrEvsIndexWaits beside the result while the off version waits.
 func (self *EvsRepo) IndexSettings(ctx context.Context, args *EvsIndexSettingsArgs) (*EvsIndexSettingsResult, error) {
 	if args == nil {
 		return nil, fmt.Errorf("%w: no args", ErrEvsIndexSettings)
