@@ -645,6 +645,12 @@ var testFenceAdditions = []struct {
 		field:    testFenceField{name: "nonce", number: 6, typeName: "bytes"},
 		question: "mail-m8-10-indexer-services-seal-context",
 	},
+	// §14.5's preamble result names the envelope the edge derived, which the sidecar checks its own against (QD-1154)
+	{
+		message:  "SmtpPreambleResult",
+		field:    testFenceField{name: "envelope_domain", number: 10, typeName: "string"},
+		question: "strict-envelope-feed-edge-facts-window",
+	},
 	// §7.9's Settings fields, which its fence's comment says join it once config.proto declares them
 	{
 		message:  "ServiceSettings",

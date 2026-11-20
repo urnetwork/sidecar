@@ -73,6 +73,11 @@ type metadataListAddition struct {
 // QD-1034's with the late sweep's (owner decision 592); each here waits for the next fold.
 var metadataListAdditions = []metadataListAddition{
 	{
+		question: "strict-envelope-feed-edge-facts-window",
+		block:    "the issued send_id, X-UR-Ref and Feedback-ID (the network's report token, public in its _dmarc, constant for burners)",
+		list:     "the issued send_id, X-UR-Ref and Feedback-ID (the network's report token, public in its _dmarc, constant for burners), and the envelope_domain it derived from the network, b.<net>.<root> or a strict custom domain's b.<domain>, named back to the sidecar (QD-1154)",
+	},
+	{
 		question: "erasure-completion-erase-evs-cannot-read-complete",
 		block:    "flags FORCE, DELETE, BASE, IMMUTABLE, CONSUME, PATH_EPOCH, ERASE, CLOSURE, DROP or CUT,",
 		list:     "flags FORCE, DELETE, BASE, IMMUTABLE, CONSUME, PATH_EPOCH, ERASE, CLOSURE, DROP, CUT or COMPLETION,",

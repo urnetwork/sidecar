@@ -9,6 +9,8 @@
 //	          and never names an IP (R-SMTP-9): the edge resolves and dials the MX
 //	preamble  the frame of SmtpPreamble, naming the selector pinned for the send, the declared byte count for
 //	          the expected mode and the key set SmtpProver.KeySet() names, then SmtpPreambleResult's frame
+//	envelope  OK names the envelope_domain the edge derived (QD-1154): one other than MAIL FROM's resets the stream
+//	          before any record, EnvelopeRefused, which the sender holds; MAIL FROM is never moved to the edge's
 //	codes     OK goes on; HALTED, QUOTA and TRY_LATER hold the message with retry_after_ms; NO_MX, NO_TLS and
 //	          DENIED end it; KEYS holds it as KeysRefused, never a failure (DESIGN-DETAILS 3.7); a code of 0
 //	          or one this version does not know resets the stream as §6.11's protocol error
@@ -46,6 +48,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"sync/atomic"
 
 	"google.golang.org/protobuf/proto"
@@ -207,6 +210,10 @@ type SmtpConnectionResult struct {
 	// KEYS: the edge does not accept the key set the preamble named. A hold, never a failure: the sender
 	// tries the next older ready set once, else defers for KeysRetryTimeout (DESIGN-DETAILS 3.7).
 	KeysRefused bool
+	// OK named an envelope_domain other than MAIL FROM's (QD-1154): the edge's facts and the strict domains the
+	// sender read differ, so the stream was reset before any client record, which Z4 would have failed and the edge
+	// cut (§14.7). A hold, never a failure: the sender reads the set again after EnvelopeRetryTimeout.
+	EnvelopeRefused bool
 	// What OK issued.
 	SendId []byte
 	MxHost string
@@ -229,7 +236,7 @@ type SmtpConnectionResult struct {
 // an EHLO the MX refused, a too_large and a mode's reconnect never reach MAIL; a send that failed after OK
 // without saying how far it got may have.
 func (self *SmtpConnectionResult) MailMayHaveGone() bool {
-	if self.NoProver || self.PreambleCode != protocol.SmtpPreambleCode_SMTP_PREAMBLE_OK {
+	if self.NoProver || self.EnvelopeRefused || self.PreambleCode != protocol.SmtpPreambleCode_SMTP_PREAMBLE_OK {
 		return false
 	}
 	if self.TlsRefusal != nil {
@@ -402,6 +409,14 @@ func (self *smtpConnection) runStream(
 		result.Err = errSmtpPreambleIssued
 		return false
 	}
+	// the envelope the edge derived, which the session holds MAIL FROM to (QD-1154): another than this send's resets
+	// before any record, so nothing is cut, and the send waits for the edge's next facts. An edge that names none
+	// predates the check, and this send's own is sent as before; the edge's value is never sent at
+	if issued := preambleResult.GetEnvelopeDomain(); issued != "" && !strings.EqualFold(issued, envelopeDomain) {
+		stream.Abort()
+		result.EnvelopeRefused = true
+		return false
+	}
 	result.SendId = sendId
 	result.MxHost = mxHost
 	authentication, err := self.policy.Authenticate(ctx, &SmtpTlsRequest{
@@ -489,6 +504,8 @@ func (self *SmtpConnectionResult) describe() string {
 		return "no prover"
 	case self.KeysRefused:
 		return "keys refused"
+	case self.EnvelopeRefused:
+		return "the edge derived another envelope"
 	case self.Err != nil && self.PreambleCode == protocol.SmtpPreambleCode_SMTP_PREAMBLE_CODE_UNSPECIFIED:
 		return fmt.Sprintf("before the preamble's answer: %v", self.Err)
 	case self.Err != nil:

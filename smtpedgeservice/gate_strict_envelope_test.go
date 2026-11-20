@@ -3,14 +3,15 @@
 // MAIL FROM from the same set as GET /mail/status names it, by the one rule (sidecar.SmtpStrictCustomDomain), so the
 // two agree for a strict domain, a custom domain that is not strict, a subdomain under a strict domain, and a domain
 // whose MX host is unmapped between two reads of the set. Through the real engine, the sender's per-attempt envelope
-// (SmtpSenderArgs.Envelope) moves a message queued under one read to the envelope the edge derives at the next, where
-// the queued envelope alone would put MAIL FROM away from the session's, which Z4 fails and the edge cuts. Every name
-// is synthetic.
+// (SmtpSenderArgs.Envelope) moves a message queued under one read to the envelope the edge derives at the next, and
+// where the two still differ, as in the edge's refresh window, the preamble's OK names the edge's (QD-1154) and the
+// sender resets before any record and holds, so nothing reaches the MX and nothing is cut. Every name is synthetic.
 
 package smtpedgeservice_test
 
 import (
 	"context"
+	"net"
 	"slices"
 	"strings"
 	"sync"
@@ -88,6 +89,51 @@ func (self *testStrictEnvelopeStatus) envelope(ctx context.Context, headerFromDo
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	return testStrictEnvelopeLocal + "@" + testStrictEnvelopeSenderDomain(headerFromDomain, self.strictDomains), nil
+}
+
+// A stream onto the engine whose Abort is a reset, as a daemon's is (§6.11): the edge's read of the stream fails
+// rather than meeting a clean close, so it ends the connection at once, uncut, where a close would leave it to wait on
+// the MX's.
+type testResettingStream struct {
+	*testEngineStream
+	edgeEnd net.Conn
+
+	stateLock sync.Mutex
+	aborted   bool
+}
+
+func (self *testResettingStream) Abort() error {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.aborted = true
+	// a deadline already past fails the edge's read at once (sidecartest's pipe honors no other)
+	return self.edgeEnd.SetReadDeadline(time.Unix(1, 0))
+}
+
+// A close after a reset closes nothing more, since a clean close would reach the edge as a half-close.
+func (self *testResettingStream) Close() error {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.aborted {
+		return nil
+	}
+	return self.testEngineStream.Close()
+}
+
+// testEngineDialer's streams, each Abort a reset.
+type testResettingDialer struct {
+	w       *edgeWorld
+	serving sync.WaitGroup
+}
+
+func (self *testResettingDialer) DialSmtpEdge(ctx context.Context) (sidecar.SmtpEdgeStream, error) {
+	sidecarEnd, edgeEnd := sidecartest.NewMxPipe(&net.TCPAddr{}, &net.TCPAddr{})
+	self.serving.Add(1)
+	go func() {
+		defer self.serving.Done()
+		self.w.service.ServeTestStream(self.w.networkId, self.w.clientId, self.w.sidecarId, edgeEnd)
+	}()
+	return &testResettingStream{testEngineStream: &testEngineStream{Conn: sidecarEnd, w: self.w}, edgeEnd: edgeEnd}, nil
 }
 
 // newTestEngineSender's sender with envelope as its SmtpSenderArgs.Envelope, nil for none.
@@ -200,12 +246,54 @@ func TestSmtpSenderEnvelopeFollowsTheStrictSetThroughTheEngine(t *testing.T) {
 		t.Fatalf("mapped again: the edge derived %s and MAIL FROM was %s", envelopeDomain, mailFrom)
 	}
 
-	// the queued envelope alone: what the per-attempt envelope keeps from happening
+	// the queued envelope alone, as a sender that asks no envelope sends it: OK names the network's envelope, so the
+	// sender resets before any record and holds the send for the edge's next facts, where the session would have
+	// failed Z4 and the edge cut (QD-1154)
 	testStrictEnvelopeFacts(w)
-	staleSender, staleLog := newTestStrictEnvelopeSender(t, w, dialer, nil)
-	envelopeDomain, mailFrom = testStrictEnvelopeSend(t, w, dialer, staleSender, staleLog, testStrictEnvelopeMessage(w, 0x64, "b."+testCustomDomain))
-	if envelopeDomain != "b."+testStrictEnvelopeNetworkZone || mailFrom != "<"+queued+">" {
-		t.Fatalf("the queued envelope: the edge derived %s and MAIL FROM was %s", envelopeDomain, mailFrom)
+	resetting := &testResettingDialer{w: w}
+	staleSender, _ := newTestStrictEnvelopeSender(t, w, resetting, nil)
+	transactionCount := len(w.mx.Transactions())
+	result, err := staleSender.Send(context.Background(), testStrictEnvelopeMessage(w, 0x64, "b."+testCustomDomain))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resetting.serving.Wait()
+	if outcome := result.Domains[0]; outcome.Outcome != sidecar.SmtpOutcomeDeferred || outcome.RetryAfter != sidecar.DefaultSmtpSenderSettings().EnvelopeRetryTimeout {
+		t.Fatalf("the queued envelope: %+v", outcome)
+	}
+	if len(w.mx.Transactions()) != transactionCount {
+		t.Fatal("a record of the queued envelope reached the MX")
+	}
+	for _, send := range w.store.Sends() {
+		if send.Result == "cut" {
+			t.Fatalf("a send was cut: %+v", send)
+		}
+	}
+}
+
+// The preamble's OK names the envelope the session holds MAIL FROM to (QD-1154): the network's, or a strict custom
+// domain's; a refusal names none.
+func TestSmtpPreambleResultNamesTheDerivedEnvelope(t *testing.T) {
+	w := newTestEngineWorld(t, func(world *edgeWorld) {
+		testStrictEnvelopeFacts(world, testCustomDomain)
+	})
+	for _, c := range []struct {
+		from string
+		want string
+	}{
+		{from: testCustomDomain, want: "b." + testCustomDomain},
+		{from: testStrictEnvelopeNetworkZone, want: "b." + testStrictEnvelopeNetworkZone},
+	} {
+		preamble := w.preamble()
+		preamble.HeaderFromDomain = c.from
+		if _, result := w.send(preamble); result.GetCode() != uint32(protocol.SmtpPreambleCode_SMTP_PREAMBLE_OK) || result.GetEnvelopeDomain() != c.want {
+			t.Errorf("From %s: answered %d naming %q, want %q", c.from, result.GetCode(), result.GetEnvelopeDomain(), c.want)
+		}
+	}
+	preamble := w.preamble()
+	preamble.HeaderFromDomain = testUnprovenDomain
+	if _, result := w.send(preamble); result.GetCode() != uint32(protocol.SmtpPreambleCode_SMTP_PREAMBLE_DENIED) || result.GetEnvelopeDomain() != "" {
+		t.Errorf("a refusal: answered %d naming %q", result.GetCode(), result.GetEnvelopeDomain())
 	}
 }
 

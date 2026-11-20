@@ -723,6 +723,11 @@ func (self *SmtpSender) sendDomain(ctx context.Context, plan *smtpSendPlan, doma
 			}
 			next, held := self.retry.Hold(message.CreateTime, self.clock.Now(), self.settings.KeysRetryTimeout)
 			return hold(next, held, "")
+		case connectionResult.EnvelopeRefused:
+			// the edge's facts and this attempt's strict domains differ: the next attempt reads them again once the
+			// edge's refresh has passed (QD-1154)
+			next, held := self.retry.Hold(message.CreateTime, self.clock.Now(), self.settings.EnvelopeRetryTimeout)
+			return hold(next, held, "")
 		}
 		switch connectionResult.PreambleCode {
 		case protocol.SmtpPreambleCode_SMTP_PREAMBLE_CODE_UNSPECIFIED:
