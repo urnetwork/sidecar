@@ -47,11 +47,11 @@
  {
   "num": 6,
   "code": "PROTO",
-  "words": 9070,
+  "words": 9195,
   "code_words": 4173,
   "ceiling": 3800,
-  "over": 5270,
-  "over_pct": 138.7
+  "over": 5395,
+  "over_pct": 142.0
  },
  {
   "num": 7,
@@ -74,11 +74,11 @@
  {
   "num": 9,
   "code": "SOCK",
-  "words": 6337,
+  "words": 6446,
   "code_words": 1791,
   "ceiling": 3000,
-  "over": 3337,
-  "over_pct": 111.2
+  "over": 3446,
+  "over_pct": 114.9
  },
  {
   "num": 10,
@@ -101,38 +101,38 @@
  {
   "num": 12,
   "code": "DNS",
-  "words": 6039,
+  "words": 6051,
   "code_words": 1978,
   "ceiling": 3000,
-  "over": 3039,
-  "over_pct": 101.3
+  "over": 3051,
+  "over_pct": 101.7
  },
  {
   "num": 13,
   "code": "TLS",
-  "words": 10176,
+  "words": 10195,
   "code_words": 1272,
   "ceiling": 3800,
-  "over": 6376,
-  "over_pct": 167.8
+  "over": 6395,
+  "over_pct": 168.3
  },
  {
   "num": 14,
   "code": "SMTP",
-  "words": 9895,
-  "code_words": 1716,
+  "words": 9968,
+  "code_words": 1724,
   "ceiling": 4500,
-  "over": 5395,
-  "over_pct": 119.9
+  "over": 5468,
+  "over_pct": 121.5
  },
  {
   "num": 15,
   "code": "MAIL",
-  "words": 11064,
+  "words": 11157,
   "code_words": 2265,
   "ceiling": 4500,
-  "over": 6564,
-  "over_pct": 145.9
+  "over": 6657,
+  "over_pct": 147.9
  },
  {
   "num": 16,
@@ -164,11 +164,11 @@
  {
   "num": 19,
   "code": "OPS",
-  "words": 9938,
+  "words": 10115,
   "code_words": 11000,
   "ceiling": 3500,
-  "over": 6438,
-  "over_pct": 183.9
+  "over": 6615,
+  "over_pct": 189.0
  },
  {
   "num": 20,

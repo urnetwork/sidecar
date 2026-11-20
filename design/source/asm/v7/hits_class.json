@@ -2057,7 +2057,7 @@
   "family": "pools",
   "file": "13-TLS.md",
   "line": 151,
-  "col": 562,
+  "col": 677,
   "match": "pool",
   "snippet": "hat class, answers a short-lived client jwt, beside it the 15-minute sockets token the edge's Finds and registrations present (§9.8; owner decision 589), and the url the pool needs for one client of `urnetwork-edge`, whose id api derives from (environment, host, block, slot, index) by a fixed, documented derivation and creates on first use; i",
   "reading": "The pool is the edge block's client pool (EdgeClientPool), whose jwts and sockets tokens api mints (owner decisions 428, 589); no storage pool or IP pool, which owner decisions 124 and 145 bar.",
@@ -2147,7 +2147,7 @@
  {
   "family": "pools",
   "file": "14-SMTP.md",
-  "line": 274,
+  "line": 275,
   "col": 301,
   "match": "pools",
   "snippet": "ingyour.com`, that HELO repeats and whose A record names it (FCrDNS); no address sends before its FCrDNS holds. Every network and burner shares every address, with no IP pools or per-IP warm-up; reputation is per sending domain and per network, through selectors, halts and rate limits (14.7, 14.8). A listed address leaves the sending set, not ",
@@ -2160,7 +2160,7 @@
  {
   "family": "edge_termination",
   "file": "14-SMTP.md",
-  "line": 357,
+  "line": 358,
   "col": 2,
   "match": "Edge-terminated",
   "snippet": "| Edge-terminated submission, an edge-held DKIM key, an SES relay, audit by disclosing the ECDHE secret, parsing enclosed message bodies, vendor report intake, a shared VERP bounce domain",
@@ -2173,7 +2173,7 @@
  {
   "family": "pools",
   "file": "14-SMTP.md",
-  "line": 372,
+  "line": 373,
   "col": 459,
   "match": "pool",
   "snippet": "ttps://support.google.com/a/answer/81126), and old PSL copies still apply the strict `_dmarc.<root>`; a listed address leaves the sending set (14.6), with no separate IP pool (owner decision 124).",
@@ -2186,7 +2186,7 @@
  {
   "family": "pools",
   "file": "14-SMTP.md",
-  "line": 376,
+  "line": 377,
   "col": 124,
   "match": "pools",
   "snippet": "**D-SMTP-7 (withdrawn).** Superseded by owner decisions 34 and 124: smtpedge sends from the shared lb addresses, with no IP pools.",
@@ -2199,7 +2199,7 @@
  {
   "family": "window_14d_weekly",
   "file": "14-SMTP.md",
-  "line": 382,
+  "line": 383,
   "col": 72,
   "match": "14 days",
   "snippet": "**D-SMTP-10 (proposed).** Retention follows §2.8 smtp-1 to smtp-6, plus 14 days of backups; send records keep the MX host, not its IP, and recipients, third-party IPs, subjects, bodies, report plaintext, session ciphertext and record lengths are nev",
@@ -2212,7 +2212,7 @@
  {
   "family": "audit_gate",
   "file": "14-SMTP.md",
-  "line": 412,
+  "line": 413,
   "col": 217,
   "match": "external audit",
   "snippet": "stworthy, and what ships before a sound proof? **Decided by owner 2026-11-03 (owner decisions 35, 99):** nothing ships until 14.5's proofs pass D-SMTP-16's gate, with no external audit; burner email launches receive-only. **Decided by owner 2026-11-04 (owner decision 125):** always fund a DATA circuit, built beside BDAT and part of the gate (D-SMTP-20)",
@@ -2225,7 +2225,7 @@
  {
   "family": "pools",
   "file": "14-SMTP.md",
-  "line": 422,
+  "line": 423,
   "col": 231,
   "match": "pools",
   "snippet": "ses send, under which PTR names? **Decided by owner 2026-11-04 (owner decision 124):** (a), the shared lb addresses, PTR names under bringyour.com, HELO = PTR, and no IP pools or per-IP warm-up (14.6). A listed address leaves the sending set but stays in ingress, with nothing to drain to; a listing that also hits api and connect ingress is an ",
@@ -2238,7 +2238,7 @@
  {
   "family": "audit_gate",
   "file": "14-SMTP.md",
-  "line": 447,
+  "line": 448,
   "col": 53,
   "match": "audited",
   "snippet": "| The BDAT or DATA proofs miss D-SMTP-16's bar, or unaudited circuits are unsound (owner decisions 99, 125) | High | High | Started in M0; `SPEC.md`, non-author analysts, §22's corpus, the RUA check; one key part and unit-sized pa",
@@ -2251,7 +2251,7 @@
  {
   "family": "audit_gate",
   "file": "14-SMTP.md",
-  "line": 447,
+  "line": 448,
   "col": 262,
   "match": "audited",
   "snippet": "isions 99, 125) | High | High | Started in M0; `SPEC.md`, non-author analysts, §22's corpus, the RUA check; one key part and unit-sized parts (D-SMTP-22); disclosed as unaudited (owner decision 119); burner email launches receive-only (owner decisions 9, 35) |",
@@ -2264,7 +2264,7 @@
  {
   "family": "pools",
   "file": "14-SMTP.md",
-  "line": 450,
+  "line": 451,
   "col": 103,
   "match": "pool",
   "snippet": "| A mail listing of a shared lb address also blocks api and connect ingress there; with no separate IP pool to drain to and no warm-up (owner decision 124), enough listings degrade sending and the shared ingress together (accepted) | Medium | High | The listed address leaves t",
@@ -3694,7 +3694,7 @@
  {
   "family": "pg_redis_durable",
   "file": "22-TEST.md",
-  "line": 1540,
+  "line": 1542,
   "col": 39,
   "match": "Redis loss too, and a rotation without a commit",
   "snippet": "              unchanged epoch, after a Redis loss too, and a rotation without a commit raises",
@@ -3707,7 +3707,7 @@
  {
   "family": "pg_redis_durable",
   "file": "22-TEST.md",
-  "line": 1737,
+  "line": 1739,
   "col": 37,
   "match": "Redis loss over-admits at most as for leases",
   "snippet": "              debit per contract_id; Redis loss over-admits at most as for leases",
@@ -3720,7 +3720,7 @@
  {
   "family": "window_14d_weekly",
   "file": "22-TEST.md",
-  "line": 1790,
+  "line": 1792,
   "col": 34,
   "match": "14 days",
   "snippet": "FS-51  §20    a Team lapse: after 14 days web hosts and From are withheld, MX and TLSA kept,   D-QUOTA-6   T2     M6-out",
@@ -3733,7 +3733,7 @@
  {
   "family": "pools",
   "file": "22-TEST.md",
-  "line": 1913,
+  "line": 1915,
   "col": 28,
   "match": "pools",
   "snippet": "FS-63  §11,19 placement and pools (owner decision 145): two creators race at place/<repo_id>'s FI-1,2,4    T2+T3  M2-out;",
@@ -3746,7 +3746,7 @@
  {
   "family": "pools",
   "file": "22-TEST.md",
-  "line": 1920,
+  "line": 1922,
   "col": 49,
   "match": "pool",
   "snippet": "              segment cluster with more than one pool fails the suite before any write, read",
@@ -3759,7 +3759,7 @@
  {
   "family": "pools",
   "file": "22-TEST.md",
-  "line": 1922,
+  "line": 1924,
   "col": 26,
   "match": "Pools",
   "snippet": "              InfoMessage.Pools), and the one-pool twin passes",
@@ -3772,7 +3772,7 @@
  {
   "family": "pools",
   "file": "22-TEST.md",
-  "line": 1922,
+  "line": 1924,
   "col": 46,
   "match": "pool",
   "snippet": "              InfoMessage.Pools), and the one-pool twin passes",
@@ -3785,7 +3785,7 @@
  {
   "family": "offsite",
   "file": "22-TEST.md",
-  "line": 1924,
+  "line": 1926,
   "col": 38,
   "match": "R2",
   "snippet": "              streams k by ranges and R2 holds k's locators from a head read, paused; a push",
@@ -3798,7 +3798,7 @@
  {
   "family": "offsite",
   "file": "22-TEST.md",
-  "line": 1927,
+  "line": 1929,
   "col": 54,
   "match": "R2",
   "snippet": "              succeed; after it evs1 deletes the two; R2 resumes, gets collected, rereads the",
@@ -3811,7 +3811,7 @@
  {
   "family": "mib64_trigger",
   "file": "22-TEST.md",
-  "line": 1982,
+  "line": 1984,
   "col": 76,
   "match": "64 MiB",
   "snippet": "              no VersioningRules takes the platform rule, versionless above 64 MiB: an honest",
@@ -3824,7 +3824,7 @@
  {
   "family": "offsite",
   "file": "22-TEST.md",
-  "line": 2414,
+  "line": 2416,
   "col": 49,
   "match": "R2",
   "snippet": "FS-91  §11    racing reuse copies: a push on ref R2 citing a listed version as reuse source,   FI-2,27     T2+T3  M10-out",
@@ -3837,7 +3837,7 @@
  {
   "family": "offsite",
   "file": "22-TEST.md",
-  "line": 2437,
+  "line": 2439,
   "col": 70,
   "match": "R2",
   "snippet": "              Z's chain), Y to X, X edited, a copy of an old X on ref R2: dropping X keeps",
@@ -3850,7 +3850,7 @@
  {
   "family": "offsite",
   "file": "22-TEST.md",
-  "line": 2438,
+  "line": 2440,
   "col": 32,
   "match": "R2",
   "snippet": "              what Z's, Y's and R2's versions name; --follow drops X, Y and Z in one push and",
@@ -3863,7 +3863,7 @@
  {
   "family": "offsite",
   "file": "22-TEST.md",
-  "line": 2439,
+  "line": 2441,
   "col": 52,
   "match": "R2",
   "snippet": "              one job, freeing what only they name, R2's copy keeping its segments; X live",
@@ -3876,7 +3876,7 @@
  {
   "family": "window_14d_weekly",
   "file": "22-TEST.md",
-  "line": 2490,
+  "line": 2492,
   "col": 26,
   "match": "weekly",
   "snippet": "              re-enrolled weekly for a year, each evicted Worker's leaves removed as stale                        Team at",
@@ -3889,7 +3889,7 @@
  {
   "family": "device_cap_1000",
   "file": "22-TEST.md",
-  "line": 2504,
+  "line": 2506,
   "col": 38,
   "match": "1,000 member devices",
   "snippet": "              Workers, in a Team past 1,000 member devices with self_admit off: Workers no",
@@ -3902,7 +3902,7 @@
  {
   "family": "audit_gate",
   "file": "22-TEST.md",
-  "line": 2649,
+  "line": 2651,
   "col": 65,
   "match": "before the claim",
   "snippet": "              not serve for A, of a generation not the newest or before the claim, and a",
@@ -3915,7 +3915,7 @@
  {
   "family": "pools",
   "file": "22-TEST.md",
-  "line": 3033,
+  "line": 3035,
   "col": 1571,
   "match": "pool",
   "snippet": "hecksums; ranged GET; Delete, and a DELETE naming its object's LastModified refused 412 for a newer one (owner decision 225); no lifecycle rule set on either bucket; one pool per cluster (FS-63).",
@@ -3928,7 +3928,7 @@
  {
   "family": "audit_gate",
   "file": "22-TEST.md",
-  "line": 3156,
+  "line": 3158,
   "col": 157,
   "match": "audited",
   "snippet": "**D-TEST-9 (proposed).** Freezes pass 22.10's gates in D-PHASE-7's two steps. *Why:* one conditional write orders storage (owner decision 2), and nothing is audited (owner decision 99).",
@@ -3941,7 +3941,7 @@
  {
   "family": "audit_gate",
   "file": "22-TEST.md",
-  "line": 3158,
+  "line": 3160,
   "col": 871,
   "match": "audited",
   "snippet": "shown under lost responses, crashes and stale processes, and the roll-up is a multi-push protocol whose lock, CAS and erasure race no schedule alone exhausts; nothing is audited (owner decision 99).",
@@ -3954,7 +3954,7 @@
  {
   "family": "kib_10_15",
   "file": "22-TEST.md",
-  "line": 3160,
+  "line": 3162,
   "col": 1266,
   "match": "10-15 KiB",
   "snippet": "oduction's 0.768, which leaves room for the bucket's 1 h of depth (§11.13); the head's If-Match overwrite alone writes ~14 KiB (owner decision 2), so the record's first ~10-15 KiB estimate was withdrawn (Q-EVS-9, decided); mkfs fixes the block size for format 2 too: at 2× year one format 1 writes ~40-43 KiB a push on 4 KiB blocks (~30-33 on 1 KiB)",
@@ -3967,7 +3967,7 @@
  {
   "family": "window_14d_weekly",
   "file": "22-TEST.md",
-  "line": 3162,
+  "line": 3164,
   "col": 316,
   "match": "14 days",
   "snippet": "askworker checks that no retained version names one; deletes turn on once FS-64 to FS-71 pass on their rows' tiers and a production soak after the final freeze (at least 14 days and 10,000 candidates) finds none that a retained version names, and until then the gate admits only internal networks and design partners (D-PHASE-10), so later network",
@@ -3980,7 +3980,7 @@
  {
   "family": "audit_gate",
   "file": "22-TEST.md",
-  "line": 3208,
+  "line": 3210,
   "col": 4,
   "match": "audited",
   "snippet": "| Unaudited novel crypto passes every test, 0x0010 having no vectors (owner decision 99) | Medium | Critical | 22.10's interop artifact; §10.4's mapping and KATs; its disclosure (ow",

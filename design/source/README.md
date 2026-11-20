@@ -7,7 +7,7 @@
 | Path | What it is |
 |---|---|
 | `sections/01-CTX.md` … `sections/23-PHASE.md` | DESIGN.md §1-§23, one file per section. The build copies them verbatim, adding only links. |
-| `owner/DECISIONS.md` | The owner's record, entries 1-637. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
+| `owner/DECISIONS.md` | The owner's record, entries 1-641. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
 | `owner/APPLY.md` | The rules for applying the owner's decisions: precedence (§1), supersession, where two decisions disagree (§2), notation (§3), editing rules (§4), and the follow-up decisions 112-136 with the sections each binds (§6-§8). |
 | `CONVENTIONS.md` | The writing conventions every section follows: the owner directive (§0), the owner rules (§1), the section template (§2) and the X registry (§7), which DESIGN.md's X1-X20 table replaced. |
 | `OUTLINE.md` | The original outline: section codes, scope boundaries, and the word budgets that G0's density rule replaced on 2026-11-04. |
@@ -44,7 +44,7 @@ It needs only `python3`; it was built and checked with Python 3.13. The steps, a
 
 The data files are layered. Each `data_*N.py` loads its predecessor with `runpy` and patches it: `data_front10.py` loads `data_front9.py`, back to `data_front3.py`, and the registers, glossary and appendices go the same way. Change the top layer (the `*10` files), or add an `*11` layer that loads them. Comments in the scripts cite working files from the design sessions (the reconcilers' orders, `peer/`, `review/`, `snap/`), which were not imported; they are history.
 
-## Adding owner decision N (638 onward)
+## Adding owner decision N (642 onward)
 
 1. Add entry N to `owner/DECISIONS.md`: the question, the answer, its cost, the options not taken, and what raised it.
 2. In `asm/data_front10.py`, append `(N, "<what it settles>", "<one line>")` to `INDEX`, add `DATES[N]`, and raise the `assert` to `list(range(1, N + 1))`. Update `STATUS` and `DECISIONS_INTRO` where they name a range. `@@OD:k@@` writes a link to decision k.
@@ -883,3 +883,27 @@ The design-records track dr6-late-sweep (wave f48d) folds the owner's answers th
 - **The metadata list** follows §2.8 at v61: v60 for owner decision 623 and v61 for 634, copied to `metadata_list.yml` by `make metadata`.
 
 Outside this folder the track touched DESIGN.md, DESIGN-DEFER.md, DESIGN-AMENDMENTS.md and metadata_list.yml. Left to the final design sweep: HANDOFF.md section 9's two FS-125 lines (QD-1083); the fold of owner decision 610 into §22.8, §22.10, §23.6, §23.8 and D-KEYS-10 (QD-1086); `IndexerRow.nonce` in §7.9's fence; and the items of the sweep's own list that wait on code, RECORD.md, DESIGN-DETAILS.md or the owner.
+
+## Validation after owner decisions 638 onward: the fourth late sweep (2026-11-19)
+
+The design-records track dr7-late-sweep (wave f49d) folds the owner's answers that the run's list of pending decisions held on 2026-11-19 after the third late sweep, QD-1102 to QD-1114, each a question the build raised and the owner answered that day, the first in the owner's handoff dialog and the rest as recommended under the owner's standing acceptance, and checks the items of sidecar/DESIGN-AMENDMENTS.md's "Later decisions". It is an interim sweep: the draft's final design sweep still runs after the implementation lanes drain. It numbers each answer that changes a behavior or a rule as it folds it, a decision that groups several answers carrying its latest answer's date:
+
+| Ledger id | Owner decision | What it settles |
+|---|---|---|
+| QD-1102 | 638 | A `sidecarctl` command draws a caller class's internal bearer, the `edge` class's first, writing the caller's file and the verifier's line and printing neither. |
+| QD-1103 | 639 | mxedge's direct-MX prober posts each result to api on an internal route only the `edge` class takes; api writes the probe state, repoints the zone and projects the routes. |
+| QD-1112 | 640 | smtpedge takes a send's `SmtpOutcome` from its dialer once, from the connection's start until 15 min after its end. |
+| QD-1114 | 641 | While a process's first read of sidecar.yml failed, api's removal owes an edge device's `rev/` object by its device spec, and CreateContract's window for an edge end is accepted. |
+
+- **The edges and operations (638 to 641).** §19.4's gate callers paragraph and §13.6's edge clients; §15.4's Team paragraph, §12.8's direct MX and §19.4's mxedge row; §14.4's `SmtpOutcome` fence comment, §14.8's self-reports and §14.14's messages; §6.10.1's who row, D-PROTO-6, D-PROTO-9, §9.8's edge clients' tokens and §19.11's reread paragraph. The internal route of owner decision 639 is named by what it carries; its path is its fix track's. No fence field changed, so no `testFenceAdditions` entry moves.
+- **§6.16's interfaces.** Its Provides name owner decision 624's `CallOptions.Edge`, `Subprotocol.SendEdge` and the edge role's `HandleNoReply`, which edge-call-no-hello landed, and lose "§6.10's remote-search windows"; its Assumptions lose the sentence that still had C19 withhold a marked pair's reports and §18.7 keep the window warm, and FS-125's sweep, which owner decision 609 withdrew. The fold of QD-1083 found the same leftovers in §6.10 and §23.9; these are the third place, and owner decision 609, the later, governs.
+- **Index rows.** Owner decisions 428, 495, 622 and 624 note the decisions that follow them.
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `989d99cb27d5c5fbb7e5470db58ac5c0b05b8bd76fbc471e727f864770941ea8`) and DESIGN-DEFER.md (SHA-256 `245b53581af9b1590ab881c380c24feb0a8dba7ed680ffc9464e04e5782b164d`, unchanged), and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no new §2.8 row, so no guard line was needed.
+- **Owner decisions.** All 641 rows are present and cited; APPLY.md's section pairs hold. `LATE_DATES` takes each new row's date.
+- **Open owner questions.** One, Q-REPO-6.
+- **Superseded options.** 312 grep hits, every one carried with its reading; none is on a changed line and none is live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 11,888 section references, 19 more, with the one unresolved as before. `v7/words.json` and `v7/text_checks.json` were regenerated.
+- **DESIGN-DEFER.md.** 99 entries and 155 pointers, unchanged: none of the four defers anything.

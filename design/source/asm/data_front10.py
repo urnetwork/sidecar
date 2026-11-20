@@ -2047,3 +2047,36 @@ assert DECISIONS_INTRO.count(_D636) == 1, 'decisions lead moved'
 DECISIONS_INTRO = DECISIONS_INTRO.replace(
     _D636, "@@OD:280@@, the reverse-alias key (633) and an indexer row's nonce (634); an eraser's CLOSURE of a card "
     "(636); and a schedule's real-time bound on a barrier wait (637). ")
+# The fourth late sweep (dr7-late-sweep, 2026-11-19): the answers recorded after the third.
+INDEX += [
+    (638, "An internal bearer's keygen",
+     "A `sidecarctl` command draws a caller class's internal bearer, the `edge` class's first, and prints "
+     'neither file.'),
+    (639, "The direct-MX prober's results through api",
+     'mxedge posts each direct-MX probe result to api on an internal route; api writes the state and the zone.'),
+    (640, 'An outcome taken while its connection is live',
+     "smtpedge takes a send's `SmtpOutcome` from its dialer from the connection's start until 15 min after its "
+     'end.'),
+    (641, 'Edge readers on a failed first read',
+     "api's removal owes an edge device's `rev/` object by its device spec; CreateContract's window is "
+     'accepted.'),
+]
+for _n, _note in [
+        (428, ' Followed by @@OD:638@@: a `sidecarctl` command draws the bearer.'),
+        (495, " Followed by @@OD:639@@: mxedge's role only reads and inserts its records, its probe results going "
+              'to api.'),
+        (622, " Followed by @@OD:641@@: api's edge `rev/` effect closes on such a read too."),
+        (624, " Followed by @@OD:640@@: the edge takes an outcome while its connection is live."),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 642))
+DATES.update({638: '2026-11-19', 639: '2026-11-19', 640: '2026-11-19', 641: '2026-11-19'})
+_D637 = "(636); and a schedule's real-time bound on a barrier wait (637). "
+assert DECISIONS_INTRO.count(_D637) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D637, _D637 + "A fourth sweep, later on 2026-11-19, numbers that day's last answers: an internal bearer's "
+    "keygen (638), following @@OD:428@@, the direct-MX prober's results through api (639), following @@OD:495@@, "
+    "an outcome taken while its connection is live (640), following @@OD:624@@, and the edge readers on a "
+    "failed first read of sidecar.yml (641), following @@OD:622@@. ")
