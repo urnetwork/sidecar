@@ -6,7 +6,9 @@
 // chunk records in order. A segment record is read from two ranges, its segment's header and key block and the
 // record itself, opened under fek and manifest of the segment header's generation, which the ladder reaches for a
 // moved entry's older generation; a slot-keyed record opens its key from the slot under fek of the key's generation.
-// An inline chain's first record opens with its own key block under fek of the push's generation.
+// An inline chain's first record opens with its own key block under fek of the push's generation. A record's key its
+// slot no longer holds is one a committed ERASE destroyed, which reads as erased (ErrEvsErased), or one evs withheld,
+// which alarms tamper, judged on the repo's ERASEs read after the slot (evs_read_erased.go).
 //
 // Nothing holds a whole file: each record's body and each intermediate result goes to an evsSpill, in memory up to
 // EvsSettings.DeltaBaseMemoryByteCount and past it in the sealed local store in 64 KiB chunks, which serve a delta's
@@ -48,6 +50,63 @@ const evsSpillChunkByteCount = 64 * 1024
 
 // evs answered a needed object missing.
 var ErrEvsObjectMissing = errors.New("evs: object missing")
+
+// A version whose key a committed ERASE destroyed (§11.12): it reads as erased, nothing of it shown and no alarm
+// raised (evs_read_erased.go).
+var ErrEvsErased = errors.New("evs: a version whose key an ERASE destroyed")
+
+// A record's key its slot does not hold, by the slot and key index the record names: one a committed ERASE destroyed,
+// or one evs withheld, which reconstructContent judges (slotKeyGone). To a caller that does not judge it, it is
+// ErrEvsSealInvalid, as it always was.
+type evsSlotKeyGoneError struct {
+	slotId   Id
+	keyIndex uint16
+}
+
+func (self *evsSlotKeyGoneError) Error() string {
+	return fmt.Sprintf("%v: a slot without the record's key", ErrEvsSealInvalid)
+}
+
+func (self *evsSlotKeyGoneError) Unwrap() error {
+	return ErrEvsSealInvalid
+}
+
+// A read's judge of a record's key its slot no longer holds.
+type evsErasureJudge interface {
+	// Whether a committed ERASE names slotId's key at keyIndex, judged on the repo's ERASEs read after the slot.
+	namesKey(ctx context.Context, repo *EvsRepo, slotId Id, keyIndex uint16) (bool, error)
+}
+
+// Makes a read's judge: evs_read_erased.go's, which its init registers. nil on the forwarding role's legs, which read
+// no erasure ref, so that there every key gone from its slot is one evs withheld, as before. Written only by init.
+var newEvsErasureJudge func() evsErasureJudge
+
+// The read's judge of keys gone from their slots, made at the first one: nil on the forwarding role's legs.
+func (self *evsReadKeys) erasureJudge() evsErasureJudge {
+	if self.erasures == nil && newEvsErasureJudge != nil {
+		self.erasures = newEvsErasureJudge()
+	}
+	return self.erasures
+}
+
+// What a record's key gone from its slot comes to: ErrEvsErased, with no alarm, where a committed ERASE names it on
+// the repo's ERASEs read after the slot was (evs_read_erased.go); else a key evs withheld, which alarms tamper. With no
+// judge, on the forwarding role's legs, every key gone is withheld.
+func (self *EvsRepo) slotKeyGone(ctx context.Context, result *evsReadResult, gone *evsSlotKeyGoneError) error {
+	if result.keys != nil {
+		if judge := result.keys.erasureJudge(); judge != nil {
+			erased, err := judge.namesKey(ctx, self, gone.slotId, gone.keyIndex)
+			if err != nil {
+				return err
+			}
+			if erased {
+				return ErrEvsErased
+			}
+		}
+	}
+	self.client.alarm(self.repoId, result.refId, SidecarEvsAlarmTamper, "", nil)
+	return gone
+}
 
 // Bytes of a known length, in memory up to a bound and past it in the sealed local store, readable at any offset:
 // an EvsGitDeltaSource.
@@ -447,6 +506,11 @@ func (self *EvsRepo) reconstructContent(ctx context.Context, result *evsReadResu
 	}
 	content, err := self.applyChain(ctx, result, push, entry, fileId, onRecord)
 	if err != nil {
+		var gone *evsSlotKeyGoneError
+		if errors.As(err, &gone) {
+			// a key gone from its slot: erased where a committed ERASE names it, else withheld
+			return nil, nil, EvsGitOid{}, self.slotKeyGone(ctx, result, gone)
+		}
 		var missing bool
 		missing = errors.Is(err, ErrEvsObjectMissing)
 		if missing && verified.Drop != nil {
@@ -736,8 +800,12 @@ func (self *EvsRepo) slotKey(ctx context.Context, result *evsReadResult, header 
 		return nil, err
 	}
 	slotKey, ok := EvsSlotKeyAt(slot, uint32(header.KeyIndex))
-	if !ok || slotKey.GetGeneration() != header.Generation {
-		return nil, fmt.Errorf("%w: a slot without the record's key", ErrEvsSealInvalid)
+	if !ok {
+		// erased, or withheld: reconstructContent judges which
+		return nil, &evsSlotKeyGoneError{slotId: header.SlotId, keyIndex: header.KeyIndex}
+	}
+	if slotKey.GetGeneration() != header.Generation {
+		return nil, fmt.Errorf("%w: a slot holding the record's key index under another generation", ErrEvsSealInvalid)
 	}
 	fekKey, err := result.keys.fek(ctx, slotKey.GetGeneration())
 	if err != nil {

@@ -103,6 +103,10 @@ var iosExtensionLegSeams = []*closureSeam{
 		name:   "record_agent_body.go",
 		reason: "init sets record_seal.go's recordAgentBodySealer, record_reader.go's recordAgentBodyOpener and record_writer.go's recordSidecarAgentSigner (QD-1065): on the legs every record entry seals version 1, and a version-2 entry reads generically, its agent body unopened",
 	},
+	{
+		name:   "evs_read_erased.go",
+		reason: "init sets evs_reconstruct.go's newEvsErasureJudge (question erased-slot-not-tamper-forwarding-leg-seam): the legs read no erasure ref, so there a key gone from its slot alarms tamper as it did before, and the forwarding role links no ERASE reader",
+	},
 }
 
 // The list's header, which a rewrite writes above its sorted names.

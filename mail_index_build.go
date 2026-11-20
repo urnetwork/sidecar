@@ -254,7 +254,8 @@ func (self *mailIndexContent) State(ctx context.Context, path string, refVersion
 		spill.close()
 		return &indexContentState{}, nil
 	case errors.Is(err, ErrMailStoreTooLarge), errors.Is(err, ErrEvsObjectMissing), errors.Is(err, ErrEvsSealInvalid),
-		errors.Is(err, ErrEvsEntryRefused):
+		errors.Is(err, ErrEvsErased), errors.Is(err, ErrEvsEntryRefused):
+		// a message that does not open here, one whose key a committed ERASE destroyed among them
 		spill.close()
 		return unopenable()
 	case err != nil:
