@@ -3,16 +3,17 @@
 //
 //	RepoCreate      general or record: a member device that is not read_only, or a tagged or ephemeral sidecar
 //	                under a rule giving it admin on evs:* or that repo, within §8.6's ceiling; team_record: a
-//	                config writer; mailcfg: a config writer, whose mailcfg is the network's and names no owner, or
-//	                a consented device of a member that writes no config heads, whose mailcfg is a Team scope's own
-//	                and owner-bound to that member (QD-1093); vault, mailbox and secret: a consented device of the
-//	                owner, its member; directory: a config writer, once per network, and at api alone the team tier
-//	                (AclStatementNeedsTeamTier); config: none, since §7.9's bootstrap creates it
-//	                (plan-ACL-small-readings #4)
+//	                config writer; mailcfg: a config writer while no network mailcfg stands, whose mailcfg is the
+//	                network's and names no owner, else a consented device of the signer's member, whose mailcfg is
+//	                that member's Team scope's own, owner-bound to it: a device that writes no config heads always
+//	                (QD-1093), a config writer once the network's stands (QD-1108; aclNetworkMailcfgStands); vault,
+//	                mailbox and secret: a consented device of the owner, its member; directory: a config writer,
+//	                once per network, and at api alone the team tier (AclStatementNeedsTeamTier); config: none,
+//	                since §7.9's bootstrap creates it (plan-ACL-small-readings #4)
 //	RepoAdmin       a repo admin or a config writer; in an owner-bound repo an add only by a consented device of its
 //	                owner, of a consented device of its owner (§15.7); never an add in the directory
-//	RepoGrant       a repo admin or a config writer, in general, record, team_record and mailcfg repos only: never
-//	                owner-bound (EvsShare there), the directory or the config
+//	RepoGrant       a repo admin or a config writer, in general, record, team_record and the network's mailcfg
+//	                only: never owner-bound (EvsShare there), the directory or the config
 //	RepoRevoke      a repo admin or a config writer, never in the directory or the config; in an owner-bound repo
 //	                never of its owner or one of its owner's consented devices (plan-ACL-owner-bound-standing-revoke)
 //	RepoDelete      a repo admin; a RepoDelete{now} may follow one without now, nothing a RepoDelete{now}
@@ -30,6 +31,11 @@
 // the directory while it is consented, either way not read_only. The config takes no access-log statement: no rows
 // give it an admin and policy never widens its writers (D-ACL-13; acl-m2-02-state-readings #10). Statements on a
 // deleted repo are refused but for RepoRevoke, RepoAdmin's remove, RepoDelete{now} and RepoRestore.
+//
+// "Owner-bound" here is the repo's own standing (aclRepoState.ownerBound): the vault, mailbox and secret kinds, and a
+// mailcfg whose row names an owner, a Team scope's own, which follows their rules as a mailbox does (QD-1107). So on
+// a scope's mailcfg no RepoGrant takes effect, a RepoAdmin add and a RepoDelete take effect only from a consented
+// device of its owner, and a RepoRevoke never removes its owner, while the network's mailcfg keeps a mailcfg's rules.
 //
 // RepoRestore's window runs from its RepoDelete's entry time, which the deletion row carries (QD-743), so every reader
 // judges it from rows alone on any day of the window, whether or not its log still keeps that entry. A row with no
@@ -96,12 +102,13 @@ func (self *AclState) statementRepo(repoIdBytes []byte) (*aclRepoState, error) {
 }
 
 // Whether the signer counts as the repo's admin at position: in its admins and standing, and in the directory, where
-// every config writer is one too, consented; in an owner-bound repo a consented device of the owner (§8.8).
+// every config writer is one too, consented; in an owner-bound repo, a Team scope's own mailcfg included (QD-1107), a
+// consented device of the owner (§8.8).
 func (self *AclState) repoAdminSigner(repo *aclRepoState, signer *aclSidecarState, position uint64) bool {
 	switch {
 	case repo.kind == protocol.RepoKind_REPO_KIND_DIRECTORY:
 		return (repo.admins[signer.id] || signer.configWriter) && self.consentedSignerAt(signer, signer.memberId, position)
-	case aclRepoKindOwnerBound(repo.kind):
+	case repo.ownerBound():
 		return repo.admins[signer.id] && self.consentedSignerAt(signer, repo.ownerId, position)
 	case repo.kind == protocol.RepoKind_REPO_KIND_CONFIG:
 		return false
@@ -185,12 +192,14 @@ func (self *AclState) checkRepoCreate(statement *AclStatement, create *protocol.
 			return nil, fmt.Errorf("%w: only a config writer creates a %s repo", ErrConfigAuthority, kind)
 		}
 	case protocol.RepoKind_REPO_KIND_MAILCFG:
-		// a config writer's is the network's and names no owner; any other member device's is a Team scope's own,
-		// owner-bound to its member as a mailbox is, so only a consented device of that member creates it (QD-1093)
+		// a config writer's while no network mailcfg stands is the network's and names no owner; any other, a member
+		// device's that writes no config heads (QD-1093) or a config writer's once the network's stands (QD-1108), is
+		// its signer's member's Team scope's own, owner-bound to that member as a mailbox is, so only a consented
+		// device of that member creates it. The fold reads the same rows the same way (FoldAclRepos)
 		verdict.ConfigWriter = signer.configWriter
-		if !signer.configWriter {
+		if !signer.configWriter || aclNetworkMailcfgStands(self.rows.GetRepos()) {
 			if signer.class != AclSubjectClassMemberDevice || !self.consentedSignerAt(signer, signer.memberId, statement.N) {
-				return nil, fmt.Errorf("%w: only a config writer or a consented device of its scope's member creates a %s repo", ErrConfigAuthority, kind)
+				return nil, fmt.Errorf("%w: only a config writer while no network mailcfg stands, or a consented device of its scope's member, creates a %s repo", ErrConfigAuthority, kind)
 			}
 			verdict.MemberId = signer.memberId
 			verdict.ConsentedSidecarIds = self.consentedSidecarIds(signer.memberId)
@@ -244,7 +253,7 @@ func (self *AclState) checkRepoAdmin(statement *AclStatement, admin *protocol.Re
 		if added == nil || added.hardDeny(statement.TimeMs) != 0 {
 			return nil, fmt.Errorf("%w: a RepoAdmin add of a sidecar that does not stand", ErrConfigRule)
 		}
-		if aclRepoKindOwnerBound(repo.kind) {
+		if repo.ownerBound() {
 			if !self.consentedSignerAt(signer, repo.ownerId, statement.N) {
 				return nil, fmt.Errorf("%w: only a consented device of its owner adds an admin to an owner-bound repo", ErrConfigAuthority)
 			}
@@ -275,6 +284,10 @@ func (self *AclState) checkRepoGrant(statement *AclStatement, grant *protocol.Re
 	}
 	if !aclRepoKindTakesGrants(repo.kind) {
 		return nil, fmt.Errorf("%w: a %s repo takes no RepoGrant", ErrConfigRule, repo.kind)
+	}
+	if !repo.takesGrants() {
+		// a Team scope's own mailcfg, owner-bound as a mailbox is (QD-1107)
+		return nil, fmt.Errorf("%w: an owner-bound %s repo takes no RepoGrant", ErrConfigRule, repo.kind)
 	}
 	if repo.deleted {
 		return nil, fmt.Errorf("%w: a RepoGrant on a deleted repo", ErrConfigRule)
@@ -313,7 +326,7 @@ func (self *AclState) checkRepoRevoke(statement *AclStatement, revoke *protocol.
 	if err != nil {
 		return nil, err
 	}
-	if aclRepoKindOwnerBound(repo.kind) {
+	if repo.ownerBound() {
 		// SidecarRevoke and Suspend remove an owner's device; a RepoRevoke never locks the owner out
 		// (plan-ACL-owner-bound-standing-revoke)
 		if subjectId == repo.ownerId {
@@ -410,7 +423,7 @@ func (self *AclState) checkRepoVersioning(statement *AclStatement, versioning *p
 	default:
 		return nil, fmt.Errorf("%w: a lock of %d", ErrConfigRule, versioning.GetLock())
 	}
-	if aclRepoKindOwnerBound(repo.kind) {
+	if repo.ownerBound() {
 		if !self.consentedSignerAt(signer, repo.ownerId, statement.N) {
 			return nil, fmt.Errorf("%w: only a consented device of its owner sets an owner-bound repo's versioning", ErrConfigAuthority)
 		}

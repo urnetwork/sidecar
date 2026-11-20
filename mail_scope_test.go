@@ -193,7 +193,8 @@ func TestMailScopeAddressesSpellUnderTheScope(t *testing.T) {
 // receiver, though it may listen; its setup creates the mailcfg, which the log binds to the member; the receiver is then
 // planned with that mailcfg and starts on smtp/25/mx.<scope>, publishing its key under mx.<scope>. A device outside the
 // scope plans none, creates none and reads none of it, a config writer's included, and a scope whose member's devices
-// write config heads stays unplanned, nothing filed.
+// write config heads stays unplanned while no network mailcfg stands, nothing filed (its setup once the network's
+// stands is TestMailScopeReceiverStartsForAnAdminSetMembersScope's).
 func TestMailScopeReceiverStartsOnItsScopesOwnMailcfg(t *testing.T) {
 	net := newTestConfigNet(t)
 	net.setTeamMail(protocol.TeamMailMode_TEAM_MAIL_MODE_MEMBER_SCOPES)
@@ -228,8 +229,8 @@ func TestMailScopeReceiverStartsOnItsScopesOwnMailcfg(t *testing.T) {
 	if err != nil || len(plans) != 0 || world.filedCount(bridge.SignedType_SIGNED_REPO_CREATE) != 0 {
 		t.Fatalf("another member's device set the scope up: %+v, %v", plans, err)
 	}
-	// a scope whose member's devices write config heads gets no mailcfg this way: nothing is filed, since the log would
-	// read it as the network's
+	// a scope whose member's devices write config heads gets no mailcfg while no network mailcfg stands: nothing is
+	// filed, since the log would read it as the network's
 	plans, err = world.repos(ownerDevice).EnsureScopeReceivers(ctx, memberScopes, scopes, now)
 	if !errors.Is(err, ErrMailReposConfigWriter) || len(plans) != 0 || world.filedCount(bridge.SignedType_SIGNED_REPO_CREATE) != 0 {
 		t.Fatalf("a config writer's scope: %+v, %v", plans, err)
