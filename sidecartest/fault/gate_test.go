@@ -146,6 +146,61 @@ func TestGateFileNamesEachCasesConventionalTests(t *testing.T) {
 	}
 }
 
+// The convention's T3 entry builds under the local stack's tag (QD-1085). Every sidecart3 FS test file is behind
+// sidecar_localstack, since a T3 Net's stores are on the local stack's MinIO, so an entry without that tag builds the
+// test out: a real gate run reads its row missing while -list reads it listed. The tags are written out here, not read
+// from gate.go, so a drift there fails this test. Each T3 case that no sweep names gets the convention's entry. Every
+// entry naming a case's conventional T3 test carries the tags, whether the convention or a sweep placed it.
+func TestGateConventionT3EntryCarriesTheLocalStack(t *testing.T) {
+	wantTags := []string{"sidecar_localstack", "sidecar_pending", "sidecar_testhooks"}
+	sortedTags := func(tags string) []string {
+		split := strings.Split(tags, ",")
+		slices.Sort(split)
+		return split
+	}
+	catalog := DefaultCatalog()
+	data, err := GateFile(catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := parseGateFileForTest(t, data)
+	entryCount := 0
+	for _, gate := range GateNames() {
+		sweep := gateSweep(gate)
+		for _, row := range file.Gates[gate] {
+			if row.Row == "" {
+				continue
+			}
+			testCase := catalog.Case(row.Row, row.Case)
+			if testCase == nil {
+				t.Errorf("%s holds %s %q, which the catalog does not", gate, row.Row, row.Case)
+				continue
+			}
+			conventional := []*GateTest{}
+			for _, test := range row.Tests {
+				if test.Repo == "server" && test.Package == "./sidecart3" && slices.Equal(test.Names, []string{GateT3TestName(testCase)}) {
+					conventional = append(conventional, test)
+				}
+			}
+			if _, swept := sweep.Cases[testCase.String()]; !swept && slices.Contains(testCase.TwinTiers(), TierT3) && len(conventional) != 1 {
+				t.Errorf("%s at %s runs %s, not the convention's one T3 entry", testCase, gate, gateTestsStringForTest(row.Tests))
+			}
+			for _, test := range conventional {
+				entryCount += 1
+				if !slices.Equal(sortedTags(test.Tags), wantTags) || !test.Stores {
+					t.Errorf("%s at %s runs %v under tags %q, stores %t: the convention's T3 entry builds under %v on the stores", testCase, gate, test.Names, test.Tags, test.Stores, wantTags)
+				}
+			}
+		}
+	}
+	if entryCount == 0 {
+		t.Fatal("the file holds no convention T3 entry")
+	}
+	if !bytes.Contains(data, []byte("TestFs<n><Case>OnT3 in server's sidecart3 under sidecar_localstack too")) {
+		t.Error("gates.yml's header does not say the convention's T3 tests build under sidecar_localstack")
+	}
+}
+
 // FS-54 and FS-55 are OPS's server tests, no schedule, so their sweeps name them in place of the convention.
 func TestGateFileShowsFs54AndFs55ByOpsTests(t *testing.T) {
 	data, err := GateFile(DefaultCatalog())
