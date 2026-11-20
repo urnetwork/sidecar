@@ -25,9 +25,11 @@
 // KF7, gkm unreachable: nothing here runs; cached keys serve reads and deposits (gkm_access.go, gkm_dropkey.go),
 // and joins, catch-up and membership changes wait for the next hint or resync.
 //
-// The commit hint's work is SyncRepo. A join through this device's last-resort KeyPackage is noted here: it owes a
-// path-only commit at once (gkm_selfupdate.go), and upkeep replaces the package at its next pass, reading
-// LastResortJoinedAt through GkmUpkeepRole.
+// The commit hint's work is SyncRepo. Before the rows above it follows a re-formed group, and finishes this device's
+// own re-form left at its finishing phase once gkm takes the rotation's writes, a repo re-seeded as deleted's once
+// it is restored (gkm_reform.go's resume row; QD-1143). A join through this device's last-resort KeyPackage is noted
+// here: it owes a path-only commit at once (gkm_selfupdate.go), and upkeep replaces the package at its next pass,
+// reading LastResortJoinedAt through GkmUpkeepRole.
 
 package sidecar
 
@@ -105,8 +107,9 @@ func (self *gkmExternalBase) Process(message []byte) (MlsStagedCommit, error) {
 }
 
 // KF5 for one repo, the commit hint's work and each resync's: the generations gkm holds past this device's, the
-// epochs past its own by catch-up or resync, and the ladder below whatever it newly opened. A device that holds
-// nothing of the repo yet takes its first wrap if one stands. See the file header for what waits.
+// epochs past its own by catch-up or resync, and the ladder below whatever it newly opened, after a re-formed group
+// is followed and this device's own re-form finished where it may be (QD-1143). A device that holds nothing of the
+// repo yet takes its first wrap if one stands. See the file header for what waits.
 func (self *GkmGroupClient) SyncRepo(ctx context.Context, repoId Id) error {
 	manager := self.manager(repoId)
 	manager.flowLock.Lock()
@@ -124,6 +127,11 @@ func (self *GkmGroupClient) SyncRepo(ctx context.Context, repoId Id) error {
 		if self.log.V(1).Enabled() {
 			self.log.Infof("[gkm]no re-form was followed: %v", err)
 		}
+	}
+	// this device's own re-form left at its finishing phase is finished once gkm takes its rotation, tried at most once
+	// a ReformResumeInterval; one gkm refuses, repo/ not active yet, leaves the sync to go on in the group it holds
+	if err := manager.resumeReformInFlow(ctx, state); err != nil && self.log.V(1).Enabled() {
+		self.log.Infof("[gkm]the re-form did not finish: %v", err)
 	}
 	if err := manager.takeGenerationsInFlow(ctx, state); err != nil && !errors.Is(err, ErrGkmKeyMissing) {
 		return err

@@ -63,14 +63,18 @@
 //	activate  POST .../activate, which takes a live repo from keying to active once it finds the GroupForm and gen/1,
 //	          and is sent for a repo re-seeded as deleted too, whose expected answer is then 409 REPO_DELETED, the one
 //	          refused call the honest order costs: repo/ stands deleted from its creation, nothing activates, and it
-//	          stays deleted until its RepoRestore, after which a second ReformGroup finishes its group. A 200 there
-//	          says the place created repo/ keying, as it does where the reseed gate was off at the place or evs's
-//	          projection did not yet hold the RepoDelete this device's state shows (one filed after the log resumed,
-//	          within §8.9's 5 s), and that repo/ is now active, which delete mends (owner decision 602; QD-1064)
-//	rotate    for a live repo, now active, the re-form's second call (ReformGroup without Reseed), which resumes from
-//	          the keychain's record and rotates to g+1 with its deliveries and then adds the members' devices, the
+//	          stays deleted until its RepoRestore, after which this device's GkmGroupClient finishes its group from the
+//	          keychain's record at its next sync once gkm takes the rotation's writes, however and on whichever device
+//	          the repo is restored (QD-1143). A 200 there says the place created repo/ keying, as it does where the
+//	          reseed gate was off at the place or evs's projection did not yet hold the RepoDelete this device's state
+//	          shows (one filed after the log resumed, within §8.9's 5 s), and that repo/ is now active, which delete
+//	          mends (owner decision 602; QD-1064)
+//	rotate    for a live repo, now active, the re-form's second call (ReformGroup with Resume), which resumes from the
+//	          keychain's record and rotates to g+1 with its deliveries and then adds the members' devices, the
 //	          generation claim and the Adds' commits being gkm writes it takes only for an active repo/, so the
-//	          repo's members return a little after repo/ goes active (§10.8's after row; owner decision 618; QD-1076)
+//	          repo's members return a little after repo/ goes active (§10.8's after row; owner decision 618; QD-1076);
+//	          a sync of this device's that finished the re-form first leaves the call the group to answer, drafting
+//	          nothing (QD-1143)
 //	delete    for a repo re-seeded as deleted that activate took to active, DELETE /evs/v1/repos/<id>, the route with
 //	          no statement of its own, which moves active to deleted{deletion_id, its entry's time, signer} under the
 //	          RepoDelete evs's projection holds and answers a repo/ already deleted under it 200; while the projection
@@ -116,17 +120,21 @@ var (
 // What a repo's groups step is asked.
 type EvsReseedPlaceArgs struct {
 	// Re-forms the repo's group once the repo is placed: GkmGroupClient.ReformGroup, asked first with Reseed, the
-	// form, epoch 0 and the ladder alone, and for a live repo asked again without it once activate has taken repo/ to
-	// active (owner decision 618). Nil re-forms through the client's key client where that re-forms groups, and where
-	// it does not the step stops after the place, and a restored repo's restore, with ErrGkmUnavailable, activating
-	// nothing.
+	// form, epoch 0 and the ladder alone, and for a live repo asked again with Resume in its place once activate has
+	// taken repo/ to active (owner decision 618; QD-1143). Nil re-forms through the client's key client where that
+	// re-forms groups, and where it does not the step stops after the place, and a restored repo's restore, with
+	// ErrGkmUnavailable, activating nothing.
 	ReformGroup func(ctx context.Context, args *GkmReformArgs) (Id, error)
 }
 
 // What a repo's groups step did.
 type EvsReseedPlaced struct {
-	// The repo is re-seeded as deleted: placed, its group's form and ladder returned, and left with repo/ deleted.
+	// The repo is re-seeded as deleted: placed, its group's form and ladder returned, and left with repo/ deleted,
+	// its group finished by this device's syncs once it is restored (QD-1143).
 	Deleted bool
+	// This device's verified state shows the repo restored, a RepoDelete with a RepoRestore of it, and the restore the
+	// step sent after its place was answered as the step expects: 409 REPO_KEYING, or a 200 that Mended reports.
+	Restored bool
 	// The place created repo/ in another state than this device's verified state shows, and the step moved it to that
 	// one: for a repo re-seeded as deleted, created keying, which activate and DELETE moved through active to deleted
 	// (owner decision 602; QD-1064); for a restored repo, created deleted, evs's projection trailing its RepoRestore,
@@ -258,6 +266,7 @@ func (self *EvsRepo) ReseedPlace(ctx context.Context, args *EvsReseedPlaceArgs) 
 			// repo/ stood deleted, evs's projection having trailed the RepoRestore at the place, and is now active
 			placed.Mended = true
 		}
+		placed.Restored = true
 	}
 	reformGroup := args.ReformGroup
 	if reformGroup == nil {
@@ -279,8 +288,9 @@ func (self *EvsRepo) ReseedPlace(ctx context.Context, args *EvsReseedPlaceArgs) 
 		// repo/ is not active, so gkm would refuse the rotation's claim: nothing rotates
 		return placed, err
 	case !deleted:
-		// repo/ is active: the re-form resumes from the keychain's record with its rotation and its Adds
-		groupId, err := reformGroup(ctx, &GkmReformArgs{RepoId: self.repoId})
+		// repo/ is active: the re-form resumes from the keychain's record with its rotation and its Adds, unless a
+		// sync finished it first, which leaves its group to answer and nothing to draft
+		groupId, err := reformGroup(ctx, &GkmReformArgs{RepoId: self.repoId, Resume: true})
 		if err != nil {
 			return placed, fmt.Errorf("evs: the repo's group, once active: %w", err)
 		}

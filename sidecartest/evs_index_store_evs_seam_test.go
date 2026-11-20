@@ -10,7 +10,8 @@
 //	          gives its bytes as they stood, held to nothing more than evs's reader held them to, its entry's own
 //	          sealed fields, rather than refusing them as a plaintext hash mismatch
 //	erased    once an erasure's CLOSURE rewrote that head file and its ERASE destroyed the slot key its earlier
-//	          versions share, evs still lists those versions kept and a read of one is refused for the key; Retained
+//	          versions share, evs still lists those versions kept and a read of one reads erased, its key gone by a
+//	          committed ERASE (sidecar.ErrEvsErased, no alarm); Retained
 //	          leaves each out, since a committed ERASE named every slot it opens under, and every version it does name
 //	          reads. A second erasure then destroys the key of the first's CLOSURE, and a resume of the first goes on,
 //	          its walk meeting none of them
@@ -118,7 +119,7 @@ func TestEvsIndexRetainedLeavesOutAVersionAnEraseDestroyedEndToEnd(t *testing.T)
 		t.Fatalf("the first erasure: %+v", first)
 	}
 	// its CLOSURE rewrote the head file, and its ERASE took the key both earlier versions open under: evs lists them
-	// kept, and a read of either is refused for its key
+	// kept, and a read of either reads erased
 	history, err := world.Owner.Repo.History(ctx, &sidecar.EvsReadArgs{Path: headPath, Fresh: true})
 	if err != nil {
 		t.Fatal(err)
@@ -131,7 +132,7 @@ func TestEvsIndexRetainedLeavesOutAVersionAnEraseDestroyedEndToEnd(t *testing.T)
 			t.Fatalf("version %d of the head file reads state %q", version.Version, version.State)
 		}
 		_, err := world.Owner.Repo.ReadHead(ctx, &sidecar.EvsReadArgs{Path: headPath, Version: version.Version, Fresh: true}, io.Discard)
-		if !errors.Is(err, sidecar.ErrEvsSealInvalid) {
+		if !errors.Is(err, sidecar.ErrEvsErased) {
 			t.Fatalf("version %d of the head file read after the ERASE: %v", version.Version, err)
 		}
 	}
