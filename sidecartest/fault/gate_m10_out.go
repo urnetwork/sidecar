@@ -467,7 +467,9 @@ func gateM10OutLedgerItems() []*GateItem {
 			Item: "the CROSSSLOT lints: every script and multi-key call keeps its keys in one slot, read from the code and from T3's engines' calls, M10's engines among them (§22.4)",
 			Tests: []*GateTest{
 				{Repo: "sidecar", Package: "./sidecartest/crossslot", Names: []string{"TestThisModuleKeepsTheRule", "TestTheModuleWalkReachesTheCodeItGuards", "TestPlantedCallsReadAsTheirNamesSay"}},
-				{Repo: "server", Package: "./sidecart3", Names: []string{"TestCrossslotKeysSpreadOverTheMasters", "TestCrossslotCallsKeepEachShapeOnce", "TestRunCrossslotRefusesOneNode"}},
+				{Repo: "server", Package: "./sidecart3", Names: []string{"TestCrossslotKeysSpreadOverTheMasters", "TestCrossslotCallsKeepEachShapeOnce"}},
+				// the lint's refusal of one node runs in server's test env, on the private stores
+				{Repo: "server", Package: "./sidecart3", Stores: true, Names: []string{"TestRunCrossslotRefusesOneNode"}},
 			},
 		},
 		{
