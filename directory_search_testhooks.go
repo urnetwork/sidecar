@@ -4,12 +4,12 @@
 // case, S13's search_agents step and FS-87's index case's roll-up leg; RECORD-M10-06): the cards ref's index as the
 // directory's writers pushed it beside their cards, read by the search cache, sync engine, policy and engine a
 // composition will run, the scope carrying the searchable_days a case gives it, as a composition's scope source will
-// read it from the policy that governs the log. No composition gives
-// the sync engine its adapter over EvsRepo yet (search_sync.go's searchSyncSource names it), so this hook stands in
-// for that adapter alone, and in the plainest way one may answer: the head by listing, as a device past its catch-up
-// budget takes it, each file read through EvsRepo's verifying reader (evs_index_store_evs.go) and sealed again for
-// the cache under the repo's key as the device's gkm answers it. Replay by statements, read receipts and a slot key's
-// reopening are that adapter's, and nothing here stands for them. Only the sidecar_testhooks build has it (§22.4).
+// read it from the policy that governs the log. No composition gives the sync engine its adapter over EvsRepo yet
+// (search_sync.go's searchSyncSource names it), so this hook stands in for that adapter alone, and in the plainest way
+// one may answer: the head by listing, as a device past its catch-up budget takes it, each file read through EvsRepo's
+// verifying reader (evs_index_store_evs.go) and sealed again for the cache under the repo's key as the device's gkm
+// answers it. Replay by statements, read receipts and a slot key's reopening are that adapter's, and nothing here
+// stands for them. Only the sidecar_testhooks build has it (§22.4).
 
 package sidecar
 
