@@ -1,6 +1,7 @@
 // IP listings (MAIL-M7-20) on synthetic prefixes, RFC 5737's and RFC 3849's: a listed exploit or botnet
 // source gets 554 at the banner, any other category passes on in MailIngress, a stale or failing mirror
-// rejects nothing, and a swap under load misses no read.
+// rejects nothing, a load still running as the mirror answers again ends with what it read, and a swap
+// under load misses no read.
 
 package mxedgeservice_test
 
@@ -25,13 +26,15 @@ type testListing struct {
 	category string
 }
 
-// A mirror a test scripts: its entries, when its data was current, and whether a load fails.
+// A mirror a test scripts: its entries, when its data was current, whether a load fails, and whether the
+// next load, having read all of that, waits for the test before it ends.
 type testListingSource struct {
 	stateLock   sync.Mutex
 	listings    []testListing
 	currentTime time.Time
 	failing     bool
-	loadCount   int
+	// holdNext's: the next load sends its release here and ends once that is closed
+	releases chan chan struct{}
 }
 
 func (self *testListingSource) set(currentTime time.Time, listings ...testListing) {
@@ -48,19 +51,50 @@ func (self *testListingSource) fail() {
 	self.failing = true
 }
 
-func (self *testListingSource) Load(ctx context.Context, add mxedgeservice.MxListingAdd) (time.Time, error) {
+// Holds the next load once it has read the mirror. That load sends its release on the channel returned, so
+// a receive there means it is running, and it ends with what it read once the release is closed, or with
+// its context's error once that ends.
+func (self *testListingSource) holdNext() chan chan struct{} {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	self.loadCount += 1
-	if self.failing {
+	self.releases = make(chan chan struct{})
+	return self.releases
+}
+
+// Reads the mirror under the lock and adds its entries outside it, so a held load leaves set and fail free.
+func (self *testListingSource) Load(ctx context.Context, add mxedgeservice.MxListingAdd) (time.Time, error) {
+	var listings []testListing
+	var currentTime time.Time
+	var failing bool
+	var releases chan chan struct{}
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		listings, currentTime, failing, releases = self.listings, self.currentTime, self.failing, self.releases
+		self.releases = nil
+	}()
+	if releases != nil {
+		release := make(chan struct{})
+		select {
+		case releases <- release:
+		case <-ctx.Done():
+			return time.Time{}, ctx.Err()
+		}
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return time.Time{}, ctx.Err()
+		}
+	}
+	if failing {
 		return time.Time{}, errors.New("the mirror cannot be read")
 	}
-	for _, listing := range self.listings {
+	for _, listing := range listings {
 		if err := add(netip.MustParsePrefix(listing.prefix), listing.category); err != nil {
 			return time.Time{}, err
 		}
 	}
-	return self.currentTime, nil
+	return currentTime, nil
 }
 
 // The synthetic feed every router test here starts on.
@@ -141,7 +175,10 @@ func TestListingsStaleRejectNothing(t *testing.T) {
 }
 
 // A mirror that stops answering keeps the set in use until its data goes stale, then rejects nothing; the
-// next good load rejects again.
+// next good load rejects again. The clock moves one refresh at a time, and each load a move starts ends
+// before the next move: a move past several refreshes can return with the last load it started still
+// running, and a count taken then is met by that load rather than by the refresh after it, the order
+// TestListingsLoadRunningAsTheFeedRecoversKeepsTheStaleSet forces on every run.
 func TestListingsFeedDownRejectsNothingOnceStale(t *testing.T) {
 	source := &testListingSource{}
 	start := sidecartest.DefaultClockStart()
@@ -153,19 +190,71 @@ func TestListingsFeedDownRejectsNothingOnceStale(t *testing.T) {
 	router.service.AwaitListingLoads(2)
 	router.expectBannerRefused("192.0.2.77")
 
-	// past the stale bound with every load failing
-	router.clock.AdvanceTo(start.Add(router.settings.ListingStaleTimeout + time.Second))
+	// past the stale bound with every load failing; each load ends with the clock where its refresh fired,
+	// so the next is due one interval on
+	staleTime := start.Add(router.settings.ListingStaleTimeout + time.Second)
+	nextLoadTime := router.clock.Now().Add(interval)
+	for !nextLoadTime.After(staleTime) {
+		loadCount := router.service.ListingLoadCount()
+		router.clock.AdvanceTo(nextLoadTime)
+		router.service.AwaitListingLoads(loadCount + 1)
+		nextLoadTime = nextLoadTime.Add(interval)
+	}
+	router.clock.AdvanceTo(staleTime)
 	client, receiver := router.dialFrom("192.0.2.77", testRouteSni)
 	receiver.writer.Close()
 	client.expectEnd()
-	if value := router.host.Metrics.Value("urnetwork_mxedge_listing_loads_total", "failed"); value < 1 {
+	// no load is running, so every one counted has ended, and each since the first failed
+	loadCount := router.service.ListingLoadCount()
+	if value := router.host.Metrics.Value("urnetwork_mxedge_listing_loads_total", "failed"); value != float64(loadCount-1) {
+		t.Errorf("%v of %d loads counted failed", value, loadCount)
+	}
+
+	// a load that answers again, the next refresh's, rejects again
+	source.set(router.clock.Now(), testListings(start)...)
+	router.clock.AdvanceTo(nextLoadTime)
+	router.service.AwaitListingLoads(loadCount + 1)
+	router.expectBannerRefused("192.0.2.77")
+}
+
+// A load still running when the mirror answers again ends with what it read: a count taken while it runs is
+// met by its failure, which keeps the stale set and rejects nothing, and only the refresh after it loads
+// the mirror and rejects again. This is the order TestListingsFeedDownRejectsNothingOnceStale fell into now
+// and then while one move took it past several refreshes, held so that it comes every run.
+func TestListingsLoadRunningAsTheFeedRecoversKeepsTheStaleSet(t *testing.T) {
+	source := &testListingSource{}
+	start := sidecartest.DefaultClockStart()
+	settings := mxedgeservice.DefaultMxEdgeSettings()
+	// current just inside the stale bound, so the set rejects now and is stale by the first refresh
+	source.set(start.Add(time.Second-settings.ListingStaleTimeout), testListings(start)...)
+	router := newTestListedRouter(t, source)
+	router.expectBannerRefused("192.0.2.77")
+
+	// the first refresh reads a mirror that cannot be read and is held there while the mirror answers again
+	source.fail()
+	releases := source.holdNext()
+	router.clock.Advance(router.settings.ListingRefreshInterval)
+	release := <-releases
+	loadCount := router.service.ListingLoadCount()
+	if loadCount != 1 {
+		t.Fatalf("%d loads counted with the second still running", loadCount)
+	}
+	source.set(router.clock.Now(), testListings(start)...)
+	close(release)
+	router.service.AwaitListingLoads(loadCount + 1)
+	client, receiver := router.dialFrom("192.0.2.77", testRouteSni)
+	if listings := receiver.ingress.GetIpListings(); len(listings) != 0 {
+		t.Errorf("a stale set passed %v on", listings)
+	}
+	receiver.writer.Close()
+	client.expectEnd()
+	if value := router.host.Metrics.Value("urnetwork_mxedge_listing_loads_total", "failed"); value != 1 {
 		t.Errorf("%v failed loads counted", value)
 	}
 
-	// a load that answers again rejects again
-	source.set(router.clock.Now(), testListings(start)...)
-	loadCount := router.service.ListingLoadCount()
-	router.clock.Advance(interval)
+	// a count taken with no load running is met by the next refresh, which reads the mirror answering again
+	loadCount = router.service.ListingLoadCount()
+	router.clock.Advance(router.settings.ListingRefreshInterval)
 	router.service.AwaitListingLoads(loadCount + 1)
 	router.expectBannerRefused("192.0.2.77")
 }
