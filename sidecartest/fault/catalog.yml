@@ -345,7 +345,7 @@ rows:
   - {id: FS-89, sections: [11], checks: [FI-1, FI-27], tiers: [T2, T3], cases: [{gates: [M10-out], store_clock: true}]}
   - {id: FS-90, sections: [11], checks: [FI-2, FI-13a, FI-27], tiers: [T2, T3], cases: [{gates: [M10-out]}]}
   - {id: FS-91, sections: [11], checks: [FI-2, FI-27], tiers: [T2, T3], cases: [{gates: [M10-out], store_clock: true}]}
-  - {id: FS-92, sections: [11, 21], checks: [FI-5, FI-13c, FI-27], tiers: [T2, T3], cases: [{gates: [M5-out, M10-out], later_of: true}]}
+  - {id: FS-92, sections: [11, 21], checks: [FI-5, FI-13c, FI-27], tiers: [T2, T3], cases: [{gates: [M5-out, M10-out], later_of: true, store_clock: true}]}
   - {id: FS-93, sections: [11], checks: [FI-27], tiers: [T2, T3], cases: [{gates: [M10-out]}]}
   - {id: FS-94, sections: [11], checks: [FI-1, FI-27], tiers: [T2, T3], cases: [{gates: [M10-out]}]}
   - id: FS-95
