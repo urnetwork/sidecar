@@ -10,17 +10,18 @@
 #   run-tlc.sh twin <Spec> <Twin> [Name=value ...]      one twin, of any part
 #   run-tlc.sh control <Spec> <Twin> [Name=value ...]   the model at that twin's bounds, to pass
 #   run-tlc.sh live <Spec> [Name=value ...]             liveness, without symmetry or view
+#   run-tlc.sh live-<part> <Spec> [Name=value ...]      one part's liveness runs, each at its bounds
 #   run-tlc.sh stories-<part> <Spec> [Name=value ...]   one part's stories, each at its bounds
 #   run-tlc.sh grounds <Spec> [Name=value ...]          a model's design grounds, each as it must end
 #   run-tlc.sh ground <Spec> <Ground> [Name=value ...]  one of them
 #   run-tlc.sh list <Spec>                              every twin, of any part, and the invariant it must break
 #   run-tlc.sh list-grounds <Spec>                      the grounds and what each must show
-#   run-tlc.sh list-parts <Spec>                        each part's twins and stories, a line each
+#   run-tlc.sh list-parts <Spec>                        each part's twins, stories and liveness runs
 #
-# A part is a group of a model's twins and stories that a gate needs apart from its other runs, so each
-# of its groups is a mode of its own, which modelled.yml records on its own: EvsCommit's M10 part runs as
-# the purger's (purge), which M10's entry needs, and the drop extension's (drop), which only its exit
-# needs (§22.10; QD-1116; parts_EvsCommit below). StoreSettle and IndexRollup have no parts.
+# A part is a group of a model's twins, stories and liveness runs that a gate needs apart from its other
+# runs, so each of its groups is a mode of its own, which modelled.yml records on its own: EvsCommit's M10
+# part runs as the purger's (purge), which M10's entry needs, and the drop extension's (drop), which only
+# its exit needs (§22.10; QD-1116, QD-1119; parts_EvsCommit below). StoreSettle and IndexRollup have none.
 #
 # <Spec> is EvsCommit, StoreSettle or IndexRollup. A Name=value replaces a constant of the spec's
 # cfg; Quiet=a+b leaves the named processes out (quiet_EvsCommit below; IndexRollup and StoreSettle
@@ -38,7 +39,7 @@ set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 
 usage() {
-  sed -n '7,18p' "$0" | sed 's/^# //' >&2
+  sed -n '7,19p' "$0" | sed 's/^# //' >&2
   exit 64
 }
 
@@ -100,8 +101,9 @@ EOF
 # EvsCommit's parts (QD-1116). Its M10 part, run story by story (F2Run) with the M2 part held at its
 # start, splits between §22.10's gates for format 2: M10's entry needs "EvsCommit.tla with the purger"
 # passing TLC, and its exit "the model's drop extension". So the purger's twins and stories (purge) and
-# the drop extension's (drop) are parts, each group run by a mode of its own (twins-purge, stories-purge,
-# twins-drop, stories-drop), which modelled.yml records apart, and twins runs the M2 part's alone.
+# the drop extension's twins, stories and liveness (drop) are parts, each group run by a mode of its own
+# (twins-purge, stories-purge, twins-drop, stories-drop, live-drop), which modelled.yml records apart, and
+# twins runs the M2 part's alone.
 parts_EvsCommit="purge drop"
 
 # A part's twins run its stories: a purge story on the committing instance alone, which holds the
@@ -146,6 +148,19 @@ dropA    F2Run="dropA"
 dropB    F2Run="dropB"
 dropC    F2Run="dropC"
 STORIES
+}
+
+# A part's liveness runs, each under LiveSpec with the spec's properties (live_cfg), without symmetry or
+# view. The drop extension's: F2DropsEnd, that every executing drop ends done, held or refused while no
+# hold stands, under weak fairness on each drop story, on the one instance EVSB-M10-07 ran them on by
+# hand (QD-1119); two instances, which EVSB-M10-07 deferred, are the review phase's. The purger has
+# none: §22.8 names no liveness of it.
+lives_EvsCommit_drop() {
+  cat <<'LIVES'
+dropA    F2Run="dropA" Instances={i1}
+dropB    F2Run="dropB" Instances={i1}
+dropC    F2Run="dropC" Instances={i1}
+LIVES
 }
 
 # The spec's parts, empty for a spec with none.
@@ -538,6 +553,9 @@ main() {
     for part in $(spec_parts); do
       "twins_${spec}_$part" | awk -v p="$part" '{ names = names " " $1 } END { print p " twins" names }'
       "stories_${spec}_$part" | awk -v p="$part" '{ names = names " " $1 } END { print p " stories" names }'
+      if declare -F "lives_${spec}_$part" > /dev/null; then
+        "lives_${spec}_$part" | awk -v p="$part" '{ names = names " " $1 } END { print p " lives" names }'
+      fi
     done
     exit 0
   fi
@@ -545,12 +563,16 @@ main() {
     list-grounds|grounds|ground)
       declare -F "grounds_$spec" > /dev/null || { echo "run-tlc.sh: $spec has no design grounds" >&2; exit 64; }
       ;;
-    twins-*|stories-*)
+    twins-*|stories-*|live-*)
       part=${mode#*-}
       case " $(spec_parts) " in
         *" $part "*) ;;
         *) echo "run-tlc.sh: $spec has no part $part" >&2; exit 64 ;;
       esac
+      if [ "${mode%%-*}" = live ] && ! declare -F "lives_${spec}_$part" > /dev/null; then
+        echo "run-tlc.sh: $spec's part $part has no liveness runs" >&2
+        exit 64
+      fi
       ;;
   esac
   if [ "$mode" = list-grounds ]; then
@@ -589,6 +611,17 @@ main() {
         live_cfg "$cfg"
         check live "$cfg" pass || failed=1
       fi
+      ;;
+    live-*)
+      while read -r name bounds; do
+        quiet_parts="" sim_depth="" sim_traces="" sim_seed="" script=""
+        cfg=$work/live-$name.cfg
+        cp "$here/$spec.cfg" "$cfg"
+        # shellcheck disable=SC2086
+        with_constants "$cfg" $bounds "$@"
+        live_cfg "$cfg"
+        check "live-$name" "$cfg" pass || failed=1
+      done < <("lives_${spec}_$part")
       ;;
     twin|control)
       [ $# -ge 1 ] || usage

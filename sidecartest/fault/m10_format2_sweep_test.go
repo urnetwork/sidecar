@@ -701,13 +701,13 @@ type m10Format2Item struct {
 func m10Format2GateItems() []*m10Format2Item {
 	return []*m10Format2Item{
 		{
-			item: "EvsCommit.tla's purger and drop extension pass TLC (§22.10; EVSB-M10-07): its M10 stories, each at its bounds, and its M10 twins each refused with its invariant violated, which hold I-EVS-9, I-EVS-10, I-EVS-15, FI-16, FI-17 and FI-27 where the stories reach, the purger's and the drop extension's each modes of their own that M10's exit needs (QD-1116)",
+			item: "EvsCommit.tla's purger and drop extension pass TLC (§22.10; EVSB-M10-07): its M10 stories, each at its bounds, its M10 twins each refused with its invariant violated, which hold I-EVS-9, I-EVS-10, I-EVS-15, FI-16, FI-17 and FI-27 where the stories reach, and F2DropsEnd under weak fairness on each drop story, the purger's and the drop extension's each modes of their own that M10's exit needs (QD-1116, QD-1119)",
 			tests: []*GateTest{
-				{Repo: "sidecar", Package: "./sidecartest/model", Tags: "sidecar_tlc", Names: []string{"TestEvsCommitPurgerStoriesPassTlc", "TestEvsCommitPurgerMutantsFailTlc", "TestEvsCommitDropStoriesPassTlc", "TestEvsCommitDropMutantsFailTlc"}},
+				{Repo: "sidecar", Package: "./sidecartest/model", Tags: "sidecar_tlc", Names: []string{"TestEvsCommitPurgerStoriesPassTlc", "TestEvsCommitPurgerMutantsFailTlc", "TestEvsCommitDropStoriesPassTlc", "TestEvsCommitDropMutantsFailTlc", "TestEvsCommitDropLivenessHolds"}},
 			},
 			missingClauses: []string{
 				"EVSB-M10-07's report lists what the stories leave out (locks voiding drops, observe modes, the 2,048-id mark, several drops a repo, index rewrites, FI-16's sweep-period liveness)",
-				"no mode runs F2DropsEnd, the drop extension's liveness under weak fairness, on a drop story: live runs EvsCommit at its cfg's bounds, where no drop executes (question tlc-modes-by-part-drop-liveness)",
+				"F2DropsEnd runs on one instance; on two it is the review phase's (QD-1119)",
 			},
 		},
 		{
