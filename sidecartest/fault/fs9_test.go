@@ -25,5 +25,5 @@ func TestFs9(t *testing.T) {
 // its own, 8 s. It runs on the default now: with the bound at 5 ms, a hundredth of the span, every one of its runs
 // passed with writerA and evs1 found working and the baton kept, where the bound alone had stalled all of them.
 func TestFs9UnfoldedListing(t *testing.T) {
-	RunClause(t, "FS-9", "unfolded listing", Fs9UnfoldedListing, nil)
+	RunRegisteredClause(t, "FS-9", "unfolded listing", nil)
 }

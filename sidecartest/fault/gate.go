@@ -14,6 +14,12 @@
 // the convention's packages, such as FS-5's, FS-73's and FS-72's rollback case's T3 tests in server's evshost
 // (owner decision 548; QD-1081).
 //
+// Beside a case's own tests, whether the convention's or a sweep's, the convention names its registered clauses' tests
+// (register_clause.go; QD-1084), so a case reads pass only when its RunRow tests and every clause's tests pass (TEST.md's
+// rule 7): each clause's TestFs<n><Case><Clause> here, and its TestFs<n><Case><Clause>OnT3 in the server package the
+// clause names, where it runs on T3. A case's clause tests on one tier and package share one entry, and a test the case's
+// own entries already name is not named twice.
+//
 // Gates are named as the tool takes them: G0; Mn-in for milestone n's entry review; Mn for its exit
 // review, Mn-out in the catalog; held for §23.6's later-of cases, case by case once both their gates have
 // passed, GateHeld in the catalog (gate_held.go); every for each Gn-out (FS-55), every-out in the catalog;
@@ -256,17 +262,57 @@ var gateAssemblyItem = &GateItem{
 	Commands: []*GateCommand{{Repo: "server", Command: []string{"go", "run", "./local/sidecar-gate", "assembly"}}},
 }
 
+// The tests a case's registered clauses show it by, beside the case's own tests in named: each clause's T2 test and its
+// T3 test, the case's tests on one tier and package in one entry, in the order Clauses gives them. A test named already
+// names a clause's test that a sweep named by hand, and is left out.
+func gateCaseClauseTests(testCase *Case, named []*GateTest) []*GateTest {
+	key := func(test *GateTest, name string) string {
+		return test.Repo + "|" + test.Dir + "|" + test.Package + "|" + name
+	}
+	seen := map[string]bool{}
+	for _, test := range named {
+		for _, name := range test.Names {
+			seen[key(test, name)] = true
+		}
+	}
+	entries := []*GateTest{}
+	for _, clause := range Clauses(testCase.Row.Id, testCase.Name) {
+		for _, test := range GateClauseTests(clause) {
+			name := test.Names[0]
+			if seen[key(test, name)] {
+				continue
+			}
+			seen[key(test, name)] = true
+			index := slices.IndexFunc(entries, func(entry *GateTest) bool {
+				return entry.Repo == test.Repo && entry.Dir == test.Dir && entry.Package == test.Package && entry.Tags == test.Tags && entry.Stores == test.Stores
+			})
+			if index < 0 {
+				entries = append(entries, test)
+				continue
+			}
+			entries[index].Names = append(entries[index].Names, name)
+		}
+	}
+	return entries
+}
+
+// A case's tests at a gate: its own, the convention's or its sweep's, then its clauses'.
+func gateCaseTests(testCase *Case, sweep *GateSweep) []*GateTest {
+	tests := gateConventionalTests(testCase)
+	if named, ok := sweep.Cases[testCase.String()]; ok {
+		tests = slices.Clone(named)
+	}
+	return append(tests, gateCaseClauseTests(testCase, tests)...)
+}
+
 // Every row of gate: the catalog's cases at it, in row order, each with its conventional tests or its
-// sweep's; at G0 and an entry review, the assembly check; then its sweep's items.
+// sweep's, and its clauses' tests; at G0 and an entry review, the assembly check; then its sweep's items.
 func GateRows(catalog *Catalog, gate string) []*GateRow {
 	sweep := gateSweep(gate)
 	rows := []*GateRow{}
 	if catalogGate := gateCatalogName(gate); catalogGate != "" {
 		for _, testCase := range catalog.GateCases(catalogGate) {
-			tests := gateConventionalTests(testCase)
-			if named, ok := sweep.Cases[testCase.String()]; ok {
-				tests = named
-			}
+			tests := gateCaseTests(testCase, sweep)
 			rows = append(rows, &GateRow{
 				Row:        testCase.Row.Id,
 				Case:       testCase.Name,
@@ -306,7 +352,9 @@ const gateFileHeader = `# §23.8's gate sweeps (TEST-M1-11; OPS-M1-07's tool): g
 # store_clock: true says the case's T3 run reads stored ages through T3's store clock (QD-264), which the report
 # names beside its outcome. A case's T2 test is TestFs<n><Case> in sidecar's sidecartest/fault and its T3 test
 # TestFs<n><Case>OnT3 in server's sidecart3 under sidecar_localstack too, by convention, so this file does not
-# change as rows land.
+# change as rows land. Each clause registered for a case (fault.RegisterClause; QD-1084) adds its tests to the
+# case's row by the same convention, TestFs<n><Case><Clause> in sidecar's sidecartest/fault and, where it runs on
+# T3, TestFs<n><Case><Clause>OnT3 in the server package it names, so a case passes only when every clause does.
 `
 
 // gates.yml's bytes for catalog: every gate in review order, each with its rows.

@@ -86,8 +86,8 @@ func (self *netEnginesEngine) Close() {
 	self.record.order = append(self.record.order, "engine")
 }
 
-// NetSettings.Engines hosts the engines, Blobs still behind the recorder FI-30 reads, and the host closes
-// after its engines.
+// NetSettings.Engines hosts the engines, Blobs still behind the recorder FI-30 reads and Redis behind the one
+// that keeps the head cache's requests for FI-27, and the host closes after its engines.
 func TestNetEnginesHostTheEngines(t *testing.T) {
 	record := &netEnginesRecord{}
 	var built *Net
@@ -107,8 +107,8 @@ func TestNetEnginesHostTheEngines(t *testing.T) {
 	if built != net {
 		t.Fatal("Engines was not given the Net")
 	}
-	if net.Host().Redis != sidecar.Redis(other.Redis) {
-		t.Error("the engines' Redis is not the host's")
+	if recorded, ok := net.Host().Redis.(*headCacheRecordedRedis); !ok || recorded.Redis != sidecar.Redis(other.Redis) {
+		t.Errorf("the engines' Redis is not the host's behind the head cache's recorder: %T", net.Host().Redis)
 	}
 	if _, ok := net.Host().Blobs.(*BlobRecorder); !ok {
 		t.Errorf("the engines' Blobs are not recorded: %T", net.Host().Blobs)

@@ -20,8 +20,9 @@
 //     of FS-85, FS-86, FS-87, FS-99 and FS-100's M6 cases, and FS-98's Team case, whose server tests run on server's
 //     sequencer alone and under another name; and the T2 runs of FS-43 and FS-51, which the catalog puts on T2, FS-43
 //     under every write's lost answer, and whose owners wrote them on server's rows in fixed orders. What is written of
-//     those rows runs in items, apart from the rows: FS-43's and FS-51's tests on Postgres, FS-85's ACL legs in server's
-//     api, and FS-99's evs scope in server's root package.
+//     those rows runs in items, apart from the rows: FS-43's and FS-51's tests on Postgres, and FS-99's evs scope's
+//     mutant in server's root package. FS-85's ACL legs and FS-99's evs scope are registered clauses (QD-1084), which
+//     run with their rows on both tiers by the convention, on T3 in server's api and root package.
 //
 // Every other case keeps the convention, the card, index and team-record cases among them, which sit at the later of
 // M6-out and M10-out and are TEST-M10-06's. DESIGN-DETAILS 16's prefix-rules rows are not here: the rules moved to
@@ -156,11 +157,11 @@ func gateM6Cases(catalog *Catalog) map[string][]*GateTest {
 		names    []string
 	}{
 		{rowId: "FS-84", caseName: "entries", names: []string{"TestFs84M6"}},
-		{rowId: "FS-85", names: []string{"TestFs85M6", "TestFs85AclRepoRequest", "TestFs85AclOwnerBoundRequest", "TestFs85AclWorkerRequest", "TestFs85AclCopiedDecision"}},
+		{rowId: "FS-85", names: []string{"TestFs85M6"}},
 		{rowId: "FS-86", caseName: "announce-entries", names: []string{"TestFs86M6"}},
 		{rowId: "FS-87", names: []string{"TestFs87M6"}},
 		{rowId: "FS-88", names: []string{"TestFs88M6"}},
-		{rowId: "FS-99", caseName: "entries", names: []string{"TestFs99M6", "TestFs99EvsScope"}},
+		{rowId: "FS-99", caseName: "entries", names: []string{"TestFs99M6"}},
 		{rowId: "FS-101", caseName: "entries", names: []string{"TestFs101M6"}},
 	} {
 		testCase := caseOf(place.rowId, place.caseName)
@@ -295,12 +296,9 @@ func gateM6OutItems(catalog *Catalog) []*GateItem {
 			)},
 		},
 		&GateItem{
-			Item: "what is written of the directory rows' T3 runs, whose rows above wait on the convention's tests: FS-85's ACL legs in server's api (ACL-M6-05) and FS-99's evs scope with its mutant in server's root package (RECORD-M6-25)",
+			Item: "what is written of the directory rows' T3 runs beside their rows, which wait on the convention's tests: FS-99's evs scope's mutant in server's root package (RECORD-M6-25); FS-85's ACL legs (ACL-M6-05) and FS-99's evs scope itself run with their rows, registered clauses whose T3 tests are server's api's and root package's (QD-1084)",
 			Tests: []*GateTest{
-				{Repo: "server", Package: "./api", Tags: gateT3Tags, Stores: true, Names: []string{
-					"TestFs85AclRepoRequestOnT3", "TestFs85AclOwnerBoundRequestOnT3", "TestFs85AclWorkerRequestOnT3", "TestFs85AclCopiedDecisionOnT3",
-				}},
-				{Repo: "server", Package: ".", Tags: gateT3Tags, Stores: true, Names: []string{"TestFs99EvsScopeOnT3", "TestFs99EvsScopeMutantExchangeMintingXAdminFailsOnT3"}},
+				{Repo: "server", Package: ".", Tags: gateT3Tags, Stores: true, Names: []string{"TestFs99EvsScopeMutantExchangeMintingXAdminFailsOnT3"}},
 			},
 		},
 		&GateItem{

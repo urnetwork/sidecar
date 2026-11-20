@@ -2783,12 +2783,20 @@ F2Cites ==
         /\ \A x \in KindIds(c, {"staged"}) :
                \A w \in F2Versions : \A c2 \in vh[w[1]][w[2]].changes : x \in CIds(c2) => w = v /\ c2 = c
 
-\* I-EVS-15, FI-27: no push validated after a DROP's fence cites a version it lists, as a base, a
-\* deleted path or a reuse source. One validated before the fence may land after it (its late step 7),
-\* which the job's mark, after every short timer, sees.
+\* Whether a version's push was validated against a head below the DROP: the store's version count when
+\* its step 4 read the store, vseq, is below the DROP's place in that count, dt.seq, so every head it
+\* read, the DROP's ref's among them, is below the DROP. Step 4 here reads the store as it stands and
+\* never a cached head, which may hide a committed DROP for at most §11.9's 10 min (DESIGN-DETAILS
+\* 10.2.7's arithmetic): the model takes that as one of the short times a minute passes (QD-1146).
+F2ValidatedBelowDrop(rec) == rec.vseq < dt.seq
+
+\* I-EVS-15, FI-27: no push validated against a head showing a DROP cites a version it lists, as a
+\* base, a deleted path or a reuse source (QD-1146: the fence is the head step 4 read). One validated
+\* against a head below the DROP may land after it (its late step 7, or a reuse source's head the
+\* cache served), which the job's mark, after every short timer, sees.
 F2FenceHolds ==
     \A v \in F2Versions : \A c \in vh[v[1]][v[2]].changes :
-        F2Listed(c.src.ref, c.src.u, c.src.path) => vh[v[1]][v[2]].vseq < dt.seq
+        F2Listed(c.src.ref, c.src.u, c.src.path) => F2ValidatedBelowDrop(vh[v[1]][v[2]])
 
 (***************************************************************************)
 (* Weak fairness: §22.8's two liveness checks, in their own config.         *)

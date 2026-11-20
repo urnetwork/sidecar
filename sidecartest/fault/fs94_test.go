@@ -12,5 +12,5 @@ func TestFs94(t *testing.T) {
 }
 
 func TestFs94RecordClass(t *testing.T) {
-	RunClause(t, "FS-94", "record class", Fs94RecordClass, nil)
+	RunRegisteredClause(t, "FS-94", "record class", nil)
 }

@@ -25,17 +25,17 @@ func TestAclMemberRemovalDropsEveryRight(t *testing.T) {
 }
 
 func TestFs85AclRepoRequest(t *testing.T) {
-	RunClause(t, "FS-85", "acl repo request", Fs85AclRepoRequest, nil)
+	RunRegisteredClause(t, "FS-85", "acl repo request", nil)
 }
 
 func TestFs85AclOwnerBoundRequest(t *testing.T) {
-	RunClause(t, "FS-85", "acl owner-bound request", Fs85AclOwnerBoundRequest, nil)
+	RunRegisteredClause(t, "FS-85", "acl owner-bound request", nil)
 }
 
 func TestFs85AclWorkerRequest(t *testing.T) {
-	RunClause(t, "FS-85", "acl worker request", Fs85AclWorkerRequest, nil)
+	RunRegisteredClause(t, "FS-85", "acl worker request", nil)
 }
 
 func TestFs85AclCopiedDecision(t *testing.T) {
-	RunClause(t, "FS-85", "acl copied decision", Fs85AclCopiedDecision, nil)
+	RunRegisteredClause(t, "FS-85", "acl copied decision", nil)
 }

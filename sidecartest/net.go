@@ -108,8 +108,10 @@ type Net struct {
 	// what each actor held, as testHookSecret gave it (fault's StoreView opens with these)
 	secrets *HeldSecrets
 
-	fakes       *FakeHost
-	blobs       *BlobRecorder
+	fakes *FakeHost
+	blobs *BlobRecorder
+	// the head cache's requests on every host AddEngines gave, beside blobs (head_cache_history.go)
+	headCache   *HeadCacheRecorder
 	removeHooks func()
 	// what NetSettings.Engines gave to close its host, nil for the fakes'
 	closeHost func()
@@ -169,6 +171,7 @@ func NewNet(ctx context.Context, settings *NetSettings) *Net {
 		engines:       map[string]sidecar.Engine{},
 		driveCounters: map[string]*DriveCounters{},
 	}
+	self.headCache = NewHeadCacheRecorder(clock, self.BlobHistoryCount)
 	self.fakes = NewFakeHost(cancelCtx, clock, faults, barriers, settings.Host)
 	self.AddEngines(self.fakes.ServiceHost())
 	if settings.Engines != nil {
@@ -261,11 +264,13 @@ func (self *Net) Fakes() *FakeHost {
 }
 
 // Where engines run on: fakes on T2, server's stores on T3 (§22.4). Blobs goes through a recorder, so
-// FI-30 reads every request either way, and a real host's stores are real.
+// FI-30 reads every request either way, and Redis through one that keeps evs's head cache's requests beside them,
+// which FI-27 reads (QD-1146); a real host's stores are real.
 func (self *Net) AddEngines(host *sidecar.ServiceHost) {
 	hostCopy := *host
 	blobs := NewBlobRecorder(host.Blobs, self.clock, nil)
 	hostCopy.Blobs = blobs
+	hostCopy.Redis = self.headCache.Wrap(host.Redis)
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.host = &hostCopy
@@ -292,6 +297,17 @@ func (self *Net) BlobHistoryCount() int {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	return self.blobs.Count()
+}
+
+// Every request of evs's head cache so far, across the hosts AddEngines gave, in call order (head_cache_history.go).
+func (self *Net) HeadCacheHistory() []*HeadCacheHistoryEntry {
+	return self.headCache.History()
+}
+
+// How many requests HeadCacheHistory holds now, without copying them: a request at this index or later comes after
+// this call.
+func (self *Net) HeadCacheHistoryCount() int {
+	return self.headCache.Count()
 }
 
 // Starts a process under name, and keeps builder for its Restart. Returns its memory.

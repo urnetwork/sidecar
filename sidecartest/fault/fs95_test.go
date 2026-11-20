@@ -8,8 +8,6 @@ package fault
 
 import (
 	"testing"
-
-	"github.com/urnetwork/sidecar/protocol"
 )
 
 func TestFs95(t *testing.T) {
@@ -17,25 +15,25 @@ func TestFs95(t *testing.T) {
 }
 
 func TestFs95Locked(t *testing.T) {
-	RunClause(t, "FS-95", "locked", Fs95Locked, nil)
+	RunRegisteredClause(t, "FS-95", "locked", nil)
 }
 
 func TestFs95Config(t *testing.T) {
-	RunClause(t, "FS-95", "config", Fs95Kind(protocol.RepoKind_REPO_KIND_CONFIG), nil)
+	RunRegisteredClause(t, "FS-95", "config", nil)
 }
 
 func TestFs95Mailcfg(t *testing.T) {
-	RunClause(t, "FS-95", "mailcfg", Fs95Kind(protocol.RepoKind_REPO_KIND_MAILCFG), nil)
+	RunRegisteredClause(t, "FS-95", "mailcfg", nil)
 }
 
 func TestFs95OwnerBound(t *testing.T) {
-	RunClause(t, "FS-95", "owner-bound", Fs95OwnerBound, nil)
+	RunRegisteredClause(t, "FS-95", "owner-bound", nil)
 }
 
 func TestFs95ListMissingAVersion(t *testing.T) {
-	RunClause(t, "FS-95", "list missing a version", Fs95ListMismatch(false), nil)
+	RunRegisteredClause(t, "FS-95", "list missing a version", nil)
 }
 
 func TestFs95ListAddingAVersion(t *testing.T) {
-	RunClause(t, "FS-95", "list adding a version", Fs95ListMismatch(true), nil)
+	RunRegisteredClause(t, "FS-95", "list adding a version", nil)
 }

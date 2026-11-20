@@ -15,13 +15,13 @@ func TestFs4(t *testing.T) {
 }
 
 func TestFs4TwoSources(t *testing.T) {
-	RunClause(t, "FS-4", "two sources", Fs4TwoSources, nil)
+	RunRegisteredClause(t, "FS-4", "two sources", nil)
 }
 
 func TestFs4BatchedEpoch(t *testing.T) {
-	RunClause(t, "FS-4", "batched epoch", Fs4BatchedEpoch, nil)
+	RunRegisteredClause(t, "FS-4", "batched epoch", nil)
 }
 
 func TestFs4BatchedEpochReadBeforeCopy(t *testing.T) {
-	RunClause(t, "FS-4", "batched epoch read before copy", Fs4BatchedEpochReadBeforeCopy, nil)
+	RunRegisteredClause(t, "FS-4", "batched epoch read before copy", nil)
 }

@@ -399,7 +399,8 @@ type EvsWorld struct {
 // Call when the instance began it and Return when it answered, both on the world's logical clock, which moves at
 // every event under the world's lock and so orders them as they happened. An attempt its instance never answered,
 // killed or still held, has Return 0 and no Answer: its outcome is unknown and its end open. StoreArrival is how many
-// store requests the Net's blob history held when it began (Operation.StoreArrival).
+// store requests the Net's blob history held when it began (Operation.StoreArrival), and CacheArrival how many head
+// cache requests the Net's record of them held then (Operation.CacheArrival).
 type EvsWorldAttempt struct {
 	PushId       sidecar.Id
 	Instance     string
@@ -407,6 +408,7 @@ type EvsWorldAttempt struct {
 	Return       int64
 	Answer       *EvsWorldAnswer
 	StoreArrival int
+	CacheArrival int
 }
 
 // A world on net, drawing its ids and keys; it writes nothing until Setup runs as a schedule's first step. settings
@@ -478,10 +480,13 @@ func NewEvsWorld(net *Net, settings *EvsWorldSettings) *EvsWorld {
 // An attempt beginning now, its call time taken from the logical clock.
 func (self *EvsWorld) beginAttempt(pushId sidecar.Id, instance string) *EvsWorldAttempt {
 	storeArrival := self.net.BlobHistoryCount()
+	cacheArrival := self.net.HeadCacheHistoryCount()
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.attemptClock += 1
-	attempt := &EvsWorldAttempt{PushId: pushId, Instance: instance, Call: self.attemptClock, StoreArrival: storeArrival}
+	attempt := &EvsWorldAttempt{
+		PushId: pushId, Instance: instance, Call: self.attemptClock, StoreArrival: storeArrival, CacheArrival: cacheArrival,
+	}
 	self.attempts = append(self.attempts, attempt)
 	return attempt
 }

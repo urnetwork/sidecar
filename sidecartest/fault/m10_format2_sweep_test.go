@@ -8,7 +8,8 @@
 // clause nobody finished surfaces here, and a clause that fails is fixed in the code of the task that owns it, never
 // by editing a schedule.
 //
-//	cases       m10Format2SweepCases: each case with the clauses its tests run beside its registered schedule, the
+//	cases       m10Format2SweepCases: each case with the clauses run beside its registered schedule, the registry's
+//	            (register_clause.go) and any its owners still run unregistered, the
 //	            T3 tests of a case that is no builder, the tests that hold parts of it without being a schedule run
 //	            under its row's rules, what the registered schedules leave out, and what it waits on outside this
 //	            build. TestM10Format2SweepNamesEveryCase holds the list to the catalog, and the tests it names to
@@ -47,8 +48,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/urnetwork/sidecar/evsservice"
-	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/sidecartest"
 )
 
@@ -79,7 +78,7 @@ func m10Format2CatalogCases(catalog *Catalog) []*Case {
 }
 
 // A clause beside a row's registered case, run under the row's rules by the name the row's own tests give it, so its
-// explorer's traces are the ones those tests write and replay.
+// explorer's traces are the ones those tests write and replay: a registered one's, or one its owner has not registered.
 type m10Format2Clause struct {
 	name  string
 	build Builder
@@ -89,8 +88,9 @@ type m10Format2Clause struct {
 type m10Format2Case struct {
 	rowId    string
 	caseName string
-	// Run beside the registered case, on each tier it is registered on.
-	clauses []*m10Format2Clause
+	// Run beside the registered case, on each tier it is registered on, after the clauses the registry holds for it: those
+	// its owner's tests run and have not registered (register_clause.go), each until its owner registers it.
+	unregisteredClauses []*m10Format2Clause
 	// The T3 tests of a case that is no builder, where they run.
 	t3Tests []*GateTest
 	// Tests of the sidecar repo that hold parts of the case without being a schedule run under its row's rules.
@@ -177,13 +177,6 @@ func m10Format2SweepCases() []*m10Format2Case {
 		},
 		{
 			rowId: "FS-68",
-			clauses: []*m10Format2Clause{
-				{name: "rules", build: Fs68Rules},
-				{name: "platform rule", build: Fs68PlatformRule},
-				{name: "config", build: Fs68Kind(protocol.RepoKind_REPO_KIND_CONFIG)},
-				{name: "mailcfg", build: Fs68Kind(protocol.RepoKind_REPO_KIND_MAILCFG)},
-				{name: "lock", build: Fs68LockedPastTheWindow},
-			},
 			missingClauses: []string{
 				"git-mode and creates-only refs never taking versioning off (EVS2-M10-31)",
 				"the index's own files committing under a lock, owner decision 168, whose root no world names yet (EVS2-M10-31)",
@@ -224,13 +217,6 @@ func m10Format2SweepCases() []*m10Format2Case {
 		{
 			rowId:    "FS-72",
 			caseName: "migration",
-			clauses: []*m10Format2Clause{
-				{name: "migration killed after step 6", build: Fs72MigrationKilledAt(evsservice.BarrierPushStep6After)},
-				{name: "migration killed before the raise", build: Fs72MigrationKilledAt(evsservice.BarrierMigrateRaiseBefore)},
-				{name: "migration killed after the raise", build: Fs72MigrationKilledAt(evsservice.BarrierMigrateRaiseAfter)},
-				{name: "migration killed before the head CAS", build: Fs72MigrationKilledAt(evsservice.BarrierHeadCasBefore)},
-				{name: "migration killed after the head CAS", build: Fs72MigrationKilledAt(evsservice.BarrierHeadCasAfter)},
-			},
 			heldByTests: []*GateTest{
 				m10Format2Held("./sidecartest/fault", "TestFi16AndFi27ReadFs72sSchedulesClean"),
 			},
@@ -264,8 +250,7 @@ func m10Format2SweepCases() []*m10Format2Case {
 			},
 		},
 		{
-			rowId:   "FS-89",
-			clauses: []*m10Format2Clause{{name: "now", build: Fs89Now}},
+			rowId: "FS-89",
 			heldByTests: []*GateTest{
 				m10Format2Held("./sidecartest/fault", "TestFs89NowWaitsForTheHorizon", "TestFs89WindowPendingAndCancel"),
 				m10Format2Held("./evsservice", "TestDropJobWaitsForTheStartDelay", "TestDropJobWaitsForTheHorizon", "TestDropJobRunsADropToDone"),
@@ -294,14 +279,17 @@ func m10Format2SweepCases() []*m10Format2Case {
 		},
 		{
 			rowId: "FS-91",
-			clauses: []*m10Format2Clause{
+			// fi27-cached-head-clause holds fs91_test.go, which runs it unregistered
+			unregisteredClauses: []*m10Format2Clause{
 				{name: "within the window", build: Fs91ReleasedWithinTheWindow},
+				{name: "on a cached head", build: Fs91ValidatedOnACachedHead},
 			},
 			heldByTests: []*GateTest{
-				m10Format2Held("./sidecartest/fault", "TestFs91WithinTheWindowIsHeldToTheWindow", "TestFs91WithinTheWindowIsHeldToAPushValidatedBeforeTheFence"),
+				m10Format2Held("./sidecartest/fault", "TestFs91WithinTheWindowIsHeldToTheWindow", "TestFs91WithinTheWindowIsHeldToAPushValidatedBeforeTheFence",
+					"TestFs91OnACachedHeadIsHeldToTheCacheAge", "TestFs91OnACachedHeadIsHeldToItsRead"),
 			},
 			missingClauses: []string{
-				"(c) a cached head a failed cache write left before the DROP, and a creating head write held past 26 h (EVS2-M10-31, EVSB-M10-04)",
+				"(c) a creating head write held at the store past 26 h, and a cache entry put 11 min after its head's write never served (EVS2-M10-31, EVSB-M10-04)",
 				"(d) a push in parts sealed after the drop: evsservice's TestPushDroppedRefusesASealAfterTheDrop holds the seal's refusal on the engine (EVS2-M10-31)",
 				"(e) a re-upload adopting a young candidate's receipt, and past 23 h SEGMENT_STALE (EVS2-M10-31, EVSB-M10-05)",
 				"(f) a git-mode push carrying a young candidate's bytes as a history segment (EVS2-M10-31, EVSB-M10-04)",
@@ -327,8 +315,7 @@ func m10Format2SweepCases() []*m10Format2Case {
 				"the row's schedule",
 		},
 		{
-			rowId:   "FS-94",
-			clauses: []*m10Format2Clause{{name: "record class", build: Fs94RecordClass}},
+			rowId: "FS-94",
 			missingClauses: []string{
 				"x.txt's marker collected and its epoch drained after its path's removal (EVS2-M10-31)",
 				"its inline bytes unserved by push id, which no route of the world's client asks for (EVS2-M10-31)",
@@ -340,14 +327,6 @@ func m10Format2SweepCases() []*m10Format2Case {
 		},
 		{
 			rowId: "FS-95",
-			clauses: []*m10Format2Clause{
-				{name: "locked", build: Fs95Locked},
-				{name: "config", build: Fs95Kind(protocol.RepoKind_REPO_KIND_CONFIG)},
-				{name: "mailcfg", build: Fs95Kind(protocol.RepoKind_REPO_KIND_MAILCFG)},
-				{name: "owner-bound", build: Fs95OwnerBound},
-				{name: "list missing a version", build: Fs95ListMismatch(false)},
-				{name: "list adding a version", build: Fs95ListMismatch(true)},
-			},
 			missingClauses: []string{
 				"git-mode and creates-only refs, 409 REF_MODE (EVS2-M10-31)",
 				"ur/lfs's objects and the reserved names beyond .ur-index/, and a modified client's DROP there raising history_drop at readers (EVS2-M10-31)",
@@ -401,12 +380,21 @@ func TestFs89(t *testing.T) {
 }
 
 func TestFs89Now(t *testing.T) {
-	RunClause(t, "FS-89", "now", Fs89Now, nil)
+	RunRegisteredClause(t, "FS-89", "now", nil)
 }
 
 // The case catalog.yml holds for sweepCase, or nil.
 func (self *m10Format2Case) catalogCase(catalog *Catalog) *Case {
 	return catalog.Case(self.rowId, self.caseName)
+}
+
+// The clauses run beside the case: the registry's, by name, then those its owners run unregistered.
+func (self *m10Format2Case) caseClauses() []*m10Format2Clause {
+	clauses := []*m10Format2Clause{}
+	for _, registration := range Clauses(self.rowId, self.caseName) {
+		clauses = append(clauses, &m10Format2Clause{name: registration.Name, build: registration.Build})
+	}
+	return append(clauses, self.unregisteredClauses...)
 }
 
 // The case's report header: "FS-66's hold (§11; FI-6, FI-16; T2+T3; the later of M5-out and M10-out)".
@@ -491,11 +479,16 @@ func TestM10Format2SweepNamesEveryCase(t *testing.T) {
 			}
 		}
 		clauseNames := []string{}
-		for _, clause := range sweepCase.clauses {
+		for _, clause := range sweepCase.caseClauses() {
 			if clause.name == "" || clause.build == nil || slices.Contains(clauseNames, clause.name) {
 				t.Errorf("%s's clause %q is unnamed, unbuilt or named twice", testCase, clause.name)
 			}
 			clauseNames = append(clauseNames, clause.name)
+		}
+		for _, clause := range sweepCase.unregisteredClauses {
+			if registration := LookupClause(testCase.Row.Id, clause.name); registration != nil {
+				t.Errorf("%s is registered: take %q off the sweep's unregistered clauses", registration, clause.name)
+			}
 		}
 		for _, test := range sweepCase.heldByTests {
 			for _, err := range GateTestDeclared(repoDirectory, test) {
@@ -557,7 +550,7 @@ func TestM10Format2SweepSchedulesCheckTheirRowsInvariants(t *testing.T) {
 			names = append(names, registration.String())
 			builders = append(builders, registration.Build)
 		}
-		for _, clause := range sweepCase.clauses {
+		for _, clause := range sweepCase.caseClauses() {
 			names = append(names, testCase.Row.Id+" "+clause.name)
 			builders = append(builders, clause.build)
 		}
@@ -626,7 +619,7 @@ func TestM10Format2SweepOnT2(t *testing.T) {
 			for _, err := range rowReport.Errors {
 				t.Errorf("%s on T2: %v", testCase, err)
 			}
-			for _, clause := range sweepCase.clauses {
+			for _, clause := range sweepCase.caseClauses() {
 				clauseCount += 1
 				clauseReport := CheckClause(t.Context(), testCase.Row.Id, clause.name, clause.build, nil)
 				m10Format2WriteRun(&report, "clause "+clause.name, clauseReport)

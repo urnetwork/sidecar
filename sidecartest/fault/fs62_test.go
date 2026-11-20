@@ -15,5 +15,5 @@ func TestFs62(t *testing.T) {
 }
 
 func TestFs62LeaseHolderResync(t *testing.T) {
-	RunClause(t, "FS-62", "lease holder resync", Fs62LeaseHolderResync, nil)
+	RunRegisteredClause(t, "FS-62", "lease holder resync", nil)
 }
