@@ -829,6 +829,9 @@ func (self *fakeRecordStreamsClient) Erase(ctx context.Context, repoId sidecar.I
 			complete[0] = 1
 		}
 		parts := [][]byte{[]byte("erase"), erase.ErasureId[:], complete, erase.SealedNote}
+		if erase.Completion {
+			parts = append(parts, []byte("completion"))
+		}
 		for _, key := range erase.Keys {
 			parts = append(parts, key.SlotId[:], binary.BigEndian.AppendUint32(nil, key.KeyIndex))
 		}
@@ -839,7 +842,7 @@ func (self *fakeRecordStreamsClient) Erase(ctx context.Context, repoId sidecar.I
 		if !repo.scopes[self.sidecarId].Admin {
 			return nil, repo.refuseWithLock(erase.PushId, statement, protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE)
 		}
-		if len(erase.Keys) == 0 {
+		if len(erase.Keys) == 0 || (erase.Completion && !erase.Complete) {
 			return nil, repo.refuseWithLock(erase.PushId, statement, protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
 		}
 		heldCount := 0
@@ -848,10 +851,13 @@ func (self *fakeRecordStreamsClient) Erase(ctx context.Context, repoId sidecar.I
 				heldCount += 1
 			}
 		}
-		if heldCount == 0 && !repo.completionWithLock(erase) {
+		switch {
+		case erase.Completion && 0 < heldCount:
+			return nil, repo.refuseWithLock(erase.PushId, statement, protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
+		case heldCount == 0 && !(erase.Completion && repo.completionWithLock(erase)):
 			return nil, repo.refuseWithLock(erase.PushId, statement, protocol.EvsRefusalCode_EVS_REFUSAL_NOTHING_TO_ERASE)
 		}
-		if heldCount == 0 {
+		if erase.Completion {
 			repo.completionPushIds[erase.PushId] = true
 		}
 		erasure := &sidecar.RecordStreamErasure{
@@ -874,34 +880,43 @@ func (self *fakeRecordStreamsClient) Erase(ctx context.Context, repoId sidecar.I
 	})
 }
 
-// Whether erase, naming only keys no slot holds, is a completion ERASE the fake takes (QD-1132): it says complete; an
-// earlier ERASE of its erasure named every key it names; the erasure's newest ERASE does not say complete already, so
-// one a late copy's ERASE reopened completes again; and the newest ERASE naming each key is no completion, which is
-// the part evs can see (question erasure-completion-erase-evs-cannot-read-complete's option 1). A racing runner's twin
-// completion, naming the key its twin took, stays NOTHING_TO_ERASE.
+// Whether evs takes erase, a completion ERASE naming only keys no slot holds, as QD-1137 has it: an earlier ERASE
+// named each key it names, and the newest such carries no COMPLETION. A racing runner's twin completion, naming the key
+// its twin took, stays NOTHING_TO_ERASE; after a late copy's ERASE one naming a key no completion took commits. Which
+// erasure the keys' ERASEs were of is the readers' (completesWithLock).
 func (self *fakeRecordRepo) completionWithLock(erase *sidecar.RecordStreamErase) bool {
-	if !erase.Complete {
-		return false
-	}
-	ownKeys := map[sidecar.RecordSlotKey]bool{}
 	newestCompletion := map[sidecar.RecordSlotKey]bool{}
-	complete := false
 	for _, erasure := range self.erasures {
 		for _, key := range erasure.Keys {
 			newestCompletion[*key] = self.completionPushIds[erasure.PushId]
-			if erasure.ErasureId == erase.ErasureId {
-				ownKeys[*key] = true
-			}
 		}
-		if erasure.ErasureId == erase.ErasureId {
-			complete = erasure.Complete
-		}
-	}
-	if complete {
-		return false
 	}
 	for _, key := range erase.Keys {
-		if !ownKeys[*key] || newestCompletion[*key] {
+		if completion, named := newestCompletion[*key]; !named || completion {
+			return false
+		}
+	}
+	return true
+}
+
+// Whether the committed ERASE at index ends its erasure as a reader reads it (QD-1137's readers): as its note says,
+// but a completion only where an earlier ERASE of its erasure named each key it names. The lock held.
+func (self *fakeRecordRepo) completesWithLock(index int) bool {
+	erasure := self.erasures[index]
+	if !erasure.Complete || !self.completionPushIds[erasure.PushId] {
+		return erasure.Complete
+	}
+	named := map[sidecar.RecordSlotKey]bool{}
+	for _, earlier := range self.erasures[:index] {
+		if earlier.ErasureId != erasure.ErasureId {
+			continue
+		}
+		for _, key := range earlier.Keys {
+			named[*key] = true
+		}
+	}
+	for _, key := range erasure.Keys {
+		if !named[*key] {
 			return false
 		}
 	}
@@ -914,11 +929,12 @@ func (self *fakeRecordStreamsClient) ReadErasures(ctx context.Context, repoId si
 		if !scope.Read {
 			return fakeRecordReadRefusal(protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE)
 		}
-		for _, erasure := range repo.erasures {
+		for index, erasure := range repo.erasures {
 			if erasure.Version <= afterVersion {
 				continue
 			}
 			copied := *erasure
+			copied.Complete = repo.completesWithLock(index)
 			copied.SealedNote = bytes.Clone(erasure.SealedNote)
 			copied.Keys = nil
 			for _, key := range erasure.Keys {

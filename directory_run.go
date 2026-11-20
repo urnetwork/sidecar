@@ -37,6 +37,12 @@
 //	           renewal carrying its old renewed time, so readers let the item expire while it was away
 //	close      Close stops the renewal timer and every write after it: the process's stop, after which an open
 //	           run's item expires unless the next process's Resume or a move renews it
+//	moderated  a run whose item an erasure took, which this sidecar's card leaves out from its return on
+//	           (directory_cards_erasure.go; QD-1144), is announced no more: each write first asks the card writer's
+//	           journal (DirectoryRunsArgs.Moderated), and a carried draft the card left out answers so too; the run
+//	           keeps that in its kept item, so a restart announces it no more either. A renewal, a move or a rewritten
+//	           where writes nothing, a claim or handoff is refused (ErrDirectoryRunModerated), a withdrawal has nothing
+//	           left to withdraw, and its end forgets it
 //
 // Barriers: directory.run.before and .after around each append, keyed by the announcement's id. Safe for concurrent
 // use. Locks: writeLock, then stateLock. writeLock is held across a write's whole build, its RepoItem call to the
@@ -79,6 +85,9 @@ var (
 	ErrDirectoryRunsConfigUnavailable = errors.New("directory runs value cannot be kept")
 	// The runs closed: nothing more is written in this process.
 	ErrDirectoryRunsClosed = errors.New("directory runs closed")
+	// An erasure took the run's item, which this sidecar's card leaves out (the file's header's moderated row): it has
+	// no item to write, as an ended run has none, so it is ErrDirectoryRunUnknown too.
+	ErrDirectoryRunModerated = fmt.Errorf("%w: an erasure took its item", ErrDirectoryRunUnknown)
 )
 
 // §16.10's claims values as a run's item reads them. The numbers are SidecarClaims', so the daemon passes a session's
@@ -168,9 +177,13 @@ type DirectoryRunsArgs struct {
 	// Where each run's item is kept: the directory's store; nil keeps nothing, so a restart starts afresh.
 	Store SidecarStore
 	// Where SetRuns keeps a member's value; nil refuses to keep one, with ErrDirectoryRunsConfigUnavailable.
-	Config   DirectoryRunsConfig
-	Clock    Clock
-	Settings *DirectoryRunsSettings
+	Config DirectoryRunsConfig
+	// Whether this sidecar's card leaves an announcement out, an erasure having taken it: the card writer's journal
+	// (the directory client's), which each write asks first. Nil reads none, and only a carried draft the card left
+	// out tells a run so.
+	Moderated func(announcementId Id) (bool, error)
+	Clock     Clock
+	Settings  *DirectoryRunsSettings
 	// RenewJitter's.
 	DirectorySettings *SidecarDirectorySettings
 	// crypto/rand's reader when nil: announcement and claim ids, and the renewal's offset.
@@ -225,6 +238,9 @@ type directoryRun struct {
 	HandoffBody []byte   `json:"handoff,omitempty"`
 	// The where last written was private.
 	Private bool `json:"private"`
+	// An erasure took its item, which this sidecar's card leaves out: it is announced no more (the file's header's
+	// moderated row).
+	Moderated bool `json:"moderated,omitempty"`
 	// Kept in memory only: when it last moved, and whether an entry waits for its start delay.
 	movedMillis int64
 	startDue    bool
@@ -246,6 +262,7 @@ type DirectoryRuns struct {
 	redactor          *Redactor
 	store             SidecarStore
 	config            DirectoryRunsConfig
+	moderated         func(announcementId Id) (bool, error)
 	clock             Clock
 	settings          *DirectoryRunsSettings
 	directorySettings *SidecarDirectorySettings
@@ -312,6 +329,7 @@ func NewDirectoryRuns(args *DirectoryRunsArgs) (*DirectoryRuns, error) {
 		redactor:          redactor,
 		store:             args.Store,
 		config:            args.Config,
+		moderated:         args.Moderated,
 		clock:             clockOrReal(args.Clock),
 		settings:          settings,
 		directorySettings: directorySettings,
@@ -336,12 +354,14 @@ func (self *DirectoryClient) Runs() *DirectoryRuns {
 	runs, err := NewDirectoryRuns(&DirectoryRunsArgs{
 		SidecarId: self.sidecarId,
 		// announce entries at format 1, this sidecar's card from format 2 (directory_format2.go)
-		Writer:            self.carrierWriter(),
-		Runs:              self.runView,
-		Auth:              self.auth,
-		RepoItem:          self.RepoItem,
-		Redactor:          self.redactor,
-		Store:             store,
+		Writer:   self.carrierWriter(),
+		Runs:     self.runView,
+		Auth:     self.auth,
+		RepoItem: self.RepoItem,
+		Redactor: self.redactor,
+		Store:    store,
+		// what this sidecar's card leaves out, an erasure having taken it (directory_cards_erasure.go)
+		Moderated:         self.cardItemModerated,
 		Clock:             self.clock,
 		DirectorySettings: self.settings,
 		Log:               self.log,
@@ -530,13 +550,18 @@ func (self *DirectoryRuns) Started(start *DirectoryRunStart) error {
 		return false, changed
 	}()
 	if changed {
-		return self.updateOnly(start.RunId, RecordSourceHook, func(run *directoryRun) (bool, error) {
+		err := self.updateOnly(start.RunId, RecordSourceHook, func(run *directoryRun) (bool, error) {
 			if !run.open() {
 				return false, nil
 			}
 			run.Version += 1
 			return true, nil
 		})
+		if errors.Is(err, ErrDirectoryRunModerated) {
+			// an erasure took the run's item: the session goes on, announced no more
+			return nil
+		}
+		return err
 	}
 	if !due {
 		return nil
@@ -592,7 +617,8 @@ func (self *DirectoryRuns) Moved(runId Id) {
 }
 
 // The run ended, at SessionEnd or its Coverage entry (§16.11's end row): its item ended, or handed_off where its
-// handoff names a member or an agent, at a raised version; a run never announced is forgotten.
+// handoff names a member or an agent, at a raised version; a run never announced, or one whose item an erasure took
+// (ErrDirectoryRunModerated, which is ErrDirectoryRunUnknown), is forgotten with nothing written.
 func (self *DirectoryRuns) Ended(runId Id) error {
 	if err := self.load(); err != nil {
 		return err
@@ -630,6 +656,10 @@ func (self *DirectoryRuns) Withdraw(runId Id) error {
 		run.Version += 1
 		return true, nil
 	})
+	if errors.Is(err, ErrDirectoryRunModerated) {
+		// an erasure took the item, which no card carries: nothing is left to withdraw
+		return nil
+	}
 	if err != nil {
 		return err
 	}
@@ -808,7 +838,8 @@ func (self *DirectoryRuns) forget(runId Id) {
 
 // Changes a run's item under writeLock and, when change answers true, writes its next entry: the item built, checked
 // and kept, then appended, its ref answered. A change that answers false writes nothing and answers nil. Refused with
-// ErrDirectoryRunUnknown for a run not held, and with ErrDirectoryRunsClosed after Close.
+// ErrDirectoryRunUnknown for a run not held, with ErrDirectoryRunModerated, before change, for a run whose item an
+// erasure took, and with ErrDirectoryRunsClosed after Close.
 func (self *DirectoryRuns) update(runId Id, source RecordSource, change func(run *directoryRun) (bool, error)) (*RecordEntryRef, error) {
 	self.writeLock.Lock()
 	defer self.writeLock.Unlock()
@@ -818,6 +849,13 @@ func (self *DirectoryRuns) update(runId Id, source RecordSource, change func(run
 	run, ok := self.runOf(runId)
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrDirectoryRunUnknown, runId)
+	}
+	moderated, err := self.moderatedRun(run)
+	if err != nil {
+		return nil, err
+	}
+	if moderated {
+		return nil, fmt.Errorf("%w: %s", ErrDirectoryRunModerated, runId)
 	}
 	write, err := change(run)
 	if err != nil {
@@ -839,12 +877,46 @@ func (self *DirectoryRuns) update(runId Id, source RecordSource, change func(run
 	}
 	self.keep(run)
 	ref, err := self.append(run, item, source)
+	if errors.Is(err, ErrDirectoryItemModerated) {
+		// the card this append wrote left the item out, an erasure having taken it
+		if err := self.markModerated(run); err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%w: %s", ErrDirectoryRunModerated, runId)
+	}
 	if err != nil {
 		return nil, err
 	}
 	// the renewal timer runs while a run is open; setting it waits on nothing (scheduleRenew's timeout is positive)
 	self.scheduleRenew()
 	return ref, nil
+}
+
+// Whether an erasure took run's item, so it is announced no more (the file's header's moderated row): its own kept
+// state, else the card writer's journal for an announced run, which a run named there keeps from then on. The caller
+// holds writeLock.
+func (self *DirectoryRuns) moderatedRun(run *directoryRun) (bool, error) {
+	if run.Moderated {
+		return true, nil
+	}
+	if self.moderated == nil || run.Version == 0 {
+		return false, nil
+	}
+	moderated, err := self.moderated(run.AnnouncementId)
+	if err != nil || !moderated {
+		return false, err
+	}
+	return true, self.markModerated(run)
+}
+
+// Keeps run as one whose item an erasure took, in the store first. The caller holds writeLock.
+func (self *DirectoryRuns) markModerated(run *directoryRun) error {
+	run.Moderated = true
+	if err := self.persist(run); err != nil {
+		return err
+	}
+	self.keep(run)
+	return nil
 }
 
 // update with its ref dropped.
@@ -1013,8 +1085,8 @@ func (self *DirectoryRuns) append(run *directoryRun, item *protocol.Announcement
 	return refs[0], nil
 }
 
-// Sets the renewal timer, when none is set and a run is open: RenewInterval on at a random offset of ±RenewJitter,
-// always a positive timeout, so a fake clock never fires it inline.
+// Sets the renewal timer, when none is set and a run is open whose item no erasure took: RenewInterval on at a random
+// offset of ±RenewJitter, always a positive timeout, so a fake clock never fires it inline.
 func (self *DirectoryRuns) scheduleRenew() {
 	if self.settings.RenewInterval <= 0 {
 		return
@@ -1026,7 +1098,7 @@ func (self *DirectoryRuns) scheduleRenew() {
 			return false
 		}
 		for _, run := range self.runIdRuns {
-			if run.open() {
+			if run.open() && !run.Moderated {
 				return true
 			}
 		}
@@ -1064,8 +1136,8 @@ func (self *DirectoryRuns) jitter() time.Duration {
 	return time.Duration(binary.BigEndian.Uint64(value[:])%span) - jitter
 }
 
-// The renewal: each open run that moved within MovedWindow renews at its version, and a where its repo's marker
-// changed is rewritten; then the next renewal is set.
+// The renewal: each open run that moved within MovedWindow, and whose item no erasure took, renews at its version, and
+// a where its repo's marker changed is rewritten; then the next renewal is set.
 func (self *DirectoryRuns) renew() {
 	closed := func() bool {
 		self.stateLock.Lock()
@@ -1082,7 +1154,8 @@ func (self *DirectoryRuns) renew() {
 		defer self.stateLock.Unlock()
 		runIds := []Id{}
 		for runId, run := range self.runIdRuns {
-			if run.open() && nowMillis-run.movedMillis <= self.settings.MovedWindow.Milliseconds() {
+			// a run whose item an erasure took renews nothing
+			if run.open() && !run.Moderated && nowMillis-run.movedMillis <= self.settings.MovedWindow.Milliseconds() {
 				runIds = append(runIds, runId)
 			}
 		}

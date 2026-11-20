@@ -4,8 +4,10 @@
 //	         repo's erasure ref, as POST .../push takes any push: a token below admin gets 403 SCOPE at arrival,
 //	         before any read, commit or slot rewrite (I-EVS-16), and a statement that is no ERASE is refused
 //	step 4   reads each slot the ERASE's erased list names
-//	5h       a list naming no key those slots still hold gets 409 NOTHING_TO_ERASE, recorded (§11.8's refuse row), a
-//	         completion ERASE's among them until its question is answered (QD-1132; eraseRules)
+//	5h       a list naming no key those slots still hold gets 409 NOTHING_TO_ERASE, recorded (§11.8's refuse row),
+//	         but for a completion ERASE (flag 1024 beside ERASE alone; QD-1132, QD-1137), which evs takes where the
+//	         newest earlier ERASE naming each of its keys carries no COMPLETION (eraseRules); it destroys nothing, so
+//	         the rewrites after it, and the reconciler's, find nothing to drop
 //	after    once the ERASE commits, and again whenever an attempt of it finds it committed, each named slot is
 //	         rewritten without those keys, If-Match the slot it read and keeping its origin (DESIGN-DETAILS 14.2.6),
 //	         before the 200, under a preservation hold too: a slot answering 404 is done, since every key it held is
@@ -122,15 +124,18 @@ func (self *pushAttempt) erasureRules(view *PushView) *EvsCheckRefusal {
 
 // An ERASE names at least one key its slots still hold, else 409 NOTHING_TO_ERASE.
 //
-// A completion ERASE (QD-1132; the root's evs_erase_completion.go) names only keys an earlier ERASE of its erasure
-// destroyed and says complete, but its erasure id and complete byte ride its sealed metadata (QD-682), which evs cannot
-// open (I-1), so evs cannot tell one from a racing duplicate ERASE. Until question
-// erasure-completion-erase-evs-cannot-read-complete settles what evs reads it by, it is refused here as any list naming
-// no held key: its erasure stays listed in its ref's set, fail closed, as before QD-1132.
+// A completion ERASE, flagged COMPLETION beside ERASE alone (§11.12's push row; QD-1132, QD-1137; the root's
+// evs_erase_completion.go), ends an erasure that no ERASE with a key is left to complete, and destroys nothing. Its
+// erasure id and complete byte ride its sealed metadata, which evs cannot open (I-1), so the flag is what evs reads it
+// by. One naming a key a slot still holds is INVALID. Otherwise evs takes it where the newest earlier ERASE naming each
+// key, found within CompletionLookbackCount ERASEs of the head (readCompletionNamings), carries no COMPLETION, and
+// answers NOTHING_TO_ERASE where one carries it, a racing runner's second completion, or where none names it, a key no
+// ERASE destroyed. An unflagged ERASE naming no held key, a duplicate, stays NOTHING_TO_ERASE.
 func (self *pushAttempt) eraseRules(view *PushView) *EvsCheckRefusal {
 	if self.erasureSlots == nil {
 		return newEvsCheckRefusal(EvsCheckReasonUnchecked, "no slots read")
 	}
+	held := false
 	for _, erased := range view.Payload.Erased {
 		read := self.erasureSlots[erased.SlotId]
 		if read == nil || read.objectBytes == nil {
@@ -140,11 +145,98 @@ func (self *pushAttempt) eraseRules(view *PushView) *EvsCheckRefusal {
 		if err != nil {
 			return newEvsCheckRefusal(EvsCheckReasonUnchecked, "a slot that does not parse")
 		}
-		if _, held := sidecar.EvsSlotKeyAt(slot, uint32(erased.KeyIndex)); held {
-			return nil
+		if _, ok := sidecar.EvsSlotKeyAt(slot, uint32(erased.KeyIndex)); ok {
+			held = true
+			break
 		}
 	}
-	return newEvsCheckRefusal(EvsCheckReasonNothingToErase, "no named key is still held")
+	if !view.has(protocol.EvsPushFlag_EVS_PUSH_COMPLETION) {
+		if held {
+			return nil
+		}
+		return newEvsCheckRefusal(EvsCheckReasonNothingToErase, "no named key is still held")
+	}
+	if held {
+		return newEvsCheckRefusal(EvsCheckReasonInvalid, "a completion naming a key a slot still holds")
+	}
+	if self.completion == nil {
+		return newEvsCheckRefusal(EvsCheckReasonUnchecked, "no completion reads")
+	}
+	for _, erased := range view.Payload.Erased {
+		naming := self.completion.newest[*erased]
+		switch {
+		case naming == nil:
+			return newEvsCheckRefusal(EvsCheckReasonNothingToErase, "a completion naming a key no ERASE within the lookback named")
+		case naming.completion:
+			return newEvsCheckRefusal(EvsCheckReasonNothingToErase, "a completion naming a key a completion named last")
+		}
+	}
+	return nil
+}
+
+// QD-1137's reads for a completion ERASE, over the head step 4 read.
+type completionReads struct {
+	headVersion uint64
+	// The newest earlier ERASE naming each key the completion names; a key none within the lookback named is absent.
+	newest map[sidecar.EvsErasedKey]*completionNaming
+}
+
+// The newest earlier ERASE naming one key: its version on the erasure ref, and whether it is a completion.
+type completionNaming struct {
+	version    uint64
+	completion bool
+}
+
+// Step 4's read for a completion ERASE (§11.12's push row; QD-1137): the erasure ref's ERASEs from the head step 4 read
+// back, at most CompletionLookbackCount of them, until each key the completion names is found named. Read again for
+// each head step 4 reads, since a racing completion moves it.
+func (self *pushAttempt) readCompletionNamings() error {
+	if self.payload == nil {
+		return errors.New("a completion with no payload read")
+	}
+	head := self.head
+	headVersion := uint64(0)
+	if head != nil && !head.Absent() {
+		headVersion = head.Version()
+	}
+	if self.completion != nil && self.completion.headVersion == headVersion {
+		return nil
+	}
+	reads := &completionReads{headVersion: headVersion, newest: map[sidecar.EvsErasedKey]*completionNaming{}}
+	wanted := map[sidecar.EvsErasedKey]bool{}
+	for _, erased := range self.payload.Erased {
+		wanted[*erased] = true
+	}
+	if 0 < headVersion {
+		pushes := newReadPushes(self.engine, self.ctx, self.cluster, self.repoId, self.refId, head.Head)
+		examined := 0
+		for version := headVersion; 0 < version && 0 < len(wanted) && examined < self.settings.CompletionLookbackCount; version -= 1 {
+			push, err := pushes.at(version)
+			if err != nil {
+				return err
+			}
+			flags := push.statement.Push.GetFlags()
+			if flags&uint32(protocol.EvsPushFlag_EVS_PUSH_ERASE) == 0 {
+				continue
+			}
+			examined += 1
+			if err := pushes.readRecord(push); err != nil {
+				return err
+			}
+			if push.payload == nil {
+				return fmt.Errorf("%w: an ERASE at version %d whose record holds no payload", ErrEvsStatementMismatch, version)
+			}
+			completion := flags&uint32(protocol.EvsPushFlag_EVS_PUSH_COMPLETION) != 0
+			for _, erased := range push.payload.Erased {
+				if wanted[*erased] {
+					delete(wanted, *erased)
+					reads.newest[*erased] = &completionNaming{version: version, completion: completion}
+				}
+			}
+		}
+	}
+	self.completion = reads
+	return nil
 }
 
 // After an ERASE commits, or an attempt of it finds it committed: every named slot rewritten without its keys. A
@@ -304,7 +396,14 @@ func FinishErasures(ctx context.Context, host *sidecar.ServiceHost, repoId sidec
 			return finished, err
 		}
 		statement, err := sidecar.ParseEvsStatement(statementBytes)
+		if errors.Is(err, sidecar.ErrEvsFormatUnsupported) {
+			statement, err = sidecar.ParseEvsStatementFormat2(statementBytes)
+		}
 		if err != nil || statement.Push.GetFlags()&uint32(protocol.EvsPushFlag_EVS_PUSH_ERASE) == 0 {
+			continue
+		}
+		if statement.Push.GetFlags()&uint32(protocol.EvsPushFlag_EVS_PUSH_COMPLETION) != 0 {
+			// a completion destroys nothing: its keys went with the ERASEs before it (QD-1137)
 			continue
 		}
 		// as the record keeps it, with no slot body (QD-806)

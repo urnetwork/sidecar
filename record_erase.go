@@ -43,9 +43,9 @@
 //	          file to rewrite leaves no ERASE with a key to say complete, so a completion ERASE does (QD-1132;
 //	          evs_erase_completion.go): it names a key an ERASE of the erasure named first and no ERASE named since,
 //	          and readers read it as destroying nothing new. It goes with the record's ERASEs, journaled under its push
-//	          id, so the index's eraser is not asked for one (IndexRewriteArgs.Completion). What evs takes of it is
-//	          question erasure-completion-erase-evs-cannot-read-complete's: until it is answered evs refuses it as
-//	          NOTHING_TO_ERASE, the erasure counts not completed, and its set entry stays
+//	          id, so the index's eraser is not asked for one (IndexRewriteArgs.Completion), flagged COMPLETION (QD-1137):
+//	          evs refuses one whose key a completion named last, NOTHING_TO_ERASE, and the erasure then counts not
+//	          completed, its set entry staying
 //	entry     step 7: the erasure entry, RECORD.md's ErasureBody, in this device's own stream of the log, which the
 //	          writer retries while §11.13's limit refuses it; until it lands the committed ERASE is the record. Headers
 //	          and chains still verify: only keys go, and the entry files stay
@@ -280,6 +280,8 @@ type recordEraseJournalPush struct {
 	PushId   Id               `json:"push_id"`
 	Keys     []*RecordSlotKey `json:"keys"`
 	Complete bool             `json:"complete"`
+	// A completion ERASE (QD-1137), whose statement a retry under its push id builds alike.
+	Completion bool `json:"completion,omitempty"`
 }
 
 // One CONSUME of a deposit whose slot an ERASE named.
@@ -873,7 +875,7 @@ func (self *RecordEraser) sendErases(ctx context.Context, logId Id, erasureId Id
 	for _, push := range pushes {
 		testHookBarrier("record.erase.before", recordChainIdText(logId))
 		_, err := streams.Erase(ctx, logId, &RecordStreamErase{
-			PushId: push.PushId, ErasureId: erasureId, Complete: push.Complete, Keys: push.Keys, SealedNote: note,
+			PushId: push.PushId, ErasureId: erasureId, Complete: push.Complete, Completion: push.Completion, Keys: push.Keys, SealedNote: note,
 		})
 		testHookBarrier("record.erase.after", recordChainIdText(logId))
 		if code, ok := RecordStreamRefusalCode(err); ok && code == protocol.EvsRefusalCode_EVS_REFUSAL_NOTHING_TO_ERASE {
@@ -1252,7 +1254,7 @@ func (self *RecordEraser) indexParts(ctx context.Context, journal *recordEraseJo
 			}
 		}
 		completed, err := self.sendErases(ctx, logId, journal.ErasureId, note, []*recordEraseJournalPush{{
-			PushId: journal.CompletionPushId, Keys: []*RecordSlotKey{key}, Complete: true,
+			PushId: journal.CompletionPushId, Keys: []*RecordSlotKey{key}, Complete: true, Completion: true,
 		}})
 		if err != nil {
 			return owed, err
@@ -1525,7 +1527,7 @@ func (self *RecordEraser) ResumeOthers(ctx context.Context, logId Id) ([]*Record
 				return results, err
 			}
 			completed, err := self.sendErases(ctx, logId, erasureId, first.SealedNote, []*recordEraseJournalPush{{
-				PushId: pushId, Keys: []*RecordSlotKey{key}, Complete: true,
+				PushId: pushId, Keys: []*RecordSlotKey{key}, Complete: true, Completion: true,
 			}})
 			if err != nil {
 				return results, err

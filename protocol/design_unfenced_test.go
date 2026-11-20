@@ -690,6 +690,7 @@ type testFenceValueAddition struct {
 // that holds its answer. Each joins the fence it extends, as testFenceAdditions' fields do, and one the design comes
 // to write fails until its line here leaves.
 var testFenceValueAdditions = []testFenceValueAddition{
+	{enum: "EvsPushFlag", name: "EVS_PUSH_COMPLETION", number: 1024, question: "erasure-completion-erase-evs-cannot-read-complete"},
 }
 
 // One value an owner's answer takes out of an enum the design fences, its number reserved.

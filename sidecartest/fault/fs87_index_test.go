@@ -2,7 +2,8 @@
 
 package fault
 
-// FS-87's index case on T2 (fs87_index_evs.go): the row's format-2 case under the explorer's seeds.
+// FS-87's index case on T2 (fs87_index_evs.go): the row's format-2 case under the explorer's seeds, the moderated
+// run still running when its writer's card returns, and across that writer's restart (QD-1144).
 
 import (
 	"testing"

@@ -16,11 +16,15 @@
 //	          its other run back under a key no ERASE named; B's device hears of the moderation as a notice, and no
 //	          other device raises anything
 //	return    the removal's push tombstoned each run the card held one above its version, so no entry of B's other
-//	          run stands live; B's next card, its first since D removed the path, carries the run two above with no
-//	          content change (QD-1106, owner decision 645): A's directory_list shows it at that version, its document
-//	          stands live in the cards ref's index above the tombstone, and search_agents on A's search device finds
-//	          it, while the moderated run stays out of all three; a card B rewrites after, no removal between, keeps
-//	          the version
+//	          run stands live; B's daemon still runs the moderated run and hands it to its next card with the other,
+//	          and that card, its first since D removed the path, reads the cards ref's erasure set through B's evs
+//	          binding (empty before the erasure, listing the run's document at the version erased after it, and
+//	          unread where its version's signer is no admin) and leaves the moderated run out (QD-1144), carrying the
+//	          other two above with no content change (QD-1106, owner decision 645): A's directory_list shows it at that
+//	          version, its document stands live in the cards ref's index above the tombstone, and search_agents on A's
+//	          search device finds it, while the moderated run stays out of all three; B's daemon restarts, and a card
+//	          it rewrites after, no removal between, the moderated run handed again, keeps the version and leaves the
+//	          run out
 //	revoke    R revokes P, seeded with A's card and its index document. A's daemon renews its run before it reads
 //	          the marker, so a copy naming P is written after the request. D's pass rewrites P's file and the index
 //	          files under fresh keys and leaves A's card waiting; a pass with nothing new sends nothing; once A read
@@ -43,10 +47,9 @@
 //	          as the steps read it each time the ref's head moves (FI-19's index clause); and every ERASE the repo holds
 //	          is a directory admin's (FI-25's admin scope, I-EVS-16)
 //
-// Not here: a moderated run its still-running writer carries again on the card that returns, which nothing tells the
-// writer to leave out (question card-version-rise-after-removal-moderated-run-carried-again): B's card here holds its
-// other run alone, as the erasure row's "its writer's other runs coming back" reads; which policy's searchable_days a
-// composition's scope source gives the cards ref, since none is built (question
+// Not here: B's run writer and format 2's carrier, which hand the cards here as B's daemon would; their stop at the
+// journal is the root's directory_run_test.go's, directory_worker_test.go's and directory_format2_test.go's on the
+// fakes; which policy's searchable_days a composition's scope source gives the cards ref, since none is built (question
 // fs87-rollup-mask-leg-cards-searchable-policy): F's scope gives the directory's default, as the row reads it; FI-19
 // through the search oracle, whose ledger this world does not feed, nor can it hold a directory repo: the case holds
 // the same rule on the slot objects and the index's own files; a runner killed mid-erasure, which FS-99's cards case
@@ -193,6 +196,19 @@ func (self *fs87Index) liveVersions(ctx context.Context, device string, names ..
 		versions = append(versions, held.Live[key])
 	}
 	return versions, nil
+}
+
+// The versions the cards ref's index erasure set lists each of names at, as device's evs binding reads it, a version
+// counting as one isAdmin takes.
+func (self *fs87Index) erasedVersions(ctx context.Context, device string, isAdmin func(signer sidecar.Id) bool, names ...[]byte) ([]uint64, error) {
+	return self.world.Device(device).Cards.CardsErasedVersions(ctx, self.world.DirectoryId, &sidecar.DirectoryCardsErasedArgs{
+		Names: names, IsAdmin: isAdmin,
+	})
+}
+
+// B's moderated run as its daemon, still running it, hands it: at its last version, renewed now.
+func (self *fs87Index) erasedItem(net *Net) *protocol.Announcement {
+	return self.world.RunItem(net, fs87IndexWriterB, self.erased, 2, &DirEvsWhere{Project: "example.org/team/app", Branch: "pricing"})
 }
 
 // The version written carries run's item at, 0 where it holds none.
@@ -414,6 +430,10 @@ func Fs87IndexOnEvsOf(net *Net, settings *Fs87IndexSettings) *Schedule {
 			if versions, err := state.liveVersions(ctx, fs87IndexAdmin, names...); err != nil || !slices.Equal(versions, []uint64{2, 1}) {
 				return fmt.Errorf("B's runs' documents before the erasure, live at versions %v: %v", versions, err)
 			}
+			// no CUT wrote the cards ref's erasure set yet: B's binding reads every document unlisted
+			if versions, err := state.erasedVersions(ctx, fs87IndexWriterB, world.IsAdmin, names...); err != nil || !slices.Equal(versions, []uint64{0, 0}) {
+				return fmt.Errorf("B's read of the erasure set before the erasure: %v, %v", versions, err)
+			}
 			return nil
 		}},
 
@@ -475,14 +495,28 @@ func Fs87IndexOnEvsOf(net *Net, settings *Fs87IndexSettings) *Schedule {
 		}},
 		{Advance: settings.WriteSpacing},
 		{Actor: fs87IndexWriterB, Action: func(ctx context.Context, net *Net) error {
-			// B's next card brings its other run back, under a key no ERASE named, two above the version the removal
-			// took, its first since another signer removed the path
-			written, err := world.WriteCard(ctx, fs87IndexWriterB, keptItem(net))
+			// B's binding reads the erasure set as its return will: the moderated run's document listed at the version
+			// erased, the other run's nowhere, and nothing read where the set's signer is taken for no admin
+			names := [][]byte{state.runDocument(fs87IndexWriterB, state.erased), state.runDocument(fs87IndexWriterB, state.kept)}
+			if versions, err := state.erasedVersions(ctx, fs87IndexWriterB, world.IsAdmin, names...); err != nil || !slices.Equal(versions, []uint64{2, 0}) {
+				return fmt.Errorf("B's read of the erasure set after the erasure: %v, %v", versions, err)
+			}
+			noAdmin := func(sidecar.Id) bool { return false }
+			if _, err := state.erasedVersions(ctx, fs87IndexWriterB, noAdmin, names...); !errors.Is(err, sidecar.ErrDirectoryCardReturnUnchecked) {
+				return fmt.Errorf("B's read of a set whose signer is no admin: %v", err)
+			}
+			// B's daemon still runs the moderated run, so its next card, its first since another signer removed the
+			// path, is handed both: the moderated run stays out, and the other comes back under a key no ERASE
+			// named, two above the version the removal took
+			written, err := world.WriteCard(ctx, fs87IndexWriterB, state.erasedItem(net), keptItem(net))
 			if err != nil {
 				return err
 			}
-			if version := fs87IndexCarried(written, state.kept); version != 3 {
-				return fmt.Errorf("B's card back after the removal carries its run at version %d", version)
+			if version := fs87IndexCarried(written, state.kept); version != 3 || len(written.Items) != 1 {
+				return fmt.Errorf("B's card back after the removal carries its run at version %d, %d items", version, len(written.Items))
+			}
+			if !slices.Equal(written.Moderated, []sidecar.Id{state.erased.AnnouncementId}) {
+				return fmt.Errorf("B's card back after the removal left out %v", written.Moderated)
 			}
 			erasure, err := world.Erasure(fs87IndexWriterB)
 			if err != nil {
@@ -584,14 +618,20 @@ func Fs87IndexOnEvsOf(net *Net, settings *Fs87IndexSettings) *Schedule {
 			return nil
 		}},
 		{Advance: settings.WriteSpacing},
+		// B's daemon starts again from its stores
+		{Actor: fs87IndexWriterB, Action: world.Reopen(fs87IndexWriterB)},
 		{Actor: fs87IndexWriterB, Action: func(ctx context.Context, net *Net) error {
-			// a card B rewrites with no removal between keeps the version, its document where the return put it
-			written, err := world.WriteCard(ctx, fs87IndexWriterB, keptItem(net))
+			// a card B rewrites with no removal between, the moderated run handed again, keeps the version, its
+			// document where the return put it, and leaves the moderated run out
+			written, err := world.WriteCard(ctx, fs87IndexWriterB, state.erasedItem(net), keptItem(net))
 			if err != nil {
 				return err
 			}
-			if version := fs87IndexCarried(written, state.kept); version != 3 {
-				return fmt.Errorf("B's card rewritten carries its run at version %d", version)
+			if version := fs87IndexCarried(written, state.kept); version != 3 || len(written.Items) != 1 {
+				return fmt.Errorf("B's card rewritten carries its run at version %d, %d items", version, len(written.Items))
+			}
+			if !slices.Equal(written.Moderated, []sidecar.Id{state.erased.AnnouncementId}) {
+				return fmt.Errorf("B's card rewritten left out %v", written.Moderated)
 			}
 			if version, err := state.liveVersion(ctx, fs87IndexAdmin, state.runDocument(fs87IndexWriterB, state.kept)); err != nil || version != 3 {
 				return fmt.Errorf("B's run's document after the rewrite, live at version %d: %v", version, err)

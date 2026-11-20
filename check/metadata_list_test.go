@@ -72,6 +72,11 @@ type metadataListAddition struct {
 // with the second fold of §7 (owner decision 557), QD-950's with the second fold of §11 (owner decision 408) and
 // QD-1034's with the late sweep's (owner decision 592); each here waits for the next fold.
 var metadataListAdditions = []metadataListAddition{
+	{
+		question: "erasure-completion-erase-evs-cannot-read-complete",
+		block:    "flags FORCE, DELETE, BASE, IMMUTABLE, CONSUME, PATH_EPOCH, ERASE, CLOSURE, DROP or CUT,",
+		list:     "flags FORCE, DELETE, BASE, IMMUTABLE, CONSUME, PATH_EPOCH, ERASE, CLOSURE, DROP, CUT or COMPLETION,",
+	},
 }
 
 // §2.8's block with each addition in place, in order, and a finding for each that does not apply.
