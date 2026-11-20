@@ -291,6 +291,12 @@ const (
 	// Around each DELETE (F7 to F9).
 	BarrierDropDeleteBefore = "evs.drop.delete.before"
 	BarrierDropDeleteAfter  = "evs.drop.delete.after"
+	// Around the CAS that moves a job a hold stopped to held, its record leaving the slot for the held jobs (QD-1127).
+	BarrierDropHeldBefore = "evs.drop.held.before"
+	BarrierDropHeldAfter  = "evs.drop.held.after"
+	// Around the CAS by which a held job whose holds ended takes the free slot back for its round (QD-1127).
+	BarrierDropTakeBefore = "evs.drop.take.before"
+	BarrierDropTakeAfter  = "evs.drop.take.after"
 )
 
 // A repo's barrier key.

@@ -42,6 +42,35 @@ func TestFs92HoldOutlastsTheDropTable(t *testing.T) {
 	RunClause(t, "FS-92", "a hold that outlasts the drop table", Fs92HoldOutlastsTheDropTable, nil)
 }
 
+// (a) with a second DROP made while the order stands (QD-1127; fs92_hold_second_drop.go): the held job gives up the
+// slot, so the second drop runs to held as its no-hold twin's runs to done, and at the order's end each held job
+// deletes what it held, the stored count falling once for each.
+func TestFs92SecondDropDuringTheHold(t *testing.T) {
+	RunClause(t, "FS-92", "a second drop during the hold", Fs92SecondDropDuringTheHold, nil)
+}
+
+// The admin's listings of both drops, pending, executing and done, and the bill while the order stands, equal the
+// no-hold twin's.
+func TestFs92SecondDropListsAsItsTwin(t *testing.T) {
+	twins, err := Fs92SecondDropTwins(t.Context(), func() *Net {
+		return sidecartest.NewNet(t.Context(), sidecartest.DefaultNetSettings())
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listedCount, billed := 0, false
+	for _, line := range twins.HeldAnswers.Lines() {
+		if strings.HasPrefix(line, "listing: ") {
+			listedCount += 1
+		}
+		billed = billed || strings.HasPrefix(line, "bill: ")
+	}
+	// x.txt's drop alone, then both at the second's pending, executing and done
+	if listedCount != 7 || !billed {
+		t.Fatalf("the comparison held %d listing lines, bill %t", listedCount, billed)
+	}
+}
+
 func TestFs69(t *testing.T) {
 	RunRow(t, "FS-69", "", nil)
 }

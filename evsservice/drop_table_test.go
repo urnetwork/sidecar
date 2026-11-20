@@ -3,6 +3,7 @@ package evsservice
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"slices"
 	"testing"
@@ -92,9 +93,19 @@ func dropTestState() *DropTableState {
 	place := &protocol.EvsPlace{Minute: 29000000, Instance: 3, Seq: 9, Offset: 32, Length: 512}
 	state := &DropTableState{
 		Job: &DropJobRecord{
-			JobId: testId("job"), Owner: testId("owner"), UntilMs: 1234, Phase: protocol.EvsDropPhase_EVS_DROP_HORIZON, Held: true,
+			JobId: testId("job"), Owner: testId("owner"), UntilMs: 1234, Phase: protocol.EvsDropPhase_EVS_DROP_HORIZON, Resumed: true,
 			Round: 3, FenceMs: 99, HorizonMs: 88, Cursor: DropCursor{Sequence: 2, Row: 77}, RetryMs: 4321, CoveredCount: 2,
 			FreedByteCount: 1 << 40, HeldByteCount: 5, StartedMs: 7,
+		},
+		HeldJobs: []*DropJobRecord{
+			{
+				JobId: testId("held-job-a"), Phase: protocol.EvsDropPhase_EVS_DROP_DELETE, Held: true, Round: 1, FenceMs: 11, HorizonMs: 12,
+				Cursor: DropCursor{Sequence: 1, Row: 3}, RetryMs: 5555, CoveredCount: 1, FreedByteCount: 100, HeldByteCount: 200, StartedMs: 13,
+			},
+			{
+				JobId: testId("held-job-b"), Phase: protocol.EvsDropPhase_EVS_DROP_DELETE, Held: true, Resumed: true, Round: 2, RetryMs: 6666,
+				CoveredCount: 3, HeldByteCount: 300, StartedMs: 14,
+			},
 		},
 		Voids: []*DropVoidRecord{{DropId: testId("void-a"), State: DropStateCancelled}, {DropId: testId("void-b"), State: DropStateRefusedVerify}},
 		Previews: []*DropPreviewRecord{
@@ -143,6 +154,31 @@ func TestDropTableRoundTrip(t *testing.T) {
 		*decoded.Voids[1] != *state.Voids[1] || *decoded.Previews[0] != *state.Previews[0] {
 		t.Fatal("a decoded table differs from the one encoded")
 	}
+	if len(decoded.HeldJobs) != 2 || *decoded.HeldJobs[0] != *state.HeldJobs[0] || *decoded.HeldJobs[1] != *state.HeldJobs[1] {
+		t.Fatalf("the held jobs decoded as %d records", len(decoded.HeldJobs))
+	}
+	// QD-1127's layout: the held job count in header bytes 6 and 7, the held jobs' records after the running one's,
+	// each record's flags at its byte 41
+	if encoded[5] != 0 || encoded[6] != 0 || encoded[7] != 2 || encoded[14] != 1 || encoded[15] != 0 {
+		t.Fatalf("the header's counts %x", encoded[:dropTableHeaderByteCount])
+	}
+	runningFlags := encoded[dropTableHeaderByteCount+41]
+	heldFlags := encoded[dropTableHeaderByteCount+dropTableJobByteCount+41]
+	if runningFlags != dropJobFlagResumed || heldFlags != dropJobFlagHeld {
+		t.Fatalf("the flags of the running and the first held record: %d, %d", runningFlags, heldFlags)
+	}
+	if !bytes.Equal(encoded[dropTableHeaderByteCount+dropTableJobByteCount:][:16], testId("held-job-a").Bytes()) {
+		t.Fatal("the first held job's record does not follow the running one's")
+	}
+	// a table of before QD-1127, header bytes 5 to 7 zero, reads with no held job
+	before := &DropTableState{Job: &DropJobRecord{JobId: testId("job"), Phase: protocol.EvsDropPhase_EVS_DROP_MARK}}
+	beforeBytes, err := EncodeDropTable(before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if beforeBytes[5] != 0 || beforeBytes[6] != 0 || beforeBytes[7] != 0 || len(beforeBytes) != dropTableHeaderByteCount+dropTableJobByteCount+dropTableTrailerByteCount {
+		t.Fatalf("a table with no held job: %x", beforeBytes[:dropTableHeaderByteCount])
+	}
 	for i := range state.Drops {
 		want, got := *state.Drops[i], *decoded.Drops[i]
 		want.Place, got.Place = nil, nil
@@ -178,12 +214,94 @@ func TestDropTableRefusesBadBytes(t *testing.T) {
 			state.Voids[0].State = DropStateDone
 		},
 		"a job in no phase": func(state *DropTableState) { state.Job.Phase = 0 },
+		// the slot holds a running job, never a held one, and a held job's record is held (QD-1127)
+		"a held job in the slot":       func(state *DropTableState) { state.Job.Held = true },
+		"a held job's record unheld":   func(state *DropTableState) { state.HeldJobs[1].Held = false },
+		"a held job in no phase":       func(state *DropTableState) { state.HeldJobs[0].Phase = 0 },
+		"a held job twice":             func(state *DropTableState) { state.HeldJobs[1].JobId = state.HeldJobs[0].JobId },
+		"the running job held as well": func(state *DropTableState) { state.HeldJobs[0].JobId = state.Job.JobId },
 	} {
 		state := dropTestState()
 		adjust(state)
 		if _, err := EncodeDropTable(state); !errors.Is(err, ErrDropTableInvalid) {
 			t.Errorf("%s encoded: %v", name, err)
 		}
+	}
+	// the same refused as bytes, each sealed with a trailer of its own
+	heldRecord := dropTableHeaderByteCount + dropTableJobByteCount
+	for name, tamper := range map[string]func(body []byte){
+		"a held flag on the running job's record": func(body []byte) { body[dropTableHeaderByteCount+41] |= dropJobFlagHeld },
+		"no held flag on a held job's record":     func(body []byte) { body[heldRecord+41] &^= dropJobFlagHeld },
+		"a flag no layout names":                  func(body []byte) { body[heldRecord+41] |= 4 },
+		"a byte before the held job count":        func(body []byte) { body[5] = 1 },
+		"a held job count past its records":       func(body []byte) { body[7] = 3 },
+		"two running jobs":                        func(body []byte) { body[14] = 2 },
+	} {
+		body := bytes.Clone(encoded[:len(encoded)-dropTableTrailerByteCount])
+		tamper(body)
+		trailer := sha256.Sum256(body)
+		if _, err := DecodeDropTable(append(body, trailer[:]...)); !errors.Is(err, ErrDropTableInvalid) {
+			t.Errorf("%s decoded: %v", name, err)
+		}
+	}
+}
+
+// QD-1127 with QD-1126's mirror: the records of jobs whose no-hold twins have ended, every held job's and a held job
+// resumed in the slot, count toward neither the refusal nor the eviction, as the twin's table holds none of them, while
+// a running job's counts as its twin's does; a read takes held jobs in past TableByteCount within TableHeldByteCount.
+func TestDropTableCountsNoRecordOfAJobWhoseTwinEnded(t *testing.T) {
+	settings := DefaultDropSettings()
+	now := sidecartest.DefaultClockStart().Add(400 * 24 * time.Hour)
+	place := &protocol.EvsPlace{Minute: 1, Length: 100}
+	held := func(label string) *DropJobRecord {
+		return &DropJobRecord{JobId: testId(label), Phase: protocol.EvsDropPhase_EVS_DROP_DELETE, Held: true}
+	}
+	state := &DropTableState{
+		Job:      &DropJobRecord{JobId: testId("running"), Phase: protocol.EvsDropPhase_EVS_DROP_MARK},
+		HeldJobs: []*DropJobRecord{held("held-a"), held("held-b"), held("held-c")},
+		Drops:    []*DropTableEntry{{DropId: testId("pending"), Place: place, State: DropStatePending, SeenMs: now.UnixMilli()}},
+	}
+	running := dropTableHeaderByteCount + dropTableTrailerByteCount + dropTableJobByteCount + dropTableEntryByteCount
+	if state.byteCount() != running+3*dropTableJobByteCount || state.boundByteCount() != running || state.mirrorByteCount(now, settings) != running {
+		t.Fatalf("a running job beside three held ones: %d bytes, %d and %d counted", state.byteCount(), state.boundByteCount(), state.mirrorByteCount(now, settings))
+	}
+	state.Job.Resumed = true
+	if state.boundByteCount() != running-dropTableJobByteCount || state.mirrorByteCount(now, settings) != running-dropTableJobByteCount {
+		t.Fatalf("a held job resumed in the slot counted %d and %d", state.boundByteCount(), state.mirrorByteCount(now, settings))
+	}
+	if !state.AdmitsDrop(settings) || state.HeldJob(testId("held-b")) != state.HeldJobs[1] || state.HeldJob(testId("running")) != nil {
+		t.Fatal("the held jobs' lookups or the admission")
+	}
+	if jobIds := state.JobIds(); len(jobIds) != 4 || jobIds[0] != testId("running") || jobIds[3] != testId("held-c") {
+		t.Fatalf("the jobs named: %v", jobIds)
+	}
+
+	// a table its held jobs take past TableByteCount is written and read, and one past TableReadByteCount is not
+	world := newDropTestWorld(t)
+	tight := DefaultDropSettings()
+	tight.TableByteCount = dropTableHeaderByteCount + dropTableTrailerByteCount + dropTableJobByteCount + dropTableEntryByteCount
+	tight.TableAdmitByteCount = tight.TableByteCount
+	tight.TableHeldByteCount = 3 * dropTableJobByteCount
+	table, err := NewDropTable(world.host.ServiceHost(), world.blobs, tight, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Job.Resumed = false
+	if _, err := table.Update(world.paidCtx, world.cluster, world.repoId, func(table *DropTableState, now time.Time) (bool, error) {
+		*table = *dropTestCloneState(state)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("a table three held jobs take past its bound: %v", err)
+	}
+	read, err := table.Read(world.ctx, world.cluster, world.repoId)
+	if err != nil || len(read.State.HeldJobs) != 3 || read.State.Job == nil {
+		t.Fatalf("its read: %v", err)
+	}
+	if _, err := table.Update(world.paidCtx, world.cluster, world.repoId, func(table *DropTableState, now time.Time) (bool, error) {
+		table.HeldJobs = append(table.HeldJobs, held("held-d"))
+		return true, nil
+	}); !errors.Is(err, ErrDropTableFull) {
+		t.Fatalf("a fourth held job past TableReadByteCount: %v", err)
 	}
 }
 
@@ -544,6 +662,10 @@ func dropTestCloneState(state *DropTableState) *DropTableState {
 		job := *state.Job
 		clone.Job = &job
 	}
+	for _, held := range state.HeldJobs {
+		job := *held
+		clone.HeldJobs = append(clone.HeldJobs, &job)
+	}
 	for _, entry := range state.Drops {
 		copied := *entry
 		clone.Drops = append(clone.Drops, &copied)
@@ -596,8 +718,9 @@ func TestDropTableBoundMirrorsANoHoldTwin(t *testing.T) {
 		}
 	}
 	held := &DropTableState{
-		// the job that moved a and c to held keeps its record while the hold stands; the twin's ended
-		Job: &DropJobRecord{JobId: testId("job"), Phase: protocol.EvsDropPhase_EVS_DROP_DELETE, Held: true},
+		// the job that moved a and c to held keeps its record among the held jobs while the hold stands; the twin's
+		// ended
+		HeldJobs: []*DropJobRecord{{JobId: testId("job"), Phase: protocol.EvsDropPhase_EVS_DROP_DELETE, Held: true}},
 		Drops: []*DropTableEntry{
 			ended("a", DropStateHeld, 10*day), ended("b", DropStateDone, 8*day), ended("c", DropStateHeld, 6*day), ended("d", DropStateDone, 4*day),
 		},
@@ -676,7 +799,7 @@ func TestDropTableBoundMirrorsANoHoldTwin(t *testing.T) {
 				state.setState(entry, DropStateDone, dropDay(now))
 			}
 		}
-		state.Job = nil
+		state.HeldJobs = nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -706,8 +829,8 @@ func TestDropTableBoundNeverRefusesAWriteForHeldEntries(t *testing.T) {
 		return entry
 	}
 	held := &DropTableState{
-		Job:   &DropJobRecord{JobId: testId("job"), Phase: protocol.EvsDropPhase_EVS_DROP_DELETE, Held: true},
-		Drops: []*DropTableEntry{entry("x", DropStateHeld), entry("p1", DropStatePending), entry("p2", DropStatePending)},
+		HeldJobs: []*DropJobRecord{{JobId: testId("job"), Phase: protocol.EvsDropPhase_EVS_DROP_DELETE, Held: true}},
+		Drops:    []*DropTableEntry{entry("x", DropStateHeld), entry("p1", DropStatePending), entry("p2", DropStatePending)},
 	}
 	twin := &DropTableState{Drops: []*DropTableEntry{entry("x", DropStateDone), entry("p1", DropStatePending), entry("p2", DropStatePending)}}
 	if err := twin.evict(now, settings); !errors.Is(err, ErrDropTableFull) {

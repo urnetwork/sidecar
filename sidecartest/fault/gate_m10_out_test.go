@@ -438,7 +438,8 @@ func TestGateM10ItemsSayWhatTheExitShows(t *testing.T) {
 		"peers.yml and §22.9's git-lfs row":            "hardware:",
 		"§22.8's search, remote and phone rows":        "hardware:",
 		"§22.8's index row":                            "hardware:",
-		"§22.8's directory row":                        "hardware:",
+		"§22.8's directory row":                        "hardware and production:",
+		"D-TEST-17's reading at the Team limit":        "hardware:",
 		"§22.8's drop row":                             "hardware:",
 		"§22.8's hdd and trash rows at M10":            "production:",
 		"T4 at M10":                                    "devices:",
@@ -453,7 +454,7 @@ func TestGateM10ItemsSayWhatTheExitShows(t *testing.T) {
 	// what no test shows yet: nothing to run and nothing waited on, so the tool reads each missing
 	wantMissing := []string{
 		"D-TEST-12's observe evidence on T3", "the migration of a format-1 repo set", "a format-1 repo migrated through evs and then indexed, in one run",
-		"D-OPS-21's drop job pace",
+		"D-OPS-21's drop job pace", "D-TEST-17's runs in physical time beyond the Team limit's hour",
 	}
 	asserts := sidecartest.DefaultPrivacyAsserts()
 	scenarios := sidecartest.DefaultScenarioRegistry()
