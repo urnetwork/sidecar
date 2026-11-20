@@ -6,6 +6,7 @@ package fault
 // clauses' tests, so that the gate reads the case failed when one clause fails.
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -264,11 +265,12 @@ var clauseUnregisteredRuns = map[string]string{
 	"FS-91 within the window": "fs91_test.go is fi27-cached-head-clause's, in the ops lane",
 }
 
-// Every RunClause or CheckClause call this package's tests make with a literal row and clause names a registered
-// clause, but the twin a forged case's clause runs and what clauseUnregisteredRuns names: a clause run outside the
-// registry is one no gate names, so a new one fails here until it registers.
-func TestEveryRunClauseCallIsRegistered(t *testing.T) {
-	paths, err := filepath.Glob("*_test.go")
+// The RunClause and CheckClause calls the test files of directory make with a literal row and clause, each as "<row>
+// <clause>", and a fault for each that names no clause lookup finds, but the twin a forged case's clause runs and what
+// unregistered names, and for each unregistered run lookup finds.
+func clauseRunsForTest(t *testing.T, directory string, lookup func(rowId string, clause string) *ClauseRegistration, unregistered map[string]string) ([]string, []string) {
+	t.Helper()
+	paths, err := filepath.Glob(filepath.Join(directory, "*_test.go"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,6 +284,7 @@ func TestEveryRunClauseCallIsRegistered(t *testing.T) {
 		return value, err == nil
 	}
 	runs := []string{}
+	faults := []string{}
 	for _, path := range paths {
 		file, err := parser.ParseFile(fileSet, path, nil, parser.SkipObjectResolution)
 		if err != nil {
@@ -308,21 +311,71 @@ func TestEveryRunClauseCallIsRegistered(t *testing.T) {
 				return true
 			}
 			runs = append(runs, rowId+" "+clause)
-			_, unregistered := clauseUnregisteredRuns[rowId+" "+clause]
-			switch registration := LookupClause(rowId, clause); {
+			_, isUnregistered := unregistered[rowId+" "+clause]
+			where := filepath.Base(fileSet.Position(call.Pos()).Filename)
+			switch registration := lookup(rowId, clause); {
 			case clause == "twin" || strings.HasSuffix(clause, " twin"):
-			case registration != nil && unregistered:
-				t.Errorf("%s: %s is registered: take it off clauseUnregisteredRuns, and run it through RunRegisteredClause", fileSet.Position(call.Pos()), registration)
-			case registration == nil && !unregistered:
-				t.Errorf("%s: %s %q runs through %s and is not registered (RegisterClause in clauses.go), so no gate names it", fileSet.Position(call.Pos()), rowId, clause, name)
+			case registration != nil && isUnregistered:
+				faults = append(faults, fmt.Sprintf("%s: %s is registered: take it off the unregistered runs, and run it through RunRegisteredClause", where, registration))
+			case registration == nil && !isUnregistered:
+				faults = append(faults, fmt.Sprintf("%s: %s %q runs through %s and is not registered (RegisterClause in clauses.go), so no gate names it", where, rowId, clause, name))
 			}
 			return true
 		})
+	}
+	return runs, faults
+}
+
+// Every RunClause or CheckClause call this package's tests make with a literal row and clause names a registered
+// clause, but the twin a forged case's clause runs and what clauseUnregisteredRuns names: a clause run outside the
+// registry is one no gate names, so a new one fails here until it registers.
+func TestEveryRunClauseCallIsRegistered(t *testing.T) {
+	runs, faults := clauseRunsForTest(t, ".", LookupClause, clauseUnregisteredRuns)
+	for _, found := range faults {
+		t.Error(found)
 	}
 	for run := range clauseUnregisteredRuns {
 		if !slices.Contains(runs, run) {
 			t.Errorf("clauseUnregisteredRuns names %s, which no test runs any more", run)
 		}
+	}
+	if len(runs) == 0 {
+		t.Fatal("no RunClause call found: the scan reads nothing")
+	}
+}
+
+// The scan fails a run nobody registered and one listed unregistered that is registered, and passes a registered run,
+// a twin's and a listed unregistered one: a fixture package's calls against a fresh registry.
+func TestTheRunClauseScanCatchesAnUnregisteredRun(t *testing.T) {
+	directory := t.TempDir()
+	content := "package fault\n\nimport \"testing\"\n\nfunc TestFixture(t *testing.T) {\n" +
+		"\tRunClause(t, \"FS-9\", \"registered\", nil, nil)\n" +
+		"\tRunClause(t, \"FS-9\", \"nobody registered\", nil, nil)\n" +
+		"\tCheckClause(t.Context(), \"FS-9\", \"registered twin\", nil, nil)\n" +
+		"\tRunClause(t, \"FS-9\", \"listed\", nil, nil)\n" +
+		"\tRunClause(t, \"FS-9\", \"listed and registered\", nil, nil)\n" +
+		"}\n"
+	if err := os.WriteFile(filepath.Join(directory, "fixture_test.go"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registry := newClauseRegistry(DefaultCatalog())
+	build := func(net *Net) *Schedule { return &Schedule{Id: "toy"} }
+	for _, clause := range []string{"registered", "listed and registered"} {
+		if _, err := registry.register("FS-9", "", clause, build); err != nil {
+			t.Fatal(err)
+		}
+	}
+	unregistered := map[string]string{"FS-9 listed": "a fixture's", "FS-9 listed and registered": "a fixture's"}
+	runs, faults := clauseRunsForTest(t, directory, registry.lookup, unregistered)
+	if len(runs) != 5 {
+		t.Errorf("the scan found %v", runs)
+	}
+	want := []string{
+		`fixture_test.go: FS-9 "nobody registered" runs through RunClause and is not registered (RegisterClause in clauses.go), so no gate names it`,
+		"fixture_test.go: FS-9's clause listed and registered on T2 is registered: take it off the unregistered runs, and run it through RunRegisteredClause",
+	}
+	if !slices.Equal(faults, want) {
+		t.Errorf("the scan found %q, want %q", faults, want)
 	}
 }
 
