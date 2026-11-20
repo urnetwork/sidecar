@@ -148,7 +148,7 @@ type NetworkDns struct {
 	// The network's custom hosts, by host (DNS-M6-02).
 	CustomHosts []DnsCustomHost `json:"custom_hosts,omitempty"`
 	// The network's verified domains with the challenge target each one's _acme-challenge CNAME names
-	// (QD-175).
+	// (QD-175), and the DKIM CNAMEs each one owes (QD-1130).
 	CustomDomains []DnsCustomDomain `json:"custom_domains,omitempty"`
 }
 
@@ -258,6 +258,19 @@ type DnsCustomDomain struct {
 	Domain string `json:"domain"`
 	// <acme_token>.acme.<root>, with no final dot: what _acme-challenge.<domain> is CNAMEd to once.
 	AcmeChallengeTarget string `json:"acme_challenge_target"`
+	// The per-selector CNAMEs the domain owes, by name (§14.6, QD-1130): each published DKIM selector of a sending
+	// sidecar under the domain that the domain does not answer at this read, by a delegated _domainkey.<domain> or by
+	// its CNAME. A device signs under none of them until it answers, and each leaves the list once it does.
+	DkimCnames []DnsDkimCname `json:"dkim_cnames,omitempty"`
+}
+
+// A CNAME a custom domain owes for a sending sidecar's DKIM selector (§14.6, QD-1130), which the customer adds in its
+// own zone unless _domainkey.<domain> is delegated to the network's dns, which answers every selector at once.
+type DnsDkimCname struct {
+	// <sel>._domainkey.<domain>, with no final dot: the CNAME's owner in the customer's zone.
+	Name string `json:"name"`
+	// <sel>._domainkey.<label>.<root>, with no final dot: where the selector's key record is.
+	Target string `json:"target"`
 }
 
 // A refusal of a record route. Error starts with the status and a space, the convention api's router answers by.

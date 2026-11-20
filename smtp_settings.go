@@ -68,8 +68,18 @@ type SmtpSenderSettings struct {
 	DkimRotateTimeout time.Duration
 	// How long a retired selector's private key stays in the keychain: 7 days, as long as the server
 	// keeps the selector in DNS (§14.6), so a send that pinned it before a rotation still signs and
-	// still verifies. A pinned selector outlives this until its send releases it.
+	// still verifies. A pinned selector outlives this until its send releases it. A Team custom domain,
+	// whose rotation waits on its answer, rotates this long before DkimRotateTimeout (QD-1130), so it
+	// must be shorter.
 	DkimRetiredKeepTimeout time.Duration
+	// How long the device's own DoH lookup of a Team custom domain's new selector,
+	// <sel>._domainkey.<domain>, may take before it counts as no answer: 15 s, as TL2's and TL3's
+	// lookups take (QD-1130).
+	DkimAnswerLookupTimeout time.Duration
+	// How long after a lookup that did not find a custom domain's new selector the next one may run:
+	// 10 min, so the sends meanwhile, signing under the selector it replaces or held as deferred, cost
+	// no lookup each, and a resolver's negative answer (RFC 2308) has time to lapse (QD-1130).
+	DkimAnswerRetryInterval time.Duration
 	// How long a DKIM signature stays valid: x= is t= plus 7 days (§14.6), and a report about the
 	// message joins on the fixed signature only while it holds.
 	DkimExpireTimeout time.Duration
@@ -147,6 +157,8 @@ func DefaultSmtpSenderSettings() *SmtpSenderSettings {
 		OutboxTakeoverTimeout:      10 * time.Minute,
 		DkimRotateTimeout:          90 * 24 * time.Hour,
 		DkimRetiredKeepTimeout:     7 * 24 * time.Hour,
+		DkimAnswerLookupTimeout:    15 * time.Second,
+		DkimAnswerRetryInterval:    10 * time.Minute,
 		DkimExpireTimeout:          7 * 24 * time.Hour,
 		HeaderHeadMaxByteCount:     720,
 		HeaderBlockMaxByteCount:    16 * 1024,
@@ -165,8 +177,9 @@ func DefaultSmtpSenderSettings() *SmtpSenderSettings {
 }
 
 // What validateLeg holds a sender's settings to: present, every number positive, the schedules in
-// their order, so a retry never waits past giving up and a live host is never taken over, and the
-// header block's head inside the block.
+// their order, so a retry never waits past giving up, a live host is never taken over and a custom
+// domain's early rotation starts after its selector began to sign, and the header block's head inside
+// the block.
 func (self *SmtpSenderSettings) validate() error {
 	if self == nil {
 		return fmt.Errorf("%w: Connect.SmtpSender is nil", errInvalidSettings)
@@ -179,6 +192,9 @@ func (self *SmtpSenderSettings) validate() error {
 	}
 	if self.OutboxTakeoverTimeout <= self.OutboxProgressInterval {
 		return fmt.Errorf("%w: Connect.SmtpSender takes a send over before its host could show progress", errInvalidSettings)
+	}
+	if self.DkimRotateTimeout <= self.DkimRetiredKeepTimeout {
+		return fmt.Errorf("%w: Connect.SmtpSender rotates a custom domain's selector before it signs", errInvalidSettings)
 	}
 	if self.HeaderBlockMaxByteCount < self.HeaderHeadMaxByteCount {
 		return fmt.Errorf("%w: Connect.SmtpSender's header head passes its header block", errInvalidSettings)
