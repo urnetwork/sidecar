@@ -85,6 +85,10 @@ func TestSmtpProofChannelEncodesEveryFieldOfAPart(t *testing.T) {
 	if caller.calls[0].options.Timeout != DefaultSmtpSenderSettings().ProofCallTimeout {
 		t.Errorf("a timeout of %v", caller.calls[0].options.Timeout)
 	}
+	// an edge answers no Hello, so the call is marked for one (owner decision 624)
+	if !caller.calls[0].options.Edge {
+		t.Error("a part's call not marked for the edge")
+	}
 	sent := &protocol.SmtpProof{}
 	if err := proto.Unmarshal(caller.calls[0].body, sent); err != nil {
 		t.Fatal(err)
@@ -123,6 +127,9 @@ func TestSmtpProofChannelDisclosesShtsByTheHandshake(t *testing.T) {
 	}
 	if !bytes.Equal(handshake.GetSendId(), sendId) || !bytes.Equal(handshake.GetShts(), shts) {
 		t.Errorf("sent %v", handshake)
+	}
+	if !caller.calls[0].options.Edge {
+		t.Error("the handshake's call not marked for the edge")
 	}
 }
 
@@ -168,6 +175,9 @@ func TestSmtpProofChannelRetriesATimedOutCallUnderItsRequestId(t *testing.T) {
 	}
 	if len(caller.calls) != 2 || caller.calls[0].options.RequestId != 0 || caller.calls[1].options.RequestId != 77 || !bytes.Equal(caller.calls[0].body, caller.calls[1].body) {
 		t.Errorf("calls %+v", caller.calls)
+	}
+	if len(caller.calls) == 2 && (!caller.calls[0].options.Edge || !caller.calls[1].options.Edge) {
+		t.Error("a call or its retry not marked for the edge")
 	}
 
 	// two timeouts end it at the attempt count

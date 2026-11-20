@@ -2,8 +2,9 @@
 // and its connection, the connections by send_id for the RPCs, and the drain.
 //
 // Serve listens as ur/smtpedge through a SocketPlatformListener on the host's platform clients in
-// urnetwork-edge (SOCK-M9-01), registers the SMTP_PROOF and SMTP_HANDSHAKE handlers on each client's dispatcher
-// in the edge role (proof_rpc.go), and serves each admitted stream: its network, client and sidecar come from the
+// urnetwork-edge (SOCK-M9-01), registers the SMTP_PROOF and SMTP_HANDSHAKE handlers and SMTP_OUTCOME's NO_REPLY
+// function on each client's dispatcher in the edge role (proof_rpc.go's registerHandlers, outcome.go), and serves
+// each admitted stream: its network, client and sidecar come from the
 // ticket admission verified, never from the sidecar. The sidecar, the §8 subject mail_send is judged for, is the
 // ticket's dialer_sidecar_id, which sockets filled at Find from the caller's token and signed with the rest, so the
 // edge needs no client-to-sidecar lookup or cache (QD-989, owner decision 560); a ticket naming none answers
@@ -113,12 +114,7 @@ func (self *SmtpEdgeService) Serve(args *sidecar.SocketPlatformListenerArgs) err
 		return err
 	}
 	for _, client := range listenArgs.Clients {
-		remove, err := client.Subprotocol.Handle(protocol.MessageType_SMTP_PROOF, self.handleProof, &sidecar.HandleOptions{Mutating: true})
-		if err != nil {
-			return fail(err)
-		}
-		removes = append(removes, remove)
-		remove, err = client.Subprotocol.Handle(protocol.MessageType_SMTP_HANDSHAKE, self.handleHandshake, &sidecar.HandleOptions{Mutating: true})
+		remove, err := self.registerHandlers(client.Subprotocol)
 		if err != nil {
 			return fail(err)
 		}
@@ -234,6 +230,9 @@ func (self *SmtpEdgeService) serveStream(conn io.ReadWriteCloser, stream *smtpPr
 		smtpAbortStream(conn)
 		return
 	}
+	// the dialer's outcome is taken from here on, before this edge has seen the stream end (QD-1112); the
+	// connection's end moves it to its window
+	self.outcomes.started(connection.send.SendId, stream.NetworkId, stream.ClientId)
 	connection.run()
 }
 
