@@ -92,6 +92,7 @@ type HeadCacheRecorder struct {
 	entries   []*HeadCacheHistoryEntry
 }
 
+// A recorder stamping each request with clock's time and storeCount's count.
 func NewHeadCacheRecorder(clock Clock, storeCount func() int) *HeadCacheRecorder {
 	return &HeadCacheRecorder{clock: clock, storeCount: storeCount}
 }
@@ -153,6 +154,7 @@ func (self *HeadCacheRecorder) end(entry *HeadCacheHistoryEntry, outcome HeadCac
 	}
 }
 
+// A Redis whose head cache requests recorder keeps: every method but HashGet and RunScript is the wrapped one's.
 type headCacheRecordedRedis struct {
 	sidecar.Redis
 	recorder *HeadCacheRecorder

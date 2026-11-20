@@ -75,10 +75,6 @@ const (
 	fs91ValidatedOnACachedHead
 )
 
-// How long after the DROP (c)'s copy is posted: 2 min, within §11.9's 10 min of the cached head's write, so the
-// cache serves it, and past the age FI-27's tests read the run with to show the cached read is held to it.
-const fs91CachedReadDelay = 2 * time.Minute
-
 // See the file header.
 func Fs91ReleasedAfterTheDrop(net *Net) *Schedule {
 	schedule := fs91Schedule(net, fs91ReleasePastTheWindow, nil)
@@ -163,7 +159,9 @@ func fs91Schedule(net *Net, released fs91Release, afterCommit func(world *EvsWor
 			// the DROP's step 8 fails its write of main's {evsh_} entry, so the cache keeps x.txt's third version's head
 			{Fault: &FaultPlan{Op: sidecartest.FaultOpRedis, KeyPrefix: evsservice.HeadCacheKey(world.RepoId), Result: FailBeforeApply, Actor: "evs1", WritesOnly: true}},
 			drop,
-			{Advance: fs91CachedReadDelay},
+			// within §11.9's 10 min of the cached head's write, so the cache serves it, and past the 1 min age
+			// fs91_test.go reads the run with to hold the cached read to its age
+			{Advance: 2 * time.Minute},
 			// validated after the DROP committed, against the cached head below it
 			{Actor: "writer", Action: post},
 		}...)
