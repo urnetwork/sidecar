@@ -4,7 +4,8 @@
 // raising it; off, the device's and the team's, withdrawing the item, and on again taking a new id; a phone, a page
 // Worker and a host of no stated class refused; a service list past the 32 cap refused whole; a restart writing no
 // version again; and the item folding as a worker item for another reader, its platform this build's (owner decision
-// 468) as written.
+// 468) as written. QD-1144's erased item, on format 2's carrier through a device's own client: announced no more until
+// the device's own on, which announces a new one.
 
 package sidecar_test
 
@@ -393,4 +394,128 @@ func TestDirectoryWorkerItemFoldsForReaders(t *testing.T) {
 	if err := readOnly.client.SetWorker(t.Context(), &sidecar.DirectoryWorkerSetting{On: &on}); !errors.Is(err, sidecar.ErrDirectoryReadOnly) {
 		t.Fatalf("a read_only client's SetWorker answered %v", err)
 	}
+}
+
+// The worker item a directory admin erased while its daemon still announces it (QD-1144), on format 2's carrier through
+// the device's own client: its daily renewal is the return, which leaves it out, so the append answers that and the
+// upkeep keeps the item as erased, holding no item and writing nothing at its next upkeeps, whatever the team's
+// setting does meanwhile. The device's own on announces a new item under a new id, which the card carries above the
+// removal, and the erased item stays out.
+func TestDirectoryWorkerModeratedItemIsAnnouncedNoMore(t *testing.T) {
+	world := newTestDirectoryWorld(t, nil)
+	device := world.format2Device(sidecar.NewId())
+	writerId := device.writer.sidecarId
+	teamOn := true
+	worker := device.client.BindWorker(&sidecar.DirectoryWorkerBinding{
+		Host:        sidecar.DirectoryWorkerHostDaemon,
+		Services:    &testWorkerServices{serving: &sidecar.DirectoryWorkerServing{Harnesses: []string{"codex"}}},
+		TeamWorkers: func() (bool, bool) { return teamOn, true },
+	})
+	if write, err := worker.Maintain(t.Context()); err != nil || write != sidecar.DirectoryWorkerAnnounced {
+		t.Fatalf("the first upkeep: %s, %v", write, err)
+	}
+	shown, err := worker.Shown()
+	if err != nil {
+		t.Fatal(err)
+	}
+	erasedId := shown.AnnouncementId
+	world.eraseFromCard(writerId, erasedId, 1)
+	device.mustSync(t)
+
+	// the renewal's timer runs the upkeep: the return, which leaves the item out
+	reads := world.counts().ErasedReads
+	world.clock.Advance(sidecar.DefaultDirectoryWorkerSettings().RenewInterval)
+	if world.counts().ErasedReads != reads+1 {
+		t.Fatal("the renewal read no erasure set")
+	}
+	shown, err = worker.Shown()
+	if err != nil || !shown.Moderated || !shown.On || shown.AnnouncementId != (sidecar.Id{}) || shown.Version != 0 {
+		t.Fatalf("the item after the return: %+v, %v", shown, err)
+	}
+	reader := world.reader(nil)
+	reader.mustSync(t)
+	if items := testItemsOf(t, reader, writerId); len(items) != 0 {
+		t.Fatalf("a reader after the return: %v", items)
+	}
+
+	writes := world.counts().CardWrites
+	for _, on := range []bool{false, true} {
+		teamOn = on
+		if write, err := worker.Maintain(t.Context()); err != nil || write != sidecar.DirectoryWorkerUnchanged {
+			t.Fatalf("an upkeep with the team's setting %t: %s, %v", on, write, err)
+		}
+	}
+	world.clock.Advance(sidecar.DefaultDirectoryWorkerSettings().RenewInterval)
+	if world.counts().CardWrites != writes {
+		t.Fatal("the erased item's upkeep wrote a card")
+	}
+
+	on := true
+	if err := device.client.SetWorker(t.Context(), &sidecar.DirectoryWorkerSetting{On: &on}); err != nil {
+		t.Fatalf("the device's own on: %v", err)
+	}
+	shown, err = worker.Shown()
+	if err != nil || shown.Moderated || shown.AnnouncementId == (sidecar.Id{}) || shown.AnnouncementId == erasedId {
+		t.Fatalf("the item after the device's own on: %+v, %v", shown, err)
+	}
+	reader.mustSync(t)
+	items := testItemsOf(t, reader, writerId)
+	if len(items) != 1 || items[erasedId] != nil || items[shown.AnnouncementId] == nil || items[shown.AnnouncementId].Announcement.GetVersion() != 3 {
+		t.Fatalf("a reader after the new item: %v", items)
+	}
+	worker.Close()
+}
+
+// The worker item an erasure took when a run's start is the return (QD-1144): the card leaves the item out though the
+// carrier hands it, and the worker's next upkeep meets the card writer's journal before it writes, keeping the item as
+// erased and writing nothing, at its next day's renewal too; a reader shows the run alone.
+func TestDirectoryWorkerMeetsTheJournalAfterAnotherItemsReturn(t *testing.T) {
+	world := newTestDirectoryWorld(t, nil)
+	device := world.format2Device(sidecar.NewId())
+	writerId := device.writer.sidecarId
+	worker := device.client.BindWorker(&sidecar.DirectoryWorkerBinding{
+		Host:        sidecar.DirectoryWorkerHostDaemon,
+		Services:    &testWorkerServices{serving: &sidecar.DirectoryWorkerServing{Harnesses: []string{"codex"}}},
+		TeamWorkers: func() (bool, bool) { return true, true },
+	})
+	if write, err := worker.Maintain(t.Context()); err != nil || write != sidecar.DirectoryWorkerAnnounced {
+		t.Fatalf("the first upkeep: %s, %v", write, err)
+	}
+	shown, err := worker.Shown()
+	if err != nil {
+		t.Fatal(err)
+	}
+	erasedId := shown.AnnouncementId
+	world.eraseFromCard(writerId, erasedId, 1)
+	device.mustSync(t)
+	runId := world.startRun(device.client, "tidy the changelog")
+	if shown, err := worker.Shown(); err != nil || shown.Moderated || shown.AnnouncementId != erasedId {
+		t.Fatalf("the item before its upkeep: %+v, %v", shown, err)
+	}
+
+	writes := world.counts().CardWrites
+	if write, err := worker.Maintain(t.Context()); err != nil || write != sidecar.DirectoryWorkerModerated {
+		t.Fatalf("the upkeep after the return: %s, %v", write, err)
+	}
+	if shown, err := worker.Shown(); err != nil || !shown.Moderated || shown.AnnouncementId != (sidecar.Id{}) {
+		t.Fatalf("the item after its upkeep: %+v, %v", shown, err)
+	}
+	// the run's renewals stop, so the day's only timer is the item's
+	device.client.Runs().Close()
+	world.clock.Advance(sidecar.DefaultDirectoryWorkerSettings().RenewInterval)
+	if world.counts().CardWrites != writes {
+		t.Fatal("the erased item's upkeep wrote a card")
+	}
+	reader := world.reader(nil)
+	reader.mustSync(t)
+	items := testItemsOf(t, reader, writerId)
+	if len(items) != 1 || items[erasedId] != nil {
+		t.Fatalf("a reader after the upkeep: %v", items)
+	}
+	for _, item := range items {
+		if sidecar.Id(item.Announcement.GetWhat().GetRunId()) != runId || item.Announcement.GetVersion() != 3 {
+			t.Fatalf("a reader after the upkeep shows %v", item.Announcement)
+		}
+	}
+	worker.Close()
 }
