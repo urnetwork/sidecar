@@ -2,7 +2,9 @@
 
 // An erasure's wait on one index ref (§11.13's wait and limit rows; §11.14's bound and limit rows; §5.4's erasure event;
 // owner decision 146; FS-78, FS-112; DESIGN-DETAILS 15.2.5 and 15.2.11; SEARCH-M10-17): what is left of its rewrites and
-// when the last pair commits at the storage limit or while the network is spent.
+// when the last pair commits at the storage limit or while the network is spent. On a metadata cluster at §19.9's
+// cohort limit evs's 507 CLUSTER_FULL holds the pairs and the re-entry as the storage limit does (QD-1118): it names
+// no allowance, so the pairs try again after its Retry-After, 0 where it names none, and the finish is the floor's.
 //
 //	objects   an erasure's work on the ref is its rekey objects, one file version each CLOSURE writes: one staged
 //	          record where the rewrite is within StagedMaxByteCount (16 KiB, a slot), else one ?closure=1 upload at
@@ -113,8 +115,8 @@ func indexPairObjectCount(objects []*indexRekeyObject, byteCount int64) int {
 	return len(objects)
 }
 
-// What a 429 or a quota refusal of a CLOSURE says of the eraser's allowance: when to try again, and, where it names
-// them, the day's allowance and what of it is used.
+// What a 429 or a quota refusal of a CLOSURE, a full cluster's 507 among them, says of the eraser's allowance: when to
+// try again, and, where it names them, the day's allowance and what of it is used, which a 507 never does.
 type indexEraseAllowance struct {
 	retryAfter time.Duration
 	// 0 where the refusal names none.
@@ -122,7 +124,8 @@ type indexEraseAllowance struct {
 	used  int64
 }
 
-// The allowance a refusal states, and false for any other error.
+// The allowance a refusal states, and false for any other error. Its wait is the refusal's retry delay, a 429's or a
+// 507's Retry-After, else its QuotaRefusal's, the storage limit's; 0 where it names neither.
 func indexEraseAllowanceOf(err error) (*indexEraseAllowance, bool) {
 	refusal, ok := indexRefusalOf(err)
 	if !ok || refusal.kind != indexRefusalRetry && refusal.kind != indexRefusalQuota {
@@ -140,7 +143,7 @@ func indexEraseAllowanceOf(err error) (*indexEraseAllowance, bool) {
 }
 
 // The erasure's state while its pairs wait on the allowance: the objects and bytes left, the refusal's next try and
-// the finish. allowance is the refusal's, or PairByteCount, the floor, where it names none.
+// the finish. allowance is the refusal's, or PairByteCount, the floor, where it names none, as a 507 does.
 func indexEraseWaiting(erasureId Id, now time.Time, objects []*indexRekeyObject, refused *indexEraseAllowance, settings *IndexEraseSettings) *SidecarErasure {
 	allowance := refused.limit
 	if allowance <= 0 {
@@ -156,8 +159,9 @@ func indexEraseWaiting(erasureId Id, now time.Time, objects []*indexRekeyObject,
 	}
 }
 
-// The state of a re-entry a quota refused: waiting, the cards left to enter as objects, tried again in
-// ReentryRetryInterval, with no finish, since a re-entry waits for the network to be under the limit and not spent.
+// The state of a re-entry a quota refused, the storage limit's or a full cluster's 507: waiting, the cards left to
+// enter as objects, tried again in ReentryRetryInterval whatever wait the refusal names, with no finish, since a
+// re-entry waits for the network to be under the limit and not spent, and for its cluster to have room.
 func indexReenterWaiting(erasureId Id, now time.Time, cardCount int, settings *IndexEraseSettings) *SidecarErasure {
 	return &SidecarErasure{
 		ErasureId:   erasureId,

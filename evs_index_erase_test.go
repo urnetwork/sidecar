@@ -11,6 +11,10 @@ package sidecar
 // ERASE resumes with the orphan's ERASE; another device resumes after 25 h and commits a missing CUT; a held version's
 // path is rewritten and a removed one's key destroyed; nothing says complete where the history did not walk whole; a
 // reproducer rebuilds a slot's CLOSURE and alarms a forged one; and a run card is folded again into the eraser's head.
+// On a full cluster (QD-1118), against the stand-in evs behind the limit gate as QD-1088's and QD-1099's DROP tests
+// run: evs's 507 CLUSTER_FULL is the index's quota refusal with its Retry-After; a CLOSURE refused it at its upload
+// waits until then, and a re-entry refused it at its push waits ReentryRetryInterval, as at the storage limit, each
+// raising waiting and going on once there is room; a 507 naming no wait keeps the waits a refusal naming none has.
 
 import (
 	"bytes"
@@ -18,7 +22,9 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1239,4 +1245,242 @@ func TestIndexRewriteTakesAnAllShardAndARolledBucket(t *testing.T) {
 		t.Fatal("the all shard's rewrite kept u1 or lost u2")
 	}
 	world.evs.sweep(t, listed)
+}
+
+// QD-1118's mapping: evs's 507 CLUSTER_FULL is the index's quota refusal, its retry delay the wait, 0 where it names
+// none, and the eraser reads that wait from it and no allowance; the storage limit's QuotaRefusal reads as it did; and
+// a 507 that is no evs refusal, with no CLUSTER_FULL code, passes as it is.
+func TestIndexRefusalOfEvsTakesAFullClusterAsTheLimit(t *testing.T) {
+	cases := []struct {
+		err   *EvsError
+		wait  time.Duration
+		limit int64
+		used  int64
+	}{
+		{err: &EvsError{Status: http.StatusInsufficientStorage, Code: protocol.EvsRefusalCode_EVS_REFUSAL_CLUSTER_FULL, RetryAfter: 7 * time.Minute}, wait: 7 * time.Minute},
+		{err: &EvsError{Status: http.StatusInsufficientStorage, Code: protocol.EvsRefusalCode_EVS_REFUSAL_CLUSTER_FULL}, wait: 0},
+		{err: &EvsError{Status: http.StatusForbidden, Code: protocol.EvsRefusalCode_EVS_REFUSAL_QUOTA_LIMIT, Quota: &protocol.EvsQuotaRefusal{
+			LimitKey: "evs_closure_bytes_per_day", Limit: 9000, Used: 4000, RetryAfterMs: 1000,
+		}}, wait: time.Second, limit: 9000, used: 4000},
+	}
+	for _, c := range cases {
+		refusal, ok := indexRefusalOf(indexRefusalOfEvs(c.err))
+		if !ok || refusal.kind != indexRefusalQuota || refusal.retryAfter != c.err.RetryAfter || refusal.quota != nil {
+			t.Errorf("%v: the index's refusal %+v", c.err, refusal)
+			continue
+		}
+		allowance, ok := indexEraseAllowanceOf(indexEraseRefusalOfEvs(c.err))
+		if !ok || allowance.retryAfter != c.wait || allowance.limit != c.limit || allowance.used != c.used {
+			t.Errorf("%v: the eraser's allowance %+v", c.err, allowance)
+		}
+	}
+	bare := error(&EvsError{Status: http.StatusInsufficientStorage})
+	if indexRefusalOfEvs(bare) != bare || indexEraseRefusalOfEvs(bare) != bare {
+		t.Error("a 507 that is no evs refusal was read as one")
+	}
+}
+
+// An eraser of the stand-in's main ref, signing as its writer, every version counting, K_ref refKey (nil where it
+// re-enters nothing), each erasure event it raises appended to events.
+func testIndexLimitEraser(t *testing.T, writer *evsTestWriter, refKey []byte, events *[]*SidecarErasure) *IndexEraser {
+	t.Helper()
+	store := newIndexEvsStore(writer.repo, nil, false)
+	eraser, err := indexNewEraser(&indexEraserArgs{
+		store: store, eraseStore: store, repoId: writer.world.repoId, refId: writer.world.refId,
+		repoKind: protocol.RepoKind_REPO_KIND_GENERAL, isAdmin: func(*indexFileVersion) bool { return true },
+		format: DefaultIndexFormatSettings(), eraser: writer.world.signer.sidecarId, refKey: refKey, tables: testHeadTables,
+		events: func(erasure *SidecarErasure) { *events = append(*events, erasure) },
+		clock:  writer.test.clock, log: NewNoopLogger(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return eraser
+}
+
+// Every live slot, large entry and shard of the stand-in's main index holding an entry listed takes, in path order,
+// as rekey objects.
+func testIndexLimitHolding(t testing.TB, writer *evsTestWriter, listed indexEraseListed) []*indexRekeyObject {
+	t.Helper()
+	view := testDropLimitView(t, writer)
+	objects := []*indexRekeyObject{}
+	for path, file := range indexEraseLiveFiles(view) {
+		plaintext, err := view.store.Read(context.Background(), file.file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		holds, err := indexHolds(file.path, plaintext, listed, view.settings)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if holds {
+			objects = append(objects, indexNewRekeyObject(path, file.file.byteCount, DefaultIndexEraseSettings()))
+		}
+	}
+	slices.SortFunc(objects, func(a *indexRekeyObject, b *indexRekeyObject) int {
+		return strings.Compare(a.path, b.path)
+	})
+	return objects
+}
+
+// The states events raised, in order.
+func testIndexErasureStates(events []*SidecarErasure) []string {
+	states := []string{}
+	for _, event := range events {
+		states = append(states, event.State)
+	}
+	return states
+}
+
+// On a full cluster an erasure's CLOSURE of a bucket shard, an upload, is refused 507 there: the erasure waits as at
+// the storage limit, its next try the 507's Retry-After, or now where it names none, with the objects and bytes the
+// list holds and the floor's finish, since a 507 names no allowance; nothing is committed and the event goes
+// rewriting, waiting. At its next try, with room, the pair commits and the shard no longer holds the listed version.
+func testIndexRewriteOnAFullCluster(t *testing.T, noWait bool) {
+	writer, capture, gate, key := testDropLimitShardWorld(t)
+	if noWait {
+		testIndexNoWaitBehind(capture, gate)
+	}
+	// the repo's erasure ref, which no ERASE has made yet, reads as a ref with no version, as at evs
+	writer.world.autoRefs = true
+	events := []*SidecarErasure{}
+	eraser := testIndexLimitEraser(t, writer, nil, &events)
+	testCut(t, eraser, "erasure", &IndexCutDocument{Key: key, Version: 1})
+	listed := indexEraseListed(indexErasureSetListed(testDropLimitView(t, writer).erasureSet))
+	objects := testIndexLimitHolding(t, writer, listed)
+	if !slices.ContainsFunc(objects, func(object *indexRekeyObject) bool { return !object.staged }) {
+		t.Fatal("no file holding the listed version is an upload")
+	}
+	settings := DefaultIndexEraseSettings()
+
+	gate.set(evsTestDropLimitClusterFull)
+	now := writer.test.clock.Now()
+	wait := testIndexClusterFullWait(noWait)
+	result, err := eraser.Rewrite(context.Background(), &IndexRewriteArgs{ErasureId: evsTestId("erasure")})
+	if err != nil {
+		t.Fatalf("a rewrite on a full cluster: %v", err)
+	}
+	waiting := result.Erasure
+	if waiting == nil || waiting.State != SidecarErasureWaiting || !waiting.NextTry.Equal(now.Add(wait)) || result.PairCount != 0 {
+		t.Fatalf("the rewrite on a full cluster: %+v, the erasure %+v", result, waiting)
+	}
+	if waiting.ObjectsLeft != int64(len(objects)) || waiting.BytesLeft != indexRekeyByteCount(objects) ||
+		!waiting.Finish.Equal(indexEraseFinish(now, objects, settings.PairByteCount, settings)) {
+		t.Fatalf("the wait names %d objects, %d B and a finish at %s", waiting.ObjectsLeft, waiting.BytesLeft, waiting.Finish)
+	}
+	// the CUT's, the pair's, and the wait's, the last the rewrite's own state
+	if states := testIndexErasureStates(events); !slices.Equal(states, []string{SidecarErasureFenced, SidecarErasureRewriting, SidecarErasureWaiting}) ||
+		*events[len(events)-1] != *waiting {
+		t.Fatalf("the events %v", states)
+	}
+	// the pair's upload refused, and no push sent
+	if uploads, pushes := gate.refused(); uploads != 1 || pushes != 0 {
+		t.Fatalf("%d uploads and %d pushes refused", uploads, pushes)
+	}
+	if closures, err := writer.repo.ReadClosures(context.Background(), nil, 0); err != nil || len(closures) != 0 {
+		t.Fatalf("%d CLOSUREs on a full cluster: %v", len(closures), err)
+	}
+	if held := testIndexLimitHolding(t, writer, listed); len(held) != len(objects) {
+		t.Fatalf("%d files hold the listed version after a refused pair, %d before", len(held), len(objects))
+	}
+
+	// the next try, with room
+	gate.set(evsTestDropLimitNone)
+	writer.test.clock.advance(wait)
+	result, err = eraser.Rewrite(context.Background(), &IndexRewriteArgs{ErasureId: evsTestId("erasure")})
+	if err != nil || result.PairCount != 1 || result.FileCount != len(objects) || result.Erasure == nil || result.Erasure.State != SidecarErasureRewriting {
+		t.Fatalf("the rewrite once there is room: %+v, %v", result, err)
+	}
+	closures, err := writer.repo.ReadClosures(context.Background(), nil, 0)
+	if err != nil || len(closures) != 1 || closures[0].ErasureId != evsTestId("erasure") {
+		t.Fatalf("%d CLOSUREs once there is room: %v", len(closures), err)
+	}
+	if held := testIndexLimitHolding(t, writer, listed); len(held) != 0 {
+		t.Fatalf("files still holding the listed version: %d", len(held))
+	}
+}
+
+// QD-1118: a CLOSURE's upload on a full cluster waits its 507's Retry-After, then goes on.
+func TestIndexRewriteOnAFullClusterWaitsItsRetryAfter(t *testing.T) {
+	testIndexRewriteOnAFullCluster(t, false)
+}
+
+// A 507 naming no wait keeps a refusal naming none's: the next try is now, the caller's next turn.
+func TestIndexRewriteOnAFullClusterWithoutRetryAfterKeepsTheDefaultWait(t *testing.T) {
+	testIndexRewriteOnAFullCluster(t, true)
+}
+
+// On a full cluster a run card's re-entry push, which adds payload, is refused 507 at its push and waits as at the
+// storage limit, whatever wait the 507 names: tried again in ReentryRetryInterval, the event waiting with the card
+// left. At its next try, with room, the card is entered in the eraser's head above the list.
+func testIndexReenterOnAFullCluster(t *testing.T, noWait bool) {
+	writer, gate := testIndexLimitWorld(t, noWait)
+	testDropLimitIndexPush(t, writer, testLive("doc", 0, 1, testHeadKeys(0, 0)))
+	refKey := testIndexDropEvsRefKey(t, writer)
+	runId := evsTestId("run")
+	stream := testNewRecordStream(protocol.RepoKind_REPO_KIND_VAULT, "a")
+	stream.add(t, testRecordEntry(t, "context", RecordKindContext, runId, 1, &protocol.ContextBody{Harness: "claude-code", Title: "Rotate the keys"}))
+	erased := stream.add(t, testRecordEntry(t, "change", RecordKindChange, runId, 2, nil))
+	stream.add(t, testRecordEntry(t, "tool", RecordKindToolCall, runId, 3, nil))
+	cardKey, err := indexDocKey(refKey, stream.refId, indexRunCardName(runId), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := []*SidecarErasure{}
+	eraser := testIndexLimitEraser(t, writer, refKey, &events)
+	cut := testCut(t, eraser, "erasure", &IndexCutDocument{Key: cardKey, ThroughEpoch: true})
+	args := &IndexReenterArgs{
+		ErasureId: evsTestId("erasure"),
+		Cards: []*IndexReenterCard{{
+			Key: cardKey, Stream: stream, RunId: runId, Head: func(ctx context.Context) (uint64, error) { return stream.readTo, nil },
+		}},
+		Erasures: []*RecordStreamErasure{{ErasureId: evsTestId("erasure"), Keys: []*RecordSlotKey{&erased.slotKeys[0]}}},
+	}
+	interval := DefaultIndexEraseSettings().ReentryRetryInterval
+
+	gate.set(evsTestDropLimitClusterFull)
+	now := writer.test.clock.Now()
+	result, err := eraser.Reenter(context.Background(), args)
+	if err != nil || !result.Waiting || !result.NextTry.Equal(now.Add(interval)) || result.EnteredCount != 0 || result.PushCount != 0 {
+		t.Fatalf("the re-entry on a full cluster: %+v, %v", result, err)
+	}
+	if uploads, pushes := gate.refused(); uploads != 0 || pushes != 1 {
+		t.Fatalf("%d uploads and %d pushes refused", uploads, pushes)
+	}
+	// the CUT's, and the wait's with the card left
+	states := testIndexErasureStates(events)
+	if !slices.Equal(states, []string{SidecarErasureFenced, SidecarErasureWaiting}) || events[1].ObjectsLeft != 1 || !events[1].NextTry.Equal(result.NextTry) {
+		t.Fatalf("the events %v", states)
+	}
+
+	// the next try, with room
+	gate.set(evsTestDropLimitNone)
+	writer.test.clock.advance(interval)
+	result, err = eraser.Reenter(context.Background(), args)
+	if err != nil || result.Waiting || result.EnteredCount != 1 || result.PushCount != 1 {
+		t.Fatalf("the re-entry once there is room: %+v, %v", result, err)
+	}
+	view := testDropLimitView(t, writer)
+	documents, err := view.bucketDocuments(context.Background(), view.writeRoot().newestBucket())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := indexRunCardVersion(cut.Version, stream.readTo, DefaultIndexFormatSettings().CardVersionBitCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := documents.of(cardKey)
+	if len(entries) != 1 || entries[0].version != want || entries[0].writer != writer.world.signer.sidecarId || !entries[0].head {
+		t.Fatalf("the card's entries %+v, want version %d in the eraser's head", entries, want)
+	}
+}
+
+// QD-1118: a re-entry on a full cluster waits as at the storage limit.
+func TestIndexReenterOnAFullClusterWaitsAsAtTheLimit(t *testing.T) {
+	testIndexReenterOnAFullCluster(t, false)
+}
+
+// A 507 naming no wait keeps the re-entry's own: ReentryRetryInterval.
+func TestIndexReenterOnAFullClusterWithoutRetryAfterKeepsTheDefaultWait(t *testing.T) {
+	testIndexReenterOnAFullCluster(t, true)
 }
