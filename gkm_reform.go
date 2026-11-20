@@ -11,18 +11,31 @@
 //	           2  POST /gkm/repos/<id>/forms: gkm writes the owner marker, the form and epoch/0, whose header holds
 //	              g and no pin; a marker another repo holds means the id is taken and another is drawn, and a form
 //	              that lost its place to another re-form is dropped, since the group that stands is adopted instead
-//	           3  POST ladder: gen/1 to gen/<g>, the old Signed GenRotates byte for byte, ascending, 64 a call
+//	           3  POST ladder: gen/1 to gen/<g>, the old Signed GenRotates byte for byte, ascending,
+//	              LadderBatchCount (64) a call
 //	           4  moves its own pins to the new group, epoch 0, with epoch 1's floor at gen/<g>'s auth, its
 //	              generation pin (g, C_g) unchanged
 //	           5  unless asked with Reseed, which takes the form and the ladder and nothing else, all gkm takes while
 //	              repo/ reads keying or deleted, as §19.10's groups step asks first for every repo it places, a live
-//	              repo's second call coming once activate has taken repo/ to active and a deleted one's once it is
-//	              restored (owner decision 618): rotates to g+1, the first generation that names the new group,
-//	              which stages every delivery as any rotation does, ReaderWraps, DelegationWraps and each reading
-//	              member's RecoveryWrap, so a member whose devices are lost keeps its recovery code's access; then
-//	              the pending engine adds every member device that has a KeyPackage (KF2)
+//	              repo's second call coming once activate has taken repo/ to active (owner decision 618) and a
+//	              deleted one's step 5 at this device's syncs once it is restored (QD-1143): rotates to g+1, the
+//	              first generation that names the new group, which stages every delivery as any rotation does,
+//	              ReaderWraps, DelegationWraps and each reading member's RecoveryWrap, so a member whose devices are
+//	              lost keeps its recovery code's access; then the pending engine adds every member device that has a
+//	              KeyPackage (KF2). A rotation that landed is not made again: a step 5 resumed after it goes on to
+//	              the Adds
 //	           A kill at any step resumes from the keychain's record with the same bytes: every write at gkm is an
 //	           If-None-Match create that equal bytes resume.
+//	resume     a record left at step 5 is finished by the re-former's own syncs (QD-1143), however and on whichever
+//	           device its repo comes back: a sync whose verified state shows the repo standing, no RepoDelete or the
+//	           newest one restored, tries step 5, at most once a ReformResumeInterval while gkm refuses the rotation's
+//	           writes, which it takes for an active repo/ alone (§10.6's checks row), the time of each try kept in the
+//	           record before the try; a rotation draft a refused try left is drawn afresh once it is older than
+//	           ReformDraftMaxAge, since gkm's claim check refuses a time past its skew. A sync never drafts a re-form,
+//	           and leaves a record cut short before step 5 to ReformGroup, as the groups step run again asks it. The
+//	           step's second call asks with Resume, and a call with Reseed or Resume that finds no record answers the
+//	           group this device pins where the repo's newest form at gkm names it, so neither the step's second call
+//	           after a sync finished its re-form nor the step run again drafts a second re-form
 //	member     at each sync, and at a Welcome to a group of the repo other than its own, a device whose pinned group
 //	           is not the one the repo's newest GroupForm names follows the forms from its own group to the newest:
 //	           each a Signed GroupForm of the repo, verified under its signer's admitted key, its signer held to
@@ -74,6 +87,7 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -84,9 +98,6 @@ import (
 // A re-formed group failed a member's checks: its form's signer, its ladder against this device's cached C_k, or
 // its generation against this device's pin. Nothing of it is adopted.
 var ErrGkmReformRefused = errors.New("gkm: a re-formed group failed its member checks")
-
-// The most Signed GenRotates one ladder call carries (QD-074 rule 4), as gkm holds it.
-const gkmLadderBatchCount = 64
 
 // The phases a re-form's record holds.
 const (
@@ -362,9 +373,15 @@ type GkmReformArgs struct {
 	// The form, its epoch 0 and the ladder, and nothing else: all gkm takes while repo/ reads keying or deleted
 	// (§10.6's checks row), since the generation claim and the Adds' commits are writes it takes only for an active
 	// repo/. §19.10's groups step asks it first for every repo it places (owner decisions 82 and 618). The rotation
-	// and the Adds follow by a second call without it, which resumes from the keychain's record: a live repo's once
-	// activate has taken repo/ to active, and a repo re-seeded as deleted's once it is restored.
+	// and the Adds follow from the keychain's record: for a live repo by the step's second call once activate has
+	// taken repo/ to active, and for a repo re-seeded as deleted by this device's own syncs once it is restored
+	// (QD-1143). Where no record stands and the repo's newest form at gkm names the group this device pins, that
+	// group is the answer and nothing is drafted, so the step run again re-forms no group a re-form already made.
 	Reseed bool
+	// Only the re-form the keychain's record holds, as the groups step's second call asks: where no record stands
+	// nothing is drafted, and the answer is the group this device pins where the repo's newest form at gkm names it,
+	// a sync having finished the re-form first, else ErrGkmKeyMissing.
+	Resume bool
 }
 
 // A re-form under way, as the keychain holds it.
@@ -374,15 +391,22 @@ type gkmReformRecord struct {
 	generation uint64
 	// the GkmGroupReformRequest, byte for byte
 	request []byte
+	// when a sync last tried the finishing phase (QD-1143), zero for never
+	resumedAt time.Time
 }
 
-// version | phase | group_id | u64 generation | u32 length | request.
+// version | phase | group_id | u64 generation | u32 length | request | u64 resumed_at_ms, the last absent from a
+// record no sync has tried.
 func (self *gkmReformRecord) encode() []byte {
 	encoded := []byte{gkmRecordVersion, byte(self.phase)}
 	encoded = append(encoded, self.groupId.Bytes()...)
 	encoded = binary.BigEndian.AppendUint64(encoded, self.generation)
 	encoded = binary.BigEndian.AppendUint32(encoded, uint32(len(self.request)))
-	return append(encoded, self.request...)
+	encoded = append(encoded, self.request...)
+	if !self.resumedAt.IsZero() {
+		encoded = binary.BigEndian.AppendUint64(encoded, uint64(self.resumedAt.UnixMilli()))
+	}
+	return encoded
 }
 
 // A re-form record's fields.
@@ -401,10 +425,19 @@ func decodeGkmReformRecord(encoded []byte) (*gkmReformRecord, error) {
 		groupId:    groupId,
 		generation: binary.BigEndian.Uint64(encoded[2+gkmIdByteCount:]),
 	}
-	if int(binary.BigEndian.Uint32(encoded[headByteCount-4:])) != len(encoded)-headByteCount {
+	requestByteCount := binary.BigEndian.Uint32(encoded[headByteCount-4:])
+	tail := encoded[headByteCount:]
+	if uint64(len(tail)) < uint64(requestByteCount) {
 		return nil, malformed
 	}
-	record.request = bytes.Clone(encoded[headByteCount:])
+	record.request = bytes.Clone(tail[:requestByteCount])
+	switch tail = tail[requestByteCount:]; len(tail) {
+	case 0:
+	case 8:
+		record.resumedAt = time.UnixMilli(int64(binary.BigEndian.Uint64(tail)))
+	default:
+		return nil, malformed
+	}
 	return record, nil
 }
 
@@ -419,8 +452,9 @@ func (self *GkmGroupClient) reformApi() (GkmReformApi, error) {
 
 // Re-forms the repo's group from this device's keychain. See the file header. It returns the new group's id once
 // its steps are done, and resumes a re-form a kill or a wait cut short. ErrGkmNotWriter for a device §10.6's rule
-// does not let form the group, ErrGkmKeyMissing for one that does not hold the whole ladder, ErrGkmWait when
-// another re-form of the repo stands, which this device adopts at its next sync.
+// does not let form the group, ErrGkmKeyMissing for one that does not hold the whole ladder, or asked with Resume
+// where no re-form stands, ErrGkmWait when another re-form of the repo stands, which this device adopts at its next
+// sync.
 func (self *GkmGroupClient) ReformGroup(ctx context.Context, args *GkmReformArgs) (Id, error) {
 	if args == nil || args.RepoId == (Id{}) {
 		return Id{}, fmt.Errorf("%w: a re-form needs its repo", ErrGkmMalformed)
@@ -473,6 +507,30 @@ func (self *gkmGroupManager) reformInFlow(ctx context.Context, args *GkmReformAr
 	if err != nil {
 		return Id{}, err
 	}
+	if record == nil && (args.Reseed || args.Resume) {
+		// a group this device pins whose form stands at gkm was re-formed by an earlier call, or finished by a sync
+		// (QD-1143): the groups step run again, or its second call after such a sync, drafts no second re-form
+		if pins, err := client.repoPins(self.repoId); err == nil {
+			reply, err := client.args.Api.Forms(ctx, self.repoId)
+			if err != nil {
+				return Id{}, err
+			}
+			if forms := reply.GetForms(); 0 < len(forms) {
+				form, err := gkmParseGroupForm(state, self.repoId, forms[len(forms)-1])
+				if err != nil {
+					return Id{}, err
+				}
+				if form.groupId == pins.groupId {
+					return pins.groupId, nil
+				}
+			}
+		} else if !errors.Is(err, ErrGkmKeyMissing) {
+			return Id{}, err
+		}
+		if args.Resume {
+			return Id{}, fmt.Errorf("%w: no re-form of the repo stands to resume", ErrGkmKeyMissing)
+		}
+	}
 	for drawCount := 0; record == nil || record.phase == gkmReformPhasePosting; drawCount += 1 {
 		if max(1, client.settings.CreateGroupDrawCount) <= drawCount {
 			return Id{}, fmt.Errorf("%w: every group id drawn was taken", ErrGkmWait)
@@ -522,20 +580,85 @@ func (self *gkmGroupManager) reformInFlow(ctx context.Context, args *GkmReformAr
 		}
 	}
 	if args.Reseed {
-		// repo/ keying or deleted takes nothing more: the record stays, and a call once repo/ is active finishes
+		// repo/ keying or deleted takes nothing more: the record stays, and the step's second call or a sync once
+		// repo/ is active finishes
 		return record.groupId, nil
 	}
-	// the first generation that names the new group, with every delivery; then the Adds, whose epochs carry it
-	if _, err := self.rotateInFlow(ctx, GkmCauseRequest); err != nil {
-		return Id{}, err
-	}
-	if err := self.runPendingInFlow(ctx); err != nil && !gkmLeafWaits(err) && !errors.Is(err, ErrGkmNotWriter) {
-		return Id{}, err
-	}
-	if err := self.putReformRecord(nil); err != nil {
+	if err := self.finishReformInFlow(ctx, record); err != nil {
 		return Id{}, err
 	}
 	return record.groupId, nil
+}
+
+// Step 5 of a record at its finishing phase: the first generation that names the new group, with every delivery,
+// unless this device already holds one past the form's there; then the Adds, whose epochs carry it; and the record
+// goes. A generation's claim gkm refuses while repo/ is not active answers ErrGkmWait, the record kept. The rotation
+// draws afresh, where nothing stands at gen/ past this device's newest generation, in place of a draft that names
+// another group, as one a rotation of the old group left would, or one older than ReformDraftMaxAge, as a try gkm
+// refused may leave for a later one, whose claim gkm's time check would refuse.
+func (self *gkmGroupManager) finishReformInFlow(ctx context.Context, record *gkmReformRecord) error {
+	client := self.client
+	top, err := client.newestHeldGeneration(self.repoId)
+	if err != nil {
+		return err
+	}
+	rotated := record.generation < top.generation.Rotate.GetGeneration() && bytes.Equal(top.generation.Rotate.GetGroupId(), record.groupId.Bytes())
+	if !rotated {
+		if draft := self.storedDraft(); draft != nil {
+			rotate := draft.generation.Rotate
+			// either way off this clock: a clock set back leaves a draft dated ahead of it
+			age := client.clock.Now().Sub(time.UnixMilli(rotate.GetTimeMs())).Abs()
+			if !bytes.Equal(rotate.GetGroupId(), record.groupId.Bytes()) || 0 < client.settings.ReformDraftMaxAge && client.settings.ReformDraftMaxAge < age {
+				standing, err := client.args.Api.Generations(ctx, self.repoId, record.groupId, top.generation.Rotate.GetGeneration())
+				if err != nil {
+					return err
+				}
+				// a claim of it that landed is the rotation's to take up as its own
+				if len(standing.GetGenerations()) == 0 {
+					if err := client.args.Secrets.Delete(gkmRepoRecordName(self.repoId, "draft")); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		if _, err := self.rotateInFlow(ctx, GkmCauseRequest); err != nil {
+			return err
+		}
+	}
+	if err := self.runPendingInFlow(ctx); err != nil && !gkmLeafWaits(err) && !errors.Is(err, ErrGkmNotWriter) {
+		return err
+	}
+	return self.putReformRecord(nil)
+}
+
+// The resume row of the file header, at a sync with the group's flow held (QD-1143): step 5 of this device's own
+// re-form record at its finishing phase, run to its end, the record gone. A record at no phase or an earlier one is
+// left as it is, and so is one whose repo this verified state shows deleted, which takes its form, epoch 0 and ladder
+// alone until it is restored (§10.8), or one tried less than a ReformResumeInterval ago by this clock. A try's error
+// is step 5's, the record kept with the try's time.
+func (self *gkmGroupManager) resumeReformInFlow(ctx context.Context, state GkmAuthView) error {
+	client := self.client
+	record, err := self.reformRecord()
+	if err != nil || record == nil || record.phase != gkmReformPhaseFinishing {
+		return err
+	}
+	if repo := state.Repo(self.repoId); repo == nil || !aclRepoRowStands(repo) {
+		return nil
+	}
+	now := client.clock.Now()
+	if !record.resumedAt.IsZero() {
+		// a clock set back since the last try tries now rather than waiting out the difference
+		since := now.Sub(record.resumedAt)
+		if 0 <= since && since < client.settings.ReformResumeInterval {
+			return nil
+		}
+	}
+	// kept before the try, so neither a kill during it nor a restart brings the next one sooner
+	record.resumedAt = now
+	if err := self.putReformRecord(record); err != nil {
+		return err
+	}
+	return self.finishReformInFlow(ctx, record)
 }
 
 // Step 1: the new group's id and MLS state, its GroupForm and the whole POST forms request.
@@ -657,14 +780,15 @@ func (self *gkmGroupManager) postReform(ctx context.Context, api GkmReformApi, r
 	return false, fmt.Errorf("%w: the re-form got no answer", ErrGkmUnavailable)
 }
 
-// Step 3: gen/1 to gen/<g> as this device holds them, ascending, gkmLadderBatchCount a call. A call sent again
-// finds its own bytes and succeeds.
+// Step 3: gen/1 to gen/<g> as this device holds them, ascending, LadderBatchCount a call. A call sent again finds
+// its own bytes and succeeds.
 func (self *gkmGroupManager) uploadLadder(ctx context.Context, api GkmReformApi, record *gkmReformRecord) error {
 	client := self.client
+	batchCount := uint64(max(1, client.settings.LadderBatchCount))
 	yield := client.newYield()
-	for first := uint64(1); first <= record.generation; first += gkmLadderBatchCount {
+	for first := uint64(1); first <= record.generation; first += batchCount {
 		request := &protocol.GkmLadderRequest{}
-		for number := first; number < first+gkmLadderBatchCount && number <= record.generation; number += 1 {
+		for number := first; number < first+batchCount && number <= record.generation; number += 1 {
 			yield.step()
 			held, err := client.heldGeneration(self.repoId, number)
 			if err != nil {
