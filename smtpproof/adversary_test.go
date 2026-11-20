@@ -295,17 +295,6 @@ func fs31ForgedServerRecord(version uint16, suite uint16, seq uint64, content []
 	return cipher.seal(tlsRecordApplicationData, content)
 }
 
-// FuzzSmtpTranscript (SMTP-M9-30; the seeds SMTP-M0-02 deferred here): an honest connection's whole transcript, the
-// records both ways, the disclosed SHTS and every part with the witness its prover held, edited by a fuzzer and
-// replayed into a fresh gate whose verifier holds each part to the relation over that witness. Edits flip, cut, drop,
-// repeat and swap events as FuzzEdgeHandshake's do, and change every field of a part: its records, its range, its
-// counts, its index, mode and last flag, its carry and its key commitment. The oracle is the MX's own view: it opens
-// each application record the gate hands it under the client's keys, at its own sequence number, and reads the
-// plaintext of each that authenticates, its TLS failing at the first that does not, as a tag a bit off makes it, which
-// no part proves (SPEC.md Z2). Whatever the edit, what the MX reads is a prefix of the honest sender's plaintexts, the
-// client's Finished under 1.3 aside: no edit makes the MX read a command the honest parts did not prove. The gate also
-// holds to its bounds, panics on nothing and passes nothing after its first refusal.
-
 // One event of a transcript replay: a record either way, a disclosed SHTS, or a part with its prover's witness.
 type fs31TranscriptEvent struct {
 	fromClient bool
@@ -612,6 +601,16 @@ func fs31ReplayTranscript(t *testing.T, transcript *fs31Transcript, events []*fs
 	return nil
 }
 
+// Whole transcripts against what the MX reads (SMTP-M9-30, with the seeds SMTP-M0-02 left to it): an honest
+// connection's records both ways, its disclosed SHTS and every part with the witness its prover held, edited and
+// replayed into a fresh gate whose verifier holds each part to the relation over that witness. Edits flip, cut, drop,
+// repeat and swap events as FuzzEdgeHandshake's do, and change every field of a part: its records, its range, its
+// counts, its index, mode and last flag, its carry and its key commitment. The oracle is the MX's own view: it opens
+// each application record the gate hands it under the client's keys, at its own sequence number, and reads the
+// plaintext of each that authenticates, its TLS failing at the first that does not, as a tag a bit off makes it, which
+// no part proves (SPEC.md Z2). Whatever the edit, what the MX reads is a prefix of the honest sender's plaintexts, the
+// client's Finished under 1.3 aside: no edit makes the MX read a command the honest parts did not prove. The gate also
+// keeps to its bounds, panics on nothing and passes nothing after its first refusal.
 func FuzzSmtpTranscript(f *testing.F) {
 	// each leg's honest transcript, BDAT and DATA, then every field of each part edited both ways, FS-31's bound-part
 	// rows among them: a reply count one off, a server record count fallen, a carry or the key commitment one bit
