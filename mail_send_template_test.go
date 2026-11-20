@@ -26,10 +26,12 @@ type testMailTemplateGate struct {
 	world *testApprovalWorld
 }
 
+// The world's gate's Authorize.
 func (self *testMailTemplateGate) Authorize(ctx context.Context, action *SidecarAction, decision *bridge.Signed) error {
 	return self.world.gate.Authorize(ctx, action, decision)
 }
 
+// Sets the world's Lookup of kind to lookup; its removal leaves it, since a test world outlives no client.
 func (self *testMailTemplateGate) RegisterEffectLookup(kind SidecarActionKind, lookup SidecarEffectLookup) func() {
 	self.world.lookups[kind] = lookup
 	return func() {}
