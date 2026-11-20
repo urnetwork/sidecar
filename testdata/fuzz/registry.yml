@@ -402,7 +402,7 @@ rows:
       - {name: FuzzSmtpMtaStsPolicy, package: "."}
 
   - id: smtpproof
-    spec: "SMTP-M0-01's, SMTP-M0-02's and SMTP-M9-21's Tests lines: what the edge parses before any proof, held to crypto/tls"
+    spec: "SMTP-M0-01's, SMTP-M0-02's, SMTP-M9-21's and SMTP-M9-30's Tests lines: what the edge parses before any proof, held to crypto/tls, and a whole transcript's edits held to what the MX reads"
     owner: SMTP-M0-01
     milestone: M0
     targets:
@@ -414,6 +414,7 @@ rows:
       - {name: FuzzCheckHeaderBlock, package: smtpproof}
       - {name: FuzzEdgeHandshake, package: smtpproof, owner: SMTP-M0-02, seeds: [testdata/fuzz/FuzzEdgeHandshake]}
       - {name: FuzzEdgeRecordOrder, package: smtpproof, owner: SMTP-M9-21, milestone: M9}
+      - {name: FuzzSmtpTranscript, package: smtpproof, owner: SMTP-M9-30, milestone: M9, seeds: [testdata/fuzz/FuzzSmtpTranscript]}
 
   - id: device-role
     spec: "SDK-M4-01's, SDK-M8-17's, BRIDGE-M4-06's and BRIDGE-M4-14's Tests lines: posture, bridge rules and the resolver on the device role"

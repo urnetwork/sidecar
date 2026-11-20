@@ -232,6 +232,93 @@ func TestListingTaintsAncestorRun(t *testing.T) {
 	}
 }
 
+// The file header's repo id row (owner decision 628, QD-1087): a listing over the Sidecar's own directory names the
+// directory's own repo id, DirectoryClient.DirectoryId, in stubs and in prose alike, which is what a remote-mode app's
+// SidecarDirectory.GetRepoId reads; once the network names no directory the listing is refused and names none; and a
+// Sidecar that names no directory sends no id beside items another backend lists.
+func TestListingNamesTheDirectoryRepo(t *testing.T) {
+	instance, _, _ := enrolledInstance(t)
+	sidecar := &Sidecar{instance: instance, settings: validSidecarSettings()}
+	networkId := testNetworkId
+	sidecar.networkId = &networkId
+	sidecar.identity = &SidecarIdentity{NetworkId: networkId, SidecarId: NewId(), IdentityPublicKey: make([]byte, 32)}
+	client, err := sidecar.DirectoryClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	team := NewDirectoryAuthTestNetwork(t)
+	client.Bind(nil, func() DirectoryAuthView { return team.View() })
+	directoryId, ok := client.DirectoryId()
+	if !ok || directoryId == (Id{}) {
+		t.Fatal("the team network names no directory")
+	}
+
+	// the Sidecar's own listing, a fake taint standing in for the runs' own
+	taintPids := []int{}
+	daemon := newDispatchTestDaemon(t)
+	if err := daemon.AddSidecar(networkId, sidecar); err != nil {
+		t.Fatal(err)
+	}
+	backends := &DaemonDirectoryBackends{
+		TaintAncestors: func(ctx context.Context, sidecar *Sidecar, pid int) error {
+			taintPids = append(taintPids, pid)
+			return nil
+		},
+	}
+	for _, method := range DaemonDirectoryMethods(daemon, backends) {
+		if err := daemon.RegisterMethod(method); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const pid = 4242
+	for _, c := range []struct {
+		params    string
+		untrusted bool
+	}{
+		{params: `{}`, untrusted: false},
+		{params: `{"kind":"repo","untrusted":"include"}`, untrusted: true},
+	} {
+		response := dispatchDirectoryTest(daemon, DaemonModeControl, pid, `{"jsonrpc":"2.0","id":1,"method":"directory.list","params":`+c.params+`}`)
+		reply := &DaemonDirectoryListReply{}
+		if response.Error != nil || json.Unmarshal(response.Result, reply) != nil || reply.Untrusted != c.untrusted {
+			t.Fatalf("the listing %s: %+v %s", c.params, response.Error, response.Result)
+		}
+		if reply.DirectoryId == nil || *reply.DirectoryId != directoryId {
+			t.Errorf("the listing %s names the directory %v, not %s", c.params, reply.DirectoryId, directoryId)
+		}
+		if !strings.Contains(string(response.Result), `"directory_id":"`+directoryId.String()+`"`) {
+			t.Errorf("the listing %s carries the id as %s", c.params, response.Result)
+		}
+	}
+	if len(taintPids) != 1 || taintPids[0] != pid {
+		t.Errorf("the taints: %v", taintPids)
+	}
+
+	// the network names no directory now: refused, nothing named
+	personal := newTestConfigNet(t)
+	client.Bind(nil, func() DirectoryAuthView { return NewDirectoryAuthView(personal.log.State()) })
+	response := dispatchDirectoryTest(daemon, DaemonModeControl, pid, `{"jsonrpc":"2.0","id":2,"method":"directory.list"}`)
+	if response.Error == nil || response.Result != nil || !strings.Contains(response.Error.Message, ErrDirectoryNone.Error()) {
+		t.Fatalf("a network with no directory: %+v %s", response.Error, response.Result)
+	}
+
+	// a Sidecar with no directory, whose items another backend lists: the listing names no directory
+	fakes := &testDirectoryBackends{items: []*DirectoryItem{{
+		Key:          DirectoryItemKey{Kind: DirectoryAnnouncementKindRepo, AnnouncementId: NewId()},
+		Announcement: &protocol.Announcement{Kind: uint32(DirectoryAnnouncementKindRepo)},
+		Display:      DirectoryItemActive,
+	}}}
+	listing, _ := newTestDirectoryDaemon(t, fakes, fakes.backends())
+	response = dispatchDirectoryTest(listing, DaemonModeControl, pid, `{"jsonrpc":"2.0","id":3,"method":"directory.list"}`)
+	reply := &DaemonDirectoryListReply{}
+	if response.Error != nil || json.Unmarshal(response.Result, reply) != nil || len(reply.Items) != 1 {
+		t.Fatalf("the fakes' listing: %+v %s", response.Error, response.Result)
+	}
+	if reply.DirectoryId != nil || strings.Contains(string(response.Result), "directory_id") {
+		t.Errorf("a Sidecar with no directory named one: %s", response.Result)
+	}
+}
+
 // A gate that records what Authorize handed it and answers err.
 type testAccessGate struct {
 	actions []*SidecarAction

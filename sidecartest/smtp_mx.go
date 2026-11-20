@@ -510,9 +510,13 @@ func (self *mxSmtpSession) handle(verb string, command string, event *MxEvent) (
 		if !strings.HasPrefix(event.Reply, "354") {
 			break
 		}
-		// the 354 goes out before the message arrives
-		self.record.addEvent(&MxEvent{Secure: self.secure, Command: command, Reply: event.Reply, Accepted: true})
-		if err := self.write(event.Reply); err != nil {
+		// the 354 goes out before the message arrives, and is DATA's event; what follows is the message's, which
+		// is no message where the connection ends before its end mark
+		dataReply := event.Reply
+		self.record.addEvent(&MxEvent{Secure: self.secure, Command: command, Reply: dataReply, Accepted: true})
+		event.Command = "<data unfinished>"
+		event.Reply = ""
+		if err := self.write(dataReply); err != nil {
 			return false, false, err
 		}
 		message, err := self.readData()

@@ -18,6 +18,10 @@
 //	backends     the acts run through DaemonDirectoryBackends: the announcement through RECORD-M6-15's AnnounceRepo,
 //	             and revoking, deciding and erasing refuse, naming the task that builds each, until it sets its field
 //	             (RECORD-M6-19, RECORD-M6-20)
+//	repo id      a listing names the directory's own repo id, DirectoryClient.DirectoryId of the call's Sidecar: the
+//	             directory status a remote-mode app reads for SidecarDirectory.GetRepoId, whose directory view names it
+//	             in a "search more" to search the directory alone (§18.5; owner decision 628). An identifier, never
+//	             prose, so stubs carry it too; a Sidecar that names no directory sends none
 //
 // A personal network, or a team whose directory does not exist yet, answers the network's refusal (reading #8 of
 // plan-RECORD-small-readings). Replies carry prose only on request and never a secret (the daemon's reply walk).
@@ -108,6 +112,8 @@ type DaemonDirectoryListReply struct {
 	Untrusted bool `json:"untrusted"`
 	// Prose fields withheld across the stubs: §16.11's untrusted_withheld.
 	Withheld int `json:"withheld"`
+	// The directory's own repo id, nil where the call's Sidecar names none (the file header's repo id row).
+	DirectoryId *Id `json:"directory_id,omitempty"`
 }
 
 // directory.announce's params: a repo's announcement, or with Private its private marker.
@@ -303,6 +309,11 @@ func DaemonDirectoryMethods(daemon *Daemon, backends *DaemonDirectoryBackends) [
 					return nil, err
 				}
 				reply := &DaemonDirectoryListReply{Items: []*DaemonDirectoryListItem{}}
+				if client := call.Sidecar.Directory(); client != nil {
+					if directoryId, ok := client.DirectoryId(); ok {
+						reply.DirectoryId = &directoryId
+					}
+				}
 				if params.Untrusted == DaemonDirectoryUntrustedInclude {
 					// the caller's harness runs read untrusted text through this answer: they are tainted first, by the
 					// pid the system reports for the socket's peer, never the hello's, which the caller writes
