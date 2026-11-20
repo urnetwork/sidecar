@@ -32,14 +32,34 @@ import (
 	"github.com/urnetwork/sidecar/sidecartest"
 )
 
-// The default budget's shape: two loaded shapes and one proof fill it.
+// The default budget and charges in MiB, so that a charge reads as its default's figure: two loaded shapes and
+// one proof fill it (TestTheDefaultBudgetHoldsTwoShapesAndOneProof).
 func testLoaderSettings() *ProverSettings {
 	settings := DefaultProverSettings()
-	settings.MemoryMaxByteCount = 2240
-	settings.ShapeMemoryByteCount = 768
-	settings.PartMemoryByteCount = 704
+	settings.MemoryMaxByteCount /= 1024 * 1024
+	settings.ShapeMemoryByteCount /= 1024 * 1024
+	settings.PartMemoryByteCount /= 1024 * 1024
 	settings.ShapeIdleTimeout = 2 * time.Minute
 	return settings
+}
+
+// A loaded shape's charge and a proof's, as settings give them.
+func testCharges(settings *ProverSettings) (int64, int64) {
+	return settings.ShapeMemoryByteCount, settings.PartMemoryByteCount
+}
+
+// The default budget keeps the meaning DESIGN.md §5.4 and DESIGN-DETAILS 3.2.8 give it, two loaded shapes, the one
+// proving and the next, and one proof in flight (QD-1115), so a charge's default is never raised without the
+// budget: BenchmarkPartMemory holds each charge to what it measures.
+func TestTheDefaultBudgetHoldsTwoShapesAndOneProof(t *testing.T) {
+	settings := DefaultProverSettings()
+	shape, part := testCharges(settings)
+	if settings.MemoryMaxByteCount != 2*shape+part {
+		t.Errorf("MemoryMaxByteCount's %d MiB is not two loaded shapes at %d MiB and one proof at %d MiB", settings.MemoryMaxByteCount/1024/1024, shape/1024/1024, part/1024/1024)
+	}
+	if settings.ProveConcurrency != 1 {
+		t.Errorf("ProveConcurrency's default %d is past the one proof the default budget holds", settings.ProveConcurrency)
+	}
 }
 
 // A loader on a fake clock, whose loads are counted by shape and whose heap returns are counted.
@@ -131,15 +151,17 @@ func (self *testLoader) expect(t *testing.T, step string, keys []string, charged
 }
 
 func TestTheLoaderNeverChargesPastTheBudget(t *testing.T) {
-	loader := newTestLoader(t, testLoaderSettings())
+	settings := testLoaderSettings()
+	shape, part := testCharges(settings)
+	loader := newTestLoader(t, settings)
 	a := loader.take(t, "a")
-	loader.expect(t, "a proving", []string{"a"}, 768+704)
+	loader.expect(t, "a proving", []string{"a"}, shape+part)
 
 	// a second shape and proof beside a's would pass the budget, and a is in use, so b waits and nothing goes
 	if !loader.wouldWait(t, "b") {
 		t.Fatal("b loaded beside a proof of a")
 	}
-	loader.expect(t, "b waiting", []string{"a"}, 768+704)
+	loader.expect(t, "b waiting", []string{"a"}, shape+part)
 	if loader.loadCount("b") != 0 {
 		t.Error("a load that waits read its shape")
 	}
@@ -147,23 +169,23 @@ func TestTheLoaderNeverChargesPastTheBudget(t *testing.T) {
 	// once a's proof ends, a stays loaded and b loads beside it: two shapes and one proof fill the budget
 	loader.loader.release(a)
 	b := loader.take(t, "b")
-	loader.expect(t, "b proving", []string{"a", "b"}, 2*768+704)
+	loader.expect(t, "b proving", []string{"a", "b"}, 2*shape+part)
 
 	// a third shape while b proves needs b's room, which b's proof holds: c waits, and a, idle, stays
 	if !loader.wouldWait(t, "c") {
 		t.Fatal("c loaded beside a proof of b")
 	}
-	loader.expect(t, "c waiting", []string{"a", "b"}, 2*768+704)
+	loader.expect(t, "c waiting", []string{"a", "b"}, 2*shape+part)
 
 	// with b's proof done, c takes the place of the least recently used shape, a
 	loader.loader.release(b)
 	c := loader.take(t, "c")
-	loader.expect(t, "c proving", []string{"b", "c"}, 2*768+704)
+	loader.expect(t, "c proving", []string{"b", "c"}, 2*shape+part)
 	loader.loader.release(c)
 
 	// a proof of a shape already loaded charges only the proof
 	again := loader.take(t, "b")
-	loader.expect(t, "b again", []string{"b", "c"}, 2*768+704)
+	loader.expect(t, "b again", []string{"b", "c"}, 2*shape+part)
 	loader.loader.release(again)
 	if loader.loadCount("b") != 1 || loader.loadCount("a") != 1 || loader.loadCount("c") != 1 {
 		t.Errorf("loads %v", loader.loads)
@@ -172,12 +194,13 @@ func TestTheLoaderNeverChargesPastTheBudget(t *testing.T) {
 
 func TestTheLoaderNeverUnloadsAShapeInUse(t *testing.T) {
 	settings := testLoaderSettings()
-	// room for three shapes and one proof, or two shapes and two proofs
-	settings.MemoryMaxByteCount = 3*768 + 704
+	shape, part := testCharges(settings)
+	// room for two shapes and two proofs, and for no third shape beside them
+	settings.MemoryMaxByteCount = 2*shape + 2*part
 	loader := newTestLoader(t, settings)
 	a := loader.take(t, "a")
 	b := loader.take(t, "b")
-	loader.expect(t, "a and b proving", []string{"a", "b"}, 2*768+2*704)
+	loader.expect(t, "a and b proving", []string{"a", "b"}, 2*shape+2*part)
 	// both shapes are held, so a third waits however long ago they were used
 	if !loader.wouldWait(t, "c") {
 		t.Fatal("c loaded over two shapes in use")
@@ -185,34 +208,36 @@ func TestTheLoaderNeverUnloadsAShapeInUse(t *testing.T) {
 	loader.loader.release(a)
 	// a is idle now, and goes for c; b stays
 	c := loader.take(t, "c")
-	loader.expect(t, "b and c proving", []string{"b", "c"}, 2*768+2*704)
+	loader.expect(t, "b and c proving", []string{"b", "c"}, 2*shape+2*part)
 	loader.loader.release(b)
 	loader.loader.release(c)
-	loader.expect(t, "idle", []string{"b", "c"}, 2*768)
+	loader.expect(t, "idle", []string{"b", "c"}, 2*shape)
 }
 
 func TestTheLoaderUnloadsAnIdleShapeAndThenReturnsTheHeap(t *testing.T) {
-	loader := newTestLoader(t, testLoaderSettings())
+	settings := testLoaderSettings()
+	shape, part := testCharges(settings)
+	loader := newTestLoader(t, settings)
 	a := loader.take(t, "a")
 	loader.loader.release(a)
 	loader.clock.Advance(time.Minute)
 	b := loader.take(t, "b")
 	loader.loader.release(b)
-	loader.expect(t, "both idle", []string{"a", "b"}, 2*768)
+	loader.expect(t, "both idle", []string{"a", "b"}, 2*shape)
 
 	// a's two minutes end first, and the heap stays: b is loaded
 	loader.clock.Advance(time.Minute)
-	loader.expect(t, "a timed out", []string{"b"}, 768)
+	loader.expect(t, "a timed out", []string{"b"}, shape)
 	if loader.frees != 0 {
 		t.Errorf("%d heap returns with a shape loaded", loader.frees)
 	}
 	// a use restarts b's timer
 	again := loader.take(t, "b")
 	loader.clock.Advance(time.Hour)
-	loader.expect(t, "b in use", []string{"b"}, 768+704)
+	loader.expect(t, "b in use", []string{"b"}, shape+part)
 	loader.loader.release(again)
 	loader.clock.Advance(2*time.Minute - time.Second)
-	loader.expect(t, "b not yet idle long enough", []string{"b"}, 768)
+	loader.expect(t, "b not yet idle long enough", []string{"b"}, shape)
 	loader.clock.Advance(time.Second)
 	loader.expect(t, "b timed out", nil, 0)
 	if loader.frees != 1 {
@@ -233,7 +258,9 @@ func TestTheLoaderUnloadsAtOnceWithNoIdleTimeout(t *testing.T) {
 }
 
 func TestACancelledProofReturnsItsCharge(t *testing.T) {
-	loader := newTestLoader(t, testLoaderSettings())
+	settings := testLoaderSettings()
+	shape, part := testCharges(settings)
+	loader := newTestLoader(t, settings)
 	started := make(chan struct{})
 	unblock := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -252,7 +279,7 @@ func TestACancelledProofReturnsItsCharge(t *testing.T) {
 		t.Fatalf("a cancelled proof returned %v", err)
 	}
 	// gnark's proof cannot stop, so its charge stays until it ends
-	loader.expect(t, "cancelled, still proving", []string{"a"}, 768+704)
+	loader.expect(t, "cancelled, still proving", []string{"a"}, shape+part)
 	if !loader.wouldWait(t, "b") {
 		t.Error("b loaded beside a proof that still runs")
 	}
@@ -262,7 +289,7 @@ func TestACancelledProofReturnsItsCharge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	loader.expect(t, "b after the cancelled proof", []string{"a", "b"}, 2*768+704)
+	loader.expect(t, "b after the cancelled proof", []string{"a", "b"}, 2*shape+part)
 	loader.loader.release(b)
 	if loader.collects != 1 {
 		t.Errorf("%d collections, want one after the proof", loader.collects)
@@ -271,7 +298,8 @@ func TestACancelledProofReturnsItsCharge(t *testing.T) {
 
 func TestALoaderWithNoRoomForAProofRefusesEveryPart(t *testing.T) {
 	settings := testLoaderSettings()
-	settings.MemoryMaxByteCount = 768 + 704 - 1
+	shape, part := testCharges(settings)
+	settings.MemoryMaxByteCount = shape + part - 1
 	loader := newTestLoader(t, settings)
 	if _, err := loader.loader.acquire(context.Background(), "a", loader.load("a")); err == nil {
 		t.Fatal("a proof was charged past the budget")
@@ -300,11 +328,12 @@ func TestAFailedLoadIsNotKeptAndReturnsItsCharge(t *testing.T) {
 
 func TestProofsOfOneShapeShareItsLoad(t *testing.T) {
 	settings := testLoaderSettings()
-	settings.MemoryMaxByteCount = 768 + 2*704
+	shape, part := testCharges(settings)
+	settings.MemoryMaxByteCount = shape + 2*part
 	loader := newTestLoader(t, settings)
 	first := loader.take(t, "a")
 	second := loader.take(t, "a")
-	loader.expect(t, "two proofs of a", []string{"a"}, 768+2*704)
+	loader.expect(t, "two proofs of a", []string{"a"}, shape+2*part)
 	if !loader.wouldWait(t, "a") {
 		t.Error("a third proof was charged past the budget")
 	}
