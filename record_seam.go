@@ -305,6 +305,10 @@ type RecordLogIds struct {
 	// The network's `record` repos, RECORD.md section 6.5's other ledgers: each with no owner, as the team record has
 	// none.
 	LedgerIds []Id
+	// Per-run cost totals go to the team record as well as the vault (RECORD.md section 6.3's row 28): the Team's
+	// ServiceSettings.record_cost, on unless its head turns it off (owner decision 302), as ConfigTeamSettings.RecordCost
+	// reads it. False keeps cost entries in the vault alone, as they stay wherever the head cannot be opened.
+	TeamCost bool
 }
 
 // What the record reads of §7.9's and §8's verified state at one pin (§16.8's matrix, §8.5's kinds and consent): who

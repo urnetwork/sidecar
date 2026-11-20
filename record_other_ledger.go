@@ -15,8 +15,9 @@
 //	copies    T's projection of the entry, never a vault body, sealed as an ordinary entry of the R log: its own
 //	          entry_id, chain position, key and commitment. So an R log's erasure or shred leaves T's entry, and T's
 //	          erasure leaves the R log's
-//	kinds     context, change, the approval family, restore and coverage, narrowed by the scope's kinds. Claims and
-//	          the other coordination kinds never go here; cost joins only once it goes past the vault
+//	kinds     context, change, the approval family, restore, coverage and cost, narrowed by the scope's kinds; cost only
+//	          while the Team's record_cost sends it to T (owner decision 302), since only T's entries are copied.
+//	          Claims and the other coordination kinds never go here
 //	agents    write here only through this path: no tool names a log
 //
 // `ur status` names each ledger this daemon copies to (StatusLines). Safe for concurrent use.

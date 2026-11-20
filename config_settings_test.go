@@ -1,7 +1,9 @@
 // §7.9's ServiceSettings on the test network: the bounds a head's settings keep, a full reader forking on a head outside
 // them, the head-only values' defaults at a full reader and unknown at a rows-only one, scim_signer from rows, and
 // FS-72's format-1 cases: a head holding VersioningRules or a ServiceSettings.directory compiles and applies with
-// nothing taken from either.
+// nothing taken from either. Then the Settings fields (owner decisions 302, 305; QD-204): their defaults and the head's
+// values at a full reader, their closed values at a rows-only one, a Team named by its directory, and a reader whose
+// config.proto lacks them skipping them and keeping them through a re-sign.
 
 package sidecar
 
@@ -9,13 +11,22 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"errors"
+	"slices"
 	"testing"
+
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protodesc"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
+	"google.golang.org/protobuf/types/descriptorpb"
+	"google.golang.org/protobuf/types/dynamicpb"
 
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
-// witness_bound_hours 0 or 24 to 168; known enum values; a scim_signer of none or a sidecar_id.
+// witness_bound_hours 0 or 24 to 168; known enum values, record_cost's among them; a scim_signer of none or a sidecar_id;
+// mail_strict and record_required either way.
 func TestServiceSettingsBounds(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -33,6 +44,9 @@ func TestServiceSettingsBounds(t *testing.T) {
 		{name: "a short scim_signer", settings: &protocol.ServiceSettings{ScimSigner: []byte{1, 2, 3}}, ok: false},
 		{name: "a scim_signer", settings: &protocol.ServiceSettings{ScimSigner: testConfigId("indexer").Bytes()}, ok: true},
 		{name: "a directory, ignored at M2", settings: &protocol.ServiceSettings{Directory: &protocol.ServiceDirectorySettings{Runs: 9}}, ok: true},
+		{name: "the Settings fields set", settings: &protocol.ServiceSettings{MailStrict: true, RecordCost: protocol.RecordCostMode_RECORD_COST_MODE_OFF, RecordRequired: true}, ok: true},
+		{name: "record_cost on", settings: &protocol.ServiceSettings{RecordCost: protocol.RecordCostMode_RECORD_COST_MODE_ON}, ok: true},
+		{name: "an unknown record_cost", settings: &protocol.ServiceSettings{RecordCost: protocol.RecordCostMode(3)}, ok: false},
 	}
 	for _, c := range cases {
 		if err := CheckServiceSettings(c.settings); (err == nil) != c.ok || (err != nil && !errors.Is(err, ErrConfigRule)) {
@@ -130,5 +144,143 @@ func TestAHeadsVersioningRulesAndDirectoryApplyNothing(t *testing.T) {
 		if head == withDirectory && facts.Settings.GetDirectory().GetRuns() != protocol.DirectoryRunsMode_DIRECTORY_RUNS_MODE_OFF {
 			t.Error("the head check lost the directory a device reads at M6")
 		}
+	}
+}
+
+// The Settings fields at a full reader: mail_strict and record_required off and record_cost on with no settings or none
+// of them set, the head's values once it sets them, record_cost on again by its explicit value; at a rows-only reader
+// not known, each at its closed value, record_cost off though the head leaves it on; and a Team once the config names a
+// directory.
+func TestServiceSettingsFieldsDefaultsAndClosedValues(t *testing.T) {
+	net := newTestConfigNet(t)
+	if honored := net.log.State().TeamSettings(); *honored != (ConfigTeamSettings{Known: true, RecordCost: true}) {
+		t.Fatalf("the defaults: %+v", honored)
+	}
+	cases := []struct {
+		settings *protocol.ServiceSettings
+		want     ConfigTeamSettings
+	}{
+		{
+			settings: &protocol.ServiceSettings{WitnessBoundHours: 48},
+			want:     ConfigTeamSettings{Known: true, RecordCost: true},
+		},
+		{
+			settings: &protocol.ServiceSettings{MailStrict: true, RecordCost: protocol.RecordCostMode_RECORD_COST_MODE_OFF, RecordRequired: true},
+			want:     ConfigTeamSettings{Known: true, MailStrict: true, RecordRequired: true},
+		},
+		{
+			settings: &protocol.ServiceSettings{RecordCost: protocol.RecordCostMode_RECORD_COST_MODE_ON, RecordRequired: true},
+			want:     ConfigTeamSettings{Known: true, RecordCost: true, RecordRequired: true},
+		},
+	}
+	configVersion := uint64(1)
+	for _, c := range cases {
+		configVersion += 1
+		net.source.settings[[sha256.Size]byte(testConfigHeadSha256(configVersion))] = c.settings
+		if verdict := net.fold(net.owner, net.n, configVersion); !verdict.Accepted() {
+			t.Fatalf("the base: %v", verdict.Refusal)
+		}
+		if honored := net.log.State().TeamSettings(); *honored != c.want {
+			t.Errorf("%v: %+v", c.settings, honored)
+		}
+	}
+	gate := net.everyReader()[2]
+	if honored := gate.State().TeamSettings(); *honored != (ConfigTeamSettings{}) {
+		t.Errorf("a rows-only reader: %+v", honored)
+	}
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_REPO_CREATE, &protocol.RepoCreate{
+		Header: net.header(), RepoId: testConfigId("directory repo").Bytes(), Kind: protocol.RepoKind_REPO_KIND_DIRECTORY,
+	})
+	if honored := net.log.State().TeamSettings(); !honored.Team || !honored.RecordCost {
+		t.Errorf("a team network: %+v", honored)
+	}
+}
+
+// A reader whose config.proto stops at directory = 6, as every build before the Settings fields does: it parses a
+// ServiceSettings that sets all three, reads fields 1 to 6 as written, and keeps 7 to 9 as unknown fields through a
+// re-sign, so an older admin's device filing other settings drops none of them; and this build takes an older writer's
+// bytes with the three at their defaults, record_cost on.
+func TestAnOlderReaderSkipsTheSettingsFields(t *testing.T) {
+	older := protodesc.ToFileDescriptorProto(protocol.File_protocol_config_proto)
+	older.EnumType = slices.DeleteFunc(older.EnumType, func(enum *descriptorpb.EnumDescriptorProto) bool {
+		return enum.GetName() == "RecordCostMode"
+	})
+	for _, message := range older.MessageType {
+		if message.GetName() == "ServiceSettings" {
+			message.Field = slices.DeleteFunc(message.Field, func(field *descriptorpb.FieldDescriptorProto) bool {
+				return 6 < field.GetNumber()
+			})
+		}
+	}
+	file, err := protodesc.NewFile(older, protoregistry.GlobalFiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	olderSettings := file.Messages().ByName("ServiceSettings")
+	if olderSettings == nil || olderSettings.Fields().Len() != 6 || olderSettings.Fields().ByNumber(7) != nil {
+		t.Fatal("the older ServiceSettings is not fields 1 to 6")
+	}
+
+	written := &protocol.ServiceSettings{
+		TeamMail:          protocol.TeamMailMode_TEAM_MAIL_MODE_INDEXERS,
+		StaleLeafDays:     30,
+		SelfAdmit:         protocol.SelfAdmitMode_SELF_ADMIT_MODE_OFF,
+		WitnessBoundHours: 48,
+		ScimSigner:        testConfigId("indexer").Bytes(),
+		Directory:         &protocol.ServiceDirectorySettings{Runs: protocol.DirectoryRunsMode_DIRECTORY_RUNS_MODE_PROMPT},
+		MailStrict:        true,
+		RecordCost:        protocol.RecordCostMode_RECORD_COST_MODE_OFF,
+		RecordRequired:    true,
+	}
+	encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(written)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := dynamicpb.NewMessage(olderSettings)
+	if err := proto.Unmarshal(encoded, read); err != nil {
+		t.Fatalf("the older reader refused the head's settings: %v", err)
+	}
+	if len(read.GetUnknown()) == 0 {
+		t.Fatal("the older reader holds no unknown field")
+	}
+	// what the older reader sees is fields 1 to 6 as written
+	seen := proto.Clone(read)
+	seen.ProtoReflect().SetUnknown(nil)
+	seenBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(seen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstSix := proto.Clone(written).(*protocol.ServiceSettings)
+	firstSix.MailStrict, firstSix.RecordCost, firstSix.RecordRequired = false, protocol.RecordCostMode_RECORD_COST_MODE_UNSPECIFIED, false
+	seenSettings := &protocol.ServiceSettings{}
+	if err := proto.Unmarshal(seenBytes, seenSettings); err != nil || !proto.Equal(seenSettings, firstSix) {
+		t.Fatalf("the older reader read %v: %v", seenSettings, err)
+	}
+	// its re-sign, as SaveDirectoryServiceSettings clones and signs, keeps the three
+	resigned, err := proto.MarshalOptions{Deterministic: true}.Marshal(read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept := &protocol.ServiceSettings{}
+	if err := proto.Unmarshal(resigned, kept); err != nil || !proto.Equal(kept, written) {
+		t.Fatalf("an older device's re-sign kept %v: %v", kept, err)
+	}
+
+	// an older writer's settings read here with the three at their defaults
+	olderWritten := dynamicpb.NewMessage(olderSettings)
+	olderWritten.Set(olderSettings.Fields().ByName("stale_leaf_days"), protoreflect.ValueOfUint32(30))
+	olderBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(olderWritten)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newer := &protocol.ServiceSettings{}
+	if err := proto.Unmarshal(olderBytes, newer); err != nil || newer.GetStaleLeafDays() != 30 {
+		t.Fatalf("an older writer's settings: %v %v", newer, err)
+	}
+	if err := CheckServiceSettings(newer); err != nil {
+		t.Fatal(err)
+	}
+	if newer.GetMailStrict() || newer.GetRecordRequired() || newer.GetRecordCost() == protocol.RecordCostMode_RECORD_COST_MODE_OFF {
+		t.Errorf("an older writer's settings read %v", newer)
 	}
 }

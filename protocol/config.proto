@@ -202,9 +202,20 @@ message ServiceDirectorySettings {
   DirectoryWorkersMode workers = 2;
 }
 
+// Whether per-run cost totals go to the team record as well as the vault (owner decision 302; RECORD.md
+// sections 6.3 and 13.1): on by default, which a bool's zero cannot say, so the zero reads as on, as
+// SelfAdmitMode's does.
+enum RecordCostMode {
+  RECORD_COST_MODE_UNSPECIFIED = 0;    // on
+  RECORD_COST_MODE_ON = 1;
+  RECORD_COST_MODE_OFF = 2;
+}
+
 // An owner or admin. A zero value means the default each comment gives, but for team_mail, whose default no
 // section writes: there zero is no choice made, which grants nothing, so an undesignated tag:mail device
-// registers no listener as it would under indexers (D-MAIL-15).
+// registers no listener as it would under indexers (D-MAIL-15). §7.9's Settings fields take 7 to 9 in the
+// order written, each network-wide, reserved before M2's freeze as directory was, so older readers ignore
+// them (D-PHASE-9).
 message ServiceSettings {
   TeamMailMode team_mail = 1;
   uint32 stale_leaf_days = 2;          // 90 (§10.9's stale Removes)
@@ -212,6 +223,11 @@ message ServiceSettings {
   uint32 witness_bound_hours = 4;      // 72, 24 to 168 (D-TRUST-10, owner decision 129)
   bytes scim_signer = 5;               // none, or the sidecar_id of an admin's indexer (7.6)
   ServiceDirectorySettings directory = 6;  // from v1 (M6), reserved here at M2: older readers ignore it (D-PHASE-9)
+  bool mail_strict = 7;                // false: §15.4's mail.strict; a reader that does not know it never claims
+                                       // strict_custom_mx (QD-204)
+  RecordCostMode record_cost = 8;      // on (owner decision 302)
+  bool record_required = 9;            // false; read from M6 and never set through MCP: each member's
+                                       // ur install-harness writes fail-closed hooks (§16.7; owner decision 305)
 }
 
 enum VersioningMode {
