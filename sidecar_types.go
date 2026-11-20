@@ -650,7 +650,7 @@ type SidecarEvent struct {
 	// head_alarm: this device's pin and the peer's or api's, as §6.5 encodes them (AuthPin, GroupHead,
 	// GenHead or RefHead), or for rollback the TopicVersion held and the one offered, as protobuf bytes;
 	// recovery_rebind at a void: the AuthPins at which keychain.wrap was sealed to the voided binding and
-	// re-sealed (§5.9).
+	// re-sealed (§5.9); ct_alarm: [0], the leaf's SHA-256.
 	Evidence [2][]byte
 	// erasure: its id, state and what is left (§11.12, §11.13's wait).
 	Erasure *SidecarErasure
@@ -671,7 +671,8 @@ type SidecarEvent struct {
 	BridgeAlarm SidecarBridgeAlarm
 	// dns_alarm (D-TRUST-9's zone watch).
 	DnsAlarm SidecarDnsAlarm
-	// ct_alarm (D-TLS-8's CT watch). SidecarId names the attesting identity of a recent_identity alarm.
+	// ct_alarm (D-TLS-8's CT watch). SidecarId names the attesting identity of a recent_identity alarm, and
+	// Evidence[0] is the leaf's SHA-256: the logged certificate's, or its precertificate's while only that is logged.
 	CtAlarm SidecarCtAlarm
 	// mail_receiver_alarm (D-MAIL-15, reading 8): SidecarId the receiver or the record's signer, RepoId the repo.
 	MailReceiverAlarm SidecarMailReceiverAlarm
