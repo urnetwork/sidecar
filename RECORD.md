@@ -1340,10 +1340,10 @@ T           per-run totals (tokens by model and reported amounts) go to T by def
 ```
 
 ```text
-ur record cost [--log l] [--since t] [--until t] [--by project|model|month] [--map file] [--format text|csv|jsonl]
+ur record cost [--log l] [--since t] [--until t] [--by project|client|model|month] [--map file] [--format text|csv|jsonl]
 ```
 
-`ur record cost` reads one log, the vault by default, and sums, per run, only the newest `cost` entry by seq in its writer's chain, since a re-opened run writes a newer entry of whole-run totals and a seq counts one (log, writer) chain. `--map` is a local file of `project,client` lines, which gives P5:845's per-client view with nothing new in any log. There is no `--by member` and no ranking of people (MK2:774). A group holding fewer than 5 members folds into `other` (owner decision 302), a minimum group size that REC:259 says may narrow works-council exposure and that needs legal review. Admins hold the entries regardless, so this shapes the tool and is no privacy control.
+`ur record cost` reads one log, the vault by default, and sums, per run, only the newest `cost` entry by seq in its writer's chain, since a re-opened run writes a newer entry of whole-run totals and a seq counts one (log, writer) chain. `--map` is a local file of `project,client` lines, which gives P5:845's per-client view with nothing new in any log: under `--by project` a mapped project shows as its client, and `--by client` needs a map naming a project's client, refused before the daemon is asked without one, a project the map names no client for showing as `(no client)` (DESIGN.md §7.9's Settings fields, whose `ur admin settings` sets `record_cost`; owner decision 657). There is no `--by member` and no ranking of people (MK2:774). A group holding fewer than 5 members folds into `other` (owner decision 302), a minimum group size that REC:259 says may narrow works-council exposure and that needs legal review. Admins hold the entries regardless, so this shapes the tool and is no privacy control.
 
 ### 13.2 What the record costs
 
