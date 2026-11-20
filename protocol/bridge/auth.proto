@@ -137,13 +137,15 @@ message CascadeSpanRow {
 }
 
 // One IndexerSet designation that holds (§7.9's Indexers; question team-m2-07-indexer-rows): what api sees of its
-// entry, its services sealed as there.
+// entry, its services sealed as there, with the header's nonce they are sealed under, so every reader opens them
+// after a fold (owner decision 634; question mail-m8-10-indexer-services-seal-context).
 message IndexerRow {
   bytes  sidecar_id = 1;                 // the subject
   uint32 scope = 2;                      // IndexerScope's value (config.proto)
   bytes  signer = 3;                     // a sidecar_id
   uint64 at = 4;                         // the IndexerSet's entry
   bytes  sealed_services = 5;            // IndexerSet.sealed_services, verbatim
+  bytes  nonce = 6;                      // the IndexerSet header's 16-byte nonce, copied at the fold
 }
 
 // Kept for the membership's life.
