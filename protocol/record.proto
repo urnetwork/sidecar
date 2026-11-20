@@ -15,22 +15,18 @@
 // CanonicalAction's field 37 is reserved in D-PHASE-9's sense: declared here, and set only in version 2, for
 // format 2's evs_write, so an approver that does not know that version refuses it (§16.8).
 //
-// The owner's answer to record-m2-01-canonical-action-detail (QD-740) is declared here ahead of §16.8's fence, which
-// design-records writes: local_port, weight and alpn leave CanonicalAction, 24, 25 and 34 reserved, for
-// ApprovalRequest's 14, 15 and 16, which ride sealed in the approval entry and never reach a server; and a dial or
+// The owners' answers the fences now write: local_port, weight and alpn left CanonicalAction, 24, 25 and 34 reserved,
+// for ApprovalRequest's 14, 15 and 16, which ride sealed in the approval entry and never reach a server, and a dial or
 // route grant's prefixes and ports ride sealed_detail = 38, a CanonicalActionDetail under §7.9's sealed-body format
-// (owner decision 220), at version 4, as a version-3 access_request's port does. The answer to
-// canonical-action-detail-listen-socket-name (QD-772) moves a socket_listen's socket name the same way: socket_name
-// leaves CanonicalAction, 23 reserved, for ApprovalRequest's 17, and a listen's action names its socket by its one
-// grant_dst entry alone, in the form a server may see. The answer to search-m10-28-transcript-prompts (QD-900) is
-// declared here ahead of RECORD.md section 6.4's fence: ContextBody gains prompts = 17, the run's redacted user
-// prompts in stage 2 entries as they arrive, which a vault's run card reads (RECORD.md 7.4) and T's projection leaves
-// empty. The answer to ur-tun-default-egress-option-lock-action (QD-1060) is declared here ahead of §16.8's fence:
-// CanonicalAction gains require_default_egress = 41, an egress_change's requirement of default egress under exits
-// (QD-1053), which approvers render and the gate binds. The answer to mcp-m8-01-app-template-uses (QD-1010) is
-// declared here ahead of §16.8's fence: ApprovalRequest gains uses = 18 at its version 2, the uses its agent asks a
-// template's approval for, 1 for any other action, which approvers render and sign as ApprovalDecision.uses.
-// design_unfenced_test.go lists each.
+// (owner decision 220), at version 4, as a version-3 access_request's port does (QD-740); socket_name left the same
+// way, 23 reserved, for ApprovalRequest's 17, a listen's action naming its socket by its one grant_dst entry alone, in
+// the form a server may see (QD-772); CanonicalAction gained require_default_egress = 41, an egress_change's
+// requirement of default egress under exits (QD-1053, QD-1060), which approvers render and the gate binds; and
+// ApprovalRequest gained uses = 18 at its version 2, the uses its agent asks a template's approval for, 1 for any other
+// action, which approvers render and sign as ApprovalDecision.uses (QD-1010, owner decision 574). §16.8's fence writes
+// those, and RECORD.md section 6.4's writes ContextBody's prompts = 17, the run's redacted user prompts in stage 2
+// entries as they arrive, which a vault's run card reads (RECORD.md 7.4) and T's projection leaves empty (QD-900,
+// owner decision 467). design_unfenced_test.go writes CanonicalActionDetail, which no fence does.
 
 syntax = "proto3";
 package urnetwork.sidecar;
@@ -254,8 +250,9 @@ message ContextBody {                       // context
   repeated string truncations = 13;         // V: <= 16 warnings, each <= 128 B: a base name and its cut
   bytes config_sha256 = 14;                 // the harness config hash §16.6 checks
   bytes continues_run_id = 15; bytes continues_entry_id = 16;
-  repeated string prompts = 17;             // V: QD-900: user prompts as they arrive (§16.7), each redacted and
-                                            // none empty, in order, <= 2,048 B together; stage 2 entries carry them
+  repeated string prompts = 17;             // V: the run's user prompts as they arrive (§16.7), each redacted and
+                                            // none empty, in order, <= 2,048 B together; stage 2 entries carry
+                                            // them, which a vault's run card reads (section 7.4; owner decision 467)
 }
 message InstructionFile {
   uint32 scope = 1;                         // 1 managed, 2 user, 3 project
@@ -369,7 +366,8 @@ message Opening {                           // an entry with what opens it
                                             // reading 1: body is the kind's message at 1 and the AgentSignedBody
                                             // holding it at 2. The opener's word, unsigned: the commitment binds body
 }
-message CopyBody { repeated Opening entries = 1; }  // copy (M6): <= 64 entries the daemon deposited to T
+message CopyBody { repeated Opening entries = 1; }  // copy (M6): <= 64 entries the daemon deposited to T, or
+                                                    // the decisions a directory requester's notice names (§16.11)
 message TranscriptBody {                    // transcript: a chunk of §16.7's tail
   uint64 first_line = 1; uint32 line_count = 2;
   bytes lines = 3;                          // the harness's JSONL lines after redaction, <= 1 MiB
@@ -402,8 +400,8 @@ message LedgerScopeBody {                   // ledger_scope (M6)
   repeated bytes repo_ids = 1;              // <= 256
   repeated string projects = 2;             // <= 256, §16.11's project keys
   repeated uint32 kinds = 3;                // the kinds copied here, from context, change, the approval family,
-                                            // restore and coverage; empty: all of them; cost joins this list only
-                                            // once Q-RECORD-6 sends it past V, and a writer leaves it out till then
+                                            // restore, coverage and cost; empty: all of them; cost only while
+                                            // the Team's ServiceSettings.record_cost sends it to T (section 13.1)
 }
 
 // RECORD.md section 10.1: the verifiable log's settings and checkpoints (M6).
@@ -412,7 +410,7 @@ message LogSettingsBody {                   // log_settings
   bytes checkpointer_sidecar_id = 2;        // a device with rw on the log: an admin's device or indexer
   bytes note_public_key = 3;                // its Ed25519 log key, 32 B
   uint32 interval_seconds = 4;              // 3,600 by default; 300 to 86,400; 0 turns the log off
-  repeated LogWitness witnesses = 5;        // <= 8; empty while Q-RECORD-8 is open
+  repeated LogWitness witnesses = 5;        // <= 8, each called by section 10.2's witness step
   uint64 from_batch = 6;                    // the first batch this entry governs
 }
 message LogWitness {

@@ -1,10 +1,10 @@
 //go:build !sidecar_http && !js && !ios_extension
 
-// MAIL-M7-24's strict mode: the setting read off where config.proto has no mail_strict field; under strict a splice for
-// a URnetwork-zone host refused and one for a custom MX host taken only where its customer-signed chain holds; a
-// refused splice ending at a TLS alert before any SMTP byte, its session never run; strict_chain sealed only for a
-// spliced session whose SNI names a custom MX host whose chain holds for its recipients, never for a URnetwork-zone
-// host, a direct-MX session or with strict off; and the label's claim saying only the stated residual.
+// MAIL-M7-24's strict mode: the setting read from config.proto's mail_strict, off unless a head sets it; under strict a
+// splice for a URnetwork-zone host refused and one for a custom MX host taken only where its customer-signed chain
+// holds; a refused splice ending at a TLS alert before any SMTP byte, its session never run; strict_chain sealed only
+// for a spliced session whose SNI names a custom MX host whose chain holds for its recipients, never for a
+// URnetwork-zone host, a direct-MX session or with strict off; and the label's claim saying only the stated residual.
 
 package sidecar
 
@@ -54,23 +54,27 @@ func newMailStrictTestPolicy(strict bool, chain *mailStrictTestChain) *MailStric
 	return NewMailStrictPolicy(args)
 }
 
-// The setting reads off for no settings and wherever this build's ServiceSettings carries no mail_strict field yet,
-// whatever else it sets.
-func TestMailStrictSettingReadsOffWithoutTheField(t *testing.T) {
+// The setting is ServiceSettings.mail_strict, field 7 (QD-204): off for no settings and for settings that leave it
+// unset whatever else they set, on once a head sets it, and off again once a head clears it.
+func TestMailStrictSettingReadsTheDeclaredField(t *testing.T) {
 	if MailStrictSetting(nil) {
 		t.Fatal("no settings read on")
 	}
-	settings := &protocol.ServiceSettings{TeamMail: protocol.TeamMailMode_TEAM_MAIL_MODE_INDEXERS, WitnessBoundHours: 48}
-	field := settings.ProtoReflect().Descriptor().Fields().ByName(mailStrictSettingField)
-	if field == nil && MailStrictSetting(settings) {
-		t.Fatal("a build without the field read strict on")
+	field := (&protocol.ServiceSettings{}).ProtoReflect().Descriptor().Fields().ByNumber(7)
+	if field == nil || field.Name() != "mail_strict" || field.Kind() != protoreflect.BoolKind {
+		t.Fatalf("ServiceSettings' field 7 is %v", field)
 	}
-	if field != nil {
-		// once config.proto carries the field, the setting reads it
-		settings.ProtoReflect().Set(field, protoreflect.ValueOfBool(true))
-		if !MailStrictSetting(settings) {
-			t.Fatal("mail_strict set true reads off")
-		}
+	settings := &protocol.ServiceSettings{TeamMail: protocol.TeamMailMode_TEAM_MAIL_MODE_INDEXERS, WitnessBoundHours: 48, RecordRequired: true}
+	if MailStrictSetting(settings) {
+		t.Fatal("settings that leave mail_strict unset read strict on")
+	}
+	settings.MailStrict = true
+	if !MailStrictSetting(settings) {
+		t.Fatal("mail_strict set true reads off")
+	}
+	settings.MailStrict = false
+	if MailStrictSetting(settings) {
+		t.Fatal("mail_strict cleared reads on")
 	}
 }
 

@@ -3,7 +3,8 @@
 // RECORD-M6-01's team mode on sidecartest's streams and authorization state: RECORD.md section 20's projection case,
 // a sponsorless tagged sidecar's kinds in T alone, deposits to T on a fake clock with each flush, a run's V and T
 // entries on distinct chains, two ingesters on T, a copy surviving T's erasure, and team mode switching at the
-// position of the team record's RepoCreate.
+// position of the team record's RepoCreate. And section 6.3's row 28 (owner decision 302): a run's cost in V and T
+// while the Team's record_cost is on, and in V alone while it is off.
 
 package sidecar_test
 
@@ -240,6 +241,104 @@ func TestRecordTeamProjectionHoldsNoRunText(t *testing.T) {
 	}
 	if !vaultPrompt {
 		t.Error("the vault's stage 2 context entry lost its prompt")
+	}
+}
+
+// A run's totals by model, as RecordRunCost.Body makes them.
+func testTeamCostBody(inputTokens uint64) *protocol.RunCostBody {
+	return &protocol.RunCostBody{
+		Usage:        []*protocol.ModelUsage{{Model: "model-a", InputTokens: inputTokens, OutputTokens: 5, Calls: 2, ReportedMicroUsd: 300, Complete: true}},
+		MeteredBytes: 4096,
+	}
+}
+
+// Section 6.3's row 28: while the Team's record_cost is on, its default, a run's cost entry goes to V and to T, T's a
+// projection holding the totals and naming the vault entry by one ContentRef, copied to the vault; once a later
+// position turns it off, the next cost entry goes to V alone and T takes nothing more.
+func TestRecordTeamCostReachesTOnlyWhileTheTeamsSettingIsOn(t *testing.T) {
+	world := newTestTeamWorld(t)
+	world.fixture.Logs.TeamCost = true
+	world.publish()
+	device := world.memberDevice(true)
+	admin := world.adminDevice()
+	record := device.open()
+	runId := sidecar.NewId()
+	world.runs.StartRun(runId)
+
+	on := testTeamCostBody(10)
+	refs, err := record.Writer().Append(sidecar.RecordRunCostDraft(runId, on))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 3 || refs[0].LogId != world.vaultId || refs[1].LogId != world.teamRecordId || refs[2].LogId != world.vaultId {
+		t.Fatalf("a cost entry while record_cost is on: %+v", refs)
+	}
+	if err := record.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	deposited := world.teamDeposits(device.sidecarId, admin.sidecarId)
+	if len(deposited) != 1 || deposited[0].header.Kind() != sidecar.RecordKindCost {
+		t.Fatalf("T holds %d entries", len(deposited))
+	}
+	teamBody := &protocol.RunCostBody{}
+	if err := proto.Unmarshal(deposited[0].body, teamBody); err != nil || !proto.Equal(teamBody, on) {
+		t.Fatalf("T's cost entry holds %v: %v", teamBody, err)
+	}
+	content := deposited[0].header.Header.GetContent()
+	if len(content) != 1 || sidecar.Id(content[0].GetRepoId()) != world.vaultId || sidecar.Id(content[0].GetObjectId()) != refs[0].EntryId ||
+		!bytes.Equal(content[0].GetCommitment(), refs[0].Commitment[:]) {
+		t.Fatalf("T's cost entry names %v", content)
+	}
+
+	world.fixture.Logs.TeamCost = false
+	world.publish()
+	off := testTeamCostBody(20)
+	refs, err = record.Writer().Append(sidecar.RecordRunCostDraft(runId, off))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 1 || refs[0].LogId != world.vaultId {
+		t.Fatalf("a cost entry while record_cost is off: %+v", refs)
+	}
+	if err := record.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if deposited := world.teamDeposits(device.sidecarId, admin.sidecarId); len(deposited) != 1 {
+		t.Fatalf("T holds %d entries once record_cost is off", len(deposited))
+	}
+	costs, copies := 0, 0
+	for _, entry := range world.storedEntries(device.sidecarId) {
+		switch sidecar.RecordKind(entry.header.GetKind()) {
+		case sidecar.RecordKindCost:
+			costs += 1
+		case sidecar.RecordKindCopy:
+			copies += 1
+		}
+	}
+	if costs != 2 || copies != 1 {
+		t.Errorf("the vault holds %d cost entries and %d copies", costs, copies)
+	}
+}
+
+// With the Team's record_cost off from the start, and in a network with no team record whatever the setting, cost stays
+// in the vault alone.
+func TestRecordTeamCostStaysInTheVaultWhileOff(t *testing.T) {
+	world := newTestTeamWorld(t)
+	device := world.memberDevice(true)
+	record := device.open()
+	runId := sidecar.NewId()
+	world.runs.StartRun(runId)
+	if refs := testRecordAppendAll(t, record, sidecar.RecordRunCostDraft(runId, testTeamCostBody(10))); len(refs) != 1 || refs[0].LogId != world.vaultId {
+		t.Fatalf("record_cost off: %+v", refs)
+	}
+	personal := newTestRecordWorld(t)
+	personal.fixture.Logs = &sidecar.RecordLogIds{TeamCost: true}
+	personal.publish()
+	personalDevice := personal.device(true)
+	personalRecord := personalDevice.open()
+	personal.runs.StartRun(runId)
+	if refs := testRecordAppendAll(t, personalRecord, sidecar.RecordRunCostDraft(runId, testTeamCostBody(10))); len(refs) != 1 || refs[0].LogId != personal.vaultId {
+		t.Fatalf("a personal network: %+v", refs)
 	}
 }
 
