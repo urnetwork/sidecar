@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/netip"
 	"slices"
 	"strings"
 	"testing"
@@ -353,6 +354,115 @@ func TestAclPolicyTestRunMeetsPortsBeforeARuleNamingNoPrefix(t *testing.T) {
 	want := []string{aclTestsNoPrefixFailure(1, 0, 0), aclTestsNoPrefixFailure(1, 1, 0)}
 	if got := aclTestsFailureLines(report); !slices.Equal(got, want) {
 		t.Errorf("failures %q", got)
+	}
+}
+
+// The line a deny of an ip: range holding a public address fails with under an autogroup:internet rule (QD-1125).
+func aclTestsInternetFailure(test int, check int, grant int) string {
+	return fmt.Sprintf("tests[%d].deny[%d]: allowed by grants[%d], which names autogroup:internet: an exit among its via "+
+		"subjects could serve any public address by its routes in force", test, check, grant)
+}
+
+// QD-1125: a rule that names autogroup:internet reaches every public address through an exit among its vias, by routes
+// in force no save sees, so a deny of a range holding a public address fails naming the rule, IPv4 or IPv6 and a /0
+// alike; a deny of a private range passes, an accept of a public range still fails, a source the rule does not take
+// passes, and a rule naming prefixes beside autogroup:internet fails a deny they overlap as before.
+func TestAclPolicyTestRunFailsAPublicIpDenyUnderAnInternetRule(t *testing.T) {
+	policy := `{
+  "groups": { "group:eng": ["dana@tests.example"] },
+  "tagOwners": { "tag:exit": ["autogroup:admin"] },
+  "grants": [
+    { "src": ["group:eng"], "dst": ["autogroup:internet"], "via": ["tag:exit"], "allow": ["route"] },
+    { "src": ["user:amir@tests.example"], "dst": ["autogroup:internet", "ip:192.168.0.0/24"], "via": ["tag:exit"], "allow": ["route"] },
+  ],
+  "tests": [
+    { "src": "dana@tests.example", "deny": ["ip:203.0.113.0/24#route", "ip:2001:db8::/32#route", "ip:0.0.0.0/0#route"] },
+    { "src": "dana@tests.example", "deny": ["ip:10.0.0.0/8#route", "ip:fc00::/7#route"] },
+    { "src": "dana@tests.example", "accept": ["ip:203.0.113.0/24#route"] },
+    { "src": "owner@tests.example", "deny": ["ip:203.0.113.0/24#route"] },
+    { "src": "amir@tests.example", "deny": ["ip:192.168.0.0/25#route", "ip:198.51.100.0/24#route", "ip:10.0.0.0/8#route"] },
+  ],
+}`
+	world := newAclTestsWorld(t, policy)
+	world.world.tag("exit")
+	report := world.run(t)
+	want := []string{
+		aclTestsInternetFailure(0, 0, 0),
+		aclTestsInternetFailure(0, 1, 0),
+		aclTestsInternetFailure(0, 2, 0),
+		"tests[2].accept[0]: refused: no_grant",
+		"tests[4].deny[0]: allowed by rule",
+		aclTestsInternetFailure(4, 1, 1),
+	}
+	if got := aclTestsFailureLines(report); !slices.Equal(got, want) {
+		t.Errorf("failures %q", got)
+	}
+}
+
+// A prefix's last address.
+func aclTestsLastAddress(prefix netip.Prefix) netip.Addr {
+	address := prefix.Masked().Addr().As16()
+	for bit := 128 - prefix.Addr().BitLen() + prefix.Bits(); bit < 128; bit += 1 {
+		address[bit/8] |= 0x80 >> (bit % 8)
+	}
+	if prefix.Addr().Is4() {
+		return netip.AddrFrom16(address).Unmap()
+	}
+	return netip.AddrFrom16(address)
+}
+
+// A prefix holds a public address exactly where aclAddressPublic takes one of its addresses: none in an unspecified,
+// loopback, link-local, multicast or private range or IPv4's broadcast, an IPv4-mapped prefix read as IPv4, two such
+// ranges side by side included; some in a documentation range and in any prefix wider than such a range, though its
+// first and last address may be no public one. Each such range's first and last address read alone agree with
+// aclAddressPublic.
+func TestAclPrefixHoldsPublicReadsAddressesAsAclAddressPublic(t *testing.T) {
+	cases := []struct {
+		prefix string
+		public bool
+	}{
+		{prefix: "192.0.2.0/24", public: true},
+		{prefix: "198.51.100.7/32", public: true},
+		{prefix: "203.0.113.0/24", public: true},
+		{prefix: "2001:db8::/32", public: true},
+		{prefix: "0.0.0.0/0", public: true},
+		{prefix: "::/0", public: true},
+		{prefix: "::ffff:192.0.2.0/120", public: true},
+		{prefix: "0.0.0.0/32", public: false},
+		{prefix: "10.0.0.0/8", public: false},
+		{prefix: "127.0.0.0/8", public: false},
+		{prefix: "169.254.0.0/16", public: false},
+		{prefix: "172.16.0.0/12", public: false},
+		{prefix: "192.168.0.0/16", public: false},
+		{prefix: "224.0.0.0/4", public: false},
+		{prefix: "255.255.255.255/32", public: false},
+		{prefix: "::/128", public: false},
+		{prefix: "::1/128", public: false},
+		{prefix: "::/127", public: false},
+		{prefix: "fc00::/7", public: false},
+		{prefix: "fe80::/10", public: false},
+		{prefix: "ff00::/8", public: false},
+		{prefix: "::ffff:10.0.0.0/104", public: false},
+	}
+	for _, c := range cases {
+		prefix := netip.MustParsePrefix(c.prefix)
+		if got := aclPrefixHoldsPublic(prefix); got != c.public {
+			t.Errorf("%s holds a public address: %v", c.prefix, got)
+		}
+		if prefix.Bits() == prefix.Addr().BitLen() && aclAddressPublic(prefix.Addr()) != c.public {
+			t.Errorf("%s: aclAddressPublic disagrees", c.prefix)
+		}
+		if c.public {
+			continue
+		}
+		for _, address := range []netip.Addr{prefix.Addr(), aclTestsLastAddress(prefix)} {
+			if aclAddressPublic(address) || aclPrefixHoldsPublic(netip.PrefixFrom(address, address.BitLen())) {
+				t.Errorf("%s: %s reads as public", c.prefix, address)
+			}
+		}
+	}
+	if aclPrefixHoldsPublic(netip.Prefix{}) {
+		t.Error("an invalid prefix holds a public address")
 	}
 }
 
