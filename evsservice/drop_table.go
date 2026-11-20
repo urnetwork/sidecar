@@ -30,13 +30,15 @@
 // Bounds (QD-179): an ended entry leaves 30 d after it ends, or sooner when a write would pass 64 KiB, ended entries
 // oldest first and never one whose DROP evs saw committed under 27 h ago, since evacuation appends a committed DROP the
 // table lacks; pending, executing and observed entries never leave. A held entry leaves neither by age nor by the bound
-// until its deletions finish, since the job resumes a held drop from its entry once its hold ends, and it sits outside
-// the 64 KiB the bound counts, so it never makes a later write fail, which would show a hold; the table passes 64 KiB
-// by its held entries alone (owner decision 643). It lists as its done twin would (owner decision 184): GET .../drops
+// until its deletions finish, since the job resumes a held drop from its entry once its hold ends, and neither it nor a
+// held job's record counts toward a refusal, so a hold never makes a later write fail, which would show it; the table
+// passes 64 KiB by them alone (owner decision 643). It lists as its done twin would (owner decision 184): GET .../drops
 // leaves every ended entry out once its 30 d have passed, a held one's counted from the day it moved to held, and its
-// move to done keeps that day, so it goes at once when they have passed (DropStatuses). A DROP is refused 429 while
-// pending, executing and observed entries and void records would pass 48 KiB (AdmitsDrop, which EVS2-M10-09's 5c reads);
-// held entries never count there either, a cancel is never refused and dry runs only evict.
+// move to done keeps that day, so it goes at once when they have passed (DropStatuses). The bound's eviction counts and
+// orders a held entry still listed as its twin, and unlists it where it would evict the twin, its ended_day set to 1,
+// so its retention has passed (QD-1126): past the bound the table lists and evicts as the twin's would. A DROP is
+// refused 429 while pending, executing and observed entries and void records would pass 48 KiB (AdmitsDrop, which
+// EVS2-M10-09's 5c reads); held entries never count there either, a cancel is never refused and dry runs only evict.
 //
 // evs writes the table at each DROP and cancel, through DropSink (CONTRACTS.md C-14: EVS2-M10-09's step 8 calls it,
 // this file implements it), and at each dry run's request; the job writes it at each phase and at most once a minute
@@ -74,6 +76,9 @@ const (
 	dropTableTrailerByteCount      = sha256.Size
 	// the job record's flag: the rest of D waits on a hold (owner decision 184)
 	dropJobFlagHeld uint8 = 1
+	// the ended_day of a held entry the bound unlisted where it would have evicted its done twin: a day whose retention
+	// has long passed (QD-1126)
+	dropUnlistedDay uint16 = 1
 )
 
 // A drop's state as the table holds it: §11.13's who row's states, a refusal's reason folded in.
@@ -213,7 +218,8 @@ type DropSettings struct {
 	// How long after a bound the horizon is taken to pass it: the next round's wake for a drop whose cite bound, or a
 	// young candidate whose adoption bound, the horizon has not passed is that bound plus this. 25 h, evacuation's.
 	HorizonRetryLag time.Duration
-	// The table's bound: 64 KiB (§11.8's drops/ row). Held entries never count toward it.
+	// The table's bound: 64 KiB (§11.8's drops/ row). Held entries never count toward a refusal of a write; its
+	// eviction counts a listed one as its done twin (QD-1126).
 	TableByteCount int
 	// How far held entries may take the table past TableByteCount, which a read takes in besides it: the format's room
 	// for drops, 65,535 records of 128 B, since a held entry stays until its deletions finish whatever the bound (owner
@@ -507,16 +513,36 @@ func (self *DropTableState) byteCount() int {
 		dropTablePreviewByteCount*len(self.Previews)
 }
 
-// What the table's bound counts of its size: every record but its held entries, which never count, so a held entry
-// never makes a later write fail (owner decision 643).
+// What can refuse a write of the table: every record but its held entries and a held job's record, which a twin with no
+// hold would not hold, so a hold never makes a later write fail (owner decision 643).
 func (self *DropTableState) boundByteCount() int {
-	byteCount := self.byteCount()
+	byteCount := self.byteCount() - self.heldJobByteCount()
 	for _, entry := range self.Drops {
 		if entry.State == DropStateHeld {
 			byteCount -= dropTableEntryByteCount
 		}
 	}
 	return byteCount
+}
+
+// What the bound's eviction counts at now, as its no-hold twin's table would hold it: every record but a held job's and
+// the held entries no longer listed, whose done twins' entries would have left, by age or by the bound (QD-1126).
+func (self *DropTableState) mirrorByteCount(now time.Time, settings *DropSettings) int {
+	byteCount := self.byteCount() - self.heldJobByteCount()
+	for _, entry := range self.Drops {
+		if entry.State == DropStateHeld && entry.aged(now, settings) {
+			byteCount -= dropTableEntryByteCount
+		}
+	}
+	return byteCount
+}
+
+// The job record's bytes while its job waits on a hold, which its no-hold twin's ended job does not leave.
+func (self *DropTableState) heldJobByteCount() int {
+	if self.Job != nil && self.Job.Held {
+		return dropTableJobByteCount
+	}
+	return 0
 }
 
 // A UTC day number, as an entry's ended_day holds it.
@@ -540,7 +566,8 @@ func (self *DropPreviewRecord) ended() bool {
 }
 
 // Whether an ended entry's retention has passed at now: a full EndedRetention after the end of the day it ended, for a
-// held entry the day it moved to held, which its move to done keeps. GET .../drops lists no aged entry.
+// held entry the day it moved to held, or dropUnlistedDay once the bound unlisted it, which its move to done keeps.
+// GET .../drops lists no aged entry.
 func (self *DropTableEntry) aged(now time.Time, settings *DropSettings) bool {
 	return self.ended() && !now.Before(dropDayStart(self.EndedDay).Add(settings.EndedRetention+24*time.Hour))
 }
@@ -571,10 +598,16 @@ func (self *DropTableState) expiring(now time.Time, settings *DropSettings) bool
 	return false
 }
 
-// Drops what the bounds let go before a write at now: every ended entry and dry run past EndedRetention, then, while
-// the bound's count would pass TableByteCount, ended entries oldest first that evs saw committed EvictGuard ago or
-// more, then ended dry runs oldest first. A held entry never leaves here and never counts (owner decision 643).
-// ErrDropTableFull when the count still passes, or when held entries take the table past what a read takes in.
+// Drops what the bounds let go before a write at now, as they would from the table of a twin with no hold (owner
+// decisions 184, 643; QD-1126): every ended entry and dry run past EndedRetention, then, while the twin's count
+// (mirrorByteCount) would pass TableByteCount, ended entries oldest first that evs saw committed EvictGuard ago or
+// more, then ended dry runs oldest first. A held entry still listed takes its place in that order as its done twin
+// would, and where the bound would evict the twin it is unlisted instead, its ended_day set to dropUnlistedDay: GET
+// .../drops leaves it out, it counts no more, and its move to done evicts it at that write, while the table keeps it
+// for its deletions. Held entries never count toward a refusal: ErrDropTableFull only when the records but every held
+// one still pass TableByteCount (boundByteCount), where the twin would refuse too, or when held entries take the table
+// past what a read takes in. A count that only held entries keep past the bound, their DROPs seen under EvictGuard
+// ago, refuses nothing, where the twin would refuse.
 func (self *DropTableState) evict(now time.Time, settings *DropSettings) error {
 	self.Drops = slices.DeleteFunc(self.Drops, func(entry *DropTableEntry) bool {
 		return entry.expired(now, settings)
@@ -582,16 +615,20 @@ func (self *DropTableState) evict(now time.Time, settings *DropSettings) error {
 	self.Previews = slices.DeleteFunc(self.Previews, func(preview *DropPreviewRecord) bool {
 		return preview.expired(now, settings)
 	})
-	evictable := func(entry *DropTableEntry) bool {
-		return entry.ended() && entry.State.Evictable()
+	// what the twin's bound may take: an ended entry whose DROP evs saw EvictGuard ago, a held one while it is listed
+	takeable := func(entry *DropTableEntry) bool {
+		if !entry.ended() || now.Sub(time.UnixMilli(entry.SeenMs)) < settings.EvictGuard {
+			return false
+		}
+		return entry.State.Evictable() || (entry.State == DropStateHeld && !entry.aged(now, settings))
 	}
 	previewEnded := func(preview *DropPreviewRecord) bool {
 		return preview.ended()
 	}
-	for settings.TableByteCount < self.boundByteCount() {
+	for settings.TableByteCount < self.mirrorByteCount(now, settings) {
 		oldest := -1
 		for i, entry := range self.Drops {
-			if !evictable(entry) || now.Sub(time.UnixMilli(entry.SeenMs)) < settings.EvictGuard {
+			if !takeable(entry) {
 				continue
 			}
 			if oldest < 0 || entry.EndedDay < self.Drops[oldest].EndedDay {
@@ -599,7 +636,11 @@ func (self *DropTableState) evict(now time.Time, settings *DropSettings) error {
 			}
 		}
 		if 0 <= oldest {
-			self.Drops = append(self.Drops[:oldest], self.Drops[oldest+1:]...)
+			if self.Drops[oldest].State == DropStateHeld {
+				self.Drops[oldest].EndedDay = dropUnlistedDay
+			} else {
+				self.Drops = append(self.Drops[:oldest], self.Drops[oldest+1:]...)
+			}
 			continue
 		}
 		oldestPreview := -1
@@ -611,10 +652,15 @@ func (self *DropTableState) evict(now time.Time, settings *DropSettings) error {
 				oldestPreview = i
 			}
 		}
-		if oldestPreview < 0 {
+		if 0 <= oldestPreview {
+			self.Previews = append(self.Previews[:oldestPreview], self.Previews[oldestPreview+1:]...)
+			continue
+		}
+		if settings.TableByteCount < self.boundByteCount() {
 			return fmt.Errorf("%w: %d bytes counted", ErrDropTableFull, self.boundByteCount())
 		}
-		self.Previews = append(self.Previews[:oldestPreview], self.Previews[oldestPreview+1:]...)
+		// only held entries keep the count past the bound: they never make a write fail
+		break
 	}
 	if settings.TableReadByteCount() < int64(self.byteCount()) {
 		return fmt.Errorf("%w: %d bytes with its held entries", ErrDropTableFull, self.byteCount())
