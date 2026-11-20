@@ -110,9 +110,6 @@ type M10WorldSettings struct {
 	// The format2 gate's purge and drop modes as sidecar.yml spells them; empty takes observe, as §23.9 opens it.
 	Purge string
 	Drop  string
-	// Told after each move of the world's clock, before the world's next step; nil for none. T3 has its stores'
-	// checks read again here, since the first requests after a move are a deposit's uploads, sent side by side.
-	Advanced func()
 }
 
 // One push evs refused a device of the world: the answer's status and the refusal's code.
@@ -255,9 +252,6 @@ func (self *M10World) Advance(wait time.Duration) {
 		self.Mail.AwaitTimerCountAt(nextDayChange, waitsBefore+1)
 	}
 	clock.AdvanceTo(target)
-	if self.settings.Advanced != nil {
-		self.settings.Advanced()
-	}
 }
 
 // Whether signer administers the mailbox: its owner's laptop alone, as its RepoAdmin row says.
