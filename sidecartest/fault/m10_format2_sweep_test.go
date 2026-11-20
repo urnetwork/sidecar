@@ -298,7 +298,7 @@ func m10Format2SweepCases() []*m10Format2Case {
 				{name: "within the window", build: Fs91ReleasedWithinTheWindow},
 			},
 			heldByTests: []*GateTest{
-				m10Format2Held("./sidecartest/fault", "TestFs91WithinTheWindowIsHeldToTheWindow"),
+				m10Format2Held("./sidecartest/fault", "TestFs91WithinTheWindowIsHeldToTheWindow", "TestFs91WithinTheWindowIsHeldToAPushValidatedBeforeTheFence"),
 			},
 			missingClauses: []string{
 				"(c) a cached head a failed cache write left before the DROP, and a creating head write held past 26 h (EVS2-M10-31, EVSB-M10-04)",
