@@ -4,7 +4,9 @@
 //	GET  .../drops                   (r) the drop table as EvsDropsReply: each void record whose entry has left as its
 //	                                 drop_id and state alone, then each entry oldest first; a held drop reads done with
 //	                                 its held bytes counted as freed, so no field, value or count shows a hold (owner
-//	                                 decision 184)
+//	                                 decision 184); an entry whose 30 d have passed has left the listing whether or not
+//	                                 a write has evicted it yet, a held one, which the table keeps for its deletions,
+//	                                 too, so a held drop leaves when its done twin would (owner decision 643)
 //	POST .../drops/preview           (admin) EvsDropPreviewRequest: its paths held to an EvsDropPath's shape, map_parts
 //	                                 empty or one per older lineage entry, and the counts within 1,048,576 in all (409
 //	                                 DROP_LIST); counted against evs_drop_previews_per_day (§20.4), 429 past it; the
@@ -72,21 +74,33 @@ func (self *EvsEngine) serveDrops(request *EvsRequest) {
 		request.Unavailable(nil)
 		return
 	}
-	request.Reply(DropStatuses(read.State))
+	request.Reply(DropStatuses(read.State, read.ReadAt, self.drops.Settings()))
 }
 
-// The listing of a table (§11.20's GET .../drops): void records whose entries have left, as their drop_id and state
-// alone, then each entry oldest first, a held one as done with its held bytes counted as freed.
-func DropStatuses(state *DropTableState) *protocol.EvsDropsReply {
+// The listing of a table at now (§11.20's GET .../drops): void records whose entries have left, as their drop_id and
+// state alone, then each entry oldest first, a held one as done with its held bytes counted as freed. An entry whose
+// retention has passed at now has left the listing, as the table's next write evicts it, and a held one too, though
+// the table keeps it until its deletions finish: its retention runs from the day it moved to held, so it leaves the
+// listing when its done twin's entry would (owner decisions 184, 643).
+func DropStatuses(state *DropTableState, now time.Time, settings *DropSettings) *protocol.EvsDropsReply {
 	reply := &protocol.EvsDropsReply{}
+	listed := map[sidecar.Id]bool{}
+	for _, entry := range state.Drops {
+		if !entry.aged(now, settings) {
+			listed[entry.DropId] = true
+		}
+	}
 	for _, void := range state.Voids {
-		if state.Drop(void.DropId) != nil {
+		if listed[void.DropId] {
 			continue
 		}
 		status, _ := void.State.Status()
 		reply.Drops = append(reply.Drops, &protocol.EvsDropStatus{DropId: void.DropId.Bytes(), State: status})
 	}
 	for _, entry := range state.Drops {
+		if !listed[entry.DropId] {
+			continue
+		}
 		status, reason := entry.State.Status()
 		dropStatus := &protocol.EvsDropStatus{
 			DropId: entry.DropId.Bytes(), RefId: entry.RefId.Bytes(), PushId: entry.PushId.Bytes(), Version: entry.Version,

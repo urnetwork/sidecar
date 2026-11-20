@@ -29,10 +29,14 @@
 //
 // Bounds (QD-179): an ended entry leaves 30 d after it ends, or sooner when a write would pass 64 KiB, ended entries
 // oldest first and never one whose DROP evs saw committed under 27 h ago, since evacuation appends a committed DROP the
-// table lacks; pending, executing and observed entries never leave. A held entry occupies, lists and leaves the table
-// exactly as its done twin would (owner decision 184). A DROP is refused 429 while pending, executing and observed
-// entries and void records would pass 48 KiB (AdmitsDrop, which EVS2-M10-09's 5c reads); a cancel is never refused and
-// dry runs only evict.
+// table lacks; pending, executing and observed entries never leave. A held entry leaves neither by age nor by the bound
+// until its deletions finish, since the job resumes a held drop from its entry once its hold ends, and it sits outside
+// the 64 KiB the bound counts, so it never makes a later write fail, which would show a hold; the table passes 64 KiB
+// by its held entries alone (owner decision 643). It lists as its done twin would (owner decision 184): GET .../drops
+// leaves every ended entry out once its 30 d have passed, a held one's counted from the day it moved to held, and its
+// move to done keeps that day, so it goes at once when they have passed (DropStatuses). A DROP is refused 429 while
+// pending, executing and observed entries and void records would pass 48 KiB (AdmitsDrop, which EVS2-M10-09's 5c reads);
+// held entries never count there either, a cancel is never refused and dry runs only evict.
 //
 // evs writes the table at each DROP and cancel, through DropSink (CONTRACTS.md C-14: EVS2-M10-09's step 8 calls it,
 // this file implements it), and at each dry run's request; the job writes it at each phase and at most once a minute
@@ -92,13 +96,20 @@ func (self DropState) Valid() bool {
 	return DropStatePending <= self && self <= DropStateObserved
 }
 
-// Whether the drop has ended: cancelled, done, refused or held. An ended entry leaves the table 30 d after it ends.
+// Whether the drop has ended, so its entry holds the day it ended: cancelled, done, refused or held. An ended entry
+// leaves the listing 30 d after it ends, and the table with it unless it is held (Evictable).
 func (self DropState) Ended() bool {
 	switch self {
 	case DropStateCancelled, DropStateDone, DropStateRefusedLocked, DropStateRefusedMismatch, DropStateRefusedVerify, DropStateHeld:
 		return true
 	}
 	return false
+}
+
+// Whether an ended entry may leave the table, by age or by the bound: every ended state but held, whose deletions the
+// job resumes from its entry once its hold ends (owner decision 643).
+func (self DropState) Evictable() bool {
+	return self.Ended() && self != DropStateHeld
 }
 
 // Whether the drop ended deleting nothing, so it leaves a void record for the repo's life: cancelled or refused.
@@ -202,8 +213,12 @@ type DropSettings struct {
 	// How long after a bound the horizon is taken to pass it: the next round's wake for a drop whose cite bound, or a
 	// young candidate whose adoption bound, the horizon has not passed is that bound plus this. 25 h, evacuation's.
 	HorizonRetryLag time.Duration
-	// The table's bound: 64 KiB (§11.8's drops/ row).
+	// The table's bound: 64 KiB (§11.8's drops/ row). Held entries never count toward it.
 	TableByteCount int
+	// How far held entries may take the table past TableByteCount, which a read takes in besides it: the format's room
+	// for drops, 65,535 records of 128 B, since a held entry stays until its deletions finish whatever the bound (owner
+	// decision 643). A write past both is ErrDropTableFull, which at this default only the format's count could reach.
+	TableHeldByteCount int
 	// 5c's line: a DROP is refused 429 while pending, executing and observed entries and void records would pass
 	// this. 48 KiB (QD-179's rule 5).
 	TableAdmitByteCount int
@@ -276,6 +291,7 @@ func DefaultDropSettings() *DropSettings {
 		HorizonRetryInterval:    10 * time.Minute,
 		HorizonRetryLag:         25 * time.Hour,
 		TableByteCount:          64 * 1024,
+		TableHeldByteCount:      0xffff * dropTableEntryByteCount,
 		TableAdmitByteCount:     48 * 1024,
 		EndedRetention:          30 * 24 * time.Hour,
 		EvictGuard:              27 * time.Hour,
@@ -317,8 +333,9 @@ func (self *DropSettings) Validate() error {
 		self.UsageWindowTimeout <= 0:
 		return fmt.Errorf("%w: an interval that is not positive", ErrDropSettings)
 	case self.TableByteCount < dropTableHeaderByteCount+dropTableJobByteCount+dropTableTrailerByteCount ||
-		self.TableAdmitByteCount <= 0 || self.TableByteCount < self.TableAdmitByteCount:
-		return fmt.Errorf("%w: a table of %d bytes admitting %d", ErrDropSettings, self.TableByteCount, self.TableAdmitByteCount)
+		self.TableAdmitByteCount <= 0 || self.TableByteCount < self.TableAdmitByteCount || self.TableHeldByteCount < 0:
+		return fmt.Errorf("%w: a table of %d bytes admitting %d, %d more for held entries", ErrDropSettings, self.TableByteCount,
+			self.TableAdmitByteCount, self.TableHeldByteCount)
 	case self.EndedRetention <= 0 || self.EvictGuard <= 0 || self.TableCacheTtl < 0:
 		return fmt.Errorf("%w: a retention that is not positive", ErrDropSettings)
 	case self.TableCasRetryCount <= 0 || self.ReadBytesPerSecond <= 0 || self.DeletesPerSecond <= 0 || self.FileRowCount <= 0 || self.ListLimit <= 0:
@@ -332,6 +349,11 @@ func (self *DropSettings) Validate() error {
 		return fmt.Errorf("%w: a drop push or serving bound that is not positive", ErrDropSettings)
 	}
 	return nil
+}
+
+// The most of a table a read takes in: TableByteCount, and TableHeldByteCount for held entries past it.
+func (self *DropSettings) TableReadByteCount() int64 {
+	return int64(self.TableByteCount) + int64(self.TableHeldByteCount)
 }
 
 // A delete cursor: the cand file sequence and row before which every candidate of the round is answered.
@@ -445,7 +467,9 @@ func (self *DropTableState) Preview(previewId sidecar.Id) *DropPreviewRecord {
 	return nil
 }
 
-// Sets entry's state, ending it on day when the state ends it and adding its void record when it voids it.
+// Sets entry's state, ending it on day when the state ends it and adding its void record when it voids it. An entry
+// that has ended keeps its day, so a held drop moved to done keeps the day it moved to held, and its retention runs
+// from there (owner decision 643).
 func (self *DropTableState) setState(entry *DropTableEntry, state DropState, day uint16) {
 	entry.State = state
 	if state != DropStateExecuting {
@@ -483,6 +507,18 @@ func (self *DropTableState) byteCount() int {
 		dropTablePreviewByteCount*len(self.Previews)
 }
 
+// What the table's bound counts of its size: every record but its held entries, which never count, so a held entry
+// never makes a later write fail (owner decision 643).
+func (self *DropTableState) boundByteCount() int {
+	byteCount := self.byteCount()
+	for _, entry := range self.Drops {
+		if entry.State == DropStateHeld {
+			byteCount -= dropTableEntryByteCount
+		}
+	}
+	return byteCount
+}
+
 // A UTC day number, as an entry's ended_day holds it.
 func dropDay(at time.Time) uint16 {
 	return uint16(min(int64(0xffff), max(int64(1), at.Unix()/int64(24*time.Hour/time.Second))))
@@ -503,9 +539,16 @@ func (self *DropPreviewRecord) ended() bool {
 	return self.State == protocol.EvsDropPreviewState_EVS_DROP_PREVIEW_DONE || self.State == protocol.EvsDropPreviewState_EVS_DROP_PREVIEW_FAILED
 }
 
-// Whether an ended entry's retention has passed at now: a full EndedRetention after the end of the day it ended.
-func (self *DropTableEntry) expired(now time.Time, settings *DropSettings) bool {
+// Whether an ended entry's retention has passed at now: a full EndedRetention after the end of the day it ended, for a
+// held entry the day it moved to held, which its move to done keeps. GET .../drops lists no aged entry.
+func (self *DropTableEntry) aged(now time.Time, settings *DropSettings) bool {
 	return self.ended() && !now.Before(dropDayStart(self.EndedDay).Add(settings.EndedRetention+24*time.Hour))
+}
+
+// Whether an entry leaves the table at its next write: aged, and not held, since the job resumes a held drop from its
+// entry once its hold ends, however long that is (owner decision 643).
+func (self *DropTableEntry) expired(now time.Time, settings *DropSettings) bool {
+	return self.State.Evictable() && self.aged(now, settings)
 }
 
 // Whether an ended dry run's retention has passed at now.
@@ -529,8 +572,9 @@ func (self *DropTableState) expiring(now time.Time, settings *DropSettings) bool
 }
 
 // Drops what the bounds let go before a write at now: every ended entry and dry run past EndedRetention, then, while
-// the table would pass TableByteCount, ended entries oldest first that evs saw committed EvictGuard ago or more, then
-// ended dry runs oldest first. ErrDropTableFull when it still passes.
+// the bound's count would pass TableByteCount, ended entries oldest first that evs saw committed EvictGuard ago or
+// more, then ended dry runs oldest first. A held entry never leaves here and never counts (owner decision 643).
+// ErrDropTableFull when the count still passes, or when held entries take the table past what a read takes in.
 func (self *DropTableState) evict(now time.Time, settings *DropSettings) error {
 	self.Drops = slices.DeleteFunc(self.Drops, func(entry *DropTableEntry) bool {
 		return entry.expired(now, settings)
@@ -538,16 +582,16 @@ func (self *DropTableState) evict(now time.Time, settings *DropSettings) error {
 	self.Previews = slices.DeleteFunc(self.Previews, func(preview *DropPreviewRecord) bool {
 		return preview.expired(now, settings)
 	})
-	ended := func(entry *DropTableEntry) bool {
-		return entry.ended()
+	evictable := func(entry *DropTableEntry) bool {
+		return entry.ended() && entry.State.Evictable()
 	}
 	previewEnded := func(preview *DropPreviewRecord) bool {
 		return preview.ended()
 	}
-	for settings.TableByteCount < self.byteCount() {
+	for settings.TableByteCount < self.boundByteCount() {
 		oldest := -1
 		for i, entry := range self.Drops {
-			if !ended(entry) || now.Sub(time.UnixMilli(entry.SeenMs)) < settings.EvictGuard {
+			if !evictable(entry) || now.Sub(time.UnixMilli(entry.SeenMs)) < settings.EvictGuard {
 				continue
 			}
 			if oldest < 0 || entry.EndedDay < self.Drops[oldest].EndedDay {
@@ -568,9 +612,12 @@ func (self *DropTableState) evict(now time.Time, settings *DropSettings) error {
 			}
 		}
 		if oldestPreview < 0 {
-			return fmt.Errorf("%w: %d bytes", ErrDropTableFull, self.byteCount())
+			return fmt.Errorf("%w: %d bytes counted", ErrDropTableFull, self.boundByteCount())
 		}
 		self.Previews = append(self.Previews[:oldestPreview], self.Previews[oldestPreview+1:]...)
+	}
+	if settings.TableReadByteCount() < int64(self.byteCount()) {
+		return fmt.Errorf("%w: %d bytes with its held entries", ErrDropTableFull, self.byteCount())
 	}
 	return nil
 }
@@ -914,7 +961,8 @@ func (self *DropTable) countState(state DropState) {
 	}
 }
 
-// The table from the cluster: an empty state with no ETag when it does not exist.
+// The table from the cluster: an empty state with no ETag when it does not exist. It takes in TableReadByteCount, and
+// refuses a table whose records but its held entries pass TableByteCount.
 func (self *DropTable) Read(ctx context.Context, cluster sidecar.BlobCluster, repoId sidecar.Id) (*DropTableRead, error) {
 	readAt := self.clock.Now()
 	object, err := cluster.Get(ctx, DropsKey(repoId))
@@ -925,17 +973,21 @@ func (self *DropTable) Read(ctx context.Context, cluster sidecar.BlobCluster, re
 		return nil, err
 	}
 	defer object.Body.Close()
-	encoded, err := io.ReadAll(io.LimitReader(object.Body, int64(self.settings.TableByteCount)+1))
+	readByteCount := self.settings.TableReadByteCount()
+	encoded, err := io.ReadAll(io.LimitReader(object.Body, readByteCount+1))
 	if err != nil {
 		return nil, err
 	}
-	if self.settings.TableByteCount < len(encoded) {
+	if readByteCount < int64(len(encoded)) {
 		return nil, fmt.Errorf("%w: %d bytes", ErrDropTableInvalid, len(encoded))
 	}
 	state, err := DecodeDropTable(encoded)
 	if err != nil {
 		self.log.Errorf("[evs] alarm drop_table_invalid: repo %s: %v", sidecar.EvsKeyId(repoId), err)
 		return nil, err
+	}
+	if self.settings.TableByteCount < state.boundByteCount() {
+		return nil, fmt.Errorf("%w: %d bytes counted", ErrDropTableInvalid, state.boundByteCount())
 	}
 	return &DropTableRead{State: state, Etag: object.Etag, ReadAt: readAt}, nil
 }

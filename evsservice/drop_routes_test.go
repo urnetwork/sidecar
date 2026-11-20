@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"net/http"
+	"slices"
 	"testing"
 	"time"
 
@@ -113,6 +114,83 @@ func TestDropRoutesListTheTable(t *testing.T) {
 	held.DropId, done.DropId = nil, nil
 	if !proto.Equal(held, done) {
 		t.Fatalf("a held drop lists apart from its done twin: %+v and %+v", held, done)
+	}
+}
+
+// Owner decisions 184 and 643 (QD-1113): a held drop lists as a done one that ended the same day, alike to the second
+// before their 30 d end, and leaves the listing at that second with it, though the table keeps the held entry for its
+// deletions. The listing judges age itself, so a done or cancelled entry has left it then whether or not a write has
+// evicted it yet, a cancelled one's void record standing in, and the write that evicts them leaves the listing as it
+// was: the held drop leaves exactly when its done twin's entry would.
+func TestDropRoutesListAHeldDropUntilItsDoneTwinLeaves(t *testing.T) {
+	fixture := newDropRoutesFixture(t)
+	place := &protocol.EvsPlace{Minute: 1, Length: 100}
+	var endedDay uint16
+	fixture.setTable(func(state *DropTableState, now time.Time) {
+		endedDay = dropDay(now)
+		state.Voids = append(state.Voids, &DropVoidRecord{DropId: testId("cancelled"), State: DropStateCancelled})
+		state.Drops = append(state.Drops,
+			&DropTableEntry{DropId: testId("pending"), Place: place, NotBeforeMs: now.Add(90 * 24 * time.Hour).UnixMilli(), State: DropStatePending},
+			&DropTableEntry{DropId: testId("cancelled"), Place: place, State: DropStateCancelled, EndedDay: endedDay},
+			&DropTableEntry{DropId: testId("held"), Place: place, State: DropStateHeld, FreedByteCount: 10, HeldByteCount: 5, EndedDay: endedDay},
+			&DropTableEntry{DropId: testId("done"), Place: place, State: DropStateDone, FreedByteCount: 15, EndedDay: endedDay},
+		)
+	})
+	list := func() *protocol.EvsDropsReply {
+		t.Helper()
+		recorder := fixture.serve(http.MethodGet, fixture.path(""), fixture.token(fixture.reader, repoScope(fixture.repoId, "r")), nil)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("status %d", recorder.Code)
+		}
+		reply := &protocol.EvsDropsReply{}
+		if err := proto.Unmarshal(recorder.Body.Bytes(), reply); err != nil {
+			t.Fatal(err)
+		}
+		return reply
+	}
+	labels := func(reply *protocol.EvsDropsReply) []string {
+		labels := []string{}
+		for _, status := range reply.Drops {
+			labels = append(labels, string(bytes.TrimRight(status.DropId, " ")))
+		}
+		return labels
+	}
+	retained := dropDayStart(endedDay).Add(fixture.engine.Drops().Settings().EndedRetention + 24*time.Hour)
+
+	// a second before the 30 d end: every entry listed, the held drop alike to the done one
+	fixture.clock.AdvanceTo(retained.Add(-time.Second))
+	before := list()
+	if got := labels(before); !slices.Equal(got, []string{"pending", "cancelled", "held", "done"}) {
+		t.Fatalf("listed %v", got)
+	}
+	held, done := proto.Clone(before.Drops[2]).(*protocol.EvsDropStatus), proto.Clone(before.Drops[3]).(*protocol.EvsDropStatus)
+	held.DropId, done.DropId = nil, nil
+	if !proto.Equal(held, done) || held.State != protocol.EvsDropState_EVS_DROP_DONE || held.FreedBytes != 15 {
+		t.Fatalf("a held drop lists apart from its done twin: %+v and %+v", held, done)
+	}
+
+	// at it: the held, done and cancelled entries have left the listing, the cancelled one's void record standing in
+	fixture.clock.AdvanceTo(retained)
+	at := list()
+	if got := labels(at); !slices.Equal(got, []string{"cancelled", "pending"}) {
+		t.Fatalf("listed %v at the retention's end", got)
+	}
+	if void := at.Drops[0]; void.State != protocol.EvsDropState_EVS_DROP_CANCELLED || len(void.RefId) != 0 || void.Version != 0 {
+		t.Fatalf("the cancelled drop is not its void record: %+v", void)
+	}
+	if table := fixture.table(); table.Drop(testId("held")) == nil || table.Drop(testId("done")) == nil {
+		t.Fatal("the listing's judgement wrote the table")
+	}
+
+	// the next write evicts the done and cancelled entries and keeps the held one; the listing does not move
+	fixture.setTable(func(state *DropTableState, now time.Time) {})
+	table := fixture.table()
+	if table.Drop(testId("held")) == nil || table.Drop(testId("done")) != nil || table.Drop(testId("cancelled")) != nil ||
+		table.Void(testId("cancelled")) == nil {
+		t.Fatalf("the write kept %v", dropTestLabels(table))
+	}
+	if after := list(); !proto.Equal(after, at) {
+		t.Fatalf("the write moved the listing: %v, was %v", labels(after), labels(at))
 	}
 }
 
