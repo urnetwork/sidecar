@@ -246,7 +246,8 @@ kinds           EvsLocator.kind 1 (segment) and 2 (inline) ship in format 1, whi
                 segment), EvsEntryVersion.versioning (14; owner decision 167 needs no field 15), EvsLocator.staged
                 (6), the kind-5 segment header (above), EvsUploadReceipt.versionless (8), batch format 2 (11.8),
                 EvsPush flag 256 (DROP) and field 33 (drop_sha256; owner decision 173), flag 512 (CUT) and field 34
-                (index_epoch; 11.8, 11.12), the read reply's per-path states drop_pending and dropped (11.9);
+                (index_epoch; 11.8, 11.12), flag 1024 (COMPLETION, a completion ERASE, 11.12; owner decision 658),
+                the read reply's per-path states drop_pending and dropped (11.9);
                 format-1 code refuses each in use as FORMAT_UNSUPPORTED {needs_format: 2} (owner decision 163), never
                 as a fork, tampering or a missing segment, and ignores window bits 4 and 5, a head's index_epoch
                 (EvsHead's 24, which format-1 writes carry, and EvsHeadSummary's 15; owner decision 235), and from M3
@@ -285,7 +286,8 @@ message EvsPush {                       // sidecar/protocol/evs.proto, inside §
   uint32 flags = 16;                    // 1 FORCE, 2 DELETE, 4 BASE, 8 IMMUTABLE, 16 CONSUME, 32 PATH_EPOCH,
                                         // 64 ERASE, 128 CLOSURE (an erasure's re-checkpoint, 11.12), 256 DROP
                                         // (a drop-history action or its cancel, 11.7; format 2), 512 CUT (an
-                                        // erasure's index cut, 11.12; format 2)
+                                        // erasure's index cut, 11.12; format 2), 1024 COMPLETION (with ERASE
+                                        // alone: a completion ERASE, 11.12; format 2; owner decision 658)
   bytes path_map_sha256 = 17;           // PATH_EPOCH: SHA-256 over the epoch's EvsPathMap parts, in order
   uint32 part_count = 18;               // 0 for a one-part push, else 2 to 1,024
   bytes parts_sha256 = 19;              // SHA-256 over the parts' SHA-256s in part order (the list is in the payload)
@@ -2028,8 +2030,16 @@ push      POST .../slots/delete (admin) commits an ERASE push on the repo's `era
           still hold (409 NOTHING_TO_ERASE, once recorded, 11.8), commits it (steps 4-7), then rewrites each named
           slot object without those keys (If-Match, its origin kept) before answering 200, under a preservation
           hold too (owner decision 133); a crash between leaves the client's retry, then taskworker's reconciler,
-          to finish the rewrites; a network's ERASE, CUT and CLOSURE pushes past 60 a minute queue as P1, their
-          slot rewrites staying P0 (11.13)
+          to finish the rewrites; in a format-2 repo evs also takes from the erasure's admin a completion ERASE,
+          flag 64 with 1024 COMPLETION and no other, which destroys nothing and whose note says complete, only
+          where no slot still holds a key it names (else INVALID), an earlier committed ERASE of the erasure
+          ref named each of its keys, looking back from the head over at most
+          EvsSettings.CompletionLookbackCount ERASEs (1,024), and the newest such ERASE of each key carries
+          no COMPLETION, else 409 NOTHING_TO_ERASE, recorded; an unflagged ERASE keeps the rule above;
+          readers refuse an ERASE whose flag and note's complete byte disagree, take a completion as
+          completing its erasure only where an earlier ERASE of its erasure id named each key it names, and
+          read it as destroying nothing (owner decision 658); a network's ERASE, CUT and CLOSURE pushes past
+          60 a minute queue as P1, their slot rewrites staying P0 (11.13)
 closure   the erasing device names every key of the entry's representations: each retained version's slot keys,
           from a walk of the path's history taken as whole only where its last version is 1 or a creation below
           which evs answered nothing, the walk neither ending at BelowUnknown nor cut at
@@ -2071,8 +2081,9 @@ cut       a CUT push (flag 512, format 2; admin, and in a directory repo the aut
           index_epoch its CUT named, its time and, per document of it the ref indexes, the doc_key and the newest
           version erased, and for a run card every version through the epoch the CUT names (owner decision 459);
           the CUT keeps every erasure still pending and every one whose CUT named an epoch at or above the set's
-          listed_since, drops a complete one only by raising listed_since past the epoch that one's CUT named, and
-          adds its own; evs takes it only at the head's index_epoch, which its step 7 sets to the CUT's version
+          listed_since, drops a complete one, its newest ERASE saying complete, a completion ERASE's included
+          (reconcile, below), only by raising listed_since past the epoch that one's CUT named, and adds its
+          own; evs takes it only at the head's index_epoch, which its step 7 sets to the CUT's version
           (11.8's 5d), else 409 INDEX_EPOCH, or 409 with the paths past those bounds; so no index push but a
           CLOSURE built before it commits after it, and a list of index files taken at or after it is complete
           (11.14's epoch and erase rows); at the storage limit and while spent it is maintenance, spending no
@@ -2100,6 +2111,11 @@ residual  a mirror offline at the erasure keeps its copy until it syncs; if the 
           no device that may finish it runs stays pending, masked and fenced, its remaining keys live (reconcile,
           below)
 reconcile an erasure resumes from evs's state, not one device's memory: its CUTs' sets list it until it is complete,
+          which it is while its newest ERASE says so: where no ERASE with a key is left to say it, an index rewrite
+          finding no file that holds a listed version, a resume finding an orphaned CLOSURE, or mail's erasure
+          finding no i/ segment that holds the message, its device sends a completion ERASE (push, above), and a
+          late copy's ERASE reopens a complete erasure, whose rewrite runs again and which a later completion
+          ends again, a racing runner's second completion being refused (owner decision 658);
           its CLOSUREs' and ERASEs' erasure_notes name its id (for the directory's erasure runner the
           DirectoryErasureRequest's request_id, which racing runners and the 30-day sweep share, as RECORD.md's
           ErasureBody.request_id does, so the note's id is that request_id), and its ERASEs' notes name its documents
@@ -2110,7 +2126,8 @@ reconcile an erasure resumes from evs's state, not one device's memory: its CUTs
           erase it does, each within its own allowance, from a head at or after its CUT, which it commits itself where
           a crash or a full erasure set left it missing: first an ERASE for each CLOSURE of it no ERASE followed (that
           CLOSURE's payload lists it), then the remaining pairs; a duplicate CLOSURE gets 409 and a duplicate ERASE
-          NOTHING_TO_ERASE, both counted done; an erasure that committed nothing never began, and its device's journal
+          NOTHING_TO_ERASE, both counted done; an erasure that committed nothing, or whose ERASEs all found their
+          keys already gone, as the erasure ref confirms, never began and lists nothing, and its device's journal
           retries it; `ur status` and §5.4's erasure event show each one's state, what is left and its next turn
           (11.13's wait)
 retention a record-class BASE or retention expiry erases keys as above; export renders an erased or expired entry
@@ -2395,12 +2412,17 @@ queue    each evs, gkm and taskworker process queues P1 work per network (the to
          advances its network's virtual finish tag as a queued one does, and a network past its weighted share of
          the interval's P1 queues behind the others even while the queue is empty, so a flood cannot spend the
          share before the lighter networks' pushes arrive (owner decision 617)
-shed     past 100 ms of queueing delay it refuses first the network with the most queued priced bytes per weight:
-         429 RESOURCE_EXHAUSTED with retry_after_ms (§6.5's codes); it refuses only a network strictly heavier than
-         the lightest one waiting, so equal light loads are kept, and among equal loads it refuses by id only when
-         every waiting network is equally loaded past the delay, so a uniform overload still sheds: a light network
-         is never refused while a flood holds more than its weighted share, and its pushes are served within the
-         interval (owner decision 617)
+shed     past 100 ms of queueing delay it refuses, 429 RESOURCE_EXHAUSTED with retry_after_ms (§6.5's codes), one
+         network at a time, three ways: first the heaviest flood, a waiting network past its weighted share of
+         the share window, while a served network of that window, waiting or not, has less queued priced bytes per
+         weight; while no flood waits, a network only while it is strictly heavier than the lightest one waiting,
+         so equal light loads are kept; and while floods wait with none lighter served and every waiting network
+         equally loaded, a flood by id, the larger first, keeping the last network waiting, so a uniform overload
+         still sheds; only floods are refused by id, a network alone in the share window is never refused, a
+         light network is never refused while a flood holds more than its weighted share, and its pushes are
+         served within the interval, while a burst past a network's weighted share, other networks of the window
+         holding theirs, gets 429s with retry_after_ms of one interval even when those shares go unused, so a
+         burst spreads over intervals (owner decisions 617, 668)
 fallback a process without a fresh allowance for 60 s runs P1 and unfunded P2 at half its last shares and funded P2 at
          most at its last minute's rate, and one that never had an allowance, at start, runs them within the refill
          over twice the process count unless the loop's saved state shows B at zero; P0 runs at once throughout;
@@ -2507,7 +2529,9 @@ purge     a versionless version V of path X is replaced at the first committed v
           count) and sets window bit 4 (11.8)
 who       the evs process that commits u: once its step-7 PUT answers 200, or a reread shows u committed, it
           queues u's candidates in memory; 60 s later, the readers' allowance, it rereads X's newest version and
-          the network's hold/ objects (cached at most 5 s), and DELETEs each candidate that the newest version
+          the network's hold/ objects (cached at most 5 s, a bound held at the DELETE itself: a cover read older
+          than it is read again once, and one that comes back past it answers unknown and deletes nothing; owner
+          decision 629), and DELETEs each candidate that the newest version
           does not name and no hold keeps: kind-5 segments on the segment cluster, slots on the repo's metadata
           cluster (204: done, MinIO answering 204 for a missing object, cmd/object-handlers.go:2678-2691); a staged
           candidate whose version's time_ms is under 23 h old is left to its batch's evacuation, an older one
@@ -2578,7 +2602,9 @@ resolve   check each lineage's older entries against the map part or tail map_pa
 table     drops/<repo>/_ holds fixed-size records within 64 KiB: a drop at most 128 B (ids, ref, push id, version,
           place, not_before_ms, seen_ms (owner decision 397), state, phase, freed and held bytes, preview_id and
           ended_day, a UTC day number to 2149), a dry run at most 64 B, holding its run's lease in until_ms while it
-          runs and its end after, the running job at most 256 B, which also points at any job still holding ids; a dry
+          runs and its end after, the running job's 128 B record in the table's one job slot, and each held job's
+          own 128 B record in the same layout after it, flags bit 0 set, a header count giving their number, a held
+          job resumed in the slot setting flags bit 1 (owner decision 654); a dry
           run's paths, lists and results and a job's snapshots, covered drops and sets go in dropscan/<repo>/<id>/<f>,
           <id> the job's or dry run's 16 B id in lowercase hex and <f> the file's kind (snap, cand, mark, del, held,
           list, or a dry run's ask and res, its EvsDropPreviewRequest's and EvsDropPreviewReply's bytes), a hyphen and
@@ -2599,7 +2625,12 @@ table     drops/<repo>/_ holds fixed-size records within 64 KiB: a drop at most 
           the bound's count, so it never makes a later DROP fail, which would reveal a hold; GET .../drops lists it
           as its done twin, leaving it out once the retention an ended drop gets, counted from the day it moved to
           held, has passed, and its move to done counts its retention from that same day, so it goes at once past
-          those 30 days and no count or listing shows a hold (owner decision 643); a cancelled
+          those 30 days and no count or listing shows a hold (owner decision 643); while it is listed the bound's
+          eviction counts and orders it as its done twin, and where the bound would evict that twin it is unlisted
+          instead, its ended_day set to 1, so its retention has passed, leaving the listing at once and going at
+          its move to done, and neither it nor the record of a job whose twin has ended, held or resumed, counts
+          toward a refusal, so the table passes 64 KiB by them alone, the listing, admission and evictions
+          matching the twin's but within 27 h of a DROP, when the twin would refuse (owner decision 654); a cancelled
           or refused drop leaves a 17 B void record {drop_id, state} for the repo's life, so an absent entry with no
           void record reads executed; 5c answers a drop 429 when pending, executing and observed entries and void
           records would pass 48 KiB, held entries never counting, a cancel never refused, and dry runs only evicting
@@ -2621,7 +2652,8 @@ verify    at snapshot V >= M, the refs listed again and their heads reread from 
           up in D, the unmarked candidates; a hit in a version at or below M refuses the job {verify}, which pages
           too, and one in a later version is marked and counted, paging as drop_late_mark when the horizon had
           passed its bounds (§19.8); it rereads each drop's ref for a cancel and the repo for a lock
-delete    per id of D: reread hold/ and repo/ (cached at most 5 s), a covering hold moving the rest of D to held;
+delete    per id of D: reread hold/ and repo/ (cached at most 5 s, the hold/ bound held at the DELETE itself, as the
+          purge's is; owner decision 629), a covering hold moving the rest of D to held;
           HEAD seg/<repo>/<id>: a 404 with a spidx/ entry is packed (withheld until compaction), any other 404 done,
           one whose LastModified + 24 h + 2 min the round's evacuation horizon has not passed young (owner decision
           397); else DELETE naming that LastModified (§19.6; 204: done; 412: stored again since the HEAD, so no
@@ -2635,8 +2667,15 @@ young     candidates whose LastModified + 24 h + 2 min the round's evacuation ho
 holds     no hold refuses the DROP, since a refusal would reveal a sealed hold (owner decision 93); the job deletes
           nothing a hold keeps, rereads hold/ before each batch of DELETEs, one already issued completing, and
           withholds held ids from reads (404) and stored bytes, so a held drop reads, bills and lists as finished;
-          once every covering hold ends it deletes them after an incremental mark and verify (owner decision 184)
-bound     one job a repo and one a segment cluster at a time, others queued; at most 32 MB/s of reads and 10
+          once every covering hold ends it deletes them after an incremental mark and verify (owner decision 184);
+          a job a hold stops moves its record to the held jobs and gives up the slot, so a new job may start,
+          cover the drops made during the hold, run them through resolve, mark and verify and move their
+          candidates to held under the same hold, listing them done and dropping their bytes from the stored
+          count once, as their no-hold twins would; when the holds end the held jobs take the free slot back
+          oldest first, before any new job, each a round over the ids its own files hold, ending only its own
+          covered drops, the rest due at once behind it (owner decision 654)
+bound     one running job a repo, in the table's slot, held jobs keeping their own records beside it (holds, above),
+          and one a segment cluster at a time, others queued; at most 32 MB/s of reads and 10
           deletes a second a job; paused while the cluster's drive operations a second exceed 50% of its measured
           capacity, both from {nvb_<cluster>} (§19.6's hdd row); a repo/ deleted pauses it, a restore resumes it,
           shredding ends it
@@ -2852,7 +2891,9 @@ version   the path's entry version (11.7's versions: known before the commit, ne
           source entry (§16.10; owner decision 459), and a directory announcement's, the Announcement's; everywhere
           the newest version of a key wins, and a removal is a tombstone at its version, as is a version that drops
           a chunk, for that chunk's key; a ref DELETE is a ref tombstone at the ref version it commits at, above
-          every version of the ref's documents before it and below every re-creation's (11.7's versions)
+          every version of the ref's documents before it and below every re-creation's (11.7's versions); no
+          version of a path's key exceeds the effective ref version it commits at, which hosts with the text hold
+          every entry to (the reads' coverage row; owner decision 669)
 sniff     a file is text when its first 8,000 bytes hold no NUL and are valid UTF-8 but for a cut final sequence
           (git's rule), or it opens with a UTF-16 byte-order mark and is decoded; a chunk whose key set would encode
           past 512 KiB, which nearly every query would match, or that alone would not fit a shard by
@@ -3400,7 +3441,13 @@ coverage  a content version newer than the index's coverage is not yet searchabl
           each resulting doc_key at that version or above, in any of the signer's files or the bucket's shards; a
           missing one is a mismatch, the host's own entry standing for it, the path queued for a backfill and
           index_mismatch naming the signer and the head file the push wrote, so a writer cannot hide a document
-          it commits behind a changed head (owner decision 621); phones compare an opened document
+          it commits behind a changed head (owner decision 621); both checks are bounded by the effective ref
+          version at the pin, the ref's version plus the base versions along its overlay bases, which no path
+          version exceeds (11.7's versions), so an entry of a path's chunk above it is never honest: a live one is
+          planted, as a never-held entry is, and a tombstone is a document hidden where the text keeps the chunk
+          live at the pin, the host's own entry standing for it, while the omitted-document check counts an entry
+          only at or below the bound, and an entry at or below it that the device cannot place passes as before
+          (owner decision 669); phones compare an opened document
           with its row; every writer of a ref writes its index, so an agent could otherwise hide a document or plant
           hits
 off       a ref with no index: hosts with the text scan it (exact, linear), phones and browsers match names and,
@@ -3714,7 +3761,12 @@ limit     at the storage limit or while spent, heads ride content pushes and sto
           once without them, the rewrites left to the backfill, which adds payload and waits as builds do, the
           listed versions' postings staying in the index files, masked by the kept version's newer entry (newest
           wins), until it runs under the limit, the gap the drop row accepts for a signer that does not hold the
-          index; the same holds on a metadata cluster at §19.9's cohort limit (drop, below; owner decision 620)
+          index; the same holds on a metadata cluster at §19.9's cohort limit (drop, below; owner decision 620),
+          and the whole row holds there: the index's upkeep takes evs's 507 CLUSTER_FULL as it takes the storage
+          limit's QuotaRefusal, its Retry-After the wait, so an admin's off command goes in steps on a full
+          cluster, the files first, then a deletion the cluster accepts, then the off version once there is room,
+          and the off version, an eraser's re-entry push and its CLOSUREs wait as at the storage limit, showing
+          §5.4's waiting state, a deletion never blocked for an index reason (owner decision 649)
 drop      a DROP push also rewrites in place, without the listed versions, each index file holding a listed version
           of a dropped path, padded to the replaced length as erase's rewrite is, with no ERASE or CLOSURE flag,
           replacing in the same push the head of each writer whose file it rewrites and the manifest of each bucket

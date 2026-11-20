@@ -548,8 +548,9 @@ message ServiceSettings {              // a head's record, with no header
   uint32 witness_bound_hours = 4;      // 72, 24 to 168
   bytes scim_signer = 5;               // none, or the sidecar_id of an admin's indexer (7.6)
   ServiceDirectorySettings directory = 6;   // from v1 (M6), reserved at M2
-  // mail_strict = 7 (§15.4), record_cost = 8 (owner decision 302) and record_required = 9 (owner decision
-  // 305), Settings fields' three, join this fence once config.proto declares them
+  bool mail_strict = 7;                // false: §15.4's mail.strict
+  RecordCostMode record_cost = 8;      // on (owner decision 302)
+  bool record_required = 9;            // false; read from M6, never set through MCP (owner decision 305)
 }
 message ServiceDirectorySettings { DirectoryRunsMode runs = 1; DirectoryWorkersMode workers = 2; }
 enum TeamMailMode {                    // zero reads as indexers (Settings fields; owner decision 304)
@@ -557,6 +558,9 @@ enum TeamMailMode {                    // zero reads as indexers (Settings field
 }
 enum SelfAdmitMode {                   // zero reads as on
   SELF_ADMIT_MODE_UNSPECIFIED = 0; SELF_ADMIT_MODE_ON = 1; SELF_ADMIT_MODE_OFF = 2;
+}
+enum RecordCostMode {                  // zero reads as on, as SelfAdmitMode's does
+  RECORD_COST_MODE_UNSPECIFIED = 0; RECORD_COST_MODE_ON = 1; RECORD_COST_MODE_OFF = 2;
 }
 enum DirectoryRunsMode {               // zero reads as auto
   DIRECTORY_RUNS_MODE_UNSPECIFIED = 0; DIRECTORY_RUNS_MODE_AUTO = 1; DIRECTORY_RUNS_MODE_PROMPT = 2;
@@ -642,7 +646,7 @@ sealed  u64be(g) || nonce (24 random B) || XChaCha20-Poly1305(K, nonce, pt, aad)
         (SealConfigBody and OpenConfigBody, sidecar/config_seal.go)
 ```
 
-**Settings fields** (owner decisions 302, 304, 305). `ServiceSettings` numbers its fields in the order written, `team_mail` 1 to `directory` 6, then `mail_strict = 7`, `record_cost = 8` and `record_required = 9`, each network-wide, signed by an Owner or Admin and reserved before M2's freeze as `directory` was (D-PHASE-9), so older readers ignore them. A zero `team_mail` (`TEAM_MAIL_MODE_UNSPECIFIED`) reads as `indexers`: a `tag:mail` device still needs an `IndexerSet` for mail before it registers (D-MAIL-15), and member scopes stays an explicit choice, which turns `{mxr_}`'s scope routes on (owner decision 304). `mail_strict`, false by default, is the field §15.4's `mail.strict` and `MailAuthEvidence.strict_chain`'s comment name; a reader that does not know it never claims `strict_custom_mx`. Per-run cost totals (tokens by model and reported amounts, never a model_call) go to the team record by default: `ur record cost` groups by project, client or month, never ranks people and folds groups under 5 members into `other`; a Team turns that off with `record_cost`, and every member's `ur status` names the setting (RECORD.md sections 6.3 and 13.1; owner decision 302). `record_required`, false by default, read from M6 and never set through MCP, makes each member's `ur install-harness` write fail-closed hooks (§16.7; owner decision 305).
+**Settings fields** (owner decisions 302, 304, 305). `ServiceSettings` numbers its fields in the order written, `team_mail` 1 to `directory` 6, then `mail_strict = 7`, `record_cost = 8` and `record_required = 9`, each network-wide, signed by an Owner or Admin and reserved before M2's freeze as `directory` was (D-PHASE-9), so older readers ignore them; `record_cost` is a `RecordCostMode`, whose zero reads as on, as `SelfAdmitMode`'s does, and the other two are bools. An Owner or Admin sets them with `ur admin settings [--mail-strict=<on|off>] [--record-cost=<on|off>] [--record-required=<on|off>] [--network=<network>]`, the shape `ur admin directory` has (§16.11): with no option it prints the three as this device honors them, and any option files them together, in one Signed `ServiceSettings`, after one yes on `/dev/tty`, keeping the head's other fields; the daemon refuses, before anything is signed, a device that is not an Owner's or Admin's, any origin but the person's confirmation (MCP, a hook, an unconfirmed control call) and a caller with a harness process among its ancestors, since every reader holds the head's `ServiceSettings` to an Owner's or Admin's standing device (owner decision 657). A zero `team_mail` (`TEAM_MAIL_MODE_UNSPECIFIED`) reads as `indexers`: a `tag:mail` device still needs an `IndexerSet` for mail before it registers (D-MAIL-15), and member scopes stays an explicit choice, which turns `{mxr_}`'s scope routes on (owner decision 304). `mail_strict`, false by default, is the field §15.4's `mail.strict` and `MailAuthEvidence.strict_chain`'s comment name; a reader that does not know it never claims `strict_custom_mx`. Per-run cost totals (tokens by model and reported amounts, never a model_call) go to the team record by default: `ur record cost` groups by project, client, model or month, a client taking `--map`'s project-to-client lines (RECORD.md 13.1), never ranks people and folds groups under 5 members into `other`; a Team turns that off with `record_cost`, and every member's `ur status` names the setting (RECORD.md sections 6.3 and 13.1; owner decision 302). `record_required`, false by default, read from M6 and never set through MCP, makes each member's `ur install-harness` write fail-closed hooks (§16.7; owner decision 305).
 
 **Authority statements** (owner decision 110) need `authority`: one signature (7.5) admits or revokes only members outside the AdminSet and their devices, and no lone signer mints or removes a config-signing key, though n ≤ 2 forces k = 1 (7.18).
 
@@ -1079,8 +1083,8 @@ message IndexerRow {                 // a designation that holds (Indexers)
   bytes signer = 3;
   uint64 at = 4;
   bytes sealed_services = 5;         // IndexerSet.sealed_services, verbatim
-                                     // owner decision 634 adds field 6, the IndexerSet header's 16-byte nonce,
-                                     // copied at the fold; it joins this fence once auth.proto declares it
+  bytes nonce = 6;                   // the IndexerSet header's 16-byte nonce, copied at the fold (owner
+                                     // decision 634)
 }
 ```
 
@@ -1607,10 +1611,12 @@ All three rename routes (server/controller/account_controller.go:13,160-256) cal
                        POST /auth/network-switch; POST /network/idp; POST /network/domain-add|domain-verify|
                        domain-remove; GET|POST /network/auth-keys|oauth-clients; POST /network/auth-key-revoke|
                        oauth-client-revoke|audit-webhook; GET /network/admin-events|scim-changes;
-                       POST /network/scim-token (Owner only; 7.6);
+                       POST /network/scim-token (Owner only; 7.6); POST /network/member-invite-accept
+                       (the invitee's own sign-in, which every role may send, the invitee not yet a member;
+                       7.5);
                        GET /network/clients gains acl_enforcing (owner decision 106); POST /account/api-key
                        gains scopes and expiry
-  Public               POST /network/enroll; POST /network/member-invite-accept; POST /auth/sso-discover;
+  Public               POST /network/enroll; POST /auth/sso-discover;
                        GET /auth/sso/callback; /scim/v2/<network_id>/...; POST /oauth/device_authorization;
                        three new /oauth/token grants; published origins at /oauth/authorize
   Client               GET /network/config/projection?after= (genesis beside the entries at after=0); POST

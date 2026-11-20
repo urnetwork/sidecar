@@ -70,18 +70,9 @@ type metadataListAddition struct {
 // Design-records wrote every entry before these into §2.8's block with the folds of 2026-11-16 (owner decision 252),
 // QD-857's with §10's, QD-199's with §11's, QD-990's with §13's (owner decision 424), QD-996's with §20's, QD-1015's
 // with the second fold of §7 (owner decision 557), QD-950's with the second fold of §11 (owner decision 408) and
-// QD-1034's with the late sweep's (owner decision 592); each here waits for the next fold.
+// QD-1034's with the late sweep's (owner decision 592), and QD-1137's and QD-1130's with the fifth late sweep's
+// (owner decisions 658 and 656); each here waits for the next fold.
 var metadataListAdditions = []metadataListAddition{
-	{
-		question: "erasure-completion-erase-evs-cannot-read-complete",
-		block:    "flags FORCE, DELETE, BASE, IMMUTABLE, CONSUME, PATH_EPOCH, ERASE, CLOSURE, DROP or CUT,",
-		list:     "flags FORCE, DELETE, BASE, IMMUTABLE, CONSUME, PATH_EPOCH, ERASE, CLOSURE, DROP, CUT or COMPLETION,",
-	},
-	{
-		question: "smtp-m9-34-cname-selector-rotation",
-		block:    "replying and forwarding burners' selectors until the PSL listing (owner decision 79)\n",
-		list:     "replying and forwarding burners' selectors until the PSL listing (owner decision 79); at each GET /network/dns, by api's own lookup of <sel>._domainkey.<domain>, whether a Team custom domain answers each of its published selectors, which the read lists as owed CNAMEs until it does and never stores (QD-1130)\n",
-	},
 }
 
 // §2.8's block with each addition in place, in order, and a finding for each that does not apply.

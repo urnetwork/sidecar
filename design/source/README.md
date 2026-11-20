@@ -7,7 +7,7 @@
 | Path | What it is |
 |---|---|
 | `sections/01-CTX.md` … `sections/23-PHASE.md` | DESIGN.md §1-§23, one file per section. The build copies them verbatim, adding only links. |
-| `owner/DECISIONS.md` | The owner's record, entries 1-646. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
+| `owner/DECISIONS.md` | The owner's record, entries 1-669. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
 | `owner/APPLY.md` | The rules for applying the owner's decisions: precedence (§1), supersession, where two decisions disagree (§2), notation (§3), editing rules (§4), and the follow-up decisions 112-136 with the sections each binds (§6-§8). |
 | `CONVENTIONS.md` | The writing conventions every section follows: the owner directive (§0), the owner rules (§1), the section template (§2) and the X registry (§7), which DESIGN.md's X1-X20 table replaced. |
 | `OUTLINE.md` | The original outline: section codes, scope boundaries, and the word budgets that G0's density rule replaced on 2026-11-04. |
@@ -44,7 +44,7 @@ It needs only `python3`; it was built and checked with Python 3.13. The steps, a
 
 The data files are layered. Each `data_*N.py` loads its predecessor with `runpy` and patches it: `data_front10.py` loads `data_front9.py`, back to `data_front3.py`, and the registers, glossary and appendices go the same way. Change the top layer (the `*10` files), or add an `*11` layer that loads them. Comments in the scripts cite working files from the design sessions (the reconcilers' orders, `peer/`, `review/`, `snap/`), which were not imported; they are history.
 
-## Adding owner decision N (647 onward)
+## Adding owner decision N (670 onward)
 
 1. Add entry N to `owner/DECISIONS.md`: the question, the answer, its cost, the options not taken, and what raised it.
 2. In `asm/data_front10.py`, append `(N, "<what it settles>", "<one line>")` to `INDEX`, add `DATES[N]`, and raise the `assert` to `list(range(1, N + 1))`. Update `STATUS` and `DECISIONS_INTRO` where they name a range. `@@OD:k@@` writes a link to decision k.
@@ -920,3 +920,59 @@ The design-records track dr7-late-sweep (wave f49d) folds the owner's answers th
 - **The metadata list** follows §2.8 at v62, for owner decision 643's evs-28, copied to `metadata_list.yml` by `make metadata`.
 
 Outside this folder the track touched DESIGN.md, DESIGN-AMENDMENTS.md and metadata_list.yml. Left to the final design sweep: the code the answers' fix tracks have still to land on 2026-11-19 (owner decision 638's `sidecarctl` command, 639's internal route and mxedge's narrowed role, 641's `rev/` fallback, 642's index-store reads, 643's drop table, 645's card writer, 646's T3 reread and QD-1104's and QD-1105's test legs); HANDOFF.md's lines that still describe C19's windows as live, section 9's two FS-125 lines among them; and the items of the sweep's own list that wait on code, RECORD.md, DESIGN-DETAILS.md or the owner.
+
+## Validation after owner decisions 647 onward: the fifth late sweep (2026-11-20)
+
+The design-records track dr8-late-sweep (wave f46e) folds the owner's answers that the run's list of pending decisions held on 2026-11-20 after the fourth late sweep, QD-1115 to QD-1154, each a question the build raised and the owner answered on 2026-11-19 or 2026-11-20 under the owner's standing acceptance of recommended options, with the as-built shape of those answers and of earlier decisions whose code had landed, and the items of sidecar/DESIGN-AMENDMENTS.md's "Later decisions". It is an interim sweep: the draft's final design sweep still runs after the implementation lanes drain. It numbers each answer that changes a behavior or a rule as it folds it, a decision that groups several answers carrying its latest answer's date:
+
+| Ledger id | Owner decision | What it settles |
+|---|---|---|
+| QD-1115 | 647 | The prover host's proving-memory defaults rise to what the benchmark measured: 960 MiB a proof and a 2,496 MiB budget. |
+| QD-1116, QD-1119 | 648 | The model harness records `EvsCommit.tla`'s M10 runs by part, the drop extension's liveness among them, as §22.10's freezes need. |
+| QD-1118 | 649 | On a metadata cluster at its cohort limit the index's upkeep takes 507 CLUSTER_FULL as it takes the storage limit's refusal. |
+| QD-1121, QD-1141 | 650 | mxedge's platform listener holds a gate class of its own, which alone reaches the role-mail notice route, and from M9 smtpedge's X-UR-Ref keys. |
+| QD-1122 | 651 | `MailClient` checks a draft and reads a send's outcomes by the send_id `or/` carries; the composing device raises `mail_send`. |
+| QD-1124 | 652 | smtpedge's send gate answers a suspended network HALTED with a 1 h retry-after. |
+| QD-1125 | 653 | A deny test of a public `ip:` range fails where an `autogroup:internet` route rule takes its source. |
+| QD-1126, QD-1127, QD-1128 | 654 | A held drop reads as its no-hold twin in the drop table: its entry follows the twin's evictions, and a held job gives up the slot, each keeping its own record. |
+| QD-1129, QD-1154 | 655 | The strict-mode MX host makes a custom domain strict for outbound mail, api names the set to the sender, and the preamble result names the envelope the edge derived. |
+| QD-1130 | 656 | A sidecar signs a custom domain's mail only under a selector the domain answers; `GET /network/dns` lists the CNAMEs owed. |
+| QD-1131 | 657 | `ur admin settings` sets `mail_strict`, `record_cost` and `record_required`. |
+| QD-1132, QD-1137 | 658 | A completion ERASE, flagged COMPLETION, ends an erasure no keyed ERASE can, taken while its keys' newest ERASE carries none. |
+| QD-1134, QD-1135, QD-1136, QD-1139 | 659 | Each edge's restricted role has its own PgBouncer entry, held to it by HBA rules, and the Main primary's slot budget counts their pools. |
+| QD-1138 | 660 | A search applies the team directory's one searchable_days to its cards ref and its ur/index alike. |
+| QD-1140 | 661 | Blocks read their service URLs from variables warpctl fills, and services.yml's `internal_routes` keep internal prefixes to the site. |
+| QD-1142 | 662 | evs and gkm mount the internal gate bearers they read their quotas with. |
+| QD-1143 | 663 | The re-former's syncs finish a repo re-seeded as deleted once it is restored, extending owner decision 618. |
+| QD-1144, QD-1148 | 664 | A moderation's ERASE names the announcement ids it erased, and a card's return reads the erasure set, so the moderated run stays out. |
+| QD-1145 | 665 | `evs_read_erased.go` is a reviewed seam off the `ios_extension` legs, extending owner decision 596. |
+| QD-1147 | 666 | A rotation draws afresh over a stored draft past `RotateDraftMaxAge` (5 min) or naming another group. |
+| QD-1151 | 667 | The explorer runs one seed of a registered schedule whose fixed run passes no barrier. |
+| QD-1152 | 668 | The shed refuses a network past its weighted share while a lighter one is served, refining owner decision 617. |
+| QD-1153 | 669 | A host with the text holds every index entry to the effective ref version at the pin. |
+
+- **Folded with no number.** Two accepted defect fixes went in as text: QD-1123, §7.17 listing `POST /network/member-invite-accept` among the Network routes as the invitee's own sign-in, as server built it; and QD-1146 in QD-1149's words, FI-27 forbidding a push validated against a head showing its drop while one validated against a head below it, from the cluster before the DROP committed or the head cache within 10 min, may commit within 5 s of that read. Four answers change no design text: QD-1117 and QD-1120 apply owner decision 549's rule to two more tests, QD-1133's readiness probe reads on the main pool §19.4's restricted roles already allow, and QD-1150's first slot-0 head is DESIGN-DETAILS.md 1.2.3's head rule. owner/DECISIONS.md names all six in the lead of its new part.
+- **The prover and the model (647, 648).** §5.4's `MemoryBudgetByteCount` comment and DESIGN-DETAILS.md 3.2.8's figures; §22.8's model row and §22.10's format 2 row, with the modes as modelled.yml records them.
+- **evs (649, 654, 658, 668, 669).** §11.14's limit row; §11.13's table, holds and bound rows, §2.8's evs-28 and DESIGN-DETAILS.md 10.2.2 and 10.2.8, as held-drop-job-slot built the table; §11.12's push, cut and reconcile rows, §11.6's EvsPush fence and kinds row, D-PHASE-9, §16.8's Erasure, §2.8's evs-12 and DESIGN-DETAILS.md 15.2.10, the "once per erasure" of the first answer read as the second refines it; §11.13's shed row; §11.14's version and coverage rows and FS-76.
+- **The edges and operations (650, 659, 661, 662).** §19.4's evs, gkm and mxedge-platform rows, its gate paragraph, its own credentials and its blocks' service URLs; §19.5's W8; §19.7's PgBouncer entries, rules and budget; §8.9's gate surface; §21.8's intake and §21.16's routes, which also take the notice route's RFC 8601 verdicts and its 503, as abuse-notice-pager-install built them.
+- **Mail and SMTP (651, 652, 655, 656).** §15.7's `or/` row, §15.10 step 4 and §18.5; §14.7's send gate and §21.7's suspended row; §14.6's Team custom domains, D-SMTP-15, §15.4's Team paragraph and §12.8 step 4, with a comment in §14.5's `SmtpPreambleResult` fence; §12.8's `GET /network/dns` and §2.8's smtp-6.
+- **Teams, keys and the directory (653, 657, 660, 663, 664, 666).** §8.8's Saving paragraph; §7.9's Settings fields and RECORD.md 13.1's `--by client`; §16.8's search and RetentionPolicy comment and §16.11's settings row; §10.8 and §19.10's groups row, naming `GkmReformArgs.Resume`, `EvsReseedPlaced.Restored`, `ReformResumeInterval` and `LadderBatchCount` as built; §16.11's moderation row; §10.5's Rotate, with `RotateDraftMaxAge`.
+- **The leg and the harness (665, 667).** §4.4's leg files and a seams row in DESIGN-DETAILS.md 4.2.3, which had no seam list; §22.8's explorer row.
+- **Fences.** §7.9's `ServiceSettings` fence takes `mail_strict = 7`, `record_cost = 8` and `record_required = 9` with the `RecordCostMode` enum, and its `IndexerRow` fence `nonce = 6`, all of which the protos declare, so their four `testFenceAdditions` entries and `RecordCostMode`'s unfenced declaration leave protocol/design_unfenced_test.go; `EVS_PUSH_COMPLETION = 1024` joins `EvsPushFlag` in that file's own fence, the design writing the flags in `EvsPush.flags`' comment, and its `testFenceValueAdditions` entry leaves. §2.8's evs-12 and smtp-6 take the text check's `metadataListAdditions` held for them, and both entries leave.
+- **In text, ahead of the code.** Owner decision 655's wire waits: §14.5's fence carries a comment naming `envelope_domain = 10`, which smtp.proto does not declare, §15.15 lists no strict set in `GET /mail/status`'s answer, and §2.8's smtp-2 is unchanged. Owner decision 664's note field waits too: §16.11 states the rule without naming the field moderation-note-entry-ids will choose. Both wait in DESIGN-AMENDMENTS.md's "Later decisions".
+- **Earlier decisions as built.** §18.5's `GetStateReason` and §5.4's reasons name `subprotocol_store_failed`, valid on Offline alone (owner decision 616); §12.7's `_mta-sts` row says where a verification change reconciles the zone (owner decision 630); §11.13's purge and delete rows and §21.9 hold the `hold/` read's bound at the DELETE itself (owner decision 629); and §16.11's versions and closure rows and `Announcement.version`'s comment put a returned item one above the removal's tombstone (owner decision 645).
+- **Deferrals.** DESIGN-DEFER.md gains one entry, test-drop-liveness-two-instances, for the two-instance liveness run owner decision 648 leaves to the review phase, which §22.8's model row points at.
+- **Index rows.** Owner decisions 531, 596, 612, 615, 617, 618, 620, 621, 626, 636 and 643 note the decisions that follow, extend or refine them.
+- **"Later decisions".** QD-899's DESIGN-DETAILS.md 15.2.2 part is folded, the vault's sources gaining coverage and, in personal mode, claim and handoff, and QD-1096's fence is folded, so both items leave. QD-024, QD-1083 and QD-1086 keep their Not folded lines, each checked again; QD-1129 with QD-1154 and QD-1148 join them for their wire.
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `60ce806e7c8375175907da25b1e56767a1db90bf9f8abe189ea850b50ff93f81`) and DESIGN-DEFER.md (SHA-256 `1f95a22cb252970da7abf4ecf58a6fb3676d2fdc667d6edcbdd6e8e11fe46f09`), and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no new §2.8 row, so no guard line was needed.
+- **Owner decisions.** All 669 rows are present and cited; APPLY.md's section pairs hold. `validate10.py`'s row pattern takes 2026-11-20, and `LATE_DATES` each new row's date.
+- **Open owner questions.** One, Q-REPO-6.
+- **Superseded options.** 314 grep hits, every one with its reading, none live; five are on changed lines of §19, Postgres and PgBouncer connection pools and W8's off-site monitor address, each read again.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 11,959 section references, 58 more, with the one unresolved as before. `v7/words.json` and `v7/text_checks.json` were regenerated.
+- **DESIGN-DEFER.md.** 100 entries and 156 pointers, one of each more.
+- **The metadata list** follows §2.8 at v63, for owner decisions 654, 656 and 658, copied to `metadata_list.yml` by `make metadata`.
+
+Outside this folder the track touched DESIGN.md, DESIGN-DEFER.md, DESIGN-AMENDMENTS.md, DESIGN-DETAILS.md (3.2.8, 4.2.3, 10.2.2, 10.2.8, 15.2.2 and 15.2.10), RECORD.md (13.1), metadata_list.yml, check/metadata_list_test.go and protocol/design_unfenced_test.go. Left to the final design sweep: owner decision 655's and 664's wire, the fix tracks still running on 2026-11-20 (strict-envelope-feed, preamble-envelope-domain, moderation-note-entry-ids, fault-clause-registry's one-seed rule and the index check's follow-ups), smtpproof/SPEC.md's sections 3 and 5, the code comments a sweep over code must change (protocol/directory.proto's `Announcement.version` and sdk's state reasons), HANDOFF.md's lines, QD-1086's KEYS rows, and the owner steps and handoff notes.

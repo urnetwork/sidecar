@@ -305,7 +305,7 @@ for n, head in sorted(entries.items()):
             named_open.append({'decision': n, 'q': q, 'issue': 'no such item'})
 open_items = [q for q, st in qstatus.items() if st == 'open']
 qf = json.loads((V7 / 'qfields.json').read_text())
-out['owner_record'] = {'entries': len(entries), 'entry_numbers_ok': sorted(entries) == list(range(1, 647)),
+out['owner_record'] = {'entries': len(entries), 'entry_numbers_ok': sorted(entries) == list(range(1, 670)),
                        'q_named_by_decisions': sum(len(re.findall(r'Q-[A-Z]+-\d+', h)) for h in entries.values()),
                        'named_but_open': named_open,
                        'open_items': open_items,
@@ -430,7 +430,7 @@ out['registers'] = {
 # From 198 the design-records tracks number the build's owner answers as they fold them, so a later number can carry
 # the bulk acceptance's earlier date; each such decision's date is listed here. 2026-11-15 joins the row pattern with
 # owner decision 251, 2026-11-11 and 2026-11-12 with 253 and 254, 2026-11-13 and 2026-11-14 with 286 and 287, and
-# 2026-11-16 with 424.
+# 2026-11-16 with 424, and 2026-11-20 with 650.
 LATE_DATES = {198: '2026-11-10', 199: '2026-11-10', 200: '2026-11-10', 201: '2026-11-10', 202: '2026-11-10',
               203: '2026-11-10', 204: '2026-11-10', 205: '2026-11-10', 206: '2026-11-10', 207: '2026-11-06',
               208: '2026-11-06', 209: '2026-11-06', 210: '2026-11-06', 211: '2026-11-06',
@@ -528,9 +528,11 @@ LATE_DATES = {198: '2026-11-10', 199: '2026-11-10', 200: '2026-11-10', 201: '202
               622: '2026-11-18', 623: '2026-11-18', 624: '2026-11-18', 625: '2026-11-18', 626: '2026-11-18', 627: '2026-11-18',
               628: '2026-11-18', 629: '2026-11-19', 630: '2026-11-19', 631: '2026-11-19', 632: '2026-11-19', 633: '2026-11-19', 634: '2026-11-19', 635: '2026-11-19', 636: '2026-11-19', 637: '2026-11-19',
               638: '2026-11-19', 639: '2026-11-19', 640: '2026-11-19', 641: '2026-11-19',
-              642: '2026-11-19', 643: '2026-11-19', 644: '2026-11-19', 645: '2026-11-19', 646: '2026-11-19'}
-idx_rows = re.findall(r'^\| <a id="od-(\d+)"></a>\d+ \| (2026-11-(?:0[34569]|1[0123456789])) \|', doc, re.M)
-out['decision_rows'] = {'rows': len(idx_rows), 'numbers_ok': [int(n) for n, d in idx_rows] == list(range(1, 647)),
+              642: '2026-11-19', 643: '2026-11-19', 644: '2026-11-19', 645: '2026-11-19', 646: '2026-11-19',
+              647: '2026-11-19', 648: '2026-11-19', 649: '2026-11-19',
+              **{_n: '2026-11-20' for _n in range(650, 670)}}
+idx_rows = re.findall(r'^\| <a id="od-(\d+)"></a>\d+ \| (2026-11-(?:0[34569]|1[0123456789]|20)) \|', doc, re.M)
+out['decision_rows'] = {'rows': len(idx_rows), 'numbers_ok': [int(n) for n, d in idx_rows] == list(range(1, 670)),
                         'dates_ok': all(d == ('2026-11-03' if int(n) <= 111 else '2026-11-04' if int(n) <= 145 else '2026-11-05' if int(n) <= 187 else '2026-11-06' if int(n) <= 196 else '2026-11-09' if int(n) == 197 else LATE_DATES.get(int(n))) for n, d in idx_rows),
                         'known_gaps_heading': '### Known gaps' in doc,
                         'closed_by_peer_review_text': len(re.findall(r'closed by peer review', doc))}

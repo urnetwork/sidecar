@@ -853,7 +853,11 @@ real        T3 runs each T3 row through server's real handlers and stores (api, 
             flag marks each translated clause, gate reports say so, and FS-114 and 22.9's file-cluster suite
             never use the wrapper
 explorer    each schedule also runs with seeded random barrier orders: 10 seeds a merge for T2 rows, 100 a night for
-            T3 rows; a failing seed becomes a fixed schedule
+            T3 rows; a failing seed becomes a fixed schedule; seeds choose only at barriers, so a registered
+            schedule whose fixed run's trace holds no barrier event and which has no Background step runs one
+            seed, its report saying "no barrier passed: every seed takes this order", and the gate's rules item
+            names the rows that took that form, while one barrier event or Background step brings back every
+            seed (owner decision 667)
 model       EvsCommit.tla (TLA+, checked by TLC: https://github.com/tlaplus/tlaplus) keeps head (its fence, refusal
             records, seal lease and collect window included), batch records, packs and parcels with their pidx/
             entries, index entries, segments with their upload receipts, slot, pmap, log, gen, epoch, repo, proj and
@@ -890,7 +894,12 @@ model       EvsCommit.tla (TLA+, checked by TLC: https://github.com/tlaplus/tlap
             7, on a ref with no head and on a cached head), rename a path holding a candidate, re-upload a candidate's
             bytes for a receipt and write the path after the drop, beside the purge's processes; TLC checks I-EVS-15,
             FI-27 and I-EVS-1, and that every executing drop ends done, held or refused while no hold stands (weak
-            fairness);
+            fairness); the harness records each part's runs as modes of their own (owner decision 648): M2's model,
+            mutants and live; the purger's twins and stories, mutants-purge and stories-purge, which M10's entry
+            needs; and the drop extension's twins and stories, mutants-drop and stories-drop, with its liveness,
+            live-drop, each drop story under the spec's weak-fairness properties on one instance, two being left
+            to the review phase (DESIGN-DEFER.md's test-drop-liveness-two-instances entry), which M10's exit
+            needs; a gate needs the modes of its milestone and those before it, and the stories modes it names;
             IndexRollup.tla keeps one ref's head (its version, its index_epoch and the index files each version
             names), its erasure set, its current, previous and expired buckets, all, each writer's head and sealed
             slots with their entries (full, a tombstone, and a diff with its base, as §11.14 had them before owner
@@ -1203,10 +1212,11 @@ FI-27  drop history: a drop deletes a segment or slot only if (1) every version 
        hold covering the repo stood when the DELETE issued (a hold keeping what existed at its placement, and
        standing for a deleter from 5 s after api acknowledged its placement, as FI-16's; owner decision 629); and (4)
        evacuation's horizon had passed the object's LastModified + 24 h + 2 min, and the DELETE named that
-       LastModified (owner decision 397); no version whose push was validated after its drop's fence commits naming
-       a listed version as a base, rename or reuse source, while a reuse copy validated before the DROP committed
-       may commit after it within §11.8's 5 s window, its step 7 not rerunning 5h, mark finding it and keeping what
-       it names; every path's newest version keeps all its content, a written boundary carrying its
+       LastModified (owner decision 397); no version whose push was validated against a head showing its drop (at
+       or past the DROP's version) commits naming a listed version as a base, rename or reuse source, while one
+       validated against a head below the DROP, read from the cluster before the DROP committed or from the head
+       cache within §11.9's 10 min, may commit after it within §11.8's 5 s of that read, its step 7 not
+       rerunning 5h, mark finding it and keeping what it names; every path's newest version keeps all its content, a written boundary carrying its
        base's oid and mode; readers show a listed version as pending or dropped, never as missing or tampered, for the
        repo's life and whatever became of the path's entry, and alarm on a drop failing its checks; a cancelled,
        refused or observed drop deletes nothing; a crash, retry, stale job instance or concurrent push changes neither
@@ -2142,10 +2152,12 @@ FS-76  §11,16 a generated corpus of mail and notes (ASCII, CJK, combining marks
               it holds it, else reported not yet searchable; buckets follow the commits'
               signed time, a reader 10 min skewed computing the same ones, and instant
               coverage spans 30-60 days; a writer's delta that omits a document or drops or
-              adds trigrams, and a rebuild or roll-up whose uploaded bytes differ from what
-              its inputs give, are caught by hosts holding the text (the indexer designated
-              for search checking every repo it reads), which use their own result and raise
-              index_mismatch; in the team record, an entry past searchable_days (90) is masked
+              adds trigrams, a tombstone or entry above every version its path can hold at
+              the pin, which would hide a live document (owner decision 669), and a rebuild
+              or roll-up whose uploaded bytes differ from what its inputs give, are caught
+              by hosts holding the text (the indexer designated for search checking every
+              repo it reads), which use their own result and raise index_mismatch; in the
+              team record, an entry past searchable_days (90) is masked
               from every search at query time, all included, and is still readable by id;
               scopes network and all merge repos as the oracle does; erasing a document whose
               postings sit in an index file a hold kept from before a REMOVE generation
@@ -3098,13 +3110,15 @@ format 2 (M10)                peer review of format 2's schemas        23.6's M1
                               (§11's versionless fields and records,   testdata/index/ fixed, its vectors byte-equal
                               the index's objects and encodings, the   on every leg (22.9); D-TEST-13's projection;
                               rule, lock and migration records, the    D-TEST-12's observe evidence on T3; the model's
-                              DROP push and its states, search.proto,  drop extension passing TLC; fuzz seeds; a
-                              directory.proto's cards, §11.14's field  migration of a format-1 repo set and a rollback
-                              registry and RECORD.md's search          to format-1 binaries (FS-72)
-                              fields); EvsCommit.tla with the purger
-                              and IndexRollup.tla passing TLC; FS-64
-                              to FS-81 and FS-83 to FS-96 written
-                              against the fakes; vector schemas fixed
+                              DROP push and its states, search.proto,  drop extension passing TLC, its mutants-drop,
+                              directory.proto's cards, §11.14's field  stories-drop and live-drop modes (owner
+                              registry and RECORD.md's search          decision 648); fuzz seeds; a migration of a
+                              fields); EvsCommit.tla with the purger,  format-1 repo set and a rollback to format-1
+                              its mutants-purge and stories-purge      binaries (FS-72)
+                              modes, and IndexRollup.tla passing
+                              TLC; FS-64 to FS-81 and FS-83 to FS-96
+                              written against the fakes; vector
+                              schemas fixed
 data rule                     before a final freeze, only local, T3, canary and M2's staging cluster hold the format
 ```
 

@@ -93,9 +93,6 @@ message AuthKeyBundle {
   uint32 version = 1; bytes genesis_sha256 = 2; AuthPin head = 3; bytes delegation_id = 4;
   bytes delegation_signing_seed = 5; bytes delegation_reader_seed = 6; repeated bytes tag_ids = 7;
 }
-// ServiceSettings.record_cost's values (§7.9's Settings fields; owner decision 302): on by default, which a bool's zero
-// cannot say, so its zero reads as on, as SelfAdmitMode's does (question record-md-run-cost-in-team-record).
-enum RecordCostMode { RECORD_COST_MODE_UNSPECIFIED = 0; RECORD_COST_MODE_ON = 1; RECORD_COST_MODE_OFF = 2; }
 
 // sidecar/protocol/bridge/auth.proto
 // §5.5's identity binding, as plan-CORE-binding-wire #1 numbers it.
@@ -238,7 +235,7 @@ message EvsHeadChanged { bytes ref_id = 1; uint64 version = 2; bytes chain = 3; 
 enum EvsPushFlag {
   EVS_PUSH_FLAG_NONE = 0; EVS_PUSH_FORCE = 1; EVS_PUSH_DELETE = 2; EVS_PUSH_BASE = 4; EVS_PUSH_IMMUTABLE = 8;
   EVS_PUSH_CONSUME = 16; EVS_PUSH_PATH_EPOCH = 32; EVS_PUSH_ERASE = 64; EVS_PUSH_CLOSURE = 128;
-  EVS_PUSH_DROP = 256; EVS_PUSH_CUT = 512;
+  EVS_PUSH_DROP = 256; EVS_PUSH_CUT = 512; EVS_PUSH_COMPLETION = 1024;
 }
 enum EvsLocatorKind {
   EVS_LOCATOR_KIND_UNSPECIFIED = 0; EVS_LOCATOR_SEGMENT = 1; EVS_LOCATOR_INLINE = 2;
@@ -640,27 +637,6 @@ var testFenceAdditions = []struct {
 	field    testFenceField
 	question string
 }{
-	{
-		message:  "IndexerRow",
-		field:    testFenceField{name: "nonce", number: 6, typeName: "bytes"},
-		question: "mail-m8-10-indexer-services-seal-context",
-	},
-	// §7.9's Settings fields, which its fence's comment says join it once config.proto declares them
-	{
-		message:  "ServiceSettings",
-		field:    testFenceField{name: "mail_strict", number: 7, typeName: "bool"},
-		question: "plan-MAIL-strict-setting",
-	},
-	{
-		message:  "ServiceSettings",
-		field:    testFenceField{name: "record_cost", number: 8, typeName: "RecordCostMode"},
-		question: "record-md-run-cost-in-team-record",
-	},
-	{
-		message:  "ServiceSettings",
-		field:    testFenceField{name: "record_required", number: 9, typeName: "bool"},
-		question: "plan-MCP-record-required",
-	},
 }
 
 // One field an owner's answer takes out of a message the design fences, its number reserved.
@@ -690,7 +666,6 @@ type testFenceValueAddition struct {
 // that holds its answer. Each joins the fence it extends, as testFenceAdditions' fields do, and one the design comes
 // to write fails until its line here leaves.
 var testFenceValueAdditions = []testFenceValueAddition{
-	{enum: "EvsPushFlag", name: "EVS_PUSH_COMPLETION", number: 1024, question: "erasure-completion-erase-evs-cannot-read-complete"},
 }
 
 // One value an owner's answer takes out of an enum the design fences, its number reserved.
