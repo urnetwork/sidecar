@@ -12,6 +12,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"maps"
+	"reflect"
 	"slices"
 	"sync"
 	"testing"
@@ -190,6 +192,27 @@ func (self *tlsCtFixture) logged(index int) ([sha256.Size]byte, []string, time.T
 	return spkiSha256, tlsCtCanonicalNames(names), notBefore
 }
 
+// A fixture certificate's leaf SHA-256: Cert Spotter's cert_sha256, the hash of crt.sh's certificate for the same
+// issuance (TestTlsCtClientReadsCrtShACertificateAtATime holds that the two agree).
+func (self *tlsCtFixture) leaf(index int) []byte {
+	self.t.Helper()
+	leafSha256, ok := tlsCtParseSha256(self.transport.certSpotter[index]["cert_sha256"].(string))
+	if !ok {
+		self.t.Fatal("the fixture's leaf is no hash")
+	}
+	return leafSha256[:]
+}
+
+// crt.sh's fixture entry id, as the client reads it.
+func (self *tlsCtFixture) crtShEntry(id string) *TlsCtCertificate {
+	self.t.Helper()
+	certificate, err := parseTlsCtCertificate([]byte(self.transport.crtSh.Certificates[id]))
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	return certificate
+}
+
 // The identity a label names, pinned long before any fixture certificate was issued.
 func (self *tlsCtFixture) identity(label string) (Id, []byte) {
 	seed := sha256.Sum256([]byte("ct watch identity " + label))
@@ -260,10 +283,18 @@ func TestTlsCtWatchAnUnattestedCertificateAlarms(t *testing.T) {
 	if len(events) != 1 || events[0].Kind != SidecarEventCtAlarm || events[0].CtAlarm != SidecarCtAlarmUnattested || events[0].SidecarId != nil {
 		t.Fatalf("events %+v", events)
 	}
+	// the event names the certificate it is about by its leaf (§5.4)
+	leafSha256 := fixture.leaf(tlsCtTestSecondCertificate)
+	if !slices.Equal(events[0].Evidence[0], leafSha256) || events[0].Evidence[1] != nil {
+		t.Errorf("evidence %x", events[0].Evidence)
+	}
 	status := fixture.watch.Status()
 	spkiSha256, names, _ := fixture.logged(tlsCtTestSecondCertificate)
 	if status.Degraded || len(status.Alarms) != 1 || !slices.Equal(status.Alarms[0].DnsNames, names) || hex.EncodeToString(status.Alarms[0].SpkiSha256) != hex.EncodeToString(spkiSha256[:]) {
 		t.Errorf("status %+v", status)
+	}
+	if len(status.Alarms) == 1 && (!slices.Equal(status.Alarms[0].CertSha256, leafSha256) || status.Alarms[0].Precertificate) {
+		t.Errorf("the standing alarm's leaf %x, precertificate %t", status.Alarms[0].CertSha256, status.Alarms[0].Precertificate)
 	}
 	if !status.PassTime.Equal(fixture.clock.Now()) {
 		t.Errorf("pass time %s", status.PassTime)
@@ -335,6 +366,15 @@ func TestTlsCtWatchCountsAPrecertificateAndItsCertificateOnce(t *testing.T) {
 	if len(keys) != 2 {
 		t.Errorf("%d keys alarmed", len(keys))
 	}
+	// each is named by its certificate's leaf, which Cert Spotter shows first: crt.sh's precertificate, shown after,
+	// names neither
+	leafHexes := map[string]bool{}
+	for _, event := range fixture.eventsSoFar() {
+		leafHexes[hex.EncodeToString(event.Evidence[0])] = true
+	}
+	if len(leafHexes) != 2 || !leafHexes[hex.EncodeToString(fixture.leaf(tlsCtTestZoneCertificate))] || !leafHexes[hex.EncodeToString(fixture.leaf(tlsCtTestSecondCertificate))] {
+		t.Errorf("leaves %v", leafHexes)
+	}
 }
 
 func TestTlsCtWatchSourcesDisagreeingIsNoAlarm(t *testing.T) {
@@ -369,6 +409,9 @@ func TestTlsCtWatchAlarmsOnAnIdentityPinnedUnder24Hours(t *testing.T) {
 	events := fixture.eventsSoFar()
 	if len(events) != 1 || events[0].CtAlarm != SidecarCtAlarmRecentIdentity || events[0].SidecarId == nil || *events[0].SidecarId != sidecarId {
 		t.Fatalf("events %+v", events)
+	}
+	if !slices.Equal(events[0].Evidence[0], fixture.leaf(tlsCtTestZoneCertificate)) || events[0].Evidence[1] != nil {
+		t.Errorf("evidence %x", events[0].Evidence)
 	}
 
 	fixture.identities.stateLock.Lock()
@@ -426,7 +469,7 @@ func TestTlsCtWatchATamperedAttestationAlarms(t *testing.T) {
 			t.Errorf("%s: %d alarms", c.name, alarms)
 			continue
 		}
-		if events := fixture.eventsSoFar(); len(events) != 1 || events[0].CtAlarm != SidecarCtAlarmUnattested {
+		if events := fixture.eventsSoFar(); len(events) != 1 || events[0].CtAlarm != SidecarCtAlarmUnattested || !slices.Equal(events[0].Evidence[0], fixture.leaf(tlsCtTestZoneCertificate)) {
 			t.Errorf("%s: events %+v", c.name, events)
 		}
 	}
@@ -595,8 +638,12 @@ func TestTlsCtWatchACustomCertificateOnAKeyNoRowHoldsAlarms(t *testing.T) {
 			continue
 		}
 		alarm := fixture.watch.Status().Alarms[0]
-		if alarm.Reason != SidecarCtAlarmUnattested || !slices.Equal(alarm.DnsNames, []string{tlsCtTestCustom}) {
+		leafSha256 := fixture.leaf(tlsCtTestCustomCertificate)
+		if alarm.Reason != SidecarCtAlarmUnattested || !slices.Equal(alarm.DnsNames, []string{tlsCtTestCustom}) || !slices.Equal(alarm.CertSha256, leafSha256) {
 			t.Errorf("%s: alarm %+v", c.name, alarm)
+		}
+		if events := fixture.eventsSoFar(); len(events) != 1 || !slices.Equal(events[0].Evidence[0], leafSha256) {
+			t.Errorf("%s: events %+v", c.name, events)
 		}
 	}
 	// a sidecar with no custom host asks about none
@@ -640,17 +687,184 @@ func TestTlsCtWatchARestartTellsAStandingAlarmAgain(t *testing.T) {
 	if alarms := fixture.pass(); alarms != 1 || len(fixture.eventsSoFar()) != 1 {
 		t.Fatalf("%d alarms", alarms)
 	}
-	// the cursors are past the certificate; the alarm is the store's
+	// the cursors are past the certificate; the alarm, its leaf with it, is the store's
 	restarted := fixture.newWatch()
 	if alarms := restarted.Pass(t.Context()); alarms != 1 {
 		t.Fatalf("%d alarms after a restart", alarms)
 	}
-	if events := fixture.eventsSoFar(); len(events) != 2 || events[1].CtAlarm != SidecarCtAlarmUnattested {
+	if events := fixture.eventsSoFar(); len(events) != 2 || events[1].CtAlarm != SidecarCtAlarmUnattested || !slices.Equal(events[1].Evidence[0], fixture.leaf(tlsCtTestSecondCertificate)) {
 		t.Errorf("events after a restart %+v", events)
 	}
 	restarted.Pass(t.Context())
 	if events := fixture.eventsSoFar(); len(events) != 2 {
 		t.Errorf("%d events after the restart's second pass", len(events))
+	}
+}
+
+func TestTlsCtWatchAlarmEventHoldsItsShape(t *testing.T) {
+	// what an app reads of each ct_alarm reason (§5.4), relayed through the Sidecar as the tls component relays it:
+	// the reason, the attesting identity of a recent_identity alarm and none of an unattested one, the leaf's SHA-256
+	// as Evidence[0], and nothing else
+	cases := []struct {
+		reason      SidecarCtAlarm
+		certificate int
+		set         func(fixture *tlsCtFixture) *Id
+	}{
+		{reason: SidecarCtAlarmUnattested, certificate: tlsCtTestSecondCertificate, set: func(fixture *tlsCtFixture) *Id {
+			fixture.setRows(fixture.row(tlsCtTestZoneCertificate, "desktop", TlsCertStateIssued))
+			return nil
+		}},
+		{reason: SidecarCtAlarmRecentIdentity, certificate: tlsCtTestZoneCertificate, set: func(fixture *tlsCtFixture) *Id {
+			fixture.setRows(fixture.zoneRows()...)
+			sidecarId, _ := fixture.identity("desktop")
+			_, _, notBefore := fixture.logged(tlsCtTestZoneCertificate)
+			fixture.identities.stateLock.Lock()
+			defer fixture.identities.stateLock.Unlock()
+			fixture.identities.pinned[sidecarId] = notBefore.Add(-23 * time.Hour)
+			return &sidecarId
+		}},
+	}
+	for _, c := range cases {
+		fixture := newTlsCtFixture(t)
+		sidecarId := c.set(fixture)
+		sidecar := newTestSidecar(t)
+		events := recordEvents(sidecar)
+		args := fixture.args()
+		args.Event = func(event SidecarEvent) {
+			if err := sidecar.Alarm(event); err != nil {
+				t.Errorf("%s: %v", c.reason, err)
+			}
+		}
+		watch, err := newTlsCtWatch(t.Context(), args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(watch.Close)
+		if alarms := watch.Pass(t.Context()); alarms != 1 {
+			t.Errorf("%s: %d alarms", c.reason, alarms)
+			continue
+		}
+		leafSha256 := fixture.leaf(c.certificate)
+		expected := SidecarEvent{
+			Kind:       SidecarEventCtAlarm,
+			Generation: sidecar.Status().Generation,
+			CtAlarm:    c.reason,
+			SidecarId:  sidecarId,
+			Evidence:   [2][]byte{leafSha256, nil},
+		}
+		if len(*events) != 1 || !reflect.DeepEqual((*events)[0], expected) {
+			t.Errorf("%s: events %+v", c.reason, *events)
+			continue
+		}
+		// the event's leaf is its own: a callback that changes it changes nothing the watch keeps
+		(*events)[0].Evidence[0][0] ^= 0xff
+		if status := watch.Status(); len(status.Alarms) != 1 || !slices.Equal(status.Alarms[0].CertSha256, leafSha256) {
+			t.Errorf("%s: the standing alarm %+v", c.reason, status.Alarms)
+		}
+	}
+}
+
+func TestTlsCtWatchNamesACertificateByItsLeafOverItsPrecertificate(t *testing.T) {
+	fixture := newTlsCtFixture(t)
+	// only crt.sh shows the zone's certificate, its precertificate first and then the certificate, in one pass
+	fixture.transport.fail(TlsCtSourceCertSpotter, 0, "[]")
+	fixture.setRows(fixture.row(tlsCtTestSecondCertificate, "laptop", TlsCertStateIssued))
+	leafSha256 := fixture.leaf(tlsCtTestZoneCertificate)
+	precertificate, certificate := fixture.crtShEntry("7000001"), fixture.crtShEntry("7000002")
+	if !precertificate.Precertificate || certificate.Precertificate || !slices.Equal(certificate.CertSha256[:], leafSha256) || slices.Equal(precertificate.CertSha256[:], leafSha256) {
+		t.Fatalf("the fixture's precertificate and certificate")
+	}
+	if alarms := fixture.pass(); alarms != 1 {
+		t.Fatalf("%d alarms", alarms)
+	}
+	if events := fixture.eventsSoFar(); len(events) != 1 || !slices.Equal(events[0].Evidence[0], leafSha256) {
+		t.Errorf("events %+v", events)
+	}
+	if alarm := fixture.watch.Status().Alarms[0]; alarm.Source != TlsCtSourceCrtSh || alarm.Precertificate || !slices.Equal(alarm.CertSha256, leafSha256) {
+		t.Errorf("alarm %+v", alarm)
+	}
+}
+
+func TestTlsCtWatchTellsAnAlarmAgainAsItsLeafIsShown(t *testing.T) {
+	fixture := newTlsCtFixture(t)
+	fixture.setRows(fixture.row(tlsCtTestSecondCertificate, "laptop", TlsCertStateIssued))
+	leafSha256 := fixture.leaf(tlsCtTestZoneCertificate)
+	precertificateSha256 := fixture.crtShEntry("7000001").CertSha256
+	// Cert Spotter knows the zone's issuance only by its precertificate, so it gives no leaf; crt.sh is down, and has
+	// logged only the precertificate so far
+	delete(fixture.transport.certSpotter[tlsCtTestZoneCertificate], "cert_sha256")
+	fixture.transport.fail(TlsCtSourceCrtSh, 503, "")
+	listing := fixture.transport.crtSh.Listing
+	isCertificate := func(entry map[string]any) bool {
+		return entry["id"].(float64) == 7000002
+	}
+	fixture.transport.crtSh.Listing = slices.DeleteFunc(slices.Clone(listing), isCertificate)
+
+	// the alarm does not wait for its leaf
+	if alarms := fixture.pass(); alarms != 1 || !fixture.watch.Degraded() {
+		t.Fatalf("%d alarms, degraded %t", alarms, fixture.watch.Degraded())
+	}
+	events := fixture.eventsSoFar()
+	if len(events) != 1 || events[0].CtAlarm != SidecarCtAlarmUnattested || events[0].Evidence[0] != nil {
+		t.Fatalf("events %+v", events)
+	}
+
+	// crt.sh back: the precertificate names it, and it is told again
+	fixture.transport.fail(TlsCtSourceCrtSh, 0, "")
+	if alarms := fixture.pass(); alarms != 1 || fixture.watch.Degraded() {
+		t.Fatalf("%d alarms, degraded %t", alarms, fixture.watch.Degraded())
+	}
+	events = fixture.eventsSoFar()
+	if len(events) != 2 || events[1].CtAlarm != SidecarCtAlarmUnattested || !slices.Equal(events[1].Evidence[0], precertificateSha256[:]) {
+		t.Fatalf("events %+v", events)
+	}
+	if alarm := fixture.watch.Status().Alarms[0]; !alarm.Precertificate {
+		t.Errorf("alarm %+v", alarm)
+	}
+
+	// crt.sh logs the certificate later, past its cursor: its leaf takes the precertificate's place, told again
+	for _, entry := range listing {
+		if isCertificate(entry) {
+			later := maps.Clone(entry)
+			later["id"] = float64(7000005)
+			fixture.transport.crtSh.Listing = append(fixture.transport.crtSh.Listing, later)
+		}
+	}
+	fixture.transport.crtSh.Certificates["7000005"] = fixture.transport.crtSh.Certificates["7000002"]
+	if alarms := fixture.pass(); alarms != 1 {
+		t.Fatalf("%d alarms", alarms)
+	}
+	events = fixture.eventsSoFar()
+	if len(events) != 3 || events[2].CtAlarm != SidecarCtAlarmUnattested || !slices.Equal(events[2].Evidence[0], leafSha256) {
+		t.Fatalf("events %+v", events)
+	}
+
+	// named, it is told no more: the sources showing it again, by its precertificate or by nothing, never name it back
+	fixture.transport.crtSh.Listing = slices.DeleteFunc(fixture.transport.crtSh.Listing, func(entry map[string]any) bool {
+		return entry["id"].(float64) == 7000005
+	})
+	state, err := fixture.watch.readState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Cursors = map[string]string{}
+	if err := fixture.watch.writeState(state); err != nil {
+		t.Fatal(err)
+	}
+	if alarms := fixture.pass(); alarms != 1 || len(fixture.eventsSoFar()) != 3 {
+		t.Fatalf("%d alarms, %d events with the sources shown again", alarms, len(fixture.eventsSoFar()))
+	}
+	if alarm := fixture.watch.Status().Alarms[0]; alarm.Precertificate || !slices.Equal(alarm.CertSha256, leafSha256) {
+		t.Errorf("alarm %+v", alarm)
+	}
+
+	// a restart tells it once, by the leaf the store kept
+	restarted := fixture.newWatch()
+	if alarms := restarted.Pass(t.Context()); alarms != 1 {
+		t.Fatalf("%d alarms after a restart", alarms)
+	}
+	if events := fixture.eventsSoFar(); len(events) != 4 || !slices.Equal(events[3].Evidence[0], leafSha256) {
+		t.Errorf("events after a restart %+v", events)
 	}
 }
 

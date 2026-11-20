@@ -82,6 +82,12 @@ models:
     runs:
       - {at: 2026-11-09, commit: 1b95665622a4ec38509bd30a686d6ed752eb400c, tlc: d8fb231, mode: mutants, result: pass, sources_sha256: 9aece8d3ee88a44e3891dcc1e2c7a0d569c6343f513304a6ad2a6ea40c512ea6, states: 14451583, depth: 67, seconds: 1743}
       - {at: 2026-11-13, commit: 49e46669de07d5448ecf89362621d01819fe5a20, tlc: d8fb231, mode: mutants, result: pass, sources_sha256: 1543fa7c06670839da4be10f56a28f7ba52bc5775c5a8a1d83dbaba9f7296dab, states: 27678754, depth: 66, seconds: 13982}
+      - {at: 2026-11-19, commit: 6cfabbc46b5fb712a2754667a3172d5363c5f1d9, tlc: d8fb231, mode: mutants-purge, result: pass, sources_sha256: 4c837dce81ba17ce161cb70770314809df7f672f809b13967209de618f5cd050, states: 5120, depth: 9, seconds: 12}
+      - {at: 2026-11-19, commit: 6cfabbc46b5fb712a2754667a3172d5363c5f1d9, tlc: d8fb231, mode: stories-purge, result: pass, sources_sha256: 4c837dce81ba17ce161cb70770314809df7f672f809b13967209de618f5cd050, states: 463818, depth: 26, seconds: 241}
+      - {at: 2026-11-19, commit: 6cfabbc46b5fb712a2754667a3172d5363c5f1d9, tlc: d8fb231, mode: mutants-drop, result: pass, sources_sha256: 4c837dce81ba17ce161cb70770314809df7f672f809b13967209de618f5cd050, states: 3097467, depth: 17, seconds: 523}
+      - {at: 2026-11-19, commit: 6cfabbc46b5fb712a2754667a3172d5363c5f1d9, tlc: d8fb231, mode: stories-drop, result: pass, sources_sha256: 4c837dce81ba17ce161cb70770314809df7f672f809b13967209de618f5cd050, states: 33723440, depth: 36, seconds: 3837}
+      - {at: 2026-11-19, commit: 6cfabbc46b5fb712a2754667a3172d5363c5f1d9, tlc: d8fb231, mode: mutants, result: pass, sources_sha256: 4c837dce81ba17ce161cb70770314809df7f672f809b13967209de618f5cd050, states: 11681051, depth: 65, seconds: 4541}
+      - {at: 2026-11-20, commit: 047aec69913fb145d89c018e8ebb95581673eda5, tlc: d8fb231, mode: live-drop, result: pass, sources_sha256: 9718f020c71e1ef13375d83a359d2049c11ceb55de65b806abad22d74d2aa8d4, states: 4334385, depth: 36, seconds: 3901}
 
   - spec: StoreSettle
     owners: [EVS1-M2-02]

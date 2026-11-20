@@ -28,7 +28,9 @@
 //
 // A precertificate and its certificate, and one certificate seen by both sources, are one: certificates compare by
 // their key and names alone. Two sources disagreeing is no alarm by itself; each certificate either source shows is
-// judged.
+// judged. An alarm names its leaf by SHA-256, §5.4's Evidence[0]: the certificate's where a source shows it, else the
+// precertificate's, which may be all a CA logs, and none while no source has given either. An alarm never waits for
+// its leaf, and a later pass whose sources show it better names it so.
 //
 // A source failing, or the rows, the names or verified config not being there to read, marks the watch degraded,
 // "CT watch degraded" in SidecarStatus, and never alarms: a pass with nothing to judge by judges nothing. A
@@ -36,8 +38,9 @@
 //
 // The watch keeps its own file in the tls component's store: each source's cursor a domain, the certificates it has
 // found known, which stay known after their rows are deleted, and the alarms standing. Each pass judges the standing
-// alarms again, so one whose row arrives late is withdrawn. An alarm's event is raised once a process. Safe for
-// concurrent use.
+// alarms again, so one whose row arrives late is withdrawn. An alarm's event, ct_alarm with the leaf's SHA-256 as
+// Evidence[0], is raised once a process, and again when its reason changes or its leaf is named better, so an alarm
+// raised before any source showed its certificate is told again once one does. Safe for concurrent use.
 
 package sidecar
 
@@ -114,6 +117,11 @@ type TlsCtAlarm struct {
 	DnsNames   []string  `json:"dns_names"`
 	NotBefore  time.Time `json:"not_before"`
 	NotAfter   time.Time `json:"not_after"`
+	// The leaf's SHA-256, of its DER, which the event carries as Evidence[0] (§5.4): the certificate's once a source has
+	// shown it, else the precertificate's. Empty while no source has given either.
+	CertSha256 []byte `json:"cert_sha256,omitempty"`
+	// CertSha256 is the precertificate's, which the certificate's takes the place of.
+	Precertificate bool `json:"precertificate,omitempty"`
 	// recent_identity: the newest-pinned identity that attested it.
 	SidecarId *Id `json:"sidecar_id,omitempty"`
 	// When this device first saw it.
@@ -457,9 +465,27 @@ func (self *tlsCtWatch) Pass(ctx context.Context) int {
 	order := []string{}
 	add := func(candidate *TlsCtAlarm) {
 		key := tlsCtCertificateKey(candidate.SpkiSha256, candidate.DnsNames)
-		if _, ok := candidates[key]; !ok {
+		held, ok := candidates[key]
+		if !ok {
 			candidates[key] = candidate
 			order = append(order, key)
+			return
+		}
+		// one certificate however many entries show it, named by the best leaf any of them gives: none, the
+		// precertificate's, then the certificate's, the first of a rank kept so a named leaf never changes back
+		leafRank := func(alarm *TlsCtAlarm) int {
+			switch {
+			case len(alarm.CertSha256) != sha256.Size:
+				return 0
+			case alarm.Precertificate:
+				return 1
+			default:
+				return 2
+			}
+		}
+		if leafRank(held) < leafRank(candidate) {
+			held.CertSha256 = candidate.CertSha256
+			held.Precertificate = candidate.Precertificate
 		}
 	}
 	for _, alarm := range state.Alarms {
@@ -476,14 +502,20 @@ func (self *tlsCtWatch) Pass(ctx context.Context) int {
 			}
 			cursors[cursorKey] = next
 			for _, certificate := range certificates {
-				add(&TlsCtAlarm{
+				candidate := &TlsCtAlarm{
 					Source:     certificate.Source,
 					SpkiSha256: certificate.SpkiSha256[:],
 					DnsNames:   certificate.DnsNames,
 					NotBefore:  certificate.NotBefore,
 					NotAfter:   certificate.NotAfter,
 					SeenTime:   now,
-				})
+				}
+				// Cert Spotter gives none for an issuance it knows only by its precertificate
+				if certificate.CertSha256 != ([sha256.Size]byte{}) {
+					candidate.CertSha256 = certificate.CertSha256[:]
+					candidate.Precertificate = certificate.Precertificate
+				}
+				add(candidate)
 			}
 		}
 	}
@@ -547,8 +579,8 @@ func (self *tlsCtWatch) endPass(now time.Time, degraded bool, alarms []*TlsCtAla
 		if alarms != nil {
 			self.status.Alarms = alarms
 			for _, alarm := range alarms {
-				// a certificate whose reason changed is told again
-				key := tlsCtCertificateKey(alarm.SpkiSha256, alarm.DnsNames) + " " + string(alarm.Reason)
+				// a certificate whose reason changed, or whose leaf is named better, is told again
+				key := tlsCtCertificateKey(alarm.SpkiSha256, alarm.DnsNames) + " " + string(alarm.Reason) + " " + hex.EncodeToString(alarm.CertSha256)
 				if !self.raised[key] {
 					self.raised[key] = true
 					raise = append(raise, alarm)
@@ -559,7 +591,13 @@ func (self *tlsCtWatch) endPass(now time.Time, degraded bool, alarms []*TlsCtAla
 	}()
 	if self.event != nil {
 		for _, alarm := range raise {
-			self.event(SidecarEvent{Kind: SidecarEventCtAlarm, CtAlarm: alarm.Reason, SidecarId: alarm.SidecarId})
+			self.event(SidecarEvent{
+				Kind:      SidecarEventCtAlarm,
+				CtAlarm:   alarm.Reason,
+				SidecarId: alarm.SidecarId,
+				// the leaf's SHA-256 (§5.4), nil while no source has given one
+				Evidence: [2][]byte{bytes.Clone(alarm.CertSha256), nil},
+			})
 		}
 	}
 	return standing

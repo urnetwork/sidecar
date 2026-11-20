@@ -1,11 +1,115 @@
 # TLC runs of the models here
 
 Each run's verdict line as its run script printed it, with the TLC that ran it and the commit it ran
-at. modelled.yml records a model's passing gate runs (model, mutants, live) at the digest of its
-sources, which a gate lets stand while nothing it modelled changes; this file keeps the verdict lines
+at. modelled.yml records a model's passing gate runs (model, mutants and live, and a part's mutants,
+stories and liveness) at the digest of its sources, which a gate lets stand while nothing it modelled
+changes; this file keeps the verdict lines
 behind those records, and those of runs no gate reruns, such as run-tlc.sh's design grounds. Every run
 here used the owner's TLC through `ROOT/.stack/tools/tlc`: tla2tools.jar built from master at d8fb231,
 which its banner names as `rev: d8fb231`.
+
+## EvsCommit.tla
+
+§22.8's model of evs's commits over separate durable objects: the M2 part, and the M10 part
+EVSB-M10-07 added, which runs story by story (F2Run) with the M2 part held at its start. QD-1116 split
+the M10 part between §22.10's gates for format 2, as run-tlc.sh's parts: the purger's twins and stories
+(`twins-purge` and `stories-purge`, recorded as mutants-purge and stories-purge), which M10's entry
+needs, and the drop extension's (`twins-drop` and `stories-drop`), which only its exit needs, while
+`twins` runs the M2 part's twins alone. QD-1119 added the drop extension's liveness, F2DropsEnd under
+weak fairness on each drop story on one instance (`live-drop`), which its exit needs too. The model at
+its cfg's bounds and its liveness there (`model` and `live`, which every gate from M2's entry needs)
+have no passing run recorded: EVS1-M2-02 reported that they do not finish on this host.
+
+The runs below are model_test.go's tests of each mode in gate mode at M10's exit
+(SIDECAR_TLC_GATE=M10), each through run-tlc.sh and the owner's TLC on 4 workers with an 8 GB heap.
+The first five ran side by side from 2026-11-19 23:12 at 6cfabbc4, whose sources digest, 4c837dce,
+modelled.yml records with them, on a host the build lanes were loading at a load average between 25
+and 45 on 14 cores, so a time here is several times an idle host's. The drop stories' and the M2 part's
+twins' record lines named the commit HEAD had reached when they ended, 047aec69, since model_test.go
+then read it after TLC ran (8781582f reads it before); modelled.yml names 6cfabbc4, at which their
+digest was taken. A breadth-first run on several workers may count a few states more or fewer from one
+run to the next, and a twin's count is what TLC had explored when it met its violation. EvsCommit's
+sources have moved since: c16fc0bb merged a change to evs_drop_push.go, and 047aec69 changed
+run-tlc.sh for `live-drop`, so these five stand at no later tip, and a gate's model phase reruns each
+mode its gate needs.
+
+### The purger's runs (M10's entry)
+
+`run-tlc.sh twins-purge EvsCommit` and `stories-purge`: each of the purger's four twins, on purgeA on
+the committing instance alone, is refused with its invariant violated, and the five purge stories pass.
+
+```text
+== PASS twin-PurgeNoAllowance: F2DeletesKeepRules violated as it must, exit 12, 254 distinct states, depth 7, a trace of 6 states, 01s
+== PASS twin-PurgeIgnoresHold: F2DeletesKeepRules violated as it must, exit 12, 1330 distinct states, depth 8, a trace of 8 states, 01s
+== PASS twin-PurgeUnseen: F2Closure violated as it must, exit 12, 576 distinct states, depth 7, a trace of 6 states, 04s
+== PASS twin-EvacDropsNewest: F2Closure violated as it must, exit 12, 2960 distinct states, depth 9, a trace of 9 states, 03s
+== PASS story-purgeA: exit 0, 52499 distinct states, depth 20, 23s
+== PASS story-purgeB: exit 0, 263870 distinct states, depth 26, 02min 27s
+== PASS story-purgeC: exit 0, 127565 distinct states, depth 24, 59s
+== PASS story-purgeD: exit 0, 9493 distinct states, depth 18, 03s
+== PASS story-purgeE: exit 0, 10391 distinct states, depth 16, 04s
+```
+
+### The drop extension's runs (M10's exit)
+
+`run-tlc.sh twins-drop EvsCommit` and `stories-drop`: each of the drop extension's three twins, on
+dropB on two instances, is refused with its invariant violated, and the three drop stories pass on two
+instances, at the state counts EVSB-M10-07 reported for them.
+
+```text
+== PASS twin-DropNoFence: F2FenceHolds violated as it must, exit 12, 3101 distinct states, depth 8, a trace of 8 states, 01s
+== PASS twin-DropNoAgeCheck: F2Closure violated as it must, exit 12, 1554908 distinct states, depth 17, a trace of 17 states, 05min 11s
+== PASS twin-DropIgnoresHold: F2DeletesKeepRules violated as it must, exit 12, 1539458 distinct states, depth 17, a trace of 17 states, 03min 28s
+== PASS story-dropA: exit 0, 12917929 distinct states, depth 36, 29min 41s
+== PASS story-dropB: exit 0, 11955999 distinct states, depth 36, 22min 35s
+== PASS story-dropC: exit 0, 8849512 distinct states, depth 31, 11min 39s
+```
+
+`run-tlc.sh live-drop EvsCommit` (QD-1119), on its own from 2026-11-20 00:10 at 047aec69, which added
+it, whose sources digest, 9718f020, modelled.yml records with it: F2DropsEnd, with the spec's other
+properties, holds under weak fairness on each drop story on one instance.
+
+```text
+== PASS live-dropA: exit 0, 1766093 distinct states, depth 36, 29min 51s
+== PASS live-dropB: exit 0, 1131554 distinct states, depth 34, 17min 39s
+== PASS live-dropC: exit 0, 1436738 distinct states, depth 31, 17min 29s
+```
+
+### The M2 part's twins (M2's gates)
+
+`run-tlc.sh twins EvsCommit`: each of the M2 part's 21 twins is refused with its invariant violated,
+StaleHorizon and CachedRefusal by seeded simulation, in 1 h 15 min.
+
+```text
+== PASS twin-RestoreAfterShred: LifecycleHolds violated as it must, exit 12, 50 distinct states, depth 6, a trace of 4 states, 01s
+== PASS twin-VersionRestarts: VersionsRise violated as it must, exit 12, 1317 distinct states, depth 32, a trace of 28 states, 06s
+== PASS twin-PinFalls: PinsHold violated as it must, exit 12, 65975 distinct states, depth 20, a trace of 20 states, 35s
+== PASS twin-NoPinCheck: PinsHold violated as it must, exit 12, 2196 distinct states, depth 12, a trace of 12 states, 05s
+== PASS twin-LadderFork: OneLadder violated as it must, exit 12, 216320 distinct states, depth 16, a trace of 13 states, 01min 12s
+== PASS twin-GitPathCas: GitTip violated as it must, exit 12, 999 distinct states, depth 20, a trace of 19 states, 07s
+== PASS twin-UnrecordedRefusal: OutcomesHold violated as it must, exit 12, 3796 distinct states, depth 18, a trace of 17 states, 08s
+== PASS twin-EarlyRefusalDrop: OutcomesHold violated as it must, exit 12, 291849 distinct states, depth 25, a trace of 25 states, 01min 04s
+== PASS twin-AnswerDeletes: AnswersDeleteNothing violated as it must, exit 12, 68527 distinct states, depth 23, a trace of 23 states, 25s
+== PASS twin-EvacuateBeforeIndex: ClosureHolds violated as it must, exit 12, 1360 distinct states, depth 17, a trace of 17 states, 02s
+== PASS twin-GcNoFence: GcSafe violated as it must, exit 12, 911703 distinct states, depth 28, a trace of 27 states, 01min 41s
+== PASS twin-GcNoSecondCheck: GcSafe violated as it must, exit 12, 1007220 distinct states, depth 29, a trace of 28 states, 02min 39s
+== PASS twin-PageOutUnfolded: NewestFound violated as it must, exit 12, 1130 distinct states, depth 32, a trace of 28 states, 02s
+== PASS twin-StaleHorizon: FileCas violated as it must, exit 12, simulation, 139025 states generated, a trace of 45 states, 04s
+== PASS twin-ReaderStaleHorizon: ReadsServeNewest violated as it must, exit 12, 67785 distinct states, depth 44, a trace of 44 states, 17s
+== PASS twin-NoIfMatchFold: NewestFound violated as it must, exit 12, 681634 distinct states, depth 37, a trace of 37 states, 07min 35s
+== PASS twin-NoRetryLookup: OutcomesHold violated as it must, exit 12, 4148494 distinct states, depth 37, a trace of 36 states, 13min 18s
+== PASS twin-NoWindowWait: NewestFound violated as it must, exit 12, 718670 distinct states, depth 65, a trace of 64 states, 12min 47s
+== PASS twin-FoldIgnoresWindow: NewestFound violated as it must, exit 12, 474565 distinct states, depth 65, a trace of 64 states, 06min 19s
+== PASS twin-CachedRefusal: OutcomesHold violated as it must, exit 12, simulation, 65333 states generated, a trace of 139 states, 02s
+== PASS twin-CopyOverwrites: NewestFound violated as it must, exit 12, 2813103 distinct states, depth 58, a trace of 58 states, 26min 49s
+```
+
+### Not run
+
+- `model` and `live` at the cfg's bounds, as above, so M2's and M10's TLC items read open for
+  EvsCommit whatever its other modes show.
+- F2DropsEnd on two instances, which QD-1119 leaves to the review phase, and what EVSB-M10-07's report
+  lists the stories leaving out.
 
 ## StoreSettle.tla
 
