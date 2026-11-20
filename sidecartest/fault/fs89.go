@@ -18,8 +18,8 @@
 //	          25 min but short of evacuation's horizon past the drop, deletes nothing; past the horizon it deletes the
 //	          listed versions' segments
 //
-// On a Net whose clusters have not passed settle, T3's local stack's (fsDropSettled), each job holds at its wait on
-// settle, nothing is deleted, and what follows the deletes is not run, as fs95.go's fsDropExecute says.
+// On a Net whose clusters have not passed settle, T3's local stack's (fsDropSettled), a job with a drop pending holds at
+// its wait on settle, nothing is deleted, and what follows the deletes is not run, as fs95.go's fsDropExecute says.
 //
 // Not here, each a missing clause in EVS2-M10-35's report: export's stubs through git fsck, and diff and restore
 // reporting dropped (EVS2-M10-19, -23); the twin whose live segment, deleted by hand, alarms as a missing segment;
@@ -160,12 +160,18 @@ func Fs89(net *Net) *Schedule {
 		{Actor: "admin", Action: world.CancelDrop("admin", "x.txt")},
 		{Actor: "check", Action: world.ExpectDropState("x.txt", evsservice.DropStateCancelled)},
 		{Advance: 7 * 24 * time.Hour},
-	}...)
-	steps = append(steps, fsDropExecute(net, world, []*Step{
+		// the job, past evacuation's horizon: with its one drop cancelled it moves nothing, on either tier, settled or
+		// not
+		{Advance: 50 * time.Hour},
+		{Actor: "taskworker", Action: world.EvacuateAt(sidecar.EvsRepoFormat2, nil)},
+		{Actor: "taskworker", Action: world.RunDropJob("taskworker", func(result *evsservice.DropJobResult) error {
+			if result != nil && 0 < len(result.Moved) {
+				return fmt.Errorf("the job moved %v, with the one drop cancelled", result.Moved)
+			}
+			return nil
+		})},
 		{Actor: "check", Action: world.NoSegmentDeletesSince(cancelled)},
 		{Actor: "check", Action: world.ExpectDropState("x.txt", evsservice.DropStateCancelled)},
-	}...)...)
-	steps = append(steps, []*Step{
 		{Actor: "reader", Action: world.HistoryStates("reader", "x.txt", fs89States(historyCount, "kept"))},
 		{Actor: "reader", Action: world.ReadVersionEnds("reader", "x.txt", 5, EvsWorldReadsContent(eras.content(5)))},
 		// dropped again, its rewrite of the head after the cancelled drop's among what it lists
