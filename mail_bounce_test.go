@@ -1,4 +1,4 @@
-//go:build !sidecar_http && !ios_extension
+//go:build !sidecar_http && !js && !ios_extension
 
 // Bounce addresses under strict mode (mail_bounce.go's strict row; QD-1129): the envelope sender of a From in a custom
 // domain GET /mail/status names in strict mode is the mailbox's own bounce under b.<domain>, its record in the
