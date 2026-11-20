@@ -87,6 +87,7 @@ models:
       - {at: 2026-11-19, commit: 6cfabbc46b5fb712a2754667a3172d5363c5f1d9, tlc: d8fb231, mode: mutants-drop, result: pass, sources_sha256: 4c837dce81ba17ce161cb70770314809df7f672f809b13967209de618f5cd050, states: 3097467, depth: 17, seconds: 523}
       - {at: 2026-11-19, commit: 6cfabbc46b5fb712a2754667a3172d5363c5f1d9, tlc: d8fb231, mode: stories-drop, result: pass, sources_sha256: 4c837dce81ba17ce161cb70770314809df7f672f809b13967209de618f5cd050, states: 33723440, depth: 36, seconds: 3837}
       - {at: 2026-11-19, commit: 6cfabbc46b5fb712a2754667a3172d5363c5f1d9, tlc: d8fb231, mode: mutants, result: pass, sources_sha256: 4c837dce81ba17ce161cb70770314809df7f672f809b13967209de618f5cd050, states: 11681051, depth: 65, seconds: 4541}
+      - {at: 2026-11-20, commit: 047aec69913fb145d89c018e8ebb95581673eda5, tlc: d8fb231, mode: live-drop, result: pass, sources_sha256: 9718f020c71e1ef13375d83a359d2049c11ceb55de65b806abad22d74d2aa8d4, states: 4334385, depth: 36, seconds: 3901}
 
   - spec: StoreSettle
     owners: [EVS1-M2-02]
