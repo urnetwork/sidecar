@@ -15,6 +15,12 @@
 //	          ERASE's note naming moderation and no request; the same id again finds nothing; B's next card brings
 //	          its other run back under a key no ERASE named; B's device hears of the moderation as a notice, and no
 //	          other device raises anything
+//	return    the removal's push tombstoned each run the card held one above its version, so no entry of B's other
+//	          run stands live; B's next card, its first since D removed the path, carries the run two above with no
+//	          content change (QD-1106, owner decision 645): A's directory_list shows it at that version, its document
+//	          stands live in the cards ref's index above the tombstone, and search_agents on A's search device finds
+//	          it, while the moderated run stays out of all three; a card B rewrites after, no removal between, keeps
+//	          the version
 //	revoke    R revokes P, seeded with A's card and its index document. A's daemon renews its run before it reads
 //	          the marker, so a copy naming P is written after the request. D's pass rewrites P's file and the index
 //	          files under fresh keys and leaves A's card waiting; a pass with nothing new sends nothing; once A read
@@ -25,8 +31,8 @@
 //	roll-up   R announces a repo and, AnnounceSpacing on, another, both into the bucket the case's cards fill; at
 //	          RollUpAge past the second, short of the directory's searchable_days (90) for it and past them for the
 //	          first, D rolls every expired bucket into all through SEARCH's roller: the roll-up drops no document, A's
-//	          run, private by then, and both announcements standing in the index as before, and no document the
-//	          erasures listed comes back
+//	          run, private by then, B's run back from its moderation and both announcements standing in the index as
+//	          before, and no document the erasures listed comes back
 //	mask      F's search device follows the cards ref's index, its scope giving the directory's searchable_days: a
 //	          search finds the second announcement in all and not the first, which it counts masked; F reads the first
 //	          by its id; raised past the first's age, the next search finds both, with no push to the index between the
@@ -37,10 +43,10 @@
 //	          as the steps read it each time the ref's head moves (FI-19's index clause); and every ERASE the repo holds
 //	          is a directory admin's (FI-25's admin scope, I-EVS-16)
 //
-// Not here: whether B's other run is searchable again once its card is back: the removal's push left its document a
-// tombstone one version above the item's, which the card written again at the item's own version does not pass
-// (question record-m10-06-moderated-card-index-tombstone), so the case holds that run to the fold alone; which
-// policy's searchable_days a composition's scope source gives the cards ref, since none is built (question
+// Not here: a moderated run its still-running writer carries again on the card that returns, which nothing tells the
+// writer to leave out (question card-version-rise-after-removal-moderated-run-carried-again): B's card here holds its
+// other run alone, as the erasure row's "its writer's other runs coming back" reads; which policy's searchable_days a
+// composition's scope source gives the cards ref, since none is built (question
 // fs87-rollup-mask-leg-cards-searchable-policy): F's scope gives the directory's default, as the row reads it; FI-19
 // through the search oracle, whose ledger this world does not feed, nor can it hold a directory repo: the case holds
 // the same rule on the slot objects and the index's own files; a runner killed mid-erasure, which FS-99's cards case
@@ -187,6 +193,16 @@ func (self *fs87Index) liveVersions(ctx context.Context, device string, names ..
 		versions = append(versions, held.Live[key])
 	}
 	return versions, nil
+}
+
+// The version written carries run's item at, 0 where it holds none.
+func fs87IndexCarried(written *sidecar.DirectoryCardWritten, run *DirEvsRun) uint64 {
+	for _, item := range written.Items {
+		if sidecar.Id(item.GetAnnouncementId()) == run.AnnouncementId {
+			return item.GetVersion()
+		}
+	}
+	return 0
 }
 
 // The version the cards ref's index holds a document live at, as device reads the index; 0 for none.
@@ -394,8 +410,9 @@ func Fs87IndexOnEvsOf(net *Net, settings *Fs87IndexSettings) *Schedule {
 				return err
 			}
 			state.noted = noted
-			if version, err := state.liveVersion(ctx, fs87IndexAdmin, state.runDocument(fs87IndexWriterB, state.erased)); err != nil || version != 2 {
-				return fmt.Errorf("the run's document before its erasure, live at version %d: %v", version, err)
+			names := [][]byte{state.runDocument(fs87IndexWriterB, state.erased), state.runDocument(fs87IndexWriterB, state.kept)}
+			if versions, err := state.liveVersions(ctx, fs87IndexAdmin, names...); err != nil || !slices.Equal(versions, []uint64{2, 1}) {
+				return fmt.Errorf("B's runs' documents before the erasure, live at versions %v: %v", versions, err)
 			}
 			return nil
 		}},
@@ -422,6 +439,10 @@ func Fs87IndexOnEvsOf(net *Net, settings *Fs87IndexSettings) *Schedule {
 			state.erasedPaths = append(state.erasedPaths, cardPath)
 			if err := state.noErasedDocumentLive(ctx, fs87IndexAdmin, false); err != nil {
 				return err
+			}
+			// the removal's push tombstoned the card's other run too, one above its version
+			if version, err := state.liveVersion(ctx, fs87IndexAdmin, state.runDocument(fs87IndexWriterB, state.kept)); err != nil || version != 0 {
+				return fmt.Errorf("B's other run's document after the removal, live at version %d: %v", version, err)
 			}
 			state.moderated = true
 			erasures, err := world.Erasures(ctx, fs87IndexAdmin)
@@ -454,9 +475,14 @@ func Fs87IndexOnEvsOf(net *Net, settings *Fs87IndexSettings) *Schedule {
 		}},
 		{Advance: settings.WriteSpacing},
 		{Actor: fs87IndexWriterB, Action: func(ctx context.Context, net *Net) error {
-			// B's next card brings its other run back, under a key no ERASE named
-			if _, err := world.WriteCard(ctx, fs87IndexWriterB, keptItem(net)); err != nil {
+			// B's next card brings its other run back, under a key no ERASE named, two above the version the removal
+			// took, its first since another signer removed the path
+			written, err := world.WriteCard(ctx, fs87IndexWriterB, keptItem(net))
+			if err != nil {
 				return err
+			}
+			if version := fs87IndexCarried(written, state.kept); version != 3 {
+				return fmt.Errorf("B's card back after the removal carries its run at version %d", version)
 			}
 			erasure, err := world.Erasure(fs87IndexWriterB)
 			if err != nil {
@@ -489,6 +515,86 @@ func Fs87IndexOnEvsOf(net *Net, settings *Fs87IndexSettings) *Schedule {
 			}
 			if alarms := world.Device(fs87IndexWriterA).Alarms(); len(alarms) != 0 {
 				return fmt.Errorf("another member's device alarmed at B's card's removal: %v", alarms)
+			}
+			return nil
+		}},
+		{Actor: fs87IndexWriterA, Action: func(ctx context.Context, net *Net) error {
+			// B's run is back: A's directory_list shows it at the version its card carries, and its document stands live
+			// above the removal's tombstone; the moderated run is in neither
+			items, err := world.Device(fs87IndexWriterA).Client.List(&sidecar.DirectoryFilter{Kind: sidecar.DirectoryAnnouncementKindRun})
+			if err != nil {
+				return err
+			}
+			shown := map[sidecar.Id]*protocol.Announcement{}
+			for _, item := range items {
+				shown[item.Key.AnnouncementId] = item.Announcement
+			}
+			if item := shown[state.kept.AnnouncementId]; item == nil || item.GetVersion() != 3 || shown[state.erased.AnnouncementId] != nil {
+				return fmt.Errorf("A's directory_list once B's card is back: %v", shown)
+			}
+			names := [][]byte{state.runDocument(fs87IndexWriterB, state.kept), state.runDocument(fs87IndexWriterB, state.erased)}
+			if versions, err := state.liveVersions(ctx, fs87IndexAdmin, names...); err != nil || !slices.Equal(versions, []uint64{3, 0}) {
+				return fmt.Errorf("B's runs' documents once its card is back, live at versions %v: %v", versions, err)
+			}
+			return nil
+		}},
+		{Actor: fs87IndexWriterA, Action: func(ctx context.Context, net *Net) error {
+			// search_agents on A's search device, following the cards ref's index, finds B's run back from its
+			// moderation and nothing of the moderated one
+			search, err := world.SearchDevice(ctx, fs87IndexWriterA, sidecar.DefaultSidecarSettings().Search, sidecar.SearchConditions{DaemonHost: true})
+			if err != nil {
+				return err
+			}
+			defer search.Close()
+			if err := search.Sync(ctx); err != nil {
+				return fmt.Errorf("A's index sync: %w", err)
+			}
+			// the agent labels and run titles search_agents shows for task, untrusted text included
+			agents := func(task string) (map[string]bool, error) {
+				result, err := search.Engine().Agents(ctx, sidecar.NewId(), world.NetworkId, &sidecar.SearchAgentsRequest{
+					Task: task, Include: true, Reader: world.SearchReader(fs87IndexWriterA),
+					Fold:  world.Device(fs87IndexWriterA).Client.SearchAgentsFold,
+					Taint: func(ctx context.Context) error { return nil },
+				})
+				if err != nil {
+					return nil, fmt.Errorf("search_agents for %q: %w", task, err)
+				}
+				shown := map[string]bool{}
+				for _, group := range result.Groups {
+					shown[group.AgentLabel] = true
+					for _, run := range group.Runs {
+						shown[run.Title] = true
+					}
+				}
+				return shown, nil
+			}
+			shown, err := agents("changelog")
+			if err != nil {
+				return err
+			}
+			if !shown[state.kept.Title] || !shown[state.kept.AgentLabel] {
+				return fmt.Errorf("search_agents misses B's run back from its moderation: %v", slices.Sorted(maps.Keys(shown)))
+			}
+			if shown, err = agents(state.erased.AgentLabel); err != nil {
+				return err
+			}
+			if len(shown) != 0 {
+				return fmt.Errorf("search_agents shows the moderated run: %v", slices.Sorted(maps.Keys(shown)))
+			}
+			return nil
+		}},
+		{Advance: settings.WriteSpacing},
+		{Actor: fs87IndexWriterB, Action: func(ctx context.Context, net *Net) error {
+			// a card B rewrites with no removal between keeps the version, its document where the return put it
+			written, err := world.WriteCard(ctx, fs87IndexWriterB, keptItem(net))
+			if err != nil {
+				return err
+			}
+			if version := fs87IndexCarried(written, state.kept); version != 3 {
+				return fmt.Errorf("B's card rewritten carries its run at version %d", version)
+			}
+			if version, err := state.liveVersion(ctx, fs87IndexAdmin, state.runDocument(fs87IndexWriterB, state.kept)); err != nil || version != 3 {
+				return fmt.Errorf("B's run's document after the rewrite, live at version %d: %v", version, err)
 			}
 			return nil
 		}},
@@ -649,9 +755,13 @@ func Fs87IndexOnEvsOf(net *Net, settings *Fs87IndexSettings) *Schedule {
 		{Advance: settings.RollUpAge},
 		{Actor: fs87IndexAdmin, Action: func(ctx context.Context, net *Net) error {
 			admin := world.Device(fs87IndexAdmin)
-			// A's run, private since it read the marker, and the late announcements are the documents that stand
-			names := [][]byte{state.runDocument(fs87IndexWriterA, state.runInP), state.repoDocument(fs87IndexOlderRepo), state.repoDocument(fs87IndexNewerRepo)}
-			standing := []uint64{2, 1, 1}
+			// A's run, private since it read the marker, B's run back from its moderation and the late announcements are
+			// the documents that stand
+			names := [][]byte{
+				state.runDocument(fs87IndexWriterA, state.runInP), state.runDocument(fs87IndexWriterB, state.kept),
+				state.repoDocument(fs87IndexOlderRepo), state.repoDocument(fs87IndexNewerRepo),
+			}
+			standing := []uint64{2, 3, 1, 1}
 			if versions, err := state.liveVersions(ctx, fs87IndexAdmin, names...); err != nil || !slices.Equal(versions, standing) {
 				return fmt.Errorf("the documents before the roll-up, live at versions %v: %v", versions, err)
 			}
