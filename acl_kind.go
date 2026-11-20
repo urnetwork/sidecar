@@ -56,11 +56,15 @@ type AclKindDefault struct {
 	// Whether * and evs:* reach it: general and record only (§8.4).
 	Wildcard bool
 	// What a rule naming a repo of the kind outright may add: everything for general and record, readers too for
-	// team_record and mailcfg, deposit alone for vault and mailbox, nothing for config, directory and secret.
+	// team_record and mailcfg, deposit alone for vault and mailbox, nothing for config, directory and secret. A
+	// mailcfg whose row names an owner, a Team scope's own, takes nothing whatever its kind's row says (QD-1107;
+	// acl_evs.go).
 	DocumentRights AclEvsRights
-	// Whether only its owner's consent adds a reader (§8.5).
+	// Whether only its owner's consent adds a reader (§8.5). A Team scope's own mailcfg is owner-bound by its row,
+	// not its kind (aclRepoState.ownerBound).
 	OwnerBound bool
-	// What the tag:mail mail indexers hold by the kind (owner decision 150), which compiles as a rule.
+	// What the tag:mail mail indexers hold by the kind (owner decision 150), which compiles as a rule. For mailcfg
+	// it is the network's alone: a Team scope's own is never the rule's target (QD-1107).
 	MailIndexers AclEvsRights
 }
 
