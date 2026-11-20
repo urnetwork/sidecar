@@ -13,10 +13,10 @@
 //	     falls when it deletes them. At the hold's deadline api's hold pass ends it, evs's hold-end sweep queued before
 //	     the object goes, and the job's next round deletes every held candidate after an incremental mark and verify,
 //	     the stored count not moving again. Its twin, Fs92NoHold, places no hold: the job deletes the three at once. The
-//	     hold is a §2258A hold whose year ends 10 days on: Fs92HoldOutlastsTheDropTable, the same with a 90-day
-//	     §2703(f) order, finds the held drop's table entry evicted 30 days after it moved to held, so its deletions
-//	     never resume (question abuse-m10-01-held-drop-outlives-its-table-entry, answered as QD-1113), and runs once
-//	     evsservice's drop table keeps a held entry as that answer says
+//	     hold is a §2258A hold whose year ends 10 days on. Fs92HoldOutlastsTheDropTable runs the same with a 90-day
+//	     §2703(f) order, past the 30 days an ended drop's entry is kept: the table keeps the held entry while the
+//	     listing lets the drop go as its twin's would, and at the order's end the job deletes every held candidate,
+//	     the drop leaving the table at once (owner decision 643; fs92_hold_outlasts.go)
 //	(b)  Fs92HoldBetweenVerifyAndDelete: the job held after its verify, a hold placed, the clock moved past §11.13's 5 s
 //	     cache (owner decision 629), the job released: nothing is deleted. Fs92HoldBetweenDeletes: held after its first
 //	     DELETE, the hold placed and the clock moved past the cache: that DELETE stands, none issues after the reread,
@@ -744,10 +744,8 @@ func Fs92DeleteInFlight(net *Net) *Schedule {
 	return schedule
 }
 
-// See the file header: (a) with a 90-day §2703(f) hold, which outlasts the drop table's 30 days for an ended drop.
-// Its run waits on QD-1113's change to evsservice's drop table (question
-// abuse-m10-01-held-drop-outlives-its-table-entry): a held entry neither expires nor is evicted, nor listed past an
-// ended drop's 30 days.
+// See the file header: (a) with a 90-day §2703(f) hold, which outlasts the drop table's 30 days for an ended drop
+// (fs92OutlastingSteps).
 func Fs92HoldOutlastsTheDropTable(net *Net) *Schedule {
 	schedule := fs92Schedule(net, fs92OutlastsTheDropTable)
 	schedule.Twin = Fs92NoHold
@@ -810,7 +808,11 @@ func fs92Schedule(net *Net, variant fs92Variant) *Schedule {
 			{Actor: "reader", Action: world.ReadVersionEnds("reader", "x.txt", 1, EvsWorldReadsDropped())},
 			{Actor: "check", Action: world.StoredFell(stored, true)},
 		}...)
-	case fs92BeforeTheDrop, fs92OutlastsTheDropTable:
+	case fs92OutlastsTheDropTable:
+		steps = append(steps, job(false))
+		steps = append(steps, held...)
+		steps = append(steps, fs92OutlastingSteps(history, stored, job)...)
+	case fs92BeforeTheDrop:
 		steps = append(steps, job(false))
 		steps = append(steps, held...)
 		steps = append(steps, []*Step{

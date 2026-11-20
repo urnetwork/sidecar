@@ -150,6 +150,9 @@ type indexRefusal struct {
 	retryAfter time.Duration
 	// A quota refusal's limit.
 	quota *QuotaRefusal
+	// A quota refusal that is a full metadata cluster's 507 CLUSTER_FULL, which the index waits on as on the storage
+	// limit's (QD-1118), and not the network's own limit: its text says so.
+	clusterFull bool
 	// An unknown outcome's push.
 	pushId Id
 }
@@ -164,6 +167,9 @@ func (self *indexRefusal) Error() string {
 	case indexRefusalRetry:
 		return fmt.Sprintf("index push refused: retry after %s", self.retryAfter)
 	case indexRefusalQuota:
+		if self.clusterFull {
+			return "index push refused: storage cluster full"
+		}
 		return "index push refused: quota"
 	case indexRefusalOutcomeUnknown:
 		return "index push outcome unknown"
