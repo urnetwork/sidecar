@@ -3,7 +3,9 @@
 // The eraser's history walk over EvsRepo on real engines, for the seam's tests (QD-1110; question
 // mail-m10-04-index-eraser-history-reads; SEARCH-M10-17's indexEvsStore.Retained and Read): what the store names
 // beside each live index path's newest version, and what its Read gives for each one evs still serves, as
-// IndexEraser.history reads them. Only the sidecar_testhooks build has it, which no release leg is (§22.4).
+// IndexEraser.history reads them; and the files at the head holding any one document by its doc_key, every chunk of a
+// message as an erasure's CUT lists it, for MAIL-M10-04's rows. Only the sidecar_testhooks build has it, which no
+// release leg is (§22.4).
 
 package sidecar
 
@@ -42,4 +44,11 @@ func SearchTestEvsRetainedVersions(ctx context.Context, repo *EvsRepo, refName [
 		versions = append(versions, listed)
 	}
 	return versions, retained.complete, nil
+}
+
+// Every index file of repo's file-mode ref refName (nil: main) at its head holding an entry, row or tombstone of the
+// document docKey names, read through EvsRepo as every index builder reads it: SearchTestEvsFilesHolding for any chunk,
+// the doc_key as SearchOracle derives it.
+func SearchTestEvsFilesHoldingKey(ctx context.Context, repo *EvsRepo, refName []byte, docKey [indexIdByteCount]byte) ([]SearchTestHeld, error) {
+	return searchTestFilesHolding(ctx, newIndexEvsStore(repo, refName, false), docKey, DefaultIndexFormatSettings())
 }
