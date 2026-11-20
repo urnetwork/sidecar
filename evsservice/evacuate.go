@@ -395,6 +395,9 @@ type evacuateMinute struct {
 	moveRepoIds map[sidecar.Id]bool
 	// the repos whose records were dropped as an unheld shred's, reread before its batches go
 	shredRepoIds map[sidecar.Id]bool
+	// the repos a staged segment of whose records went unwritten on a read of hold/ (droppedStaged), whose holds each
+	// batch DELETE reads again; nil until one does
+	stagedDropRepoIds map[sidecar.Id]bool
 	// the slots its dead records list, each decided on its object before its batches go (DESIGN-DETAILS 14.2.5); none
 	// while EvacuatorSettings.DeleteDeadSlots is off
 	deadSlots []*evacuateSlot
@@ -864,7 +867,9 @@ func (self *evacuateRun) deleteDeadSlot(minute *evacuateMinute, slot *evacuateSl
 
 // Deletes the minute's batches once nothing holds them: every repo with a kept record in it moved, every repo
 // dropped as a shred's still an unheld shred's, and every slot its dead records list decided (deleteDeadSlot), of
-// which none is queued while EvacuatorSettings.DeleteDeadSlots is off (I-EVS-7, I-EVS-2).
+// which none is queued while EvacuatorSettings.DeleteDeadSlots is off (I-EVS-7, I-EVS-2). Each batch DELETE rechecks
+// as it issues, on hold/ held to its bound, every shred's repo and every repo a staged segment was dropped of
+// (recheckBatchDelete; owner decision 629), and a hold that now keeps either leaves the batches for the next run.
 func (self *evacuateRun) deleteMinute(minute *evacuateMinute) {
 	if minute.waiting != "" {
 		return
@@ -899,7 +904,14 @@ func (self *evacuateRun) deleteMinute(minute *evacuateMinute) {
 			minute.wait("stopped")
 			return
 		}
-		if err := self.deleteKey(minute.minute, batch.key, nil); err != nil {
+		recheck := func(ctx context.Context) error {
+			return self.recheckBatchDelete(ctx, minute)
+		}
+		if err := self.deleteKey(minute.minute, batch.key, recheck); err != nil {
+			if errors.Is(err, errEvacuateHeld) || errors.Is(err, errEvacuateRepoWaits) {
+				minute.wait("batch held")
+				return
+			}
 			minute.wait("batch not deleted")
 			self.fail(err)
 			return

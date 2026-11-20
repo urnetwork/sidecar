@@ -9,7 +9,10 @@
 //	         under 60 s earlier, or when a hold covering the repo keeps it (its batch predates the hold's placement)
 //	dropped  otherwise: it goes with its batch, never reaching seg/; except while §19.11's purge mode is observe, which
 //	         keeps replaced content: such a segment is written too, and logged as a candidate, for the turn-on pass
-//	         to delete (plan-EVS2-small-readings#6)
+//	         to delete (plan-EVS2-small-readings#6). Its batch's DELETE is the delete the hold read here judged for,
+//	         so the minute notes the repo, and each of its batches' DELETEs reads hold/ again, held to its bound as it
+//	         issues (recheckBatchDelete; owner decision 629): a hold that now keeps the batch's minute leaves the
+//	         batches, and the next run writes the segment for the hold
 //
 // The newest version is read from the cluster at the decision (PurgeNewestReader). A replacement whose time the head
 // no longer shows, or a newest version that cannot be read for a reason other than the store's, writes the segment:
@@ -187,6 +190,10 @@ func (self *evacuateRun) decideStaged(minute *evacuateMinute, place *protocol.Ev
 		} else {
 			self.countStaged(versionlessStagedDropped)
 			self.result.StagedDroppedCount += 1
+			if ok {
+				// dropped on a hold/ read that the batch's DELETE reads again
+				minute.droppedStaged(record.RepoId)
+			}
 		}
 		if !write || heldOnly {
 			// dropped, or kept only for a hold: either way out of the stored count
@@ -205,6 +212,15 @@ func (self *evacuateRun) decideStaged(minute *evacuateMinute, place *protocol.Ev
 func evacuateStoreError(err error) bool {
 	var unknown *sidecar.BlobUnknownError
 	return errors.Is(err, sidecar.ErrBlobHeld) || errors.As(err, &unknown) || errors.Is(err, sidecar.ErrBlobClusterUnknown)
+}
+
+// Notes that a staged segment of repoId's records went unwritten on a read of hold/, so each of the minute's batch
+// DELETEs reads it again (recheckBatchDelete).
+func (self *evacuateMinute) droppedStaged(repoId sidecar.Id) {
+	if self.stagedDropRepoIds == nil {
+		self.stagedDropRepoIds = map[sidecar.Id]bool{}
+	}
+	self.stagedDropRepoIds[repoId] = true
 }
 
 func (self *evacuateRun) countStaged(outcome string) {
