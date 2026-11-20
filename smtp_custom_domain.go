@@ -18,8 +18,9 @@
 // A custom domain's DKIM selectors are SmtpDkimKeys' as any domain's: d= is the header From's domain, which Z5 holds
 // literally, so a custom-domain send signs under that domain or fails, and its selectors go through POST
 // /smtp/dkim-keys naming it. The server writes their records at <sel>._domainkey.<net>.<root>, which the customer's
-// delegated _domainkey.<domain> (dnsservice.DelegatedZones) or a per-selector CNAME answers; under CNAME mode a new
-// selector signs only once the domain answers it (QD-1130), which SmtpDkimKeys does not do yet.
+// delegated _domainkey.<domain> (dnsservice.DelegatedZones) or a per-selector CNAME answers; a new selector signs
+// only once the device's own DoH finds the domain answering it (QD-1130, smtp_dkim_answer.go), and GET /network/dns
+// names the CNAMEs a domain owes until then.
 //
 // On every leg but the extension's; nothing here does I/O.
 

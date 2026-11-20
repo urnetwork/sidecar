@@ -16,8 +16,11 @@
 // A selector signs only once the server has answered its publish, and a send pins the one it declared
 // at its preamble, so a rotation in between never leaves it signing under a key that has gone: a
 // retired key stays in the keychain DkimRetiredKeepTimeout, as long as the server keeps it in DNS, and
-// longer while a send still holds it. A Locked keychain answers ErrSidecarStoreLocked, which holds the
-// send, and a Failed one ErrSidecarStoreFailed, on which nothing is generated (D-CORE-15).
+// longer while a send still holds it. A Team custom domain's selector signs only once the domain answers
+// it as well, through the device's own DoH (QD-1130), which smtp_dkim_answer.go holds: until then the
+// selector it replaces keeps signing, and a domain's first selector holds the send. A Locked keychain
+// answers ErrSidecarStoreLocked, which holds the send, and a Failed one ErrSidecarStoreFailed, on which
+// nothing is generated (D-CORE-15).
 //
 // Keys reach testHookSecret when made and each time one is read to sign. No key, and no signing
 // domain, reaches a log or an error: logs name selectors, which are opaque and random (I-7, I-13).
@@ -92,6 +95,9 @@ const (
 	smtpDkimStatePending smtpDkimState = "pending"
 	// The server answered: it signs until a rotation retires it.
 	smtpDkimStatePublished smtpDkimState = "published"
+	// The server answered, and a Team custom domain does not answer it yet at <sel>._domainkey.<domain>
+	// (QD-1130): it never signs, and the selectors it replaces stay published and sign meanwhile.
+	smtpDkimStateAwaiting smtpDkimState = "awaiting"
 	// A retire sent and not yet answered. It never signs again, and the retire is sent again.
 	smtpDkimStateRetiring smtpDkimState = "retiring"
 	// The server keeps it in DNS 7 days; here its key stays as long, or while a send holds it.
@@ -104,11 +110,18 @@ type smtpDkimRecord struct {
 	Selector string        `json:"selector"`
 	Domain   string        `json:"domain"`
 	State    smtpDkimState `json:"state"`
-	// While pending: the selectors the same call retires, which a rotation names.
-	Replaces      []string `json:"replaces,omitempty"`
-	CreateTimeMs  int64    `json:"create_time_ms"`
-	PublishTimeMs int64    `json:"publish_time_ms,omitempty"`
-	RetireTimeMs  int64    `json:"retire_time_ms,omitempty"`
+	// While pending: the selectors the same call retires, which a rotation names. For a selector that
+	// awaits its domain's answer (Await), the selectors that answer retires instead, named until then.
+	Replaces []string `json:"replaces,omitempty"`
+	// Made for a Team custom domain whose answer it awaits before it signs (QD-1130): its publish
+	// retires nothing, and it goes awaiting once answered.
+	Await         bool  `json:"await,omitempty"`
+	CreateTimeMs  int64 `json:"create_time_ms"`
+	PublishTimeMs int64 `json:"publish_time_ms,omitempty"`
+	// When the domain was found answering it, which is when it began to sign; zero for a selector that
+	// awaited nothing.
+	AnswerTimeMs int64 `json:"answer_time_ms,omitempty"`
+	RetireTimeMs int64 `json:"retire_time_ms,omitempty"`
 	// DER SubjectPublicKeyInfo, which is what the server publishes.
 	PublicKey []byte `json:"public_key"`
 }
@@ -182,12 +195,13 @@ func decodeSmtpDkimRecord(name string, value []byte) (*smtpDkimRecord, error) {
 		return nil, fmt.Errorf("%w: a dkim selector record does not decode", ErrSidecarStoreFailed)
 	}
 	switch record.State {
-	case smtpDkimStatePending, smtpDkimStatePublished, smtpDkimStateRetiring, smtpDkimStateRetired:
+	case smtpDkimStatePending, smtpDkimStatePublished, smtpDkimStateAwaiting, smtpDkimStateRetiring, smtpDkimStateRetired:
 	default:
 		return nil, fmt.Errorf("%w: a dkim selector record has an unknown state", ErrSidecarStoreFailed)
 	}
 	if record.Version != smtpDkimRecordVersion || !smtpDkimSelectorForm(record.Selector) || name != smtpDkimSelectorRecordName(record.Selector) ||
-		!smtpDkimDomainForm(record.Domain) || !smtpDkimPublicKeyValid(record.PublicKey) {
+		!smtpDkimDomainForm(record.Domain) || !smtpDkimPublicKeyValid(record.PublicKey) ||
+		(record.State == smtpDkimStateAwaiting && !record.Await) {
 		return nil, fmt.Errorf("%w: a dkim selector record is malformed", ErrSidecarStoreFailed)
 	}
 	for _, replaced := range record.Replaces {
@@ -207,18 +221,23 @@ type SmtpDkimKeys struct {
 	log       Logger
 
 	// Orders every read, decision and write of the records, and is held across POST
-	// /smtp/dkim-keys, so two sends never make two keys for one domain and a rotation is decided
-	// once. It is never stateLock and never taken under it.
+	// /smtp/dkim-keys and the DoH lookup of a custom domain's answer, so two sends never make two keys
+	// for one domain and a rotation is decided once. It is never stateLock and never taken under it.
 	publishLock sync.Mutex
+	// When each selector that awaits its domain's answer was last looked up, under publishLock, so a
+	// lookup runs at most once each DkimAnswerRetryInterval. In memory: a restart looks up at once.
+	answerLookupTimes map[string]time.Time
 
 	stateLock sync.Mutex
 	// How many sends hold each selector. A purge leaves a held one's key in place.
 	pinnedSelectorCounts map[string]int
+	// What tells a Team custom domain's answer (SetDomainAnswers); nil when no domain waits for one.
+	answers *SmtpDkimDomainAnswers
 }
 
 // The keys under secrets, which is this network's keychain.ur namespace SmtpDkimSecretsNamespace,
 // published through publisher. settings must have passed validate; nil clock is real time and nil
-// log silence.
+// log silence. No domain waits for its answer until SetDomainAnswers installs what tells it.
 func NewSmtpDkimKeys(secrets SidecarSecrets, publisher SmtpDkimPublisher, settings *SmtpSenderSettings, clock Clock, log Logger) *SmtpDkimKeys {
 	if log == nil {
 		log = NewNoopLogger()
@@ -229,6 +248,7 @@ func NewSmtpDkimKeys(secrets SidecarSecrets, publisher SmtpDkimPublisher, settin
 		settings:             settings,
 		clock:                clockOrReal(clock),
 		log:                  log,
+		answerLookupTimes:    map[string]time.Time{},
 		pinnedSelectorCounts: map[string]int{},
 	}
 }
@@ -331,10 +351,15 @@ func (self *SmtpDkimKeys) pinned(selector string) bool {
 // made. A rotation that fails for any reason but the keychain leaves the old selector signing, since
 // the server still holds it, and the next call tries again.
 //
+// A Team custom domain's new selector signs only once the domain answers it as well (QD-1130,
+// smtp_dkim_answer.go): until then a rotation keeps signing under the selector it replaces, and the
+// domain's first selector answers ErrSmtpDkimSelectorUnanswered, which holds the send as deferred. Such
+// a domain rotates DkimRetiredKeepTimeout before DkimRotateTimeout, and never while a selector awaits.
+//
 // domain is d=, which the From's domain must equal: <net>.<root>, a burner's <blabel>.<net>.<root> or
 // a verified Team domain. Errors: ErrSmtpDkimDomain; ErrSidecarStoreLocked, which holds the send;
 // ErrSidecarStoreFailed, on which nothing is made; ErrSmtpDkimPublishRefused with the server's reason;
-// or the transport's, after which the same key is sent again.
+// ErrSmtpDkimSelectorUnanswered; or the transport's, after which the same key is sent again.
 func (self *SmtpDkimKeys) Current(ctx context.Context, domain string) (*SmtpDkimSelector, error) {
 	domain = strings.ToLower(domain)
 	if !smtpDkimDomainForm(domain) {
@@ -352,7 +377,10 @@ func (self *SmtpDkimKeys) Current(ctx context.Context, domain string) (*SmtpDkim
 		published, err := self.sendPendingWithPublishLock(ctx, records, pending, now)
 		switch {
 		case err == nil:
-			current = published
+			// an awaiting one is taken up below
+			if published.State == smtpDkimStatePublished {
+				current = published
+			}
 		case current == nil || smtpDkimStoreError(err):
 			return nil, err
 		default:
@@ -362,16 +390,50 @@ func (self *SmtpDkimKeys) Current(ctx context.Context, domain string) (*SmtpDkim
 			return self.pinWithPublishLock(current), nil
 		}
 	}
+	// a selector awaiting its custom domain's answer stands for the domain's rotation, and its CNAME is
+	// owed already, so nothing new is made beside it
+	if awaiting := smtpDkimNewest(records, domain, smtpDkimStateAwaiting); awaiting != nil {
+		answered, err := self.answerWithPublishLock(ctx, records, awaiting, now)
+		switch {
+		case err != nil:
+			return nil, err
+		case answered:
+			current = awaiting
+		case current == nil:
+			return nil, ErrSmtpDkimSelectorUnanswered
+		}
+		return self.pinWithPublishLock(current), nil
+	}
 	switch {
 	case current == nil:
-		if current, err = self.publishNewWithPublishLock(ctx, records, domain, now); err != nil {
+		created, err := self.publishNewWithPublishLock(ctx, records, domain, now)
+		if err != nil {
 			return nil, err
 		}
-	case self.settings.DkimRotateTimeout <= now.Sub(time.UnixMilli(current.PublishTimeMs)):
+		if created.State == smtpDkimStateAwaiting {
+			answered, err := self.answerWithPublishLock(ctx, records, created, now)
+			if err != nil {
+				return nil, err
+			}
+			if !answered {
+				return nil, ErrSmtpDkimSelectorUnanswered
+			}
+		}
+		current = created
+	case self.rotateTimeout(domain) <= now.Sub(smtpDkimSignTime(current)):
 		rotated, err := self.publishNewWithPublishLock(ctx, records, domain, now)
 		switch {
-		case err == nil:
+		case err == nil && rotated.State == smtpDkimStatePublished:
 			current = rotated
+		case err == nil:
+			// a custom domain's: the old selector signs until the domain answers the new one
+			answered, err := self.answerWithPublishLock(ctx, records, rotated, now)
+			if err != nil {
+				return nil, err
+			}
+			if answered {
+				current = rotated
+			}
 		case smtpDkimStoreError(err):
 			return nil, err
 		default:
@@ -379,6 +441,24 @@ func (self *SmtpDkimKeys) Current(ctx context.Context, domain string) (*SmtpDkim
 		}
 	}
 	return self.pinWithPublishLock(current), nil
+}
+
+// How long domain's selector signs before a rotation starts: DkimRotateTimeout, and for a domain whose
+// new selectors await its answer DkimRetiredKeepTimeout less, the 7 days the selector it replaces would
+// stay in DNS (QD-1130), so the customer has them to publish the new one before the 90 days are up.
+func (self *SmtpDkimKeys) rotateTimeout(domain string) time.Duration {
+	if self.awaitsAnswer(domain) {
+		return self.settings.DkimRotateTimeout - self.settings.DkimRetiredKeepTimeout
+	}
+	return self.settings.DkimRotateTimeout
+}
+
+// When record began to sign: its domain's answer, or the server's for a selector that awaited none.
+func smtpDkimSignTime(record *smtpDkimRecord) time.Time {
+	if record.AnswerTimeMs != 0 {
+		return time.UnixMilli(record.AnswerTimeMs)
+	}
+	return time.UnixMilli(record.PublishTimeMs)
 }
 
 // A rotation that failed, by the old selector's name: opaque and random, unlike the domain (I-13).
@@ -451,13 +531,18 @@ func (self *SmtpDkimKeys) deleteWithPublishLock(records map[string]*smtpDkimReco
 }
 
 // The records as they stand, tidied under publishLock: key records with no selector record deleted,
-// retired selectors past DkimRetiredKeepTimeout that no send holds purged, and retires left
-// unanswered sent again. A failed resend is left for the next call: those selectors never sign
-// again, whatever the server answers.
+// retired selectors past DkimRetiredKeepTimeout that no send holds purged, retires left unanswered
+// sent again, and the lookup times of selectors that no longer await forgotten. A failed resend is
+// left for the next call: those selectors never sign again, whatever the server answers.
 func (self *SmtpDkimKeys) prepareWithPublishLock(ctx context.Context) (map[string]*smtpDkimRecord, error) {
 	records, err := self.loadWithPublishLock()
 	if err != nil {
 		return nil, err
+	}
+	for selector := range self.answerLookupTimes {
+		if record, ok := records[selector]; !ok || record.State != smtpDkimStateAwaiting {
+			delete(self.answerLookupTimes, selector)
+		}
 	}
 	keyNames, err := self.secrets.List(smtpDkimKeyRecordPrefix)
 	if err != nil {
