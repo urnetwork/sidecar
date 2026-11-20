@@ -187,7 +187,7 @@ var gateNextClusterSweep = RegisterGateSweep(&GateSweep{
 			Item: "§22.9's file-cluster suite on the new cluster, D-OPS-20's in-house MinIO build at its pinned commit (peers.yml's File clusters row): the store suite on the local stack and on T3's 4-host layouts, then on the new cluster's own hosts",
 			Tests: []*GateTest{
 				{Repo: "server", Package: ".", Tags: "sidecar_localstack", Names: []string{"TestFileClustersConformOnTheLocalStack"}},
-				{Repo: "server", Package: "./sidecart3", Tags: "sidecar_testhooks,sidecar_pending,sidecar_filecluster_t3", Names: []string{"TestT3LayoutTakesRequestsOnAFakeClock", "TestT3QuorumLossGives503AndAnUnknownOutcome", "TestT3DriveMissLeavesTheObjectReadableUntilASecondHostGoesDown", "TestT3AHostReturningHeals"}},
+				{Repo: "server", Package: "./sidecart3", Tags: "sidecar_testhooks,sidecar_pending,sidecar_filecluster_t3", Stores: true, Names: []string{"TestT3LayoutTakesRequestsOnAFakeClock", "TestT3QuorumLossGives503AndAnUnknownOutcome", "TestT3DriveMissLeavesTheObjectReadableUntilASecondHostGoesDown", "TestT3AHostReturningHeals"}},
 			},
 			External: "production: the new cluster's own hosts, before place_new names it, each build and upgrade on them a run",
 		},

@@ -12,10 +12,14 @@
 //	executing/verify   -> refused {verify}     the two scans disagree below M_r (F6, verify, EVSB-M10-05); pages
 //	executing/verify   -> observed             format2.drop: observe, D recorded in del files, nothing deleted
 //	executing/verify   -> executing/delete     snap-r written: the round's horizon and both snapshots
-//	executing/delete   -> held                 a hold covers the repo: the rest of D waits (owner decision 184)
+//	executing/delete   -> held                 a hold covers the repo: the rest of D waits (owner decision 184), and the
+//	                                           job gives up the slot, its record joining the held jobs (QD-1127)
 //	executing/delete   -> executing/horizon    D answered and some id young (F7): the next round
 //	executing/delete   -> done                 D answered and none young
-//	held               -> executing/horizon    every covering hold ended: a round over what was held
+//	held               -> done                 every covering hold ended and the slot free: the held job takes it
+//	                                           back in phase horizon for a round over what it held (10.2.8's held ->
+//	                                           executing/horizon is the job's), its drops reading done throughout and
+//	                                           moving to done at its end
 //
 // F0, before every phase: ClockCheck.Sure(); SettlePassed on the repo's metadata cluster and the segment cluster; repo/
 // active (deleted pauses, a restore resumes, shredding ends the job); the segment cluster's drive operations within
@@ -26,12 +30,21 @@
 // horizon, which its scans followed. A job that waits, for the horizon or a hold, holds no lease and sets retry_ms,
 // and taskworker wakes it then and each 10 min after.
 //
-// One job a repo, the table's one job record, taken by If-Match once none runs or its owner's lease lapsed LeaseLapse
-// ago by this instance's checked clock; owner until now + LeaseTime, renewed at each table write; a lost If-Match stops
-// the run at once. One job a segment cluster, by a Redis lease holding only the instance id. A job covers the pending
-// drops whose start has passed when it is taken, except that a drop whose cite bound the horizon has not passed is
-// left for the next job whenever another startable drop is past its own; if every startable drop is short, it covers
-// them and waits.
+// One job a repo, the table's one running job record, the slot, taken by If-Match once none runs or its owner's lease
+// lapsed LeaseLapse ago by this instance's checked clock; owner until now + LeaseTime, renewed at each table write; a
+// lost If-Match stops the run at once. One job a segment cluster, by a Redis lease holding only the instance id. A job
+// covers the pending drops whose start has passed when it is taken, except that a drop whose cite bound the horizon has
+// not passed is left for the next job whenever another startable drop is past its own; if every startable drop is
+// short, it covers them and waits.
+//
+// A job a hold stops gives up the slot (QD-1127; §11.13's table row): its record moves to the table's held jobs, with
+// no lease, so a drop made during the hold starts, runs and moves to held under it as its no-hold twin starts and ends,
+// listed, admitted and billed alike; an id a held job holds is left to it, whichever later drop lists it too, so no id
+// counts twice (deleteSet). A held job's files keep its ids withheld (DropIndex.Withheld) and stay for tidy.
+// At a held job's retry_ms a run with the slot free reads the holds: while one covers the repo, or none can tell, every
+// held job due waits HorizonRetryInterval more; once none does, the oldest held job takes the slot back, whatever its
+// own retry_ms, before any new job, and runs a round over what it held from its own files, its drops reading done
+// throughout (owner decision 184), the rest queued behind it, each due at once, one job at a time.
 //
 // Resolve and mark are EVSB-M10-04's, verify EVSB-M10-05's (server injects dropverify), and the deletes EVSB-M10-06's:
 // this file declares their seams (CONTRACTS.md C-16), and a job missing any of them starts nothing, so nothing is
@@ -568,21 +581,21 @@ func (self *DropJob) Run(ctx context.Context, clusterId string, repoId sidecar.I
 		return result, err
 	}
 	job := read.State.Job
-	if job != nil && job.Owner != (sidecar.Id{}) && job.Owner != self.instance && now.Before(time.UnixMilli(job.UntilMs).Add(self.settings.LeaseLapse)) {
+	switch {
+	case job != nil && job.Owner != (sidecar.Id{}) && job.Owner != self.instance && now.Before(time.UnixMilli(job.UntilMs).Add(self.settings.LeaseLapse)):
 		result.Waiting, result.Next = DropWaitLease, time.UnixMilli(job.UntilMs).Add(self.settings.LeaseLapse)
 		return result, nil
-	}
-	if job != nil && job.RetryMs != 0 && now.Before(time.UnixMilli(job.RetryMs)) {
+	case job != nil && job.RetryMs != 0 && now.Before(time.UnixMilli(job.RetryMs)):
 		result.Waiting, result.Next = DropWaitHorizon, time.UnixMilli(job.RetryMs)
-		if job.Held {
-			result.Waiting = DropWaitHold
-		}
 		return result, nil
-	}
-	if job == nil && !self.anyStartable(read.State, now) {
+	case job == nil && len(dueHeldJobs(read.State, now)) == 0 && !self.anyStartable(read.State, now):
+		// the slot free and nothing to run in it yet
 		result.Next = self.nextStart(read.State)
 		if !result.Next.IsZero() {
 			result.Waiting = DropWaitStart
+		}
+		if wake := heldWake(read.State); !wake.IsZero() && (result.Next.IsZero() || wake.Before(result.Next)) {
+			result.Waiting, result.Next = DropWaitHold, wake
 		}
 		return result, nil
 	}
@@ -611,9 +624,12 @@ func (self *DropJob) Run(ctx context.Context, clusterId string, repoId sidecar.I
 		return result, nil
 	}
 	defer self.releaseClusterLease(segmentCluster)
-	run := &dropJobRun{job: self, ctx: ctx, cluster: cluster, segmentCluster: segmentCluster, repoId: repoId, repoObject: repoObject, result: result}
+	run := &dropJobRun{
+		job: self, ctx: ctx, cluster: cluster, segmentCluster: segmentCluster, repoId: repoId, repoObject: repoObject, result: result,
+		last: read.State,
+	}
 	if job == nil {
-		err = run.start(read.State)
+		err = run.next(read.State)
 	} else {
 		err = run.resume(job.JobId)
 	}
@@ -621,7 +637,32 @@ func (self *DropJob) Run(ctx context.Context, clusterId string, repoId sidecar.I
 		// another instance holds it now: it is that instance's to finish
 		return result, nil
 	}
+	if err == nil {
+		run.wake()
+	}
 	return result, err
+}
+
+// The held jobs whose retry_ms has come, oldest first: each reads the holds again.
+func dueHeldJobs(state *DropTableState, now time.Time) []*DropJobRecord {
+	due := []*DropJobRecord{}
+	for _, job := range state.HeldJobs {
+		if !now.Before(time.UnixMilli(job.RetryMs)) {
+			due = append(due, job)
+		}
+	}
+	return due
+}
+
+// The earliest retry_ms of the held jobs, zero for none.
+func heldWake(state *DropTableState) time.Time {
+	var wake time.Time
+	for _, job := range state.HeldJobs {
+		if at := time.UnixMilli(job.RetryMs); wake.IsZero() || at.Before(wake) {
+			wake = at
+		}
+	}
+	return wake
 }
 
 // Whether every seam the current mode needs is built: resolve, mark and verify, and the deletes when drop is on.
@@ -757,6 +798,23 @@ type dropJobRun struct {
 	leaseUntil     time.Time
 	lastWrite      time.Time
 	files          *DropFiles
+	// the table as the run's last read or write left it
+	last *DropTableState
+}
+
+// One table write of the run's, as the job's update makes it, keeping what it left.
+func (self *dropJobRun) update(decide func(state *DropTableState, now time.Time) (bool, error)) (*DropTableRead, error) {
+	read, err := self.job.update(self.ctx, self.cluster, self.repoId, decide)
+	if err == nil {
+		self.last = read.State
+	}
+	return read, err
+}
+
+// Binds the run to jobId and its files.
+func (self *dropJobRun) bind(jobId sidecar.Id) {
+	self.jobId = jobId
+	self.files = NewDropFiles(self.segmentCluster, self.repoId, jobId, self.job.settings)
 }
 
 // The repo's barrier key.
@@ -787,7 +845,7 @@ func (self *dropJobRun) moved(state DropState, count int) {
 // A table write that holds this run's job: decide sees the record, and the write renews the lease. ErrDropLeaseLost
 // once another instance holds it or it left.
 func (self *dropJobRun) write(decide func(state *DropTableState, job *DropJobRecord, now time.Time) error) (*DropTableState, error) {
-	read, err := self.job.update(self.ctx, self.cluster, self.repoId, func(state *DropTableState, now time.Time) (bool, error) {
+	read, err := self.update(func(state *DropTableState, now time.Time) (bool, error) {
 		job, err := self.job.ownJob(state, self.jobId)
 		if err != nil {
 			return false, err
@@ -864,14 +922,28 @@ func setDropPhase(state *DropTableState, job *DropJobRecord, phase protocol.EvsD
 	}
 }
 
-// Ends the job: its record leaves, its files stay for tidy. Each executing drop ends in state, a held one done.
+// Ends the job: its record leaves, its files stay for tidy. Each executing drop ends in state, and each held one of
+// this job's, a held job resumed after its holds (snap-0 names them), done: the held entries of the jobs still held
+// stay theirs (QD-1127).
 func (self *dropJobRun) end(state DropState) error {
+	ownDropIds := map[sidecar.Id]bool{}
+	if state == DropStateDone && self.last != nil && self.last.Job != nil && self.last.Job.JobId == self.jobId && self.last.Job.Resumed {
+		file, err := self.files.Read(self.ctx, DropFileSnap, 0)
+		if err != nil {
+			return err
+		}
+		if file != nil {
+			for _, drop := range file.Covered {
+				ownDropIds[drop.DropId] = true
+			}
+		}
+	}
 	movedCount := 0
 	_, err := self.write(func(table *DropTableState, job *DropJobRecord, now time.Time) error {
 		movedCount = 0
 		for _, entry := range table.Drops {
-			// a held entry is this job's, one job a repo: it ends done once its held ids are deleted
-			if entry.State == DropStateExecuting || (state == DropStateDone && entry.State == DropStateHeld) {
+			// an executing entry is the running job's, one job a repo; a held one ends done once its held ids are deleted
+			if entry.State == DropStateExecuting || (entry.State == DropStateHeld && ownDropIds[entry.DropId]) {
 				entry.FreedByteCount, entry.HeldByteCount = job.FreedByteCount, job.HeldByteCount
 				table.setState(entry, state, dropDay(now))
 				movedCount += 1
@@ -937,10 +1009,10 @@ func (self *dropJobRun) start(state *DropTableState) error {
 		return err
 	}
 	starts := map[DropState]int{}
-	read, err := self.job.update(self.ctx, self.cluster, self.repoId, func(table *DropTableState, now time.Time) (bool, error) {
+	read, err := self.update(func(table *DropTableState, now time.Time) (bool, error) {
 		clear(starts)
 		if table.Job != nil {
-			// another instance started first
+			// another instance started first, or a held job took the slot back
 			return false, ErrDropLeaseLost
 		}
 		executing := 0
@@ -992,12 +1064,11 @@ func (self *dropJobRun) start(state *DropTableState) error {
 	return self.resume(jobId)
 }
 
-// Runs the job from where its record stands: resolve, a round, the deletes, or a held job's wait.
+// Runs the running job from where its record stands: resolve, a round or the deletes.
 func (self *dropJobRun) resume(jobId sidecar.Id) error {
-	self.jobId = jobId
-	self.files = NewDropFiles(self.segmentCluster, self.repoId, jobId, self.job.settings)
+	self.bind(jobId)
 	// take the lease: a lapsed one, a waiting job's, or this instance's own
-	state, err := self.job.update(self.ctx, self.cluster, self.repoId, func(table *DropTableState, now time.Time) (bool, error) {
+	read, err := self.update(func(table *DropTableState, now time.Time) (bool, error) {
 		job := table.Job
 		if job == nil || job.JobId != jobId {
 			return false, ErrDropLeaseLost
@@ -1013,31 +1084,129 @@ func (self *dropJobRun) resume(jobId sidecar.Id) error {
 	if err != nil {
 		return err
 	}
+	return self.loop(read.State)
+}
+
+// With the slot free: once a held job's retry_ms has come the holds are read, and once none covers the repo the oldest
+// held job takes the slot back, whatever its own retry_ms; while one does, or none can tell, every held job due waits
+// again. Then, unless a held job took it, a new job over the startable drops.
+func (self *dropJobRun) next(table *DropTableState) error {
+	now := self.job.clock.Now()
+	if 0 < len(dueHeldJobs(table, now)) {
+		cover, err := self.job.holds.CoveringRepo(self.ctx, self.repoId, self.repoObject)
+		if err == nil && cover != nil && !cover.Unknown && len(cover.Holds) == 0 {
+			return self.resumeHeld(table.HeldJobs[0].JobId)
+		}
+		if err := self.waitHeld(); err != nil {
+			return err
+		}
+		self.result.Waiting = DropWaitHold
+	}
+	if !self.job.anyStartable(table, now) {
+		return nil
+	}
+	return self.start(table)
+}
+
+// Every held job whose retry_ms has come waits HorizonRetryInterval more: a hold still covers the repo, or no reader can
+// tell. The write also evicts what has aged, as each wake of a held job does.
+func (self *dropJobRun) waitHeld() error {
+	_, err := self.update(func(table *DropTableState, now time.Time) (bool, error) {
+		changed := false
+		for _, job := range dueHeldJobs(table, now) {
+			job.RetryMs = now.Add(self.job.settings.HorizonRetryInterval).UnixMilli()
+			changed = true
+		}
+		return changed, nil
+	})
+	return err
+}
+
+// Held job jobId, whose holds have all ended, takes the slot back (QD-1127): its record leaves the held jobs for the
+// slot, resumed, its lease this instance's, in phase horizon for a round over what it held, which its own files name;
+// its drops keep reading done (owner decision 184). The held jobs behind it are due at once, so each takes the slot in
+// turn as soon as it is free. ErrDropLeaseLost when the slot is taken or the held job is gone.
+func (self *dropJobRun) resumeHeld(jobId sidecar.Id) error {
+	self.bind(jobId)
+	testHookBarrier(BarrierDropTakeBefore, self.key())
+	if err := self.job.step(BarrierDropTakeBefore, self.key()); err != nil {
+		return err
+	}
+	read, err := self.update(func(table *DropTableState, now time.Time) (bool, error) {
+		index := table.heldJobIndex(jobId)
+		if table.Job != nil || index < 0 {
+			return false, ErrDropLeaseLost
+		}
+		job := table.HeldJobs[index]
+		table.HeldJobs = slices.Delete(table.HeldJobs, index, index+1)
+		for _, queued := range table.HeldJobs {
+			queued.RetryMs = 0
+		}
+		job.Held, job.Resumed = false, true
+		job.Phase = protocol.EvsDropPhase_EVS_DROP_HORIZON
+		job.Owner = self.job.instance
+		job.UntilMs = now.Add(self.job.settings.LeaseTime).UnixMilli()
+		job.RetryMs = 0
+		table.Job = job
+		return true, nil
+	})
+	if err != nil {
+		return err
+	}
+	testHookBarrier(BarrierDropTakeAfter, self.key())
+	if err := self.job.step(BarrierDropTakeAfter, self.key()); err != nil {
+		return err
+	}
+	return self.loop(read.State)
+}
+
+// Runs the job this run holds the lease of, from table, phase by phase until it ends, waits or leaves this instance.
+func (self *dropJobRun) loop(table *DropTableState) error {
 	self.lastWrite = self.job.clock.Now()
-	self.leaseUntil = time.UnixMilli(state.State.Job.UntilMs)
+	self.leaseUntil = time.UnixMilli(table.Job.UntilMs)
 	for {
 		if why, err := self.gate(); err != nil || why != "" {
 			if err != nil {
 				return err
 			}
-			return self.wait(why, state.State.Job.Phase, self.job.clock.Now().Add(self.job.settings.PauseRetryInterval))
+			return self.wait(why, table.Job.Phase, self.job.clock.Now().Add(self.job.settings.PauseRetryInterval))
 		}
-		job := state.State.Job
+		job := table.Job
 		var next *DropTableState
+		var err error
 		switch {
-		case job.Held:
-			next, err = self.heldResume(state.State)
 		case job.Phase == protocol.EvsDropPhase_EVS_DROP_RESOLVE:
-			next, err = self.resolve(state.State)
+			next, err = self.resolve(table)
 		case job.Phase == protocol.EvsDropPhase_EVS_DROP_DELETE:
-			next, err = self.deletes(state.State)
+			next, err = self.deletes(table)
 		default:
-			next, err = self.round(state.State)
+			next, err = self.round(table)
 		}
-		if err != nil || next == nil || next.Job == nil || next.Job.JobId != jobId || next.Job.Owner != self.job.instance {
+		if err != nil || next == nil || next.Job == nil || next.Job.JobId != self.jobId || next.Job.Owner != self.job.instance {
 			return err
 		}
-		state = &DropTableRead{State: next}
+		table = next
+	}
+}
+
+// Once the run is over with the slot free, the repo asks to run again no later than a held job's retry_ms and the
+// next pending drop's start, now for one already past: a drop made during a hold starts when its twin's would, and a
+// held job meets its hold's end.
+func (self *dropJobRun) wake() {
+	if self.last == nil || self.last.Job != nil {
+		return
+	}
+	now := self.job.clock.Now()
+	for _, next := range []time.Time{self.job.nextStart(self.last), heldWake(self.last)} {
+		if next.IsZero() {
+			continue
+		}
+		if next.Before(now) {
+			next = now
+		}
+		if self.result.Next.IsZero() || next.Before(self.result.Next) {
+			self.result.Next = next
+		}
 	}
 }
 
@@ -1317,9 +1486,10 @@ func (self *dropJobRun) round(table *DropTableState) (*DropTableState, error) {
 			return nil, err
 		}
 		self.moved(DropStateCancelled, cancelledCount)
+		// what this job still covers: its executing drops, or the held ones snap-0 names, not another held job's
 		stillCovered := false
 		for _, entry := range table.Drops {
-			stillCovered = stillCovered || entry.State == DropStateExecuting || entry.State == DropStateHeld
+			stillCovered = stillCovered || entry.State == DropStateExecuting || (entry.State == DropStateHeld && coveredIds[entry.DropId])
 		}
 		if !stillCovered {
 			return nil, self.end(DropStateDone)
@@ -1369,7 +1539,10 @@ func (self *dropJobRun) writeLateMarks(lateMarks []DropScanId) error {
 	return self.files.Put(self.ctx, DropFileMark, sequence, EncodeDropMarkFile(self.repoId, self.jobId, sequence, cursorRefId, cursorVersion, lateMarks))
 }
 
-// D: the candidates neither marked nor answered for good, from cursor on, in cand order.
+// D: the candidates neither marked nor answered for good, from cursor on, in cand order, less every id a held job
+// other than this one holds, its newest answer held (QD-1127). Two drops can list one segment or slot: the held job's
+// bytes for the id left the stored count when it moved it to held, and it deletes the id once its holds end, as its
+// no-hold twin deleted it at once and a later job found it absent, so no id moves to held twice or counts twice.
 func (self *dropJobRun) deleteSet(cursor DropCursor) ([]*DropCandidate, error) {
 	candidates, err := self.files.Candidates(self.ctx)
 	if err != nil {
@@ -1383,9 +1556,26 @@ func (self *dropJobRun) deleteSet(cursor DropCursor) ([]*DropCandidate, error) {
 	if err != nil {
 		return nil, err
 	}
+	heldElsewhere := map[DropScanId]bool{}
+	if self.last != nil {
+		for _, held := range self.last.HeldJobs {
+			if held.JobId == self.jobId {
+				continue
+			}
+			heldAnswers, err := NewDropFiles(self.segmentCluster, self.repoId, held.JobId, self.job.settings).Answers(self.ctx)
+			if err != nil {
+				return nil, err
+			}
+			for scanId, outcome := range heldAnswers {
+				if outcome == DropOutcomeHeld {
+					heldElsewhere[scanId] = true
+				}
+			}
+		}
+	}
 	set := []*DropCandidate{}
 	for _, candidate := range candidates {
-		if candidate.Cursor.before(cursor) || marks[candidate.DropScanId] || answers[candidate.DropScanId].Final() {
+		if candidate.Cursor.before(cursor) || marks[candidate.DropScanId] || answers[candidate.DropScanId].Final() || heldElsewhere[candidate.DropScanId] {
 			continue
 		}
 		set = append(set, candidate)
@@ -1449,28 +1639,7 @@ func (self *dropJobRun) deletes(table *DropTableState) (*DropTableState, error) 
 	now := self.job.clock.Now()
 	switch {
 	case deleted.Held:
-		heldCount := 0
-		_, err := self.write(func(state *DropTableState, job *DropJobRecord, now time.Time) error {
-			heldCount = 0
-			for _, entry := range state.Drops {
-				if entry.State == DropStateExecuting {
-					entry.FreedByteCount, entry.HeldByteCount = job.FreedByteCount, job.HeldByteCount
-					state.setState(entry, DropStateHeld, dropDay(now))
-					heldCount += 1
-				}
-			}
-			job.Held = true
-			job.Owner = sidecar.Id{}
-			job.UntilMs = 0
-			job.RetryMs = now.Add(settings.HorizonRetryInterval).UnixMilli()
-			return nil
-		})
-		if err != nil {
-			return nil, err
-		}
-		self.moved(DropStateHeld, heldCount)
-		self.result.Waiting, self.result.Next = DropWaitHold, now.Add(settings.HorizonRetryInterval)
-		return nil, nil
+		return nil, self.hold()
 	case 0 < deleted.Unanswered:
 		return nil, self.wait(DropWaitUnanswered, protocol.EvsDropPhase_EVS_DROP_DELETE, now.Add(settings.PauseRetryInterval))
 	case !deleted.YoungBound.IsZero():
@@ -1483,18 +1652,41 @@ func (self *dropJobRun) deletes(table *DropTableState) (*DropTableState, error) 
 	return nil, self.end(DropStateDone)
 }
 
-// A held job: while a hold covers the repo it waits; once every covering hold ended, a round over what was held.
-func (self *dropJobRun) heldResume(table *DropTableState) (*DropTableState, error) {
-	cover, err := self.job.holds.CoveringRepo(self.ctx, self.repoId, self.repoObject)
-	if err != nil || cover == nil || cover.Unknown || 0 < len(cover.Holds) {
-		return nil, self.wait(DropWaitHold, protocol.EvsDropPhase_EVS_DROP_DELETE, self.job.clock.Now().Add(self.job.settings.HorizonRetryInterval))
+// A hold covers the repo, so the rest of D waits (owner decision 184): each executing drop moves to held with the job's
+// freed and held bytes, reading done, and the job gives up the slot (QD-1127), its record joining the held jobs with no
+// lease, to read the holds again at retry_ms. A later drop then runs in the slot as its no-hold twin's would.
+func (self *dropJobRun) hold() error {
+	testHookBarrier(BarrierDropHeldBefore, self.key())
+	if err := self.job.step(BarrierDropHeldBefore, self.key()); err != nil {
+		return err
 	}
-	return self.write(func(state *DropTableState, job *DropJobRecord, now time.Time) error {
-		// the held drops keep reading done; the job alone moves (owner decision 184)
-		job.Held = false
-		job.Phase = protocol.EvsDropPhase_EVS_DROP_HORIZON
+	heldCount := 0
+	retry := time.Time{}
+	_, err := self.write(func(state *DropTableState, job *DropJobRecord, now time.Time) error {
+		heldCount = 0
+		for _, entry := range state.Drops {
+			if entry.State == DropStateExecuting {
+				entry.FreedByteCount, entry.HeldByteCount = job.FreedByteCount, job.HeldByteCount
+				state.setState(entry, DropStateHeld, dropDay(now))
+				heldCount += 1
+			}
+		}
+		retry = now.Add(self.job.settings.HorizonRetryInterval)
+		job.Held = true
+		job.Owner = sidecar.Id{}
+		job.UntilMs = 0
+		job.RetryMs = retry.UnixMilli()
+		state.HeldJobs = append(state.HeldJobs, job)
+		state.Job = nil
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	self.moved(DropStateHeld, heldCount)
+	self.result.Waiting, self.result.Next = DropWaitHold, time.UnixMilli(retry.UnixMilli())
+	testHookBarrier(BarrierDropHeldAfter, self.key())
+	return self.job.step(BarrierDropHeldAfter, self.key())
 }
 
 // Counts bytes a pass read.
@@ -1681,8 +1873,9 @@ func (self *DropJob) tidy(ctx context.Context, cluster sidecar.BlobCluster, segm
 		}
 	}
 	live := map[sidecar.Id]bool{}
-	if state.Job != nil {
-		live[state.Job.JobId] = true
+	// the running job's files and every held job's, which its round after the holds reads (QD-1127)
+	for _, jobId := range state.JobIds() {
+		live[jobId] = true
 	}
 	for _, preview := range state.Previews {
 		live[preview.PreviewId] = true

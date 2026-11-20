@@ -1,44 +1,54 @@
 // The drop table, drops/<repo>/_ (§11.13's who row, §11.8's drops/ row; QD-179, DESIGN-DETAILS 10.2.2; EVSB-M10-03):
 // one object per repo on its metadata cluster, at most 64 KiB, changed only by If-Match (created If-None-Match), which
-// holds the repo's drops, the void records of the cancelled and refused ones, its dry runs and its one running drop
-// job. Fixed-size records only (QD-179), integers big-endian:
+// holds the repo's drops, the void records of the cancelled and refused ones, its dry runs, its one running drop job
+// and the jobs still holding ids. Fixed-size records only (QD-179), integers big-endian:
 //
-//	header, 16 B   "URdt" | format u8 (1) | 3 zero bytes | drop count u16 | void count u16 | dry run count u16 |
-//	               job count u8 (0 or 1) | 1 zero byte
-//	job, 128 B     job_id 16 | owner 16 | until_ms i64 | phase u8 | flags u8 | 2 zero bytes | round u32 | fence_ms i64 |
-//	               horizon_ms i64 | cursor (file sequence u32, row u32) | retry_ms i64 | covered u16 | 6 zero bytes |
-//	               freed u64 | held u64 | started_ms i64 | 16 zero bytes
-//	drop, 128 B    drop_id 16 | ref_id 16 | push_id 16 | version u64 | place 20 | not_before_ms i64 | seen_ms i64 |
-//	               state u8 | phase u8 | freed u64 | held u64 | preview_id 16 | ended_day u16
-//	void, 17 B     drop_id 16 | state u8
-//	dry run, 64 B  preview_id 16 | ref_id 16 | state u8 | 7 zero bytes | created_ms i64 | until_ms i64 | snapshot u64
-//	trailer, 32 B  SHA-256 of every byte before it
+//	header, 16 B    "URdt" | format u8 (1) | 1 zero byte | held job count u16 | drop count u16 | void count u16 |
+//	                dry run count u16 | job count u8 (0 or 1) | 1 zero byte
+//	job, 128 B      job_id 16 | owner 16 | until_ms i64 | phase u8 | flags u8 | 2 zero bytes | round u32 | fence_ms i64 |
+//	                horizon_ms i64 | cursor (file sequence u32, row u32) | retry_ms i64 | covered u16 | 6 zero bytes |
+//	                freed u64 | held u64 | started_ms i64 | 16 zero bytes
+//	held job, 128 B each, the job's layout
+//	drop, 128 B     drop_id 16 | ref_id 16 | push_id 16 | version u64 | place 20 | not_before_ms i64 | seen_ms i64 |
+//	                state u8 | phase u8 | freed u64 | held u64 | preview_id 16 | ended_day u16
+//	void, 17 B      drop_id 16 | state u8
+//	dry run, 64 B   preview_id 16 | ref_id 16 | state u8 | 7 zero bytes | created_ms i64 | until_ms i64 | snapshot u64
+//	trailer, 32 B   SHA-256 of every byte before it
+//
+// A job record's flags: 1 held, set on every held job's record and on no running one's; 2 resumed, a held job back in
+// the slot for its round after its holds ended, kept from then on; no other bit. Header bytes 5 to 7 were zero before
+// QD-1127, so a table written then reads as one with no held job.
 //
 // The drop entry is 10.2.2's 126 B with one u16 added, the UTC day it ended, which QD-179's "an entry leaves 30 d after
 // it ends" needs and 10.2.2's fields do not hold; it keeps QD-179's 128 B. A dry run's until_ms is the lease of the run
 // holding it while it runs and the time it ended once it has. Each record's meaning:
 //
-//	drop     a committed DROP: pending, cancelled, executing in its phase, done, refused {locked, mismatch, verify},
-//	         held or observed. seen_ms is its appender's checked clock read after the answer that showed it the DROP
-//	         committed (step 7's 200, or a cluster read for evacuation's and a reader's append), never earlier
-//	void     a cancelled or refused drop, for the repo's life: an entry absent with no void record means executed
-//	         (QD-179's rule 4), which is the safe default for §11.9's serve row and the job's liveness
-//	dry run  queued, running, done or failed; its request and results live in dropscan/<repo>/<preview_id>/
-//	job      the repo's one running drop job (one job a repo), its owner instance and lease (until_ms), its phase,
-//	         round, fence and the round's horizon, its delete cursor and when a waiting job wakes (retry_ms)
+//	drop      a committed DROP: pending, cancelled, executing in its phase, done, refused {locked, mismatch, verify},
+//	          held or observed. seen_ms is its appender's checked clock read after the answer that showed it the DROP
+//	          committed (step 7's 200, or a cluster read for evacuation's and a reader's append), never earlier
+//	void      a cancelled or refused drop, for the repo's life: an entry absent with no void record means executed
+//	          (QD-179's rule 4), which is the safe default for §11.9's serve row and the job's liveness
+//	dry run   queued, running, done or failed; its request and results live in dropscan/<repo>/<preview_id>/
+//	job       the repo's one running drop job (one job a repo), its owner instance and lease (until_ms), its phase,
+//	          round, fence and the round's horizon, its delete cursor and when a waiting job wakes (retry_ms)
+//	held job  a job a hold stopped (owner decision 184), which gave up the slot so a later drop runs as its no-hold
+//	          twin's would (QD-1127; §11.13's table row: the running job "also points at any job still holding ids"):
+//	          its record as it stood, no owner, retry_ms when it next reads the holds, in the order the jobs moved to
+//	          held; its files and the ids they hold stay the job's until its round after the holds ends it
 //
 // Bounds (QD-179): an ended entry leaves 30 d after it ends, or sooner when a write would pass 64 KiB, ended entries
 // oldest first and never one whose DROP evs saw committed under 27 h ago, since evacuation appends a committed DROP the
 // table lacks; pending, executing and observed entries never leave. A held entry leaves neither by age nor by the bound
-// until its deletions finish, since the job resumes a held drop from its entry once its hold ends, and neither it nor a
-// held job's record counts toward a refusal, so a hold never makes a later write fail, which would show it; the table
-// passes 64 KiB by them alone (owner decision 643). It lists as its done twin would (owner decision 184): GET .../drops
-// leaves every ended entry out once its 30 d have passed, a held one's counted from the day it moved to held, and its
-// move to done keeps that day, so it goes at once when they have passed (DropStatuses). The bound's eviction counts and
-// orders a held entry still listed as its twin, and unlists it where it would evict the twin, its ended_day set to 1,
-// so its retention has passed (QD-1126): past the bound the table lists and evicts as the twin's would. A DROP is
-// refused 429 while pending, executing and observed entries and void records would pass 48 KiB (AdmitsDrop, which
-// EVS2-M10-09's 5c reads); held entries never count there either, a cancel is never refused and dry runs only evict.
+// until its deletions finish, since the job resumes a held drop from its entry once its hold ends, and neither it nor
+// the record of a job whose twin has ended, held or resumed, counts toward a refusal, so a hold never makes a later
+// write fail, which would show it; the table passes 64 KiB by them alone (owner decision 643). It lists as its done
+// twin would (owner decision 184): GET .../drops leaves every ended entry out once its 30 d have passed, a held one's
+// counted from the day it moved to held, and its move to done keeps that day, so it goes at once when they have passed
+// (DropStatuses). The bound's eviction counts and orders a held entry still listed as its twin, and unlists it where it
+// would evict the twin, its ended_day set to 1, so its retention has passed (QD-1126): past the bound the table lists
+// and evicts as the twin's would. A DROP is refused 429 while pending, executing and observed entries and void records
+// would pass 48 KiB (AdmitsDrop, which EVS2-M10-09's 5c reads); held entries never count there either, and no held
+// job keeps a later drop pending (QD-1127), a cancel is never refused and dry runs only evict.
 //
 // evs writes the table at each DROP and cancel, through DropSink (CONTRACTS.md C-14: EVS2-M10-09's step 8 calls it,
 // this file implements it), and at each dry run's request; the job writes it at each phase and at most once a minute
@@ -74,8 +84,10 @@ const (
 	dropTableVoidByteCount         = 17
 	dropTablePreviewByteCount      = 64
 	dropTableTrailerByteCount      = sha256.Size
-	// the job record's flag: the rest of D waits on a hold (owner decision 184)
-	dropJobFlagHeld uint8 = 1
+	// the job record's flags: the rest of D waits on a hold (owner decision 184), the record a held job's; and a held
+	// job resumed in the slot after its holds ended (QD-1127)
+	dropJobFlagHeld    uint8 = 1
+	dropJobFlagResumed uint8 = 2
 	// the ended_day of a held entry the bound unlisted where it would have evicted its done twin: a day whose retention
 	// has long passed (QD-1126)
 	dropUnlistedDay uint16 = 1
@@ -218,12 +230,13 @@ type DropSettings struct {
 	// How long after a bound the horizon is taken to pass it: the next round's wake for a drop whose cite bound, or a
 	// young candidate whose adoption bound, the horizon has not passed is that bound plus this. 25 h, evacuation's.
 	HorizonRetryLag time.Duration
-	// The table's bound: 64 KiB (§11.8's drops/ row). Held entries never count toward a refusal of a write; its
-	// eviction counts a listed one as its done twin (QD-1126).
+	// The table's bound: 64 KiB (§11.8's drops/ row). Held entries and the records of jobs whose twins have ended never
+	// count toward a refusal of a write; its eviction counts a listed held entry as its done twin (QD-1126).
 	TableByteCount int
-	// How far held entries may take the table past TableByteCount, which a read takes in besides it: the format's room
-	// for drops, 65,535 records of 128 B, since a held entry stays until its deletions finish whatever the bound (owner
-	// decision 643). A write past both is ErrDropTableFull, which at this default only the format's count could reach.
+	// How far held entries and held jobs' records may take the table past TableByteCount, which a read takes in besides
+	// it: the format's room for drops, 65,535 records of 128 B, and a 128 B job record beside each, since a held entry
+	// stays until its deletions finish whatever the bound (owner decision 643) and every held job holds one at least
+	// (QD-1127). A write past both is ErrDropTableFull, which at this default only the format's counts could reach.
 	TableHeldByteCount int
 	// 5c's line: a DROP is refused 429 while pending, executing and observed entries and void records would pass
 	// this. 48 KiB (QD-179's rule 5).
@@ -297,7 +310,7 @@ func DefaultDropSettings() *DropSettings {
 		HorizonRetryInterval:    10 * time.Minute,
 		HorizonRetryLag:         25 * time.Hour,
 		TableByteCount:          64 * 1024,
-		TableHeldByteCount:      0xffff * dropTableEntryByteCount,
+		TableHeldByteCount:      0xffff * (dropTableEntryByteCount + dropTableJobByteCount),
 		TableAdmitByteCount:     48 * 1024,
 		EndedRetention:          30 * 24 * time.Hour,
 		EvictGuard:              27 * time.Hour,
@@ -357,7 +370,7 @@ func (self *DropSettings) Validate() error {
 	return nil
 }
 
-// The most of a table a read takes in: TableByteCount, and TableHeldByteCount for held entries past it.
+// The most of a table a read takes in: TableByteCount, and TableHeldByteCount for held entries and held jobs past it.
 func (self *DropSettings) TableReadByteCount() int64 {
 	return int64(self.TableByteCount) + int64(self.TableHeldByteCount)
 }
@@ -368,7 +381,7 @@ type DropCursor struct {
 	Row      uint32
 }
 
-// The repo's running drop job.
+// A drop job: the repo's running one, or one still holding ids.
 type DropJobRecord struct {
 	JobId sidecar.Id
 	// The instance holding it, and its lease's end by that instance's checked clock. A zero owner holds nothing: a
@@ -377,8 +390,11 @@ type DropJobRecord struct {
 	UntilMs int64
 	// Its phase: resolve, horizon, mark, verify or delete.
 	Phase protocol.EvsDropPhase
-	// The rest of D waits on a hold (owner decision 184).
+	// The rest of D waits on a hold (owner decision 184): a held job's record, out of the slot (QD-1127).
 	Held bool
+	// A held job taken back into the slot once its holds ended, for the round over what it held: its no-hold twin
+	// ended long since, so its record counts as a held one's does (QD-1126).
+	Resumed bool
 	// The round whose horizon it took last, 0 before its first.
 	Round uint32
 	// The largest seen_ms of its covered drops, and the round's H (DESIGN-DETAILS 10.2.8's F3 and F4).
@@ -437,10 +453,40 @@ type DropPreviewRecord struct {
 
 // The table as one read found it.
 type DropTableState struct {
-	Job      *DropJobRecord
+	// The running job, the one slot: never held.
+	Job *DropJobRecord
+	// The jobs still holding ids, each held, oldest first (QD-1127).
+	HeldJobs []*DropJobRecord
 	Drops    []*DropTableEntry
 	Voids    []*DropVoidRecord
 	Previews []*DropPreviewRecord
+}
+
+// The held job jobId's place in HeldJobs, -1 for none.
+func (self *DropTableState) heldJobIndex(jobId sidecar.Id) int {
+	return slices.IndexFunc(self.HeldJobs, func(job *DropJobRecord) bool {
+		return job.JobId == jobId
+	})
+}
+
+// The held job jobId, or nil.
+func (self *DropTableState) HeldJob(jobId sidecar.Id) *DropJobRecord {
+	if index := self.heldJobIndex(jobId); 0 <= index {
+		return self.HeldJobs[index]
+	}
+	return nil
+}
+
+// Every job the table names, whose files hold ids: the running one first, then the held ones in order.
+func (self *DropTableState) JobIds() []sidecar.Id {
+	jobIds := []sidecar.Id{}
+	if self.Job != nil {
+		jobIds = append(jobIds, self.Job.JobId)
+	}
+	for _, job := range self.HeldJobs {
+		jobIds = append(jobIds, job.JobId)
+	}
+	return jobIds
 }
 
 // The entry of dropId, or nil.
@@ -505,7 +551,7 @@ func (self *DropTableState) AdmitsDrop(settings *DropSettings) bool {
 
 // The table's encoded size.
 func (self *DropTableState) byteCount() int {
-	byteCount := dropTableHeaderByteCount + dropTableTrailerByteCount
+	byteCount := dropTableHeaderByteCount + dropTableTrailerByteCount + dropTableJobByteCount*len(self.HeldJobs)
 	if self.Job != nil {
 		byteCount += dropTableJobByteCount
 	}
@@ -513,8 +559,8 @@ func (self *DropTableState) byteCount() int {
 		dropTablePreviewByteCount*len(self.Previews)
 }
 
-// What can refuse a write of the table: every record but its held entries and a held job's record, which a twin with no
-// hold would not hold, so a hold never makes a later write fail (owner decision 643).
+// What can refuse a write of the table: every record but its held entries and the records of jobs whose twins have
+// ended, which a twin with no hold would not hold, so a hold never makes a later write fail (owner decision 643).
 func (self *DropTableState) boundByteCount() int {
 	byteCount := self.byteCount() - self.heldJobByteCount()
 	for _, entry := range self.Drops {
@@ -525,8 +571,9 @@ func (self *DropTableState) boundByteCount() int {
 	return byteCount
 }
 
-// What the bound's eviction counts at now, as its no-hold twin's table would hold it: every record but a held job's and
-// the held entries no longer listed, whose done twins' entries would have left, by age or by the bound (QD-1126).
+// What the bound's eviction counts at now, as its no-hold twin's table would hold it: every record but those of jobs
+// whose twins have ended and the held entries no longer listed, whose done twins' entries would have left, by age or by
+// the bound (QD-1126).
 func (self *DropTableState) mirrorByteCount(now time.Time, settings *DropSettings) int {
 	byteCount := self.byteCount() - self.heldJobByteCount()
 	for _, entry := range self.Drops {
@@ -537,12 +584,14 @@ func (self *DropTableState) mirrorByteCount(now time.Time, settings *DropSetting
 	return byteCount
 }
 
-// The job record's bytes while its job waits on a hold, which its no-hold twin's ended job does not leave.
+// The bytes of the job records whose jobs' no-hold twins have ended, which the twin's table does not hold: every held
+// job's, and the running one's once it is a held job resumed after its holds (QD-1126, QD-1127).
 func (self *DropTableState) heldJobByteCount() int {
-	if self.Job != nil && self.Job.Held {
-		return dropTableJobByteCount
+	byteCount := dropTableJobByteCount * len(self.HeldJobs)
+	if self.Job != nil && (self.Job.Held || self.Job.Resumed) {
+		byteCount += dropTableJobByteCount
 	}
-	return 0
+	return byteCount
 }
 
 // A UTC day number, as an entry's ended_day holds it.
@@ -605,9 +654,9 @@ func (self *DropTableState) expiring(now time.Time, settings *DropSettings) bool
 // would, and where the bound would evict the twin it is unlisted instead, its ended_day set to dropUnlistedDay: GET
 // .../drops leaves it out, it counts no more, and its move to done evicts it at that write, while the table keeps it
 // for its deletions. Held entries never count toward a refusal: ErrDropTableFull only when the records but every held
-// one still pass TableByteCount (boundByteCount), where the twin would refuse too, or when held entries take the table
-// past what a read takes in. A count that only held entries keep past the bound, their DROPs seen under EvictGuard
-// ago, refuses nothing, where the twin would refuse.
+// one still pass TableByteCount (boundByteCount), where the twin would refuse too, or when held entries and held jobs
+// take the table past what a read takes in. A count that only held entries keep past the bound, their DROPs seen under
+// EvictGuard ago, refuses nothing, where the twin would refuse.
 func (self *DropTableState) evict(now time.Time, settings *DropSettings) error {
 	self.Drops = slices.DeleteFunc(self.Drops, func(entry *DropTableEntry) bool {
 		return entry.expired(now, settings)
@@ -671,12 +720,13 @@ func (self *DropTableState) evict(now time.Time, settings *DropSettings) error {
 // The table's bytes. A state that breaks the layout's rules is ErrDropTableInvalid; one past TableByteCount is the
 // caller's to evict first.
 func EncodeDropTable(state *DropTableState) ([]byte, error) {
-	if 0xffff < len(state.Drops) || 0xffff < len(state.Voids) || 0xffff < len(state.Previews) {
+	if 0xffff < len(state.Drops) || 0xffff < len(state.Voids) || 0xffff < len(state.Previews) || 0xffff < len(state.HeldJobs) {
 		return nil, fmt.Errorf("%w: too many records", ErrDropTableInvalid)
 	}
 	encoded := make([]byte, 0, state.byteCount())
 	encoded = append(encoded, dropTableMagic...)
-	encoded = append(encoded, dropTableFormat1, 0, 0, 0)
+	encoded = append(encoded, dropTableFormat1, 0)
+	encoded = binary.BigEndian.AppendUint16(encoded, uint16(len(state.HeldJobs)))
 	encoded = binary.BigEndian.AppendUint16(encoded, uint16(len(state.Drops)))
 	encoded = binary.BigEndian.AppendUint16(encoded, uint16(len(state.Voids)))
 	encoded = binary.BigEndian.AppendUint16(encoded, uint16(len(state.Previews)))
@@ -685,13 +735,19 @@ func EncodeDropTable(state *DropTableState) ([]byte, error) {
 	} else {
 		encoded = append(encoded, 0, 0)
 	}
-	if job := state.Job; job != nil {
-		if !dropPhaseValid(job.Phase) {
-			return nil, fmt.Errorf("%w: a job in phase %d", ErrDropTableInvalid, job.Phase)
+	seenJobs := map[sidecar.Id]bool{}
+	// one job record: the running job's, never held, or a held job's, always
+	appendJob := func(job *DropJobRecord, held bool) error {
+		if !dropPhaseValid(job.Phase) || job.Held != held || seenJobs[job.JobId] {
+			return fmt.Errorf("%w: a job in phase %d, held %t in the place of a held one %t", ErrDropTableInvalid, job.Phase, job.Held, held)
 		}
+		seenJobs[job.JobId] = true
 		flags := uint8(0)
 		if job.Held {
 			flags |= dropJobFlagHeld
+		}
+		if job.Resumed {
+			flags |= dropJobFlagResumed
 		}
 		encoded = append(encoded, job.JobId[:]...)
 		encoded = append(encoded, job.Owner[:]...)
@@ -709,6 +765,17 @@ func EncodeDropTable(state *DropTableState) ([]byte, error) {
 		encoded = binary.BigEndian.AppendUint64(encoded, job.HeldByteCount)
 		encoded = binary.BigEndian.AppendUint64(encoded, uint64(job.StartedMs))
 		encoded = append(encoded, make([]byte, 16)...)
+		return nil
+	}
+	if state.Job != nil {
+		if err := appendJob(state.Job, false); err != nil {
+			return nil, err
+		}
+	}
+	for _, job := range state.HeldJobs {
+		if err := appendJob(job, true); err != nil {
+			return nil, err
+		}
 	}
 	seen := map[sidecar.Id]bool{}
 	for _, entry := range state.Drops {
@@ -776,17 +843,18 @@ func DecodeDropTable(encoded []byte) (*DropTableState, error) {
 	if trailer := sha256.Sum256(body); !bytes.Equal(trailer[:], encoded[len(body):]) {
 		return nil, invalid("trailer")
 	}
-	if string(body[0:4]) != dropTableMagic || body[4] != dropTableFormat1 || body[5] != 0 || body[6] != 0 || body[7] != 0 || body[15] != 0 {
+	if string(body[0:4]) != dropTableMagic || body[4] != dropTableFormat1 || body[5] != 0 || body[15] != 0 {
 		return nil, invalid("header")
 	}
+	heldJobCount := int(binary.BigEndian.Uint16(body[6:8]))
 	dropCount := int(binary.BigEndian.Uint16(body[8:10]))
 	voidCount := int(binary.BigEndian.Uint16(body[10:12]))
 	previewCount := int(binary.BigEndian.Uint16(body[12:14]))
 	jobCount := int(body[14])
 	if 1 < jobCount {
-		return nil, invalid("two jobs")
+		return nil, invalid("two running jobs")
 	}
-	if len(body) != dropTableHeaderByteCount+jobCount*dropTableJobByteCount+dropCount*dropTableEntryByteCount+
+	if len(body) != dropTableHeaderByteCount+(jobCount+heldJobCount)*dropTableJobByteCount+dropCount*dropTableEntryByteCount+
 		voidCount*dropTableVoidByteCount+previewCount*dropTablePreviewByteCount {
 		return nil, invalid("length")
 	}
@@ -816,7 +884,9 @@ func DecodeDropTable(encoded []byte) (*DropTableState, error) {
 		offset += byteCount
 		return true
 	}
-	if jobCount == 1 {
+	seenJobs := map[sidecar.Id]bool{}
+	// one job record: the running job's, never held, or a held job's, always
+	readJob := func(held bool) (*DropJobRecord, error) {
 		job := &DropJobRecord{}
 		job.JobId = readId()
 		job.Owner = readId()
@@ -824,10 +894,11 @@ func DecodeDropTable(encoded []byte) (*DropTableState, error) {
 		job.Phase = protocol.EvsDropPhase(body[offset])
 		flags := body[offset+1]
 		offset += 2
-		if !dropPhaseValid(job.Phase) || flags&^dropJobFlagHeld != 0 || !zero(2) {
+		if !dropPhaseValid(job.Phase) || flags&^(dropJobFlagHeld|dropJobFlagResumed) != 0 || !zero(2) {
 			return nil, invalid("job")
 		}
 		job.Held = flags&dropJobFlagHeld != 0
+		job.Resumed = flags&dropJobFlagResumed != 0
 		job.Round = readUint32()
 		job.FenceMs = int64(readUint64())
 		job.HorizonMs = int64(readUint64())
@@ -842,10 +913,25 @@ func DecodeDropTable(encoded []byte) (*DropTableState, error) {
 		job.FreedByteCount = readUint64()
 		job.HeldByteCount = readUint64()
 		job.StartedMs = int64(readUint64())
-		if !zero(16) {
+		if !zero(16) || job.Held != held || seenJobs[job.JobId] {
 			return nil, invalid("job")
 		}
+		seenJobs[job.JobId] = true
+		return job, nil
+	}
+	if jobCount == 1 {
+		job, err := readJob(false)
+		if err != nil {
+			return nil, err
+		}
 		state.Job = job
+	}
+	for range heldJobCount {
+		job, err := readJob(true)
+		if err != nil {
+			return nil, err
+		}
+		state.HeldJobs = append(state.HeldJobs, job)
 	}
 	seen := map[sidecar.Id]bool{}
 	for range dropCount {
@@ -1008,7 +1094,8 @@ func (self *DropTable) countState(state DropState) {
 }
 
 // The table from the cluster: an empty state with no ETag when it does not exist. It takes in TableReadByteCount, and
-// refuses a table whose records but its held entries pass TableByteCount.
+// refuses a table whose records but its held entries and the records of jobs whose twins have ended pass
+// TableByteCount.
 func (self *DropTable) Read(ctx context.Context, cluster sidecar.BlobCluster, repoId sidecar.Id) (*DropTableRead, error) {
 	readAt := self.clock.Now()
 	object, err := cluster.Get(ctx, DropsKey(repoId))
