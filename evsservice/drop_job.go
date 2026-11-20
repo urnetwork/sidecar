@@ -39,7 +39,8 @@
 //
 // A job a hold stops gives up the slot (QD-1127; §11.13's table row): its record moves to the table's held jobs, with
 // no lease, so a drop made during the hold starts, runs and moves to held under it as its no-hold twin starts and ends,
-// listed, admitted and billed alike. A held job's files keep its ids withheld (DropIndex.Withheld) and stay for tidy.
+// listed, admitted and billed alike; an id a held job holds is left to it, whichever later drop lists it too, so no id
+// counts twice (deleteSet). A held job's files keep its ids withheld (DropIndex.Withheld) and stay for tidy.
 // At a held job's retry_ms a run with the slot free reads the holds: while one covers the repo, or none can tell, every
 // held job due waits HorizonRetryInterval more; once none does, the oldest held job takes the slot back, whatever its
 // own retry_ms, before any new job, and runs a round over what it held from its own files, its drops reading done
