@@ -33,7 +33,8 @@ import (
 var modelSpecs = []string{"EvsCommit", "StoreSettle", "IndexRollup"}
 
 // The run-tlc.sh modes every spec has, each a group of runs a recorded run names (recordedMode); a spec with
-// parts adds twins-<part> and stories-<part> for each (run-tlc.sh list-parts).
+// parts adds twins-<part> and stories-<part> for each, and live-<part> for one with liveness runs (run-tlc.sh
+// list-parts).
 var modelRunModes = []string{"model", "twins", "live"}
 
 // The groups of a details model's run script, each of which a gate needs passing at the model's sources
@@ -746,14 +747,15 @@ func TestGateModesNeedEachMilestoneFromItsGateOn(t *testing.T) {
 }
 
 // modelled.yml's milestones give each gate what §22.10 names of each model and no more (QD-1116): EvsCommit's model,
-// mutants and live from M2's entry, the purger's mutants and stories from M10's entry and the drop extension's only
-// from its exit; StoreSettle's three from M2's entry; IndexRollup's three from M10's entry. Each model's milestones
+// mutants and live from M2's entry, the purger's mutants and stories from M10's entry and the drop extension's
+// mutants, stories and liveness (QD-1119) only from its exit; StoreSettle's three from M2's entry; IndexRollup's three
+// from M10's entry. Each model's milestones
 // are in gate order, each at a gate of the tool's, and together name every mode run-tlc.sh runs of the spec, each
 // once, so a mode no gate needs is never run unread.
 func TestModelledMilestonesNameEachGatesModes(t *testing.T) {
 	m2 := []string{"model", "mutants", "live"}
 	purge := append(slices.Clone(m2), "mutants-purge", "stories-purge")
-	drop := append(slices.Clone(purge), "mutants-drop", "stories-drop")
+	drop := append(slices.Clone(purge), "mutants-drop", "stories-drop", "live-drop")
 	wants := map[string]map[string][]string{
 		"EvsCommit":   {"M1": {}, "M2-in": m2, "M2": m2, "M9": m2, "M10-in": purge, "M10": drop},
 		"StoreSettle": {"M1": {}, "M2-in": m2, "M2": m2, "M10-in": m2, "M10": m2},
@@ -821,8 +823,9 @@ func TestModeVerdictTakesEachGatesModes(t *testing.T) {
 	noTlc := "no tla2tools.jar (set TLC to a command that runs tlc2.TLC)"
 	m2 := []string{"model", "mutants", "live"}
 	purge := append(slices.Clone(m2), "mutants-purge", "stories-purge")
-	all := append(slices.Clone(purge), "mutants-drop", "stories-drop")
+	all := append(slices.Clone(purge), "mutants-drop", "stories-drop", "live-drop")
 	purgeMutants := append(slices.Clone(m2), "mutants-purge")
+	dropSafety := append(slices.Clone(purge), "mutants-drop", "stories-drop")
 	model := func(standing []string, failed ...string) *modelledModel {
 		runs := []*modelledRun{}
 		for _, mode := range standing {
@@ -838,7 +841,7 @@ func TestModeVerdictTakesEachGatesModes(t *testing.T) {
 			Milestones: []*modelledMilestone{
 				{Gate: "M2-in", Modes: m2},
 				{Gate: "M10-in", Modes: []string{"mutants-purge", "stories-purge"}},
-				{Gate: "M10", Modes: []string{"mutants-drop", "stories-drop"}},
+				{Gate: "M10", Modes: []string{"mutants-drop", "stories-drop", "live-drop"}},
 			},
 			Runs: runs,
 		}
@@ -860,19 +863,24 @@ func TestModeVerdictTakesEachGatesModes(t *testing.T) {
 		{name: "the entry's model test with the drop's missing", model: model(purge), runMode: "model", tlcMode: "gate", gate: "M10-in", missingTool: noTlc, action: tlcUnchanged, reason: "unchanged since its passing runs"},
 		{name: "the drop's stories at the entry", model: model(purge), runMode: "stories-drop", tlcMode: "gate", gate: "M10-in", missingTool: noTlc, action: tlcNotNeeded, reason: "M10-in needs no stories-drop run of EvsCommit"},
 		{name: "the drop's mutants at the entry", model: model(nil), runMode: "twins-drop", tlcMode: "gate", gate: "M10-in", missingTool: noTlc, action: tlcNotNeeded, reason: "M10-in needs no mutants-drop run"},
-		{name: "the drop's stories at the exit, not standing", model: model(purge), runMode: "stories-drop", tlcMode: "gate", gate: "M10", missingTool: noTlc, action: tlcFail, reason: "no passing mutants-drop, stories-drop run"},
+		{name: "the drop's stories at the exit, not standing", model: model(purge), runMode: "stories-drop", tlcMode: "gate", gate: "M10", missingTool: noTlc, action: tlcFail, reason: "no passing mutants-drop, stories-drop, live-drop run"},
+		{name: "the drop's liveness at the entry", model: model(purge), runMode: "live-drop", tlcMode: "gate", gate: "M10-in", missingTool: noTlc, action: tlcNotNeeded, reason: "M10-in needs no live-drop run of EvsCommit"},
+		{name: "the drop's liveness at the exit, its safety standing", model: model(dropSafety), runMode: "live-drop", tlcMode: "gate", gate: "M10", missingTool: noTlc, action: tlcFail, reason: "no passing live-drop run"},
+		{name: "the drop's stories at the exit, its liveness not standing", model: model(dropSafety), runMode: "stories-drop", tlcMode: "gate", gate: "M10", missingTool: noTlc, action: tlcFail, reason: "no passing live-drop run"},
+		{name: "the same with TLC here", model: model(dropSafety), runMode: "stories-drop", tlcMode: "gate", gate: "M10", action: tlcUnchanged, reason: "its stories-drop run of 2026-11-19 stands"},
 		{name: "the purger's mutants at the exit, the drop's not standing", model: model(purge), runMode: "twins-purge", tlcMode: "gate", gate: "M10", missingTool: noTlc, action: tlcFail, reason: "TLC has not run"},
 		{name: "every mode standing at the exit", model: model(all), runMode: "stories-drop", tlcMode: "gate", gate: "M10-out", missingTool: noTlc, action: tlcUnchanged},
 		{name: "the purger's mutants at M2's entry", model: model(nil), runMode: "twins-purge", tlcMode: "gate", gate: "M2-in", missingTool: noTlc, action: tlcNotNeeded, reason: "M2-in needs no mutants-purge run"},
 		{name: "the purger's stories at M2's exit", model: model(m2), runMode: "stories-purge", tlcMode: "gate", gate: "M2", missingTool: noTlc, action: tlcNotNeeded},
 		{name: "M2's mutants at M2's exit", model: model(m2), runMode: "twins", tlcMode: "gate", gate: "M2", missingTool: noTlc, action: tlcUnchanged},
-		{name: "no gate named needs the drop's too", model: model(purge), runMode: "stories-purge", tlcMode: "gate", missingTool: noTlc, action: tlcFail, reason: "mutants-drop, stories-drop"},
+		{name: "no gate named needs the drop's too", model: model(purge), runMode: "stories-purge", tlcMode: "gate", missingTool: noTlc, action: tlcFail, reason: "mutants-drop, stories-drop, live-drop"},
 		{name: "its own run standing, another not, TLC here", model: model(purgeMutants), runMode: "twins-purge", tlcMode: "gate", gate: "M10-in", action: tlcUnchanged, reason: "its mutants-purge run of 2026-11-19 stands"},
 		{name: "its own run standing, another not, no TLC", model: model(purgeMutants), runMode: "twins-purge", tlcMode: "gate", gate: "M10-in", missingTool: noTlc, action: tlcFail, reason: "no passing stories-purge run"},
 		{name: "a gate that is no gate", model: model(all), runMode: "model", tlcMode: "gate", gate: "M10-exit", missingTool: noTlc, action: tlcFail, reason: "names no gate"},
 		{name: "a merge runs the purger's mutants", model: model(nil), runMode: "twins-purge", tlcMode: "merge", action: tlcRun},
 		{name: "a merge runs the M2 part's mutants", model: model(nil), runMode: "twins", tlcMode: "merge", action: tlcRun},
 		{name: "a merge leaves the drop's stories to a gate", model: model(nil), runMode: "stories-drop", tlcMode: "merge", action: tlcNotNeeded, reason: "runs at a gate"},
+		{name: "a merge leaves the drop's liveness to a gate", model: model(nil), runMode: "live-drop", tlcMode: "merge", action: tlcNotNeeded, reason: "runs at a gate"},
 		{name: "a merge with no TLC", model: model(nil), runMode: "twins-drop", tlcMode: "merge", missingTool: noTlc, action: tlcNotRun, reason: "TLC has not run"},
 	}
 	for _, c := range cases {
@@ -883,11 +891,13 @@ func TestModeVerdictTakesEachGatesModes(t *testing.T) {
 	}
 }
 
-// One part of a spec, as run-tlc.sh's list-parts prints it: its twins and its stories, in their tables' order.
+// One part of a spec, as run-tlc.sh's list-parts prints it: its twins, its stories and its liveness runs, in their
+// tables' order.
 type modelPart struct {
 	name    string
 	twins   []string
 	stories []string
+	lives   []string
 }
 
 // run-tlc.sh's parts of spec, as its list-parts mode prints them.
@@ -919,30 +929,47 @@ func partsTable(t *testing.T, spec string) []*modelPart {
 			parts[index].twins = append(parts[index].twins, fields[2:]...)
 		case "stories":
 			parts[index].stories = append(parts[index].stories, fields[2:]...)
+		case "lives":
+			parts[index].lives = append(parts[index].lives, fields[2:]...)
 		default:
-			t.Fatalf("run-tlc.sh list-parts %s: %q is no part's twins or stories", spec, line)
+			t.Fatalf("run-tlc.sh list-parts %s: %q is no part's twins, stories or liveness runs", spec, line)
 		}
 	}
 	return parts
 }
 
 // The run-tlc.sh modes that run a group of spec's runs a recorded run names: every spec's, then each part's twins and
-// stories.
+// stories, and its liveness runs where it has them.
 func specRunModes(t *testing.T, spec string) []string {
 	t.Helper()
 	modes := slices.Clone(modelRunModes)
 	for _, part := range partsTable(t, spec) {
 		modes = append(modes, "twins-"+part.name, "stories-"+part.name)
+		if 0 < len(part.lives) {
+			modes = append(modes, "live-"+part.name)
+		}
 	}
 	return modes
 }
 
 // A run line run-tlc.sh prints before each TLC run it starts: "== twin-PurgeUnseen: <the cfg it runs>".
-var runTlcStartPattern = regexp.MustCompile(`(?m)^== (\S+): `)
+var runTlcStartPattern = regexp.MustCompile(`(?m)^== (\S+): (.*)$`)
 
 // The runs run-tlc.sh starts for args, under a stand-in for TLC that checks nothing and passes, so each run's
 // label shows what the mode runs, whatever its verdict, and its exit code.
 func runTlcLabels(t *testing.T, args ...string) ([]string, int) {
+	t.Helper()
+	starts, code := runTlcStarts(t, args...)
+	labels := []string{}
+	for _, start := range starts {
+		labels = append(labels, start[0])
+	}
+	return labels, code
+}
+
+// The runs run-tlc.sh starts for args under the stand-in, each its label and the cfg it shows, a line, and its exit
+// code.
+func runTlcStarts(t *testing.T, args ...string) ([][2]string, int) {
 	t.Helper()
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skipf("not run: this leg cannot run run-tlc.sh: %v", err)
@@ -958,30 +985,31 @@ func runTlcLabels(t *testing.T, args ...string) ([]string, int) {
 	if command.ProcessState == nil {
 		t.Fatalf("run-tlc.sh %v did not start: %v", args, err)
 	}
-	labels := []string{}
+	starts := [][2]string{}
 	for _, match := range runTlcStartPattern.FindAllStringSubmatch(string(output), -1) {
-		labels = append(labels, match[1])
+		starts = append(starts, [2]string{match[1], match[2]})
 	}
-	return labels, command.ProcessState.ExitCode()
+	return starts, command.ProcessState.ExitCode()
 }
 
-// run-tlc.sh's parts (QD-1116): EvsCommit's M10 part runs as the purger's twins and stories and the drop extension's,
-// each group by a mode of its own that runs exactly its rows, and twins runs the M2 part's alone, so no part's run is
-// recorded with another's; list keeps every twin, so mutants.yml still names each, and twin and control find a part's
-// by name. StoreSettle and IndexRollup have no parts, a part no spec has is refused, and so is the stories mode that
-// ran both parts' stories as one.
+// run-tlc.sh's parts (QD-1116, QD-1119): EvsCommit's M10 part runs as the purger's twins and stories and the drop
+// extension's twins, stories and liveness, each group by a mode of its own that runs exactly its rows, and twins runs
+// the M2 part's alone, so no part's run is recorded with another's; the drop extension's liveness runs each drop story
+// under LiveSpec with F2DropsEnd on one instance. list keeps every twin, so mutants.yml still names each, and twin and
+// control find a part's by name. StoreSettle and IndexRollup have no parts, a part no spec has is refused, as are
+// liveness runs of the purger, which has none, and the stories mode that ran both parts' stories as one.
 func TestRunTlcRunsEachPartApart(t *testing.T) {
 	parts := partsTable(t, "EvsCommit")
 	wants := []*modelPart{
 		{name: "purge", twins: []string{"PurgeNoAllowance", "PurgeIgnoresHold", "PurgeUnseen", "EvacDropsNewest"}, stories: []string{"purgeA", "purgeB", "purgeC", "purgeD", "purgeE"}},
-		{name: "drop", twins: []string{"DropNoFence", "DropNoAgeCheck", "DropIgnoresHold"}, stories: []string{"dropA", "dropB", "dropC"}},
+		{name: "drop", twins: []string{"DropNoFence", "DropNoAgeCheck", "DropIgnoresHold"}, stories: []string{"dropA", "dropB", "dropC"}, lives: []string{"dropA", "dropB", "dropC"}},
 	}
 	if len(parts) != len(wants) {
 		t.Fatalf("EvsCommit's parts: %d, want %d", len(parts), len(wants))
 	}
 	for index, want := range wants {
 		part := parts[index]
-		if part.name != want.name || !slices.Equal(part.twins, want.twins) || !slices.Equal(part.stories, want.stories) {
+		if part.name != want.name || !slices.Equal(part.twins, want.twins) || !slices.Equal(part.stories, want.stories) || !slices.Equal(part.lives, want.lives) {
 			t.Errorf("EvsCommit's part %d: %+v, want %+v", index, part, want)
 		}
 	}
@@ -1033,13 +1061,29 @@ func TestRunTlcRunsEachPartApart(t *testing.T) {
 			t.Errorf("stories-%s EvsCommit ran %v, exit %d, want %v passing on the stand-in", part.name, ran, code, want)
 		}
 	}
+	// the drop extension's liveness: each drop story under LiveSpec with F2DropsEnd, no invariant, on one instance
+	starts, code := runTlcStarts(t, "live-drop", "EvsCommit")
+	if len(starts) != 3 || code != 0 {
+		t.Errorf("live-drop EvsCommit ran %v, exit %d, want each drop story passing on the stand-in", starts, code)
+	}
+	for index, start := range starts {
+		story := wants[1].lives[min(index, len(wants[1].lives)-1)]
+		for _, fragment := range []string{"SPECIFICATION LiveSpec", "PROPERTY RemovalGates DueEpochCommits F2DropsEnd", "Instances = {i1}", `F2Run = "` + story + `"`} {
+			if start[0] != "live-"+story || !strings.Contains(start[1], fragment) {
+				t.Errorf("live-drop's run %s: want live-%s showing %q in %q", start[0], story, fragment, start[1])
+			}
+		}
+		if strings.Contains(start[1], "INVARIANT") || strings.Contains(start[1], "SPECIFICATION Spec ") {
+			t.Errorf("live-drop's run %s checks invariants or the plain spec: %q", start[0], start[1])
+		}
+	}
 	if ran, _ := runTlcLabels(t, "twin", "EvsCommit", "DropNoFence"); !slices.Equal(ran, []string{"twin-DropNoFence"}) {
 		t.Errorf("twin EvsCommit DropNoFence ran %v", ran)
 	}
 	if ran, _ := runTlcLabels(t, "control", "EvsCommit", "PurgeUnseen"); !slices.Equal(ran, []string{"control-PurgeUnseen"}) {
 		t.Errorf("control EvsCommit PurgeUnseen ran %v", ran)
 	}
-	for _, args := range [][]string{{"twins-nope", "EvsCommit"}, {"stories-purge", "StoreSettle"}, {"twins-drop", "IndexRollup"}, {"stories", "EvsCommit"}} {
+	for _, args := range [][]string{{"twins-nope", "EvsCommit"}, {"stories-purge", "StoreSettle"}, {"twins-drop", "IndexRollup"}, {"live-purge", "EvsCommit"}, {"live-drop", "StoreSettle"}, {"stories", "EvsCommit"}} {
 		if ran, code := runTlcLabels(t, args...); code != 64 || len(ran) != 0 {
 			t.Errorf("run-tlc.sh %v ran %v, exit %d, want refused with 64", args, ran, code)
 		}

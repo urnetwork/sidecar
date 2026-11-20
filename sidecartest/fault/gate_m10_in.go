@@ -26,9 +26,9 @@
 //     people's work, open.
 //
 // The drop extension's TLC pass is M10's exit's (§22.10's right column; §22.17's blocking line), so no item here
-// waits on it, and nothing here reads fail or open for want of it: its mutants and stories are modes of their own,
-// which modelled.yml's milestones name only from M10's exit, so at M10's entry no test needs them and the TLC item
-// runs none of the drop extension's tests.
+// waits on it, and nothing here reads fail or open for want of it: its mutants, stories and liveness are modes of their
+// own, which modelled.yml's milestones name only from M10's exit (QD-1116, QD-1119), so at M10's entry no test needs
+// them and the TLC item runs none of the drop extension's tests.
 //
 // No item here is an external audit (R-TEST-6; owner decisions 99, 119). Each command's last line says its outcome,
 // as server's gate tool reads it (GateOutcomeLinePrefix): the written check and the TLC check run as tests of this
@@ -58,7 +58,8 @@ const (
 
 // TEST-M2-08's tests of EvsCommit and IndexRollup, in gate mode at M10's entry: EvsCommit's model, mutants and live,
 // its purger's mutants and stories, and IndexRollup's model, mutants and live. The drop extension's tests,
-// TestEvsCommitDropMutantsFailTlc and TestEvsCommitDropStoriesPassTlc, are M10's exit's.
+// TestEvsCommitDropMutantsFailTlc, TestEvsCommitDropStoriesPassTlc and TestEvsCommitDropLivenessHolds, are M10's
+// exit's.
 var gateM10InTlcTests = []string{
 	"TestEvsCommitPassesTlcAtItsBounds",
 	"TestEvsCommitMutantsFailTlc",

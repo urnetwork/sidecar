@@ -241,6 +241,12 @@ func TestEvsCommitDropStoriesPassTlc(t *testing.T) {
 	checkTlc(t, "EvsCommit", "stories-drop")
 }
 
+// The drop extension's liveness, F2DropsEnd under weak fairness on each drop story on one instance (§22.8; QD-1119),
+// which only M10's exit needs.
+func TestEvsCommitDropLivenessHolds(t *testing.T) {
+	checkTlc(t, "EvsCommit", "live-drop")
+}
+
 func TestStoreSettlePassesTlcAtItsBounds(t *testing.T) {
 	checkTlc(t, "StoreSettle", "model")
 }
