@@ -128,7 +128,8 @@ type Operation struct {
 	StoreArrival int
 	// How many head cache requests the Net's record of them held when it was called (Net.HeadCacheHistory), so every
 	// one at that index or later came after it: what FI-27 finds a push's cached read of a reuse source's head by
-	// (QD-1146). Known where StoreArrival is, and 0 then only for a call before the cache's first request.
+	// (QD-1146). An evs world's attempts carry it beside StoreArrival; one a recorder leaves 0 has every request the
+	// record holds come after its call.
 	CacheArrival int
 }
 
