@@ -9,11 +9,23 @@ package fault
 // FI-14 (a) and (b) are checked as properties of every run: each interval's P1 and unfunded P2 debits
 // within the T in force, funded P2 within A2 and W, W within the funded backlog the processes reported,
 // every deferred unit paid once, and the drive writes of any 24 h window within its refill, the
-// bucket's depth and one interval's pricing error.
+// bucket's depth and one interval's pricing error. The world records each breach it finds, and a test's
+// world fails the test at its end with them.
+//
+// The steady run is the row's registered case (Fs116Case; QD-1084), a schedule a step each for the
+// warm-up, the steady intervals and the drain, which TestFs116 runs under every rule §22.8 gives the row,
+// FI-14 checked after every step as this world reads it: FI-14's oracle is EVSB-M2-16's and unbound, so
+// the check is the case's own (FI-14/fs116). The world runs on a fake clock of its own and touches no
+// store and no barrier, so the explorer's seeds each take the one order there is. The other clauses here
+// stay plain tests: a clause registers from a non-test file (register_clause.go), and this world is a
+// test file's.
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -78,7 +90,6 @@ type fs116Interval struct {
 }
 
 type fs116World struct {
-	t        *testing.T
 	settings *evsservice.WriteBudgetSettings
 	clock    *sidecartest.FakeClock
 	governor *evsservice.Governor
@@ -107,15 +118,28 @@ type fs116World struct {
 	totalDeferred      int64
 	totalPaidFunded    int64
 	totalPaidUncovered int64
+
+	// every breach a check found, in the order found
+	breaches []error
+}
+
+// newFs116WorldOf's world, which fails t at its end with every breach its checks found.
+func newFs116World(t *testing.T) *fs116World {
+	world := newFs116WorldOf()
+	t.Cleanup(func() {
+		if err := world.err(); err != nil {
+			t.Error(err)
+		}
+	})
+	return world
 }
 
 // A world at a full bucket, W preloaded beside a steady funded queue, with evs asked for seven pushes
 // an interval, gkm for three, and one taskworker.
-func newFs116World(t *testing.T) *fs116World {
+func newFs116WorldOf() *fs116World {
 	settings := fs116Settings()
 	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
 	world := &fs116World{
-		t:        t,
 		settings: settings,
 		clock:    clock,
 		governor: evsservice.NewGovernor("meta-1", settings, &evsservice.GovernorState{
@@ -303,32 +327,47 @@ func (self *fs116World) run(count int) []*fs116Interval {
 	return intervals
 }
 
+// Records a breach a check found.
+func (self *fs116World) breach(format string, args ...any) {
+	self.breaches = append(self.breaches, fmt.Errorf(format, args...))
+}
+
+// Every breach the checks found, or nil.
+func (self *fs116World) err() error {
+	return errors.Join(self.breaches...)
+}
+
 // FI-14 (b) for one interval: P1 and unfunded P2 within T, funded P2 within A2 and W, and W within the
 // funded backlog the processes reported.
 func (self *fs116World) checkConservation(interval *fs116Interval) {
-	self.t.Helper()
 	allowance := interval.allowance
 	if allowance.TotalByteCount < interval.p1Debit+interval.unfundedIssued {
-		self.t.Errorf("step %d: P1 %d and unfunded %d past T %d", self.step, interval.p1Debit, interval.unfundedIssued, allowance.TotalByteCount)
+		self.breach("step %d: P1 %d and unfunded %d past T %d", self.step, interval.p1Debit, interval.unfundedIssued, allowance.TotalByteCount)
 	}
 	if allowance.P1ByteCount+allowance.UnfundedByteCount != allowance.TotalByteCount {
-		self.t.Errorf("step %d: A1 %d and A_U %d are not T %d", self.step, allowance.P1ByteCount, allowance.UnfundedByteCount, allowance.TotalByteCount)
+		self.breach("step %d: A1 %d and A_U %d are not T %d", self.step, allowance.P1ByteCount, allowance.UnfundedByteCount, allowance.TotalByteCount)
 	}
 	if allowance.FundedByteCount < interval.fundedIssued || allowance.WalletByteCount < interval.fundedIssued {
-		self.t.Errorf("step %d: funded %d past A2 %d or W %d", self.step, interval.fundedIssued, allowance.FundedByteCount, allowance.WalletByteCount)
+		self.breach("step %d: funded %d past A2 %d or W %d", self.step, interval.fundedIssued, allowance.FundedByteCount, allowance.WalletByteCount)
 	}
 	if interval.reportedBacklog < allowance.WalletByteCount {
-		self.t.Errorf("step %d: W %d past the funded backlog %d", self.step, allowance.WalletByteCount, interval.reportedBacklog)
+		self.breach("step %d: W %d past the funded backlog %d", self.step, allowance.WalletByteCount, interval.reportedBacklog)
 	}
 	if float64(allowance.UnfundedByteCount) > self.settings.UnfundedShare*float64(allowance.TotalByteCount) {
-		self.t.Errorf("step %d: A_U %d past its share of T %d", self.step, allowance.UnfundedByteCount, allowance.TotalByteCount)
+		self.breach("step %d: A_U %d past its share of T %d", self.step, allowance.UnfundedByteCount, allowance.TotalByteCount)
 	}
 }
 
 // FI-14 (a) with no P0: the drive writes of every window of windowCount intervals within its refill,
 // the bucket's depth and the largest one interval's pricing error.
 func (self *fs116World) checkWindows(windowCount int) {
-	self.t.Helper()
+	if err := self.windowsErr(windowCount); err != nil {
+		self.breach("%v", err)
+	}
+}
+
+// checkWindows' reading, nil where every window holds.
+func (self *fs116World) windowsErr(windowCount int) error {
 	windowCount = min(windowCount, len(self.intervals))
 	refill := 1000.0
 	var errorBound int64
@@ -344,28 +383,35 @@ func (self *fs116World) checkWindows(windowCount int) {
 		if windowCount-1 <= i {
 			bound := int64(refill*float64(windowCount)) + 720000 + errorBound
 			if bound < windowSum {
-				self.t.Errorf("the window ending at interval %d wrote %d, past %d", i, windowSum, bound)
-				return
+				return fmt.Errorf("the window ending at interval %d wrote %d, past %d", i, windowSum, bound)
 			}
 		}
 	}
+	return nil
 }
 
-// Every push's deferred units paid once, from W or as unfunded P2, once the queue is drained.
+// Every push's deferred units paid once, from W or as unfunded P2, the queue's unpaid among them, which once
+// the queue is drained is none.
 func (self *fs116World) checkPaidOnce() {
-	self.t.Helper()
+	if err := self.paidOnceErr(); err != nil {
+		self.breach("%v", err)
+	}
+}
+
+// checkPaidOnce's reading, nil where every deferred unit is paid once or queued.
+func (self *fs116World) paidOnceErr() error {
 	var unpaid int64
 	for _, work := range self.funded {
 		unpaid += work.byteCount
 	}
 	if self.totalPaidFunded+self.totalPaidUncovered+unpaid != self.totalDeferred {
-		self.t.Errorf("deferred %d: paid %d from W, %d unfunded, %d unpaid", self.totalDeferred, self.totalPaidFunded, self.totalPaidUncovered, unpaid)
+		return fmt.Errorf("deferred %d: paid %d from W, %d unfunded, %d unpaid", self.totalDeferred, self.totalPaidFunded, self.totalPaidUncovered, unpaid)
 	}
+	return nil
 }
 
 // Stops the pushes and runs until the funded queue is empty.
 func (self *fs116World) drain(limit int) {
-	self.t.Helper()
 	for _, process := range self.processes {
 		process.pushesPerInterval = 0
 	}
@@ -375,7 +421,7 @@ func (self *fs116World) drain(limit int) {
 		}
 		self.stepOnce()
 	}
-	self.t.Errorf("%d funded units still unpaid after %d intervals", len(self.funded), limit)
+	self.breach("%d funded units still unpaid after %d intervals", len(self.funded), limit)
 }
 
 // FS-116's steady clause, which the mutant must fail: after warm-up, every push asked for is admitted
@@ -392,26 +438,89 @@ func fs116CheckSteady(intervals []*fs116Interval) error {
 	return nil
 }
 
-func TestFs116SteadyLoadAdmitsTenPushesAnInterval(t *testing.T) {
-	world := newFs116World(t)
-	world.run(2 * fs116FundedDelay)
-	steady := world.run(100)
-	if err := fs116CheckSteady(steady); err != nil {
-		t.Error(err)
-	}
-	for _, interval := range steady {
-		if interval.allowance.TotalByteCount != 1000 || interval.allowance.Calibration != 1 {
-			t.Fatalf("T %d, k %v", interval.allowance.TotalByteCount, interval.allowance.Calibration)
+// The steady run, FS-116's registered case: after the warm-up, ten pushes an interval admitted, none queued, T a
+// full 1,000 at k = 1 and W back at its preload; then the pushes stop and the funded queue drains, every deferred unit
+// paid once. FI-14 (a) and (b), as the world reads them, are checked after every step.
+var Fs116Case = Register("FS-116", "", []Tier{TierT2}, fs116SteadyLoad(nil))
+
+// The steady run's builder, mutate applied to each run's world before its warm-up where not nil.
+func fs116SteadyLoad(mutate func(world *fs116World)) Builder {
+	return func(net *Net) *Schedule {
+		var world *fs116World
+		return &Schedule{
+			Steps: []*Step{
+				{Actor: "governor", Action: func(ctx context.Context, net *Net) error {
+					world = newFs116WorldOf()
+					if mutate != nil {
+						mutate(world)
+					}
+					world.run(2 * fs116FundedDelay)
+					return nil
+				}},
+				{Actor: "governor", Action: func(ctx context.Context, net *Net) error {
+					steady := world.run(100)
+					if err := fs116CheckSteady(steady); err != nil {
+						return err
+					}
+					for i, interval := range steady {
+						if interval.allowance.TotalByteCount != 1000 || interval.allowance.Calibration != 1 {
+							return fmt.Errorf("steady interval %d: T %d, k %v", i, interval.allowance.TotalByteCount, interval.allowance.Calibration)
+						}
+					}
+					for _, process := range world.processes {
+						if process.queuedByteCount != 0 {
+							return fmt.Errorf("%s queues %d", process.id, process.queuedByteCount)
+						}
+					}
+					return nil
+				}},
+				{Actor: "governor", Action: func(ctx context.Context, net *Net) error {
+					world.drain(100)
+					if len(world.funded) != 0 {
+						return fmt.Errorf("%d funded units unpaid after the drain", len(world.funded))
+					}
+					return nil
+				}},
+			},
+			Check: []Invariant{NewInvariant("FI-14/fs116", func(ctx context.Context, oracle *Oracle) error {
+				if world == nil {
+					return nil
+				}
+				return errors.Join(world.err(), world.paidOnceErr(), world.windowsErr(len(world.intervals)))
+			})},
 		}
 	}
-	for _, process := range world.processes {
-		if process.queuedByteCount != 0 {
-			t.Errorf("%s queues %d", process.id, process.queuedByteCount)
-		}
+}
+
+func TestFs116(t *testing.T) {
+	RunRow(t, "FS-116", "", nil)
+}
+
+// The registered case fails what its world breaks: FI-14's check, run after every step, fails a world holding a breach
+// at the step that left it, and the mutant debiting funded P2 from T fails the steady step.
+func TestFs116CaseFailsWhatItsWorldBreaks(t *testing.T) {
+	for _, planted := range []struct {
+		name   string
+		mutate func(world *fs116World)
+		want   string
+	}{
+		{name: "a breach", mutate: func(world *fs116World) { world.breach("a planted breach") }, want: "a planted breach"},
+		{name: "funded P2 debited from T", mutate: func(world *fs116World) { world.mutantFundedFromT = true }, want: "pushes"},
+	} {
+		func() {
+			net := sidecartest.NewNet(t.Context(), nil)
+			defer net.Close()
+			schedule := fs116SteadyLoad(planted.mutate)(net)
+			schedule.Id = "FS-116 " + planted.name
+			result := Run(t.Context(), schedule, net)
+			if result.Err == nil || !strings.Contains(result.Err.Error(), planted.want) {
+				t.Errorf("%s: %s", planted.name, result)
+			}
+			if planted.name == "a breach" && result.FailedStep != 0 {
+				t.Errorf("the planted breach failed the run at step %d, not the step that left it", result.FailedStep)
+			}
+		}()
 	}
-	world.drain(100)
-	world.checkPaidOnce()
-	world.checkWindows(len(world.intervals))
 }
 
 // P2 paused 100 intervals, then resumed: ten pushes still admitted each interval while W drains, the
