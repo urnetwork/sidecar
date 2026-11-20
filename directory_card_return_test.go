@@ -9,9 +9,9 @@
 // through the cards ref's index and search_agents (sidecartest/fault/fs87_index_evs.go).
 //
 // QD-1144's check at the return (directory_cards_erasure.go): an item an erasure took, which its writer still hands,
-// is left out of the return and of every card after, the erasure set read once; a return whose last card holds
-// nothing the set lists at or above that card's version reads the set and changes nothing. Its fail-closed half is
-// directory_cards_erasure_test.go's.
+// is left out of the return and of every card after, the erasure set read once, the repair's return alike; a return
+// whose last card holds nothing the set lists at or above that card's version reads the set and changes nothing. Its
+// fail-closed half is directory_cards_erasure_test.go's.
 
 package sidecar_test
 
@@ -414,5 +414,33 @@ func TestDirectoryCardReturnWithNothingErasedChangesNothing(t *testing.T) {
 	reader.mustSync(t)
 	if shown := testItemsOf(t, reader, writer.sidecarId); len(shown) != 2 || shown[keptId].Announcement.GetVersion() != 4 {
 		t.Fatalf("a reader after the return: %v", shown)
+	}
+}
+
+// The repair hands the card's items back from the card put last, past the run and worker writers, so its return holds
+// to the erasure set alike: after a directory admin's CUT lists one of A's runs, another member removes A's card, a
+// breach readers refuse, and A's repair over it, a return, leaves the listed run out and carries the other two above.
+func TestDirectoryCardRepairLeavesOutWhatAnErasureTook(t *testing.T) {
+	world := newTestDirectoryWorld(t, nil)
+	aMember, bMember := sidecar.NewId(), sidecar.NewId()
+	a := world.memberWriter(aMember)
+	b := world.memberWriter(bMember)
+	world.publish()
+	device := world.device(a)
+	now := world.clock.Now().UnixMilli()
+	erasedId, keptId := sidecar.NewId(), sidecar.NewId()
+	device.writeCard(t, testRunItem(a.sidecarId, &aMember, erasedId, 1, now), testRunItem(a.sidecarId, &aMember, keptId, 1, now))
+	world.cards.ListErased(world.directoryId, world.readerId, testAnnouncementDocumentName(&a.sidecarId, erasedId), 1)
+	world.removeFile(b.sidecarId, sidecar.DirectoryCardPath(a.sidecarId))
+	device.mustSync(t)
+	pass, err := device.client.Repair(t.Context())
+	if err != nil || pass.Card == nil {
+		t.Fatalf("the repair of B's removal: %+v, %v", pass, err)
+	}
+	if versions := testCardWrittenVersions(pass.Card); len(versions) != 1 || versions[keptId] != 3 {
+		t.Fatalf("the repair carries %v", versions)
+	}
+	if len(pass.Card.Moderated) != 1 || pass.Card.Moderated[0] != erasedId {
+		t.Fatalf("the repair left out %v", pass.Card.Moderated)
 	}
 }
