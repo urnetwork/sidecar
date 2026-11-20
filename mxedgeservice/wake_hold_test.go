@@ -262,6 +262,10 @@ func TestWakeHoldsBoundsAtTheDesignsNumbers(t *testing.T) {
 // The hint is a forced MailHint{RECEIVER_NEEDED, mx} on topic mail, kind 0x1702, its version the clock's ms at the
 // miss, to every receiver the route lists; one the host cannot resolve is missed, never an error. A second session
 // held for the same network hints no one again.
+//
+// A hold's count is published before its session reaches the hint, so AwaitWakeHints, a wait on the hint group, is
+// called only once that hold's first Find timer is armed, which holdForReceiver does after the hint has joined the
+// group (QD-1117): on the count alone the wait could run before the hint's Add, which the race detector reports.
 func TestWakeHoldHintsTheRoutesReceiversOnceForced(t *testing.T) {
 	receiverIds := []sidecar.Id{testRouteNetworkId("receiver newest"), testRouteNetworkId("receiver older")}
 	router := newTestWakeRouter(t, nil, receiverIds[:1])
@@ -272,9 +276,14 @@ func TestWakeHoldHintsTheRoutesReceiversOnceForced(t *testing.T) {
 	router.heldFrom(testWakeSenders[0])
 	missTime := router.clock.Now()
 	router.service.AwaitWakeHoldCount(1)
+	router.awaitTimerAt(missTime.Add(router.settings.WakeHoldFindInterval))
 	router.service.AwaitWakeHints()
 	router.heldFrom(testWakeSenders[1])
+	// the second hold's miss is a STARTTLS quiet period after the first's
+	secondMissTime := router.clock.Now()
 	router.service.AwaitWakeHoldCount(2)
+	// and the second hold's, so a hint it sent, which it must not, would be in the wait too
+	router.awaitTimerAt(secondMissTime.Add(router.settings.WakeHoldFindInterval))
 	router.service.AwaitWakeHints()
 
 	hints := router.host.Push.Hints(testWakeClientOf(receiverIds[0]))
