@@ -116,6 +116,8 @@ type testSenderOptions struct {
 	readyKeySets [][]byte
 	measure      *sidecar.SmtpProverMeasure
 	memberDevice func(sidecarId sidecar.Id) bool
+	// replaces the world's DKIM keys, given its device DoH, clock and settings
+	dkim func(zone *sidecartest.FakeMailZone, clock *sidecartest.FakeClock, settings *sidecar.SmtpSenderSettings) *sidecar.SmtpDkimKeys
 }
 
 // mail.example and its MX behind the stub edge, a sender on the fake prover, and what it reported.
@@ -167,6 +169,9 @@ func newTestSenderWorld(t *testing.T, options *testSenderOptions) *testSenderWor
 	allowances := sidecar.NewSmtpTlsAllowanceStore(tls.store.Root(), self.settings, tls.clock)
 	policy := sidecar.NewSmtpTlsPolicy(dane, mtaSts, self.pins, allowances, tls.gate, tls.zone, tls.pki.roots, self.settings, tls.clock)
 	dkim := sidecar.NewSmtpDkimKeys(newTestMemorySecrets(), testEchoDkimPublisher{}, self.settings, tls.clock, nil)
+	if options.dkim != nil {
+		dkim = options.dkim(tls.zone, tls.clock, self.settings)
+	}
 	args := &sidecar.SmtpSenderArgs{
 		Dialer:       dialer,
 		Prover:       prover,

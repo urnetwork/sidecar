@@ -77,6 +77,11 @@ var metadataListAdditions = []metadataListAddition{
 		block:    "flags FORCE, DELETE, BASE, IMMUTABLE, CONSUME, PATH_EPOCH, ERASE, CLOSURE, DROP or CUT,",
 		list:     "flags FORCE, DELETE, BASE, IMMUTABLE, CONSUME, PATH_EPOCH, ERASE, CLOSURE, DROP, CUT or COMPLETION,",
 	},
+	{
+		question: "smtp-m9-34-cname-selector-rotation",
+		block:    "replying and forwarding burners' selectors until the PSL listing (owner decision 79)\n",
+		list:     "replying and forwarding burners' selectors until the PSL listing (owner decision 79); at each GET /network/dns, by api's own lookup of <sel>._domainkey.<domain>, whether a Team custom domain answers each of its published selectors, which the read lists as owed CNAMEs until it does and never stores (QD-1130)\n",
+	},
 }
 
 // §2.8's block with each addition in place, in order, and a finding for each that does not apply.

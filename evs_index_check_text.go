@@ -1,12 +1,16 @@
 //go:build !ios_extension
 
-// Checks by hosts with the text (§11.14's coverage row; D-EVS-56; DESIGN-DETAILS 1.5's deleted-document row and 1.7's
-// note for SEARCH-M10-21; QD-209; SEARCH-M10-21): a host holding a ref's text re-extracts each document version a
-// writer's push adds and checks each tombstone against its path's history; on a mismatch it uses its own result, which
-// its local layer serves in the entry's place, and raises index_mismatch {repo, ref, path, signer: the push's}.
-// Indexers do so for every repo they read. Every writer of a ref writes its index, so without this an agent could hide
-// a document or plant hits.
+// Checks by hosts with the text (§11.14's coverage row; D-EVS-56; DESIGN-DETAILS 1.2.8, 1.5's deleted-document row and
+// 1.7's note for SEARCH-M10-21; QD-209; SEARCH-M10-21): a host holding a ref's text re-extracts each document version a
+// writer's push adds, in its own files or in the shards a push past DirectBytes merges them into, and checks each
+// tombstone against its path's history; on a mismatch it uses its own result, which its local layer serves in the
+// entry's place, and raises index_mismatch {repo, ref, path, signer: the push's}. Indexers do so for every repo they
+// read. Every writer of a ref writes its index, so without this an agent could hide a document or plant hits.
 //
+//	added      an entry of a slot or large entry the push wrote that the version it replaced did not hold, and a row
+//	           or tombstone of a shard it wrote that no shard of its partition at its base held as it stands: a push
+//	           past DirectBytes merges its entries into the bucket's shards in the push (§11.14's seal row), and its
+//	           head holds none of them; what a merge carried over is not judged again
 //	live       a full entry of a path's chunk at version v: the path's text at v, extracted as every writer extracts
 //	           it, must give that chunk's key set and row, else the host's own entry stands for it
 //	deleted    a live entry whose path the content ref holds removed, or at a higher version, at the pin, with no
@@ -28,8 +32,9 @@
 // use.
 //
 // Memory and reads: this draft walks every push of the content ref to its pin and every standing path's doc_keys in
-// RAM for each check, and the omitted row reads every bucket's entries, its shards decoded, where an indexer's steady
-// state wants them kept between checks (QD-641).
+// RAM for each check, the omitted row reads every bucket's entries, its shards decoded, and the added row holds each
+// shard the push wrote and the base's shards it is compared with decoded, where an indexer's steady state wants them
+// kept between checks and streamed from storage (QD-641).
 
 package sidecar
 
@@ -47,6 +52,10 @@ type indexTextCheckArgs struct {
 	// The versions the push replaced, decoded, by path: entries carried over from them are not judged again. Nil
 	// judges every entry of the push's files.
 	replaced map[string]*indexSlot
+	// The shards at the push's base, decoded, by path, of every partition whose shards it wrote, those it replaced or
+	// removed among them: a row or tombstone one of them held as it stands is one a merge inside the push carried over,
+	// and is not judged again. Nil judges every row and tombstone of each shard the push wrote.
+	baseShards map[string]*indexShard
 	// The content ref whose documents the entries are of, and the version they are checked at: an in-ref push's own,
 	// a companion push's coverage pin.
 	content indexContentRef
@@ -78,10 +87,10 @@ type indexTextCheckOutcome struct {
 	checked int
 }
 
-// One added entry and the file of the signer's holding it.
+// One added entry and the index file holding it: a slot or large entry of the signer's, or a shard.
 type indexTextAdded struct {
 	entry *indexEntry
-	file  *indexViewSlot
+	path  string
 }
 
 // A path's chunk.
@@ -91,11 +100,18 @@ type indexTextPlace struct {
 }
 
 // The entries a push's own files add: every entry of each slot and large entry it wrote that the version it replaced
-// did not hold at the same key, version and kind.
-func indexTextAddedEntries(view *indexView, push *indexReproducePush, replaced map[string]*indexSlot) []*indexTextAdded {
+// did not hold at the same key, version and kind; and every row and tombstone of each shard it wrote that no shard at
+// its base held as it stands, the entries a push past DirectBytes merged into its bucket's shards.
+func indexTextAddedEntries(ctx context.Context, args *indexTextCheckArgs) ([]*indexTextAdded, error) {
+	view, push := args.view, args.push
 	written := map[string]bool{}
 	for _, file := range push.files {
 		written[file.file.path] = true
+	}
+	type held struct {
+		key     [indexIdByteCount]byte
+		version uint64
+		kind    indexEntryKind
 	}
 	added := []*indexTextAdded{}
 	for _, root := range view.roots {
@@ -108,33 +124,91 @@ func indexTextAddedEntries(view *indexView, push *indexReproducePush, replaced m
 				if !written[file.file.path] {
 					continue
 				}
-				type held struct {
-					key     [indexIdByteCount]byte
-					version uint64
-					kind    indexEntryKind
-				}
 				before := map[held]bool{}
-				if slot := replaced[file.file.path]; slot != nil {
+				if slot := args.replaced[file.file.path]; slot != nil {
 					for _, entry := range slot.entries {
 						before[held{key: entry.key, version: entry.version, kind: entry.kind}] = true
 					}
 				}
 				for _, entry := range file.slot.entries {
 					if !before[held{key: entry.key, version: entry.version, kind: entry.kind}] {
-						added = append(added, &indexTextAdded{entry: entry, file: file})
+						added = append(added, &indexTextAdded{entry: entry, path: file.file.path})
 					}
 				}
 			}
 		}
 	}
-	return added
+
+	// a merge carries a row over as it stood, its time, key set and row unchanged, and moves it between the shards of
+	// its partition; a row that differs in any of them is the push's own
+	carried := map[held][]*indexEntry{}
+	for _, shard := range args.baseShards {
+		for _, entry := range indexShardEntries(shard) {
+			at := held{key: entry.key, version: entry.version, kind: entry.kind}
+			carried[at] = append(carried[at], entry)
+		}
+	}
+	carriedOver := func(entry *indexEntry) bool {
+		if args.baseShards == nil {
+			return false
+		}
+		for _, before := range carried[held{key: entry.key, version: entry.version, kind: entry.kind}] {
+			if before.timeSeconds == entry.timeSeconds && slices.Equal(before.keys, entry.keys) && indexRowsEqual(before.row, entry.row, view.companion) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, root := range view.roots {
+		shards := slices.Clone(root.allShards)
+		for _, bucket := range root.buckets {
+			shards = append(shards, bucket.shards...)
+		}
+		for _, shard := range shards {
+			if !written[shard.file.path] {
+				continue
+			}
+			decoded, err := view.shard(ctx, shard)
+			if err != nil {
+				return nil, err
+			}
+			if decoded == nil {
+				// a shard that breaks its format, which the view alarms naming its signer
+				continue
+			}
+			for _, entry := range indexShardEntries(decoded) {
+				if !carriedOver(entry) {
+					added = append(added, &indexTextAdded{entry: entry, path: shard.file.path})
+				}
+			}
+		}
+	}
+	return added, nil
+}
+
+// A shard's rows as full entries and its tombstones as entries of their kinds, as a merge takes them.
+func indexShardEntries(shard *indexShard) []*indexEntry {
+	entries := make([]*indexEntry, 0, len(shard.documents)+len(shard.tombstones))
+	for _, document := range shard.documents {
+		entries = append(entries, &indexEntry{
+			kind: indexEntryFull, key: document.key, version: document.version, timeSeconds: document.timeSeconds,
+			row: document.row, keys: document.keys,
+		})
+	}
+	for _, tombstone := range shard.tombstones {
+		entries = append(entries, &indexEntry{kind: tombstone.kind, key: tombstone.key, version: tombstone.version, timeSeconds: tombstone.timeSeconds})
+	}
+	return entries
 }
 
 // Checks push's added entries against the host's text: see the file header.
 func indexCheckWithText(ctx context.Context, args *indexTextCheckArgs) (*indexTextCheckOutcome, error) {
 	view := args.view
 	outcome := &indexTextCheckOutcome{}
-	added := indexTextAddedEntries(view, args.push, args.replaced)
+	added, err := indexTextAddedEntries(ctx, args)
+	if err != nil {
+		return nil, err
+	}
 	committed, err := indexTextContentPush(ctx, args)
 	if err != nil {
 		return nil, err
@@ -233,7 +307,7 @@ func indexCheckWithText(ctx context.Context, args *indexTextCheckArgs) (*indexTe
 	}
 
 	mismatch := func(added *indexTextAdded, own *indexEntry) {
-		mismatchAt(added.file.file.path, added.entry.key, added.entry.version, own)
+		mismatchAt(added.path, added.entry.key, added.entry.version, own)
 	}
 
 	for _, one := range added {
