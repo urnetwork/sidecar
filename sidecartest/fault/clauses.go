@@ -49,6 +49,21 @@ var registeredClauses = []*ClauseRegistration{
 	RegisterClause("FS-14", "", "acl two removals", Fs14AclTwoRemovals),
 	RegisterClause("FS-14", "", "acl forked readers", Fs14AclForkedReaders),
 
+	// QUOTA-M2-13's producer and lease rows on the Net's fake Quota, beside the registered kill (fs44.go)
+	RegisterClause("FS-44", "", "lost response retried", Fs44LostResponseRetried),
+	RegisterClause("FS-44", "", "killed with an applied batch unanswered", Fs44KilledWithAnAppliedBatchUnanswered),
+	RegisterClause("FS-44", "", "drain loses nothing", Fs44DrainLosesNothing),
+	RegisterClause("FS-44", "", "api unavailable eleven minutes", Fs44ApiUnavailableElevenMinutes),
+	RegisterClause("FS-44", "", "edge killed before its post", Fs44EdgeKilledBeforeItsPost),
+	RegisterClause("FS-44", "", "two hosts on one balance", Fs44TwoHostsOnOneBalance),
+
+	// the relayed reservation rule's twin (fs45.go)
+	RegisterClause("FS-45", "", "stream-bound pair is unaffected", Fs45StreamBoundPairIsUnaffected),
+	RegisterClause("FS-45", "", "one debit per contract", Fs45OneDebitPerContract),
+	RegisterClause("FS-45", "", "redis loss over-admits by the outstanding grants", Fs45RedisLossOverAdmitsByTheOutstandingGrants),
+
+	RegisterClause("FS-47", "", "one eraser keeps its own rate", Fs47OneEraserKeepsItsOwnRate),
+
 	RegisterClause("FS-57", "", "store unreachable", Fs57StoreUnreachable, ClauseOnT3("./evshost")),
 
 	RegisterClause("FS-58", "", "folds killed and raced", Fs58FoldKilledAndRaced, ClauseOnT3("./evshost")),
@@ -99,4 +114,5 @@ var registeredClauses = []*ClauseRegistration{
 	RegisterClause("FS-95", "", "owner-bound", Fs95OwnerBound, ClauseOnT3("./evshost")),
 	RegisterClause("FS-95", "", "list missing a version", Fs95ListMismatch(false), ClauseOnT3("./evshost")),
 	RegisterClause("FS-95", "", "list adding a version", Fs95ListMismatch(true), ClauseOnT3("./evshost")),
+
 }
