@@ -18,7 +18,8 @@
 #     stack               make stack-test: the store suites on §22.4's local stack, which needs Docker
 #     t3                  ../server/sidecar-t3.sh nightly: T3's FS rows and their 100 explorer seeds
 #   gate, the nightly phases and then, for --gate Mn:
-#     model               the TLC runs of sidecartest/model in gate mode (TEST-M2-08), with TLC naming
+#     model               the TLC runs of sidecartest/model in gate mode (TEST-M2-08) at Mn, milestone n's
+#                         exit, each model's modes it needs by modelled.yml's milestones, with TLC naming
 #                         the command that runs tlc2.TLC; with no TLC the gate fails, naming the tool
 #     gate-report         ../server/local/sidecar-gate Mn, OPS-M1-07's report of the gate's rows
 #
@@ -208,7 +209,7 @@ if [ "$cadence" = nightly ] || [ "$cadence" = gate ]; then
 fi
 
 if [ "$cadence" = gate ]; then
-  phase model "$here" env SIDECAR_TLC_MODE=gate "$GO" test -count=1 -timeout 0 -tags sidecar_tlc ./sidecartest/model
+  phase model "$here" env SIDECAR_TLC_MODE=gate SIDECAR_TLC_GATE="$gate" "$GO" test -count=1 -timeout 0 -tags sidecar_tlc ./sidecartest/model
   if [ -d "$server/local/sidecar-gate" ]; then
     phase gate-report "$server" "$GO" run ./local/sidecar-gate "$gate"
   else
