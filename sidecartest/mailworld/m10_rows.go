@@ -15,8 +15,8 @@
 //
 //	RunM10Fs76Mailbox   FS-76's corpus mail (SearchCorpus's MIME forms and edge classes, and four messages only the
 //	                    canonical reading finds a word of), delivered over the corpus's 200 days and ingested by two
-//	                    devices in turn, the mailbox's first message erased early and, after the first roll-up, a
-//	                    message the roll-up moved into an all shard; at every bucket boundary 1 s before and after,
+//	                    devices in turn, the mailbox's first message erased early and, once a roll-up has moved a
+//	                    standing message into an all shard, that message; at every bucket boundary 1 s before and after,
 //	                    after every roll-up, after each erasure and at the end the mailbox's index holds live exactly
 //	                    the oracle's documents; and the query set runs on a desktop and a phone against the oracle over
 //	                    the same messages' stored bytes on a search world (the file's second half), since no device
@@ -970,7 +970,8 @@ type M10Fs76Settings struct {
 	// After how many of the corpus's messages the first message is erased, and the canonical-reading messages land.
 	EraseAfterCount     int
 	CanonicalAfterCount int
-	// After how many of the mailbox's roll-ups a message they moved into an all shard is erased.
+	// From how many of the mailbox's roll-ups on a standing message they moved into an all shard is erased: after the
+	// first roll-up from then that has moved one, since a roll-up of a bucket holding only erased documents moves none.
 	RolledEraseAfterRollUpCount int
 	// The most roll-ups one boundary may owe, a bound on a loop.
 	RollUpMaxCount int
