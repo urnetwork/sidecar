@@ -7,6 +7,11 @@
 // through a put's path conflict where the copy had not read the removal, raised once though its put failed, and kept
 // by the repair and by format 2's carrier across a restart. FS-87's index case holds the same return on the real engine,
 // through the cards ref's index and search_agents (sidecartest/fault/fs87_index_evs.go).
+//
+// QD-1144's check at the return (directory_cards_erasure.go): an item an erasure took, which its writer still hands,
+// is left out of the return and of every card after, the erasure set read once, the repair's return alike; a return
+// whose last card holds nothing the set lists at or above that card's version reads the set and changes nothing. Its
+// fail-closed half is directory_cards_erasure_test.go's.
 
 package sidecar_test
 
@@ -310,4 +315,132 @@ func TestDirectoryCardCarrierKeepsTheLineAcrossARestart(t *testing.T) {
 		t.Fatalf("the restarted daemon's card: %v", versions)
 	}
 	restarted.Runs().Close()
+}
+
+// A directory admin erases a run A's card holds beside another run and its worker item, A's daemon still running it
+// (QD-1144): A's next card, its return, reads the erasure set once and leaves the erased run out, though A hands it
+// again, the run it kept and the worker item coming back two above; a reader shows those two. Every card after leaves
+// the run out with no read of the set, its renewal and a content change of it alike.
+func TestDirectoryCardReturnLeavesOutWhatAnErasureTook(t *testing.T) {
+	world := newTestDirectoryWorld(t, nil)
+	memberId := sidecar.NewId()
+	writer := world.memberWriter(memberId)
+	world.publish()
+	device := world.device(writer)
+	now := world.clock.Now().UnixMilli()
+	erasedId, keptId, workerId := sidecar.NewId(), sidecar.NewId(), sidecar.NewId()
+	erased := testRunItem(writer.sidecarId, &memberId, erasedId, 2, now)
+	kept := testRunItem(writer.sidecarId, &memberId, keptId, 1, now)
+	worker := testWorkerItem(writer.sidecarId, &memberId, workerId, 1, now)
+	device.writeCard(t, erased, kept, worker)
+
+	world.eraseFromCard(writer.sidecarId, erasedId, 2)
+	world.clock.Advance(time.Minute)
+	world.publish()
+	reads := world.counts().ErasedReads
+	returned := device.writeCard(t, erased, kept, worker)
+	if versions := testCardWrittenVersions(returned); len(versions) != 2 || versions[keptId] != 3 || versions[workerId] != 3 {
+		t.Fatalf("the card back after the erasure carries %v", versions)
+	}
+	if len(returned.Moderated) != 1 || returned.Moderated[0] != erasedId {
+		t.Fatalf("the return left out %v", returned.Moderated)
+	}
+	if count := world.counts().ErasedReads - reads; count != 1 {
+		t.Fatalf("the return read the erasure set %d times", count)
+	}
+	reader := world.reader(nil)
+	reader.mustSync(t)
+	if shown := testItemsOf(t, reader, writer.sidecarId); len(shown) != 2 || shown[erasedId] != nil ||
+		shown[keptId].Announcement.GetVersion() != 3 || shown[workerId].Announcement.GetVersion() != 3 {
+		t.Fatalf("a reader after the return: %v", shown)
+	}
+
+	for index, handed := range [][]*protocol.Announcement{{erased, kept, worker}, {testItemAt(erased, 3), kept, worker}} {
+		world.clock.Advance(time.Minute)
+		written := device.writeCard(t, handed...)
+		if versions := testCardWrittenVersions(written); len(versions) != 2 || versions[erasedId] != 0 || versions[keptId] != 3 {
+			t.Fatalf("card %d after the return carries %v", index, versions)
+		}
+		if len(written.Moderated) != 1 || written.Moderated[0] != erasedId {
+			t.Fatalf("card %d after the return left out %v", index, written.Moderated)
+		}
+	}
+	if count := world.counts().ErasedReads - reads; count != 1 {
+		t.Fatalf("the cards after the return read the erasure set again: %d reads", count)
+	}
+	reader.mustSync(t)
+	if shown := testItemsOf(t, reader, writer.sidecarId); len(shown) != 2 || shown[erasedId] != nil {
+		t.Fatalf("a reader after the cards that followed: %v", shown)
+	}
+}
+
+// A removal by a directory admin over a card none of whose items the erasure set lists at or above the version that
+// card held it at: the return reads the set once and changes nothing, every item coming back two above. The set lists
+// one run below the version the card holds, as a revocation lists the version that named its repo before the run was
+// written private, and another sidecar's run.
+func TestDirectoryCardReturnWithNothingErasedChangesNothing(t *testing.T) {
+	world := newTestDirectoryWorld(t, nil)
+	memberId := sidecar.NewId()
+	writer := world.memberWriter(memberId)
+	world.publish()
+	device := world.device(writer)
+	now := world.clock.Now().UnixMilli()
+	keptId, workerId := sidecar.NewId(), sidecar.NewId()
+	kept := testRunItem(writer.sidecarId, &memberId, keptId, 1, now)
+	worker := testWorkerItem(writer.sidecarId, &memberId, workerId, 1, now)
+	device.writeCard(t, kept, worker)
+	world.clock.Advance(time.Minute)
+	changed := testItemAt(kept, 2)
+	device.writeCard(t, changed, worker)
+
+	otherId := sidecar.NewId()
+	world.cards.ListErased(world.directoryId, world.readerId, testAnnouncementDocumentName(&writer.sidecarId, keptId), 1)
+	world.cards.ListErased(world.directoryId, world.readerId, testAnnouncementDocumentName(&otherId, sidecar.NewId()), 7)
+	world.removeFile(world.readerId, sidecar.DirectoryCardPath(writer.sidecarId))
+	world.clock.Advance(time.Minute)
+	world.publish()
+	reads := world.counts().ErasedReads
+	returned := device.writeCard(t, changed, worker)
+	if versions := testCardWrittenVersions(returned); len(versions) != 2 || versions[keptId] != 4 || versions[workerId] != 3 {
+		t.Fatalf("the card back after the removal carries %v", versions)
+	}
+	if len(returned.Moderated) != 0 {
+		t.Fatalf("a return with nothing erased left out %v", returned.Moderated)
+	}
+	if count := world.counts().ErasedReads - reads; count != 1 {
+		t.Fatalf("the return read the erasure set %d times", count)
+	}
+	reader := world.reader(nil)
+	reader.mustSync(t)
+	if shown := testItemsOf(t, reader, writer.sidecarId); len(shown) != 2 || shown[keptId].Announcement.GetVersion() != 4 {
+		t.Fatalf("a reader after the return: %v", shown)
+	}
+}
+
+// The repair hands the card's items back from the card put last, past the run and worker writers, so its return holds
+// to the erasure set alike: after a directory admin's CUT lists one of A's runs, another member removes A's card, a
+// breach readers refuse, and A's repair over it, a return, leaves the listed run out and carries the other two above.
+func TestDirectoryCardRepairLeavesOutWhatAnErasureTook(t *testing.T) {
+	world := newTestDirectoryWorld(t, nil)
+	aMember, bMember := sidecar.NewId(), sidecar.NewId()
+	a := world.memberWriter(aMember)
+	b := world.memberWriter(bMember)
+	world.publish()
+	device := world.device(a)
+	now := world.clock.Now().UnixMilli()
+	erasedId, keptId := sidecar.NewId(), sidecar.NewId()
+	device.writeCard(t, testRunItem(a.sidecarId, &aMember, erasedId, 1, now), testRunItem(a.sidecarId, &aMember, keptId, 1, now))
+	world.cards.ListErased(world.directoryId, world.readerId, testAnnouncementDocumentName(&a.sidecarId, erasedId), 1)
+	world.removeFile(b.sidecarId, sidecar.DirectoryCardPath(a.sidecarId))
+	device.mustSync(t)
+	pass, err := device.client.Repair(t.Context())
+	if err != nil || pass.Card == nil {
+		t.Fatalf("the repair of B's removal: %+v, %v", pass, err)
+	}
+	if versions := testCardWrittenVersions(pass.Card); len(versions) != 1 || versions[keptId] != 3 {
+		t.Fatalf("the repair carries %v", versions)
+	}
+	if len(pass.Card.Moderated) != 1 || pass.Card.Moderated[0] != erasedId {
+		t.Fatalf("the repair left out %v", pass.Card.Moderated)
+	}
 }

@@ -3,8 +3,9 @@
 // RECORD-M10-03's move to format 2 on sidecartest's fakes: a daemon the format2 gate admits writes its run onto its card
 // and its repo's item onto the r/ file in place of entries; announce entries and files of one announcement fold to one
 // state, counted once (FS-84); a reader across the switch shows the item throughout, a daemon outside the gate follows
-// once the repo reads format 2 and moves a repo item off its entry, whose expiry then ends reading both; and a
-// versionless notice's replaced content purged a minute on still brings the requester its decision (FS-100).
+// once the repo reads format 2 and moves a repo item off its entry, whose expiry then ends reading both; a
+// versionless notice's replaced content purged a minute on still brings the requester its decision (FS-100); and the
+// carrier seeding no item an erasure took after a return whose put failed (QD-1144).
 
 package sidecar_test
 
@@ -230,4 +231,40 @@ func TestDirectoryFormat2VersionlessNotices(t *testing.T) {
 	if events := env.events[env.requester.writer.sidecarId]; len(events) != 1 || events[0] != "access_decided/denied/"+filed.RequestId.String() {
 		t.Fatalf("the requester's events: %v", events)
 	}
+}
+
+// The return's put fails after its journal, the sidecar suspended at the state now, so the card this device put last
+// still holds the run a directory admin erased (QD-1144): the restarted daemon's carrier seeds from that card less what
+// the journal leaves out, and its next card, the sidecar standing again, carries the kept run and the new one two above
+// with no second read of the erasure set, the erased run left out.
+func TestDirectoryFormat2CarrierSeedsNoErasedItem(t *testing.T) {
+	world := newTestDirectoryWorld(t, nil)
+	device := world.format2Device(sidecar.NewId())
+	writerId := device.writer.sidecarId
+	erasedRunId := world.startRun(device.client, "ship the launch plan")
+	keptRunId := world.startRun(device.client, "tidy the changelog")
+	world.eraseFromCard(writerId, sidecar.Id(world.shownRuns(writerId)[erasedRunId].GetAnnouncementId()), 1)
+	device.mustSync(t)
+
+	sidecarState := world.directoryFixture.Sidecars[writerId]
+	sidecarState.SuspendedAt = world.directoryAuth.Tip().Pin().GetVersion() + 1
+	world.publish()
+	reads, writes := world.counts().ErasedReads, world.counts().CardWrites
+	world.startRun(device.client, "review the loader")
+	if world.counts().ErasedReads != reads+1 || world.counts().CardWrites != writes {
+		t.Fatalf("the suspended return read the set %d times and put %d cards", world.counts().ErasedReads-reads, world.counts().CardWrites-writes)
+	}
+	sidecarState.SuspendedAt = 0
+	world.publish()
+
+	restarted := world.restartClient(device)
+	nextRunId := world.startRun(restarted, "write the release notes")
+	shown := world.shownRuns(writerId)
+	if len(shown) != 2 || shown[erasedRunId] != nil || shown[keptRunId].GetVersion() != 3 || shown[nextRunId].GetVersion() != 3 {
+		t.Fatalf("the runs after the restart: %v", shown)
+	}
+	if world.counts().ErasedReads != reads+1 {
+		t.Fatal("the restarted daemon's card read the erasure set again")
+	}
+	restarted.Runs().Close()
 }

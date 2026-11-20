@@ -15,7 +15,9 @@
 //	          to the card or the repo file in place of an entry: run and worker items join this sidecar's card, whose
 //	          items the carrier keeps (seeded from the last card this device wrote), one card write carrying every
 //	          live item and a withdrawal leaving its item out; a repo item, or a private marker, is its repo's r/ file.
-//	          Every other draft, and every announce draft before format 2, goes to the record's writer as before
+//	          Every other draft, and every announce draft before format 2, goes to the record's writer as before. An
+//	          item the card leaves out, an erasure having taken it (directory_cards_erasure.go), the carrier forgets
+//	          with the card, and seeds no more; its draft answers ErrDirectoryItemModerated, so its writer stops
 //	readers   the fold reads entries and files alike, keyed by (kind, writer, announcement_id) for runs and workers and
 //	          by (repo, announcement_id) for repos, so a reader mid-migration counts an item that has both an entry and
 //	          a card once, the higher (version, renewed_millis) standing (directory_fold.go); reading both ends only as
@@ -40,6 +42,7 @@ package sidecar
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -212,23 +215,30 @@ func (self *DirectoryClient) carryItem(ctx context.Context, item *protocol.Annou
 	if err != nil {
 		return err
 	}
-	// what the card no longer holds, ended or stale past its window, the carrier forgets
-	carrier.stateLock.Lock()
-	defer carrier.stateLock.Unlock()
-	kept := map[Id]bool{}
-	for _, held := range written.Items {
-		kept[recordIdOf(held.GetAnnouncementId())] = true
-	}
-	for heldId := range carrier.items {
-		if !kept[heldId] {
-			delete(carrier.items, heldId)
+	// what the card no longer holds, ended or stale past its window or taken by an erasure, the carrier forgets
+	func() {
+		carrier.stateLock.Lock()
+		defer carrier.stateLock.Unlock()
+		kept := map[Id]bool{}
+		for _, held := range written.Items {
+			kept[recordIdOf(held.GetAnnouncementId())] = true
 		}
+		for heldId := range carrier.items {
+			if !kept[heldId] {
+				delete(carrier.items, heldId)
+			}
+		}
+	}()
+	if slices.Contains(written.Moderated, announcementId) {
+		// the card left this item out, an erasure having taken it: its writer announces it no more
+		return ErrDirectoryItemModerated
 	}
 	return nil
 }
 
 // Seeds the carrier's items once from the last card this device wrote, at their writers' versions, so a restart's first
-// card keeps the items the last one carried at the versions it carried them.
+// card keeps the items the last one carried at the versions it carried them, less any an erasure took
+// (cardWrittenItems).
 func (self *DirectoryClient) seedCarrier(carrier *directoryCarrier) error {
 	carrier.stateLock.Lock()
 	seeded := carrier.seeded

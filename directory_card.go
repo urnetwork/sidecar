@@ -29,6 +29,10 @@
 //	        seq, before the put, and never falls, so later cards carry their items on the raised line: a renewal keeps
 //	        its version and a content change still raises it. Items read back from the card this device put last (the
 //	        format 2 carrier's seed, the repair) go back to their writers' versions first (cardWrittenItems)
+//	moderated a return first reads the cards ref's erasure set, and leaves out every item of the card this device put
+//	        last whose document the set lists at or above the version that card held it at, an erasure having taken
+//	        it, journaled with the raise and left out of every card after (directory_cards_erasure.go; QD-1144); a
+//	        return whose check cannot be made puts nothing
 //	binding the DirectoryCards binding writes d/ and r/ as the directory's reserved writer (EvsReservedDirectory,
 //	        versionless from format 2) and seals each file padded to FileStepByteCount steps, so a card's size shows at
 //	        most whether its sidecar has more than about two runs; the plaintext is the Signed's own bytes
@@ -135,20 +139,26 @@ type DirectoryCardSettings struct {
 	EndedKeepTime time.Duration
 	// An active item past its expires_millis stays on its card this long, shown stale: 24 h.
 	StaleShowTime time.Duration
+	// The items a return left out, an erasure having taken them, that this device's card writer keeps leaving out of
+	// every card after: 256, the newest kept. A writer's own bound, no format value: each run and worker writer keeps
+	// what it was told at its first write after the return, so one past the bound comes back only where its writer
+	// wrote nothing across that many later moderations of this sidecar's items. Non-positive keeps every one.
+	ModeratedItemCount int
 }
 
 // The defaults, a fresh value each call.
 func DefaultDirectoryCardSettings() *DirectoryCardSettings {
 	return &DirectoryCardSettings{
-		ItemCount:         DirectoryCardItemCount,
-		WorkerItemCount:   1,
-		ItemsByteCount:    16188,
-		CardFileByteCount: 16 * 1024,
-		RepoFileByteCount: DirectoryRepoFileByteCount,
-		FileStepByteCount: DirectoryFileStepByteCount,
-		PinPositionCount:  DirectoryPinPositionCount,
-		EndedKeepTime:     DirectoryEndedKeepTime,
-		StaleShowTime:     DirectoryStaleShowTime,
+		ItemCount:          DirectoryCardItemCount,
+		WorkerItemCount:    1,
+		ItemsByteCount:     16188,
+		CardFileByteCount:  16 * 1024,
+		RepoFileByteCount:  DirectoryRepoFileByteCount,
+		FileStepByteCount:  DirectoryFileStepByteCount,
+		PinPositionCount:   DirectoryPinPositionCount,
+		EndedKeepTime:      DirectoryEndedKeepTime,
+		StaleShowTime:      DirectoryStaleShowTime,
+		ModeratedItemCount: 256,
 	}
 }
 
@@ -902,6 +912,9 @@ type DirectoryCardWritten struct {
 	PathVersion uint64
 	// The items the card holds, worker first, at the versions it carries them at: their writers' plus the raise.
 	Items []*protocol.Announcement
+	// The items handed that the card left out, an erasure having taken them (the file's header's moderated row): their
+	// writers announce them no more.
+	Moderated []Id
 	// The Signed's bytes, and the size the binding stores them at, a whole number of steps.
 	ByteCount       int
 	StoredByteCount int
@@ -924,6 +937,9 @@ type directoryCardWrittenDocument struct {
 	// The push version of the newest removal of the path by another signer that a card of this device was put over,
 	// kept after the put: until then a put names the removal, and after it the version it put (directoryCardIfVersion).
 	PutOver uint64 `json:"put_over,omitempty"`
+	// The items a return found an erasure took, oldest first, journaled with the raise before the put: every card
+	// leaves them out (directory_cards_erasure.go), the newest DirectoryCardSettings.ModeratedItemCount kept.
+	Moderated []*directoryCardModerated `json:"moderated,omitempty"`
 }
 
 // The card this document keeps as put last, nil before the first put or where its content does not parse as sidecarId's
@@ -953,13 +969,14 @@ func directoryCardHandedItems(items []*protocol.Announcement, raise uint64) []*p
 }
 
 // The items of the card this device put last, each at its writer's version, for a writer that hands them to WriteCard
-// again; none before its first put.
+// again; none before its first put, and none an erasure took (the file's header's moderated row), which a card put
+// before its return still holds.
 func (self *DirectoryClient) cardWrittenItems() ([]*protocol.Announcement, error) {
 	written, err := self.readCardWritten()
 	if err != nil {
 		return nil, err
 	}
-	return directoryCardHandedItems(written.card(self.sidecarId).GetItems(), written.ContentRaise), nil
+	return directoryCardHandedItems(written.withoutModerated(written.card(self.sidecarId).GetItems()), written.ContentRaise), nil
 }
 
 // How far a return raises the line under items, at their writers' versions, as written stands before it. The removal's
@@ -1098,19 +1115,34 @@ func (self *DirectoryClient) WriteCard(ctx context.Context, args *DirectoryCardW
 		return nil, ErrDirectoryNone
 	}
 	settings := self.cardSettings()
-	items, err := self.cardItems(args.Items, settings, self.clock.Now().UnixMilli())
-	if err != nil {
-		return nil, err
-	}
 	writer := self.cardWriter()
 	writer.writeLock.Lock()
 	defer writer.writeLock.Unlock()
-	return self.putCard(ctx, items, settings)
+	written, err := self.readCardWritten()
+	if err != nil {
+		return nil, err
+	}
+	// what an erasure took leaves its place before the caps are held to (the file's header's moderated row)
+	items, err := self.cardItems(written.withoutModerated(args.Items), settings, self.clock.Now().UnixMilli())
+	if err != nil {
+		return nil, err
+	}
+	put, err := self.putCard(ctx, items, settings)
+	if err != nil {
+		return nil, err
+	}
+	for _, announcementId := range written.moderatedOf(args.Items) {
+		if !slices.Contains(put.Moderated, announcementId) {
+			put.Moderated = append(put.Moderated, announcementId)
+		}
+	}
+	return put, nil
 }
 
 // Signs and puts a card of items, at their writers' versions, at a seq above every one written or accepted and on this
-// device's raise, a return raising it first (the file's header's version row), journaling the seq and the raise first;
-// a path conflict syncs once and puts again. The caller holds the card writer's writeLock.
+// device's raise, a return reading the erasure set and raising it first (the file's header's version and moderated
+// rows), less every item the journal leaves out, journaling the seq, the raise and what the return left out first; a
+// path conflict syncs once and puts again. The caller holds the card writer's writeLock.
 func (self *DirectoryClient) putCard(ctx context.Context, items []*protocol.Announcement, settings *DirectoryCardSettings) (*DirectoryCardWritten, error) {
 	path := DirectoryCardPath(self.sidecarId)
 	written, err := self.readCardWritten()
@@ -1126,11 +1158,17 @@ func (self *DirectoryClient) putCard(ctx context.Context, items []*protocol.Anno
 		removal := directoryCardForeignRemoval(pathFile, self.sidecarId)
 		over := written.PutOver < removal
 		if over && written.RaisedFor < removal {
-			// the first card since another signer removed the path: every item comes back above the removal's tombstones
-			written.Raise += directoryCardReturnRaise(items, written, self.sidecarId)
+			// the first card since another signer removed the path: what an erasure took stays out, and every other item
+			// comes back above the removal's tombstones
+			moderated, err := self.cardModeratedAtReturn(ctx, written)
+			if err != nil {
+				return nil, err
+			}
+			written.noteModerated(moderated, removal, settings.ModeratedItemCount)
+			written.Raise += directoryCardReturnRaise(written.withoutModerated(items), written, self.sidecarId)
 			written.RaisedFor = removal
 		}
-		carried := directoryCardCarried(items, written.Raise)
+		carried := directoryCardCarried(written.withoutModerated(items), written.Raise)
 		if err := settings.checkWrittenItems(carried); err != nil {
 			return nil, err
 		}
@@ -1204,8 +1242,8 @@ func (self *DirectoryClient) putCard(ctx context.Context, items []*protocol.Anno
 			return nil, err
 		}
 		return &DirectoryCardWritten{
-			Path: path, Seq: seq, PathVersion: pathVersion, Items: carried, ByteCount: len(content),
-			StoredByteCount: settings.StoredByteCount(len(content)),
+			Path: path, Seq: seq, PathVersion: pathVersion, Items: carried, Moderated: written.moderatedOf(items),
+			ByteCount: len(content), StoredByteCount: settings.StoredByteCount(len(content)),
 		}, nil
 	}
 }

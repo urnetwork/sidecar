@@ -20,7 +20,10 @@
 // MLS commits never raise the generation: a Remove is a commit plus this separate claim (D-KEYS-15). A read_only
 // device signs no rotation. A restart resumes from the draft: the same RK' and the same Signed bytes go to the claim,
 // and the deliveries are staged again; a draft whose delivery set no longer has the count it signed, a ReaderKey
-// having lapsed or appeared since, is dropped and drawn afresh, since nothing of it stands at gen/.
+// having lapsed or appeared since, is dropped and drawn afresh, since nothing of it stands at gen/. So is a draft whose
+// time_ms is more than RotateDraftMaxAge off the time a fresh one would carry, since gkm's claim check refuses a time
+// past its 10 minutes of skew at every try, and one that names another group than the pinned one, as a re-form leaves
+// a rotation of the old group's (QD-1147).
 //
 // Calls testHookSecret through the ladder's own functions at every key made or opened.
 
@@ -228,8 +231,9 @@ func (self *gkmGroupManager) storedDraft() *gkmRotateDraft {
 }
 
 // Step 1, or its resumption: the draft for generation g*+1 on top, and the delivery set it counts. A stored draft
-// is reused when it chains on top, is this device's at a pin its state holds, and still counts its delivery set;
-// else a new one is drawn and persisted before it returns.
+// is reused when it chains on top, is this device's at a pin its state holds, names the pinned group, was made within
+// RotateDraftMaxAge of at, and still counts its delivery set; else a new one is drawn and persisted before it returns.
+// The caller has read gen/<g*+1> and found nothing there, so nothing of a dropped draft stands.
 func (self *gkmGroupManager) rotateDraft(ctx context.Context, state GkmAuthView, pins *gkmRepoPins, top *gkmHeldGeneration, cause GkmCause, at time.Time) (*gkmRotateDraft, []*gkmDeliveryTarget, error) {
 	client := self.client
 	parent := top.generation.Rotate
@@ -251,8 +255,13 @@ func (self *gkmGroupManager) rotateDraft(ctx context.Context, state GkmAuthView,
 			rotate := stored.generation.Rotate
 			chains := rotate.GetGeneration() == parent.GetGeneration()+1 && bytes.Equal(rotate.GetParentCommitment(), parent.GetCommitment()) &&
 				stored.generation.SignerId == client.args.SidecarId
-			if draftState, stateErr := state.At(rotate.GetAuth()); chains && stateErr == nil {
-				draftAt := time.UnixMilli(rotate.GetTimeMs())
+			draftAt := time.UnixMilli(rotate.GetTimeMs())
+			// a draft whose time gkm's claim check refuses past its skew never lands, and one of another group than the
+			// pinned one would land naming a group its members refuse there (QD-1147); its time is held either way off
+			// at, since a clock set back leaves a draft dated ahead of it
+			fresh := 0 < client.settings.RotateDraftMaxAge && at.Sub(draftAt).Abs() <= client.settings.RotateDraftMaxAge &&
+				bytes.Equal(rotate.GetGroupId(), pins.groupId.Bytes())
+			if draftState, stateErr := state.At(rotate.GetAuth()); chains && fresh && stateErr == nil {
 				holders, err := KeyHolders(draftState, self.repoId, draftAt)
 				if err != nil {
 					return nil, nil, err

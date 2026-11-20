@@ -30,12 +30,12 @@
 //	           device its repo comes back: a sync whose verified state shows the repo standing, no RepoDelete or the
 //	           newest one restored, tries step 5, at most once a ReformResumeInterval while gkm refuses the rotation's
 //	           writes, which it takes for an active repo/ alone (§10.6's checks row), the time of each try kept in the
-//	           record before the try; a rotation draft a refused try left is drawn afresh once it is older than
-//	           ReformDraftMaxAge, since gkm's claim check refuses a time past its skew. A sync never drafts a re-form,
-//	           and leaves a record cut short before step 5 to ReformGroup, as the groups step run again asks it. The
-//	           step's second call asks with Resume, and a call with Reseed or Resume that finds no record answers the
-//	           group this device pins where the repo's newest form at gkm names it, so neither the step's second call
-//	           after a sync finished its re-form nor the step run again drafts a second re-form
+//	           record before the try; the rotation draws afresh over a draft a refused try left once it is older than
+//	           RotateDraftMaxAge, since gkm's claim check refuses a time past its skew (QD-1147). A sync never drafts a
+//	           re-form, and leaves a record cut short before step 5 to ReformGroup, as the groups step run again asks
+//	           it. The step's second call asks with Resume, and a call with Reseed or Resume that finds no record
+//	           answers the group this device pins where the repo's newest form at gkm names it, so neither the step's
+//	           second call after a sync finished its re-form nor the step run again drafts a second re-form
 //	member     at each sync, and at a Welcome to a group of the repo other than its own, a device whose pinned group
 //	           is not the one the repo's newest GroupForm names follows the forms from its own group to the newest:
 //	           each a Signed GroupForm of the repo, verified under its signer's admitted key, its signer held to
@@ -594,34 +594,15 @@ func (self *gkmGroupManager) reformInFlow(ctx context.Context, args *GkmReformAr
 // Step 5 of a record at its finishing phase: the first generation that names the new group, with every delivery,
 // unless this device already holds one past the form's there; then the Adds, whose epochs carry it; and the record
 // goes. A generation's claim gkm refuses while repo/ is not active answers ErrGkmWait, the record kept. The rotation
-// draws afresh, where nothing stands at gen/ past this device's newest generation, in place of a draft that names
-// another group, as one a rotation of the old group left would, or one older than ReformDraftMaxAge, as a try gkm
-// refused may leave for a later one, whose claim gkm's time check would refuse.
+// resumes no draft an earlier try left past RotateDraftMaxAge, nor one of the old group a rotation before the re-form
+// left (gkm_rotate.go's rotateDraft; QD-1147).
 func (self *gkmGroupManager) finishReformInFlow(ctx context.Context, record *gkmReformRecord) error {
-	client := self.client
-	top, err := client.newestHeldGeneration(self.repoId)
+	top, err := self.client.newestHeldGeneration(self.repoId)
 	if err != nil {
 		return err
 	}
 	rotated := record.generation < top.generation.Rotate.GetGeneration() && bytes.Equal(top.generation.Rotate.GetGroupId(), record.groupId.Bytes())
 	if !rotated {
-		if draft := self.storedDraft(); draft != nil {
-			rotate := draft.generation.Rotate
-			// either way off this clock: a clock set back leaves a draft dated ahead of it
-			age := client.clock.Now().Sub(time.UnixMilli(rotate.GetTimeMs())).Abs()
-			if !bytes.Equal(rotate.GetGroupId(), record.groupId.Bytes()) || 0 < client.settings.ReformDraftMaxAge && client.settings.ReformDraftMaxAge < age {
-				standing, err := client.args.Api.Generations(ctx, self.repoId, record.groupId, top.generation.Rotate.GetGeneration())
-				if err != nil {
-					return err
-				}
-				// a claim of it that landed is the rotation's to take up as its own
-				if len(standing.GetGenerations()) == 0 {
-					if err := client.args.Secrets.Delete(gkmRepoRecordName(self.repoId, "draft")); err != nil {
-						return err
-					}
-				}
-			}
-		}
 		if _, err := self.rotateInFlow(ctx, GkmCauseRequest); err != nil {
 			return err
 		}
