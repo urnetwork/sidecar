@@ -612,7 +612,8 @@ message MailOutcome {
   MailOutcomeKind outcome = 5; uint32 reply_code = 6; uint32 retry_after_ms = 7; uint64 update_time_ms = 8;
   uint32 tls_level = 9;
 }
-message MailOutcomeRecord { repeated MailOutcome outcomes = 1; }
+// The record's send_id is QD-1122's (question mail-m9-06-send-result-owner): the send its o/ entry's Message-ID names.
+message MailOutcomeRecord { repeated MailOutcome outcomes = 1; bytes send_id = 2; }
 // §15.7's p/ row, with DESIGN-DETAILS 3.7's fields for SMTP-M9-09 in the order it writes them.
 message MailProverRecord {
   uint64 smtp_data_proof_bytes = 1; uint64 data_bytes_per_s = 2; uint64 measure_time_ms = 3;

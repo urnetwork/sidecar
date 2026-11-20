@@ -3,10 +3,12 @@
 // T2's sidecar.SmtpMailbox: a member's o/, or/ and p/ in memory, until MAIL-M9-02's mailSmtpMailbox.
 // or/ and p/ are held in their wire forms, MailOutcomeRecord and MailProverRecord (§15.7,
 // plan-MAIL-format-bytes#5), so what a sender writes is refused or read back exactly as a mailbox on
-// those formats would. PutOutbox stands in for MAIL's write of o/, which the seam has no method for.
-// Calls go through hostCall, so a plan under FaultOpHost with the key "smtpmailbox.<Method>" reaches
-// them, and each is counted. RunSmtpMailboxSuite holds this fake and the real mailbox to the same
-// promises. Safe for concurrent use.
+// those formats would. An or/ record names its send as MAIL's does (QD-1122): the write that creates
+// it takes the send its o/ entry's Message-ID names (sidecar.MailOutboxSendIdOf), and a later write
+// keeps what the record holds, which ReadSendOutcomes reads back. PutOutbox stands in for MAIL's write
+// of o/, which the seam has no method for. Calls go through hostCall, so a plan under FaultOpHost with
+// the key "smtpmailbox.<Method>" reaches them, and each is counted. RunSmtpMailboxSuite holds this fake
+// and the real mailbox to the same promises. Safe for concurrent use.
 
 package sidecartest
 
@@ -24,7 +26,10 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-var _ sidecar.SmtpMailbox = (*FakeSmtpMailbox)(nil)
+var (
+	_ sidecar.SmtpMailbox           = (*FakeSmtpMailbox)(nil)
+	_ sidecar.MailSendOutcomeReader = (*FakeSmtpMailbox)(nil)
+)
 
 var (
 	errFakeSmtpMailboxEmptyDsn  = errors.New("a dsn with no bytes")
@@ -146,7 +151,8 @@ func (self *FakeSmtpMailbox) RemoveOutbox(ctx context.Context, effectKey []byte)
 	})
 }
 
-// Encodes as or/ holds them, refusing what the wire form refuses.
+// Encodes as or/ holds them, refusing what the wire form refuses, the record naming its send as the file's comment
+// says.
 func (self *FakeSmtpMailbox) WriteOutcomes(ctx context.Context, effectKey []byte, outcomes []*sidecar.SmtpDomainOutcome) error {
 	record := &protocol.MailOutcomeRecord{}
 	for _, outcome := range outcomes {
@@ -156,11 +162,21 @@ func (self *FakeSmtpMailbox) WriteOutcomes(ctx context.Context, effectKey []byte
 		}
 		record.Outcomes = append(record.Outcomes, mailOutcome)
 	}
-	encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(record)
-	if err != nil {
-		return err
-	}
 	return self.call(ctx, "WriteOutcomes", func() error {
+		if standing, ok := self.outcomes[string(effectKey)]; ok {
+			kept := &protocol.MailOutcomeRecord{}
+			if proto.Unmarshal(standing, kept) == nil && len(kept.GetSendId()) == len(sidecar.Id{}) {
+				record.SendId = bytes.Clone(kept.GetSendId())
+			}
+		} else if file, ok := self.outbox[string(effectKey)]; ok {
+			if sendId, ok := sidecar.MailOutboxSendIdOf(file.Message); ok {
+				record.SendId = sendId.Bytes()
+			}
+		}
+		encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(record)
+		if err != nil {
+			return err
+		}
 		self.outcomes[string(effectKey)] = encoded
 		return nil
 	})
@@ -178,8 +194,19 @@ func (self *FakeSmtpMailbox) ListOutcomes(ctx context.Context) ([][]byte, error)
 }
 
 func (self *FakeSmtpMailbox) ReadOutcomes(ctx context.Context, effectKey []byte) ([]*sidecar.SmtpDomainOutcome, error) {
+	_, outcomes, err := self.readOutcomes(ctx, "ReadOutcomes", effectKey)
+	return outcomes, err
+}
+
+// See sidecar.MailSendOutcomeReader.
+func (self *FakeSmtpMailbox) ReadSendOutcomes(ctx context.Context, effectKey []byte) (sidecar.Id, []*sidecar.SmtpDomainOutcome, error) {
+	return self.readOutcomes(ctx, "ReadSendOutcomes", effectKey)
+}
+
+// One record read back through method's seam: its send, the zero Id for none, and its outcomes.
+func (self *FakeSmtpMailbox) readOutcomes(ctx context.Context, method string, effectKey []byte) (sidecar.Id, []*sidecar.SmtpDomainOutcome, error) {
 	var encoded []byte
-	err := self.call(ctx, "ReadOutcomes", func() error {
+	err := self.call(ctx, method, func() error {
 		kept, ok := self.outcomes[string(effectKey)]
 		if !ok {
 			return sidecar.ErrSmtpMailboxNotFound
@@ -188,21 +215,26 @@ func (self *FakeSmtpMailbox) ReadOutcomes(ctx context.Context, effectKey []byte)
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return sidecar.Id{}, nil, err
 	}
 	record := &protocol.MailOutcomeRecord{}
 	if err := proto.Unmarshal(encoded, record); err != nil {
-		return nil, err
+		return sidecar.Id{}, nil, err
 	}
 	outcomes := make([]*sidecar.SmtpDomainOutcome, 0, len(record.GetOutcomes()))
 	for _, mailOutcome := range record.GetOutcomes() {
 		outcome, err := sidecar.SmtpDomainOutcomeFromMailOutcome(mailOutcome)
 		if err != nil {
-			return nil, err
+			return sidecar.Id{}, nil, err
 		}
 		outcomes = append(outcomes, outcome)
 	}
-	return outcomes, nil
+	// a send_id of another length names no send
+	sendId, err := sidecar.IdFromBytes(record.GetSendId())
+	if err != nil {
+		sendId = sidecar.Id{}
+	}
+	return sendId, outcomes, nil
 }
 
 // Encodes as p/ holds it.

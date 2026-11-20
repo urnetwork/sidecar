@@ -527,6 +527,8 @@ barrier mail.send.deposit.after mail_send_local.go
 barrier mail.send.deposit.before mail_send_local.go
 barrier mail.send.gate.after mail_send_gate.go
 barrier mail.send.gate.before mail_send_gate.go
+barrier mail.send.watch.after mail_send_result.go
+barrier mail.send.watch.before mail_send_result.go
 barrier mail.spam.teach.after mail_spam.go
 barrier mail.spam.teach.before mail_spam.go
 barrier mail.vault.erase.after mail_vault.go

@@ -124,8 +124,10 @@ func NewMailOutbox(args *MailOutboxArgs) (*MailOutbox, error) {
 	}, nil
 }
 
-// The send an o/ entry's message names in its Message-ID, false where it names none of MailOutboxMessageId's form.
-func mailOutboxSendIdOf(message []byte) (Id, bool) {
+// The send an o/ entry's message names in its Message-ID, false where it names none of MailOutboxMessageId's form: what
+// or/'s send_id holds (mailSmtpMailbox.WriteOutcomes), what SmtpOutboxRunner's message names in its events
+// (VerifySmtpOutboxEntry), and what sidecartest.FakeSmtpMailbox reads as the real mailbox does.
+func MailOutboxSendIdOf(message []byte) (Id, bool) {
 	parsed, err := mail.ReadMessage(bytes.NewReader(message))
 	if err != nil {
 		return Id{}, false
@@ -239,7 +241,7 @@ func (self *MailOutbox) Lookup(ctx context.Context, canonical []byte, effectKey 
 	switch {
 	case err == nil:
 		outcome := &SidecarOutcome{State: ApprovalOutcomeDone}
-		if sendId, ok := mailOutboxSendIdOf(file.Message); ok {
+		if sendId, ok := MailOutboxSendIdOf(file.Message); ok {
 			outcome.EffectRef = sendId.Bytes()
 		}
 		return outcome, nil

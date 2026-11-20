@@ -381,6 +381,8 @@ message MailOutcome {              // one recipient domain's result of a send (ย
 
 message MailOutcomeRecord {        // or/<h>/<effect_key>, written by the sending device, kept 30 days
   repeated MailOutcome outcomes = 1;  // one a recipient domain
+  bytes send_id = 2;               // the send's 16-byte id, its o/ entry's Message-ID left side (QD-1122), which
+                                   //   GetSendResult and mail_send name; empty from a writer before it
 }
 
 message MailProverRecord {         // p/<sidecar_id>, rewritten at each measurement (ยง14.5)

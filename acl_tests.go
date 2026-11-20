@@ -25,7 +25,11 @@
 //	                   state holds, a test's subject, or a new one of a class its via and destinations name, as above,
 //	                   with a tagged one carrying every tag it names and, for autogroup:self, another new device of the
 //	                   source's own member and a tagged sidecar that member sponsors. The failure names the rule by its
-//	                   grant's index (owner decision 615)
+//	                   grant's index (owner decision 615). A rule that names autogroup:internet reaches every public
+//	                   address (aclAddressPublic) through an exit among its vias, by routes in force no save sees
+//	                   either, so it holds no accept by that and fails every deny of a range holding a public address,
+//	                   named the same way (QD-1125). A rule whose detail the device does not hold, an activated
+//	                   grant's, meets no ip: check (QD-003)
 //	ports              a dial check with ports holds at every port of the range for an accept and at none for a deny,
 //	                   at a sidecar destination, whose own engine checks ports; with none it is the rows' dial alone;
 //	                   a route check's ports meet a rule's ports before its prefixes do
@@ -534,10 +538,9 @@ func (self *aclTestRun) holds(source AclSubject, check AclPolicyCheck, destinati
 		result := self.engine.Check(source, check.Action, repoResource, now)
 		return answer(AclDecision{Allowed: result.Allowed, Reason: result.Reason})
 	case AclResourceIp:
-		decision, bySubject := self.routeToPrefix(source, resource.Cidr, check.Ports, want)
-		if bySubject {
-			return "allowed by " + self.ruleName(decision.Rule) + ", which names no prefix: a sidecar among both its via " +
-				"subjects and its destinations could serve any range by its routes in force"
+		decision, unseen := self.routeToPrefix(source, resource.Cidr, check.Ports, want)
+		if unseen != "" {
+			return "allowed by " + self.ruleName(decision.Rule) + ", " + unseen
 		}
 		return answer(decision)
 	}
@@ -593,11 +596,13 @@ func (self *aclTestRun) holdsSubject(source AclSubject, destination AclSubject, 
 
 // A route to a prefix: for an accept, a route rule in force whose prefixes hold the whole of it, at every port of the
 // check's range; for a deny, whether any route rule in force reaches any address of it at any of those ports, by its
-// prefixes, or, for a rule that names none, by naming for the source a sidecar among both its via subjects and its
-// subject destinations, whose routes in force could serve any range (owner decision 615). Such a rule holds no accept,
-// since no save sees what its sidecars' routes serve. The second answer is whether the decision's rule is one, which a
-// deny's failure names.
-func (self *aclTestRun) routeToPrefix(source AclSubject, cidr netip.Prefix, ports *AclPortRange, want bool) (AclDecision, bool) {
+// prefixes, or by a reach no save sees: for a rule that names no prefix, by naming for the source a sidecar among both
+// its via subjects and its subject destinations, whose routes in force could serve any range (owner decision 615); for
+// a rule that names autogroup:internet, by a public address in the range, which an exit among its vias could serve by
+// its routes in force (QD-1125). Neither holds an accept, since no save sees what those routes serve. The second answer
+// is what a deny's failure says of a rule matched by such a reach, after its name, and empty for one matched by its
+// prefixes.
+func (self *aclTestRun) routeToPrefix(source AclSubject, cidr netip.Prefix, ports *AclPortRange, want bool) (AclDecision, string) {
 	portsMatch := func(local *AclLocalRule) bool {
 		if ports == nil || local == nil || len(local.Ports) == 0 {
 			return true
@@ -617,15 +622,20 @@ func (self *aclTestRun) routeToPrefix(source AclSubject, cidr netip.Prefix, port
 		return false
 	}
 	sourceResolved := self.state.resolve(&source, self.nowMs)
-	bySubject := false
+	holdsPublic := !want && aclPrefixHoldsPublic(cidr)
+	unseen := ""
 	decision := self.state.resourceDecision(source, self.nowMs, protocol.AclAction_ACL_ACTION_ROUTE, func(rule *aclRule) bool {
 		local := self.localRules[rule.index]
 		if local == nil || !portsMatch(local) {
 			return false
 		}
 		if aclRouteBySubject(local, rule.internetTarget) {
-			bySubject = !want && self.routeBySubjectReaches(&sourceResolved, rule)
-			return bySubject
+			if !want && self.routeBySubjectReaches(&sourceResolved, rule) {
+				unseen = "which names no prefix: a sidecar among both its via subjects and its destinations could serve any " +
+					"range by its routes in force"
+				return true
+			}
+			return false
 		}
 		for _, held := range local.Cidrs {
 			if want && held.Bits() <= cidr.Bits() && held.Contains(cidr.Addr()) {
@@ -635,9 +645,68 @@ func (self *aclTestRun) routeToPrefix(source AclSubject, cidr netip.Prefix, port
 				return true
 			}
 		}
+		if holdsPublic && rule.internetTarget {
+			unseen = "which names autogroup:internet: an exit among its via subjects could serve any public address by its " +
+				"routes in force"
+			return true
+		}
 		return false
 	})
-	return decision, bySubject
+	return decision, unseen
+}
+
+// Whether a prefix holds an address aclAddressPublic takes, which autogroup:internet reaches (§8.4): one outside every
+// range netip reads as unspecified, loopback, link-local, multicast or private, and IPv4's broadcast address. A prefix
+// one of those ranges holds whole holds none, one that overlaps none holds only public ones, and one that strictly holds
+// a range holds one exactly where a half of it does, since each range is a prefix too. An IPv4-mapped prefix reads as
+// IPv4, as netip's reads do.
+func aclPrefixHoldsPublic(prefix netip.Prefix) bool {
+	if !prefix.IsValid() {
+		return false
+	}
+	prefix = prefix.Masked()
+	if prefix.Addr().Is4In6() && 96 <= prefix.Bits() {
+		prefix = netip.PrefixFrom(prefix.Addr().Unmap(), prefix.Bits()-96)
+	}
+	ranges := []netip.Prefix{
+		netip.MustParsePrefix("::/128"), netip.MustParsePrefix("::1/128"), netip.MustParsePrefix("fc00::/7"),
+		netip.MustParsePrefix("fe80::/10"), netip.MustParsePrefix("ff00::/8"),
+	}
+	if prefix.Addr().Is4() {
+		ranges = []netip.Prefix{
+			netip.MustParsePrefix("0.0.0.0/32"), netip.MustParsePrefix("10.0.0.0/8"), netip.MustParsePrefix("127.0.0.0/8"),
+			netip.MustParsePrefix("169.254.0.0/16"), netip.MustParsePrefix("172.16.0.0/12"),
+			netip.MustParsePrefix("192.168.0.0/16"), netip.MustParsePrefix("224.0.0.0/4"),
+			netip.MustParsePrefix("255.255.255.255/32"),
+		}
+	}
+	var holds func(prefix netip.Prefix) bool
+	holds = func(prefix netip.Prefix) bool {
+		overlaps := false
+		for _, held := range ranges {
+			if held.Bits() <= prefix.Bits() && held.Contains(prefix.Addr()) {
+				return false
+			}
+			overlaps = overlaps || held.Overlaps(prefix)
+		}
+		if !overlaps {
+			return true
+		}
+		// it strictly holds a range, so it is wider than one address: its two halves
+		bits := prefix.Bits()
+		var high netip.Addr
+		if prefix.Addr().Is4() {
+			address := prefix.Addr().As4()
+			address[bits/8] |= 0x80 >> (bits % 8)
+			high = netip.AddrFrom4(address)
+		} else {
+			address := prefix.Addr().As16()
+			address[bits/8] |= 0x80 >> (bits % 8)
+			high = netip.AddrFrom16(address)
+		}
+		return holds(netip.PrefixFrom(prefix.Addr(), bits+1)) || holds(netip.PrefixFrom(high, bits+1))
+	}
+	return holds(prefix)
 }
 
 // Whether a route rule that names no prefix names, for the source, a sidecar among both its via subjects and its subject

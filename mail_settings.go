@@ -130,18 +130,29 @@ type MailOutboxSettings struct {
 	// How often the mail component sweeps the member's or/ for records past OutcomeKeepDuration: a day, so a record
 	// outlives its 30 days by at most one more, and a listing of or/'s shards runs once a day a device.
 	OutcomeSweepInterval time.Duration
+	// How long the send watch, which raises mail_send from the member's or/ (mail_send_result.go), waits for a change
+	// to or/ it hears of before it reads or/ again anyway: the component's 5 min CheckInterval, since a change its
+	// subscription to or/ hears of, or a Resync, wakes it at once, and this only bounds one it missed.
+	SendWatchInterval time.Duration
+	// The most bytes of the send watch's last read of or/ kept in the component's sealed store, which a restart reads
+	// back so it raises only what changed since: a record's send and each domain's outcome take some 200 bytes, so 4 MiB
+	// holds about 20,000 records, past a member's 30 days of internet mail. Past it the read is kept in memory alone,
+	// and the next start reads or/ afresh, raising nothing for what it finds then (the file header's baseline row).
+	SendWatchStateMaxByteCount int
 }
 
 // The one default.
 func DefaultMailOutboxSettings() *MailOutboxSettings {
 	return &MailOutboxSettings{
-		OutboxSignedMaxByteCount:  64 * 1024,
-		OutboxFileMaxByteCount:    50*1024*1024 + 64*1024 + mailOutboxLengthByteCount,
-		OutcomeRecordMaxByteCount: 64 * 1024,
-		ProverRecordMaxByteCount:  4 * 1024,
-		WriteRetryCount:           8,
-		OutcomeKeepDuration:       30 * 24 * time.Hour,
-		OutcomeSweepInterval:      24 * time.Hour,
+		OutboxSignedMaxByteCount:   64 * 1024,
+		OutboxFileMaxByteCount:     50*1024*1024 + 64*1024 + mailOutboxLengthByteCount,
+		OutcomeRecordMaxByteCount:  64 * 1024,
+		ProverRecordMaxByteCount:   4 * 1024,
+		WriteRetryCount:            8,
+		OutcomeKeepDuration:        30 * 24 * time.Hour,
+		OutcomeSweepInterval:       24 * time.Hour,
+		SendWatchInterval:          5 * time.Minute,
+		SendWatchStateMaxByteCount: 4 * 1024 * 1024,
 	}
 }
 
@@ -149,7 +160,7 @@ func DefaultMailOutboxSettings() *MailOutboxSettings {
 func (self *MailOutboxSettings) valid() bool {
 	return self != nil && 0 < self.OutboxSignedMaxByteCount && self.OutboxSignedMaxByteCount < self.OutboxFileMaxByteCount &&
 		0 < self.OutcomeRecordMaxByteCount && 0 < self.ProverRecordMaxByteCount && 0 < self.WriteRetryCount &&
-		0 < self.OutcomeKeepDuration && 0 < self.OutcomeSweepInterval
+		0 < self.OutcomeKeepDuration && 0 < self.OutcomeSweepInterval && 0 < self.SendWatchInterval && 0 < self.SendWatchStateMaxByteCount
 }
 
 // What forwarding is held to (MAIL-M9-04; §15.10's forwarding, owner decision 53). Every value must be positive.

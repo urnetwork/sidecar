@@ -18,7 +18,8 @@
 //	mta-sts   while the receiver listens and the device holds a §13 certificate for the network's pair, §15.5's
 //	          MTA-STS policy as this receiver's system publish (mail_mta_sts.go), ended with the receiver
 //	outcomes  while mail is on, once an OutcomeSweepInterval, the member's or/ records past their 30 days are removed
-//	          (§15.7; MAIL-M9-02)
+//	          (§15.7; MAIL-M9-02); and a send watch reads or/ as it changes, raising mail_send for each outcome that
+//	          changed (§15.10's step 4; QD-1122, mail_send_result.go)
 //	idle      Active while mail is on, so a daemon with mail on never idles out (§5.8); `ur status` says so and
 //	          prompts for a mail indexer until one stands (§15.6)
 //
@@ -565,7 +566,8 @@ func (self *MailClient) stopReceiver(run *mailComponentRun) {
 }
 
 // An app's wake (§15.6 step 5; owner decision 197): the mailbox's ingest runs now, and nothing listens for it, so a
-// wake only resyncs mail a receiver took. Nothing while no generation runs the ingestor.
+// wake only resyncs mail a receiver took; the send watch reads or/ now too (mail_send_result.go). Nothing while no
+// generation runs them.
 func (self *MailClient) Resync() {
 	ingestor := func() *MailIngestor {
 		self.stateLock.Lock()
@@ -578,4 +580,5 @@ func (self *MailClient) Resync() {
 	if ingestor != nil {
 		ingestor.Wake()
 	}
+	self.wakeSends()
 }
