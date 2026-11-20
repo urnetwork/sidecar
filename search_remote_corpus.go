@@ -310,7 +310,8 @@ func (self *searchEngineRemoteView) openRef(ctx context.Context, ask searchRemot
 	if self.scopeAll {
 		planScope = searchPlanAll
 	}
-	plan := searchPlanRef(&searchPlanArgs{scope: planScope, since: request.Since, nowMs: engine.clock.Now().UnixMilli(), tables: indexLinkedTables()}, holding)
+	nowMs := engine.clock.Now().UnixMilli()
+	plan := searchPlanRef(&searchPlanArgs{scope: planScope, since: request.Since, nowMs: nowMs, tables: indexLinkedTables()}, holding)
 	switch {
 	case plan.status == searchRefOff:
 		snapshot.Release()
@@ -325,7 +326,7 @@ func (self *searchEngineRemoteView) openRef(ctx context.Context, ask searchRemot
 	companion := searchRootCompanion(snapshot.manifest.Root)
 	opened := &searchOpenedRef{
 		engine: engine, repoId: repo.RepoId, refId: ref.RefId, snap: snapshot, holding: holding, plan: plan,
-		probe: searchProbeOf(snapshot.Versions()), keys: keys,
+		probe: searchProbeOf(snapshot.Versions()), keys: keys, searchableSinceSeconds: searchSearchableSinceSeconds(nowMs, repo.SearchableAge),
 	}
 	if engine.args.Local != nil {
 		opened.local = engine.args.Local(repo.RepoId, ref.RefId)
@@ -337,7 +338,10 @@ func (self *searchEngineRemoteView) openRef(ctx context.Context, ask searchRemot
 	if opened.probe == nil {
 		opened.probe = func(key [indexIdByteCount]byte) (searchVersionRecord, error) { return searchVersionRecord{}, nil }
 	}
-	mask, err := newSearchMask(&searchMaskArgs{probe: opened.probe, companion: companion, refId: ref.RefId, local: localNewest})
+	// §11.14's serve row: masks, newest wins and searchable_days, as a local search applies them
+	mask, err := newSearchMask(&searchMaskArgs{
+		probe: opened.probe, companion: companion, refId: ref.RefId, local: localNewest, searchableSinceSeconds: opened.searchableSinceSeconds,
+	})
 	if err != nil {
 		snapshot.Release()
 		return searchRemoteRefRow{}, nil, err

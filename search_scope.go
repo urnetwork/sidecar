@@ -13,6 +13,10 @@
 //	          pending; a repo this sidecar cannot read is never listed, named in the request or not
 //	receipts  an owner-bound repo read by a reader that is not its writer is searched only once its read receipts
 //	          landed (search_receipts.go); one whose receipt did not land is skipped, coverage naming it
+//	age       a repo's log's searchable_days (§16.8), as SearchableAge, masks its older documents from every search at
+//	          query time, all included (§16.10's merge row), each mask taking it at the search's open
+//	          (searchSearchableSinceSeconds); a document so masked stays in the index and readable by id, so a later
+//	          rise finds it again with no rebuild (FS-76, FS-87; QD-1104)
 //
 // The scope source is the composition's: §8.6's evaluation over the installed AclState with this sidecar's refs
 // (evs's EvsRepo and the agent's narrowing, §5.5, §8.4). The resolution here is a pure function of what it answers and
@@ -23,6 +27,7 @@ package sidecar
 import (
 	"context"
 	"slices"
+	"time"
 
 	"github.com/urnetwork/sidecar/protocol"
 )
@@ -42,6 +47,24 @@ type SearchScopeRepo struct {
 	ReceiptRequired bool
 	// The refs it is followed on for search: its default ref first.
 	Refs []*SearchScopeRef
+	// Its log's searchable_days (§16.8) as an age, at the retention's day length: a document whose index time is
+	// older than this at a search's open is masked from that search, all included. 0 or less masks none, as a
+	// searchable_days of 0 does. The scope source's to give from the policy that governs the log.
+	SearchableAge time.Duration
+}
+
+// The time before which a document's index time is past age at nowMs, in seconds, as searchMaskArgs reads it: rounded
+// up, so a row a whole second short of the cut is masked and one at it is not. 0, which masks none, for an age of 0
+// or less, or one reaching back to the epoch.
+func searchSearchableSinceSeconds(nowMs int64, age time.Duration) uint64 {
+	if age <= 0 {
+		return 0
+	}
+	sinceMs := nowMs - age.Milliseconds()
+	if sinceMs <= 0 {
+		return 0
+	}
+	return uint64((sinceMs + 999) / 1000)
 }
 
 // One ref of a repo search follows.

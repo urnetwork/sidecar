@@ -138,7 +138,7 @@ func TestGkmReconcilerHintsOnlyTheSignerAndTheConfigWritersInTheDirectoryGroup(t
 		}
 	}
 	// the gate stays closed: the repeats reach the config writers, and still no other writer
-	world.awaitPass(func() { fixture.clock.Advance(world.reconciler.settings.PendingHintInterval) })
+	world.advance(world.reconciler.settings.PendingHintInterval)
 	if count := world.pendingHints(config); count != 2 {
 		t.Errorf("the config writer's pending hints one interval into a closed gate: %d", count)
 	}

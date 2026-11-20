@@ -32,17 +32,13 @@ func gateDeclaredBesideThisCheckout(t *testing.T) func(test *GateTest) []error {
 	}
 }
 
-// The cases M10's entry reads failing on this tree, each with the task whose builder it is: each schedule asserts in
-// its steps and names no invariant in Check (TEST.md's contract for schedule authors, rule 4), so no FI is checked
-// after its steps, and the gate reads it fail until its owner names the FI its row checks. The gate's command reads
-// them fail; this list only keeps the merge's run below to new failures. A case here that reads written is logged, to
-// come off the list.
-var gateM10InKnownFailing = map[string]string{
-	"FS-74":            "SEARCH-M10-35",
-	"FS-75":            "SEARCH-M10-35",
-	"FS-87's index":    "RECORD-M10-06",
-	"FS-88's searches": "RECORD-M10-06",
-}
+// The cases M10's entry reads failing on this tree, each with the task whose builder it is: a schedule that asserts in
+// its steps and names no invariant in Check (TEST.md's contract for schedule authors, rule 4) has no FI checked after
+// its steps, and the gate reads it fail until its owner names the FI its row checks. The gate's command reads them
+// fail; this list only keeps the merge's run below to new failures. A case here that reads written is logged, to come
+// off the list. None is on it: every case M10's entry finds a builder for names its checks, so the merge's run guards
+// each; a case with no builder reads missing, which is the gate's to report.
+var gateM10InKnownFailing = map[string]string{}
 
 // One case's written check, as M10-in's item for it runs it: its reason and outcome on the last two lines, failing
 // the run only when the case fails. Without the flag, every case M10's entry looks for is checked and logged, and the

@@ -14,6 +14,13 @@
 // whose answer was lost is run again, as the schedule's next tick would run it, a runner retaking its own lock. The
 // index's seams here are the root's under sidecar_testhooks alone (search_evs_testhooks.go), so the case is registered
 // only on that build. The rest of FS-75 runs on the search world (fs75_test.go).
+//
+// Its checks after every step are what its reader's steps make by hand, each read as they read the index: FI-18's
+// documents clause, each note a writer committed live in the reader's view through the kill, the lapse and the
+// roll-up (fs74Written); and FI-20's one roll-up and leaving clauses (I-EVS-12): the writers' bucket stands while all
+// is rolled short of it and is gone once all is rolled through it, so it leaves only in the push that commits all, and
+// all's manifest, once a roll-up wrote it, is never written again, no rerun or second runner committing another
+// (fs75RollUp). Nothing here erases, so FI-19, the row's third invariant, is the search world's (fs75_test.go).
 
 package fault
 
@@ -21,6 +28,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/urnetwork/sidecar"
@@ -53,9 +64,75 @@ func fs75RollUpOnEvs(world *EvsWorld, device string) func(ctx context.Context, n
 	}
 }
 
+// FI-20's one roll-up and leaving clauses over the writers' bucket, from the step that found it on: see the file
+// header. Safe for concurrent use.
+type fs75RollUp struct {
+	// what reads the reader's view of the index, shared with FI-18's documents clause
+	written *fs74Written
+
+	stateLock sync.Mutex
+	// the writers' bucket's start day, 0 until the reader's step found it; and the version all's manifest stood at once
+	// all was rolled through the bucket, 0 before
+	bucket     uint32
+	allVersion uint64
+}
+
+// The writers' bucket, as the reader's step found it.
+func (self *fs75RollUp) found(bucket uint32) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.bucket = bucket
+}
+
+// Read as the steps read the index (fs74Written.readIndex).
+func (self *fs75RollUp) check() Invariant {
+	return NewInvariant("FI-20/one-roll-up", func(ctx context.Context, oracle *Oracle) error {
+		self.stateLock.Lock()
+		bucket := self.bucket
+		self.stateLock.Unlock()
+		if bucket == 0 {
+			return nil
+		}
+		index, err := self.written.readIndex(ctx, oracle)
+		if err != nil {
+			return err
+		}
+		standing := slices.Contains(index.Buckets, bucket)
+		rolled := bucket <= index.RolledThroughDay
+		switch {
+		case !rolled && !standing:
+			return fmt.Errorf("bucket %d left the index with all rolled through day %d only", bucket, index.RolledThroughDay)
+		case rolled && standing:
+			return fmt.Errorf("all is rolled through day %d, and bucket %d stands", index.RolledThroughDay, bucket)
+		case !rolled:
+			return nil
+		}
+		manifestVersion := uint64(0)
+		for _, path := range slices.Sorted(maps.Keys(index.Files)) {
+			if strings.HasSuffix(path, "/a/m") {
+				manifestVersion = index.Files[path]
+			}
+		}
+		if manifestVersion == 0 {
+			return fmt.Errorf("all is rolled through day %d and holds no manifest", index.RolledThroughDay)
+		}
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if self.allVersion == 0 {
+			self.allVersion = manifestVersion
+		}
+		if manifestVersion != self.allVersion {
+			return fmt.Errorf("all's manifest, which the roll-up wrote at version %d, was written again at %d: a second roll-up committed", self.allVersion, manifestVersion)
+		}
+		return nil
+	})
+}
+
 // See the file header.
 func Fs75RollUpKilledOnEvs(net *Net) *Schedule {
 	world := NewEvsWorld(net, fs74EvsWorldSettings())
+	written := newFs74Written(world)
+	rollUp := &fs75RollUp{written: written}
 	notes := []struct {
 		device string
 		path   string
@@ -74,7 +151,7 @@ func Fs75RollUpKilledOnEvs(net *Net) *Schedule {
 		{Actor: "writerA", Action: fs74InstallIndexWriters(world, "writerA", "writerB")},
 	}
 	for _, note := range notes {
-		steps = append(steps, &Step{Actor: note.device, Action: world.Write(note.device, note.path, []byte(note.text))})
+		steps = append(steps, &Step{Actor: note.device, Action: written.write(note.device, note.path, []byte(note.text))})
 	}
 	steps = append(steps, []*Step{
 		{Actor: "reader", Action: func(ctx context.Context, net *Net) error {
@@ -86,6 +163,7 @@ func Fs75RollUpKilledOnEvs(net *Net) *Schedule {
 				return fmt.Errorf("the writers' pushes made buckets %v", index.Buckets)
 			}
 			rolled = index.Buckets[0]
+			rollUp.found(rolled)
 			return nil
 		}},
 		// past the bucket's window and the next one, so it is expired
@@ -125,5 +203,5 @@ func Fs75RollUpKilledOnEvs(net *Net) *Schedule {
 			return nil
 		}},
 	}...)
-	return &Schedule{Steps: steps, Tiers: []Tier{TierT2, TierT3}}
+	return &Schedule{Steps: steps, Check: []Invariant{written.documentsLive(), rollUp.check()}, Tiers: []Tier{TierT2, TierT3}}
 }
