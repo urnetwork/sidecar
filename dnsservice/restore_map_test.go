@@ -232,6 +232,9 @@ func TestRestoreListsEveryHostBeyondProbeSample(t *testing.T) {
 			test.report(t, name, version, added, nil)
 			test.report(t, name, version+1, []string{"later.example"}, nil)
 		}
+		if err := test.maps.SyncMapInterfaces(t.Context(), edgeTestRoot, []string{"lb-2", "replacement"}); err != nil {
+			t.Fatal(err)
+		}
 	})
 	incident := sidecar.NewId()
 	for range 2 {

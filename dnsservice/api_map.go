@@ -133,12 +133,11 @@ type DnsMapPoll struct {
 	Time   time.Time
 }
 
-// The first map load at or above a restore's target, kept across later reports and probe rounds.
+// The complete first load an interface acknowledged for a restore. It lives with the incident,
+// independently of ordinary readiness probes and the interface's lifetime.
 type DnsMapRestoreReport struct {
-	Version  uint64   `json:"version"`
-	Received bool     `json:"received,omitempty"`
-	Added    []string `json:"added,omitempty"`
-	Dropped  []string `json:"dropped,omitempty"`
+	Added   []string `json:"added,omitempty"`
+	Dropped []string `json:"dropped,omitempty"`
 }
 
 // What the store keeps of one interface: dns_custom_host_map_applied's row (§12.14).
@@ -159,7 +158,6 @@ type DnsMapInterface struct {
 	DroppedHosts []string
 	// The latest probe of each added host for the reported version.
 	HostProbes map[string]bool
-	Restore    *DnsMapRestoreReport
 }
 
 // A copy that shares nothing with this one.
@@ -167,12 +165,6 @@ func (self *DnsMapInterface) Clone() *DnsMapInterface {
 	clone := *self
 	clone.AddedHosts = slices.Clone(self.AddedHosts)
 	clone.DroppedHosts = slices.Clone(self.DroppedHosts)
-	if self.Restore != nil {
-		report := *self.Restore
-		report.Added = slices.Clone(report.Added)
-		report.Dropped = slices.Clone(report.Dropped)
-		clone.Restore = &report
-	}
 	clone.HostProbes = map[string]bool{}
 	for host, passed := range self.HostProbes {
 		clone.HostProbes[host] = passed
@@ -254,11 +246,6 @@ func ApplyDnsMapPoll(lbInterface *DnsMapInterface, poll *DnsMapPoll) {
 // again.
 func ApplyDnsMapReport(lbInterface *DnsMapInterface, report *DnsCustomHostMapReport, now time.Time, routeHostCount int, droppedMaxCount int) {
 	lbInterface.PollTime = now
-	if restore := lbInterface.Restore; restore != nil && !restore.Received && restore.Version <= report.Version {
-		restore.Added = slices.Clone(report.Added)
-		restore.Dropped = slices.Clone(report.Dropped)
-		restore.Received = true
-	}
 	master := report.Master.key()
 	if report.Version != 0 && report.Version == lbInterface.ReportedVersion && master == lbInterface.Master && report.Digest == lbInterface.Digest {
 		return

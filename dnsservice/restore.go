@@ -117,8 +117,8 @@ type DnsRestoreMapStore interface {
 	// Raises root's map 2^24 above the restored one for incidentId (see the file header's step 3b) and answers
 	// the version; run again for the incident, it answers the same one.
 	RaiseCustomHostMapForRestore(ctx context.Context, root string, incidentId sidecar.Id) (version uint64, err error)
-	// The map's state: each interface's report.
-	CustomHostMapState(ctx context.Context, root string) (*DnsMapState, error)
+	// The incident's complete first acknowledged load per interface; nil means a current interface still owes a report.
+	RestoreMapReports(ctx context.Context, root string, incidentId sidecar.Id) (map[string]*DnsMapRestoreReport, error)
 	// Lists the hosts the regenerated map added and dropped under incidentId in one transaction: each not yet
 	// listed under it, mapped to its network by its row or else by the verified domain it is under, its network
 	// flagged for an open §21 case, and one admin event for each network the incident lists first. Returns the
@@ -389,40 +389,35 @@ func (self *RestoreStep) Run(ctx context.Context, root string, incidentId sideca
 func (self *RestoreStep) awaitMapReports(ctx context.Context, root string, progress *DnsRestoreProgress) (added []string, dropped []string, err error) {
 	waitEnded := self.clock.After(dnsSeconds(self.settings.Restore.MapWaitSeconds))
 	for {
-		state, err := self.deps.CustomHostMaps.CustomHostMapState(ctx, root)
+		reports, err := self.deps.CustomHostMaps.RestoreMapReports(ctx, root, progress.IncidentId)
 		if err != nil {
 			return nil, nil, err
 		}
 		added = []string{}
 		dropped = []string{}
 		reportedCount := 0
-		expectedCount := 0
-		for _, lbInterface := range state.Interfaces {
-			if lbInterface.Restore == nil || lbInterface.Restore.Version != progress.MapVersion {
+		for _, report := range reports {
+			if report == nil {
 				continue
 			}
-			expectedCount++
-			if !lbInterface.Restore.Received {
-				continue
-			}
-			reportedCount += 1
-			added = append(added, lbInterface.Restore.Added...)
-			dropped = append(dropped, lbInterface.Restore.Dropped...)
+			reportedCount++
+			added = append(added, report.Added...)
+			dropped = append(dropped, report.Dropped...)
 		}
 		slices.Sort(added)
 		slices.Sort(dropped)
 		added = slices.Compact(added)
 		dropped = slices.Compact(dropped)
 		progress.MapReportedCount = reportedCount
-		progress.MapInterfaceCount = expectedCount
-		if expectedCount <= reportedCount {
+		progress.MapInterfaceCount = len(reports)
+		if len(reports) == reportedCount {
 			return added, dropped, nil
 		}
 		select {
 		case <-ctx.Done():
 			return nil, nil, ctx.Err()
 		case <-waitEnded:
-			self.log.Warningf("[dns]restore: %d of %d interfaces reported the restored map; a rerun lists what comes later", reportedCount, expectedCount)
+			self.log.Warningf("[dns]restore: %d of %d interfaces reported the restored map; a rerun lists what comes later", reportedCount, len(reports))
 			return added, dropped, nil
 		case <-self.clock.After(dnsSeconds(self.settings.Restore.PollSeconds)):
 		}
