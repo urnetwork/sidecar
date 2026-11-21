@@ -113,9 +113,6 @@ func (self *sidecarGeneration) connectionChanged(connected bool) {
 		if request.online != connected {
 			request.online = connected
 			request.revision++
-			if !connected {
-				request.version = 0
-			}
 		}
 		return request
 	})
@@ -208,7 +205,7 @@ func (self *Sidecar) startGeneration(args *sidecarGenerationArgs) {
 		self.applyTransition(sidecarTransition{to: SidecarStateOffline, generation: generationNumber})
 	}
 	install := func(byJwt string) {
-		generation.refreshCore(0)
+		generation.refreshCore()
 		if generation.leg != nil {
 			generation.leg.install(byJwt)
 		}
