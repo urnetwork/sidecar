@@ -114,6 +114,11 @@ type urSettings struct {
 	ShareLinkByteCount int
 	// The maximum ACL policy source the parser accepts (§8.8).
 	AclSourceMaxByteCount int64
+	// The most member-directory pages ur acl push reads for a policy's emails, each its own one-command Owner/Admin
+	// authorization, a page past the first by the after member_id its command's signed body carries (QD-1162): 8, past
+	// §20.4's 5,000 Team admissions at api's 1,000 members a page. A policy naming a member past them is refused before
+	// it is planned. Positive.
+	AclMemberPageCount int
 	// How long ur search waits for a page where it names no --wait and stdout is a terminal: 10 s (§16.10's wire row);
 	// off a terminal it names none, and the daemon takes the MCP tool's default. Positive.
 	SearchTerminalWait time.Duration
@@ -139,6 +144,7 @@ func defaultUrSettings() *urSettings {
 		CloseTimeout:               30 * time.Second,
 		ShareLinkByteCount:         1024,
 		AclSourceMaxByteCount:      4 * 1024 * 1024,
+		AclMemberPageCount:         8,
 		SearchTerminalWait:         10 * time.Second,
 		SearchPageCount:            64,
 	}

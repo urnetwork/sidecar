@@ -5,7 +5,9 @@
 // matched in the browser by its code: loopback PKCE, or with --device RFC 8628's device grant (urcli_token.go,
 // cmd_login_device.go). A token never runs a second command, and ur-cli drops it and its key at once:
 //
-//	ur admin members [list]                     GET /network/members, its first page
+//	ur admin members [list] [--after=]          GET /network/members, a page: the first, or with --after the one past
+//	                                            that member_id, which the command's signed body names, since the
+//	                                            command covers no query, each page its own authorization (QD-1162)
 //	ur admin members invite <email>             POST /network/member-invite; the bearer is printed, and the link's
 //	                                            client-only fragment, which the inviting device appends, is not yet
 //	ur admin members remove <member_id>         the MemberRevoke's plan from the verified log, confirmed on
@@ -105,7 +107,7 @@ var (
 	_ = registerUrAdminPart(&urAdminPart{
 		word: "members",
 		usage: []string{
-			"  ur admin members [list] [--device]",
+			"  ur admin members [list] [--after=<after>] [--device]",
 			"  ur admin members invite <email> [--role=<role>] [--expire-days=<days>] [--device]",
 			"  ur admin members remove <member_id> [--device]",
 		},
@@ -190,6 +192,16 @@ var urAdminRunCommand = func(ctx context.Context, cli *urCli, command *sidecar.A
 	}
 	defer grant.erase()
 	return urcliRunCommand(ctx, env, grant)
+}
+
+// The member directory's page command (QD-1162): GET /network/members, whose one-command admin token binds the method,
+// the query-free path and the canonical body, so a page past the first names the member_id it reads after in the body,
+// inside the consent's digest. The first page's carries no body. The body names nothing else, no email among it.
+func urAdminMembersPageCommand(after sidecar.Id) (*sidecar.AdminCommand, error) {
+	if after == (sidecar.Id{}) {
+		return urAdminCommand("GET", "/network/members", nil)
+	}
+	return urAdminCommand("GET", "/network/members", map[string]string{"after": after.String()})
 }
 
 // A command whose body is value's JSON, nil for none.
@@ -279,7 +291,15 @@ func runUrAdminMembers(ctx context.Context, cli *urCli, options docopt.Opts) err
 	case urOptionBool(options, "remove"):
 		return runUrAdminMemberRemove(ctx, cli, options)
 	}
-	command, err := urAdminCommand("GET", "/network/members", nil)
+	after := sidecar.Id{}
+	if text := urOptionString(options, "--after"); text != "" {
+		parsed, err := sidecar.ParseId(text)
+		if err != nil || parsed == (sidecar.Id{}) {
+			return fmt.Errorf("--after takes a member_id: %q", text)
+		}
+		after = parsed
+	}
+	command, err := urAdminMembersPageCommand(after)
 	if err != nil {
 		return err
 	}
@@ -306,8 +326,9 @@ func runUrAdminMembers(ctx context.Context, cli *urCli, options docopt.Opts) err
 		}
 		cli.printf("%s\n", strings.TrimSpace(line))
 	}
-	if result.More {
-		cli.printf("more members follow; the console lists them all\n")
+	if result.More && 0 < len(result.Members) {
+		cli.printf("more members follow: ur admin members list --after=%s reads the next page, by its own authorization\n",
+			result.Members[len(result.Members)-1].MemberId)
 	}
 	return nil
 }

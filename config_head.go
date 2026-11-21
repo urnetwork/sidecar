@@ -566,8 +566,9 @@ func CheckConfigBase(head *ConfigHead, check *ConfigHeadCheck, rows *ConfigCompi
 // head's genesis is the one the reader trusts (check.GenesisChain); its folds hold a record at every position 1 to the
 // base's folded_through, bases included; the records at the positions the reader holds, from check.FoldedFrom, equal
 // check.Folded; the chain recomputed from the genesis through the records before check.FoldedFrom reaches the first
-// held entry's prev_chain, and passes through check.Floor when the reader held a pin there (DESIGN-DETAILS 5.5); and
-// its ServiceSettings keeps its bounds. No compile is checked: the reader holds no rows at folded_through but the base's.
+// held entry's prev_chain, and passes through check.Floor when the reader held a pin there (DESIGN-DETAILS 5.5); its
+// ServiceSettings keeps its bounds; and the base's rows hold its ServiceSettings' Team scopes exactly (QD-1163). No
+// compile is checked: the reader holds no rows at folded_through but the base's.
 func checkConfigAnchor(head *ConfigHead, check *ConfigHeadCheck) (*ConfigHeadFacts, error) {
 	if bridge.GenesisChain(head.signedGenesis) != check.GenesisChain {
 		return nil, fmt.Errorf("%w: another genesis", ErrConfigHeadMismatch)
@@ -623,19 +624,26 @@ func checkConfigAnchor(head *ConfigHead, check *ConfigHeadCheck) (*ConfigHeadFac
 	}
 
 	facts := &ConfigHeadFacts{}
-	if len(check.Rows) > 0 {
-		rows := &bridge.ProjectionRows{}
-		if err := proto.Unmarshal(check.Rows, rows); err != nil {
-			return nil, fmt.Errorf("%w: binding rows: %w", ErrConfigHeadMismatch, err)
-		}
-		facts.recoveryBodies = configFoldedRecoveryBodies(rows.GetMembers(), records)
-	}
 	settings, _, err := head.ServiceSettings()
 	if err != nil {
 		return nil, err
 	}
 	if err := CheckServiceSettings(settings); err != nil {
 		return nil, fmt.Errorf("%w: service_settings: %w", ErrConfigHeadMismatch, err)
+	}
+	if len(check.Rows) > 0 {
+		rows := &bridge.ProjectionRows{}
+		if err := proto.Unmarshal(check.Rows, rows); err != nil {
+			return nil, fmt.Errorf("%w: binding rows: %w", ErrConfigHeadMismatch, err)
+		}
+		facts.recoveryBodies = configFoldedRecoveryBodies(rows.GetMembers(), records)
+		// the base's Team scopes are its head's, the one source a reader takes them from (QD-1163), which the
+		// compile a reader past its first base runs holds every later base to
+		if !slices.EqualFunc(rows.GetTeamScopes(), settings.GetTeamScopes(), func(a *bridge.TeamScopeRow, b *bridge.TeamScopeRow) bool {
+			return proto.Equal(a, b)
+		}) {
+			return nil, fmt.Errorf("%w: the rows' team scopes are not the head's", ErrConfigHeadMismatch)
+		}
 	}
 	facts.Settings = settings
 	versioningRules, _, err := head.VersioningRules()

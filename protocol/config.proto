@@ -216,6 +216,14 @@ enum RecordCostMode {
 // registers no listener as it would under indexers (D-MAIL-15). §7.9's Settings fields take 7 to 9 in the
 // order written, each network-wide, reserved before M2's freeze as directory was, so older readers ignore
 // them (D-PHASE-9).
+//
+// team_scopes is the signed source of the projection's Team scopes (QD-1163, QD-059): each label's first binding,
+// to a member or a tag atom, in label order, which an Owner or Admin creates by signing this record. Compile
+// writes the list as ProjectionRows.team_scopes, which every reader of a scope takes and nothing else
+// establishes, and holds each head to the bindings its base's rows hold: a head that drops one or binds its
+// label to another owner forks its base, so a binding never changes, its retirement's included, and
+// reassignment waits for a consented-member transition rule (DESIGN-DEFER.md). A new binding names a member
+// the log holds or a tag atom the head's tags table holds.
 message ServiceSettings {
   TeamMailMode team_mail = 1;
   uint32 stale_leaf_days = 2;          // 90 (§10.9's stale Removes)
@@ -228,6 +236,7 @@ message ServiceSettings {
   RecordCostMode record_cost = 8;      // on (owner decision 302)
   bool record_required = 9;            // false; read from M6 and never set through MCP: each member's
                                        // ur install-harness writes fail-closed hooks (§16.7; owner decision 305)
+  repeated TeamScopeRow team_scopes = 10;  // Team scopes' first bindings, in label order (QD-1163)
 }
 
 enum VersioningMode {

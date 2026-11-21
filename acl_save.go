@@ -99,6 +99,10 @@ type AclSaveInput struct {
 	Random io.Reader
 	// The time the tests and the preview judge at.
 	Now time.Time
+	// The config repo's key of a generation, nil for one this device does not hold: what opens each surviving
+	// activated grant's sealed detail, which the tests' ip: checks judge by at the state's base (QD-1164). Nil opens
+	// none, so the checks such a grant may apply to are indeterminate.
+	RepoKeyAt func(generation uint64) *EvsRepoKey
 }
 
 // One save's plan: the head it writes and everything the person previews before signing.
@@ -472,7 +476,8 @@ func PlanAclSave(ctx context.Context, input *AclSaveInput) (*AclSavePlan, error)
 	if err := AclRowsCheckLimits(rows, len(projection), input.Limits); err != nil {
 		return nil, err
 	}
-	tests, err := AclPolicyTestRun(&AclPolicyTestInput{Compile: compile, View: input.State, Now: input.Now})
+	tests, err := AclPolicyTestRun(&AclPolicyTestInput{Compile: compile, View: input.State, Now: input.Now,
+		GrantDetails: newAclStateGrantDetails(input.State, input.Head, input.RepoKeyAt)})
 	if err != nil {
 		return nil, err
 	}
@@ -903,13 +908,23 @@ func (self *Sidecar) TestAclPolicy(ctx context.Context, source []byte) (*AclPoli
 			ResolveNetworkLabel: func(text string) (Id, bool) {
 				id, ok := networks[text]
 				return id, ok
-			}})
+			}, RepoKeyAt: self.aclRepoKeyAt()})
 		if err != nil {
 			return nil, err
 		}
 		return plan.Tests, nil
 	}
-	return AclPolicyTestOver(source, head, state, self.clock.Now())
+	return aclPolicyTestOver(source, head, state, self.clock.Now(), newAclStateGrantDetails(state, head, self.aclRepoKeyAt()))
+}
+
+// The config repo's keys this device holds, which open activated grants' sealed details for a save's tests
+// (QD-1164): nil while KEYS installed none.
+func (self *Sidecar) aclRepoKeyAt() func(generation uint64) *EvsRepoKey {
+	keys := self.configKeys()
+	if keys == nil {
+		return nil
+	}
+	return keys.ConfigKeyAt
 }
 
 // The change audit over this device's verified log (QD-555).
@@ -924,8 +939,14 @@ func (self *Sidecar) AclLog() ([]AclLogEntry, error) {
 // A document's tests over a head's tables and a state, either of which may be nil: a name the head does not hold takes
 // a provisional id, so a test naming a user or a tag the state does not hold fails, and with no state the document's
 // own world stands in, every user it names a member with no device, so its tests check the document against itself.
-// Validation is the writer's (PlanAclSave): this runs the tests alone.
+// Validation is the writer's (PlanAclSave): this runs the tests alone. It opens no activated grant's sealed detail, so
+// an ip: check such a grant of the state may apply to is indeterminate (QD-1164).
 func AclPolicyTestOver(source []byte, head *ConfigHead, state *ConfigState, now time.Time) (*AclPolicyTestReport, error) {
+	return aclPolicyTestOver(source, head, state, now, nil)
+}
+
+// AclPolicyTestOver with the opener of the state's activated grants' sealed details, nil for none.
+func aclPolicyTestOver(source []byte, head *ConfigHead, state *ConfigState, now time.Time, details AclGrantDetails) (*AclPolicyTestReport, error) {
 	policy, err := ParseAclPolicy(source)
 	if err != nil {
 		return nil, err
@@ -1040,7 +1061,7 @@ func AclPolicyTestOver(source []byte, head *ConfigHead, state *ConfigState, now 
 		}
 		view = document
 	}
-	report, err := AclPolicyTestRun(&AclPolicyTestInput{Compile: input, View: view, Now: now})
+	report, err := AclPolicyTestRun(&AclPolicyTestInput{Compile: input, View: view, Now: now, GrantDetails: details})
 	if err != nil {
 		return nil, err
 	}
@@ -1134,7 +1155,8 @@ func (self *Sidecar) SaveAclTeamStart(ctx context.Context, limits *AclLimits, or
 			return nil, fmt.Errorf("%w: the network is not on the Team tier", ErrAclPolicyInvalid)
 		}
 	}
-	plan, err := PlanAclSave(ctx, &AclSaveInput{Policy: AclTeamStartDocument(), Head: head, State: state, Limits: limits, Now: self.clock.Now(), ResolveScope: state.TeamScope})
+	plan, err := PlanAclSave(ctx, &AclSaveInput{Policy: AclTeamStartDocument(), Head: head, State: state, Limits: limits, Now: self.clock.Now(),
+		ResolveScope: state.TeamScope, RepoKeyAt: self.aclRepoKeyAt()})
 	if err != nil {
 		return nil, err
 	}

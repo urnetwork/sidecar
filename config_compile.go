@@ -50,7 +50,9 @@ type ConfigCompileRows struct {
 	Sidecars       []*bridge.SidecarRow
 	Delegations    []*bridge.DelegationRow
 	RegisteredKeys []*bridge.KeyRow
-	TeamScopes     []*bridge.TeamScopeRow
+	// The Team scope bindings the base before holds, which the head's ServiceSettings must keep (QD-1163): compile
+	// writes the head's, not these.
+	TeamScopes []*bridge.TeamScopeRow
 	// What the log's 0x11xx statements give at folded_through: grants, shares, suspensions and AclRepo rows, which
 	// the acl compile carries into AclRows beside what the head's policy gives (§8.8).
 	AclStatements *protocol.AclRows
@@ -184,8 +186,8 @@ func CompileProjectionRows(head *ConfigHead, rows *ConfigCompileRows) ([]byte, e
 	projection.Sidecars = configSortRows(rows.Sidecars, (*bridge.SidecarRow).GetSidecarId, "sidecars", &sortErr)
 	projection.Delegations = configSortRows(rows.Delegations, (*bridge.DelegationRow).GetDelegationId, "delegations", &sortErr)
 	projection.RegisteredKeys = configSortRows(rows.RegisteredKeys, (*bridge.KeyRow).GetKeyId, "registered_keys", &sortErr)
-	projection.TeamScopes = configSortRows(rows.TeamScopes, func(row *bridge.TeamScopeRow) []byte { return []byte(row.GetLabel()) }, "team_scopes", &sortErr)
-	for _, scope := range projection.TeamScopes {
+	heldScopes := configSortRows(rows.TeamScopes, func(row *bridge.TeamScopeRow) []byte { return []byte(row.GetLabel()) }, "team_scopes", &sortErr)
+	for _, scope := range heldScopes {
 		if err := configCheckTeamScope(scope); err != nil {
 			return nil, err
 		}
@@ -195,6 +197,9 @@ func CompileProjectionRows(head *ConfigHead, rows *ConfigCompileRows) ([]byte, e
 	projection.Ring = configSortRows(rows.Ring, configRingRowKey, "ring", &sortErr)
 	if sortErr != nil {
 		return nil, sortErr
+	}
+	if projection.TeamScopes, err = configCompileTeamScopes(head, settings, heldScopes, rows.Members); err != nil {
+		return nil, err
 	}
 	for i, row := range projection.Ring {
 		if len(row.GetStatementId()) != configRetainedIdSize {
@@ -211,10 +216,82 @@ func CompileProjectionRows(head *ConfigHead, rows *ConfigCompileRows) ([]byte, e
 	return encoded, nil
 }
 
+// A head's ServiceSettings rebinds or drops a Team scope binding its base's rows hold (QD-1163): no head of this log
+// makes either, since each label's first binding never changes, its retirement's included, and reassignment waits for
+// its consent rule (DESIGN-DEFER.md).
+var ErrConfigTeamScopeRebound = fmt.Errorf("%w: a team scope's label stays bound to its first owner", ErrConfigRule)
+
+// A head's ServiceSettings binds a Team scope to a member the log does not hold or a tag atom the head's tags table
+// does not hold (QD-1163).
+var ErrConfigTeamScopeOwnerUnknown = fmt.Errorf("%w: a team scope's first binding names no member or tag of the network", ErrConfigRule)
+
+// The rows' Team scopes compile writes from a head (QD-1163): its ServiceSettings' team_scopes, in label order, each
+// label's first binding. Every binding held, the base's rows' as held, stands in the head unchanged, and a binding
+// held nowhere yet is a first binding, whose member members holds, the log's at the head's folded_through, or whose
+// tag atom the head's tags table holds. A hostname, an acl grant naming a scope host or a directory answer makes no
+// binding: rows carry only what a signed ServiceSettings declared, which every reader of a scope takes from a
+// verified base alone.
+func configCompileTeamScopes(head *ConfigHead, settings *protocol.ServiceSettings, held []*bridge.TeamScopeRow,
+	members []*bridge.MemberRow) ([]*bridge.TeamScopeRow, error) {
+	declared := settings.GetTeamScopes()
+	byLabel := make(map[string]*bridge.TeamScopeRow, len(declared))
+	for i, scope := range declared {
+		if err := configCheckTeamScope(scope); err != nil {
+			return nil, err
+		}
+		if 0 < i && declared[i-1].GetLabel() >= scope.GetLabel() {
+			return nil, fmt.Errorf("%w: service_settings.team_scopes out of label order or repeated", ErrConfigRule)
+		}
+		byLabel[scope.GetLabel()] = scope
+	}
+	for i, scope := range held {
+		binding := byLabel[scope.GetLabel()]
+		if binding == nil {
+			return nil, fmt.Errorf("%w: the head drops the binding of held scope %d", ErrConfigTeamScopeRebound, i)
+		}
+		if !bytes.Equal(binding.GetMemberId(), scope.GetMemberId()) || !bytes.Equal(binding.GetTagAtom(), scope.GetTagAtom()) {
+			return nil, fmt.Errorf("%w: the head binds held scope %d to another owner", ErrConfigTeamScopeRebound, i)
+		}
+		delete(byLabel, scope.GetLabel())
+	}
+	// first bindings, the ones byLabel still holds
+	var tags map[string]bool
+	for i, scope := range declared {
+		if byLabel[scope.GetLabel()] == nil {
+			continue
+		}
+		if memberId := scope.GetMemberId(); len(memberId) != 0 {
+			if !slices.ContainsFunc(members, func(member *bridge.MemberRow) bool { return bytes.Equal(member.GetMemberId(), memberId) }) {
+				return nil, fmt.Errorf("%w: team_scopes[%d]'s member", ErrConfigTeamScopeOwnerUnknown, i)
+			}
+			continue
+		}
+		if tags == nil {
+			tags = map[string]bool{}
+			if data := head.File(ConfigHeadTagsPath); data != nil {
+				table := &protocol.ConfigAtomTable{}
+				if err := proto.Unmarshal(data, table); err != nil {
+					return nil, fmt.Errorf("%w: the head's tags file", ErrConfigHeadMalformed)
+				}
+				for _, row := range table.GetAtoms() {
+					tags[string(row.GetAtomId())] = true
+				}
+			}
+		}
+		if !tags[string(scope.GetTagAtom())] {
+			return nil, fmt.Errorf("%w: team_scopes[%d]'s tag", ErrConfigTeamScopeOwnerUnknown, i)
+		}
+	}
+	scopes := make([]*bridge.TeamScopeRow, 0, len(declared))
+	for _, scope := range declared {
+		scopes = append(scopes, proto.Clone(scope).(*bridge.TeamScopeRow))
+	}
+	return scopes, nil
+}
+
 // The public shape of a scope binding. The owner's id stays reserved when its member or tag leaves.
 func configCheckTeamScope(row *bridge.TeamScopeRow) error {
-	label := row.GetLabel()
-	if !isDnsLowerLdhLabel(label) || (len(label) >= 4 && label[2:4] == "--") || IsReservedDnsLabel(label) || IsWordNumberDnsLabel(label) {
+	if !configTeamScopeLabelValid(row.GetLabel()) {
 		return fmt.Errorf("%w: invalid team scope label", ErrConfigRowsMalformed)
 	}
 	memberId, tagAtom := row.GetMemberId(), row.GetTagAtom()
@@ -229,6 +306,12 @@ func configCheckTeamScope(row *bridge.TeamScopeRow) error {
 		}
 	}
 	return fmt.Errorf("%w: team scope must have exactly one valid member_id or tag_atom", ErrConfigRowsMalformed)
+}
+
+// Whether label is a scope label every reader takes (§12.5): one lowercase LDH label, no -- at 3-4, not reserved and
+// not a word-number label.
+func configTeamScopeLabelValid(label string) bool {
+	return isDnsLowerLdhLabel(label) && !(len(label) >= 4 && label[2:4] == "--") && !IsReservedDnsLabel(label) && !IsWordNumberDnsLabel(label)
 }
 
 // A ring row's sort key, its position: the ring runs in position order, at most one statement a position.
