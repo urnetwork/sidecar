@@ -175,23 +175,25 @@ func (self *EvsClient) readLog(ctx context.Context, repoId Id, refId Id, since u
 		if err != nil {
 			return nil, err
 		}
-		for _, statement := range reply.GetStatements() {
+		page := reply.GetStatements()
+		for _, statement := range page {
 			if through < statement.GetVersion() {
 				return statements, nil
 			}
 			statements = append(statements, statement)
 		}
-		next := reply.GetNextVersion()
-		if len(reply.GetStatements()) == 0 {
+		if len(page) == 0 {
 			return statements, nil
 		}
+		next := reply.GetNextVersion()
 		if next == 0 {
-			// The log may serve a cached head older than the verified head we are
-			// walking to. Asking for its successor requires a head at least that new.
-			last := statements[len(statements)-1].GetVersion()
+			last := page[len(page)-1].GetVersion()
 			if through <= last {
 				return statements, nil
 			}
+			// The log may stop at its cached head before the newer head we
+			// are verifying. Asking for the next version requires EVS to
+			// read at least that far or explicitly return an empty page.
 			next = last + 1
 		}
 		if next <= since {

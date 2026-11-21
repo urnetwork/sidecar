@@ -527,6 +527,23 @@ func (self *EvsVerifier) Walk(ctx context.Context, repoId Id, refId Id, fromVers
 	return self.walk(repoId, refId, fromVersion, fromChain, statements, throughVersion)
 }
 
+// The whole log of a verified head. Its signed statements must reach that head's chain.
+func (self *EvsVerifier) walkToHead(ctx context.Context, head *EvsVerifiedHead) ([]*EvsVerifiedStatement, error) {
+	start := EvsChainStart(head.RepoId, head.RefId)
+	walked, err := self.Walk(ctx, head.RepoId, head.RefId, 0, start, head.Version)
+	if err != nil {
+		return nil, err
+	}
+	reached := start
+	if len(walked) != 0 {
+		reached = walked[len(walked)-1].Chain
+	}
+	if reached != head.Chain {
+		return nil, fmt.Errorf("%w: the history does not chain to the head", ErrEvsChainBroken)
+	}
+	return walked, nil
+}
+
 // The statements from fromVersion + 1 to throughVersion, each verified, chained from fromChain, in order.
 func (self *EvsVerifier) walk(repoId Id, refId Id, fromVersion uint64, fromChain [sha256.Size]byte, statements []*protocol.EvsReadStatement, throughVersion uint64) ([]*EvsVerifiedStatement, error) {
 	walked := []*EvsVerifiedStatement{}

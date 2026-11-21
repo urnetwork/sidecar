@@ -257,7 +257,7 @@ func (self *EvsRepo) ReadErasures(ctx context.Context, afterVersion uint64) ([]*
 	if err != nil || head.Version <= afterVersion {
 		return nil, err
 	}
-	walked, err := self.client.verifier.Walk(ctx, self.repoId, refId, 0, EvsChainStart(self.repoId, refId), head.Version)
+	walked, err := self.client.verifier.walkToHead(ctx, head)
 	if err != nil {
 		return nil, err
 	}

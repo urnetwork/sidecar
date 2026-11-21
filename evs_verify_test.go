@@ -1783,6 +1783,14 @@ func TestEvsWalkFromTheLog(t *testing.T) {
 	if len(walked) != int(version) || walked[len(walked)-1].Chain != chain {
 		t.Errorf("walked %d to another chain", len(walked))
 	}
+	head := &EvsVerifiedHead{RepoId: world.repoId, RefId: world.refId, Version: version, Chain: chain}
+	if _, err := reader.client.Verifier().walkToHead(t.Context(), head); err != nil {
+		t.Fatal(err)
+	}
+	head.Chain[0] ^= 1
+	if _, err := reader.client.Verifier().walkToHead(t.Context(), head); !errors.Is(err, ErrEvsChainBroken) {
+		t.Fatalf("a different chain at the same verified version: %v", err)
+	}
 	world.omitVersion = 7
 	if _, err := reader.client.Verifier().Walk(context.Background(), world.repoId, world.refId, 0, EvsChainStart(world.repoId, world.refId), version); !errors.Is(err, ErrEvsChainBroken) {
 		t.Errorf("a log that skips a version: %v", err)

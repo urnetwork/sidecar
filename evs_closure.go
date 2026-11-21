@@ -117,7 +117,7 @@ func (self *EvsRepo) ReadClosures(ctx context.Context, refName []byte, afterVers
 	if err != nil || head.Version == 0 {
 		return nil, err
 	}
-	walked, err := self.client.verifier.Walk(ctx, self.repoId, refId, 0, EvsChainStart(self.repoId, refId), head.Version)
+	walked, err := self.client.verifier.walkToHead(ctx, head)
 	if err != nil {
 		return nil, err
 	}
