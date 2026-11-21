@@ -10,7 +10,11 @@
 //
 // A head below the pin is refused and raises head_alarm's fork with both RefHeads as evidence, unless a verified
 // EvsReseed covers it (§11.13, §19.10), which lowers the pin and is kept as a loss. A head at the pin's version with
-// another chain is the same fork.
+// another chain is the same fork. The pin a head is judged against is the one its read asked at (EvsHeadRead.ask):
+// another read of the same client may raise the pin while this one is in flight, and a head it passed is no fork. It
+// stands as read where the pin store holds its chain at its version, and is a stale read, read again or answered
+// ErrEvsReadStale, where it holds none; a walk that meets a chain the store holds with another one is still a fork,
+// whichever read raised it (evs_pin_store.go's header).
 //
 // Catching up costs at most EvsSettings.CatchUpByteCount of statements (§11.9's budget): past it the reader re-pins
 // at the head and marks the gap, raising evs_gap, so what a never-read path or any path read after the gap holds is
@@ -69,6 +73,11 @@ var (
 	// overwritten faster than it downloads (§11.7's reads row). No alarm.
 	ErrEvsReplacedMidRead = errors.New("evs: replaced while it was read")
 )
+
+// A read whose head another read of this client raised the pin past while it was in flight, where nothing this device
+// holds places that head on the pinned history: no fork, and no alarm. The read is read again, fresh, at most
+// EvsSettings.ReadStaleRetryCount times before it answers this (evs_pin_store.go's header).
+var ErrEvsReadStale = errors.New("evs: read stale")
 
 // The two refs format 2 reserves by name (§11.7's git row, §11.11, §11.14).
 var (
@@ -158,6 +167,9 @@ type EvsHeadRead struct {
 	Statements []*protocol.EvsReadStatement
 	// The reply's behind: the first version it could not serve from the window, 0 when none.
 	Behind uint64
+	// The ref's pin as the read asked (EvsPinStore.ask), which the head is judged against; nil judges it against the
+	// pin as it stands when the head is checked.
+	ask *evsPinAsk
 }
 
 // A head the reader verified, ready to pin.
@@ -173,6 +185,27 @@ type EvsVerifiedHead struct {
 	FromVersion uint64
 	// The read re-pinned at the head past the catch-up budget: the versions before it are evs's word.
 	Gap bool
+	// The pin VerifyHead judged the head against, and C at FromVersion: Pin raises a head with an ask as the pin store
+	// judges it (EvsPinStore.raiseRead), and one built any other way, with none, as Raise does.
+	ask       *evsPinAsk
+	fromChain [sha256.Size]byte
+}
+
+// C at version as the head's walk verified it, false where it holds none: its own, its walk's start's or a walked
+// statement's.
+func (self *EvsVerifiedHead) chainAt(version uint64) ([sha256.Size]byte, bool) {
+	switch {
+	case version == self.Version:
+		return self.Chain, true
+	case self.Gap:
+		return [sha256.Size]byte{}, false
+	case version == self.FromVersion:
+		return self.fromChain, true
+	}
+	if statement, ok := self.StatementAt(version); ok {
+		return statement.Chain, true
+	}
+	return [sha256.Size]byte{}, false
 }
 
 // The statement at version, false when the walk does not hold it.
@@ -416,9 +449,12 @@ func evsCheckRefRulesOver(state GkmAuthView, statement *EvsStatement, changes []
 	return nil
 }
 
-// Checks a head read: the pin rule, then every statement after FromVersion and the chain they make to the head. A
+// Checks a head read: the pin rule against the pin the read asked at, then every statement after FromVersion and the
+// chain they make to the head, then the head against the pin as it stands now and the chains the pin store keeps. A
 // reply that is behind, and statements that stop short of the head, page GET .../log from the last version held,
-// within the catch-up budget; past it, the head is taken as evs's word and the result marked Gap.
+// within the catch-up budget; past it, the head is taken as evs's word and the result marked Gap. A head another read
+// of this client passed while this one was in flight answers ErrEvsReadStale where the store cannot place it, so the
+// caller reads again before it reads any path (see the file header).
 func (self *EvsVerifier) VerifyHead(ctx context.Context, read *EvsHeadRead) (*EvsVerifiedHead, error) {
 	head := read.Head
 	if head == nil {
@@ -431,8 +467,17 @@ func (self *EvsVerifier) VerifyHead(ctx context.Context, read *EvsHeadRead) (*Ev
 	if err != nil {
 		return nil, fmt.Errorf("%w: the head's chain", ErrEvsReplyInvalid)
 	}
-	if err := self.checkPin(read.RepoId, read.RefId, head.GetVersion(), headChain); err != nil {
-		return nil, err
+	ask := read.ask
+	if ask == nil {
+		// a read that kept no ask: the pin as it stands now
+		if ask, err = self.client.pins.ask(read.RepoId, read.RefId); err != nil {
+			return nil, err
+		}
+	}
+	if pin := ask.pin; pin != nil && (head.GetVersion() < pin.Version || (head.GetVersion() == pin.Version && headChain != pin.Chain)) {
+		// the pin rule (I-16) at the pin the read asked at
+		self.alarmFork(read.RepoId, read.RefId, pin, head.GetVersion(), headChain)
+		return nil, ErrEvsHeadForked
 	}
 	verified := &EvsVerifiedHead{
 		RepoId:      read.RepoId,
@@ -441,6 +486,8 @@ func (self *EvsVerifier) VerifyHead(ctx context.Context, read *EvsHeadRead) (*Ev
 		Version:     head.GetVersion(),
 		Chain:       headChain,
 		FromVersion: read.FromVersion,
+		ask:         ask,
+		fromChain:   read.FromChain,
 	}
 	if head.GetVersion() < read.FromVersion {
 		return nil, fmt.Errorf("%w: a head below the version read from", ErrEvsHeadForked)
@@ -457,12 +504,12 @@ func (self *EvsVerifier) VerifyHead(ctx context.Context, read *EvsHeadRead) (*Ev
 			return nil, err
 		}
 		if gap {
-			return self.gapHead(verified, read)
+			return self.judgeHead(self.gapHead(verified, read))
 		}
 		statements = paged
 	}
 	if byteCount > self.client.settings.CatchUpByteCount {
-		return self.gapHead(verified, read)
+		return self.judgeHead(self.gapHead(verified, read))
 	}
 	walked, err := self.walk(read.RepoId, read.RefId, read.FromVersion, read.FromChain, statements, head.GetVersion())
 	if err != nil {
@@ -474,11 +521,42 @@ func (self *EvsVerifier) VerifyHead(ctx context.Context, read *EvsHeadRead) (*Ev
 	if len(walked) == 0 && read.FromChain != headChain {
 		return nil, fmt.Errorf("%w: a head at the pin's version with another chain", ErrEvsHeadForked)
 	}
-	if err := self.checkPinOnWalk(read.RepoId, read.RefId, walked); err != nil {
+	verified.Statements = walked
+	return self.judgeHead(verified, nil)
+}
+
+// A verified head judged against the pin as it stands now, which another read of this client may have raised past
+// the one this read asked at, and the chains the pin store keeps (EvsPinStore.standing): a version they hold with
+// another chain is a fork, alarmed; a head they passed and cannot place is ErrEvsReadStale, with no alarm; else the
+// head, which Pin judges again as it raises.
+func (self *EvsVerifier) judgeHead(verified *EvsVerifiedHead, err error) (*EvsVerifiedHead, error) {
+	if err != nil {
 		return nil, err
 	}
-	verified.Statements = walked
+	standing, mine, err := self.client.pins.standing(verified)
+	switch {
+	case errors.Is(err, ErrEvsPinFork), errors.Is(err, ErrEvsPinLower):
+		self.alarmHeadAgainst(verified, mine)
+		return nil, ErrEvsHeadForked
+	case err != nil:
+		return nil, err
+	case standing == evsPinStale:
+		return nil, ErrEvsReadStale
+	}
 	return verified, nil
+}
+
+// head_alarm's fork over a verified head the pin store refused: this device's RefHead that it contradicts, and evs's,
+// the head's own chain at that version where its walk holds one, else the head.
+func (self *EvsVerifier) alarmHeadAgainst(verified *EvsVerifiedHead, mine *EvsPin) {
+	if mine == nil {
+		mine = &EvsPin{RepoId: verified.RepoId, RefId: verified.RefId}
+	}
+	version, chain := verified.Version, verified.Chain
+	if served, ok := verified.chainAt(mine.Version); ok {
+		version, chain = mine.Version, served
+	}
+	self.alarmFork(verified.RepoId, verified.RefId, mine, version, chain)
 }
 
 // A head re-pinned past the catch-up budget (§11.9's budget row): its version and chain are evs's word, and the
@@ -489,6 +567,8 @@ func (self *EvsVerifier) gapHead(verified *EvsVerifiedHead, read *EvsHeadRead) (
 	verified.Gap = true
 	verified.Statements = nil
 	verified.FromVersion = verified.Version
+	// C before the carried statements is not known here
+	verified.fromChain = [sha256.Size]byte{}
 	carried := []*protocol.EvsReadStatement{}
 	for _, statement := range read.Statements {
 		if read.FromVersion < statement.GetVersion() && statement.GetVersion() <= verified.Version {
@@ -650,7 +730,9 @@ func (self *EvsVerifier) pageLog(ctx context.Context, read *EvsHeadRead, spentBy
 }
 
 // The pin rule (I-16): a head below the ref's pin, or at it with another chain, is a fork, alarmed with both
-// RefHeads, unless a verified reseed lowered the pin to exactly that head first.
+// RefHeads, unless a verified reseed lowered the pin to exactly that head first. It judges against the pin as it
+// stands now, which is the readers' rule only where nothing else raises the pin while they read; VerifyHead judges a
+// head against the pin its read asked at.
 func (self *EvsVerifier) checkPin(repoId Id, refId Id, version uint64, chain [sha256.Size]byte) error {
 	pin, ok, err := self.client.pins.Pin(repoId, refId)
 	if err != nil || !ok {
@@ -663,7 +745,7 @@ func (self *EvsVerifier) checkPin(repoId Id, refId Id, version uint64, chain [sh
 	return nil
 }
 
-// Checks that the walk passes through the pin: C at the pin's version equals the pin's chain.
+// Checks that the walk passes through the pin as it stands now: C at the pin's version equals the pin's chain.
 func (self *EvsVerifier) checkPinOnWalk(repoId Id, refId Id, walked []*EvsVerifiedStatement) error {
 	pin, ok, err := self.client.pins.Pin(repoId, refId)
 	if err != nil || !ok {
@@ -693,7 +775,10 @@ func (self *EvsVerifier) alarmFork(repoId Id, refId Id, pin *EvsPin, version uin
 }
 
 // Pins a verified head durably, before anything it backs is shown: raised to its version and chain, its group from
-// the head's generation pin, and, past the budget, the gap marked and evs_gap raised.
+// the head's generation pin, and, past the budget, the gap marked and evs_gap raised. A head VerifyHead verified is
+// judged again as it is raised, against the pin it was read at and the pin as it then stands (EvsPinStore.raiseRead):
+// one another read raised the pin past stands with nothing raised where the store places it on the pinned history,
+// and answers ErrEvsReadStale, with no alarm, where it cannot; a regression or a fork refuses with the alarm.
 func (self *EvsVerifier) Pin(verified *EvsVerifiedHead) error {
 	now := self.client.clock.Now()
 	pin := &EvsPin{
@@ -709,7 +794,26 @@ func (self *EvsVerifier) Pin(verified *EvsVerifiedHead) error {
 	if verified.Gap {
 		pin.VerifiedSince = now
 	}
-	if err := self.client.pins.Raise(pin); err != nil {
+	// the raise is the read's linearization point: another read of the client may raise the pin up to it
+	barrierKey := verified.RepoId.String() + ":" + verified.RefId.String()
+	testHookBarrier("evs.pin.raise.before", barrierKey)
+	defer testHookBarrier("evs.pin.raise.after", barrierKey)
+	if verified.ask != nil {
+		standing, mine, err := self.client.pins.raiseRead(pin, verified)
+		if err != nil {
+			if errors.Is(err, ErrEvsPinLower) || errors.Is(err, ErrEvsPinFork) {
+				self.alarmHeadAgainst(verified, mine)
+			}
+			return err
+		}
+		switch standing {
+		case evsPinStale:
+			return ErrEvsReadStale
+		case evsPinPassed:
+			// the pin stands past this head, on its history: nothing to raise, no gap to mark
+			return nil
+		}
+	} else if err := self.client.pins.Raise(pin); err != nil {
 		if errors.Is(err, ErrEvsPinLower) || errors.Is(err, ErrEvsPinFork) {
 			if held, ok, _ := self.client.pins.Pin(verified.RepoId, verified.RefId); ok {
 				self.alarmFork(verified.RepoId, verified.RefId, held, verified.Version, verified.Chain)

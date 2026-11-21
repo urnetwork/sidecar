@@ -207,19 +207,31 @@ func (self *EvsClient) epochFresh(state *evsRefEpoch) bool {
 
 // One round for the ref's head alone (§11.9's read with no path), verified from the pin and pinned, its epoch state
 // kept: what a read does first when it holds no epoch state for the ref or a new name needs a fresh one, and what a
-// retoken waits on.
+// retoken waits on. A head another read of this client passed while this one was in flight, which the pin store
+// cannot place, is read again, fresh, at most ReadStaleRetryCount times before the read answers ErrEvsReadStale; one
+// it places on the pinned history is returned as read, below the pin (evs_pin_store.go's header).
 func (self *EvsRepo) readHeadAlone(ctx context.Context, refId Id, fresh bool) (*EvsVerifiedHead, error) {
-	return self.readHeadAloneFromPin(ctx, refId, fresh, true)
+	done := self.client.pins.beginRead(self.repoId, refId)
+	defer done()
+	for staleCount := 0; ; staleCount += 1 {
+		head, err := self.readHeadAloneFromPin(ctx, refId, fresh, true)
+		if !errors.Is(err, ErrEvsReadStale) || self.client.settings.ReadStaleRetryCount <= staleCount {
+			return head, err
+		}
+		fresh = true
+	}
 }
 
-// readHeadAlone, taking a head below the pin under the ref's EvsReseed at most once (reseed).
+// readHeadAlone's one read, taking a head below the pin under the ref's EvsReseed at most once (reseed), judged against
+// the pin it asks at.
 func (self *EvsRepo) readHeadAloneFromPin(ctx context.Context, refId Id, fresh bool, reseed bool) (*EvsVerifiedHead, error) {
 	fromVersion := uint64(0)
 	fromChain := EvsChainStart(self.repoId, refId)
-	pin, pinned, err := self.client.pins.Pin(self.repoId, refId)
+	ask, err := self.client.pins.ask(self.repoId, refId)
 	if err != nil {
 		return nil, err
 	}
+	pin, pinned := ask.pin, ask.pin != nil
 	if pinned {
 		fromVersion, fromChain = pin.Version, pin.Chain
 		if pin.Version < self.client.hintedVersion(self.repoId, refId) {
@@ -238,7 +250,7 @@ func (self *EvsRepo) readHeadAloneFromPin(ctx context.Context, refId Id, fresh b
 			return nil, err
 		}
 		if again {
-			return self.readHeadAloneFromPin(ctx, refId, fresh, false)
+			return self.readHeadAloneFromPin(ctx, refId, true, false)
 		}
 	}
 	head, err := self.client.verifier.VerifyHead(ctx, &EvsHeadRead{
@@ -249,6 +261,7 @@ func (self *EvsRepo) readHeadAloneFromPin(ctx context.Context, refId Id, fresh b
 		FromChain:   fromChain,
 		Statements:  reply.statements,
 		Behind:      reply.behind,
+		ask:         ask,
 	})
 	if err != nil {
 		return nil, err
@@ -742,7 +755,25 @@ var errEvsReadRounds = errors.New("evs: a read past its rounds")
 // A verified EvsReseed that lowers the ref's pin while the call runs, taken by a round of its own, a lookup's or
 // another read's, drops or lowers the ref's records (QD-816): the call loads them again, drops what it gathered of
 // the history the incident lost, and starts its round again on the re-seeded head.
+//
+// Other reads of the client may run beside it: each round is judged against the pin and records this call held when
+// it asked, and a head another read raised the pin past while this one was in flight stands as read where the pin
+// store places it on the pinned history; where it cannot, the whole call is read again, fresh, from the records as
+// they then stand, at most ReadStaleRetryCount times before it answers ErrEvsReadStale (evs_pin_store.go's header).
 func (self *EvsRepo) readPaths(ctx context.Context, refId Id, paths []*evsReadPath, fresh bool) (*evsReadResult, error) {
+	done := self.client.pins.beginRead(self.repoId, refId)
+	defer done()
+	for staleCount := 0; ; staleCount += 1 {
+		result, err := self.readPathsOnce(ctx, refId, paths, fresh)
+		if !errors.Is(err, ErrEvsReadStale) || self.client.settings.ReadStaleRetryCount <= staleCount {
+			return result, err
+		}
+		fresh = true
+	}
+}
+
+// readPaths' one pass, from the records as they stand when it starts.
+func (self *EvsRepo) readPathsOnce(ctx context.Context, refId Id, paths []*evsReadPath, fresh bool) (*evsReadResult, error) {
 	keys := newEvsReadKeys(self)
 	for _, path := range paths {
 		if path.token != nil {
@@ -1083,16 +1114,19 @@ func (self *EvsRepo) statementNames(ctx context.Context, keys *evsReadKeys, stat
 // Ends a read: the records' rule over each path, the pin, each record a gap head passed of a path served absent or
 // its removal dropped, and each record raised with the ref version its entry committed at, its floor and the epoch it
 // is pinned in. A path a lookup settled absent was never asked, so its record, which a lookup never consults, keeps.
+// A head another read raised the pin past stands with nothing raised, its records merged under the newer ones
+// (EvsPinStore.RaiseReadRecords), or the read answers ErrEvsReadStale for readPaths to read again.
 //
 // The records' rule, for a path read at its newest (an older version asked for by number is history, not a rollback):
-// a path this device read a version of is never served a version below it, gap or not, and never absent, removed at
-// most, which a path served absent is where the walk from the record's pin ends on its removal (QD-979). On a gap
-// head whose re-pin passed the record's pin, the walk holds nothing from before the re-pin, which is evs's word: such
-// a path served absent is taken as evs serves it, with no alarm, and its record dropped, so it reads as a never-read
-// path does (QD-1041; Q-EVS-6). The record of a path served its removal, its own or a prefix's, is dropped there too:
-// kept at its old pin, it would send every later read of the path through the same gap (QD-1055). A record pinned at
-// or past where the gap's walk starts has its whole walk, and keeps the rule. A version format 2 ignores is no
-// absence evs served, and keeps it too.
+// a path this device read a version of is never served a version below it, gap or not, and never
+// absent, removed at most, which a path served absent is where the walk from the record's pin ends on its removal
+// (QD-979). Each path is held to the record this call loaded when it asked, never to one another read raised since,
+// whose newer version this call's older head may well not hold. On a gap head whose re-pin passed the record's pin,
+// the walk holds nothing from before the re-pin, which is evs's word: such a path served absent is taken as evs serves
+// it, with no alarm, and its record dropped, so it reads as a never-read path does (QD-1041; Q-EVS-6). The record of a
+// path served its removal, its own or a prefix's, is dropped there too: kept at its old pin, it would send every later
+// read of the path through the same gap (QD-1055). A record pinned at or past where the gap's walk starts has its
+// whole walk, and keeps the rule. A version format 2 ignores is no absence evs served, and keeps it too.
 func (self *EvsRepo) finishRead(ctx context.Context, refId Id, keys *evsReadKeys, round *evsReadRound, paths []*evsReadPath) (*evsReadResult, error) {
 	head := round.head
 	current := evsCurrentEpoch(head.Head.GetPathEpoch())

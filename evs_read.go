@@ -11,7 +11,9 @@
 // (g0-recheck-0-head-reader-read-paths#1), and a version below the record is refused and alarmed as tampering. A
 // verified EvsReseed drops the records of entries the incident lost and lowers the rest to the re-seeded head
 // (QD-816), so a lost path's surviving version reads as part of the loss. A hint naming a newer version sends the read
-// past evs's head cache.
+// past evs's head cache. Reads of one client overlap: each round's answer is judged against the pin and the records
+// its read held when it asked, never against what another read raised since, and a head another read raised the pin
+// past stands as read or is read again (evs_pin_store.go's header).
 //
 // Objects the reply carries (segment ranges, slots) stream into spills (evs_reconstruct.go), never a whole reply in
 // memory. Nothing is decrypted before the head and the path verify and the head is pinned, and nothing at all of an
@@ -454,14 +456,16 @@ func (self *EvsRepo) readRound(ctx context.Context, refId Id, keys *evsReadKeys,
 }
 
 // readRound, taking a head below the pin under the ref's EvsReseed at most once (reseed): the round after one reads
-// from the lowered pin and refuses a head below that.
+// from the lowered pin, fresh, and refuses a head below that. The round asks at the pin it holds now, which its answer
+// is judged against whatever another read of this client raises meanwhile (VerifyHead; evs_pin_store.go's header).
 func (self *EvsRepo) readRoundFromPin(ctx context.Context, refId Id, keys *evsReadKeys, paths []*evsReadPath, fresh bool, reseed bool) (*evsReadRound, error) {
 	fromVersion := uint64(0)
 	fromChain := EvsChainStart(self.repoId, refId)
-	pin, pinned, err := self.client.pins.Pin(self.repoId, refId)
+	ask, err := self.client.pins.ask(self.repoId, refId)
 	if err != nil {
 		return nil, err
 	}
+	pin, pinned := ask.pin, ask.pin != nil
 	refPinVersion := uint64(0)
 	if pinned {
 		fromVersion, fromChain, refPinVersion = pin.Version, pin.Chain, pin.Version
@@ -498,9 +502,11 @@ func (self *EvsRepo) readRoundFromPin(ctx context.Context, refId Id, keys *evsRe
 			return nil, err
 		}
 		if again {
-			// the pin now stands at the re-seeded head, or the head has passed the pin since: the round again
+			// the pin now stands at the re-seeded head, or the head has passed the pin since: the round again, fresh,
+			// since a head below the pin that was no reseed is a cached one, which asking from an older record's pin
+			// may meet again
 			objects.close()
-			return self.readRoundFromPin(ctx, refId, keys, paths, fresh, false)
+			return self.readRoundFromPin(ctx, refId, keys, paths, true, false)
 		}
 	}
 	head, err := self.client.verifier.VerifyHead(ctx, &EvsHeadRead{
@@ -511,6 +517,7 @@ func (self *EvsRepo) readRoundFromPin(ctx context.Context, refId Id, keys *evsRe
 		FromChain:   fromChain,
 		Statements:  reply.statements,
 		Behind:      reply.behind,
+		ask:         ask,
 	})
 	if err != nil {
 		objects.close()
