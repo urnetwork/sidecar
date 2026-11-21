@@ -26,6 +26,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"slices"
+	"time"
+
+	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
@@ -61,6 +64,15 @@ func (self *GkmEngine) serveRecoveryWrapBatch(request *GkmRequest) {
 	reply := &protocol.GkmWrapBatchReply{Results: make([]*protocol.GkmWrapResult, len(items))}
 	writes := []*gkmWrapWrite{}
 	stagedStatus := batch.stagedStatus(request.SidecarId)
+	// A stale creator or rotator may resume after retirement. Never recreate a retired binding's path.
+	var current map[sidecar.Id][]byte
+	if !self.settings.DraftMls {
+		bindings, ok := self.repoRecoveryBindings(request)
+		if !ok {
+			return
+		}
+		current = bindings
+	}
 	for i, item := range items {
 		reply.Results[i] = &protocol.GkmWrapResult{}
 		memberId, err := sidecar.IdFromBytes(item.GetMemberId())
@@ -68,6 +80,13 @@ func (self *GkmEngine) serveRecoveryWrapBatch(request *GkmRequest) {
 			len(item.GetCiphertext()) != gkmRecoveryWrapByteCount {
 			reply.Results[i].Status = 403
 			continue
+		}
+		if current != nil {
+			digest := current[memberId]
+			if len(digest) != 32 || !bytes.Equal(digest[:gkmPrefixByteCount], item.GetBindingPrefix()) {
+				reply.Results[i].Status = 409
+				continue
+			}
 		}
 		if stagedStatus != 0 {
 			reply.Results[i].Status = uint32(stagedStatus)
@@ -101,6 +120,14 @@ func (self *GkmEngine) serveRecoveryWrapWrite(request *GkmRequest) {
 		return
 	}
 	if !request.AuthorizeGroup(groupId) {
+		return
+	}
+	coverage, ok := self.recoveryCoverage(request)
+	if !ok {
+		return
+	}
+	if !slices.Contains(coverage.RepoIds, request.RepoId) || !bytes.Equal(coverage.Current[:gkmPrefixByteCount], wrap.GetBindingPrefix()) {
+		request.Conflict(nil)
 		return
 	}
 	facts, err := self.generationFacts(request.Ctx, request.Cluster, groupId, wrap.GetGeneration())
@@ -163,9 +190,24 @@ func (self *GkmEngine) listRecoveryWraps(request *GkmRequest, memberId sidecar.I
 			self.answerStoreError(request, err)
 			return nil, false
 		}
+		ownNetwork := map[sidecar.Id]bool{}
 		for _, info := range infos {
 			groupId, generation, c8, b8, ok := parseGkmRecoveryWrapKey(prefix, info.Key)
 			if !ok {
+				continue
+			}
+			ours, known := ownNetwork[groupId]
+			if !known {
+				body, _, err := readGkmObject(request.Ctx, cluster, GkmGroupOwnerKey(groupId), self.settings.ObjectMaxByteCount)
+				if err != nil && !errors.Is(err, sidecar.ErrBlobNotFound) {
+					self.answerStoreError(request, err)
+					return nil, false
+				}
+				owner := &protocol.GkmGroupOwner{}
+				ours = err == nil && proto.Unmarshal(body, owner) == nil && bytes.Equal(owner.GetNetworkId(), sidecar.Id(request.Principal.NetworkId).Bytes())
+				ownNetwork[groupId] = ours
+			}
+			if !ours {
 				continue
 			}
 			found = append(found, &gkmFoundRecoveryWrap{clusterId: clusterId, key: info.Key, groupId: groupId, generation: generation, c8: c8, b8: b8})
@@ -174,10 +216,175 @@ func (self *GkmEngine) listRecoveryWraps(request *GkmRequest, memberId sidecar.I
 	return found, true
 }
 
+// Recovery wrap retirement is owned by the member across all of its devices. The authorization snapshot gives
+// the service the entire set of eligible repos, including ones outside the requesting device's scopes.
+type RecoveryWrapCoverage struct {
+	Current []byte
+	Retired [][]byte
+	RepoIds []sidecar.Id
+}
+
+type gkmRecoveryCoverageState interface {
+	RecoveryCoverage(principal *sidecar.Principal, memberId sidecar.Id, now time.Time) (*RecoveryWrapCoverage, GkmAuthAnswer)
+}
+
+type gkmRepoRecoveryState interface {
+	RepoRecoveryBindings(principal *sidecar.Principal, repoId sidecar.Id, now time.Time) (map[sidecar.Id][]byte, GkmAuthAnswer)
+}
+
+func (self *GkmEngine) repoRecoveryBindings(request *GkmRequest) (map[sidecar.Id][]byte, bool) {
+	source, ok := self.deps.AuthState.(gkmRepoRecoveryState)
+	if !ok {
+		request.Unavailable()
+		return nil, false
+	}
+	bindings, answer := source.RepoRecoveryBindings(request.Principal, request.RepoId, request.Now())
+	if answer != GkmAuthAllowed {
+		answerGkmAuth(request, answer)
+		return nil, false
+	}
+	if bindings == nil {
+		request.Unavailable()
+		return nil, false
+	}
+	return bindings, true
+}
+
+// A new winning claim and retirement both require coverage under the current bindings. A concurrent rotator
+// that staged to the old binding cannot supersede the generation the rebind just verified.
+func (self *GkmEngine) checkClaimRecoveryWraps(request *GkmRequest, groupId sidecar.Id, generation uint64, commitment []byte, raw []byte) bool {
+	if self.settings.DraftMls {
+		return true
+	}
+	bindings, ok := self.repoRecoveryBindings(request)
+	if !ok {
+		return false
+	}
+	c8, _ := gkmDigestPrefix(commitment)
+	for memberId, binding := range bindings {
+		b8, valid := gkmDigestPrefix(binding)
+		if !valid {
+			request.Unavailable()
+			return false
+		}
+		key := GkmRecoveryWrapKey(memberId, groupId, generation, c8, b8)
+		wrap, _, err := readGkmObject(request.Ctx, request.Cluster, key, gkmRecoveryWrapByteCount)
+		if err == nil && len(wrap) == gkmRecoveryWrapByteCount {
+			continue
+		}
+		if err != nil && !errors.Is(err, sidecar.ErrBlobNotFound) {
+			self.answerStoreError(request, err)
+			return false
+		}
+		// A retry of an earlier win must still see its original result, including after rebind.
+		winner, err := readGkmGeneration(request.Ctx, request.Cluster, groupId, generation)
+		switch {
+		case errors.Is(err, sidecar.ErrBlobNotFound):
+			request.Conflict(nil)
+		case err != nil:
+			self.answerStoreError(request, err)
+		case bytes.Equal(winner, raw):
+			request.Created()
+		default:
+			request.PreconditionFailed(winner)
+		}
+		return false
+	}
+	return true
+}
+
+func (self *GkmEngine) recoveryCoverage(request *GkmRequest) (*RecoveryWrapCoverage, bool) {
+	source, ok := self.deps.AuthState.(gkmRecoveryCoverageState)
+	if !ok {
+		request.Unavailable()
+		return nil, false
+	}
+	coverage, answer := source.RecoveryCoverage(request.Principal, request.pathMemberId, request.Now())
+	switch {
+	case answer == GkmAuthDenied:
+		request.Forbidden()
+	case answer != GkmAuthAllowed || coverage == nil || len(coverage.Current) != 32:
+		request.Unavailable()
+	default:
+		return coverage, true
+	}
+	return nil, false
+}
+
+// The latest formed group of each eligible repo must hold a replacement wrap of its current winning generation.
+// A repo that has not formed a group has no key to replace. A group partway through creation or reseed waits.
+func (self *GkmEngine) checkRecoveryCoverage(request *GkmRequest, coverage *RecoveryWrapCoverage) bool {
+	for _, repoId := range coverage.RepoIds {
+		cluster, _, err := self.places.Cluster(request.Ctx, repoId)
+		if errors.Is(err, sidecar.ErrEvsRepoNotPlaced) {
+			continue
+		}
+		if err != nil {
+			self.answerStoreError(request, err)
+			return false
+		}
+		forms, err := gkmReadForms(request.Ctx, cluster, repoId, self.settings)
+		if err != nil {
+			self.answerStoreError(request, err)
+			return false
+		}
+		if len(forms) == 0 {
+			continue
+		}
+		form := forms[len(forms)-1]
+		facts, found, err := gkmNewestGenerationFacts(request.Ctx, cluster, form.GroupId, self.settings)
+		if err != nil {
+			self.answerStoreError(request, err)
+			return false
+		}
+		if !found || facts.generation < form.Body.GetGeneration() {
+			request.Conflict(nil)
+			return false
+		}
+		c8, _ := gkmDigestPrefix(facts.commitment)
+		b8, _ := gkmDigestPrefix(coverage.Current)
+		key := GkmRecoveryWrapKey(request.pathMemberId, form.GroupId, facts.generation, c8, b8)
+		ciphertext, _, err := readGkmObject(request.Ctx, cluster, key, gkmRecoveryWrapByteCount)
+		if errors.Is(err, sidecar.ErrBlobNotFound) || err == nil && len(ciphertext) != gkmRecoveryWrapByteCount {
+			request.Conflict(nil)
+			return false
+		}
+		if err != nil {
+			self.answerStoreError(request, err)
+			return false
+		}
+	}
+	return true
+}
+
 // GET /gkm/recovery/<member_id>/wraps: a GkmRecoveryWrapsReply, per group and binding the newest generation's wrap
 // whose c8 is gen/<g>'s, at most RecoveryWrapsReplyMaxCount.
 func (self *GkmEngine) serveRecoveryWrapsRead(request *GkmRequest) {
 	memberId := request.pathMemberId
+	if request.Http.URL.Query().Has("complete") {
+		b8 := request.Http.URL.Query().Get("complete")
+		if !gkmHexPrefixForm(b8) {
+			request.BadRequest()
+			return
+		}
+		if request.viaRecoveryScope {
+			request.Forbidden()
+			return
+		}
+		coverage, ok := self.recoveryCoverage(request)
+		if !ok {
+			return
+		}
+		current, _ := gkmDigestPrefix(coverage.Current)
+		if current != b8 {
+			request.Conflict(nil)
+			return
+		}
+		if self.checkRecoveryCoverage(request, coverage) {
+			request.Reply(nil)
+		}
+		return
+	}
 	found, ok := self.listRecoveryWraps(request, memberId)
 	if !ok {
 		return
@@ -248,6 +455,22 @@ func (self *GkmEngine) serveRecoveryWrapsDelete(request *GkmRequest) {
 	b8 := request.Http.URL.Query().Get("binding")
 	if !gkmHexPrefixForm(b8) {
 		request.BadRequest()
+		return
+	}
+	coverage, ok := self.recoveryCoverage(request)
+	if !ok {
+		return
+	}
+	current, _ := gkmDigestPrefix(coverage.Current)
+	retired := slices.ContainsFunc(coverage.Retired, func(digest []byte) bool {
+		prefix, ok := gkmDigestPrefix(digest)
+		return ok && prefix == b8
+	})
+	if !retired || current == b8 {
+		request.Conflict(nil)
+		return
+	}
+	if !self.checkRecoveryCoverage(request, coverage) {
 		return
 	}
 	found, ok := self.listRecoveryWraps(request, request.pathMemberId)

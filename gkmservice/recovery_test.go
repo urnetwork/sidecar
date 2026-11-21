@@ -54,6 +54,9 @@ func TestGkmRecoveryWrapsStageReadRewrapAndDelete(t *testing.T) {
 	fixture := world.fixture
 	oldBinding := bytes.Repeat([]byte{0xb1}, gkmPrefixByteCount)
 	newBinding := bytes.Repeat([]byte{0xb2}, gkmPrefixByteCount)
+	fixture.auth.recovery[world.memberId] = &RecoveryWrapCoverage{
+		Current: bytes.Repeat([]byte{0xb2}, 32), Retired: [][]byte{bytes.Repeat([]byte{0xb1}, 32)}, RepoIds: []sidecar.Id{world.repoId},
+	}
 	key2, claim2 := world.nextGeneration(world.admin, world.key1, nil)
 	lostKey, _ := world.nextGeneration(world.admin, world.key1, nil)
 	item := &protocol.GkmRecoveryWrapItem{MemberId: world.memberId.Bytes(), BindingPrefix: oldBinding, Ciphertext: gkmTestRecoveryCiphertext(1)}
@@ -110,10 +113,20 @@ func TestGkmRecoveryWrapsStageReadRewrapAndDelete(t *testing.T) {
 	if recorder := fixture.serve(http.MethodPost, rewrapPath, deviceToken, fixture.marshal(wrongCommitment)); recorder.Code != http.StatusConflict {
 		t.Errorf("a re-wrap naming another commitment than gen/2's: %d", recorder.Code)
 	}
+	completePath := rewrapPath + "?complete=" + hex.EncodeToString(newBinding)
+	deletePath := rewrapPath + "?binding=" + hex.EncodeToString(oldBinding)
+	if reply := fixture.serve(http.MethodGet, completePath, deviceToken, nil); reply.Code != http.StatusConflict {
+		t.Fatalf("coverage before replacement: %d", reply.Code)
+	}
+	if reply := fixture.serve(http.MethodDelete, deletePath, deviceToken, nil); reply.Code != http.StatusConflict || fixture.object("meta-2", key) == nil {
+		t.Fatalf("a missing replacement must preserve the old wrap: %d", reply.Code)
+	}
 	if recorder := fixture.serve(http.MethodPost, rewrapPath, deviceToken, fixture.marshal(rewrap)); recorder.Code != http.StatusCreated {
 		t.Fatalf("the member's device's re-wrap: %d", recorder.Code)
 	}
-	deletePath := rewrapPath + "?binding=" + hex.EncodeToString(oldBinding)
+	if reply := fixture.serve(http.MethodGet, completePath, deviceToken, nil); reply.Code != http.StatusOK {
+		t.Fatalf("completed current-generation coverage: %d", reply.Code)
+	}
 	if recorder := fixture.serve(http.MethodDelete, deletePath, strangerToken, nil); recorder.Code != http.StatusForbidden {
 		t.Errorf("a delete by another member's device: %d", recorder.Code)
 	}
@@ -123,5 +136,48 @@ func TestGkmRecoveryWrapsStageReadRewrapAndDelete(t *testing.T) {
 	code, wraps = world.readRecoveryWraps(deviceToken, world.memberId)
 	if code != http.StatusOK || len(wraps) != 1 || !bytes.Equal(wraps[0].GetBindingPrefix(), newBinding) {
 		t.Errorf("after the rebind: %d, %d wraps", code, len(wraps))
+	}
+}
+
+// A native claim cannot overtake a rebind with the retired wrap. Replaying the winning bytes after another
+// binding change still returns their original result.
+func TestGkmGenerationRequiresTheEffectiveRecoveryWrap(t *testing.T) {
+	world := newGkmGroupWorld(t)
+	fixture := world.fixture
+	fixture.settings.DraftMls = false
+	fixture.start()
+	create := world.createRequest(world.groupId)
+	create.CipherSuite, create.GenWrap, create.SealedGroupInfo = 0, nil, nil
+	if reply := world.postCreate(create); reply.Code != http.StatusOK {
+		t.Fatalf("formation: %d", reply.Code)
+	}
+	fixture.setRepoState(world.repoId, "meta-2", protocol.EvsRepoState_EVS_REPO_ACTIVE)
+	old := bytes.Repeat([]byte{1}, 32)
+	next := bytes.Repeat([]byte{2}, 32)
+	coverage := &RecoveryWrapCoverage{RepoIds: []sidecar.Id{world.repoId}, Current: old}
+	fixture.auth.recovery[world.memberId] = coverage
+	key, claim := world.nextGeneration(world.admin, world.key1, nil)
+	stage := func(binding []byte, want uint32) {
+		t.Helper()
+		code, results := world.postRecoveryWraps(world.adminToken, 2, gkmTestC8(key), &protocol.GkmRecoveryWrapItem{
+			MemberId: world.memberId.Bytes(), BindingPrefix: binding[:8], Ciphertext: gkmTestRecoveryCiphertext(binding[0]),
+		})
+		if code != http.StatusOK || len(results) != 1 || results[0].GetStatus() != want {
+			t.Fatalf("stage: %d %v", code, results)
+		}
+	}
+	stage(old, http.StatusCreated)
+	coverage.Current, coverage.Retired = next, [][]byte{old}
+	if reply := world.postClaim(world.adminToken, 2, claim); reply.Code != http.StatusConflict {
+		t.Fatalf("claim waiting for replacement: %d", reply.Code)
+	}
+	stage(old, http.StatusConflict)
+	stage(next, http.StatusCreated)
+	if reply := world.postClaim(world.adminToken, 2, claim); reply.Code != http.StatusCreated {
+		t.Fatalf("covered claim: %d", reply.Code)
+	}
+	coverage.Current = bytes.Repeat([]byte{3}, 32)
+	if reply := world.postClaim(world.adminToken, 2, claim); reply.Code != http.StatusCreated {
+		t.Fatalf("winning retry: %d", reply.Code)
 	}
 }

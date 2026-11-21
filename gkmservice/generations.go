@@ -360,6 +360,10 @@ func (self *GkmEngine) serveGenerationClaim(request *GkmRequest) {
 		return
 	}
 	if leafWrap := rotate.GetLeafWrap(); leafWrap != nil {
+		if !self.settings.DraftMls {
+			request.BadRequest()
+			return
+		}
 		_, err := request.Cluster.Head(request.Ctx, GkmEpochKey(groupId, leafWrap.GetEpoch()))
 		if errors.Is(err, sidecar.ErrBlobNotFound) {
 			request.Forbidden()
@@ -378,6 +382,9 @@ func (self *GkmEngine) serveGenerationClaim(request *GkmRequest) {
 	}
 	barrierKey := gkmBarrierNumberKey(groupId, generation)
 	testHookBarrier(BarrierGenClaimBefore, barrierKey)
+	if !self.checkClaimRecoveryWraps(request, groupId, generation, rotate.GetCommitment(), raw) {
+		return
+	}
 	winner, err := self.createGeneration(writeCtx, request.Cluster, groupId, generation, raw)
 	testHookBarrier(BarrierGenClaimAfter, barrierKey)
 	if err != nil {
@@ -388,7 +395,9 @@ func (self *GkmEngine) serveGenerationClaim(request *GkmRequest) {
 		request.PreconditionFailed(winner)
 		return
 	}
-	if epoch, found, err := self.newestEpoch(request.Ctx, request.Cluster, groupId); err == nil && found {
+	if !self.settings.DraftMls {
+		self.hintGroupCommit(request, groupId, 0, generation)
+	} else if epoch, found, err := self.newestEpoch(request.Ctx, request.Cluster, groupId); err == nil && found {
 		self.hintGroupCommit(request, groupId, epoch, generation)
 	}
 	request.Created()
