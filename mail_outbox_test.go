@@ -457,6 +457,84 @@ func TestMailOutcomeSweepRequiresDatedOutcomes(t *testing.T) {
 	}
 }
 
+// The runner verifies the persisted entry before reaping it. A crash leaves both versions intact, and a competing
+// update to a legacy receipt keeps its fields when the restart fills the committed send ID and removes the entry.
+func TestMailOutboxRunnerBackfillsALegacyReceiptBeforeRemoval(t *testing.T) {
+	ctx := t.Context()
+	store := newMailTestStore()
+	clock := newTestMailCredentialClock(time.UnixMilli(testMailIngestPushMillis))
+	signer := newTestMailOutboxSigner(testMailId(0xb1))
+	effectKey, sendId := testMailOutboxEffectKey(), newMailOutboxSendId()
+	outbox := newTestMailOutbox(t, store, signer, testMailOutboxStanding(AbuseStandingStandard, true))
+	args := testMailOutboxQueueArgs(effectKey, testMailOutboxMessage(sendId))
+	args.Recipients = []string{"someone@outside.example"}
+	args.ApprovalNotAfter = clock.Now()
+	if _, err := outbox.Queue(ctx, args); err != nil {
+		t.Fatal(err)
+	}
+	path, _ := MailOutcomePath(effectKey)
+	legacy := func() {
+		t.Helper()
+		record, err := SmtpMailboxOutcomeRecord([]*SmtpDomainOutcome{{Domain: "outside.example", Outcome: SmtpOutcomeSent, UpdateTime: clock.Now()}}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		record.ProtoReflect().SetUnknown([]byte{0x78, 1})
+		content, err := proto.Marshal(record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		store.put(path, content)
+	}
+	legacy()
+	pass := func() (*SmtpOutboxPass, error) {
+		t.Helper()
+		runner, err := NewSmtpOutboxRunner(&SmtpOutboxRunnerArgs{
+			Sender: &SmtpSender{}, Mailbox: newMailSmtpMailbox(store, nil, nil, nil, clock), Settings: DefaultSmtpSenderSettings(), Clock: clock,
+			Consented: func() bool { return true }, MemberDeviceKey: func(sidecarId Id) ed25519.PublicKey {
+				if sidecarId == signer.sidecarId {
+					return signer.publicKey()
+				}
+				return nil
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return runner.RunOnce(ctx)
+	}
+	crash := errors.New("batch write interrupted")
+	store.failWrite = crash
+	if p, err := pass(); !errors.Is(err, crash) || p.Removed != 0 {
+		t.Fatalf("interrupted reaping %+v: %v", p, err)
+	}
+	if _, err := outbox.mailbox.ReadOutbox(ctx, effectKey); err != nil {
+		t.Fatalf("missing original entry after interrupted write: %v", err)
+	}
+	if id, _, err := outbox.mailbox.ReadSendOutcomes(ctx, effectKey); err != nil || id != (Id{}) {
+		t.Fatalf("incomplete batch changed receipt %s: %v", id, err)
+	}
+	store.beforeWrite = func() {
+		clock.Advance(time.Minute)
+		legacy()
+	}
+	if p, err := pass(); err != nil || p.Removed != 1 || p.Sent != 0 {
+		t.Fatalf("restart %+v: %v", p, err)
+	}
+	if _, err := outbox.mailbox.ReadOutbox(ctx, effectKey); !errors.Is(err, ErrSmtpMailboxNotFound) {
+		t.Fatalf("reaped entry: %v", err)
+	}
+	receipt, err := newTestMailOutbox(t, store, signer, nil).Lookup(ctx, nil, effectKey)
+	if err != nil || receipt.State != ApprovalOutcomeDone || !bytes.Equal(receipt.EffectRef, sendId.Bytes()) {
+		t.Fatalf("post-reap receipt %+v: %v", receipt, err)
+	}
+	record := &protocol.MailOutcomeRecord{}
+	if err := proto.Unmarshal(store.file(path).content, record); err != nil || len(record.Outcomes) != 1 ||
+		record.Outcomes[0].UpdateTimeMs != uint64(clock.Now().UnixMilli()) || !bytes.Equal(record.ProtoReflect().GetUnknown(), []byte{0x78, 1}) {
+		t.Fatalf("winning receipt fields %+v: %v", record, err)
+	}
+}
+
 // The component's pass sweeps the member's or/ while mail is on, once an OutcomeSweepInterval: a record past its 30
 // days goes at the first pass, one that expires later stays until the interval has passed, and a pass before then
 // lists nothing.
