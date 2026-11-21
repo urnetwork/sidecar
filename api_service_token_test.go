@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"testing"
 )
 
@@ -15,11 +16,20 @@ func TestForgetServiceTokenExchangesAgain(t *testing.T) {
 	settings.Clock = newTokenTestClock()
 	sidecar := newSidecarBase(nil, settings)
 	exchangeCount := 0
+	reduceGrant := false
 	transport := &scriptedApiTransport{
 		answer: func(request *http.Request, body []byte) (*http.Response, error) {
 			exchangeCount += 1
 			token := fmt.Sprintf("synthetic-service-token-%d", exchangeCount)
-			return syntheticResponse(request, 200, `{"access_token":"`+token+`","expires_in":900,"scope":"repo:x:r"}`, nil), nil
+			form, err := url.ParseQuery(string(body))
+			if err != nil {
+				return nil, err
+			}
+			granted := form.Get("scope")
+			if reduceGrant {
+				granted = "repo:b:rw"
+			}
+			return syntheticResponse(request, 200, fmt.Sprintf(`{"access_token":%q,"expires_in":900,"scope":%q}`, token, granted), nil), nil
 		},
 	}
 	api, err := newSidecarApi(settings, transport, testApiClock)
@@ -66,5 +76,18 @@ func TestForgetServiceTokenExchangesAgain(t *testing.T) {
 	sidecar.ForgetServiceToken("https://evs.example", []string{"repo:c:r", "repo:b:rw"})
 	if renewedOther, _ := sidecar.ServiceToken(ctx, "https://evs.example", []string{"repo:b:rw", "repo:c:r"}); renewedOther == other || exchangeCount != 5 {
 		t.Errorf("a set forgotten in another order was kept: %d exchanges", exchangeCount)
+	}
+	// A reduced grant may serve its allowed repo now. It must not mask an
+	// immediately subsequent grant of the second repo during the cache lifetime.
+	reduceGrant = true
+	batch := []string{"repo:b:rw", "repo:new:r"}
+	partial, err := sidecar.ServiceToken(ctx, "https://gkm.example", batch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reduceGrant = false
+	full, err := sidecar.ServiceToken(ctx, "https://gkm.example", batch)
+	if err != nil || full == partial || exchangeCount != 7 {
+		t.Fatalf("a reduced token masked the new grant: %d exchanges, %v", exchangeCount, err)
 	}
 }
