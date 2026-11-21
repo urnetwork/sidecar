@@ -529,10 +529,13 @@ func (self *RecordEvsStreams) listHeads(ctx context.Context, repoId Id) ([]*prot
 	if evsRecordStreamsFormat < reply.GetFormat() {
 		return nil, fmt.Errorf("%w: a format-%d log's streams are past this build", ErrEvsFormatUnsupported, reply.GetFormat())
 	}
+	if !reply.GetAll() {
+		return nil, fmt.Errorf("%w: incomplete record ref listing", ErrEvsReplyInvalid)
+	}
 	return reply.GetRefs(), nil
 }
 
-// The repo's streams, one a writer: each owned ref whose id is its owner's stream name's.
+// The listed writer ids discover streams. Their versions come from the canonical, freshly verified refs.
 func (self *RecordEvsStreams) Streams(ctx context.Context, repoId Id) ([]*RecordStreamHead, error) {
 	heads, err := self.listHeads(ctx, repoId)
 	if err != nil {
@@ -546,7 +549,7 @@ func (self *RecordEvsStreams) Streams(ctx context.Context, repoId Id) ([]*Record
 		}
 		ownerId, err := IdFromBytes(head.GetOwnerSidecarId())
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("%w: a listed owned ref has no owner", ErrEvsReplyInvalid)
 		}
 		refId, err := repo.resolveRefId(ctx, RecordStreamRefName(ownerId), nil)
 		if err != nil {
@@ -556,7 +559,13 @@ func (self *RecordEvsStreams) Streams(ctx context.Context, repoId Id) ([]*Record
 			// another ref of the owner's, which no stream is
 			continue
 		}
-		streams = append(streams, &RecordStreamHead{SidecarId: ownerId, Version: head.GetVersion(), RefId: refId})
+		verified, err := self.streamHead(ctx, repo, refId, ownerId, true)
+		if err != nil {
+			return nil, err
+		}
+		if verified.Version != 0 {
+			streams = append(streams, &RecordStreamHead{SidecarId: ownerId, Version: verified.Version, RefId: refId})
+		}
 	}
 	slices.SortFunc(streams, func(a *RecordStreamHead, b *RecordStreamHead) int { return a.SidecarId.Cmp(b.SidecarId) })
 	return streams, nil
@@ -831,24 +840,89 @@ func (self *RecordEvsStreams) keepStreamReplay(key recordStreamKey, replay *reco
 	}
 }
 
+// Verifies the canonical ref's complete signed history through its fresh head before pinning it. The walk holds
+// kind, mode and owner constant. Check the last statement for those values, including when the head was already pinned.
+func (self *RecordEvsStreams) streamHead(ctx context.Context, repo *EvsRepo, refId Id, writerSidecarId Id, headOnly bool) (*EvsVerifiedHead, error) {
+	head, err := repo.pinnedHead(ctx, refId)
+	if err != nil {
+		return nil, recordEvsRefusal(err)
+	}
+	if !bytes.Equal(head.Head.GetRefId(), refId[:]) {
+		return nil, fmt.Errorf("%w: a record stream head of another ref", ErrEvsReplyInvalid)
+	}
+	if headOnly {
+		// An unchanged ref was already fully authenticated by the last replay. Discovery needs only its
+		// version, so a fresh read at that same chain saves re-reading the entire log on each sync.
+		key := recordStreamKey{repoId: repo.repoId, writerSidecarId: writerSidecarId}
+		known := func() bool {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			replay := self.streamKeyReplays[key]
+			return replay != nil && replay.through == head.Version && replay.chain == head.Chain
+		}()
+		if known {
+			return head, nil
+		}
+	}
+	chain := EvsChainStart(repo.repoId, refId)
+	walked, err := self.client.verifier.Walk(ctx, repo.repoId, refId, 0, chain, head.Version)
+	if err != nil {
+		return nil, recordEvsRefusal(err)
+	}
+	if len(walked) != 0 {
+		last := walked[len(walked)-1]
+		push := last.Statement.Push
+		if protocol.EvsRefKind(push.GetRefKind()) != protocol.EvsRefKind_EVS_REF_OWNED ||
+			protocol.EvsRefMode(push.GetRefMode()) != protocol.EvsRefMode_EVS_REF_FILE ||
+			!bytes.Equal(push.GetOwnerSidecarId(), writerSidecarId[:]) {
+			return nil, fmt.Errorf("%w: the signed ref is not the writer's record stream", ErrEvsStatementRefused)
+		}
+		if head.Head.GetRefKind() != protocol.EvsRefKind(push.GetRefKind()) ||
+			head.Head.GetRefMode() != protocol.EvsRefMode(push.GetRefMode()) ||
+			!bytes.Equal(head.Head.GetOwnerSidecarId(), push.GetOwnerSidecarId()) {
+			return nil, fmt.Errorf("%w: the record stream head disagrees with its signed owner or mode", ErrEvsReplyInvalid)
+		}
+		chain = last.Chain
+	}
+	if head.Chain != chain {
+		return nil, fmt.Errorf("%w: the record stream does not chain to the fresh head", ErrEvsChainBroken)
+	}
+	if err := self.client.verifier.checkPinOnWalk(repo.repoId, refId, walked); err != nil {
+		return nil, err
+	}
+	head.Statements = walked
+	if err := self.client.verifier.Pin(head); err != nil {
+		return nil, err
+	}
+	self.client.noteVerifiedHead(repo.repoId, refId, head.Head)
+	return head, nil
+}
+
 // A stream's committed pushes after afterVersion, oldest first: see the file header's read and counter rows.
 func (self *RecordEvsStreams) ReadStream(ctx context.Context, repoId Id, writerSidecarId Id, afterVersion uint64) ([]*RecordStreamVersion, error) {
+	return self.readStream(ctx, repoId, writerSidecarId, afterVersion, nil)
+}
+
+// Writer recovery visits one entry at a time. Counter recovery needs only its authenticated creation path.
+func (self *RecordEvsStreams) readWriterStream(ctx context.Context, writer *recordWriterStreamRead) error {
+	_, err := self.readStream(ctx, writer.logId, writer.writerSidecarId, 0, writer)
+	return err
+}
+
+func (self *RecordEvsStreams) readStream(ctx context.Context, repoId Id, writerSidecarId Id, afterVersion uint64, writer *recordWriterStreamRead) ([]*RecordStreamVersion, error) {
 	repo := self.client.Repo(repoId)
 	refId, err := repo.resolveRefId(ctx, RecordStreamRefName(writerSidecarId), nil)
 	if err != nil {
 		return nil, err
 	}
-	head, err := repo.readHeadAlone(ctx, refId, true)
+	head, err := self.streamHead(ctx, repo, refId, writerSidecarId, false)
 	if err != nil {
-		return nil, recordEvsRefusal(err)
+		return nil, err
 	}
 	if head.Version <= afterVersion {
 		return []*RecordStreamVersion{}, nil
 	}
-	walked, err := self.client.verifier.Walk(ctx, repoId, refId, 0, EvsChainStart(repoId, refId), head.Version)
-	if err != nil {
-		return nil, recordEvsRefusal(err)
-	}
+	walked := head.Statements
 	keys := newEvsReadKeys(repo)
 	epochCounters := map[uint64]*recordStreamCounters{}
 	countersOf := func(pathEpoch uint64) (*recordStreamCounters, error) {
@@ -956,7 +1030,16 @@ func (self *RecordEvsStreams) ReadStream(ctx context.Context, repoId Id, writerS
 			if !ok {
 				return nil, fmt.Errorf("%w: a stream file at no stream path", ErrEvsEntryRefused)
 			}
+			if writer != nil {
+				writer.counter = max(writer.counter, n)
+				if writer.identityKey == nil {
+					continue
+				}
+			}
 			if removed[string(change.TokenPath.Bytes())] {
+				if writer != nil {
+					writer.missingCounter = max(writer.missingCounter, n)
+				}
 				continue
 			}
 			path, err := RecordStreamPath(n)
@@ -968,6 +1051,10 @@ func (self *RecordEvsStreams) ReadStream(ctx context.Context, repoId Id, writerS
 				defer result.objects.close()
 				verified := &EvsVerifiedPath{TokenPath: change.TokenPath, EntryBytes: change.EntryVersion, Entry: entry, Statement: statement.Statement, CommitVersion: statement.Version}
 				spill, _, _, err := repo.reconstructContent(ctx, result, verified, nil)
+				if writer != nil && errors.Is(err, ErrEvsErased) {
+					writer.missingCounter = max(writer.missingCounter, n)
+					return nil, nil
+				}
 				if err != nil {
 					return nil, err
 				}
@@ -981,6 +1068,12 @@ func (self *RecordEvsStreams) ReadStream(ctx context.Context, repoId Id, writerS
 			}
 			if err != nil {
 				return nil, recordEvsRefusal(err)
+			}
+			if writer != nil {
+				if err := writer.file(n, content); err != nil {
+					return nil, err
+				}
+				continue
 			}
 			version.Entries = append(version.Entries, &RecordStreamEntry{Path: path, Entry: content})
 		}

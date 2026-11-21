@@ -140,8 +140,16 @@ func (self *recordWriter) settleRestoredEntries(ctx context.Context, logId Id, t
 	for _, version := range versions {
 		for _, stored := range version.Entries {
 			seq, leaf, verified := recordStreamEntryOf(stored.Entry, logId, self.sidecarId, self.identityPublicKey)
+			if !verified {
+				continue
+			}
+			if through < seq {
+				// This read already saw a newer signed entry. Repeat the complete writer read before any
+				// acknowledgement or fresh signature uses its earlier head and counter.
+				return fmt.Errorf("%w: record stream advanced from sequence %d to %d during journal recovery", ErrRecordStreamsUnavailable, through, seq)
+			}
 			entry := waiting[seq]
-			if !verified || entry == nil {
+			if entry == nil {
 				continue
 			}
 			if leaf != entry.Leaf {

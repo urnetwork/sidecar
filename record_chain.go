@@ -32,6 +32,7 @@ package sidecar
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -653,59 +654,119 @@ func (self *RecordChainStore) Adopt(logId Id, head RecordChainHead) (bool, error
 // Reads this writer's own stream of logId and adopts its newest entry of this chain (Adopt), answering whether the
 // head rose. identityKey is this sidecar's Ed25519 public key, which every entry it adopts must verify under.
 func (self *RecordChainStore) AdoptStream(ctx context.Context, streams RecordStreams, logId Id, identityKey []byte) (bool, error) {
-	head, ok, err := RecordStreamChainHead(ctx, streams, logId, self.writerSidecarId, identityKey)
-	if err != nil || !ok {
+	read, err := self.readWriterStream(ctx, streams, logId, identityKey)
+	if err != nil || read.head == nil {
 		return false, err
 	}
-	return self.Adopt(logId, *head)
+	return self.Adopt(logId, *read.head)
 }
 
-// The newest entry of writerSidecarId's chain in its own stream of logId, read newest push first, doubling the
-// window back until a push holds one: a writer pushes its chain in seq order, so the newest push holding any of it
-// holds its head. Only an entry whose header verifies under identityKey, as writerSidecarId's in logId, counts, so a
-// server cannot raise a writer's head by planting one. False when the stream holds none.
+// The authenticated files in a writer's canonical stream. A counter-only read needs no entry contents.
+type recordWriterStreamRead struct {
+	logId           Id
+	writerSidecarId Id
+	identityKey     []byte
+	localHead       RecordChainHead
+
+	counter        uint64
+	head           *RecordChainHead
+	headCounter    uint64
+	missingCounter uint64
+}
+
+// A signed file creation reserves its path even if a later removal destroyed its content. An ingested entry
+// reserves a path too, but only this writer's own verified header can advance its chain.
+func (self *recordWriterStreamRead) file(counter uint64, entry []byte) error {
+	self.counter = max(self.counter, counter)
+	if self.identityKey == nil {
+		return nil
+	}
+	seq, leaf, ok := recordStreamEntryOf(entry, self.logId, self.writerSidecarId, self.identityKey)
+	if !ok {
+		return nil
+	}
+	if seq == self.localHead.Seq && leaf != self.localHead.Leaf {
+		return fmt.Errorf("%w: local and stream entries at sequence %d", ErrRecordChainForked, seq)
+	}
+	if self.head == nil || self.head.Seq < seq {
+		self.head = &RecordChainHead{Seq: seq, Leaf: leaf}
+		self.headCounter = counter
+	} else if self.head.Seq == seq {
+		if self.head.Leaf != leaf {
+			return fmt.Errorf("%w: stream sequence %d", ErrRecordChainForked, seq)
+		}
+		// A replay of the same header farther along the stream cannot vouch for files in between.
+		self.headCounter = min(self.headCounter, counter)
+	}
+	return nil
+}
+
+func (self *recordWriterStreamRead) read(ctx context.Context, streams RecordStreams) error {
+	if binding, ok := streams.(interface {
+		readWriterStream(context.Context, *recordWriterStreamRead) error
+	}); ok {
+		return binding.readWriterStream(ctx, self)
+	}
+	versions, err := streams.ReadStream(ctx, self.logId, self.writerSidecarId, 0)
+	if err != nil {
+		return err
+	}
+	for _, version := range versions {
+		for _, entry := range version.Entries {
+			counter, _ := RecordStreamPathCounter(entry.Path)
+			if err := self.file(counter, entry.Entry); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// The newest verified entry of this chain in its own stream. The read goes directly to the writer's ref: discovery
+// can lag a commit or omit a stream. An exact replay of an older entry cannot lower the head.
 func RecordStreamChainHead(ctx context.Context, streams RecordStreams, logId Id, writerSidecarId Id, identityKey []byte) (*RecordChainHead, bool, error) {
-	heads, err := streams.Streams(ctx, logId)
+	read, err := readRecordWriterChain(ctx, streams, logId, writerSidecarId, identityKey, RecordChainHead{}, 0)
 	if err != nil {
 		return nil, false, err
 	}
-	var newest uint64
-	for _, head := range heads {
-		if head.SidecarId == writerSidecarId {
-			newest = head.Version
-		}
+	return read.head, read.head != nil, nil
+}
+
+func readRecordWriterChain(ctx context.Context, streams RecordStreams, logId Id, writerSidecarId Id, identityKey []byte, localHead RecordChainHead, committedCounter uint64) (*recordWriterStreamRead, error) {
+	if len(identityKey) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("%w: invalid record writer identity key", ErrRecordDraftInvalid)
 	}
-	// versions above scannedAfter, up to newest, are read; one pushed since Streams answered waits for the next restart
-	scannedAfter := newest
-	window := uint64(1)
-	var found *RecordChainHead
-	for 0 < scannedAfter {
-		after := uint64(0)
-		if window < newest {
-			after = newest - window
-		}
-		versions, err := streams.ReadStream(ctx, logId, writerSidecarId, after)
-		if err != nil {
-			return nil, false, err
-		}
-		for _, version := range versions {
-			if version.Version <= after || scannedAfter < version.Version {
-				continue
-			}
-			for _, streamEntry := range version.Entries {
-				seq, leaf, ok := recordStreamEntryOf(streamEntry.Entry, logId, writerSidecarId, identityKey)
-				if ok && (found == nil || found.Seq < seq) {
-					found = &RecordChainHead{Seq: seq, Leaf: leaf}
-				}
-			}
-		}
-		if found != nil {
-			return found, true, nil
-		}
-		scannedAfter = after
-		window *= 2
+	read := &recordWriterStreamRead{logId: logId, writerSidecarId: writerSidecarId, identityKey: identityKey, localHead: localHead}
+	if err := read.read(ctx, streams); err != nil {
+		return nil, err
 	}
-	return nil, false, nil
+	if max(read.headCounter, committedCounter) < read.missingCounter {
+		return nil, fmt.Errorf("%w: cannot recover the writer's chain through removed stream file %d", ErrRecordStreamsUnavailable, read.missingCounter)
+	}
+	return read, nil
+}
+
+// A committed stream counter carrying the writer's durable head can account for removed files through that counter.
+// An older chain, or a legacy counter with no paired head, still needs the stream's signed evidence.
+func (self *RecordChainStore) readWriterStream(ctx context.Context, streams RecordStreams, logId Id, identityKey []byte) (*recordWriterStreamRead, error) {
+	local, err := self.Head(logId)
+	if err != nil {
+		return nil, err
+	}
+	counter, err := self.storedCounter(logId)
+	if err != nil {
+		return nil, err
+	}
+	var committed uint64
+	if head := counter.Chain; head != nil && (head.Seq < local.Seq || (head.Seq == local.Seq && bytes.Equal(head.Leaf, local.Leaf[:]))) {
+		committed = counter.Counter
+	}
+	read, err := readRecordWriterChain(ctx, streams, logId, self.writerSidecarId, identityKey, local, committed)
+	if err != nil {
+		return nil, err
+	}
+	read.counter = max(read.counter, counter.Counter)
+	return read, nil
 }
 
 // The seq and leaf of a stream entry's header when it verifies as writerSidecarId's entry in logId under

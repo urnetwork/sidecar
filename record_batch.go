@@ -384,19 +384,19 @@ func (self *recordWriter) adopt(ctx context.Context, logId Id) error {
 	}() {
 		return nil
 	}
-	head, found, err := RecordStreamChainHead(ctx, self.boundStreams(), logId, self.sidecarId, self.identityPublicKey)
+	read, err := self.chain.readWriterStream(ctx, self.boundStreams(), logId, self.identityPublicKey)
 	raised := false
-	if err == nil && found {
+	if err == nil && read.head != nil {
 		raised, err = func() (bool, error) {
 			self.sealLock.Lock()
 			defer self.sealLock.Unlock()
 			if err := self.finishCaptureWithLock(); err != nil {
 				return false, err
 			}
-			return self.chain.Adopt(logId, *head)
+			return self.chain.Adopt(logId, *read.head)
 		}()
 		if err == nil {
-			err = self.settleRestoredEntries(ctx, logId, head.Seq)
+			err = self.settleRestoredEntries(ctx, logId, read.head.Seq)
 		}
 	}
 	if errors.Is(err, ErrRecordChainForked) {
@@ -407,6 +407,13 @@ func (self *recordWriter) adopt(ctx context.Context, logId Id) error {
 	if err != nil {
 		return err
 	}
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		queue := self.queueWithLock(logId)
+		queue.counter = max(queue.counter, read.counter)
+		queue.counterLoaded = true
+	}()
 	if raised {
 		self.log.Warningf("[record]log %s's stream is ahead of this writer's journal; the chain continues from it", logId)
 	}
