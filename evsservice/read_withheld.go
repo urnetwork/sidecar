@@ -18,7 +18,7 @@ func (self *readAttempt) withheld(id DropScanId) (bool, error) {
 		return false, nil
 	}
 	table, err := self.engine.drops.Read(self.ctx, self.cluster, self.repoId)
-	if err != nil || table.Etag == "" || (table.State.Job == nil && len(table.State.HeldJobs) == 0) {
+	if err != nil || table.Etag == "" {
 		return false, err
 	}
 	segmentCluster, err := self.engine.blobs.SegmentCluster()
