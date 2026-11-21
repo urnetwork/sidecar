@@ -81,12 +81,17 @@ func TestKeyDeliveryReseedRetainsInstalledLadder(t *testing.T) {
 	world := newGkmGroupWorld(t)
 	world.createAndActivate()
 	fixture := world.fixture
-	_, rotate2 := world.nextGeneration(world.admin, world.key1, nil)
+	_, rotate2 := world.nextGeneration(world.admin, world.key1, func(args *sidecar.GkmGenerationArgs) {
+		args.LeafWrapKek = bytes.Repeat([]byte{3}, 32)
+	})
 	fixture.put("meta-2", GkmGenerationKey(world.groupId, 2), fixture.marshal(rotate2))
 	old := world.groupId
-	world.groupId = testId("restored-keydelivery")
 	fixture.settings = DefaultGkmServiceSettings()
 	fixture.start()
+	if answer := world.postClaim(world.adminToken, 2, rotate2); answer.Code != http.StatusCreated {
+		t.Fatalf("retry of the installed signed generation: %d", answer.Code)
+	}
+	world.groupId = testId("restored-keydelivery")
 	request := &protocol.GkmGroupReformRequest{Form: world.form(world.admin, world.groupId, &old, 2)}
 	path := "/gkm/repos/" + sidecar.EvsKeyId(world.repoId) + "/forms"
 	for range 2 {
