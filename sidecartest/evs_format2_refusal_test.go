@@ -983,8 +983,8 @@ func (self *format2World) malformedStatementBody(plan *sidecar.EvsPushPlan, muta
 		self.t.Fatal(err)
 	}
 	signing := &format2Signing{mutate: mutate}
-	if _, err := sidecar.NewEvsStatementBuilder(self.sign(signing)).BuildFormat2(plan); err == nil {
-		self.t.Fatal("format 2 parses the malformed twin")
+	if _, err := sidecar.NewEvsStatementBuilder(self.sign(signing)).BuildFormat2(plan); !errors.Is(err, sidecar.ErrEvsPushInvalid) {
+		self.t.Fatalf("format 2 returned %v for the malformed statement, want %v", err, sidecar.ErrEvsPushInvalid)
 	}
 	return &protocol.EvsPushRequest{Statement: signing.statementBytes, Payload: built.Payload}
 }
@@ -1175,8 +1175,7 @@ var format2EvsDrivers = map[string]func(world *format2World) *format2EvsCase{
 		twin := world.plan()
 		world.create(twin, "cut.txt", []byte("cut"), protocol.EvsVersioning_EVS_VERSIONING_KEPT, nil)
 		return &format2EvsCase{push: world.body(plan, setCut, nil), twin: world.malformedStatementBody(twin, func(push *protocol.EvsPush) {
-			// a flag no format names: 1024 is COMPLETION's (QD-1137)
-			push.Flags |= 2048
+			push.Flags |= 4096 // unassigned in both formats
 		})}
 	},
 	"push-flag-1024": func(world *format2World) *format2EvsCase {

@@ -124,7 +124,7 @@
       "status": 409,
       "recorded": true,
       "twin": {
-        "construct": "the same push with flag 2048, which no format holds",
+        "construct": "a signed file-mode push with the unassigned flag 4096",
         "outcome": "refused",
         "status": 400,
         "code": "INVALID"
