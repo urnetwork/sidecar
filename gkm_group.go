@@ -258,17 +258,38 @@ func (self *GkmGroupClient) AuthAdvanced(state GkmAuthView) {
 		return
 	}
 	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	if self.state != nil && state.Pin().GetVersion() <= self.state.Pin().GetVersion() {
+	before := self.state
+	if before != nil && state.Pin().GetVersion() <= before.Pin().GetVersion() {
+		self.stateLock.Unlock()
 		return
 	}
 	self.state = state
+	// A verified state supersedes every unconfirmed one.
+	self.unconfirmedState, self.unconfirmedConfigRepoId = nil, Id{}
+	ctx := self.hintsCtx
+	self.stateLock.Unlock()
 	select {
 	case self.rebindWake <- struct{}{}:
 	default:
 	}
-	// a verified state supersedes every unconfirmed one
-	self.unconfirmedState, self.unconfirmedConfigRepoId = nil, Id{}
+	if ctx != nil && self.KeyDeliveryOnly() && self.args.ReaderRepoIds != nil {
+		go self.syncNewReaderRepos(ctx, before)
+	}
+}
+
+// A new grant can refer to a generation the repo has held for some time. Ask for its wrap at the grant,
+// including for a vault or mailbox that became readable after the config follower first stood.
+func (self *GkmGroupClient) syncNewReaderRepos(ctx context.Context, before GkmAuthView) {
+	now := self.clock.Now()
+	for _, repoId := range self.args.ReaderRepoIds() {
+		if ctx.Err() != nil {
+			return
+		}
+		if before != nil && slices.Contains(before.RepoReadersAt(repoId, now), self.args.SidecarId) {
+			continue
+		}
+		self.hintWork(ctx, "sync", repoId, func() { self.logFlowError("reader grant", self.SyncRepo(ctx, repoId)) })
+	}
 }
 
 // The config follower's state before it stands (GkmConfigJoiner; QD-817), kept for the config group's join alone:
