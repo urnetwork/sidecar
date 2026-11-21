@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
 )
@@ -153,6 +155,9 @@ func TestDirectoryFormat2FirstCardWithdrawsOneRetainedRun(t *testing.T) {
 	kept := world.startRun(device.client, "keep this run")
 	drop := world.startRun(device.client, "withdraw this run")
 	device.flush(t)
+	if entries := device.entriesAtEvs(t, sidecar.RecordKindAnnounce); len(entries) != 2 {
+		t.Fatalf("before migration: %d retained announcements", len(entries))
+	}
 	world.cards.RaiseFormat(world.directoryId)
 	device.mustSync(t)
 	if err := device.client.Runs().Withdraw(drop); err != nil {
@@ -160,9 +165,22 @@ func TestDirectoryFormat2FirstCardWithdrawsOneRetainedRun(t *testing.T) {
 	}
 	reader := world.reader(nil)
 	reader.mustSync(t)
+	files := reader.client.Cards()
+	if len(files) != 1 || files[0].Path != sidecar.DirectoryCardPath(writer.sidecarId) {
+		t.Fatalf("expected the writer's first card, got %d files", len(files))
+	}
+	card, err := sidecar.DirectoryDecodeCard(files[0].Content, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cardItems := card.Card.GetItems()
+	if len(cardItems) != 1 || !slices.Equal(cardItems[0].GetWhat().GetRunId(), kept[:]) {
+		t.Fatalf("first card after withdrawing %s: %v", drop, cardItems)
+	}
+	// The surviving run has identical content, version and renewal on both carriers.
 	items := testFormat2ItemsOf(t, reader, writer.sidecarId)
-	if len(items) != 1 || items[0].EntryId != (sidecar.Id{}) || sidecar.Id(items[0].Announcement.GetWhat().GetRunId()) != kept {
-		t.Fatalf("first card after withdrawing %s: %+v", drop, items)
+	if len(items) != 1 || !proto.Equal(items[0].Announcement, cardItems[0]) {
+		t.Fatalf("cold view after withdrawing %s: %d items, expected the surviving run", drop, len(items))
 	}
 }
 
