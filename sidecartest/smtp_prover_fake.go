@@ -551,10 +551,11 @@ func (self *fakeSmtpProverRun) run(ctx context.Context, conn net.Conn) (*sidecar
 	if reply.code[0] != '2' {
 		return &sidecar.SmtpProofResult{Mode: uint32(mode), RefusedCode: reply.code}, nil
 	}
+	accepted := &sidecar.SmtpProofResult{Mode: uint32(mode), Accepted: true}
 	if err := self.command("QUIT\r\n"); err != nil {
-		return nil, err
+		return accepted, fmt.Errorf("fake smtp prover: QUIT after message acceptance: %w", err)
 	}
-	return &sidecar.SmtpProofResult{Mode: uint32(mode), Accepted: true}, nil
+	return accepted, nil
 }
 
 // The records crypto/tls writes for content, with dynamic sizing off.

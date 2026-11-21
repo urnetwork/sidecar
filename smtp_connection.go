@@ -221,7 +221,7 @@ type SmtpConnectionResult struct {
 	TlsLevel SmtpTlsLevel
 	// Why VerifyPeer refused the MX, nil when it did not: tls_refused, its DSN giving the refusal's Reason.
 	TlsRefusal *SmtpTlsRefusal
-	// The prover's result, nil when SendSmtp failed or never ran.
+	// The prover's result, including an acknowledged delivery if the subsequent QUIT failed.
 	Proof *SmtpProofResult
 	// The connection's own failure: the dial, the frames, a reset, the store, a DKIM selector, the prover.
 	// Never wraps a reply's or a message's text.

@@ -240,6 +240,8 @@ func (self *SmtpSender) dsnCountsSent(dsnCount uint32, hardBounceCount uint32) {
 // One recipient domain of a send.
 type smtpDomainPlan struct {
 	progress *smtpRecipientProgress
+	// This attempt takes over an earlier queued send.
+	resend bool
 	// lowercase, with no trailing dot
 	domain string
 	// addr-specs, the domain lowercase, in the order named, each once
@@ -470,9 +472,7 @@ func (self *SmtpSender) send(ctx context.Context, message *SmtpOutboundMessage, 
 			outcomes.keep(earlier)
 			continue
 		}
-		if resend {
-			result.ResentDomains = append(result.ResentDomains, domainPlan.domain)
-		}
+		domainPlan.resend = resend
 		var saved *protocol.MailRecipientProgress
 		if earlier != nil {
 			saved = earlier.progress
@@ -493,9 +493,16 @@ func (self *SmtpSender) send(ctx context.Context, message *SmtpOutboundMessage, 
 	}
 	stopProgress := outcomes.progress(ctx)
 	for _, domainPlan := range toSend {
+		if ctx.Err() != nil {
+			// Unstarted domains already have a queued claim for takeover.
+			break
+		}
+		if domainPlan.resend {
+			result.ResentDomains = append(result.ResentDomains, domainPlan.domain)
+		}
 		outcome := self.sendDomain(ctx, plan, domainPlan, earlierByDomain[domainPlan.domain], outcomes)
 		outcomes.set(outcome, earlierByDomain[domainPlan.domain])
-		if err := outcomes.write(ctx); err != nil {
+		if err := outcomes.writeResult(ctx); err != nil {
 			stopProgress()
 			return nil, err
 		}
