@@ -80,7 +80,7 @@ func (self *Sidecar) checkPairable() error {
 	if lifecycle.reason == SidecarReasonKeystoreLost {
 		return ErrSidecarKeystoreLost
 	}
-	if self.instance.Restored() {
+	if self.instance.networkRestored(self.enrolledNetworkId()) {
 		// a restored or copied state takes --replace's path, which a pairing has no flag for
 		return ErrSidecarRestored
 	}

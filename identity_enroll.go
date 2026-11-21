@@ -265,19 +265,14 @@ func (self *Sidecar) Enroll(ctx context.Context, credential *SidecarEnrollCreden
 	if !ok {
 		connectInstanceId = NewId()
 	}
-	err = self.instance.RecordNetwork(SidecarNetworkRecord{
+	err = self.instance.recordNetwork(SidecarNetworkRecord{
 		NetworkId:         networkId,
 		ClientId:          result.ClientId,
 		SidecarId:         sidecarId,
 		ConnectInstanceId: connectInstanceId,
-	})
+	}, credential.Replace)
 	if err != nil {
 		return abandon(err)
-	}
-	if credential.Replace && self.instance.Restored() {
-		if err := self.instance.AcceptRestored(); err != nil {
-			self.log.Warningf("[identity]the restored state was not taken as this machine's: %s", err)
-		}
 	}
 	if previous != nil && previousByJwt != "" {
 		// the old client goes with its own token, which the refusal that ended it may have ended too
@@ -341,7 +336,7 @@ func (self *Sidecar) checkEnrollable(credential *SidecarEnrollCredential) error 
 	if credential.Ephemeral && !self.instance.memoryOnly() {
 		return ErrSidecarEnrollEphemeral
 	}
-	if self.instance.Restored() && !credential.Replace {
+	if self.instance.networkRestored(self.enrolledNetworkId()) && !credential.Replace {
 		return ErrSidecarRestored
 	}
 	if stores := self.hostCredentialStores(); 0 < len(stores) {

@@ -277,6 +277,65 @@ func (self *testEnrollWorld) enroll(ctx context.Context) error {
 	return self.sidecar.Enroll(ctx, &SidecarEnrollCredential{AuthKey: testAuthKeyBearer()})
 }
 
+// Each restored network stays inactive across restarts until its own replacement binds.
+func TestRestoreReplacesOneRecordedClientAtATime(t *testing.T) {
+	ctx := context.Background()
+	backend, keyStore := NewSidecarMemoryBackend(), newFakeKeyStore()
+	open := func(machine string) *SidecarInstance {
+		instance := openOnMachine(t, backend, keyStore, []byte(machine))
+		if err := instance.Unlock(testPass); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(instance.Close)
+		return instance
+	}
+	start := func(instance *SidecarInstance, api *testEnrollApi, networkId *Id) *Sidecar {
+		running := newTestRunningSidecar(t, instance, networkId, testSidecarSettings(newTestSidecarPlatform()))
+		running.sidecarApi.setTransport(api)
+		running.hostStores = func() []SidecarHostCredentialStore { return nil }
+		return running
+	}
+	apis := []*testEnrollApi{newTestEnrollApi(t), newTestEnrollApi(t)}
+	original := open("first synthetic machine")
+	ids := []Id{}
+	for _, api := range apis {
+		running := start(original, api, nil)
+		awaitSidecarStatus(t, running, atStatus(SidecarStateUnenrolled, 0))
+		if err := running.Enroll(ctx, &SidecarEnrollCredential{AuthKey: testAuthKeyBearer()}); err != nil {
+			t.Fatal(err)
+		}
+		awaitSidecarStatus(t, running, atStatus(SidecarStateOffline, 1))
+		ids = append(ids, running.Identity().SidecarId)
+		if err := running.CloseAndWait(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	original.Close()
+
+	for i, api := range apis {
+		restored := open("second synthetic machine")
+		running := start(restored, api, &api.networkId)
+		awaitSidecarStatus(t, running, atStatus(SidecarStateUnenrolled, 0))
+		if running.Identity() != nil || running.runningGeneration() != nil || running.BoundGeneration() != 1 {
+			t.Fatal("the copied client started or lost its previous binding")
+		}
+		if err := running.Enroll(ctx, &SidecarEnrollCredential{AuthKey: testAuthKeyBearer()}); !errors.Is(err, ErrSidecarRestored) {
+			t.Fatalf("enrollment without replacement: %v", err)
+		}
+		if err := running.Enroll(ctx, &SidecarEnrollCredential{AuthKey: testAuthKeyBearer(), Replace: true}); err != nil {
+			t.Fatal(err)
+		}
+		awaitSidecarStatus(t, running, atStatus(SidecarStateOffline, 2))
+		if running.Identity().SidecarId != ids[i] || restored.Restored() != (i == 0) {
+			t.Fatal("replacement changed identity or activated another network")
+		}
+		if err := running.CloseAndWait(ctx); err != nil {
+			t.Fatal(err)
+		}
+		restored.Close()
+	}
+}
+
 // An enrollment starts the new client's generation: the request sends the bearer with both marks and no egress,
 // the binding names the new client at generation 1, and the keychain and sidecar.json hold the result.
 func TestEnrollRunsTheNewGeneration(t *testing.T) {

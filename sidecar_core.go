@@ -152,6 +152,12 @@ func (self *Sidecar) reconcileOpen() {
 		return
 	}
 	secrets := self.instance.secrets(*networkId, sidecarCoreSecretsNamespace)
+	if self.instance.networkRestored(networkId) {
+		self.stopGeneration()
+		self.setIdentity(nil, nil)
+		self.leaveForUnenrolled("")
+		return
+	}
 	record, err := loadSidecarIdentity(secrets)
 	switch {
 	case err == nil:
