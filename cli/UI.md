@@ -173,9 +173,8 @@ ur id rm <name> [--network=<net>]
 - `create` and `rm` are outward actions (I-8): each passes §5.4's gate first. While a person's decision is awaited the
   command prints `ur approve <id>` for another approval-capable device and exits 1; it runs once it is run again
   after the approval.
-- `group-create` and `group-add` ask on /dev/tty first, never through MCP. A group's repo stores its mail once for all
-  of its members; `group-add` is the only way in (§16.11). `group-create` refuses until the access log carries a group
-  inbox's marker (plan-MAIL-group-inbox).
+- `group-create` and `group-add` ask on /dev/tty first. A group's repo stores each message once. The signed creation
+  marks the inbox and a Team grants its mail indexers deposit access. Members join with `group-add` (§16.11).
 - `ls` names an address whose creator's grant is gone as one no receiver takes, since a record outlives no grant.
 
 ## ur mail (§15.6, §15.15)

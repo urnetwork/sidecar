@@ -267,8 +267,10 @@ type EvsWritePlan struct {
 	// the push ids the repair form writes over, which the sender seals as EvsSealedMetadata.written_over (QD-833;
 	// evsPrefixWrittenOver); none for a plan that repairs nothing
 	writtenOver [][]byte
-	// the repo keeps its object keys in slots, a record-class repo's (see the file header)
+	// Record-class repos and signed general inboxes keep each file's object key in a deletable slot.
 	slotKeyed bool
+	// The signed inbox role also selects the mail index's extraction and exclusion rules.
+	groupInbox bool
 	// the ref's name bytes and the repo's kind, which a write's versioning is decided from (evs_write_versionless.go)
 	refName  []byte
 	repoKind protocol.RepoKind
@@ -561,7 +563,7 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 					Head: head, PathEpoch: evsCurrentEpoch(head.GetPathEpoch()), Sources: evsSourceEpochs(head.GetPathEpoch()),
 					Generation: args.Generation, keys: result.keys, floors: map[string]uint64{},
 					slotKeyed: evsRepoSlotKeyed(repo), Tainted: args.Tainted, AgentId: args.AgentId,
-					refName: args.RefName, repoKind: repo.GetKind(),
+					refName: args.RefName, repoKind: repo.GetKind(), groupInbox: AclRepoIsInbox(repo),
 				}
 				if err := plan.setRef(head, args.RefName, self.client.args.Identity().SidecarId, rekeyOnly); err != nil {
 					return err

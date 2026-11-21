@@ -588,6 +588,36 @@ func TestMailReposNetworkMailKeyRepo(t *testing.T) {
 	}
 }
 
+func TestMailTeamNetworkKeyRequiresTheSignedAdminInbox(t *testing.T) {
+	world := newMailReposTestWorld(t)
+	_, device := world.fixture.memberWithDevice(bridge.MemberRole_MEMBER_ROLE_OWNER)
+	world.fixture.repo(protocol.RepoKind_REPO_KIND_TEAM_RECORD, Id{})
+	world.rebuild()
+	repos := world.repos(device)
+	authority := newMailConfigTestAuthority()
+	authority.grant(device, "*")
+	for _, role := range []protocol.RepoInbox{protocol.RepoInbox_REPO_INBOX_GROUP, protocol.RepoInbox_REPO_INBOX_ADMIN} {
+		id := NewId()
+		if err := world.file(device, bridge.SignedType_SIGNED_REPO_CREATE, &protocol.RepoCreate{
+			RepoId: id.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL, Inbox: role,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		config := newMailConfigTestDevice(t, newMailConfigTestRepo(), authority, device, nil).config
+		if _, err := config.CreateAddress(t.Context(), &MailCreateAddressArgs{Kind: protocol.MailAddressKind_MAIL_ADDRESS_ADMIN, MailboxRepoId: id}); err != nil {
+			t.Fatal(err)
+		}
+		got, err := repos.NetworkMailKeyRepo(t.Context(), config)
+		if role == protocol.RepoInbox_REPO_INBOX_ADMIN {
+			if err != nil || got != id {
+				t.Fatalf("the signed admin inbox: %s, %v", got, err)
+			}
+		} else if !errors.Is(err, ErrMailReposAbsent) {
+			t.Fatalf("an ordinary group's key was selected as the network key: %v", err)
+		}
+	}
+}
+
 // A Team scope's own mailcfg is created once, by a consented device of the scope's member that writes no config heads
 // (QD-1093): the log binds it to that member; a config writer, another member's device and a read_only one file
 // nothing; the member's other devices are answered the one that stands; a creation cut short is taken up again under

@@ -62,6 +62,9 @@ func newMailIndexTestWorld(t *testing.T, kind protocol.RepoKind) *mailIndexTestW
 		defer writer.world.config.stateLock.Unlock()
 		repo := proto.Clone(writer.world.config.repo).(*protocol.AclRepo)
 		repo.Kind = kind
+		if kind == protocol.RepoKind_REPO_KIND_GENERAL {
+			repo.Inbox = protocol.RepoInbox_REPO_INBOX_GROUP
+		}
 		signer := writer.world.signer.sidecarId.Bytes()
 		repo.Admins = append(repo.Admins, &protocol.AclRepoAdminRow{SidecarId: signer, Signer: signer, At: 1})
 		writer.world.config.repo = repo
@@ -83,10 +86,9 @@ func newMailIndexTestWorld(t *testing.T, kind protocol.RepoKind) *mailIndexTestW
 		isAdmin: func(repoId Id) func(file *indexFileVersion) bool {
 			return world.isAdmin
 		},
-		groupInbox: func(repoId Id) bool { return kind == protocol.RepoKind_REPO_KIND_GENERAL },
-		settings:   DefaultIndexFormatSettings(),
-		clock:      writer.test.clock,
-		log:        NewNoopLogger(),
+		settings: DefaultIndexFormatSettings(),
+		clock:    writer.test.clock,
+		log:      NewNoopLogger(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -644,7 +646,7 @@ func testMailIndexFirstBuildOfOldMail(t *testing.T, kind protocol.RepoKind) {
 	}
 
 	gate = true
-	result, err := MailIndexFirstBuild(ctx, &MailIndexBuildArgs{Repo: world.writer.repo, GroupInbox: kind == protocol.RepoKind_REPO_KIND_GENERAL})
+	result, err := MailIndexFirstBuild(ctx, &MailIndexBuildArgs{Repo: world.writer.repo})
 	if err != nil {
 		t.Fatal(err)
 	}

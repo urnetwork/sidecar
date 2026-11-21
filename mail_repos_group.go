@@ -36,6 +36,9 @@ import (
 // Group creation requires a person's confirmation before reserving a repo or publishing an address.
 var ErrMailGroupUnconfirmed = errors.New("mail repos: group creation needs confirmation")
 
+// Deprecated: retained for callers that support releases preceding the signed inbox marker.
+var ErrMailGroupInboxNotBuilt = errors.New("mail repos: a group inbox needs RepoCreate's inbox marker, which is not built")
+
 // A Team inbox needs the mail tag from the same verified head as its access projection.
 var ErrMailGroupIndexerTag = errors.New("mail repos: the mail indexer tag is unavailable")
 

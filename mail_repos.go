@@ -570,5 +570,17 @@ func (self *MailRepos) NetworkMailKeyRepo(ctx context.Context, config *MailConfi
 	if !lookup.Known {
 		return Id{}, ErrMailReposAbsent
 	}
+	state, err := self.verifiedState()
+	if err != nil {
+		return Id{}, err
+	}
+	// A Team's network-wide key belongs to the one admin-marked repo in the signed log.
+	// A member scope still uses its own mailbox, as does a personal network.
+	if zone.Scope == "" && state.teamNetwork() {
+		row := state.Repo(lookup.MailboxRepoId)
+		if row.GetInbox() != protocol.RepoInbox_REPO_INBOX_ADMIN || !mailRepoStands(row) {
+			return Id{}, ErrMailReposAbsent
+		}
+	}
 	return lookup.MailboxRepoId, nil
 }

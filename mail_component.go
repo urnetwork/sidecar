@@ -439,8 +439,8 @@ func (self *MailClient) passGroupInboxes(run *mailComponentRun, binding *MailBin
 	if err != nil {
 		return
 	}
-	_, parts, err := self.bound()
-	if err != nil {
+	active, parts, err := self.bound()
+	if err != nil || active.Engine != binding.Engine || active.Evs != binding.Evs {
 		return
 	}
 	memberId, member := mailMemberOf(state, self.sidecarId)
@@ -454,7 +454,7 @@ func (self *MailClient) passGroupInboxes(run *mailComponentRun, binding *MailBin
 	next := map[Id]*MailGroupRefs{}
 	ingested := map[Id]bool{}
 	for _, address := range addresses {
-		if run.ctx.Err() != nil {
+		if run.ctx.Err() != nil || binding.Engine.State() != state {
 			return
 		}
 		if !address.Known || (address.Kind != protocol.MailAddressKind_MAIL_ADDRESS_GROUP && address.Kind != protocol.MailAddressKind_MAIL_ADDRESS_ADMIN) {
@@ -462,7 +462,11 @@ func (self *MailClient) passGroupInboxes(run *mailComponentRun, binding *MailBin
 		}
 		groupId := address.MailboxRepoId
 		row := state.Repo(groupId)
-		if !AclRepoIsInbox(row) || !mailRepoStands(row) {
+		role := protocol.RepoInbox_REPO_INBOX_GROUP
+		if address.Kind == protocol.MailAddressKind_MAIL_ADDRESS_ADMIN {
+			role = protocol.RepoInbox_REPO_INBOX_ADMIN
+		}
+		if row.GetInbox() != role || !mailRepoStands(row) {
 			continue
 		}
 		rights := state.EvsAccess(subject, groupId, AclTokenAudienceEvs, now).Rights

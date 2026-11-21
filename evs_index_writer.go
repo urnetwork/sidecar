@@ -56,8 +56,6 @@ type indexWriterArgs struct {
 	// Whether this device may merge now: desktops, the daemon and indexers; phones on Wi-Fi while charging (§11.14's
 	// devices row). Nil merges never.
 	mayMerge func() bool
-	// Whether a general repo is laid out as a group inbox, whose mail is m/ (§15.7). Nil reads none.
-	groupInbox func(repoId Id) bool
 	// The team directory's copy of a card or repo file at the version a write replaces (DirectoryClient.IndexReplaced):
 	// its d/ and r/ files are versionless, so evs holds a replaced version about a minute. False, and nil, read the
 	// version from evs, and a version neither gives leaves the push unindexed.
@@ -111,7 +109,7 @@ func (self *IndexWriter) Prepare(ctx context.Context, plan *EvsWritePlan) error 
 		protocol.RepoKind_REPO_KIND_UNSPECIFIED:
 		return nil
 	}
-	groupInbox := self.args.groupInbox != nil && self.args.groupInbox(plan.RepoId)
+	groupInbox := plan.groupInbox
 	changes := []*indexWriterChange{}
 	for _, planned := range plan.Paths {
 		write := plan.writeOf(planned.Path)
