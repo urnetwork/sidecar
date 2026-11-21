@@ -136,6 +136,12 @@ func TestEvsLfsAgentProtocol(t *testing.T) {
 	answers := []*evsLfsAgentMessage{}
 	scanner := bufio.NewScanner(stdout)
 	for scanner.Scan() {
+		if len(answers) == 1 {
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(scanner.Bytes(), &fields); err != nil || fields == nil || len(fields) != 0 {
+				t.Fatalf("init reply %q, want an empty object", scanner.Text())
+			}
+		}
 		answer := &evsLfsAgentMessage{}
 		if err := json.Unmarshal(scanner.Bytes(), answer); err != nil {
 			t.Fatalf("an answer that is no JSON: %q", scanner.Text())
@@ -147,8 +153,8 @@ func TestEvsLfsAgentProtocol(t *testing.T) {
 	if len(answers) != 7 {
 		t.Fatalf("%d answers: %q", len(answers), stdout.String())
 	}
-	if answers[0].Error == nil || answers[1].Event != "" || answers[1].Error != nil {
-		t.Fatalf("before init %+v, init %+v", answers[0], answers[1])
+	if answers[0].Error == nil {
+		t.Fatalf("transfer before init: %+v", answers[0])
 	}
 	if answers[2].Event != "progress" || answers[3].Event != "complete" || answers[3].Error != nil || answers[3].Oid != oid.String() {
 		t.Fatalf("the upload: %+v %+v", answers[2], answers[3])
