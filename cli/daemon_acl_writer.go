@@ -6,8 +6,14 @@ import (
 	"github.com/urnetwork/sidecar"
 )
 
-// The writer uses the same verified, per-network config ref as the daemon's follower.
-var _ sidecar.ConfigHeadRef = (*urNetworkConfigHeads)(nil)
+// The stock follower is a reader. Only explicit ACL confirmation selects this writer.
+func (self *urNetworkConfigHeads) ConfirmedAclConfigRef() sidecar.ConfigHeadRef {
+	return &urConfirmedAclConfigRef{self}
+}
+
+type urConfirmedAclConfigRef struct {
+	*urNetworkConfigHeads
+}
 
 func (self *urNetworkConfigHeads) CurrentConfigHeadTip(ctx context.Context) (*sidecar.ConfigHeadTip, error) {
 	ref, err := self.clients.headReader(nil)
@@ -17,26 +23,26 @@ func (self *urNetworkConfigHeads) CurrentConfigHeadTip(ctx context.Context) (*si
 	return ref.CurrentConfigHeadTip(ctx)
 }
 
-func (self *urNetworkConfigHeads) PrepareConfigHead(ctx context.Context, head *sidecar.ConfigHead, version uint64) (*sidecar.ConfigHeadPush, error) {
+func (self *urConfirmedAclConfigRef) PrepareConfigHead(ctx context.Context, head *sidecar.ConfigHead, version uint64) (*sidecar.ConfigHeadPush, error) {
 	ref, err := self.clients.headReader(nil)
 	if err != nil {
 		return nil, err
 	}
-	return ref.PrepareConfigHead(ctx, head, version)
+	return ref.ConfirmedAclConfigRef().PrepareConfigHead(ctx, head, version)
 }
 
-func (self *urNetworkConfigHeads) CommitConfigHead(ctx context.Context, push *sidecar.ConfigHeadPush) error {
+func (self *urConfirmedAclConfigRef) CommitConfigHead(ctx context.Context, push *sidecar.ConfigHeadPush) error {
 	ref, err := self.clients.headReader(nil)
 	if err != nil {
 		return err
 	}
-	return ref.CommitConfigHead(ctx, push)
+	return ref.ConfirmedAclConfigRef().CommitConfigHead(ctx, push)
 }
 
-func (self *urNetworkConfigHeads) ConfigHeadPushes(ctx context.Context, after uint64, through uint64) ([][]byte, error) {
+func (self *urConfirmedAclConfigRef) ConfigHeadPushes(ctx context.Context, after uint64, through uint64) ([][]byte, error) {
 	ref, err := self.clients.headReader(nil)
 	if err != nil {
 		return nil, err
 	}
-	return ref.ConfigHeadPushes(ctx, after, through)
+	return ref.ConfirmedAclConfigRef().ConfigHeadPushes(ctx, after, through)
 }

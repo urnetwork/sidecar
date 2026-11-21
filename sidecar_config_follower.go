@@ -718,7 +718,13 @@ func (self *SidecarConfigFollower) startClient(networkId Id, genesisChain [sha25
 	if err != nil {
 		return nil, err
 	}
-	if ref, ok := self.args.Heads.(ConfigHeadRef); ok {
+	ref, generalWriter := self.args.Heads.(ConfigHeadRef)
+	if !generalWriter {
+		if source, ok := self.args.Heads.(ConfirmedAclConfigRefProvider); ok {
+			ref = source.ConfirmedAclConfigRef()
+		}
+	}
+	if ref != nil {
 		identity := self.sidecar.Identity()
 		if identity == nil || identity.NetworkId != networkId {
 			client.Close()
@@ -736,12 +742,18 @@ func (self *SidecarConfigFollower) startClient(networkId Id, genesisChain [sha25
 		if judge := client.logSettings.BridgeBodyJudge; judge != nil {
 			args.BridgeFold = judge.Fold
 		}
-		writer, err := NewConfigWriter(client.ctx, args)
-		if err != nil {
-			client.Close()
-			return nil, err
+		if generalWriter {
+			writer, err := NewConfigWriter(client.ctx, args)
+			if err != nil {
+				client.Close()
+				return nil, err
+			}
+			context.AfterFunc(client.ctx, writer.Close)
+		} else {
+			// Only aclSaveContext can select this writer. It never registers a general
+			// config writer or starts a periodic fold. A confirmed save performs its own fold.
+			client.confirmedAclWriter = newConfigWriter(client.ctx, args)
 		}
-		context.AfterFunc(client.ctx, writer.Close)
 	}
 	held := func() bool {
 		self.stateLock.Lock()

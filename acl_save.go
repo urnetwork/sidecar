@@ -743,6 +743,14 @@ func AclLog(state *ConfigState) []AclLogEntry {
 	return entries
 }
 
+// A host's existing general config writer, or the stock ref dedicated to confirmed ACL saves.
+func (self *ConfigClient) aclPolicyWriter() *ConfigWriter {
+	if writer := self.Writer(); writer != nil {
+		return writer
+	}
+	return self.confirmedAclWriter
+}
+
 // This network's config writer, its verified state and its current head: what a save plans on.
 func (self *Sidecar) aclSaveContext(ctx context.Context, allowPreviewOnly bool) (*ConfigWriter, *ConfigState, *ConfigHeadTip, error) {
 	authority, ok := self.authority().(*ConfigAuthority)
@@ -750,7 +758,7 @@ func (self *Sidecar) aclSaveContext(ctx context.Context, allowPreviewOnly bool) 
 		return nil, nil, nil, ErrAgentPlanNoState
 	}
 	client := authority.client
-	writer := client.Writer()
+	writer := client.aclPolicyWriter()
 	var heads ConfigHeadTipReader
 	var sidecarId Id
 	if writer != nil {
@@ -880,7 +888,7 @@ func (self *Sidecar) TestAclPolicy(ctx context.Context, source []byte) (*AclPoli
 	if head == nil {
 		return nil, fmt.Errorf("%w: the signed base's head is unavailable offline", ErrConfigHeadUnavailable)
 	}
-	if writer := client.Writer(); writer != nil && state.IsConfigWriter(writer.args.SidecarId) {
+	if writer := client.aclPolicyWriter(); writer != nil && state.IsConfigWriter(writer.args.SidecarId) {
 		resolve := &protocol.ConfigResolution{}
 		if err := aclSaveDecode(head, ConfigHeadResolvePath, resolve); err != nil {
 			return nil, err

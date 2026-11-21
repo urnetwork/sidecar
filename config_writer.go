@@ -76,6 +76,14 @@ type ConfigHeadPush struct {
 	Payload []byte
 }
 
+// A confirmed edit compares the signed parent with the exact head it previewed.
+func (self *ConfigHeadPush) extends(version uint64, chain [sha256.Size]byte) bool {
+	signed, statement := &bridge.Signed{}, &protocol.EvsPush{}
+	return self != nil && self.Version == version+1 && proto.Unmarshal(self.SignedPush, signed) == nil &&
+		signed.GetType() == uint32(bridge.SignedType_SIGNED_EVS_PUSH) && proto.Unmarshal(signed.GetBody(), statement) == nil &&
+		statement.GetBaseVersion() == version && bytes.Equal(statement.GetBaseChain(), chain[:])
+}
+
 // The current verified main-ref head, including a pending head that no base names yet.
 type ConfigHeadTipReader interface {
 	// A nil head at version 0 before the first push.
@@ -89,6 +97,12 @@ type ConfigHeadTip struct {
 	Version           uint64
 	Chain             [sha256.Size]byte
 	SupportsExactHead bool
+}
+
+// A host can supply an exact ref only for explicitly confirmed ACL edits. The ordinary
+// follower keeps its existing head reader and never runs its periodic writer on this ref.
+type ConfirmedAclConfigRefProvider interface {
+	ConfirmedAclConfigRef() ConfigHeadRef
 }
 
 // The config repo's file-mode main ref as a writer saves heads to it (§11.8).
@@ -224,7 +238,7 @@ func NewConfigWriter(ctx context.Context, args *ConfigWriterArgs) (*ConfigWriter
 	return self, nil
 }
 
-// A writer with no fold loop, for BootstrapNetwork and tests.
+// A writer with no fold loop, for a confirmed ACL save, BootstrapNetwork and tests.
 func newConfigWriter(ctx context.Context, args *ConfigWriterArgs) *ConfigWriter {
 	settings := args.Settings
 	if settings == nil {
@@ -434,10 +448,7 @@ func (self *ConfigWriter) plan(ctx context.Context, previous *configWriterPlan, 
 		}
 		// Prepare may read the ref again. Even at the same version a restored or forked
 		// ref must never substitute another chain for the one whose files the edit saw.
-		signed, statement := &bridge.Signed{}, &protocol.EvsPush{}
-		if push == nil || push.Version != version+1 || proto.Unmarshal(push.SignedPush, signed) != nil ||
-			signed.GetType() != uint32(bridge.SignedType_SIGNED_EVS_PUSH) || proto.Unmarshal(signed.GetBody(), statement) != nil ||
-			statement.GetBaseVersion() != version || !bytes.Equal(statement.GetBaseChain(), chain[:]) {
+		if expected != nil && !push.extends(version, chain) {
 			return nil, fmt.Errorf("%w: the prepared push does not extend the selected version and chain", ErrConfigHeadConflict)
 		}
 		if err := self.args.Heads.CommitConfigHead(ctx, push); err != nil {

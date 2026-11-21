@@ -13,10 +13,17 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
-var _ ConfigHeadRef = (*EvsConfigHeadReader)(nil)
+type evsConfirmedAclRef struct {
+	*EvsConfigHeadReader
+}
+
+// Explicitly selects signed exact-head commits for a confirmed ACL policy change.
+func (self *EvsConfigHeadReader) ConfirmedAclConfigRef() ConfigHeadRef {
+	return &evsConfirmedAclRef{self}
+}
 
 // Builds the exact signed push on version. Only its encrypted objects may be staged until CommitConfigHead.
-func (self *EvsConfigHeadReader) PrepareConfigHead(ctx context.Context, head *ConfigHead, version uint64) (*ConfigHeadPush, error) {
+func (self *evsConfirmedAclRef) PrepareConfigHead(ctx context.Context, head *ConfigHead, version uint64) (*ConfigHeadPush, error) {
 	tip, err := self.CurrentConfigHeadTip(ctx)
 	if err != nil {
 		return nil, err
@@ -32,13 +39,13 @@ func (self *EvsConfigHeadReader) PrepareConfigHead(ctx context.Context, head *Co
 		return nil, ErrConfigWriterNothing
 	}
 	repo := self.repo
-	state, ok := repo.client.args.Config().(*ConfigState)
-	if !ok || state == nil || state.Base() == nil {
-		return nil, ErrConfigHeadUnavailable
+	configBase, err := self.writerBase()
+	if err != nil {
+		return nil, err
 	}
 	// A pending head can be adopted only when its signed pushes descend exactly from
 	// the last base. Discover an incompatible older file-mode landing before writing.
-	base := state.Base().GetConfigVersion()
+	base := configBase.GetConfigVersion()
 	if version < base || version-base >= ConfigPushesMaxCount {
 		return nil, fmt.Errorf("%w: the next push would fall outside the window of a signed base", ErrConfigHeadConflict)
 	}
@@ -131,7 +138,7 @@ func evsConfigHeadWrites(previous *ConfigHead, next *ConfigHead) []*EvsPathWrite
 	return writes
 }
 
-func (self *EvsConfigHeadReader) CommitConfigHead(ctx context.Context, push *ConfigHeadPush) error {
+func (self *evsConfirmedAclRef) CommitConfigHead(ctx context.Context, push *ConfigHeadPush) error {
 	if push == nil || push.deliver == nil {
 		return ErrConfigHeadConflict
 	}
@@ -140,9 +147,12 @@ func (self *EvsConfigHeadReader) CommitConfigHead(ctx context.Context, push *Con
 
 // The config pushes since the verified base. Each signature and chain link is checked against the newest
 // ref head, which also catches a short or divergent answer when another writer committed in the meantime.
-func (self *EvsConfigHeadReader) ConfigHeadPushes(ctx context.Context, after uint64, through uint64) ([][]byte, error) {
-	state, ok := self.repo.client.args.Config().(*ConfigState)
-	if !ok || state == nil || state.Base() == nil || state.Base().GetConfigVersion() != after || through < after {
+func (self *evsConfirmedAclRef) ConfigHeadPushes(ctx context.Context, after uint64, through uint64) ([][]byte, error) {
+	configBase, err := self.writerBase()
+	if err != nil {
+		return nil, err
+	}
+	if configBase.GetConfigVersion() != after || through < after {
 		return nil, ErrConfigHeadConflict
 	}
 	if after == through {
@@ -151,7 +161,7 @@ func (self *EvsConfigHeadReader) ConfigHeadPushes(ctx context.Context, after uin
 	if through-after > ConfigPushesMaxCount {
 		return nil, fmt.Errorf("%w: more pending pushes than a signed base can carry", ErrConfigHeadConflict)
 	}
-	chain, err := EvsChainFromBytes(state.Base().GetConfigHeadSha256())
+	chain, err := EvsChainFromBytes(configBase.GetConfigHeadSha256())
 	if err != nil {
 		return nil, err
 	}
@@ -199,8 +209,21 @@ func (self *EvsConfigHeadReader) ConfigHeadPushes(ctx context.Context, after uin
 		pushes = append(pushes, link.Statement.Bytes)
 	}
 	target := &bridge.ProjectionHeader{ConfigVersion: through, ConfigHeadSha256: last.Chain[:]}
-	if err := CheckConfigPushes(self.repo.repoId, state.Base(), target, pushes); err != nil {
+	if err := CheckConfigPushes(self.repo.repoId, configBase, target, pushes); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrConfigHeadConflict, err)
 	}
 	return pushes, nil
+}
+
+// Only the current verified base of this network's genesis config repo can anchor a writer.
+func (self *evsConfirmedAclRef) writerBase() (*bridge.ProjectionHeader, error) {
+	view, err := self.repo.client.verifier.config()
+	if err != nil {
+		return nil, err
+	}
+	state, ok := view.(*ConfigState)
+	if !ok || state == nil || state.Base() == nil || !bytes.Equal(state.Genesis().GetConfigRepoId(), self.repo.repoId.Bytes()) {
+		return nil, ErrConfigHeadUnavailable
+	}
+	return state.Base(), nil
 }

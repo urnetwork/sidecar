@@ -242,6 +242,9 @@ type ConfigClient struct {
 	configKeyWait <-chan struct{}
 	// this device's config writer for the network, nil for none
 	writer atomic.Pointer[ConfigWriter]
+	// For a native host with a read-only follower and a ref dedicated to explicit ACL confirmation.
+	// It shares the client lifetime and has no periodic fold loop.
+	confirmedAclWriter *ConfigWriter
 }
 
 // This device's config writer for the network, nil while none runs: what an act saving a config head goes through.
