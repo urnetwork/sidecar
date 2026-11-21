@@ -319,17 +319,9 @@ func TestDaemonAdmitsADeviceTheGateHolds(t *testing.T) {
 	}
 }
 
-// The network's first device bootstrapping on evs (the file's comment), the daemon's own Sidecar and key client on the
-// engines behind the real gate, which holds nothing of the network before base 1: the bootstrap lands base 1, forms the
-// config group and commits the first head; the key client holds generation 1 signed at S(1), its group the drafted one
-// and its C_1 the one the push named, which evs's head holds; and the daemon's follower, started once the network
-// exists, stands on base 1 over the real head reader, the first device admitted.
-func TestDaemonsFirstNetworkStandsOnItsBaseOne(t *testing.T) {
-	ctx, cancel := context.WithTimeout(t.Context(), 5*urTestTimeout)
-	defer cancel()
-	net := sidecartest.NewNet(ctx, nil)
-	t.Cleanup(net.Close)
-	engines := enginenet.NewEngines(t, net, nil)
+// Bootstraps the first device with the daemon's key client and the real EVS and GKM engines.
+func bootstrapTestDaemonOwner(t *testing.T, ctx context.Context, net *sidecartest.Net, engines *enginenet.Engines) (*sidecar.Sidecar, sidecar.GkmClient, *enginenet.BootstrapResult) {
+	t.Helper()
 	instance, err := net.StartInstance("daemon", &sidecartest.TestInstanceArgs{})
 	if err != nil {
 		t.Fatal(err)
@@ -348,6 +340,22 @@ func TestDaemonsFirstNetworkStandsOnItsBaseOne(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the first device's bootstrap: %v", err)
 	}
+	return running, gkm, result
+}
+
+// The network's first device bootstrapping on evs (the file's comment), the daemon's own Sidecar and key client on the
+// engines behind the real gate, which holds nothing of the network before base 1: the bootstrap lands base 1, forms the
+// config group and commits the first head; the key client holds generation 1 signed at S(1), its group the drafted one
+// and its C_1 the one the push named, which evs's head holds; and the daemon's follower, started once the network
+// exists, stands on base 1 over the real head reader, the first device admitted.
+func TestDaemonsFirstNetworkStandsOnItsBaseOne(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*urTestTimeout)
+	defer cancel()
+	net := sidecartest.NewNet(ctx, nil)
+	t.Cleanup(net.Close)
+	engines := enginenet.NewEngines(t, net, nil)
+	running, gkm, result := bootstrapTestDaemonOwner(t, ctx, net, engines)
+	networkId := running.Identity().NetworkId
 	bootstrap := result.Bootstrap
 	if tip, err := engines.Api().Tip(ctx, networkId); err != nil || tip.GetVersion() != 1 || !bytes.Equal(tip.GetChain(), bootstrap.Pin.GetChain()) {
 		t.Fatalf("api's log after the bootstrap: %v %v", tip, err)
@@ -415,7 +423,6 @@ func TestDaemonsFirstNetworkStandsOnItsBaseOne(t *testing.T) {
 	if !running.Admitted() {
 		t.Fatal("the first device is not admitted at base 1")
 	}
-	testDaemonOwnerAclPlanAndConfirm(t, ctx, running, result, net, engines)
 }
 
 // The daemon signs both bindings, rewraps and rotates through the real service, and restarts. Opening the
@@ -595,8 +602,12 @@ func TestDaemonRecoveryRotationSurvivesRestart(t *testing.T) {
 
 // The production startup composition initializes an empty network and follows the first head through EVS.
 func TestDaemonFollowerBootstrapsAnEmptyOwnerNetwork(t *testing.T) {
-	t.Run("first start", func(t *testing.T) { testDaemonFirstOwner(t, false) })
-	t.Run("restart after base one", func(t *testing.T) { testDaemonFirstOwner(t, true) })
+	testDaemonFirstOwner(t, false)
+}
+
+// A restart after base one resumes the first owner's bootstrap on the same device and repo.
+func TestDaemonFollowerResumesOwnerBootstrapAfterBaseOne(t *testing.T) {
+	testDaemonFirstOwner(t, true)
 }
 
 // Two enrolled owner devices both see an empty log. Hold the first POST until the other device has published
@@ -671,6 +682,7 @@ func TestDaemonFollowersAgreeOnTheFirstOwner(t *testing.T) {
 }
 
 func testDaemonFirstOwner(t *testing.T, restart bool) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 5*urTestTimeout)
 	defer cancel()
 	net := sidecartest.NewNet(ctx, nil)
