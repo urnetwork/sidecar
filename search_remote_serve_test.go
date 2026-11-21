@@ -263,6 +263,19 @@ func TestTheServedRecordNamesNoQuery(t *testing.T) {
 	}
 }
 
+// An owner-bound share is excluded from the pinned view when the served record cannot be written.
+func TestSharedRepoNeedsItsServedRecordBeforeReturningHits(t *testing.T) {
+	team := newTestConfigSearchTeam(t)
+	fixture := newTestSearchRemoteServer(t, team, team.danaNas)
+	fixture.server.args.State = nil
+	fixture.corpus.serveText(team.danaVault, 5, testSearchRemoteDocs("shared", 900)...)
+	body := testSearchRemoteRequest(t, fixture.wire, 83, 0, "plan", team.danaVault)
+	reply := fixture.page(t, team.benPhone, body, 83, 0)
+	if reply.Coverage[0].Served != uint32(protocol.SearchServed_REFUSED_ALL_ABSENT) || len(reply.Hits) != 0 || reply.GetCounts().GetChecked() != 0 {
+		t.Fatalf("unrecorded share: %v", reply)
+	}
+}
+
 // A query the indexer's engine cannot run, one that normalizes past §16.10's caps or a filter it cannot apply, is
 // answered INVALID at the request's size, never an Error, and its id is ended: no lock is held across the cursor's end.
 func TestAQueryTheIndexerCannotRunIsInvalid(t *testing.T) {

@@ -29,19 +29,7 @@ type followerConfigKeys struct {
 
 // Seals new material only under a generation that covers removals and expiries at the current pin.
 func (self *followerConfigKeys) CurrentConfigKey(ctx context.Context) (*EvsRepoKey, error) {
-	client := self.follower.Client()
-	if client == nil {
-		return nil, ErrGkmUnavailable
-	}
-	state := client.State()
-	if state == nil {
-		return nil, ErrGkmUnavailable
-	}
-	repoId, err := IdFromBytes(state.Genesis().GetConfigRepoId())
-	if err != nil {
-		return nil, err
-	}
-	return self.follower.args.Gkm.EnsureWritable(ctx, repoId)
+	return self.follower.CurrentConfigKey(ctx)
 }
 
 // Opens existing statements under precisely the generation carried in their seal.

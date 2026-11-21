@@ -35,6 +35,7 @@ package sidecar
 
 import (
 	"slices"
+	"time"
 
 	"github.com/urnetwork/sidecar/protocol"
 )
@@ -92,12 +93,17 @@ func searchRemoteConfigVerdict(state *ConfigState, selfId Id, requesterId Id, re
 	if state == nil {
 		return protocol.SearchServed_REFUSED_NOT_READER, false
 	}
+	return searchRemoteConfigVerdictAt(state, selfId, requesterId, repoId, services, state.timeMs)
+}
+
+func searchRemoteConfigVerdictAt(state *ConfigState, selfId, requesterId, repoId Id,
+	services func(indexer ConfigIndexer) ([]protocol.IndexerService, bool), atMs int64) (protocol.SearchServed, bool) {
 	acl, err := state.Acl()
 	if err != nil {
 		return protocol.SearchServed_REFUSED_NOT_READER, false
 	}
 	// row 1: the requester's read first, so the row says nothing of what this device reads
-	readers := state.RepoReaders(repoId)
+	readers := state.RepoReadersAt(repoId, time.UnixMilli(atMs))
 	repo := acl.Repo(repoId)
 	if !slices.Contains(readers, requesterId) || repo == nil {
 		return protocol.SearchServed_REFUSED_NOT_READER, false
@@ -112,7 +118,7 @@ func searchRemoteConfigVerdict(state *ConfigState, selfId Id, requesterId Id, re
 		if err != nil || ownerId == (Id{}) || !acl.ConsentedFor(selfId, ownerId) {
 			return protocol.SearchServed_REFUSED_NOT_CONSENTED, false
 		}
-		if !acl.ConsentedFor(requesterId, ownerId) && !state.evsShareSubject(acl, requesterId, repoId) {
+		if !acl.ConsentedFor(requesterId, ownerId) && !state.evsShareSubjectAt(acl, requesterId, repoId, atMs) {
 			return protocol.SearchServed_REFUSED_NOT_CONSENTED, false
 		}
 	}

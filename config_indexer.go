@@ -402,6 +402,11 @@ func (self *ConfigState) SearchIndexersFor(searcherId Id, repoId Id, services fu
 // share whose signer counts (a consented device of the repo's owner, outside every cascade), unexpired, whose subject
 // names the sidecar as §8.6 reads a share's subject.
 func (self *ConfigState) evsShareSubject(acl *AclState, sidecarId Id, repoId Id) bool {
+	return self.evsShareSubjectAt(acl, sidecarId, repoId, self.timeMs)
+}
+
+// Evaluates a verified share at the instant its reader is asking.
+func (self *ConfigState) evsShareSubjectAt(acl *AclState, sidecarId, repoId Id, atMs int64) bool {
 	repo := acl.repos[repoId]
 	sidecar := acl.sidecarState(sidecarId)
 	if repo == nil || sidecar == nil {
@@ -409,7 +414,7 @@ func (self *ConfigState) evsShareSubject(acl *AclState, sidecarId Id, repoId Id)
 	}
 	for i := range repo.shares {
 		share := &repo.shares[i]
-		if !share.valid || (share.expiresMs != 0 && share.expiresMs <= self.timeMs) {
+		if !share.valid || (share.expiresMs != 0 && share.expiresMs <= atMs) {
 			continue
 		}
 		if acl.namesSidecar(sidecar, share.subject, sidecar.ephemeral) {

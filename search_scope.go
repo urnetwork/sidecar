@@ -39,6 +39,8 @@ type SearchScopeRepo struct {
 	GroupInbox bool
 	// This sidecar reads it: a repo it does not read is never listed.
 	Readable bool
+	// Whether this verified host view still stands when a page or hit reference is opened.
+	valid func() bool
 	// It may only deposit to it.
 	DepositOnly bool
 	// Owner-bound and its own member's while this device is parked (owner decision 126).
@@ -80,6 +82,8 @@ type SearchScopeRef struct {
 	// The index is off, or not built yet (owner decision 156).
 	IndexOff bool
 	Unbuilt  bool
+	// A previously verified local pin must still match when a result page or hit is used.
+	valid func() bool
 }
 
 // What a search's scope is read from. Safe for concurrent use.
