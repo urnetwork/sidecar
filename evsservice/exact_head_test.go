@@ -51,6 +51,18 @@ func TestPushExactHeadAndOrdinaryDisjointWrites(t *testing.T) {
 		fixture.requireCommitted(fixture.push(ordinary), 3)
 		// A retry of the exact byte-identical first push still returns its original version.
 		fixture.requireCommitted(fixture.post(token, firstBody), 1)
+		current := fixture.plan()
+		current.Flags = uint32(protocol.EvsPushFlag_EVS_PUSH_EXACT_HEAD)
+		fixture.create(current, "confirmed-now")
+		fixture.requireCommitted(fixture.push(current), 4)
+		reply := fixture.read(token, read)
+		reader := newWalkedTestReader(fixture)
+		verified, err := reader.client.Verifier().VerifyHead(fixture.ctx, &sidecar.EvsHeadRead{
+			RepoId: fixture.check.repoId, RefId: fixture.check.refId, Head: reply.head, FromChain: genesis, Statements: reply.statements,
+		})
+		if err != nil || verified.Version != 4 || len(verified.Statements) != 4 {
+			t.Fatalf("format %d: mixed ordinary and confirmed history: %v, %v", format, verified, err)
+		}
 		read.Fresh = false
 		if fixture.read(token, read).head.GetSupportsExactHead() {
 			t.Fatalf("format %d: capability on a non-fresh read", format)
