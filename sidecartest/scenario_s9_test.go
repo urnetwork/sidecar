@@ -155,7 +155,7 @@ func s9Run(ctx context.Context, run *sidecartest.ScenarioRun) error {
 	if err != nil {
 		return err
 	}
-	record, err := sidecar.NewSidecarRecord(&sidecar.SidecarRecordArgs{
+	record, err := sidecar.OpenSidecarRecord(ctx, &sidecar.SidecarRecordArgs{
 		SidecarId:         sidecarId,
 		IdentityPublicKey: publicKey,
 		Store:             recordStore,

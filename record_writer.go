@@ -5,7 +5,8 @@
 //
 // What Append does with a draft:
 //
-//	routed, unlocked   seal (record_seal.go), journal (record_chain.go), queue for the log's next push or deposit
+//	direct startup     spool until the writer reconciles existing journals and its verified stream head
+//	routed, ready      seal (record_seal.go), journal (record_chain.go), queue for the log's next push or deposit
 //	locked             spool the draft unsealed, to the spool's public key; it is sealed at unlock, in capture order
 //	unrouted           spool it: no author, no vault yet, or no right there (section 4.2's no author row); the run's
 //	                   coverage names no_vault, and it is sealed once a log takes it
@@ -325,6 +326,9 @@ func (self *SidecarRecord) ingestedLogs() []Id {
 // One pass of the loop's own work before the writer pumps: queued events mirrored, and each log this device ingests
 // ingested when a deposit may wait.
 func (self *SidecarRecord) tend(ctx context.Context) {
+	if err := self.PrepareDirectWrites(ctx); err != nil && self.writer.log.V(1).Enabled() {
+		self.writer.log.Infof("[record]a direct writer awaits its stream: %s", err)
+	}
 	self.accounting.mirrorQueued(ctx)
 	self.log.Tick(ctx)
 	self.export.Tick(ctx)
@@ -366,6 +370,11 @@ func (self *SidecarRecord) Run(ctx context.Context) {
 // Pushes and deposits everything queued now, retrying nothing that fails, and answers the first failure: what sleep
 // and exit call, and what a test steps the loop with.
 func (self *SidecarRecord) Flush(ctx context.Context) error {
+	if self.writer.backlogged() {
+		if err := self.DrainSpool(ctx); err != nil {
+			return errors.Join(err, self.writer.Flush(ctx))
+		}
+	}
 	return self.writer.Flush(ctx)
 }
 
@@ -430,7 +439,13 @@ func (self *SidecarRecord) SetSpoolHandlers(taint func(id SpoolRecordId, record 
 
 // Seals what the spool holds now, in capture order, as far as it can: what an unlock calls.
 func (self *SidecarRecord) DrainSpool(ctx context.Context) error {
-	return self.writer.drainSpool(ctx)
+	// One unavailable log must not hold up a capture whose destinations are ready.
+	warmErr := self.PrepareDirectWrites(ctx)
+	err := self.writer.drainSpool(ctx)
+	if errors.Is(err, errRecordHeadPending) {
+		return errors.Join(err, warmErr)
+	}
+	return err
 }
 
 // The writer: routing, sealing, spooling, and the queues the push loop empties.
@@ -454,8 +469,8 @@ type recordWriter struct {
 	runLock   sync.Mutex
 	pumpLock  sync.Mutex
 	drainLock sync.Mutex
-	// held shared from a seal through its entry's enqueue, and alone while a plan takes entries, so a plan never takes
-	// seq n+1 while n is between its journal and its queue
+	// Serializes capture installation, fresh signatures and plan construction, so a plan never takes sequence n+1
+	// while n is between its journal and its queue. A landed check takes it shared.
 	sealLock sync.RWMutex
 	// A committed capture may still need installation, including on first open. Guarded by sealLock.
 	capturePending bool
@@ -466,8 +481,10 @@ type recordWriter struct {
 	authFunc  func() RecordAuthView
 	loaded    bool
 	logQueues map[Id]*recordLogQueue
-	// whether the spool may hold drafts: true until a drain finds none
+	// whether the spool may hold drafts: true until a drain finds none without a concurrent capture
 	spoolBacklog bool
+	// incremented after each durable spool append, so an overlapping drain cannot clear its wakeup
+	spoolGeneration uint64
 	// no drain is tried before this, Unix milliseconds: a drain that failed waits PushCoalesce, so a run of Appends
 	// does not read the whole spool once each
 	drainRetryMillis int64
@@ -546,6 +563,10 @@ func (self *recordWriter) boundStreams() RecordStreams {
 
 // SidecarRecord.Bind's: a new binding lets every log adopt again, and wakes the loop.
 func (self *recordWriter) bind(streams RecordStreams, auth func() RecordAuthView) {
+	self.pumpLock.Lock()
+	defer self.pumpLock.Unlock()
+	self.sealLock.Lock()
+	defer self.sealLock.Unlock()
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
@@ -959,6 +980,9 @@ func (self *recordWriter) sealRoutes(draft *recordSpoolDraft, routes *recordRout
 	if err := self.finishCaptureWithLock(); err != nil {
 		return nil, err
 	}
+	if err := self.readyToSeal(routes); err != nil {
+		return nil, err
+	}
 	env := &RecordSealEnv{Chain: self.chain, Sign: self.sign, Random: self.random}
 	var capture *recordCapture
 	if remaining > 1 || captureId != nil {
@@ -1100,7 +1124,9 @@ func (self *recordWriter) spoolDraft(draft *recordSpoolDraft, gapCode string) ([
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		self.spoolBacklog = true
+		self.spoolGeneration++
 	}()
+	self.signal()
 	if gapCode != "" {
 		self.countGap(draft.RunId, gapCode)
 	}
@@ -1125,10 +1151,10 @@ func (self *recordWriter) drainSpool(ctx context.Context) error {
 	}
 	self.drainLock.Lock()
 	defer self.drainLock.Unlock()
-	taint, other, mark := func() (func(SpoolRecordId, *SpoolRecord) error, func(SpoolRecordId, *SpoolRecord) error, *SpoolRecordId) {
+	taint, other, mark, generation := func() (func(SpoolRecordId, *SpoolRecord) error, func(SpoolRecordId, *SpoolRecord) error, *SpoolRecordId, uint64) {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		return self.spoolTaint, self.spoolOther, self.captureMark
+		return self.spoolTaint, self.spoolOther, self.captureMark, self.spoolGeneration
 	}()
 	err := self.spool.Drain(ctx, func(id SpoolRecordId, record *SpoolRecord) error {
 		if record.Kind == SpoolRecordTaint {
@@ -1180,7 +1206,7 @@ func (self *recordWriter) drainSpool(ctx context.Context) error {
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		self.spoolBacklog = false
+		self.spoolBacklog = self.spoolGeneration != generation
 		self.drainRetryMillis = 0
 	}()
 	self.signal()

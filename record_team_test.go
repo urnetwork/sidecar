@@ -643,7 +643,10 @@ func TestRecordTeamModeSwitchesAtTheRepoCreate(t *testing.T) {
 	if len(refs) != 3 || refs[1].LogId != teamRecordId {
 		t.Fatalf("from the RepoCreate: %+v", refs)
 	}
-	directoryId := sidecar.NewId()
+	directoryId, err := world.streams.NewRepo(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
 	world.fixture.Logs = &sidecar.RecordLogIds{Team: true, TeamRecordId: &teamRecordId, DirectoryId: &directoryId}
 	world.publish()
 	claim := &sidecar.RecordDraft{Kind: sidecar.RecordKindClaim, Source: sidecar.RecordSourceAgent, RunId: &runId,
@@ -653,7 +656,13 @@ func TestRecordTeamModeSwitchesAtTheRepoCreate(t *testing.T) {
 	}
 	note := testRecordNote(&runId, "a note to the team")
 	world.fixture.Repos[directoryId] = &sidecartest.FakeRecordRepoAuth{Writers: []sidecar.Id{device.sidecarId}}
+	if err := world.streams.Grant(directoryId, device.sidecarId, sidecartest.RecordStreamsScope{Read: true, Write: true}); err != nil {
+		t.Fatal(err)
+	}
 	world.publish()
+	if err := record.PrepareDirectWrites(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if refs := testRecordAppendAll(t, record, note); len(refs) != 1 || refs[0].LogId != directoryId {
 		t.Errorf("a note with a directory: %+v", refs)
 	}

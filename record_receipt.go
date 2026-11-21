@@ -380,6 +380,11 @@ func (self *RecordReceipts) Deposit(ctx context.Context, request *RecordReceiptR
 		}
 	}
 	missing := receiptLog.missing(objects)
+	if len(missing) != 0 && self.writer.auth().Deposits(request.RepoId, self.writer.sidecarId) {
+		if err := self.writer.prepareLog(ctx, request.RepoId); err != nil {
+			return err
+		}
+	}
 	objectCount := DefaultRecordBodySettings().ReadObjectCount
 	for start := 0; start < len(missing); start += objectCount {
 		pending, err := self.seal(receiptLog, request, missing[start:min(start+objectCount, len(missing))])
@@ -586,6 +591,8 @@ func (self *RecordReceipts) writeDocument(document *recordReceiptDocument) error
 // is sent. Refused with nothing sealed when this sidecar may not deposit there or no pin is known. A file that fails
 // to write leaves the entry journaled with none, which the next load takes up.
 func (self *RecordReceipts) seal(receiptLog *recordReceiptLog, request *RecordReceiptRequest, objects []recordReceiptObject) (*recordReceiptPending, error) {
+	self.writer.sealLock.Lock()
+	defer self.writer.sealLock.Unlock()
 	auth := self.writer.auth()
 	if !auth.Deposits(receiptLog.logId, self.writer.sidecarId) {
 		return nil, fmt.Errorf("%w: %s", ErrRecordReceiptNotDepositor, receiptLog.logId)
@@ -608,8 +615,11 @@ func (self *RecordReceipts) seal(receiptLog *recordReceiptLog, request *RecordRe
 	case !request.NoSession:
 		tainted = true
 	}
-	self.writer.sealLock.Lock()
-	defer self.writer.sealLock.Unlock()
+	if deposit, ok := recordLogMode(auth, self.writer.sidecarId, receiptLog.logId); ok && !deposit {
+		if err := self.writer.readyLog(receiptLog.logId); err != nil {
+			return nil, err
+		}
+	}
 	if err := self.writer.finishCaptureWithLock(); err != nil {
 		return nil, err
 	}
@@ -661,7 +671,7 @@ func (self *RecordReceipts) send(ctx context.Context, receiptLog *recordReceiptL
 		return fmt.Errorf("%w: seq %d in log %s: %w", ErrRecordReceiptRefused, pending.document.Seq, receiptLog.logId, err)
 	}
 	// the audit reader's second read, journaled before the read it reports may decrypt anything
-	if err := self.auditRead(receiptLog, pending); err != nil {
+	if err := self.auditRead(ctx, receiptLog, pending); err != nil {
 		return fmt.Errorf("%w: seq %d in log %s: the audit reader's read to the team record: %w", ErrRecordReceiptRefused, pending.document.Seq, receiptLog.logId, err)
 	}
 	self.committed(receiptLog, pending)
@@ -672,7 +682,7 @@ func (self *RecordReceipts) send(ctx context.Context, receiptLog *recordReceiptL
 // row. Nothing for any other reader, in a network with no team record, or once this receipt's file names one. The
 // receipt stays pending when this fails, so the read is refused and the next Deposit, which evs answers with the
 // commit it made, comes here again.
-func (self *RecordReceipts) auditRead(receiptLog *recordReceiptLog, pending *recordReceiptPending) error {
+func (self *RecordReceipts) auditRead(ctx context.Context, receiptLog *recordReceiptLog, pending *recordReceiptPending) error {
 	if pending.document.AuditSeq != 0 {
 		return nil
 	}
@@ -691,6 +701,9 @@ func (self *RecordReceipts) auditRead(receiptLog *recordReceiptLog, pending *rec
 	if !ok || pin == nil {
 		return fmt.Errorf("%w: the team record takes nothing from this sidecar", ErrRecordReceiptNotDepositor)
 	}
+	if err := writer.prepareLog(ctx, *teamRecordId); err != nil {
+		return err
+	}
 	body := &protocol.ReadBody{Purpose: pending.document.Purpose, ObjectIds: pending.document.ObjectIds, ReadLogId: receiptLog.logId.Bytes()}
 	if err := RecordBodyValidate(RecordKindRead, body); err != nil {
 		return fmt.Errorf("%w: %v", ErrRecordReceiptInvalid, err)
@@ -703,6 +716,15 @@ func (self *RecordReceipts) auditRead(receiptLog *recordReceiptLog, pending *rec
 	sealed, err := func() (*RecordSealedEntry, error) {
 		writer.sealLock.Lock()
 		defer writer.sealLock.Unlock()
+		deposit, ok = recordLogMode(writer.auth(), writer.sidecarId, *teamRecordId)
+		if !ok {
+			return nil, ErrRecordReceiptNotDepositor
+		}
+		if !deposit {
+			if err := writer.readyLog(*teamRecordId); err != nil {
+				return nil, err
+			}
+		}
 		if err := writer.finishCaptureWithLock(); err != nil {
 			return nil, err
 		}
