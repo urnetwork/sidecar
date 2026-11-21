@@ -21,7 +21,11 @@ import (
 func hostedRecordNote(t *testing.T, format2 bool) (*testUrFollowWorld, *sidecar.Sidecar, *sidecar.EvsClient, *sidecar.SidecarRecord, sidecar.Id, *sidecar.RecordEntryRef) {
 	t.Helper()
 	world := newTestUrFollowWorld(t, 1)
-	engines := enginenet.NewEngines(t, world.net, nil)
+	settings := enginenet.DefaultEnginesSettings()
+	if format2 {
+		settings.EvsInstanceFormat = sidecar.EvsRepoFormat2
+	}
+	engines := enginenet.NewEngines(t, world.net, settings)
 	network := world.networks[0]
 	engines.OpenNetwork(network.NetworkId())
 	if format2 {
