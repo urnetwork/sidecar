@@ -205,50 +205,62 @@ func (self *evsDepositStanding) deposit() (*EvsDeposit, error) {
 	}, nil
 }
 
-// A deposit ref's standing deposits after afterVersion, oldest first, each opened and given to visit with its body,
-// which visit reads before it returns. visit's error ends the read, and so does a deposit that does not open, as an
-// *EvsDepositOpenError naming it. A CONSUME of the ref this device sent and saw no
-// answer to goes again first.
-func (self *EvsRepo) ReadDeposits(ctx context.Context, depositorId Id, afterVersion uint64, visit func(deposit *EvsDeposit, body io.Reader) error) error {
+// Finishes this device's outstanding CONSUME, including its slot deletes, before walking the signed creations and
+// removals through the fresh head. The caller can account for a standing deposit even when its content cannot open.
+func (self *EvsRepo) standingDeposits(ctx context.Context, depositorId Id) ([]*evsDepositStanding, error) {
 	refId := EvsDepositRefId(self.repoId, depositorId)
 	if err := self.resumeConsume(ctx, refId); err != nil {
-		return err
+		return nil, err
 	}
 	head, err := self.readHeadAlone(ctx, refId, true)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	if head.Version != 0 && (head.Head.GetRefKind() != protocol.EvsRefKind_EVS_REF_DEPOSIT || !bytes.Equal(head.Head.GetOwnerSidecarId(), depositorId[:])) {
+		return nil, fmt.Errorf("%w: unexpected deposit ref", ErrEvsReplyInvalid)
 	}
 	cursor, err := self.depositCursor(refId)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if head.Version < cursor.Version {
-		// a history below what this device read, as after a re-seed: read the ref again from its first version
+	if head.Version < cursor.Version || (head.Version != 0 && head.Version == cursor.Version && !bytes.Equal(head.Chain[:], cursor.Chain)) {
+		// A re-seed can also reach the old height on a new chain before this device reads the deposits again.
 		cursor = &evsDepositCursor{}
 	}
 	if cursor.Version < head.Version {
 		chain := EvsChainStart(self.repoId, refId)
 		if cursor.Version != 0 {
 			if chain, err = EvsChainFromBytes(cursor.Chain); err != nil {
-				return fmt.Errorf("%w: a deposit cursor's chain", ErrSidecarStoreFailed)
+				return nil, fmt.Errorf("%w: a deposit cursor's chain", ErrSidecarStoreFailed)
 			}
 		}
 		walked, err := self.client.verifier.Walk(ctx, self.repoId, refId, cursor.Version, chain, head.Version)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if len(walked) == 0 || walked[len(walked)-1].Chain != head.Chain {
-			return fmt.Errorf("%w: a deposit ref's walk that does not reach its head", ErrEvsChainBroken)
+			return nil, fmt.Errorf("%w: a deposit ref's walk that does not reach its head", ErrEvsChainBroken)
 		}
 		if err := cursor.apply(walked); err != nil {
-			return err
+			return nil, err
 		}
 		cursor.Version, cursor.Chain = head.Version, head.Chain[:]
 		if err := self.writeStoreJson(self.depositFile(evsDepositCursorDirectory, refId), cursor); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	for _, standing := range slices.Clone(cursor.Standing) {
+	return cursor.Standing, nil
+}
+
+// A deposit ref's standing deposits after afterVersion, oldest first, each opened and given to visit with its body.
+// A CONSUME with an unknown outcome goes again first. A failed open names the deposit in an EvsDepositOpenError.
+func (self *EvsRepo) ReadDeposits(ctx context.Context, depositorId Id, afterVersion uint64, visit func(deposit *EvsDeposit, body io.Reader) error) error {
+	refId := EvsDepositRefId(self.repoId, depositorId)
+	deposits, err := self.standingDeposits(ctx, depositorId)
+	if err != nil {
+		return err
+	}
+	for _, standing := range deposits {
 		if standing.Version <= afterVersion {
 			continue
 		}
