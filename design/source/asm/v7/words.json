@@ -56,20 +56,20 @@
  {
   "num": 7,
   "code": "TEAM",
-  "words": 12713,
-  "code_words": 15069,
+  "words": 12831,
+  "code_words": 15094,
   "ceiling": 3500,
-  "over": 9213,
-  "over_pct": 263.2
+  "over": 9331,
+  "over_pct": 266.6
  },
  {
   "num": 8,
   "code": "ACL",
-  "words": 12985,
+  "words": 13041,
   "code_words": 5343,
   "ceiling": 3800,
-  "over": 9185,
-  "over_pct": 241.7
+  "over": 9241,
+  "over_pct": 243.2
  },
  {
   "num": 9,
