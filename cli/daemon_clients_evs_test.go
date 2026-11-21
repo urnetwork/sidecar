@@ -415,7 +415,7 @@ func TestDaemonsFirstNetworkStandsOnItsBaseOne(t *testing.T) {
 	if !running.Admitted() {
 		t.Fatal("the first device is not admitted at base 1")
 	}
-	testDaemonOwnerAclPlanAndConfirm(t, ctx, running, result, net.Fakes().Quota)
+	testDaemonOwnerAclPlanAndConfirm(t, ctx, running, result, net, engines)
 }
 
 // The daemon signs both bindings, rewraps and rotates through the real service, and restarts. Opening the
