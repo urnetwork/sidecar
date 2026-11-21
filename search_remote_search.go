@@ -78,9 +78,10 @@ type searchRemoteLeg struct {
 	holds   bool
 	untilMs int64
 	source  *searchRemoteSource
-	served  map[Id]bool
-	lost    map[Id]bool
-	refs    map[Id]Id
+	// Repos this leg won, and repos its indexer could serve that another leg won first.
+	served map[Id]bool
+	lost   map[Id]bool
+	refs   map[Id]Id
 	// the last page of status OK or PARTIAL: its checked_through_ms and phase
 	checkedThroughMs int64
 	phase            uint32
@@ -712,9 +713,7 @@ func (self *searchRemoteSearch) handle(event *searchRemoteLegEvent) []searchRemo
 		leg.checkedThroughMs, leg.phase = reply.GetCheckedThroughMs(), reply.GetPhase()
 		servedRepos := []Id{}
 		for repoId := range leg.served {
-			if !leg.lost[repoId] {
-				servedRepos = append(servedRepos, repoId)
-			}
+			servedRepos = append(servedRepos, repoId)
 		}
 		touched = append(touched, self.merge.moveSpan(leg.source, servedRepos, reply.GetCheckedThroughMs())...)
 	}
@@ -794,7 +793,7 @@ func (self *searchRemoteSearch) pageZero(leg *searchRemoteLeg, reply *protocol.S
 			self.merge.waitPin(leg.source, repoId, refId)
 		}
 	}
-	if len(leg.served) == 0 || len(leg.served) == len(leg.lost) {
+	if len(leg.served) == 0 {
 		// a leg that serves no repo is abandoned
 		leg.state = searchRemoteLegEnded
 		client.unwant(leg.indexerId, leg.searchId)
@@ -922,7 +921,7 @@ func (self *searchRemoteSearch) reopen(leg *searchRemoteLeg) []searchRemoteMerge
 	self.reopens += 1
 	repos := []Id{}
 	for _, repoId := range leg.repos {
-		if leg.served[repoId] && !leg.lost[repoId] && self.repos[repoId].servedBy == leg {
+		if leg.served[repoId] && self.repos[repoId].servedBy == leg {
 			repos = append(repos, repoId)
 		}
 	}
