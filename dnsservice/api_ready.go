@@ -73,8 +73,8 @@ type DnsCanaryVerdict struct {
 	ReportTime time.Time
 }
 
-// What GET ready reads beyond dns_root: the resolutions' dns_ns and dns_canary_verdict. dnshost.Store
-// implements it once MG5 holds those tables. Safe for concurrent use.
+// GET ready reads stopped nameservers and the latest monitor verdicts through dnshost.Canaries.
+// Implementations must be safe for concurrent use.
 type DnsReadyStore interface {
 	// The NS dns.yml lists that dns_ns marks stopped for root.
 	StoppedNs(ctx context.Context, root string) ([]string, error)

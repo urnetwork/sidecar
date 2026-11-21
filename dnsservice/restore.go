@@ -57,8 +57,7 @@ import (
 	"github.com/urnetwork/sidecar"
 )
 
-// The NS's running or stopped state cannot be kept, since dns_ns does not exist yet: the step keeps
-// counting the NS, plan-DNS-running-ns's interim and the closed direction.
+// A store that cannot persist a stop returns this error. The restore continues to count that NS.
 var ErrDnsNsStateUnavailable = errors.New("dns ns state unavailable")
 
 // The reason the step stops an NS with: it did not answer the SOA read.
