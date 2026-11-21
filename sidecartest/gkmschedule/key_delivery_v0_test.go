@@ -2,6 +2,8 @@ package gkmschedule
 
 import (
 	"bytes"
+	"errors"
+	"slices"
 	"testing"
 
 	"github.com/urnetwork/sidecar"
@@ -15,7 +17,6 @@ func TestKeyDeliveryLifecycleAfterRestartAndDeviceLoss(t *testing.T) {
 	world := NewFsKeysWorld(t, protocol.RepoKind_REPO_KIND_GENERAL)
 	world.Reconfigure(func(settings *gkmservice.GkmServiceSettings) { settings.DraftMls = false })
 	writer := world.AddMember("writer", false)
-	member := world.AddMember("reader", false)
 	agent := world.AddAgent("creator")
 	world.Grant(true, writer, agent)
 	world.Creator(agent)
@@ -29,14 +30,33 @@ func TestKeyDeliveryLifecycleAfterRestartAndDeviceLoss(t *testing.T) {
 	if first.Generation() != 1 || world.EpochObject(0) != nil || world.Generation(1).Rotate.GetLeafWrap() != nil {
 		t.Fatal("generation 1 must stand without an epoch")
 	}
+	member := world.AddMember("reader", true)
 	world.Grant(false, member)
 	world.Advance()
 	member.PublishReaderKey()
+	if _, err := member.Client.CurrentRepoKey(world.Ctx, world.RepoId); !errors.Is(err, sidecar.ErrGkmUnavailable) {
+		t.Fatalf("reading before the first wrap: %v", err)
+	}
+	if err := world.Engine.AwaitHints(world.Ctx); err != nil {
+		t.Fatal(err)
+	}
+	recipient := fsKeysRecipient(member.SidecarId())
+	if !slices.ContainsFunc(world.Hints(writer), func(hint *FsKeysHint) bool {
+		return hint.Hint.GetKind() == protocol.GkmHintKind_GKM_HINT_WRAP_PENDING && bytes.Equal(hint.Hint.GetGroupId(), world.GroupId.Bytes()) && string(hint.Hint.GetRecipient()) == recipient
+	}) {
+		t.Fatal("the reader's first key request did not wake the writer")
+	}
 	if err := writer.Client.SyncRepo(world.Ctx, world.RepoId); err != nil {
 		t.Fatal(err)
 	}
-	if err := writer.Client.DeliverFirstWrap(world.Ctx, world.RepoId, member.SidecarId()); err != nil {
+	if err := writer.Client.DeliverLate(world.Ctx, world.RepoId, recipient); err != nil {
 		t.Fatal(err)
+	}
+	if err := world.Engine.AwaitHints(world.Ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(world.Hints(member), world.pendingHint) {
+		t.Fatal("the written wrap did not wake the reader of the existing generation")
 	}
 	got, err := member.Client.CurrentRepoKey(world.Ctx, world.RepoId)
 	if err != nil || !bytes.Equal(got.Commitment(), first.Commitment()) {
