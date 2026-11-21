@@ -78,12 +78,19 @@ func (self *Sidecar) openMemberReplica(ctx context.Context, browserSignIn bool) 
 
 // The member replica this host opened, nil before enrollment or after close.
 func (self *Sidecar) MemberReplica() *MemberReplica {
-	self.memberReplicaLock.Lock()
-	defer self.memberReplicaLock.Unlock()
-	replica, _ := self.memberReplica.(*MemberReplica)
+	replica := self.registeredMemberReplica()
 	if replica == nil || replica.ctx.Err() != nil {
 		return nil
 	}
+	return replica
+}
+
+// A closed app replica still identifies the host as a member. Its components
+// cannot fall back to a previously attached raw EVS client while closing.
+func (self *Sidecar) registeredMemberReplica() *MemberReplica {
+	self.memberReplicaLock.Lock()
+	defer self.memberReplicaLock.Unlock()
+	replica, _ := self.memberReplica.(*MemberReplica)
 	return replica
 }
 
@@ -345,12 +352,13 @@ func (self *memberReplicaKeys) setScopes() {
 		return
 	}
 	subject := AclSidecarSubject(self.replica.identity.SidecarId)
+	now := self.replica.running.clock.Now()
 	var scopes []GkmRepoScope
 	for _, repoId := range acl.RepoIds() {
 		if !confirmed && repoId != configId {
 			continue
 		}
-		rights := acl.EvsAccess(subject, repoId, AclTokenAudienceGkm, self.replica.running.clock.Now()).Rights
+		rights := acl.EvsAccess(subject, repoId, AclTokenAudienceGkm, now).Rights
 		var role string
 		switch {
 		case rights.Has(AclEvsAdmin):
