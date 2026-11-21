@@ -136,6 +136,8 @@ func DefaultSidecarConfigFollowerSettings() *SidecarConfigFollowerSettings {
 
 // What a follower runs on beyond its Sidecar.
 type SidecarConfigFollowerArgs struct {
+	// A standalone top-level CLI device may propose Genesis on an empty log. The API checks its owner's membership.
+	BootstrapFirstOwner bool
 	// The config repo's head reader through evs: each base's head is checked by it, and the acl follower's local
 	// policy and the bridge's compile read heads through it. Nil holds every base withheld.
 	Heads ConfigHeadReader
@@ -624,8 +626,18 @@ func (self *SidecarConfigFollower) trustFirstUse(networkId Id) error {
 	ctx, cancel := context.WithTimeout(self.ctx, self.settings.AnchorReadTimeout)
 	defer cancel()
 	projection, err := self.sidecar.sidecarApi.ReadConfigProjection(ctx, 0)
-	if err != nil {
+	bootstrap := self.args.BootstrapFirstOwner && !self.sidecar.Paired()
+	if err != nil && !bootstrap {
 		return err
+	}
+	if projection == nil {
+		projection = &ConfigProjection{}
+	}
+	if bootstrap {
+		projection.SignedGenesis, err = self.firstOwnerGenesis(ctx, networkId, projection.SignedGenesis, err)
+		if err != nil {
+			return err
+		}
 	}
 	if len(projection.SignedGenesis) == 0 {
 		return errors.New("api serves no genesis yet")

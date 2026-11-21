@@ -112,6 +112,8 @@ type fakeApiClientBinding struct {
 
 // The core routes' state on FakeApi, under its stateLock.
 type fakeApiCoreState struct {
+	// Personal network owners, when a fixture exercises the owner's own CLI enrollment.
+	ownerUserIds map[sidecar.Id]sidecar.Id
 	// signs the tokens this api mints
 	tokenKey   []byte
 	authKeys   map[string]*fakeApiAuthKey
@@ -166,6 +168,7 @@ func newFakeApiCoreState() fakeApiCoreState {
 		refusedRefreshClientIds: map[sidecar.Id]bool{},
 		routeCounts:             map[string]int{},
 		newestTokens:            map[sidecar.Id]fakeApiTokenTimes{},
+		ownerUserIds:            map[sidecar.Id]sidecar.Id{},
 		clientTokens:            map[sidecar.Id][]string{},
 	}
 }
@@ -200,6 +203,13 @@ func (self *FakeApi) RouteCount(route string) int {
 	return self.core.routeCounts[route]
 }
 
+// Issues each personal-network client in this fixture the owner's real user_id claim.
+func (self *FakeApi) SetPersonalOwner(networkId sidecar.Id, userId sidecar.Id) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.core.ownerUserIds[networkId] = userId
+}
+
 // Mints client's token, as server signs a by_jwt: client_id, device_id, session_id, network_id, create_time,
 // strict_exp and admin_refused when client carries the mark (owner decision 291), iat, exp and a random jti. exp is
 // ClientTokenTimeout from now, §7.4's 7 days. The token maps to a copy of client.
@@ -217,6 +227,12 @@ func (self *FakeApi) mintClientToken(client *fakeApiClient) string {
 		"iat":         issuedAt.Unix(),
 		"exp":         expireTime.Unix(),
 		"jti":         sidecar.NewId().String(),
+	}
+	self.stateLock.Lock()
+	ownerId := self.core.ownerUserIds[minted.networkId]
+	self.stateLock.Unlock()
+	if ownerId != (sidecar.Id{}) {
+		claims["user_id"] = ownerId.String()
 	}
 	if minted.strictExp {
 		claims["strict_exp"] = true

@@ -71,7 +71,7 @@ func startUrScimSigner(running *sidecar.Sidecar, log sidecar.Logger) *sidecar.Si
 // Sidecar then runs unjudged, and the daemon's other networks are untouched. Nil when none started. A follower that
 // starts has the network's scim_signer started beside it (startUrScimSigner), which reads the state it installs.
 func startUrConfigFollower(running *sidecar.Sidecar, log sidecar.Logger) *sidecar.SidecarConfigFollower {
-	args := &sidecar.SidecarConfigFollowerArgs{Settings: urConfigFollowerSettings()}
+	args := &sidecar.SidecarConfigFollowerArgs{Settings: urConfigFollowerSettings(), BootstrapFirstOwner: true}
 	if urDaemonConfigHeads != nil {
 		args.Heads = urDaemonConfigHeads(running)
 	}
