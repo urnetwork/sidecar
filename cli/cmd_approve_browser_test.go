@@ -13,11 +13,18 @@ func TestApproveBrowserComparesSafetyAndSignsOnlyAfterTerminalYes(t *testing.T) 
 	target, mailbox, network, member := sidecar.NewId(), sidecar.NewId(), sidecar.NewId(), sidecar.NewId()
 	number := strings.Repeat("123456", 10)
 	decisions := make(chan urBrowserAdmission, 2)
+	requestedBurnerExpiry := make(chan int64, 1)
+	// A retry displays the earlier deadline retained by the signer, including its millisecond component.
+	retainedExpiry := time.Now().Add(59 * time.Minute).Truncate(time.Second).Add(321 * time.Millisecond).UnixMilli()
 	daemon := startTestUrDaemon(t, shortTestDirectory(t), func(daemon *sidecar.Daemon) {
 		preview := &sidecar.DaemonMethod{Name: urMethodBrowserPreview, Handler: func(ctx context.Context, call *sidecar.DaemonCall) (any, error) {
 			var args urBrowserAdmission
 			if err := decodeUrParams(call, &args); err != nil {
 				return nil, err
+			}
+			if args.Terms.Mode == sidecar.BrowserAdmissionBurner {
+				requestedBurnerExpiry <- args.Terms.NotAfterMs
+				args.Terms.NotAfterMs = retainedExpiry
 			}
 			return &sidecar.BrowserAdmissionPreview{Terms: args.Terms, SafetyNumber: number, NetworkId: network, MemberId: member}, nil
 		}}
@@ -71,9 +78,9 @@ func TestApproveBrowserComparesSafetyAndSignsOnlyAfterTerminalYes(t *testing.T) 
 				t.Fatalf("decision: %+v", args)
 			}
 			if row.mode == sidecar.BrowserAdmissionBurner {
-				deadline := args.Terms.NotAfterMs
-				if args.Network != "example" || args.Terms.MailboxId != mailbox || deadline < before.Add(time.Hour).UnixMilli() || deadline > time.Now().Add(time.Hour).UnixMilli() ||
-					!strings.Contains(screen, mailbox.String()) || !strings.Contains(screen, time.UnixMilli(deadline).Format(time.RFC3339Nano)) {
+				requested := <-requestedBurnerExpiry
+				if args.Network != "example" || args.Terms.MailboxId != mailbox || requested < before.Add(time.Hour).UnixMilli() || requested > time.Now().Add(time.Hour).UnixMilli() ||
+					args.Terms.NotAfterMs != retainedExpiry || !strings.Contains(screen, mailbox.String()) || !strings.Contains(screen, time.UnixMilli(retainedExpiry).Format(time.RFC3339Nano)) {
 					t.Fatalf("burner terms: %+v %q", args, screen)
 				}
 			}
