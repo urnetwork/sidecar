@@ -30,8 +30,6 @@ type MemberReplica struct {
 	upkeep         *GkmUpkeep
 	removeRecovery func()
 	follower       *SidecarConfigFollower
-	recordLock     sync.Mutex
-	record         *SidecarRecord
 	closeOnce      sync.Once
 }
 
@@ -140,12 +138,6 @@ func (self *MemberReplica) Close() {
 		if self.follower != nil {
 			self.follower.Close()
 		}
-		self.recordLock.Lock()
-		if self.record != nil {
-			self.record.Bind(nil, func() RecordAuthView { return RecordAuthUnavailable{} })
-			self.record = nil
-		}
-		self.recordLock.Unlock()
 		if self.evs != nil {
 			self.evs.Close()
 		}
@@ -226,30 +218,11 @@ func (self *MemberReplica) open() error {
 	// first self-verified genesis of this network for its admitter's safety-number comparison.
 	settings := DefaultSidecarConfigFollowerSettings()
 	settings.TrustFirstUse = self.trustFirstUse
-	self.follower, err = running.FollowConfig(&SidecarConfigFollowerArgs{Heads: self, Gkm: keys, Hints: self.hints, Settings: settings, beforeStanding: self.bindRecord})
+	self.follower, err = running.FollowConfig(&SidecarConfigFollowerArgs{Heads: self, Gkm: keys, Hints: self.hints, Settings: settings, RecordEvs: func() (*EvsClient, error) { return self.evs, nil }})
 	if err != nil {
 		return err
 	}
 	return self.follower.followIdentity(&self.identity)
-}
-
-// Opens the record streams and their receipt gate only after the enrolled anchor
-// has verified, and before either host can obtain the file client for a read.
-func (self *MemberReplica) bindRecord(config *ConfigClient) error {
-	self.recordLock.Lock()
-	defer self.recordLock.Unlock()
-	if self.ctx.Err() != nil {
-		return self.ctx.Err()
-	}
-	record, err := self.running.Record()
-	if err != nil {
-		return err
-	}
-	if err := record.BindMemberReplica(config, self.evs); err != nil {
-		return err
-	}
-	self.record = record
-	return nil
 }
 
 // A config head's verifier may need its previously verified rows while the initial anchor check is in progress.

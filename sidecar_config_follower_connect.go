@@ -42,3 +42,8 @@ func (self *MemberReplica) EvsComponent() *EvsComponent {
 func (self *MemberReplica) installRecovery(group *GkmGroupClient) {
 	self.removeRecovery = self.running.InstallNetworkRecovery(group)
 }
+
+// Runs the enrolled device’s record writer and resumes pending erasures with its client generation.
+func (self *SidecarConfigFollower) attachRecord(record *SidecarRecord) (func(), error) {
+	return self.sidecar.AddComponent(NewRecordComponent(record))
+}

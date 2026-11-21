@@ -32,3 +32,8 @@ func (self *MemberReplica) installRecovery(group *GkmGroupClient) {}
 func (self *SidecarConfigFollower) firstOwnerGenesis(_ context.Context, _ Id, served []byte, readErr error) ([]byte, error) {
 	return served, readErr
 }
+
+// HTTP members only read the record. The bound receipt and erasure readers share the follower’s authority.
+func (self *SidecarConfigFollower) attachRecord(record *SidecarRecord) (func(), error) {
+	return nil, nil
+}

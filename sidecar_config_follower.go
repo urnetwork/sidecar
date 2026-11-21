@@ -151,8 +151,8 @@ type SidecarConfigFollowerArgs struct {
 	ReportFork func(fork HeadFork)
 	// Nil is DefaultSidecarConfigFollowerSettings.
 	Settings *SidecarConfigFollowerSettings
-	// A member host installs its read receipt gate before publishing the verified client.
-	beforeStanding func(*ConfigClient) error
+	// The host’s file client, used to bind record reads, receipts, writes and erasures before publishing the verified config.
+	RecordEvs func() (*EvsClient, error)
 }
 
 // One network's config follower on its Sidecar (the file's comment).
@@ -568,9 +568,10 @@ func (self *SidecarConfigFollower) run(networkId Id, sidecarId Id) {
 		}
 		return
 	}
-	if bind := self.args.beforeStanding; bind != nil {
+	var removeRecord func()
+	if self.args.RecordEvs != nil {
 		for {
-			if err := bind(client); err == nil {
+			if removeRecord, err = self.bindRecord(client); err == nil {
 				break
 			} else {
 				self.moveTo(SidecarConfigFollowerCatchingUp, fmt.Sprintf("waiting for the member record binding: %v", err))
@@ -582,7 +583,7 @@ func (self *SidecarConfigFollower) run(networkId Id, sidecarId Id) {
 			}
 		}
 	}
-	self.stand(networkId, sidecarId, client)
+	self.stand(networkId, sidecarId, client, removeRecord)
 }
 
 // The anchor, asked again at a doubling interval while the keychain is locked or api serves no genesis to trust.
@@ -794,7 +795,7 @@ func (self *SidecarConfigFollower) refuseGenesis(anchored [sha256.Size]byte, ser
 
 // Standing: the authority installed, the acl follower started on an engine of its own, the key client let through, and
 // only then the state that makes Client answer. A follower that refused or closed meanwhile takes all of it back.
-func (self *SidecarConfigFollower) stand(networkId Id, sidecarId Id, client *ConfigClient) {
+func (self *SidecarConfigFollower) stand(networkId Id, sidecarId Id, client *ConfigClient, removeRecord func()) {
 	aclSettings := DefaultAclSettings()
 	if self.settings.Acl != nil {
 		copied := *self.settings.Acl
@@ -808,7 +809,13 @@ func (self *SidecarConfigFollower) stand(networkId Id, sidecarId Id, client *Con
 	}
 	engine := NewAclEngine(sidecarId, &sidecarConfigFollowerAclStates{client: client}, self.aclAlarm, self.settings.AclEngine)
 	testHookBarrier("sidecar_config_follower.stand.before", networkId.String())
-	removeAuthority := self.sidecar.InstallAuthority(client.Authority())
+	removeSigningAuthority := self.sidecar.InstallAuthority(client.Authority())
+	removeAuthority := func() {
+		removeSigningAuthority()
+		if removeRecord != nil {
+			removeRecord()
+		}
+	}
 	aclFollower, err := NewAclFollower(self.ctx, &AclFollowerArgs{
 		Source:   client,
 		Engine:   engine,
