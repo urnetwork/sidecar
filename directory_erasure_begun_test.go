@@ -18,7 +18,10 @@
 package sidecar_test
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"slices"
 	"testing"
 	"time"
@@ -552,4 +555,218 @@ func TestDirectoryFormat2ErasureAnotherRunnerEndedIsReadEnded(t *testing.T) {
 		t.Fatalf("%d CLOSUREs of the cards ref, %d rewrites, after the erasure ended", after-closures, seed.hooks.readDoneCount)
 	}
 	refs.Sweep()
+}
+
+// Whether the copy holds the request's erasure_request entry.
+func (self *testBegunSeed) holds(device *testDirectoryDevice) bool {
+	return slices.ContainsFunc(device.client.ErasureRequests(), func(request *sidecar.DirectoryErasureRequestView) bool {
+		return request.RequestId == self.requestId
+	})
+}
+
+// A compromise revocation of the request's signer, from the request's own push on, voids its signature while the card
+// waits for its writer, and the directory admin's device restarts: its reader, reading the log again, refuses the
+// request's entry, so the copy no longer holds the request, though the ERASEs naming it stand. The card's writer then
+// writes the run private, and the restarted device's pass works the request's ledger row all the same, by the repo and
+// marker version the row kept: it rewrites the card by CLOSURE and that CLOSURE's ERASE ends the erasure (QD-1169).
+// Before, a pass walked only the requests the copy holds, and the erasure stayed open for good.
+func TestDirectoryFormat2ErasureWhoseRequestARestartedReaderRefusedFinishes(t *testing.T) {
+	seed := newTestBegunSeed(t)
+	refs := seed.refs
+	if files := seed.admin.pass(t, seed.runner).Files[seed.requestId]; files == nil || files.Complete || !slices.Equal(files.WaitingPaths, []string{seed.cardPath}) {
+		t.Fatalf("the first pass: %+v", files)
+	}
+	seed.failCheck(t, testBegunVoided)
+	restarted := seed.world.restarted(seed.admin)
+	restartedRunner := testRefsRunner(t, restarted, seed.evs.bindRefs(restarted, refs))
+	pass := restarted.pass(t, restartedRunner)
+	if seed.holds(restarted) {
+		t.Fatal("the restarted copy holds the request whose signature a compromise revocation voided")
+	}
+	if files := pass.Files[seed.requestId]; files != nil || !slices.Equal(pass.Waiting, []sidecar.Id{seed.requestId}) {
+		t.Fatalf("the restarted device's pass with the card waiting: waiting %v, files %+v", pass.Waiting, files)
+	}
+	other := seed.otherMemberCard(t, refs)
+	other.writeRun(t, 2, true)
+
+	seed.writeRun(t, 2, true)
+	pass = restarted.pass(t, restartedRunner)
+	files := pass.Files[seed.requestId]
+	if len(pass.Erased) != 0 || files == nil || !files.Complete || !slices.Equal(files.ClosedPaths, []string{seed.cardPath}) || files.CutCount != 0 ||
+		len(files.WaitingPaths) != 0 {
+		t.Fatalf("the restarted device's pass after the card's writer wrote it private: erased %v, files %+v", pass.Erased, files)
+	}
+	if readable := seed.evs.readable(t, testErasureProject); len(readable) != 0 {
+		t.Fatalf("card versions naming the repo still open: %v", readable)
+	}
+	if readable := testReadableAt(t, seed.evs, testWindowOtherProject, other.cardPath); len(readable) == 0 {
+		t.Fatal("a card first met after the request left the copy lost its key")
+	}
+	if version := refs.ListedVersion(sidecar.DirectoryErasureTestCardsRef, seed.requestId, other.document); version != 0 {
+		t.Fatalf("a card first met after the request left the copy is cut at %d", version)
+	}
+	if _, _, complete := refs.Erases(seed.requestId); !complete {
+		t.Fatal("the erasure reads open after the card's ERASE")
+	}
+	refs.Sweep()
+	if files := restarted.pass(t, restartedRunner).Files[seed.requestId]; files != nil {
+		t.Fatalf("a pass after the erasure ended: %+v", files)
+	}
+}
+
+// The request's card waits for its writer past the sweep window, and past the request's 400 days the runner's own
+// retention expiry takes its erasure_request entry, so the copy no longer holds the request. The card's writer then
+// writes the run private, and the pass works the request's ledger row all the same, by the repo and marker version the
+// row kept: it rewrites the card by CLOSURE and that CLOSURE's ERASE ends the erasure (QD-1169). The row, first worked
+// past the ledger's 60-day hold ago, is not forgotten in the middle of the call that ends it, so no later pass makes it
+// again as newly begun and rewrites anything more. Before, the expired request was read no more and the erasure
+// stayed open for good.
+func TestDirectoryFormat2ErasureWhoseRequestEntryExpiredFinishes(t *testing.T) {
+	seed, admin, refs, erase := newTestErasureRefsSeed(t)
+	revocation := seed.revoke(t)
+	requestId := revocation.RequestId
+	cardPath := sidecar.DirectoryCardPath(seed.daemon.writer.sidecarId)
+	runner, err := sidecar.NewDirectoryErasureRunner(&sidecar.DirectoryErasureRunnerArgs{
+		Client: admin.client, Erase: erase, Raise: (&testErasureRaises{}).raise, Random: &testErasureDelay{},
+		Expire: func(ctx context.Context, directoryId sidecar.Id, hold func(entry *sidecar.RecordReadEntry) bool) error {
+			_, err := admin.record.Retention().Expire(ctx, &sidecar.RecordRetentionExpireArgs{LogId: directoryId, Hold: hold})
+			return err
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if files := admin.pass(t, runner).Files[requestId]; files == nil || files.Complete || !slices.Equal(files.WaitingPaths, []string{cardPath}) {
+		t.Fatalf("the first pass: %+v", files)
+	}
+	retention := sidecar.DefaultRecordRetentionSettings()
+	keep := time.Duration(retention.DirectoryKeepDays) * retention.Day
+	testAgeRequest(t, seed.world, admin, requestId, keep+time.Hour)
+	admin.pass(t, runner)
+	admin.pass(t, runner)
+	if slices.ContainsFunc(admin.client.ErasureRequests(), func(request *sidecar.DirectoryErasureRequestView) bool { return request.RequestId == requestId }) {
+		t.Fatal("the copy holds the request past its keep_days")
+	}
+
+	seed.writeRun(t, 2, true)
+	pass := admin.pass(t, runner)
+	files := pass.Files[requestId]
+	if len(pass.Erased) != 0 || files == nil || !files.Complete || !slices.Equal(files.ClosedPaths, []string{cardPath}) || files.CutCount != 0 ||
+		len(files.WaitingPaths) != 0 {
+		t.Fatalf("the pass after the card's writer wrote it private: erased %v, files %+v", pass.Erased, files)
+	}
+	if readable := seed.evs.readable(t, testErasureProject); len(readable) != 0 {
+		t.Fatalf("card versions naming the repo still open: %v", readable)
+	}
+	if _, _, complete := refs.Erases(requestId); !complete {
+		t.Fatal("the erasure reads open after the card's ERASE")
+	}
+	refs.Sweep()
+	ended, _, _ := refs.Erases(requestId)
+	for range 2 {
+		if files := admin.pass(t, runner).Files[requestId]; files != nil {
+			t.Fatalf("a pass after the erasure ended: %+v", files)
+		}
+	}
+	if after, _, _ := refs.Erases(requestId); after != ended {
+		t.Fatalf("%d ERASEs of the request after it ended", after-ended)
+	}
+}
+
+// Takes the repo and marker version out of every row of the ledger a device keeps, as a row written before they were
+// kept reads.
+func testErasureLedgerWithoutRepos(t *testing.T, device *testDirectoryDevice) {
+	t.Helper()
+	reader, err := device.store.Open("erasure_files")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := io.ReadAll(reader)
+	reader.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := map[string]any{}
+	if err := json.Unmarshal(content, &document); err != nil {
+		t.Fatal(err)
+	}
+	erasures, _ := document["erasures"].(map[string]any)
+	if len(erasures) == 0 {
+		t.Fatal("the ledger keeps no erasure")
+	}
+	for _, row := range erasures {
+		if _, ok := row.(map[string]any)["repo_id"]; !ok {
+			t.Fatal("a row of the ledger kept no repo")
+		}
+		delete(row.(map[string]any), "repo_id")
+		delete(row.(map[string]any), "marker_version")
+	}
+	content, err = json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer, err := device.store.Create("erasure_files")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	if _, err := writer.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Commit(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A row written before the ledger kept a request's repo and marker version, of a request a restarted reader refused
+// after a compromise revocation of its signer: where the row owes a rewrite and no path it met is owed a CLOSURE, the
+// pass works it from the ledger alone, reading no file, and the cards ref's rewrite that waited on the allowance runs
+// and ends the erasure; where the card it met still waits for its writer, which only a read of the sync's files could
+// judge, the row is left as it is and nothing is sent (QD-1169).
+func TestDirectoryFormat2ErasureRowWithNoRepoIsWorkedFromTheLedgerAlone(t *testing.T) {
+	cardsRef := sidecar.DirectoryErasureTestCardsRef
+	for _, waiting := range []bool{false, true} {
+		seed := newTestBegunSeed(t)
+		refs := seed.refs
+		if !waiting {
+			// the card goes at the first pass, while the cards ref's rewrite waits on the allowance
+			seed.writeRun(t, 2, true)
+			refs.RefuseNextClosure(cardsRef)
+		}
+		files := seed.admin.pass(t, seed.runner).Files[seed.requestId]
+		if files == nil || files.Complete || files.IndexWaiting == waiting || slices.Equal(files.WaitingPaths, []string{seed.cardPath}) != waiting {
+			t.Fatalf("waiting %t: the first pass: %+v", waiting, files)
+		}
+		seed.failCheck(t, testBegunVoided)
+		testErasureLedgerWithoutRepos(t, seed.admin)
+		restarted := seed.world.restarted(seed.admin)
+		restartedRunner := testRefsRunner(t, restarted, seed.evs.bindRefs(restarted, refs))
+		count, _, _ := refs.Erases(seed.requestId)
+
+		pass := restarted.pass(t, restartedRunner)
+		if seed.holds(restarted) {
+			t.Fatalf("waiting %t: the restarted copy holds the request", waiting)
+		}
+		files = pass.Files[seed.requestId]
+		after, _, complete := refs.Erases(seed.requestId)
+		switch {
+		case waiting:
+			if files != nil || len(pass.Waiting) != 0 || after != count || complete {
+				t.Fatalf("waiting %t: the pass of a row that cannot judge its card: waiting %v, files %+v, %d ERASEs more", waiting, pass.Waiting, files, after-count)
+			}
+			if readable := testReadableAt(t, seed.evs, testErasureProject, seed.cardPath); len(readable) == 0 {
+				t.Fatalf("waiting %t: the waiting card lost its key", waiting)
+			}
+		default:
+			if files == nil || !files.Complete || files.IndexPairCount == 0 || files.CutCount != 0 || len(files.ClosedPaths) != 0 || len(files.WaitingPaths) != 0 || !complete {
+				t.Fatalf("waiting %t: the pass from the ledger alone: files %+v, complete %t", waiting, files, complete)
+			}
+			for _, document := range [][]byte{seed.repoDocument, seed.runDocument} {
+				if readable := refs.Readable(cardsRef, document); len(readable) != 0 {
+					t.Fatalf("waiting %t: index versions holding %s still open: %v", waiting, document, readable)
+				}
+			}
+		}
+		refs.Sweep()
+	}
 }
