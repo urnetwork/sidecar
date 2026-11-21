@@ -332,10 +332,19 @@ type EvsCreateRepoArgs struct {
 	// the announcement, so no device announces the repo on its own. Asked of EvsClientArgs.PrivateCreate before the
 	// RepoCreate is filed, which refuses while the network's directory does not stand (QD-748).
 	Private bool
-	// A group inbox (§15.8): announced with requests closed and no roles offered.
+	// The role filed in RepoCreate. A group inbox is announced with requests closed and no roles offered.
+	Inbox protocol.RepoInbox
+	// GroupInbox selects the group role for callers predating the signed marker.
 	GroupInbox bool
 	// A person confirmed the creating command on /dev/tty or in an app's UI (§5.8).
 	Confirmed bool
+}
+
+func (self *EvsCreateRepoArgs) inboxRole() protocol.RepoInbox {
+	if self.Inbox == protocol.RepoInbox_REPO_INBOX_NONE && self.GroupInbox {
+		return protocol.RepoInbox_REPO_INBOX_GROUP
+	}
+	return self.Inbox
 }
 
 // A new random repo id: 16 random bytes, so the id says nothing of when or where it was made (§11.12's naming row).
@@ -356,6 +365,9 @@ func NewEvsRepoId() Id {
 func (self *EvsClient) CreateRepo(ctx context.Context, args *EvsCreateRepoArgs) (*EvsRepo, error) {
 	if args == nil || args.Kind == protocol.RepoKind_REPO_KIND_UNSPECIFIED {
 		return nil, fmt.Errorf("%w: a repo of no kind", errInvalidSettings)
+	}
+	if !aclRepoInboxFits(args.Kind, args.inboxRole()) {
+		return nil, fmt.Errorf("%w: invalid inbox role for repo kind", errInvalidSettings)
 	}
 	if !AclRepoKindOwnerFits(args.Kind, args.OwnerMemberId != nil) {
 		return nil, fmt.Errorf("%w: an owner member for an owner-bound kind and a Team scope's mailcfg alone", errInvalidSettings)
@@ -384,7 +396,7 @@ func (self *EvsClient) CreateRepo(ctx context.Context, args *EvsCreateRepoArgs) 
 			return repo, err
 		}
 	} else {
-		groupArgs := &GkmCreateGroupArgs{NetworkId: self.args.NetworkId, RepoId: repoId, Kind: args.Kind, OwnerMemberId: args.OwnerMemberId}
+		groupArgs := &GkmCreateGroupArgs{NetworkId: self.args.NetworkId, RepoId: repoId, Kind: args.Kind, Inbox: args.inboxRole(), OwnerMemberId: args.OwnerMemberId}
 		if _, err := self.args.Gkm.CreateGroup(ctx, groupArgs); err != nil {
 			return nil, fmt.Errorf("evs: the repo's group: %w", err)
 		}
@@ -399,7 +411,7 @@ func (self *EvsClient) CreateRepo(ctx context.Context, args *EvsCreateRepoArgs) 
 			OwnerMemberId: args.OwnerMemberId,
 			DisplayName:   args.DisplayName,
 			Private:       args.Private,
-			GroupInbox:    args.GroupInbox,
+			GroupInbox:    args.inboxRole() != protocol.RepoInbox_REPO_INBOX_NONE,
 			Confirmed:     args.Confirmed,
 		}
 		if err := self.args.RepoCreated(ctx, created); err != nil {
@@ -422,7 +434,7 @@ func (self *EvsClient) placeRepo(ctx context.Context, args *EvsCreateRepoArgs) (
 	}
 	for retryCount := 0; ; retryCount += 1 {
 		repoId := NewEvsRepoId()
-		create := &protocol.RepoCreate{RepoId: repoId.Bytes(), Kind: args.Kind}
+		create := &protocol.RepoCreate{RepoId: repoId.Bytes(), Kind: args.Kind, Inbox: args.inboxRole()}
 		if err := self.args.FileStatement(ctx, bridge.SignedType_SIGNED_REPO_CREATE, create); err != nil {
 			return Id{}, fmt.Errorf("evs: RepoCreate: %w", err)
 		}
