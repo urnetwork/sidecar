@@ -63,7 +63,8 @@ const (
 	evsFormat1PushFlags = uint32(protocol.EvsPushFlag_EVS_PUSH_FORCE) | uint32(protocol.EvsPushFlag_EVS_PUSH_DELETE) |
 		uint32(protocol.EvsPushFlag_EVS_PUSH_BASE) | uint32(protocol.EvsPushFlag_EVS_PUSH_IMMUTABLE) |
 		uint32(protocol.EvsPushFlag_EVS_PUSH_CONSUME) | uint32(protocol.EvsPushFlag_EVS_PUSH_PATH_EPOCH) |
-		uint32(protocol.EvsPushFlag_EVS_PUSH_ERASE) | uint32(protocol.EvsPushFlag_EVS_PUSH_CLOSURE)
+		uint32(protocol.EvsPushFlag_EVS_PUSH_ERASE) | uint32(protocol.EvsPushFlag_EVS_PUSH_CLOSURE) |
+		uint32(protocol.EvsPushFlag_EVS_PUSH_EXACT_HEAD)
 	evsFormat2PushFlags = uint32(protocol.EvsPushFlag_EVS_PUSH_DROP) | uint32(protocol.EvsPushFlag_EVS_PUSH_CUT) |
 		uint32(protocol.EvsPushFlag_EVS_PUSH_COMPLETION)
 	// A completion ERASE's flags: ERASE with COMPLETION and no other (§11.12's push row; QD-1137).
@@ -199,6 +200,9 @@ func (self *EvsStatement) checkShape(format2 bool) error {
 	}
 	hasFlag := func(flag protocol.EvsPushFlag) bool {
 		return flags&uint32(flag) != 0
+	}
+	if hasFlag(protocol.EvsPushFlag_EVS_PUSH_EXACT_HEAD) && protocol.EvsRefMode(push.GetRefMode()) != protocol.EvsRefMode_EVS_REF_FILE {
+		return fmt.Errorf("%w: exact head requires file mode", ErrEvsPushInvalid)
 	}
 	for name, value := range map[string][]byte{
 		"sealed_metadata_sha256": push.GetSealedMetadataSha256(), "new_objects_sha256": push.GetNewObjectsSha256(),

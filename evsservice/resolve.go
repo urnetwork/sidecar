@@ -95,7 +95,7 @@ func EvsPushStandingInPrefix(ctx context.Context, head *protocol.EvsHead, pushId
 	}
 
 	// the versions of (b, b+64] the window no longer holds, git mode only b+1
-	last := baseVersion + evsFileModeBaseWindow + 1
+	last := baseVersion + sidecar.DefaultEvsFormatSettings().FileBaseMaxLag + 1
 	if gitMode {
 		last = baseVersion + 1
 	}
@@ -237,7 +237,7 @@ func ResolveBatchRecord(ctx context.Context, record *sidecar.EvsBatchRecord, hea
 	if standing.Committed {
 		return &EvsResolution{State: EvsResolveCommitted, Version: standing.Version, Place: standing.Place}, nil
 	}
-	bound := push.GetBaseVersion() + evsFileModeBaseWindow + 1
+	bound := push.GetBaseVersion() + sidecar.DefaultEvsFormatSettings().FileBaseMaxLag + 1
 	if gitMode {
 		bound = push.GetBaseVersion() + 1
 	}
