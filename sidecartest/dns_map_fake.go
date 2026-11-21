@@ -127,6 +127,9 @@ func (self *FakeDnsCustomHostMapStore) raiseForRestore(incidentId sidecar.Id) (u
 		self.hostVersions[host] = version
 		delete(self.hostReadyTimes, host)
 	}
+	for _, lbInterface := range self.interfaces {
+		lbInterface.Restore = &dnsservice.DnsMapRestoreReport{Version: version}
+	}
 	self.incidentVersions[incidentId] = version
 	return version, true, self.restoreRaiseHook
 }

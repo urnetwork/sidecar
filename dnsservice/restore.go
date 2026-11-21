@@ -392,28 +392,33 @@ func (self *RestoreStep) awaitMapReports(ctx context.Context, root string, progr
 		added = []string{}
 		dropped = []string{}
 		reportedCount := 0
+		expectedCount := 0
 		for _, lbInterface := range state.Interfaces {
-			if lbInterface.ReportedVersion < progress.MapVersion {
+			if lbInterface.Restore == nil || lbInterface.Restore.Version != progress.MapVersion {
+				continue
+			}
+			expectedCount++
+			if !lbInterface.Restore.Received {
 				continue
 			}
 			reportedCount += 1
-			added = append(added, lbInterface.AddedHosts...)
-			dropped = append(dropped, lbInterface.DroppedHosts...)
+			added = append(added, lbInterface.Restore.Added...)
+			dropped = append(dropped, lbInterface.Restore.Dropped...)
 		}
 		slices.Sort(added)
 		slices.Sort(dropped)
 		added = slices.Compact(added)
 		dropped = slices.Compact(dropped)
 		progress.MapReportedCount = reportedCount
-		progress.MapInterfaceCount = len(state.Interfaces)
-		if len(state.Interfaces) <= reportedCount {
+		progress.MapInterfaceCount = expectedCount
+		if expectedCount <= reportedCount {
 			return added, dropped, nil
 		}
 		select {
 		case <-ctx.Done():
 			return nil, nil, ctx.Err()
 		case <-waitEnded:
-			self.log.Warningf("[dns]restore: %d of %d interfaces reported the restored map; a rerun lists what comes later", reportedCount, len(state.Interfaces))
+			self.log.Warningf("[dns]restore: %d of %d interfaces reported the restored map; a rerun lists what comes later", reportedCount, expectedCount)
 			return added, dropped, nil
 		case <-self.clock.After(dnsSeconds(self.settings.Restore.PollSeconds)):
 		}
@@ -450,6 +455,9 @@ func (self *RestoreStep) awaitServed(ctx context.Context, root string, progress 
 		progress.StoppedNs = stillStopped
 		running := slices.DeleteFunc(slices.Clone(self.settings.Ns), func(ns string) bool { return slices.Contains(stillStopped, ns) })
 		progress.WaitingNs = slices.DeleteFunc(slices.Clone(running), serving)
+		if len(running) == 0 {
+			progress.WaitingNs = slices.Clone(self.settings.Ns)
+		}
 		if len(progress.WaitingNs) == 0 {
 			return running, nil
 		}
