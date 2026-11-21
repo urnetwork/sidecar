@@ -96,6 +96,7 @@ func searchRemoteConfigVerdict(state *ConfigState, selfId Id, requesterId Id, re
 	return searchRemoteConfigVerdictAt(state, selfId, requesterId, repoId, services, state.timeMs)
 }
 
+// Checks reader and share eligibility at the supplied time before applying the signed indexer scope.
 func searchRemoteConfigVerdictAt(state *ConfigState, selfId, requesterId, repoId Id,
 	services func(indexer ConfigIndexer) ([]protocol.IndexerService, bool), atMs int64) (protocol.SearchServed, bool) {
 	acl, err := state.Acl()

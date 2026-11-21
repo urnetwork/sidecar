@@ -1,5 +1,6 @@
 //go:build !sidecar_http && !ios_extension
 
+// Remote search resolves host identity and indexer designations from the enrolled network's local state.
 package sidecar
 
 import "github.com/urnetwork/sidecar/protocol"
@@ -11,6 +12,7 @@ type searchRemoteHostAuthority struct {
 	services  func(ConfigIndexer) ([]protocol.IndexerService, bool)
 }
 
+// Binds indexer service decryption to the config keys this sidecar holds for the network.
 func newSearchRemoteHostAuthority(running *Sidecar, networkId Id) *searchRemoteHostAuthority {
 	source := &searchRemoteHostAuthority{running: running, networkId: networkId}
 	source.services = ConfigIndexerServicesOpener(source.configKeyAt)
@@ -51,6 +53,7 @@ func (self *searchRemoteHostAuthority) configKeyAt(generation uint64) *EvsRepoKe
 	return key
 }
 
+// Returns the current sidecar identity only while it belongs to the enrolled network.
 func (self *searchRemoteHostAuthority) selfId() (Id, bool) {
 	identity := self.running.currentIdentity()
 	if identity == nil || identity.NetworkId != self.networkId {

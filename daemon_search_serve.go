@@ -295,6 +295,7 @@ func (self *searchServeComponent) handle(ctx context.Context, request *Subprotoc
 	return self.handleWith(ctx, request, self.serve.Handler)
 }
 
+// Rechecks designation before dispatch, counts served pages and records refusals by protocol code.
 func (self *searchServeComponent) handleWith(ctx context.Context, request *SubprotocolRequest, handler SubprotocolHandler) ([]byte, error) {
 	stats := &self.sidecar.stats
 	if !self.designated() {

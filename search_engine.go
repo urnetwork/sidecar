@@ -627,6 +627,7 @@ func (self *searchEngineStream) scopeEnded() bool {
 	return searchReposEnded(self.repoEnds) || slices.ContainsFunc(self.validScope, func(valid func() bool) bool { return !valid() })
 }
 
+// Reports whether any repo in the query has invalidated its readers, without waiting for a change.
 func searchReposEnded(ends []<-chan struct{}) bool {
 	for _, end := range ends {
 		select {

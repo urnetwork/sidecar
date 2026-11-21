@@ -909,6 +909,7 @@ func (self *RecordEvsStreams) readWriterStream(ctx context.Context, writer *reco
 	return err
 }
 
+// Replays the verified stream, collecting surviving entries by version or visiting files individually for writer recovery.
 func (self *RecordEvsStreams) readStream(ctx context.Context, repoId Id, writerSidecarId Id, afterVersion uint64, writer *recordWriterStreamRead) ([]*RecordStreamVersion, error) {
 	repo := self.client.Repo(repoId)
 	refId, err := repo.resolveRefId(ctx, RecordStreamRefName(writerSidecarId), nil)
