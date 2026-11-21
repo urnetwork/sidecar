@@ -31,9 +31,13 @@ import (
 	"github.com/urnetwork/sidecar"
 )
 
-// The next CUT each index ref of a device refuses, by ref name, as a full set or a kill would.
+// The next CUT each index ref of a device refuses, by ref name, as a full set or a kill would; and the refs whose next
+// rewrite reads its erasure complete with nothing left to rewrite there, as the eraser answers then, sending nothing,
+// with how many rewrites answered so.
 type testWindowHooks struct {
-	refuseCut map[string]error
+	refuseCut     map[string]error
+	readDone      map[string]bool
+	readDoneCount int
 }
 
 // One index ref's eraser of one call, hooked.
@@ -49,6 +53,15 @@ func (self *testWindowIndex) Cut(ctx context.Context, args *sidecar.IndexCutArgs
 		return nil, err
 	}
 	return self.DirectoryErasureIndex.Cut(ctx, args)
+}
+
+func (self *testWindowIndex) Rewrite(ctx context.Context, args *sidecar.IndexRewriteArgs) (*sidecar.IndexRewriteResult, error) {
+	if self.hooks.readDone[self.ref] {
+		delete(self.hooks.readDone, self.ref)
+		self.hooks.readDoneCount += 1
+		return &sidecar.IndexRewriteResult{Erasure: &sidecar.SidecarErasure{ErasureId: args.ErasureId, State: sidecar.SidecarErasureDone}, Attempts: 1}, nil
+	}
+	return self.DirectoryErasureIndex.Rewrite(ctx, args)
 }
 
 // A device's reach with both index refs' erasers hooked.
@@ -75,7 +88,7 @@ func (self *testWindowFiles) StreamsIndex(ctx context.Context, repoId sidecar.Id
 
 // Binds device's format-2 erasers to files with both index refs hooked.
 func testBindWindow(device *testDirectoryDevice, files sidecar.DirectoryErasureFiles) *testWindowHooks {
-	hooks := &testWindowHooks{refuseCut: map[string]error{}}
+	hooks := &testWindowHooks{refuseCut: map[string]error{}, readDone: map[string]bool{}}
 	device.client.BindErasureFiles(&testWindowFiles{DirectoryErasureFiles: files, hooks: hooks})
 	return hooks
 }
@@ -189,7 +202,7 @@ func TestDirectoryFormat2RewriteWaitingOnTheAllowanceFinishesPastTheWindow(t *te
 	pass := seed.admin.pass(t, seed.runner)
 	files = pass.Files[seed.requestId]
 	if len(pass.Erased[seed.requestId]) != 0 || files == nil || files.CutCount != 0 || files.IndexPairCount == 0 || files.IndexWaiting ||
-		files.Complete || !slices.Equal(files.WaitingPaths, []string{seed.cardPath}) || len(files.ClosedPaths) != 0 || len(files.UnclosedPaths) != 0 {
+		files.Complete || !slices.Equal(files.WaitingPaths, []string{seed.cardPath}) || len(files.ClosedPaths) != 0 {
 		t.Fatalf("the pass past the window: erased %v, files %+v", pass.Erased[seed.requestId], files)
 	}
 	if version := refs.ListedVersion(cardsRef, seed.requestId, other.document); version != 0 {
@@ -215,7 +228,7 @@ func TestDirectoryFormat2RewriteWaitingOnTheAllowanceFinishesPastTheWindow(t *te
 	pass = seed.admin.pass(t, seed.runner)
 	files = pass.Files[seed.requestId]
 	if len(pass.Erased[seed.requestId]) != 0 || files == nil || !slices.Equal(files.ClosedPaths, []string{seed.cardPath}) || !files.Complete ||
-		files.CutCount != 0 || files.IndexPairCount != 0 || len(files.WaitingPaths) != 0 || len(files.UnclosedPaths) != 0 {
+		files.CutCount != 0 || files.IndexPairCount != 0 || len(files.WaitingPaths) != 0 {
 		t.Fatalf("the pass after both writers wrote their runs private past the window: erased %v, files %+v", pass.Erased[seed.requestId], files)
 	}
 	if after := seed.evs.cardClosures(); len(after) != closures+1 || after[len(after)-1].path != seed.cardPath || after[len(after)-1].erasureId != seed.requestId {
@@ -268,7 +281,7 @@ func TestDirectoryFormat2CardMetInsideTheWindowIsRewrittenPastIt(t *testing.T) {
 	pass := seed.admin.pass(t, seed.runner)
 	files := pass.Files[seed.requestId]
 	if len(pass.Erased[seed.requestId]) != 0 || files == nil || files.CutCount != 0 || files.IndexPairCount == 0 || files.IndexWaiting ||
-		!files.Complete || !slices.Equal(files.ClosedPaths, []string{seed.cardPath}) || len(files.WaitingPaths) != 0 || len(files.UnclosedPaths) != 0 {
+		!files.Complete || !slices.Equal(files.ClosedPaths, []string{seed.cardPath}) || len(files.WaitingPaths) != 0 {
 		t.Fatalf("the pass past the window: erased %v, files %+v", pass.Erased[seed.requestId], files)
 	}
 	if after := len(seed.evs.cardClosures()); after != closures+1 {
@@ -377,6 +390,51 @@ func TestDirectoryFormat2CutAFullSetRefusedNearTheWindowsEndIsSentPastIt(t *test
 	seed.slotRewritten(t)
 }
 
+// The sweep's later-signed card, cut inside the window, waits for its writer, which then writes its card again without
+// the run, announcing another run that names no repo: the card's standing version no longer holds the document, so
+// the pass rewrites it by CLOSURE and that CLOSURE's ERASE ends the erasure, inside the window and past it alike
+// (§16.11's closure row, "or left it out"; QD-1166). Before, a card its writer left the run out of was never read
+// again, so its earlier versions kept their key and the erasure stayed open.
+func TestDirectoryFormat2CardWhoseWriterLeftTheRunOutIsRewritten(t *testing.T) {
+	for _, past := range []bool{false, true} {
+		seed := newTestDroppedSeed(t)
+		refs := seed.refs
+		files := seed.admin.pass(t, seed.runner).Files[seed.requestId]
+		if files == nil || files.CutCount != 1 || files.IndexPairCount == 0 || files.Complete || !slices.Equal(files.WaitingPaths, []string{seed.cardPath}) {
+			t.Fatalf("past %t: the sweep's pass: %+v", past, files)
+		}
+		seed.slotRewritten(t)
+		if past {
+			testAgeRequest(t, seed.world, seed.admin, seed.requestId, testSweepWindow()+time.Hour)
+		}
+		closures := len(seed.evs.cardClosures())
+
+		world := seed.world
+		world.clock.Advance(time.Minute)
+		world.publish()
+		seed.daemon.writeCard(t, testRunItem(seed.daemon.writer.sidecarId, &seed.memberId, sidecar.NewId(), 1, world.clock.Now().UnixMilli()))
+		pass := seed.admin.pass(t, seed.runner)
+		files = pass.Files[seed.requestId]
+		if len(pass.Erased[seed.requestId]) != 0 || files == nil || !slices.Equal(files.ClosedPaths, []string{seed.cardPath}) || !files.Complete ||
+			files.CutCount != 0 || len(files.WaitingPaths) != 0 {
+			t.Fatalf("past %t: the pass after the run was left out: erased %v, files %+v", past, pass.Erased[seed.requestId], files)
+		}
+		if after := seed.evs.cardClosures(); len(after) != closures+1 || after[len(after)-1].path != seed.cardPath {
+			t.Fatalf("past %t: %d CLOSUREs of the cards ref after the run was left out", past, len(after)-closures)
+		}
+		if readable := seed.evs.readable(t, testErasureProject); len(readable) != 0 {
+			t.Fatalf("past %t: card versions naming the repo still open: %v", past, readable)
+		}
+		if _, _, complete := refs.Erases(seed.requestId); !complete {
+			t.Fatalf("past %t: the erasure reads open after the CLOSURE's ERASE", past)
+		}
+		refs.Sweep()
+		if files := seed.admin.pass(t, seed.runner).Files[seed.requestId]; files != nil {
+			t.Fatalf("past %t: a pass after the erasure ended: %+v", past, files)
+		}
+	}
+}
+
 // After a revocation completed, the card's writer signs its run naming the repo again past the window, and the card's
 // push enters its document in the cards ref's index. The ledger owes the request nothing, so the pass sends nothing for
 // it: no CUT lists the later version, the erasure stays complete, and the document stands in its slot, a copy the
@@ -448,7 +506,7 @@ func TestDirectoryFormat2OrphanedClosureNearTheWindowsEndIsErasedPastIt(t *testi
 	pass := admin.pass(t, runner)
 	files := pass.Files[requestId]
 	if len(pass.Erased[requestId]) != 0 || files == nil || files.ErasedKeyCount == 0 || !files.Complete || files.CutCount != 0 ||
-		len(files.ClosedPaths) != 0 || len(files.UnclosedPaths) != 0 {
+		len(files.ClosedPaths) != 0 {
 		t.Fatalf("the pass past the window: erased %v, files %+v", pass.Erased[requestId], files)
 	}
 	if readable := evs.readable(t, testErasureProject); len(readable) != 0 {
