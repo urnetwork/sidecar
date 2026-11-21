@@ -262,7 +262,7 @@ func (self *gkmGroupManager) formedGroupId(ctx context.Context) (Id, error) {
 	}
 	signedForms := forms.GetForms()
 	if len(signedForms) == 0 {
-		return Id{}, fmt.Errorf("%w: gkm holds no group for the repo", ErrGkmKeyMissing)
+		return Id{}, errGkmGroupUnformed
 	}
 	form := &protocol.GroupForm{}
 	if err := proto.Unmarshal(signedForms[len(signedForms)-1].GetBody(), form); err != nil {
@@ -1022,7 +1022,7 @@ func (self *GkmGroupClient) rebindRecovery(ctx context.Context, args *GkmRecover
 		if err != nil {
 			return err
 		}
-		if holders.Contains(GkmHolderRecovery, args.MemberId.Bytes()) {
+		if holders.Contains(GkmHolderRecovery, args.MemberId.Bytes()) && gkmHolderOrCovered(state, holders, repoId, self.args.SidecarId, now) {
 			memberRepoIds = append(memberRepoIds, repoId)
 		}
 	}
@@ -1036,7 +1036,11 @@ func (self *GkmGroupClient) rebindRecovery(ctx context.Context, args *GkmRecover
 			err := manager.rewrapRecoveryInFlow(ctx, state, api, args)
 			manager.flowLock.Unlock()
 			if err != nil {
-				// the retired binding's wraps stand until every new one does
+				// Another device may hold this group's latest key. Contribute to the remaining groups
+				// before asking the service to verify the member's complete set of winners.
+				if self.args.RecoveryKeyAt != nil && (gkmLeafWaits(err) || IsGkmStatus(err, http.StatusNotFound)) {
+					continue
+				}
 				return err
 			}
 		}
@@ -1087,14 +1091,13 @@ func (self *GkmGroupClient) rebindRecovery(ctx context.Context, args *GkmRecover
 		switch {
 		case err == nil && rotated, errors.Is(err, ErrGkmNotWriter):
 		case err == nil:
+		case self.args.RecoveryKeyAt != nil && (errors.Is(err, errGkmGroupUnformed) || IsGkmStatus(err, http.StatusNotFound)):
+			// There is no winning generation to rotate. The member-wide check still covers every formed repo.
 		case gkmLeafWaits(err) || errors.Is(err, ErrGkmAuthAhead) || gkmUnreachable(ctx, err):
 			waits = append(waits, err)
 		default:
 			return err
 		}
-	}
-	if 0 < len(waits) {
-		return fmt.Errorf("%w: %d of the rebind's rotations wait: %w", ErrGkmWait, len(waits), waits[0])
 	}
 	if coverage, ok := api.(interface {
 		CheckRecoveryCoverage(context.Context, Id, []byte) error
@@ -1108,6 +1111,9 @@ func (self *GkmGroupClient) rebindRecovery(ctx context.Context, args *GkmRecover
 			}
 			return err
 		}
+	}
+	if 0 < len(waits) {
+		return fmt.Errorf("%w: %d of the rebind's rotations wait: %w", ErrGkmWait, len(waits), waits[0])
 	}
 	if err := self.args.Secrets.Put(gkmRecoveryRebindDone, args.New.BindingKeySha256); err != nil {
 		return err
