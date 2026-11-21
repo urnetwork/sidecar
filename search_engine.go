@@ -281,7 +281,7 @@ func (self *SearchEngine) RunBackgroundSync(ctx context.Context) error {
 	if self.background == nil {
 		return ErrSidecarSearchUnavailable
 	}
-	if _, err := self.args.Scope.Repos(ctx); err != nil {
+	if err := self.refreshScope(ctx, nil); err != nil {
 		return err
 	}
 	return self.background.RunBackgroundSync(ctx)
@@ -592,7 +592,7 @@ func (self *searchEngineStream) open(ctx context.Context, scoped []*searchScoped
 		}
 		confirmer := &searchConfirmer{
 			query: self.query, filters: self.filters, normalizer: self.normalizer, registry: searchRegistryOf(entry.repo.Kind),
-			settings: engine.results, repoId: repoId,
+			settings: engine.results, repoId: repoId, acceptRow: entry.repo.acceptRow,
 		}
 		if engine.args.Text != nil {
 			confirmer.text = engine.args.Text(repoId, refId)

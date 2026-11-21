@@ -193,9 +193,6 @@ func (self *memberRecordSearchScan) document(entry *RecordReadEntry) (*SearchSca
 	if entry == nil {
 		return nil, nil
 	}
-	if policy := self.policy[entry.Kind().Class()]; policy != nil && policy.SearchableDays != 0 && !self.now.Before(time.UnixMilli(entry.PushTimeMillis).Add(memberSearchAge(policy.SearchableDays, self.day))) {
-		return nil, nil
-	}
 	var newest *RecordEntryCopy
 	for _, copy := range entry.Copies {
 		if copy.StreamSidecarId == self.writer && (newest == nil || newest.Version < copy.Version) {
@@ -203,6 +200,10 @@ func (self *memberRecordSearchScan) document(entry *RecordReadEntry) (*SearchSca
 		}
 	}
 	if newest == nil || newest.Path == "" || newest.Version == 0 || newest.TimeMillis <= 0 {
+		return nil, nil
+	}
+	if policy := self.policy[entry.Kind().Class()]; policy != nil && policy.SearchableDays != 0 &&
+		uint64(newest.TimeMillis/1000) < searchSearchableSinceSeconds(self.now.UnixMilli(), memberSearchAge(policy.SearchableDays, self.day)) {
 		return nil, nil
 	}
 	signer, err := IdFromBytes(entry.Header.Header.GetWriterSidecarId())
@@ -226,10 +227,6 @@ func (self *Sidecar) BindSearchWrites(evs *EvsClient) error {
 	writer, err := newIndexWriter(&indexWriterArgs{client: evs, settings: format, clock: self.clock, log: self.log,
 		store:   func(repo *EvsRepo, name []byte) indexRefStore { return newIndexEvsStore(repo, name, false) },
 		isAdmin: func(repo Id) func(*indexFileVersion) bool { judge, _ := evs.Repo(repo).indexAdmins(); return judge },
-		groupInbox: func(repo Id) bool {
-			state, err := evs.verifier.config()
-			return err == nil && state != nil && AclRepoIsInbox(state.Repo(repo))
-		},
 		mayMerge: func() bool {
 			conditions, _ := self.SearchConditions()
 			fg, _ := self.SearchForeground()

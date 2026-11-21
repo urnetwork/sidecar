@@ -366,7 +366,7 @@ func (self *searchEngineRemoteView) openRef(ctx context.Context, ask searchRemot
 	}
 	confirmer := &searchConfirmer{
 		query: self.query, filters: filters, normalizer: normalizer, registry: searchRegistryOf(repo.Kind),
-		settings: engine.results, repoId: repo.RepoId,
+		settings: engine.results, repoId: repo.RepoId, acceptRow: repo.acceptRow,
 	}
 	if text && engine.args.Text != nil {
 		confirmer.text = engine.args.Text(repo.RepoId, ref.RefId)

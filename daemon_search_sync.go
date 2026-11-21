@@ -144,7 +144,7 @@ func searchSyncNow(ctx context.Context, engine *SearchEngine, state func() (*Sid
 		}
 		reply.Policy = params.Policy
 	}
-	if _, err := engine.args.Scope.Repos(ctx); err != nil {
+	if err := engine.refreshScope(ctx, repoId); err != nil {
 		return nil, err
 	}
 	for _, key := range engine.args.Sync.followedRefs(repoId) {

@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -122,7 +123,7 @@ func (self *memberSearchHost) open() (*SearchEngine, error) {
 	}
 	source.syncer, source.policy = syncer, policy
 	engine, err := NewSearchEngine(&SearchEngineArgs{Settings: settings, Cache: cache, Sync: syncer, Policy: policy, Format: format, Scope: source, Gkm: memberSearchKeys{running: running},
-		Scan: source.scan, Members: source.memberSidecars, Events: running.searchEvents(), Clock: running.clock, Log: running.log})
+		Scan: source.scan, Members: source.memberSidecars, Join: source, Events: running.searchEvents(), Clock: running.clock, Log: running.log})
 	if err != nil {
 		syncer.Close()
 		return nil, err
@@ -212,6 +213,7 @@ func (self *memberSearchSource) Repos(ctx context.Context) ([]*SearchScopeRepo, 
 		}
 		rights := acl.EvsAccess(subject, id, AclTokenAudienceEvs, now).Rights
 		repo := &SearchScopeRepo{RepoId: id, Kind: row.Kind, GroupInbox: AclRepoIsInbox(row), Readable: rights.Has(AclEvsRead), DepositOnly: !rights.Has(AclEvsRead) && rights.Has(AclEvsDeposit)}
+		repo.acceptRow = func(row *indexRow) bool { return memberSearchIndexRow(repo, row) }
 		if !repo.Readable && !repo.DepositOnly {
 			continue
 		}
@@ -234,6 +236,17 @@ func (self *memberSearchSource) Repos(ctx context.Context) ([]*SearchScopeRepo, 
 		repo.Refs, err = self.refs(repo, len(row.GetPrefixRules()) == 0, live)
 		if err != nil {
 			return nil, err
+		}
+		if repo.GroupInbox || repo.Kind == protocol.RepoKind_REPO_KIND_MAILBOX {
+			mail := self.heldMail(id)
+			if mail == nil {
+				for _, ref := range repo.Refs {
+					ref.Unbuilt = true
+				}
+			} else {
+				authorized := repo.valid
+				repo.valid = func() bool { return authorized() && mail() }
+			}
 		}
 		if repo.Kind == protocol.RepoKind_REPO_KIND_DIRECTORY {
 			age, policy := self.directoryAge(id)
@@ -261,6 +274,27 @@ func (self *memberSearchSource) Repos(ctx context.Context) ([]*SearchScopeRepo, 
 	}
 	self.followLock.Unlock()
 	return repos, nil
+}
+
+// Checks row shape against this verified repo's document class before ranking or opening its text.
+func memberSearchIndexRow(repo *SearchScopeRepo, row *indexRow) bool {
+	if row == nil || row.locator == "" || indexExcluded(indexPlace{repoKind: repo.Kind, groupInbox: repo.GroupInbox, path: row.locator}) {
+		return false
+	}
+	if repo.GroupInbox || repo.Kind == protocol.RepoKind_REPO_KIND_MAILBOX {
+		_, _, ok := searchJoinMailPath(row.locator)
+		return ok && row.docKind == IndexDocMail
+	}
+	switch repo.Kind {
+	case protocol.RepoKind_REPO_KIND_GENERAL:
+		return row.docKind == IndexDocFile
+	case protocol.RepoKind_REPO_KIND_DIRECTORY:
+		// Cards and repo files produce announcement documents named a/<announcement> or a/<writer><announcement>.
+		ids, ok := strings.CutPrefix(row.locator, directoryIndexAnnouncementPrefix)
+		return row.docKind == IndexDocDerived && ok && (len(ids) == 2*len(Id{}) || len(ids) == 4*len(Id{})) &&
+			strings.Trim(ids, "0123456789abcdef") == ""
+	}
+	return false
 }
 
 // QD-1138 uses the directory's signed coordination policy for every indexed card. Only a complete local read
@@ -328,7 +362,7 @@ func (self *memberSearchSource) refs(repo *SearchScopeRepo, unrestricted bool, l
 		}
 		reader.stateLock.Unlock()
 	}
-	fileIndex := repo.Kind == protocol.RepoKind_REPO_KIND_DIRECTORY || repo.Kind == protocol.RepoKind_REPO_KIND_GENERAL && !repo.GroupInbox
+	fileIndex := repo.Kind == protocol.RepoKind_REPO_KIND_DIRECTORY || repo.Kind == protocol.RepoKind_REPO_KIND_GENERAL || repo.Kind == protocol.RepoKind_REPO_KIND_MAILBOX
 	if fileIndex {
 		pins, err := self.evs.pins.Pins(&repo.RepoId)
 		if err != nil {
@@ -467,7 +501,7 @@ func (self *memberSearchHost) run() {
 			timer = self.running.clock.After(self.running.settings.Search.ResyncInterval)
 		}
 		if engine, err := self.open(); err == nil {
-			if _, err := engine.args.Scope.Repos(self.ctx); err == nil {
+			if err := engine.refreshScope(self.ctx, nil); err == nil {
 				engine.args.Sync.triggerAll(reason)
 			}
 		}
