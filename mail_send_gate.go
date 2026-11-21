@@ -207,21 +207,33 @@ type mailSendEffect struct {
 	result    *MailSendResult
 }
 
-// See SidecarEffect. Under a standing grant the key is empty, and a fresh one names the entry, since such a use keeps
-// no ledger row to retry under. An error is the whole send's, nothing deposited or queued, so it proves the effect did
-// not happen.
+// See SidecarEffect. A standing grant has no ledger row and acquires its own fresh key. A reserved use records its
+// plan first, so an error after that point can be reconciled against its checkpoint and queue.
 func (self *mailSendEffect) Run(ctx context.Context, effectKey []byte) ([]byte, error) {
+	var checkpointName string
 	if len(effectKey) == 0 {
 		effectKey = mailSendStandingEffectKey()
+	} else if len(effectKey) == mailEffectKeyByteCount {
+		checkpointName = mailSendCheckpointName(effectKey)
+		release, err := self.client.lockSendUse(ctx, checkpointName)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrMailSendUncertain, err)
+		}
+		defer release()
 	}
 	plan, err := self.replan()
+	if err == nil && (plan.fromAddress != self.approved.GetAlias() || !slices.Equal(plan.recipients, self.approved.GetRecipients())) {
+		err = errors.New("the delivery addresses changed after approval")
+	}
 	if err != nil {
+		if checkpointName != "" {
+			if held, readErr := self.client.readSendCheckpoint(checkpointName); readErr != nil || held != nil {
+				return nil, fmt.Errorf("%w: %w", ErrMailSendUncertain, err)
+			}
+		}
 		return nil, fmt.Errorf("%w: %w", ErrSidecarEffectNotDone, err)
 	}
-	if plan.fromAddress != self.approved.GetAlias() || !slices.Equal(plan.recipients, self.approved.GetRecipients()) {
-		return nil, fmt.Errorf("%w: the delivery addresses changed after approval", ErrSidecarEffectNotDone)
-	}
-	result, err := self.client.deliverSend(ctx, plan, self.content, effectKey)
+	result, err := self.client.deliverSend(ctx, plan, self.content, effectKey, checkpointName)
 	if errors.Is(err, ErrMailSendUncertain) {
 		return nil, err
 	}
@@ -247,7 +259,7 @@ func (self *mailSendEffect) Run(ctx context.Context, effectKey []byte) ([]byte, 
 	}()
 	// A sent copy alone does not prove delivery. A retry sees only this ref, without the first call's
 	// per-recipient failures.
-	if result.SendId != (Id{}) && (len(result.EffectKey) != 0 || len(result.Delivered()) != 0) {
+	if result.SendId != (Id{}) && (result.replayed || len(result.EffectKey) != 0 || len(result.Delivered()) != 0) {
 		return result.SendId.Bytes(), nil
 	}
 	return nil, nil

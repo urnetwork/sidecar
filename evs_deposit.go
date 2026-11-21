@@ -150,21 +150,59 @@ func (self *EvsRepo) Deposit(ctx context.Context, args *EvsDepositArgs) (*EvsDep
 	identity := self.client.args.Identity()
 	refId := EvsDepositRefId(self.repoId, identity.SidecarId)
 	entryId := NewEvsRandomToken()
+	request := args.pending
+	var message *protocol.EvsPushRequest
+	if request != nil {
+		entryId = request.EntryId
+		message = &protocol.EvsPushRequest{}
+		if err := proto.Unmarshal(request.Request, message); err != nil {
+			return nil, fmt.Errorf("%w: a saved deposit request did not parse", ErrSidecarStoreFailed)
+		}
+	}
 	for rebuild := 0; ; rebuild += 1 {
-		dropKey, err := self.waitDropKey(ctx)
-		if err != nil {
+		if request == nil {
+			dropKey, err := self.waitDropKey(ctx)
+			if err != nil {
+				return nil, err
+			}
+			head, err := self.depositHead(refId)
+			if err != nil {
+				return nil, err
+			}
+			push, err := self.sealDeposit(ctx, dropKey, refId, entryId, body, oid, head, NewEvsPushId())
+			if err != nil {
+				return nil, err
+			}
+			push.sealed.Close()
+			message = &protocol.EvsPushRequest{
+				Statement: push.built.Statement.Bytes, Payload: push.built.Payload, Receipts: push.receipts,
+			}
+			request = &evsDepositRequest{EntryId: entryId, PushId: push.pushId}
+			if args.prepare != nil {
+				request.Request, err = proto.MarshalOptions{Deterministic: true}.Marshal(message)
+				if err != nil {
+					return nil, err
+				}
+				if err := args.prepare(request); err != nil {
+					return nil, err
+				}
+			}
+		}
+		reply, err := self.postPushAs(ctx, request.PushId, message, evsScopeDeposit)
+		if err != nil && request == args.pending {
+			// EVS retains old outcomes for a bounded time. A refusal today can follow acceptance and
+			// consumption of the original deposit, so only replay the saved push until acceptance is proven.
 			return nil, err
 		}
-		head, err := self.depositHead(refId)
-		if err != nil {
-			return nil, err
+		if err != nil && args.prepare != nil {
+			refusal, ok := EvsErrorOf(err)
+			if !ok || refusal.OutcomeUnknown || refusal.RefusesNothing() || refusal.Code == protocol.EvsRefusalCode_EVS_REFUSAL_CODE_UNSPECIFIED {
+				return nil, err
+			}
+			if saveErr := args.prepare(nil); saveErr != nil {
+				return nil, saveErr
+			}
 		}
-		push, err := self.sealDeposit(ctx, dropKey, refId, entryId, body, oid, head, NewEvsPushId())
-		if err != nil {
-			return nil, err
-		}
-		reply, err := self.sendDeposit(ctx, push)
-		push.sealed.Close()
 		switch {
 		case err == nil:
 			if err := self.keepDepositHead(refId, reply.GetDepositHead()); err != nil {
@@ -185,6 +223,7 @@ func (self *EvsRepo) Deposit(ctx context.Context, args *EvsDepositArgs) (*EvsDep
 		default:
 			return nil, err
 		}
+		request = nil
 	}
 }
 
@@ -369,10 +408,4 @@ func (self *EvsRepo) sealDeposit(ctx context.Context, dropKey *GkmDropKey, refId
 	}
 	keep = true
 	return push, nil
-}
-
-// Posts a deposit push under the deposit scope, retried with the same bytes until evs answers it.
-func (self *EvsRepo) sendDeposit(ctx context.Context, push *evsDepositPush) (*protocol.EvsPushReply, error) {
-	request := &protocol.EvsPushRequest{Statement: push.built.Statement.Bytes, Payload: push.built.Payload, Receipts: push.receipts}
-	return self.postPushAs(ctx, push.pushId, request, evsScopeDeposit)
 }
