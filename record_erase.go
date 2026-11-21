@@ -33,6 +33,11 @@
 //	          would list more than CutDocumentCount documents is refused before anything is erased. An erasure none of
 //	          whose entries is a document or a card's source lists nothing, takes none of steps 4 to 6, and its last
 //	          ERASE says complete, as in format 1
+//	journaled an erasure whose caller journals steps of its own that follow under the same erasure id and end it
+//	          (RecordEraseArgs.Journaled), as the directory's format-2 half does after its announce entries' ERASEs:
+//	          no ERASE of this eraser says complete, since its caller's CUT is still to come (DESIGN-DETAILS 15.2.10's
+//	          step 2; QD-1158). It is refused in a log whose index takes part, where another device taking the
+//	          erasure up (ResumeOthers) would end it as its own
 //	again     step 5: each listed card is folded again at its stream's head, which this device's reader holds, without
 //	          the erased entries, and entered full in this device's own index head (IndexEraser.Reenter): an erased
 //	          entry leaves its run card there, the card above every version the CUT lists. A quota refusal holds back
@@ -54,7 +59,9 @@
 //	late      a log admin's daemon that reads, at a later sync, a live copy of an entry an erasure names ERASEs that
 //	          copy's key row under the same erasure id, its note the erasure's own, then takes steps 4 to 6 for that
 //	          copy, the CUT adding its documents to the erasure's set entry (EraseLateCopies); no second erasure entry
-//	          is written, the first naming the entry
+//	          is written, the first naming the entry. Its rewrite lists before it trusts a complete it reads
+//	          (IndexRewriteArgs.Relisted), so another device's ERASE that ended the erasure after this copy's reopened
+//	          it leaves no file holding the copy's documents unrewritten
 //	complete  in a format-2 log an erasure is complete while its newest ERASE says so (recordEraseNewestStore and the
 //	          binding's complete), so a late copy's ERASE opens it again until that copy's rewrite ends it, and no CUT
 //	          drops its set entry meanwhile
@@ -63,7 +70,8 @@
 //
 // Off the ios_extension legs, which link the record's other files but none of its erasures. Not here: expiry's own
 // erasures (RECORD-M6-03, which calls this eraser and so takes the same steps), the directory's announcement
-// documents and cards (RECORD-M10-05, whose log's index this eraser leaves alone), and the search and ur://record
+// documents and cards (RECORD-M10-05, whose log's index this eraser leaves alone, and which journals and ends the
+// erasures it hands this eraser where its format-2 half follows), and the search and ur://record
 // caches' own deletes, which are their components'. Safe for concurrent use: one erasure at a time.
 
 package sidecar
@@ -170,6 +178,13 @@ type RecordEraseArgs struct {
 	Confirmed bool
 	// The caller has a harness process among its ancestors: a person's erasure is then refused.
 	HarnessAncestor bool
+	// The caller journals steps of its own that follow under the erasure's id and end it, as the directory's format-2
+	// half does, whose CUT comes after these ERASEs (directory_erasure.go; DESIGN-DETAILS 15.2.10's step 2; QD-1158):
+	// no ERASE of this eraser says complete, so no reader, §5.4's erasure event and EvsRepo.Erasures among them, reads
+	// the erasure done before the caller's CUT. Only in a log whose index this eraser leaves alone, the directory's:
+	// in one whose index takes part it is refused before anything is erased. False ends it here, as the file
+	// header's rows have it.
+	Journaled bool
 }
 
 // What an erasure did.
@@ -251,6 +266,8 @@ type recordEraseJournal struct {
 	Consumes []*recordEraseJournalConsume `json:"consumes,omitempty"`
 	Erased   []Id                         `json:"erased,omitempty"`
 	Missing  []Id                         `json:"missing,omitempty"`
+	// The caller's own steps end the erasure (RecordEraseArgs.Journaled): no ERASE here says complete.
+	Journaled bool `json:"journaled,omitempty"`
 	// Format 2's: the log's index takes part, so no ERASE before the rewrite's says complete; the documents the CUT
 	// lists and the cards the re-entry folds, journaled before the CUT.
 	Listing   bool                          `json:"listing,omitempty"`
@@ -466,6 +483,12 @@ func (self *recordEraseJournal) note() ([]byte, error) {
 	return proto.MarshalOptions{Deterministic: true}.Marshal(self.body())
 }
 
+// Whether the erasure's last ERASE of steps 2 and 3 says it complete: only where no CUT follows, neither this
+// eraser's (Listing) nor its caller's (Journaled).
+func (self *recordEraseJournal) endsAtErase() bool {
+	return !self.Listing && !self.Journaled
+}
+
 // Every key the journal's ERASEs name, in order.
 func (self *recordEraseJournal) keys() []*RecordSlotKey {
 	keys := []*RecordSlotKey{}
@@ -540,7 +563,7 @@ func (self *RecordEraser) Erase(ctx context.Context, args *RecordEraseArgs) (*Re
 	}
 	journal := &recordEraseJournal{
 		ErasureId: erasureId, LogId: args.LogId, EntryIds: entryIds, Reason: uint32(args.Reason), RequestId: args.RequestId,
-		Step: recordEraseStepPlanned,
+		Journaled: args.Journaled, Step: recordEraseStepPlanned,
 	}
 	if err := self.writeJournal(journal); err != nil {
 		return nil, err
@@ -746,8 +769,12 @@ func (self *RecordEraser) drawErases(keys []*RecordSlotKey, complete bool) ([]*r
 
 // Step 1: what the erasure takes, journaled before anything goes: the copies' keys and the deposits standing, the
 // ERASEs and CONSUMEs drawn, and in a format-2 log whether its index takes part. ErrRecordEraseTooLarge before
-// anything is drawn where its CUT would list too many documents.
+// anything is drawn where its CUT would list too many documents, and ErrRecordEraseInvalid for a journaled erasure in
+// a log whose index takes part, which another device taking it up (ResumeOthers) would end as its own.
 func (self *RecordEraser) plan(ctx context.Context, journal *recordEraseJournal, index RecordEraseIndex) error {
+	if journal.Journaled && index != nil {
+		return fmt.Errorf("%w: a journaled erasure in a log whose index takes part", ErrRecordEraseInvalid)
+	}
 	writer := self.record.writer
 	reader := self.record.reader
 	streams := writer.boundStreams()
@@ -858,8 +885,9 @@ func (self *RecordEraser) plan(ctx context.Context, journal *recordEraseJournal,
 			journal.Missing = append(journal.Missing, entryId)
 		}
 	}
-	// at most EraseKeyCount keys a push, the entries' own first; complete only where no CUT follows
-	erases, err := self.drawErases(keys, !journal.Listing)
+	// at most EraseKeyCount keys a push, the entries' own first; complete only where no CUT follows, this eraser's or
+	// its caller's
+	erases, err := self.drawErases(keys, journal.endsAtErase())
 	if err != nil {
 		return err
 	}
@@ -935,7 +963,7 @@ func (self *RecordEraser) reread(ctx context.Context, journal *recordEraseJourna
 	if journal.Listing && index == nil {
 		return ErrRecordEraseIndexUnavailable
 	}
-	erases, err := self.drawErases(keys, !journal.Listing)
+	erases, err := self.drawErases(keys, journal.endsAtErase())
 	if err != nil {
 		return err
 	}
@@ -986,7 +1014,7 @@ func (self *RecordEraser) runSteps(ctx context.Context, journal *recordEraseJour
 			return nil, indexErr
 		}
 		if err := self.plan(ctx, journal, index); err != nil {
-			if errors.Is(err, ErrRecordEraseTooLarge) {
+			if errors.Is(err, ErrRecordEraseTooLarge) || errors.Is(err, ErrRecordEraseInvalid) {
 				// refused, nothing erased: no restart takes it up
 				if removeErr := self.store.Remove(recordEraseJournalName(journal.ErasureId)); removeErr != nil {
 					return nil, removeErr
@@ -1225,9 +1253,12 @@ func (self *RecordEraser) indexParts(ctx context.Context, journal *recordEraseJo
 			}
 		}
 	}
-	// step 6
+	// step 6: a late copy's CUT listed documents again, so its rewrite lists before it trusts a complete it reads; a
+	// journaled erasure's caller ends it, so nothing here says complete
 	testHookBarrier("record.erase.rewrite.before", recordChainIdText(logId))
-	rewritten, err := index.Rewrite(ctx, &IndexRewriteArgs{ErasureId: journal.ErasureId, Complete: true, Note: note})
+	rewritten, err := index.Rewrite(ctx, &IndexRewriteArgs{
+		ErasureId: journal.ErasureId, Complete: !journal.Journaled, Note: note, Relisted: journal.Late,
+	})
 	testHookBarrier("record.erase.rewrite.after", recordChainIdText(logId))
 	if err != nil {
 		return owed, err
@@ -1236,7 +1267,7 @@ func (self *RecordEraser) indexParts(ctx context.Context, journal *recordEraseJo
 	if rewritten.Erasure != nil && rewritten.Erasure.State == SidecarErasureWaiting {
 		owe(rewritten.Erasure.NextTry)
 	}
-	if recordEraseRewriteEndedUnsaid(rewritten) {
+	if !journal.Journaled && recordEraseRewriteEndedUnsaid(rewritten) {
 		// no file held a listed version, so no ERASE with a key was left to say complete (QD-1132): a completion ERASE
 		// names a key an ERASE of this erasure destroyed, as evs's erasure ref holds it
 		key, err := self.erasedKeyOf(ctx, logId, journal.ErasureId)
@@ -1386,7 +1417,7 @@ func (self *RecordEraser) eraseLateCopies(ctx context.Context, logId Id, sync bo
 			journal.Listing = 0 < len(documents)
 			journal.Documents, journal.Cards = documents, cards
 		}
-		if journal.Erases, err = self.drawErases(keys, !journal.Listing); err != nil {
+		if journal.Erases, err = self.drawErases(keys, journal.endsAtErase()); err != nil {
 			return results, err
 		}
 		journal.RereadFrom = len(journal.Erases)

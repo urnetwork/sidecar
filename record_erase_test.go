@@ -20,17 +20,38 @@ import (
 	"github.com/urnetwork/sidecar/sidecartest"
 )
 
-// A device's streams as the storage limit and a crash leave them: pushes to its own stream refused while limited, and
-// an ERASE's answer lost after it committed while set.
+// A device's streams as the storage limit and a crash leave them: pushes to its own stream refused while limited, an
+// ERASE's answer lost after it committed while set, and the next listings of the deposit refs failing, as a kill
+// before an erasure's first push.
 type testEraseTap struct {
 	sidecar.RecordStreams
 
-	stateLock sync.Mutex
-	limited   bool
-	loseErase bool
+	stateLock       sync.Mutex
+	limited         bool
+	loseErase       bool
+	failDepositRefs int
 }
 
-var errTestEraseAnswerLost = errors.New("the ERASE's answer was lost")
+var (
+	errTestEraseAnswerLost = errors.New("the ERASE's answer was lost")
+	errTestEraseKilled     = errors.New("the eraser was killed before its first push")
+)
+
+func (self *testEraseTap) DepositRefs(ctx context.Context, repoId sidecar.Id) ([]*sidecar.RecordStreamHead, error) {
+	failed := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if self.failDepositRefs <= 0 {
+			return false
+		}
+		self.failDepositRefs -= 1
+		return true
+	}()
+	if failed {
+		return nil, errTestEraseKilled
+	}
+	return self.RecordStreams.DepositRefs(ctx, repoId)
+}
 
 func (self *testEraseTap) Append(ctx context.Context, repoId sidecar.Id, push *sidecar.RecordStreamPush) (*sidecar.RecordStreamCommit, error) {
 	self.stateLock.Lock()
@@ -351,5 +372,102 @@ func TestRecordEraserNoteRidesInline(t *testing.T) {
 	noteByteCount := uint64(16 + 1 + len(note))
 	if sidecar.EvsInlineMaxByteCount < sidecar.EvsPadme(sidecar.EvsWrappedKeyByteCount+sidecar.EvsRecordByteCount(noteByteCount)) {
 		t.Fatalf("a note of %d entries, %d bytes, does not ride inline", settings.EntryCount, noteByteCount)
+	}
+}
+
+// An erasure whose caller's own steps follow under its id and end it (RecordEraseArgs.Journaled; QD-1158), as the
+// directory's format-2 half does after its announce entries' ERASEs: its ERASE says nothing complete, the flag kept in
+// its journal across a kill before its first push and the restart that resumes it, while the key goes and the erasure
+// entry lands as for any other; an erasure that ends itself says complete as before.
+func TestRecordEraserJournaledSaysNothingComplete(t *testing.T) {
+	ctx := t.Context()
+	world := newTestRecordWorld(t)
+	eraser, tap := world.eraserDevice()
+	eraserRecord := eraser.open()
+	journaled := testRecordAppend(t, eraserRecord, testRecordNote(nil, "journaled"))
+	plain := testRecordAppend(t, eraserRecord, testRecordNote(nil, "plain"))
+	if err := eraserRecord.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	tap.stateLock.Lock()
+	tap.failDepositRefs = 1
+	tap.stateLock.Unlock()
+	if _, err := eraserRecord.Eraser().Erase(ctx, &sidecar.RecordEraseArgs{
+		LogId: world.vaultId, EntryIds: []sidecar.Id{journaled.EntryId}, Reason: sidecar.RecordErasureReasonPerson, Confirmed: true,
+		Journaled: true,
+	}); !errors.Is(err, errTestEraseKilled) {
+		t.Fatalf("the erasure killed before its first push: %v", err)
+	}
+	erasures, err := world.streams.For(eraser.sidecarId).ReadErasures(ctx, world.vaultId, 0)
+	if err != nil || len(erasures) != 0 {
+		t.Fatalf("%d ERASEs before the restart: %v", len(erasures), err)
+	}
+	restarted := eraser.open()
+	if err := restarted.Eraser().Resume(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ended, err := restarted.Eraser().Erase(ctx, &sidecar.RecordEraseArgs{
+		LogId: world.vaultId, EntryIds: []sidecar.Id{plain.EntryId}, Reason: sidecar.RecordErasureReasonPerson, Confirmed: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if erasures, err = world.streams.For(eraser.sidecarId).ReadErasures(ctx, world.vaultId, 0); err != nil || len(erasures) != 2 {
+		t.Fatalf("%d ERASEs committed: %v", len(erasures), err)
+	}
+	if erasures[0].ErasureId == ended.ErasureId || erasures[0].Complete {
+		t.Fatalf("the journaled erasure's ERASE: %+v", erasures[0])
+	}
+	if erasures[1].ErasureId != ended.ErasureId || !erasures[1].Complete {
+		t.Fatalf("the erasure that ends itself: %+v", erasures[1])
+	}
+	stored := testEraseStored(world, eraser.sidecarId)
+	for _, entryId := range []sidecar.Id{journaled.EntryId, plain.EntryId} {
+		if item := stored[entryId]; item == nil || item.body != nil {
+			t.Fatal("an erased body still opens")
+		}
+	}
+	bodies := testEraseBodies(t, stored)
+	if len(bodies) != 2 {
+		t.Fatalf("%d erasure entries", len(bodies))
+	}
+	for _, body := range bodies {
+		if sidecar.Id(body.GetErasureId()) != erasures[0].ErasureId && sidecar.Id(body.GetErasureId()) != ended.ErasureId {
+			t.Fatalf("an erasure entry of %x", body.GetErasureId())
+		}
+	}
+}
+
+// A journaled erasure in a log whose index takes part is refused before anything is erased, since another device that
+// took it up (ResumeOthers) would end it as its own: no ERASE, no call of the index, the body still opening, and no
+// journal for a restart to take up.
+func TestRecordEraserRefusesAJournaledErasureWhereTheIndexTakesPart(t *testing.T) {
+	ctx := t.Context()
+	world := newTestRecordWorld(t)
+	eraser, _ := world.eraserDevice()
+	index := sidecar.NewRecordEraseTestIndex(t, protocol.RepoKind_REPO_KIND_VAULT, eraser.sidecarId)
+	record := testEraseIndexOpen(eraser, index)
+	note := testRecordAppend(t, record, testRecordNote(nil, "kept"))
+	if err := record.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := record.Eraser().Erase(ctx, &sidecar.RecordEraseArgs{
+		LogId: world.vaultId, EntryIds: []sidecar.Id{note.EntryId}, Reason: sidecar.RecordErasureReasonPerson, Confirmed: true,
+		Journaled: true,
+	}); !errors.Is(err, sidecar.ErrRecordEraseInvalid) {
+		t.Fatalf("a journaled erasure where the index takes part: %v", err)
+	}
+	if err := record.Eraser().Resume(ctx); err != nil {
+		t.Fatal(err)
+	}
+	erasures, err := world.streams.For(eraser.sidecarId).ReadErasures(ctx, world.vaultId, 0)
+	if err != nil || len(erasures) != 0 || len(index.Calls()) != 0 {
+		t.Fatalf("the refused erasure: %d ERASEs, index calls %v, %v", len(erasures), index.Calls(), err)
+	}
+	if item := testEraseStored(world, eraser.sidecarId)[note.EntryId]; item == nil || item.body == nil {
+		t.Fatal("the refused erasure took the body")
 	}
 }
