@@ -37,7 +37,6 @@ import (
 	"fmt"
 	"net/mail"
 	"strings"
-	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -165,23 +164,28 @@ func (self *mailSmtpMailbox) replace(ctx context.Context, path string, content [
 	}
 }
 
-// Removes path if it stands: read its version, remove at it, read again when another writer moved it in between.
-// Absent is no error.
-func (self *mailSmtpMailbox) remove(ctx context.Context, path string, maxByteCount int) error {
+// Removes the version accepted by the predicate, checking its replacement again after a conflict. Nil accepts
+// any version. An absent file does not count as a removal.
+func (self *mailSmtpMailbox) removeIf(ctx context.Context, path string, maxByteCount int, accept func([]byte) (bool, error)) (bool, error) {
 	for attempt := 0; ; attempt += 1 {
-		_, version, err := self.store.Read(ctx, path, maxByteCount)
+		content, version, err := self.store.Read(ctx, path, maxByteCount)
 		if errors.Is(err, ErrEvsPathAbsent) {
-			return nil
+			return false, nil
 		}
 		if err != nil {
-			return err
+			return false, err
+		}
+		if accept != nil {
+			if remove, err := accept(content); err != nil || !remove {
+				return false, err
+			}
 		}
 		_, err = self.store.Write(ctx, []*mailStoreWrite{{Path: path, Remove: true, IfVersion: version}})
 		if err == nil {
-			return nil
+			return true, nil
 		}
 		if !mailStoreConflictOn(err, path) || self.settings.WriteRetryCount <= attempt {
-			return err
+			return false, err
 		}
 	}
 }
@@ -214,7 +218,7 @@ func (self *mailSmtpMailbox) RemoveOutbox(ctx context.Context, effectKey []byte)
 		return nil
 	}
 	testHookBarrier("mail.outbox.remove.before", "")
-	err = self.remove(ctx, path, self.settings.OutboxFileMaxByteCount)
+	_, err = self.removeIf(ctx, path, self.settings.OutboxFileMaxByteCount, nil)
 	testHookBarrier("mail.outbox.remove.after", "")
 	return err
 }
@@ -306,6 +310,11 @@ func (self *mailSmtpMailbox) ReadSendOutcomes(ctx context.Context, effectKey []b
 	if err != nil {
 		return Id{}, nil, err
 	}
+	return mailDecodeSendOutcomes(content)
+}
+
+// The send identity and per-domain results from the encrypted mailbox record.
+func mailDecodeSendOutcomes(content []byte) (Id, []*SmtpDomainOutcome, error) {
 	record := &protocol.MailOutcomeRecord{}
 	if err := proto.Unmarshal(content, record); err != nil {
 		return Id{}, nil, err
@@ -322,43 +331,45 @@ func (self *mailSmtpMailbox) ReadSendOutcomes(ctx context.Context, effectKey []b
 	return sendId, outcomes, nil
 }
 
-// Removes every or/ record whose newest outcome was last written more than OutcomeKeepDuration ago (§15.7's 30 days),
-// and one that does not decode. The count removed.
+// Removes each or/ record whose outcomes all have known update times before the retention cutoff (§15.7's 30 days).
+// An unreadable record is kept. Other records can still expire during the same sweep.
 func (self *mailSmtpMailbox) RemoveExpiredOutcomes(ctx context.Context) (int, error) {
 	effectKeys, err := self.ListOutcomes(ctx)
 	if err != nil {
 		return 0, err
 	}
-	now := self.clock.Now()
-	removed := 0
-	for _, effectKey := range effectKeys {
-		outcomes, err := self.ReadOutcomes(ctx, effectKey)
-		if errors.Is(err, ErrSmtpMailboxNotFound) {
-			continue
+	cutoff := self.clock.Now().Add(-self.settings.OutcomeKeepDuration)
+	expired := func(content []byte) (bool, error) {
+		_, outcomes, err := mailDecodeSendOutcomes(content)
+		if err != nil || len(outcomes) == 0 {
+			return false, err
 		}
-		expired := err != nil
-		if err == nil {
-			newest := time.Time{}
-			for _, outcome := range outcomes {
-				if newest.Before(outcome.UpdateTime) {
-					newest = outcome.UpdateTime
-				}
+		for _, outcome := range outcomes {
+			if outcome.UpdateTime.IsZero() || !outcome.UpdateTime.Before(cutoff) {
+				return false, nil
 			}
-			expired = self.settings.OutcomeKeepDuration < now.Sub(newest)
 		}
-		if !expired {
-			continue
+		return true, nil
+	}
+	removed := 0
+	var firstErr error
+	for _, effectKey := range effectKeys {
+		if err := ctx.Err(); err != nil {
+			return removed, err
 		}
 		path, err := MailOutcomePath(effectKey)
 		if err != nil {
-			continue
-		}
-		if err := self.remove(ctx, path, self.settings.OutcomeRecordMaxByteCount); err != nil {
 			return removed, err
 		}
-		removed += 1
+		didRemove, err := self.removeIf(ctx, path, self.settings.OutcomeRecordMaxByteCount, expired)
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+		if didRemove {
+			removed += 1
+		}
 	}
-	return removed, nil
+	return removed, firstErr
 }
 
 // See SmtpMailbox.

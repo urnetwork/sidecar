@@ -355,6 +355,108 @@ func TestMailSmtpMailboxRemovesExpiredOutcomes(t *testing.T) {
 	}
 }
 
+// The first read of an outcome fails, then the same stored version is readable again.
+type mailOutcomeTestReadFailure struct {
+	mailStore
+	path string
+	err  error
+}
+
+func (self *mailOutcomeTestReadFailure) Read(ctx context.Context, path string, maxByteCount int) ([]byte, uint64, error) {
+	if path == self.path && self.err != nil {
+		err := self.err
+		self.err = nil
+		return nil, 0, err
+	}
+	return self.mailStore.Read(ctx, path, maxByteCount)
+}
+
+// A completed send's durable identity survives a sweep that could not read its receipt and a process restart.
+func TestMailOutcomeSweepKeepsTheReceiptAfterAReadFailure(t *testing.T) {
+	ctx := t.Context()
+	store := newMailTestStore()
+	clock := newTestMailCredentialClock(time.UnixMilli(testMailIngestPushMillis))
+	signer := newTestMailOutboxSigner(testMailId(0xb1))
+	outbox := newTestMailOutbox(t, store, signer, testMailOutboxStanding(AbuseStandingStandard, true))
+	effectKey, sendId := testMailOutboxEffectKey(), newMailOutboxSendId()
+	if _, err := outbox.Queue(ctx, testMailOutboxQueueArgs(effectKey, testMailOutboxMessage(sendId))); err != nil {
+		t.Fatal(err)
+	}
+	if err := outbox.mailbox.WriteOutcomes(ctx, effectKey, []*SmtpDomainOutcome{{Domain: "outside.example", Outcome: SmtpOutcomeSent, UpdateTime: clock.Now()}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := outbox.mailbox.RemoveOutbox(ctx, effectKey); err != nil {
+		t.Fatal(err)
+	}
+	path, _ := MailOutcomePath(effectKey)
+	unavailable := errors.New("outcome read interrupted")
+	sweeper := newMailSmtpMailbox(&mailOutcomeTestReadFailure{mailStore: store, path: path, err: unavailable}, nil, nil, nil, clock)
+	if removed, err := sweeper.RemoveExpiredOutcomes(ctx); removed != 0 || !errors.Is(err, unavailable) {
+		t.Fatalf("sweep removed %d: %v", removed, err)
+	}
+	restarted := newTestMailOutbox(t, store, signer, nil)
+	receipt, err := restarted.Lookup(ctx, nil, effectKey)
+	if err != nil || receipt.State != ApprovalOutcomeDone || !bytes.Equal(receipt.EffectRef, sendId.Bytes()) {
+		t.Fatalf("receipt after restart %+v: %v", receipt, err)
+	}
+}
+
+// An update between the sweep's expiry check and its remove starts a new retention term at the winning version.
+func TestMailOutcomeSweepRechecksARefreshedVersion(t *testing.T) {
+	ctx := t.Context()
+	store := newMailTestStore()
+	clock := newTestMailCredentialClock(time.UnixMilli(testMailIngestPushMillis))
+	mailbox := newMailSmtpMailbox(store, nil, nil, nil, clock)
+	effectKey := testMailOutboxEffectKey()
+	write := func() {
+		t.Helper()
+		if err := mailbox.WriteOutcomes(ctx, effectKey, []*SmtpDomainOutcome{{Domain: "outside.example", Outcome: SmtpOutcomeSent, UpdateTime: clock.Now()}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write()
+	clock.Advance(mailbox.settings.OutcomeKeepDuration + time.Hour)
+	store.beforeWrite = write
+	if removed, err := mailbox.RemoveExpiredOutcomes(ctx); err != nil || removed != 0 {
+		t.Fatalf("sweep racing a refresh removed %d: %v", removed, err)
+	}
+	outcomes, err := mailbox.ReadOutcomes(ctx, effectKey)
+	if err != nil || len(outcomes) != 1 || !outcomes[0].UpdateTime.Equal(clock.Now()) {
+		t.Fatalf("refreshed outcomes %+v: %v", outcomes, err)
+	}
+	clock.Advance(mailbox.settings.OutcomeKeepDuration)
+	if removed, err := mailbox.RemoveExpiredOutcomes(ctx); err != nil || removed != 0 {
+		t.Fatalf("at the retention boundary removed %d: %v", removed, err)
+	}
+	clock.Advance(time.Millisecond)
+	if removed, err := mailbox.RemoveExpiredOutcomes(ctx); err != nil || removed != 1 {
+		t.Fatalf("past the new term removed %d: %v", removed, err)
+	}
+}
+
+// An unknown record format, an empty outcome and an undated domain establish no expiry date.
+func TestMailOutcomeSweepRequiresDatedOutcomes(t *testing.T) {
+	ctx := t.Context()
+	store := newMailTestStore()
+	clock := newTestMailCredentialClock(time.UnixMilli(testMailIngestPushMillis))
+	mailbox := newMailSmtpMailbox(store, nil, nil, nil, clock)
+	malformed, _ := MailOutcomePath(testMailOutboxEffectKey())
+	store.put(malformed, []byte{0xff})
+	for _, outcomes := range [][]*SmtpDomainOutcome{
+		nil,
+		{{Domain: "first.example", Outcome: SmtpOutcomeSent, UpdateTime: clock.Now()}, {Domain: "second.example", Outcome: SmtpOutcomeSent}},
+		{{Domain: "expired.example", Outcome: SmtpOutcomeSent, UpdateTime: clock.Now()}},
+	} {
+		if err := mailbox.WriteOutcomes(ctx, testMailOutboxEffectKey(), outcomes); err != nil {
+			t.Fatal(err)
+		}
+	}
+	clock.Advance(mailbox.settings.OutcomeKeepDuration + time.Hour)
+	if removed, err := mailbox.RemoveExpiredOutcomes(ctx); err == nil || removed != 1 || len(store.paths()) != 3 || store.file(malformed) == nil {
+		t.Fatalf("sweep removed %d, %d records remain: %v", removed, len(store.paths()), err)
+	}
+}
+
 // The component's pass sweeps the member's or/ while mail is on, once an OutcomeSweepInterval: a record past its 30
 // days goes at the first pass, one that expires later stays until the interval has passed, and a pass before then
 // lists nothing.
