@@ -33,6 +33,8 @@ type MemberReplica struct {
 	recordLock     sync.Mutex
 	record         *SidecarRecord
 	closeOnce      sync.Once
+
+	removeSearchRequester func()
 }
 
 // Opens the enrolled identity's replica. Calls for the same identity share the same replica and its lifetime.
@@ -137,6 +139,9 @@ func (self *MemberReplica) activeIdentity() *SidecarIdentity {
 func (self *MemberReplica) Close() {
 	self.closeOnce.Do(func() {
 		self.cancel()
+		if self.removeSearchRequester != nil {
+			self.removeSearchRequester()
+		}
 		if self.follower != nil {
 			self.follower.Close()
 		}
@@ -229,7 +234,10 @@ func (self *MemberReplica) open() error {
 	if err != nil {
 		return err
 	}
-	return self.follower.followIdentity(&self.identity)
+	if err := self.follower.followIdentity(&self.identity); err != nil {
+		return err
+	}
+	return self.bindSearchRequester()
 }
 
 // Opens the record streams and their receipt gate only after the enrolled anchor

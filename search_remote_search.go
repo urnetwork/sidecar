@@ -166,7 +166,7 @@ func (self *SearchRemoteClient) newSearch(ctx context.Context, request *SearchRe
 	}
 	answerable := false
 	for _, repoId := range scope {
-		if 0 < len(state.SearchIndexersFor(selfId, repoId, self.args.Services)) {
+		if 0 < len(state.searchIndexersAt(selfId, repoId, self.args.Services, self.clock.Now().UnixMilli())) {
 			answerable = true
 			break
 		}
@@ -201,7 +201,7 @@ func (self *SearchRemoteClient) newSearch(ctx context.Context, request *SearchRe
 	local := *request
 	local.Scope = SearchCached
 	local.Remote = SearchRemoteOff
-	local.Repos = slices.Clone(scope)
+	local.Repos = slices.Clone(request.Repos)
 	own, err := self.args.Local.Search(ctx, &local)
 	if err != nil {
 		cancel()
@@ -240,13 +240,16 @@ func (self *SearchRemoteClient) scopeOf(state *ConfigState, selfId Id, request *
 	}
 	reads := func(repoId Id) bool {
 		repo := acl.Repo(repoId)
+		if request.allowRepo != nil && !request.allowRepo(repoId) {
+			return false
+		}
 		if repo == nil {
 			return false
 		}
 		if _, ok := searchRemoteKindOf(repo.GetKind()); !ok {
 			return false
 		}
-		return slices.Contains(state.RepoReaders(repoId), selfId)
+		return slices.Contains(state.RepoReadersAt(repoId, self.clock.Now()), selfId)
 	}
 	scope := []Id{}
 	if 0 < len(request.Repos) {
@@ -358,6 +361,16 @@ func (self *searchRemoteSearch) Next() (page []SearchHit, progress SearchProgres
 func (self *searchRemoteSearch) scopeEnded() bool {
 	if searchReposEnded(self.repoEnds) {
 		return true
+	}
+	state, err := self.client.args.Config()
+	current, ok := self.client.args.SelfId()
+	if err != nil || state == nil || !ok || current != self.selfId {
+		return true
+	}
+	for _, repo := range self.scope {
+		if (self.request.allowRepo != nil && !self.request.allowRepo(repo)) || !slices.Contains(state.RepoReadersAt(repo, self.client.clock.Now()), current) {
+			return true
+		}
 	}
 	scoped, ok := self.own.source.(interface{ scopeEnded() bool })
 	return ok && scoped.scopeEnded()
@@ -490,7 +503,11 @@ func (self *searchRemoteSearch) plan() []searchRemoteMergeKey {
 	client := self.client
 	todo := []Id{}
 	for _, repoId := range self.scope {
-		if self.repos[repoId].state == searchRemoteRepoTodo {
+		if repo := self.repos[repoId]; repo.state == searchRemoteRepoTodo {
+			if self.request.allowRepo != nil && !self.request.allowRepo(repoId) {
+				repo.state, repo.reason = searchRemoteRepoFallback, SearchFallbackRefused
+				continue
+			}
 			todo = append(todo, repoId)
 		}
 	}
@@ -626,6 +643,12 @@ func (self *searchRemoteSearch) ask(leg *searchRemoteLeg, page uint32, supersede
 		return
 	}
 	testHookBarrier("search.remote.asked", leg.repos[0].String())
+	// The goroutine outlives this planning step. Capture only the immutable scope of this disclosure.
+	named := slices.Clone(leg.repos)
+	indexerId := leg.indexerId
+	allowed := func() bool {
+		return self.ctx.Err() == nil && self.maySend(indexerId, named)
+	}
 	timeout := client.remoteTimeout()
 	attempts := 1
 	if 0 < page {
@@ -641,7 +664,7 @@ func (self *searchRemoteSearch) ask(leg *searchRemoteLeg, page uint32, supersede
 			answers := make(chan *searchRemoteLegEvent, 1)
 			deadline := client.clock.After(timeout)
 			go func() {
-				answer, err := transport.Call(self.ctx, leg.indexerId, body)
+				answer, err := transport.Call(self.ctx, indexerId, body, allowed)
 				answers <- &searchRemoteLegEvent{leg: leg, page: page, body: answer, err: err}
 			}()
 			select {
@@ -671,6 +694,10 @@ func (self *searchRemoteSearch) handle(event *searchRemoteLegEvent) []searchRemo
 	if leg.state != searchRemoteLegWaiting || leg.page != event.page {
 		// ended, superseded or abandoned: dropped
 		return nil
+	}
+	if errors.Is(event.err, errSearchRemotePermission) || event.err == nil && !self.maySend(leg.indexerId, leg.repos) {
+		self.endLeg(leg, SearchFallbackRefused, false)
+		return self.plan()
 	}
 	if event.err != nil {
 		return self.failOnError(leg, event.err)
@@ -1038,31 +1065,53 @@ func (self *searchRemoteSearch) recheck() []searchRemoteMergeKey {
 // Whether the view still lets leg's indexer be asked about every repo it asks or serves: E1 to E6, and own or, in mode
 // on, its notice member's answer allowing.
 func (self *searchRemoteSearch) mayAsk(view *searchRemoteOrderView, leg *searchRemoteLeg) bool {
-	client := self.client
-	if view.mode == SearchRemoteOff {
+	if view.selfId != self.selfId || !self.client.mayDiscloseTo(view.state, view.selfId, leg.indexerId, view.mode) {
 		return false
-	}
-	if !searchRemoteOwn(view.state, leg.indexerId, view.selfId) {
-		if view.mode != SearchRemoteOn {
-			return false
-		}
-		memberId, ok := searchRemoteNoticeMember(view.state, leg.indexerId)
-		if !ok {
-			return false
-		}
-		if allow, answered := client.answer(memberId); !answered || !allow {
-			return false
-		}
 	}
 	for _, repoId := range leg.repos {
 		if leg.lost[repoId] {
 			continue
 		}
-		if !slices.Contains(client.eligibleFor(view, repoId), leg.indexerId) {
+		if !slices.Contains(self.client.eligibleFor(view, repoId), leg.indexerId) {
 			return false
 		}
 	}
 	return true
+}
+
+// Read only the current authorization and device consent. Neither the earlier plan nor a standing Hello
+// authorizes sending query bytes after a designation, membership, signed scope or notice changes.
+func (self *searchRemoteSearch) maySend(indexerId Id, named []Id) bool {
+	client := self.client
+	state, err := client.args.Config()
+	id, ok := client.args.SelfId()
+	if err != nil || state == nil || !ok || id != self.selfId || !client.mayDiscloseTo(state, id, indexerId, client.mode()) {
+		return false
+	}
+	for _, repo := range named {
+		if (self.request.allowRepo != nil && !self.request.allowRepo(repo)) || !slices.Contains(state.searchIndexersAt(id, repo, client.args.Services, client.clock.Now().UnixMilli()), indexerId) {
+			return false
+		}
+	}
+	return true
+}
+
+func (self *SearchRemoteClient) mayDiscloseTo(state *ConfigState, selfId Id, indexerId Id, mode string) bool {
+	if mode == SearchRemoteOff {
+		return false
+	}
+	if searchRemoteOwn(state, indexerId, selfId) {
+		return true
+	}
+	if mode != SearchRemoteOn {
+		return false
+	}
+	member, ok := searchRemoteNoticeMember(state, indexerId)
+	if !ok {
+		return false
+	}
+	allow, answered := self.answer(member)
+	return allow && answered
 }
 
 // The progress a page carries: the device's own search's, with the remote state, fallback reason and indexer (DESIGN-

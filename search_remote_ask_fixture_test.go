@@ -54,7 +54,10 @@ func newTestSearchRemoteTransport(requester testConfigDevice) *testSearchRemoteT
 	}
 }
 
-func (self *testSearchRemoteTransport) Call(ctx context.Context, indexerId Id, body []byte) ([]byte, error) {
+func (self *testSearchRemoteTransport) Call(ctx context.Context, indexerId Id, body []byte, allowed func() bool) ([]byte, error) {
+	if !allowed() {
+		return nil, errSearchRemotePermission
+	}
 	request := &protocol.SearchRequest{}
 	if err := proto.Unmarshal(body, request); err != nil {
 		return nil, err
@@ -342,6 +345,7 @@ func (self *testSearchRemoteAsker) search(t *testing.T, repoIds ...Id) *SearchSt
 
 // One page, which must not fail.
 type testSearchRemotePage struct {
+	err      error
 	hits     []SearchHit
 	progress SearchProgress
 	done     bool
@@ -360,8 +364,8 @@ func testSearchRemoteNext(t *testing.T, stream *SearchStream) testSearchRemotePa
 func testSearchRemoteNextLater(stream *SearchStream) chan testSearchRemotePage {
 	answer := make(chan testSearchRemotePage, 1)
 	go func() {
-		hits, progress, done, _ := stream.Next()
-		answer <- testSearchRemotePage{hits: hits, progress: progress, done: done}
+		hits, progress, done, err := stream.Next()
+		answer <- testSearchRemotePage{hits: hits, progress: progress, done: done, err: err}
 	}()
 	return answer
 }

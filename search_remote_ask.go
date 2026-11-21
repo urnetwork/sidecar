@@ -80,6 +80,7 @@ var (
 	// No reply by a leg's deadline.
 	errSearchRemoteTimeout = errors.New("remote search: no reply by the deadline")
 	// No transport: no client generation is attached.
+	errSearchRemotePermission  = errors.New("remote search: permission changed")
 	errSearchRemoteNoTransport = errors.New("remote search: no dispatcher attached")
 )
 
@@ -90,7 +91,7 @@ const searchAskComponentName = "search-ask"
 type searchRemoteTransport interface {
 	// One SEARCH body to the indexer, its Hello first where none stands, checked for the indexer's identity binding and
 	// bit 0 before the request goes (errSearchRemoteAuth). The reply's body, or the error.
-	Call(ctx context.Context, indexerId Id, body []byte) ([]byte, error)
+	Call(ctx context.Context, indexerId Id, body []byte, allowed func() bool) ([]byte, error)
 	// Whether a Hello with the indexer stands, and whether it showed bit 0.
 	Peer(indexerId Id) (servesSearch bool, standing bool)
 	// Whether a Hello with the indexer verified after at and stands.
@@ -190,10 +191,16 @@ func (self *SearchRemoteClient) currentTransport() searchRemoteTransport {
 }
 
 // Sets the transport, as a generation attaches; nil as it ends.
-func (self *SearchRemoteClient) setTransport(transport searchRemoteTransport) {
+func (self *SearchRemoteClient) setTransport(transport searchRemoteTransport) error {
+	if transport != nil {
+		if err := transport.SetAsksSearch(self.asksSearch); err != nil {
+			return err
+		}
+	}
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.transport = transport
+	return nil
 }
 
 // See SidecarComponent.
@@ -209,7 +216,9 @@ func (self *SearchRemoteClient) Attach(env *SidecarEnv) error {
 		return errors.New("remote search needs the generation's dispatcher")
 	}
 	transport := newSearchRemoteSubprotocolTransport(env.Subprotocol, env.SidecarApi, self.args.Config, self.clock)
-	self.setTransport(transport)
+	if err := self.setTransport(transport); err != nil {
+		return err
+	}
 	go func() {
 		self.follow(env.Ctx, transport)
 		self.stateLock.Lock()
@@ -238,18 +247,7 @@ func (self *SearchRemoteClient) asksSearch(indexerId Id) bool {
 	if !ok || !slices.Contains(self.eligibleAnywhere(state, selfId), indexerId) {
 		return false
 	}
-	if searchRemoteOwn(state, indexerId, selfId) {
-		return true
-	}
-	if mode != SearchRemoteOn {
-		return false
-	}
-	memberId, ok := searchRemoteNoticeMember(state, indexerId)
-	if !ok {
-		return false
-	}
-	allow, answered := self.answer(memberId)
-	return answered && allow
+	return self.mayDiscloseTo(state, selfId, indexerId, mode)
 }
 
 // The first-choice own indexer now, which HeadCheck's foreground round counts among its own picks (§6.4's round row,
@@ -286,9 +284,6 @@ func (self *SearchRemoteClient) foreground() (bool, chan struct{}) {
 // and each move of the mode, the answers or the config while in it, the first-choice own indexer, the zero Id where
 // there is none. Nothing here opens a session or sends a frame (owner decision 609).
 func (self *SearchRemoteClient) follow(ctx context.Context, transport searchRemoteTransport) {
-	if err := transport.SetAsksSearch(self.asksSearch); err != nil {
-		self.log.Warningf("[search]remote search could not set bit 1: %s", err)
-	}
 	configMoved := make(chan struct{}, 1)
 	if self.args.ConfigWatch != nil {
 		stop := self.args.ConfigWatch(func() {
@@ -465,7 +460,7 @@ func (self *SearchRemoteClient) eligibleAnywhere(state *ConfigState, selfId Id) 
 	}
 	seen := map[Id]bool{}
 	for repoId := range acl.repos {
-		for _, indexerId := range state.SearchIndexersFor(selfId, repoId, self.args.Services) {
+		for _, indexerId := range state.searchIndexersAt(selfId, repoId, self.args.Services, self.clock.Now().UnixMilli()) {
 			seen[indexerId] = true
 		}
 	}

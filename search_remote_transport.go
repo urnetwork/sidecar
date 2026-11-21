@@ -105,7 +105,10 @@ func (self *searchRemoteSubprotocolTransport) resolve(ctx context.Context, index
 }
 
 // See searchRemoteTransport.
-func (self *searchRemoteSubprotocolTransport) Call(ctx context.Context, indexerId Id, body []byte) ([]byte, error) {
+func (self *searchRemoteSubprotocolTransport) Call(ctx context.Context, indexerId Id, body []byte, allowed func() bool) ([]byte, error) {
+	if !allowed() {
+		return nil, errSearchRemotePermission
+	}
 	clientId, err := self.resolve(ctx, indexerId)
 	if err != nil {
 		return nil, err
@@ -125,6 +128,10 @@ func (self *searchRemoteSubprotocolTransport) Call(ctx context.Context, indexerI
 	peer, ok := self.subprotocol.PeerIdentity(Id(clientId))
 	if !ok || peer.SidecarId != indexerId || peer.Features&SubprotocolFeatureServesSearch == 0 {
 		return nil, errSearchRemoteAuth
+	}
+	// Resolving a binding and authenticating a new Hello can span a revocation or a changed notice.
+	if !allowed() {
+		return nil, errSearchRemotePermission
 	}
 	return self.subprotocol.Call(ctx, Id(clientId), protocol.MessageType_SEARCH, body, nil)
 }

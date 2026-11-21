@@ -367,7 +367,10 @@ type searchTestRemoteTransport struct {
 }
 
 // See searchRemoteTransport: the test transport's.
-func (self *searchTestRemoteTransport) Call(ctx context.Context, indexerId Id, body []byte) ([]byte, error) {
+func (self *searchTestRemoteTransport) Call(ctx context.Context, indexerId Id, body []byte, allowed func() bool) ([]byte, error) {
+	if !allowed() {
+		return nil, errSearchRemotePermission
+	}
 	return self.inner.Call(ctx, indexerId, body)
 }
 
