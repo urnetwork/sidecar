@@ -232,30 +232,28 @@ func (self *EvsRepo) streamVersion(ctx context.Context, result *evsReadResult, g
 	if !ok {
 		return nil, fmt.Errorf("%w: the push record of version %d", ErrEvsObjectMissing, statement.Version)
 	}
-	batchRecord, err := ParseEvsBatchRecord(record)
+	batchRecord, tail, err := self.parseReadBatchRecord(record)
 	if err != nil {
 		return nil, fmt.Errorf("%w: a push record that does not parse", ErrEvsEntryRefused)
 	}
 	var payload *EvsCheckedPayload
 	switch {
-	case (batchRecord.Type == protocol.EvsBatchRecordType_EVS_BATCH_PUSH || batchRecord.Type == protocol.EvsBatchRecordType_EVS_BATCH_RESEED) && push.GetPartCount() == 0:
-		// a push record, or a re-seeded push's reseed record holding a push record's body (QD-725)
-		statementBytes, payloadBytes, err := ParseEvsPushRecordBody(batchRecord.Body)
-		if err != nil || !bytes.Equal(statementBytes, statement.Statement.Bytes) {
-			return nil, fmt.Errorf("%w: a push record of another statement", ErrEvsEntryRefused)
-		}
-		// a record keeps no slot body (QD-806): the keys come from the slots the reply carried
-		if payload, err = EvsCheckRecordPayload(statement.Statement, payloadBytes); err != nil {
+	case push.GetPartCount() == 0:
+		if payload, err = self.checkReadPushPayload(statement.Statement, batchRecord, tail); err != nil {
 			return nil, err
 		}
 	case batchRecord.Type == protocol.EvsBatchRecordType_EVS_BATCH_SEAL && 0 < push.GetPartCount():
+		signed, places, err := ParseEvsSealRecordBody(batchRecord.Body)
+		if err != nil || !bytes.Equal(signed, statement.Statement.Bytes) || len(places) != int(push.GetPartCount()) {
+			return nil, fmt.Errorf("%w: a seal record of another statement or part count", ErrEvsEntryRefused)
+		}
 		parts := make([][]byte, push.GetPartCount())
 		for part := range parts {
 			partRecord, ok := group.record(push.GetPushId(), uint64(part+1))
 			if !ok {
 				return nil, fmt.Errorf("%w: part %d of version %d", ErrEvsObjectMissing, part+1, statement.Version)
 			}
-			parsed, err := ParseEvsBatchRecord(partRecord)
+			parsed, _, err := self.parseReadBatchRecord(partRecord)
 			if err != nil {
 				return nil, fmt.Errorf("%w: a part record that is not one part's", ErrEvsEntryRefused)
 			}
@@ -269,13 +267,14 @@ func (self *EvsRepo) streamVersion(ctx context.Context, result *evsReadResult, g
 			}
 			parts[part] = partBytes
 		}
-		if payload, _, err = EvsCheckStoredSeal(statement.Statement, parts); err != nil {
-			return nil, fmt.Errorf("%w: %w", ErrEvsEntryRefused, err)
+		if payload, err = self.checkReadSeal(statement.Statement, parts); err != nil {
+			return nil, err
 		}
 	default:
 		return nil, fmt.Errorf("%w: a record of type %d for a push of %d parts", ErrEvsEntryRefused, batchRecord.Type, push.GetPartCount())
 	}
 	version := &EvsStreamVersion{Version: statement.Version, Statement: statement, Payload: payload}
+	reader := self.client.format2Reader()
 	for _, change := range payload.Changes {
 		if !change.WritesEntry() {
 			continue
@@ -283,6 +282,12 @@ func (self *EvsRepo) streamVersion(ctx context.Context, result *evsReadResult, g
 		entry := &protocol.EvsEntryVersion{}
 		if err := proto.Unmarshal(change.EntryVersion, entry); err != nil {
 			return nil, fmt.Errorf("%w: an entry that does not parse", ErrEvsEntryRefused)
+		}
+		if reader != nil && EvsEntryVersionNeedsFormat2(entry) {
+			// Owned record streams keep every version. Apply the writer's pinned rules before using the entry.
+			if err := reader.verifyVersion(self.client.verifier, self.repoId, result.refId, statement.Statement, nil, EvsReservedRefNone, entry); err != nil {
+				return nil, err
+			}
 		}
 		if entry.GetKind() != uint32(protocol.EvsEntryKind_EVS_ENTRY_FILE) {
 			continue

@@ -67,7 +67,7 @@ func (self *EvsRepo) pushContent(ctx context.Context, head *EvsVerifiedHead, sta
 				if err != nil {
 					return err
 				}
-				record, err := ParseEvsBatchRecord(recordBytes)
+				record, _, err := self.parseReadBatchRecord(recordBytes)
 				if err != nil {
 					return fmt.Errorf("%w: a part record that is not one part's", ErrEvsEntryRefused)
 				}
@@ -91,7 +91,16 @@ func (self *EvsRepo) pushContent(ctx context.Context, head *EvsVerifiedHead, sta
 			return nil, fmt.Errorf("%w: part %d evs did not serve", ErrEvsObjectMissing, part+1)
 		}
 	}
-	checked, _, err := EvsCheckStoredSeal(statement.Statement, parts)
+	return self.checkReadSeal(statement.Statement, parts)
+}
+
+// A stored seal and its parts under the reader's admitted format. Their signed hashes cover the original parts.
+func (self *EvsRepo) checkReadSeal(statement *EvsStatement, parts [][]byte) (*EvsCheckedPayload, error) {
+	check := EvsCheckRecordSeal
+	if self.client.format2Reader() != nil {
+		check = EvsCheckStoredSeal
+	}
+	checked, _, err := check(statement, parts)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrEvsEntryRefused, err)
 	}
@@ -123,28 +132,37 @@ func (self *EvsRepo) pushPayload(ctx context.Context, head *EvsVerifiedHead, sta
 	if record == nil {
 		return nil, fmt.Errorf("%w: a push record evs did not serve", ErrEvsObjectMissing)
 	}
-	// the batch record as its place holds it: its header, then the push's statement and payload, a re-seeded push's
-	// under the reseed type (QD-725); a format-2 reader takes a format-2 record, its staged tail beside it
-	format2 := self.client.format2Reader() != nil
-	var batchRecord *EvsBatchRecord
-	var tail *EvsBatchRecordTail
-	if format2 {
-		batchRecord, tail, err = ParseEvsBatchRecordFormat2(record)
-	} else {
-		batchRecord, err = ParseEvsBatchRecord(record)
+	batchRecord, tail, err := self.parseReadBatchRecord(record)
+	if err != nil {
+		return nil, fmt.Errorf("%w: a push record that does not parse", ErrEvsEntryRefused)
 	}
-	if err != nil || (batchRecord.Type != protocol.EvsBatchRecordType_EVS_BATCH_PUSH && batchRecord.Type != protocol.EvsBatchRecordType_EVS_BATCH_RESEED) {
+	return self.checkReadPushPayload(statement.Statement, batchRecord, tail)
+}
+
+// Both record read modes use the admitted format and preserve the stored tail when present.
+func (self *EvsRepo) parseReadBatchRecord(record []byte) (*EvsBatchRecord, *EvsBatchRecordTail, error) {
+	if self.client.format2Reader() != nil {
+		return ParseEvsBatchRecordFormat2(record)
+	}
+	parsed, err := ParseEvsBatchRecord(record)
+	return parsed, nil, err
+}
+
+// A one-part push or reseed record bound to its verified statement, with any staged tail checked against
+// its signed new objects. An evacuated record's tail can be absent.
+func (self *EvsRepo) checkReadPushPayload(statement *EvsStatement, batchRecord *EvsBatchRecord, tail *EvsBatchRecordTail) (*EvsCheckedPayload, error) {
+	if batchRecord.Type != protocol.EvsBatchRecordType_EVS_BATCH_PUSH && batchRecord.Type != protocol.EvsBatchRecordType_EVS_BATCH_RESEED {
 		return nil, fmt.Errorf("%w: a push record that is not one push's", ErrEvsEntryRefused)
 	}
 	statementBytes, payload, err := ParseEvsPushRecordBody(batchRecord.Body)
-	if err != nil || !bytes.Equal(statementBytes, statement.Statement.Bytes) {
+	if err != nil || !bytes.Equal(statementBytes, statement.Bytes) {
 		return nil, fmt.Errorf("%w: a push record of another statement", ErrEvsEntryRefused)
 	}
-	if !format2 {
+	if self.client.format2Reader() == nil {
 		// as evs keeps it, with no slot body: keys come from slot reads alone (QD-806)
-		return EvsCheckRecordPayload(statement.Statement, payload)
+		return EvsCheckRecordPayload(statement, payload)
 	}
-	checked, err := EvsCheckStoredPayload(statement.Statement, payload)
+	checked, err := EvsCheckStoredPayload(statement, payload)
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +171,7 @@ func (self *EvsRepo) pushPayload(ctx context.Context, head *EvsVerifiedHead, sta
 		if err != nil {
 			return nil, err
 		}
-		if checked.Staged, err = evsMatchStaged(statement.Statement.Push, checked.NewObjects, segments); err != nil {
+		if checked.Staged, err = evsMatchStaged(statement.Push, checked.NewObjects, segments); err != nil {
 			return nil, err
 		}
 	}

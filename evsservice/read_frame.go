@@ -212,20 +212,7 @@ func (self *readAttempt) streamObjects(stream *readStream) bool {
 	engine := self.engine
 	body := self.body
 	for _, slotId := range body.GetSlotIds() {
-		// a slot a drop's job deleted or holds answers missing, stored or not (read_withheld.go)
-		withheld, err := self.withheldSlot(sidecar.Id(slotId))
-		switch {
-		case err != nil:
-			stream.fail("withheld_read_failed", err)
-			return false
-		case withheld:
-			if !stream.missing(protocol.EvsReadObjectKind_EVS_READ_OBJECT_SLOT, slotId, 0) {
-				return false
-			}
-			continue
-		}
-		object, err := self.cluster.Get(self.ctx, SlotKey(self.repoId, sidecar.Id(slotId)))
-		if !self.streamObject(stream, protocol.EvsReadObjectKind_EVS_READ_OBJECT_SLOT, slotId, 0, object, err) {
+		if !self.streamSlot(stream, slotId) {
 			return false
 		}
 	}
@@ -257,11 +244,27 @@ func (self *readAttempt) streamObjects(stream *readStream) bool {
 		}
 	}
 	for _, readRange := range body.GetRanges() {
-		if !self.streamRange(stream, readRange) {
+		if !self.streamRange(stream, readRange, false) {
 			return false
 		}
 	}
 	return true
+}
+
+// A slot named directly or by a stream entry. A drop's withheld slot answers missing before its object is opened.
+func (self *readAttempt) streamSlot(stream *readStream, slotId []byte) bool {
+	kind := protocol.EvsReadObjectKind_EVS_READ_OBJECT_SLOT
+	id := sidecar.Id(slotId)
+	withheld, err := self.withheldSlot(id)
+	switch {
+	case err != nil:
+		stream.fail("withheld_read_failed", err)
+		return false
+	case withheld:
+		return stream.missing(kind, slotId, 0)
+	}
+	object, err := self.cluster.Get(self.ctx, SlotKey(self.repoId, id))
+	return self.streamObject(stream, kind, slotId, 0, object, err)
 }
 
 // One whole object, or missing on a 404.
@@ -303,39 +306,45 @@ func (self *readAttempt) streamPushRecord(stream *readStream, readPush *protocol
 		stream.fail("record_read_failed", err)
 		return false
 	}
-	// a dropped version's inline record goes as zeros of its length (read_elide.go)
-	if recordBytes, err = self.elideRecord(recordBytes, readPush.GetVersion()); err != nil {
+	return self.streamBatchRecord(stream, pushId, number, readPush.GetVersion(), recordBytes)
+}
+
+// A record as served at its commit version, with dropped inline entries elided before framing.
+func (self *readAttempt) streamBatchRecord(stream *readStream, pushId []byte, number uint64, version uint64, recordBytes []byte) bool {
+	recordBytes, err := self.elideRecord(recordBytes, version)
+	if err != nil {
 		stream.fail("record_elide_failed", err)
 		return false
 	}
-	return stream.object(self.settings, kind, pushId, number, 0, bytes.NewReader(recordBytes))
+	return stream.object(self.settings, protocol.EvsReadObjectKind_EVS_READ_OBJECT_BATCH_RECORD, pushId, number, 0, bytes.NewReader(recordBytes))
 }
 
-// One segment range: whole up to ReadSegmentWholeByteCount, else the aligned range covering it (§11.9's rounds
-// row). A segment evs holds no copy of answers missing.
-func (self *readAttempt) streamRange(stream *readStream, readRange *protocol.EvsReadRange) bool {
-	// a segment a drop's job deleted, holds or packed answers missing, stored or not (read_withheld.go)
-	withheld, err := self.withheldSegment([32]byte(readRange.GetSegmentId()))
+// A withheld segment answers missing before opening it. A streams read sends the exact range its entry needs.
+// An ordinary read serves staged bytes, a whole small segment, or the aligned range covering the request.
+func (self *readAttempt) streamRange(stream *readStream, readRange *protocol.EvsReadRange, exact bool) bool {
+	kind := protocol.EvsReadObjectKind_EVS_READ_OBJECT_SEGMENT
+	segmentId := [32]byte(readRange.GetSegmentId())
+	withheld, err := self.withheldSegment(segmentId)
 	switch {
 	case err != nil:
 		stream.fail("withheld_read_failed", err)
 		return false
 	case withheld:
-		return stream.missing(protocol.EvsReadObjectKind_EVS_READ_OBJECT_SEGMENT, readRange.GetSegmentId(), 0)
+		return stream.missing(kind, segmentId[:], 0)
 	}
-	// format 2: a staged segment one of the request's paths stages is read in its push's record (read_staged.go)
-	if handled, ok := self.streamStagedRange(stream, readRange); handled || !ok {
-		return ok
-	}
-	kind := protocol.EvsReadObjectKind_EVS_READ_OBJECT_SEGMENT
-	segmentId := [32]byte(readRange.GetSegmentId())
-	offset := int64(readRange.GetOffset())
-	end := offset + int64(readRange.GetLength())
-	from, byteCount := int64(0), int64(0)
-	if self.settings.ReadSegmentWholeByteCount < end {
-		align := self.settings.ReadSegmentRangeAlign
-		from = offset - offset%align
-		byteCount = (end - from + align - 1) / align * align
+	from, byteCount := int64(readRange.GetOffset()), int64(readRange.GetLength())
+	if !exact {
+		if handled, ok := self.streamStagedRange(stream, readRange); handled || !ok {
+			return ok
+		}
+		end := from + byteCount
+		if end <= self.settings.ReadSegmentWholeByteCount {
+			from, byteCount = 0, 0
+		} else {
+			align := self.settings.ReadSegmentRangeAlign
+			from -= from % align
+			byteCount = (end - from + align - 1) / align * align
+		}
 	}
 	object, err := self.engine.segments.OpenSegment(self.ctx, self.cluster, self.repoId, segmentId, from, byteCount)
 	switch {
@@ -346,5 +355,9 @@ func (self *readAttempt) streamRange(stream *readStream, readRange *protocol.Evs
 		return false
 	}
 	defer object.Body.Close()
-	return stream.object(self.settings, kind, segmentId[:], 0, uint32(from), object.Body)
+	var body io.Reader = object.Body
+	if 0 < byteCount {
+		body = io.LimitReader(body, byteCount)
+	}
+	return stream.object(self.settings, kind, segmentId[:], 0, uint32(from), body)
 }

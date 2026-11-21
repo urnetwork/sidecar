@@ -12,32 +12,30 @@ import (
 	"github.com/urnetwork/sidecar"
 )
 
-// Whether the read withholds id: see the file header.
-func (self *readAttempt) withheld(id DropScanId) (bool, error) {
+// The current set for the object about to be served, including every segment in a record's staged tail.
+func (self *readAttempt) withheldIds() (map[DropScanId]bool, error) {
 	if !self.engine.format2Instance() {
-		return false, nil
+		return nil, nil
 	}
 	table, err := self.engine.drops.Read(self.ctx, self.cluster, self.repoId)
 	if err != nil || table.Etag == "" {
-		return false, err
+		return nil, err
 	}
 	segmentCluster, err := self.engine.blobs.SegmentCluster()
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	set, err := self.engine.dropIndex.Withheld(self.ctx, segmentCluster, self.cluster.ClusterId(), self.repoId, table.State, self.engine.clock.Now())
-	if err != nil {
-		return false, err
-	}
-	return set[id], nil
+	return self.engine.dropIndex.Withheld(self.ctx, segmentCluster, self.cluster.ClusterId(), self.repoId, table.State, self.engine.clock.Now())
 }
 
 // Whether the read withholds the segment.
 func (self *readAttempt) withheldSegment(segmentId [32]byte) (bool, error) {
-	return self.withheld(DropSegmentId(segmentId))
+	ids, err := self.withheldIds()
+	return ids[DropSegmentId(segmentId)], err
 }
 
 // Whether the read withholds the slot.
 func (self *readAttempt) withheldSlot(slotId sidecar.Id) (bool, error) {
-	return self.withheld(DropSlotId(slotId))
+	ids, err := self.withheldIds()
+	return ids[DropSlotId(slotId)], err
 }
