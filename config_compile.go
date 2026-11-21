@@ -45,6 +45,7 @@ var (
 
 // The rows the log's records give at a head's folded_through, which compile encodes beside the head's acl part.
 type ConfigCompileRows struct {
+	recoveryBodies map[Id]*configRecoveryBody
 	Members        []*bridge.MemberRow
 	Sidecars       []*bridge.SidecarRow
 	Delegations    []*bridge.DelegationRow
@@ -69,6 +70,7 @@ func ConfigCompileRowsOf(state *ConfigState) *ConfigCompileRows {
 		aclStatements = proto.Clone(state.aclRows).(*protocol.AclRows)
 	}
 	return &ConfigCompileRows{
+		recoveryBodies: state.recoveryBodies,
 		Members:        rows.GetMembers(),
 		Sidecars:       rows.GetSidecars(),
 		Delegations:    rows.GetDelegations(),

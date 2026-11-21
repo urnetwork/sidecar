@@ -271,6 +271,10 @@ func configApplyRecoveryBinding(next *configStateBuilder, statement *configState
 		signer = statement.signers[0]
 	}
 	binding := &bridge.RecoveryBindingRow{KeySha256: bytes.Clone(keySha256), Signer: signer.RowsSigner(), At: statement.n, Reason: reason}
+	// Keep the encrypted statement that actually took effect, including a completed proposal. Its hash alone
+	// does not authenticate the X-Wing public key held inside the sealed body.
+	next.state.recoveryBodies = configCloneMap(next.state.recoveryBodies)
+	next.state.recoveryBodies[memberId] = &configRecoveryBody{at: statement.n, kind: statement.signedType, body: bytes.Clone(statement.bodyBytes)}
 	member.Bindings = append([]*bridge.RecoveryBindingRow{binding}, member.Bindings...)
 	member.RecoveryKeySha256 = bytes.Clone(keySha256)
 	configVoidProposals(next, statement.n, func(proposal *configProposal) bool {
