@@ -3,9 +3,13 @@
 package main
 
 import (
+	"errors"
+	"fmt"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
+
+	"github.com/urnetwork/connect"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
@@ -13,12 +17,19 @@ import (
 	"github.com/urnetwork/sidecar/sidecartest/enginenet"
 )
 
-// A newly bound reader has only its member's published config, EVS client and an empty record store.
-func TestHostedMemberReadsSignedVaultRecord(t *testing.T) {
+// Opens the normal daemon follower and writes a signed note to its member vault.
+func hostedRecordNote(t *testing.T, format2 bool) (*testUrFollowWorld, *sidecar.Sidecar, *sidecar.EvsClient, *sidecar.SidecarRecord, sidecar.Id, *sidecar.RecordEntryRef) {
+	t.Helper()
 	world := newTestUrFollowWorld(t, 1)
 	engines := enginenet.NewEngines(t, world.net, nil)
 	network := world.networks[0]
 	engines.OpenNetwork(network.NetworkId())
+	if format2 {
+		id := connect.Id(network.NetworkId()).String()
+		if err := world.net.Fakes().Gates.Set(fmt.Sprintf("sidecar:\n  evs: {enabled: true, networks: [%q]}\n  gkm: {enabled: true, networks: [%q]}\n  format2: {enabled: true, networks: [%q]}\n", id, id, id)); err != nil {
+			t.Fatal(err)
+		}
+	}
 	running := world.host(network, nil)
 	world.standing(running, network)
 	if err := engines.Sync(world.ctx, network.NetworkId()); err != nil {
@@ -39,12 +50,8 @@ func TestHostedMemberReadsSignedVaultRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	config := running.ConfigFollower().Client()
 	writer, err := running.Record()
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := writer.BindMemberReplica(config, evs); err != nil {
 		t.Fatal(err)
 	}
 	if err := writer.PrepareDirectWrites(world.ctx); err != nil {
@@ -60,10 +67,18 @@ func TestHostedMemberReadsSignedVaultRecord(t *testing.T) {
 	if err := writer.Land(world.ctx, refs); err != nil {
 		t.Fatal(err)
 	}
+	return world, running, evs, writer, vault, refs[0]
+}
+
+// A newly bound reader has only its member's published config, EVS client and an empty record store.
+func TestHostedMemberReadsSignedVaultRecord(t *testing.T) {
+	world, running, evs, _, vault, ref := hostedRecordNote(t, false)
+	config := running.ConfigFollower().Client()
+	want := &protocol.CoordinationBody{Text: "the member's first vault note"}
 	identity := running.Identity()
 	reader, err := sidecar.NewSidecarRecord(&sidecar.SidecarRecordArgs{
 		SidecarId: identity.SidecarId, IdentityPublicKey: identity.IdentityPublicKey, Sign: running.Sign,
-		Store: sidecartest.NewFakeStore().Root(), Clock: network.Clock(), Settings: sidecar.DefaultSidecarSettings().Record,
+		Store: sidecartest.NewFakeStore().Root(), Clock: world.networks[0].Clock(), Settings: sidecar.DefaultSidecarSettings().Record,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -74,12 +89,38 @@ func TestHostedMemberReadsSignedVaultRecord(t *testing.T) {
 	if err := reader.Reader().Sync(world.ctx, vault); err != nil {
 		t.Fatal(err)
 	}
-	entry, ok := reader.Reader().Entry(vault, refs[0].EntryId)
-	if !ok || entry.State != sidecar.RecordEntryLive || entry.BodyInvalid || entry.Leaf != refs[0].Leaf {
+	entry, ok := reader.Reader().Entry(vault, ref.EntryId)
+	if !ok || entry.State != sidecar.RecordEntryLive || entry.BodyInvalid || entry.Leaf != ref.Leaf {
 		t.Fatalf("verified reader lost the signed vault entry: %v", entry)
 	}
 	got := &protocol.CoordinationBody{}
 	if err := proto.Unmarshal(entry.Body, got); err != nil || !proto.Equal(got, want) {
 		t.Fatalf("reopened vault note: %v, %v", got, err)
+	}
+}
+
+// The native daemon's stock erase reaches the authenticated companion CUT and the writer's completion ERASE.
+func TestHostedMemberErasesSignedVaultRecordWithItsIndex(t *testing.T) {
+	world, _, evs, writer, vault, ref := hostedRecordNote(t, true)
+	if !evs.Format2Admitted() {
+		t.Fatal("the daemon did not receive the format2 gate")
+	}
+	result, err := writer.Eraser().Erase(world.ctx, &sidecar.RecordEraseArgs{LogId: vault, EntryIds: []sidecar.Id{ref.EntryId}, Reason: sidecar.RecordErasureReasonPerson, Confirmed: true})
+	if err != nil || result.Index == nil || !result.Index.Fenced || !result.Index.Completed || result.Index.DocumentCount != 1 {
+		t.Fatalf("record erasure and index: %+v, %v", result, err)
+	}
+	erasures, err := evs.Repo(vault).ReadErasures(world.ctx, 0)
+	if err != nil || len(erasures) < 2 {
+		t.Fatalf("erasure statements: %+v, %v", erasures, err)
+	}
+	last := erasures[len(erasures)-1]
+	if last.ErasureId != result.ErasureId || !last.Completion || !last.Complete {
+		t.Fatalf("completion: %+v", last)
+	}
+	// A subsequent operation on the same initialized vault must wait if a rollout closes while its format-2 index stands.
+	evs.SetFormat2Source(func() bool { return false })
+	_, err = writer.Eraser().Plan(world.ctx, &sidecar.RecordEraseArgs{LogId: vault, EntryIds: []sidecar.Id{ref.EntryId}})
+	if !errors.Is(err, sidecar.ErrRecordEraseIndexUnavailable) {
+		t.Fatalf("closed format2 on an initialized vault: %v", err)
 	}
 }
