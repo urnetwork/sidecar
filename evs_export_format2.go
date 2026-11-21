@@ -12,6 +12,10 @@
 //	          the ref's history, evs not reporting it refused) exports as the stub `ur-dropped <drop id hex> <entry
 //	          hash hex>\n` with its entry version's mode, and its commit's note names it (dropped <token path> <drop
 //	          id> <entry hash>); a pending drop's versions, and a cancelled or refused drop's, export their content
+//	erased    a version whose key a committed ERASE destroyed, the path's newest versionless one or a kept one, exports as
+//	          format 1's erased stub, `ur-erased <token path hex> <entry hash hex>\n` under its entry version's mode
+//	          (§11.12's retention row; evs_export_file.go), and the replay goes on; a replaced versionless version
+//	          stays its pointer and a dropped one its drop's stub, which read no content, whatever their keys
 //	exact     export replays the ref's whole history, so it is a replaying reader: each executed drop's lists are held
 //	          to the history it replayed (EvsCheckDropExact), and a drop whose body and list disagree fails the export
 //	          with history_drop invalid naming its signer, rather than leave its stubs in commits already written
@@ -31,6 +35,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -200,6 +205,15 @@ func (self *EvsRepo) exportFormat2File(ctx context.Context, writer *evsGitObject
 	refId := head.RefId
 	path := string(bytes.Join(pathNames, []byte("/")))
 	info, err := self.ReadVersion(ctx, &EvsReadArgs{RefId: &refId, Path: path, Version: entry.GetVersion()}, spill)
+	if errors.Is(err, ErrEvsErased) {
+		// its key a committed ERASE destroyed: the erased stub, and the replay goes on (see the file header)
+		oid, err := writer.writeErasedStub(change)
+		if err != nil {
+			return false, "", err
+		}
+		state[evsExportKey(pathNames)] = &evsExportPath{names: pathNames, mode: fields.GetMode(), oid: oid}
+		return true, "", nil
+	}
 	if err != nil {
 		return false, "", err
 	}
