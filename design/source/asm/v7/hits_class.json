@@ -2342,7 +2342,7 @@
  {
   "family": "window_14d_weekly",
   "file": "16-MCP.md",
-  "line": 1759,
+  "line": 1762,
   "col": 14,
   "match": "7-day window",
   "snippet": "latest index (7-day window)           ~48 MB              ~190 MB               ~480 MB",

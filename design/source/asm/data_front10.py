@@ -2333,3 +2333,32 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "which the owner had the run take over: a policy writer's later member-directory pages (677), Team scope "
     "declarations (678), following @@OD:40@@, `ip:` tests and activated route grants (679), extending @@OD:615@@, "
     "and a delegated DNS-01 challenge's handoff (680), following @@OD:417@@. ")
+
+# The same fold: the build's two answers recorded while it ran, QD-1166 and QD-1167.
+INDEX += [
+    (681, 'A met path closed past the window',
+     'Past the window the runner still closes a path it met inside it once the path drops the document, ending '
+     'the erasure.'),
+    (682, "A begun directory erasure whose check fails",
+     "A request an ERASE names has its owed format-2 work finished whatever its check reads now, catching nothing "
+     'new.'),
+]
+for _n, _note in [
+        (472, ' Refined by @@OD:682@@: a lapsed request an ERASE already names still has its owed work finished.'),
+        (604, ' Refined by @@OD:682@@: a superseded request an ERASE already names still has its owed work '
+              'finished.'),
+        (676, ' Amended by @@OD:681@@: past the window the runner also closes a path met inside it once the path '
+              'drops the document.'),
+        (676, " Extended by @@OD:682@@: a begun erasure finishes whatever its request's check reads later."),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 683))
+DATES.update({_n: '2026-11-21' for _n in range(681, 683)})
+_D680 = "and a delegated DNS-01 challenge's handoff (680), following @@OD:417@@. "
+assert DECISIONS_INTRO.count(_D680) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D680, _D680 + "The same fold numbers the build's two answers recorded while it ran: a path the directory's "
+    "erasure runner met inside a request's window, closed past it (681), amending @@OD:676@@, and a begun erasure "
+    "whose request's check now fails (682), extending @@OD:676@@ and refining @@OD:472@@ and @@OD:604@@. ")
