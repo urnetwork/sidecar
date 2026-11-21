@@ -553,6 +553,36 @@ func (self *directoryFiles) acceptedAt(path string) *directoryAcceptedFile {
 	return self.accepted[path]
 }
 
+// A verified current card drops withdrawn items by omission. An older retained
+// announce entry cannot restore one. Later entries still participate in the fold.
+func (self *directoryFiles) supersedesEntry(version *directoryVersion) bool {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if version.key.Kind == DirectoryAnnouncementKindRepo {
+		repoId := recordIdOf(version.item.GetWhere().GetRepoId())
+		taken := self.accepted[DirectoryRepoPath(repoId)]
+		return taken != nil && taken.file.Removed && version.pushTimeMillis <= taken.file.TimeMillis
+	}
+	taken := self.accepted[DirectoryCardPath(version.writerId)]
+	if taken == nil {
+		return false
+	}
+	if taken.file.Removed {
+		return min(version.pushTimeMillis, version.item.GetRenewedMillis()) <= taken.file.TimeMillis
+	}
+	// An offline stream draft may be delivered after the snapshot. Its renewal
+	// and the card's written time are both signed by this same writer.
+	if version.item.GetRenewedMillis() > taken.card.Card.GetWrittenMillis() {
+		return false
+	}
+	for _, item := range taken.card.Card.GetItems() {
+		if item.GetKind() == uint32(version.key.Kind) && bytes.Equal(item.GetAnnouncementId(), version.key.AnnouncementId[:]) {
+			return false
+		}
+	}
+	return true
+}
+
 // Whether the newest version this copy judged at path was refused: a breach, which its rightful writer repairs.
 func (self *directoryFiles) breached(path string) bool {
 	self.stateLock.Lock()
