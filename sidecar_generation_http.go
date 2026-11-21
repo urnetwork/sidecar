@@ -203,6 +203,24 @@ func (self *sidecarHttpGeneration) newPollClient() (*PushPollClient, error) {
 		pollClient.Close()
 		return nil, err
 	}
+	// The Worker may open its replica before or after this poll client. Resolve the current
+	// follower on delivery so notices survive token refresh and an intervening close.
+	for _, topic := range []string{PushTopicTeam, PushTopicGkm, PushTopicGkmGroupPrefix} {
+		if _, err := pollClient.Subscribe(topic, func(notice PushNotice) {
+			follower := sidecar.ConfigFollower()
+			if follower == nil {
+				return
+			}
+			if topic == PushTopicTeam {
+				follower.receiveNotice(notice)
+			} else if hints := follower.args.Hints; hints != nil {
+				hints.Receive(notice)
+			}
+		}); err != nil {
+			pollClient.Close()
+			return nil, err
+		}
+	}
 	// it read the store: a reason an earlier poll client's failure raised ends before this one's first poll reports
 	sidecar.subprotocolStoreRead(generationNumber)
 	close(subscribed)

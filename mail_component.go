@@ -332,8 +332,11 @@ func (self *MailClient) bindFromSidecar(ctx context.Context, env *SidecarEnv) {
 	self.Bind(binding)
 }
 
-// The network's EvsClient: the evs component's, nil while none is attached.
+// A member host's verified client, including when it only exposes mail, or the daemon's EVS component.
 func (self *Sidecar) mailEvsClient() *EvsClient {
+	if replica := self.MemberReplica(); replica != nil {
+		return replica.Evs()
+	}
 	leg, ok := self.leg.(*sidecarConnectLeg)
 	if !ok {
 		return nil
