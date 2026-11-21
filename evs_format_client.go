@@ -32,20 +32,30 @@ func EvsFormat2AdmittedBy(core *SidecarSyncCore) bool {
 func (self *EvsClient) SetFormat2Source(admitted func() bool) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	self.format2Source = admitted
+	if admitted == nil {
+		self.format2Source = nil
+		return
+	}
+	self.format2Source = func() (bool, bool) { return admitted(), true }
 }
 
-// Whether the network is in §19.11's format2 gate, as the newest core answer the composition holds lists it; false
-// with no source, so the client writes format 1.
+// The network's rollout gate. An unknown result cannot establish that a repo has no format-2 history.
+// MaxFormat limits this binary's capabilities independently of the network's rollout.
+func (self *EvsClient) Format2Gate() (admitted bool, known bool) {
+	self.stateLock.Lock()
+	source := self.format2Source
+	self.stateLock.Unlock()
+	if source == nil {
+		return false, false
+	}
+	return source()
+}
+
+// Whether this client can write format 2 on its network. Format-1 and unknown-gate writers stay at format 1.
 func (self *EvsClient) Format2Admitted() bool {
-	source := func() func() bool {
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
-		return self.format2Source
-	}()
-	// a client held to format 1 (EvsSettings.MaxFormat) writes as a format-1 one, which FS-72's rollback tests run
 	if self.settings != nil && self.settings.MaxFormat < 2 {
 		return false
 	}
-	return source != nil && source()
+	admitted, known := self.Format2Gate()
+	return known && admitted
 }
