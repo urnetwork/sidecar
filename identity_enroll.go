@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // Sidecar.Enroll (§5.6, D-CORE-7, R-CORE-9, R-CORE-11): a top-level client from a §7 auth key, in the order that
 // fails closed. The key's client-only #<bundle> is split off before anything else reads it (TEAM-M1-05's
 // ParseAuthKey), and a urn_ API key or any other network credential is refused. The identity key, ClientKey seed,
@@ -12,7 +14,7 @@
 // the existing keychain journals the immutable candidate before the bind, and the old client is removed, best effort,
 // with its own token after the new generation commits (§5.5). A refused, expired or ended generation is the
 // one case: a lost keychain (keystore_lost) enrolls only after the person confirms a new device (D-CORE-15), and a
-// revoked sidecar never again. Nothing here names a connect type, so it builds on every leg.
+// revoked sidecar never again. Enrollment belongs to the app or daemon. The forwarding role uses its own Delegation.
 
 package sidecar
 
@@ -34,21 +36,6 @@ const sidecarDefaultDeviceSpec = "ur"
 
 // A sidecar that a verified SidecarRevoke ended enrolls only as a new sidecar_id, from new state (§5.5).
 var ErrSidecarRevoked = errors.New("this sidecar is revoked")
-
-// A client token's network and client, read unverified as the refresh schedule reads its claims: only for checks
-// that a verified answer already stands behind, never as authority.
-func sidecarJwtClient(byJwt string) (networkId Id, clientId Id, ok bool) {
-	parse := parseSidecarJwt(byJwt)
-	if !parse.ok {
-		return Id{}, Id{}, false
-	}
-	networkId, networkErr := ParseId(parse.stringClaim("network_id"))
-	clientId, clientErr := ParseId(parse.stringClaim("client_id"))
-	if networkErr != nil || clientErr != nil || networkId == (Id{}) || clientId == (Id{}) {
-		return Id{}, Id{}, false
-	}
-	return networkId, clientId, true
-}
 
 // A first ReaderKey: a fresh X-Wing seed, which the KEM must take as a private key.
 func newSidecarReaderKeySeed(random io.Reader) ([]byte, error) {
@@ -341,22 +328,6 @@ func (self *Sidecar) checkEnrollable(credential *SidecarEnrollCredential) error 
 		return ErrSidecarHostCredentialStore
 	}
 	return nil
-}
-
-// The network this sidecar is enrolled in, a copy, or nil before enrollment and after a logout.
-func (self *Sidecar) NetworkId() *Id {
-	return self.enrolledNetworkId()
-}
-
-// The network this sidecar is enrolled in, a copy, or nil.
-func (self *Sidecar) enrolledNetworkId() *Id {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	if self.networkId == nil {
-		return nil
-	}
-	id := *self.networkId
-	return &id
 }
 
 // Whether every file of this instance lives in memory, as an ephemeral sidecar's must (§5.6).

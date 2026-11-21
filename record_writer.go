@@ -70,6 +70,9 @@ var (
 	errRecordSpoolUnhandled = errors.New("record spool record unhandled")
 )
 
+// The log's direct writer has yet to reconcile its stream in this binding.
+var errRecordHeadPending = errors.New("record writer awaits verified stream head")
+
 // Seals and appends entries to one network's logs, section 5.3's order. Safe for concurrent use. Append routes by
 // section 4.2 and returns once each entry is durable in the journal or spool, never waiting on evs. A kind bound for V
 // and T takes both messages.
@@ -220,39 +223,6 @@ type SidecarRecord struct {
 	// the reach receipts (record_reach.go, which no ios_extension leg links), made at the first Reach: held as any, so
 	// this file, which the forwarding leg links, names none of their types
 	reach any
-}
-
-// A record over args. Nothing is read until the first Append or Run.
-func NewSidecarRecord(args *SidecarRecordArgs) (*SidecarRecord, error) {
-	if args == nil || args.Store == nil || args.Sign == nil || args.Settings == nil {
-		return nil, fmt.Errorf("%w: a record needs a store, a signer and settings", ErrRecordDraftInvalid)
-	}
-	writer := newRecordWriter(args)
-	reader := NewRecordReader(&RecordReaderArgs{
-		SidecarId:    args.SidecarId,
-		Store:        args.Store,
-		Streams:      writer.boundStreams,
-		Auth:         writer.auth,
-		Alarm:        args.Alarm,
-		Clock:        args.Clock,
-		Settings:     args.Settings,
-		Log:          args.Log,
-		AgentSubkeys: args.AgentSubkeys,
-	})
-	self := &SidecarRecord{
-		writer:     writer,
-		reader:     reader,
-		ingester:   newRecordIngester(writer, reader),
-		receipts:   newRecordReceipts(writer),
-		approvals:  &RecordApprovals{writer: writer, reader: reader},
-		accounting: &RecordAccounting{writer: writer, reader: reader},
-		ingestDue:  true,
-	}
-	writer.addCommitHook(func(logId Id) { self.markIngestDue() })
-	self.log = newRecordLog(self, args.Witness)
-	reader.addSyncHook(self.log.monitor)
-	self.export = newRecordExport(self)
-	return self, nil
 }
 
 // The verifiable log (RECORD-M6-05): its monitor runs at each of the reader's syncs.
@@ -955,137 +925,6 @@ func (self *recordWriter) sealOne(env *RecordSealEnv, draft *recordSpoolDraft, r
 	return opening, nil
 }
 
-// Seals a draft's entries by its routes (record_team.go), in order: the vault's, T's, T's copy in the vault, the
-// directory's. A capture with multiple destinations or a spool cursor commits through one write-ahead file.
-func (self *recordWriter) sealRoutes(draft *recordSpoolDraft, routes *recordRoutes, captureId []byte) ([]*RecordEntryRef, error) {
-	kind := RecordKind(draft.Kind)
-	remaining := 0
-	if routes.vault != nil && routes.vaultEntry {
-		remaining += 1
-	}
-	if routes.team != nil {
-		remaining += 1 + len(routes.ledgers)
-		if routes.copy && routes.vault != nil {
-			remaining += 1
-		}
-	}
-	if routes.directory != nil {
-		remaining += 1
-	}
-	if remaining == 0 {
-		return nil, fmt.Errorf("%w: %s routes nowhere", ErrRecordRouteTeamOnly, kind)
-	}
-	self.sealLock.Lock()
-	defer self.sealLock.Unlock()
-	if err := self.finishCaptureWithLock(); err != nil {
-		return nil, err
-	}
-	if err := self.readyToSeal(routes); err != nil {
-		return nil, err
-	}
-	env := &RecordSealEnv{Chain: self.chain, Sign: self.sign, Random: self.random}
-	var capture *recordCapture
-	if remaining > 1 || captureId != nil {
-		var err error
-		capture, err = self.beginCapture(captureId, remaining)
-		if err != nil {
-			return nil, err
-		}
-		defer capture.file.Close()
-		env.stage = capture.stage
-	}
-	// T's body first, so a draft that cannot project seals nothing at all
-	var teamBody []byte
-	if routes.team != nil {
-		projected, err := recordTeamBodyBytes(kind, routes.teamBody, draft.Body, draft.Projection)
-		if err != nil {
-			return nil, err
-		}
-		teamBody = projected
-	}
-	refs := []*RecordEntryRef{}
-	var vaultRef *RecordEntryRef
-	if routes.vault != nil && routes.vaultEntry {
-		sealed, err := self.sealOne(env, draft, routes.vault, kind, draft.Body, draft.contentRefs(), nil)
-		if err != nil {
-			return refs, err
-		}
-		vaultRef = sealed.ref
-		refs = append(refs, sealed.ref)
-	}
-	if routes.team != nil {
-		var content []*protocol.ContentRef
-		if routes.teamBody == recordTeamBodyProjection && vaultRef != nil {
-			// one ContentRef to the vault entry, whose salt stays in its slot row (RECORD.md section 5.1)
-			content = []*protocol.ContentRef{{RepoId: vaultRef.LogId.Bytes(), ObjectId: vaultRef.EntryId.Bytes(), Commitment: bytes.Clone(vaultRef.Commitment[:])}}
-		}
-		sealed, err := self.sealOne(env, draft, routes.team, kind, teamBody, append(content, draft.contentRefs()...), nil)
-		if err != nil {
-			return refs, err
-		}
-		refs = append(refs, sealed.ref)
-		if routes.copy && routes.vault != nil {
-			// what the header's commitment opens with: T's body, or the AgentSignedBody holding it (version 2)
-			copiedBody := teamBody
-			if sealed.committed != nil {
-				copiedBody = sealed.committed
-			}
-			copyBody, err := NewRecordCopyBody([]*RecordOpened{{SignedBytes: sealed.signed, Salt: sealed.salt, Body: copiedBody, Version: sealed.version}})
-			clear(sealed.salt)
-			if err != nil {
-				return refs, err
-			}
-			copyBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(copyBody)
-			if err != nil {
-				return refs, err
-			}
-			// an accounting entry of the run that filed T's, about no action of its own
-			copyDraft := *draft
-			copyDraft.Kind = uint32(RecordKindCopy)
-			copyDraft.Source = uint32(RecordSourceObserved)
-			copyDraft.ActionId = nil
-			copyDraft.GrantId = nil
-			copied, err := self.sealOne(env, &copyDraft, routes.vault, RecordKindCopy, copyBytes, nil, nil)
-			clear(copyBytes)
-			if err != nil {
-				return refs, err
-			}
-			refs = append(refs, copied.ref)
-		}
-		clear(sealed.salt)
-		// T's body again as each in-scope ledger's own entry: its own id, chain position, key and commitment
-		for _, ledger := range routes.ledgers {
-			copied, err := self.sealOne(env, draft, ledger, kind, teamBody, nil, nil)
-			if err != nil {
-				return refs, err
-			}
-			clear(copied.salt)
-			refs = append(refs, copied.ref)
-		}
-	}
-	if routes.directory != nil {
-		sealed, err := self.sealOne(env, draft, routes.directory, kind, draft.Body, nil, nil)
-		if err != nil {
-			return refs, err
-		}
-		refs = append(refs, sealed.ref)
-	}
-	if capture != nil {
-		testHookBarrier("record.capture.commit.before", recordChainIdText(self.sidecarId))
-		if err := capture.file.Commit(); err != nil {
-			return nil, err
-		}
-		self.capturePending = true
-		testHookBarrier("record.capture.commit.after", recordChainIdText(self.sidecarId))
-		if err := self.finishCaptureWithLock(); err != nil {
-			// The whole capture is durable. A later pump installs these exact entries.
-			self.log.Warningf("[record]a committed capture still needs installation: %s", err)
-			self.signal()
-		}
-	}
-	return refs, nil
-}
-
 // Whether a drain may be tried now: none failed within PushCoalesce.
 func (self *recordWriter) drainDue() bool {
 	nowMillis := self.clock.Now().UnixMilli()
@@ -1354,84 +1193,4 @@ func (self *recordWriter) load() error {
 		}
 	}
 	return nil
-}
-
-// The network's record, one per Sidecar, built once its network and identity are known. Its streams stay unavailable
-// until RECORD-M3-12 binds evs, and its authorization state until TEAM's and ACL's states bind (SidecarRecord.Bind), so
-// until then every draft spools, as an unrouted one does. ErrSidecarStoreLocked before enrollment, and
-// ErrSidecarNoIdentity before an identity. The record component (record_component.go) runs its push loop.
-func (self *Sidecar) Record() (*SidecarRecord, error) {
-	networkId := self.knownNetworkId()
-	if self.instance == nil || networkId == nil {
-		return nil, ErrSidecarStoreLocked
-	}
-	identity := self.Identity()
-	if identity == nil {
-		return nil, ErrSidecarNoIdentity
-	}
-	store, err := self.LocalStore().Directory(recordComponentName, recordComponentName)
-	if err != nil {
-		return nil, err
-	}
-	// each takes the records' lock itself, so before it is taken here
-	var spool RecordSpool
-	var kept *Spool
-	if built, err := self.Spool(); err == nil {
-		spool = built
-		kept = built
-	}
-	runs, runsErr := self.Runs()
-	self.records.stateLock.Lock()
-	defer self.records.stateLock.Unlock()
-	self.records.forNetworkWithLock(*networkId)
-	if self.records.record != nil {
-		return self.records.record, nil
-	}
-	args := &SidecarRecordArgs{
-		SidecarId:         identity.SidecarId,
-		IdentityPublicKey: identity.IdentityPublicKey,
-		Store:             store,
-		Sign:              self.Sign,
-		Spool:             spool,
-		// taint read at sealing, true whenever the run store cannot answer (D-MCP-16)
-		Runs: self,
-		Alarm: func(alarm *RecordAlarm) {
-			logId := alarm.LogId
-			self.emitEvent(SidecarEvent{Kind: SidecarEventRecordAlarm, RepoId: &logId, SidecarId: alarm.SidecarId, RecordAlarm: alarm.Reason})
-		},
-		Clock:    self.settings.ClockOrReal(),
-		Settings: self.settings.Record,
-		Log:      self.log,
-	}
-	args.AgentSubkeys = self.settings.AgentSubkeys
-	if recordSidecarAgentSigner != nil && self.settings.AgentSubkeys != nil && self.settings.AgentSubkeys.SignRecordEntries {
-		args.SignProvenance = recordSidecarAgentSigner(self)
-	}
-	if runsErr == nil {
-		args.Gap = func(runId Id, code string) {
-			if err := runs.AddGap(context.Background(), runId, code); err != nil {
-				self.log.Warningf("[record]a coverage gap was not counted: %s", err)
-			}
-		}
-	}
-	record, err := NewSidecarRecord(args)
-	if err != nil {
-		return nil, err
-	}
-	// where a follow job's lines go: a file on this device, on a leg that has files
-	record.SetExportSink(recordExportFileSink())
-	if kept != nil {
-		record.kept = kept
-	}
-	// §5's membership and key events, mirrored into the member's vault (RECORD-M3-08); Queue never blocks. A Sidecar
-	// NewSidecar did not build raises no events to mirror.
-	if self.eventCallbacks != nil {
-		self.AddEventCallback(func(event SidecarEvent) {
-			if mirrored, ok := RecordAccountingEventOf(event); ok {
-				record.Accounting().Queue(mirrored)
-			}
-		})
-	}
-	self.records.record = record
-	return record, nil
 }

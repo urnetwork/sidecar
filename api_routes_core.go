@@ -14,7 +14,6 @@
 package sidecar
 
 import (
-	"bytes"
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
@@ -381,29 +380,6 @@ type sidecarIdentityReply struct {
 	Status            string   `json:"status"`
 	Binding           []byte   `json:"binding"`
 	Bindings          [][]byte `json:"bindings"`
-}
-
-// A browser's opt-in eligibility lookup. An older API can ignore the query, so only a positive reply
-// naming the requested mode can be used to open an admission. The signed binding is checked locally.
-func (self *SidecarApi) browserAdmissionBinding(ctx context.Context, networkId, target Id, mode string) (*SidecarIdentityBinding, error) {
-	if mode != BrowserAdmissionPage && mode != BrowserAdmissionBurner || target == (Id{}) {
-		return nil, ErrSidecarApiArgs
-	}
-	reply := &sidecarIdentityReply{}
-	const route = "GET /sidecar/identity/<sidecar_id>"
-	err := self.sendJson(ctx, &sidecarApiRequest{route: route, operation: "identity", method: "GET", bearer: true,
-		url: self.settings.ApiUrl + "/sidecar/identity/" + target.String() + "?browser_admission=" + mode}, nil, reply)
-	if err != nil {
-		return nil, err
-	}
-	if reply.BrowserAdmission != mode || reply.SidecarId == nil || *reply.SidecarId != target || reply.Status != "active" || reply.IdentityAlg != configIdentityAlgEd25519 {
-		return nil, ErrSidecarApiReply
-	}
-	binding, err := VerifySidecarIdentityBinding(reply.Binding)
-	if err != nil || binding.NetworkId != networkId || binding.SidecarId != target || !bytes.Equal(reply.IdentityPublicKey, binding.IdentityPublicKey) {
-		return nil, ErrSidecarApiReply
-	}
-	return binding, nil
 }
 
 // GET /sidecar/identity/<sidecar_id> (§5.15): a sidecar of the caller's own network, or of one

@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // A file write whose verified base reads ErrEvsErased starts a checkpoint. Its signed file id, mode and base
 // version still identify the file for the path CAS. The replacement has a fresh slot and key even on a versionless
 // path. A git-mode rekey requires the original blob to preserve its oid.

@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // Child enrollment for an sdk host (§5.6's sdk host row, §18.5's EnrollWithDevice, §18.7; CORE-M8-01): the device's
 // token mints this sidecar's client as a child of the device client, admin_refused and strict_exp (§7.4), and the
 // host's TokenSource refreshes it with the core's DPoP signer (api_token_source.go). The sidecar role never holds the

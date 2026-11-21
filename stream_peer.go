@@ -572,3 +572,22 @@ func (self *Subprotocol) clockContext(parent context.Context, timeout time.Durat
 	}()
 	return ctx, cancel
 }
+
+// The verified Hello standing with peerId and the C15 key it verified under, and false while none stands.
+func (self *Subprotocol) peerVerifiedIdentity(peerId connect.Id) (*SubprotocolPeerIdentity, [32]byte, bool) {
+	now := self.clock.Now()
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	identity, ok := self.sourceIdIdentities[peerId]
+	if !ok || !now.Before(identity.expireTime) {
+		return nil, [32]byte{}, false
+	}
+	var peer *SubprotocolPeerIdentity
+	if identity.peer != nil {
+		peer = identity.peer.clone()
+	} else {
+		// a gate an internal test opened by hand: no Hello's fields behind it
+		peer = &SubprotocolPeerIdentity{}
+	}
+	return peer, identity.clientPublicKey, true
+}

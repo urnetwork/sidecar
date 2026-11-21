@@ -82,7 +82,7 @@ func (self *repository) runRootLegTests(t testing.TB, tags []string, testFile st
 		return nil, err
 	}
 	// a failed test's account is on stdout, which runGo keeps out of its error
-	command := exec.Command("go", "test", "-count=1", "-v", "-overlay="+overlayPath, "-tags="+strings.Join(tags, ","), "-run", "^TestSearchLeg", ".")
+	command := exec.Command("go", "test", "-count=1", "-v", "-overlay="+overlayPath, "-tags="+strings.Join(tags, ","), ".")
 	command.Dir = self.moduleDirectory
 	command.Env = environment
 	output, err = command.CombinedOutput()
@@ -107,6 +107,23 @@ func TestLegsRunTheIosExtensionLegsSearchTests(t *testing.T) {
 	}
 	if !slices.Equal(passed, iosExtensionLegTestNames) {
 		t.Errorf("the ios_extension legs' tests that passed are %v, want %v", passed, iosExtensionLegTestNames)
+	}
+}
+
+// Runs the forwarding role's shared call sites with the host stores and signers absent.
+func TestIosExtensionLegsRefuseSidecarOperations(t *testing.T) {
+	repository := openThisCheckout(t)
+	passed, err := repository.runRootLegTests(t, []string{mobileBindTag, iosExtensionTag}, "sidecar_role_extension_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"TestForwardingLegKeepsTheSidecarUnenrolled",
+		"TestForwardingLegReadsWithoutSearchOrWriteRecovery",
+		"TestForwardingLegRefusesRecordAndPeerStreamStores",
+	}
+	if !slices.Equal(passed, want) {
+		t.Errorf("forwarding role tests passed %v, want %v", passed, want)
 	}
 }
 

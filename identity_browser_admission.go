@@ -1,9 +1,10 @@
+//go:build !ios_extension
+
 package sidecar
 
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"slices"
@@ -20,12 +21,6 @@ const (
 )
 
 var ErrBrowserAdmissionConfirmation = errors.New("compare the browser safety number and confirm the displayed admission on the consented device")
-
-type BrowserAdmissionTerms struct {
-	Mode       string `json:"mode"`
-	MailboxId  Id     `json:"mailbox_id"`
-	NotAfterMs int64  `json:"not_after_ms"`
-}
 
 type BrowserAdmissionPreview struct {
 	Terms        BrowserAdmissionTerms `json:"terms"`
@@ -56,11 +51,6 @@ func (authority *ConfigAuthority) BrowserMailbox(memberId, mailboxId Id) *protoc
 
 type browserMailboxAuthority interface {
 	BrowserMailbox(Id, Id) *protocol.AclRepo
-}
-
-type browserAdmissionDependency struct {
-	target Id
-	digest [sha256.Size]byte
 }
 
 // A competing admission or a refused act must never release the contingent OwnerConfirm or EvsShare.
@@ -313,4 +303,27 @@ func (self *Sidecar) admitBrowserBurner(ctx context.Context, request *SidecarAdm
 	}
 	_, err = act.Run(ctx, check)
 	return err
+}
+
+// A browser's opt-in eligibility lookup. An older API can ignore the query, so only a positive reply
+// naming the requested mode can be used to open an admission. The signed binding is checked locally.
+func (self *SidecarApi) browserAdmissionBinding(ctx context.Context, networkId, target Id, mode string) (*SidecarIdentityBinding, error) {
+	if mode != BrowserAdmissionPage && mode != BrowserAdmissionBurner || target == (Id{}) {
+		return nil, ErrSidecarApiArgs
+	}
+	reply := &sidecarIdentityReply{}
+	const route = "GET /sidecar/identity/<sidecar_id>"
+	err := self.sendJson(ctx, &sidecarApiRequest{route: route, operation: "identity", method: "GET", bearer: true,
+		url: self.settings.ApiUrl + "/sidecar/identity/" + target.String() + "?browser_admission=" + mode}, nil, reply)
+	if err != nil {
+		return nil, err
+	}
+	if reply.BrowserAdmission != mode || reply.SidecarId == nil || *reply.SidecarId != target || reply.Status != "active" || reply.IdentityAlg != configIdentityAlgEd25519 {
+		return nil, ErrSidecarApiReply
+	}
+	binding, err := VerifySidecarIdentityBinding(reply.Binding)
+	if err != nil || binding.NetworkId != networkId || binding.SidecarId != target || !bytes.Equal(reply.IdentityPublicKey, binding.IdentityPublicKey) {
+		return nil, ErrSidecarApiReply
+	}
+	return binding, nil
 }

@@ -90,6 +90,21 @@ type EvsPinLoss struct {
 	At          time.Time
 }
 
+// The file version actually returned, at the ref and policy the reader verified. No file body is retained.
+type evsSearchObservation struct {
+	RefName   string            `json:"ref_name,omitempty"`
+	Version   uint64            `json:"version"`
+	Commit    uint64            `json:"commit"`
+	Push      Id                `json:"push"`
+	Signer    Id                `json:"signer"`
+	TimeMs    int64             `json:"time_ms"`
+	Head      uint64            `json:"head"`
+	Chain     [sha256.Size]byte `json:"chain"`
+	AuthChain []byte            `json:"auth_chain"`
+	Tainted   bool              `json:"tainted,omitempty"`
+	Outside   bool              `json:"outside,omitempty"`
+}
+
 // One path's read record.
 type EvsReadRecord struct {
 	search *evsSearchObservation

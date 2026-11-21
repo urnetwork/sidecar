@@ -342,10 +342,8 @@ func NewDirectoryRuns(args *DirectoryRunsArgs) (*DirectoryRuns, error) {
 }
 
 // Resumes terminal writes on the first successful sync after startup, even before a harness attaches.
-func init() {
-	directoryReconcileRuns = func(client *DirectoryClient) error {
-		return client.Runs().Reconcile()
-	}
+func (self *DirectoryClient) reconcileRuns() error {
+	return self.Runs().Reconcile()
 }
 
 // This client's runs, made at the first call over the client's writer, run view, state, store and redactor.

@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // A direct writer reconciles its verified stream before it gives a new capture a sequence. Its capture entry point
 // never waits for the network. Until startup finishes, drafts stay in capture order in the local spool.
 
@@ -10,9 +12,6 @@ import (
 	"fmt"
 	"slices"
 )
-
-// The log's direct writer has yet to reconcile its stream in this binding.
-var errRecordHeadPending = errors.New("record writer awaits verified stream head")
 
 // Opens the record and reconciles its writable streams, for hosts that need immediate signed references. An offline
 // host can construct the record with NewSidecarRecord and let Run prepare it while captures accumulate in its spool.
@@ -181,4 +180,117 @@ func (self *recordWriter) settleRestoredEntries(ctx context.Context, logId Id, t
 		delete(queue.waitingSeqEntries, seq)
 	}
 	return nil
+}
+
+// A record over args. Nothing is read until the first Append or Run.
+func NewSidecarRecord(args *SidecarRecordArgs) (*SidecarRecord, error) {
+	if args == nil || args.Store == nil || args.Sign == nil || args.Settings == nil {
+		return nil, fmt.Errorf("%w: a record needs a store, a signer and settings", ErrRecordDraftInvalid)
+	}
+	writer := newRecordWriter(args)
+	reader := NewRecordReader(&RecordReaderArgs{
+		SidecarId:    args.SidecarId,
+		Store:        args.Store,
+		Streams:      writer.boundStreams,
+		Auth:         writer.auth,
+		Alarm:        args.Alarm,
+		Clock:        args.Clock,
+		Settings:     args.Settings,
+		Log:          args.Log,
+		AgentSubkeys: args.AgentSubkeys,
+	})
+	self := &SidecarRecord{
+		writer:     writer,
+		reader:     reader,
+		ingester:   newRecordIngester(writer, reader),
+		receipts:   newRecordReceipts(writer),
+		approvals:  &RecordApprovals{writer: writer, reader: reader},
+		accounting: &RecordAccounting{writer: writer, reader: reader},
+		ingestDue:  true,
+	}
+	writer.addCommitHook(func(logId Id) { self.markIngestDue() })
+	self.log = newRecordLog(self, args.Witness)
+	reader.addSyncHook(self.log.monitor)
+	self.export = newRecordExport(self)
+	return self, nil
+}
+
+// The network's record, one per Sidecar, built once its network and identity are known. Its streams stay unavailable
+// until RECORD-M3-12 binds evs, and its authorization state until TEAM's and ACL's states bind (SidecarRecord.Bind), so
+// until then every draft spools, as an unrouted one does. ErrSidecarStoreLocked before enrollment, and
+// ErrSidecarNoIdentity before an identity. The record component (record_component.go) runs its push loop.
+func (self *Sidecar) Record() (*SidecarRecord, error) {
+	networkId := self.knownNetworkId()
+	if self.instance == nil || networkId == nil {
+		return nil, ErrSidecarStoreLocked
+	}
+	identity := self.Identity()
+	if identity == nil {
+		return nil, ErrSidecarNoIdentity
+	}
+	store, err := self.LocalStore().Directory(recordComponentName, recordComponentName)
+	if err != nil {
+		return nil, err
+	}
+	// each takes the records' lock itself, so before it is taken here
+	var spool RecordSpool
+	var kept *Spool
+	if built, err := self.Spool(); err == nil {
+		spool = built
+		kept = built
+	}
+	runs, runsErr := self.Runs()
+	self.records.stateLock.Lock()
+	defer self.records.stateLock.Unlock()
+	self.records.forNetworkWithLock(*networkId)
+	if self.records.record != nil {
+		return self.records.record, nil
+	}
+	args := &SidecarRecordArgs{
+		SidecarId:         identity.SidecarId,
+		IdentityPublicKey: identity.IdentityPublicKey,
+		Store:             store,
+		Sign:              self.Sign,
+		Spool:             spool,
+		// taint read at sealing, true whenever the run store cannot answer (D-MCP-16)
+		Runs: self,
+		Alarm: func(alarm *RecordAlarm) {
+			logId := alarm.LogId
+			self.emitEvent(SidecarEvent{Kind: SidecarEventRecordAlarm, RepoId: &logId, SidecarId: alarm.SidecarId, RecordAlarm: alarm.Reason})
+		},
+		Clock:    self.settings.ClockOrReal(),
+		Settings: self.settings.Record,
+		Log:      self.log,
+	}
+	args.AgentSubkeys = self.settings.AgentSubkeys
+	if recordSidecarAgentSigner != nil && self.settings.AgentSubkeys != nil && self.settings.AgentSubkeys.SignRecordEntries {
+		args.SignProvenance = recordSidecarAgentSigner(self)
+	}
+	if runsErr == nil {
+		args.Gap = func(runId Id, code string) {
+			if err := runs.AddGap(context.Background(), runId, code); err != nil {
+				self.log.Warningf("[record]a coverage gap was not counted: %s", err)
+			}
+		}
+	}
+	record, err := NewSidecarRecord(args)
+	if err != nil {
+		return nil, err
+	}
+	// where a follow job's lines go: a file on this device, on a leg that has files
+	record.SetExportSink(recordExportFileSink())
+	if kept != nil {
+		record.kept = kept
+	}
+	// §5's membership and key events, mirrored into the member's vault (RECORD-M3-08); Queue never blocks. A Sidecar
+	// NewSidecar did not build raises no events to mirror.
+	if self.eventCallbacks != nil {
+		self.AddEventCallback(func(event SidecarEvent) {
+			if mirrored, ok := RecordAccountingEventOf(event); ok {
+				record.Accounting().Queue(mirrored)
+			}
+		})
+	}
+	self.records.record = record
+	return record, nil
 }

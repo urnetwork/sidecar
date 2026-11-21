@@ -149,6 +149,7 @@ evs_plan_versionless.go
 evs_proof.go
 evs_push_record.go
 evs_read.go
+evs_read_extension.go
 evs_reconstruct.go
 evs_record.go
 evs_ref.go
@@ -213,8 +214,7 @@ identity_binding.go
 identity_committer.go
 identity_credential.go
 identity_devices.go
-identity_enroll.go
-identity_enroll_child.go
+identity_extension.go
 identity_host_stores_other.go
 identity_keys.go
 identity_pending.go
@@ -281,7 +281,6 @@ record_disclose.go
 record_export.go
 record_export_ocsf.go
 record_export_otel.go
-record_export_sink.go
 record_hash.go
 record_ingest.go
 record_kind.go
@@ -308,6 +307,7 @@ record_team.go
 record_verify.go
 record_verify_packet.go
 record_writer.go
+record_writer_extension.go
 rpc_admission.go
 rpc_call.go
 rpc_contract_class.go
@@ -365,9 +365,9 @@ stream_buffer.go
 stream_conn.go
 stream_credit.go
 stream_edge.go
+stream_ids_extension.go
 stream_keepalive.go
 stream_listen.go
-stream_open.go
 stream_peer.go
 stream_state.go
 testhook.go

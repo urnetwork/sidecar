@@ -60,6 +60,12 @@ type sidecarPendingStatement struct {
 	act *sidecarPendingAct
 }
 
+// The signed browser admission that must land before its dependent statement can be posted.
+type browserAdmissionDependency struct {
+	target Id
+	digest [sha256.Size]byte
+}
+
 // A pending statement's place in its act.
 type sidecarPendingAct struct {
 	actId Id
