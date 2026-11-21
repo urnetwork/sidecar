@@ -59,7 +59,8 @@ func TestPageRemintRestartsWithTheSameTopLevelBinding(t *testing.T) {
 	if err := world.sidecar.EnrollPageClient(ctx, networkId, false, mint); err != nil {
 		t.Fatal(err)
 	}
-	awaitSidecarStatus(t, world.sidecar, atStatus(SidecarStateOffline, 1))
+	world.platform.connected.Set(true)
+	awaitSidecarStatus(t, world.sidecar, atStatus(SidecarStateOnline, 1))
 	original := world.sidecar.Identity()
 	world.sidecar.runningGeneration().tokenManager.Load().end(SidecarReasonRefused)
 	awaitSidecarStatus(t, world.sidecar, atStatus(SidecarStateUnenrolled, 1))
