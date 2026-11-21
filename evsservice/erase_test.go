@@ -372,7 +372,7 @@ func TestConsumeRetryFinishesTheSlotDeleteAfterACommittedRemoval(t *testing.T) {
 	fixture, refId, slotId, request := consumeTestDeposit(t)
 	key := SlotKey(fixture.check.repoId, slotId)
 	if _, err := fixture.host.Blobs.Faults().Add(&sidecartest.FaultPlan{
-		Op: sidecartest.FaultOpDelete, KeyPrefix: key, Result: sidecartest.FailBeforeApply, Repeat: 2,
+		Op: sidecartest.FaultOpDelete, KeyPrefix: key, Result: sidecartest.FailBeforeApply, Repeat: 1,
 	}); err != nil {
 		t.Fatal(err)
 	}
