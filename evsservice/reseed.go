@@ -150,6 +150,7 @@ func (self *EvsEngine) serveReseed(request *EvsRequest) {
 		request.Unavailable(nil)
 		return
 	}
+	excludeReseedTransfer(request.Writer)
 	body := &protocol.EvsReseedRequest{}
 	// every call carries at most one part (QD-836), so every call is held to the route's one bound
 	if !request.ReadMessage(body, self.settings.ReseedBodyMaxByteCount) {
