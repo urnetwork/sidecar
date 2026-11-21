@@ -53,7 +53,7 @@ type GkmAclGate interface {
 	State(networkId sidecar.Id) (*sidecar.AclGateSnapshot, sidecar.AclGateStatus)
 	// Tells the cache a gate needs the network, which starts its load.
 	Changed(networkId sidecar.Id)
-	// ACL-M2-14's scope check at the newest verified state, which also asks for a network the cache has not heard of.
+	// ACL-M2-14's scope check at the newest verified state, which requests a load when the snapshot is missing.
 	HonorScope(networkId sidecar.Id, subjectId sidecar.Id, repoId sidecar.Id, scope sidecar.AclEvsRights, audience sidecar.AclTokenAudience, now time.Time) sidecar.AclScopeAnswer
 }
 
@@ -84,15 +84,11 @@ var _ GkmAuthState = (*AclGkmAuthState)(nil)
 // The snapshot of the token's network, Unknown while it is not loaded, when the cache is asked for it (the file
 // header).
 func (self *AclGkmAuthState) snapshot(principal *sidecar.Principal) (*sidecar.AclGateSnapshot, GkmAuthAnswer) {
-	if self.gate == nil || principal == nil {
+	if principal == nil {
 		return nil, GkmAuthUnknown
 	}
 	networkId := sidecar.Id(principal.NetworkId)
-	snapshot, status := self.gate.State(networkId)
-	if status != sidecar.AclGateLoaded {
-		self.gate.Changed(networkId)
-		return nil, GkmAuthUnknown
-	}
+	snapshot := sidecar.RequestAclGateSnapshot(self.gate, networkId)
 	if snapshot == nil || snapshot.Acl == nil || snapshot.Config == nil {
 		return nil, GkmAuthUnknown
 	}

@@ -63,15 +63,13 @@ func NewAclGateViews(cache *sidecar.AclGateCache) EvsGateViews {
 	return &aclGateViews{cache: cache}
 }
 
-// See EvsGateViews. A network the cache does not track yet is told to it, which starts its load, and is unknown
-// meanwhile.
+// See EvsGateViews. A network with no loaded snapshot is requested and stays unknown until it verifies.
 func (self *aclGateViews) View(networkId sidecar.Id) (sidecar.GkmAuthView, EvsAuthAnswer) {
-	snapshot, status := self.cache.State(networkId)
-	switch {
-	case status == sidecar.AclGateUnknown:
-		self.cache.Changed(networkId)
+	if self.cache == nil {
 		return nil, EvsAuthUnknown
-	case status != sidecar.AclGateLoaded || snapshot == nil || snapshot.Config == nil:
+	}
+	snapshot := sidecar.RequestAclGateSnapshot(self.cache, networkId)
+	if snapshot == nil || snapshot.Config == nil {
 		return nil, EvsAuthUnknown
 	}
 	return snapshot.Config, EvsAuthAllowed

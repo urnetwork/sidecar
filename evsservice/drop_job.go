@@ -320,15 +320,8 @@ func NewAclDropLocks(gate EvsAclGate) DropLockView {
 }
 
 func (self *aclDropLocks) LockStanding(networkId sidecar.Id, repoId sidecar.Id) (bool, EvsAuthAnswer) {
-	if self.gate == nil {
-		return false, EvsAuthUnknown
-	}
-	snapshot, status := self.gate.State(networkId)
-	switch {
-	case status == sidecar.AclGateUnknown:
-		self.gate.Changed(networkId)
-		return false, EvsAuthUnknown
-	case status != sidecar.AclGateLoaded || snapshot == nil || snapshot.Acl == nil:
+	snapshot := sidecar.RequestAclGateSnapshot(self.gate, networkId)
+	if snapshot == nil || snapshot.Acl == nil {
 		return false, EvsAuthUnknown
 	}
 	row := snapshot.Acl.Repo(repoId)
