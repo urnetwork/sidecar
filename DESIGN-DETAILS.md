@@ -2427,7 +2427,7 @@ verifying it                                                                  2.
 A dump loads in 0.13 s where the compressed key must take a square root a point, so the cache holds dumps (3.2.7 step 7). Against the landed π3's 1.7 to 6.9 GiB, the plan is a budget that a host's settings state and the prover keeps to by counting:
 
 ```text
-charge:  ShapeMemoryByteCount (768 MiB) a loaded shape;  PartMemoryByteCount (704 MiB) a proof in flight
+charge:  ShapeMemoryByteCount (768 MiB) a loaded shape;  PartMemoryByteCount (960 MiB) a proof in flight
 rule:    loaded shapes x ShapeMemoryByteCount + proofs in flight x PartMemoryByteCount <= MemoryMaxByteCount
 load:    over the budget -> unload the least recently used shape that no proof in flight uses; none -> wait
 prove:   take one of ProveConcurrency slots, load the part's shape, charge the part, prove, run a collection
@@ -2436,7 +2436,7 @@ idle:    a shape unused for ShapeIdleTimeout (2 min) is unloaded; when the last 
          system (debug.FreeOSMemory)
 ```
 
-The collection after each proof is what the charge rests on: a first proof took 662 MiB over its loaded shape, and proofs run back to back with no collection between them took 1,158 MiB. That rule was not measured here. `BenchmarkPartMemory` (SMTP-M9-39) runs repeated proofs under it and holds `PartMemoryByteCount` to the peak it finds, and the default is raised if that is more. `MemoryMaxByteCount` defaults to 2,240 MiB: two loaded shapes, the one proving and the next, and one proof. A send uses its shapes in runs (key, then env, then msg, then hdr or body), so two is enough to never wait on a load. A host that can give more raises `ProveConcurrency`; each proof at once is 704 MiB more. `MemoryBudgetByteCount` is untouched: QD-483 stands, and proving now has a bound of its own, in the injected prover's settings. A host whose `Measure` cannot finish inside the budget records no `p/` and only queues, as QD-483 has it. Mapping the key dump from the cache file instead of reading it into the heap would take 261 MiB a shape out of the heap and is review-phase work, in the spirit of QD-641; the draft reads it.
+The collection after each proof is what the charge rests on: a first proof took 662 MiB over its loaded shape, and proofs run back to back with no collection between them took 1,158 MiB. That rule was not measured here. `BenchmarkPartMemory` (SMTP-M9-39) runs repeated proofs under it and holds `PartMemoryByteCount` to the peak it finds, and the default is raised if that is more: it measured a ChaCha20 body proof at 935 MiB, so the default is 960 MiB, from 704 MiB first (owner decision 647, QD-1115). `MemoryMaxByteCount` defaults to 2,496 MiB, from 2,240 MiB first: two loaded shapes, the one proving and the next, and one proof. A send uses its shapes in runs (key, then env, then msg, then hdr or body), so two is enough to never wait on a load. A host that can give more raises `ProveConcurrency`; each proof at once is 960 MiB more. `MemoryBudgetByteCount` is untouched: QD-483 stands, and proving now has a bound of its own, in the injected prover's settings. A host whose `Measure` cannot finish inside the budget records no `p/` and only queues, as QD-483 has it. Mapping the key dump from the cache file instead of reading it into the heap would take 261 MiB a shape out of the heap and is review-phase work, in the spirit of QD-641; the draft reads it.
 
 **Settings (QD-702).** Every number above is a field. Identifiers stay constants: the curve's d and l, the generator tags, the scan state's bit positions, the literals of SPEC.md 4.2 and Z5, `keySetVersion`, message ids, role and mode values, and the proof's 164 octets, which is the encoding of three group elements.
 
@@ -2457,7 +2457,7 @@ smtpproof.ProofSettings          DefaultProofSettings(); carried by ProverSettin
 smtpproof.ProverSettings         as landed, and:
   Proof                          *ProofSettings
   SuiteOrder                     0x1303, 0x1301, 0xc02b, 0xc02f
-  MemoryMaxByteCount             2,240 MiB    ShapeMemoryByteCount 768 MiB    PartMemoryByteCount 704 MiB
+  MemoryMaxByteCount             2,496 MiB    ShapeMemoryByteCount 768 MiB    PartMemoryByteCount 960 MiB
   ProveConcurrency               1 proof at once in a send    ShapeIdleTimeout              2 min
   EnvelopeGroupMaxCount          0, for what fits             ReplyEstimateByteCount 40 octets   ReplyMarginByteCount 8 octets
   DataPartTime, DataConnectionTime, DataProofBytes, MaxServerBytes, ForceData   as landed
@@ -2570,7 +2570,7 @@ DATA, the gate's header block, 100 KiB in all       82 / 44              3.4 to 
 - `smtp_data_proof_bytes`, 2 h of body parts at the slowest family's rate (reading 22): about 3.0 MiB on the M1 by projection (2,400 units less the send's own, at 1,295 octets), and 358 KiB on an m5.large at 41,000 a second, 457 KiB by domain. D-SMTP-20's "≈1 MiB" and "≈600 KiB" were never measured; the landed 2 KiB part is 2,103,103 constraints, 281 KiB in 2 h at that rate.
 - A phone does not prove (D-SMTP-18), and nothing here changes that. For scale: a unit needs 1.3 to 1.8 GiB resident and the cache below.
 
-**Memory** (3.2.8, measured): 1,279 MiB peak resident for one proof with its shape loaded, and 1,775 MiB over three proofs with no collection between them; the default budget is 2,240 MiB, kept by counting and by a collection after each proof. Landed: 1.7 to 6.9 GiB for π3 alone.
+**Memory** (3.2.8, measured): 1,279 MiB peak resident for one proof with its shape loaded, and 1,775 MiB over three proofs with no collection between them; the default budget is 2,496 MiB (owner decision 647), kept by counting and by a collection after each proof. Landed: 1.7 to 6.9 GiB for π3 alone.
 
 **I/O.** A host's cache: eleven proving keys as dumps, 261 MiB for a full unit and about 200 MiB for a key shape, 2.6 GiB; eleven compiled circuits of 17 to 151 MiB, about 0.9 GiB; one phase 1's commons, about 0.2 GiB. About 3.7 GiB, against about 8.5 GiB of keys for the landed 22 shapes. The download is about 0.9 GiB, once a key set, against about 2.8 GiB of phase 1 contributions alone for the landed four domain sizes. The check is the cost that is not measured at this size: SPEC.md section 12 has 130 CPU-minutes for a 2^20 shape's ceremony, check and one proof together on the M4 Pro, so a host's check of one shape is under that, and eleven shapes are hours of idle CPU on a desktop and most of a day on an m5.large, once a key set. Phase 1 is now checked once and not per shape. SMTP-M9-32 measures `EnsureKeys` per shape on both machines.
 
@@ -2745,7 +2745,7 @@ smtp-7:
 
 **§4.10.** A bullet: "**The mail prover's key sets** are in no package. A host that sends mail fetches the key set its release pins, by hash, from ur.io at idle and checks it before use (§14.9; DESIGN-DETAILS 3.2.7): about 0.9 GiB fetched and 4 GiB kept."
 
-**§5.4, the settings' comment on memory.** "Proving sits outside `MemoryBudgetByteCount` (QD-483), under the injected prover's own `MemoryMaxByteCount` (2,240 MiB; DESIGN-DETAILS 3.2.8)."
+**§5.4, the settings' comment on memory.** "Proving sits outside `MemoryBudgetByteCount` (QD-483), under the injected prover's own `MemoryMaxByteCount` (2,496 MiB since owner decision 647; DESIGN-DETAILS 3.2.8)."
 
 **§6.11.** `SmtpPreambleResult.code` gains `KEYS 8`.
 
@@ -2935,6 +2935,11 @@ leaves, by module     mox, adns, go-smtp, go-message, go-imap, miekg/dns, acmez,
                         yaml.v3, golang.org/x/text/encoding, golang.org/x/net/html: none is imported by a
                         listed file, and make check refuses each in the leg's go list -deps
 never linked          cli/, mcp/, every <svc>service, smtpproof, sidecarctl: other modules or packages
+seams                 the closure's reviewed registration seams, each with its reason in check/'s list and
+                        DESIGN.md §4.4 (owner decision 596): evs_read_provenance.go, six directory_,
+                        identity_ and record_ files, and evs_read_erased.go, whose init gives a read its
+                        judge of keys gone from their slots, so on the leg a key gone from its slot still
+                        alarms tamper (owner decision 665, QD-1145)
 ```
 
 **Why a computed list.** The file closure was found by building the leg with every root and `protocol` file outside a growing set replaced by an empty one, adding the file that declares each undefined name until it compiles (ten rounds). It is 269 files because the root's files are not layered: 31 `record_`, 25 `rpc_`, 18 `identity_` and 11 `directory_` files are in it for a type or constant each. The linker then drops what nothing reaches, so the list's length does not set the size: of the 269, 118 hold any linked code. What the tags buy is the code and tables that a package-level variable or `init` roots, which no dead-code pass removes: `mox/publicsuffix` (335 KB), the `x/text` encodings (about 700 KB), `html`, `x/text/language`. Measured, the same entry points cost 2,004,152 B more unstripped without the tags, 1,885,888 B stripped. Cutting the list further (an `ios_extension` seam so the leg's files stop naming `record_` and `rpc_` types) is review-phase work the ratchet invites; it would shorten the list and barely move the size.
@@ -8291,15 +8296,24 @@ replaced  an EvsPurgeList with replaced set rides only in a part's record; one i
           INVALID
 ```
 
-The drop table's entry (QD-179's fixed record of at most 128 B) gains one field, and the job's record its round:
+The drop table's entry (QD-179's fixed record of at most 128 B) gains one field, and the job's record its round; as built, the table is a 16 B header, the running job's record, each held job's record, the drops, voids and dry runs, and a SHA-256 trailer (EVS-FORMAT.md's table chapter; owner decision 654):
 
 ```text
 drop entry    drop_id 16 | ref_id 16 | push_id 16 | version u64 | place 20 | not_before_ms i64 | seen_ms i64 |
               state u8 | phase u8 | freed u64 | held u64 | preview_id 16: 126 B
               seen_ms: its appender's checked clock, read after the answer that showed it the DROP committed:
               step 7's 200 for the committing process, a cluster read of the ref's head for any other appender
-job record    job_id 16 | owner 16 | until_ms i64 | phase u8 | round u32 | fence_ms i64 | horizon_ms i64 |
-              cursor (file sequence u32, row u32) | retry_ms i64 | covered u16, within QD-179's 256 B
+header        "URdt" | format u8 (1) | 1 zero byte | held job count u16 | drop count u16 | void count u16 |
+              dry run count u16 | job count u8 (0 or 1) | 1 zero byte: 16 B; the held job count takes
+              bytes 6 and 7, zero before QD-1127, so an older table reads with no held job
+stored entry  the drop entry, then ended_day u16, the UTC day it ended: 128 B; a held entry's ended_day 1
+              means the bound unlisted it where it would have evicted its done twin (QD-1126)
+job record    job_id 16 | owner 16 | until_ms i64 | phase u8 | flags u8 | 2 zero bytes | round u32 |
+              fence_ms i64 | horizon_ms i64 | cursor (file sequence u32, row u32) | retry_ms i64 |
+              covered u16 | 6 zero bytes | freed u64 | held u64 | started_ms i64 | 16 zero bytes: 128 B,
+              the running job's in the slot and one for each held job after it, in the order the jobs
+              moved to held (QD-1127, QD-1128); flags bit 0 held, set on every held job's record and on
+              no running one's, bit 1 resumed, a held job back in the slot after its holds ended
               fence_ms: the largest seen_ms of the job's covered drops; horizon_ms: the round's H
 ```
 
@@ -8538,7 +8552,7 @@ DropCiteBound = 12 min >= 10 min 5.15 s + the 50 ms by which a slow clock may pu
 
 #### 10.2.8 The job
 
-One job a repo (EVSB-M10-03). A job covers the pending drops whose start has passed when it is taken, with one exception that keeps a `now` drop from holding an older one back: a drop whose cite bound the horizon has not yet passed (F4) is left pending for the next job whenever some other startable drop is past its own. If every startable drop is short of its bound the job covers them and waits. A drop's states, as the table holds them:
+One running job a repo (EVSB-M10-03), in the table's slot. A job a hold stops moves its record to the held jobs and gives up the slot, so a drop made during the hold starts, runs and moves to held under it as its no-hold twin would; when the holds end, the held jobs take the free slot back oldest first, before any new job, each a round over the ids its own files hold, ending only its own covered drops, the rest due at once behind it (QD-1127, QD-1128; owner decision 654). A job covers the pending drops whose start has passed when it is taken, with one exception that keeps a `now` drop from holding an older one back: a drop whose cite bound the horizon has not yet passed (F4) is left pending for the next job whenever some other startable drop is past its own. If every startable drop is short of its bound the job covers them and waits. A drop's states, as the table holds them:
 
 ```text
 pending              -> cancelled            a cancel commits: evs's step 8 for the cancel, and the job's start read
@@ -8554,7 +8568,8 @@ executing/verify     -> executing/delete
 executing/delete     -> held                 a hold covers the repo: the rest of D waits (owner decision 184)
 executing/delete     -> executing/horizon    D answered and some id young: the next round
 executing/delete     -> done                 D answered and none young
-held                 -> executing/horizon    every covering hold ended: a round over what was held
+held                 -> executing/horizon    every covering hold ended and the held job back in the slot,
+                                             oldest first: a round over what was held
 ```
 
 The fences, in the order the job meets them. Each must hold when the step that follows it is issued.
@@ -12557,7 +12572,8 @@ re-entry         a full entry of an owed key at its owed version, or a run card 
 stream R         one ref of a record log that holds entries; an owned stream takes only its sidecar's pushes
                  (§11.8), so R has one writer, W_R
 source entry     an entry of one of the kinds RECORD.md 7.4's sources row names for the log's card (a vault:
-                 context, tool_call, change, transcript; a team record: context, change, approval, publish,
+                 context, tool_call, change, transcript, coverage, and in personal mode claim and handoff,
+                 owner decision 467 as QD-899 reads it; a team record: context, change, approval, publish,
                  route, reach, coverage)
 card (R, r)      the run card of run r in stream R: the derived document named run/ || run_id under R's ref_id
 E                the index_epoch a push names: the version of the index ref's newest CUT before it (11.8's 5d)
@@ -12797,7 +12813,10 @@ erase(log, entries), by a device that may erase them (RECORD.md 8):
   2 ERASE every copy's key row and each deposit slot that RECORD.md 8 names, in as many pushes as their keys
     take. The bodies are gone from here. Each ERASE's sealed note is the erasure's ErasureBody, naming
     the entry ids, as landed (record_erase.go). No ERASE of this step or the next says complete: an
-    erasure is complete only after its CUT
+    erasure is complete only after its CUT, by its last ERASE or by a completion ERASE (flag COMPLETION,
+    §11.12's push row), which the eraser sends where step 6 finds no file holding a listed version, so no
+    ERASE with a key is left to say it; it is complete while its newest ERASE says so, a late copy's
+    ERASE reopening it until a later completion (owner decision 658, QD-1132, QD-1137)
   3 read the streams' heads again; ERASE a copy found now, as step 2
   4 IndexEraser.Cut on the log's ur/index:
         a copy that is a document   {its doc_key, its path's entry version}

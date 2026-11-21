@@ -6,11 +6,11 @@ Every design decision made since DESIGN.md was last rebuilt and not yet folded i
 
 **Folding.** Only a design-records track edits `design/source/` and rebuilds DESIGN.md with `design/source/build.sh`. Each design-records track takes one DESIGN.md section, applies its items below (and the matching "Proposed DESIGN.md text" of DESIGN-DETAILS.md), and in the same commit deletes those items from this file. When this file holds no items it is deleted. Owner decisions that change behavior go into `design/source/owner/DECISIONS.md` as numbered owner decisions, after decision 197, as decision 197 was.
 
-Generated from the ledger on 2026-11-10, it holds no item under a DESIGN.md section now: the last were folded on 2026-11-18 by track dr4-outside-docs, their parts in RECORD.md, the review ledger, pitch5.html and HANDOFF.md with them. "Later decisions", below, holds five items: two wait on a file outside the design-records tracks' reach, and three are what track dr6-late-sweep left of the answers it folded on 2026-11-19 as owner decisions 617 to 636, each waiting on HANDOFF.md, on KEYS's review-phase rework or on a field the code does not declare yet. The fourth late sweep, track dr7-late-sweep, folded owner decisions 638 to 646 and two fixes the same day and left nothing of them here. QD-597 (owner decision 197) is already folded, and QD-336 went into §4.5 with owner decision 251 (QD-841 to QD-843), which DESIGN.md carries directly.
+Generated from the ledger on 2026-11-10, it holds no item under a DESIGN.md section now: the last were folded on 2026-11-18 by track dr4-outside-docs, their parts in RECORD.md, the review ledger, pitch5.html and HANDOFF.md with them. "Later decisions", below, holds four items: one waits on a file outside the design-records tracks' reach (QD-024), two are what track dr6-late-sweep left of the answers it folded on 2026-11-19 as owner decisions 617 to 636, waiting on HANDOFF.md and on KEYS's review-phase rework, and one is what the fifth late sweep, track dr8-late-sweep, left on 2026-11-20 of the answers it folded as owner decisions 647 to 669, waiting on smtpproof/SPEC.md. The same track folded QD-1148's note field on 2026-11-21, once moderation-note-entry-ids had landed it, and its item left. The fourth late sweep, track dr7-late-sweep, folded owner decisions 638 to 646 and two fixes on 2026-11-19 and left nothing of them here; the fifth folded QD-899's DESIGN-DETAILS.md part and QD-1096's fence, whose items left. QD-597 (owner decision 197) is already folded, and QD-336 went into §4.5 with owner decision 251 (QD-841 to QD-843), which DESIGN.md carries directly.
 
 ## Index
 
-No section holds an item. "Later decisions" holds QD-024 (§4), QD-899 (§16), QD-1083 (§6), QD-1086 (§22) and QD-1096 (§7).
+No section holds an item. "Later decisions" holds QD-024 (§4), QD-1083 (§6), QD-1086 (§22) and QD-1129 with QD-1154 (§14).
 
 ## DESIGN-DETAILS.md sections to fold
 
@@ -58,22 +58,7 @@ Not folded (2026-11-19, track dr6-late-sweep): sidecar/design/UI.md is still abs
 
 Not folded (2026-11-19, track dr7-late-sweep): sidecar/design/UI.md is still absent; the copy is the owner's step at the review handoff.
 
-### QD-899: Which source kinds give a run card the fields RECORD.md 7.4 reads from claims, coverage and approval decisions?
-*Decided by the owner on 2026-11-15, asked one question at a time; owner decision 467. Folds into §16 The local MCP server and record primitives.*
-
-RECORD.md's part, which waits on RECORD.md's own change: 7.3 and 7.4's sources row and mapping (a vault card's coverage and, in personal mode, claim and handoff; fields 13 and 14 and its row's expires; the team card's line counting approval requests), and DESIGN-DETAILS.md 15.2.2, the design agent's. The rest is folded (2026-11-16): the decision and §16.10's run card and group rows.
-
-Changes: RECORD.md 7.3 and 7.4; DESIGN-DETAILS.md 15.2.2.
-
-Questions: `search-m10-28-vault-card-sources.md`.
-
-Not folded (2026-11-18): RECORD.md 7.3 and 7.4, outside design/source/, and DESIGN-DETAILS.md 15.2.2, the design agent's.
-
-Not folded (2026-11-18, track dr4-outside-docs): DESIGN-DETAILS.md 15.2.2's source entry, which still names a vault's sources without coverage, claim and handoff, the design agent's to amend; RECORD.md 7.3 and 7.4 are folded (the vault card's sources, fields 13 and 14 and its row's expires, and the team card's line of action kinds asked for approval).
-
-Not folded (2026-11-19, track dr6-late-sweep): DESIGN-DETAILS.md 15.2.2 is unchanged, and it is the design agent's.
-
-Not folded (2026-11-19, track dr7-late-sweep): DESIGN-DETAILS.md 15.2.2's source entry still lists a vault's sources without coverage, claim and handoff, and it is the design agent's.
+Not folded (2026-11-20, track dr8-late-sweep): sidecar/design/UI.md is still absent, and the copy is the owner's step.
 
 ### QD-1083: Should design-records drop the two places DESIGN.md still describes C19 as live, §6.10's opening debit list and §23.9's merge rule?
 *Decided by the owner on 2026-11-18, asked one question at a time. Folds into §6 The sidecar subprotocol.*
@@ -88,6 +73,8 @@ Not folded (2026-11-19, track dr6-late-sweep): HANDOFF.md is outside this track'
 
 Not folded (2026-11-19, track dr7-late-sweep): HANDOFF.md is outside this track's files, and its brief leaves HANDOFF.md's lines to the final design sweep. A third place in DESIGN.md that still described C19's windows as live, §6.16's Interfaces, is folded: its Provides and Assumptions follow owner decision 609.
 
+Not folded (2026-11-20, track dr8-late-sweep): HANDOFF.md is outside this track's files; the final design sweep's list holds its lines.
+
 ### QD-1086: How should M2's gate show FS-15, FS-20, FS-24 and FS-104, whose MLS legs owner decision 610 took off the gates?
 *Decided by the owner on 2026-11-18, asked one question at a time; owner decision 627. Folds into §22 Testing and verification.*
 
@@ -101,15 +88,15 @@ Not folded (2026-11-19, track dr6-late-sweep): KEYS's review-phase rework of the
 
 Not folded (2026-11-19, track dr7-late-sweep): the rework is review-phase work and has not landed; the four rows keep their drafted schedules.
 
-### QD-1096: Should IndexerRow and ConfigIndexer carry the IndexerSet header's nonce, so any reader can open a designation's sealed services after a fold?
-*Decided by the owner on 2026-11-19, asked one question at a time; owner decision 634. Folds into §7 Networks, teams, members, enrollment, and SSO.*
+Not folded (2026-11-20, track dr8-late-sweep): KEYS's review-phase rework has still not landed, and the catalog's tests hold §22.8's rows as drafted.
 
-The wire part, which waits on the code: `IndexerRow`'s `bytes nonce = 6` in §7.9's proto fence, which protocol's fence test holds to protocol/bridge/auth.proto, and auth.proto does not declare the field yet (fix track indexer-row-nonce). The fence carries a comment naming the decision. The rest is folded (2026-11-19): owner decision 634, §7.9's Indexers paragraph and §2.8's api-7, list v61.
+### QD-1129 and QD-1154: How do smtpedge and the sending sidecar agree that a Team custom domain is strict, and stay agreed in the minute after a strict-mode MX host is mapped or unmapped?
+*Decided by the owner on 2026-11-20, asked one question at a time; owner decision 655. Folds into §14 The SMTP edge.*
 
-Changes: §7.9's `IndexerRow` fence, with the field's `testFenceAdditions` entry leaving protocol/design_unfenced_test.go in the same commit if the fix track adds one.
+smtpproof/SPEC.md's part: section 3's source of `envelope_domain`, which says the edge derives it from the ticket's network and does not yet name the network's active strict-mode MX hosts as what makes a custom domain strict. The rest is folded (2026-11-20): owner decision 655, §14.6's Team custom domains, §14.5's `SmtpPreambleResult.envelope_domain = 10`, which smtp.proto declares, §15.15's `strict_domains` in `GET /mail/status`, which api serves, §2.8's smtp-2, §15.4's Team paragraph, §12.8 step 4 and D-SMTP-15; SPEC.md section 5's issued values already name the field (track strict-envelope-feed).
 
-Questions: `mail-m8-10-indexer-services-seal-context.md`.
+Changes: smtpproof/SPEC.md section 3.
 
-Not folded (2026-11-19, track dr6-late-sweep): auth.proto declares no `IndexerRow.nonce`, and a fence never moves ahead of the code (owner decision 273).
+Questions: `smtp-m9-34-strict-envelope.md`, `strict-envelope-feed-edge-facts-window.md`.
 
-Not folded (2026-11-19, track dr7-late-sweep): auth.proto's `IndexerRow` still declares fields 1 to 5 and no nonce, so the fence stays as the code is.
+Not folded (2026-11-20, track dr8-late-sweep): smtpproof/SPEC.md is outside the design-records tracks' files.

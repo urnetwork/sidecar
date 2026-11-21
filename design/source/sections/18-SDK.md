@@ -201,7 +201,10 @@ func (self *Sidecar) SetForwardingDevice(device Device) // at each start, once t
 func (self *Sidecar) Unlock(passphrase string, callback SidecarResultCallback)       // local only; "": key-store wrap, called once the store unlocks;
                                                                                   // remote: refused, the daemon unlocks (§5.9)
 func (self *Sidecar) GetState() string       // locked|unenrolled|offline|online|revoked (State, below)
-func (self *Sidecar) GetStateReason() string // unenrolled: expired|refused|parent_lost|session_ended|keystore_lost; revoked: signed
+func (self *Sidecar) GetStateReason() string // unenrolled: expired|refused|parent_lost|session_ended|keystore_lost; revoked: signed;
+	// offline: subprotocol_store_failed, valid on offline alone: a generation whose start failed on a damaged sealed
+	// file in the network's subprotocol store, which raises one refused event as it enters that state (§5.9's Failed;
+	// owner decision 616)
 func (self *Sidecar) AddEventListener(listener SidecarEventListener) Sub // §5.4's SidecarEvent kinds: state,
 	// approval_pending, member_added, member_removed, key_changed, refused, admission_alarm, recovery_rebind,
 	// recovery_window, recovery_unseen, head_alarm (§6.4: fork, withheld, unverified or unwitnessed, with both
@@ -269,7 +272,9 @@ func (self *SidecarMail) GetAliases() *SidecarAliasList
 func (self *SidecarMail) Send(draft *SidecarDraft, callback SidecarResultCallback) // internet mail: §14's outbox unless this host proves;
 	// the result names its send_id, whose outcomes GetSendResult reads and the mail_send event announces; a
 	// remote-mode Sidecar calls §5.8's mail.send, mail.check_send and mail.send_result for Send, CheckSend and
-	// GetSendResult, so desktop apps on `ur daemon` get all three (owner decision 288)
+	// GetSendResult, so desktop apps on `ur daemon` get all three (owner decision 288); the core's
+	// MailClient.CheckSend and SendResult serve them, SendResult reading or/'s outcomes by the send_id the record
+	// carries, so every device of the member answers alike, a daemon following its phone's sends (owner decision 651)
 func (self *SidecarMail) CheckSend(draft *SidecarDraft, callback SidecarSendCheckCallback) // for the composer, per recipient
 	// domain: mode (bdat|data|unknown), encoded bytes, the DATA cap, expected delay and ok|too_large|unknown (§14.5)
 func (self *SidecarMail) GetSendResult(sendId *Id, callback SidecarSendResultCallback) // per recipient domain:

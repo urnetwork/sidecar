@@ -2117,6 +2117,105 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "@@OD:380@@, and a held drop's table entry (643), following @@OD:184@@; a Team scope's own mailcfg (644), "
     "extending @@OD:631@@, and a card's return after a removal (645), following @@OD:636@@; and T3's reread of "
     "admin info after a clock move (646). ")
+# The fifth late sweep (dr8-late-sweep, 2026-11-20): the answers recorded after the fourth, QD-1115 to QD-1154.
+INDEX += [
+    (647, "The prover host's proving memory",
+     "`PartMemoryByteCount` defaults to 960 MiB and `MemoryMaxByteCount` to 2,496 MiB, as the benchmark measured."),
+    (648, "`EvsCommit.tla`'s TLC modes by part",
+     "The harness records the purger's and the drop extension's runs apart, the drop liveness among them, as "
+     "§22.10's gates need."),
+    (649, 'Index upkeep on a full metadata cluster',
+     "The index's upkeep takes 507 CLUSTER_FULL as it takes the storage limit's refusal, as the DROP does."),
+    (650, "The platform listener's gate class and keys",
+     'mxedge-platform holds its own gate class, which alone pages the rota, and from M9 smtpedge\'s X-UR-Ref keys.'),
+    (651, "A send's check and its results by send_id",
+     "`MailClient` checks a draft and reads a send's outcomes by the send_id `or/` carries; the composer raises "
+     '`mail_send`.'),
+    (652, "A suspension's mail halt at the send gate",
+     'smtpedge answers a suspended network HALTED with a 1 h retry-after, so its queue waits for the lift.'),
+    (653, 'An internet route rule and an `ip:` deny test',
+     'A deny test of a public range fails where an `autogroup:internet` route rule takes its source.'),
+    (654, "A held drop as its no-hold twin",
+     "A held entry follows the twin's evictions; a held job gives up the slot, each held job keeping its own "
+     'record.'),
+    (655, "A strict custom domain's envelope",
+     "The strict-mode MX host makes a domain strict, api names the set, and the preamble result names the edge's "
+     'envelope.'),
+    (656, 'DKIM selectors a custom domain answers',
+     'A sidecar signs only under a selector the domain answers; `GET /network/dns` lists the CNAMEs owed.'),
+    (657, '`ur admin settings`',
+     'An Owner or Admin sets `mail_strict`, `record_cost` and `record_required` together, confirmed on '
+     '`/dev/tty`.'),
+    (658, 'The completion ERASE',
+     'A COMPLETION-flagged ERASE ends an erasure no keyed ERASE can, taken while its keys\' newest ERASE carries '
+     'none.'),
+    (659, "The edges' PgBouncer entries",
+     'Each restricted role has its own PgBouncer entry, held to it by HBA rules; the slot budget counts their '
+     'pools.'),
+    (660, "The directory's one searchable_days",
+     "A search applies the directory's searchable_days to its cards ref and its ur/index alike."),
+    (661, "The blocks' service URLs and internal routes",
+     "Blocks read their service URLs from variables warpctl fills; `internal_routes` keep internal prefixes to "
+     'the site.'),
+    (662, "evs's and gkm's gate bearers",
+     'evs and gkm mount the internal gate bearers they read their quotas with.'),
+    (663, "A deleted repo's re-form after its restore",
+     "The re-former's syncs finish a repo re-seeded as deleted once it is restored, rotating and adding members."),
+    (664, "A moderated run left out of its writer's card",
+     "The moderation's ERASE names the ids it erased, and a card's return reads the cards ref's erasure set."),
+    (665, "The erased-key judge's leg seam",
+     '`evs_read_erased.go` is a reviewed seam off the `ios_extension` legs.'),
+    (666, "A rotation draft's freshness",
+     'A rotation draws afresh over a stored draft past `RotateDraftMaxAge` (5 min) or naming another group.'),
+    (667, 'The explorer on a barrier-free schedule',
+     'A registered schedule whose fixed run passes no barrier runs one seed, and the report says so.'),
+    (668, 'The shed past a weighted share',
+     'A network past its weighted share is refused while a lighter one is served; only such networks by id.'),
+    (669, "Index entries above the pin's ref version",
+     "A host with the text holds every entry to the effective ref version at the pin, catching a future "
+     'tombstone.'),
+    (670, "The unknown rule on the fake hosts' writes",
+     "On T2 the rule also loses the answers of the calls the fake hosts declare as writes, the Quota's among "
+     'them.'),
+]
+for _n, _note in [
+        (531, ' Followed by @@OD:652@@: a suspension holds mail at the send gate as a halt.'),
+        (596, ' Extended by @@OD:665@@: `evs_read_erased.go` is an eighth seam.'),
+        (612, ' Followed by @@OD:650@@: the route takes the platform listener\'s own class.'),
+        (615, ' Extended by @@OD:653@@: an `autogroup:internet` rule fails a public range\'s deny test.'),
+        (617, ' Refined by @@OD:668@@: a flood past its weighted share is refused while a lighter network is '
+              'served.'),
+        (618, " Extended by @@OD:663@@: a deleted repo's second call comes from the re-former's syncs."),
+        (620, " Followed by @@OD:649@@: the index's other upkeep takes the cluster's limit so too."),
+        (621, ' Followed by @@OD:669@@: entries above the pin\'s ref version are caught.'),
+        (626, ' Followed by @@OD:667@@: a barrier-free schedule runs one seed.'),
+        (636, " Followed by @@OD:664@@: the moderated run stays off its writer's card."),
+        (643, " Followed by @@OD:654@@: a held entry follows its twin's evictions, and a held job gives up the "
+              'slot.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 671))
+DATES.update({647: '2026-11-19', 648: '2026-11-19', 649: '2026-11-19'})
+DATES.update({_n: '2026-11-20' for _n in range(650, 671)})
+_D646 = "and T3's reread of admin info after a clock move (646). "
+assert DECISIONS_INTRO.count(_D646) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D646, _D646 + "A fifth sweep, on 2026-11-20, numbers the answers of 2026-11-19 and 2026-11-20 that followed: the "
+    "prover host's proving memory (647), `EvsCommit.tla`'s TLC modes by part (648), index upkeep on a full "
+    "metadata cluster (649), following @@OD:620@@, the platform listener's gate class and keys (650), following "
+    "@@OD:612@@, a send's check and results by send_id (651), a suspension's mail halt at the send gate (652), "
+    "following @@OD:531@@, an internet route rule and an `ip:` deny test (653), extending @@OD:615@@, and a held "
+    "drop as its no-hold twin (654), following @@OD:643@@; a strict custom domain's envelope (655), DKIM "
+    "selectors a custom domain answers (656), `ur admin settings` (657), the completion ERASE (658), the edges' "
+    "PgBouncer entries (659), the directory's one searchable_days (660), the blocks' service URLs and internal "
+    "routes (661) and evs's and gkm's gate bearers (662); a deleted repo's re-form after its restore (663), "
+    "extending @@OD:618@@, a moderated run left out of its writer's card (664), following @@OD:636@@, the "
+    "erased-key judge's leg seam (665), extending @@OD:596@@, a rotation draft's freshness (666), the explorer on "
+    "a barrier-free schedule (667), following @@OD:626@@, the shed past a weighted share (668), refining "
+    "@@OD:617@@, index entries above the pin's ref version (669), following @@OD:621@@, and the unknown rule on "
+    "the fake hosts' writes (670). ")
 
 # Owner decision 141's file-mode amendment, approved 2026-11-20.
 _i = [row[0] for row in INDEX].index(141)
