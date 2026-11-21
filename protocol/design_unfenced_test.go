@@ -637,12 +637,6 @@ var testFenceAdditions = []struct {
 	field    testFenceField
 	question string
 }{
-	// §14.5's preamble result names the envelope the edge derived, which the sidecar checks its own against (QD-1154)
-	{
-		message:  "SmtpPreambleResult",
-		field:    testFenceField{name: "envelope_domain", number: 10, typeName: "string"},
-		question: "strict-envelope-feed-edge-facts-window",
-	},
 }
 
 // One field an owner's answer takes out of a message the design fences, its number reserved.
