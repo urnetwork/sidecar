@@ -403,8 +403,23 @@ func (self *DnsApi) serveZone(writer http.ResponseWriter, request *http.Request)
 		self.writeRecordsError(writer, &sidecar.DnsApiError{Status: http.StatusServiceUnavailable, Code: sidecar.DnsApiCodeUnavailable})
 		return
 	}
-	zone.RecordSets = self.visibleRecordSets(root, networkId, sidecarId, zone.RecordSets)
-	answer, err := json.Marshal(zone)
+	visible := *zone
+	visible.RecordSets = self.visibleRecordSets(root, networkId, sidecarId, zone.RecordSets)
+	visible.CustomHosts = nil
+	if gate := self.deps.RecordGate; gate != nil {
+		now := self.clock.Now()
+		for _, mapped := range zone.CustomHosts {
+			if !strings.HasSuffix(mapped.Owner, "."+zone.Apex()) {
+				continue
+			}
+			host, ok := DnsOwnerHost(root, mapped.Owner)
+			if ok && gate.MayView(networkId, sidecarId, host, now) == DnsGateAllowed {
+				mapped.PendingInterfaces = nil
+				visible.CustomHosts = append(visible.CustomHosts, mapped)
+			}
+		}
+	}
+	answer, err := json.Marshal(&visible)
 	if err != nil {
 		self.writeRecordsError(writer, &sidecar.DnsApiError{Status: http.StatusServiceUnavailable, Code: sidecar.DnsApiCodeUnavailable})
 		return

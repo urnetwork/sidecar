@@ -314,6 +314,11 @@ func TestDnsZoneRouteShowsOnlyTheCallersHosts(t *testing.T) {
 		Label:   "label0001",
 		Alias:   "synthetic-alias",
 		Version: 41,
+		CustomHosts: []sidecar.DnsCustomHost{
+			{Host: "first.example", Owner: "www." + apex, PendingInterfaces: []string{"edge-a"}},
+			{Host: "foreign.example", Owner: "www.other." + edgeTestRoot},
+			{Host: "second.example", Owner: "api." + apex},
+		},
 		RecordSets: []sidecar.DnsZoneRecordSet{
 			{Name: apex, Type: "TXT", Ttl: 300, Kind: "system", Values: []string{`"v=spf1 -all"`}},
 			{Name: "www." + apex, Type: "A", Ttl: 300, Kind: "user", Values: []string{"192.0.2.10"}},
@@ -335,10 +340,14 @@ func TestDnsZoneRouteShowsOnlyTheCallersHosts(t *testing.T) {
 	}
 	viewed := shown(&fakeRecordGate{viewHosts: []string{"www"}})
 	if viewed.Label != "label0001" || viewed.Alias != "synthetic-alias" || viewed.Version != 41 || len(viewed.RecordSets) != 2 ||
-		viewed.RecordSets[0].Name != "www."+apex || viewed.RecordSets[1].Name != "_x.www."+apex {
+		viewed.RecordSets[0].Name != "www."+apex || viewed.RecordSets[1].Name != "_x.www."+apex ||
+		len(viewed.CustomHosts) != 1 || viewed.CustomHosts[0].Host != "first.example" || len(viewed.CustomHosts[0].PendingInterfaces) != 0 {
 		t.Fatalf("a view of www: %+v", viewed)
 	}
-	if none := shown(nil); none.Label != "label0001" || len(none.RecordSets) != 0 {
+	if other := shown(&fakeRecordGate{viewHosts: []string{"api"}}); len(other.CustomHosts) != 1 || other.CustomHosts[0].Host != "second.example" {
+		t.Fatalf("a second caller's mappings: %+v", other.CustomHosts)
+	}
+	if none := shown(nil); none.Label != "label0001" || len(none.RecordSets) != 0 || len(none.CustomHosts) != 0 {
 		t.Fatalf("with no gate: %+v", none)
 	}
 }
