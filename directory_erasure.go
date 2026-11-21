@@ -708,8 +708,8 @@ func (self *DirectoryErasureRunner) raiseOnce(request *DirectoryErasureRequestVi
 	}
 }
 
-// One pass: see the file's header's runner, expiry, waiting and window rows. On a device that is no directory admin it
-// does nothing; on an admin's that is not the runner it only raises what waits past 24 h.
+// One pass: see the file's header's runner, expiry, waiting, window and begun rows. On a device that is no directory
+// admin it does nothing; on an admin's that is not the runner it only raises what waits past 24 h.
 func (self *DirectoryErasureRunner) Pass(ctx context.Context) (*DirectoryErasurePass, error) {
 	self.passLock.Lock()
 	defer self.passLock.Unlock()
@@ -1335,9 +1335,12 @@ func (self *DirectoryClient) announcementFiles(id Id, work *directoryErasureWork
 
 // What a request finds on format 2's carriers at this sync: the repo's file once its marker stands, the versions
 // below the marker its document's; each card holding a run that names the repo, holding it still where the run is
-// not private, held by an earlier version where its writer wrote it private at a raised version; and the documents
-// the request's announce entries folded into on ur/index.
+// not private, held by an earlier version where its writer wrote it private at a raised version, and at a path the
+// ledger met still owed its CLOSURE, held by an earlier version where its standing version names the repo in no run,
+// its writer having left the run out (§16.11's closure row); and the documents the request's announce entries folded
+// into on ur/index.
 func (self *DirectoryErasureRunner) fileCopies(request *DirectoryErasureRequestView) *directoryErasureWork {
+	owedPaths := self.client.erasureFilesClosurePaths(request.RequestId)
 	work := newDirectoryErasureWork()
 	work.erasureId = request.RequestId
 	work.reason = RecordErasureReasonRevocation
@@ -1367,7 +1370,7 @@ func (self *DirectoryErasureRunner) fileCopies(request *DirectoryErasureRequestV
 			switch {
 			case holds:
 				work.holding = append(work.holding, erasureFile)
-			case held:
+			case held, owedPaths[taken.file.Path]:
 				work.held = append(work.held, erasureFile)
 			}
 		case taken.repo != nil && taken.file.Path == repoPath:
@@ -1417,6 +1420,11 @@ func (self *directoryErasureLedgerRow) path(path string) *directoryErasurePathRo
 	return row
 }
 
+// Whether a stored version of the path at or below Held still has its key: the path is owed a CLOSURE.
+func (self *directoryErasurePathRow) owesClosure() bool {
+	return 0 < self.Held && self.Closed <= self.Held
+}
+
 // Notes a file the sync showed, and answers whether its path is owed a CLOSURE: a stored version at or below Held
 // still has its key. A standing version another sidecar than its rightful writer pushed is an admin's CLOSURE, so
 // the path reads rewritten there; a file first met with nothing rewritten is taken to have held the document at the
@@ -1432,7 +1440,7 @@ func (self *directoryErasureLedgerRow) noteHeld(erasureFile *directoryErasureFil
 			row.Held = max(row.Held, erasureFile.file.Version-1)
 		}
 	}
-	return 0 < row.Held && row.Closed <= row.Held
+	return row.owesClosure()
 }
 
 // Notes a file whose standing version holds a document.
@@ -1461,7 +1469,7 @@ func (self *directoryErasureLedgerRow) owes() bool {
 // such a path once its writer has (the file header's window row; QD-1166).
 func (self *directoryErasureLedgerRow) closureOwed() bool {
 	for _, row := range self.Paths {
-		if 0 < row.Held && row.Closed <= row.Held {
+		if row.owesClosure() {
 			return true
 		}
 	}
@@ -1677,6 +1685,23 @@ func (self *DirectoryClient) erasureFilesLedger(erasureId Id) bool {
 	self.loadErasureLedgerWithLock(state)
 	row, ok := state.rows[erasureId]
 	return ok && (row.owes() || row.closureOwed() || row.endOwed())
+}
+
+// The cards ref paths the erasure's ledger row met that are still owed a CLOSURE; none where this device holds no row.
+func (self *DirectoryClient) erasureFilesClosurePaths(erasureId Id) map[string]bool {
+	state := self.erasureFilesState()
+	state.stateLock.Lock()
+	defer state.stateLock.Unlock()
+	self.loadErasureLedgerWithLock(state)
+	paths := map[string]bool{}
+	if row, ok := state.rows[erasureId]; ok {
+		for path, pathRow := range row.Paths {
+			if pathRow.owesClosure() {
+				paths[path] = true
+			}
+		}
+	}
+	return paths
 }
 
 // Runs fn on the erasure's row and keeps the ledger.
