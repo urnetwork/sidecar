@@ -41,7 +41,8 @@ message EvsPush {                       // sidecar/protocol/evs.proto, inside §
                                         // (a drop-history action or its cancel, 11.7; format 2), 512 CUT (an
                                         // erasure's index cut, 11.12; format 2), 1024 COMPLETION (with ERASE
                                         // alone, an ERASE that destroys nothing and ends its erasure, 11.12;
-                                        // format 2; QD-1137)
+                                        // format 2; QD-1137), 2048 EXACT_HEAD (file mode: commit only on
+                                        // base_version and base_chain)
   bytes path_map_sha256 = 17;           // PATH_EPOCH: SHA-256 over the epoch's EvsPathMap parts, in order
   uint32 part_count = 18;               // 0 for a one-part push, else 2 to 1,024
   bytes parts_sha256 = 19;              // SHA-256 over the parts' SHA-256s in part order (the list is in the payload)
@@ -235,6 +236,7 @@ enum EvsPushFlag {
   EVS_PUSH_DROP = 256;
   EVS_PUSH_CUT = 512;
   EVS_PUSH_COMPLETION = 1024;           // with ERASE alone: a completion ERASE (11.12; QD-1137)
+  EVS_PUSH_EXACT_HEAD = 2048;           // file mode: base_version and base_chain must match the head at commit
 }
 
 // EvsLocator.kind. Versionless segments are format 2's. 3 is a push-payload range and 4 a pack range, each refused
@@ -772,6 +774,7 @@ message EvsHeadSummary {                // all a reader sees of a head (11.8's f
   uint64 index_epoch = 15;              // format 2
   bool deleted = 16;
   uint64 push_sequence = 17;            // what its last commit raised, 0 where {evsh_} holds none (11.9's moved row)
+  bool supports_exact_head = 18;        // a fresh single-ref read: this service enforces EXACT_HEAD for file mode
 }
 message EvsReadStatement {
   uint64 version = 1;

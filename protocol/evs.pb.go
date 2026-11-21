@@ -58,6 +58,7 @@ const (
 	EvsPushFlag_EVS_PUSH_DROP       EvsPushFlag = 256
 	EvsPushFlag_EVS_PUSH_CUT        EvsPushFlag = 512
 	EvsPushFlag_EVS_PUSH_COMPLETION EvsPushFlag = 1024 // with ERASE alone: a completion ERASE (11.12; QD-1137)
+	EvsPushFlag_EVS_PUSH_EXACT_HEAD EvsPushFlag = 2048 // file mode: base_version and base_chain must match the head at commit
 )
 
 // Enum value maps for EvsPushFlag.
@@ -75,6 +76,7 @@ var (
 		256:  "EVS_PUSH_DROP",
 		512:  "EVS_PUSH_CUT",
 		1024: "EVS_PUSH_COMPLETION",
+		2048: "EVS_PUSH_EXACT_HEAD",
 	}
 	EvsPushFlag_value = map[string]int32{
 		"EVS_PUSH_FLAG_NONE":  0,
@@ -89,6 +91,7 @@ var (
 		"EVS_PUSH_DROP":       256,
 		"EVS_PUSH_CUT":        512,
 		"EVS_PUSH_COMPLETION": 1024,
+		"EVS_PUSH_EXACT_HEAD": 2048,
 	}
 )
 
@@ -1563,7 +1566,8 @@ type EvsPush struct {
 	// (a drop-history action or its cancel, 11.7; format 2), 512 CUT (an
 	// erasure's index cut, 11.12; format 2), 1024 COMPLETION (with ERASE
 	// alone, an ERASE that destroys nothing and ends its erasure, 11.12;
-	// format 2; QD-1137)
+	// format 2; QD-1137), 2048 EXACT_HEAD (file mode: commit only on
+	// base_version and base_chain)
 	PathMapSha256        []byte          `protobuf:"bytes,17,opt,name=path_map_sha256,json=pathMapSha256,proto3" json:"path_map_sha256,omitempty"` // PATH_EPOCH: SHA-256 over the epoch's EvsPathMap parts, in order
 	PartCount            uint32          `protobuf:"varint,18,opt,name=part_count,json=partCount,proto3" json:"part_count,omitempty"`              // 0 for a one-part push, else 2 to 1,024
 	PartsSha256          []byte          `protobuf:"bytes,19,opt,name=parts_sha256,json=partsSha256,proto3" json:"parts_sha256,omitempty"`         // SHA-256 over the parts' SHA-256s in part order (the list is in the payload)
@@ -6760,7 +6764,8 @@ type EvsHeadSummary struct {
 	PathEpoch            *EvsPathEpoch          `protobuf:"bytes,14,opt,name=path_epoch,json=pathEpoch,proto3" json:"path_epoch,omitempty"`
 	IndexEpoch           uint64                 `protobuf:"varint,15,opt,name=index_epoch,json=indexEpoch,proto3" json:"index_epoch,omitempty"` // format 2
 	Deleted              bool                   `protobuf:"varint,16,opt,name=deleted,proto3" json:"deleted,omitempty"`
-	PushSequence         uint64                 `protobuf:"varint,17,opt,name=push_sequence,json=pushSequence,proto3" json:"push_sequence,omitempty"` // what its last commit raised, 0 where {evsh_} holds none (11.9's moved row)
+	PushSequence         uint64                 `protobuf:"varint,17,opt,name=push_sequence,json=pushSequence,proto3" json:"push_sequence,omitempty"`                  // what its last commit raised, 0 where {evsh_} holds none (11.9's moved row)
+	SupportsExactHead    bool                   `protobuf:"varint,18,opt,name=supports_exact_head,json=supportsExactHead,proto3" json:"supports_exact_head,omitempty"` // a fresh single-ref read: this service enforces EXACT_HEAD for file mode
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -6912,6 +6917,13 @@ func (x *EvsHeadSummary) GetPushSequence() uint64 {
 		return x.PushSequence
 	}
 	return 0
+}
+
+func (x *EvsHeadSummary) GetSupportsExactHead() bool {
+	if x != nil {
+		return x.SupportsExactHead
+	}
+	return false
 }
 
 type EvsReadStatement struct {
@@ -8622,7 +8634,7 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"\x04path\x18\x05 \x01(\v2#.urnetwork.sidecar.EvsReadPathReplyR\x04path\x128\n" +
 	"\x06object\x18\x06 \x01(\v2 .urnetwork.sidecar.EvsReadObjectR\x06object\x12\x10\n" +
 	"\x03end\x18\a \x01(\bR\x03end\x128\n" +
-	"\x05error\x18\b \x01(\v2\".urnetwork.sidecar.EvsRefusalReplyR\x05error\"\xa9\x05\n" +
+	"\x05error\x18\b \x01(\v2\".urnetwork.sidecar.EvsRefusalReplyR\x05error\"\xd9\x05\n" +
 	"\x0eEvsHeadSummary\x12\x15\n" +
 	"\x06ref_id\x18\x01 \x01(\fR\x05refId\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\x04R\aversion\x12\x14\n" +
@@ -8645,7 +8657,8 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"\vindex_epoch\x18\x0f \x01(\x04R\n" +
 	"indexEpoch\x12\x18\n" +
 	"\adeleted\x18\x10 \x01(\bR\adeleted\x12#\n" +
-	"\rpush_sequence\x18\x11 \x01(\x04R\fpushSequence\"J\n" +
+	"\rpush_sequence\x18\x11 \x01(\x04R\fpushSequence\x12.\n" +
+	"\x13supports_exact_head\x18\x12 \x01(\bR\x11supportsExactHead\"J\n" +
 	"\x10EvsReadStatement\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\x04R\aversion\x12\x1c\n" +
 	"\tstatement\x18\x02 \x01(\fR\tstatement\"\x94\a\n" +
@@ -8763,7 +8776,7 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"list_match\x18\x01 \x01(\bR\tlistMatch\x12\x14\n" +
 	"\x05count\x18\x02 \x01(\rR\x05count\x12\x1b\n" +
 	"\tmap_parts\x18\x03 \x03(\rR\bmapParts\x12\x16\n" +
-	"\x06linked\x18\x04 \x01(\bR\x06linked*\x94\x02\n" +
+	"\x06linked\x18\x04 \x01(\bR\x06linked*\xae\x02\n" +
 	"\vEvsPushFlag\x12\x16\n" +
 	"\x12EVS_PUSH_FLAG_NONE\x10\x00\x12\x12\n" +
 	"\x0eEVS_PUSH_FORCE\x10\x01\x12\x13\n" +
@@ -8776,7 +8789,8 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"\x10EVS_PUSH_CLOSURE\x10\x80\x01\x12\x12\n" +
 	"\rEVS_PUSH_DROP\x10\x80\x02\x12\x11\n" +
 	"\fEVS_PUSH_CUT\x10\x80\x04\x12\x18\n" +
-	"\x13EVS_PUSH_COMPLETION\x10\x80\b*\x94\x01\n" +
+	"\x13EVS_PUSH_COMPLETION\x10\x80\b\x12\x18\n" +
+	"\x13EVS_PUSH_EXACT_HEAD\x10\x80\x10*\x94\x01\n" +
 	"\x0eEvsLocatorKind\x12 \n" +
 	"\x1cEVS_LOCATOR_KIND_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13EVS_LOCATOR_SEGMENT\x10\x01\x12\x16\n" +
