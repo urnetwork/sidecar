@@ -28,6 +28,19 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
+// The edge serves ticketed opens, the sender's proof and handshake calls, cancellations and outcomes.
+// Its listener verifies the ticket and its handlers bind each send to the authenticated calling client.
+func Inbound(inbound sidecar.SubprotocolInbound) bool {
+	switch inbound.MessageType {
+	case protocol.MessageType_STREAM_OPEN:
+		return !inbound.Response && inbound.StreamId != 0
+	case protocol.MessageType_SMTP_HANDSHAKE, protocol.MessageType_SMTP_PROOF, protocol.MessageType_SMTP_OUTCOME, protocol.MessageType_CANCEL:
+		return !inbound.Response && inbound.StreamId == 0
+	default:
+		return sidecar.EdgeDialInbound(inbound)
+	}
+}
+
 // Registers the engine's functions on subprotocol, one platform client's dispatcher in the edge role: SMTP_PROOF's and
 // SMTP_HANDSHAKE's handlers, mutating, so a part or SHTS sent again under its request_id runs once, and SMTP_OUTCOME's
 // NO_REPLY function. remove takes all three away; on an error nothing stays registered.
