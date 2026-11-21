@@ -329,3 +329,74 @@ func TestRecordChainChecksLocalLeafBelowHigherStreamHead(t *testing.T) {
 		t.Fatalf("local head after a conflict: %+v, %v", head, err)
 	}
 }
+
+type testRecordAdvancingStream struct {
+	sidecar.RecordStreams
+	reads   int
+	advance func() error
+}
+
+func (self *testRecordAdvancingStream) ReadStream(ctx context.Context, repoId sidecar.Id, writerId sidecar.Id, after uint64) ([]*sidecar.RecordStreamVersion, error) {
+	self.reads++
+	if self.reads == 2 {
+		if err := self.advance(); err != nil {
+			return nil, err
+		}
+	}
+	return self.RecordStreams.ReadStream(ctx, repoId, writerId, after)
+}
+
+func TestRecordWriterRestoredJournalRetriesIfSettlementSeesANewerHeader(t *testing.T) {
+	world := newTestRecordWorld(t)
+	ctx := t.Context()
+	device := world.device(true)
+	original := device.open()
+	first := testRecordAppend(t, original, testRecordNote(nil, "pending at backup"))
+	backup := sidecartest.NewFakeStore()
+	for _, path := range device.files.Paths() {
+		data, ok := device.files.Contents(path)
+		if !ok {
+			t.Fatalf("missing backup file %q", path)
+		}
+		file, err := backup.Root().Create(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = file.Write(data); err == nil {
+			err = file.Commit()
+		}
+		file.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := original.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	second := testRecordAppend(t, original, testRecordNote(nil, "commits during settlement"))
+	device.files = backup
+	var err error
+	device.store, err = backup.Root().Directory("record", "record")
+	if err != nil {
+		t.Fatal(err)
+	}
+	device.tap = &testRecordStreamsTap{RecordStreams: &testRecordAdvancingStream{
+		RecordStreams: device.tap.RecordStreams, advance: func() error { return original.Flush(ctx) },
+	}}
+	restored := device.cold()
+	if err := restored.PrepareDirectWrites(ctx); !errors.Is(err, sidecar.ErrRecordStreamsUnavailable) {
+		t.Fatalf("startup after settlement observed a newer header: %v", err)
+	}
+	if ref := testRecordAppend(t, restored, testRecordNote(nil, "after retry")); !ref.Spooled {
+		t.Fatal("signed from the earlier head")
+	}
+	if err := restored.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	entries := world.storedEntries(device.sidecarId)
+	if len(entries) != 3 || !bytes.Equal(entries[0].header.GetEntryId(), first.EntryId[:]) ||
+		!bytes.Equal(entries[1].header.GetEntryId(), second.EntryId[:]) || entries[2].header.GetSeq() != second.Seq+1 ||
+		!bytes.Equal(entries[2].header.GetPrevSha256(), second.Leaf[:]) || entries[2].path != "e/0/0/3" {
+		t.Fatalf("restored journal or fresh continuation: %+v", entries)
+	}
+}
