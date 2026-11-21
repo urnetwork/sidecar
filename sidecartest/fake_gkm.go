@@ -207,9 +207,9 @@ func (self *FakeGkm) cluster() (sidecar.BlobCluster, error) {
 	return self.blobs.Cluster(self.settings.ClusterId)
 }
 
-// Whether the kind's GenRotates carry a drop key.
-func (self *FakeGkm) takesDeposits(kind protocol.RepoKind) bool {
-	return slices.Contains(self.settings.DepositKinds, kind)
+// Whether this repo's GenRotates carry a drop key, including the signed marker on a general inbox.
+func (self *FakeGkm) takesDeposits(kind protocol.RepoKind, row *protocol.AclRepo) bool {
+	return slices.Contains(self.settings.DepositKinds, kind) || sidecar.AclRepoIsInbox(row)
 }
 
 // The settings' holders hash, or KeyHolders', or the hash of no identity.
@@ -421,6 +421,10 @@ func (self *fakeGkmClient) CreateGroup(ctx context.Context, args *sidecar.GkmCre
 	if args == nil {
 		return nil, fmt.Errorf("%w: no repo", errFakeGkmRefused)
 	}
+	row := state.Repo(args.RepoId)
+	if args.Inbox != protocol.RepoInbox_REPO_INBOX_NONE && (!sidecar.AclRepoIsInbox(row) || row.GetInbox() != args.Inbox) {
+		return nil, fmt.Errorf("%w: inbox role does not match the verified repo", errFakeGkmRefused)
+	}
 	self.gkm.rotateLock.Lock()
 	defer self.gkm.rotateLock.Unlock()
 	if self.gkm.repo(args.RepoId) != nil {
@@ -438,7 +442,7 @@ func (self *fakeGkmClient) CreateGroup(ctx context.Context, args *sidecar.GkmCre
 		Time:          now,
 		HoldersSha256: self.gkm.holdersSha256(args.RepoId, state, now),
 	}
-	if self.gkm.takesDeposits(args.Kind) {
+	if self.gkm.takesDeposits(args.Kind, row) {
 		generationArgs.DropNotAfter = now.Add(self.gkm.settings.DropKeyLifetime)
 	}
 	key, rotate, err := sidecar.NewGkmFirstGeneration(args.RepoId, groupId, generationArgs)
@@ -484,7 +488,7 @@ func (self *fakeGkmClient) rotateWithLock(ctx context.Context, repo *fakeGkmRepo
 		Time:          now,
 		HoldersSha256: self.gkm.holdersSha256(repo.repoId, state, now),
 	}
-	if self.gkm.takesDeposits(repo.kind) {
+	if self.gkm.takesDeposits(repo.kind, state.Repo(repo.repoId)) {
 		generationArgs.DropNotAfter = now.Add(self.gkm.settings.DropKeyLifetime)
 	}
 	key, rotate, err := parent.NextGeneration(generationArgs)
@@ -672,7 +676,7 @@ func (self *fakeGkmClient) DropKey(ctx context.Context, repoId sidecar.Id) (*sid
 	if repo == nil {
 		return nil, fmt.Errorf("%w: repo %s has no group", sidecar.ErrGkmKeyMissing, repoId)
 	}
-	if !self.gkm.takesDeposits(repo.kind) {
+	if !self.gkm.takesDeposits(repo.kind, state.Repo(repoId)) {
 		return nil, fmt.Errorf("%w: repo %s takes no deposits", sidecar.ErrGkmKeyMissing, repoId)
 	}
 	newest := uint64(len(repo.keys))

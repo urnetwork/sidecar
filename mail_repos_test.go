@@ -123,9 +123,12 @@ func (self *mailReposTestEvs) CreateRepo(ctx context.Context, args *EvsCreateRep
 		return nil, errInvalidSettings
 	}
 	repoId := NewEvsRepoId()
+	if args.proposedRepoId != nil {
+		repoId = *args.proposedRepoId
+	}
 	if args.ResumeRepoId != nil {
 		repoId = *args.ResumeRepoId
-	} else if err := self.world.file(self.sidecarId, bridge.SignedType_SIGNED_REPO_CREATE, &protocol.RepoCreate{RepoId: repoId.Bytes(), Kind: args.Kind}); err != nil {
+	} else if err := self.world.file(self.sidecarId, bridge.SignedType_SIGNED_REPO_CREATE, &protocol.RepoCreate{RepoId: repoId.Bytes(), Kind: args.Kind, Inbox: args.inboxRole()}); err != nil {
 		return nil, err
 	}
 	failure := func() error {
@@ -402,10 +405,61 @@ func TestMailReposEnsureMailConfig(t *testing.T) {
 	}
 }
 
+// A restarted group creation resumes the same signed repo, keeps its original private choice, and grants
+// only deposits to the Team's current mail tag. The first call stops after RepoCreate and before keying.
+func TestMailGroupCreateResumesItsApprovedPrivateInbox(t *testing.T) {
+	world := newMailReposTestWorld(t)
+	member, device := world.fixture.memberWithDevice(bridge.MemberRole_MEMBER_ROLE_OWNER)
+	tag := world.fixture.tag(member)
+	indexer := world.fixture.agent(member, tag)
+	world.fixture.repo(protocol.RepoKind_REPO_KIND_TEAM_RECORD, Id{})
+	world.rebuild()
+	mailcfg := newMailConfigTestRepo()
+	authority := newMailConfigTestAuthority()
+	authority.grant(device, "*")
+	config := newMailConfigTestDevice(t, mailcfg, authority, device, nil).config
+	resume := func() *MailRepos {
+		repos := world.repos(device)
+		repos.mailIndexerTag = func(*AclState) (Id, bool) { return tag, true }
+		return repos
+	}
+	args := &MailCreateGroupArgs{LocalPart: "team", DisplayName: "Support", Confirmed: true, Private: true}
+	withoutTag := world.repos(device)
+	if _, err := withoutTag.CreateGroup(t.Context(), config, args); !errors.Is(err, ErrMailGroupIndexerTag) || len(mailcfg.standingPaths()) != 0 {
+		t.Fatalf("unavailable Team tag: %v", err)
+	}
+	cut := errors.New("keying interrupted")
+	world.failCreation = cut
+	if _, err := resume().CreateGroup(t.Context(), config, args); !errors.Is(err, cut) {
+		t.Fatalf("interrupted creation: %v", err)
+	}
+	retry := &MailCreateGroupArgs{LocalPart: "team", Confirmed: true}
+	repo, err := resume().CreateGroup(t.Context(), config, retry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := repo.RepoId()
+	if again, err := resume().CreateGroup(t.Context(), config, retry); err != nil || again.RepoId() != id {
+		t.Fatalf("completed replay: %v, %v", again, err)
+	}
+	state := world.state()
+	row := state.Repo(id)
+	if row.GetInbox() != protocol.RepoInbox_REPO_INBOX_GROUP || len(row.GetGrants()) != 1 ||
+		aclTestRights(state, indexer, id, AclTokenAudienceEvs) != AclEvsDeposit || !mailRepoGrantStands(row, tag, protocol.RepoGrantRole_REPO_GRANT_ROLE_DEPOSIT) {
+		t.Fatalf("group role and projected deposit grant: %v", row)
+	}
+	if len(world.creations) != 2 || world.creations[1].ResumeRepoId == nil || *world.creations[1].ResumeRepoId != id ||
+		!world.creations[1].Private || world.creations[1].DisplayName != args.DisplayName || world.filedCount(bridge.SignedType_SIGNED_REPO_CREATE) != 1 {
+		t.Fatalf("private group creation and resume: %v", world.creations)
+	}
+	if members, named, err := config.GroupMembers(t.Context(), args.LocalPart); err != nil || len(members) != 0 || named != id {
+		t.Fatalf("signed address: %v, %v, %v", members, named, err)
+	}
+}
+
 // group-add writes the member into the group's mailcfg record and files the RepoGrant, together: the record first,
 // the grant after, each once; a call cut short between them is finished by the same call again; past
-// mail_group_members nothing is filed; a RepoGrant alone joins no group; and a group inbox is not created until
-// RepoCreate carries its marker.
+// mail_group_members nothing is filed; a RepoGrant alone joins no group; and only a confirmed command creates a group inbox.
 func TestMailReposGroupAddWritesTheRecordAndTheGrantTogether(t *testing.T) {
 	world := newMailReposTestWorld(t)
 	_, adminDevice := world.fixture.memberWithDevice(bridge.MemberRole_MEMBER_ROLE_OWNER)
@@ -413,7 +467,7 @@ func TestMailReposGroupAddWritesTheRecordAndTheGrantTogether(t *testing.T) {
 	world.rebuild()
 	ctx := context.Background()
 	groupId := evsTestId("the group's repo")
-	if err := world.file(adminDevice, bridge.SignedType_SIGNED_REPO_CREATE, &protocol.RepoCreate{RepoId: groupId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL}); err != nil {
+	if err := world.file(adminDevice, bridge.SignedType_SIGNED_REPO_CREATE, &protocol.RepoCreate{RepoId: groupId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL, Inbox: protocol.RepoInbox_REPO_INBOX_GROUP}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -427,9 +481,9 @@ func TestMailReposGroupAddWritesTheRecordAndTheGrantTogether(t *testing.T) {
 	member := newMailConfigTestDevice(t, mailcfg, authority, memberDevice, nil)
 	adminRepos := world.repos(adminDevice)
 
-	// a group inbox needs RepoCreate's marker
+	// Rejected confirmations and reserved names write neither a repo nor an address.
 	creations := len(world.creations)
-	if _, err := adminRepos.CreateGroup(ctx, admin.config, &MailCreateGroupArgs{LocalPart: "team"}); !errors.Is(err, ErrMailGroupInboxNotBuilt) {
+	if _, err := adminRepos.CreateGroup(ctx, admin.config, &MailCreateGroupArgs{LocalPart: "team"}); !errors.Is(err, ErrMailGroupUnconfirmed) {
 		t.Fatalf("a group creation: %v", err)
 	}
 	if _, err := adminRepos.CreateGroup(ctx, admin.config, &MailCreateGroupArgs{LocalPart: "postmaster"}); !errors.Is(err, ErrMailLocalPartReserved) {
@@ -437,6 +491,23 @@ func TestMailReposGroupAddWritesTheRecordAndTheGrantTogether(t *testing.T) {
 	}
 	if len(world.creations) != creations || len(mailcfg.standingPaths()) != 0 {
 		t.Fatal("a refused group creation made something")
+	}
+
+	adminId := NewId()
+	if err := world.file(adminDevice, bridge.SignedType_SIGNED_REPO_CREATE, &protocol.RepoCreate{
+		RepoId: adminId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL, Inbox: protocol.RepoInbox_REPO_INBOX_ADMIN,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	authority.own(adminId, adminDevice)
+	if _, err := admin.config.CreateAddress(ctx, &MailCreateAddressArgs{LocalPart: "office", Kind: protocol.MailAddressKind_MAIL_ADDRESS_GROUP, MailboxRepoId: adminId}); err != nil {
+		t.Fatal(err)
+	}
+	if err := adminRepos.AddGroupMember(ctx, admin.config, "office", NewId()); !errors.Is(err, ErrMailReposAbsent) {
+		t.Fatalf("group-add for the signed admin inbox: %v", err)
+	}
+	if members, _, err := admin.config.GroupMembers(ctx, "office"); err != nil || len(members) != 0 || len(world.state().Repo(adminId).GetGrants()) != 0 {
+		t.Fatalf("admin inbox group members: %v, %v", members, err)
 	}
 
 	if _, err := admin.config.CreateAddress(ctx, &MailCreateAddressArgs{LocalPart: "team", Kind: protocol.MailAddressKind_MAIL_ADDRESS_GROUP, MailboxRepoId: groupId}); err != nil {
@@ -531,6 +602,36 @@ func TestMailReposNetworkMailKeyRepo(t *testing.T) {
 	authority.grant(ownerDevice)
 	if _, err := repos.NetworkMailKeyRepo(ctx, owner.config); !errors.Is(err, ErrMailReposAbsent) {
 		t.Fatalf("once the admin record is not honored: %v", err)
+	}
+}
+
+func TestMailTeamNetworkKeyRequiresTheSignedAdminInbox(t *testing.T) {
+	world := newMailReposTestWorld(t)
+	_, device := world.fixture.memberWithDevice(bridge.MemberRole_MEMBER_ROLE_OWNER)
+	world.fixture.repo(protocol.RepoKind_REPO_KIND_TEAM_RECORD, Id{})
+	world.rebuild()
+	repos := world.repos(device)
+	authority := newMailConfigTestAuthority()
+	authority.grant(device, "*")
+	for _, role := range []protocol.RepoInbox{protocol.RepoInbox_REPO_INBOX_GROUP, protocol.RepoInbox_REPO_INBOX_ADMIN} {
+		id := NewId()
+		if err := world.file(device, bridge.SignedType_SIGNED_REPO_CREATE, &protocol.RepoCreate{
+			RepoId: id.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL, Inbox: role,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		config := newMailConfigTestDevice(t, newMailConfigTestRepo(), authority, device, nil).config
+		if _, err := config.CreateAddress(t.Context(), &MailCreateAddressArgs{Kind: protocol.MailAddressKind_MAIL_ADDRESS_ADMIN, MailboxRepoId: id}); err != nil {
+			t.Fatal(err)
+		}
+		got, err := repos.NetworkMailKeyRepo(t.Context(), config)
+		if role == protocol.RepoInbox_REPO_INBOX_ADMIN {
+			if err != nil || got != id {
+				t.Fatalf("the signed admin inbox: %s, %v", got, err)
+			}
+		} else if !errors.Is(err, ErrMailReposAbsent) {
+			t.Fatalf("an ordinary group's key was selected as the network key: %v", err)
+		}
 	}
 }
 

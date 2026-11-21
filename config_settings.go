@@ -202,7 +202,12 @@ func (self *ConfigState) teamNetwork() bool {
 	if err != nil {
 		return false
 	}
-	for _, repo := range acl.Rows().GetRepos() {
+	return acl.teamNetwork()
+}
+
+// A Team projection retains its directory or team record even after their deletion.
+func (self *AclState) teamNetwork() bool {
+	for _, repo := range self.Rows().GetRepos() {
 		switch repo.GetKind() {
 		case protocol.RepoKind_REPO_KIND_DIRECTORY, protocol.RepoKind_REPO_KIND_TEAM_RECORD:
 			return true

@@ -142,6 +142,7 @@ type mailClientParts interface {
 	config(repoId Id, args *MailConfigArgs) (*MailConfig, error)
 	repos(args *MailReposArgs) *MailRepos
 	ingestor(repoId Id, args *MailIngestArgs) (*MailIngestor, error)
+	groupRefs(groupId, mailboxId Id) (*MailGroupRefs, error)
 }
 
 // The parts over an EvsClient.
@@ -165,6 +166,11 @@ func (self *mailEvsClientParts) config(repoId Id, args *MailConfigArgs) (*MailCo
 func (self *mailEvsClientParts) repos(args *MailReposArgs) *MailRepos {
 	args.Evs = self.evs
 	return newMailRepos(self.evs, args)
+}
+
+// Tracks the group's index in the member's own mailbox.
+func (self *mailEvsClientParts) groupRefs(groupId, mailboxId Id) (*MailGroupRefs, error) {
+	return NewMailGroupRefs(&MailGroupRefsArgs{Group: self.evs.Repo(groupId), Mailbox: self.evs.Repo(mailboxId), Settings: self.settings.GroupRefs})
 }
 
 // The repo's ingestor.
@@ -447,9 +453,20 @@ func (self *MailClient) mailRepos() (*MailRepos, *AclState, error) {
 		self.repos = parts.repos(&MailReposArgs{
 			State:         engine.State,
 			FileStatement: binding.FileStatement,
-			Gkm:           binding.Gkm,
-			SidecarId:     self.sidecarId,
-			Log:           self.log,
+			MailIndexerTag: func(state *AclState) (Id, bool) {
+				view := engine.installed.Load()
+				if view != nil && view.state == state && view.local != nil {
+					for _, name := range view.local.Names {
+						if name.Text == "tag:"+aclMailIndexerTag {
+							return name.Id, true
+						}
+					}
+				}
+				return Id{}, false
+			},
+			Gkm:       binding.Gkm,
+			SidecarId: self.sidecarId,
+			Log:       self.log,
 		})
 	}
 	return self.repos, state, nil
@@ -797,8 +814,7 @@ func (self *MailClient) CreateAgentAddress(ctx context.Context, args *MailAgentA
 	})
 }
 
-// A group address and its repo (`ur id group-create`): MailRepos.CreateGroup, which refuses until RepoCreate carries
-// plan-MAIL-group-inbox's marker.
+// Creates the signed group inbox and its address on a confirmed command.
 func (self *MailClient) CreateGroup(ctx context.Context, args *MailCreateGroupArgs) (*EvsRepo, error) {
 	repos, _, err := self.mailRepos()
 	if err != nil {
