@@ -66,3 +66,17 @@ func TestMemberRequesterAcceptsVerifiedSharedRecord(t *testing.T) {
 		t.Fatal("the revoked share accepted another remote claim")
 	}
 }
+
+// Losing the verified cache ref leaves neither a coverage pin nor a usable erasure check.
+func TestMemberRequesterWithholdsHitsWithoutThePhysicalIndexRef(t *testing.T) {
+	host := &memberSearchHost{ctx: t.Context(), running: &Sidecar{}}
+	host.engine = &SearchEngine{args: SearchEngineArgs{Scope: &memberSearchSource{host: host}}}
+	local := memberRequesterLocal{member: host}
+	repo, ref := NewId(), NewId()
+	if _, _, _, found := local.ownIndex(repo, ref); found {
+		t.Fatal("a requester whose source lost standing reported a coverage pin")
+	}
+	if !local.masked(repo, ref, [16]byte{1}, 1) {
+		t.Fatal("a requester whose erasure mask cannot be located admitted a hit")
+	}
+}

@@ -158,6 +158,9 @@ func (self memberRequesterLocal) ownIndex(repo, ref Id) (SearchSyncPin, bool, []
 		return SearchSyncPin{}, false, nil, false
 	}
 	indexId := engine.args.Scope.(*memberSearchSource).indexId(repo, ref)
+	if indexId == (Id{}) {
+		return SearchSyncPin{}, false, nil, false
+	}
 	syncer := engine.args.Sync
 	syncer.stateLock.Lock()
 	defer syncer.stateLock.Unlock()
@@ -176,6 +179,9 @@ func (self memberRequesterLocal) masked(repo, ref Id, key [16]byte, version uint
 		return true
 	}
 	indexId := engine.args.Scope.(*memberSearchSource).indexId(repo, ref)
+	if indexId == (Id{}) {
+		return true
+	}
 	snapshot, err := engine.args.Sync.Snapshot(repo, indexId)
 	switch {
 	case err == nil:
