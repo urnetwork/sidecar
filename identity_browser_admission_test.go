@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"net/http"
+	"slices"
 	"testing"
 	"time"
 
@@ -33,11 +34,15 @@ type testBrowserLookup struct {
 	reply         *sidecarIdentityReply
 	mode          string
 	landAdmission func(*bridge.Signed)
+	fallback      http.RoundTripper
 }
 
 func (a *testBrowserLookup) RoundTrip(r *http.Request) (*http.Response, error) {
 	if r.Method == "GET" && r.URL.Path == "/sidecar/identity/"+a.reply.SidecarId.String() && r.URL.Query().Get("browser_admission") == a.mode {
 		return testApiAnswer(http.StatusOK, a.reply)
+	}
+	if a.fallback != nil {
+		return a.fallback.RoundTrip(r)
 	}
 	reply, err := a.delta.RoundTrip(r)
 	if err == nil && reply.StatusCode == http.StatusOK && a.landAdmission != nil {
@@ -48,6 +53,67 @@ func (a *testBrowserLookup) RoundTrip(r *http.Request) (*http.Response, error) {
 		}
 	}
 	return reply, err
+}
+
+func TestBrowserApprovalsMakeTheExpectedReposReadableOnTheVerifiedLog(t *testing.T) {
+	vault, mailbox := NewId(), NewId()
+	world := newTestCleanupWorld(t, 100, func(w *testCleanupWorld) {
+		for _, repo := range []struct {
+			id   Id
+			kind protocol.RepoKind
+		}{{vault, protocol.RepoKind_REPO_KIND_VAULT}, {mailbox, protocol.RepoKind_REPO_KIND_MAILBOX}} {
+			w.net.mustPost(w.net.owner, bridge.SignedType_SIGNED_REPO_CREATE, &protocol.RepoCreate{Header: w.net.header(), RepoId: repo.id.Bytes(), Kind: repo.kind})
+		}
+	})
+	running := world.sidecar
+	genesis := world.net.log.State().genesisChain
+	if err := running.TrustFirstUse(genesis[:]); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{BrowserAdmissionPage, BrowserAdmissionBurner} {
+		t.Run(mode, func(t *testing.T) {
+			target := NewId()
+			signed, err := NewSidecarIdentityBinding(&SidecarIdentityBinding{NetworkId: world.net.networkId, SidecarId: target,
+				ClientId: NewId(), Generation: 1, IssuedAt: running.clock.Now()}, bytes.Repeat([]byte{mode[0]}, 32), bytes.Repeat([]byte{mode[0] + 1}, 32))
+			if err != nil {
+				t.Fatal(err)
+			}
+			identity, err := VerifySidecarIdentityBinding(signed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			running.sidecarApi.setTransport(&testBrowserLookup{mode: mode, fallback: world.api, reply: &sidecarIdentityReply{SidecarId: &target, Status: "active",
+				IdentityAlg: configIdentityAlgEd25519, IdentityPublicKey: identity.IdentityPublicKey, Binding: signed, BrowserAdmission: mode}})
+			terms := BrowserAdmissionTerms{Mode: mode}
+			now := running.clock.Now()
+			if mode == BrowserAdmissionBurner {
+				terms.MailboxId = mailbox
+				terms.NotAfterMs = now.Add(time.Hour).UnixMilli()
+			}
+			preview, err := running.PreviewBrowserAdmission(t.Context(), target, terms)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := running.ConfirmBrowserAdmission(t.Context(), target, *preview, nil); err != nil {
+				t.Fatal(err)
+			}
+			state := world.catchUp()
+			acl, err := state.Acl()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Contains(acl.RepoReaders(mailbox, now), target) || slices.Contains(acl.RepoWriters(mailbox, now), target) {
+				t.Fatal("incorrect mailbox rights")
+			}
+			if mode == BrowserAdmissionPage {
+				if !acl.ConsentedFor(target, world.net.ownerMemberId) || !slices.Contains(acl.RepoReaders(vault, now), target) || slices.Contains(acl.RepoWriters(vault, now), target) {
+					t.Fatal("page cannot read its member's existing vault with read-only consent")
+				}
+			} else if slices.Contains(acl.RepoReaders(vault, now), target) || slices.Contains(acl.RepoReaders(mailbox, now.Add(2*time.Hour)), target) {
+				t.Fatal("burner could read past the approved mailbox or expiry")
+			}
+		})
+	}
 }
 
 func TestBrowserFollowupWaitsForItsOwnVerifiedAdmission(t *testing.T) {
