@@ -521,6 +521,144 @@ func TestDaemonRecoveryRotationSurvivesRestart(t *testing.T) {
 	}
 }
 
+// The production startup composition initializes an empty network and follows the first head through EVS.
+func TestDaemonFollowerBootstrapsAnEmptyOwnerNetwork(t *testing.T) {
+	t.Run("first start", func(t *testing.T) { testDaemonFirstOwner(t, false) })
+	t.Run("restart after base one", func(t *testing.T) { testDaemonFirstOwner(t, true) })
+}
+
+// Two enrolled owner devices both see an empty log. Hold the first POST until the other device has published
+// and activated its candidate, then make the losing device follow the winning Genesis and repo.
+func TestDaemonFollowersAgreeOnTheFirstOwner(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*urTestTimeout)
+	defer cancel()
+	net := sidecartest.NewNet(ctx, nil)
+	t.Cleanup(net.Close)
+	settings := enginenet.DefaultEnginesSettings()
+	settings.FollowBeforeExchange = true
+	engines := enginenet.NewEngines(t, net, settings)
+	networkId := sidecar.NewId()
+	engines.OpenNetwork(networkId)
+	engines.Api().SetPersonalOwner(networkId, sidecar.NewId())
+	device := func(name string) *sidecar.Sidecar {
+		instance, err := net.StartInstance(name, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(instance.Close)
+		running, err := instance.AddSidecarIn(networkId, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return running
+	}
+	first, winner := device("first"), device("winner")
+	posting, release := make(chan struct{}), make(chan struct{})
+	net.Faults().SetOnFire(func(*sidecartest.FaultPlan) {
+		close(posting)
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+	})
+	if _, err := net.Faults().Add(&sidecartest.FaultPlan{Op: sidecartest.FaultOpHttp,
+		KeyPrefix: "/network/config/projection", WritesOnly: true, Result: sidecartest.ApplyThenDrop}); err != nil {
+		t.Fatal(err)
+	}
+	reads, allowRead := make(chan *testUrProbedRead, 1), make(chan struct{})
+	close(allowRead)
+	heads := urDaemonConfigHeads
+	urDaemonConfigHeads = func(running *sidecar.Sidecar) sidecar.ConfigHeadReader {
+		return &testUrProbedHeads{next: heads(running), running: running, answers: reads, admitted: allowRead}
+	}
+	firstFollower := startUrConfigFollower(first, sidecar.NewNoopLogger())
+	urDaemonConfigHeads = heads
+	select {
+	case <-posting:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	winnerFollower := startUrConfigFollower(winner, sidecar.NewNoopLogger())
+	if _, err := winnerFollower.WaitStanding(ctx); err != nil {
+		t.Fatalf("the winning owner: %v", err)
+	}
+	close(release)
+	select {
+	case <-reads:
+	case <-ctx.Done():
+		t.Fatalf("the losing follower: %+v: %v", firstFollower.Status(), ctx.Err())
+	}
+	a, err := first.Anchor()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := winner.Anchor()
+	if err != nil || !bytes.Equal(a.GenesisSha256, b.GenesisSha256) || first.Admitted() {
+		t.Fatalf("the losing device did not retain the winning anchor: %+v %+v %v", a, b, err)
+	}
+}
+
+func testDaemonFirstOwner(t *testing.T, restart bool) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*urTestTimeout)
+	defer cancel()
+	net := sidecartest.NewNet(ctx, nil)
+	t.Cleanup(net.Close)
+	settings := enginenet.DefaultEnginesSettings()
+	settings.FollowBeforeExchange = true
+	engines := enginenet.NewEngines(t, net, settings)
+	networkId, ownerId := sidecar.NewId(), sidecar.NewId()
+	engines.OpenNetwork(networkId)
+	engines.Api().SetPersonalOwner(networkId, ownerId)
+	instance, err := net.StartInstance("owner", &sidecartest.TestInstanceArgs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(instance.Close)
+	running, err := instance.AddSidecarIn(networkId, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstId := running.Identity().SidecarId
+	site := sidecartest.BarrierSite("api.config.appended", networkId.String())
+	if restart {
+		if err := net.Barriers().Arm(site, "", 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	follower := startUrConfigFollower(running, sidecar.NewNoopLogger())
+	if restart {
+		if err := net.Barriers().AwaitHeld(ctx, site, ""); err != nil {
+			t.Fatal(err)
+		}
+		follower.Close()
+		if err := net.Barriers().Release(site); err != nil {
+			t.Fatal(err)
+		}
+		if err := instance.Restart(); err != nil {
+			t.Fatal(err)
+		}
+		running = instance.Sidecar(networkId)
+		follower = startUrConfigFollower(running, sidecar.NewNoopLogger())
+	}
+	client, err := follower.WaitStanding(ctx)
+	if err != nil {
+		t.Fatalf("first-owner startup: %+v: %v", follower.Status(), err)
+	}
+	state := follower.VerifiedState()
+	if client.Pin().GetVersion() != 1 || !bytes.Equal(state.Genesis().GetOwnerMemberId(), ownerId.Bytes()) ||
+		!bytes.Equal(state.Genesis().GetOwnerSidecarId(), firstId.Bytes()) || running.Identity().SidecarId != firstId {
+		t.Fatalf("the owner did not stand on its own base: %v", client.Pin())
+	}
+	repoId, err := sidecar.IdFromBytes(state.Genesis().GetConfigRepoId())
+	if err != nil {
+		t.Fatal(err)
+	}
+	heads, err := engines.RefHeads(ctx, repoId)
+	if err != nil || len(heads) != 1 || heads[0].GetVersion() != 1 {
+		t.Fatalf("the first config repo heads: %v %v", heads, err)
+	}
+}
+
 // A publisher whose every base is lost before api takes it: a bootstrap cut short before base 1.
 type testUrLostBasePublisher struct{}
 

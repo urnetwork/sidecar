@@ -96,6 +96,8 @@ type testEnrollApi struct {
 	bindRefusal   *testApiRefusal
 	onBind        func()
 	generationsBy map[Id]int64
+	bindingsBy    map[Id][]byte
+	loseBindReply bool
 	// POST /network/config/delta's next answers, "ok", "lost" or "refused", ok when they run out; and its posts
 	deltaAnswers []string
 	deltaPosts   [][]byte
@@ -115,7 +117,7 @@ type testApiRefusal struct {
 }
 
 func newTestEnrollApi(t *testing.T) *testEnrollApi {
-	return &testEnrollApi{t: t, networkId: NewId(), adminRefused: true, generationsBy: map[Id]int64{}}
+	return &testEnrollApi{t: t, networkId: NewId(), adminRefused: true, generationsBy: map[Id]int64{}, bindingsBy: map[Id][]byte{}}
 }
 
 // A JSON answer.
@@ -174,10 +176,18 @@ func (self *testEnrollApi) RoundTrip(request *http.Request) (*http.Response, err
 		if err != nil || binding.NetworkId != self.networkId {
 			return testApiAnswer(http.StatusBadRequest, map[string]string{"error": "bad", "code": "binding_invalid"})
 		}
+		if bytes.Equal(wire.Binding, self.bindingsBy[binding.SidecarId]) {
+			return testApiAnswer(http.StatusOK, map[string]int64{"generation": binding.Generation})
+		}
 		if binding.Generation != self.generationsBy[binding.SidecarId]+1 {
 			return testApiAnswer(http.StatusConflict, map[string]string{"error": "bad", "code": "generation_conflict"})
 		}
 		self.generationsBy[binding.SidecarId] = binding.Generation
+		self.bindingsBy[binding.SidecarId] = bytes.Clone(wire.Binding)
+		if self.loseBindReply {
+			self.loseBindReply = false
+			return nil, errors.New("the committed bind reply was lost")
+		}
 		return testApiAnswer(http.StatusOK, map[string]int64{"generation": binding.Generation})
 	case "/network/config/delta":
 		wire := &sidecarConfigDeltaWire{}
@@ -275,6 +285,128 @@ func newTestEnrollWorldOn(t *testing.T, backend SidecarStoreBackend) *testEnroll
 // An enrollment with a plain auth key.
 func (self *testEnrollWorld) enroll(ctx context.Context) error {
 	return self.sidecar.Enroll(ctx, &SidecarEnrollCredential{AuthKey: testAuthKeyBearer()})
+}
+
+// Restart after the API has committed generation two but the reply failed in transit. Both enrollment modes
+// must recover the same keys, client and signed bytes without another mint.
+func TestReopenReplaysTheCommittedIdentityBinding(t *testing.T) {
+	ctx := context.Background()
+	for _, pair := range []bool{true, false} {
+		world := newTestEnrollWorld(t)
+		var err error
+		if pair {
+			err = world.enroll(ctx)
+		} else {
+			err = world.sidecar.Pair(ctx, testPairChildToken(world.api.networkId, NewId(), true))
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		awaitSidecarStatus(t, world.sidecar, atStatus(SidecarStateOffline, 1))
+		original := world.sidecar.Identity()
+		world.api.stateLock.Lock()
+		world.api.loseBindReply = true
+		world.api.stateLock.Unlock()
+		if pair {
+			err = world.sidecar.Pair(ctx, testPairChildToken(world.api.networkId, NewId(), true))
+		} else {
+			err = world.enroll(ctx)
+		}
+		if !errors.Is(err, ErrSidecarBindingPending) {
+			t.Fatalf("lost reply for pair=%t: %v", pair, err)
+		}
+		if err := world.sidecar.CloseAndWait(ctx); err != nil {
+			t.Fatal(err)
+		}
+		world.instance.Close()
+		instance := newInstanceOn(t, world.backend, newFakeKeyStore())
+		running := newTestRunningSidecar(t, instance, &world.api.networkId, testSidecarSettings(newTestSidecarPlatform()))
+		running.sidecarApi.setTransport(world.api)
+		if err := instance.Unlock(testPass); err != nil {
+			t.Fatal(err)
+		}
+		awaitSidecarStatus(t, running, atStatus(SidecarStateOffline, 2))
+		restored := running.Identity()
+		if restored.SidecarId != original.SidecarId || !bytes.Equal(restored.IdentityPublicKey, original.IdentityPublicKey) ||
+			restored.ClientId == original.ClientId || running.Paired() != pair {
+			t.Fatalf("recovered binding for pair=%t: %+v", pair, restored)
+		}
+		world.api.stateLock.Lock()
+		removed := slices.Clone(world.api.removed)
+		created := len(world.api.clients)
+		world.api.stateLock.Unlock()
+		if created != 1 || !slices.Equal(removed, []Id{original.ClientId}) {
+			t.Fatalf("recovery minted %d clients and removed %v", created, removed)
+		}
+	}
+}
+
+// Each restored network stays inactive across restarts until its own replacement binds.
+func TestRestoreReplacesOneRecordedClientAtATime(t *testing.T) {
+	ctx := context.Background()
+	backend, keyStore := NewSidecarMemoryBackend(), newFakeKeyStore()
+	open := func(machine string) *SidecarInstance {
+		instance := openOnMachine(t, backend, keyStore, []byte(machine))
+		if err := instance.Unlock(testPass); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(instance.Close)
+		return instance
+	}
+	start := func(instance *SidecarInstance, api *testEnrollApi, networkId *Id) *Sidecar {
+		running := newTestRunningSidecar(t, instance, networkId, testSidecarSettings(newTestSidecarPlatform()))
+		running.sidecarApi.setTransport(api)
+		running.hostStores = func() []SidecarHostCredentialStore { return nil }
+		return running
+	}
+	apis := []*testEnrollApi{newTestEnrollApi(t), newTestEnrollApi(t)}
+	original := open("first synthetic machine")
+	ids := []Id{}
+	for i, api := range apis {
+		running := start(original, api, nil)
+		awaitSidecarStatus(t, running, atStatus(SidecarStateUnenrolled, 0))
+		if err := running.Enroll(ctx, &SidecarEnrollCredential{AuthKey: testAuthKeyBearer()}); err != nil {
+			t.Fatal(err)
+		}
+		awaitSidecarStatus(t, running, atStatus(SidecarStateOffline, 1))
+		ids = append(ids, running.Identity().SidecarId)
+		if i == 1 {
+			api.stateLock.Lock()
+			api.loseBindReply = true
+			api.stateLock.Unlock()
+			if err := running.Pair(ctx, testPairChildToken(api.networkId, NewId(), true)); !errors.Is(err, ErrSidecarBindingPending) {
+				t.Fatalf("lost reply on the original machine: %v", err)
+			}
+		}
+		if err := running.CloseAndWait(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	original.Close()
+
+	for i, api := range apis {
+		restored := open("second synthetic machine")
+		running := start(restored, api, &api.networkId)
+		awaitSidecarStatus(t, running, atStatus(SidecarStateUnenrolled, 0))
+		if running.Identity() != nil || running.runningGeneration() != nil || running.BoundGeneration() != 1 {
+			t.Fatal("the copied client started or lost its previous binding")
+		}
+		if err := running.Enroll(ctx, &SidecarEnrollCredential{AuthKey: testAuthKeyBearer()}); !errors.Is(err, ErrSidecarRestored) {
+			t.Fatalf("enrollment without replacement: %v", err)
+		}
+		if err := running.Enroll(ctx, &SidecarEnrollCredential{AuthKey: testAuthKeyBearer(), Replace: true}); err != nil {
+			t.Fatal(err)
+		}
+		// The second source host already posted generation 2 before its backup was restored.
+		awaitSidecarStatus(t, running, atStatus(SidecarStateOffline, int64(2+i)))
+		if running.Identity().SidecarId != ids[i] || restored.Restored() != (i == 0) {
+			t.Fatal("replacement changed identity or activated another network")
+		}
+		if err := running.CloseAndWait(ctx); err != nil {
+			t.Fatal(err)
+		}
+		restored.Close()
+	}
 }
 
 // An enrollment starts the new client's generation: the request sends the bearer with both marks and no egress,

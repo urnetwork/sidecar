@@ -175,6 +175,8 @@ type SidecarTokenRefreshSettings struct {
 // stored beside its wrap, so changing these moves only new wraps. A cost of zero would be a pass with
 // no cost, and an interval of zero a limit that never counts, so these are held as every number is.
 type SidecarKeychainSettings struct {
+	// The largest sidecar.json read from disk, in bytes. A larger document fails closed.
+	StateJsonMaxByteCount int
 	// Argon2id memory: 64 MiB (RFC 9106 §4); 19 MiB on mobile and wasm (OWASP).
 	PassMemoryByteCount int64
 	// Argon2id passes: t=3 (RFC 9106 §4); 2 on mobile and wasm (OWASP).
@@ -997,12 +999,13 @@ func DefaultSidecarSettings() *SidecarSettings {
 			ServiceTokenCacheTimeout:   10 * time.Minute,
 		},
 		KeychainSettings: &SidecarKeychainSettings{
-			PassMemoryByteCount: passMemoryByteCount,
-			PassIterationCount:  passIterationCount,
-			PassThreadCount:     passThreadCount,
-			PassAttemptCount:    5,
-			PassAttemptInterval: 10 * time.Minute,
-			AutoLockTimeout:     10 * time.Minute,
+			StateJsonMaxByteCount: 1024 * 1024,
+			PassMemoryByteCount:   passMemoryByteCount,
+			PassIterationCount:    passIterationCount,
+			PassThreadCount:       passThreadCount,
+			PassAttemptCount:      5,
+			PassAttemptInterval:   10 * time.Minute,
+			AutoLockTimeout:       10 * time.Minute,
 		},
 		LocalSettings: &SidecarLocalSettings{
 			IdleExitTimeout:        10 * time.Minute,
