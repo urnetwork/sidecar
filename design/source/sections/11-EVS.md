@@ -2096,12 +2096,15 @@ cut       a CUT push (flag 512, format 2; admin, and in a directory repo the aut
           the CUT keeps every erasure still pending and every one whose CUT named an epoch at or above the set's
           listed_since, drops a complete one, its newest ERASE saying complete, a completion ERASE's included
           (reconcile, below), only by raising listed_since past the epoch that one's CUT named, and adds its
-          own; evs takes it only at the head's index_epoch, which its step 7 sets to the CUT's version
-          (11.8's 5d), else 409 INDEX_EPOCH, or 409 with the paths past those bounds; so no index push but a
-          CLOSURE built before it commits after it, and a list of index files taken at or after it is complete
-          (11.14's epoch and erase rows); at the storage limit and while spent it is maintenance, spending no
-          allowance, since its one staged record replaces its ref's set; an erasure that finds the set full cuts
-          once pending ones complete, its first ERASE (closure, above) not waiting
+          own, or, where the set still lists its erasure, joins its documents to that entry, which keeps the
+          epoch its first CUT named, so another erasure's CUT may still drop it while it reads complete, and
+          a CUT of an erasure the set has dropped adds it again under the epoch that CUT names (reconcile,
+          below; owner decision 675); evs takes it only at the head's index_epoch, which its step 7 sets to
+          the CUT's version (11.8's 5d), else 409 INDEX_EPOCH, or 409 with the paths past those bounds; so no
+          index push but a CLOSURE built before it commits after it, and a list of index files taken at or
+          after it is complete (11.14's epoch and erase rows); at the storage limit and while spent it is
+          maintenance, spending no allowance, since its one staged record replaces its ref's set; an erasure
+          that finds the set full cuts once pending ones complete, its first ERASE (closure, above) not waiting
 deposits  a depositor draws a random object key per deposit, seals the body under it and the record header, the
           entry's sealed fields and, under its first entry's, the push's sealed metadata under K_dep from it (11.6's
           Bytes), and puts HPKE-XWing(drop key of g, object key), info "UR evs 1.0 deposit" and aad repo_id ||
@@ -2134,7 +2137,12 @@ reconcile an erasure resumes from evs's state, not one device's memory: its CUTs
           erasure id; every reader of an erasure's progress reads its newest ERASE, the directory's index
           binding among them, whose resumed orphan ERASE says complete where nothing else is left; and a
           rewrite that a CUT of its call listed documents for again, a late copy's or the 30-day sweep's
-          later-signed card's, lists before it trusts a complete it reads (owner decision 673);
+          later-signed card's, lists before it trusts a complete it reads (owner decision 673); where such a
+          rewrite of the directory's finds its erasure dropped from the ref's set, another erasure's CUT
+          having read it complete between this call's CUT and the list, it says so, and the directory CUTs
+          the same documents once more, which adds the erasure again under the head's epoch, and rewrites
+          again, a second drop putting the documents back as uncut in its ledger, owed at its next sync as
+          a CUT a full set holds back is (owner decision 675);
           its CLOSUREs' and ERASEs' erasure_notes name its id (for the directory's erasure runner the
           DirectoryErasureRequest's request_id, which racing runners and the 30-day sweep share, as RECORD.md's
           ErasureBody.request_id does, so the note's id is that request_id), and its ERASEs' notes name its documents
@@ -3741,7 +3749,9 @@ cut       an erasure's first push on the index's ref (the entry's own, or ur/ind
           epoch its CUT names, so at every version of that epoch or an older one (owner decision 459); a set
           version from a signer who may not erase its documents is ignored and alarms (the directory, §16.11); a
           CUT that lists documents again for an erasure already complete, a late copy's or the directory's
-          30-day sweep's later-signed card's, has its call's rewrite list again (erase, below; owner decision 673)
+          30-day sweep's later-signed card's, has its call's rewrite list again (erase, below; owner decision 673),
+          a rewrite that finds the erasure dropped from the set since, by another erasure's CUT, saying so, and
+          the directory then CUTs those documents once more (11.12's reconcile row; owner decision 675)
 erase     at a head at or after its CUT the eraser, which reads the erasure's progress by its newest ERASE and,
           where a CUT of its call listed documents again, lists before it trusts a complete it reads (owner
           decision 673), lists every index file holding the document: each writer's slots

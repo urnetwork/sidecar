@@ -1807,8 +1807,11 @@ erasure     a directory admin's ur directory erase <id>: for an announcement, a 
             (owner decision 181); at format 2 an erasure's M6 announce entries go first, through 16.8's eraser,
             whose ERASEs then say nothing complete, the erasure completing only after its CUT, and a CUT at a
             later sync that adds a card the 30-day sweep caught to an erasure already complete has the cards
-            ref's rewrite list again before it trusts that complete (owner decision 673); a member asks an
-            admin, or withdraws, which tombstones and purges but destroys no key
+            ref's rewrite list again before it trusts that complete (owner decision 673); should another
+            erasure's CUT drop the erasure from a ref's set between that CUT and its rewrite's list, the
+            rewrite says so and the directory CUTs the same documents on that ref once more and rewrites
+            again, a second drop leaving them uncut in its ledger for the next sync (owner decision 675); a
+            member asks an admin, or withdraws, which tombstones and purges but destroys no key
 closure     the eraser holds neither a card's key nor a repo admin's, and readers refuse any other bytes at d/ and
             r/ (path rules), so its CLOSURE rewrites a card (d/<h>/<sid>) or a repo file (r/<h>/<repo>) only once
             the standing version no longer holds the erased document, writing that version's own bytes under a

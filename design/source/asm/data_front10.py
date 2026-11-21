@@ -2255,3 +2255,24 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "git-mode blob (671), amending @@OD:141@@ for export alone, and a record entry whose header an ERASE took "
     "(672), both following @@OD:665@@; a directory erasure's completion after its CUT (673), refining @@OD:658@@; "
     "and darwin's ICMP echo identifiers (674). ")
+
+# The late fold (dr10-late-fold, 2026-11-21): the answer recorded after the final sweep, QD-1160.
+INDEX += [
+    (675, 'A directory erasure another CUT dropped',
+     "Where another erasure's CUT drops a complete one between its re-CUT and its rewrite, the directory CUTs "
+     'once more.'),
+]
+for _n, _note in [
+        (673, " Refined by @@OD:675@@: a re-CUT that another erasure's CUT dropped before its rewrite is CUT once "
+              'more.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 676))
+DATES[675] = '2026-11-21'
+_D674 = "and darwin's ICMP echo identifiers (674). "
+assert DECISIONS_INTRO.count(_D674) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D674, _D674 + "A late fold the same day numbers the answer recorded after it: a directory erasure that another "
+    "erasure's CUT dropped between its re-CUT and its rewrite (675), refining @@OD:673@@. ")
