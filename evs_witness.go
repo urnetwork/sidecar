@@ -182,8 +182,17 @@ func (self *EvsClient) readLog(ctx context.Context, repoId Id, refId Id, since u
 			statements = append(statements, statement)
 		}
 		next := reply.GetNextVersion()
-		if next == 0 || len(reply.GetStatements()) == 0 {
+		if len(reply.GetStatements()) == 0 {
 			return statements, nil
+		}
+		if next == 0 {
+			// The log may serve a cached head older than the verified head we are
+			// walking to. Asking for its successor requires a head at least that new.
+			last := statements[len(statements)-1].GetVersion()
+			if through <= last {
+				return statements, nil
+			}
+			next = last + 1
 		}
 		if next <= since {
 			return nil, fmt.Errorf("%w: a log page that does not move forward", ErrEvsReplyInvalid)

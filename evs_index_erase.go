@@ -51,8 +51,7 @@
 // Hints only speed this: every step reads evs's state at the head, so a lost hint publishes nothing, and no indexer
 // takes part. No watch follows an ERASE, since the CUT fences. A hold never pauses an ERASE. Not built here: ?closure=1
 // uploads, which EvsRepo.Closure does not send yet (evs_closure.go), so at the storage limit or on a full cluster a
-// CLOSURE's upload is refused as any upload is and its pair waits on that refusal; and an eraser's own walk of a
-// removed index path's history on EvsRepo (indexEvsStore.Retained answers incomplete). Barriers evs.index.erase.listed,
+// CLOSURE's upload is refused as any upload is and its pair waits on that refusal. Barriers evs.index.erase.listed,
 // .closed, .erased and .completed, and evs.index.reenter.built and .pushed, keyed <repo>:<ref>. Paths and documents
 // stay on the device (I-13). Not safe for concurrent use: one rewrite or re-entry of an erasure at a time.
 
@@ -132,6 +131,8 @@ type indexErasePush struct {
 // What the ref's history retains.
 type indexRetained struct {
 	versions []*indexRetainedVersion
+	// The verified head the store walked, when supplied.
+	headVersion uint64
 	// Every retained version is here: false where the store could not walk the whole history, so no erasure it serves
 	// completes.
 	complete bool
@@ -151,6 +152,8 @@ type indexRetainedVersion struct {
 type indexEraseProgress struct {
 	closures []*indexEraseClosed
 	erases   []*indexEraseErased
+	// A key this erasure named first and no ERASE of the whole ref named again (QD-1137).
+	completionKey *EvsErasedKey
 }
 
 // One committed CLOSURE of the erasure on the index's ref.
@@ -448,10 +451,8 @@ func (self *IndexEraser) sendCompletion(ctx context.Context, args *IndexRewriteA
 		result.Completed = true
 		return false, nil
 	}
-	key, ok := evsCompletionKeyOf(progress.erases, args.ErasureId, func(erased *indexEraseErased) (Id, []*EvsErasedKey) {
-		return args.ErasureId, erased.keys
-	})
-	if !ok {
+	key := progress.completionKey
+	if key == nil {
 		// no ERASE of it destroyed a key that stands unnamed since: nothing here can say complete
 		return false, nil
 	}
@@ -560,6 +561,9 @@ func (self *IndexEraser) history(ctx context.Context, view *indexView, own index
 	if err != nil {
 		return err
 	}
+	if retained.headVersion != 0 && retained.headVersion != view.head.version {
+		return indexEvsMoved(view.head.version, retained.headVersion)
+	}
 	if !retained.complete {
 		work.unproven = true
 	}
@@ -591,6 +595,10 @@ func (self *IndexEraser) history(ctx context.Context, view *indexView, own index
 		if readable {
 			plaintext, err := view.store.Read(ctx, version.file)
 			switch {
+			case errors.Is(err, ErrEvsErased):
+				// One missing key can stop reconstruction. The history walk
+				// could still identify other slots retaining some of this file.
+				holds = true
 			case errors.Is(err, errIndexCollected):
 				readable = false
 			case err != nil:
@@ -690,6 +698,7 @@ func (self *IndexEraser) sendPairs(ctx context.Context, args *IndexRewriteArgs, 
 		result.Unproven = true
 	}
 	mayComplete := args.Complete && !work.unproven
+	sentComplete := false
 	if 0 < len(objects) {
 		self.raise(&SidecarErasure{
 			ErasureId: args.ErasureId, State: SidecarErasureRewriting, ObjectsLeft: int64(len(objects)),
@@ -760,7 +769,7 @@ func (self *IndexEraser) sendPairs(ctx context.Context, args *IndexRewriteArgs, 
 				return false, err
 			}
 			result.KeyCount += len(erased)
-			result.Completed = result.Completed || complete
+			sentComplete = complete
 			testHookBarrier("evs.index.erase.erased", self.barrierKey())
 		}
 		if 0 < len(objects) {
@@ -784,8 +793,14 @@ func (self *IndexEraser) sendPairs(ctx context.Context, args *IndexRewriteArgs, 
 			return false, err
 		}
 		result.KeyCount += len(keyOnlyKeys)
-		result.Completed = result.Completed || mayComplete
+		sentComplete = mayComplete
 		testHookBarrier("evs.index.erase.erased", self.barrierKey())
+	}
+	if sentComplete {
+		// An independent erasure may have destroyed the same keys first. NOTHING_TO_ERASE carries no note.
+		if _, err := self.completeByState(ctx, args.ErasureId, result); err != nil {
+			return false, err
+		}
 	}
 	if mayComplete && args.Completion && !result.Completed {
 		// no ERASE of this pass said complete: nothing was left to rewrite here, an orphaned CLOSURE's ERASE found its

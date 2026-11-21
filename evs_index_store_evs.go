@@ -40,6 +40,8 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/urnetwork/sidecar/protocol"
@@ -351,9 +353,8 @@ func (self *indexEvsStore) Commit(ctx context.Context, push *indexPush) (*indexC
 // The eraser's seam over EvsRepo (indexEraseStore; SEARCH-M10-17): a CLOSURE through EvsRepo.Closure, each file the
 // index's reserved writer's, held to the version its eraser read and padded already to that version's length; an
 // ERASE through EvsRepo.Erase; the keys through SlotKeysOf, which fails closed past a path's walked history; the
-// erasure's progress from the ref's CLOSUREs and the erasure ref's ERASEs, by their notes. Retained walks each live
-// index path's history for the versions it keeps beside its newest, but names no removed path, since EvsRepo walks no
-// ref's removed paths by name yet: it answers incomplete, so no erasure on the real store says complete until it does.
+// erasure's progress from the ref's CLOSUREs and the erasure ref's ERASEs, by their notes. Retained finds removed
+// index paths in the ref's signed directory deltas and holds every path's walk to the signed writes at one head.
 // A version whose every slot a committed ERASE named opens under no key, its staged bytes with it, and evs still lists
 // it kept and refuses its read for the key: Retained leaves it out, nothing being left there to hold, so the walk of
 // an erasure resumed after another's ERASE goes on (QD-1110; question mail-m10-04-index-eraser-history-reads).
@@ -421,17 +422,28 @@ func (self *indexEvsStore) KeysOf(ctx context.Context, paths []string) ([]*EvsEr
 	return self.repo.SlotKeysOf(ctx, self.refName, paths)
 }
 
-// See indexEraseStore, and the seam's comment above: incomplete, every live path's kept versions beside its newest.
+// See indexEraseStore. Each path's history includes its newest removal, where it no longer stands.
 func (self *indexEvsStore) Retained(ctx context.Context) (*indexRetained, error) {
-	listing, err := self.List(ctx, 0)
-	if err != nil {
-		return nil, err
-	}
 	refId, err := self.refId(ctx)
 	if err != nil {
 		return nil, err
 	}
-	retained := &indexRetained{}
+	head, err := self.repo.readHeadAlone(ctx, refId, true)
+	if err != nil {
+		return nil, err
+	}
+	writes, err := self.retainedFileWrites(ctx, head)
+	if err != nil {
+		return nil, err
+	}
+	row, err := self.repo.repoRow()
+	if err != nil {
+		return nil, err
+	}
+	retained := &indexRetained{
+		headVersion: head.Version,
+		complete:    self.repo.client.format2Reader() != nil && evsRepoSlotKeyed(row) && head.Head.GetBase() == nil,
+	}
 	// the slots a committed ERASE names a key of, read once a path shows a version beside its newest: a version whose
 	// every slot is among them opens under no key, its staged bytes with it, so it is none the ref still stores
 	var erasedSlots map[Id]bool
@@ -446,6 +458,9 @@ func (self *indexEvsStore) Retained(ctx context.Context) (*indexRetained, error)
 			}
 			erasedSlots = map[Id]bool{}
 			for _, erasure := range erasures {
+				if erasure.Completion {
+					continue
+				}
 				for _, key := range erasure.Keys {
 					if key.KeyIndex == evsChainSlotKeyIndex {
 						erasedSlots[key.SlotId] = true
@@ -460,14 +475,33 @@ func (self *indexEvsStore) Retained(ctx context.Context) (*indexRetained, error)
 		}
 		return true, nil
 	}
-	for _, file := range listing.files {
-		parsed, ok := indexParsePath(file.path, self.companion)
-		if !ok || !indexPathHoldsDocuments(parsed.kind) {
+	for _, path := range slices.Sorted(maps.Keys(writes)) {
+		history, err := self.repo.History(ctx, &EvsReadArgs{RefId: &refId, Path: path, Fresh: true})
+		if errors.Is(err, ErrEvsPathAbsent) || errors.Is(err, ErrEvsOverlayBase) {
+			retained.complete = false
 			continue
 		}
-		history, err := self.repo.History(ctx, &EvsReadArgs{RefId: &refId, Path: file.path})
 		if err != nil {
 			return nil, err
+		}
+		if history.HeadVersion != head.Version {
+			return nil, indexEvsMoved(head.Version, history.HeadVersion)
+		}
+		if !history.Whole || history.BelowUnknown {
+			retained.complete = false
+		}
+		expected := writes[path]
+		for _, version := range history.Versions {
+			if version.Removed {
+				continue
+			}
+			if !expected[version.CommitVersion] || len(version.SlotIds) == 0 {
+				retained.complete = false
+			}
+			delete(expected, version.CommitVersion)
+		}
+		if len(expected) != 0 {
+			retained.complete = false
 		}
 		// newest first: each version past the live one, replaced by the version before it in the list
 		for index := 1; index < len(history.Versions); index += 1 {
@@ -482,7 +516,7 @@ func (self *indexEvsStore) Retained(ctx context.Context) (*indexRetained, error)
 			}
 			retained.versions = append(retained.versions, &indexRetainedVersion{
 				file: &indexFileVersion{
-					path: file.path, version: version.Version, commitVersion: version.CommitVersion,
+					path: path, version: version.Version, commitVersion: version.CommitVersion,
 					signerSidecarId: version.SignerSidecarId, signedTimeMs: version.Time.UnixMilli(),
 				},
 				readable:        version.State == "kept",
@@ -491,8 +525,6 @@ func (self *indexEvsStore) Retained(ctx context.Context) (*indexRetained, error)
 			})
 		}
 	}
-	// a removed index path's versions are not named here: no erasure through this store is proven complete
-	retained.complete = false
 	return retained, nil
 }
 
@@ -507,13 +539,16 @@ func (self *indexEvsStore) Progress(ctx context.Context, erasureId Id) (*indexEr
 		return nil, err
 	}
 	progress := &indexEraseProgress{}
+	progress.completionKey, _ = evsCompletionKeyOf(erasures, erasureId, func(erased *EvsErasure) (Id, []*EvsErasedKey) {
+		return erased.ErasureId, erased.Keys
+	})
 	for _, closure := range closures {
 		if closure.ErasureId == erasureId {
 			progress.closures = append(progress.closures, &indexEraseClosed{version: closure.Version, keys: closure.Keys})
 		}
 	}
 	for _, erasure := range erasures {
-		if erasure.ErasureId == erasureId {
+		if erasure.ErasureId == erasureId && (!erasure.Completion || erasure.Complete) {
 			progress.erases = append(progress.erases, &indexEraseErased{keys: erasure.Keys, complete: erasure.Complete, timeMs: erasure.Time.UnixMilli()})
 		}
 	}
