@@ -41,32 +41,28 @@ type McpTeamNetwork interface {
 	Grants(now time.Time) []sidecar.AclGrantInfo
 }
 
-// A hosted Sidecar with its engine and its config client, as the views read them.
-type mcpSidecarTeamNetwork struct {
-	*mcpSidecarNetwork
-	config *sidecar.ConfigClient
-}
-
 // The view of hosted, its grants from engine and its config from config.
 func McpTeamNetworkOf(hosted *sidecar.Sidecar, engine *sidecar.AclEngine, config *sidecar.ConfigClient) McpTeamNetwork {
-	return &mcpSidecarTeamNetwork{mcpSidecarNetwork: &mcpSidecarNetwork{Sidecar: hosted, engine: engine}, config: config}
+	return &mcpSidecarNetwork{Sidecar: hosted, engine: engine, config: config}
 }
 
 // The config client's verified state.
-func (self *mcpSidecarTeamNetwork) ConfigState() *sidecar.ConfigState {
-	if self.config == nil {
+func (self *mcpSidecarNetwork) ConfigState() *sidecar.ConfigState {
+	_, config := self.policy()
+	if config == nil {
 		return nil
 	}
-	return self.config.State()
+	return config.State()
 }
 
 // The engine's grants for the hosted sidecar.
-func (self *mcpSidecarTeamNetwork) Grants(now time.Time) []sidecar.AclGrantInfo {
+func (self *mcpSidecarNetwork) Grants(now time.Time) []sidecar.AclGrantInfo {
 	identity := self.Identity()
-	if self.engine == nil || identity == nil {
+	engine, _ := self.policy()
+	if engine == nil || identity == nil {
 		return nil
 	}
-	return self.engine.Grants(sidecar.AclSidecarSubject(identity.SidecarId), now)
+	return engine.Grants(sidecar.AclSidecarSubject(identity.SidecarId), now)
 }
 
 // The views' refusals, each constant.

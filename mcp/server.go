@@ -121,7 +121,7 @@ func (self *daemonMcpDaemon) Network(networkId sidecar.Id) (McpNetwork, bool) {
 	if !ok {
 		return nil, false
 	}
-	return hosted, true
+	return &mcpSidecarNetwork{Sidecar: hosted, follow: true}, true
 }
 
 func (self *daemonMcpDaemon) Agent(hello *sidecar.DaemonHello) (*sidecar.SidecarAgent, error) {

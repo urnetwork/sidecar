@@ -263,7 +263,7 @@ func (self *MailClient) bindFromSidecar(ctx context.Context, env *SidecarEnv) {
 		return
 	}
 	binding := &MailBinding{Gate: sidecar}
-	if evs := sidecar.mailEvsClient(); evs != nil {
+	if evs := sidecar.EvsClient(); evs != nil {
 		binding.Evs = evs
 		binding.Gkm = evs.args.Gkm
 		binding.FileStatement = evs.args.FileStatement
@@ -330,20 +330,6 @@ func (self *MailClient) bindFromSidecar(ctx context.Context, env *SidecarEnv) {
 		return mailIndexerCovers(state, self.sidecarId, binding.IndexerServices)
 	}
 	self.Bind(binding)
-}
-
-// The network's EvsClient: the evs component's, nil while none is attached.
-func (self *Sidecar) mailEvsClient() *EvsClient {
-	leg, ok := self.leg.(*sidecarConnectLeg)
-	if !ok {
-		return nil
-	}
-	for _, component := range leg.componentList() {
-		if evsComponent, ok := component.(*EvsComponent); ok {
-			return evsComponent.Client()
-		}
-	}
-	return nil
 }
 
 // Starts the member's mailbox's ingestor, or moves it to a new mailbox, once the mailbox stands.

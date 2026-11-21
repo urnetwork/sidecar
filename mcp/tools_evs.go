@@ -50,7 +50,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"io"
-	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -82,46 +81,48 @@ type McpEvsNetwork interface {
 	EvsWriteEffect(repoId sidecar.Id, effect *sidecar.EvsWriteEffect) sidecar.SidecarEffect
 }
 
-// A hosted Sidecar, its engine and its evs client, as the evs tools read them.
-type mcpSidecarEvsNetwork struct {
-	*mcpSidecarNetwork
-	client *sidecar.EvsClient
-}
-
 // The evs view of hosted, its repos from engine's installed state and its calls through client.
 func McpEvsNetworkOf(hosted *sidecar.Sidecar, engine *sidecar.AclEngine, client *sidecar.EvsClient) McpEvsNetwork {
-	return &mcpSidecarEvsNetwork{mcpSidecarNetwork: &mcpSidecarNetwork{Sidecar: hosted, engine: engine}, client: client}
+	return &mcpSidecarNetwork{Sidecar: hosted, engine: engine, evs: client}
 }
 
 // The installed state's repos.
-func (self *mcpSidecarEvsNetwork) RepoIds() []sidecar.Id {
-	if self.engine == nil || self.engine.State() == nil {
+func (self *mcpSidecarNetwork) RepoIds() []sidecar.Id {
+	engine, _ := self.policy()
+	if engine == nil {
 		return nil
 	}
-	repoIds := []sidecar.Id{}
-	for _, repo := range self.engine.State().Rows().GetRepos() {
-		if repoId, err := sidecar.IdFromBytes(repo.GetRepoId()); err == nil {
-			repoIds = append(repoIds, repoId)
-		}
+	state := engine.State()
+	if state == nil {
+		return nil
 	}
-	slices.SortFunc(repoIds, sidecar.Id.Cmp)
-	return repoIds
+	return state.RepoIds()
+}
+
+// The daemon's currently attached EVS client, or the one supplied by the embedding host.
+func (self *mcpSidecarNetwork) evsClient() *sidecar.EvsClient {
+	if self.follow {
+		return self.Sidecar.EvsClient()
+	}
+	return self.evs
 }
 
 // The client's repo.
-func (self *mcpSidecarEvsNetwork) EvsRepo(repoId sidecar.Id) McpEvsRepo {
-	if self.client == nil {
+func (self *mcpSidecarNetwork) EvsRepo(repoId sidecar.Id) McpEvsRepo {
+	client := self.evsClient()
+	if client == nil {
 		return nil
 	}
-	return self.client.Repo(repoId)
+	return client.Repo(repoId)
 }
 
 // The evs effect over the client's repo.
-func (self *mcpSidecarEvsNetwork) EvsWriteEffect(repoId sidecar.Id, effect *sidecar.EvsWriteEffect) sidecar.SidecarEffect {
-	if self.client == nil {
+func (self *mcpSidecarNetwork) EvsWriteEffect(repoId sidecar.Id, effect *sidecar.EvsWriteEffect) sidecar.SidecarEffect {
+	client := self.evsClient()
+	if client == nil {
 		return nil
 	}
-	effect.Repo = self.client.Repo(repoId)
+	effect.Repo = client.Repo(repoId)
 	return effect
 }
 
