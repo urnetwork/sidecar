@@ -69,10 +69,8 @@ var _ SocketGate = (*SocketProjectionGate)(nil)
 var _ SocketGateFollower = (*SocketProjectionGate)(nil)
 var _ SocketScopeConsent = (*SocketProjectionGate)(nil)
 
-// Where a gate reads a network's Team scopes in its verified state (§7.9, Q-TLS-3; owner decisions 40, 126;
-// SOCK-M6-01): the scope a label names in snapshot, false for a label it holds no scope for. ProjectionRows keeps field 6
-// for TeamScopeRow, which no state carries yet (protos-bridge-row-fields #3), so a host sets none, and every scope host
-// is refused, the closed direction, until the rows carry scopes and a source reads them.
+// The scope a label names in the gate's verified snapshot (§7.9, Q-TLS-3). The host reads the signed
+// TeamScopeRow for the label and returns false when the snapshot reserves no such scope.
 type SocketScopeSource func(snapshot *sidecar.AclGateSnapshot, label string) (sidecar.AclScope, bool)
 
 // A run of evidence that arrived between two loads' starts: the newest evidence in it by count, and when its first
@@ -811,6 +809,28 @@ func (self *socketProjectionView) MayListen(request *SocketGateRequest, now time
 	return self.verdict(self.snapshot.Acl.MayListen(subject, socket, now))
 }
 
+// The host of a TLS publication. A Team scope label is reserved at the signed position
+// even when the independently refreshed listen facts still predate its reservation.
+func (self *socketProjectionView) publishHost(name string) (string, bool) {
+	path, ok := strings.CutPrefix(name, "tls/")
+	if !ok {
+		return "", false
+	}
+	_, host, ok := strings.Cut(path, "/")
+	if !ok || host == "" {
+		return "", false
+	}
+	label, _, _ := strings.Cut(host, ".")
+	source := self.scopes.Load()
+	if source == nil {
+		// The view still holds the authenticated rows when a host disables scoped listeners.
+		_, reserved := self.snapshot.Config.TeamScope(label)
+		return host, !reserved
+	}
+	_, reserved := (*source)(self.snapshot, label)
+	return host, !reserved
+}
+
 // An urnetwork-edge caller's tls/ dial and publish, a visitor's Find as autogroup:public (§9.10, §13.5 step 4;
 // QD-852): allowed wherever a sidecar of the network holds a publish grant for the name, whatever its audience, the
 // verdict carrying that grant, and refused where none does. The front alone judges the audience (§13.7). A scope
@@ -818,10 +838,11 @@ func (self *socketProjectionView) MayListen(request *SocketGateRequest, now time
 // registration is held. Any other name is no edge's to dial here: smtp/ and the system publish are judged per
 // receiver, and a blinded name within its own network (§9.4).
 func (self *socketProjectionView) edgeFind(request *SocketGateRequest, now time.Time) *SocketGateVerdict {
-	if 0 < len(request.NameToken) || !strings.HasPrefix(request.Name, "tls/") {
+	host, ok := self.publishHost(request.Name)
+	if 0 < len(request.NameToken) || !ok {
 		return &SocketGateVerdict{}
 	}
-	if label, scoped := socketNameScope(request.Name); scoped {
+	if label, scoped := socketHostScope(host); scoped {
 		scope, found := self.scopeOf(label)
 		if !found {
 			return &SocketGateVerdict{}
@@ -853,13 +874,9 @@ func (self *socketProjectionView) MayPublish(request *SocketGateRequest, now tim
 	if self.edgeCaller(request) {
 		return self.edgeFind(request, now)
 	}
-	host, found := strings.CutPrefix(request.Name, "tls/")
-	if !found {
-		return &SocketGateVerdict{}
-	}
-	host = host[strings.IndexByte(host, '/')+1:]
+	host, found := self.publishHost(request.Name)
 	subject, ok := socketGateSubject(request)
-	if !ok || host == "" {
+	if !found || !ok {
 		return &SocketGateVerdict{}
 	}
 	if label, scoped := socketHostScope(host); scoped {
@@ -876,13 +893,9 @@ func (self *socketProjectionView) MayPublish(request *SocketGateRequest, now tim
 // mode other than appMode, raw under an audience but public or link and a raw link with no pin. A scope host's is held
 // to its scope and, in a member scope, to its member's consented devices, as MayPublish holds it.
 func (self *socketProjectionView) PublishGrant(request *SocketGateRequest, appMode string, now time.Time) *sidecar.AclPublishGrant {
-	host, found := strings.CutPrefix(request.Name, "tls/")
-	if !found {
-		return nil
-	}
-	host = host[strings.IndexByte(host, '/')+1:]
+	host, found := self.publishHost(request.Name)
 	subject, ok := socketGateSubject(request)
-	if !ok || host == "" {
+	if !found || !ok {
 		return nil
 	}
 	var mode protocol.AclAppMode

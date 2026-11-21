@@ -75,6 +75,23 @@ func (self *AclGateView) MaySendMail(networkId Id, subject AclSubject, now time.
 	return state.MaySend(subject, now)
 }
 
+// The send grant and From-domain scope labels at the same verified position. An unavailable projection
+// holds the preamble. A loaded projection with no Team scope rows can authorize ordinary network mail.
+func (self *AclGateView) MaySendMailWithScopes(networkId Id, subject AclSubject, now time.Time) (AclDecision, []string) {
+	snapshot, deny := self.snapshot(networkId)
+	if deny != 0 {
+		return aclDeny(deny), nil
+	}
+	if snapshot.Config == nil {
+		return aclDeny(AclReasonNoState), nil
+	}
+	decision := snapshot.Acl.MaySend(subject, now)
+	if !decision.Allowed {
+		return decision, nil
+	}
+	return decision, snapshot.Config.TeamScopeLabels()
+}
+
 // Whether a receiver honors a mailcfg record its creator signed for an alias (§15.10): only while policy grants the
 // creator mail:<alias>#listen, judged at each read on the installed state, so a record outlives no grant.
 func (self *AclEngine) HonorsMailcfgRecord(creatorSidecarId Id, alias string, now time.Time) bool {

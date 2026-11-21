@@ -341,6 +341,24 @@ func TestSmtpGateScreensABurnersWord(t *testing.T) {
 	g.expect("paypal.root.example", 0, protocol.SmtpPreambleCode_SMTP_PREAMBLE_OK, "")
 }
 
+// A reviewer's clearance of a burner word applies in the network's live alias and signed scope.
+func TestSmtpGateChecksReviewedBurnersInAliasAndScopeZones(t *testing.T) {
+	g := newGateWorld(t)
+	for _, zone := range []string{"quiet-net.root.example", "sales.n1.root.example"} {
+		from := "paypalsupport-1234." + zone
+		g.facts.ReviewAllowedNames = nil
+		g.reload()
+		g.expect(from, sidecar.SmtpFlagBurner, protocol.SmtpPreambleCode_SMTP_PREAMBLE_DENIED, "screen")
+		g.facts.ReviewAllowedNames = []string{"paypalsupport"}
+		g.reload()
+		g.expect(from, sidecar.SmtpFlagBurner, protocol.SmtpPreambleCode_SMTP_PREAMBLE_OK, "")
+	}
+	g.facts.Aliases, g.facts.ScopeLabels = nil, nil
+	g.reload()
+	g.expect("paypalsupport-1234.quiet-net.root.example", sidecar.SmtpFlagBurner, protocol.SmtpPreambleCode_SMTP_PREAMBLE_DENIED, "from_domain")
+	g.expect("paypalsupport-1234.sales.n1.root.example", sidecar.SmtpFlagBurner, protocol.SmtpPreambleCode_SMTP_PREAMBLE_DENIED, "from_domain")
+}
+
 func TestSmtpGateBreakerLevels(t *testing.T) {
 	cases := []struct {
 		level    smtpedgeservice.SmtpBreakerLevel
