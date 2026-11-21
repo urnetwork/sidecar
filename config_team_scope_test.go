@@ -23,7 +23,7 @@ func TestConfigVerifiedTeamScopeRows(t *testing.T) {
 	tagId := testConfigId("scope tag")
 	rows.TeamScopes = []*bridge.TeamScopeRow{
 		{Label: "alpha-unit", MemberId: net.ownerMemberId.Bytes()},
-		{Label: "beta-unit", TagAtom: tagId.Bytes()},
+		{Label: "ops-unit", TagAtom: tagId.Bytes()},
 	}
 	gate := net.apiAtTip()
 	if _, ok := gate.State().TeamScope("alpha-unit"); ok {
@@ -41,13 +41,13 @@ func TestConfigVerifiedTeamScopeRows(t *testing.T) {
 	if device, ok := state.TeamScopeForDevice(net.owner.sidecarId); !ok || device != member {
 		t.Fatalf("owner device scope: %+v", device)
 	}
-	tag, ok := state.TeamScope("beta-unit")
+	tag, ok := state.TeamScope("ops-unit")
 	if !ok || tag.TagId != tagId || tag.MemberId != (Id{}) {
 		t.Fatalf("tag scope: %+v", tag)
 	}
 	state.TeamScopeLabels()[0] = "changed"
 	state.Rows().GetTeamScopes()[0].Label = "changed"
-	if _, ok := state.TeamScope("changed"); ok || !slices.Equal(state.TeamScopeLabels(), []string{"alpha-unit", "beta-unit"}) {
+	if _, ok := state.TeamScope("changed"); ok || !slices.Equal(state.TeamScopeLabels(), []string{"alpha-unit", "ops-unit"}) {
 		t.Fatal("changing an answer changed the verified base")
 	}
 	head := testConfigHead(t, net)
@@ -84,6 +84,7 @@ func TestConfigTeamScopeRejectsMalformedBindings(t *testing.T) {
 		{{Label: "team-unit"}},
 		{{Label: "team-unit", MemberId: valid.MemberId, TagAtom: testConfigId("scope tag").Bytes()}},
 		{{Label: "nested.label", MemberId: valid.MemberId}},
+		{{Label: "beta-unit", MemberId: valid.MemberId}},
 		{{Label: "team-unit", MemberId: make([]byte, len(Id{}))}},
 		{{Label: "team-unit", TagAtom: make([]byte, len(Id{}))}},
 	} {
