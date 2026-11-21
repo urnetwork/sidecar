@@ -423,6 +423,8 @@ barrier identity.bind.after identity_enroll.go
 barrier identity.bind.after identity_enroll_child.go
 barrier identity.bind.before identity_enroll.go
 barrier identity.bind.before identity_enroll_child.go
+barrier identity.change.bind.after identity_binding_retry.go
+barrier identity.change.bind.before identity_binding_retry.go
 barrier identity.cleanup.sign.after identity_cleanup.go
 barrier identity.cleanup.sign.before identity_cleanup.go
 barrier identity.enroll.after identity_enroll.go
@@ -828,6 +830,7 @@ secret * gkm_keys.go
 secret * mls_state.go
 secret AdminDpopKey config_admin_command.go
 secret ClientKey api_dpop.go
+secret ClientKey identity_binding_retry.go
 secret ClientKey identity_keys.go
 secret KEK_e mls_engine.go
 secret K_dep evs_slot.go

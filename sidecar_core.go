@@ -152,7 +152,22 @@ func (self *Sidecar) reconcileOpen() {
 		return
 	}
 	secrets := self.instance.secrets(*networkId, sidecarCoreSecretsNamespace)
-	if self.instance.networkRestored(networkId) {
+	restored := self.instance.networkRestored(networkId)
+	if self.runningGeneration() == nil && self.enrollLock.TryLock() {
+		bound, err := self.resumeBinding(self.ctx, networkId, false)
+		self.enrollLock.Unlock()
+		if bound != nil {
+			// finishBinding woke the loop after installing every local record.
+			return
+		}
+		if err != nil && !errors.Is(err, ErrSidecarKeystoreLost) && !errors.Is(err, ErrSidecarStoreLocked) && !restored {
+			self.log.Warningf("[identity]the pending binding did not finish: %s", err)
+			self.setIdentity(nil, nil)
+			self.leaveForUnenrolled("")
+			return
+		}
+	}
+	if restored {
 		self.stopGeneration()
 		self.setIdentity(nil, nil)
 		self.leaveForUnenrolled("")
@@ -218,10 +233,10 @@ func (self *Sidecar) reconcileOpen() {
 		self.leaveForUnenrolled("")
 		return
 	}
-	connectInstanceId, child, ok := self.networkRecordOf(*networkId)
-	if !ok {
-		// enrollment records the network last, so an identity with no record is an enrollment a kill cut short
-		self.log.Warningf("[sidecar]an identity with no network record does not start")
+	networkRecord, ok := self.networkRecordOf(*networkId)
+	if !ok || networkRecord.ClientId != identity.ClientId || networkRecord.SidecarId != identity.SidecarId {
+		// The keychain and the network record must name the same committed client.
+		self.log.Warningf("[sidecar]an identity with no matching network record does not start")
 		self.stopGeneration()
 		self.leaveForUnenrolled("")
 		return
@@ -230,33 +245,29 @@ func (self *Sidecar) reconcileOpen() {
 	self.startGeneration(&sidecarGenerationArgs{
 		identity:          identity.clone(),
 		networkId:         *networkId,
-		connectInstanceId: connectInstanceId,
+		connectInstanceId: networkRecord.ConnectInstanceId,
 		byJwt:             byJwt,
 		clientKeySeed:     record.keys.clientKeySeedCopy(),
 		binding:           bytes.Clone(record.binding),
 		secrets:           secrets,
-		child:             child,
+		child:             networkRecord.Child,
 	})
 }
 
-// The connect InstanceId and child flag sidecar.json keeps for the network.
-func (self *Sidecar) networkRecordOf(networkId Id) (Id, bool, bool) {
+// The public identity and client sidecar.json has committed for the network.
+func (self *Sidecar) networkRecordOf(networkId Id) (SidecarNetworkRecord, bool) {
 	for _, record := range self.instance.Networks() {
 		if record.NetworkId == networkId {
-			return record.ConnectInstanceId, record.Child, true
+			return record, true
 		}
 	}
-	return Id{}, false, false
+	return SidecarNetworkRecord{}, false
 }
 
 // The connect InstanceId sidecar.json keeps for the network, so a restart keeps the resident (§5.9).
 func (self *Sidecar) connectInstanceIdOf(networkId Id) (Id, bool) {
-	for _, record := range self.instance.Networks() {
-		if record.NetworkId == networkId {
-			return record.ConnectInstanceId, true
-		}
-	}
-	return Id{}, false
+	record, ok := self.networkRecordOf(networkId)
+	return record.ConnectInstanceId, ok
 }
 
 // Points the sidecar at secrets and the identity they hold, nil for none.

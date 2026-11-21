@@ -20,8 +20,9 @@
 //	         and removes C with its own token (Enroll, which takes a paired sidecar while it runs)
 //
 // A pairing takes the running sidecar as it is, Online or Offline: the run loop moves to the new generation once the
-// keychain names it. Nothing is kept before the binding lands, and a failure after it removes C, best effort, with its
-// own token; the bound generation is then spent, as an abandoned enrollment's is. Nothing returns a token (I-7).
+// keychain and network record name it. An existing identity journals its exact next binding before posting it, so
+// a lost reply can be replayed without spending another generation or revoking the new child. A first enrollment
+// creates its keychain only after the binding is confirmed. Nothing returns a token (I-7).
 //
 // On every leg but the forwarding one: root Id, no connect type.
 
@@ -133,6 +134,11 @@ func (self *Sidecar) pair(ctx context.Context, childJwt string) (int64, error) {
 	if knownNetworkId != nil && *knownNetworkId != networkId {
 		return 0, fmt.Errorf("%w: the device is another network's than this sidecar's", ErrSidecarPairToken)
 	}
+	if bound, err := self.resumeBinding(ctx, knownNetworkId, false); err != nil {
+		return 0, err
+	} else if bound != nil && bound.ClientId == clientId {
+		return bound.Generation, nil
+	}
 	if knownNetworkId == nil {
 		if _, recorded := self.connectInstanceIdOf(networkId); recorded {
 			// that network is another Sidecar's of this instance, which takes the pairing (CORE-M6-01)
@@ -201,15 +207,17 @@ func (self *Sidecar) pair(ctx context.Context, childJwt string) (int64, error) {
 	if err != nil {
 		return abandon(err)
 	}
+	if previous != nil {
+		err := self.changeBinding(ctx, previous, keys, signedBinding, childJwt, previousByJwt, true, false, nil)
+		if err != nil {
+			return 0, err
+		}
+		return generation, nil
+	}
 	testHookBarrier("identity.pair.bind.before", sidecarId.String())
 	boundGeneration, err := childApi.Bind(ctx, signedBinding)
 	testHookBarrier("identity.pair.bind.after", sidecarId.String())
 	if err != nil {
-		if previous != nil && isSidecarRevokedRefusal(err) {
-			if revoked, verifyErr := self.VerifyRevocationClaim(ctx); verifyErr == nil && revoked {
-				return abandon(ErrSidecarRevoked)
-			}
-		}
 		return abandon(err)
 	}
 	if boundGeneration != generation {
@@ -217,10 +225,8 @@ func (self *Sidecar) pair(ctx context.Context, childJwt string) (int64, error) {
 	}
 
 	// the binding recorded: the keychain first, sidecar.json last of all
-	if previous == nil {
-		if _, err := self.instance.createKeychain(networkId); err != nil {
-			return abandon(err)
-		}
+	if _, err := self.instance.createKeychain(networkId); err != nil {
+		return abandon(err)
 	}
 	secrets := self.instance.secrets(networkId, sidecarCoreSecretsNamespace)
 	if _, err := persistSidecarIdentity(secrets, keys, signedBinding); err != nil {
@@ -249,12 +255,6 @@ func (self *Sidecar) pair(ctx context.Context, childJwt string) (int64, error) {
 	testHookBarrier("identity.pair.record.after", sidecarId.String())
 	if err != nil {
 		return abandon(err)
-	}
-	if previous != nil && previousByJwt != "" {
-		// the top-level client, or an earlier child, goes with its own token (§5.8's remove any top-level client)
-		if err := self.sidecarApi.withByJwt(previousByJwt).RemoveClient(ctx, previous.identity.ClientId); err != nil {
-			self.log.Infof("[identity]generation %d's client was not removed, and the reaper will: %s", previous.identity.Generation, err)
-		}
 	}
 	func() {
 		self.stateLock.Lock()

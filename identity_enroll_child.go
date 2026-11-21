@@ -29,12 +29,15 @@ func (self *Sidecar) enrollChild(ctx context.Context, credential *SidecarEnrollC
 	}
 	self.enrollLock.Lock()
 	defer self.enrollLock.Unlock()
+	knownNetworkId := self.enrolledNetworkId()
 	if err := self.checkEnrollable(credential); err != nil {
+		return err
+	}
+	if bound, err := self.resumeBinding(ctx, knownNetworkId, credential.Replace); err != nil || bound != nil && self.Paired() {
 		return err
 	}
 	var previous *sidecarIdentityRecord
 	previousByJwt := ""
-	knownNetworkId := self.enrolledNetworkId()
 	if knownNetworkId != nil {
 		secrets := self.instance.secrets(*knownNetworkId, sidecarCoreSecretsNamespace)
 		record, err := loadSidecarIdentity(secrets)
@@ -119,15 +122,13 @@ func (self *Sidecar) enrollChild(ctx context.Context, credential *SidecarEnrollC
 	if err != nil {
 		return abandon(err)
 	}
+	if previous != nil {
+		return self.changeBinding(ctx, previous, keys, signedBinding, result.ByClientJwt, previousByJwt, true, false, nil)
+	}
 	testHookBarrier("identity.bind.before", sidecarId.String())
 	boundGeneration, err := childApi.Bind(ctx, signedBinding)
 	testHookBarrier("identity.bind.after", sidecarId.String())
 	if err != nil {
-		if previous != nil && isSidecarRevokedRefusal(err) {
-			if revoked, verifyErr := self.VerifyRevocationClaim(ctx); verifyErr == nil && revoked {
-				return abandon(ErrSidecarRevoked)
-			}
-		}
 		return abandon(err)
 	}
 	if boundGeneration != generation {
@@ -135,10 +136,8 @@ func (self *Sidecar) enrollChild(ctx context.Context, credential *SidecarEnrollC
 	}
 
 	// both marks confirmed and the binding recorded: the keychain first, sidecar.json last of all
-	if previous == nil {
-		if _, err := self.instance.createKeychain(networkId); err != nil {
-			return abandon(err)
-		}
+	if _, err := self.instance.createKeychain(networkId); err != nil {
+		return abandon(err)
 	}
 	secrets := self.instance.secrets(networkId, sidecarCoreSecretsNamespace)
 	if _, err := persistSidecarIdentity(secrets, keys, signedBinding); err != nil {
@@ -165,12 +164,6 @@ func (self *Sidecar) enrollChild(ctx context.Context, credential *SidecarEnrollC
 	})
 	if err != nil {
 		return abandon(err)
-	}
-	if previous != nil && previousByJwt != "" {
-		// the old child goes with its own token (§5.8's re-pair)
-		if err := self.sidecarApi.withByJwt(previousByJwt).RemoveClient(ctx, previous.identity.ClientId); err != nil {
-			self.log.Infof("[identity]generation %d's child was not removed, and the reaper will: %s", previous.identity.Generation, err)
-		}
 	}
 	func() {
 		self.stateLock.Lock()

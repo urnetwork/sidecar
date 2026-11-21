@@ -9,7 +9,8 @@
 // daemon from starting on it (D-CORE-7).
 //
 // A re-enrollment after Unenrolled keeps the sidecar_id and identity key: a new ClientKey binds generation n+1, and
-// the old client is removed, best effort, with its own token (§5.5). A refused, expired or ended generation is the
+// the existing keychain journals the immutable candidate before the bind, and the old client is removed, best effort,
+// with its own token after the new generation commits (§5.5). A refused, expired or ended generation is the
 // one case: a lost keychain (keystore_lost) enrolls only after the person confirms a new device (D-CORE-15), and a
 // revoked sidecar never again. Nothing here names a connect type, so it builds on every leg.
 
@@ -121,14 +122,21 @@ func (self *Sidecar) Enroll(ctx context.Context, credential *SidecarEnrollCreden
 
 	self.enrollLock.Lock()
 	defer self.enrollLock.Unlock()
-	if err := self.checkEnrollable(credential); err != nil {
+	knownNetworkId := self.enrolledNetworkId()
+	enrollErr := self.checkEnrollable(credential)
+	if enrollErr != nil && !errors.Is(enrollErr, ErrSidecarEnrolled) {
+		return enrollErr
+	}
+	if bound, err := self.resumeBinding(ctx, knownNetworkId, credential.Replace); err != nil || bound != nil && !self.Paired() {
 		return err
+	}
+	if enrollErr != nil {
+		return enrollErr
 	}
 
 	// a re-enrollment keeps the identity and binds the next generation
 	var previous *sidecarIdentityRecord
 	previousByJwt := ""
-	knownNetworkId := self.enrolledNetworkId()
 	if knownNetworkId != nil {
 		secrets := self.instance.secrets(*knownNetworkId, sidecarCoreSecretsNamespace)
 		record, err := loadSidecarIdentity(secrets)
@@ -221,16 +229,13 @@ func (self *Sidecar) Enroll(ctx context.Context, credential *SidecarEnrollCreden
 	if err != nil {
 		return abandon(err)
 	}
+	if previous != nil {
+		return self.changeBinding(ctx, previous, keys, signedBinding, result.ByClientJwt, previousByJwt, false, credential.Replace, anchor)
+	}
 	testHookBarrier("identity.bind.before", sidecarId.String())
 	boundGeneration, err := enrollApi.Bind(ctx, signedBinding)
 	testHookBarrier("identity.bind.after", sidecarId.String())
 	if err != nil {
-		if previous != nil && isSidecarRevokedRefusal(err) {
-			// api holds this identity revoked: a claim the config must verify before it means Revoked (CORE-M2-07)
-			if revoked, verifyErr := self.VerifyRevocationClaim(ctx); verifyErr == nil && revoked {
-				return abandon(ErrSidecarRevoked)
-			}
-		}
 		return abandon(err)
 	}
 	if boundGeneration != generation {
@@ -238,10 +243,8 @@ func (self *Sidecar) Enroll(ctx context.Context, credential *SidecarEnrollCreden
 	}
 
 	// admin_refused confirmed and the binding recorded: the keychain first, sidecar.json last of all
-	if previous == nil {
-		if _, err := self.instance.createKeychain(networkId); err != nil {
-			return abandon(err)
-		}
+	if _, err := self.instance.createKeychain(networkId); err != nil {
+		return abandon(err)
 	}
 	secrets := self.instance.secrets(networkId, sidecarCoreSecretsNamespace)
 	if _, err := persistSidecarIdentity(secrets, keys, signedBinding); err != nil {
@@ -274,12 +277,6 @@ func (self *Sidecar) Enroll(ctx context.Context, credential *SidecarEnrollCreden
 	if err != nil {
 		return abandon(err)
 	}
-	if previous != nil && previousByJwt != "" {
-		// the old client goes with its own token, which the refusal that ended it may have ended too
-		if err := self.sidecarApi.withByJwt(previousByJwt).RemoveClient(ctx, previous.identity.ClientId); err != nil {
-			self.log.Infof("[identity]generation %d's client was not removed, and the reaper will: %s", previous.identity.Generation, err)
-		}
-	}
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
@@ -299,8 +296,8 @@ func (self *Sidecar) Paired() bool {
 	if self.instance == nil || networkId == nil {
 		return false
 	}
-	_, child, ok := self.networkRecordOf(*networkId)
-	return ok && child
+	record, ok := self.networkRecordOf(*networkId)
+	return ok && record.Child
 }
 
 // Why this sidecar cannot enroll now, or nil. Runs under enrollLock.
