@@ -703,7 +703,7 @@ func (self *Sidecar) MailGroupInboxes(ctx context.Context) (map[Id]bool, error) 
 	if err := config.Sync(ctx); err != nil {
 		return nil, err
 	}
-	groups, err := config.groupInboxes()
+	groups, err := config.groupInboxes(state.Rows().GetRepos())
 	if err != nil {
 		return nil, err
 	}

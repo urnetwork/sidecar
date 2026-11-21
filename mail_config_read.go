@@ -881,14 +881,23 @@ func (self *MailConfig) Addresses() ([]*MailAddressLookup, error) {
 	return lookups, nil
 }
 
-// Every group a verified address record names, including groups whose creator no longer has a sending grant.
-func (self *MailConfig) groupInboxes() (map[Id]bool, error) {
+// Every inbox marked at repo creation or named in a verified address record, including withdrawn aliases.
+func (self *MailConfig) groupInboxes(repos []*protocol.AclRepo) (map[Id]bool, error) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	if !self.synced {
 		return nil, ErrMailConfigNotSynced
 	}
 	groups := map[Id]bool{}
+	for _, repo := range repos {
+		if AclRepoIsInbox(repo) {
+			id, err := IdFromBytes(repo.GetRepoId())
+			if err != nil {
+				return nil, ErrMailConfigNotSynced
+			}
+			groups[id] = true
+		}
+	}
 	for _, entry := range self.addressEntries {
 		if entry.unreadable || entry.standing && entry.record == nil {
 			return nil, ErrMailConfigNotSynced

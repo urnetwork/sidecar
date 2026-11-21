@@ -23,6 +23,8 @@ func TestUrMcpChecksTheHostedNetworksStandingPolicy(t *testing.T) {
 	network.MustLand(network.Sign(network.Owner(), bridge.SignedType_SIGNED_REPO_CREATE, &protocol.RepoCreate{
 		Header: network.Header(), RepoId: deniedRepo.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL,
 	}))
+	// The personal starter otherwise grants every member every general repo.
+	network.SaveAclPolicy([]byte(`{"grants": []}`), nil)
 	engines := enginenet.NewEngines(t, world.net, nil)
 	engines.OpenNetwork(network.NetworkId())
 	running := world.host(network, nil)
