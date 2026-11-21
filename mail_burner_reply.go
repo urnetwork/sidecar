@@ -89,17 +89,17 @@ func (self *MailClient) Reply(ctx context.Context, args *MailReplyArgs) (*MailSe
 		From: args.From, To: args.To, Cc: args.Cc, Bcc: args.Bcc, Subject: args.Subject, Text: args.Text,
 		InReplyTo: args.InReplyTo, Action: args.Action,
 	}
-	plan, err := self.planSendDraft(draft, label)
+	plan, err := self.planSendDraft(ctx, draft, label)
 	if err != nil {
 		return nil, err
 	}
 	content := &mailSendContent{draft: mailSendCopyArgs(draft)}
-	result, err := self.sendPlanned(ctx, plan, content, args.Action, func() (*mailSendPlan, error) {
+	result, err := self.sendPlanned(ctx, plan, content, args.Action, func(ctx context.Context) (*mailSendPlan, error) {
 		// the burner held live again at the spend, as the From is
 		if _, err := self.replyBurner(ctx, args.From); err != nil {
 			return nil, err
 		}
-		return self.planSendDraft(content.draft, label)
+		return self.planSendDraft(ctx, content.draft, label)
 	})
 	if err != nil {
 		return nil, err

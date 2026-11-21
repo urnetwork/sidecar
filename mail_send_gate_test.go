@@ -407,7 +407,7 @@ func TestMailSubmitSendActionIsTheDrafts(t *testing.T) {
 	world, _, _ := newMailSendTestWorld(t)
 	plan := func(args *MailSendArgs) *StoredCanonicalAction {
 		t.Helper()
-		planned, err := world.client.planSend(args)
+		planned, err := world.client.planSend(t.Context(), args)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -465,7 +465,7 @@ func TestMailSubmitSendPreviewCutsAtARune(t *testing.T) {
 	world, _, _ := newMailSendTestWorld(t)
 	long := testMailSubmitDraft()
 	long.Text = strings.Repeat("ü", 4096)
-	planned, err := world.client.planSend(long)
+	planned, err := world.client.planSend(t.Context(), long)
 	if err != nil {
 		t.Fatal(err)
 	}

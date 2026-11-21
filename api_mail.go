@@ -44,6 +44,8 @@ type MailNetworkStatus struct {
 	DirectMxAddresses []netip.Addr
 	// Verified customer recipient domains of this network.
 	VerifiedDomains []string
+	// The Team entitlement or its downgrade grace permits sending From the network's verified customer domains.
+	MaySendFromCustomDomains bool
 	// The network's verified custom domains in strict mode (QD-1129): each at or above an active strict-mode MX host
 	// the network maps (§12.8 step 4), whose mail's envelope is b.<domain>, the set smtpedge's gate derives
 	// envelope_domain from. Lowercase with no final dot; empty while none is. A sender picks a From's envelope from
@@ -77,13 +79,14 @@ func (self *SidecarApi) MailEnable(ctx context.Context) (*MailEnabled, error) {
 // domain that is no domain name, is not the route's. Never the packet path.
 func (self *SidecarApi) MailStatus(ctx context.Context) (*MailNetworkStatus, error) {
 	answer := struct {
-		Enabled           *bool        `json:"enabled"`
-		StorageFull       *bool        `json:"storage_full"`
-		Spent             *bool        `json:"spent"`
-		DirectMx          *bool        `json:"direct_mx"`
-		StrictDomains     *[]string    `json:"strict_domains"`
-		VerifiedDomains   []string     `json:"verified_domains"`
-		DirectMxAddresses []netip.Addr `json:"direct_mx_addresses"`
+		Enabled                  *bool        `json:"enabled"`
+		StorageFull              *bool        `json:"storage_full"`
+		Spent                    *bool        `json:"spent"`
+		DirectMx                 *bool        `json:"direct_mx"`
+		StrictDomains            *[]string    `json:"strict_domains"`
+		VerifiedDomains          []string     `json:"verified_domains"`
+		MaySendFromCustomDomains bool         `json:"may_send_from_custom_domains"`
+		DirectMxAddresses        []netip.Addr `json:"direct_mx_addresses"`
 	}{}
 	err := self.sendJson(ctx, &sidecarApiRequest{
 		route:     sidecarMailStatusRoute,
@@ -118,6 +121,7 @@ func (self *SidecarApi) MailStatus(ctx context.Context) (*MailNetworkStatus, err
 	return &MailNetworkStatus{
 		Enabled: *answer.Enabled, StorageFull: *answer.StorageFull, Spent: *answer.Spent, DirectMx: *answer.DirectMx,
 		StrictDomains: strictDomains, VerifiedDomains: answer.VerifiedDomains, DirectMxAddresses: answer.DirectMxAddresses,
+		MaySendFromCustomDomains: answer.MaySendFromCustomDomains,
 	}, nil
 }
 

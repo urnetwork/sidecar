@@ -483,6 +483,10 @@ func (self *MailClient) ingestArgs(run *mailComponentRun, binding *MailBinding) 
 			OwnZone: func(zone MailZone) bool {
 				return zone.OfNetwork(self.networkRow())
 			},
+			CustomFrom: func(address string) (MailRecipient, bool) {
+				from, _, err := mailVerifiedCustomFrom(run.ctx, binding.Api, self.networkRow(), address)
+				return from, err == nil
+			},
 			Clock: self.clock,
 		},
 		Message: func(message *MailMessage) {

@@ -440,6 +440,60 @@ func testMailSendOutbox(t *testing.T, world *mailClientTestWorld) map[string]*Sm
 	return files
 }
 
+// The normal submission keeps a verified domain in From and Message-ID, checks the local alias's
+// policy, and uses the strict domain's bounce address. Ownership must still hold at approval spend.
+func TestMailSubmitSelectsAndRechecksAVerifiedCustomFrom(t *testing.T) {
+	world, parts, _ := newMailSendTestWorld(t)
+	setDomains := func(entitled bool, domains ...string) {
+		world.api.stateLock.Lock()
+		defer world.api.stateLock.Unlock()
+		world.api.status = &MailNetworkStatus{Enabled: true, VerifiedDomains: domains,
+			MaySendFromCustomDomains: entitled, StrictDomains: []string{"brand.example"}}
+	}
+	setDomains(true, "brand.example")
+	signer := newTestMailOutboxSigner(world.device)
+	testMailSendBindOutbox(world, signer, testMailOutboxStanding(AbuseStandingStandard, true))
+	draft := &MailSendArgs{To: []string{"someone@outside.example"}, Subject: "Team mail", Text: "Hello"}
+	for _, from := range []string{"bo@brand.example", "ann@sub.brand.example", "ann@another.example"} {
+		draft.From = from
+		if _, err := world.client.SubmitSend(t.Context(), draft); !errors.Is(err, ErrMailSendFromRefused) {
+			t.Fatalf("unauthorized alias or domain: %v", err)
+		}
+	}
+	draft.From = "Ann@Brand.Example"
+	setDomains(false, "brand.example")
+	if _, err := world.client.SubmitSend(t.Context(), draft); !errors.Is(err, ErrMailSendFromRefused) {
+		t.Fatalf("expired Team sending entitlement: %v", err)
+	}
+	setDomains(true, "brand.example")
+	result, err := world.client.SubmitSend(t.Context(), draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := testMailSendOutbox(t, world)[string(result.EffectKey)]
+	if file == nil {
+		t.Fatalf("custom From was not queued: %+v", result)
+	}
+	verified, err := VerifySmtpOutboxEntry(file, func(Id) ed25519.PublicKey { return signer.publicKey() })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(verified.Message.Sender, "@b.brand.example") ||
+		!bytes.Contains(file.Message, []byte("From: ann@brand.example\r\n")) ||
+		!bytes.Contains(file.Message, []byte("Message-ID: <"+MailOutboxMessageId(result.SendId, "brand.example")+">\r\n")) {
+		t.Fatal("the signed outbox did not preserve the custom header and envelope identities")
+	}
+	gate := &mailSubmitTestGate{beforeEffect: func() { setDomains(true) }}
+	testMailSubmitRebind(world, gate)
+	draft.To = []string{"unapproved@outside.example"}
+	if _, err := world.client.SubmitSend(t.Context(), draft); !errors.Is(err, ErrSidecarEffectNotDone) || !errors.Is(err, ErrMailSendFromRefused) {
+		t.Fatalf("withdrawn ownership at approval spend: %v", err)
+	}
+	if len(testMailSendOutbox(t, world)) != 1 || len(parts.snapshot()) != 0 {
+		t.Fatal("a refused From reached delivery")
+	}
+}
+
 // A send naming members and the internet, once the gate passes it: the member part deposits, the internet part,
 // Bcc included and nothing else, queues at o/ under the gate's key with the mailbox's bounce address as its envelope
 // sender, the message naming no Bcc and a random id under the From's domain; the sent copy is kept; the bounce

@@ -48,7 +48,7 @@ import (
 const mailSendPreviewCutMark = "…"
 
 // Runs a planned send through the gate (see the file header), answering its delivery once the gate passes it.
-func (self *MailClient) gatedSend(ctx context.Context, plan *mailSendPlan, content *mailSendContent, actionArgs MailConfigActionArgs, replan func() (*mailSendPlan, error)) (*MailSendResult, error) {
+func (self *MailClient) gatedSend(ctx context.Context, plan *mailSendPlan, content *mailSendContent, actionArgs MailConfigActionArgs, replan func(context.Context) (*mailSendPlan, error)) (*MailSendResult, error) {
 	gate := plan.binding.Gate
 	if gate == nil {
 		return nil, ErrSidecarGateDenied
@@ -199,7 +199,7 @@ func mailSendApprovalNotAfter(ctx context.Context) time.Time {
 type mailSendEffect struct {
 	client *MailClient
 	// the send's plan made again at the spend, held to policy as it stands then
-	replan   func() (*mailSendPlan, error)
+	replan   func(context.Context) (*mailSendPlan, error)
 	content  *mailSendContent
 	approved *protocol.CanonicalAction
 
@@ -214,7 +214,7 @@ func (self *mailSendEffect) Run(ctx context.Context, effectKey []byte) ([]byte, 
 	if len(effectKey) == 0 {
 		effectKey = mailSendStandingEffectKey()
 	}
-	plan, err := self.replan()
+	plan, err := self.replan(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrSidecarEffectNotDone, err)
 	}

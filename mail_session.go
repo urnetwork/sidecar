@@ -282,9 +282,8 @@ func (self *MailSessionServer) resolve(ctx context.Context, address string) (*Ma
 	recipient, knownForm := MailReceiverRecipient(zone.Root, address)
 	envelope := recipient.Address()
 	if !knownForm {
-		local, domain, ok := strings.Cut(dnsAsciiLower(address), "@")
-		if !ok || len(address) > MailAddressMaxByteCount || !ValidMailLocalPart(local) || !isNetworkLabelRoot(domain) ||
-			domain == zone.Root || strings.HasSuffix(domain, "."+zone.Root) || zone.Scope != "" {
+		custom, domain, ok := mailCustomAddress(zone, address)
+		if !ok {
 			return &MailSessionRecipient{}, nil
 		}
 		status, err := self.networkStatus(ctx)
@@ -299,11 +298,8 @@ func (self *MailSessionServer) resolve(ctx context.Context, address string) (*Ma
 		if !slices.Contains(verified, domain) {
 			return &MailSessionRecipient{}, nil
 		}
-		recipient, err = ParseMailRecipient(zone.Root, local+"@"+zone.Domain())
-		if err != nil {
-			return &MailSessionRecipient{}, nil
-		}
-		envelope = local + "@" + domain
+		recipient = custom
+		envelope = custom.LocalPart + "@" + domain
 	}
 	lookup, err := config.Resolve(ctx, recipient)
 	if err != nil {

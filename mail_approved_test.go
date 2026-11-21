@@ -251,7 +251,7 @@ func TestMailApprovedRecipientRecordedByAGatedSend(t *testing.T) {
 	ctx := context.Background()
 	recipient := "someone@outside.example"
 	draft := &MailSendArgs{From: testMailSendFrom, To: []string{recipient}, Subject: "Plans", Text: "Dinner at eight."}
-	plan, err := world.client.planSend(draft)
+	plan, err := world.client.planSend(t.Context(), draft)
 	if err != nil {
 		t.Fatal(err)
 	}

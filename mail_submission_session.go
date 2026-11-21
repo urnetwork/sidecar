@@ -268,13 +268,13 @@ func (self *MailClient) SubmitMessage(ctx context.Context, args *MailSubmitArgs)
 	if err != nil {
 		return nil, err
 	}
-	plan, err := self.planSendFrom(from, "", recipients)
+	plan, err := self.planSendFrom(ctx, from, "", recipients)
 	if err != nil {
 		return nil, err
 	}
 	content := &mailSendContent{raw: bytes.Clone(args.Message)}
-	return self.sendPlanned(ctx, plan, content, MailConfigActionArgs{}, func() (*mailSendPlan, error) {
-		return self.planSendFrom(from, "", recipients)
+	return self.sendPlanned(ctx, plan, content, MailConfigActionArgs{}, func(ctx context.Context) (*mailSendPlan, error) {
+		return self.planSendFrom(ctx, from, "", recipients)
 	})
 }
 
