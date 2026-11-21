@@ -41,6 +41,8 @@ type DirectoryClientArgs struct {
 	// §5.9's directory/ under file class search; a memory store on phones, which keep the copy only while the view is
 	// open.
 	Store SidecarStore
+	// Separate sealed scratch namespace for native open views. A client without one keeps views in memory.
+	ViewStore SidecarStore
 	// The directory's evs: DirectoryCardsUnavailable when nil, until RECORD-M3-12 and EVS1-M6-01 bind one.
 	Cards DirectoryCards
 	// The record's streams, for the directory's erasure ref; nil is RecordStreamsUnavailable.
@@ -133,6 +135,10 @@ type DirectoryClient struct {
 	parts map[string]any
 	// what each part runs after a sync the loop finished without error, in the order added
 	syncHooks []func(ctx context.Context)
+
+	viewStore      SidecarStore
+	viewStoreLock  sync.Mutex
+	viewStoreReady bool
 }
 
 // A client over args. Nothing is read until its first Sync.
@@ -175,6 +181,7 @@ func NewDirectoryClient(args *DirectoryClientArgs) (*DirectoryClient, error) {
 	self := &DirectoryClient{
 		sidecarId:     args.SidecarId,
 		store:         store,
+		viewStore:     args.ViewStore,
 		adapter:       &directoryStreams{store: store, streams: streams},
 		recordAuth:    recordAuth,
 		alarm:         args.Alarm,
@@ -572,6 +579,10 @@ func (self *Sidecar) DirectoryClient() (*DirectoryClient, error) {
 	if err != nil {
 		return nil, err
 	}
+	viewStore, err := self.LocalStore().Directory("directory-views", directoryFileClass)
+	if err != nil {
+		return nil, err
+	}
 	networkId := self.knownNetworkId()
 	if networkId == nil {
 		return nil, ErrSidecarStoreLocked
@@ -590,6 +601,7 @@ func (self *Sidecar) DirectoryClient() (*DirectoryClient, error) {
 	client, err := NewDirectoryClient(&DirectoryClientArgs{
 		SidecarId:      record.writer.sidecarId,
 		Store:          store,
+		ViewStore:      viewStore,
 		Streams:        record.writer.boundStreams,
 		RecordAuth:     record.writer.auth,
 		Alarm:          record.writer.alarm,

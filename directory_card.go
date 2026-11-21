@@ -656,7 +656,7 @@ func (self *directoryFiles) judge(fold *DirectoryFold) []*directoryVersion {
 	recordAuth := client.recordAuth()
 	nowMillis := client.clock.Now().UnixMilli()
 	judge := &directoryJudge{fold: fold, auth: auth, readerPin: auth.Pin(), nowMillis: nowMillis, standingNow: map[Id]DirectoryStanding{}}
-	for _, file := range client.store.Cards() {
+	for _, file := range client.store.filesForFold() {
 		_, card := directoryCardPathSidecar(file.Path)
 		_, repo := directoryRepoPathRepo(file.Path)
 		if !card && !repo {
@@ -668,6 +668,11 @@ func (self *directoryFiles) judge(fold *DirectoryFold) []*directoryVersion {
 			return self.judged[file.Path]
 		}()
 		if file.PushVersion <= judgedVersion {
+			continue
+		}
+		file, err := client.store.forJudgement(file)
+		if err != nil {
+			client.log.Warningf("[directory]could not open a staged file: %v", err)
 			continue
 		}
 		var judgement directoryFileJudgement
