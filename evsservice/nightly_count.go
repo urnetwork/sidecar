@@ -77,9 +77,22 @@ func (self *NightlyPass) billableSegmentBytes(ctx context.Context, cluster, segm
 	if err != nil {
 		return 0, err
 	}
+	if err := checkHeldCoverage(ctx, segmentCluster, repoId, table.State, self.drops.Settings(), nil); err != nil {
+		return 0, err
+	}
 	held := map[string]bool{}
 	for _, jobId := range table.State.JobIds() {
 		files := NewDropFiles(segmentCluster, repoId, jobId, self.drops.Settings())
+		// A checkpoint makes its del rows durable before its held file and table cursor.
+		answers, err := files.Answers(ctx)
+		if err != nil {
+			return 0, err
+		}
+		for id, outcome := range answers {
+			if id.Kind == DropIdSegment && outcome == DropOutcomeHeld {
+				held[SegmentKey(repoId, id.Id)] = true
+			}
+		}
 		heldFiles, err := files.ReadAll(ctx, DropFileHeld)
 		if err != nil {
 			return 0, err

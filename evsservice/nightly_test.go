@@ -234,6 +234,76 @@ func TestNightlyPassCountsAHeldDropAsDeleted(t *testing.T) {
 	}
 }
 
+// A restarted counter can see a durable del checkpoint before the worker writes held-0.
+func TestNightlyPassExcludesAHeldOutcomeBeforeItsHeldFileIsWritten(t *testing.T) {
+	fixture := newDropDeleteFixture(t)
+	world := fixture.world
+	held := fixture.putSegment("held", 300)
+	fixture.putSegment("still live", 145)
+	table, err := EncodeDropTable(&DropTableState{Job: &DropJobRecord{
+		JobId: world.jobId, Phase: protocol.EvsDropPhase_EVS_DROP_DELETE,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := world.cluster.PutIfNoneMatch(world.paidCtx, DropsKey(world.repoId), table, nil); err != nil {
+		t.Fatal(err)
+	}
+	files := world.files(world.jobId)
+	del := EncodeDropDelFile(world.repoId, world.jobId, 0, []*DropAnswer{{DropScanId: held, Outcome: DropOutcomeHeld}})
+	if err := files.Put(world.paidCtx, DropFileDel, 0, del); err != nil {
+		t.Fatal(err)
+	}
+	pass, err := NewNightlyPass(world.host.ServiceHost(), &NightlyPassDeps{
+		EvsSettings: world.settings, SegmentClusterBusy: func(context.Context, string) bool { return true },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := pass.Run(world.ctx, world.cluster.ClusterId(), "", "")
+	if err != nil || !result.Complete {
+		t.Fatalf("nightly: %+v, %v", result, err)
+	}
+	if stored := result.NetworkBytes[testId("network-a")].StoredByteCount(); stored != 145 || !fixture.stored(held) {
+		t.Fatalf("nightly counted %d bytes with a durable held outcome", stored)
+	}
+}
+
+// A DROP held by an older worker can lack the job that accounts for the retained bytes.
+func TestNightlyPassWithholdsTheCountUntilALegacyHeldDropHasAnOwner(t *testing.T) {
+	fixture := newDropJobFixture(t)
+	world := fixture.world
+	fixture.placeHold()
+	fixture.deleter.held = true
+	fixture.appendDrop("legacy", world.clock.Now())
+	fixture.ripen()
+	fixture.run()
+	_, err := fixture.job.Table().Update(world.paidCtx, world.cluster, world.repoId, func(state *DropTableState, now time.Time) (bool, error) {
+		state.HeldJobs = nil
+		return true, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	segments, err := world.host.Blobs.SegmentCluster()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := segments.PutIfNoneMatch(world.paidCtx, SegmentKey(world.repoId, fixture.a.Id), []byte("held"), nil); err != nil {
+		t.Fatal(err)
+	}
+	pass, err := NewNightlyPass(world.host.ServiceHost(), &NightlyPassDeps{
+		EvsSettings: world.settings, SegmentClusterBusy: func(context.Context, string) bool { return true },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := pass.Run(world.ctx, world.cluster.ClusterId(), "", "")
+	if !errors.Is(err, ErrDropJobState) || result.Complete || len(result.NetworkBytes) != 0 {
+		t.Fatalf("nightly reported an uncertain count: %+v, %v", result, err)
+	}
+}
+
 // A run that reaches its bound stops, gives the key it reached and is not complete; the job queues itself there.
 func TestNightlyPassStopsAtItsBoundAndIsNotComplete(t *testing.T) {
 	fixture := newNightlyFixture(t)
