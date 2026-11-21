@@ -238,8 +238,8 @@ type AclInbound struct {
 }
 
 // Whether an inbound stream or dial is allowed (§6, §8.10): to the sidecar, a dial grant reaching it whose ports take
-// the port; to one of its sockets, a dial grant on the socket whose exact name or glob, where the device holds it,
-// takes the name.
+// the port; to one of its sockets, a dial grant on the socket whose exact name or glob, from the same config head
+// takes the name. A token prefix alone cannot verify a private name.
 func (self *AclEngine) AllowInbound(inbound *AclInbound, now time.Time) AclDecision {
 	installed := self.installed.Load()
 	if installed == nil || inbound == nil {
@@ -249,11 +249,14 @@ func (self *AclEngine) AllowInbound(inbound *AclInbound, now time.Time) AclDecis
 	state := installed.state
 	if inbound.SocketName != "" {
 		return state.resourceDecision(inbound.Source, nowMs, protocol.AclAction_ACL_ACTION_DIAL, func(rule *aclRule) bool {
-			covered := false
+			local := installed.localRules[rule.index]
 			for i := range rule.sockets {
-				covered = covered || rule.sockets[i].covers(inbound.NameToken)
+				target := &rule.sockets[i]
+				if target.covers(inbound.NameToken) && (!target.prefix || local != nil) && aclLocalSocketMatch(local, inbound.SocketName) {
+					return true
+				}
 			}
-			return covered && aclLocalSocketMatch(installed.localRules[rule.index], inbound.SocketName)
+			return false
 		})
 	}
 	return state.mayDial(inbound.Source, installed.self, nowMs, func(rule *aclRule) bool {
