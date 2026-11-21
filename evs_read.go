@@ -755,9 +755,15 @@ func evsFileInfoOf(refId Id, head *EvsVerifiedHead, verified *EvsVerifiedPath) *
 		Time:          evsTime(verified.Entry.GetTimeMs()),
 		Kind:          protocol.EvsEntryKind(verified.Entry.GetKind()),
 		HeadVersion:   head.Version,
+		Versioning:    verified.Entry.GetVersioning(),
 	}
 	info.PushId, _ = IdFromBytes(push.GetPushId())
 	info.SignerSidecarId, _ = IdFromBytes(push.GetSignerSidecarId())
 	info.ClientId, _ = IdFromBytes(push.GetClientId())
+	if verified.Drop != nil {
+		// a dropped version reads no content (evs_reconstruct.go), so only a pending one reaches a caller with it
+		drop := *verified.Drop
+		info.Drop = &drop
+	}
 	return info
 }

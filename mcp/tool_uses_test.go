@@ -177,7 +177,7 @@ func TestCatalogHoldsUsesToMailSend(t *testing.T) {
 
 	with := NewMcpCatalog(server.settings.Mcp, clock, nil)
 	AddTool(with, &McpToolSpec[testToolIn]{Name: "mail_send", Tier: McpTierWrite, MayAct: true, MultiUse: true, Description: "sends", Access: none}, echo)
-	// mail_send is still listed unbuilt, which the check names; its uses are not
+	// the other design names go unregistered here, which the check names; mail_send's uses it does not
 	if err := checkMcpCatalog(with); err != nil && strings.Contains(err.Error(), "mail_send takes") {
 		t.Errorf("mail_send with uses: %v", err)
 	}

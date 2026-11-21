@@ -371,10 +371,16 @@ type recoverTestHeads struct {
 	forged    *ConfigHead
 	ladderKey *EvsRepoKey
 	reads     []uint64
+	// Runs once when recovery first reads a head.
+	beforeFirstRead func()
 }
 
 func (self *recoverTestHeads) ReadRecoveryHead(ctx context.Context, key *EvsRepoKey, configVersion uint64, configHeadSha256 []byte) (*ConfigHead, func(generation uint64) *EvsRepoKey, error) {
 	self.reads = append(self.reads, configVersion)
+	if self.beforeFirstRead != nil {
+		self.beforeFirstRead()
+		self.beforeFirstRead = nil
+	}
 	if !bytes.Equal(configHeadSha256, testConfigHeadSha256(configVersion)) {
 		return nil, nil, fmt.Errorf("%w: the ref's chain at %d is another", ErrConfigHeadMismatch, configVersion)
 	}
@@ -771,6 +777,47 @@ func TestARecoveryAdmitsPlainlyOutsideTheAdminSetWithSelfAdmitOn(t *testing.T) {
 	again := world.mustRecover(SidecarRecoveryAnchored)
 	if len(world.api.postsSoFar(t)) != 1 || !slices.Equal(world.groups.calls, []string{"fetch admitted=false", "anchor", "run", "run"}) || again.Entry != nil {
 		t.Errorf("a second call: %+v, calls %v", again, world.groups.calls)
+	}
+}
+
+// A verified tick lands after admission while recovery is reading the head. Only the proof
+// made against the new tip may anchor the group, even though both reads name the same base.
+func TestRecoveryRechecksTheTipWhenTheLogAdvancesDuringAHeadRead(t *testing.T) {
+	world := newRecoverTestWorld(t, false)
+	reading := make(chan struct{})
+	resume := make(chan struct{})
+	world.heads.beforeFirstRead = func() {
+		close(reading)
+		<-resume
+	}
+
+	code := recoverTestCode(t, world.words)
+	done := make(chan error, 1)
+	go func() {
+		result, err := world.sidecar.RecoverWithCode(t.Context(), code, SidecarActConfirmed)
+		if err == nil && (result.Phase != SidecarRecoveryAnchored || !result.OfferRotate) {
+			err = fmt.Errorf("recovery finished at %s, offer rotate %t", result.Phase, result.OfferRotate)
+		}
+		done <- err
+	}()
+	select {
+	case <-reading:
+	case err := <-done:
+		t.Fatalf("recovery returned before reading the head: %v", err)
+	}
+	verdict := world.net.tick(&bridge.ApiTick{})
+	close(resume)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !verdict.Accepted() {
+		t.Fatalf("the tick did not advance the log: %v", verdict.Refusal)
+	}
+	if len(world.groups.anchorErrs) != 2 || !errors.Is(world.groups.anchorErrs[0], errRecoveryAnchorMoved) || world.groups.anchorErrs[1] != nil {
+		t.Fatalf("the two anchor decisions: %v", world.groups.anchorErrs)
+	}
+	if !slices.Equal(world.heads.reads, []uint64{1, 1}) || len(world.api.postsSoFar(t)) != 1 {
+		t.Fatalf("head reads %v, admission posts %d", world.heads.reads, len(world.api.postsSoFar(t)))
 	}
 }
 
@@ -1261,6 +1308,14 @@ func TestConfigAuthorityJudgesAndShowsTheAnchorItsLog(t *testing.T) {
 		log.Base.GetVersion() != 1 || log.BasePin.GetVersion() != 1 || log.HeldFrom != 1 || uint64(len(log.Held)) != world.net.n ||
 		log.HeldPrevChain != bridge.GenesisChain(world.net.signedGenesis) {
 		t.Errorf("the view: %+v", log)
+	}
+	pin := authority.Pin()
+	if !proto.Equal(log.Tip, pin) {
+		t.Fatalf("the anchor log tip %v, want %v", log.Tip, pin)
+	}
+	log.Tip = nil
+	if rebuilt, err := log.anchorTip(); err != nil || !proto.Equal(rebuilt, pin) {
+		t.Fatalf("the retained entries give tip %v, want %v: %v", rebuilt, pin, err)
 	}
 	if (&ConfigAuthority{client: &ConfigClient{}}).JudgeStatement(admit) == nil {
 		t.Error("a client with no log judged")
