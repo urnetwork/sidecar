@@ -88,9 +88,22 @@ func TestStandingConfigFollowerInstallsForwardingOnFirstOpenAndRestart(t *testin
 		t.Fatalf("the stopped follower retained its setup sources: %v", err)
 	}
 	network.Sync()
-	network.MustLand(network.Sign(network.Owner(), bridge.SignedType_SIGNED_DELEGATION_REVOKE, &protocol.DelegationRevoke{
+	// The owner posts to the same sequencer that accepted the daemon's delegation.
+	api, err := world.net.Api()
+	if err != nil {
+		t.Fatal(err)
+	}
+	revocation := network.Sign(network.Owner(), bridge.SignedType_SIGNED_DELEGATION_REVOKE, &protocol.DelegationRevoke{
 		Header: network.Header(), DelegationId: handOff.GetPending().GetForwardDelegationId(),
-	}))
+	})
+	pin, err := api.AppendStatement(world.ctx, network.NetworkId(), revocation)
+	if err != nil {
+		t.Fatalf("appending the owner's revocation: %v", err)
+	}
+	network.Sync()
+	if verdict := network.VerdictAt(pin.GetVersion()); !verdict.Accepted() {
+		t.Fatalf("the owner's revocation at %d: %v", pin.GetVersion(), verdict.Refusal)
+	}
 	if err := world.instance.Restart(); err != nil {
 		t.Fatal(err)
 	}
