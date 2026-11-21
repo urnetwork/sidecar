@@ -633,8 +633,8 @@ func (self *TlsFront) update(now time.Time) (*TlsFrontUpdate, time.Time) {
 		return maps.Clone(self.acmeNameClaimSeqs)
 	}()
 	for name, claimSeq := range nameClaimSeqs {
-		if self.responder.certificate(name, now) == nil {
-			// its challenge ended or expired
+		if self.customEntry(name) == nil || self.responder.certificate(name, now) == nil {
+			// its mapping was withdrawn, or its challenge ended or expired
 			continue
 		}
 		update.AcmeNames = append(update.AcmeNames, &SocketAcmeName{Name: name, ClaimSeq: claimSeq})

@@ -156,6 +156,11 @@ type socketRegistrarEntry struct {
 	sentRowCount int
 	// the service has given its first verdict
 	answered bool
+	// ACME names in the last acknowledged page for the current registration. A waiter arms this channel
+	// under the registrar lock before checking for its exact name and claim.
+	acknowledgedAcme []*SocketAcmeName
+	acmeAttachment   uint64
+	acmeChanged      chan struct{}
 }
 
 // One registration of an entry: its key and what proves it.
@@ -517,6 +522,7 @@ func (self *socketRegistrarState) addEntry(entry *socketRegistrarEntry) error {
 
 // Takes entry out of the set without asking for a round: the service holds no lease for it.
 func (self *socketRegistrarState) dropEntry(entry *socketRegistrarEntry) {
+	entry.wakeAcme()
 	delete(self.entries, entry.listenId)
 	delete(self.listenIdsByName, entry.name)
 }
@@ -981,6 +987,11 @@ func (self *socketRegistrarState) finish(call *socketRegistrarCall, result *Sock
 		switch {
 		case status == SocketRegistrationStatusOk && previous:
 		case status == SocketRegistrationStatusOk:
+			if entry.namespace == SocketNamespaceTls {
+				entry.acknowledgedAcme = call.args.Registrations[index].AcmeNames
+				entry.acmeAttachment = call.attachmentSeq
+				entry.wakeAcme()
+			}
 			entry.reportedInflight = call.inflights[index]
 			if !self.eagerMoved(entry) {
 				entry.eagerSince = time.Time{}
