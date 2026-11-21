@@ -32,6 +32,7 @@ import (
 	"context"
 	cryptorand "crypto/rand"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -87,9 +88,9 @@ type AclSaveInput struct {
 	Limits *AclLimits
 	// Nil resolves from the head's own rows alone.
 	Resolver AclSaveResolver
-	// §12's ResolveNetworkLabel for validation; nil before M5's labels.
+	// §12's ResolveNetworkLabel for validation. A nil lookup refuses specific network selectors.
 	ResolveNetworkLabel func(text string) (Id, bool)
-	// The network's Team scopes for validation (ACL-M6-01); nil before M6's, and every scope host refuses.
+	// The network's verified Team scopes for validation. A nil lookup refuses every scoped host.
 	ResolveScope func(label string) (AclScope, bool)
 	// The leaves of the data repos the writer holds trees for, for the unseated preview; nil takes the seating rule.
 	LeavesByRepo map[Id][]Id
@@ -101,6 +102,7 @@ type AclSaveInput struct {
 
 // One save's plan: the head it writes and everything the person previews before signing.
 type AclSavePlan struct {
+	basePin *bridge.AuthPin
 	// The head the plan stands on, and the head it makes from it.
 	BaseHead *ConfigHead
 	Head     *ConfigHead
@@ -109,8 +111,7 @@ type AclSavePlan struct {
 	Local    *AclLocalPolicy
 	Tests    *AclPolicyTestReport
 	Preview  *AclSavePreview
-	// SHA-256 over the base's acl files and the planned policy and resolve rows, which a confirmed save names so it signs
-	// what was seen.
+	// SHA-256 over the base's ACL files, the planned policy and resolve rows, and the effective changes shown.
 	Digest [sha256.Size]byte
 }
 
@@ -362,6 +363,8 @@ func aclSaveResolution(ctx context.Context, previous *protocol.ConfigResolution,
 			}
 			if bound {
 				row.SidecarId = sidecarId.Bytes()
+			} else {
+				row.SidecarId = nil
 			}
 		}
 		resolution.Clients = append(resolution.Clients, row)
@@ -456,18 +459,21 @@ func PlanAclSave(ctx context.Context, input *AclSaveInput) (*AclSavePlan, error)
 	if err != nil {
 		return nil, err
 	}
-	plan := &AclSavePlan{BaseHead: input.Head, Head: head, Policy: policy, Rows: rows, Local: local, Tests: tests}
+	plan := &AclSavePlan{BaseHead: input.Head, Head: head, Policy: policy, Rows: rows, Local: local, Tests: tests, basePin: input.State.Pin()}
 	if plan.Preview, err = aclSavePreview(input, rows, previousResolve, resolve); err != nil {
 		return nil, err
 	}
-	plan.Digest = aclSaveDigest(input.Head, head)
+	plan.Digest, err = aclSaveDigest(input.Head, head, plan.Preview)
+	if err != nil {
+		return nil, err
+	}
 	return plan, nil
 }
 
 // SHA-256 over what a person previews and signs: the base head's acl files, and the planned head's policy and resolve
-// rows, each path and length-prefixed, in a fixed order. The ids a save draws for new names are left out, since each
-// plan draws its own and none changes what the head means.
-func aclSaveDigest(base *ConfigHead, planned *ConfigHead) [sha256.Size]byte {
+// rows, each path and length-prefixed, then the effective changes displayed in the preview. The ids a save
+// draws for new names are left out, since each plan draws its own and none changes what the head means.
+func aclSaveDigest(base *ConfigHead, planned *ConfigHead, preview *AclSavePreview) ([sha256.Size]byte, error) {
 	hash := sha256.New()
 	write := func(head *ConfigHead, path string) {
 		data := head.File(path)
@@ -483,13 +489,29 @@ func aclSaveDigest(base *ConfigHead, planned *ConfigHead) [sha256.Size]byte {
 		hash.Write(data)
 	}
 	hash.Write([]byte("urnetwork-sidecar-v1/acl-save\x00"))
+	// The same source and an empty diff on another hosted network are a different save.
+	write(base, ConfigHeadGenesisPath)
 	for _, path := range aclSaveBasePaths {
 		write(base, path)
 	}
 	for _, path := range []string{ConfigHeadPolicyPath, ConfigHeadResolvePath} {
 		write(planned, path)
 	}
-	return [sha256.Size]byte(hash.Sum(nil))
+	// These slices are built in canonical order. They bind every displayed identity and
+	// reader effect even if the head files stay put. Unrelated log entries leave the same
+	// preview confirmable. Freshly drawn rule ids have no prior meaning and are shown as counts.
+	effects, err := json.Marshal(struct {
+		Readers     []AclSaveReaderChange
+		Unseated    []AclUnseatedRepo
+		Resolutions []AclSaveResolution
+		Added       int
+		Removed     int
+	}{preview.Readers, preview.Unseated, preview.Resolutions, len(preview.RulesAdded), len(preview.RulesRemoved)})
+	if err != nil {
+		return [sha256.Size]byte{}, err
+	}
+	hash.Write(effects)
+	return [sha256.Size]byte(hash.Sum(nil)), nil
 }
 
 // The preview: readers before and after each repo, unseatable repos, resolve rows new or changed, rules added and
@@ -567,6 +589,25 @@ func aclSavePreview(input *AclSaveInput, rows *protocol.AclRows, previousResolve
 			preview.Resolutions = append(preview.Resolutions, AclSaveResolution{Kind: "network", Text: row.GetText(), Id: networkId, PreviousId: previousNetworks[row.GetText()]})
 		}
 	}
+	previousClients := map[Id]Id{}
+	for _, row := range previousResolve.GetClients() {
+		clientId, err := IdFromBytes(row.GetClientId())
+		if err == nil {
+			sidecarId, _ := IdFromBytes(row.GetSidecarId())
+			previousClients[clientId] = sidecarId
+		}
+	}
+	for _, row := range resolve.GetClients() {
+		clientId, err := IdFromBytes(row.GetClientId())
+		if err != nil {
+			continue
+		}
+		sidecarId, _ := IdFromBytes(row.GetSidecarId())
+		previous, held := previousClients[clientId]
+		if !held || previous != sidecarId {
+			preview.Resolutions = append(preview.Resolutions, AclSaveResolution{Kind: "client", Text: clientId.String(), Id: sidecarId, PreviousId: previous})
+		}
+	}
 
 	ruleIds := func(rows *protocol.AclRows) map[Id]bool {
 		ids := map[Id]bool{}
@@ -607,6 +648,10 @@ func AclSave(ctx context.Context, writer *ConfigWriter, plan *AclSavePlan) (*bri
 		return nil, err
 	}
 	return writer.SaveHead(ctx, func(head *ConfigHead) (*ConfigHead, error) {
+		state := writer.args.Client.State()
+		if state == nil || !proto.Equal(plan.basePin, state.Pin()) {
+			return nil, fmt.Errorf("%w: the signed network state changed", ErrAclSaveStale)
+		}
 		for _, path := range aclSaveBasePaths {
 			if !bytes.Equal(head.File(path), plan.BaseHead.File(path)) {
 				return nil, fmt.Errorf("%w: its %s file changed", ErrAclSaveStale, path)
@@ -693,16 +738,26 @@ func (self *Sidecar) aclSaveContext(ctx context.Context) (*ConfigWriter, *Config
 
 // A save's plan on this device's config writer, for `ur acl push`'s preview. Reading only; any origin may ask.
 func (self *Sidecar) PlanAclPolicy(ctx context.Context, source []byte) (*AclSavePlan, error) {
+	return self.PlanAclPolicyWithSubjects(ctx, source, nil)
+}
+
+// Plans with the member-directory proposals and enrolled networks held by this writer's host.
+func (self *Sidecar) PlanAclPolicyWithSubjects(ctx context.Context, source []byte, subjects *AclWriterSubjects) (*AclSavePlan, error) {
 	_, state, head, err := self.aclSaveContext(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return PlanAclSave(ctx, &AclSaveInput{Policy: source, Head: head, State: state, Now: self.clock.Now()})
+	return self.aclWriterPlan(ctx, source, subjects, state, head)
 }
 
 // Saves a policy as the person confirmed its preview (D-CORE-13): never from MCP, a hook or an unconfirmed call, and
 // only when digest is the plan's made now, so the head signed is the one previewed. Answers the base's pin.
 func (self *Sidecar) SaveAclPolicy(ctx context.Context, source []byte, digest [sha256.Size]byte, origin SidecarActOrigin) (*bridge.AuthPin, error) {
+	return self.SaveAclPolicyWithSubjects(ctx, source, digest, origin, nil)
+}
+
+// Rechecks this writer's bindings, labels and verified membership before saving the confirmed plan.
+func (self *Sidecar) SaveAclPolicyWithSubjects(ctx context.Context, source []byte, digest [sha256.Size]byte, origin SidecarActOrigin, subjects *AclWriterSubjects) (*bridge.AuthPin, error) {
 	if origin != SidecarActConfirmed {
 		return nil, ErrSidecarActMode
 	}
@@ -710,7 +765,7 @@ func (self *Sidecar) SaveAclPolicy(ctx context.Context, source []byte, digest [s
 	if err != nil {
 		return nil, err
 	}
-	plan, err := PlanAclSave(ctx, &AclSaveInput{Policy: source, Head: head, State: state, Now: self.clock.Now()})
+	plan, err := self.aclWriterPlan(ctx, source, subjects, state, head)
 	if err != nil {
 		return nil, err
 	}
@@ -724,23 +779,50 @@ func (self *Sidecar) SaveAclPolicy(ctx context.Context, source []byte, digest [s
 // writer's plan, validation included; elsewhere the base's head as this device last verified it, when it can read it,
 // over the state; and with neither, the document's own world (AclPolicyTestOver). Reading only.
 func (self *Sidecar) TestAclPolicy(ctx context.Context, source []byte) (*AclPolicyTestReport, error) {
-	if _, state, head, err := self.aclSaveContext(ctx); err == nil {
-		plan, err := PlanAclSave(ctx, &AclSaveInput{Policy: source, Head: head, State: state, Now: self.clock.Now()})
-		if err != nil {
-			return nil, err
-		}
-		return plan.Tests, nil
-	}
 	authority, ok := self.authority().(*ConfigAuthority)
 	if !ok {
 		return AclPolicyTestOver(source, nil, nil, self.clock.Now())
 	}
-	state := authority.client.State()
+	client := authority.client
+	state := client.State()
+	if state == nil {
+		return AclPolicyTestOver(source, nil, nil, self.clock.Now())
+	}
+	base := state.Base()
+	if base == nil {
+		return AclPolicyTestOver(source, nil, state, self.clock.Now())
+	}
 	var head *ConfigHead
-	if base := state.Base(); base != nil && authority.client.args.Heads != nil {
-		if read, err := authority.client.args.Heads.ReadConfigHead(ctx, base.GetConfigVersion(), base.GetConfigHeadSha256()); err == nil {
-			head = read
+	if held := client.localHead.Load(); held != nil && base.GetConfigVersion() == held.version && bytes.Equal(base.GetConfigHeadSha256(), held.chain[:]) {
+		head = held.head
+	} else if local, ok := client.args.Heads.(interface {
+		CachedConfigHead(uint64, []byte) *ConfigHead
+	}); ok {
+		head = local.CachedConfigHead(base.GetConfigVersion(), base.GetConfigHeadSha256())
+	}
+	if head == nil {
+		return nil, fmt.Errorf("%w: the signed base's head is unavailable offline", ErrConfigHeadUnavailable)
+	}
+	if writer := client.Writer(); writer != nil && state.IsConfigWriter(writer.args.SidecarId) {
+		resolve := &protocol.ConfigResolution{}
+		if err := aclSaveDecode(head, ConfigHeadResolvePath, resolve); err != nil {
+			return nil, err
 		}
+		networks := map[string]Id{}
+		for _, row := range resolve.GetNetworks() {
+			if id, err := IdFromBytes(row.GetNetworkId()); err == nil {
+				networks[row.GetText()] = id
+			}
+		}
+		plan, err := PlanAclSave(ctx, &AclSaveInput{Policy: source, Head: head, State: state, Now: self.clock.Now(), ResolveScope: state.TeamScope,
+			ResolveNetworkLabel: func(text string) (Id, bool) {
+				id, ok := networks[text]
+				return id, ok
+			}})
+		if err != nil {
+			return nil, err
+		}
+		return plan.Tests, nil
 	}
 	return AclPolicyTestOver(source, head, state, self.clock.Now())
 }
@@ -949,7 +1031,24 @@ func (self *Sidecar) SaveAclTeamStart(ctx context.Context, limits *AclLimits, or
 	if head.File(ConfigHeadPolicyPath) != nil {
 		return nil, ErrAclTeamStartHasDocument
 	}
-	plan, err := PlanAclSave(ctx, &AclSaveInput{Policy: AclTeamStartDocument(), Head: head, State: state, Limits: limits, Now: self.clock.Now()})
+	if !bytes.Equal(state.Genesis().GetOwnerSidecarId(), writer.args.SidecarId.Bytes()) {
+		return nil, fmt.Errorf("%w: only the genesis Owner device saves a Team's first policy", ErrConfigWriterNotWriter)
+	}
+	if !state.TeamSettings().Team {
+		// A freshly created Team may not have its first directory yet. §20.5's authenticated
+		// network-tier read supplies that fact; an empty policy by itself supplies none.
+		if self.sidecarApi == nil {
+			return nil, fmt.Errorf("%w: no verified Team or tier source", ErrAclPolicyInvalid)
+		}
+		billing, err := self.sidecarApi.Limits(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if billing.Tier != "team" {
+			return nil, fmt.Errorf("%w: the network is not on the Team tier", ErrAclPolicyInvalid)
+		}
+	}
+	plan, err := PlanAclSave(ctx, &AclSaveInput{Policy: AclTeamStartDocument(), Head: head, State: state, Limits: limits, Now: self.clock.Now(), ResolveScope: state.TeamScope})
 	if err != nil {
 		return nil, err
 	}
