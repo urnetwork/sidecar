@@ -231,7 +231,7 @@ func (self *SearchSync) storeRemaining(ctx context.Context, ref *searchSyncRef, 
 func (self *SearchSync) swapLatest(ctx context.Context, ref *searchSyncRef, manifest *SearchManifest, plan *SearchSyncPlan, latest []*SearchManifestFile) (*SearchManifest, error) {
 	companion := ref.args.companion
 	next := &SearchManifest{
-		Root: plan.Root, Pin: plan.Target, IndexEpoch: plan.IndexEpoch, Listing: plan.Wanted,
+		Receipted: ref.args.nonWriter, Root: plan.Root, Pin: plan.Target, IndexEpoch: plan.IndexEpoch, Listing: plan.Wanted,
 	}
 	if manifest != nil {
 		next.All = manifest.All

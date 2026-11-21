@@ -34,6 +34,7 @@ package sidecar
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -418,6 +419,8 @@ type evsReadResult struct {
 	// genesis names, whose kind no read receipt covers: its content is decrypted without asking the receipt gate,
 	// which asks a verified state that a reader starting at a base does not hold yet
 	receiptExempt bool
+	// For a verified search index file the gate receipts its plaintext SHA-256. Other reads name their locators.
+	searchReceipt *[sha256.Size]byte
 	mailSegment   bool
 	exportPath    string
 }

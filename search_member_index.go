@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io"
 	"slices"
+	"sync"
 
 	"github.com/urnetwork/sidecar/protocol"
 )
@@ -20,6 +21,7 @@ type memberIndexSource struct {
 	store      *indexEvsStore
 	kind       protocol.RepoKind
 	contentRef Id
+	nonWriter  bool
 }
 
 // A changed head is re-listed through EVS's verifying reader. A matching pin needs neither a listing nor content.
@@ -32,6 +34,16 @@ func (self *memberIndexSource) Replay(ctx context.Context, pin SearchSyncPin) (*
 			return nil, err
 		}
 	}
+	if self.store.companion {
+		// Discover stream ids from their signed heads without opening a record body. Pins survive a restart.
+		streams := self.member.record.writer.boundStreams()
+		if streams == nil {
+			return nil, ErrRecordStreamsUnavailable
+		}
+		if _, err := streams.Streams(ctx, self.store.repo.repoId); err != nil {
+			return nil, err
+		}
+	}
 	id, err := self.store.refId(ctx)
 	if err != nil {
 		return nil, err
@@ -40,7 +52,9 @@ func (self *memberIndexSource) Replay(ctx context.Context, pin SearchSyncPin) (*
 	if err != nil {
 		return nil, err
 	}
-	if verified.Head.GetRefMode() != protocol.EvsRefMode_EVS_REF_FILE || (verified.Head.GetRefKind() != protocol.EvsRefKind_EVS_REF_SHARED && verified.Head.GetRefKind() != protocol.EvsRefKind_EVS_REF_OWNED) {
+	kind := verified.Head.GetRefKind()
+	fileRef := kind == protocol.EvsRefKind_EVS_REF_SHARED || !self.store.companion && kind == protocol.EvsRefKind_EVS_REF_OWNED
+	if verified.Version != 0 && (verified.Head.GetRefMode() != protocol.EvsRefMode_EVS_REF_FILE || !fileRef) {
 		return nil, ErrSearchSyncUnfollowed
 	}
 	head := indexHeadOfEvs(verified)
@@ -50,7 +64,7 @@ func (self *memberIndexSource) Replay(ctx context.Context, pin SearchSyncPin) (*
 	case head.version == pin.Version && head.version != 0 && head.chain != pin.Chain:
 		return nil, ErrEvsPinFork
 	}
-	return &searchSyncReplay{head: head, catchUp: pin.Version == 0 || pin.Version != head.version}, nil
+	return &searchSyncReplay{head: head, catchUp: pin.Version != head.version}, nil
 }
 
 // No retained file survives the withdrawal of its governing grant, or a new prefix policy the index cannot verify.
@@ -72,7 +86,7 @@ func (self *memberIndexSource) readable() bool {
 		return false
 	}
 	rights := acl.EvsAccess(AclSidecarSubject(self.member.record.writer.sidecarId), id, AclTokenAudienceEvs, self.member.host.running.clock.Now()).Rights
-	return rights.Has(AclEvsRead) && (!aclRepoKindOwnerBound(row.Kind) || rights.Has(AclEvsWrite))
+	return rights.Has(AclEvsRead) && (aclRepoKindOwnerBound(row.Kind) && !rights.Has(AclEvsWrite)) == self.nonWriter
 }
 
 // An in-ref head written by its own signer in the content commit proves that commit indexed. A held, validated
@@ -128,6 +142,16 @@ func (self *memberIndexSource) List(ctx context.Context) (*indexListing, error) 
 			files = append(files, f)
 			continue
 		}
+		if self.nonWriter {
+			settings, err := self.protectedSettings(ctx, f, listing.head.version, judge)
+			if err != nil {
+				return nil, err
+			}
+			if settings != nil {
+				files = append(files, settings)
+			}
+			continue
+		}
 		view := &indexView{store: self.store, repoKind: self.kind, companion: self.store.companion, settings: self.member.syncer.args.format}
 		root := &indexViewRoot{number: path.rootNumber, paths: indexNewPaths(self.store.companion, path.rootNumber)}
 		if err := view.loadSettings(ctx, root, listing.head.version, judge); err != nil {
@@ -168,7 +192,11 @@ func (self *memberIndexSource) Fetch(ctx context.Context, files []*indexFileVers
 			return nil, ErrSearchCacheArgs
 		}
 		if path.kind == indexPathSettings {
-			found.settings, err = self.store.Read(ctx, file)
+			if self.nonWriter {
+				found.settings, err = self.readProtectedSettings(ctx, ref, file)
+			} else {
+				found.settings, err = self.store.Read(ctx, file)
+			}
 		} else {
 			found.record, err = self.checkpoint(ctx, repo, ref, file)
 		}
@@ -199,6 +227,11 @@ func (self *memberIndexSource) checkpoint(ctx context.Context, repo *EvsRepo, re
 	}
 	if v.CommitVersion != file.commitVersion || v.Statement == nil || !bytes.Equal(v.Statement.Push.GetSignerSidecarId(), file.signerSidecarId[:]) || len(v.Entry.Chain) != 1 {
 		return nil, ErrSearchCacheContent
+	}
+	if self.nonWriter {
+		if err := self.bindSearchReceipt(ctx, result, v, file); err != nil {
+			return nil, err
+		}
 	}
 	content, fields, _, err := repo.reconstructContent(ctx, result, v, nil)
 	if err != nil {
@@ -324,4 +357,133 @@ func (self *SearchSync) memberSettings(ref *searchSyncRef, wanted *SearchSyncWan
 	}
 	return &SearchManifestFile{Path: wanted.Path, Version: wanted.Version, ContentSha256: wanted.ContentSha256, ByteCount: wanted.ByteCount,
 		Signer: wanted.Signer, Partition: wanted.Partition, State: SearchManifestHeld, Small: slices.Clone(data)}, nil
+}
+
+// The two authenticated size and digest values of a supported settings encoding.
+type memberSettingsHash struct {
+	size   uint64
+	digest [sha256.Size]byte
+}
+
+// Versioned settings attest a Git blob OID and size. For the supported canonical encodings this fixes their SHA-256
+// before a body fetch. The table contains only identifiers and is built once per process.
+var memberSearchSettingsDigests = sync.OnceValue(func() map[EvsGitOid]memberSettingsHash {
+	table := make(map[EvsGitOid]memberSettingsHash)
+	for days := uint32(0); days <= indexMaxWindowDays; days++ {
+		for _, off := range []bool{false, true} {
+			data, err := indexEncodeSettings(&protocol.IndexSettings{Off: off, WindowDays: days})
+			if err == nil {
+				table[evsGitObjectOid(evsGitBlobKind, data)] = memberSettingsHash{size: uint64(len(data)), digest: sha256.Sum256(data)}
+			}
+		}
+	}
+	return table
+})
+
+// Only the sealed fields of the signed settings version can identify a supported input for its receipt.
+func memberSearchSettingsDigest(fields *protocol.EvsSealedFields) [sha256.Size]byte {
+	if fields.GetOidKind() == protocol.EvsOidKind_EVS_OID_SHA1 && len(fields.GetGitOid()) == len(EvsGitOid{}) {
+		item, ok := memberSearchSettingsDigests()[EvsGitOid(fields.GetGitOid())]
+		if ok && item.size == fields.GetSize() {
+			return item.digest
+		}
+	}
+	return [sha256.Size]byte{}
+}
+
+// Finds the governing admin version by verified history alone. Unrecognized settings cannot be safely fetched.
+func (self *memberIndexSource) protectedSettings(ctx context.Context, newest *indexFileVersion, head uint64, judge func(*indexFileVersion) bool) (*indexFileVersion, error) {
+	if judge == nil {
+		return nil, errSearchSyncReceipt
+	}
+	file := newest
+	if !judge(file) {
+		ref, err := self.store.refId(ctx)
+		if err != nil {
+			return nil, err
+		}
+		history, err := self.store.repo.History(ctx, &EvsReadArgs{RefId: &ref, Path: newest.path})
+		if err != nil {
+			return nil, err
+		}
+		file = nil
+		for _, version := range history.Versions {
+			if version.Removed || version.CommitVersion > head || version.State != "" && version.State != "kept" {
+				continue
+			}
+			if !judge(&indexFileVersion{signerSidecarId: version.SignerSidecarId, signedTimeMs: version.Time.UnixMilli()}) {
+				self.member.host.running.raiseIndexMalformed(self.store.repo.repoId, self.contentRef, newest.path, version.SignerSidecarId)
+				continue
+			}
+			result, err := self.store.repo.read(ctx, ref, []string{newest.path}, version.Version, false)
+			if err != nil {
+				return nil, err
+			}
+			defer result.objects.close()
+			v := result.replies[0]
+			if v.Entry == nil || v.Entry.Version != version.Version || v.CommitVersion != version.CommitVersion {
+				return nil, errIndexCollected
+			}
+			file, err = self.store.fileVersion(ctx, result, newest.path, v)
+			if err != nil {
+				return nil, err
+			}
+			break
+		}
+	}
+	if file != nil && file.contentSha256 == ([sha256.Size]byte{}) {
+		return nil, errSearchSyncReceipt
+	}
+	return file, nil
+}
+
+// Opens exactly the settings version its prior receipt named, then verifies its actual read bytes before use.
+func (self *memberIndexSource) readProtectedSettings(ctx context.Context, ref Id, file *indexFileVersion) ([]byte, error) {
+	repo := self.store.repo
+	result, err := repo.read(ctx, ref, []string{file.path}, file.version, false)
+	if err != nil {
+		return nil, err
+	}
+	defer result.objects.close()
+	v := result.replies[0]
+	if v.Entry == nil || v.Entry.Version != file.version || v.CommitVersion != file.commitVersion || v.Statement == nil ||
+		!bytes.Equal(v.Statement.Push.GetSignerSidecarId(), file.signerSidecarId[:]) {
+		return nil, errIndexCollected
+	}
+	if err := self.bindSearchReceipt(ctx, result, v, file); err != nil {
+		return nil, err
+	}
+	content, _, _, err := repo.reconstructContent(ctx, result, v, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer content.close()
+	if content.Size() != int64(file.byteCount) || content.Size() > self.member.syncer.args.readByteCount {
+		return nil, ErrSearchCacheContent
+	}
+	data, err := io.ReadAll(content.reader())
+	if err != nil {
+		return nil, err
+	}
+	if sha256.Sum256(data) != file.contentSha256 {
+		return nil, ErrSearchCacheContent
+	}
+	return data, nil
+}
+
+// Binds the named hash to this read's verified entry before any content reconstruction or additional object fetch.
+func (self *memberIndexSource) bindSearchReceipt(ctx context.Context, result *evsReadResult, path *EvsVerifiedPath, wanted *indexFileVersion) error {
+	if !self.store.searchMetadata || wanted.contentSha256 == ([sha256.Size]byte{}) {
+		return errSearchSyncReceipt
+	}
+	verified, err := self.store.fileVersion(ctx, result, wanted.path, path)
+	if err != nil {
+		return err
+	}
+	if verified.version != wanted.version || verified.commitVersion != wanted.commitVersion || verified.signerSidecarId != wanted.signerSidecarId ||
+		verified.contentSha256 != wanted.contentSha256 || verified.byteCount != wanted.byteCount {
+		return errSearchSyncReceipt
+	}
+	result.searchReceipt = &wanted.contentSha256
+	return nil
 }

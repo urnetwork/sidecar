@@ -92,7 +92,7 @@ func (self *searchEngineScan) page(ctx context.Context, stream *searchEngineStre
 				return false, err
 			}
 			hit.key = key
-			erased, err := stream.engine.args.Cache.erasedMask(repo.RepoId, ref.RefId, key)
+			erased, err := stream.engine.args.Cache.erasedMask(repo.RepoId, ref.indexId(), key)
 			return !erased.Erase && erased.Through < document.Version, err
 		},
 	})

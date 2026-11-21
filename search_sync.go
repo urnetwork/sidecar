@@ -174,11 +174,13 @@ type searchSyncCoverage func(ctx context.Context, repoId Id, contentRefId Id, ro
 
 // What the engine runs on.
 type searchSyncArgs struct {
-	cache    *SearchCache
-	settings *SidecarSearchSettings
-	format   *IndexFormatSettings
-	clock    Clock
-	log      Logger
+	// The stock member's durable non-writer sync schedule.
+	receiptState *SidecarSearchState
+	cache        *SearchCache
+	settings     *SidecarSearchSettings
+	format       *IndexFormatSettings
+	clock        Clock
+	log          Logger
 	// index_malformed's sink (Sidecar.searchEvents).
 	events func(event SidecarEvent)
 	// §11.9's read limits, the evs client's: paths and bytes a read.
@@ -288,7 +290,7 @@ func newSearchSync(args *searchSyncArgs) (*SearchSync, error) {
 		return nil, fmt.Errorf("%w: a sync needs its cache and settings", ErrSearchCacheArgs)
 	}
 	settings := args.settings
-	if settings.ResyncInterval <= 0 || settings.SyncRoundCount <= 0 || settings.SyncRetryInterval <= 0 ||
+	if settings.ResyncInterval <= 0 || settings.NonWriterSyncInterval <= 0 || settings.SyncRoundCount <= 0 || settings.SyncRetryInterval <= 0 ||
 		settings.PinRingCount <= 0 || settings.RetainFactor <= 0 || settings.HintCoalesce <= 0 || settings.SyncRestartCount <= 0 {
 		return nil, fmt.Errorf("%w: the sync's settings", ErrSearchCacheArgs)
 	}
@@ -780,6 +782,23 @@ func (self *SearchSync) roundWithRun(ctx context.Context, ref *searchSyncRef, mo
 	if err := self.load(ref); err != nil {
 		return err
 	}
+	var receiptKey string
+	var next int64
+	receiptState := self.args.receiptState
+	if ref.args.nonWriter {
+		if receiptState != nil {
+			receiptKey = searchReceiptRoundKey(ref.args.repoId, ref.args.refId)
+			var err error
+			next, err = receiptState.beginReceiptRound(receiptKey)
+			if err != nil {
+				return err
+			}
+		}
+		ctx = WithEvsReadContext(ctx, &EvsReadContext{Purpose: RecordReadPurposeSearch, NoSession: true})
+		if err := self.receiptHeld(ctx, ref); err != nil {
+			return err
+		}
+	}
 	if err := self.args.cache.SweepRetained(); err != nil {
 		return err
 	}
@@ -792,6 +811,9 @@ func (self *SearchSync) roundWithRun(ctx context.Context, ref *searchSyncRef, mo
 			return err
 		}
 		if !restarted {
+			if ref.args.nonWriter && receiptState != nil {
+				return receiptState.finishReceiptRound(receiptKey, next)
+			}
 			return nil
 		}
 	}
@@ -1137,6 +1159,9 @@ func (self *SearchSync) Snapshot(repoId Id, refId Id) (*SearchSyncSnapshot, erro
 	}
 	if err := self.load(ref); err != nil {
 		return nil, err
+	}
+	if ref.args.nonWriter && self.receiptSkipped(repoId, refId) {
+		return nil, errSearchSyncReceipt
 	}
 	held, err := self.args.cache.Ref(repoId, refId)
 	if err != nil {

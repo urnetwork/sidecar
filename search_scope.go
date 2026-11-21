@@ -50,6 +50,8 @@ type SearchScopeRepo struct {
 	// A read of it needs a read receipt first: owner-bound, and this sidecar not its writer (§16.10's owner-bound row,
 	// AclEngine.ReadRequiresReceipt).
 	ReceiptRequired bool
+	// An unavailable receipt skips every stream of its repo.
+	receiptSkipped bool
 	// The refs it is followed on for search: its default ref first.
 	Refs []*SearchScopeRef
 	// Its log's searchable_days (§16.8) as an age, at the retention's day length: a document whose index time is
@@ -81,11 +83,21 @@ type SearchScopeRef struct {
 	Default bool
 	// The index rides the repo's ur/index (git-mode refs, record streams), whose rows carry their ref_id.
 	Companion bool
+	// The physical companion cache ref, shared by all its content streams.
+	indexRef Id
 	// The index is off, or not built yet (owner decision 156).
 	IndexOff bool
 	Unbuilt  bool
 	// A previously verified local pin must still match when a result page or hit is used.
 	valid func() bool
+}
+
+// The index's physical ref for cache reads and synchronization.
+func (self *SearchScopeRef) indexId() Id {
+	if self.indexRef != (Id{}) {
+		return self.indexRef
+	}
+	return self.RefId
 }
 
 // What a search's scope is read from. Safe for concurrent use.
@@ -148,6 +160,10 @@ func searchResolveScope(repos []*SearchScopeRepo, request *SearchRequest) ([]*se
 			continue
 		case repo.ConsentPending:
 			excluded = append(excluded, SearchExclusion{RepoId: repo.RepoId, Reason: SearchExcludedConsentPending})
+			continue
+		}
+		if repo.receiptSkipped {
+			excluded = append(excluded, SearchExclusion{RepoId: repo.RepoId, Reason: SearchExcludedReceipt})
 			continue
 		}
 		if len(repo.Refs) == 0 {

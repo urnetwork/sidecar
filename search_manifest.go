@@ -148,6 +148,8 @@ type SearchManifestRun struct {
 
 // The snapshot's record (DESIGN-DETAILS 7.2.7).
 type SearchManifest struct {
+	// Every held file was covered by a committed search receipt before this swap.
+	Receipted bool
 	// The index root the snapshot follows: .ur-index/i<n> or i<n>.
 	Root string
 	// The version the latest set is whole at, and the head's index_epoch there (§11.14's epoch row).
@@ -215,6 +217,7 @@ type SearchSyncPlan struct {
 
 // The wire forms, JSON with hex for hashes and ids.
 type searchManifestWire struct {
+	Receipted  bool                        `json:"receipted,omitempty"`
 	Format     int                         `json:"format"`
 	Root       string                      `json:"root"`
 	Pin        searchPinWire               `json:"pin"`
@@ -449,7 +452,7 @@ func (self searchWantedWire) wanted() (*SearchSyncWanted, error) {
 // The manifest as stored.
 func (self *SearchManifest) encode() ([]byte, error) {
 	wire := searchManifestWire{
-		Format: searchManifestFormat, Root: self.Root, Pin: searchPinWireOf(self.Pin), IndexEpoch: self.IndexEpoch,
+		Receipted: self.Receipted, Format: searchManifestFormat, Root: self.Root, Pin: searchPinWireOf(self.Pin), IndexEpoch: self.IndexEpoch,
 		Files: []searchManifestFileWire{},
 		All: searchManifestAllWire{
 			Held: self.All.Held, Pin: searchPinWireOf(self.All.Pin), RolledThroughDay: self.All.RolledThroughDay,
@@ -501,7 +504,7 @@ func searchDecodeManifest(content []byte) (*SearchManifest, error) {
 		return nil, err
 	}
 	manifest := &SearchManifest{
-		Root: wire.Root, Pin: pin, IndexEpoch: wire.IndexEpoch,
+		Receipted: wire.Receipted, Root: wire.Root, Pin: pin, IndexEpoch: wire.IndexEpoch,
 		All: SearchManifestAll{Held: wire.All.Held, Pin: allPin, RolledThroughDay: wire.All.RolledThroughDay},
 	}
 	if pin.Version < allPin.Version {

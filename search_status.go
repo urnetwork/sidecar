@@ -57,7 +57,7 @@ func (self *SearchEngine) refStatus(entry *searchScopedRef) (*SearchStatus, erro
 		return status, nil
 	}
 	repoId, refId := entry.repo.RepoId, entry.ref.RefId
-	snapshot, err := self.args.Sync.Snapshot(repoId, refId)
+	snapshot, err := self.args.Sync.Snapshot(repoId, entry.ref.indexId())
 	if err != nil {
 		// not synced yet: on, nothing cached
 		return status, nil
@@ -83,7 +83,7 @@ func (self *SearchEngine) refStatus(entry *searchScopedRef) (*SearchStatus, erro
 	if 0 < lastDay {
 		status.AllCachedThrough = time.UnixMilli(int64(lastDay) * indexDayMs).UTC()
 	}
-	missing, _, err := self.args.Sync.moreMissing(repoId, refId)
+	missing, _, err := self.args.Sync.moreMissing(repoId, entry.ref.indexId())
 	if err != nil {
 		return nil, err
 	}
