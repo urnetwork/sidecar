@@ -163,14 +163,18 @@ type sidecarCoreSync struct {
 
 // A notice invalidates the previous gates immediately. Its body can separately suggest checking signed revocation.
 func (self *sidecarGeneration) receiveCoreNotice(notice PushNotice) {
-	self.refreshCore(notice.Version)
+	self.core.requests.Update(func(request sidecarCoreRequest) sidecarCoreRequest {
+		request.revision++
+		request.version = notice.Version
+		return request
+	})
 	self.sidecar.receiveCoreHint(self.generation, notice.Hint)
 }
 
-func (self *sidecarGeneration) refreshCore(version uint64) {
+// A credential change asks again without resetting the core version. A clock fall comes from the push feed.
+func (self *sidecarGeneration) refreshCore() {
 	self.core.requests.Update(func(request sidecarCoreRequest) sidecarCoreRequest {
 		request.revision++
-		request.version = version
 		return request
 	})
 }
