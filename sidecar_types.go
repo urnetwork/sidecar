@@ -606,7 +606,10 @@ const (
 // What AddEventCallback, `ur status` and the sdk listener see (§18.5). Each field's comment says
 // which kinds fill it. Never log a Path, which is local to this device (I-13).
 type SidecarEvent struct {
-	Kind SidecarEventKind
+	// A completed logout retains its origin until the daemon has published this final state.
+	logoutNetwork *Id
+	logoutSidecar *Id
+	Kind          SidecarEventKind
 	// The client generation it comes from, as §18.5's State block has every event name. A callback
 	// of an older generation is dropped (D-SDK-14). Zero is an event no client raised, such as a
 	// config alarm, which emitEvent stamps with the current generation.
