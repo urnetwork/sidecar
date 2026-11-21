@@ -83,7 +83,7 @@ func TestAclWriterBindsTheScopeOwnerInItsPreview(t *testing.T) {
 		t.Helper()
 		state := net.log.State()
 		rows := state.Rows()
-		rows.TeamScopes = []*bridge.TeamScopeRow{{Label: "crew", Owner: &bridge.TeamScopeRow_MemberId{MemberId: owner.Bytes()}}}
+		rows.TeamScopes = []*bridge.TeamScopeRow{{Label: "crew", MemberId: owner.Bytes()}}
 		if verdict := net.pushBase(net.owner, rows, net.n, state.Base().GetConfigVersion()+1, 0); !verdict.Accepted() {
 			t.Fatal(verdict.Refusal)
 		}

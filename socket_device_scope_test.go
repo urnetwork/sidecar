@@ -37,8 +37,8 @@ func TestSocketDeviceFollowsSignedPublicScope(t *testing.T) {
 		state := net.log.State()
 		rows := state.Rows()
 		rows.TeamScopes = []*bridge.TeamScopeRow{
-			{Label: "crew", Owner: &bridge.TeamScopeRow_MemberId{MemberId: scopeMember.Bytes()}},
-			{Label: "eng", Owner: &bridge.TeamScopeRow_TagAtom{TagAtom: testConfigId("engineering tag").Bytes()}},
+			{Label: "crew", MemberId: scopeMember.Bytes()},
+			{Label: "eng", TagAtom: testConfigId("engineering tag").Bytes()},
 		}
 		rows.Acl = encoded
 		if verdict := net.pushBase(net.owner, rows, net.n, state.Base().GetConfigVersion()+1, 0); !verdict.Accepted() {

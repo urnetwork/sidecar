@@ -10,6 +10,9 @@ import (
 
 // QD-059's wire numbers are shared by config writers, projection readers, DNS and cert delivery.
 func TestTeamScopeProjectionWire(t *testing.T) {
+	if (&TeamScopeRow{}).ProtoReflect().Descriptor().Oneofs().Len() != 0 {
+		t.Fatal("the owner fields must decode independently for validation")
+	}
 	id := bytes.Repeat([]byte{7}, 16)
 	for _, ownerField := range []protowire.Number{2, 3} {
 		row := protowire.AppendString(protowire.AppendTag(nil, 1, protowire.BytesType), "one")

@@ -113,7 +113,7 @@ func TestAclMailSendScopesReadOneSnapshot(t *testing.T) {
 		{nil, false, nil},
 		{&ConfigState{}, true, []string{}},
 		{&ConfigState{teamScopes: []*bridge.TeamScopeRow{
-			{Label: "sales", Owner: &bridge.TeamScopeRow_MemberId{MemberId: world.scopeMember.Bytes()}},
+			{Label: "sales", MemberId: world.scopeMember.Bytes()},
 		}}, true, []string{"sales"}},
 	} {
 		states.snapshots[world.networkId].Config = sample.config
