@@ -51,6 +51,13 @@ type DnsReadyAnswer struct {
 	RestoreSerial uint64 `json:"restore_serial"`
 }
 
+// The authenticated authority inventory used by each scheduled monitor's direct SOA and canary checks.
+const DnsRunningNsPath = DnsInternalPathPrefix + "running-ns"
+
+type DnsRunningNsAnswer struct {
+	Ns []string `json:"ns"`
+}
+
 // The monitor sources a canary verdict comes from (plan-DNS-canary-route-state).
 const (
 	DnsCanarySourceSite    = "site"
@@ -66,8 +73,8 @@ type DnsCanaryVerdict struct {
 	ReportTime time.Time
 }
 
-// What GET ready reads beyond dns_root: the resolutions' dns_ns and dns_canary_verdict. dnshost.Store
-// implements it once MG5 holds those tables. Safe for concurrent use.
+// GET ready reads stopped nameservers and the latest monitor verdicts through dnshost.Canaries.
+// Implementations must be safe for concurrent use.
 type DnsReadyStore interface {
 	// The NS dns.yml lists that dns_ns marks stopped for root.
 	StoppedNs(ctx context.Context, root string) ([]string, error)
@@ -311,6 +318,7 @@ func (self *dnsSoaPoller) read(root string, state *dnsSoaRoot) {
 
 func (self *DnsApi) readyRoutes() []*dnsApiRoute {
 	return []*dnsApiRoute{
+		{method: http.MethodGet, path: DnsRunningNsPath, class: DnsCallerMonitor, alsoClass: DnsCallerMonitorOutside, serve: self.serveRunningNs},
 		{method: http.MethodGet, path: DnsReadyPath, class: DnsCallerCerts, serve: self.serveReady},
 	}
 }
@@ -332,6 +340,20 @@ func (self *DnsApi) serveReady(writer http.ResponseWriter, request *http.Request
 		return
 	}
 	dnsWriteJson(writer, answer)
+}
+
+func (self *DnsApi) serveRunningNs(writer http.ResponseWriter, request *http.Request) {
+	root, ok := self.requestRoot(request)
+	if !ok {
+		http.Error(writer, "no such root", http.StatusBadRequest)
+		return
+	}
+	running, err := self.runningNs(request.Context(), root)
+	if err != nil {
+		dnsStoreUnavailable(writer)
+		return
+	}
+	dnsWriteJson(writer, &DnsRunningNsAnswer{Ns: running})
 }
 
 // The running NS of root: dns.yml's, less those dns_ns marks stopped.
@@ -367,7 +389,7 @@ func (self *DnsApi) readyAnswer(ctx context.Context, root string, serial uint64)
 			return nil, err
 		}
 		results, fresh, changed := self.soa.results(root)
-		behind := !fresh || slices.ContainsFunc(running, func(ns string) bool {
+		behind := len(running) == 0 || !fresh || slices.ContainsFunc(running, func(ns string) bool {
 			result, ok := results[ns]
 			return !ok || !result.ok || !dnsSoaAtOrAbove(result.serial, serial)
 		})
