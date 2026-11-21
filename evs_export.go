@@ -164,21 +164,9 @@ func (self *EvsRepo) pinnedHeadFromPin(ctx context.Context, refId Id, reseed boo
 // A ref's whole history, verified from C_0 to the pinned head and pinned again: nil for a ref with no version. A
 // file-mode export reads it whole; a git-mode one pages it (evsGitExportRef).
 func (self *EvsRepo) verifiedHistory(ctx context.Context, head *EvsVerifiedHead) (*EvsVerifiedHead, error) {
-	statements, err := self.client.readLog(ctx, self.repoId, head.RefId, 1, head.Version)
+	walked, err := self.client.verifier.walkToHead(ctx, head)
 	if err != nil {
 		return nil, err
-	}
-	start := EvsChainStart(self.repoId, head.RefId)
-	walked, err := self.client.verifier.walk(self.repoId, head.RefId, 0, start, statements, head.Version)
-	if err != nil {
-		return nil, err
-	}
-	reached := start
-	if 0 < len(walked) {
-		reached = walked[len(walked)-1].Chain
-	}
-	if reached != head.Chain {
-		return nil, fmt.Errorf("%w: the history does not chain to the head", ErrEvsChainBroken)
 	}
 	verified := &EvsVerifiedHead{RepoId: self.repoId, RefId: head.RefId, Head: head.Head, Version: head.Version, Chain: head.Chain, Statements: walked}
 	if err := self.client.verifier.Pin(verified); err != nil {
