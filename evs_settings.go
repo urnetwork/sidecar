@@ -264,6 +264,14 @@ type EvsSettings struct {
 	// How many times ReadHead reads a versionless file again from a fresh head after its content was replaced
 	// mid-read, before it answers ErrEvsReplacedMidRead (§11.7's reads row), 3. Not negative; 0 never rereads.
 	ReadReplacedRestartCount int
+	// How many times a read whose head another read of the same client raised the pin past while it was in flight,
+	// and which the pin store cannot place on the pinned history, is read again, fresh, before it answers
+	// ErrEvsReadStale: 4. Each read again asks at the pin then, which only a further overlapping raise passes again.
+	ReadStaleRetryCount int
+	// The chains a client keeps per ref while a read of it is in flight, C at each version its other reads' raises
+	// walked, which judge a head a raise passed (evs_pin_store.go's header): 1,024, at most about 64 KiB a ref and
+	// none once no read is in flight, the oldest out first, past which such a head is read again.
+	PinChainCount int
 
 	// §11.11's git-lfs rows (evs_lfs_*.go). A git-lfs pointer is shorter than this, 1,024 bytes, git-lfs's own bound
 	// (docs/spec.md): a longer blob is no pointer and requires nothing (R(c)'s requires row).
@@ -418,6 +426,8 @@ func DefaultEvsSettings() *EvsSettings {
 		LookupVersionCount:       10000,
 		MaxFormat:                2,
 		ReadReplacedRestartCount: 3,
+		ReadStaleRetryCount:      4,
+		PinChainCount:            1024,
 		LfsPointerMaxByteCount:   1024,
 		LfsObjectMaxByteCount:    2 * 1024 * 1024 * 1024,
 		LfsHeadReadPathCount:     64,

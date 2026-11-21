@@ -34,6 +34,28 @@
 // it ran raises no record (RaiseReadRecords), and a read in flight loads its records again when the ref's count of
 // reseeds moves (reseedCount).
 //
+// A path's record is newer than another by where its entry committed once both hold that, else by its entry version.
+// The two agree for a file, whose versions only rise (§11.7's 5g); a directory's do not, since its deltas merge
+// without a path-level CAS, each at the version its writer read plus one (§11.7's directory row), so a delta its
+// writer based on an older table commits a lower version after a higher one, while where each committed only rises.
+//
+// Overlapping reads of one client (the e2e-client-origins bug): a read asks at the pin it holds then (ask), and its
+// answer is judged against that, never against a pin another of the client's calls raised since; the pin only rises.
+//
+//	ask       the ref's pin and count of reseeds when the read asks, which its head is checked against (EvsVerifier)
+//	raise     raiseRead judges a head verified from an ask against the pin as it then stands, under writeLock, so
+//	          nothing raises between the judgment and the raise: a walk that crosses the pin's version, the asked
+//	          pin's or a kept chain's with another chain is a fork; a head below the pin it was asked at, or below
+//	          its own walk's start, a regression; a head at or above the pin raises it
+//	passed    a head another raise passed while the read was in flight stands as read, the pin unmoved, when the
+//	          chain at its version is one this store holds, the pin it was asked at or a kept one
+//	stale     else, and after a reseed while it was in flight, it is a stale read: read again, fresh, never a fork
+//	kept      while a read of a ref is in flight (beginRead), each raise keeps C at every version its walk verified,
+//	          at most EvsSettings.PinChainCount a ref, the oldest out, in memory only and gone once no read of the ref
+//	          is in flight. The raises during a read's flight walk every version from its ask to the pin, each
+//	          crossing the pin it met, so a head between them is judged unless a gap head re-pinned past the budget,
+//	          whose versions are evs's word, or the count ran out: such a head is stale
+//
 // Layout: pins/<repo_id> and reads/<repo_id>, each the repo's records as JSON, rewritten whole by Commit, so a kill
 // leaves the old file or the new one. Writes serialize on writeLock, which is never held with stateLock's work on the
 // store; memory answers reads under stateLock. Safe for concurrent use.
@@ -207,7 +229,37 @@ type EvsPinStore struct {
 	// per ref, the verified EvsReseeds this store took since it opened, in memory only: a read in flight that loaded
 	// the ref's records loads them again when it moves
 	refReseedCounts map[evsRefKey]uint64
+	// per ref, the reads in flight and, while any is, the chains raises walked (see the file header's kept row)
+	refReadCounts map[evsRefKey]int
+	refChains     map[evsRefKey]*evsRefChains
 }
+
+// C at the versions raises walked while a read of the ref was in flight: by version, and the versions in the order
+// they were kept, the oldest out first past EvsSettings.PinChainCount.
+type evsRefChains struct {
+	versionChains map[uint64][sha256.Size]byte
+	order         []uint64
+}
+
+// A read's view of a ref's pin as it asked (EvsPinStore.ask): what its answer is judged against.
+type evsPinAsk struct {
+	// The pin, nil when none was held.
+	pin *EvsPin
+	// The ref's count of reseeds then.
+	reseeds uint64
+}
+
+// Where a head verified from an ask stands against the ref's pin (see the file header).
+type evsPinStanding int
+
+const (
+	// At or above the pin, its walk crossing the pin on the pin's chain: a raise takes it.
+	evsPinAbove evsPinStanding = iota
+	// Below the pin, on the pinned history: it stands as read and the pin does not move.
+	evsPinPassed
+	// Below the pin, its place on the pinned history unknown here, or the pin fell under it: read again.
+	evsPinStale
+)
 
 // The store over the evs component's sealed directory.
 func NewEvsPinStore(store SidecarStore, settings *EvsSettings) *EvsPinStore {
@@ -216,6 +268,8 @@ func NewEvsPinStore(store SidecarStore, settings *EvsSettings) *EvsPinStore {
 		settings:        settings,
 		repoIdRepos:     map[Id]*evsRepoState{},
 		refReseedCounts: map[evsRefKey]uint64{},
+		refReadCounts:   map[evsRefKey]int{},
+		refChains:       map[evsRefKey]*evsRefChains{},
 	}
 }
 
@@ -497,6 +551,206 @@ func (self *EvsPinStore) Raise(pin *EvsPin) error {
 	})
 }
 
+// The ref's pin and count of reseeds as a read asks at them (see the file header's ask row).
+func (self *EvsPinStore) ask(repoId Id, refId Id) (*evsPinAsk, error) {
+	if err := self.load(); err != nil {
+		return nil, err
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	ask := &evsPinAsk{reseeds: self.refReseedCounts[evsRefKey{repoId: repoId, refId: refId}]}
+	if state := self.repoIdRepos[repoId]; state != nil && state.refIdPins[refId] != nil {
+		ask.pin = state.refIdPins[refId].clone()
+	}
+	return ask, nil
+}
+
+// Notes a read of a ref in flight until the function it returns is called, which may be called more than once: while
+// one is, raises keep their walks' chains (see the file header's kept row).
+func (self *EvsPinStore) beginRead(repoId Id, refId Id) func() {
+	key := evsRefKey{repoId: repoId, refId: refId}
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.refReadCounts[key] += 1
+	}()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			self.refReadCounts[key] -= 1
+			if self.refReadCounts[key] <= 0 {
+				delete(self.refReadCounts, key)
+				delete(self.refChains, key)
+			}
+		})
+	}
+}
+
+// Where a head verified from its ask stands against held, the ref's pin as it stands (nil for none), and the chains
+// kept, under stateLock (see the file header): a regression is ErrEvsPinLower and a fork ErrEvsPinFork, each with the
+// RefHead this device holds that the head contradicts, for the alarm's evidence.
+func (self *EvsPinStore) standingWithLock(verified *EvsVerifiedHead, held *EvsPin) (evsPinStanding, *EvsPin, error) {
+	ask := verified.ask
+	key := evsRefKey{repoId: verified.RepoId, refId: verified.RefId}
+	if ask.reseeds != self.refReseedCounts[key] || (ask.pin != nil && held == nil) {
+		// a verified EvsReseed lowered the pin while the read was in flight, which may have read the history lost, or
+		// a shred forgot it
+		return evsPinStale, nil, nil
+	}
+	switch {
+	case ask.pin != nil && verified.Version < ask.pin.Version:
+		return 0, ask.pin.clone(), ErrEvsPinLower
+	case verified.Version < verified.FromVersion:
+		return 0, &EvsPin{RepoId: verified.RepoId, RefId: verified.RefId, Version: verified.FromVersion, Chain: verified.fromChain}, ErrEvsPinLower
+	}
+	kept := self.refChains[key]
+	// the chain this store holds at version, from the pin, the asked pin or a kept one, false for none
+	holds := func(version uint64) ([sha256.Size]byte, bool) {
+		for _, pin := range []*EvsPin{held, ask.pin} {
+			if pin != nil && pin.Version == version {
+				return pin.Chain, true
+			}
+		}
+		if kept != nil {
+			chain, ok := kept.versionChains[version]
+			return chain, ok
+		}
+		return [sha256.Size]byte{}, false
+	}
+	check := func(version uint64, chain [sha256.Size]byte) *EvsPin {
+		if holdsChain, ok := holds(version); ok && holdsChain != chain {
+			return &EvsPin{RepoId: verified.RepoId, RefId: verified.RefId, Version: version, Chain: holdsChain}
+		}
+		return nil
+	}
+	if !verified.Gap {
+		// the walk's start and every version it verified; a gap head's carried statements are not chained
+		if mine := check(verified.FromVersion, verified.fromChain); mine != nil {
+			return 0, mine, ErrEvsPinFork
+		}
+		for _, statement := range verified.Statements {
+			if mine := check(statement.Version, statement.Chain); mine != nil {
+				return 0, mine, ErrEvsPinFork
+			}
+		}
+	}
+	if mine := check(verified.Version, verified.Chain); mine != nil {
+		return 0, mine, ErrEvsPinFork
+	}
+	switch {
+	case held == nil, held.Version == verified.Version:
+		return evsPinAbove, nil, nil
+	case held.Version < verified.Version:
+		if !verified.Gap && held.Version < verified.FromVersion {
+			// a walk that starts above the pin crosses nothing: the pin fell, which the reseed count shows first
+			return evsPinStale, nil, nil
+		}
+		return evsPinAbove, nil, nil
+	}
+	if _, ok := holds(verified.Version); ok {
+		return evsPinPassed, nil, nil
+	}
+	return evsPinStale, nil, nil
+}
+
+// standingWithLock against the pin as it stands now, which a raise judges again: what a read asks of a head it has
+// verified before it reads its paths.
+func (self *EvsPinStore) standing(verified *EvsVerifiedHead) (evsPinStanding, *EvsPin, error) {
+	if err := self.load(); err != nil {
+		return 0, nil, err
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	var held *EvsPin
+	if state := self.repoIdRepos[verified.RepoId]; state != nil {
+		held = state.refIdPins[verified.RefId]
+	}
+	return self.standingWithLock(verified, held)
+}
+
+// Raises the ref's pin to pin, the head verified from its ask, durably, judged against the pin as it stands under
+// writeLock, which every pin write takes, so the judgment holds until the raise (see the file header's raise row):
+// above, raised as Raise raises; passed or stale, nothing moves; a regression or a fork refuses, with the RefHead it
+// contradicts. A head above or passed keeps its walk's chains while reads of the ref are in flight.
+func (self *EvsPinStore) raiseRead(pin *EvsPin, verified *EvsVerifiedHead) (evsPinStanding, *EvsPin, error) {
+	if err := self.load(); err != nil {
+		return 0, nil, err
+	}
+	self.writeLock.Lock()
+	defer self.writeLock.Unlock()
+	standing, mine, err := func() (evsPinStanding, *EvsPin, error) {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		var held *EvsPin
+		if state := self.repoIdRepos[pin.RepoId]; state != nil {
+			held = state.refIdPins[pin.RefId]
+		}
+		return self.standingWithLock(verified, held)
+	}()
+	if err != nil || standing == evsPinStale {
+		return standing, mine, err
+	}
+	if standing == evsPinAbove {
+		err := self.updateWithWriteLock(pin.RepoId, func(state *evsRepoState) error {
+			raised := pin.clone()
+			if held := state.refIdPins[pin.RefId]; held != nil {
+				if raised.VerifiedSince.IsZero() {
+					raised.VerifiedSince = held.VerifiedSince
+				}
+				if raised.Loss == nil {
+					raised.Loss = held.Loss
+				}
+				if raised.GroupId == (Id{}) {
+					raised.GroupId = held.GroupId
+				}
+			}
+			state.refIdPins[pin.RefId] = raised
+			return nil
+		})
+		if err != nil {
+			return 0, nil, err
+		}
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.keepChainsWithLock(verified)
+	return standing, nil, nil
+}
+
+// Keeps C at every version a head's walk verified while a read of its ref is in flight, at most PinChainCount, the
+// oldest out; under stateLock.
+func (self *EvsPinStore) keepChainsWithLock(verified *EvsVerifiedHead) {
+	key := evsRefKey{repoId: verified.RepoId, refId: verified.RefId}
+	if self.refReadCounts[key] <= 0 {
+		return
+	}
+	kept := self.refChains[key]
+	if kept == nil {
+		kept = &evsRefChains{versionChains: map[uint64][sha256.Size]byte{}}
+		self.refChains[key] = kept
+	}
+	keep := func(version uint64, chain [sha256.Size]byte) {
+		if _, ok := kept.versionChains[version]; ok {
+			return
+		}
+		kept.versionChains[version] = chain
+		kept.order = append(kept.order, version)
+		for self.settings.PinChainCount < len(kept.order) {
+			delete(kept.versionChains, kept.order[0])
+			kept.order = kept.order[1:]
+		}
+	}
+	if !verified.Gap {
+		keep(verified.FromVersion, verified.fromChain)
+		for _, statement := range verified.Statements {
+			keep(statement.Version, statement.Chain)
+		}
+	}
+	keep(verified.Version, verified.Chain)
+}
+
 // Lowers a ref's pin to pin, the re-seeded head a verified EvsReseed names (§11.13): the only way a pin falls, kept
 // as a loss, and the ref's read records with it, headEpoch being that head's current path epoch (QD-816; see the file
 // header). The records are durable first. The pin keeps the group and gap mark held, and the same head again keeps
@@ -538,7 +792,10 @@ func (self *EvsPinStore) lowerByReseed(pin *EvsPin, incidentId []byte, at time.T
 		if changed {
 			self.repoWithLock(pin.RepoId).reads = reads
 		}
-		self.refReseedCounts[evsRefKey{repoId: pin.RepoId, refId: pin.RefId}] += 1
+		key := evsRefKey{repoId: pin.RepoId, refId: pin.RefId}
+		self.refReseedCounts[key] += 1
+		// what raises kept is of the history the incident lost, above the re-seeded head or not
+		delete(self.refChains, key)
 	}()
 	return self.updateWithWriteLock(pin.RepoId, func(state *evsRepoState) error {
 		held := state.refIdPins[pin.RefId]
@@ -614,6 +871,11 @@ func (self *EvsPinStore) Forget(repoId Id) error {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	delete(self.repoIdRepos, repoId)
+	for key := range self.refChains {
+		if key.repoId == repoId {
+			delete(self.refChains, key)
+		}
+	}
 	return nil
 }
 
@@ -704,9 +966,10 @@ func (self *EvsPinStore) ReadRecord(repoId Id, refId Id, path string) (*EvsReadR
 
 // Raises the read records of one repo's reads, each to its entry version, with that entry's commit version, and pin,
 // its floor to the lower of the two, and evicts the network's least recently used past HeadReadRecordCount. A record
-// never falls: a lower entry version is the caller's refusal, which it makes before calling this. A record pinned
-// above its ref's pin raises nothing: a verified EvsReseed lowered the pin after the read pinned a head of the history
-// the incident lost, and a record of it would hold that history's entry over the re-seeded one (QD-816).
+// never falls: an older entry is the caller's refusal, which it makes before calling this, unless another read raised
+// the record past it meanwhile, which keeps the newer entry and pin. A record pinned above its ref's pin raises
+// nothing: a verified EvsReseed lowered the pin after the read pinned a head of the history the incident lost, and a
+// record of it would hold that history's entry over the re-seeded one (QD-816).
 func (self *EvsPinStore) RaiseReadRecords(repoId Id, records []*EvsReadRecord) error {
 	if len(records) == 0 {
 		return nil
@@ -743,6 +1006,11 @@ func (self *EvsPinStore) RaiseReadRecords(repoId Id, records []*EvsReadRecord) e
 			raised.RepoId = repoId
 			if held := reads[key]; held != nil {
 				switch {
+				case raised.CommitVersion != 0 && held.CommitVersion != 0:
+					// where each committed orders them, a directory's merged deltas among them (see the file header)
+					if raised.CommitVersion < held.CommitVersion {
+						raised.EntryVersion, raised.CommitVersion = held.EntryVersion, held.CommitVersion
+					}
 				case raised.EntryVersion < held.EntryVersion:
 					raised.EntryVersion, raised.CommitVersion = held.EntryVersion, held.CommitVersion
 				case raised.EntryVersion == held.EntryVersion && held.CommitVersion != 0:
