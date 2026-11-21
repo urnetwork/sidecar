@@ -305,7 +305,12 @@ func CheckRegisteredClause(ctx context.Context, registration *ClauseRegistration
 		}
 		return CheckClause(ctx, registration.Row, registration.Name+" twin", twin, settings)
 	}
-	return CheckClause(ctx, registration.Row, registration.Name, registration.Build, settings)
+	// a registered clause on T2, which a child process rebuilds (rules_processes.go)
+	var child *ruleChildName
+	if tier == TierT2 && LookupClause(registration.Row, registration.Name) == registration {
+		child = &ruleChildName{Row: registration.Row, Clause: registration.Name}
+	}
+	return checkClause(ctx, registration.Row, registration.Name, registration.Build, settings, child)
 }
 
 // CheckRegisteredClause for the clause of rowId named clause, failing t with each failure and logging what ran. A

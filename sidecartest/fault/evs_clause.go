@@ -21,6 +21,11 @@ import (
 
 // Runs builder as clause of rowId under every rule the row takes. settings nil takes the defaults.
 func CheckClause(ctx context.Context, rowId string, clause string, builder Builder, settings *RuleSettings) *RowReport {
+	return checkClause(ctx, rowId, clause, builder, settings, nil)
+}
+
+// CheckClause, child naming how a child process rebuilds builder, for a registered clause on T2, or nil.
+func checkClause(ctx context.Context, rowId string, clause string, builder Builder, settings *RuleSettings, child *ruleChildName) *RowReport {
 	if settings == nil {
 		settings = DefaultRuleSettings()
 	}
@@ -36,67 +41,23 @@ func CheckClause(ctx context.Context, rowId string, clause string, builder Build
 		report.Errors = append(report.Errors, err)
 		return report
 	}
-	named := func(net *Net) *Schedule {
+	subject := &ruleSubject{id: id, builder: clauseBuilder(row, id, builder), unknown: row.Unknown, child: child}
+	// a clause registered under this name, which the gate shows with its case, on the build the gate runs
+	if registration := LookupClause(rowId, clause); sidecartest.HooksLinked && registration != nil {
+		subject.oneOrderCase = DefaultCatalog().Case(rowId, registration.Case)
+	}
+	report.checkRules(ctx, subject, settings)
+	return report
+}
+
+// builder's schedule as the clause of row that id names, forged where the row is.
+func clauseBuilder(row *Row, id string, builder Builder) Builder {
+	return func(net *Net) *Schedule {
 		schedule := builder(net)
 		schedule.Id = id
 		schedule.Forged = schedule.Forged || row.Forged
 		return schedule
 	}
-	traces, err := Traces(settings.SeedsDirectory, id)
-	if err != nil {
-		report.Errors = append(report.Errors, err)
-	}
-	twinTraces, err := Traces(settings.SeedsDirectory, id+" twin")
-	if err != nil {
-		report.Errors = append(report.Errors, err)
-	}
-
-	var fixed *Schedule
-	func() {
-		net := sidecartest.NewNet(ctx, settings.Net)
-		defer net.Close()
-		fixed = named(net)
-		report.Fixed = Run(ctx, fixed, net)
-	}()
-	report.fail(report.Fixed)
-	var twin Builder
-	if fixed.Twin != nil {
-		twin = twinBuilder(fixed)
-		report.Twin = RunTwin(ctx, fixed, settings.Net)
-		report.fail(report.Twin)
-	}
-	report.Explore = exploreAfter(ctx, named, report.Fixed, settings)
-	report.Failures = append(report.Failures, report.Explore.Failures...)
-	report.Errors = append(report.Errors, report.Explore.TraceErrors...)
-	if twin != nil {
-		report.ExploreTwin = exploreAfter(ctx, twin, report.Twin, settings)
-		report.Failures = append(report.Failures, report.ExploreTwin.Failures...)
-		report.Errors = append(report.Errors, report.ExploreTwin.TraceErrors...)
-	}
-	// a clause registered under this name, which the gate shows with its case, on the build the gate runs
-	if registration := LookupClause(rowId, clause); sidecartest.HooksLinked && registration != nil {
-		if testCase := DefaultCatalog().Case(rowId, registration.Case); testCase != nil {
-			report.Errors = append(report.Errors, report.oneOrderErrors(testCase)...)
-		}
-	}
-	if row.Unknown {
-		failures, lostWrites := EveryWrite(ctx, named, settings.Net)
-		report.Failures = append(report.Failures, failures...)
-		report.LostWrites = lostWrites
-	}
-	for _, trace := range traces {
-		result := runBuilt(ctx, Replay(named, trace), settings.Net, nil)
-		report.Replays = append(report.Replays, result)
-		report.fail(result)
-	}
-	if twin != nil {
-		for _, trace := range twinTraces {
-			result := runBuilt(ctx, Replay(twin, trace), settings.Net, nil)
-			report.Replays = append(report.Replays, result)
-			report.fail(result)
-		}
-	}
-	return report
 }
 
 // CheckClause on T2, failing t with each failure and logging what ran. settings nil takes the defaults.
