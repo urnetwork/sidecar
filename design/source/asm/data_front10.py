@@ -2369,3 +2369,25 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "erasure runner met inside a request's window, closed past it (681), amending @@OD:676@@; a begun erasure "
     "whose request's check now fails (682), extending @@OD:676@@ and refining @@OD:472@@ and @@OD:604@@; and that "
     "erasure's met paths (683), extending @@OD:681@@ and amending @@OD:682@@. ")
+
+# The fourth late fold (dr13-late-fold, 2026-11-21): the answer recorded after the third late fold, QD-1169.
+INDEX += [
+    (684, "A begun erasure whose request entry is gone",
+     "A begun erasure's owed work is finished once the copy no longer holds its request's entry, expired or "
+     'refused.'),
+]
+for _n, _note in [
+        (682, " Extended by @@OD:684@@: also once the copy no longer holds the request's entry."),
+        (683, " Extended by @@OD:684@@: also once the copy no longer holds the request's entry."),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 685))
+DATES[684] = '2026-11-21'
+_D683 = "erasure's met paths (683), extending @@OD:681@@ and amending @@OD:682@@. "
+assert DECISIONS_INTRO.count(_D683) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D683, _D683 + "A fourth late fold the same day numbers the answer recorded after that: a begun directory "
+    "erasure whose request's entry the copy no longer holds, expired or refused after its signer's compromise "
+    "revocation (684), extending @@OD:682@@ and @@OD:683@@. ")

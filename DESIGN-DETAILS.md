@@ -14645,7 +14645,7 @@ The lock is never waited on inside the server: a refused claim returns at once w
 
 **The holder's side.** A holder keeps a local deadline: the moment it sent the claim, on its monotonic clock, plus `lease_ms` less `LeaseMargin`. It renews, by the same claim call, every `LockLease / 3`, and again immediately before each of the five requests that change something at the CA: newOrder, the challenge POST, finalize, keyChange and revokeCert. A renewal that is refused, or a deadline that passes, ends its work on the row: it clears its challenge and sends nothing more to the CA but reads. These renewals keep a stalled holder's reach to one request (17.5). No invariant rests on them.
 
-**A delegated DNS-01's write** (amended 2026-11-21, QD-1165; owner decision 680). `POST /tls/custom-challenge` names neither the row nor the claim, so api captures them from the lock: the row and `claim_seq` of the claim the caller holds on the domain's account, with the digest and the expiry, in the bounded certs worker command it files (17.2.9). The worker on taskworker rechecks ownership and authority when it runs: a lock a newer holder took before dispatch, or a caller no longer `orderer(caller, domain)`, refuses the command, and nothing is written.
+**A delegated DNS-01's write** (amended 2026-11-21, QD-1165; owner decision 680). `POST /tls/custom-challenge` names neither the row nor the claim, so api captures them from the lock, in one transaction that checks the caller is `orderer(caller, domain)` and holds the account's lock for an order, its row `custom_ordering` under that claim: the row and `claim_seq` of the claim, the holder sidecar, the digest, the domain's acme name and root, and an expiry the challenge's hour on, as a receipt, one row of `network_tls_custom_challenge` (MG5) a domain and claim, with the bounded certs worker command it files in the same transaction (17.2.9). A retry under the claim with the same digest at the same name recovers the receipt, never a second write. The worker on taskworker, which reads no grant, rechecks ownership and authority under the account's lock when it runs, as a claim reads them: the lock is still the receipt's claim, sidecar and row, the row is still `custom_ordering` under it, and the domain still holds the receipt's acme name. A lock a newer holder took before dispatch refuses the command (`claim`), as does a domain that lost its acme name (`no_account`), and nothing is written. A receipt is deleted once its challenge's hour has passed.
 
 #### 17.2.7 The order
 
@@ -14856,20 +14856,24 @@ The probe is the same path the CA's validators take: public DNS to tlsedge, Find
 ```text
 1  value = base64url(SHA-256(key authorization)); POST /tls/custom-challenge {domain, value}. api
    authenticates the caller, captures the row and claim_seq of its claim (17.2.6), the digest and the
-   expiry, and files a bounded certs worker command with a restart-safe receipt per (domain, claim);
-   the worker rechecks the claim and orderer, writes through its root-scoped DNS client and returns the
-   real DNS serial, which the answer's id carries. A retry of the POST recovers the receipt, and an
-   interrupted write is settled before another is charged against the name's ten writes an hour
-2  poll GET /tls/custom-challenge/<id> until the edges serve it. stale, confirmed for that serial: POST
+   expiry, and files a bounded certs worker command with a restart-safe receipt per (domain, claim), a
+   network_tls_custom_challenge row; the worker rechecks the claim and the domain's acme name (17.2.6),
+   writes through its root-scoped DNS client and returns the real DNS serial, which the answer's id
+   carries, api waiting a bounded time for it and otherwise answering 503 with the receipt kept. A
+   retry of the POST recovers the receipt, and an interrupted write is settled before another is
+   charged against the name's ten writes an hour
+2  poll GET /tls/custom-challenge/<id> until the edges serve it; it answers only the sidecar whose
+   receipt holds that serial, any other caller reading 404. stale, confirmed for that serial: POST
    again, and the confirmed verdict permits the worker's next write of the same digest, at a new serial
 3  probe: resolver.LookupTxt(_acme-challenge.<c>) holds value, ProbeCount times in a row within
    ProbeTimeout each. Not so: kill the order; progress order_invalid {no_route}
 4  renew the claim; acme.Challenge(url); poll
-5  nothing to clear: the value lapses in 1 h (QD-175), and its receipt is kept no longer. One order in
-   flight an account and one account a domain keep a domain within QD-175's two values
+5  nothing to clear: the value lapses in 1 h (QD-175), and its receipt is deleted once that hour from
+   its capture has passed. One order in flight an account and one account a domain keep a domain
+   within QD-175's two values
 ```
 
-The POST and GET keep QD-175's contract, and the worker reuses certs' queue, its sole DNS credential (`internal-certs.yml`, owner decision 417) and its DNS client, so api writes no record. The command states whether the DNS write takes an idempotency key and how a lost write acknowledgement is recovered (amended 2026-11-21, QD-1165; owner decision 680).
+The POST and GET keep QD-175's contract, and the worker reuses certs' queue, its sole DNS credential (`internal-certs.yml`, owner decision 417) and its DNS client, so api writes no record. The DNS write takes no idempotency key: `POST /dns/internal/acme-challenge` carries the name and the values alone, and every write takes a new serial, which the rewrite after `stale` needs. The worker records each dispatch's time and the root's serial at that moment, and a write whose acknowledgement was lost, an answer that never came, a 503, which a failed commit also answers, or a worker stopped mid-call, is recovered from the DNS journal before anything is written again: under the zone's lock, which a write of the root's own rows holds through its commit, the first journal commit above that serial that writes the digest at the name is the write, adopted with its serial and never charged again. Only `SettleAfter` past the dispatch, a setting longer than certs' DNS client waits for an answer, with no such commit is the write read as never made and owed again, a capture making at most `DispatchMaxCount` dispatches before its receipt is refused. A write whose answer was lost and that still commits after `SettleAfter` costs the name's hourly limit one more write of the same value, never a wrong value, since it writes the same digest (amended 2026-11-21, QD-1165; owner decision 680).
 
 #### 17.2.10 Certified names and the ACME route in Find
 

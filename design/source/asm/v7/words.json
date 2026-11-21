@@ -12,7 +12,7 @@
   "num": 2,
   "code": "TRUST",
   "words": 9282,
-  "code_words": 21489,
+  "code_words": 21630,
   "ceiling": 3000,
   "over": 6282,
   "over_pct": 209.4
@@ -56,20 +56,20 @@
  {
   "num": 7,
   "code": "TEAM",
-  "words": 12713,
-  "code_words": 15069,
+  "words": 12831,
+  "code_words": 15094,
   "ceiling": 3500,
-  "over": 9213,
-  "over_pct": 263.2
+  "over": 9331,
+  "over_pct": 266.6
  },
  {
   "num": 8,
   "code": "ACL",
-  "words": 12985,
+  "words": 13041,
   "code_words": 5343,
   "ceiling": 3800,
-  "over": 9185,
-  "over_pct": 241.7
+  "over": 9241,
+  "over_pct": 243.2
  },
  {
   "num": 9,
@@ -93,7 +93,7 @@
   "num": 11,
   "code": "EVS",
   "words": 22752,
-  "code_words": 55908,
+  "code_words": 55954,
   "ceiling": 5000,
   "over": 17752,
   "over_pct": 355.0
@@ -101,20 +101,20 @@
  {
   "num": 12,
   "code": "DNS",
-  "words": 6327,
+  "words": 6475,
   "code_words": 2026,
   "ceiling": 3000,
-  "over": 3327,
-  "over_pct": 110.9
+  "over": 3475,
+  "over_pct": 115.8
  },
  {
   "num": 13,
   "code": "TLS",
-  "words": 10306,
-  "code_words": 1330,
+  "words": 10381,
+  "code_words": 1421,
   "ceiling": 3800,
-  "over": 6506,
-  "over_pct": 171.2
+  "over": 6581,
+  "over_pct": 173.2
  },
  {
   "num": 14,
@@ -138,7 +138,7 @@
   "num": 16,
   "code": "MCP",
   "words": 15220,
-  "code_words": 21367,
+  "code_words": 21557,
   "ceiling": 3500,
   "over": 11720,
   "over_pct": 334.9

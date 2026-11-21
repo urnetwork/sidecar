@@ -33,7 +33,7 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 
 ## Index
 
-102 entries, grouped by the DESIGN.md section that owns the deferred thing. "Described in" lists the subsections of DESIGN.md that point at the entry.
+103 entries, grouped by the DESIGN.md section that owns the deferred thing. "Described in" lists the subsections of DESIGN.md that point at the entry.
 
 | Section | Entry | Stage | Described in |
 |---|---|---|---|
@@ -57,6 +57,7 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 | [§8 Access control: policy, compilation, distribution, enforcement](#s8) | [Client-checked prefix write rules](#acl-prefix-write-rules) | Later | §8.8, §8.12, §8.14, §8.19, §11.11, §11.17, §11.18, §11.22, §23.4 |
 |  | [Client-attested postures](#acl-client-attested-postures) | Later | §8.19 |
 |  | [Reassigning a Team scope's label](#acl-team-scope-reassignment) | Later, until a consented-member transition rule is decided | §7.9, §8.8, §8.19, §12.5, §13.8 |
+|  | [Retiring a Team scope](#acl-team-scope-retirement) | Later, until a retirement format is designed | §7.9, §8.8, §8.19 |
 |  | [§8's v1 set](#acl-v1) | v1 (M6, M10) | §8.19 |
 | [§9 Abstract socket listeners and the scheduler](#s9) | [Region-aware listener selection](#sock-region-aware-selection) | Later | §9.17 |
 |  | [Slow start for new listeners](#sock-slow-start) | Later | §9.17 |
@@ -410,13 +411,26 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 
 *Later, until a consented-member transition rule is decided. DESIGN.md: §7.9, §8.8, §8.19, §12.5, §13.8.*
 
-- **Deferred.** Reassigning a Team scope's label (owner decisions 40, 58; Q-TLS-3) to another member or tag, and the consented-member transition rule that must come first (owner decision 678; QD-1163). An Owner or Admin declares each scope's first binding, its label and either its member or its tag, in the config head's signed `ServiceSettings`, and that binding is immutable, across the label's retirement too.
+- **Deferred.** Reassigning a Team scope's label (owner decisions 40, 58; Q-TLS-3) to another member or tag, and the consented-member transition rule that must come first (owner decision 678; QD-1163). An Owner or Admin declares each scope's first binding, its label and either its member or its tag, in the config head's signed `ServiceSettings`, its `team_scopes` field, and that binding is immutable, across the label's retirement too, which has no format yet ([Retiring a Team scope](#acl-team-scope-retirement)).
 - **Why.** A label's member or tag decides which devices hold its certificates and receive its mail (§13.8, §15.5), so moving a member's label could hand both to devices the member never consented to. The owner kept reassignment unavailable until a rule for that member's consent is decided.
 - **Launch instead.** Every label keeps its first member or tag. A Team that wants a scope under another member or tag declares a new label, and DNS, ACL and certificate readers take scopes only from the verified projection (§8.8).
 - **Lost.** Moving a scope label, with its hosts' names and mail addresses, from one member or tag to another, as when a member leaves and a colleague takes over the scope.
-- **Dark in code.** Nothing: no command reassigns a label. The signed field, its writer and the check that refuses a declaration binding a label to another member or tag are fix track review-acl-open-questions' work (QD-1163), not yet landed when this entry was written.
+- **Dark in code.** Nothing: no command reassigns a label. `ServiceSettings.team_scopes = 10` carries each label's first binding; `ur admin scopes add` files one through `SaveTeamScope` (sidecar/config_team_scope_admin.go), which refuses a label already bound, to another member or tag or to its own (`ErrTeamScopeBound`), and `ur admin scopes [list]` lists the verified base's scopes (sidecar/cli/admin_scopes_cmd.go). Compile refuses a head that binds a held label to another member or tag (`ErrConfigTeamScopeRebound`, sidecar/config_compile.go), so both the writer and every reader refuse a reassignment.
 - **Held.** Nothing: no task or track waits on it.
-- **To bring back.** A decision on the consented-member transition: who signs a reassignment, how the member a label names consents to it (from a consented device, as owner decision 126's owner-bound rule asks), what becomes of the scope's issued certificates, mail hosts and mail in flight at the change, and its tests; then the immutability check admits a reassignment that carries that consent.
+- **To bring back.** A decision on the consented-member transition: who signs a reassignment, how the member a label names consents to it (from a consented device, as owner decision 126's owner-bound rule asks), what becomes of the scope's issued certificates, mail hosts and mail in flight at the change, and its tests; then the writer and compile admit a reassignment that carries that consent.
+
+<a id="acl-team-scope-retirement"></a>
+### Retiring a Team scope
+
+*Later, until a retirement format is designed. DESIGN.md: §7.9, §8.8, §8.19.*
+
+- **Deferred.** Retiring a Team scope (owner decisions 40, 58), which owner decision 678 provides for, each label's first binding staying immutable across its retirement too (QD-1163), but which has no format: `ServiceSettings.team_scopes` carries each label's first binding and nothing that marks one retired, and no head may drop a binding.
+- **Why.** A head whose `ServiceSettings` dropped a binding its base's rows hold would leave the label free to be bound again, which owner decision 678 forbids, and no record says that a retired label stays bound, so compile refuses every such head. Retirement was not designed with the declaration.
+- **Launch instead.** Every declared scope stays bound, and in the verified projection's `team_scopes` rows, for the network's life: its label keeps its first member or tag, also after that member or tag leaves, and is never declared again (§8.8).
+- **Lost.** Taking a scope out of a Team's projection, as when its member leaves, its tag is deleted or the Team stops using the label: the label and its binding stay in every base's rows.
+- **Dark in code.** Nothing: no command or record retires a scope. `ur admin scopes` lists and adds bindings only (`SaveTeamScope`, sidecar/config_team_scope_admin.go), and compile refuses a head that drops a binding its base's rows hold (`ErrConfigTeamScopeRebound`, sidecar/config_compile.go).
+- **Held.** Nothing: no task or track waits on it.
+- **To bring back.** A design for retirement: the record that marks a label retired while keeping its first binding (a field of `TeamScopeRow` or of `ServiceSettings`, with its fence and any words §2.8 then needs), who signs it, what DNS, certs and mail do with a retired scope's hosts, certificates and mail (§12.5, §13.8, §15.5), and its tests; then compile admits a head that marks a held binding retired, and still refuses one that drops or rebinds it.
 
 <a id="acl-v1"></a>
 ### §8's v1 set

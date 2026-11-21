@@ -7,7 +7,7 @@
 | Path | What it is |
 |---|---|
 | `sections/01-CTX.md` … `sections/23-PHASE.md` | DESIGN.md §1-§23, one file per section. The build copies them verbatim, adding only links. |
-| `owner/DECISIONS.md` | The owner's record, entries 1-683. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
+| `owner/DECISIONS.md` | The owner's record, entries 1-684. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
 | `owner/APPLY.md` | The rules for applying the owner's decisions: precedence (§1), supersession, where two decisions disagree (§2), notation (§3), editing rules (§4), and the follow-up decisions 112-136 with the sections each binds (§6-§8). |
 | `CONVENTIONS.md` | The writing conventions every section follows: the owner directive (§0), the owner rules (§1), the section template (§2) and the X registry (§7), which DESIGN.md's X1-X20 table replaced. |
 | `OUTLINE.md` | The original outline: section codes, scope boundaries, and the word budgets that G0's density rule replaced on 2026-11-04. |
@@ -44,7 +44,7 @@ It needs only `python3`; it was built and checked with Python 3.13. The steps, a
 
 The data files are layered. Each `data_*N.py` loads its predecessor with `runpy` and patches it: `data_front10.py` loads `data_front9.py`, back to `data_front3.py`, and the registers, glossary and appendices go the same way. Change the top layer (the `*10` files), or add an `*11` layer that loads them. Comments in the scripts cite working files from the design sessions (the reconcilers' orders, `peer/`, `review/`, `snap/`), which were not imported; they are history.
 
-## Adding owner decision N (684 onward)
+## Adding owner decision N (685 onward)
 
 1. Add entry N to `owner/DECISIONS.md`: the question, the answer, its cost, the options not taken, and what raised it.
 2. In `asm/data_front10.py`, append `(N, "<what it settles>", "<one line>")` to `INDEX`, add `DATES[N]`, and raise the `assert` to `list(range(1, N + 1))`. Update `STATUS` and `DECISIONS_INTRO` where they name a range. `@@OD:k@@` writes a link to decision k.
@@ -1092,3 +1092,29 @@ The design-records track dr12-late-fold (wave f46e) folds the four answers that 
 - **The metadata list** is unchanged at v64: no §2.8 row changes.
 
 Outside this folder the track touched DESIGN.md, DESIGN-DEFER.md, DESIGN-AMENDMENTS.md and DESIGN-DETAILS.md (17.2.6 and 17.2.9). Left for the review phase: the fix tracks still running on 2026-11-21 for these decisions, review-acl-open-questions, review-tls-delegated-challenge and directory-erasure-begun-finishes; QD-1163's fence and §7.9's Paths list once config.proto declares the field; what owner decision 680's command states on an idempotency key and a lost acknowledgement, once it is built; and what the final sweep's validation section lists.
+
+## Validation after owner decision 684 and the as-built parts of 678 and 680: the fourth late fold (2026-11-21)
+
+The design-records track dr13-late-fold (wave f47c) folds the one answer that the run's list of pending decisions held on 2026-11-21 after the third late fold, QD-1169, a question the build raised and the owner answered that day under the owner's standing acceptance of recommended options, and the parts of owner decisions 678 and 680 that the third late fold left to their fix tracks, which have since landed. It numbers the answer as it folds it:
+
+| Ledger id | Owner decision | What it settles |
+|---|---|---|
+| QD-1169 | 684 | The directory's erasure runner still finishes what its ledger owes a begun erasure once the copy no longer holds the request's `erasure_request` entry, expired by retention or refused after a compromise revocation voided its signer's signature, the ledger row keeping the request's repo id and marker version, extending owner decisions 682 and 683. |
+
+- **The directory and evs (684).** §16.11's retention row, where an erasure request's expiry ends no erasure it began; its runner row, which works in the owed form each ledger row whose erasure an ERASE names once the copy no longer holds the request's entry, with no announce entry, no new find and no newly met path, the row keeping the request's repo id and marker version and a row written before that field worked from the ledger alone where it needs no file read; its closure and erasure rows; and §11.12's reconcile row. Fix track directory-erasure-begun-finishes built it while this track ran (sidecar 3689246d), the ledger row keeping `repo_id` and `marker_version`: Go code and the device's own ledger, so no fence, no §2.8 row and no metadata change.
+- **Team scopes as built (678; review-acl-open-questions, sidecar 9a048c6f to a7383eb8).** §7.9's `ServiceSettings` fence takes `repeated TeamScopeRow team_scopes = 10`, which config.proto declares, and its entry leaves protocol's `testFenceAdditions` in the same commit; §7.9's records table and Settings fields say what the field holds and that `ur admin scopes` files and lists it, the declarations riding the head's `service_settings` file, so the Paths list takes no line. DESIGN-DEFER.md's acl-team-scope-reassignment entry names the writer, `SaveTeamScope` with `ur admin scopes [list|add]`, and the refusal of a reassignment by the writer and by compile, in place of the writer it said had not landed; a new acl-team-scope-retirement entry defers retiring a scope, which has no format, since no head may drop a binding, so a label stays bound and in the projection's rows until retirement is designed, and §7.9's Settings fields, §8.8's Team scopes and §8.19's Later row point at it. QD-1163's item leaves DESIGN-AMENDMENTS.md's "Later decisions".
+- **The delegated challenge as built (680; review-tls-delegated-challenge, server dfe7efb76 to ed60ffa9f, sidecar 960d12a1 to a62f1cf0).** §12.8's step 3, §13.8's challenge row and DNS writes block, §13.15's routes and tables, and DESIGN-DETAILS.md 17.2.6 and 17.2.9 now say what the command states: the DNS write takes no idempotency key; a write whose acknowledgement was lost is found in the DNS journal, above the root's serial the worker kept at its dispatch, before anything is written again; one that commits only after the settle time costs the name's hourly limit one more write of the same value, never a wrong one; the receipts are rows of `network_tls_custom_challenge` (MG5), deleted after the challenge's hour; and `GET /tls/custom-challenge/<id>`, its id the serial the POST answered, answers only the sidecar whose receipt holds it. 17.2.6 and 17.2.9 also say what the worker rechecks as built, the claim, the row's state and the domain's acme name, where the third late fold had it recheck `orderer(caller, domain)` too: the worker reads no grant, and api checks `orderer` at the capture, as the holder's claim renewal does just before its POST.
+- **The metadata list.** The receipt table is server-visible, so I-18 needs its columns in cert-1's row. The list had published them through check's additions as v65 (QD-1165), and §2.8's block now writes those words, the five entries leaving `metadataListAdditions`, so `make metadata` leaves metadata_list.yml byte for byte at v65. cert-1 is no new row, and server's column map (local/sidecar-columns.yml) already maps the table's columns to it, so no guard line is needed.
+- **"Later decisions".** QD-024 (§4) and QD-1086 (§22) keep the Not folded lines the final sweep gave them.
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `d9e159b138301894ad84fcec962ec17190d1b6b00aabca1dba63b89d821e447c`) and DESIGN-DEFER.md (SHA-256 `c0e7b5f18658b6b8c90e08c6fa8062799826945d640fca6458420c37e4ab9f4d`), and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no new §2.8 row, so no guard line was needed.
+- **Owner decisions.** All 684 rows are present and cited; APPLY.md's section pairs hold. `LATE_DATES` takes the new row's date, which `validate10.py`'s row pattern already took.
+- **Open owner questions.** One, Q-REPO-6.
+- **Superseded options.** 314 grep hits, every one carried with its reading; none is on a changed line and none is live, and the 45 readings in §2, §7, §13 and §16 whose lines these edits moved carry their new line numbers, while those whose recorded lines earlier folds had left behind keep them.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 12,014 section references, 5 more, with the one unresolved as before. `v7/words.json` and `v7/text_checks.json` were regenerated.
+- **DESIGN-DEFER.md.** 103 entries and 165 pointers, one entry and three pointers more: retiring a Team scope.
+- **The metadata list** is unchanged at v65, its words now §2.8's own, and check's additions list is empty.
+
+Outside this folder the track touched DESIGN.md, DESIGN-DEFER.md, DESIGN-AMENDMENTS.md, DESIGN-DETAILS.md (17.2.6 and 17.2.9), protocol/design_unfenced_test.go and check/metadata_list_test.go. Left for the review phase: the as-built writer's refusal of a second label for one member or tag (`ur admin scopes add`; readers take a device two scopes name as ambiguous), which no decision states; and what the final sweep's validation section lists.

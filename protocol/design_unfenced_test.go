@@ -645,8 +645,6 @@ var testFenceAdditions = []struct {
 }{
 	{message: "RepoCreate", field: testFenceField{name: "inbox", number: 4, typeName: "RepoInbox"}, question: "plan-MAIL-group-inbox (QD-102)"},
 	{message: "AclRepo", field: testFenceField{name: "inbox", number: 14, typeName: "RepoInbox"}, question: "plan-MAIL-group-inbox (QD-102)"},
-	{message: "ServiceSettings", field: testFenceField{name: "team_scopes", number: 10, typeName: "TeamScopeRow", repeated: true},
-		question: "review-fix-acl-team-scope-declarations (QD-1163)"},
 }
 
 // One field an owner's answer takes out of a message the design fences, its number reserved.
