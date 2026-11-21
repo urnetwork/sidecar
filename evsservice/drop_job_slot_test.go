@@ -67,54 +67,63 @@ func (self *fakeDropDeleter) jobIds() []sidecar.Id {
 	return jobIds
 }
 
-func TestResumedDropRetainsItsJobUntilPhysicalDeletion(t *testing.T) {
-	for _, cause := range []string{"disagreement", "lock", "observe"} {
-		t.Run(cause, func(t *testing.T) {
-			fixture := newDropJobFixture(t)
-			world := fixture.world
-			hold := fixture.placeHold()
-			fixture.deleter.held = true
-			fixture.appendDrop("drop", world.clock.Now())
-			fixture.ripen()
-			fixture.run()
-			jobId := fixture.table().HeldJobs[0].JobId
-			fixture.endHold(hold)
-			fixture.deleter.held = false
-			fixture.advance(fixture.job.settings.HorizonRetryInterval, 0)
-			fixture.verifier.result = func(request *DropVerifyRequest) *DropVerifyResult {
-				return &DropVerifyResult{Snapshot: request.Marked, Disagree: cause == "disagreement", Locked: cause == "lock"}
-			}
-			if cause == "observe" {
-				fixture.format2.mode = sidecar.Format2Observe
-			}
-			fixture.stopAt = BarrierDropHeldAfter
-			fixture.runKilled(fixture.job)
-			fixture.job = fixture.newJob(testId("restarted"))
-			table := fixture.table()
-			if table.Job != nil || table.HeldJob(jobId) == nil || table.Drop(testId("drop")).State != DropStateHeld {
-				t.Fatalf("lost held drop after restart: %+v", table)
-			}
-			cluster, err := world.host.Blobs.SegmentCluster()
-			if err != nil {
-				t.Fatal(err)
-			}
-			withheld, err := NewDropIndex(nil, nil, nil).Withheld(world.ctx, cluster, "meta-1", world.repoId, table, world.clock.Now())
-			if err != nil || !withheld[fixture.a] || len(fixture.deleter.requests) != 1 {
-				t.Fatalf("after failed resume: withheld %v, deletes %d, error %v", withheld, len(fixture.deleter.requests), err)
-			}
-			if result := fixture.run(); !world.clock.Now().Before(result.Next) {
-				t.Fatalf("blocked job ran without waiting: %+v", result)
-			}
-			fixture.format2.mode = sidecar.Format2On
-			fixture.verifier.result = nil
-			fixture.advance(fixture.job.settings.HorizonRetryInterval, 0)
-			result := fixture.run()
-			entry := fixture.entry("drop")
-			if !result.Ended || entry.State != DropStateDone || fixture.deleter.deleteCounts[fixture.a] != 1 ||
-				len(fixture.table().JobIds()) != 0 || entry.FreedByteCount+entry.HeldByteCount != 300 {
-				t.Fatalf("after deletion: result %+v, entry %+v, deletions %v", result, entry, fixture.deleter.deleteCounts)
-			}
-		})
+func TestResumedDropRetainsItsJobWhenScansDisagree(t *testing.T) {
+	testResumedDropRetainsItsJobUntilPhysicalDeletion(t, DropVerifyResult{Disagree: true}, sidecar.Format2On)
+}
+
+func TestResumedDropRetainsItsJobWhenLocked(t *testing.T) {
+	testResumedDropRetainsItsJobUntilPhysicalDeletion(t, DropVerifyResult{Locked: true}, sidecar.Format2On)
+}
+
+func TestResumedDropRetainsItsJobInObserveMode(t *testing.T) {
+	testResumedDropRetainsItsJobUntilPhysicalDeletion(t, DropVerifyResult{}, sidecar.Format2Observe)
+}
+
+// Restart a held job while deletion is blocked, then clear the block and account for its bytes.
+func testResumedDropRetainsItsJobUntilPhysicalDeletion(t *testing.T, verification DropVerifyResult, mode sidecar.Format2Mode) {
+	fixture := newDropJobFixture(t)
+	world := fixture.world
+	hold := fixture.placeHold()
+	fixture.deleter.held = true
+	fixture.appendDrop("drop", world.clock.Now())
+	fixture.ripen()
+	fixture.run()
+	jobId := fixture.table().HeldJobs[0].JobId
+	fixture.endHold(hold)
+	fixture.deleter.held = false
+	fixture.advance(fixture.job.settings.HorizonRetryInterval, 0)
+	fixture.verifier.result = func(request *DropVerifyRequest) *DropVerifyResult {
+		result := verification
+		result.Snapshot = request.Marked
+		return &result
+	}
+	fixture.format2.mode = mode
+	fixture.stopAt = BarrierDropHeldAfter
+	fixture.runKilled(fixture.job)
+	fixture.job = fixture.newJob(testId("restarted"))
+	table := fixture.table()
+	if table.Job != nil || table.HeldJob(jobId) == nil || table.Drop(testId("drop")).State != DropStateHeld {
+		t.Fatalf("lost held drop after restart: %+v", table)
+	}
+	cluster, err := world.host.Blobs.SegmentCluster()
+	if err != nil {
+		t.Fatal(err)
+	}
+	withheld, err := NewDropIndex(nil, nil, nil).Withheld(world.ctx, cluster, "meta-1", world.repoId, table, world.clock.Now())
+	if err != nil || !withheld[fixture.a] || len(fixture.deleter.requests) != 1 {
+		t.Fatalf("after failed resume: withheld %v, deletes %d, error %v", withheld, len(fixture.deleter.requests), err)
+	}
+	if result := fixture.run(); !world.clock.Now().Before(result.Next) {
+		t.Fatalf("blocked job ran without waiting: %+v", result)
+	}
+	fixture.format2.mode = sidecar.Format2On
+	fixture.verifier.result = nil
+	fixture.advance(fixture.job.settings.HorizonRetryInterval, 0)
+	result := fixture.run()
+	entry := fixture.entry("drop")
+	if !result.Ended || entry.State != DropStateDone || fixture.deleter.deleteCounts[fixture.a] != 1 ||
+		len(fixture.table().JobIds()) != 0 || entry.FreedByteCount+entry.HeldByteCount != 300 {
+		t.Fatalf("after deletion: result %+v, entry %+v, deletions %v", result, entry, fixture.deleter.deleteCounts)
 	}
 }
 
