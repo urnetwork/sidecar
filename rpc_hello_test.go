@@ -228,12 +228,15 @@ func testRpcBinding(t testing.TB, networkId Id, clientId connect.Id, identity *t
 
 // Adds a side with identity, nil for a fresh one, its settings adjusted by adjust.
 func (self *testRpcPair) add(identity *testRpcIdentity, adjust func(settings *SidecarProtocolSettings)) *testRpcSide {
+	return self.addClient(connect.NewId(), identity, adjust)
+}
+
+func (self *testRpcPair) addClient(clientId connect.Id, identity *testRpcIdentity, adjust func(settings *SidecarProtocolSettings)) *testRpcSide {
 	t := self.t
 	t.Helper()
 	if identity == nil {
 		identity = newTestRpcIdentity()
 	}
-	clientId := connect.NewId()
 	binding := testRpcBinding(t, self.networkId, clientId, identity)
 	verified, err := VerifySidecarIdentityBinding(binding)
 	if err != nil {
@@ -300,6 +303,10 @@ func (self *testRpcPair) add(identity *testRpcIdentity, adjust func(settings *Si
 // Adds an edge's side (stream_edge.go): a dispatcher in SubprotocolRoleEdge with no binding, store or
 // network, on a clock of its own, its settings adjusted by adjust.
 func (self *testRpcPair) addEdge(adjust func(settings *SidecarProtocolSettings)) *testRpcSide {
+	return self.addEdgeClient(connect.NewId(), newTestRpcIdentity(), adjust)
+}
+
+func (self *testRpcPair) addEdgeClient(clientId connect.Id, identity *testRpcIdentity, adjust func(settings *SidecarProtocolSettings)) *testRpcSide {
 	t := self.t
 	t.Helper()
 	clock := newTestEnvelopeClock()
@@ -314,9 +321,7 @@ func (self *testRpcPair) addEdge(adjust func(settings *SidecarProtocolSettings))
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	client := newTestRequiredClient(t, ctx)
-	clientId := connect.NewId()
-	clientKeySeed := make([]byte, ed25519.SeedSize)
-	rand.Read(clientKeySeed)
+	clientKeySeed := identity.clientKeySeed
 	side := &testRpcSide{
 		pair:          self,
 		clientId:      clientId,
@@ -331,13 +336,14 @@ func (self *testRpcPair) addEdge(adjust func(settings *SidecarProtocolSettings))
 	}
 	copy(side.clientPublicKey[:], ed25519.NewKeyFromSeed(clientKeySeed).Public().(ed25519.PublicKey))
 	subprotocol, err := newSubprotocol(ctx, &SubprotocolEnv{
-		Client:   client,
-		Log:      NewNoopLogger(),
-		Settings: settings,
-		Budget:   NewSubprotocolBudget(settings, 128*1024*1024),
-		Clock:    subprotocolClock,
-		Inbound:  SubprotocolInboundWithoutPolicy,
-		Role:     SubprotocolRoleEdge,
+		Client:               client,
+		Log:                  NewNoopLogger(),
+		Settings:             settings,
+		Budget:               NewSubprotocolBudget(settings, 128*1024*1024),
+		Clock:                subprotocolClock,
+		Inbound:              SubprotocolInboundWithoutPolicy,
+		Role:                 SubprotocolRoleEdge,
+		ReserveStreamIdRange: func(context.Context) (uint64, error) { return reserveStoredStreamIds(identity.store) },
 	}, &subprotocolSeams{clientPublicKeyOf: testRpcClientPublicKeyOf, send: side.send, clientId: clientId})
 	if err != nil {
 		t.Fatal(err)

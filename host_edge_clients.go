@@ -65,6 +65,13 @@ func DefaultEdgeClientPoolSettings() *EdgeClientPoolSettings {
 	}
 }
 
+// An edge's credential source can reserve a fresh range for the stable slot ID
+// across process restarts. Ranges are strictly increasing values in [1, 2^42).
+// Only a client opening outbound streams needs one.
+type EdgeStreamIdRangeSource interface {
+	ReserveStreamIdRange(ctx context.Context, index int, clientId Id) (uint64, error)
+}
+
 // What NewEdgeClientPool takes.
 type EdgeClientPoolArgs struct {
 	// Where each client's credential comes from, which only the host holds.
@@ -251,14 +258,21 @@ func (self *EdgeClientPool) openClient(index int, platform SidecarPlatform, stra
 	client.platform.Client.ContractManager().SetProvideModes(map[connectprotocol.ProvideMode]bool{
 		connectprotocol.ProvideMode_Service: true,
 	})
+	var reserveRange func(context.Context) (uint64, error)
+	if source, ok := self.source.(EdgeStreamIdRangeSource); ok {
+		reserveRange = func(ctx context.Context) (uint64, error) {
+			return source.ReserveStreamIdRange(ctx, index, client.clientId)
+		}
+	}
 	client.subprotocol, err = NewSubprotocol(self.ctx, &SubprotocolEnv{
-		Client:   client.platform.Client,
-		Log:      self.log,
-		Settings: self.settings.Protocol,
-		Budget:   budget,
-		Clock:    self.clock,
-		Inbound:  inbound,
-		Role:     SubprotocolRoleEdge,
+		ReserveStreamIdRange: reserveRange,
+		Client:               client.platform.Client,
+		Log:                  self.log,
+		Settings:             self.settings.Protocol,
+		Budget:               budget,
+		Clock:                self.clock,
+		Inbound:              inbound,
+		Role:                 SubprotocolRoleEdge,
 	})
 	if err != nil {
 		self.closeClient(client)
