@@ -341,6 +341,24 @@ func (self *Sidecar) ApprovalArgs(states func() (ApprovalStates, error)) (*Appro
 // sources for the rest, and installs it behind Authorize in place of whatever gate stood (InstallGate). Answers the gate
 // and its removal. The host runs the gate's Reconcile once before it serves, and its inbox's Run for the poll.
 func (self *Sidecar) InstallApprovalGate(sources *ApprovalGateSources) (*ApprovalGate, func(), error) {
+	return self.installApprovalGate(sources, false)
+}
+
+// InstallApprovalGateIfAbsent installs the native gate only while the network has no gate. A host that already
+// installed its own gate retains it and receives nil for both the gate and its removal.
+func (self *Sidecar) InstallApprovalGateIfAbsent(sources *ApprovalGateSources) (*ApprovalGate, func(), error) {
+	return self.installApprovalGate(sources, true)
+}
+
+func (self *Sidecar) installApprovalGate(sources *ApprovalGateSources, onlyIfAbsent bool) (*ApprovalGate, func(), error) {
+	if onlyIfAbsent {
+		self.gates.stateLock.Lock()
+		installed := self.gates.gate != nil
+		self.gates.stateLock.Unlock()
+		if installed {
+			return nil, nil, nil
+		}
+	}
 	if sources == nil {
 		sources = &ApprovalGateSources{}
 	}
@@ -364,7 +382,11 @@ func (self *Sidecar) InstallApprovalGate(sources *ApprovalGateSources) (*Approva
 	if err != nil {
 		return nil, nil, err
 	}
-	return gate, self.InstallGate(gate), nil
+	remove := self.installGate(gate, onlyIfAbsent)
+	if remove == nil {
+		return nil, nil, nil
+	}
+	return gate, remove, nil
 }
 
 // The installed §16.6 gate, or ErrApprovalNoState where another gate, or none, stands.
