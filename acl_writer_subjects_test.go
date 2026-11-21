@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
@@ -72,13 +73,13 @@ func TestAclWriterPlansOnlyLiveNamedMembers(t *testing.T) {
 }
 
 // The confirmation covers the signed owner of each referenced scope even when a later
-// base retains the same policy files and the same host labels.
+// base retains the same policy files and the same host labels. Each base's head signs its
+// binding, as a head must for the rows to hold it (QD-1163).
 func TestAclWriterBindsTheScopeOwnerInItsPreview(t *testing.T) {
 	net := newTestConfigNet(t)
 	other, _ := net.consentedMember("scope owner")
 	writer := newTestAclWriterDevice(t)
 	source := []byte(`{"grants":[{"src":["autogroup:member"],"dst":["sock:tls/443/*.crew"],"allow":["listen"]}]}`)
-	head := testConfigHead(t, net)
 	planAt := func(owner Id) *AclSavePlan {
 		t.Helper()
 		state := net.log.State()
@@ -86,6 +87,11 @@ func TestAclWriterBindsTheScopeOwnerInItsPreview(t *testing.T) {
 		rows.TeamScopes = []*bridge.TeamScopeRow{{Label: "crew", MemberId: owner.Bytes()}}
 		if verdict := net.pushBase(net.owner, rows, net.n, state.Base().GetConfigVersion()+1, 0); !verdict.Accepted() {
 			t.Fatal(verdict.Refusal)
+		}
+		head, err := testConfigHead(t, net).WithFile(ConfigHeadServiceSettingsPath, net.sign(net.owner, bridge.SignedType_SIGNED_SERVICE_SETTINGS,
+			&protocol.ServiceSettings{TeamScopes: rows.TeamScopes}))
+		if err != nil {
+			t.Fatal(err)
 		}
 		plan, err := writer.aclWriterPlan(t.Context(), source, nil, net.log.State(), head)
 		if err != nil {

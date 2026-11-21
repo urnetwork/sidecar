@@ -11,11 +11,13 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 // A gate exposes exactly the bindings its verified base carries. Both ways a writer obtains
-// a later fold keep them, and callers cannot change them through either accessor.
+// a later fold keep them under a head that signs them (QD-1163), and callers cannot change
+// them through either accessor.
 func TestConfigVerifiedTeamScopeRows(t *testing.T) {
 	net := newTestConfigNet(t)
 	registerTestConfigAclCompiler(t)
@@ -50,7 +52,11 @@ func TestConfigVerifiedTeamScopeRows(t *testing.T) {
 	if _, ok := state.TeamScope("changed"); ok || !slices.Equal(state.TeamScopeLabels(), []string{"alpha-unit", "ops-unit"}) {
 		t.Fatal("changing an answer changed the verified base")
 	}
-	head := testConfigHead(t, net)
+	head, err := testConfigHead(t, net).WithFile(ConfigHeadServiceSettingsPath, net.sign(net.owner, bridge.SignedType_SIGNED_SERVICE_SETTINGS,
+		&protocol.ServiceSettings{TeamScopes: rows.TeamScopes}))
+	if err != nil {
+		t.Fatal(err)
+	}
 	fromBase, err := configCompileRowsFromRows(rows)
 	if err != nil {
 		t.Fatal(err)
