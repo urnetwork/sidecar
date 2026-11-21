@@ -207,9 +207,8 @@ func TestMailSubmitSendRecoversTheCommittedSendId(t *testing.T) {
 	replay(&SidecarOutcome{State: ApprovalOutcomeDone, EffectRef: newMailOutboxSendId().Bytes()})
 }
 
-// A writer can win the key after this send's first receipt read. The queue's actual winner supplies the
-// caller's id as well as the gate's recorded effect ref.
-func TestMailSubmitSendReturnsTheWriterThatWonTheQueue(t *testing.T) {
+// A direct queue writer racing the sent copy must respect the reserved send's claim.
+func TestMailSubmitSendClaimHoldsTheQueueWhileWritingTheCopy(t *testing.T) {
 	ctx := t.Context()
 	world, _, _ := newMailSendTestWorld(t)
 	draft := &MailSendArgs{From: testMailSendFrom, To: []string{"someone@outside.example"}, Subject: "Plans", Text: "Dinner at eight."}
@@ -222,22 +221,29 @@ func TestMailSubmitSendReturnsTheWriterThatWonTheQueue(t *testing.T) {
 		t.Fatal(err)
 	}
 	effectKey := mailConfigTestEffectKey(action.Bytes)
-	winnerId := newMailOutboxSendId()
+	otherId := newMailOutboxSendId()
 	outbox, err := world.client.memberOutbox(testMailOutboxStanding(AbuseStandingStandard, true))
 	if err != nil {
 		t.Fatal(err)
 	}
 	world.ingest.store.beforeWrite = func() {
-		if _, err := outbox.Queue(ctx, testMailOutboxQueueArgs(effectKey, testMailOutboxMessage(winnerId))); err != nil {
-			t.Fatal(err)
+		if _, err := outbox.Queue(ctx, testMailOutboxQueueArgs(effectKey, testMailOutboxMessage(otherId))); !errors.Is(err, ErrMailSendUncertain) {
+			t.Fatalf("direct writer during the claimed send: %v", err)
 		}
 	}
 	result, err := world.client.SubmitSend(ctx, draft)
-	if err != nil || result.SendId != winnerId || !bytes.Equal(result.EffectKey, effectKey) {
-		t.Fatalf("racing send %+v, want %s: %v", result, winnerId, err)
+	if err != nil || result.SendId == (Id{}) || result.SendId == otherId || !bytes.Equal(result.EffectKey, effectKey) {
+		t.Fatalf("claimed send %+v: %v", result, err)
 	}
-	if ref := world.gate.lastAction().Outcome.EffectRef; !bytes.Equal(ref, winnerId.Bytes()) {
-		t.Fatalf("the gate recorded %x, want %s", ref, winnerId)
+	if ref := world.gate.lastAction().Outcome.EffectRef; !bytes.Equal(ref, result.SendId.Bytes()) {
+		t.Fatalf("the gate recorded %x, want %s", ref, result.SendId)
+	}
+	if sent := testMailSendRead(t, world, MailFolderSent, draft.Subject); sent == nil || mailEntryId(sent.Entry) != result.SendId {
+		t.Fatal("sent copy does not match the committed send")
+	}
+	again, err := outbox.Queue(ctx, testMailOutboxQueueArgs(effectKey, testMailOutboxMessage(otherId)))
+	if err != nil || again.Created || again.SendId != result.SendId {
+		t.Fatalf("direct retry after commit %+v: %v", again, err)
 	}
 }
 

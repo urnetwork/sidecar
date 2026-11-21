@@ -93,6 +93,8 @@ type MailOutbox struct {
 	settings *MailOutboxSettings
 	clock    Clock
 	mailbox  *mailSmtpMailbox
+	// The composing client, when the outbox shares a member device's reserved sends.
+	client *MailClient
 }
 
 // The outbox over args' store.
@@ -163,6 +165,11 @@ func mailOutboxStandingAllows(status *AbuseStatus) bool {
 // network that may send no internet mail; any other error leaves the entry unwritten or, where the write's answer was
 // lost, maybe written, which a Queue under the same key settles.
 func (self *MailOutbox) Queue(ctx context.Context, args *MailOutboxQueueArgs) (*MailOutboxQueued, error) {
+	return self.queue(ctx, args, false)
+}
+
+// The queue commit. A reserved send calls it while it owns the device's checkpoint.
+func (self *MailOutbox) queue(ctx context.Context, args *MailOutboxQueueArgs, composing bool) (*MailOutboxQueued, error) {
 	if args == nil || len(args.EffectKey) != mailEffectKeyByteCount || args.Sender == "" || len(args.Recipients) == 0 || len(args.Message) == 0 {
 		return nil, ErrMailOutboxInvalid
 	}
@@ -183,10 +190,29 @@ func (self *MailOutbox) Queue(ctx context.Context, args *MailOutboxQueueArgs) (*
 	if self.sign == nil {
 		return nil, fmt.Errorf("%w: no signer", ErrMailOutboxInvalid)
 	}
+	var claimName string
+	var busy bool
+	if !composing && self.client != nil {
+		claimName = mailSendCheckpointName(args.EffectKey)
+		release, _ := self.client.trySendUse(claimName)
+		busy = release == nil
+		if !busy {
+			defer release()
+		}
+	}
 	if queued, err := self.receipt(ctx, args.EffectKey); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrMailSendUncertain, err)
 	} else if queued != nil {
 		return queued, nil
+	}
+	if busy {
+		return nil, ErrMailSendUncertain
+	}
+	if claimName != "" {
+		held, err := self.client.readSendCheckpoint(claimName)
+		if err != nil || held != nil {
+			return nil, ErrMailSendUncertain
+		}
 	}
 	signed, err := SignSmtpOutboxEntry(&SmtpOutboundMessage{
 		EffectKey:        args.EffectKey,

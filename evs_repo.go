@@ -247,6 +247,17 @@ type EvsWriteResult struct {
 type EvsDepositArgs struct {
 	Body io.Reader
 	Size int64
+	// A composing device can durably checkpoint the exact request before posting it and restore it on retry.
+	pending *evsDepositRequest
+	prepare func(*evsDepositRequest) error
+}
+
+// A prepared deposit. Its segments have uploaded, and only the signed request can publish the entry.
+type evsDepositRequest struct {
+	EntryId EvsToken `json:"entry_id"`
+	PushId  Id       `json:"push_id"`
+	// Deterministic protobuf, including every field of the original upload receipts.
+	Request []byte `json:"request"`
 }
 
 // A committed deposit.
