@@ -23,7 +23,7 @@
 // before the request is filed, so the call made again after the approval pins the same key, and it is removed when
 // the publish ends.
 //
-// A scoped host, <label>.<scope>, is refused until Team scopes land (TLS-M6-03). Safe for concurrent use.
+// A scoped host uses its verified owner's certificate set. Safe for concurrent use.
 
 package sidecar
 
@@ -220,9 +220,6 @@ func newTlsPublishPlan(settings *TlsPublishSettings) (*tlsPublishPlan, error) {
 		return nil, fmt.Errorf("%w: a host is a label or @, on port 443, 8443, 8883 or 5671", ErrTlsPublishInvalid)
 	}
 	host := socketTlsHost(name)
-	if strings.Contains(host, ".") {
-		return nil, fmt.Errorf("%w: a scoped host waits on Team scopes", ErrTlsPublishInvalid)
-	}
 	if host == socketTlsHost(tlsSystemPublishName) {
 		return nil, fmt.Errorf("%w: the system publish's", ErrTlsPublishHostTaken)
 	}
@@ -285,8 +282,16 @@ func tlsPublishServerNames(host string, names *TlsCertNames) ([]string, error) {
 	if names == nil || names.Root == "" || names.Label == "" {
 		return nil, fmt.Errorf("%w: the network has no name yet", ErrTlsPublishUnavailable)
 	}
+	_, scope, scoped := strings.Cut(host, ".")
+	if scoped && scope != names.Scope || !scoped && names.Scope != "" {
+		return nil, fmt.Errorf("%w: the device does not hold this scope", ErrTlsPublishInvalid)
+	}
+	labels := []string{names.Label}
+	if !scoped {
+		labels = append(labels, names.Aliases...)
+	}
 	serverNames := []string{}
-	for _, label := range append([]string{names.Label}, names.Aliases...) {
+	for _, label := range labels {
 		if label == "" {
 			continue
 		}
@@ -719,7 +724,12 @@ func (self *sidecarTlsPublishBackend) serve(ctx context.Context, target *TlsFron
 		return nil, err
 	}
 	sidecar := self.sidecar
-	front, err := NewTlsFront(sidecar.ctx, &TlsFrontArgs{
+	component := sidecar.tlsComponent()
+	if component == nil {
+		listener.Close()
+		return nil, ErrTlsComponentAbsent
+	}
+	front, err := NewTlsFront(component.ctx, &TlsFrontArgs{
 		Target:    target,
 		Listener:  listener,
 		NetworkId: networkId,
@@ -733,12 +743,11 @@ func (self *sidecarTlsPublishBackend) serve(ctx context.Context, target *TlsFron
 		}),
 		Certificate: func(serverName string) (*tls.Certificate, error) {
 			// an issued certificate alone: a visitor is never shown the self-signed leaf
-			component := sidecar.tlsComponent()
-			if component == nil {
-				return nil, ErrTlsComponentAbsent
-			}
 			return component.manager.PublishCertificate([]string{serverName})
 		},
+		Custom:    &tlsFrontOwnerCertificates{manager: component.manager, owner: socketTlsHost(target.Name)},
+		UpdateTls: listener.updateTls,
+		Limits:    component.limits,
 		Secrets:   secrets,
 		IssuerUrl: sidecar.settings.AuthUrl,
 		Clock:     sidecar.clock,

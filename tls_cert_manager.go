@@ -47,6 +47,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -118,6 +119,8 @@ type TlsCertNames struct {
 	// Each active custom host mapped to an owner on one of whose tls/ names this device holds an active approved
 	// publish grant (17.2.5's test): canonical names under no URnetwork root.
 	CustomHosts []string
+	// The publish owner of each verified mapping; used by that endpoint alone.
+	CustomHostOwners map[string]string
 	// URnetwork's other roots, which no custom host may sit under. Root is always one.
 	OtherRoots []string
 }
@@ -228,6 +231,7 @@ type TlsCertManager struct {
 	passLock chan struct{}
 	// raised when the installed custom chains or what they present change: an install, an expiry, a revocation
 	customVersion *MonitorValue[uint64]
+	customOwners  map[string]string
 	// a hint, a resync notice or a new generation asks for a pass
 	wake chan struct{}
 
@@ -675,6 +679,55 @@ func (self *TlsCertManager) CustomCertificates() []*TlsCustomCertificate {
 		}
 	}
 	return certificates
+}
+
+// One front's entries, including pending certificates that may answer a claimed ACME challenge.
+// A grant on the device's other endpoints never contributes a name to this listener.
+type tlsFrontOwnerCertificates struct {
+	manager *TlsCertManager
+	owner   string
+}
+
+func (self *tlsFrontOwnerCertificates) CustomCertificates() []*TlsFrontCustomCertificate {
+	manager := self.manager
+	now := manager.clock.Now()
+	manager.stateLock.Lock()
+	defer manager.stateLock.Unlock()
+	entries := []*TlsFrontCustomCertificate{}
+	for host, owner := range manager.customOwners {
+		if owner != self.owner {
+			continue
+		}
+		entry := &TlsFrontCustomCertificate{Name: host}
+		if selected := manager.selectWithLock([]string{host}, now); selected != nil && selected.CustomHost == host {
+			entry.Certificate = manager.certificateWithLock(selected)
+			entry.NotAfter = selected.leaf.NotAfter
+		}
+		entries = append(entries, entry)
+	}
+	slices.SortFunc(entries, func(a, b *TlsFrontCustomCertificate) int { return strings.Compare(a.Name, b.Name) })
+	return entries
+}
+
+func (self *tlsFrontOwnerCertificates) CustomChanged() <-chan struct{} {
+	_, changed := self.manager.WatchCustomCertificates()
+	return changed
+}
+
+// Removals and owner changes update the same registration even when the installed leaf is unchanged.
+func (self *TlsCertManager) setCustomOwners(owners map[string]string) {
+	changed := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if maps.Equal(self.customOwners, owners) {
+			return false
+		}
+		self.customOwners = maps.Clone(owners)
+		return true
+	}()
+	if changed {
+		self.customVersion.Update(func(version uint64) uint64 { return version + 1 })
+	}
 }
 
 // A count raised at each change to what the custom hosts present, and a channel that closes at the next: an install,
@@ -1276,12 +1329,14 @@ func (self *TlsCertManager) Sync(ctx context.Context) error {
 
 	names, err := self.names(ctx)
 	if err != nil {
+		self.setCustomOwners(nil)
 		return errors.Join(passErr, err)
 	}
 	networkSet, networkSetSha256, err := tlsCertNetworkSet(names)
 	if err != nil {
 		return errors.Join(passErr, err)
 	}
+	self.setCustomOwners(names.CustomHostOwners)
 	// read at each row, since an install may promote the pending key and drop the one it replaces
 	heldKey := func(spkiSha256 []byte) *TlsDeviceKey {
 		if len(spkiSha256) != sha256.Size {

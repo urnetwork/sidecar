@@ -129,6 +129,8 @@ type DnsZone struct {
 	// The serial of the zone's last write, zero before any.
 	Version    uint64             `json:"version"`
 	RecordSets []DnsZoneRecordSet `json:"record_sets"`
+	// The custom hosts mapped to owners this caller may publish or administer.
+	CustomHosts []DnsCustomHost `json:"custom_hosts,omitempty"`
 }
 
 // The zone's apex, <label>.<root>, canonical; empty while it has no label.

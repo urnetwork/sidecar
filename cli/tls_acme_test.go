@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -176,8 +177,8 @@ func TestUrTlsAccountRollSaysWhatItDid(t *testing.T) {
 // With no ACME directory configured, every account method refuses before it reaches a Sidecar, a CA or evs; create
 // and roll are a person's, confirmed, and create refuses terms not agreed first.
 func TestUrTlsAccountMethodsRefuseWithNoDirectory(t *testing.T) {
-	if urTlsCustomCommandSettings.DirectoryUrl != "" {
-		t.Fatalf("a default directory: %s", urTlsCustomCommandSettings.DirectoryUrl)
+	if urDesktopTlsSettings().DirectoryUrl == "" {
+		t.Fatal("the stock daemon needs its ACME directory")
 	}
 	methods := urTlsAccountMethods(&urDaemonNetwork{})
 	if len(methods) != 3 {
@@ -202,5 +203,12 @@ func TestUrTlsAccountMethodsRefuseWithNoDirectory(t *testing.T) {
 	}
 	if methods := urTlsAccountMethods(nil); methods != nil {
 		t.Fatalf("methods on a target that hosts no Sidecar")
+	}
+}
+
+func TestUrDesktopTlsReservesItsDaemonListeners(t *testing.T) {
+	listeners := []sidecar.DaemonLocalListenerStatus{{Addresses: []string{"127.0.0.1:18001", "[::1]:18001", "[::1]:18002"}}}
+	if got := urTlsDaemonPorts(listeners); !slices.Equal(got, []int{18001, 18002}) {
+		t.Fatalf("reserved daemon ports: %v", got)
 	}
 }

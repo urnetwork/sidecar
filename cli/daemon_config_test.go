@@ -347,3 +347,44 @@ func TestDaemonRunsOneFollowerASidecar(t *testing.T) {
 		t.Fatal("a bridge was built with no follower")
 	}
 }
+
+// The stock TLS installer attaches to an enrolled daemon's verified follower. The real publish handler then
+// evaluates the reserved system name, and removing the component makes that same handler unavailable again.
+func TestUrDesktopTlsInstallsTheDaemonPublisher(t *testing.T) {
+	world := newTestUrFollowWorld(t, 1)
+	network := world.networks[0]
+	running := world.host(network, nil)
+	world.saveBlock(network, 80)
+	world.standing(running, network)
+	service := &urDesktopTls{
+		running: running, follower: running.ConfigFollower(), stateDirectory: t.TempDir(), network: &urDaemonNetwork{},
+	}
+	if _, err := service.clientNames(world.ctx); err != nil {
+		t.Fatalf("client names from the verified config head: %v", err)
+	}
+	var publish *sidecar.DaemonMethod
+	for _, method := range sidecar.DaemonTlsMethods() {
+		if method.Name == sidecar.DaemonMethodTlsPublish {
+			publish = method
+		}
+	}
+	if publish == nil {
+		t.Fatal("the daemon has no TLS publish handler")
+	}
+	call := &sidecar.DaemonCall{Sidecar: running, Params: []byte(`{"host":"mta-sts","target":"8080"}`)}
+	if _, err := publish.Handler(world.ctx, call); !errors.Is(err, sidecar.ErrTlsComponentAbsent) {
+		t.Fatalf("publish before TLS installation: %v", err)
+	}
+	remove, err := service.install(world.ctx, sidecar.NewNoopLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer remove()
+	if _, err := publish.Handler(world.ctx, call); !errors.Is(err, sidecar.ErrTlsPublishHostTaken) {
+		t.Fatalf("reserved publish through installed TLS: %v", err)
+	}
+	remove()
+	if _, err := publish.Handler(world.ctx, call); !errors.Is(err, sidecar.ErrTlsComponentAbsent) {
+		t.Fatalf("publish after removing TLS: %v", err)
+	}
+}
