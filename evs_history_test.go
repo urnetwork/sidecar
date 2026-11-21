@@ -213,6 +213,47 @@ func TestEvsHistoryIsWholeAtAFirstCreationPastVersionOne(t *testing.T) {
 	}
 }
 
+// A signed lower entry can still be displayed. Reaching version 1 through it proves no coverage of the missing
+// file before a removal or the removal a re-creation named.
+func TestEvsHistoryKeepsASkippedPredecessorIncomplete(t *testing.T) {
+	ctx := t.Context()
+	for _, missing := range []string{"file", "removal"} {
+		world := newEvsTestWorld(t)
+		path := "history.txt"
+		world.push(&evsTestChange{path: path, content: []byte("first")})
+		world.push(&evsTestChange{path: path, content: []byte("second")})
+		world.push(&evsTestChange{path: path})
+		partial := "[3/removed 1/created]"
+		state := world.paths[path]
+		var restore func()
+		if missing == "removal" {
+			world.nextBaseVersion = 1
+			world.push(&evsTestChange{path: path, content: []byte("new life")})
+			removal := state.removals[3]
+			delete(state.removals, 3)
+			restore = func() { state.removals[3] = removal }
+			partial = "[4/created 2 1/created]"
+		} else {
+			file := state.versions[2]
+			delete(state.versions, 2)
+			restore = func() { state.versions[2] = file }
+		}
+		reader := world.reader(t, evsTestId("history reader"))
+		repo := reader.client.Repo(world.repoId)
+		history, err := repo.History(ctx, &EvsReadArgs{Path: path})
+		if err != nil || evsTestHistoryVersions(history) != partial || history.Whole {
+			t.Fatalf("missing %s, displayed history %+v: %v", missing, history, err)
+		}
+		if keys, err := repo.SlotKeysOf(ctx, nil, []string{path}); !errors.Is(err, ErrEvsSlotKeysIncomplete) || keys != nil {
+			t.Fatalf("missing %s, destructive history %v: %v", missing, keys, err)
+		}
+		restore()
+		if _, err := repo.SlotKeysOf(ctx, nil, []string{path}); err != nil {
+			t.Fatalf("restored %s: %v", missing, err)
+		}
+	}
+}
+
 // A read below a creation that evs refuses 503, as it refuses a read past its scan bound, ends the walk there with
 // BelowUnknown set and no error, and the walk asked from inside the life it could not reach fails as any read does.
 func TestEvsHistoryEndsBelowACreationEvsCannotRead(t *testing.T) {

@@ -58,7 +58,11 @@ func (self *MailEraser) segmentsListing(ctx context.Context, messages []mailEras
 			if err != nil {
 				return nil, err
 			}
-			if _, removedCount := mailSegmentWithout(content, month, messages); 0 < removedCount {
+			_, removedCount, err := mailSegmentWithout(content, month, messages)
+			if err != nil {
+				return nil, err
+			}
+			if 0 < removedCount {
 				listing = append(listing, &mailEraseSegment{segment: mailErasedSegment{Month: month, N: n}, byteCount: int64(len(content))})
 			}
 		}
@@ -66,9 +70,9 @@ func (self *MailEraser) segmentsListing(ctx context.Context, messages []mailEras
 	return listing, nil
 }
 
-// A segment's bytes without the rows of messages under month, and how many rows that took out. A segment that does
-// not parse keeps its bytes past the fault as they are, so nothing a reader could still read is dropped.
-func mailSegmentWithout(segment []byte, month MailYearMonth, messages []mailErasedMessage) ([]byte, int) {
+// A segment's bytes without the rows of messages under month, and how many rows that took out. A partial parse
+// cannot establish which rows remain or supply a replacement for the segment.
+func mailSegmentWithout(segment []byte, month MailYearMonth, messages []mailErasedMessage) ([]byte, int, error) {
 	kept := []byte{}
 	removedCount := 0
 	err := mailSegmentRecords(segment, func(index int, record []byte) error {
@@ -83,9 +87,9 @@ func mailSegmentWithout(segment []byte, month MailYearMonth, messages []mailEras
 		return nil
 	})
 	if err != nil {
-		return segment, 0
+		return nil, 0, err
 	}
-	return kept, removedCount
+	return kept, removedCount, nil
 }
 
 // The erasure's i/ parts over segments, the segments listing its messages, one at a time, the last one's ERASE
@@ -144,7 +148,10 @@ func (self *MailEraser) part(ctx context.Context, erasureId Id, segment mailEras
 		if err != nil {
 			return false, err
 		}
-		without, removedCount := mailSegmentWithout(content, segment.Month, messages)
+		without, removedCount, err := mailSegmentWithout(content, segment.Month, messages)
+		if err != nil {
+			return false, err
+		}
 		if removedCount == 0 {
 			// re-checkpointed already: a CLOSURE whose ERASE did not follow is Resume's
 			return false, nil
