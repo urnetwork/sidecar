@@ -104,6 +104,11 @@ type EvsFileInfo struct {
 	// ask, where evs no longer serves the push's record, where the push sealed none, a push from before the field,
 	// and on the forwarding role's legs: a caller reads nil as unknown, which is never an untainted run's word.
 	Provenance *EvsPushProvenance
+	// The version's versioning setting, its entry's: 0 kept, 1 versionless, 2 the index's (§11.7).
+	Versioning uint32
+	// Where a DROP that passed this device's checks lists the version and its window has not ended, drop_pending: the
+	// version reads, with its drop named (§11.9). Nil for every other version; a dropped one reads EvsDroppedError.
+	Drop *EvsDropState
 }
 
 // How a push's provenance reads (QD-159).
@@ -201,6 +206,8 @@ type EvsHistoryVersion struct {
 	// any other version.
 	DropId        Id
 	DropNotBefore time.Time
+	// That drop's signer, a repo admin at its auth pin, which MCP's evs_history names (§16.5); zero for any other version.
+	DropSignerId Id
 	// The entry_sha256 its statement's change names, a drop's list value (§11.7's action row); empty for a removal.
 	EntrySha256 []byte
 	// The path epoch its statement declares, which a drop's lineage starts from (DESIGN-DETAILS 10.2.4).

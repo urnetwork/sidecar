@@ -126,6 +126,18 @@ func gateUnknownRows(catalog *Catalog, gate string) []string {
 	return rowIds
 }
 
+// The catalog gate's cases some registered schedule of which the explorer runs in its short form (QD-1151;
+// exploreOneOrderCases), in row order.
+func gateOneOrderCases(catalog *Catalog, gate string) []string {
+	names := []string{}
+	for _, testCase := range catalog.GateCases(gate) {
+		if name := testCase.String(); slices.Contains(exploreOneOrderCases(), name) && !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
 // The cases catalog.yml flags store_clock among the catalog gate's, in row order.
 func gateStoreClockCases(catalog *Catalog, gate string) []string {
 	names := []string{}
@@ -138,18 +150,31 @@ func gateStoreClockCases(catalog *Catalog, gate string) []string {
 }
 
 // The item that says which of §22.8's rules every row of the catalog's gate runs under: the seeds on each tier, the
-// unknown list and the twins. Its tests hold the rules to what the item says.
+// explorer's short form and the cases taking it (QD-1151), the unknown list and the twins. Its tests hold the rules to
+// what the item says.
 func gateRulesItem(catalog *Catalog, gate string) *GateItem {
-	unknown := gateUnknownRows(catalog, gate)
-	unknownText := "none at this gate"
-	if 0 < len(unknown) {
-		unknownText = strings.Join(unknown, ", ")
+	listText := func(names []string) string {
+		if len(names) == 0 {
+			return "none at this gate"
+		}
+		return strings.Join(names, ", ")
 	}
 	return &GateItem{
-		Item: fmt.Sprintf("§22.8's rules on every row: on T2 each case's fixed schedule, its twin where it refuses, %d explorer seeds over both, every write's lost answer for the unknown list (%s) and each committed trace; on T3 the same with the nightly form's %d seeds, a forged case's twin among them; each row's FI checks after every step and at the end",
-			len(MergeSeeds()), unknownText, len(NightlySeeds())),
+		Item: fmt.Sprintf("§22.8's rules on every row: on T2 each case's fixed schedule, its twin where it refuses, %d explorer seeds over both, or the first alone, its report saying so, where the fixed run passed no barrier, no action outlived its step and the baton moved only as each step began (QD-1151; the cases with a schedule taking it: %s), every write's lost answer for the unknown list (%s) and each committed trace; on T3 the same with the nightly form's %d seeds, a forged case's twin among them; each row's FI checks after every step and at the end",
+			len(MergeSeeds()), listText(gateOneOrderCases(catalog, gate)), listText(gateUnknownRows(catalog, gate)), len(NightlySeeds())),
 		Tests: []*GateTest{
-			{Repo: "sidecar", Package: "./sidecartest/fault", Tags: "sidecar_testhooks", Names: []string{"TestGateRunsItsRowsUnderSection228sRules"}},
+			{Repo: "sidecar", Package: "./sidecartest/fault", Tags: "sidecar_testhooks", Names: []string{
+				"TestGateRunsItsRowsUnderSection228sRules",
+				"TestABarrierFreeScheduleRunsOneSeed",
+				"TestOneBarrierEventBringsBackEverySeed",
+				"TestABackgroundStepBringsBackEverySeed",
+				"TestAStepEndingWhenItsFaultFiresBringsBackEverySeed",
+				"TestAnActionStartingRunsOfItsOwnBringsBackEverySeed",
+				"TestAFirstSeedLeavingTheFixedOrderBringsBackEverySeed",
+				"TestAShortFormForACaseTheRulesItemLeavesOutFails",
+				"TestTheRulesItemNamesTheCasesTheExplorerRunsOneSeedFor",
+				"TestTheRulesItemNamesEveryCaseWithABarrierFreeScheduleAndNoOther",
+			}},
 			{Repo: "server", Package: "./sidecart3", Names: []string{"TestGateT3RunsTheNightlySeeds"}},
 		},
 	}

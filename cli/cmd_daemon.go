@@ -758,6 +758,9 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 	}
 	network.bridges = newUrBridgeDaemon(ctx, bridgeArgs)
 	defer network.bridges.close()
+	// §16.7's restore points, which ingest and run_restore share, and which each network's executed drops reach
+	// (MCP-M10-01's restore_drop.go)
+	restorePoints := mcp.NewRestorePoints(&mcp.RestorePointsArgs{Clock: settings.Clock, Ingest: settings.Ingest, Log: log})
 	if urlsErr != nil {
 		network.noSidecar = urlsErr.Error()
 		log.Warningf("[ur]%s", urlsErr)
@@ -770,6 +773,10 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 			runningLock.Lock()
 			runningSidecars[running] = true
 			runningLock.Unlock()
+			// an executed drop deletes the restore points' copies of what only its listed versions held (D-CORE-19)
+			if _, err := restorePoints.AddDropHolder(running); err != nil {
+				log.Warningf("[ur]a network's restore points take no drops: %s", err)
+			}
 			// its events reach the events method's ring (daemon_events.go) for as long as it runs, a logout's last
 			// state among them, so it stays attached
 			daemon.Events().Attach(running)
@@ -828,7 +835,7 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 	home, _ := os.UserHomeDir()
 	ingest := mcp.NewIngest(&mcp.IngestArgs{
 		Server:  mcpServer,
-		Restore: mcp.NewRestorePoints(&mcp.RestorePointsArgs{Clock: settings.Clock, Ingest: settings.Ingest, Log: log}),
+		Restore: restorePoints,
 		Home:    home,
 		Record:  settings.Record,
 		// §16.18's file events, which Ingest.FileEvents turns on (M6's, off by default): fsnotify on each run's worktree

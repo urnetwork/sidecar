@@ -73,6 +73,8 @@ type mcpResourceFamily struct {
 // The map of resource families a daemon serves.
 type McpResources struct {
 	server *McpServer
+	// the map's life, which its sender and each family's leases end with
+	ctx context.Context
 
 	stateLock sync.Mutex
 	families  []*mcpResourceFamily
@@ -84,9 +86,14 @@ type McpResources struct {
 
 // An empty map on server, whose notifications its sender sends until ctx ends.
 func NewMcpResources(ctx context.Context, server *McpServer) *McpResources {
-	self := &McpResources{server: server, pending: map[string]bool{}, wake: make(chan struct{}, 1)}
+	self := &McpResources{server: server, ctx: ctx, pending: map[string]bool{}, wake: make(chan struct{}, 1)}
 	go self.run(ctx)
 	return self
+}
+
+// The map's life: a family's lease that outlives a subscribe call ends with it.
+func (self *McpResources) context() context.Context {
+	return self.ctx
 }
 
 // A template's parts, or an error for one that is not ur://, leaves a variable unnamed or puts text after {+name}.
