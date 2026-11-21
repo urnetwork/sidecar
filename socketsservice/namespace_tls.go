@@ -517,6 +517,16 @@ func (self *TlsNamespaceHooks) addEntryWithLock(networkId connect.Id, entry *tls
 	self.networkEntries[networkId] = entry
 }
 
+// Reads the mail enablement row from the same cached facts as TLS. A cold network
+// asks the worker for a read and keeps its registration pending until the row is known.
+func (self *TlsNamespaceHooks) MailEnabled(ctx context.Context, networkId connect.Id) (bool, error) {
+	facts, loaded := self.facts(networkId, self.clock.Now())
+	if !loaded {
+		return false, ErrSocketListenUnavailable
+	}
+	return facts.MailNetwork, nil
+}
+
 // The network's facts at now, false while none have loaded. Asks a worker for a read when the network has none or
 // its facts are FactsRefreshInterval old, unless a read is asked for already or the last failed within
 // FactsRetryInterval. Never waits on the source.
