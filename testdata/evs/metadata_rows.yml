@@ -161,6 +161,7 @@ EvsHeadSummary.path_epoch: {number: 14, type: EvsPathEpoch, row: evs-3, sees: "p
 EvsHeadSummary.index_epoch: {number: 15, type: uint64, row: evs-3, sees: "its index_epoch"}
 EvsHeadSummary.deleted: {number: 16, type: bool, row: evs-3, sees: "(deleted)"}
 EvsHeadSummary.push_sequence: {number: 17, type: uint64, row: evs-24, sees: "the sequence value each ref's last commit raised"}
+EvsHeadSummary.supports_exact_head: {number: 18, type: bool, row: evs-3, sees: "whether the responding host supports EXACT_HEAD on a file-mode push"}
 EvsReadStatement.version: {number: 1, type: uint64, row: evs-14, sees: "versions 64n to 64n+63"}
 EvsReadStatement.statement: {number: 2, type: bytes, row: evs-14, sees: "their Signed EvsPush statements"}
 EvsReadPathReply.token_path: {number: 1, type: repeated bytes, row: evs-11, sees: "tokens t_i"}

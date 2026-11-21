@@ -176,7 +176,7 @@ for d in EX:
         items_by_id[it['id']] = (d['num'], it)
 
 DECIDED = re.compile(r'\*\*Decided by owner (2026-11-[01]\d) \(([^)]*)\):\*\*')
-AMENDED = re.compile(r'\*\*Amended by owner (2026-11-[01]\d) \(([^)]*)\)[^*]*:\*\*')
+AMENDED = re.compile(r'\*\*Amended by owner (2026-11-(?:0[1-9]|[12]\d|30)) \(([^)]*)\)[^*]*:\*\*')
 
 
 PEERC = '**Closed by peer review 2026-11-04:**'
