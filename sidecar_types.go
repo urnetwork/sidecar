@@ -215,9 +215,15 @@ type SidecarAction struct {
 	// (QD-740, QD-772). A decision spends only on an action whose Detail is its request's. Nil for none.
 	Detail *SidecarActionDetail
 	// How many distinct actions the agent asks a template's approval to cover (§16.6's multi-use row; QD-1010), filed
-	// as ApprovalRequest.uses, which approvers render and sign: 2 or more with a template (Canonical's scope = true),
-	// and 0 or 1, one use, with any other action. Any other pairing is refused (ErrApprovalUses).
+	// as ApprovalRequest.uses, which approvers render and sign: 2 or more with a template (Canonical's scope = true, or
+	// Template), and 0 or 1, one use, with any other action. Any other pairing is refused (ErrApprovalUses).
 	Uses uint32
+	// A template Canonical falls inside, of its kind (scope = true), built by the daemon as Canonical is, which the
+	// agent asks Uses of in the action's place (owner decision 613: mail_send's uses, NewMailTemplateAction): the gate
+	// spends a decision that covers the action as ever, and where none does it files the template's request, not the
+	// action's, and answers pending with the template's id, so this action and each later one that falls inside the
+	// template spend its uses once a person approves it. Nil for none.
+	Template []byte
 	// The agent's own words about the action, filed as ApprovalRequest.summary and shown to an approver as
 	// untrusted text, never as the action (D-MCP-17). Empty for none.
 	Summary string

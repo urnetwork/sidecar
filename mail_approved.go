@@ -100,7 +100,7 @@ func (self *MailApprovedRecipients) ApprovedAll(ctx context.Context, alias strin
 	}
 	now := self.client.clock.Now()
 	for _, recipient := range recipients {
-		record, err := mailRecipientApprovalRead(ctx, store, alias, recipient, self.settings())
+		record, _, err := mailRecipientApprovalRead(ctx, store, alias, recipient, self.settings())
 		if err != nil {
 			return false
 		}
@@ -116,10 +116,16 @@ func (self *MailApprovedRecipients) ApprovedAll(ctx context.Context, alias strin
 // once its delivery is done (the file header's record row). A use with no such decision, a harness one's, writes
 // nothing. A record that cannot be written is logged, naming no address, and the next send takes the gate.
 func (self *MailApprovedRecipients) Record(ctx context.Context, alias string, recipients []string, decisions [][]byte, action []byte) {
+	stored, err := ParseStoredCanonicalAction(action)
+	if err != nil || stored.Action.GetKind() != uint32(SidecarActionMail) || stored.Action.GetScope() || stored.Action.GetAlias() != alias || len(recipients) == 0 {
+		// A template spends a bounded number of uses in its run. Only a decision on a full message can stand for a pair.
+		return
+	}
+	payload := stored.PayloadSha256()
 	var chosen []byte
 	for _, storedSigned := range decisions {
 		decision, err := ParseStoredApprovalDecision(storedSigned)
-		if err != nil || decision.Decision == nil {
+		if err != nil || decision.Decision == nil || !bytes.Equal(decision.Decision.GetPayloadSha256(), payload[:]) {
 			continue
 		}
 		switch protocol.ApprovalChannel(decision.Decision.GetChannel()) {
@@ -130,7 +136,7 @@ func (self *MailApprovedRecipients) Record(ctx context.Context, alias string, re
 			break
 		}
 	}
-	if chosen == nil || len(action) == 0 || len(recipients) == 0 {
+	if chosen == nil {
 		return
 	}
 	store, err := self.store(ctx, alias)
@@ -139,6 +145,21 @@ func (self *MailApprovedRecipients) Record(ctx context.Context, alias string, re
 		return
 	}
 	for _, recipient := range recipients {
+		if !slices.Contains(stored.Action.GetRecipients(), recipient) {
+			continue
+		}
+		held, version, err := mailRecipientApprovalRead(ctx, store, alias, recipient, self.settings())
+		if err == nil {
+			// An older sender could have stored a bounded template here. A new approval over this exact
+			// message can replace that row at the version read. Every standing single-message approval is kept.
+			previous, err := ParseStoredCanonicalAction(held.GetAction())
+			if err != nil || held.GetAlias() != alias || held.GetRecipient() != recipient || previous.Action.GetKind() != uint32(SidecarActionMail) || !previous.Action.GetScope() {
+				continue
+			}
+		} else if !errors.Is(err, ErrEvsPathAbsent) {
+			self.client.log.Warningf("[mail]an approval record could not be read: %v", err)
+			continue
+		}
 		content, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.MailRecipientApproval{
 			Alias: alias, Recipient: recipient, Decision: bytes.Clone(chosen), Action: bytes.Clone(action),
 		})
@@ -147,7 +168,7 @@ func (self *MailApprovedRecipients) Record(ctx context.Context, alias string, re
 		}
 		path := MailRecipientApprovalPath(alias, recipient)
 		testHookBarrier("mail.approved.record.before", "")
-		_, err = store.Write(ctx, []*mailStoreWrite{{Path: path, Content: content, IfVersion: 0}})
+		_, err = store.Write(ctx, []*mailStoreWrite{{Path: path, Content: content, IfVersion: version}})
 		testHookBarrier("mail.approved.record.after", "")
 		if err != nil && !mailStoreConflictOn(err, path) {
 			self.client.log.Warningf("[mail]an approval record was not written: %v", err)
@@ -209,19 +230,16 @@ func (self *MailApprovedRecipients) settings() *MailOutboxSettings {
 }
 
 // The record approving recipient for alias in store.
-func mailRecipientApprovalRead(ctx context.Context, store mailStore, alias string, recipient string, settings *MailOutboxSettings) (*protocol.MailRecipientApproval, error) {
-	content, _, err := store.Read(ctx, MailRecipientApprovalPath(alias, recipient), settings.OutcomeRecordMaxByteCount)
-	if errors.Is(err, ErrEvsPathAbsent) {
-		return nil, ErrMailRecipientApproval
-	}
+func mailRecipientApprovalRead(ctx context.Context, store mailStore, alias string, recipient string, settings *MailOutboxSettings) (*protocol.MailRecipientApproval, uint64, error) {
+	content, version, err := store.Read(ctx, MailRecipientApprovalPath(alias, recipient), settings.OutcomeRecordMaxByteCount)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	record := &protocol.MailRecipientApproval{}
 	if err := proto.Unmarshal(content, record); err != nil {
-		return nil, ErrMailRecipientApproval
+		return nil, 0, ErrMailRecipientApproval
 	}
-	return record, nil
+	return record, version, nil
 }
 
 // Whether record approves (alias, recipient) for spender at P at now (the file header's verify row).
@@ -240,7 +258,7 @@ func mailRecipientApprovalVerify(record *protocol.MailRecipientApproval, alias s
 	if err != nil || action.Action == nil {
 		return refused("no action")
 	}
-	if SidecarActionKind(action.Action.GetKind()) != SidecarActionMail || action.Action.GetAlias() != alias ||
+	if SidecarActionKind(action.Action.GetKind()) != SidecarActionMail || action.Action.GetScope() || action.Action.GetAlias() != alias ||
 		!slices.Contains(action.Action.GetRecipients(), recipient) {
 		return refused("an action that does not send to the pair")
 	}
