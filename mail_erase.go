@@ -157,6 +157,8 @@ type mailEraseStore interface {
 	// Every retained version of path, newest first, each with the slots its records name and its push's time;
 	// ErrEvsPathAbsent where the path never stood.
 	Versions(ctx context.Context, path string) ([]*EvsHistoryVersion, error)
+	// The newest flag push, used to date trash even when older flag history is unavailable.
+	NewestPushTime(ctx context.Context, path string) (time.Time, error)
 	// One ERASE (evs_erase.go); one naming only keys gone already counts done.
 	Erase(ctx context.Context, args *EvsEraseArgs) error
 	// The committed ERASEs after afterVersion of the repo's erasure ref, oldest first, each with its note.
@@ -527,11 +529,24 @@ func (self *MailEraser) begin(ctx context.Context, erasureId Id, month MailYearM
 // to carry complete, the index's rewrite ends the erasure, by its last ERASE or a completion ERASE, or the last
 // orphan's ERASE does; one evs's state still shows incomplete then takes a completion ERASE here (QD-1132), so no
 // erasure reads done on this device alone. Fills erasure with where it stands.
-func (self *MailEraser) parts(ctx context.Context, erasure *MailErasure, messages []mailErasedMessage, index *mailEraseIndex, role IndexResumeRole, orphans []*EvsClosure) error {
+func (self *MailEraser) parts(ctx context.Context, erasure *MailErasure, messages []mailErasedMessage, index *mailEraseIndex, role IndexResumeRole, erasedKeys map[EvsErasedKey]bool) error {
 	segments, err := self.segmentsListing(ctx, messages)
 	if err != nil {
 		erasure.State = MailErasureRewriting
 		return err
+	}
+	// A competing CLOSURE can make a row disappear. Read the main ref after the segments so that a CLOSURE
+	// responsible for an already absent row is visible before deciding which ERASE can complete the operation.
+	closures, err := self.store.Closures(ctx)
+	if err != nil {
+		erasure.State = MailErasureRewriting
+		return err
+	}
+	var orphans []*EvsClosure
+	for _, closure := range closures {
+		if closure.ErasureId == erasure.ErasureId && slices.ContainsFunc(closure.Keys, func(key *EvsErasedKey) bool { return !erasedKeys[*key] }) {
+			orphans = append(orphans, closure)
+		}
 	}
 	mayComplete := true
 	// whether the index's rewrite was asked to end the erasure, a completion ERASE included
@@ -556,11 +571,10 @@ func (self *MailEraser) parts(ctx context.Context, erasure *MailErasure, message
 			return err
 		}
 	}
-	if err := self.rewrite(ctx, erasure, segments, messages, mayComplete); err != nil || erasure.State != MailErasureDone || 0 < len(segments) {
+	if err := self.rewrite(ctx, erasure, segments, messages, mayComplete); err != nil || erasure.State != MailErasureDone {
 		return err
 	}
-	// no i/ segment held a message, so no part's ERASE carried complete; an index asked to end the erasure sent its own
-	// completion, which is not sent twice, and a format-1 mailbox has none to send (COMPLETION is format 2's)
+	// Even the last segment's ERASE may have found its keys already gone and committed nothing.
 	return self.complete(ctx, erasure, index != nil && !indexEnds)
 }
 
@@ -576,6 +590,7 @@ func (self *MailEraser) complete(ctx context.Context, erasure *MailErasure, send
 		return err
 	}
 	if mailErasureComplete(erasures, erasure.ErasureId) {
+		erasure.State = MailErasureDone
 		return nil
 	}
 	erasure.State = MailErasureRewriting
@@ -651,7 +666,7 @@ func (self *MailEraser) Resume(ctx context.Context) ([]*MailErasure, error) {
 		complete bool
 		messages []mailErasedMessage
 		// the keys its ERASEs destroyed
-		erasedSlotIds map[Id]bool
+		erasedKeys map[EvsErasedKey]bool
 		// the device whose ERASE began it
 		eraserId Id
 	}
@@ -660,21 +675,20 @@ func (self *MailEraser) Resume(ctx context.Context) ([]*MailErasure, error) {
 	for _, erasure := range erasures {
 		state := byId[erasure.ErasureId]
 		if state == nil {
-			state = &standing{erasedSlotIds: map[Id]bool{}, eraserId: erasure.EraserSidecarId}
+			state = &standing{erasedKeys: map[EvsErasedKey]bool{}, eraserId: erasure.EraserSidecarId}
 			byId[erasure.ErasureId] = state
 			order = append(order, erasure.ErasureId)
 		}
 		state.complete = state.complete || erasure.Complete
+		if erasure.Completion {
+			continue
+		}
 		for _, key := range erasure.Keys {
-			state.erasedSlotIds[key.SlotId] = true
+			state.erasedKeys[*key] = true
 		}
 		if messages, _, ok := parseMailErasureNote(erasure.Note); ok {
 			state.messages = append(state.messages, messages...)
 		}
-	}
-	closures, err := self.store.Closures(ctx)
-	if err != nil {
-		return resumed, err
 	}
 	began := slices.Clone(resumed)
 	for _, erasureId := range order {
@@ -692,14 +706,7 @@ func (self *MailEraser) Resume(ctx context.Context) ([]*MailErasure, error) {
 			erasure.MessageIds = append(erasure.MessageIds, message.MessageId)
 		}
 		resumed = append(resumed, erasure)
-		// a CLOSURE no ERASE followed: its replaced chain's keys still stand
-		orphans := []*EvsClosure{}
-		for _, closure := range closures {
-			if closure.ErasureId == erasureId && slices.ContainsFunc(closure.Keys, func(key *EvsErasedKey) bool { return !state.erasedSlotIds[key.SlotId] }) {
-				orphans = append(orphans, closure)
-			}
-		}
-		err = self.parts(ctx, erasure, state.messages, index, self.resumeRole(state.eraserId), orphans)
+		err = self.parts(ctx, erasure, state.messages, index, self.resumeRole(state.eraserId), state.erasedKeys)
 		self.report(erasure)
 		if err != nil || erasure.State != MailErasureDone {
 			return resumed, err

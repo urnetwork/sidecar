@@ -980,3 +980,61 @@ func TestMailEraseFormat2EndsByItsOwnCompletionWhereAnOrphansEraseFoundItsKeysGo
 		t.Fatalf("mail's completion ERASE: %+v", completion)
 	}
 }
+
+// Runs an interleaving at the read that determines whether a segment still lists the row.
+type mailEraseRacingSegmentTestStore struct {
+	mailEraseStore
+	path       string
+	beforeRead func()
+}
+
+func (self *mailEraseRacingSegmentTestStore) Read(ctx context.Context, path string, maxByteCount int) ([]byte, uint64, error) {
+	if path == self.path && self.beforeRead != nil {
+		hook := self.beforeRead
+		self.beforeRead = nil
+		hook()
+	}
+	return self.mailEraseStore.Read(ctx, path, maxByteCount)
+}
+
+// The last mail row moves after Resume reads the erasure ref. The search index cannot end the erasure while the
+// CLOSURE that removed that row still has its old key.
+func TestMailEraseResumeFindsAClosureCommittedDuringTheSegmentScan(t *testing.T) {
+	ctx := t.Context()
+	world := newMailEraseIndexTestWorld(t)
+	ids := world.ingestMessages("One")
+	world.waiting = &SidecarErasure{State: SidecarErasureWaiting, NextTry: world.clock.Now().Add(time.Hour)}
+	eraser, _ := world.format2Eraser(NewId(), world.journal, nil)
+	begun, err := eraser.Erase(ctx, world.month, ids)
+	if err != nil || begun == nil || begun.State != MailErasureWaiting {
+		t.Fatalf("stopped erasure %+v: %v", begun, err)
+	}
+	world.waiting = nil
+	fresh, index := world.format2Eraser(eraser.sidecarId, world.journal, nil)
+	path := MailIndexPath(world.month, 0)
+	oldKeys, err := fresh.pathKeys(ctx, path)
+	if err != nil || len(oldKeys) == 0 {
+		t.Fatalf("old segment keys %v: %v", oldKeys, err)
+	}
+	other := fresh.store
+	fresh.store = &mailEraseRacingSegmentTestStore{mailEraseStore: other, path: path, beforeRead: func() {
+		content, version, err := other.Read(ctx, path, mailIndexSegmentReadMaxByteCount)
+		if err != nil {
+			t.Fatal(err)
+		}
+		without, count := mailSegmentWithout(content, world.month, []mailErasedMessage{{Month: world.month, MessageId: ids[0]}})
+		if count != 1 {
+			t.Fatalf("segment held %d requested rows", count)
+		}
+		if err := other.Closure(ctx, begun.ErasureId, path, without, version, oldKeys); err != nil {
+			t.Fatal(err)
+		}
+	}}
+	resumed, err := fresh.Resume(ctx)
+	if err != nil || len(resumed) != 1 || resumed[0].State != MailErasureDone || world.completeCount() != 1 {
+		t.Fatalf("resume %+v: %v", resumed, err)
+	}
+	if len(index.resumes) != 1 || index.resumes[0].Complete || world.eraseStore.slotHeld(oldKeys[0].SlotId) {
+		t.Fatal("the index completed while the removed row's slot was still open")
+	}
+}
