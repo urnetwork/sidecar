@@ -18,6 +18,8 @@ import (
 	"context"
 	"slices"
 	"sync"
+
+	"google.golang.org/protobuf/proto"
 )
 
 // Whether two outcomes say the same thing, their times aside.
@@ -35,6 +37,7 @@ func smtpOutcomeCopy(outcome *SmtpDomainOutcome) *SmtpDomainOutcome {
 		return nil
 	}
 	copied := *outcome
+	copied.progress = proto.CloneOf(outcome.progress)
 	return &copied
 }
 

@@ -374,13 +374,21 @@ func (self *DnsWatch) StrictChain(ctx context.Context, sniHost string, recipient
 	if !ok {
 		return false
 	}
-	return self.strict.strictChainHolds(ctx, &dnsWatchStrictRequest{
+	return dnsWatchStrictChain(ctx, self.strict, self.settings.UrnetworkZones, root, self.clock, sniHost, recipientDomains, spkiSha256)
+}
+
+// The watch and a stock mail receiver use the same customer-chain check and platform zone exclusions.
+func dnsWatchStrictChain(ctx context.Context, validator DnsWatchStrictValidator, platformZones []string, root string, clock Clock, sniHost string, recipientDomains []string, spkiSha256 []byte) bool {
+	if validator == nil || root == "" {
+		return false
+	}
+	return validator.strictChainHolds(ctx, &dnsWatchStrictRequest{
 		sniHost:          sniHost,
 		recipientDomains: slices.Clone(recipientDomains),
 		spkiSha256:       slices.Clone(spkiSha256),
-		urnetworkZones:   append(slices.Clone(self.settings.UrnetworkZones), root),
-		now:              self.clock.Now(),
-		clock:            self.clock,
+		urnetworkZones:   append(slices.Clone(platformZones), CanonicalDnsRecordName(root)),
+		now:              clock.Now(),
+		clock:            clock,
 	})
 }
 
