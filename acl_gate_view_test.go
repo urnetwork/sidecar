@@ -320,6 +320,19 @@ func TestAclGateViewDnsAdmin(t *testing.T) {
 	}
 }
 
+func TestAclGateViewDnsReceiverReadsOneSnapshot(t *testing.T) {
+	world := newAclGateViewWorld(t)
+	receiver := AclSidecarSubject(world.receiver)
+	for _, scope := range []string{"", "unbound"} {
+		before, _ := world.states.asked()
+		decision := world.view.MayReceiveByScopeLabel(world.networkId, receiver, scope, aclTestNow)
+		after, _ := world.states.asked()
+		if after != before+1 || decision.Allowed != (scope == "") || (scope != "" && decision.Reason != AclReasonNoState) {
+			t.Errorf("receiver scope %q, snapshot reads %d, decision %+v", scope, after-before, decision)
+		}
+	}
+}
+
 // The hard denies only servers know: a halted network, a standing this build does not know, one the host has not
 // loaded, a network over its limit, and a network the cache has not loaded, which the view asks the cache to load.
 func TestAclGateViewFoldsInTheServersHardDenies(t *testing.T) {
