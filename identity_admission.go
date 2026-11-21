@@ -60,6 +60,7 @@ func (self *Sidecar) Admitted() bool {
 	return self.admittedBy(self.authority())
 }
 
+// Checks the current identity's admission, revocation and expiry against the supplied authority.
 func (self *Sidecar) admittedBy(authority SidecarAuthority) bool {
 	identity := self.currentIdentity()
 	if authority == nil || identity == nil {

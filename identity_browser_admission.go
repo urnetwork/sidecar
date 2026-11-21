@@ -21,12 +21,14 @@ const (
 
 var ErrBrowserAdmissionConfirmation = errors.New("compare the browser safety number and confirm the displayed admission on the consented device")
 
+// The requested page or burner mode. A burner also names its mailbox and when access expires.
 type BrowserAdmissionTerms struct {
 	Mode       string `json:"mode"`
 	MailboxId  Id     `json:"mailbox_id"`
 	NotAfterMs int64  `json:"not_after_ms"`
 }
 
+// The terms and safety number shown on the consenting device, scoped to its network and member.
 type BrowserAdmissionPreview struct {
 	Terms        BrowserAdmissionTerms `json:"terms"`
 	SafetyNumber string                `json:"safety_number"`
@@ -34,11 +36,13 @@ type BrowserAdmissionPreview struct {
 	MemberId     Id                    `json:"member_id"`
 }
 
+// Encodes the mode, mailbox and expiry in the order used to derive the approval item's id.
 func (terms *BrowserAdmissionTerms) identityBytes() []byte {
 	value := append([]byte(terms.Mode), terms.MailboxId.Bytes()...)
 	return binary.BigEndian.AppendUint64(value, uint64(terms.NotAfterMs))
 }
 
+// Context key for the terms the person confirmed on the consenting device.
 type browserAdmissionConfirmation struct{}
 
 // Only a live mailbox owned by the authenticated member is available for the burner's one explicit share.
@@ -54,10 +58,12 @@ func (authority *ConfigAuthority) BrowserMailbox(memberId, mailboxId Id) *protoc
 	return repo
 }
 
+// Looks up a live mailbox owned by the member sharing it with a burner.
 type browserMailboxAuthority interface {
 	BrowserMailbox(Id, Id) *protocol.AclRepo
 }
 
+// Identifies the admission that must land before the browser's owner confirmation or mailbox share can be posted.
 type browserAdmissionDependency struct {
 	target Id
 	digest [sha256.Size]byte
@@ -100,6 +106,7 @@ func (record *sidecarAlarmRecord) browserItem(target, member Id, key []byte) *si
 	return nil
 }
 
+// Reads the saved approval item for this member, browser sidecar and identity key.
 func (self *Sidecar) previousBrowserApproval(target, member Id, key []byte) (*sidecarApprovalRecord, error) {
 	self.alarms.stateLock.Lock()
 	defer self.alarms.stateLock.Unlock()
@@ -110,6 +117,7 @@ func (self *Sidecar) previousBrowserApproval(target, member Id, key []byte) (*si
 	return record.browserItem(target, member, key), nil
 }
 
+// Resolves the browser's binding and allowed terms, preserving the original mailbox and expiry on burner retries.
 func (self *Sidecar) browserAdmissionRequest(ctx context.Context, target Id, terms BrowserAdmissionTerms) (*SidecarAdmissionRequest, string, error) {
 	identity, authority := self.currentIdentity(), self.authority()
 	if identity == nil || authority == nil || authority.Pin() == nil {
@@ -163,7 +171,7 @@ func (self *Sidecar) browserAdmissionRequest(ctx context.Context, target Id, ter
 		Capabilities: caps, browser: &terms}, number, nil
 }
 
-// PreviewBrowserAdmission verifies the current binding and computes the safety number on the signer's own anchor.
+// Verifies the current binding and computes the safety number from the signer's own genesis anchor.
 func (self *Sidecar) PreviewBrowserAdmission(ctx context.Context, target Id, terms BrowserAdmissionTerms) (*BrowserAdmissionPreview, error) {
 	request, number, err := self.browserAdmissionRequest(ctx, target, terms)
 	if err != nil {
@@ -176,7 +184,7 @@ func (self *Sidecar) PreviewBrowserAdmission(ctx context.Context, target Id, ter
 	return &BrowserAdmissionPreview{Terms: *request.browser, SafetyNumber: number, NetworkId: identity.NetworkId, MemberId: request.MemberId}, nil
 }
 
-// ConfirmBrowserAdmission rechecks the current member and mode after the person compares both devices.
+// Rechecks the displayed network, member, safety number and terms before completing the admission.
 func (self *Sidecar) ConfirmBrowserAdmission(ctx context.Context, target Id, preview BrowserAdmissionPreview, check SidecarPresenceCheck) error {
 	terms := preview.Terms
 	request, actual, err := self.browserAdmissionRequest(ctx, target, terms)
@@ -242,6 +250,7 @@ func (self *Sidecar) ConfirmBrowserAdmission(ctx context.Context, target Id, pre
 	return self.DecideApproval(context.WithValue(ctx, browserAdmissionConfirmation{}, &terms), item, SidecarDecisionApprove, SidecarActConfirmed, check)
 }
 
+// Matches the landed burner admission to the saved approval and finishes the mailbox share if it is still missing.
 func (self *Sidecar) completeBrowserBurner(ctx context.Context, request *SidecarAdmissionRequest, row *bridge.SidecarRow, check SidecarPresenceCheck) error {
 	item, err := self.previousBrowserApproval(request.SidecarId, request.MemberId, request.IdentityPublicKey)
 	if err != nil {
@@ -292,10 +301,12 @@ func (self *Sidecar) completeBrowserBurner(ctx context.Context, request *Sidecar
 	return self.runOneStatement(ctx, SidecarActConfirmed, check, bridge.SignedType_SIGNED_EVS_SHARE, request.burnerShare())
 }
 
+// Builds the expiring share for the approved mailbox and browser sidecar.
 func (request *SidecarAdmissionRequest) burnerShare() *protocol.EvsShare {
 	return &protocol.EvsShare{RepoId: request.browser.MailboxId.Bytes(), Subject: request.SidecarId.Bytes(), Expires: request.browser.NotAfterMs}
 }
 
+// Submits the ephemeral admission and its dependent mailbox share in one act.
 func (self *Sidecar) admitBrowserBurner(ctx context.Context, request *SidecarAdmissionRequest, origin SidecarActOrigin, check SidecarPresenceCheck) error {
 	act, err := self.newAct(origin)
 	if err != nil {

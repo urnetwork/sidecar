@@ -311,11 +311,13 @@ func (self *Sidecar) statementTime() time.Time {
 	return self.clock.Now()
 }
 
+// Adds the configured timeout to the statement clock, limiting the timeout to the verifier's maximum lifetime.
 func (self *Sidecar) statementNotAfterMs() int64 {
 	timeout := min(self.settings.statementTimeout(), time.Duration(configStatementMaxLifetimeMs)*time.Millisecond)
 	return self.statementTime().Add(timeout).UnixMilli()
 }
 
+// Uses the sidecar's expiry policy for each statement header the act prepares.
 func (self *sidecarAct) notAfterMs() int64 {
 	return self.sidecar.statementNotAfterMs()
 }

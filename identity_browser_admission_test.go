@@ -61,7 +61,10 @@ func TestBrowserApprovalsMakeTheExpectedReposReadableOnTheVerifiedLog(t *testing
 		for _, repo := range []struct {
 			id   Id
 			kind protocol.RepoKind
-		}{{vault, protocol.RepoKind_REPO_KIND_VAULT}, {mailbox, protocol.RepoKind_REPO_KIND_MAILBOX}} {
+		}{
+			{id: vault, kind: protocol.RepoKind_REPO_KIND_VAULT},
+			{id: mailbox, kind: protocol.RepoKind_REPO_KIND_MAILBOX},
+		} {
 			w.net.mustPost(w.net.owner, bridge.SignedType_SIGNED_REPO_CREATE, &protocol.RepoCreate{Header: w.net.header(), RepoId: repo.id.Bytes(), Kind: repo.kind})
 		}
 	})
