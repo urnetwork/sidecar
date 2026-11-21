@@ -133,8 +133,15 @@ func TestMailSearchJoinAnswersFromFlagsAndScores(t *testing.T) {
 	if flagsOf(testMailMailboxId, month, 2) != nil {
 		t.Fatal("a join that never synced answered")
 	}
+	if join.pinRepo(testMailMailboxId) != nil {
+		t.Fatal("unopened mailbox accepted as a search view")
+	}
 	if err := join.Sync(ctx); err != nil {
 		t.Fatal(err)
+	}
+	pinned := join.pinRepo(testMailMailboxId)
+	if pinned == nil || !pinned() || join.pinRepo(NewId()) != nil {
+		t.Fatal("mail scope must follow its held flag table")
 	}
 	reads := mailbox.readCount + group.readCount
 	if flags := flagsOf(testMailMailboxId, month, 1); flags == nil || flags.Spam || flags.Trash || flags.Seen || flags.Flagged || len(flags.Labels) != 0 {
@@ -176,8 +183,14 @@ func TestMailSearchJoinAnswersFromFlagsAndScores(t *testing.T) {
 		t.Fatalf("a sync inside the interval read again: %v", err)
 	}
 	join.Invalidate()
+	if pinned() {
+		t.Fatal("an invalidated flag table retained its search hits")
+	}
 	if err := join.Sync(ctx); err != nil || !flagsOf(testMailMailboxId, month, 1).Trash {
 		t.Fatalf("a sync after a write was said: %v", err)
+	}
+	if pinned() || join.pinRepo(testMailMailboxId) == nil {
+		t.Fatal("refresh must establish new hits without reopening the previous table")
 	}
 	testMailFlag(t, mailbox, 1, &MailFlagChange{Month: month, MessageId: testMailId(1), Kind: protocol.MailFlagKind_MAIL_FLAG_TRASH, Set: false})
 	clock.now = clock.now.Add(DefaultMailSearchSettings().RefreshInterval)

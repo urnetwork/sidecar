@@ -121,6 +121,8 @@ type MailSearchJoin struct {
 	stale bool
 	// messages the last sync left out past MessageMaxCount
 	leftOut int
+	// Changes with the local flag table so cursors cannot retain an earlier view.
+	revision uint64
 }
 
 // A join over args' stores, holding nothing until it syncs.
@@ -147,6 +149,7 @@ func (self *MailSearchJoin) Invalidate() {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.stale = true
+	self.revision++
 }
 
 // Whether the table still answers for now.
@@ -169,6 +172,7 @@ func (self *MailSearchJoin) Sync(ctx context.Context) error {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		self.stale = false
+		self.synced = false
 	}()
 	self.reader.Invalidate()
 	defer self.reader.Invalidate()
@@ -232,6 +236,7 @@ func (self *MailSearchJoin) Sync(ctx context.Context) error {
 	defer self.stateLock.Unlock()
 	self.months, self.groupIds, self.leftOut = months, groupIds, leftOut
 	self.synced, self.syncedAt = true, self.clock.Now()
+	self.revision++
 	return nil
 }
 

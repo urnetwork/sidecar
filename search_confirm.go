@@ -173,9 +173,10 @@ type searchConfirmer struct {
 	display SearchDisplaySource
 	// The repo's class's registered fields: §16.8's for record logs, §16.11's for the directory; nil for files and
 	// mail.
-	registry *IndexFieldRegistry
-	settings *SearchResultSettings
-	repoId   Id
+	registry  *IndexFieldRegistry
+	settings  *SearchResultSettings
+	repoId    Id
+	acceptRow func(*indexRow) bool
 }
 
 // A row's values as a confirmation reads them, normalized and padded once each.
@@ -279,6 +280,9 @@ func (self *searchConfirmer) filtersHold(texts *searchRowTexts) (bool, error) {
 
 // Checks one candidate: its filters, then its text where this host holds it, else its display fields.
 func (self *searchConfirmer) confirm(ctx context.Context, candidate *searchConfirmCandidate) (*searchConfirmation, error) {
+	if self.acceptRow != nil && !self.acceptRow(candidate.row) {
+		return &searchConfirmation{state: searchMatchRejected}, nil
+	}
 	texts := &searchRowTexts{normalizer: self.normalizer, row: candidate.row, padded: map[int]string{}}
 	if holds, err := self.filtersHold(texts); err != nil || !holds {
 		return &searchConfirmation{state: searchMatchRejected}, err

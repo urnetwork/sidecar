@@ -68,6 +68,9 @@ func (self *memberIndexSource) readable() bool {
 	if row == nil || len(row.GetPrefixRules()) != 0 || row.Kind != self.kind || indexRepoExcluded(row.Kind) {
 		return false
 	}
+	if (AclRepoIsInbox(row) || row.Kind == protocol.RepoKind_REPO_KIND_MAILBOX) && self.member.heldMail(id) == nil {
+		return false
+	}
 	rights := acl.EvsAccess(AclSidecarSubject(self.member.record.writer.sidecarId), id, AclTokenAudienceEvs, self.member.host.running.clock.Now()).Rights
 	return rights.Has(AclEvsRead) && (!aclRepoKindOwnerBound(row.Kind) || rights.Has(AclEvsWrite))
 }
