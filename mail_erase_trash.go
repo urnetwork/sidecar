@@ -124,12 +124,12 @@ func (self *MailEraser) trashDue(ctx context.Context, month MailYearMonth, now t
 		if err := merger.addSegment(segment); err != nil && !errors.Is(err, ErrMailSegmentInvalid) {
 			return nil, 0, err
 		}
-		versions, err := self.store.Versions(ctx, path)
+		pushed, err := self.store.NewestPushTime(ctx, path)
 		if err != nil {
 			return nil, 0, err
 		}
-		if 0 < len(versions) && lastPush.Before(versions[0].Time) {
-			lastPush = versions[0].Time
+		if lastPush.Before(pushed) {
+			lastPush = pushed
 		}
 	}
 	for _, op := range merger.winners() {
@@ -152,4 +152,16 @@ func (self *MailEraser) trashDue(ctx context.Context, month MailYearMonth, now t
 		due = append(due, messageId)
 	}
 	return due, waiting, nil
+}
+
+// Reads the signed time of the newest flag update. Only destructive slot discovery needs proof about earlier lives.
+func (self *mailEraseEvsStore) NewestPushTime(ctx context.Context, path string) (time.Time, error) {
+	history, err := self.repo.History(ctx, &EvsReadArgs{RefName: self.refName, Path: path, Fresh: true, NewestLife: true})
+	if err != nil {
+		return time.Time{}, err
+	}
+	if len(history.Versions) == 0 {
+		return time.Time{}, ErrEvsReplyInvalid
+	}
+	return history.Versions[0].Time, nil
 }

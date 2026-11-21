@@ -27,9 +27,8 @@
 //	          between is named by another ERASE of the same erasure before the removal goes again; the ERASE goes
 //	          first, so a crash between leaves no version openable and only the removal to finish, which
 //	          ResumeVaultDeletions, or the delete called again, finishes from evs's erasures on any of the owner's
-//	          devices (§11.12's reconcile row); a path no slot or walk reaches, a general repo's or one removed
-//	          without this ERASE, which History cannot walk until evs serves a removed path's versions (QD-672,
-//	          question mail-m8-02-history-of-a-removed-path), is refused, never answered shredded
+//	          devices (§11.12's reconcile row); deletion needs a complete history through every earlier life
+//	          and the slots its versions name (QD-1109)
 //	erased    an entry a committed vault ERASE names is never read again, since a version whose slot key is gone
 //	          reads as tamper; its id never takes a new entry
 //	never     no index covers vault/ (D-MAIL-16, D-EVS-43), since a mailbox's other readers may not read it, and this
@@ -965,39 +964,9 @@ type mailVaultEvsStore struct {
 	*mailEvsStore
 }
 
-// History's walk, page after page of HistoryVersionCount, to the path's first version, each version below the one
-// before it. A walk that stops descending ends there: evs answers a read by number of a removed path's older version
-// with the removal again, so History of a removed path repeats its removal and reaches none of the versions before
-// it, until evs serves them by number and History stops such a walk itself (QD-672, question
-// mail-m8-02-history-of-a-removed-path); shred then refuses unless the vault erased them first.
+// The complete slot inventory for vault deletion and mail erasure, including versions below removals (QD-1109).
 func (self *mailVaultEvsStore) Versions(ctx context.Context, path string) ([]*EvsHistoryVersion, error) {
-	versions := []*EvsHistoryVersion{}
-	pageCount := self.repo.client.settings.HistoryVersionCount
-	for next := uint64(0); ; {
-		history, err := self.repo.History(ctx, &EvsReadArgs{RefName: self.refName, Path: path, Version: next, Fresh: next == 0})
-		if errors.Is(err, ErrEvsPathAbsent) && 0 < len(versions) {
-			return versions, nil
-		}
-		if err != nil {
-			return nil, err
-		}
-		descended := false
-		for _, version := range history.Versions {
-			if 0 < len(versions) && versions[len(versions)-1].Version <= version.Version {
-				continue
-			}
-			versions = append(versions, version)
-			descended = true
-		}
-		if !descended {
-			return versions, nil
-		}
-		last := versions[len(versions)-1]
-		if len(history.Versions) < pageCount || last.Version <= 1 {
-			return versions, nil
-		}
-		next = last.Version - 1
-	}
+	return self.repo.erasureVersions(ctx, self.refName, path)
 }
 
 // A removal through evs, held to ifVersion.
