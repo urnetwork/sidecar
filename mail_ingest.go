@@ -11,10 +11,9 @@
 //	          write deposits §16.8's read receipts, which are the record's and are left alone; one with no right to
 //	          deposit there is consumed unrecorded; a pin this device does not hold yet leaves the deposit for a later
 //	          pass
-//	erased    a message a committed ERASE names is never written again (FS-13): its deposit is consumed with no
-//	          message, opened or not, since the ERASE took the deposit's slot too. The eraser removes no m/ path
-//	          (mail_erase.go), so an erasure that commits after this pass read the erasure ref still meets the path
-//	          standing, which is the 409 below
+//	erased    a signed ERASE consumes its deposit without a message. If a deposit-only ERASE races the mailbox push,
+//	          the post-commit check withholds callbacks. Readers mask the signed message id and a repo admin's next
+//	          pass destroys any new body and index slots under the original erasure id (mail_erase_late.go)
 //	trailer   the plaintext splits into the message and its MailDeposit (mail_ingest_reader.go); one that does not
 //	          split, or names no recipient, is consumed unrecorded, and one of an unknown version or past this
 //	          reader's bound stands for a reader that knows it
