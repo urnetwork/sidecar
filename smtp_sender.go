@@ -11,6 +11,8 @@
 //	          values' room (AssembleSmtpMessage); a message assembly refuses fails at every domain, with a DSN
 //	mode      the domain's pin's post-TLS mode, else BDAT, declares the count (plan-SMTP-preamble-byte-count);
 //	          a mismatch reconnects once with the other count and retry_of_send_id, a second is deferred
+//	envelope  MAIL FROM is the message's Sender, or what SmtpSenderArgs.Envelope answers at each attempt: the
+//	          bounce address at the envelope the edge derives then, which strict mode moves (QD-1129)
 //	outcomes  sent; queued (no ready key set: the host only queues, D-SMTP-18); deferred with retry_after_ms
 //	          (HALTED, QUOTA, TRY_LATER, KEYS, a temporary failure, a host whose cap is under the bytes, the day's
 //	          retry units spent); too_large with the bytes and the cap; refused with the MX's code; tls_refused
@@ -103,6 +105,12 @@ type SmtpSenderArgs struct {
 	ReachGrant func(message *SmtpOutboundMessage) *SmtpReachGrant
 	// Where mail_send events go (the Sidecar's emitEvent); nil raises none.
 	Events func(event SidecarEvent)
+	// The envelope sender a domain's connections take for a message whose header From is in headerFromDomain, asked
+	// at each attempt once its proving slot is held: MAIL's bounce address at the envelope the edge derives now from
+	// the network's custom domains in strict mode (MailClient.BounceSender; QD-1129), since a strict-mode MX host
+	// mapped or unmapped after the message was queued moves it, and MAIL FROM away from the edge's envelope is a cut
+	// (§14.7). Nil sends at the message's own Sender. An error holds the domain's send for its next retry.
+	Envelope func(ctx context.Context, headerFromDomain string) (string, error)
 	// The preamble frames' bound; nil is DefaultSmtpFrameSettings'.
 	Frame *SmtpFrameSettings
 	// Must have passed validate.
@@ -647,6 +655,14 @@ func (self *SmtpSender) sendDomain(ctx context.Context, plan *smtpSendPlan, doma
 		return scheduled("")
 	}
 	defer release()
+	// the envelope as the edge derives it now, read once the slot is held so no wait for it can stale the read
+	sender := message.Sender
+	if self.args.Envelope != nil {
+		sender, err = self.args.Envelope(ctx, plan.wire.HeaderFromDomain())
+		if err != nil {
+			return scheduled("")
+		}
+	}
 
 	keySetIndex := 0
 	reconnected, envelopeRetried, resent := false, false, false
@@ -665,7 +681,7 @@ func (self *SmtpSender) sendDomain(ctx context.Context, plan *smtpSendPlan, doma
 		connectionResult := self.connection.Run(ctx, &smtpConnectionArgs{
 			EffectKey:             message.EffectKey,
 			Wire:                  plan.wire,
-			SenderAddress:         message.Sender,
+			SenderAddress:         sender,
 			RecipientDomain:       domain,
 			RecipientLocals:       locals,
 			Flags:                 message.Flags,
@@ -706,6 +722,11 @@ func (self *SmtpSender) sendDomain(ctx context.Context, plan *smtpSendPlan, doma
 				continue
 			}
 			next, held := self.retry.Hold(message.CreateTime, self.clock.Now(), self.settings.KeysRetryTimeout)
+			return hold(next, held, "")
+		case connectionResult.EnvelopeRefused:
+			// the edge's facts and this attempt's strict domains differ: the next attempt reads them again once the
+			// edge's refresh has passed (QD-1154)
+			next, held := self.retry.Hold(message.CreateTime, self.clock.Now(), self.settings.EnvelopeRetryTimeout)
 			return hold(next, held, "")
 		}
 		switch connectionResult.PreambleCode {

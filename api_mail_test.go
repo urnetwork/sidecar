@@ -3,12 +3,17 @@
 package sidecar
 
 // POST /mail/enable and GET /mail/status on SidecarApi (MAIL-M7-22): each sends its request with the client JWT and
-// no body, reads its answer, refuses one that is not its shape, and gives a refusal as a SidecarApiError.
+// no body, reads its answer, refuses one that is not its shape, and gives a refusal as a SidecarApiError. GET
+// /mail/status names the network's custom domains in strict mode (QD-1129), each a domain name a sender may put in
+// MAIL FROM, or the answer is refused whole.
 
 import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -33,13 +38,13 @@ func TestSidecarApiMailEnableSendsNoBodyAndReadsItsTime(t *testing.T) {
 }
 
 func TestSidecarApiMailStatusReadsItsBody(t *testing.T) {
-	transport := answerWith(http.StatusOK, `{"enabled":true,"storage_full":false,"spent":true,"direct_mx":false}`)
+	transport := answerWith(http.StatusOK, `{"enabled":true,"storage_full":false,"spent":true,"direct_mx":false,"strict_domains":[]}`)
 	api := newTestSidecarApi(t, transport)
 	status, err := api.MailStatus(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if *status != (MailNetworkStatus{Enabled: true, Spent: true}) {
+	if !status.Enabled || status.StorageFull || !status.Spent || status.DirectMx || status.StrictDomains == nil || len(status.StrictDomains) != 0 {
 		t.Errorf("status %+v", status)
 	}
 	request, body := transport.onlyRequest(t)
@@ -61,9 +66,14 @@ func TestSidecarApiMailRoutesRefuseAnAnswerThatIsNotTheirShape(t *testing.T) {
 	}
 	for _, body := range []string{
 		`{}`,
-		`{"enabled":true,"storage_full":false,"spent":false}`,
-		`{"enabled":true,"storage_full":false,"direct_mx":false}`,
-		`{"enabled":"yes","storage_full":false,"spent":false,"direct_mx":false}`,
+		`{"enabled":true,"storage_full":false,"spent":false,"strict_domains":[]}`,
+		`{"enabled":true,"storage_full":false,"direct_mx":false,"strict_domains":[]}`,
+		`{"enabled":"yes","storage_full":false,"spent":false,"direct_mx":false,"strict_domains":[]}`,
+		// an answer of a server before QD-1129, which names no strict domains: whether a custom domain's envelope moved
+		// is unknown, so it is no answer to send by
+		`{"enabled":true,"storage_full":false,"spent":false,"direct_mx":false}`,
+		`{"enabled":true,"storage_full":false,"spent":false,"direct_mx":false,"strict_domains":null}`,
+		`{"enabled":true,"storage_full":false,"spent":false,"direct_mx":false,"strict_domains":"brand.example"}`,
 		`[]`,
 	} {
 		api := newTestSidecarApi(t, answerWith(http.StatusOK, body))
@@ -84,5 +94,49 @@ func TestSidecarApiMailRoutesRefusal(t *testing.T) {
 	_, err = api.MailStatus(context.Background())
 	if apiErr := asSidecarApiError(t, err); apiErr.Route != sidecarMailStatusRoute || apiErr.Status != http.StatusServiceUnavailable {
 		t.Errorf("%+v", apiErr)
+	}
+}
+
+// The strict domains come as the server names them, each a name a sender may put in MAIL FROM under b.: two or more
+// lowercase LDH labels, with room for b. above it. Any other entry refuses the whole answer, since a sender would
+// otherwise send at an envelope the edge never derives.
+func TestSidecarApiMailStatusNamesTheStrictDomains(t *testing.T) {
+	transport := answerWith(http.StatusOK, `{"enabled":true,"storage_full":false,"spent":false,"direct_mx":false,`+
+		`"strict_domains":["brand.example","mail.shop.example"]}`)
+	status, err := newTestSidecarApi(t, transport).MailStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(status.StrictDomains, []string{"brand.example", "mail.shop.example"}) {
+		t.Fatalf("strict %v", status.StrictDomains)
+	}
+	// the longest name that leaves room for b. is taken, one octet more is not
+	long := strings.Repeat(strings.Repeat("a", 63)+".", 3) + strings.Repeat("a", 59)
+	if len("b."+long) != 253 {
+		t.Fatalf("a bad fixture: %d", len(long))
+	}
+	for _, c := range []struct {
+		domain string
+		taken  bool
+	}{
+		{domain: long, taken: true},
+		{domain: long + "a", taken: false},
+		{domain: "example", taken: false},
+		{domain: "Brand.example", taken: false},
+		{domain: "brand.example.", taken: false},
+		{domain: "-brand.example", taken: false},
+		{domain: "brand..example", taken: false},
+		{domain: "brand.example>", taken: false},
+		{domain: "", taken: false},
+	} {
+		body := `{"enabled":true,"storage_full":false,"spent":false,"direct_mx":false,"strict_domains":["brand.example",` +
+			strconv.Quote(c.domain) + `]}`
+		status, err := newTestSidecarApi(t, answerWith(http.StatusOK, body)).MailStatus(context.Background())
+		switch {
+		case c.taken && (err != nil || !slices.Equal(status.StrictDomains, []string{"brand.example", c.domain})):
+			t.Errorf("%q: %v %v", c.domain, status, err)
+		case !c.taken && !errors.Is(err, ErrSidecarApiReply):
+			t.Errorf("%q: %v, want a malformed reply", c.domain, err)
+		}
 	}
 }

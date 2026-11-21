@@ -40,6 +40,9 @@ message SmtpPreambleResult {     // 0x1602, edge -> sidecar
   string mx_host = 7;
   bytes dnssec_chain = 8;         // MX, TLSA RRsets with RRSIGs (TL1)
   repeated string ehlo_keywords = 9;  // pre-TLS hints only; Z8 proves the post-TLS reply
+  string envelope_domain = 10;    // OK only: the envelope_domain the edge derived from the ticket's network, which Z4
+                                  //   holds MAIL FROM to; the sidecar resets before any record where its own differs
+                                  //   and never sends at this one (QD-1154)
 }
 message SmtpProof {              // 0x1605, RPC sidecar -> edge (M9)
   bytes send_id = 1;

@@ -141,6 +141,8 @@ func NewSmtpSendWorld(t testing.TB, settings *SmtpSendWorldSettings) *SmtpSendWo
 	edgeSettings := settings.Edge
 	if edgeSettings == nil {
 		edgeSettings = DefaultStubSmtpEdgeSettings()
+		// the envelope a real edge derives for the world's network, which it names back (QD-1154)
+		edgeSettings.EnvelopeDomain = "b." + networkDomain
 	}
 	worldSettings := DefaultMxWorldSettings()
 	worldSettings.Clock = clock

@@ -194,14 +194,15 @@ func (self *StubSmtpEdge) Serve(ctx context.Context, conn net.Conn) error {
 	token := make([]byte, 16)
 	rand.Read(token)
 	result := &protocol.SmtpPreambleResult{
-		Code:         uint32(protocol.SmtpPreambleCode_SMTP_PREAMBLE_OK),
-		SendId:       sendId,
-		XUrRef:       "1." + strings.ToLower(smtpStubBase32.EncodeToString(issued)),
-		FeedbackId:   "n:c:" + strings.ToLower(smtpStubBase32.EncodeToString(token)) + ":urnetwork",
-		HeloName:     self.settings.HeloName,
-		MxHost:       mxHost,
-		DnssecChain:  chain,
-		EhloKeywords: keywords,
+		Code:           uint32(protocol.SmtpPreambleCode_SMTP_PREAMBLE_OK),
+		SendId:         sendId,
+		XUrRef:         "1." + strings.ToLower(smtpStubBase32.EncodeToString(issued)),
+		FeedbackId:     "n:c:" + strings.ToLower(smtpStubBase32.EncodeToString(token)) + ":urnetwork",
+		HeloName:       self.settings.HeloName,
+		MxHost:         mxHost,
+		DnssecChain:    chain,
+		EhloKeywords:   keywords,
+		EnvelopeDomain: self.settings.EnvelopeDomain,
 	}
 	session, err := self.verifier.NewSmtpProofSession(&sidecar.SmtpProofPreamble{
 		RecipientDomain:  preamble.GetRecipientDomain(),

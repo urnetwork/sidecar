@@ -309,6 +309,7 @@ fields:
   SmtpPreambleResult.mx_host: smtp-2
   SmtpPreambleResult.dnssec_chain: smtp-2
   SmtpPreambleResult.ehlo_keywords: smtp-2
+  SmtpPreambleResult.envelope_domain: smtp-2
   SmtpProof.send_id: smtp-2
   SmtpProof.index: smtp-2
   SmtpProof.mode: smtp-2

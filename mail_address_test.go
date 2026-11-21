@@ -361,3 +361,89 @@ func TestMailRecipientFuzzSeedsHold(t *testing.T) {
 		}
 	}
 }
+
+// A custom domain's bounce (QD-1129): bounces+<token>@b.<domain>, <domain> outside the root, any ASCII case, its
+// recipient spelling the address again and holding the domain apart from the zone, which carries the root alone.
+func TestParseMailCustomBounceRecipientForms(t *testing.T) {
+	cases := []struct {
+		address      string
+		token        string
+		customDomain string
+	}{
+		{address: "bounces+abc123@b.brand.example", token: "abc123", customDomain: "brand.example"},
+		{address: "BOUNCES+ABC123@B.Brand.Example", token: "abc123", customDomain: "brand.example"},
+		{address: "bounces+a.b_c-d@b.mail.brand.example", token: "a.b_c-d", customDomain: "mail.brand.example"},
+		// a domain whose own first label is b is a domain like any
+		{address: "bounces+t@b.b.brand.example", token: "t", customDomain: "b.brand.example"},
+		// a domain that only ends in the root's name is not under it
+		{address: "bounces+t@b.otherroot.example", token: "t", customDomain: "otherroot.example"},
+	}
+	for _, c := range cases {
+		recipient, err := ParseMailCustomBounceRecipient(testMailRoot, c.address)
+		if err != nil {
+			t.Errorf("%q: %v", c.address, err)
+			continue
+		}
+		want := MailRecipient{
+			Kind: MailAddressKindBounce, LocalPart: "bounces+" + c.token, Zone: MailZone{Root: testMailRoot}, Token: c.token,
+			CustomDomain: c.customDomain,
+		}
+		if recipient != want {
+			t.Errorf("%q: %+v, want %+v", c.address, recipient, want)
+		}
+		if recipient.Domain() != "b."+c.customDomain || recipient.Address() != strings.ToLower(c.address) {
+			t.Errorf("%q: spelled %s", c.address, recipient.Address())
+		}
+		// never a form of §15.8's under the root
+		if _, err := ParseMailRecipient(testMailRoot, c.address); err == nil {
+			t.Errorf("%q: parsed under the root too", c.address)
+		}
+	}
+}
+
+// Everything but bounces+<token>@b.<domain> outside the root is refused, the root's own bounce zones included, which
+// ParseMailRecipient reads, and the error never repeats the address.
+func TestParseMailCustomBounceRecipientRefusals(t *testing.T) {
+	cases := []string{
+		"",
+		"bounces+t",
+		"bounces+t@",
+		// another local part, or no token
+		"ada@b.brand.example",
+		"bounces@b.brand.example",
+		"bounces+@b.brand.example",
+		"bounces+a+b@b.brand.example",
+		"bounces+a/b@b.brand.example",
+		"bounces+" + strings.Repeat("a", 57) + "@b.brand.example",
+		"r-abc@b.brand.example",
+		// no b. above the domain, or no domain above a TLD
+		"bounces+t@brand.example",
+		"bounces+t@b.example",
+		"bounces+t@c.brand.example",
+		// labels out of shape
+		"bounces+t@b..brand.example",
+		"bounces+t@b.-brand.example",
+		"bounces+t@b.brand_x.example",
+		"bounces+t@b.brand.example.",
+		"bounces+t@b.[192.0.2.1]",
+		// under the root, the root's own bounce zones among them
+		"bounces+t@b.root.example",
+		"bounces+t@b.k3j4h5g6f7.root.example",
+		"bounces+t@b.x.k3j4h5g6f7.root.example",
+		"bounces+t@b@brand.example",
+		"bounces+t@b." + strings.Repeat(strings.Repeat("a", 63)+".", 4) + "example",
+	}
+	for _, address := range cases {
+		recipient, err := ParseMailCustomBounceRecipient(testMailRoot, address)
+		if !errors.Is(err, ErrMailRecipientInvalid) || recipient != (MailRecipient{}) {
+			t.Errorf("%q: got %+v, %v", address, recipient, err)
+			continue
+		}
+		if at := strings.Index(address, "@"); 0 <= at && strings.Contains(address[at:], ".") && strings.Contains(err.Error(), address) {
+			t.Errorf("%q: the error repeats the address", address)
+		}
+	}
+	if _, err := ParseMailCustomBounceRecipient("example", "bounces+t@b.brand.example"); !errors.Is(err, ErrMailRecipientInvalid) {
+		t.Errorf("a root that is no domain name: %v", err)
+	}
+}

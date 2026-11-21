@@ -194,7 +194,7 @@ Each is a value the edge already holds or computes, or one the prover publishes 
      SF         the server Finished record as relayed: explicit nonce and ciphertext
 ```
 
-**Preamble and issued values.** `recipient_domain`, `recipient_count`, `message_id`, `header_from_domain`, `dkim_selector`, `message_byte_count`, `flags`, `helo_name`, `x_ur_ref`, `feedback_id`, `envelope_domain`.
+**Preamble and issued values.** `recipient_domain`, `recipient_count`, `message_id`, `header_from_domain`, `dkim_selector`, `message_byte_count`, `flags`, `helo_name`, `x_ur_ref`, `feedback_id`, `envelope_domain`. The edge names its `envelope_domain` in `SmtpPreambleResult.envelope_domain` (QD-1154), and the sidecar resets the stream before any client record where it differs from its own MAIL FROM's, so a send whose strict set the edge has not loaded yet is held rather than cut (§14.7); the sidecar never sends at the edge's value, and the statement takes the edge's either way.
 
 **Part.** `index`, `mode`, `first_record`, `last_record`, `server_record_count`, `last`, `reply_count`, and k as the part that opens header record 1 named it; `records`, the ciphertext of each client record the part opens; the server records it covers, as the edge relayed them, from the previous part's `server_record_count` on.
 

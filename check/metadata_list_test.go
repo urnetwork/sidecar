@@ -73,6 +73,11 @@ type metadataListAddition struct {
 // QD-1034's with the late sweep's (owner decision 592), and QD-1137's and QD-1130's with the fifth late sweep's
 // (owner decisions 658 and 656); each here waits for the next fold.
 var metadataListAdditions = []metadataListAddition{
+	{
+		question: "strict-envelope-feed-edge-facts-window",
+		block:    "the issued send_id, X-UR-Ref and Feedback-ID (the network's report token, public in its _dmarc, constant for burners)",
+		list:     "the issued send_id, X-UR-Ref and Feedback-ID (the network's report token, public in its _dmarc, constant for burners), and the envelope_domain it derived from the network, b.<net>.<root> or a strict custom domain's b.<domain>, named back to the sidecar (QD-1154)",
+	},
 }
 
 // §2.8's block with each addition in place, in order, and a finding for each that does not apply.

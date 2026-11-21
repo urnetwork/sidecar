@@ -102,6 +102,10 @@ type SmtpSenderSettings struct {
 	// tried again: 6 h, leaving its outbox entry for a host whose proofs the edge accepts (DESIGN-DETAILS
 	// 3.2.7, 3.5).
 	KeysRetryTimeout time.Duration
+	// How long a send is held whose preamble OK named an envelope other than its MAIL FROM's (QD-1154) before it
+	// reads the strict domains again and is tried: 60 s, smtpedge's gate facts refresh, by which the edge holds the
+	// set GET /mail/status names.
+	EnvelopeRetryTimeout time.Duration
 	// How often a prover host measures itself again with its key set unchanged: 7 days. It also measures
 	// when a family becomes ready and when the key set changes (DESIGN-DETAILS 3.7's SMTP-M9-09).
 	ProverMeasureInterval time.Duration
@@ -163,6 +167,7 @@ func DefaultSmtpSenderSettings() *SmtpSenderSettings {
 		HeaderHeadMaxByteCount:     720,
 		HeaderBlockMaxByteCount:    16 * 1024,
 		KeysRetryTimeout:           6 * time.Hour,
+		EnvelopeRetryTimeout:       60 * time.Second,
 		ProverMeasureInterval:      7 * 24 * time.Hour,
 		EnvelopeRetryGroupCount:    1,
 		ProofCallTimeout:           30 * time.Second,

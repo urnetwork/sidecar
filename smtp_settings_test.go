@@ -37,6 +37,7 @@ func TestDefaultSmtpSenderSettingsMatchDesign(t *testing.T) {
 		HeaderHeadMaxByteCount:  720,
 		HeaderBlockMaxByteCount: 16384,
 		KeysRetryTimeout:        6 * time.Hour,
+		EnvelopeRetryTimeout:    60 * time.Second,
 		ProverMeasureInterval:   7 * 24 * time.Hour,
 		EnvelopeRetryGroupCount: 1,
 		// the driver's and the outbox's readings

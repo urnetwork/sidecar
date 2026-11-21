@@ -376,16 +376,17 @@ type SmtpPreambleResult struct {
 	Code  uint32                 `protobuf:"varint,1,opt,name=code,proto3" json:"code,omitempty"` // §6.11: 1 OK, 2 HALTED, 3 QUOTA, 4 DENIED, 5 NO_MX, 6 NO_TLS, 7 TRY_LATER,
 	//   8 KEYS (the edge does not accept proof_key_set: no MX is dialed, nothing is debited);
 	//   0 UNSPECIFIED, a protocol error
-	RetryAfterMs  uint32   `protobuf:"varint,2,opt,name=retry_after_ms,json=retryAfterMs,proto3" json:"retry_after_ms,omitempty"`
-	SendId        []byte   `protobuf:"bytes,3,opt,name=send_id,json=sendId,proto3" json:"send_id,omitempty"`
-	XUrRef        string   `protobuf:"bytes,4,opt,name=x_ur_ref,json=xUrRef,proto3" json:"x_ur_ref,omitempty"`           // issued; proven present (Z5)
-	FeedbackId    string   `protobuf:"bytes,5,opt,name=feedback_id,json=feedbackId,proto3" json:"feedback_id,omitempty"` // issued; proven present (Z5)
-	HeloName      string   `protobuf:"bytes,6,opt,name=helo_name,json=heloName,proto3" json:"helo_name,omitempty"`       // the sending address's PTR name (14.6)
-	MxHost        string   `protobuf:"bytes,7,opt,name=mx_host,json=mxHost,proto3" json:"mx_host,omitempty"`
-	DnssecChain   []byte   `protobuf:"bytes,8,opt,name=dnssec_chain,json=dnssecChain,proto3" json:"dnssec_chain,omitempty"`    // MX, TLSA RRsets with RRSIGs (TL1)
-	EhloKeywords  []string `protobuf:"bytes,9,rep,name=ehlo_keywords,json=ehloKeywords,proto3" json:"ehlo_keywords,omitempty"` // pre-TLS hints only; Z8 proves the post-TLS reply
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	RetryAfterMs   uint32   `protobuf:"varint,2,opt,name=retry_after_ms,json=retryAfterMs,proto3" json:"retry_after_ms,omitempty"`
+	SendId         []byte   `protobuf:"bytes,3,opt,name=send_id,json=sendId,proto3" json:"send_id,omitempty"`
+	XUrRef         string   `protobuf:"bytes,4,opt,name=x_ur_ref,json=xUrRef,proto3" json:"x_ur_ref,omitempty"`           // issued; proven present (Z5)
+	FeedbackId     string   `protobuf:"bytes,5,opt,name=feedback_id,json=feedbackId,proto3" json:"feedback_id,omitempty"` // issued; proven present (Z5)
+	HeloName       string   `protobuf:"bytes,6,opt,name=helo_name,json=heloName,proto3" json:"helo_name,omitempty"`       // the sending address's PTR name (14.6)
+	MxHost         string   `protobuf:"bytes,7,opt,name=mx_host,json=mxHost,proto3" json:"mx_host,omitempty"`
+	DnssecChain    []byte   `protobuf:"bytes,8,opt,name=dnssec_chain,json=dnssecChain,proto3" json:"dnssec_chain,omitempty"`           // MX, TLSA RRsets with RRSIGs (TL1)
+	EhloKeywords   []string `protobuf:"bytes,9,rep,name=ehlo_keywords,json=ehloKeywords,proto3" json:"ehlo_keywords,omitempty"`        // pre-TLS hints only; Z8 proves the post-TLS reply
+	EnvelopeDomain string   `protobuf:"bytes,10,opt,name=envelope_domain,json=envelopeDomain,proto3" json:"envelope_domain,omitempty"` // OK only: the envelope_domain the edge derived from the ticket's network, which Z4
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *SmtpPreambleResult) Reset() {
@@ -479,6 +480,13 @@ func (x *SmtpPreambleResult) GetEhloKeywords() []string {
 		return x.EhloKeywords
 	}
 	return nil
+}
+
+func (x *SmtpPreambleResult) GetEnvelopeDomain() string {
+	if x != nil {
+		return x.EnvelopeDomain
+	}
+	return ""
 }
 
 type SmtpProof struct {
@@ -927,7 +935,7 @@ const file_protocol_smtp_proto_rawDesc = "" +
 	"\x10retry_of_send_id\x18\b \x01(\fR\rretryOfSendId\x12\x14\n" +
 	"\x05flags\x18\t \x01(\rR\x05flags\x12\"\n" +
 	"\rproof_key_set\x18\n" +
-	" \x01(\fR\vproofKeySet\"\xa0\x02\n" +
+	" \x01(\fR\vproofKeySet\"\xc9\x02\n" +
 	"\x12SmtpPreambleResult\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\rR\x04code\x12$\n" +
 	"\x0eretry_after_ms\x18\x02 \x01(\rR\fretryAfterMs\x12\x17\n" +
@@ -938,7 +946,9 @@ const file_protocol_smtp_proto_rawDesc = "" +
 	"\thelo_name\x18\x06 \x01(\tR\bheloName\x12\x17\n" +
 	"\amx_host\x18\a \x01(\tR\x06mxHost\x12!\n" +
 	"\fdnssec_chain\x18\b \x01(\fR\vdnssecChain\x12#\n" +
-	"\rehlo_keywords\x18\t \x03(\tR\fehloKeywords\"\x94\x03\n" +
+	"\rehlo_keywords\x18\t \x03(\tR\fehloKeywords\x12'\n" +
+	"\x0fenvelope_domain\x18\n" +
+	" \x01(\tR\x0eenvelopeDomain\"\x94\x03\n" +
 	"\tSmtpProof\x12\x17\n" +
 	"\asend_id\x18\x01 \x01(\fR\x06sendId\x12\x14\n" +
 	"\x05index\x18\x02 \x01(\rR\x05index\x12\x12\n" +
