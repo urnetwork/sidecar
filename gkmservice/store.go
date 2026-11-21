@@ -1,11 +1,14 @@
 // Where gkm's objects live, and what gkm rereads before it writes (§10.6's placement and checks rows):
 //
 //   - placement: a group's objects live on the cluster place/<repo_id> names, which evs wrote once at the repo's
-//     creation; gkm resolves it through the root's EvsRepoPlaceResolver, once per process, a 404 cached 5 s, and a
-//     re-formed group stays on its repo's cluster. Per-sidecar objects live on the first cluster (FS-63);
+//     creation; gkm resolves it through the root's EvsRepoPlaceResolver, once per process, a 404 cached 5 s for
+//     reads, a write's never answered by a cached 404 (service.go's repoCluster), and a re-formed group stays on its
+//     repo's cluster. Per-sidecar objects live on the first cluster (FS-63);
 //   - repo/<id>, reread as each write issues, cached at most 5 s: active, or keying for the group's creation or
-//     re-forming, or deleted only for a re-seed's GroupForm and ladder. EVS1-M2-19 owns repo/'s state machine; gkm
-//     only reads it, with the shape evs's codec holds it to;
+//     re-forming, or deleted only for a re-seed's GroupForm and ladder. A keying repo/, or none yet, is cached only
+//     RepoKeyingCacheTtl, 0 by default, since its creation moves it on within moments and a write judged against
+//     the cached state after that would be refused. EVS1-M2-19 owns repo/'s state machine; gkm only reads it, with the
+//     shape evs's codec holds it to;
 //   - a repo's GroupForms, gkm/repo/<repo_id>/<seq>, which tie each group to its repo: a group route resolves its
 //     group to one of the repos the token scopes, and a write needs the repo's newest form to name the group. A
 //     group's repo never changes, so a process remembers it; the forms themselves are cached as repo/ is, so a
@@ -47,19 +50,17 @@ var (
 	errGkmObjectGone = errors.New("gkm: an object existed and is gone")
 )
 
-// §11.8's bound on repo/'s bytes.
-const gkmEvsRepoMaxByteCount = 4 * 1024
-
 // The formats a repo may be in (§11.6).
 const (
 	gkmEvsRepoFormat1 = 1
 	gkmEvsRepoFormat2 = 2
 )
 
-// repo/'s bytes held to their shape, as evs's codec holds them (evsservice.ParseEvsRepoObject): its bound, a 16-byte
-// repo id equal to the key's, a kind acl.proto has, a state EvsRepoState has, format 1 or 2.
-func parseGkmEvsRepoObject(repoId sidecar.Id, objectBytes []byte) (*protocol.EvsRepoObject, error) {
-	if gkmEvsRepoMaxByteCount < len(objectBytes) {
+// repo/'s bytes held to their shape, as evs's codec holds them (evsservice.ParseEvsRepoObject): its bound,
+// maxByteCount (GkmServiceSettings.RepoObjectMaxByteCount), a 16-byte repo id equal to the key's, a kind acl.proto
+// has, a state EvsRepoState has, format 1 or 2.
+func parseGkmEvsRepoObject(repoId sidecar.Id, objectBytes []byte, maxByteCount int64) (*protocol.EvsRepoObject, error) {
+	if maxByteCount < int64(len(objectBytes)) {
 		return nil, fmt.Errorf("%w: repo/ of %d bytes", errGkmStoreFault, len(objectBytes))
 	}
 	object := &protocol.EvsRepoObject{}
@@ -213,7 +214,8 @@ type gkmRepoCacheEntry struct {
 	expiresAt time.Time
 }
 
-// repo/ as this process reads it, each answer good for RepoCacheTtl. See the file header.
+// repo/ as this process reads it, each answer good for RepoCacheTtl, a keying one or a 404 for RepoKeyingCacheTtl.
+// See the file header.
 type gkmRepoCache struct {
 	clock    sidecar.Clock
 	settings *GkmServiceSettings
@@ -227,8 +229,10 @@ func newGkmRepoCache(clock sidecar.Clock, settings *GkmServiceSettings) *gkmRepo
 	return &gkmRepoCache{clock: clock, settings: settings, repoEntries: map[sidecar.Id]*gkmRepoCacheEntry{}}
 }
 
-// repo/ from this cache while its answer is under RepoCacheTtl old, else one GET on cluster: errGkmRepoNotFound for
-// a 404, errGkmStoreFault for bytes that break its shape, which is not cached.
+// repo/ from this cache while its answer is under its ttl old, else one GET on cluster: errGkmRepoNotFound for a 404,
+// errGkmStoreFault for bytes that break its shape, which is not cached. An answer its creation moves on from within
+// moments, keying or a 404, is kept only RepoKeyingCacheTtl, so the activation that follows KF1's deliveries is seen
+// by the next write: by default no write is judged against a keying state read before it.
 func (self *gkmRepoCache) read(ctx context.Context, cluster sidecar.BlobCluster, repoId sidecar.Id) (*protocol.EvsRepoObject, error) {
 	var cached *gkmRepoCacheEntry
 	func() {
@@ -251,22 +255,27 @@ func (self *gkmRepoCache) read(ctx context.Context, cluster sidecar.BlobCluster,
 		return cached.object, nil
 	}
 	readAt := self.clock.Now()
-	objectBytes, _, err := readGkmObject(ctx, cluster, GkmEvsRepoKey(repoId), gkmEvsRepoMaxByteCount)
+	objectBytes, _, err := readGkmObject(ctx, cluster, GkmEvsRepoKey(repoId), self.settings.RepoObjectMaxByteCount)
 	var object *protocol.EvsRepoObject
 	switch {
 	case errors.Is(err, sidecar.ErrBlobNotFound):
 	case err != nil:
 		return nil, err
 	default:
-		object, err = parseGkmEvsRepoObject(repoId, objectBytes)
+		object, err = parseGkmEvsRepoObject(repoId, objectBytes, self.settings.RepoObjectMaxByteCount)
 		if err != nil {
 			return nil, err
 		}
 	}
+	ttl := self.settings.RepoCacheTtl
+	if object == nil || object.GetState() == protocol.EvsRepoState_EVS_REPO_KEYING {
+		// placed with repo/ still to be written, or keying until its activation: both move on within moments
+		ttl = min(ttl, self.settings.RepoKeyingCacheTtl)
+	}
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		if self.settings.RepoCacheTtl <= 0 || self.settings.RepoCacheCount <= 0 {
+		if ttl <= 0 || self.settings.RepoCacheCount <= 0 {
 			return
 		}
 		if self.settings.RepoCacheCount <= len(self.repoEntries) {
@@ -275,7 +284,7 @@ func (self *gkmRepoCache) read(ctx context.Context, cluster sidecar.BlobCluster,
 				break
 			}
 		}
-		self.repoEntries[repoId] = &gkmRepoCacheEntry{object: object, expiresAt: readAt.Add(self.settings.RepoCacheTtl)}
+		self.repoEntries[repoId] = &gkmRepoCacheEntry{object: object, expiresAt: readAt.Add(ttl)}
 	}()
 	if object == nil {
 		return nil, errGkmRepoNotFound

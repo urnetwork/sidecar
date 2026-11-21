@@ -1230,7 +1230,8 @@ func (self *GkmReconciler) formlessAgentRepo(view sidecar.GkmAuthView, repoId si
 	if found {
 		return false, false
 	}
-	objectBytes, _, err := readGkmObject(ctx, cluster, GkmEvsRepoKey(repoId), gkmEvsRepoMaxByteCount)
+	maxByteCount := self.settings.Service.RepoObjectMaxByteCount
+	objectBytes, _, err := readGkmObject(ctx, cluster, GkmEvsRepoKey(repoId), maxByteCount)
 	if errors.Is(err, sidecar.ErrBlobNotFound) {
 		// placed and not yet written: evs writes repo/ just after place/
 		return true, false
@@ -1238,7 +1239,7 @@ func (self *GkmReconciler) formlessAgentRepo(view sidecar.GkmAuthView, repoId si
 	if err != nil {
 		return true, false
 	}
-	object, err := parseGkmEvsRepoObject(repoId, objectBytes)
+	object, err := parseGkmEvsRepoObject(repoId, objectBytes, maxByteCount)
 	if err != nil || object.GetState() != protocol.EvsRepoState_EVS_REPO_KEYING {
 		return err != nil, false
 	}
