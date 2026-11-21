@@ -115,6 +115,8 @@ type fakeApiCoreState struct {
 	// The owner's user and, only in a Team, that user's separate membership id.
 	ownerUserIds  map[sidecar.Id]sidecar.Id
 	teamMemberIds map[sidecar.Id]sidecar.Id
+	// A page account handoff's selected native signer, indexed by the minted browser client.
+	pageSigners map[sidecar.Id]sidecar.Id
 	// signs the tokens this api mints
 	tokenKey   []byte
 	authKeys   map[string]*fakeApiAuthKey
@@ -171,6 +173,7 @@ func newFakeApiCoreState() fakeApiCoreState {
 		newestTokens:            map[sidecar.Id]fakeApiTokenTimes{},
 		ownerUserIds:            map[sidecar.Id]sidecar.Id{},
 		teamMemberIds:           map[sidecar.Id]sidecar.Id{},
+		pageSigners:             map[sidecar.Id]sidecar.Id{},
 		clientTokens:            map[sidecar.Id][]string{},
 	}
 }
@@ -254,6 +257,9 @@ func (self *FakeApi) mintClientToken(client *fakeApiClient) string {
 	}
 	if minted.adminRefused {
 		claims["admin_refused"] = true
+	}
+	if minted.pageReader {
+		claims["declares_no_egress"] = true
 	}
 	header, err := json.Marshal(map[string]string{"alg": "HS256", "typ": "JWT"})
 	if err != nil {
@@ -855,6 +861,7 @@ func (self *FakeApi) handleBind(writer http.ResponseWriter, request *http.Reques
 
 // GET /sidecar/identity's answer, never a user_id (§5.15).
 type fakeApiIdentityResult struct {
+	BrowserAdmission  string     `json:"browser_admission,omitempty"`
 	SidecarId         sidecar.Id `json:"sidecar_id"`
 	IdentityPublicKey []byte     `json:"identity_public_key"`
 	IdentityAlg       string     `json:"identity_alg"`
@@ -915,6 +922,13 @@ func (self *FakeApi) handleIdentity(writer http.ResponseWriter, request *http.Re
 		}
 	}
 	result := self.identityResult(client.networkId, sidecarId, nil, beforeGeneration)
+	if mode := request.URL.Query().Get("browser_admission"); mode != "" {
+		if mode != "page" || result == nil || !self.ownPageCandidate(client, result) {
+			result = nil
+		} else {
+			result.BrowserAdmission = mode
+		}
+	}
 	if result == nil {
 		fakeApiRefuse(writer, http.StatusNotFound, "not_found", "No such sidecar identity.", nil)
 		return

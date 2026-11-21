@@ -302,10 +302,22 @@ func (self *sidecarAct) proposalId(index int) []byte {
 	return proposalId[:]
 }
 
-// A statement's not_after from now, ms since the epoch: StatementTimeout, at most §7.9's 7 days.
+// A statement's expiry uses the sequencer's clock. Its HTTP Date was reached by the time the response arrived,
+// so this bound keeps even the full seven-day default inside the verifier's window on a fast device.
+func (self *Sidecar) statementTime() time.Time {
+	if self.sidecarApi != nil {
+		return self.sidecarApi.statementTime()
+	}
+	return self.clock.Now()
+}
+
+func (self *Sidecar) statementNotAfterMs() int64 {
+	timeout := min(self.settings.statementTimeout(), time.Duration(configStatementMaxLifetimeMs)*time.Millisecond)
+	return self.statementTime().Add(timeout).UnixMilli()
+}
+
 func (self *sidecarAct) notAfterMs() int64 {
-	timeout := min(self.sidecar.settings.statementTimeout(), time.Duration(configStatementMaxLifetimeMs)*time.Millisecond)
-	return self.sidecar.clock.Now().Add(timeout).UnixMilli()
+	return self.sidecar.statementNotAfterMs()
 }
 
 // The statement digests in act order, which an act's tree hashes.

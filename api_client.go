@@ -130,6 +130,8 @@ type SidecarApi struct {
 	stateLock sync.Mutex
 	// the api's clock less this device's, at the newest answer whose Date gave it; zero until one
 	apiClockOffset time.Duration
+	// The same Date measured at receipt, a lower bound for deadlines the sequencer caps against its own clock.
+	apiClockLowerOffset time.Duration
 	// the authenticated jwt
 	byJwt       string
 	bearerEpoch uint64
@@ -240,6 +242,13 @@ func (self *SidecarApi) apiNow() time.Time {
 	return self.now().Add(self.currentApiClockOffset())
 }
 
+func (self *SidecarApi) statementTime() time.Time {
+	now := self.now()
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return now.Add(self.apiClockLowerOffset)
+}
+
 // Whether requestUrl is on one of api's own origins, whose answers give api's clock. Another
 // service's answer, such as sockets', gives its own, which the registrar keeps.
 func (self *SidecarApi) isApiOrigin(requestUrl string) bool {
@@ -267,6 +276,7 @@ func (self *SidecarApi) keepApiClock(response *http.Response, sentAt time.Time, 
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		self.apiClockOffset = offset
+		self.apiClockLowerOffset = apiTime.Sub(receivedAt)
 	}()
 	testHookBarrier("api.clock_offset.after", "")
 }
