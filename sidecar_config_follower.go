@@ -886,6 +886,10 @@ type sidecarConfigFollowerProjection struct {
 	kept <-chan struct{}
 }
 
+func (self *sidecarConfigFollowerProjection) statementTime() time.Time {
+	return self.follower.sidecar.statementTime()
+}
+
 // The Sidecar api's read, once the follower holds the client, its genesis checked first.
 func (self *sidecarConfigFollowerProjection) ReadConfigProjection(ctx context.Context, after uint64) (*ConfigProjection, error) {
 	select {

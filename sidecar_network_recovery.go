@@ -212,7 +212,7 @@ func (self *codeRecoveryAuthority) JudgeStatement(signedBytes []byte) error {
 	if log == nil {
 		return ErrConfigClientClosed
 	}
-	return configJudgeStatement(log, signedBytes, self.client.clock.Now())
+	return configJudgeStatement(log, signedBytes, self.statementTime())
 }
 func (self *codeRecoveryAuthority) RecoveryLog() (*SidecarRecoveryLog, error) {
 	self.client.followLock.Lock()

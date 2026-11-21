@@ -406,12 +406,11 @@ func (self *Sidecar) recoveryStatementHeader(networkId Id, at *bridge.AuthPin, r
 	if _, err := io.ReadFull(random, nonce); err != nil {
 		return nil, fmt.Errorf("no randomness for a nonce: %w", err)
 	}
-	timeout := min(self.settings.statementTimeout(), time.Duration(configStatementMaxLifetimeMs)*time.Millisecond)
 	return &bridge.StatementHeader{
 		NetworkId:  networkId.Bytes(),
 		At:         &bridge.AuthPin{Version: at.GetVersion(), Chain: bytes.Clone(at.GetChain())},
 		Nonce:      nonce,
-		NotAfterMs: self.clock.Now().Add(timeout).UnixMilli(),
+		NotAfterMs: self.statementNotAfterMs(),
 	}, nil
 }
 
@@ -905,7 +904,17 @@ func (self *ConfigAuthority) JudgeStatement(signedBytes []byte) error {
 	if log == nil {
 		return ErrConfigClientClosed
 	}
-	return configJudgeStatement(log, signedBytes, self.client.clock.Now())
+	return configJudgeStatement(log, signedBytes, self.statementTime())
+}
+
+// A recovery candidate is signed against the sequencer's clock and judged locally before posting.
+func (self *ConfigAuthority) statementTime() time.Time {
+	if self.client.args != nil {
+		if source, ok := self.client.args.Projection.(interface{ statementTime() time.Time }); ok {
+			return source.statementTime()
+		}
+	}
+	return self.client.clock.Now()
 }
 
 // What §7.9's recovery anchor reads of the verified log (SidecarRecoveryLogView).

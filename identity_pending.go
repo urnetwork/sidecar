@@ -215,7 +215,7 @@ func (self *Sidecar) pendingStatements() ([]*sidecarPendingStatement, error) {
 // nil entry and no error, when its Worker holds a leaf again; one whose re-check cannot run stays pending. Else as
 // postPendingStatement.
 func (self *Sidecar) postPendingInOrder(ctx context.Context, pending *sidecarPendingStatement) (*bridge.AuthPin, error) {
-	if pending.act != nil && pending.act.admission != nil && self.clock.Now().UnixMilli() < pending.notAfterMs {
+	if pending.act != nil && pending.act.admission != nil && self.statementTime().UnixMilli() < pending.notAfterMs {
 		if err := self.checkBrowserAdmissionDependency(ctx, pending.act.admission); err != nil {
 			if errors.Is(err, ErrSidecarActRefused) {
 				if dropErr := self.dropPendingStatement(pending); dropErr != nil {
@@ -225,7 +225,7 @@ func (self *Sidecar) postPendingInOrder(ctx context.Context, pending *sidecarPen
 			return nil, err
 		}
 	}
-	if pending.act != nil && pending.act.stale != nil && self.clock.Now().UnixMilli() < pending.notAfterMs {
+	if pending.act != nil && pending.act.stale != nil && self.statementTime().UnixMilli() < pending.notAfterMs {
 		post, err := self.recheckStaleRevocation(ctx, pending.act.stale)
 		if err != nil {
 			return nil, err
@@ -271,7 +271,7 @@ func sidecarPendingRuns(pendings []*sidecarPendingStatement) [][]*sidecarPending
 // dropped, when api refuses it or its not_after has passed; any other error, a lost answer or api unavailable, and it
 // stays to be posted again with the same bytes.
 func (self *Sidecar) postPendingStatement(ctx context.Context, pending *sidecarPendingStatement) (*bridge.AuthPin, error) {
-	if pending.notAfterMs <= self.clock.Now().UnixMilli() {
+	if pending.notAfterMs <= self.statementTime().UnixMilli() {
 		if err := self.dropPendingStatement(pending); err != nil {
 			return nil, err
 		}
