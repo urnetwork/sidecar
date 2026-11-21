@@ -166,6 +166,7 @@ var (
 	errMcpEvsUncertain   = NewMcpError(McpCodeFailed, "the write's outcome is not known yet: send the same call again", true)
 	errMcpEvsReceipt     = NewMcpError(McpCodeRefused, "this repo's owner reads a receipt of every read first, and this daemon cannot deposit one: run ur status in your own terminal", true)
 	errMcpEvsTipMoved    = NewMcpError(McpCodeFailed, "the repo's tip moved on each of this daemon's tries while the path stood still: send the same call again", true)
+	errMcpEvsStale       = NewMcpError(McpCodeFailed, "the repo's head moved past this read on each of this daemon's tries, as its other calls read it: send the same call again", true)
 	errMcpEvsGitRefused  = NewMcpError(McpCodeFailed, "the repo's ref refused the commit: run ur evs in your own terminal to see why", false)
 	errMcpEvsUnchanged   = NewMcpError(McpCodeFailedPrecondition, "the write changes nothing: the path holds that content already, or a removal names a path the ref lacks", false)
 	errMcpEvsInvalid     = NewMcpError(McpCodeInvalidArguments, "the repo takes no such write: content past its file bound, or a name or label it cannot carry", false)
@@ -267,6 +268,10 @@ func mcpEvsError(err error) error {
 	case errors.Is(err, sidecar.ErrEvsGitTipMoved):
 		// WriteAtTip's tries ran out on a tip that kept moving while the path stood at its base: the call may go again
 		return errMcpEvsTipMoved
+	case errors.Is(err, sidecar.ErrEvsReadStale):
+		// the reads again ran out on a head another call of this client raised the pin past each time, which nothing
+		// placed on the pinned history: no alarm was raised, and the call may go again
+		return errMcpEvsStale
 	case errors.Is(err, sidecar.ErrEvsGitOutcomePending):
 		return errMcpEvsUncertain
 	case errors.Is(err, sidecar.ErrEvsGitWriteRefused):

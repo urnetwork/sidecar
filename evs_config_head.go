@@ -9,7 +9,8 @@
 // and a head read answers the newest version only, while a base names a version that later pushes may have passed.
 //
 //	chain    C_0 = SHA-256("UR evs 1.0 ref" || repo_id || ref_id), then each statement as received, in version order;
-//	         the chain passes through this device's pin, and its value at v is the one the base names
+//	         the chain passes through this device's pin as the read asked at it before it read the log, never as
+//	         another call of the client raised it since, and its value at v is the one the base names
 //	writers  every statement after the newest point this device already vouches for, its pin (unless the pin was
 //	         taken past the catch-up budget, which is evs's word) or else C_0, is judged by the verifier at its own
 //	         authorization pin: its signature under its signer's admitted identity key, and §11.8's refs table, where
@@ -33,7 +34,11 @@
 //
 // What it answers (ConfigHeadReader's contract):
 //
-//	the head          C_v is the ref's at v, through config writers' pushes; the pin is raised to (v, C_v) first
+//	the head          C_v is the ref's at v, through config writers' pushes; the pin is raised to (v, C_v) first, with
+//	                  the walk from the replay, judged against the pin as it then stands (evs_pin_walk.go): a head
+//	                  another raise passed meanwhile stands where that raise's walk places it, and where nothing
+//	                  does the read is made again, at most EvsSettings.ReadStaleRetryCount times, before it withholds
+//	                  with ErrEvsReadStale
 //	unavailable       evs serves no version v yet, or a log that does not pass through this device's pin, or a
 //	                  record that is not its statement's; this device's state is behind a push's authorization pin or
 //	                  no longer retains it, which is unjudged and never allowed (§7.9's state by pin); at an anchor, a
@@ -303,12 +308,17 @@ func (self *EvsConfigHeadReader) read(ctx context.Context, configVersion uint64,
 	if head := self.cachedHead(configVersion, named); head != nil {
 		return head, nil
 	}
-	head, err := self.readWithTurn(ctx, configVersion, named, anchor)
-	if err != nil {
-		return nil, err
+	for staleCount := 0; ; staleCount += 1 {
+		head, err := self.readWithTurn(ctx, configVersion, named, anchor)
+		if errors.Is(err, ErrEvsReadStale) && staleCount < self.repo.client.settings.ReadStaleRetryCount {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		self.cacheHead(configVersion, named, head)
+		return head, nil
 	}
-	self.cacheHead(configVersion, named, head)
-	return head, nil
 }
 
 // One read, by the turn's holder: the chain and its writers through version, the pin, the tree and its files. With
@@ -323,9 +333,18 @@ func (self *EvsConfigHeadReader) readWithTurn(ctx context.Context, version uint6
 	if err != nil {
 		return nil, unavailable("the main ref's id", err)
 	}
-	pin, pinned, err := client.pins.Pin(repo.repoId, refId)
+	// the pin as this read asks at it, before the log is read, its read in flight until the raise
+	done := client.pins.beginRead(repo.repoId, refId)
+	defer done()
+	ask, err := client.pins.ask(repo.repoId, refId)
 	if err != nil {
 		return nil, unavailable("the main ref's pin", err)
+	}
+	pin, pinned := ask.pin, ask.pin != nil
+	// a mismatch with the pin asked at is a fork, unless a verified reseed lowered the pin meanwhile, the log read
+	// being the re-seeded history: read again
+	reseeded := func() bool {
+		return client.pins.reseedCount(repo.repoId, refId) != ask.reseeds
 	}
 
 	replay := self.replay
@@ -386,14 +405,21 @@ func (self *EvsConfigHeadReader) readWithTurn(ctx context.Context, version uint6
 
 	// the log is this device's pinned history
 	if chainAt(trustedVersion) != trustedChain {
+		// evs serves another log than the one the replay was built on, or than the pin's: the next read starts again
+		self.replay = nil
+		if pinned && reseeded() {
+			return nil, unavailable("the main ref's pin", ErrEvsReadStale)
+		}
 		if pinned {
 			client.verifier.alarmFork(repo.repoId, refId, pin, trustedVersion, chainAt(trustedVersion))
 		}
-		// evs serves another log than the one the replay was built on, or than the pin's: the next read starts again
-		self.replay = nil
 		return nil, fmt.Errorf("%w: the log evs serves does not pass through this device's pin at version %d", ErrConfigHeadUnavailable, trustedVersion)
 	}
 	if pinned && replay.version <= pin.Version && pin.Version <= through && chainAt(pin.Version) != pin.Chain {
+		if reseeded() {
+			self.replay = nil
+			return nil, unavailable("the main ref's pin", ErrEvsReadStale)
+		}
 		client.verifier.alarmFork(repo.repoId, refId, pin, pin.Version, chainAt(pin.Version))
 		return nil, fmt.Errorf("%w: the log evs serves does not pass through this device's pin at version %d", ErrConfigHeadUnavailable, pin.Version)
 	}
@@ -431,14 +457,16 @@ func (self *EvsConfigHeadReader) readWithTurn(ctx context.Context, version uint6
 		return nil, fmt.Errorf("%w: the main ref's chain at version %d is another", ErrConfigHeadMismatch, version)
 	}
 
-	// pinned before anything it backs is opened
+	// pinned before anything it backs is opened, with the walk from the replay, judged against the pin as it stands
+	// now: a version another call of the client raised it past stands where that raise's walk places it
 	pinVersion := version
 	if pinned && version <= pin.Version {
 		pinVersion = pin.Version
 	} else {
 		push := statements[version-replay.version-1].Statement.Push
 		raised := &EvsVerifiedHead{
-			RepoId: repo.repoId, RefId: refId, Version: version, Chain: named, FromVersion: trustedVersion,
+			RepoId: repo.repoId, RefId: refId, Version: version, Chain: named, FromVersion: replay.version,
+			Statements: statements[:version-replay.version], ask: ask, fromChain: replay.chain, ownStart: true,
 			// the group the pin keeps, as a head's summary gives it
 			Head: &protocol.EvsHeadSummary{RefId: refId.Bytes(), Version: version, Chain: named[:], GroupId: push.GetGroupId()},
 		}

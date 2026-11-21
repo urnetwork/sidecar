@@ -30,6 +30,13 @@
 // evs answers missing stays named in the mirror's state, which coverage reports (evs_mirror_coverage.go). A hash
 // check (Check) rereads everything held, so a mirror that rotted on disk is reported partial.
 //
+// This device's own pins hold each listed head too, as the listing asked at them, taken before it (askRepo), never as
+// another call of the client raised them since: a head below its ref's is a fork, alarmed. A ref the mirror holds
+// whole is pinned with its walk from what the mirror held, judged against the pin as it then stands (evs_pin_walk.go),
+// so a head another raise passed meanwhile stands where that raise's walk places it; where nothing does, the ref is
+// synced again from a fresh listing, at most EvsSettings.ReadStaleRetryCount times, before the sync answers
+// ErrEvsReadStale.
+//
 // Under the repo's prefix write rules (DESIGN-DETAILS 16.2.5's mirror row; EVS1-M6-04) every statement of a
 // file-mode shared ref is judged from the ref's first version, change by change, from the bytes the mirror holds:
 // the allowed changes are applied to the ref's fold, the names this device follows (evs_prefix.go), and an ignored
@@ -282,9 +289,20 @@ func (self *EvsMirror) Sync(ctx context.Context) (*EvsMirrorSyncResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	// the pins the listing's heads are held to, as it asks at them
+	asks, err := self.client.pins.askRepo(self.repoId)
+	if err != nil {
+		return nil, err
+	}
 	heads, err := self.listHeads(ctx)
 	if err != nil {
 		return nil, err
+	}
+	// each ref's read in flight until its raise, so another raise meanwhile keeps the chains that place its head
+	for _, head := range heads {
+		refId, _ := IdFromBytes(head.GetRefId())
+		done := self.client.pins.beginRead(self.repoId, refId)
+		defer done()
 	}
 	result := &EvsMirrorSyncResult{}
 	missing := &evsMirrorMissingSet{limit: self.settings.MissingNameCount, nameSet: map[string]bool{}, erasedOk: map[string]bool{}}
@@ -313,7 +331,8 @@ func (self *EvsMirror) Sync(ctx context.Context) (*EvsMirrorSyncResult, error) {
 	}
 	refStates := []*EvsMirrorRefState{}
 	for _, head := range heads {
-		refState, err := run.syncRef(ctx, head)
+		refId, _ := IdFromBytes(head.GetRefId())
+		refState, err := run.syncRefAgain(ctx, head, asks.of(refId))
 		if err != nil {
 			return nil, err
 		}
@@ -420,9 +439,38 @@ type evsMirrorRun struct {
 	reread  map[Id]bool
 }
 
-// One ref to its head: the statements past what the mirror holds, walked and verified, then each version's objects,
-// the ref raised to the last version held whole.
-func (self *evsMirrorRun) syncRef(ctx context.Context, summary *protocol.EvsHeadSummary) (*EvsMirrorRefState, error) {
+// syncRef, again from a fresh listing's head where this device's pin of the ref moved in a way nothing places while
+// the sync walked it, at most ReadStaleRetryCount times (see the file header).
+func (self *evsMirrorRun) syncRefAgain(ctx context.Context, summary *protocol.EvsHeadSummary, ask *evsPinAsk) (*EvsMirrorRefState, error) {
+	mirror := self.mirror
+	refId, _ := IdFromBytes(summary.GetRefId())
+	for staleCount := 0; ; staleCount += 1 {
+		refState, err := self.syncRef(ctx, summary, ask)
+		if !errors.Is(err, ErrEvsReadStale) || mirror.client.settings.ReadStaleRetryCount <= staleCount {
+			return refState, err
+		}
+		if ask, err = mirror.client.pins.ask(mirror.repoId, refId); err != nil {
+			return nil, err
+		}
+		heads, err := mirror.listHeads(ctx)
+		if err != nil {
+			return nil, err
+		}
+		listed := false
+		for _, head := range heads {
+			if bytes.Equal(head.GetRefId(), refId.Bytes()) {
+				summary, listed = head, true
+			}
+		}
+		if !listed {
+			return nil, ErrEvsReadStale
+		}
+	}
+}
+
+// One ref to its head, held to this device's pin of it at ask: the statements past what the mirror holds, walked and
+// verified, then each version's objects, the ref raised to the last version held whole.
+func (self *evsMirrorRun) syncRef(ctx context.Context, summary *protocol.EvsHeadSummary, ask *evsPinAsk) (*EvsMirrorRefState, error) {
 	mirror := self.mirror
 	client := mirror.client
 	refId, _ := IdFromBytes(summary.GetRefId())
@@ -439,19 +487,20 @@ func (self *evsMirrorRun) syncRef(ctx context.Context, summary *protocol.EvsHead
 	if ok {
 		fromVersion, fromChain = held.Version, held.Chain
 	}
-	switch {
-	case summary.GetVersion() < fromVersion, summary.GetVersion() == fromVersion && headChain != fromChain:
+	if summary.GetVersion() < fromVersion || (summary.GetVersion() == fromVersion && headChain != fromChain) {
 		client.verifier.alarmFork(mirror.repoId, refId, &EvsPin{RepoId: mirror.repoId, RefId: refId, Version: fromVersion, Chain: fromChain}, summary.GetVersion(), headChain)
 		refState.Lower = true
 		self.result.LowerRefIds = append(self.result.LowerRefIds, refId)
 		return refState, nil
-	case summary.GetVersion() == fromVersion:
+	}
+	// this device's own pin holds the head too, as the listing asked at it, the head the mirror holds among them: a
+	// head below it is a fork, alarmed
+	if err := client.verifier.checkAsked(mirror.repoId, refId, ask, summary.GetVersion(), headChain); err != nil {
+		return nil, err
+	}
+	if summary.GetVersion() == fromVersion {
 		// the head held: only the time moves
 		return refState, mirror.store.RaiseRef(&EvsMirrorRef{RefId: refId, Version: fromVersion, Chain: fromChain, MirroredAt: client.clock.Now()})
-	}
-	// this device's own pin holds the head too: a head below it is a fork the reader already alarms
-	if err := client.verifier.checkPin(mirror.repoId, refId, summary.GetVersion(), headChain); err != nil {
-		return nil, err
 	}
 	statements, err := client.readLog(ctx, mirror.repoId, refId, fromVersion+1, summary.GetVersion())
 	if err != nil {
@@ -464,7 +513,10 @@ func (self *evsMirrorRun) syncRef(ctx context.Context, summary *protocol.EvsHead
 	if len(walked) == 0 || walked[len(walked)-1].Version != summary.GetVersion() || walked[len(walked)-1].Chain != headChain {
 		return nil, fmt.Errorf("%w: the log does not chain to the head", ErrEvsChainBroken)
 	}
-	head := &EvsVerifiedHead{RepoId: mirror.repoId, RefId: refId, Head: summary, Version: summary.GetVersion(), Chain: headChain, Statements: walked, FromVersion: fromVersion}
+	head := &EvsVerifiedHead{
+		RepoId: mirror.repoId, RefId: refId, Head: summary, Version: summary.GetVersion(), Chain: headChain, Statements: walked,
+		FromVersion: fromVersion, ask: ask, fromChain: fromChain, ownStart: true,
+	}
 	wholes := make([]bool, len(walked))
 	for i, statement := range walked {
 		whole, err := self.mirrorVersion(ctx, head, statement)
@@ -480,7 +532,7 @@ func (self *evsMirrorRun) syncRef(ctx context.Context, summary *protocol.EvsHead
 		return nil, err
 	}
 	if reread != nil {
-		return self.syncRef(ctx, reread)
+		return self.syncRef(ctx, reread, ask)
 	}
 	raised := false
 	for i, statement := range walked {

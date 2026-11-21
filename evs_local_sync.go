@@ -312,19 +312,28 @@ func (self *EvsGitSyncEngine) takeReplaySlot(ctx context.Context) (func(), error
 	}
 }
 
-// Replays refId to its head and settles it (EvsGitSync's Replay): see the file header.
+// Replays refId to its head and settles it (EvsGitSync's Replay): see the file header. A replay whose head another
+// call of the client raised the pin past while it walked, where nothing the pin store holds places it, is replayed
+// again from what the mount last flushed, fresh, at most EvsSettings.ReadStaleRetryCount times before it answers
+// ErrEvsReadStale (evs_pin_walk.go).
 func (self *EvsGitSyncEngine) Replay(ctx context.Context, refId Id) error {
 	release, err := self.takeReplaySlot(ctx)
 	if err != nil {
 		return err
 	}
 	defer release()
-	_, err = self.replayWithSlot(ctx, refId, 0, map[Id]bool{})
-	return err
+	for staleCount := 0; ; staleCount += 1 {
+		_, err = self.replayWithSlot(ctx, refId, 0, map[Id]bool{})
+		if !errors.Is(err, ErrEvsReadStale) || self.settings.ReadStaleRetryCount <= staleCount {
+			return err
+		}
+	}
 }
 
 // One ref's replay to upTo, 0 for its head, inside the mount's replay turn: replaying holds the refs whose replays
-// enclose this one, so a source naming one of them back is a cycle unless that ref has passed the version named.
+// enclose this one, so a source naming one of them back is a cycle unless that ref has passed the version named. The
+// head is read at the pin as it stands then, its read in flight until it is pinned with the walk's chains from that
+// pin, or from the mount's own state above it (evsWalkTrail).
 func (self *EvsGitSyncEngine) replayWithSlot(ctx context.Context, refId Id, upTo uint64, replaying map[Id]bool) (*EvsGitRef, error) {
 	ref, err := self.loadRef(ctx, refId)
 	if err != nil {
@@ -333,6 +342,8 @@ func (self *EvsGitSyncEngine) replayWithSlot(ctx context.Context, refId Id, upTo
 	if ref.Mode == protocol.EvsRefMode_EVS_REF_FILE {
 		return ref, nil
 	}
+	done := self.client.pins.beginRead(self.mount.RepoId, refId)
+	defer done()
 	head, err := self.repo.pinnedHead(ctx, refId)
 	if err != nil {
 		return nil, err
@@ -375,7 +386,9 @@ func (self *EvsGitSyncEngine) replayWithSlot(ctx context.Context, refId Id, upTo
 		engine: self, ref: ref.clone(), head: head, store: store, replayer: newEvsGitReplayer(self.repo, store),
 		keys: newEvsReadKeys(self.repo), replaying: replaying,
 		paths: NewEvsReplayPathsOfMode(ref.Version, protocol.EvsRefMode_EVS_REF_GIT).WithOverlayOffset(overlayOffset),
+		trail: newEvsWalkTrail(head.ask),
 	}
+	run.trail.start(ref.Version, ref.Chain)
 	if run.ref.WaitingSource != nil || run.ref.WaitingRules != "" {
 		// tried again now: a wait still owed is recorded again below
 		run.ref.WaitingSource, run.ref.WaitingVersion, run.ref.WaitingRules, run.dirty = nil, 0, "", true
@@ -396,17 +409,12 @@ func (self *EvsGitSyncEngine) replayWithSlot(ctx context.Context, refId Id, upTo
 		return nil, err
 	}
 	if run.ref.Version == head.Version && run.ref.Chain == head.Chain {
-		// the walk reached the head: pinned before what it backs is shown, unless a read on another path, a push's
-		// plan or a receive's own replay, pinned a newer head meanwhile: the pin only rises, and this older head is
-		// not pinned again, so a race of two reads is no fork (found by EVS1-M2-43's twenty agents)
-		held, pinned, err := self.client.pins.Pin(self.mount.RepoId, refId)
-		if err != nil {
+		// the walk reached the head: pinned before what it backs is shown, judged against the pin as it stands now,
+		// which a read on another path, a push's plan or a receive's own replay may have raised past it meanwhile: the
+		// pin only rises, and this older head stands where the walks of those raises place it, so a race of two reads
+		// is no fork (found by EVS1-M2-43's twenty agents), and is replayed again, unflushed, where nothing does
+		if err := self.client.verifier.Pin(run.trail.head(head)); err != nil {
 			return nil, err
-		}
-		if !pinned || held.Version <= head.Version {
-			if err := self.client.verifier.Pin(head); err != nil {
-				return nil, err
-			}
 		}
 		run.ref.PathEpoch = head.Head.GetPathEpoch()
 		run.reachedHead = true
@@ -515,6 +523,9 @@ type evsGitReplayRun struct {
 	applied     int
 	dirty       bool
 	reachedHead bool
+	// the walk's chains from the pin the head's read asked at, or from the mount's state above it, which the head's
+	// raise judges
+	trail *evsWalkTrail
 }
 
 // The statements through version through, a page at a time, each applied.
@@ -532,9 +543,16 @@ func (self *evsGitReplayRun) replay(ctx context.Context, through uint64) error {
 		if err != nil {
 			return err
 		}
-		if err := client.verifier.checkPinOnWalk(engine.mount.RepoId, self.ref.RefId, walked); err != nil {
+		// the page held to what the pin store holds now, before any of it applies: a fork found here stops the replay
+		// with its alarm, and the head's raise judges the whole walk again
+		page := &EvsVerifiedHead{
+			RepoId: engine.mount.RepoId, RefId: self.ref.RefId, Head: self.head.Head, Version: last, Chain: walked[len(walked)-1].Chain,
+			FromVersion: self.ref.Version, Statements: walked, ask: self.head.ask, fromChain: self.ref.Chain, ownStart: true, page: true,
+		}
+		if _, err := client.verifier.judgeHead(page, nil); err != nil {
 			return err
 		}
+		self.trail.add(walked)
 		for _, statement := range walked {
 			if err := self.apply(ctx, statement); err != nil {
 				return err

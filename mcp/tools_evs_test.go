@@ -1111,6 +1111,24 @@ func TestEvsWriteSealsTheSessionsAgentId(t *testing.T) {
 	}
 }
 
+// A read whose head another call of the daemon's client raised the pin past on each of its tries, which nothing placed
+// on the pinned history (ErrEvsReadStale), answers a retryable failure of constant text, naming nothing of the call.
+func TestMcpEvsStaleReadIsRetryable(t *testing.T) {
+	env := newTestEvsToolEnv(t)
+	conn := env.conn("2025-11-25")
+	const path = "plans/secret-plan.md"
+	env.put(env.general, path, "the plan", env.tools.identity.SidecarId)
+	env.evs.repos[env.general].files[path].readErr = fmt.Errorf("%s: %w", path, sidecar.ErrEvsReadStale)
+	result := env.callTool(conn, "2025-11-25", "evs_read", map[string]any{"repo": env.general.String(), "path": path})
+	wantMcpError(t, result, McpCodeFailed, "moved past this read")
+	if _, retryable := mcpErrorCode(t, responseError(result)); !retryable {
+		t.Error("a stale read is not retryable")
+	}
+	if strings.Contains(result.Error.Message, "secret-plan") || len(result.Result) != 0 {
+		t.Fatalf("the stale read exposed its path or a result: %+v", result)
+	}
+}
+
 // A committed erasure has a stable terminal tool result without the underlying path.
 func TestMcpEvsErasedVersionResult(t *testing.T) {
 	env := newTestEvsToolEnv(t)

@@ -47,6 +47,9 @@ func (self *EvsRepo) StorageStatus(ctx context.Context, refName []byte) (*EvsSto
 	if err != nil {
 		return nil, err
 	}
+	// the read in flight from the head's ask to its pin, so a raise meanwhile keeps the chains that place it
+	done := self.client.pins.beginRead(self.repoId, refId)
+	defer done()
 	pinned, err := self.pinnedHead(ctx, refId)
 	if err != nil {
 		return nil, err

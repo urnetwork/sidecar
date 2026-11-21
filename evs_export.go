@@ -73,6 +73,7 @@ func (self *EvsRepo) Export(ctx context.Context, args *EvsExportArgs) (*EvsExpor
 	export := newEvsGitExport(self, writer)
 	// the originals a rewrite over an erased blob kept beside the repository go with the export, whatever its end
 	defer export.store.close()
+	defer export.release()
 	result := &EvsExportResult{}
 	notes := []*evsExportNote{}
 	for _, refName := range refNames {
@@ -106,76 +107,101 @@ func (self *EvsRepo) Export(ctx context.Context, args *EvsExportArgs) (*EvsExpor
 	return result, nil
 }
 
-// One ref's whole history, verified from C_0 and pinned, then rebuilt into the export's repository under gitRef.
+// One ref's whole history, verified from C_0 and pinned, then rebuilt into the export's repository under gitRef. The
+// read of the ref stays in flight until its head is pinned: at the export's end for a git-mode ref, whose sources the
+// export pins last (evsGitExport.release), and before a file-mode ref's tree is rebuilt, a stale read of which is read
+// again, fresh, at most EvsSettings.ReadStaleRetryCount times.
 func (self *EvsRepo) exportRef(ctx context.Context, export *evsGitExport, refId Id, refName []byte, gitRef string) (*EvsExportedRef, []*evsExportNote, error) {
-	head, err := self.pinnedHead(ctx, refId)
-	if err != nil || head.Version == 0 {
-		return nil, nil, err
-	}
-	switch protocol.EvsRefMode(head.Head.GetRefMode()) {
-	case protocol.EvsRefMode_EVS_REF_GIT:
-		return export.exportGitRef(ctx, head, refName, gitRef)
-	case protocol.EvsRefMode_EVS_REF_FILE:
-		verified, err := self.verifiedHistory(ctx, head)
-		if err != nil || verified == nil {
+	for staleCount := 0; ; staleCount += 1 {
+		done := self.client.pins.beginRead(self.repoId, refId)
+		head, err := self.pinnedHead(ctx, refId)
+		if err != nil || head.Version == 0 {
+			done()
 			return nil, nil, err
 		}
-		return self.exportFileRef(ctx, export.writer, verified, gitRef)
-	default:
-		return nil, nil, fmt.Errorf("%w: ref mode %d", ErrEvsExport, head.Head.GetRefMode())
+		switch protocol.EvsRefMode(head.Head.GetRefMode()) {
+		case protocol.EvsRefMode_EVS_REF_GIT:
+			export.reading(done)
+			return export.exportGitRef(ctx, head, refName, gitRef)
+		case protocol.EvsRefMode_EVS_REF_FILE:
+			verified, err := self.verifiedHistory(ctx, head)
+			done()
+			if errors.Is(err, ErrEvsReadStale) && staleCount < self.client.settings.ReadStaleRetryCount {
+				continue
+			}
+			if err != nil || verified == nil {
+				return nil, nil, err
+			}
+			return self.exportFileRef(ctx, export.writer, verified, gitRef)
+		default:
+			done()
+			return nil, nil, fmt.Errorf("%w: ref mode %d", ErrEvsExport, head.Head.GetRefMode())
+		}
 	}
 }
 
-// A ref's head, read fresh and held to this device's pin: its statements not read yet. A head below the pin is taken
-// only under the ref's Signed EvsReseed, as a read takes it (evs_read.go's acceptReseedBelowPin).
+// A ref's head, read fresh and held to the pin its read asked at (EvsPinStore.ask, evs_pin_walk.go): its statements
+// not read yet, so the walk that reads them, from C_0 or from its reader's own state, gives Pin what it walked
+// (verifiedHistory, evsWalkTrail), and Pin judges the head against the pin as it then stands, which another call of
+// the client may have raised past it meanwhile. A head below the pin asked at is taken only under the ref's Signed
+// EvsReseed, as a read takes it (evs_read.go's acceptReseedBelowPin), and is otherwise a fork, alarmed. A caller that
+// walks before it pins notes its read in flight first (EvsPinStore.beginRead), so a raise meanwhile keeps the chains
+// that place this head.
 func (self *EvsRepo) pinnedHead(ctx context.Context, refId Id) (*EvsVerifiedHead, error) {
 	return self.pinnedHeadFromPin(ctx, refId, true)
 }
 
 // pinnedHead, taking a head below the pin under the ref's EvsReseed at most once (reseed).
 func (self *EvsRepo) pinnedHeadFromPin(ctx context.Context, refId Id, reseed bool) (*EvsVerifiedHead, error) {
+	ask, err := self.client.pins.ask(self.repoId, refId)
+	if err != nil {
+		return nil, err
+	}
 	reply, objects, err := self.client.postRead(ctx, self.repoId, &protocol.EvsReadRequest{RefId: refId.Bytes(), Fresh: true})
 	if err != nil {
 		return nil, err
 	}
 	objects.close()
 	head := reply.head
-	if reseed {
-		pin, pinned, err := self.client.pins.Pin(self.repoId, refId)
+	if reseed && ask.pin != nil && head.GetVersion() < ask.pin.Version {
+		// this read named no pin, so the statement comes with a second one that does
+		again, err := self.acceptReseedBelowPin(ctx, refId, ask.pin, reply, 0)
 		if err != nil {
 			return nil, err
 		}
-		if pinned && head.GetVersion() < pin.Version {
-			// this read named no pin, so the statement comes with a second one that does
-			again, err := self.acceptReseedBelowPin(ctx, refId, pin, reply, 0)
-			if err != nil {
-				return nil, err
-			}
-			if again {
-				return self.pinnedHeadFromPin(ctx, refId, false)
-			}
+		if again {
+			return self.pinnedHeadFromPin(ctx, refId, false)
 		}
 	}
 	headChain, err := EvsChainFromBytes(head.GetChain())
 	if err != nil {
 		return nil, fmt.Errorf("%w: the head's chain", ErrEvsReplyInvalid)
 	}
-	if err := self.client.verifier.checkPin(self.repoId, refId, head.GetVersion(), headChain); err != nil {
+	if err := self.client.verifier.checkAsked(self.repoId, refId, ask, head.GetVersion(), headChain); err != nil {
 		return nil, err
 	}
-	return &EvsVerifiedHead{RepoId: self.repoId, RefId: refId, Head: head, Version: head.GetVersion(), Chain: headChain}, nil
+	return &EvsVerifiedHead{
+		RepoId: self.repoId, RefId: refId, Head: head, Version: head.GetVersion(), Chain: headChain,
+		ask: ask, fromChain: EvsChainStart(self.repoId, refId),
+	}, nil
 }
 
-// A ref's whole history, verified from C_0 to the pinned head and pinned again: nil for a ref with no version. A
-// file-mode export reads it whole; a git-mode one pages it (evsGitExportRef).
+// A ref's whole history, verified from C_0 to the pinned head and pinned with its walk: nil for a ref with no version.
+// A head its read pinned already is not judged again, its whole history reaching its chain. A file-mode export reads
+// it whole; a git-mode one pages it (evsGitExportRef).
 func (self *EvsRepo) verifiedHistory(ctx context.Context, head *EvsVerifiedHead) (*EvsVerifiedHead, error) {
 	walked, err := self.client.verifier.walkToHead(ctx, head)
 	if err != nil {
 		return nil, err
 	}
-	verified := &EvsVerifiedHead{RepoId: self.repoId, RefId: head.RefId, Head: head.Head, Version: head.Version, Chain: head.Chain, Statements: walked}
-	if err := self.client.verifier.Pin(verified); err != nil {
-		return nil, err
+	verified := &EvsVerifiedHead{
+		RepoId: self.repoId, RefId: head.RefId, Head: head.Head, Version: head.Version, Chain: head.Chain, Statements: walked,
+		ask: head.ask, fromChain: EvsChainStart(self.repoId, head.RefId), pinned: head.pinned,
+	}
+	if !verified.pinned {
+		if err := self.client.verifier.Pin(verified); err != nil {
+			return nil, err
+		}
 	}
 	if len(walked) == 0 {
 		return nil, nil
@@ -215,6 +241,8 @@ type evsGitExport struct {
 	refs      map[Id]*evsGitExportRef
 	// the refs mid-replay, so a source that names one back is a cycle
 	replaying map[Id]bool
+	// each ref's read in flight from its head's ask to its pin, ended with the export (EvsPinStore.beginRead)
+	dones []func()
 }
 
 // One git-mode ref as export has replayed it. Its history is read a page at a time from the log, each page walked
@@ -230,8 +258,10 @@ type evsGitExportRef struct {
 	passed uint64
 	chain  [sha256.Size]byte
 	page   []*EvsVerifiedStatement
-	// the chain was held to the head and pinned
+	// the chain was held to the head and pinned; the walk's chains from the pin its head's read asked at, which the
+	// pin's raise judges
 	pinned bool
+	trail  *evsWalkTrail
 	// its tip, nil before its creation and after a DELETE; the tip it had at its last DELETE, nil for none; and the
 	// kind its pushes carry, which with its name says whether it is a shared branch (DESIGN-DETAILS 8.2.7)
 	tip     *EvsGitOid
@@ -298,6 +328,7 @@ func (self *evsGitExport) next(ctx context.Context, ref *evsGitExportRef) (*EvsV
 			return nil, fmt.Errorf("%w: the log ends short of the head", ErrEvsChainBroken)
 		}
 		ref.page = walked
+		ref.trail.add(walked)
 	}
 	return ref.page[0], nil
 }
@@ -308,8 +339,10 @@ func (self *evsGitExportRef) pass(statement *EvsVerifiedStatement) {
 	self.page = self.page[1:]
 }
 
-// Walks what is left of the ref's history without applying it, holds the chain to the head and pins it: a source
-// replayed part way is still read to its head, so no fork below a head goes unseen.
+// Walks what is left of the ref's history without applying it, holds the chain to the head and pins it with the walk's
+// chains from the pin its read asked at: a source replayed part way is still read to its head, so no fork below a head
+// goes unseen, and a head another call of the client raised the pin past meanwhile stands where the store places it,
+// else answers ErrEvsReadStale.
 func (self *evsGitExport) finish(ctx context.Context, ref *evsGitExportRef) error {
 	if ref.pinned {
 		return nil
@@ -327,11 +360,24 @@ func (self *evsGitExport) finish(ctx context.Context, ref *evsGitExportRef) erro
 	if ref.chain != ref.head.Chain {
 		return fmt.Errorf("%w: the history does not chain to the head", ErrEvsChainBroken)
 	}
-	if err := self.repo.client.verifier.Pin(ref.head); err != nil {
+	if err := self.repo.client.verifier.Pin(ref.trail.head(ref.head)); err != nil {
 		return err
 	}
 	ref.pinned = true
 	return nil
+}
+
+// Keeps a ref's read in flight until the export ends.
+func (self *evsGitExport) reading(done func()) {
+	self.dones = append(self.dones, done)
+}
+
+// Ends every ref's read the export kept in flight.
+func (self *evsGitExport) release() {
+	for _, done := range self.dones {
+		done()
+	}
+	self.dones = nil
 }
 
 // An export's replays into writer's repository through its store (evs_export_erased.go), its tree cache bounded by
@@ -361,7 +407,8 @@ func newEvsGitReplayer(repo *EvsRepo, objects evsGitReplayStore) *evsGitExport {
 func (self *evsGitExport) ref(head *EvsVerifiedHead) *evsGitExportRef {
 	ref := self.refs[head.RefId]
 	if ref == nil {
-		ref = &evsGitExportRef{refId: head.RefId, head: head, chain: EvsChainStart(self.repo.repoId, head.RefId)}
+		ref = &evsGitExportRef{refId: head.RefId, head: head, chain: EvsChainStart(self.repo.repoId, head.RefId), trail: newEvsWalkTrail(head.ask)}
+		ref.trail.start(0, ref.chain)
 		self.refs[head.RefId] = ref
 	}
 	return ref
@@ -797,10 +844,13 @@ func (self *evsGitExport) replaySource(ctx context.Context, source *protocol.Evs
 	}
 	ref := self.refs[refId]
 	if ref == nil {
+		done := self.repo.client.pins.beginRead(self.repo.repoId, refId)
 		head, err := self.repo.pinnedHead(ctx, refId)
 		if err != nil {
+			done()
 			return err
 		}
+		self.reading(done)
 		if head.Version == 0 {
 			return fmt.Errorf("%w: a source with no version", ErrEvsGitUpdateRefused)
 		}
