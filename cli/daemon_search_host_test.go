@@ -4,10 +4,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"testing"
+	"time"
 
+	"github.com/urnetwork/connect"
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/sidecartest/enginenet"
@@ -17,11 +21,19 @@ import (
 func TestDaemonSearchReadsVerifiedFilesOnlyInTheirHostedNetwork(t *testing.T) {
 	world := newTestUrFollowWorld(t, 2)
 	engines := enginenet.NewEngines(t, world.net, nil)
+	var networks []connect.Id
+	for _, network := range world.networks {
+		engines.OpenNetwork(network.NetworkId())
+		networks = append(networks, connect.Id(network.NetworkId()))
+	}
+	// Opening an individual engine fixture replaces its service allowlist. Keep both hosted networks admitted.
+	for _, service := range []string{sidecar.ServiceGateEvs, sidecar.ServiceGateGkm} {
+		world.net.Fakes().Gates.OpenService(service, networks...)
+	}
 	var hosted []*sidecar.Sidecar
 	var repoId sidecar.Id
 	path := "review-orchard.txt"
 	for index, network := range world.networks {
-		engines.OpenNetwork(network.NetworkId())
 		running := world.host(network, nil)
 		world.standing(running, network)
 		hosted = append(hosted, running)
@@ -63,6 +75,19 @@ func TestDaemonSearchReadsVerifiedFilesOnlyInTheirHostedNetwork(t *testing.T) {
 	if hits := hostedSearchHits(t, world.ctx, hosted[0], &sidecar.SearchRequest{Text: "orchard", Repos: []sidecar.Id{repoId}, Ref: "unverified-ref"}); len(hits) != 0 {
 		t.Fatalf("another ref returned the observation: %+v", hits)
 	}
+	if err := world.instance.Restart(); err != nil {
+		t.Fatal(err)
+	}
+	for index, network := range world.networks {
+		hosted[index] = world.instance.Sidecar(network.NetworkId())
+		world.standing(hosted[index], network)
+	}
+	if hits := hostedSearchHits(t, world.ctx, hosted[0], request); len(hits) != 1 || hits[0].Path != path {
+		t.Fatalf("restored verified file: %+v", hits)
+	}
+	if err := engines.Sync(world.ctx, world.networks[0].NetworkId()); err != nil {
+		t.Fatal(err)
+	}
 	evs, err := urDaemonEvsClient(hosted[0])
 	if err != nil {
 		t.Fatal(err)
@@ -82,6 +107,12 @@ func TestDaemonSearchReadsVerifiedFilesOnlyInTheirHostedNetwork(t *testing.T) {
 // Each result enters through the public Sidecar method without installing a test engine.
 func hostedSearchHits(t *testing.T, ctx context.Context, running *sidecar.Sidecar, r *sidecar.SearchRequest) []sidecar.SearchHit {
 	t.Helper()
+	hits, _ := hostedSearchPage(t, ctx, running, r)
+	return hits
+}
+
+func hostedSearchPage(t *testing.T, ctx context.Context, running *sidecar.Sidecar, r *sidecar.SearchRequest) ([]sidecar.SearchHit, sidecar.SearchProgress) {
+	t.Helper()
 	stream, err := running.Search(ctx, r)
 	if err != nil {
 		t.Fatal(err)
@@ -89,34 +120,68 @@ func hostedSearchHits(t *testing.T, ctx context.Context, running *sidecar.Sideca
 	defer stream.Close()
 	var hits []sidecar.SearchHit
 	for {
-		page, _, done, err := stream.Next()
+		page, progress, done, err := stream.Next()
 		if err != nil {
 			t.Fatal(err)
 		}
 		hits = append(hits, page...)
 		if done {
-			return hits
+			return hits, progress
 		}
 	}
 }
 
 // The actual signed record reader and its governing class policy drive the fallback view.
 func TestDaemonSearchOpensSignedVaultDocumentsOnTheirWriterRef(t *testing.T) {
-	world := newTestUrFollowWorld(t, 1)
-	engines := enginenet.NewEngines(t, world.net, nil)
-	network := world.networks[0]
-	engines.OpenNetwork(network.NetworkId())
-	running := world.host(network, nil)
-	world.standing(running, network)
-	if err := engines.Sync(world.ctx, network.NetworkId()); err != nil {
+	world, running, _, record, vault, _ := hostedRecordNote(t, false)
+	if err := record.Reader().Sync(world.ctx, vault); err != nil {
 		t.Fatal(err)
 	}
+	request := &sidecar.SearchRequest{Text: "first vault note", Repos: []sidecar.Id{vault}, Ref: string(sidecar.RecordStreamRefName(running.Identity().SidecarId))}
+	hits := hostedSearchHits(t, world.ctx, running, request)
+	if len(hits) != 1 || hits[0].Repo != vault || hits[0].Signer != running.Identity().SidecarId {
+		t.Fatalf("signed vault search: %+v", hits)
+	}
+	policy, err := record.Retention().Set(world.ctx, &sidecar.RecordRetentionSetArgs{LogId: vault, Class: sidecar.RecordClassCoordination, SearchableDays: 1, Confirmed: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := record.Land(world.ctx, []*sidecar.RecordEntryRef{policy}); err != nil {
+		t.Fatal(err)
+	}
+	if err := record.Reader().Sync(world.ctx, vault); err != nil {
+		t.Fatal(err)
+	}
+	if d := record.Retention().SearchableDays(vault, sidecar.RecordClassCoordination); d != 1 {
+		t.Fatalf("signed retention policy: %d days", d)
+	}
+	world.net.Clock().Advance(24*time.Hour + time.Second)
+	if hits := hostedSearchHits(t, world.ctx, running, request); len(hits) != 0 {
+		t.Fatalf("signed searchable age still exposed: %+v", hits)
+	}
+}
+
+// A normal format-2 write creates a real encrypted index. An unscoped cached query cannot use the named-repo scan.
+func TestDaemonSearchSyncsTheRealEncryptedIndex(t *testing.T) {
+	world := newTestUrFollowWorld(t, 1)
+	cfg := enginenet.DefaultEnginesSettings()
+	cfg.EvsInstanceFormat = sidecar.EvsRepoFormat2
+	cfg.FollowBeforeExchange = true
+	engines := enginenet.NewEngines(t, world.net, cfg)
+	network := world.networks[0]
+	engines.OpenNetwork(network.NetworkId())
+	gates := world.net.Fakes().Gates
+	id := connect.Id(network.NetworkId()).String()
+	if err := gates.Set(fmt.Sprintf("sidecar:\n  evs: {enabled: true, networks: [%q]}\n  gkm: {enabled: true, networks: [%q]}\n  format2: {enabled: true, networks: [%q]}\n", id, id, id)); err != nil {
+		t.Fatal(err)
+	}
+	running := world.host(network, nil)
+	world.standing(running, network)
 	keys, err := urDaemonGkmClient(running)
 	if err != nil {
 		t.Fatal(err)
 	}
-	owner := network.Owner().MemberId
-	vault, err := engines.CreateRepo(world.ctx, &enginenet.CreateRepoArgs{Sidecar: running, Gkm: keys, Kind: protocol.RepoKind_REPO_KIND_VAULT, OwnerMemberId: &owner})
+	repoId, err := engines.CreateRepo(world.ctx, &enginenet.CreateRepoArgs{Sidecar: running, Gkm: keys, Kind: protocol.RepoKind_REPO_KIND_GENERAL})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,29 +189,84 @@ func TestDaemonSearchOpensSignedVaultDocumentsOnTheirWriterRef(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err := running.Record()
+	for {
+		_, changed := world.net.Clock().WatchTimers()
+		if on, known := evs.Format2Gate(); on && known {
+			break
+		}
+		select {
+		case <-changed:
+		case <-world.ctx.Done():
+			t.Fatalf("waiting for authenticated format-2 admission: %v", world.ctx.Err())
+		}
+	}
+	path := "orchard-catalog.txt"
+	content := []byte("very local catalog")
+	repo := evs.Repo(repoId)
+	if _, err := repo.Write(world.ctx, &sidecar.EvsWriteArgs{Path: path, Content: bytes.NewReader(content), Size: int64(len(content))}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := repo.ReadHead(world.ctx, &sidecar.EvsReadArgs{Path: path}, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := record.BindMemberReplica(running.ConfigFollower().Client(), evs); err != nil {
-		t.Fatal(err)
-	}
-	if err := record.PrepareDirectWrites(world.ctx); err != nil {
-		t.Fatal(err)
-	}
-	refs, err := record.Writer().Append(&sidecar.RecordDraft{Kind: sidecar.RecordKindNote, Source: sidecar.RecordSourceAgent, NoSession: true, Body: &protocol.CoordinationBody{Text: "orchard record"}})
+	params, err := json.Marshal(&sidecar.DaemonSearchSyncParams{Repo: repoId.String()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := record.Land(world.ctx, refs); err != nil {
+	reply, err := sidecar.DaemonSearchSyncMethods()[0].Handler(world.ctx, &sidecar.DaemonCall{Sidecar: running, Params: params})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := record.Reader().Sync(world.ctx, vault); err != nil {
+	synced := reply.(*sidecar.DaemonSearchSyncReply)
+	if synced.Synced != 1 || len(synced.Failed) != 0 {
+		for _, f := range synced.Failed {
+			t.Logf("%s %s", f.RefId, f.Error)
+		}
+		t.Fatalf("synced %d refs", synced.Synced)
+	}
+	request := &sidecar.SearchRequest{Text: "orchard", Scope: sidecar.SearchCached}
+	hits, progress := hostedSearchPage(t, world.ctx, running, request)
+	if len(hits) != 1 || hits[0].Path != path || hits[0].Repo != repoId {
+		t.Fatalf("ordinary network search of cache: %+v", hits)
+	}
+	cache, err := running.SearchCache()
+	if err != nil {
 		t.Fatal(err)
 	}
-	request := &sidecar.SearchRequest{Text: "orchard", Repos: []sidecar.Id{vault}, Ref: string(sidecar.RecordStreamRefName(running.Identity().SidecarId))}
-	hits := hostedSearchHits(t, world.ctx, running, request)
-	if len(hits) != 1 || hits[0].Repo != vault || hits[0].Signer != running.Identity().SidecarId {
-		t.Fatalf("signed vault search: %+v", hits)
+	refId, err := repo.RefIdOf(world.ctx, sidecar.EvsMainRefName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var covered bool
+	for _, ref := range progress.Coverage {
+		if ref.RepoId == repoId && ref.RefId == refId && ref.State == "searched" && ref.PinVersion == info.HeadVersion &&
+			ref.IndexedThrough == info.CommitVersion && ref.IndexedThrough > 0 {
+			covered = true
+		}
+	}
+	if !covered {
+		t.Fatalf("coverage at the signed file commit %d (head %d): %+v", info.CommitVersion, info.HeadVersion, progress.Coverage)
+	}
+	held, err := cache.Ref(repoId, refId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := false
+	if held != nil {
+		for _, f := range held.Files {
+			ready = ready || f.KeysKept
+		}
+	}
+	if !ready {
+		t.Fatal("the hosted cache must retain an actual reopenable EVS record")
+	}
+	if err := world.instance.Restart(); err != nil {
+		t.Fatal(err)
+	}
+	restored := world.instance.Sidecar(network.NetworkId())
+	world.standing(restored, network)
+	if hits := hostedSearchHits(t, world.ctx, restored, request); len(hits) != 1 || hits[0].Repo != repoId || hits[0].Path != path {
+		t.Fatalf("the restarted host could not reopen the encrypted search cache: %+v", hits)
 	}
 }

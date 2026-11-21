@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 
@@ -43,6 +44,26 @@ func TestMemberReplicaReadsTheEnrolledNetworksEncryptedHeadAfterRestart(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Provision a normal shared file before the app joins. Its own EVS reader must establish the searchable name.
+	startUrConfigFollower(running, sidecar.NewNoopLogger())
+	initial, err := running.ConfigFollower().WaitStanding(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileRepo, err := engines.CreateRepo(ctx, &enginenet.CreateRepoArgs{Sidecar: running, Gkm: keys, Kind: protocol.RepoKind_REPO_KIND_GENERAL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tip := initial.Pin()
+	evs, err := urDaemonEvsClient(running)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const path = "app-orchard.txt"
+	content := []byte("the enrolled member's file")
+	if _, err := evs.Repo(fileRepo).Write(ctx, &sidecar.EvsWriteArgs{Path: path, Content: bytes.NewReader(content), Size: int64(len(content))}); err != nil {
+		t.Fatal(err)
+	}
 	if err := instance.Restart(); err != nil {
 		t.Fatal(err)
 	}
@@ -57,11 +78,15 @@ func TestMemberReplicaReadsTheEnrolledNetworksEncryptedHeadAfterRestart(t *testi
 		if err != nil || again != replica {
 			t.Fatalf("the enrolled host opened a second replica: %v", err)
 		}
-		if _, err := running.ConfigFollower().WaitStanding(ctx); err != nil {
+		client, err := running.ConfigFollower().WaitStanding(ctx)
+		if err != nil {
 			t.Fatalf("the enrolled config head: %v (%+v)", err, running.ConfigFollower().Status())
 		}
+		if _, err := client.WaitFor(ctx, tip.GetVersion()); err != nil {
+			t.Fatal(err)
+		}
 		config, evs := replica.Config(), replica.Evs()
-		if config == nil || evs == nil || !bytes.Equal(config.Pin().GetChain(), provisioned.Bootstrap.Pin.GetChain()) {
+		if config == nil || evs == nil || !bytes.Equal(config.Pin().GetChain(), tip.GetChain()) {
 			t.Fatal("the public clients did not open on the verified pin")
 		}
 		var content bytes.Buffer
@@ -72,7 +97,26 @@ func TestMemberReplicaReadsTheEnrolledNetworksEncryptedHeadAfterRestart(t *testi
 		return replica
 	}
 	first := open(running)
+	fileRequest := &sidecar.SearchRequest{Text: "orchard", Repos: []sidecar.Id{fileRepo}}
+	if _, err := first.Evs().Repo(fileRepo).ReadHead(ctx, &sidecar.EvsReadArgs{Path: path}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	assertFile := func(running *sidecar.Sidecar) {
+		t.Helper()
+		hits := hostedSearchHits(t, ctx, running, fileRequest)
+		if len(hits) != 1 || hits[0].Path != path || hits[0].Signer != running.Identity().SidecarId {
+			t.Fatalf("the app's verified file: %+v", hits)
+		}
+	}
+	assertFile(running)
+	request := &sidecar.SearchRequest{Text: "genesis", Repos: []sidecar.Id{provisioned.ConfigRepoId}}
+	if hits := hostedSearchHits(t, ctx, running, request); len(hits) != 0 {
+		t.Fatal("an app search exposed its config repository")
+	}
 	instance.Instance().Lock()
+	if _, err := running.Search(ctx, request); err == nil {
+		t.Fatal("the locked app opened a search")
+	}
 	if first.Config() != nil || first.Evs() != nil {
 		t.Fatal("the locked instance still served member data")
 	}
@@ -84,6 +128,10 @@ func TestMemberReplicaReadsTheEnrolledNetworksEncryptedHeadAfterRestart(t *testi
 	}
 	restarted := instance.Sidecar(networkId)
 	second := open(restarted)
+	assertFile(restarted)
+	if hits := hostedSearchHits(t, ctx, restarted, request); len(hits) != 0 {
+		t.Fatal("a restarted app search exposed its config repository")
+	}
 	restarted.Close()
 	if second.Config() != nil || second.Evs() != nil || restarted.MemberReplica() != nil {
 		t.Fatal("the host still serves its replica after Close")
