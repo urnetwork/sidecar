@@ -259,6 +259,7 @@ func (self *Net) AddApi(settings *FakeApiSettings) (*FakeApi, error) {
 	api.secretSink = self.capture.AddSecret
 	// §6.8's sync routes from the Net's hint state (fake_api_sync.go)
 	api.sync.push = self.push
+	api.sync.gates = self.Host().Gates
 	return api, nil
 }
 

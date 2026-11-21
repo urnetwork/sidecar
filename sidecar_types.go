@@ -28,6 +28,8 @@ type Sidecar struct {
 	// The sidecar's client of api, on every leg, holding its jwt and DPoP signer (api_client.go).
 	// Set once at construction.
 	sidecarApi *SidecarApi
+	// A member host consumes this network's core rollout across client generations. Guarded by stateLock.
+	followCoreGates bool
 	// Mirrors lifecycle's state for a caller waiting on a change, and is written only with it.
 	state          *MonitorValue[SidecarState]
 	eventCallbacks *CallbackList[SidecarEventFunction]

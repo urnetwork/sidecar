@@ -173,7 +173,7 @@ type EvsClient struct {
 	writeHook EvsWritePlanHook
 	// whether the network is in §19.11's format2 gate, from the composition's core state (evs_format_client.go); nil
 	// answers false
-	format2Source func() bool
+	format2Source func() (admitted bool, known bool)
 	// a new path's versioning rules, from the composition's config state (evs_write_versionless.go); nil reads as
 	// no rule
 	versioningRules func(repoId Id, filePath string, size uint64) (uint32, error)

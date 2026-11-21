@@ -131,7 +131,8 @@ type SidecarApi struct {
 	// the api's clock less this device's, at the newest answer whose Date gave it; zero until one
 	apiClockOffset time.Duration
 	// the authenticated jwt
-	byJwt string
+	byJwt       string
+	bearerEpoch uint64
 	// the ClientKey's proof (§7.4), newDpopSigner's; nil until the core installs one, and then a call
 	// that needs a proof is not sent
 	dpopSigner func(method string, url string, ath string) (string, error)
@@ -194,7 +195,10 @@ func (self *SidecarApi) SetByJwt(byJwt string) {
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		self.byJwt = byJwt
+		if self.byJwt != byJwt {
+			self.byJwt = byJwt
+			self.bearerEpoch++
+		}
 	}()
 	testHookBarrier("api.set_by_jwt.after", "")
 }
@@ -202,9 +206,15 @@ func (self *SidecarApi) SetByJwt(byJwt string) {
 // The installed token, for the token manager's schedule, which reads its claims. Never for a reply,
 // a log or an environment (I-7).
 func (self *SidecarApi) currentByJwt() string {
+	token, _ := self.currentBearer()
+	return token
+}
+
+// The token and its installation epoch. Live authenticated state can detect replacement without retaining a bearer.
+func (self *SidecarApi) currentBearer() (string, uint64) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	return self.byJwt
+	return self.byJwt, self.bearerEpoch
 }
 
 // Installs the ClientKey's proof signer, newDpopSigner's. nil removes it, after which no call that
@@ -319,9 +329,8 @@ type sidecarApiRequest struct {
 	buildBody func(byJwt string) []byte
 	// Presents the jwt as a bearer.
 	bearer bool
-	// Presents this service token as the bearer in place of the jwt, which the request then needs none of: a
-	// service's route on its own audience's token (§7.8), sockets' since QD-1029.
-	serviceBearer string
+	// Presents the caller's selected bearer, such as a service token or a client token checked against a generation.
+	bearerOverride string
 	// Carries a DPoP proof over the jwt (§7.4).
 	dpop bool
 	// Reads a refusal's whole body as the route's own, when set: the error it answers stands for the refusal, and nil
@@ -406,8 +415,8 @@ func (self *SidecarApi) sendOnce(ctx context.Context, request *sidecarApiRequest
 	if request.contentType != "" {
 		httpRequest.Header.Set("Content-Type", request.contentType)
 	}
-	if request.serviceBearer != "" {
-		httpRequest.Header.Set("Authorization", "Bearer "+request.serviceBearer)
+	if request.bearerOverride != "" {
+		httpRequest.Header.Set("Authorization", "Bearer "+request.bearerOverride)
 	} else if request.bearer {
 		httpRequest.Header.Set("Authorization", "Bearer "+byJwt)
 	}

@@ -197,9 +197,7 @@ func (self *sidecarHttpGeneration) newPollClient() (*PushPollClient, error) {
 		return nil, err
 	}
 	generationNumber := generation.generation
-	if _, err := pollClient.Subscribe(PushTopicCore, func(notice PushNotice) {
-		sidecar.receiveCoreHint(generationNumber, notice.Hint)
-	}); err != nil {
+	if _, err := pollClient.Subscribe(PushTopicCore, generation.receiveCoreNotice); err != nil {
 		pollClient.Close()
 		return nil, err
 	}

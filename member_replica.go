@@ -210,6 +210,7 @@ func (self *MemberReplica) open() error {
 	if err != nil {
 		return err
 	}
+	running.BindEvsFormat2(self.evs)
 	self.evs.EnablePrefixRules(running.EvsPrefixRulesArgs())
 	running.BindMemberSearch(self.ctx, func() (*EvsClient, error) {
 		evs := self.Evs()
