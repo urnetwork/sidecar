@@ -3,6 +3,7 @@ package sidecar
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"slices"
@@ -47,8 +48,7 @@ func (authority *ConfigAuthority) BrowserMailbox(memberId, mailboxId Id) *protoc
 		return nil
 	}
 	repo := state.Repo(mailboxId)
-	if repo == nil || repo.GetKind() != protocol.RepoKind_REPO_KIND_MAILBOX || !bytes.Equal(repo.GetOwnerMemberId(), memberId.Bytes()) ||
-		repo.GetDeletion().GetDeletedAt() > repo.GetDeletion().GetRestoredAt() {
+	if repo == nil || repo.GetKind() != protocol.RepoKind_REPO_KIND_MAILBOX || !bytes.Equal(repo.GetOwnerMemberId(), memberId.Bytes()) || !aclRepoRowStands(repo) {
 		return nil
 	}
 	return repo
@@ -56,6 +56,36 @@ func (authority *ConfigAuthority) BrowserMailbox(memberId, mailboxId Id) *protoc
 
 type browserMailboxAuthority interface {
 	BrowserMailbox(Id, Id) *protocol.AclRepo
+}
+
+type browserAdmissionDependency struct {
+	target Id
+	digest [sha256.Size]byte
+}
+
+// A competing admission or a refused act must never release the contingent OwnerConfirm or EvsShare.
+// The sealed dependency survives both an interrupted post and the follower catching up after restart.
+func (self *Sidecar) checkBrowserAdmissionDependency(ctx context.Context, dependency *browserAdmissionDependency) error {
+	authority := self.authority()
+	if authority == nil {
+		return ErrSidecarActPending
+	}
+	admitted := authority.Admission(dependency.target)
+	if admitted == nil {
+		if follower, ok := authority.(interface{ CatchUp(context.Context) error }); ok {
+			if err := follower.CatchUp(ctx); err != nil {
+				return err
+			}
+			admitted = authority.Admission(dependency.target)
+		}
+	}
+	if admitted == nil || admitted.Row == nil {
+		return ErrSidecarActPending
+	}
+	if admitted.Row.GetRevokedAt() != 0 || !bytes.Equal(admitted.Row.GetAdmissionSha256(), dependency.digest[:]) {
+		return ErrSidecarActRefused
+	}
+	return nil
 }
 
 // Each ephemeral identity has one mailbox grant, with the expiry the person first approved.
@@ -244,6 +274,7 @@ func (self *Sidecar) admitBrowserBurner(ctx context.Context, request *SidecarAdm
 		return err
 	}
 	terms := request.browser
+	act.browserTarget = &request.SidecarId
 	if err := act.Add(bridge.SignedType_SIGNED_SIDECAR_ADMIT, &protocol.SidecarAdmit{NetworkId: act.identity.NetworkId.Bytes(),
 		SidecarId: request.SidecarId.Bytes(), IdentityPublicKey: request.IdentityPublicKey, IdentityAlg: configIdentityAlgEd25519,
 		MemberId: request.MemberId.Bytes(), Ephemeral: true, NotAfter: terms.NotAfterMs}); err != nil {

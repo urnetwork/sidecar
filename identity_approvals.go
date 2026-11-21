@@ -242,6 +242,7 @@ func (self *Sidecar) runAdmissionAct(ctx context.Context, origin SidecarActOrigi
 		return err
 	}
 	if confirm != nil {
+		act.browserTarget = workerId
 		if err := act.Add(bridge.SignedType_SIGNED_OWNER_CONFIRM, confirm); err != nil {
 			return err
 		}

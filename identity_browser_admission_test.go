@@ -29,16 +29,63 @@ func (a *testBrowserAuthority) BrowserMailbox(member, mailbox Id) *protocol.AclR
 }
 
 type testBrowserLookup struct {
-	delta *testDeltaApi
-	reply *sidecarIdentityReply
-	mode  string
+	delta         *testDeltaApi
+	reply         *sidecarIdentityReply
+	mode          string
+	landAdmission func(*bridge.Signed)
 }
 
 func (a *testBrowserLookup) RoundTrip(r *http.Request) (*http.Response, error) {
 	if r.Method == "GET" && r.URL.Path == "/sidecar/identity/"+a.reply.SidecarId.String() && r.URL.Query().Get("browser_admission") == a.mode {
 		return testApiAnswer(http.StatusOK, a.reply)
 	}
-	return a.delta.RoundTrip(r)
+	reply, err := a.delta.RoundTrip(r)
+	if err == nil && reply.StatusCode == http.StatusOK && a.landAdmission != nil {
+		posts := a.delta.postsSoFar()
+		var signed bridge.Signed
+		if proto.Unmarshal(posts[len(posts)-1], &signed) == nil && bridge.SignedType(signed.GetType()) == bridge.SignedType_SIGNED_SIDECAR_ADMIT {
+			a.landAdmission(&signed)
+		}
+	}
+	return reply, err
+}
+
+func TestBrowserFollowupWaitsForItsOwnVerifiedAdmission(t *testing.T) {
+	world := newAlarmTestWorld(t)
+	world.consentSelf()
+	running := world.sidecar
+	api := running.sidecarApi.Transport().(*absoluteUrlTransport).transport.(*testDeltaApi)
+	target := NewId()
+	act, err := running.newAct(SidecarActConfirmed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	act.browserTarget = &target
+	if err := act.Add(bridge.SignedType_SIGNED_SIDECAR_ADMIT, &protocol.SidecarAdmit{SidecarId: target.Bytes(), MemberId: world.memberId.Bytes()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := act.Add(bridge.SignedType_SIGNED_OWNER_CONFIRM, &protocol.OwnerConfirm{SidecarId: target.Bytes()}); err != nil {
+		t.Fatal(err)
+	}
+	// A receipt alone does not confirm the signer's view of the admission.
+	if _, err := act.Run(t.Context(), nil); !errors.Is(err, ErrSidecarActPending) {
+		t.Fatalf("waiting for the follower: %v", err)
+	}
+	if got := len(api.postsSoFar()); got != 1 {
+		t.Fatalf("before the verified admission: %d posts", got)
+	}
+	// A different admission won the sequencer race. Reload the sealed retry as a restarted daemon does.
+	world.admit(target, world.memberId)
+	if err := running.PostPendingStatements(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(api.postsSoFar()); got != 1 {
+		t.Fatalf("after another admission won: %d posts", got)
+	}
+	pending, err := running.pendingStatements()
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("pending follow-up after losing the race: %d %v", len(pending), err)
+	}
 }
 
 func TestBrowserApprovalConfirmsTypedScopeAndReplaysGrant(t *testing.T) {
@@ -70,6 +117,19 @@ func TestBrowserApprovalConfirmsTypedScopeAndReplaysGrant(t *testing.T) {
 			}
 			api := &testBrowserLookup{mode: mode, delta: &testDeltaApi{}, reply: &sidecarIdentityReply{SidecarId: &target,
 				Status: "active", IdentityAlg: configIdentityAlgEd25519, IdentityPublicKey: verified.IdentityPublicKey, Binding: keys}}
+			api.landAdmission = func(signed *bridge.Signed) {
+				var admit protocol.SidecarAdmit
+				if err := proto.Unmarshal(signed.GetBody(), &admit); err != nil {
+					t.Fatal(err)
+				}
+				digest := bridge.SignedBytesSha256(bridge.SignedPurposeAuthority, bridge.SignedType_SIGNED_SIDECAR_ADMIT, signed.GetBody())
+				authority.stateLock.Lock()
+				defer authority.stateLock.Unlock()
+				authority.sidecars[target] = &AclSidecar{MemberId: world.memberId, Ephemeral: admit.GetEphemeral(), Row: &bridge.SidecarRow{
+					SidecarId: target.Bytes(), MemberId: world.memberId.Bytes(), IdentityPublicKey: verified.IdentityPublicKey,
+					Ephemeral: admit.GetEphemeral(), Capabilities: admit.GetCapabilities(), NotAfter: admit.GetNotAfter(),
+					AdmissionSigners: [][]byte{identity.SidecarId.Bytes()}, AdmissionSha256: digest[:]}}
+			}
 			running.sidecarApi.setTransport(api)
 			terms := BrowserAdmissionTerms{Mode: mode}
 			if mode == BrowserAdmissionBurner {
@@ -141,10 +201,6 @@ func TestBrowserApprovalConfirmsTypedScopeAndReplaysGrant(t *testing.T) {
 				t.Fatalf("burner grant: %+v %+v", &admit, &share)
 			}
 			// The follower sees the admission while the original grant is awaiting its lost response.
-			authority.stateLock.Lock()
-			authority.sidecars[target] = &AclSidecar{MemberId: world.memberId, Ephemeral: true, Row: &bridge.SidecarRow{SidecarId: target.Bytes(), MemberId: world.memberId.Bytes(),
-				Ephemeral: true, IdentityPublicKey: verified.IdentityPublicKey, NotAfter: terms.NotAfterMs, AdmissionSigners: [][]byte{identity.SidecarId.Bytes()}}}
-			authority.stateLock.Unlock()
 			later := terms
 			later.NotAfterMs += time.Minute.Milliseconds()
 			preview, err = running.PreviewBrowserAdmission(t.Context(), target, later)
