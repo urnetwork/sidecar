@@ -379,8 +379,9 @@ func TestDirectoryRunnerRefusesARequestThatFailsItsCheck(t *testing.T) {
 	owner, repoId := world.announcedRepo("design notes")
 	owner.mustSync(t)
 	// a member with no right on the repo files a request for it
-	stranger := world.device(world.memberWriter(sidecar.NewId()))
+	strangerWriter := world.memberWriter(sidecar.NewId())
 	world.publish()
+	stranger := world.device(strangerWriter)
 	forgedId := sidecar.NewId()
 	if _, err := stranger.record.Writer().Append(&sidecar.RecordDraft{
 		Kind: sidecar.RecordKindErasureRequest, Source: sidecar.RecordSourceApprover, NoSession: true,

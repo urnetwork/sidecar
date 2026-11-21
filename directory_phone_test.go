@@ -314,11 +314,13 @@ func TestDirectoryPhoneFormat2Coverage(t *testing.T) {
 	world.publish()
 	repoId := world.createRepo(protocol.RepoKind_REPO_KIND_GENERAL, nil, writer)
 	now := world.clock.Now().UnixMilli()
-	retained := testRunItem(legacy.sidecarId, &other, sidecar.NewId(), 1, now)
-	legacy.announce(retained)
-	runId := sidecar.NewId()
+	legacyId, runId := sidecar.NewId(), sidecar.NewId()
+	legacy.announce(testRunItem(legacy.sidecarId, &other, legacyId, 1, now))
 	run := testRunItem(writer.sidecarId, &member, runId, 1, now)
 	writer.announce(run)
+	repoItem := testRepoItem(t, writer.sidecarId, &member, repoId, protocol.RepoKind_REPO_KIND_GENERAL, 1, now, "field notes", false)
+	delayedRepo := writer.prepareAnnouncement(repoItem, nil, nil)
+	delayedRun := writer.prepareAnnouncement(run, nil, nil)
 	world.cards.RaiseFormat(world.directoryId)
 	cardPath, repoPath := sidecar.DirectoryCardPath(writer.sidecarId), sidecar.DirectoryRepoPath(repoId)
 	pin := world.directoryAuth.Tip().Pin()
@@ -326,7 +328,6 @@ func TestDirectoryPhoneFormat2Coverage(t *testing.T) {
 		world.putFile(writer.sidecarId, cardPath, world.cardContent(writer, writer.sidecarId, seq, pin, items...), pin)
 	}
 	writeCard(1, run)
-	repoItem := testRepoItem(t, writer.sidecarId, &member, repoId, protocol.RepoKind_REPO_KIND_GENERAL, 1, now, "field notes", false)
 	world.putFile(writer.sidecarId, repoPath, world.repoFileContent(writer, repoId, 1, pin, repoItem), pin)
 	world.clock.Advance(time.Minute)
 	writeCard(2, testRunItem(writer.sidecarId, &member, runId, 2, world.clock.Now().UnixMilli()))
@@ -378,25 +379,43 @@ func TestDirectoryPhoneFormat2Coverage(t *testing.T) {
 	if err := view.Fetch(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	page = view.List(nil)
-	if !page.Coverage.Complete || len(page.Items) != 2 || len(page.Coverage.LeftSidecarIds) != 0 || len(page.Coverage.FetchedSidecarIds) != 2 {
-		t.Fatalf("resumed page: %+v, %d items", page.Coverage, len(page.Items))
-	}
-	for _, item := range page.Items {
-		if item.Key.WriterSidecarId == writer.sidecarId && (item.Announcement.GetVersion() != 2 || item.EntryId != (sidecar.Id{})) {
-			t.Fatalf("older record replaced the current signed card: %+v", item)
+	checkRuns := func(page *sidecar.DirectoryViewPage) {
+		t.Helper()
+		if !page.Coverage.Complete || len(page.Items) != 2 || len(page.Coverage.LeftSidecarIds) != 0 || len(page.Coverage.FetchedSidecarIds) != 2 {
+			t.Fatalf("coverage after removal: %+v, %d items", page.Coverage, len(page.Items))
+		}
+		var fromCard, fromStream bool
+		for _, item := range page.Items {
+			switch item.Key.AnnouncementId {
+			case runId:
+				fromCard = item.Key.WriterSidecarId == writer.sidecarId && item.Announcement.GetVersion() == 2 && item.EntryId == (sidecar.Id{})
+			case legacyId:
+				fromStream = item.Key.WriterSidecarId == legacy.sidecarId && item.Announcement.GetVersion() == 1 && item.EntryId != (sidecar.Id{})
+			}
+		}
+		if !fromCard || !fromStream {
+			t.Fatalf("current signed card visible: %t, retained stream entry visible: %t", fromCard, fromStream)
 		}
 	}
+	checkRuns(view.List(nil))
 	// A repo announcement drafted before the removal can arrive on its stream
 	// afterward. The removed file still takes precedence over that old item.
 	world.clock.Advance(time.Minute)
-	writer.announce(repoItem)
+	writer.appendAnnouncement(delayedRepo)
 	if err := view.Fetch(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if page := view.List(nil); !page.Coverage.Complete || len(page.Items) != 2 {
-		t.Fatalf("delayed record restored the removed repo: %+v, %d items", page.Coverage, len(page.Items))
+	checkRuns(view.List(nil))
+	// A cold phone verifies the removal even if it never held the former repo file.
+	afterRemoval, err := phone.client.View(&sidecar.DirectoryViewArgs{})
+	if err != nil {
+		t.Fatal(err)
 	}
+	if err := afterRemoval.Fetch(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	checkRuns(afterRemoval.List(nil))
+	afterRemoval.Close()
 	// Recreating the repo file is visible from an already open view.
 	world.putFile(writer.sidecarId, repoPath, world.repoFileContent(writer, repoId, 2, pin, repoItem), pin)
 	if err := view.Fetch(t.Context()); err != nil {
@@ -418,7 +437,7 @@ func TestDirectoryPhoneFormat2Coverage(t *testing.T) {
 	// An already-signed M6 draft can drain from an offline queue after the
 	// withdrawal. Its old renewal still precedes the signed snapshot.
 	world.clock.Advance(time.Minute)
-	writer.announce(run)
+	writer.appendAnnouncement(delayedRun)
 	if err := view.Fetch(t.Context()); err != nil {
 		t.Fatal(err)
 	}
