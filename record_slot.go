@@ -13,7 +13,7 @@
 //
 // The stream's counter, from 1, names each entry's path (record_route.go); in a stream that holds no ingested entry it
 // equals seq. A counter the file has lost, or one evs refused the paths of, is read back from the stream itself: the
-// newest push holds the highest, since every plan takes the next ones in order.
+// signed file creations retain their counters even after a later removal.
 //
 // Safe for concurrent use, through the writer's locks.
 
@@ -23,6 +23,7 @@ import (
 	"bytes"
 	"context"
 	cryptorand "crypto/rand"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -166,11 +167,25 @@ type recordCounterDocument struct {
 	Version int    `json:"version"`
 	LogId   Id     `json:"log_id"`
 	Counter uint64 `json:"counter"`
+	// The same writer's durable chain when this counter committed. Older counter files have no such evidence.
+	Chain *recordChainHeadDocument `json:"chain,omitempty"`
 }
 
-// Raises the log's counter file to counter, durably.
+// Records the committed path counter and the durable chain that accounts for the files through it.
 func (self *recordWriter) writeCounter(logId Id, counter uint64) error {
-	content, err := json.Marshal(&recordCounterDocument{Version: recordCounterVersion, LogId: logId, Counter: counter})
+	head, err := self.chain.Head(logId)
+	if err != nil {
+		return err
+	}
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		counter = max(counter, self.queueWithLock(logId).counter)
+	}()
+	content, err := json.Marshal(&recordCounterDocument{
+		Version: recordCounterVersion, LogId: logId, Counter: counter,
+		Chain: &recordChainHeadDocument{Version: recordChainFileVersion, LogId: logId, WriterSidecarId: self.sidecarId, Seq: head.Seq, Leaf: head.Leaf[:]},
+	})
 	if err != nil {
 		return err
 	}
@@ -178,6 +193,26 @@ func (self *recordWriter) writeCounter(logId Id, counter uint64) error {
 		return fmt.Errorf("record: counter: %w", err)
 	}
 	return nil
+}
+
+// The last stream counter this writer durably recorded for the log.
+func (self *RecordChainStore) storedCounter(logId Id) (*recordCounterDocument, error) {
+	content, err := self.readFile(recordCounterName(logId))
+	if err != nil {
+		return nil, err
+	}
+	document := &recordCounterDocument{}
+	if content == nil {
+		return document, nil
+	}
+	if err := recordChainDecode(content, document); err != nil || document.Version != recordCounterVersion || document.LogId != logId {
+		return nil, fmt.Errorf("%w: counter of log %s", ErrRecordChainCorrupt, logId)
+	}
+	if head := document.Chain; head != nil && (head.Version != recordChainFileVersion || head.LogId != logId ||
+		head.WriterSidecarId != self.writerSidecarId || len(head.Leaf) != sha256.Size) {
+		return nil, fmt.Errorf("%w: counter's chain of log %s", ErrRecordChainCorrupt, logId)
+	}
+	return document, nil
 }
 
 // The log's counter: the queue's, the file's, or read back from this writer's own stream.
@@ -191,23 +226,15 @@ func (self *recordWriter) loadCounter(ctx context.Context, logId Id) (uint64, er
 	if loaded {
 		return counter, nil
 	}
-	content, err := self.chain.readFile(recordCounterName(logId))
+	fileCounter, err := self.chain.storedCounter(logId)
 	if err != nil {
 		return 0, err
-	}
-	var fileCounter uint64
-	if content != nil {
-		document := &recordCounterDocument{}
-		if err := recordChainDecode(content, document); err != nil || document.Version != recordCounterVersion || document.LogId != logId {
-			return 0, fmt.Errorf("%w: counter of log %s", ErrRecordChainCorrupt, logId)
-		}
-		fileCounter = document.Counter
 	}
 	streamCounter, err := RecordStreamCounter(ctx, self.boundStreams(), logId, self.sidecarId)
 	if err != nil {
 		return 0, err
 	}
-	counter = max(fileCounter, streamCounter)
+	counter = max(fileCounter.Counter, streamCounter)
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	queue := self.queueWithLock(logId)
@@ -216,34 +243,13 @@ func (self *recordWriter) loadCounter(ctx context.Context, logId Id) (uint64, er
 	return queue.counter, nil
 }
 
-// The highest counter writerSidecarId's own stream of logId holds, from its newest push, 0 for a stream with none.
+// The highest file counter allocated in the writer's own stream, zero before its first file.
 func RecordStreamCounter(ctx context.Context, streams RecordStreams, logId Id, writerSidecarId Id) (uint64, error) {
-	heads, err := streams.Streams(ctx, logId)
-	if err != nil {
+	read := &recordWriterStreamRead{logId: logId, writerSidecarId: writerSidecarId}
+	if err := read.read(ctx, streams); err != nil {
 		return 0, err
 	}
-	var newest uint64
-	for _, head := range heads {
-		if head.SidecarId == writerSidecarId {
-			newest = head.Version
-		}
-	}
-	if newest == 0 {
-		return 0, nil
-	}
-	versions, err := streams.ReadStream(ctx, logId, writerSidecarId, newest-1)
-	if err != nil {
-		return 0, err
-	}
-	var counter uint64
-	for _, version := range versions {
-		for _, entry := range version.Entries {
-			if n, ok := RecordStreamPathCounter(entry.Path); ok {
-				counter = max(counter, n)
-			}
-		}
-	}
-	return counter, nil
+	return read.counter, nil
 }
 
 // 16 random bytes as an Id: a push, slot or deposit id, drawn per push statement.
