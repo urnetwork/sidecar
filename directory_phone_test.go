@@ -387,6 +387,16 @@ func TestDirectoryPhoneFormat2Coverage(t *testing.T) {
 			t.Fatalf("older record replaced the current signed card: %+v", item)
 		}
 	}
+	// A repo announcement drafted before the removal can arrive on its stream
+	// afterward. The removed file still takes precedence over that old item.
+	world.clock.Advance(time.Minute)
+	writer.announce(repoItem)
+	if err := view.Fetch(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if page := view.List(nil); !page.Coverage.Complete || len(page.Items) != 2 {
+		t.Fatalf("delayed record restored the removed repo: %+v, %d items", page.Coverage, len(page.Items))
+	}
 	// Recreating the repo file is visible from an already open view.
 	world.putFile(writer.sidecarId, repoPath, world.repoFileContent(writer, repoId, 2, pin, repoItem), pin)
 	if err := view.Fetch(t.Context()); err != nil {
