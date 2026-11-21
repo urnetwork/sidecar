@@ -713,8 +713,16 @@ type GkmSettings struct {
 	// DelegationKeysMaxCount. Below 1 sends one id a request.
 	DelegationKeysBatchCount int
 	// §10.6's late wraps: a holder waits a random time up to this before it answers wrap-pending, so one normally
-	// delivers: 15 s.
+	// delivers: 15 s. The holder that signed the recipient's admission, KF2's granting device, waits none.
 	LateDeliverJitter time.Duration
+	// §10.6's late wraps at a sync, the KeyDelivery resync's answer to the asks whose hints it lost (KEYS-M2-20): the
+	// most LATE deliveries one sync of one repo writes to holders the newest generation's own state did not hold, so
+	// a burst of joins is answered over several syncs: 64. Non-positive writes none, leaving every join to its ask's
+	// hint.
+	ResyncLateDeliverMaxCount int
+	// §10.14's bound on one POST /gkm/groups/<id>/wraps/<g>/<c8> (QD-066): 256 deliveries, the protocol's value, which
+	// gkm holds too. A staging batch is RotateBatchSize, never past this.
+	WrapBatchMaxCount int
 	// §10.4: a leaf that committed no path this long commits a path-only self-update: 7 days.
 	SelfUpdateInterval time.Duration
 	// The same above LargeGroupLeafCount leaves: 30 days.
@@ -799,6 +807,8 @@ func DefaultGkmSettings() *GkmSettings {
 		ReaderKeysBatchCount:         256,
 		DelegationKeysBatchCount:     256,
 		LateDeliverJitter:            15 * time.Second,
+		ResyncLateDeliverMaxCount:    64,
+		WrapBatchMaxCount:            256,
 		SelfUpdateInterval:           7 * 24 * time.Hour,
 		SelfUpdateIntervalLarge:      30 * 24 * time.Hour,
 		LargeGroupLeafCount:          50,
@@ -832,8 +842,8 @@ func (self *GkmSettings) validate() error {
 		return fmt.Errorf("%w: Gkm.KeyPackageLastResortRenewAge not before the set's renewal", errInvalidSettings)
 	case GkmSeatCount < self.SeatCount:
 		return fmt.Errorf("%w: Gkm.SeatCount past a tree's 1,000 leaves", errInvalidSettings)
-	case gkmWrapBatchMaxCount < self.RotateBatchSize:
-		return fmt.Errorf("%w: Gkm.RotateBatchSize past gkm's 256 a request", errInvalidSettings)
+	case self.WrapBatchMaxCount < self.RotateBatchSize:
+		return fmt.Errorf("%w: Gkm.RotateBatchSize past gkm's WrapBatchMaxCount a request", errInvalidSettings)
 	case GkmClockSkew <= self.RotateDraftMaxAge:
 		return fmt.Errorf("%w: Gkm.RotateDraftMaxAge not inside gkm's 10 minutes of claim skew", errInvalidSettings)
 	}
