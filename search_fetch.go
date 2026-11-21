@@ -47,6 +47,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/urnetwork/sidecar/protocol"
 )
 
 // Which set a wanted file is in, and its place in the fetch order (lower first).
@@ -267,8 +269,18 @@ func (self *SearchSync) fetch(ctx context.Context, ref *searchSyncRef, manifest 
 					return false, err
 				}
 				if drop {
-					if err := self.args.cache.Remove(SearchCacheKey{RepoId: ref.args.repoId, RefId: ref.args.refId, Path: staged.Path, Version: staged.Version}); err != nil {
-						return false, err
+					// The shard stays out of this plan. Retirement preserves it only while a page still holds it.
+					key := SearchCacheKey{RepoId: ref.args.repoId, RefId: ref.args.refId, Path: staged.Path, Version: staged.Version}
+					self.stateLock.Lock()
+					held := false
+					for snapshot := range ref.open {
+						held = held || snapshot.landed[key]
+					}
+					self.stateLock.Unlock()
+					if !held {
+						if err := self.args.cache.Remove(key); err != nil {
+							return false, err
+						}
 					}
 					continue
 				}
@@ -334,9 +346,16 @@ func (self *SearchSync) stage(ctx context.Context, ref *searchSyncRef, plan *Sea
 	case err != nil:
 		return nil, err
 	}
-	if parsed.kind == indexPathErasureSet && !ref.args.mayErase(wanted.Signer, wanted.SignedTimeMs) {
-		// a set version from a signer who may not erase: ignored and alarmed, the last good set masking (§11.14's cut row)
-		return bad()
+	if parsed.kind == indexPathErasureSet {
+		if !ref.args.mayErase(wanted.Signer, wanted.SignedTimeMs) {
+			return bad()
+		}
+		// Readers already holding a page must observe a verified cut even if the rest of this round fails.
+		if wanted.CommitVersion != 0 && wanted.CommitVersion == plan.IndexEpoch {
+			if err := cache.ApplyCut(ctx, repoId, refId, validated.message.(*protocol.IndexErasureSet)); err != nil {
+				return nil, err
+			}
+		}
 	}
 	staged.State = SearchManifestHeld
 	file := SearchVersionFile{Path: wanted.Path, Version: wanted.Version}
@@ -384,7 +403,7 @@ func (self *SearchSync) stage(ctx context.Context, ref *searchSyncRef, plan *Sea
 			staged.Run, staged.TimeMinMs, staged.TimeMaxMs = run, times.TimeMinMs, times.TimeMaxMs
 		}
 	default:
-		// a small file: kept whole beside the manifest, which a snapshot reads with no record keys
+		// A snapshot opens small files directly from its sealed manifest.
 		small := make([]byte, source.indexLength())
 		if err := indexNewFrameCursor(source).read(0, small); err != nil {
 			return nil, err

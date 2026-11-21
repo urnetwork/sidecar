@@ -11,12 +11,35 @@ package sidecar
 import (
 	"cmp"
 	"context"
+	"errors"
 	"slices"
 	"testing"
 
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
+
+// A completed local leg still invalidates an in-flight remote query when its device learns a cut.
+func TestRemoteSearchExpiresAfterItsCachedLegFinishes(t *testing.T) {
+	team := newTestConfigSearchTeam(t)
+	fixture := newTestSearchRemoteAsker(t, team, team.danaPhone)
+	world := newTestEngineWorld(t, nil, testEngineDocument(t, "seed", 1, 1, "indexed.md", "harbor"))
+	// The remotely served repo has no locally known refs.
+	world.scope.repos = nil
+	fixture.client.args.Local = world.engine
+	fixture.serve(t, team.danaNas).corpus.serveText(team.danaVault, 5, testSearchRemoteDocs("remote", 900, 800)...)
+	stream := fixture.search(t, team.danaVault)
+	first := testSearchRemoteNext(t, stream)
+	if len(first.hits) == 0 || !stream.source.(*searchRemoteSearch).ownDone {
+		t.Fatalf("first remote page: %+v", first)
+	}
+	if err := world.sync.cache.cache.ApplyCut(t.Context(), team.danaVault, world.sync.refId, &protocol.IndexErasureSet{}); err != nil {
+		t.Fatal(err)
+	}
+	if hits, _, done, err := stream.Next(); !done || len(hits) != 0 || !errors.Is(err, ErrSearchCursorExpired) {
+		t.Fatalf("remote continuation: %+v, %t, %v", hits, done, err)
+	}
+}
 
 // QD-707: the first two own indexers are asked at once, with no pair kept warm or named before (owner decision 609),
 // both requests built from one reading and sent before either reply comes, and the first page 0 to serve the vault
