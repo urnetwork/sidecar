@@ -1566,10 +1566,10 @@ request   POST /evs/v1/repos/<repo_id>/read (r): {ref_id, pin_version (0 if none
           checked, by ref version, at most 64 (held_drops)}; this, the refs and log routes and 11.10's subscription
           routes answer a deleted repo 409 REPO_DELETED and a shredding or shredded one 409 SHREDDING, from the 5 s
           repo/ cache the upload route uses (11.12's refused row; owner decision 379)
-exact     only an authenticated fresh single-ref read of a file-mode or as-yet uncreated ref advertises
-          EvsHeadSummary.supports_exact_head (bool field 18). True means this host enforces the signed EXACT_HEAD
-          bit in 11.8. Missing or false leaves the native ACL client at its preview (§7.9). Listings and stream
-          reads carry no such capability. A host that receives a signed flag it does not recognize refuses the push.
+exact     An authenticated fresh single-ref read of a file-mode or uncreated ref reports whether this host enforces
+          EXACT_HEAD in 11.8 (EvsHeadSummary.supports_exact_head, bool field 18). Listings, streams and cached
+          reads omit it. Missing or false leaves the native ACL client at its preview (§7.9). Older hosts reject
+          the signed flag. Older readers of either format need an upgrade to replay past a flagged version.
 streams   POST .../read {refs: up to 64 (ref_id, pin_version)} (r) reads a record-class repo's owned streams: per
           ref, the head summary and the Signed EvsPush of every version after its pin with the entries those
           versions create, their records and slots, in one framed stream of at most 4 MiB, a ref past it

@@ -56,11 +56,11 @@
  {
   "num": 7,
   "code": "TEAM",
-  "words": 12390,
+  "words": 12440,
   "code_words": 14949,
   "ceiling": 3500,
-  "over": 8890,
-  "over_pct": 254.0
+  "over": 8940,
+  "over_pct": 255.4
  },
  {
   "num": 8,
@@ -93,7 +93,7 @@
   "num": 11,
   "code": "EVS",
   "words": 22593,
-  "code_words": 54399,
+  "code_words": 54398,
   "ceiling": 5000,
   "over": 17593,
   "over_pct": 351.9
