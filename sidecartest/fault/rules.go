@@ -108,6 +108,8 @@ type RuleCosts struct {
 	Wall time.Duration
 	// How many child processes the runs went to (rules_processes.go), zero when every run ran in this one.
 	ChildProcesses int
+	// Why every run ran in this process though a child could rebuild the schedule, or empty.
+	Here string
 }
 
 // Every rule's runs together.
@@ -124,8 +126,11 @@ func (self *RuleCosts) Total() RuleCost {
 // replays 0 runs 0s; 727 runs 7m17s, in 1m9s with 7 child processes".
 func (self *RuleCosts) String() string {
 	where := "in this process"
-	if 0 < self.ChildProcesses {
+	switch {
+	case 0 < self.ChildProcesses:
 		where = fmt.Sprintf("with %d child processes", self.ChildProcesses)
+	case self.Here != "":
+		where += ": " + self.Here
 	}
 	return fmt.Sprintf(
 		"fixed %s, twin %s, explorer %s, twin's explorer %s, every write %s, replays %s; %s, in %s %s",
@@ -266,6 +271,8 @@ func (self *RowReport) checkRules(ctx context.Context, subject *ruleSubject, set
 
 	var fixed *Schedule
 	var opResults map[string][]FaultResult
+	// whether the schedule's connect clients ran, on the fixed run or the twin's
+	var connectClients bool
 	runStarted := time.Now()
 	func() {
 		net := sidecartest.NewNet(ctx, settings.Net)
@@ -273,6 +280,7 @@ func (self *RowReport) checkRules(ctx context.Context, subject *ruleSubject, set
 		fixed = subject.builder(net)
 		self.Fixed = Run(ctx, fixed, net)
 		opResults = everyWriteResults(net)
+		connectClients = net.UsesPlatformFakes()
 	}()
 	self.Costs.Fixed.add(1, time.Since(runStarted))
 	self.fail(self.Fixed)
@@ -283,9 +291,21 @@ func (self *RowReport) checkRules(ctx context.Context, subject *ruleSubject, set
 	if fixed.Twin != nil {
 		twin = twinBuilder(fixed)
 		runStarted = time.Now()
-		self.Twin = RunTwin(ctx, fixed, settings.Net)
+		func() {
+			net := sidecartest.NewNet(ctx, settings.Net)
+			defer net.Close()
+			self.Twin = runTwinOn(ctx, fixed, net)
+			connectClients = connectClients || net.UsesPlatformFakes()
+		}()
 		self.Costs.Twin.add(1, time.Since(runStarted))
 		self.fail(self.Twin)
+	}
+	child := subject.child
+	if connectClients && child != nil {
+		// two processes' connect clients share the host's network stack, where darwin hands each process's datagram
+		// ICMP sockets the other's echo replies under the same process-local ids (connect's ip_icmp_egress_unix.go)
+		self.Costs.Here = "its connect clients egress through the host's network stack, which two processes share"
+		child = nil
 	}
 
 	runStarted = time.Now()
@@ -323,7 +343,7 @@ func (self *RowReport) checkRules(ctx context.Context, subject *ruleSubject, set
 			runs = append(runs, &ruleRun{Twin: true, Replay: trace})
 		}
 	}
-	outcomes := self.runAll(ctx, subject, twin, runs, settings)
+	outcomes := self.runAll(ctx, subject, child, twin, runs, settings)
 
 	for index, run := range runs {
 		outcome := outcomes[index]
@@ -367,12 +387,12 @@ func (self *RowReport) checkRules(ctx context.Context, subject *ruleSubject, set
 	}
 }
 
-// Runs runs, each on a Net of its own, in child processes where settings and subject allow it and here otherwise, and
-// returns what each left, in runs' order.
-func (self *RowReport) runAll(ctx context.Context, subject *ruleSubject, twin Builder, runs []*ruleRun, settings *RuleSettings) []*ruleOutcome {
+// Runs runs, each on a Net of its own, in child processes rebuilding subject's builder by child where settings allow
+// it, child nil keeping them here, and returns what each left, in runs' order.
+func (self *RowReport) runAll(ctx context.Context, subject *ruleSubject, child *ruleChildName, twin Builder, runs []*ruleRun, settings *RuleSettings) []*ruleOutcome {
 	outcomes := make([]*ruleOutcome, len(runs))
-	if count := ruleChildCount(settings, subject.child); 1 < count && 1 < len(runs) {
-		outcomes, self.Costs.ChildProcesses = runInChildren(ctx, subject.child, subject.id, runs, count, settings.Processes)
+	if count := ruleChildCount(settings, child); 1 < count && 1 < len(runs) {
+		outcomes, self.Costs.ChildProcesses = runInChildren(ctx, child, subject.id, runs, count, settings.Processes)
 	}
 	twinOf := func() (Builder, error) {
 		if twin == nil {

@@ -355,6 +355,20 @@ func TestRunsGoToChildProcessesOnlyWhereAChildRebuildsThem(t *testing.T) {
 	}
 }
 
+// A schedule whose connect clients ran keeps every run here, the report saying why: FS-56's, whose bridge host maps its
+// echoes onto the host's loopback, where two children on darwin read each other's echo replies under the same ids, so
+// a revoked subject in one saw an echo answered that the other's twin had sent, in 8 of 20 tests with children
+// (connect's ip_icmp_egress_unix.go).
+func TestAScheduleWhoseConnectClientsRanKeepsItsRunsHere(t *testing.T) {
+	report := CheckRow(t.Context(), Fs56Case, nil)
+	if report.Failed() {
+		t.Fatalf("%s", report)
+	}
+	if report.Costs.ChildProcesses != 0 || report.Costs.Here == "" || !strings.Contains(report.String(), "in this process: its connect clients") {
+		t.Errorf("FS-56's runs went to %d child processes: %s", report.Costs.ChildProcesses, report)
+	}
+}
+
 // FS-45's registered case, whose host writes the unknown rule loses one at a time, sends its reruns to child processes
 // under the default rules and reports as it does with every run here.
 func TestARegisteredCaseRunsInChildProcessesAsInThisOne(t *testing.T) {

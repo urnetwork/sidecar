@@ -14,7 +14,11 @@
 // (rules_processes_test.go's TestRuleChildProcess), and everything runs here otherwise: a test's own builder or
 // settings, T3's Nets in server's sidecart3, whose binary links no entry, and a search heap process's rows, FS-77's and
 // FS-109's, whose heap samplers answer only in the one process their test runs in (sidecartest's
-// search_heap_process.go).
+// search_heap_process.go). A schedule whose connect clients ran, on its fixed run or its twin's, keeps its runs here
+// too: their egress is the host's own network stack, which processes share, and on darwin connect's datagram ICMP
+// sockets take every echo reply the host receives, each process filtering by ids it counts from one, so two children
+// running a bridge row's world at once each read the other's replies, and FS-56's revoked subject saw an echo answered
+// that the other child's twin had sent (connect's ip_icmp_egress_unix.go).
 //
 // A child is this binary run as `<binary> -test.run=^TestRuleChildProcess$` with ruleChildEnvironment set. It reads
 // the name of its builder and then one run at a time from stdin, and writes each run's result to fd 3, a pipe of its
