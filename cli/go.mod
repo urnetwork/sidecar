@@ -7,6 +7,7 @@ require (
 	github.com/ebitengine/purego v0.11.2
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/godbus/dbus/v5 v5.1.0
+	github.com/mholt/acmez/v3 v3.1.7
 	github.com/urnetwork/connect v0.0.0
 	github.com/urnetwork/sidecar v0.0.0
 	github.com/urnetwork/sidecar/smtpproof v0.0.0
@@ -41,7 +42,6 @@ require (
 	github.com/letsencrypt/pebble/v2 v2.10.3 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
-	github.com/mholt/acmez/v3 v3.1.7
 	github.com/miekg/dns v1.1.72 // indirect
 	github.com/mjl-/adns v0.0.0-20260809141028-22f885debe71 // indirect
 	github.com/mjl-/flate v0.0.0-20250221133712-6372d09eb978 // indirect
@@ -79,10 +79,12 @@ require (
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/exp v0.0.0-20260727155853-b88d891fe743 // indirect
+	golang.org/x/mod v0.41.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
+	golang.org/x/tools v0.51.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gvisor.dev/gvisor v0.0.0-20260909230408-9b1144b679cb // indirect
