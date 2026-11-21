@@ -41,7 +41,9 @@
 //	          read shares (evs_read_erased.go): nothing of it is left to give, so it is left out as a removed one is,
 //	          and the version with it once nothing else stands, and the record reads past it, as it reads past an
 //	          entry the fake's RemoveStreamEntries took; a key gone that no ERASE names is one evs withheld, which
-//	          alarms tamper and refuses the read
+//	          alarms tamper and refuses the read. No record eraser destroys an entry file's own key (they name body
+//	          rows), so its header goes with it only by an ERASE outside the record, and the reader reads the hole as
+//	          a gap (question erased-version-readers-record-entry-header-erased)
 //	replay    every push's changes held again, with their entry versions, to the creates-only rule as
 //	          EvsVerifier.VerifyPayloadRefRules judges a payload (QD-722), against the stream's directories as a
 //	          replay of its pushes from the first holds them: each by its plaintext path, so a path epoch's new tokens
