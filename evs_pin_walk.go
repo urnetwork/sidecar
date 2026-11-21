@@ -7,8 +7,8 @@
 //
 //	ask      before the request whose answer it judges, the reader takes the ref's pin and count of reseeds
 //	         (EvsPinStore.ask), a mirror every ref of its repo at once before its listing (askRepo), and notes its
-//	         read in flight until its raise (beginRead), so another read's raise meanwhile keeps the chains that place
-//	         its head
+//	         read in flight until its raise (beginRead), a mirror each ref its listing names once it has it, so
+//	         another read's raise meanwhile keeps the chains that place its head
 //	head     a head served below the pin asked at, or at its version on another chain, is a fork, alarmed with both
 //	         RefHeads (checkAsked); a pin another call of the client raised since is never what the head is held to
 //	walk     the head raised carries the reader's walk: its start, C_0 or the reader's own state, and C at every
@@ -18,9 +18,11 @@
 //	raise    Pin judges the head against the pin as it then stands (EvsPinStore.raiseRead): above, raised; passed by
 //	         another raise on its history, stands as read; a walk that crosses a chain the store holds with another
 //	         chain, a fork; where nothing places a head the pin stands past, ErrEvsReadStale, which the reader reads
-//	         again, fresh, at most EvsSettings.ReadStaleRetryCount times
-//	page     a walk that stops short of the head, a cards or stream log page, is a page: it raises the pin to its end
-//	         where that stands above it, and is judged but raises nothing below it
+//	         again, fresh, at most EvsSettings.ReadStaleRetryCount times, but for a git-mode export, record streams
+//	         and storage status, which answer it
+//	page     a walk that stops short of the head is a page: a cards or stream log page raises the pin to its end
+//	         where that stands above it, and the sync engine's pages and a streams read's more are judged against
+//	         what the store holds and raise nothing; below the pin asked at a page is no regression
 //
 // On every leg but the ios_extension legs, whose config head reader asks and raises through the pin store alone.
 // Safe for concurrent use but for an evsWalkTrail, which one walk owns.
