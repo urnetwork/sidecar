@@ -103,12 +103,15 @@ func (self *pushAttempt) commit() (*pushOutcome, bool) {
 		}
 		prior := self.head
 		self.issued = true
-		written, err := self.engine.heads.Commit(self.writeCtx, self.cluster, self.repoId, self.refId, prior, next)
+		written, err := self.engine.heads.commitBefore(self.writeCtx, self.cluster, self.repoId, self.refId, prior, next, self.reads.readAt.Add(self.settings.PushStepSevenWindow))
 		var unknown *sidecar.BlobUnknownError
 		switch {
 		case err == nil:
 			self.head = written
 			return self.committed(written), false
+		case errors.Is(err, errHeadIssueWindow):
+			self.issued = false
+			return nil, true
 		case errors.Is(err, sidecar.ErrBlobPrecondition):
 			// another write came first: this PUT can never apply, since an ETag never repeats
 			self.issued = false

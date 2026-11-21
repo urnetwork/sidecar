@@ -722,6 +722,46 @@ func (self *fs92History) expectDeleted(deletedCount int) func(ctx context.Contex
 	}
 }
 
+// A restarted reader must still be able to find every retained segment from
+// the durable job records and their files, even when verification postponed deletion.
+func (self *fs92History) expectWithheld(ctx context.Context, net *Net) error {
+	ids, err := self.listed()
+	if err != nil {
+		return err
+	}
+	host := net.Host()
+	clusterId, err := self.world.repoClusterId(net)
+	if err != nil {
+		return err
+	}
+	cluster, err := host.Blobs.Cluster(clusterId)
+	if err != nil {
+		return err
+	}
+	segments, err := host.Blobs.SegmentCluster()
+	if err != nil {
+		return err
+	}
+	table, err := evsservice.NewDropTable(host, host.Blobs, self.world.dropJobSettings(), nil)
+	if err != nil {
+		return err
+	}
+	read, err := table.Read(ctx, cluster, self.world.RepoId)
+	if err != nil {
+		return err
+	}
+	withheld, err := evsservice.NewDropIndex(self.world.dropJobSettings(), nil, nil).Withheld(ctx, segments, clusterId, self.world.RepoId, read.State, net.Clock().Now())
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if !withheld[evsservice.DropSegmentId([32]byte(id))] {
+			return errors.New("a retained segment is absent from the restarted reader's withheld set")
+		}
+	}
+	return nil
+}
+
 // The checks FS-92 names, after every step: the world's, format 2's, FI-5, FI-16 and FI-27.
 func fs92Checks(world *EvsWorld) []Invariant {
 	return world.Checks(world.FormatHolds(), FI(5), FI(16), FI(17), FI(27))
@@ -837,6 +877,15 @@ func fs92Schedule(net *Net, variant fs92Variant) *Schedule {
 			{Actor: "abuse", Action: holds.ToExpiry("order")},
 			{Actor: "abuse", Action: holds.Pass("order")},
 			{Actor: "check", Action: holds.Swept()},
+			{Advance: time.Hour},
+			{Actor: "admin", Action: world.LockRepo(true)},
+			job(false),
+			{Actor: "check", Action: history.expectDeleted(0)},
+			{Actor: "evsr", Kill: true},
+			{Actor: "evsr", Restart: "evsr"},
+			{Actor: "check", Action: history.expectWithheld},
+			{Actor: "reader", Action: world.ReadVersionEnds("reader", "x.txt", 1, EvsWorldReadsDropped())},
+			{Actor: "admin", Action: world.LockRepo(false)},
 			{Advance: time.Hour},
 			job(false),
 			{Actor: "check", Action: world.ExpectDropState("x.txt", evsservice.DropStateDone)},

@@ -35,6 +35,8 @@ func TestPushJudgesTheNewestGateViewAtEachRunOfStepFour(t *testing.T) {
 		{name: "first step 4", barrier: BarrierPushStep4Before, removal: true},
 		{name: "412", barrier: BarrierHeadCasBefore, conflict: true, removal: true},
 		{name: "window", barrier: BarrierPushStep6After, pastWindow: true, removal: true},
+		{name: "window expires just before issuing CAS", barrier: BarrierHeadCasBefore, pastWindow: true, removal: true},
+		{name: "fresh view still permits CAS", barrier: BarrierHeadCasBefore, pastWindow: true},
 		{name: "412 with no removal", barrier: BarrierHeadCasBefore, conflict: true},
 	}
 	for _, c := range cases {
