@@ -37,7 +37,13 @@
 //	         directory's 30-day sweep does for a later-signed card, can reach files no rewrite has listed, so the pass
 //	         lists first and rewrites what holds a listed version, the first ERASE opening the erasure again under a
 //	         store that reads it by its newest ERASE (recordEraseNewestStore), until the last says complete. A list that
-//	         finds nothing, or a set that dropped the erasure since, leaves it complete with nothing sent
+//	         finds nothing leaves it complete with nothing sent
+//	dropped  a CUT of an erasure the set still lists keeps that entry's epoch, so between the caller's CUT and this list
+//	         another erasure's CUT, reading the erasure complete by its newest ERASE, can drop it from the set by
+//	         raising listed_since past that epoch: the list then finds nothing of what the caller's CUT added, which no
+//	         reader masks any longer. Such a rewrite sends nothing but the keys of a CLOSURE no ERASE followed, and its
+//	         result says dropped (IndexRewriteResult.Dropped; QD-1160), so the caller CUTs the documents again, which
+//	         adds the entry back at the head's epoch, and rewrites again
 //	resume   from evs's state, never one device's memory: an ERASE first for the keys of each CLOSURE of the erasure no
 //	         ERASE of it named, saying complete where the list at the head finds nothing else to rewrite, so an erasure
 //	         killed between its last CLOSURE and that CLOSURE's ERASE ends with it (QD-1132), then the pairs at the head;
@@ -240,7 +246,8 @@ type IndexRewriteArgs struct {
 	// directory's 30-day sweep cuts a later-signed card (QD-1158): the rewrite lists before it trusts a complete it
 	// reads, and rewrites each file that holds a listed version, its first ERASE opening the erasure again until one
 	// says complete. Where nothing is left to rewrite here the erasure stays complete, as its newest ERASE says, and
-	// nothing is sent. False trusts a complete it reads and lists nothing.
+	// nothing is sent; where the set no longer lists it, the result says dropped. False trusts a complete it reads and
+	// lists nothing.
 	Relisted bool
 }
 
@@ -259,6 +266,12 @@ type IndexRewriteResult struct {
 	// The history was not walked whole, or a file that may hold a listed document did not read: nothing here said
 	// complete, and the erasure stays rewriting until it can.
 	Unproven bool
+	// Relisted, and the set at the head no longer lists the erasure, which the store reads complete, that the caller's
+	// CUT listed documents on: a later CUT, another erasure's, dropped it before this rewrite listed them, so nothing
+	// that holds them was rewritten here and readers no longer mask them. The caller CUTs them again, which adds the
+	// entry back at the head's epoch, and rewrites again (QD-1160). Nothing was sent but the ERASE of the keys of a
+	// CLOSURE no ERASE followed.
+	Dropped bool
 	// Passes made, the last included.
 	Attempts int
 }
@@ -349,8 +362,10 @@ func (self *IndexEraser) rewritePass(ctx context.Context, args *IndexRewriteArgs
 	view, listed, work, err := self.listPass(ctx, args.ErasureId, progress)
 	if complete && errors.Is(err, ErrIndexEraseNotCut) {
 		// relisted, and a later CUT dropped the erasure from the set since it completed: nothing is listed here to
-		// rewrite. A CLOSURE no ERASE followed still has its keys erased, saying complete again where the erasure ends
-		// here; where it does not, that ERASE opens the erasure again, and the caller's last ERASE ends it
+		// rewrite, and what the caller's CUT added is owed its CUT again (the file header's dropped row). A CLOSURE no
+		// ERASE followed still has its keys erased, saying complete again where the erasure ends here; where it does
+		// not, that ERASE opens the erasure again, and the caller's last ERASE ends it
+		result.Dropped = true
 		if 0 < len(orphans) {
 			if done, eraseErr := self.eraseOrphans(ctx, args, orphans, args.Complete, result); eraseErr != nil || done {
 				return done, eraseErr

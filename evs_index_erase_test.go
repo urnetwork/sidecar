@@ -18,7 +18,9 @@ package sidecar
 // A CUT that lists documents again after the erasure completed (IndexRewriteArgs.Relisted; QD-1158): a relisted
 // rewrite rewrites the file holding the added document under a fresh key, opening the erasure again where the caller
 // ends it, and a rewrite that trusts complete leaves it; a relisted rewrite finding nothing sends nothing; and one
-// killed between its CLOSURE and ERASE erases the orphan's keys at the next relisted pass.
+// killed between its CLOSURE and ERASE erases the orphan's keys at the next relisted pass. Another erasure's CUT
+// between that CUT and its rewrite (QD-1160): the relisted rewrite of the erasure it dropped sends nothing and says
+// dropped, and a CUT again adds the entry back at the head's epoch, after which the rewrite takes the late document.
 
 import (
 	"bytes"
@@ -1685,7 +1687,12 @@ func TestIndexRewriteLeavesAnErasureRewritingWhereEvsTakesNoCompletion(t *testin
 // each ERASE.
 func (self *testEraseWorld) newestEraser(t testing.TB) *IndexEraser {
 	t.Helper()
-	signer := evsTestId("eraser")
+	return self.newestEraserAs(t, evsTestId("eraser"))
+}
+
+// newestEraser signing as signer, another device's where signer is another of the world's admins.
+func (self *testEraseWorld) newestEraserAs(t testing.TB, signer Id) *IndexEraser {
+	t.Helper()
 	store := self.evs.as(signer)
 	eraser, err := indexNewEraser(&indexEraserArgs{
 		store: store, eraseStore: &recordEraseNewestStore{indexEraseStore: store},
@@ -1748,7 +1755,7 @@ func TestIndexRewriteRelistedRewritesWhatALaterCutAddedToACompleteErasure(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if trusted.PairCount != 0 || trusted.Erasure.State != SidecarErasureDone || !slices.Equal(world.holding(t, listed), held) {
+	if trusted.PairCount != 0 || trusted.Erasure.State != SidecarErasureDone || trusted.Dropped || !slices.Equal(world.holding(t, listed), held) {
 		t.Fatalf("the rewrite that trusts complete: %+v, holding %v", trusted, world.holding(t, listed))
 	}
 	erases := len(world.evs.erases)
@@ -1756,7 +1763,8 @@ func TestIndexRewriteRelistedRewritesWhatALaterCutAddedToACompleteErasure(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if relisted.PairCount == 0 || relisted.FileCount != len(held) || !relisted.Completed || relisted.Erasure.State != SidecarErasureDone {
+	if relisted.PairCount == 0 || relisted.FileCount != len(held) || !relisted.Completed || relisted.Erasure.State != SidecarErasureDone ||
+		relisted.Dropped {
 		t.Fatalf("the relisted rewrite: %+v, %d files held", relisted, len(held))
 	}
 	if again := world.holding(t, listed); len(again) != 0 {
@@ -1883,7 +1891,7 @@ func TestIndexRewriteRelistedErasesItsOrphanedClosure(t *testing.T) {
 }
 
 // A complete erasure another erasure's CUT has dropped from the set lists nothing: a relisted rewrite of it is done,
-// with nothing sent and no error.
+// with nothing sent and no error, and says dropped (QD-1160).
 func TestIndexRewriteRelistedLeavesADroppedErasureComplete(t *testing.T) {
 	ctx := context.Background()
 	world := testEraseWorldWithCopies(t)
@@ -1899,7 +1907,67 @@ func TestIndexRewriteRelistedLeavesADroppedErasureComplete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if relisted.Erasure.State != SidecarErasureDone || relisted.Completed || len(world.evs.closures) != closures || len(world.evs.erases) != erases {
+	if relisted.Erasure.State != SidecarErasureDone || relisted.Completed || !relisted.Dropped || len(world.evs.closures) != closures ||
+		len(world.evs.erases) != erases {
 		t.Fatalf("a relisted rewrite of a dropped erasure: %+v", relisted)
 	}
+}
+
+// Another erasure's CUT, by another device, between a later call's CUT of a document into a complete erasure and that
+// call's relisted rewrite (QD-1160): the later CUT joined the set's entry and kept its epoch, so the other CUT, reading
+// the erasure complete by its newest ERASE, drops it. The relisted rewrite lists nothing, sends nothing and says
+// dropped, the file holding the late document still open under its live key and no longer listed; a CUT of the same
+// document again adds the entry back at the head's epoch, the one the other CUT moved it to, and the next relisted
+// rewrite rewrites that file under a fresh key, its last ERASE saying complete again. FS-78's sweep after.
+func TestIndexRewriteDroppedBetweenItsCutAndRewriteIsCutAgain(t *testing.T) {
+	ctx := context.Background()
+	world := testEraseWorldWithCopies(t)
+	otherId := evsTestId("other eraser")
+	world.admins = append(world.admins, otherId)
+	eraser := world.newestEraser(t)
+	held := testEraseWorldRelisted(t, world, eraser)
+	erasureId := evsTestId("erasure")
+	late := indexEraseListed{testIndexId("late", 0): 1}
+	view := world.view(t, evsTestId("reader"))
+	if entry := indexErasureOf(view.erasureSet, erasureId); entry == nil || view.head.indexEpoch <= entry.GetEpoch() {
+		t.Fatalf("the later CUT did not join the entry at its first epoch: %v, head epoch %d", entry, view.head.indexEpoch)
+	}
+
+	dropping := testCut(t, world.newestEraserAs(t, otherId), "other", &IndexCutDocument{Key: testIndexId("elsewhere", 0), Version: 1})
+	if !dropping.Pushed || dropping.DroppedCount != 1 || indexErasureOf(world.view(t, evsTestId("reader")).erasureSet, erasureId) != nil {
+		t.Fatalf("the other erasure's CUT kept the complete erasure in the set: %+v", dropping)
+	}
+	closures, erases := len(world.evs.closures), len(world.evs.erases)
+	dropped, err := eraser.Rewrite(ctx, &IndexRewriteArgs{ErasureId: erasureId, Complete: true, Note: []byte("note"), Completion: true, Relisted: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !dropped.Dropped || dropped.PairCount != 0 || dropped.Completed || dropped.Erasure.State != SidecarErasureDone ||
+		len(world.evs.closures) != closures || len(world.evs.erases) != erases {
+		t.Fatalf("the relisted rewrite after the drop: %+v", dropped)
+	}
+	if still := world.holding(t, late); !slices.Equal(still, held) {
+		t.Fatalf("files holding the late document after the drop: %v, held %v", still, held)
+	}
+
+	recut := testCut(t, eraser, "erasure", &IndexCutDocument{Key: testIndexId("late", 0), Version: 1})
+	entry := indexErasureOf(world.view(t, evsTestId("reader")).erasureSet, erasureId)
+	if !recut.Pushed || entry == nil || entry.GetEpoch() != recut.Epoch || recut.Epoch != dropping.Version {
+		t.Fatalf("the CUT again: %+v, entry %v, the other CUT at %d", recut, entry, dropping.Version)
+	}
+	rewritten, err := eraser.Rewrite(ctx, &IndexRewriteArgs{ErasureId: erasureId, Complete: true, Note: []byte("note"), Completion: true, Relisted: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rewritten.Dropped || rewritten.FileCount != len(held) || !rewritten.Completed || rewritten.Erasure.State != SidecarErasureDone {
+		t.Fatalf("the relisted rewrite after the CUT again: %+v, %d files held", rewritten, len(held))
+	}
+	if still := world.holding(t, late); len(still) != 0 {
+		t.Fatalf("files still holding the late document: %v", still)
+	}
+	if indexErasureOf(world.view(t, evsTestId("reader")).erasureSet, evsTestId("other")) == nil {
+		t.Fatal("the CUT again dropped the other erasure, which is pending")
+	}
+	world.evs.sweep(t, late)
+	world.evs.sweep(t, world.listed(t))
 }
