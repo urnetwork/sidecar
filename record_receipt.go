@@ -608,6 +608,11 @@ func (self *RecordReceipts) seal(receiptLog *recordReceiptLog, request *RecordRe
 	case !request.NoSession:
 		tainted = true
 	}
+	self.writer.sealLock.Lock()
+	defer self.writer.sealLock.Unlock()
+	if err := self.writer.finishCaptureWithLock(); err != nil {
+		return nil, err
+	}
 	env := &RecordSealEnv{Chain: self.writer.chain, Sign: self.writer.sign, Random: self.writer.random}
 	sealed, err := RecordSeal(env, &RecordSealArgs{
 		LogId:         receiptLog.logId,
@@ -696,8 +701,11 @@ func (self *RecordReceipts) auditRead(receiptLog *recordReceiptLog, pending *rec
 		tainted = header.Header.GetTainted()
 	}
 	sealed, err := func() (*RecordSealedEntry, error) {
-		writer.sealLock.RLock()
-		defer writer.sealLock.RUnlock()
+		writer.sealLock.Lock()
+		defer writer.sealLock.Unlock()
+		if err := writer.finishCaptureWithLock(); err != nil {
+			return nil, err
+		}
 		sealed, err := RecordSeal(&RecordSealEnv{Chain: writer.chain, Sign: writer.sign, Random: writer.random}, &RecordSealArgs{
 			LogId:         *teamRecordId,
 			Kind:          RecordKindRead,

@@ -382,7 +382,18 @@ func (self *recordWriter) adopt(ctx context.Context, logId Id) error {
 	}() {
 		return nil
 	}
-	raised, err := self.chain.AdoptStream(ctx, self.boundStreams(), logId, self.identityPublicKey)
+	head, found, err := RecordStreamChainHead(ctx, self.boundStreams(), logId, self.sidecarId, self.identityPublicKey)
+	raised := false
+	if err == nil && found {
+		raised, err = func() (bool, error) {
+			self.sealLock.Lock()
+			defer self.sealLock.Unlock()
+			if err := self.finishCaptureWithLock(); err != nil {
+				return false, err
+			}
+			return self.chain.Adopt(logId, *head)
+		}()
+	}
 	if errors.Is(err, ErrRecordChainForked) {
 		// a pending entry at the stream's head seq with another leaf: readers alarm on what goes out
 		self.log.Warningf("[record]this writer's chain in log %s forks its stream's", logId)
