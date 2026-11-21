@@ -824,6 +824,17 @@ func TestTlsListenReadsThePublishGrantFromTheProjection(t *testing.T) {
 	if err != nil || platform.PublishGrant(request, "http", now) != nil {
 		t.Fatalf("the platform network answered %v", err)
 	}
+	edge := *request
+	edge.CallerNetworkId = world.edgeNetworkId
+	if !view.MayDial(&edge, now).Allowed || !view.MayPublish(request, now).Allowed {
+		t.Fatal("the public host was unavailable before the scope reservation")
+	}
+	process.projection.SetScopeSource(func(snapshot *sidecar.AclGateSnapshot, label string) (sidecar.AclScope, bool) {
+		return sidecar.AclScope{Label: label}, snapshot != nil && label == "blog"
+	})
+	if view.PublishGrant(request, "http", now) != nil || view.MayPublish(request, now).Allowed || view.MayDial(&edge, now).Allowed {
+		t.Fatal("a Team scope label remained available for registration or lookup as an ordinary host")
+	}
 }
 
 // A receiver's entry for §13.9's system publish: tls/443/mta-sts, http, its listen verdict the receiver's smtp/25/mx
