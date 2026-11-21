@@ -9046,6 +9046,11 @@ drop_job_test.go            each transition of 10.2.8's table; F0 to F9 each wit
                             evs.drop.head, evs.drop.delete, each .before and .after); the horizon read before
                             the LIST of head/, held with a barrier between; a job in phase horizon releases its
                             lease and returns at retry_ms; a round restarts at F4 after a kill
+drop_job_slot_test.go       (amended 2026-11-21, QD-1127 as held-drop-job-slot built it) a job a hold
+                            stopped gives up the slot, its record joining the held jobs at evs.drop.held
+                            (.before and .after), and the next job takes the slot; held jobs whose holds end
+                            take it back oldest first at evs.drop.take, the rest due at once, each ending only
+                            its own snap-0 drops; a crash at either hand-over resumes
 drop_mark_test.go           Names over kind-1, kind-5 and slot ids and a git-mode push's new-objects list; a
                             version a done drop lists marks nothing; a ref created since the last round is read
                             from version 1; a held head makes the phase wait

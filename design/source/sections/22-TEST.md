@@ -860,10 +860,13 @@ real        T3 runs each T3 row through server's real handlers and stores (api, 
             never use the wrapper
 explorer    each schedule also runs with seeded random barrier orders: 10 seeds a merge for T2 rows, 100 a night for
             T3 rows; a failing seed becomes a fixed schedule; seeds choose only at barriers, so a registered
-            schedule whose fixed run's trace holds no barrier event and which has no Background step runs one
-            seed, its report saying "no barrier passed: every seed takes this order", and the gate's rules item
-            names the rows that took that form, while one barrier event or Background step brings back every
-            seed (owner decision 667)
+            schedule runs its first seed alone, its report saying "no barrier passed: every seed takes this
+            order", where its fixed run passed no barrier, it has no Background step and no step ending when
+            its fault fires, and the baton moved only as each step's action began, so no runs an action started
+            waited for it together; a first seed that fails or leaves the fixed run's order brings back the
+            rest, as a barrier event, a Background step or a step its fault ends does; the gate's rules item
+            names the cases with a schedule taking that form, and a registered case, twin or clause taking it
+            for a case the item leaves out fails the gate's build (owner decision 667)
 model       EvsCommit.tla (TLA+, checked by TLC: https://github.com/tlaplus/tlaplus) keeps head (its fence, refusal
             records, seal lease and collect window included), batch records, packs and parcels with their pidx/
             entries, index entries, segments with their upload receipts, slot, pmap, log, gen, epoch, repo, proj and
