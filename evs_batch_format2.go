@@ -145,14 +145,22 @@ func (self *EvsBatchRecord) encodeFormat2(tail *EvsBatchRecordTail) []byte {
 	return encoded
 }
 
+// Encodes a parsed record after its body or unsigned tail has been normalized. An empty tail uses format 1's form.
+func (self *EvsBatchRecord) Bytes(tail *EvsBatchRecordTail) []byte {
+	if tail.Empty() {
+		return self.encode()
+	}
+	return self.encodeFormat2(tail)
+}
+
 // The record's bytes as a pack or parcel keeps them (§11.13's staged row: packs and parcels never hold staged bytes):
 // its purge list kept, which a hold's end and purge's turn-on read back (EVSB-M10-02), its staged item emptied, and
 // format 1's form when no purge list is left. Its hashes do not change, since staged bytes ride outside every hash.
 func EvsBatchRecordBytesWithoutStaged(record *EvsBatchRecord, tail *EvsBatchRecordTail) []byte {
-	if tail == nil || len(tail.PurgeList) == 0 {
-		return record.encode()
+	if tail != nil {
+		tail = &EvsBatchRecordTail{PurgeList: tail.PurgeList}
 	}
-	return record.encodeFormat2(&EvsBatchRecordTail{PurgeList: tail.PurgeList})
+	return record.Bytes(tail)
 }
 
 // Adds a record of either format and gives its place: with a non-empty tail, a format-2 record, which turns the batch

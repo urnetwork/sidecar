@@ -11,7 +11,8 @@
 //	         missing version when its pin is older than the window, the client paging GET .../log; else each version
 //	         after the pin in order: its Signed EvsPush as received, its push record (a sealed push's seal record and
 //	         each part's), and the objects the entries it creates name, each chain's segment ranges and each slot,
-//	         with the slots the push introduces
+//	         with the slots the push introduces. Records elide dropped inline entries and withheld slots and
+//	         ranges answer missing under the same rules as a single-ref read
 //	budget   the reply's frames stay within ReadStreamMaxByteCount, 4 MiB: a version that would pass it is not
 //	         started, and its ref answers `more` with that version, as does every ref after it with a version past
 //	         its pin; a request serves at least one version whatever its size, so a large push never wedges a stream
@@ -30,7 +31,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"sync"
 
@@ -225,14 +225,17 @@ func (self *readAttempt) streamVersionObjects(version uint64) (*readStreamVersio
 				return nil, err
 			}
 			objects.records = append(objects.records, partRecord)
-			record, err := sidecar.ParseEvsBatchRecord(partRecord)
-			if err != nil {
+			record, err := self.engine.records.parseRecord(partRecord)
+			if err != nil || record.RepoId != self.repoId || record.RefId != self.refId || record.PushId != push.entry.PushId {
 				return nil, fmt.Errorf("%w: a seal's part place holds another record", ErrEvsStatementMismatch)
 			}
 			// a part record, or a re-seeded push's part, a reseed record holding a part's body (QD-818)
-			_, partBytes, _, _, err := sidecar.ParseEvsSealPartRecord(record)
+			statementBytes, partBytes, _, _, err := sidecar.ParseEvsSealPartRecord(record)
 			if err != nil {
 				return nil, fmt.Errorf("%w: a seal's part place holds another record: %w", ErrEvsStatementMismatch, err)
+			}
+			if !bytes.Equal(statementBytes, push.statement.Bytes) {
+				return nil, fmt.Errorf("%w: a part of another statement", ErrEvsStatementMismatch)
 			}
 			parts = append(parts, partBytes)
 		}
@@ -303,36 +306,19 @@ func (self *readAttempt) streamVersion(stream *readStream, objects *readStreamVe
 		return false
 	}
 	for number, record := range objects.records {
-		if !stream.object(self.settings, protocol.EvsReadObjectKind_EVS_READ_OBJECT_BATCH_RECORD, objects.pushId, uint64(number), 0, bytes.NewReader(record)) {
+		if !self.streamBatchRecord(stream, objects.pushId, uint64(number), objects.version, record) {
 			return false
 		}
 	}
 	for _, readRange := range objects.ranges {
-		if !self.streamExactRange(stream, readRange) {
+		if !self.streamRange(stream, readRange, true) {
 			return false
 		}
 	}
 	for _, slotId := range objects.slotIds {
-		object, err := self.cluster.Get(self.ctx, SlotKey(self.repoId, sidecar.Id(slotId)))
-		if !self.streamObject(stream, protocol.EvsReadObjectKind_EVS_READ_OBJECT_SLOT, slotId, 0, object, err) {
+		if !self.streamSlot(stream, slotId) {
 			return false
 		}
 	}
 	return true
-}
-
-// One segment range exactly as named: the streams read sends what each record needs and no more of a segment.
-func (self *readAttempt) streamExactRange(stream *readStream, readRange *protocol.EvsReadRange) bool {
-	kind := protocol.EvsReadObjectKind_EVS_READ_OBJECT_SEGMENT
-	segmentId := [32]byte(readRange.GetSegmentId())
-	object, err := self.engine.segments.OpenSegment(self.ctx, self.cluster, self.repoId, segmentId, int64(readRange.GetOffset()), int64(readRange.GetLength()))
-	switch {
-	case errors.Is(err, sidecar.ErrBlobNotFound), errors.Is(err, sidecar.ErrBlobRange):
-		return stream.missing(kind, segmentId[:], 0)
-	case err != nil:
-		stream.fail("segment_read_failed", err)
-		return false
-	}
-	defer object.Body.Close()
-	return stream.object(self.settings, kind, segmentId[:], 0, readRange.GetOffset(), io.LimitReader(object.Body, int64(readRange.GetLength())))
 }
