@@ -507,6 +507,9 @@ func (self *EvsVerifier) gapHead(verified *EvsVerifiedHead, read *EvsHeadRead) (
 		if err != nil {
 			return nil, err
 		}
+		if err := evsCheckExactHeadVersion(parsed.Push, statement.GetVersion()); err != nil {
+			return nil, err
+		}
 		verified.Statements = append(verified.Statements, &EvsVerifiedStatement{Version: statement.GetVersion(), Statement: parsed})
 	}
 	verified.FromVersion = first - 1

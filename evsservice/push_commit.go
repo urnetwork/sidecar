@@ -102,6 +102,12 @@ func (self *pushAttempt) commit() (*pushOutcome, bool) {
 			return outcome, false
 		}
 		prior := self.head
+		if refusal := checkExactHead(self.reads.view, prior.Head); refusal != nil {
+			if self.restsOnCache(refusal) {
+				return nil, true
+			}
+			return self.refuse(refusal), false
+		}
 		self.issued = true
 		written, err := self.engine.heads.commitBefore(self.writeCtx, self.cluster, self.repoId, self.refId, prior, next, self.reads.readAt.Add(self.settings.PushStepSevenWindow))
 		var unknown *sidecar.BlobUnknownError
