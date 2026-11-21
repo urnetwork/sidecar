@@ -2152,7 +2152,10 @@ reconcile an erasure resumes from evs's state, not one device's memory: its CUTs
           the erasure (owner decision 681), and a request an ERASE names has what its ledger owes finished
           whatever the request's check reads now, lapsed, voided or superseded (owner decision 682), its met
           paths closed the same way, and where every one reads rewritten and nothing else is owed, a ref
-          rewrite's completion ERASE ends the erasure (owner decision 683);
+          rewrite's completion ERASE ends the erasure (owner decision 683), as it does once the copy no
+          longer holds the request's entry, expired or refused after its signer's compromise revocation, the
+          ERASEs naming the request being evs's state, its ledger row keeping the repo id and marker version
+          the work's file reads need (owner decision 684);
           its CLOSUREs' and ERASEs' erasure_notes name its id (for the directory's erasure runner the
           DirectoryErasureRequest's request_id, which racing runners and the 30-day sweep share, as RECORD.md's
           ErasureBody.request_id does, so the note's id is that request_id), and its ERASEs' notes name its documents

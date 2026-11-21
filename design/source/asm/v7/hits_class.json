@@ -2316,7 +2316,7 @@
  {
   "family": "window_14d_weekly",
   "file": "16-MCP.md",
-  "line": 1274,
+  "line": 1276,
   "col": 101,
   "match": "14 days",
   "snippet": "            decision 156's general off switch for this repo; window 7 days (7-90), so latest holds 7-14 days;",
@@ -2329,7 +2329,7 @@
  {
   "family": "window_14d_weekly",
   "file": "16-MCP.md",
-  "line": 1286,
+  "line": 1288,
   "col": 12,
   "match": "weekly",
   "snippet": "roll-up     weekly, by the directory's network-scope search indexer, else the first writer after expiry (owner",
@@ -2342,7 +2342,7 @@
  {
   "family": "window_14d_weekly",
   "file": "16-MCP.md",
-  "line": 1764,
+  "line": 1766,
   "col": 14,
   "match": "7-day window",
   "snippet": "latest index (7-day window)           ~48 MB              ~190 MB               ~480 MB",
