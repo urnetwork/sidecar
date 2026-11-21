@@ -192,43 +192,40 @@ func (self *DirectoryClient) carryItem(ctx context.Context, item *protocol.Annou
 	carrier := self.carrier()
 	carrier.writeLock.Lock()
 	defer carrier.writeLock.Unlock()
-	if err := self.seedCarrier(carrier); err != nil {
+	if err := self.seedCarrier(ctx, carrier); err != nil {
 		return err
 	}
 	announcementId := recordIdOf(item.GetAnnouncementId())
-	items := func() []*protocol.Announcement {
-		carrier.stateLock.Lock()
-		defer carrier.stateLock.Unlock()
-		if DirectoryAnnouncementState(item.GetState()) == DirectoryAnnouncementStateWithdrawn {
-			// a card says a withdrawal by leaving the item out
-			delete(carrier.items, announcementId)
-		} else {
-			carrier.items[announcementId] = proto.Clone(item).(*protocol.Announcement)
+	// Stage the replacement. A rejected write must leave the last successfully
+	// carried set intact for a retry or a different run's next append.
+	carrier.stateLock.Lock()
+	items := make([]*protocol.Announcement, 0, len(carrier.items)+1)
+	for id, held := range carrier.items {
+		if id != announcementId {
+			items = append(items, held)
 		}
-		items := make([]*protocol.Announcement, 0, len(carrier.items))
-		for _, held := range carrier.items {
-			items = append(items, proto.Clone(held).(*protocol.Announcement))
-		}
-		return items
-	}()
+	}
+	carrier.stateLock.Unlock()
+	if DirectoryAnnouncementState(item.GetState()) != DirectoryAnnouncementStateWithdrawn {
+		items = append(items, item)
+	}
 	written, err := self.WriteCard(ctx, &DirectoryCardWriteArgs{Items: items})
 	if err != nil {
 		return err
 	}
-	// what the card no longer holds, ended or stale past its window or taken by an erasure, the carrier forgets
-	func() {
-		carrier.stateLock.Lock()
-		defer carrier.stateLock.Unlock()
-		kept := map[Id]bool{}
-		for _, held := range written.Items {
-			kept[recordIdOf(held.GetAnnouncementId())] = true
+	kept := make(map[Id]bool, len(written.Items))
+	for _, held := range written.Items {
+		kept[recordIdOf(held.GetAnnouncementId())] = true
+	}
+	carrier.stateLock.Lock()
+	clear(carrier.items)
+	for _, held := range items {
+		id := recordIdOf(held.GetAnnouncementId())
+		if kept[id] {
+			carrier.items[id] = proto.Clone(held).(*protocol.Announcement)
 		}
-		for heldId := range carrier.items {
-			if !kept[heldId] {
-				delete(carrier.items, heldId)
-			}
-		}
-	}()
+	}
+	carrier.stateLock.Unlock()
 	if slices.Contains(written.Moderated, announcementId) {
 		// the card left this item out, an erasure having taken it: its writer announces it no more
 		return ErrDirectoryItemModerated
@@ -239,16 +236,36 @@ func (self *DirectoryClient) carryItem(ctx context.Context, item *protocol.Annou
 // Seeds the carrier's items once from the last card this device wrote, at their writers' versions, so a restart's first
 // card keeps the items the last one carried at the versions it carried them, less any an erasure took
 // (cardWrittenItems).
-func (self *DirectoryClient) seedCarrier(carrier *directoryCarrier) error {
+func (self *DirectoryClient) seedCarrier(ctx context.Context, carrier *directoryCarrier) error {
 	carrier.stateLock.Lock()
 	seeded := carrier.seeded
 	carrier.stateLock.Unlock()
 	if seeded {
 		return nil
 	}
-	items, err := self.cardWrittenItems()
+	written, err := self.readCardWritten()
 	if err != nil {
 		return err
+	}
+	items := directoryCardHandedItems(written.withoutModerated(written.card(self.sidecarId).GetItems()), written.ContentRaise)
+	if len(written.Content) == 0 {
+		// A first card is a complete snapshot. It carries older announcements of
+		// this writer that still stand, even if another run triggered migration.
+		if err := self.Sync(ctx); err != nil {
+			return err
+		}
+		if accepted := self.files().acceptedAt(DirectoryCardPath(self.sidecarId)); accepted != nil {
+			if accepted.card != nil {
+				items = directoryCardHandedItems(written.withoutModerated(accepted.card.Card.GetItems()), written.ContentRaise)
+			}
+		} else {
+			for _, held := range self.currentFold().View(self.auth(), self.clock.Now().UnixMilli()) {
+				if held.SignerSidecarId == self.sidecarId && held.EntryId != (Id{}) && (held.Key.Kind == DirectoryAnnouncementKindRun || held.Key.Kind == DirectoryAnnouncementKindWorker) {
+					items = append(items, held.Announcement)
+				}
+			}
+			items = written.withoutModerated(items)
+		}
 	}
 	carrier.stateLock.Lock()
 	defer carrier.stateLock.Unlock()

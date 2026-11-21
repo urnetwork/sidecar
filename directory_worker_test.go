@@ -18,6 +18,8 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/sidecartest"
 )
@@ -518,4 +520,25 @@ func TestDirectoryWorkerMeetsTheJournalAfterAnotherItemsReturn(t *testing.T) {
 		}
 	}
 	worker.Close()
+}
+
+// The saved off setting and its outstanding withdrawal are distinct across a restart.
+func TestDirectoryWorkerResumesFailedWithdrawal(t *testing.T) {
+	env := newTestWorkerEnv(t)
+	env.mustMaintain(sidecar.DirectoryWorkerAnnounced)
+	off := false
+	env.writer.appendErr = errors.New("writer unavailable")
+	if _, err := env.worker.Set(t.Context(), &sidecar.DirectoryWorkerSetting{On: &off}); !errors.Is(err, env.writer.appendErr) {
+		t.Fatalf("off: %v", err)
+	}
+	owed := env.writer.refused
+	env.worker.Close()
+	env.worker = env.open()
+	env.clock.Advance(time.Minute)
+	env.writer.appendErr = nil
+	env.mustMaintain(sidecar.DirectoryWorkerWithdrawn)
+	env.mustMaintain(sidecar.DirectoryWorkerUnchanged)
+	if items := env.writer.items(t); len(items) != 2 || owed == nil || !proto.Equal(owed, items[1]) {
+		t.Fatalf("recovered %d items, wanted the original withdrawal", len(items))
+	}
 }
