@@ -76,6 +76,43 @@ func newGkmReformWorld(t *testing.T, pinVersion uint64) *gkmReformWorld {
 	return reformWorld
 }
 
+// A v0 restore keeps installed signed history across a service change and an interrupted reseed.
+func TestKeyDeliveryReseedRetainsInstalledLadder(t *testing.T) {
+	world := newGkmGroupWorld(t)
+	world.createAndActivate()
+	fixture := world.fixture
+	_, rotate2 := world.nextGeneration(world.admin, world.key1, nil)
+	fixture.put("meta-2", GkmGenerationKey(world.groupId, 2), fixture.marshal(rotate2))
+	old := world.groupId
+	world.groupId = testId("restored-keydelivery")
+	fixture.settings = DefaultGkmServiceSettings()
+	fixture.start()
+	request := &protocol.GkmGroupReformRequest{Form: world.form(world.admin, world.groupId, &old, 2)}
+	path := "/gkm/repos/" + sidecar.EvsKeyId(world.repoId) + "/forms"
+	for range 2 {
+		if answer := fixture.serve(http.MethodPost, path, world.adminToken, fixture.marshal(request)); answer.Code != http.StatusOK {
+			t.Fatalf("restore form: %d", answer.Code)
+		}
+	}
+	if answer := world.postLadder(world.adminToken, world.rotate1); answer.Code != http.StatusOK {
+		t.Fatalf("first ladder item: %d", answer.Code)
+	}
+	fixture.start()
+	if answer := world.postLadder(world.adminToken, world.rotate1, rotate2); answer.Code != http.StatusOK {
+		t.Fatalf("resumed ladder: %d", answer.Code)
+	}
+	for generation := uint64(1); generation <= 2; generation++ {
+		original := fixture.object("meta-2", GkmGenerationKey(old, generation))
+		restored := fixture.object("meta-2", GkmGenerationKey(world.groupId, generation))
+		if len(original) == 0 || !bytes.Equal(original, restored) {
+			t.Fatalf("the signed generation %d changed on restore", generation)
+		}
+	}
+	if world.storedEpoch(0) != nil {
+		t.Fatal("the restored group acquired an epoch")
+	}
+}
+
 // QD-074 rules 3 and 4: the ladder route gives a re-formed group its old generations byte for byte, each naming its
 // old group, in ascending order from generation 1; the same call again answers success; and once gen/<the form's
 // generation> stands, the next generation is claimed as in any group.

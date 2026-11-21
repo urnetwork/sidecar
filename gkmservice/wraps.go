@@ -72,6 +72,7 @@ const gkmWrapStatusNotTried = 0
 // One item of a batch on its way to the store: its key and bytes, whether it is a LATE delivery, and where its answer
 // goes.
 type gkmWrapWrite struct {
+	beforePut  func() bool
 	wakeReader *sidecar.Id
 	key        string
 	body       []byte
@@ -490,6 +491,9 @@ func (self *GkmEngine) putWraps(ctx context.Context, request *GkmRequest, writes
 			defer group.Done()
 			defer func() { <-slots }()
 			testHookBarrier(BarrierWrapPutBefore, barrierKey)
+			if write.beforePut != nil && !write.beforePut() {
+				return
+			}
 			winner, err := createGkmObject(ctx, request.Cluster, write.key, write.body, gkmDeliveryMaxByteCount)
 			testHookBarrier(BarrierWrapPutAfter, barrierKey)
 			switch {

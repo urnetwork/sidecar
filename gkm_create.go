@@ -1,42 +1,14 @@
-// KF1, a new repo's group (KEYS-M2-21; D-KEYS-5, D-KEYS-18; DESIGN-DETAILS 6.2.4): what EvsClient.CreateRepo calls
-// between the repo's placement, keying, and its activation.
+// KF1 forms a repo while it is keying. The creator persists its chosen group ID and RK_1 before sending its
+// signed GroupForm and first GenRotate. On a retry it uses the same signed bytes, then stages the first reader,
+// delegation and recovery deliveries. EVS can activate the repo after CreateGroup succeeds (D-KEYS-18).
 //
-//	2  draw group_id, 16 random bytes, RK_1 and GenRotate_1 {generation 1, no parent, cause REQUEST, this state's
-//	   pin, holders_sha256 over KeyHolders there, wrap_count}; create the MLS group, whose only leaf is this
-//	   sidecar's, with ur_group {network, repo, kind, owner}; seal GenWrap_0 and GroupInfo_0 under RK_1; persist the
-//	   draft, the whole request with RK_1, in the keychain
-//	3  POST /gkm/groups: gkm writes the owner marker, the form, epoch/0 and gen/1, each If-None-Match, equal bytes
-//	   resuming; a 409 means the id is another repo's, and another is drawn
-//	4  stage generation 1's deliveries as a rotation stages its own: ReaderWraps to agents and, in the config and
-//	   directory groups, to the member devices among the holders; DelegationWraps; RecoveryWraps
+// For a first config repo, DraftGroup supplies the group ID and RK_1 before base 1 so the first config head
+// can be sealed. Its commitment depends on the key, repo and generation. Once base 1 lands, CreateGroup uses
+// its verified S(1) pin to sign GenRotate_1. A collision on the config group's drafted ID keeps the draft,
+// since the published head already commits to that key (QD-824).
 //
-// Only when step 4 has returned does CreateGroup answer, and only then does EvsClient.CreateRepo have evs activate
-// the repo (plan-EVS1-repo-activate-route), so no content predates its recovery wraps (D-KEYS-18). The engine's
-// first run then adds every pending member device in one Add commit (KF2).
-//
-// A kill resumes: before step 3 from the draft, with the same bytes; after it, the group stands at gkm and in the
-// keychain, and step 4 runs again, each delivery an If-None-Match create. A second CreateGroup of a repo whose group
-// stands answers its generation 1 once its deliveries stand. A creator whose only device is lost before activation
-// leaves the repo keying, and a repo admin's device re-forms or deletes it (FS-20).
-//
-// A sidecar that holds no leaf creates no group: KF1's epoch 0 has one leaf, the creator's. A repo such a sidecar,
-// a tagged or ephemeral one, creates is formed by the first member device gkm's pending hint reaches (QD-638;
-// FormAgentRepos): it runs steps 2 to 4 as the group's creator, and the agent, which stays the repo's admin, activates
-// the repo once it holds generation 1. Two member devices that act at once race at the repo's first form, and the
-// loser's 409, a form standing that is not its own, discards its draft (ErrGkmGroupFormed). The state must already
-// hold the repo's row, its RepoCreate applied, or the holders cannot be computed and CreateGroup answers
-// ErrGkmNoRepo for its caller to retry once the log advances.
-//
-// The config repo's group is split at its network's bootstrap (QD-824). Base 1 names the first config head, so that
-// head's push is sealed and signed before base 1 under the generation pin {group_id, 1, C_1}; but GenRotate_1's auth
-// pin must be past position 0, and gkm's gate holds nothing before base 1. DraftGroup draws step 2's group_id and RK_1
-// alone before base 1, kept as KF1's draft with no request yet, and answers the key the push is sealed under; after
-// base 1, CreateGroup finishes step 2 over that draft at its state, S(1): the MLS group, GenRotate_1 signed over the
-// drawn RK_1, the form, GenWrap_0 and GroupInfo_0. C_g = SHA-256("UR evs 1.0 commit" || repo_id || u64be(g) || RK_g)
-// holds no pin, which makes the split sound. A kill before base 1, or between it and the POST, draws nothing new: the
-// draft answers the same id and RK_1, and a step 2 a kill cut short after the MLS group was made takes that group, at
-// epoch 0, rather than make another under the same id. The config group's id is never drawn again: a 409 on it ends
-// the creation (ErrGkmDraftTaken), its draft kept, since a push base 1 names is sealed under it.
+// KeyDelivery clients use the same formation flow for member devices and authorized agents (owner 610).
+// The optional draft MLS engine adds the creator's leaf and epoch-0 material to the stored request.
 
 package sidecar
 

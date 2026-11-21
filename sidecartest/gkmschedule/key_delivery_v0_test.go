@@ -74,3 +74,25 @@ func TestKeyDeliveryLifecycleAfterRestartAndDeviceLoss(t *testing.T) {
 		t.Fatalf("replacement read: %v, writer: %v", err, heldErr)
 	}
 }
+
+// A readable repo can have its projection row before its group forms. It contributes no generation to retirement.
+func TestRecoveryRotationCompletesAcrossAnUnformedRepo(t *testing.T) {
+	world := NewFsKeysWorld(t, protocol.RepoKind_REPO_KIND_GENERAL)
+	world.Reconfigure(func(settings *gkmservice.GkmServiceSettings) { settings.DraftMls = false })
+	writer := world.AddMember("writer", false)
+	world.Grant(true, writer)
+	world.Admin(writer)
+	world.ConfigWriters(writer)
+	old := world.BindRecovery("initial", writer)
+	world.Advance()
+	world.Publish()
+	world.CreateConfig(writer)
+	replacement := world.RebindRecovery("replacement", writer, false)
+	world.Advance()
+	if err := writer.Client.CompleteRecoveryBinding(world.Ctx, replacement.KeySha256); err != nil {
+		t.Fatal(err)
+	}
+	if world.RecoveryReach(old, world.ConfigGroupId) != 0 || world.RecoveryReach(replacement, world.ConfigGroupId) == 0 {
+		t.Fatal("the formed config group's replacement was not completed")
+	}
+}
