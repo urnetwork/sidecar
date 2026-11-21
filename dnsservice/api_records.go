@@ -95,25 +95,12 @@ func (self *dnsAclRecordGate) MayAdmin(networkId sidecar.Id, sidecarId sidecar.I
 	return dnsGateVerdictOf(self.view.MayAdminDns(networkId, sidecar.AclSidecarSubject(sidecarId), host, now))
 }
 
-// admin through the view, which applies its refusals, then publish on the same loaded state, which the view has no
-// method for: a rule refusal of admin means the state is loaded and the network neither halted nor over its limit.
+// Read either grant through the same verified view, including the service's standing checks.
 func (self *dnsAclRecordGate) MayView(networkId sidecar.Id, sidecarId sidecar.Id, host string, now time.Time) DnsGateVerdict {
 	if self.view == nil || self.states == nil {
 		return DnsGateUnavailable
 	}
-	subject := sidecar.AclSidecarSubject(sidecarId)
-	verdict := dnsGateVerdictOf(self.view.MayAdminDns(networkId, subject, host, now))
-	if verdict != DnsGateDenied {
-		return verdict
-	}
-	snapshot, status := self.states.State(networkId)
-	if status != sidecar.AclGateLoaded || snapshot == nil || snapshot.Acl == nil {
-		return DnsGateUnavailable
-	}
-	if snapshot.Acl.MayPublish(subject, host, now).Allowed {
-		return DnsGateAllowed
-	}
-	return DnsGateDenied
+	return dnsGateVerdictOf(self.view.MayViewDns(networkId, sidecar.AclSidecarSubject(sidecarId), host, now))
 }
 
 // The gate of a host that installed none: unavailable to everything, so no write passes under a grant and the zone

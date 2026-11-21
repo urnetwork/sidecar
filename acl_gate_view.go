@@ -151,7 +151,23 @@ func (self *AclGateView) MayAdminDns(networkId Id, subject AclSubject, host stri
 	if deny != 0 {
 		return aclDeny(deny)
 	}
-	return state.resourceDecision(subject, now.UnixMilli(), protocol.AclAction_ACL_ACTION_ADMIN, func(rule *aclRule) bool {
+	return state.mayAdminDns(subject, host, now)
+}
+
+// The zone view exposes records covered by either grant, with standing and quota checked on the same snapshot.
+func (self *AclGateView) MayViewDns(networkId Id, subject AclSubject, host string, now time.Time) AclDecision {
+	state, deny := self.state(networkId)
+	if deny != 0 {
+		return aclDeny(deny)
+	}
+	if decision := state.mayAdminDns(subject, host, now); decision.Allowed {
+		return decision
+	}
+	return state.MayPublish(subject, host, now)
+}
+
+func (self *AclState) mayAdminDns(subject AclSubject, host string, now time.Time) AclDecision {
+	return self.resourceDecision(subject, now.UnixMilli(), protocol.AclAction_ACL_ACTION_ADMIN, func(rule *aclRule) bool {
 		for _, pattern := range rule.publicNames {
 			if !strings.Contains(pattern, "/") && aclDnsHostCovers(pattern, host) {
 				return true

@@ -304,6 +304,7 @@ func (self *RestoreStep) Run(ctx context.Context, root string, incidentId sideca
 			case err != nil:
 				return progress, err
 			default:
+				progress.StoppedNs = append(progress.StoppedNs, ns)
 				self.log.Warningf("[dns]restore: %s did not answer its SOA and is stopped until it serves the restore serial", ns)
 			}
 		}
@@ -318,6 +319,9 @@ func (self *RestoreStep) Run(ctx context.Context, root string, incidentId sideca
 		}
 		testHookBarrier("dnsservice.restore_commit.after", key)
 		progress.RestoreSerial = restoreSerial
+		if len(progress.StoppedNs) == len(self.settings.Ns) {
+			progress.WaitingNs = slices.Clone(self.settings.Ns)
+		}
 		self.log.Infof("[dns]restore: %s lands at serial %d", root, restoreSerial)
 	}
 	// step 3b: the custom-host map, raised once the restore transaction has run
