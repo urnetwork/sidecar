@@ -467,7 +467,7 @@ func (self *EvsRepo) exportFileRef(ctx context.Context, writer *evsGitObjectWrit
 					continue
 				}
 			}
-			file, err := self.exportBlob(ctx, writer, head, keys, statement, change)
+			file, err := self.exportBlob(ctx, writer, head, keys, statement, change, string(bytes.Join(pathNames, []byte("/"))))
 			erased := errors.Is(err, ErrEvsErased)
 			if err != nil && !erased {
 				return nil, nil, err

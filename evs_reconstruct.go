@@ -437,6 +437,9 @@ func (self *EvsRepo) reconstruct(ctx context.Context, result *evsReadResult, ver
 		return nil, err
 	}
 	defer content.close()
+	if err := self.checkMailRead(ctx, result, verified, content); err != nil {
+		return nil, err
+	}
 	if _, err := io.Copy(out, content.reader()); err != nil {
 		return nil, err
 	}

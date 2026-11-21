@@ -157,6 +157,10 @@ func (self *MailGroupRefs) Sync(ctx context.Context) (*MailGroupRefSync, error) 
 		if erasure.Version <= self.erasureVersion {
 			continue
 		}
+		if erasure.Completion {
+			self.erasureVersion = erasure.Version
+			continue
+		}
 		messages, _, _ := parseMailErasureNote(erasure.Note)
 		for _, message := range messages {
 			self.erased[message.MessageId] = true

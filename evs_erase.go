@@ -254,7 +254,7 @@ func (self *EvsRepo) postErase(ctx context.Context, attempt *evsPushAttempt) (*p
 func (self *EvsRepo) ReadErasures(ctx context.Context, afterVersion uint64) ([]*EvsErasure, error) {
 	refId := EvsErasureRefId(self.repoId)
 	head, err := self.readHeadAlone(ctx, refId, true)
-	if err != nil || head.Version == 0 {
+	if err != nil || head.Version <= afterVersion {
 		return nil, err
 	}
 	walked, err := self.client.verifier.Walk(ctx, self.repoId, refId, 0, EvsChainStart(self.repoId, refId), head.Version)
@@ -389,6 +389,7 @@ func (self *EvsRepo) Erasures(ctx context.Context) ([]*SidecarErasure, error) {
 		if complete {
 			state.State = "done"
 		} else {
+			// A late copy's destructive ERASE reopens an earlier completion.
 			state.State = "rewriting"
 		}
 		last[id] = erasure.Time

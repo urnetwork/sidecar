@@ -194,7 +194,7 @@ func (self *mailErasedView) refresh(ctx context.Context, erasures func(ctx conte
 			continue
 		}
 		fresh = append(fresh, erasure)
-		if messages, _, ok := parseMailErasureNote(erasure.Note); ok {
+		if messages, _, ok := parseMailErasureNote(erasure.Note); !erasure.Completion && ok {
 			for _, message := range messages {
 				self.messageErasureIds[message.MessageId] = erasure.ErasureId
 				self.messageMonths[message.MessageId] = message.Month
@@ -232,4 +232,11 @@ func (self *mailErasedView) messageIds() map[Id]bool {
 		ids[messageId] = true
 	}
 	return ids
+}
+
+// Whether the erasure ref named any mail, including in a completed erasure.
+func (self *mailErasedView) hasMessages() bool {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return len(self.messageErasureIds) != 0
 }
