@@ -1450,12 +1450,21 @@ func gkmNewestFormGroup(ctx context.Context, cluster sidecar.BlobCluster, repoId
 // RepoAckKeys returns the Redis acknowledgment hash for each group whose
 // stored GroupForm names repoId, including groups preceding a re-form.
 func RepoAckKeys(ctx context.Context, cluster sidecar.BlobCluster, repoId sidecar.Id) ([]string, error) {
-	forms, err := readRepoForms(ctx, cluster, repoId, DefaultGkmServiceSettings(), false)
+	settings := DefaultGkmServiceSettings()
+	forms, err := readRepoForms(ctx, cluster, repoId, settings, false)
 	if err != nil {
 		return nil, err
 	}
+	owners := newGkmGroupOwnerCache(settings)
 	keys := make([]string, 0, len(forms))
 	for _, form := range forms {
+		owner, found, err := owners.owner(ctx, cluster, form.GroupId)
+		if err != nil {
+			return nil, err
+		}
+		if !found || owner != repoId {
+			return nil, fmt.Errorf("%w: the stored group owner does not match the form's repository", errGkmStoreFault)
+		}
 		keys = append(keys, GkmAckRedisKey(form.GroupId))
 	}
 	return keys, nil

@@ -10,6 +10,7 @@ import (
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/evsservice"
 	"github.com/urnetwork/sidecar/protocol"
+	"github.com/urnetwork/sidecar/protocol/bridge"
 	"github.com/urnetwork/sidecar/sidecartest"
 )
 
@@ -34,6 +35,24 @@ func TestRepoAckKeysFollowOnlyTheReposForms(t *testing.T) {
 	if err == nil || keys != nil {
 		t.Fatalf("malformed form returned keys=%v err=%v", keys, err)
 	}
+}
+
+// A form cannot select another repository's Redis hash without its own matching owner marker.
+func TestRepoAckKeysRequireTheStoredGroupOwner(t *testing.T) {
+	f := newGkmFixture(t)
+	cluster := f.cluster("meta-1")
+	repo, other, group := testId("held"), testId("other"), testId("group")
+	body := f.marshal(&protocol.GroupForm{RepoId: repo.Bytes(), GroupId: group.Bytes(), Generation: 1})
+	f.put("meta-1", GkmFormKey(repo, 1), f.marshal(&bridge.Signed{Body: body, Type: uint32(bridge.SignedType_SIGNED_GROUP_FORM)}))
+	check := func() {
+		t.Helper()
+		if keys, err := RepoAckKeys(f.ctx, cluster, repo); err == nil || keys != nil {
+			t.Fatalf("group without the matching owner returned keys %v, error %v", keys, err)
+		}
+	}
+	check()
+	f.put("meta-1", GkmGroupOwnerKey(group), f.marshal(&protocol.GkmGroupOwner{RepoId: other.Bytes(), NetworkId: sidecar.Id(f.networkId).Bytes()}))
+	check()
 }
 
 // gkm rereads evs's repo/ by the key evs writes, which this package builds without linking evs.
