@@ -13,6 +13,7 @@ type memberRequesterLocal struct {
 	member *memberSearchHost
 }
 
+// Runs the requester's local search on the enrolled member's engine.
 func (self memberRequesterLocal) Search(ctx context.Context, request *SearchRequest) (*SearchStream, error) {
 	engine, err := self.member.open()
 	if err != nil {
@@ -21,6 +22,7 @@ func (self memberRequesterLocal) Search(ctx context.Context, request *SearchRequ
 	return engine.Search(ctx, request)
 }
 
+// Reports local coverage for the requested repo, or for every repo when repo is nil.
 func (self memberRequesterLocal) Status(repo *Id) (*SearchStatus, error) {
 	engine, err := self.member.open()
 	if err != nil {
@@ -29,6 +31,7 @@ func (self memberRequesterLocal) Status(repo *Id) (*SearchStatus, error) {
 	return engine.Status(repo)
 }
 
+// Drops the member engine's local search data for the requested scope.
 func (self memberRequesterLocal) DropCache(repo *Id) error {
 	engine, err := self.member.open()
 	if err != nil {
@@ -148,15 +151,20 @@ func (self *MemberReplica) searchDeviceName(id Id) string {
 	return names[id]
 }
 
+// Returns the local index pin and its recent chain values for judging an indexer's coverage.
 func (self memberRequesterLocal) ownIndex(repo, ref Id) (SearchSyncPin, bool, []SearchSyncPinPair, bool) {
 	engine, err := self.member.open()
 	if err != nil {
 		return SearchSyncPin{}, false, nil, false
 	}
+	indexId := engine.args.Scope.(*memberSearchSource).indexId(repo, ref)
+	if indexId == (Id{}) {
+		return SearchSyncPin{}, false, nil, false
+	}
 	syncer := engine.args.Sync
 	syncer.stateLock.Lock()
 	defer syncer.stateLock.Unlock()
-	held := syncer.refs[[2]Id{repo, ref}]
+	held := syncer.refs[[2]Id{repo, indexId}]
 	if held == nil || held.manifest == nil || syncer.closed {
 		return SearchSyncPin{}, false, nil, false
 	}
@@ -170,7 +178,11 @@ func (self memberRequesterLocal) masked(repo, ref Id, key [16]byte, version uint
 	if err != nil {
 		return true
 	}
-	snapshot, err := engine.args.Sync.Snapshot(repo, ref)
+	indexId := engine.args.Scope.(*memberSearchSource).indexId(repo, ref)
+	if indexId == (Id{}) {
+		return true
+	}
+	snapshot, err := engine.args.Sync.Snapshot(repo, indexId)
 	switch {
 	case err == nil:
 		defer snapshot.Release()
@@ -178,7 +190,7 @@ func (self memberRequesterLocal) masked(repo, ref Id, key [16]byte, version uint
 		return err != nil || version <= probe.ErasedThrough || version < probe.RefTombstoneVersion ||
 			(probe.Tombstone && version <= probe.Version)
 	case errors.Is(err, ErrSearchSyncUnfollowed), errors.Is(err, ErrSidecarStoreAbsent):
-		mask, err := engine.args.Cache.erasedMask(repo, ref, key)
+		mask, err := engine.args.Cache.erasedMask(repo, indexId, key)
 		return err != nil || mask.Erase || version <= mask.Through
 	default:
 		return true
