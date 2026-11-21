@@ -744,8 +744,9 @@ func (self *DirectoryClient) judgeErasures(repoId Id, erasures []*RecordStreamEr
 				seen.RequestId = &requestId
 				if _, ok := part.erased[requestId]; !ok {
 					part.erased[requestId] = &directoryErasedRow{TimeMillis: erasure.TimeMillis, EraserSidecarId: erasure.EraserSidecarId}
-					changed = true
 				}
+				// A retried batch must also persist a request a previous store failure left in memory.
+				changed = true
 			}
 			for _, entryId := range body.GetEntryIds() {
 				if len(entryId) == len(Id{}) {
@@ -769,8 +770,7 @@ func (self *DirectoryClient) judgeErasures(repoId Id, erasures []*RecordStreamEr
 		self.raise(SidecarRecordAlarmBadErasure, repoId, &signerId)
 	}
 	// what a moderation took off this sidecar's card stays off every card after, whatever this judge's keep did
-	self.journalModerationNotes(notes)
-	if err != nil {
+	if err := errors.Join(err, self.journalModerationNotes(notes)); err != nil {
 		return nil, err
 	}
 	return accepted, nil
