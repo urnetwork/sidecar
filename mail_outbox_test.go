@@ -12,7 +12,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
-	"crypto/rand"
 	"errors"
 	"slices"
 	"strings"
@@ -25,45 +24,11 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
-// One device's identity key, which signs its outbox entries as Sidecar.Sign does.
-type testMailOutboxSigner struct {
-	sidecarId Id
-	key       ed25519.PrivateKey
-}
-
-func newTestMailOutboxSigner(sidecarId Id) *testMailOutboxSigner {
-	_, key, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		panic(err)
-	}
-	return &testMailOutboxSigner{sidecarId: sidecarId, key: key}
-}
-
-func (self *testMailOutboxSigner) sign(purpose string, signedType bridge.SignedType, body []byte) (*bridge.Signed, error) {
-	return &bridge.Signed{
-		Body:      body,
-		SignerId:  self.sidecarId.Bytes(),
-		Signature: ed25519.Sign(self.key, bridge.SignedBytes(purpose, signedType, body)),
-		Type:      uint32(signedType),
-	}, nil
-}
-
-func (self *testMailOutboxSigner) publicKey() ed25519.PublicKey {
-	return self.key.Public().(ed25519.PublicKey)
-}
-
 // A network's standing as GET /abuse/status would answer it.
 func testMailOutboxStanding(standing AbuseStanding, verified bool) MailOutboxStanding {
 	return func(ctx context.Context) (*AbuseStatus, error) {
 		return &AbuseStatus{Standing: standing, Verified: verified}, nil
 	}
-}
-
-// 32 random bytes, as D-MCP-11's keys are.
-func testMailOutboxEffectKey() []byte {
-	key := make([]byte, 32)
-	rand.Read(key)
-	return key
 }
 
 // An internet message whose Message-ID carries sendId, as a send names it.
