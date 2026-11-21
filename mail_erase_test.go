@@ -359,7 +359,10 @@ func TestMailEraseRequiresWholeBodyHistoryAcrossLives(t *testing.T) {
 	if err != nil || first == second {
 		t.Fatalf("distinct slots across a removal: %v", err)
 	}
-	store := &mailHistoryTestStore{mailEraseTestStore: newMailEraseTestStore(), history: &mailVaultEvsStore{newMailEvsStore(writer.repo, nil, nil)}}
+	store := &mailHistoryTestStore{
+		mailEraseTestStore: newMailEraseTestStore(),
+		history:            &mailVaultEvsStore{mailEvsStore: newMailEvsStore(writer.repo, nil, nil)},
+	}
 	store.holdSlot(first)
 	store.holdSlot(second)
 	start := func() *MailEraser {
@@ -470,7 +473,7 @@ func TestMailEraseRecoversACompetingRunnersClosureBeforeCompletion(t *testing.T)
 			}
 		}
 		runner := world.eraser()
-		runner.store = &mailRacingClosureTestStore{world.eraseStore}
+		runner.store = &mailRacingClosureTestStore{mailEraseStore: world.eraseStore}
 		erasure, err := runner.Erase(ctx, world.month, ids[:1])
 		if err != nil || erasure == nil || erasure.State != MailErasureRewriting || mailErasureComplete(world.eraseStore.committedErasures(), erasure.ErasureId) {
 			t.Fatalf("%d segments, unpaired CLOSURE %+v: %v", segmentCount, erasure, err)

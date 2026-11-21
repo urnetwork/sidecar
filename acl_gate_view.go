@@ -96,6 +96,7 @@ func (self *AclGateView) snapshot(networkId Id) (*AclGateSnapshot, AclReason) {
 	return snapshot, 0
 }
 
+// Returns the network's access rules or the reason the gate refused its snapshot.
 func (self *AclGateView) state(networkId Id) (*AclState, AclReason) {
 	snapshot, deny := self.snapshot(networkId)
 	if deny != 0 {
@@ -185,6 +186,7 @@ func (self *AclGateView) MayViewDns(networkId Id, subject AclSubject, host strin
 	return snapshot.Acl.MayPublish(subject, host, now)
 }
 
+// Checks whether an admin grant's host pattern covers the requested name.
 func (self *AclState) mayAdminDns(subject AclSubject, host string, now time.Time) AclDecision {
 	return self.resourceDecision(subject, now.UnixMilli(), protocol.AclAction_ACL_ACTION_ADMIN, func(rule *aclRule) bool {
 		for _, pattern := range rule.publicNames {

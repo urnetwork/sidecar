@@ -14,6 +14,7 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
+// Registers the desktop sender factory with the mail component.
 func init() {
 	mailSidecarSenderFactory = newMailSidecarSender
 }

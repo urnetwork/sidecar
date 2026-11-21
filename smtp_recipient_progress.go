@@ -100,6 +100,7 @@ func smtpMergeRecipientProgress(earlier, current *protocol.MailRecipientProgress
 	return combined, nil
 }
 
+// Indexes progress by recipient domain, rejecting empty or duplicate domains and wrong-length envelope digests.
 func smtpProgressByDomain(record *protocol.MailOutcomeRecord) (map[string]*protocol.MailRecipientProgress, error) {
 	progress := make(map[string]*protocol.MailRecipientProgress, len(record.GetRecipientProgress()))
 	for _, row := range record.GetRecipientProgress() {

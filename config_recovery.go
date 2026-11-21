@@ -495,6 +495,7 @@ func (self *ConfigState) checkActivation(proposalId []byte, n uint64, timeMs int
 	return &statement, nil
 }
 
+// Keeps the recovery binding's statement type and body with the log position where it took effect.
 type configRecoveryBody struct {
 	at   uint64
 	kind bridge.SignedType

@@ -958,6 +958,7 @@ type sidecarConfigFollowerProjection struct {
 	kept <-chan struct{}
 }
 
+// Gives the config authority the sidecar's clock for judging statement deadlines.
 func (self *sidecarConfigFollowerProjection) statementTime() time.Time {
 	return self.follower.sidecar.statementTime()
 }

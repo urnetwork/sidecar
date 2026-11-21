@@ -110,11 +110,15 @@ func TestAclMailSendScopesReadOneSnapshot(t *testing.T) {
 		allowed bool
 		labels  []string
 	}{
-		{nil, false, nil},
-		{&ConfigState{}, true, []string{}},
-		{&ConfigState{teamScopes: []*bridge.TeamScopeRow{
-			{Label: "sales", MemberId: world.scopeMember.Bytes()},
-		}}, true, []string{"sales"}},
+		{config: nil, allowed: false, labels: nil},
+		{config: &ConfigState{}, allowed: true, labels: []string{}},
+		{
+			config: &ConfigState{teamScopes: []*bridge.TeamScopeRow{
+				{Label: "sales", MemberId: world.scopeMember.Bytes()},
+			}},
+			allowed: true,
+			labels:  []string{"sales"},
+		},
 	} {
 		states.snapshots[world.networkId].Config = sample.config
 		before, _ := states.asked()

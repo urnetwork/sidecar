@@ -8,8 +8,8 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// ReadMemberView returns one published state and the names and local policy of its
-// verified base. The joining client's rows-only pass never supplies any of them.
+// Returns one published state and the names and local policy of its verified base.
+// The joining client's rows-only pass never supplies any of them.
 func (self *ConfigClient) ReadMemberView(ctx context.Context) (*ConfigState, *ConfigHead, *AclLocalPolicy, error) {
 	var rowsBytes []byte
 	state := func() *ConfigState {

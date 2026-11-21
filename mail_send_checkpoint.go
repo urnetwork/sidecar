@@ -25,6 +25,7 @@ const mailSendCheckpointPrefix = "send-checkpoints/"
 // its instance lock across processes. An approval binds its requester, so no other device can present this use.
 var mailSendUses sync.Map
 
+// Scopes the writer lock for a named send checkpoint to one network and device.
 type mailSendUse struct {
 	networkId Id
 	sidecarId Id

@@ -181,7 +181,7 @@ func (self *AclGateCache) State(networkId Id) (*AclGateSnapshot, AclGateStatus) 
 	return snapshot, AclGateLoaded
 }
 
-// RequestAclGateSnapshot returns the verified snapshot or queues a load and returns nil. Requests
+// Returns the verified snapshot or queues a load and returns nil. Requests
 // requeue evicted networks and failed first loads because the periodic poll refreshes loaded networks only.
 func RequestAclGateSnapshot(source AclContractStateSource, networkId Id) *AclGateSnapshot {
 	if source == nil {

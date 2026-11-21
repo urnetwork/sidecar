@@ -191,6 +191,7 @@ func (self *MailRepos) CreateGroup(ctx context.Context, config *MailConfig, args
 	return self.evs.Repo(creation.RepoId), nil
 }
 
+// Returns the team's required mail indexer tag for deposit grants, or zero on a personal network.
 func (self *MailRepos) groupDepositTag(state *AclState) (Id, error) {
 	if !state.teamNetwork() {
 		return Id{}, nil

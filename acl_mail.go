@@ -39,7 +39,7 @@ func (self *AclGateView) MayReceive(networkId Id, receiver AclSubject, scope Acl
 	return state.mayReceive(receiver, scope, now)
 }
 
-// MayReceiveByScopeLabel resolves a TLSA request's scope and its listen grant in one verified snapshot.
+// Resolves a tlsa request's scope and its listen grant in one verified snapshot.
 // The empty label names the network's own receiver.
 func (self *AclGateView) MayReceiveByScopeLabel(networkId Id, receiver AclSubject, label string, now time.Time) AclDecision {
 	snapshot, deny := self.snapshot(networkId)
@@ -57,6 +57,7 @@ func (self *AclGateView) MayReceiveByScopeLabel(networkId Id, receiver AclSubjec
 	return snapshot.Acl.mayReceive(receiver, scope, now)
 }
 
+// Checks whether the receiver may listen on the mail socket named by the scope.
 func (self *AclState) mayReceive(receiver AclSubject, scope AclScope, now time.Time) AclDecision {
 	name := aclMailReceiverName
 	if scope.Label != "" {
