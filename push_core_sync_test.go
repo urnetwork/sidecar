@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"testing"
+	"time"
 )
 
 // A generation can accept an explicitly empty list. A missing gate list or an incomplete core response is unknown.
@@ -31,7 +32,7 @@ func TestSyncCoreRequiresTheCompleteNetworkGateReply(t *testing.T) {
 // A newer hint invalidates immediately, a version older than that hint waits for a retry, and the current
 // generation's positive and negative answers both expire. A replacement credential cannot reuse either one.
 func TestCoreRolloutInvalidatesInFlightExpiredAndReplacedAnswers(t *testing.T) {
-	ctx, cancel := context.WithCancel(t.Context())
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	clock := newTokenTestClock()
 	settings := validSidecarSettings()
 	identity := &SidecarIdentity{NetworkId: NewId(), SidecarId: NewId(), ClientId: NewId(), Generation: 1}
@@ -61,7 +62,7 @@ func TestCoreRolloutInvalidatesInFlightExpiredAndReplacedAnswers(t *testing.T) {
 	api.SetByJwt(bearer)
 	generation := &sidecarGeneration{
 		ctx: ctx, networkId: identity.NetworkId, identity: identity, generation: identity.Generation,
-		sidecar: &Sidecar{sidecarApi: api, settings: settings, clock: clock},
+		sidecar: &Sidecar{sidecarApi: api, settings: settings, clock: clock, log: NewNoopLogger()},
 		core:    sidecarCoreSync{requests: NewMonitorValue(sidecarCoreRequest{online: true, revision: 1})},
 	}
 	generation.startCoreSyncWithLock()
@@ -74,15 +75,20 @@ func TestCoreRolloutInvalidatesInFlightExpiredAndReplacedAnswers(t *testing.T) {
 				request.Header.Get("Authorization") != "Bearer "+bearer {
 				t.Fatal("core did not use the enrolled client's authenticated route")
 			}
-		case <-t.Context().Done():
-			t.Fatal(t.Context().Err())
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
 		}
 	}
 	reply := func(version uint64, gates string) {
-		replies <- fmt.Sprintf(`{"version":"%d","gates":%s,"min_secure_version":0,"revoked":false}`, version, gates)
+		t.Helper()
+		select {
+		case replies <- fmt.Sprintf(`{"version":"%d","gates":%s,"min_secure_version":0,"revoked":false}`, version, gates):
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
 	}
 	waitRequest()
-	generation.refreshCore(20)
+	generation.receiveCoreNotice(PushNotice{Topic: PushTopicCore, Version: 20, Resync: true})
 	reply(10, `["format2"]`)
 	waitRequest()
 	if generation.currentCore() != nil {
@@ -114,9 +120,17 @@ func TestCoreRolloutInvalidatesInFlightExpiredAndReplacedAnswers(t *testing.T) {
 	if generation.currentCore() != nil {
 		t.Fatal("replacement credentials inherited the previous gate")
 	}
-	generation.refreshCore(0)
+	generation.refreshCore()
 	clock.awaitArmed(t, 10)
 	if transport.requestCount() != 4 || generation.currentCore() != nil {
 		t.Fatal("a core request used a different network's credential")
+	}
+	api.SetByJwt(bearer)
+	generation.refreshCore()
+	waitRequest()
+	reply(19, `["format2"]`)
+	clock.awaitArmed(t, 12)
+	if generation.currentCore() != nil {
+		t.Fatal("refresh accepted a response behind the last core notice")
 	}
 }
