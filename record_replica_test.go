@@ -38,6 +38,9 @@ func TestRecordReplicaWaitsForPublishedConfig(t *testing.T) {
 	if err := record.Reader().Sync(t.Context(), world.DirectoryId); !errors.Is(err, ErrRecordNotReader) {
 		t.Fatalf("unpublished config reached a record read: %v", err)
 	}
+	if _, err := record.Eraser().indexOf(t.Context(), world.VaultId); !errors.Is(err, ErrEvsNoConfig) {
+		t.Fatalf("unpublished state authorized an erasure index: %v", err)
+	}
 	config.configLog.Store(world.net.log)
 	auth := record.reader.authNow()
 	if _, ok := record.writer.boundStreams().(*RecordEvsStreams); !ok || evs.preDecryptHook == nil ||
@@ -46,6 +49,9 @@ func TestRecordReplicaWaitsForPublishedConfig(t *testing.T) {
 		t.Fatal("published config did not bind the member's exact live rights, streams and receipts")
 	}
 	identity = nil
+	if _, err := record.Eraser().indexOf(t.Context(), world.VaultId); !errors.Is(err, ErrEvsNoConfig) {
+		t.Fatalf("a previous identity authorized an erasure index: %v", err)
+	}
 	if err := record.Reader().Sync(t.Context(), world.DirectoryId); !errors.Is(err, ErrRecordNotReader) {
 		t.Fatalf("a previous identity authorized a read: %v", err)
 	}

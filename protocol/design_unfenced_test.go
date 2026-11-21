@@ -15,6 +15,7 @@ package protocol
 // Each block names its file, as a fence does, and each declaration says where the design writes it. A declaration
 // that gains a real fence is then written twice, which says to take it out of here.
 const testUnfencedFence = `
+// sidecar/protocol/acl.proto
 // §8.8's RepoCreate row and QD-102 fix the values of the creation marker.
 enum RepoInbox { REPO_INBOX_NONE = 0; REPO_INBOX_GROUP = 1; REPO_INBOX_ADMIN = 2; }
 // sidecar/protocol/envelope.proto

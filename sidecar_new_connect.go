@@ -289,10 +289,7 @@ func (self *sidecarConnectLeg) startGeneration(generation *sidecarGeneration) (s
 		closePlatform()
 		return nil, storeFailed(err)
 	}
-	generationNumber := generation.generation
-	if _, err := subprotocol.Subscribe(PushTopicCore, func(notice PushNotice) {
-		self.sidecar.receiveCoreHint(generationNumber, notice.Hint)
-	}); err != nil {
+	if _, err := subprotocol.Subscribe(PushTopicCore, generation.receiveCoreNotice); err != nil {
 		pushClient.Close()
 		subprotocol.Close()
 		api.Close()

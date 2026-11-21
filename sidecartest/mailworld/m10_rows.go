@@ -45,13 +45,8 @@
 // a writer's head file's earlier version, and passes over one whose key an ERASE destroyed (QD-1110). Every row
 // leans on both.
 //
-// What a real mailbox does not carry yet, each named for the task it goes back to. None of it is asserted here, and
-// none of these rows shows an erasure complete:
+// What a real mailbox does not carry yet:
 //
-//   - no erasure says complete: the EvsRepo store names no removed index path among the versions the ref retains
-//     (SEARCH-M10-17's indexEvsStore.Retained), so it answers that history incomplete and each erasure stays
-//     rewriting and unproven. That reaches FI-19 after a roll-up: the bucket files the roll-up removed still hold the
-//     message FS-76 erases after it, in versions under keys no ERASE names;
 //   - FS-111's eraser killed after its first CLOSURE and restarted, and the member's other device after 25 h: not run
 //     here, and the mailbox's member has one device that may erase, the owner's laptop;
 //   - the exact storage limit, the closure allowance's floor, the 429s and the finish estimate (FS-78's and FS-112's
@@ -555,8 +550,8 @@ func (self *M10World) eraseHeld(label string, message *M10Message) (*m10Erased, 
 	if err := self.Ledger.Erase(self.Mail.RepoId, self.refId, message.Path, message.Version); err != nil {
 		return nil, err
 	}
-	if !erasure.Fenced || !slices.Contains(erasure.MessageIds, message.Id) {
-		return nil, fmt.Errorf("%s: the erasure is not fenced: %+v", label, erasure)
+	if !erasure.Fenced || !slices.Contains(erasure.MessageIds, message.Id) || erasure.State != sidecar.MailErasureDone || erasure.Unproven {
+		return nil, fmt.Errorf("%s: the erasure did not fence and complete: %+v", label, erasure)
 	}
 	events := owner.ErasureEvents()[eventsBefore:]
 	if len(events) == 0 || events[0].State != sidecar.SidecarErasureFenced || events[0].ErasureId != erasure.ErasureId {
@@ -648,10 +643,7 @@ func (self *M10World) eraseHeld(label string, message *M10Message) (*m10Erased, 
 	return &m10Erased{erasure: erasure, cutVersion: cutVersion}, nil
 }
 
-// The owner's laptop restarting after a later erasure: a fresh eraser's Resume of every erasure no ERASE completed
-// goes on from evs's state, first taking up first, the oldest, whose walk now meets versions whose keys a later
-// erasure's ERASE destroyed and passes over them (QD-1110), and leaves it rewriting and unproven, as every erasure here
-// (the file header). Nothing was left to rewrite, so the mailbox's ref does not move.
+// A fresh eraser resumes from the committed ERASEs. Both erasures have ended, so the mailbox ref stays at its head.
 func (self *M10World) resumeHeld(label string, first *m10Erased) error {
 	before, err := self.Index(self.Owner)
 	if err != nil {
@@ -661,11 +653,8 @@ func (self *M10World) resumeHeld(label string, first *m10Erased) error {
 	if err != nil {
 		return fmt.Errorf("%s: the resume: %w", label, err)
 	}
-	if len(resumed) == 0 || resumed[0].ErasureId != first.erasure.ErasureId {
-		return fmt.Errorf("%s: the resume took up %+v, not the first erasure", label, resumed)
-	}
-	if resumed[0].State != sidecar.MailErasureRewriting || !resumed[0].Unproven {
-		return fmt.Errorf("%s: the first erasure after the resume: %+v", label, resumed[0])
+	if len(resumed) != 0 || first.erasure.State != sidecar.MailErasureDone {
+		return fmt.Errorf("%s: a restart resumed %+v after the first erasure ended %s", label, resumed, first.erasure.State)
 	}
 	after, err := self.Index(self.Owner)
 	if err != nil {

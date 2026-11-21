@@ -37,6 +37,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
@@ -107,6 +108,9 @@ type mailComponentRun struct {
 	ingestRepoId Id
 	ingestCancel context.CancelFunc
 	ingestor     *MailIngestor
+	// Written only by this generation's pass. An r/ checkpoint belongs to a particular member mailbox.
+	groupMailboxId Id
+	groupRefs      map[Id]*MailGroupRefs
 	// the receiver running, what ends it, and what closes its parts after
 	receiver       *MailReceiver
 	receiverCancel context.CancelFunc
@@ -266,6 +270,7 @@ func (self *MailClient) pass(run *mailComponentRun) bool {
 	self.passReceive(run, binding)
 	self.passMtaSts(run, binding)
 	self.passOutcomes(run)
+	self.passGroupInboxes(run, binding)
 	if binding.BurnerSelectors != nil {
 		// a burn another device made retires this device's selectors for the label too (MAIL-M9-03)
 		if _, err := self.RetireBurnedSelectors(ctx); err != nil {
@@ -465,8 +470,31 @@ func (self *MailClient) passIngest(run *mailComponentRun, binding *MailBinding) 
 	if running {
 		return
 	}
+	ingestor, err := parts.ingestor(mailboxId, self.ingestArgs(run, binding))
+	if err != nil {
+		self.log.Warningf("[mail]no ingestor for the mailbox: %v", err)
+		return
+	}
+	ingestCtx, ingestCancel := context.WithCancel(run.ctx)
+	previous := func() context.CancelFunc {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		previous := run.ingestCancel
+		run.ingestCancel = ingestCancel
+		run.ingestRepoId = mailboxId
+		run.ingestor = ingestor
+		return previous
+	}()
+	if previous != nil {
+		previous()
+	}
+	go ingestor.Run(ingestCtx)
+}
+
+// Both the personal inbox and group repositories judge deposits at their signed pins.
+func (self *MailClient) ingestArgs(run *mailComponentRun, binding *MailBinding) *MailIngestArgs {
 	root := self.networkRow().Root
-	ingestor, err := parts.ingestor(mailboxId, &MailIngestArgs{
+	return &MailIngestArgs{
 		SidecarId: self.sidecarId,
 		Root:      root,
 		Authority: &MailIngestAclAuthority{
@@ -492,25 +520,83 @@ func (self *MailClient) passIngest(run *mailComponentRun, binding *MailBinding) 
 		Clock:    self.clock,
 		Log:      self.log,
 		Settings: self.settings.Ingest,
-	})
-	if err != nil {
-		self.log.Warningf("[mail]no ingestor for the mailbox: %v", err)
+	}
+}
+
+// A writer ingests once into the group's own ref. A listed member with read access adds only a reference
+// to their own writable mailbox. Each pass rechecks the signed address and rights before touching either.
+func (self *MailClient) passGroupInboxes(run *mailComponentRun, binding *MailBinding) {
+	state := binding.Engine.State()
+	if state == nil || !slices.ContainsFunc(state.Rows().GetRepos(), AclRepoIsInbox) {
+		run.groupRefs = nil
 		return
 	}
-	ingestCtx, ingestCancel := context.WithCancel(run.ctx)
-	previous := func() context.CancelFunc {
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
-		previous := run.ingestCancel
-		run.ingestCancel = ingestCancel
-		run.ingestRepoId = mailboxId
-		run.ingestor = ingestor
-		return previous
-	}()
-	if previous != nil {
-		previous()
+	config, err := self.syncedConfig(run.ctx)
+	if err != nil {
+		return
 	}
-	go ingestor.Run(ingestCtx)
+	addresses, err := config.Addresses()
+	if err != nil {
+		return
+	}
+	active, parts, err := self.bound()
+	if err != nil || active.Engine != binding.Engine || active.Evs != binding.Evs {
+		return
+	}
+	memberId, member := mailMemberOf(state, self.sidecarId)
+	mailboxId, _ := self.mailboxId()
+	subject := AclSidecarSubject(self.sidecarId)
+	now := self.clock.Now()
+	mailboxWritable := member && mailboxId != (Id{}) && state.EvsAccess(subject, mailboxId, AclTokenAudienceEvs, now).Rights.Has(AclEvsWrite)
+	if mailboxId != run.groupMailboxId {
+		run.groupMailboxId, run.groupRefs = mailboxId, nil
+	}
+	next := map[Id]*MailGroupRefs{}
+	ingested := map[Id]bool{}
+	for _, address := range addresses {
+		if run.ctx.Err() != nil || binding.Engine.State() != state {
+			return
+		}
+		if !address.Known || (address.Kind != protocol.MailAddressKind_MAIL_ADDRESS_GROUP && address.Kind != protocol.MailAddressKind_MAIL_ADDRESS_ADMIN) {
+			continue
+		}
+		groupId := address.MailboxRepoId
+		row := state.Repo(groupId)
+		role := protocol.RepoInbox_REPO_INBOX_GROUP
+		if address.Kind == protocol.MailAddressKind_MAIL_ADDRESS_ADMIN {
+			role = protocol.RepoInbox_REPO_INBOX_ADMIN
+		}
+		if row.GetInbox() != role || !mailRepoStands(row) {
+			continue
+		}
+		rights := state.EvsAccess(subject, groupId, AclTokenAudienceEvs, now).Rights
+		if rights.Has(AclEvsWrite) && !ingested[groupId] {
+			ingested[groupId] = true
+			ingestor, err := parts.ingestor(groupId, self.ingestArgs(run, binding))
+			if err == nil {
+				_, err = ingestor.Ingest(run.ctx)
+			}
+			if err != nil {
+				self.log.Warningf("[mail]group ingest %s: %v", groupId, err)
+			}
+		}
+		if !mailboxWritable || !rights.Has(AclEvsRead) || !slices.Contains(address.MemberIds, memberId) || next[groupId] != nil {
+			continue
+		}
+		refs := run.groupRefs[groupId]
+		if refs == nil {
+			refs, err = parts.groupRefs(groupId, mailboxId)
+			if err != nil {
+				self.log.Warningf("[mail]group references %s: %v", groupId, err)
+				continue
+			}
+		}
+		next[groupId] = refs
+		if _, err := refs.Sync(run.ctx); err != nil {
+			self.log.Warningf("[mail]group references %s: %v", groupId, err)
+		}
+	}
+	run.groupRefs = next
 }
 
 // Drops the view's kept month where the mailbox's ingest wrote, so the next list reads it afresh, and raises IDLE's
@@ -689,6 +775,7 @@ func (self *MailClient) Resync() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		if run, ok := self.componentRun.(*mailComponentRun); ok {
+			self.notifyWithLock()
 			return run.ingestor
 		}
 		return nil

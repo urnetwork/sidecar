@@ -41,6 +41,8 @@ type SearchScopeRepo struct {
 	Readable bool
 	// Whether this verified host view still stands when a page or hit reference is opened.
 	valid func() bool
+	// The row types and locators the signed repo class can put in its index.
+	acceptRow func(*indexRow) bool
 	// It may only deposit to it.
 	DepositOnly bool
 	// Owner-bound and its own member's while this device is parked (owner decision 126).

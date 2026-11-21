@@ -173,7 +173,7 @@ type EvsClient struct {
 	writeHook EvsWritePlanHook
 	// whether the network is in §19.11's format2 gate, from the composition's core state (evs_format_client.go); nil
 	// answers false
-	format2Source func() bool
+	format2Source func() (admitted bool, known bool)
 	// a new path's versioning rules, from the composition's config state (evs_write_versionless.go); nil reads as
 	// no rule
 	versioningRules func(repoId Id, filePath string, size uint64) (uint32, error)
@@ -328,6 +328,8 @@ type EvsCreateRepoArgs struct {
 	// A create already filed and cut short: its repo id, to resume at the route without filing a second
 	// RepoCreate. Nil draws a new random id and files.
 	ResumeRepoId *Id
+	// A random ID already reserved by the caller's durable operation, before it filed RepoCreate.
+	proposedRepoId *Id
 	// The repo's display name, which a team network's directory announces a general or record repo under (prose).
 	DisplayName string
 	// --private on every repo-creating command (§16.11's private row): the directory gets a private marker in place of
@@ -436,12 +438,15 @@ func (self *EvsClient) placeRepo(ctx context.Context, args *EvsCreateRepoArgs) (
 	}
 	for retryCount := 0; ; retryCount += 1 {
 		repoId := NewEvsRepoId()
+		if args.proposedRepoId != nil {
+			repoId = *args.proposedRepoId
+		}
 		create := &protocol.RepoCreate{RepoId: repoId.Bytes(), Kind: args.Kind, Inbox: args.inboxRole()}
 		if err := self.args.FileStatement(ctx, bridge.SignedType_SIGNED_REPO_CREATE, create); err != nil {
 			return Id{}, fmt.Errorf("evs: RepoCreate: %w", err)
 		}
 		err := self.Repo(repoId).callLifecycle(ctx, evsPlaceCall(repoId))
-		if !IsEvsRepoPlaced(err) || self.settings.RepoPlacedRetryCount <= retryCount {
+		if args.proposedRepoId != nil || !IsEvsRepoPlaced(err) || self.settings.RepoPlacedRetryCount <= retryCount {
 			return repoId, err
 		}
 		self.log.Warningf("[evs]repo %s is placed by another creator: creating under another id", repoId)

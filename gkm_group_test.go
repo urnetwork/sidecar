@@ -45,6 +45,29 @@ func (self *gkmFlowWorld) createArgs() *sidecar.GkmCreateGroupArgs {
 	return &sidecar.GkmCreateGroupArgs{RepoId: self.repoId, Kind: self.repo.GetKind()}
 }
 
+// The caller cannot turn a plain general repo into a deposit target. Once the verified repo
+// creation marks the inbox, its very first signed generation already carries a drop key.
+func TestGkmFirstGenerationUsesTheVerifiedGroupInboxMarker(t *testing.T) {
+	world, _ := newGkmCreateWorld(t, protocol.RepoKind_REPO_KIND_GENERAL)
+	writer := world.flows[world.a].client
+	args := world.createArgs()
+	args.Inbox = protocol.RepoInbox_REPO_INBOX_GROUP
+	if _, err := writer.CreateGroup(world.ctx, args); !errors.Is(err, sidecar.ErrGkmMalformed) {
+		t.Fatalf("unsourced inbox marker: %v", err)
+	}
+	world.repo.Inbox = args.Inbox
+	state := world.stateFor()
+	key, err := writer.CreateGroup(world.ctx, args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	world.groupId = key.GroupId()
+	gen := world.storedGeneration(state, 1).Rotate
+	if len(gen.GetDropPublicKey()) == 0 || gen.GetDropNotAfterMs() <= world.clock.Now().UnixMilli() {
+		t.Fatal("the first inbox generation lacks a current drop key")
+	}
+}
+
 // CreateGroup as EvsClient.CreateRepo sequences it: the repo is activated only once CreateGroup has returned, and by
 // then generation 1's recovery wrap and reader wrap stand at gkm (D-KEYS-18). Returns whether it activated.
 func (self *gkmFlowWorld) createThenActivate(creator *gkmFlowDevice) (bool, error) {
