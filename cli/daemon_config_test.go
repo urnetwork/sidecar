@@ -38,6 +38,11 @@ type testUrFollowWorld struct {
 // A world of networkCount networks, nothing hosted yet: the daemon's head reader hook reads each Sidecar's own
 // network's config repo.
 func newTestUrFollowWorld(t *testing.T, networkCount int) *testUrFollowWorld {
+	return newTestUrFollowWorldWithSettings(t, networkCount, nil)
+}
+
+// Like a stock instance, with a new settings object for each device or restart.
+func newTestUrFollowWorldWithSettings(t *testing.T, networkCount int, settings func() *sidecar.SidecarSettings) *testUrFollowWorld {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 5*urTestTimeout)
 	t.Cleanup(cancel)
@@ -64,6 +69,7 @@ func newTestUrFollowWorld(t *testing.T, networkCount int) *testUrFollowWorld {
 	urTunPlatform = func(settings *urTunSettings, log sidecar.Logger) urTunSystem { return world.system }
 
 	world.instance, err = net.StartInstance("daemon", &sidecartest.TestInstanceArgs{
+		Settings: settings,
 		Start: func(running *sidecar.Sidecar) error {
 			if startUrConfigFollower(running, sidecar.NewNoopLogger()) == nil {
 				return errors.New("no follower started")
