@@ -187,6 +187,46 @@ func TestStubOpensOnlyByHitId(t *testing.T) {
 	wantMcpError(t, env.callTool(conn, "2025-11-25", "evs_read", map[string]any{"hit": "forged"}), McpCodeInvalidArguments, "the hit is none a live search of this session gave")
 }
 
+func TestNamedFileHitAndResourceReadTheSameRef(t *testing.T) {
+	env := newTestHitToolEnv(t)
+	path := "docs/harbor.md"
+	env.putWith(env.general, path, "main", env.tools.identity.SidecarId, testEvsCleanProvenance())
+	refId := sidecar.NewId()
+	file := &fakeEvsFile{refId: refId, content: []byte(strings.Repeat("draft ", 256)), signer: env.tools.identity.SidecarId, version: 3, provenance: testEvsCleanProvenance()}
+	env.evs.repos[env.general].refs = map[string]map[string]*fakeEvsFile{"draft": {path: file}}
+	env.hit("draft-file", &sidecar.SearchHitRef{RepoId: env.general, RefId: refId, RefName: "draft", Path: path, Version: 3, DocKind: int(sidecar.IndexDocFile)})
+	env.hit("index-file", &sidecar.SearchHitRef{RepoId: env.general, RefId: refId, RefName: "ur/index", Path: path, Version: 3, DocKind: int(sidecar.IndexDocFile)})
+	conn := env.conn("2025-11-25")
+	env.searchHits(conn)
+	wantMcpError(t, env.callTool(conn, "2025-11-25", "evs_read", map[string]any{"hit": "index-file"}), McpCodeRefused, "search index")
+	env.server.settings.Mcp.ResultByteCount = 768
+	reply := testEnvelopeOf(t, env.callTool(conn, "2025-11-25", "evs_read", map[string]any{"hit": "draft-file"}))
+	if !reply.Truncated || !strings.Contains(reply.Resource, "hit=draft-file") {
+		t.Fatalf("named ref resource: %+v", reply)
+	}
+	opened := testResourceEnvelope(t, conn.call("resources/read", map[string]any{"uri": reply.Resource}), reply.Resource)
+	var data mcpEvsReadOut
+	if err := json.Unmarshal(opened.Data, &data); err != nil || data.Version != file.version || data.Content != string(file.content) {
+		t.Fatalf("named ref resource: %+v, %v", data, err)
+	}
+	other, _ := env.cleanRun("another reader")
+	if res := other.call("resources/read", map[string]any{"uri": reply.Resource}); res.Error == nil {
+		t.Fatal("another session opened a named file's resource")
+	}
+	session := env.search.recorded()[0].Session
+	repo := env.evs.repos[env.general]
+	repo.stateLock.Lock()
+	repo.gate = func(context.Context) error {
+		env.search.EndSession(session)
+		return nil
+	}
+	repo.stateLock.Unlock()
+	wantMcpError(t, env.callTool(conn, "2025-11-25", "evs_read", map[string]any{"hit": "draft-file"}), McpCodeInvalidArguments, "the hit is none a live search of this session gave")
+	if res := conn.call("resources/read", map[string]any{"uri": reply.Resource}); res.Error == nil {
+		t.Fatal("a resource opened after its hit expired")
+	}
+}
+
 // D-MCP-21: a hit never reaches a repo evs_read would refuse by name. Each hit naming a secret repo, the config, the
 // search index's files, a vault's harness config, an unknown repo or one §8 does not allow read on is refused as the
 // call naming that repo and path is, with its code and text, and no repo is read.
