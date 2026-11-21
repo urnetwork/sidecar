@@ -1519,10 +1519,10 @@ revoke      the owner (a repo admin; owner-bound, a consented device of its owne
             format change (owner decision 604); these checks govern what a request catches, so once an ERASE
             names a request its runner still finishes the format-2 work the ledger owes it whatever the check
             reads now, lapsed, its signer's signature voided or superseded, in the runner row's past-window
-            form, and catches nothing new for it (owner decision 682); (4) until an ERASE names the request, the revoking device, ur
-            directory revoke and ur status show the erasure pending with its age, and past 24 h every directory
-            admin's device raises directory_erasure (§5.4); a reader that syncs the copies meanwhile keeps them,
-            as §2.8 discloses
+            form, and catches nothing new for it (owner decision 682); (4) until an ERASE names the request,
+            the revoking device, ur directory revoke and ur status show the erasure pending with its age, and
+            past 24 h every directory admin's device raises directory_erasure (§5.4); a reader that syncs the
+            copies meanwhile keeps them, as §2.8 discloses
 runs        a run in an evs repo with no live, non-private item (private, revoked, not announced by default, or
             not yet) announces its repo_id with private true and project and branch empty, its daemon rewriting a
             live item so once it reads the repo's marker; readers that read the repo show its name from their own

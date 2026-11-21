@@ -110,11 +110,11 @@
  {
   "num": 13,
   "code": "TLS",
-  "words": 10302,
+  "words": 10306,
   "code_words": 1330,
   "ceiling": 3800,
-  "over": 6502,
-  "over_pct": 171.1
+  "over": 6506,
+  "over_pct": 171.2
  },
  {
   "num": 14,
