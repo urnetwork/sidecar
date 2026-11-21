@@ -545,7 +545,7 @@ func TestServiceTokenNeverLeavesProcess(t *testing.T) {
 		answer: func(request *http.Request, body []byte) (*http.Response, error) {
 			exchangeCount += 1
 			token := fmt.Sprintf("synthetic-service-token-%d", exchangeCount)
-			return syntheticResponse(request, 200, `{"access_token":"`+token+`","expires_in":900,"scope":"repo:x:r"}`, nil), nil
+			return syntheticResponse(request, 200, `{"access_token":"`+token+`","expires_in":900,"scope":"repo:b:r repo:a:r"}`, nil), nil
 		},
 	}
 	api, err := newSidecarApi(settings, transport, testApiClock)

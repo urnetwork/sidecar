@@ -90,7 +90,7 @@ func (self *sidecarServiceTokens) forget(key sidecarServiceTokenKey) {
 func newSidecarServiceTokenKey(resource string, scopes []string) sidecarServiceTokenKey {
 	sortedScopes := slices.Clone(scopes)
 	slices.Sort(sortedScopes)
-	return sidecarServiceTokenKey{resource: resource, scopes: strings.Join(sortedScopes, " ")}
+	return sidecarServiceTokenKey{resource: resource, scopes: strings.Join(slices.Compact(sortedScopes), " ")}
 }
 
 // Drops the token kept for resource with scopes, so the next ServiceToken for them exchanges again: what a service's
@@ -133,6 +133,11 @@ func (self *Sidecar) ServiceToken(ctx context.Context, resource string, scopes [
 	token, err := self.sidecarApi.ExchangeToken(ctx, resource, sortedScopes)
 	if err != nil {
 		return "", err
+	}
+	// The exchange can grant a subset, including no scopes before admission. An
+	// attempt made after a grant must exchange again for that original request.
+	if key != newSidecarServiceTokenKey(resource, token.Scopes) {
+		return token.AccessToken, nil
 	}
 	keepFor := self.settings.TokenRefreshSettings.ServiceTokenCacheTimeout
 	if 0 < token.ExpiresIn && token.ExpiresIn < keepFor {
