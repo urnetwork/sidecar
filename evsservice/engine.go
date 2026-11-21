@@ -740,9 +740,16 @@ func (self *EvsRequest) RecheckRevocation() bool {
 	return self.checkRevocation()
 }
 
-// Guard step 8: the repo's placement and cluster. false once it has answered the refusal.
+// Guard step 8: the repo's placement and cluster. false once it has answered the refusal. A read takes §11.8's 404
+// cached 5 s; a write a 404 only from a read of place/ begun after it (EvsRepoPlaceResolver.ResolveCurrent), since a
+// reader's request that cached one ahead of the creator's PUT, on another process than the PUT's, must not refuse the
+// creation's activation or first push.
 func (self *EvsRequest) resolvePlace() bool {
-	cluster, place, err := self.engine.places.Cluster(self.Ctx, self.RepoId)
+	places := self.engine.places.Cluster
+	if self.route.Write {
+		places = self.engine.places.ClusterCurrent
+	}
+	cluster, place, err := places(self.Ctx, self.RepoId)
 	switch {
 	case err == nil:
 		self.Place = place

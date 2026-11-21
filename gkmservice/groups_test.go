@@ -128,7 +128,7 @@ func (self *gkmGroupWorld) createAndActivate() {
 func (self *gkmFixture) setRepoState(repoId sidecar.Id, clusterId string, state protocol.EvsRepoState) {
 	self.t.Helper()
 	cluster := self.cluster(clusterId)
-	held, info, err := readGkmObject(self.ctx, cluster, GkmEvsRepoKey(repoId), gkmEvsRepoMaxByteCount)
+	held, info, err := readGkmObject(self.ctx, cluster, GkmEvsRepoKey(repoId), self.settings.RepoObjectMaxByteCount)
 	if err != nil {
 		self.t.Fatal(err)
 	}

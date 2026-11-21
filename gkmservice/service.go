@@ -555,7 +555,8 @@ func (self *GkmRequest) checkMember() bool {
 
 // Step 7 for repoId: the strongest right the token holds of those the route's row takes, asked of the newest verified
 // state together with each weaker right of its role that the row takes and honored only whole (§10.6's checks row;
-// QD-975), then the repo's cluster from place/, and for a write repo/'s state. A live repo's admin writes and reads
+// QD-975), then the repo's cluster from place/, a write's never refused by a cached 404 (repoCluster), and for a write
+// repo/'s state. A live repo's admin writes and reads
 // and its writer reads, so the set asks them no more than the one right would, while a deleted repo's standing admin
 // holds admin alone (QD-880), so its admin token passes only the rows that take admin and nothing weaker, and no read
 // or other write, before repo/ shows deleted as after. A route whose body names its repo calls this itself before it
@@ -581,7 +582,7 @@ func (self *GkmRequest) AuthorizeRepo(repoId sidecar.Id) bool {
 		self.Unavailable()
 		return false
 	}
-	cluster, _, err := self.engine.places.Cluster(self.Ctx, repoId)
+	cluster, err := self.engine.repoCluster(self.Ctx, repoId, self.route.Write)
 	switch {
 	case err == nil:
 	case errors.Is(err, sidecar.ErrEvsRepoNotPlaced):
@@ -688,11 +689,12 @@ func (self *GkmRequest) checkRevocation() bool {
 // newest form names the group, or for a read any of whose forms does, and that the group's owner marker names
 // (DESIGN-DETAILS 6.2.2). The marker is what ties a group to its one repo: a form of another repo naming the group
 // resolves nothing, whichever form a process read first, and a group with no marker resolves to no repo. A group's
-// repo never changes, so a token that does not scope it is refused.
+// repo never changes, so a token that does not scope it is refused. newestOnly is a write's, whose candidates'
+// placements no cached 404 refuses (repoCluster).
 func (self *GkmEngine) resolveGroup(ctx context.Context, groupId sidecar.Id, candidateRepoIds []sidecar.Id, newestOnly bool) (sidecar.Id, bool, error) {
 	// whether repoId's forms name the group as the request needs, and the group's marker names repoId
 	named := func(repoId sidecar.Id) (bool, error) {
-		cluster, _, err := self.places.Cluster(ctx, repoId)
+		cluster, err := self.repoCluster(ctx, repoId, newestOnly)
 		if errors.Is(err, sidecar.ErrEvsRepoNotPlaced) {
 			return false, nil
 		}
@@ -744,6 +746,19 @@ func (self *GkmEngine) resolveGroup(ctx context.Context, groupId sidecar.Id, can
 		}
 	}
 	return sidecar.Id{}, false, nil
+}
+
+// The repo's cluster from place/. A read takes §11.8's 404 cached 5 s. A write is answered 404 only by a read of
+// place/ begun after it (EvsRepoPlaceResolver.ResolveCurrent): every reader's sync of a new repo asks when its
+// RepoCreate lands, ahead of the creator's PUT, and the 404 that read cached must not refuse KF1's POST /gkm/groups,
+// sent right after the placement, nor the creation's writes that follow on another process.
+func (self *GkmEngine) repoCluster(ctx context.Context, repoId sidecar.Id, write bool) (sidecar.BlobCluster, error) {
+	if write {
+		cluster, _, err := self.places.ClusterCurrent(ctx, repoId)
+		return cluster, err
+	}
+	cluster, _, err := self.places.Cluster(ctx, repoId)
+	return cluster, err
 }
 
 // The body, at most maxByteCount and RequestBodyMaxByteCount. false once it has answered 400.

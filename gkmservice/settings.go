@@ -2,10 +2,10 @@
 // and read where it is used. A bound the design's argument needs, such as repo/'s 5 s cache (§10.6's checks row), is
 // a field too, its default the design's value (QD-702), and a ceiling Validate holds the settings under it to, so a
 // deployment shortens those and raising the bound itself changes the design's argument. Format limits move here as
-// their files are touched, the protocol's value their default: one POST /gkm/delegation-keys' 256 ids so far. The
-// rest still stand beside their formats until QD-706's sweep: a ReaderKey's 7 days and gkm's 10 minutes of clock skew
-// (gkm_delivery.go), a token's 64 repo scopes (§7.8), and a wrap batch's 256, reader-keys' 256 and the drop-key
-// route's 64 (§10.14).
+// their files are touched, the protocol's value their default: one POST /gkm/delegation-keys' 256 ids and repo/'s
+// 4 KiB so far. The rest still stand beside their formats until QD-706's sweep: a ReaderKey's 7 days and gkm's 10
+// minutes of clock skew (gkm_delivery.go), a token's 64 repo scopes (§7.8), a wrap batch's 256, reader-keys' 256 and
+// the drop-key route's 64 (§10.14), and store.go's two sends of one create, whose callers include wraps.go.
 //
 // The rates are counted per process, in memory (plan-KEYS-rate-counters, decided): each limit is its rate times the
 // process count, and a restart forgets it. The 24 h ReaderKey rule is exact, read from the stored object.
@@ -52,8 +52,19 @@ type GkmServiceSettings struct {
 	// How long a repo/ read stays cached in a process: §10.6's "cached at most 5 s". At most RepoCacheMaxTtl;
 	// non-positive caches nothing, every check reading the cluster.
 	RepoCacheTtl time.Duration
+	// How long a repo/ read showing a state its creation leaves within moments stays cached: keying, which the
+	// creator's activation ends right after KF1's deliveries, and no repo/ yet, which evs writes right after place/. A
+	// write judged against either after the change would be refused for the rest of RepoCacheTtl: a LATE delivery right
+	// after the activation 409 as keying ("a keying repo takes only its creation's deliveries"), which its deliverer
+	// drops until the recipient asks again, a LateAskInterval later. Its default 0, so the window does not occur: each
+	// write to a repo in its creation reads repo/ as it issues, a creation's few. At most RepoCacheTtl; non-positive
+	// caches neither.
+	RepoKeyingCacheTtl time.Duration
 	// The most repo/ objects one process caches; past it one is evicted. Non-positive caches none.
 	RepoCacheCount int
+	// §11.8's bound on repo/'s bytes, 4 KiB, the format's value (sidecar.EvsRepoObjectMaxByteCount), which evs writes
+	// within: a repo/ past it is a fault that alarms.
+	RepoObjectMaxByteCount int64
 	// How long a repo's GroupForms stay cached, so "the newest GroupForm names the group" reads as fresh as repo/
 	// does. At most RepoCacheMaxTtl; non-positive caches nothing.
 	FormCacheTtl time.Duration
@@ -202,7 +213,9 @@ func DefaultGkmServiceSettings() *GkmServiceSettings {
 
 		RepoCacheMaxTtl:          5 * time.Second,
 		RepoCacheTtl:             5 * time.Second,
+		RepoKeyingCacheTtl:       0,
 		RepoCacheCount:           100 * 1000,
+		RepoObjectMaxByteCount:   sidecar.EvsRepoObjectMaxByteCount,
 		FormCacheTtl:             5 * time.Second,
 		FormCacheCount:           100 * 1000,
 		FormMaxCount:             1000,
@@ -290,6 +303,9 @@ func (self *GkmServiceSettings) Validate() error {
 	if self.RepoCacheMaxTtl < self.RepoCacheTtl || self.RepoCacheMaxTtl < self.FormCacheTtl || self.RepoCacheMaxTtl < self.GroupInfoCacheTtl {
 		return fmt.Errorf("%w: repo/, GroupForms or group-info cached past §10.6's %s", ErrGkmSettings, self.RepoCacheMaxTtl)
 	}
+	if self.RepoCacheTtl < self.RepoKeyingCacheTtl {
+		return fmt.Errorf("%w: a keying repo/ cached past RepoCacheTtl", ErrGkmSettings)
+	}
 	if self.GroupInfoPointerLagCount == 0 {
 		return fmt.Errorf("%w: GroupInfoPointerLagCount must be positive", ErrGkmSettings)
 	}
@@ -297,6 +313,7 @@ func (self *GkmServiceSettings) Validate() error {
 		name  string
 		value int64
 	}{
+		{name: "RepoObjectMaxByteCount", value: self.RepoObjectMaxByteCount},
 		{name: "FormMaxCount", value: int64(self.FormMaxCount)},
 		{name: "GroupResolveRepoMaxCount", value: int64(self.GroupResolveRepoMaxCount)},
 		{name: "RequestBodyMaxByteCount", value: self.RequestBodyMaxByteCount},

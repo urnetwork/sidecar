@@ -148,8 +148,9 @@ func (self *EvsEngine) placeRepo(request *EvsRequest, facts *EvsRepoFacts) (*sid
 	repoId := request.RepoId
 	newClusterId := self.blobs.NewRepoClusterId()
 	if _, err := self.blobs.Cluster(newClusterId); err != nil {
-		// a repo already placed continues where place/ names, and a new one waits, so no place/ names this cluster
-		if held, err := self.places.Resolve(request.Ctx, repoId); err == nil {
+		// a repo already placed continues where place/ names, and a new one waits, so no place/ names this cluster; a
+		// write, so no 404 a reader's request cached here refuses a creator who placed it on another process
+		if held, err := self.places.ResolveCurrent(request.Ctx, repoId); err == nil {
 			return self.continuePlace(request, facts, held)
 		}
 		self.log.Warningf("[evs] place_new names cluster %s, which this process cannot reach", newClusterId)
