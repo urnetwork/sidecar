@@ -37,6 +37,7 @@ type httpTestApi struct {
 	deviceId  string
 	// polls answer these, in order: a PollResponse, or an int status
 	pollAnswers chan any
+	coreReply   *MonitorValue[string]
 
 	stateLock sync.Mutex
 	// each request's path and bearer, in order
@@ -60,6 +61,7 @@ func newHttpTestApi(networkId Id, clientId Id) *httpTestApi {
 		clientId:    clientId,
 		deviceId:    NewId().String(),
 		pollAnswers: make(chan any, 16),
+		coreReply:   NewMonitorValue(""),
 		changes:     NewMonitorValue(0),
 	}
 }
@@ -143,6 +145,10 @@ func (self *httpTestApi) RoundTrip(request *http.Request) (*http.Response, error
 		}
 	case "/sidecar/sync/versions":
 		return respondPoll(&protocol.PollResponse{Reset_: &protocol.PushReset{Epoch: 1, Complete: true}})
+	case "/sidecar/sync/core":
+		if body := self.coreReply.Value(); body != "" {
+			return respond(http.StatusOK, "application/json", []byte(body)), nil
+		}
 	case "/auth/refresh":
 		self.stateLock.Lock()
 		byJwt := self.refreshByJwt
@@ -333,6 +339,70 @@ func TestHttpSidecarCarriesCoreOnTheLongPoll(t *testing.T) {
 	})
 	if sidecar.Stats().CoreHintCount == 0 {
 		t.Error("the core hint never reached the core")
+	}
+}
+
+// A real page member follows its authenticated rollout on the long-poll. A positive answer cannot stand in for
+// membership when the browser has no verified network config.
+func TestPageMemberRefetchesRolloutWithoutGrantingMembership(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), httpSidecarTestTimeout)
+	defer cancel()
+	clock := newTokenTestClock()
+	settings := cheapKeychainSettings()
+	settings.Clock = clock
+	instance, keyStore, api := newHttpTestEnrollment(t, clock.Now(), 7*24*time.Hour)
+	api.coreReply.Set(`{"version":"33","gates":["format2"],"min_secure_version":0,"revoked":false}`)
+	host := &httpTestHost{store: instance.Store(&api.networkId), keyStore: keyStore}
+	running, err := newHttpSidecar(ctx, host, settings, api)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer running.CloseAndWait(ctx)
+	api.pollAnswers <- httpTestCorePoll(t)
+	awaitHttpSidecarStatus(t, running, func(status SidecarStatus) bool { return status.State == SidecarStateOnline })
+	replica, err := running.OpenPageMemberReplica(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	generation := running.runningGeneration()
+	waitCore := func(version uint64, want bool) {
+		t.Helper()
+		for {
+			_, changed := clock.armed.Get()
+			core := generation.currentCore()
+			if core != nil && core.Version == version && EvsFormat2AdmittedBy(core) == want {
+				return
+			}
+			select {
+			case <-ctx.Done():
+				t.Fatalf("browser core did not reach %d: %v", version, ctx.Err())
+			case <-changed:
+			}
+		}
+	}
+	waitCore(33, true)
+	if on, known := replica.evs.Format2Gate(); known || on || replica.Evs() != nil {
+		t.Fatal("an authenticated rollout standing alone admitted the browser")
+	}
+	api.coreReply.Set(`{"version":"34","gates":[],"min_secure_version":0,"revoked":false}`)
+	next := httpTestCorePoll(t)
+	next.Reset_ = nil
+	next.Hints[0].Seq = 2
+	next.Hints[0].Version = 34
+	api.pollAnswers <- next
+	waitCore(34, false)
+	requests := 0
+	for _, request := range api.requestsSoFar() {
+		if request.path == "/sidecar/sync/core" {
+			requests++
+			networkId, clientId, ok := sidecarJwtClient(request.bearer)
+			if !ok || networkId != api.networkId || clientId != api.clientId {
+				t.Fatal("browser core read used a different subject")
+			}
+		}
+	}
+	if requests < 2 {
+		t.Fatal("the browser never refetched its rollout")
 	}
 }
 

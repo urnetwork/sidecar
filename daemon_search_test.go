@@ -35,6 +35,26 @@ func testSearchTools(t *testing.T, world *testEngineWorld) *SearchTools {
 	return tools
 }
 
+func TestSearchToolsOpenNamedRefAfterCut(t *testing.T) {
+	world, cut := newTestNamedRefScan(t)
+	cut()
+	repoId, refId := world.sync.repoId, world.sync.refId
+	ref := world.scope.repos[0].Refs[1]
+	ref.IndexOff, ref.Unbuilt = false, true
+	tools := testSearchTools(t, world)
+	session := evsTestId("tool scan")
+	result, err := tools.Search(t.Context(), &SearchToolEnv{Session: session}, &SearchToolArgs{
+		Query: "harbor", Repos: []string{"id:" + repoId.String()}, Ref: "draft",
+	})
+	if err != nil || len(result.Hits) != 1 || result.Hits[0].Ref != refId.String() || result.Hits[0].Stub || result.Hits[0].Open.Arguments["hit"] != result.Hits[0].HitId {
+		t.Fatalf("named tool search: %+v, %v", result, err)
+	}
+	opened, err := tools.OpenHit(session, result.Hits[0].HitId)
+	if err != nil || opened.RefId != refId || opened.RefName != "draft" {
+		t.Fatalf("named hit: %+v, %v", opened, err)
+	}
+}
+
 func TestSearchToolsRefuseArgumentsOutsideTheirRanges(t *testing.T) {
 	world := newTestEngineWorld(t, nil, testEngineDocument(t, "doc", 1, 1, "notes/a.md", "rate limiter notes"))
 	tools := testSearchTools(t, world)
