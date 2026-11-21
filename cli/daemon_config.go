@@ -89,6 +89,25 @@ func startUrConfigFollower(running *sidecar.Sidecar, log sidecar.Logger) *sideca
 		log.Warningf("[ur]a network follows no config, and nothing is admitted on it: %s", err)
 		return nil
 	}
+	installSockets := func() {
+		// The Sidecar owns the component and closes it at removal or daemon shutdown.
+		component, err := running.NewSocketComponent(context.Background())
+		if err == nil {
+			_, err = running.AddComponent(component)
+			if err != nil {
+				component.Close()
+			}
+		}
+		if err != nil && !errors.Is(err, sidecar.ErrSidecarClosed) {
+			log.Warningf("[ur]a network could not start its sockets: %s", err)
+		}
+	}
+	if running.NetworkId() != nil {
+		installSockets()
+	} else {
+		// Platform sockets only need enrollment. Application sockets additionally wait for verified config.
+		go installSockets()
+	}
 	startUrScimSigner(running, log)
 	return follower
 }
