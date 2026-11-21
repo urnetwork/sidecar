@@ -63,30 +63,6 @@ func (self *Sidecar) GkmHeldKey(repoId Id, generation uint64) *EvsRepoKey {
 	return held.key
 }
 
-func (self *Sidecar) gkmRecoveryKeyAt(view GkmAuthView, memberId Id) (*GkmRecoveryKey, error) {
-	state, ok := view.(*ConfigState)
-	if !ok {
-		return nil, ErrGkmKeyMissing
-	}
-	repoId, err := IdFromBytes(state.Genesis().GetConfigRepoId())
-	if err != nil {
-		return nil, err
-	}
-	return state.recoveryKey(memberId, func(generation uint64) *EvsRepoKey { return self.GkmHeldKey(repoId, generation) })
-}
-
-// A cold follower can start on a folded head instead of observing the original RecoveryBind entry.
-func (self *Sidecar) sealOwnRecoveryBinding(key *GkmRecoveryKey) error {
-	authority := self.authority()
-	if authority == nil {
-		return ErrSidecarActNoAuthority
-	}
-	if err := self.keepRecoveryPublicKey(key.BindingKeySha256, key.XwingPublicKey); err != nil {
-		return err
-	}
-	return self.syncRecoverySeal(authority, authority.Pin())
-}
-
 // Whether the network's keychain under gkm's namespace holds RK_g of some generation of the repo, read with no state
 // and no key client (QD-817): what a host's key client answers a config follower before its group client is built, so a
 // restart that holds the config key keeps the full check from base 1. False before enrollment, and where the keychain
