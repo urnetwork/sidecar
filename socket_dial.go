@@ -648,6 +648,11 @@ func (self *SocketComponent) dial(ctx context.Context, address *SocketAddress, s
 	if parseErr != nil {
 		return nil, parseErr
 	}
+	if namespace == SocketNamespaceApplication || (allowShare && namespace == SocketNamespaceShare) {
+		if err := self.prepareSocketNetwork(ctx, address.NetworkLabel); err != nil {
+			return nil, err
+		}
+	}
 	dialer, err := self.dialer()
 	if err != nil {
 		return nil, err
@@ -667,6 +672,9 @@ func (self *SocketComponent) dial(ctx context.Context, address *SocketAddress, s
 // `ur share get`'s Dial (SOCK-M5-15): share/ let through, and a listener whose verified sidecar_id is not
 // listenerSidecarId, the link's, refused before OPEN as a failed ticket (§9.9).
 func (self *SocketComponent) dialShare(ctx context.Context, address *SocketAddress, listenerSidecarId Id) (*SocketConn, error) {
+	if err := self.prepareSocketNetwork(ctx, address.NetworkLabel); err != nil {
+		return nil, err
+	}
 	dialer, err := self.dialer()
 	if err != nil {
 		return nil, err

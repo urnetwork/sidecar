@@ -1572,6 +1572,10 @@ func (self *socketRegistrar) remake(now time.Time) {
 	}
 	failed := false
 	for _, job := range jobs {
+		if ring == nil && job.entry.blinded() {
+			// The verified head no longer supplies K_sock. Withdraw both paths.
+			continue
+		}
 		// an entry's name, namespace and claim fields are fixed at add, so they are read here without the lock
 		job.rows, job.err = makeSocketRegistrarRows(self.networkId, self.sign, job.entry, ring, now.UnixMilli(), job.reuse, identityEpoch)
 		if job.err != nil {

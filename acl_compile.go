@@ -319,13 +319,23 @@ func CompileAclLocal(input *AclCompileInput) (*AclLocalPolicy, error) {
 	if err != nil {
 		return nil, err
 	}
+	if input.SocketKey != nil {
+		// Old heads still recompile to their original projection rows. Only a complete,
+		// valid rotation can supply live blinded socket registrations.
+		ring, err := NewSocketKeyRing(input.NetworkId, input.SocketKey, DefaultSocketKeyRingSettings())
+		if err == nil {
+			compiler.local.socketKeyRing = ring
+		}
+	}
 	return compiler.local, nil
 }
 
 // A device's view of its policy beyond rows: what a client checks that a gate cannot (§8.10). Immutable once
 // compiled; lists are in rule_id order.
 type AclLocalPolicy struct {
-	HasDocument bool
+	// The same head's validated K_sock, kept only on the device.
+	socketKeyRing *SocketKeyRing
+	HasDocument   bool
 	// Every rule CompileAcl wrote from the head: the document's or the implicit one's grants and the kind defaults'.
 	// An activated grant is the log's, and its own fields are the device's from its GrantActivate.
 	Rules []AclLocalRule
