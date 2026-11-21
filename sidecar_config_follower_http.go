@@ -5,6 +5,13 @@ package sidecar
 
 import "context"
 
+// Opens the top-level key-origin browser's member replica after its account
+// sign-in handoff. The browser may verify a first-use genesis for its admitter's
+// safety-number comparison. An existing enrollment anchor is always enforced.
+func (self *Sidecar) OpenPageMemberReplica(ctx context.Context) (*MemberReplica, error) {
+	return self.openMemberReplica(ctx, true)
+}
+
 // The browser opens its replica after enrollment. Its owner closes the follower with the network.
 func (self *Sidecar) attachConfigFollower(follower *SidecarConfigFollower) (func(), error) {
 	return nil, follower.followIdentity(self.Identity())

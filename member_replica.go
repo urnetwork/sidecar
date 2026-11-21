@@ -19,6 +19,7 @@ type MemberReplica struct {
 	ctx            context.Context
 	cancel         context.CancelFunc
 	identity       SidecarIdentity
+	trustFirstUse  bool
 	presenceLock   sync.Mutex
 	presence       SidecarPresenceCheck
 	headsLock      sync.Mutex
@@ -36,6 +37,12 @@ type MemberReplica struct {
 
 // Opens the enrolled identity's replica. Calls for the same identity share the same replica and its lifetime.
 func (self *Sidecar) OpenMemberReplica(ctx context.Context) (*MemberReplica, error) {
+	return self.openMemberReplica(ctx, false)
+}
+
+// The native SDK marks a child in its durable network record. An HTTP member
+// identifies its top-level browser sign-in explicitly after the account handoff.
+func (self *Sidecar) openMemberReplica(ctx context.Context, browserSignIn bool) (*MemberReplica, error) {
 	self.memberReplicaLock.Lock()
 	defer self.memberReplicaLock.Unlock()
 	if self.ctx == nil || self.ctx.Err() != nil || ctx.Err() != nil {
@@ -46,13 +53,14 @@ func (self *Sidecar) OpenMemberReplica(ctx context.Context) (*MemberReplica, err
 		return nil, ErrSidecarNoIdentity
 	}
 	if current, ok := self.memberReplica.(*MemberReplica); ok {
-		if current.ctx.Err() == nil && current.identity.SidecarId == identity.SidecarId && current.identity.NetworkId == identity.NetworkId {
+		sameIdentity := current.identity.SidecarId == identity.SidecarId && current.identity.NetworkId == identity.NetworkId
+		if current.ctx.Err() == nil && sameIdentity && (!browserSignIn || current.trustFirstUse || current.Config() != nil) {
 			return current, nil
 		}
 		current.Close()
 	}
 	runCtx, cancel := context.WithCancel(ctx)
-	replica := &MemberReplica{ctx: runCtx, cancel: cancel, running: self, identity: *identity}
+	replica := &MemberReplica{ctx: runCtx, cancel: cancel, running: self, identity: *identity, trustFirstUse: browserSignIn || self.Paired()}
 	if err := replica.open(); err != nil {
 		replica.Close()
 		return nil, err
@@ -177,10 +185,10 @@ func (self *MemberReplica) open() error {
 		return err
 	}
 	self.evs.EnablePrefixRules(running.EvsPrefixRulesArgs())
-	// A signed-in member child may have no invitation anchor. The follower records the
+	// A signed-in member without an invitation may have no stored anchor. The follower records the
 	// first self-verified genesis of this network for its admitter's safety-number comparison.
 	settings := DefaultSidecarConfigFollowerSettings()
-	settings.TrustFirstUse = running.Paired()
+	settings.TrustFirstUse = self.trustFirstUse
 	self.follower, err = running.FollowConfig(&SidecarConfigFollowerArgs{Heads: self, Gkm: keys, Hints: self.hints, Settings: settings, beforeStanding: self.bindRecord})
 	if err != nil {
 		return err
