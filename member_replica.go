@@ -80,7 +80,7 @@ func (self *Sidecar) openMemberReplica(ctx context.Context, browserSignIn bool) 
 // The member replica this host opened, nil before enrollment or after close.
 func (self *Sidecar) MemberReplica() *MemberReplica {
 	replica := self.registeredMemberReplica()
-	if replica == nil || replica.ctx.Err() != nil {
+	if replica == nil || self.ctx.Err() != nil || replica.ctx.Err() != nil {
 		return nil
 	}
 	return replica
@@ -119,7 +119,7 @@ func (self *MemberReplica) Config() *ConfigClient {
 // The live identity for file and record access. The core retains the public
 // identity while locked, although the instance can no longer serve member data.
 func (self *MemberReplica) activeIdentity() *SidecarIdentity {
-	if self.ctx.Err() != nil {
+	if self.ctx.Err() != nil || self.running.ctx.Err() != nil {
 		return nil
 	}
 	if state, _ := self.running.instance.State(); state != SidecarInstanceOpen {
