@@ -61,7 +61,34 @@ func newUrBridgeFilingNetwork(wire *urBridgeWire, running *sidecar.Sidecar, foll
 	}
 	removeForward := running.RegisterEffectLookup(sidecar.SidecarActionForward, grants.Lookup)
 	removeRules := filer.Register()
+	gate, removeGate, err := running.InstallApprovalGateIfAbsent(&sidecar.ApprovalGateSources{
+		Grants: engine,
+		States: func() (sidecar.ApprovalStates, error) {
+			if follower.Client() != client || client.Fork() != nil {
+				return nil, sidecar.ErrApprovalNoState
+			}
+			return sidecar.NewConfigApprovalStates(client.State(), false, follower.AclLocal())
+		},
+	})
+	if err == nil && gate != nil {
+		_, err = gate.Reconcile(wire.host.ctx)
+	}
+	if err != nil {
+		if removeGate != nil {
+			removeGate()
+		}
+		removeRules()
+		removeForward()
+		wire.close()
+		return nil, err
+	}
+	if gate != nil {
+		go gate.Inbox().Run(wire.host.ctx)
+	}
 	network.close = func() {
+		if removeGate != nil {
+			removeGate()
+		}
 		removeRules()
 		removeForward()
 		wire.close()
