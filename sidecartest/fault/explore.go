@@ -7,12 +7,26 @@
 // Nothing here retries: a seed that failed once is a failure, whatever a second run of it would do
 // (R-TEST-9). And a seed that passes proves only the orders it reached, so a report says how many seeds
 // ran, never that there is no race.
+//
+// After a fixed run, CheckRow and CheckClause take the short form where a seed has nothing to order
+// (QD-1151). A seed chooses only through the seeded baton: whether an actor passing a barrier yields, the
+// order a Release step lets its sites go, and which of the actors waiting for the baton together takes
+// it. Actors wait together only beside an action that outlives its step, a Background step's or one
+// parked by the fault its step ended on, or beside runs an action starts and waits on with the baton
+// given up, as EvsWorld's duplicate push does. So when the fixed run passed with no barrier event in its
+// trace, its schedule has no Background step and no step ending when its fault fires, and the baton moved
+// only as each step's action began, every seed takes the fixed run's order and can find nothing it did
+// not. The first seed runs, and if it passes in that same order the rest do not, the report saying so
+// ("no barrier passed: every seed takes this order"). Anything else runs every seed, as before. Without
+// sidecar_testhooks no barrier in sidecar's own code reaches the driver, so far more schedules take the
+// short form on that build than on the gate's.
 
 package fault
 
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/urnetwork/sidecar/sidecartest"
@@ -67,6 +81,9 @@ type ExploreReport struct {
 	Id string
 	// Every seed run, passing or not.
 	Seeds []int64
+	// The explorer took its short form (QD-1151; the file header): nothing in the fixed run left a seed
+	// anything to order, and the first seed passed in the fixed run's order, so that seed ran alone.
+	OneOrder bool
 	// Each failing seed's result, with its trace.
 	Failures []*Result
 	// The trace file each failure wrote, in the order of Failures, empty where none was written.
@@ -75,13 +92,21 @@ type ExploreReport struct {
 	TraceErrors []error
 }
 
-// "FS-1: 10 seeds run (1 to 10), 1 failed (seed 7, trace ...)". Never "no race": a seed that passed
+// What a report of the short form says, after its seeds (QD-1151).
+const ExploreOneOrderText = "no barrier passed: every seed takes this order"
+
+// "FS-1: 10 seeds run (1 to 10), 1 failed; seed 7, trace ...", or in the short form "FS-116: 1 seed run
+// (1), 0 failed; no barrier passed: every seed takes this order". Never "no race": a seed that passed
 // proves only the orders it reached.
 func (self *ExploreReport) String() string {
 	var text strings.Builder
-	fmt.Fprintf(&text, "%s: %d seeds run", self.Id, len(self.Seeds))
-	if 0 < len(self.Seeds) {
-		fmt.Fprintf(&text, " (%d to %d)", self.Seeds[0], self.Seeds[len(self.Seeds)-1])
+	switch len(self.Seeds) {
+	case 0:
+		fmt.Fprintf(&text, "%s: 0 seeds run", self.Id)
+	case 1:
+		fmt.Fprintf(&text, "%s: 1 seed run (%d)", self.Id, self.Seeds[0])
+	default:
+		fmt.Fprintf(&text, "%s: %d seeds run (%d to %d)", self.Id, len(self.Seeds), self.Seeds[0], self.Seeds[len(self.Seeds)-1])
 	}
 	fmt.Fprintf(&text, ", %d failed", len(self.Failures))
 	for index, failure := range self.Failures {
@@ -89,6 +114,9 @@ func (self *ExploreReport) String() string {
 		if index < len(self.TracePaths) && self.TracePaths[index] != "" {
 			fmt.Fprintf(&text, ", trace %s", self.TracePaths[index])
 		}
+	}
+	if self.OneOrder {
+		fmt.Fprintf(&text, "; %s", ExploreOneOrderText)
 	}
 	return text.String()
 }
@@ -101,26 +129,100 @@ func Explore(ctx context.Context, builder Builder, settings *RuleSettings) *Expl
 	}
 	report := &ExploreReport{}
 	for _, seed := range settings.Seeds {
-		result := runBuilt(ctx, builder, settings.Net, func(schedule *Schedule) {
-			schedule.Seed = seed
-		})
-		report.Id = result.Id
-		report.Seeds = append(report.Seeds, seed)
-		if result.Err == nil {
-			continue
-		}
-		report.Failures = append(report.Failures, result)
-		tracePath := ""
-		if settings.WriteTraces {
-			path, err := WriteTrace(settings.SeedsDirectory, TraceOf(result))
-			if err != nil {
-				report.TraceErrors = append(report.TraceErrors, err)
-			}
-			tracePath = path
-		}
-		report.TracePaths = append(report.TracePaths, tracePath)
+		report.runSeed(ctx, builder, settings, seed, nil)
 	}
 	return report
+}
+
+// Runs builder's schedule under seed and records it, writing a failure's trace when settings say so.
+// built, when not nil, is handed the schedule as built, before it runs.
+func (self *ExploreReport) runSeed(ctx context.Context, builder Builder, settings *RuleSettings, seed int64, built func(schedule *Schedule)) *Result {
+	result := runBuilt(ctx, builder, settings.Net, func(schedule *Schedule) {
+		schedule.Seed = seed
+		if built != nil {
+			built(schedule)
+		}
+	})
+	self.Id = result.Id
+	self.Seeds = append(self.Seeds, seed)
+	if result.Err == nil {
+		return result
+	}
+	self.Failures = append(self.Failures, result)
+	tracePath := ""
+	if settings.WriteTraces {
+		path, err := WriteTrace(settings.SeedsDirectory, TraceOf(result))
+		if err != nil {
+			self.TraceErrors = append(self.TraceErrors, err)
+		}
+		tracePath = path
+	}
+	self.TracePaths = append(self.TracePaths, tracePath)
+	return result
+}
+
+// The explorer after fixed, the fixed run of builder's schedule: the first seed, and the rest unless the
+// short form holds (the file header). settings nil takes the defaults.
+func exploreAfter(ctx context.Context, builder Builder, fixed *Result, settings *RuleSettings) *ExploreReport {
+	if settings == nil {
+		settings = DefaultRuleSettings()
+	}
+	report := &ExploreReport{}
+	if len(settings.Seeds) == 0 {
+		return report
+	}
+	var schedule *Schedule
+	first := report.runSeed(ctx, builder, settings, settings.Seeds[0], func(built *Schedule) {
+		schedule = built
+	})
+	if first.Err == nil && exploreOrderChoice(schedule, fixed) == "" && slices.Equal(first.Trace, fixed.Trace) {
+		report.OneOrder = true
+		return report
+	}
+	for _, seed := range settings.Seeds[1:] {
+		report.runSeed(ctx, builder, settings, seed, nil)
+	}
+	return report
+}
+
+// What leaves a seed something to order in schedule, built as the one fixed ran was, or empty when nothing
+// does (the file header). A fixed run that failed stopped short of the rest of its schedule, so it shows
+// nothing of it.
+// Its trace holds an event for every barrier anything reached and for every stall and kill, beside a ran
+// event each time an actor took the baton. With no barrier event and no step an action outlives, the baton
+// moves only when the running action ends or gives it up: the ran events are one for each step's action,
+// in order, unless an action started runs of its own or waited with the baton given up, when other actors
+// may have waited for it together.
+func exploreOrderChoice(schedule *Schedule, fixed *Result) string {
+	switch {
+	case fixed == nil || schedule == nil:
+		return "no fixed run"
+	case fixed.Err != nil:
+		return "the fixed run failed"
+	}
+	ranActors := []string{}
+	for _, event := range fixed.Events {
+		if event.Kind != sidecartest.BarrierRan {
+			return "the fixed run's trace holds a barrier event: " + strings.Join(strings.Fields(event.String()), " ")
+		}
+		ranActors = append(ranActors, event.Actor)
+	}
+	actionActors := []string{}
+	for index, step := range schedule.Steps {
+		switch {
+		case step.Background:
+			return fmt.Sprintf("step %d is a Background step", index)
+		case step.Await == FaultFired:
+			return fmt.Sprintf("step %d ends when its fault fires, and its action may run on", index)
+		}
+		if step.Action != nil {
+			actionActors = append(actionActors, step.Actor)
+		}
+	}
+	if !slices.Equal(ranActors, actionActors) {
+		return fmt.Sprintf("the baton moved %d times in the fixed run, not once as each of its %d actions began", len(ranActors), len(actionActors))
+	}
+	return ""
 }
 
 // Builds and runs one schedule on a Net of its own, closed before this returns: under

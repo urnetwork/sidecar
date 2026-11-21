@@ -337,6 +337,9 @@ type EvsWriteEffect struct {
 	// none: what the effect's push seals in its provenance (EvsWritePathsArgs.Tainted, AgentId).
 	Tainted bool
 	AgentId *Id
+	// The setting the write asks for its version (EvsWriteOptions.Versioning): "" the path's own, "on" or "off", which
+	// the action's field 37 carries at version 2 (§16.8). A git-mode ref takes "" alone.
+	Versioning string
 }
 
 // What Lookup asks of the effect: its content by git oid, which the live effect can compute.
@@ -413,6 +416,8 @@ func (self *EvsWriteEffect) write(ctx context.Context) ([]byte, error) {
 	write := &EvsPathWrite{Path: self.Path, Mode: self.Mode, Remove: self.Remove, IfBaseVersion: &base}
 	if !self.Remove {
 		write.Content = bytes.NewReader(self.Content)
+		// each plan takes the version's setting from the one asked, on its own read of the path
+		write.Options = &EvsWriteOptions{Versioning: self.Versioning}
 	}
 	result, err := self.Repo.WritePaths(ctx, &EvsWritePathsArgs{
 		RefName: self.RefName, Writes: []*EvsPathWrite{write}, AgentId: self.AgentId, Tainted: self.Tainted,
@@ -422,6 +427,10 @@ func (self *EvsWriteEffect) write(ctx context.Context) ([]byte, error) {
 	}
 	if !errors.Is(err, ErrEvsGitRef) {
 		return nil, err
+	}
+	if self.Versioning == EvsVersioningOff {
+		// git-mode refs refuse versioning off (§11.7's refused row): nothing was sent
+		return nil, fmt.Errorf("%w: versioning off on a git-mode ref", ErrEvsWriteInvalid)
 	}
 	written, err := self.Repo.WriteAtTip(ctx, &EvsWriteAtTipArgs{
 		RefName: self.RefName, Path: self.Path, BaseVersion: self.BaseVersion, Content: self.Content, Mode: self.Mode,

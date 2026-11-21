@@ -28,7 +28,8 @@
 // A file-mode version whose key a committed ERASE destroyed exports as its stub and the export goes on (§11.12's
 // retention row; evs_export_file.go, evs_export_format2.go). A git-mode version's blob so erased still ends the export
 // with ErrEvsErased, as it ends the local tier's sync, which shares applyUpdate: a stub there is another blob, so its
-// tree and commit, and every commit after them, would leave the original oids D-EVS-22 keeps.
+// tree and commit, and every commit after them, would leave the original oids D-EVS-22 keeps. Question
+// erased-version-readers-git-mode-erased-blob holds which way export goes; until it is answered export fails closed.
 //
 // Refs are named by the names the caller holds: nil exports main. A source a push names is replayed for its objects
 // whether or not the caller named it, and a cycle of sources refuses the version that closes it.

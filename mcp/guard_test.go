@@ -85,6 +85,19 @@ func TestGuardRefusesItsTable(t *testing.T) {
 		{name: "a mailbox's vaults/ read", target: testRepoTarget(protocol.RepoKind_REPO_KIND_MAILBOX, McpRepoRead, "", "vaults/m1")},
 		{name: "a general repo's vault/ read", target: testRepoTarget(general, McpRepoRead, "", "vault/m1")},
 
+		// QD-1097: the rcpt/ family on a mailbox, and on a general repo mailcfg does not confirm is an ordinary file
+		// repo, a group inbox or one mailcfg could not be read for, the target's OrdinaryFileRepo unset
+		{name: "a mailbox's approved recipient read", target: testRepoTarget(protocol.RepoKind_REPO_KIND_MAILBOX, McpRepoRead, "", "rcpt/ab/x"), refused: true},
+		{name: "a mailbox's rcpt directory listed", target: testRepoTarget(protocol.RepoKind_REPO_KIND_MAILBOX, McpRepoList, "", "rcpt"), refused: true},
+		{name: "a mailbox's rcpt shard searched", target: testRepoTarget(protocol.RepoKind_REPO_KIND_MAILBOX, McpRepoSearch, "", "rcpt/ab"), refused: true},
+		{name: "a mailbox's approved recipient written on another ref", target: testRepoTarget(protocol.RepoKind_REPO_KIND_MAILBOX, McpRepoWrite, "draft", "rcpt/ab/x"), refused: true},
+		{name: "a group inbox's approved recipient read", target: testRepoTarget(general, McpRepoRead, "", "rcpt/ab/x"), refused: true},
+		{name: "a group inbox's approved recipient deleted", target: testRepoTarget(general, McpRepoDelete, "", "rcpt/ab/x"), refused: true},
+		{name: "an ordinary file repo's rcpt read", target: McpTarget{Kind: McpTargetRepo, RepoKind: general, Operation: McpRepoRead, Path: "rcpt/ab/x", OrdinaryFileRepo: true}},
+		{name: "an ordinary file repo's rcpt written", target: McpTarget{Kind: McpTargetRepo, RepoKind: general, Operation: McpRepoWrite, Path: "rcpt", OrdinaryFileRepo: true}},
+		{name: "a mailbox's rcpt sibling read", target: testRepoTarget(protocol.RepoKind_REPO_KIND_MAILBOX, McpRepoRead, "", "rcpts/x")},
+		{name: "a vault's rcpt/ read", target: testRepoTarget(protocol.RepoKind_REPO_KIND_VAULT, McpRepoRead, "", "rcpt/ab/x")},
+
 		{name: "an unknown repo read", target: testRepoTarget(protocol.RepoKind_REPO_KIND_UNSPECIFIED, McpRepoRead, "", "x"), refused: true},
 		{name: "an unknown operation", target: testRepoTarget(general, McpRepoOperation(99), "", "x"), refused: true},
 

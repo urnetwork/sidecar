@@ -188,6 +188,12 @@ func MailMessagePath(month MailYearMonth, messageId Id) string {
 	return mailDatedShardedPath(mailMessageFamily, month, mailBinaryName(messageId[:]))
 }
 
+// The month and message id MailMessagePath spells path with, false for any path it does not spell: what a mail
+// document's search hit names (MCP's mail_read by hit).
+func ParseMailMessagePath(path string) (MailYearMonth, Id, bool) {
+	return searchJoinMailPath(path)
+}
+
 // r/<yyyymm>/<h>/<id>: a mailbox's reference to a group message, by the group message's month and id.
 func MailGroupRefPath(month MailYearMonth, messageId Id) string {
 	return mailDatedShardedPath(mailGroupRefFamily, month, mailBinaryName(messageId[:]))

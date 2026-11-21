@@ -11,6 +11,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
@@ -38,6 +39,9 @@ type McpError struct {
 	// Constant: never a call's input or a value read for it.
 	Message   string
 	Retryable bool
+	// The drop an EVS_DROPPED refusal names, which its data carries beside the constant text: ids only (I-13). Nil
+	// for every other error.
+	Drop *McpErrorDrop
 }
 
 // The text, which is constant.
@@ -47,7 +51,11 @@ func (self *McpError) Error() string {
 
 // The wire error go-sdk answers with.
 func (self *McpError) wire() *jsonrpc.Error {
-	return newMcpError(self.Code, self.Message, self.Retryable)
+	if self.Drop == nil {
+		return newMcpError(self.Code, self.Message, self.Retryable)
+	}
+	data, _ := json.Marshal(&McpErrorData{Retryable: self.Retryable, Drop: self.Drop})
+	return &jsonrpc.Error{Code: self.Code, Message: self.Message, Data: data}
 }
 
 // A tool error of code with constant text.

@@ -1,8 +1,8 @@
 //go:build !js && !ios && !android && !sdk_mobile_bind
 
-// §16.5's evs tools (R-MCP-5, R-MCP-9, D-MCP-13, D-MCP-17, D-MCP-18, I-7, I-9, FS-30; MCP-M3-13): evs_repos,
-// evs_list, evs_history and evs_read at R, evs_write and evs_delete at W, outward for a shared repo's agent-config
-// files. ur://evs/{repo}/{+path} is resources_evs.go's.
+// §16.5's evs tools (R-MCP-5, R-MCP-9, D-MCP-8, D-MCP-13, D-MCP-17, D-MCP-18, D-MCP-32, I-7, I-9, FS-30; MCP-M3-13,
+// MCP-M10-01): evs_repos, evs_list, evs_history, evs_read and evs_drop_preview at R, evs_write and evs_delete at W,
+// outward for a shared repo's agent-config files. ur://evs/{repo}/{+path} is resources_evs.go's.
 //
 //	guard      every call names what it reaches to McpGuard (§16.6's refused table, guard.go): never a secret repo,
 //	           the config's contents, the team directory, the search index's files, approved-recipient records,
@@ -29,16 +29,26 @@
 //	           a conflict answering FAILED_PRECONDITION; a git-mode ref through the local tier's WriteAtTip, which rebuilds on a
 //	           newer tip while the path is unchanged, at most EvsSettings' WriteAtTipTryCount tips (owner decision
 //	           141), the tool calling it once and its tries running out answering a retryable failure; a daemon with
-//	           no local tier answers EVS_GIT_REF; versioning on alone, format 1's, off answering FAILED_PRECONDITION
+//	           no local tier answers EVS_GIT_REF
+//	format 2   (MCP-M10-01) evs_write's versioning is on or off, the path's own when omitted, a new path's from its
+//	           rules (EvsWriteOptions, which each plan follows on its own read of the path), never retried by
+//	           rebasing; off is refused FAILED_PRECONDITION outside §19.11's format2 gate, in a locked repo and on a
+//	           git-mode ref (§11.7's refused row), and an outward write that names one carries it as field 37 at
+//	           version 2. evs_list, evs_history and evs_read name each version's setting, on, off or index, and a
+//	           replaced versionless version reads collected. evs_history and evs_read mark a version a checked DROP
+//	           lists drop_pending, with not_before, or dropped, with the drop's id and signer; a dropped version's
+//	           read answers EVS_DROPPED, FAILED_PRECONDITION, its data naming the drop, and a pending one reads with
+//	           a warning. evs_drop_preview runs §11.13's dry run for a sidecar §8 lets administer the repo, within
+//	           evs_drop_previews_per_day, which evs counts, and never drops: no MCP path signs a DROP or its cancel
+//	           (D-MCP-32; the guard's DROP row)
 //	outward    a write or delete of Ingest.AgentConfigPaths in a shared repo goes through §5.4's gate with the evs
 //	           effect (EvsWriteEffect, EVS1-M3-01), which pushes only while its Lookup finds nothing and looks again
 //	           after a refusal, so a crash after the effect takes no second push; pending answers approval_pending
 //	secrets    a shared repo's write whose content Redactor.Scan matches is refused (R-MCP-5); owner-bound vault
 //	           writes keep their bytes, as the vault's own redaction is the record's
 //
-// Format 2's versioning, drop states and collected versions are MCP-M10-01's. evs_read's hit, a file's search hit in
-// place of repo, path and version, resolves through the session's cursors and then reads as those named would
-// (tools_hit.go).
+// evs_read's hit, a file's search hit in place of repo, path and version, resolves through the session's cursors and
+// then reads as those named would (tools_hit.go).
 
 package mcp
 
@@ -48,6 +58,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"io"
 	"net/url"
@@ -142,7 +153,13 @@ var (
 	errMcpEvsAbsent      = NewMcpError(McpCodeFailedPrecondition, "nothing stands at that path", false)
 	errMcpEvsConflict    = NewMcpError(McpCodeFailedPrecondition, "the path moved past base_version: read it again and write on its version", false)
 	errMcpEvsGitRef      = NewMcpError(McpCodeFailedPrecondition, "EVS_GIT_REF: the repo's ref is git-mode, and this daemon has no local tier to commit through", false)
-	errMcpEvsVersioning  = NewMcpError(McpCodeFailedPrecondition, "versioning off is format 2's: this repo keeps every version", false)
+	errMcpEvsVersioning  = NewMcpError(McpCodeFailedPrecondition, "versioning off is refused here: outside format 2, in a locked repo or on a git-mode ref every version is kept", false)
+	errMcpEvsCollected   = NewMcpError(McpCodeFailedPrecondition, "this version was replaced and is versionless, so evs keeps none of its content: read the path's newest version", false)
+	errMcpEvsDropped     = NewMcpError(McpCodeFailedPrecondition, "EVS_DROPPED: this version's history was dropped, so nothing of it is read", false)
+	errMcpEvsDropFollow  = NewMcpError(McpCodeInvalidArguments, "follow, a dry run through renames, is not built: preview the path alone", false)
+	errMcpEvsDropLineage = NewMcpError(McpCodeFailedPrecondition, "the path's history cannot be previewed as one drop: evs cannot follow its lineage, or it is past one drop's bounds", false)
+	errMcpEvsDropScope   = NewMcpError(McpCodeRefused, "evs takes a drop's dry run only from the repo's admins", false)
+	errMcpEvsDropBudget  = NewMcpError(McpCodeRefused, "the repo's dry runs for today are spent: a person may preview it with ur history drop later", false)
 	errMcpEvsSecret      = NewMcpError(McpCodeRefused, "the content holds what reads as a secret, which a shared repo never takes: write it to your vault, or leave it out", false)
 	errMcpEvsTooLarge    = NewMcpError(McpCodeFailed, "the file is past what a read through MCP holds: read it with ur evs in your own terminal", false)
 	errMcpEvsOutward     = NewMcpError(McpCodeRefused, "this write is outward and could not go through the gate: a person may approve it with ur approve", false)
@@ -237,6 +254,10 @@ func mcpEvsError(err error) error {
 		return errMcpEvsGitRef
 	case errors.Is(err, sidecar.ErrEvsErased):
 		return errMcpEvsErased
+	case errors.Is(err, sidecar.ErrEvsDropped):
+		return errMcpEvsDropped
+	case errors.Is(err, sidecar.ErrEvsCollected):
+		return errMcpEvsCollected
 	case errors.Is(err, sidecar.ErrEvsPathAbsent):
 		return errMcpEvsAbsent
 	case errors.Is(err, sidecar.ErrEvsFormatUnsupported):
@@ -258,6 +279,33 @@ func mcpEvsError(err error) error {
 		return errMcpEvsInvalid
 	}
 	return err
+}
+
+// CanonicalAction's version that carries field 37, format 2's versioning (§16.8).
+const mcpCanonicalActionVersionVersioning = 2
+
+// What a pending drop's version reads with (§16.5): the drop is named beside it.
+const mcpEvsDropPendingWarning = "a drop lists this version: from not_before_millis its history is dropped, and it reads no more"
+
+// A version's setting as the tools name it: on (0), off (1) or index (2), §11.7's.
+func mcpEvsVersioningName(versioning uint32) string {
+	switch protocol.EvsVersioning(versioning) {
+	case protocol.EvsVersioning_EVS_VERSIONING_KEPT:
+		return sidecar.EvsVersioningOn
+	case protocol.EvsVersioning_EVS_VERSIONING_VERSIONLESS:
+		return sidecar.EvsVersioningOff
+	}
+	return "index"
+}
+
+// EVS_DROPPED naming drop, its id, signer and window's end in the answer's data, ids only (I-13): the message stays
+// constant.
+func mcpEvsDroppedError(drop *sidecar.EvsDropState) *McpError {
+	refusal := *errMcpEvsDropped
+	refusal.Drop = &McpErrorDrop{
+		DropId: drop.DropId.String(), SignerId: drop.SignerSidecarId.String(), NotBeforeMillis: drop.NotBefore.UnixMilli(),
+	}
+	return &refusal
 }
 
 // EVS_PREFIX_RULE as a tool answers it (DESIGN-DETAILS 16.2.7, 16.2.5, 8.2.8; QD-801): the code and its detail, one of
@@ -322,6 +370,8 @@ type mcpEvsEntryOut struct {
 	Name string `json:"name"`
 	// file, directory, symlink or gitlink
 	Kind string `json:"kind"`
+	// A file's setting, on, off or index (§11.7); empty for a directory.
+	Versioning string `json:"versioning,omitempty"`
 }
 
 // evs_list's data.
@@ -345,10 +395,15 @@ type mcpEvsVersionOut struct {
 	SignerId      string `json:"signer_id"`
 	TimeMillis    int64  `json:"time_millis"`
 	Removed       bool   `json:"removed,omitempty"`
-	// on: format 1 keeps every version
+	// on, off or index (§11.7): the version's setting
 	Versioning string `json:"versioning"`
-	// kept: format 1's only state
+	// kept; collected, a replaced versionless version's whose content evs no longer serves; drop_pending, listed by a
+	// DROP whose window has not ended; or dropped (§11.9)
 	State string `json:"state"`
+	// A listed version's drop, its signer and its window's end, ms; empty for any other version.
+	DropId          string `json:"drop_id,omitempty"`
+	DropSignerId    string `json:"drop_signer_id,omitempty"`
+	NotBeforeMillis int64  `json:"not_before_millis,omitempty"`
 }
 
 // evs_history's data.
@@ -380,9 +435,15 @@ type mcpEvsReadOut struct {
 	// utf-8, or base64 for bytes that are not
 	Encoding string `json:"encoding"`
 	// between the untrusted markers where the version reads untrusted
-	Content    string `json:"content"`
+	Content string `json:"content"`
+	// on, off or index (§11.7)
 	Versioning string `json:"versioning"`
-	State      string `json:"state"`
+	// kept, or drop_pending for a version a DROP lists whose window has not ended, which reads with a warning
+	State           string `json:"state"`
+	DropId          string `json:"drop_id,omitempty"`
+	DropSignerId    string `json:"drop_signer_id,omitempty"`
+	NotBeforeMillis int64  `json:"not_before_millis,omitempty"`
+	Warning         string `json:"warning,omitempty"`
 }
 
 // evs_write's arguments.
@@ -403,6 +464,59 @@ type mcpEvsDeleteIn struct {
 	Repo        string `json:"repo"`
 	Path        string `json:"path"`
 	BaseVersion uint64 `json:"base_version"`
+}
+
+// What evs_drop_preview reaches of a repo: *sidecar.EvsRepo's dry run, or a test's. Only the dry run: no MCP path
+// signs a drop or its cancel (D-MCP-32).
+type mcpEvsDropPreviewRepo interface {
+	DropHistoryPreview(ctx context.Context, args *sidecar.EvsDropPreviewArgs) (*sidecar.EvsDropPreview, error)
+}
+
+var _ mcpEvsDropPreviewRepo = (*sidecar.EvsRepo)(nil)
+
+// evs_drop_preview's arguments.
+type mcpEvsDropPreviewIn struct {
+	Repo string `json:"repo"`
+	Path string `json:"path"`
+	// Through renames, by file_id: not built, refused.
+	Follow bool `json:"follow,omitempty"`
+}
+
+// evs_drop_preview's data: §11.13's dry run of a drop of the path's history now.
+type mcpEvsDropPreviewOut struct {
+	// The dry run's id, hex, which a person's drop names; empty where the lists did not match.
+	PreviewId string `json:"preview_id,omitempty"`
+	// The versions a drop now would list, and the bytes evs's resolve reported.
+	Versions    uint64 `json:"versions"`
+	FreesBytes  uint64 `json:"frees_bytes"`
+	SharedBytes uint64 `json:"shared_bytes"`
+	InlineBytes uint64 `json:"inline_bytes"`
+	// Bytes too young to free yet.
+	Young uint64 `json:"young"`
+	// Whether evs resolved the versions this device listed; false names nothing else, and asks for a fresh look at
+	// evs_history first.
+	ListMatch bool `json:"list_match"`
+}
+
+// A dry run's error as evs_drop_preview answers it, by constant text.
+func mcpEvsDropPreviewError(err error) error {
+	switch {
+	case errors.Is(err, sidecar.ErrEvsDropPath):
+		return errMcpEvsDropFollow
+	case errors.Is(err, sidecar.ErrEvsDropUnlinked), errors.Is(err, sidecar.ErrEvsDropTooLarge):
+		return errMcpEvsDropLineage
+	}
+	if evsError, ok := sidecar.EvsErrorOf(err); ok {
+		switch evsError.Code {
+		case protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE:
+			return errMcpEvsDropScope
+		case protocol.EvsRefusalCode_EVS_REFUSAL_RESOURCE_EXHAUSTED, protocol.EvsRefusalCode_EVS_REFUSAL_QUOTA_LIMIT,
+			protocol.EvsRefusalCode_EVS_REFUSAL_QUOTA_PAYMENT:
+			// past evs_drop_previews_per_day (§20.4), which evs counts
+			return errMcpEvsDropBudget
+		}
+	}
+	return mcpEvsError(err)
 }
 
 // evs_write's and evs_delete's data.
@@ -460,6 +574,11 @@ func mcpEvsRead(ctx context.Context, call *McpCall, repo McpEvsRepo, ref *sideca
 		if content.over {
 			return nil, errMcpEvsTooLarge
 		}
+		var dropped *sidecar.EvsDroppedError
+		if errors.As(err, &dropped) {
+			// EVS_DROPPED, naming the drop by its id and signer in the answer's data (§16.5)
+			return nil, mcpEvsDroppedError(&dropped.Drop)
+		}
 		return nil, mcpEvsError(err)
 	}
 	if hit != "" {
@@ -488,8 +607,15 @@ func mcpEvsRead(ctx context.Context, call *McpCall, repo McpEvsRepo, ref *sideca
 		TimeMillis:    info.Time.UnixMilli(),
 		Size:          info.Size,
 		Encoding:      "utf-8",
-		Versioning:    "on",
+		Versioning:    mcpEvsVersioningName(info.Versioning),
 		State:         "kept",
+	}
+	if drop := info.Drop; drop != nil {
+		// a pending drop's version reads, with its drop named and a warning (§16.5's format-2 text)
+		out.State = sidecar.EvsVersionStateDropPending
+		out.DropId, out.DropSignerId = drop.DropId.String(), drop.SignerSidecarId.String()
+		out.NotBeforeMillis = drop.NotBefore.UnixMilli()
+		out.Warning = mcpEvsDropPendingWarning
 	}
 	text := content.buffer.String()
 	if !utf8.ValidString(text) {
@@ -526,11 +652,53 @@ func (self *mcpLimitedBuffer) Write(p []byte) (int, error) {
 	return self.buffer.Write(p)
 }
 
-// One write or removal of path on base, the W path or, for a shared repo's agent-config file, the outward one.
-func mcpEvsWrite(ctx context.Context, call *McpCall, repoId sidecar.Id, path string, base uint64, content []byte, remove bool, message string, result *McpResult) (*mcpEvsWriteOut, error) {
+// What evs_write's versioning off reads of a network (§11.7's refused row): whether it is inside §19.11's format2
+// gate, and whether the installed state holds a repo locked. A network that cannot say refuses off.
+type mcpEvsVersioningNetwork interface {
+	EvsFormat2Admitted() bool
+	EvsRepoLocked(repoId sidecar.Id) bool
+}
+
+// Whether the network's EVS client is inside §19.11's format2 gate.
+func (self *mcpSidecarNetwork) EvsFormat2Admitted() bool {
+	client := self.evsClient()
+	return client != nil && client.Format2Admitted()
+}
+
+// Whether the installed state holds repoId locked (§8.8's RepoVersioning lock); true while no state is installed.
+func (self *mcpSidecarNetwork) EvsRepoLocked(repoId sidecar.Id) bool {
+	engine, _ := self.policy()
+	if engine == nil {
+		return true
+	}
+	state := engine.State()
+	if state == nil {
+		return true
+	}
+	return state.RepoLocked(repoId)
+}
+
+// Refuses versioning off where §11.7 or the repo's lock refuses it: outside §19.11's format2 gate, in a locked repo,
+// or where the network cannot say (§16.5's evs_write row).
+func mcpEvsVersioningOffAllowed(network McpEvsNetwork, repoId sidecar.Id) error {
+	versioning, ok := network.(mcpEvsVersioningNetwork)
+	if !ok || !versioning.EvsFormat2Admitted() || versioning.EvsRepoLocked(repoId) {
+		return errMcpEvsVersioning
+	}
+	return nil
+}
+
+// One write or removal of path on base, the W path or, for a shared repo's agent-config file, the outward one, its
+// version's setting versioning: "" the path's own, a new path's from its rules, or "on" or "off".
+func mcpEvsWrite(ctx context.Context, call *McpCall, repoId sidecar.Id, path string, base uint64, content []byte, remove bool, message string, versioning string, result *McpResult) (*mcpEvsWriteOut, error) {
 	network, repo, err := mcpEvsRepoOf(call, repoId)
 	if err != nil {
 		return nil, err
+	}
+	if versioning == sidecar.EvsVersioningOff {
+		if err := mcpEvsVersioningOffAllowed(network, repoId); err != nil {
+			return nil, err
+		}
 	}
 	result.SetSource("evs:" + repoId.String())
 	agentLabel := ""
@@ -553,11 +721,13 @@ func mcpEvsWrite(ctx context.Context, call *McpCall, repoId sidecar.Id, path str
 		}
 	}
 	if shared && McpAgentConfigPath(call.Session.server.settings.Ingest, path) {
-		return mcpEvsWriteOutward(ctx, call, network, repoId, path, base, content, remove, message, agentLabel, agentId, tainted)
+		return mcpEvsWriteOutward(ctx, call, network, repoId, path, base, content, remove, message, versioning, agentLabel, agentId, tainted)
 	}
 	write := &sidecar.EvsPathWrite{Path: path, Remove: remove, IfBaseVersion: &base}
 	if !remove {
 		write.Content = bytes.NewReader(content)
+		// the plan takes the version's setting from this one on its own read of the path (§11.7's choose row)
+		write.Options = &sidecar.EvsWriteOptions{Versioning: versioning}
 	}
 	written, err := repo.WritePaths(ctx, &sidecar.EvsWritePathsArgs{Writes: []*sidecar.EvsPathWrite{write}, AgentId: agentId, Tainted: tainted})
 	if err == nil {
@@ -566,6 +736,10 @@ func mcpEvsWrite(ctx context.Context, call *McpCall, repoId sidecar.Id, path str
 	}
 	if !errors.Is(err, sidecar.ErrEvsGitRef) {
 		return nil, mcpEvsError(err)
+	}
+	if versioning == sidecar.EvsVersioningOff {
+		// git-mode refs refuse versioning off (§11.7's refused row)
+		return nil, errMcpEvsVersioning
 	}
 	// a git-mode ref: a commit through the local tier on the current tip, while the path is unchanged
 	committed, err := repo.WriteAtTip(ctx, &sidecar.EvsWriteAtTipArgs{
@@ -580,9 +754,11 @@ func mcpEvsWrite(ctx context.Context, call *McpCall, repoId sidecar.Id, path str
 }
 
 // An agent-config write or delete as an outward action (§16.5): its action, bound to the call's run and agent, and the
-// evs effect, sealing the same agent id, through §5.4's gate.
+// evs effect, sealing the same agent id, through §5.4's gate. A write that names its versioning carries it as field 37
+// at version 2, 0 on and 1 off, so an approver that does not know format 2 refuses it (§16.8); one that names none
+// keeps the path's own setting and stays at version 1.
 func mcpEvsWriteOutward(ctx context.Context, call *McpCall, network McpEvsNetwork, repoId sidecar.Id, path string, base uint64,
-	content []byte, remove bool, message string, agentLabel string, agentId *sidecar.Id, tainted bool) (*mcpEvsWriteOut, error) {
+	content []byte, remove bool, message string, versioning string, agentLabel string, agentId *sidecar.Id, tainted bool) (*mcpEvsWriteOut, error) {
 	authorizer, ok := call.Network.(mcpAuthorizer)
 	if !ok {
 		return nil, errMcpEvsOutward
@@ -594,6 +770,12 @@ func mcpEvsWriteOutward(ctx context.Context, call *McpCall, network McpEvsNetwor
 	} else {
 		sum := sha256.Sum256(content)
 		action.ContentSha256 = sum[:]
+		switch versioning {
+		case sidecar.EvsVersioningOn:
+			action.Version, action.Versioning = mcpCanonicalActionVersionVersioning, uint32(protocol.EvsVersioning_EVS_VERSIONING_KEPT)
+		case sidecar.EvsVersioningOff:
+			action.Version, action.Versioning = mcpCanonicalActionVersionVersioning, uint32(protocol.EvsVersioning_EVS_VERSIONING_VERSIONLESS)
+		}
 	}
 	action.Kind = uint32(kind)
 	stored, err := sidecar.NewCanonicalAction(action)
@@ -607,7 +789,7 @@ func mcpEvsWriteOutward(ctx context.Context, call *McpCall, network McpEvsNetwor
 	}
 	effect := &sidecar.EvsWriteEffect{
 		Path: path, BaseVersion: base, Remove: remove, Message: message, AgentLabel: agentLabel, AgentId: agentId,
-		Tainted: tainted,
+		Tainted: tainted, Versioning: versioning,
 	}
 	if !remove {
 		effect.Content = content
@@ -710,7 +892,8 @@ func addEvsTools(catalog *McpCatalog) {
 		}
 		result.Member()
 		result.SetSource("evs:" + repoId.String())
-		listing, err := repo.List(ctx, &sidecar.EvsReadArgs{Path: in.Path})
+		// each file's setting read too (§16.5's format-2 text), and the index's root only when asked
+		listing, err := repo.List(ctx, &sidecar.EvsReadArgs{Path: in.Path, Settings: true, IndexFiles: in.IncludeIndex})
 		if err != nil {
 			return nil, mcpEvsError(err)
 		}
@@ -723,7 +906,11 @@ func addEvsTools(catalog *McpCatalog) {
 			if !in.IncludeIndex && (full == mcpEvsIndexName || strings.HasPrefix(full, mcpEvsIndexName+"/")) {
 				continue
 			}
-			out.Entries = append(out.Entries, &mcpEvsEntryOut{Name: string(entry.Name), Kind: mcpEvsEntryKindName(entry.Kind)})
+			shown := &mcpEvsEntryOut{Name: string(entry.Name), Kind: mcpEvsEntryKindName(entry.Kind)}
+			if entry.Kind != protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY {
+				shown.Versioning = mcpEvsVersioningName(entry.Versioning)
+			}
+			out.Entries = append(out.Entries, shown)
 		}
 		return out, nil
 	})
@@ -768,16 +955,22 @@ func addEvsTools(catalog *McpCatalog) {
 			if state == "" {
 				state = "kept"
 			}
-			out.Versions = append(out.Versions, &mcpEvsVersionOut{
+			shown := &mcpEvsVersionOut{
 				Version:       version.Version,
 				CommitVersion: version.CommitVersion,
 				PushId:        version.PushId.String(),
 				SignerId:      version.SignerSidecarId.String(),
 				TimeMillis:    version.Time.UnixMilli(),
 				Removed:       version.Removed,
-				Versioning:    "on",
+				Versioning:    mcpEvsVersioningName(version.Versioning),
 				State:         state,
-			})
+			}
+			if version.DropId != (sidecar.Id{}) {
+				// a listed version names its drop, its signer and its window's end (§16.5)
+				shown.DropId, shown.DropSignerId = version.DropId.String(), version.DropSignerId.String()
+				shown.NotBeforeMillis = version.DropNotBefore.UnixMilli()
+			}
+			out.Versions = append(out.Versions, shown)
 		}
 		return out, nil
 	})
@@ -813,6 +1006,60 @@ func addEvsTools(catalog *McpCatalog) {
 		return mcpEvsRead(ctx, call, repo, ref, in.Hit, result)
 	})
 
+	AddTool(catalog, &McpToolSpec[mcpEvsDropPreviewIn]{
+		Name: "evs_drop_preview",
+		Tier: McpTierRead,
+		Description: "Asks evs for a dry run of dropping a path's old history: how many versions a drop would list and the bytes it would free. " +
+			"It never drops: only a person drops history, at a device. It takes a repo admin's grant and counts against the repo's daily dry runs.",
+		// a dry run reads the path's history, so the guard's read rows hold: never a secret repo, the config's
+		// contents, the team directory, a mailbox's vault/ or rcpt/ families or the index's files
+		Targets: func(call *McpCall, in *mcpEvsDropPreviewIn) ([]McpTarget, error) {
+			repoId, err := mcpEvsRepoId(in.Repo)
+			if err != nil {
+				return nil, err
+			}
+			path, err := mcpEvsPath(in.Path, false)
+			if err != nil {
+				return nil, err
+			}
+			return []McpTarget{mcpEvsTarget(call, repoId, McpRepoRead, path)}, nil
+		},
+		// an admin-scoped sidecar's alone (§16.5), as evs's preview route takes an admin's alone (§11.20)
+		Access: func(call *McpCall, in *mcpEvsDropPreviewIn) ([]McpAccess, error) {
+			repoId, err := mcpEvsRepoId(in.Repo)
+			if err != nil {
+				return nil, err
+			}
+			return mcpEvsAccess(repoId, protocol.AclAction_ACL_ACTION_ADMIN), nil
+		},
+	}, func(ctx context.Context, call *McpCall, in *mcpEvsDropPreviewIn, result *McpResult) (*mcpEvsDropPreviewOut, error) {
+		if in.Follow {
+			return nil, errMcpEvsDropFollow
+		}
+		repoId, _ := mcpEvsRepoId(in.Repo)
+		_, repo, err := mcpEvsRepoOf(call, repoId)
+		if err != nil {
+			return nil, err
+		}
+		previewer, ok := repo.(mcpEvsDropPreviewRepo)
+		if !ok {
+			return nil, errMcpEvsUnavailable
+		}
+		result.SetSource("evs:" + repoId.String())
+		preview, err := previewer.DropHistoryPreview(ctx, &sidecar.EvsDropPreviewArgs{Paths: []string{in.Path}})
+		if errors.Is(err, sidecar.ErrEvsDropListMismatch) {
+			// the history moved under the walk: evs resolved another count, and nothing else is reported
+			return &mcpEvsDropPreviewOut{}, nil
+		}
+		if err != nil {
+			return nil, mcpEvsDropPreviewError(err)
+		}
+		return &mcpEvsDropPreviewOut{
+			PreviewId: hex.EncodeToString(preview.PreviewId), Versions: preview.VersionCount, FreesBytes: preview.FreedBytes,
+			SharedBytes: preview.SharedBytes, InlineBytes: preview.InlineBytes, Young: preview.YoungBytes, ListMatch: true,
+		}, nil
+	})
+
 	writeTargets := func(call *McpCall, repoText string, pathText string, operation McpRepoOperation) ([]McpTarget, error) {
 		repoId, err := mcpEvsRepoId(repoText)
 		if err != nil {
@@ -843,14 +1090,12 @@ func addEvsTools(catalog *McpCatalog) {
 		Access: func(call *McpCall, in *mcpEvsWriteIn) ([]McpAccess, error) { return writeAccess(in.Repo) },
 	}, func(ctx context.Context, call *McpCall, in *mcpEvsWriteIn, result *McpResult) (*mcpEvsWriteOut, error) {
 		switch in.Versioning {
-		case "", "on":
-		case "off":
-			return nil, errMcpEvsVersioning
+		case sidecar.EvsVersioningKeepSetting, sidecar.EvsVersioningOn, sidecar.EvsVersioningOff:
 		default:
 			return nil, errMcpInvalidArguments
 		}
 		repoId, _ := mcpEvsRepoId(in.Repo)
-		return mcpEvsWrite(ctx, call, repoId, in.Path, in.BaseVersion, []byte(in.Content), false, in.Message, result)
+		return mcpEvsWrite(ctx, call, repoId, in.Path, in.BaseVersion, []byte(in.Content), false, in.Message, in.Versioning, result)
 	})
 
 	AddTool(catalog, &McpToolSpec[mcpEvsDeleteIn]{
@@ -864,7 +1109,7 @@ func addEvsTools(catalog *McpCatalog) {
 		Access: func(call *McpCall, in *mcpEvsDeleteIn) ([]McpAccess, error) { return writeAccess(in.Repo) },
 	}, func(ctx context.Context, call *McpCall, in *mcpEvsDeleteIn, result *McpResult) (*mcpEvsWriteOut, error) {
 		repoId, _ := mcpEvsRepoId(in.Repo)
-		return mcpEvsWrite(ctx, call, repoId, in.Path, in.BaseVersion, nil, true, "", result)
+		return mcpEvsWrite(ctx, call, repoId, in.Path, in.BaseVersion, nil, true, "", sidecar.EvsVersioningKeepSetting, result)
 	})
 }
 

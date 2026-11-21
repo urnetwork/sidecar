@@ -43,6 +43,9 @@ type fakeEvsFile struct {
 	version uint64
 	// its push's sealed provenance as a read that asks gives it, nil for a push that sealed none
 	provenance *sidecar.EvsPushProvenance
+	// format 2: its entry's versioning, and the pending drop a read names (MCP-M10-01)
+	versioning uint32
+	drop       *sidecar.EvsDropState
 }
 
 // A repo's calls on maps.
@@ -63,6 +66,25 @@ type fakeMcpEvsRepo struct {
 	keepAs *sidecar.Id
 	// EVS1-M3-01's receipt gate, which a read runs before anything decrypts: nil for a repo that needs no receipt
 	gate func(ctx context.Context) error
+	// format 2 (MCP-M10-01): a path's history as History answers it, in place of its one kept version; each listed
+	// child's setting; what each List asked; and the dry runs asked and what the next answers
+	histories   map[string]*sidecar.EvsHistory
+	versionings map[string]uint32
+	listArgs    []*sidecar.EvsReadArgs
+	previews    []*sidecar.EvsDropPreviewArgs
+	preview     func(args *sidecar.EvsDropPreviewArgs) (*sidecar.EvsDropPreview, error)
+}
+
+// A dry run as evs answers it: what the repo's preview answers, else nothing to drop.
+func (self *fakeMcpEvsRepo) DropHistoryPreview(ctx context.Context, args *sidecar.EvsDropPreviewArgs) (*sidecar.EvsDropPreview, error) {
+	self.stateLock.Lock()
+	self.previews = append(self.previews, args)
+	preview := self.preview
+	self.stateLock.Unlock()
+	if preview == nil {
+		return &sidecar.EvsDropPreview{PreviewId: make([]byte, 16)}, nil
+	}
+	return preview(args)
 }
 
 func newFakeMcpEvsRepo() *fakeMcpEvsRepo {
@@ -72,9 +94,14 @@ func newFakeMcpEvsRepo() *fakeMcpEvsRepo {
 func (self *fakeMcpEvsRepo) List(ctx context.Context, args *sidecar.EvsReadArgs) (*sidecar.EvsListing, error) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
+	self.listArgs = append(self.listArgs, args)
 	listing := &sidecar.EvsListing{Path: args.Path, HeadVersion: 9}
 	for _, name := range self.children[args.Path] {
-		listing.Entries = append(listing.Entries, &sidecar.EvsListEntry{Name: []byte(name), Kind: protocol.EvsEntryKind_EVS_ENTRY_FILE})
+		entry := &sidecar.EvsListEntry{Name: []byte(name), Kind: protocol.EvsEntryKind_EVS_ENTRY_FILE}
+		if args.Settings {
+			entry.Versioning = self.versionings[name]
+		}
+		listing.Entries = append(listing.Entries, entry)
 	}
 	return listing, nil
 }
@@ -82,6 +109,9 @@ func (self *fakeMcpEvsRepo) List(ctx context.Context, args *sidecar.EvsReadArgs)
 func (self *fakeMcpEvsRepo) History(ctx context.Context, args *sidecar.EvsReadArgs) (*sidecar.EvsHistory, error) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
+	if history, ok := self.histories[args.Path]; ok {
+		return history, nil
+	}
 	file, ok := self.files[args.Path]
 	if !ok {
 		return nil, sidecar.ErrEvsPathAbsent
@@ -116,7 +146,10 @@ func (self *fakeMcpEvsRepo) ReadHead(ctx context.Context, args *sidecar.EvsReadA
 	if _, err := out.Write(file.content); err != nil {
 		return nil, err
 	}
-	info := &sidecar.EvsFileInfo{RefId: file.refId, Path: args.Path, Version: file.version, CommitVersion: 9, SignerSidecarId: file.signer, Size: uint64(len(file.content))}
+	info := &sidecar.EvsFileInfo{
+		RefId: file.refId, Path: args.Path, Version: file.version, CommitVersion: 9, SignerSidecarId: file.signer, Size: uint64(len(file.content)),
+		Versioning: file.versioning, Drop: file.drop,
+	}
 	if args.Provenance && file.provenance != nil {
 		// only a read that asks is given the push's provenance (EvsReadArgs.Provenance)
 		provenance := *file.provenance
