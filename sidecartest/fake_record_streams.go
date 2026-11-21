@@ -110,8 +110,6 @@ type fakeRecordRepo struct {
 	deposits   map[sidecar.Id]*fakeRecordDepositRef
 	slots      map[sidecar.Id]map[uint32][]byte
 	erasures   []*sidecar.RecordStreamErasure
-	// the push ids of the completion ERASEs taken (QD-1132), which destroyed nothing
-	completionPushIds map[sidecar.Id]bool
 	// what each push id came to, for its retries
 	outcomes map[sidecar.Id]*fakeRecordOutcome
 	// a receipt-only depositor's deposits by UTC day
@@ -220,16 +218,15 @@ func (self *FakeRecordStreams) NewRepo(ctx context.Context) (sidecar.Id, error) 
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.repos[repoId] = &fakeRecordRepo{
-		scopes:            map[sidecar.Id]RecordStreamsScope{},
-		streams:           map[sidecar.Id]*fakeRecordStream{},
-		deposits:          map[sidecar.Id]*fakeRecordDepositRef{},
-		slots:             map[sidecar.Id]map[uint32][]byte{},
-		outcomes:          map[sidecar.Id]*fakeRecordOutcome{},
-		completionPushIds: map[sidecar.Id]bool{},
-		receiptCounts:     map[fakeRecordReceiptDay]int{},
-		sequence:          fakeRecordSequenceStart,
-		restartedAt:       fakeRecordSequenceStart,
-		refSequences:      map[FakeRecordRef]uint64{},
+		scopes:        map[sidecar.Id]RecordStreamsScope{},
+		streams:       map[sidecar.Id]*fakeRecordStream{},
+		deposits:      map[sidecar.Id]*fakeRecordDepositRef{},
+		slots:         map[sidecar.Id]map[uint32][]byte{},
+		outcomes:      map[sidecar.Id]*fakeRecordOutcome{},
+		receiptCounts: map[fakeRecordReceiptDay]int{},
+		sequence:      fakeRecordSequenceStart,
+		restartedAt:   fakeRecordSequenceStart,
+		refSequences:  map[FakeRecordRef]uint64{},
 	}
 	return repoId, nil
 }
@@ -857,9 +854,6 @@ func (self *fakeRecordStreamsClient) Erase(ctx context.Context, repoId sidecar.I
 		case heldCount == 0 && !(erase.Completion && repo.completionWithLock(erase)):
 			return nil, repo.refuseWithLock(erase.PushId, statement, protocol.EvsRefusalCode_EVS_REFUSAL_NOTHING_TO_ERASE)
 		}
-		if erase.Completion {
-			repo.completionPushIds[erase.PushId] = true
-		}
 		erasure := &sidecar.RecordStreamErasure{
 			Version:         uint64(len(repo.erasures) + 1),
 			PushId:          erase.PushId,
@@ -867,6 +861,7 @@ func (self *fakeRecordStreamsClient) Erase(ctx context.Context, repoId sidecar.I
 			EraserSidecarId: self.sidecarId,
 			ErasureId:       erase.ErasureId,
 			Complete:        erase.Complete,
+			Completion:      erase.Completion,
 			SealedNote:      bytes.Clone(erase.SealedNote),
 		}
 		for _, key := range erase.Keys {
@@ -888,7 +883,7 @@ func (self *fakeRecordRepo) completionWithLock(erase *sidecar.RecordStreamErase)
 	newestCompletion := map[sidecar.RecordSlotKey]bool{}
 	for _, erasure := range self.erasures {
 		for _, key := range erasure.Keys {
-			newestCompletion[*key] = self.completionPushIds[erasure.PushId]
+			newestCompletion[*key] = erasure.Completion
 		}
 	}
 	for _, key := range erase.Keys {
@@ -903,12 +898,12 @@ func (self *fakeRecordRepo) completionWithLock(erase *sidecar.RecordStreamErase)
 // but a completion only where an earlier ERASE of its erasure named each key it names. The lock held.
 func (self *fakeRecordRepo) completesWithLock(index int) bool {
 	erasure := self.erasures[index]
-	if !erasure.Complete || !self.completionPushIds[erasure.PushId] {
+	if !erasure.Complete || !erasure.Completion {
 		return erasure.Complete
 	}
 	named := map[sidecar.RecordSlotKey]bool{}
 	for _, earlier := range self.erasures[:index] {
-		if earlier.ErasureId != erasure.ErasureId {
+		if earlier.Completion || earlier.ErasureId != erasure.ErasureId {
 			continue
 		}
 		for _, key := range earlier.Keys {

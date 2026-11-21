@@ -306,17 +306,12 @@ func newIndexRecordErasures(erasures []*RecordStreamErasure, set *protocol.Index
 			listed[Id(erasure.GetErasureId())] = true
 		}
 	}
-	complete := map[Id]bool{}
-	for _, erasure := range erasures {
-		if erasure.Complete {
-			complete[erasure.ErasureId] = true
-		}
-	}
+	complete := recordEraseCompleteByNewest(erasures, (*RecordStreamErasure).completionState)
 	for _, erasure := range erasures {
 		if listed[erasure.ErasureId] || complete[erasure.ErasureId] {
 			self.cut[erasure.ErasureId] = true
 		}
-		for _, key := range erasure.Keys {
+		for _, key := range erasure.destroyedKeys() {
 			self.keyErasureIds[*key] = append(self.keyErasureIds[*key], erasure.ErasureId)
 		}
 		if body, ok := recordErasureNoteBody(erasure); ok {
@@ -1002,7 +997,7 @@ func indexRecordEraseMaskKeys(refKey []byte, logKind protocol.RepoKind, erasure 
 		}
 	}
 	keys := map[RecordSlotKey]bool{}
-	for _, key := range erasure.Keys {
+	for _, key := range erasure.destroyedKeys() {
 		keys[*key] = true
 	}
 	sources := []RecordKind{}

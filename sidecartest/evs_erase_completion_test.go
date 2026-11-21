@@ -95,7 +95,24 @@ func TestEvsCompletionEraseEndsAnErasureEndToEnd(t *testing.T) {
 		!completion.Completion || !completion.Complete || !stray.Completion || stray.Complete {
 		t.Fatalf("the ERASEs as read: %+v, %+v, %+v", first, completion, stray)
 	}
-	if state := stateOf(strayId); state == "done" {
-		t.Fatal("a completion naming another erasure's key ended its own")
+	if state := stateOf(strayId); state != "" {
+		t.Fatalf("a completion claiming another erasure's key created state %q", state)
+	}
+	reader := world.format2Device("r")
+	streams, err := sidecar.NewRecordEvsStreams(&sidecar.RecordEvsStreamsArgs{Client: reader.client, Store: reader.store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorded, err := streams.ReadErasures(ctx, world.repoId, 1)
+	if err != nil || len(recorded) != 3 || !recorded[0].Complete || !recorded[0].Completion ||
+		recorded[1].Completion || !recorded[2].Completion || recorded[2].Complete || len(recorded[2].Keys) != 1 {
+		t.Fatalf("record erasure audit: %+v, %v", recorded, err)
+	}
+	late := keysOf("notes/late.bin")
+	if version := erase(erasureId, late, false, false); version != 5 || stateOf(erasureId) != "rewriting" {
+		t.Fatal("a late key destruction did not reopen the erasure")
+	}
+	if version := erase(erasureId, late, true, true); version != 6 || stateOf(erasureId) != "done" {
+		t.Fatal("the late key's matching completion did not end its erasure")
 	}
 }

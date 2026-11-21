@@ -1308,7 +1308,7 @@ func (self *RecordEraser) eraseLateCopies(ctx context.Context, logId Id, sync bo
 	erasureNotes := map[Id][]byte{}
 	erasureBodies := map[Id]*protocol.ErasureBody{}
 	for _, erasure := range erasures {
-		for _, key := range erasure.Keys {
+		for _, key := range erasure.destroyedKeys() {
 			erasedKeys[*key] = true
 		}
 		body, ok := recordErasureNoteBody(erasure)
@@ -1442,9 +1442,7 @@ func (self *RecordEraser) ResumeOthers(ctx context.Context, logId Id) ([]*Record
 	for _, journal := range journals {
 		journaled[journal.ErasureId] = true
 	}
-	complete := recordEraseCompleteByNewest(erasures, func(erasure *RecordStreamErasure) (Id, bool) {
-		return erasure.ErasureId, erasure.Complete
-	})
+	complete := recordEraseCompleteByNewest(erasures, (*RecordStreamErasure).completionState)
 	// each record erasure's first ERASE: its eraser and its note
 	erasureIds := []Id{}
 	firstErasures := map[Id]*RecordStreamErasure{}
@@ -1771,9 +1769,7 @@ func NewRecordEvsEraseIndex(args *RecordEvsEraseIndexArgs) (RecordEraseIndexOpen
 				if err != nil {
 					return nil, err
 				}
-				return recordEraseCompleteByNewest(erasures, func(erasure *EvsErasure) (Id, bool) {
-					return erasure.ErasureId, erasure.Complete
-				}), nil
+				return recordEraseCompleteByNewest(erasures, (*EvsErasure).completionState), nil
 			},
 			refKey: refKey, padKey: padKey, events: args.Events, clock: client.clock, log: client.log,
 		})
@@ -1799,17 +1795,18 @@ func recordEraseIndexedKind(kind protocol.RepoKind) bool {
 }
 
 // The erasures whose newest ERASE says complete (the file header's complete row), from erases, every ERASE of the
-// erasure ref oldest first, each read by of as its erasure and its complete.
-func recordEraseCompleteByNewest[T any](erases []T, of func(erase T) (Id, bool)) map[Id]bool {
-	newest := map[Id]bool{}
-	for _, erase := range erases {
-		erasureId, complete := of(erase)
-		newest[erasureId] = complete
-	}
+// erasure ref oldest first. A stray completion has no effect on an earlier state.
+func recordEraseCompleteByNewest[T any](erases []T, state func(T) (id Id, complete bool, applies bool)) map[Id]bool {
 	complete := map[Id]bool{}
-	for erasureId, said := range newest {
-		if said {
-			complete[erasureId] = true
+	for _, erase := range erases {
+		id, done, applies := state(erase)
+		if !applies {
+			continue
+		}
+		if done {
+			complete[id] = true
+		} else {
+			delete(complete, id)
 		}
 	}
 	return complete
