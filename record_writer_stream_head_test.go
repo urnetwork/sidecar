@@ -121,7 +121,7 @@ func TestRecordEvsOwnStreamRecoveryVerifiesTheFreshRefAndWholeLog(t *testing.T) 
 		t.Fatal(err)
 	}
 	listing := &protocol.EvsRefsReply{Format: 1}
-	listed, fresh := 0, 0
+	listed, fresh, logReads := 0, 0, 0
 	partialLog := false
 	answer := func(message proto.Message) *http.Response {
 		encoded, err := proto.Marshal(message)
@@ -138,8 +138,11 @@ func TestRecordEvsOwnStreamRecoveryVerifiesTheFreshRefAndWholeLog(t *testing.T) 
 			case strings.HasSuffix(request.URL.Path, "/refs"):
 				listed++
 				return answer(listing), nil
-			case strings.HasSuffix(request.URL.Path, "/log") && partialLog:
-				return answer(&protocol.EvsLogReply{}), nil
+			case strings.HasSuffix(request.URL.Path, "/log"):
+				logReads++
+				if partialLog {
+					return answer(&protocol.EvsLogReply{}), nil
+				}
 			case strings.HasSuffix(request.URL.Path, "/read"):
 				data, err := io.ReadAll(request.Body)
 				if err != nil {
@@ -176,10 +179,14 @@ func TestRecordEvsOwnStreamRecoveryVerifiesTheFreshRefAndWholeLog(t *testing.T) 
 	if listed != 1 || fresh < 3 {
 		t.Fatalf("writer recovery used %d listings and %d fresh reads of its ref", listed-1, fresh)
 	}
+	beforeListing := logReads
 	listing.All = true
 	listing.Refs = []*protocol.EvsHeadSummary{{RefId: refId[:], OwnerSidecarId: writerId[:], RefKind: protocol.EvsRefKind_EVS_REF_OWNED, Version: 1}}
 	if heads, err := streams.Streams(ctx, repoId); err != nil || len(heads) != 1 || heads[0].Version != 2 {
 		t.Fatalf("stale discovery version reached the reader: %+v, %v", heads, err)
+	}
+	if beforeListing != logReads {
+		t.Fatal("discovery re-read an unchanged, fully authenticated stream log")
 	}
 }
 

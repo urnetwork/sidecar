@@ -553,7 +553,7 @@ func (self *RecordEvsStreams) Streams(ctx context.Context, repoId Id) ([]*Record
 			// another ref of the owner's, which no stream is
 			continue
 		}
-		verified, err := self.streamHead(ctx, repo, refId, ownerId)
+		verified, err := self.streamHead(ctx, repo, refId, ownerId, true)
 		if err != nil {
 			return nil, err
 		}
@@ -836,13 +836,27 @@ func (self *RecordEvsStreams) keepStreamReplay(key recordStreamKey, replay *reco
 
 // Verifies the canonical ref's complete signed history through its fresh head before pinning it. The walk holds
 // kind, mode and owner constant. Check the last statement for those values, including when the head was already pinned.
-func (self *RecordEvsStreams) streamHead(ctx context.Context, repo *EvsRepo, refId Id, writerSidecarId Id) (*EvsVerifiedHead, error) {
+func (self *RecordEvsStreams) streamHead(ctx context.Context, repo *EvsRepo, refId Id, writerSidecarId Id, headOnly bool) (*EvsVerifiedHead, error) {
 	head, err := repo.pinnedHead(ctx, refId)
 	if err != nil {
 		return nil, recordEvsRefusal(err)
 	}
 	if !bytes.Equal(head.Head.GetRefId(), refId[:]) {
 		return nil, fmt.Errorf("%w: a record stream head of another ref", ErrEvsReplyInvalid)
+	}
+	if headOnly {
+		// An unchanged ref was already fully authenticated by the last replay. Discovery needs only its
+		// version, so a fresh read at that same chain saves re-reading the entire log on each sync.
+		key := recordStreamKey{repoId: repo.repoId, writerSidecarId: writerSidecarId}
+		known := func() bool {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			replay := self.streamKeyReplays[key]
+			return replay != nil && replay.through == head.Version && replay.chain == head.Chain
+		}()
+		if known {
+			return head, nil
+		}
 	}
 	chain := EvsChainStart(repo.repoId, refId)
 	walked, err := self.client.verifier.Walk(ctx, repo.repoId, refId, 0, chain, head.Version)
@@ -895,7 +909,7 @@ func (self *RecordEvsStreams) readStream(ctx context.Context, repoId Id, writerS
 	if err != nil {
 		return nil, err
 	}
-	head, err := self.streamHead(ctx, repo, refId, writerSidecarId)
+	head, err := self.streamHead(ctx, repo, refId, writerSidecarId, false)
 	if err != nil {
 		return nil, err
 	}
