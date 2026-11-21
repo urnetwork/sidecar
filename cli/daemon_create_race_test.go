@@ -13,14 +13,11 @@ package main
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/urnetwork/sidecar"
-	"github.com/urnetwork/sidecar/evsservice"
-	"github.com/urnetwork/sidecar/gkmservice"
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/sidecartest"
 	"github.com/urnetwork/sidecar/sidecartest/enginenet"
@@ -37,36 +34,28 @@ func (self *testUrStatusWriter) WriteHeader(status int) {
 	self.ResponseWriter.WriteHeader(status)
 }
 
-// gkm with its production settings on the Net's host, behind the engines' gate, in place of the world's gkm: every
-// request the daemon makes of gkm reaches it. Each GET of a repo's forms it answers 404 sends that repo's id, as the
-// path names it, on the channel, which keeps the newest 64.
-func testUrProductionGkm(t *testing.T, net *sidecartest.Net, engines *enginenet.Engines) <-chan string {
+// gkm at its production settings in place of the world's (enginenet.ServeProductionGkm): every request the daemon makes
+// of gkm reaches it. Each GET of a repo's forms it answers 404 sends that repo's id, as the path names it, on the
+// channel, which keeps the newest 64.
+func testUrProductionGkm(t *testing.T, engines *enginenet.Engines) <-chan string {
 	t.Helper()
-	revocationSettings := sidecar.DefaultRevocationSettings()
-	revocationSettings.Clock = net.Clock()
-	revocations := sidecar.NewRevocationChecker(net.Host().Blobs, func(object []byte) ([]byte, error) {
-		return nil, errors.New("this world signs no revocation object")
-	}, revocationSettings)
-	state := gkmservice.NewAclGkmAuthState(engines.Gate(), revocations, net.Clock())
-	built, err := net.AddEngine("gkm-production", func(ctx context.Context, host *sidecar.ServiceHost) (sidecar.Engine, error) {
-		return gkmservice.NewGkmEngine(ctx, host, gkmservice.DefaultGkmServiceSettings(), &gkmservice.GkmEngineDeps{AuthState: state})
+	notFound := make(chan string, 64)
+	err := engines.ServeProductionGkm(func(engine http.Handler) http.Handler {
+		return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			capture := &testUrStatusWriter{ResponseWriter: writer, status: http.StatusOK}
+			engine.ServeHTTP(capture, request)
+			repoHex, forms := strings.CutSuffix(strings.TrimPrefix(request.URL.Path, "/gkm/repos/"), "/forms")
+			if request.Method == http.MethodGet && forms && capture.status == http.StatusNotFound {
+				select {
+				case notFound <- repoHex:
+				default:
+				}
+			}
+		})
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	engine := built.(*gkmservice.GkmEngine)
-	notFound := make(chan string, 64)
-	engines.Api().ServeService(gkmservice.GkmAudience, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		capture := &testUrStatusWriter{ResponseWriter: writer, status: http.StatusOK}
-		engine.Handler().ServeHTTP(capture, request)
-		repoHex, forms := strings.CutSuffix(strings.TrimPrefix(request.URL.Path, "/gkm/repos/"), "/forms")
-		if request.Method == http.MethodGet && forms && capture.status == http.StatusNotFound {
-			select {
-			case notFound <- repoHex:
-			default:
-			}
-		}
-	}))
 	return notFound
 }
 
@@ -96,7 +85,7 @@ func TestDaemonFirstNetworkStandsThoughItsOwnSyncRacesTheConfigRepoPlacement(t *
 	settings := enginenet.DefaultEnginesSettings()
 	settings.FollowBeforeExchange = true
 	engines := enginenet.NewEngines(t, net, settings)
-	notFound := testUrProductionGkm(t, net, engines)
+	notFound := testUrProductionGkm(t, engines)
 	networkId, ownerId := sidecar.NewId(), sidecar.NewId()
 	engines.OpenNetwork(networkId)
 	engines.Api().SetPersonalOwner(networkId, ownerId)
@@ -111,7 +100,7 @@ func TestDaemonFirstNetworkStandsThoughItsOwnSyncRacesTheConfigRepoPlacement(t *
 	}
 	start := net.Clock().Now()
 	// the bootstrap's PUT of the config repo, held until the key client's own sync has met the 404
-	site := evsservice.BarrierPlacePutBefore
+	site := enginenet.EvsPlacePutBeforeBarrier
 	if err := net.Barriers().Arm(site, "", 0); err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +147,7 @@ func TestDaemonCreateRepoRacedByItsOwnSyncOfTheNewRepoIsTaken(t *testing.T) {
 	t.Cleanup(net.Close)
 	engines := enginenet.NewEngines(t, net, nil)
 	running, gkm, result := bootstrapTestDaemonOwner(t, ctx, net, engines)
-	notFound := testUrProductionGkm(t, net, engines)
+	notFound := testUrProductionGkm(t, engines)
 	if startUrConfigFollower(running, sidecar.NewNoopLogger()) == nil {
 		t.Fatal("no follower started")
 	}
@@ -168,7 +157,7 @@ func TestDaemonCreateRepoRacedByItsOwnSyncOfTheNewRepoIsTaken(t *testing.T) {
 		t.Fatalf("the follower: %v (%+v)", err, running.ConfigFollower().Status())
 	}
 	configRepoHex := sidecar.EvsKeyId(result.ConfigRepoId)
-	site := evsservice.BarrierPlacePutBefore
+	site := enginenet.EvsPlacePutBeforeBarrier
 	if err := net.Barriers().Arm(site, "", 0); err != nil {
 		t.Fatal(err)
 	}
