@@ -145,7 +145,7 @@ func Fs87RemovalAndRetention(net *Net) *Schedule {
 				return err
 			}
 			world.publish()
-			if err := world.open(member); err != nil {
+			if err := world.open(ctx, member); err != nil {
 				return err
 			}
 			if err := member.client.Sync(ctx); err != nil {

@@ -121,7 +121,7 @@ func (self *authorWorld) member(ctx context.Context, name string, memberId sidec
 		return nil, err
 	}
 	self.publish()
-	if err := self.open(device); err != nil {
+	if err := self.open(ctx, device); err != nil {
 		return nil, err
 	}
 	return device, nil

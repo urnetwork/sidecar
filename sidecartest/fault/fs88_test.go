@@ -105,7 +105,7 @@ func Fs88TaintAndPrivacy(net *Net) *Schedule {
 			}
 			member.runs = map[sidecar.Id]bool{cleanRun: false, taintedRun: true, optedRun: false}
 			world.publish()
-			if err := world.open(member); err != nil {
+			if err := world.open(ctx, member); err != nil {
 				return err
 			}
 			if err := member.client.Sync(ctx); err != nil {

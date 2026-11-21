@@ -83,7 +83,7 @@ func Fs100DenialOnVersionlessNotices(net *Net) *Schedule {
 			world.directoryFixture.TimeMillis = world.recordFixture.TimeMillis
 			world.recordAuth.Append(world.recordFixture)
 			world.directoryAuth.Append(world.directoryFixture)
-			if err := world.open(late, false); err != nil {
+			if err := world.open(ctx, late, false); err != nil {
 				return err
 			}
 			if err := late.client.Sync(ctx); err != nil {

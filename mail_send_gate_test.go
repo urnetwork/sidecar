@@ -212,7 +212,7 @@ func TestMailSubmitSendClaimHoldsTheQueueWhileWritingTheCopy(t *testing.T) {
 	ctx := t.Context()
 	world, _, _ := newMailSendTestWorld(t)
 	draft := &MailSendArgs{From: testMailSendFrom, To: []string{"someone@outside.example"}, Subject: "Plans", Text: "Dinner at eight."}
-	plan, err := world.client.planSend(draft)
+	plan, err := world.client.planSend(ctx, draft)
 	if err != nil {
 		t.Fatal(err)
 	}
