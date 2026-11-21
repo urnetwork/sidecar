@@ -76,7 +76,7 @@ type EvsLfsAgentArgs struct {
 
 // One message of git-lfs's protocol, either way: the fields each event uses.
 type evsLfsAgentMessage struct {
-	Event               string            `json:"event"`
+	Event               string            `json:"event,omitempty"`
 	Operation           string            `json:"operation,omitempty"`
 	Remote              string            `json:"remote,omitempty"`
 	Concurrent          bool              `json:"concurrent,omitempty"`
