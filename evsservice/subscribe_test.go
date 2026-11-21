@@ -584,11 +584,12 @@ func TestHintsCoalesceToTheHighestSequence(t *testing.T) {
 	}
 
 	// the repo's first hint goes at once and opens the interval
-	notifier.send(repoId, hint(1), []sidecar.Id{firstClientId})
+	notifier.outcomes = host.Metrics.Counter("urnetwork_evs_head_hints_total", "Hint outcomes", "result")
+	notifier.send(repoId, hint(1), []sidecar.Id{firstClientId}, clock.Now())
 	requireHints(firstClientId, 1)
 	// sequence 3 arrives ahead of sequence 2
-	notifier.send(repoId, hint(3), []sidecar.Id{secondClientId})
-	notifier.send(repoId, hint(2), []sidecar.Id{thirdClientId})
+	notifier.send(repoId, hint(3), []sidecar.Id{secondClientId}, clock.Now())
+	notifier.send(repoId, hint(2), []sidecar.Id{thirdClientId}, clock.Now().Add(-settings.HeadHintTarget))
 	requireHints(secondClientId)
 	requireHints(thirdClientId)
 	flush(2)
@@ -597,12 +598,15 @@ func TestHintsCoalesceToTheHighestSequence(t *testing.T) {
 	requireHints(thirdClientId, 3)
 
 	// in sequence order the later hint still takes the waiting one's place
-	notifier.send(repoId, hint(4), []sidecar.Id{secondClientId})
-	notifier.send(repoId, hint(5), []sidecar.Id{thirdClientId})
+	notifier.send(repoId, hint(4), []sidecar.Id{secondClientId}, clock.Now())
+	notifier.send(repoId, hint(5), []sidecar.Id{thirdClientId}, clock.Now())
 	flush(3)
 	requireHints(firstClientId, 1)
 	requireHints(secondClientId, 3, 5)
 	requireHints(thirdClientId, 3, 5)
+	if onTime, late := host.Metrics.Value("urnetwork_evs_head_hints_total", "on_time"), host.Metrics.Value("urnetwork_evs_head_hints_total", "late"); onTime != 4 || late != 1 {
+		t.Fatalf("latency of the five acknowledged heads: on time %v, late %v", onTime, late)
+	}
 }
 
 // §22.4's CROSSSLOT lint over evsservice's Redis calls and scripts: each names keys under one hash tag, and the

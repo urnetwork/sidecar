@@ -401,6 +401,9 @@ func (self *GkmEngine) serveGenerationClaim(request *GkmRequest) {
 		self.hintGroupCommit(request, groupId, epoch, generation)
 	}
 	request.Created()
+	if !self.settings.DraftMls {
+		self.metrics.commitSeconds.Observe(self.clock.Now().Sub(request.started).Seconds())
+	}
 }
 
 // SHA-256 of b.

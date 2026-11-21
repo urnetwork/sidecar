@@ -150,7 +150,7 @@ func NewGkmEngine(ctx context.Context, host *sidecar.ServiceHost, settings *GkmS
 		owners:           newGkmGroupOwnerCache(settings),
 		rates:            newGkmRateCounters(settings.RateEntryCount),
 		kinds:            newGkmKeyPackageKinds(settings.KeyPackageKindCacheCount),
-		metrics:          newGkmMetrics(host.Metrics),
+		metrics:          newGkmMetrics(host.Metrics, settings),
 		newestEpochs:     newGkmNewestEpochs(settings.NewestEpochCacheCount),
 		groupInfos:       newGkmGroupInfoCache(clock, settings),
 		generations:      newGkmGenerationCache(settings.GenerationCacheCount),
@@ -942,30 +942,32 @@ func (self *loggerGkmServiceLog) Write(entry *GkmServiceLogEntry) {
 
 // §19.8's gkm series. Labels come from closed sets: a route's pattern, a status, an alarm's or a hint's kind.
 type gkmMetrics struct {
-	requests     sidecar.MetricsCounter
-	seconds      sidecar.MetricsHistogram
-	gateClosed   sidecar.MetricsCounter
-	rateLimited  sidecar.MetricsCounter
-	alarms       sidecar.MetricsCounter
-	hintsSent    sidecar.MetricsCounter
-	hintsFailed  sidecar.MetricsCounter
-	hintsDropped sidecar.MetricsCounter
-	budgetShed   sidecar.MetricsCounter
-	budgetP0     sidecar.MetricsCounter
+	commitSeconds sidecar.MetricsHistogram
+	requests      sidecar.MetricsCounter
+	seconds       sidecar.MetricsHistogram
+	gateClosed    sidecar.MetricsCounter
+	rateLimited   sidecar.MetricsCounter
+	alarms        sidecar.MetricsCounter
+	hintsSent     sidecar.MetricsCounter
+	hintsFailed   sidecar.MetricsCounter
+	hintsDropped  sidecar.MetricsCounter
+	budgetShed    sidecar.MetricsCounter
+	budgetP0      sidecar.MetricsCounter
 }
 
 // Declares the series.
-func newGkmMetrics(metrics sidecar.Metrics) *gkmMetrics {
+func newGkmMetrics(metrics sidecar.Metrics, settings *GkmServiceSettings) *gkmMetrics {
 	return &gkmMetrics{
-		requests:     metrics.Counter("urnetwork_gkm_requests_total", "gkm requests by route and status", "route", "status"),
-		seconds:      metrics.Histogram("urnetwork_gkm_request_seconds", "gkm request time by route", nil, "route"),
-		gateClosed:   metrics.Counter("urnetwork_gkm_gate_closed_total", "gkm requests the gate answered 503", "route"),
-		rateLimited:  metrics.Counter("urnetwork_gkm_rate_limited_total", "gkm requests a per-process rate answered 429", "route"),
-		alarms:       metrics.Counter("urnetwork_gkm_alarms_total", "gkm faults that alarm, by kind", "kind"),
-		hintsSent:    metrics.Counter("urnetwork_gkm_hints_sent_total", "gkm hints sent, by kind", "kind"),
-		hintsFailed:  metrics.Counter("urnetwork_gkm_hints_failed_total", "gkm hints whose send failed, by kind", "kind"),
-		hintsDropped: metrics.Counter("urnetwork_gkm_hints_dropped_total", "gkm hints dropped unsent, by kind", "kind"),
-		budgetShed:   metrics.Counter("urnetwork_gkm_budget_shed_total", "gkm P1 writes the write budget refused, by route", "route"),
-		budgetP0:     metrics.Counter("urnetwork_gkm_budget_p0_total", "gkm write groups issued as P0, by kind", "kind"),
+		commitSeconds: metrics.Histogram("urnetwork_gkm_commit_seconds", "Time from request start to an accepted group commit.", settings.CommitSecondsBuckets),
+		requests:      metrics.Counter("urnetwork_gkm_requests_total", "gkm requests by route and status", "route", "status"),
+		seconds:       metrics.Histogram("urnetwork_gkm_request_seconds", "gkm request time by route", nil, "route"),
+		gateClosed:    metrics.Counter("urnetwork_gkm_gate_closed_total", "gkm requests the gate answered 503", "route"),
+		rateLimited:   metrics.Counter("urnetwork_gkm_rate_limited_total", "gkm requests a per-process rate answered 429", "route"),
+		alarms:        metrics.Counter("urnetwork_gkm_alarms_total", "gkm faults that alarm, by kind", "kind"),
+		hintsSent:     metrics.Counter("urnetwork_gkm_hints_sent_total", "gkm hints sent, by kind", "kind"),
+		hintsFailed:   metrics.Counter("urnetwork_gkm_hints_failed_total", "gkm hints whose send failed, by kind", "kind"),
+		hintsDropped:  metrics.Counter("urnetwork_gkm_hints_dropped_total", "gkm hints dropped unsent, by kind", "kind"),
+		budgetShed:    metrics.Counter("urnetwork_gkm_budget_shed_total", "gkm P1 writes the write budget refused, by route", "route"),
+		budgetP0:      metrics.Counter("urnetwork_gkm_budget_p0_total", "gkm write groups issued as P0, by kind", "kind"),
 	}
 }

@@ -45,6 +45,9 @@ func TestGkmOneCommitPerEpoch(t *testing.T) {
 	if stored := world.storedEpoch(1); stored == nil || !bytes.Equal(stored.GetCommit(), first.Message()) {
 		t.Errorf("epoch/1 does not hold the winner")
 	}
+	if count := world.fixture.host.Metrics.ObservationCount("urnetwork_gkm_commit_seconds"); count != 1 {
+		t.Fatalf("%d measured commits after one successful epoch and one conflict", count)
+	}
 	// a commit with no epoch to commit onto
 	if recorder := world.postEpoch(world.adminToken, 3, gkmTestEpochRequest(first.Message(), 1, false)); recorder.Code != http.StatusBadRequest {
 		t.Errorf("a commit sent in epoch 0 posted as epoch 3: %d", recorder.Code)
