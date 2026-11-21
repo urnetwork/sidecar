@@ -2,14 +2,79 @@ package gkmschedule
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"slices"
 	"testing"
+	"time"
+
+	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/gkmservice"
 	"github.com/urnetwork/sidecar/protocol"
 )
+
+// A newly granted reader asks for its first key when the grant reaches its follower. Relay the two real
+// service notices to the stock clients and wait on the keychain, without an application read or timer tick.
+func TestReaderGrantDeliversExistingGenerationThroughHints(t *testing.T) {
+	world := NewFsKeysWorld(t, protocol.RepoKind_REPO_KIND_GENERAL)
+	ctx, cancel := context.WithTimeout(world.Ctx, 15*time.Second)
+	defer cancel()
+	world.Ctx = ctx
+	world.Reconfigure(func(settings *gkmservice.GkmServiceSettings) { settings.DraftMls = false })
+	writer := world.AddMember("writer", false)
+	reader := world.AddMember("reader", true)
+	world.Grant(true, writer)
+	world.Creator(writer)
+	world.Advance()
+	world.Publish()
+	first := world.Create(writer)
+
+	reader.Offline = true
+	world.Grant(false, reader)
+	grant := world.Advance()
+	reader.PublishReaderKey()
+	attach := func(device *FsKeysDevice) *sidecar.GkmHints {
+		t.Helper()
+		hints, err := sidecar.NewGkmHints(ctx, &sidecar.GkmHintsArgs{Clock: world.Clock})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(hints.Close)
+		device.Client.AttachHints(ctx, hints)
+		return hints
+	}
+	writerHints, readerHints := attach(writer), attach(reader)
+	reader.Take(grant)
+	relay := func(hints *sidecar.GkmHints, notice *FsKeysHint) {
+		t.Helper()
+		body, err := proto.Marshal(notice.Hint)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hints.Receive(sidecar.PushNotice{Topic: notice.Topic, Version: notice.Version, Kind: uint32(protocol.MessageType_GKM_HINT), Hint: body})
+	}
+	relay(writerHints, world.AwaitHint(writer, func(hint *FsKeysHint) bool {
+		return hint.Hint.GetKind() == protocol.GkmHintKind_GKM_HINT_WRAP_PENDING && bytes.Equal(hint.Hint.GetGroupId(), world.GroupId.Bytes()) && string(hint.Hint.GetRecipient()) == fsKeysRecipient(reader.SidecarId())
+	}))
+	relay(readerHints, world.AwaitHint(reader, world.pendingHint))
+	for {
+		held, changed := reader.Client.RepoKeyHeld(world.RepoId)
+		if held {
+			break
+		}
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			t.Fatal("the delivered key never reached the reader")
+		}
+	}
+	key, err := reader.Client.CurrentRepoKey(ctx, world.RepoId)
+	if err != nil || !bytes.Equal(key.Commitment(), first.Commitment()) {
+		t.Fatalf("reading the signer's generation after the wake: %v", err)
+	}
+}
 
 // The production routes and KeyDelivery clients form, join and remove a reader, replace the code, and recover the
 // winning generation on a fresh device after both the writer and the service restart.
