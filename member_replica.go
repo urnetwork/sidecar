@@ -210,6 +210,7 @@ func (self *MemberReplica) open() error {
 	if err != nil {
 		return err
 	}
+	running.BindEvsFormat2(self.evs)
 	self.evs.EnablePrefixRules(running.EvsPrefixRulesArgs())
 	// A signed-in member without an invitation may have no stored anchor. The follower records the
 	// first self-verified genesis of this network for its admitter's safety-number comparison.

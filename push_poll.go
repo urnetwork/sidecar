@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -81,40 +82,167 @@ type SidecarSyncCore struct {
 	Gates []string
 	// Whether api holds this sidecar revoked: a candidate, checked against the config.
 	Revoked bool
+	// Local to the authenticated request. Neither value is supplied in the core reply or persisted.
+	bearerEpoch   uint64
+	bearerExpires time.Time
 }
 
 // What core's JSON carries: the version as a decimal string, since it passes what a JSON number holds.
 type sidecarSyncCoreReply struct {
 	Version          string   `json:"version"`
-	MinSecureVersion uint32   `json:"min_secure_version"`
+	MinSecureVersion *uint32  `json:"min_secure_version"`
 	Gates            []string `json:"gates"`
-	Revoked          bool     `json:"revoked"`
+	Revoked          *bool    `json:"revoked"`
 }
 
 // GET /sidecar/sync/core.
 func (self *SidecarApi) SyncCore(ctx context.Context) (*SidecarSyncCore, error) {
+	return self.syncCore(ctx, nil)
+}
+
+// Sends the same bearer whose client and network match this generation, including when a token changes mid-request.
+func (self *SidecarApi) syncCore(ctx context.Context, identity *SidecarIdentity) (*SidecarSyncCore, error) {
 	route := "GET /sidecar/sync/core"
 	reply := &sidecarSyncCoreReply{}
-	err := self.sendJson(ctx, &sidecarApiRequest{
-		route:     route,
-		operation: "sync_core",
-		method:    "GET",
-		url:       self.settings.ApiUrl + "/sidecar/sync/core",
-		bearer:    true,
-	}, nil, reply)
+	token, epoch := self.currentBearer()
+	if token == "" {
+		return nil, fmt.Errorf("sidecar api %s: %w", route, ErrSidecarApiNoToken)
+	}
+	request := &sidecarApiRequest{
+		route:          route,
+		operation:      "sync_core",
+		method:         "GET",
+		url:            self.settings.ApiUrl + "/sidecar/sync/core",
+		bearerOverride: token,
+	}
+	if identity != nil {
+		networkId, clientId, ok := sidecarJwtClient(token)
+		if !ok || networkId != identity.NetworkId || clientId != identity.ClientId {
+			return nil, fmt.Errorf("sidecar api %s: %w", route, ErrSidecarApiNoToken)
+		}
+	}
+	err := self.sendJson(ctx, request, nil, reply)
 	if err != nil {
 		return nil, err
 	}
 	version, err := strconv.ParseUint(reply.Version, 10, 64)
-	if err != nil || version == 0 || strconv.FormatUint(version, 10) != reply.Version {
+	if err != nil || version == 0 || strconv.FormatUint(version, 10) != reply.Version || reply.Gates == nil ||
+		reply.MinSecureVersion == nil || reply.Revoked == nil {
 		return nil, fmt.Errorf("sidecar api %s: %w", route, ErrSidecarSyncReply)
 	}
 	return &SidecarSyncCore{
 		Version:          version,
-		MinSecureVersion: reply.MinSecureVersion,
+		MinSecureVersion: *reply.MinSecureVersion,
 		Gates:            reply.Gates,
-		Revoked:          reply.Revoked,
+		Revoked:          *reply.Revoked,
+		bearerEpoch:      epoch,
+		bearerExpires:    sidecarJwtExpiration(token),
 	}, nil
+}
+
+// The core topic can fall on a reset. A local revision orders requests even across repeated remote versions.
+type sidecarCoreRequest struct {
+	online   bool
+	revision uint64
+	version  uint64
+}
+
+// A core answer lives only in the generation that authenticated it, through the next notice or hourly resync.
+type sidecarCoreAnswer struct {
+	revision uint64
+	fetched  time.Time
+	core     *SidecarSyncCore
+}
+
+type sidecarCoreSync struct {
+	requests *MonitorValue[sidecarCoreRequest]
+	answer   atomic.Pointer[sidecarCoreAnswer]
+	// Created under Sidecar.stateLock, before the generation can be removed and joined.
+	done chan struct{}
+}
+
+// A notice invalidates the previous gates immediately. Its body can separately suggest checking signed revocation.
+func (self *sidecarGeneration) receiveCoreNotice(notice PushNotice) {
+	self.refreshCore(notice.Version)
+	self.sidecar.receiveCoreHint(self.generation, notice.Hint)
+}
+
+func (self *sidecarGeneration) refreshCore(version uint64) {
+	self.core.requests.Update(func(request sidecarCoreRequest) sidecarCoreRequest {
+		request.revision++
+		request.version = version
+		return request
+	})
+}
+
+// A single reader serves all member clients in the generation. Generation removal excludes further starts.
+func (self *sidecarGeneration) startCoreSyncWithLock() {
+	if self.core.done == nil {
+		self.core.done = make(chan struct{})
+		go self.runCoreSync()
+	}
+}
+
+// Reconnects, resets and hourly versions pages request the latest gates. A failed fetch leaves them unknown and
+// retries on the push client's backoff. A late answer cannot undo an intervening notice or disconnect.
+func (self *sidecarGeneration) runCoreSync() {
+	defer close(self.core.done)
+	settings := DefaultPushClientSettings()
+	clock := self.sidecar.clock
+	interval := self.sidecar.settings.ProtocolSettings.SyncRefetchInterval
+	var backoff time.Duration
+	for self.ctx.Err() == nil {
+		request, changed := self.core.requests.Get()
+		var retry <-chan time.Time
+		if request.online {
+			start := clock.Now()
+			ctx, cancel := context.WithCancel(self.ctx)
+			stop := clock.AfterFunc(self.sidecar.settings.ProtocolSettings.DefaultCallTimeout, cancel)
+			core, err := self.sidecar.sidecarApi.syncCore(ctx, self.identity)
+			stop()
+			valid := err == nil && ctx.Err() == nil && core.Version >= request.version
+			cancel()
+			if valid {
+				self.core.answer.Store(&sidecarCoreAnswer{revision: request.revision, fetched: start, core: core})
+				backoff = 0
+				testHookBarrier("sidecar.core_sync.accepted", self.networkId.String())
+				retry = clock.After(max(0, interval-clock.Now().Sub(start)))
+			} else {
+				self.core.answer.Store(nil)
+				if backoff == 0 {
+					backoff = settings.RetryMinInterval
+				} else {
+					backoff = min(2*backoff, settings.RetryMaxInterval)
+				}
+				retry = clock.After(backoff)
+			}
+		}
+		select {
+		case <-self.ctx.Done():
+			return
+		case <-changed:
+		case <-retry:
+		}
+	}
+}
+
+// A superseded answer stays inaccessible even while its replacement is still in flight.
+func (self *sidecarGeneration) currentCore() *SidecarSyncCore {
+	answer := self.core.answer.Load()
+	request := self.core.requests.Value()
+	if answer == nil || self.ctx.Err() != nil || !request.online || answer.revision != request.revision {
+		return nil
+	}
+	age := self.sidecar.clock.Now().Sub(answer.fetched)
+	if age < 0 || age >= self.sidecar.settings.ProtocolSettings.SyncRefetchInterval {
+		return nil
+	}
+	api := self.sidecar.sidecarApi
+	_, epoch := api.currentBearer()
+	if epoch != answer.core.bearerEpoch || (!answer.core.bearerExpires.IsZero() && !api.apiNow().Before(answer.core.bearerExpires)) {
+		return nil
+	}
+	return answer.core
 }
 
 // GET /sidecar/sync/poll, one hold: SidecarApi.SyncPoll, or a test's.

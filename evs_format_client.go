@@ -16,6 +16,7 @@
 package sidecar
 
 import (
+	"bytes"
 	"slices"
 )
 
@@ -58,4 +59,52 @@ func (self *EvsClient) Format2Admitted() bool {
 	}
 	admitted, known := self.Format2Gate()
 	return known && admitted
+}
+
+// Installs the verifying reader and binds rollout to this enrolled host's current, signed membership. Reading a
+// migrated repo remains possible after a rollout closes. The server independently enforces each format-2 write.
+func (self *Sidecar) BindEvsFormat2(client *EvsClient) {
+	client.EnableFormat2Reader()
+	client.stateLock.Lock()
+	client.format2Source = func() (bool, bool) {
+		return self.evsFormat2Gate(client)
+	}
+	client.stateLock.Unlock()
+
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.followCoreGates = true
+	if self.generation != nil {
+		self.generation.startCoreSyncWithLock()
+	}
+}
+
+// Membership comes from the standing config follower. Core describes only the rollout for its authenticated bearer.
+func (self *Sidecar) evsFormat2Gate(client *EvsClient) (bool, bool) {
+	generation := self.runningGeneration()
+	if generation == nil || generation.ctx.Err() != nil || self.instance.stateError() != nil ||
+		generation.networkId != client.NetworkId() || self.lifecycleState() != SidecarStateOnline {
+		return false, false
+	}
+	identity := client.args.Identity()
+	if identity == nil || identity.NetworkId != generation.networkId || identity.ClientId != generation.identity.ClientId ||
+		identity.SidecarId != generation.identity.SidecarId || identity.Generation != generation.generation ||
+		!bytes.Equal(identity.IdentityPublicKey, generation.identity.IdentityPublicKey) {
+		return false, false
+	}
+	follower := self.ConfigFollower()
+	if follower == nil {
+		return false, false
+	}
+	config := follower.Client()
+	if config == nil {
+		return false, false
+	}
+	state := config.State()
+	if state == nil || state.NetworkId() != identity.NetworkId || !bytes.Equal(state.IdentityKey(identity.SidecarId), identity.IdentityPublicKey) ||
+		!self.admittedBy(config.Authority()) {
+		return false, false
+	}
+	core := generation.currentCore()
+	return EvsFormat2AdmittedBy(core), core != nil
 }
