@@ -240,7 +240,7 @@ func (self *MailRepos) AddGroupMember(ctx context.Context, config *MailConfig, l
 		return err
 	}
 	repo := state.Repo(groupRepoId)
-	if !AclRepoIsInbox(repo) || !mailRepoStands(repo) {
+	if repo.GetInbox() != protocol.RepoInbox_REPO_INBOX_GROUP || !mailRepoStands(repo) {
 		return fmt.Errorf("%w: the group's repo", ErrMailReposAbsent)
 	}
 	// the record: the bound, and whether this device may change it, are MailConfig's to refuse, before any grant

@@ -493,6 +493,23 @@ func TestMailReposGroupAddWritesTheRecordAndTheGrantTogether(t *testing.T) {
 		t.Fatal("a refused group creation made something")
 	}
 
+	adminId := NewId()
+	if err := world.file(adminDevice, bridge.SignedType_SIGNED_REPO_CREATE, &protocol.RepoCreate{
+		RepoId: adminId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL, Inbox: protocol.RepoInbox_REPO_INBOX_ADMIN,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	authority.own(adminId, adminDevice)
+	if _, err := admin.config.CreateAddress(ctx, &MailCreateAddressArgs{LocalPart: "office", Kind: protocol.MailAddressKind_MAIL_ADDRESS_GROUP, MailboxRepoId: adminId}); err != nil {
+		t.Fatal(err)
+	}
+	if err := adminRepos.AddGroupMember(ctx, admin.config, "office", NewId()); !errors.Is(err, ErrMailReposAbsent) {
+		t.Fatalf("group-add for the signed admin inbox: %v", err)
+	}
+	if members, _, err := admin.config.GroupMembers(ctx, "office"); err != nil || len(members) != 0 || len(world.state().Repo(adminId).GetGrants()) != 0 {
+		t.Fatalf("admin inbox group members: %v, %v", members, err)
+	}
+
 	if _, err := admin.config.CreateAddress(ctx, &MailCreateAddressArgs{LocalPart: "team", Kind: protocol.MailAddressKind_MAIL_ADDRESS_GROUP, MailboxRepoId: groupId}); err != nil {
 		t.Fatal(err)
 	}
