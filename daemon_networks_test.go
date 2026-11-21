@@ -6,7 +6,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"slices"
 	"testing"
+	"time"
 )
 
 // Several networks per daemon (CORE-M6-01, R-CORE-15, D-CORE-14): one instance, one U, and per network its own
@@ -106,20 +108,49 @@ func TestOneUnlockOpensAll(t *testing.T) {
 // A network whose keychain fails is Locked alone, with its alarm, and the other runs on.
 func TestOneFailedNetworkLeavesOthers(t *testing.T) {
 	networks := newTestTwoNetworks(t)
-	failing := networks.worlds[1].sidecar.currentIdentity()
+	healthy, failing := networks.worlds[0], networks.worlds[1]
+	healthyIdentity := healthy.sidecar.currentIdentity()
+	failingIdentity := failing.sidecar.currentIdentity()
 	networks.instance.Lock()
-	putBackendFile(t, networks.backend, keychainWrapPath(failing.NetworkId), []byte("not a keychain wrap"))
+	for _, world := range networks.worlds {
+		awaitSidecarStatus(t, world.sidecar, atStatus(SidecarStateLocked, 1))
+	}
+
+	wrapPath := keychainWrapPath(failingIdentity.NetworkId)
+	damaged := []byte("not a keychain wrap")
+	putBackendFile(t, networks.backend, wrapPath, damaged)
+	files := networkFiles(t, networks.backend, failingIdentity.NetworkId)
+	refused := NewMonitorValue(false)
+	_, alarm := refused.Get()
+	t.Cleanup(failing.sidecar.AddEventCallback(func(event SidecarEvent) {
+		if event.Kind == SidecarEventRefused {
+			refused.Set(true)
+		}
+	}))
 	if err := networks.instance.Unlock(testPass); err != nil {
 		t.Fatal(err)
 	}
-	networks.worlds[0].sidecar.wake()
-	networks.worlds[1].sidecar.wake()
-	awaitSidecarStatus(t, networks.worlds[0].sidecar, func(status SidecarStatus) bool {
-		return status.State == SidecarStateOffline || status.State == SidecarStateOnline
-	})
-	awaitSidecarStatus(t, networks.worlds[1].sidecar, func(status SidecarStatus) bool { return status.State == SidecarStateLocked })
-	if networks.worlds[0].sidecar.currentIdentity() == nil {
-		t.Error("the healthy network lost its identity")
+	select {
+	case <-alarm:
+	case <-time.After(sidecarTestTimeout):
+		t.Fatalf("no alarm for the damaged keychain, status %+v", failing.sidecar.Status())
+	}
+	if status := failing.sidecar.Status(); status.State != SidecarStateLocked || status.Generation != 1 {
+		t.Errorf("damaged network status %+v", status)
+	}
+	if identity := failing.sidecar.currentIdentity(); identity == nil || identity.SidecarId != failingIdentity.SidecarId {
+		t.Error("the failed network lost its identity")
+	}
+	if opened := len(failing.platform.openedClients()); opened != 1 {
+		t.Errorf("the failed network opened %d clients, want only the original", opened)
+	}
+	if !slices.Equal(files, networkFiles(t, networks.backend, failingIdentity.NetworkId)) ||
+		!bytes.Equal(readBackend(t, networks.backend, wrapPath), damaged) {
+		t.Error("the failed network changed its files")
+	}
+	awaitSidecarStatus(t, healthy.sidecar, atStatus(SidecarStateOnline, 1))
+	if identity := healthy.sidecar.currentIdentity(); identity == nil || identity.SidecarId != healthyIdentity.SidecarId || identity.ClientId != healthyIdentity.ClientId {
+		t.Error("the healthy network lost its enrolled identity or client")
 	}
 }
 
