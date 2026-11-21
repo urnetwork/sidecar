@@ -22,9 +22,9 @@
 //	          the erased list and its sealed metadata, whose erasure note it opens; an ERASE that changes a path, or
 //	          whose note is not one, refuses the read, as does a completion ERASE (format 2's flag COMPLETION beside
 //	          ERASE alone; QD-1137) whose note says nothing complete. A completion destroys nothing, and completes its
-//	          erasure only where an earlier ERASE of the erasure named each key it names; one that does not reads as
+//	          erasure only where an earlier ordinary ERASE of the erasure named each key it names; one that does not reads as
 //	          completing nothing
-//	reconcile Erasures gives each erasure the committed ERASEs' notes name, done once one of them completes it, else
+//	reconcile Erasures reports done while the newest applicable ERASE completes its erasure, else
 //	          rewriting, and stalled 25 h after its last ERASE with none since; which device resumes it, its eraser's
 //	          at its start or another of its member's after 25 h, is the caller's, from these states and from each
 //	          content ref's CLOSUREs, whose notes name their erasure (EvsRepo.ReadClosures)
