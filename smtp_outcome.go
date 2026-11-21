@@ -126,6 +126,21 @@ func (self *smtpOutcomeBoard) write(ctx context.Context) error {
 	return self.writeOutcomes(ctx, false)
 }
 
+// A completed domain has a delivery or retry decision to keep even when its caller stops. If
+// cancellation interrupts the mailbox write, retry the same idempotent update within the outcome budget.
+func (self *smtpOutcomeBoard) writeResult(ctx context.Context) error {
+	if ctx.Err() == nil {
+		if err := self.write(ctx); err == nil || ctx.Err() == nil {
+			return err
+		}
+	}
+	writeCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	defer cancel()
+	stop := self.sender.clock.AfterFunc(self.sender.settings.OutcomeSendTimeout, cancel)
+	defer stop()
+	return self.write(writeCtx)
+}
+
 // Rewrites or/ every OutboxProgressInterval until stop, which returns once no rewrite runs.
 func (self *smtpOutcomeBoard) progress(ctx context.Context) (stop func()) {
 	progressCtx, cancel := context.WithCancel(ctx)

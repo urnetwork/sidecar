@@ -139,7 +139,7 @@ type SmtpProofJob struct {
 type SmtpProofResult struct {
 	// 1 BDAT, 2 DATA, 0 if the send ended before the mode was known.
 	Mode uint32
-	// The MX took the message.
+	// The MX acknowledged the whole message. This remains true if SendSmtp reports a subsequent QUIT error.
 	Accepted bool
 	// The reply that ended the send when it did not take the message, such as "550".
 	RefusedCode string

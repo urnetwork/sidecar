@@ -1034,6 +1034,27 @@ func TestSendStopsOnABadPreambleBeforeAnyEffect(t *testing.T) {
 	}
 }
 
+// The reply is already read when the peer closes before QUIT. An incomplete reply gives no acceptance.
+func TestProverKeepsFinalMessageReplyAcrossDisconnect(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	client, peer := net.Pipe()
+	defer client.Close()
+	peer.Close()
+	for _, mode := range []uint32{partModeData, partModeBdat} {
+		run := &proverRun{client: &tlsClient{conn: client}, job: &sidecar.SmtpProofJob{}, stream: []byte("250 2.0.0 accepted\r\n")}
+		quit := &tlsSealedRecord{raw: []byte("quit record")}
+		result, err := run.finish(ctx, mode, quit)
+		if result == nil || !result.Accepted || result.Mode != mode || !errors.Is(err, io.ErrClosedPipe) {
+			t.Fatalf("mode %d, acknowledged message with a closed stream: %+v, %v", mode, result, err)
+		}
+		run.stream = []byte("250 2.0.0 accepted")
+		if result, err := run.finish(ctx, mode, quit); result != nil || !errors.Is(err, context.Canceled) {
+			t.Fatalf("mode %d, incomplete acknowledgement: %+v, %v", mode, result, err)
+		}
+	}
+}
+
 func TestProverBoundsWhatAnMxCanMakeItHold(t *testing.T) {
 	// a reply that never ends would otherwise grow without limit, and a part could never cover it
 	settings := DefaultProverSettings()

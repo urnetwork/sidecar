@@ -671,11 +671,12 @@ func (self *proverRun) finish(ctx context.Context, mode uint32, quitRecord *tlsS
 	if replies[0].code[0] != '2' {
 		return &sidecar.SmtpProofResult{Mode: mode, RefusedCode: replies[0].code}, nil
 	}
-	// QUIT is no message record, so a reply past the part's count never holds it (E3 step 5)
+	// The final reply commits delivery. A subsequent QUIT failure only ends the session.
+	accepted := &sidecar.SmtpProofResult{Mode: mode, Accepted: true}
 	if err := self.client.writeSealed(quitRecord); err != nil {
-		return nil, err
+		return accepted, fmt.Errorf("smtpproof: QUIT after message acceptance: %w", err)
 	}
-	return &sidecar.SmtpProofResult{Mode: mode, Accepted: true}, nil
+	return accepted, nil
 }
 
 // Reads server records until the stream holds count whole replies, which it consumes and returns.
