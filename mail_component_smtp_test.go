@@ -35,8 +35,17 @@ func TestMailComponentSmtpUsesLocalEnableAndTheMembersMailbox(t *testing.T) {
 	client.setNetworkRow(testMailIngestNetwork())
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
+	dispatcher := newTestSubprotocol(t, nil).subprotocol
+	versions := newTestPushHeldVersions()
+	push, err := newPushClient(ctx, &PushClientEnv{Subprotocol: dispatcher, Store: world.store}, versions.versions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer push.Close()
+	versions.awaitStart(t, "the generation's first push resync")
+	versions.answer(t)
 	run := &mailComponentRun{ctx: ctx, cancel: cancel, env: &SidecarEnv{
-		Ctx: ctx, SidecarApi: &SidecarApi{}, Subprotocol: newTestSubprotocol(t, nil).subprotocol,
+		Ctx: ctx, SidecarApi: &SidecarApi{}, Subprotocol: dispatcher,
 	}}
 	client.componentRun = run
 	defer client.replaceSmtp(run, nil)
@@ -54,17 +63,13 @@ func TestMailComponentSmtpUsesLocalEnableAndTheMembersMailbox(t *testing.T) {
 	client.passSmtp(run, binding)
 	smtp := run.smtp
 	if smtp == nil || smtp.mailboxId != world.mailboxId || smtp.memberId != world.member {
-		t.Fatal("the enabled prover host did not attach the member's mailbox")
+		t.Fatalf("the enabled prover host did not attach the member's mailbox: %v", world.log.snapshot())
 	}
 	binding, _, err = client.bound()
 	if err != nil || binding.Sender != smtp.sender || binding.BurnerSelectors != smtp.dkim || smtp.dkim.domainAnswers() == nil || smtp.dkim.domainAnswers().Root != testMailIngestRoot {
 		t.Fatal("the active sender or its DKIM domain answers are missing")
 	}
-	select {
-	case <-prover.entered:
-	case <-ctx.Done():
-		t.Fatal(ctx.Err())
-	}
+	testAwait(t, prover.entered, "the member's prover host")
 	client.passSmtp(run, binding)
 	if run.smtp != smtp {
 		t.Fatal("another pass replaced an active sender")
