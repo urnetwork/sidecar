@@ -216,3 +216,35 @@ ur admin settings [--mail-strict=on|off] [--record-cost=on|off] [--record-requir
   `ur install-harness` reads `record_required` from its running daemon and writes the fail-closed form while it is
   set; while it is set, the daemon reads a fail-open install as changed, so its runs taint until the install runs
   again.
+
+## ur admin scopes (§7.9, §12.5, §13.8)
+
+A Team scope's first binding, signed by an Owner's or Admin's device into ServiceSettings.team_scopes (QD-1163). §7.9
+names no command; this one follows `ur admin settings`.
+
+```text
+ur admin scopes [list] [--network=<name>]
+                                        the Team scopes the newest verified base holds
+ur admin scopes add <label> (--member=<member_id> | --tag=<tag>) [--network=<name>]
+                                        bind a label to a member or a tag, after a yes on /dev/tty
+```
+
+- A scope is the network's only once a verified base holds its binding: a head that declares it binds nothing until
+  then, and a hostname, a grant naming a scope host or a directory answer never does.
+- A label's first binding never changes, its retirement's included, and reassignment waits for its consent rule
+  (DESIGN-DEFER.md): `add` refuses a label bound already, to the same owner as well, and an owner holding a label.
+- The daemon refuses before anything is signed: a device that is no Owner's or Admin's, any call a person did not
+  confirm, a caller with a harness process among its ancestors, a label §12.5 refuses a scope or §12.7 refuses an
+  owner, a brand-confusable one, a client name, a host the policy publishes, a member the network does not hold and a
+  tag the policy declares no owners of.
+
+## ur admin members --after (§7.5, §7.8)
+
+```text
+ur admin members [list] [--after=<member_id>] [--device]
+                                        a page of the team's members: the first, or the one past <member_id>
+```
+
+- One command a page (QD-1162): the page's admin token covers no query, so `--after` rides in the command's signed body,
+  and each page takes its own consent in the browser. `ur acl push` reads pages the same way while a member its policy
+  names is on none read yet, at most `AclMemberPageCount` (8), and sends no email of the policy's in any of them.

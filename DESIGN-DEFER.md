@@ -33,7 +33,7 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 
 ## Index
 
-101 entries, grouped by the DESIGN.md section that owns the deferred thing. "Described in" lists the subsections of DESIGN.md that point at the entry.
+102 entries, grouped by the DESIGN.md section that owns the deferred thing. "Described in" lists the subsections of DESIGN.md that point at the entry.
 
 | Section | Entry | Stage | Described in |
 |---|---|---|---|
@@ -56,6 +56,7 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 |  | [§7's v1 set](#team-v1) | v1 (M6, M10) | §7.19 |
 | [§8 Access control: policy, compilation, distribution, enforcement](#s8) | [Client-checked prefix write rules](#acl-prefix-write-rules) | Later | §8.8, §8.12, §8.14, §8.19, §11.11, §11.17, §11.18, §11.22, §23.4 |
 |  | [Client-attested postures](#acl-client-attested-postures) | Later | §8.19 |
+|  | [Reassigning a Team scope's label](#acl-team-scope-reassignment) | Later, until a consented-member transition rule is decided | §7.9, §8.8, §8.19, §12.5, §13.8 |
 |  | [§8's v1 set](#acl-v1) | v1 (M6, M10) | §8.19 |
 | [§9 Abstract socket listeners and the scheduler](#s9) | [Region-aware listener selection](#sock-region-aware-selection) | Later | §9.17 |
 |  | [Slow start for new listeners](#sock-slow-start) | Later | §9.17 |
@@ -403,6 +404,19 @@ A design-records pass that folds a deferral adds its entry here in the same chan
 - **Dark in code.** Nothing is built. `sidecar/device`'s posture is a different thing, the forwarding role's checks between compiles (§17.8).
 - **Held.** Nothing: no task or track waits on it.
 - **To bring back.** A design: what a client attests, who verifies it, how a rule names it, and what §2.8's list then publishes.
+
+<a id="acl-team-scope-reassignment"></a>
+### Reassigning a Team scope's label
+
+*Later, until a consented-member transition rule is decided. DESIGN.md: §7.9, §8.8, §8.19, §12.5, §13.8.*
+
+- **Deferred.** Reassigning a Team scope's label (owner decisions 40, 58; Q-TLS-3) to another member or tag, and the consented-member transition rule that must come first (owner decision 678; QD-1163). An Owner or Admin declares each scope's first binding, its label and either its member or its tag, in the config head's signed `ServiceSettings`, and that binding is immutable, across the label's retirement too.
+- **Why.** A label's member or tag decides which devices hold its certificates and receive its mail (§13.8, §15.5), so moving a member's label could hand both to devices the member never consented to. The owner kept reassignment unavailable until a rule for that member's consent is decided.
+- **Launch instead.** Every label keeps its first member or tag. A Team that wants a scope under another member or tag declares a new label, and DNS, ACL and certificate readers take scopes only from the verified projection (§8.8).
+- **Lost.** Moving a scope label, with its hosts' names and mail addresses, from one member or tag to another, as when a member leaves and a colleague takes over the scope.
+- **Dark in code.** Nothing: no command reassigns a label. The signed field, its writer and the check that refuses a declaration binding a label to another member or tag are fix track review-acl-open-questions' work (QD-1163), not yet landed when this entry was written.
+- **Held.** Nothing: no task or track waits on it.
+- **To bring back.** A decision on the consented-member transition: who signs a reassignment, how the member a label names consents to it (from a consented device, as owner decision 126's owner-bound rule asks), what becomes of the scope's issued certificates, mail hosts and mail in flight at the change, and its tests; then the immutability check admits a reassignment that carries that consent.
 
 <a id="acl-v1"></a>
 ### §8's v1 set

@@ -57,8 +57,10 @@ func DefaultConfigServiceFormatSettings() *ConfigServiceFormatSettings {
 }
 
 // Checks a ServiceSettings a head holds: known enum values, record_cost's among them, a witness_bound_hours of 0 (the
-// default) or within the format's bounds, and a scim_signer of none or a sidecar_id. directory is ignored at M2, so its
-// values are not judged, and mail_strict and record_required are bools, either value good.
+// default) or within the format's bounds, a scim_signer of none or a sidecar_id, and team_scopes each a binding of
+// QD-059's shape, in label order with no label twice (QD-1163); whether its bindings keep the base's is compile's
+// (configCompileTeamScopes). directory is ignored at M2, so its values are not judged, and mail_strict and
+// record_required are bools, either value good.
 func CheckServiceSettings(settings *protocol.ServiceSettings) error {
 	if settings == nil {
 		return nil
@@ -78,6 +80,15 @@ func CheckServiceSettings(settings *protocol.ServiceSettings) error {
 	}
 	if _, known := protocol.RecordCostMode_name[int32(settings.GetRecordCost())]; !known {
 		return fmt.Errorf("%w: record_cost %d", ErrConfigRule, settings.GetRecordCost())
+	}
+	scopes := settings.GetTeamScopes()
+	for i, scope := range scopes {
+		if err := configCheckTeamScope(scope); err != nil {
+			return fmt.Errorf("%w: team_scopes[%d]: %w", ErrConfigRule, i, err)
+		}
+		if 0 < i && scopes[i-1].GetLabel() >= scope.GetLabel() {
+			return fmt.Errorf("%w: team_scopes out of label order or repeated", ErrConfigRule)
+		}
 	}
 	return nil
 }

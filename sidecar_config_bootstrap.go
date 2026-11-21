@@ -143,7 +143,7 @@ func (self *SidecarConfigFollower) firstOwnerGenesis(ctx context.Context, networ
 				if err != nil {
 					return nil, err
 				}
-				plan, err := planFirstTeamAcl(ctx, genesis, head, quota, self.clock.Now())
+				plan, err := planFirstTeamAcl(ctx, genesis, head, quota, running.aclWriterSettings(), self.clock.Now())
 				if err != nil {
 					return nil, err
 				}
@@ -214,8 +214,8 @@ func restoreFirstAclFiles(head *ConfigHead, files map[string][]byte) (*ConfigHea
 
 // The Owner's Team creation includes the fixed starter. Its request rule and grants must
 // fit the network's effective limits, and its policy tests must pass before the first signature.
-func planFirstTeamAcl(ctx context.Context, state *ConfigState, head *ConfigHead, quota *QuotaLimits, now time.Time) (*AclSavePlan, error) {
-	plan, err := PlanAclSave(ctx, &AclSaveInput{Policy: AclTeamStartDocument(), Head: head, State: state, Limits: aclWriterLimits(quota), Now: now})
+func planFirstTeamAcl(ctx context.Context, state *ConfigState, head *ConfigHead, quota *QuotaLimits, settings *SidecarAclWriterSettings, now time.Time) (*AclSavePlan, error) {
+	plan, err := PlanAclSave(ctx, &AclSaveInput{Policy: AclTeamStartDocument(), Head: head, State: state, Limits: aclWriterLimits(quota, settings), Now: now})
 	if err != nil {
 		return nil, err
 	}

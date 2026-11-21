@@ -126,12 +126,14 @@ type urAclParams struct {
 	Digest string `json:"digest,omitempty"`
 }
 
-// One failing check, by index.
+// One failing check, by index, with the activated grant whose sealed detail did not open, hex, for a check it left
+// indeterminate or kept from an accept (QD-1164).
 type urAclTestFailure struct {
-	Test   int    `json:"test"`
-	List   string `json:"list"`
-	Check  int    `json:"check"`
-	Reason string `json:"reason"`
+	Test    int    `json:"test"`
+	List    string `json:"list"`
+	Check   int    `json:"check"`
+	Reason  string `json:"reason"`
+	GrantId string `json:"grant_id,omitempty"`
 }
 
 // A test run's answer.
@@ -145,7 +147,11 @@ type urAclTestReply struct {
 func urAclTestReplyOf(report *sidecar.AclPolicyTestReport) *urAclTestReply {
 	reply := &urAclTestReply{TestCount: report.TestCount, CheckCount: report.CheckCount, DocumentAlone: report.DocumentAlone}
 	for _, failure := range report.Failures {
-		reply.Failures = append(reply.Failures, &urAclTestFailure{Test: failure.Test, List: failure.List, Check: failure.Check, Reason: failure.Reason})
+		row := &urAclTestFailure{Test: failure.Test, List: failure.List, Check: failure.Check, Reason: failure.Reason}
+		if failure.GrantId != nil {
+			row.GrantId = hex.EncodeToString(failure.GrantId)
+		}
+		reply.Failures = append(reply.Failures, row)
 	}
 	return reply
 }
@@ -530,46 +536,78 @@ func runUrAclPush(ctx context.Context, cli *urCli, path string) error {
 	return nil
 }
 
-// The already-authorized Owner/Admin directory read. Only the policy's named, admitted candidates
-// cross the local control socket. The writer independently checks each id against the signed state.
+// The already-authorized Owner/Admin directory read, a page a command (QD-1162; urAdminMembersPageCommand, whose body
+// names nothing of the policy, so no email leaves this device in a directory request): each page past the first is a
+// command of its own, which the person authorizes as they did the first, read while some email the policy names is on
+// no page read yet and api says more follow, up to the settings' AclMemberPageCount. A page must hold only members past
+// the one it reads after, in member_id order, so a directory that answers a page again or out of order is refused
+// rather than read forever. Only the policy's named, admitted candidates cross the local control socket. The writer
+// independently checks each id against the signed state.
 func (self *urCli) aclMemberProposals(ctx context.Context, emails []string) (map[string]sidecar.Id, error) {
-	command, err := urAdminCommand("GET", "/network/members", nil)
-	if err != nil {
-		return nil, err
-	}
-	var roster struct {
-		Members []struct {
-			MemberId sidecar.Id `json:"member_id"`
-			Email    string     `json:"email"`
-			Pending  bool       `json:"pending"`
-		} `json:"members"`
-		More bool `json:"more"`
-	}
-	if err := urAdminRun(ctx, self, nil, command, &roster); err != nil {
-		return nil, err
-	}
 	wanted := make(map[string]bool, len(emails))
 	for _, email := range emails {
 		wanted[email] = true
 	}
 	members := make(map[string]sidecar.Id, len(emails))
-	for _, row := range roster.Members {
-		email := strings.ToLower(row.Email)
-		if row.Pending || !wanted[email] {
-			continue
-		}
-		if previous, ok := members[email]; row.MemberId == (sidecar.Id{}) || (ok && previous != row.MemberId) {
-			return nil, fmt.Errorf("the member directory returned an ambiguous identity for %s", email)
-		}
-		members[email] = row.MemberId
-	}
-	for _, email := range emails {
-		if _, ok := members[email]; !ok {
-			if roster.More {
-				return nil, fmt.Errorf("%s is outside the member page authorized by this command", email)
+	missing := func() []string {
+		left := []string{}
+		for _, email := range emails {
+			if _, ok := members[email]; !ok {
+				left = append(left, email)
 			}
-			return nil, fmt.Errorf("the member directory holds no active member for %s", email)
 		}
+		return left
+	}
+	after := sidecar.Id{}
+	more := false
+	for page := 0; page < self.settings.AclMemberPageCount; page += 1 {
+		if 0 < page {
+			self.printf("%d of the policy's emails are on none of the first %d member pages: the next page, after member %s, "+
+				"needs its own authorization\n", len(missing()), page, after)
+		}
+		command, err := urAdminMembersPageCommand(after)
+		if err != nil {
+			return nil, err
+		}
+		var roster struct {
+			Members []struct {
+				MemberId sidecar.Id `json:"member_id"`
+				Email    string     `json:"email"`
+				Pending  bool       `json:"pending"`
+			} `json:"members"`
+			More bool `json:"more"`
+		}
+		if err := urAdminRun(ctx, self, nil, command, &roster); err != nil {
+			return nil, err
+		}
+		for _, row := range roster.Members {
+			// a zero id included: none sorts after the cursor, and a page read again holds the cursor's own
+			if row.MemberId.Cmp(after) <= 0 {
+				return nil, errors.New("the member directory answered a page out of member_id order")
+			}
+			after = row.MemberId
+			email := strings.ToLower(row.Email)
+			if row.Pending || !wanted[email] {
+				continue
+			}
+			if previous, ok := members[email]; ok && previous != row.MemberId {
+				return nil, fmt.Errorf("the member directory returned an ambiguous identity for %s", email)
+			}
+			members[email] = row.MemberId
+		}
+		more = roster.More
+		if len(missing()) == 0 || !more {
+			break
+		}
+		if len(roster.Members) == 0 {
+			return nil, errors.New("the member directory said more members follow a page that held none")
+		}
+	}
+	for _, email := range missing() {
+		if more {
+			return nil, fmt.Errorf("%s is on none of the %d member pages ur acl push reads", email, self.settings.AclMemberPageCount)
+		}
+		return nil, fmt.Errorf("the member directory holds no active member for %s", email)
 	}
 	return members, nil
 }

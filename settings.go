@@ -77,6 +77,8 @@ type SidecarSettings struct {
 	AgentSubkeys *SidecarAgentSubkeySettings
 	// §5.6's alarms and §7.10's cleanup on the device: the windows they measure and the cap's reads.
 	Alarms *SidecarAlarmSettings
+	// §8.8's save on a config writer: the tier bounds it holds a document to beside GET /sidecar/limits' acl_* keys.
+	AclWriter *SidecarAclWriterSettings
 
 	// Envelopes one component's queue holds. Complete envelopes wait here without blocking the
 	// inline handler, and a full queue drops and counts (§5.4; connect/CODESTYLE.md:119). Default
@@ -136,6 +138,14 @@ type SidecarAlarmSettings struct {
 	// reading (QD-250 names the route and no cadence; a tier changes the cap rarely, and every cleanup preview and
 	// revoke reads it afresh). Zero reads it at no entry, leaving those and RefreshAdmissionCap to read it.
 	AdmissionCapTimeout time.Duration `settings:"zero"`
+}
+
+// §8.8's save on a config writer (acl_writer_subjects.go): the bounds it holds a document to where GET /sidecar/limits
+// names no key.
+type SidecarAclWriterSettings struct {
+	// The longest a publish request may last on Community, §13.9's 7 days (owner decision 41), which the limits route
+	// names no key for. Positive.
+	CommunityPublishMaxExpiry time.Duration
 }
 
 // The alarm settings, DefaultSidecarSettings' where a host left them out.
@@ -1118,6 +1128,9 @@ func DefaultSidecarSettings() *SidecarSettings {
 			Recovery:                DefaultConfigRecoverySettings(),
 			RecoveryUnseenTolerance: 10 * time.Minute,
 			AdmissionCapTimeout:     1 * time.Hour,
+		},
+		AclWriter: &SidecarAclWriterSettings{
+			CommunityPublishMaxExpiry: 7 * 24 * time.Hour,
 		},
 
 		ComponentQueueMessageCount: 256,

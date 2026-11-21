@@ -234,7 +234,8 @@ func TestAclPushRefusesUnresolvedDirectoryRows(t *testing.T) {
 		urAdminRunCommand = func(context.Context, *urCli, *sidecar.AdminCommand, bool) ([]byte, error) {
 			return json.Marshal(map[string]any{"members": test.members, "more": test.more})
 		}
-		if proposals, err := (&urCli{}).aclMemberProposals(context.Background(), []string{email}); err == nil || len(proposals) != 0 {
+		cli, _, _ := newTestUrCli(filepath.Join(t.TempDir(), "none.sock"))
+		if proposals, err := cli.aclMemberProposals(context.Background(), []string{email}); err == nil || len(proposals) != 0 {
 			t.Fatalf("unauthorized proposal: %v, %v", proposals, err)
 		}
 	}

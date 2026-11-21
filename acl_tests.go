@@ -28,8 +28,18 @@
 //	                   grant's index (owner decision 615). A rule that names autogroup:internet reaches every public
 //	                   address (aclAddressPublic) through an exit among its vias, by routes in force no save sees
 //	                   either, so it holds no accept by that and fails every deny of a range holding a public address,
-//	                   named the same way (QD-1125). A rule whose detail the device does not hold, an activated
-//	                   grant's, meets no ip: check (QD-003)
+//	                   named the same way (QD-1125)
+//	activated grants   an ip: check judges effective access at the verified base the save stands on, so a surviving
+//	                   activated route grant counts beside the document's rules (QD-1164): one whose action seals no
+//	                   detail names no prefix and routes by its subjects alone, as above; one whose sealed detail the
+//	                   writer opens under its config keys (owner decision 220, QD-003) is judged by the detail's
+//	                   prefixes, its cidrs and ip: destinations, and by the ports its sidecar destinations name, none
+//	                   meaning every port; and one whose detail does not open here, the action not held, its key
+//	                   generation missing or a detail not its action's, may apply to any range at any port, so it
+//	                   establishes no accept and a deny it may apply to fails as indeterminate. Such a failure names
+//	                   the grant by its id and the test by its index, and the writer restores its config keys, removes
+//	                   the test or waits for the grant to end before saving. A rule a definite failure matches that an
+//	                   activated grant gave is named by its grant id
 //	ports              a dial check with ports holds at every port of the range for an accept and at none for a deny,
 //	                   at a sidecar destination, whose own engine checks ports; with none it is the rows' dial alone;
 //	                   a route check's ports meet a rule's ports before its prefixes do
@@ -42,6 +52,7 @@ package sidecar
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -57,6 +68,10 @@ import (
 // A document's tests did not all pass: the head is not signed (D-ACL-9).
 var ErrAclPolicyTests = errors.New("acl policy tests failed")
 
+// An activated grant's sealed detail did not open here, so its ip: checks are indeterminate (QD-1164): the base holds
+// no action for it, or the action's detail did not open to it.
+var ErrAclGrantDetailUnread = errors.New("acl tests: an activated grant's detail did not open")
+
 // One check of one test that did not pass, or a test that could not run.
 type AclPolicyTestFailure struct {
 	// The test's index among tests.
@@ -67,6 +82,55 @@ type AclPolicyTestFailure struct {
 	Check int
 	// Why: refused and its reason for an accept, allowed for a deny, or what could not be judged.
 	Reason string
+	// The activated grant whose sealed detail did not open here, for a check it left indeterminate or kept from an
+	// accept (QD-1164); nil otherwise. An opaque id, as rule ids are (I-13).
+	GrantId []byte
+}
+
+// Opens an activated grant's sealed detail at the verified base a run stands on (owner decision 220, QD-003, QD-1164):
+// the CanonicalActionDetail its action's sealed_detail opens to under the device's config keys, held to that action.
+// grantId is the grant's rule id in the rows. An error, ErrAclGrantDetailUnread or the opener's own
+// (ErrConfigSealGenerationMissing, ErrConfigSealInvalid, ErrCanonicalActionDetailInvalid), says it did not open here.
+type AclGrantDetails interface {
+	GrantDetail(grantId []byte) (*protocol.CanonicalActionDetail, error)
+}
+
+// The details a writer's verified state opens: each activated grant's action as the state holds it, or as the base's
+// head's folds hold it for a reader that joined after the grant landed (ConfigState.grantActionsAtHead), opened in the
+// state's network under the config repo's key of the generation it names, which repoKeyAt answers, nil holding none.
+type aclStateGrantDetails struct {
+	actions   map[string][]byte
+	networkId Id
+	repoKeyAt func(generation uint64) *EvsRepoKey
+}
+
+// The details state opens at the base head stands on; nil for no state.
+func newAclStateGrantDetails(state *ConfigState, head *ConfigHead, repoKeyAt func(generation uint64) *EvsRepoKey) AclGrantDetails {
+	if state == nil {
+		return nil
+	}
+	return &aclStateGrantDetails{actions: state.grantActionsAtHead(head), networkId: state.NetworkId(), repoKeyAt: repoKeyAt}
+}
+
+// See AclGrantDetails. A detail that opens to nil, an action that seals none, is unread too: a rule the fold marked
+// as limiting ports names them nowhere else.
+func (self *aclStateGrantDetails) GrantDetail(grantId []byte) (*protocol.CanonicalActionDetail, error) {
+	encoded := self.actions[string(grantId)]
+	if len(encoded) == 0 {
+		return nil, fmt.Errorf("%w: the base holds no action for the grant", ErrAclGrantDetailUnread)
+	}
+	action, err := ParseStoredCanonicalAction(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrAclGrantDetailUnread, err)
+	}
+	detail, err := OpenCanonicalActionDetail(action, self.networkId, self.repoKeyAt)
+	if err != nil {
+		return nil, err
+	}
+	if detail == nil {
+		return nil, fmt.Errorf("%w: the grant's action seals no detail", ErrAclGrantDetailUnread)
+	}
+	return detail, nil
 }
 
 // The failure as a preview line, which names no value.
@@ -113,6 +177,9 @@ type AclPolicyTestInput struct {
 	View    AclAuthView
 	// The time the tests judge at.
 	Now time.Time
+	// Opens the sealed detail of each activated grant the compile carries, which its ip: checks judge by (QD-1164);
+	// nil opens none, so every such grant whose action seals a detail leaves the checks it may apply to indeterminate.
+	GrantDetails AclGrantDetails
 }
 
 // Runs the document's tests over its compiled result. An error is a document that does not compile; failing tests
@@ -131,6 +198,8 @@ func AclPolicyTestRun(input *AclPolicyTestInput) (*AclPolicyTestReport, error) {
 		nowMs:        input.Now.UnixMilli(),
 		report:       &AclPolicyTestReport{TestCount: len(compiler.policy.Tests)},
 		grantIndexes: map[Id]int{},
+		grantDetails: input.GrantDetails,
+		grantRoutes:  map[string]*aclTestGrantRoute{},
 	}
 	// each grant's rule id, the first of identical grants naming the rule they compile to
 	keys, err := AclPolicyRuleKeys(compiler.policy)
@@ -199,6 +268,26 @@ type aclTestRun struct {
 	report     *AclPolicyTestReport
 	// the index of the first grant compiling to each rule id, by which a failure names a rule
 	grantIndexes map[Id]int
+	// the opener of activated grants' sealed details, and what each grant's gave, by its rule id (QD-1164)
+	grantDetails AclGrantDetails
+	grantRoutes  map[string]*aclTestGrantRoute
+}
+
+// An activated grant's route as a run reads it: the detail its ip: checks judge by, or why it did not open.
+type aclTestGrantRoute struct {
+	local  *AclLocalRule
+	unread string
+}
+
+// What an ip: check found for one source (routeToPrefix).
+type aclTestRouteAnswer struct {
+	decision AclDecision
+	// what a deny's failure says of a rule matched by a reach no save sees, after its name; empty for one matched by its
+	// prefixes
+	unseen string
+	// the first activated grant that may apply whose detail did not open, and why (QD-1164)
+	unreadGrantId []byte
+	unread        string
 }
 
 // The subjects a test names, made where they are none of the view's.
@@ -468,12 +557,13 @@ func (self *aclTestRun) engineFor(sidecarId Id) *AclEngine {
 
 // Judges one test's checks, recording each failure.
 func (self *aclTestRun) judge(plan *aclTestPlan) {
-	fail := func(list string, check int, reason string) {
-		self.report.Failures = append(self.report.Failures, AclPolicyTestFailure{Test: plan.index, List: list, Check: check, Reason: reason})
+	fail := func(list string, check int, reason string, grantId []byte) {
+		self.report.Failures = append(self.report.Failures, AclPolicyTestFailure{Test: plan.index, List: list, Check: check, Reason: reason,
+			GrantId: slices.Clone(grantId)})
 	}
 	self.report.CheckCount += len(plan.test.Accept) + len(plan.test.Deny)
 	if plan.srcUnjudged != "" {
-		fail("src", -1, plan.srcUnjudged)
+		fail("src", -1, plan.srcUnjudged, nil)
 		return
 	}
 	lists := []struct {
@@ -489,7 +579,7 @@ func (self *aclTestRun) judge(plan *aclTestPlan) {
 		for j, check := range list.checks {
 			checkPlan := list.plans[j]
 			if checkPlan.unjudged != "" {
-				fail(list.name, j, checkPlan.unjudged)
+				fail(list.name, j, checkPlan.unjudged, nil)
 				continue
 			}
 			for si, source := range plan.sources {
@@ -497,8 +587,8 @@ func (self *aclTestRun) judge(plan *aclTestPlan) {
 				if si < len(checkPlan.destinations) {
 					destinations = checkPlan.destinations[si]
 				}
-				if reason := self.holds(source, check, destinations, list.want); reason != "" {
-					fail(list.name, j, reason)
+				if reason, grantId := self.holds(source, check, destinations, list.want); reason != "" {
+					fail(list.name, j, reason, grantId)
 					break
 				}
 			}
@@ -506,8 +596,9 @@ func (self *aclTestRun) judge(plan *aclTestPlan) {
 	}
 }
 
-// Whether one check holds for one source as want says: empty when it does, else why not.
-func (self *aclTestRun) holds(source AclSubject, check AclPolicyCheck, destinations []AclSubject, want bool) string {
+// Whether one check holds for one source as want says: empty when it does, else why not, with the activated grant
+// whose unopened detail the failure stands on, nil for none (QD-1164).
+func (self *aclTestRun) holds(source AclSubject, check AclPolicyCheck, destinations []AclSubject, want bool) (string, []byte) {
 	answer := func(decision AclDecision) string {
 		switch {
 		case want && !decision.Allowed:
@@ -523,33 +614,56 @@ func (self *aclTestRun) holds(source AclSubject, check AclPolicyCheck, destinati
 	case AclResourceSubject:
 		for _, destination := range destinations {
 			if reason := self.holdsSubject(source, destination, check, want); reason != "" {
-				return reason
+				return reason, nil
 			}
 		}
-		return ""
+		return "", nil
 	case AclResourceSocket, AclResourceDns, AclResourceMail:
 		result := self.engine.Check(source, check.Action, resource, now)
-		return answer(AclDecision{Allowed: result.Allowed, Reason: result.Reason})
+		return answer(AclDecision{Allowed: result.Allowed, Reason: result.Reason}), nil
 	case AclResourceRepo:
 		repoResource := resource
 		if repoResource.RepoId == (Id{}) {
 			repoResource.RepoId = self.compiler.labelRepoIds[resource.Name]
 		}
 		result := self.engine.Check(source, check.Action, repoResource, now)
-		return answer(AclDecision{Allowed: result.Allowed, Reason: result.Reason})
+		return answer(AclDecision{Allowed: result.Allowed, Reason: result.Reason}), nil
 	case AclResourceIp:
-		decision, unseen := self.routeToPrefix(source, resource.Cidr, check.Ports, want)
-		if unseen != "" {
-			return "allowed by " + self.ruleName(decision.Rule) + ", " + unseen
+		route := self.routeToPrefix(source, resource.Cidr, check.Ports, want)
+		decision := route.decision
+		grant := ""
+		if route.unreadGrantId != nil {
+			grant = "grant " + hex.EncodeToString(route.unreadGrantId)
 		}
-		return answer(decision)
+		switch {
+		case want && decision.Allowed, !want && !decision.Allowed && route.unreadGrantId == nil:
+			return "", nil
+		case want && route.unreadGrantId != nil:
+			// an accept another rule did not hold, which the unread grant cannot establish
+			return answer(decision) + "; " + grant + " may route it, but its sealed detail " + route.unread +
+				", so it establishes no accept", route.unreadGrantId
+		case want:
+			return answer(decision), nil
+		case !decision.Allowed:
+			return "indeterminate: " + grant + " may route its source into the range, but its sealed detail " + route.unread +
+				": restore this device's config keys, remove the test or wait for the grant to end", route.unreadGrantId
+		case route.unseen != "":
+			return "allowed by " + self.ruleName(decision.Rule) + ", " + route.unseen, nil
+		case len(decision.Rule.GetSourceRuleId()) != 0:
+			// an activated grant its opened detail matched
+			return "allowed by " + self.ruleName(decision.Rule), nil
+		}
+		return answer(decision), nil
 	}
-	return "a check no test can judge"
+	return "a check no test can judge", nil
 }
 
-// A rule as a failure names it, by no value (I-13): its grant's index in the document, the first of identical grants,
-// else its id, for a rule no grant of the document gave.
+// A rule as a failure names it, by no value (I-13): an activated grant by its grant id; else its grant's index in the
+// document, the first of identical grants, else its id, for a rule no grant of the document gave.
 func (self *aclTestRun) ruleName(rule *protocol.AclRule) string {
+	if len(rule.GetSourceRuleId()) != 0 {
+		return "grant " + hex.EncodeToString(rule.GetRuleId())
+	}
 	ruleId, err := IdFromBytes(rule.GetRuleId())
 	if err != nil {
 		return "a rule"
@@ -599,10 +713,11 @@ func (self *aclTestRun) holdsSubject(source AclSubject, destination AclSubject, 
 // prefixes, or by a reach no save sees: for a rule that names no prefix, by naming for the source a sidecar among both
 // its via subjects and its subject destinations, whose routes in force could serve any range (owner decision 615); for
 // a rule that names autogroup:internet, by a public address in the range, which an exit among its vias could serve by
-// its routes in force (QD-1125). Neither holds an accept, since no save sees what those routes serve. The second answer
-// is what a deny's failure says of a rule matched by such a reach, after its name, and empty for one matched by its
-// prefixes.
-func (self *aclTestRun) routeToPrefix(source AclSubject, cidr netip.Prefix, ports *AclPortRange, want bool) (AclDecision, string) {
+// its routes in force (QD-1125). Neither holds an accept, since no save sees what those routes serve. A surviving
+// activated grant is judged by its detail as grantRoute reads it, and one whose detail did not open matches nothing,
+// the answer naming the first such grant the source's route reaches, which a deny then fails on as indeterminate when
+// no rule matched it outright (QD-1164).
+func (self *aclTestRun) routeToPrefix(source AclSubject, cidr netip.Prefix, ports *AclPortRange, want bool) aclTestRouteAnswer {
 	portsMatch := func(local *AclLocalRule) bool {
 		if ports == nil || local == nil || len(local.Ports) == 0 {
 			return true
@@ -623,16 +738,30 @@ func (self *aclTestRun) routeToPrefix(source AclSubject, cidr netip.Prefix, port
 	}
 	sourceResolved := self.state.resolve(&source, self.nowMs)
 	holdsPublic := !want && aclPrefixHoldsPublic(cidr)
-	unseen := ""
-	decision := self.state.resourceDecision(source, self.nowMs, protocol.AclAction_ACL_ACTION_ROUTE, func(rule *aclRule) bool {
+	answer := aclTestRouteAnswer{}
+	answer.decision = self.state.resourceDecision(source, self.nowMs, protocol.AclAction_ACL_ACTION_ROUTE, func(rule *aclRule) bool {
 		local := self.localRules[rule.index]
-		if local == nil || !portsMatch(local) {
+		if local == nil {
+			grant := self.grantRoute(rule)
+			if grant == nil {
+				return false
+			}
+			if grant.unread != "" {
+				// it may apply to any range at any port: it holds no accept, and a deny falls back on it below
+				if answer.unreadGrantId == nil {
+					answer.unreadGrantId, answer.unread = rule.row.GetRuleId(), grant.unread
+				}
+				return false
+			}
+			local = grant.local
+		}
+		if !portsMatch(local) {
 			return false
 		}
 		if aclRouteBySubject(local, rule.internetTarget) {
 			if !want && self.routeBySubjectReaches(&sourceResolved, rule) {
-				unseen = "which names no prefix: a sidecar among both its via subjects and its destinations could serve any " +
-					"range by its routes in force"
+				answer.unseen = "which names no prefix: a sidecar among both its via subjects and its destinations could serve " +
+					"any range by its routes in force"
 				return true
 			}
 			return false
@@ -646,13 +775,75 @@ func (self *aclTestRun) routeToPrefix(source AclSubject, cidr netip.Prefix, port
 			}
 		}
 		if holdsPublic && rule.internetTarget {
-			unseen = "which names autogroup:internet: an exit among its via subjects could serve any public address by its " +
-				"routes in force"
+			answer.unseen = "which names autogroup:internet: an exit among its via subjects could serve any public address by " +
+				"its routes in force"
 			return true
 		}
 		return false
 	})
-	return decision, unseen
+	return answer
+}
+
+// An activated grant's route as an ip: check judges it (QD-1164), read once a run; nil for a rule no grant activated,
+// whose detail the document gives. A grant whose action seals no detail, its rule limiting no ports, names no prefix
+// and no port, so it routes by its subjects alone. One whose rule limits ports seals a detail, which it is judged by
+// where the run's opener opens it: its prefixes are its cidrs and its ip: destinations, and its ports those its sidecar
+// destinations name, taken together since rows mark ports for the rule whole, none meaning every port. A detail naming
+// target_port alone names no protocol, so its ports are not read whole and it stays unread, as one that does not open.
+func (self *aclTestRun) grantRoute(rule *aclRule) *aclTestGrantRoute {
+	if len(rule.row.GetSourceRuleId()) == 0 {
+		return nil
+	}
+	grantId := rule.row.GetRuleId()
+	if held, found := self.grantRoutes[string(grantId)]; found {
+		return held
+	}
+	grant := func() *aclTestGrantRoute {
+		if !rule.portsLimited {
+			return &aclTestGrantRoute{local: &AclLocalRule{}}
+		}
+		if self.grantDetails == nil {
+			return &aclTestGrantRoute{unread: "has no opener on this run"}
+		}
+		detail, err := self.grantDetails.GrantDetail(grantId)
+		switch {
+		case errors.Is(err, ErrConfigSealGenerationMissing):
+			return &aclTestGrantRoute{unread: "needs a config key generation this device does not hold"}
+		case err != nil:
+			return &aclTestGrantRoute{unread: "did not open here"}
+		case detail == nil:
+			return &aclTestGrantRoute{unread: "is missing"}
+		}
+		local := &AclLocalRule{}
+		for _, text := range detail.GetCidrs() {
+			prefix, err := netip.ParsePrefix(text)
+			if err != nil {
+				return &aclTestGrantRoute{unread: "holds a prefix that does not read"}
+			}
+			local.Cidrs = append(local.Cidrs, prefix)
+		}
+		for _, dst := range detail.GetGrantDst() {
+			if text, isPrefix := strings.CutPrefix(dst, "ip:"); isPrefix {
+				prefix, err := netip.ParsePrefix(text)
+				if err != nil {
+					return &aclTestGrantRoute{unread: "holds a prefix that does not read"}
+				}
+				local.Cidrs = append(local.Cidrs, prefix)
+				continue
+			}
+			_, ports, err := ParseAclGrantDst(dst)
+			if err != nil || ports == nil {
+				return &aclTestGrantRoute{unread: "holds a destination that does not read"}
+			}
+			local.Ports = append(local.Ports, AclPortRange{Protocol: ports.GetProtocol(), First: ports.GetFirst(), Last: ports.GetLast()})
+		}
+		if detail.GetTargetPort() != 0 && len(local.Ports) == 0 {
+			return &aclTestGrantRoute{unread: "names a port with no protocol"}
+		}
+		return &aclTestGrantRoute{local: local}
+	}()
+	self.grantRoutes[string(grantId)] = grant
+	return grant
 }
 
 // Whether a prefix holds an address aclAddressPublic takes, which autogroup:internet reaches (§8.4): one outside every
