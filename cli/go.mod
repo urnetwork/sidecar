@@ -77,7 +77,7 @@ require (
 	github.com/wlynxg/anet v0.0.5 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
-	golang.org/x/crypto v0.58.0 // indirect
+	golang.org/x/crypto v0.58.0
 	golang.org/x/exp v0.0.0-20260727155853-b88d891fe743 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
