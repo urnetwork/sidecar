@@ -301,6 +301,27 @@ func TestReadWithholdsTheJobsHeldIds(t *testing.T) {
 		}
 	}
 	jobId := testId("held job")
+	read := func() *readTestReply {
+		return fixture.read(fixture.token(fixture.check.signerId), &protocol.EvsReadRequest{
+			RefId: fixture.check.refId.Bytes(),
+			Ranges: []*protocol.EvsReadRange{
+				{SegmentId: heldId[:], Length: 100},
+				{SegmentId: freeId[:], Length: 100},
+			},
+		})
+	}
+	if reply := read(); len(reply.objects) != 2 || reply.objects[0].GetMissing() {
+		t.Fatal("the segment was missing before the job started")
+	}
+	if _, err := fixture.engine.drops.Update(fixture.paidContext(), fixture.cluster, fixture.check.repoId, func(state *DropTableState, now time.Time) (bool, error) {
+		state.Job = &DropJobRecord{JobId: jobId, Phase: protocol.EvsDropPhase_EVS_DROP_DELETE, StartedMs: now.UnixMilli()}
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if reply := read(); len(reply.objects) != 2 || reply.objects[0].GetMissing() {
+		t.Fatal("the segment was missing before the job withheld it")
+	}
 	heldFile, err := EncodeDropIdFile(DropFileHeld, fixture.check.repoId, jobId, 0, []DropScanId{DropSegmentId(heldId)})
 	if err != nil {
 		t.Fatal(err)
@@ -308,21 +329,19 @@ func TestReadWithholdsTheJobsHeldIds(t *testing.T) {
 	if err := NewDropFiles(segmentCluster, fixture.check.repoId, jobId, fixture.settings.Drop).Put(fixture.ctx, DropFileHeld, 0, heldFile); err != nil {
 		t.Fatal(err)
 	}
+	if reply := read(); len(reply.objects) != 2 || !reply.objects[0].GetMissing() || reply.objects[1].GetMissing() {
+		t.Fatal("the warm reader missed a published held file before the table checkpoint")
+	}
 	if _, err := fixture.engine.drops.Update(fixture.paidContext(), fixture.cluster, fixture.check.repoId, func(state *DropTableState, now time.Time) (bool, error) {
 		// a held job's record sits among the held jobs, out of the slot (QD-1127)
-		state.HeldJobs = append(state.HeldJobs, &DropJobRecord{JobId: jobId, Phase: protocol.EvsDropPhase_EVS_DROP_DELETE, Held: true, StartedMs: now.UnixMilli()})
+		state.Job.Held = true
+		state.HeldJobs = append(state.HeldJobs, state.Job)
+		state.Job = nil
 		return true, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	fixture.engine.dropIndex = NewDropIndex(fixture.settings.Drop, fixture.engine.records, fixture.engine.locator)
-	reply := fixture.read(fixture.token(fixture.check.signerId), &protocol.EvsReadRequest{
-		RefId: fixture.check.refId.Bytes(),
-		Ranges: []*protocol.EvsReadRange{
-			{SegmentId: heldId[:], Offset: 0, Length: 100},
-			{SegmentId: freeId[:], Offset: 0, Length: 100},
-		},
-	})
+	reply := read()
 	missing := map[string]bool{}
 	served := map[string]bool{}
 	for _, object := range reply.objects {
