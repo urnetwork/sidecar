@@ -3,7 +3,9 @@
 // DELETEs, Redis writes, the fake hosts' writing calls and, on T3, Postgres commits; then the schedule
 // runs again once per write, a fresh build each time, with that write's response lost, and every run
 // checks the row's invariants after every step, so a run that cleans up on an unknown outcome is caught
-// by the invariant that forbids it (FI-2's, UnknownDeletesNothing).
+// by the invariant that forbids it (FI-2's, UnknownDeletesNothing). Under CheckRow and CheckClause the
+// fixed run is the dry run, and the reruns run in child processes where a child can rebuild them
+// (rules_processes.go).
 //
 // A fake host's writing call is one its fake declares a write (sidecartest's fake_host.go; QD-1155): the
 // Quota's ReportUsage, CountRate, a Lease that draws and a lease's settling Close, Tasks' Schedule and
@@ -44,7 +46,7 @@ type LostWrite struct {
 // crashes or already drops keeps that fault, which is the row's own. A fake counts the writes, so this
 // is T2's; a T3 row sets its own plans. settings nil takes the defaults.
 func EveryWrite(ctx context.Context, builder Builder, settings *sidecartest.NetSettings) (failures []*Result, lostWrites []LostWrite) {
-	opResults := map[string][]FaultResult{}
+	var opResults map[string][]FaultResult
 	func() {
 		net := sidecartest.NewNet(ctx, settings)
 		defer net.Close()
@@ -52,29 +54,56 @@ func EveryWrite(ctx context.Context, builder Builder, settings *sidecartest.NetS
 		if result.Err != nil {
 			failures = append(failures, result)
 		}
-		for _, op := range everyWriteOps {
-			opResults[op] = net.Faults().WriteResults(op)
-		}
+		opResults = everyWriteResults(net)
 	}()
 	if 0 < len(failures) {
 		return failures, nil
 	}
+	lostWrites = everyWriteLosses(opResults)
+	for _, lost := range lostWrites {
+		result := runBuilt(ctx, builder, settings, lostWriteAdjust(lost))
+		if result.Err != nil {
+			failures = append(failures, result)
+		}
+	}
+	return failures, lostWrites
+}
+
+// What the run on net gave each write of every op the rule loses, read before the Net closes.
+func everyWriteResults(net *Net) map[string][]FaultResult {
+	opResults := map[string][]FaultResult{}
+	for _, op := range everyWriteOps {
+		opResults[op] = net.Faults().WriteResults(op)
+	}
+	return opResults
+}
+
+// The writes a dry run's results say the rule loses, one rerun each, in everyWriteOps' order: each one the
+// schedule's own plans left alone or failed before apply.
+func everyWriteLosses(opResults map[string][]FaultResult) []LostWrite {
+	var lostWrites []LostWrite
 	for _, op := range everyWriteOps {
 		for index, result := range opResults[op] {
 			if result != 0 && result != FailBeforeApply {
 				continue
 			}
-			lost := LostWrite{Op: op, Nth: index + 1}
-			lostWrites = append(lostWrites, lost)
-			result := runBuilt(ctx, builder, settings, func(schedule *Schedule) {
-				plan := &FaultPlan{Op: lost.Op, Nth: lost.Nth, Result: ApplyThenDrop, Displaces: true, WritesOnly: true}
-				schedule.Steps = append([]*Step{{Fault: plan}}, schedule.Steps...)
-				schedule.Id = fmt.Sprintf("%s with %s write %d's response lost", schedule.Id, lost.Op, lost.Nth)
-			})
-			if result.Err != nil {
-				failures = append(failures, result)
-			}
+			lostWrites = append(lostWrites, LostWrite{Op: op, Nth: index + 1})
 		}
 	}
-	return failures, lostWrites
+	return lostWrites
+}
+
+// A schedule's rerun with lost's response lost: a plan for that write before its first step, the
+// schedule named for it.
+func lostWriteAdjust(lost LostWrite) func(schedule *Schedule) {
+	return func(schedule *Schedule) {
+		plan := &FaultPlan{Op: lost.Op, Nth: lost.Nth, Result: ApplyThenDrop, Displaces: true, WritesOnly: true}
+		schedule.Steps = append([]*Step{{Fault: plan}}, schedule.Steps...)
+		schedule.Id = lostWriteId(schedule.Id, lost)
+	}
+}
+
+// "FS-1 with put write 17's response lost".
+func lostWriteId(scheduleId string, lost LostWrite) string {
+	return fmt.Sprintf("%s with %s write %d's response lost", scheduleId, lost.Op, lost.Nth)
 }

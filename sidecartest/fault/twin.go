@@ -48,6 +48,11 @@ func RunTwin(ctx context.Context, schedule *Schedule, settings *sidecartest.NetS
 	}
 	net := sidecartest.NewNet(ctx, settings)
 	defer net.Close()
+	return runTwinOn(ctx, schedule, net)
+}
+
+// RunTwin on net, which its caller closes, for a schedule that names a twin.
+func runTwinOn(ctx context.Context, schedule *Schedule, net *Net) *Result {
 	twin := twinBuilder(schedule)(net)
 	if twin.Refuses != "" {
 		return &Result{Id: twin.Id, FailedStep: -1, Err: fmt.Errorf("%s expects %s refused, and a twin must succeed", twin.Id, twin.Refuses)}

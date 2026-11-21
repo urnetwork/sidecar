@@ -48,6 +48,9 @@ type RuleSettings struct {
 	SeedsDirectory string
 	// Whether a failing seed writes its trace there.
 	WriteTraces bool
+	// The child processes CheckRow and CheckClause send the runs that depend on nothing but their own
+	// schedule to, where a child can rebuild them (rules_processes.go). Nil runs every run here.
+	Processes *RuleProcessSettings
 }
 
 func DefaultRuleSettings() *RuleSettings {
@@ -55,6 +58,7 @@ func DefaultRuleSettings() *RuleSettings {
 		Net:         sidecartest.DefaultNetSettings(),
 		Seeds:       MergeSeeds(),
 		WriteTraces: true,
+		Processes:   DefaultRuleProcessSettings(),
 	}
 }
 
@@ -143,14 +147,21 @@ func (self *ExploreReport) runSeed(ctx context.Context, builder Builder, setting
 			built(schedule)
 		}
 	})
+	self.record(seed, result, settings, true)
+	return result
+}
+
+// Records seed's run, wherever it ran, writing a failure's trace when settings say so and traced holds: a run
+// whose child process ended under it left no events to write.
+func (self *ExploreReport) record(seed int64, result *Result, settings *RuleSettings, traced bool) {
 	self.Id = result.Id
 	self.Seeds = append(self.Seeds, seed)
 	if result.Err == nil {
-		return result
+		return
 	}
 	self.Failures = append(self.Failures, result)
 	tracePath := ""
-	if settings.WriteTraces {
+	if settings.WriteTraces && traced {
 		path, err := WriteTrace(settings.SeedsDirectory, TraceOf(result))
 		if err != nil {
 			self.TraceErrors = append(self.TraceErrors, err)
@@ -158,18 +169,15 @@ func (self *ExploreReport) runSeed(ctx context.Context, builder Builder, setting
 		tracePath = path
 	}
 	self.TracePaths = append(self.TracePaths, tracePath)
-	return result
 }
 
-// The explorer after fixed, the fixed run of builder's schedule: the first seed, and the rest unless the
-// short form holds (the file header). settings nil takes the defaults.
-func exploreAfter(ctx context.Context, builder Builder, fixed *Result, settings *RuleSettings) *ExploreReport {
-	if settings == nil {
-		settings = DefaultRuleSettings()
-	}
+// The explorer's first seed after fixed, the fixed run of builder's schedule, and the seeds still to run:
+// none where the short form holds (the file header), which the report then says. CheckRow and CheckClause
+// run the rest beside the rules' other independent runs (rules.go's checkRules) and record each.
+func exploreFirst(ctx context.Context, builder Builder, fixed *Result, settings *RuleSettings) (*ExploreReport, []int64) {
 	report := &ExploreReport{}
 	if len(settings.Seeds) == 0 {
-		return report
+		return report, nil
 	}
 	var schedule *Schedule
 	first := report.runSeed(ctx, builder, settings, settings.Seeds[0], func(built *Schedule) {
@@ -177,12 +185,9 @@ func exploreAfter(ctx context.Context, builder Builder, fixed *Result, settings 
 	})
 	if first.Err == nil && exploreOrderChoice(schedule, fixed) == "" && slices.Equal(first.Trace, fixed.Trace) {
 		report.OneOrder = true
-		return report
+		return report, nil
 	}
-	for _, seed := range settings.Seeds[1:] {
-		report.runSeed(ctx, builder, settings, seed, nil)
-	}
-	return report
+	return report, settings.Seeds[1:]
 }
 
 // What leaves a seed something to order in schedule, built as the one fixed ran was, or empty when nothing

@@ -9,6 +9,12 @@
 // for the case and for its twin. Each run checks the row's invariants after every step. A failure is
 // reported once, as it happened: nothing reruns a failed attempt to see whether it passes (R-TEST-9).
 //
+// The fixed run is also the unknown rule's dry run, whose writes the reruns lose one at a time. After
+// each explorer's first seed, the runs that depend on nothing but their own schedule, the explorers'
+// other seeds, the reruns and the replays, run together in child processes of the test binary where a
+// child can rebuild them (rules_processes.go), and each result goes where it went when they ran one
+// after another. A report says what each rule's runs cost, and where they ran.
+//
 // The explorer takes its short form after a fixed run that passed no barrier, of a schedule with no
 // Background step, where nothing else left a seed anything to order (QD-1151; explore.go): one seed, the
 // report saying "no barrier passed: every seed takes this order". The gate's rules item names the cases
@@ -28,6 +34,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/urnetwork/sidecar/sidecartest"
 )
@@ -63,6 +70,72 @@ type RowReport struct {
 	Failures []*Result
 	// What kept a rule from running, which fails the case as a failure does.
 	Errors []error
+	// What each rule's runs cost.
+	Costs RuleCosts
+}
+
+// What one rule's runs cost: how many schedules it ran, and their times in real time added up, each run's own
+// wherever it ran.
+type RuleCost struct {
+	Runs int
+	Time time.Duration
+}
+
+func (self *RuleCost) add(runs int, took time.Duration) {
+	self.Runs += runs
+	self.Time += took
+}
+
+func (self RuleCost) String() string {
+	noun := "runs"
+	if self.Runs == 1 {
+		noun = "run"
+	}
+	return fmt.Sprintf("%d %s %s", self.Runs, noun, self.Time.Round(time.Millisecond))
+}
+
+// What each rule's runs cost, which a report's log says, so a slow row says where its time went: the fixed run, which
+// is the unknown rule's dry run too, the twin, the explorer's seeds over each, the unknown rule's rerun for each write,
+// and the replays. The times are real time, read for the log alone: nothing decides by them, and no schedule sees them.
+type RuleCosts struct {
+	Fixed       RuleCost
+	Twin        RuleCost
+	Explore     RuleCost
+	ExploreTwin RuleCost
+	EveryWrite  RuleCost
+	Replays     RuleCost
+	// How long the rules took together in real time, the runs sent to child processes running side by side.
+	Wall time.Duration
+	// How many child processes the runs went to (rules_processes.go), zero when every run ran in this one.
+	ChildProcesses int
+	// Why every run ran in this process though a child could rebuild the schedule, or empty.
+	Here string
+}
+
+// Every rule's runs together.
+func (self *RuleCosts) Total() RuleCost {
+	total := RuleCost{}
+	for _, cost := range []RuleCost{self.Fixed, self.Twin, self.Explore, self.ExploreTwin, self.EveryWrite, self.Replays} {
+		total.Runs += cost.Runs
+		total.Time += cost.Time
+	}
+	return total
+}
+
+// "fixed 1 run 1.2s, twin 0 runs 0s, explorer 10 runs 6.1s, twin's explorer 0 runs 0s, every write 716 runs 7m10s,
+// replays 0 runs 0s; 727 runs 7m17s, in 1m9s with 7 child processes".
+func (self *RuleCosts) String() string {
+	where := "in this process"
+	switch {
+	case 0 < self.ChildProcesses:
+		where = fmt.Sprintf("with %d child processes", self.ChildProcesses)
+	case self.Here != "":
+		where += ": " + self.Here
+	}
+	return fmt.Sprintf(
+		"fixed %s, twin %s, explorer %s, twin's explorer %s, every write %s, replays %s; %s, in %s %s",
+		self.Fixed, self.Twin, self.Explore, self.ExploreTwin, self.EveryWrite, self.Replays, self.Total(), self.Wall.Round(time.Millisecond), where,
+	)
 }
 
 func (self *RowReport) Failed() bool {
@@ -87,6 +160,7 @@ func (self *RowReport) String() string {
 		fmt.Fprintf(&text, " %d writes run with their responses lost.", len(self.LostWrites))
 	}
 	fmt.Fprintf(&text, " %d traces replayed.", len(self.Replays))
+	fmt.Fprintf(&text, " Cost: %s.", &self.Costs)
 	for _, failure := range self.Failures {
 		fmt.Fprintf(&text, "\n%s", failure)
 	}
@@ -129,80 +203,213 @@ func CheckRow(ctx context.Context, registration *Registration, settings *RuleSet
 		report.Errors = append(report.Errors, err)
 		return report
 	}
-	// the case's schedule, named for its case and flagged as the catalog says
-	builder := func(net *Net) *Schedule {
+	subject := &ruleSubject{id: testCase.String(), builder: caseBuilder(registration, testCase), unknown: testCase.Row.Unknown, forgedCase: testCase}
+	// the registered case alone, which the gate shows, on the build it runs, and which a child process rebuilds: the
+	// rules' own tests run toys under rows' names
+	tier := settings.Tier
+	if tier == "" {
+		tier = TierT2
+	}
+	if Lookup(registration.Row, registration.Case, tier) == registration {
+		if sidecartest.HooksLinked {
+			subject.oneOrderCase = testCase
+		}
+		if tier == TierT2 {
+			subject.child = &ruleChildName{Row: registration.Row, Case: registration.Case}
+		}
+	}
+	report.checkRules(ctx, subject, settings)
+	return report
+}
+
+// registration's schedule, named for its case and flagged as the catalog says.
+func caseBuilder(registration *Registration, testCase *Case) Builder {
+	return func(net *Net) *Schedule {
 		schedule := registration.Build(net)
 		schedule.Id = testCase.String()
 		schedule.Forged = testCase.Forged()
 		return schedule
 	}
+}
 
-	// the traces committed for the case and its twin, read before the explorer writes this run's own;
-	// a twin's seeds leave theirs under the twin's name
-	traces, err := Traces(settings.SeedsDirectory, testCase.String())
+// What the rules run over, as CheckRow and CheckClause name it.
+type ruleSubject struct {
+	// The schedule, named, and its traces' name.
+	id      string
+	builder Builder
+	// The row is on the unknown list.
+	unknown bool
+	// A case, whose schedule must name its twin where the case is forged; nil for a clause.
+	forgedCase *Case
+	// The case whose short form the gate's rules item must name, for a registered case or clause on the gate's build;
+	// nil for none.
+	oneOrderCase *Case
+	// How a child process rebuilds builder (rules_processes.go), nil when none can.
+	child *ruleChildName
+}
+
+// The rules over subject into the report, in the file header's order: the fixed run, which is the unknown rule's dry
+// run too, since it is the same run; the twin; each explorer's first seed; then every run that depends on nothing but
+// its own schedule together, in child processes where a child can rebuild it (rules_processes.go): the explorers'
+// other seeds unless the short form holds, a rerun for each write with its answer lost, and each committed trace's
+// replay. Each run's result goes where it went when the runs were made one after another.
+func (self *RowReport) checkRules(ctx context.Context, subject *ruleSubject, settings *RuleSettings) {
+	started := time.Now()
+	defer func() {
+		self.Costs.Wall = time.Since(started)
+	}()
+	// the traces committed for the schedule and its twin, read before the explorer writes this run's own; a twin's
+	// seeds leave theirs under the twin's name
+	traces, err := Traces(settings.SeedsDirectory, subject.id)
 	if err != nil {
-		report.Errors = append(report.Errors, err)
+		self.Errors = append(self.Errors, err)
 	}
-	twinTraces, err := Traces(settings.SeedsDirectory, testCase.String()+" twin")
+	twinTraces, err := Traces(settings.SeedsDirectory, subject.id+" twin")
 	if err != nil {
-		report.Errors = append(report.Errors, err)
+		self.Errors = append(self.Errors, err)
 	}
 
 	var fixed *Schedule
+	var opResults map[string][]FaultResult
+	// whether the schedule's connect clients ran, on the fixed run or the twin's
+	var connectClients bool
+	runStarted := time.Now()
 	func() {
 		net := sidecartest.NewNet(ctx, settings.Net)
 		defer net.Close()
-		fixed = builder(net)
-		report.Fixed = Run(ctx, fixed, net)
+		fixed = subject.builder(net)
+		self.Fixed = Run(ctx, fixed, net)
+		opResults = everyWriteResults(net)
+		connectClients = net.UsesPlatformFakes()
 	}()
-	report.fail(report.Fixed)
-	if fixed.Forged && fixed.Twin == nil {
-		report.Errors = append(report.Errors, fmt.Errorf("%s is forged, and its twin, which runs on T3, is missing", testCase))
+	self.Costs.Fixed.add(1, time.Since(runStarted))
+	self.fail(self.Fixed)
+	if subject.forgedCase != nil && fixed.Forged && fixed.Twin == nil {
+		self.Errors = append(self.Errors, fmt.Errorf("%s is forged, and its twin, which runs on T3, is missing", subject.forgedCase))
 	}
 	var twin Builder
 	if fixed.Twin != nil {
 		twin = twinBuilder(fixed)
-		report.Twin = RunTwin(ctx, fixed, settings.Net)
-		report.fail(report.Twin)
+		runStarted = time.Now()
+		func() {
+			net := sidecartest.NewNet(ctx, settings.Net)
+			defer net.Close()
+			self.Twin = runTwinOn(ctx, fixed, net)
+			connectClients = connectClients || net.UsesPlatformFakes()
+		}()
+		self.Costs.Twin.add(1, time.Since(runStarted))
+		self.fail(self.Twin)
+	}
+	child := subject.child
+	if connectClients && child != nil {
+		// two processes' connect clients share the host's network stack, where darwin hands each process's datagram
+		// ICMP sockets the other's echo replies under the same process-local ids (connect's ip_icmp_egress_unix.go)
+		self.Costs.Here = "its connect clients egress through the host's network stack, which two processes share"
+		child = nil
 	}
 
-	report.Explore = exploreAfter(ctx, builder, report.Fixed, settings)
-	report.Failures = append(report.Failures, report.Explore.Failures...)
-	report.Errors = append(report.Errors, report.Explore.TraceErrors...)
+	runStarted = time.Now()
+	explore, exploreRest := exploreFirst(ctx, subject.builder, self.Fixed, settings)
+	self.Costs.Explore.add(len(explore.Seeds), time.Since(runStarted))
+	var exploreTwin *ExploreReport
+	var exploreTwinRest []int64
 	if twin != nil {
-		report.ExploreTwin = exploreAfter(ctx, twin, report.Twin, settings)
-		report.Failures = append(report.Failures, report.ExploreTwin.Failures...)
-		report.Errors = append(report.Errors, report.ExploreTwin.TraceErrors...)
-	}
-	// the registered case alone, which the gate shows, on the build it runs: the rules' own tests run toys
-	// under rows' names
-	tier := settings.Tier
-	if tier == "" {
-		tier = TierT2
-	}
-	if sidecartest.HooksLinked && Lookup(registration.Row, registration.Case, tier) == registration {
-		report.Errors = append(report.Errors, report.oneOrderErrors(testCase)...)
+		runStarted = time.Now()
+		exploreTwin, exploreTwinRest = exploreFirst(ctx, twin, self.Twin, settings)
+		self.Costs.ExploreTwin.add(len(exploreTwin.Seeds), time.Since(runStarted))
 	}
 
-	if testCase.Row.Unknown {
-		failures, lostWrites := EveryWrite(ctx, builder, settings.Net)
-		report.Failures = append(report.Failures, failures...)
-		report.LostWrites = lostWrites
+	// every run left, in the order the runs were made one after another
+	runs := []*ruleRun{}
+	for _, seed := range exploreRest {
+		runs = append(runs, &ruleRun{Seed: seed})
 	}
-
+	for _, seed := range exploreTwinRest {
+		runs = append(runs, &ruleRun{Twin: true, Seed: seed})
+	}
+	var lostWrites []LostWrite
+	if subject.unknown && self.Fixed.Err == nil {
+		// a fixed run that failed is a dry run that failed, which leaves nothing to rerun (EveryWrite)
+		lostWrites = everyWriteLosses(opResults)
+	}
+	for _, lost := range lostWrites {
+		runs = append(runs, &ruleRun{Lost: &lost})
+	}
 	for _, trace := range traces {
-		result := runBuilt(ctx, Replay(builder, trace), settings.Net, nil)
-		report.Replays = append(report.Replays, result)
-		report.fail(result)
+		runs = append(runs, &ruleRun{Replay: trace})
 	}
 	if twin != nil {
 		for _, trace := range twinTraces {
-			result := runBuilt(ctx, Replay(twin, trace), settings.Net, nil)
-			report.Replays = append(report.Replays, result)
-			report.fail(result)
+			runs = append(runs, &ruleRun{Twin: true, Replay: trace})
 		}
 	}
-	return report
+	outcomes := self.runAll(ctx, subject, child, twin, runs, settings)
+
+	for index, run := range runs {
+		outcome := outcomes[index]
+		switch {
+		case run.Replay != nil:
+			self.Costs.Replays.add(1, outcome.took)
+		case run.Lost != nil:
+			self.Costs.EveryWrite.add(1, outcome.took)
+		case run.Twin:
+			self.Costs.ExploreTwin.add(1, outcome.took)
+			exploreTwin.record(run.Seed, outcome.result, settings, !outcome.childEnded)
+		default:
+			self.Costs.Explore.add(1, outcome.took)
+			explore.record(run.Seed, outcome.result, settings, !outcome.childEnded)
+		}
+	}
+	self.Explore = explore
+	self.Failures = append(self.Failures, explore.Failures...)
+	self.Errors = append(self.Errors, explore.TraceErrors...)
+	if exploreTwin != nil {
+		self.ExploreTwin = exploreTwin
+		self.Failures = append(self.Failures, exploreTwin.Failures...)
+		self.Errors = append(self.Errors, exploreTwin.TraceErrors...)
+	}
+	if subject.oneOrderCase != nil {
+		self.Errors = append(self.Errors, self.oneOrderErrors(subject.oneOrderCase)...)
+	}
+	if subject.unknown {
+		self.LostWrites = lostWrites
+		for index, run := range runs {
+			if run.Lost != nil {
+				self.fail(outcomes[index].result)
+			}
+		}
+	}
+	for index, run := range runs {
+		if run.Replay != nil {
+			self.Replays = append(self.Replays, outcomes[index].result)
+			self.fail(outcomes[index].result)
+		}
+	}
+}
+
+// Runs runs, each on a Net of its own, in child processes rebuilding subject's builder by child where settings allow
+// it, child nil keeping them here, and returns what each left, in runs' order.
+func (self *RowReport) runAll(ctx context.Context, subject *ruleSubject, child *ruleChildName, twin Builder, runs []*ruleRun, settings *RuleSettings) []*ruleOutcome {
+	outcomes := make([]*ruleOutcome, len(runs))
+	if count := ruleChildCount(settings, child); 1 < count && 1 < len(runs) {
+		outcomes, self.Costs.ChildProcesses = runInChildren(ctx, child, subject.id, runs, count, settings.Processes)
+	}
+	twinOf := func() (Builder, error) {
+		if twin == nil {
+			return nil, fmt.Errorf("%s names no twin", subject.id)
+		}
+		return twin, nil
+	}
+	// what no child took
+	for index, run := range runs {
+		if outcomes[index] != nil {
+			continue
+		}
+		started := time.Now()
+		result := run.run(ctx, subject.id, subject.builder, twinOf, settings.Net)
+		outcomes[index] = &ruleOutcome{result: result, took: time.Since(started)}
+	}
+	return outcomes
 }
 
 func (self *RowReport) fail(result *Result) {
