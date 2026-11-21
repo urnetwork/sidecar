@@ -102,8 +102,16 @@ func TestHostedMemberReadsSignedVaultRecord(t *testing.T) {
 // The native daemon's stock erase reaches the authenticated companion CUT and the writer's completion ERASE.
 func TestHostedMemberErasesSignedVaultRecordWithItsIndex(t *testing.T) {
 	world, _, evs, writer, vault, ref := hostedRecordNote(t, true)
-	if !evs.Format2Admitted() {
-		t.Fatal("the daemon did not receive the format2 gate")
+	for {
+		_, changed := world.net.Clock().WatchTimers()
+		if on, known := evs.Format2Gate(); known && on {
+			break
+		}
+		select {
+		case <-changed:
+		case <-world.ctx.Done():
+			t.Fatalf("waiting for the daemon's authenticated format2 gate: %v", world.ctx.Err())
+		}
 	}
 	result, err := writer.Eraser().Erase(world.ctx, &sidecar.RecordEraseArgs{LogId: vault, EntryIds: []sidecar.Id{ref.EntryId}, Reason: sidecar.RecordErasureReasonPerson, Confirmed: true})
 	if err != nil || result.Index == nil || !result.Index.Fenced || !result.Index.Completed || result.Index.DocumentCount != 1 {
