@@ -47,6 +47,7 @@ type fakeEvsFile struct {
 type fakeMcpEvsRepo struct {
 	stateLock  sync.Mutex
 	files      map[string]*fakeEvsFile
+	retained   map[string]map[uint64]*fakeEvsFile
 	children   map[string][]string
 	writeErr   error
 	atTipErr   error
@@ -90,6 +91,9 @@ func (self *fakeMcpEvsRepo) History(ctx context.Context, args *sidecar.EvsReadAr
 func (self *fakeMcpEvsRepo) ReadHead(ctx context.Context, args *sidecar.EvsReadArgs, out io.Writer) (*sidecar.EvsFileInfo, error) {
 	self.stateLock.Lock()
 	file, ok := self.files[args.Path]
+	if args.Version != 0 && (!ok || file.version != args.Version) {
+		file, ok = self.retained[args.Path][args.Version]
+	}
 	gate := self.gate
 	self.stateLock.Unlock()
 	if !ok {

@@ -51,6 +51,7 @@ import (
 	"errors"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -436,7 +437,6 @@ func mcpEvsRead(ctx context.Context, call *McpCall, repoId sidecar.Id, repo McpE
 		return nil, errMcpUnenrolled
 	}
 	result.SetSource("evs:" + repoId.String())
-	result.SetResource(McpEvsUri(repoId, path))
 	runId := call.RunId
 	ctx = sidecar.WithEvsReadContext(ctx, &sidecar.EvsReadContext{Purpose: sidecar.RecordReadPurposeRead, RunId: &runId})
 	limit := call.Session.server.settings.Mcp.ResourceByteCount
@@ -448,6 +448,7 @@ func mcpEvsRead(ctx context.Context, call *McpCall, repoId sidecar.Id, repo McpE
 		}
 		return nil, mcpEvsError(err)
 	}
+	result.SetResource(McpEvsUri(repoId, path) + "?network=" + call.NetworkId.String() + "&version=" + strconv.FormatUint(info.Version, 10))
 	McpMeter(ctx, int64(content.buffer.Len()))
 	out := &mcpEvsReadOut{
 		Path:          path,

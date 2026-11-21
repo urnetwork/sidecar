@@ -1,6 +1,7 @@
 //go:build !js && !ios && !android && !sdk_mobile_bind
 
-// ur://evs/{repo}/{+path} (§16.5; D-MCP-17, I-9; MCP-M3-13): a file's newest version as evs_read reads it, under the
+// ur://evs/{repo}/{+path} (§16.5; D-MCP-17, I-9; MCP-M3-13): a file's newest version, or the network and revision
+// an oversized evs_read result selected, under the
 // same guard, allow, trust and taint rule (tools_evs.go's header): its trust by its push's sealed provenance, own or
 // member for an untainted run's version, and an untrusted one, a tainted run's or an import's, tainting the run
 // before it returns (QD-042, QD-851).
@@ -18,6 +19,7 @@ package mcp
 import (
 	"context"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -25,19 +27,42 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
+const mcpEvsUriPrefix = "ur://evs/"
+
 // The URI of a path's resource: its names each escaped, joined by /.
 func McpEvsUri(repoId sidecar.Id, path string) string {
 	names := strings.Split(path, "/")
 	for i, name := range names {
 		names[i] = url.PathEscape(name)
 	}
-	return "ur://evs/" + repoId.String() + "/" + strings.Join(names, "/")
+	return mcpEvsUriPrefix + repoId.String() + "/" + strings.Join(names, "/")
+}
+
+// The selected network and version of an EVS result link. A plain path reads the head in the session's network.
+func mcpEvsResourcePin(uri string) (string, uint64, error) {
+	_, rawQuery, pinned := strings.Cut(uri, "?")
+	if !pinned {
+		return "", 0, nil
+	}
+	values, err := url.ParseQuery(rawQuery)
+	if err != nil || len(values) != 2 || len(values["network"]) != 1 || len(values["version"]) != 1 {
+		return "", 0, errMcpResourceNotFound()
+	}
+	networkId, err := sidecar.ParseId(values.Get("network"))
+	if err != nil || networkId == (sidecar.Id{}) {
+		return "", 0, errMcpResourceNotFound()
+	}
+	version, err := strconv.ParseUint(values.Get("version"), 10, 64)
+	if err != nil || version == 0 {
+		return "", 0, errMcpResourceNotFound()
+	}
+	return networkId.String(), version, nil
 }
 
 // The network a session's subscription acts on, resolved as a call's is, and ready.
-func (self *McpServer) sessionNetwork(session *McpSession) (sidecar.Id, McpNetwork, error) {
+func (self *McpServer) sessionNetwork(session *McpSession, name string) (sidecar.Id, McpNetwork, error) {
 	hello := session.hello
-	networkId, err := self.daemon.ResolveNetwork(&hello, "")
+	networkId, err := self.daemon.ResolveNetwork(&hello, name)
 	if err != nil {
 		return sidecar.Id{}, nil, newMcpError(McpCodeFailedPrecondition, "no network to act on: name one in the project's .ur", false)
 	}
@@ -131,7 +156,7 @@ func addEvsResource(resources *McpResources, server *McpServer) {
 	resources.Add(&McpResourceSpec{
 		UriTemplate: "ur://evs/{repo}/{+path}",
 		Name:        "evs",
-		Description: "A file of a repo at its newest version, as evs_read reads it; content a tainted run wrote, or an import brought in from outside, comes back marked untrusted, and reading it taints the run.",
+		Description: "A file of a repo at its newest version or the revision named in an evs_read result link. Content a tainted run wrote or an import brought in from outside comes back marked untrusted, and reading it taints the run.",
 		Read: func(ctx context.Context, call *McpCall, uri string, variables map[string]string, result *McpResult) (any, error) {
 			repoId, path, err := mcpEvsUriVariables(variables)
 			if err != nil {
@@ -151,14 +176,22 @@ func addEvsResource(resources *McpResources, server *McpServer) {
 			if err != nil {
 				return nil, err
 			}
-			return mcpEvsRead(ctx, call, repoId, repo, path, 0, result)
+			_, version, err := mcpEvsResourcePin(uri)
+			if err != nil {
+				return nil, err
+			}
+			return mcpEvsRead(ctx, call, repoId, repo, path, version, result)
 		},
 		Subscribe: func(ctx context.Context, session *McpSession, uri string, variables map[string]string) error {
 			repoId, path, err := mcpEvsUriVariables(variables)
 			if err != nil {
 				return err
 			}
-			networkId, network, err := server.sessionNetwork(session)
+			name, _, err := mcpEvsResourcePin(uri)
+			if err != nil {
+				return err
+			}
+			networkId, network, err := server.sessionNetwork(session, name)
 			if err != nil {
 				return err
 			}

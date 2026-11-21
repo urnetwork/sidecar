@@ -91,6 +91,60 @@ func TestResourceReadTaints(t *testing.T) {
 	}
 }
 
+// Both a large historical read and a large head read remain on the version and network they selected.
+func TestLargeEvsReadReturnsTheSelectedRevision(t *testing.T) {
+	env := newTestEvsToolEnv(t)
+	env.server.settings.Mcp.ResultByteCount = 768
+	conn := env.conn("2025-11-25")
+	path := "docs/history?#.txt"
+	before := strings.Repeat("first revision\n", 100)
+	env.putWith(env.general, path, before, env.tools.identity.SidecarId, testEvsCleanProvenance())
+	read := func(version uint64) string {
+		t.Helper()
+		response := env.callTool(conn, "2025-11-25", "evs_read", map[string]any{
+			"network": env.networkId.String(), "repo": env.general.String(), "path": path, "version": version,
+		})
+		envelope := testEnvelopeOf(t, response)
+		var wire testWireResult
+		if err := json.Unmarshal(response.Result, &wire); err != nil {
+			t.Fatal(err)
+		}
+		if !envelope.Truncated || len(wire.Content) != 1 || wire.Content[0].Type != "resource_link" || wire.Content[0].Uri != envelope.Resource {
+			t.Fatalf("missing result link: %s", response.Result)
+		}
+		return wire.Content[0].Uri
+	}
+	headLink := read(0)
+	repo := env.evs.repos[env.general]
+	first := repo.files[path]
+	repo.retained = map[string]map[uint64]*fakeEvsFile{path: {first.version: first}}
+	repo.files[path] = &fakeEvsFile{content: []byte("new head"), signer: first.signer, version: first.version + 1, provenance: first.provenance}
+	readLink := func(uri string) *mcpEvsReadOut {
+		t.Helper()
+		envelope := testResourceEnvelope(t, conn.call("resources/read", map[string]any{"uri": uri}), uri)
+		var out mcpEvsReadOut
+		if err := json.Unmarshal(envelope.Data, &out); err != nil {
+			t.Fatal(err)
+		}
+		return &out
+	}
+	if head := readLink(McpEvsUri(env.general, path)); head.Content != "new head" || head.Version != first.version+1 {
+		t.Fatalf("plain URI read version %d", head.Version)
+	}
+	// With two hosted networks a resource relying on the session default cannot be resolved.
+	env.daemon.host(t, env.network.Status().State, env.clock)
+	oldLink := read(first.version)
+	for _, uri := range []string{headLink, oldLink} {
+		if got := readLink(uri); got.Content != before || got.Version != first.version || got.Path != path {
+			t.Errorf("the link read version %d of %q, %d bytes", got.Version, got.Path, len(got.Content))
+		}
+	}
+	env.tools.stateLock.Lock()
+	env.tools.allowed = nil
+	env.tools.stateLock.Unlock()
+	wantMcpError(t, conn.call("resources/read", map[string]any{"uri": oldLink}), McpCodeRefused, "does not allow")
+}
+
 // A taint that cannot be written fails a ur://evs read of another writer's version, and nothing of it returns.
 func TestResourceReadFailedTaintFailsRead(t *testing.T) {
 	env := newTestEvsToolEnv(t)
