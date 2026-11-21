@@ -173,8 +173,12 @@ func (self *gkmGroupManager) createInFlow(ctx context.Context, args *GkmCreateGr
 	if err != nil {
 		return nil, err
 	}
-	if state.Repo(self.repoId) == nil {
+	repo := state.Repo(self.repoId)
+	if repo == nil {
 		return nil, fmt.Errorf("%w: repo %s: its RepoCreate has not reached this state", ErrGkmNoRepo, self.repoId)
+	}
+	if args.Inbox != protocol.RepoInbox_REPO_INBOX_NONE && (repo.GetInbox() != args.Inbox || !AclRepoIsInbox(repo)) {
+		return nil, fmt.Errorf("%w: repo %s does not carry the expected inbox role", ErrGkmMalformed, self.repoId)
 	}
 	for drawCount := 0; drawCount < max(1, client.settings.CreateGroupDrawCount); drawCount += 1 {
 		// the group stands: only its deliveries may be missing
@@ -320,7 +324,7 @@ func (self *gkmGroupManager) draftCreate(state GkmAuthView, args *GkmCreateGroup
 		return nil, err
 	}
 	generationArgs := &GkmGenerationArgs{Cause: GkmCauseRequest, Auth: state.Pin(), Time: now, HoldersSha256: holders.Sha256(), WrapCount: uint32(len(targets))}
-	if GkmRepoKindTakesDeposits(args.Kind) {
+	if gkmRepoTakesDeposits(state.Repo(self.repoId)) {
 		generationArgs.DropNotAfter = now.Add(client.settings.DropKeyLifetime)
 	}
 	var key *EvsRepoKey

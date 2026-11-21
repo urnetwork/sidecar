@@ -242,7 +242,7 @@ func (self *GkmGroupClient) RenewDropKey(ctx context.Context, repoId Id) error {
 	}
 	repo := state.Repo(repoId)
 	row := state.SidecarRow(self.args.SidecarId)
-	if repo == nil || !GkmRepoKindTakesDeposits(repo.GetKind()) || !gkmRowStanding(row) || gkmRowReadOnly(row) || !gkmWrites(state, repoId, self.args.SidecarId) {
+	if !gkmRepoTakesDeposits(repo) || !gkmRowStanding(row) || gkmRowReadOnly(row) || !gkmWrites(state, repoId, self.args.SidecarId) {
 		return nil
 	}
 	top, err := self.newestHeldGeneration(repoId)

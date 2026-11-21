@@ -101,12 +101,17 @@ func FoldAclRepos(repos []*protocol.AclRepo, entries []AclAccessLogEntry) ([]*pr
 		signer := verdict.Signer.Bytes()
 		switch body := statement.Body.(type) {
 		case *protocol.RepoCreate:
+			if !aclRepoInboxFits(body.GetKind(), body.GetInbox()) || (body.GetInbox() == protocol.RepoInbox_REPO_INBOX_ADMIN &&
+				slices.ContainsFunc(next, func(repo *protocol.AclRepo) bool { return repo.GetInbox() == protocol.RepoInbox_REPO_INBOX_ADMIN })) {
+				return nil, ErrAclAccessLogFold
+			}
 			if slices.ContainsFunc(next, func(repo *protocol.AclRepo) bool { return bytes.Equal(repo.GetRepoId(), body.GetRepoId()) }) {
 				return nil, ErrAclAccessLogFold
 			}
 			repo := &protocol.AclRepo{
 				RepoId: bytes.Clone(body.GetRepoId()),
 				Kind:   body.GetKind(),
+				Inbox:  body.GetInbox(),
 				Admins: []*protocol.AclRepoAdminRow{{SidecarId: signer, Signer: signer, At: at}},
 				// the making is the repo's t_s until its first shrink (QD-1015)
 				HoldersShrunkTimeMs: statement.TimeMs,

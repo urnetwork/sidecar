@@ -15,6 +15,8 @@ package protocol
 // Each block names its file, as a fence does, and each declaration says where the design writes it. A declaration
 // that gains a real fence is then written twice, which says to take it out of here.
 const testUnfencedFence = `
+// §8.8's RepoCreate row and QD-102 fix the values of the creation marker.
+enum RepoInbox { REPO_INBOX_NONE = 0; REPO_INBOX_GROUP = 1; REPO_INBOX_ADMIN = 2; }
 // sidecar/protocol/envelope.proto
 // §6.5: each result has its request's fields.
 message HelloResult {
@@ -640,6 +642,8 @@ var testFenceAdditions = []struct {
 	field    testFenceField
 	question string
 }{
+	{message: "RepoCreate", field: testFenceField{name: "inbox", number: 4, typeName: "RepoInbox"}, question: "plan-MAIL-group-inbox (QD-102)"},
+	{message: "AclRepo", field: testFenceField{name: "inbox", number: 14, typeName: "RepoInbox"}, question: "plan-MAIL-group-inbox (QD-102)"},
 	{
 		message:  "IndexerRow",
 		field:    testFenceField{name: "nonce", number: 6, typeName: "bytes"},

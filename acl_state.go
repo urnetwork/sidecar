@@ -761,6 +761,7 @@ func (self *AclState) indexSuspensions() error {
 
 // Indexes the rows' repos and their folded access logs.
 func (self *AclState) indexRepos() error {
+	adminInbox := false
 	for i, row := range self.rows.GetRepos() {
 		field := fmt.Sprintf("repos[%d]", i)
 		repoId, err := aclRowsId(row.GetRepoId(), field+".repo_id")
@@ -772,6 +773,15 @@ func (self *AclState) indexRepos() error {
 		}
 		if _, found := self.repos[repoId]; found {
 			return aclRowsRefusal("%s repeats a repo", field)
+		}
+		if !aclRepoInboxFits(row.GetKind(), row.GetInbox()) {
+			return aclRowsRefusal("%s has an invalid inbox role", field)
+		}
+		if row.GetInbox() == protocol.RepoInbox_REPO_INBOX_ADMIN {
+			if adminInbox {
+				return aclRowsRefusal("%s repeats the network admin inbox", field)
+			}
+			adminInbox = true
 		}
 		repo := &aclRepoState{
 			row:      row,
