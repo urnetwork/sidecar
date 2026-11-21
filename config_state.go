@@ -190,6 +190,8 @@ type ConfigState struct {
 	delegations map[string]*bridge.DelegationRow
 	keys        map[string]*bridge.KeyRow
 	aclRows     *protocol.AclRows
+	// Canonical actions of port-limited grants this reader verified. The ciphertext stays bound to its grant id.
+	grantActions map[string][]byte
 	// the newest AdminSet's threshold as signed, 0 for the default (§7.9's authority row)
 	threshold uint32
 	// the ServiceSettings values every verifier judges by, from the newest base's rows; nil before base 1
@@ -710,6 +712,7 @@ func configCopyState(state *ConfigState) *ConfigState {
 		delegations:         state.delegations,
 		keys:                state.keys,
 		aclRows:             state.aclRows,
+		grantActions:        state.grantActions,
 		threshold:           state.threshold,
 		settings:            state.settings,
 		headSettings:        state.headSettings,

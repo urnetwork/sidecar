@@ -34,6 +34,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
+	"net/netip"
 	"slices"
 	"strings"
 
@@ -322,4 +324,102 @@ func RecordOrderInPush(headers []*StoredRecordHeader) {
 // Whether a push's entries already stand in §16.8's order, as a reader holds a received push to it.
 func RecordInPushOrder(headers []*StoredRecordHeader) bool {
 	return slices.IsSortedFunc(headers, RecordCompareInPush)
+}
+
+// A CanonicalActionDetail that is not one its action may carry: empty, a port that is none, a prefix or a destination
+// that does not read, a destination that names no port or prefix, or a sidecar the clear grant_dst does not name.
+var ErrCanonicalActionDetailInvalid = errors.New("canonical action detail invalid")
+
+// The sidecar a clear grant_dst entry names, false for another kind of destination.
+func canonicalActionGrantDstSidecar(dst string) (string, bool) {
+	kind, value, found := strings.Cut(dst, ":")
+	if !found || kind != "sidecar" {
+		return "", false
+	}
+	id, _, _ := strings.Cut(value, ":")
+	return id, true
+}
+
+// Whether text is a prefix in its one form: an address and a length, the host bits clear.
+func canonicalActionPrefixForm(text string) bool {
+	prefix, err := netip.ParsePrefix(text)
+	return err == nil && prefix == prefix.Masked() && prefix.String() == text
+}
+
+// Holds a detail to the action that carries it: it holds something; target_port is a port; each cidr is a prefix in
+// its one form; each grant_dst entry is one a clear field may not hold, a sidecar's port as ParseAclGrantDst reads it
+// or an ip: prefix; and each sidecar it names a port of is one the action's clear grant_dst names. action nil checks
+// the detail alone.
+func CheckCanonicalActionDetail(action *protocol.CanonicalAction, detail *protocol.CanonicalActionDetail) error {
+	if detail == nil {
+		return fmt.Errorf("%w: no detail", ErrCanonicalActionDetailInvalid)
+	}
+	if len(detail.ProtoReflect().GetUnknown()) != 0 {
+		return fmt.Errorf("%w: a field this build cannot name", ErrCanonicalActionDetailInvalid)
+	}
+	if len(detail.GetCidrs()) == 0 && detail.GetTargetPort() == 0 && len(detail.GetGrantDst()) == 0 {
+		return fmt.Errorf("%w: an empty detail", ErrCanonicalActionDetailInvalid)
+	}
+	if math.MaxUint16 < detail.GetTargetPort() {
+		return fmt.Errorf("%w: target_port %d", ErrCanonicalActionDetailInvalid, detail.GetTargetPort())
+	}
+	// the values stay out of the errors, which a log may carry (I-13)
+	for i, cidr := range detail.GetCidrs() {
+		if !canonicalActionPrefixForm(cidr) {
+			return fmt.Errorf("%w: cidrs[%d] is no prefix", ErrCanonicalActionDetailInvalid, i)
+		}
+	}
+	clearSidecars := []string{}
+	for _, dst := range action.GetGrantDst() {
+		if id, ok := canonicalActionGrantDstSidecar(dst); ok {
+			clearSidecars = append(clearSidecars, id)
+		}
+	}
+	for i, dst := range detail.GetGrantDst() {
+		if canonicalActionGrantDstClear(dst) {
+			return fmt.Errorf("%w: grant_dst[%d] names no port or prefix", ErrCanonicalActionDetailInvalid, i)
+		}
+		if prefix, isPrefix := strings.CutPrefix(dst, "ip:"); isPrefix {
+			if !canonicalActionPrefixForm(prefix) {
+				return fmt.Errorf("%w: grant_dst[%d] is no prefix", ErrCanonicalActionDetailInvalid, i)
+			}
+			continue
+		}
+		if _, port, err := ParseAclGrantDst(dst); err != nil || port == nil {
+			return fmt.Errorf("%w: grant_dst[%d] is no sidecar's port", ErrCanonicalActionDetailInvalid, i)
+		}
+		if id, _ := canonicalActionGrantDstSidecar(dst); action != nil && !slices.Contains(clearSidecars, id) {
+			return fmt.Errorf("%w: grant_dst[%d] names a sidecar the clear grant_dst does not", ErrCanonicalActionDetailInvalid, i)
+		}
+	}
+	return nil
+}
+
+// Opens action's sealed_detail with the key of the generation it names, which repoKeyAt answers (nil holds none),
+// under the context action's own stored bytes derive in networkId's network (CanonicalActionDetailSealContext), and
+// holds it to the action. nil with no error for an action that carries none. See CanonicalActionDetailOpener for the
+// errors.
+func OpenCanonicalActionDetail(action *StoredCanonicalAction, networkId Id, repoKeyAt func(generation uint64) *EvsRepoKey) (*protocol.CanonicalActionDetail, error) {
+	if action == nil || action.Action == nil {
+		return nil, fmt.Errorf("%w: no action", ErrCanonicalActionInvalid)
+	}
+	sealed := action.Action.GetSealedDetail()
+	if len(sealed) == 0 {
+		return nil, nil
+	}
+	sealContext, err := CanonicalActionDetailSealContext(networkId, action.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	if repoKeyAt == nil {
+		repoKeyAt = func(generation uint64) *EvsRepoKey { return nil }
+	}
+	detail := &protocol.CanonicalActionDetail{}
+	if _, err := OpenConfigBody(sealed, sealContext, repoKeyAt, detail); err != nil {
+		return nil, err
+	}
+	if err := CheckCanonicalActionDetail(action.Action, detail); err != nil {
+		return nil, err
+	}
+	return detail, nil
 }

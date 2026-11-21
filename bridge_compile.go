@@ -64,7 +64,8 @@ type BridgeConfigView interface {
 	Acl() *AclState
 	// The sealed policy's CIDRs and ports (§8.6); nil with no document, or before the head's policy is compiled.
 	AclLocal() *AclLocalPolicy
-	// The head S(n)'s base names, without its folds: the block, the names and the ledger's manifest. Nil before base 1.
+	// The head S(n)'s base names: the block, names and ledger manifest. Its folded records can supply the exact
+	// approved action for a port-limited grant when a reader starts at a base. Nil before base 1.
 	Head() *ConfigHead
 	// A ledger file the head's manifest names, streamed: rows in file order, its bytes hashed to the manifest's. Nil and
 	// no error for a path the head holds no file at. The only way the compile reads the ledger's rows.
@@ -302,6 +303,8 @@ type bridgeCompiler struct {
 	state    *ConfigState
 	acl      *AclState
 	aclLocal *AclLocalPolicy
+	// Includes cold-start grants recovered from the authenticated head at this pin.
+	grantActions map[string][]byte
 	// t, S(n)'s time, as ms and as a time
 	t   int64
 	now time.Time
@@ -345,18 +348,19 @@ func CompileBridgeState(view BridgeConfigView, local *BridgeCompileLocal, settin
 	}
 	state := view.State()
 	compiler := &bridgeCompiler{
-		view:        view,
-		local:       local,
-		settings:    compileSettings,
-		state:       state,
-		acl:         view.Acl(),
-		aclLocal:    view.AclLocal(),
-		t:           state.TimeMs(),
-		now:         time.UnixMilli(state.TimeMs()),
-		self:        local.SidecarId,
-		selfSubject: AclSidecarSubject(local.SidecarId),
-		bindings:    local.Bindings,
-		compiled:    &BridgeCompiled{},
+		view:         view,
+		local:        local,
+		settings:     compileSettings,
+		state:        state,
+		acl:          view.Acl(),
+		aclLocal:     view.AclLocal(),
+		grantActions: state.grantActionsAtHead(view.Head()),
+		t:            state.TimeMs(),
+		now:          time.UnixMilli(state.TimeMs()),
+		self:         local.SidecarId,
+		selfSubject:  AclSidecarSubject(local.SidecarId),
+		bindings:     local.Bindings,
+		compiled:     &BridgeCompiled{},
 
 		ledgerSettings: settings,
 	}
