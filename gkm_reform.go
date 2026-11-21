@@ -137,7 +137,7 @@ type GkmRepoAdminView interface {
 	RepoAdmins(repoId Id) []Id
 }
 
-// §10.6's GroupForm signer rule at a state: a standing member device that is not read_only and, in an owner-bound
+// §10.6's GroupForm signer rule at a state: a standing writable sidecar and, in an owner-bound
 // repo, the owner's consented device; outside owner-bound kinds, one of the repo's admins, its access log's
 // RepoAdmins (owner decision 8), a device of a network admin, a member whose role is Owner or Admin, or a device a
 // state answering GkmRepoAdminView names. ErrGkmNotWriter for a signer the rule refuses. The rows hold no deletion's
@@ -178,6 +178,19 @@ func GkmFormSignerAllowed(view GkmAuthView, repoId Id, signerId Id) error {
 	}
 	if adminView, ok := view.(GkmRepoAdminView); ok && slices.Contains(adminView.RepoAdmins(repoId), signerId) {
 		return nil
+	}
+	if config, ok := view.(interface {
+		Acl() (*AclState, error)
+		TimeMs() int64
+	}); ok {
+		acl, err := config.Acl()
+		if err != nil {
+			return err
+		}
+		access := acl.EvsAccess(AclSidecarSubject(signerId), repoId, AclTokenAudienceGkm, time.UnixMilli(config.TimeMs()))
+		if access.Rights.Has(AclEvsAdmin) {
+			return nil
+		}
 	}
 	return fmt.Errorf("%w: a GroupForm is a repo admin's or a network admin's device's", ErrGkmNotWriter)
 }
