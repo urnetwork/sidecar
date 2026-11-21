@@ -1291,3 +1291,41 @@ func TestMailReceiverTlsaRecordsReadRetirementsAndRefuseAMalformedOne(t *testing
 		}
 	}
 }
+
+// An RCPT's recipient (QD-1129): every form of §15.8's under the root as ParseMailRecipient gives it, and outside the
+// root only a custom domain's bounce, bounces+<token>@b.<domain>, which a DSN of a send strict mode moved reaches
+// through the custom MX; anything else outside the root names no recipient, an unknown address. Every name is
+// synthetic.
+func TestMailReceiverRecipientTakesACustomDomainsBounce(t *testing.T) {
+	root := "root.example"
+	for _, address := range []string{
+		"ada@acme.root.example",
+		"bounces+abc@b.acme.root.example",
+		"shop@otter-4821.acme.root.example",
+		"ada@ops.acme.root.example",
+	} {
+		recipient, ok := MailReceiverRecipient(root, address)
+		parsed, err := ParseMailRecipient(root, address)
+		if !ok || err != nil || recipient != parsed || recipient.CustomDomain != "" {
+			t.Errorf("%q: %+v, %t", address, recipient, ok)
+		}
+	}
+	recipient, ok := MailReceiverRecipient(root, "Bounces+abc@B.Brand.Example")
+	if !ok || recipient.Kind != MailAddressKindBounce || recipient.CustomDomain != "brand.example" || recipient.Token != "abc" ||
+		recipient.Address() != "bounces+abc@b.brand.example" {
+		t.Fatalf("a custom domain's bounce: %+v, %t", recipient, ok)
+	}
+	for _, address := range []string{
+		// the custom domain's own names are no recipient of a network's receivers
+		"ada@brand.example",
+		"bounces+abc@brand.example",
+		"ada@b.brand.example",
+		"bounces+abc@b.example",
+		"postmaster",
+		"",
+	} {
+		if recipient, ok := MailReceiverRecipient(root, address); ok || recipient != (MailRecipient{}) {
+			t.Errorf("%q: %+v", address, recipient)
+		}
+	}
+}

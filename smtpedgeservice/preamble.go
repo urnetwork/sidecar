@@ -288,6 +288,9 @@ func (self *smtpPreambleHandler) decide(ctx context.Context, stream *smtpPreambl
 			MxHost:       mx.mxHost,
 			DnssecChain:  mx.chain,
 			EhloKeywords: mx.keywords,
+			// the envelope the session holds MAIL FROM to, which the sidecar checks its own against before any record
+			// (QD-1154): it never sends at this one, so a sidecar that read another strict set holds instead of a cut
+			EnvelopeDomain: gate.EnvelopeDomain,
 		},
 		Mx:          mx,
 		Session:     session,

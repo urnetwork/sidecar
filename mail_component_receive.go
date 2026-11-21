@@ -70,9 +70,10 @@ func newMailSidecarReceiverFactory(sidecar *Sidecar) mailReceiverFactory {
 		sessions, err := NewMailSessionServer(&MailSessionArgs{
 			ReceiverSidecarId: identity.SidecarId,
 			Resolve: func(ctx context.Context, address string) (*MailSessionRecipient, error) {
-				recipient, err := ParseMailRecipient(root, address)
-				if err != nil {
-					// no form of §15.8's under the root: unknown, as an unknown address is (550 5.1.1)
+				recipient, ok := MailReceiverRecipient(root, address)
+				if !ok {
+					// no form of §15.8's under the root, nor a custom domain's bounce (QD-1129): unknown, as an unknown
+					// address is (550 5.1.1)
 					return &MailSessionRecipient{}, nil
 				}
 				lookup, err := config.Resolve(ctx, recipient)

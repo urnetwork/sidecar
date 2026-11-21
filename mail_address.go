@@ -14,6 +14,11 @@
 //	<name>@<blabel>.<net>.<root>      a burner, any local part, <blabel> a word-number label (§15.9)
 //	r-<token>@<blabel>.<net>.<root>   a burner's reverse alias (§15.10), which parses although r-* is reserved
 //
+// One form lies outside the root, so ParseMailRecipient never gives it and only ParseMailCustomBounceRecipient does:
+//
+//	bounces+<token>@b.<domain>        a DSN to a mailbox whose send strict mode moved to a custom domain's envelope
+//	                                  (QD-1129), <domain> a verified custom domain, reached through its custom MX
+//
 // Parsing folds ASCII case, since §15.8's local parts are lowercase and DNS folds case, and refuses everything
 // else: a quoted, empty or non-ASCII local part, a domain outside the root, an IP literal, and a burner or b. zone
 // under a Team scope, which §15.8's table does not have. A <scope> or <net> is a lowercase LDH label but no
@@ -119,17 +124,25 @@ type MailRecipient struct {
 	Kind MailAddressKind
 	// The local part: bounces+<token> for a bounce, r-<token> for a reverse alias.
 	LocalPart string
-	Zone      MailZone
+	// For a custom domain's bounce, the root alone.
+	Zone MailZone
 	// A burner's or a reverse alias's <blabel>, else empty.
 	BurnerLabel string
 	// A bounce's or a reverse alias's <token>, else empty.
 	Token string
+	// A custom domain's bounce (ParseMailCustomBounceRecipient): the domain outside the root its b. sits under, else
+	// empty.
+	CustomDomain string
 }
 
-// The domain: the zone's, under b. for a bounce and under <blabel>. for a burner or a reverse alias.
+// The domain: the zone's, under b. for a bounce, or a custom domain's, and under <blabel>. for a burner or a reverse
+// alias.
 func (self MailRecipient) Domain() string {
 	switch self.Kind {
 	case MailAddressKindBounce:
+		if self.CustomDomain != "" {
+			return mailBounceLabel + "." + self.CustomDomain
+		}
 		return mailBounceLabel + "." + self.Zone.Domain()
 	case MailAddressKindBurner, MailAddressKindReverseAlias:
 		return self.BurnerLabel + "." + self.Zone.Domain()
@@ -263,4 +276,46 @@ func ParseMailRecipient(root string, address string) (MailRecipient, error) {
 		kind = MailAddressKindAdmin
 	}
 	return MailRecipient{Kind: kind, LocalPart: localPart, Zone: zone}, nil
+}
+
+// address as a custom domain's bounce, bounces+<token>@b.<domain>, any ASCII case (the file header's last form;
+// QD-1129): <domain> a name of two or more lowercase LDH labels outside root, as a sending sidecar's envelope stands
+// at b.<domain> while strict mode moves it there (SmtpStrictCustomDomain). Whether <domain> is strict, or the
+// network's at all, is not the grammar's to say: a receiver finds the address in its own network's mailcfg or answers
+// it unknown, so a DSN of a send made while the domain was strict still arrives after its MX host is unmapped.
+// Anything else is ErrMailRecipientInvalid, the address unrepeated.
+func ParseMailCustomBounceRecipient(root string, address string) (MailRecipient, error) {
+	invalid := func(reason string) (MailRecipient, error) {
+		return MailRecipient{}, fmt.Errorf("%w: %s", ErrMailRecipientInvalid, reason)
+	}
+	root = canonicalNetworkLabelRoot(root)
+	if !isNetworkLabelRoot(root) {
+		return invalid("the root is not a domain name")
+	}
+	if MailAddressMaxByteCount < len(address) {
+		return invalid("the address is too long")
+	}
+	address = dnsAsciiLower(address)
+	localPart, domain, found := strings.Cut(address, "@")
+	if !found || strings.Contains(domain, "@") {
+		return invalid("the address has no single @")
+	}
+	if localPart == "" || mailLocalPartMaxByteCount < len(localPart) {
+		return invalid("the local part is empty or too long")
+	}
+	token, found := strings.CutPrefix(localPart, mailBouncePrefix)
+	if !found || !validMailToken(token) {
+		return invalid("a custom domain's bounce zone takes only bounces+<token>")
+	}
+	if dnsDomainMaxByteCount < len(domain) {
+		return invalid("the domain is too long")
+	}
+	customDomain, found := strings.CutPrefix(domain, mailBounceLabel+".")
+	if !found || !isNetworkLabelRoot(customDomain) {
+		return invalid("the domain is no bounce zone of a domain")
+	}
+	if customDomain == root || strings.HasSuffix(customDomain, "."+root) {
+		return invalid("the domain is under the root, whose bounce zones ParseMailRecipient reads")
+	}
+	return MailRecipient{Kind: MailAddressKindBounce, LocalPart: localPart, Zone: MailZone{Root: root}, Token: token, CustomDomain: customDomain}, nil
 }

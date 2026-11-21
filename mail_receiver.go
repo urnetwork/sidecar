@@ -33,6 +33,10 @@
 // the route takes as a repeat, keeping the times this device recorded, then the served key's again naming every
 // retirement the store keeps, since the restored rows may hold a key it retired published again.
 //
+// A session's RCPT is one of §15.8's forms under the root, or the bounce of a send strict mode moved to a custom
+// domain's envelope, bounces+<token>@b.<domain> (QD-1129), which a DSN reaches through the custom MX
+// (MailReceiverRecipient); either resolves through the network's mailcfg, and anything else is unknown, 550 5.1.1.
+//
 // No URnetwork component or evs repo holds the mail host key: the keychain holds it, and only certificates reach a
 // handshake and only the TLSA times the component's store. Nothing here logs a host, a name, an address or a key
 // (I-13). Safe for concurrent use.
@@ -55,6 +59,19 @@ import (
 
 // The socket name a receiver listens on, before its host: §15.5's smtp/25/mx, or a Team scope's smtp/25/mx.<scope>.
 const mailReceiverListenPrefix = "smtp/25/"
+
+// The recipient an RCPT's address names under root (see the file header): one of §15.8's forms, or a custom domain's
+// bounce, which only a network's own mailcfg holds. False for anything else, which a session answers as an unknown
+// address, so the grammar tells a sender nothing a lookup would not.
+func MailReceiverRecipient(root string, address string) (MailRecipient, bool) {
+	if recipient, err := ParseMailRecipient(root, address); err == nil {
+		return recipient, true
+	}
+	if recipient, err := ParseMailCustomBounceRecipient(root, address); err == nil {
+		return recipient, true
+	}
+	return MailRecipient{}, false
+}
 
 var (
 	// Start was called on a receiver already started.

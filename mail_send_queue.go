@@ -116,7 +116,9 @@ func (self *MailClient) prepareQueue(ctx context.Context, plan *mailSendPlan) (m
 	if err != nil {
 		return nil, MailSendFailed
 	}
-	sender, err := self.BounceRecipient(ctx)
+	// the envelope the edge derives for the From as the network's strict domains stand now (QD-1129); the sender asks
+	// again at each connection, which a later mapping or unmapping of a strict-mode MX host moves
+	sender, err := self.BounceSender(ctx, plan.fromDomain)
 	if err != nil {
 		return nil, MailSendFailed
 	}
