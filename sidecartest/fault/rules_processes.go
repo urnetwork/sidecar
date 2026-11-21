@@ -30,6 +30,11 @@
 //
 // Each result keeps its run's place: a report lists seeds, failures, lost writes and replays in the order the runs were
 // made, whichever child finished first, so it reads the same however the children were scheduled.
+//
+// A child runs in the parent's working directory, the package's own, in a source tree, so that a builder finds there
+// what it finds in the parent, and it writes no trace: it reads no seeds, since each replay's trace comes over stdin,
+// and the parent writes a failing seed's trace from the events the child sent back, where the parent's settings say
+// (explore.go's record), never into the working directory or the seeds a walk up from it finds.
 
 package fault
 

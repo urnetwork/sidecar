@@ -1,7 +1,14 @@
-// A failing seed becomes a fixed schedule (§22.8's explorer row): its run's trace is written to
-// testdata/fault/seeds/<row>-<seed>.trace, and Replay builds the row's schedule to make the trace's
-// choices, the actor each baton went to, each yield and each step's release order, through the barrier
-// driver's script. Every run of a row then replays each trace committed for it.
+// A failing seed becomes a fixed schedule (§22.8's explorer row): its run's trace is written as
+// <row>-<seed>.trace, and once committed to testdata/fault/seeds, Replay builds the row's schedule to
+// make the trace's choices, the actor each baton went to, each yield and each step's release order,
+// through the barrier driver's script. Every run of a row then replays each trace committed for it.
+//
+// Committed traces are read from the repository's testdata/fault/seeds, found above the working
+// directory (SeedsDirectory), but a run writes a trace only where it is told to: the directory its
+// settings or UR_FAULT_TRACE_DIR name, or else one made for it under the host's temporary directory,
+// whose path the failure names (traceDestination). A walk up from a server package's directory finds
+// the sidecar checkout its go.mod replaces, the main checkout wherever a worktree links it, so writing
+// where the seeds are read put every failing seed of every consumer into a source tree.
 //
 // A replay of the code that failed repeats the failure. A replay of fixed code may leave the trace
 // where the fix changed what ran, and from there runs in the fixed order; Result.LeftTrace says where,
@@ -32,6 +39,13 @@ const seedsDirectoryPath = "testdata/fault/seeds"
 
 // The sibling a consumer's go.mod replace names, where server's T3 tests find the traces.
 const seedsSiblingName = "sidecar"
+
+// What names the directory failing seeds write their traces to, for DefaultRuleSettings'
+// TraceDirectory.
+const traceDirectoryEnvironment = "UR_FAULT_TRACE_DIR"
+
+// The name, before os.MkdirTemp's random part, of a directory made for traces where none is named.
+const traceTemporaryDirectoryPattern = "sidecar-fault-traces-"
 
 // A run's barrier trace, as a failing seed leaves it.
 type Trace struct {
@@ -152,15 +166,12 @@ func ReadTrace(path string) (*Trace, error) {
 	return trace, nil
 }
 
-// Writes trace into directory as its FileName, and returns its path. An empty directory is the
-// repository's, found above the working directory.
+// Writes trace into directory as its FileName, and returns its path. directory must be named, and
+// nothing is written without one: an empty directory once meant the seeds SeedsDirectory finds, a
+// source tree.
 func WriteTrace(directory string, trace *Trace) (string, error) {
 	if directory == "" {
-		found, err := SeedsDirectory()
-		if err != nil {
-			return "", err
-		}
-		directory = found
+		return "", fmt.Errorf("trace %s: no directory is named to write it to", trace.Id)
 	}
 	data, err := trace.Bytes()
 	if err != nil {
@@ -173,10 +184,46 @@ func WriteTrace(directory string, trace *Trace) (string, error) {
 	return path, nil
 }
 
+// Where one explorer's failing seeds write their traces: the directory named for them, made if
+// missing, or with none named, one made under the host's temporary directory at the first failing
+// seed, which the explorer's later ones share. A made directory is kept, so the path a failure names
+// outlives the test, and a trace reaches a source tree only through a directory named for it, as
+// testdata/fault/seeds is to commit what failed. A named directory is absolute: go test runs each
+// package's tests in the package's own directory, so a relative one would put a copy in every package
+// a run reaches.
+type traceDestination struct {
+	// RuleSettings.TraceDirectory, or empty
+	named string
+	// the directory made for the traces, once one is
+	made string
+}
+
+// Writes trace where the destination says, and returns its path.
+func (self *traceDestination) write(trace *Trace) (string, error) {
+	switch {
+	case self.named != "":
+		if !filepath.IsAbs(self.named) {
+			return "", fmt.Errorf("trace %s: the directory named for traces, %q, is not absolute, and go test would resolve it in each package's own directory (%s or RuleSettings.TraceDirectory)", trace.Id, self.named, traceDirectoryEnvironment)
+		}
+		if err := os.MkdirAll(self.named, 0o755); err != nil {
+			return "", err
+		}
+		return WriteTrace(self.named, trace)
+	case self.made == "":
+		made, err := os.MkdirTemp("", traceTemporaryDirectoryPattern)
+		if err != nil {
+			return "", err
+		}
+		self.made = made
+	}
+	return WriteTrace(self.made, trace)
+}
+
 // The repository's testdata/fault/seeds, looking from the working directory up: in this repository
 // it is in an ancestor, and in a consumer that replaces this module it is in the sidecar sibling of an
 // ancestor. Finding none is an error, so a row that cannot find its traces fails rather than replays
-// nothing.
+// nothing. Committed traces are read from here; a run writes none here unless a directory named for
+// traces is this one (traceDestination).
 func SeedsDirectory() (string, error) {
 	workingDirectory, err := os.Getwd()
 	if err != nil {

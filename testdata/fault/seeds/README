@@ -1,12 +1,17 @@
 Failing explorer seeds, kept as traces (§22.8's explorer row; TEST-M0-03).
 
-When a seed of fault.Explore fails a row, the run writes its barrier trace here as
+When a seed of fault.Explore fails a row, the run writes its barrier trace as
 <row>-<seed>.trace, where <row> is the case's name with "'s " made a hyphen: FS-1-7.trace,
-FS-19-config-read-3.trace. Commit the file with the fix. From then on every run of the row
-(fault.RunRow, fault.CheckRow) replays it through fault.Replay, which makes the trace's
-choices: the actor each baton went to, where each actor yielded, and the order each step
-released its barriers in. The same code fails the same way every time; fixed code passes,
-and the replay's LeftTrace says where the fix took the run off the trace.
+FS-19-config-read-3.trace, and the failure names the file. It writes it outside every source
+tree unless told otherwise: to the absolute directory RuleSettings.TraceDirectory names,
+UR_FAULT_TRACE_DIR's value by default, or with none named, to a directory made for it under
+the host's temporary directory and kept. Every run reads the traces here, and none writes here
+unless that directory is this one. Copy the file here and commit it with the fix, or run with
+UR_FAULT_TRACE_DIR set to this directory's absolute path to have it written here. From then on
+every run of the row (fault.RunRow, fault.CheckRow) replays it through fault.Replay, which
+makes the trace's choices: the actor each baton went to, where each actor yielded, and the
+order each step released its barriers in. The same code fails the same way every time; fixed
+code passes, and the replay's LeftTrace says where the fix took the run off the trace.
 
 The trace is kept, not the seed alone: a goroutine no actor owns runs free, so a seed may not
 order the actors the same way twice. A trace whose run stalled is followed to the stall and no
