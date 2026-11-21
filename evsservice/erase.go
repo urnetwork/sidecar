@@ -19,18 +19,19 @@
 //	class    a network's ERASE, CUT and CLOSURE pushes within 60 a minute are P0, past it P1, counted through
 //	         Quota.CountRate's evs_erasure_pushes; every slot rewrite is P0 (§11.13's classes)
 //
-// FinishErasures, the reconciler's half, reads the erasure ref's head window and finishes every committed ERASE's
-// rewrites there; versions paged into log pages are left to the client's own resume (§11.12's reconcile row), which
-// re-commits what a crash left missing.
+// The nightly inventory discovers each erasure ref independently of the writer. The reconciler walks the committed
+// window and earlier log pages, including packed pages and records. Each task finishes one page, newest first.
 
 package evsservice
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"maps"
 	"net/http"
+	"time"
 
 	"github.com/urnetwork/connect"
 
@@ -326,97 +327,126 @@ func (self *slotRewriter) rewriteSlot(ctx context.Context, cluster sidecar.BlobC
 	return fmt.Errorf("slot %s: %d rewrites lost their race", sidecar.EvsKeyId(slotId), self.settings.SlotRewriteRetryCount)
 }
 
-// Queues taskworker's evs.erasure_finish for the repo, a minute on. A queue that does not answer is logged: the
-// client's retry finishes the rewrites too.
+// The initial task accepts the original repo-ID args. A continuation names the
+// highest version still to check. Each page gets its own idempotent queue key.
+func erasureFinishRequest(repoId sidecar.Id, through uint64, runAt time.Time) *sidecar.TaskRequest {
+	args := repoId.Bytes()
+	onceKey := sidecar.EvsKeyId(repoId)
+	if through != 0 {
+		args = binary.BigEndian.AppendUint64(args, through)
+		onceKey += fmt.Sprintf("/%d", through)
+	}
+	return &sidecar.TaskRequest{Name: EvsErasureFinishTaskName, OnceKey: onceKey, Args: args, RunAt: runAt}
+}
+
+func ParseErasureFinishArgs(args []byte) (sidecar.Id, uint64, bool) {
+	var repoId sidecar.Id
+	switch len(args) {
+	case len(repoId):
+		return sidecar.Id(args), 0, true
+	case len(repoId) + 8:
+		through := binary.BigEndian.Uint64(args[len(repoId):])
+		return sidecar.Id(args[:len(repoId)]), through, through != 0
+	default:
+		return repoId, 0, false
+	}
+}
+
+// A live rewrite failure asks for an early pass. The nightly pass will also
+// discover the durable head when a writer stops before it can schedule a task.
 func (self *EvsEngine) queueErasureFinish(ctx context.Context, repoId sidecar.Id) {
 	if self.host.Tasks == nil {
 		return
 	}
-	err := self.host.Tasks.Schedule(ctx, &sidecar.TaskRequest{
-		Name:    EvsErasureFinishTaskName,
-		OnceKey: sidecar.EvsKeyId(repoId),
-		Args:    repoId.Bytes(),
-		RunAt:   self.clock.Now().Add(self.settings.ErasureFinishDelay),
-	})
-	if err != nil {
+	if err := self.host.Tasks.Schedule(ctx, erasureFinishRequest(repoId, 0, self.clock.Now().Add(self.settings.ErasureFinishDelay))); err != nil {
 		self.log.Warningf("[evs] repo %s: the erasure reconciler not queued: %v", sidecar.EvsKeyId(repoId), err)
 	}
 }
 
-// The reconciler's half (§11.12's push row: "a crash between leaves the client's retry, then taskworker's
-// reconciler, to finish the rewrites"): every committed ERASE in the repo's erasure ref's head window has its slots
-// rewritten without its keys. How many ERASEs it went over.
+// Reconcile one page. Queue its predecessor before acknowledging this task so
+// a worker can restart at either side of the handoff and repeat it safely.
+func RunErasureFinish(ctx context.Context, host *sidecar.ServiceHost, repoId sidecar.Id, through uint64) error {
+	_, remaining, err := finishErasures(ctx, host, repoId, through, true)
+	if err != nil || remaining == 0 {
+		return err
+	}
+	if host.Tasks == nil {
+		return errors.New("no task queue to continue erasure reconciliation")
+	}
+	return host.Tasks.Schedule(ctx, erasureFinishRequest(repoId, remaining, host.ClockOrReal().Now()))
+}
+
+// Finishes every committed ERASE on the ref, including archived versions.
 func FinishErasures(ctx context.Context, host *sidecar.ServiceHost, repoId sidecar.Id) (int, error) {
+	finished, _, err := finishErasures(ctx, host, repoId, 0, false)
+	return finished, err
+}
+
+func finishErasures(ctx context.Context, host *sidecar.ServiceHost, repoId sidecar.Id, through uint64, pageOnly bool) (int, uint64, error) {
 	if host == nil || host.Blobs == nil || host.Budget == nil {
-		return 0, errors.New("no host to finish erasures on")
+		return 0, 0, errors.New("no host to finish erasures on")
 	}
 	settings := DefaultEvsSettings()
 	priceTable, err := DefaultPriceTable(settings.PriceBlockByteCount)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	blobs := NewBudgetedBlobs(host.Blobs)
 	firstCluster, err := blobs.FirstCluster()
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	place, err := sidecar.ReadEvsRepoPlace(ctx, firstCluster, repoId)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	cluster, err := blobs.Cluster(place.ClusterId)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	heads := NewHeadStore(host.ClockOrReal(), host.ClockCheck, nil, settings, sidecar.NewNoopLogger())
 	refId := sidecar.EvsErasureRefId(repoId)
 	head, err := heads.ReadCluster(ctx, cluster, repoId, refId)
 	if err != nil || head.Absent() {
-		return 0, err
+		return 0, 0, err
 	}
-	window, err := EvsHeadWindow(head.Head)
+	if through == 0 {
+		through = head.Version()
+	} else if head.Version() < through {
+		return 0, 0, fmt.Errorf("%w: erasure continuation at %d past head %d", ErrEvsStatementMismatch, through, head.Version())
+	}
+	first := uint64(1)
+	if pageOnly && through != 0 {
+		first, _ = EvsLogPageVersions(EvsLogPageOf(through))
+	}
+	reader, err := newDropRefReader(ctx, cluster, repoId, refId, head.Head, NewRecordCache(settings), NewRecordLocator(blobs, nil), NewLogPageCache(settings), nil)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	records := NewRecordCache(settings)
-	// an ERASE's batch that evacuation emptied is read from its container through pidx/ (QD-664)
-	locator := NewRecordLocator(blobs, nil)
 	rewriter := &slotRewriter{budget: host.Budget, priceTable: priceTable, settings: settings}
 	finished := 0
-	for _, entry := range window {
+	for version := through; first <= version; version -= 1 {
+		entry, _, err := reader.entryAt(version)
+		if err != nil {
+			return finished, 0, err
+		}
 		if !entry.RewritesHistory() {
 			continue
 		}
-		record, err := ReadRecordLocated(ctx, records, locator, cluster, repoId, refId, entry.Place)
+		statement, payload, err := reader.pushAt(version, entry)
 		if err != nil {
-			return finished, err
+			return finished, 0, err
 		}
-		statementBytes, payloadBytes, err := sidecar.ParseEvsPushRecordBody(record.Body)
-		if err != nil {
-			return finished, err
-		}
-		statement, err := sidecar.ParseEvsStatement(statementBytes)
-		if errors.Is(err, sidecar.ErrEvsFormatUnsupported) {
-			statement, err = sidecar.ParseEvsStatementFormat2(statementBytes)
-		}
-		if err != nil || statement.Push.GetFlags()&uint32(protocol.EvsPushFlag_EVS_PUSH_ERASE) == 0 {
+		flags := statement.Push.GetFlags()
+		if flags&uint32(protocol.EvsPushFlag_EVS_PUSH_ERASE) == 0 || flags&uint32(protocol.EvsPushFlag_EVS_PUSH_COMPLETION) != 0 {
 			continue
-		}
-		if statement.Push.GetFlags()&uint32(protocol.EvsPushFlag_EVS_PUSH_COMPLETION) != 0 {
-			// a completion destroys nothing: its keys went with the ERASEs before it (QD-1137)
-			continue
-		}
-		// as the record keeps it, with no slot body (QD-806)
-		payload, err := sidecar.EvsCheckRecordPayload(statement, payloadBytes)
-		if err != nil {
-			return finished, err
 		}
 		if err := rewriter.rewriteErased(ctx, cluster, repoId, payload.Erased); err != nil {
-			return finished, err
+			return finished, 0, err
 		}
 		finished += 1
 	}
-	return finished, nil
+	return finished, first - 1, nil
 }
 
 // An ERASE's, CUT's or CLOSURE's class: P0 within its network's 60 a minute, counted once a push id, else P1 (§11.13).

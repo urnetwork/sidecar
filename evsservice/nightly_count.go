@@ -76,7 +76,15 @@ func (self *NightlyPass) batchRecordByteCount(ctx context.Context, cluster sidec
 	}
 	byteCount := int64(0)
 	readAge := max(self.settings.HeadWindowAge, self.collectorSettings.HeadAge)
+	erasureHead := HeadKey(repoId, sidecar.EvsErasureRefId(repoId))
 	for _, listed := range heads {
+		// An ERASE writer can stop immediately after committing. Its head is the
+		// durable source of work even after it falls outside the accounting age.
+		if listed.Key == erasureHead && self.host.Tasks != nil {
+			if err := self.host.Tasks.Schedule(ctx, erasureFinishRequest(repoId, 0, now)); err != nil {
+				return 0, err
+			}
+		}
 		if listed.LastModified.Before(now.Add(-readAge)) {
 			continue
 		}
