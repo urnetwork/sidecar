@@ -603,8 +603,8 @@ barrier pushservice.wake_sender.window pushservice/wake_sender.go
 barrier pushservice.wake_sender.window_set pushservice/wake_sender.go
 barrier quota.usage_report.after host_quota_batcher.go
 barrier quota.usage_report.before host_quota_batcher.go
-barrier record.capture.commit.after record_writer.go
-barrier record.capture.commit.before record_writer.go
+barrier record.capture.commit.after record_capture.go
+barrier record.capture.commit.before record_capture.go
 barrier record.chain.fsync.after record_chain.go
 barrier record.chain.fsync.before record_chain.go
 barrier record.chain.head.after record_chain.go
