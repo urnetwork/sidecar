@@ -200,7 +200,7 @@ type smtpConnectionArgs struct {
 // What one connection came to. Exactly one of these holds: NoProver; Err with no PreambleCode; a PreambleCode
 // other than OK; or OK, with the TLS level, any refusal and the prover's result or error.
 type SmtpConnectionResult struct {
-	// No key set was ready, so no connection was made: the host only queues (D-SMTP-18).
+	// No key set or current measurement was available. This host only queues (D-SMTP-18, QD-483).
 	NoProver bool
 	// The edge's answer, OK or the refusal that ended the stream before any MX byte; UNSPECIFIED when the
 	// connection ended before one came.
@@ -474,7 +474,9 @@ func (self *smtpConnection) runStream(
 	result.TlsLevel = authentication.Level()
 	result.TlsRefusal = authentication.Refusal()
 	result.Proof = proofResult
-	if err != nil {
+	if errors.Is(err, ErrSmtpProverUnmeasured) {
+		result.NoProver = true
+	} else if err != nil {
 		result.Err = err
 	}
 	if proofResult != nil && proofResult.Mode != 0 {

@@ -743,6 +743,15 @@ func TestAJobsClientHelloOffersOnlyItsSetsReadyFamilies(t *testing.T) {
 	if !bytes.Equal(prover.KeySet(), made.id) {
 		t.Errorf("KeySet %x", prover.KeySet())
 	}
+	if suites, err := testClientHelloSuites(t, prover, job); !errors.Is(err, sidecar.ErrSmtpProverUnmeasured) || suites != nil {
+		t.Fatalf("ready keys before measurement: %x, %v", suites, err)
+	}
+	clock := &testClock{now: time.Unix(1_800_000_000, 0)}
+	prover.clock = clock.read
+	prover.backend = &testClockedBackend{clock: clock, costs: map[uint16]time.Duration{tlsSuiteChacha20Poly1305Sha256: time.Second}}
+	if _, err := prover.Measure(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	suites, err := testClientHelloSuites(t, prover, job)
 	if err == nil || !slices.Equal(suites, []uint16{tlsSuiteChacha20Poly1305Sha256}) {
 		t.Errorf("offered %x, %v", suites, err)

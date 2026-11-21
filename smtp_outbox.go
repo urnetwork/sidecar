@@ -386,7 +386,7 @@ func (self *SmtpOutboxRunner) RunOnce(ctx context.Context) (*SmtpOutboxPass, err
 			}
 			continue
 		}
-		if !self.takes(message, outcomes, records, now) {
+		if self.args.Sender.localMeasure() == nil || !self.takes(message, outcomes, records, now) {
 			pass.Left += 1
 			continue
 		}

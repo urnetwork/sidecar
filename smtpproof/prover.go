@@ -62,9 +62,8 @@ type ProverSettings struct {
 	// replies, a public value, plus ReplyMarginByteCount, 8 octets (DESIGN-DETAILS 3.2.4).
 	ReplyEstimateByteCount int
 	ReplyMarginByteCount   int
-	// smtp_data_proof_bytes: a larger message to an MX without CHUNKING is too_large before MAIL (§14.5). Measure
-	// replaces this unmeasured default with the host's own figure, 0 where a unit cannot prove within
-	// DataPartTime. Non-positive refuses every DATA send.
+	// The send's measured smtp_data_proof_bytes. SendSmtp sets this on its per-send settings from Measure.
+	// Zero after measurement closes DATA. A prover awaiting its first measurement only queues (§14.5).
 	DataProofBytes int
 	// How long one DATA part may take to prove: §14.5's 2 minutes, inside the MX's 5-minute timeout. A
 	// host whose unit takes longer sends nothing in DATA mode.
@@ -117,7 +116,6 @@ func DefaultProverSettings() *ProverSettings {
 		ShapeIdleTimeout:       2 * time.Minute,
 		ReplyEstimateByteCount: 40,
 		ReplyMarginByteCount:   8,
-		DataProofBytes:         1024 * 1024,
 		DataPartTime:           2 * time.Minute,
 		DataConnectionTime:     2 * time.Hour,
 		MaxServerBytes:         256 * 1024,
@@ -334,8 +332,20 @@ func (self *Prover) SendSmtp(ctx context.Context, conn net.Conn, job *sidecar.Sm
 	if len(suites) == 0 {
 		return nil, errors.New("smtpproof: no TLS suite to offer")
 	}
-	settings.suites = suites
 	sendSettings := self.sendSettings()
+	if sendSettings == nil {
+		return nil, sidecar.ErrSmtpProverUnmeasured
+	}
+	if self.keys != nil {
+		// An older key set offered after KEYS can have families the current host did not measure.
+		suites = slices.DeleteFunc(slices.Clone(suites), func(suite uint16) bool {
+			return !slices.Contains(sendSettings.SuiteOrder, suite)
+		})
+		if len(suites) == 0 {
+			return nil, sidecar.ErrSmtpProverUnmeasured
+		}
+	}
+	settings.suites = suites
 	sendSettings.Proof = proof
 	run := &proverRun{
 		settings: sendSettings,

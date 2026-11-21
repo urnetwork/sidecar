@@ -134,6 +134,15 @@ func (self *FakeSmtpProver) Sends() []*FakeSmtpProverSend {
 	return append([]*FakeSmtpProverSend(nil), self.sends...)
 }
 
+// SendMeasure supplies a sender fixture with the DATA cap its scripted prover enforces.
+func (self *FakeSmtpProver) SendMeasure() *sidecar.SmtpProverMeasure {
+	if self.settings.Measure != nil {
+		measure := *self.settings.Measure
+		return &measure
+	}
+	return &sidecar.SmtpProverMeasure{DataProofBytes: self.settings.DataProofByteCount}
+}
+
 func (self *FakeSmtpProver) Measure(ctx context.Context) (*sidecar.SmtpProverMeasure, error) {
 	if self.settings.Measure == nil {
 		return nil, errFakeSmtpProverNoMeasure

@@ -843,7 +843,7 @@ func fs31Run(t *testing.T, connection *fs31Connection) *fs31Outcome {
 		conn = outcome.attack.conn(conn)
 		channel = outcome.attack.channel(channel)
 	}
-	prover := &Prover{settings: settings, backend: backend, tlsSuites: cell.leg.suites}
+	prover := testSendingProver(settings, backend, cell.leg.suites)
 	proved := make(chan struct{})
 	go func() {
 		defer close(proved)

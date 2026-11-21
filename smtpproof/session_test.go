@@ -506,8 +506,19 @@ func testRunSendWith(t *testing.T, leg *testTlsLeg, mxSettings *testMxSettings, 
 	return testRunSendThrough(t, leg, mxSettings, proverSettings, job, partProver, partVerifier, nil)
 }
 
-// As testRunSendWith, with the relay set up by configure, when given, before anything flows.
-func testRunSendThrough(t *testing.T, leg *testTlsLeg, mxSettings *testMxSettings, proverSettings *ProverSettings, job *sidecar.SmtpProofJob, partProver partProver, partVerifier partVerifier, configure func(edge *testEdge)) *testSend {
+// The scripted prover has a known reference capacity. A fixture can lower it to exercise the size check.
+func testSendingProver(settings *ProverSettings, backend partProver, suites []uint16) *Prover {
+	cap := settings.DataProofBytes
+	if cap == 0 {
+		cap = 1024 * 1024
+	}
+	return &Prover{settings: settings, backend: backend, tlsSuites: suites, measured: &proverMeasured{
+		measure: sidecar.SmtpProverMeasure{DataProofBytes: uint64(cap)},
+	}}
+}
+
+// As testRunSendWith, with the relay configured before anything flows and, if supplied, a host's actual measurement.
+func testRunSendThrough(t *testing.T, leg *testTlsLeg, mxSettings *testMxSettings, proverSettings *ProverSettings, job *sidecar.SmtpProofJob, partProver partProver, partVerifier partVerifier, configure func(edge *testEdge), measurement ...*sidecar.SmtpProverMeasure) *testSend {
 	t.Helper()
 	sidecarConn, edgeSidecarConn := testPipe()
 	edgeMxConn, mxConn := testPipe()
@@ -534,7 +545,10 @@ func testRunSendThrough(t *testing.T, leg *testTlsLeg, mxSettings *testMxSetting
 	}
 	edge.run()
 
-	prover := &Prover{settings: proverSettings, backend: partProver, tlsSuites: leg.suites}
+	prover := testSendingProver(proverSettings, partProver, leg.suites)
+	if len(measurement) != 0 {
+		prover.measured.measure = *measurement[0]
+	}
 	result, err := prover.SendSmtp(context.Background(), sidecarConn, job, edge)
 	sidecarConn.Close()
 	<-mxDone

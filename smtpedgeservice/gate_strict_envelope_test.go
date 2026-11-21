@@ -151,8 +151,9 @@ func newTestStrictEnvelopeSender(t *testing.T, w *edgeWorld, dialer sidecar.Smtp
 		sidecar.NewSmtpMtaSts(zone, w.world.MtaStsTransport(), store.Root(), settings, w.clock), pins,
 		sidecar.NewSmtpTlsAllowanceStore(store.Root(), settings, w.clock), nil, zone, nil, settings, w.clock)
 	senderLog := &captureLogger{}
+	prover := sidecartest.NewFakeSmtpProver(nil)
 	sender, err := sidecar.NewSmtpSender(&sidecar.SmtpSenderArgs{
-		Dialer: dialer, Prover: sidecartest.NewFakeSmtpProver(nil), Policy: policy, Pins: pins,
+		Dialer: dialer, Prover: prover, Measure: prover.SendMeasure, Policy: policy, Pins: pins,
 		Dkim:     sidecar.NewSmtpDkimKeys(&testEngineSecrets{values: map[string][]byte{}}, testEnginePublisher{}, settings, w.clock, nil),
 		Mailbox:  sidecartest.NewFakeSmtpMailbox(nil),
 		Envelope: envelope,
