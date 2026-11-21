@@ -160,6 +160,13 @@ type MailSendArgs struct {
 	// nil for a person's own command or a host's submission, which are no run and so untainted (§16.6's spend step
 	// 1), the agent's words and a decision in hand.
 	Action MailConfigActionArgs
+	// How many mails the agent asks one approval to cover (mail_send's uses; owner decision 613). 2 or more, on a send
+	// that waits on the gate, asks for a template of From and the recipients, To, Cc and Bcc the allowed set
+	// (NewMailTemplateAction), filed in this mail's place where no decision covers the mail, so Send answers
+	// *ApprovalPendingError with the template's id; once a person approves it, this mail sent again and each later
+	// one from From to a subset of them spend its uses. A send that goes at once, W, asks for nothing. 0 or 1 is this
+	// mail alone. A template binds its agent's run, so one asked with no run in Action is refused.
+	Uses uint32
 }
 
 // One recipient's outcome.
@@ -358,6 +365,10 @@ func mailSendOwnRecipient(row NetworkLabelRow, address string) (MailRecipient, b
 // queued while a person's decision is awaited. An error is the whole send's: nothing was sent. Otherwise each
 // recipient's outcome is in the answer.
 func (self *MailClient) Send(ctx context.Context, args *MailSendArgs) (*MailSendResult, error) {
+	if args != nil && 1 < args.Uses && args.Action.RunId == nil {
+		// a decision binds its run: a template with none would serve every send of this device's that names none
+		return nil, fmt.Errorf("%w: uses asked by no run", ErrMailSendInvalid)
+	}
 	plan, err := self.planSend(args)
 	if err != nil {
 		return nil, err

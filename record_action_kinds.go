@@ -45,6 +45,11 @@
 // domain has one action; and expires_millis for an allowance that ends. Its host is filled even by a template, since
 // D-SMTP-2's consent is per recipient domain and an empty host would match them all.
 //
+// Kind 14, mail_send, takes a template only as owner decision 613 gives it (QD-1071), the one an agent asks for through
+// mail_send's uses: its from_alias and its recipients, the allowed set, both filled, so no template covers another
+// alias or every recipient, and its body's hash and preview empty (TemplateEmpty), so it is the alias and the set alone
+// and no approver reads one message's text as the template's (NewMailTemplateAction).
+//
 // Package-level functions are safe for concurrent use: the table never changes.
 
 package sidecar
@@ -128,6 +133,9 @@ type CanonicalActionKindFields struct {
 	// field whose empty value is itself what the approver saw, where "a field a template leaves empty matches anything"
 	// would spend an approval on what its approver never saw: an egress_change's require_default_egress (QD-1060).
 	TemplateBound []protoreflect.FieldNumber
+	// Fields a template leaves empty, which the builder refuses on one: a mail template's body hash and preview (owner
+	// decision 613), so it names what each use may vary and nothing that reads as one use's.
+	TemplateEmpty []protoreflect.FieldNumber
 }
 
 // The rows, one a kind with an O tool, in SidecarActionKind's order.
@@ -240,11 +248,14 @@ var canonicalActionKindRows = []*CanonicalActionKindFields{
 		Server:   []protoreflect.FieldNumber{8, 18, 19, 20, 21},
 	},
 	{
-		// mail_send: every recipient, the body's hash, the daemon's preview and from_alias (§15)
-		Kind:     SidecarActionMail,
-		Required: []protoreflect.FieldNumber{2, 3, 22},
-		Optional: []protoreflect.FieldNumber{4},
-		Versions: []uint32{1},
+		// mail_send: every recipient, the body's hash, the daemon's preview and from_alias (§15); a template, mail_send's
+		// uses' (owner decision 613), from_alias and the allowed recipients alone
+		Kind:             SidecarActionMail,
+		Required:         []protoreflect.FieldNumber{2, 3, 22},
+		Optional:         []protoreflect.FieldNumber{4},
+		Versions:         []uint32{1},
+		TemplateRequired: []protoreflect.FieldNumber{2, 22},
+		TemplateEmpty:    []protoreflect.FieldNumber{3, 4},
 	},
 	{
 		// directory_request's access request at version 3 (16.11), which approvers know since MCP-M6-01; a

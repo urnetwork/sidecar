@@ -17,6 +17,11 @@
 //	          MailConfigActionArgs; a submission and a host's call carry none, which is no run and so untainted
 //	          (§16.6's spend step 1). A same-uid process may submit as ur does (owner decision 47), and the gate still
 //	          holds what is outward
+//	template  a draft's uses of 2 or more, mail_send's (owner decision 613): beside the action, a template of the From
+//	          and every recipient, the allowed set (NewMailTemplateAction), which the gate files for those uses in the
+//	          action's place where no decision covers this mail (SidecarAction.Template), so the send answers
+//	          *ApprovalPendingError with the template's id; once a person approves it, this draft sent again and each
+//	          later one from the same From to a subset of them spend its uses, each its own action as ever
 //	effect    once the gate passes it, the send planned again, so a From that policy no longer grants at the spend is
 //	          refused there, and then its delivery under the use's effect key: the member part deposits and the
 //	          internet part queues at o/<h>/<effect_key> (mail_outbox.go), created only if absent, so a run the gate
@@ -72,6 +77,14 @@ func (self *MailClient) gatedSend(ctx context.Context, plan *mailSendPlan, conte
 		AgentId:   actionArgs.AgentId,
 		Summary:   actionArgs.Summary,
 		Effect:    effect,
+	}
+	if content.draft != nil && 1 < content.draft.Uses {
+		template, err := NewMailTemplateAction(plan.fromAddress, plan.recipients)
+		if err != nil {
+			return nil, err
+		}
+		action.Template = template.Bytes
+		action.Uses = content.draft.Uses
 	}
 	testHookBarrier("mail.send.gate.before", "")
 	err = gate.Authorize(ctx, action, actionArgs.Decision)

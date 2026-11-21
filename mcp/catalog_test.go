@@ -219,11 +219,20 @@ type testToolEnv struct {
 // The env, its run untainted.
 func newTestToolEnv(t *testing.T) *testToolEnv {
 	t.Helper()
+	return newTestToolEnvWith(t, nil)
+}
+
+// The env, its catalog also holding what register adds, nil for nothing.
+func newTestToolEnvWith(t *testing.T, register func(catalog *McpCatalog)) *testToolEnv {
+	t.Helper()
 	env := &testToolEnv{hookTestEnv: newHookTestEnv(t), sink: &testCallSink{}}
 	env.tools = newFakeMcpToolNetwork(env.network, testToolCredential)
 	env.daemon.hostNetwork(env.networkId, env.tools)
 	env.catalog = NewMcpCatalog(env.server.settings.Mcp, env.clock, env.sink)
 	addTestTools(env.catalog)
+	if register != nil {
+		register(env.catalog)
+	}
 	env.catalog.Install(env.server)
 	env.claude = env.harness(sidecartest.FakeHarnessClaudeCode)
 	if err := env.claude.SessionStart("tool session", "startup"); err != nil {
