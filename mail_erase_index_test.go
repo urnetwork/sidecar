@@ -604,9 +604,12 @@ func TestMailEraseFormat2EndsWithTheIndexWhereNoSegmentIsLeft(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	without, removedCount := mailSegmentWithout(content, world.month, []mailErasedMessage{{Month: world.month, MessageId: ids[0]}})
-	keys, err := eraser.pathKeys(ctx, segmentPath)
+	without, removedCount, err := mailSegmentWithout(content, world.month, []mailErasedMessage{{Month: world.month, MessageId: ids[0]}})
 	if err != nil || removedCount != 1 {
+		t.Fatalf("removed %d rows: %v", removedCount, err)
+	}
+	keys, err := eraser.pathKeys(ctx, segmentPath)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := world.eraseStore.Closure(ctx, erasure.ErasureId, segmentPath, without, version, keys); err != nil {
@@ -1022,9 +1025,9 @@ func TestMailEraseResumeFindsAClosureCommittedDuringTheSegmentScan(t *testing.T)
 		if err != nil {
 			t.Fatal(err)
 		}
-		without, count := mailSegmentWithout(content, world.month, []mailErasedMessage{{Month: world.month, MessageId: ids[0]}})
-		if count != 1 {
-			t.Fatalf("segment held %d requested rows", count)
+		without, count, err := mailSegmentWithout(content, world.month, []mailErasedMessage{{Month: world.month, MessageId: ids[0]}})
+		if err != nil || count != 1 {
+			t.Fatalf("segment held %d requested rows: %v", count, err)
 		}
 		if err := other.Closure(ctx, begun.ErasureId, path, without, version, oldKeys); err != nil {
 			t.Fatal(err)
