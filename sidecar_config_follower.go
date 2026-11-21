@@ -149,6 +149,8 @@ type SidecarConfigFollowerArgs struct {
 	ReportFork func(fork HeadFork)
 	// Nil is DefaultSidecarConfigFollowerSettings.
 	Settings *SidecarConfigFollowerSettings
+	// A member host installs its read receipt gate before publishing the verified client.
+	beforeStanding func(*ConfigClient) error
 }
 
 // One network's config follower on its Sidecar (the file's comment).
@@ -563,6 +565,20 @@ func (self *SidecarConfigFollower) run(networkId Id, sidecarId Id) {
 			self.refuse(err)
 		}
 		return
+	}
+	if bind := self.args.beforeStanding; bind != nil {
+		for {
+			if err := bind(client); err == nil {
+				break
+			} else {
+				self.moveTo(SidecarConfigFollowerCatchingUp, fmt.Sprintf("waiting for the member record binding: %v", err))
+			}
+			select {
+			case <-self.ctx.Done():
+				return
+			case <-self.clock.After(self.settings.AnchorRetryInterval):
+			}
+		}
 	}
 	self.stand(networkId, sidecarId, client)
 }

@@ -28,6 +28,8 @@ type MemberReplica struct {
 	hints        *GkmHints
 	upkeep       *GkmUpkeep
 	follower     *SidecarConfigFollower
+	recordLock   sync.Mutex
+	record       *SidecarRecord
 	closeOnce    sync.Once
 }
 
@@ -42,8 +44,8 @@ func (self *Sidecar) OpenMemberReplica(ctx context.Context) (*MemberReplica, err
 	if identity == nil {
 		return nil, ErrSidecarNoIdentity
 	}
-	if current, ok := self.memberReplica.(*MemberReplica); ok && current.ctx.Err() == nil {
-		if current.identity.SidecarId == identity.SidecarId && current.identity.NetworkId == identity.NetworkId {
+	if current, ok := self.memberReplica.(*MemberReplica); ok {
+		if current.ctx.Err() == nil && current.identity.SidecarId == identity.SidecarId && current.identity.NetworkId == identity.NetworkId {
 			return current, nil
 		}
 		current.Close()
@@ -104,6 +106,12 @@ func (self *MemberReplica) Close() {
 		if self.follower != nil {
 			self.follower.Close()
 		}
+		self.recordLock.Lock()
+		if self.record != nil {
+			self.record.Bind(nil, func() RecordAuthView { return RecordAuthUnavailable{} })
+			self.record = nil
+		}
+		self.recordLock.Unlock()
 		if self.evs != nil {
 			self.evs.Close()
 		}
@@ -168,11 +176,30 @@ func (self *MemberReplica) open() error {
 	// first self-verified genesis of this network for its admitter's safety-number comparison.
 	settings := DefaultSidecarConfigFollowerSettings()
 	settings.TrustFirstUse = true
-	self.follower, err = running.FollowConfig(&SidecarConfigFollowerArgs{Heads: self, Gkm: keys, Hints: self.hints, Settings: settings})
+	self.follower, err = running.FollowConfig(&SidecarConfigFollowerArgs{Heads: self, Gkm: keys, Hints: self.hints, Settings: settings, beforeStanding: self.bindRecord})
 	if err != nil {
 		return err
 	}
 	return self.follower.followIdentity(&self.identity)
+}
+
+// Opens the record streams and their receipt gate only after the enrolled anchor
+// has verified, and before either host can obtain the file client for a read.
+func (self *MemberReplica) bindRecord(config *ConfigClient) error {
+	self.recordLock.Lock()
+	defer self.recordLock.Unlock()
+	if self.ctx.Err() != nil {
+		return self.ctx.Err()
+	}
+	record, err := self.running.Record()
+	if err != nil {
+		return err
+	}
+	if err := record.BindMemberReplica(config, self.evs); err != nil {
+		return err
+	}
+	self.record = record
+	return nil
 }
 
 // The newest uploaded and still valid ReaderKey usable for late deliveries.
