@@ -86,20 +86,60 @@ func (self *socketEnginePolicy) AllowInbound(inbound *AclInbound, now time.Time)
 
 // See SocketPolicy.
 func (self *socketEnginePolicy) MayListen(subject AclSubject, socket AclSocketName, now time.Time) AclDecision {
-	state := self.engine.State()
-	if state == nil {
-		return aclDeny(AclReasonNoState)
-	}
-	return state.MayListen(subject, socket, now)
+	return socketInstalledGrants{self.engine.State()}.MayListen(subject, socket, now)
 }
 
 // See SocketPolicy.
 func (self *socketEnginePolicy) MayPublish(subject AclSubject, host string, now time.Time) AclDecision {
-	state := self.engine.State()
-	if state == nil {
+	return socketInstalledGrants{self.engine.State()}.MayPublish(subject, host, now)
+}
+
+// A TLS admission checks both grants on the same installed state, including its signed scope bindings.
+type socketPublicGrants interface {
+	MayListen(AclSubject, AclSocketName, time.Time) AclDecision
+	MayPublish(AclSubject, string, time.Time) AclDecision
+}
+
+func socketGrantsAt(policy SocketPolicy) socketPublicGrants {
+	if device, ok := policy.(*socketEnginePolicy); ok {
+		return socketInstalledGrants{device.engine.State()}
+	}
+	return policy
+}
+
+type socketInstalledGrants struct {
+	state *AclState
+}
+
+// An unscoped host uses the ordinary grant. A scoped host also requires its signed binding and, for
+// a member scope, the named member's consented device. Both facts come from this ACL's own view.
+func (self socketInstalledGrants) scope(host string) (AclScope, bool) {
+	if self.state == nil {
+		return AclScope{}, false
+	}
+	label, scoped := aclScopeOfHost(host)
+	if !scoped {
+		return AclScope{}, true
+	}
+	config, _ := self.state.view.(*ConfigState)
+	return config.TeamScope(label)
+}
+
+func (self socketInstalledGrants) MayListen(subject AclSubject, socket AclSocketName, now time.Time) AclDecision {
+	host, _ := aclSocketHost(socket.PublicName)
+	scope, ok := self.scope(host)
+	if !ok {
 		return aclDeny(AclReasonNoState)
 	}
-	return state.MayPublish(subject, host, now)
+	return self.state.MayListenInScope(subject, socket, scope, now)
+}
+
+func (self socketInstalledGrants) MayPublish(subject AclSubject, host string, now time.Time) AclDecision {
+	scope, ok := self.scope(host)
+	if !ok {
+		return aclDeny(AclReasonNoState)
+	}
+	return self.state.MayPublishInScope(subject, host, scope, now)
 }
 
 // The network's names as sockets need them (§12): its 10-character label, which every stream target names as

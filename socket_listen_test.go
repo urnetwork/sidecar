@@ -87,10 +87,18 @@ type testListenFixture struct {
 }
 
 func newTestListenFixture(t testing.TB) *testListenFixture {
+	return newTestListenFixtureIn(t, testRegistrarNetworkId)
+}
+
+func newTestListenFixtureIn(t testing.TB, networkId Id) *testListenFixture {
 	t.Helper()
+	ring, err := NewSocketKeyRing(networkId, &protocol.SocketKeyFile{CurrentKey: testRegistrarKey("listen")}, DefaultSocketKeyRingSettings())
+	if err != nil {
+		t.Fatal(err)
+	}
 	fixture := &testListenFixture{
 		clock:    newTestArmedClock(),
-		ring:     newTestSocketRing(t, "listen", "", 0),
+		ring:     ring,
 		policy:   newTestSocketPolicy(5),
 		service:  &testListenService{urnetworkEdge: testSocketId("urnetwork-edge"), pages: make(chan *SocketRegistrationsArgs, 64), status: SocketRegistrationStatusOk},
 		dialer:   &SubprotocolPeerIdentity{SidecarId: testSocketId("dialer sidecar")},
@@ -98,7 +106,7 @@ func newTestListenFixture(t testing.TB) *testListenFixture {
 	}
 	signer := newTestSocketSigner("listener")
 	component, err := NewSocketComponent(t.Context(), &SocketComponentArgs{
-		NetworkId: testRegistrarNetworkId,
+		NetworkId: networkId,
 		Settings:  DefaultSidecarSocketSettings(),
 		Sign:      signer.sign,
 		Clock:     fixture.clock,
@@ -121,7 +129,7 @@ func newTestListenFixture(t testing.TB) *testListenFixture {
 		ctx: t.Context(),
 		seq: 1,
 		identity: &SidecarIdentity{
-			NetworkId:         testRegistrarNetworkId,
+			NetworkId:         networkId,
 			SidecarId:         signer.sidecarId,
 			ClientId:          testSocketId("listener client"),
 			IdentityPublicKey: signer.publicKey(),
@@ -163,11 +171,11 @@ func (self *testListenFixture) ticket(t testing.TB, listener *SocketListener, mu
 	nowMillis := uint64(self.clock.Now().UnixMilli())
 	ticket := &protocol.SocketTicket{
 		TicketId:         testSocketId("listen ticket " + string(rune('a'+self.ticketSeq))).Bytes(),
-		NetworkId:        testRegistrarNetworkId.Bytes(),
+		NetworkId:        listener.networkId.Bytes(),
 		ListenerClientId: self.generation.identity.ClientId.Bytes(),
 		ListenId:         listener.listenId.Bytes(),
 		DialerClientId:   self.dialerId.Bytes(),
-		DialerNetworkId:  testRegistrarNetworkId.Bytes(),
+		DialerNetworkId:  listener.networkId.Bytes(),
 		IssueTimeMillis:  nowMillis,
 		ExpireTimeMillis: nowMillis + 30_000,
 		PolicyVersion:    5,
