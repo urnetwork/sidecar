@@ -828,6 +828,14 @@ func (self *toyOrder) registration() *Registration {
 	return &Registration{Row: "FS-2", Tiers: []Tier{TierT2}, Build: self.builder()}
 }
 
+// CheckClause on the toy, run as a clause of FS-2's. It is a toy of the rules and no clause of the row, so nothing
+// registers it and no gate names it, and its name reaches CheckClause as a value: TestEveryRunClauseCallIsRegistered
+// holds the calls naming a literal clause, a real clause's thin tests, to the registry.
+func (self *toyOrder) checkClause(t *testing.T) *RowReport {
+	clause := "toy order"
+	return CheckClause(t.Context(), "FS-2", clause, self.builder(), toyRuleSettings(t))
+}
+
 // A schedule whose fixed run passes no barrier, with no Background step, runs one seed, in CheckRow and CheckClause
 // alike and on the nightly seeds as on a merge's: every seed would take the fixed run's order, and the report says so.
 func TestABarrierFreeScheduleRunsOneSeed(t *testing.T) {
@@ -847,7 +855,7 @@ func TestABarrierFreeScheduleRunsOneSeed(t *testing.T) {
 		t.Errorf("the plain toy leaves a seed something to order: %s", why)
 	}
 
-	clause := CheckClause(t.Context(), "FS-2", "toy order", (&toyOrder{}).builder(), toyRuleSettings(t))
+	clause := (&toyOrder{}).checkClause(t)
 	if clause.Failed() || !clause.Explore.OneOrder || !slices.Equal(clause.Explore.Seeds, []int64{1}) || !strings.Contains(clause.String(), ExploreOneOrderText) {
 		t.Fatalf("%s", clause)
 	}
@@ -881,7 +889,7 @@ func TestOneBarrierEventBringsBackEverySeed(t *testing.T) {
 		t.Errorf("report %q", text)
 	}
 
-	clause := CheckClause(t.Context(), "FS-2", "toy order", (&toyOrder{barrierFromBuild: 1}).builder(), toyRuleSettings(t))
+	clause := (&toyOrder{barrierFromBuild: 1}).checkClause(t)
 	if clause.Failed() || clause.Explore.OneOrder || !slices.Equal(clause.Explore.Seeds, MergeSeeds()) {
 		t.Fatalf("%s", clause)
 	}
@@ -899,7 +907,7 @@ func TestABackgroundStepBringsBackEverySeed(t *testing.T) {
 		t.Errorf("the Background step reads %q", why)
 	}
 
-	clause := CheckClause(t.Context(), "FS-2", "toy order", (&toyOrder{background: true}).builder(), toyRuleSettings(t))
+	clause := (&toyOrder{background: true}).checkClause(t)
 	if clause.Failed() || clause.Explore.OneOrder || !slices.Equal(clause.Explore.Seeds, MergeSeeds()) {
 		t.Fatalf("%s", clause)
 	}
