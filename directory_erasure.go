@@ -46,7 +46,10 @@
 //	           itself, every version of a versionless d/ or r/ path sealed under the one key its slot holds until a
 //	           CLOSURE draws another
 //	order      the announce entries' ERASEs first, as at M6, so a body never waits on index work (§11.12's closure
-//	           row); then a CUT on the cards ref and on ur/index listing the documents at the newest version erased,
+//	           row), saying nothing complete, since this half follows under the same erasure id
+//	           (RecordEraseArgs.Journaled; DESIGN-DETAILS 15.2.10's step 2; QD-1158): no ERASE of a format-2 directory
+//	           erasure says complete before its CUT; then a CUT on the cards ref and on ur/index listing the documents at
+//	           the newest version erased,
 //	           through each ref's eraser (DirectoryErasureIndex, the index's IndexEraser), which folds nothing again:
 //	           an announcement's document goes whole (15.2.10); then each ref's CLOSURE and ERASE pairs over its index
 //	           files (IndexEraser.Rewrite); then a CLOSURE a file, rewriting in place under a fresh key each card and
@@ -73,6 +76,12 @@
 //	revoke     the runner works a request's files as its entries: the repo file's versions below the marker, each
 //	           card holding a run that names the repo, and their documents; a later-signed card naming the repo is
 //	           cut at the sync that shows it and rewritten once its writer has, while the marker stands, for 30 days
+//	complete   an erasure is complete while its newest ERASE says so (owner decision 658): each index ref's eraser reads
+//	           its progress that way (recordEraseNewestStore), as its CUTs read which erasures are complete, and every
+//	           rewrite this half asks lists before it trusts a complete it reads (IndexRewriteArgs.Relisted; QD-1158),
+//	           since a CUT it follows may have added documents to an erasure already complete, as the 30-day sweep's
+//	           later-signed card's: the index files holding it are rewritten under fresh keys, the first pair's ERASE
+//	           opening the erasure again until the files' last ERASE ends it
 //	ledger     what this device cut, rewrote and still owes of each erasure is kept in the copy (erasure files), so a
 //	           later sync repeats nothing; a file whose standing version another admin's CLOSURE left reads as
 //	           rewritten there. Two runners that race meet at the path's CAS and at evs: one CLOSURE commits, the
@@ -313,7 +322,11 @@ func (self *DirectoryClient) Erase(ctx context.Context, args *DirectoryEraseArgs
 	}
 	result := &DirectoryEraseResult{ErasureId: NewId(), Reason: reason}
 	if 0 < len(entryIds) {
-		erased, err := erase(ctx, &RecordEraseArgs{LogId: directoryId, EntryIds: entryIds, Reason: reason, Confirmed: true})
+		// where format 2's half follows under the erasure's id, it ends the erasure after its CUT: the entries' ERASEs
+		// say nothing complete (the file header's order row; QD-1158)
+		erased, err := erase(ctx, &RecordEraseArgs{
+			LogId: directoryId, EntryIds: entryIds, Reason: reason, Confirmed: true, Journaled: work.found(),
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -784,8 +797,11 @@ func (self *DirectoryErasureRunner) Pass(ctx context.Context) (*DirectoryErasure
 		}
 		testHookBarrier("directory.erasure.erase.before", recordChainIdText(request.RequestId))
 		for chunk := range slices.Chunk(entryIds, max(1, self.settings.EntryCount)) {
+			// where format 2's half of this pass follows under the request's id, it ends the erasure after its CUT: the
+			// entries' ERASEs say nothing complete (the file header's order row; QD-1158)
 			result, err := erase(ctx, &RecordEraseArgs{
 				LogId: directoryId, EntryIds: chunk, Reason: RecordErasureReasonRevocation, RequestId: request.RequestId.Bytes(),
+				Journaled: owed,
 			})
 			if err != nil {
 				firstErr = err
@@ -1574,13 +1590,18 @@ func (self *DirectoryClient) eraseFiles(ctx context.Context, work *directoryEras
 	// each ref's index files: the eraser's CLOSURE and ERASE pairs, which read their own progress from evs's state.
 	// Asked to end the erasure, a rewrite that finds no file holding a listed version, or whose orphaned CLOSURE's ERASE
 	// found its keys gone, has no ERASE with a key left to say complete: it ends the erasure by a completion ERASE
-	// (QD-1132, QD-1137), as the record's and mail's erasers do. True where a CUT of the erasure stands on the ref.
+	// (QD-1132, QD-1137), as the record's and mail's erasers do. Every rewrite the ledger owes follows a CUT, this
+	// device's or the device's that began the erasure, which may have listed documents again after the erasure was
+	// complete, as the 30-day sweep cuts a later-signed card: it lists before it trusts a complete it reads (the file
+	// header's complete row; QD-1158). True where a CUT of the erasure stands on the ref.
 	rewrite := func(index func(ctx context.Context, repoId Id) (DirectoryErasureIndex, error), cards bool, complete bool) (bool, error) {
 		eraser, err := index(ctx, directoryId)
 		if err != nil {
 			return false, err
 		}
-		rewritten, err := eraser.Rewrite(ctx, &IndexRewriteArgs{ErasureId: work.erasureId, Complete: complete, Note: note, Completion: complete})
+		rewritten, err := eraser.Rewrite(ctx, &IndexRewriteArgs{
+			ErasureId: work.erasureId, Complete: complete, Note: note, Completion: complete, Relisted: true,
+		})
 		cut := true
 		waits := false
 		switch {
@@ -1822,7 +1843,7 @@ func (self *DirectoryEvsErasure) index(ctx context.Context, repoId Id, refName [
 	if err != nil {
 		return nil, err
 	}
-	eraser, err := indexNewEraser(&indexEraserArgs{
+	index, err := directoryNewErasureIndex(&indexEraserArgs{
 		store: store, eraseStore: store, repoId: repoId, refId: refId, repoKind: kind, companion: companion,
 		isAdmin:  func(file *indexFileVersion) bool { return self.isAdmin(file.signerSidecarId) },
 		format:   self.indexFormat,
@@ -1842,7 +1863,25 @@ func (self *DirectoryEvsErasure) index(ctx context.Context, repoId Id, refName [
 	if err != nil {
 		return nil, err
 	}
-	return &directoryEvsErasureIndex{IndexEraser: eraser, refKey: refKey, refId: refId}, nil
+	return index, nil
+}
+
+// One index ref's eraser of the directory over args' stores, its documents' keys drawn under args' K_ref and ref id.
+// It reads an erasure's progress on the erasure ref by the erasure's newest ERASE (recordEraseNewestStore), as its CUTs
+// read which erasures are complete and as the record's and mail's bindings read both (§11.12's reconcile row; owner
+// decision 658; QD-1158): an ERASE of a rewrite that a later CUT owes, which says nothing complete, opens an erasure an
+// earlier ERASE completed, so the next rewrite of it, on either ref, runs and a completion can end it again. Read by
+// any ERASE that once said complete, a rewrite found such an erasure done, and its completion was never sent.
+func directoryNewErasureIndex(args *indexEraserArgs) (*directoryEvsErasureIndex, error) {
+	wrapped := *args
+	if wrapped.eraseStore != nil {
+		wrapped.eraseStore = &recordEraseNewestStore{indexEraseStore: wrapped.eraseStore}
+	}
+	eraser, err := indexNewEraser(&wrapped)
+	if err != nil {
+		return nil, err
+	}
+	return &directoryEvsErasureIndex{IndexEraser: eraser, refKey: bytes.Clone(args.refKey), refId: args.refId}, nil
 }
 
 // The cards ref's own index.

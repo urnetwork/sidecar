@@ -38,11 +38,12 @@ func NewDirectoryErasureTestIndex(t testing.TB, admins ...Id) *DirectoryErasureT
 	}
 }
 
-// The ref's eraser signing as eraserId, built afresh at each call as each pass of a device builds one.
+// The ref's eraser signing as eraserId, built afresh at each call as each pass of a device builds one, by the
+// binding's own constructor (directoryNewErasureIndex), so it reads an erasure's progress by its newest ERASE.
 func (self *DirectoryErasureTestIndex) Open(eraserId Id) DirectoryErasureIndex {
 	self.t.Helper()
 	store := self.evs.as(eraserId)
-	eraser, err := indexNewEraser(&indexEraserArgs{
+	index, err := directoryNewErasureIndex(&indexEraserArgs{
 		store: store, eraseStore: store, repoId: evsTestId("directory repo"), refId: self.refId,
 		repoKind: protocol.RepoKind_REPO_KIND_DIRECTORY, isAdmin: self.world.isAdmin, format: self.world.settings,
 		eraser: eraserId, complete: self.complete, refKey: self.refKey, tables: testHeadTables,
@@ -51,7 +52,7 @@ func (self *DirectoryErasureTestIndex) Open(eraserId Id) DirectoryErasureIndex {
 	if err != nil {
 		self.t.Fatal(err)
 	}
-	return &directoryEvsErasureIndex{IndexEraser: eraser, refKey: self.refKey, refId: self.refId}
+	return index
 }
 
 // Which erasures are complete while their newest ERASE says so as readers read it, a completion that completes
