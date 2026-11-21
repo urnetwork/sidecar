@@ -50,6 +50,8 @@ type GkmCreateGroupArgs struct {
 	NetworkId Id
 	RepoId    Id
 	Kind      protocol.RepoKind
+	// An expected inbox role for a mail create, checked against the signed RepoCreate before generation 1.
+	Inbox protocol.RepoInbox
 	// The member an owner-bound repo belongs to, nil for any other.
 	OwnerMemberId *Id
 }

@@ -557,6 +557,9 @@ func (self *searchTestEraseStore) Progress(ctx context.Context, erasureId Id) (*
 	self.erasure.stateLock.Lock()
 	defer self.erasure.stateLock.Unlock()
 	progress := &indexEraseProgress{}
+	progress.completionKey, _ = evsCompletionKeyOf(self.erasure.erases, erasureId, func(erase *searchTestErasureErase) (Id, []*EvsErasedKey) {
+		return erase.erasureId, erase.erased.keys
+	})
 	for _, closure := range self.erasure.closures {
 		if closure.erasureId == erasureId {
 			progress.closures = append(progress.closures, closure.closed)

@@ -394,7 +394,7 @@ func (self *EvsRepo) dropChangeless(ctx context.Context, refName []byte, spec *e
 	if err != nil {
 		return Id{}, 0, err
 	}
-	repoKind, err := self.repoKind()
+	repo, err := self.repoRow()
 	if err != nil {
 		return Id{}, 0, err
 	}
@@ -421,7 +421,7 @@ func (self *EvsRepo) dropChangeless(ctx context.Context, refName []byte, spec *e
 				RepoId: self.repoId, RefId: refId, BaseVersion: result.head.Version, BaseChain: result.head.Chain,
 				Head: head, PathEpoch: evsCurrentEpoch(head.GetPathEpoch()), Sources: evsSourceEpochs(head.GetPathEpoch()),
 				Generation: repoKey.Generation(), keys: result.keys, floors: map[string]uint64{},
-				slotKeyed: EvsRepoKindRecordClass(repoKind), refName: refName, repoKind: repoKind,
+				slotKeyed: evsRepoSlotKeyed(repo), refName: refName, repoKind: repo.GetKind(),
 			}
 			if err := plan.setRef(head, refName, self.client.args.Identity().SidecarId, false); err != nil {
 				return nil, err

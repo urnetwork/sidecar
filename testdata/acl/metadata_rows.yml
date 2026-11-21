@@ -2,6 +2,9 @@
 # field, its number and that api-7's rows show it, and design-records writes those words into the list. Until it
 # does, each stays pending here and fails at M2's exit, so no format freezes with a field the list lacks.
 
+RepoCreate.inbox: {number: 4, type: RepoInbox, row: api-7, pending: "QD-102: the signed group or admin inbox marker at creation"}
+AclRepo.inbox: {number: 14, type: RepoInbox, row: api-7, pending: "QD-102: the creation marker in the folded access-log row"}
+
 AclRows.suspensions: {number: 8, type: repeated AclSuspension, row: api-7, pending: "plan-ACL-folded-grant-state #1: api-7's rows add the folded Suspends"}
 AclRows.spent_grants: {number: 9, type: repeated AclSpentGrant, row: api-7, pending: "plan-ACL-folded-grant-state #3: api-7's rows add the spent grant ids"}
 AclRows.evidence_default: {number: 10, type: repeated uint32, row: api-7, sees: "the document's default evidence channels for an action no request rule names"}

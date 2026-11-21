@@ -192,6 +192,7 @@ message AclRepo {
                                              // of the RepoCreate's entry while that is 0, §7.9's t_s, which the
                                              // shrink row's second comparison reads at every verifier, a new device
                                              // and a cold gate that start at a base among them (QD-1015)
+  RepoInbox inbox = 14;                      // the original RepoCreate's immutable inbox role (§8.8, QD-102)
 }
 
 // A RepoAdmin{remove} stamps removed_at and keeps the row, so a reader judges the admin's right at a position before
@@ -315,6 +316,13 @@ message RepoCreate {
   StatementHeader header = 1;
   bytes repo_id = 2;
   RepoKind kind = 3;
+  RepoInbox inbox = 4;                    // only a general repo; admin only from a config writer, once a network
+}
+
+enum RepoInbox {
+  REPO_INBOX_NONE = 0;
+  REPO_INBOX_GROUP = 1;
+  REPO_INBOX_ADMIN = 2;
 }
 
 enum RepoAdminChange {

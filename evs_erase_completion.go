@@ -25,8 +25,8 @@
 package sidecar
 
 // The key a completion ERASE of erasureId names: see the file header's key row. erases is every committed ERASE the
-// caller read of the repo's erasure ref, oldest first, or of the erasure alone where that is all the caller holds, each
-// read by of as its erasure and the keys it names. False where no ERASE of the erasure named a key first that stands
+// caller read of the repo's erasure ref, oldest first, each read by of as its erasure and the keys it names. False
+// where no ERASE of the erasure named a key first that stands
 // unnamed since.
 func evsCompletionKeyOf[T any, K comparable](erases []T, erasureId Id, of func(erase T) (Id, []*K)) (*K, bool) {
 	firstNamed := map[K]int{}
