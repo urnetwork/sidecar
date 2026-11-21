@@ -1,6 +1,8 @@
 // ServiceHost.Tasks in memory (host_tasks.go): taskworker's once-keyed jobs on the injected clock.
 // Nothing runs by itself. A test calls RunDue, which is what a claim loop would do, so a job runs at a
 // point the test chose, and a run that crashes leaves its request where a restarted worker finds it.
+// Schedule enqueues, so it is a write (hostWrite): §22.8's unknown rule loses its answer with the request
+// queued, and asking again under its OnceKey runs it once.
 
 package sidecartest
 
@@ -89,7 +91,7 @@ func (self *FakeTasks) Schedule(ctx context.Context, request *sidecar.TaskReques
 	if request.OnceKey == "" {
 		return errors.New("a task request needs a OnceKey")
 	}
-	return hostCall(ctx, self.faults, "tasks.Schedule", func() error {
+	return hostWrite(ctx, self.faults, "tasks.Schedule", func() error {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		requestCopy := *request

@@ -382,6 +382,154 @@ func TestFaultQuotaDropsAWrappedQuotasAnswer(t *testing.T) {
 	}
 }
 
+// A Lease whose answer is lost leaves its caller no handle, so the fake closes the one the call opened, as server's
+// Lease closes its handle on an unanswered draw: nothing stays reserved, and asking again draws afresh.
+func TestFakeQuotaALostLeaseAnswerLeavesNothingReserved(t *testing.T) {
+	quota, _, faults := newQuotaFixture(t)
+	networkId := connect.NewId()
+	quota.SetBalance(networkId, 1000)
+	if _, err := faults.Add(&FaultPlan{Op: FaultOpHost, KeyPrefix: "quota.Lease", Result: ApplyThenDrop}); err != nil {
+		t.Fatal(err)
+	}
+	if lease, _, err := quota.Lease(t.Context(), networkId, sidecar.QuotaMeterTls); err == nil {
+		t.Fatalf("the plan did not fire: %v", lease)
+	}
+	if got := quota.Balances(networkId)[0].ReservedByteCount; got != 0 {
+		t.Errorf("a lease whose answer was lost holds %d", got)
+	}
+	lease, refusal, err := quota.Lease(t.Context(), networkId, sidecar.QuotaMeterTls)
+	if err != nil || refusal != nil {
+		t.Fatalf("asked again: %+v, %v", refusal, err)
+	}
+	if got := quota.Balances(networkId)[0].ReservedByteCount; got != 1000 {
+		t.Errorf("asked again: reserved %d", got)
+	}
+	lease.Close()
+	if got := quota.Balances(networkId)[0].ReservedByteCount; got != 0 {
+		t.Errorf("closed: reserved %d", got)
+	}
+}
+
+// The settle that gives a lease's unused rest back is its Close's one write. Failed before it applies, the rest stays
+// reserved as long as the spent bytes do, LeaseTokenLifetime past the close; with its answer lost it applied, and Close,
+// which answers nothing, has nothing to lose.
+func TestFakeQuotaASettleThatNeverAppliedHoldsTheRest(t *testing.T) {
+	for _, c := range []struct {
+		result FaultResult
+		held   bool
+	}{
+		{result: FailBeforeApply, held: true},
+		{result: ApplyThenDrop},
+	} {
+		quota, clock, faults := newQuotaFixture(t)
+		networkId := connect.NewId()
+		quota.SetBalance(networkId, 1000)
+		lease, _, err := quota.Lease(t.Context(), networkId, sidecar.QuotaMeterTls)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !lease.Spend(300) {
+			t.Fatal("spend refused")
+		}
+		if _, err := faults.Add(&FaultPlan{Op: FaultOpHost, KeyPrefix: "quotalease.Close", Result: c.result}); err != nil {
+			t.Fatal(err)
+		}
+		lease.Close()
+		if unfired := faults.Unfired(); len(unfired) != 0 {
+			t.Errorf("%s: unfired %v", c.result, unfired)
+		}
+		want := int64(300)
+		if c.held {
+			want = 1000
+		}
+		if got := quota.Balances(networkId)[0].ReservedByteCount; got != want {
+			t.Errorf("%s: reserved %d after the close, want %d", c.result, got, want)
+		}
+		if lease.Spend(1) {
+			t.Errorf("%s: a closed handle spent", c.result)
+		}
+		clock.Advance(quota.settings.LeaseTokenLifetime)
+		if got := quota.Balances(networkId)[0].ReservedByteCount; got != 0 {
+			t.Errorf("%s: reserved %d a token's lifetime after the close", c.result, got)
+		}
+	}
+}
+
+// A killed process sends nothing: its lease's Close, which only a cleanup outliving the kill makes, takes no plan and
+// gives nothing back, and the reservation lapses LeaseTokenLifetime after the kill, as for a lease never closed.
+func TestFakeQuotaAKilledProcessClosesNothing(t *testing.T) {
+	quota, clock, faults := newQuotaFixture(t)
+	driver := NewBarrierDriver(nil)
+	t.Cleanup(driver.Close)
+	table := NewActorTable(clock, driver)
+	networkId := connect.NewId()
+	quota.SetBalance(networkId, 1000)
+	edge := table.Actor(t.Context(), "tlsedge1")
+	lease, _, err := quota.Lease(edge.Context(), networkId, sidecar.QuotaMeterTls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !lease.Spend(300) {
+		t.Fatal("spend refused")
+	}
+	edge.Kill()
+	callCount := len(faults.OpResults(FaultOpHost))
+	lease.Close()
+	if got := len(faults.OpResults(FaultOpHost)); got != callCount {
+		t.Errorf("a dead process's close reached the queue: %d calls, want %d", got, callCount)
+	}
+	if got := quota.Balances(networkId)[0].ReservedByteCount; got != 1000 {
+		t.Errorf("after the dead process's close: reserved %d", got)
+	}
+	clock.Advance(quota.settings.LeaseTokenLifetime)
+	if got := quota.Balances(networkId)[0].ReservedByteCount; got != 0 {
+		t.Errorf("a token's lifetime after the kill: reserved %d", got)
+	}
+}
+
+// NewFaultQuota counts the wrapped Quota's writes as FakeQuota counts its own, its reads as reads, and closes the
+// handle of a Lease whose answer it drops, so the wrapped Quota holds nothing for it.
+func TestFaultQuotaCountsTheWrappedQuotasWrites(t *testing.T) {
+	inner, _, _ := newQuotaFixture(t)
+	faults := NewFaultQueue()
+	quota := NewFaultQuota(inner, faults)
+	networkId := connect.NewId()
+	inner.SetBalance(networkId, 1000)
+	ctx := t.Context()
+	if _, err := quota.Limits(ctx, networkId); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := quota.OverLimit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := quota.CountRate(ctx, networkId, map[string]int64{sidecar.QuotaRateKeyDrop: 1}, connect.NewId()); err != nil {
+		t.Fatal(err)
+	}
+	batch := &sidecar.UsageBatch{
+		BatchId:  connect.NewId(),
+		Producer: sidecar.QuotaProducerEvs,
+		Events:   []*sidecar.UsageEvent{{NetworkId: networkId, Meter: sidecar.QuotaMeterEvs, TransferByteCount: 1}},
+	}
+	if err := quota.ReportUsage(ctx, batch); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := faults.Add(&FaultPlan{Op: FaultOpHost, KeyPrefix: "quota.Lease", Result: ApplyThenDrop}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := quota.Lease(ctx, networkId, sidecar.QuotaMeterTls); err == nil {
+		t.Fatal("the lease plan did not fire")
+	}
+	if got := inner.Balances(networkId)[0].ReservedByteCount; got != 0 {
+		t.Errorf("a lease whose answer was dropped holds %d", got)
+	}
+	if got := len(faults.OpResults(FaultOpHost)); got != 5 {
+		t.Errorf("%d calls counted, want 5", got)
+	}
+	if got := len(faults.WriteResults(FaultOpHost)); got != 3 {
+		t.Errorf("%d writes counted, want CountRate's, ReportUsage's and Lease's", got)
+	}
+}
+
 // The fake's pacing is sidecar.QuotaClosurePacing behind the call's own counters: on a fixed-seed run of
 // paced uploads, each eraser's 60 a minute judged first, every answer is the reference's, which server's
 // {sq_} script is held to in turn (quota_rate_pacing_test.go).

@@ -1,9 +1,16 @@
 // §22.8's unknown rule: every write in a row on the unknown list also runs with ApplyThenDrop, its
 // effect applied and its response lost. One dry run counts the writes the schedule issues, PUTs,
-// DELETEs, Redis writes and, on T3, Postgres commits; then the schedule runs again once per write, a
-// fresh build each time, with that write's response lost, and every run checks the row's invariants
-// after every step, so a run that cleans up on an unknown outcome is caught by the invariant that
-// forbids it (FI-2's, UnknownDeletesNothing).
+// DELETEs, Redis writes, the fake hosts' writing calls and, on T3, Postgres commits; then the schedule
+// runs again once per write, a fresh build each time, with that write's response lost, and every run
+// checks the row's invariants after every step, so a run that cleans up on an unknown outcome is caught
+// by the invariant that forbids it (FI-2's, UnknownDeletesNothing).
+//
+// A fake host's writing call is one its fake declares a write (sidecartest's fake_host.go; QD-1155): the
+// Quota's ReportUsage, CountRate, a Lease that draws and a lease's settling Close, Tasks' Schedule and
+// Push's Hint and HintSidecars. Its answer is lost as a store's is, so a usage batch, a lease draw or an
+// enqueued task whose caller treats the unknown outcome as a failure fails its row here. On T3 the hosts
+// the Net keeps as fakes, Push and Quota, are counted the same way, and the real ones' writes are their
+// stores' Redis calls and Postgres commits.
 
 package fault
 
@@ -20,6 +27,7 @@ var everyWriteOps = []string{
 	sidecartest.FaultOpDelete,
 	sidecartest.FaultOpRedis,
 	sidecartest.FaultOpPgCommit,
+	sidecartest.FaultOpHost,
 }
 
 // One write a rerun loses: the nth write of op.

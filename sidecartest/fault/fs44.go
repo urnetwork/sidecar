@@ -15,10 +15,13 @@
 // carve's own steps (a kill between a carve and its post, a third copy after the flush) are Redis's, and run on T3 in
 // server's quotahost, whose tests are FS-44's T3 run.
 //
-// FS-44 is on §22.8's unknown list, but the fake Quota's calls are host calls, which the unknown rule's dry run does not
-// count as writes (every_write.go), so on T2 the rule loses no answer of these schedules; the clauses lose ReportUsage's
-// answers by their own plans. The producer arms its next wait only once a round has ended, so a step ends at the timer
-// it waits on, never at a sleep (owner decision 549). Each world's ids are its own, so no run sees another's.
+// FS-44 is on §22.8's unknown list, and the fake Quota's ReportUsage, Lease and settling Close are writes (QD-1155), so
+// on T2 the rule loses each one's answer in turn (every_write.go), beside the answers the clauses lose by their own
+// plans. A schedule holds through either: a step that moves the producer to a wait follows the retry of a send whose
+// answer the rule lost, a step standing in for an edge asks again under the same ids, as the edge does, and what a
+// step counts of sends and applies is what the lost answers leave. The producer arms its next wait only once a round
+// has ended, so a step ends at the timer it waits on, never at a sleep (owner decision 549). Each world's ids are its
+// own, so no run sees another's.
 
 package fault
 
@@ -45,15 +48,24 @@ type Fs44WorldSettings struct {
 	// Real time a step waits for the producer to arm the timer it names before it fails: a guard against a producer
 	// that never arms it, never a wait a schedule orders: 10 s.
 	TimerTimeout time.Duration
+	// How many times a step standing in for an edge makes one Lease or ReportUsage call before it fails, asking again
+	// while the call answers an error, as the edge's next connection or its batcher does: 3, past the one answer
+	// §22.8's unknown rule loses a run.
+	CallAttemptCount int
 	// The Net's fake Quota's settings, which the lease clauses read: sidecartest's defaults, which the Net's fakes take.
 	Quota *sidecartest.FakeQuotaSettings
+	// The producer's, whose retry a step follows when a send lost its answer: sidecar's defaults, which the producer
+	// takes.
+	Batcher *sidecar.QuotaUsageBatcherSettings
 }
 
 func DefaultFs44WorldSettings() *Fs44WorldSettings {
 	return &Fs44WorldSettings{
 		BalanceByteCount: 1024 * 1024 * 1024,
 		TimerTimeout:     10 * time.Second,
+		CallAttemptCount: 3,
 		Quota:            sidecartest.DefaultFakeQuotaSettings(),
+		Batcher:          sidecar.DefaultQuotaUsageBatcherSettings(),
 	}
 }
 
@@ -65,6 +77,9 @@ type fs44World struct {
 	metrics   *sidecartest.FakeMetrics
 	oracle    *sidecartest.QuotaOracle
 	networkId connect.Id
+
+	// the answers the schedule's own plans lose, counted as it is built
+	ownLostAnswerCount int
 
 	stateLock sync.Mutex
 	// the Net's time at Setup, from which the schedule names the producer's timers
@@ -101,7 +116,7 @@ func (self *fs44World) setup(ctx context.Context, net *Net) error {
 	self.oracle.Grant(self.networkId, self.settings.BalanceByteCount)
 	start := net.Clock().Now()
 	host := &sidecar.ServiceHost{Quota: self.quota, Metrics: self.metrics, Clock: net.Clock()}
-	batcher, err := sidecar.NewQuotaUsageBatcher(ctx, host, sidecar.QuotaProducerEvs, nil)
+	batcher, err := sidecar.NewQuotaUsageBatcher(ctx, host, sidecar.QuotaProducerEvs, self.settings.Batcher)
 	if err != nil {
 		return err
 	}
@@ -126,26 +141,108 @@ func (self *fs44World) producer() *sidecar.QuotaUsageBatcher {
 	return self.batcher
 }
 
-// Returns once the Net's clock holds a timer at at.
+// Returns once the Net's clock holds a timer at at, any retry of a lost answer before it run (awaitWait).
 func (self *fs44World) awaitTimerAt(ctx context.Context, at time.Time) error {
+	return self.awaitWait(ctx, func(pending []time.Time) bool {
+		return slices.ContainsFunc(pending, func(pendingTime time.Time) bool { return pendingTime.Equal(at) })
+	}, func(pending []time.Time) error {
+		return fmt.Errorf("the producer armed no timer at %s, pending %v", at, pending)
+	})
+}
+
+// Returns once done holds of the clock's timers, moving the clock to each retry the producer waits on for a send
+// whose answer was lost and the schedule names no wait for: a lost answer (§22.8's unknown rule) is retried
+// RetryTimeout on under its batch's id, a round of its own before the wait the schedule names. When done still does
+// not hold TimerTimeout of real time after the timers last changed, it fails with missing's error.
+func (self *fs44World) awaitWait(ctx context.Context, done func(pending []time.Time) bool, missing func(pending []time.Time) error) error {
 	clock := self.net.Clock()
 	for {
 		pending, added := clock.WatchTimers()
-		if slices.ContainsFunc(pending, func(pendingTime time.Time) bool { return pendingTime.Equal(at) }) {
+		if done(pending) {
 			return nil
+		}
+		retry := clock.Now().Add(self.settings.Batcher.RetryTimeout)
+		if self.lastSendLost() && slices.ContainsFunc(pending, func(pendingTime time.Time) bool { return pendingTime.Equal(retry) }) {
+			clock.AdvanceTo(retry)
+			continue
 		}
 		select {
 		case <-added:
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(self.settings.TimerTimeout):
-			return fmt.Errorf("the producer armed no timer at %s, pending %v", at, pending)
+			return missing(pending)
 		}
 	}
 }
 
+// Whether the last host write the Net's queue saw, a ReportUsage in the producer's clauses, applied with its answer
+// lost.
+func (self *fs44World) lastSendLost() bool {
+	results := self.net.Faults().WriteResults(sidecartest.FaultOpHost)
+	return 0 < len(results) && results[len(results)-1] == ApplyThenDrop
+}
+
+// The answers §22.8's unknown rule lost this run: every host write that applied with its answer lost, but the
+// schedule's own.
+func (self *fs44World) ruleLostAnswerCount() int {
+	lost := 0
+	for _, result := range self.net.Faults().WriteResults(sidecartest.FaultOpHost) {
+		if result == ApplyThenDrop {
+			lost += 1
+		}
+	}
+	return lost - self.ownLostAnswerCount
+}
+
+// call, asked again while it answers an error, up to CallAttemptCount calls: what an edge does with a call it got no
+// answer to, under the same ids, so a lost answer is never taken for a failure.
+func (self *fs44World) untilAnswered(call func() error) error {
+	var err error
+	for range self.settings.CallAttemptCount {
+		if err = call(); err == nil {
+			return nil
+		}
+	}
+	return err
+}
+
+// Returns the drain's answer, moving the clock to each retry the producer waits on while the drain's sends lose their
+// answers, the schedule's own and the unknown rule's.
+func (self *fs44World) awaitDrained(ctx context.Context, drained <-chan error) error {
+	clock := self.net.Clock()
+	for {
+		pending, added := clock.WatchTimers()
+		retry := clock.Now().Add(self.settings.Batcher.RetryTimeout)
+		if self.lastSendLost() && slices.ContainsFunc(pending, func(pendingTime time.Time) bool { return pendingTime.Equal(retry) }) {
+			clock.AdvanceTo(retry)
+			continue
+		}
+		select {
+		case err := <-drained:
+			return err
+		case <-added:
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(self.settings.TimerTimeout):
+			return errors.New("the drain never returned")
+		}
+	}
+}
+
+// The step's edge's lease on the network's tls meter, asked again while it answers an error, as the edge's next
+// connection asks: a Lease whose answer was lost left no handle to keep.
+func (self *fs44World) lease(ctx context.Context) (lease sidecar.QuotaLease, refusal *sidecar.QuotaRefusal, err error) {
+	err = self.untilAnswered(func() error {
+		var err error
+		lease, refusal, err = self.quota.Lease(ctx, self.networkId, sidecar.QuotaMeterTls)
+		return err
+	})
+	return lease, refusal, err
+}
+
 // A step action: the clock moves to the producer's timer at at, and the step ends once the round it starts has ended
-// in the producer's next wait, at next.
+// in the producer's next wait, at next, any retry of a lost answer on the way run.
 func (self *fs44World) stepTo(at time.Duration, next time.Duration) func(ctx context.Context, net *Net) error {
 	return func(ctx context.Context, net *Net) error {
 		if err := self.awaitTimerAt(ctx, self.at(at)); err != nil {
@@ -192,9 +289,11 @@ func (self *fs44World) expectDebited(debited int64) func(ctx context.Context, ne
 	}
 }
 
-// A step action: the fake Quota was sent sent batches and applied applied of them.
+// A step action: the fake Quota was sent sent batches, and one more for each answer §22.8's unknown rule lost, whose
+// batch went again, and applied applied of them.
 func (self *fs44World) expectBatches(sent int, applied int) func(ctx context.Context, net *Net) error {
 	return func(ctx context.Context, net *Net) error {
+		sent += self.ruleLostAnswerCount()
 		sentBatches, appliedBatches := self.quota.SentBatches(), self.quota.Batches()
 		if len(sentBatches) != sent || len(appliedBatches) != applied {
 			return fmt.Errorf("%d batches sent and %d applied, want %d and %d", len(sentBatches), len(appliedBatches), sent, applied)
@@ -213,8 +312,9 @@ func (self *fs44World) expectMetric(name string, value float64) func(ctx context
 	}
 }
 
-// The next ReportUsage applies and loses its answer.
-func fs44LoseNextAnswer() *Step {
+// The next ReportUsage applies and loses its answer, one of the schedule's own.
+func (self *fs44World) loseNextAnswer() *Step {
+	self.ownLostAnswerCount += 1
 	return &Step{Fault: &FaultPlan{Op: sidecartest.FaultOpHost, KeyPrefix: "quota.ReportUsage", Result: ApplyThenDrop}}
 }
 
@@ -243,7 +343,7 @@ func Fs44LostResponseRetried(net *Net) *Schedule {
 	world := newFs44World(net, nil)
 	steps := []*Step{
 		{Actor: "producer", Action: world.setup},
-		fs44LoseNextAnswer(),
+		world.loseNextAnswer(),
 		{Actor: "producer", Action: world.meter(100)},
 		// the window closes, api applies the batch and the answer is lost: the retry waits RetryTimeout
 		{Actor: "check", Action: world.stepTo(60*time.Second, 65*time.Second)},
@@ -251,9 +351,12 @@ func Fs44LostResponseRetried(net *Net) *Schedule {
 		{Actor: "check", Action: world.stepTo(65*time.Second, 120*time.Second)},
 		{Actor: "check", Action: world.settled},
 		{Actor: "check", Action: func(ctx context.Context, net *Net) error {
+			// two sends, and one more for an answer of the retry's the unknown rule lost
 			sent := world.quota.SentBatches()
-			if len(sent) != 2 || sent[0].BatchId != sent[1].BatchId {
-				return fmt.Errorf("the retry: %d sends, not two of one batch", len(sent))
+			if len(sent) != 2+world.ruleLostAnswerCount() || slices.ContainsFunc(sent, func(batch *sidecar.UsageBatch) bool {
+				return batch.BatchId != sent[0].BatchId
+			}) {
+				return fmt.Errorf("the retry: %d sends, not %d of one batch", len(sent), 2+world.ruleLostAnswerCount())
 			}
 			return nil
 		}},
@@ -269,7 +372,7 @@ func Fs44KilledWithAnAppliedBatchUnanswered(net *Net) *Schedule {
 	world := newFs44World(net, nil)
 	steps := []*Step{
 		{Actor: "producer", Action: world.setup},
-		fs44LoseNextAnswer(),
+		world.loseNextAnswer(),
 		{Actor: "producer", Action: world.meter(100)},
 		{Actor: "check", Action: world.stepTo(60*time.Second, 65*time.Second)},
 		{Actor: "producer", Action: world.kill(100)},
@@ -283,7 +386,7 @@ func Fs44KilledWithAnAppliedBatchUnanswered(net *Net) *Schedule {
 
 // A SIGTERM drain: the open window is sent at once and nothing is lost, a lost answer on the way included. The drain
 // waits on the producer's retry timer, so it runs on a goroutine of the producer's, as the process's SIGTERM handler
-// does, and the step that moves the clock to the retry lets it end.
+// does, and the step that moves the clock to the retry lets it end (awaitDrained).
 func Fs44DrainLosesNothing(net *Net) *Schedule {
 	world := newFs44World(net, nil)
 	drained := make(chan error, 1)
@@ -293,7 +396,7 @@ func Fs44DrainLosesNothing(net *Net) *Schedule {
 		{Actor: "check", Action: world.stepTo(60*time.Second, 120*time.Second)},
 		{Actor: "producer", Action: world.meter(40)},
 		{Advance: 10 * time.Second},
-		fs44LoseNextAnswer(),
+		world.loseNextAnswer(),
 		{Actor: "producer", Action: func(ctx context.Context, net *Net) error {
 			producer := world.producer()
 			go func() {
@@ -303,18 +406,7 @@ func Fs44DrainLosesNothing(net *Net) *Schedule {
 		}},
 		// the drain's send lost its answer: the retry waits RetryTimeout on the clock
 		{Actor: "check", Action: func(ctx context.Context, net *Net) error {
-			if err := world.awaitTimerAt(ctx, world.at(75*time.Second)); err != nil {
-				return err
-			}
-			net.Clock().AdvanceTo(world.at(75 * time.Second))
-			select {
-			case err := <-drained:
-				return err
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(world.settings.TimerTimeout):
-				return errors.New("the drain never returned")
-			}
+			return world.awaitDrained(ctx, drained)
 		}},
 		{Actor: "producer", Action: world.kill(0)},
 		{Actor: "check", Action: world.settled},
@@ -325,7 +417,9 @@ func Fs44DrainLosesNothing(net *Net) *Schedule {
 }
 
 // api unavailable for 11 min: the batch is retried under its id for its 10 min horizon, then dropped, counted for the
-// alert, and never applied; the windows after api returns apply as ever.
+// alert, and never applied; the windows after api returns apply as ever. An attempt §22.8's unknown rule lets reach api
+// with its answer lost, in place of its failure, applies the batch, once, and the producer, which cannot tell the two
+// apart, drops it as ever.
 func Fs44ApiUnavailableElevenMinutes(net *Net) *Schedule {
 	world := newFs44World(net, nil)
 	steps := []*Step{
@@ -353,16 +447,30 @@ func Fs44ApiUnavailableElevenMinutes(net *Net) *Schedule {
 		{Actor: "check", Action: world.stepTo(720*time.Second, 780*time.Second)},
 		{Actor: "check", Action: world.settled},
 		{Actor: "check", Action: func(ctx context.Context, net *Net) error {
-			applied := world.quota.Batches()
-			if len(applied) != 1 || applied[0].Events[0].TransferByteCount != 7 {
-				return fmt.Errorf("applied %d batches, not the later window's alone", len(applied))
+			// the dropped batch applied only if an attempt reached api, which a failure before apply never does
+			reached := slices.ContainsFunc(world.quota.SentBatches(), func(batch *sidecar.UsageBatch) bool {
+				return batch.Events[0].TransferByteCount == 100
+			})
+			want := []int64{7}
+			if reached {
+				want = []int64{100, 7}
+			}
+			applied := []int64{}
+			for _, batch := range world.quota.Batches() {
+				applied = append(applied, batch.Events[0].TransferByteCount)
+			}
+			if !slices.Equal(applied, want) {
+				return fmt.Errorf("applied batches of %v bytes, want %v", applied, want)
 			}
 			if violations := world.metrics.Violations(); len(violations) != 0 {
 				return fmt.Errorf("metrics %v", violations)
 			}
-			return nil
+			var debited int64
+			for _, byteCount := range want {
+				debited += byteCount
+			}
+			return world.expectDebited(debited)(ctx, net)
 		}},
-		{Actor: "check", Action: world.expectDebited(7)},
 	}...)
 	return &Schedule{Id: "FS-44 api unavailable eleven minutes", Steps: steps, Check: []Invariant{world.check()}}
 }
@@ -378,7 +486,7 @@ func Fs44EdgeKilledBeforeItsPost(net *Net) *Schedule {
 			return nil
 		}},
 		{Actor: "tlsedge1", Action: func(ctx context.Context, net *Net) error {
-			lease, refusal, err := world.quota.Lease(ctx, world.networkId, sidecar.QuotaMeterTls)
+			lease, refusal, err := world.lease(ctx)
 			if err != nil || refusal != nil {
 				return fmt.Errorf("the lease: %v, %+v", err, refusal)
 			}
@@ -431,7 +539,7 @@ func Fs44TwoHostsOnOneBalance(net *Net) *Schedule {
 	// both reserve before either spends: the second finds what the first left
 	for index, edge := range edges {
 		steps = append(steps, &Step{Actor: edge, Action: func(ctx context.Context, net *Net) error {
-			lease, refusal, err := world.quota.Lease(ctx, world.networkId, sidecar.QuotaMeterTls)
+			lease, refusal, err := world.lease(ctx)
 			if err != nil || refusal != nil {
 				return fmt.Errorf("%s's lease: %v, %+v", edge, err, refusal)
 			}
@@ -464,7 +572,10 @@ func Fs44TwoHostsOnOneBalance(net *Net) *Schedule {
 		}
 		for range 2 {
 			steps = append(steps, &Step{Actor: edge, Action: func(ctx context.Context, net *Net) error {
-				return world.quota.ReportUsage(ctx, batch)
+				// sent again under its id while unanswered, as the edge's batcher does
+				return world.untilAnswered(func() error {
+					return world.quota.ReportUsage(ctx, batch)
+				})
 			}})
 		}
 		steps = append(steps, &Step{Actor: edge, Action: func(ctx context.Context, net *Net) error {
