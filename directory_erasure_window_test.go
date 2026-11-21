@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -100,19 +101,53 @@ func testSweepWindow() time.Duration {
 	return sidecar.DefaultDirectoryErasureSettings().SweepWindow
 }
 
-// Another member's daemon signs a card whose run names the repo, its document entered in the cards ref's index as the
-// card's push enters it: a copy no sync of the admin's has shown yet. Answers the document's name.
-func (self *testDroppedSeed) otherMemberCard(t *testing.T) []byte {
+// The project another member's run names the repo under, told apart from the daemon's in the cards' stored versions.
+const testWindowOtherProject = "example.org/team/vault-audit"
+
+// Another member's daemon whose card's run names the repo.
+type testWindowMember struct {
+	world    *testDirectoryWorld
+	repoId   sidecar.Id
+	device   *testDirectoryDevice
+	memberId sidecar.Id
+	runId    sidecar.Id
+	cardPath string
+	// the run's document's name
+	document []byte
+}
+
+// Another member's daemon signs a card whose run names the repo under testWindowOtherProject, its document entered in
+// the cards ref's index as the card's push enters it: a copy no sync of the admin's has shown yet.
+func (self *testErasureSeed) otherMemberCard(t *testing.T, refs *sidecar.DirectoryErasureTestRefs) *testWindowMember {
 	t.Helper()
 	world := self.world
-	memberId, runId := sidecar.NewId(), sidecar.NewId()
+	memberId := sidecar.NewId()
 	device := world.device(world.memberWriter(memberId))
 	world.publish()
 	writerId := device.writer.sidecarId
-	device.writeCard(t, testRunItemIn(world, writerId, memberId, runId, self.repoId, 1, testErasureProject, false))
-	document := testAnnouncementDocumentName(&writerId, runId)
-	self.refs.Enter(sidecar.DirectoryErasureTestCardsRef, writerId, document, 1)
-	return document
+	member := &testWindowMember{
+		world: world, repoId: self.repoId, device: device, memberId: memberId, runId: sidecar.NewId(),
+		cardPath: sidecar.DirectoryCardPath(writerId),
+	}
+	member.document = testAnnouncementDocumentName(&writerId, member.runId)
+	member.writeRun(t, 1, false)
+	refs.Enter(sidecar.DirectoryErasureTestCardsRef, writerId, member.document, 1)
+	return member
+}
+
+// The member's card again with its run at version, private or naming the repo.
+func (self *testWindowMember) writeRun(t *testing.T, version uint64, private bool) {
+	t.Helper()
+	self.world.clock.Advance(time.Minute)
+	self.world.publish()
+	writerId := self.device.writer.sidecarId
+	self.device.writeCard(t, testRunItemIn(self.world, writerId, self.memberId, self.runId, self.repoId, version, testWindowOtherProject, private))
+}
+
+// The stored versions of the card at path holding text whose key still stands.
+func testReadableAt(t *testing.T, evs *testErasureEvs, text string, path string) []string {
+	t.Helper()
+	return slices.DeleteFunc(evs.readable(t, text), func(version string) bool { return !strings.HasPrefix(version, path+"@") })
 }
 
 // The sweep's CUT of the later-signed card an hour before the window's end, the cards ref's rewrite then waiting on the
@@ -146,17 +181,17 @@ func TestDirectoryFormat2RewriteWaitingOnTheAllowanceFinishesPastTheWindow(t *te
 	}
 
 	testAgeRequest(t, seed.world, seed.admin, seed.requestId, testSweepWindow()+time.Hour)
-	otherDocument := seed.otherMemberCard(t)
+	other := seed.otherMemberCard(t, refs)
 	pass := seed.admin.pass(t, seed.runner)
 	files = pass.Files[seed.requestId]
 	if len(pass.Erased[seed.requestId]) != 0 || files == nil || files.CutCount != 0 || files.IndexPairCount == 0 || files.IndexWaiting ||
 		files.Complete || !slices.Equal(files.WaitingPaths, []string{seed.cardPath}) || len(files.ClosedPaths) != 0 || len(files.UnclosedPaths) != 0 {
 		t.Fatalf("the pass past the window: erased %v, files %+v", pass.Erased[seed.requestId], files)
 	}
-	if version := refs.ListedVersion(cardsRef, seed.requestId, otherDocument); version != 0 {
+	if version := refs.ListedVersion(cardsRef, seed.requestId, other.document); version != 0 {
 		t.Fatalf("a card first found past the window is cut at %d", version)
 	}
-	if readable := refs.Readable(cardsRef, otherDocument); len(readable) == 0 {
+	if readable := refs.Readable(cardsRef, other.document); len(readable) == 0 {
 		t.Fatal("the rewrite past the window took a document no CUT lists")
 	}
 	seed.slotRewritten(t)
