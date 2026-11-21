@@ -100,6 +100,16 @@ func (record *sidecarAlarmRecord) browserItem(target, member Id, key []byte) *si
 	return nil
 }
 
+func (self *Sidecar) previousBrowserApproval(target, member Id, key []byte) (*sidecarApprovalRecord, error) {
+	self.alarms.stateLock.Lock()
+	defer self.alarms.stateLock.Unlock()
+	record, err := self.loadAlarmRecord()
+	if err != nil {
+		return nil, err
+	}
+	return record.browserItem(target, member, key), nil
+}
+
 func (self *Sidecar) browserAdmissionRequest(ctx context.Context, target Id, terms BrowserAdmissionTerms) (*SidecarAdmissionRequest, string, error) {
 	identity, authority := self.currentIdentity(), self.authority()
 	if identity == nil || authority == nil || authority.Pin() == nil {
@@ -129,13 +139,11 @@ func (self *Sidecar) browserAdmissionRequest(ctx context.Context, target Id, ter
 		return nil, "", err
 	}
 	if terms.Mode == BrowserAdmissionBurner {
-		self.alarms.stateLock.Lock()
-		record, err := self.loadAlarmRecord()
-		self.alarms.stateLock.Unlock()
+		previous, err := self.previousBrowserApproval(target, own.MemberId, binding.IdentityPublicKey)
 		if err != nil {
 			return nil, "", err
 		}
-		if previous := record.browserItem(target, own.MemberId, binding.IdentityPublicKey); previous != nil {
+		if previous != nil {
 			retained := previous.Browser
 			if retained.Mode != terms.Mode || retained.MailboxId != terms.MailboxId || retained.NotAfterMs > terms.NotAfterMs || retained.NotAfterMs <= self.clock.Now().UnixMilli() {
 				return nil, "", ErrSidecarApprovalAuthority
@@ -184,7 +192,30 @@ func (self *Sidecar) ConfirmBrowserAdmission(ctx context.Context, target Id, pre
 	if authority == nil {
 		return ErrSidecarActNoAuthority
 	}
-	if existing := authority.Admission(target); existing != nil {
+	existing := authority.Admission(target)
+	if existing == nil {
+		previous, err := self.previousBrowserApproval(target, request.MemberId, request.IdentityPublicKey)
+		if err != nil {
+			return err
+		}
+		if previous != nil && previous.Decided && previous.Decision == SidecarDecisionApprove {
+			// A previous decision already signed this act. A lost response or a daemon
+			// restart before the follower was installed can leave its bytes waiting.
+			if err := self.PostPendingStatements(ctx); err != nil && !errors.Is(err, ErrSidecarActPending) {
+				return err
+			}
+			if follower, ok := authority.(interface{ CatchUp(context.Context) error }); ok {
+				if err := follower.CatchUp(ctx); err != nil {
+					return err
+				}
+			}
+			existing = authority.Admission(target)
+			if existing == nil {
+				return ErrSidecarActPending
+			}
+		}
+	}
+	if existing != nil {
 		if existing.Row == nil || existing.Row.GetRevokedAt() != 0 || existing.MemberId != request.MemberId ||
 			len(existing.TagIds) != 0 || existing.Row.GetCapabilities() != request.Capabilities || existing.Row.GetNotAfter() != terms.NotAfterMs ||
 			!bytes.Equal(existing.Row.GetIdentityPublicKey(), request.IdentityPublicKey) {
@@ -212,13 +243,10 @@ func (self *Sidecar) ConfirmBrowserAdmission(ctx context.Context, target Id, pre
 }
 
 func (self *Sidecar) completeBrowserBurner(ctx context.Context, request *SidecarAdmissionRequest, row *bridge.SidecarRow, check SidecarPresenceCheck) error {
-	self.alarms.stateLock.Lock()
-	record, err := self.loadAlarmRecord()
-	self.alarms.stateLock.Unlock()
+	item, err := self.previousBrowserApproval(request.SidecarId, request.MemberId, request.IdentityPublicKey)
 	if err != nil {
 		return err
 	}
-	item := record.browserItem(request.SidecarId, request.MemberId, request.IdentityPublicKey)
 	identity := self.currentIdentity()
 	if item == nil || *item.Browser != *request.browser || identity == nil ||
 		!slices.ContainsFunc(row.GetAdmissionSigners(), func(signer []byte) bool { return bytes.Equal(signer, identity.SidecarId.Bytes()) }) {
