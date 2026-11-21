@@ -112,6 +112,8 @@ type urSettings struct {
 	// the longest link's 161 B (a 63-character label, share/, a 26-character token and a 64-character fragment), so a
 	// file piped in by mistake is not read whole. A longer line is refused; zero or less refuses every line.
 	ShareLinkByteCount int
+	// The maximum ACL policy source the parser accepts (§8.8).
+	AclSourceMaxByteCount int64
 	// How long ur search waits for a page where it names no --wait and stdout is a terminal: 10 s (§16.10's wire row);
 	// off a terminal it names none, and the daemon takes the MCP tool's default. Positive.
 	SearchTerminalWait time.Duration
@@ -136,6 +138,7 @@ func defaultUrSettings() *urSettings {
 		RelayReconnectInterval:     1 * time.Second,
 		CloseTimeout:               30 * time.Second,
 		ShareLinkByteCount:         1024,
+		AclSourceMaxByteCount:      4 * 1024 * 1024,
 		SearchTerminalWait:         10 * time.Second,
 		SearchPageCount:            64,
 	}

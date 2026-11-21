@@ -210,6 +210,8 @@ type ConfigClient struct {
 	saveDue bool
 
 	configLog atomic.Pointer[ConfigLog]
+	// Only the newest decrypted head this client actually verified, for offline policy tests.
+	localHead atomic.Pointer[configClientLocalHead]
 	// the log a full start builds while its pages apply, nil outside one: what VerifiedState answers before configLog
 	// holds it
 	starting atomic.Pointer[ConfigLog]
@@ -254,6 +256,12 @@ type configVerifiedHead struct {
 	recoveryBodies  map[Id]*configRecoveryBody
 	recoveryKnown   bool
 	versioningRules *protocol.VersioningRules
+}
+
+type configClientLocalHead struct {
+	version uint64
+	chain   [sha256.Size]byte
+	head    *ConfigHead
 }
 
 // A client following args.NetworkId's log, started: it restores what authlog/ kept and follows at once, then on each
@@ -1190,6 +1198,7 @@ func (self *configClientRowsSource) CheckHead(check *ConfigHeadCheck) (*ConfigHe
 		return nil, err
 	}
 	self.client.rememberHead(headSha256, check.Header.GetConfigVersion(), facts, true)
+	self.client.localHead.Store(&configClientLocalHead{version: check.Header.GetConfigVersion(), chain: [sha256.Size]byte(headSha256), head: head})
 	return facts, nil
 }
 

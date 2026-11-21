@@ -895,6 +895,17 @@ type urNetworkConfigHeads struct {
 
 var _ sidecar.ConfigHeadAnchorReader = (*urNetworkConfigHeads)(nil)
 
+// Only the verified heads already held by this daemon, with no network read.
+func (self *urNetworkConfigHeads) CachedConfigHead(version uint64, chain []byte) *sidecar.ConfigHead {
+	self.clients.stateLock.Lock()
+	reader := self.clients.reader
+	self.clients.stateLock.Unlock()
+	if reader == nil {
+		return nil
+	}
+	return reader.CachedConfigHead(version, chain)
+}
+
 // The head at configVersion, each push after this device's pin judged at its own pin (ReadConfigHead).
 func (self *urNetworkConfigHeads) ReadConfigHead(ctx context.Context, configVersion uint64, configHeadSha256 []byte) (*sidecar.ConfigHead, error) {
 	reader, err := self.clients.headReader(nil)
