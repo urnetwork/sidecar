@@ -40,11 +40,18 @@ type FakeDnsCustomHostMapStore struct {
 	restoreRaiseHook func(version uint64)
 	// reads of the state, which a test waits on to know a reader has reached its wait
 	stateReads *sidecar.MonitorValue[int]
+	// reads of the incident's interface reports during a restore
+	restoreReportReads *sidecar.MonitorValue[int]
 }
 
 // How many times the state was read, and a channel that closes at the next read.
 func (self *FakeDnsCustomHostMapStore) StateReads() (int, chan struct{}) {
 	return self.stateReads.Get()
+}
+
+// How many times a restore read its reports, and a channel that closes at the next read.
+func (self *FakeDnsCustomHostMapStore) RestoreReportReads() (int, chan struct{}) {
+	return self.restoreReportReads.Get()
 }
 
 // Calls hook with the version once a restore's raise has made it, outside the store's lock, before the raise
@@ -72,6 +79,7 @@ func NewFakeDnsCustomHostMapStore() *FakeDnsCustomHostMapStore {
 		hostNetworkIds:          map[string]sidecar.Id{},
 		incidentEventNetworkIds: map[sidecar.Id][]sidecar.Id{},
 		stateReads:              sidecar.NewMonitorValue(0),
+		restoreReportReads:      sidecar.NewMonitorValue(0),
 	}
 }
 
@@ -140,6 +148,7 @@ func (self *FakeDnsCustomHostMapStore) raiseForRestore(incidentId sidecar.Id) (u
 
 // Include a captured load even after the reporting interface has left the inventory.
 func (self *FakeDnsCustomHostMapStore) RestoreMapReports(ctx context.Context, root string, incidentId sidecar.Id) (map[string]*dnsservice.DnsMapRestoreReport, error) {
+	defer self.restoreReportReads.Update(func(count int) int { return count + 1 })
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	reports := map[string]*dnsservice.DnsMapRestoreReport{}
