@@ -144,6 +144,9 @@ func searchSyncNow(ctx context.Context, engine *SearchEngine, state func() (*Sid
 		}
 		reply.Policy = params.Policy
 	}
+	if _, err := engine.args.Scope.Repos(ctx); err != nil {
+		return nil, err
+	}
 	for _, key := range engine.args.Sync.followedRefs(repoId) {
 		if err := engine.args.Sync.RunRound(ctx, key[0], key[1], params.More); err != nil {
 			reply.Failed = append(reply.Failed, &DaemonSearchSyncFailure{RepoId: key[0].String(), RefId: key[1].String(), Error: err.Error()})

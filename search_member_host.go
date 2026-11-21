@@ -9,6 +9,7 @@ import (
 	"errors"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/urnetwork/sidecar/protocol"
 )
@@ -17,14 +18,14 @@ import (
 type memberSearchHost struct {
 	running   *Sidecar
 	ctx       context.Context
-	clients   func() (*EvsClient, *GkmGroupClient, error)
+	clients   func() (*EvsClient, error)
 	buildLock sync.Mutex
 	engine    *SearchEngine
 	syncer    *SearchSync
 }
 
 // Binds the hosted network's existing clients. The cache and queries open on first use, after enrollment.
-func (self *Sidecar) BindMemberSearch(ctx context.Context, clients func() (*EvsClient, *GkmGroupClient, error)) {
+func (self *Sidecar) BindMemberSearch(ctx context.Context, clients func() (*EvsClient, error)) {
 	if clients == nil {
 		return
 	}
@@ -33,6 +34,7 @@ func (self *Sidecar) BindMemberSearch(ctx context.Context, clients func() (*EvsC
 	search.stateLock.Lock()
 	search.member = host
 	search.stateLock.Unlock()
+	go host.run()
 	context.AfterFunc(ctx, func() {
 		host.buildLock.Lock()
 		defer host.buildLock.Unlock()
@@ -48,19 +50,20 @@ func (self *Sidecar) BindMemberSearch(ctx context.Context, clients func() (*EvsC
 	})
 }
 
-// The exact generation already opened in the local sealed keychain. A search never causes a key delivery or fetch.
-func (self *GkmGroupClient) localRepoKey(repo Id, generation uint64) (*EvsRepoKey, error) {
-	if !self.holdsState() {
-		return nil, ErrGkmUnavailable
-	}
-	held, err := self.heldGeneration(repo, generation)
-	if err != nil {
+// Query-time record opening only reads an already-held generation. Other key operations refuse.
+type memberSearchKeys struct {
+	gkmRefusingClient
+	running *Sidecar
+}
+
+func (self memberSearchKeys) RepoKey(ctx context.Context, repo Id, generation uint64) (*EvsRepoKey, error) {
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if held.key == nil {
-		return nil, ErrGkmKeyMissing
+	if key := self.running.GkmHeldKey(repo, generation); key != nil {
+		return key, nil
 	}
-	return held.key, nil
+	return nil, ErrGkmKeyMissing
 }
 
 // Opens this network's engine once its published config and its bound clients agree.
@@ -78,18 +81,18 @@ func (self *memberSearchHost) open() (*SearchEngine, error) {
 	if follower == nil || follower.Client() == nil || !running.Admitted() {
 		return nil, ErrSidecarSearchUnavailable
 	}
-	evs, group, err := self.clients()
+	evs, err := self.clients()
 	if err != nil {
 		return nil, err
 	}
-	if evs == nil || group == nil {
+	if evs == nil {
 		return nil, ErrSidecarSearchUnavailable
 	}
 	record, err := running.Record()
 	if err != nil {
 		return nil, err
 	}
-	source := &memberSearchSource{host: self, evs: evs, group: group, record: record}
+	source := &memberSearchSource{host: self, evs: evs, record: record}
 	if source.state() == nil {
 		return nil, ErrSidecarSearchUnavailable
 	}
@@ -117,28 +120,37 @@ func (self *memberSearchHost) open() (*SearchEngine, error) {
 	if err != nil {
 		return nil, err
 	}
-	engine, err := NewSearchEngine(&SearchEngineArgs{Settings: settings, Cache: cache, Sync: syncer, Policy: policy, Format: format, Scope: source, Gkm: evs.args.Gkm,
-		Scan: source.scan, Events: running.searchEvents(), Clock: running.clock, Log: running.log})
+	source.syncer, source.policy = syncer, policy
+	engine, err := NewSearchEngine(&SearchEngineArgs{Settings: settings, Cache: cache, Sync: syncer, Policy: policy, Format: format, Scope: source, Gkm: memberSearchKeys{running: running},
+		Scan: source.scan, Members: source.memberSidecars, Events: running.searchEvents(), Clock: running.clock, Log: running.log})
 	if err != nil {
 		syncer.Close()
 		return nil, err
 	}
+	syncer.Start(self.ctx)
 	self.engine, self.syncer = engine, syncer
 	return engine, nil
 }
 
 // The record retention and the file view belong to the same authorized member.
 type memberSearchSource struct {
-	host   *memberSearchHost
-	evs    *EvsClient
-	group  *GkmGroupClient
-	record *SidecarRecord
+	host       *memberSearchHost
+	evs        *EvsClient
+	syncer     *SearchSync
+	policy     *SearchPolicy
+	followLock sync.Mutex
+	followed   map[[2]Id]bool
+	record     *SidecarRecord
 }
 
 // Refuses pending, closed, locked, replaced or freshly revoked identities.
 func (self *memberSearchSource) state() *ConfigState {
 	running := self.host.running
-	if self.host.ctx.Err() != nil || !running.Admitted() {
+	search := running.searchOf()
+	search.stateLock.Lock()
+	current := search.member == self.host
+	search.stateLock.Unlock()
+	if !current || self.host.ctx.Err() != nil || !running.Admitted() {
 		return nil
 	}
 	if state, _ := running.instance.State(); state != SidecarInstanceOpen {
@@ -161,6 +173,21 @@ func (self *memberSearchSource) state() *ConfigState {
 	return state
 }
 
+// Resolves a historical writer to the member its verified admission names, including retired devices.
+func (self *memberSearchSource) memberSidecars(member Id) []Id {
+	state := self.state()
+	if state == nil || member == (Id{}) {
+		return nil
+	}
+	var ids []Id
+	for _, id := range state.SidecarIds() {
+		if row := state.SidecarRow(id); row != nil && bytes.Equal(row.GetMemberId(), member[:]) {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
 // Every ref is named by local verified evidence and scoped to the reader that holds it.
 func (self *memberSearchSource) Repos(ctx context.Context) ([]*SearchScopeRepo, error) {
 	state := self.state()
@@ -174,6 +201,7 @@ func (self *memberSearchSource) Repos(ctx context.Context) ([]*SearchScopeRepo, 
 	subject := AclSidecarSubject(self.record.writer.sidecarId)
 	now := self.host.running.clock.Now()
 	var repos []*SearchScopeRepo
+	live := map[[2]Id]bool{}
 	for _, id := range acl.RepoIds() {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -188,47 +216,100 @@ func (self *memberSearchSource) Repos(ctx context.Context) ([]*SearchScopeRepo, 
 			continue
 		}
 		repos = append(repos, repo)
+		repo.valid = func() bool {
+			current := self.state()
+			if current == nil || !bytes.Equal(current.Pin().Chain, state.Pin().Chain) {
+				return false
+			}
+			live := acl.EvsAccess(subject, id, AclTokenAudienceEvs, self.host.running.clock.Now()).Rights
+			if repo.Readable {
+				return live.Has(AclEvsRead)
+			}
+			return live.Has(AclEvsDeposit)
+		}
 		if !repo.Readable || indexRepoExcluded(repo.Kind) {
 			continue
 		}
 		repo.ReceiptRequired = aclRepoKindOwnerBound(repo.Kind) && !rights.Has(AclEvsWrite)
-		repo.valid = func() bool {
-			current := self.state()
-			return current != nil && bytes.Equal(current.Pin().Chain, state.Pin().Chain) && acl.EvsAccess(subject, id, AclTokenAudienceEvs, self.host.running.clock.Now()).Rights.Has(AclEvsRead)
-		}
-		if repo.Kind == protocol.RepoKind_REPO_KIND_DIRECTORY {
-			r := self.record.Retention()
-			repo.SearchableAge = memberSearchAge(r.SearchableDays(id, RecordClassCoordination), r.settings.Day)
-		}
-		repo.Refs, err = self.refs(repo)
+		repo.Refs, err = self.refs(repo, len(row.GetPrefixRules()) == 0, live)
 		if err != nil {
 			return nil, err
 		}
+		if repo.Kind == protocol.RepoKind_REPO_KIND_DIRECTORY {
+			age, policy := self.directoryAge(id)
+			repo.SearchableAge = age
+			for _, ref := range repo.Refs {
+				if policy == nil {
+					ref.Unbuilt = true
+				}
+			}
+			if policy != nil {
+				authorized := repo.valid
+				repo.valid = func() bool { return authorized() && policy() }
+			}
+		}
 	}
+	// A revoked grant or withdrawn ref cannot remain a scheduled or control-visible sync target.
+	self.followLock.Lock()
+	if self.state() == state {
+		for key := range self.followed {
+			if !live[key] {
+				self.syncer.Unfollow(key[0], key[1])
+				delete(self.followed, key)
+			}
+		}
+	}
+	self.followLock.Unlock()
 	return repos, nil
+}
+
+// QD-1138 uses the directory's signed coordination policy for every indexed card. Only a complete local read
+// establishes which policy stands. A new reader revision expires every page opened at the preceding cut.
+func (self *memberSearchSource) directoryAge(repo Id) (time.Duration, func() bool) {
+	_, directory := recordTeamLogs(self.record.writer.auth())
+	if directory == nil || *directory != repo {
+		return 0, nil
+	}
+	reader := self.record.Reader()
+	reader.stateLock.Lock()
+	log := reader.logs[repo]
+	if log == nil || !log.complete {
+		reader.stateLock.Unlock()
+		return 0, nil
+	}
+	revision := log.searchRevision
+	reader.stateLock.Unlock()
+	retention := self.record.Retention()
+	age := memberSearchAge(retention.SearchableDays(repo, RecordClassCoordination), retention.settings.Day)
+	valid := func() bool {
+		reader.stateLock.Lock()
+		defer reader.stateLock.Unlock()
+		return log.complete && log.searchRevision == revision
+	}
+	if !valid() {
+		return 0, nil
+	}
+	return age, valid
 }
 
 // Held generation one derives K_ref directly, without testing or authenticating any remote endpoint.
 func (self *memberSearchSource) refKey(repo Id) (*EvsRefKey, error) {
-	key, err := self.group.localRepoKey(repo, 1)
-	if errors.Is(err, ErrGkmKeyMissing) {
+	key := self.host.running.GkmHeldKey(repo, 1)
+	if key == nil {
 		return nil, nil
-	}
-	if err != nil {
-		return nil, err
 	}
 	return NewEvsRefKey(key)
 }
 
 // The signed record reader knows each stream's name. The pins and sealed observations name ordinary file refs.
-func (self *memberSearchSource) refs(repo *SearchScopeRepo) ([]*SearchScopeRef, error) {
+func (self *memberSearchSource) refs(repo *SearchScopeRepo, unrestricted bool, live map[[2]Id]bool) ([]*SearchScopeRef, error) {
 	key, err := self.refKey(repo.RepoId)
 	if err != nil || key == nil {
 		return nil, err
 	}
 	refs := map[Id]*SearchScopeRef{}
 	add := func(id Id, name string, def bool) {
-		if id == (Id{}) || name == "" || name == string(EvsIndexRefName) {
+		if id == (Id{}) || name == "" || (name == string(EvsIndexRefName) || name == string(EvsLfsRefName)) {
 			return
 		}
 		verified, err := EvsRefId(key, []byte(name))
@@ -247,7 +328,8 @@ func (self *memberSearchSource) refs(repo *SearchScopeRepo) ([]*SearchScopeRef, 
 		}
 		reader.stateLock.Unlock()
 	}
-	if repo.Kind == protocol.RepoKind_REPO_KIND_GENERAL && !repo.GroupInbox {
+	fileIndex := repo.Kind == protocol.RepoKind_REPO_KIND_DIRECTORY || repo.Kind == protocol.RepoKind_REPO_KIND_GENERAL && !repo.GroupInbox
+	if fileIndex {
 		pins, err := self.evs.pins.Pins(&repo.RepoId)
 		if err != nil {
 			return nil, err
@@ -267,6 +349,12 @@ func (self *memberSearchSource) refs(repo *SearchScopeRepo) ([]*SearchScopeRef, 
 	}
 	out := make([]*SearchScopeRef, 0, len(refs))
 	for _, r := range refs {
+		if unrestricted && fileIndex && !repo.ReceiptRequired && (!memberSearchRecordKind(repo.Kind) || r.Name == string(EvsMainRefName)) {
+			live[[2]Id{repo.RepoId, r.RefId}] = true
+			if err := self.follow(repo, r); err != nil {
+				return nil, err
+			}
+		}
 		out = append(out, r)
 	}
 	slices.SortFunc(out, func(a, b *SearchScopeRef) int {
@@ -279,4 +367,109 @@ func (self *memberSearchSource) refs(repo *SearchScopeRepo) ([]*SearchScopeRef, 
 		return a.RefId.Cmp(b.RefId)
 	})
 	return out, nil
+}
+
+// Follow starts no network work. Rounds run only on a sync trigger. A verified cache manifest chooses index or scan.
+func (self *memberSearchSource) follow(repo *SearchScopeRepo, ref *SearchScopeRef) error {
+	key := [2]Id{repo.RepoId, ref.RefId}
+	self.followLock.Lock()
+	if !self.followed[key] {
+		source := &memberIndexSource{member: self, store: newIndexEvsStore(self.evs.Repo(repo.RepoId), []byte(ref.Name), ref.Companion), contentRef: ref.RefId, kind: repo.Kind}
+		err := self.syncer.Follow(&searchSyncRefArgs{repoId: repo.RepoId, refId: ref.RefId, repoKind: repo.Kind, companion: ref.Companion, source: source,
+			keepLatest: func() bool { return self.policy.KeepsLatest(repo.Kind) }, keepAll: func() bool { return self.policy.KeepsAll(repo.RepoId, 0) },
+			mayErase: func(signer Id, when int64) bool {
+				state := self.state()
+				if state == nil {
+					return false
+				}
+				acl, err := state.Acl()
+				return err == nil && indexAclAdmins(acl, repo.RepoId)(&indexFileVersion{signerSidecarId: signer, signedTimeMs: when})
+			}})
+		if err != nil {
+			self.followLock.Unlock()
+			return err
+		}
+		if self.followed == nil {
+			self.followed = make(map[[2]Id]bool)
+		}
+		self.followed[key] = true
+	}
+	self.followLock.Unlock()
+	snapshot, err := self.syncer.Snapshot(repo.RepoId, ref.RefId)
+	if errors.Is(err, ErrSidecarStoreAbsent) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if snapshot == nil {
+		return nil
+	}
+	defer snapshot.Release()
+	held := snapshot.Pin()
+	current := func() bool {
+		pin, found, err := self.evs.pins.Pin(repo.RepoId, ref.RefId)
+		return err == nil && found && pin.Version == held.Version && pin.Chain == held.Chain
+	}
+	if !current() {
+		return nil
+	}
+	ref.valid = current
+	for _, f := range snapshot.manifest.Files {
+		if f.State != SearchManifestHeld {
+			continue
+		}
+		parsed, ok := indexParsePath(f.Path, ref.Companion)
+		if !ok {
+			continue
+		}
+		switch parsed.kind {
+		case indexPathSettings:
+			settings, err := indexDecodeSettings(f.Small)
+			if err == nil {
+				ref.IndexOff = settings.Off
+			}
+		case indexPathSlot, indexPathLargeEntry, indexPathBucketShard, indexPathAllShard:
+			ref.Unbuilt = false
+		}
+	}
+	return nil
+}
+
+// Enrollment and scheduled refreshes discover newly pinned refs independently of queries.
+func (self *memberSearchHost) run() {
+	wake := make(chan struct{}, 1)
+	stop := self.running.AddEventCallback(func(event SidecarEvent) {
+		if event.Kind == SidecarEventState {
+			select {
+			case wake <- struct{}{}:
+			default:
+			}
+		}
+	})
+	defer stop()
+	timer := self.running.clock.After(self.running.settings.Search.ResyncInterval)
+	_, foregroundChange := self.running.SearchForeground()
+	for {
+		reason := SearchSyncResync
+		select {
+		case <-self.ctx.Done():
+			return
+		case <-wake:
+		case <-foregroundChange:
+			foreground, changed := self.running.SearchForeground()
+			foregroundChange = changed
+			if !foreground {
+				continue
+			}
+			reason = SearchSyncForeground
+		case <-timer:
+			timer = self.running.clock.After(self.running.settings.Search.ResyncInterval)
+		}
+		if engine, err := self.open(); err == nil {
+			if _, err := engine.args.Scope.Repos(self.ctx); err == nil {
+				engine.args.Sync.triggerAll(reason)
+			}
+		}
+	}
 }

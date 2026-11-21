@@ -253,7 +253,12 @@ func (self *SearchSync) fetch(ctx context.Context, ref *searchSyncRef, manifest 
 			case answer.file.version != wanted.Version:
 				return false, fmt.Errorf("%w: a read answered another version", ErrSearchCacheArgs)
 			}
-			staged, err := self.stage(ctx, ref, plan, wanted, answer.record)
+			var staged *SearchManifestFile
+			if answer.settings != nil {
+				staged, err = self.memberSettings(ref, wanted, answer.settings)
+			} else {
+				staged, err = self.stage(ctx, ref, plan, wanted, answer.record)
+			}
 			if err != nil {
 				return false, err
 			}

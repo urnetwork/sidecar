@@ -155,6 +155,8 @@ type searchSyncChange struct {
 type searchSyncFetched struct {
 	file   *indexFileVersion
 	record *SearchCacheRecord
+	// An EVS-verified admin settings file may consist of multiple versioned records. Its bounded bytes stay sealed in the manifest.
+	settings []byte
 	// The version is replaced and its content gone (§11.9's collected): the round restarts on the new head.
 	collected bool
 }
