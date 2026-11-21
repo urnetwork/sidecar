@@ -130,10 +130,6 @@ func newEpochWorld(t *testing.T) *epochWorld {
 
 // newEpochWorld's repo of kind.
 func newEpochWorldOf(t *testing.T, kind protocol.RepoKind) *epochWorld {
-	return newEpochWorldWithInbox(t, kind, protocol.RepoInbox_REPO_INBOX_NONE)
-}
-
-func newEpochWorldWithInbox(t *testing.T, kind protocol.RepoKind, inbox protocol.RepoInbox) *epochWorld {
 	t.Helper()
 	return newEpochWorldWithInbox(t, kind, protocol.RepoInbox_REPO_INBOX_NONE)
 }
