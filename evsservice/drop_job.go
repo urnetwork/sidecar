@@ -576,6 +576,16 @@ func (self *DropJob) Run(ctx context.Context, clusterId string, repoId sidecar.I
 	if read.Etag == "" {
 		return result, nil
 	}
+	if err := checkHeldCoverage(ctx, segmentCluster, repoId, read.State, self.settings, nil); err != nil {
+		var missing missingHeldOwners
+		if !errors.As(err, &missing) {
+			return result, err
+		}
+		read, err = self.restoreHeldOwners(ctx, cluster, segmentCluster, repoId, read.State, missing)
+		if err != nil {
+			return result, err
+		}
+	}
 	now := self.clock.Now()
 	if err := self.tidy(ctx, cluster, segmentCluster, repoId, read.State, now); err != nil {
 		return result, err
@@ -1588,7 +1598,11 @@ func (self *dropJobRun) deleteSet(cursor DropCursor) ([]*DropCandidate, error) {
 	}
 	set := []*DropCandidate{}
 	for _, candidate := range candidates {
-		if candidate.Cursor.before(cursor) || marks[candidate.DropScanId] || answers[candidate.DropScanId].Final() || heldElsewhere[candidate.DropScanId] {
+		answer := answers[candidate.DropScanId]
+		// The deleter checkpoints its cursor before the job parks. A crash
+		// between them must not turn those retained answers into completion.
+		if marks[candidate.DropScanId] || heldElsewhere[candidate.DropScanId] || answer.Final() ||
+			(candidate.Cursor.before(cursor) && answer != DropOutcomeHeld) {
 			continue
 		}
 		set = append(set, candidate)
@@ -1632,7 +1646,12 @@ func (self *dropJobRun) observe() error {
 func (self *dropJobRun) deletes(table *DropTableState) (*DropTableState, error) {
 	job := table.Job
 	if self.job.format2.DropMode() != sidecar.Format2On {
-		return nil, self.observe()
+		if job.Resumed {
+			return nil, self.hold()
+		}
+		// Physical work may already be checkpointed. Its owner stays in the
+		// table until deletion can run again, even on an observe-only worker.
+		return nil, self.wait(DropWaitUnanswered, job.Phase, self.job.clock.Now().Add(self.job.settings.PauseRetryInterval))
 	}
 	set, err := self.deleteSet(job.Cursor)
 	if err != nil {

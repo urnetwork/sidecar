@@ -382,11 +382,84 @@ type withheldSnapshot struct {
 
 type withheldKey struct{ dropRepoKey }
 
+type heldCoverageKey struct {
+	clusterId string
+	repoId    sidecar.Id
+	jobId     sidecar.Id
+}
+
+type missingHeldOwners map[sidecar.Id]bool
+
+func (self missingHeldOwners) Error() string {
+	return fmt.Sprintf("%v: %d held drops have no job record", ErrDropJobState, len(self))
+}
+
+func (self missingHeldOwners) Unwrap() error { return ErrDropJobState }
+
+// Some older tables could lose the job record while leaving its drops held.
+// Their snap-0 is the durable membership proof. A missing owner leaves no safe
+// way to authorize bytes or expire the unreferenced job's files.
+func checkHeldCoverage(ctx context.Context, segmentCluster sidecar.BlobCluster, repoId sidecar.Id, table *DropTableState, settings *DropSettings, index *DropIndex) error {
+	var missing map[sidecar.Id]bool
+	for _, entry := range table.Drops {
+		if entry.State == DropStateHeld {
+			if missing == nil {
+				missing = map[sidecar.Id]bool{}
+			}
+			missing[entry.DropId] = true
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	for _, jobId := range table.JobIds() {
+		if table.Job != nil && table.Job.JobId == jobId && !table.Job.Resumed {
+			continue
+		}
+		key := heldCoverageKey{clusterId: segmentCluster.ClusterId(), repoId: repoId, jobId: jobId}
+		var covered []sidecar.Id
+		if index != nil {
+			if value, ok := index.get(key); ok {
+				covered = value.([]sidecar.Id)
+			}
+		}
+		if covered == nil {
+			file, err := NewDropFiles(segmentCluster, repoId, jobId, settings).Read(ctx, DropFileSnap, 0)
+			if err != nil {
+				return err
+			}
+			if file == nil {
+				return fmt.Errorf("%w: held job %s has no snap-0", ErrDropJobState, sidecar.EvsKeyId(jobId))
+			}
+			covered = make([]sidecar.Id, len(file.Covered))
+			for i, drop := range file.Covered {
+				covered[i] = drop.DropId
+			}
+			if index != nil {
+				index.put(key, covered, 128+16*int64(len(covered)))
+			}
+		}
+		for _, id := range covered {
+			delete(missing, id)
+		}
+	}
+	if len(missing) != 0 {
+		return missingHeldOwners(missing)
+	}
+	return nil
+}
+
 // Lists every active job's del and held files on each check. A writer can publish
 // a new file before it checkpoints the table, including on a different instance.
 // Only an identical inventory permits reuse of the decoded withheld IDs.
 func (self *DropIndex) Withheld(ctx context.Context, segmentCluster sidecar.BlobCluster, clusterId string, repoId sidecar.Id, table *DropTableState, _ time.Time) (map[DropScanId]bool, error) {
-	if table == nil || (table.Job == nil && len(table.HeldJobs) == 0) {
+	if table == nil {
+		return nil, nil
+	}
+	if err := checkHeldCoverage(ctx, segmentCluster, repoId, table, self.settings, self); err != nil {
+		return nil, err
+	}
+	if table.Job == nil && len(table.HeldJobs) == 0 {
 		return nil, nil
 	}
 	var inventory []withheldFile
