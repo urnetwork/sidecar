@@ -697,6 +697,29 @@ type EvsDropState struct {
 	Withheld bool
 }
 
+// ErrEvsDropped as a read answers it, with the drop that took the version, which MCP's evs_read names (§16.5).
+type EvsDroppedError struct {
+	Drop EvsDropState
+}
+
+// ErrEvsDropped's text, which names nothing of the version or the drop (I-13).
+func (self *EvsDroppedError) Error() string {
+	return ErrEvsDropped.Error()
+}
+
+// ErrEvsDropped, so every errors.Is of it holds.
+func (self *EvsDroppedError) Unwrap() error {
+	return ErrEvsDropped
+}
+
+// ErrEvsDropped naming drop, the plain sentinel where the version has none.
+func evsDroppedError(drop *EvsDropState) error {
+	if drop == nil {
+		return ErrEvsDropped
+	}
+	return &EvsDroppedError{Drop: *drop}
+}
+
 // Whether the version reads as dropped at now: its window passed, or evs withheld its entry version. False for nil.
 func (self *EvsDropState) Dropped(now time.Time) bool {
 	return self != nil && (self.Withheld || !now.Before(self.NotBefore))
@@ -719,6 +742,14 @@ func evsDropIdOf(state *EvsDropState) Id {
 		return Id{}
 	}
 	return state.DropId
+}
+
+// The drop's signer, zero for nil.
+func evsDropSignerOf(state *EvsDropState) Id {
+	if state == nil {
+		return Id{}
+	}
+	return state.SignerSidecarId
 }
 
 // The drop's window's end, zero for nil.
