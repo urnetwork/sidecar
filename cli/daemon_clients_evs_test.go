@@ -34,6 +34,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -430,6 +431,7 @@ func TestDaemonRecoveryRotationSurvivesRestart(t *testing.T) {
 	}
 	t.Cleanup(instance.Close)
 	networkId, memberId := sidecar.NewId(), sidecar.NewId()
+	engines.Api().SetPersonalOwner(networkId, memberId)
 	running, err := instance.AddSidecarIn(networkId, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -519,6 +521,75 @@ func TestDaemonRecoveryRotationSurvivesRestart(t *testing.T) {
 	if err != nil || !bytes.Equal(opened.Commitment(), generation.Rotate.GetCommitment()) {
 		t.Fatalf("replacement code alone: %v", err)
 	}
+
+	// The replacement has a new instance, key store, identity and member-owned session. Its previous devices are gone.
+	instance.Close()
+	fresh, err := net.StartInstance("fresh-recovery", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(fresh.Close)
+	device, err := fresh.AddSidecarIn(networkId, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	follower := startUrConfigFollower(device, sidecar.NewNoopLogger())
+	if follower == nil {
+		t.Fatal("the fresh device has no config follower")
+	}
+	cold := testUrClientsOf(device)
+	select {
+	case <-cold.groupBuilt():
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	for {
+		_, changed := cold.upkeep.Passes()
+		state, _, _ := cold.gkm.joiningState()
+		if state != nil && bytes.Equal(state.Member(memberId).GetRecoveryKeySha256(), replacement.KeySha256) {
+			break
+		}
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+	}
+	if device.GkmRepoKeyHeld(result.ConfigRepoId) || device.Admitted() {
+		t.Fatal("the fresh device already has a repo key or admission")
+	}
+	recoverCode := func() *sidecar.SidecarRecovery {
+		t.Helper()
+		code, err := sidecar.ParseRecoveryCode(strings.Join(replacement.Words, " "))
+		if err != nil {
+			t.Fatal(err)
+		}
+		progress, err := device.RecoverWithCode(ctx, code, sidecar.SidecarActConfirmed)
+		if err != nil {
+			t.Fatalf("recovering with the replacement on the fresh device: %v", err)
+		}
+		return progress
+	}
+	pending := recoverCode()
+	if pending.Phase != sidecar.SidecarRecoveryPending || pending.Entry == nil || pending.ActivatesAfter.IsZero() {
+		t.Fatalf("the owner's recovery proposal did not enter its window: %+v", pending)
+	}
+	net.Clock().Advance(pending.ActivatesAfter.Sub(net.Clock().Now()) + time.Millisecond)
+	if _, err := engines.Api().AppendTick(ctx, networkId, &bridge.ApiTick{ActivatedProposalIds: [][]byte{pending.StatementId}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := engines.Sync(ctx, networkId); err != nil {
+		t.Fatal(err)
+	}
+	recovered := recoverCode()
+	if recovered.Phase != sidecar.SidecarRecoveryAnchored || !device.Admitted() || !recovered.OfferRotate {
+		t.Fatalf("the fresh device did not finish recovery: %+v", recovered)
+	}
+	current, err := cold.builtGroup().CurrentRepoKey(ctx, result.ConfigRepoId)
+	if err != nil || !bytes.Equal(current.Commitment(), opened.Commitment()) {
+		t.Fatalf("the fresh device's recovered commitment: %v", err)
+	}
+
 }
 
 // A publisher whose every base is lost before api takes it: a bootstrap cut short before base 1.

@@ -18,11 +18,9 @@ import (
 	"fmt"
 )
 
-// The args a GkmGroupClient takes from this Sidecar for the network it is enrolled in: its sidecar_id and network, api,
-// Sign, the network's keychain under gkm's namespace (§5.9), which upkeep's records share, mls, its alarms raised as
-// events, settings.Gkm, the clock and the log. What only the verified state and the upkeep know, the reader keys, the
-// repos it reads, recovery keys, anchoring and the witness stop, the caller sets. mls is nil for a sidecar that holds
-// no leaf.
+// Builds network group-client arguments from this sidecar's identity, signer, keychain, clock and settings.
+// It provides the authenticated recovery-key source, local recovery sealing and anchor status. The host supplies
+// ReaderKey upkeep and the repos the device can read. Passing nil for mls selects KeyDelivery.
 func (self *Sidecar) GkmGroupClientArgs(api GkmGroupApi, mls MlsEngine) (*GkmGroupClientArgs, error) {
 	networkId := self.enrolledNetworkId()
 	identity := self.currentIdentity()

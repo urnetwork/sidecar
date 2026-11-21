@@ -1,3 +1,8 @@
+// A v0 re-form files a signed GroupForm and replays the original signed generation ladder without an epoch.
+// Reseed stops after those objects so the restore can reactivate the repo. An active repo then rotates to the
+// first generation signed for its new group and stages the current holders' deliveries. The MLS-specific
+// steps below apply only when the optional draft engine is installed.
+//
 // Re-forming a repo's group (KEYS-M2-25; D-KEYS-12, D-KEYS-13, FI-5, FI-12; §10.8's site loss, plan-KEYS-reform-ladder's
 // rules as QD-074 decided them, DESIGN-DETAILS 6.2.4's Re-form): what a device does after a site loss took gkm's
 // objects, for a group a refused commit stalled, and for a group whose cipher suite IANA renumbered, and what every

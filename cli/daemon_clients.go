@@ -1,5 +1,5 @@
 // Each hosted network's key and evs clients (QD-804; KEYS-M2-22, EVS1-M2-22, QD-796): ur daemon builds, for every network
-// it hosts, the network's GkmGroupClient over its MLS engine, a GkmApi and the key upkeep, an EvsClient over that key
+// it hosts, the network's KeyDelivery group client over GkmApi, the ReaderKey upkeep, an EvsClient over that key
 // client with its evs component and its local git tier, and the config repo's head reader over that EvsClient
 // (sidecar.EvsConfigHeadReader), and fills three hooks with them:
 //
@@ -707,9 +707,10 @@ var (
 	_ sidecar.GkmConfigJoiner = (*urNetworkGkm)(nil)
 )
 
-// The newest verified state given, nil before one.
+// This host forms and follows groups through their signed generation and KeyDelivery wraps.
 func (self *urNetworkGkm) KeyDeliveryOnly() bool { return true }
 
+// The newest verified state given, nil before one.
 func (self *urNetworkGkm) newestState() sidecar.GkmAuthView {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
