@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // An existing identity advances one generation at a time. Keep its exact next binding in its sealed
 // keychain until the server and the local network record both acknowledge the change (§5.6, §7.7).
 

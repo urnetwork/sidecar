@@ -33,7 +33,6 @@
 package sidecar
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -44,7 +43,6 @@ import (
 	"strings"
 
 	"github.com/urnetwork/sidecar/protocol"
-	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 var (
@@ -651,27 +649,14 @@ func (self *EvsRepo) readHeadContent(ctx context.Context, args *EvsReadArgs, out
 	if err != nil {
 		return nil, err
 	}
-	// Only a name returned by a current effective read is eligible for the local search cache.
-	var auth *bridge.AuthPin
-	if self.client.searchNames.Load() && args.Version == 0 {
-		if state, err := self.client.verifier.config(); err == nil && state != nil {
-			row := state.Repo(self.repoId)
-			if row.GetKind() == protocol.RepoKind_REPO_KIND_GENERAL && row.GetInbox() == protocol.RepoInbox_REPO_INBOX_NONE {
-				auth = state.Pin()
-			}
-		}
-	}
+	observe := self.searchReadObserver(args)
 	fresh := args.Fresh
 	for restartCount := 0; ; restartCount += 1 {
 		// nothing reaches out before a version's content is whole and checked, so a failed pass wrote none of it
 		info, err := self.readFile(ctx, refId, args, fresh, out, mailSegment)
 		if args.Version != 0 || !errors.Is(err, ErrEvsCollected) {
-			if err == nil && info != nil && auth != nil {
-				if state, stateErr := self.client.verifier.config(); stateErr == nil && state != nil && bytes.Equal(auth.GetChain(), state.Pin().GetChain()) {
-					if cacheErr := self.client.pins.observeSearchFile(self.repoId, args, info, auth); cacheErr != nil {
-						self.client.log.Warningf("[evs] could not retain a verified name for search")
-					}
-				}
+			if err == nil && info != nil && observe != nil {
+				observe(info)
 			}
 			return info, err
 		}

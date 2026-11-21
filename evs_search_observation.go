@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // Names shown by an effective head read stay with its bounded, sealed per-path read record.
 // An older store has no observations until the corresponding files are verified again.
 package sidecar
@@ -6,23 +8,9 @@ import (
 	"bytes"
 	"crypto/sha256"
 
+	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
-
-// The file version actually returned, at the ref and policy the reader verified. No file body is retained.
-type evsSearchObservation struct {
-	RefName   string            `json:"ref_name,omitempty"`
-	Version   uint64            `json:"version"`
-	Commit    uint64            `json:"commit"`
-	Push      Id                `json:"push"`
-	Signer    Id                `json:"signer"`
-	TimeMs    int64             `json:"time_ms"`
-	Head      uint64            `json:"head"`
-	Chain     [sha256.Size]byte `json:"chain"`
-	AuthChain []byte            `json:"auth_chain"`
-	Tainted   bool              `json:"tainted,omitempty"`
-	Outside   bool              `json:"outside,omitempty"`
-}
 
 // A search observation can only augment a read record at the very same verified head and effective version.
 // A concurrent read, removal, eviction or reseed therefore cannot revive an older name.
@@ -80,4 +68,32 @@ func (self *EvsPinStore) observeSearchFile(repo Id, args *EvsReadArgs, info *Evs
 	defer self.stateLock.Unlock()
 	state.reads = reads
 	return nil
+}
+
+// A current effective read may retain a name from a general repo only while the same verified policy still stands.
+func (self *EvsRepo) searchReadObserver(args *EvsReadArgs) func(*EvsFileInfo) {
+	if !self.client.searchNames.Load() || args.Version != 0 {
+		return nil
+	}
+	state, err := self.client.verifier.config()
+	if err != nil || state == nil {
+		return nil
+	}
+	row := state.Repo(self.repoId)
+	if row.GetKind() != protocol.RepoKind_REPO_KIND_GENERAL || row.GetInbox() != protocol.RepoInbox_REPO_INBOX_NONE {
+		return nil
+	}
+	auth := state.Pin()
+	if auth == nil {
+		return nil
+	}
+	return func(info *EvsFileInfo) {
+		current, err := self.client.verifier.config()
+		if err != nil || current == nil || !bytes.Equal(auth.GetChain(), current.Pin().GetChain()) {
+			return
+		}
+		if err := self.client.pins.observeSearchFile(self.repoId, args, info, auth); err != nil {
+			self.client.log.Warningf("[evs] could not retain a verified name for search")
+		}
+	}
 }

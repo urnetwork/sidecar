@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // Record authorization from one published config state and its folded ACL. Live reads sample the device clock once
 // per view so expiring grants cannot outlive their expiry between config entries. Historical views use the time
 // of the corresponding verified config entry.
@@ -28,7 +30,7 @@ type configRecordAuth struct {
 
 // The record's authorization against a published snapshot. An absent snapshot or unusable ACL grants nothing.
 func NewRecordAuthView(state *ConfigState) RecordAuthView {
-	return newConfigRecordAuth(state, time.Now())
+	return newConfigRecordAuth(state, RealClock{}.Now())
 }
 
 // Binds a verified state to its evaluation time.

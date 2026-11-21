@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // The opener's half of §6.7 (R-PROTO-4, D-PROTO-4, D-PROTO-13): OpenStream sends StreamOpen with its first
 // bytes and waits for the acceptor's answer.
@@ -252,23 +252,4 @@ func openFailure(err error) error {
 		return err
 	}
 	return &SubprotocolError{Code: protocol.ErrorCode_ERR_UNAUTHENTICATED}
-}
-
-// The verified Hello standing with peerId and the C15 key it verified under, and false while none stands.
-func (self *Subprotocol) peerVerifiedIdentity(peerId connect.Id) (*SubprotocolPeerIdentity, [32]byte, bool) {
-	now := self.clock.Now()
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	identity, ok := self.sourceIdIdentities[peerId]
-	if !ok || !now.Before(identity.expireTime) {
-		return nil, [32]byte{}, false
-	}
-	var peer *SubprotocolPeerIdentity
-	if identity.peer != nil {
-		peer = identity.peer.clone()
-	} else {
-		// a gate an internal test opened by hand: no Hello's fields behind it
-		peer = &SubprotocolPeerIdentity{}
-	}
-	return peer, identity.clientPublicKey, true
 }

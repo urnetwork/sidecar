@@ -1,4 +1,4 @@
-//go:build !js
+//go:build !js && !ios_extension
 
 // Where a follow job's lines go on a leg that has files (RECORD.md section 9's target row): a file on this device,
 // appended to, readable by its owner alone. Never a network address: a customer's own forwarder ships the file.

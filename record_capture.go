@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // The local write-ahead file of one multi-log or spooled capture. Its commit is the durable decision to install every
 // signed destination. Each destination keeps its original entry, key and salt. A restart recognizes a destination
 // by its journal and finishes the rest before any further seal, so the team's projection always names its original
@@ -12,6 +14,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+
+	"google.golang.org/protobuf/proto"
+
+	"github.com/urnetwork/sidecar/protocol"
 )
 
 const recordCaptureFile = "capture"
@@ -187,4 +193,135 @@ func (self *recordWriter) installCaptureEntry(entry *RecordSealedEntry) error {
 		return entry, nil
 	})
 	return err
+}
+
+// Seals a draft's entries by its routes (record_team.go), in order: the vault's, T's, T's copy in the vault, the
+// directory's. A capture with multiple destinations or a spool cursor commits through one write-ahead file.
+func (self *recordWriter) sealRoutes(draft *recordSpoolDraft, routes *recordRoutes, captureId []byte) ([]*RecordEntryRef, error) {
+	kind := RecordKind(draft.Kind)
+	remaining := 0
+	if routes.vault != nil && routes.vaultEntry {
+		remaining += 1
+	}
+	if routes.team != nil {
+		remaining += 1 + len(routes.ledgers)
+		if routes.copy && routes.vault != nil {
+			remaining += 1
+		}
+	}
+	if routes.directory != nil {
+		remaining += 1
+	}
+	if remaining == 0 {
+		return nil, fmt.Errorf("%w: %s routes nowhere", ErrRecordRouteTeamOnly, kind)
+	}
+	self.sealLock.Lock()
+	defer self.sealLock.Unlock()
+	if err := self.finishCaptureWithLock(); err != nil {
+		return nil, err
+	}
+	if err := self.readyToSeal(routes); err != nil {
+		return nil, err
+	}
+	env := &RecordSealEnv{Chain: self.chain, Sign: self.sign, Random: self.random}
+	var capture *recordCapture
+	if remaining > 1 || captureId != nil {
+		var err error
+		capture, err = self.beginCapture(captureId, remaining)
+		if err != nil {
+			return nil, err
+		}
+		defer capture.file.Close()
+		env.stage = capture.stage
+	}
+	// T's body first, so a draft that cannot project seals nothing at all
+	var teamBody []byte
+	if routes.team != nil {
+		projected, err := recordTeamBodyBytes(kind, routes.teamBody, draft.Body, draft.Projection)
+		if err != nil {
+			return nil, err
+		}
+		teamBody = projected
+	}
+	refs := []*RecordEntryRef{}
+	var vaultRef *RecordEntryRef
+	if routes.vault != nil && routes.vaultEntry {
+		sealed, err := self.sealOne(env, draft, routes.vault, kind, draft.Body, draft.contentRefs(), nil)
+		if err != nil {
+			return refs, err
+		}
+		vaultRef = sealed.ref
+		refs = append(refs, sealed.ref)
+	}
+	if routes.team != nil {
+		var content []*protocol.ContentRef
+		if routes.teamBody == recordTeamBodyProjection && vaultRef != nil {
+			// one ContentRef to the vault entry, whose salt stays in its slot row (RECORD.md section 5.1)
+			content = []*protocol.ContentRef{{RepoId: vaultRef.LogId.Bytes(), ObjectId: vaultRef.EntryId.Bytes(), Commitment: bytes.Clone(vaultRef.Commitment[:])}}
+		}
+		sealed, err := self.sealOne(env, draft, routes.team, kind, teamBody, append(content, draft.contentRefs()...), nil)
+		if err != nil {
+			return refs, err
+		}
+		refs = append(refs, sealed.ref)
+		if routes.copy && routes.vault != nil {
+			// what the header's commitment opens with: T's body, or the AgentSignedBody holding it (version 2)
+			copiedBody := teamBody
+			if sealed.committed != nil {
+				copiedBody = sealed.committed
+			}
+			copyBody, err := NewRecordCopyBody([]*RecordOpened{{SignedBytes: sealed.signed, Salt: sealed.salt, Body: copiedBody, Version: sealed.version}})
+			clear(sealed.salt)
+			if err != nil {
+				return refs, err
+			}
+			copyBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(copyBody)
+			if err != nil {
+				return refs, err
+			}
+			// an accounting entry of the run that filed T's, about no action of its own
+			copyDraft := *draft
+			copyDraft.Kind = uint32(RecordKindCopy)
+			copyDraft.Source = uint32(RecordSourceObserved)
+			copyDraft.ActionId = nil
+			copyDraft.GrantId = nil
+			copied, err := self.sealOne(env, &copyDraft, routes.vault, RecordKindCopy, copyBytes, nil, nil)
+			clear(copyBytes)
+			if err != nil {
+				return refs, err
+			}
+			refs = append(refs, copied.ref)
+		}
+		clear(sealed.salt)
+		// T's body again as each in-scope ledger's own entry: its own id, chain position, key and commitment
+		for _, ledger := range routes.ledgers {
+			copied, err := self.sealOne(env, draft, ledger, kind, teamBody, nil, nil)
+			if err != nil {
+				return refs, err
+			}
+			clear(copied.salt)
+			refs = append(refs, copied.ref)
+		}
+	}
+	if routes.directory != nil {
+		sealed, err := self.sealOne(env, draft, routes.directory, kind, draft.Body, nil, nil)
+		if err != nil {
+			return refs, err
+		}
+		refs = append(refs, sealed.ref)
+	}
+	if capture != nil {
+		testHookBarrier("record.capture.commit.before", recordChainIdText(self.sidecarId))
+		if err := capture.file.Commit(); err != nil {
+			return nil, err
+		}
+		self.capturePending = true
+		testHookBarrier("record.capture.commit.after", recordChainIdText(self.sidecarId))
+		if err := self.finishCaptureWithLock(); err != nil {
+			// The whole capture is durable. A later pump installs these exact entries.
+			self.log.Warningf("[record]a committed capture still needs installation: %s", err)
+			self.signal()
+		}
+	}
+	return refs, nil
 }

@@ -1,9 +1,10 @@
+//go:build !ios_extension
+
 package sidecar
 
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"slices"
@@ -20,13 +21,6 @@ const (
 )
 
 var ErrBrowserAdmissionConfirmation = errors.New("compare the browser safety number and confirm the displayed admission on the consented device")
-
-// The requested page or burner mode. A burner also names its mailbox and when access expires.
-type BrowserAdmissionTerms struct {
-	Mode       string `json:"mode"`
-	MailboxId  Id     `json:"mailbox_id"`
-	NotAfterMs int64  `json:"not_after_ms"`
-}
 
 // The terms and safety number shown on the consenting device, scoped to its network and member.
 type BrowserAdmissionPreview struct {
@@ -61,12 +55,6 @@ func (authority *ConfigAuthority) BrowserMailbox(memberId, mailboxId Id) *protoc
 // Looks up a live mailbox owned by the member sharing it with a burner.
 type browserMailboxAuthority interface {
 	BrowserMailbox(Id, Id) *protocol.AclRepo
-}
-
-// Identifies the admission that must land before the browser's owner confirmation or mailbox share can be posted.
-type browserAdmissionDependency struct {
-	target Id
-	digest [sha256.Size]byte
 }
 
 // A competing admission or a refused act must never release the contingent OwnerConfirm or EvsShare.
@@ -324,4 +312,27 @@ func (self *Sidecar) admitBrowserBurner(ctx context.Context, request *SidecarAdm
 	}
 	_, err = act.Run(ctx, check)
 	return err
+}
+
+// A browser's opt-in eligibility lookup. An older API can ignore the query, so only a positive reply
+// naming the requested mode can be used to open an admission. The signed binding is checked locally.
+func (self *SidecarApi) browserAdmissionBinding(ctx context.Context, networkId, target Id, mode string) (*SidecarIdentityBinding, error) {
+	if mode != BrowserAdmissionPage && mode != BrowserAdmissionBurner || target == (Id{}) {
+		return nil, ErrSidecarApiArgs
+	}
+	reply := &sidecarIdentityReply{}
+	const route = "GET /sidecar/identity/<sidecar_id>"
+	err := self.sendJson(ctx, &sidecarApiRequest{route: route, operation: "identity", method: "GET", bearer: true,
+		url: self.settings.ApiUrl + "/sidecar/identity/" + target.String() + "?browser_admission=" + mode}, nil, reply)
+	if err != nil {
+		return nil, err
+	}
+	if reply.BrowserAdmission != mode || reply.SidecarId == nil || *reply.SidecarId != target || reply.Status != "active" || reply.IdentityAlg != configIdentityAlgEd25519 {
+		return nil, ErrSidecarApiReply
+	}
+	binding, err := VerifySidecarIdentityBinding(reply.Binding)
+	if err != nil || binding.NetworkId != networkId || binding.SidecarId != target || !bytes.Equal(reply.IdentityPublicKey, binding.IdentityPublicKey) {
+		return nil, ErrSidecarApiReply
+	}
+	return binding, nil
 }

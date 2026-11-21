@@ -182,3 +182,18 @@ func sidecarJwtRefreshTimeout(refreshTime time.Time, previousAttemptTime time.Ti
 	}
 	return max(refreshTime.Sub(now), 0)
 }
+
+// A client token's network and client, read unverified as the refresh schedule reads its claims: only for checks
+// that a verified answer already stands behind, never as authority.
+func sidecarJwtClient(byJwt string) (networkId Id, clientId Id, ok bool) {
+	parse := parseSidecarJwt(byJwt)
+	if !parse.ok {
+		return Id{}, Id{}, false
+	}
+	networkId, networkErr := ParseId(parse.stringClaim("network_id"))
+	clientId, clientErr := ParseId(parse.stringClaim("client_id"))
+	if networkErr != nil || clientErr != nil || networkId == (Id{}) || clientId == (Id{}) {
+		return Id{}, Id{}, false
+	}
+	return networkId, clientId, true
+}

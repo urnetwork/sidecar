@@ -215,9 +215,6 @@ func NewDirectoryClient(args *DirectoryClientArgs) (*DirectoryClient, error) {
 // leg links: each new file judged by its path's rules, then every accepted one's items. Nil folds entries alone.
 var directoryFoldFiles func(client *DirectoryClient, fold *DirectoryFold) []*directoryVersion
 
-// Run writer recovery after a successful read on builds that file run announcements.
-var directoryReconcileRuns func(*DirectoryClient) error
-
 // §16.11's readers row for the directory's ERASEs, set by directory_revoke.go, which no ios_extension leg links: the
 // ERASEs the reader takes, those of a directory admin, the rest alarming. Nil takes every one.
 var directoryErasureJudge func(client *DirectoryClient, repoId Id, erasures []*RecordStreamErasure) ([]*RecordStreamErasure, error)
@@ -529,8 +526,8 @@ func (self *DirectoryClient) Run(ctx context.Context) {
 				if _, maintainErr := self.MaintainRepos(ctx); maintainErr != nil {
 					self.log.Infof("[directory]repo items: %s", maintainErr)
 				}
-				if directoryReconcileRuns != nil && !self.readOnly && self.writer != nil {
-					if err := directoryReconcileRuns(self); err != nil {
+				if !self.readOnly && self.writer != nil {
+					if err := self.reconcileRuns(); err != nil {
 						self.log.Infof("[directory]run items: %s", err)
 					}
 				}
