@@ -1,17 +1,54 @@
 //go:build !sidecar_http && !ios_extension
 
-// A bridge for MAIL-M9-02's external test, which runs sidecartest.RunSmtpMailboxSuite on mailSmtpMailbox: the mailbox
-// over an in-memory store, and the write of o/ that MailOutbox.Queue makes, created only if absent.
+// Outbox signing fixtures shared by mail and smtp tests, and the in-memory mailbox for MAIL-M9-02's contract suite.
 
 package sidecar
 
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"errors"
 	"io"
 	"sync"
+
+	"github.com/urnetwork/sidecar/protocol/bridge"
 )
+
+// One device's identity key, which signs its outbox entries as Sidecar.Sign does.
+type testMailOutboxSigner struct {
+	sidecarId Id
+	key       ed25519.PrivateKey
+}
+
+func newTestMailOutboxSigner(sidecarId Id) *testMailOutboxSigner {
+	_, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		panic(err)
+	}
+	return &testMailOutboxSigner{sidecarId: sidecarId, key: key}
+}
+
+func (self *testMailOutboxSigner) sign(purpose string, signedType bridge.SignedType, body []byte) (*bridge.Signed, error) {
+	return &bridge.Signed{
+		Body:      body,
+		SignerId:  self.sidecarId.Bytes(),
+		Signature: ed25519.Sign(self.key, bridge.SignedBytes(purpose, signedType, body)),
+		Type:      uint32(signedType),
+	}, nil
+}
+
+func (self *testMailOutboxSigner) publicKey() ed25519.PublicKey {
+	return self.key.Public().(ed25519.PublicKey)
+}
+
+// 32 random bytes, as D-MCP-11's keys are.
+func testMailOutboxEffectKey() []byte {
+	key := make([]byte, 32)
+	rand.Read(key)
+	return key
+}
 
 // A deposit that keeps what it is given.
 type mailOutboxTestDeposit struct {
