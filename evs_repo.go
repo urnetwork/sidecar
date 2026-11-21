@@ -336,10 +336,14 @@ type EvsExportResult struct {
 // One exported ref.
 type EvsExportedRef struct {
 	GitRef string
-	// Its tip, zero when every version is refused or the ref ends deleted.
+	// Its tip, zero when every version is refused or the ref ends deleted: the repository's oid for it, its rewrite's
+	// where Rewritten is above 0.
 	Tip EvsGitOid
 	// The evs versions it rebuilt.
 	Versions uint64
+	// A git-mode ref's commits that export rewrote over a blob a committed ERASE destroyed (QD-1156), each noted with
+	// its original oid in refs/notes/ur; 0 where every oid is the original's.
+	Rewritten uint64
 	// Each git-mode version that failed its check, which stopped the ref at the version before until a DELETE
 	// (DESIGN-DETAILS 8.5); none when every version applied.
 	Refused []*EvsExportRefusal

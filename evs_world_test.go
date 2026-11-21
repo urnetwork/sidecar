@@ -155,6 +155,9 @@ type evsTestChange struct {
 	children []string
 	// format 2: changes the file's entry version before it is signed, which then builds as a format-2 push
 	format2 func(entry *protocol.EvsEntryVersion)
+	// keyed in a slot of its own, as a record-class repo keys every chain (§11.6's object key row): the slot the push
+	// introduces, holding the file's object key at index 0, which the world serves until a test empties it
+	slotId *Id
 }
 
 // The world.
@@ -477,6 +480,77 @@ func (self *evsTestWorld) fileEntry(content []byte, segment bool, version uint64
 	return entryBytes
 }
 
+// A file's entry version keyed in a slot of its own, as a record-class repo keys every chain (§11.6's object key row):
+// its one checkpoint in a slot-keyed segment of the world's generation, stored, under an object key at index 0 of
+// slotId; and the slot's bytes, which the push introduces.
+func (self *evsTestWorld) slotFileEntry(content []byte, version uint64, pushId Id, baseVersion uint64, prev *evsTestVersion, slotId Id) ([]byte, []byte) {
+	keys := evsTestKeys(self.t, self.repoId, self.generation)
+	fileId := NewEvsSlotId()
+	oid, err := EvsGitBlobOid(bytes.NewReader(content), int64(len(content)))
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	sealedFields, err := EvsSealFields(keys.manifest, &protocol.EvsSealedFields{
+		FileId: fileId.Bytes(), Mode: 0o100644, GitOid: oid[:], OidKind: protocol.EvsOidKind_EVS_OID_SHA1, Size: uint64(len(content)),
+	})
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	objectKey := NewEvsObjectKey()
+	header := &EvsRecordHeader{
+		RecordId: NewEvsSlotId(), Generation: self.generation, Kind: protocol.EvsRecordKind_EVS_RECORD_CHECKPOINT,
+		KeyRefKind: protocol.EvsKeyRefKind_EVS_KEY_REF_SLOT, SlotId: slotId, OidKind: protocol.EvsOidKind_EVS_OID_SHA1,
+		BodyLength: uint64(len(content)),
+	}
+	copy(header.Oid[:], oid[:])
+	out := &bytes.Buffer{}
+	builder, err := NewEvsSlotKeyedSegmentBuilder(out, keys.manifest)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	writer, err := builder.BeginSlotRecord(keys.manifest, objectKey, fileId, header)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	writer.Write(content)
+	if err := writer.Close(); err != nil {
+		self.t.Fatal(err)
+	}
+	summary, err := builder.Finish()
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	self.stateLock.Lock()
+	self.segments[string(summary.Id[:])] = out.Bytes()
+	self.stateLock.Unlock()
+	wrapped, err := EvsWrapObjectKey(keys.fek, objectKey)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	slot, err := EvsEncodeSlotObject(&protocol.EvsSlotObject{Keys: []*protocol.EvsSlotKey{{KeyIndex: 0, Generation: self.generation, Wrapped: wrapped}}})
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	entry := &protocol.EvsEntryVersion{
+		Version: version, PushId: pushId.Bytes(), BaseVersion: baseVersion, TimeMs: 1767225600000 + int64(version),
+		Kind: uint32(protocol.EvsEntryKind_EVS_ENTRY_FILE), PaddedSize: EvsPadme(uint64(len(content))),
+		SealedFields: sealedFields, SlotIds: [][]byte{slotId.Bytes()},
+		Chain: []*protocol.EvsLocator{{
+			Kind: uint32(protocol.EvsLocatorKind_EVS_LOCATOR_SEGMENT), Id: summary.Id[:],
+			Offset: summary.Places[0].Offset, Length: summary.Places[0].Length,
+		}},
+	}
+	if prev != nil {
+		entry.PrevPushId = prev.pushId
+		entry.PrevCommitVersion = prev.commitVersion
+	}
+	entryBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(entry)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	return entryBytes, slot
+}
+
 // One record in a new segment of keys' generation, stored, and its locator.
 func (self *evsTestWorld) segmentRecord(keys *evsTestGenerationKeys, fileId Id, header *EvsRecordHeader, body []byte) *protocol.EvsLocator {
 	out := &bytes.Buffer{}
@@ -552,6 +626,9 @@ func (self *evsTestWorld) push(changes ...*evsTestChange) uint64 {
 		entry   []byte
 		removal *protocol.EvsRemovalMarker
 		rows    []*protocol.EvsName
+		// a slot-keyed file's slot and its bytes
+		slotId   *Id
+		slotBody []byte
 	}
 	pendings := []*pending{}
 	for _, change := range changes {
@@ -599,6 +676,11 @@ func (self *evsTestWorld) push(changes ...*evsTestChange) uint64 {
 				entry.PrevPushId, entry.PrevCommitVersion = prev.pushId, prev.commitVersion
 			}
 			p.entry, _ = proto.MarshalOptions{Deterministic: true}.Marshal(entry)
+		case change.content != nil && change.slotId != nil:
+			p.entry, p.slotBody = self.slotFileEntry(change.content, entryVersion, pushId, baseVersion, prev, *change.slotId)
+			p.slotId = change.slotId
+			plan.NewObjects = append(plan.NewObjects, &EvsNewObject{Kind: protocol.EvsNewObjectKind_EVS_NEW_OBJECT_SLOT, Id: change.slotId.Bytes()})
+			plan.SlotBodies = append(plan.SlotBodies, p.slotBody)
 		case change.content != nil:
 			p.entry = self.fileEntry(change.content, change.segment, entryVersion, pushId, baseVersion, prev)
 			if change.format2 != nil {
@@ -645,6 +727,12 @@ func (self *evsTestWorld) push(changes ...*evsTestChange) uint64 {
 	}
 	self.commits = append(self.commits, &evsTestCommit{statement: statement.Bytes, parsed: statement, built: built, chain: chain})
 	for _, p := range pendings {
+		if p.slotId != nil {
+			if self.slots == nil {
+				self.slots = map[string][]byte{}
+			}
+			self.slots[string(p.slotId.Bytes())] = p.slotBody
+		}
 		state := self.paths[p.key]
 		if state == nil {
 			state = &evsTestPath{versions: map[uint64]*evsTestVersion{}}

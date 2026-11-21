@@ -2,9 +2,10 @@
 
 // Export's signed provenance (§11.12's export row): refs/notes/ur, one note per exported commit that ends a push,
 // naming the push, its signer, its client, the ref version it committed at and its Signed EvsPush as received, so
-// anyone holding the export can check the statement against the network's keys without evs. The notes commit is
-// deterministic: its tree is git's notes layout, one blob per annotated commit named by that commit's 40-hex oid,
-// and its author and committer are fixed at the newest push's time.
+// anyone holding the export can check the statement against the network's keys without evs. A git-mode commit export
+// rewrote over an erased blob that a push carried before its tip gets a note too, its push's (QD-1156;
+// evs_export_erased.go). The notes commit is deterministic: its tree is git's notes layout, one blob per annotated
+// commit named by that commit's 40-hex oid, and its author and committer are fixed at the newest push's time.
 //
 // On every leg; only a desktop host runs it. Not safe for concurrent use.
 
@@ -25,7 +26,8 @@ type evsExportNote struct {
 	commit    EvsGitOid
 	statement *EvsVerifiedStatement
 	// format 2's: a line for each blob of the commit that is a replaced version's pointer or a dropped version's stub
-	// (evs_export_format2.go)
+	// (evs_export_format2.go); a git-mode rewrite's: `rewritten <original oid hex>` on a rewritten commit, and
+	// `erased <token path hex> <entry hash hex>` for each erased stub its push wrote (evs_export_erased.go)
 	lines []string
 }
 
