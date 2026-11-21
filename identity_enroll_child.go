@@ -24,6 +24,23 @@ import (
 
 // Enrolls this sidecar as a child of its host's device client, credential.MintChild minting it. Called by Enroll.
 func (self *Sidecar) enrollChild(ctx context.Context, credential *SidecarEnrollCredential) error {
+	return self.enrollMintedClient(ctx, credential, nil, credential.MintChild)
+}
+
+// EnrollPageClient binds a top-level, read-only browser client to this keychain. The key-origin
+// document exchanges its one-time code and returns only the marked client. A burner requires a
+// memory-only instance. The opened network is checked before the binding or any persistence.
+func (self *Sidecar) EnrollPageClient(ctx context.Context, networkId Id, ephemeral bool, mint func(context.Context) (*SidecarAuthClientResult, error)) error {
+	if networkId == (Id{}) || mint == nil {
+		return ErrSidecarApiArgs
+	}
+	return self.enrollMintedClient(ctx, &SidecarEnrollCredential{Ephemeral: ephemeral}, &networkId,
+		func(ctx context.Context, _ []byte) (*SidecarAuthClientResult, error) { return mint(ctx) })
+}
+
+// Child and browser clients use the same identity binding and storage order. Only a device's
+// child mint takes the ClientKey before binding or records the child lifecycle.
+func (self *Sidecar) enrollMintedClient(ctx context.Context, credential *SidecarEnrollCredential, pageNetwork *Id, mint func(context.Context, []byte) (*SidecarAuthClientResult, error)) error {
 	if self.instance == nil || self.sidecarApi == nil {
 		return ErrSidecarClosed
 	}
@@ -74,7 +91,7 @@ func (self *Sidecar) enrollChild(ctx context.Context, credential *SidecarEnrollC
 	}
 
 	testHookBarrier("identity.enroll_child.mint.before", sidecarId.String())
-	result, err := credential.MintChild(ctx, keys.clientPublicKey())
+	result, err := mint(ctx, keys.clientPublicKey())
 	testHookBarrier("identity.enroll_child.mint.after", sidecarId.String())
 	if err != nil {
 		return err
@@ -91,7 +108,7 @@ func (self *Sidecar) enrollChild(ctx context.Context, credential *SidecarEnrollC
 		}
 		return cause
 	}
-	if !result.AdminRefused || !result.StrictExp {
+	if !result.AdminRefused || !result.StrictExp || (pageNetwork != nil && (!result.DeclaresNoEgress || result.ForwardOnly)) {
 		// the child could administer the network or outlive its 7 days: nothing of it is kept (D-CORE-7, §7.4)
 		return abandon(ErrSidecarEnrollNotAdminRefused)
 	}
@@ -100,6 +117,9 @@ func (self *Sidecar) enrollChild(ctx context.Context, credential *SidecarEnrollC
 		return abandon(fmt.Errorf("%w: the child's token does not name the minted client", ErrSidecarApiReply))
 	}
 	result.ClientId = clientId
+	if pageNetwork != nil && *pageNetwork != networkId {
+		return abandon(fmt.Errorf("%w: minted client belongs to another network", ErrSidecarApiReply))
+	}
 	if knownNetworkId != nil && *knownNetworkId != networkId {
 		return abandon(fmt.Errorf("%w: the device is another network's than this sidecar's", ErrSidecarEnrolled))
 	}
@@ -161,7 +181,7 @@ func (self *Sidecar) enrollChild(ctx context.Context, credential *SidecarEnrollC
 		ClientId:          clientId,
 		SidecarId:         sidecarId,
 		ConnectInstanceId: connectInstanceId,
-		Child:             true,
+		Child:             pageNetwork == nil,
 	})
 	if err != nil {
 		return abandon(err)
@@ -178,7 +198,7 @@ func (self *Sidecar) enrollChild(ctx context.Context, credential *SidecarEnrollC
 		id := networkId
 		self.networkId = &id
 	}()
-	self.log.Infof("[identity]enrolled child generation %d", generation)
+	self.log.Infof("[identity]enrolled client generation %d", generation)
 	self.wake()
 	return nil
 }

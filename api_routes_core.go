@@ -195,9 +195,10 @@ type SidecarAuthClientResult struct {
 	// The marks api confirmed. A sidecar keeps nothing of a client whose answer does not confirm
 	// admin_refused (§5.6), nor hands on a forwarding client whose answer does not confirm forward_only
 	// (§7.4).
-	AdminRefused bool
-	StrictExp    bool
-	ForwardOnly  bool
+	AdminRefused     bool
+	StrictExp        bool
+	DeclaresNoEgress bool
+	ForwardOnly      bool
 	// An ephemeral mint's close capability (§7.7), else empty.
 	Close string
 }
@@ -214,13 +215,14 @@ func (self *SidecarAuthClientResult) GoString() string {
 
 // POST /network/auth-client's answer.
 type sidecarAuthClientReply struct {
-	ByClientJwt  string                 `json:"by_client_jwt"`
-	ClientId     *Id                    `json:"client_id"`
-	AdminRefused bool                   `json:"admin_refused"`
-	StrictExp    bool                   `json:"strict_exp"`
-	ForwardOnly  bool                   `json:"forward_only"`
-	Close        string                 `json:"close"`
-	Error        *sidecarApiResultError `json:"error"`
+	ByClientJwt      string                 `json:"by_client_jwt"`
+	ClientId         *Id                    `json:"client_id"`
+	AdminRefused     bool                   `json:"admin_refused"`
+	StrictExp        bool                   `json:"strict_exp"`
+	DeclaresNoEgress bool                   `json:"declares_no_egress"`
+	ForwardOnly      bool                   `json:"forward_only"`
+	Close            string                 `json:"close"`
+	Error            *sidecarApiResultError `json:"error"`
 }
 
 // POST /network/auth-client (§7.4): mints a child of this sidecar's client, or reissues a client's
@@ -265,11 +267,12 @@ func (self *SidecarApi) AuthClient(ctx context.Context, args *SidecarAuthClientA
 		testHookSecret("close", []byte(reply.Close))
 	}
 	result := &SidecarAuthClientResult{
-		ByClientJwt:  reply.ByClientJwt,
-		AdminRefused: reply.AdminRefused,
-		StrictExp:    reply.StrictExp,
-		ForwardOnly:  reply.ForwardOnly,
-		Close:        reply.Close,
+		ByClientJwt:      reply.ByClientJwt,
+		AdminRefused:     reply.AdminRefused,
+		StrictExp:        reply.StrictExp,
+		DeclaresNoEgress: reply.DeclaresNoEgress,
+		ForwardOnly:      reply.ForwardOnly,
+		Close:            reply.Close,
 	}
 	if reply.ClientId != nil {
 		result.ClientId = *reply.ClientId
