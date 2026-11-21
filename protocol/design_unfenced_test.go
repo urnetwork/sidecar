@@ -616,7 +616,9 @@ message MailOutcome {
   uint32 tls_level = 9;
 }
 // The record's send_id is QD-1122's (question mail-m9-06-send-result-owner): the send its o/ entry's Message-ID names.
-message MailOutcomeRecord { repeated MailOutcome outcomes = 1; bytes send_id = 2; }
+message MailOutcomeRecord { repeated MailOutcome outcomes = 1; bytes send_id = 2; repeated MailRecipientProgress recipient_progress = 3; }
+// Optional private progress for partially answered recipient domains, bound to the signed outbox envelope.
+message MailRecipientProgress { string domain = 1; bytes envelope_sha256 = 2; repeated uint32 delivered = 3; repeated uint32 refused = 4; }
 // §15.7's p/ row, with DESIGN-DETAILS 3.7's fields for SMTP-M9-09 in the order it writes them.
 message MailProverRecord {
   uint64 smtp_data_proof_bytes = 1; uint64 data_bytes_per_s = 2; uint64 measure_time_ms = 3;
