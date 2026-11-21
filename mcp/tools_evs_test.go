@@ -47,6 +47,7 @@ type fakeEvsFile struct {
 type fakeMcpEvsRepo struct {
 	stateLock  sync.Mutex
 	files      map[string]*fakeEvsFile
+	retained   map[string]map[uint64]*fakeEvsFile
 	children   map[string][]string
 	writeErr   error
 	atTipErr   error
@@ -90,6 +91,9 @@ func (self *fakeMcpEvsRepo) History(ctx context.Context, args *sidecar.EvsReadAr
 func (self *fakeMcpEvsRepo) ReadHead(ctx context.Context, args *sidecar.EvsReadArgs, out io.Writer) (*sidecar.EvsFileInfo, error) {
 	self.stateLock.Lock()
 	file, ok := self.files[args.Path]
+	if args.Version != 0 && (!ok || file.version != args.Version) {
+		file, ok = self.retained[args.Path][args.Version]
+	}
 	gate := self.gate
 	self.stateLock.Unlock()
 	if !ok {
@@ -710,6 +714,36 @@ func TestSharedWriteRefusedOnSecret(t *testing.T) {
 		t.Error("a write with a secret reached a shared repo")
 	}
 	testViewData(t, env.callTool(conn, "2025-11-25", "evs_write", map[string]any{"repo": env.vault.String(), "path": "notes.md", "content": content, "base_version": 0}), &mcpEvsWriteOut{})
+}
+
+// Shared agent config passes the content scan before it can become an approved effect.
+func TestSharedAgentConfigIsScannedBeforeApproval(t *testing.T) {
+	env := newTestEvsToolEnv(t)
+	conn := env.conn("2025-11-25")
+	pushId := sidecar.NewId()
+	env.evs.authorize = func(action *sidecar.SidecarAction) error {
+		action.Outcome = &sidecar.SidecarOutcome{State: sidecar.ApprovalOutcomeDone, EffectRef: sidecar.EvsEffectRef(pushId, 1)}
+		return nil
+	}
+	write := func(content string) *testMcpResponse {
+		return env.callTool(conn, "2025-11-25", "evs_write", map[string]any{
+			"repo": env.general.String(), "path": "docs/AGENTS.md", "content": content, "base_version": 0,
+		})
+	}
+	marker := "ur_sk_" + strings.Repeat("Q7", 20)
+	response := write("token = " + marker)
+	wantMcpError(t, response, McpCodeRefused, "reads as a secret")
+	if raw, _ := json.Marshal(response); bytes.Contains(raw, []byte(marker)) {
+		t.Error("the refusal echoed the matched content")
+	}
+	if len(env.evs.actions) != 0 || len(env.evs.effects) != 0 || len(env.evs.repos[env.general].writes) != 0 {
+		t.Fatal("matched content reached the approval or write path")
+	}
+	out := &mcpEvsWriteOut{}
+	testViewData(t, write("Use the project formatter."), out)
+	if out.Status != "written" || out.PushId != pushId.String() || len(env.evs.actions) != 1 || len(env.evs.effects) != 1 {
+		t.Fatalf("clean config write: %+v, %d actions, %d effects", out, len(env.evs.actions), len(env.evs.effects))
+	}
 }
 
 // The six evs tools are registered at their §16.5 tiers and hints, and each reports its targets to the guard.

@@ -51,6 +51,7 @@ import (
 	"errors"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -436,7 +437,6 @@ func mcpEvsRead(ctx context.Context, call *McpCall, repoId sidecar.Id, repo McpE
 		return nil, errMcpUnenrolled
 	}
 	result.SetSource("evs:" + repoId.String())
-	result.SetResource(McpEvsUri(repoId, path))
 	runId := call.RunId
 	ctx = sidecar.WithEvsReadContext(ctx, &sidecar.EvsReadContext{Purpose: sidecar.RecordReadPurposeRead, RunId: &runId})
 	limit := call.Session.server.settings.Mcp.ResourceByteCount
@@ -448,6 +448,7 @@ func mcpEvsRead(ctx context.Context, call *McpCall, repoId sidecar.Id, repo McpE
 		}
 		return nil, mcpEvsError(err)
 	}
+	result.SetResource(McpEvsUri(repoId, path) + "?network=" + call.NetworkId.String() + "&version=" + strconv.FormatUint(info.Version, 10))
 	McpMeter(ctx, int64(content.buffer.Len()))
 	out := &mcpEvsReadOut{
 		Path:          path,
@@ -512,9 +513,6 @@ func mcpEvsWrite(ctx context.Context, call *McpCall, repoId sidecar.Id, path str
 	// tainted run's words read back untrusted in every run (QD-042). An unbound session's placeholder reads tainted
 	tainted := call.Tainted()
 	shared := mcpEvsShared(network.RepoKind(repoId))
-	if shared && McpAgentConfigPath(call.Session.server.settings.Ingest, path) {
-		return mcpEvsWriteOutward(ctx, call, network, repoId, path, base, content, remove, message, agentLabel, agentId, tainted)
-	}
 	if shared && !remove {
 		scanner, err := sidecar.NewRedactor(rand.Reader)
 		if err != nil {
@@ -523,6 +521,9 @@ func mcpEvsWrite(ctx context.Context, call *McpCall, repoId sidecar.Id, path str
 		if 0 < len(scanner.Scan(content)) {
 			return nil, errMcpEvsSecret
 		}
+	}
+	if shared && McpAgentConfigPath(call.Session.server.settings.Ingest, path) {
+		return mcpEvsWriteOutward(ctx, call, network, repoId, path, base, content, remove, message, agentLabel, agentId, tainted)
 	}
 	write := &sidecar.EvsPathWrite{Path: path, Remove: remove, IfBaseVersion: &base}
 	if !remove {
