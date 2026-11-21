@@ -519,7 +519,11 @@ func NewApprovalWorldWith(net *Net, name string, options *ApprovalWorldOptions) 
 		taintSeenRunIds:       map[sidecar.Id]bool{},
 		options:               options,
 	}
-	for _, kind := range []sidecar.SidecarActionKind{sidecar.SidecarActionMail, sidecar.SidecarActionDnsSet, sidecar.SidecarActionDnsDelete} {
+	for _, kind := range []sidecar.SidecarActionKind{
+		sidecar.SidecarActionMail, sidecar.SidecarActionDnsSet, sidecar.SidecarActionDnsDelete,
+		// mail_alias_create's and mail_alias_delete's mailcfg records, for MCP's mail tools
+		sidecar.SidecarActionAliasCreate, sidecar.SidecarActionAliasDelete,
+	} {
 		world.sinks[kind] = NewEffectSink()
 	}
 	chain := sha256.Sum256([]byte("approval world chain " + name))
