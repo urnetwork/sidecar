@@ -499,6 +499,8 @@ barrier mail.erase.index.after mail_erase_index.go
 barrier mail.erase.index.before mail_erase_index.go
 barrier mail.erase.keys.after mail_erase_closure.go
 barrier mail.erase.keys.before mail_erase_closure.go
+barrier mail.erase.late.after mail_erase_late.go
+barrier mail.erase.late.before mail_erase_late.go
 barrier mail.erase.message.after mail_erase.go
 barrier mail.erase.message.before mail_erase.go
 barrier mail.erase.orphan.after mail_erase.go
@@ -601,6 +603,8 @@ barrier pushservice.wake_sender.window pushservice/wake_sender.go
 barrier pushservice.wake_sender.window_set pushservice/wake_sender.go
 barrier quota.usage_report.after host_quota_batcher.go
 barrier quota.usage_report.before host_quota_batcher.go
+barrier record.capture.commit.after record_writer.go
+barrier record.capture.commit.before record_writer.go
 barrier record.chain.fsync.after record_chain.go
 barrier record.chain.fsync.before record_chain.go
 barrier record.chain.head.after record_chain.go
@@ -714,6 +718,7 @@ barrier sidecar.attach.after sidecar_component.go
 barrier sidecar.attach.before sidecar_component.go
 barrier sidecar.authorize.after sidecar_gate.go
 barrier sidecar.authorize.before sidecar_gate.go
+barrier sidecar.core_sync.accepted push_poll.go
 barrier sidecar.drop.applied state_drop_apply.go
 barrier sidecar.generation.start.after sidecar_generation.go
 barrier sidecar.generation.start.before sidecar_generation.go
@@ -916,9 +921,11 @@ secret pushservice.apns_provider_token pushservice/wake_vendor_apns.go
 secret pushservice.fcm_access_token pushservice/wake_vendor_fcm.go
 secret pushservice.fcm_assertion pushservice/wake_vendor_fcm.go
 secret pushservice.fcm_key pushservice/wake_vendor_fcm.go
+secret record_entry_key record_capture.go
 secret record_entry_key record_chain.go
 secret record_entry_key record_deposit.go
 secret record_entry_key record_seal.go
+secret record_entry_salt record_capture.go
 secret record_entry_salt record_chain.go
 secret record_entry_salt record_deposit.go
 secret record_entry_salt record_seal.go
