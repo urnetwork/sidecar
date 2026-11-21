@@ -209,11 +209,13 @@ type Announcement struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	AnnouncementId []byte                 `protobuf:"bytes,1,opt,name=announcement_id,json=announcementId,proto3" json:"announcement_id,omitempty"` // runs and workers: random 16 B, fixed for the item's life
 	Kind           uint32                 `protobuf:"varint,2,opt,name=kind,proto3" json:"kind,omitempty"`                                          // 1 run, 2 worker, 3 repo
-	Version        uint64                 `protobuf:"varint,3,opt,name=version,proto3" json:"version,omitempty"`                                    // +1 at each content change; a renewal keeps it
-	StartedMillis  int64                  `protobuf:"varint,4,opt,name=started_millis,json=startedMillis,proto3" json:"started_millis,omitempty"`
-	RenewedMillis  int64                  `protobuf:"varint,5,opt,name=renewed_millis,json=renewedMillis,proto3" json:"renewed_millis,omitempty"`
-	ExpiresMillis  int64                  `protobuf:"varint,6,opt,name=expires_millis,json=expiresMillis,proto3" json:"expires_millis,omitempty"` // runs: renewed + 90 min; workers: renewed + 26 h; repos: none (0)
-	State          uint32                 `protobuf:"varint,7,opt,name=state,proto3" json:"state,omitempty"`                                      // 1 active, 2 ended, 3 handed_off, 4 withdrawn (runs and workers only:
+	Version        uint64                 `protobuf:"varint,3,opt,name=version,proto3" json:"version,omitempty"`                                    // +1 at each content change; at a card's return after another
+	// signer removed it, one above the removal's tombstone (owner
+	// decision 645); a renewal keeps it
+	StartedMillis int64  `protobuf:"varint,4,opt,name=started_millis,json=startedMillis,proto3" json:"started_millis,omitempty"`
+	RenewedMillis int64  `protobuf:"varint,5,opt,name=renewed_millis,json=renewedMillis,proto3" json:"renewed_millis,omitempty"`
+	ExpiresMillis int64  `protobuf:"varint,6,opt,name=expires_millis,json=expiresMillis,proto3" json:"expires_millis,omitempty"` // runs: renewed + 90 min; workers: renewed + 26 h; repos: none (0)
+	State         uint32 `protobuf:"varint,7,opt,name=state,proto3" json:"state,omitempty"`                                      // 1 active, 2 ended, 3 handed_off, 4 withdrawn (runs and workers only:
 	// terminal, folded over the item at once and never shown)
 	Tainted       bool           `protobuf:"varint,8,opt,name=tainted,proto3" json:"tainted,omitempty"` // the writing run's taint when this version was written (16.6)
 	Who           *AnnounceWho   `protobuf:"bytes,9,opt,name=who,proto3" json:"who,omitempty"`
