@@ -1,9 +1,9 @@
 //go:build !js && !ios && !android && !sdk_mobile_bind
 
 // ur://evs/{repo}/{+path} (§16.5; D-MCP-17, I-9; MCP-M3-13): a file's newest version, or the network and revision
-// an oversized evs_read result selected, under the
-// same guard, allow, trust and taint rule (tools_evs.go's header): its trust by its push's sealed provenance, own or
-// member for an untainted run's version, and an untrusted one, a tainted run's or an import's, tainting the run
+// an oversized evs_read result selected, under the same guard, allow, trust and taint rule (tools_evs.go's header):
+// its trust by its push's sealed provenance, own or member for an untainted run's version, and an untrusted one,
+// a tainted run's or an import's, tainting the run
 // before it returns (QD-042, QD-851).
 //
 //	subscribe  judged at once: the guard on the repo and path, then §8's allow of read, so a subscription on a refused
@@ -226,6 +226,7 @@ func addEvsResource(resources *McpResources, server *McpServer) {
 				return errMcpNoToolNetwork
 			}
 			call := &McpCall{Session: session, NetworkId: networkId, Network: network}
+			call.bindRecipientGuard(ctx)
 			ref, err := pin.target(call, repoId, path)
 			if err != nil {
 				return err

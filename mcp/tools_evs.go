@@ -5,9 +5,9 @@
 // files. ur://evs/{repo}/{+path} is resources_evs.go's.
 //
 //	guard      every call names what it reaches to McpGuard (§16.6's refused table, guard.go): never a secret repo,
-//	           the config's contents, the team directory, the search index's files, a mailbox's vault/ family or a
-//	           vault's harness/ config; a listing leaves such items out, and evs_list names the index's files only
-//	           when asked (include_index)
+//	           the config's contents, the team directory, the search index's files, approved-recipient records,
+//	           a mailbox's vault/ family or a vault's harness/ config. A listing omits refused items and names the
+//	           index's files only when asked (include_index)
 //	allow      §8's local allow of read, or write, on the repo for this sidecar
 //	reads      over EvsRepo, the read's purpose and run in its context, so an owner-bound repo's reader that is not
 //	           its writer deposits its receipt and awaits evs's 200 before anything decrypts (EVS1-M3-01's gate,
@@ -51,7 +51,6 @@ import (
 	"errors"
 	"io"
 	"net/url"
-	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -83,46 +82,48 @@ type McpEvsNetwork interface {
 	EvsWriteEffect(repoId sidecar.Id, effect *sidecar.EvsWriteEffect) sidecar.SidecarEffect
 }
 
-// A hosted Sidecar, its engine and its evs client, as the evs tools read them.
-type mcpSidecarEvsNetwork struct {
-	*mcpSidecarNetwork
-	client *sidecar.EvsClient
-}
-
 // The evs view of hosted, its repos from engine's installed state and its calls through client.
 func McpEvsNetworkOf(hosted *sidecar.Sidecar, engine *sidecar.AclEngine, client *sidecar.EvsClient) McpEvsNetwork {
-	return &mcpSidecarEvsNetwork{mcpSidecarNetwork: &mcpSidecarNetwork{Sidecar: hosted, engine: engine}, client: client}
+	return &mcpSidecarNetwork{Sidecar: hosted, engine: engine, evs: client}
 }
 
 // The installed state's repos.
-func (self *mcpSidecarEvsNetwork) RepoIds() []sidecar.Id {
-	if self.engine == nil || self.engine.State() == nil {
+func (self *mcpSidecarNetwork) RepoIds() []sidecar.Id {
+	engine, _ := self.policy()
+	if engine == nil {
 		return nil
 	}
-	repoIds := []sidecar.Id{}
-	for _, repo := range self.engine.State().Rows().GetRepos() {
-		if repoId, err := sidecar.IdFromBytes(repo.GetRepoId()); err == nil {
-			repoIds = append(repoIds, repoId)
-		}
+	state := engine.State()
+	if state == nil {
+		return nil
 	}
-	slices.SortFunc(repoIds, sidecar.Id.Cmp)
-	return repoIds
+	return state.RepoIds()
+}
+
+// The daemon's currently attached EVS client, or the one supplied by the embedding host.
+func (self *mcpSidecarNetwork) evsClient() *sidecar.EvsClient {
+	if self.follow {
+		return self.Sidecar.EvsClient()
+	}
+	return self.evs
 }
 
 // The client's repo.
-func (self *mcpSidecarEvsNetwork) EvsRepo(repoId sidecar.Id) McpEvsRepo {
-	if self.client == nil {
+func (self *mcpSidecarNetwork) EvsRepo(repoId sidecar.Id) McpEvsRepo {
+	client := self.evsClient()
+	if client == nil {
 		return nil
 	}
-	return self.client.Repo(repoId)
+	return client.Repo(repoId)
 }
 
 // The evs effect over the client's repo.
-func (self *mcpSidecarEvsNetwork) EvsWriteEffect(repoId sidecar.Id, effect *sidecar.EvsWriteEffect) sidecar.SidecarEffect {
-	if self.client == nil {
+func (self *mcpSidecarNetwork) EvsWriteEffect(repoId sidecar.Id, effect *sidecar.EvsWriteEffect) sidecar.SidecarEffect {
+	client := self.evsClient()
+	if client == nil {
 		return nil
 	}
-	effect.Repo = self.client.Repo(repoId)
+	effect.Repo = client.Repo(repoId)
 	return effect
 }
 
@@ -213,7 +214,11 @@ func mcpEvsTarget(call *McpCall, repoId sidecar.Id, operation McpRepoOperation, 
 	if network, ok := mcpToolNetworkOf(call); ok {
 		kind = network.RepoKind(repoId)
 	}
-	return McpTarget{Kind: McpTargetRepo, RepoKind: kind, Operation: operation, Ref: mcpEvsMainRef, Path: path}
+	target := McpTarget{Kind: McpTargetRepo, RepoKind: kind, Operation: operation, Ref: mcpEvsMainRef, Path: path}
+	if kind == protocol.RepoKind_REPO_KIND_GENERAL && mcpRecipientPath(path) && call.ordinaryFileRepo != nil {
+		target.OrdinaryFileRepo = call.ordinaryFileRepo(repoId)
+	}
+	return target
 }
 
 // §8's grant a call needs on repoId.

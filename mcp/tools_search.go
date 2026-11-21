@@ -143,9 +143,9 @@ func mcpSearchEnv(ctx context.Context, call *McpCall, result *McpResult) (*sidec
 		Taint:   result.Untrusted,
 		Fence:   result.Fence,
 		Secret:  matcher.Matches,
-		// each hit is a search target: a secret repo's, or one under a mailbox's vault/ family, is left out (QD-673)
+		// Each hit passes the same path guard as an EVS read, including mailbox vaults and approved recipients.
 		Admit: func(repoId sidecar.Id, path string) bool {
-			return McpGuardAdmits(McpTarget{Kind: McpTargetRepo, RepoKind: network.RepoKind(repoId), Operation: McpRepoSearch, Path: path})
+			return McpGuardAdmits(mcpEvsTarget(call, repoId, McpRepoSearch, path))
 		},
 		Report: func(progress *sidecar.SearchToolProgress) {
 			// numbers and fixed words only (I-13)
@@ -160,8 +160,7 @@ func mcpSearchEnv(ctx context.Context, call *McpCall, result *McpResult) (*sidec
 
 // The search targets a call names: each repo, with path_prefix, at the call's state's kind.
 func mcpSearchTargets(call *McpCall, repos []string, pathPrefix string) ([]McpTarget, error) {
-	network, ok := mcpToolNetworkOf(call)
-	if !ok {
+	if _, ok := mcpToolNetworkOf(call); !ok {
 		return nil, errMcpNoToolNetwork
 	}
 	targets := []McpTarget{}
@@ -170,7 +169,7 @@ func mcpSearchTargets(call *McpCall, repos []string, pathPrefix string) ([]McpTa
 		if err != nil {
 			return nil, errMcpSearchArguments
 		}
-		targets = append(targets, McpTarget{Kind: McpTargetRepo, RepoKind: network.RepoKind(repoId), Operation: McpRepoSearch, Path: pathPrefix})
+		targets = append(targets, mcpEvsTarget(call, repoId, McpRepoSearch, pathPrefix))
 	}
 	return targets, nil
 }

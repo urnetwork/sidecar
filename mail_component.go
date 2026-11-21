@@ -346,7 +346,7 @@ func (self *MailClient) bindFromSidecar(ctx context.Context, env *SidecarEnv) {
 		return
 	}
 	binding := &MailBinding{Gate: sidecar}
-	if evs := sidecar.mailEvsClient(); evs != nil {
+	if evs := sidecar.EvsClient(); evs != nil {
 		binding.Evs = evs
 		binding.Gkm = evs.args.Gkm
 		binding.FileStatement = evs.args.FileStatement
@@ -425,26 +425,6 @@ func (self *MailClient) bindFromSidecar(ctx context.Context, env *SidecarEnv) {
 		}
 		return true
 	})
-}
-
-// A member host's verified client, including when it only exposes mail, or the daemon's EVS component.
-func (self *Sidecar) mailEvsClient() *EvsClient {
-	if self.ctx != nil && self.ctx.Err() != nil {
-		return nil
-	}
-	if replica := self.registeredMemberReplica(); replica != nil {
-		return replica.Evs()
-	}
-	leg, ok := self.leg.(*sidecarConnectLeg)
-	if !ok {
-		return nil
-	}
-	for _, component := range leg.componentList() {
-		if evsComponent, ok := component.(*EvsComponent); ok {
-			return evsComponent.Client()
-		}
-	}
-	return nil
 }
 
 // Starts the member's mailbox's ingestor, or moves it to a new mailbox, once the mailbox stands.

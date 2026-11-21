@@ -63,6 +63,26 @@ func (self *EvsComponent) Client() *EvsClient {
 	return self.client
 }
 
+// The enrolled member's verified client, or the daemon's current EVS component. A stopped replica withholds both.
+func (self *Sidecar) EvsClient() *EvsClient {
+	if self.ctx != nil && self.ctx.Err() != nil {
+		return nil
+	}
+	if replica := self.registeredMemberReplica(); replica != nil {
+		return replica.Evs()
+	}
+	leg, ok := self.leg.(*sidecarConnectLeg)
+	if !ok {
+		return nil
+	}
+	for _, component := range leg.componentList() {
+		if evs, ok := component.(*EvsComponent); ok {
+			return evs.Client()
+		}
+	}
+	return nil
+}
+
 // Follows one generation: subscribes to its push feed's evs: family, whose hints its queue carries until env.Ctx
 // ends. A generation whose dispatcher has no push client yet attaches without hints.
 func (self *EvsComponent) Attach(env *SidecarEnv) error {

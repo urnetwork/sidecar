@@ -121,7 +121,7 @@ func (self *daemonMcpDaemon) Network(networkId sidecar.Id) (McpNetwork, bool) {
 	if !ok {
 		return nil, false
 	}
-	return hosted, true
+	return &mcpSidecarNetwork{Sidecar: hosted, follow: true}, true
 }
 
 func (self *daemonMcpDaemon) Agent(hello *sidecar.DaemonHello) (*sidecar.SidecarAgent, error) {
@@ -527,6 +527,7 @@ func (self *McpServer) call(ctx context.Context, session *McpSession, network st
 		return nil, newMcpError(McpCodeFailedPrecondition, "this device was revoked from the network: run ur login in your own terminal to enroll anew", false)
 	}
 	call := &McpCall{Session: session, NetworkId: networkId, Network: host}
+	call.bindRecipientGuard(ctx)
 	if err := self.binder.readyCall(ctx, call); err != nil {
 		if _, _, isMcpError := McpErrorCode(err); isMcpError {
 			return nil, err

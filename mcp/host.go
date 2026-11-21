@@ -5,10 +5,8 @@
 // decision 6), the sidecar itself, since in-daemon agents share their sidecar's grants (§5.5); the repo kinds McpGuard
 // judges; and the credentials no result may carry (I-7).
 //
-// McpNetworkOf is the adapter over the root's Sidecar and its network's §8.9 AclEngine, which ACL-M2-15's follower
-// installs into. The daemon does not hold an engine per network yet (no task has wired one into a hosted Sidecar),
-// so DaemonOf still answers a bare Sidecar, which is no McpToolNetwork, and every tool call on it is refused: the
-// closed direction, until that wiring passes McpNetworkOf instead.
+// DaemonOf uses the hosted Sidecar's standing config follower and its attached EVS component. Hosts that already
+// own these dependencies may pass them directly through McpNetworkOf, McpTeamNetworkOf or McpEvsNetworkOf.
 //
 // McpCallSink is where every W call goes as a tool_call entry, source observed, once it ends: Ingest.RecordMcpCall
 // (ingest_tools.go) is one.
@@ -62,7 +60,11 @@ func mcpToolNetworkOf(call *McpCall) (McpToolNetwork, bool) {
 // A hosted Sidecar and its network's engine as tools read them.
 type mcpSidecarNetwork struct {
 	*sidecar.Sidecar
+	// Daemon views follow component lifetimes. Other hosts supply their fixed dependencies directly.
+	follow bool
 	engine *sidecar.AclEngine
+	config *sidecar.ConfigClient
+	evs    *sidecar.EvsClient
 }
 
 // The tool view of hosted, its local allow and repo kinds from engine, whose installed state ACL's follower keeps.
@@ -70,26 +72,40 @@ func McpNetworkOf(hosted *sidecar.Sidecar, engine *sidecar.AclEngine) McpToolNet
 	return &mcpSidecarNetwork{Sidecar: hosted, engine: engine}
 }
 
+// The policy and client of this hosted network at the time of the check.
+func (self *mcpSidecarNetwork) policy() (*sidecar.AclEngine, *sidecar.ConfigClient) {
+	if !self.follow {
+		return self.engine, self.config
+	}
+	if follower := self.ConfigFollower(); follower != nil {
+		return follower.StandingPolicy()
+	}
+	return nil, nil
+}
+
 // Whether the engine holds a state.
 func (self *mcpSidecarNetwork) PolicyInstalled() bool {
-	return self.engine != nil && self.engine.State() != nil
+	engine, _ := self.policy()
+	return engine != nil && engine.State() != nil
 }
 
 // AclEngine.Check for the hosted sidecar, false before a state installs or before enrollment.
 func (self *mcpSidecarNetwork) Allow(action protocol.AclAction, resource sidecar.AclResource, now time.Time) (sidecar.AclCheck, bool) {
 	identity := self.Identity()
-	if self.engine == nil || self.engine.State() == nil || identity == nil {
+	engine, _ := self.policy()
+	if engine == nil || engine.State() == nil || identity == nil {
 		return sidecar.AclCheck{}, false
 	}
-	return self.engine.Check(sidecar.AclSidecarSubject(identity.SidecarId), action, resource, now), true
+	return engine.Check(sidecar.AclSidecarSubject(identity.SidecarId), action, resource, now), true
 }
 
 // The installed state's repo row's kind.
 func (self *mcpSidecarNetwork) RepoKind(repoId sidecar.Id) protocol.RepoKind {
-	if self.engine == nil {
+	engine, _ := self.policy()
+	if engine == nil {
 		return protocol.RepoKind_REPO_KIND_UNSPECIFIED
 	}
-	state := self.engine.State()
+	state := engine.State()
 	if state == nil {
 		return protocol.RepoKind_REPO_KIND_UNSPECIFIED
 	}
