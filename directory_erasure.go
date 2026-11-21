@@ -52,9 +52,11 @@
 //	           files (IndexEraser.Rewrite); then a CLOSURE a file, rewriting in place under a fresh key each card and
 //	           repo file whose earlier versions held a document, and its ERASE of every key a stored version of the
 //	           file names. The files go last so that the ERASE that says the erasure complete names keys that stand:
-//	           a ref whose index holds none of the documents sends no ERASE. Every ERASE of a file's keys, and the
-//	           index's completing one, carries as its sealed note an ErasureBody naming the erasure, its reason and,
-//	           for a revocation, the request, whose id is the erasure's
+//	           a ref whose index holds none of the documents sends no pair, and where no file is left either the
+//	           rewrite of the last ref a CUT of the erasure stands on ends it by a completion ERASE, which names a key
+//	           an ERASE of the erasure destroyed (IndexRewriteArgs.Completion; QD-1132, QD-1137). Every ERASE of a
+//	           file's keys, and the index's completing one, carries as its sealed note an ErasureBody naming the
+//	           erasure, its reason and, for a revocation, the request, whose id is the erasure's
 //	note       a moderation, a directory admin's erase of an announcement another sidecar's card holds, names that
 //	           announcement in its note too (ErasureBody.announcement_ids; QD-1148), the ERASE of the removed card's
 //	           keys carrying it, every later ERASE of the erasure alike: the card's writer reads it at its next sync and
@@ -77,8 +79,9 @@
 //	           other's is a conflict it reads past, and a second ERASE of keys already gone is done
 //	resume     from evs's state (§11.12's reconcile row): once a process an erasure, and whenever the ledger shows a
 //	           CLOSURE of this device that may stand alone, which it journals before sending one, an ERASE for each
-//	           CLOSURE of the cards ref no ERASE followed; and each index ref's rewrite again, which erases its own
-//	           orphans first. A person's erasure this device began is resumed at its next erase or pass
+//	           CLOSURE of the cards ref no ERASE followed, saying complete where nothing else of the erasure is owed
+//	           (QD-1132); and each index ref's rewrite again, which erases its own orphans first. A person's erasure
+//	           this device began is resumed at its next erase or pass
 //	authority  CUT, CLOSURE, their uploads and ERASE take admin, which evs checks before any commit or slot rewrite
 //	           (I-EVS-16): the calls go through DirectoryErasureFiles alone, and with none bound nothing of this half
 //	           is cut, rewritten or erased (ErrDirectoryErasureFilesUnbound)
@@ -1435,6 +1438,7 @@ func (self *DirectoryClient) eraseFiles(ctx context.Context, work *directoryEras
 	closes := []*directoryErasureFile{}
 	removes := []*directoryErasureFile{}
 	resume := false
+	rewriteOwed := false
 	err = func() error {
 		state.stateLock.Lock()
 		defer state.stateLock.Unlock()
@@ -1455,6 +1459,7 @@ func (self *DirectoryClient) eraseFiles(ctx context.Context, work *directoryEras
 			}
 		}
 		resume = row.Unerased || !state.resumed[work.erasureId]
+		rewriteOwed = row.CardsRewriteOwed || row.StreamsRewriteOwed
 		return self.keepErasureLedgerWithLock(state)
 	}()
 	if err != nil {
@@ -1473,13 +1478,17 @@ func (self *DirectoryClient) eraseFiles(ctx context.Context, work *directoryEras
 	}
 
 	// the reconcile row: an ERASE first for each CLOSURE of the cards ref no ERASE followed, by evs's state, once a
-	// process an erasure and whenever a CLOSURE of this device may stand alone
+	// process an erasure and whenever a CLOSURE of this device may stand alone. Where nothing else of the erasure is
+	// owed at this call, as after a kill between its last CLOSURE and that CLOSURE's ERASE, that ERASE says it complete
+	// (QD-1132), as the index's eraser's orphaned CLOSURE's does: no later ERASE is left to say it
 	if resume {
 		orphans, err := files.OrphanCardKeys(ctx, directoryId, work.erasureId)
 		if err != nil {
 			return result, err
 		}
-		if err := eraseKeys(orphans, false); err != nil {
+		last := len(uncutCards) == 0 && len(uncutStreams) == 0 && len(closes) == 0 && len(removes) == 0 &&
+			len(result.WaitingPaths) == 0 && !rewriteOwed
+		if err := eraseKeys(orphans, last); err != nil {
 			return result, err
 		}
 		if err := self.updateErasureLedger(work, func(row *directoryErasureLedgerRow) { row.Unerased = false }); err != nil {
@@ -1562,19 +1571,24 @@ func (self *DirectoryClient) eraseFiles(ctx context.Context, work *directoryEras
 		return len(result.WaitingPaths) == 0 && len(result.ConflictPaths) == 0
 	}
 
-	// each ref's index files: the eraser's CLOSURE and ERASE pairs, which read their own progress from evs's state
-	rewrite := func(index func(ctx context.Context, repoId Id) (DirectoryErasureIndex, error), cards bool, complete bool) error {
+	// each ref's index files: the eraser's CLOSURE and ERASE pairs, which read their own progress from evs's state.
+	// Asked to end the erasure, a rewrite that finds no file holding a listed version, or whose orphaned CLOSURE's ERASE
+	// found its keys gone, has no ERASE with a key left to say complete: it ends the erasure by a completion ERASE
+	// (QD-1132, QD-1137), as the record's and mail's erasers do. True where a CUT of the erasure stands on the ref.
+	rewrite := func(index func(ctx context.Context, repoId Id) (DirectoryErasureIndex, error), cards bool, complete bool) (bool, error) {
 		eraser, err := index(ctx, directoryId)
 		if err != nil {
-			return err
+			return false, err
 		}
-		rewritten, err := eraser.Rewrite(ctx, &IndexRewriteArgs{ErasureId: work.erasureId, Complete: complete, Note: note})
+		rewritten, err := eraser.Rewrite(ctx, &IndexRewriteArgs{ErasureId: work.erasureId, Complete: complete, Note: note, Completion: complete})
+		cut := true
 		waits := false
 		switch {
 		case errors.Is(err, ErrIndexEraseNotCut):
 			// no CUT of the erasure stands on this ref: nothing of it is listed there
+			cut = false
 		case err != nil:
-			return err
+			return true, err
 		default:
 			result.IndexPairCount += rewritten.PairCount
 			result.Complete = result.Complete || rewritten.Completed
@@ -1582,9 +1596,9 @@ func (self *DirectoryClient) eraseFiles(ctx context.Context, work *directoryEras
 		}
 		if waits {
 			result.IndexWaiting = true
-			return nil
+			return cut, nil
 		}
-		return self.updateErasureLedger(work, func(row *directoryErasureLedgerRow) {
+		return cut, self.updateErasureLedger(work, func(row *directoryErasureLedgerRow) {
 			if cards {
 				row.CardsRewriteOwed = false
 			} else {
@@ -1593,16 +1607,30 @@ func (self *DirectoryClient) eraseFiles(ctx context.Context, work *directoryEras
 		})
 	}
 	// the erasure's last ERASE says it complete: a file's, whose keys always stand, where a file is rewritten or
-	// removed at this call, else the last ref's
+	// removed at this call, else the rewrite's of the last ref a CUT of it stands on
 	fileCount := len(closes) + len(removes)
+	ends := func() bool {
+		return fileCount == 0 && !result.IndexWaiting && settled()
+	}
+	cardsCut := false
 	if cardsOwed {
-		if err := rewrite(files.CardsIndex, true, fileCount == 0 && !streamsOwed && settled()); err != nil {
+		cut, err := rewrite(files.CardsIndex, true, fileCount == 0 && !streamsOwed && settled())
+		if err != nil {
 			return result, err
 		}
+		cardsCut = cut
 	}
 	if streamsOwed {
-		if err := rewrite(files.StreamsIndex, false, fileCount == 0 && !result.IndexWaiting && settled()); err != nil {
+		cut, err := rewrite(files.StreamsIndex, false, ends())
+		if err != nil {
 			return result, err
+		}
+		if !cut && cardsCut && ends() {
+			// no CUT of it stands on ur/index, as where another device began it on the cards ref alone and both refs
+			// read owed here: the cards ref's rewrite was its last, which is asked again to end it
+			if _, err := rewrite(files.CardsIndex, true, true); err != nil {
+				return result, err
+			}
 		}
 	}
 	// the cards ref's files, last: a CLOSURE each, then the ERASE of every key its stored versions name

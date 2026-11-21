@@ -105,7 +105,8 @@ func mailErasureDocumented(messages []mailErasedMessage) bool {
 
 // The index's side of repo's erasures: the index's eraser over the mailbox's main ref, whose .ur-index/ holds its
 // index, signing as this device, a set or settings version counting where authority says its signer administers the
-// repo, and which erasures are complete read from the repo's erasure ref. It reads the repo's current key for K_ref.
+// repo, and which erasures are complete read from the repo's erasure ref, each by its newest ERASE. It reads the
+// repo's current key for K_ref.
 func mailNewEraseIndex(ctx context.Context, repo *EvsRepo, args *MailEraserArgs, settings *MailEraseSettings) (*mailEraseIndex, error) {
 	store := newIndexEvsStore(repo, nil, false)
 	refId, err := store.refId(ctx)
@@ -130,7 +131,7 @@ func mailNewEraseIndex(ctx context.Context, repo *EvsRepo, args *MailEraserArgs,
 	}
 	repoId := repo.repoId
 	authority := args.Authority
-	eraser, err := indexNewEraser(&indexEraserArgs{
+	return mailEraseIndexOver(&indexEraserArgs{
 		store: store, eraseStore: store, repoId: repoId, refId: refId, repoKind: kind,
 		isAdmin: func(file *indexFileVersion) bool {
 			return authority != nil && authority.Erases(repoId, file.signerSidecarId)
@@ -150,16 +151,30 @@ func mailNewEraseIndex(ctx context.Context, repo *EvsRepo, args *MailEraserArgs,
 			return complete, nil
 		},
 		events: args.Progress, clock: repo.client.clock, log: repo.client.log,
-	})
+	}, refKey)
+}
+
+// The index's side over args' stores, its doc_keys drawn under refKey. Its eraser reads an erasure's progress on the
+// erasure ref by the erasure's newest ERASE (recordEraseNewestStore), as its CUTs read which erasures are complete and
+// Resume reads which to finish: a late body's ERASE, which says nothing complete in a format-2 mailbox
+// (mail_erase_late.go), reopens an erasure an earlier ERASE completed, whose rewrite then runs again (§11.12's
+// reconcile row; owner decision 658). Read by any ERASE that once said complete, the rewrite found the reopened erasure
+// done, so the index files holding the late body's documents and the i/ parts after them kept their keys.
+func mailEraseIndexOver(args *indexEraserArgs, refKey []byte) (*mailEraseIndex, error) {
+	if args.eraseStore != nil {
+		args.eraseStore = &recordEraseNewestStore{indexEraseStore: args.eraseStore}
+	}
+	eraser, err := indexNewEraser(args)
 	if err != nil {
 		return nil, err
 	}
+	refId := args.refId
 	return &mailEraseIndex{
 		eraser: eraser,
 		docKey: func(path string, chunk uint32) ([indexIdByteCount]byte, error) {
 			return indexDocKey(refKey, refId, []byte(path), chunk)
 		},
-		format: format,
+		format: args.format,
 	}, nil
 }
 
