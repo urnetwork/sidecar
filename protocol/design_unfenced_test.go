@@ -645,13 +645,6 @@ var testFenceAdditions = []struct {
 }{
 	{message: "RepoCreate", field: testFenceField{name: "inbox", number: 4, typeName: "RepoInbox"}, question: "plan-MAIL-group-inbox (QD-102)"},
 	{message: "AclRepo", field: testFenceField{name: "inbox", number: 14, typeName: "RepoInbox"}, question: "plan-MAIL-group-inbox (QD-102)"},
-	// RECORD.md section 6.4's ErasureBody: the announcements a moderation's ERASE took off a card, which its note names
-	// (QD-1148)
-	{
-		message:  "ErasureBody",
-		field:    testFenceField{name: "announcement_ids", number: 5, typeName: "bytes", repeated: true},
-		question: "moderated-run-left-out-dropped-erasure",
-	},
 }
 
 // One field an owner's answer takes out of a message the design fences, its number reserved.

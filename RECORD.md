@@ -684,6 +684,10 @@ message ErasureBody {                       // erasure: §16.8's entry in the er
   repeated bytes entry_ids = 2;             // <= 1,024; a larger erasure writes several
   uint32 reason = 3;                        // 1 person, 2 retention, 3 moderation, 4 revocation
   bytes request_id = 4;                     // reason 4: the DirectoryErasureRequest
+  repeated bytes announcement_ids = 5;      // reason 3: the 16 B announcement ids a moderation took off a card,
+                                            // which every ERASE note of its erasure names (§16.11's moderation
+                                            // row; owner decision 664); never an entry's id, which entry_ids
+                                            // alone names
 }
 message InventoryBody {                     // inventory: one a sidecar a UTC day it ran anything
   bytes sponsor_member_id = 1;              // the member, or a tagged sidecar's sponsor

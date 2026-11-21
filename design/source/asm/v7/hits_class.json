@@ -2355,7 +2355,7 @@
  {
   "family": "device_cap_1000",
   "file": "16-MCP.md",
-  "line": 1927,
+  "line": 1930,
   "col": 86,
   "match": "1,000 member devices",
   "snippet": "| Data-repo seats for the directory | no change to owner decision 144 | members past ~1,000 member devices wait keyless | not taken (owner decision 182) |",

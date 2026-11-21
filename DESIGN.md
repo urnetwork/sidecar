@@ -17247,7 +17247,8 @@ runner      the directory's erasure runner: a network-scope indexer that is itse
             expiry (the repo's retention row) and repo owners' erasure_request entries (Repos' revoke)
 erasure     a directory admin's ur directory erase <id>: for an announcement, a CUT on the cards ref and on
             ur/index listing its documents (§11.12), then a CLOSURE rewriting under fresh keys the index files and
-            the card holding its document, then the ERASE of the old slots' keys (§11.12, §11.14); for an entry,
+            the card holding its document, then the ERASE of the old slots' keys (§11.12, §11.14), a moderation's
+            ERASEs each naming the announcement in its sealed note (the moderation row); for an entry,
             16.8's per-entry ERASE after its CUT; under a preservation hold too (owner decision 133); a repo's
             owner revoking its announcement has the runner erase every copy that names the repo the same way
             (owner decision 181); a member asks an admin, or withdraws, which tombstones and purges but destroys
@@ -17272,15 +17273,17 @@ closure     the eraser holds neither a card's key nor a repo admin's, and reader
             that has accepted nothing at the path has no seq to hold a replayed earlier Signed to, a check the
             review phase adds (DESIGN-DEFER.md's mcp-card-closure-replay-check entry); no format changes
 moderation  a directory admin removes another sidecar's card or ERASEs an entry, and the member's devices alarm;
-            a moderation's ERASE of a card's keys names in its sealed note the announcement ids it erased, which
-            the writer's sync, reading the erasure ref's ERASEs and their notes for the moderation notice,
-            journals in the card writer's journal at once, whatever the index's erasure set still lists and
-            however long the writer is off; and at a return the card writer also reads the cards ref's erasure
-            set and leaves out every item whose document the set lists at or above the version its last card
-            held it at, a doc_key per item coming through the directory's evs binding, so the run and worker
-            writers stop announcing that item and a moderated run its writer still runs stays out of the card,
-            the fold and the index, as FI-19's index clause asks under owner decision 645's raised versions
-            (owner decision 664)
+            a moderation that takes an announcement off the cards holding it names it in the sealed note of every
+            ERASE of its erasure (RECORD.md's ErasureBody.announcement_ids, never an entry's id), its ERASE of a
+            card's keys among them, its ledger keeping the id so a resumed call's ERASEs name it as its first did,
+            while a person's erasure and a revocation's name none; the writer's sync, reading the erasure ref's
+            ERASEs and their notes for the moderation notice, journals those ids in the card writer's journal at
+            once, whatever the index's erasure set still lists and however long the writer is off; and at a
+            return the card writer also reads the cards ref's erasure set and leaves out every item whose document
+            the set lists at or above the version its last card held it at, a doc_key per item coming through the
+            directory's evs binding, so the run and worker writers stop announcing that item and a moderated run
+            its writer still runs stays out of the card, the fold and the index, as FI-19's index clause asks
+            under owner decision 645's raised versions (owner decision 664)
 readers     accept a directory ERASE, CUT or CLOSURE from a directory admin for any entry or document, showing one
             that names an erasure_request as that repo owner's revocation, and alarm on any other signer, which
             only a server breaching the scope rule can commit (I-EVS-16); with no runner online, revocation

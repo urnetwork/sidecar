@@ -6,11 +6,11 @@ Every design decision made since DESIGN.md was last rebuilt and not yet folded i
 
 **Folding.** Only a design-records track edits `design/source/` and rebuilds DESIGN.md with `design/source/build.sh`. Each design-records track takes one DESIGN.md section, applies its items below (and the matching "Proposed DESIGN.md text" of DESIGN-DETAILS.md), and in the same commit deletes those items from this file. When this file holds no items it is deleted. Owner decisions that change behavior go into `design/source/owner/DECISIONS.md` as numbered owner decisions, after decision 197, as decision 197 was.
 
-Generated from the ledger on 2026-11-10, it holds no item under a DESIGN.md section now: the last were folded on 2026-11-18 by track dr4-outside-docs, their parts in RECORD.md, the review ledger, pitch5.html and HANDOFF.md with them. "Later decisions", below, holds five items: one waits on a file outside the design-records tracks' reach (QD-024), two are what track dr6-late-sweep left of the answers it folded on 2026-11-19 as owner decisions 617 to 636, waiting on HANDOFF.md and on KEYS's review-phase rework, and two are what the fifth late sweep, track dr8-late-sweep, left on 2026-11-20 of the answers it folded as owner decisions 647 to 669, one waiting on smtpproof/SPEC.md and one on a field the code does not declare yet. The fourth late sweep, track dr7-late-sweep, folded owner decisions 638 to 646 and two fixes on 2026-11-19 and left nothing of them here; the fifth folded QD-899's DESIGN-DETAILS.md part and QD-1096's fence, whose items left. QD-597 (owner decision 197) is already folded, and QD-336 went into §4.5 with owner decision 251 (QD-841 to QD-843), which DESIGN.md carries directly.
+Generated from the ledger on 2026-11-10, it holds no item under a DESIGN.md section now: the last were folded on 2026-11-18 by track dr4-outside-docs, their parts in RECORD.md, the review ledger, pitch5.html and HANDOFF.md with them. "Later decisions", below, holds four items: one waits on a file outside the design-records tracks' reach (QD-024), two are what track dr6-late-sweep left of the answers it folded on 2026-11-19 as owner decisions 617 to 636, waiting on HANDOFF.md and on KEYS's review-phase rework, and one is what the fifth late sweep, track dr8-late-sweep, left on 2026-11-20 of the answers it folded as owner decisions 647 to 669, waiting on smtpproof/SPEC.md. The same track folded QD-1148's note field on 2026-11-21, once moderation-note-entry-ids had landed it, and its item left. The fourth late sweep, track dr7-late-sweep, folded owner decisions 638 to 646 and two fixes on 2026-11-19 and left nothing of them here; the fifth folded QD-899's DESIGN-DETAILS.md part and QD-1096's fence, whose items left. QD-597 (owner decision 197) is already folded, and QD-336 went into §4.5 with owner decision 251 (QD-841 to QD-843), which DESIGN.md carries directly.
 
 ## Index
 
-No section holds an item. "Later decisions" holds QD-024 (§4), QD-1083 (§6), QD-1086 (§22), QD-1129 with QD-1154 (§14) and QD-1148 (§16).
+No section holds an item. "Later decisions" holds QD-024 (§4), QD-1083 (§6), QD-1086 (§22) and QD-1129 with QD-1154 (§14).
 
 ## DESIGN-DETAILS.md sections to fold
 
@@ -100,14 +100,3 @@ Changes: smtpproof/SPEC.md section 3.
 Questions: `smtp-m9-34-strict-envelope.md`, `strict-envelope-feed-edge-facts-window.md`.
 
 Not folded (2026-11-20, track dr8-late-sweep): smtpproof/SPEC.md is outside the design-records tracks' files.
-
-### QD-1148: When another erasure's CUT drops a complete moderation erasure from the cards ref's index set before the moderated writer's card returns, how does that writer still leave the moderated run out?
-*Decided by the owner on 2026-11-20, asked one question at a time; owner decision 664. Folds into §16 The local MCP server and record primitives.*
-
-The wire part, which waits on the code: the note's field that names the announcement ids a moderation's ERASE of a card's keys erased, `ErasureBody.entry_ids`' comment in RECORD.md's record.proto fence, or a field of its own in that fence, once the fix track moderation-note-entry-ids lands and says which. The rest is folded (2026-11-20): owner decision 664 and §16.11's moderation row, which states the rule without naming the field.
-
-Changes: RECORD.md's `ErasureBody` fence, and protocol/design_unfenced_test.go's `testFenceAdditions` in the same commit if the fix track adds a field there.
-
-Questions: `moderated-run-left-out-dropped-erasure.md`.
-
-Not folded (2026-11-20, track dr8-late-sweep): moderation-note-entry-ids has not landed, so which field carries the ids is not settled in code, and a fence never moves ahead of it.
