@@ -250,7 +250,9 @@ type RecordReadStream struct {
 
 // One log as read.
 type recordReadLog struct {
-	logId Id
+	// Changes before the signed search view changes.
+	searchRevision uint64
+	logId          Id
 	// one Sync at a time
 	syncLock sync.Mutex
 
@@ -375,6 +377,7 @@ func (self *RecordReader) Sync(ctx context.Context, logId Id) error {
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
+		log.searchRevision++
 		log.complete = false
 	}()
 	for _, head := range heads {
@@ -894,8 +897,10 @@ func (self *RecordReader) setArchived(logId Id, entryIds []Id) {
 		switch {
 		case entry.State == RecordEntryLive && archived[entry.EntryId]:
 			entry.State = RecordEntryArchived
+			log.searchRevision++
 		case entry.State == RecordEntryArchived && !archived[entry.EntryId]:
 			entry.State = RecordEntryLive
+			log.searchRevision++
 		}
 	}
 }
@@ -905,6 +910,9 @@ func (self *RecordReader) noteExpired(logId Id, entryIds []Id) {
 	log := self.readLog(logId)
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
+	if len(entryIds) > 0 {
+		log.searchRevision++
+	}
 	for _, entryId := range entryIds {
 		log.expiredEntryIds[entryId] = true
 	}
@@ -917,6 +925,9 @@ func (self *RecordReader) noteErased(logId Id, entryIds []Id, keys []*RecordSlot
 	log := self.readLog(logId)
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
+	if len(entryIds) > 0 || len(keys) > 0 {
+		log.searchRevision++
+	}
 	for _, entryId := range entryIds {
 		log.erasedEntryIds[entryId] = true
 	}

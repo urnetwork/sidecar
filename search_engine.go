@@ -476,6 +476,10 @@ func (self *searchEngineStream) open(ctx context.Context, scoped []*searchScoped
 			}
 			if searchBreadthOf(self.request) == SearchBreadthRepo && engine.args.Scan != nil {
 				view, err := engine.args.Scan(ctx, repoId, refId)
+				if errors.Is(err, errSearchSyncReceipt) {
+					exclude(SearchExcludedReceipt)
+					return nil
+				}
 				if err != nil {
 					return err
 				}
@@ -490,6 +494,9 @@ func (self *searchEngineStream) open(ctx context.Context, scoped []*searchScoped
 					if refId == indexRef {
 						exclude(SearchExcludedNoIndex)
 						return nil
+					}
+					if view.valid != nil {
+						self.validScope = append(self.validScope, view.valid)
 					}
 					self.scans = append(self.scans, &searchEngineScan{view: view, scope: entry, reason: reason,
 						since: searchSearchableSinceSeconds(nowMs, entry.repo.SearchableAge)})

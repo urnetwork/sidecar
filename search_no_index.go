@@ -61,6 +61,8 @@ type SearchScanSource interface {
 // A locally held view fixed for the lifetime of a search. The key derives the same document identifiers the index
 // would use, so cuts, hit references and chunk identities work without an index or a key fetch.
 type SearchScanView struct {
+	// Whether this source still represents the effective reader view.
+	valid  func() bool
 	Source SearchScanSource
 	RefKey *EvsRefKey
 }

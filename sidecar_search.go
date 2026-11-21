@@ -313,6 +313,7 @@ type sidecarSearch struct {
 	state     *SidecarSearchState
 	cache     *SearchCache
 	engine    SidecarSearchEngine
+	member    *memberSearchHost
 }
 
 // The Sidecar's search, made on first use.
@@ -474,11 +475,15 @@ func (self *Sidecar) searchEngine() (SidecarSearchEngine, error) {
 		return nil, err
 	}
 	search.stateLock.Lock()
-	defer search.stateLock.Unlock()
-	if search.engine == nil {
+	engine, member := search.engine, search.member
+	search.stateLock.Unlock()
+	if engine != nil {
+		return engine, nil
+	}
+	if member == nil {
 		return nil, ErrSidecarSearchUnavailable
 	}
-	return search.engine, nil
+	return member.open()
 }
 
 // The remote mode a search of this network runs under: off where this host asks no indexer, or where search.state

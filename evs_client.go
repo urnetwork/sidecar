@@ -33,6 +33,7 @@ import (
 	"net/http"
 	"reflect"
 	"sync"
+	"sync/atomic"
 
 	"google.golang.org/protobuf/proto"
 
@@ -140,13 +141,14 @@ type EvsRepoCreated struct {
 
 // One network's client of evs.
 type EvsClient struct {
-	args     *EvsClientArgs
-	settings *EvsSettings
-	clock    Clock
-	log      Logger
-	http     *evsHttp
-	pins     *EvsPinStore
-	verifier *EvsVerifier
+	searchNames atomic.Bool
+	args        *EvsClientArgs
+	settings    *EvsSettings
+	clock       Clock
+	log         Logger
+	http        *evsHttp
+	pins        *EvsPinStore
+	verifier    *EvsVerifier
 
 	stateLock sync.Mutex
 	// the newest ref version a hint named, per repo and ref, which sends the next read past evs's head cache

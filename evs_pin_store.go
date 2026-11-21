@@ -92,6 +92,7 @@ type EvsPinLoss struct {
 
 // One path's read record.
 type EvsReadRecord struct {
+	search *evsSearchObservation
 	RepoId Id
 	RefId  Id
 	// The path as this device names it, raw names joined by /.
@@ -144,15 +145,16 @@ type evsPinRecord struct {
 
 // A read record's stored form. A field added later is optional, so a record stored before it opens with its zero.
 type evsReadRecordRecord struct {
-	RefId         string `json:"ref_id"`
-	Path          string `json:"path"`
-	EntryVersion  uint64 `json:"entry_version"`
-	CommitVersion uint64 `json:"commit_version,omitempty"`
-	PinVersion    uint64 `json:"pin_version"`
-	PinChain      string `json:"pin_chain,omitempty"`
-	UsedAtMs      int64  `json:"used_at_ms"`
-	Floor         uint64 `json:"floor,omitempty"`
-	PinEpoch      uint64 `json:"pin_epoch,omitempty"`
+	Search        *evsSearchObservation `json:"search,omitempty"`
+	RefId         string                `json:"ref_id"`
+	Path          string                `json:"path"`
+	EntryVersion  uint64                `json:"entry_version"`
+	CommitVersion uint64                `json:"commit_version,omitempty"`
+	PinVersion    uint64                `json:"pin_version"`
+	PinChain      string                `json:"pin_chain,omitempty"`
+	UsedAtMs      int64                 `json:"used_at_ms"`
+	Floor         uint64                `json:"floor,omitempty"`
+	PinEpoch      uint64                `json:"pin_epoch,omitempty"`
 	// DESIGN-DETAILS 16.2.5's Accepted and IgnoredThrough: accepted is set by any of the first four
 	Accepted        bool   `json:"accepted,omitempty"`
 	AcceptedVersion uint64 `json:"accepted_version,omitempty"`
@@ -260,6 +262,7 @@ func (self *EvsPinStore) load() error {
 						return fmt.Errorf("%w: an evs read record's ref", ErrSidecarStoreFailed)
 					}
 					read := &EvsReadRecord{
+						search:        record.Search,
 						RepoId:        repoId,
 						RefId:         refId,
 						Path:          record.Path,
@@ -558,6 +561,7 @@ func evsReseedReadRecord(record *EvsReadRecord, head *EvsPin, headEpoch uint64) 
 		return record
 	}
 	lowered := *record
+	lowered.search = nil
 	if lowered.Accepted != nil && head.Version < lowered.PinVersion {
 		// what was accepted or ignored above the re-seeded head may be part of the loss: the next read walks again
 		lowered.Accepted, lowered.IgnoredThrough = nil, 0
@@ -736,6 +740,9 @@ func (self *EvsPinStore) RaiseReadRecords(repoId Id, records []*EvsReadRecord) e
 				raised.Floor = evsLowerFloor(raised.Floor, held.Floor)
 				// what the reader believes moves only through NoteAccepted
 				raised.Accepted, raised.IgnoredThrough = held.Accepted, held.IgnoredThrough
+				if raised.PinVersion == held.PinVersion && raised.EntryVersion == held.EntryVersion {
+					raised.search = held.search
+				}
 			} else {
 				raised.Accepted, raised.IgnoredThrough = nil, 0
 			}
@@ -882,6 +889,7 @@ func (self *EvsPinStore) writeReadsWithWriteLock(repoId Id, reads map[evsReadKey
 	stored := []*evsReadRecordRecord{}
 	for _, record := range reads {
 		storedRecord := &evsReadRecordRecord{
+			Search:        record.search,
 			RefId:         record.RefId.String(),
 			Path:          record.Path,
 			EntryVersion:  record.EntryVersion,

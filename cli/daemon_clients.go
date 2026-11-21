@@ -150,6 +150,14 @@ func urNetworkClientsOf(running *sidecar.Sidecar) (*urNetworkClients, error) {
 		clients.cancel()
 		return nil, err
 	}
+	running.BindMemberSearch(clients.ctx, func() (*sidecar.EvsClient, *sidecar.GkmGroupClient, error) {
+		evs, err := clients.evsClient()
+		if err != nil {
+			return nil, nil, err
+		}
+		group, err := clients.groupClient()
+		return evs, group, err
+	})
 	urNetworkClientsBySidecar[running] = clients
 	return clients, nil
 }
@@ -541,6 +549,10 @@ func (self *urNetworkClients) evsClient() (*sidecar.EvsClient, error) {
 	// the daemon is a desktop's: it repairs what its mirrors journal (16.2.8's who)
 	prefixRules.Repair = true
 	client.EnablePrefixRules(prefixRules)
+	if err := self.running.BindSearchWrites(client); err != nil {
+		client.Close()
+		return nil, err
+	}
 	if err := self.startLocalTier(client, args); err != nil {
 		// git's service refuses for want of the tier, naming it, and the rest of evs runs on
 		self.log.Warningf("[ur]network %s serves no local git tier: %s", client.NetworkId(), err)
