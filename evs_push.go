@@ -637,7 +637,7 @@ func (self *EvsRepo) PinPush(ctx context.Context, refName []byte) (*EvsPinPushRe
 // PinPush of a ref by its id, refName its name where the caller holds it, nil where it does not: a pin push states no
 // name, which only a creating push carries.
 func (self *EvsRepo) pinPushRef(ctx context.Context, refId Id, refName []byte) (*EvsPinPushResult, error) {
-	repoKind, err := self.repoKind()
+	repo, err := self.repoRow()
 	if err != nil {
 		return nil, err
 	}
@@ -673,7 +673,7 @@ func (self *EvsRepo) pinPushRef(ctx context.Context, refId Id, refName []byte) (
 				RepoId: self.repoId, RefId: refId, BaseVersion: result.head.Version, BaseChain: result.head.Chain,
 				Head: head, PathEpoch: evsCurrentEpoch(head.GetPathEpoch()), Sources: evsSourceEpochs(head.GetPathEpoch()),
 				Generation: repoKey.Generation(), keys: result.keys, floors: map[string]uint64{},
-				slotKeyed: EvsRepoKindRecordClass(repoKind), refName: refName, repoKind: repoKind,
+				slotKeyed: evsRepoSlotKeyed(repo), refName: refName, repoKind: repo.GetKind(),
 			}
 			if err := plan.setRef(head, refName, self.client.args.Identity().SidecarId, false); err != nil {
 				return nil, err

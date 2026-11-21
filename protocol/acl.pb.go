@@ -467,6 +467,55 @@ func (RepoVersioningLock) EnumDescriptor() ([]byte, []int) {
 	return file_protocol_acl_proto_rawDescGZIP(), []int{6}
 }
 
+type RepoInbox int32
+
+const (
+	RepoInbox_REPO_INBOX_NONE  RepoInbox = 0
+	RepoInbox_REPO_INBOX_GROUP RepoInbox = 1
+	RepoInbox_REPO_INBOX_ADMIN RepoInbox = 2
+)
+
+// Enum value maps for RepoInbox.
+var (
+	RepoInbox_name = map[int32]string{
+		0: "REPO_INBOX_NONE",
+		1: "REPO_INBOX_GROUP",
+		2: "REPO_INBOX_ADMIN",
+	}
+	RepoInbox_value = map[string]int32{
+		"REPO_INBOX_NONE":  0,
+		"REPO_INBOX_GROUP": 1,
+		"REPO_INBOX_ADMIN": 2,
+	}
+)
+
+func (x RepoInbox) Enum() *RepoInbox {
+	p := new(RepoInbox)
+	*p = x
+	return p
+}
+
+func (x RepoInbox) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (RepoInbox) Descriptor() protoreflect.EnumDescriptor {
+	return file_protocol_acl_proto_enumTypes[7].Descriptor()
+}
+
+func (RepoInbox) Type() protoreflect.EnumType {
+	return &file_protocol_acl_proto_enumTypes[7]
+}
+
+func (x RepoInbox) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use RepoInbox.Descriptor instead.
+func (RepoInbox) EnumDescriptor() ([]byte, []int) {
+	return file_protocol_acl_proto_rawDescGZIP(), []int{7}
+}
+
 type RepoAdminChange int32
 
 const (
@@ -500,11 +549,11 @@ func (x RepoAdminChange) String() string {
 }
 
 func (RepoAdminChange) Descriptor() protoreflect.EnumDescriptor {
-	return file_protocol_acl_proto_enumTypes[7].Descriptor()
+	return file_protocol_acl_proto_enumTypes[8].Descriptor()
 }
 
 func (RepoAdminChange) Type() protoreflect.EnumType {
-	return &file_protocol_acl_proto_enumTypes[7]
+	return &file_protocol_acl_proto_enumTypes[8]
 }
 
 func (x RepoAdminChange) Number() protoreflect.EnumNumber {
@@ -513,7 +562,7 @@ func (x RepoAdminChange) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use RepoAdminChange.Descriptor instead.
 func (RepoAdminChange) EnumDescriptor() ([]byte, []int) {
-	return file_protocol_acl_proto_rawDescGZIP(), []int{7}
+	return file_protocol_acl_proto_rawDescGZIP(), []int{8}
 }
 
 type PrefixAction int32
@@ -546,11 +595,11 @@ func (x PrefixAction) String() string {
 }
 
 func (PrefixAction) Descriptor() protoreflect.EnumDescriptor {
-	return file_protocol_acl_proto_enumTypes[8].Descriptor()
+	return file_protocol_acl_proto_enumTypes[9].Descriptor()
 }
 
 func (PrefixAction) Type() protoreflect.EnumType {
-	return &file_protocol_acl_proto_enumTypes[8]
+	return &file_protocol_acl_proto_enumTypes[9]
 }
 
 func (x PrefixAction) Number() protoreflect.EnumNumber {
@@ -559,7 +608,7 @@ func (x PrefixAction) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use PrefixAction.Descriptor instead.
 func (PrefixAction) EnumDescriptor() ([]byte, []int) {
-	return file_protocol_acl_proto_rawDescGZIP(), []int{8}
+	return file_protocol_acl_proto_rawDescGZIP(), []int{9}
 }
 
 type AclRows struct {
@@ -1109,8 +1158,12 @@ type AclRepo struct {
 	// pushes pinned in its span are judged by it (DESIGN-DETAILS
 	// 16.2.3); at most AclPrefixSettings.SetMaxCount
 	HoldersShrunkTimeMs int64 `protobuf:"varint,13,opt,name=holders_shrunk_time_ms,json=holdersShrunkTimeMs,proto3" json:"holders_shrunk_time_ms,omitempty"` // ms since the epoch: the time_ms of the entry at holders_shrunk_at, or
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// of the RepoCreate's entry while that is 0, §7.9's t_s, which the
+	// shrink row's second comparison reads at every verifier, a new device
+	// and a cold gate that start at a base among them (QD-1015)
+	Inbox         RepoInbox `protobuf:"varint,14,opt,name=inbox,proto3,enum=urnetwork.sidecar.RepoInbox" json:"inbox,omitempty"` // the original RepoCreate's immutable inbox role (§8.8, QD-102)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AclRepo) Reset() {
@@ -1232,6 +1285,13 @@ func (x *AclRepo) GetHoldersShrunkTimeMs() int64 {
 		return x.HoldersShrunkTimeMs
 	}
 	return 0
+}
+
+func (x *AclRepo) GetInbox() RepoInbox {
+	if x != nil {
+		return x.Inbox
+	}
+	return RepoInbox_REPO_INBOX_NONE
 }
 
 // A RepoAdmin{remove} stamps removed_at and keeps the row, so a reader judges the admin's right at a position before
@@ -2153,6 +2213,7 @@ type RepoCreate struct {
 	Header        *bridge.StatementHeader `protobuf:"bytes,1,opt,name=header,proto3" json:"header,omitempty"`
 	RepoId        []byte                  `protobuf:"bytes,2,opt,name=repo_id,json=repoId,proto3" json:"repo_id,omitempty"`
 	Kind          RepoKind                `protobuf:"varint,3,opt,name=kind,proto3,enum=urnetwork.sidecar.RepoKind" json:"kind,omitempty"`
+	Inbox         RepoInbox               `protobuf:"varint,4,opt,name=inbox,proto3,enum=urnetwork.sidecar.RepoInbox" json:"inbox,omitempty"` // only a general repo; admin only from a config writer, once a network
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2206,6 +2267,13 @@ func (x *RepoCreate) GetKind() RepoKind {
 		return x.Kind
 	}
 	return RepoKind_REPO_KIND_UNSPECIFIED
+}
+
+func (x *RepoCreate) GetInbox() RepoInbox {
+	if x != nil {
+		return x.Inbox
+	}
+	return RepoInbox_REPO_INBOX_NONE
 }
 
 type RepoAdmin struct {
@@ -2940,7 +3008,7 @@ const file_protocol_acl_proto_rawDesc = "" +
 	"\tapprovers\x18\x06 \x01(\rR\tapprovers\x124\n" +
 	"\x16default_expiry_seconds\x18\a \x01(\x03R\x14defaultExpirySeconds\x12,\n" +
 	"\x12max_expiry_seconds\x18\b \x01(\x03R\x10maxExpirySeconds\x12\x1a\n" +
-	"\bevidence\x18\t \x03(\rR\bevidence\"\xce\x05\n" +
+	"\bevidence\x18\t \x03(\rR\bevidence\"\x82\x06\n" +
 	"\aAclRepo\x12\x17\n" +
 	"\arepo_id\x18\x01 \x01(\fR\x06repoId\x12/\n" +
 	"\x04kind\x18\x02 \x01(\x0e2\x1b.urnetwork.sidecar.RepoKindR\x04kind\x12&\n" +
@@ -2955,7 +3023,8 @@ const file_protocol_acl_proto_rawDesc = "" +
 	" \x01(\x0e2%.urnetwork.sidecar.RepoVersioningLockR\x04lock\x12*\n" +
 	"\x11holders_shrunk_at\x18\v \x01(\x04R\x0fholdersShrunkAt\x12K\n" +
 	"\fprefix_rules\x18\f \x03(\v2(.urnetwork.sidecar.AclRepoPrefixRulesRowR\vprefixRules\x123\n" +
-	"\x16holders_shrunk_time_ms\x18\r \x01(\x03R\x13holdersShrunkTimeMs\"w\n" +
+	"\x16holders_shrunk_time_ms\x18\r \x01(\x03R\x13holdersShrunkTimeMs\x122\n" +
+	"\x05inbox\x18\x0e \x01(\x0e2\x1c.urnetwork.sidecar.RepoInboxR\x05inbox\"w\n" +
 	"\x0fAclRepoAdminRow\x12\x1d\n" +
 	"\n" +
 	"sidecar_id\x18\x01 \x01(\fR\tsidecarId\x12\x16\n" +
@@ -3035,12 +3104,13 @@ const file_protocol_acl_proto_rawDesc = "" +
 	"\fOwnerConfirm\x12:\n" +
 	"\x06header\x18\x01 \x01(\v2\".urnetwork.sidecar.StatementHeaderR\x06header\x12\x1d\n" +
 	"\n" +
-	"sidecar_id\x18\x02 \x01(\fR\tsidecarId\"\x92\x01\n" +
+	"sidecar_id\x18\x02 \x01(\fR\tsidecarId\"\xc6\x01\n" +
 	"\n" +
 	"RepoCreate\x12:\n" +
 	"\x06header\x18\x01 \x01(\v2\".urnetwork.sidecar.StatementHeaderR\x06header\x12\x17\n" +
 	"\arepo_id\x18\x02 \x01(\fR\x06repoId\x12/\n" +
-	"\x04kind\x18\x03 \x01(\x0e2\x1b.urnetwork.sidecar.RepoKindR\x04kind\"\xbb\x01\n" +
+	"\x04kind\x18\x03 \x01(\x0e2\x1b.urnetwork.sidecar.RepoKindR\x04kind\x122\n" +
+	"\x05inbox\x18\x04 \x01(\x0e2\x1c.urnetwork.sidecar.RepoInboxR\x05inbox\"\xbb\x01\n" +
 	"\tRepoAdmin\x12:\n" +
 	"\x06header\x18\x01 \x01(\v2\".urnetwork.sidecar.StatementHeaderR\x06header\x12\x17\n" +
 	"\arepo_id\x18\x02 \x01(\fR\x06repoId\x12\x1d\n" +
@@ -3151,7 +3221,11 @@ const file_protocol_acl_proto_rawDesc = "" +
 	"\x12RepoVersioningLock\x12$\n" +
 	" REPO_VERSIONING_LOCK_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bREPO_VERSIONING_LOCK_LOCKED\x10\x01\x12!\n" +
-	"\x1dREPO_VERSIONING_LOCK_UNLOCKED\x10\x02*m\n" +
+	"\x1dREPO_VERSIONING_LOCK_UNLOCKED\x10\x02*L\n" +
+	"\tRepoInbox\x12\x13\n" +
+	"\x0fREPO_INBOX_NONE\x10\x00\x12\x14\n" +
+	"\x10REPO_INBOX_GROUP\x10\x01\x12\x14\n" +
+	"\x10REPO_INBOX_ADMIN\x10\x02*m\n" +
 	"\x0fRepoAdminChange\x12!\n" +
 	"\x1dREPO_ADMIN_CHANGE_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15REPO_ADMIN_CHANGE_ADD\x10\x01\x12\x1c\n" +
@@ -3172,7 +3246,7 @@ func file_protocol_acl_proto_rawDescGZIP() []byte {
 	return file_protocol_acl_proto_rawDescData
 }
 
-var file_protocol_acl_proto_enumTypes = make([]protoimpl.EnumInfo, 9)
+var file_protocol_acl_proto_enumTypes = make([]protoimpl.EnumInfo, 10)
 var file_protocol_acl_proto_msgTypes = make([]protoimpl.MessageInfo, 31)
 var file_protocol_acl_proto_goTypes = []any{
 	(AclAutogroup)(0),              // 0: urnetwork.sidecar.AclAutogroup
@@ -3182,89 +3256,92 @@ var file_protocol_acl_proto_goTypes = []any{
 	(RepoKind)(0),                  // 4: urnetwork.sidecar.RepoKind
 	(RepoGrantRole)(0),             // 5: urnetwork.sidecar.RepoGrantRole
 	(RepoVersioningLock)(0),        // 6: urnetwork.sidecar.RepoVersioningLock
-	(RepoAdminChange)(0),           // 7: urnetwork.sidecar.RepoAdminChange
-	(PrefixAction)(0),              // 8: urnetwork.sidecar.PrefixAction
-	(*AclRows)(nil),                // 9: urnetwork.sidecar.AclRows
-	(*AclAtom)(nil),                // 10: urnetwork.sidecar.AclAtom
-	(*AclPortRange)(nil),           // 11: urnetwork.sidecar.AclPortRange
-	(*AclRule)(nil),                // 12: urnetwork.sidecar.AclRule
-	(*AclRequestRule)(nil),         // 13: urnetwork.sidecar.AclRequestRule
-	(*AclRepo)(nil),                // 14: urnetwork.sidecar.AclRepo
-	(*AclRepoAdminRow)(nil),        // 15: urnetwork.sidecar.AclRepoAdminRow
-	(*AclRepoGrantRow)(nil),        // 16: urnetwork.sidecar.AclRepoGrantRow
-	(*AclRepoShareRow)(nil),        // 17: urnetwork.sidecar.AclRepoShareRow
-	(*AclRepoRevokeRow)(nil),       // 18: urnetwork.sidecar.AclRepoRevokeRow
-	(*AclRepoDeletionRow)(nil),     // 19: urnetwork.sidecar.AclRepoDeletionRow
-	(*AclRepoPrefixRulesRow)(nil),  // 20: urnetwork.sidecar.AclRepoPrefixRulesRow
-	(*AclAudit)(nil),               // 21: urnetwork.sidecar.AclAudit
-	(*AclTarget)(nil),              // 22: urnetwork.sidecar.AclTarget
-	(*AclSuspension)(nil),          // 23: urnetwork.sidecar.AclSuspension
-	(*AclSpentGrant)(nil),          // 24: urnetwork.sidecar.AclSpentGrant
-	(*GrantActivate)(nil),          // 25: urnetwork.sidecar.GrantActivate
-	(*EvsShare)(nil),               // 26: urnetwork.sidecar.EvsShare
-	(*OwnerConfirm)(nil),           // 27: urnetwork.sidecar.OwnerConfirm
-	(*RepoCreate)(nil),             // 28: urnetwork.sidecar.RepoCreate
-	(*RepoAdmin)(nil),              // 29: urnetwork.sidecar.RepoAdmin
-	(*RepoGrant)(nil),              // 30: urnetwork.sidecar.RepoGrant
-	(*RepoRevoke)(nil),             // 31: urnetwork.sidecar.RepoRevoke
-	(*RepoDelete)(nil),             // 32: urnetwork.sidecar.RepoDelete
-	(*RepoRestore)(nil),            // 33: urnetwork.sidecar.RepoRestore
-	(*RepoVersioning)(nil),         // 34: urnetwork.sidecar.RepoVersioning
-	(*RepoPrefixRules)(nil),        // 35: urnetwork.sidecar.RepoPrefixRules
-	(*PrefixRuleSet)(nil),          // 36: urnetwork.sidecar.PrefixRuleSet
-	(*PrefixRule)(nil),             // 37: urnetwork.sidecar.PrefixRule
-	(*AuditOptIn)(nil),             // 38: urnetwork.sidecar.AuditOptIn
-	(*AuditOptOut)(nil),            // 39: urnetwork.sidecar.AuditOptOut
-	(*bridge.StatementHeader)(nil), // 40: urnetwork.sidecar.StatementHeader
-	(*bridge.Signed)(nil),          // 41: urnetwork.sidecar.Signed
+	(RepoInbox)(0),                 // 7: urnetwork.sidecar.RepoInbox
+	(RepoAdminChange)(0),           // 8: urnetwork.sidecar.RepoAdminChange
+	(PrefixAction)(0),              // 9: urnetwork.sidecar.PrefixAction
+	(*AclRows)(nil),                // 10: urnetwork.sidecar.AclRows
+	(*AclAtom)(nil),                // 11: urnetwork.sidecar.AclAtom
+	(*AclPortRange)(nil),           // 12: urnetwork.sidecar.AclPortRange
+	(*AclRule)(nil),                // 13: urnetwork.sidecar.AclRule
+	(*AclRequestRule)(nil),         // 14: urnetwork.sidecar.AclRequestRule
+	(*AclRepo)(nil),                // 15: urnetwork.sidecar.AclRepo
+	(*AclRepoAdminRow)(nil),        // 16: urnetwork.sidecar.AclRepoAdminRow
+	(*AclRepoGrantRow)(nil),        // 17: urnetwork.sidecar.AclRepoGrantRow
+	(*AclRepoShareRow)(nil),        // 18: urnetwork.sidecar.AclRepoShareRow
+	(*AclRepoRevokeRow)(nil),       // 19: urnetwork.sidecar.AclRepoRevokeRow
+	(*AclRepoDeletionRow)(nil),     // 20: urnetwork.sidecar.AclRepoDeletionRow
+	(*AclRepoPrefixRulesRow)(nil),  // 21: urnetwork.sidecar.AclRepoPrefixRulesRow
+	(*AclAudit)(nil),               // 22: urnetwork.sidecar.AclAudit
+	(*AclTarget)(nil),              // 23: urnetwork.sidecar.AclTarget
+	(*AclSuspension)(nil),          // 24: urnetwork.sidecar.AclSuspension
+	(*AclSpentGrant)(nil),          // 25: urnetwork.sidecar.AclSpentGrant
+	(*GrantActivate)(nil),          // 26: urnetwork.sidecar.GrantActivate
+	(*EvsShare)(nil),               // 27: urnetwork.sidecar.EvsShare
+	(*OwnerConfirm)(nil),           // 28: urnetwork.sidecar.OwnerConfirm
+	(*RepoCreate)(nil),             // 29: urnetwork.sidecar.RepoCreate
+	(*RepoAdmin)(nil),              // 30: urnetwork.sidecar.RepoAdmin
+	(*RepoGrant)(nil),              // 31: urnetwork.sidecar.RepoGrant
+	(*RepoRevoke)(nil),             // 32: urnetwork.sidecar.RepoRevoke
+	(*RepoDelete)(nil),             // 33: urnetwork.sidecar.RepoDelete
+	(*RepoRestore)(nil),            // 34: urnetwork.sidecar.RepoRestore
+	(*RepoVersioning)(nil),         // 35: urnetwork.sidecar.RepoVersioning
+	(*RepoPrefixRules)(nil),        // 36: urnetwork.sidecar.RepoPrefixRules
+	(*PrefixRuleSet)(nil),          // 37: urnetwork.sidecar.PrefixRuleSet
+	(*PrefixRule)(nil),             // 38: urnetwork.sidecar.PrefixRule
+	(*AuditOptIn)(nil),             // 39: urnetwork.sidecar.AuditOptIn
+	(*AuditOptOut)(nil),            // 40: urnetwork.sidecar.AuditOptOut
+	(*bridge.StatementHeader)(nil), // 41: urnetwork.sidecar.StatementHeader
+	(*bridge.Signed)(nil),          // 42: urnetwork.sidecar.Signed
 }
 var file_protocol_acl_proto_depIdxs = []int32{
-	10, // 0: urnetwork.sidecar.AclRows.atoms:type_name -> urnetwork.sidecar.AclAtom
-	12, // 1: urnetwork.sidecar.AclRows.rules:type_name -> urnetwork.sidecar.AclRule
-	13, // 2: urnetwork.sidecar.AclRows.requests:type_name -> urnetwork.sidecar.AclRequestRule
-	14, // 3: urnetwork.sidecar.AclRows.repos:type_name -> urnetwork.sidecar.AclRepo
-	21, // 4: urnetwork.sidecar.AclRows.audit:type_name -> urnetwork.sidecar.AclAudit
-	23, // 5: urnetwork.sidecar.AclRows.suspensions:type_name -> urnetwork.sidecar.AclSuspension
-	24, // 6: urnetwork.sidecar.AclRows.spent_grants:type_name -> urnetwork.sidecar.AclSpentGrant
-	22, // 7: urnetwork.sidecar.AclRule.targets:type_name -> urnetwork.sidecar.AclTarget
+	11, // 0: urnetwork.sidecar.AclRows.atoms:type_name -> urnetwork.sidecar.AclAtom
+	13, // 1: urnetwork.sidecar.AclRows.rules:type_name -> urnetwork.sidecar.AclRule
+	14, // 2: urnetwork.sidecar.AclRows.requests:type_name -> urnetwork.sidecar.AclRequestRule
+	15, // 3: urnetwork.sidecar.AclRows.repos:type_name -> urnetwork.sidecar.AclRepo
+	22, // 4: urnetwork.sidecar.AclRows.audit:type_name -> urnetwork.sidecar.AclAudit
+	24, // 5: urnetwork.sidecar.AclRows.suspensions:type_name -> urnetwork.sidecar.AclSuspension
+	25, // 6: urnetwork.sidecar.AclRows.spent_grants:type_name -> urnetwork.sidecar.AclSpentGrant
+	23, // 7: urnetwork.sidecar.AclRule.targets:type_name -> urnetwork.sidecar.AclTarget
 	2,  // 8: urnetwork.sidecar.AclRule.audience:type_name -> urnetwork.sidecar.AclAudience
 	3,  // 9: urnetwork.sidecar.AclRule.app_mode:type_name -> urnetwork.sidecar.AclAppMode
-	22, // 10: urnetwork.sidecar.AclRule.via:type_name -> urnetwork.sidecar.AclTarget
-	22, // 11: urnetwork.sidecar.AclRequestRule.targets:type_name -> urnetwork.sidecar.AclTarget
+	23, // 10: urnetwork.sidecar.AclRule.via:type_name -> urnetwork.sidecar.AclTarget
+	23, // 11: urnetwork.sidecar.AclRequestRule.targets:type_name -> urnetwork.sidecar.AclTarget
 	4,  // 12: urnetwork.sidecar.AclRepo.kind:type_name -> urnetwork.sidecar.RepoKind
-	15, // 13: urnetwork.sidecar.AclRepo.admins:type_name -> urnetwork.sidecar.AclRepoAdminRow
-	16, // 14: urnetwork.sidecar.AclRepo.grants:type_name -> urnetwork.sidecar.AclRepoGrantRow
-	17, // 15: urnetwork.sidecar.AclRepo.shares:type_name -> urnetwork.sidecar.AclRepoShareRow
-	18, // 16: urnetwork.sidecar.AclRepo.revokes:type_name -> urnetwork.sidecar.AclRepoRevokeRow
-	19, // 17: urnetwork.sidecar.AclRepo.deletion:type_name -> urnetwork.sidecar.AclRepoDeletionRow
+	16, // 13: urnetwork.sidecar.AclRepo.admins:type_name -> urnetwork.sidecar.AclRepoAdminRow
+	17, // 14: urnetwork.sidecar.AclRepo.grants:type_name -> urnetwork.sidecar.AclRepoGrantRow
+	18, // 15: urnetwork.sidecar.AclRepo.shares:type_name -> urnetwork.sidecar.AclRepoShareRow
+	19, // 16: urnetwork.sidecar.AclRepo.revokes:type_name -> urnetwork.sidecar.AclRepoRevokeRow
+	20, // 17: urnetwork.sidecar.AclRepo.deletion:type_name -> urnetwork.sidecar.AclRepoDeletionRow
 	6,  // 18: urnetwork.sidecar.AclRepo.lock:type_name -> urnetwork.sidecar.RepoVersioningLock
-	20, // 19: urnetwork.sidecar.AclRepo.prefix_rules:type_name -> urnetwork.sidecar.AclRepoPrefixRulesRow
-	5,  // 20: urnetwork.sidecar.AclRepoGrantRow.role:type_name -> urnetwork.sidecar.RepoGrantRole
-	40, // 21: urnetwork.sidecar.GrantActivate.header:type_name -> urnetwork.sidecar.StatementHeader
-	41, // 22: urnetwork.sidecar.GrantActivate.decisions:type_name -> urnetwork.sidecar.Signed
-	40, // 23: urnetwork.sidecar.EvsShare.header:type_name -> urnetwork.sidecar.StatementHeader
-	40, // 24: urnetwork.sidecar.OwnerConfirm.header:type_name -> urnetwork.sidecar.StatementHeader
-	40, // 25: urnetwork.sidecar.RepoCreate.header:type_name -> urnetwork.sidecar.StatementHeader
-	4,  // 26: urnetwork.sidecar.RepoCreate.kind:type_name -> urnetwork.sidecar.RepoKind
-	40, // 27: urnetwork.sidecar.RepoAdmin.header:type_name -> urnetwork.sidecar.StatementHeader
-	7,  // 28: urnetwork.sidecar.RepoAdmin.change:type_name -> urnetwork.sidecar.RepoAdminChange
-	40, // 29: urnetwork.sidecar.RepoGrant.header:type_name -> urnetwork.sidecar.StatementHeader
-	5,  // 30: urnetwork.sidecar.RepoGrant.role:type_name -> urnetwork.sidecar.RepoGrantRole
-	40, // 31: urnetwork.sidecar.RepoRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
-	40, // 32: urnetwork.sidecar.RepoDelete.header:type_name -> urnetwork.sidecar.StatementHeader
-	40, // 33: urnetwork.sidecar.RepoRestore.header:type_name -> urnetwork.sidecar.StatementHeader
-	40, // 34: urnetwork.sidecar.RepoVersioning.header:type_name -> urnetwork.sidecar.StatementHeader
-	6,  // 35: urnetwork.sidecar.RepoVersioning.lock:type_name -> urnetwork.sidecar.RepoVersioningLock
-	40, // 36: urnetwork.sidecar.RepoPrefixRules.header:type_name -> urnetwork.sidecar.StatementHeader
-	37, // 37: urnetwork.sidecar.PrefixRuleSet.rules:type_name -> urnetwork.sidecar.PrefixRule
-	8,  // 38: urnetwork.sidecar.PrefixRule.action:type_name -> urnetwork.sidecar.PrefixAction
-	40, // 39: urnetwork.sidecar.AuditOptIn.header:type_name -> urnetwork.sidecar.StatementHeader
-	40, // 40: urnetwork.sidecar.AuditOptOut.header:type_name -> urnetwork.sidecar.StatementHeader
-	41, // [41:41] is the sub-list for method output_type
-	41, // [41:41] is the sub-list for method input_type
-	41, // [41:41] is the sub-list for extension type_name
-	41, // [41:41] is the sub-list for extension extendee
-	0,  // [0:41] is the sub-list for field type_name
+	21, // 19: urnetwork.sidecar.AclRepo.prefix_rules:type_name -> urnetwork.sidecar.AclRepoPrefixRulesRow
+	7,  // 20: urnetwork.sidecar.AclRepo.inbox:type_name -> urnetwork.sidecar.RepoInbox
+	5,  // 21: urnetwork.sidecar.AclRepoGrantRow.role:type_name -> urnetwork.sidecar.RepoGrantRole
+	41, // 22: urnetwork.sidecar.GrantActivate.header:type_name -> urnetwork.sidecar.StatementHeader
+	42, // 23: urnetwork.sidecar.GrantActivate.decisions:type_name -> urnetwork.sidecar.Signed
+	41, // 24: urnetwork.sidecar.EvsShare.header:type_name -> urnetwork.sidecar.StatementHeader
+	41, // 25: urnetwork.sidecar.OwnerConfirm.header:type_name -> urnetwork.sidecar.StatementHeader
+	41, // 26: urnetwork.sidecar.RepoCreate.header:type_name -> urnetwork.sidecar.StatementHeader
+	4,  // 27: urnetwork.sidecar.RepoCreate.kind:type_name -> urnetwork.sidecar.RepoKind
+	7,  // 28: urnetwork.sidecar.RepoCreate.inbox:type_name -> urnetwork.sidecar.RepoInbox
+	41, // 29: urnetwork.sidecar.RepoAdmin.header:type_name -> urnetwork.sidecar.StatementHeader
+	8,  // 30: urnetwork.sidecar.RepoAdmin.change:type_name -> urnetwork.sidecar.RepoAdminChange
+	41, // 31: urnetwork.sidecar.RepoGrant.header:type_name -> urnetwork.sidecar.StatementHeader
+	5,  // 32: urnetwork.sidecar.RepoGrant.role:type_name -> urnetwork.sidecar.RepoGrantRole
+	41, // 33: urnetwork.sidecar.RepoRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
+	41, // 34: urnetwork.sidecar.RepoDelete.header:type_name -> urnetwork.sidecar.StatementHeader
+	41, // 35: urnetwork.sidecar.RepoRestore.header:type_name -> urnetwork.sidecar.StatementHeader
+	41, // 36: urnetwork.sidecar.RepoVersioning.header:type_name -> urnetwork.sidecar.StatementHeader
+	6,  // 37: urnetwork.sidecar.RepoVersioning.lock:type_name -> urnetwork.sidecar.RepoVersioningLock
+	41, // 38: urnetwork.sidecar.RepoPrefixRules.header:type_name -> urnetwork.sidecar.StatementHeader
+	38, // 39: urnetwork.sidecar.PrefixRuleSet.rules:type_name -> urnetwork.sidecar.PrefixRule
+	9,  // 40: urnetwork.sidecar.PrefixRule.action:type_name -> urnetwork.sidecar.PrefixAction
+	41, // 41: urnetwork.sidecar.AuditOptIn.header:type_name -> urnetwork.sidecar.StatementHeader
+	41, // 42: urnetwork.sidecar.AuditOptOut.header:type_name -> urnetwork.sidecar.StatementHeader
+	43, // [43:43] is the sub-list for method output_type
+	43, // [43:43] is the sub-list for method input_type
+	43, // [43:43] is the sub-list for extension type_name
+	43, // [43:43] is the sub-list for extension extendee
+	0,  // [0:43] is the sub-list for field type_name
 }
 
 func init() { file_protocol_acl_proto_init() }
@@ -3277,7 +3354,7 @@ func file_protocol_acl_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_protocol_acl_proto_rawDesc), len(file_protocol_acl_proto_rawDesc)),
-			NumEnums:      9,
+			NumEnums:      10,
 			NumMessages:   31,
 			NumExtensions: 0,
 			NumServices:   0,
