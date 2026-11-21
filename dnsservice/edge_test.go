@@ -474,6 +474,61 @@ func TestEdgeAnswersUdpFromItsView(t *testing.T) {
 	}
 }
 
+// Two generations share the snapshot and ZSK. Only the one that served each
+// unpredictable question can confirm the signature actually seen on the wire.
+func TestEdgeRolloutDenialIdentifiesTheServingProcess(t *testing.T) {
+	settings := edgeTestSettings(t)
+	settings.Rrl.ResponsesPerSecond = 100
+	old := newTestEdge(t, settings)
+	current := newTestEdge(t, settings)
+	current.keys = old.keys
+	canary := dnsservice.DnsCanaryOwner(edgeTestRoot)
+	rows := append(edgeTestRows(), dnsservice.DnsRecordSet{Owner: canary, Type: dns.TypeTXT, Ttl: 60, Kind: dnsservice.DnsRecordKindCanary, Rdata: []string{`"1000 synthetic"`}})
+	view := edgeTestView(t, settings, 7, rows)
+	old.publish(t, view)
+	current.publish(t, view)
+	for i, pair := range [][2]*testEdge{{old, current}, {current, old}} {
+		nonce := dnsservice.DnsRolloutNonce{byte(i + 1)}
+		conn := pair[0].serveUdp(t)
+		conn.send(t, edgeTestQuery(nonce.Owner(edgeTestRoot), dns.TypeA, true), "192.0.2.1")
+		reply, _ := conn.receive(t)
+		pair[0].wantSigned(t, reply)
+		var denial *dns.NSEC
+		var signature *dns.RRSIG
+		for _, record := range reply.Ns {
+			if rr, ok := record.(*dns.NSEC); ok {
+				denial = rr
+			}
+			if rrsig, ok := record.(*dns.RRSIG); ok && rrsig.TypeCovered == dns.TypeNSEC && rrsig.Hdr.Name == nonce.Owner(edgeTestRoot) {
+				signature = rrsig
+			}
+		}
+		if denial == nil || signature == nil {
+			t.Fatal("missing denial")
+		}
+		received := dnsservice.DnsRolloutRecordProof(denial, signature)
+		if proof, serial := pair[0].edge.CachedRolloutProof(edgeTestRoot, &nonce); received == "" || proof != received || serial != 7 {
+			t.Fatalf("serving process returned serial %d and proof %q for signed denial %q", serial, proof, received)
+		}
+		if proof, _ := pair[1].edge.CachedRolloutProof(edgeTestRoot, &nonce); proof != "" {
+			t.Fatal("another process confirmed a question it never served")
+		}
+		conn.send(t, edgeTestQuery(canary, dns.TypeTXT, true), "192.0.2.1")
+		reply, _ = conn.receive(t)
+		pair[0].wantSigned(t, reply)
+		if len(reply.Answer) != 2 {
+			t.Fatalf("missing signed canary: %v", reply)
+		}
+		received = dnsservice.DnsRolloutRecordProof(reply.Answer[0], reply.Answer[1].(*dns.RRSIG))
+		if proof, _ := pair[0].edge.CachedRolloutProof(edgeTestRoot, nil); proof == "" || proof != received {
+			t.Fatal("serving process did not confirm the actual signed canary")
+		}
+		if proof, _ := pair[1].edge.CachedRolloutProof(edgeTestRoot, nil); proof == received {
+			t.Fatal("another process confirmed this canary with the shared ZSK")
+		}
+	}
+}
+
 // RRL over UDP: a flood from one /24 is dropped, every second drop slipping out empty with TC, while
 // another /24 and the flooding /24's other classes are answered.
 func TestEdgeRrlLimitsAFloodAndNoOneElse(t *testing.T) {
