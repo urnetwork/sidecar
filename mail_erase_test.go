@@ -842,30 +842,136 @@ func TestMailEraseFinishIsTheFloorsBound(t *testing.T) {
 
 // QD-1132's mail case in a format-1 mailbox: an erasure whose i/ row another step took before its part ran has no
 // part's ERASE left to say complete, and format 1 has no completion ERASE (COMPLETION is format 2's flag, QD-1137). Its
-// resume once read it done on this device alone; now it reads evs's state and leaves it rewriting, sending nothing,
-// and so does every resume after, until an ERASE of it says complete.
-func TestMailEraseFormat1WithNoSegmentLeftStaysRewriting(t *testing.T) {
+// resume finds nothing left, sends nothing and reads it done on this device, though evs's state still shows it
+// incomplete, and so does every resume after (settleFormat1).
+func TestMailEraseFormat1WithNoSegmentLeftReadsDoneOnThisDevice(t *testing.T) {
 	world := newMailEraseTestWorld(t)
 	ctx := context.Background()
 	ids := world.ingestMessages("One")
-	stopped := errors.New("stopped before its part")
-	world.eraseStore.failClosure = stopped
-	eraser := world.eraser()
-	erasure, err := eraser.Erase(ctx, world.month, ids)
-	if !errors.Is(err, stopped) || erasure == nil || erasure.State != MailErasureRewriting {
-		t.Fatalf("the stopped erasure: %+v, %v", erasure, err)
-	}
-	testMailEraseTakeRow(t, world, eraser, erasure.ErasureId, ids[0], erasure.ErasureId)
+	erasure := testMailEraseFormat1RowTaken(t, world, ids[:1])
 	before := len(world.eraseStore.committedErasures())
 	for range 2 {
 		resumed, err := world.eraser().Resume(ctx)
-		if err != nil || len(resumed) != 1 || resumed[0].State != MailErasureRewriting || resumed[0].ErasureId != erasure.ErasureId {
-			t.Fatalf("the resume: %+v, %v", resumed, err)
+		if err != nil || len(resumed) != 1 || resumed[0].State != MailErasureDone || resumed[0].ErasureId != erasure.ErasureId {
+			t.Fatalf("the resume: %v, %v", testMailErasureStates(resumed), err)
 		}
 	}
-	if committed := len(world.eraseStore.committedErasures()); committed != before || world.eraseStore.refusedCompletions != 0 {
-		t.Fatalf("%d ERASEs committed after the row was taken, %d completions tried", committed-before, world.eraseStore.refusedCompletions)
+	committed := world.eraseStore.committedErasures()
+	if len(committed) != before || world.eraseStore.refusedCompletions != 0 {
+		t.Fatalf("%d ERASEs committed after the row was taken, %d completions tried", len(committed)-before, world.eraseStore.refusedCompletions)
 	}
+	if mailErasureComplete(committed, erasure.ErasureId) {
+		t.Fatal("evs's state shows complete an erasure no ERASE of it completed")
+	}
+}
+
+// A format-1 erasure with nothing left no longer ends a resume at itself (QD-1137): read rewriting, it held back every
+// erasure after it, so a later erasure killed between its part's CLOSURE and that CLOSURE's ERASE kept its replaced
+// segment's keys. The resume reads the first done on this device and goes on to the second, whose orphaned CLOSURE's
+// keys go by an ERASE that completes it at evs.
+func TestMailEraseFormat1ResumeGoesPastAnErasureWithNothingLeft(t *testing.T) {
+	world := newMailEraseTestWorld(t)
+	ctx := context.Background()
+	ids := world.ingestMessages("One", "Two")
+	first := testMailEraseFormat1RowTaken(t, world, ids[:1])
+	crash := errors.New("killed between the CLOSURE and its ERASE")
+	world.eraseStore.eraseCount, world.eraseStore.failErase = 0, crash
+	second, err := world.eraser().Erase(ctx, world.month, ids[1:])
+	if !errors.Is(err, crash) || second == nil || second.State != MailErasureRewriting {
+		t.Fatalf("the killed erasure: %+v, %v", second, err)
+	}
+	segmentPath := MailIndexPath(world.month, 0)
+	if open := world.eraseStore.openableVersions(segmentPath); len(open) != 2 {
+		t.Fatalf("the segment's versions a key opens before the resume: %v", open)
+	}
+	resumed, err := world.eraser().Resume(ctx)
+	if err != nil || len(resumed) != 2 || resumed[0].ErasureId != first.ErasureId || resumed[0].State != MailErasureDone ||
+		resumed[1].ErasureId != second.ErasureId || resumed[1].State != MailErasureDone {
+		t.Fatalf("the resume: %v, %v", testMailErasureStates(resumed), err)
+	}
+	if open := world.eraseStore.openableVersions(segmentPath); len(open) != 1 {
+		t.Fatalf("the segment's versions a key opens after the resume: %v", open)
+	}
+	committed := world.eraseStore.committedErasures()
+	if mailErasureComplete(committed, first.ErasureId) || !mailErasureComplete(committed, second.ErasureId) {
+		t.Fatal("the first erasure should stand incomplete at evs and the second complete by its orphan's ERASE")
+	}
+}
+
+// Before a format-1 erasure reads done on this device its deposits' inventory is taken again (§15.14, FS-13): a deposit
+// of its message standing since its first ERASE, as a receiver's retried deposit, has its slot taken by an ERASE that
+// says complete, which evs then shows. An inventory a deposit ref does not answer reads nothing done and takes
+// nothing.
+func TestMailEraseFormat1TakesTheDepositsInventoryAgainBeforeDone(t *testing.T) {
+	world := newMailEraseTestWorld(t)
+	ctx := context.Background()
+	ids := world.ingestMessages("One")
+	erasure := testMailEraseFormat1RowTaken(t, world, ids[:1])
+	retried := world.depositMessage(testMailIngestMessage("One", "body"))
+	func() {
+		world.repo.stateLock.Lock()
+		defer world.repo.stateLock.Unlock()
+		retried.id = ids[0]
+	}()
+	before := len(world.eraseStore.committedErasures())
+	unanswered := errors.New("a deposit ref did not answer")
+	resumer := world.eraser()
+	resumer.deposits = &mailEraseUnansweredDeposits{mailEraseDeposits: resumer.deposits, err: unanswered}
+	resumed, err := resumer.Resume(ctx)
+	if !errors.Is(err, unanswered) || len(resumed) != 1 || resumed[0].State != MailErasureRewriting {
+		t.Fatalf("the resume whose inventory a ref did not answer: %v, %v", testMailErasureStates(resumed), err)
+	}
+	if len(world.eraseStore.committedErasures()) != before || !world.eraseStore.slotHeld(retried.slotId) {
+		t.Fatal("an inventory a ref did not answer took something")
+	}
+	resumed, err = world.eraser().Resume(ctx)
+	if err != nil || len(resumed) != 1 || resumed[0].State != MailErasureDone {
+		t.Fatalf("the resume: %v, %v", testMailErasureStates(resumed), err)
+	}
+	committed := world.eraseStore.committedErasures()
+	if world.eraseStore.slotHeld(retried.slotId) || len(committed) != before+1 || !mailErasureComplete(committed, erasure.ErasureId) {
+		t.Fatalf("the retried deposit's slot held %v, %d ERASEs committed", world.eraseStore.slotHeld(retried.slotId), len(committed)-before)
+	}
+	if erased := committed[len(committed)-1]; len(erased.Keys) != 1 || erased.Keys[0].SlotId != retried.slotId || !erased.Complete {
+		t.Fatalf("the ERASE of the retried deposit: %+v", erased)
+	}
+}
+
+// The states of erasures, in order, for a failure's message.
+func testMailErasureStates(erasures []*MailErasure) []string {
+	states := []string{}
+	for _, erasure := range erasures {
+		states = append(states, erasure.State)
+	}
+	return states
+}
+
+// The repo's deposit refs, every one of which fails to answer.
+type mailEraseUnansweredDeposits struct {
+	mailEraseDeposits
+	err error
+}
+
+func (self *mailEraseUnansweredDeposits) depositSlots(ctx context.Context, depositorId Id, messageIds []Id) ([]mailDepositSlot, error) {
+	return nil, self.err
+}
+
+// A format-1 erasure of messages stopped before its part's CLOSURE, whose rows another step of it then took, so no
+// part's ERASE is left to say complete: it reads rewriting.
+func testMailEraseFormat1RowTaken(t *testing.T, world *mailEraseTestWorld, messageIds []Id) *MailErasure {
+	t.Helper()
+	ctx := context.Background()
+	stopped := errors.New("stopped before its part")
+	world.eraseStore.failClosure = stopped
+	eraser := world.eraser()
+	erasure, err := eraser.Erase(ctx, world.month, messageIds)
+	if !errors.Is(err, stopped) || erasure == nil || erasure.State != MailErasureRewriting {
+		t.Fatalf("the stopped erasure: %+v, %v", erasure, err)
+	}
+	for _, messageId := range messageIds {
+		testMailEraseTakeRow(t, world, eraser, erasure.ErasureId, messageId, erasure.ErasureId)
+	}
+	return erasure
 }
 
 // Takes messageId's row out of the month's first i/ segment by a CLOSURE under closureErasureId and an ERASE of the
