@@ -403,6 +403,46 @@ func TestMailEraseRequiresWholeBodyHistoryAcrossLives(t *testing.T) {
 	}
 }
 
+// A malformed suffix can follow a readable target row. Its index segment must be repaired before a complete
+// slot inventory can be committed, and its old versions must then lose their keys.
+func TestMailEraseRefusesAPartiallyReadableSegment(t *testing.T) {
+	ctx := t.Context()
+	world := newMailEraseTestWorld(t)
+	ids := world.ingestMessages("Erase", "Keep")
+	path := MailIndexPath(world.month, 0)
+	content, version, err := world.eraseStore.Read(ctx, path, mailIndexSegmentReadMaxByteCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	broken := append(slices.Clone(content), 0x80)
+	versions, err := world.eraseStore.Write(ctx, []*mailStoreWrite{{Path: path, Content: broken, IfVersion: version}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := false
+	err = mailSegmentRecords(broken, func(index int, record []byte) error {
+		id, _, ok := mailIndexRecordKey(record)
+		seen = seen || (ok && id == ids[0])
+		return nil
+	})
+	if !seen || !errors.Is(err, ErrMailSegmentInvalid) {
+		t.Fatalf("readable row before the damaged suffix %t: %v", seen, err)
+	}
+	if erased, err := world.eraser().Erase(ctx, world.month, ids[:1]); erased != nil || !errors.Is(err, ErrMailSegmentInvalid) {
+		t.Fatalf("partially readable segment returned %+v: %v", erased, err)
+	}
+	if len(world.eraseStore.committedErasures()) != 0 || len(world.eraseStore.openableVersions(MailMessagePath(world.month, ids[0]))) == 0 {
+		t.Fatal("incomplete inventory changed the durable erasure state")
+	}
+	if _, err := world.eraseStore.Write(ctx, []*mailStoreWrite{{Path: path, Content: content, IfVersion: versions[0]}}); err != nil {
+		t.Fatal(err)
+	}
+	erased, err := world.eraser().Erase(ctx, world.month, ids[:1])
+	if err != nil || erased == nil || erased.State != MailErasureDone || !slices.Equal(world.rowIds(), ids[1:]) || len(world.eraseStore.openableVersions(path)) != 1 {
+		t.Fatalf("restarted erasure after segment repair %+v: %v", erased, err)
+	}
+}
+
 // A second runner wins the conditional CLOSURE and stops before its ERASE.
 type mailRacingClosureTestStore struct{ mailEraseStore }
 
@@ -835,7 +875,10 @@ func testMailEraseTakeRow(t *testing.T, world *mailEraseTestWorld, eraser *MailE
 	if err != nil {
 		t.Fatal(err)
 	}
-	without, removedCount := mailSegmentWithout(content, world.month, []mailErasedMessage{{Month: world.month, MessageId: messageId}})
+	without, removedCount, err := mailSegmentWithout(content, world.month, []mailErasedMessage{{Month: world.month, MessageId: messageId}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	keys, err := eraser.pathKeys(ctx, segmentPath)
 	if err != nil || removedCount != 1 {
 		t.Fatalf("the segment's keys: %d rows, %v", removedCount, err)
