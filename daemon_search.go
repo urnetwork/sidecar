@@ -868,6 +868,7 @@ func (self *SearchTools) Search(ctx context.Context, env *SearchToolEnv, args *S
 	return result, nil
 }
 
+// Formats ref coverage and exclusion reasons together for the tool response.
 func searchToolCoverageOf(progress *SearchProgress) []*SearchToolCoverage {
 	rows := make([]*SearchToolCoverage, 0, len(progress.Coverage)+len(progress.Excluded))
 	for _, coverage := range progress.Coverage {

@@ -1,5 +1,6 @@
 //go:build !js && !ios && !android && !sdk_mobile_bind && !ios_extension
 
+// Host-wide searches use each network's own engine and share a single continuation cursor.
 package sidecar
 
 import (
@@ -13,11 +14,13 @@ import (
 
 const daemonSearchAllPrefix = "all."
 
+// Recognizes both a new host-wide query and a continuation carrying its cursor.
 func daemonSearchAllScope(raw json.RawMessage) bool {
 	var selector struct{ Scope, Cursor string }
 	return json.Unmarshal(raw, &selector) == nil && (selector.Scope == "all" || strings.HasPrefix(selector.Cursor, daemonSearchAllPrefix))
 }
 
+// One network's search session and its progress through the combined result.
 type daemonSearchLeg struct {
 	tools  *SearchTools
 	env    *SearchToolEnv
@@ -25,6 +28,7 @@ type daemonSearchLeg struct {
 	done   bool
 }
 
+// Searches every network in the call under a shared page limit and deadline.
 func daemonSearchAll(ctx context.Context, call *DaemonCall, params *daemonSearchParams,
 	envOf func(*DaemonCall) (*SearchTools, *SearchToolEnv, error), matcherOf func(*DaemonCall, *SearchToolEnv) error) (*SearchToolResult, error) {
 	if params.Network != "" || len(params.Repos) != 0 || params.Ref != "" || !slices.Contains([]string{"", "network", "all"}, params.Scope) {
@@ -101,6 +105,7 @@ func daemonSearchLegs(ctx context.Context, call *DaemonCall,
 	return networkIds, legs, nil
 }
 
+// Anchors the network cursors in the first session. A continuation must still name the same networks in order.
 func daemonHostedCursor(ctx context.Context, networkIds []Id, legs []daemonSearchLeg, args *SearchToolArgs, limit int) (*daemonHostedSearch, error) {
 	var err error
 	first := legs[0]
@@ -139,6 +144,7 @@ func daemonHostedCursor(ctx context.Context, networkIds []Id, legs []daemonSearc
 	return hosted, nil
 }
 
+// Resumes unfinished networks in rotation and reports coverage from every network, including those skipped this page.
 func (hosted *daemonHostedSearch) page(ctx context.Context, call *DaemonCall, report bool, args *SearchToolArgs, legs []daemonSearchLeg, limit int, deadline time.Time) (*SearchToolResult, error) {
 	hosted.pageLock.Lock()
 	defer hosted.pageLock.Unlock()
@@ -257,6 +263,7 @@ func (hosted *daemonHostedSearch) page(ctx context.Context, call *DaemonCall, re
 	return result, nil
 }
 
+// Sums engine progress across networks. Each returned page accounts for its withheld hits separately.
 func (self *SearchToolCounts) add(counts SearchToolCounts) {
 	self.Confirmed += counts.Confirmed
 	self.Possible += counts.Possible

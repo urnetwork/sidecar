@@ -21,11 +21,13 @@ func (self *Daemon) HostRemoteSearch(networkId Id, budget *SidecarRemoteBudget) 
 	return self.ServeRemoteSearch(networkId, &DaemonSearchServe{open: host.open, Services: host.services, Designated: host.designated})
 }
 
+// The verified config and serving budget for remote search on one daemon network.
 type daemonSearchRemoteHost struct {
 	*searchRemoteHostAuthority
 	budget *SidecarRemoteBudget
 }
 
+// Checks that this sidecar still stands at the current time and has a signed search designation.
 func (self *daemonSearchRemoteHost) designated() bool {
 	state, err := self.config()
 	selfId, ok := self.selfId()

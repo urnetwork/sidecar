@@ -67,6 +67,7 @@ type SearchScanView struct {
 	RefKey *EvsRefKey
 }
 
+// The local view, retention cutoff and resume position for one ref searched without an index.
 type searchEngineScan struct {
 	view     *SearchScanView
 	scope    *searchScopedRef
@@ -75,6 +76,7 @@ type searchEngineScan struct {
 	position uint64
 }
 
+// Matches the next local documents within the ref's retention window and checks each hit against cached erasures.
 func (self *searchEngineScan) page(ctx context.Context, stream *searchEngineStream, limit int) (*searchScanResult, error) {
 	repo, ref := self.scope.repo, self.scope.ref
 	return searchNoIndexScan(ctx, &searchScanArgs{

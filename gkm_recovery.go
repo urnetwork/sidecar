@@ -849,6 +849,7 @@ func (self *GkmGroupClient) RebindRecovery(ctx context.Context, args *GkmRecover
 	return self.rebindRecoveryWithLock(ctx, args)
 }
 
+// With rebindLock held, records a new rebind before wrapping or resumes the matching rebind's saved phase.
 func (self *GkmGroupClient) rebindRecoveryWithLock(ctx context.Context, args *GkmRecoveryRebindArgs) error {
 	if err := checkGkmRecoveryRebind(args); err != nil {
 		return err
@@ -893,7 +894,7 @@ func (self *GkmGroupClient) storedRecoveryRebind() (*GkmRecoveryRebindArgs, int,
 	return decodeGkmRecoveryRebind(encoded)
 }
 
-// CompleteRecoveryBinding verifies that the named binding took effect, then resumes its wrap and rotation work.
+// Checks any expected digest against the member's current recovery binding, then completes its wraps and rotations.
 // Every admitted writable device of the member can contribute the groups it reads after restart.
 func (self *GkmGroupClient) CompleteRecoveryBinding(ctx context.Context, expected []byte) error {
 	self.rebindLock.Lock()
@@ -968,6 +969,7 @@ func (self *GkmGroupClient) CompleteRecoveryBinding(ctx context.Context, expecte
 	return self.rebindRecoveryWithLock(ctx, work)
 }
 
+// Rechecks the member's effective binding and its wrap coverage on each recovery wake.
 func (self *GkmGroupClient) followRecoveryBinding(ctx context.Context) {
 	for {
 		select {

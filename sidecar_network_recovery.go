@@ -21,6 +21,7 @@ func (self *Sidecar) InstallNetworkRecovery(group *GkmGroupClient) func() {
 	}
 }
 
+// Connects the network's group keys and config follower to recovery from a code.
 type networkRecovery struct {
 	running *Sidecar
 	*GkmGroupClient
@@ -47,6 +48,7 @@ func (self *networkRecovery) RunRecovery(ctx context.Context, args *GkmRecoverAr
 	return self.GkmGroupClient.RunRecovery(ctx, args)
 }
 
+// Reads the config repo id from the genesis of the group's verified state.
 func (self *networkRecovery) configRepoId() (Id, error) {
 	state, err := self.GkmGroupClient.currentState()
 	if err != nil {
@@ -59,6 +61,7 @@ func (self *networkRecovery) configRepoId() (Id, error) {
 	return IdFromBytes(config.Genesis().GetConfigRepoId())
 }
 
+// Asks the group client for the newest config repo key available to this sidecar.
 func (self *networkRecovery) CurrentConfigKey(ctx context.Context) (*EvsRepoKey, error) {
 	repoId, err := self.configRepoId()
 	if err != nil {
@@ -67,6 +70,7 @@ func (self *networkRecovery) CurrentConfigKey(ctx context.Context) (*EvsRepoKey,
 	return self.GkmGroupClient.CurrentRepoKey(ctx, repoId)
 }
 
+// Reads the requested config key generation from the sidecar's keychain.
 func (self *networkRecovery) ConfigKeyAt(generation uint64) *EvsRepoKey {
 	repoId, err := self.configRepoId()
 	if err != nil {
@@ -81,10 +85,12 @@ type recoveryHeadKeys struct {
 	keys []*EvsRepoKey
 }
 
+// Returns the top key of the recovered ladder when it belongs to the requested repo.
 func (self *recoveryHeadKeys) CurrentRepoKey(ctx context.Context, repoId Id) (*EvsRepoKey, error) {
 	return self.RepoKey(ctx, repoId, uint64(len(self.keys)))
 }
 
+// Finds the key by its one-based generation and checks that it belongs to the requested repo.
 func (self *recoveryHeadKeys) RepoKey(ctx context.Context, repoId Id, generation uint64) (*EvsRepoKey, error) {
 	if generation == 0 || uint64(len(self.keys)) < generation || self.keys[generation-1].RepoId() != repoId {
 		return nil, ErrGkmKeyMissing
@@ -92,6 +98,7 @@ func (self *recoveryHeadKeys) RepoKey(ctx context.Context, repoId Id, generation
 	return self.keys[generation-1], nil
 }
 
+// Opens the config key ladder and reads the named head with private pins. The returned lookup uses the same ladder.
 func (self *networkRecovery) ReadRecoveryHead(ctx context.Context, top *EvsRepoKey, version uint64, digest []byte) (*ConfigHead, func(uint64) *EvsRepoKey, error) {
 	view, configRepoId, confirmed, err := self.GkmGroupClient.joiningState()
 	if err != nil {
@@ -165,10 +172,12 @@ func (self *Sidecar) recoveryJoiningAuthority() SidecarAuthority {
 	return &codeRecoveryAuthority{ConfigAuthority: client.Authority()}
 }
 
+// Reads the joining follower's log to evaluate the admission requested by a recovery code.
 type codeRecoveryAuthority struct {
 	*ConfigAuthority
 }
 
+// Prefers the follower's unconfirmed log and falls back to its published log.
 func (self *codeRecoveryAuthority) log() *ConfigLog {
 	if log := self.client.unconfirmed.Load(); log != nil {
 		return log
@@ -176,24 +185,31 @@ func (self *codeRecoveryAuthority) log() *ConfigLog {
 	return self.client.Log()
 }
 
+// Returns the version and chain hash at the recovery log's tip.
 func (self *codeRecoveryAuthority) Pin() *bridge.AuthPin {
 	if log := self.log(); log != nil {
 		return log.Pin()
 	}
 	return nil
 }
+
+// Copies the sidecar's admission row from the recovery log, including any revocation.
 func (self *codeRecoveryAuthority) Admission(sidecarId Id) *AclSidecar {
 	if log := self.log(); log != nil {
 		return configCloneAclSidecar(log.State().Sidecar(sidecarId))
 	}
 	return nil
 }
+
+// Looks up the member's active recovery binding in the selected log.
 func (self *codeRecoveryAuthority) CurrentBinding(memberId Id) *bridge.RecoveryBindingRow {
 	if log := self.log(); log != nil {
 		return log.State().CurrentBinding(memberId)
 	}
 	return nil
 }
+
+// Looks up a proposal that is still open at the recovery log's time.
 func (self *codeRecoveryAuthority) PendingProposal(proposalId []byte) *bridge.ProposalRow {
 	log := self.log()
 	if log == nil || len(proposalId) != 32 {
@@ -205,6 +221,8 @@ func (self *codeRecoveryAuthority) PendingProposal(proposalId []byte) *bridge.Pr
 	}
 	return proposal.row
 }
+
+// Checks a signed statement at the current recovery log tip without appending it.
 func (self *codeRecoveryAuthority) JudgeStatement(signedBytes []byte) error {
 	self.client.followLock.Lock()
 	defer self.client.followLock.Unlock()
@@ -214,6 +232,8 @@ func (self *codeRecoveryAuthority) JudgeStatement(signedBytes []byte) error {
 	}
 	return configJudgeStatement(log, signedBytes, self.statementTime())
 }
+
+// Snapshots genesis, the newest base and retained entries for the recovery anchor.
 func (self *codeRecoveryAuthority) RecoveryLog() (*SidecarRecoveryLog, error) {
 	self.client.followLock.Lock()
 	defer self.client.followLock.Unlock()

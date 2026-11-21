@@ -131,6 +131,7 @@ func (self *Sidecar) resumeBinding(ctx context.Context, networkId *Id, replace b
 	return VerifySidecarIdentityBinding(pending.Signed)
 }
 
+// Checks whether this caller can resume the journaled operation, using the client id to distinguish legacy pairs.
 func (self *sidecarPendingBinding) matches(operation sidecarBindingOperation, expected *Id) bool {
 	if self.Operation == bindingRecovery {
 		// Earlier journals were either an auth-key top-level mint or a child mint/pair.

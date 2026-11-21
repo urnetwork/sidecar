@@ -86,12 +86,12 @@ func (self *socketEnginePolicy) AllowInbound(inbound *AclInbound, now time.Time)
 
 // See SocketPolicy.
 func (self *socketEnginePolicy) MayListen(subject AclSubject, socket AclSocketName, now time.Time) AclDecision {
-	return socketInstalledGrants{self.engine.State()}.MayListen(subject, socket, now)
+	return socketInstalledGrants{state: self.engine.State()}.MayListen(subject, socket, now)
 }
 
 // See SocketPolicy.
 func (self *socketEnginePolicy) MayPublish(subject AclSubject, host string, now time.Time) AclDecision {
-	return socketInstalledGrants{self.engine.State()}.MayPublish(subject, host, now)
+	return socketInstalledGrants{state: self.engine.State()}.MayPublish(subject, host, now)
 }
 
 // A TLS admission checks both grants on the same installed state, including its signed scope bindings.
@@ -100,13 +100,15 @@ type socketPublicGrants interface {
 	MayPublish(AclSubject, string, time.Time) AclDecision
 }
 
+// Captures the device's installed state once for the listen and publish checks of a single admission.
 func socketGrantsAt(policy SocketPolicy) socketPublicGrants {
 	if device, ok := policy.(*socketEnginePolicy); ok {
-		return socketInstalledGrants{device.engine.State()}
+		return socketInstalledGrants{state: device.engine.State()}
 	}
 	return policy
 }
 
+// A snapshot of the grants and team scope bindings installed together on this device.
 type socketInstalledGrants struct {
 	state *AclState
 }
@@ -125,6 +127,7 @@ func (self socketInstalledGrants) scope(host string) (AclScope, bool) {
 	return config.TeamScope(label)
 }
 
+// Checks the listen grant in the scope bound to the socket's public host.
 func (self socketInstalledGrants) MayListen(subject AclSubject, socket AclSocketName, now time.Time) AclDecision {
 	host, _ := aclSocketHost(socket.PublicName)
 	scope, ok := self.scope(host)
@@ -134,6 +137,7 @@ func (self socketInstalledGrants) MayListen(subject AclSubject, socket AclSocket
 	return self.state.MayListenInScope(subject, socket, scope, now)
 }
 
+// Checks the publish grant in the scope bound to the requested host.
 func (self socketInstalledGrants) MayPublish(subject AclSubject, host string, now time.Time) AclDecision {
 	scope, ok := self.scope(host)
 	if !ok {

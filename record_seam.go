@@ -210,6 +210,7 @@ type RecordStreamErasure struct {
 	SealedNote []byte
 }
 
+// Returns the keys this erasure destroyed. A completion only records evidence of an earlier destruction.
 func (self *RecordStreamErasure) destroyedKeys() []*RecordSlotKey {
 	if self.Completion {
 		return nil

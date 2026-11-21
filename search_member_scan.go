@@ -100,6 +100,7 @@ func (self *memberSearchSource) scan(ctx context.Context, repo, ref Id) (*Search
 // A bounded snapshot of names; pin changes invalidate every page that retained it.
 type memberFileSearchScan []*SearchScanDocument
 
+// Visits verified file names in path order, starting after the last position visited.
 func (self memberFileSearchScan) SearchScan(ctx context.Context, after uint64, visit func(uint64, *SearchScanDocument) (bool, error)) error {
 	for i := after; i < uint64(len(self)); i++ {
 		if err := ctx.Err(); err != nil {
@@ -126,6 +127,7 @@ type memberRecordSearchScan struct {
 	day         time.Duration
 }
 
+// Binds the scan to a verified writer ref in a complete local log and captures its revision and retention policy.
 func (self *memberSearchSource) recordScan(repo, ref Id, kind protocol.RepoKind, key *EvsRefKey) *SearchScanView {
 	record := self.record
 	reader := record.Reader()
@@ -152,6 +154,7 @@ func (self *memberSearchSource) recordScan(repo, ref Id, kind protocol.RepoKind,
 	return &SearchScanView{Source: scan, RefKey: key, valid: scan.valid}
 }
 
+// Reports whether the local log is still complete at the revision captured for this scan.
 func (self *memberRecordSearchScan) valid() bool {
 	reader := self.record.Reader()
 	reader.stateLock.Lock()
@@ -159,6 +162,7 @@ func (self *memberRecordSearchScan) valid() bool {
 	return self.log.complete && self.log.searchRevision == self.revision
 }
 
+// Visits each remaining position in the captured log. Ineligible entries yield a nil document so the cursor can advance.
 func (self *memberRecordSearchScan) SearchScan(ctx context.Context, after uint64, visit func(uint64, *SearchScanDocument) (bool, error)) error {
 	reader := self.record.Reader()
 	for i := after; i < uint64(self.length); i++ {

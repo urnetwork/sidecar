@@ -1317,6 +1317,7 @@ func (self *SearchSyncSnapshot) holdLanded(key SearchCacheKey) error {
 	return nil
 }
 
+// Releases the page's hold on a downloaded shard so the cache can retire it after ranking.
 func (self *SearchSyncSnapshot) releaseLanded(key SearchCacheKey) {
 	self.sync.stateLock.Lock()
 	delete(self.landed, key)
@@ -1324,8 +1325,8 @@ func (self *SearchSyncSnapshot) releaseLanded(key SearchCacheKey) {
 	self.retireReleased()
 }
 
+// Retires files and version runs that no manifest, plan or page needs. An active sync round handles its own retirement.
 func (self *SearchSyncSnapshot) retireReleased() {
-	// A round owns retirement while it holds the ref. Otherwise release what no manifest or page still names.
 	if self.ref.roundLock.TryLock() {
 		defer self.ref.roundLock.Unlock()
 		if err := self.sync.retire(self.ref); err != nil {

@@ -344,6 +344,7 @@ type EvsCreateRepoArgs struct {
 	Confirmed bool
 }
 
+// Uses the explicit inbox role when set, falling back to the legacy group-inbox flag.
 func (self *EvsCreateRepoArgs) inboxRole() protocol.RepoInbox {
 	if self.Inbox == protocol.RepoInbox_REPO_INBOX_NONE && self.GroupInbox {
 		return protocol.RepoInbox_REPO_INBOX_GROUP

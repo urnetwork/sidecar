@@ -13,13 +13,14 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
+// A config ref that binds a confirmed policy change to the exact head its writer verified.
 type evsConfirmedAclRef struct {
 	*EvsConfigHeadReader
 }
 
 // Explicitly selects signed exact-head commits for a confirmed ACL policy change.
 func (self *EvsConfigHeadReader) ConfirmedAclConfigRef() ConfigHeadRef {
-	return &evsConfirmedAclRef{self}
+	return &evsConfirmedAclRef{EvsConfigHeadReader: self}
 }
 
 // Builds the exact signed push on version. Only its encrypted objects may be staged until CommitConfigHead.
@@ -138,6 +139,7 @@ func evsConfigHeadWrites(previous *ConfigHead, next *ConfigHead) []*EvsPathWrite
 	return writes
 }
 
+// Delivers the prepared signed push for this network and config repo.
 func (self *evsConfirmedAclRef) CommitConfigHead(ctx context.Context, push *ConfigHeadPush) error {
 	if push == nil || push.deliver == nil {
 		return ErrConfigHeadConflict

@@ -701,6 +701,7 @@ func (self *recordWriterStreamRead) file(counter uint64, entry []byte) error {
 	return nil
 }
 
+// Uses the binding's incremental reader when available, otherwise visits the entries returned by the stream.
 func (self *recordWriterStreamRead) read(ctx context.Context, streams RecordStreams) error {
 	if binding, ok := streams.(interface {
 		readWriterStream(context.Context, *recordWriterStreamRead) error
@@ -732,6 +733,7 @@ func RecordStreamChainHead(ctx context.Context, streams RecordStreams, logId Id,
 	return read.head, read.head != nil, nil
 }
 
+// Recovers the writer's signed head. Every removed file must be covered by that head's counter or the committed counter.
 func readRecordWriterChain(ctx context.Context, streams RecordStreams, logId Id, writerSidecarId Id, identityKey []byte, localHead RecordChainHead, committedCounter uint64) (*recordWriterStreamRead, error) {
 	if len(identityKey) != ed25519.PublicKeySize {
 		return nil, fmt.Errorf("%w: invalid record writer identity key", ErrRecordDraftInvalid)

@@ -420,12 +420,13 @@ func (self *Sidecar) InstallApprovalGate(sources *ApprovalGateSources) (*Approva
 	return self.installApprovalGate(sources, false)
 }
 
-// InstallApprovalGateIfAbsent installs the native gate only while the network has no gate. A host that already
+// Installs the native gate only while the network has no gate. A host that already
 // installed its own gate retains it and receives nil for both the gate and its removal.
 func (self *Sidecar) InstallApprovalGateIfAbsent(sources *ApprovalGateSources) (*ApprovalGate, func(), error) {
 	return self.installApprovalGate(sources, true)
 }
 
+// Wires the inbox and router to the gate, checking for a concurrent installation when the caller requires an empty slot.
 func (self *Sidecar) installApprovalGate(sources *ApprovalGateSources, onlyIfAbsent bool) (*ApprovalGate, func(), error) {
 	if onlyIfAbsent {
 		self.gates.stateLock.Lock()

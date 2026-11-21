@@ -27,7 +27,7 @@ func (self *Sidecar) enrollChild(ctx context.Context, credential *SidecarEnrollC
 	return self.enrollMintedClient(ctx, credential, nil, credential.MintChild)
 }
 
-// EnrollPageClient binds a top-level, read-only browser client to this keychain. The key-origin
+// Binds a top-level, read-only browser client to this keychain. The key-origin
 // document exchanges its one-time code and returns only the marked client. A burner requires a
 // memory-only instance. The opened network is checked before the binding or any persistence.
 func (self *Sidecar) EnrollPageClient(ctx context.Context, networkId Id, ephemeral bool, mint func(context.Context) (*SidecarAuthClientResult, error)) error {

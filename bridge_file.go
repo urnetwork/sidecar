@@ -1379,6 +1379,7 @@ func (self *BridgeFiler) confirmForwardGrant(ctx context.Context, pin *bridge.Au
 	return nil
 }
 
+// Reuses a matching forward request's sealed action until its deadline passes or a matching grant is withdrawn.
 func (self *BridgeFiler) forwardApprovalAction(gate *ApprovalGate, origin *BridgeFileOrigin, request *BridgeForwardRequest, fresh *StoredCanonicalAction, detail *protocol.CanonicalActionDetail, now time.Time) (*StoredCanonicalAction, error) {
 	// Separate origins, users, run bindings, local listeners and requested durations, even when a remote port matches.
 	intent, err := json.Marshal(struct {
@@ -1388,7 +1389,15 @@ func (self *BridgeFiler) forwardApprovalAction(gate *ApprovalGate, origin *Bridg
 		Risk           SidecarRisk
 		Summary        string
 		Request        BridgeForwardRequest
-	}{fresh.Action.GetSubject(), origin.Act, origin.RunId, origin.AgentId, origin.AgentRisk, origin.Summary, *request})
+	}{
+		Subject: fresh.Action.GetSubject(),
+		Act:     origin.Act,
+		RunId:   origin.RunId,
+		AgentId: origin.AgentId,
+		Risk:    origin.AgentRisk,
+		Summary: origin.Summary,
+		Request: *request,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -1432,6 +1441,7 @@ func (self *BridgeFiler) forwardApprovalAction(gate *ApprovalGate, origin *Bridg
 	return fresh, err
 }
 
+// Reports whether a matching approval's grant was spent and its rule is absent from the current policy.
 func (self *BridgeFiler) forwardGrantWithdrawn(gate *ApprovalGate, origin *BridgeFileOrigin, localPort uint32, action *StoredCanonicalAction) (bool, error) {
 	if err := gate.inbox.ensureLoaded(); err != nil {
 		return false, err

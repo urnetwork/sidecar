@@ -345,7 +345,7 @@ func TestDaemonEventKeepsTheOriginThatRaisedItsState(t *testing.T) {
 	})
 	defer detachListener()
 	events := newDaemonEvents(DefaultSidecarSettings().LocalSettings, nil)
-	detachRing := events.Attach(struct{ *Sidecar }{running})
+	detachRing := events.Attach(struct{ *Sidecar }{Sidecar: running})
 	defer detachRing()
 	running.emitEvent(SidecarEvent{Kind: SidecarEventState, State: SidecarStateUnenrolled, Reason: SidecarReasonRefused})
 	reply, err := events.next(t.Context(), nil, events.cursorOf(0), 0)
