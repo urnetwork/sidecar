@@ -426,6 +426,23 @@ func (self *SidecarConfigFollower) Rows() ConfigRowsSource {
 	return &sidecarConfigFollowerRows{follower: self}
 }
 
+// The writable config generation for a new sealed statement on this network's standing log.
+func (self *SidecarConfigFollower) CurrentConfigKey(ctx context.Context) (*EvsRepoKey, error) {
+	client := self.Client()
+	if client == nil || client.Fork() != nil || self.args == nil || self.args.Gkm == nil {
+		return nil, ErrGkmUnavailable
+	}
+	state := client.State()
+	if state == nil {
+		return nil, ErrGkmUnavailable
+	}
+	repoId, err := IdFromBytes(state.Genesis().GetConfigRepoId())
+	if err != nil {
+		return nil, err
+	}
+	return self.args.Gkm.EnsureWritable(ctx, repoId)
+}
+
 // The config repo's key of generation, from the key client: nil before the follower stands, with no key client, and for
 // a generation the client does not give within RepoKeyTimeout, every refusal alike.
 func (self *SidecarConfigFollower) RepoKeyAt(generation uint64) *EvsRepoKey {

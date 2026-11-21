@@ -78,7 +78,7 @@ func (self *testSearchRemoteCorpus) Open(ctx context.Context, query *searchRemot
 	rows := []searchRemoteRefRow{}
 	for _, ask := range asks {
 		ref := self.refs[ask.repoId]
-		if ref == nil {
+		if ref == nil || (searchRemoteServes(ref.row.served) && ask.recordServed != nil && !ask.recordServed()) {
 			rows = append(rows, searchRemoteRefRow{served: protocol.SearchServed_REFUSED_ALL_ABSENT})
 			continue
 		}

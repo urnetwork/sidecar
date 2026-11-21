@@ -82,6 +82,8 @@ type SearchScopeRef struct {
 	// The index is off, or not built yet (owner decision 156).
 	IndexOff bool
 	Unbuilt  bool
+	// A previously verified local pin must still match when a result page or hit is used.
+	valid func() bool
 }
 
 // What a search's scope is read from. Safe for concurrent use.
