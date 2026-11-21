@@ -78,14 +78,31 @@ func TestFs13ErasesAConsumedDepositWhoseOriginalSlotSurvived(t *testing.T) {
 	}
 	slotId := deposits[0].Deposit.SlotId
 	slotKey := evsservice.SlotKey(world.RepoId, slotId)
-	if _, err := host.Blobs.Faults().Add(&sidecartest.FaultPlan{
+	failedDelete, err := host.Blobs.Faults().Add(&sidecartest.FaultPlan{
 		Op: sidecartest.FaultOpDelete, KeyPrefix: slotKey, Result: sidecartest.FailBeforeApply,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 	var written *sidecar.MailMessage
 	ingest := world.Ingestor(ingestClient, consumer.SidecarId, func(message *sidecar.MailMessage) { written = message }, nil)
-	if _, err := ingest.Ingest(ctx); err == nil || written == nil {
+	ingestCtx, stopIngest := context.WithCancel(ctx)
+	defer stopIngest()
+	finished := make(chan error, 1)
+	go func() {
+		_, err := ingest.Ingest(ingestCtx)
+		finished <- err
+	}()
+	select {
+	case <-failedDelete:
+		// Stop this consumer before its client's automatic retry of the committed push.
+		stopIngest()
+	case err := <-finished:
+		t.Fatalf("ingest ended before the injected slot failure: %v", err)
+	case <-time.After(settings.StepTimeout):
+		t.Fatal("ingest did not reach the slot deletion")
+	}
+	if err := <-finished; err == nil || written == nil {
 		t.Fatalf("ingest before failed slot delete: message %v, %v", written, err)
 	}
 	owner := world.Device(world.Owner, false, sidecartest.NewFakeStore().Root(), nil)

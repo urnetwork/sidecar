@@ -60,6 +60,7 @@ func gateM3Cases(catalog *Catalog) map[string][]*GateTest {
 
 	cases[caseOf("FS-41", "").String()] = []*GateTest{
 		{Repo: "server", Package: "./sidecarrestore", Tags: "sidecar_pending", Stores: true, Names: []string{"TestFs41SiteLossThroughTheCloseOnT3"}},
+		{Repo: "server", Package: ".", Tags: "sidecar_pending,sidecar_localstack", Stores: true, Names: []string{"TestSiteCloseWithRestrictedUsersAcrossMetadataClusters"}},
 		{Repo: "server", Package: ".", Tags: "sidecar_testhooks,sidecar_pending,sidecar_filecluster_t3", Names: []string{"TestFileClusterReseedStorageLossesOnT3"}},
 		{Repo: "server", Package: "./model", Stores: true, Names: []string{
 			"TestAdoptConfigRunTakesWhatTwoMembersHold", "TestAdoptConfigRunTakesNoPositionOneMemberHoldsAlone", "TestAdoptConfigRunHoldsToTheRestoredHead",
