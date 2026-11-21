@@ -124,8 +124,7 @@ type GkmGroupClientArgs struct {
 	Sign GkmSignFunction
 	// The network's keychain.ur under gkm's namespace (§5.9).
 	Secrets SidecarSecrets
-	// This sidecar's MLS engine. Nil for a sidecar that holds no leaf, an agent: it commits nothing and rotates by
-	// wraps.
+	// The draft MLS engine. Nil for v0 clients, which give every holder a KeyDelivery.
 	Mls MlsEngine
 	// The private key of a ReaderKey this sidecar signed, by its key's digest: GkmUpkeep.ReaderPrivateKey. Nil opens
 	// no delivery.
@@ -352,8 +351,7 @@ func gkmKeychainHoldsRepoKey(secrets SidecarSecrets, repoId Id) (bool, error) {
 	return false, nil
 }
 
-// KeyDeliveryOnly reports whether this client forms and follows groups entirely through signed generations and
-// their deliveries. A host can form a group with this client irrespective of its device role.
+// Reports whether this client forms and follows groups using only signed generations and their deliveries.
 func (self *GkmGroupClient) KeyDeliveryOnly() bool {
 	return self.args.Mls == nil
 }

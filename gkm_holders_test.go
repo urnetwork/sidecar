@@ -1087,7 +1087,7 @@ func TestKeyHoldersOverAConfigState(t *testing.T) {
 			{RuleId: testConfigId("member rule").Bytes(), SrcAtoms: [][]byte{AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER).Bytes()},
 				Targets: []*protocol.AclTarget{{RepoId: repoId.Bytes()}}, Actions: []uint32{uint32(protocol.AclAction_ACL_ACTION_READ)}},
 			{RuleId: testConfigId("tag rule").Bytes(), SrcAtoms: [][]byte{tagId.Bytes()},
-				Targets: []*protocol.AclTarget{{RepoId: repoId.Bytes()}}, Actions: []uint32{uint32(protocol.AclAction_ACL_ACTION_READ)}},
+				Targets: []*protocol.AclTarget{{RepoId: repoId.Bytes()}}, Actions: []uint32{uint32(protocol.AclAction_ACL_ACTION_ADMIN)}},
 		},
 		Repos: []*protocol.AclRepo{
 			{RepoId: repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL},
@@ -1116,6 +1116,12 @@ func TestKeyHoldersOverAConfigState(t *testing.T) {
 	}
 	state := net.log.State()
 	at := time.UnixMilli(state.TimeMs())
+	if err := GkmFormSignerAllowed(state, repoId, agentId); err != nil {
+		t.Fatalf("the tag rule grants this agent admin on the repo: %v", err)
+	}
+	if err := GkmFormSignerAllowed(state, configId, agentId); !errors.Is(err, ErrGkmNotWriter) {
+		t.Fatalf("the tag rule grants no admin on the config: %v", err)
+	}
 	want := []string{
 		gkmTestIdentity(GkmHolderLeaf, net.owner.sidecarId.Bytes()),
 		gkmTestIdentity(GkmHolderLeaf, device.sidecarId.Bytes()),

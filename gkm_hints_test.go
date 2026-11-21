@@ -69,8 +69,8 @@ func (self *gkmTestHandler) taken() []*GkmHintWake {
 	return append([]*GkmHintWake(nil), self.wakes...)
 }
 
-// Hints arriving while a handler runs coalesce into one wake, a commit keeping its newest epoch and generation from
-// its topic's version (D-KEYS-19); hints of other groups stay apart.
+// While a handler is held, each group gets one wake. V0 keeps the full generation and draft MLS
+// keeps the latest epoch and its generation even when an older epoch arrives last.
 func TestGkmHintsCoalesceABurstIntoOneWake(t *testing.T) {
 	clock := newGkmTestClock()
 	hints, err := NewGkmHints(context.Background(), &GkmHintsArgs{Clock: clock})
@@ -81,23 +81,28 @@ func TestGkmHintsCoalesceABurstIntoOneWake(t *testing.T) {
 	handler := newGkmTestHandler(true)
 	hints.SetHandler(protocol.GkmHintKind_GKM_HINT_COMMIT, handler.handle)
 	groupId := NewId()
-	otherGroupId := NewId()
-	topic := PushTopicGkmGroup(groupId)
-	commit := &protocol.GkmHint{Kind: protocol.GkmHintKind_GKM_HINT_COMMIT}
-	version := func(epoch uint64, generation uint64) uint64 {
+	legacyGroupId := NewId()
+	commit := func(groupId Id, epoch, version uint64) PushNotice {
+		return gkmTestNotice(t, PushTopicGkmGroup(groupId), version, &protocol.GkmHint{
+			GroupId: groupId.Bytes(), Epoch: epoch, Kind: protocol.GkmHintKind_GKM_HINT_COMMIT,
+		})
+	}
+	legacy := func(epoch, generation uint64) PushNotice {
 		version, err := GkmGroupVersion(epoch, generation)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return version
+		return commit(legacyGroupId, epoch, version)
 	}
-	hints.Receive(gkmTestNotice(t, topic, version(1, 1), commit))
+	hints.Receive(commit(groupId, 0, 1))
 	<-handler.entered
-	// the handler holds the first: these three wait, coalesced, with the other group's apart
-	hints.Receive(gkmTestNotice(t, topic, version(2, 1), commit))
-	hints.Receive(gkmTestNotice(t, topic, version(3, 2), commit))
-	hints.Receive(gkmTestNotice(t, topic, version(2, 5), commit))
-	hints.Receive(gkmTestNotice(t, PushTopicGkmGroup(otherGroupId), version(1, 1), commit))
+	generation := uint64(1<<32 + 7)
+	hints.Receive(commit(groupId, 0, generation-1))
+	hints.Receive(legacy(2, 1))
+	hints.Receive(commit(groupId, 0, generation))
+	hints.Receive(legacy(3, 2))
+	hints.Receive(commit(groupId, 0, generation-2))
+	hints.Receive(legacy(2, 5))
 	close(handler.release)
 	<-handler.entered
 	<-handler.entered
@@ -105,11 +110,11 @@ func TestGkmHintsCoalesceABurstIntoOneWake(t *testing.T) {
 	if len(wakes) != 3 {
 		t.Fatalf("%d wakes, want 3", len(wakes))
 	}
-	if *wakes[1].GroupId != groupId || wakes[1].Epoch != 3 || wakes[1].Generation != 2 {
-		t.Errorf("the coalesced wake %+v", wakes[1])
+	if *wakes[1].GroupId != groupId || wakes[1].Epoch != 0 || wakes[1].Generation != generation {
+		t.Errorf("the coalesced generation wake %+v", wakes[1])
 	}
-	if *wakes[2].GroupId != otherGroupId {
-		t.Error("another group's hint coalesced with this one's")
+	if *wakes[2].GroupId != legacyGroupId || wakes[2].Epoch != 3 || wakes[2].Generation != 2 {
+		t.Errorf("the coalesced draft MLS wake %+v", wakes[2])
 	}
 }
 

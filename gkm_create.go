@@ -59,8 +59,8 @@ type gkmCreateDraft struct {
 // kept as KF1's draft before this answers, so a kill draws nothing new. Answers RK_1 as the key the network's first
 // config head is sealed under, its generation pin {group_id, 1, C_1}; it carries no gen/1 statement yet, so cause
 // REQUEST, as gen/1's will be, and no auth pin or time. A draft already kept answers its own id and RK_1, a group that
-// stands its generation 1 as held. It reads no state: before base 1 there is only the genesis. The config kind alone,
-// by a sidecar that holds a leaf, in a process that holds the network's state.
+// stands its generation 1 as held. Before base 1 there is only the genesis. Only the config repo can be drafted,
+// in a process that holds the network's state. The verified state determines who can sign its form.
 func (self *GkmGroupClient) DraftGroup(ctx context.Context, args *GkmCreateGroupArgs) (*EvsRepoKey, error) {
 	if args == nil || args.RepoId == (Id{}) || args.Kind != protocol.RepoKind_REPO_KIND_CONFIG {
 		return nil, fmt.Errorf("%w: only the config repo's group is drafted before its network's base 1", ErrGkmMalformed)
@@ -260,6 +260,9 @@ func (self *gkmGroupManager) createInFlow(ctx context.Context, args *GkmCreateGr
 // stands at epoch 0, since an engine makes no second group under one id.
 func (self *gkmGroupManager) draftCreate(ctx context.Context, state GkmAuthView, args *GkmCreateGroupArgs, drawn *gkmCreateDraft) (*gkmCreateDraft, error) {
 	client := self.client
+	if err := GkmFormSignerAllowed(state, self.repoId, client.args.SidecarId); err != nil {
+		return nil, err
+	}
 	groupId := Id{}
 	if drawn != nil {
 		groupId = drawn.groupId

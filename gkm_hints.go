@@ -6,8 +6,8 @@
 // Hints arrive as push notices on two topics, from a connect leg's Subprotocol.Subscribe or the sidecar_http leg's
 // PushPollClient.Subscribe, whichever the host passes:
 //
-//   - gkm:<group_id>, commit, whose version is epoch × 2^24 + generation (D-KEYS-19), so a rotation with no commit
-//     wakes too;
+//   - gkm:<group_id>, commit, whose version is the full generation in v0 (owner decision 610).
+//     Draft MLS senders include the epoch in the body and pack epoch × 2^24 + generation into the version.
 //   - gkm, per client, the work hints: pending, welcome, key-packages-low and wrap-pending.
 //
 // Receive never blocks: it records the wake under a lock and signals the intake's own goroutine, which runs the
@@ -36,8 +36,8 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-// What one wake names: a hint's kind and the group, epoch, generation and recipient it carries. A commit's epoch and
-// generation come from its topic's version; a work hint's generation is zero.
+// A commit wake carries the group's generation and, for a draft MLS sender, its epoch.
+// Work hints carry the kind, group and recipient to fetch and leave the generation at zero.
 type GkmHintWake struct {
 	Kind protocol.GkmHintKind
 	// nil for a hint about no group, as key-packages-low is.
@@ -224,7 +224,7 @@ func gkmHintWakeOf(notice PushNotice) (*GkmHintWake, error) {
 		wake.GroupId = &groupId
 	}
 	if idText, ok := strings.CutPrefix(notice.Topic, PushTopicGkmGroupPrefix); ok {
-		// commit on gkm:<group_id>: the topic names the group, and the version its epoch and generation
+		// The topic names the group. A v0 version is the full generation, including bits above 24.
 		groupId, err := ParseId(idText)
 		if err != nil || groupId.String() != idText || wake.Kind != protocol.GkmHintKind_GKM_HINT_COMMIT {
 			return nil, errors.New("gkm hints: a group topic out of form")
