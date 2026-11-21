@@ -180,7 +180,7 @@ func (self *MemberReplica) open() error {
 	// A signed-in member child may have no invitation anchor. The follower records the
 	// first self-verified genesis of this network for its admitter's safety-number comparison.
 	settings := DefaultSidecarConfigFollowerSettings()
-	settings.TrustFirstUse = true
+	settings.TrustFirstUse = running.Paired()
 	self.follower, err = running.FollowConfig(&SidecarConfigFollowerArgs{Heads: self, Gkm: keys, Hints: self.hints, Settings: settings, beforeStanding: self.bindRecord})
 	if err != nil {
 		return err
