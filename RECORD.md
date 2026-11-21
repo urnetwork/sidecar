@@ -265,7 +265,9 @@ stream path   e/<n div 4,194,304>/<(n div 2,048) mod 2,048>/<n>, n a stream's ow
               table within §16.8's 256 KiB, and at most 3,584 of those under e/ (§11.7's bound), about 15 billion
               entries, so no stream reaches 409 DIRECTORY_FULL; in a stream that holds no ingested entry, every
               directory stream among them, n equals the header's seq, which is how §16.11's DecisionRef names a path;
-              the ref's name and the text of ids in paths wait on plan-RECORD-stream-names
+              the ref is `ur/<sidecar_id>/record`, `<sidecar_id>` as Id.String() as in every ur/ name, and ids in
+              paths are 32 lowercase hex, as plan-RECORD-stream-names' answers gave them (QD-450, QD-484, QD-485;
+              owner decision 406; §11.8's refs table)
 ```
 
 ### 5.3 Writing
@@ -459,12 +461,12 @@ These checks hold, and `record_md_test.go` recomputes each figure:
 - `BASE` keeps every push statement (§11.8's Refs table), so a checkpoint batch's stream versions stay checkable after expiry (section 10).
 - A depositor learns of a `CONSUME` by its mark: the ingester's CONSUME declares `consumed_through` (`EvsPush` field 35), which evs copies to `EvsHead` field 27 and returns on the depositor's push replies, so D-MCP-10's spool prunes at it (section 5.4's `spool` row); §11.6's and §11.8's fences carry both fields (plan-RECORD-depositor-spool, beside plan-EVS1-deposit-head; QD-176).
 
-These are open, and the finding waits on each:
+These were open; the finding waits on the first, and the second has settled:
 
 | Open | What rests on it | Where it is raised | If it goes the other way |
 |---|---|---|---|
 | What a `BASE` carries, what evs checks and what GC then keeps: §11.22 lists it and no section specifies it | Sections 5.5, 8 and 10 read which paths a BASE removed and rely on its kept statements | plan-EVS1-v1-unspecified, whose reading this document follows: an `admin` push adding no payload, whose changes remove expired paths | a BASE that does not show what it removed leaves readers no way to hold class 7 or tell expiry from loss, and format 1 must carry that |
-| The bytes of a stream's ref name and of ids in paths | Section 5.2; `DecisionRef`'s head read | plan-RECORD-stream-names, beside plan-EVS1-ref-name-bytes | no new field, but no vector over a stream path freezes before it |
+| The bytes of a stream's ref name and of ids in paths | Section 5.2; `DecisionRef`'s head read | plan-RECORD-stream-names, beside plan-EVS1-ref-name-bytes | settled: `ur/<sidecar_id>/record` spells its sidecar id as Id.String(), and ids in paths stay 32 lowercase hex (QD-450, QD-484, QD-485; owner decision 406; §11.8's refs table), so section 5.2's vectors stand |
 
 ## 6. The v1 kind registry
 
@@ -1411,7 +1413,7 @@ deposit, ingest, CONSUME pushes     850         25,500      85,000      340,000
 
 **D-RECORD-5 (proposed).** Idling ends a run's record but not the run: a later event on the session re-opens it, its newest `coverage` superseding, and taint stands. A row per session outlasts the run file, so a session resumed after the file is gone binds its old run, tainted. *Why:* §16.8 writes Coverage after 10 min idle, while §16.6's monotone row must survive that, or idling would launder a tainted run, and §16.6 deletes the file 30 days on, or waiting would.
 
-**D-RECORD-6 (proposed).** Search text is section 7's, a deterministic function of an entry and its run's first `context`, as record extractor 1; claim state is folded when read. *Why:* §11.14's determinism and its row rule; R-RECORD-13.
+**D-RECORD-6 (proposed).** Search text is section 7's, a deterministic function of an entry, its copy's path and the context entry section 7.1's fields row names, the first of its run that its own stream holds at the push's pin and no erasure with a CUT below the push's epoch names, or for a run card the newest one folded (owner decision 460), as record extractor 1; claim state is folded when read. *Why:* §11.14's determinism and its row rule; R-RECORD-13.
 
 **D-RECORD-7 (proposed).** Retention classes are section 8's; class 7 never expires, and expiry counts from the signed push time of the earliest copy. *Why:* §16.8 leaves `class` here; a tree must outlive its entries; `time_millis` is a writer's assertion.
 
@@ -1563,7 +1565,7 @@ type SidecarRecordSettings struct { // defaults only from DefaultSidecarSettings
 }
 ```
 
-**Asks of other sections.** The `design-records` track owns these. None changes a semantic in §16.8's row. DESIGN.md carries the six that section 16.1's answers and section 6.2's numbers settled; the last three wait for a design-records pass.
+**Asks of other sections.** The `design-records` track owns these. None changes a semantic in §16.8's row. DESIGN.md carries all nine: the six that section 16.1's answers and section 6.2's numbers settled, and the last three, which the draft's final design sweep folded on 2026-11-21.
 
 | Section | Change | Why | In DESIGN.md |
 |---|---|---|---|
@@ -1572,10 +1574,10 @@ type SidecarRecordSettings struct { // defaults only from DefaultSidecarSettings
 | §7.5, §8.8, §11.12 | who files `team_record`'s `RepoCreate` | Q-RECORD-3 | §7.5, D-TEAM-28, §8.8, §11.12 (owner decision 303) |
 | §16.5 or none | how R logs are written | Q-RECORD-4 | none in §16.5: §16.8's logs table (owner decision 454) |
 | §5.4 | numbers for `SidecarActionKind` and `SidecarRisk`; say that `head_alarm` carries chain gaps and forks, or add a kind | section 6.2; section 5.5 | §5.4's kinds and §16.8's `values` row (QD-429); §5.4's `record_alarm`, its `RecordAlarm` field and 14 reasons, beside `head_alarm` (QD-168) |
-| §16.16 | list `ur record` beside `ur search` and `ur directory`; name `SidecarRecordSettings`' fields | section 18 | open |
+| §16.16 | list `ur record` beside `ur search` and `ur directory`; name `SidecarRecordSettings`' fields | section 18 | §16.16's Provides and its services row |
 | §3 (D-ARCH-2) | say that a checkpointer's HTTPS call to a customer's witness is no URnetwork carrier | Q-RECORD-8 | §3.5 and D-ARCH-2 (owner decision 214) |
-| §22.5, §22.8 | section 20's cases; a `record` row measuring section 13's table | section 13 | open |
-| §23.6 | M6's row names the checkpoint and packet vectors | section 20 | open |
+| §22.5, §22.8 | section 20's cases; a `record` row measuring section 13's table | section 13 | §22.5's §16 row and §22.8's storage benchmark `record` row |
+| §23.6 | M6's row names the checkpoint and packet vectors | section 20 | §23.6's M6 row |
 
 ## 19. Risks
 

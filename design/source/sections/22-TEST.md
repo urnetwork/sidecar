@@ -208,7 +208,9 @@ Parentheses hold T1 tests; the rest run in T2 and T3. Inline server paths (contr
       receipts, filters, grouping, labels, taint and caches, each MCP version validating their results against the
       wire schema: FS-80; the directory's writers, requests, scale, removal and taint: FS-84 to FS-88, its erasure
       authority, decisions and repo items: FS-99 to FS-101; an approver refuses a CanonicalAction version it does not
-      know (M3)
+      know (M3); RECORD.md section 20's cases over testdata/record/'s vectors, each at its milestone: hashed bytes,
+      the registry, chains, runs and erasure at M3, ingest at M3 in V and M6 in T, the projection, retention, the
+      log, packets and exports at M6, and search at M10
 §17   (Classify = linear scan; hook = reference; BenchmarkCompile at 6, 1,000 and 5,000 devices) a compile
       reads no fold file, and a daemon's and a forwarding role's compiles of one view are byte-equal
       (DESIGN-DETAILS.md section 12); reset vs drain; reset bucket; C18's aliases within §17.9's
@@ -689,7 +691,7 @@ storage benchmark (M2's exit on the staging cluster, the production hosts' PM9A3
 SMART-rechecked before M3 (§19.11, D-PHASE-7); again on production before M3's pilot; §11.13's mix, §10.6's sizes;
 D-TEST-11; at M10, the index row and the fold and trash rows' M10 runs on T3, format 2's projection from this run's
 price table (D-TEST-13), confirmed on production after the freeze, and the phone, search, remote, directory and drop
-rows)
+rows; at M6's exit, the record row)
 mix      every GET, PUT, LIST and DELETE in §11.13's table at 2x year one with the write budget on (pushes with their
          batch writes, folds and evacuation, parts and seals, gkm commits, rotations, Adds, reconnects, full resyncs),
          a restart with every reset incomplete included: p99 <= 25 ms per operation; bytes written per push and per
@@ -782,6 +784,10 @@ directory
          429s, on T3's 4-host file-cluster layout with nothing else running (owner decision 598), priced NVMe
          bytes per push per drive, and readers' requests, path reads and bytes per reader-day
          and team-day against the golden schedule and §16.11's cost table, with a cold phone past 8 MiB
+record   at M6's exit on T3, on §16.11's model of 10 agent runs a member-day and 5 working days in 7, at 5, 150,
+         500 and 2,000 members as fake-clock days: T's entries a working day and its bytes kept at 400 days,
+         checkpoint leaves a working day, a T reader's sync bytes a working day and the deposit, ingest and
+         CONSUME pushes, against RECORD.md 13.2's table, whose inferred figures the measured ones replace
 drop     at M10 on T3: dry-run and job scan rates, HDD drive operations, HEAD and DELETE costs, NVMe writes per job
          and per drop, and a 60 GB history's job time; the directory and drop rows' NVMe operations, priced by M2's
          table, join §11.13's price table
