@@ -231,13 +231,28 @@ type directoryReaderStreams struct {
 	client *DirectoryClient
 }
 
-// The adapter's ERASEs past afterVersion that §16.11's readers row takes.
+// Saves the raw batch's position, including refused statements, only after the judge has kept the accepted notes.
+// A failed journal write leaves the same batch available to this reader or a restarted one.
 func (self directoryReaderStreams) ReadErasures(ctx context.Context, repoId Id, afterVersion uint64) ([]*RecordStreamErasure, error) {
 	erasures, err := self.directoryStreams.ReadErasures(ctx, repoId, afterVersion)
-	if err != nil || directoryErasureJudge == nil {
+	if err != nil || len(erasures) == 0 {
 		return erasures, err
 	}
-	return directoryErasureJudge(self.client, repoId, erasures)
+	accepted := erasures
+	if directoryErasureJudge != nil {
+		accepted, err = directoryErasureJudge(self.client, repoId, erasures)
+		if err != nil {
+			return nil, err
+		}
+	}
+	var through uint64
+	for _, erasure := range erasures {
+		through = max(through, erasure.Version)
+	}
+	if err := self.store.NoteErasureVersion(through); err != nil {
+		return nil, err
+	}
+	return accepted, nil
 }
 
 // The client's part of name, made by build at its first ask and kept: nil when build answers nil, which is asked
