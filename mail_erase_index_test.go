@@ -1041,3 +1041,47 @@ func TestMailEraseResumeFindsAClosureCommittedDuringTheSegmentScan(t *testing.T)
 		t.Fatal("the index completed while the removed row's slot was still open")
 	}
 }
+
+// Mail's index side reads an erasure's progress by its newest ERASE (mailEraseIndexOver; §11.12's reconcile row, owner
+// decision 658): an erasure whose first ERASE said complete, as a deposit-only one does where no m/ file stood, and
+// which a late body's ERASE then reopened, the late body's CUT listing a document index files hold, is not done for
+// the index's rewrite, which rewrites those files and ends the erasure again by its last pair's ERASE. Read by any
+// ERASE that once said complete, the rewrite found it done and rewrote nothing.
+func TestMailEraseFormat2IndexRewriteRunsAgainForAReopenedErasure(t *testing.T) {
+	ctx := context.Background()
+	world := testEraseWorldWithCopies(t)
+	signer := evsTestId("eraser")
+	store := world.evs.as(signer)
+	index, err := mailEraseIndexOver(&indexEraserArgs{
+		store: store, eraseStore: store, repoId: evsTestId("view repo"), refId: evsTestId("view ref"),
+		repoKind: protocol.RepoKind_REPO_KIND_GENERAL, isAdmin: world.isAdmin, format: world.settings, eraser: signer,
+		tables: testHeadTables, clock: &testIndexWorldClock{world: world.testHeadWorld}, log: NewNoopLogger(),
+	}, bytes.Repeat([]byte{0x6d}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	erasureId := evsTestId("erasure")
+	if err := store.Erase(ctx, &indexErasePush{erasureId: erasureId, keys: []*EvsErasedKey{{SlotId: evsTestId("deposit slot")}}, complete: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := index.eraser.Cut(ctx, &IndexCutArgs{ErasureId: erasureId, Documents: []*IndexCutDocument{{Key: testIndexId("d", 0), Version: 1}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Erase(ctx, &indexErasePush{erasureId: erasureId, keys: []*EvsErasedKey{{SlotId: evsTestId("late body slot")}}}); err != nil {
+		t.Fatal(err)
+	}
+	if holding := world.holding(t, world.listed(t)); len(holding) == 0 {
+		t.Fatal("no index file holds the late body's document")
+	}
+	resumed, err := index.eraser.Resume(ctx, &IndexResumeArgs{ErasureId: erasureId, Role: IndexResumeEraser, Complete: true, Note: []byte("note"), Completion: true})
+	if err != nil || resumed == nil || resumed.Rewrite == nil || resumed.Rewrite.Erasure == nil {
+		t.Fatalf("the reopened erasure's resume: %+v, %v", resumed, err)
+	}
+	if rewrite := resumed.Rewrite; rewrite.PairCount == 0 || !rewrite.Completed || rewrite.Erasure.State != SidecarErasureDone {
+		t.Fatalf("the reopened erasure's rewrite: %d pairs, completed %t, %s", rewrite.PairCount, rewrite.Completed, rewrite.Erasure.State)
+	}
+	if holding := world.holding(t, world.listed(t)); len(holding) != 0 {
+		t.Fatalf("index files still holding the late body's document: %v", holding)
+	}
+	world.evs.sweep(t, world.listed(t))
+}
