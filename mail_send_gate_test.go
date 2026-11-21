@@ -25,7 +25,7 @@ import (
 func testMailSubmitDraft() *MailSendArgs {
 	return &MailSendArgs{
 		From:    testMailSendFrom,
-		To:      []string{testMailIngestRecipient, "Someone@Outside.Example"},
+		To:      []string{testMailIngestRecipient, "someone@Outside.Example"},
 		Bcc:     []string{"hidden@elsewhere.example"},
 		Subject: "Plans",
 		Text:    "Dinner at eight.",
@@ -241,8 +241,32 @@ func TestMailSubmitSendEffectRefusalAndNoGate(t *testing.T) {
 	}
 }
 
+// Losing a network alias can change a recipient from a case-folded local name to a case-sensitive external
+// mailbox. A decision for the previous spelling cannot dispatch to the new one.
+func TestMailSubmitSendRefusesAChangedDeliveryAddressAtTheSpend(t *testing.T) {
+	world, parts, _ := newMailSendTestWorld(t)
+	binding, _, err := world.client.bound()
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := binding.Network()
+	row.Alias = "former"
+	updated := *binding
+	updated.Network = func() NetworkLabelRow { return row }
+	updated.Gate = &mailSubmitTestGate{beforeEffect: func() { row.Alias = "" }}
+	world.client.Bind(&updated)
+	draft := testMailSubmitDraft()
+	draft.To = append(draft.To, "Bo@former.root.example")
+	if _, err := world.client.SubmitSend(context.Background(), draft); !errors.Is(err, ErrSidecarEffectNotDone) {
+		t.Fatalf("an address changed while awaiting approval: %v", err)
+	}
+	if len(parts.snapshot()) != 0 {
+		t.Fatal("a send with changed recipients deposited mail")
+	}
+}
+
 // The action is the draft's: the same draft builds the same bytes, and a subject, a text, a recipient or a From that
-// differs builds another; recipients are distinct and lowercase, To then Cc then Bcc.
+// differs builds another; distinct external local parts remain in To, Cc and Bcc order.
 func TestMailSubmitSendActionIsTheDrafts(t *testing.T) {
 	world, _, _ := newMailSendTestWorld(t)
 	plan := func(args *MailSendArgs) *StoredCanonicalAction {
@@ -276,10 +300,10 @@ func TestMailSubmitSendActionIsTheDrafts(t *testing.T) {
 		}
 	}
 	args := testMailSubmitDraft()
-	args.To = append(args.To, "SOMEONE@outside.example")
+	args.To = append(args.To, "SOMEONE@outside.example", "SOMEONE@Outside.Example", strings.ToUpper(testMailIngestRecipient))
 	args.Cc = []string{"cc@outside.example"}
 	if recipients := plan(args).Action.GetRecipients(); !slices.Equal(recipients, []string{
-		testMailIngestRecipient, "someone@outside.example", "cc@outside.example", "hidden@elsewhere.example",
+		testMailIngestRecipient, "someone@outside.example", "SOMEONE@outside.example", "cc@outside.example", "hidden@elsewhere.example",
 	}) {
 		t.Fatalf("recipients %v", recipients)
 	}

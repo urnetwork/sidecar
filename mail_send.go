@@ -164,7 +164,7 @@ type MailSendArgs struct {
 
 // One recipient's outcome.
 type MailSendRecipient struct {
-	// As the caller named it, lowercase.
+	// Its delivery address, with a canonical domain and the original external local part.
 	Address string
 	Outcome MailSendOutcome
 }
@@ -268,10 +268,6 @@ func (self *MailClient) planSendDraft(args *MailSendArgs, burnerLabel string) (*
 	if args == nil {
 		return nil, fmt.Errorf("%w: no message", ErrMailSendInvalid)
 	}
-	recipients, err := mailSendRecipients(args, settings)
-	if err != nil {
-		return nil, err
-	}
 	if strings.ContainsAny(args.Subject, "\r\n") || settings.SubjectMaxByteCount < len(args.Subject) || !utf8.ValidString(args.Subject) ||
 		settings.TextMaxByteCount < len(args.Text) || !utf8.ValidString(args.Text) {
 		return nil, fmt.Errorf("%w: a subject or text out of shape", ErrMailSendInvalid)
@@ -280,13 +276,13 @@ func (self *MailClient) planSendDraft(args *MailSendArgs, burnerLabel string) (*
 		!strings.Contains(args.InReplyTo, "@") || !utf8.ValidString(args.InReplyTo)) {
 		return nil, fmt.Errorf("%w: a reply's id out of shape", ErrMailSendInvalid)
 	}
-	return self.planSendFrom(args.From, recipients, burnerLabel)
+	return self.planSendFrom(args.From, burnerLabel, args.To, args.Cc, args.Bcc)
 }
 
-// What a send from fromText to recipients, distinct and lowercase, is held to: the zone, and a From of this network
+// What a send to the address lists is held to: the zone, its distinct recipients and a From of this network
 // that policy lets this device send as. burnerLabel, a reply's, holds a burner's From to its live label in this
 // member's mailbox instead (MailClient.Reply).
-func (self *MailClient) planSendFrom(fromText string, recipients []string, burnerLabel string) (*mailSendPlan, error) {
+func (self *MailClient) planSendFrom(fromText string, burnerLabel string, lists ...[]string) (*mailSendPlan, error) {
 	binding, parts, _, err := self.state()
 	if err != nil {
 		return nil, err
@@ -297,6 +293,10 @@ func (self *MailClient) planSendFrom(fromText string, recipients []string, burne
 	}
 	if row.Root == "" || row.Label == "" {
 		return nil, ErrMailConfigNoZone
+	}
+	recipients, err := mailSendAddressList(row, self.sendSettings(), lists...)
+	if err != nil {
+		return nil, err
 	}
 	authority := MailSendAuthority(&MailSendAclAuthority{
 		Engine: binding.Engine,
@@ -472,7 +472,7 @@ func (self *MailClient) deliverSend(ctx context.Context, plan *mailSendPlan, con
 		result.SendId = newMailOutboxSendId()
 		messageId = MailOutboxMessageId(result.SendId, messageDomain)
 	}
-	message, err := content.message(fromAddress, messageId, now)
+	message, err := content.message(plan, messageId, now)
 	if err != nil {
 		return nil, err
 	}
@@ -548,18 +548,24 @@ type mailSendQueue interface {
 	queue(ctx context.Context, args *mailSendQueueArgs) MailSendOutcome
 }
 
-// The distinct recipients of args, lowercase, To then Cc then Bcc, each parsing as a bare RFC 5322 address, within
-// the settings' bounds.
-func mailSendRecipients(args *MailSendArgs, settings *MailSendSettings) ([]string, error) {
-	return mailSendAddressList(settings, args.To, args.Cc, args.Bcc)
+// Canonicalizes a bare recipient. An external SMTP local part is opaque, whereas a local mailcfg name folds case.
+func mailSendAddress(row NetworkLabelRow, address string) string {
+	address = strings.TrimSpace(address)
+	if recipient, own := mailSendOwnRecipient(row, address); own {
+		return recipient.Address()
+	}
+	if at := strings.LastIndexByte(address, '@'); at >= 0 {
+		return address[:at+1] + dnsAsciiLower(address[at+1:])
+	}
+	return address
 }
 
-// The distinct addresses of lists, lowercase and in order, each a bare RFC 5322 address within settings' bounds.
-func mailSendAddressList(settings *MailSendSettings, lists ...[]string) ([]string, error) {
+// The distinct delivery addresses in list order, each a bare RFC 5322 address within settings' bounds.
+func mailSendAddressList(row NetworkLabelRow, settings *MailSendSettings, lists ...[]string) ([]string, error) {
 	recipients := []string{}
 	for _, list := range lists {
 		for _, address := range list {
-			address = dnsAsciiLower(strings.TrimSpace(address))
+			address = mailSendAddress(row, address)
 			if address == "" || settings.AddressMaxByteCount < len(address) || strings.ContainsAny(address, "\r\n<>,") {
 				return nil, fmt.Errorf("%w: a recipient out of shape", ErrMailSendInvalid)
 			}
@@ -582,29 +588,23 @@ func mailSendAddressList(settings *MailSendSettings, lists ...[]string) ([]strin
 }
 
 // The message content sends: a draft's built under messageId, or a submission's as its client wrote it.
-func (self *mailSendContent) message(fromAddress string, messageId string, now time.Time) ([]byte, error) {
+func (self *mailSendContent) message(plan *mailSendPlan, messageId string, now time.Time) ([]byte, error) {
 	if self.draft == nil {
 		return bytes.Clone(self.raw), nil
 	}
-	return mailSendBuildMessageWithId(self.draft, fromAddress, messageId, now)
+	return mailSendBuildMessageWithId(self.draft, plan.row, plan.fromAddress, messageId, now)
 }
 
-// The message a send deposits and keeps: plain text, UTF-8, quoted-printable, CRLF lines (see the file header), its
-// Message-ID the send id under the From's domain.
-func mailSendBuildMessage(args *MailSendArgs, fromAddress string, fromDomain string, sendId Id, now time.Time) ([]byte, error) {
-	return mailSendBuildMessageWithId(args, fromAddress, strings.ToLower(sendId.String())+"@"+fromDomain, now)
-}
-
-// mailSendBuildMessage with its Message-ID's addr-spec.
-func mailSendBuildMessageWithId(args *MailSendArgs, fromAddress string, messageId string, now time.Time) ([]byte, error) {
-	lowerAll := func(addresses []string) []string {
-		lowered := []string{}
+// A draft's message with its send's Message-ID, and the same To and Cc addresses the planner used for delivery.
+func mailSendBuildMessageWithId(args *MailSendArgs, row NetworkLabelRow, fromAddress string, messageId string, now time.Time) ([]byte, error) {
+	headerAddresses := func(addresses []string) []string {
+		distinct := []string{}
 		for _, address := range addresses {
-			if address = dnsAsciiLower(strings.TrimSpace(address)); address != "" && !slices.Contains(lowered, address) {
-				lowered = append(lowered, address)
+			if address = mailSendAddress(row, address); address != "" && !slices.Contains(distinct, address) {
+				distinct = append(distinct, address)
 			}
 		}
-		return lowered
+		return distinct
 	}
 	message := &bytes.Buffer{}
 	header := func(name string, value string) {
@@ -614,10 +614,10 @@ func mailSendBuildMessageWithId(args *MailSendArgs, fromAddress string, messageI
 		message.WriteString("\r\n")
 	}
 	header("From", fromAddress)
-	if to := lowerAll(args.To); 0 < len(to) {
+	if to := headerAddresses(args.To); 0 < len(to) {
 		header("To", strings.Join(to, ", "))
 	}
-	if cc := lowerAll(args.Cc); 0 < len(cc) {
+	if cc := headerAddresses(args.Cc); 0 < len(cc) {
 		header("Cc", strings.Join(cc, ", "))
 	}
 	if args.Subject != "" {
