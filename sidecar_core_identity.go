@@ -43,6 +43,10 @@ func (self *Sidecar) reconcileOpen() {
 			// finishBinding woke the loop after installing every local record.
 			return
 		}
+		if errors.Is(err, ErrSidecarStoreFailed) {
+			self.lockFailedKeychain(err)
+			return
+		}
 		if err != nil && !errors.Is(err, ErrSidecarKeystoreLost) && !errors.Is(err, ErrSidecarStoreLocked) && !restored {
 			self.log.Warningf("[identity]the pending binding did not finish: %s", err)
 			self.setIdentity(nil, nil)
@@ -74,11 +78,7 @@ func (self *Sidecar) reconcileOpen() {
 		self.enterLocked()
 		return
 	default:
-		// a keychain that fails decoding or AEAD: as Locked, and alarms, creating nothing (D-CORE-15)
-		self.log.Warningf("[sidecar]the network's keychain failed: %s", err)
-		self.stopGeneration()
-		self.enterLocked()
-		self.emitEvent(SidecarEvent{Kind: SidecarEventRefused})
+		self.lockFailedKeychain(err)
 		return
 	}
 	defer record.keys.erase()
@@ -135,4 +135,12 @@ func (self *Sidecar) reconcileOpen() {
 		secrets:           secrets,
 		child:             networkRecord.Child,
 	})
+}
+
+// A failed keychain read during binding recovery or identity loading locks this network and raises its alarm (D-CORE-15).
+func (self *Sidecar) lockFailedKeychain(err error) {
+	self.log.Warningf("[sidecar]the network's keychain failed: %s", err)
+	self.stopGeneration()
+	self.enterLocked()
+	self.emitEvent(SidecarEvent{Kind: SidecarEventRefused})
 }
