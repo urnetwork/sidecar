@@ -84,7 +84,20 @@ func (self *bridgeLinkGenerator) NewClient(
 	if self.built == nil || self.sign == nil {
 		return nil, fmt.Errorf("%w: a generator no link's build made", ErrBridgeLinkRefused)
 	}
-	client, err := self.MultiClientGenerator.NewClient(ctx, args, clientSettings)
+	// Gate the dedicated window at the entry point that creates the client,
+	// keeping the host's template and other clients independent.
+	if clientSettings == nil {
+		clientSettings = self.MultiClientGenerator.NewClientSettings()
+	}
+	settings := *clientSettings
+	encryption := settings.EncryptionSettings
+	if encryption == nil {
+		encryption = connect.DefaultEncryptionSettings()
+	}
+	linkEncryption := *encryption
+	linkEncryption.GateReceiveOnSignedIdentity = true
+	settings.EncryptionSettings = &linkEncryption
+	client, err := self.MultiClientGenerator.NewClient(ctx, args, &settings)
 	if err != nil {
 		return client, err
 	}
