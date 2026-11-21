@@ -205,9 +205,14 @@ func newTestTlsWorld(t *testing.T, options *sidecartest.MxWorldZoneOptions) *tes
 // _25._tcp.<host>.
 func (self *testTlsWorld) addMx(t *testing.T, host string, address netip.Addr, certificate *tls.Certificate, tlsa ...*sidecar.SmtpTlsaRecord) *sidecartest.ScriptedMx {
 	t.Helper()
+	return self.addMxWithScript(t, host, address, certificate, nil, tlsa...)
+}
+
+func (self *testTlsWorld) addMxWithScript(t *testing.T, host string, address netip.Addr, certificate *tls.Certificate, script *sidecartest.MxScript, tlsa ...*sidecar.SmtpTlsaRecord) *sidecartest.ScriptedMx {
+	t.Helper()
 	settings := sidecartest.DefaultScriptedMxSettings()
 	settings.Certificate = certificate
-	mx, err := sidecartest.NewScriptedMx(host, nil, settings)
+	mx, err := sidecartest.NewScriptedMx(host, script, settings)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -980,7 +985,9 @@ func TestSmtpTlsRequireTlsTakesOnlyTl1OrTl2(t *testing.T) {
 	testTlsExpectRefused(t, send, sidecar.SmtpTlsRefusalRequireTls, mx, 0)
 
 	enforced := newTestTlsWorld(t, &sidecartest.MxWorldZoneOptions{Unsigned: true})
-	enforced.addMx(t, testTlsHost, testTlsAddress, enforced.pki.leaf(t, testTlsHost))
+	script := sidecartest.DefaultMxScript()
+	script.Keywords = append(script.Keywords, "REQUIRETLS")
+	enforced.addMxWithScript(t, testTlsHost, testTlsAddress, enforced.pki.leaf(t, testTlsHost), script)
 	enforced.publishPolicy(t, "20261108", testTlsPolicy)
 	testTlsExpectSent(t, enforced.send(t, enforced.edge(nil), enforced.policy(), sidecar.SmtpFlagRequireTls), sidecar.SmtpTlsLevelMtaSts)
 }

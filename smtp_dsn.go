@@ -71,6 +71,9 @@ func (self *SmtpDsn) summary() string {
 	case SmtpOutcomeRefused:
 		return fmt.Sprintf("The mail server for %s refused the message.", self.RecipientDomain)
 	case SmtpOutcomeTlsRefused:
+		if len(self.Recipients) != 0 && self.Recipients[0].Status == smtpDsnStatusRequireTlsMissing {
+			return fmt.Sprintf("The REQUIRETLS message could not be sent to %s.", self.RecipientDomain)
+		}
 		return fmt.Sprintf("The message was not sent to %s: its mail server could not be authenticated well enough.", self.RecipientDomain)
 	case SmtpOutcomeTooLarge:
 		return fmt.Sprintf("The message is %d bytes, over the %d bytes this device can prove to the mail server for %s, "+

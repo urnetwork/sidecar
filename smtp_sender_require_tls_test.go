@@ -46,8 +46,13 @@ func TestSmtpSenderRequireTlsExtensionAndAuthentication(t *testing.T) {
 		if outcome.Outcome != sidecar.SmtpOutcomeTlsRefused || len(dsns) != 1 || !bytes.Contains(dsns[0].Dsn, []byte("Status: "+c.wantStatus+"\r\n")) {
 			t.Fatalf("authenticated %v, advertised %v: %+v, DSNs %s", c.authenticated, c.advertised, outcome, testDsnText(dsns))
 		}
-		if c.authenticated && outcome.TlsLevel != sidecar.SmtpTlsLevelMtaSts {
-			t.Errorf("TLS level %d for an authenticated MX", outcome.TlsLevel)
+		if c.authenticated {
+			if outcome.TlsLevel != sidecar.SmtpTlsLevelMtaSts {
+				t.Errorf("TLS level %d for an authenticated MX", outcome.TlsLevel)
+			}
+			if bytes.Contains(dsns[0].Dsn, []byte("could not be authenticated")) {
+				t.Error("capability refusal reported an authentication failure")
+			}
 		}
 		for _, event := range world.mx.Events() {
 			if strings.HasPrefix(event.Command, "MAIL ") {
