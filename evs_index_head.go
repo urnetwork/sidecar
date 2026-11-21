@@ -16,13 +16,13 @@
 // unable to, takes it and alarms; with all 16 in use (the slot paths' k 0 to 15) nothing is written. An entry past
 // SlotEntryMaxByteCount is a large entry, alone in a file of its own, and a push whose entries pass
 // PushDirectByteCount puts them straight into the bucket's shards, a merge inside that push, and writes its head
-// without them.
+// without them, slot 0 where it holds no slot there (QD-1150).
 //
 // The head rule (R2): every push that writes a file of a writer's in a bucket replaces that writer's head there at the
 // version the push's base showed, a head sealed as it stood written again with its own bytes, and a writer with no slot
-// there given slot 0, empty when every entry is a large entry. So a writer's pushes in a bucket commit one at a time,
-// and each finds every file of the writer's as it read them. The plan removes each of the writer's absorbed large
-// entries.
+// there given slot 0, empty when every entry is a large entry or the push passes PushDirectByteCount. So a writer's
+// pushes in a bucket commit one at a time, and each finds every file of the writer's as it read them. The plan removes
+// each of the writer's absorbed large entries.
 //
 // One counter a writer a bucket numbers its slots and large entries, so the manifest's absorbed watermark reads as one
 // number; a push that numbers anything renumbers the head above it, so the head always holds its writer's highest seq
@@ -121,7 +121,8 @@ type indexHeadPlan struct {
 	// By start day.
 	buckets []*indexHeadPlanBucket
 	// The push's entries pass PushDirectByteCount: every one goes straight into its bucket's shards as a full entry, a
-	// merge inside the push (SEARCH-M10-10's), and the writer's heads there are written without them.
+	// merge inside the push (SEARCH-M10-10's), and the writer's head in each of those buckets is written without them,
+	// slot 0 opening empty where the writer holds no slot.
 	mergeInPush bool
 	// The writer has no free slot and may merge: it merges first, then plans again. Nothing else is set.
 	mergeFirst bool
@@ -275,18 +276,44 @@ func indexPlanHead(ctx context.Context, args *indexHeadPlanArgs) (*indexHeadPlan
 	}
 
 	if settings.PushDirectByteCount < totalByteCount {
-		// the push merges its documents itself and writes each head it has without the keys it carried; the merge is
-		// SEARCH-M10-10's
+		// the push merges its documents itself and writes its writer's head in each bucket without the keys it carried,
+		// with C; the merge is SEARCH-M10-10's
 		plan.mergeInPush = true
 		for _, start := range starts {
 			work := works[start]
 			planned := &indexHeadPlanBucket{window: work.window, created: work.created}
 			plan.buckets = append(plan.buckets, planned)
 			planned.direct = work.entries
-			if work.writer == nil || work.writer.head() == nil {
+			var head *indexViewSlot
+			if work.writer != nil {
+				head = work.writer.head()
+			}
+			if head == nil {
+				// the head rule: a writer with no slot in the bucket creates slot 0 there, empty, carrying C, at the seq
+				// above every file of its own there, so the push reads as indexed and a host with the text holds it to
+				// its documents (QD-1150; QD-689's reading 9)
+				seq := uint32(1)
+				if work.writer != nil {
+					seq = work.writer.highestSeq() + 1
+				}
+				path, err := root.paths.slot(planned.window.startDay, [indexIdByteCount]byte(args.writer), 0)
+				if err != nil {
+					return nil, err
+				}
+				header := indexNewFileHeader(indexFileSlot, args.tables)
+				header.BucketStartDay = planned.window.startDay
+				header.BucketDays = planned.window.days
+				header.WriterSidecarId = args.writer.Bytes()
+				header.Seq = seq
+				header.Coverage = args.coverage
+				file, err := indexEncodePlanned(&indexSlot{header: header}, view.companion, settings)
+				if err != nil {
+					return nil, err
+				}
+				parsed, _ := indexParsePath(path, view.companion)
+				planned.head = &indexPlannedFile{path: parsed, slot: file.slot, file: file.file}
 				continue
 			}
-			head := work.writer.head()
 			carried := map[[indexIdByteCount]byte]bool{}
 			for _, document := range work.pending {
 				carried[document.key] = true

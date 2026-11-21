@@ -5,11 +5,12 @@
 // erasure set at the push's epoch lists, which the push commits with no entry, and one it lists only below the version
 // the push commits; a path under the never row in a general ref, a mailbox and a group inbox; a chunk D6 skips beside
 // the chunk after it; and a push past DirectBytes, whose entries the check finds in the bucket's shards and whose
-// document left out it names against the head the push wrote. Each case is also run with a document left out, so a
-// check that holds nothing to an entry cannot pass it. Beside them, the rows and tombstones a push past DirectBytes
-// merges into the shards are judged against the text as a head's entries are, and the rows its merge carried over
-// are not; and an entry above the effective ref version at the pin, which no path version exceeds, enters nothing,
-// and as a tombstone is planted whatever the path holds at the pin, over a live chunk a document hidden (QD-1153).
+// document left out it names against the head the push wrote, a writer's first push into the bucket among them, whose
+// head is the slot 0 it opens there (QD-1150). Each case is also run with a document left out, so a check that holds
+// nothing to an entry cannot pass it. Beside them, the rows and tombstones a push past DirectBytes merges into the
+// shards are judged against the text as a head's entries are, and the rows its merge carried over are not; and an
+// entry above the effective ref version at the pin, which no path version exceeds, enters nothing, and as a tombstone
+// is planted whatever the path holds at the pin, over a live chunk a document hidden (QD-1153).
 
 package sidecar
 
@@ -499,6 +500,56 @@ func TestIndexCheckWithTextFindsAnEntryMergedPastDirectBytes(t *testing.T) {
 		}
 	}
 	check.leftOut(t, world, mallory, "b.txt", omitted)
+}
+
+// QD-1150: a writer's first push into a bucket, past DirectBytes, opens its slot 0 head there, empty, beside the
+// shards its merge writes, so the push changed its signer's head and the check runs for it, as for any push past
+// DirectBytes: with every document it commits in the shards, nothing is flagged; with b.txt left out of the merge,
+// b.txt is flagged, and index_mismatch names the signer and the slot 0 head the push wrote, not a shard or the
+// manifest.
+func TestIndexCheckWithTextHoldsAFirstPushPastDirectBytesToItsDocuments(t *testing.T) {
+	mallory := evsTestId("writer m")
+	// a world whose first push, mallory's, commits three bulk texts and b.txt, which mallory enters past DirectBytes
+	first := func() (*testBackfillWorld, *indexContentPush, []string) {
+		world := testNewBackfillWorld(false)
+		changes, paths := testBulkChanges(7, "a", "b", "c")
+		committed := world.commit(t, mallory, testInRefPush, append(changes, testContentChange{path: "b.txt", content: []byte("radishes and parsnips")})...)
+		return world, committed, paths
+	}
+	// the slot 0 head the push opened, empty, the only file of mallory's it wrote
+	opened := func(check *testInRefCheck, label string) {
+		if !check.plan.mergeInPush || len(check.plan.buckets) != 1 {
+			t.Fatalf("%s: the push did not pass DirectBytes", label)
+		}
+		head := check.plan.buckets[0].head
+		if head == nil || head.path.kind != indexPathSlot || head.path.slotIndex != 0 || head.replaces != 0 || len(head.slot.entries) != 0 || head.slot.header.Seq != 1 {
+			t.Fatalf("%s: the push opened head %+v", label, head)
+		}
+	}
+
+	world, committed, bulkPaths := first()
+	check := testCheckInRef(t, world, mallory, committed, false, testOneEntryEach(t, world, committed, append(slices.Clone(bulkPaths), "b.txt")...)...)
+	opened(check, "a first push entering every document")
+	if shardCount, ownCount := testHeldOf(t, world, mallory, "b.txt"); shardCount != 1 || ownCount != 0 {
+		t.Fatalf("b.txt held in %d shard entries and %d of the writer's", shardCount, ownCount)
+	}
+	check.clean(t, "a first push past DirectBytes entering every document")
+	// the four rows it merged: its new head holds nothing
+	if check.outcome.checked != 4 {
+		t.Fatalf("%d entries judged", check.outcome.checked)
+	}
+
+	world, committed, bulkPaths = first()
+	omitted := testOneEntryEach(t, world, committed, "b.txt")[0]
+	check = testCheckInRef(t, world, mallory, committed, false, testOneEntryEach(t, world, committed, bulkPaths...)...)
+	opened(check, "a first push leaving b.txt out")
+	if shardCount, ownCount := testHeldOf(t, world, mallory, "b.txt"); shardCount != 0 || ownCount != 0 {
+		t.Fatalf("b.txt held in %d shard entries and %d of the writer's", shardCount, ownCount)
+	}
+	check.leftOut(t, world, mallory, "b.txt", omitted)
+	if path, ok := indexParsePath(check.raised[0].Path, false); !ok || path.kind != indexPathSlot || path.slotIndex != 0 {
+		t.Fatalf("the omission named %s, not mallory's slot 0", check.raised[0].Path)
+	}
 }
 
 // A push past DirectBytes merges its entries into the bucket's shards, where its signer's head holds none of them, so a
