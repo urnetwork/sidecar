@@ -74,8 +74,9 @@ func (self *evsWalkTrail) add(statements []*EvsVerifiedStatement) {
 	}
 }
 
-// head as its raise judges it, the trail as its walk, from the reader's own start: a copy of head, whose own fields
-// stay as they are. A trail that never reached the asked pin's version judges the head alone.
+// The head a read walked, as its raise judges it: a copy of head with the trail as its walk, from the reader's own
+// start, head's own fields left as they are. A trail that never reached the asked pin's version judges the head
+// alone.
 func (self *evsWalkTrail) head(head *EvsVerifiedHead) *EvsVerifiedHead {
 	raised := *head
 	raised.Statements, raised.walkChains, raised.ownStart = nil, nil, true
