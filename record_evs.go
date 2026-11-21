@@ -36,6 +36,12 @@
 //	          new slots, each entry file rebuilt and checked against its sealed fields, and its path found from its
 //	          tokens (below); the push's slot object is the one new slot that no entry's chain names. A version that
 //	          creates no entry file, a BASE's, is left out, and so is an entry file a later BASE removed
+//	erased    an entry file whose key a committed ERASE destroyed before any BASE removed it reads as erased
+//	          (ErrEvsErased, no alarm), judged on the ERASEs read after its slot by the one judge every key gone in the
+//	          read shares (evs_read_erased.go): nothing of it is left to give, so it is left out as a removed one is,
+//	          and the version with it once nothing else stands, and the record reads past it, as it reads past an
+//	          entry the fake's RemoveStreamEntries took; a key gone that no ERASE names is one evs withheld, which
+//	          alarms tamper and refuses the read
 //	replay    every push's changes held again, with their entry versions, to the creates-only rule as
 //	          EvsVerifier.VerifyPayloadRefRules judges a payload (QD-722), against the stream's directories as a
 //	          replay of its pushes from the first holds them: each by its plaintext path, so a path epoch's new tokens
@@ -968,6 +974,11 @@ func (self *RecordEvsStreams) ReadStream(ctx context.Context, repoId Id, writerS
 				defer spill.close()
 				return io.ReadAll(spill.reader())
 			}()
+			if errors.Is(err, ErrEvsErased) {
+				// its key a committed ERASE destroyed, no BASE having removed it yet: nothing to give (the file
+				// header's erased row)
+				continue
+			}
 			if err != nil {
 				return nil, recordEvsRefusal(err)
 			}
