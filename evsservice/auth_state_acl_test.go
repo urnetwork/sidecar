@@ -220,6 +220,71 @@ func TestAclEvsAuthStateIsUnavailableWhileTheStateIsCold(t *testing.T) {
 	}
 }
 
+// A second network displaces the first. Each normal EVS guard can request its previous snapshot again.
+func TestAclEvsGuardsReloadEvictedNetworks(t *testing.T) {
+	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
+	blobs := sidecartest.NewFakeBlobs(clock, sidecartest.NewFaultQueue(), nil, nil)
+	cluster, err := blobs.FirstCluster()
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := func() *sidecar.Principal {
+		networkId, ownerId := connect.NewId(), connect.NewId()
+		world := sidecartest.NewConfigLogSuiteWorldFor(t.Context(), cluster, sidecar.Id(networkId), sidecar.NewId(), sidecar.Id(ownerId))
+		api := sidecartest.NewFakeApi(t.Context(), world.Clock(), blobs.Faults(), nil, cluster, nil)
+		if err := world.Start(api); err != nil {
+			t.Fatal(err)
+		}
+		return &sidecar.Principal{NetworkId: networkId, ClientId: connect.NewId(), SidecarId: &ownerId}
+	}
+	first, second := owner(), owner()
+	loads := make(chan error, 1)
+	settings := sidecar.DefaultAclGateSettings()
+	settings.PollInterval = 0
+	settings.ByteBudget = 1
+	settings.OnLoad = func(_ sidecar.Id, _ *bridge.AuthPin, err error) { loads <- err }
+	cache := sidecar.NewAclGateCache(t.Context(), sidecar.NewAclGateDirectSource(nil, blobs, settings), clock, settings)
+	t.Cleanup(cache.Close)
+	waitLoad := func() {
+		t.Helper()
+		select {
+		case err := <-loads:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("the guard did not request its network")
+		}
+	}
+	auth := NewAclEvsAuthState(cache, nil)
+	for _, principal := range []*sidecar.Principal{first, second, first} {
+		if got := auth.MatchBinding(principal); got != EvsAuthUnknown {
+			t.Fatalf("binding before loading: %v", got)
+		}
+		waitLoad()
+		if got := auth.MatchBinding(principal); got != EvsAuthAllowed {
+			t.Fatalf("verified owner's binding: %v", got)
+		}
+	}
+	views := NewAclGateViews(cache)
+	if _, answer := views.View(sidecar.Id(second.NetworkId)); answer != EvsAuthUnknown {
+		t.Fatalf("evicted push view: %v", answer)
+	}
+	waitLoad()
+	if view, answer := views.View(sidecar.Id(second.NetworkId)); view == nil || answer != EvsAuthAllowed {
+		t.Fatalf("reloaded push view: %v", answer)
+	}
+	locks := NewAclDropLocks(cache)
+	repoId := sidecar.NewId()
+	if _, answer := locks.LockStanding(sidecar.Id(first.NetworkId), repoId); answer != EvsAuthUnknown {
+		t.Fatalf("evicted DROP lock view: %v", answer)
+	}
+	waitLoad()
+	if _, answer := locks.LockStanding(sidecar.Id(first.NetworkId), repoId); answer != EvsAuthAllowed {
+		t.Fatalf("reloaded DROP lock view: %v", answer)
+	}
+}
+
 // A read token of sidecarId in networkId, its client clientId, as the exchange would mint it.
 func (self *aclAuthFixture) tokenOf(networkId sidecar.Id, sidecarId sidecar.Id, clientId sidecar.Id) string {
 	connectSidecarId := connect.Id(sidecarId)

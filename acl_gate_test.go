@@ -366,7 +366,7 @@ func TestAclGateRefusesAGapAndAForkWithAnAlarm(t *testing.T) {
 }
 
 // Past its byte budget the cache drops the loaded state of the network read longest ago, never the one it just
-// loaded; that network reads not loaded, keeps its pin, reloads when next changed, and a cold start below its pin is
+// loaded; that network reads not loaded, keeps its pin, reloads on the next scope check, and a cold start below its pin is
 // refused with an alarm.
 func TestAclGateEvictsUnderItsByteBudgetAndKeepsPins(t *testing.T) {
 	source := newAclGateTestSource()
@@ -408,11 +408,15 @@ func TestAclGateEvictsUnderItsByteBudgetAndKeepsPins(t *testing.T) {
 	// the evicted network keeps its pin: a stale store's cold start below it is refused with an alarm, the true one
 	// reloads
 	evicted := nets[1]
-	evicted.mustPost(evicted.owner, bridge.SignedType_SIGNED_MEMBER_ADMIT, evicted.memberAdmitStatement("after eviction"))
 	source.stateLock.Lock()
-	source.entries[evicted.networkId] = slices.Clone(evicted.entries[:len(evicted.entries)-2])
+	source.entries[evicted.networkId] = slices.Clone(evicted.entries[:len(evicted.entries)-1])
 	source.stateLock.Unlock()
-	cache.Changed(evicted.networkId)
+	checkScope := func() AclScopeAnswer {
+		return cache.HonorScope(evicted.networkId, evicted.owner.sidecarId, evicted.configRepoId(), AclEvsAdmin, AclTokenAudienceEvs, aclTestNow)
+	}
+	if answer := checkScope(); answer != AclScopeUnknown {
+		t.Fatalf("scope after eviction: %v", answer)
+	}
 	if load := aclGateTestNextLoad(t, loads); !errors.Is(load.err, ErrConfigBelowPin) || cache.Stats().AlarmCount != 1 {
 		t.Fatalf("a cold start below the pin: %v", load.err)
 	}
@@ -420,9 +424,65 @@ func TestAclGateEvictsUnderItsByteBudgetAndKeepsPins(t *testing.T) {
 		t.Errorf("after the refused cold start: %d", status)
 	}
 	source.publish(evicted)
-	cache.Changed(evicted.networkId)
+	if answer := checkScope(); answer != AclScopeUnknown {
+		t.Fatalf("scope before the pinned log reloads: %v", answer)
+	}
 	if load := aclGateTestNextLoad(t, loads); load.err != nil || !proto.Equal(load.pin, evicted.log.Pin()) {
 		t.Fatalf("the reload: %v", load.err)
+	}
+	if answer := checkScope(); answer != AclScopeHonored {
+		t.Fatalf("owner's scope after reload: %v", answer)
+	}
+}
+
+func TestAclGateRejectsAnotherNetworksSignedLog(t *testing.T) {
+	requested := newTestConfigNetNamed(t, "requested network")
+	other := newTestConfigNetNamed(t, "other network")
+	other.mustPost(other.owner, bridge.SignedType_SIGNED_MEMBER_ADMIT, other.memberAdmitStatement("extra member"))
+	source := newAclGateTestSource()
+	source.publish(other)
+	// A valid log returned at the wrong source address.
+	source.genesis[requested.networkId] = other.signedGenesis
+	source.entries[requested.networkId] = other.entries
+	settings := DefaultAclGateSettings()
+	settings.PollInterval = 0
+	settings.FailureBackoff = 0
+	cache, loads := newAclGateTestCache(t, source, newAclGateTestClock(), settings)
+	RequestAclGateSnapshot(cache, requested.networkId)
+	if load := aclGateTestNextLoad(t, loads); !errors.Is(load.err, ErrConfigRunRefused) || load.pin != nil {
+		t.Fatalf("loaded another network's signed log: %+v", load)
+	}
+	if snapshot, _ := cache.State(requested.networkId); snapshot != nil {
+		t.Fatal("published the other network's state")
+	}
+	source.publish(requested)
+	RequestAclGateSnapshot(cache, requested.networkId)
+	if load := aclGateTestNextLoad(t, loads); load.err != nil || !proto.Equal(load.pin, requested.log.Pin()) {
+		t.Fatalf("recovering the requested network: %+v", load)
+	}
+	held, _ := cache.State(requested.networkId)
+	requested.mustPost(requested.owner, bridge.SignedType_SIGNED_MEMBER_ADMIT, requested.memberAdmitStatement("added after pin"))
+	requested.foldPast(held.Pin.GetVersion())
+	source.publish(requested)
+	retained := requested.log.Retained().Entries
+	// The source has compacted past the pin, but serves another network's rows for the new base.
+	source.stateLock.Lock()
+	source.rewrite = func(_ Id, _ *bridge.AuthPin, _ [][]byte) [][]byte { return retained }
+	source.rows[requested.networkId] = ConfigRowsOnlySource(func(_ Id, _ []byte) ([]byte, error) {
+		return other.source.Rows(other.networkId, other.log.State().Base().GetRowsSha256())
+	})
+	source.stateLock.Unlock()
+	cache.Changed(requested.networkId)
+	if load := aclGateTestNextLoad(t, loads); !errors.Is(load.err, ErrConfigFork) {
+		t.Fatalf("accepted a retained rebuild with another network's rows: %+v", load)
+	}
+	if current, _ := cache.State(requested.networkId); current != held {
+		t.Fatal("lost the last verified snapshot")
+	}
+	source.publish(requested)
+	cache.Changed(requested.networkId)
+	if load := aclGateTestNextLoad(t, loads); load.err != nil || !proto.Equal(load.pin, requested.log.Pin()) {
+		t.Fatalf("rebuilding after the requested network's rows returned: %+v", load)
 	}
 }
 

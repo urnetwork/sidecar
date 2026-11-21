@@ -24,8 +24,7 @@
 // deposit are for everyone. evs's guard and gkm's, taking an admin token on a route a weaker right also opens, ask for
 // both (EvsRequest.AuthorizeRepo, GkmRequest.AuthorizeRepo; QD-975), and gkm's rechecks repo/ before each write.
 //
-// Cold state is no pass: a network the cache holds nothing of, or holds with nothing loaded, answers AclScopeUnknown,
-// which every gate answers 503, and a network the cache had never heard of is told to it so its load starts.
+// Every network without a loaded snapshot answers AclScopeUnknown (503) and queues a load.
 //
 // Safe for concurrent use. Nothing here creates, derives or unwraps a key.
 
@@ -55,13 +54,8 @@ const aclEvsAllRights = AclEvsDeposit | AclEvsRead | AclEvsWrite | AclEvsAdmin
 // for a token of audience: one map read and one EvsAccess, no lock, no I/O and no allocation once the network is
 // loaded.
 func (self *AclGateCache) HonorScope(networkId Id, subjectId Id, repoId Id, scope AclEvsRights, audience AclTokenAudience, now time.Time) AclScopeAnswer {
-	snapshot, status := self.State(networkId)
-	switch status {
-	case AclGateUnknown:
-		// evs's and gkm's networks all have logs: ask for one, and refuse meanwhile
-		self.Changed(networkId)
-		return AclScopeUnknown
-	case AclGateNotLoaded:
+	snapshot := RequestAclGateSnapshot(self, networkId)
+	if snapshot == nil {
 		return AclScopeUnknown
 	}
 	return AclHonorScope(snapshot.Acl, subjectId, repoId, scope, audience, now)

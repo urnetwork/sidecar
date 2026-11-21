@@ -181,6 +181,20 @@ func (self *AclGateCache) State(networkId Id) (*AclGateSnapshot, AclGateStatus) 
 	return snapshot, AclGateLoaded
 }
 
+// RequestAclGateSnapshot returns the verified snapshot or queues a load and returns nil. Requests
+// requeue evicted networks and failed first loads because the periodic poll refreshes loaded networks only.
+func RequestAclGateSnapshot(source AclContractStateSource, networkId Id) *AclGateSnapshot {
+	if source == nil {
+		return nil
+	}
+	snapshot, status := source.State(networkId)
+	if status == AclGateLoaded && snapshot != nil {
+		return snapshot
+	}
+	source.Changed(networkId)
+	return nil
+}
+
 // Tells the cache the network's log moved, or that a gate needs it: tracks the network, and starts a load, or marks
 // one due after the load running. Never blocks or reads, so the shared subscriber's callback may call it.
 func (self *AclGateCache) Changed(networkId Id) {
@@ -349,7 +363,7 @@ func (self *AclGateCache) load(network *aclGateNetwork) error {
 			defer network.stateLock.Unlock()
 			return network.floor
 		}()
-		log, err = RestoreConfigLogRowsOnly(logSettings, &ConfigRetained{SignedGenesis: genesis, Entries: entries}, rowsSource, floor)
+		log, err = restoreConfigLogRowsOnly(logSettings, &ConfigRetained{SignedGenesis: genesis, Entries: entries}, rowsSource, floor, &networkId)
 		if err != nil {
 			if errors.Is(err, ErrConfigRunRefused) || errors.Is(err, ErrConfigBelowPin) || errors.Is(err, ErrConfigFork) {
 				return self.alarm(networkId, err)
@@ -373,7 +387,7 @@ func (self *AclGateCache) load(network *aclGateNetwork) error {
 			// verified pin until a signed base and its entire tail verify.
 			retained := &ConfigRetained{SignedGenesis: log.signedGenesis, Entries: entries}
 			var restored *ConfigLog
-			restored, err = RestoreConfigLogRowsOnly(logSettings, retained, rowsSource, log.Pin())
+			restored, err = restoreConfigLogRowsOnly(logSettings, retained, rowsSource, log.Pin(), &networkId)
 			if err == nil {
 				log = restored
 				network.stateLock.Lock()
