@@ -72,6 +72,15 @@ func startUrScimSigner(running *sidecar.Sidecar, log sidecar.Logger) *sidecar.Si
 // starts has the network's scim_signer started beside it (startUrScimSigner), which reads the state it installs.
 func startUrConfigFollower(running *sidecar.Sidecar, log sidecar.Logger) *sidecar.SidecarConfigFollower {
 	args := &sidecar.SidecarConfigFollowerArgs{Settings: urConfigFollowerSettings(), BootstrapFirstOwner: true}
+	if urDaemonGkmClient != nil {
+		args.RecordEvs = func() (*sidecar.EvsClient, error) {
+			clients, err := urNetworkClientsOf(running)
+			if err != nil {
+				return nil, err
+			}
+			return clients.evsClient()
+		}
+	}
 	if urDaemonConfigHeads != nil {
 		args.Heads = urDaemonConfigHeads(running)
 	}

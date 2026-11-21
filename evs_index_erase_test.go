@@ -270,6 +270,9 @@ func (self *testEraseStore) Progress(ctx context.Context, erasureId Id) (*indexE
 	self.evs.stateLock.Lock()
 	defer self.evs.stateLock.Unlock()
 	progress := &indexEraseProgress{}
+	progress.completionKey, _ = evsCompletionKeyOf(self.evs.erases, erasureId, func(erase *testEraseErase) (Id, []*EvsErasedKey) {
+		return erase.erasureId, erase.erased.keys
+	})
 	for _, closure := range self.evs.closures {
 		if closure.erasureId == erasureId {
 			progress.closures = append(progress.closures, closure.closed)
@@ -540,8 +543,8 @@ func (self *testEraseWorld) completingEraser(t testing.TB) *IndexEraser {
 	return self.eraserJudging(t, evsTestId("eraser"), nil, func(ctx context.Context, erasureIds []Id) (map[Id]bool, error) {
 		self.evs.stateLock.Lock()
 		defer self.evs.stateLock.Unlock()
-		return recordEraseCompleteByNewest(self.evs.erases, func(erase *testEraseErase) (Id, bool) {
-			return erase.erasureId, erase.erased.complete
+		return recordEraseCompleteByNewest(self.evs.erases, func(erase *testEraseErase) (Id, bool, bool) {
+			return erase.erasureId, erase.erased.complete, true
 		}), nil
 	})
 }

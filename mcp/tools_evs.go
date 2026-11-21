@@ -138,6 +138,7 @@ var (
 	errMcpEvsUnavailable = NewMcpError(McpCodeUnavailable, "this daemon holds no evs client for the network yet: run ur status in your own terminal", true)
 	errMcpEvsRepo        = NewMcpError(McpCodeInvalidArguments, "repo is a repo's id", false)
 	errMcpEvsPath        = NewMcpError(McpCodeInvalidArguments, "path is names joined by /, with no empty name", false)
+	errMcpEvsErased      = NewMcpError(McpCodeFailedPrecondition, "this version was erased", false)
 	errMcpEvsAbsent      = NewMcpError(McpCodeFailedPrecondition, "nothing stands at that path", false)
 	errMcpEvsConflict    = NewMcpError(McpCodeFailedPrecondition, "the path moved past base_version: read it again and write on its version", false)
 	errMcpEvsGitRef      = NewMcpError(McpCodeFailedPrecondition, "EVS_GIT_REF: the repo's ref is git-mode, and this daemon has no local tier to commit through", false)
@@ -234,6 +235,8 @@ func mcpEvsError(err error) error {
 		return errMcpEvsConflict
 	case errors.Is(err, sidecar.ErrEvsGitRef):
 		return errMcpEvsGitRef
+	case errors.Is(err, sidecar.ErrEvsErased):
+		return errMcpEvsErased
 	case errors.Is(err, sidecar.ErrEvsPathAbsent):
 		return errMcpEvsAbsent
 	case errors.Is(err, sidecar.ErrEvsFormatUnsupported):

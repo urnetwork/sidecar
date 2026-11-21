@@ -504,6 +504,15 @@ func TestRecordEraseMaskKeys(t *testing.T) {
 	if !slices.Equal(masked, want) {
 		t.Fatalf("masked %x, want %x", masked, want)
 	}
+	// The same signed keys and note on a completion add no masks, even when the earlier erasure owns them.
+	erase.Completion = true
+	for _, valid := range []bool{false, true} {
+		erase.Complete = valid
+		masked, err := indexRecordEraseMaskKeys(refKey, protocol.RepoKind_REPO_KIND_VAULT, erase, entries, streams)
+		if err != nil || len(masked) != 0 {
+			t.Fatalf("completion (valid %t) added masks %x, %v", valid, masked, err)
+		}
+	}
 }
 
 // A fake of a log's ERASE reads: every other call refuses.

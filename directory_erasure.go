@@ -1786,13 +1786,7 @@ func (self *DirectoryEvsErasure) index(ctx context.Context, repoId Id, refName [
 			if err != nil {
 				return nil, err
 			}
-			complete := map[Id]bool{}
-			for _, erasure := range erasures {
-				if erasure.Complete {
-					complete[erasure.ErasureId] = true
-				}
-			}
-			return complete, nil
+			return recordEraseCompleteByNewest(erasures, (*EvsErasure).completionState), nil
 		},
 		refKey: refKey, tables: indexLinkedTables(), mayMerge: func() bool { return true },
 		padKey: func(ctx context.Context) (*indexPadKey, error) { return padKey, nil },
@@ -1884,7 +1878,7 @@ func (self *DirectoryEvsErasure) OrphanCardKeys(ctx context.Context, repoId Id, 
 		if erasure.ErasureId != erasureId {
 			continue
 		}
-		for _, key := range erasure.Keys {
+		for _, key := range erasure.destroyedKeys() {
 			erased[*key] = true
 		}
 	}

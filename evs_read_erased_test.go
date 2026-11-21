@@ -141,3 +141,32 @@ func TestEvsReadHeadAlarmsAKeyWithheld(t *testing.T) {
 		t.Fatalf("the ERASEs read %d times", reads)
 	}
 }
+
+// ReadStream verifies both pushes of the writer and serves the surviving entries when an ERASE precedes any BASE.
+func TestRecordEvsStreamsReadPastErasedFiles(t *testing.T) {
+	world := newEvsStreamsWorld(t, 1)
+	ctx := t.Context()
+	writer := world.writers[0]
+	world.append(t, writer, 1, 1)
+	world.append(t, writer, 2, 2)
+	admin := world.world.evsRepo(world.world.ownerId, world.repoId)
+	keys := append(evsReadErasedEntryKeys(t, world, writer, 1), evsReadErasedEntryKeys(t, world, writer, 2)...)
+	if result, err := admin.Erase(ctx, &sidecar.EvsEraseArgs{ErasureId: sidecar.NewId(), Complete: true, Keys: keys}); err != nil || result.Version != 1 {
+		t.Fatalf("erasure was not committed: %+v, %v", result, err)
+	}
+	path, err := sidecar.RecordStreamPath(3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := world.world.For(world.readerId)
+	for _, after := range []uint64{0, 1} {
+		versions, err := reader.ReadStream(ctx, world.repoId, writer, after)
+		if err != nil || len(versions) != 1 || versions[0].Version != 2 || len(versions[0].Entries) != 1 {
+			t.Fatalf("stream after %d: %+v, %v", after, versions, err)
+		}
+		entry := versions[0].Entries[0]
+		if entry.Path != path || string(entry.Entry) != "entry "+path {
+			t.Fatalf("surviving entry: %+v", entry)
+		}
+	}
+}

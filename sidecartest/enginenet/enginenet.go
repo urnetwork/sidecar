@@ -49,6 +49,8 @@ type EnginesSettings struct {
 	FollowBeforeExchange bool
 	// The evs storage balance each opened network starts with: 1 TiB, so no test write meets quota.
 	NetworkBalanceByteCount int64
+	// The EVS binary the service runs. An unspecified format exercises the format-1 rollout.
+	EvsInstanceFormat uint32
 	// How long a wait on the gate's load of a log may take in real time: 60 s, only a failure's bound.
 	SyncTimeout time.Duration
 	// How far before the Net's clock evs's receipt key may issue from: 48 h, so a receipt is issued at once.
@@ -63,6 +65,7 @@ type EnginesSettings struct {
 func DefaultEnginesSettings() *EnginesSettings {
 	return &EnginesSettings{
 		NetworkBalanceByteCount: 1024 * 1024 * 1024 * 1024,
+		EvsInstanceFormat:       sidecar.EvsRepoFormat1,
 		SyncTimeout:             60 * time.Second,
 		ReceiptKeyAge:           48 * time.Hour,
 		StatementLife:           time.Hour,
@@ -142,7 +145,7 @@ func NewEngines(t testing.TB, net *sidecartest.Net, settings *EnginesSettings) *
 	evsState := evsservice.NewAclEvsAuthState(self.cache, revocations)
 	evsViews := evsservice.NewAclGateViews(self.cache)
 	evsEngine, err := net.AddEngine("evs", func(ctx context.Context, host *sidecar.ServiceHost) (sidecar.Engine, error) {
-		return newEnginesEvsHost(ctx, host, net.Clock(), settings.ReceiptKeyAge, evsState, evsViews)
+		return newEnginesEvsHost(ctx, host, net.Clock(), settings, evsState, evsViews)
 	})
 	if err != nil {
 		t.Fatalf("evs: %v", err)
@@ -303,7 +306,7 @@ type enginesEvsHost struct {
 	closers []func()
 }
 
-func newEnginesEvsHost(ctx context.Context, host *sidecar.ServiceHost, clock sidecar.Clock, receiptKeyAge time.Duration, state evsservice.EvsAuthState, views evsservice.EvsGateViews) (evsHost *enginesEvsHost, returnErr error) {
+func newEnginesEvsHost(ctx context.Context, host *sidecar.ServiceHost, clock sidecar.Clock, world *EnginesSettings, state evsservice.EvsAuthState, views evsservice.EvsGateViews) (evsHost *enginesEvsHost, returnErr error) {
 	evsHost = &enginesEvsHost{}
 	defer func() {
 		if returnErr != nil {
@@ -311,7 +314,7 @@ func newEnginesEvsHost(ctx context.Context, host *sidecar.ServiceHost, clock sid
 		}
 	}()
 	receiptKey := sha256.Sum256([]byte("enginenet receipt key"))
-	receiptKeys, err := evsservice.NewReceiptKeys([]*evsservice.ReceiptKey{{KeyId: 1, Key: receiptKey[:], IssueFrom: clock.Now().Add(-receiptKeyAge)}}, nil)
+	receiptKeys, err := evsservice.NewReceiptKeys([]*evsservice.ReceiptKey{{KeyId: 1, Key: receiptKey[:], IssueFrom: clock.Now().Add(-world.ReceiptKeyAge)}}, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -343,7 +346,7 @@ func newEnginesEvsHost(ctx context.Context, host *sidecar.ServiceHost, clock sid
 	evsHost.closers = append(evsHost.closers, hdd.Close)
 	uploads.Hdd = hdd
 	settings := evsservice.DefaultEvsSettings()
-	settings.InstanceFormat = sidecar.EvsRepoFormat1
+	settings.InstanceFormat = max(sidecar.EvsRepoFormat1, world.EvsInstanceFormat)
 	settings.BatchFlushDelay = 0
 	settings.RepoCacheTtl = 0
 	settings.PushUnknownRereadInterval = 0

@@ -470,7 +470,7 @@ func searchEraseAgainUnits(record *SearchEraseRecord, erasureId Id) []*SearchEra
 		}
 	}
 	keys := map[RecordSlotKey]bool{}
-	for _, key := range record.Erasure.Keys {
+	for _, key := range record.Erasure.destroyedKeys() {
 		if key != nil {
 			keys[*key] = true
 		}

@@ -688,8 +688,10 @@ func (self *MailVault) refreshErasures(ctx context.Context) (map[string]Id, erro
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	for _, erasure := range erasures {
-		for _, path := range mailVaultErasedPaths(erasure.Note) {
-			self.erasedPathIds[path] = erasure.ErasureId
+		if !erasure.Completion {
+			for _, path := range mailVaultErasedPaths(erasure.Note) {
+				self.erasedPathIds[path] = erasure.ErasureId
+			}
 		}
 		self.erasuresThrough = max(self.erasuresThrough, erasure.Version)
 	}

@@ -25,6 +25,11 @@
 // derived or stores, never exported, and .ur-index/ files are left out of every file-mode tree. A format-2 repo's
 // collected or dropped versions (M10's) refuse.
 //
+// A file-mode version whose key a committed ERASE destroyed exports as its stub and the export goes on (§11.12's
+// retention row; evs_export_file.go, evs_export_format2.go). A git-mode version's blob so erased still ends the export
+// with ErrEvsErased, as it ends the local tier's sync, which shares applyUpdate: a stub there is another blob, so its
+// tree and commit, and every commit after them, would leave the original oids D-EVS-22 keeps.
+//
 // Refs are named by the names the caller holds: nil exports main. A source a push names is replayed for its objects
 // whether or not the caller named it, and a cycle of sources refuses the version that closes it.
 //

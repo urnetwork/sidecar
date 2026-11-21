@@ -44,8 +44,12 @@ func newVersionlessWorld(t *testing.T) *epochWorld {
 
 // newVersionlessWorld with a repo of kind.
 func newVersionlessWorldOf(t *testing.T, kind protocol.RepoKind) *epochWorld {
+	return newVersionlessWorldWithInbox(t, kind, protocol.RepoInbox_REPO_INBOX_NONE)
+}
+
+func newVersionlessWorldWithInbox(t *testing.T, kind protocol.RepoKind, inbox protocol.RepoInbox) *epochWorld {
 	t.Helper()
-	world := newEpochWorldOf(t, kind)
+	world := newEpochWorldWithInbox(t, kind, inbox)
 	network := connect.Id(world.networkId).String()
 	gates := fmt.Sprintf("sidecar:\n  evs: {enabled: true, networks: [%q]}\n  format2: {enabled: true, networks: [%q]}\n", network, network)
 	if err := world.host.Gates.Set(gates); err != nil {

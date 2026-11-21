@@ -71,8 +71,8 @@ func (self *RecordEraseTestIndex) Open(eraserId Id) RecordEraseIndexOpen {
 func (self *RecordEraseTestIndex) complete(ctx context.Context, erasureIds []Id) (map[Id]bool, error) {
 	self.evs.stateLock.Lock()
 	defer self.evs.stateLock.Unlock()
-	return recordEraseCompleteByNewest(self.evs.erases, func(erase *testEraseErase) (Id, bool) {
-		return erase.erasureId, erase.erased.complete
+	return recordEraseCompleteByNewest(self.evs.erases, func(erase *testEraseErase) (Id, bool, bool) {
+		return erase.erasureId, erase.erased.complete, true
 	}), nil
 }
 
@@ -435,7 +435,7 @@ func TestRecordEraseCompleteByNewest(t *testing.T) {
 		},
 	}
 	for index, c := range cases {
-		got := recordEraseCompleteByNewest(c.erases, func(erase erase) (Id, bool) { return erase.erasureId, erase.complete })
+		got := recordEraseCompleteByNewest(c.erases, func(erase erase) (Id, bool, bool) { return erase.erasureId, erase.complete, true })
 		if !maps.Equal(got, c.want) {
 			t.Errorf("case %d: complete %v, want %v", index, got, c.want)
 		}

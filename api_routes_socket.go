@@ -100,7 +100,7 @@ func (self *SidecarApi) sendSocketsJson(ctx context.Context, request *sidecarApi
 	if err != nil {
 		return fmt.Errorf("sidecar api %s: no sockets token: %w", request.route, err)
 	}
-	request.serviceBearer = token
+	request.bearerOverride = token
 	err = self.sendJson(ctx, request, args, result)
 	var apiErr *SidecarApiError
 	if errors.As(err, &apiErr) && apiErr.Status == http.StatusUnauthorized {

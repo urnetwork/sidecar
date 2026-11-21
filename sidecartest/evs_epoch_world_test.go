@@ -66,6 +66,7 @@ type epochWorld struct {
 
 	stateLock sync.Mutex
 	view      *FakeGkmAuthView
+	config    func() sidecar.GkmAuthView
 	devices   []*epochDevice
 	// called before a device's request is served, nil for none; an error fails the request as a transport would
 	intercept func(device *epochDevice, request *http.Request) error
@@ -129,6 +130,10 @@ func newEpochWorld(t *testing.T) *epochWorld {
 
 // newEpochWorld's repo of kind.
 func newEpochWorldOf(t *testing.T, kind protocol.RepoKind) *epochWorld {
+	return newEpochWorldWithInbox(t, kind, protocol.RepoInbox_REPO_INBOX_NONE)
+}
+
+func newEpochWorldWithInbox(t *testing.T, kind protocol.RepoKind, inbox protocol.RepoInbox) *epochWorld {
 	t.Helper()
 	return newEpochWorldWithInbox(t, kind, protocol.RepoInbox_REPO_INBOX_NONE)
 }
@@ -290,6 +295,10 @@ func (self *epochWorld) deviceOn(label string, store sidecar.SidecarStore, mutat
 	if mutate != nil {
 		mutate(settings)
 	}
+	config := self.config
+	if config == nil {
+		config = func() sidecar.GkmAuthView { return self.currentView() }
+	}
 	client, err := sidecar.NewEvsClient(&sidecar.EvsClientArgs{
 		NetworkId: self.networkId,
 		EvsUrl:    "https://evs.example",
@@ -305,7 +314,7 @@ func (self *epochWorld) deviceOn(label string, store sidecar.SidecarStore, mutat
 		Identity: func() *sidecar.SidecarIdentity { return identity },
 		Gkm:      device.gkm,
 		Store:    store,
-		Config:   func() sidecar.GkmAuthView { return self.currentView() },
+		Config:   config,
 		Clock:    &epochDeviceClock{clock: self.clock},
 		Log:      sidecar.NewNoopLogger(),
 		Settings: settings,
