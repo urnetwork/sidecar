@@ -226,7 +226,7 @@ func newTestSidecar(t *testing.T) *Sidecar {
 // Collects what a Sidecar raises.
 func recordEvents(sidecar *Sidecar) *[]SidecarEvent {
 	events := &[]SidecarEvent{}
-	sidecar.eventCallbacks.Add(func(event SidecarEvent) {
+	sidecar.AddEventCallback(func(event SidecarEvent) {
 		*events = append(*events, event)
 	})
 	return events
@@ -411,7 +411,7 @@ func TestEveryCallbackGetsTheEvent(t *testing.T) {
 func TestACallbackMayCallBackIn(t *testing.T) {
 	sidecar := newTestSidecar(t)
 	var kinds []SidecarEventKind
-	sidecar.eventCallbacks.Add(func(event SidecarEvent) {
+	sidecar.AddEventCallback(func(event SidecarEvent) {
 		kinds = append(kinds, event.Kind)
 		if event.Kind == SidecarEventState {
 			sidecar.emitEvent(SidecarEvent{Kind: SidecarEventRefused})
@@ -454,7 +454,7 @@ func TestAnOvertakenEventNeverArrivesAfterTheNewerGeneration(t *testing.T) {
 	}
 	entered := make(chan struct{})
 	release := make(chan struct{})
-	sidecar.eventCallbacks.Add(func(event SidecarEvent) {
+	sidecar.AddEventCallback(func(event SidecarEvent) {
 		if event.Kind == SidecarEventState && event.Reason == SidecarReasonRefused && event.Generation == 2 {
 			close(entered)
 			<-release
@@ -462,7 +462,7 @@ func TestAnOvertakenEventNeverArrivesAfterTheNewerGeneration(t *testing.T) {
 	})
 	var recordedLock sync.Mutex
 	recorded := []SidecarEvent{}
-	sidecar.eventCallbacks.Add(func(event SidecarEvent) {
+	sidecar.AddEventCallback(func(event SidecarEvent) {
 		recordedLock.Lock()
 		defer recordedLock.Unlock()
 		recorded = append(recorded, event)
@@ -497,7 +497,7 @@ func TestAnOvertakenEventNeverArrivesAfterTheNewerGeneration(t *testing.T) {
 func TestAPanickingCallbackDoesNotStopLaterEvents(t *testing.T) {
 	sidecar := newTestSidecar(t)
 	panicking := true
-	sidecar.eventCallbacks.Add(func(event SidecarEvent) {
+	sidecar.AddEventCallback(func(event SidecarEvent) {
 		if panicking {
 			panicking = false
 			panic("synthetic callback panic")

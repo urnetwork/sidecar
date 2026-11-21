@@ -385,6 +385,11 @@ func (self *Sidecar) Status() SidecarStatus {
 // Calls callback with each event from here on, until the answer is called (§5.4). See SidecarEventFunction for what
 // a callback may do.
 func (self *Sidecar) AddEventCallback(callback SidecarEventFunction) func() {
+	return self.addQueuedEventCallback(func(event sidecarQueuedEvent) { callback(event.SidecarEvent) })
+}
+
+// The daemon also consumes the origin captured when the event was raised.
+func (self *Sidecar) addQueuedEventCallback(callback func(sidecarQueuedEvent)) func() {
 	callbackId := self.eventCallbacks.Add(callback)
 	var once sync.Once
 	return func() {
