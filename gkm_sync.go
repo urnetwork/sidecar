@@ -25,6 +25,13 @@
 // KF7, gkm unreachable: nothing here runs; cached keys serve reads and deposits (gkm_access.go, gkm_dropkey.go),
 // and joins, catch-up and membership changes wait for the next hint or resync.
 //
+// In KeyDelivery mode (v0, owner decision 610) none of the rows above run: a sync takes the generations gkm holds past
+// this device's, its first wrap or a late delivery asked for where it holds no key of the newest, walks the ladder,
+// and then answers late asks (gkm_deliver.go's answerLateInFlow): a writer, or the device that signed an admission,
+// writes the LATE deliveries its lost wrap-pending hints would have asked of it, to the holders the newest
+// generation's own state did not hold, so a holder offline at a hint delivers at its next sync, the hourly resync's
+// among them (§6.8).
+//
 // The commit hint's work is SyncRepo. Before the rows above it follows a re-formed group, and finishes this device's
 // own re-form left at its finishing phase once gkm takes the rotation's writes, a repo re-seeded as deleted's once
 // it is restored (gkm_reform.go's resume row; QD-1143). A join through this device's last-resort KeyPackage is noted
@@ -109,7 +116,8 @@ func (self *gkmExternalBase) Process(message []byte) (MlsStagedCommit, error) {
 // KF5 for one repo, the commit hint's work and each resync's: the generations gkm holds past this device's, the
 // epochs past its own by catch-up or resync, and the ladder below whatever it newly opened, after a re-formed group
 // is followed and this device's own re-form finished where it may be (QD-1143). A device that holds nothing of the
-// repo yet takes its first wrap if one stands. See the file header for what waits.
+// repo yet takes its first wrap if one stands. In KeyDelivery mode it then answers late asks. See the file header
+// for what waits.
 func (self *GkmGroupClient) SyncRepo(ctx context.Context, repoId Id) error {
 	manager := self.manager(repoId)
 	manager.flowLock.Lock()
@@ -140,7 +148,7 @@ func (self *GkmGroupClient) SyncRepo(ctx context.Context, repoId Id) error {
 		if pins, err := self.repoPins(repoId); err == nil {
 			manager.walkLadderForLater(ctx, state, pins.groupId)
 		}
-		return nil
+		return manager.answerLateInFlow(ctx)
 	}
 	if err := manager.takeGenerationsInFlow(ctx, state); err != nil && !errors.Is(err, ErrGkmKeyMissing) {
 		return err

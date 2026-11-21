@@ -151,6 +151,8 @@ type FsKeysDevice struct {
 	// how far the device's own clock runs ahead of the world's, negative for one that trails it; its next restart
 	// takes it
 	ClockOffset time.Duration
+	// the device's jittered waits, a draw in [0, max), which its next restart takes; nil waits none
+	Jitter func(max time.Duration) time.Duration
 	// the client its sidecar is now, which hints reach
 	ClientId connect.Id
 	// whether Publish has uploaded its first keys
@@ -726,7 +728,7 @@ func (self *FsKeysDevice) Restart() {
 		RecoveryKey:     world.recoveryKey,
 		ReaderRepoIds:   world.repoIds,
 		Alarm:           func(alarm *sidecar.GkmAlarm) { self.Alarms = append(self.Alarms, alarm) },
-		Jitter:          func(max time.Duration) time.Duration { return 0 },
+		Jitter:          self.jitter,
 		Settings:        settings,
 		Clock:           deviceClock,
 	}
@@ -749,6 +751,14 @@ func (self *FsKeysDevice) Restart() {
 	if self.state != nil {
 		client.AuthAdvanced(self.state)
 	}
+}
+
+// The device's jittered wait: Jitter's draw, none without it.
+func (self *FsKeysDevice) jitter(max time.Duration) time.Duration {
+	if self.Jitter == nil {
+		return 0
+	}
+	return self.Jitter(max)
 }
 
 // An active clone of device (§2.10's copied keychain row): another process holding its identity key, and copies of

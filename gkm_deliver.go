@@ -26,7 +26,11 @@
 //
 // A LATE delivery (the deliver row) answers wrap-pending: after a random wait of up to LateDeliverJitter, a holder
 // that is not read_only, holds RK_g* and judged gen/<g*>, at a tip at or past its pin (R2), delivers to a recipient
-// among the holders at its own state and time (R6), to the key gkm serves for it, signed at that state.
+// among the holders at its own state and time (R6), to the key gkm serves for it, signed at that state. The holder
+// that signed the recipient's admission, KF2 and KF3's granting device, waits none (DeliverFirstWrap). Hints are
+// lossy, so in KeyDelivery mode each sync answers too (answerLateInFlow): a writer, or the signer of a holder's
+// admission in the config and directory groups, writes a LATE delivery to each holder the newest generation's own
+// state did not hold, once a generation, so a holder offline at a hint delivers at its next resync.
 //
 // A reading: in a data repo a rotator that is no leaf wraps to every member device among the holders, a device
 // waiting for a seat included, since only a leaf sees which devices are seated; each is a key holder, so nothing
@@ -37,10 +41,12 @@ package sidecar
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -50,9 +56,6 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
-
-// The most deliveries one wraps or recovery-wraps request carries (QD-066), gkm's bound.
-const gkmWrapBatchMaxCount = 256
 
 // What one delivery of a rotation is.
 type gkmDeliveryTargetKind int
@@ -311,7 +314,7 @@ func (self *gkmGroupManager) stageDeliveries(ctx context.Context, state GkmAuthV
 			wrapItems = append(wrapItems, item)
 		}
 	}
-	batchSize := max(1, min(client.settings.RotateBatchSize, gkmWrapBatchMaxCount))
+	batchSize := max(1, min(client.settings.RotateBatchSize, client.settings.WrapBatchMaxCount))
 	type batch struct {
 		items    []*gkmStagedItem
 		recovery bool
@@ -415,7 +418,12 @@ func gkmParseHintRecipient(recipient string) (wrapType GkmWrapType, id []byte, e
 // the newest generation this device holds and judged, after a random wait of up to LateDeliverJitter. It returns
 // nil with nothing written when this device may not deliver or the recipient is no holder at its state: another
 // holder, or a later state, serves it. A 412 means another holder delivered first, whose delivery is judged as any.
+// The device that signed the recipient's admission waits none: KF2 and KF3's granting device delivers at once
+// (DeliverFirstWrap), and the other holders after their wait, whose PUT then meets its delivery.
 func (self *GkmGroupClient) DeliverLate(ctx context.Context, repoId Id, recipient string) error {
+	if sidecarId, granted := self.grantedRecipient(recipient); granted {
+		return self.DeliverFirstWrap(ctx, repoId, sidecarId)
+	}
 	if err := self.wait(ctx, self.jitter(self.settings.LateDeliverJitter)); err != nil {
 		return err
 	}
@@ -425,87 +433,160 @@ func (self *GkmGroupClient) DeliverLate(ctx context.Context, repoId Id, recipien
 	return manager.deliverLateInFlow(ctx, recipient)
 }
 
-// DeliverLate, with the group's flow held.
-func (self *gkmGroupManager) deliverLateInFlow(ctx context.Context, recipient string) error {
-	client := self.client
+// The sidecar a wrap-pending's recipient names when this device signed its admission at the newest verified state:
+// the granting device of its first wrap (KF2's wrapped row, §5.6's reads row). False for a Delegation, a malformed
+// recipient, or no state.
+func (self *GkmGroupClient) grantedRecipient(recipient string) (Id, bool) {
 	wrapType, recipientId, err := gkmParseHintRecipient(recipient)
-	if err != nil {
-		return err
+	if err != nil || wrapType != GkmWrapTypeReader {
+		return Id{}, false
 	}
+	state, err := self.currentState()
+	if err != nil {
+		return Id{}, false
+	}
+	sidecarId, err := IdFromBytes(recipientId)
+	if err != nil || sidecarId == self.args.SidecarId || !gkmAdmissionSignedBy(state, sidecarId, self.args.SidecarId) {
+		return Id{}, false
+	}
+	return sidecarId, true
+}
+
+// Whether signerId signed sidecarId's admission at view: one of its row's admission signers.
+func gkmAdmissionSignedBy(view GkmAuthView, sidecarId Id, signerId Id) bool {
+	row := view.SidecarRow(sidecarId)
+	return row != nil && slices.ContainsFunc(row.GetAdmissionSigners(), func(signer []byte) bool { return bytes.Equal(signer, signerId.Bytes()) })
+}
+
+// What this device's LATE deliveries of a repo's newest generation are made at: its newest verified state, the
+// repo's pins, the generation it holds and judged with its key, the delivery's time, max(now, gen/<g>'s time), and
+// KeyHolders there.
+type gkmLateDelivery struct {
+	state   GkmAuthView
+	pins    *gkmRepoPins
+	top     *gkmHeldGeneration
+	at      time.Time
+	holders GkmHolders
+}
+
+// How one LATE delivery ended.
+type gkmLateOutcome int
+
+const (
+	// gkm took it: 201, or 200 for the same bytes again
+	gkmLateDelivered gkmLateOutcome = iota + 1
+	// another holder's delivery stood at its path, 412, and was judged
+	gkmLateStood
+	// nothing written: the recipient is no holder here, has no key to seal to that passes its check, or gkm answered
+	// 409 (not the newest generation any more, or a key it no longer serves), which a later ask or sync tries again
+	gkmLatePassed
+)
+
+// The deliverer's row of the late delivery: nil, with no error, when this device may not hand the newest generation
+// on: it holds none with its key, or it poisoned it, or it is not standing, is read_only, or is neither a holder nor
+// covered at its state. ErrGkmAuthAhead while its state is below gen/<g>'s pin (R2).
+func (self *gkmGroupManager) lateDeliveryInFlow() (*gkmLateDelivery, error) {
+	client := self.client
 	state, err := client.currentState()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	pins, err := client.repoPins(self.repoId)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	top, err := client.newestHeldGeneration(self.repoId)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if top.key == nil || top.poisoned {
 		// nothing this device may hand on
-		return nil
+		return nil, nil
 	}
 	rotate := top.generation.Rotate
 	// R2: signed at or past the claim's pin
 	if state.Pin().GetVersion() < rotate.GetAuth().GetVersion() {
-		return fmt.Errorf("%w: this state is below gen/%d's pin", ErrGkmAuthAhead, rotate.GetGeneration())
+		return nil, fmt.Errorf("%w: this state is below gen/%d's pin", ErrGkmAuthAhead, rotate.GetGeneration())
 	}
-	now := client.clock.Now()
-	at := now
+	at := client.clock.Now()
 	if generationTime := time.UnixMilli(rotate.GetTimeMs()); at.Before(generationTime) {
 		at = generationTime
 	}
 	holders, err := KeyHolders(state, self.repoId, at)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// the deliverer: a holder, or covered, standing and not read_only
 	selfRow := state.SidecarRow(client.args.SidecarId)
 	if !gkmRowStanding(selfRow) || gkmRowReadOnly(selfRow) || !gkmHolderOrCovered(state, holders, self.repoId, client.args.SidecarId, at) {
-		return nil
+		return nil, nil
 	}
+	return &gkmLateDelivery{state: state, pins: pins, top: top, at: at, holders: holders}, nil
+}
+
+// DeliverLate, with the group's flow held.
+func (self *gkmGroupManager) deliverLateInFlow(ctx context.Context, recipient string) error {
+	if _, _, err := gkmParseHintRecipient(recipient); err != nil {
+		return err
+	}
+	late, err := self.lateDeliveryInFlow()
+	if err != nil || late == nil {
+		return err
+	}
+	_, err = self.deliverLateToInFlow(ctx, late, recipient)
+	return err
+}
+
+// One LATE delivery to recipient at late, the deliver row's checks from R6 on: the recipient a holder at late's state
+// and time, at a key it published and gkm serves; sealed, signed at that state and PUT, a lost answer sending the same
+// bytes again (If-None-Match), and a 412's winner judged.
+func (self *gkmGroupManager) deliverLateToInFlow(ctx context.Context, late *gkmLateDelivery, recipient string) (gkmLateOutcome, error) {
+	client := self.client
+	wrapType, recipientId, err := gkmParseHintRecipient(recipient)
+	if err != nil {
+		return 0, err
+	}
+	state, holders, at, top := late.state, late.holders, late.at, late.top
+	rotate := top.generation.Rotate
 	// R6: the recipient a holder at this state and time, at a key it published and gkm serves
 	var publicKey []byte
 	switch wrapType {
 	case GkmWrapTypeReader:
 		if !holders.Contains(GkmHolderLeaf, recipientId) && !holders.Contains(GkmHolderAgent, recipientId) {
-			return nil
+			return gkmLatePassed, nil
 		}
 		sidecarId, _ := IdFromBytes(recipientId)
 		if err := self.auditWrapAllowed(state, sidecarId, at); err != nil {
 			// the reader list at this state does not show the audit reader (gkm_audit.go)
-			return nil
+			return gkmLatePassed, nil
 		}
 		signedKey, err := client.args.Api.ReaderKey(ctx, sidecarId)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		readerKey, err := GkmAdmittedReaderKey(state, signedKey, sidecarId, at.UnixMilli())
 		if err != nil {
 			// no key that passes the readerkey check: the recipient publishes one and asks again
-			return nil
+			return gkmLatePassed, nil
 		}
 		publicKey = readerKey.Body.GetXwingPublicKey()
 	case GkmWrapTypeDelegation:
 		holder, held := holders.DelegationRecipient(recipientId)
 		if !held {
-			return nil
+			return gkmLatePassed, nil
 		}
 		if holder.Kind == GkmHolderForwarding {
 			fetch, err := GkmForwardingReaderKeysFetched(ctx, state, GkmHolders{holder}, self.delegationKeysFetch())
 			if err != nil {
-				return err
+				return 0, err
 			}
 			key, err := GkmForwardingReaderKey(ctx, state, holder, fetch)
 			if errors.Is(err, ErrGkmKeyMissing) {
 				// no key to seal to yet: its sidecar uploads the object, then writes this delivery itself
-				return nil
+				return gkmLatePassed, nil
 			}
 			if err != nil {
-				return err
+				return 0, err
 			}
 			publicKey = key
 			break
@@ -516,51 +597,228 @@ func (self *gkmGroupManager) deliverLateInFlow(ctx context.Context, recipient st
 			}
 		}
 		if len(publicKey) != gkmXWingPublicKeyByteCount {
-			return nil
+			return gkmLatePassed, nil
 		}
 	}
 	body, err := SealGkmDelivery(top.key, &GkmDeliveryArgs{
-		GroupId: pins.groupId, Type: wrapType, Recipient: recipientId, RecipientPublicKey: publicKey,
+		GroupId: late.pins.groupId, Type: wrapType, Recipient: recipientId, RecipientPublicKey: publicKey,
 		Kind: GkmDeliveryLate, Auth: state.Pin(), Time: at,
 	})
 	if err != nil {
-		return err
+		return 0, err
 	}
 	signed, err := SignGkmDelivery(body, wrapType, client.args.Sign)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	signedBytes, err := gkmSignedBytes(signed)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	for sendCount := 0; sendCount < max(1, client.settings.RotateStageSendCount); sendCount += 1 {
-		reply, err := client.args.Api.UploadWraps(ctx, self.repoId, pins.groupId, rotate.GetGeneration(), rotate.GetCommitment(), &protocol.GkmWrapBatch{Deliveries: [][]byte{signedBytes}})
+		reply, err := client.args.Api.UploadWraps(ctx, self.repoId, late.pins.groupId, rotate.GetGeneration(), rotate.GetCommitment(), &protocol.GkmWrapBatch{Deliveries: [][]byte{signedBytes}})
 		if err != nil {
-			return err
+			return 0, err
 		}
 		if len(reply.GetResults()) != 1 {
-			return fmt.Errorf("%w: %d results for one delivery", ErrGkmReplyInvalid, len(reply.GetResults()))
+			return 0, fmt.Errorf("%w: %d results for one delivery", ErrGkmReplyInvalid, len(reply.GetResults()))
 		}
 		result := reply.GetResults()[0]
 		switch result.GetStatus() {
 		case http.StatusCreated, http.StatusOK:
-			return nil
+			return gkmLateDelivered, nil
 		case 0:
 			// not tried: the same bytes go again
 			continue
 		case http.StatusPreconditionFailed:
-			return self.judgeLateWinner(state, pins.groupId, top, wrapType, result.GetWinner())
+			return gkmLateStood, self.judgeLateWinner(state, late.pins.groupId, top, wrapType, result.GetWinner())
 		case http.StatusConflict:
-			// not the newest generation any more, or a key gkm no longer serves: the next hint asks again
-			return nil
+			// not the newest generation any more, or a key gkm no longer serves: the next ask or sync tries again
+			return gkmLatePassed, nil
 		case http.StatusForbidden:
-			return fmt.Errorf("%w: gkm refused a late delivery", ErrGkmWait)
+			return 0, fmt.Errorf("%w: gkm refused a late delivery", ErrGkmWait)
 		default:
-			return &GkmError{Status: int(result.GetStatus())}
+			return 0, &GkmError{Status: int(result.GetStatus())}
 		}
 	}
-	return fmt.Errorf("%w: gkm gave no answer for a late delivery", ErrGkmUnavailable)
+	return 0, fmt.Errorf("%w: gkm gave no answer for a late delivery", ErrGkmUnavailable)
+}
+
+// §10.6's late wraps at a sync, the KeyDelivery resync's answer (KEYS-M2-20): what the asks this device's lost
+// wrap-pending hints named would have brought, since hints are lossy and correctness rests on the hourly resync
+// (§6.8). A writer of the repo, the hinted holders' first row, or in the config and directory groups the device that
+// signed a holder's admission (§5.6's reads row), writes one LATE delivery of the newest generation, by the deliver
+// row's checks, to each holder at its state that gen/<g>'s own state, KeyHolders at the claim's pin and time, did not
+// hold, so no STAGED delivery reached it:
+//
+//	joined       a member device or agent reading the repo since the claim, an agent its Delegation no longer
+//	             covers among them: a ReaderWrap at its current ReaderKey
+//	delegation   a Delegation live since the claim, whose signer's dwraps a kill may have cut short: a DelegationWrap
+//	forwarding   a sidecar's forwarding Delegation newer than the claim's: a DelegationWrap to its key, where its
+//	             object stands
+//
+// at most ResyncLateDeliverMaxCount a sync, each recipient once a generation: the keychain's late-answered record
+// keeps those gkm took or found answered, so a later sync PUTs nothing for them again. A holder whose ReaderKey lapsed
+// before the claim, which the claim's state holds and its rotator skipped, is not seen here: its ask's hint answers
+// it. Nothing is answered while the claim's state is not retained here, or where this device may not deliver.
+func (self *gkmGroupManager) answerLateInFlow(ctx context.Context) error {
+	client := self.client
+	if client.settings.ResyncLateDeliverMaxCount <= 0 {
+		return nil
+	}
+	late, err := self.lateDeliveryInFlow()
+	switch {
+	case errors.Is(err, ErrGkmUnavailable), errors.Is(err, ErrGkmKeyMissing), errors.Is(err, ErrGkmAuthAhead):
+		// no verified state, no generation held, or a state below the claim: nothing to hand on yet
+		return nil
+	case err != nil:
+		return err
+	case late == nil:
+		return nil
+	}
+	rotate := late.top.generation.Rotate
+	repo := late.state.Repo(self.repoId)
+	writer := gkmWrites(late.state, self.repoId, client.args.SidecarId)
+	if !writer && !gkmGroupLeafRanked(repo) {
+		return nil
+	}
+	claimState, err := late.state.At(rotate.GetAuth())
+	if err != nil {
+		// who the claim's STAGED deliveries reached cannot be told here: the asks' hints answer its joiners
+		if client.log.V(1).Enabled() {
+			client.log.Infof("[gkm]%s no late delivery at this sync, gen/%d's state is not held: %v", self.repoId, rotate.GetGeneration(), err)
+		}
+		return nil
+	}
+	staged, err := KeyHolders(claimState, self.repoId, time.UnixMilli(rotate.GetTimeMs()))
+	if err != nil {
+		return err
+	}
+	answered, err := client.lateAnswered(self.repoId, rotate.GetGeneration())
+	if err != nil {
+		return err
+	}
+	recipients := []string{}
+	for _, holder := range late.holders {
+		if client.settings.ResyncLateDeliverMaxCount <= len(recipients) {
+			break
+		}
+		recipient := ""
+		switch holder.Kind {
+		case GkmHolderLeaf, GkmHolderAgent:
+			if bytes.Equal(holder.Id, client.args.SidecarId.Bytes()) || staged.Contains(GkmHolderLeaf, holder.Id) || staged.Contains(GkmHolderAgent, holder.Id) {
+				continue
+			}
+			if !writer {
+				// a config or directory group's non-writer answers the devices whose admission it signed alone
+				sidecarId, err := IdFromBytes(holder.Id)
+				if err != nil || !gkmAdmissionSignedBy(late.state, sidecarId, client.args.SidecarId) {
+					continue
+				}
+			}
+			recipient = "s:" + hex.EncodeToString(holder.Id)
+		case GkmHolderDelegation:
+			if !writer || staged.Contains(GkmHolderDelegation, holder.Id) {
+				continue
+			}
+			recipient = "d:" + hex.EncodeToString(holder.Id)
+		case GkmHolderForwarding:
+			if !writer {
+				continue
+			}
+			if stagedHolder, held := staged.DelegationRecipient(holder.ForwardDelegationId); held && stagedHolder.Kind == GkmHolderForwarding {
+				continue
+			}
+			recipient = "d:" + hex.EncodeToString(holder.ForwardDelegationId)
+		default:
+			// a RecoveryWrap is no late delivery: the recovery flows write their own
+			continue
+		}
+		if !answered[recipient] {
+			recipients = append(recipients, recipient)
+		}
+	}
+	newlyAnswered := []string{}
+	errs := []error{}
+	yield := client.newYield()
+	for _, recipient := range recipients {
+		yield.step()
+		outcome, err := self.deliverLateToInFlow(ctx, late, recipient)
+		if err != nil {
+			errs = append(errs, err)
+			if gkmUnreachable(ctx, err) {
+				// the rest wait for the next sync
+				break
+			}
+			continue
+		}
+		if outcome == gkmLateDelivered || outcome == gkmLateStood {
+			newlyAnswered = append(newlyAnswered, recipient)
+		}
+	}
+	if 0 < len(newlyAnswered) {
+		errs = append(errs, client.noteLateAnswered(self.repoId, rotate.GetGeneration(), newlyAnswered))
+	}
+	return errors.Join(errs...)
+}
+
+// The keychain's record of the recipients a sync answered for one generation of a repo (answerLateInFlow): version |
+// u64 generation | each recipient as its wrap path writes it, a u16 length before each. A record of an older
+// generation answers nothing, and the next note replaces it.
+func gkmLateAnsweredRecordName(repoId Id) string {
+	return gkmRepoRecordName(repoId, "late-answered")
+}
+
+// The recipients the keychain records as answered for generation of the repo.
+func (self *GkmGroupClient) lateAnswered(repoId Id, generation uint64) (map[string]bool, error) {
+	answered := map[string]bool{}
+	encoded, err := self.getRecord(gkmLateAnsweredRecordName(repoId))
+	if errors.Is(err, ErrGkmKeyMissing) {
+		return answered, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if len(encoded) < 9 || encoded[0] != gkmRecordVersion {
+		// unreadable: answered again, which If-None-Match makes safe
+		return answered, nil
+	}
+	if binary.BigEndian.Uint64(encoded[1:9]) != generation {
+		return answered, nil
+	}
+	rest := encoded[9:]
+	for 2 <= len(rest) {
+		length := int(binary.BigEndian.Uint16(rest[:2]))
+		if len(rest) < 2+length {
+			break
+		}
+		answered[string(rest[2:2+length])] = true
+		rest = rest[2+length:]
+	}
+	return answered, nil
+}
+
+// Adds recipients to the record of generation's answered recipients, replacing a record of another generation.
+func (self *GkmGroupClient) noteLateAnswered(repoId Id, generation uint64, recipients []string) error {
+	answered, err := self.lateAnswered(repoId, generation)
+	if err != nil {
+		return err
+	}
+	for _, recipient := range recipients {
+		answered[recipient] = true
+	}
+	sorted := make([]string, 0, len(answered))
+	for recipient := range answered {
+		sorted = append(sorted, recipient)
+	}
+	slices.Sort(sorted)
+	encoded := []byte{gkmRecordVersion}
+	encoded = binary.BigEndian.AppendUint64(encoded, generation)
+	for _, recipient := range sorted {
+		encoded = binary.BigEndian.AppendUint16(encoded, uint16(len(recipient)))
+		encoded = append(encoded, recipient...)
+	}
+	return self.args.Secrets.Put(gkmLateAnsweredRecordName(repoId), encoded)
 }
 
 // Judges the delivery that holds a late delivery's path in groupId, as any member judges one it reads when it
