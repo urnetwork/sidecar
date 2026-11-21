@@ -88,6 +88,7 @@ type SidecarApprovalItem struct {
 // A request to admit a new device of this device's member, which the device's enrollment surfaced (a `ur login`
 // device's safety number shown beside it, or an invite's): opened with OpenAdmission.
 type SidecarAdmissionRequest struct {
+	browser           *BrowserAdmissionTerms
 	SidecarId         Id
 	MemberId          Id
 	IdentityPublicKey []byte
@@ -219,6 +220,7 @@ func (self *sidecarApprovalRecord) admissionRequest() (*SidecarAdmissionRequest,
 		return nil, ErrSidecarApprovalUnknown
 	}
 	return &SidecarAdmissionRequest{
+		browser:           self.Browser,
 		SidecarId:         *self.SidecarId,
 		MemberId:          *self.MemberId,
 		IdentityPublicKey: bytes.Clone(self.IdentityPublicKey),
@@ -231,13 +233,19 @@ func (self *sidecarApprovalRecord) admissionRequest() (*SidecarAdmissionRequest,
 // other Workers this device sees as stale, posted first (identity_act_stale.go). A group view that cannot answer
 // revokes nothing, and the admission goes on: no revocation is signed without the evidence.
 func (self *Sidecar) runAdmissionAct(ctx context.Context, origin SidecarActOrigin, check SidecarPresenceCheck, memberId Id,
-	workerId *Id, signedType bridge.SignedType, statement proto.Message) error {
+	workerId *Id, signedType bridge.SignedType, statement proto.Message, confirm *protocol.OwnerConfirm) error {
 	act, err := self.newAct(origin)
 	if err != nil {
 		return err
 	}
 	if err := act.Add(signedType, statement); err != nil {
 		return err
+	}
+	if confirm != nil {
+		act.browserTarget = workerId
+		if err := act.Add(bridge.SignedType_SIGNED_OWNER_CONFIRM, confirm); err != nil {
+			return err
+		}
 	}
 	if workerId != nil {
 		revocations, err := act.AddStaleRevocations(ctx, memberId, workerId)
@@ -287,10 +295,24 @@ func sidecarDecideAdmission(ctx context.Context, self *Sidecar, authority Sideca
 	if !self.consentedFor(authority, request.MemberId) {
 		return ErrSidecarApprovalAuthority
 	}
+	if request.browser != nil {
+		confirmed, _ := ctx.Value(browserAdmissionConfirmation{}).(*BrowserAdmissionTerms)
+		if confirmed == nil || *confirmed != *request.browser {
+			return ErrBrowserAdmissionConfirmation
+		}
+		if confirmed.Mode == BrowserAdmissionBurner {
+			return self.admitBrowserBurner(ctx, request, origin, check)
+		}
+	}
 	// a page Worker's admission carries §7.10's stale revocations of its member's other Workers (D-TEAM-29)
 	var workerId *Id
 	if sidecarIsPageWorker(request.Capabilities) {
 		workerId = &request.SidecarId
+	}
+	var confirm *protocol.OwnerConfirm
+	if request.browser != nil && request.browser.Mode == BrowserAdmissionPage {
+		// A pre-existing personal vault's consent list grows on OwnerConfirm.
+		confirm = &protocol.OwnerConfirm{SidecarId: request.SidecarId.Bytes()}
 	}
 	// after an admission the signer commits the device's Add or first wrap in the config group (§5.6's reads row),
 	// which GkmClient's config-group commit does once KEYS lands it: any writer leaf commits it meanwhile
@@ -301,7 +323,7 @@ func sidecarDecideAdmission(ctx context.Context, self *Sidecar, authority Sideca
 		IdentityAlg:       configIdentityAlgEd25519,
 		MemberId:          request.MemberId.Bytes(),
 		Capabilities:      request.Capabilities,
-	})
+	}, confirm)
 }
 
 // approve signs OwnerConfirm{sidecar_id}; revoke is RevokeDevice's, from the alarm's entry; deny dismisses, signing
@@ -323,7 +345,7 @@ func sidecarDecideAdmissionAlarm(ctx context.Context, self *Sidecar, authority S
 			memberId = *item.MemberId
 		}
 		return self.runAdmissionAct(ctx, origin, check, memberId, workerId, bridge.SignedType_SIGNED_OWNER_CONFIRM,
-			&protocol.OwnerConfirm{SidecarId: item.SidecarId.Bytes()})
+			&protocol.OwnerConfirm{SidecarId: item.SidecarId.Bytes()}, nil)
 	case SidecarDecisionRevoke:
 		return self.decideApprovalRevoke(ctx, authority, item, origin, check)
 	}
@@ -484,7 +506,14 @@ func (self *Sidecar) OpenAdmission(request *SidecarAdmissionRequest) (Id, error)
 	if err != nil {
 		return Id{}, err
 	}
-	itemId := sidecarApprovalItemId(SidecarApprovalAdmission, append(request.SidecarId.Bytes(), request.IdentityPublicKey...), 0)
+	subject := append(request.SidecarId.Bytes(), request.IdentityPublicKey...)
+	if request.browser != nil {
+		if previous := record.browserItem(request.SidecarId, request.MemberId, request.IdentityPublicKey); previous != nil && *previous.Browser != *request.browser {
+			return Id{}, ErrSidecarApprovalAuthority
+		}
+		subject = append(subject, request.browser.identityBytes()...)
+	}
+	itemId := sidecarApprovalItemId(SidecarApprovalAdmission, subject, 0)
 	sidecarId := request.SidecarId
 	memberId := request.MemberId
 	record.open(&sidecarApprovalRecord{
@@ -494,6 +523,7 @@ func (self *Sidecar) OpenAdmission(request *SidecarAdmissionRequest) (Id, error)
 		MemberId:          &memberId,
 		IdentityPublicKey: bytes.Clone(request.IdentityPublicKey),
 		Capabilities:      request.Capabilities,
+		Browser:           request.browser,
 		RaisedAtMs:        self.clock.Now().UnixMilli(),
 	})
 	return itemId, self.persistAlarmRecord(record)
