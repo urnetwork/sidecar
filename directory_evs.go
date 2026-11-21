@@ -12,12 +12,12 @@
 //	          (RecordStreamRefName), anything else Other. Heads are evs's word: what a sync acts on it reads verified
 //	streams   POST .../read {refs} (EvsRepo.ReadStreams), up to ReadStreamMaxRefCount streams in the order asked, each
 //	          walked and verified from the version the reader holds and C there (the chain row), and pinned once read to
-//	          its head (the pins row). Each version's payload is held to the creates-only rule as far as its entry versions show it
-//	          (EvsVerifier.VerifyPayloadRefRules, with no path state: a directory delta's base on its newest version is
-//	          the record chain's to hold), each file it creates is named by its counter in its push epoch, RECORD.md
-//	          section 5.2's e/<a>/<b>/<n> (record_evs.go's counter row), and its own slot, the new slot no file's chain
-//	          names, is opened row by row under fek of each key's generation. Every version is answered, one creating
-//	          no entry too, so a copy keeps its stream's versions with no gap
+//	          its head (the pins row). Each version's payload is held to the creates-only rule as far as its entry
+//	          versions show it (EvsVerifier.VerifyPayloadRefRules, with no path state: a directory delta's base on its
+//	          newest version is the record chain's to hold), each file it creates is named by its counter in its push
+//	          epoch, RECORD.md section 5.2's e/<a>/<b>/<n> (record_evs.go's counter row), and its own slot, the new slot
+//	          no file's chain names, is opened row by row under fek of each key's generation. Every version is
+//	          answered, one creating no entry too, so a copy keeps its stream's versions with no gap
 //	log       GET .../log?ref=&since= for a stream past the window: one page, LogPageVersionCount versions at most,
 //	          verified from the version before it, its pin raised as far as it reaches (the pins row), each version's
 //	          push record read ReadObjectCount to a read and each file rebuilt as the streams read rebuilds it. A page
@@ -29,15 +29,15 @@
 //	          and its copy's write needs
 //	cards     the shared file-mode ref cards: one read for its head and the window's statements after the copy's
 //	          version, GET .../log past the window, CardsPageVersionCount statements a page, verified from the version
-//	          and pinned (the pins row). Each statement's push record is read, ReadObjectCount to a read, and its changes taken in
-//	          commit order: a directory's delta teaches the names it adds, a file's version is rebuilt (its per-path
-//	          keys from its slots, a page's slots and segment ranges read together) and a removal is one. Each file is named by its
-//	          plaintext path, found from its token path in its push's epoch among the names this binding knows: the
-//	          rows of the deltas it read, the shards of q/, d/ and r/, the copy's own paths
-//	          (DirectoryCardsCopyPaths), and for a token no known name gives the listing of the directory above it at
-//	          the head (EvsRepo.List). A change no name places is no file the copy holds or will hold: its path was
-//	          never one the copy kept, and it stands nowhere at the head, so it is left out. A removed directory
-//	          removes each file the names hold below it
+//	          and pinned (the pins row). Each statement's push record is read, ReadObjectCount to a read, and its
+//	          changes taken in commit order: a directory's delta teaches the names it adds, a file's version is
+//	          rebuilt (its per-path keys from its slots, a page's slots and segment ranges read together) and a
+//	          removal is one. Each file is named by its plaintext path, found from its token path in its push's epoch
+//	          among the names this binding knows: the rows of the deltas it read, the shards of q/, d/ and r/, the
+//	          copy's own paths (DirectoryCardsCopyPaths), and for a token no known name gives the listing of the
+//	          directory above it at the head (EvsRepo.List). A change no name places is no file the copy holds or will
+//	          hold: its path was never one the copy kept, and it stands nowhere at the head, so it is left out. A
+//	          removed directory removes each file the names hold below it
 //	format 2  a format-2 repo's push records are read as format 2 keeps them (ParseEvsBatchRecordFormat2: the record
 //	          and its tail, whose staged segments answer the payload's new objects), each payload checked as stored
 //	          (EvsCheckStoredPayload). A versionless file's version names its path to evs's reader in its push's
