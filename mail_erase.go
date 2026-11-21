@@ -22,7 +22,8 @@
 //	wait     a part evs refuses 429, past the eraser's closure rate, its turn or its day's allowance, stops the
 //	         erasure there with the time to try again (retry_after_ms) and §11.13's estimate of its end: the rows
 //	         still listed stay openable to key holders until their part commits, and the bodies are gone already
-//	resume   Resume finishes every erasure of the repo that no ERASE completed, whoever began it, from evs alone:
+//	resume   Resume checks even completed erasures for bodies that raced their deposit-only ERASE (mail_erase_late.go),
+//	         then finishes the parts of each open erasure, whoever began it, from evs alone:
 //	         the erasure ref's ERASEs say which messages each names, the main ref's CLOSUREs say which re-checkpoint
 //	         no ERASE followed, whose keys the next ERASE destroys, and each segment still listing a message takes
 //	         its part. Nothing is kept on the device, so a restart, a wiped phone or another admin's device resumes
@@ -659,8 +660,8 @@ func (self *MailEraser) complete(ctx context.Context, erasure *MailErasure, send
 // Whether an ERASE of erasureId among erasures says complete, as Resume reads an erasure done.
 func mailErasureComplete(erasures []*EvsErasure, erasureId Id) bool {
 	for _, erasure := range slices.Backward(erasures) {
-		if erasure.ErasureId == erasureId && (!erasure.Completion || erasure.Complete) {
-			return erasure.Complete
+		if id, complete, applies := erasure.completionState(); id == erasureId && applies {
+			return complete
 		}
 	}
 	return false
@@ -698,6 +699,7 @@ func (self *MailEraser) Resume(ctx context.Context) ([]*MailErasure, error) {
 	}
 	type standing struct {
 		complete bool
+		late     bool
 		messages []mailErasedMessage
 		// the keys its ERASEs destroyed
 		erasedKeys map[EvsErasedKey]bool
@@ -707,15 +709,17 @@ func (self *MailEraser) Resume(ctx context.Context) ([]*MailErasure, error) {
 	byId := map[Id]*standing{}
 	order := []Id{}
 	for _, erasure := range erasures {
+		_, complete, applies := erasure.completionState()
+		if !applies {
+			continue
+		}
 		state := byId[erasure.ErasureId]
 		if state == nil {
 			state = &standing{erasedKeys: map[EvsErasedKey]bool{}, eraserId: erasure.EraserSidecarId}
 			byId[erasure.ErasureId] = state
 			order = append(order, erasure.ErasureId)
 		}
-		if !erasure.Completion || erasure.Complete {
-			state.complete = erasure.Complete
-		}
+		state.complete = complete
 		if erasure.Completion {
 			continue
 		}
@@ -728,22 +732,22 @@ func (self *MailEraser) Resume(ctx context.Context) ([]*MailErasure, error) {
 	}
 	erasedKeys := mailErasedKeys(erasures)
 	began := slices.Clone(resumed)
+	// A waiting index or segment rewrite does not hold back the destruction of
+	// another erasure's late body. Check the bodies before spending closure quota.
 	for _, erasureId := range order {
 		state := byId[erasureId]
-		if len(state.messages) == 0 {
-			// Another writer's erasure, a vault entry's among them.
+		if len(state.messages) == 0 || slices.ContainsFunc(began, func(erasure *MailErasure) bool { return erasure.ErasureId == erasureId }) {
 			continue
 		}
-		if slices.ContainsFunc(began, func(erasure *MailErasure) bool { return erasure.ErasureId == erasureId }) {
-			// a journaled erasure this call just ran
-			continue
-		}
-		messages, complete, late, err := self.eraseLateBodies(ctx, erasureId, state.messages, erasedKeys, index, state.complete)
+		state.messages, state.complete, state.late, err = self.eraseLateBodies(ctx, erasureId, state.messages, erasedKeys, index, state.complete)
 		if err != nil {
 			return resumed, err
 		}
-		state.messages = messages
-		if complete && !late {
+	}
+	for _, erasureId := range order {
+		state := byId[erasureId]
+		if len(state.messages) == 0 || (state.complete && !state.late) ||
+			slices.ContainsFunc(began, func(erasure *MailErasure) bool { return erasure.ErasureId == erasureId }) {
 			continue
 		}
 		erasure := &MailErasure{ErasureId: erasureId, State: MailErasureRewriting}
@@ -751,7 +755,7 @@ func (self *MailEraser) Resume(ctx context.Context) ([]*MailErasure, error) {
 			erasure.MessageIds = append(erasure.MessageIds, message.MessageId)
 		}
 		resumed = append(resumed, erasure)
-		if complete {
+		if state.complete {
 			erasure.State = MailErasureDone
 			self.report(erasure)
 			continue

@@ -20,10 +20,8 @@ var errMailEraseUncommitted = errors.New("mail erasure did not commit its messag
 func mailErasedKeys(erasures []*EvsErasure) map[EvsErasedKey]bool {
 	keys := map[EvsErasedKey]bool{}
 	for _, erasure := range erasures {
-		if !erasure.Completion {
-			for _, key := range erasure.Keys {
-				keys[*key] = true
-			}
+		for _, key := range erasure.destroyedKeys() {
+			keys[*key] = true
 		}
 	}
 	return keys
