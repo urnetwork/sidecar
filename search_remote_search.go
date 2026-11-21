@@ -116,6 +116,7 @@ type searchRemoteSearch struct {
 	merge       *searchRemoteMerge
 	own         *SearchStream
 	ownDone     bool
+	repoEnds    []<-chan struct{}
 	progress    SearchProgress
 	fallbacks   []*searchRemoteFallback
 	firstPages  int
@@ -206,6 +207,12 @@ func (self *SearchRemoteClient) newSearch(ctx context.Context, request *SearchRe
 		return nil, err
 	}
 	search.own = own
+	if cached, ok := own.source.(*searchEngineStream); ok {
+		for _, repoId := range scope {
+			// A remote repo can have no locally known ref at all.
+			search.repoEnds = append(search.repoEnds, cached.engine.args.Sync.repoEnd(repoId))
+		}
+	}
 	_, search.stateCount, search.configN, search.configChain = search.marks()
 	ended := func() bool {
 		self.stateLock.Lock()
@@ -290,10 +297,15 @@ func (self *searchRemoteSearch) isClosed() bool {
 }
 
 // The next page (SearchStreamSource). See the file header.
-func (self *searchRemoteSearch) Next() ([]SearchHit, SearchProgress, bool, error) {
+func (self *searchRemoteSearch) Next() (page []SearchHit, progress SearchProgress, done bool, err error) {
 	self.pageLock.Lock()
-	defer self.pageLock.Unlock()
-	if self.isClosed() {
+	defer func() {
+		self.pageLock.Unlock()
+		if errors.Is(err, ErrSearchCursorExpired) {
+			self.Close()
+		}
+	}()
+	if self.isClosed() || self.scopeEnded() {
 		return nil, self.progress, true, ErrSearchCursorExpired
 	}
 	touched := []searchRemoteMergeKey{}
@@ -334,17 +346,30 @@ func (self *searchRemoteSearch) Next() ([]SearchHit, SearchProgress, bool, error
 	touched = append(touched, opened...)
 	touched = append(touched, self.recheckPins()...)
 	rows := self.merge.rows(touched)
+	if self.scopeEnded() {
+		return nil, self.progress, true, ErrSearchCursorExpired
+	}
 	return rows, self.progressNow(), self.done(), nil
+}
+
+// A local cached leg keeps the original scope even after giving its last page. A later reply must still respect a
+// cut learned by that device while the remote search was in flight.
+func (self *searchRemoteSearch) scopeEnded() bool {
+	if searchReposEnded(self.repoEnds) {
+		return true
+	}
+	scoped, ok := self.own.source.(interface{ scopeEnded() bool })
+	return ok && scoped.scopeEnded()
 }
 
 // The device's own next page: its claims, and its progress as the page's.
 func (self *searchRemoteSearch) ownPage() ([]searchRemoteMergeKey, error) {
 	hits, progress, done, err := self.own.Next()
-	if err != nil && !errors.Is(err, ErrSearchCursorExpired) {
+	if err != nil {
 		return nil, err
 	}
 	self.progress = progress
-	self.ownDone = done || err != nil
+	self.ownDone = done
 	return self.merge.add(nil, hits), nil
 }
 
@@ -356,10 +381,10 @@ func (self *searchRemoteSearch) fallbackPages() ([]searchRemoteMergeKey, error) 
 			continue
 		}
 		hits, progress, done, err := fallback.stream.Next()
-		if err != nil && !errors.Is(err, ErrSearchCursorExpired) {
+		if err != nil {
 			return nil, err
 		}
-		fallback.done, fallback.progress = done || err != nil, progress
+		fallback.done, fallback.progress = done, progress
 		touched = append(touched, self.merge.add(nil, hits)...)
 	}
 	return touched, nil
@@ -390,10 +415,10 @@ func (self *searchRemoteSearch) openFallbacks() ([]searchRemoteMergeKey, error) 
 	fallback := &searchRemoteFallback{stream: stream}
 	self.fallbacks = append(self.fallbacks, fallback)
 	hits, progress, done, err := stream.Next()
-	if err != nil && !errors.Is(err, ErrSearchCursorExpired) {
+	if err != nil {
 		return nil, err
 	}
-	fallback.done, fallback.progress = done || err != nil, progress
+	fallback.done, fallback.progress = done, progress
 	return self.merge.add(nil, hits), nil
 }
 
