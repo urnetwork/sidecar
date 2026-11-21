@@ -22,7 +22,9 @@
 //	            directory admin, by its ERASE's note or its erasure entry, and is the moderated writer or a device of
 //	            its member or sponsor, raises record_alarm moderation naming the writer, once an erasure and writer,
 //	            which apps show as a notice. From format 2 a directory admin's removal of another's card alarms the
-//	            same way (directory_card.go)
+//	            same way (directory_card.go), and the ERASE of the card's keys names in its note the announcements the
+//	            moderation took, which the moderated writer's sync journals and its card leaves out from then, whatever
+//	            the cards ref's erasure set lists by its return (directory_cards_erasure.go's note row; QD-1148)
 //	mirror      a designated mirror is a copy for site loss, never the authority over a key: nothing here asks it
 //
 // Barriers: directory.removal.cleanup.before and .after around the cleanup's push, keyed by the directory's id.

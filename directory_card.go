@@ -32,7 +32,8 @@
 //	moderated a return first reads the cards ref's erasure set, and leaves out every item of the card this device put
 //	        last whose document the set lists at or above the version that card held it at, an erasure having taken
 //	        it, journaled with the raise and left out of every card after (directory_cards_erasure.go; QD-1144); a
-//	        return whose check cannot be made puts nothing
+//	        return whose check cannot be made puts nothing. Each sync journals the same way each item of that card a
+//	        directory admin's moderation note names (QD-1148), which no later CUT can drop
 //	binding the DirectoryCards binding writes d/ and r/ as the directory's reserved writer (EvsReservedDirectory,
 //	        versionless from format 2) and seals each file padded to FileStepByteCount steps, so a card's size shows at
 //	        most whether its sidecar has more than about two runs; the plaintext is the Signed's own bytes
@@ -1054,6 +1055,13 @@ func directoryCardCarried(items []*protocol.Announcement, raise uint64) []*proto
 type directoryCardWriter struct {
 	// one card write at a time
 	writeLock sync.Mutex
+
+	// the card written document's reads and keeps: a card write's, and a sync's journal of what a moderation's note
+	// names (directory_cards_erasure.go), which runs inside a card write's sync of a path conflict and so takes no
+	// writeLock. Held across no call but the store's.
+	stateLock sync.Mutex
+	// what a sync journaled that the store did not keep, kept with the document's next keep
+	unkept []*directoryCardModerated
 }
 
 // The client's card writer part.
@@ -1061,20 +1069,62 @@ func (self *DirectoryClient) cardWriter() *directoryCardWriter {
 	return self.part(directoryCardWriterPart, func() any { return &directoryCardWriter{} }).(*directoryCardWriter)
 }
 
-// The card document this device keeps, empty before its first put.
+// The card document this device keeps, empty before its first put, with what a sync journaled that the store did not
+// keep.
 func (self *DirectoryClient) readCardWritten() (*directoryCardWrittenDocument, error) {
+	writer := self.cardWriter()
+	writer.stateLock.Lock()
+	defer writer.stateLock.Unlock()
+	return self.readCardWrittenWithLock(writer)
+}
+
+// readCardWritten's read. The caller holds writer.stateLock.
+func (self *DirectoryClient) readCardWrittenWithLock(writer *directoryCardWriter) (*directoryCardWrittenDocument, error) {
 	content, err := self.store.readFile(directoryCardWrittenName)
 	if err != nil {
 		return nil, err
 	}
 	document := &directoryCardWrittenDocument{Version: directoryCardWrittenKept}
-	if content == nil {
-		return document, nil
+	if content != nil {
+		if err := json.Unmarshal(content, document); err != nil || document.Version != directoryCardWrittenKept {
+			return nil, fmt.Errorf("%w: the card written", ErrDirectoryStoreCorrupt)
+		}
 	}
-	if err := json.Unmarshal(content, document); err != nil || document.Version != directoryCardWrittenKept {
-		return nil, fmt.Errorf("%w: the card written", ErrDirectoryStoreCorrupt)
+	for _, unkept := range writer.unkept {
+		if !document.moderated(unkept.AnnouncementId) {
+			document.Moderated = append(document.Moderated, unkept)
+		}
 	}
 	return document, nil
+}
+
+// Keeps written as the card document, first taking into its journal whatever a sync journaled since written was read
+// (directoryCardWrittenDocument.takeJournal), so neither a card write nor a sync's journal loses the other's.
+func (self *DirectoryClient) keepCardWritten(written *directoryCardWrittenDocument, itemCount int) error {
+	writer := self.cardWriter()
+	writer.stateLock.Lock()
+	defer writer.stateLock.Unlock()
+	kept, err := self.readCardWrittenWithLock(writer)
+	if err != nil {
+		return err
+	}
+	written.takeJournal(kept.Moderated, itemCount)
+	if err := self.store.writeDocument(directoryCardWrittenName, written); err != nil {
+		return err
+	}
+	writer.unkept = nil
+	return nil
+}
+
+// Takes into written's journal what a sync journaled since it was read, before a write reckons what its card leaves
+// out.
+func (self *DirectoryClient) refreshCardJournal(written *directoryCardWrittenDocument, itemCount int) error {
+	kept, err := self.readCardWritten()
+	if err != nil {
+		return err
+	}
+	written.takeJournal(kept.Moderated, itemCount)
+	return nil
 }
 
 // The items a card holds from items at nowMillis: those that still show, checked as this sidecar's, the worker item
@@ -1189,6 +1239,10 @@ func (self *DirectoryClient) putCard(ctx context.Context, items []*protocol.Anno
 	}
 	hookKey := recordChainIdText(self.sidecarId)
 	for attempt := 0; ; attempt += 1 {
+		// what a moderation's note named, journaled at a sync since, a conflict's included, stays out of this put too
+		if err := self.refreshCardJournal(written, settings.ModeratedItemCount); err != nil {
+			return nil, err
+		}
 		seq := max(written.Seq, self.files().seqAt(path)) + 1
 		written.Seq = seq
 		pathFile := self.cardPathFile(path)
@@ -1212,7 +1266,7 @@ func (self *DirectoryClient) putCard(ctx context.Context, items []*protocol.Anno
 		}
 		// the seq and the raise are kept before anything carries them, so a kill after the put never puts the seq again,
 		// and every card after a return carries its raise
-		if err := self.store.writeDocument(directoryCardWrittenName, written); err != nil {
+		if err := self.keepCardWritten(written, settings.ModeratedItemCount); err != nil {
 			return nil, err
 		}
 		auth := self.auth()
@@ -1276,7 +1330,7 @@ func (self *DirectoryClient) putCard(ctx context.Context, items []*protocol.Anno
 		if over {
 			written.PutOver = removal
 		}
-		if err := self.store.writeDocument(directoryCardWrittenName, written); err != nil {
+		if err := self.keepCardWritten(written, settings.ModeratedItemCount); err != nil {
 			return nil, err
 		}
 		return &DirectoryCardWritten{
