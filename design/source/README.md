@@ -7,7 +7,7 @@
 | Path | What it is |
 |---|---|
 | `sections/01-CTX.md` … `sections/23-PHASE.md` | DESIGN.md §1-§23, one file per section. The build copies them verbatim, adding only links. |
-| `owner/DECISIONS.md` | The owner's record, entries 1-674. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
+| `owner/DECISIONS.md` | The owner's record, entries 1-675. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
 | `owner/APPLY.md` | The rules for applying the owner's decisions: precedence (§1), supersession, where two decisions disagree (§2), notation (§3), editing rules (§4), and the follow-up decisions 112-136 with the sections each binds (§6-§8). |
 | `CONVENTIONS.md` | The writing conventions every section follows: the owner directive (§0), the owner rules (§1), the section template (§2) and the X registry (§7), which DESIGN.md's X1-X20 table replaced. |
 | `OUTLINE.md` | The original outline: section codes, scope boundaries, and the word budgets that G0's density rule replaced on 2026-11-04. |
@@ -44,7 +44,7 @@ It needs only `python3`; it was built and checked with Python 3.13. The steps, a
 
 The data files are layered. Each `data_*N.py` loads its predecessor with `runpy` and patches it: `data_front10.py` loads `data_front9.py`, back to `data_front3.py`, and the registers, glossary and appendices go the same way. Change the top layer (the `*10` files), or add an `*11` layer that loads them. Comments in the scripts cite working files from the design sessions (the reconcilers' orders, `peer/`, `review/`, `snap/`), which were not imported; they are history.
 
-## Adding owner decision N (675 onward)
+## Adding owner decision N (676 onward)
 
 1. Add entry N to `owner/DECISIONS.md`: the question, the answer, its cost, the options not taken, and what raised it.
 2. In `asm/data_front10.py`, append `(N, "<what it settles>", "<one line>")` to `INDEX`, add `DATES[N]`, and raise the `assert` to `list(range(1, N + 1))`. Update `STATUS` and `DECISIONS_INTRO` where they name a range. `@@OD:k@@` writes a link to decision k.
@@ -1011,3 +1011,27 @@ The design-records track dr9-final-sweep (wave f46e) is the draft's final design
 - **The metadata list** is unchanged at v64: no §2.8 row changes.
 
 Outside this folder the track touched DESIGN.md, DESIGN-AMENDMENTS.md, DESIGN-DETAILS.md (8.5, 10.6 and 15.2.10), RECORD.md (5.2, 5.5, 5.7, 15 and 18), HANDOFF.md and smtpproof/SPEC.md (section 3). Left for the review phase: the fix tracks still running on 2026-11-21 (directory-erasure-complete-after-cut for owner decision 673, connect-icmp-echo-ids for 674); RECORD.md 5.7's BASE row and the test that holds it open; gate items in sidecartest/fault for §22.8's new `record` row and §23.6's record vectors at M6; QD-1086's KEYS rows; QD-024's copy of cli/UI.md; the code comments a sweep over code changes (protocol/record.proto's header, protocol/directory.proto's `Announcement.version`, sdk's state reasons, which proto-sdk-stale-comments takes); and the owner steps and handoff notes the orchestrator lists in the review handoff.
+
+## Validation after owner decision 675: the late fold (2026-11-21)
+
+The design-records track dr10-late-fold (wave f46e) folds the one answer that the run's list of pending decisions held on 2026-11-21 after the final design sweep, QD-1160, a question the build raised and the owner answered that day under the owner's standing acceptance of recommended options. It numbers the answer as it folds it:
+
+| Ledger id | Owner decision | What it settles |
+|---|---|---|
+| QD-1160 | 675 | Where another erasure's CUT drops a complete directory erasure from a ref's set between this device's re-CUT of it and its relisted rewrite, the directory CUTs the same documents once more and rewrites again, a second drop leaving them uncut in its ledger for the next sync, refining owner decision 673. |
+
+- **evs and the directory (675).** §11.12's cut row, which now says that a CUT of an erasure the set still lists joins its documents to that entry under the epoch its first CUT named, as evs_index_cut.go's again row builds it, and that one of an erasure the set has dropped adds it again; §11.12's reconcile row, §16.11's Erasure and removal and DESIGN-DETAILS.md 15.2.10's directory paragraph, stated as decided while fix track directory-erasure-dropped-recut builds `IndexRewriteResult`'s dropped flag, the directory's one re-CUT and its ledger fallback, which are Go fields and calls, no wire. §11.14's cut row, which states owner decision 673's re-listed rewrite for the index, takes the answer too, though the answer's list of places names only §11.12, §16.11 and DESIGN-DETAILS.md 15.2.10.
+- **Index rows.** Owner decision 673 notes the decision that refines it.
+- **"Later decisions".** QD-024 (§4) and QD-1086 (§22) are neither on this track's list nor in its sections, and keep the Not folded lines the final sweep gave them.
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `503dc5686135098e0b69bda899886317d659f00c5c9d964c8e7235bc38e41bc3`) and DESIGN-DEFER.md (SHA-256 `60b462071a09c9abf4603fdab90c51efb82c5e59d94fa05278afaacceac06cc4`, unchanged), and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no new §2.8 row, so no guard line was needed.
+- **Owner decisions.** All 675 rows are present and cited; APPLY.md's section pairs hold. `LATE_DATES` takes the new row's date, which `validate10.py`'s row pattern already took.
+- **Open owner questions.** One, Q-REPO-6.
+- **Superseded options.** 314 grep hits, every one carried with its reading; none is on a changed line and none is live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 11,977 section references, 2 more, with the one unresolved as before. `v7/words.json` and `v7/text_checks.json` were regenerated.
+- **DESIGN-DEFER.md.** 101 entries and 157 pointers, unchanged: the decision defers nothing.
+- **The metadata list** is unchanged at v64: no §2.8 row changes.
+
+Outside this folder the track touched DESIGN.md, DESIGN-AMENDMENTS.md and DESIGN-DETAILS.md (15.2.10). Left for the review phase: the fix track still running on 2026-11-21 for owner decision 675, directory-erasure-dropped-recut, and what the final sweep's validation section lists.
