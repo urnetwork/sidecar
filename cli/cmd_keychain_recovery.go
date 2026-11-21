@@ -59,7 +59,6 @@ func (self *urDaemonNetwork) bindRecovery(ctx context.Context, binding *sidecar.
 	}
 	rotation, err := running.BindRecovery(ctx, binding, compromise, sidecar.SidecarActConfirmed, nil)
 	if errors.Is(err, sidecar.ErrSidecarActPending) {
-		// signed and kept: its post goes again, and the reply says so
 		return rotation, nil
 	}
 	return rotation, err
@@ -93,6 +92,7 @@ type urRecoveryBindReply struct {
 	Position          uint64              `json:"position,omitempty"`
 	ProposalId        []byte              `json:"proposal_id,omitempty"`
 	Pending           bool                `json:"pending,omitempty"`
+	RewrapPending     bool                `json:"rewrap_pending,omitempty"`
 	Devices           []*urRecoveryDevice `json:"devices,omitempty"`
 }
 
@@ -134,6 +134,7 @@ func urKeychainRecoveryMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
 					PreviousKeySha256: rotation.PreviousKeySha256,
 					ProposalId:        rotation.ProposalId,
 					Pending:           rotation.Pending,
+					RewrapPending:     rotation.RewrapPending,
 				}
 				if rotation.Entry != nil {
 					reply.Position = rotation.Entry.GetVersion()
@@ -234,6 +235,14 @@ func runUrKeychainRecoveryRotate(ctx context.Context, cli *urCli, options docopt
 			}
 		}
 	}
-	cli.printf("recovery code rotated\n")
+	if reply.RewrapPending || reply.Pending || len(reply.ProposalId) != 0 {
+		fmt.Fprintln(tty, "Existing repo keys are still being wrapped for this code.")
+		if len(reply.PreviousKeySha256) != 0 {
+			fmt.Fprintln(tty, "Keep your previous code until the wraps complete.")
+		}
+		cli.printf("recovery code change pending\n")
+	} else {
+		cli.printf("recovery code rotated\n")
+	}
 	return nil
 }

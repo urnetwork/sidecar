@@ -1333,6 +1333,9 @@ func (self *GkmReconciler) rehintClosedGates() {
 // as a Remove (sidecar.GkmRemoveDue). false when the group has no epoch gkm can read a pin from, a re-form's epoch
 // 0 among them, or a read failed: nothing is hinted on a guess.
 func (self *GkmReconciler) holderDroppedSinceNewestEpoch(view sidecar.GkmAuthView, repoId sidecar.Id, groupId sidecar.Id, now time.Time) bool {
+	if !self.settings.Service.DraftMls {
+		return false
+	}
 	ctx := self.ctx
 	cluster, _, err := self.places.Cluster(ctx, repoId)
 	if err != nil {

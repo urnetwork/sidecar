@@ -153,15 +153,19 @@ func (self *gkmGroupManager) deliverySet(ctx context.Context, state GkmAuthView,
 			if err != nil {
 				return nil, fmt.Errorf("%w: a holder's id", ErrGkmMalformed)
 			}
-			if client.args.RecoveryKey == nil {
-				return nil, fmt.Errorf("%w: no source of recovery keys, and a member holds a recovery identity", ErrGkmKeyMissing)
+			var recoveryKey *GkmRecoveryKey
+			switch {
+			case client.args.RecoveryKeyAt != nil:
+				recoveryKey, err = client.args.RecoveryKeyAt(state, memberId)
+			case client.args.RecoveryKey != nil:
+				recoveryKey, err = client.args.RecoveryKey(memberId)
 			}
-			recoveryKey, err := client.args.RecoveryKey(memberId)
 			if err != nil {
 				return nil, err
 			}
-			if recoveryKey == nil || len(recoveryKey.XwingPublicKey) != gkmXWingPublicKeyByteCount || len(recoveryKey.BindingKeySha256) != gkmDigestByteCount {
-				return nil, fmt.Errorf("%w: a member's recovery key", ErrGkmKeyMissing)
+			if recoveryKey == nil || len(recoveryKey.XwingPublicKey) != gkmXWingPublicKeyByteCount ||
+				len(recoveryKey.BindingKeySha256) != gkmDigestByteCount || !bytes.Equal(recoveryKey.BindingKeySha256, state.Member(memberId).GetRecoveryKeySha256()) {
+				return nil, fmt.Errorf("%w: no recovery key for the member's binding at this pin", ErrGkmKeyMissing)
 			}
 			targets = append(targets, &gkmDeliveryTarget{
 				kind: gkmDeliveryTargetRecovery, recipient: memberId.Bytes(),
@@ -361,7 +365,7 @@ func (self *gkmGroupManager) stageDeliveries(ctx context.Context, state GkmAuthV
 					}
 				case 0:
 					again = append(again, item)
-				case http.StatusForbidden:
+				case http.StatusConflict, http.StatusForbidden:
 					return fmt.Errorf("%w: gkm refused a staged delivery", ErrGkmWait)
 				default:
 					return &GkmError{Status: int(result.GetStatus())}

@@ -36,6 +36,9 @@ func (self GkmRate) valid() bool {
 
 // The engine's settings. Every field is read where it is used, from one instance.
 type GkmServiceSettings struct {
+	// Enables the deferred MLS wire only for explicit interop and legacy schedule fixtures.
+	DraftMls bool `json:"-" yaml:"-"`
+
 	// place/'s resolution: a 404 cached 5 s, the placements a process keeps (§10.6's placement row).
 	Place *sidecar.EvsRepoPlaceSettings
 

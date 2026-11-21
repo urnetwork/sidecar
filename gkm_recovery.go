@@ -52,6 +52,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar/protocol"
+	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 var (
@@ -69,6 +70,7 @@ const (
 	gkmRecoveryWrapsRecord  = "recovery/wraps"
 	gkmRecoveryPhaseRecord  = "recovery/phase"
 	gkmRecoveryRebindRecord = "recovery/rebind"
+	gkmRecoveryRebindDone   = "recovery/rebind-complete"
 )
 
 // The phases recovery/phase holds.
@@ -260,7 +262,7 @@ func (self *gkmGroupManager) formedGroupId(ctx context.Context) (Id, error) {
 	}
 	signedForms := forms.GetForms()
 	if len(signedForms) == 0 {
-		return Id{}, fmt.Errorf("%w: gkm holds no group for the repo", ErrGkmKeyMissing)
+		return Id{}, errGkmGroupUnformed
 	}
 	form := &protocol.GroupForm{}
 	if err := proto.Unmarshal(signedForms[len(signedForms)-1].GetBody(), form); err != nil {
@@ -402,9 +404,13 @@ func (self *GkmGroupClient) AnchorRecovery(ctx context.Context, args *GkmRecover
 		// nothing may run ahead of the anchor, so a host with no check recovers nothing
 		return fmt.Errorf("%w: no anchor check is installed", ErrGkmUnavailable)
 	}
-	state, err := self.recoveryState()
+	state, joiningRepo, confirmed, err := self.joiningState()
 	if err != nil {
 		return err
+	}
+	row := state.SidecarRow(self.args.SidecarId)
+	if !confirmed && joiningRepo != args.ConfigRepoId || !gkmRowStanding(row) || !gkmRecoveryAdmitted(state, row) {
+		return fmt.Errorf("%w: the recovery admission for the config repo is not present", ErrGkmWait)
 	}
 	if state.Repo(args.ConfigRepoId) == nil {
 		return fmt.Errorf("%w: repo %s", ErrGkmNoRepo, args.ConfigRepoId)
@@ -822,6 +828,28 @@ func checkGkmRecoveryRebind(args *GkmRecoveryRebindArgs) error {
 // ErrGkmWait while the new binding has not reached this state, ErrGkmKeyMissing while this device holds no key of
 // a group's newest generation, in which case nothing is deleted.
 func (self *GkmGroupClient) RebindRecovery(ctx context.Context, args *GkmRecoveryRebindArgs) error {
+	self.rebindLock.Lock()
+	defer self.rebindLock.Unlock()
+	if self.args.RecoveryKeyAt != nil {
+		if err := checkGkmRecoveryRebind(args); err != nil {
+			return err
+		}
+		state, err := self.currentState()
+		if err != nil {
+			return err
+		}
+		key, err := self.args.RecoveryKeyAt(state, args.MemberId)
+		if err != nil {
+			return err
+		}
+		if key == nil || !bytes.Equal(key.BindingKeySha256, args.New.BindingKeySha256) || !bytes.Equal(key.XwingPublicKey, args.New.XwingPublicKey) {
+			return fmt.Errorf("%w: rebind differs from the effective recovery key", ErrGkmKeyMissing)
+		}
+	}
+	return self.rebindRecoveryWithLock(ctx, args)
+}
+
+func (self *GkmGroupClient) rebindRecoveryWithLock(ctx context.Context, args *GkmRecoveryRebindArgs) error {
 	if err := checkGkmRecoveryRebind(args); err != nil {
 		return err
 	}
@@ -844,6 +872,8 @@ func (self *GkmGroupClient) RebindRecovery(ctx context.Context, args *GkmRecover
 
 // Finishes a rebind a kill cut short. resumed is false for a keychain that holds none.
 func (self *GkmGroupClient) ResumeRecoveryRebind(ctx context.Context) (resumed bool, err error) {
+	self.rebindLock.Lock()
+	defer self.rebindLock.Unlock()
 	stored, phase, err := self.storedRecoveryRebind()
 	if err != nil || stored == nil {
 		return false, err
@@ -861,6 +891,94 @@ func (self *GkmGroupClient) storedRecoveryRebind() (*GkmRecoveryRebindArgs, int,
 		return nil, 0, err
 	}
 	return decodeGkmRecoveryRebind(encoded)
+}
+
+// CompleteRecoveryBinding verifies that the named binding took effect, then resumes its wrap and rotation work.
+// Every admitted writable device of the member can contribute the groups it reads after restart.
+func (self *GkmGroupClient) CompleteRecoveryBinding(ctx context.Context, expected []byte) error {
+	self.rebindLock.Lock()
+	defer self.rebindLock.Unlock()
+	state, err := self.currentState()
+	if err != nil {
+		return err
+	}
+	own := state.SidecarRow(self.args.SidecarId)
+	memberId, err := IdFromBytes(own.GetMemberId())
+	if err != nil || !gkmRowMemberDevice(own) || gkmRowReadOnly(own) || !gkmRowStanding(own) {
+		return ErrGkmNotWriter
+	}
+	member := state.Member(memberId)
+	current := member.GetRecoveryKeySha256()
+	if len(current) == 0 && expected == nil {
+		return nil
+	}
+	if len(current) != gkmDigestByteCount || expected != nil && !bytes.Equal(expected, current) {
+		return ErrGkmWait
+	}
+	done, err := self.getRecord(gkmRecoveryRebindDone)
+	if err != nil && !errors.Is(err, ErrGkmKeyMissing) {
+		return err
+	}
+	pending, _, err := self.storedRecoveryRebind()
+	if err != nil {
+		return err
+	}
+	if bytes.Equal(done, current) && pending == nil {
+		// A repo can be formed or re-seeded after the previous successful pass.
+		coverage, ok := self.args.Api.(interface {
+			CheckRecoveryCoverage(context.Context, Id, []byte) error
+		})
+		if !ok {
+			return ErrGkmUnavailable
+		}
+		if err := coverage.CheckRecoveryCoverage(ctx, memberId, current); !IsGkmStatus(err, http.StatusConflict) {
+			return err
+		}
+	}
+	if self.args.RecoveryKeyAt == nil {
+		return ErrGkmKeyMissing
+	}
+	key, err := self.args.RecoveryKeyAt(state, memberId)
+	if err != nil {
+		return err
+	}
+	if key == nil || !bytes.Equal(key.BindingKeySha256, current) {
+		return ErrGkmKeyMissing
+	}
+	if self.args.OwnRecoveryKey != nil {
+		if err := self.args.OwnRecoveryKey(key); err != nil {
+			return err
+		}
+	}
+	bindings := member.GetBindings()
+	if len(bindings) == 0 || !bytes.Equal(bindings[0].GetKeySha256(), current) {
+		return ErrGkmWait
+	}
+	work := &GkmRecoveryRebindArgs{MemberId: memberId, New: key, Compromise: bindings[0].GetReason() == bridge.RecoveryRebindReason_RECOVERY_REBIND_REASON_COMPROMISE}
+	if len(bindings) > 1 && bindings[0].GetReason() != bridge.RecoveryRebindReason_RECOVERY_REBIND_REASON_UNSPECIFIED {
+		work.RetiredKeySha256 = bindings[1].GetKeySha256()
+	}
+	if pending != nil && (!bytes.Equal(pending.New.BindingKeySha256, current) || !bytes.Equal(pending.New.XwingPublicKey, key.XwingPublicKey)) {
+		// An intervening approved rebind superseded the unfinished one. Its older wraps are retained
+		// until the replacement stands for every group, and are retired below from the verified history.
+		if err := self.args.Secrets.Put(gkmRecoveryRebindRecord, work.encode(gkmRebindPhaseWrapping)); err != nil {
+			return err
+		}
+	}
+	return self.rebindRecoveryWithLock(ctx, work)
+}
+
+func (self *GkmGroupClient) followRecoveryBinding(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-self.rebindWake:
+			if err := self.CompleteRecoveryBinding(ctx, nil); err != nil && !errors.Is(err, ErrGkmNotWriter) && self.log.V(1).Enabled() {
+				self.log.Infof("[gkm]recovery wraps wait: %s", err)
+			}
+		}
+	}
 }
 
 // The rebind's steps from phase.
@@ -904,7 +1022,7 @@ func (self *GkmGroupClient) rebindRecovery(ctx context.Context, args *GkmRecover
 		if err != nil {
 			return err
 		}
-		if holders.Contains(GkmHolderRecovery, args.MemberId.Bytes()) {
+		if holders.Contains(GkmHolderRecovery, args.MemberId.Bytes()) && gkmHolderOrCovered(state, holders, repoId, self.args.SidecarId, now) {
 			memberRepoIds = append(memberRepoIds, repoId)
 		}
 	}
@@ -918,12 +1036,37 @@ func (self *GkmGroupClient) rebindRecovery(ctx context.Context, args *GkmRecover
 			err := manager.rewrapRecoveryInFlow(ctx, state, api, args)
 			manager.flowLock.Unlock()
 			if err != nil {
-				// the retired binding's wraps stand until every new one does
+				// Another device may hold this group's latest key. Contribute to the remaining groups
+				// before asking the service to verify the member's complete set of winners.
+				if self.args.RecoveryKeyAt != nil && (gkmLeafWaits(err) || IsGkmStatus(err, http.StatusNotFound)) {
+					continue
+				}
 				return err
 			}
 		}
-		if 0 < len(args.RetiredKeySha256) {
-			if err := api.DeleteRecoveryWraps(ctx, args.MemberId, args.RetiredKeySha256[:gkmDigestPrefixByteCount]); err != nil {
+		if coverage, ok := api.(interface {
+			CheckRecoveryCoverage(context.Context, Id, []byte) error
+		}); ok {
+			if err := coverage.CheckRecoveryCoverage(ctx, args.MemberId, args.New.BindingKeySha256); err != nil {
+				return err
+			}
+		} else if self.args.RecoveryKeyAt != nil {
+			return fmt.Errorf("%w: no member-wide recovery coverage check", ErrGkmUnavailable)
+		}
+		retired := [][]byte{}
+		if len(args.RetiredKeySha256) != 0 {
+			retired = append(retired, args.RetiredKeySha256)
+		}
+		if self.args.RecoveryKeyAt != nil {
+			for _, binding := range member.GetBindings() {
+				digest := binding.GetKeySha256()
+				if len(digest) == gkmDigestByteCount && !bytes.Equal(digest, args.New.BindingKeySha256) && !bytes.Equal(digest, args.RetiredKeySha256) {
+					retired = append(retired, digest)
+				}
+			}
+		}
+		for _, digest := range retired {
+			if err := api.DeleteRecoveryWraps(ctx, args.MemberId, digest[:gkmDigestPrefixByteCount]); err != nil {
 				return err
 			}
 		}
@@ -948,14 +1091,32 @@ func (self *GkmGroupClient) rebindRecovery(ctx context.Context, args *GkmRecover
 		switch {
 		case err == nil && rotated, errors.Is(err, ErrGkmNotWriter):
 		case err == nil:
+		case self.args.RecoveryKeyAt != nil && (errors.Is(err, errGkmGroupUnformed) || IsGkmStatus(err, http.StatusNotFound)):
+			// There is no winning generation to rotate. The member-wide check still covers every formed repo.
 		case gkmLeafWaits(err) || errors.Is(err, ErrGkmAuthAhead) || gkmUnreachable(ctx, err):
 			waits = append(waits, err)
 		default:
 			return err
 		}
 	}
+	if coverage, ok := api.(interface {
+		CheckRecoveryCoverage(context.Context, Id, []byte) error
+	}); ok {
+		if err := coverage.CheckRecoveryCoverage(ctx, args.MemberId, args.New.BindingKeySha256); err != nil {
+			if IsGkmStatus(err, http.StatusConflict) {
+				// A newly formed group needs wrapping before its rotation can finish.
+				if saveErr := self.args.Secrets.Put(gkmRecoveryRebindRecord, args.encode(gkmRebindPhaseWrapping)); saveErr != nil {
+					return saveErr
+				}
+			}
+			return err
+		}
+	}
 	if 0 < len(waits) {
 		return fmt.Errorf("%w: %d of the rebind's rotations wait: %w", ErrGkmWait, len(waits), waits[0])
+	}
+	if err := self.args.Secrets.Put(gkmRecoveryRebindDone, args.New.BindingKeySha256); err != nil {
+		return err
 	}
 	return self.args.Secrets.Delete(gkmRecoveryRebindRecord)
 }

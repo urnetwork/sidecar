@@ -153,7 +153,9 @@ func TestGkmRetentionKeepsTheNewestEpochForAReturningDevice(t *testing.T) {
 	// every ack older than 30 days, the family still inside its 31 day life
 	fixture.clock.Advance(30*24*time.Hour + time.Hour)
 	state := newFakeGkmReconcilerState()
-	reconciler, err := NewGkmReconciler(fixture.ctx, fixture.host.ServiceHost(), DefaultGkmReconcilerSettings(), &GkmReconcilerDeps{State: state})
+	settings := DefaultGkmReconcilerSettings()
+	settings.Service.DraftMls = true
+	reconciler, err := NewGkmReconciler(fixture.ctx, fixture.host.ServiceHost(), settings, &GkmReconcilerDeps{State: state})
 	if err != nil {
 		t.Fatal(err)
 	}
