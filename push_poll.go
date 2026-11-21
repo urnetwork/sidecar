@@ -154,6 +154,7 @@ type sidecarCoreAnswer struct {
 	core     *SidecarSyncCore
 }
 
+// Tracks one generation's requested core revision, cached reply and reader lifetime.
 type sidecarCoreSync struct {
 	requests *MonitorValue[sidecarCoreRequest]
 	answer   atomic.Pointer[sidecarCoreAnswer]

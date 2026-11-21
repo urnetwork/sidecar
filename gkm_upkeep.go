@@ -278,7 +278,7 @@ func newGkmUpkeep(ctx context.Context, args *GkmUpkeepArgs) (*GkmUpkeep, error) 
 	return self, nil
 }
 
-// Refresh asks for a pass after auth or published key state changes.
+// Requests an upkeep pass after auth or published key state changes.
 func (self *GkmUpkeep) Refresh() {
 	self.passAsked.Update(func(count int) int { return count + 1 })
 }

@@ -59,9 +59,12 @@ func TestSocketDeviceFollowsSignedPublicScope(t *testing.T) {
 		host    string
 		want    bool
 	}{
-		{device.sidecarId, "app.crew", true}, {second.sidecarId, "app.crew", false},
-		{net.owner.sidecarId, "app.crew", false}, {device.sidecarId, "app.unknown", false},
-		{net.owner.sidecarId, "app.eng", true}, {device.sidecarId, "app", true},
+		{sidecar: device.sidecarId, host: "app.crew", want: true},
+		{sidecar: second.sidecarId, host: "app.crew", want: false},
+		{sidecar: net.owner.sidecarId, host: "app.crew", want: false},
+		{sidecar: device.sidecarId, host: "app.unknown", want: false},
+		{sidecar: net.owner.sidecarId, host: "app.eng", want: true},
+		{sidecar: device.sidecarId, host: "app", want: true},
 	} {
 		subject := AclSidecarSubject(check.sidecar)
 		socket := AclSocketName{PublicName: "tls/443/" + check.host}

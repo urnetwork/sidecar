@@ -743,6 +743,7 @@ func (self *EvsRepo) repoRow() (*protocol.AclRepo, error) {
 	return repo, nil
 }
 
+// Reads the kind recorded at repo creation from the verified config.
 func (self *EvsRepo) repoKind() (protocol.RepoKind, error) {
 	repo, err := self.repoRow()
 	return repo.GetKind(), err
