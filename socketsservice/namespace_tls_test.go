@@ -1549,3 +1549,25 @@ func TestTlsListenRoutesAnAliasOnlyToListenersCertifiedForIt(t *testing.T) {
 		}
 	}
 }
+
+// SMTP enablement and TLS share the same authoritative network facts. An unknown
+// network stays pending, and mail enablement changes on the next facts read.
+func TestSmtpEnabledFromTheTlsListenFacts(t *testing.T) {
+	scene := newTestTlsListenScene(t, nil)
+	scene.facts.MailNetwork = true
+	scene.source.set(scene.networkId, scene.facts)
+	if enabled, err := scene.hooks.MailEnabled(scene.ctx, scene.networkId); enabled || !errors.Is(err, socketsservice.ErrSocketListenUnavailable) {
+		t.Fatalf("cold mail facts = %v, %v", enabled, err)
+	}
+	scene.awaitLoads(1)
+	if enabled, err := scene.hooks.MailEnabled(scene.ctx, scene.networkId); err != nil || !enabled {
+		t.Fatalf("enabled mail facts = %v, %v", enabled, err)
+	}
+	scene.source.set(scene.networkId, &socketsservice.TlsListenFacts{})
+	scene.clock.Advance(socketsservice.DefaultTlsNamespaceSettings().FactsRefreshInterval)
+	scene.hooks.MailEnabled(scene.ctx, scene.networkId)
+	scene.awaitLoads(2)
+	if enabled, err := scene.hooks.MailEnabled(scene.ctx, scene.networkId); err != nil || enabled {
+		t.Fatalf("disabled mail facts = %v, %v", enabled, err)
+	}
+}
