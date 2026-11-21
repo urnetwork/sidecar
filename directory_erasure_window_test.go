@@ -1,19 +1,21 @@
 //go:build !sidecar_http && !ios_extension
 
-// A request past its 30-day sweep window (QD-1161; §16.11's runner, closure and erasure rows, §11.12's reconcile row,
-// §11.13's wait row; FI-19): the directory's erasure runner still finishes what the request's ledger row owes of format
-// 2's half, and catches nothing new. The sweep's later-signed card cut near the window's end, the cards ref's rewrite
-// then waiting on the eraser's allowance, has the slot holding its document rewritten under a fresh key past the
-// window, nothing said complete while the card waits for its writer, and another member's card first found then is left
-// uncut; a card met inside the window and written private past it is not rewritten then (§16.11's closure row as owner
-// decision 676 has it) and keeps the erasure open; a second drop near the window's end, which puts the document back
-// uncut, and a CUT a full set refused there each have it cut and the slot rewritten past the window; a later-signed
-// card first found past the window is not cut; and a kill between a card's CLOSURE and its ERASE near the window's end
-// has the ERASE of the orphan's keys sent past it, ending the erasure. Inside the window, a kill between an announce
-// entry's ERASE and the CUT of the document it folded into on ur/index, which the next sync no longer finds, still has
-// that document cut by the device started again: it was journaled owed a CUT before the ERASE. FI-19's index and keys
-// clauses on both refs after each step. The fakes are QD-1160's (directory_erasure_dropped_test.go): both index refs
-// are the index's own erasers on its in-memory fake with one erasure ref between them.
+// A request past its 30-day sweep window (QD-1161, QD-1166; §16.11's runner, closure and erasure rows, §11.12's
+// reconcile row, §11.13's wait row; FI-19): the directory's erasure runner still finishes what the request's ledger row
+// owes of format 2's half, and catches nothing new. The sweep's later-signed card cut near the window's end, the cards
+// ref's rewrite then waiting on the eraser's allowance, has the slot holding its document rewritten under a fresh key
+// past the window, nothing said complete while the card waits for its writer, and another member's card first found
+// then is left uncut; once the card's writer wrote the run private past the window the card, met inside it, is
+// rewritten by CLOSURE and its ERASE ends the erasure, which the next CUT on each ref drops from the set, while the
+// other member's card, first met past the window, is not touched though its writer wrote it private too; a second drop
+// near the window's end, which puts the document back uncut, and a CUT a full set refused there each have it cut and
+// the slot rewritten past the window; a later-signed card first found past the window is not cut; and a kill between a
+// card's CLOSURE and its ERASE near the window's end has the ERASE of the orphan's keys sent past it, ending the
+// erasure. Inside the window, a kill between an announce entry's ERASE and the CUT of the document it folded into on
+// ur/index, which the next sync no longer finds, still has that document cut by the device started again: it was
+// journaled owed a CUT before the ERASE. FI-19's index and keys clauses on both refs after each step. The fakes are
+// QD-1160's (directory_erasure_dropped_test.go): both index refs are the index's own erasers on its in-memory fake with
+// one erasure ref between them.
 
 package sidecar_test
 
@@ -155,10 +157,12 @@ func testReadableAt(t *testing.T, evs *testErasureEvs, text string, path string)
 // erasure still reading complete by its newest ERASE, as another erasure's CUT would drop it. Past the window the
 // rewrite the ledger owes runs, the slot is rewritten under a fresh key and the pair's ERASE opens the erasure while
 // the card waits for its writer, so another erasure's CUT keeps it in the set; another member's card that names the
-// repo, first found past the window, is not cut. The card's writer then writes the run private: the card, met inside
-// the window, is not rewritten past it (§16.11's closure row: caught at each later sync for 30 days), and the erasure
-// stays open, listed and masked. Before QD-1161 the pass past the window skipped the request, so the slot kept the
-// document under its live key, and a later CUT's drop of the erasure let it back into search.
+// repo, first found past the window, is not cut. The card's writer then writes the run private, and the other
+// member's writer too: the card, met inside the window, is rewritten by CLOSURE past it and its ERASE ends the
+// erasure (QD-1166), which the next CUT on each ref drops from the set; the other member's card, first met past the
+// window, is not touched. Before QD-1161 the pass past the window skipped the request, so the slot kept the document
+// under its live key, and a later CUT's drop of the erasure let it back into search; before QD-1166 the card stayed
+// owed its CLOSURE past the window, its earlier versions keeping their key, and the erasure stayed open and listed.
 func TestDirectoryFormat2RewriteWaitingOnTheAllowanceFinishesPastTheWindow(t *testing.T) {
 	seed := newTestDroppedSeed(t)
 	refs := seed.refs
@@ -199,32 +203,61 @@ func TestDirectoryFormat2RewriteWaitingOnTheAllowanceFinishesPastTheWindow(t *te
 	if !refs.Lists(cardsRef, seed.requestId) {
 		t.Fatal("another erasure's CUT dropped the erasure the rewrite opened")
 	}
-	if files := seed.admin.pass(t, seed.runner).Files[seed.requestId]; files != nil {
-		t.Fatalf("a pass past the window with nothing owed: %+v", files)
+	// the card still names the repo: the ledger shows it owed its CLOSURE, so the pass reads it, and sends nothing
+	pass = seed.admin.pass(t, seed.runner)
+	if files := pass.Files[seed.requestId]; files != nil || !slices.Equal(pass.Waiting, []sidecar.Id{seed.requestId}) {
+		t.Fatalf("a pass past the window with the card waiting for its writer: waiting %v, files %+v", pass.Waiting, files)
 	}
 
+	closures := len(seed.evs.cardClosures())
 	seed.writeRun(t, 4, true)
-	if files := seed.admin.pass(t, seed.runner).Files[seed.requestId]; files != nil {
-		t.Fatalf("the pass after the card's writer wrote the run private past the window: %+v", files)
+	other.writeRun(t, 2, true)
+	pass = seed.admin.pass(t, seed.runner)
+	files = pass.Files[seed.requestId]
+	if len(pass.Erased[seed.requestId]) != 0 || files == nil || !slices.Equal(files.ClosedPaths, []string{seed.cardPath}) || !files.Complete ||
+		files.CutCount != 0 || files.IndexPairCount != 0 || len(files.WaitingPaths) != 0 || len(files.UnclosedPaths) != 0 {
+		t.Fatalf("the pass after both writers wrote their runs private past the window: erased %v, files %+v", pass.Erased[seed.requestId], files)
 	}
-	if readable := seed.evs.readable(t, testErasureProject); len(readable) == 0 {
-		t.Fatal("a card met inside the window was rewritten past it")
+	if after := seed.evs.cardClosures(); len(after) != closures+1 || after[len(after)-1].path != seed.cardPath || after[len(after)-1].erasureId != seed.requestId {
+		t.Fatalf("the cards ref's CLOSUREs past the window: %d more", len(after)-closures)
 	}
-	if _, _, complete := refs.Erases(seed.requestId); complete {
-		t.Fatal("the erasure reads complete with a card it met owed its CLOSURE")
+	if readable := seed.evs.readable(t, testErasureProject); len(readable) != 0 {
+		t.Fatalf("versions of the card met inside the window still open: %v", readable)
+	}
+	if readable := testReadableAt(t, seed.evs, testWindowOtherProject, other.cardPath); len(readable) == 0 {
+		t.Fatal("the card first met past the window lost its key")
+	}
+	if _, _, complete := refs.Erases(seed.requestId); !complete {
+		t.Fatal("the erasure reads open after the CLOSURE's ERASE")
 	}
 	refs.Sweep()
+	// the next CUT on each ref, another erasure's, drops the complete erasure from its set
+	for _, ref := range []string{cardsRef, sidecar.DirectoryErasureTestStreamsRef} {
+		seed.otherCut(t, refs.Open(ref, seed.otherId), "after the end on "+ref)
+		if refs.Lists(ref, seed.requestId) {
+			t.Fatalf("%s's set lists the erasure after it ended", ref)
+		}
+	}
+	refs.Sweep()
+	if files := seed.admin.pass(t, seed.runner).Files[seed.requestId]; files != nil {
+		t.Fatalf("a pass past the window after the erasure ended: %+v", files)
+	}
+	if after := len(seed.evs.cardClosures()); after != closures+1 {
+		t.Fatalf("%d CLOSUREs of the cards ref after the erasure ended", after-closures-1)
+	}
 }
 
 // The cards ref's rewrite waits on the allowance an hour before the window's end, as above, and the card's writer
-// writes the run private past the window. The rewrite the ledger owes runs, but the card, which a CLOSURE could take
-// now, is not rewritten past the window: it is owed its CLOSURE in the ledger and keeps the pair's ERASE from saying
-// complete, so the erasure stays open and listed while the card's earlier version keeps its key.
-func TestDirectoryFormat2CardMetInsideTheWindowIsNotRewrittenPastIt(t *testing.T) {
+// writes the run private past the window. The pass runs the rewrite the ledger owes, then rewrites the card, met inside
+// the window, by CLOSURE, and that CLOSURE's ERASE of its keys ends the erasure (QD-1166): the next CUT on the cards
+// ref drops it from the set. Before QD-1166 the card stayed owed its CLOSURE past the window, its earlier versions
+// keeping their key, and the erasure stayed open and listed for good, holding set room.
+func TestDirectoryFormat2CardMetInsideTheWindowIsRewrittenPastIt(t *testing.T) {
 	seed := newTestDroppedSeed(t)
 	refs := seed.refs
+	cardsRef := sidecar.DirectoryErasureTestCardsRef
 	testAgeRequest(t, seed.world, seed.admin, seed.requestId, testSweepWindow()-time.Hour)
-	refs.RefuseNextClosure(sidecar.DirectoryErasureTestCardsRef)
+	refs.RefuseNextClosure(cardsRef)
 	if files := seed.admin.pass(t, seed.runner).Files[seed.requestId]; files == nil || !files.IndexWaiting || files.IndexPairCount != 0 {
 		t.Fatalf("the pass an hour before the window's end: %+v", files)
 	}
@@ -232,18 +265,39 @@ func TestDirectoryFormat2CardMetInsideTheWindowIsNotRewrittenPastIt(t *testing.T
 
 	testAgeRequest(t, seed.world, seed.admin, seed.requestId, testSweepWindow()+time.Hour)
 	seed.writeRun(t, 4, true)
-	files := seed.admin.pass(t, seed.runner).Files[seed.requestId]
-	if files == nil || files.IndexPairCount == 0 || files.IndexWaiting || files.Complete || len(files.ClosedPaths) != 0 ||
-		len(files.WaitingPaths) != 0 || !slices.Equal(files.UnclosedPaths, []string{seed.cardPath}) {
-		t.Fatalf("the pass past the window: %+v", files)
+	pass := seed.admin.pass(t, seed.runner)
+	files := pass.Files[seed.requestId]
+	if len(pass.Erased[seed.requestId]) != 0 || files == nil || files.CutCount != 0 || files.IndexPairCount == 0 || files.IndexWaiting ||
+		!files.Complete || !slices.Equal(files.ClosedPaths, []string{seed.cardPath}) || len(files.WaitingPaths) != 0 || len(files.UnclosedPaths) != 0 {
+		t.Fatalf("the pass past the window: erased %v, files %+v", pass.Erased[seed.requestId], files)
 	}
-	if after := len(seed.evs.cardClosures()); after != closures {
+	if after := len(seed.evs.cardClosures()); after != closures+1 {
 		t.Fatalf("%d CLOSUREs of the cards ref past the window", after-closures)
 	}
-	if readable := seed.evs.readable(t, testErasureProject); len(readable) == 0 {
-		t.Fatal("the card met inside the window lost its key past it")
+	if readable := seed.evs.readable(t, testErasureProject); len(readable) != 0 {
+		t.Fatalf("versions of the card met inside the window still open: %v", readable)
 	}
-	seed.slotRewritten(t)
+	if version := refs.ListedVersion(cardsRef, seed.requestId, seed.runDocument); version != 3 {
+		t.Fatalf("the cards ref's set lists the later card's document at %d", version)
+	}
+	if readable := refs.Readable(cardsRef, seed.runDocument); len(readable) != 0 {
+		t.Fatalf("index versions holding the later card's document still open: %v", readable)
+	}
+	if readable := refs.Readable(cardsRef, []byte("a/another")); len(readable) == 0 {
+		t.Fatal("the other document left the cards ref's index")
+	}
+	if _, _, complete := refs.Erases(seed.requestId); !complete {
+		t.Fatal("the erasure reads open after the CLOSURE's ERASE")
+	}
+	refs.Sweep()
+	seed.otherCut(t, refs.Open(cardsRef, seed.otherId), "after the end")
+	if refs.Lists(cardsRef, seed.requestId) {
+		t.Fatal("the cards ref's set lists the erasure after it ended")
+	}
+	refs.Sweep()
+	if files := seed.admin.pass(t, seed.runner).Files[seed.requestId]; files != nil {
+		t.Fatalf("a pass past the window after the erasure ended: %+v", files)
+	}
 }
 
 // Another directory admin's CUT drops the erasure an hour before the window's end after the sweep's CUT of the
