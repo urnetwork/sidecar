@@ -273,6 +273,9 @@ type SidecarOutcome struct {
 	State ApprovalOutcomeState
 	// The component's reference to what it did, opaque to the gate. Empty unless done.
 	EffectRef []byte
+	// The reserved use that returned this outcome, supplied in memory by the gate. A component can recover a
+	// receipt under this key when an older ledger entry recorded an incomplete reference.
+	effectKey []byte
 	// The effect's error in this call; nil on a retry that found a recorded outcome. Never stored.
 	Err error
 }

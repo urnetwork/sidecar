@@ -96,7 +96,7 @@ func testGateExpectOutcome(t *testing.T, name string, err error, action *Sidecar
 func TestOneEffectForTwoCallers(t *testing.T) {
 	world := newTestApprovalWorld(t)
 	stored := world.mailAction("someone@example.com")
-	world.approved(stored)
+	request := world.approved(stored)
 	world.effect.running = make(chan struct{})
 	world.effect.release = make(chan struct{})
 	joined := make(chan struct{}, 1)
@@ -129,6 +129,10 @@ func TestOneEffectForTwoCallers(t *testing.T) {
 	world.effect.running, world.effect.release = nil, nil
 	third := world.action(stored)
 	testGateExpectOutcome(t, "a retry", world.gate.Authorize(t.Context(), third, nil), third, ApprovalOutcomeDone)
+	wantKey := ApprovalEffectKey(request.ApprovalId(), stored.ActionId(request.ApprovalId()))
+	if !bytes.Equal(third.Outcome.effectKey, wantKey[:]) {
+		t.Error("the recorded outcome did not name its reserved use")
+	}
 	if runCount, _ := world.effect.counts(); runCount != 1 || !bytes.Equal(third.Outcome.EffectRef, first.Outcome.EffectRef) {
 		t.Errorf("the retry ran the effect again, or answered another reference: %d runs", runCount)
 	}
