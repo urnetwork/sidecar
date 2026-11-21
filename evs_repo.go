@@ -70,10 +70,6 @@ type EvsReadArgs struct {
 	// EvsHistoryVersion.Provenance), one more round per push, since a path read carries no push's sealed metadata
 	// (evs_read_provenance.go). A read that does not ask gives none.
 	Provenance bool
-	// Internal mailbox readers need a whole i/ segment to preserve row offsets, and
-	// writers need its original bytes for CAS and CLOSURE. Public reads withhold
-	// a segment containing an erased row until the admin re-checkpoints it.
-	mailSegment bool
 	// History: walks the newest life alone, ending at its creation with no read below it, as Lookup under a
 	// base_version of 0 does (evs_lookup.go); else History walks every life (evs_history.go).
 	NewestLife bool

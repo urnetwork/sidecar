@@ -510,8 +510,9 @@ func (self *MailEraser) beginAttempt(ctx context.Context, erasureId Id, month Ma
 	// for, which the index never held; any other format-2 erasure ends with its index files' rewrite
 	complete := len(segments) == 0 && (index == nil || !standing)
 	testHookBarrier("mail.erase.message.before", "")
+	note := mailErasureNote(messages, nil)
 	err = self.store.Erase(ctx, &EvsEraseArgs{
-		ErasureId: erasure.ErasureId, Keys: keys, Complete: complete, Note: mailErasureNote(messages, nil),
+		ErasureId: erasure.ErasureId, Keys: keys, Complete: complete, Note: note,
 	})
 	testHookBarrier("mail.erase.message.after", "")
 	if err != nil {
@@ -522,7 +523,7 @@ func (self *MailEraser) beginAttempt(ctx context.Context, erasureId Id, month Ma
 		return nil, err
 	}
 	if !slices.ContainsFunc(erasures, func(row *EvsErasure) bool {
-		return row.ErasureId == erasureId && bytes.Equal(row.Note, mailErasureNote(messages, nil))
+		return !row.Completion && row.ErasureId == erasureId && bytes.Equal(row.Note, note)
 	}) {
 		return nil, errMailEraseUncommitted
 	}

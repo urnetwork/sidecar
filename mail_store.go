@@ -169,7 +169,7 @@ func newMailEvsStore(repo *EvsRepo, refName []byte, settings *MailStoreSettings)
 func (self *mailEvsStore) Read(ctx context.Context, path string, maxByteCount int) ([]byte, uint64, error) {
 	out := &mailBoundedBuffer{maxByteCount: maxByteCount}
 	_, _, segment := parseMailIndexPath(path)
-	info, err := self.repo.ReadHead(ctx, &EvsReadArgs{RefName: self.refName, Path: path, mailSegment: segment}, out)
+	info, err := self.repo.readHeadContent(ctx, &EvsReadArgs{RefName: self.refName, Path: path}, out, segment)
 	if err != nil {
 		if errors.Is(err, ErrMailStoreTooLarge) {
 			return nil, 0, ErrMailStoreTooLarge

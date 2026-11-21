@@ -773,3 +773,15 @@ func (self *MailView) readErased(ctx context.Context, repoId Id) (*mailErasedVie
 	_, err := mask.refresh(ctx, reader.Erasures)
 	return mask, err
 }
+
+// Checks only the previously synced erasure ref, for joins whose query must select no reads.
+func (self *MailView) knownErased(repoId Id, id Id) bool {
+	self.stateLock.Lock()
+	mask := self.erased[repoId]
+	self.stateLock.Unlock()
+	if mask == nil {
+		return false
+	}
+	_, erased := mask.erased(id)
+	return erased
+}

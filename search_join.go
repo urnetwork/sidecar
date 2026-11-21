@@ -20,6 +20,8 @@ import (
 
 // One message's flags as the device joins them.
 type SearchMailFlags struct {
+	// A signed admin erasure permanently withholds this hit, even during its index rewrite.
+	Erased  bool
 	Seen    bool
 	Flagged bool
 	Trash   bool
@@ -88,7 +90,7 @@ func searchJoinMailHit(ctx context.Context, source SearchJoinSource, ask SearchJ
 	if !held || flags == nil {
 		return true, nil, nil
 	}
-	if (flags.Spam && !ask.Spam) || (flags.Trash && !ask.Trash) {
+	if flags.Erased || (flags.Spam && !ask.Spam) || (flags.Trash && !ask.Trash) {
 		return false, flags, nil
 	}
 	return true, flags, nil

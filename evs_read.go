@@ -639,6 +639,12 @@ func (self *EvsClient) refEpoch(repoId Id, refId Id) *protocol.EvsPathEpoch {
 // replaced mid-read is read again from the new head (§18.5), a fresh one, at most
 // EvsSettings.ReadReplacedRestartCount times; an older version that was replaced answers ErrEvsCollected.
 func (self *EvsRepo) ReadHead(ctx context.Context, args *EvsReadArgs, out io.Writer) (*EvsFileInfo, error) {
+	return self.readHeadContent(ctx, args, out, false)
+}
+
+// Internal mailbox readers use the original bytes of an i/ segment for row offsets,
+// append and re-checkpoint. All public reads check the segment before releasing it.
+func (self *EvsRepo) readHeadContent(ctx context.Context, args *EvsReadArgs, out io.Writer, mailSegment bool) (*EvsFileInfo, error) {
 	refId, err := self.resolveRefId(ctx, args.RefName, args.RefId)
 	if err != nil {
 		return nil, err
@@ -646,7 +652,7 @@ func (self *EvsRepo) ReadHead(ctx context.Context, args *EvsReadArgs, out io.Wri
 	fresh := args.Fresh
 	for restartCount := 0; ; restartCount += 1 {
 		// nothing reaches out before a version's content is whole and checked, so a failed pass wrote none of it
-		info, err := self.readFile(ctx, refId, args, fresh, out)
+		info, err := self.readFile(ctx, refId, args, fresh, out, mailSegment)
 		if args.Version != 0 || !errors.Is(err, ErrEvsCollected) {
 			return info, err
 		}
@@ -658,7 +664,7 @@ func (self *EvsRepo) ReadHead(ctx context.Context, args *EvsReadArgs, out io.Wri
 }
 
 // One pass of ReadHead: the file at args.Version on a head read fresh or not.
-func (self *EvsRepo) readFile(ctx context.Context, refId Id, args *EvsReadArgs, fresh bool, out io.Writer) (*EvsFileInfo, error) {
+func (self *EvsRepo) readFile(ctx context.Context, refId Id, args *EvsReadArgs, fresh bool, out io.Writer, mailSegment bool) (*EvsFileInfo, error) {
 	ruled, err := self.prefixRuled()
 	if err != nil {
 		return nil, err
@@ -699,7 +705,7 @@ func (self *EvsRepo) readFile(ctx context.Context, refId Id, args *EvsReadArgs, 
 	case verified.Entry.GetKind() != uint32(protocol.EvsEntryKind_EVS_ENTRY_FILE):
 		return nil, fmt.Errorf("%w: a directory, which List reads", ErrEvsTokenInvalid)
 	}
-	result.mailSegment = args.mailSegment
+	result.mailSegment = mailSegment
 	if !args.Provenance || evsProvenanceRead == nil {
 		info, err := self.reconstruct(ctx, result, verified, out)
 		if err != nil {

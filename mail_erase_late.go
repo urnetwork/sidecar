@@ -67,7 +67,11 @@ func (self *MailEraser) eraseLateBodies(ctx context.Context, erasureId Id, messa
 		if len(keys) == start {
 			continue
 		}
-		if index != nil {
+		if index != nil && message.ChunkCount != 0 {
+			// The signed deposit note bounded every chunk of this message. Its
+			// actual creation version may exceed the estimate at the first CUT.
+			message.Version = max(message.Version, version)
+		} else if index != nil {
 			message.Version, message.ChunkCount, err = self.documentOf(ctx, index, path, version, 0)
 			if err != nil {
 				return nil, false, false, err

@@ -38,6 +38,14 @@ func TestMailEraseResumesLateIngestAfterTerminalDepositErase(t *testing.T) {
 	deposit := world.depositMessage(testMailIngestMessage("late", "private body"))
 	messagePath := MailMessagePath(world.month, deposit.id)
 	segmentPath := MailIndexPath(world.month, 0)
+	view := NewMailView(&MailViewArgs{MailboxId: world.repoId, Mailbox: world.eraseStore, Settings: DefaultMailStoreSettings()})
+	join, err := NewMailSearchJoin(&MailSearchJoinArgs{View: view.args, Clock: world.clock})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := join.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
 	crash := errors.New("lost the ingest result")
 	ingestor := world.slotIngestor()
 	var original Id
@@ -56,7 +64,13 @@ func TestMailEraseResumesLateIngestAfterTerminalDepositErase(t *testing.T) {
 	if len(bodySlots) == 0 || len(segmentSlots) == 0 || !slices.Contains(world.rowIds(), deposit.id) {
 		t.Fatal("fixture did not leave a late publication")
 	}
-	view := NewMailView(&MailViewArgs{MailboxId: world.repoId, Mailbox: world.eraseStore, Settings: DefaultMailStoreSettings()})
+	if err := join.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	show, _, err := searchJoinMailHit(ctx, join, SearchJoinAsk{Spam: true, Trash: true}, world.repoId, &indexRow{docKind: indexDocMail, locator: messagePath})
+	if err != nil || show {
+		t.Fatalf("a cached search released the erased row: %t, %v", show, err)
+	}
 	if _, err := view.Entry(ctx, world.month, deposit.id); !errors.Is(err, ErrMailViewEntryAbsent) {
 		t.Fatalf("an interim mail read released the erased row: %v", err)
 	}
