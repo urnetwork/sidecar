@@ -607,6 +607,16 @@ func TestHintsCoalesceToTheHighestSequence(t *testing.T) {
 	if onTime, late := host.Metrics.Value("urnetwork_evs_head_hints_total", "on_time"), host.Metrics.Value("urnetwork_evs_head_hints_total", "late"); onTime != 4 || late != 1 {
 		t.Fatalf("latency of the five acknowledged heads: on time %v, late %v", onTime, late)
 	}
+	notifier.views = &fixedGateViews{}
+	committed := &EvsCommitted{RepoNetworkId: sidecar.NewId(), SeenAt: clock.Now()}
+	for _, expiry := range []time.Time{clock.Now(), clock.Now().Add(time.Hour)} {
+		if clients := notifier.match(committed, []*EvsLease{{EveryRef: true, ExpiresAt: expiry}}); len(clients) != 0 {
+			t.Fatal("a missing projection dispatched a hint")
+		}
+	}
+	if failed := host.Metrics.Value("urnetwork_evs_head_hints_total", "failed"); failed != 1 {
+		t.Fatalf("a missing projection with one live lease counted %v failures", failed)
+	}
 }
 
 // §22.4's CROSSSLOT lint over evsservice's Redis calls and scripts: each names keys under one hash tag, and the

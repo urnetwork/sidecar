@@ -199,7 +199,18 @@ func (self *EvsHintNotifier) leases(ctx context.Context, repoId sidecar.Id) ([]*
 // The clients whose leases committed matches. See the file header.
 func (self *EvsHintNotifier) match(committed *EvsCommitted, leases []*EvsLease) []sidecar.Id {
 	view, answer := self.views.View(committed.RepoNetworkId)
+	now := self.clock.Now()
 	if answer != EvsAuthAllowed || view == nil {
+		// A missing projection prevents dispatch to potentially eligible live leases. It cannot
+		// silently remove these heads from the delivery budget. A known denial owes no hint.
+		if self.outcomes != nil && !committed.SeenAt.IsZero() && answer != EvsAuthDenied {
+			for _, lease := range leases {
+				if now.Before(lease.ExpiresAt) && (lease.EveryRef || lease.RefId == committed.RefId) {
+					self.outcomes.Add(1, "failed")
+					break
+				}
+			}
+		}
 		return nil
 	}
 	readers := map[sidecar.Id]bool{}
@@ -216,7 +227,6 @@ func (self *EvsHintNotifier) match(committed *EvsCommitted, leases []*EvsLease) 
 	if len(push.GetChangesRoot()) != 0 && len(changed) == 0 {
 		changed = committed.Statement.ChangedPrefixes
 	}
-	now := self.clock.Now()
 	clients := map[sidecar.Id]bool{}
 	for _, lease := range leases {
 		if !now.Before(lease.ExpiresAt) || (!lease.EveryRef && lease.RefId != committed.RefId) || !readers[lease.SidecarId] {
