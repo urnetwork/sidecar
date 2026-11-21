@@ -180,6 +180,7 @@ type EvsConfigHeadReader struct {
 }
 
 var _ ConfigHeadAnchorReader = (*EvsConfigHeadReader)(nil)
+var _ ConfigHeadTipReader = (*EvsConfigHeadReader)(nil)
 
 // A reader of args.Repo's main ref as config heads.
 func NewEvsConfigHeadReader(args *EvsConfigHeadReaderArgs) (*EvsConfigHeadReader, error) {
@@ -202,6 +203,23 @@ func (self *EvsConfigHeadReader) CachedConfigHead(version uint64, chain []byte) 
 		return nil
 	}
 	return self.cachedHead(version, [sha256.Size]byte(chain))
+}
+
+// Opens the current main-ref head through the same verified replay as a base's head.
+func (self *EvsConfigHeadReader) CurrentConfigHead(ctx context.Context) (*ConfigHead, uint64, [sha256.Size]byte, error) {
+	refId, err := self.repo.resolveRefId(ctx, EvsMainRefName, nil)
+	if err != nil {
+		return nil, 0, [sha256.Size]byte{}, err
+	}
+	tip, err := self.repo.readHeadAlone(ctx, refId, true)
+	if err != nil {
+		return nil, 0, [sha256.Size]byte{}, err
+	}
+	if tip.Version == 0 {
+		return nil, 0, tip.Chain, nil
+	}
+	head, err := self.ReadConfigHead(ctx, tip.Version, tip.Chain[:])
+	return head, tip.Version, tip.Chain, err
 }
 
 // A head answered before at configVersion with chain, nil for none.

@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"sync/atomic"
 	"time"
 
@@ -216,13 +215,7 @@ func restoreFirstAclFiles(head *ConfigHead, files map[string][]byte) (*ConfigHea
 // The Owner's Team creation includes the fixed starter. Its request rule and grants must
 // fit the network's effective limits, and its policy tests must pass before the first signature.
 func planFirstTeamAcl(ctx context.Context, state *ConfigState, head *ConfigHead, quota *QuotaLimits, now time.Time) (*AclSavePlan, error) {
-	requests := 0
-	if quotaLocalLimit(quota, "acl_requests") != 0 {
-		requests = -1
-	}
-	rules := min(quotaLocalLimit(quota, "acl_rules"), int64(math.MaxInt))
-	limits := &AclLimits{Rules: int(rules), Requests: requests}
-	plan, err := PlanAclSave(ctx, &AclSaveInput{Policy: AclTeamStartDocument(), Head: head, State: state, Limits: limits, Now: now})
+	plan, err := PlanAclSave(ctx, &AclSaveInput{Policy: AclTeamStartDocument(), Head: head, State: state, Limits: aclWriterLimits(quota), Now: now})
 	if err != nil {
 		return nil, err
 	}

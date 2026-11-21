@@ -111,6 +111,8 @@ type AclSavePlan struct {
 	Local    *AclLocalPolicy
 	Tests    *AclPolicyTestReport
 	Preview  *AclSavePreview
+	// The host can verify the current ref but has no config writer on which to commit this preview.
+	PreviewOnly bool
 	// SHA-256 over the base's ACL files, the planned policy and resolve rows, and the effective changes shown.
 	Digest [sha256.Size]byte
 }
@@ -121,7 +123,7 @@ type AclSavePreview struct {
 	Readers []AclSaveReaderChange
 	// Each data repo that cannot seat a reader (§8.12).
 	Unseated []AclUnseatedRepo
-	// Each new or changed resolve row.
+	// Each new or changed resolve row and every signed scope binding the policy uses.
 	Resolutions []AclSaveResolution
 	// The rules and requests rules added and removed, by id.
 	RulesAdded   []Id
@@ -137,7 +139,7 @@ type AclSaveReaderChange struct {
 
 // One new or changed resolve row, with what it names in the state.
 type AclSaveResolution struct {
-	// "user", "network" or "client".
+	// "user", "network", "client", "member_scope" or "tag_scope".
 	Kind string
 	// The email or network text the document writes, or the client id; local to the person's device.
 	Text string
@@ -436,8 +438,21 @@ func PlanAclSave(ctx context.Context, input *AclSaveInput) (*AclSavePlan, error)
 	if err != nil {
 		return nil, err
 	}
+	// Keep every scoped host's verified owner in the preview. Reassigning a label between
+	// preview and confirmation changes which devices may serve it, even when its spelling stays.
+	scopes := map[string]AclScope{}
+	resolveScope := input.ResolveScope
+	if resolveScope != nil {
+		resolveScope = func(label string) (AclScope, bool) {
+			scope, found := input.ResolveScope(label)
+			if found {
+				scopes[label] = scope
+			}
+			return scope, found
+		}
+	}
 	if err := ValidateAclPolicy(&AclValidateInput{Compile: compile, Limits: input.Limits, ResolveNetworkLabel: input.ResolveNetworkLabel,
-		ResolveScope: input.ResolveScope}); err != nil {
+		ResolveScope: resolveScope}); err != nil {
 		return nil, err
 	}
 	rows, err := CompileAcl(compile)
@@ -462,6 +477,16 @@ func PlanAclSave(ctx context.Context, input *AclSaveInput) (*AclSavePlan, error)
 	plan := &AclSavePlan{BaseHead: input.Head, Head: head, Policy: policy, Rows: rows, Local: local, Tests: tests, basePin: input.State.Pin()}
 	if plan.Preview, err = aclSavePreview(input, rows, previousResolve, resolve); err != nil {
 		return nil, err
+	}
+	for _, label := range slices.Sorted(maps.Keys(scopes)) {
+		scope := scopes[label]
+		kind, id := "tag_scope", scope.TagId
+		if scope.MemberId != (Id{}) {
+			kind, id = "member_scope", scope.MemberId
+		}
+		if id != (Id{}) {
+			plan.Preview.Resolutions = append(plan.Preview.Resolutions, AclSaveResolution{Kind: kind, Text: label, Id: id})
+		}
 	}
 	plan.Digest, err = aclSaveDigest(input.Head, head, plan.Preview)
 	if err != nil {
@@ -506,7 +531,10 @@ func aclSaveDigest(base *ConfigHead, planned *ConfigHead, preview *AclSavePrevie
 		Resolutions []AclSaveResolution
 		Added       int
 		Removed     int
-	}{preview.Readers, preview.Unseated, preview.Resolutions, len(preview.RulesAdded), len(preview.RulesRemoved)})
+	}{
+		Readers: preview.Readers, Unseated: preview.Unseated, Resolutions: preview.Resolutions,
+		Added: len(preview.RulesAdded), Removed: len(preview.RulesRemoved),
+	})
 	if err != nil {
 		return [sha256.Size]byte{}, err
 	}
@@ -641,7 +669,7 @@ func aclSavePreview(input *AclSaveInput, rows *protocol.AclRows, previousResolve
 // in force stays (D-ACL-9), and while the writer's head no longer holds what the plan stood on (ErrAclSaveStale).
 // Answers the base's pin.
 func AclSave(ctx context.Context, writer *ConfigWriter, plan *AclSavePlan) (*bridge.AuthPin, error) {
-	if writer == nil || plan == nil {
+	if writer == nil || plan == nil || plan.PreviewOnly {
 		return nil, ErrAclSaveUnconfirmed
 	}
 	if err := plan.Tests.Err(); err != nil {
@@ -710,28 +738,44 @@ func AclLog(state *ConfigState) []AclLogEntry {
 }
 
 // This network's config writer, its verified state and its current head: what a save plans on.
-func (self *Sidecar) aclSaveContext(ctx context.Context) (*ConfigWriter, *ConfigState, *ConfigHead, error) {
+func (self *Sidecar) aclSaveContext(ctx context.Context, allowPreviewOnly bool) (*ConfigWriter, *ConfigState, *ConfigHead, error) {
 	authority, ok := self.authority().(*ConfigAuthority)
 	if !ok {
 		return nil, nil, nil, ErrAgentPlanNoState
 	}
-	writer := authority.client.Writer()
-	if writer == nil {
+	client := authority.client
+	writer := client.Writer()
+	var heads ConfigHeadTipReader
+	var sidecarId Id
+	if writer != nil {
+		heads, sidecarId = writer.args.Heads, writer.args.SidecarId
+	} else if allowPreviewOnly {
+		if identity := self.Identity(); identity != nil && identity.NetworkId == client.NetworkId() {
+			heads, _ = client.args.Heads.(ConfigHeadTipReader)
+			sidecarId = identity.SidecarId
+		}
+	}
+	if heads == nil {
 		return nil, nil, nil, fmt.Errorf("%w: no config writer runs for this network on this device", ErrConfigWriterNotWriter)
 	}
-	state := authority.client.State()
+	state := client.State()
 	if state == nil {
 		return nil, nil, nil, ErrAgentPlanNoState
 	}
-	if err := CheckConfigHeadWriter(state, writer.args.SidecarId); err != nil {
+	if err := CheckConfigHeadWriter(state, sidecarId); err != nil {
 		return nil, nil, nil, fmt.Errorf("%w: %w", ErrConfigWriterNotWriter, err)
 	}
-	head, _, _, err := writer.args.Heads.CurrentConfigHead(ctx)
+	head, version, chain, err := heads.CurrentConfigHead(ctx)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	if head == nil {
 		return nil, nil, nil, errors.New("the config repo holds no head yet")
+	}
+	base := state.Base()
+	if base == nil || version < base.GetConfigVersion() ||
+		(version == base.GetConfigVersion() && !bytes.Equal(chain[:], base.GetConfigHeadSha256())) {
+		return nil, nil, nil, ErrConfigHeadMismatch
 	}
 	return writer, state, head, nil
 }
@@ -743,11 +787,15 @@ func (self *Sidecar) PlanAclPolicy(ctx context.Context, source []byte) (*AclSave
 
 // Plans with the member-directory proposals and enrolled networks held by this writer's host.
 func (self *Sidecar) PlanAclPolicyWithSubjects(ctx context.Context, source []byte, subjects *AclWriterSubjects) (*AclSavePlan, error) {
-	_, state, head, err := self.aclSaveContext(ctx)
+	writer, state, head, err := self.aclSaveContext(ctx, true)
 	if err != nil {
 		return nil, err
 	}
-	return self.aclWriterPlan(ctx, source, subjects, state, head)
+	plan, err := self.aclWriterPlan(ctx, source, subjects, state, head)
+	if err == nil {
+		plan.PreviewOnly = writer == nil
+	}
+	return plan, err
 }
 
 // Saves a policy as the person confirmed its preview (D-CORE-13): never from MCP, a hook or an unconfirmed call, and
@@ -761,7 +809,7 @@ func (self *Sidecar) SaveAclPolicyWithSubjects(ctx context.Context, source []byt
 	if origin != SidecarActConfirmed {
 		return nil, ErrSidecarActMode
 	}
-	writer, state, head, err := self.aclSaveContext(ctx)
+	writer, state, head, err := self.aclSaveContext(ctx, false)
 	if err != nil {
 		return nil, err
 	}
@@ -1024,7 +1072,7 @@ func (self *Sidecar) SaveAclTeamStart(ctx context.Context, limits *AclLimits, or
 	if origin != SidecarActConfirmed {
 		return nil, ErrSidecarActMode
 	}
-	writer, state, head, err := self.aclSaveContext(ctx)
+	writer, state, head, err := self.aclSaveContext(ctx, false)
 	if err != nil {
 		return nil, err
 	}

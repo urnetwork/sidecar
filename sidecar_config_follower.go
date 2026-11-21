@@ -747,6 +747,31 @@ func (self *SidecarConfigFollower) startClient(networkId Id, genesisChain [sha25
 	if err != nil {
 		return nil, err
 	}
+	if ref, ok := self.args.Heads.(ConfigHeadRef); ok {
+		identity := self.sidecar.Identity()
+		if identity == nil || identity.NetworkId != networkId {
+			client.Close()
+			return nil, ErrSidecarNoIdentity
+		}
+		settings := DefaultConfigWriterSettings()
+		settings.Clock, settings.Log = self.clock, self.log
+		args := &ConfigWriterArgs{
+			SidecarId: identity.SidecarId, Client: client, Heads: ref, Publisher: self.sidecar.sidecarApi,
+			Settings: settings,
+			Sign: func(purpose string, signedType bridge.SignedType, body []byte) (*bridge.Signed, error) {
+				return self.sidecar.Sign(purpose, signedType, body, nil)
+			},
+		}
+		if judge := client.logSettings.BridgeBodyJudge; judge != nil {
+			args.BridgeFold = judge.Fold
+		}
+		writer, err := NewConfigWriter(client.ctx, args)
+		if err != nil {
+			client.Close()
+			return nil, err
+		}
+		context.AfterFunc(client.ctx, writer.Close)
+	}
 	held := func() bool {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()

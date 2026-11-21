@@ -8,10 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"net/http"
 	"slices"
-
-	"github.com/urnetwork/sidecar/protocol"
+	"time"
 )
 
 // Inputs held by the writer's host. Members are email proposals from its own accepted
@@ -154,33 +154,56 @@ func (self *Sidecar) aclWriterPlan(ctx context.Context, source []byte, subjects 
 	}
 	emails := policy.MemberEmails()
 	if subjects == nil {
-		// A host with no directory read may keep a previously confirmed binding to a still-live
-		// member. Never manufacture a first binding, including for emails used only in tests.
-		held := &protocol.ConfigResolution{}
-		if err := aclSaveDecode(head, ConfigHeadResolvePath, held); err != nil {
-			return nil, err
-		}
-		subjects = &AclWriterSubjects{Members: map[string]Id{}}
-		for _, row := range held.GetMembers() {
-			id, err := IdFromBytes(row.GetMemberId())
-			if err == nil && state.Member(id) != nil {
-				subjects.Members[row.GetEmail()] = id
-			}
-		}
-		for _, email := range emails {
-			if _, known := subjects.Members[email]; !known {
-				return nil, &AclMemberLookupRequired{Emails: emails}
-			}
-		}
-	} else if subjects.Members == nil && len(emails) > 0 {
+		subjects = &AclWriterSubjects{}
+	}
+	// A previous head pins that policy's email mapping. The new save takes the host's
+	// invitation record or a fresh directory proposal, including emails named only in tests.
+	if subjects.Members == nil && len(emails) > 0 {
 		return nil, &AclMemberLookupRequired{Emails: emails}
+	}
+	if self.sidecarApi == nil {
+		return nil, errors.New("the writer cannot read this network's ACL limits")
+	}
+	quota, err := self.sidecarApi.Limits(ctx)
+	if err != nil {
+		return nil, err
 	}
 	resolver := &aclWriterSubjectResolver{writer: self, subjects: subjects, state: state}
 	return PlanAclSave(ctx, &AclSaveInput{
-		Policy: source, Head: head, State: state, Now: self.clock.Now(), ResolveScope: state.TeamScope, Resolver: resolver,
+		Policy: source, Head: head, State: state, Now: self.clock.Now(), Limits: aclWriterLimits(quota),
+		ResolveScope: state.TeamScope, Resolver: resolver,
 		ResolveNetworkLabel: func(text string) (Id, bool) {
 			id, found, err := resolver.ResolveNetwork(ctx, text)
 			return id, found && err == nil
 		},
 	})
+}
+
+// §20.4's groups, requests and network shares are switches. With one enabled, acl_rules
+// bounds the compiled document. Section 13.9 separately bounds a Community publish.
+func aclWriterLimits(quota *QuotaLimits) *AclLimits {
+	if quota == nil {
+		return &AclLimits{}
+	}
+	if !quota.Enforced {
+		return nil
+	}
+	countWhenEnabled := func(key string) int {
+		if quota.Limits[key] != 0 {
+			return -1
+		}
+		return 0
+	}
+	limits := &AclLimits{
+		Rules:             int(min(quota.Limits["acl_rules"], int64(math.MaxInt))),
+		Groups:            countWhenEnabled("acl_groups"),
+		Requests:          countWhenEnabled("acl_requests"),
+		NetworkShares:     countWhenEnabled("acl_network_shares"),
+		ApproversTwo:      quota.Limits["acl_approvers_two"] != 0,
+		StandingPublishes: quota.Tier == "pro" || quota.Tier == "team",
+	}
+	if quota.Tier == "free" {
+		limits.PublishMaxExpiry = 7 * 24 * time.Hour
+	}
+	return limits
 }

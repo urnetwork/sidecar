@@ -13,6 +13,12 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
+func newTestAclWriterDevice(t *testing.T) *Sidecar {
+	t.Helper()
+	api := newTestSidecarApi(t, answerWith(200, `{"tier":"team","limits":{"acl_rules":5000,"acl_network_shares":1},"enforced":true}`))
+	return &Sidecar{clock: RealClock{}, sidecarApi: api}
+}
+
 // A new policy email requests exactly that lookup from the host. The proposed id must
 // stand in the signed state, whose role and actual device ids are carried in the preview.
 func TestAclWriterPlansOnlyLiveNamedMembers(t *testing.T) {
@@ -20,7 +26,7 @@ func TestAclWriterPlansOnlyLiveNamedMembers(t *testing.T) {
 	head, state := testConfigHead(t, net), net.log.State()
 	const email = "person@example.test"
 	source := []byte(`{"grants":[{"src":["user:person@example.test"],"dst":["autogroup:self"],"allow":["dial"]}]}`)
-	writer := &Sidecar{clock: RealClock{}}
+	writer := newTestAclWriterDevice(t)
 	ctx := context.Background()
 	_, err := writer.aclWriterPlan(ctx, source, nil, state, head)
 	var required *AclMemberLookupRequired
@@ -44,6 +50,9 @@ func TestAclWriterPlansOnlyLiveNamedMembers(t *testing.T) {
 		!slices.Equal(row.SidecarIds, []Id{net.owner.sidecarId}) {
 		t.Fatalf("new member binding: %+v", row)
 	}
+	if _, err := writer.aclWriterPlan(ctx, source, nil, state, plan.Head); !errors.As(err, &required) {
+		t.Fatalf("the previous policy's email binding answered a fresh save without a proposal: %v", err)
+	}
 	other := newTestConfigNetOf(t, "another network")
 	otherPlan, err := writer.aclWriterPlan(ctx, source, subjects, other.log.State(), testConfigHead(t, other))
 	if err != nil || otherPlan.Digest == plan.Digest {
@@ -59,6 +68,38 @@ func TestAclWriterPlansOnlyLiveNamedMembers(t *testing.T) {
 	replanned, err := writer.aclWriterPlan(ctx, source, subjects, net.log.State(), head)
 	if err != nil || replanned.Digest == plan.Digest || !slices.Contains(replanned.Preview.Resolutions[0].SidecarIds, device.sidecarId) {
 		t.Fatalf("a changed device list did not require a fresh confirmation: %v", err)
+	}
+}
+
+// The confirmation covers the signed owner of each referenced scope even when a later
+// base retains the same policy files and the same host labels.
+func TestAclWriterBindsTheScopeOwnerInItsPreview(t *testing.T) {
+	net := newTestConfigNet(t)
+	other, _ := net.consentedMember("scope owner")
+	writer := newTestAclWriterDevice(t)
+	source := []byte(`{"grants":[{"src":["autogroup:member"],"dst":["sock:tls/443/*.crew"],"allow":["listen"]}]}`)
+	head := testConfigHead(t, net)
+	planAt := func(owner Id) *AclSavePlan {
+		t.Helper()
+		state := net.log.State()
+		rows := state.Rows()
+		rows.TeamScopes = []*bridge.TeamScopeRow{{Label: "crew", Owner: &bridge.TeamScopeRow_MemberId{MemberId: owner.Bytes()}}}
+		if verdict := net.pushBase(net.owner, rows, net.n, state.Base().GetConfigVersion()+1, 0); !verdict.Accepted() {
+			t.Fatal(verdict.Refusal)
+		}
+		plan, err := writer.aclWriterPlan(t.Context(), source, nil, net.log.State(), head)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resolved := plan.Preview.Resolutions
+		if len(resolved) != 1 || resolved[0].Kind != "member_scope" || resolved[0].Text != "crew" || resolved[0].Id != owner {
+			t.Fatalf("scope preview: %+v", resolved)
+		}
+		return plan
+	}
+	before := planAt(net.ownerMemberId)
+	if planAt(other).Digest == before.Digest {
+		t.Fatal("changing the signed owner preserved its preview digest")
 	}
 }
 
@@ -120,6 +161,55 @@ func TestAclWriterUsesNonInteractiveNetworkLabels(t *testing.T) {
 	}
 	if _, ok, err := resolver.ResolveNetwork(context.Background(), "team-old"); ok || !errors.Is(err, resolver.unreadLabels) {
 		t.Fatalf("retiring alias on an incomplete view: %t, %v", ok, err)
+	}
+}
+
+// Both planning and confirmation read each enrollment's authenticated zone. An answer
+// must name that enrollment even when its proposed label is still the same.
+func TestAclWriterRechecksThePartnerNetwork(t *testing.T) {
+	net := newTestConfigNet(t)
+	state, head := net.log.State(), testConfigHead(t, net)
+	enrollment := func(networkId Id, label, alias string) (*Sidecar, *testDnsBlock) {
+		t.Helper()
+		running := newTestAclWriterDevice(t)
+		zone := &DnsZone{NetworkId: networkId, Root: testLabelRoot, Label: label, Alias: alias, Version: 1}
+		block := newTestDnsBlock(zone)
+		dns := newTestDnsClient(t, block, running.clock, networkId)
+		labels, err := OpenNetworkLabelTable(newTestDnsMemoryStore())
+		if err != nil {
+			t.Fatal(err)
+		}
+		dns.FeedLabels(labels)
+		running.dns.client = dns
+		return running, block
+	}
+	writer, _ := enrollment(net.networkId, "a7q2m9x4k1", "owner-team")
+	partnerId := testConfigId("another enrolled network")
+	partner, reply := enrollment(partnerId, "b7q2m9x4k2", "partner-team")
+	subjects := &AclWriterSubjects{Networks: []*Sidecar{writer, partner}}
+	source := []byte(`{"grants":[{"src":["network:partner-team"],"dst":["autogroup:member"],"allow":["dial"]}]}`)
+	plan, err := writer.aclWriterPlan(t.Context(), source, subjects, state, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows := plan.Preview.Resolutions; len(rows) != 1 || rows[0].Kind != "network" || rows[0].Id != partnerId || rows[0].Text != "partner-team" {
+		t.Fatalf("partner preview: %+v", rows)
+	}
+	confirmed, err := writer.aclWriterPlan(t.Context(), source, subjects, state, head)
+	if err != nil || confirmed.Digest != plan.Digest {
+		t.Fatalf("partner confirmation: %v", err)
+	}
+	teamApi := writer.sidecarApi
+	writer.sidecarApi = newTestSidecarApi(t, answerWith(200, `{"tier":"team","limits":{"acl_rules":5000},"enforced":true}`))
+	if _, err := writer.aclWriterPlan(t.Context(), source, subjects, state, head); !errors.Is(err, ErrAclPolicyInvalid) {
+		t.Fatalf("a network whose effective limits exclude sharing could sign the partner policy: %v", err)
+	}
+	writer.sidecarApi = teamApi
+	reply.stateLock.Lock()
+	reply.zone.NetworkId = net.networkId
+	reply.stateLock.Unlock()
+	if _, err := writer.aclWriterPlan(t.Context(), source, subjects, state, head); !errors.Is(err, ErrDnsClientReply) {
+		t.Fatalf("a zone for a different enrollment answered the confirmation: %v", err)
 	}
 }
 

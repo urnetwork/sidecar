@@ -45,6 +45,11 @@ type FakeConfigHeads struct {
 func NewFakeConfigHeads(repoId sidecar.Id) *FakeConfigHeads {
 	var refId sidecar.Id
 	rand.Read(refId[:])
+	return NewFakeConfigHeadsOnRef(repoId, refId)
+}
+
+// A version-checked ref using the id of a known config main ref, initially empty at its C_0.
+func NewFakeConfigHeadsOnRef(repoId sidecar.Id, refId sidecar.Id) *FakeConfigHeads {
 	return &FakeConfigHeads{repoId: repoId, refId: refId, chains: [][sha256.Size]byte{sidecar.EvsChainStart(repoId, refId)}}
 }
 
