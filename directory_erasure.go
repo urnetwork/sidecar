@@ -81,6 +81,16 @@
 //	           since a CUT it follows may have added documents to an erasure already complete, as the 30-day sweep's
 //	           later-signed card's: the index files holding it are rewritten under fresh keys, the first pair's ERASE
 //	           opening the erasure again until the files' last ERASE ends it
+//	dropped    a CUT of an erasure a ref's set still lists keeps its entry's epoch, so between this device's CUT and
+//	           the ref's rewrite another erasure's CUT, on another device, can read the erasure complete by its newest
+//	           ERASE and drop it from the set; the rewrite then lists nothing of what the CUT added, which readers no
+//	           longer mask (IndexRewriteResult.Dropped; QD-1160). The ledger keeps the documents a ref's CUTs listed
+//	           since its rewrite last ran through, so a rewrite that finds the erasure off the set with such documents
+//	           owed, in the call of the CUT or after a kill, CUTs them again once, which adds the entry back at the
+//	           head's epoch, and rewrites again; off the set once more, they go back uncut in the ledger, nothing of the
+//	           call says complete, and the next sync cuts them again, as a CUT a full set refused waits. The record's
+//	           late copy meets no such race, its ERASE, which opens the erasure, going before its CUT; the directory's
+//	           cannot go first, a card's keys waiting for its writer's rewrite
 //	ledger     what this device cut, rewrote and still owes of each erasure is kept in the copy (erasure files), so a
 //	           later sync repeats nothing; a file whose standing version another admin's CLOSURE left reads as
 //	           rewritten there. Two runners that race meet at the path's CAS and at evs: one CLOSURE commits, the
@@ -965,8 +975,9 @@ type DirectoryErasureFilesResult struct {
 	// Keys the cards ref's ERASEs named, and the index refs' pairs.
 	ErasedKeyCount int
 	IndexPairCount int
-	// An index ref's erasure set is full, a rewrite waits for its allowance, or one could not prove its list whole:
-	// the rest runs at a later call.
+	// An index ref's erasure set is full, a rewrite waits for its allowance, one could not prove its list whole, or
+	// another erasure's CUT dropped the erasure from a ref's set again after its documents were cut there a second
+	// time (QD-1160): the rest runs at a later call.
 	IndexWaiting bool
 	// An ERASE of this call said the erasure complete.
 	Complete bool
@@ -1005,6 +1016,11 @@ type directoryErasureLedgerRow struct {
 	// A ref's index files are owed their rewrite since its last CUT.
 	CardsRewriteOwed   bool `json:"cards_rewrite_owed,omitempty"`
 	StreamsRewriteOwed bool `json:"streams_rewrite_owed,omitempty"`
+	// The documents a ref's CUTs listed since its rewrite last ran through, by name, at their versions: what the
+	// rewrite owed takes out, and what is cut again where a later CUT dropped the erasure from the ref's set before
+	// the rewrite listed them (the file header's dropped row; QD-1160).
+	CardsRewriteDocuments   map[string]uint64 `json:"cards_rewrite_documents,omitempty"`
+	StreamsRewriteDocuments map[string]uint64 `json:"streams_rewrite_documents,omitempty"`
 	// A CLOSURE of the cards ref this device sent may stand with no ERASE after it: evs's state is read before
 	// anything else.
 	Unerased bool `json:"unerased,omitempty"`
@@ -1344,6 +1360,68 @@ func (self *directoryErasureLedgerRow) noteHolding(erasureFile *directoryErasure
 	row.Held = max(row.Held, erasureFile.file.Version)
 }
 
+// The documents the CUTs listed on a ref, the cards ref's own index where cards and else ur/index, and those listed
+// since its rewrite last ran through, each made where absent.
+func (self *directoryErasureLedgerRow) refDocuments(cards bool) (map[string]uint64, map[string]uint64) {
+	if cards {
+		if self.CardsDocuments == nil {
+			self.CardsDocuments = map[string]uint64{}
+		}
+		if self.CardsRewriteDocuments == nil {
+			self.CardsRewriteDocuments = map[string]uint64{}
+		}
+		return self.CardsDocuments, self.CardsRewriteDocuments
+	}
+	if self.StreamDocuments == nil {
+		self.StreamDocuments = map[string]uint64{}
+	}
+	if self.StreamsRewriteDocuments == nil {
+		self.StreamsRewriteDocuments = map[string]uint64{}
+	}
+	return self.StreamDocuments, self.StreamsRewriteDocuments
+}
+
+// Notes a CUT on a ref that listed names at their versions: the ref's rewrite is owed, and takes them out.
+func (self *directoryErasureLedgerRow) noteCut(cards bool, names []string, versions map[string]uint64) {
+	listed, owed := self.refDocuments(cards)
+	for _, name := range names {
+		listed[name] = versions[name]
+		owed[name] = max(owed[name], versions[name])
+	}
+	if cards {
+		self.CardsRewriteOwed = true
+	} else {
+		self.StreamsRewriteOwed = true
+	}
+	self.Complete = false
+}
+
+// Notes a ref's rewrite run through: nothing of it is owed.
+func (self *directoryErasureLedgerRow) noteRewritten(cards bool) {
+	if cards {
+		self.CardsRewriteOwed, self.CardsRewriteDocuments = false, nil
+	} else {
+		self.StreamsRewriteOwed, self.StreamsRewriteDocuments = false, nil
+	}
+}
+
+// Puts the documents a ref's CUTs listed since its rewrite last ran through back uncut, where a later CUT dropped the
+// erasure from the ref's set again before the rewrite listed them (the file header's dropped row; QD-1160): the next
+// sync that finds them cuts them again, as one a full set refused, and the rewrite stays owed.
+func (self *directoryErasureLedgerRow) noteDropped(cards bool) {
+	listed, owed := self.refDocuments(cards)
+	for name, version := range owed {
+		if listed[name] <= version {
+			delete(listed, name)
+		}
+	}
+	if cards {
+		self.CardsRewriteDocuments = nil
+	} else {
+		self.StreamsRewriteDocuments = nil
+	}
+}
+
 // The documents of found the row's CUT has not listed at their version, in name order.
 func directoryErasureUncut(found map[string]uint64, cut map[string]uint64) []string {
 	names := []string{}
@@ -1516,22 +1594,15 @@ func (self *DirectoryClient) eraseFiles(ctx context.Context, work *directoryEras
 		}()
 	}
 
-	// the fence: a CUT a ref listing the documents, before any CLOSURE and any list of index files
-	cut := func(names []string, found map[string]uint64, index func(ctx context.Context, repoId Id) (DirectoryErasureIndex, error), cards bool) error {
-		if len(names) == 0 {
-			return nil
-		}
-		eraser, err := index(ctx, directoryId)
-		if err != nil {
-			return err
-		}
+	// a CUT on a ref through its eraser, listing names at their versions
+	cutOn := func(eraser DirectoryErasureIndex, names []string, versions map[string]uint64) error {
 		documents := make([]*IndexCutDocument, 0, len(names))
 		for _, name := range names {
 			key, err := eraser.DocKey([]byte(name))
 			if err != nil {
 				return err
 			}
-			documents = append(documents, &IndexCutDocument{Key: key, Version: found[name]})
+			documents = append(documents, &IndexCutDocument{Key: key, Version: versions[name]})
 		}
 		testHookBarrier("directory.erasure.cut.before", barrierKey)
 		cutResult, err := eraser.Cut(ctx, &IndexCutArgs{ErasureId: work.erasureId, Documents: documents})
@@ -1541,18 +1612,22 @@ func (self *DirectoryClient) eraseFiles(ctx context.Context, work *directoryEras
 		if cutResult != nil && cutResult.Pushed {
 			result.CutCount += 1
 		}
+		return nil
+	}
+	// the fence: a CUT a ref listing the documents, before any CLOSURE and any list of index files
+	cut := func(names []string, found map[string]uint64, index func(ctx context.Context, repoId Id) (DirectoryErasureIndex, error), cards bool) error {
+		if len(names) == 0 {
+			return nil
+		}
+		eraser, err := index(ctx, directoryId)
+		if err != nil {
+			return err
+		}
+		if err := cutOn(eraser, names, found); err != nil {
+			return err
+		}
 		return self.updateErasureLedger(work, func(row *directoryErasureLedgerRow) {
-			listed := row.StreamDocuments
-			if cards {
-				listed = row.CardsDocuments
-				row.CardsRewriteOwed = true
-			} else {
-				row.StreamsRewriteOwed = true
-			}
-			for _, name := range names {
-				listed[name] = found[name]
-			}
-			row.Complete = false
+			row.noteCut(cards, names, found)
 		})
 	}
 	for _, each := range []struct {
@@ -1593,38 +1668,71 @@ func (self *DirectoryClient) eraseFiles(ctx context.Context, work *directoryEras
 	// device's or the device's that began the erasure, which may have listed documents again after the erasure was
 	// complete, as the 30-day sweep cuts a later-signed card: it lists before it trusts a complete it reads (the file
 	// header's complete row; QD-1158). True where a CUT of the erasure stands on the ref.
+	//
+	// A rewrite that finds the erasure off the ref's set while the ledger holds documents a CUT of this device listed
+	// there since the ref's rewrite last ran through lists nothing of them: another erasure's CUT dropped it in between
+	// (the file header's dropped row; QD-1160). They are CUT again once, adding the erasure back at the head's epoch,
+	// and the ref rewritten again; off the set a second time, they go back uncut and the call waits, saying nothing
+	// complete. A CUT again that the set cannot hold answers ErrIndexErasureSetFull, the documents back uncut.
 	rewrite := func(index func(ctx context.Context, repoId Id) (DirectoryErasureIndex, error), cards bool, complete bool) (bool, error) {
 		eraser, err := index(ctx, directoryId)
 		if err != nil {
 			return false, err
 		}
-		rewritten, err := eraser.Rewrite(ctx, &IndexRewriteArgs{
-			ErasureId: work.erasureId, Complete: complete, Note: note, Completion: complete, Relisted: true,
-		})
-		cut := true
-		waits := false
-		switch {
-		case errors.Is(err, ErrIndexEraseNotCut):
-			// no CUT of the erasure stands on this ref: nothing of it is listed there
-			cut = false
-		case err != nil:
-			return true, err
-		default:
-			result.IndexPairCount += rewritten.PairCount
-			result.Complete = result.Complete || rewritten.Completed
-			waits = rewritten.Unproven || (rewritten.Erasure != nil && rewritten.Erasure.State == SidecarErasureWaiting)
-		}
-		if waits {
-			result.IndexWaiting = true
-			return cut, nil
-		}
-		return cut, self.updateErasureLedger(work, func(row *directoryErasureLedgerRow) {
-			if cards {
-				row.CardsRewriteOwed = false
-			} else {
-				row.StreamsRewriteOwed = false
+		documents := func() map[string]uint64 {
+			state.stateLock.Lock()
+			defer state.stateLock.Unlock()
+			_, owed := self.erasureLedgerRowWithLock(state, work).refDocuments(cards)
+			return maps.Clone(owed)
+		}()
+		for recut := false; ; recut = true {
+			rewritten, err := eraser.Rewrite(ctx, &IndexRewriteArgs{
+				ErasureId: work.erasureId, Complete: complete, Note: note, Completion: complete, Relisted: true,
+			})
+			if err != nil && !errors.Is(err, ErrIndexEraseNotCut) {
+				return true, err
 			}
-		})
+			// ErrIndexEraseNotCut: no CUT of the erasure stands on this ref, nothing of it listed there
+			cut := err == nil
+			if rewritten != nil {
+				result.IndexPairCount += rewritten.PairCount
+				result.Complete = result.Complete || rewritten.Completed
+			}
+			// off the set after a CUT of this device listed documents there: complete when another erasure's CUT
+			// dropped it, or opened again by an ERASE after that CUT read it complete
+			dropped := 0 < len(documents) && (!cut || (rewritten != nil && rewritten.Dropped))
+			switch {
+			case dropped && !recut:
+				cutErr := cutOn(eraser, slices.Sorted(maps.Keys(documents)), documents)
+				if errors.Is(cutErr, ErrIndexErasureSetFull) {
+					// back uncut: the next sync's CUT waits on the set as a first CUT does
+					if err := self.updateErasureLedger(work, func(row *directoryErasureLedgerRow) { row.noteDropped(cards) }); err != nil {
+						return false, err
+					}
+					return false, cutErr
+				}
+				if cutErr != nil {
+					return true, cutErr
+				}
+				continue
+			case dropped:
+				result.IndexWaiting = true
+				return false, self.updateErasureLedger(work, func(row *directoryErasureLedgerRow) { row.noteDropped(cards) })
+			case cut && rewritten != nil && (rewritten.Unproven || (rewritten.Erasure != nil && rewritten.Erasure.State == SidecarErasureWaiting)):
+				result.IndexWaiting = true
+				return true, nil
+			}
+			return cut, self.updateErasureLedger(work, func(row *directoryErasureLedgerRow) { row.noteRewritten(cards) })
+		}
+	}
+	// a CUT again that the set could not hold waits while pending erasures finish, and with it everything it fences
+	// (§11.12's cut row), as the call's first CUTs do
+	stopped := func(err error) (*DirectoryErasureFilesResult, error) {
+		if errors.Is(err, ErrIndexErasureSetFull) {
+			result.IndexWaiting = true
+			return result, nil
+		}
+		return result, err
 	}
 	// the erasure's last ERASE says it complete: a file's, whose keys always stand, where a file is rewritten or
 	// removed at this call, else the rewrite's of the last ref a CUT of it stands on
@@ -1636,20 +1744,20 @@ func (self *DirectoryClient) eraseFiles(ctx context.Context, work *directoryEras
 	if cardsOwed {
 		cut, err := rewrite(files.CardsIndex, true, fileCount == 0 && !streamsOwed && settled())
 		if err != nil {
-			return result, err
+			return stopped(err)
 		}
 		cardsCut = cut
 	}
 	if streamsOwed {
 		cut, err := rewrite(files.StreamsIndex, false, ends())
 		if err != nil {
-			return result, err
+			return stopped(err)
 		}
 		if !cut && cardsCut && ends() {
 			// no CUT of it stands on ur/index, as where another device began it on the cards ref alone and both refs
 			// read owed here: the cards ref's rewrite was its last, which is asked again to end it
 			if _, err := rewrite(files.CardsIndex, true, true); err != nil {
-				return result, err
+				return stopped(err)
 			}
 		}
 	}
