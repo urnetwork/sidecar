@@ -1516,10 +1516,15 @@ revoke      the owner (a repo admin; owner-bound, a consented device of its owne
             the request as superseded, from what every copy holds: its runner works none of it, shows it as no
             pending erasure and raises no directory_erasure for it, later copies going under the newer request,
             whose ERASEs cover every copy the older could name, and its revoker reads it as lapsed, with no
-            format change (owner decision 604); (4) until an ERASE names the request, the revoking device, ur
-            directory revoke and ur status show the erasure pending with its age, and past 24 h every directory
-            admin's device raises directory_erasure (§5.4); a reader that syncs the copies meanwhile keeps them,
-            as §2.8 discloses
+            format change (owner decision 604); these checks govern what a request catches, so once an ERASE
+            names a request its runner still finishes the format-2 work the ledger owes it whatever the check
+            reads now, lapsed, its signer's signature voided or superseded, in the runner row's past-window
+            form, and catches nothing new for it (owner decision 682), though it closes each path it met once
+            the path no longer holds the document, an erasure whose every met path reads rewritten, a
+            superseded one's too, ending by a completion ERASE (owner decision 683); (4) until an ERASE names
+            the request, the revoking device, ur directory revoke and ur status show the erasure pending with
+            its age, and past 24 h every directory admin's device raises directory_erasure (§5.4); a reader
+            that syncs the copies meanwhile keeps them, as §2.8 discloses
 runs        a run in an evs repo with no live, non-private item (private, revoked, not announced by default, or
             not yet) announces its repo_id with private true and project and branch empty, its daemon rewriting a
             live item so once it reads the repo's marker; readers that read the repo show its name from their own
@@ -1803,7 +1808,19 @@ runner      the directory's erasure runner: a network-scope indexer that is itse
             allowance (§11.13's wait row) or on a history it could not yet walk whole, a cards ref CLOSURE whose
             ERASE a kill cut off and documents a second drop put back uncut (the erasure row), and cuts nothing
             it newly finds after the window, a ledger mark telling those documents, still owed a CUT, apart from
-            new finds (owner decision 676)
+            new finds (owner decision 676); past the window it also CLOSUREs, and ERASEs the old keys of, each
+            path its ledger met inside the window once that path's standing version no longer holds the
+            document, as a card whose writer wrote the run private after the window, never touching a path
+            first met past the window, the erasure then ending with that ERASE and leaving the set (the closure
+            row; owner decision 681); and for a request an ERASE already names it finishes what the ledger owes
+            in owner decision 676's form whatever the request's check reads now, lapsed, its signer's signature
+            voided or superseded, the ledger read before that check, which still comes before anything new is
+            caught (Repos' revoke; owner decision 682), and closes each path the ledger met as it does past the
+            window, reading the request's files only while the ledger shows a met path owed a CLOSURE and
+            judging only those paths; where every met path reads rewritten, by its own CLOSURE or another
+            erasure's, and nothing else is owed, the erasure ends by a ref rewrite's completion ERASE (owner
+            decision 658's form), so a superseded erasure whose card the later request rewrote first leaves the
+            set too (owner decision 683)
 erasure     a directory admin's ur directory erase <id>: for an announcement, a CUT on the cards ref and on
             ur/index listing its documents (§11.12), then a CLOSURE rewriting under fresh keys the index files and
             the card holding its document, then the ERASE of the old slots' keys (§11.12, §11.14), a moderation's
@@ -1818,7 +1835,11 @@ erasure     a directory admin's ur directory erase <id>: for an announcement, a 
             rewrite says so and the directory CUTs the same documents on that ref once more and rewrites
             again, a second drop leaving them uncut in its ledger for the next sync (owner decision 675), whose
             pass CUTs them past a request's 30-day sweep window too, by the ledger's mark (the runner row; owner
-            decision 676); a member asks an admin, or withdraws, which tombstones and purges but destroys no key
+            decision 676); a begun erasure finishes past the window, ending once each path its ledger met inside
+            it no longer holds the document (owner decision 681), and whatever its request's check reads later
+            (owner decision 682), its met paths closed the same way and, where every one reads rewritten and
+            nothing else is owed, a completion ERASE ending it (owner decision 683); a member asks an admin, or
+            withdraws, which tombstones and purges but destroys no key
 closure     the eraser holds neither a card's key nor a repo admin's, and readers refuse any other bytes at d/ and
             r/ (path rules), so its CLOSURE rewrites a card (d/<h>/<sid>) or a repo file (r/<h>/<repo>) only once
             the standing version no longer holds the erased document, writing that version's own bytes under a
@@ -1826,8 +1847,11 @@ closure     the eraser holds neither a card's key nor a repo admin's, and reader
             as the revoke row orders, and each card naming the repo once its writer wrote the run private or left
             it out, a card that still names the repo having its document CUT from both indexes at once and
             waiting for its writer, caught at each later sync for 30 days, past which the runner catches no new
-            copy but still sends the ERASE a kill cut off after a CLOSURE of the cards ref, with the rest its
-            ledger owes the request (the runner row; owner decision 676); for a directory admin's own erase, a
+            copy, but a card it met inside the window it still CLOSUREs, and ERASEs the keys of, once its writer
+            writes the run private or leaves it out, which ends the erasure (owner decision 681), as it does a
+            card met for a request whose check has since failed (owner decision 683), and it still sends the
+            ERASE a kill cut off after a CLOSURE of the cards ref, with the rest its ledger owes the request (the
+            runner row; owner decision 676); for a directory admin's own erase, a
             card that still holds the item is removed whole by moderation's removal and its keys erased, its
             writer's other runs coming back with its next card, which, as the first card a writer writes after
             another signer removed its path (read at its sync, as its moderation notice shows), raises every

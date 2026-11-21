@@ -14645,6 +14645,8 @@ The lock is never waited on inside the server: a refused claim returns at once w
 
 **The holder's side.** A holder keeps a local deadline: the moment it sent the claim, on its monotonic clock, plus `lease_ms` less `LeaseMargin`. It renews, by the same claim call, every `LockLease / 3`, and again immediately before each of the five requests that change something at the CA: newOrder, the challenge POST, finalize, keyChange and revokeCert. A renewal that is refused, or a deadline that passes, ends its work on the row: it clears its challenge and sends nothing more to the CA but reads. These renewals keep a stalled holder's reach to one request (17.5). No invariant rests on them.
 
+**A delegated DNS-01's write** (amended 2026-11-21, QD-1165; owner decision 680). `POST /tls/custom-challenge` names neither the row nor the claim, so api captures them from the lock: the row and `claim_seq` of the claim the caller holds on the domain's account, with the digest and the expiry, in the bounded certs worker command it files (17.2.9). The worker on taskworker rechecks ownership and authority when it runs: a lock a newer holder took before dispatch, or a caller no longer `orderer(caller, domain)`, refuses the command, and nothing is written.
+
 #### 17.2.7 The order
 
 `TlsCustomDomainOrderer` runs this loop on a desktop that holds a key file, at once after it frees a lock, every `PollInterval` (jittered by a fifth) while its last answer listed work, and every `IdlePollInterval` otherwise. `acme` is the injected client (17.7); every request retries a `badNonce` with the fresh nonce up to `NonceRetryCount` times, which is one request to the CA's limits, not several.
@@ -14852,14 +14854,22 @@ The probe is the same path the CA's validators take: public DNS to tlsedge, Find
 **DNS-01.**
 
 ```text
-1  value = base64url(SHA-256(key authorization)); POST /tls/custom-challenge {domain, value}
-2  poll GET /tls/custom-challenge/<id> until the edges serve it
+1  value = base64url(SHA-256(key authorization)); POST /tls/custom-challenge {domain, value}. api
+   authenticates the caller, captures the row and claim_seq of its claim (17.2.6), the digest and the
+   expiry, and files a bounded certs worker command with a restart-safe receipt per (domain, claim);
+   the worker rechecks the claim and orderer, writes through its root-scoped DNS client and returns the
+   real DNS serial, which the answer's id carries. A retry of the POST recovers the receipt, and an
+   interrupted write is settled before another is charged against the name's ten writes an hour
+2  poll GET /tls/custom-challenge/<id> until the edges serve it. stale, confirmed for that serial: POST
+   again, and the confirmed verdict permits the worker's next write of the same digest, at a new serial
 3  probe: resolver.LookupTxt(_acme-challenge.<c>) holds value, ProbeCount times in a row within
    ProbeTimeout each. Not so: kill the order; progress order_invalid {no_route}
 4  renew the claim; acme.Challenge(url); poll
-5  nothing to clear: the value lapses in 1 h (QD-175). One order in flight an account and one account a
-   domain keep a domain within QD-175's two values
+5  nothing to clear: the value lapses in 1 h (QD-175), and its receipt is kept no longer. One order in
+   flight an account and one account a domain keep a domain within QD-175's two values
 ```
+
+The POST and GET keep QD-175's contract, and the worker reuses certs' queue, its sole DNS credential (`internal-certs.yml`, owner decision 417) and its DNS client, so api writes no record. The command states whether the DNS write takes an idempotency key and how a lost write acknowledgement is recovered (amended 2026-11-21, QD-1165; owner decision 680).
 
 #### 17.2.10 Certified names and the ACME route in Find
 
