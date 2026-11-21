@@ -11,6 +11,7 @@ package gkmschedule
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -235,6 +236,34 @@ func TestHolderOfflineAtTheHintDeliversAtItsNextResync(t *testing.T) {
 	}
 	if otherUploads.Load() != 0 {
 		t.Fatalf("the other holder uploaded %d deliveries", otherUploads.Load())
+	}
+}
+
+// The same resync once the claim's state is older than what the devices retain, their previous base past it: the
+// writer tells the joiner from its row, admitted past the claim's position, and the other device, admitted before it,
+// from its own, and delivers to the joiner alone.
+func TestResyncAnswersAJoinerPastTheClaimsRetainedState(t *testing.T) {
+	late := newLateDeliveryWorld(t, nil)
+	world := late.world
+	claim := world.GenerationIn(world.ConfigGroupId, 1)
+	if late.admission.Pin().GetVersion() <= claim.Rotate.GetAuth().GetVersion() {
+		t.Fatal("the joiner was admitted at the claim's position")
+	}
+	world.Retain(late.admission.Pin().GetVersion())
+	if _, err := late.admission.At(claim.Rotate.GetAuth()); !errors.Is(err, sidecar.ErrGkmAuthNotRetained) {
+		t.Fatalf("the claim's state is still retained: %v", err)
+	}
+	writerHints := late.attach(t, late.writer)
+	joinerHints := late.attach(t, late.joiner)
+	late.joinerTakesItsAdmission()
+	// the writer's intake never hears the ask's hint
+	world.AwaitHint(late.writer, late.wrapPendingForJoiner)
+	uploads := countWrapUploads(late.writer)
+	writerHints.Resync()
+	relayLateDeliveryHint(t, joinerHints, world.AwaitHint(late.joiner, late.configPending))
+	late.awaitJoinerHoldsTheConfig(t)
+	if count := uploads.Load(); count != 1 {
+		t.Fatalf("the writer uploaded %d deliveries, want the joiner's alone", count)
 	}
 }
 
