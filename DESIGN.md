@@ -12849,12 +12849,14 @@ coverage  a content version newer than the index's coverage is not yet searchabl
           it commits behind a changed head (owner decision 621); both checks are bounded by the effective ref
           version at the pin, the ref's version plus the base versions along its overlay bases, which no path
           version exceeds (11.7's versions), so an entry of a path's chunk above it is never honest: a live one is
-          planted, as a never-held entry is, and a tombstone is a document hidden where the text keeps the chunk
-          live at the pin, the host's own entry standing for it, while the omitted-document check counts an entry
-          only at or below the bound, and an entry at or below it that the device cannot place passes as before
-          (owner decision 669); phones compare an opened document
-          with its row; every writer of a ref writes its index, so an agent could otherwise hide a document or plant
-          hits
+          planted, as a never-held entry is, and a tombstone is a mismatch whatever the path holds at the pin,
+          since readers take it over every version the path reaches below it: where the text keeps the chunk
+          live at the pin it hides a document, the host's own entry standing for it, and where the path is
+          removed or binary there, or the chunk past its text, index_mismatch names its signer and file with
+          nothing to repair; the omitted-document check counts an entry only at or below the bound, and an entry
+          at or below it that the device cannot place passes as before (owner decision 669); phones compare an
+          opened document with its row; every writer of a ref writes its index, so an agent could otherwise hide a
+          document or plant hits
 off       a ref with no index: hosts with the text scan it (exact, linear), phones and browsers match names and,
           for mail, i/'s fields, and the result says "index off"; an index in a newer format turns search off for
           that ref, status "update"; no search reaches a secret, config or mailcfg repo; an owner-bound repo's

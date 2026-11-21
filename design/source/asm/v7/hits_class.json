@@ -1653,7 +1653,7 @@
  {
   "family": "pg_redis_durable",
   "file": "11-EVS.md",
-  "line": 3868,
+  "line": 3870,
   "col": 68,
   "match": "Postgres (the drafted Q-EVS",
   "snippet": "| Plaintext paths (PLAN.md:59), or a sealed client index ordered in Postgres (the drafted Q-EVS-1 (c)) | Server-side paths; or only repos and refs visible | Names, shape and sizes in the clear; or 3-RTT cold reads, client-side GC, Postgres on the storage path | Rul",
@@ -1666,7 +1666,7 @@
  {
   "family": "pools",
   "file": "11-EVS.md",
-  "line": 3875,
+  "line": 3877,
   "col": 8,
   "match": "pools",
   "snippet": "| MinIO pools for the metadata tier | One namespace | A multi-pool PUT checks its precondition only in the pool it picks (11.3) | Rejected (owner decision 145) |",
@@ -1679,7 +1679,7 @@
  {
   "family": "pools",
   "file": "11-EVS.md",
-  "line": 3875,
+  "line": 3877,
   "col": 56,
   "match": "multi-pool",
   "snippet": "| MinIO pools for the metadata tier | One namespace | A multi-pool PUT checks its precondition only in the pool it picks (11.3) | Rejected (owner decision 145) |",
@@ -1692,7 +1692,7 @@
  {
   "family": "pools",
   "file": "11-EVS.md",
-  "line": 3875,
+  "line": 3877,
   "col": 107,
   "match": "pool",
   "snippet": "| MinIO pools for the metadata tier | One namespace | A multi-pool PUT checks its precondition only in the pool it picks (11.3) | Rejected (owner decision 145) |",
@@ -1705,7 +1705,7 @@
  {
   "family": "pg_redis_durable",
   "file": "11-EVS.md",
-  "line": 3962,
+  "line": 3964,
   "col": 79,
   "match": "Redis soft state that holders re-create after a loss, answered once the lease",
   "snippet": "**D-EVS-14 (proposed).** Subscriptions are token-prefix leases per path epoch, Redis soft state that holders re-create after a loss, answered once the lease exists; hints carry only server-held fields, versioned by the push sequence, a Redis counter seeded from the master's clock, so it restarts above every earlier value. *W",
@@ -1718,7 +1718,7 @@
  {
   "family": "pg_redis_durable",
   "file": "11-EVS.md",
-  "line": 3976,
+  "line": 3978,
   "col": 136,
   "match": "gkm acks in Redis",
   "snippet": "**D-EVS-21 (proposed).** 11.13 budgets every metadata write in drive bytes, which bound its IOs too, with leases, the push sequence and gkm acks in Redis and a per-network fair share that sheds the heaviest network first. *Why:* every drive takes every write (owner decisions 21, 116, 140).",
@@ -1731,7 +1731,7 @@
  {
   "family": "decided_q_open",
   "file": "11-EVS.md",
-  "line": 3982,
+  "line": 3984,
   "col": 261,
   "match": "for every reader (Q-EVS-6",
   "snippet": " head window names each recent one's place and hash; head readers verify every statement after their pin and the one behind each entry they read. *Why:* owner decision 7 for every reader (Q-EVS-6), at one block per head write.",
@@ -1744,7 +1744,7 @@
  {
   "family": "mib64_trigger",
   "file": "11-EVS.md",
-  "line": 4018,
+  "line": 4020,
   "col": 157,
   "match": "64 MiB",
   "snippet": "**D-EVS-42 (proposed).** Writers set a new path's versioning from the rules in force at its creation: the repo's, else its network's, else versionless above 64 MiB, a present rule set replacing the next entirely; it persists until a writer changes it. *Why:* owner decision 164; no rule edit flips existing paths (owner decision 167)",
@@ -1757,7 +1757,7 @@
  {
   "family": "window_14d_weekly",
   "file": "11-EVS.md",
-  "line": 4056,
+  "line": 4058,
   "col": 491,
   "match": "7-day window",
   "snippet": "n`, as every repo's, held only by its consented, not-read-only admins, a repo owner's revocation erasing through §16.11's erasure runner. Its index is on by kind, with a 7-day window, and refuses `off`; its group seats readers under §7.9's leaves rule; its daemons read moved streams 64 to a request (11.9). *Why:* owner decision 171 gives this repo's ",
@@ -1770,7 +1770,7 @@
  {
   "family": "decided_q_open",
   "file": "11-EVS.md",
-  "line": 4056,
+  "line": 4058,
   "col": 766,
   "match": "force writers, as Q-EVS-3",
   "snippet": " streams 64 to a request (11.9). *Why:* owner decision 171 gives this repo's index every announcement, specific beside owner decision 156; evs sees no path, so readers enforce writers, as Q-EVS-3's prefix rules, now Later, would, but a reader's check after a key is destroyed restores nothing, so erasure needs an authority evs checks first; owner decisions 177, 18",
@@ -1783,7 +1783,7 @@
  {
   "family": "kib_10_15",
   "file": "11-EVS.md",
-  "line": 4092,
+  "line": 4094,
   "col": 94,
   "match": "10-15 KiB",
   "snippet": "**Q-EVS-9.** Cross-cutting (owner decisions 2, 140, 145; §19, §22). Must the design meet the ~10-15 KiB of drive writes a push in owner decision 140's record, when owner decision 2's commit point, the head's If-Match overwrite, alone writes ~14 KiB a drive (~10.5 on 1 KiB ",
@@ -1796,7 +1796,7 @@
  {
   "family": "kib_10_15",
   "file": "11-EVS.md",
-  "line": 4092,
+  "line": 4094,
   "col": 480,
   "match": "10-15 KiB",
   "snippet": "e old xl.meta (11.3)? **Decided by owner 2026-11-04 (owner decision 140, record corrected):** (a): the binding budget, gated at 43 KiB a push per drive (D-TEST-11). The ~10-15 KiB figure was the design team's first estimate, not the owner's requirement, which is the PM9A3 profile itself (\"We have to make that iop profile work\"): at most 0.8 DWPD a",
@@ -1809,7 +1809,7 @@
  {
   "family": "mib64_trigger",
   "file": "11-EVS.md",
-  "line": 4106,
+  "line": 4108,
   "col": 135,
   "match": "64 MiB",
   "snippet": "**Q-EVS-16.** Is there a default versioning rule? **Decided by owner 2026-11-05 (owner decision 164):** per network, versionless above 64 MiB by default, edited by admins in the config repo (§7.9). *Residual:* none.",
@@ -1822,7 +1822,7 @@
  {
   "family": "window_14d_weekly",
   "file": "11-EVS.md",
-  "line": 4112,
+  "line": 4114,
   "col": 294,
   "match": "7-day window",
   "snippet": "2026-11-05 (owner decision 173):** (b), as 11.7 and 11.13 write: a repo admin's signed DROP push on a file-mode ref, refused in config and mailcfg repos, deletes after a 7-day window the kind-1 segments and slots that only the dropped versions name, found by scanning every ref's versions; inline records in packs wait for compaction; statements and ha",
@@ -1835,7 +1835,7 @@
  {
   "family": "window_14d_weekly",
   "file": "11-EVS.md",
-  "line": 4120,
+  "line": 4122,
   "col": 136,
   "match": "7-day window",
   "snippet": "**Q-EVS-23.** Does a drop wait out a cancellable window before it deletes? **Decided by owner 2026-11-05 (owner decision 183):** (a), a 7-day window in which any repo admin can cancel; `now` skips it, as RepoDelete's does; a repo lock voids a pending drop; deletion starts after the window and the 25-minute fence (11.",
@@ -1848,7 +1848,7 @@
  {
   "family": "pg_redis_durable",
   "file": "11-EVS.md",
-  "line": 4188,
+  "line": 4190,
   "col": 75,
   "match": "Redis soft state: §6's hint keys, {evsl_} leases",
   "snippet": "- **Tables:** none; evs keeps only 11.8's objects (owner decision 2), plus Redis soft state: §6's hint keys, {evsl_} leases, the {evsq_} push sequence, the {evsh_} head cache and {evsd_} drop hints (owner decision 136).",
@@ -1861,7 +1861,7 @@
  {
   "family": "pg_redis_durable",
   "file": "11-EVS.md",
-  "line": 4191,
+  "line": 4193,
   "col": 44,
   "match": "evs-8 and evs-24 in Redis",
   "snippet": "  - §2.8's evs rows follow 11.8's families (evs-8 and evs-24 in Redis; evs-21 to evs-23 `spidx/`, `pb/`, `hp/`; evs-25 `place/`; evs-28 `drops/`, `dropscan/` and `{evsd_}`; evs-20 withdrawn), evs-1 listing the `secret` kind, evs-3 a mapper",
@@ -1874,7 +1874,7 @@
  {
   "family": "pools",
   "file": "11-EVS.md",
-  "line": 4194,
+  "line": 4196,
   "col": 1238,
   "match": "multi-pool",
   "snippet": "s and P0 figures with their page (§19.8), tracks each cluster's cohort and its limit (§19.9's cohorts row) and provides the clusters and a conformance suite that refuses multi-pool metadata, and §19.9's triggers start each next cluster (owner decision 145), §19.9 sizing year two at five to six sets by 11.13's per-cluster batches; §19.10 re-seeds sl",
@@ -1887,7 +1887,7 @@
  {
   "family": "pg_redis_durable",
   "file": "11-EVS.md",
-  "line": 4194,
+  "line": 4196,
   "col": 691,
   "match": "evs, gkm, taskworker, Redis",
   "snippet": "never, a key held while a write that lacks a write quorum could still be read), which 11.7's stale and collect margins need instead of a measured lag, runs chrony on the evs, gkm, taskworker, Redis master and MinIO hosts within 50 ms of UTC, alarmed past 25 ms, a taskworker whose offset is unknown or over 50 ms raising no fence and GC deleting nothing (§19.10's clo",
@@ -1900,7 +1900,7 @@
  {
   "family": "pg_redis_durable",
   "file": "11-EVS.md",
-  "line": 4194,
+  "line": 4196,
   "col": 1499,
   "match": "gkm's objects on the repo's cluster, acks in Redis",
   "snippet": ".9 sizing year two at five to six sets by 11.13's per-cluster batches; §19.10 re-seeds slots last and places a repo re-seeded as deleted in that state first; §10.6 keeps gkm's objects on the repo's cluster, acks in Redis; §21.9's api writes `hold/`, and §21 tracks counsel's confirmation for owner decision 133.",
@@ -1913,7 +1913,7 @@
  {
   "family": "decided_q_open",
   "file": "11-EVS.md",
-  "line": 4196,
+  "line": 4198,
   "col": 410,
   "match": "format 2 out, Q-OPS-2",
   "snippet": "16 add no versionless rule of their own beyond the index's and §15.7's `s/model`; §19's evs credentials include DELETE on the segment bucket, §19.11's format2 gate rolls format 2 out, Q-OPS-2's packing never takes kind-5 segments, and §19.8 exports the purge's metrics; §20.7 counts replaced versionless content until purged; §21.9's holds keep only content exi",
@@ -1926,7 +1926,7 @@
  {
   "family": "audit_gate",
   "file": "11-EVS.md",
-  "line": 4206,
+  "line": 4208,
   "col": 57,
   "match": "audited",
   "snippet": "| A flaw in the format, token tree or commit protocol, unaudited and so disclosed (owner decisions 99, 119) | Medium | High | Peer review before format 1 freezes; vectors, fuzzing, a model check of 11.8 (§22) |",
@@ -1939,7 +1939,7 @@
  {
   "family": "mib64_trigger",
   "file": "11-EVS.md",
-  "line": 4231,
+  "line": 4233,
   "col": 89,
   "match": "64 MiB",
   "snippet": "| Users lose content they expected to keep | Medium | Medium | Versioning stays on below 64 MiB; history written while on stays; listings and `ur status` show the setting; a repo lock |",
@@ -1952,7 +1952,7 @@
  {
   "family": "window_14d_weekly",
   "file": "11-EVS.md",
-  "line": 4238,
+  "line": 4240,
   "col": 67,
   "match": "7-day window",
   "snippet": "| A rogue or compromised admin destroys history | Low | High | The 7-day window, notices, any repo admin's cancel, a lock voiding it, owner-bound consent (owner decision 183); `now` as RepoDelete's (§2.18) |",
@@ -1965,7 +1965,7 @@
  {
   "family": "pg_redis_durable",
   "file": "11-EVS.md",
-  "line": 4254,
+  "line": 4256,
   "col": 343,
   "match": "Redis soft state, the verified head",
   "snippet": "acement); streams, deposits, slots and ERASE, and the owner-bound read-receipt budget, which an `EvsShare` reader needs before it reads (§16.8, D-MCP-18); subscriptions, Redis soft state, the verified head cache and reads of §7.9's `{acl_}e`; head mode; path epochs; the gate and HeadCheck's ref pins (§6.4); usage events, fair share and the write budget, with its classes, a",
