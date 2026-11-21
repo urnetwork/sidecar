@@ -40,6 +40,8 @@ func urConfigFollowerSettings() *sidecar.SidecarConfigFollowerSettings {
 	settings.TrustFirstUse = true
 	settings.ConfigClient = sidecar.DefaultConfigClientSettings()
 	settings.ConfigClient.RetainFullTail = true
+	settings.ConfigClient.LogSettings = sidecar.DefaultConfigLogSettings()
+	settings.ConfigClient.LogSettings.AclSpendCheck = sidecar.NewSpendCheck(nil)
 	return settings
 }
 

@@ -40,6 +40,21 @@ func TestActivatedForwardReachesItsExactProviderPort(t *testing.T) {
 			!live && decision.Verdict != connect.EgressVerdictDeny {
 			t.Fatalf("provider decision with live grant %t: %+v", live, decision)
 		}
+		flow.Principal.Subject = connect.Id(fixture.TargetId)
+		if policy.ResolveEgress(flow).Verdict != connect.EgressVerdictDeny {
+			t.Fatal("the provider admitted a different subject under the grant")
+		}
+		flow.Principal.Subject = connect.Id(fixture.SubjectId)
+		flow.Principal.Network[0] ^= 1
+		if policy.ResolveEgress(flow).Verdict != connect.EgressVerdictDeny {
+			t.Fatal("the provider admitted the subject of another network")
+		}
+		flow.Principal.Network = connect.Id(fixture.NetworkId)
+		flow.To = netip.AddrPortFrom(fixture.Target.Addr().Next(), fixture.Target.Port())
+		if policy.ResolveEgress(flow).Verdict != connect.EgressVerdictDeny {
+			t.Fatal("the provider admitted the port at another address")
+		}
+		flow.To = fixture.Target
 		flow.Protocol = connect.IpProtocolTcp
 		if policy.ResolveEgress(flow).Verdict != connect.EgressVerdictDeny {
 			t.Fatal("the provider admitted the unapproved protocol")

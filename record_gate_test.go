@@ -25,6 +25,16 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
+func TestNativeApprovalGatePreservesInstalledHostPolicy(t *testing.T) {
+	running, _, _ := newIdentityTestSidecar(t)
+	host := &testRecordingGate{answer: ErrSidecarGateDenied}
+	t.Cleanup(running.InstallGate(host))
+	installed, remove, err := running.InstallApprovalGateIfAbsent(nil)
+	if err != nil || installed != nil || remove != nil || running.gate() != host {
+		t.Fatalf("the native gate replaced the installed host policy: %v", err)
+	}
+}
+
 // A mail template the world's agent may spend uses times: recipients among those listed, from alias me.
 func (self *testApprovalWorld) mailTemplate(recipients ...string) *StoredCanonicalAction {
 	self.t.Helper()
