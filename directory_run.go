@@ -241,6 +241,8 @@ type directoryRun struct {
 	// An erasure took its item, which this sidecar's card leaves out: it is announced no more (the file's header's
 	// moderated row).
 	Moderated bool `json:"moderated,omitempty"`
+	// Exact terminal item still owed to the directory after interruption.
+	PendingTerminal *protocol.Announcement `json:"pending_terminal,omitempty"`
 	// Kept in memory only: when it last moved, and whether an entry waits for its start delay.
 	movedMillis int64
 	startDue    bool
@@ -337,6 +339,13 @@ func NewDirectoryRuns(args *DirectoryRunsArgs) (*DirectoryRuns, error) {
 		log:               log,
 		runIdRuns:         map[Id]*directoryRun{},
 	}, nil
+}
+
+// Resumes terminal writes on the first successful sync after startup, even before a harness attaches.
+func init() {
+	directoryReconcileRuns = func(client *DirectoryClient) error {
+		return client.Runs().Reconcile()
+	}
 }
 
 // This client's runs, made at the first call over the client's writer, run view, state, store and redactor.
@@ -677,7 +686,7 @@ func (self *DirectoryRuns) Reconcile() error {
 		defer self.stateLock.Unlock()
 		runIds := []Id{}
 		for runId, run := range self.runIdRuns {
-			if run.open() && run.RepoId != nil {
+			if run.PendingTerminal != nil || (run.open() && run.RepoId != nil) {
 				runIds = append(runIds, runId)
 			}
 		}
@@ -693,6 +702,12 @@ func (self *DirectoryRuns) Reconcile() error {
 // One run's where rewritten when it turned private since its last entry (§16.11's runs row).
 func (self *DirectoryRuns) reconcileRun(runId Id) error {
 	run, ok := self.runOf(runId)
+	if ok && run.PendingTerminal != nil {
+		if DirectoryAnnouncementState(run.State) != DirectoryAnnouncementStateWithdrawn {
+			return self.Ended(runId)
+		}
+		return self.Withdraw(runId)
+	}
 	if !ok || !run.open() || run.RepoId == nil || run.Private || !self.repoPrivate(*run.RepoId) {
 		return nil
 	}
@@ -726,7 +741,7 @@ func (self *DirectoryRuns) Resume(ended func(runId Id) bool) error {
 		defer self.stateLock.Unlock()
 		runIds := []Id{}
 		for runId, run := range self.runIdRuns {
-			if run.open() {
+			if run.PendingTerminal != nil || run.open() {
 				runIds = append(runIds, runId)
 			}
 		}
@@ -735,7 +750,9 @@ func (self *DirectoryRuns) Resume(ended func(runId Id) bool) error {
 	}()
 	errs := []error{}
 	for _, runId := range runIds {
-		if ended != nil && ended(runId) {
+		if run, ok := self.runOf(runId); ok && run.PendingTerminal != nil {
+			errs = append(errs, self.reconcileRun(runId))
+		} else if ended != nil && ended(runId) {
 			errs = append(errs, self.Ended(runId))
 		}
 	}
@@ -808,7 +825,7 @@ func (self *DirectoryClient) Withdraw(announcementId Id) error {
 		runs.stateLock.Lock()
 		defer runs.stateLock.Unlock()
 		for runId, run := range runs.runIdRuns {
-			if run.AnnouncementId == announcementId && run.open() {
+			if run.AnnouncementId == announcementId && (run.open() || run.PendingTerminal != nil) {
 				return runId, true
 			}
 		}
@@ -850,6 +867,13 @@ func (self *DirectoryRuns) update(runId Id, source RecordSource, change func(run
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrDirectoryRunUnknown, runId)
 	}
+	if run.PendingTerminal != nil {
+		// Advance earlier terminal work before an end can forget the run.
+		if _, err := self.publishTerminal(run); err != nil {
+			return nil, err
+		}
+		run, _ = self.runOf(runId)
+	}
 	moderated, err := self.moderatedRun(run)
 	if err != nil {
 		return nil, err
@@ -872,10 +896,16 @@ func (self *DirectoryRuns) update(runId Id, source RecordSource, change func(run
 	if err != nil {
 		return nil, err
 	}
+	if !run.open() {
+		run.PendingTerminal = item
+	}
 	if err := self.persist(run); err != nil {
 		return nil, err
 	}
 	self.keep(run)
+	if run.PendingTerminal != nil {
+		return self.publishTerminal(run)
+	}
 	ref, err := self.append(run, item, source)
 	if errors.Is(err, ErrDirectoryItemModerated) {
 		// the card this append wrote left the item out, an erasure having taken it
@@ -889,6 +919,22 @@ func (self *DirectoryRuns) update(runId Id, source RecordSource, change func(run
 	}
 	// the renewal timer runs while a run is open; setting it waits on nothing (scheduleRenew's timeout is positive)
 	self.scheduleRenew()
+	return ref, nil
+}
+
+// Clears the intent only once the writer has committed or durably queued the exact version.
+func (self *DirectoryRuns) publishTerminal(run *directoryRun) (*RecordEntryRef, error) {
+	ref, err := self.append(run, run.PendingTerminal, RecordSourceHook)
+	if err != nil && !errors.Is(err, ErrDirectoryItemModerated) {
+		return nil, err
+	}
+	written := *run
+	written.Moderated = written.Moderated || errors.Is(err, ErrDirectoryItemModerated)
+	written.PendingTerminal = nil
+	if err := self.persist(&written); err != nil {
+		return nil, err
+	}
+	self.keep(&written)
 	return ref, nil
 }
 
