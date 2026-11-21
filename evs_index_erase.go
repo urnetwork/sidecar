@@ -32,6 +32,12 @@
 //	         completion ERASE (evs_erase_completion.go; QD-1132); any other leaves complete to its own ERASEs. An
 //	         erasure counts complete after an ERASE that could have found its keys gone only once evs's state read back
 //	         says so
+//	relisted an erasure the store reads complete is done, with nothing listed, unless the caller's CUT listed documents
+//	         again (IndexRewriteArgs.Relisted; QD-1158): a CUT that adds documents to an erasure already complete, as the
+//	         directory's 30-day sweep does for a later-signed card, can reach files no rewrite has listed, so the pass
+//	         lists first and rewrites what holds a listed version, the first ERASE opening the erasure again under a
+//	         store that reads it by its newest ERASE (recordEraseNewestStore), until the last says complete. A list that
+//	         finds nothing, or a set that dropped the erasure since, leaves it complete with nothing sent
 //	resume   from evs's state, never one device's memory: an ERASE first for the keys of each CLOSURE of the erasure no
 //	         ERASE of it named, saying complete where the list at the head finds nothing else to rewrite, so an erasure
 //	         killed between its last CLOSURE and that CLOSURE's ERASE ends with it (QD-1132), then the pairs at the head;
@@ -230,6 +236,12 @@ type IndexRewriteArgs struct {
 	// the erasure with a completion ERASE (evs_erase_completion.go; QD-1132). False leaves that to the caller, as
 	// record_erase.go sends its own, journaled with the record's ERASEs: the result then reads rewriting.
 	Completion bool
+	// A CUT of the caller's call listed documents again, which may have reached an erasure an ERASE had ended, as the
+	// directory's 30-day sweep cuts a later-signed card (QD-1158): the rewrite lists before it trusts a complete it
+	// reads, and rewrites each file that holds a listed version, its first ERASE opening the erasure again until one
+	// says complete. Where nothing is left to rewrite here the erasure stays complete, as its newest ERASE says, and
+	// nothing is sent. False trusts a complete it reads and lists nothing.
+	Relisted bool
 }
 
 // What a rewrite did.
@@ -328,12 +340,27 @@ func (self *IndexEraser) rewritePass(ctx context.Context, args *IndexRewriteArgs
 	if err != nil {
 		return false, err
 	}
-	if progress.complete() {
+	complete := progress.complete()
+	if complete && !args.Relisted {
 		result.Erasure = &SidecarErasure{ErasureId: args.ErasureId, State: SidecarErasureDone}
 		return true, nil
 	}
 	orphans := progress.orphanKeys()
 	view, listed, work, err := self.listPass(ctx, args.ErasureId, progress)
+	if complete && errors.Is(err, ErrIndexEraseNotCut) {
+		// relisted, and a later CUT dropped the erasure from the set since it completed: nothing is listed here to
+		// rewrite. A CLOSURE no ERASE followed still has its keys erased, saying complete again where the erasure ends
+		// here; where it does not, that ERASE opens the erasure again, and the caller's last ERASE ends it
+		if 0 < len(orphans) {
+			if done, eraseErr := self.eraseOrphans(ctx, args, orphans, args.Complete, result); eraseErr != nil || done {
+				return done, eraseErr
+			}
+			result.Erasure = &SidecarErasure{ErasureId: args.ErasureId, State: SidecarErasureRewriting}
+			return true, nil
+		}
+		result.Erasure = &SidecarErasure{ErasureId: args.ErasureId, State: SidecarErasureDone}
+		return true, nil
+	}
 	if err != nil || work == nil {
 		// resume: the keys of each CLOSURE no ERASE followed go whatever the list did (§11.12's reconcile row)
 		if 0 < len(orphans) {
@@ -342,6 +369,11 @@ func (self *IndexEraser) rewritePass(ctx context.Context, args *IndexRewriteArgs
 			}
 		}
 		return false, err
+	}
+	if complete && len(orphans) == 0 && len(work.rewrites) == 0 && len(work.keyOnly) == 0 && !work.unproven {
+		// relisted, and no file holds a listed version: the erasure stays complete, as its newest ERASE says
+		result.Erasure = &SidecarErasure{ErasureId: args.ErasureId, State: SidecarErasureDone}
+		return true, nil
 	}
 	if 0 < len(orphans) {
 		// resume: an ERASE first for each CLOSURE no ERASE followed (§11.12's reconcile row), saying complete where

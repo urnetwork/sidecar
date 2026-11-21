@@ -15,6 +15,10 @@ package sidecar
 // run: evs's 507 CLUSTER_FULL is the index's quota refusal with its Retry-After; a CLOSURE refused it at its upload
 // waits until then, and a re-entry refused it at its push waits ReentryRetryInterval, as at the storage limit, each
 // raising waiting and going on once there is room; a 507 naming no wait keeps the waits a refusal naming none has.
+// A CUT that lists documents again after the erasure completed (IndexRewriteArgs.Relisted; QD-1158): a relisted
+// rewrite rewrites the file holding the added document under a fresh key, opening the erasure again where the caller
+// ends it, and a rewrite that trusts complete leaves it; a relisted rewrite finding nothing sends nothing; and one
+// killed between its CLOSURE and ERASE erases the orphan's keys at the next relisted pass.
 
 import (
 	"bytes"
@@ -1673,5 +1677,229 @@ func TestIndexRewriteLeavesAnErasureRewritingWhereEvsTakesNoCompletion(t *testin
 	}
 	if len(world.evs.erases) != 1 || world.evs.erases[0].erased.complete {
 		t.Fatalf("%d ERASEs committed", len(world.evs.erases))
+	}
+}
+
+// The world's eraser as the directory's, the record's and mail's bindings build theirs: an erasure's progress read by
+// its newest ERASE (recordEraseNewestStore), and its CUTs judging an erasure complete the same way, as readers read
+// each ERASE.
+func (self *testEraseWorld) newestEraser(t testing.TB) *IndexEraser {
+	t.Helper()
+	signer := evsTestId("eraser")
+	store := self.evs.as(signer)
+	eraser, err := indexNewEraser(&indexEraserArgs{
+		store: store, eraseStore: &recordEraseNewestStore{indexEraseStore: store},
+		repoId: evsTestId("view repo"), refId: evsTestId("view ref"), repoKind: protocol.RepoKind_REPO_KIND_GENERAL,
+		isAdmin: self.isAdmin, format: self.settings, eraser: signer, tables: testHeadTables,
+		complete: func(ctx context.Context, erasureIds []Id) (map[Id]bool, error) {
+			self.evs.stateLock.Lock()
+			defer self.evs.stateLock.Unlock()
+			indexes := make([]int, 0, len(self.evs.erases))
+			for index := range self.evs.erases {
+				indexes = append(indexes, index)
+			}
+			return recordEraseCompleteByNewest(indexes, func(index int) (Id, bool, bool) {
+				erase, read := self.evs.erases[index], self.evs.readErasedWithLock(index)
+				return erase.erasureId, read.complete, !erase.completion || read.complete
+			}), nil
+		},
+		events: func(erasure *SidecarErasure) {
+			self.events = append(self.events, erasure)
+		},
+		clock: &testIndexWorldClock{world: self.testHeadWorld}, log: NewNoopLogger(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return eraser
+}
+
+// An erasure of d0 at version 1 rewritten to its end, then a document "late" indexed by another writer and added to the
+// complete erasure by a later call's CUT, as the directory's 30-day sweep cuts a later-signed card: what the later
+// call's rewrite meets. The files holding the late document, which no rewrite has listed.
+func testEraseWorldRelisted(t testing.TB, world *testEraseWorld, eraser *IndexEraser) []string {
+	t.Helper()
+	testCut(t, eraser, "erasure", &IndexCutDocument{Key: testIndexId("d", 0), Version: 1})
+	if first := world.rewrite(t, eraser, "erasure", true); !first.Completed {
+		t.Fatalf("the erasure's first rewrite: %+v", first)
+	}
+	world.push(t, evsTestId("writer c"), testLive("late", 0, 1, testHeadKeys(7, 0)))
+	testCut(t, eraser, "erasure", &IndexCutDocument{Key: testIndexId("late", 0), Version: 1})
+	held := world.holding(t, world.listed(t))
+	if len(held) == 0 {
+		t.Fatal("no file holds the document the later CUT listed")
+	}
+	return held
+}
+
+// A later call's CUT added a document to a complete erasure (QD-1158): a rewrite that trusts the complete it reads
+// lists nothing and leaves the file holding the document under its live key; one told its CUT listed documents again
+// (Relisted) lists first, rewrites that file under a fresh key, and its last ERASE says complete again; relisted
+// again with nothing left, it sends nothing.
+func TestIndexRewriteRelistedRewritesWhatALaterCutAddedToACompleteErasure(t *testing.T) {
+	ctx := context.Background()
+	world := testEraseWorldWithCopies(t)
+	eraser := world.newestEraser(t)
+	held := testEraseWorldRelisted(t, world, eraser)
+	listed := world.listed(t)
+	erasureId := evsTestId("erasure")
+
+	trusted, err := eraser.Rewrite(ctx, &IndexRewriteArgs{ErasureId: erasureId, Complete: true, Note: []byte("note")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trusted.PairCount != 0 || trusted.Erasure.State != SidecarErasureDone || !slices.Equal(world.holding(t, listed), held) {
+		t.Fatalf("the rewrite that trusts complete: %+v, holding %v", trusted, world.holding(t, listed))
+	}
+	erases := len(world.evs.erases)
+	relisted, err := eraser.Rewrite(ctx, &IndexRewriteArgs{ErasureId: erasureId, Complete: true, Note: []byte("note"), Relisted: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if relisted.PairCount == 0 || relisted.FileCount != len(held) || !relisted.Completed || relisted.Erasure.State != SidecarErasureDone {
+		t.Fatalf("the relisted rewrite: %+v, %d files held", relisted, len(held))
+	}
+	if again := world.holding(t, listed); len(again) != 0 {
+		t.Fatalf("files still holding a listed version: %v", again)
+	}
+	world.evs.sweep(t, listed)
+	if last := world.evs.erases[len(world.evs.erases)-1]; len(world.evs.erases) <= erases || !last.erased.complete || last.completion {
+		t.Fatal("the relisted rewrite's last ERASE did not say complete")
+	}
+
+	closures, erases := len(world.evs.closures), len(world.evs.erases)
+	idle, err := eraser.Rewrite(ctx, &IndexRewriteArgs{ErasureId: erasureId, Complete: true, Note: []byte("note"), Completion: true, Relisted: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if idle.PairCount != 0 || idle.KeyCount != 0 || idle.Completed || idle.Erasure.State != SidecarErasureDone ||
+		len(world.evs.closures) != closures || len(world.evs.erases) != erases {
+		t.Fatalf("a relisted rewrite with nothing left: %+v", idle)
+	}
+}
+
+// A relisted rewrite whose caller ends the erasure later, as the directory's files do: its ERASEs say nothing complete,
+// so the erasure, read by its newest ERASE, is open again; a later rewrite that finds nothing ends it by a completion
+// ERASE. Read by any ERASE that once said complete (the raw store), the erasure stays done, and an eraser over it
+// sends no completion, leaving the erasure open where readers read it by its newest ERASE.
+func TestIndexRewriteRelistedOpensTheErasureAgainUntilACompletionEndsIt(t *testing.T) {
+	ctx := context.Background()
+	world := testEraseWorldWithCopies(t)
+	eraser := world.newestEraser(t)
+	testEraseWorldRelisted(t, world, eraser)
+	erasureId := evsTestId("erasure")
+
+	reopened, err := eraser.Rewrite(ctx, &IndexRewriteArgs{ErasureId: erasureId, Note: []byte("note"), Relisted: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened.PairCount == 0 || reopened.Completed || reopened.Erasure.State != SidecarErasureRewriting {
+		t.Fatalf("the relisted rewrite the caller ends: %+v", reopened)
+	}
+	if held := world.holding(t, world.listed(t)); len(held) != 0 {
+		t.Fatalf("files still holding a listed version: %v", held)
+	}
+	newest, err := eraser.args.eraseStore.Progress(ctx, erasureId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := world.evs.as(evsTestId("eraser")).Progress(ctx, erasureId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if newest.complete() || !raw.complete() {
+		t.Fatalf("after the relisted pairs: complete by the newest ERASE %t, by any %t", newest.complete(), raw.complete())
+	}
+
+	// an eraser over the raw store reads it done and sends nothing
+	erases := len(world.evs.erases)
+	stale, err := world.eraser(t, nil).Rewrite(ctx, &IndexRewriteArgs{ErasureId: erasureId, Complete: true, Note: []byte("note"), Completion: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stale.Completed || stale.Erasure.State != SidecarErasureDone || len(world.evs.erases) != erases {
+		t.Fatalf("the raw store's rewrite: %+v", stale)
+	}
+	ended, err := eraser.Rewrite(ctx, &IndexRewriteArgs{ErasureId: erasureId, Complete: true, Note: []byte("note"), Completion: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ended.Completed || ended.PairCount != 0 || ended.Erasure.State != SidecarErasureDone {
+		t.Fatalf("the rewrite that ends it: %+v", ended)
+	}
+	if last := world.evs.erases[len(world.evs.erases)-1]; len(world.evs.erases) != erases+1 || !last.completion || !last.erased.complete {
+		t.Fatal("the erasure did not end by a completion ERASE")
+	}
+	if progress, err := eraser.args.eraseStore.Progress(ctx, erasureId); err != nil || !progress.complete() {
+		t.Fatalf("after the completion the erasure reads complete %t: %v", progress != nil && progress.complete(), err)
+	}
+	world.evs.sweep(t, world.listed(t))
+}
+
+// A relisted rewrite killed between its CLOSURE and the ERASE after it: the erasure's newest ERASE still says complete,
+// so a rewrite that trusts it leaves the CLOSURE's keys standing; the next relisted pass erases them first, saying
+// complete where nothing else is left (§11.12's reconcile row).
+func TestIndexRewriteRelistedErasesItsOrphanedClosure(t *testing.T) {
+	ctx := context.Background()
+	world := testEraseWorldWithCopies(t)
+	eraser := world.newestEraser(t)
+	testEraseWorldRelisted(t, world, eraser)
+	erasureId := evsTestId("erasure")
+	crash := errors.New("the device stopped")
+	world.evs.eraseRefusals = []error{crash}
+	if _, err := eraser.Rewrite(ctx, &IndexRewriteArgs{ErasureId: erasureId, Complete: true, Note: []byte("note"), Relisted: true}); !errors.Is(err, crash) {
+		t.Fatalf("the crashed relisted rewrite: %v", err)
+	}
+	orphan := world.evs.closures[len(world.evs.closures)-1].closed.keys
+	standing := func() int {
+		world.evs.stateLock.Lock()
+		defer world.evs.stateLock.Unlock()
+		count := 0
+		for _, key := range orphan {
+			if !world.evs.destroyed[key.SlotId] {
+				count += 1
+			}
+		}
+		return count
+	}
+	if standing() == 0 {
+		t.Fatal("the crashed CLOSURE's keys went without its ERASE")
+	}
+	trusted, err := eraser.Rewrite(ctx, &IndexRewriteArgs{ErasureId: erasureId, Complete: true, Note: []byte("note")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trusted.KeyCount != 0 || standing() == 0 {
+		t.Fatalf("the rewrite that trusts complete: %+v", trusted)
+	}
+	resumed, err := eraser.Rewrite(ctx, &IndexRewriteArgs{ErasureId: erasureId, Complete: true, Note: []byte("note"), Relisted: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.KeyCount < len(orphan) || !resumed.Completed || resumed.Erasure.State != SidecarErasureDone || standing() != 0 {
+		t.Fatalf("the relisted resume: %+v, %d keys standing", resumed, standing())
+	}
+	world.evs.sweep(t, world.listed(t))
+}
+
+// A complete erasure another erasure's CUT has dropped from the set lists nothing: a relisted rewrite of it is done,
+// with nothing sent and no error.
+func TestIndexRewriteRelistedLeavesADroppedErasureComplete(t *testing.T) {
+	ctx := context.Background()
+	world := testEraseWorldWithCopies(t)
+	eraser := world.newestEraser(t)
+	testCut(t, eraser, "erasure", &IndexCutDocument{Key: testIndexId("d", 0), Version: 1})
+	world.rewrite(t, eraser, "erasure", true)
+	testCut(t, eraser, "other", &IndexCutDocument{Key: testIndexId("big", 0), Version: 1})
+	if indexErasureOf(world.view(t, evsTestId("reader")).erasureSet, evsTestId("erasure")) != nil {
+		t.Fatal("the next CUT kept the complete erasure in the set")
+	}
+	closures, erases := len(world.evs.closures), len(world.evs.erases)
+	relisted, err := eraser.Rewrite(ctx, &IndexRewriteArgs{ErasureId: evsTestId("erasure"), Complete: true, Note: []byte("note"), Completion: true, Relisted: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if relisted.Erasure.State != SidecarErasureDone || relisted.Completed || len(world.evs.closures) != closures || len(world.evs.erases) != erases {
+		t.Fatalf("a relisted rewrite of a dropped erasure: %+v", relisted)
 	}
 }
