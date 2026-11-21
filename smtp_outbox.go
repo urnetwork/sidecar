@@ -339,6 +339,17 @@ func (self *SmtpOutboxRunner) leaveTooLarge(ctx context.Context, message *SmtpOu
 	return self.args.Mailbox.WriteOutcomes(ctx, message.EffectKey, result.Domains)
 }
 
+// The durable mailbox can bind an older receipt to this verified message in the same write that removes the entry.
+func (self *SmtpOutboxRunner) removeCompleted(ctx context.Context, file *SmtpOutboxFile, sendId Id, domainCount int) (bool, error) {
+	if mailbox, ok := self.args.Mailbox.(interface {
+		removeVerifiedOutbox(context.Context, *SmtpOutboxFile, Id, int) (bool, error)
+	}); ok {
+		return mailbox.removeVerifiedOutbox(ctx, file, sendId, domainCount)
+	}
+	err := self.args.Mailbox.RemoveOutbox(ctx, file.EffectKey)
+	return err == nil, err
+}
+
 // One pass over o/: each entry this host may take now is sent, each that is done and past its window removed. An
 // error is the mailbox's, and the pass stops there; an entry that fails alone is counted and skipped.
 func (self *SmtpOutboxRunner) RunOnce(ctx context.Context) (*SmtpOutboxPass, error) {
@@ -387,10 +398,13 @@ func (self *SmtpOutboxRunner) RunOnce(ctx context.Context) (*SmtpOutboxPass, err
 		domainCount := smtpDomainCount(message.Recipients)
 		if smtpOutcomesEnded(outcomes, domainCount) {
 			if message.ApprovalNotAfter.IsZero() || !now.Before(message.ApprovalNotAfter) {
-				if err := self.args.Mailbox.RemoveOutbox(ctx, effectKey); err != nil {
+				removed, err := self.removeCompleted(ctx, file, message.SendId, domainCount)
+				if err != nil {
 					return pass, err
 				}
-				pass.Removed += 1
+				if removed {
+					pass.Removed += 1
+				}
 			}
 			continue
 		}

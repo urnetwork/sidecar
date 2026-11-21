@@ -223,6 +223,77 @@ func (self *mailSmtpMailbox) RemoveOutbox(ctx context.Context, effectKey []byte)
 	return err
 }
 
+// The runner has verified the signature and message in file. Keep an older receipt's outcomes and unknown
+// fields when adding that authenticated send ID, in the same conditional write that removes its last source.
+func (self *mailSmtpMailbox) removeVerifiedOutbox(ctx context.Context, file *SmtpOutboxFile, sendId Id, domainCount int) (bool, error) {
+	path, err := MailOutboxPath(file.EffectKey)
+	if err != nil {
+		return false, err
+	}
+	outcomePath, err := MailOutcomePath(file.EffectKey)
+	if err != nil {
+		return false, err
+	}
+	standing, outboxVersion, err := self.store.Read(ctx, path, self.settings.OutboxFileMaxByteCount)
+	if errors.Is(err, ErrEvsPathAbsent) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if len(standing) < mailOutboxLengthByteCount || int(binary.BigEndian.Uint32(standing)) != len(file.Signed) {
+		return false, nil
+	}
+	message, ok := bytes.CutPrefix(standing[mailOutboxLengthByteCount:], file.Signed)
+	if !ok || !bytes.Equal(message, file.Message) {
+		return false, nil
+	}
+	for attempt := 0; ; attempt += 1 {
+		content, version, err := self.store.Read(ctx, outcomePath, self.settings.OutcomeRecordMaxByteCount)
+		if errors.Is(err, ErrEvsPathAbsent) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		record := &protocol.MailOutcomeRecord{}
+		if err := proto.Unmarshal(content, record); err != nil {
+			return false, err
+		}
+		outcomes, err := SmtpMailboxOutcomes(record)
+		if err != nil || !smtpOutcomesEnded(outcomes, domainCount) {
+			return false, err
+		}
+		if sendId != (Id{}) && (len(record.SendId) == 0 || bytes.Equal(record.SendId, (Id{}).Bytes())) {
+			record.SendId = sendId.Bytes()
+			content, err = proto.MarshalOptions{Deterministic: true}.Marshal(record)
+			if err != nil {
+				return false, err
+			}
+			if len(content) > self.settings.OutcomeRecordMaxByteCount {
+				return false, ErrMailStoreTooLarge
+			}
+		}
+		// Checking both versions also prevents a completed row reopened for another host from losing its entry.
+		testHookBarrier("mail.outbox.remove.before", "")
+		_, err = self.store.Write(ctx, []*mailStoreWrite{
+			{Path: path, Remove: true, IfVersion: outboxVersion},
+			{Path: outcomePath, Content: content, IfVersion: version},
+		})
+		testHookBarrier("mail.outbox.remove.after", "")
+		if err == nil {
+			return true, nil
+		}
+		if mailStoreConflictOn(err, path) {
+			// A different entry needs its own signature check in the next pass.
+			return false, nil
+		}
+		if !mailStoreConflictOn(err, outcomePath) || self.settings.WriteRetryCount <= attempt {
+			return false, err
+		}
+	}
+}
+
 // See SmtpMailbox. The record names its send as the file header's or/ row says: a write that creates it reads the send
 // from the o/ entry under effectKey, and a later one keeps what the record standing names.
 func (self *mailSmtpMailbox) WriteOutcomes(ctx context.Context, effectKey []byte, outcomes []*SmtpDomainOutcome) error {
