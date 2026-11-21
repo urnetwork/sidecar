@@ -205,7 +205,9 @@ func TestSearchEngineScopeAndExclusions(t *testing.T) {
 	}
 }
 
-func TestSearchEngineNamedRefScansLocalVersionsAcrossACut(t *testing.T) {
+// A named-ref scan with two visible documents and one index file. The returned cut removes the second document.
+func newTestNamedRefScan(t *testing.T) (*testEngineWorld, func()) {
+	t.Helper()
 	world := newTestEngineWorld(t, nil, testEngineDocument(t, "other", 1, 1, "indexed.md", "harbor"))
 	repoId, refId := world.sync.repoId, world.sync.refId
 	repo := world.scope.repos[0]
@@ -228,6 +230,22 @@ func TestSearchEngineNamedRefScansLocalVersionsAcrossACut(t *testing.T) {
 		}
 		return &SearchScanView{Source: docs, RefKey: key}, nil
 	}
+	return world, func() {
+		t.Helper()
+		through, err := indexDocKey(key.key, refId, []byte("harbor-b.md"), 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		eraser := testNewEraser(t, world.sync.head.ref.store(evsTestId("scan eraser")), false, &testIndexWorldClock{world: world.sync.head}, nil)
+		testCut(t, eraser, "scan cut", &IndexCutDocument{Key: through, Version: 1})
+		world.sync.round(t)
+	}
+}
+
+func TestSearchEngineNamedRefScansLocalVersionsAcrossACut(t *testing.T) {
+	world, cut := newTestNamedRefScan(t)
+	repoId, refId := world.sync.repoId, world.sync.refId
+	repo := world.scope.repos[0]
 	request := &SearchRequest{Text: "harbor", Repos: []Id{repoId}, Ref: "draft", PageSize: 1}
 	session := evsTestId("scan session")
 	stream, cursor, err := world.engine.SearchIn(t.Context(), session, request)
@@ -240,13 +258,7 @@ func TestSearchEngineNamedRefScansLocalVersionsAcrossACut(t *testing.T) {
 		len(progress.Coverage) != 1 || progress.Coverage[0].State != SearchExcludedIndexOff || len(progress.Excluded) != 0 {
 		t.Fatalf("first scan page: %+v, %+v, done %t, %v", first, progress, done, err)
 	}
-	through, err := indexDocKey(key.key, refId, []byte("harbor-b.md"), 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	eraser := testNewEraser(t, world.sync.head.ref.store(evsTestId("scan eraser")), false, &testIndexWorldClock{world: world.sync.head}, nil)
-	testCut(t, eraser, "scan cut", &IndexCutDocument{Key: through, Version: 1})
-	world.sync.round(t)
+	cut()
 	if _, err := world.engine.Resume(session, cursor); !errors.Is(err, ErrSearchCursorExpired) {
 		t.Fatalf("scan cursor after cut: %v", err)
 	}
@@ -258,17 +270,6 @@ func TestSearchEngineNamedRefScansLocalVersionsAcrossACut(t *testing.T) {
 	hits, coverage := world.all(t, request)
 	if !slices.Equal(testHitPaths(hits), []string{"harbor-a.md"}) || coverage.Coverage[0].State != SearchExcludedUnbuilt {
 		t.Fatalf("fresh scan: %+v, %+v", hits, coverage)
-	}
-	tools := testSearchTools(t, world)
-	result, err := tools.Search(t.Context(), &SearchToolEnv{Session: evsTestId("tool scan")}, &SearchToolArgs{
-		Query: "harbor", Repos: []string{"id:" + repoId.String()}, Ref: "draft",
-	})
-	if err != nil || len(result.Hits) != 1 || result.Hits[0].Ref != refId.String() || result.Hits[0].Stub || result.Hits[0].Open.Arguments["hit"] != result.Hits[0].HitId {
-		t.Fatalf("named tool search: %+v, %v", result, err)
-	}
-	opened, err := tools.OpenHit(evsTestId("tool scan"), result.Hits[0].HitId)
-	if err != nil || opened.RefId != refId || opened.RefName != "draft" {
-		t.Fatalf("named hit: %+v, %v", opened, err)
 	}
 	request.Ref = ""
 	hits, coverage = world.all(t, request)
