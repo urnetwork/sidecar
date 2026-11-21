@@ -226,31 +226,26 @@ func (self *mailSmtpMailbox) WriteOutcomes(ctx context.Context, effectKey []byte
 	if err != nil {
 		return err
 	}
-	record := &protocol.MailOutcomeRecord{}
-	for _, outcome := range outcomes {
-		if outcome == nil {
-			return fmt.Errorf("%w: no outcome", ErrMailOutboxFileInvalid)
-		}
-		mailOutcome, err := outcome.MailOutcome()
-		if err != nil {
-			return err
-		}
-		record.Outcomes = append(record.Outcomes, mailOutcome)
-	}
 	for attempt := 0; ; attempt += 1 {
 		standing, version, err := self.store.Read(ctx, path, self.settings.OutcomeRecordMaxByteCount)
+		previous := &protocol.MailOutcomeRecord{}
 		switch {
 		case errors.Is(err, ErrEvsPathAbsent):
-			// this write creates the record: its send is the one its entry names
 			version = 0
-			if record.SendId, err = self.outboxSendId(ctx, effectKey); err != nil {
+			if previous.SendId, err = self.outboxSendId(ctx, effectKey); err != nil {
 				return err
 			}
 		case err != nil:
-			// a file past the bound is none this side wrote, and is left as it stands
 			return err
 		default:
-			record.SendId = mailOutcomeRecordSendId(standing)
+			if proto.Unmarshal(standing, previous) != nil {
+				// Preserve the existing recovery behavior for an unreadable older record.
+				previous.Reset()
+			}
+		}
+		record, err := SmtpMailboxOutcomeRecord(outcomes, previous)
+		if err != nil {
+			return err
 		}
 		content, err := proto.MarshalOptions{Deterministic: true}.Marshal(record)
 		if err != nil {
@@ -287,19 +282,6 @@ func (self *mailSmtpMailbox) outboxSendId(ctx context.Context, effectKey []byte)
 	return sendId.Bytes(), nil
 }
 
-// The send_id a record's bytes name, nil for none: one that does not decode, or a send_id of another length, which
-// names no send and is not carried into the next write.
-func mailOutcomeRecordSendId(content []byte) []byte {
-	record := &protocol.MailOutcomeRecord{}
-	if err := proto.Unmarshal(content, record); err != nil {
-		return nil
-	}
-	if _, err := IdFromBytes(record.GetSendId()); err != nil {
-		return nil
-	}
-	return bytes.Clone(record.GetSendId())
-}
-
 // See SmtpMailbox.
 func (self *mailSmtpMailbox) ListOutcomes(ctx context.Context) ([][]byte, error) {
 	return self.listSharded(ctx, mailOutcomeFamily, mailEffectKeyByteCount)
@@ -328,13 +310,9 @@ func (self *mailSmtpMailbox) ReadSendOutcomes(ctx context.Context, effectKey []b
 	if err := proto.Unmarshal(content, record); err != nil {
 		return Id{}, nil, err
 	}
-	outcomes := make([]*SmtpDomainOutcome, 0, len(record.GetOutcomes()))
-	for _, mailOutcome := range record.GetOutcomes() {
-		outcome, err := SmtpDomainOutcomeFromMailOutcome(mailOutcome)
-		if err != nil {
-			return Id{}, nil, err
-		}
-		outcomes = append(outcomes, outcome)
+	outcomes, err := SmtpMailboxOutcomes(record)
+	if err != nil {
+		return Id{}, nil, err
 	}
 	// a send_id of another length names no send
 	sendId, err := IdFromBytes(record.GetSendId())

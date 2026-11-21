@@ -79,6 +79,8 @@ type SmtpOutboxMessage struct {
 	Message *SmtpOutboundMessage
 	// The composing device, which signed the entry.
 	SignerId Id
+	// Exactly the authenticated SmtpOutboxEntry, including fields a newer writer may have added.
+	signedBody []byte
 }
 
 // Verifies one o/ entry: its Signed is SIGNED_SMTP_OUTBOX by signerKey's sidecar, over a SmtpOutboxEntry naming
@@ -127,7 +129,7 @@ func VerifySmtpOutboxEntry(file *SmtpOutboxFile, memberDeviceKey func(sidecarId 
 	if sendId, ok := MailOutboxSendIdOf(message.Message); ok {
 		message.SendId = sendId
 	}
-	return &SmtpOutboxMessage{Message: message, SignerId: signerId}, nil
+	return &SmtpOutboxMessage{Message: message, SignerId: signerId, signedBody: signed.GetBody()}, nil
 }
 
 // SignSmtpOutboxEntry's signer: Sidecar.Sign, or a test's key.
@@ -139,6 +141,20 @@ func SignSmtpOutboxEntry(message *SmtpOutboundMessage, sign SmtpOutboxSigner) ([
 	if message == nil || len(message.EffectKey) == 0 || sign == nil {
 		return nil, ErrSmtpSendInvalid
 	}
+	body, err := smtpOutboxEntryBody(message)
+	if err != nil {
+		return nil, err
+	}
+	signed, err := sign(SmtpOutboxPurpose, bridge.SignedType_SIGNED_SMTP_OUTBOX, body)
+	if err != nil {
+		return nil, err
+	}
+	return proto.MarshalOptions{Deterministic: true}.Marshal(signed)
+}
+
+// The deterministic bytes signed by the composing device. A sender also binds its encrypted
+// per-recipient progress to this envelope when another host takes over.
+func smtpOutboxEntryBody(message *SmtpOutboundMessage) ([]byte, error) {
 	messageSha256 := sha256.Sum256(message.Message)
 	entry := &protocol.SmtpOutboxEntry{
 		EffectKey:     message.EffectKey,
@@ -152,15 +168,7 @@ func SignSmtpOutboxEntry(message *SmtpOutboundMessage, sign SmtpOutboxSigner) ([
 	if !message.ApprovalNotAfter.IsZero() {
 		entry.ApprovalNotAfter = uint64(max(message.ApprovalNotAfter.UnixMilli(), 0))
 	}
-	body, err := proto.MarshalOptions{Deterministic: true}.Marshal(entry)
-	if err != nil {
-		return nil, err
-	}
-	signed, err := sign(SmtpOutboxPurpose, bridge.SignedType_SIGNED_SMTP_OUTBOX, body)
-	if err != nil {
-		return nil, err
-	}
-	return proto.MarshalOptions{Deterministic: true}.Marshal(signed)
+	return proto.MarshalOptions{Deterministic: true}.Marshal(entry)
 }
 
 // What a runner is made of.
@@ -390,7 +398,7 @@ func (self *SmtpOutboxRunner) RunOnce(ctx context.Context) (*SmtpOutboxPass, err
 			pass.Left += 1
 			continue
 		}
-		result, err := self.args.Sender.Send(ctx, message)
+		result, err := self.args.Sender.send(ctx, message, verified.signedBody)
 		if err != nil {
 			if self.log.V(1).Enabled() {
 				self.log.Infof("[smtp]outbox %s: not sent: %v\n", hex.EncodeToString(effectKey), err)

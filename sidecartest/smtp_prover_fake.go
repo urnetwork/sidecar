@@ -475,7 +475,7 @@ func (self *fakeSmtpProverRun) run(ctx context.Context, conn net.Conn) (*sidecar
 			if err != nil {
 				return nil, err
 			}
-			if refusal == nil && refuses(i, reply) {
+			if refused := refuses(i, reply); refusal == nil && refused {
 				refusal = reply
 			}
 		}
