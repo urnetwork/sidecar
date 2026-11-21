@@ -257,7 +257,8 @@ func newBenchWorld(ctx context.Context, keysDirectory string, hostDirectory stri
 				return nil, err
 			}
 			if readiness.Done {
-				return legProver, nil
+				_, err := legProver.Measure(ctx)
+				return legProver, err
 			}
 		}
 	}

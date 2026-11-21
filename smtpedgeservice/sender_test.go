@@ -134,7 +134,7 @@ func newTestEngineSender(t *testing.T, w *edgeWorld, dialer sidecar.SmtpEdgeDial
 	prover := sidecartest.NewFakeSmtpProver(nil)
 	senderLog := &captureLogger{}
 	sender, err := sidecar.NewSmtpSender(&sidecar.SmtpSenderArgs{
-		Dialer: dialer, Prover: prover, Policy: policy, Pins: pins,
+		Dialer: dialer, Prover: prover, Measure: prover.SendMeasure, Policy: policy, Pins: pins,
 		Dkim:    sidecar.NewSmtpDkimKeys(&testEngineSecrets{values: map[string][]byte{}}, testEnginePublisher{}, settings, w.clock, nil),
 		Mailbox: sidecartest.NewFakeSmtpMailbox(nil), Settings: settings, Clock: w.clock, Log: senderLog,
 	})
@@ -253,7 +253,7 @@ func TestSmtpSenderThroughTheEngine(t *testing.T) {
 	prover := sidecartest.NewFakeSmtpProver(nil)
 	senderLog := &captureLogger{}
 	sender, err := sidecar.NewSmtpSender(&sidecar.SmtpSenderArgs{
-		Dialer: dialer, Prover: prover, Policy: policy, Pins: pins,
+		Dialer: dialer, Prover: prover, Measure: prover.SendMeasure, Policy: policy, Pins: pins,
 		Dkim:    sidecar.NewSmtpDkimKeys(&testEngineSecrets{values: map[string][]byte{}}, testEnginePublisher{}, settings, w.clock, nil),
 		Mailbox: mailbox, Settings: settings, Clock: w.clock, Log: senderLog,
 	})

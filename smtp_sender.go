@@ -90,8 +90,8 @@ type SmtpSenderArgs struct {
 	// Whether a sidecar is one of the mailbox owner's consented devices (§8.5; owner decision 126), whose p/ records
 	// alone Check reads; nil counts none.
 	MemberDevice func(sidecarId Id) bool
-	// The host's last measure (SmtpProverHost.Measure), for Check's cap and delay and too_large's cap; nil
-	// reads none.
+	// The host's current completed measure (SmtpProverHost.Measure). Until it exists Send only queues
+	// and Check uses the member's prover hosts. A measured cap of zero still admits BDAT.
 	Measure func() *SmtpProverMeasure
 	// The key sets the host's last PrepareKeys reported ready, newest first, which KEYS falls back on; nil
 	// reads none.
@@ -434,14 +434,9 @@ func (self *SmtpSender) Send(ctx context.Context, message *SmtpOutboundMessage) 
 	stopClose := context.AfterFunc(self.ctx, cancel)
 	defer stopClose()
 
-	if self.args.Prover == nil || len(self.args.Prover.KeySet()) == 0 {
-		// a host with no ready key set only queues: its outbox entry waits for a prover host (D-SMTP-18)
-		result := &SmtpSendResult{EffectKey: bytes.Clone(message.EffectKey)}
-		now := self.clock.Now()
-		for _, domainPlan := range plan.domains {
-			result.Domains = append(result.Domains, &SmtpDomainOutcome{Domain: domainPlan.domain, Outcome: SmtpOutcomeQueued, UpdateTime: now})
-		}
-		return result, nil
+	if self.localMeasure() == nil {
+		// Its outbox entry waits for a host with a ready measured family (D-SMTP-18, QD-483).
+		return self.currentResult(ctx, plan)
 	}
 
 	earlierOutcomes, err := self.args.Mailbox.ReadOutcomes(ctx, message.EffectKey)
@@ -546,15 +541,12 @@ func (self *SmtpSender) keySets() [][]byte {
 	return keySets
 }
 
-// The DATA cap the host's last measure records, 0 when none.
-func (self *SmtpSender) dataProofByteCount() uint64 {
-	if self.args.Measure == nil {
-		return 0
+// A local send needs both a ready key set and its measurement. A zero DATA cap is a completed measurement.
+func (self *SmtpSender) localMeasure() *SmtpProverMeasure {
+	if self.args.Prover == nil || len(self.args.Prover.KeySet()) == 0 || self.args.Measure == nil {
+		return nil
 	}
-	if measure := self.args.Measure(); measure != nil {
-		return measure.DataProofBytes
-	}
-	return 0
+	return self.args.Measure()
 }
 
 // Waits for a proving slot, and the prover host's hold, until ctx ends.
@@ -563,6 +555,12 @@ func (self *SmtpSender) takeProvingSlot(ctx context.Context) (release func(), er
 	case self.proving <- struct{}{}:
 	case <-ctx.Done():
 		return nil, ctx.Err()
+	}
+	// Key preparation can advance while a domain waits for its slot. An unmeasured domain must
+	// leave the idle measurement running so a later pass can send.
+	if self.localMeasure() == nil {
+		<-self.proving
+		return nil, ErrSmtpProverUnmeasured
 	}
 	releaseHold := func() {}
 	if self.args.SendHold != nil {
@@ -644,17 +642,22 @@ func (self *SmtpSender) sendDomain(ctx context.Context, plan *smtpSendPlan, doma
 	if err != nil {
 		return scheduled("")
 	}
-	keySets := self.keySets()
-	if len(keySets) == 0 {
+	release, err := self.takeProvingSlot(ctx)
+	if errors.Is(err, ErrSmtpProverUnmeasured) {
 		outcome.Outcome = SmtpOutcomeQueued
 		outcome.UpdateTime = self.clock.Now()
 		return outcome
 	}
-	release, err := self.takeProvingSlot(ctx)
 	if err != nil {
 		return scheduled("")
 	}
 	defer release()
+	keySets := self.keySets()
+	if len(keySets) == 0 || self.localMeasure() == nil {
+		outcome.Outcome = SmtpOutcomeQueued
+		outcome.UpdateTime = self.clock.Now()
+		return outcome
+	}
 	// the envelope as the edge derives it now, read once the slot is held so no wait for it can stale the read
 	sender := message.Sender
 	if self.args.Envelope != nil {
@@ -772,13 +775,16 @@ func (self *SmtpSender) sendDomain(ctx context.Context, plan *smtpSendPlan, doma
 			return scheduled("")
 		}
 		switch {
+		case proof.RequireTlsMissing:
+			return end(SmtpOutcomeTlsRefused, &SmtpDsn{
+				Outcome:    SmtpOutcomeTlsRefused,
+				Recipients: self.dsnRecipients(pending, smtpDsnStatusRequireTlsMissing, 0),
+				Reason:     "The receiving mail server did not advertise REQUIRETLS after TLS was established.",
+			})
 		case proof.TooLarge:
 			byteCount, _ := plan.wire.ByteCount(SmtpModeData)
 			outcome.ByteCount = byteCount
 			outcome.CapByteCount = proof.DataProofByteCount
-			if outcome.CapByteCount == 0 {
-				outcome.CapByteCount = self.dataProofByteCount()
-			}
 			return end(SmtpOutcomeTooLarge, &SmtpDsn{
 				Outcome:      SmtpOutcomeTooLarge,
 				Recipients:   self.dsnRecipients(pending, smtpDsnStatusTooLarge, 0),

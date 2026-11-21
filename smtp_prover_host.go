@@ -108,8 +108,8 @@ type SmtpProverHostArgs struct {
 // ready or refused, and once each step after, so what moved since is seen; then
 // SmtpProver.Measure when a family has become ready, when the key set changes, and each ProverMeasureInterval;
 // and p/<sidecar_id> rewritten after each measure, with the key set and its ready suites. A host with no ready
-// family, or whose Measure fails, records no p/ and only queues. A send's HoldForSend cancels the idle work at once
-// and keeps it off until the send ends, so a send never waits on a shape check. Safe for concurrent use.
+// family, or whose Measure fails, only queues. Once measured, a send's HoldForSend cancels idle work and keeps it
+// off until the send ends, so a send never waits on a shape check. Safe for concurrent use.
 type SmtpProverHost struct {
 	args     *SmtpProverHostArgs
 	settings *SmtpSenderSettings
@@ -142,13 +142,14 @@ func NewSmtpProverHost(args *SmtpProverHostArgs) (*SmtpProverHost, error) {
 	return &SmtpProverHost{args: args, settings: args.Settings, clock: clockOrReal(args.Clock), log: log, released: make(chan struct{})}, nil
 }
 
-// Holds the host for a send: idle work stops at once and starts again only after release, which may be called more
-// than once.
+// Holds the host for a send. A hold racing the first measurement of newly ready keys lets that measurement
+// finish. Other idle work stops until release, which may be called more than once.
 func (self *SmtpProverHost) HoldForSend() (release func()) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.sendCount += 1
-	if self.idleCancel != nil {
+	awaitingMeasure := self.measure == nil && self.readiness != nil && len(self.readiness.KeySets) != 0
+	if self.idleCancel != nil && !awaitingMeasure {
 		self.idleCancel()
 	}
 	var once sync.Once
@@ -176,12 +177,12 @@ func (self *SmtpProverHost) Measure() *SmtpProverMeasure {
 	return &measure
 }
 
-// The key sets the last PrepareKeys reported ready, newest first.
+// The ready key sets a measured host can use, newest first.
 func (self *SmtpProverHost) ReadyKeySets() [][]byte {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	keySets := [][]byte{}
-	if self.readiness != nil {
+	if self.measure != nil {
 		for _, keySet := range self.readiness.KeySets {
 			keySets = append(keySets, bytes.Clone(keySet.Id))
 		}
@@ -220,9 +221,7 @@ func (self *SmtpProverHost) measureDueWithLock(now time.Time) bool {
 	if self.readiness == nil || len(self.readiness.KeySets) == 0 {
 		return false
 	}
-	newest := self.readiness.KeySets[0]
-	return self.measure == nil || !bytes.Equal(newest.Id, self.measuredKeySet) || !slices.Equal(newest.ReadySuites, self.measuredSuites) ||
-		!now.Before(self.measure.MeasureTime.Add(self.settings.ProverMeasureInterval))
+	return self.measure == nil || !now.Before(self.measure.MeasureTime.Add(self.settings.ProverMeasureInterval))
 }
 
 // One idle step to its end, unless a send starts: see SmtpProverHost. An error is the prover's or the mailbox's, or
@@ -247,6 +246,10 @@ func (self *SmtpProverHost) Idle(ctx context.Context) error {
 			self.stateLock.Lock()
 			defer self.stateLock.Unlock()
 			self.readiness = readiness
+			if len(readiness.KeySets) == 0 || !bytes.Equal(readiness.KeySets[0].Id, self.measuredKeySet) ||
+				!slices.Equal(readiness.KeySets[0].ReadySuites, self.measuredSuites) {
+				self.measure = nil
+			}
 		}()
 		if readiness.Done || 0 < len(readiness.KeySets) {
 			// a family is ready: measure it before checking further shapes, so the host can send meanwhile
@@ -267,7 +270,11 @@ func (self *SmtpProverHost) Idle(ctx context.Context) error {
 	}
 	measure, err := self.args.Prover.Measure(idleCtx)
 	if err != nil {
-		// no p/: the host only queues until a measure finishes (QD-483)
+		if idleCtx.Err() == nil {
+			self.stateLock.Lock()
+			self.measure = nil
+			self.stateLock.Unlock()
+		}
 		return err
 	}
 	func() {
@@ -278,9 +285,7 @@ func (self *SmtpProverHost) Idle(ctx context.Context) error {
 		self.measuredSuites = suites
 	}()
 	return self.args.Mailbox.WriteProverRecord(idleCtx, self.args.SidecarId, &SmtpProverRecord{
-		Measure:     *measure,
-		KeySet:      keySet,
-		ReadySuites: suites,
+		Measure: *measure, KeySet: keySet, ReadySuites: suites,
 	})
 }
 
