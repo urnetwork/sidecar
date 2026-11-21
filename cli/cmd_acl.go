@@ -511,7 +511,7 @@ func runUrAclPush(ctx context.Context, cli *urCli, path string) error {
 		return fmt.Errorf("nothing saved: %w", err)
 	}
 	if plan.PreviewOnly {
-		return errors.New("saving this preview requires a writable config ref on this device")
+		return errors.New("saving this preview requires a writable config ref that supports signed exact-head commits")
 	}
 	confirmed, err := confirmOnTty(cli, "sign and save this policy as the network's?")
 	if err != nil {
