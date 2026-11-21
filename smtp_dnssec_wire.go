@@ -30,7 +30,9 @@ const (
 	smtpDnsTypeNs     uint16 = 2
 	smtpDnsTypeCname  uint16 = 5
 	smtpDnsTypeSoa    uint16 = 6
+	smtpDnsTypePtr    uint16 = 12
 	smtpDnsTypeMx     uint16 = 15
+	smtpDnsTypeAaaa   uint16 = 28
 	smtpDnsTypeDname  uint16 = 39
 	smtpDnsTypeDs     uint16 = 43
 	smtpDnsTypeRrsig  uint16 = 46
@@ -408,14 +410,14 @@ func parseSmtpDnsTlsa(rdata []byte) (*SmtpTlsaRecord, error) {
 	return &SmtpTlsaRecord{Usage: rdata[0], Selector: rdata[1], MatchingType: rdata[2], Data: bytes.Clone(rdata[3:])}, nil
 }
 
-// The rdata as RFC 4034 §6.2 signs it: names inside an MX and a CNAME lowercased, every other type as
+// The rdata as RFC 4034 §6.2 signs it: names inside an MX, CNAME or PTR lowercased, every other type as
 // sent (RFC 6840 §5.1 leaves NSEC's next name as it is).
 func (self *smtpDnsRr) canonicalRdata() []byte {
 	switch self.rrtype {
 	case smtpDnsTypeMx:
 		exchange, _ := parseSmtpDnsMx(self.rdata)
 		return append(append([]byte{}, self.rdata[:2]...), exchange...)
-	case smtpDnsTypeCname:
+	case smtpDnsTypeCname, smtpDnsTypePtr:
 		target, _ := parseSmtpDnsCname(self.rdata)
 		return []byte(target)
 	}
@@ -425,6 +427,11 @@ func (self *smtpDnsRr) canonicalRdata() []byte {
 // Reads every record of a chain, at most maxRrCount of them, refusing a type or class outside what a
 // chain to the root holds and any rdata that does not parse as its type.
 func parseSmtpDnsRrs(chain []byte, maxRrCount int) ([]*smtpDnsRr, error) {
+	return parseSmtpLookupRrs(chain, maxRrCount, 0)
+}
+
+// Also accepts the requested local lookup type at the edge.
+func parseSmtpLookupRrs(chain []byte, maxRrCount int, extraType uint16) ([]*smtpDnsRr, error) {
 	var rrs []*smtpDnsRr
 	for offset := 0; offset < len(chain); {
 		if maxRrCount <= len(rrs) {
@@ -466,7 +473,14 @@ func parseSmtpDnsRrs(chain []byte, maxRrCount int) ([]*smtpDnsRr, error) {
 		case smtpDnsTypeTlsa:
 			_, err = parseSmtpDnsTlsa(rr.rdata)
 		default:
-			err = fmt.Errorf("%w: a record of type %d", ErrSmtpDnssecBogus, rrtype)
+			switch {
+			case rrtype == extraType && rrtype == smtpDnsTypeA && len(rr.rdata) == 4:
+			case rrtype == extraType && rrtype == smtpDnsTypeAaaa && len(rr.rdata) == 16:
+			case rrtype == extraType && rrtype == smtpDnsTypePtr:
+				_, err = parseSmtpDnsCname(rr.rdata)
+			default:
+				err = fmt.Errorf("%w: a record of type %d", ErrSmtpDnssecBogus, rrtype)
+			}
 		}
 		if err != nil {
 			return nil, err
