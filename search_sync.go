@@ -271,10 +271,13 @@ type SearchSync struct {
 	stateLock sync.Mutex
 	refs      map[[2]Id]*searchSyncRef
 	hints     map[Id]*searchSyncHints
-	closed    bool
-	wake      chan struct{}
-	cancel    context.CancelFunc
-	done      chan struct{}
+	// A repo's open queries, including completed cursors whose hit references still live.
+	repoEnds         map[Id]chan struct{}
+	removeDeleteHook func()
+	closed           bool
+	wake             chan struct{}
+	cancel           context.CancelFunc
+	done             chan struct{}
 }
 
 // An engine over args. Nothing runs until Start, or a caller's RunDue.
@@ -296,12 +299,19 @@ func newSearchSync(args *searchSyncArgs) (*SearchSync, error) {
 	if copied.events == nil {
 		copied.events = func(SidecarEvent) {}
 	}
-	return &SearchSync{
-		args:  &copied,
-		refs:  map[[2]Id]*searchSyncRef{},
-		hints: map[Id]*searchSyncHints{},
-		wake:  make(chan struct{}, 1),
-	}, nil
+	engine := &SearchSync{
+		args:     &copied,
+		refs:     map[[2]Id]*searchSyncRef{},
+		hints:    map[Id]*searchSyncHints{},
+		repoEnds: map[Id]chan struct{}{},
+		wake:     make(chan struct{}, 1),
+	}
+	remove, err := copied.cache.AddDeleteHooks(&SearchDeleteHooks{EndRepo: engine.EndRepo})
+	if err != nil {
+		return nil, err
+	}
+	engine.removeDeleteHook = remove
+	return engine, nil
 }
 
 // Follows a ref for search: its rounds start at the next trigger. An index root in a config, mailcfg or secret repo is
@@ -577,6 +587,10 @@ func (self *SearchSync) Close() {
 		return
 	}
 	self.closed = true
+	for repoId, end := range self.repoEnds {
+		close(end)
+		delete(self.repoEnds, repoId)
+	}
 	cancel, done := self.cancel, self.done
 	snapshots := []*SearchSyncSnapshot{}
 	for _, ref := range self.refs {
@@ -585,6 +599,7 @@ func (self *SearchSync) Close() {
 		}
 	}
 	self.stateLock.Unlock()
+	self.removeDeleteHook()
 	if cancel != nil {
 		cancel()
 		<-done
@@ -1150,7 +1165,16 @@ func (self *SearchSync) Snapshot(repoId Id, refId Id) (*SearchSyncSnapshot, erro
 			snapshot.end()
 			return nil, err
 		}
-		snapshot.versions = versions
+		self.stateLock.Lock()
+		stillOpen := ref.open[snapshot]
+		if stillOpen {
+			snapshot.versions = versions
+		}
+		self.stateLock.Unlock()
+		if !stillOpen {
+			versions.Close()
+			return nil, ErrSearchCursorExpired
+		}
 	}
 	return snapshot, nil
 }
@@ -1224,10 +1248,30 @@ func (self *SearchSync) dropAndReset(repoId *Id, drop func() error) error {
 	return err
 }
 
+// A query takes this before reading a repo. It outlives the path reads of a completed cursor.
+func (self *SearchSync) repoEnd(repoId Id) <-chan struct{} {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if end := self.repoEnds[repoId]; end != nil {
+		return end
+	}
+	end := make(chan struct{})
+	if self.closed {
+		close(end)
+	} else {
+		self.repoEnds[repoId] = end
+	}
+	return end
+}
+
 // Ends every open snapshot of the repo, releasing what it held: CORE-M10-04's ApplyErase, ApplyCut and an executed
 // drop call it before they return, so the files an erasure replaced go at once (§16.10's pages row).
 func (self *SearchSync) EndRepo(repoId Id) {
 	self.stateLock.Lock()
+	if end := self.repoEnds[repoId]; end != nil {
+		close(end)
+		delete(self.repoEnds, repoId)
+	}
 	snapshots := []*SearchSyncSnapshot{}
 	for key, ref := range self.refs {
 		if key[0] != repoId {
@@ -1251,8 +1295,41 @@ type SearchSyncSnapshot struct {
 	manifest  *SearchManifest
 	versions  *SearchVersionSnapshot
 	allUsable bool
-	once      sync.Once
-	ended     chan struct{}
+	// Cold shards handed to the page and still needed for lazy ranking, guarded by sync.stateLock.
+	landed map[SearchCacheKey]bool
+	once   sync.Once
+	ended  chan struct{}
+}
+
+// A cold shard has to survive the download's cache-cap decision and retirement until its page ranks it.
+func (self *SearchSyncSnapshot) holdLanded(key SearchCacheKey) error {
+	self.sync.stateLock.Lock()
+	defer self.sync.stateLock.Unlock()
+	if !self.ref.open[self] {
+		return ErrSearchCursorExpired
+	}
+	if self.landed == nil {
+		self.landed = map[SearchCacheKey]bool{}
+	}
+	self.landed[key] = true
+	return nil
+}
+
+func (self *SearchSyncSnapshot) releaseLanded(key SearchCacheKey) {
+	self.sync.stateLock.Lock()
+	delete(self.landed, key)
+	self.sync.stateLock.Unlock()
+	self.retireReleased()
+}
+
+func (self *SearchSyncSnapshot) retireReleased() {
+	// A round owns retirement while it holds the ref. Otherwise release what no manifest or page still names.
+	if self.ref.roundLock.TryLock() {
+		defer self.ref.roundLock.Unlock()
+		if err := self.sync.retire(self.ref); err != nil {
+			self.sync.args.log.Warningf("[search]files a released snapshot held were not retired: %s", err)
+		}
+	}
 }
 
 // The index ref's version the snapshot's latest set is whole at.
@@ -1349,20 +1426,15 @@ func (self *SearchSyncSnapshot) Release() {
 // Ends and releases the snapshot once.
 func (self *SearchSyncSnapshot) end() {
 	self.once.Do(func() {
-		close(self.ended)
-		if self.versions != nil {
-			self.versions.Close()
-		}
 		engine := self.sync
 		engine.stateLock.Lock()
+		close(self.ended)
 		delete(self.ref.open, self)
+		versions := self.versions
 		engine.stateLock.Unlock()
-		// files this snapshot alone held go now, unless a round is retiring them itself
-		if self.ref.roundLock.TryLock() {
-			defer self.ref.roundLock.Unlock()
-			if err := engine.retire(self.ref); err != nil {
-				engine.args.log.Warningf("[search]files a released snapshot held were not retired: %s", err)
-			}
+		if versions != nil {
+			versions.Close()
 		}
+		self.retireReleased()
 	})
 }

@@ -516,7 +516,12 @@ func (self *TlsCustomDomainOrderer) accountKey(ctx context.Context, account *Tls
 // acme name; "" for none (17.2.9).
 func (self *TlsCustomDomainOrderer) challengePath(ctx context.Context, account *TlsCustomAccount, row *TlsCertRecord) string {
 	if row.HostReady && self.deps.Alpn != nil && self.deps.Devices.Holds443(row.Owner) {
-		return TlsAcmeChallengeTlsAlpn
+		local, live := self.deps.Alpn.(interface {
+			CanServe(ctx context.Context, host, owner string) bool
+		})
+		if !live || local.CanServe(ctx, row.CustomHost, row.Owner) {
+			return TlsAcmeChallengeTlsAlpn
+		}
 	}
 	if self.deps.Resolver != nil && account.AcmeName != "" {
 		target, err := self.deps.Resolver.LookupCname(ctx, tlsCustomAcmeChallengeLabel+row.CustomHost)
@@ -1684,12 +1689,24 @@ var tlsCustomPublishPorts = []int{443, 8443, 8883, 5671}
 // Whether sidecarId holds an active approved publish grant on tls/<port>/<ownerLabel> for one of ports, in either
 // mode.
 func (self *sidecarTlsCustomDevices) granted(sidecarId Id, ownerLabel string, ports []int) bool {
-	state := self.state()
+	return tlsDevicePublishGrant(self.state(), sidecarId, ownerLabel, ports, self.sidecar.clock.Now())
+}
+
+func tlsDevicePublishGrant(state *AclState, sidecarId Id, ownerLabel string, ports []int, now time.Time) bool {
 	if state == nil || ownerLabel == "" {
 		return false
 	}
-	now := self.sidecar.clock.Now()
 	subject := AclSubject{Kind: AclSubjectSidecar, Id: sidecarId}
+	if _, label, scoped := strings.Cut(ownerLabel, "."); scoped {
+		config, ok := state.View().(*ConfigState)
+		if !ok {
+			return false
+		}
+		scope, declared := config.TeamScope(label)
+		if !declared || !state.MayPublishInScope(subject, ownerLabel, scope, now).Allowed {
+			return false
+		}
+	}
 	for _, port := range ports {
 		socketName := "tls/" + strconv.Itoa(port) + "/" + ownerLabel
 		for _, appMode := range []protocol.AclAppMode{protocol.AclAppMode_ACL_APP_MODE_HTTP, protocol.AclAppMode_ACL_APP_MODE_RAW} {
@@ -1810,7 +1827,7 @@ func (self *sidecarTlsCustomDevices) secretRepo() *TlsCustomSecretRepo {
 // service token for aud certs, its own verified view of the network's devices and grants, each key file's local copy
 // beside the device key, the network's root from its zone, its clock, and its local alarms, which it logs. The host
 // gives the CA (cli/'s acmez client), the resolver and the secret repos' key files (cli/'s evs), so no sdk leg links
-// them; the TLS-ALPN-01 path stays nil, DNS-01 alone, until the front serves a challenge. ErrTlsCertsUnconfigured with
+// them. The TLS-ALPN-01 path uses this device's active listener for the exact mapped owner. ErrTlsCertsUnconfigured with
 // no certs audience configured, as for the device's own orders.
 func (self *Sidecar) TlsCustomOrdererDeps(ctx context.Context, acme TlsAcmeClient, resolver TlsCustomResolver, files TlsCustomRepoFiles) (*TlsCustomDomainOrdererDeps, TlsCustomKeyRepos, error) {
 	if acme == nil || resolver == nil || files == nil {
@@ -1836,6 +1853,7 @@ func (self *Sidecar) TlsCustomOrdererDeps(ctx context.Context, acme TlsAcmeClien
 		}),
 		Acme:     acme,
 		Resolver: resolver,
+		Alpn:     &sidecarTlsCustomAlpn{sidecar: self, claims: map[string]*tlsDesktopChallenge{}},
 		Devices:  devices,
 		Keys:     &sidecarTlsCustomKeyStore{files: files, secrets: self.instance.secrets(*networkId, tlsSecretsNamespace)},
 		Roots:    []string{names.Root},

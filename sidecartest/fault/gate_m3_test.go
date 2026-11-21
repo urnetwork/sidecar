@@ -23,7 +23,7 @@ func TestGateM3NamesEachRowsTestsWhereTheyRun(t *testing.T) {
 	file := parseGateFileForTest(t, data)
 	named := map[string][]string{
 		"FS-25":  {"TestFs25", "TestFs25GateResponseLostAfterCommit", "TestFs25TwoApiInstancesRacing", "TestFs25TwoUsesThreeActions", "TestFs25CancelThroughTheRouteRefusesTheRest"},
-		"FS-41":  {"TestFs41SiteLossThroughTheCloseOnT3", "TestFileClusterReseedStorageLossesOnT3", "TestAdoptConfigRunTakesNoPositionOneMemberHoldsAlone", "TestEvsReseedKeepsAnErasedKeyOutOfAStaleMirrorsSlotEndToEnd", "TestAVaultReformedByItsOwnersDeviceKeepsEveryReader", "TestACodeOnlyDeviceReadsOnlyItsWrapsBeforeAdmission"},
+		"FS-41":  {"TestFs41SiteLossThroughTheCloseOnT3", "TestSiteCloseWithRestrictedUsersAcrossMetadataClusters", "TestFileClusterReseedStorageLossesOnT3", "TestAdoptConfigRunTakesNoPositionOneMemberHoldsAlone", "TestEvsReseedKeepsAnErasedKeyOutOfAStaleMirrorsSlotEndToEnd", "TestAVaultReformedByItsOwnersDeviceKeepsEveryReader", "TestACodeOnlyDeviceReadsOnlyItsWrapsBeforeAdmission"},
 		"FS-42":  {"TestFs42MainDumpOlder", "TestFs42MainDumpNewer"},
 		"FS-50":  {"TestPageClassAt0200PagesTheSecondPersonAt30MinutesNotBefore", "TestFileClusterPageConditionsAt0200ReachThePager", "TestPostgresPrimaryDownPages"},
 		"FS-98":  {"TestFs98Cli", "TestFs98CliOnT3"},

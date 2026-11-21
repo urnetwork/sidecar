@@ -22,6 +22,10 @@ import (
 
 	"github.com/emersion/go-sasl"
 	"github.com/emersion/go-smtp"
+	"google.golang.org/protobuf/proto"
+
+	"github.com/urnetwork/sidecar/protocol"
+	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 // The network's client world behind one submission server, its credential made, on a clock the test moves.
@@ -229,7 +233,7 @@ func TestMailSubmissionRefusesAFromOutsideItsSendGrant(t *testing.T) {
 func TestMailSubmissionHoldsAnUnapprovedRecipientUntilApproved(t *testing.T) {
 	world := newTestMailSubmissionWorld(t, nil)
 	message := testMailSubmissionMessage(testMailSendFrom, "Plans")
-	recipients := []string{testMailIngestRecipient, "someone@outside.example", "hidden@elsewhere.example"}
+	recipients := []string{testMailIngestRecipient, "Someone@outside.example", "someone@outside.example", "hidden@elsewhere.example"}
 
 	testMailSubmitHold(world.send.gate, true)
 	err := testMailSubmit(world.signedIn(), recipients, message)
@@ -267,6 +271,14 @@ func TestMailSubmissionHoldsAnUnapprovedRecipientUntilApproved(t *testing.T) {
 		t.Fatalf("%d entries", len(files))
 	}
 	for _, file := range files {
+		signed := &bridge.Signed{}
+		if err := proto.Unmarshal(file.Signed, signed); err != nil {
+			t.Fatal(err)
+		}
+		entry := &protocol.SmtpOutboxEntry{}
+		if err := proto.Unmarshal(signed.Body, entry); err != nil || !slices.Equal(entry.GetRecipients(), recipients[1:]) {
+			t.Fatalf("submitted envelope %v: %v", entry.GetRecipients(), err)
+		}
 		if bytes.Contains(file.Message, []byte("hidden@")) || !bytes.Contains(file.Message, []byte("Dinner at eight.")) {
 			t.Fatal("the queued message is not the submission's, Bcc stripped")
 		}

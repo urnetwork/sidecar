@@ -30,6 +30,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar/protocol"
+	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 // The evs component.
@@ -205,83 +206,49 @@ func (self *EvsComponent) tickRef(ctx context.Context, repoId Id, refId Id) {
 	}
 }
 
-// The args an EvsClient takes from this Sidecar for the network it is enrolled in: the service url, SidecarApi's
-// transport, ServiceToken and ForgetServiceToken, Sign, the identity, the evs component's sealed directory, events,
-// the clock, the log, settings.Evs, the team directory's hooks around a create (§16.11's default and private rows,
-// QD-748), and SignProvenance with settings.AgentSubkeys, so the agent's subkey in this network's keychain.ur signs a
-// push made for its agent_id and a reader holds certificates to this sidecar's bound (evs_provenance.go; owner decision
-// 470). gkm, the verified config state and the statement poster are the caller's, from KEYS, TEAM and CORE-M2-02 as
-// each lands.
-func (self *Sidecar) EvsClientArgs(gkm GkmClient, config EvsConfigFunction, fileStatement EvsFileStatementFunction) (*EvsClientArgs, error) {
-	networkId := self.enrolledNetworkId()
-	if networkId == nil {
-		return nil, fmt.Errorf("%w: evs needs an enrolled network", errInvalidSettings)
-	}
-	store, err := self.instance.Store(networkId).Directory(evsComponentName, evsComponentName)
-	if err != nil {
-		return nil, err
-	}
-	return &EvsClientArgs{
-		NetworkId:          *networkId,
-		EvsUrl:             self.settings.EvsUrl,
-		Transport:          self.sidecarApi.Transport(),
-		ServiceToken:       self.ServiceToken,
-		ForgetServiceToken: self.ForgetServiceToken,
-		Sign:               self.Sign,
-		Identity:           self.currentIdentity,
-		Gkm:                gkm,
-		Store:              store,
-		Config:             config,
-		FileStatement:      fileStatement,
-		Emit:               self.emitEvent,
-		Clock:              self.clock,
-		Log:                self.log,
-		Settings:           self.settings.Evs,
-		RepoCreated:        self.announceCreatedRepo,
-		PrivateCreate:      self.readyPrivateRepo,
-		ConfigFollow:       self.evsConfigFollow,
-		SignProvenance:     self.SignProvenance,
-		AgentSubkeys:       self.settings.AgentSubkeys,
-	}, nil
+// Installs the local application's presence prompt for acts whose verified policy requires it.
+func (self *MemberReplica) SetPresenceCheck(check SidecarPresenceCheck) {
+	self.presenceLock.Lock()
+	defer self.presenceLock.Unlock()
+	self.presence = check
 }
 
-// EvsClientArgs.ConfigFollow: one follow of the network's authorization log through the config follower's client
-// (ConfigClient.CatchUp, within its FollowTimeout). Nothing where no follower stands yet, which follows on its own.
-func (self *Sidecar) evsConfigFollow(ctx context.Context) error {
-	follower := self.ConfigFollower()
-	if follower == nil {
-		return nil
+// A native lifecycle call files the signed act at the installed authority, then waits for the
+// following client to observe it before the EVS route or a subsequent create step consumes it.
+func (self *MemberReplica) setStatementPoster(args *EvsClientArgs) {
+	args.FileStatement = func(ctx context.Context, kind bridge.SignedType, body proto.Message) error {
+		client := self.Config()
+		if client == nil {
+			return ErrEvsNoConfig
+		}
+		act, err := self.running.newAct(SidecarActConfirmed)
+		if err != nil {
+			return err
+		}
+		if err := act.Add(kind, body); err != nil {
+			return err
+		}
+		self.presenceLock.Lock()
+		check := self.presence
+		self.presenceLock.Unlock()
+		pins, err := act.Run(ctx, check)
+		if err != nil {
+			return err
+		}
+		if len(pins) == 0 {
+			return ErrSidecarActState
+		}
+		if err := client.CatchUp(ctx); err != nil {
+			return err
+		}
+		_, err = client.WaitFor(ctx, pins[len(pins)-1].GetVersion())
+		return err
 	}
-	client := follower.Client()
-	if client == nil {
-		return nil
-	}
-	return client.CatchUp(ctx)
 }
 
-// What EnablePrefixRules takes from this Sidecar (DESIGN-DETAILS 16.2.5, 16.2.7): the config follower's head reader,
-// which opens a set whose entry this device no longer keeps, and its AclEngine's AllowPrefixWrite, the writer's local
-// refusal. With no follower standing no set is opened that way and every write to a ruled repo is refused pending.
-func (self *Sidecar) EvsPrefixRulesArgs() *EvsPrefixRulesArgs {
-	return &EvsPrefixRulesArgs{
-		Heads: func() ConfigHeadReader {
-			follower := self.ConfigFollower()
-			if follower == nil {
-				return nil
-			}
-			return follower.Heads()
-		},
-		AllowWrite: func(write *AclPrefixWrite) AclPrefixWriteDecision {
-			var engine *AclEngine
-			if follower := self.ConfigFollower(); follower != nil {
-				engine = follower.AclEngine()
-			}
-			if engine == nil {
-				return AclPrefixWriteDecision{AclDecision: AclDecision{Reason: AclReasonNoState}, Line: AclPrefixReasonPending, Detail: AclPrefixDetailPending}
-			}
-			return engine.AllowPrefixWrite(write)
-		},
-	}
+// A native host can file the protected private marker when a repo is created.
+func (self *Sidecar) setMemberEvsHooks(args *EvsClientArgs) {
+	args.PrivateCreate = self.readyPrivateRepo
 }
 
 // What a prefix rule subject's text is read against: the verified state's members and rows, and the names the

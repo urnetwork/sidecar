@@ -211,6 +211,8 @@ type DnsApiDeps struct {
 	// as running and every verdict as missing, so ready answers canary_failing: both the closed
 	// direction (plan-DNS-running-ns, plan-DNS-canary-route-state).
 	ReadyStore DnsReadyStore
+	// Probes the persisted verdicts and synchronizes the nameserver inventory with dns.yml.
+	ProbeReadiness func(ctx context.Context, root string, names []string) error
 	// Reads an NS's SOA over TCP for GET ready. nil reads every NS as not answering, so ready holds and
 	// answers waiting.
 	SoaReader DnsSoaReader
@@ -227,8 +229,7 @@ type DnsApiDeps struct {
 	// stays pending: the closed direction.
 	CustomHostMaps DnsCustomHostMapStore
 	// dns_canary_verdict, where the monitors' reports go (DNS-M5-17). nil answers every report 503 and
-	// keeps no verdict, so ready answers canary_failing: plan-DNS-canary-route-state's interim until the
-	// table's §2.8 row lands.
+	// keeps no verdict, so ready answers canary_failing.
 	CanaryVerdicts DnsCanaryVerdictStore
 	// §12.8's record write and GET /dns/zone's read through the model (DNS-M5-12). nil answers both 503.
 	Records DnsRecordStore
@@ -347,16 +348,6 @@ func (self *DnsApi) guard(route *dnsApiRoute) http.HandlerFunc {
 			if request = self.authenticateServiceToken(writer, request); request == nil {
 				return
 			}
-			// sidecar.yml's dns gate admits networks one by one (preview_networks and the percent)
-			principal, _ := dnsRequestPrincipal(request)
-			gates := self.host.GatesOrClosed()
-			if !gates.Service(sidecar.ServiceGateDns).Admits(principal.NetworkId) {
-				self.metrics.refused.Add(1, dnsApiRefusedGate)
-				retryAfter := int(math.Ceil(gates.RetryAfter().Seconds()))
-				writer.Header().Set("Retry-After", strconv.Itoa(max(retryAfter, 1)))
-				http.Error(writer, "service unavailable", http.StatusServiceUnavailable)
-				return
-			}
 			self.serveGated(route, writer, request)
 			return
 		}
@@ -413,6 +404,11 @@ func (self *DnsApi) run() {
 				defer stop()
 				if err := self.store.EnsureRoot(ctx, root); err != nil {
 					return err
+				}
+				if self.deps.ProbeReadiness != nil {
+					if err := self.deps.ProbeReadiness(ctx, root, self.settings.Ns); err != nil {
+						return err
+					}
 				}
 				_, err := self.store.RootState(ctx, root)
 				return err

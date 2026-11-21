@@ -72,7 +72,15 @@ func (self *RelationKeySet) NewProver(settings *ProverSettings) sidecar.SmtpProv
 	if settings == nil {
 		settings = DefaultProverSettings()
 	}
-	return &relationProver{prover: &Prover{settings: settings, backend: self.backend}, keySet: bytes.Clone(self.id)}
+	// The relation fixture has no proving keys to time. Its ordinary sends use a synthetic reference cap.
+	cap := settings.DataProofBytes
+	if cap == 0 {
+		cap = 1024 * 1024
+	}
+	prover := &Prover{settings: settings, backend: self.backend, measured: &proverMeasured{
+		measure: sidecar.SmtpProverMeasure{DataProofBytes: uint64(cap)},
+	}}
+	return &relationProver{prover: prover, keySet: bytes.Clone(self.id)}
 }
 
 // Every part the set's verifier refused, in order.

@@ -114,7 +114,7 @@ func (self *GkmGroupClient) SyncRepo(ctx context.Context, repoId Id) error {
 	manager := self.manager(repoId)
 	manager.flowLock.Lock()
 	defer manager.flowLock.Unlock()
-	state, err := self.currentState()
+	state, err := self.keyState(repoId)
 	if err != nil {
 		return err
 	}
@@ -132,6 +132,15 @@ func (self *GkmGroupClient) SyncRepo(ctx context.Context, repoId Id) error {
 	// a ReformResumeInterval; one gkm refuses, repo/ not active yet, leaves the sync to go on in the group it holds
 	if err := manager.resumeReformInFlow(ctx, state); err != nil && self.log.V(1).Enabled() {
 		self.log.Infof("[gkm]the re-form did not finish: %v", err)
+	}
+	if self.args.Mls == nil {
+		if err := manager.takeGenerationsInFlow(ctx, state); err != nil {
+			return err
+		}
+		if pins, err := self.repoPins(repoId); err == nil {
+			manager.walkLadderForLater(ctx, state, pins.groupId)
+		}
+		return nil
 	}
 	if err := manager.takeGenerationsInFlow(ctx, state); err != nil && !errors.Is(err, ErrGkmKeyMissing) {
 		return err

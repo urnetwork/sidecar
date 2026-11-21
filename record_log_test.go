@@ -201,7 +201,7 @@ func (self *testLogWorld) reader() *testRecordDevice {
 // One process's life of a device's record, reaching witnesses through witness.
 func (self *testRecordDevice) openWith(witness sidecar.RecordLogWitness) *sidecar.SidecarRecord {
 	self.t.Helper()
-	record, err := sidecar.NewSidecarRecord(&sidecar.SidecarRecordArgs{
+	record, err := sidecar.OpenSidecarRecord(self.t.Context(), &sidecar.SidecarRecordArgs{
 		SidecarId:         self.sidecarId,
 		IdentityPublicKey: self.key.Public().(ed25519.PublicKey),
 		Store:             self.store,

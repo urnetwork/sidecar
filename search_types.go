@@ -122,6 +122,7 @@ func searchHitOf(hit *searchRankedHit) SearchHit {
 	result := SearchHit{
 		Repo:       hit.repoId,
 		Ref:        hit.refId,
+		Signer:     hit.signer,
 		Version:    hit.version,
 		Time:       time.Unix(int64(hit.timeSeconds), 0).UTC(),
 		Snippet:    hit.snippet,
@@ -132,9 +133,7 @@ func searchHitOf(hit *searchRankedHit) SearchHit {
 		result.Partition = SearchPartitionAll
 	}
 	result.PartitionName = searchPartitionName(hit.partition, hit.scanned)
-	if !hit.scanned {
-		result.DocKey = hit.key
-	}
+	result.DocKey = hit.key
 	if hit.row != nil {
 		result.Path = hit.row.locator
 		result.DocKind = int(hit.row.docKind)

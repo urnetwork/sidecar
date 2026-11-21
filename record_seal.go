@@ -135,6 +135,8 @@ type RecordSealEnv struct {
 	// crypto/rand's reader when nil. A test fixes it to seal golden entries: an entry draws, in order, its entry_id
 	// (16 bytes), key (32), salt (32) and nonce (24).
 	Random io.Reader
+	// A multi-log capture stages its entries together before installing their signed chains.
+	stage func(logId Id, build func(uint64, [sha256.Size]byte) (*RecordSealedEntry, error)) (*RecordSealedEntry, error)
 }
 
 // One entry sealed, signed and journaled (RECORD.md section 5.3), which the writer pushes or deposits as it is. A
@@ -379,7 +381,11 @@ func RecordSeal(env *RecordSealEnv, args *RecordSealArgs) (*RecordSealedEntry, e
 	sealedBody := aead.Seal(nonce, nonce, body, recordSealAad(args.LogId[:], entryId[:]))
 
 	writerSidecarId := env.Chain.WriterSidecarId()
-	return env.Chain.append(args.LogId, func(seq uint64, prev [sha256.Size]byte) (*RecordSealedEntry, error) {
+	appendEntry := env.Chain.append
+	if env.stage != nil {
+		appendEntry = env.stage
+	}
+	return appendEntry(args.LogId, func(seq uint64, prev [sha256.Size]byte) (*RecordSealedEntry, error) {
 		headerBytes, err := args.header(entryId, writerSidecarId, seq, prev, commitment)
 		if err != nil {
 			return nil, fmt.Errorf("%w: header: %v", ErrRecordSealInvalid, err)

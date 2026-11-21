@@ -8,13 +8,17 @@ package sidecar
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"io"
 	"net"
+	"net/netip"
 	"net/textproto"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 // A pipe end that reads as a TCP connection from a sender's address.
@@ -156,4 +160,90 @@ func TestMailDirectListenerCapsAnswer421(t *testing.T) {
 	if _, _, err := textproto.NewConn(other).ReadResponse(220); err != nil {
 		t.Fatalf("another sender: %v", err)
 	}
+}
+
+// A public listener supplied by the test's binder. Connections use in-memory pipes.
+type mailDirectBoundTestListener struct {
+	endpoint string
+	conns    chan net.Conn
+	closed   chan struct{}
+	once     sync.Once
+}
+
+func (self *mailDirectBoundTestListener) Accept() (net.Conn, error) {
+	select {
+	case conn := <-self.conns:
+		return conn, nil
+	case <-self.closed:
+		return nil, net.ErrClosed
+	}
+}
+
+func (self *mailDirectBoundTestListener) Close() error {
+	self.once.Do(func() { close(self.closed) })
+	return nil
+}
+
+func (self *mailDirectBoundTestListener) Addr() net.Addr {
+	return net.TCPAddrFromAddrPort(netip.MustParseAddrPort(self.endpoint))
+}
+
+// Pending receiver assignments bind their own public addresses. Removing one tears down even a conn stalled
+// before STARTTLS and keeps its sibling serving. Ending the approved listener closes the remainder.
+func TestMailDirectAssignmentsBindAndWithdrawTheirPublicListeners(t *testing.T) {
+	world := newMailSessionTestWorld(t, nil)
+	direct := newMailDirectTestListener(t, world, nil)
+	clock := newMailReceiverTestClock()
+	direct.clock = clock
+	ctx, cancel := context.WithCancel(world.ctx)
+	done := make(chan struct{})
+	defer func() { cancel(); <-done }()
+	assignments := make(chan []netip.Addr)
+	bound := make(chan *mailDirectBoundTestListener, 2)
+	interval := 37 * time.Second
+	go func() {
+		defer close(done)
+		direct.runAssigned(ctx, interval, func(ctx context.Context) []netip.Addr {
+			select {
+			case addresses := <-assignments:
+				return addresses
+			case <-ctx.Done():
+				return nil
+			}
+		}, func(_ context.Context, network string, endpoint string) (net.Listener, error) {
+			if network != "tcp" {
+				t.Errorf("listener network %q", network)
+			}
+			listener := &mailDirectBoundTestListener{endpoint: endpoint, closed: make(chan struct{}), conns: make(chan net.Conn)}
+			bound <- listener
+			return listener, nil
+		})
+	}()
+	first, second := netip.MustParseAddr("192.0.2.25"), netip.MustParseAddr("2001:db8::25")
+	assignments <- []netip.Addr{first, second}
+	one, two := <-bound, <-bound
+	if one.endpoint != "192.0.2.25:25" || two.endpoint != "[2001:db8::25]:25" {
+		t.Fatalf("direct endpoints %q %q", one.endpoint, two.endpoint)
+	}
+	sender, receiver := net.Pipe()
+	defer sender.Close()
+	one.conns <- &mailDirectTestConn{Conn: receiver, remote: &net.TCPAddr{IP: net.ParseIP("192.0.2.14"), Port: 41000}}
+	if _, _, err := textproto.NewConn(sender).ReadResponse(220); err != nil {
+		t.Fatal(err)
+	}
+	clock.awaitWaitAt(clock.Now().Add(interval))
+	clock.Advance(interval)
+	assignments <- []netip.Addr{second}
+	<-one.closed
+	if _, err := sender.Read(make([]byte, 1)); err != io.EOF {
+		t.Fatalf("withdrawn address kept a connection: %v", err)
+	}
+	clock.awaitWaitAt(clock.Now().Add(interval))
+	select {
+	case <-two.closed:
+		t.Fatal("withdrawing the first address closed the second")
+	default:
+	}
+	cancel()
+	<-two.closed
 }

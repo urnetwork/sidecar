@@ -349,18 +349,26 @@ func (self *Sidecar) MailWith(settings *MailSettings) (*MailClient, error) {
 // Binds what the client works on, replacing what was bound; what was built over the old binding is dropped and built
 // again at its next use. The component calls it as the Sidecar's pieces stand; a host may call it itself.
 func (self *MailClient) Bind(binding *MailBinding) {
+	self.bindWhen(binding, nil)
+}
+
+// A generation can decline a stale binding, or supply its sender, under the same lock that installs it.
+func (self *MailClient) bindWhen(binding *MailBinding, accept func(*MailBinding) bool) {
 	if binding == nil {
 		return
 	}
 	copied := *binding
 	var closeConfig *MailConfig
-	func() {
+	applied := func() bool {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
+		if accept != nil && !accept(&copied) {
+			return false
+		}
 		if self.binding != nil && self.binding.Evs == copied.Evs && self.binding.Engine == copied.Engine {
 			// the same repos and state: keep what is built, take the rest
 			self.binding = &copied
-			return
+			return true
 		}
 		self.binding = &copied
 		self.repos = nil
@@ -372,11 +380,12 @@ func (self *MailClient) Bind(binding *MailBinding) {
 		self.imapStores = map[Id]*MailImapStore{}
 		self.vaults = map[Id]*MailVault{}
 		self.notifyWithLock()
+		return true
 	}()
 	if closeConfig != nil {
 		closeConfig.Close()
 	}
-	if copied.Gate != nil {
+	if applied && copied.Gate != nil {
 		// so a restart reconciles a reserved send with no caller alive
 		self.registerOutboxLookup(copied.Gate)
 	}

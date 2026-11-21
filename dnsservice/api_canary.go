@@ -13,9 +13,8 @@
 //     keeps the verdict with the time it came (DnsCanaryVerdictStore), which GET ready reads by
 //     DnsCanaryClean. Not zone data, so writes: false leaves it be.
 //
-// dns_canary_verdict waits for its §2.8 row (plan-DNS-metadata-rows #7, v9), and a block with no verdict
-// store answers each report 503, keeping nothing, so ready answers canary_failing: the resolution's
-// interim, the closed direction.
+// The hosted DNS block persists each monitor's latest report in dns_canary_verdict.
+// A missing verdict store makes reports unavailable and leaves readiness waiting for a clean canary.
 
 package dnsservice
 

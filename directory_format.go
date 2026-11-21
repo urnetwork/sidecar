@@ -82,6 +82,18 @@ const (
 	DirectoryRepoEntryStepByteCount = 2 * 1024
 )
 
+// Cards and repo files are charged in 2 KiB storage steps (§16.11).
+func DirectoryFileStoredByteCount(size uint64) uint64 {
+	const step = uint64(DirectoryFileStepByteCount)
+	if size == 0 {
+		return step
+	}
+	if size > ^uint64(0)-(step-1) {
+		return ^uint64(0)
+	}
+	return ((size + step - 1) / step) * step
+}
+
 // The domain of a repo item's announcement_id.
 const directoryRepoAnnouncementDomain = "urnetwork-sidecar-v1/directory-repo"
 

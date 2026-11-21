@@ -244,6 +244,64 @@ func (self *mailEraseTestWorld) slotIngestor() *MailIngestor {
 	return newMailIngestor(self.repoId, self.repo, self.eraseStore, args)
 }
 
+// The signed fields of standing deposits, independent of whether the body opens.
+func (self *mailIngestTestRepo) depositSlots(ctx context.Context, depositorId Id, messageIds []Id) ([]mailDepositSlot, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	var slots []mailDepositSlot
+	for _, deposit := range self.standing[depositorId] {
+		if slices.Contains(messageIds, deposit.id) {
+			slots = append(slots, mailDepositSlot{messageId: deposit.id, slotId: deposit.slotId, paddedSize: EvsPadme(uint64(len(deposit.plaintext)))})
+		}
+	}
+	return slots, nil
+}
+
+// A deposit ref cannot disappear from inventory because its owner or the listing is incomplete.
+func TestMailDepositInventoryRequiresEveryRef(t *testing.T) {
+	repoId, depositorId := NewId(), NewId()
+	head := &protocol.EvsHeadSummary{
+		RefKind: protocol.EvsRefKind_EVS_REF_DEPOSIT, OwnerSidecarId: depositorId.Bytes(),
+		RefId: EvsDepositRefId(repoId, depositorId).Bytes(),
+	}
+	reply := &protocol.EvsRefsReply{Refs: []*protocol.EvsHeadSummary{head}}
+	if _, err := mailDepositRefOwners(repoId, reply); !errors.Is(err, ErrEvsReplyInvalid) {
+		t.Fatalf("partial inventory: %v", err)
+	}
+	reply.All = true
+	owners, err := mailDepositRefOwners(repoId, reply)
+	if err != nil || !slices.Equal(owners, []Id{depositorId}) {
+		t.Fatalf("deposit ref owners: %v, %v", owners, err)
+	}
+	head.OwnerSidecarId = NewId().Bytes()
+	if _, err := mailDepositRefOwners(repoId, reply); !errors.Is(err, ErrEvsReplyInvalid) {
+		t.Fatalf("inconsistent ref owner: %v", err)
+	}
+	reply.Refs[0] = nil
+	if _, err := mailDepositRefOwners(repoId, reply); !errors.Is(err, ErrEvsReplyInvalid) {
+		t.Fatalf("unidentified ref: %v", err)
+	}
+}
+
+// An interrupted CONSUME leaves an authenticated deposit slot even while its body cannot be read.
+func TestMailErasureUsesTheStandingDepositSlotWithoutOpeningItsBody(t *testing.T) {
+	world := newMailEraseTestWorld(t)
+	ctx := t.Context()
+	deposit := world.depositMessage(testMailIngestMessage("Deposit inventory", "body"))
+	world.repo.failConsumeBefore = errors.New("transient consume failure")
+	if _, err := world.slotIngestor().Ingest(ctx); err == nil {
+		t.Fatal("ingest did not stop before CONSUME")
+	}
+	deposit.openErr = errors.New("deposit content temporarily unavailable")
+	erasure, err := world.eraser().Erase(ctx, world.month, []Id{deposit.id})
+	if err != nil || erasure.State != MailErasureDone {
+		t.Fatalf("erasure from the verified entry: %+v, %v", erasure, err)
+	}
+	if world.eraseStore.slotHeld(deposit.slotId) {
+		t.Fatal("the completed erasure left its standing deposit slot open")
+	}
+}
+
 // An eraser as a device makes one: a restart, or another admin's device.
 func (self *mailEraseTestWorld) eraser() *MailEraser {
 	return newMailEraser(self.repoId, self.eraseStore, self.repo, &MailEraserArgs{

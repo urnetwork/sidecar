@@ -200,7 +200,7 @@ type smtpConnectionArgs struct {
 // What one connection came to. Exactly one of these holds: NoProver; Err with no PreambleCode; a PreambleCode
 // other than OK; or OK, with the TLS level, any refusal and the prover's result or error.
 type SmtpConnectionResult struct {
-	// No key set was ready, so no connection was made: the host only queues (D-SMTP-18).
+	// No key set or current measurement was available. This host only queues (D-SMTP-18, QD-483).
 	NoProver bool
 	// The edge's answer, OK or the refusal that ended the stream before any MX byte; UNSPECIFIED when the
 	// connection ended before one came.
@@ -233,8 +233,8 @@ type SmtpConnectionResult struct {
 }
 
 // Whether the connection may have spent a unit: the MX may have seen MAIL (§14.7). A preamble refusal, KEYS,
-// an EHLO the MX refused, a too_large and a mode's reconnect never reach MAIL; a send that failed after OK
-// without saying how far it got may have.
+// an EHLO refusal, a missing REQUIRETLS extension, a too_large and a mode's reconnect all end before MAIL.
+// A send that failed after OK without saying how far it got may have spent a unit.
 func (self *SmtpConnectionResult) MailMayHaveGone() bool {
 	if self.NoProver || self.EnvelopeRefused || self.PreambleCode != protocol.SmtpPreambleCode_SMTP_PREAMBLE_OK {
 		return false
@@ -245,7 +245,7 @@ func (self *SmtpConnectionResult) MailMayHaveGone() bool {
 	if self.Proof == nil {
 		return true
 	}
-	return self.Proof.Mode != 0 && !self.Proof.TooLarge && self.Proof.ReconnectByteCount == 0
+	return self.Proof.Mode != 0 && !self.Proof.RequireTlsMissing && !self.Proof.TooLarge && self.Proof.ReconnectByteCount == 0
 }
 
 // SmtpOutcome's form of a send that got a send_id (§14.4's step 5): the level, the mode, every reply code the
@@ -474,7 +474,9 @@ func (self *smtpConnection) runStream(
 	result.TlsLevel = authentication.Level()
 	result.TlsRefusal = authentication.Refusal()
 	result.Proof = proofResult
-	if err != nil {
+	if errors.Is(err, ErrSmtpProverUnmeasured) {
+		result.NoProver = true
+	} else if err != nil {
 		result.Err = err
 	}
 	if proofResult != nil && proofResult.Mode != 0 {

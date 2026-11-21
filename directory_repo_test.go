@@ -121,7 +121,7 @@ func (self *testDirectoryWorld) deviceWith(writer *testDirectoryWriter, options 
 	if err != nil {
 		self.t.Fatal(err)
 	}
-	record, err := sidecar.NewSidecarRecord(&sidecar.SidecarRecordArgs{
+	record, err := sidecar.OpenSidecarRecord(self.t.Context(), &sidecar.SidecarRecordArgs{
 		SidecarId:         writer.sidecarId,
 		IdentityPublicKey: writer.key.Public().(ed25519.PublicKey),
 		Store:             store,

@@ -608,6 +608,10 @@ type testDirectoryReader struct {
 }
 
 func (self *testDirectoryWorld) reader(sessionActive func() bool) *testDirectoryReader {
+	return self.readerWithSettings(sessionActive, sidecar.DefaultSidecarSettings().Directory, nil)
+}
+
+func (self *testDirectoryWorld) readerWithSettings(sessionActive func() bool, settings *sidecar.SidecarDirectorySettings, views sidecar.SidecarStore) *testDirectoryReader {
 	self.t.Helper()
 	files := sidecartest.NewFakeStore()
 	store, err := files.Root().Directory("directory", "search")
@@ -618,6 +622,7 @@ func (self *testDirectoryWorld) reader(sessionActive func() bool) *testDirectory
 	client, err := sidecar.NewDirectoryClient(&sidecar.DirectoryClientArgs{
 		SidecarId:     self.readerId,
 		Store:         store,
+		ViewStore:     views,
 		Cards:         self.cardsFor(self.readerId),
 		Streams:       func() sidecar.RecordStreams { return self.streamsFor(self.readerId) },
 		Auth:          self.directoryView,
@@ -637,7 +642,7 @@ func (self *testDirectoryWorld) reader(sessionActive func() bool) *testDirectory
 			reader.alarms = append(reader.alarms, alarm)
 		},
 		Clock:     self.clock,
-		Settings:  sidecar.DefaultSidecarSettings().Directory,
+		Settings:  settings,
 		NetworkId: self.networkId,
 	})
 	if err != nil {

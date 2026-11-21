@@ -105,8 +105,6 @@ type SidecarInstance struct {
 	// through with its directory sync failing, and so does a file a killed process left, which this one
 	// never wrote. Nothing goes under a key such a file names until it is written again (keys_rotate.go).
 	durableWrapPaths map[string]bool
-	// sidecar.json's hash is another machine's, or another instance's, and nothing has accepted it
-	restored bool
 }
 
 // Reads sidecar.json and sweeps a kill's temp files. An instance that cannot read its state comes back
@@ -159,7 +157,7 @@ func newSidecarInstance(ctx context.Context, args *SidecarInstanceArgs, now func
 // Reads sidecar.json, or starts a document that reaches the disk with U, so a first run in front of a
 // locked store writes nothing.
 func (self *SidecarInstance) loadDocument() error {
-	encoded, err := readBackendFile(self.backend, stateJsonPath, stateJsonMaxByteCount)
+	encoded, err := readBackendFile(self.backend, stateJsonPath, self.settings.StateJsonMaxByteCount)
 	if errors.Is(err, ErrSidecarStoreAbsent) {
 		instanceId := NewId()
 		self.setDocument(&sidecarStateDocument{
@@ -179,12 +177,12 @@ func (self *SidecarInstance) loadDocument() error {
 		return err
 	}
 	machineIdHash := stateMachineIdHash(document.InstanceId, self.machineId)
-	self.setDocument(document)
 	if document.MachineIdHash != "" && machineIdHash != "" && document.MachineIdHash != machineIdHash {
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
-		self.restored = true
+		for i := range document.NetworkRecords {
+			document.NetworkRecords[i].ReplaceRequired = true
+		}
 	}
+	self.setDocument(document)
 	return nil
 }
 
@@ -229,29 +227,41 @@ func (self *SidecarInstance) State() (SidecarInstanceState, chan struct{}) {
 }
 
 // Whether sidecar.json's machine-id hash is not this machine's: restored or copied state (§5.9). This
-// instance's keys open as ever, and an identity here may not act until `--replace` has revoked the old
-// client and called AcceptRestored, since two copies of one sidecar must not both run.
+// instance's keys open as ever, and each recorded identity waits for its own replacement bind.
 func (self *SidecarInstance) Restored() bool {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	return self.restored
+	document := self.currentDocument()
+	if document == nil {
+		return false
+	}
+	hash := stateMachineIdHash(document.InstanceId, self.machineId)
+	return (hash != "" && document.MachineIdHash != "" && hash != document.MachineIdHash) ||
+		slices.ContainsFunc(document.NetworkRecords, func(record SidecarNetworkRecord) bool { return record.ReplaceRequired })
 }
 
-// Takes this machine as the instance's own, after `--replace`.
+// Whether this particular network must replace its old client before it can run.
+func (self *SidecarInstance) networkRestored(networkId *Id) bool {
+	document := self.currentDocument()
+	if networkId == nil || document == nil {
+		return false
+	}
+	return slices.ContainsFunc(document.NetworkRecords, func(record SidecarNetworkRecord) bool {
+		return record.NetworkId == *networkId && record.ReplaceRequired
+	})
+}
+
+// Takes this machine as an empty instance's own. Recorded clients require their individual replacement bind.
 func (self *SidecarInstance) AcceptRestored() error {
 	self.operationLock.Lock()
 	defer self.operationLock.Unlock()
-	err := self.editDocumentWithLock(func(document *sidecarStateDocument) error {
+	return self.editDocumentWithLock(func(document *sidecarStateDocument) error {
+		for _, record := range document.NetworkRecords {
+			if record.ReplaceRequired {
+				return ErrSidecarRestored
+			}
+		}
 		document.MachineIdHash = stateMachineIdHash(document.InstanceId, self.machineId)
 		return nil
 	})
-	if err != nil {
-		return err
-	}
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	self.restored = false
-	return nil
 }
 
 // The networks enrolled here.
@@ -266,6 +276,11 @@ func (self *SidecarInstance) Networks() []SidecarNetworkRecord {
 // Records a network, the last step of an enrollment (CORE-M1-09). From here a lost key for this network
 // is a loss and not a first run. Every id must be set.
 func (self *SidecarInstance) RecordNetwork(record SidecarNetworkRecord) error {
+	return self.recordNetwork(record, false)
+}
+
+// Commits the new client and its replacement of this network's previous machine in the same rename.
+func (self *SidecarInstance) recordNetwork(record SidecarNetworkRecord, replace bool) error {
 	if record.NetworkId == (Id{}) || record.ClientId == (Id{}) || record.SidecarId == (Id{}) ||
 		record.ConnectInstanceId == (Id{}) {
 		return errNetworkRecord
@@ -275,6 +290,14 @@ func (self *SidecarInstance) RecordNetwork(record SidecarNetworkRecord) error {
 		self.operationLock.Lock()
 		defer self.operationLock.Unlock()
 		return self.editDocumentWithLock(func(document *sidecarStateDocument) error {
+			for _, other := range document.NetworkRecords {
+				if other.NetworkId == record.NetworkId && other.ReplaceRequired && !replace {
+					return ErrSidecarRestored
+				}
+			}
+			if hash := stateMachineIdHash(document.InstanceId, self.machineId); hash != "" {
+				document.MachineIdHash = hash
+			}
 			document.Urls = self.urls
 			document.NetworkRecords = slices.DeleteFunc(document.NetworkRecords, func(other SidecarNetworkRecord) bool {
 				return other.NetworkId == record.NetworkId

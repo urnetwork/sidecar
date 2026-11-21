@@ -82,6 +82,7 @@ type testForwardingWorld struct {
 	mintFails   int
 	// api answers a mint without confirming forward_only, as one that kept no such mark would
 	mintUnmarked bool
+	mintExpired  bool
 	// F by its client key, one a key as api keeps it
 	forwardClients map[string]Id
 }
@@ -150,8 +151,12 @@ func (self *testForwardingWorld) mint(wire *sidecarAuthClientWire) (int, any) {
 		clientId = testConfigId("forwarding client " + hex.EncodeToString(wire.ClientPublicKey))
 		self.forwardClients[string(wire.ClientPublicKey)] = clientId
 	}
+	expires := self.clock.Now().Add(7 * 24 * time.Hour)
+	if self.mintExpired {
+		expires = self.clock.Now()
+	}
 	return http.StatusOK, map[string]any{
-		"by_client_jwt": testForwardingJwt(clientId, self.clock.Now().Add(7*24*time.Hour)), "client_id": clientId,
+		"by_client_jwt": testForwardingJwt(clientId, expires), "client_id": clientId,
 		"admin_refused": true, "strict_exp": true, "forward_only": !self.mintUnmarked,
 	}
 }
@@ -475,6 +480,36 @@ func TestForwardingSetupFindsItsLandedDelegationAgain(t *testing.T) {
 	}
 	if rows := world.forwardingRows(); len(rows) != 1 || rows[0].GetSupersededAt() != 0 || rows[0].GetAt() != handOff.GetDelegationAt().GetVersion() {
 		t.Fatalf("%d forwarding Delegations", len(rows))
+	}
+}
+
+// Expired client credentials never reach the VPN component. The durable setup resumes with a fresh mint.
+func TestForwardingSetupRefusesAnExpiredMint(t *testing.T) {
+	world := newTestForwardingWorld(t)
+	world.mintExpired = true
+	keys := testForwardingKeys("expired mint")
+	if handOff, err := world.sidecar.SetUpForwarding(t.Context(), world.networkId(), keys); !errors.Is(err, ErrForwardingSetupIncomplete) || handOff != nil {
+		t.Fatalf("expired mint: %v %v", handOff, err)
+	}
+	world.mintExpired = false
+	if handOff, err := world.sidecar.SetUpForwarding(t.Context(), world.networkId(), keys); err != nil || handOff == nil {
+		t.Fatalf("retry with fresh credentials: %v %v", handOff, err)
+	}
+}
+
+func TestForwardingSetupRechecksWithdrawalBeforeHandOff(t *testing.T) {
+	world := newTestForwardingWorld(t)
+	world.api.authClient = func(wire *sidecarAuthClientWire) (int, any) {
+		status, answer := world.mint(wire)
+		live := world.net.log.State().ForwardingDelegation(world.hostId)
+		world.net.mustPost(world.net.owner, bridge.SignedType_SIGNED_DELEGATION_REVOKE, &protocol.DelegationRevoke{
+			Header: world.net.header(), DelegationId: live.GetDelegationId(),
+		})
+		return status, answer
+	}
+	handOff, err := world.sidecar.SetUpForwarding(t.Context(), world.networkId(), testForwardingKeys("withdrawn during mint"))
+	if !errors.Is(err, ErrForwardingSetupNeedsConfirm) || handOff != nil {
+		t.Fatalf("withdrawal during mint: %v, %v", handOff, err)
 	}
 }
 

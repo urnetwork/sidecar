@@ -218,6 +218,10 @@ type MailReceiverStatus struct {
 
 // §15.5's receiver. See the file header.
 type MailReceiver struct {
+	// The direct-MX listener shares the lifetime of the approved registration.
+	runDirect func(context.Context)
+	// Closed after the registration, key worker and every registered or direct session have exited.
+	done        chan struct{}
 	args        *MailReceiverArgs
 	settings    *MailReceiverSettings
 	tlsSettings *SidecarTlsSettings
@@ -265,6 +269,7 @@ func NewMailReceiver(args *MailReceiverArgs) (*MailReceiver, error) {
 		log = NewNoopLogger()
 	}
 	self := &MailReceiver{
+		done:        make(chan struct{}),
 		args:        args,
 		settings:    settings,
 		tlsSettings: tlsSettings,
@@ -421,6 +426,7 @@ func (self *MailReceiver) listen(ctx context.Context) (MailReceiverListener, err
 
 // The receiver's loop: serves each listen until it ends, and asks again for one that waits, fails or ends.
 func (self *MailReceiver) run(ctx context.Context, listener MailReceiverListener, listenErr error) {
+	defer close(self.done)
 	for {
 		if listener != nil {
 			self.serveListener(ctx, listener)
@@ -455,6 +461,9 @@ func (self *MailReceiver) serveListener(ctx context.Context, listener MailReceiv
 	group.Go(func() {
 		self.runKeys(listenCtx, listener)
 	})
+	if self.runDirect != nil {
+		group.Go(func() { self.runDirect(listenCtx) })
+	}
 	for {
 		conn, err := listener.AcceptSocket(listenCtx)
 		if err != nil {

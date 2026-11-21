@@ -265,12 +265,12 @@ func (self *dirWorld) device(name string, memberId sidecar.Id, admin bool) (*dir
 }
 
 // Opens device's record and directory client, its requests and decisions bound.
-func (self *dirWorld) open(device *dirDevice) error {
+func (self *dirWorld) open(ctx context.Context, device *dirDevice) error {
 	recordStore, err := sidecartest.NewFakeStore().Root().Directory("record", "record")
 	if err != nil {
 		return err
 	}
-	record, err := sidecar.NewSidecarRecord(&sidecar.SidecarRecordArgs{
+	record, err := sidecar.OpenSidecarRecord(ctx, &sidecar.SidecarRecordArgs{
 		SidecarId:         device.sidecarId,
 		IdentityPublicKey: device.key.Public().(ed25519.PublicKey),
 		Store:             recordStore,
@@ -382,7 +382,7 @@ func newDirWorld(ctx context.Context) (*dirWorld, error) {
 	}
 	world.publish()
 	for _, device := range world.devices {
-		if err := world.open(device); err != nil {
+		if err := world.open(ctx, device); err != nil {
 			return nil, err
 		}
 	}

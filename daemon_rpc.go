@@ -31,6 +31,8 @@ type DaemonMethod struct {
 	// (§5.8). One that resolves to none is refused FAILED_PRECONDITION before the handler runs, and the handler gets
 	// the network and its Sidecar.
 	Network bool
+	// A control request whose explicit scope spans the daemon's hosted networks.
+	allNetworks func(json.RawMessage) bool
 	// Signs or approves what only a person may (D-CORE-13): runs only from control, with Confirmed set.
 	Confirm bool
 	// Runs the call. Its result is JSON-encoded as the response's result, after the secret walk; its error's text
@@ -49,6 +51,8 @@ type DaemonCall struct {
 	// A Network method's network, resolved by §5.8's rule, and the Sidecar hosting it.
 	NetworkId Id
 	Sidecar   *Sidecar
+	// The hosted networks for a method whose request selected all of them.
+	Networks []DaemonNetwork
 	// The agent the session acts as: its hello's, else its project's .ur default; nil for none (daemon_agent.go). A
 	// Network method's carries its id in NetworkId, the one the session took at its first call there, unless none can
 	// be taken there now.
@@ -222,7 +226,12 @@ func (self *Daemon) dispatch(line []byte, session *daemonSession, run func(handl
 		return answer(DaemonRpcConfirmationRequired, "this call needs a person's confirmation on /dev/tty or in an app")
 	}
 	call := &DaemonCall{Hello: hello, Params: request.Params, Confirmed: confirmed, SessionDone: session.done, Notify: session.notify}
-	if method.Network {
+	if method.allNetworks != nil && method.allNetworks(request.Params) {
+		if hello.Mode != DaemonModeControl {
+			return answer(DaemonRpcFailedPrecondition, "host-wide search requires a control session")
+		}
+		call.Networks = self.Sidecars()
+	} else if method.Network {
 		call.Network = daemonCallNetwork(request.Params)
 		networkId, err := self.resolveSessionNetwork(session, call.Network)
 		if err != nil {

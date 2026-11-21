@@ -26,10 +26,13 @@ import (
 	"io"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/evsservice"
+	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/sidecartest"
 	"github.com/urnetwork/sidecar/sidecartest/mailworld"
 )
@@ -54,12 +57,99 @@ func fs13OpenVersions(t *testing.T, ctx context.Context, repo *sidecar.EvsRepo, 
 	return opened, len(history.Versions)
 }
 
-func TestFs13ErasedDepositAndIndexCopiesAfterAConsumeCrash(t *testing.T) {
+// An owner's erasure on a fresh store also destroys the deposit slot when a different reader's CONSUME committed
+// its removal but the slot delete failed. The eraser has no consume journal from that reader to replay.
+func TestFs13ErasesAConsumedDepositWhoseOriginalSlotSurvived(t *testing.T) {
 	ctx := t.Context()
 	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
 	host := sidecartest.NewFakeHost(ctx, clock, nil, nil, nil)
 	settings := mailworld.DefaultMailWorldSettings()
 	world := mailworld.NewMailWorld(t, host, clock, settings)
+	consumer := world.AdmitReader()
+	ingestClient := world.Device(consumer, false, sidecartest.NewFakeStore().Root(), nil)
+	recipient := settings.Addresses[0]
+	body := []byte("From: <sender@sender.example>\r\nTo: <" + recipient + ">\r\nSubject: interrupted\r\n\r\nMessage for the owner.\r\n")
+	if reply := world.Send(netip.MustParseAddr("203.0.113.9"), settings.MxHost(), "sender@sender.example", []string{recipient}, body); !reply.Is(250) {
+		t.Fatal(reply)
+	}
+	deposits, err := world.StandingDeposits(ingestClient)
+	if err != nil || len(deposits) != 1 {
+		t.Fatalf("deposit before ingest: %d, %v", len(deposits), err)
+	}
+	slotId := deposits[0].Deposit.SlotId
+	slotKey := evsservice.SlotKey(world.RepoId, slotId)
+	if _, err := host.Blobs.Faults().Add(&sidecartest.FaultPlan{
+		Op: sidecartest.FaultOpDelete, KeyPrefix: slotKey, Result: sidecartest.FailBeforeApply,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var written *sidecar.MailMessage
+	ingest := world.Ingestor(ingestClient, consumer.SidecarId, func(message *sidecar.MailMessage) { written = message }, nil)
+	if _, err := ingest.Ingest(ctx); err == nil || written == nil {
+		t.Fatalf("ingest before failed slot delete: message %v, %v", written, err)
+	}
+	owner := world.Device(world.Owner, false, sidecartest.NewFakeStore().Root(), nil)
+	if standing, err := world.StandingDeposits(owner); err != nil || len(standing) != 0 {
+		t.Fatalf("the committed CONSUME left %d standing deposits: %v", len(standing), err)
+	}
+	if _, err := world.Cluster.Head(ctx, slotKey); err != nil {
+		t.Fatalf("the interrupted CONSUME's surviving slot: %v", err)
+	}
+	erasure, err := world.Eraser(owner, world.Owner.SidecarId).Erase(ctx, written.Month, []sidecar.Id{written.Id})
+	if err != nil || erasure.State != sidecar.MailErasureDone {
+		t.Fatalf("the owner's erasure: %+v, %v", erasure, err)
+	}
+	erased := false
+	confirmed, err := owner.Repo(world.RepoId).ReadErasures(ctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, evidence := range confirmed {
+		for _, key := range evidence.Keys {
+			erased = erased || key.SlotId == slotId && key.KeyIndex == 0
+		}
+	}
+	if !erased {
+		t.Fatal("the completed erasure omitted the surviving deposit slot")
+	}
+	slot, err := world.Cluster.Get(ctx, slotKey)
+	if errors.Is(err, sidecar.ErrBlobNotFound) {
+		return
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer slot.Body.Close()
+	data, err := io.ReadAll(slot.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := sidecar.EvsDecodeSlotObject(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, held := sidecar.EvsSlotKeyAt(decoded, 0); held {
+		t.Fatal("the completed erasure left the original deposit key in the service store")
+	}
+}
+
+func TestFs13ErasedDepositAndIndexCopiesAfterAConsumeCrash(t *testing.T) {
+	ctx := t.Context()
+	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
+	host := sidecartest.NewFakeHost(ctx, clock, nil, nil, nil)
+	settings := mailworld.DefaultMailWorldSettings()
+	// Fail one path read in the unconsumed depositor's ref, after its mailbox write is durable.
+	var failDepositRead atomic.Bool
+	var depositRefId sidecar.Id
+	readFailure := errors.New("deposit entry temporarily unavailable")
+	settings.EvsReadError = func(read *protocol.EvsReadRequest) error {
+		if failDepositRead.Load() && len(read.GetPaths()) != 0 && bytes.Equal(read.GetRefId(), depositRefId[:]) && failDepositRead.Swap(false) {
+			return readFailure
+		}
+		return nil
+	}
+	world := mailworld.NewMailWorld(t, host, clock, settings)
+	depositRefId = sidecar.EvsDepositRefId(world.RepoId, world.Receiver.SidecarId)
 	recipient := settings.Addresses[0]
 	owner := world.Device(world.Owner, false, sidecartest.NewFakeStore().Root(), nil)
 	kept := []byte("From: <sender@sender.example>\r\nTo: <" + recipient + ">\r\nSubject: kept\r\nMessage-ID: <kept@sender.example>\r\n\r\nA message that stays.\r\n")
@@ -78,6 +168,8 @@ func TestFs13ErasedDepositAndIndexCopiesAfterAConsumeCrash(t *testing.T) {
 	// the owner's ingest killed between its push and its CONSUME
 	reached := make(chan struct{})
 	release := make(chan struct{})
+	releaseIngest := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(releaseIngest)
 	var holdOnce sync.Once
 	sidecar.SetTestHooks(&sidecar.TestHooks{Barrier: func(name string, key string) {
 		if name != "mail.ingest.consume.before" {
@@ -112,8 +204,15 @@ func TestFs13ErasedDepositAndIndexCopiesAfterAConsumeCrash(t *testing.T) {
 		t.Fatalf("the deposit beside its message: %d, %v", len(deposits), err)
 	}
 
-	// the owner's device erases the message
+	// The owner needs a verified answer for the deposit slot before any key can go.
 	eraser := world.Eraser(owner, world.Owner.SidecarId)
+	failDepositRead.Store(true)
+	if erasure, err := eraser.Erase(ctx, written.Month, []sidecar.Id{written.Id}); !errors.Is(err, readFailure) || erasure != nil {
+		t.Fatalf("erasure with incomplete deposit inventory: %+v, %v", erasure, err)
+	}
+	if committed, err := owner.Repo(world.RepoId).ReadErasures(ctx, 0); err != nil || len(committed) != 0 {
+		t.Fatalf("committed erasures before the retry: %d, %v", len(committed), err)
+	}
 	erasure, err := eraser.Erase(ctx, written.Month, []sidecar.Id{written.Id})
 	if err != nil || erasure.State != sidecar.MailErasureDone {
 		t.Fatalf("the erasure: %+v, %v", erasure, err)
@@ -165,7 +264,7 @@ func TestFs13ErasedDepositAndIndexCopiesAfterAConsumeCrash(t *testing.T) {
 	}
 
 	// the killed ingest, let go, writes nothing
-	close(release)
+	releaseIngest()
 	select {
 	case <-crashed:
 	case <-time.After(settings.StepTimeout):

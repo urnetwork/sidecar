@@ -748,6 +748,35 @@ func TestDirectoryEvsCardsReadCardsInCommitOrder(t *testing.T) {
 	}
 }
 
+// The native phone can budget a signed file before opening its exact committed bytes.
+func TestDirectoryEvsCardsPlanAndOpen(t *testing.T) {
+	directory := newDirectoryEvsWorld(t, 1)
+	writer := directory.writers[0]
+	path := sidecar.DirectoryCardPath(writer)
+	directory.put(t, writer, path, 0, "current card")
+	plan, err := directory.cards.PlanCards(t.Context(), directory.directoryId, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.ThroughVersion != 1 || len(plan.Files) != 1 {
+		t.Fatalf("plan: %+v", plan)
+	}
+	file := plan.Files[0]
+	if file.Path != path || file.StoredByteCount != sidecar.DirectoryFileStepByteCount || file.Content != nil || file.SignerSidecarId != writer {
+		t.Fatalf("metadata: %+v", file)
+	}
+	body, err := directory.cards.ReadPlannedCard(t.Context(), directory.directoryId, file)
+	if err != nil || string(body) != "current card" {
+		t.Fatalf("opened %q: %v", body, err)
+	}
+	directory.put(t, writer, path, file.Version, "a replacement")
+	body, err = directory.cards.ReadPlannedCard(t.Context(), directory.directoryId, file)
+	if !errors.Is(err, sidecar.ErrEvsCollected) || body != nil {
+		t.Fatalf("old retained version opened as current: %q, %v", body, err)
+	}
+
+}
+
 // The cards ref's keyless-slot rule (the file header's format 2 and erased rows): a card version whose key an ERASE
 // destroyed stands in the changes with no content, raising no alarm; one whose key evs withheld, with no ERASE naming
 // it, alarms tamper once the ERASEs are read again and is left out, so the copy keeps what it last took.

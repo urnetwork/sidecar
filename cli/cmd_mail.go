@@ -77,7 +77,7 @@ func (self *urDaemonNetwork) mailClient(network string) (urMailClient, error) {
 	if !ok {
 		return nil, fmt.Errorf("no sidecar runs: %s", self.noSidecar)
 	}
-	return running.Mail()
+	return running.StartMail()
 }
 
 // mail.enable's reply.
@@ -125,12 +125,16 @@ func urMailStatusReplyOf(status *sidecar.MailClientStatus) *urMailStatusReply {
 }
 
 // Starts each hosted network's mail component, so a network with mail on keeps the daemon up from its start (§5.8).
-// A network enrolled after the daemon started takes its component at the daemon's next start.
 func (self *urDaemonNetwork) startMail() {
 	for _, hosted := range self.hosted() {
-		if _, err := hosted.Sidecar.StartMail(); err != nil {
-			fmt.Fprintf(os.Stderr, "ur: a network's mail did not start: %v\n", err)
-		}
+		startUrHostedMail(hosted.Sidecar)
+	}
+}
+
+// Attaches mail to the existing network at startup or to a newly enrolled or paired network.
+func startUrHostedMail(running *sidecar.Sidecar) {
+	if _, err := running.StartMail(); err != nil {
+		fmt.Fprintf(os.Stderr, "ur: a network's mail did not start: %v\n", err)
 	}
 }
 

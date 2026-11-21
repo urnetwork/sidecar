@@ -581,6 +581,9 @@ func (self *SearchSync) retire(ref *searchSyncRef) error {
 	}
 	for snapshot := range ref.open {
 		name(snapshot.manifest)
+		for key := range snapshot.landed {
+			keepFiles[key] = true
+		}
 	}
 	table := ref.table
 	self.stateLock.Unlock()

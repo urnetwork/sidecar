@@ -50,7 +50,7 @@ const (
 func init() {
 	registerUrCommand(&urCommand{
 		name:    "approve",
-		usage:   "  ur approve [<approval_id>] [--deny | --revoke] [--uses=<n>]\n  ur approve cancel <approval_id>",
+		usage:   "  ur approve [<approval_id>] [--deny | --revoke] [--uses=<n>]\n  ur approve cancel <approval_id>\n  ur approve browser <sidecar_id> [--network=<network>]\n  ur approve burner <sidecar_id> <mailbox_repo_id> --for=<duration> [--network=<network>]",
 		summary: "list what waits for this device's decision, or decide one on the terminal",
 		run:     runUrApprove,
 	})
@@ -308,6 +308,9 @@ func urApproveMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
 
 // Lists the items, or decides the one named.
 func runUrApprove(ctx context.Context, cli *urCli, options docopt.Opts) error {
+	if urOptionBool(options, "browser") || urOptionBool(options, "burner") {
+		return runUrApproveBrowser(ctx, cli, options)
+	}
 	if urOptionBool(options, "cancel") {
 		return runUrApproveCancel(ctx, cli, options)
 	}

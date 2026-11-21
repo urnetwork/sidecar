@@ -14,6 +14,7 @@
 package sidecar
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
@@ -195,9 +196,10 @@ type SidecarAuthClientResult struct {
 	// The marks api confirmed. A sidecar keeps nothing of a client whose answer does not confirm
 	// admin_refused (§5.6), nor hands on a forwarding client whose answer does not confirm forward_only
 	// (§7.4).
-	AdminRefused bool
-	StrictExp    bool
-	ForwardOnly  bool
+	AdminRefused     bool
+	StrictExp        bool
+	DeclaresNoEgress bool
+	ForwardOnly      bool
 	// An ephemeral mint's close capability (§7.7), else empty.
 	Close string
 }
@@ -214,13 +216,14 @@ func (self *SidecarAuthClientResult) GoString() string {
 
 // POST /network/auth-client's answer.
 type sidecarAuthClientReply struct {
-	ByClientJwt  string                 `json:"by_client_jwt"`
-	ClientId     *Id                    `json:"client_id"`
-	AdminRefused bool                   `json:"admin_refused"`
-	StrictExp    bool                   `json:"strict_exp"`
-	ForwardOnly  bool                   `json:"forward_only"`
-	Close        string                 `json:"close"`
-	Error        *sidecarApiResultError `json:"error"`
+	ByClientJwt      string                 `json:"by_client_jwt"`
+	ClientId         *Id                    `json:"client_id"`
+	AdminRefused     bool                   `json:"admin_refused"`
+	StrictExp        bool                   `json:"strict_exp"`
+	DeclaresNoEgress bool                   `json:"declares_no_egress"`
+	ForwardOnly      bool                   `json:"forward_only"`
+	Close            string                 `json:"close"`
+	Error            *sidecarApiResultError `json:"error"`
 }
 
 // POST /network/auth-client (§7.4): mints a child of this sidecar's client, or reissues a client's
@@ -265,11 +268,12 @@ func (self *SidecarApi) AuthClient(ctx context.Context, args *SidecarAuthClientA
 		testHookSecret("close", []byte(reply.Close))
 	}
 	result := &SidecarAuthClientResult{
-		ByClientJwt:  reply.ByClientJwt,
-		AdminRefused: reply.AdminRefused,
-		StrictExp:    reply.StrictExp,
-		ForwardOnly:  reply.ForwardOnly,
-		Close:        reply.Close,
+		ByClientJwt:      reply.ByClientJwt,
+		AdminRefused:     reply.AdminRefused,
+		StrictExp:        reply.StrictExp,
+		DeclaresNoEgress: reply.DeclaresNoEgress,
+		ForwardOnly:      reply.ForwardOnly,
+		Close:            reply.Close,
 	}
 	if reply.ClientId != nil {
 		result.ClientId = *reply.ClientId
@@ -370,12 +374,36 @@ type SidecarIdentityRecord struct {
 
 // GET /sidecar/identity's answer, for both lookups.
 type sidecarIdentityReply struct {
+	BrowserAdmission  string   `json:"browser_admission,omitempty"`
 	SidecarId         *Id      `json:"sidecar_id"`
 	IdentityPublicKey []byte   `json:"identity_public_key"`
 	IdentityAlg       string   `json:"identity_alg"`
 	Status            string   `json:"status"`
 	Binding           []byte   `json:"binding"`
 	Bindings          [][]byte `json:"bindings"`
+}
+
+// A browser's opt-in eligibility lookup. An older API can ignore the query, so only a positive reply
+// naming the requested mode can be used to open an admission. The signed binding is checked locally.
+func (self *SidecarApi) browserAdmissionBinding(ctx context.Context, networkId, target Id, mode string) (*SidecarIdentityBinding, error) {
+	if mode != BrowserAdmissionPage && mode != BrowserAdmissionBurner || target == (Id{}) {
+		return nil, ErrSidecarApiArgs
+	}
+	reply := &sidecarIdentityReply{}
+	const route = "GET /sidecar/identity/<sidecar_id>"
+	err := self.sendJson(ctx, &sidecarApiRequest{route: route, operation: "identity", method: "GET", bearer: true,
+		url: self.settings.ApiUrl + "/sidecar/identity/" + target.String() + "?browser_admission=" + mode}, nil, reply)
+	if err != nil {
+		return nil, err
+	}
+	if reply.BrowserAdmission != mode || reply.SidecarId == nil || *reply.SidecarId != target || reply.Status != "active" || reply.IdentityAlg != configIdentityAlgEd25519 {
+		return nil, ErrSidecarApiReply
+	}
+	binding, err := VerifySidecarIdentityBinding(reply.Binding)
+	if err != nil || binding.NetworkId != networkId || binding.SidecarId != target || !bytes.Equal(reply.IdentityPublicKey, binding.IdentityPublicKey) {
+		return nil, ErrSidecarApiReply
+	}
+	return binding, nil
 }
 
 // GET /sidecar/identity/<sidecar_id> (§5.15): a sidecar of the caller's own network, or of one

@@ -213,6 +213,9 @@ func (self *Sidecar) currentCoreSecrets() SidecarSecrets {
 		return self.coreSecrets
 	}()
 	if secrets == nil && networkId != nil && self.instance != nil {
+		if self.instance.networkRestored(networkId) {
+			return nil
+		}
 		secrets = self.instance.secrets(*networkId, sidecarCoreSecretsNamespace)
 	}
 	return secrets

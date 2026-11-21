@@ -367,7 +367,21 @@ func (self *AclGateCache) load(network *aclGateNetwork) error {
 		if err != nil {
 			return self.loadFailed(networkId, "entries", err)
 		}
-		if _, err := log.ApplyRun(entries, rowsSource); err != nil {
+		_, err = log.ApplyRun(entries, rowsSource)
+		if errors.Is(err, ErrConfigEntryAhead) {
+			// Retention advanced past our pin. Keep the original genesis and the
+			// verified pin until a signed base and its entire tail verify.
+			retained := &ConfigRetained{SignedGenesis: log.signedGenesis, Entries: entries}
+			var restored *ConfigLog
+			restored, err = RestoreConfigLogRowsOnly(logSettings, retained, rowsSource, log.Pin())
+			if err == nil {
+				log = restored
+				network.stateLock.Lock()
+				network.log = restored
+				network.stateLock.Unlock()
+			}
+		}
+		if err != nil {
 			if errors.Is(err, ErrConfigRunRefused) || errors.Is(err, ErrConfigFork) {
 				loadErr = self.alarm(networkId, err)
 			} else {

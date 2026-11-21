@@ -209,7 +209,9 @@ func urBridgeApiGenerator(ctx context.Context, generation *urBridgeGeneration, t
 		urBridgeDeviceSpec,
 		sidecar.Version,
 		&sourceClientId,
-		connect.DefaultClientSettings,
+		func() *connect.ClientSettings {
+			return connect.NewOperatorClientSettings(nil, generation.apiUrl, generation.strategy)
+		},
 		settings,
 	)
 }

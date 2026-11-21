@@ -30,6 +30,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
@@ -473,6 +474,13 @@ func (self *McpServer) middleware(next gomcp.MethodHandler) gomcp.MethodHandler 
 		network := ""
 		if params, ok := request.GetParams().(*gomcp.CallToolParamsRaw); ok {
 			network = mcpNetworkArgument(params.Arguments)
+		}
+		if params, ok := request.GetParams().(*gomcp.ReadResourceParams); ok && strings.HasPrefix(params.URI, mcpEvsUriPrefix) {
+			pin, err := mcpEvsPinOf(params.URI)
+			if err != nil {
+				return nil, err
+			}
+			network = pin.network
 		}
 		result, err := session.limits.run(ctx, func(ctx context.Context) (any, error) {
 			call, err := self.call(ctx, session, network)

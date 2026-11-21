@@ -40,6 +40,8 @@ import (
 
 // What tunes the notifier.
 type EvsHintSettings struct {
+	// §19.8's head-to-hint deadline, from the acknowledged head CAS through the push handoff.
+	HeadHintTarget time.Duration
 	// The least time between two hints of one repo: 100 ms, §11.10's hint row's 10 hints a second a repo. A hint
 	// inside it waits for its end. Non-positive sends every hint at once.
 	HintPerRepoInterval time.Duration
@@ -51,6 +53,7 @@ type EvsHintSettings struct {
 
 func DefaultEvsHintSettings() *EvsHintSettings {
 	return &EvsHintSettings{
+		HeadHintTarget:      2 * time.Second,
 		HintPerRepoInterval: 100 * time.Millisecond,
 		RepoStateCount:      100 * 1000,
 	}
@@ -66,7 +69,9 @@ type evsLeaseCopy struct {
 type evsRepoHintState struct {
 	lastSent time.Time
 	pending  *sidecar.ClientHint
-	clients  map[sidecar.Id]bool
+	// A coalesced hint covers each of these heads, which retain their own latency deadlines.
+	pendingHeads []time.Time
+	clients      map[sidecar.Id]bool
 }
 
 // See the file header.
@@ -78,6 +83,7 @@ type EvsHintNotifier struct {
 	views    EvsGateViews
 	settings *EvsHintSettings
 	log      sidecar.Logger
+	outcomes sidecar.MetricsCounter
 
 	stateLock   sync.Mutex
 	leaseCopies map[sidecar.Id]*evsLeaseCopy
@@ -117,11 +123,16 @@ func (self *EvsHintNotifier) Sent() (int, chan struct{}) {
 }
 
 // See EvsCommitNotifier.
-func (self *EvsHintNotifier) Notify(ctx context.Context, committed *EvsCommitted) (uint64, error) {
+func (self *EvsHintNotifier) Notify(ctx context.Context, committed *EvsCommitted) (sequence uint64, err error) {
+	defer func() {
+		if err != nil && self.outcomes != nil && !committed.SeenAt.IsZero() {
+			self.outcomes.Add(1, "failed")
+		}
+	}()
 	if self.redis == nil {
 		return 0, nil
 	}
-	sequence, err := RaisePushSequence(ctx, self.redis, committed.RepoId)
+	sequence, err = RaisePushSequence(ctx, self.redis, committed.RepoId)
 	if err != nil {
 		return 0, err
 	}
@@ -151,7 +162,7 @@ func (self *EvsHintNotifier) Notify(ctx context.Context, committed *EvsCommitted
 		Version: sequence,
 		Kind:    uint32(protocol.MessageType_EVS_HEAD_CHANGED),
 		Body:    delta,
-	}, clientIds)
+	}, clientIds, committed.SeenAt)
 	return sequence, nil
 }
 
@@ -188,7 +199,18 @@ func (self *EvsHintNotifier) leases(ctx context.Context, repoId sidecar.Id) ([]*
 // The clients whose leases committed matches. See the file header.
 func (self *EvsHintNotifier) match(committed *EvsCommitted, leases []*EvsLease) []sidecar.Id {
 	view, answer := self.views.View(committed.RepoNetworkId)
+	now := self.clock.Now()
 	if answer != EvsAuthAllowed || view == nil {
+		// A missing projection prevents dispatch to potentially eligible live leases. It cannot
+		// silently remove these heads from the delivery budget. A known denial owes no hint.
+		if self.outcomes != nil && !committed.SeenAt.IsZero() && answer != EvsAuthDenied {
+			for _, lease := range leases {
+				if now.Before(lease.ExpiresAt) && (lease.EveryRef || lease.RefId == committed.RefId) {
+					self.outcomes.Add(1, "failed")
+					break
+				}
+			}
+		}
 		return nil
 	}
 	readers := map[sidecar.Id]bool{}
@@ -205,7 +227,6 @@ func (self *EvsHintNotifier) match(committed *EvsCommitted, leases []*EvsLease) 
 	if len(push.GetChangesRoot()) != 0 && len(changed) == 0 {
 		changed = committed.Statement.ChangedPrefixes
 	}
-	now := self.clock.Now()
 	clients := map[sidecar.Id]bool{}
 	for _, lease := range leases {
 		if !now.Before(lease.ExpiresAt) || (!lease.EveryRef && lease.RefId != committed.RefId) || !readers[lease.SidecarId] {
@@ -244,7 +265,7 @@ func evsLeaseMatches(prefix sidecar.EvsTokenPath, changed []sidecar.EvsTokenPath
 // step 8 runs on its own, so a hint that arrives after one with a higher sequence adds its clients and no more:
 // were it to take the waiting hint's place, the higher sequence would not be hinted before the repo's next push or
 // the clients' hourly resync.
-func (self *EvsHintNotifier) send(repoId sidecar.Id, hint *sidecar.ClientHint, clientIds []sidecar.Id) {
+func (self *EvsHintNotifier) send(repoId sidecar.Id, hint *sidecar.ClientHint, clientIds []sidecar.Id, seenAt time.Time) {
 	now := self.clock.Now()
 	sendNow := false
 	func() {
@@ -271,12 +292,14 @@ func (self *EvsHintNotifier) send(repoId sidecar.Id, hint *sidecar.ClientHint, c
 		}
 		switch {
 		case state.pending != nil:
+			state.pendingHeads = append(state.pendingHeads, seenAt)
 			// a hint already waits: the one of the higher push sequence stays, for the clients of both
 			if state.pending.Version < hint.Version {
 				state.pending = hint
 			}
 		case now.Sub(state.lastSent) < self.settings.HintPerRepoInterval:
 			state.pending = hint
+			state.pendingHeads = []time.Time{seenAt}
 			self.clock.AfterFunc(state.lastSent.Add(self.settings.HintPerRepoInterval).Sub(now), func() {
 				go self.flush(repoId)
 			})
@@ -286,13 +309,14 @@ func (self *EvsHintNotifier) send(repoId sidecar.Id, hint *sidecar.ClientHint, c
 		}
 	}()
 	if sendNow {
-		self.deliver(hint, clientIds)
+		self.deliver(hint, clientIds, []time.Time{seenAt})
 	}
 }
 
 // Sends the repo's waiting hint, its interval ended.
 func (self *EvsHintNotifier) flush(repoId sidecar.Id) {
 	var hint *sidecar.ClientHint
+	var pendingHeads []time.Time
 	var clientIds []sidecar.Id
 	func() {
 		self.stateLock.Lock()
@@ -302,6 +326,8 @@ func (self *EvsHintNotifier) flush(repoId sidecar.Id) {
 			return
 		}
 		hint = state.pending
+		pendingHeads = state.pendingHeads
+		state.pendingHeads = nil
 		for clientId := range state.clients {
 			clientIds = append(clientIds, clientId)
 		}
@@ -310,18 +336,34 @@ func (self *EvsHintNotifier) flush(repoId sidecar.Id) {
 		state.lastSent = self.clock.Now()
 	}()
 	if hint != nil {
-		self.deliver(hint, clientIds)
+		self.deliver(hint, clientIds, pendingHeads)
 	}
 }
 
 // One Push.Hint, whose failure is a gap.
-func (self *EvsHintNotifier) deliver(hint *sidecar.ClientHint, clientIds []sidecar.Id) {
+func (self *EvsHintNotifier) deliver(hint *sidecar.ClientHint, clientIds []sidecar.Id, heads []time.Time) {
 	connectClientIds := make([]connect.Id, len(clientIds))
 	for i, clientId := range clientIds {
 		connectClientIds[i] = connect.Id(clientId)
 	}
-	if err := self.push.Hint(self.ctx, connectClientIds, hint); err != nil {
+	err := self.push.Hint(self.ctx, connectClientIds, hint)
+	if err != nil {
 		self.log.Infof("[evs] hints for %s not all sent: %v", hint.Topic, err)
+	}
+	if self.outcomes != nil {
+		now := self.clock.Now()
+		for _, seenAt := range heads {
+			if seenAt.IsZero() {
+				continue
+			}
+			result := "on_time"
+			if err != nil {
+				result = "failed"
+			} else if self.settings.HeadHintTarget < now.Sub(seenAt) {
+				result = "late"
+			}
+			self.outcomes.Add(1, result)
+		}
 	}
 	self.sentCount.Update(func(count int) int { return count + 1 })
 }
