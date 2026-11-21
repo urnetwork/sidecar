@@ -3,8 +3,9 @@
 // an entry, and servers parse them: api and the gates read ApprovalDecision and ApprovalCancel (§2.8's api-10), and
 // whatever a CanonicalAction holds shows wherever a GrantActivate carries it into the log (api-7, §8.8) or a gate takes
 // it beside a decision (api-10, §16.6's spend check). testdata/metadata/fields.yml maps those fields to their rows, and
-// says which have none. RECORD.md's messages travel only sealed, in an entry or a deposit, or in a packet a person
-// hands to someone outside the log, so none of them needs a row (RECORD.md section 18; I-18).
+// says which have none. RECORD.md's messages travel only sealed, in an entry or a deposit, an erasure's ErasureBody
+// also as each of its ERASEs' sealed note (DESIGN-DETAILS 15.2.10, §16.11's moderation row), or in a packet a
+// person hands to someone outside the log, so none of them needs a row (RECORD.md section 18; I-18).
 //
 // The four enums after §16.8's messages name the values CanonicalAction.kind, ApprovalRequest.risk and
 // ApprovalDecision.decision and .channel carry, and those fields stay uint32 on the wire, as §16.8 writes them
