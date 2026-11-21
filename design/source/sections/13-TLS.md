@@ -226,10 +226,10 @@ certs' DNS writes: an order's _acme-challenge TXT, or a strong-mode probe's CAA 
            before another is charged against the name's ten an hour, and a confirmed stale permits
            the next write of the same digest (owner decision 680)
   lost     the write takes no idempotency key, each write taking a new serial: one whose answer was
-           lost is looked for in the DNS journal above the root's serial kept at dispatch before any
-           write again, and adopted with its serial; only a settle time past the dispatch with no
-           such commit owes it again, so a lost write that commits later costs one more of the ten,
-           of the same value, never a wrong one (owner decision 680)
+           lost is looked for in the DNS journal, above the root's serial kept at its dispatch,
+           before it is written again, and adopted with its serial; only a settle time past the
+           dispatch with no such commit owes it again, so a lost write that commits later costs one
+           more of the ten, of the same value, never a wrong one (owner decision 680)
 ```
 
 ```proto
