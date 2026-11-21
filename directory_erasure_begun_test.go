@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/sidecartest"
@@ -120,6 +121,8 @@ func (self *testBegunSeed) failCheck(t *testing.T, check testBegunCheck) {
 		world.recordFixture.CompromisedSince = map[sidecar.Id]uint64{ownerId: since}
 		world.publish()
 	case testBegunSuperseded:
+		// pushed after the request, so every pass reaches the older request first
+		world.clock.Advance(time.Minute)
 		writer := world.memberWriter(sidecar.NewId())
 		repo := world.directoryFixture.Repos[self.repoId]
 		repo.Admins = append(repo.Admins, sidecartest.FakeDirectoryRepoAdmin{SidecarId: writer.sidecarId, At: world.directoryAuth.Tip().Pin().GetVersion() + 1})
@@ -213,10 +216,11 @@ func (self *testBegunSeed) noNewCopy(t *testing.T, check testBegunCheck, other *
 // The cards ref's rewrite waits on the eraser's allowance at the request's first pass, which cuts both refs and erases
 // the repo's announce entry, so the slots holding the repo's and the run's documents on the cards ref keep them under
 // their live keys; then the check fails, and the card's writer writes the run private. The next pass runs the rewrite
-// the ledger owes, the slots rewritten under fresh keys, and rewrites no card: the card, met before the check failed,
-// stays owed its CLOSURE (UnclosedPaths) and its earlier version keeps its key, so nothing says complete; where a later
-// request superseded it, that request's own CLOSURE takes the card under its id. Before QD-1167 the pass skipped the
-// request, and the slots kept the documents under their live keys.
+// the ledger owes, the slots rewritten under fresh keys, and rewrites the card, met before the check failed, by
+// CLOSURE, whose ERASE ends the erasure (QD-1168), so the next CUT on the cards ref drops it from the set, a
+// superseding request's own CUT in the same pass among them. Before QD-1167 the pass skipped the request, and the slots
+// kept the documents under their live keys; before QD-1168 the card stayed owed its CLOSURE, its earlier version
+// keeping its key, and the erasure stayed open.
 func TestDirectoryFormat2RewriteOwedFinishesOnceTheErasedRequestsCheckFails(t *testing.T) {
 	cardsRef := sidecar.DirectoryErasureTestCardsRef
 	for _, check := range testBegunChecks() {
@@ -242,8 +246,8 @@ func TestDirectoryFormat2RewriteOwedFinishesOnceTheErasedRequestsCheckFails(t *t
 		pass = seed.admin.pass(t, seed.runner)
 		seed.checkFailed(t, check, pass)
 		files = pass.Files[seed.requestId]
-		if files == nil || files.CutCount != 0 || files.IndexPairCount == 0 || files.IndexWaiting || files.Complete || len(files.ClosedPaths) != 0 ||
-			len(files.WaitingPaths) != 0 || !slices.Equal(files.UnclosedPaths, []string{seed.cardPath}) {
+		if files == nil || files.CutCount != 0 || files.IndexPairCount == 0 || files.IndexWaiting || !files.Complete ||
+			!slices.Equal(files.ClosedPaths, []string{seed.cardPath}) || len(files.WaitingPaths) != 0 {
 			t.Fatalf("%s: the pass after the check failed: %+v", check, files)
 		}
 		for _, document := range [][]byte{seed.repoDocument, seed.runDocument} {
@@ -254,33 +258,33 @@ func TestDirectoryFormat2RewriteOwedFinishesOnceTheErasedRequestsCheckFails(t *t
 		if readable := refs.Readable(cardsRef, []byte("a/another")); len(readable) == 0 {
 			t.Fatalf("%s: the other document left the cards ref's index", check)
 		}
-		if after := len(seed.requestClosures()); after != closures {
-			t.Fatalf("%s: %d CLOSUREs of the cards ref for the request after its check failed", check, after-closures)
+		if after := seed.requestClosures(); len(after) != closures+1 || after[len(after)-1].path != seed.cardPath {
+			t.Fatalf("%s: %d CLOSUREs of the cards ref for the request after its check failed", check, len(after)-closures)
 		}
-		if check == testBegunSuperseded {
-			// the later request, inside its own window, takes the card by its own CLOSURE
-			if !slices.ContainsFunc(seed.evs.cardClosures(), func(closure *testErasurePush) bool {
-				return closure.erasureId == seed.laterId && closure.path == seed.cardPath
-			}) {
-				t.Fatalf("%s: no CLOSURE of the later request took the card", check)
-			}
-		} else if readable := testReadableAt(t, seed.evs, testErasureProject, seed.cardPath); len(readable) == 0 {
-			t.Fatalf("%s: the card met before the check failed was rewritten", check)
+		if readable := seed.evs.readable(t, testErasureProject); len(readable) != 0 {
+			t.Fatalf("%s: card versions naming the repo still open: %v", check, readable)
 		}
-		if _, _, complete := refs.Erases(seed.requestId); complete {
-			t.Fatalf("%s: the erasure reads complete with a card it met owed its CLOSURE", check)
+		if _, _, complete := refs.Erases(seed.requestId); !complete {
+			t.Fatalf("%s: the erasure reads open after the card's ERASE", check)
 		}
 		seed.noNewCopy(t, check, other)
 		refs.Sweep()
+		if check != testBegunSuperseded {
+			// a superseding request's CUT of this pass already took this place
+			seed.otherAdminCut(t, cardsRef)
+		}
+		if refs.Lists(cardsRef, seed.requestId) {
+			t.Fatalf("%s: the cards ref's set lists the erasure after it ended", check)
+		}
+		refs.Sweep()
 
-		// nothing more is owed: a pass reads the request no further, the card still unrewritten
+		// nothing more is owed: a pass reads the request no further
 		if files := seed.admin.pass(t, seed.runner).Files[seed.requestId]; files != nil {
 			t.Fatalf("%s: a pass with nothing owed: %+v", check, files)
 		}
-		if after := len(seed.requestClosures()); after != closures {
-			t.Fatalf("%s: %d CLOSUREs of the cards ref for the request once nothing was owed", check, after-closures)
+		if after := len(seed.requestClosures()); after != closures+1 {
+			t.Fatalf("%s: %d CLOSUREs of the cards ref for the request once it ended", check, after-closures)
 		}
-		refs.Sweep()
 	}
 }
 
@@ -318,7 +322,7 @@ func TestDirectoryFormat2OrphanedClosureIsErasedOnceTheErasedRequestsCheckFails(
 		seed.checkFailed(t, check, pass)
 		files := pass.Files[seed.requestId]
 		if files == nil || files.ErasedKeyCount == 0 || !files.Complete || files.CutCount != 0 || len(files.ClosedPaths) != 0 ||
-			len(files.WaitingPaths) != 0 || len(files.UnclosedPaths) != 0 {
+			len(files.WaitingPaths) != 0 {
 			t.Fatalf("%s: the pass after the check failed: %+v", check, files)
 		}
 		if readable := seed.evs.readable(t, testErasureProject); len(readable) != 0 {
@@ -348,11 +352,13 @@ func TestDirectoryFormat2OrphanedClosureIsErasedOnceTheErasedRequestsCheckFails(
 }
 
 // The request's first pass erases the repo's announce entry, and its CUT on the cards ref meets a full erasure set, so
-// nothing of either ref is listed and the call waits, its documents journaled owed a CUT; then the check fails. The
-// next pass, with room in the set, CUTs them on both refs as the ledger owes and rewrites the index files holding
-// them, rewriting no card and no repo file for the request, and says nothing complete while the card waits for its
-// writer. Before QD-1167 the pass skipped the request: its documents stayed unlisted in index files under live keys,
-// in search though their announce entry was erased.
+// nothing of either ref is listed and the call waits, its documents journaled owed a CUT, before any file's CLOSURE;
+// then the check fails. The next pass, with room in the set, CUTs them on both refs as the ledger owes and rewrites the
+// index files holding them, and the repo file, met at the first pass, by CLOSURE where its standing version, the
+// request's marker or a later request's, no longer holds the repo's document (QD-1168), not where the repo was
+// announced again; it says nothing complete while the card waits for its writer. Before QD-1167 the pass skipped the
+// request: its documents stayed unlisted in index files under live keys, in search though their announce entry was
+// erased.
 func TestDirectoryFormat2CutsOwedAreSentOnceTheErasedRequestsCheckFails(t *testing.T) {
 	cardsRef := sidecar.DirectoryErasureTestCardsRef
 	streamsRef := sidecar.DirectoryErasureTestStreamsRef
@@ -376,8 +382,13 @@ func TestDirectoryFormat2CutsOwedAreSentOnceTheErasedRequestsCheckFails(t *testi
 		pass = seed.admin.pass(t, seed.runner)
 		seed.checkFailed(t, check, pass)
 		files = pass.Files[seed.requestId]
-		if files == nil || files.CutCount != 2 || files.IndexPairCount == 0 || files.IndexWaiting || files.Complete || len(files.ClosedPaths) != 0 ||
-			!slices.Equal(files.WaitingPaths, []string{seed.cardPath}) {
+		closed := []string{seed.repoPath}
+		if check == testBegunLapsed {
+			// the repo file holds the repo's item announced again
+			closed = []string{}
+		}
+		if files == nil || files.CutCount != 2 || files.IndexPairCount == 0 || files.IndexWaiting || files.Complete ||
+			!slices.Equal(files.ClosedPaths, closed) || !slices.Equal(files.WaitingPaths, []string{seed.cardPath}) {
 			t.Fatalf("%s: the pass after the check failed: %+v", check, files)
 		}
 		for _, each := range []struct {
@@ -396,8 +407,14 @@ func TestDirectoryFormat2CutsOwedAreSentOnceTheErasedRequestsCheckFails(t *testi
 				t.Fatalf("%s: on %s index versions holding %s still open: %v", check, each.ref, each.document, readable)
 			}
 		}
-		if closures := seed.requestClosures(); len(closures) != 0 {
+		closures := seed.requestClosures()
+		if len(closures) != len(closed) || slices.ContainsFunc(closures, func(closure *testErasurePush) bool { return closure.path != seed.repoPath }) {
 			t.Fatalf("%s: %d CLOSUREs of the cards ref for the request", check, len(closures))
+		}
+		if check != testBegunLapsed {
+			if readable := seed.evs.readable(t, testErasureRepoTitle); len(readable) != 0 {
+				t.Fatalf("%s: repo file versions holding the title still open: %v", check, readable)
+			}
 		}
 		if _, _, complete := refs.Erases(seed.requestId); complete {
 			t.Fatalf("%s: the erasure reads complete while the card waits for its writer", check)
@@ -409,4 +426,130 @@ func TestDirectoryFormat2CutsOwedAreSentOnceTheErasedRequestsCheckFails(t *testi
 		}
 		refs.Sweep()
 	}
+}
+
+// The card waits for its writer when a later request supersedes the request, and the writer then writes the run
+// private. Another directory admin's device, which holds no ledger of the request, works the later request first, its
+// CLOSURE taking the card under the later request's id. The request's next pass reads every path its ledger met
+// rewritten, the repo file and the card both by the later request's CLOSUREs, with nothing else owed, and ends the
+// erasure by a rewrite of the cards ref (QD-1168): its last ERASE there says complete, a completion ERASE where nothing
+// is left to rewrite (QD-1132's form); the later request's rewrite left the index file it rewrote with an earlier version
+// under a key that ERASE destroyed, which the rewrite reads as holding, so it rewrites that file once more. No CLOSURE of
+// the cards ref is the request's own, and the next CUT on the cards ref drops it from the set. Before QD-1168 nothing
+// of the request was owed then, so no ERASE of it said complete and it stayed pending in the set for good.
+func TestDirectoryFormat2SupersededErasureWhoseCardALaterRequestRewroteFirstEnds(t *testing.T) {
+	cardsRef := sidecar.DirectoryErasureTestCardsRef
+	seed := newTestBegunSeed(t)
+	refs := seed.refs
+	if files := seed.admin.pass(t, seed.runner).Files[seed.requestId]; files == nil || files.Complete ||
+		!slices.Equal(files.ClosedPaths, []string{seed.repoPath}) || !slices.Equal(files.WaitingPaths, []string{seed.cardPath}) {
+		t.Fatalf("the first pass: %+v", files)
+	}
+	seed.failCheck(t, testBegunSuperseded)
+	seed.writeRun(t, 2, true)
+
+	other := seed.evs.adminDevice(t)
+	refs.Admit(other.writer.sidecarId)
+	otherRunner := testRefsRunner(t, other, seed.evs.bindRefs(other, refs))
+	otherPass := other.pass(t, otherRunner)
+	if files := otherPass.Files[seed.laterId]; files == nil || !files.Complete || !slices.Contains(files.ClosedPaths, seed.cardPath) {
+		t.Fatalf("the other device's pass of the later request: %+v", files)
+	}
+	if files := otherPass.Files[seed.requestId]; files != nil {
+		t.Fatalf("the other device worked the request with no ledger of it: %+v", files)
+	}
+	if readable := seed.evs.readable(t, testErasureProject); len(readable) != 0 {
+		t.Fatalf("card versions naming the repo still open: %v", readable)
+	}
+	count, _, complete := refs.Erases(seed.requestId)
+	if complete {
+		t.Fatal("the request's erasure reads complete before its pass")
+	}
+	closures := len(seed.requestClosures())
+
+	pass := seed.admin.pass(t, seed.runner)
+	seed.checkFailed(t, testBegunSuperseded, pass)
+	files := pass.Files[seed.requestId]
+	if files == nil || !files.Complete || len(files.ClosedPaths) != 0 || files.CutCount != 0 || files.ErasedKeyCount != 0 ||
+		len(files.WaitingPaths) != 0 || len(files.ConflictPaths) != 0 {
+		t.Fatalf("the pass once the later request rewrote every path the request met: %+v", files)
+	}
+	ended, _, complete := refs.Erases(seed.requestId)
+	if ended <= count || !complete {
+		t.Fatalf("the request's ERASEs: %d more, complete %t", ended-count, complete)
+	}
+	if after := len(seed.requestClosures()); after != closures {
+		t.Fatalf("%d CLOSUREs of the cards ref for the request", after-closures)
+	}
+	refs.Sweep()
+	seed.otherAdminCut(t, cardsRef)
+	if refs.Lists(cardsRef, seed.requestId) {
+		t.Fatal("the cards ref's set lists the erasure after it ended")
+	}
+	refs.Sweep()
+	if files := seed.admin.pass(t, seed.runner).Files[seed.requestId]; files != nil {
+		t.Fatalf("a pass after the erasure ended: %+v", files)
+	}
+	if after, _, _ := refs.Erases(seed.requestId); after != ended {
+		t.Fatalf("%d ERASEs of the request after it ended", after-ended)
+	}
+}
+
+// Two directory admins' runners work the request, and its card waits for its writer on both copies; then the check
+// fails, its repo announced again, and the writer writes the run private. One runner rewrites the card, which it met, by
+// CLOSURE, and that CLOSURE's ERASE ends the erasure. The other then reads the card rewritten, by that runner's
+// CLOSURE, with nothing else owed and no ERASE of its own having said complete, so it asks the cards ref's rewrite to
+// end the erasure; that rewrite reads it complete with nothing left to rewrite there and sends nothing (hooked, as the
+// eraser answers then: its history walk here reads more conservatively, rewriting once more what another runner's
+// CLOSURE replaced). The runner keeps that reading, so no later pass asks again (QD-1168).
+func TestDirectoryFormat2ErasureAnotherRunnerEndedIsReadEnded(t *testing.T) {
+	cardsRef := sidecar.DirectoryErasureTestCardsRef
+	seed := newTestBegunSeed(t)
+	refs := seed.refs
+	second := seed.evs.adminDevice(t)
+	refs.Admit(second.writer.sidecarId)
+	secondRunner := testRefsRunner(t, second, seed.evs.bindRefs(second, refs))
+	for _, each := range []struct {
+		device *testDirectoryDevice
+		runner *sidecar.DirectoryErasureRunner
+	}{
+		{device: seed.admin, runner: seed.runner},
+		{device: second, runner: secondRunner},
+	} {
+		if files := each.device.pass(t, each.runner).Files[seed.requestId]; files == nil || files.Complete || !slices.Equal(files.WaitingPaths, []string{seed.cardPath}) {
+			t.Fatalf("a runner's first pass: %+v", files)
+		}
+	}
+	seed.failCheck(t, testBegunLapsed)
+	seed.writeRun(t, 2, true)
+	files := second.pass(t, secondRunner).Files[seed.requestId]
+	if files == nil || !files.Complete || !slices.Equal(files.ClosedPaths, []string{seed.cardPath}) {
+		t.Fatalf("the second runner's pass: %+v", files)
+	}
+	count, _, complete := refs.Erases(seed.requestId)
+	if !complete {
+		t.Fatal("the erasure reads open after the second runner's CLOSURE")
+	}
+	closures := len(seed.requestClosures())
+
+	seed.hooks.readDone[cardsRef] = true
+	pass := seed.admin.pass(t, seed.runner)
+	seed.checkFailed(t, testBegunLapsed, pass)
+	files = pass.Files[seed.requestId]
+	if seed.hooks.readDoneCount != 1 || files == nil || files.Complete || files.CutCount != 0 || files.IndexPairCount != 0 || files.ErasedKeyCount != 0 ||
+		len(files.ClosedPaths) != 0 || len(files.WaitingPaths) != 0 || len(files.ConflictPaths) != 0 {
+		t.Fatalf("the first runner's pass once the second ended the erasure: %d rewrites read it ended, files %+v", seed.hooks.readDoneCount, files)
+	}
+	for range 2 {
+		if files := seed.admin.pass(t, seed.runner).Files[seed.requestId]; files != nil {
+			t.Fatalf("a later pass of the first runner: %+v", files)
+		}
+	}
+	if after, _, complete := refs.Erases(seed.requestId); after != count || !complete {
+		t.Fatalf("the first runner's passes: %d ERASEs more, complete %t", after-count, complete)
+	}
+	if after := len(seed.requestClosures()); after != closures || seed.hooks.readDoneCount != 1 {
+		t.Fatalf("%d CLOSUREs of the cards ref, %d rewrites, after the erasure ended", after-closures, seed.hooks.readDoneCount)
+	}
+	refs.Sweep()
 }

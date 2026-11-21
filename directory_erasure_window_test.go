@@ -31,9 +31,13 @@ import (
 	"github.com/urnetwork/sidecar"
 )
 
-// The next CUT each index ref of a device refuses, by ref name, as a full set or a kill would.
+// The next CUT each index ref of a device refuses, by ref name, as a full set or a kill would; and the refs whose next
+// rewrite reads its erasure complete with nothing left to rewrite there, as the eraser answers then, sending nothing,
+// with how many rewrites answered so.
 type testWindowHooks struct {
-	refuseCut map[string]error
+	refuseCut     map[string]error
+	readDone      map[string]bool
+	readDoneCount int
 }
 
 // One index ref's eraser of one call, hooked.
@@ -49,6 +53,15 @@ func (self *testWindowIndex) Cut(ctx context.Context, args *sidecar.IndexCutArgs
 		return nil, err
 	}
 	return self.DirectoryErasureIndex.Cut(ctx, args)
+}
+
+func (self *testWindowIndex) Rewrite(ctx context.Context, args *sidecar.IndexRewriteArgs) (*sidecar.IndexRewriteResult, error) {
+	if self.hooks.readDone[self.ref] {
+		delete(self.hooks.readDone, self.ref)
+		self.hooks.readDoneCount += 1
+		return &sidecar.IndexRewriteResult{Erasure: &sidecar.SidecarErasure{ErasureId: args.ErasureId, State: sidecar.SidecarErasureDone}, Attempts: 1}, nil
+	}
+	return self.DirectoryErasureIndex.Rewrite(ctx, args)
 }
 
 // A device's reach with both index refs' erasers hooked.
@@ -75,7 +88,7 @@ func (self *testWindowFiles) StreamsIndex(ctx context.Context, repoId sidecar.Id
 
 // Binds device's format-2 erasers to files with both index refs hooked.
 func testBindWindow(device *testDirectoryDevice, files sidecar.DirectoryErasureFiles) *testWindowHooks {
-	hooks := &testWindowHooks{refuseCut: map[string]error{}}
+	hooks := &testWindowHooks{refuseCut: map[string]error{}, readDone: map[string]bool{}}
 	device.client.BindErasureFiles(&testWindowFiles{DirectoryErasureFiles: files, hooks: hooks})
 	return hooks
 }
@@ -189,7 +202,7 @@ func TestDirectoryFormat2RewriteWaitingOnTheAllowanceFinishesPastTheWindow(t *te
 	pass := seed.admin.pass(t, seed.runner)
 	files = pass.Files[seed.requestId]
 	if len(pass.Erased[seed.requestId]) != 0 || files == nil || files.CutCount != 0 || files.IndexPairCount == 0 || files.IndexWaiting ||
-		files.Complete || !slices.Equal(files.WaitingPaths, []string{seed.cardPath}) || len(files.ClosedPaths) != 0 || len(files.UnclosedPaths) != 0 {
+		files.Complete || !slices.Equal(files.WaitingPaths, []string{seed.cardPath}) || len(files.ClosedPaths) != 0 {
 		t.Fatalf("the pass past the window: erased %v, files %+v", pass.Erased[seed.requestId], files)
 	}
 	if version := refs.ListedVersion(cardsRef, seed.requestId, other.document); version != 0 {
@@ -215,7 +228,7 @@ func TestDirectoryFormat2RewriteWaitingOnTheAllowanceFinishesPastTheWindow(t *te
 	pass = seed.admin.pass(t, seed.runner)
 	files = pass.Files[seed.requestId]
 	if len(pass.Erased[seed.requestId]) != 0 || files == nil || !slices.Equal(files.ClosedPaths, []string{seed.cardPath}) || !files.Complete ||
-		files.CutCount != 0 || files.IndexPairCount != 0 || len(files.WaitingPaths) != 0 || len(files.UnclosedPaths) != 0 {
+		files.CutCount != 0 || files.IndexPairCount != 0 || len(files.WaitingPaths) != 0 {
 		t.Fatalf("the pass after both writers wrote their runs private past the window: erased %v, files %+v", pass.Erased[seed.requestId], files)
 	}
 	if after := seed.evs.cardClosures(); len(after) != closures+1 || after[len(after)-1].path != seed.cardPath || after[len(after)-1].erasureId != seed.requestId {
@@ -268,7 +281,7 @@ func TestDirectoryFormat2CardMetInsideTheWindowIsRewrittenPastIt(t *testing.T) {
 	pass := seed.admin.pass(t, seed.runner)
 	files := pass.Files[seed.requestId]
 	if len(pass.Erased[seed.requestId]) != 0 || files == nil || files.CutCount != 0 || files.IndexPairCount == 0 || files.IndexWaiting ||
-		!files.Complete || !slices.Equal(files.ClosedPaths, []string{seed.cardPath}) || len(files.WaitingPaths) != 0 || len(files.UnclosedPaths) != 0 {
+		!files.Complete || !slices.Equal(files.ClosedPaths, []string{seed.cardPath}) || len(files.WaitingPaths) != 0 {
 		t.Fatalf("the pass past the window: erased %v, files %+v", pass.Erased[seed.requestId], files)
 	}
 	if after := len(seed.evs.cardClosures()); after != closures+1 {
@@ -448,7 +461,7 @@ func TestDirectoryFormat2OrphanedClosureNearTheWindowsEndIsErasedPastIt(t *testi
 	pass := admin.pass(t, runner)
 	files := pass.Files[requestId]
 	if len(pass.Erased[requestId]) != 0 || files == nil || files.ErasedKeyCount == 0 || !files.Complete || files.CutCount != 0 ||
-		len(files.ClosedPaths) != 0 || len(files.UnclosedPaths) != 0 {
+		len(files.ClosedPaths) != 0 {
 		t.Fatalf("the pass past the window: erased %v, files %+v", pass.Erased[requestId], files)
 	}
 	if readable := evs.readable(t, testErasureProject); len(readable) != 0 {
