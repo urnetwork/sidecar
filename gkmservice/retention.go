@@ -217,11 +217,12 @@ func (self *GkmReconciler) sweepUnit(ctx context.Context, cluster sidecar.BlobCl
 // Whether a hold covers a repo, read through its repo/'s network: true too when the repo or its network cannot be
 // read, since every doubt keeps data.
 func (self *GkmReconciler) repoHeld(ctx context.Context, cluster sidecar.BlobCluster, repoId sidecar.Id) bool {
-	objectBytes, _, err := readGkmObject(ctx, cluster, GkmEvsRepoKey(repoId), gkmEvsRepoMaxByteCount)
+	maxByteCount := self.settings.Service.RepoObjectMaxByteCount
+	objectBytes, _, err := readGkmObject(ctx, cluster, GkmEvsRepoKey(repoId), maxByteCount)
 	if err != nil {
 		return true
 	}
-	object, err := parseGkmEvsRepoObject(repoId, objectBytes)
+	object, err := parseGkmEvsRepoObject(repoId, objectBytes, maxByteCount)
 	if err != nil {
 		return true
 	}

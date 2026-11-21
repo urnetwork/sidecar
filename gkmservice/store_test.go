@@ -203,14 +203,16 @@ func TestGkmCreateAnswersTheWinnerAndResolvesLostAnswers(t *testing.T) {
 	}
 }
 
-// repo/ and the GroupForms are cached at most 5 s, so a state change is seen within that.
+// repo/ and the GroupForms are cached at most 5 s, so a state change is seen within that. An active repo's deletion
+// stands in for any change of a state its creation does not move on from within moments; a keying repo/'s ttl is
+// TestGkmRepoCacheKeepsAKeyingRepoOnlyItsKeyingTtl's.
 func TestGkmRepoAndFormCachesHoldAnAnswerAtMostTheirTtl(t *testing.T) {
 	fixture := newGkmFixture(t)
 	repoId := testId("repo-r")
-	fixture.placeRepo(repoId, "meta-1", protocol.EvsRepoState_EVS_REPO_KEYING)
+	fixture.placeRepo(repoId, "meta-1", protocol.EvsRepoState_EVS_REPO_ACTIVE)
 	cluster := fixture.cluster("meta-1")
 	object, err := fixture.engine.repos.read(fixture.ctx, cluster, repoId)
-	if err != nil || object.GetState() != protocol.EvsRepoState_EVS_REPO_KEYING {
+	if err != nil || object.GetState() != protocol.EvsRepoState_EVS_REPO_ACTIVE {
 		t.Fatalf("repo/: %v %v", object, err)
 	}
 	info, err := cluster.Head(fixture.ctx, GkmEvsRepoKey(repoId))
@@ -218,15 +220,15 @@ func TestGkmRepoAndFormCachesHoldAnAnswerAtMostTheirTtl(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := cluster.PutIfMatch(fixture.ctx, GkmEvsRepoKey(repoId), info.Etag, fixture.marshal(&protocol.EvsRepoObject{
-		RepoId: repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL, State: protocol.EvsRepoState_EVS_REPO_ACTIVE, Format: 1,
+		RepoId: repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL, State: protocol.EvsRepoState_EVS_REPO_DELETED, Format: 1,
 	}), nil); err != nil {
 		t.Fatal(err)
 	}
-	if object, _ := fixture.engine.repos.read(fixture.ctx, cluster, repoId); object.GetState() != protocol.EvsRepoState_EVS_REPO_KEYING {
+	if object, _ := fixture.engine.repos.read(fixture.ctx, cluster, repoId); object.GetState() != protocol.EvsRepoState_EVS_REPO_ACTIVE {
 		t.Error("the cache did not hold its answer")
 	}
 	fixture.clock.Advance(fixture.settings.RepoCacheTtl)
-	if object, _ := fixture.engine.repos.read(fixture.ctx, cluster, repoId); object.GetState() != protocol.EvsRepoState_EVS_REPO_ACTIVE {
+	if object, _ := fixture.engine.repos.read(fixture.ctx, cluster, repoId); object.GetState() != protocol.EvsRepoState_EVS_REPO_DELETED {
 		t.Error("the cache held its answer past its ttl")
 	}
 
