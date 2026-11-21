@@ -11,6 +11,8 @@ package sidecar
 import (
 	"context"
 	"errors"
+	"net"
+	"net/netip"
 
 	"github.com/urnetwork/connect"
 )
@@ -50,7 +52,6 @@ func newMailSidecarReceiverFactory(sidecar *Sidecar) mailReceiverFactory {
 			closeParts()
 			return nil, nil, err
 		}
-		root := args.Root
 		config := args.Config
 		strict := NewMailStrictPolicy(&MailStrictPolicyArgs{
 			Strict: func() bool {
@@ -61,7 +62,10 @@ func newMailSidecarReceiverFactory(sidecar *Sidecar) mailReceiverFactory {
 				settings, known := state.HeadSettings()
 				return known && MailStrictSetting(settings)
 			},
-			Root: func() string { return root },
+			Root: func() string {
+				zone, _, _ := config.zone()
+				return zone.Root
+			},
 			Chain: func(ctx context.Context, sniHost string, recipientDomains []string, spkiSha256 []byte) bool {
 				watch := sidecar.mailDnsWatch()
 				return watch != nil && watch.StrictChain(ctx, sniHost, recipientDomains, spkiSha256)
@@ -69,19 +73,7 @@ func newMailSidecarReceiverFactory(sidecar *Sidecar) mailReceiverFactory {
 		})
 		sessions, err := NewMailSessionServer(&MailSessionArgs{
 			ReceiverSidecarId: identity.SidecarId,
-			Resolve: func(ctx context.Context, address string) (*MailSessionRecipient, error) {
-				recipient, ok := MailReceiverRecipient(root, address)
-				if !ok {
-					// no form of §15.8's under the root, nor a custom domain's bounce (QD-1129): unknown, as an unknown
-					// address is (550 5.1.1)
-					return &MailSessionRecipient{}, nil
-				}
-				lookup, err := config.Resolve(ctx, recipient)
-				if err != nil {
-					return nil, err
-				}
-				return &MailSessionRecipient{Known: lookup.Known, Address: recipient.Address(), RepoId: lookup.MailboxRepoId}, nil
-			},
+			mailConfig:        config,
 			// a bare RCPT TO:<Postmaster> with no SNI: this network receiver's own zone, <label>.<root>, under the root
 			// Resolve parses with, from GET /dns/zone as the certificate's names are (owner decision 446)
 			PostmasterDomain: func(ctx context.Context) (string, error) {
@@ -92,7 +84,7 @@ func newMailSidecarReceiverFactory(sidecar *Sidecar) mailReceiverFactory {
 				if zone.Label == "" {
 					return "", nil
 				}
-				return MailZone{Root: canonicalNetworkLabelRoot(root), Net: zone.Label}.Domain(), nil
+				return MailZone{Root: canonicalNetworkLabelRoot(zone.Root), Net: zone.Label}.Domain(), nil
 			},
 			Status:      args.Api.MailStatus,
 			Limits:      args.Api.Limits,
@@ -144,6 +136,42 @@ func newMailSidecarReceiverFactory(sidecar *Sidecar) mailReceiverFactory {
 		if err != nil {
 			closeParts()
 			return nil, nil, err
+		}
+		if args.DirectMxEligible != nil {
+			receiver.runDirect = func(ctx context.Context) {
+				// A receiver can start before its zone arrives. Its public greeting uses the assigned MX name.
+				var zone MailZone
+				var err error
+				for {
+					zone, _, err = config.zone()
+					if err == nil {
+						break
+					}
+					select {
+					case <-ctx.Done():
+						return
+					case <-sessions.clock.After(sessions.settings.StatusInterval):
+					}
+				}
+				direct, err := NewMailDirectListener(&MailDirectListenerArgs{
+					Receiver: receiver, Sessions: sessions, HostName: "mx." + zone.Domain(),
+					Clock: args.Clock, Log: args.Log, Settings: receive.Direct,
+				})
+				if err != nil {
+					sessions.log.Warningf("[mail]direct MX listener settings: %v", err)
+					return
+				}
+				direct.runAssigned(ctx, sessions.settings.StatusInterval, func(ctx context.Context) []netip.Addr {
+					if !args.DirectMxEligible() {
+						return nil
+					}
+					status, err := sessions.networkStatus(ctx)
+					if err != nil || !status.Enabled {
+						return nil
+					}
+					return status.DirectMxAddresses
+				}, (&net.ListenConfig{}).Listen)
+			}
 		}
 		return receiver, closeParts, nil
 	}

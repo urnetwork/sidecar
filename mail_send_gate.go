@@ -6,7 +6,7 @@
 // (mail_send_daemon.go) or a mail client's on the submission port (MailClient.SubmitMessage). Each starts from the
 // same plan, so a send the gate holds was refused for no shape, zone or From, and then:
 //
-//	action    MCP-M3-02's mail_send row: every recipient, Bcc included, distinct and lowercase in the order Send names
+//	action    MCP-M3-02's mail_send row: every recipient, Bcc included, distinct with its delivery spelling in the order Send names
 //	          them (To, Cc, Bcc; a submission's envelope order); the From in its one form as from_alias; body_sha256,
 //	          for a draft SHA-256 over the subject, a CRLF and the text as the draft gives them (a subject holds no line
 //	          break, so its first CRLF ends it), for a submission SHA-256 over the message's bytes as submitted; and a
@@ -64,7 +64,7 @@ func (self *MailClient) gatedSend(ctx context.Context, plan *mailSendPlan, conte
 	if err != nil {
 		return nil, err
 	}
-	effect := &mailSendEffect{client: self, replan: replan, content: content}
+	effect := &mailSendEffect{client: self, replan: replan, content: content, approved: stored.Action}
 	action := &SidecarAction{
 		Kind:      SidecarActionMail,
 		Canonical: stored.Bytes,
@@ -199,8 +199,9 @@ func mailSendApprovalNotAfter(ctx context.Context) time.Time {
 type mailSendEffect struct {
 	client *MailClient
 	// the send's plan made again at the spend, held to policy as it stands then
-	replan  func() (*mailSendPlan, error)
-	content *mailSendContent
+	replan   func() (*mailSendPlan, error)
+	content  *mailSendContent
+	approved *protocol.CanonicalAction
 
 	stateLock sync.Mutex
 	result    *MailSendResult
@@ -216,6 +217,9 @@ func (self *mailSendEffect) Run(ctx context.Context, effectKey []byte) ([]byte, 
 	plan, err := self.replan()
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrSidecarEffectNotDone, err)
+	}
+	if plan.fromAddress != self.approved.GetAlias() || !slices.Equal(plan.recipients, self.approved.GetRecipients()) {
+		return nil, fmt.Errorf("%w: the delivery addresses changed after approval", ErrSidecarEffectNotDone)
 	}
 	result, err := self.client.deliverSend(ctx, plan, self.content, effectKey)
 	if errors.Is(err, ErrMailSendUncertain) {

@@ -131,7 +131,7 @@ func (self *mailSubmissionSession) Rcpt(to string, opts *smtp.RcptOptions) error
 	if self.server.settings.RecipientMaxCount <= recipientCount {
 		return mailSubmitReplyTooMany
 	}
-	address := dnsAsciiLower(strings.TrimSpace(to))
+	address := mailSendAddress(NetworkLabelRow{}, to)
 	parsed, err := mail.ParseAddress(address)
 	if err != nil || parsed.Address != address || parsed.Name != "" || strings.ContainsAny(address, "\r\n<>,") {
 		return mailSubmitReplyBadAddress
@@ -263,21 +263,18 @@ func (self *MailClient) SubmitMessage(ctx context.Context, args *MailSubmitArgs)
 	if args == nil || len(args.Message) == 0 || settings.MessageMaxByteCount < len(args.Message) {
 		return nil, fmt.Errorf("%w: no message, or one past its bound", ErrMailSendInvalid)
 	}
-	recipients, err := mailSendAddressList(settings, args.Recipients)
-	if err != nil {
-		return nil, err
-	}
+	recipients := slices.Clone(args.Recipients)
 	from, err := mailSubmitFrom(args.Message)
 	if err != nil {
 		return nil, err
 	}
-	plan, err := self.planSendFrom(from, recipients, "")
+	plan, err := self.planSendFrom(from, "", recipients)
 	if err != nil {
 		return nil, err
 	}
 	content := &mailSendContent{raw: bytes.Clone(args.Message)}
 	return self.sendPlanned(ctx, plan, content, MailConfigActionArgs{}, func() (*mailSendPlan, error) {
-		return self.planSendFrom(from, recipients, "")
+		return self.planSendFrom(from, "", recipients)
 	})
 }
 

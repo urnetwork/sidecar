@@ -32,6 +32,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -73,14 +74,15 @@ type mailReceiverFactory func(args *mailReceiverFactoryArgs) (*MailReceiver, fun
 
 // What a receiver is built over.
 type mailReceiverFactoryArgs struct {
-	Evs      *EvsClient
-	Config   *MailConfig
-	Root     string
-	Api      MailApi
-	Store    SidecarStore
-	Settings *MailReceiveSettings
-	Clock    Clock
-	Log      Logger
+	// The signed network-scope mail designation of this daemon, checked before each direct bind.
+	DirectMxEligible func() bool
+	Evs              *EvsClient
+	Config           *MailConfig
+	Api              MailApi
+	Store            SidecarStore
+	Settings         *MailReceiveSettings
+	Clock            Clock
+	Log              Logger
 }
 
 // One generation's running parts, under the client's stateLock.
@@ -525,16 +527,26 @@ func (self *MailClient) startReceiver(run *mailComponentRun, binding *MailBindin
 	if err != nil {
 		return nil, err
 	}
-	receiver, closeParts, err := factory(&mailReceiverFactoryArgs{
+	args := &mailReceiverFactoryArgs{
 		Evs:      binding.Evs,
 		Config:   config,
-		Root:     self.networkRow().Root,
 		Api:      binding.Api,
 		Store:    self.store,
 		Settings: self.settings.Receive,
 		Clock:    self.clock,
 		Log:      self.log,
-	})
+	}
+	if self.Profile().MayIndex() && binding.Config != nil {
+		args.DirectMxEligible = func() bool {
+			state, err := binding.Config()
+			if err != nil || state == nil {
+				return false
+			}
+			receivers, _ := MailDesignatedReceivers(state, binding.IndexerServices)
+			return slices.Contains(mailNetworkIndexers(state, receivers), self.sidecarId)
+		}
+	}
+	receiver, closeParts, err := factory(args)
 	if err != nil {
 		return nil, err
 	}
@@ -544,7 +556,12 @@ func (self *MailClient) startReceiver(run *mailComponentRun, binding *MailBindin
 		defer self.stateLock.Unlock()
 		run.receiver = receiver
 		run.receiverCancel = receiverCancel
-		run.receiverClose = closeParts
+		run.receiverClose = func() {
+			<-receiver.done
+			if closeParts != nil {
+				closeParts()
+			}
+		}
 	}()
 	var pending *ApprovalPendingError
 	if err := receiver.Start(receiverCtx); err != nil && !errors.As(err, &pending) && self.log.V(1).Enabled() {

@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/netip"
 	"slices"
 	"strconv"
 	"strings"
@@ -74,6 +75,10 @@ func TestSidecarApiMailRoutesRefuseAnAnswerThatIsNotTheirShape(t *testing.T) {
 		`{"enabled":true,"storage_full":false,"spent":false,"direct_mx":false}`,
 		`{"enabled":true,"storage_full":false,"spent":false,"direct_mx":false,"strict_domains":null}`,
 		`{"enabled":true,"storage_full":false,"spent":false,"direct_mx":false,"strict_domains":"brand.example"}`,
+		`{"enabled":true,"storage_full":false,"spent":false,"direct_mx":true,"strict_domains":[],"direct_mx_addresses":["0.0.0.0"]}`,
+		`{"enabled":true,"storage_full":false,"spent":false,"direct_mx":true,"strict_domains":[],"direct_mx_addresses":["10.2.3.4"]}`,
+		`{"enabled":true,"storage_full":false,"spent":false,"direct_mx":false,"strict_domains":[],"direct_mx_addresses":["192.0.2.25"]}`,
+		`{"enabled":true,"storage_full":false,"spent":false,"direct_mx":false,"strict_domains":[],"verified_domains":["Customer.Example"]}`,
 		`[]`,
 	} {
 		api := newTestSidecarApi(t, answerWith(http.StatusOK, body))
@@ -138,5 +143,18 @@ func TestSidecarApiMailStatusNamesTheStrictDomains(t *testing.T) {
 		case !c.taken && !errors.Is(err, ErrSidecarApiReply):
 			t.Errorf("%q: %v, want a malformed reply", c.domain, err)
 		}
+	}
+}
+
+// A pending assignment is visible only through the per-receiver field. Older replies carry no addresses.
+func TestSidecarApiMailStatusReadsReceiverAssignments(t *testing.T) {
+	const body = `{"enabled":true,"storage_full":false,"spent":false,"direct_mx":true,"strict_domains":[],
+		"verified_domains":["customer.example"],"direct_mx_addresses":["192.0.2.25","2001:db8::25"]}`
+	transport := answerWith(http.StatusOK, body)
+	api := newTestSidecarApi(t, transport)
+	status, err := api.MailStatus(context.Background())
+	if err != nil || !slices.Equal(status.VerifiedDomains, []string{"customer.example"}) ||
+		!slices.Equal(status.DirectMxAddresses, []netip.Addr{netip.MustParseAddr("192.0.2.25"), netip.MustParseAddr("2001:db8::25")}) {
+		t.Fatalf("receiver status %+v: %v", status, err)
 	}
 }
