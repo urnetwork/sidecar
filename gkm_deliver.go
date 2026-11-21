@@ -658,12 +658,21 @@ func (self *gkmGroupManager) deliverLateToInFlow(ctx context.Context, late *gkmL
 //	             object stands
 //
 // at most ResyncLateDeliverMaxCount a sync, each recipient once a generation: the keychain's late-answered record
-// keeps those gkm took or found answered, so a later sync PUTs nothing for them again. A holder whose ReaderKey lapsed
-// before the claim, which the claim's state holds and its rotator skipped, is not seen here: its ask's hint answers
-// it. Nothing is answered while the claim's state is not retained here, or where this device may not deliver.
+// keeps those gkm took or found answered, so a later sync PUTs nothing for them again. A claim older than this
+// device's previous base, whose state it no longer retains, is told by position instead: a sidecar whose row was
+// admitted or went live past the claim's position, a Delegation filed past it, which misses a holder whose read
+// began later by a grant alone. A holder whose ReaderKey lapsed before the claim, which the claim's state holds and
+// its rotator skipped, is not seen here either: its ask's hint answers both. Nothing is answered where this device may
+// not deliver.
 func (self *gkmGroupManager) answerLateInFlow(ctx context.Context) error {
 	client := self.client
 	if client.settings.ResyncLateDeliverMaxCount <= 0 {
+		return nil
+	}
+	// a device that answers nothing here, no writer of a data repo, computes no holders at every sync
+	if state, err := client.currentState(); err != nil {
+		return nil
+	} else if !gkmWrites(state, self.repoId, client.args.SidecarId) && !gkmGroupLeafRanked(state.Repo(self.repoId)) {
 		return nil
 	}
 	late, err := self.lateDeliveryInFlow()
@@ -682,17 +691,12 @@ func (self *gkmGroupManager) answerLateInFlow(ctx context.Context) error {
 	if !writer && !gkmGroupLeafRanked(repo) {
 		return nil
 	}
-	claimState, err := late.state.At(rotate.GetAuth())
+	staged, err := self.stagedHoldersInFlow(late)
 	if err != nil {
-		// who the claim's STAGED deliveries reached cannot be told here: the asks' hints answer its joiners
 		if client.log.V(1).Enabled() {
-			client.log.Infof("[gkm]%s no late delivery at this sync, gen/%d's state is not held: %v", self.repoId, rotate.GetGeneration(), err)
+			client.log.Infof("[gkm]%s no late delivery at this sync: %v", self.repoId, err)
 		}
 		return nil
-	}
-	staged, err := KeyHolders(claimState, self.repoId, time.UnixMilli(rotate.GetTimeMs()))
-	if err != nil {
-		return err
 	}
 	answered, err := client.lateAnswered(self.repoId, rotate.GetGeneration())
 	if err != nil {
@@ -706,7 +710,7 @@ func (self *gkmGroupManager) answerLateInFlow(ctx context.Context) error {
 		recipient := ""
 		switch holder.Kind {
 		case GkmHolderLeaf, GkmHolderAgent:
-			if bytes.Equal(holder.Id, client.args.SidecarId.Bytes()) || staged.Contains(GkmHolderLeaf, holder.Id) || staged.Contains(GkmHolderAgent, holder.Id) {
+			if bytes.Equal(holder.Id, client.args.SidecarId.Bytes()) || staged(holder) {
 				continue
 			}
 			if !writer {
@@ -718,7 +722,7 @@ func (self *gkmGroupManager) answerLateInFlow(ctx context.Context) error {
 			}
 			recipient = "s:" + hex.EncodeToString(holder.Id)
 		case GkmHolderDelegation:
-			if !writer || staged.Contains(GkmHolderDelegation, holder.Id) {
+			if !writer || staged(holder) {
 				continue
 			}
 			recipient = "d:" + hex.EncodeToString(holder.Id)
@@ -726,7 +730,7 @@ func (self *gkmGroupManager) answerLateInFlow(ctx context.Context) error {
 			if !writer {
 				continue
 			}
-			if stagedHolder, held := staged.DelegationRecipient(holder.ForwardDelegationId); held && stagedHolder.Kind == GkmHolderForwarding {
+			if staged(holder) {
 				continue
 			}
 			recipient = "d:" + hex.EncodeToString(holder.ForwardDelegationId)
@@ -760,6 +764,61 @@ func (self *gkmGroupManager) answerLateInFlow(ctx context.Context) error {
 		errs = append(errs, client.noteLateAnswered(self.repoId, rotate.GetGeneration(), newlyAnswered))
 	}
 	return errors.Join(errs...)
+}
+
+// Whether a holder at late's state was among the holders gen/<g>'s STAGED deliveries went to: KeyHolders at the
+// claim's pin and time where this device retains that state; else, the claim being before its previous base, whether
+// the holder's row stood at the claim's position, a sidecar admitted and live by then and a Delegation filed by then,
+// a forwarding holder's by its live Delegation's row. An error for a claim this state cannot place: ahead of it, or
+// off its chain, which the generation's own checks alarm.
+func (self *gkmGroupManager) stagedHoldersInFlow(late *gkmLateDelivery) (func(holder GkmHolder) bool, error) {
+	rotate := late.top.generation.Rotate
+	claimState, err := late.state.At(rotate.GetAuth())
+	if err == nil {
+		staged, err := KeyHolders(claimState, self.repoId, time.UnixMilli(rotate.GetTimeMs()))
+		if err != nil {
+			return nil, err
+		}
+		return func(holder GkmHolder) bool {
+			switch holder.Kind {
+			case GkmHolderLeaf, GkmHolderAgent:
+				return staged.Contains(GkmHolderLeaf, holder.Id) || staged.Contains(GkmHolderAgent, holder.Id)
+			case GkmHolderForwarding:
+				stagedHolder, held := staged.DelegationRecipient(holder.ForwardDelegationId)
+				return held && stagedHolder.Kind == GkmHolderForwarding
+			}
+			return staged.Contains(holder.Kind, holder.Id)
+		}, nil
+	}
+	if !errors.Is(err, ErrGkmAuthNotRetained) {
+		return nil, fmt.Errorf("gen/%d's state: %w", rotate.GetGeneration(), err)
+	}
+	claimVersion := rotate.GetAuth().GetVersion()
+	delegationAt := func(delegationId []byte) uint64 {
+		for _, delegation := range late.state.Delegations() {
+			if bytes.Equal(delegation.GetDelegationId(), delegationId) {
+				return delegation.GetAt()
+			}
+		}
+		// a row this state does not show is taken as staged: nothing is sent to it
+		return claimVersion
+	}
+	return func(holder GkmHolder) bool {
+		switch holder.Kind {
+		case GkmHolderLeaf, GkmHolderAgent:
+			sidecarId, err := IdFromBytes(holder.Id)
+			if err != nil {
+				return true
+			}
+			row := late.state.SidecarRow(sidecarId)
+			return row == nil || max(row.GetAdmittedAt(), row.GetLiveSince()) <= claimVersion
+		case GkmHolderDelegation:
+			return delegationAt(holder.Id) <= claimVersion
+		case GkmHolderForwarding:
+			return delegationAt(holder.ForwardDelegationId) <= claimVersion
+		}
+		return true
+	}, nil
 }
 
 // The keychain's record of the recipients a sync answered for one generation of a repo (answerLateInFlow): version |
