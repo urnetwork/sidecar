@@ -68,7 +68,7 @@ func NewAclGateView(states AclContractStateSource, abuse AbuseGate, quota AclGat
 }
 
 // The network's loaded state, or the refusal that stands before any rule: not loaded, halted or over its limit.
-func (self *AclGateView) state(networkId Id) (*AclState, AclReason) {
+func (self *AclGateView) snapshot(networkId Id) (*AclGateSnapshot, AclReason) {
 	if self == nil || self.states == nil {
 		return nil, AclReasonNoState
 	}
@@ -92,6 +92,14 @@ func (self *AclGateView) state(networkId Id) (*AclState, AclReason) {
 		if over {
 			return nil, AclReasonQuota
 		}
+	}
+	return snapshot, 0
+}
+
+func (self *AclGateView) state(networkId Id) (*AclState, AclReason) {
+	snapshot, deny := self.snapshot(networkId)
+	if deny != 0 {
+		return nil, deny
 	}
 	return snapshot.Acl, 0
 }
@@ -156,14 +164,25 @@ func (self *AclGateView) MayAdminDns(networkId Id, subject AclSubject, host stri
 
 // The zone view exposes records covered by either grant, with standing and quota checked on the same snapshot.
 func (self *AclGateView) MayViewDns(networkId Id, subject AclSubject, host string, now time.Time) AclDecision {
-	state, deny := self.state(networkId)
+	snapshot, deny := self.snapshot(networkId)
 	if deny != 0 {
 		return aclDeny(deny)
 	}
-	if decision := state.mayAdminDns(subject, host, now); decision.Allowed {
+	if decision := snapshot.Acl.mayAdminDns(subject, host, now); decision.Allowed {
 		return decision
 	}
-	return state.MayPublish(subject, host, now)
+	// A member-bound publication grants a view only to a sidecar permitted to publish in that scope.
+	if label, scoped := aclScopeOfHost(host); scoped {
+		scope, ok := snapshot.Config.TeamScope(label)
+		if !ok {
+			return aclDeny(AclReasonNoState)
+		}
+		return snapshot.Acl.MayPublishInScope(subject, host, scope, now)
+	}
+	if scope, ok := snapshot.Config.TeamScope(host); ok {
+		return snapshot.Acl.MayPublishInScope(subject, host, scope, now)
+	}
+	return snapshot.Acl.MayPublish(subject, host, now)
 }
 
 func (self *AclState) mayAdminDns(subject AclSubject, host string, now time.Time) AclDecision {
