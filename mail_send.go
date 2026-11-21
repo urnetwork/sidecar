@@ -5,7 +5,7 @@
 // internet's, each recipient on its own path. A draft's message is built here; a submission's comes as its client
 // wrote it (MailClient.SubmitMessage, mail_submission.go), and both take the same steps.
 //
-//	from      one of this network's own addresses (its label's, its alias's or a scope's), held to
+//	from      one of this network's own addresses (its label's, its alias's, a scope's or a verified Team domain's), held to
 //	          mail:<alias>#send for this device (D-ACL-12) by the rule ingest holds a deposit's signer to, so a message
 //	          the sender may not send as its From is refused here and, if forged, shown as outside mail there. A
 //	          burner's From is a reply, which MailClient.Reply alone sends (mail_burner_reply.go), and a bounce or
@@ -258,12 +258,12 @@ func mailSendDepositRepoOf(binding *MailBinding, parts mailClientParts, repoId I
 // Holds args to what a draft's send needs before it keeps or deposits anything (see the file header): its shape and
 // bounds, the zone, and a From of this network that policy lets this device send as. Send and SubmitSend both start
 // here, so a send the gate holds was refused for none of these. An error names no address.
-func (self *MailClient) planSend(args *MailSendArgs) (*mailSendPlan, error) {
-	return self.planSendDraft(args, "")
+func (self *MailClient) planSend(ctx context.Context, args *MailSendArgs) (*mailSendPlan, error) {
+	return self.planSendDraft(ctx, args, "")
 }
 
 // planSend for a draft from burnerLabel's burner, a reply's (MailClient.Reply), or "" for any other.
-func (self *MailClient) planSendDraft(args *MailSendArgs, burnerLabel string) (*mailSendPlan, error) {
+func (self *MailClient) planSendDraft(ctx context.Context, args *MailSendArgs, burnerLabel string) (*mailSendPlan, error) {
 	settings := self.sendSettings()
 	if args == nil {
 		return nil, fmt.Errorf("%w: no message", ErrMailSendInvalid)
@@ -276,13 +276,13 @@ func (self *MailClient) planSendDraft(args *MailSendArgs, burnerLabel string) (*
 		!strings.Contains(args.InReplyTo, "@") || !utf8.ValidString(args.InReplyTo)) {
 		return nil, fmt.Errorf("%w: a reply's id out of shape", ErrMailSendInvalid)
 	}
-	return self.planSendFrom(args.From, burnerLabel, args.To, args.Cc, args.Bcc)
+	return self.planSendFrom(ctx, args.From, burnerLabel, args.To, args.Cc, args.Bcc)
 }
 
 // What a send to the address lists is held to: the zone, its distinct recipients and a From of this network
 // that policy lets this device send as. burnerLabel, a reply's, holds a burner's From to its live label in this
 // member's mailbox instead (MailClient.Reply).
-func (self *MailClient) planSendFrom(fromText string, burnerLabel string, lists ...[]string) (*mailSendPlan, error) {
+func (self *MailClient) planSendFrom(ctx context.Context, fromText string, burnerLabel string, lists ...[]string) (*mailSendPlan, error) {
 	binding, parts, _, err := self.state()
 	if err != nil {
 		return nil, err
@@ -310,12 +310,19 @@ func (self *MailClient) planSendFrom(fromText string, burnerLabel string, lists 
 		authority = sendParts.sendAuthority()
 	}
 
-	// from: one of the network's own addresses, which policy lets this device send as
+	// The policy alias stays the network's own. The sender preserves a verified customer domain on the wire.
 	from, err := ParseMailRecipient(row.Root, fromText)
-	if err != nil || !from.Zone.OfNetwork(row) {
+	fromDomain := from.Domain()
+	if err != nil {
+		from, fromDomain, err = mailVerifiedCustomFrom(ctx, binding.Api, row, fromText)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if !from.Zone.OfNetwork(row) {
 		return nil, ErrMailSendFromRefused
 	}
-	fromAddress := from.Address()
+	fromAddress := from.LocalPart + "@" + fromDomain
 	switch {
 	case burnerLabel != "":
 		// a reply's From is its burner's, held to the live label in this member's mailbox by the reply's caller
@@ -324,7 +331,7 @@ func (self *MailClient) planSendFrom(fromText string, burnerLabel string, lists 
 		}
 	case from.Kind != MailAddressKindName && from.Kind != MailAddressKindAdmin:
 		return nil, ErrMailSendFromRefused
-	case !authority.MaySendAs(self.sidecarId, fromAddress):
+	case !authority.MaySendAs(self.sidecarId, from.Address()):
 		return nil, ErrMailSendFromRefused
 	}
 	return &mailSendPlan{
@@ -336,10 +343,27 @@ func (self *MailClient) planSendFrom(fromText string, burnerLabel string, lists 
 			return mailSendDepositRepoOf(binding, parts, repoId)
 		},
 		fromAddress: fromAddress,
-		fromDomain:  from.Domain(),
+		fromDomain:  fromDomain,
 		recipients:  recipients,
 		burnerLabel: burnerLabel,
 	}, nil
+}
+
+// Resolve a custom From to the local alias the device needs permission to use. Status applies the edge's
+// Team/downgrade entitlement and verifies the exact domain. Every approval spend repeats the lookup.
+func mailVerifiedCustomFrom(ctx context.Context, api MailApi, row NetworkLabelRow, address string) (MailRecipient, string, error) {
+	from, domain, ok := mailCustomAddress(MailZone{Net: row.Label, Root: row.Root}, address)
+	if !ok || api == nil {
+		return MailRecipient{}, "", ErrMailSendFromRefused
+	}
+	status, err := api.MailStatus(ctx)
+	if err != nil {
+		return MailRecipient{}, "", err
+	}
+	if status == nil || !status.MaySendFromCustomDomains || !slices.Contains(status.VerifiedDomains, domain) {
+		return MailRecipient{}, "", ErrMailSendFromRefused
+	}
+	return from, domain, nil
 }
 
 // address parsed under row's root, and whether it is an address of row's network. One that does not parse there is
@@ -358,13 +382,13 @@ func mailSendOwnRecipient(row NetworkLabelRow, address string) (MailRecipient, b
 // queued while a person's decision is awaited. An error is the whole send's: nothing was sent. Otherwise each
 // recipient's outcome is in the answer.
 func (self *MailClient) Send(ctx context.Context, args *MailSendArgs) (*MailSendResult, error) {
-	plan, err := self.planSend(args)
+	plan, err := self.planSend(ctx, args)
 	if err != nil {
 		return nil, err
 	}
 	draft := mailSendCopyArgs(args)
-	return self.sendPlanned(ctx, plan, &mailSendContent{draft: draft}, args.Action, func() (*mailSendPlan, error) {
-		return self.planSend(draft)
+	return self.sendPlanned(ctx, plan, &mailSendContent{draft: draft}, args.Action, func(ctx context.Context) (*mailSendPlan, error) {
+		return self.planSend(ctx, draft)
 	})
 }
 
@@ -375,7 +399,7 @@ func (self *MailClient) SubmitSend(ctx context.Context, args *MailSendArgs) (*Ma
 
 // The send once planned: at once where it is W, else through the gate (the file header's gate row), whose effect
 // plans it again with replan at the spend.
-func (self *MailClient) sendPlanned(ctx context.Context, plan *mailSendPlan, content *mailSendContent, action MailConfigActionArgs, replan func() (*mailSendPlan, error)) (*MailSendResult, error) {
+func (self *MailClient) sendPlanned(ctx context.Context, plan *mailSendPlan, content *mailSendContent, action MailConfigActionArgs, replan func(context.Context) (*mailSendPlan, error)) (*MailSendResult, error) {
 	outside := plan.outsideRecipients()
 	tainted := action.RunId != nil && plan.binding.RunTainted != nil && plan.binding.RunTainted(*action.RunId)
 	if len(outside) == 0 && !tainted {

@@ -122,6 +122,8 @@ type MailIngestAclAuthority struct {
 	Root string
 	// Whether a zone is this network's own: its label, its alias or one of its scopes. Nil refuses every From.
 	OwnZone func(zone MailZone) bool
+	// A verified custom From maps to its own network's policy alias. An unavailable answer grants no identity.
+	CustomFrom func(address string) (MailRecipient, bool)
 	// Nil is real time.
 	Clock Clock
 }
@@ -171,7 +173,17 @@ func (self *MailIngestAclAuthority) MaySendAs(signerSidecarId Id, fromAddress st
 		return false
 	}
 	recipient, err := ParseMailRecipient(self.Root, fromAddress)
-	if err != nil || recipient.Kind == MailAddressKindBurner || recipient.Kind == MailAddressKindReverseAlias || !self.OwnZone(recipient.Zone) {
+	if err != nil {
+		if self.CustomFrom == nil {
+			return false
+		}
+		var ok bool
+		recipient, ok = self.CustomFrom(fromAddress)
+		if !ok {
+			return false
+		}
+	}
+	if recipient.Kind == MailAddressKindBurner || recipient.Kind == MailAddressKindReverseAlias || !self.OwnZone(recipient.Zone) {
 		return false
 	}
 	now := clockOrReal(self.Clock).Now()

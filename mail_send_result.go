@@ -65,7 +65,7 @@ var (
 
 // See MailClient.CheckSend and the file header's check row.
 func (self *MailClient) checkSend(ctx context.Context, args *MailSendArgs) (*SmtpSendCheck, error) {
-	plan, err := self.planSend(args)
+	plan, err := self.planSend(ctx, args)
 	if err != nil {
 		return nil, err
 	}

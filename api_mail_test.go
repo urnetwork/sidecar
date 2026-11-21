@@ -149,11 +149,11 @@ func TestSidecarApiMailStatusNamesTheStrictDomains(t *testing.T) {
 // A pending assignment is visible only through the per-receiver field. Older replies carry no addresses.
 func TestSidecarApiMailStatusReadsReceiverAssignments(t *testing.T) {
 	const body = `{"enabled":true,"storage_full":false,"spent":false,"direct_mx":true,"strict_domains":[],
-		"verified_domains":["customer.example"],"direct_mx_addresses":["192.0.2.25","2001:db8::25"]}`
+		"verified_domains":["customer.example"],"may_send_from_custom_domains":true,"direct_mx_addresses":["192.0.2.25","2001:db8::25"]}`
 	transport := answerWith(http.StatusOK, body)
 	api := newTestSidecarApi(t, transport)
 	status, err := api.MailStatus(context.Background())
-	if err != nil || !slices.Equal(status.VerifiedDomains, []string{"customer.example"}) ||
+	if err != nil || !status.MaySendFromCustomDomains || !slices.Equal(status.VerifiedDomains, []string{"customer.example"}) ||
 		!slices.Equal(status.DirectMxAddresses, []netip.Addr{netip.MustParseAddr("192.0.2.25"), netip.MustParseAddr("2001:db8::25")}) {
 		t.Fatalf("receiver status %+v: %v", status, err)
 	}
