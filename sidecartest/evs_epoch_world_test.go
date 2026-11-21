@@ -650,6 +650,55 @@ func TestEvsPathEpochCutOverEndToEnd(t *testing.T) {
 	}
 }
 
+// A fresh read of a new name needs the parent listing at the head it returns, after another writer
+// created the file while the ref still lists a source epoch.
+func TestEvsFreshReadAfterAParentListingMovesEndToEnd(t *testing.T) {
+	world := newEpochWorld(t)
+	reader := world.device("w", nil)
+	if _, err := reader.write("docs/keep", []byte("kept")); err != nil {
+		t.Fatal(err)
+	}
+	world.advance([]string{"w", "v", "m", "r"}, 2, nil)
+	if _, err := reader.write("docs/keep", []byte("updated")); err != nil {
+		t.Fatal(err)
+	}
+	refId := world.mainRefId(reader)
+	if err := reader.repo.TickMapper(world.ctx, refId); err != nil {
+		t.Fatal(err)
+	}
+	if epoch := world.head(refId).GetPathEpoch(); epoch.GetCurrent() != 2 || len(epoch.GetSources()) != 1 {
+		t.Fatalf("path epochs before the listing: %v", epoch)
+	}
+	if names, err := reader.list("docs"); err != nil || !slices.Equal(names, []string{"keep"}) {
+		t.Fatalf("parent before creation: %v, %v", names, err)
+	}
+
+	writer := world.device("v", nil)
+	const path = "docs/new"
+	content := []byte("created by the other writer")
+	committed, err := writer.write(path, content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests := world.record()
+	var out bytes.Buffer
+	info, err := reader.repo.ReadHead(world.ctx, &sidecar.EvsReadArgs{Path: path, Fresh: true}, &out)
+	if err != nil || info.HeadVersion != committed.Version || !bytes.Equal(out.Bytes(), content) {
+		t.Fatalf("fresh read at version %d: %q, %+v, %v", committed.Version, out.Bytes(), info, err)
+	}
+	if requests.named(reader.tokenPath(path, 1)) {
+		t.Fatal("the new name was sent in the source epoch")
+	}
+	if _, err := reader.repo.ReadHead(world.ctx, &sidecar.EvsReadArgs{Path: "docs/missing", Fresh: true}, io.Discard); !errors.Is(err, sidecar.ErrEvsPathAbsent) {
+		t.Fatalf("a name the current listing lacks: %v", err)
+	}
+	for _, epoch := range []uint64{1, 2} {
+		if requests.named(reader.tokenPath("docs/missing", epoch)) {
+			t.Fatalf("the absent name was sent in epoch %d", epoch)
+		}
+	}
+}
+
 // QD-681 end to end (question evs1-m2-28-rooted-delta-proofs): a writer's second 12-file push into one directory
 // plans, each new name's read walking the first push, whose list is under changes_root and changed the directory by a
 // delta; a device pinned below both pushes reads a file that was there before them and one each push created, and

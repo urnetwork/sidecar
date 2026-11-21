@@ -396,8 +396,8 @@ type evsReadPath struct {
 	moreAsked bool
 	// the reads again that a drop's body left out of a reply asked (EvsSettings.DropBodyReadCount)
 	dropReads int
-	// a lookup ran for it in this call
-	lookedUp bool
+	// the head version of the parent listing used for this path, zero when none was needed
+	lookupVersion uint64
 	// the reply as verified, or the absence a lookup settled with no token of the path sent
 	verified *EvsVerifiedPath
 	settled  *EvsVerifiedPath
