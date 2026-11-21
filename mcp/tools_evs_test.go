@@ -1034,3 +1034,11 @@ func TestEvsWriteSealsTheSessionsAgentId(t *testing.T) {
 		t.Errorf("the next session's write reads %+v, not verified under %s", next, nextId)
 	}
 }
+
+// A committed erasure has a stable terminal tool result without the underlying path.
+func TestMcpEvsErasedVersionResult(t *testing.T) {
+	result := mcpEvsError(fmt.Errorf("private path: %w", sidecar.ErrEvsErased))
+	if result != errMcpEvsErased || strings.Contains(result.Error(), "private path") {
+		t.Fatalf("erased version: %v", result)
+	}
+}
