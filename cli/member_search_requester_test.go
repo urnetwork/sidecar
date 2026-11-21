@@ -24,6 +24,7 @@ type testMemberSearchIndexer struct {
 	ready     chan struct{}
 	once      sync.Once
 	calls     atomic.Int32
+	handler   sidecar.SubprotocolHandler
 	requester sidecar.Id
 	repo      sidecar.Id
 	ref       sidecar.Id
@@ -34,7 +35,11 @@ func (self *testMemberSearchIndexer) Name() string { return "test-member-indexer
 func (self *testMemberSearchIndexer) Close()       {}
 
 func (self *testMemberSearchIndexer) Attach(env *sidecar.SidecarEnv) error {
-	_, err := env.Subprotocol.Handle(protocol.MessageType_SEARCH, self.answer, nil)
+	handler := self.handler
+	if handler == nil {
+		handler = self.answer
+	}
+	_, err := env.Subprotocol.Handle(protocol.MessageType_SEARCH, handler, nil)
 	if err != nil {
 		return err
 	}
@@ -73,9 +78,21 @@ func (self *testMemberSearchIndexer) answer(ctx context.Context, message *sideca
 	return proto.MarshalOptions{Deterministic: true}.Marshal(reply)
 }
 
-func TestEnrolledAppAsksOnlyItsCurrentSignedSearchIndexer(t *testing.T) {
+type testEnrolledSearchApp struct {
+	ctx         context.Context
+	net         *sidecartest.Net
+	engines     *enginenet.Engines
+	app         *sidecar.Sidecar
+	client      *sidecar.ConfigClient
+	replica     *sidecar.MemberReplica
+	provisioned *enginenet.BootstrapResult
+	member      sidecar.Id
+}
+
+func newTestEnrolledSearchApp(t *testing.T) *testEnrolledSearchApp {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 5*urTestTimeout)
-	defer cancel()
+	t.Cleanup(cancel)
 	net := sidecartest.NewNet(ctx, nil)
 	t.Cleanup(net.Close)
 	engines := enginenet.NewEngines(t, net, nil)
@@ -114,6 +131,14 @@ func TestEnrolledAppAsksOnlyItsCurrentSignedSearchIndexer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return &testEnrolledSearchApp{ctx: ctx, net: net, engines: engines, app: app, client: client, replica: replica, provisioned: provisioned, member: member}
+}
+
+func TestEnrolledAppAsksOnlyItsCurrentSignedSearchIndexer(t *testing.T) {
+	world := newTestEnrolledSearchApp(t)
+	ctx, net, engines, app := world.ctx, world.net, world.engines, world.app
+	network, member := *app.NetworkId(), world.member
+	client, replica, provisioned := world.client, world.replica, world.provisioned
 	peerHost, err := net.AddSidecarIn("orchard-indexer", network, nil)
 	if err != nil {
 		t.Fatal(err)

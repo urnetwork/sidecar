@@ -274,6 +274,7 @@ func (self *SearchRemoteClient) scopeOf(state *ConfigState, selfId Id, request *
 	return scope
 }
 
+// Checks the requester's verified read at the current time, including the owner's consent for a shared repo.
 func (self *SearchRemoteClient) readsAt(state *ConfigState, selfId, repo Id, at time.Time) bool {
 	if !slices.Contains(state.RepoReadersAt(repo, at), selfId) {
 		return false
@@ -281,9 +282,16 @@ func (self *SearchRemoteClient) readsAt(state *ConfigState, selfId, repo Id, at 
 	if _, stock := self.args.Local.(memberRequesterLocal); !stock || !aclRepoKindOwnerBound(state.Repo(repo).GetKind()) {
 		return true
 	}
-	// The stock member has no receipt bound to this search. An owner-bound non-writer must acquire one before reading.
 	acl, err := state.Acl()
-	return err == nil && acl.EvsAccess(AclSidecarSubject(selfId), repo, AclTokenAudienceEvs, at).Rights.Has(AclEvsWrite)
+	return err == nil && searchRemoteOwnerAllows(state, acl, selfId, repo, at)
+}
+
+// The owner's consented devices and current EvsShare subjects may ask the owner's indexer. The indexer
+// records the shared reader's search before serving it. Audit readers use the receipt-gated local path.
+func searchRemoteOwnerAllows(state *ConfigState, acl *AclState, reader, repo Id, at time.Time) bool {
+	row := acl.repos[repo]
+	return row != nil && row.ownerId != (Id{}) &&
+		(acl.ConsentedFor(reader, row.ownerId) || state.evsShareSubjectAt(acl, reader, repo, at.UnixMilli()))
 }
 
 // The device's own index of a ref, as the merge reads it.
@@ -1117,6 +1125,7 @@ func (self *searchRemoteSearch) maySend(indexerId Id, named []Id) bool {
 	return true
 }
 
+// Checks the app's current remote mode and the user's consent to send a query to this member's device.
 func (self *SearchRemoteClient) mayDiscloseTo(state *ConfigState, selfId Id, indexerId Id, mode string) bool {
 	if mode == SearchRemoteOff {
 		return false

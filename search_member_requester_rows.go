@@ -11,7 +11,7 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-// An authenticated indexer supplies a claim. The app still applies its own receipts, erasures, mail flags and
+// An authenticated indexer supplies a claim. The app still applies its current read grants, erasures, mail flags and
 // signed log policy before showing it. All sources here are already held on this device.
 func (self memberRequesterLocal) remoteRows(ctx context.Context, request *SearchRequest) (func(SearchHit) bool, func() bool) {
 	engine, err := self.member.open()
@@ -48,6 +48,7 @@ func (self memberRequesterLocal) remoteRows(ctx context.Context, request *Search
 	}, current
 }
 
+// Pins the local filters and verified repo policy used to judge an indexer's claims for one repo.
 func (self *memberSearchSource) remoteRowsFor(ctx context.Context, state *ConfigState, repo Id, request *SearchRequest, scopes map[Id]func() bool) func(SearchHit) bool {
 	row := state.Repo(repo)
 	acl, err := state.Acl()
@@ -97,7 +98,7 @@ func (self *memberSearchSource) remoteRowsFor(ctx context.Context, state *Config
 	return func(hit SearchHit) bool {
 		now := time.UnixMilli(max(state.timeMs, self.host.running.clock.Now().UnixMilli()))
 		rights := acl.EvsAccess(subject, repo, AclTokenAudienceEvs, now).Rights
-		if !rights.Has(AclEvsRead) || aclRepoKindOwnerBound(scope.Kind) && !rights.Has(AclEvsWrite) ||
+		if !rights.Has(AclEvsRead) || aclRepoKindOwnerBound(scope.Kind) && !searchRemoteOwnerAllows(state, acl, subject.Id, repo, now) ||
 			expectedRef != nil && hit.Ref != *expectedRef || valid != nil && !valid() ||
 			uint64(hit.Time.Unix()) < searchSearchableSinceSeconds(now.UnixMilli(), age) {
 			return false
@@ -109,8 +110,9 @@ func (self *memberSearchSource) remoteRowsFor(ctx context.Context, state *Config
 			}
 		}
 		doc := &indexRow{docKind: indexDocKind(hit.DocKind), locator: hit.Path}
-		if doc.docKind == IndexDocRecord {
-			return record != nil && record(hit, now)
+		if record != nil {
+			// A shared stream admits its verified entries. A derived card needs separate evidence for its fold.
+			return doc.docKind == IndexDocRecord && record(hit, now)
 		}
 		if !memberSearchIndexRow(scope, doc) {
 			return false
