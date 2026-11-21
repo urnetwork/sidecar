@@ -124,6 +124,9 @@ func fsKeysCatch(body func()) (err error) {
 type fsKeysRun struct {
 	net    *Net
 	failer *fsKeysFailer
+	// called as the last step begins waiting for the worlds' queued hints: nil in a schedule, a test's way to release a
+	// hint send it holds only once that wait has begun
+	awaitingHints func()
 
 	stateLock sync.Mutex
 	worlds    []*gkmschedule.FsKeysWorld
@@ -159,9 +162,24 @@ func (self *fsKeysRun) background(actor string, body func(ctx context.Context)) 
 	return step
 }
 
-// The last step: everything the worlds started closes, the last started first.
+// The last step: every hint the worlds' engines queued is sent first, so a run makes the same Push writes whenever
+// gkm's free senders get to them (§22.8's unknown rule loses each by its place among the host's writes, QD-1155), and
+// then everything the worlds started closes, the last started first.
 func (self *fsKeysRun) cleanup() *Step {
 	return &Step{Actor: "cleanup", Action: func(ctx context.Context, net *Net) error {
+		self.stateLock.Lock()
+		worlds := append([]*gkmschedule.FsKeysWorld(nil), self.worlds...)
+		self.stateLock.Unlock()
+		if self.awaitingHints != nil {
+			self.awaitingHints()
+		}
+		for _, world := range worlds {
+			var err error
+			net.Barriers().Blocking(func() { err = world.Engine.AwaitHints(ctx) })
+			if err != nil {
+				return err
+			}
+		}
 		self.failer.stateLock.Lock()
 		cleanups := self.failer.cleanups
 		self.failer.cleanups = nil

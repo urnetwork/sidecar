@@ -12,8 +12,10 @@
 // one debit however often its close is replayed, capped at its grant; and with the reservations lost the next grants
 // over-admit by no more than the grants then outstanding, as a lease's loss is bounded by its draws.
 //
-// FS-45 is on §22.8's unknown list; the fake Quota's calls are host calls, which the unknown rule's dry run does not
-// count as writes (every_write.go), so on T2 the rule loses no answer of these schedules.
+// FS-45 is on §22.8's unknown list, and the fake Quota's ReportUsage is a write (QD-1155), so on T2 the rule loses each
+// settlement's answer in turn (every_write.go): the twin's settlement, which cannot tell a lost answer from a failed
+// one, replays the close under its contract id until it is answered, as either side or the deadline does, and the
+// debit stays one.
 
 package fault
 
@@ -41,14 +43,18 @@ type Fs45TwinSettings struct {
 	GrantShare int64
 	// Grants a schedule asks for before it calls the run of them endless: 400.
 	GrantLimit int
+	// How many times the settlement sends one close's debit before it fails, sending it again under the contract id
+	// while it answers an error: 3, past the one answer §22.8's unknown rule loses a run.
+	SettleAttemptCount int
 }
 
 func DefaultFs45TwinSettings() *Fs45TwinSettings {
 	return &Fs45TwinSettings{
-		RequestByteCount: 64 * 1024 * 1024,
-		FloorByteCount:   1024 * 1024,
-		GrantShare:       8,
-		GrantLimit:       400,
+		RequestByteCount:   64 * 1024 * 1024,
+		FloorByteCount:     1024 * 1024,
+		GrantShare:         8,
+		GrantLimit:         400,
+		SettleAttemptCount: 3,
 	}
 }
 
@@ -143,8 +149,8 @@ func (self *fs45Twin) reserve(streamBound bool) (contractId connect.Id, grant in
 	return contractId, grant, true
 }
 
-// The contract's close, replayed or not: the debit is one usage keyed by the contract id, and the rest of the
-// reservation returns.
+// The contract's close, replayed or not: the debit is one usage keyed by the contract id, sent again while it answers
+// an error, and the rest of the reservation returns once it is answered.
 func (self *fs45Twin) settle(ctx context.Context, contractId connect.Id, usedByteCount int64) error {
 	self.stateLock.Lock()
 	grant, ok := self.contractGrantByteCounts[contractId]
@@ -158,7 +164,13 @@ func (self *fs45Twin) settle(ctx context.Context, contractId connect.Id, usedByt
 		Producer: sidecar.QuotaProducerTaskworker,
 		Events:   []*sidecar.UsageEvent{{NetworkId: self.networkId, Meter: sidecar.QuotaMeterRelay, TransferByteCount: min(usedByteCount, grant)}},
 	}
-	if err := self.quota.ReportUsage(ctx, batch); err != nil {
+	var err error
+	for range self.settings.SettleAttemptCount {
+		if err = self.quota.ReportUsage(ctx, batch); err == nil {
+			break
+		}
+	}
+	if err != nil {
 		return err
 	}
 	self.stateLock.Lock()
