@@ -204,6 +204,15 @@ func (self *MemberReplica) open() error {
 	}
 	running.BindEvsFormat2(self.evs)
 	self.evs.EnablePrefixRules(running.EvsPrefixRulesArgs())
+	running.BindMemberSearch(self.ctx, func() (*EvsClient, *GkmGroupClient, error) {
+		if self.Evs() == nil {
+			return nil, nil, ErrSidecarSearchUnavailable
+		}
+		return self.evs, group, nil
+	})
+	if err := running.BindSearchWrites(self.evs); err != nil {
+		return err
+	}
 	// A signed-in member without an invitation may have no stored anchor. The follower records the
 	// first self-verified genesis of this network for its admitter's safety-number comparison.
 	settings := DefaultSidecarConfigFollowerSettings()
