@@ -7111,6 +7111,17 @@ a helper is deleted, and a device first       the merge step names (helper, vers
   syncs dst afterwards                        below its DELETE as before it (8.2.6's cleanup)
 a version fails check                         evs_alarm; the ref stops at the version before; its local ref is left
                                               alone and still serves; receive answers `ng <ref> ref refused at version u`
+a blob of a git-mode ref that a committed     (amended 2026-11-21, QD-1156; owner decision 671) a mount's replay
+  ERASE destroyed (a slot-keyed repo's;       still meets it as ErrEvsErased, since a mount holds the tip's original
+  §11.12's push row)                          oid to push on it (D-EVS-22's tip rule); export writes the erased stub
+                                              for it, `ur-erased <token path hex> <entry hash hex>\n`, named by the
+                                              first entry version that carried it, and the trees, commits and tags
+                                              holding it, and every later commit of the ref, under new oids with every
+                                              other byte their own, the replay going on in the original oids; a
+                                              rewritten commit's note names its original, `rewritten <oid hex>`, and
+                                              the stub's push's note names its token path and entry hash, `erased
+                                              <token path hex> <entry hash hex>`; a history blob so erased, which names
+                                              no token path for a stub, still ends the export with ErrEvsErased
 a version breaks the repo's prefix rules      (amended 2026-11-13, section 16; QD-793) the row above, with reason
                                               prefix_rule naming the signer and the path; recovery as below, by a
                                               device the set names for every path
@@ -12847,7 +12858,7 @@ Step 4 lists a card for every stream that holds a copy of a source entry, whethe
 
 **Masks at a reader.** A key the set lists is masked at or below L(k), whether or not an ERASE names it. A key that an ERASE names and no set version the device holds lists is masked whole, until a set version lists it or, as today, the rewritten files are cached. So an edit that survives an erasure, and a card folded again, show as soon as they are synced.
 
-**The directory.** §16.11's announcement documents keep their rule: a directory erasure removes an announcement's document whole and folds nothing again, and an announcement's version stays the Announcement's.
+**The directory.** §16.11's announcement documents keep their rule: a directory erasure removes an announcement's document whole and folds nothing again, and an announcement's version stays the Announcement's. A format-2 directory erasure keeps step 2's rule too (amended 2026-11-21, QD-1158; owner decision 673). Where its announcements' M6 entries stand, it ERASEs them through this eraser first, under the same erasure id, with `RecordEraseArgs`' journaled flag set, so none of those ERASEs says complete, and the erasure completes only after its CUT, by the directory's last ERASE or a completion. The directory's index binding reads progress by the erasure's newest ERASE, as the record's and mail's do, and its resumed orphan ERASE says complete where nothing else is left. And a call whose CUT listed documents again, the 30-day sweep's CUT of a later-signed card added to an erasure already complete among them, sets `IndexRewriteArgs`' re-listing flag, so step 6 lists before it trusts a complete it reads and the card's index slot is rewritten under a fresh key, as a late copy's is once its ERASE reopens the erasure; mail's and the record's re-CUTs may set it too.
 
 #### 15.2.11 Settings
 

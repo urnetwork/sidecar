@@ -394,7 +394,11 @@ verify      per entry, in stream order, on every reader:
             the head with another leaf is a fork: keep both, alarm (§16.8), showing a fork's later branch as forked;
             a higher seq is a gap, kept and alarmed at once from a writer with no deposit ref on this log, whose
             stream lands in seq order, and from a writer that deposits held open and alarmed only past
-            ChainGapTimeout (1 h), since one ingester's push can land before another's
+            ChainGapTimeout (1 h), since one ingester's push can land before another's; an entry whose own
+            entry-file key an ERASE destroyed, its header gone with its body, the record's evs binding leaves
+            out, and its version once nothing else in it stands, so it reads here as a gap, alarmed so and read
+            past, every later entry shown: no record client sends such an ERASE, so a header destroyed is an
+            admin acting outside the record (owner decision 672)
   expired   a gap, or a chain whose first readable entry is past seq 1, raises nothing once committed BASEs account for
             it (§11.8): where n equals seq, they removed those seqs' own paths; in an ingested stream, where paths do
             not map to seqs, they removed at least as many of the log's paths as the gap holds; any other gap stands;
@@ -405,7 +409,8 @@ verify      per entry, in stream order, on every reader:
             the body as invalid; without its key: the states below
   6 kind    known: parse as the kind's one message, keeping the stored bytes; unknown: keep, verify steps 1-5, show
             generically (§16.8); a known kind from a writer section 6.3 does not admit: ignore and alarm
-states      live; erased (an ERASE named a key of any copy; header kept); expired (past keep_days and erased; after
+states      live; erased (an ERASE named a key of any copy; header kept, but for an ERASE of the entry file's
+            own key, which reads as a gap at step 4; owner decision 672); expired (past keep_days and erased; after
             BASE and GC only its push statement and any checkpoint leaf remain); archived (section 8); forked; lost
             (a checkpoint leaf with no entry, after a site loss)
 flagged     an entry is flagged, for §16.6 and I-9, when its header's tainted is true; §16.10's trust rule reads

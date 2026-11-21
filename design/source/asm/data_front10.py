@@ -2222,3 +2222,36 @@ _i = [row[0] for row in INDEX].index(141)
 _n, _title, _answer = INDEX[_i]
 INDEX[_i] = (_n, _title, _answer + " On 2026-11-20 the owner approved a signed exact-head option for file-mode "
              "pushes. The native ACL writer uses it after a user confirms a preview.")
+
+# The final design sweep (dr9-final-sweep, 2026-11-21): the answers recorded after the fifth, QD-1156 to QD-1159.
+INDEX += [
+    (671, 'Export over an erased git-mode blob',
+     "Export writes an erased blob's stub and rewrites the commits from it on under new oids, each noting its "
+     'original.'),
+    (672, "A record entry whose header an ERASE took",
+     "An entry whose own file key an ERASE destroyed reads as a gap in its writer's chain, alarmed and read past."),
+    (673, "A directory erasure's completion after its CUT",
+     'No ERASE of a format-2 directory erasure says complete before its CUT; a rewrite listed again lists first.'),
+    (674, "Darwin's ICMP echo identifiers",
+     "connect draws each darwin echo identifier at random per process and keeps replies only to its own "
+     'sequences.'),
+]
+for _n, _note in [
+        (141, " Amended by @@OD:671@@ for export alone: the commits from an erased git-mode blob on are rewritten, "
+              'each noting its original.'),
+        (658, ' Refined by @@OD:673@@: no ERASE of a format-2 directory erasure says complete before its CUT.'),
+        (665, ' Followed by @@OD:671@@ and @@OD:672@@: export stubs an erased git-mode blob, and the record reads '
+              'an erased header as a gap.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 675))
+DATES.update({_n: '2026-11-21' for _n in range(671, 675)})
+_D670 = "and the unknown rule on the fake hosts' writes (670). "
+assert DECISIONS_INTRO.count(_D670) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D670, _D670 + "The final design sweep, on 2026-11-21, numbers that day's answers: export over an erased "
+    "git-mode blob (671), amending @@OD:141@@ for export alone, and a record entry whose header an ERASE took "
+    "(672), both following @@OD:665@@; a directory erasure's completion after its CUT (673), refining @@OD:658@@; "
+    "and darwin's ICMP echo identifiers (674). ")
