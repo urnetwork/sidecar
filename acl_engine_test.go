@@ -203,6 +203,27 @@ func TestAclEngineChecksSocketGlobsAndAliases(t *testing.T) {
 	}
 }
 
+// Until the sealed rule is authenticated, a coarsened token prefix supplies
+// no final listener admission. Installing its exact glob opens its matches.
+func TestAclEngineWaitsForTheLocalSocketGlob(t *testing.T) {
+	world := newAclEngineWorld(t)
+	engine := NewAclEngine(world.laptop, nil, nil, nil)
+	state, local := world.install(t, aclTestEnginePin(5, "socket-listen"))
+	if err := engine.Install(state, nil); err != nil {
+		t.Fatal(err)
+	}
+	inbound := &AclInbound{Source: AclSidecarSubject(world.agent), SocketName: "app/db1", NameToken: world.world.tokenPath(t, "app/db1")}
+	if got := engine.AllowInbound(inbound, aclTestNow); got.Allowed {
+		t.Fatal("the token prefix opened a socket without its matching head")
+	}
+	if err := engine.Install(state, local); err != nil {
+		t.Fatal(err)
+	}
+	if got := engine.AllowInbound(inbound, aclTestNow); !got.Allowed {
+		t.Fatalf("the exact glob refused its socket: %v", got)
+	}
+}
+
 // A lower pin and a second A_n at one n are refused with an alarm, and the installed state stays (I-16).
 func TestAclEngineInstallRefusesLowerAndForkedPins(t *testing.T) {
 	world := newAclEngineWorld(t)

@@ -150,6 +150,7 @@ func (self *EvsEngine) serveReseed(request *EvsRequest) {
 		request.Unavailable(nil)
 		return
 	}
+	excludeReseedTransfer(request.Writer)
 	body := &protocol.EvsReseedRequest{}
 	// every call carries at most one part (QD-836), so every call is held to the route's one bound
 	if !request.ReadMessage(body, self.settings.ReseedBodyMaxByteCount) {
@@ -798,7 +799,11 @@ func (self *EvsEngine) serveReseedSlot(request *EvsRequest, body *protocol.EvsRe
 		invalid("a slot that does not parse")
 		return
 	}
-	statement, err := sidecar.ParseEvsStatement(body.GetStatement())
+	parse := sidecar.ParseEvsStatement
+	if self.format2Instance() {
+		parse = sidecar.ParseEvsStatementFormat2
+	}
+	statement, err := parse(body.GetStatement())
 	if err != nil {
 		// no version named: nothing says a re-seeded version names the slot
 		request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_SLOT_UNKNOWN)

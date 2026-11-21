@@ -76,7 +76,8 @@ type connectSidecarPlatform struct{}
 // A client on an ApiOutOfBandControl and a PlatformTransport. See SidecarPlatform.
 func (self connectSidecarPlatform) OpenClient(ctx context.Context, args *SidecarPlatformClientArgs) (*SidecarPlatformClient, error) {
 	oob := connect.NewApiOutOfBandControl(ctx, args.ClientStrategy, args.Auth.ByJwt, args.ApiUrl)
-	client := connect.NewClient(ctx, args.ClientId, oob, args.ClientSettings)
+	clientSettings := connect.NewOperatorClientSettings(args.ClientSettings, args.ApiUrl, args.ClientStrategy)
+	client := connect.NewClient(ctx, args.ClientId, oob, clientSettings)
 	transport := connect.NewPlatformTransport(
 		ctx,
 		args.ClientStrategy,
@@ -288,10 +289,7 @@ func (self *sidecarConnectLeg) startGeneration(generation *sidecarGeneration) (s
 		closePlatform()
 		return nil, storeFailed(err)
 	}
-	generationNumber := generation.generation
-	if _, err := subprotocol.Subscribe(PushTopicCore, func(notice PushNotice) {
-		self.sidecar.receiveCoreHint(generationNumber, notice.Hint)
-	}); err != nil {
+	if _, err := subprotocol.Subscribe(PushTopicCore, generation.receiveCoreNotice); err != nil {
 		pushClient.Close()
 		subprotocol.Close()
 		api.Close()

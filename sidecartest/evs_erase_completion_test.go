@@ -5,6 +5,8 @@
 package sidecartest
 
 import (
+	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/urnetwork/sidecar"
@@ -114,5 +116,110 @@ func TestEvsCompletionEraseEndsAnErasureEndToEnd(t *testing.T) {
 	}
 	if version := erase(erasureId, late, true, true); version != 6 || stateOf(erasureId) != "done" {
 		t.Fatal("the late key's matching completion did not end its erasure")
+	}
+}
+
+// Overlapping erasures select their completion keys from the whole ref. Two runners of the record's index
+// eraser meet on one completion. After an ERASE of a late copy the second runner can end it again.
+func TestEvsRecordIndexCompletesIndependentErasuresEndToEnd(t *testing.T) {
+	world := newVersionlessWorldOf(t, protocol.RepoKind_REPO_KIND_RECORD)
+	ctx := world.ctx
+	w, other := world.format2Device("w"), world.format2Device("w")
+	auth := NewFakeRecordAuth()
+	auth.Append(&FakeRecordAuthFixture{Repos: map[sidecar.Id]*FakeRecordRepoAuth{
+		world.repoId: {Admins: []sidecar.Id{w.signer.SidecarId}},
+	}})
+	open := func(device *epochDevice) sidecar.RecordEraseIndex {
+		t.Helper()
+		openIndex, err := sidecar.NewRecordEvsEraseIndex(&sidecar.RecordEvsEraseIndexArgs{Client: device.client, Auth: auth.Tip})
+		if err != nil {
+			t.Fatal(err)
+		}
+		index, err := openIndex(ctx, world.repoId)
+		if err != nil || index == nil {
+			t.Fatalf("opening the record's index: %v", err)
+		}
+		return index
+	}
+	first, second := open(w), open(other)
+	keyOf := func(path string) *sidecar.EvsErasedKey {
+		t.Helper()
+		if _, err := w.writeSetting(path, versionlessContent(path, 1024), sidecar.EvsVersioningOff); err != nil {
+			t.Fatal(err)
+		}
+		keys, err := w.repo.SlotKeysOf(ctx, nil, []string{path})
+		if err != nil || len(keys) != 1 {
+			t.Fatalf("%s has %d keys: %v", path, len(keys), err)
+		}
+		return keys[0]
+	}
+	shared, own, independent := keyOf("notes/shared"), keyOf("notes/first"), keyOf("notes/second")
+	a, b := sidecar.NewId(), sidecar.NewId()
+	erase := func(id sidecar.Id, keys ...*sidecar.EvsErasedKey) {
+		t.Helper()
+		world.clock.Advance(evsservice.DefaultEvsSettings().RefusalFenceInterval)
+		result, err := w.repo.Erase(ctx, &sidecar.EvsEraseArgs{ErasureId: id, Keys: keys})
+		if err != nil || result.Version == 0 {
+			t.Fatalf("committing an erasure: %v, %v", result, err)
+		}
+	}
+	for _, id := range []sidecar.Id{a, b} {
+		key, err := first.DocKey(world.mainRefId(w), id.Bytes())
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = first.Cut(ctx, &sidecar.IndexCutArgs{ErasureId: id, Documents: []*sidecar.IndexCutDocument{{Key: key, Version: 1}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	erase(a, shared)
+	erase(a, own)
+	erase(b, shared, independent)
+	rewrite := func(index sidecar.RecordEraseIndex, id sidecar.Id) {
+		t.Helper()
+		result, err := index.Rewrite(ctx, &sidecar.IndexRewriteArgs{ErasureId: id, Complete: true, Completion: true})
+		if err != nil || result == nil || result.Erasure == nil || result.Unproven || result.Erasure.State != sidecar.SidecarErasureDone {
+			t.Fatalf("ending the record index erasure: %+v, %v", result, err)
+		}
+	}
+	// The first runner has read the ref and chosen its key. The other commits its own completion before
+	// that first push reaches the engine. Both runners must confirm the same terminal statement.
+	raced := false
+	world.setIntercept(func(device *epochDevice, request *http.Request) error {
+		if device == w && request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/slots/delete") && !raced {
+			raced = true
+			rewrite(second, a)
+			world.clock.Advance(evsservice.DefaultEvsSettings().RefusalFenceInterval)
+		}
+		return nil
+	})
+	rewrite(first, a)
+	world.setIntercept(nil)
+	if !raced {
+		t.Fatal("neither runner sent a completion")
+	}
+	rewrite(second, b)
+	late := keyOf("notes/late")
+	erase(a, late)
+	rewrite(second, a)
+	committed, err := other.repo.ReadErasures(ctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantKeys := []*sidecar.EvsErasedKey{own, independent, late}
+	wantIds := []sidecar.Id{a, b, a}
+	count := 0
+	for _, entry := range committed {
+		if !entry.Completion {
+			continue
+		}
+		if count >= len(wantKeys) || !entry.Complete || entry.ErasureId != wantIds[count] || len(entry.Keys) != 1 || *entry.Keys[0] != *wantKeys[count] {
+			t.Fatalf("completion %d: %+v", count, entry)
+		}
+		count++
+	}
+	if count != len(wantKeys) {
+		t.Fatalf("the erasure ref has %d completions, want %d", count, len(wantKeys))
 	}
 }

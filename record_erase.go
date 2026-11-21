@@ -1709,7 +1709,8 @@ type RecordEvsEraseIndexArgs struct {
 // The format-2 index side of a network's record logs over its EvsClient (RecordEraseIndexOpen): in the format2 gate,
 // for a vault, a team record or a `record` repo, the index's eraser on the log's ur/index, built as each erasure opens
 // it, signing as this device, its K_ref and pad key from the repo's current key, and an erasure complete while its
-// newest ERASE on the erasure ref says so. Nil and no error outside the gate and for any other log.
+// newest ERASE on the erasure ref says so. An explicitly closed gate allows format 1 erasure only on a format 1 repo
+// without a companion index. A migrated repo waits for the gate to reopen before erasure can proceed.
 func NewRecordEvsEraseIndex(args *RecordEvsEraseIndexArgs) (RecordEraseIndexOpen, error) {
 	if args == nil || args.Client == nil {
 		return nil, fmt.Errorf("%w: a record's erase index needs an evs client", ErrRecordEraseIndexUnavailable)
@@ -1724,10 +1725,6 @@ func NewRecordEvsEraseIndex(args *RecordEvsEraseIndexArgs) (RecordEraseIndexOpen
 	}
 	client := args.Client
 	return func(ctx context.Context, logId Id) (RecordEraseIndex, error) {
-		if !client.Format2Admitted() {
-			// format 1: no CUT, no index to rewrite
-			return nil, nil
-		}
 		repo := client.Repo(logId)
 		kind, err := repo.repoKind()
 		if err != nil {
@@ -1736,10 +1733,35 @@ func NewRecordEvsEraseIndex(args *RecordEvsEraseIndexArgs) (RecordEraseIndexOpen
 		if !recordEraseIndexedKind(kind) {
 			return nil, nil
 		}
+		admitted, known := client.Format2Gate()
+		if !known {
+			return nil, ErrRecordEraseIndexUnavailable
+		}
+		if admitted && client.format2Reader() == nil {
+			return nil, ErrEvsFormatUnsupported
+		}
 		store := newIndexEvsStore(repo, nil, true)
 		refId, err := store.refId(ctx)
 		if err != nil {
 			return nil, recordEvsRefusal(err)
+		}
+		if !admitted {
+			// A rollback closes admission without reverting a migrated repo or its existing index.
+			listing, err := repo.ListRefs(ctx, nil)
+			if err != nil {
+				return nil, err
+			}
+			if listing.Format != EvsRepoFormat1 {
+				return nil, ErrRecordEraseIndexUnavailable
+			}
+			head, err := repo.readHeadAlone(ctx, refId, true)
+			if err != nil {
+				return nil, err
+			}
+			if head.Version != 0 {
+				return nil, ErrRecordEraseIndexUnavailable
+			}
+			return nil, nil
 		}
 		repoKey, err := client.args.Gkm.CurrentRepoKey(ctx, logId)
 		if err != nil {
@@ -1753,6 +1775,10 @@ func NewRecordEvsEraseIndex(args *RecordEvsEraseIndexArgs) (RecordEraseIndexOpen
 		if err != nil {
 			return nil, err
 		}
+		identity := client.args.Identity()
+		if identity == nil {
+			return nil, ErrEvsNoConfig
+		}
 		auth := args.Auth
 		return recordNewEraseIndex(&recordEraseIndexArgs{
 			store: store, eraseStore: store, repoId: logId, refId: refId, logKind: kind,
@@ -1763,7 +1789,7 @@ func NewRecordEvsEraseIndex(args *RecordEvsEraseIndexArgs) (RecordEraseIndexOpen
 				view := auth()
 				return view != nil && view.Admins(logId, file.signerSidecarId)
 			},
-			format: format, settings: settings, eraser: client.args.Identity().SidecarId,
+			format: format, settings: settings, eraser: identity.SidecarId,
 			complete: func(ctx context.Context, erasureIds []Id) (map[Id]bool, error) {
 				erasures, err := repo.ReadErasures(ctx, 0)
 				if err != nil {
@@ -1890,7 +1916,7 @@ func (self *recordEraseNewestStore) Progress(ctx context.Context, erasureId Id) 
 	if err != nil || len(progress.erases) == 0 || progress.erases[len(progress.erases)-1].complete {
 		return progress, err
 	}
-	reopened := &indexEraseProgress{closures: progress.closures}
+	reopened := &indexEraseProgress{closures: progress.closures, completionKey: progress.completionKey}
 	for _, erased := range progress.erases {
 		copied := *erased
 		copied.complete = false

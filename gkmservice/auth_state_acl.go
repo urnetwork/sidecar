@@ -315,3 +315,63 @@ func (self *AclGkmAuthState) HoldersDropped(principal *sidecar.Principal, repoId
 	}
 	return gkmAclAnswer(dropped)
 }
+
+// RecoveryCoverage reads the binding history and every repo where any of this member's devices makes the recovery
+// identity a holder. Repo scopes of the requesting device cannot limit a member-wide delete.
+func (self *AclGkmAuthState) RecoveryCoverage(principal *sidecar.Principal, memberId sidecar.Id, now time.Time) (*RecoveryWrapCoverage, GkmAuthAnswer) {
+	snapshot, answer := self.snapshot(principal)
+	if answer != GkmAuthAllowed {
+		return nil, answer
+	}
+	row := snapshot.Config.Member(memberId)
+	binding := snapshot.Config.CurrentBinding(memberId)
+	if binding == nil {
+		return nil, GkmAuthDenied
+	}
+	result := &RecoveryWrapCoverage{Current: binding.GetKeySha256()}
+	for _, prior := range row.GetBindings() {
+		if prior.GetAt() < binding.GetAt() {
+			result.Retired = append(result.Retired, prior.GetKeySha256())
+		}
+	}
+	for _, repoId := range snapshot.Acl.RepoIds() {
+		holders, err := sidecar.KeyHolders(snapshot.Config, repoId, now)
+		if err != nil {
+			return nil, GkmAuthUnknown
+		}
+		if holders.Contains(sidecar.GkmHolderRecovery, memberId.Bytes()) {
+			result.RepoIds = append(result.RepoIds, repoId)
+		}
+	}
+	return result, GkmAuthAllowed
+}
+
+// RecoveryBindingsOf gives each current recovery holder and its exact effective binding in a verified repo view.
+func RecoveryBindingsOf(view sidecar.GkmAuthView, repoId sidecar.Id, now time.Time) (map[sidecar.Id][]byte, GkmAuthAnswer) {
+	if view == nil {
+		return nil, GkmAuthUnknown
+	}
+	holders, err := sidecar.KeyHolders(view, repoId, now)
+	if err != nil {
+		return nil, GkmAuthUnknown
+	}
+	bindings := map[sidecar.Id][]byte{}
+	for _, holder := range holders {
+		if holder.Kind == sidecar.GkmHolderRecovery {
+			memberId, err := sidecar.IdFromBytes(holder.Id)
+			if err != nil {
+				return nil, GkmAuthUnknown
+			}
+			bindings[memberId] = view.Member(memberId).GetRecoveryKeySha256()
+		}
+	}
+	return bindings, GkmAuthAllowed
+}
+
+func (self *AclGkmAuthState) RepoRecoveryBindings(principal *sidecar.Principal, repoId sidecar.Id, now time.Time) (map[sidecar.Id][]byte, GkmAuthAnswer) {
+	snapshot, answer := self.snapshot(principal)
+	if answer != GkmAuthAllowed {
+		return nil, answer
+	}
+	return RecoveryBindingsOf(snapshot.Config, repoId, now)
+}

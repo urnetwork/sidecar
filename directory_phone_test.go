@@ -9,6 +9,7 @@ package sidecar_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
+	"github.com/urnetwork/sidecar/sidecartest"
 )
 
 // A DirectoryCards that logs each call it passes on, for a request trace.
@@ -62,6 +64,16 @@ func (self *testRecordingCards) ReadStreamLog(ctx context.Context, repoId sideca
 func (self *testRecordingCards) ReadCards(ctx context.Context, repoId sidecar.Id, afterVersion uint64) (*sidecar.DirectoryCardsChanges, error) {
 	self.log(fmt.Sprintf("cards %d", afterVersion))
 	return self.inner.ReadCards(ctx, repoId, afterVersion)
+}
+
+func (self *testRecordingCards) PlanCards(ctx context.Context, repoId sidecar.Id, after uint64) (*sidecar.DirectoryCardsChanges, error) {
+	self.log(fmt.Sprintf("plan %d", after))
+	return self.inner.(sidecar.DirectoryViewCards).PlanCards(ctx, repoId, after)
+}
+
+func (self *testRecordingCards) ReadPlannedCard(ctx context.Context, repoId sidecar.Id, file *sidecar.DirectoryCardFile) ([]byte, error) {
+	self.log(fmt.Sprintf("file %s@%d", file.Path, file.PushVersion))
+	return self.inner.(sidecar.DirectoryViewCards).ReadPlannedCard(ctx, repoId, file)
 }
 
 func (self *testRecordingCards) PutCard(ctx context.Context, repoId sidecar.Id, write *sidecar.DirectoryCardWrite) (uint64, error) {
@@ -289,4 +301,196 @@ func TestDirectoryPhoneOpenViewRefreshes(t *testing.T) {
 	if again := world.cards.Counts(); again.StreamReads != after.StreamReads {
 		t.Errorf("an idle refresh read %d streams", again.StreamReads-after.StreamReads)
 	}
+}
+
+// A mixed directory on a phone. A cold view plans the latest signed version of each
+// file, pauses on its exact stored cost and resumes after a queued version is replaced.
+func TestDirectoryPhoneFormat2Coverage(t *testing.T) {
+	settings := sidecartest.DefaultFakeDirectoryCardsSettings()
+	settings.CardsPageCount = 1
+	world := newTestDirectoryWorld(t, settings)
+	member, other := sidecar.NewId(), sidecar.NewId()
+	writer, legacy := world.memberWriter(member), world.memberWriter(other)
+	world.publish()
+	repoId := world.createRepo(protocol.RepoKind_REPO_KIND_GENERAL, nil, writer)
+	now := world.clock.Now().UnixMilli()
+	retained := testRunItem(legacy.sidecarId, &other, sidecar.NewId(), 1, now)
+	legacy.announce(retained)
+	runId := sidecar.NewId()
+	run := testRunItem(writer.sidecarId, &member, runId, 1, now)
+	writer.announce(run)
+	world.cards.RaiseFormat(world.directoryId)
+	cardPath, repoPath := sidecar.DirectoryCardPath(writer.sidecarId), sidecar.DirectoryRepoPath(repoId)
+	pin := world.directoryAuth.Tip().Pin()
+	writeCard := func(seq uint64, items ...*protocol.Announcement) {
+		world.putFile(writer.sidecarId, cardPath, world.cardContent(writer, writer.sidecarId, seq, pin, items...), pin)
+	}
+	writeCard(1, run)
+	repoItem := testRepoItem(t, writer.sidecarId, &member, repoId, protocol.RepoKind_REPO_KIND_GENERAL, 1, now, "field notes", false)
+	world.putFile(writer.sidecarId, repoPath, world.repoFileContent(writer, repoId, 1, pin, repoItem), pin)
+	world.clock.Advance(time.Minute)
+	writeCard(2, testRunItem(writer.sidecarId, &member, runId, 2, world.clock.Now().UnixMilli()))
+	budget := sidecar.DefaultSidecarSettings().Directory
+	budget.PhoneMeteredByteCount = sidecar.DirectoryFileStepByteCount
+	scratch := sidecartest.NewFakeStore().Root()
+	phone := world.readerWithSettings(nil, budget, scratch)
+	recording := &testRecordingCards{inner: world.cardsFor(world.readerId)}
+	phone.client.Bind(recording, nil)
+	view, err := phone.client.View(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := view.Fetch(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	page := view.List(nil)
+	if page.Coverage.Complete || page.Coverage.Waiting != sidecar.DirectoryCoverageWaitingMetered ||
+		page.Coverage.MeteredByteCount != budget.PhoneMeteredByteCount || page.Coverage.LeftByteCount < sidecar.DirectoryFileStepByteCount ||
+		len(page.Items) != 1 || page.Items[0].Announcement.GetVersion() != 2 ||
+		!slices.Contains(page.Coverage.LeftSidecarIds, legacy.sidecarId) || !slices.Contains(page.Coverage.LeftSidecarIds, writer.sidecarId) {
+		t.Fatalf("metered page: %+v, %d items", page.Coverage, len(page.Items))
+	}
+	files := func() []string {
+		out := []string{}
+		for _, call := range recording.trace() {
+			if strings.HasPrefix(call, "file ") {
+				out = append(out, call)
+			}
+		}
+		return out
+	}
+	if err := view.Fetch(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := files(); !slices.Equal(got, []string{"file " + cardPath + "@3"}) {
+		t.Fatalf("metered reads: %v", got)
+	}
+	if kept, err := scratch.List(""); err != nil || len(kept) == 0 {
+		t.Fatalf("view store: %v, %v", kept, err)
+	}
+	// A removal while the older body is still queued triggers a refresh instead of
+	// accepting stale bytes or claiming completeness.
+	world.removeFile(writer.sidecarId, repoPath)
+	view.AllowMetered()
+	if err := view.Fetch(t.Context()); !errors.Is(err, sidecar.ErrEvsCollected) || view.Coverage().Complete {
+		t.Fatalf("replaced read: %v, %+v", err, view.Coverage())
+	}
+	if err := view.Fetch(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	page = view.List(nil)
+	if !page.Coverage.Complete || len(page.Items) != 2 || len(page.Coverage.LeftSidecarIds) != 0 || len(page.Coverage.FetchedSidecarIds) != 2 {
+		t.Fatalf("resumed page: %+v, %d items", page.Coverage, len(page.Items))
+	}
+	for _, item := range page.Items {
+		if item.Key.WriterSidecarId == writer.sidecarId && (item.Announcement.GetVersion() != 2 || item.EntryId != (sidecar.Id{})) {
+			t.Fatalf("older record replaced the current signed card: %+v", item)
+		}
+	}
+	// A repo announcement drafted before the removal can arrive on its stream
+	// afterward. The removed file still takes precedence over that old item.
+	world.clock.Advance(time.Minute)
+	writer.announce(repoItem)
+	if err := view.Fetch(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if page := view.List(nil); !page.Coverage.Complete || len(page.Items) != 2 {
+		t.Fatalf("delayed record restored the removed repo: %+v, %d items", page.Coverage, len(page.Items))
+	}
+	// Recreating the repo file is visible from an already open view.
+	world.putFile(writer.sidecarId, repoPath, world.repoFileContent(writer, repoId, 2, pin, repoItem), pin)
+	if err := view.Fetch(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if page := view.List(nil); !page.Coverage.Complete || len(page.Items) != 3 {
+		t.Fatalf("refreshed page: %+v, %d items", page.Coverage, len(page.Items))
+	}
+	// The writer withdraws its run by omitting it from its next card. Its
+	// retained record must stay hidden in both an open view and a new cold view.
+	world.clock.Advance(time.Minute)
+	writeCard(3)
+	if err := view.Fetch(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if page := view.List(nil); !page.Coverage.Complete || len(page.Items) != 2 {
+		t.Fatalf("withdrawn run returned from its retained record: %+v, %d items", page.Coverage, len(page.Items))
+	}
+	// An already-signed M6 draft can drain from an offline queue after the
+	// withdrawal. Its old renewal still precedes the signed snapshot.
+	world.clock.Advance(time.Minute)
+	writer.announce(run)
+	if err := view.Fetch(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if page := view.List(nil); !page.Coverage.Complete || len(page.Items) != 2 {
+		t.Fatalf("delayed record restored the withdrawn run: %+v, %d items", page.Coverage, len(page.Items))
+	}
+	view.Close()
+	if kept, err := scratch.List(""); err != nil || len(kept) != 0 {
+		t.Fatalf("closed view store: %v, %v", kept, err)
+	}
+	// The process exits with another view still open. Its replacement removes the
+	// abandoned scope before reading the current heads into a new one.
+	abandoned, err := phone.client.View(&sidecar.DirectoryViewArgs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := abandoned.Fetch(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if left, err := scratch.List(""); err != nil || len(left) == 0 {
+		t.Fatalf("interrupted view store: %v, %v", left, err)
+	}
+	restart := world.readerWithSettings(nil, budget, scratch)
+	cold, err := restart.client.View(&sidecar.DirectoryViewArgs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cold.Close()
+	if left, err := scratch.List(""); err != nil || len(left) != 0 {
+		t.Fatalf("abandoned scope after restart: %v, %v", left, err)
+	}
+	if err := cold.Fetch(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if page := cold.List(nil); !page.Coverage.Complete || len(page.Items) != 2 {
+		t.Fatalf("reopened page: %+v, %d items", page.Coverage, len(page.Items))
+	}
+	world.clock.Advance(26 * time.Hour)
+	if page := cold.List(nil); !page.Coverage.Complete || len(page.Items) != 1 || page.Items[0].Key.Kind != sidecar.DirectoryAnnouncementKindRepo {
+		t.Fatalf("past the run's stale window: %+v, %d items", page.Coverage, len(page.Items))
+	}
+	if err := world.streams.Grant(world.directoryId, world.readerId, sidecartest.RecordStreamsScope{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cold.Fetch(t.Context()); err == nil {
+		t.Fatal("the server withdrew directory read access")
+	}
+	if page := cold.List(nil); page.Coverage.Complete || len(page.Items) != 0 {
+		t.Fatalf("cached after losing read: %+v, %d items", page.Coverage, len(page.Items))
+	}
+	if err := world.streams.Grant(world.directoryId, world.readerId, sidecartest.RecordStreamsScope{Read: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cold.Fetch(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if page := cold.List(nil); !page.Coverage.Complete || len(page.Items) != 1 {
+		t.Fatalf("restored read: %+v, %d items", page.Coverage, len(page.Items))
+	}
+
+	world.directoryFixture.Sidecars[world.readerId].RevokedAt = world.directoryAuth.Tip().Pin().GetVersion() + 1
+	world.publish()
+	revoked, err := restart.client.View(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer revoked.Close()
+	if err := revoked.Fetch(t.Context()); !errors.Is(err, sidecar.ErrDirectoryReadLost) {
+		t.Fatalf("reader lost its directory: %v", err)
+	}
+	if page := revoked.List(nil); page.Coverage.Complete || len(page.Items) != 0 {
+		t.Fatalf("revoked phone: %+v, %d items", page.Coverage, len(page.Items))
+	}
+
 }

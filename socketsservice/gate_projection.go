@@ -253,6 +253,12 @@ func NewSocketProjectionGate(ctx context.Context, host *sidecar.ServiceHost, sou
 		passCount:   sidecar.NewMonitorValue[uint64](0),
 		networks:    map[connect.Id]*socketGateNetwork{},
 	}
+	self.SetScopeSource(func(snapshot *sidecar.AclGateSnapshot, label string) (sidecar.AclScope, bool) {
+		if snapshot == nil || snapshot.Config == nil {
+			return sidecar.AclScope{}, false
+		}
+		return snapshot.Config.TeamScope(label)
+	})
 	var cacheSource sidecar.AclGateSource
 	if source != nil {
 		self.source = &socketGateSource{gate: self, inner: source}

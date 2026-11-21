@@ -18,7 +18,8 @@
 //	lookup    Lookup reconciles a reserved mail_send use at a restart from the stored action and its key alone: an o/
 //	          entry under the key is done, its effect ref the send's id, which the entry's Message-ID carries
 //	          (MailOutboxMessageId); an or/ record with no o/, an entry sent and removed past its approval's window,
-//	          is done with no ref; neither, both read whole, is not_done; a read that fails is uncertain
+//	          carries the same ref in send_id. An older record or raw submission can name no send. Two absent
+//	          records give not_done. A read that fails is uncertain
 //	removal   o/ goes once sent and past its approval's retry window, which SmtpOutboxRunner decides through
 //	          SmtpMailbox.RemoveOutbox; or/ is kept 30 days (mailSmtpMailbox.RemoveExpiredOutcomes, which the
 //	          mail component's pass runs once an OutcomeSweepInterval)
@@ -65,13 +66,6 @@ type MailOutboxQueueArgs struct {
 	Tl4Domains []string
 	// The approval's not_after, whence the entry's retry window; zero for none.
 	ApprovalNotAfter time.Time
-}
-
-// What Queue did.
-type MailOutboxQueued struct {
-	EffectKey []byte
-	// This call wrote the entry; false for one that stood under the key already.
-	Created bool
 }
 
 // A network's standing as GET /abuse/status gives it (SidecarApi.AbuseStatus).
@@ -189,11 +183,10 @@ func (self *MailOutbox) Queue(ctx context.Context, args *MailOutboxQueueArgs) (*
 	if self.sign == nil {
 		return nil, fmt.Errorf("%w: no signer", ErrMailOutboxInvalid)
 	}
-	// one that stands answers the key: a retry, a restart's or another device's
-	if _, err := self.mailbox.ReadOutbox(ctx, args.EffectKey); err == nil {
-		return &MailOutboxQueued{EffectKey: bytes.Clone(args.EffectKey)}, nil
-	} else if !errors.Is(err, ErrSmtpMailboxNotFound) && !errors.Is(err, ErrMailOutboxFileInvalid) {
-		return nil, err
+	if queued, err := self.receipt(ctx, args.EffectKey); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrMailSendUncertain, err)
+	} else if queued != nil {
+		return queued, nil
 	}
 	signed, err := SignSmtpOutboxEntry(&SmtpOutboundMessage{
 		EffectKey:        args.EffectKey,
@@ -216,19 +209,46 @@ func (self *MailOutbox) Queue(ctx context.Context, args *MailOutboxQueueArgs) (*
 		return nil, fmt.Errorf("%w: a message past the outbox's bound", ErrMailOutboxInvalid)
 	}
 	testHookBarrier("mail.outbox.queue.before", "")
-	_, err = self.store.Write(ctx, []*mailStoreWrite{{Path: path, Content: content, IfVersion: 0}})
+	_, err = self.store.Write(ctx, []*mailStoreWrite{{Path: path, Content: content, CreateOnce: true}})
 	testHookBarrier("mail.outbox.queue.after", "")
 	if err == nil {
-		return &MailOutboxQueued{EffectKey: bytes.Clone(args.EffectKey), Created: true}, nil
+		sendId, _ := MailOutboxSendIdOf(args.Message)
+		return &MailOutboxQueued{EffectKey: bytes.Clone(args.EffectKey), SendId: sendId, Created: true}, nil
 	}
-	if !mailStoreConflictOn(err, path) {
+	// A lost write acknowledgement may still have committed. A writer that won the race may already have
+	// finished and removed its entry.
+	queued, readErr := self.receipt(ctx, args.EffectKey)
+	if readErr != nil {
+		return nil, fmt.Errorf("%w: %w", ErrMailSendUncertain, readErr)
+	}
+	if queued != nil {
+		return queued, nil
+	}
+	return nil, err
+}
+
+// The identity committed under effectKey. Read o/ first so removal between the reads still finds or/. A named
+// outcome wins if an older writer recreated the entry. An unnamed outcome can still take its id from a live entry.
+func (self *MailOutbox) receipt(ctx context.Context, effectKey []byte) (*MailOutboxQueued, error) {
+	var queued *MailOutboxQueued
+	file, err := self.mailbox.ReadOutbox(ctx, effectKey)
+	if err == nil {
+		sendId, _ := MailOutboxSendIdOf(file.Message)
+		queued = &MailOutboxQueued{EffectKey: bytes.Clone(effectKey), SendId: sendId}
+	} else if !errors.Is(err, ErrSmtpMailboxNotFound) {
 		return nil, err
 	}
-	// another writer's entry stands under the key: that is this effect's one object
-	if _, readErr := self.mailbox.ReadOutbox(ctx, args.EffectKey); readErr != nil {
+	sendId, _, err := self.mailbox.ReadSendOutcomes(ctx, effectKey)
+	if errors.Is(err, ErrSmtpMailboxNotFound) {
+		return queued, nil
+	}
+	if err != nil {
 		return nil, err
 	}
-	return &MailOutboxQueued{EffectKey: bytes.Clone(args.EffectKey)}, nil
+	if queued == nil || sendId != (Id{}) {
+		queued = &MailOutboxQueued{EffectKey: bytes.Clone(effectKey), SendId: sendId}
+	}
+	return queued, nil
 }
 
 // A kind mail use's Lookup (see the file header's lookup row): from the stored action and its key alone.
@@ -237,26 +257,16 @@ func (self *MailOutbox) Lookup(ctx context.Context, canonical []byte, effectKey 
 		// no entry can stand under a key of another length
 		return &SidecarOutcome{State: ApprovalOutcomeNotDone}, nil
 	}
-	file, err := self.mailbox.ReadOutbox(ctx, effectKey)
-	switch {
-	case err == nil:
-		outcome := &SidecarOutcome{State: ApprovalOutcomeDone}
-		if sendId, ok := MailOutboxSendIdOf(file.Message); ok {
-			outcome.EffectRef = sendId.Bytes()
-		}
-		return outcome, nil
-	case errors.Is(err, ErrMailOutboxFileInvalid):
-		// something stands under the key that no Queue wrote: whether this use wrote first is not known
-		return &SidecarOutcome{State: ApprovalOutcomeUncertain}, nil
-	case !errors.Is(err, ErrSmtpMailboxNotFound):
+	queued, err := self.receipt(ctx, effectKey)
+	if err != nil {
 		return &SidecarOutcome{State: ApprovalOutcomeUncertain}, nil
 	}
-	_, err = self.mailbox.ReadOutcomes(ctx, effectKey)
-	switch {
-	case err == nil:
-		return &SidecarOutcome{State: ApprovalOutcomeDone}, nil
-	case errors.Is(err, ErrSmtpMailboxNotFound):
+	if queued == nil {
 		return &SidecarOutcome{State: ApprovalOutcomeNotDone}, nil
 	}
-	return &SidecarOutcome{State: ApprovalOutcomeUncertain}, nil
+	outcome := &SidecarOutcome{State: ApprovalOutcomeDone}
+	if queued.SendId != (Id{}) {
+		outcome.EffectRef = queued.SendId.Bytes()
+	}
+	return outcome, nil
 }

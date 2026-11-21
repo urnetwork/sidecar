@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -205,6 +206,8 @@ func (self *DnsClient) fetchZone(ctx context.Context) (*DnsZone, error) {
 			self.fetchTime = self.clock.Now()
 			self.stale = false
 			self.version.Set(zone.Version)
+		} else {
+			zone = self.zone
 		}
 		labels = self.labels
 	}()
@@ -219,6 +222,10 @@ func (self *DnsClient) fetchZone(ctx context.Context) (*DnsZone, error) {
 // A copy that shares nothing with zone.
 func cloneDnsZone(zone *DnsZone) *DnsZone {
 	copied := *zone
+	copied.CustomHosts = slices.Clone(zone.CustomHosts)
+	for index := range copied.CustomHosts {
+		copied.CustomHosts[index].PendingInterfaces = slices.Clone(copied.CustomHosts[index].PendingInterfaces)
+	}
 	copied.RecordSets = make([]DnsZoneRecordSet, 0, len(zone.RecordSets))
 	for _, recordSet := range zone.RecordSets {
 		recordSet.Values = append([]string{}, recordSet.Values...)

@@ -36,11 +36,33 @@ func (self *AclGateView) MayReceive(networkId Id, receiver AclSubject, scope Acl
 	if deny != 0 {
 		return aclDeny(deny)
 	}
+	return state.mayReceive(receiver, scope, now)
+}
+
+// MayReceiveByScopeLabel resolves a TLSA request's scope and its listen grant in one verified snapshot.
+// The empty label names the network's own receiver.
+func (self *AclGateView) MayReceiveByScopeLabel(networkId Id, receiver AclSubject, label string, now time.Time) AclDecision {
+	snapshot, deny := self.snapshot(networkId)
+	if deny != 0 {
+		return aclDeny(deny)
+	}
+	var scope AclScope
+	if label != "" {
+		var found bool
+		scope, found = snapshot.Config.TeamScope(label)
+		if !found {
+			return aclDeny(AclReasonNoState)
+		}
+	}
+	return snapshot.Acl.mayReceive(receiver, scope, now)
+}
+
+func (self *AclState) mayReceive(receiver AclSubject, scope AclScope, now time.Time) AclDecision {
 	name := aclMailReceiverName
 	if scope.Label != "" {
 		name = aclMailReceiverName + "." + scope.Label
 	}
-	return state.MayListenInScope(receiver, AclSocketName{PublicName: name}, scope, now)
+	return self.MayListenInScope(receiver, AclSocketName{PublicName: name}, scope, now)
 }
 
 // Whether a subject may send mail through smtpedge: a send grant with mail_send (D-ACL-12). The From domain is

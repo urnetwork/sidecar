@@ -1318,3 +1318,44 @@ func TestRecoveryKeepsNoCode(t *testing.T) {
 		t.Errorf("the record: %+v %v", record, err)
 	}
 }
+
+// Both a directly effective binding and a cosigned proposal reopen the same recovery public key on a fresh
+// folded head, even though the row of the cosigned binding names its approval rather than its proposal.
+func TestVerifiedRecoveryBindingOpensAtItsPinAcrossAFold(t *testing.T) {
+	for _, cosigned := range []bool{false, true} {
+		var world *recoverTestWorld
+		if cosigned {
+			team := newTestConfigTeam(t)
+			world = newRecoverTestWorldOn(t, team.testConfigNet, true, &team.adminB)
+		} else {
+			world = newRecoverTestWorld(t, false)
+		}
+		keys := recoverTestKeys(t, world.words)
+		keyAt := func(generation uint64) *EvsRepoKey {
+			if generation == world.configKey.Generation() {
+				return world.configKey
+			}
+			return nil
+		}
+		check := func(state *ConfigState) {
+			t.Helper()
+			key, err := state.recoveryKey(world.memberId, keyAt)
+			if err != nil || !bytes.Equal(key.BindingKeySha256, keys.KeySha256()) || !bytes.Equal(key.XwingPublicKey, keys.XwingPublicKey()) {
+				t.Fatalf("cosigned %t, binding at %d: %v", cosigned, state.CurrentBinding(world.memberId).GetAt(), err)
+			}
+		}
+		check(world.net.log.State())
+		world.foldTo(2)
+		check(world.net.log.State())
+		head := world.heads.heads[2]
+		records, err := head.RecordsIn(0, head.FoldedThrough())
+		if err != nil {
+			t.Fatal(err)
+		}
+		state := world.net.log.State()
+		fresh := &ConfigState{networkId: state.networkId, genesisChain: state.genesisChain, members: state.members,
+			recoveryBodies: configFoldedRecoveryBodies([]*bridge.MemberRow{state.Member(world.memberId)}, records)}
+		check(fresh)
+		keys.Erase()
+	}
+}

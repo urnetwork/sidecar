@@ -127,6 +127,11 @@ func (self *fsKeysBudgetState) LateHolders(principal *sidecar.Principal, repoId 
 	return nil, gkmservice.GkmAuthAllowed
 }
 
+func (self *fsKeysBudgetState) RepoRecoveryBindings(principal *sidecar.Principal, repoId sidecar.Id, now time.Time) (map[sidecar.Id][]byte, gkmservice.GkmAuthAnswer) {
+	// The budget fixture grants keys only to its writer and reader; it has no recovery binding.
+	return map[sidecar.Id][]byte{}, gkmservice.GkmAuthAllowed
+}
+
 func (self *fsKeysBudgetState) HoldersDropped(principal *sidecar.Principal, repoId sidecar.Id, pin *bridge.AuthPin, since time.Time, now time.Time) gkmservice.GkmAuthAnswer {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()

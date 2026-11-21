@@ -396,6 +396,33 @@ func TestRestoreStepStopsAnNsThatMissesItsSoaRead(t *testing.T) {
 	}
 }
 
+func TestRestoreWaitsForAtLeastOneServingAuthority(t *testing.T) {
+	test := newRestoreTest(t)
+	test.writeMany(t, 2)
+	test.takeDump(t)
+	test.loseAndLoad(t)
+	test.ns.silence("ns1")
+	test.ns.silence("ns2")
+	incident := sidecar.NewId()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := test.step.Run(ctx, edgeTestRoot, incident)
+		done <- err
+	}()
+	test.ns.awaitReads(t, 4)
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) || !test.state(t).Restoring {
+		t.Fatalf("empty authority inventory reopened writes: %v", err)
+	}
+	test.ns.serve("ns1", uint32(test.state(t).RestoreSerial))
+	test.ns.follow("ns1", nil, nil)
+	if progress := test.run(t, incident); !progress.Done || len(progress.StoppedNs) != 1 || progress.StoppedNs[0] != "ns2" {
+		t.Fatalf("one authority served the recovered zone: %+v", progress)
+	}
+}
+
 // Where no NS state can be kept (dns_ns before its §2.8 row), an NS that misses its SOA read is counted
 // still, so restoring holds until it serves restore_serial: plan-DNS-running-ns's interim.
 func TestRestoreStepWaitsForEveryNsWhenNoneCanBeStopped(t *testing.T) {

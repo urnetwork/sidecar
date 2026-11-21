@@ -1014,6 +1014,19 @@ func (self *GkmApi) RecoveryWraps(ctx context.Context, memberId Id, recoveryScop
 	return reply, nil
 }
 
+// Checks the member's complete coverage under the current binding, including groups read by its other devices.
+func (self *GkmApi) CheckRecoveryCoverage(ctx context.Context, memberId Id, binding []byte) error {
+	if len(binding) != gkmDigestByteCount {
+		return ErrGkmMalformed
+	}
+	scopes, err := self.scopesFor(nil, GkmScopeRoleRead)
+	if err != nil {
+		return err
+	}
+	path := "/gkm/recovery/" + gkmUrlId(memberId) + "/wraps?complete=" + hex.EncodeToString(binding[:gkmDigestPrefixByteCount])
+	return self.callMessage(ctx, &gkmCall{route: "GET /gkm/recovery/{member_id}/wraps", method: http.MethodGet, path: path, scopes: scopes, retry: true}, nil)
+}
+
 // POST /gkm/recovery/<member_id>/wraps: one re-wrap after a rebind, by that member's device, of a group of repoId.
 func (self *GkmApi) UploadRecoveryWrap(ctx context.Context, repoId Id, memberId Id, wrap *protocol.GkmRecoveryWrap) error {
 	scopes, err := self.scopesFor(&repoId, GkmScopeRoleRead)

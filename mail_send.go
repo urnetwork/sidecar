@@ -164,14 +164,15 @@ type MailSendArgs struct {
 
 // One recipient's outcome.
 type MailSendRecipient struct {
-	// As the caller named it, lowercase.
+	// Its delivery address, with a canonical domain and the original external local part.
 	Address string
 	Outcome MailSendOutcome
 }
 
 // What Send answers.
 type MailSendResult struct {
-	// The message's id: its sent copy's, and its Message-ID's left side.
+	// A draft's send id. Queued mail takes the id in its committed Message-ID. A raw SMTP submission can have
+	// a client-chosen Message-ID that names no send.
 	SendId Id
 	// Each distinct recipient, in the order named, To then Cc then Bcc.
 	Recipients []*MailSendRecipient
@@ -268,10 +269,6 @@ func (self *MailClient) planSendDraft(args *MailSendArgs, burnerLabel string) (*
 	if args == nil {
 		return nil, fmt.Errorf("%w: no message", ErrMailSendInvalid)
 	}
-	recipients, err := mailSendRecipients(args, settings)
-	if err != nil {
-		return nil, err
-	}
 	if strings.ContainsAny(args.Subject, "\r\n") || settings.SubjectMaxByteCount < len(args.Subject) || !utf8.ValidString(args.Subject) ||
 		settings.TextMaxByteCount < len(args.Text) || !utf8.ValidString(args.Text) {
 		return nil, fmt.Errorf("%w: a subject or text out of shape", ErrMailSendInvalid)
@@ -280,13 +277,13 @@ func (self *MailClient) planSendDraft(args *MailSendArgs, burnerLabel string) (*
 		!strings.Contains(args.InReplyTo, "@") || !utf8.ValidString(args.InReplyTo)) {
 		return nil, fmt.Errorf("%w: a reply's id out of shape", ErrMailSendInvalid)
 	}
-	return self.planSendFrom(args.From, recipients, burnerLabel)
+	return self.planSendFrom(args.From, burnerLabel, args.To, args.Cc, args.Bcc)
 }
 
-// What a send from fromText to recipients, distinct and lowercase, is held to: the zone, and a From of this network
+// What a send to the address lists is held to: the zone, its distinct recipients and a From of this network
 // that policy lets this device send as. burnerLabel, a reply's, holds a burner's From to its live label in this
 // member's mailbox instead (MailClient.Reply).
-func (self *MailClient) planSendFrom(fromText string, recipients []string, burnerLabel string) (*mailSendPlan, error) {
+func (self *MailClient) planSendFrom(fromText string, burnerLabel string, lists ...[]string) (*mailSendPlan, error) {
 	binding, parts, _, err := self.state()
 	if err != nil {
 		return nil, err
@@ -297,6 +294,10 @@ func (self *MailClient) planSendFrom(fromText string, recipients []string, burne
 	}
 	if row.Root == "" || row.Label == "" {
 		return nil, ErrMailConfigNoZone
+	}
+	recipients, err := mailSendAddressList(row, self.sendSettings(), lists...)
+	if err != nil {
+		return nil, err
 	}
 	authority := MailSendAuthority(&MailSendAclAuthority{
 		Engine: binding.Engine,
@@ -398,6 +399,10 @@ func mailSendStandingEffectKey() []byte {
 // and the queue. effectKey is the use's, nil for a send to members alone, which queues nothing.
 func (self *MailClient) deliverSend(ctx context.Context, plan *mailSendPlan, content *mailSendContent, effectKey []byte) (*MailSendResult, error) {
 	row, authority, fromAddress := plan.row, plan.authority, plan.fromAddress
+	// A retry may find its queue committed before the gate recorded the answer.
+	if replay, err := self.priorSend(ctx, plan, content, effectKey); err != nil || replay != nil {
+		return replay, err
+	}
 
 	// split and resolve
 	result := &MailSendResult{}
@@ -472,7 +477,7 @@ func (self *MailClient) deliverSend(ctx context.Context, plan *mailSendPlan, con
 		result.SendId = newMailOutboxSendId()
 		messageId = MailOutboxMessageId(result.SendId, messageDomain)
 	}
-	message, err := content.message(fromAddress, messageId, now)
+	message, err := content.message(plan, messageId, now)
 	if err != nil {
 		return nil, err
 	}
@@ -504,21 +509,52 @@ func (self *MailClient) deliverSend(ctx context.Context, plan *mailSendPlan, con
 		for _, recipient := range outside {
 			addresses = append(addresses, recipient.Address)
 		}
-		outcome := queue.queue(ctx, &mailSendQueueArgs{
+		queued, outcome, err := queue.queue(ctx, &mailSendQueueArgs{
 			effectKey:  effectKey,
 			recipients: addresses,
 			message:    sendable,
 			flags:      flags,
 			notAfter:   mailSendApprovalNotAfter(ctx),
 		})
+		if err != nil {
+			return nil, err
+		}
 		for _, recipient := range outside {
 			recipient.Outcome = outcome
 		}
-		if outcome == MailSendQueued {
-			result.EffectKey = append([]byte(nil), effectKey...)
+		if queued != nil {
+			if !queued.Created {
+				return content.replayedSend(queued.SendId, queued.EffectKey)
+			}
+			result.EffectKey = queued.EffectKey
+			result.SendId = queued.SendId
 		}
 	}
 	return result, nil
+}
+
+// The recorded queue result, read before repeating any effect and when a gate answers from its ledger.
+func (self *MailClient) priorSend(ctx context.Context, plan *mailSendPlan, content *mailSendContent, effectKey []byte) (*MailSendResult, error) {
+	if len(effectKey) != mailEffectKeyByteCount || len(plan.outsideRecipients()) == 0 {
+		return nil, nil
+	}
+	queued, err := self.queuedSend(ctx, plan, effectKey)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrMailSendUncertain, err)
+	}
+	if queued == nil {
+		return nil, nil
+	}
+	return content.replayedSend(queued.SendId, queued.EffectKey)
+}
+
+// The result known on replay. A raw submission may carry a client-chosen Message-ID, and an old outcome may
+// omit send_id. A draft needs its committed id for GetSendResult.
+func (self *mailSendContent) replayedSend(sendId Id, effectKey []byte) (*MailSendResult, error) {
+	if sendId == (Id{}) && self.draft != nil {
+		return nil, fmt.Errorf("%w: the recorded outcome names no send", ErrMailSendUncertain)
+	}
+	return &MailSendResult{SendId: sendId, EffectKey: effectKey}, nil
 }
 
 // The Message-ID an internet send names, <id>@<domain>: id the lowercase base32 of the send's 16 bytes, which a
@@ -542,24 +578,39 @@ type mailSendQueueArgs struct {
 	notAfter   time.Time
 }
 
+// What MailOutbox.Queue committed or found under the same key.
+type MailOutboxQueued struct {
+	EffectKey []byte
+	// The id in the committed message or outcome record, zero if it names none.
+	SendId Id
+	// This call wrote the entry.
+	Created bool
+}
+
 // Where a send's internet mail goes: the member's outbox on the legs that send mail (mail_send_queue.go).
 type mailSendQueue interface {
-	// Queues args' message for its internet recipients: MailSendQueued, or the outcome they answer instead.
-	queue(ctx context.Context, args *mailSendQueueArgs) MailSendOutcome
+	// Queues args' message for its internet recipients. An error means a committed receipt could not be read.
+	queue(ctx context.Context, args *mailSendQueueArgs) (*MailOutboxQueued, MailSendOutcome, error)
 }
 
-// The distinct recipients of args, lowercase, To then Cc then Bcc, each parsing as a bare RFC 5322 address, within
-// the settings' bounds.
-func mailSendRecipients(args *MailSendArgs, settings *MailSendSettings) ([]string, error) {
-	return mailSendAddressList(settings, args.To, args.Cc, args.Bcc)
+// Canonicalizes a bare recipient. An external SMTP local part is opaque, whereas a local mailcfg name folds case.
+func mailSendAddress(row NetworkLabelRow, address string) string {
+	address = strings.TrimSpace(address)
+	if recipient, own := mailSendOwnRecipient(row, address); own {
+		return recipient.Address()
+	}
+	if at := strings.LastIndexByte(address, '@'); at >= 0 {
+		return address[:at+1] + dnsAsciiLower(address[at+1:])
+	}
+	return address
 }
 
-// The distinct addresses of lists, lowercase and in order, each a bare RFC 5322 address within settings' bounds.
-func mailSendAddressList(settings *MailSendSettings, lists ...[]string) ([]string, error) {
+// The distinct delivery addresses in list order, each a bare RFC 5322 address within settings' bounds.
+func mailSendAddressList(row NetworkLabelRow, settings *MailSendSettings, lists ...[]string) ([]string, error) {
 	recipients := []string{}
 	for _, list := range lists {
 		for _, address := range list {
-			address = dnsAsciiLower(strings.TrimSpace(address))
+			address = mailSendAddress(row, address)
 			if address == "" || settings.AddressMaxByteCount < len(address) || strings.ContainsAny(address, "\r\n<>,") {
 				return nil, fmt.Errorf("%w: a recipient out of shape", ErrMailSendInvalid)
 			}
@@ -582,29 +633,23 @@ func mailSendAddressList(settings *MailSendSettings, lists ...[]string) ([]strin
 }
 
 // The message content sends: a draft's built under messageId, or a submission's as its client wrote it.
-func (self *mailSendContent) message(fromAddress string, messageId string, now time.Time) ([]byte, error) {
+func (self *mailSendContent) message(plan *mailSendPlan, messageId string, now time.Time) ([]byte, error) {
 	if self.draft == nil {
 		return bytes.Clone(self.raw), nil
 	}
-	return mailSendBuildMessageWithId(self.draft, fromAddress, messageId, now)
+	return mailSendBuildMessageWithId(self.draft, plan.row, plan.fromAddress, messageId, now)
 }
 
-// The message a send deposits and keeps: plain text, UTF-8, quoted-printable, CRLF lines (see the file header), its
-// Message-ID the send id under the From's domain.
-func mailSendBuildMessage(args *MailSendArgs, fromAddress string, fromDomain string, sendId Id, now time.Time) ([]byte, error) {
-	return mailSendBuildMessageWithId(args, fromAddress, strings.ToLower(sendId.String())+"@"+fromDomain, now)
-}
-
-// mailSendBuildMessage with its Message-ID's addr-spec.
-func mailSendBuildMessageWithId(args *MailSendArgs, fromAddress string, messageId string, now time.Time) ([]byte, error) {
-	lowerAll := func(addresses []string) []string {
-		lowered := []string{}
+// A draft's message with its send's Message-ID, and the same To and Cc addresses the planner used for delivery.
+func mailSendBuildMessageWithId(args *MailSendArgs, row NetworkLabelRow, fromAddress string, messageId string, now time.Time) ([]byte, error) {
+	headerAddresses := func(addresses []string) []string {
+		distinct := []string{}
 		for _, address := range addresses {
-			if address = dnsAsciiLower(strings.TrimSpace(address)); address != "" && !slices.Contains(lowered, address) {
-				lowered = append(lowered, address)
+			if address = mailSendAddress(row, address); address != "" && !slices.Contains(distinct, address) {
+				distinct = append(distinct, address)
 			}
 		}
-		return lowered
+		return distinct
 	}
 	message := &bytes.Buffer{}
 	header := func(name string, value string) {
@@ -614,10 +659,10 @@ func mailSendBuildMessageWithId(args *MailSendArgs, fromAddress string, messageI
 		message.WriteString("\r\n")
 	}
 	header("From", fromAddress)
-	if to := lowerAll(args.To); 0 < len(to) {
+	if to := headerAddresses(args.To); 0 < len(to) {
 		header("To", strings.Join(to, ", "))
 	}
-	if cc := lowerAll(args.Cc); 0 < len(cc) {
+	if cc := headerAddresses(args.Cc); 0 < len(cc) {
 		header("Cc", strings.Join(cc, ", "))
 	}
 	if args.Subject != "" {

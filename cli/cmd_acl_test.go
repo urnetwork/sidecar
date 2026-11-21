@@ -6,8 +6,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -21,36 +23,42 @@ import (
 // A daemon target that answers the acl methods as a test sets them.
 type testUrAclTarget struct {
 	testUrDaemonTarget
-	report   *sidecar.AclPolicyTestReport
-	plan     *sidecar.AclSavePlan
-	planErr  error
-	tested   []string
-	planned  []string
-	saved    []string
-	digests  [][32]byte
-	logEntry []sidecar.AclLogEntry
+	report       *sidecar.AclPolicyTestReport
+	plan         *sidecar.AclSavePlan
+	planErr      error
+	tested       []string
+	planned      []string
+	saved        []string
+	digests      [][32]byte
+	logEntry     []sidecar.AclLogEntry
+	needMembers  []string
+	savedMembers map[string]sidecar.Id
 }
 
-func (self *testUrAclTarget) testAclPolicy(ctx context.Context, source []byte) (*sidecar.AclPolicyTestReport, error) {
+func (self *testUrAclTarget) testAclPolicy(ctx context.Context, hello *sidecar.DaemonHello, source []byte) (*sidecar.AclPolicyTestReport, error) {
 	self.tested = append(self.tested, string(source))
 	return self.report, nil
 }
 
-func (self *testUrAclTarget) planAclPolicy(ctx context.Context, source []byte) (*sidecar.AclSavePlan, error) {
+func (self *testUrAclTarget) planAclPolicy(ctx context.Context, hello *sidecar.DaemonHello, source []byte, members map[string]sidecar.Id) (*sidecar.AclSavePlan, error) {
 	self.planned = append(self.planned, string(source))
+	if members == nil && len(self.needMembers) > 0 {
+		return nil, &sidecar.AclMemberLookupRequired{Emails: self.needMembers}
+	}
 	if self.planErr != nil {
 		return nil, self.planErr
 	}
 	return self.plan, nil
 }
 
-func (self *testUrAclTarget) saveAclPolicy(ctx context.Context, source []byte, digest [32]byte) (*bridge.AuthPin, error) {
+func (self *testUrAclTarget) saveAclPolicy(ctx context.Context, hello *sidecar.DaemonHello, source []byte, digest [32]byte, members map[string]sidecar.Id) (*bridge.AuthPin, error) {
 	self.saved = append(self.saved, string(source))
 	self.digests = append(self.digests, digest)
+	self.savedMembers = maps.Clone(members)
 	return &bridge.AuthPin{Version: 42}, nil
 }
 
-func (self *testUrAclTarget) aclLog() ([]sidecar.AclLogEntry, error) {
+func (self *testUrAclTarget) aclLog(hello *sidecar.DaemonHello) ([]sidecar.AclLogEntry, error) {
 	return self.logEntry, nil
 }
 
@@ -171,6 +179,64 @@ func TestAclPushIsConfirmOnly(t *testing.T) {
 	}
 	if methods := urAclMethods(&testUrDaemonTarget{}); len(methods) != 0 {
 		t.Error("a target with no Sidecar serves the acl methods")
+	}
+}
+
+// A real push command reviews the signed-state identity and sends only the named
+// directory candidate back with the digest the writer previewed.
+func TestAclPushLooksUpAndConfirmsNamedMembers(t *testing.T) {
+	const email = "amir@cli.example"
+	member, device := sidecar.NewId(), sidecar.NewId()
+	plan := &sidecar.AclSavePlan{Tests: &sidecar.AclPolicyTestReport{}, Digest: [32]byte{91},
+		Preview: &sidecar.AclSavePreview{Resolutions: []sidecar.AclSaveResolution{
+			{Kind: "user", Text: email, Id: member, Role: bridge.MemberRole_MEMBER_ROLE_MEMBER, SidecarIds: []sidecar.Id{device}},
+		}}}
+	target := &testUrAclTarget{needMembers: []string{email}, plan: plan}
+	daemon := startTestControlDaemon(t, target, nil)
+	cli, stdout, stderr := newTestUrCli(daemon.socketPath)
+	cli.openTty = func() (urTty, error) { return &testTty{lines: []string{"yes"}}, nil }
+	path := testUrAclPolicyFile(t, testUrAclPolicy)
+	old := urAdminRunCommand
+	t.Cleanup(func() { urAdminRunCommand = old })
+	reads := 0
+	urAdminRunCommand = func(ctx context.Context, cli *urCli, command *sidecar.AdminCommand, deviceGrant bool) ([]byte, error) {
+		reads++
+		if command.Method != "GET" || command.Path != "/network/members" || len(command.Body) != 0 {
+			t.Fatalf("directory read: %+v", command)
+		}
+		return json.Marshal(map[string]any{"members": []map[string]any{
+			{"email": "AMIR@cli.example", "member_id": member},
+			{"email": "another@cli.example", "member_id": sidecar.NewId()},
+		}})
+	}
+	if code := cli.main(context.Background(), []string{"ur", "acl", "push", path}); code != urExitOk ||
+		reads != 1 || len(target.planned) != 2 || len(target.saved) != 1 || !maps.Equal(target.savedMembers, map[string]sidecar.Id{email: member}) ||
+		!strings.Contains(stdout.String(), member.String()) || !strings.Contains(stdout.String(), device.String()) {
+		t.Fatalf("exit %d, reads %d, saved %v, stdout %s, stderr %s", code, reads, target.savedMembers, stdout, stderr)
+	}
+}
+
+// Pending, absent, and ambiguous members give the writer no proposal.
+func TestAclPushRefusesUnresolvedDirectoryRows(t *testing.T) {
+	const email = "person@example.test"
+	first, second := sidecar.NewId(), sidecar.NewId()
+	old := urAdminRunCommand
+	t.Cleanup(func() { urAdminRunCommand = old })
+	cases := []struct {
+		members []map[string]any
+		more    bool
+	}{
+		{members: []map[string]any{{"member_id": first, "email": email, "pending": true}}},
+		{members: []map[string]any{{"member_id": first, "email": email}, {"member_id": second, "email": email}}},
+		{members: []map[string]any{{"member_id": first, "email": "someone@example.test"}}, more: true},
+	}
+	for _, test := range cases {
+		urAdminRunCommand = func(context.Context, *urCli, *sidecar.AdminCommand, bool) ([]byte, error) {
+			return json.Marshal(map[string]any{"members": test.members, "more": test.more})
+		}
+		if proposals, err := (&urCli{}).aclMemberProposals(context.Background(), []string{email}); err == nil || len(proposals) != 0 {
+			t.Fatalf("unauthorized proposal: %v, %v", proposals, err)
+		}
 	}
 }
 

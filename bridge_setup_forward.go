@@ -175,6 +175,8 @@ type forwardingSetupRecord struct {
 	CompletedMs int64 `json:"completed_ms,omitempty"`
 	// The position of another signer's DelegationRevoke the person confirmed setting up past.
 	ConfirmedRevocationAt uint64 `json:"confirmed_revocation_at,omitempty"`
+	// A confirmation is for this exact stored key set even after the ended row ages out of the retained log.
+	ConfirmedWithdrawal bool `json:"confirmed_withdrawal,omitempty"`
 }
 
 // Installs forwarding's setup over sources, replacing any before; the answer removes it, if it is still installed.
@@ -323,10 +325,17 @@ func (self *Sidecar) forwardingDue(setup *sidecarForwardingSetup, state *ConfigS
 	if len(record.DelegationId) != 0 {
 		row := state.Delegation(record.DelegationId)
 		admission := state.Sidecar(identity.SidecarId)
-		if row != nil && row.GetEndedAt() != 0 && record.ConfirmedRevocationAt != row.GetEndedAt() &&
-			admission != nil && admission.Row.GetRevokedAt() == 0 &&
-			!forwardingEndedBySelf(setup.sources.Config, row.GetEndedAt(), identity.SidecarId, record.DelegationId) {
-			return ForwardingSetupForeignRevocation
+		if admission != nil && admission.Row.GetRevokedAt() == 0 {
+			if row != nil && row.GetEndedAt() != 0 && record.ConfirmedRevocationAt != row.GetEndedAt() &&
+				!forwardingEndedBySelf(setup.sources.Config, row.GetEndedAt(), identity.SidecarId, record.DelegationId) {
+				return ForwardingSetupForeignRevocation
+			}
+			// A live forwarding row is never pruned. After a long app absence its ended row and signer can
+			// both be outside retention. Losing that evidence must not authorize an automatic replacement.
+			if row == nil && record.Step >= 2 && record.DelegationAtN < state.RetentionPoint() &&
+				state.ForwardingDelegation(identity.SidecarId) == nil && !record.ConfirmedWithdrawal {
+				return ForwardingSetupForeignRevocation
+			}
 		}
 	}
 	switch {
@@ -377,6 +386,7 @@ func (self *Sidecar) ConfirmForwardingSetup(networkId Id) error {
 		return err
 	}
 	record.ConfirmedRevocationAt = state.Delegation(record.DelegationId).GetEndedAt()
+	record.ConfirmedWithdrawal = true
 	return self.saveForwardingSetupRecord(setup, record)
 }
 
@@ -395,20 +405,15 @@ func (self *Sidecar) SetUpForwarding(ctx context.Context, networkId Id, keys *br
 	if self.sidecarApi == nil {
 		return nil, fmt.Errorf("%w: no api client to mint the forwarding client", ErrForwardingSetupUnavailable)
 	}
-	configKeys := self.configKeys()
-	if configKeys == nil {
-		return nil, fmt.Errorf("%w: no config key", ErrForwardingSetupUnavailable)
-	}
-	repoKey, err := configKeys.CurrentConfigKey(ctx)
-	if err != nil || repoKey == nil {
-		return nil, fmt.Errorf("%w: no current config key: %w", ErrForwardingSetupUnavailable, errors.Join(err, ErrConfigSealGenerationMissing))
-	}
 	setup.runLock.Lock()
 	defer setup.runLock.Unlock()
 	config := setup.sources.Config
 	state := config.State()
 	if state == nil {
 		return nil, fmt.Errorf("%w: no verified state", ErrForwardingSetupUnavailable)
+	}
+	if forks, ok := config.(interface{ Fork() *ConfigForkError }); ok && forks.Fork() != nil {
+		return nil, fmt.Errorf("%w: the config log is forked", ErrForwardingSetupRefused)
 	}
 	record, err := self.loadForwardingSetupRecord(setup)
 	if err != nil {
@@ -417,19 +422,31 @@ func (self *Sidecar) SetUpForwarding(ctx context.Context, networkId Id, keys *br
 	if self.forwardingDue(setup, state, record, identity) == ForwardingSetupForeignRevocation {
 		return nil, ErrForwardingSetupNeedsConfirm
 	}
-	switch {
-	case record == nil || !bytes.Equal(record.KeySetId, keys.GetKeySetId()):
-		// a new key set starts over; its Delegation supersedes the one before
+	configKeys := self.configKeys()
+	if configKeys == nil {
+		return nil, fmt.Errorf("%w: no config key", ErrForwardingSetupUnavailable)
+	}
+	repoKey, err := configKeys.CurrentConfigKey(ctx)
+	if err != nil || repoKey == nil {
+		return nil, fmt.Errorf("%w: no current config key: %w", ErrForwardingSetupUnavailable, errors.Join(err, ErrConfigSealGenerationMissing))
+	}
+	sameSet := record != nil && bytes.Equal(record.KeySetId, keys.GetKeySetId())
+	if sameSet && !bytes.Equal(record.Keys, keysBytes) {
+		return nil, fmt.Errorf("%w: another key set was recorded under its key_set_id", ErrForwardingSetupRefused)
+	}
+	// A component that never received its hand-off still has its generated keys. Once a withdrawal is confirmed,
+	// those same public halves need a new signed Delegation, even if the old setup reached its mint.
+	endedSet := sameSet && record.Step >= 2 && state.ForwardingDelegation(identity.SidecarId) == nil &&
+		(state.Delegation(record.DelegationId).GetEndedAt() != 0 || record.DelegationAtN < state.RetentionPoint())
+	if !sameSet || endedSet {
 		fresh := &forwardingSetupRecord{Version: forwardingSetupRecordVersion, KeySetId: bytes.Clone(keys.GetKeySetId()), Keys: keysBytes}
 		if record != nil {
-			fresh.Generation, fresh.CompletedMs, fresh.ConfirmedRevocationAt = record.Generation, record.CompletedMs, record.ConfirmedRevocationAt
+			fresh.Generation, fresh.CompletedMs = record.Generation, record.CompletedMs
 		}
 		record = fresh
 		if err := self.saveForwardingSetupRecord(setup, record); err != nil {
 			return nil, err
 		}
-	case !bytes.Equal(record.Keys, keysBytes):
-		return nil, fmt.Errorf("%w: another key set was recorded under its key_set_id", ErrForwardingSetupRefused)
 	}
 
 	// 1 and 2: the Delegation, signed and filed, and its entry applied
@@ -475,10 +492,14 @@ func (self *Sidecar) SetUpForwarding(ctx context.Context, networkId Id, keys *br
 		return nil, fmt.Errorf("%w: the forwarding client: %w", ErrForwardingSetupIncomplete, err)
 	}
 	strictExp := sidecarJwtExpiration(minted.ByClientJwt)
-	if !minted.AdminRefused || !minted.StrictExp || !minted.ForwardOnly || minted.ClientId == (Id{}) || strictExp.IsZero() {
+	if !minted.AdminRefused || !minted.StrictExp || !minted.ForwardOnly || minted.ClientId == (Id{}) || !self.clock.Now().Before(strictExp) {
 		// a client whose answer does not confirm its marks is kept nowhere and handed to no component (§5.6, §7.4): one
 		// without forward_only would pass more than the forwarding allowlist
 		return nil, fmt.Errorf("%w: api's forwarding client does not confirm admin_refused, strict_exp and forward_only", ErrForwardingSetupIncomplete)
+	}
+	installed, current, err := self.forwardingSetupFor(networkId)
+	if err != nil || installed != setup || current.ClientId != identity.ClientId || current.Generation != identity.Generation {
+		return nil, fmt.Errorf("%w: the forwarding host changed during setup", ErrForwardingSetupUnavailable)
 	}
 	if record.ForwardClientId != nil && *record.ForwardClientId != minted.ClientId && record.Step < 6 {
 		self.log.Warningf("[bridge]%s a resumed setup's forwarding client is not the one minted before", networkId)
@@ -489,6 +510,20 @@ func (self *Sidecar) SetUpForwarding(ctx context.Context, networkId Id, keys *br
 		return nil, err
 	}
 	// 6: the hand-off, with no key of S's
+	state = config.State()
+	if state == nil {
+		return nil, ErrForwardingSetupUnavailable
+	}
+	if self.forwardingDue(setup, state, record, identity) == ForwardingSetupForeignRevocation {
+		return nil, ErrForwardingSetupNeedsConfirm
+	}
+	liveId, _, live := state.ForwardingKey(identity.SidecarId)
+	if !live || !bytes.Equal(liveId, record.DelegationId) {
+		return nil, fmt.Errorf("%w: the forwarding Delegation is no longer in force", ErrForwardingSetupRefused)
+	}
+	if forks, ok := config.(interface{ Fork() *ConfigForkError }); ok && forks.Fork() != nil {
+		return nil, fmt.Errorf("%w: the config log is forked", ErrForwardingSetupRefused)
+	}
 	pending := CompileBridgePending(state, identity)
 	pending.ForwardDelegationId = bytes.Clone(record.DelegationId)
 	handOff := &bridge.ForwardingHandOff{

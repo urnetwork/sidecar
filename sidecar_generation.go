@@ -91,6 +91,7 @@ type sidecarGeneration struct {
 	leg          sidecarLegGeneration
 	// closed once the start's post of pending statements has returned (identity_pending.go)
 	pendingDone chan struct{}
+	core        sidecarCoreSync
 }
 
 // connect's AuthorizationClosed for this generation's client: a close for unavailability is ignored, and anything
@@ -108,6 +109,16 @@ func (self *sidecarGeneration) connectionChanged(connected bool) {
 		return
 	}
 	to := SidecarStateOffline
+	self.core.requests.Update(func(request sidecarCoreRequest) sidecarCoreRequest {
+		if request.online != connected {
+			request.online = connected
+			request.revision++
+			if !connected {
+				request.version = 0
+			}
+		}
+		return request
+	})
 	if connected {
 		to = SidecarStateOnline
 	}
@@ -174,6 +185,7 @@ func (self *Sidecar) startGeneration(args *sidecarGenerationArgs) {
 		binding:           args.binding,
 		ctx:               generationCtx,
 		cancel:            cancel,
+		core:              sidecarCoreSync{requests: NewMonitorValue(sidecarCoreRequest{})},
 	}
 	if self.leg != nil {
 		testHookBarrier("sidecar.generation.start.before", args.identity.SidecarId.String())
@@ -195,9 +207,11 @@ func (self *Sidecar) startGeneration(args *sidecarGenerationArgs) {
 		// the store that failed before read this time, so its reason ends before anything sees the generation run
 		self.applyTransition(sidecarTransition{to: SidecarStateOffline, generation: generationNumber})
 	}
-	var install func(byJwt string)
-	if generation.leg != nil {
-		install = generation.leg.install
+	install := func(byJwt string) {
+		generation.refreshCore(0)
+		if generation.leg != nil {
+			generation.leg.install(byJwt)
+		}
 	}
 	secrets := args.secrets
 	persist := func(byJwt string) error {
@@ -239,6 +253,9 @@ func (self *Sidecar) startGeneration(args *sidecarGenerationArgs) {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		self.generation = generation
+		if self.followCoreGates {
+			generation.startCoreSyncWithLock()
+		}
 	}()
 	self.runningGenerationNumber.Set(generationNumber)
 	self.stats.generationCount.Add(1)
@@ -307,6 +324,9 @@ func (self *Sidecar) stopGeneration() {
 	}
 	testHookBarrier("sidecar.generation.stop.before", generation.identity.SidecarId.String())
 	generation.cancel()
+	if generation.core.done != nil {
+		<-generation.core.done
+	}
 	if generation.pendingDone != nil {
 		<-generation.pendingDone
 	}

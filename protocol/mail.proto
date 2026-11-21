@@ -383,6 +383,14 @@ message MailOutcomeRecord {        // or/<h>/<effect_key>, written by the sendin
   repeated MailOutcome outcomes = 1;  // one a recipient domain
   bytes send_id = 2;               // the send's 16-byte id, its o/ entry's Message-ID left side (QD-1122), which
                                    //   GetSendResult and mail_send name; empty from a writer before it
+  repeated MailRecipientProgress recipient_progress = 3; // private retry state in outcome order in the encrypted mailbox
+}
+
+message MailRecipientProgress {
+  string domain = 1;
+  bytes envelope_sha256 = 2;       // binds the ordinals to this immutable send and its ordered recipient domain
+  repeated uint32 delivered = 3;   // recipient ordinals after final message acceptance
+  repeated uint32 refused = 4;     // recipient ordinals after a permanent refusal
 }
 
 message MailProverRecord {         // p/<sidecar_id>, rewritten at each measurement (§14.5)

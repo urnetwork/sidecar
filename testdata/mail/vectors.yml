@@ -416,6 +416,21 @@ messages:
         update_time_ms: 1793923200000
       }
       send_id: "\x85\x64\x2d\x64\x36\x1f\x45\xb6\x76\x21\x6d\x73\x74\xe5\xed\x06"
+  - name: outcome-record-partial-recipients
+    type: MailOutcomeRecord
+    hex: "0a1a0a0f6f7574736964652e6578616d706c6528034080e89ef19a341a390a0f6f7574736964652e6578616d706c65122070707070707070707070707070707070707070707070707070707070707070701a0100220102"
+    text: |
+      outcomes {
+        domain: "outside.example"
+        outcome: MAIL_OUTCOME_DEFERRED
+        update_time_ms: 1793923200000
+      }
+      recipient_progress {
+        domain: "outside.example"
+        envelope_sha256: "pppppppppppppppppppppppppppppppp"
+        delivered: 0
+        refused: 2
+      }
   - name: prover-record
     type: MailProverRecord
     hex: "088080401092011880e89ef19a3420c02528bf0630af09380d42206b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b4a0483268126"

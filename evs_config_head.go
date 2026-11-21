@@ -196,6 +196,14 @@ func NewEvsConfigHeadReader(args *EvsConfigHeadReaderArgs) (*EvsConfigHeadReader
 	return &EvsConfigHeadReader{repo: args.Repo, settings: settings, turn: make(chan struct{}, 1)}, nil
 }
 
+// A locally held verified head for an offline policy test.
+func (self *EvsConfigHeadReader) CachedConfigHead(version uint64, chain []byte) *ConfigHead {
+	if len(chain) != sha256.Size {
+		return nil
+	}
+	return self.cachedHead(version, [sha256.Size]byte(chain))
+}
+
 // A head answered before at configVersion with chain, nil for none.
 func (self *EvsConfigHeadReader) cachedHead(configVersion uint64, chain [sha256.Size]byte) *ConfigHead {
 	self.stateLock.Lock()

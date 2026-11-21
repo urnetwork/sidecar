@@ -29,6 +29,72 @@ func TestScenarioS12(t *testing.T) {
 	RunScenario(t, &Scenario{Id: "S12", Run: s12Run}, nil)
 }
 
+// Both indexers hold the team repo and each holds a different private repo. In either arrival order the second
+// indexer loses the team repo and wins its private repo, whose verified hits span two pages.
+func TestRemoteSearchKeepsEachRepositoryWinner(t *testing.T) {
+	ctx := t.Context()
+	net := NewNet(ctx, nil)
+	defer net.Close()
+	tier, err := net.AdmissionTier()
+	if err != nil {
+		t.Fatal(err)
+	}
+	documents := map[string][]*sidecar.SearchTestDocument{}
+	for _, repo := range []string{"m vault", "m mailbox", "team"} {
+		count := sidecar.DefaultSearchWireSettings().HitMaxCount + 1
+		if repo == "team" {
+			count = 1
+		}
+		for i := range count {
+			path := fmt.Sprintf("notes/%s/%d.md", strings.ReplaceAll(repo, " ", "-"), i)
+			documents[repo] = append(documents[repo], &sidecar.SearchTestDocument{Path: path, Version: 1, Title: "Survey", Text: "harbor"})
+		}
+	}
+	team, err := NewSearchRemoteTeam(ctx, &SearchRemoteTeamArgs{
+		Tier: tier, Documents: func(repo string) []*sidecar.SearchTestDocument { return documents[repo] },
+		Text: func(indexer string, repo string) sidecar.SearchTextSource {
+			return &searchRemoteDocumentText{documents: documents[repo]}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer team.Close()
+	desktop, nas := team.Indexers["m desktop"], team.Indexers["m nas"]
+	vault, mailbox := team.RepoId("m vault"), team.RepoId("m mailbox")
+	if err := desktop.Device.Engine().DropCache(&mailbox); err != nil {
+		t.Fatal(err)
+	}
+	if err := nas.Device.Engine().DropCache(&vault); err != nil {
+		t.Fatal(err)
+	}
+	pages, err := team.Phone.Search(ctx, &sidecar.SearchRequest{Text: "harbor", Repos: []sidecar.Id{vault, mailbox, team.RepoId("team")}}, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pages.Progress.Remote != sidecar.SearchRemoteStateAnswered {
+		t.Fatalf("remote coverage %q", pages.Progress.Remote)
+	}
+	verifiedBy := map[string]string{}
+	for _, hit := range pages.Hits {
+		if hit.State == sidecar.SearchVerified {
+			verifiedBy[hit.Path] = hit.By
+		}
+	}
+	winners := map[string][]string{
+		"m vault":   {desktop.SidecarId.String()},
+		"m mailbox": {nas.SidecarId.String()},
+		"team":      {desktop.SidecarId.String(), nas.SidecarId.String()},
+	}
+	for repo, indexers := range winners {
+		for _, doc := range documents[repo] {
+			if by := verifiedBy[doc.Path]; !slices.Contains(indexers, by) {
+				t.Fatalf("%s verified by %q, want one of %v", doc.Path, by, indexers)
+			}
+		}
+	}
+}
+
 // A world's documents as text a desktop holding a mirror reads: each document's title and body at its version.
 type searchRemoteDocumentText struct {
 	documents []*sidecar.SearchTestDocument

@@ -76,92 +76,27 @@ func (self *Subprotocol) OpenStream(ctx context.Context, clientId Id, request *S
 	if known, peerEdge := self.streamPeerKind(peerId); known && peerEdge != edge {
 		return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_FAILED_PRECONDITION, Message: errStreamPeerKind.Error()}
 	}
-	var identity *SubprotocolPeerIdentity
-	var clientPublicKey [32]byte
-	peerInitialWindow := uint32(0)
 	if !edge {
 		if err := self.ensurePeerVerifiedWithin(ctx, peerId, timeout); err != nil {
 			return nil, openFailure(err)
 		}
-		var ok bool
-		identity, clientPublicKey, ok = self.peerVerifiedIdentity(peerId)
-		if !ok {
-			return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_UNAUTHENTICATED}
-		}
-		peerInitialWindow = identity.InitialWindow
 	}
-	firstByteCount := min(len(request.EarlyData), MaxStreamEarlyDataByteCount)
-
-	var stream *SubprotocolStream
-	var open *protocol.StreamOpen
-	var rest streamFrames
-	err := func() error {
-		streams := &self.streams
-		streams.stateLock.Lock()
-		defer streams.stateLock.Unlock()
-		peer, err := self.streamPeerWithLock(peerId, edge)
-		if err != nil {
-			return &SubprotocolError{Code: protocol.ErrorCode_ERR_FAILED_PRECONDITION, Message: err.Error()}
-		}
-		streamId, err := peer.ids.open()
-		if err != nil {
-			return &SubprotocolError{Code: protocol.ErrorCode_ERR_RESOURCE_EXHAUSTED, Message: err.Error()}
-		}
-		state, window, err := newStreamOpener(streamId, peer.credit, peerInitialWindow, firstByteCount)
-		switch {
-		case errors.Is(err, errStreamCreditExhausted):
-			return &SubprotocolError{Code: protocol.ErrorCode_ERR_RESOURCE_EXHAUSTED}
-		case err != nil:
-			return &SubprotocolError{Code: protocol.ErrorCode_ERR_INVALID_ARGUMENT, Message: err.Error()}
-		}
-		// the rest of the early data within the acceptor's initial window, before any answer
-		var n int
-		rest, n, err = state.write(request.EarlyData[firstByteCount:])
-		if err != nil || n < len(request.EarlyData)-firstByteCount {
-			state.end(&streamResetError{code: protocol.StreamResetCode_RST_CANCELLED, local: true})
-			return &SubprotocolError{Code: protocol.ErrorCode_ERR_INVALID_ARGUMENT, Message: "early data past the acceptor's initial window"}
-		}
-		stream = newSubprotocolStream(self, peer, streamId, state)
-		// the lane every frame of the stream rides, chosen once at its open so none reorders across lanes
-		stream.opts = self.peerLaneOpts(peerId)
-		stream.identity = identity
-		stream.clientPublicKey = clientPublicKey
-		stream.target = request.Target
-		stream.metadata = request.Metadata
-		stream.ticket = request.Ticket
-		open = &protocol.StreamOpen{
-			Target:    request.Target,
-			Metadata:  request.Metadata,
-			Ticket:    request.Ticket,
-			Window:    window,
-			EarlyData: request.EarlyData[:firstByteCount],
-		}
-		return nil
-	}()
+	deadline := start.Add(timeout)
+	openCtx, cancelOpen := self.clockContext(ctx, deadline.Sub(self.clock.Now()))
+	stopOnClose := context.AfterFunc(self.ctx, cancelOpen)
+	stream, err := self.startStreamOpen(openCtx, peerId, edge, request, deadline)
+	stopOnClose()
+	cancelOpen()
 	if err != nil {
-		return nil, err
-	}
-	body, err := proto.Marshal(open)
-	if err != nil || self.settings.StreamOpenMaxByteCount < len(body) {
-		stream.endLocal(protocol.StreamResetCode_RST_CANCELLED)
-		return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_INVALID_ARGUMENT, Message: "a stream open past §6.5's budget"}
-	}
-	if !self.addStream(stream) {
-		stream.endLocal(protocol.StreamResetCode_RST_CANCELLED)
-		return nil, errSubprotocolClosed
-	}
-	self.streams.stats.openedCount.Add(1)
-
-	barrierKey := peerId.String()
-	testHookBarrier("stream.open.before", barrierKey)
-	sendErr := self.sendEnvelopeAcked(peerId, stream.envelope(protocol.MessageType_STREAM_OPEN, body), stream.ackFunction(time.Time{}), timeout, stream.opts...)
-	testHookBarrier("stream.open.after", barrierKey)
-	if sendErr != nil {
-		stream.endLocal(protocol.StreamResetCode_RST_TRANSFER_FAILED)
-		self.removeStream(stream)
-		return nil, sendFailure(sendErr, 0)
-	}
-	if err := stream.sendFrames(rest); err != nil {
+		if ctx.Err() != nil {
+			return nil, openFailure(ctx.Err())
+		}
+		if self.ctx.Err() != nil {
+			return nil, errSubprotocolClosed
+		}
+		if !self.clock.Now().Before(deadline) {
+			return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_DEADLINE_EXCEEDED}
+		}
 		return nil, err
 	}
 	if !edge {
@@ -169,7 +104,6 @@ func (self *Subprotocol) OpenStream(ctx context.Context, clientId Id, request *S
 		self.headCheckOnExchange(peerId, protocol.MessageType_STREAM_OPEN)
 	}
 
-	deadline := start.Add(timeout)
 	for {
 		var phase streamPhase
 		var endErr error
@@ -204,6 +138,104 @@ func (self *Subprotocol) OpenStream(ctx context.Context, clientId Id, request *S
 			return nil, errSubprotocolClosed
 		}
 	}
+}
+
+// Reserve an ID and submit this peer's open before letting another opener advance its watermark.
+func (self *Subprotocol) startStreamOpen(ctx context.Context, peerId connect.Id, edge bool, request *StreamOpenRequest, deadline time.Time) (*SubprotocolStream, error) {
+	firstByteCount := min(len(request.EarlyData), MaxStreamEarlyDataByteCount)
+
+	streams := &self.streams
+	streams.stateLock.Lock()
+	peer, err := self.streamPeerWithLock(peerId, edge)
+	streams.stateLock.Unlock()
+	if err != nil {
+		return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_FAILED_PRECONDITION, Message: err.Error()}
+	}
+	// Assign and enqueue opens to a peer in the same order: its receiver advances
+	// a single watermark. Other peers and the receive callback can still run.
+	select {
+	case peer.opening <- struct{}{}:
+		defer func() { <-peer.opening }()
+	case <-ctx.Done():
+		return nil, openFailure(ctx.Err())
+	case <-self.ctx.Done():
+		return nil, errSubprotocolClosed
+	}
+	streamId, err := streams.nextId(ctx, peer)
+	if err != nil {
+		if errors.Is(err, errStreamIdsExhausted) {
+			return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_RESOURCE_EXHAUSTED, Message: err.Error()}
+		}
+		return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_UNAVAILABLE, Message: "could not reserve stream IDs"}
+	}
+	remaining := deadline.Sub(self.clock.Now())
+	if remaining <= 0 {
+		return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_DEADLINE_EXCEEDED}
+	}
+	var identity *SubprotocolPeerIdentity
+	var clientPublicKey [32]byte
+	var peerInitialWindow uint32
+	if !edge {
+		// Waiting for a peer's earlier open or for a durable ID range can outlive its verified Hello.
+		var verified bool
+		identity, clientPublicKey, verified = self.peerVerifiedIdentity(peerId)
+		if !verified {
+			return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_UNAUTHENTICATED}
+		}
+		peerInitialWindow = identity.InitialWindow
+	}
+	state, window, err := newStreamOpener(streamId, peer.credit, peerInitialWindow, firstByteCount)
+	switch {
+	case errors.Is(err, errStreamCreditExhausted):
+		return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_RESOURCE_EXHAUSTED}
+	case err != nil:
+		return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_INVALID_ARGUMENT, Message: err.Error()}
+	}
+	// the rest of the early data within the acceptor's initial window, before any answer
+	rest, n, err := state.write(request.EarlyData[firstByteCount:])
+	if err != nil || n < len(request.EarlyData)-firstByteCount {
+		state.end(&streamResetError{code: protocol.StreamResetCode_RST_CANCELLED, local: true})
+		return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_INVALID_ARGUMENT, Message: "early data past the acceptor's initial window"}
+	}
+	stream := newSubprotocolStream(self, peer, streamId, state)
+	// the lane every frame of the stream rides, chosen once at its open so none reorders across lanes
+	stream.opts = self.peerLaneOpts(peerId)
+	stream.identity = identity
+	stream.clientPublicKey = clientPublicKey
+	stream.target = request.Target
+	stream.metadata = request.Metadata
+	stream.ticket = request.Ticket
+	open := &protocol.StreamOpen{
+		Target:    request.Target,
+		Metadata:  request.Metadata,
+		Ticket:    request.Ticket,
+		Window:    window,
+		EarlyData: request.EarlyData[:firstByteCount],
+	}
+	body, err := proto.Marshal(open)
+	if err != nil || self.settings.StreamOpenMaxByteCount < len(body) {
+		stream.endLocal(protocol.StreamResetCode_RST_CANCELLED)
+		return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_INVALID_ARGUMENT, Message: "a stream open past §6.5's budget"}
+	}
+	if !self.addStream(stream) {
+		stream.endLocal(protocol.StreamResetCode_RST_CANCELLED)
+		return nil, errSubprotocolClosed
+	}
+	self.streams.stats.openedCount.Add(1)
+
+	barrierKey := peerId.String()
+	testHookBarrier("stream.open.before", barrierKey)
+	sendErr := self.sendEnvelopeAcked(peerId, stream.envelope(protocol.MessageType_STREAM_OPEN, body), stream.ackFunction(time.Time{}), remaining, stream.opts...)
+	testHookBarrier("stream.open.after", barrierKey)
+	if sendErr != nil {
+		stream.endLocal(protocol.StreamResetCode_RST_TRANSFER_FAILED)
+		self.removeStream(stream)
+		return nil, sendFailure(sendErr, 0)
+	}
+	if err := stream.sendFrames(rest); err != nil {
+		return nil, err
+	}
+	return stream, nil
 }
 
 // Hello's failure as an open reports it: its code, or the context's.

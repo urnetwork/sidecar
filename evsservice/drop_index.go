@@ -8,7 +8,7 @@
 //	          (sidecar.NewEvsDropLists) and kept by (cluster, repo, ref, version, push id), never changing once
 //	          committed
 //	repos     per repo: drops/<repo>/_ as a GET cached TableCacheTtl, absent for a repo that never had a drop; its list
-//	          files, listed again each IndexRefresh; and the ids its running job's del and held files withhold
+//	          files, listed again each IndexRefresh; its withheld ids, reused only while the same immutable files stand
 //	bound     bodies and repos share one recency list, least recently used out past IndexByteCount
 //	appended  the (cluster, repo, ref, version) of each DROP whose append this process made, at most AppendedCount
 //
@@ -298,7 +298,7 @@ func (self *DropIndex) NoteAppended(clusterId string, repoId sidecar.Id, refId s
 }
 
 // What a process keeps of one repo's drops for serving (read_drop.go, read_withheld.go): its table and when it read
-// it, its list files and when it listed them, and the ids its jobs' del and held files withhold.
+// it, its list files and when it listed them.
 type dropRepoState struct {
 	tableReadAt time.Time
 	// nil while drops/<repo>/_ is absent: the repo never had a drop
@@ -308,11 +308,6 @@ type dropRepoState struct {
 	lists    []*DropListFile
 	// the list files' bytes as read, which their index entry counts
 	listByteCount int64
-
-	withheldAt time.Time
-	// the jobs whose files the set was read from, in the table's order
-	withheldJobs []sidecar.Id
-	withheld     map[DropScanId]bool
 }
 
 // One repo's serving state's key.
@@ -330,9 +325,9 @@ func (self *DropIndex) repoState(clusterId string, repoId sidecar.Id) *dropRepoS
 	return &dropRepoState{}
 }
 
-// Keeps the repo's serving state, counted at its list files' bytes and its withheld ids.
+// Keeps the repo's serving state, counted at its list files' bytes.
 func (self *DropIndex) putRepoState(clusterId string, repoId sidecar.Id, state *dropRepoState) {
-	byteCount := int64(256) + state.listByteCount + int64(len(state.withheld))*int64(sha256.Size+8)
+	byteCount := int64(256) + state.listByteCount
 	self.put(dropRepoKey{clusterId: clusterId, repoId: repoId}, state, byteCount)
 }
 
@@ -373,49 +368,141 @@ func (self *DropIndex) Lists(ctx context.Context, segmentCluster sidecar.BlobClu
 	return files, nil
 }
 
-// The ids the repo's jobs withhold (EVS2-M10-10's withheld-id set): every id the del files of its running job and of
-// each held job answer deleted, held or packed and every id their held files keep, so no byte of one is served, a held
-// one reading as a deleted one (owner decision 184), however many jobs a hold stopped since (QD-1127). Loaded through
-// the table's job records from the segment cluster, again for another set of jobs or each IndexRefresh; empty for a
-// table with no job, which costs no read.
-func (self *DropIndex) Withheld(ctx context.Context, segmentCluster sidecar.BlobCluster, clusterId string, repoId sidecar.Id, table *DropTableState, now time.Time) (map[DropScanId]bool, error) {
+// Each immutable file in the snapshot used to authorize a content read.
+type withheldFile struct {
+	jobId    sidecar.Id
+	kind     DropFileKind
+	sequence uint32
+}
+
+type withheldSnapshot struct {
+	files []withheldFile
+	ids   map[DropScanId]bool
+}
+
+type withheldKey struct{ dropRepoKey }
+
+type heldCoverageKey struct {
+	clusterId string
+	repoId    sidecar.Id
+	jobId     sidecar.Id
+}
+
+type missingHeldOwners map[sidecar.Id]bool
+
+func (self missingHeldOwners) Error() string {
+	return fmt.Sprintf("%v: %d held drops have no job record", ErrDropJobState, len(self))
+}
+
+func (self missingHeldOwners) Unwrap() error { return ErrDropJobState }
+
+// Some older tables could lose the job record while leaving its drops held.
+// Their snap-0 is the durable membership proof. A missing owner leaves no safe
+// way to authorize bytes or expire the unreferenced job's files.
+func checkHeldCoverage(ctx context.Context, segmentCluster sidecar.BlobCluster, repoId sidecar.Id, table *DropTableState, settings *DropSettings, index *DropIndex) error {
+	var missing map[sidecar.Id]bool
+	for _, entry := range table.Drops {
+		if entry.State == DropStateHeld {
+			if missing == nil {
+				missing = map[sidecar.Id]bool{}
+			}
+			missing[entry.DropId] = true
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	for _, jobId := range table.JobIds() {
+		if table.Job != nil && table.Job.JobId == jobId && !table.Job.Resumed {
+			continue
+		}
+		key := heldCoverageKey{clusterId: segmentCluster.ClusterId(), repoId: repoId, jobId: jobId}
+		var covered []sidecar.Id
+		if index != nil {
+			if value, ok := index.get(key); ok {
+				covered = value.([]sidecar.Id)
+			}
+		}
+		if covered == nil {
+			file, err := NewDropFiles(segmentCluster, repoId, jobId, settings).Read(ctx, DropFileSnap, 0)
+			if err != nil {
+				return err
+			}
+			if file == nil {
+				return fmt.Errorf("%w: held job %s has no snap-0", ErrDropJobState, sidecar.EvsKeyId(jobId))
+			}
+			covered = make([]sidecar.Id, len(file.Covered))
+			for i, drop := range file.Covered {
+				covered[i] = drop.DropId
+			}
+			if index != nil {
+				index.put(key, covered, 128+16*int64(len(covered)))
+			}
+		}
+		for _, id := range covered {
+			delete(missing, id)
+		}
+	}
+	if len(missing) != 0 {
+		return missingHeldOwners(missing)
+	}
+	return nil
+}
+
+// Lists every active job's del and held files on each check. A writer can publish
+// a new file before it checkpoints the table, including on a different instance.
+// Only an identical inventory permits reuse of the decoded withheld IDs.
+func (self *DropIndex) Withheld(ctx context.Context, segmentCluster sidecar.BlobCluster, clusterId string, repoId sidecar.Id, table *DropTableState, _ time.Time) (map[DropScanId]bool, error) {
 	if table == nil {
 		return nil, nil
 	}
-	jobIds := table.JobIds()
-	if len(jobIds) == 0 {
+	if err := checkHeldCoverage(ctx, segmentCluster, repoId, table, self.settings, self); err != nil {
+		return nil, err
+	}
+	if table.Job == nil && len(table.HeldJobs) == 0 {
 		return nil, nil
 	}
-	state := self.repoState(clusterId, repoId)
-	if state.withheld != nil && slices.Equal(state.withheldJobs, jobIds) && now.Sub(state.withheldAt) < self.settings.IndexRefresh {
-		return state.withheld, nil
+	var inventory []withheldFile
+	for _, jobId := range table.JobIds() {
+		files := NewDropFiles(segmentCluster, repoId, jobId, self.settings)
+		for _, kind := range []DropFileKind{DropFileDel, DropFileHeld} {
+			sequences, err := files.Sequences(ctx, kind)
+			if err != nil {
+				return nil, err
+			}
+			for _, sequence := range sequences {
+				inventory = append(inventory, withheldFile{jobId: jobId, kind: kind, sequence: sequence})
+			}
+		}
+	}
+	key := withheldKey{dropRepoKey{clusterId: clusterId, repoId: repoId}}
+	if prior, ok := self.get(key); ok {
+		snapshot := prior.(*withheldSnapshot)
+		if slices.Equal(snapshot.files, inventory) {
+			return snapshot.ids, nil
+		}
 	}
 	withheld := map[DropScanId]bool{}
-	for _, jobId := range jobIds {
-		files := NewDropFiles(segmentCluster, repoId, jobId, self.settings)
-		dels, err := files.ReadAll(ctx, DropFileDel)
+	for _, item := range inventory {
+		files := NewDropFiles(segmentCluster, repoId, item.jobId, self.settings)
+		file, err := files.Read(ctx, item.kind, item.sequence)
 		if err != nil {
 			return nil, err
 		}
-		for _, del := range dels {
-			for _, answer := range del.Answers {
-				switch answer.Outcome {
-				case DropOutcomeDeleted, DropOutcomeHeld, DropOutcomePacked:
-					withheld[answer.DropScanId] = true
-				}
+		if file == nil {
+			return nil, fmt.Errorf("%w: %s %d listed and gone", ErrDropFileInvalid, item.kind, item.sequence)
+		}
+		for _, answer := range file.Answers {
+			switch answer.Outcome {
+			case DropOutcomeDeleted, DropOutcomeHeld, DropOutcomePacked:
+				withheld[answer.DropScanId] = true
 			}
 		}
-		helds, err := files.ReadAll(ctx, DropFileHeld)
-		if err != nil {
-			return nil, err
-		}
-		for _, held := range helds {
-			for _, id := range held.Ids {
-				withheld[id] = true
-			}
+		for _, id := range file.Ids {
+			withheld[id] = true
 		}
 	}
-	state.withheldAt, state.withheldJobs, state.withheld = now, jobIds, withheld
-	self.putRepoState(clusterId, repoId, state)
+	byteCount := int64(256) + int64(len(inventory))*24 + int64(len(withheld))*int64(sha256.Size+8)
+	self.put(key, &withheldSnapshot{files: inventory, ids: withheld}, byteCount)
 	return withheld, nil
 }

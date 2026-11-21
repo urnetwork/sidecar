@@ -6,9 +6,8 @@
 // its acl part in the sidecar's AclEngine, and acks the position through POST /acl/ack.
 //
 //	install  the state's AclState and the AclLocalPolicy of the config head its base names; a newer head's local
-//	         policy is read and compiled off the callback, and until it lands the rows install beside the last one
-//	         compiled, whose detail holds only for rule ids still present, since a rule that changes meaning takes a
-//	         new id (plan-ACL-atom-and-rule-ids #3), so a new port-limited rule opens no port meanwhile
+//	         policy is read and compiled off the callback. Until it lands the new rows carry no local detail, so
+//	         port-limited and prefix-socket rules cannot authorize destinations from their public rows alone
 //	refuse   §7.9's BASE row owns the rows-hash check: a base whose rows do not compile from its head forks the client,
 //	         which raises head_alarm and applies nothing, so nothing reaches here; a state whose acl part does not
 //	         build raises refused, and a second A_n at the installed n head_alarm fork, each installing nothing and
@@ -171,8 +170,8 @@ func (self *AclFollower) Stats() AclFollowerStats {
 	}
 }
 
-// Installs the source's newest state, once per position: its acl part beside the newest compiled local policy, then
-// asks for its head's policy when that is another, and marks the position for the ack loop.
+// Installs the source's newest ACL state and the local policy authenticated by its base, when available.
+// Asks the reader for that head and marks the position for the ack loop.
 func (self *AclFollower) apply() {
 	state := self.args.Source.State()
 	if state == nil || state.Pin() == nil {
@@ -194,10 +193,10 @@ func (self *AclFollower) apply() {
 // One state's install, refusing what the file header says. Whether the engine now holds it.
 func (self *AclFollower) installWithLock(state *ConfigState) bool {
 	pin := state.Pin()
-	local := self.newestLocal()
+	local := self.localForState(state)
 	if current := self.args.Engine.State(); current != nil {
 		installedPin := current.Pin()
-		sameLocal := local == nil || self.installedLocal() == local
+		sameLocal := self.installedLocal() == local
 		switch {
 		case pin.GetVersion() < installedPin.GetVersion():
 			// a read older than what is installed: the source never goes back, so this is a stale read, never a fork
@@ -244,9 +243,11 @@ func (self *AclFollower) installedLocal() *AclLocalPolicy {
 	return nil
 }
 
-// The newest compiled local policy: the newest base's head's once read, else the last one compiled, nil before any.
-func (self *AclFollower) newestLocal() *AclLocalPolicy {
-	if local := self.local.Load(); local != nil {
+// Only detail compiled from the head this base authenticated can refine its rows.
+// A new base becomes effective immediately even while its detail is being read.
+func (self *AclFollower) localForState(state *ConfigState) *AclLocalPolicy {
+	local := self.local.Load()
+	if local != nil && bytes.Equal(local.headSha256[:], state.Base().GetConfigHeadSha256()) {
 		return local.local
 	}
 	return nil

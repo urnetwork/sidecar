@@ -16,6 +16,7 @@
 package sidecar
 
 import (
+	"bytes"
 	"slices"
 )
 
@@ -32,20 +33,78 @@ func EvsFormat2AdmittedBy(core *SidecarSyncCore) bool {
 func (self *EvsClient) SetFormat2Source(admitted func() bool) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	self.format2Source = admitted
+	if admitted == nil {
+		self.format2Source = nil
+		return
+	}
+	self.format2Source = func() (bool, bool) { return admitted(), true }
 }
 
-// Whether the network is in §19.11's format2 gate, as the newest core answer the composition holds lists it; false
-// with no source, so the client writes format 1.
+// The network's rollout gate. An unknown result cannot establish that a repo has no format-2 history.
+// MaxFormat limits this binary's capabilities independently of the network's rollout.
+func (self *EvsClient) Format2Gate() (admitted bool, known bool) {
+	self.stateLock.Lock()
+	source := self.format2Source
+	self.stateLock.Unlock()
+	if source == nil {
+		return false, false
+	}
+	return source()
+}
+
+// Whether this client can write format 2 on its network. Format-1 and unknown-gate writers stay at format 1.
 func (self *EvsClient) Format2Admitted() bool {
-	source := func() func() bool {
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
-		return self.format2Source
-	}()
-	// a client held to format 1 (EvsSettings.MaxFormat) writes as a format-1 one, which FS-72's rollback tests run
 	if self.settings != nil && self.settings.MaxFormat < 2 {
 		return false
 	}
-	return source != nil && source()
+	admitted, known := self.Format2Gate()
+	return known && admitted
+}
+
+// Installs the verifying reader and binds rollout to this enrolled host's current, signed membership. Reading a
+// migrated repo remains possible after a rollout closes. The server independently enforces each format-2 write.
+func (self *Sidecar) BindEvsFormat2(client *EvsClient) {
+	client.EnableFormat2Reader()
+	client.stateLock.Lock()
+	client.format2Source = func() (bool, bool) {
+		return self.evsFormat2Gate(client)
+	}
+	client.stateLock.Unlock()
+
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.followCoreGates = true
+	if self.generation != nil {
+		self.generation.startCoreSyncWithLock()
+	}
+}
+
+// Membership comes from the standing config follower. Core describes only the rollout for its authenticated bearer.
+func (self *Sidecar) evsFormat2Gate(client *EvsClient) (bool, bool) {
+	generation := self.runningGeneration()
+	if generation == nil || generation.ctx.Err() != nil || self.instance.stateError() != nil ||
+		generation.networkId != client.NetworkId() || self.lifecycleState() != SidecarStateOnline {
+		return false, false
+	}
+	identity := client.args.Identity()
+	if identity == nil || identity.NetworkId != generation.networkId || identity.ClientId != generation.identity.ClientId ||
+		identity.SidecarId != generation.identity.SidecarId || identity.Generation != generation.generation ||
+		!bytes.Equal(identity.IdentityPublicKey, generation.identity.IdentityPublicKey) {
+		return false, false
+	}
+	follower := self.ConfigFollower()
+	if follower == nil {
+		return false, false
+	}
+	config := follower.Client()
+	if config == nil {
+		return false, false
+	}
+	state := config.State()
+	if state == nil || state.NetworkId() != identity.NetworkId || !bytes.Equal(state.IdentityKey(identity.SidecarId), identity.IdentityPublicKey) ||
+		!self.admittedBy(config.Authority()) {
+		return false, false
+	}
+	core := generation.currentCore()
+	return EvsFormat2AdmittedBy(core), core != nil
 }

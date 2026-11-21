@@ -45,6 +45,8 @@ import (
 
 // Tunables of an Engines world.
 type EnginesSettings struct {
+	// Catch the service gate up before pricing an exchange. Used when the fixture drives the unmodified CLI.
+	FollowBeforeExchange bool
 	// The evs storage balance each opened network starts with: 1 TiB, so no test write meets quota.
 	NetworkBalanceByteCount int64
 	// How long a wait on the gate's load of a log may take in real time: 60 s, only a failure's bound.
@@ -247,6 +249,11 @@ func (self *Engines) ScopeRequests() []*sidecartest.FakeApiScopeRequest {
 // The exchange's scope source (the file header): §8's table at the gate's state of the token's network. A network the
 // gate has not loaded is told to it and answers a server error, which the sidecar asks again past.
 func (self *Engines) exchangeScopes(ctx context.Context, request *sidecartest.FakeApiScopeRequest) (*sidecartest.FakeApiScopeGrant, error) {
+	if self.settings.FollowBeforeExchange {
+		if err := self.Sync(ctx, request.NetworkId); err != nil {
+			return nil, err
+		}
+	}
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()

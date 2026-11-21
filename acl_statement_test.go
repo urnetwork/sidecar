@@ -495,6 +495,42 @@ func TestAclOwnerBoundStandingRevoke(t *testing.T) {
 	}
 }
 
+// A signed inbox role selects group key and file slot behavior. Only a config writer creates the unique admin inbox.
+func TestAclInboxCreationBindsItsRoleAndAuthority(t *testing.T) {
+	cast := newAclStatementCast()
+	fixture := cast.fixture
+	state := fixture.state(t)
+	statement := func(kind protocol.RepoKind, role protocol.RepoInbox, signer Id) *AclStatement {
+		create := &protocol.RepoCreate{RepoId: NewId().Bytes(), Kind: kind, Inbox: role}
+		return fixture.statement(bridge.SignedType_SIGNED_REPO_CREATE, create, signer)
+	}
+	for _, invalid := range []*AclStatement{
+		statement(protocol.RepoKind_REPO_KIND_MAILBOX, protocol.RepoInbox_REPO_INBOX_GROUP, cast.laptop),
+		statement(protocol.RepoKind_REPO_KIND_GENERAL, protocol.RepoInbox(18), cast.laptop),
+		statement(protocol.RepoKind_REPO_KIND_GENERAL, protocol.RepoInbox_REPO_INBOX_ADMIN, cast.laptop),
+	} {
+		if _, err := state.CheckStatement(invalid, nil); err == nil {
+			t.Fatalf("invalid inbox creation accepted: %v", invalid.Body)
+		}
+	}
+	group := statement(protocol.RepoKind_REPO_KIND_GENERAL, protocol.RepoInbox_REPO_INBOX_GROUP, cast.laptop)
+	state, _ = fixture.apply(t, state, group)
+	row := state.Repo(Id(group.Body.(*protocol.RepoCreate).GetRepoId()))
+	if !AclRepoIsInbox(row) || !gkmRepoTakesDeposits(row) || !evsRepoSlotKeyed(row) {
+		t.Fatalf("group inbox lost its drop key or file slots: %v", row)
+	}
+	plain := &protocol.AclRepo{Kind: protocol.RepoKind_REPO_KIND_GENERAL}
+	if AclRepoIsInbox(plain) || gkmRepoTakesDeposits(plain) || evsRepoSlotKeyed(plain) {
+		t.Fatal("a general repo without an inbox role was treated as mail")
+	}
+	admin := statement(protocol.RepoKind_REPO_KIND_GENERAL, protocol.RepoInbox_REPO_INBOX_ADMIN, cast.adminDevice)
+	state, _ = fixture.apply(t, state, admin)
+	second := statement(protocol.RepoKind_REPO_KIND_GENERAL, protocol.RepoInbox_REPO_INBOX_ADMIN, cast.ownerDevice)
+	if _, err := state.CheckStatement(second, nil); !errors.Is(err, ErrConfigRule) {
+		t.Fatalf("second admin inbox: %v", err)
+	}
+}
+
 // RepoCreate by kind: a member device makes a general repo and becomes its admin; a tagged agent only under an admin
 // rule; a config writer makes the team record, mailcfg and one directory; an owner-bound repo by a consented device of
 // its owner, listing the owner's consented devices; never the config or a repo the rows hold.
@@ -855,6 +891,7 @@ func TestAclReapplyFoldsAsApplyForEveryStatementType(t *testing.T) {
 		{name: "Unsuspend by k of n", statement: fixture.authorityStatement(bridge.SignedType_SIGNED_UNSUSPEND, unsuspend(suspended, "lift"), cast.ownerDevice, cast.adminDevice)},
 		{name: "EvsShare", statement: fixture.statement(bridge.SignedType_SIGNED_EVS_SHARE, &protocol.EvsShare{RepoId: vaultId.Bytes(), Subject: cast.stranger.Bytes()}, cast.laptop)},
 		{name: "OwnerConfirm", statement: fixture.statement(bridge.SignedType_SIGNED_OWNER_CONFIRM, &protocol.OwnerConfirm{SidecarId: adminAdmitted.Bytes()}, cast.laptop), derives: true},
+		{name: "RepoCreate of an admin inbox", statement: fixture.statement(bridge.SignedType_SIGNED_REPO_CREATE, &protocol.RepoCreate{RepoId: NewId().Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL, Inbox: protocol.RepoInbox_REPO_INBOX_ADMIN}, cast.adminDevice)},
 		{name: "RepoCreate of a general repo", statement: fixture.statement(bridge.SignedType_SIGNED_REPO_CREATE, &protocol.RepoCreate{RepoId: NewId().Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL}, cast.phone)},
 		{name: "RepoCreate of a vault", statement: fixture.statement(bridge.SignedType_SIGNED_REPO_CREATE, &protocol.RepoCreate{RepoId: NewId().Bytes(), Kind: protocol.RepoKind_REPO_KIND_VAULT}, cast.laptop), derives: true},
 		{name: "RepoAdmin", statement: fixture.statement(bridge.SignedType_SIGNED_REPO_ADMIN, &protocol.RepoAdmin{RepoId: repoId.Bytes(), SidecarId: cast.phone.Bytes(),

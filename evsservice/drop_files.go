@@ -633,7 +633,8 @@ func (self *DropFiles) Marks(ctx context.Context) (marks map[DropScanId]bool, cu
 	return marks, cursorRefId, cursorVersion, nil
 }
 
-// Each answered id's newest outcome.
+// Each answered id's newest outcome. Older observe-only workers could append an
+// observation over a held answer. Only physical work can release a held ID.
 func (self *DropFiles) Answers(ctx context.Context) (map[DropScanId]DropOutcome, error) {
 	files, err := self.ReadAll(ctx, DropFileDel)
 	if err != nil {
@@ -642,6 +643,9 @@ func (self *DropFiles) Answers(ctx context.Context) (map[DropScanId]DropOutcome,
 	answers := map[DropScanId]DropOutcome{}
 	for _, file := range files {
 		for _, answer := range file.Answers {
+			if answer.Outcome == DropOutcomeObserved && answers[answer.DropScanId] == DropOutcomeHeld {
+				continue
+			}
 			answers[answer.DropScanId] = answer.Outcome
 		}
 	}

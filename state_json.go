@@ -15,12 +15,8 @@ import (
 	"slices"
 )
 
-// The format's values. Far above any real file, so the bound only stops a decoder from reading a
-// garbage file whole.
-const (
-	stateJsonVersion      = 1
-	stateJsonMaxByteCount = 1024 * 1024
-)
+// The sidecar.json format version.
+const stateJsonVersion = 1
 
 // The machine-id hash's domain. The instance id salts it, so two instances on one machine do not
 // correlate.
@@ -40,6 +36,8 @@ type SidecarNetworkRecord struct {
 	// The client is a child of a device client, an sdk host's or a pairing's, so a confirmed rejection
 	// of it reads as parent_lost (plan-CORE-parent-lost-signal).
 	Child bool `json:"child,omitempty"`
+	// This network's recorded client belongs to the previous machine. Only a replacement bind clears it.
+	ReplaceRequired bool `json:"replace_required,omitempty"`
 }
 
 // The service urls an instance was set up against.

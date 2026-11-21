@@ -73,6 +73,7 @@ type urSearchParams struct {
 type urSearchStatusParams struct {
 	sidecar.SearchStatusToolArgs
 	Network string `json:"network,omitempty"`
+	Scope   string `json:"scope,omitempty"`
 }
 
 // Runs ur search, ur search status or ur search sync.
@@ -332,6 +333,9 @@ func urSearchExplainScope(out io.Writer, result *sidecar.SearchToolResult) {
 	}
 	for _, coverage := range result.Coverage {
 		line := "scope " + coverage.RepoId
+		if coverage.Network != "" {
+			line = "scope " + coverage.Network + " repo " + coverage.RepoId
+		}
 		if coverage.RefId != "" {
 			line += " ref " + coverage.RefId
 		}
@@ -359,7 +363,7 @@ func runUrSearchStatus(ctx context.Context, cli *urCli, options docopt.Opts) err
 	params.Repos = urOptionStrings(options, "--repo")
 	switch {
 	case scope == "all":
-		return sidecar.ErrSearchToolUnbuilt
+		params.Scope = scope
 	case scope == "repo" && len(params.Repos) == 0:
 		return errors.New("--scope repo names a --repo")
 	}
@@ -377,6 +381,9 @@ func runUrSearchStatus(ctx context.Context, cli *urCli, options docopt.Opts) err
 			format = "format newer than this build: update"
 		}
 		line := fmt.Sprintf("%s  %s  %s", repo.RepoId, index, format)
+		if repo.Network != "" {
+			line = repo.Network + "  " + line
+		}
 		if repo.Policy != "" {
 			line += "  all policy " + repo.Policy
 		}

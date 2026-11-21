@@ -329,12 +329,13 @@ func TestMailSendMixedListDepositsItsLocalPartAndQueuesTheRest(t *testing.T) {
 	for _, recipient := range result.Recipients {
 		outcomes[recipient.Address] = recipient.Outcome
 	}
-	if outcomes[testMailIngestRecipient] != MailSendDelivered || outcomes["someone@outside.example"] != MailSendQueued ||
+	if outcomes[testMailIngestRecipient] != MailSendDelivered || outcomes["Someone@outside.example"] != MailSendQueued ||
 		outcomes["nobody@acme.root.example"] != MailSendUnknown {
 		t.Fatalf("outcomes %v", outcomes)
 	}
 	deposits := parts.snapshot()
-	if len(deposits) != 1 || !slices.Equal(deposits[0].deposit.GetRecipients(), []string{testMailIngestRecipient}) {
+	if len(deposits) != 1 || !slices.Equal(deposits[0].deposit.GetRecipients(), []string{testMailIngestRecipient}) ||
+		!bytes.Contains(deposits[0].message, []byte("To: "+testMailIngestRecipient+", Someone@outside.example\r\n")) {
 		t.Fatalf("deposits %+v", deposits)
 	}
 	// an all-outside list deposits nothing, queues, and keeps the copy
@@ -397,10 +398,10 @@ func TestMailSendForgedSignerIsOutsideMailAtIngest(t *testing.T) {
 // The message is plain text with its headers, the subject encoded, the Bcc in no header, quoted-printable, CRLF.
 func TestMailSendBuildsAPlainTextMessage(t *testing.T) {
 	sendId := NewId()
-	message, err := mailSendBuildMessage(&MailSendArgs{
+	message, err := mailSendBuildMessageWithId(&MailSendArgs{
 		To: []string{"Bo@Acme.Root.Example"}, Cc: []string{"cy@acme.root.example"}, Bcc: []string{"dee@acme.root.example"},
 		Subject: "Grüße", Text: "line one\nline two = three",
-	}, testMailSendFrom, "acme.root.example", sendId, time.UnixMilli(testMailIngestPushMillis))
+	}, NetworkLabelRow{Root: "root.example", Label: "acme"}, testMailSendFrom, strings.ToLower(sendId.String())+"@acme.root.example", time.UnixMilli(testMailIngestPushMillis))
 	if err != nil {
 		t.Fatal(err)
 	}

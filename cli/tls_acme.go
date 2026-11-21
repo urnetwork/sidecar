@@ -28,6 +28,7 @@ import (
 
 	"github.com/docopt/docopt-go"
 	"github.com/mholt/acmez/v3/acme"
+	standardAcme "golang.org/x/crypto/acme"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
@@ -295,9 +296,12 @@ const (
 	urMethodTlsAccountRoll   = "tls.account.roll"
 )
 
-// The ordering desktop's settings in this ur (DESIGN-DETAILS 17.2.15), the CA's directory among them, which has no
-// default: until a configuration sets it, the account commands refuse, and nothing reaches a CA.
-var urTlsCustomCommandSettings = sidecar.DefaultTlsCustomSettings()
+// The desktop uses the Let's Encrypt directory from its ACME dependency for both account commands and renewals.
+func urDesktopTlsSettings() *sidecar.TlsCustomSettings {
+	settings := sidecar.DefaultTlsCustomSettings()
+	settings.DirectoryUrl = standardAcme.LetsEncryptURL
+	return settings
+}
 
 // A command line ur tls cannot take.
 var errUrTlsUsage = errors.New("ur tls: see ur tls --help")
@@ -398,9 +402,8 @@ type urTlsCustomHost struct {
 }
 
 // running's parts, or why there are none: no CA directory configured, no evs client, no certs audience.
-func newUrTlsCustomHost(ctx context.Context, running *sidecar.Sidecar) (*urTlsCustomHost, error) {
-	settings := urTlsCustomCommandSettings
-	if settings.DirectoryUrl == "" {
+func newUrTlsCustomHost(ctx context.Context, running *sidecar.Sidecar, settings *sidecar.TlsCustomSettings) (*urTlsCustomHost, error) {
+	if settings == nil || settings.DirectoryUrl == "" {
 		return nil, errUrTlsNoDirectory
 	}
 	acme, err := newUrTlsAcmeClient(settings.DirectoryUrl, nil, settings)
@@ -430,7 +433,8 @@ var errUrTlsNoDirectory = errors.New("no ACME directory is configured for custom
 
 // The account methods, on a target that hosts Sidecars.
 func urTlsAccountMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
-	if _, ok := target.(*urDaemonNetwork); !ok {
+	network, ok := target.(*urDaemonNetwork)
+	if !ok {
 		return nil
 	}
 	return []*sidecar.DaemonMethod{
@@ -442,7 +446,7 @@ func urTlsAccountMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
 				if err := decodeUrParams(call, params); err != nil {
 					return nil, err
 				}
-				host, err := newUrTlsCustomHost(ctx, call.Sidecar)
+				host, err := newUrTlsCustomHost(ctx, call.Sidecar, network.tlsSettings)
 				if err != nil {
 					return nil, err
 				}
@@ -473,7 +477,7 @@ func urTlsAccountMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
 				if !params.AgreeTos {
 					return nil, errUrTlsTermsNotAgreed
 				}
-				host, err := newUrTlsCustomHost(ctx, call.Sidecar)
+				host, err := newUrTlsCustomHost(ctx, call.Sidecar, network.tlsSettings)
 				if err != nil {
 					return nil, err
 				}
@@ -520,7 +524,7 @@ func urTlsAccountMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
 				if err := decodeUrParams(call, params); err != nil {
 					return nil, err
 				}
-				host, err := newUrTlsCustomHost(ctx, call.Sidecar)
+				host, err := newUrTlsCustomHost(ctx, call.Sidecar, network.tlsSettings)
 				if err != nil {
 					return nil, err
 				}

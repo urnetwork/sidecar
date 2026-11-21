@@ -115,6 +115,7 @@ type searchRankSource struct {
 type searchRankInput struct {
 	source    *searchRankSource
 	partition searchPartitionKind
+	release   func()
 	// The plan step's place in the search's order, which breaks ties between partitions.
 	step   int
 	result *searchPartitionResult
@@ -180,6 +181,7 @@ const (
 type searchRankedHit struct {
 	repoId      Id
 	refId       Id
+	signer      Id
 	key         [indexIdByteCount]byte
 	version     uint64
 	timeSeconds uint64
@@ -196,7 +198,7 @@ type searchRankedHit struct {
 	trigramCount int
 	inHeader     bool
 	density      float64
-	// Found by a scan of a ref with no index (search_no_index.go): no doc key, no partition, and "index off".
+	// Found by a scan of a ref with no index (search_no_index.go): no index partition.
 	scanned bool
 }
 

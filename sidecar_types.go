@@ -28,6 +28,8 @@ type Sidecar struct {
 	// The sidecar's client of api, on every leg, holding its jwt and DPoP signer (api_client.go).
 	// Set once at construction.
 	sidecarApi *SidecarApi
+	// A member host consumes this network's core rollout across client generations. Guarded by stateLock.
+	followCoreGates bool
 	// Mirrors lifecycle's state for a caller waiting on a change, and is written only with it.
 	state          *MonitorValue[SidecarState]
 	eventCallbacks *CallbackList[SidecarEventFunction]
@@ -95,8 +97,11 @@ type Sidecar struct {
 	// search is: the forwarding leg sets up nothing.
 	forwardingSetup atomic.Value
 	// The network's config follower, which a host starts (sidecar_config_follower.go). Held as any, as search is: the
-	// forwarding and page legs build none.
+	// forwarding-only leg builds none.
 	configFollower atomic.Value
+	// The enrolled app or browser host owns one GKM and EVS replica for its identity.
+	memberReplicaLock sync.Mutex
+	memberReplica     interface{ Close() }
 	// The network's mail (Sidecar.Mail, mail_client.go). Held as any, as search is: the forwarding leg holds no mail.
 	mail atomic.Value
 	// What an executed drop reaches beside the mirror and the index cache (state_drop_apply.go). Held as any, as search
@@ -273,6 +278,9 @@ type SidecarOutcome struct {
 	State ApprovalOutcomeState
 	// The component's reference to what it did, opaque to the gate. Empty unless done.
 	EffectRef []byte
+	// The reserved use that returned this outcome, supplied in memory by the gate. A component can recover a
+	// receipt under this key when an older ledger entry recorded an incomplete reference.
+	effectKey []byte
 	// The effect's error in this call; nil on a retry that found a recorded outcome. Never stored.
 	Err error
 }
@@ -606,7 +614,10 @@ const (
 // What AddEventCallback, `ur status` and the sdk listener see (§18.5). Each field's comment says
 // which kinds fill it. Never log a Path, which is local to this device (I-13).
 type SidecarEvent struct {
-	Kind SidecarEventKind
+	// A completed logout retains its origin until the daemon has published this final state.
+	logoutNetwork *Id
+	logoutSidecar *Id
+	Kind          SidecarEventKind
 	// The client generation it comes from, as §18.5's State block has every event name. A callback
 	// of an older generation is dropped (D-SDK-14). Zero is an event no client raised, such as a
 	// config alarm, which emitEvent stamps with the current generation.

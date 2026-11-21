@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -39,10 +40,6 @@ const (
 	urMethodAclLog      = "acl.log"
 )
 
-// The most a policy file may hold: §8.8's 4 MiB source bound, which ParseAclPolicy holds every reader to, and one byte
-// more, so a longer file is refused rather than cut.
-const urAclPolicyMaxByteCount = 4*1024*1024 + 1
-
 func init() {
 	urDaemonMethodExtensions = append(urDaemonMethodExtensions, urAclMethods)
 	registerUrCommand(&urCommand{
@@ -59,39 +56,62 @@ func init() {
 
 // What the acl methods act on.
 type urAclTarget interface {
-	testAclPolicy(ctx context.Context, source []byte) (*sidecar.AclPolicyTestReport, error)
-	planAclPolicy(ctx context.Context, source []byte) (*sidecar.AclSavePlan, error)
-	saveAclPolicy(ctx context.Context, source []byte, digest [32]byte) (*bridge.AuthPin, error)
-	aclLog() ([]sidecar.AclLogEntry, error)
+	testAclPolicy(ctx context.Context, hello *sidecar.DaemonHello, source []byte) (*sidecar.AclPolicyTestReport, error)
+	planAclPolicy(ctx context.Context, hello *sidecar.DaemonHello, source []byte, members map[string]sidecar.Id) (*sidecar.AclSavePlan, error)
+	saveAclPolicy(ctx context.Context, hello *sidecar.DaemonHello, source []byte, digest [32]byte, members map[string]sidecar.Id) (*bridge.AuthPin, error)
+	aclLog(hello *sidecar.DaemonHello) ([]sidecar.AclLogEntry, error)
 }
 
-func (self *urDaemonNetwork) testAclPolicy(ctx context.Context, source []byte) (*sidecar.AclPolicyTestReport, error) {
-	running, err := self.onlySidecar()
+func (self *urDaemonNetwork) testAclPolicy(ctx context.Context, hello *sidecar.DaemonHello, source []byte) (*sidecar.AclPolicyTestReport, error) {
+	running, err := self.aclNetwork(hello)
 	if err != nil {
 		return nil, err
 	}
 	return running.TestAclPolicy(ctx, source)
 }
 
-func (self *urDaemonNetwork) planAclPolicy(ctx context.Context, source []byte) (*sidecar.AclSavePlan, error) {
-	running, err := self.onlySidecar()
+func (self *urDaemonNetwork) aclNetwork(hello *sidecar.DaemonHello) (*sidecar.Sidecar, error) {
+	if self.daemon == nil {
+		return nil, fmt.Errorf("no sidecar runs: %s", self.noSidecar)
+	}
+	id, err := self.daemon.ResolveNetwork(hello, "")
 	if err != nil {
 		return nil, err
 	}
-	return running.PlanAclPolicy(ctx, source)
+	running, ok := self.daemon.SidecarForNetwork(id)
+	if !ok {
+		return nil, errors.New("the selected network is no longer hosted")
+	}
+	return running, nil
+}
+
+func (self *urDaemonNetwork) aclSubjects(members map[string]sidecar.Id) *sidecar.AclWriterSubjects {
+	subjects := &sidecar.AclWriterSubjects{Members: members}
+	for _, hosted := range self.hosted() {
+		subjects.Networks = append(subjects.Networks, hosted.Sidecar)
+	}
+	return subjects
+}
+
+func (self *urDaemonNetwork) planAclPolicy(ctx context.Context, hello *sidecar.DaemonHello, source []byte, members map[string]sidecar.Id) (*sidecar.AclSavePlan, error) {
+	running, err := self.aclNetwork(hello)
+	if err != nil {
+		return nil, err
+	}
+	return running.PlanAclPolicyWithSubjects(ctx, source, self.aclSubjects(members))
 }
 
 // A confirmed control call.
-func (self *urDaemonNetwork) saveAclPolicy(ctx context.Context, source []byte, digest [32]byte) (*bridge.AuthPin, error) {
-	running, err := self.onlySidecar()
+func (self *urDaemonNetwork) saveAclPolicy(ctx context.Context, hello *sidecar.DaemonHello, source []byte, digest [32]byte, members map[string]sidecar.Id) (*bridge.AuthPin, error) {
+	running, err := self.aclNetwork(hello)
 	if err != nil {
 		return nil, err
 	}
-	return running.SaveAclPolicy(ctx, source, digest, sidecar.SidecarActConfirmed)
+	return running.SaveAclPolicyWithSubjects(ctx, source, digest, sidecar.SidecarActConfirmed, self.aclSubjects(members))
 }
 
-func (self *urDaemonNetwork) aclLog() ([]sidecar.AclLogEntry, error) {
-	running, err := self.onlySidecar()
+func (self *urDaemonNetwork) aclLog(hello *sidecar.DaemonHello) ([]sidecar.AclLogEntry, error) {
+	running, err := self.aclNetwork(hello)
 	if err != nil {
 		return nil, err
 	}
@@ -100,7 +120,8 @@ func (self *urDaemonNetwork) aclLog() ([]sidecar.AclLogEntry, error) {
 
 // A document as the acl methods carry it.
 type urAclParams struct {
-	Source string `json:"source"`
+	Source  string                `json:"source"`
+	Members map[string]sidecar.Id `json:"members,omitempty"`
 	// acl.push's: the preview's digest, hex.
 	Digest string `json:"digest,omitempty"`
 }
@@ -156,6 +177,7 @@ type urAclResolution struct {
 
 // A save's preview, as acl.push.plan answers it.
 type urAclPlanReply struct {
+	NeedMembers  []string             `json:"need_members,omitempty"`
 	Digest       string               `json:"digest"`
 	Tests        *urAclTestReply      `json:"tests"`
 	Readers      []*urAclReaderChange `json:"readers,omitempty"`
@@ -187,6 +209,9 @@ func urAclPlanReplyOf(plan *sidecar.AclSavePlan) *urAclPlanReply {
 		row := &urAclResolution{Kind: resolution.Kind, Text: resolution.Text, Id: resolution.Id.String(), SidecarIds: urAclIds(resolution.SidecarIds), MemberUnknown: resolution.MemberUnknown}
 		if resolution.PreviousId != (sidecar.Id{}) {
 			row.PreviousId = resolution.PreviousId.String()
+		}
+		if resolution.Kind == "client" && resolution.Id == (sidecar.Id{}) {
+			row.Id = ""
 		}
 		if resolution.Kind == "user" && !resolution.MemberUnknown {
 			row.Role = strings.ToLower(strings.TrimPrefix(resolution.Role.String(), "MEMBER_ROLE_"))
@@ -238,7 +263,7 @@ func urAclMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
 				if err != nil {
 					return nil, err
 				}
-				report, err := acl.testAclPolicy(ctx, []byte(params.Source))
+				report, err := acl.testAclPolicy(ctx, call.Hello, []byte(params.Source))
 				if err != nil {
 					return nil, err
 				}
@@ -252,7 +277,11 @@ func urAclMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
 				if err != nil {
 					return nil, err
 				}
-				plan, err := acl.planAclPolicy(ctx, []byte(params.Source))
+				plan, err := acl.planAclPolicy(ctx, call.Hello, []byte(params.Source), params.Members)
+				var lookup *sidecar.AclMemberLookupRequired
+				if errors.As(err, &lookup) {
+					return &urAclPlanReply{NeedMembers: lookup.Emails}, nil
+				}
 				if err != nil {
 					return nil, err
 				}
@@ -271,7 +300,7 @@ func urAclMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
 				if err != nil || len(digest) != 32 {
 					return nil, errors.New("no preview digest")
 				}
-				pin, err := acl.saveAclPolicy(ctx, []byte(params.Source), [32]byte(digest))
+				pin, err := acl.saveAclPolicy(ctx, call.Hello, []byte(params.Source), [32]byte(digest), params.Members)
 				if err != nil {
 					return nil, err
 				}
@@ -281,7 +310,7 @@ func urAclMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
 		{
 			Name: urMethodAclLog,
 			Handler: func(ctx context.Context, call *sidecar.DaemonCall) (any, error) {
-				entries, err := acl.aclLog()
+				entries, err := acl.aclLog(call.Hello)
 				if err != nil {
 					return nil, err
 				}
@@ -310,15 +339,18 @@ func runUrAcl(ctx context.Context, cli *urCli, options docopt.Opts) error {
 
 // The policy file's bytes, held to the source bound, and parsed here so a document that does not parse reaches no
 // daemon.
-func urAclReadPolicy(path string) ([]byte, error) {
+func (self *urCli) readAclPolicy(path string) ([]byte, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
-	source, err := io.ReadAll(io.LimitReader(file, urAclPolicyMaxByteCount))
+	source, err := io.ReadAll(io.LimitReader(file, self.settings.AclSourceMaxByteCount+1))
 	if err != nil {
 		return nil, err
+	}
+	if int64(len(source)) > self.settings.AclSourceMaxByteCount {
+		return nil, errors.New("the policy source exceeds the ACL source bound")
 	}
 	if _, err := sidecar.ParseAclPolicy(source); err != nil {
 		return nil, err
@@ -373,7 +405,7 @@ func (self *urCli) printAclTests(source []byte, reply *urAclTestReply) error {
 
 // ur acl test: the daemon's run where one answers, else the document's own.
 func runUrAclTest(ctx context.Context, cli *urCli, path string) error {
-	source, err := urAclReadPolicy(path)
+	source, err := cli.readAclPolicy(path)
 	if err != nil {
 		return err
 	}
@@ -414,8 +446,16 @@ func (self *urCli) printAclPlan(reply *urAclPlanReply) {
 			self.printf("%s %s resolves to %s, which the network holds no member of\n", resolution.Kind, resolution.Text, resolution.Id)
 		case resolution.Kind == "user":
 			self.printf("user %s is member %s (%s) with %d devices\n", resolution.Text, resolution.Id, resolution.Role, len(resolution.SidecarIds))
+			for _, device := range resolution.SidecarIds {
+				self.printf("  %s\n", device)
+			}
+		case resolution.Kind == "client" && resolution.Id == "":
+			self.printf("client %s has no binding and stays a literal client id\n", resolution.Text)
 		default:
 			self.printf("%s %s resolves to %s\n", resolution.Kind, resolution.Text, resolution.Id)
+		}
+		if resolution.PreviousId != "" {
+			self.printf("  previously %s\n", resolution.PreviousId)
 		}
 	}
 	self.printf("%d rules added, %d removed\n", len(reply.RulesAdded), len(reply.RulesRemoved))
@@ -423,7 +463,7 @@ func (self *urCli) printAclPlan(reply *urAclPlanReply) {
 
 // ur acl push: a person on a terminal, a config writer's preview, a yes, then the save of exactly that preview.
 func runUrAclPush(ctx context.Context, cli *urCli, path string) error {
-	source, err := urAclReadPolicy(path)
+	source, err := cli.readAclPolicy(path)
 	if err != nil {
 		return err
 	}
@@ -434,8 +474,32 @@ func runUrAclPush(ctx context.Context, cli *urCli, path string) error {
 	}
 	tty.Close()
 	plan := &urAclPlanReply{}
-	if err := cli.callDaemon(ctx, urMethodAclPushPlan, &urAclParams{Source: string(source)}, false, plan); err != nil {
+	params := &urAclParams{Source: string(source)}
+	if err := cli.callDaemon(ctx, urMethodAclPushPlan, params, false, plan); err != nil {
 		return err
+	}
+	if len(plan.NeedMembers) != 0 {
+		policy, err := sidecar.ParseAclPolicy(source)
+		if err != nil {
+			return err
+		}
+		named := policy.MemberEmails()
+		for _, email := range plan.NeedMembers {
+			if _, found := slices.BinarySearch(named, email); !found {
+				return errors.New("the daemon requested a member the policy does not name")
+			}
+		}
+		params.Members, err = cli.aclMemberProposals(ctx, plan.NeedMembers)
+		if err != nil {
+			return err
+		}
+		plan = &urAclPlanReply{}
+		if err := cli.callDaemon(ctx, urMethodAclPushPlan, params, false, plan); err != nil {
+			return err
+		}
+	}
+	if plan.Tests == nil || plan.Digest == "" {
+		return errors.New("the daemon returned no complete access policy preview")
 	}
 	cli.printAclPlan(plan)
 	if err := cli.printAclTests(source, plan.Tests); err != nil {
@@ -450,11 +514,56 @@ func runUrAclPush(ctx context.Context, cli *urCli, path string) error {
 		return nil
 	}
 	reply := &urAclPushReply{}
-	if err := cli.callDaemon(ctx, urMethodAclPush, &urAclParams{Source: string(source), Digest: plan.Digest}, true, reply); err != nil {
+	params.Digest = plan.Digest
+	if err := cli.callDaemon(ctx, urMethodAclPush, params, true, reply); err != nil {
 		return err
 	}
 	cli.printf("the policy is saved, in force from the base at %d\n", reply.N)
 	return nil
+}
+
+// The already-authorized Owner/Admin directory read. Only the policy's named, admitted candidates
+// cross the local control socket. The writer independently checks each id against the signed state.
+func (self *urCli) aclMemberProposals(ctx context.Context, emails []string) (map[string]sidecar.Id, error) {
+	command, err := urAdminCommand("GET", "/network/members", nil)
+	if err != nil {
+		return nil, err
+	}
+	var roster struct {
+		Members []struct {
+			MemberId sidecar.Id `json:"member_id"`
+			Email    string     `json:"email"`
+			Pending  bool       `json:"pending"`
+		} `json:"members"`
+		More bool `json:"more"`
+	}
+	if err := urAdminRun(ctx, self, nil, command, &roster); err != nil {
+		return nil, err
+	}
+	wanted := make(map[string]bool, len(emails))
+	for _, email := range emails {
+		wanted[email] = true
+	}
+	members := make(map[string]sidecar.Id, len(emails))
+	for _, row := range roster.Members {
+		email := strings.ToLower(row.Email)
+		if row.Pending || !wanted[email] {
+			continue
+		}
+		if previous, ok := members[email]; row.MemberId == (sidecar.Id{}) || (ok && previous != row.MemberId) {
+			return nil, fmt.Errorf("the member directory returned an ambiguous identity for %s", email)
+		}
+		members[email] = row.MemberId
+	}
+	for _, email := range emails {
+		if _, ok := members[email]; !ok {
+			if roster.More {
+				return nil, fmt.Errorf("%s is outside the member page authorized by this command", email)
+			}
+			return nil, fmt.Errorf("the member directory holds no active member for %s", email)
+		}
+	}
+	return members, nil
 }
 
 // ur acl log: the change audit.

@@ -420,7 +420,7 @@ func TestGateM10ItemsSayWhatTheExitShows(t *testing.T) {
 	if invariants := find("every FI the rows check"); len(invariants.Commands) != 1 || !slices.Equal(invariants.Commands[0].Command, gateInvariantsCommand(gateM10OutGate)) {
 		t.Errorf("the invariants item: %+v", invariants)
 	}
-	if clock := find("T3's store clock"); !strings.Contains(clock.Item, "FS-89") || !strings.Contains(clock.Item, "FS-114 never does") {
+	if clock := find("T3's store clock"); !strings.Contains(clock.Item, "FS-89") || !strings.Contains(clock.Item, "FS-114 never does") || !strings.Contains(clock.Item, "their own observed translation") {
 		t.Errorf("the store clock item: %+v", clock)
 	}
 	tlc := find("EvsCommit.tla with the purger and the drop extension, and IndexRollup.tla")

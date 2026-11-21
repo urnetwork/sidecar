@@ -12,6 +12,7 @@
 package sidecartest
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"net/http"
@@ -36,13 +37,15 @@ func fakeApiSyncRetryAfter() string {
 // read only after.
 type fakeApiSyncState struct {
 	// the Net's hint state, nil outside a Net
-	push func() (*netPush, error)
+	push  func() (*netPush, error)
+	gates sidecar.ServiceGates
 }
 
 // The routes, on the api's mux.
 func (self *FakeApi) addSyncRoutes() {
 	self.mux.HandleFunc("GET /sidecar/sync/poll", self.counted("GET /sidecar/sync/poll", self.handleSyncPoll))
 	self.mux.HandleFunc("GET /sidecar/sync/versions", self.counted("GET /sidecar/sync/versions", self.handleSyncVersions))
+	self.mux.HandleFunc("GET /sidecar/sync/core", self.counted("GET /sidecar/sync/core", self.handleSyncCore))
 }
 
 // The hint state, or false having answered the request 503, as a closed push gate does.
@@ -127,15 +130,10 @@ func (self *FakeApi) handleSyncVersions(writer http.ResponseWriter, request *htt
 	if !ok {
 		return
 	}
-	fieldValues, err := plane.redis.HashGetAll(request.Context(), pushservice.HintVersionsKey(clientId))
+	topicVersions, err := self.syncTopicVersions(request.Context(), plane, clientId)
 	if err != nil {
 		fakeApiRefuse(writer, http.StatusInternalServerError, "", "Unexpected error.", nil)
 		return
-	}
-	topicVersions := pushservice.ParseHintVersions(fieldValues)
-	if _, ok := topicVersions[sidecar.PushTopicCore]; !ok {
-		// api's clock in µs, core's version when ver holds none (plan-CORE-core-hint-body #3)
-		topicVersions[sidecar.PushTopicCore] = uint64(self.clock.Now().UnixMicro())
 	}
 	response, err := pushservice.VersionsPage(topicVersions, cursor)
 	if errors.Is(err, pushservice.ErrVersionsCursor) {
@@ -147,4 +145,59 @@ func (self *FakeApi) handleSyncVersions(writer http.ResponseWriter, request *htt
 		return
 	}
 	fakeApiWritePollResponse(writer, response)
+}
+
+// The version read by both routes. Core falls back to the api clock after its hint expires.
+func (self *FakeApi) syncTopicVersions(ctx context.Context, plane *netPush, clientId connect.Id) (map[string]uint64, error) {
+	fields, err := plane.redis.HashGetAll(ctx, pushservice.HintVersionsKey(clientId))
+	if err != nil {
+		return nil, err
+	}
+	versions := pushservice.ParseHintVersions(fields)
+	if _, ok := versions[sidecar.PushTopicCore]; !ok {
+		versions[sidecar.PushTopicCore] = uint64(self.clock.Now().UnixMicro())
+	}
+	return versions, nil
+}
+
+// The authenticated client's network determines the rollout. A client from a different network gets its own gates.
+func (self *FakeApi) handleSyncCore(writer http.ResponseWriter, request *http.Request) {
+	client := self.client(request)
+	if client == nil {
+		fakeApiRefuse(writer, http.StatusUnauthorized, "", "Not authorized.", nil)
+		return
+	}
+	plane, ok := self.syncPush(writer)
+	if !ok {
+		return
+	}
+	versions, err := self.syncTopicVersions(request.Context(), plane, connect.Id(client.clientId))
+	if err != nil {
+		fakeApiRefuse(writer, http.StatusInternalServerError, "", "Unexpected error.", nil)
+		return
+	}
+	networkId := connect.Id(client.networkId)
+	gates := []string{}
+	for _, name := range []string{sidecar.ServiceGateEvs, sidecar.EvsFormat2GateName, sidecar.ServiceGateGkm, sidecar.ServiceGateSockets, sidecar.ServiceGateTlsedge, sidecar.ServiceGateMxedge, sidecar.ServiceGateSmtpedge} {
+		gate := self.sync.gates.Service(name)
+		if name == sidecar.EvsFormat2GateName {
+			gate = self.sync.gates.Format2().Gate()
+		}
+		if gate.Admits(networkId) {
+			gates = append(gates, name)
+		}
+	}
+	if self.sync.gates.Service(sidecar.ServiceGateDns).Enabled() {
+		gates = append(gates, sidecar.ServiceGateDns)
+	}
+	for _, name := range []string{sidecar.GateSwitchPush, sidecar.GateSwitchBridge} {
+		if self.sync.gates.Switch(name) {
+			gates = append(gates, name)
+		}
+	}
+	status, _, _ := self.SidecarIdentity(client.sidecarId)
+	fakeApiWriteJson(writer, http.StatusOK, map[string]any{
+		"version": pushservice.FormatVersion(versions[sidecar.PushTopicCore]), "gates": gates,
+		"min_secure_version": 0, "revoked": status == fakeApiIdentityRevoked,
+	})
 }

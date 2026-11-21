@@ -509,6 +509,9 @@ func TestApplySidecarClientSettings(t *testing.T) {
 		if !settings.EncryptionSettings.ExposeVerifiedPeerClientKey {
 			t.Error("C15's key not exposed")
 		}
+		if !settings.EncryptionSettings.GateReceiveOnSignedIdentity {
+			t.Error("C15's receive gate is off")
+		}
 		if settings.DefaultTransferOpts.ForceStream {
 			t.Error("ForceStream stayed on")
 		}

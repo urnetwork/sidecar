@@ -163,8 +163,10 @@ type SidecarRecoveryHeads interface {
 
 // What a host installs for code-only recovery (InstallRecovery).
 type SidecarRecoveryArgs struct {
-	Groups SidecarRecoveryGroups
-	Heads  SidecarRecoveryHeads
+	// Only the code admission and its anchor may consult the pre-confirmation log.
+	JoiningAuthority func() SidecarAuthority
+	Groups           SidecarRecoveryGroups
+	Heads            SidecarRecoveryHeads
 }
 
 // An authority that also judges a statement as api would at its tip now, keeping nothing: ConfigLog.Check, §7.9's
@@ -176,6 +178,7 @@ type SidecarStatementJudge interface {
 
 // What §7.9's recovery anchor reads of the verified log, a copy.
 type SidecarRecoveryLog struct {
+	Bindings  map[Id]*bridge.RecoveryBindingRow
 	NetworkId Id
 	// The genesis's config_repo_id, whose group's key the anchor runs on.
 	ConfigRepoId Id
@@ -352,7 +355,11 @@ func (self *Sidecar) Recovery() (*SidecarRecovery, error) {
 	if err != nil || record == nil {
 		return nil, err
 	}
-	return self.recoveryResult(record, self.authority()), nil
+	authority := self.authority()
+	if recovery := self.recoveryArgs(); authority == nil && recovery != nil && recovery.JoiningAuthority != nil {
+		authority = recovery.JoiningAuthority()
+	}
+	return self.recoveryResult(record, authority), nil
 }
 
 // The result a record and the verified state give.
@@ -363,7 +370,7 @@ func (self *Sidecar) recoveryResult(record *sidecarRecoveryRecord, authority Sid
 		StatementId: bytes.Clone(record.StatementId),
 		Proposal:    record.Proposal,
 	}
-	if record.Phase == SidecarRecoveryPending && self.Admitted() {
+	if record.Phase == SidecarRecoveryPending && self.admittedBy(authority) {
 		result.Phase = SidecarRecoveryAdmitted
 	}
 	if result.Phase != SidecarRecoveryPending {
@@ -532,10 +539,13 @@ func (self *Sidecar) RecoverWithCode(ctx context.Context, code *RecoveryCode, or
 		}
 	}
 	authority := self.authority()
+	recoveryArgs := self.recoveryArgs()
+	if authority == nil && recoveryArgs != nil && recoveryArgs.JoiningAuthority != nil {
+		authority = recoveryArgs.JoiningAuthority()
+	}
 	if authority == nil {
 		return nil, ErrSidecarActNoAuthority
 	}
-	recoveryArgs := self.recoveryArgs()
 	judge, judges := authority.(SidecarStatementJudge)
 	view, views := authority.(SidecarRecoveryLogView)
 	if recoveryArgs == nil || !judges || !views {
@@ -561,7 +571,7 @@ func (self *Sidecar) RecoverWithCode(ctx context.Context, code *RecoveryCode, or
 		result.Entry = entry
 		return result
 	}
-	if record.Phase == SidecarRecoveryPending && !self.Admitted() {
+	if record.Phase == SidecarRecoveryPending && !self.admittedBy(authority) {
 		return resultOf(), nil
 	}
 
@@ -598,6 +608,7 @@ func (self *Sidecar) RecoverWithCode(ctx context.Context, code *RecoveryCode, or
 				networkId:        identity.NetworkId,
 				memberId:         record.MemberId,
 				ed25519PublicKey: keys.Ed25519PublicKey(),
+				xwingPublicKey:   keys.XwingPublicKey(),
 			})
 		},
 	}
@@ -635,7 +646,7 @@ func (self *Sidecar) RecoverWithCode(ctx context.Context, code *RecoveryCode, or
 	repos, err := recoveryArgs.Groups.RunRecovery(ctx, gkmArgs)
 	result := resultOf()
 	result.Repos = repos
-	result.OfferRotate = true
+	result.OfferRotate = err == nil
 	return result, err
 }
 
@@ -644,7 +655,7 @@ func (self *Sidecar) RecoverWithCode(ctx context.Context, code *RecoveryCode, or
 // for a lost answer, which stays pending.
 func (self *Sidecar) fileRecovery(ctx context.Context, identity *SidecarIdentity, secrets SidecarSecrets, keys *RecoveryKeys, authority SidecarAuthority,
 	judge SidecarStatementJudge, recoveryArgs *SidecarRecoveryArgs) (*sidecarRecoveryRecord, *bridge.AuthPin, error) {
-	if self.Admitted() {
+	if self.admittedBy(authority) {
 		return nil, nil, ErrSidecarRecoveryAdmitted
 	}
 	byJwt, err := loadSidecarByJwt(secrets)
@@ -731,6 +742,7 @@ type recoveryCodeAnchorArgs struct {
 	memberId  Id
 	// the Ed25519 public key the code derives
 	ed25519PublicKey []byte
+	xwingPublicKey   []byte
 }
 
 // The config keys a recovery's ladder reaches, as a binding's sealed body opens under them.
@@ -853,28 +865,28 @@ func checkRecoveryCodeAnchor(args *recoveryCodeAnchorArgs) error {
 		return failed("the config head's records", err)
 	}
 	keySha256 := RecoveryKeySha256(args.ed25519PublicKey)
-	var bindingType bridge.SignedType
-	var bindingBytes []byte
-	found := false
-	for _, record := range headRecords {
-		if signedType, statementBytes, ok := recoveryBindingOfRecord(record.GetKind(), record.GetBody(), args.memberId, keySha256); ok {
-			bindingType, bindingBytes, found = signedType, statementBytes, true
-		}
+	binding := log.Bindings[args.memberId]
+	if binding == nil || !bytes.Equal(binding.GetKeySha256(), keySha256) {
+		return failed("the code is no longer the member's current binding", nil)
 	}
-	for _, record := range tail {
-		if signedType, statementBytes, ok := recoveryBindingOfRecord(record.Kind, record.Body, args.memberId, keySha256); ok {
-			bindingType, bindingBytes, found = signedType, statementBytes, true
-		}
+	records := append([]*protocol.ConfigRecord(nil), headRecords...)
+	for _, r := range tail {
+		records = append(records, &protocol.ConfigRecord{N: r.N, Kind: r.Kind, Body: r.Body})
 	}
-	if !found {
-		return failed("no record on the verified chain binds this code to its member", nil)
+	member := &bridge.MemberRow{MemberId: args.memberId.Bytes(), RecoveryKeySha256: keySha256, Bindings: []*bridge.RecoveryBindingRow{binding}}
+	statement := configFoldedRecoveryBodies([]*bridge.MemberRow{member}, records)[args.memberId]
+	if statement == nil {
+		return failed("the effective binding is missing from the verified chain", nil)
 	}
-	_, _, body, err := openRecoveryBindBody(bindingType, bindingBytes, &recoveryAnchorKeys{keyAt: args.keyAt}, args.networkId, nil)
+	_, _, body, err := openRecoveryBindBody(statement.kind, statement.body, &recoveryAnchorKeys{keyAt: args.keyAt}, args.networkId, nil)
 	switch {
 	case errors.Is(err, ErrConfigSealGenerationMissing):
 		return fmt.Errorf("recovery anchor: %w", err)
 	case err != nil:
 		return failed("the binding's sealed body does not open to this code's keys", err)
+	}
+	if len(args.xwingPublicKey) != 0 && !bytes.Equal(body.GetXwingPublicKey(), args.xwingPublicKey) {
+		return failed("the binding names another X-Wing public key", nil)
 	}
 	if !bytes.Equal(body.GetEd25519PublicKey(), args.ed25519PublicKey) {
 		return failed("the binding's body names another Ed25519 key", nil)
@@ -936,7 +948,14 @@ func configRecoveryLog(log *ConfigLog) (*SidecarRecoveryLog, error) {
 	if len(prevChain) != sha256.Size {
 		return nil, errors.New("recovery anchor: the first kept entry's prev_chain")
 	}
+	bindings := map[Id]*bridge.RecoveryBindingRow{}
+	for _, memberId := range state.MemberIds() {
+		if binding := state.CurrentBinding(memberId); binding != nil {
+			bindings[memberId] = proto.Clone(binding).(*bridge.RecoveryBindingRow)
+		}
+	}
 	return &SidecarRecoveryLog{
+		Bindings:      bindings,
 		NetworkId:     log.networkId,
 		ConfigRepoId:  configRepoId,
 		GenesisChain:  bridge.GenesisChain(log.signedGenesis),

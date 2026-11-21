@@ -401,13 +401,12 @@ func (self *evacuateRun) refHead(repoId sidecar.Id, refId sidecar.Id) (*EvsStore
 }
 
 // One log page of a ref for Resolve: this process's cache, log/, or, once packed, its pack through pidx/.
-func (self *evacuateRun) readLogPage(ctx context.Context, repoId sidecar.Id, refId sidecar.Id, page uint64) (*LogPage, error) {
-	evacuator := self.evacuator
-	logPage, err := ReadLogPage(ctx, evacuator.logPages, self.cluster, repoId, refId, page)
+func (self *Evacuator) readLogPage(ctx context.Context, cluster sidecar.BlobCluster, repoId sidecar.Id, refId sidecar.Id, page uint64) (*LogPage, error) {
+	logPage, err := ReadLogPage(ctx, self.logPages, cluster, repoId, refId, page)
 	if !errors.Is(err, ErrEvsRecordEvacuated) {
 		return logPage, err
 	}
-	pageBytes, err := evacuator.locator.ReadLogPage(ctx, self.cluster, repoId, refId, page)
+	pageBytes, err := self.locator.ReadLogPage(ctx, cluster, repoId, refId, page)
 	if err != nil {
 		return nil, err
 	}
@@ -415,7 +414,7 @@ func (self *evacuateRun) readLogPage(ctx context.Context, repoId sidecar.Id, ref
 	if err != nil {
 		return nil, err
 	}
-	evacuator.logPages.Put(self.cluster.ClusterId(), repoId, refId, logPage)
+	self.logPages.Put(cluster.ClusterId(), repoId, refId, logPage)
 	return logPage, nil
 }
 
@@ -423,7 +422,7 @@ func (self *evacuateRun) readLogPage(ctx context.Context, repoId sidecar.Id, ref
 // leaves the record where it is, for why.
 func (self *evacuateRun) resolve(minute *evacuateMinute, record *sidecar.EvsBatchRecord) (*EvsResolution, string, error) {
 	readPage := func(ctx context.Context, page uint64) (*LogPage, error) {
-		return self.readLogPage(ctx, record.RepoId, record.RefId, page)
+		return self.evacuator.readLogPage(ctx, self.cluster, record.RepoId, record.RefId, page)
 	}
 	head, err := self.refHead(record.RepoId, record.RefId)
 	if err != nil {

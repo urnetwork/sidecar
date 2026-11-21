@@ -100,6 +100,8 @@ type SearchRequest struct {
 	Text string
 	// Empty: every readable repo with its index on (never secret, config or mailcfg).
 	Repos []Id
+	// A content ref's name or id:<ref_id> in repo breadth. Empty selects the default ref.
+	Ref   string
 	Scope SearchScope
 	// Zero: unbounded.
 	Since time.Time
@@ -124,6 +126,8 @@ type SearchRequest struct {
 type SearchHit struct {
 	Repo Id
 	Ref  Id
+	// A non-main content ref. The local open tool resolves it through the querying session's hit ID.
+	refName string
 	// Or a derived document's registered name (§11.14).
 	Path    string
 	Version uint64

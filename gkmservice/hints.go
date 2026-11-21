@@ -50,10 +50,14 @@ func gkmHintBody(groupId *sidecar.Id, epoch uint64, kind protocol.GkmHintKind, r
 
 // Queues a commit hint on gkm:<group_id> to sidecarIds, at epoch and generation.
 func (self *GkmEngine) hintCommit(sidecarIds []sidecar.Id, groupId sidecar.Id, epoch uint64, generation uint64) {
-	version, err := sidecar.GkmGroupVersion(epoch, generation)
-	if err != nil {
-		self.metrics.hintsDropped.Add(1, protocol.GkmHintKind_GKM_HINT_COMMIT.String())
-		return
+	version := generation
+	if self.settings.DraftMls {
+		var err error
+		version, err = sidecar.GkmGroupVersion(epoch, generation)
+		if err != nil {
+			self.metrics.hintsDropped.Add(1, protocol.GkmHintKind_GKM_HINT_COMMIT.String())
+			return
+		}
 	}
 	body, err := gkmHintBody(&groupId, epoch, protocol.GkmHintKind_GKM_HINT_COMMIT, nil)
 	if err != nil {

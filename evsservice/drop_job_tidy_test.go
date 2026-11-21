@@ -1,6 +1,7 @@
 package evsservice
 
 import (
+	"errors"
 	"maps"
 	"slices"
 	"strings"
@@ -9,6 +10,150 @@ import (
 
 	"github.com/urnetwork/sidecar"
 )
+
+func TestDropJobRestartsBetweenHeldCheckpointAndParking(t *testing.T) {
+	testDropJobRestartBeforeParking(t, false)
+}
+
+func TestDropJobObserveWorkerPreservesHeldCheckpointBeforeParking(t *testing.T) {
+	testDropJobRestartBeforeParking(t, true)
+}
+
+// Stop after the physical deleter checkpointed held IDs but before the table
+// CAS parked the job. The cursor points past every retained object.
+func testDropJobRestartBeforeParking(t *testing.T, observe bool) {
+	t.Helper()
+	f := newDropJobFixture(t)
+	hold := f.placeHold()
+	f.deleter.held = true
+	f.appendDrop("drop", f.world.clock.Now())
+	f.ripen()
+	f.stopAt = BarrierDropHeldBefore
+	if _, err := f.job.Run(f.world.ctx, "meta-1", f.world.repoId); err == nil {
+		t.Fatal("the stop before parking did not interrupt the job")
+	}
+	job := f.table().Job
+	if job == nil || job.HeldByteCount == 0 || job.Cursor == (DropCursor{}) {
+		t.Fatalf("no checkpoint before parking: %+v", job)
+	}
+	f.stopAt = ""
+	f.job = f.newJob(testId("replacement before parking"))
+	f.world.clock.AdvanceTo(time.UnixMilli(job.UntilMs).Add(f.job.settings.LeaseLapse))
+	f.hddKnown()
+	if observe {
+		f.format2.mode = sidecar.Format2Observe
+		f.job.deps.Deleter = nil
+		if result := f.run(); result.Waiting != DropWaitUnanswered || f.table().Job == nil {
+			t.Fatalf("the observe worker lost the active checkpoint: %+v", result)
+		}
+		f.format2.mode = sidecar.Format2On
+		f.job.deps.Deleter = f.deleter
+		f.advance(f.job.settings.PauseRetryInterval, 0)
+	}
+	if result := f.run(); result.Waiting != DropWaitHold || f.table().HeldJob(job.JobId) == nil {
+		t.Fatalf("the retained objects lost their owner: %+v", result)
+	}
+	last := f.deleter.requests[len(f.deleter.requests)-1]
+	if len(last.Candidates) != 3 {
+		t.Fatalf("the checkpoint hid %d retained objects", 3-len(last.Candidates))
+	}
+	f.endHold(hold)
+	f.deleter.held = false
+	f.advance(f.job.settings.HorizonRetryInterval, 0)
+	if result := f.run(); !result.Ended || f.entry("drop").State != DropStateDone {
+		t.Fatalf("the released job did not finish: %+v", result)
+	}
+	for _, id := range []DropScanId{f.a, f.b, f.c} {
+		if f.deleter.deleteCounts[id] != 1 {
+			t.Fatalf("retained object deleted %d times", f.deleter.deleteCounts[id])
+		}
+	}
+}
+
+func TestLegacyHeldEntryWithIncompleteFilesProtectsItsFilesAndReads(t *testing.T) {
+	fixture := newDropJobFixture(t)
+	world := fixture.world
+	fixture.placeHold()
+	fixture.deleter.held = true
+	fixture.appendDrop("legacy", world.clock.Now())
+	fixture.ripen()
+	fixture.run()
+	jobId := fixture.table().HeldJobs[0].JobId
+	segments, err := world.host.Blobs.SegmentCluster()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The value an older worker could leave after it refused a resumed job.
+	legacy, err := fixture.job.Table().Update(world.paidCtx, world.cluster, world.repoId, func(state *DropTableState, now time.Time) (bool, error) {
+		state.HeldJobs = nil
+		return true, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = NewDropIndex(nil, nil, nil).Withheld(world.ctx, segments, "meta-1", world.repoId, legacy.State, world.clock.Now())
+	if !errors.Is(err, ErrDropJobState) {
+		t.Fatalf("a content read accepted unknown held ownership: %v", err)
+	}
+	fixture.advance(fixture.job.settings.EndedRetention+48*time.Hour, 0)
+	if _, err := fixture.job.Run(world.ctx, "meta-1", world.repoId); !errors.Is(err, ErrDropJobState) {
+		t.Fatalf("the worker accepted unknown held ownership: %v", err)
+	}
+	if answers, err := fixture.files(jobId).Read(world.ctx, DropFileDel, 0); err != nil || answers == nil {
+		t.Fatalf("the old job's retained evidence was lost: %v", err)
+	}
+}
+
+func TestLegacyHeldEntryRecoversItsOwnerAndDeletesItsRetainedObjects(t *testing.T) {
+	fixture := newDropJobFixture(t)
+	world := fixture.world
+	hold := fixture.placeHold()
+	fixture.deleter.held = true
+	fixture.appendDrop("legacy", world.clock.Now())
+	fixture.ripen()
+	fixture.run()
+	jobId := fixture.table().HeldJobs[0].JobId
+	files := fixture.files(jobId)
+	// Production records both the del outcomes and the immutable held IDs.
+	ids := []DropScanId{fixture.a, fixture.b, fixture.c}
+	held, err := EncodeDropIdFile(DropFileHeld, world.repoId, jobId, 0, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := files.Put(world.ctx, DropFileHeld, 0, held); err != nil {
+		t.Fatal(err)
+	}
+	var observed []*DropAnswer
+	for _, id := range ids {
+		observed = append(observed, &DropAnswer{DropScanId: id, Outcome: DropOutcomeObserved})
+	}
+	if err := files.Put(world.ctx, DropFileDel, 1, EncodeDropDelFile(world.repoId, jobId, 1, observed)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.job.Table().Update(world.paidCtx, world.cluster, world.repoId, func(state *DropTableState, now time.Time) (bool, error) {
+		state.HeldJobs = nil
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fixture.job = fixture.newJob(testId("recovery worker"))
+	if result := fixture.run(); result.Waiting != DropWaitHold || fixture.table().HeldJob(jobId) == nil {
+		t.Fatalf("legacy hold remained without its job: %+v", result)
+	}
+	fixture.endHold(hold)
+	fixture.deleter.held = false
+	fixture.advance(fixture.job.settings.HorizonRetryInterval, 0)
+	result := fixture.run()
+	entry := fixture.entry("legacy")
+	if !result.Ended || entry.State != DropStateDone || entry.HeldByteCount != 300 || entry.FreedByteCount != 0 {
+		t.Fatalf("recovered job: %+v, entry %+v", result, entry)
+	}
+	for _, id := range ids {
+		if fixture.deleter.deleteCounts[id] != 1 {
+			t.Fatalf("retained object was deleted %d times", fixture.deleter.deleteCounts[id])
+		}
+	}
+}
 
 // Owner decision 570 (QD-1021; §11.13's table row, §2.8's evs-28): an ended job's snap-0 stays past the 30 d its other
 // files get, as its list files do, so `sidecarctl evs drop-reindex` can still read which drops the job covered. A job

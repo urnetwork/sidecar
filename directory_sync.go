@@ -131,6 +131,8 @@ type DirectoryCardFile struct {
 	Removed bool
 	// The file's plaintext, which the binding opened.
 	Content []byte
+	// The stored bytes of a current announcement file, from its verified sealed fields when planning a phone view.
+	StoredByteCount uint64
 	// The cards ref's version that wrote or removed it, its signer, the auth pin its push declared and evs's time for
 	// it, which the path rules judge (§16.11).
 	PushVersion     uint64
@@ -183,6 +185,12 @@ type DirectoryCards interface {
 	// Leases a notice prefix q/<h>/<tgt>/ or a notice's own path (§11.10): callback, with no lock held, at each
 	// commit changing a file under it, a hint carrying nothing, until release. Refuses any other path.
 	Lease(repoId Id, prefix string, callback func(repoId Id)) (func(), error)
+}
+
+// A phone first reads verified change metadata, then opens only the current files its budget covers.
+type DirectoryViewCards interface {
+	PlanCards(ctx context.Context, repoId Id, afterVersion uint64) (*DirectoryCardsChanges, error)
+	ReadPlannedCard(ctx context.Context, repoId Id, file *DirectoryCardFile) ([]byte, error)
 }
 
 // What a DirectoryCards binding that finds the cards ref's files by their tokens learns from the copy

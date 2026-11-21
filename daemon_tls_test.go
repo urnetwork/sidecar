@@ -110,3 +110,40 @@ func TestDaemonTlsPublishStatusCarriesAPathAndNoKey(t *testing.T) {
 		t.Errorf("a call's origin")
 	}
 }
+
+// The registered daemon handler returns the approval, then serves the local HTTP target with that grant.
+func TestDaemonTlsPublishWaitsForApprovalThenServes(t *testing.T) {
+	publisher, backend, target := newTlsPublishTest(t)
+	running := newTestSidecar(t)
+	running.leg = &sidecarConnectLeg{sidecar: running}
+	fixture := newTlsCertFixture(t)
+	remove, err := running.AddComponent(&TlsComponent{manager: fixture.manager, publisher: publisher})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer remove()
+	params, err := json.Marshal(&DaemonTlsPublishParams{Host: "blog", Target: target})
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := &DaemonCall{Sidecar: running, Params: params}
+	publish := daemonTlsMethod(t, DaemonMethodTlsPublish)
+	pending, err := publish.Handler(t.Context(), call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := pending.(*DaemonTlsPublishReply)
+	if first.ApprovalId == nil || *first.ApprovalId != backend.approvalId || first.Publish != nil || backend.certificates != 0 {
+		t.Fatalf("before approval: %+v", first)
+	}
+	backend.approve()
+	accepted, err := publish.Handler(t.Context(), call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := accepted.(*DaemonTlsPublishReply)
+	if second.ApprovalId != nil || second.Publish == nil || !second.Publish.Serving ||
+		second.Publish.Name != "tls/443/blog" || second.Publish.GrantId == "" || len(backend.endpoints) != 1 {
+		t.Fatalf("after approval: %+v", second)
+	}
+}

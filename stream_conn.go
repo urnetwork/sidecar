@@ -145,7 +145,7 @@ func (self *SubprotocolStream) PeerId() Id {
 	return Id(self.peerId)
 }
 
-// The stream's id, unique with its peer for the dispatcher's life (§6.7).
+// The stream's id, unique with its peer across sender restarts (§6.7).
 func (self *SubprotocolStream) StreamId() uint64 {
 	return self.streamId
 }

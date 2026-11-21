@@ -261,6 +261,9 @@ func TestPlatformTakesAbuseMailWithNoSni(t *testing.T) {
 		t.Errorf("arrival %v", messages[0].ArrivalTime)
 	}
 	platform.service.AwaitSessionCount(0)
+	if value := platform.host.Metrics.Value("urnetwork_mxedge_preambles_total", "platform_ready"); value != 1 {
+		t.Errorf("STARTTLS preambles counted %v", value)
+	}
 	if value := platform.host.Metrics.Value("urnetwork_mxedge_sessions_total", "platform_served"); value != 1 {
 		t.Errorf("platform_served counted %v", value)
 	}

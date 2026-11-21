@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -41,11 +42,12 @@ const (
 
 // The act record's values.
 const (
-	sidecarPendingActVersion     = 1
-	sidecarPendingActKindPlain   = 0
-	sidecarPendingActKindStale   = 1
-	sidecarPendingActByteCount   = 1 + 16 + 4 + 1
-	sidecarPendingActStaleLength = sidecarPendingActByteCount + 16 + 16
+	sidecarPendingActVersion       = 1
+	sidecarPendingActKindPlain     = 0
+	sidecarPendingActKindStale     = 1
+	sidecarPendingActKindAdmission = 2
+	sidecarPendingActByteCount     = 1 + 16 + 4 + 1
+	sidecarPendingActStaleLength   = sidecarPendingActByteCount + 16 + 16
 )
 
 // One statement signed and not yet landed.
@@ -64,6 +66,8 @@ type sidecarPendingAct struct {
 	index uint32
 	// set for §7.10's stale revocation, which each post and retry re-checks
 	stale *sidecarStaleRevocation
+	// A browser OwnerConfirm or mailbox share is contingent on this exact signed admission landing.
+	admission *browserAdmissionDependency
 }
 
 // The act record's bytes.
@@ -72,6 +76,11 @@ func (self *sidecarPendingAct) encode() []byte {
 	record = append(record, sidecarPendingActVersion)
 	record = append(record, self.actId[:]...)
 	record = binary.BigEndian.AppendUint32(record, self.index)
+	if self.admission != nil {
+		record = append(record, sidecarPendingActKindAdmission)
+		record = append(record, self.admission.target[:]...)
+		return append(record, self.admission.digest[:]...)
+	}
 	if self.stale == nil {
 		return append(record, sidecarPendingActKindPlain)
 	}
@@ -100,6 +109,14 @@ func decodeSidecarPendingAct(record []byte) (*sidecarPendingAct, error) {
 		copy(stale.workerId[:], record[22:38])
 		copy(stale.memberId[:], record[38:54])
 		act.stale = stale
+	case sidecarPendingActKindAdmission:
+		if len(record) != sidecarPendingActByteCount+len(Id{})+sha256.Size {
+			return nil, fmt.Errorf("%w: a pending admission dependency", ErrSidecarStoreFailed)
+		}
+		dependency := &browserAdmissionDependency{}
+		copy(dependency.target[:], record[22:38])
+		copy(dependency.digest[:], record[38:])
+		act.admission = dependency
 	default:
 		return nil, fmt.Errorf("%w: a pending act record", ErrSidecarStoreFailed)
 	}
@@ -198,6 +215,16 @@ func (self *Sidecar) pendingStatements() ([]*sidecarPendingStatement, error) {
 // nil entry and no error, when its Worker holds a leaf again; one whose re-check cannot run stays pending. Else as
 // postPendingStatement.
 func (self *Sidecar) postPendingInOrder(ctx context.Context, pending *sidecarPendingStatement) (*bridge.AuthPin, error) {
+	if pending.act != nil && pending.act.admission != nil && self.clock.Now().UnixMilli() < pending.notAfterMs {
+		if err := self.checkBrowserAdmissionDependency(ctx, pending.act.admission); err != nil {
+			if errors.Is(err, ErrSidecarActRefused) {
+				if dropErr := self.dropPendingStatement(pending); dropErr != nil {
+					return nil, dropErr
+				}
+			}
+			return nil, err
+		}
+	}
 	if pending.act != nil && pending.act.stale != nil && self.clock.Now().UnixMilli() < pending.notAfterMs {
 		post, err := self.recheckStaleRevocation(ctx, pending.act.stale)
 		if err != nil {

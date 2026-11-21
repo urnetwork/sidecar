@@ -73,6 +73,10 @@ type SubprotocolEnv struct {
 	// The network's component store, where PROTO-M1-04 keeps first-use pins (§2.8 EX6). Required: with
 	// nowhere to write a pin, no peer could ever verify.
 	Store SidecarStore
+	// Reserve a strictly increasing value in [1, 2^42) for the lifetime of
+	// this client ID, across process restarts. A sidecar uses Store when
+	// nil. An edge that only accepts streams needs neither.
+	ReserveStreamIdRange func(context.Context) (uint64, error)
 	// Nil logs to connect's default logger.
 	Log Logger
 	// §6.6's bounds, which validate holds to their maximums and to positive values.
@@ -299,6 +303,7 @@ func ApplySidecarClientSettings(clientSettings *connect.ClientSettings) {
 	}
 	clientSettings.EncryptionSettings.Mode = connect.EncryptionModeRequired
 	clientSettings.EncryptionSettings.ExposeVerifiedPeerClientKey = true
+	clientSettings.EncryptionSettings.GateReceiveOnSignedIdentity = true
 	clientSettings.DefaultTransferOpts.ForceStream = false
 	// a Service-mode source reaches this client on id 21842 alone, and nothing else of it, IP included,
 	// gets in (C9; stream_edge.go); connect names no id, so the owner lists its own
@@ -413,10 +418,16 @@ func newSubprotocol(ctx context.Context, env *SubprotocolEnv, seams *subprotocol
 		streams: subprotocolStreams{
 			outboundWake: make(chan struct{}, 1),
 			change:       NewMonitorValue[uint64](0),
+			reserveIds:   env.ReserveStreamIdRange,
 		},
 		streamClientId:       seams.clientId,
 		streamPressureOf:     seams.streamPressure,
 		streamKeepaliveArmed: NewMonitorValue(time.Time{}),
+	}
+	if store := env.Store; self.streams.reserveIds == nil && store != nil {
+		self.streams.reserveIds = func(context.Context) (uint64, error) {
+			return reserveStoredStreamIds(store)
+		}
 	}
 	if self.clientPublicKeyOf == nil {
 		self.clientPublicKeyOf = connect.Peer.VerifiedClientPublicKey

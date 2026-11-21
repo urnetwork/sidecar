@@ -272,14 +272,14 @@ func newGkmUpkeep(ctx context.Context, args *GkmUpkeepArgs) (*GkmUpkeep, error) 
 			self.RefillKeyPackages()
 		})
 		args.Hints.AddResync(func(ctx context.Context) {
-			self.askPass()
+			self.Refresh()
 		})
 	}
 	return self, nil
 }
 
-// Asks for a pass now.
-func (self *GkmUpkeep) askPass() {
+// Refresh asks for a pass after auth or published key state changes.
+func (self *GkmUpkeep) Refresh() {
 	self.passAsked.Update(func(count int) int { return count + 1 })
 }
 
@@ -290,7 +290,7 @@ func (self *GkmUpkeep) RefillKeyPackages() {
 		defer self.stateLock.Unlock()
 		self.refillAsked = true
 	}()
-	self.askPass()
+	self.Refresh()
 }
 
 // The loop: a pass, then wait for UpkeepInterval or an ask.
@@ -424,7 +424,15 @@ func (self *GkmUpkeep) keepReaderKey(ctx context.Context, now time.Time) error {
 		return err
 	}
 	current.uploaded = true
-	return self.putReaderKeyRecord(current)
+	if err := self.putReaderKeyRecord(current); err != nil {
+		return err
+	}
+	// A joining device may have asked before it had a ReaderKey. Retry its config wrap now the
+	// published digest and its private key are durable.
+	if self.args.Hints != nil && self.args.CreateKeyPackage == nil {
+		self.args.Hints.Resync()
+	}
+	return nil
 }
 
 // A fresh X-Wing pair signed now, valid ReaderKeyLifetime, its private key in the keychain before anything sends it
@@ -459,6 +467,22 @@ func (self *GkmUpkeep) newReaderKey(now time.Time) (*gkmReaderKeyRecord, error) 
 		return nil, err
 	}
 	return record, nil
+}
+
+// The digest of the newest uploaded ReaderKey that remains valid at this device's clock.
+func (self *GkmUpkeep) CurrentReaderKeySha256() []byte {
+	records, err := self.readerKeyRecords()
+	if err != nil {
+		return nil
+	}
+	defer clearGkmReaderKeySeeds(records)
+	now := self.clock.Now()
+	for i := len(records) - 1; i >= 0; i-- {
+		if record := records[i]; record.uploaded && now.Before(record.notAfter) {
+			return bytes.Clone(record.keySha256)
+		}
+	}
+	return nil
 }
 
 // The private key of a ReaderKey this sidecar signed, by its key's digest, while its record is kept: what opens a

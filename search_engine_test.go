@@ -205,6 +205,78 @@ func TestSearchEngineScopeAndExclusions(t *testing.T) {
 	}
 }
 
+func TestSearchEngineNamedRefScansLocalVersionsAcrossACut(t *testing.T) {
+	world := newTestEngineWorld(t, nil, testEngineDocument(t, "other", 1, 1, "indexed.md", "harbor"))
+	repoId, refId := world.sync.repoId, world.sync.refId
+	repo := world.scope.repos[0]
+	repo.Refs = []*SearchScopeRef{
+		{RefId: evsTestId("other default"), Default: true, Name: "main", Unbuilt: true},
+		{RefId: refId, Name: "draft", IndexOff: true},
+	}
+	key, err := NewEvsRefKey(evsTestRepoKey(repoId, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	docs := testSearchScan{}
+	for _, name := range []string{"harbor-a.md", ".ur-index/harbor", "harbor-b.md"} {
+		docs = append(docs, &SearchScanDocument{RefId: refId, Name: []byte(name), Kind: IndexDocFile,
+			Version: 1, TimeMs: world.sync.head.at.UnixMilli(), Signer: evsTestId("my laptop"), Display: &SearchScanDisplay{}})
+	}
+	world.engine.args.Scan = func(_ context.Context, repo, ref Id) (*SearchScanView, error) {
+		if repo != repoId || ref != refId {
+			return nil, nil
+		}
+		return &SearchScanView{Source: docs, RefKey: key}, nil
+	}
+	request := &SearchRequest{Text: "harbor", Repos: []Id{repoId}, Ref: "draft", PageSize: 1}
+	session := evsTestId("scan session")
+	stream, cursor, err := world.engine.SearchIn(t.Context(), session, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	first, progress, done, err := stream.Next()
+	if err != nil || done || len(first) != 1 || first[0].Path != "harbor-a.md" || first[0].DocKey == ([16]byte{}) ||
+		len(progress.Coverage) != 1 || progress.Coverage[0].State != SearchExcludedIndexOff || len(progress.Excluded) != 0 {
+		t.Fatalf("first scan page: %+v, %+v, done %t, %v", first, progress, done, err)
+	}
+	through, err := indexDocKey(key.key, refId, []byte("harbor-b.md"), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eraser := testNewEraser(t, world.sync.head.ref.store(evsTestId("scan eraser")), false, &testIndexWorldClock{world: world.sync.head}, nil)
+	testCut(t, eraser, "scan cut", &IndexCutDocument{Key: through, Version: 1})
+	world.sync.round(t)
+	if _, err := world.engine.Resume(session, cursor); !errors.Is(err, ErrSearchCursorExpired) {
+		t.Fatalf("scan cursor after cut: %v", err)
+	}
+	if hits, _, _, err := stream.Next(); len(hits) != 0 || !errors.Is(err, ErrSearchCursorExpired) {
+		t.Fatalf("old scan after cut: %+v, %v", hits, err)
+	}
+	request.Ref = "id:" + refId.String()
+	repo.Refs[1].IndexOff, repo.Refs[1].Unbuilt = false, true
+	hits, coverage := world.all(t, request)
+	if !slices.Equal(testHitPaths(hits), []string{"harbor-a.md"}) || coverage.Coverage[0].State != SearchExcludedUnbuilt {
+		t.Fatalf("fresh scan: %+v, %+v", hits, coverage)
+	}
+	tools := testSearchTools(t, world)
+	result, err := tools.Search(t.Context(), &SearchToolEnv{Session: evsTestId("tool scan")}, &SearchToolArgs{
+		Query: "harbor", Repos: []string{"id:" + repoId.String()}, Ref: "draft",
+	})
+	if err != nil || len(result.Hits) != 1 || result.Hits[0].Ref != refId.String() || result.Hits[0].Stub || result.Hits[0].Open.Arguments["hit"] != result.Hits[0].HitId {
+		t.Fatalf("named tool search: %+v, %v", result, err)
+	}
+	opened, err := tools.OpenHit(evsTestId("tool scan"), result.Hits[0].HitId)
+	if err != nil || opened.RefId != refId || opened.RefName != "draft" {
+		t.Fatalf("named hit: %+v, %v", opened, err)
+	}
+	request.Ref = ""
+	hits, coverage = world.all(t, request)
+	if len(hits) != 0 || len(coverage.Excluded) != 1 || *coverage.Excluded[0].RefId != repo.Refs[0].RefId {
+		t.Fatalf("default ref: %+v, %+v", hits, coverage)
+	}
+}
+
 // §16.10's owner-bound row: a reader that is not the writer deposits a receipt of purpose search naming each index file
 // it fetches before the round's first fetch; a receipt that cannot land fetches nothing, and the search skips the repo,
 // coverage naming it.
@@ -261,6 +333,21 @@ func TestSearchEngineReceiptsBeforeDecrypts(t *testing.T) {
 	if err != nil || len(page) != 0 || len(progress.Excluded) != 1 || progress.Excluded[0].Reason != SearchExcludedReceipt {
 		t.Fatalf("a repo whose receipt failed: %v, %+v, %v", page, progress.Excluded, err)
 	}
+	repo.Refs[0].Unbuilt = true
+	engine.args.Scan = func(context.Context, Id, Id) (*SearchScanView, error) {
+		t.Fatal("opened a scan after a refused search receipt")
+		return nil, nil
+	}
+	stream, err = engine.Search(t.Context(), &SearchRequest{Text: "harbor", Repos: []Id{world.repoId}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, progress, _, err = stream.Next()
+	stream.Close()
+	if err != nil || len(page) != 0 || len(progress.Excluded) != 1 || progress.Excluded[0].Reason != SearchExcludedReceipt {
+		t.Fatalf("named repo after a refused receipt: %v, %+v, %v", page, progress.Excluded, err)
+	}
+	repo.Refs[0].Unbuilt = false
 	fail = false
 	world.round(t)
 	stream, err = engine.Search(context.Background(), &SearchRequest{Text: "harbor"})
@@ -292,6 +379,59 @@ func TestSearchEngineCursorExpiresAfterAnErase(t *testing.T) {
 	}
 	if _, err := world.engine.Resume(evsTestId("session"), token); !errors.Is(err, ErrSearchCursorExpired) {
 		t.Fatalf("the cursor after the erasure answered %v", err)
+	}
+}
+
+// Learning a valid cut during an ordinary round expires both live pages and the hit references from finished searches.
+func TestSearchEngineSyncedCutExpiresItsCursors(t *testing.T) {
+	for _, listing := range []bool{false, true} {
+		first := testEngineDocument(t, "cut document", 1, 1, "a.txt", "harbor a")
+		second := testEngineDocument(t, "cut document", 2, 1, "b.txt", "harbor b")
+		world := newTestEngineWorld(t, nil, first, second)
+		ctx := context.Background()
+		session := evsTestId("cut search session")
+		request := &SearchRequest{Text: "harbor", PageSize: 1}
+		stream, token, err := world.engine.SearchIn(ctx, session, request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		page, _, done, err := stream.Next()
+		if err != nil || len(page) != 1 || done {
+			t.Fatalf("first page: %v, done %v, %v", page, done, err)
+		}
+		_, finished, err := world.engine.SearchIn(ctx, session, request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cursors := world.engine.cursors
+		cursors.noteHits(session, finished, page, 1)
+		hitId := cursors.hitId(session, &page[0])
+		cursors.finish(session, finished)
+		if _, err := cursors.openHit(session, hitId); err != nil {
+			t.Fatal(err)
+		}
+		// An ordinary content push leaves the previous query alive. It also puts two statements in the listing case.
+		world.sync.head.push(t, evsTestId("writer"), testEngineDocument(t, "outside query", 1, 1, "c.txt", "city"))
+		if listing {
+			world.sync.source.catchUpCount = 1
+		}
+		eraser := testNewEraser(t, world.sync.head.ref.store(evsTestId("eraser")), false, &testIndexWorldClock{world: world.sync.head}, nil)
+		testCut(t, eraser, "cut search", &IndexCutDocument{Key: second.key, Version: second.version})
+		world.sync.round(t)
+		if hits, _, _, err := stream.Next(); !errors.Is(err, ErrSearchCursorExpired) || len(hits) != 0 {
+			t.Fatalf("listing %v: continued with %v, %v", listing, hits, err)
+		}
+		if _, err := world.engine.Resume(session, token); !errors.Is(err, ErrSearchCursorExpired) {
+			t.Fatalf("listing %v: resumed cursor: %v", listing, err)
+		}
+		if _, err := cursors.openHit(session, hitId); !errors.Is(err, ErrSearchHitUnknown) {
+			t.Fatalf("listing %v: finished cursor kept its hit: %v", listing, err)
+		}
+		hits, _ := world.all(t, request)
+		if !slices.Equal(testHitPaths(hits), []string{"a.txt"}) {
+			t.Fatalf("listing %v: fresh search found %v", listing, testHitPaths(hits))
+		}
+		stream.Close()
 	}
 }
 
@@ -427,7 +567,19 @@ func testWriteTextAll(t *testing.T, world *testSyncWorld, shardCount int, text f
 // §16.10's phase rows with "search more": SearchCached reads the buckets only while all is not held; SearchAll fetches
 // every all shard, searching each as it lands, its hits after every phase-1 hit and never revised.
 func TestSearchEngineSearchMoreRanksEachShardAsItLands(t *testing.T) {
+	testSearchEngineColdShards(t, false)
+}
+
+func TestSearchEngineReadsColdShardsAboveTheRetentionCap(t *testing.T) {
+	testSearchEngineColdShards(t, true)
+}
+
+func testSearchEngineColdShards(t *testing.T, overCap bool) {
+	t.Helper()
 	world := newTestSyncWorld(t, false)
+	if overCap {
+		world.cache.settings.AllCacheByteCount = 1
+	}
 	world.head.push(t, evsTestId("writer"), testEngineDocument(t, "doc", 1, 1, "notes/new.md", "harbor today"))
 	testWriteTextAll(t, world, 3, func(n int, index int) string {
 		if index == 0 {
@@ -450,7 +602,7 @@ func TestSearchEngineSearchMoreRanksEachShardAsItLands(t *testing.T) {
 	if paths := testHitPaths(cached); !slices.Equal(paths, []string{"notes/new.md"}) {
 		t.Fatalf("SearchCached with all not held found %v", paths)
 	}
-	more, progress := engineWorld.all(t, &SearchRequest{Text: "harbor", Scope: SearchAll})
+	more, progress := engineWorld.all(t, &SearchRequest{Text: "harbor", Scope: SearchAll, PageSize: 1})
 	if len(more) != 4 || more[0].Path != "notes/new.md" || more[0].Partition != SearchPartitionLatest {
 		t.Fatalf("SearchAll found %v", testHitPaths(more))
 	}
@@ -464,6 +616,18 @@ func TestSearchEngineSearchMoreRanksEachShardAsItLands(t *testing.T) {
 	}
 	if progress.FetchedBytes == 0 {
 		t.Fatal("the fetched bytes were not reported")
+	}
+	if overCap {
+		ref, err := world.cache.cache.Ref(world.repoId, world.refId)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, file := range ref.Files {
+			path, ok := indexParsePath(file.Key.Path, false)
+			if ok && path.kind == indexPathAllShard {
+				t.Fatalf("over-cap shard still held after its last page: %s", file.Key.Path)
+			}
+		}
 	}
 }
 

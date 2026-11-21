@@ -1065,3 +1065,52 @@ func TestTlsListenerLapsesByLeaseAndRegistersAgainOnResume(t *testing.T) {
 	}
 	tlsListenTestVisitThroughAdmission(t, fixture, socketListener, fixture.service.urnetworkEdge)
 }
+
+// A device orders only active, grant-bound mappings. Pending names remain available for ACME on the correct front;
+// reassigning a host removes it from the previous listener even if its certificate did not change.
+func TestTlsDeviceZoneRoutesCustomCertificatesByOwner(t *testing.T) {
+	zone := &DnsZone{Root: "operator.example.", Label: "network", Alias: "alias"}
+	zone.CustomHosts = []DnsCustomHost{
+		{Host: "shop.customer.example", Owner: "shop.network.operator.example.", State: DnsCustomHostStateActive},
+		{Host: "other.customer.example", Owner: "other.network.operator.example.", State: DnsCustomHostStateActive},
+		{Host: "pending.customer.example", Owner: "shop.network.operator.example.", State: DnsCustomHostStatePending},
+		{Host: "foreign.customer.example", Owner: "shop.foreign.operator.example.", State: DnsCustomHostStateActive},
+		{Host: "wrong.operator.example", Owner: "shop.network.operator.example.", State: DnsCustomHostStateActive},
+	}
+	names := tlsDeviceZoneNames(zone, "", func(owner string) bool { return owner == "shop" })
+	if tlsCustomHostReady(zone, "shop.customer.example", "shop") {
+		t.Fatal("an active mapping whose interfaces are pending was ready for ALPN")
+	}
+	zone.CustomHosts[0].Ready = true
+	if !tlsCustomHostReady(zone, "shop.customer.example", "shop") || tlsCustomHostReady(zone, "shop.customer.example", "other") {
+		t.Fatal("ALPN readiness did not identify the mapped owner")
+	}
+	if names.Root != "operator.example" || !slices.Equal(names.CustomHosts, []string{"shop.customer.example"}) {
+		t.Fatalf("the device's names: %+v", names)
+	}
+	scoped := tlsDeviceZoneNames(zone, "team", nil)
+	if got, err := tlsPublishServerNames("www.team", scoped); err != nil || !slices.Equal(got, []string{"www.team.network.operator.example"}) {
+		t.Fatalf("the scope's host: %v, %v", got, err)
+	}
+	if _, err := tlsPublishServerNames("www.other", scoped); err == nil {
+		t.Fatal("a device served a different scope")
+	}
+	fixture := newTlsCertFixture(t)
+	manager := fixture.manager
+	manager.setCustomOwners(names.CustomHostOwners)
+	shop := &tlsFrontOwnerCertificates{manager: manager, owner: "shop"}
+	other := &tlsFrontOwnerCertificates{manager: manager, owner: "other"}
+	if entries := shop.CustomCertificates(); len(entries) != 1 || entries[0].Name != "shop.customer.example" || entries[0].Certificate != nil || len(other.CustomCertificates()) != 0 {
+		t.Fatalf("the mapped owner's pending entry: %+v", entries)
+	}
+	changed := shop.CustomChanged()
+	manager.setCustomOwners(map[string]string{"shop.customer.example": "other"})
+	select {
+	case <-changed:
+	default:
+		t.Fatal("the registration was not woken by reassignment")
+	}
+	if len(shop.CustomCertificates()) != 0 || len(other.CustomCertificates()) != 1 {
+		t.Fatal("the old endpoint retained the mapping")
+	}
+}

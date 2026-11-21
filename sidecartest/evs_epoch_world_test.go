@@ -55,6 +55,7 @@ type epochWorld struct {
 	clientId  sidecar.Id
 	memberId  sidecar.Id
 	kind      protocol.RepoKind
+	inbox     protocol.RepoInbox
 	log       *FakeGkmAuthLog
 	gkm       *FakeGkm
 	engine    *evsservice.EvsEngine
@@ -129,6 +130,10 @@ func newEpochWorld(t *testing.T) *epochWorld {
 
 // newEpochWorld's repo of kind.
 func newEpochWorldOf(t *testing.T, kind protocol.RepoKind) *epochWorld {
+	return newEpochWorldWithInbox(t, kind, protocol.RepoInbox_REPO_INBOX_NONE)
+}
+
+func newEpochWorldWithInbox(t *testing.T, kind protocol.RepoKind, inbox protocol.RepoInbox) *epochWorld {
 	t.Helper()
 	ctx := t.Context()
 	clock := NewFakeClock(DefaultClockStart())
@@ -140,7 +145,7 @@ func newEpochWorldOf(t *testing.T, kind protocol.RepoKind) *epochWorld {
 	world := &epochWorld{
 		t: t, ctx: ctx, clock: clock, host: host,
 		networkId: sidecar.NewId(), repoId: sidecar.NewId(), clientId: sidecar.NewId(), memberId: sidecar.NewId(),
-		kind: kind, log: NewFakeGkmAuthLog(), signers: map[string]*FakeGkmSigner{},
+		kind: kind, inbox: inbox, log: NewFakeGkmAuthLog(), signers: map[string]*FakeGkmSigner{},
 		purge: &epochPurgeSink{},
 	}
 	for _, label := range epochWorldLabels {
@@ -161,7 +166,7 @@ func newEpochWorldOf(t *testing.T, kind protocol.RepoKind) *epochWorld {
 	world.gkm = NewFakeGkm(clock, host.Blobs, nil)
 	creator := world.gkm.Client(world.signers["w"].SidecarId, world.signers["w"].Sign)
 	creator.AuthAdvanced(world.currentView())
-	if _, err := creator.CreateGroup(ctx, &sidecar.GkmCreateGroupArgs{RepoId: world.repoId, Kind: kind}); err != nil {
+	if _, err := creator.CreateGroup(ctx, &sidecar.GkmCreateGroupArgs{RepoId: world.repoId, Kind: kind, Inbox: inbox}); err != nil {
 		t.Fatal(err)
 	}
 	usage, err := evsservice.NewUsageBatcher(ctx, host.ServiceHost(), nil)
@@ -219,7 +224,7 @@ func newEpochWorldOf(t *testing.T, kind protocol.RepoKind) *epochWorld {
 func (self *epochWorld) advance(readers []string, shrunkAt uint64, expiries map[string]time.Time) *FakeGkmAuthView {
 	fixture := &FakeGkmAuthFixture{
 		Rows: FakeGkmAuthRows(&protocol.AclRepo{
-			RepoId: self.repoId.Bytes(), Kind: self.kind, HoldersShrunkAt: shrunkAt,
+			RepoId: self.repoId.Bytes(), Kind: self.kind, Inbox: self.inbox, HoldersShrunkAt: shrunkAt,
 			Admins: []*protocol.AclRepoAdminRow{{SidecarId: self.signers["w"].SidecarId.Bytes()}},
 		}),
 		IdentityKeys:       map[sidecar.Id][]byte{},
