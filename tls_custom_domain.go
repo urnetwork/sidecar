@@ -24,7 +24,9 @@
 // The account key never leaves the desktop's keychain and the secret repo: no route, log or metric carries it. A new
 // key is committed to a repo the remaining holders read before the CA is asked to require it, and the row's key_seq
 // moves last (17.2.13, C8). Durations on the wire are milliseconds from the answer: no desktop clock is compared
-// with the server's. Every wait is on the orderer's clock.
+// with the server's. Every wait is on the orderer's clock, and every wait under a claim renews it each third of its
+// lease (17.2.6), so the lock lapses only under a holder that stalled or lost the server. A wait or a failed read ends
+// nothing by itself: the claim is released where 17.2.7 says, an attempt at the latest at its OrderDeadline.
 
 package sidecar
 
@@ -360,9 +362,10 @@ type TlsCustomSettings struct {
 	OrderPollInterval time.Duration
 	// The holder's local deadline is the claim's send plus lease_ms less this.
 	LeaseMargin time.Duration
-	// While it waits between requests, the holder renews its claim once this fraction of lease_ms has passed since
-	// the claim it holds was sent: 17.2.6's LockLease / 3, a third. Not positive renews at every wait; 1 or more
-	// lets the local deadline pass first.
+	// While it waits between requests, in any of its waiting loops, the holder renews its claim once this fraction of
+	// lease_ms has passed since the claim it holds, or its last renewal, was sent: 17.2.6's LockLease / 3, a third. A
+	// longer wait is cut at each renewal, and a renewal left unanswered is tried again OrderPollInterval on. Not
+	// positive renews at both ends of every wait; 1 or more lets the local deadline pass first.
 	LeaseRenewFraction float64
 	// An attempt at one order lasts at most this; past it the holder releases, the order staying recorded.
 	OrderDeadline time.Duration
@@ -612,7 +615,9 @@ func (self *tlsCustomHold) held(sent time.Time, claim *TlsCustomClaimResult) {
 	self.renewTime = sent.Add(time.Duration(float64(lease) * self.orderer.settings.LeaseRenewFraction))
 }
 
-// Renews the claim before a request that changes something at the CA; false once the hold is lost.
+// Renews the claim immediately before a request that changes something at the CA (17.2.6); false once the hold is
+// lost. Any failure loses it, an unanswered renewal included: such a request goes out only under a renewal the server
+// answered, which keeps a stalled holder's reach to one request.
 func (self *tlsCustomHold) renew(ctx context.Context) bool {
 	if self.lost || !self.orderer.clock.Now().Before(self.deadline) {
 		self.lost = true
@@ -629,16 +634,92 @@ func (self *tlsCustomHold) renew(ctx context.Context) bool {
 }
 
 // Renews the claim while the holder waits between requests, once its renewal is due (17.2.6: every LockLease / 3), so
-// the lock does not lapse under a holder still working on the row; false once the hold is lost.
+// the lock does not lapse under a holder still working on the row. A renewal refused, or answered under another claim,
+// loses the hold, as a passed local deadline does (17.2.6). One left unanswered, with no reply or a server's failure,
+// leaves the hold standing, to be tried again OrderPollInterval on, until that deadline passes. false once the hold is
+// lost.
 func (self *tlsCustomHold) keep(ctx context.Context) bool {
-	if self.lost || !self.orderer.clock.Now().Before(self.deadline) {
+	now := self.orderer.clock.Now()
+	if self.lost || !now.Before(self.deadline) {
 		self.lost = true
 		return false
 	}
-	if self.orderer.clock.Now().Before(self.renewTime) {
+	if now.Before(self.renewTime) {
 		return true
 	}
-	return self.renew(ctx)
+	claim, err := self.orderer.deps.Api.Claim(ctx, self.args)
+	switch {
+	case err == nil && claim != nil && claim.ClaimSeq == self.claim.ClaimSeq:
+		self.held(now, claim)
+		return true
+	case err != nil && tlsCustomUnanswered(err):
+		self.renewTime = now.Add(self.orderer.settings.OrderPollInterval)
+		return true
+	}
+	self.lost = true
+	return false
+}
+
+// Waits timeout between requests, renewing the claim each time its renewal falls due on the way (17.2.6: every
+// LockLease / 3, as LeaseRenewFraction sets), so no wait under a claim outlasts that fraction of the lease unrenewed: a
+// longer wait is cut at each renewal, and at the local deadline. Every waiting loop of a holder waits here. false once
+// ctx ended or the hold was lost, with nothing more to send for the row.
+func (self *tlsCustomHold) pause(ctx context.Context, timeout time.Duration) bool {
+	clock := self.orderer.clock
+	end := clock.Now().Add(timeout)
+	earlier := func(a time.Time, b time.Time) time.Time {
+		if b.Before(a) {
+			return b
+		}
+		return a
+	}
+	for {
+		// an overdue renewal goes before the wait
+		if !self.keep(ctx) {
+			return false
+		}
+		now := clock.Now()
+		if !now.Before(end) {
+			return true
+		}
+		next := earlier(end, self.deadline)
+		if now.Before(self.renewTime) {
+			next = earlier(next, self.renewTime)
+		}
+		if self.orderer.wait(ctx, next.Sub(now)) != nil {
+			return false
+		}
+	}
+}
+
+// pause inside an order's attempt, which lasts at most OrderDeadline (17.2.7): a wait that would reach the attempt's
+// end releases the claim instead, the order staying recorded for the next claim. false once the work on the row ended.
+func (self *tlsCustomHold) poll(ctx context.Context, timeout time.Duration) bool {
+	now := self.orderer.clock.Now()
+	if self.lost || !now.Before(self.deadline) {
+		self.lost = true
+		return false
+	}
+	if !self.attemptStart.IsZero() && !now.Add(timeout).Before(self.attemptStart.Add(self.orderer.settings.OrderDeadline)) {
+		self.progress(ctx, &TlsCustomProgressArgs{Event: TlsCustomEventRelease})
+		return false
+	}
+	return self.pause(ctx, timeout)
+}
+
+// Whether a custom route's request was left unanswered rather than refused: no reply, a reply that does not parse, or
+// a server's failure (5xx, or a 429 before the route), which the same request may get past later. A custom route's
+// refusal, any other 4xx and a request refused before it was sent are answers.
+func tlsCustomUnanswered(err error) bool {
+	var refusal *TlsCustomError
+	if errors.As(err, &refusal) {
+		return http.StatusInternalServerError <= refusal.Status
+	}
+	var apiErr *SidecarApiError
+	if errors.As(err, &apiErr) {
+		return apiErr.Status == http.StatusTooManyRequests || !(http.StatusOK < apiErr.Status && apiErr.Status < http.StatusInternalServerError)
+	}
+	return !errors.Is(err, ErrSidecarApiArgs)
 }
 
 // A progress event under the hold's claim.
@@ -823,7 +904,8 @@ func (self *TlsCustomDomainOrderer) order(ctx context.Context, report *TlsCustom
 		break
 	}
 
-	// 5: by the order's status, until valid
+	// 5: by the order's status, until valid. Each wait renews the claim as it comes due, and a read with no answer is
+	// read again; the attempt's OrderDeadline releases the claim, the order staying recorded
 	for {
 		if self.settings.OrderDeadline <= self.clock.Now().Sub(attemptStart) {
 			release()
@@ -841,44 +923,35 @@ func (self *TlsCustomDomainOrderer) order(ctx context.Context, report *TlsCustom
 				return
 			}
 			finalized, err := acme.Finalize(ctx, key, accountUri, order, row.Csr)
-			if err != nil {
-				problem := tlsAcmeProblemOf(err)
-				switch {
-				case problem != nil && problem.Type == TlsAcmeProblemOrderNotReady:
-				case problem != nil && (problem.Type == TlsAcmeProblemBadCsr || problem.Type == TlsAcmeProblemBadPublicKey):
-					hold.progress(ctx, &TlsCustomProgressArgs{Event: TlsCustomEventFailed, Reason: TlsCustomReasonCaRefused})
-					self.alarm(TlsCustomAlarmCaRefused)
-					report.Failed = append(report.Failed, row.CertId)
-					return
-				case problem != nil && problem.Status == 429:
-					hold.progress(ctx, &TlsCustomProgressArgs{Event: TlsCustomEventRateLimited, RetryAfterMs: uint32(problem.RetryAfter.Milliseconds())})
-					return
-				}
-				// read the order again and act on its status
-				reread, err := acme.Order(ctx, key, accountUri, order.Url)
-				if err != nil {
-					if errors.Is(err, ErrTlsAcmeGone) {
-						hold.progress(ctx, &TlsCustomProgressArgs{Event: TlsCustomEventOrderInvalid})
-						return
-					}
-					if err := self.wait(ctx, self.settings.OrderPollInterval); err != nil {
-						return
-					}
-					continue
-				}
-				order = reread
+			if err == nil && finalized != nil {
+				order = finalized
 				continue
 			}
-			order = finalized
-		case TlsAcmeStatusProcessing:
-			if err := self.wait(ctx, self.settings.OrderPollInterval); err != nil {
+			problem := tlsAcmeProblemOf(err)
+			switch {
+			case problem != nil && (problem.Type == TlsAcmeProblemBadCsr || problem.Type == TlsAcmeProblemBadPublicKey):
+				hold.progress(ctx, &TlsCustomProgressArgs{Event: TlsCustomEventFailed, Reason: TlsCustomReasonCaRefused})
+				self.alarm(TlsCustomAlarmCaRefused)
+				report.Failed = append(report.Failed, row.CertId)
+				return
+			case problem != nil && problem.Status == 429:
+				hold.progress(ctx, &TlsCustomProgressArgs{Event: TlsCustomEventRateLimited, RetryAfterMs: uint32(problem.RetryAfter.Milliseconds())})
 				return
 			}
-			reread, err := acme.Order(ctx, key, accountUri, order.Url)
-			if err == nil {
-				order = reread
-			} else if errors.Is(err, ErrTlsAcmeGone) {
-				order = &TlsAcmeOrder{Url: order.Url, Status: TlsAcmeStatusInvalid}
+			// 403 orderNotReady, or an outcome unknown: the order is read again a poll on, until the CA answers, and
+			// acted on by its status. It is never finalized again unread
+			if !hold.poll(ctx, self.settings.OrderPollInterval) {
+				return
+			}
+			if order = self.reread(ctx, hold, key, order.Url); order == nil {
+				return
+			}
+		case TlsAcmeStatusProcessing:
+			if !hold.poll(ctx, self.settings.OrderPollInterval) {
+				return
+			}
+			if order = self.reread(ctx, hold, key, order.Url); order == nil {
+				return
 			}
 		case TlsAcmeStatusValid:
 			self.download(ctx, report, hold, key, order)
@@ -887,6 +960,24 @@ func (self *TlsCustomDomainOrderer) order(ctx context.Context, report *TlsCustom
 			// dead: another order if the budgets grant one, next pass
 			hold.progress(ctx, &TlsCustomProgressArgs{Event: TlsCustomEventOrderInvalid})
 			return
+		}
+	}
+}
+
+// The order read again until the CA answers, a poll apart, the claim renewed as it comes due meanwhile: an unknown
+// outcome is read again until the attempt's OrderDeadline, which releases the claim (17.2.7). A 404 answers the order
+// as invalid, which is dead. nil once the work on the row ended.
+func (self *TlsCustomDomainOrderer) reread(ctx context.Context, hold *tlsCustomHold, key *ecdsa.PrivateKey, orderUrl string) *TlsAcmeOrder {
+	for {
+		read, err := self.deps.Acme.Order(ctx, key, hold.account.AccountUri, orderUrl)
+		switch {
+		case err == nil && read != nil:
+			return read
+		case errors.Is(err, ErrTlsAcmeGone):
+			return &TlsAcmeOrder{Url: orderUrl, Status: TlsAcmeStatusInvalid}
+		}
+		if !hold.poll(ctx, self.settings.OrderPollInterval) {
+			return nil
 		}
 	}
 }
@@ -939,21 +1030,21 @@ func (self *TlsCustomDomainOrderer) authorize(ctx context.Context, report *TlsCu
 		return nil, true
 	}
 	authorization, err := acme.Authorization(ctx, key, accountUri, order.Authorizations[0])
-	if err != nil {
-		hold.progress(ctx, &TlsCustomProgressArgs{Event: TlsCustomEventRelease})
-		return nil, true
+	if err != nil || authorization == nil {
+		// an outcome unknown: the pending order's round comes again a poll on, under the claim
+		if !hold.poll(ctx, self.settings.OrderPollInterval) {
+			return nil, true
+		}
+		return order, false
 	}
 	switch authorization.Status {
 	case TlsAcmeStatusValid:
-		if err := self.wait(ctx, self.settings.OrderPollInterval); err != nil {
+		// wait for ready
+		if !hold.poll(ctx, self.settings.OrderPollInterval) {
 			return nil, true
 		}
-		reread, err := acme.Order(ctx, key, accountUri, order.Url)
-		if err != nil {
-			hold.progress(ctx, &TlsCustomProgressArgs{Event: TlsCustomEventRelease})
-			return nil, true
-		}
-		return reread, false
+		reread := self.reread(ctx, hold, key, order.Url)
+		return reread, reread == nil
 	case TlsAcmeStatusPending:
 	default:
 		hold.progress(ctx, &TlsCustomProgressArgs{Event: TlsCustomEventAuthzFailed, Reason: authorization.ProblemType})
@@ -1016,12 +1107,9 @@ func (self *TlsCustomDomainOrderer) authorize(ctx context.Context, report *TlsCu
 				self.kill(ctx, hold, key, order, TlsCustomReasonNoRoute)
 				return nil, true
 			}
-			if err := self.wait(ctx, self.settings.OrderPollInterval); err != nil {
-				return nil, true
-			}
 			// kept while the edges catch up, so a POST after a stale verdict comes under the claim its receipt is
 			// kept for; a lapsed lock would make the next claim's a new receipt and a new write
-			if !hold.keep(ctx) {
+			if !hold.pause(ctx, self.settings.OrderPollInterval) {
 				return nil, true
 			}
 		}
@@ -1040,32 +1128,24 @@ func (self *TlsCustomDomainOrderer) authorize(ctx context.Context, report *TlsCu
 		hold.progress(ctx, &TlsCustomProgressArgs{Event: TlsCustomEventRelease})
 		return nil, true
 	}
-	for range int(self.settings.OrderDeadline / self.settings.OrderPollInterval) {
-		if err := self.wait(ctx, self.settings.OrderPollInterval); err != nil {
+	// the authorization polled until the CA decides it, under the claim renewed as it comes due; a read with no answer
+	// is asked again, and the attempt's OrderDeadline, not the challenge's time, ends the poll, releasing the claim
+	for {
+		if !hold.poll(ctx, self.settings.OrderPollInterval) {
 			return nil, true
 		}
 		polled, err := acme.Authorization(ctx, key, accountUri, authorization.Url)
-		if err != nil {
+		if err != nil || polled == nil || polled.Status == TlsAcmeStatusPending {
 			continue
 		}
-		switch polled.Status {
-		case TlsAcmeStatusPending:
-			continue
-		case TlsAcmeStatusValid:
-			reread, err := acme.Order(ctx, key, accountUri, order.Url)
-			if err != nil {
-				hold.progress(ctx, &TlsCustomProgressArgs{Event: TlsCustomEventRelease})
-				return nil, true
-			}
-			return reread, false
-		default:
-			hold.progress(ctx, &TlsCustomProgressArgs{Event: TlsCustomEventAuthzFailed, Reason: polled.ProblemType})
-			hold.progress(ctx, &TlsCustomProgressArgs{Event: TlsCustomEventOrderInvalid})
-			return nil, true
+		if polled.Status == TlsAcmeStatusValid {
+			reread := self.reread(ctx, hold, key, order.Url)
+			return reread, reread == nil
 		}
+		hold.progress(ctx, &TlsCustomProgressArgs{Event: TlsCustomEventAuthzFailed, Reason: polled.ProblemType})
+		hold.progress(ctx, &TlsCustomProgressArgs{Event: TlsCustomEventOrderInvalid})
+		return nil, true
 	}
-	hold.progress(ctx, &TlsCustomProgressArgs{Event: TlsCustomEventRelease})
-	return nil, true
 }
 
 // POST /tls/custom-challenge under the hold's claim (17.2.9's DNS-01 steps 1 and 2; owner decision 680): the answer
@@ -1126,15 +1206,9 @@ func (self *TlsCustomDomainOrderer) challengeWrite(ctx context.Context, hold *tl
 			release()
 			return nil, true
 		}
-		if !self.clock.Now().Add(wait).Before(hold.attemptStart.Add(self.settings.OrderDeadline)) {
-			// the attempt ends, its order recorded for the next claim
-			release()
-			return nil, true
-		}
-		if err := self.wait(ctx, wait); err != nil {
-			return nil, true
-		}
-		if !hold.keep(ctx) {
+		// a wait that would reach the attempt's end releases instead, the order recorded for the next claim; a longer
+		// retry_after than a third of the lease is cut at each renewal
+		if !hold.poll(ctx, wait) {
 			return nil, true
 		}
 	}
@@ -1164,15 +1238,22 @@ func (self *TlsCustomDomainOrderer) kill(ctx context.Context, hold *tlsCustomHol
 	self.alarm(TlsCustomAlarmOrderStuck)
 }
 
-// Steps 6 to 8 of 17.2.7: the CA's chain, checked, its window, and the register.
+// Steps 6 to 8 of 17.2.7: the CA's chain, checked, its window, and the register. A download with an unknown outcome is
+// retried until the attempt's OrderDeadline, and a register with no answer is sent again while the claim renews; each
+// wait renews the claim as it comes due, and the attempt's end releases it, the next claim resuming at step 4.
 func (self *TlsCustomDomainOrderer) download(ctx context.Context, report *TlsCustomPassReport, hold *tlsCustomHold, key *ecdsa.PrivateKey, order *TlsAcmeOrder) {
 	acme := self.deps.Acme
 	accountUri := hold.account.AccountUri
 	row := hold.claim.Record
-	chain, err := acme.Certificate(ctx, key, accountUri, order.Certificate)
-	if err != nil {
-		hold.progress(ctx, &TlsCustomProgressArgs{Event: TlsCustomEventRelease})
-		return
+	var chain [][]byte
+	for {
+		var err error
+		if chain, err = acme.Certificate(ctx, key, accountUri, order.Certificate); err == nil {
+			break
+		}
+		if !hold.poll(ctx, self.settings.OrderPollInterval) {
+			return
+		}
 	}
 	leaf, ok := self.checkChain(row, chain)
 	if !ok {
@@ -1185,25 +1266,39 @@ func (self *TlsCustomDomainOrderer) download(ctx context.Context, report *TlsCus
 	if err != nil {
 		start, end = time.Time{}, time.Time{}
 	}
-	err = self.deps.Api.Register(ctx, &TlsCertRegisterArgs{
+	args := &TlsCertRegisterArgs{
 		CertId:         row.CertId,
 		ClaimSeq:       hold.claim.ClaimSeq,
 		Chain:          chain,
 		AccountUri:     accountUri,
 		AriWindowStart: start,
 		AriWindowEnd:   end,
-	})
-	var refusal *TlsCustomError
-	switch {
-	case err == nil:
-		report.Issued = append(report.Issued, row.CertId)
-	case errors.As(err, &refusal) && refusal.Refusal.Reason == TlsCustomRefusalState:
-		// the row ended under its order: revoke the chain at once, and free the lock, so the revoke pass that settles
-		// the row is not held up by this claim's lease (17.2.12 step 4)
-		acme.Revoke(ctx, key, accountUri, leaf.Raw, tlsCustomRevocationCessation)
-		hold.progress(ctx, &TlsCustomProgressArgs{Event: TlsCustomEventRelease})
 	}
-	// no answer, or another holder's register: the next claim resumes at step 4 and registers
+	for {
+		err := self.deps.Api.Register(ctx, args)
+		var refusal *TlsCustomError
+		switch {
+		case err == nil:
+			report.Issued = append(report.Issued, row.CertId)
+			return
+		case errors.As(err, &refusal) && refusal.Refusal.Reason == TlsCustomRefusalState:
+			// the row ended under its order: revoke the chain at once, and free the lock, so the revoke pass that
+			// settles the row is not held up by this claim's lease (17.2.12 step 4)
+			acme.Revoke(ctx, key, accountUri, leaf.Raw, tlsCustomRevocationCessation)
+			hold.progress(ctx, &TlsCustomProgressArgs{Event: TlsCustomEventRelease})
+			return
+		case errors.As(err, &refusal) && refusal.Refusal.Reason == TlsCustomRefusalClaim:
+			// another holder registers it
+			hold.lost = true
+			return
+		case !tlsCustomUnanswered(err):
+			// a refusal no retry under the claim changes: the next claim resumes at step 4
+			return
+		}
+		if !hold.poll(ctx, self.settings.OrderPollInterval) {
+			return
+		}
+	}
 }
 
 // The chain's check (17.2.7 step 6): the leaf's key is the CSR's, its names exactly the row's one name, not_after
@@ -1303,7 +1398,7 @@ func (self *TlsCustomDomainOrderer) revokePass(ctx context.Context, report *TlsC
 			}
 			return
 		case order.Status == TlsAcmeStatusProcessing:
-			if err := self.wait(ctx, self.settings.OrderPollInterval); err != nil {
+			if !hold.pause(ctx, self.settings.OrderPollInterval) {
 				return
 			}
 		default:
