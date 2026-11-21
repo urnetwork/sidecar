@@ -221,7 +221,7 @@ func newTestEnrolledInstance(t *testing.T) (*SidecarInstance, *testEnrollment) {
 	return instance, enrollment
 }
 
-// Persists generation's binding of keys with a new client id and token, as an enrollment does.
+// Writes the new client's binding and token to the keychain, before enrollment commits sidecar.json.
 func (self *testEnrollment) bind(t *testing.T, generation int64, keys *sidecarIdentityKeys) {
 	t.Helper()
 	self.clientId = NewId()
@@ -243,6 +243,20 @@ func (self *testEnrollment) bind(t *testing.T, generation int64, keys *sidecarId
 	if err := persistSidecarByJwt(self.secrets, self.byJwt); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// Commits the replacement client to the existing network record and wakes the run loop, as finishBinding does.
+func (self *testEnrollment) commitReplacement(t *testing.T, sidecar *Sidecar) {
+	t.Helper()
+	record, ok := sidecar.networkRecordOf(self.networkId)
+	if !ok {
+		t.Fatal("missing network record for the enrolled client")
+	}
+	record.ClientId = self.clientId
+	if err := sidecar.instance.RecordNetwork(record); err != nil {
+		t.Fatal(err)
+	}
+	sidecar.wake()
 }
 
 // A client token of networkId's clientId, issued now for 7 days, with its own jti.
@@ -471,7 +485,7 @@ func TestNewGenerationReplacesClient(t *testing.T) {
 		t.Fatal(err)
 	}
 	enrollment.bind(t, 2, keys)
-	sidecar.wake()
+	enrollment.commitReplacement(t, sidecar)
 
 	secondClient := platform.awaitOpened(t, 2)
 	secondEnv := component.awaitAttached(t, 2)
@@ -508,6 +522,12 @@ func TestOldGenerationEventsDropped(t *testing.T) {
 	}
 	enrollment.bind(t, 2, keys)
 	sidecar.wake()
+	// The run loop observed the new keychain while sidecar.json still named the old client.
+	awaitSidecarStatus(t, sidecar, atStatus(SidecarStateUnenrolled, 2))
+	if opened := len(platform.openedClients()); opened != 1 {
+		t.Fatalf("%d clients opened before the replacement committed", opened)
+	}
+	enrollment.commitReplacement(t, sidecar)
 	platform.awaitOpened(t, 2)
 	platform.connected.Set(true)
 	awaitSidecarStatus(t, sidecar, atStatus(SidecarStateOnline, 2))
