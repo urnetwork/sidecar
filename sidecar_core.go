@@ -51,6 +51,13 @@ func (self *Sidecar) run() {
 	defer close(self.done)
 	defer func() {
 		self.stopGeneration()
+		self.memberReplicaLock.Lock()
+		replica := self.memberReplica
+		self.memberReplica = nil
+		self.memberReplicaLock.Unlock()
+		if replica != nil {
+			replica.Close()
+		}
 		if self.leg != nil {
 			self.leg.close()
 		}

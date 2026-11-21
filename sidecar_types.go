@@ -95,8 +95,11 @@ type Sidecar struct {
 	// search is: the forwarding leg sets up nothing.
 	forwardingSetup atomic.Value
 	// The network's config follower, which a host starts (sidecar_config_follower.go). Held as any, as search is: the
-	// forwarding and page legs build none.
+	// forwarding-only leg builds none.
 	configFollower atomic.Value
+	// The enrolled app or browser host owns one GKM and EVS replica for its identity.
+	memberReplicaLock sync.Mutex
+	memberReplica     interface{ Close() }
 	// The network's mail (Sidecar.Mail, mail_client.go). Held as any, as search is: the forwarding leg holds no mail.
 	mail atomic.Value
 	// What an executed drop reaches beside the mirror and the index cache (state_drop_apply.go). Held as any, as search

@@ -1,4 +1,4 @@
-//go:build !ios_extension && !sidecar_http
+//go:build !ios_extension
 
 // A hosted network's config follower (QD-796; TEAM-M2-10, ACL-M2-15, CORE-M2-01): the composition that makes a daemon's
 // Sidecar the device's one judge of its network's §7.9 log. Sidecar.FollowConfig adds it as the Sidecar's "config"
@@ -145,10 +145,14 @@ type SidecarConfigFollowerArgs struct {
 	// config repo's generation keys. One that is a GkmConfigJoiner is also handed the rows-only pass's states of a
 	// device joining its network, before the follower stands (QD-817). Nil for none.
 	Gkm GkmClient
+	// Receives GKM notices on each generation when the host owns the member replica.
+	Hints *GkmHints
 	// HeadStopState.ReportFork: a fork of the log stops sealing in shared groups (§6.4). Nil for none.
 	ReportFork func(fork HeadFork)
 	// Nil is DefaultSidecarConfigFollowerSettings.
 	Settings *SidecarConfigFollowerSettings
+	// A member host installs its read receipt gate before publishing the verified client.
+	beforeStanding func(*ConfigClient) error
 }
 
 // One network's config follower on its Sidecar (the file's comment).
@@ -226,7 +230,7 @@ func (self *Sidecar) FollowConfig(args *SidecarConfigFollowerArgs) (*SidecarConf
 		cancel()
 		return nil, ErrSidecarConfigFollowing
 	}
-	remove, err := self.AddComponent(follower)
+	remove, err := self.attachConfigFollower(follower)
 	if err != nil {
 		follower.Close()
 		return nil, err
@@ -249,11 +253,9 @@ func (self *SidecarConfigFollower) Name() string {
 	return sidecarConfigFollowerComponentName
 }
 
-// One client generation: its team hints go to the client until the generation ends, a follow is asked for, and the
-// first generation starts the follower on its identity's network. A generation of another network than the first one's
-// is refused: a Sidecar's network never changes, and this log judges only its own.
-func (self *SidecarConfigFollower) Attach(env *SidecarEnv) error {
-	identity := env.Identity
+// Starts the follower at this enrolled identity. A later generation can wake the same
+// network's client. A generation from a different network cannot reuse its log.
+func (self *SidecarConfigFollower) followIdentity(identity *SidecarIdentity) error {
 	if identity == nil {
 		return fmt.Errorf("%w: a generation with no identity", ErrSidecarNoIdentity)
 	}
@@ -268,14 +270,6 @@ func (self *SidecarConfigFollower) Attach(env *SidecarEnv) error {
 	}()
 	if !ours {
 		return fmt.Errorf("the config follower of network %s takes no generation of network %s", networkId, identity.NetworkId)
-	}
-	if env.Subprotocol != nil {
-		if unsubscribe, err := env.Subprotocol.Subscribe(PushTopicTeam, self.receiveNotice); err == nil {
-			go func() {
-				<-env.Ctx.Done()
-				unsubscribe()
-			}()
-		}
 	}
 	if client := self.followingClient(); client != nil {
 		client.requestFollow()
@@ -327,6 +321,9 @@ func (self *SidecarConfigFollower) Close() {
 
 // Keeps the function that takes the component off the Sidecar, or calls it at once when the follower closed meanwhile.
 func (self *SidecarConfigFollower) setRemove(remove func()) {
+	if remove == nil {
+		return
+	}
 	closed := func() bool {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
@@ -570,6 +567,20 @@ func (self *SidecarConfigFollower) run(networkId Id, sidecarId Id) {
 			self.refuse(err)
 		}
 		return
+	}
+	if bind := self.args.beforeStanding; bind != nil {
+		for {
+			if err := bind(client); err == nil {
+				break
+			} else {
+				self.moveTo(SidecarConfigFollowerCatchingUp, fmt.Sprintf("waiting for the member record binding: %v", err))
+			}
+			select {
+			case <-self.ctx.Done():
+				return
+			case <-self.clock.After(self.settings.AnchorRetryInterval):
+			}
+		}
 	}
 	self.stand(networkId, sidecarId, client)
 }
