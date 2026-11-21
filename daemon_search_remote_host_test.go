@@ -4,6 +4,7 @@ package sidecar
 
 import (
 	"bytes"
+	"context"
 	"testing"
 
 	"github.com/urnetwork/sidecar/protocol"
@@ -201,5 +202,36 @@ func TestDaemonHostsRemoteSearchFromSignedDesignationAndHeldIndex(t *testing.T) 
 	registered = component.apply(dispatcher, registered)
 	if registered != nil || dispatcher.features != 0 || leg.budget.memoryBudgetByteCount != running.settings.MemoryBudgetByteCount {
 		t.Fatal("retirement kept the handler, its feature, or its budget")
+	}
+}
+
+// The initial verified config can arrive after the daemon has attached to its client generation.
+func TestRemoteServingRechecksWhenTheConfigFollowerStands(t *testing.T) {
+	world := newSearchTestSidecar(t, nil)
+	follower := &SidecarConfigFollower{state: NewMonitorValue(SidecarConfigFollowerCatchingUp)}
+	world.sidecar.configFollower.Store(follower)
+	component := newSearchServeComponent(world.sidecar, &DaemonSearchServe{
+		Designated: func() bool { return follower.state.Value() == SidecarConfigFollowerStanding },
+		Handler:    func(context.Context, *SubprotocolRequest) ([]byte, error) { return nil, nil },
+	})
+	dispatcher := newSearchServeTestDispatcher()
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		component.follow(ctx, dispatcher)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+	world.clock.awaitPending(t, 1)
+	if registered, _ := dispatcher.state(); registered {
+		t.Fatal("registered while the follower was still starting")
+	}
+	follower.state.Set(SidecarConfigFollowerStanding)
+	world.clock.awaitPending(t, 2)
+	if registered, features := dispatcher.state(); !registered || features != SubprotocolFeatureServesSearch {
+		t.Fatal("standing config failed to wake the waiting registration")
 	}
 }

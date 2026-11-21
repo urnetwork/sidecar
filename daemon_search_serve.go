@@ -127,6 +127,11 @@ func (self *searchServeComponent) follow(ctx context.Context, dispatcher searchS
 		}
 	}()
 	for {
+		// The verified follower can finish its initial read after this generation attached.
+		var followerChanged <-chan struct{}
+		if follower := self.sidecar.ConfigFollower(); follower != nil {
+			_, followerChanged = follower.state.Get()
+		}
 		if current := self.sidecar.authority(); current != authority {
 			if removeCallback != nil {
 				removeCallback()
@@ -147,6 +152,7 @@ func (self *searchServeComponent) follow(ctx context.Context, dispatcher searchS
 		case <-ctx.Done():
 			return
 		case <-entries:
+		case <-followerChanged:
 		case <-self.sidecar.clock.After(self.sidecar.settings.Search.ServeRecheckInterval):
 		}
 	}

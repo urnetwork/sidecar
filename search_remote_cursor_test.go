@@ -189,7 +189,6 @@ func TestRemoteRepeatedPageChecksShareExpiryWithoutANewEntry(t *testing.T) {
 		Header: net.header(), RepoId: team.danaMailbox.Bytes(), Subject: team.benPhone.sidecarId.Bytes(), Expires: expires,
 	})
 	fixture := newTestSearchRemoteServer(t, team, team.danaNas)
-	fixture.clock.current = time.UnixMilli(net.timeMs)
 	fixture.corpus.serveText(team.danaMailbox, 5, testSearchRemoteDocs("mail", 300)...)
 	body := testSearchRemoteRequest(t, fixture.wire, 152, 0, "plan", team.danaMailbox)
 	if page := fixture.page(t, team.benPhone, body, 152, 0); len(page.Hits) == 0 {
