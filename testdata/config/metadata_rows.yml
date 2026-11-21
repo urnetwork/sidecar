@@ -33,6 +33,10 @@ ProjectionRows.sidecars: {number: 2, type: repeated SidecarRow, row: api-7, sees
 ProjectionRows.delegations: {number: 3, type: repeated DelegationRow, row: api-7, sees: "Delegations' signing and reader public keys, tag ids, max_admits and admissions, expiry, key drops and ends"}
 ProjectionRows.registered_keys: {number: 4, type: repeated KeyRow, row: api-7, sees: "registered presence and SSH public keys with member and purpose"}
 ProjectionRows.acl: {number: 5, type: bytes, row: api-7, sees: "their AclRows"}
+ProjectionRows.team_scopes: {number: 6, type: repeated TeamScopeRow, row: api-7, sees: "Team scope labels"}
+TeamScopeRow.label: {number: 1, type: string, row: api-7, sees: "Team scope labels"}
+TeamScopeRow.member_id: {number: 2, type: bytes, row: api-7, sees: "member or opaque tag ids"}
+TeamScopeRow.tag_atom: {number: 3, type: bytes, row: api-7, sees: "member or opaque tag ids"}
 
 MemberRow.member_id: {number: 1, type: bytes, row: api-7, sees: "members with roles"}
 MemberRow.role: {number: 2, type: MemberRole, row: api-7, sees: "members with roles"}

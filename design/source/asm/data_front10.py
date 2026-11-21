@@ -2117,3 +2117,9 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "@@OD:380@@, and a held drop's table entry (643), following @@OD:184@@; a Team scope's own mailcfg (644), "
     "extending @@OD:631@@, and a card's return after a removal (645), following @@OD:636@@; and T3's reread of "
     "admin info after a clock move (646). ")
+
+# Owner decision 141's file-mode amendment, approved 2026-11-20.
+_i = [row[0] for row in INDEX].index(141)
+_n, _title, _answer = INDEX[_i]
+INDEX[_i] = (_n, _title, _answer + " On 2026-11-20 the owner approved a signed exact-head option for file-mode "
+             "pushes. The native ACL writer uses it after a user confirms a preview.")

@@ -241,7 +241,7 @@ message EvsHeadChanged { bytes ref_id = 1; uint64 version = 2; bytes chain = 3; 
 enum EvsPushFlag {
   EVS_PUSH_FLAG_NONE = 0; EVS_PUSH_FORCE = 1; EVS_PUSH_DELETE = 2; EVS_PUSH_BASE = 4; EVS_PUSH_IMMUTABLE = 8;
   EVS_PUSH_CONSUME = 16; EVS_PUSH_PATH_EPOCH = 32; EVS_PUSH_ERASE = 64; EVS_PUSH_CLOSURE = 128;
-  EVS_PUSH_DROP = 256; EVS_PUSH_CUT = 512;
+  EVS_PUSH_DROP = 256; EVS_PUSH_CUT = 512; EVS_PUSH_EXACT_HEAD = 2048;
 }
 enum EvsLocatorKind {
   EVS_LOCATOR_KIND_UNSPECIFIED = 0; EVS_LOCATOR_SEGMENT = 1; EVS_LOCATOR_INLINE = 2;
@@ -438,6 +438,7 @@ message EvsHeadSummary {
   EvsRefMode ref_mode = 6; bytes owner_sidecar_id = 7; bytes sealed_ref_name = 8; EvsOverlay base = 9;
   AuthPin auth = 10; bytes group_id = 11; uint64 generation = 12; bytes generation_commitment = 13;
   EvsPathEpoch path_epoch = 14; uint64 index_epoch = 15; bool deleted = 16; uint64 push_sequence = 17;
+  bool supports_exact_head = 18;
 }
 message EvsReadStatement { uint64 version = 1; bytes statement = 2; }
 message EvsMerkleProof { bytes leaf = 1; uint64 index = 2; uint64 size = 3; repeated bytes path = 4; }
