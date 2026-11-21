@@ -517,16 +517,7 @@ func (self *directoryStreams) ReadErasures(ctx context.Context, repoId Id, after
 	if !moved {
 		return []*RecordStreamErasure{}, nil
 	}
-	erasures, err := self.streams().ReadErasures(ctx, repoId, afterVersion)
-	if err != nil {
-		return nil, err
-	}
-	for _, erasure := range erasures {
-		if err := self.store.NoteErasureVersion(erasure.Version); err != nil {
-			return nil, err
-		}
-	}
-	return erasures, nil
+	return self.streams().ReadErasures(ctx, repoId, afterVersion)
 }
 
 // Never fires: the directory's hints are its leases' (DirectoryClient.Lease).

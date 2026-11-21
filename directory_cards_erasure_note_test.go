@@ -14,6 +14,7 @@ package sidecar_test
 import (
 	"errors"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -233,6 +234,75 @@ func TestDirectoryModerationNoteJournalsAtTheNextSyncWhileIdle(t *testing.T) {
 		t.Fatalf("A's return after its restart carries %v, left out %v", versions, returned.Moderated)
 	}
 	restarted.Runs().Close()
+}
+
+// Fails only the ordinary store write of the private card journal. The erasure position can still be written.
+type testDirectoryModerationJournalStore struct {
+	sidecar.SidecarStore
+	refuse atomic.Bool
+}
+
+// Opens the requested document, reporting a local store failure while the card journal is unavailable.
+func (self *testDirectoryModerationJournalStore) Create(name string) (sidecar.SidecarStoreWriter, error) {
+	if name == "card" && self.refuse.Load() {
+		return nil, sidecartest.ErrFakeStoreWriteFailed
+	}
+	return self.SidecarStore.Create(name)
+}
+
+// A failed journal write leaves the erasure unread on disk. A fresh client recovers the note from the same signed
+// ref when the store is writable again, even though the current CUT has already dropped its listing.
+func TestDirectoryModerationJournalFailureRetriesAfterRestart(t *testing.T) {
+	world := newTestDirectoryWorld(t, nil)
+	memberId := sidecar.NewId()
+	writer := world.memberWriter(memberId)
+	world.publish()
+	device := world.device(writer)
+	store := &testDirectoryModerationJournalStore{SidecarStore: device.store}
+	device.store = store
+	device.client = world.restartClient(device)
+	now := world.clock.Now().UnixMilli()
+	erasedId, keptId := sidecar.NewId(), sidecar.NewId()
+	erased := testRunItem(writer.sidecarId, &memberId, erasedId, 1, now)
+	kept := testRunItem(writer.sidecarId, &memberId, keptId, 1, now)
+	device.writeCard(t, erased, kept)
+	erasureId := world.moderateCard(writer.sidecarId, erasedId, 1, true)
+	world.cards.DropErased(world.directoryId, world.readerId, testAnnouncementDocumentName(&writer.sidecarId, erasedId))
+	position := func() uint64 {
+		t.Helper()
+		persisted := sidecar.NewDirectoryStore(store)
+		if err := persisted.Load(world.directoryId); err != nil {
+			t.Fatal(err)
+		}
+		return persisted.State().ErasureVersion
+	}
+
+	store.refuse.Store(true)
+	for range 2 {
+		if err := device.client.Sync(t.Context()); !errors.Is(err, sidecartest.ErrFakeStoreWriteFailed) {
+			t.Fatalf("sync while the card journal is unavailable: %v", err)
+		}
+	}
+	if got := position(); got != 0 {
+		t.Fatalf("saved erasure position %d before its journal", got)
+	}
+
+	store.refuse.Store(false)
+	restarted := world.restartClient(device)
+	defer restarted.Runs().Close()
+	if journal := testCardJournal(t, restarted); !testJournalNoted(journal, erasedId, erasureId) {
+		t.Fatalf("journal after restart: %+v", journal)
+	}
+	if position() == 0 {
+		t.Fatal("erasure position did not advance after the journal was saved")
+	}
+	returned, err := restarted.WriteCard(t.Context(), &sidecar.DirectoryCardWriteArgs{Items: []*protocol.Announcement{erased, kept}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if versions := testCardWrittenVersions(returned); len(versions) != 1 || versions[keptId] != 3 || !slices.Equal(returned.Moderated, []sidecar.Id{erasedId}) {
+		t.Fatalf("recovered card versions %v and moderated items %v", versions, returned.Moderated)
+	}
 }
 
 // A daemon off past several erasures still leaves its moderated run out (QD-1148): while A's daemon is stopped, a
