@@ -26,10 +26,11 @@
 // collected or dropped versions (M10's) refuse.
 //
 // A file-mode version whose key a committed ERASE destroyed exports as its stub and the export goes on (§11.12's
-// retention row; evs_export_file.go, evs_export_format2.go). A git-mode version's blob so erased still ends the export
-// with ErrEvsErased, as it ends the local tier's sync, which shares applyUpdate: a stub there is another blob, so its
-// tree and commit, and every commit after them, would leave the original oids D-EVS-22 keeps. Question
-// erased-version-readers-git-mode-erased-blob holds which way export goes; until it is answered export fails closed.
+// retention row; evs_export_file.go, evs_export_format2.go). A git-mode version's blob so erased exports as that stub
+// too, and the trees, commits and tags holding it, and every commit of the ref after them, are rewritten under new
+// oids, each rewritten commit's note naming its original (QD-1156, question
+// erased-version-readers-git-mode-erased-blob, option 1; evs_export_erased.go): the oids D-EVS-22 keeps hold up to the
+// first erased commit. The local tier's sync, which shares applyUpdate, still meets such a blob as ErrEvsErased.
 //
 // Refs are named by the names the caller holds: nil exports main. A source a push names is replayed for its objects
 // whether or not the caller named it, and a cycle of sources refuses the version that closes it.
@@ -43,6 +44,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -69,6 +71,8 @@ func (self *EvsRepo) Export(ctx context.Context, args *EvsExportArgs) (*EvsExpor
 		refNames = [][]byte{EvsMainRefName}
 	}
 	export := newEvsGitExport(self, writer)
+	// the originals a rewrite over an erased blob kept beside the repository go with the export, whatever its end
+	defer export.store.close()
 	result := &EvsExportResult{}
 	notes := []*evsExportNote{}
 	for _, refName := range refNames {
@@ -199,6 +203,9 @@ type evsGitExport struct {
 	repo *EvsRepo
 	// export's repository, for its refs and notes; nil in the local tier
 	writer *evsGitObjectWriter
+	// export's store over it, objects too, which stubs an erased blob and rewrites what holds it (evs_export_erased.go,
+	// QD-1156); nil in the local tier, whose replay meets an erased blob as ErrEvsErased
+	store *evsGitExportStore
 	// where objects are read and written
 	objects evsGitReplayStore
 	builder *EvsGitTreeBuilder
@@ -235,6 +242,8 @@ type evsGitExportRef struct {
 	stoppedAt uint64
 	refused   []*EvsExportRefusal
 	notes     []*evsExportNote
+	// the commits its pushes carried that export rewrote over an erased blob (evs_export_erased.go)
+	rewritten uint64
 	// each applied version that moved the tip, in order, and each span of versions a refusal stopped, from the
 	// refused version to the DELETE that ended it (0 while it stands): what a source naming a version reads
 	tips    []evsGitExportTip
@@ -325,10 +334,12 @@ func (self *evsGitExport) finish(ctx context.Context, ref *evsGitExportRef) erro
 	return nil
 }
 
-// An export's replays into writer's repository, its tree cache bounded by the client's TreeCacheByteCount.
+// An export's replays into writer's repository through its store (evs_export_erased.go), its tree cache bounded by
+// the client's TreeCacheByteCount.
 func newEvsGitExport(repo *EvsRepo, writer *evsGitObjectWriter) *evsGitExport {
-	export := newEvsGitReplayer(repo, writer)
-	export.writer = writer
+	store := newEvsGitExportStore(writer)
+	export := newEvsGitReplayer(repo, store)
+	export.writer, export.store = writer, store
 	return export
 }
 
@@ -371,12 +382,14 @@ func (self *evsGitExport) exportGitRef(ctx context.Context, head *EvsVerifiedHea
 	if ref.tip == nil && len(ref.refused) == 0 {
 		return nil, ref.notes, nil
 	}
-	exported := &EvsExportedRef{GitRef: gitRef, Versions: ref.head.Version, Refused: ref.refused}
+	exported := &EvsExportedRef{GitRef: gitRef, Versions: ref.head.Version, Refused: ref.refused, Rewritten: ref.rewritten}
 	if ref.tip != nil {
-		if err := self.writer.setRef(gitRef, *ref.tip); err != nil {
+		// the repository's oid for the tip: its rewrite's, where a blob under it was erased
+		tip := self.store.exported(*ref.tip)
+		if err := self.writer.setRef(gitRef, tip); err != nil {
 			return nil, nil, err
 		}
-		exported.Tip = *ref.tip
+		exported.Tip = tip
 	}
 	return exported, ref.notes, nil
 }
@@ -565,7 +578,23 @@ func (self *evsGitExport) apply(ctx context.Context, ref *evsGitExportRef, state
 		// the name its creating push sealed, which the check held to the ref's id
 		ref.name = metadata.GetRefName()
 	}
-	ref.notes = append(ref.notes, &evsExportNote{commit: *checked.Peeled, statement: statement})
+	note := &evsExportNote{commit: *checked.Peeled, statement: statement}
+	if self.store != nil {
+		// a rewrite over an erased blob (evs_export_erased.go): the note goes on the commit the repository holds, with
+		// this push's stubs, and each commit it rewrote names its original, one before the tip in a note of its own
+		lines, rewritten := self.store.takePush()
+		note.commit, note.lines = self.store.exported(*checked.Peeled), lines
+		for _, commit := range rewritten {
+			line := "rewritten " + hex.EncodeToString(commit.original[:])
+			if commit.original == *checked.Peeled {
+				note.lines = append([]string{line}, note.lines...)
+				continue
+			}
+			ref.notes = append(ref.notes, &evsExportNote{commit: commit.rewritten, statement: statement, lines: []string{line}})
+		}
+		ref.rewritten += uint64(len(rewritten))
+	}
+	ref.notes = append(ref.notes, note)
 	return nil
 }
 
@@ -642,15 +671,23 @@ func (self *evsGitExport) sourceTip(ctx context.Context, source *protocol.EvsOve
 }
 
 // An UPDATE's objects, its sources replayed by the check: its blobs, its tags, then each commit's tree rebuilt and the
-// commit written. It answers each file entry's sealed mode and oid by its change's token path key.
+// commit written. It answers each file entry's sealed mode and oid by its change's token path key. Under export's
+// store a blob a committed ERASE destroyed is its stub, and what holds it is rewritten, the tags after the commits
+// they may name (evs_export_erased.go); the local tier's replay, with no store, meets it as ErrEvsErased.
 func (self *evsGitExport) applyUpdate(ctx context.Context, head *EvsVerifiedHead, statement *EvsVerifiedStatement, payload *EvsCheckedPayload, metadata *protocol.EvsSealedMetadata, checked *EvsGitCheckedUpdate) (map[string]*evsGitWrittenFile, error) {
 	git := metadata.GetGit()
+	if self.store != nil {
+		self.store.beginPush()
+	}
 	written := map[string]*evsGitWrittenFile{}
 	for _, change := range payload.Changes {
 		if !change.WritesEntry() {
 			continue
 		}
 		file, err := self.repo.exportBlob(ctx, self.objects, head, self.keys, statement, change, "")
+		if errors.Is(err, ErrEvsErased) && self.store != nil {
+			file, err = self.erasedBlob(ctx, head, statement, change)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -661,9 +698,11 @@ func (self *evsGitExport) applyUpdate(ctx context.Context, head *EvsVerifiedHead
 	if err := self.historyBlobs(ctx, head, statement, git); err != nil {
 		return nil, err
 	}
-	for i, tag := range checked.Tags {
-		if oid, err := self.objects.WriteGitObject(evsGitTagKind, tag); err != nil || oid != checked.TagOids[i] {
-			return nil, errors.Join(err, fmt.Errorf("%w: a tag that is not its oid", ErrEvsGitUpdateRefused))
+	if self.store == nil {
+		for i, tag := range checked.Tags {
+			if oid, err := self.objects.WriteGitObject(evsGitTagKind, tag); err != nil || oid != checked.TagOids[i] {
+				return nil, errors.Join(err, fmt.Errorf("%w: a tag that is not its oid", ErrEvsGitUpdateRefused))
+			}
 		}
 	}
 	for _, commit := range checked.Commits {
@@ -695,11 +734,57 @@ func (self *evsGitExport) applyUpdate(ctx context.Context, head *EvsVerifiedHead
 			self.repo.client.alarm(self.repo.repoId, head.RefId, SidecarEvsAlarmTamper, "", nil)
 			return nil, fmt.Errorf("%w: a commit's tree does not rebuild from its changes", ErrEvsGitUpdateRefused)
 		}
+		if self.store != nil {
+			if err := self.store.commit(commit); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		if _, err := self.objects.WriteGitObject(evsGitCommitKind, commit.Sealed.GetObject()); err != nil {
 			return nil, err
 		}
 	}
+	if self.store != nil {
+		// innermost first, so a tag of a rewritten tag is rewritten too
+		for i := len(checked.Tags) - 1; 0 <= i; i -= 1 {
+			if oid, err := self.store.tag(checked.Tags[i]); err != nil || oid != checked.TagOids[i] {
+				return nil, errors.Join(err, fmt.Errorf("%w: a tag that is not its oid", ErrEvsGitUpdateRefused))
+			}
+		}
+	}
 	return written, nil
+}
+
+// Export's reading of a git-mode version's blob a committed ERASE destroyed (evs_export_erased.go): its stub in the
+// repository, and the file as its sealed fields state it, so the replay goes on in the original oids. A gitlink holds
+// no key to erase, and sealed fields that do not open alarm tamper, as reconstruction's do.
+func (self *evsGitExport) erasedBlob(ctx context.Context, head *EvsVerifiedHead, statement *EvsVerifiedStatement, change *EvsCheckedChange) (*evsGitWrittenFile, error) {
+	entry := &protocol.EvsEntryVersion{}
+	if err := proto.Unmarshal(change.EntryVersion, entry); err != nil {
+		return nil, fmt.Errorf("%w: an entry that does not parse", ErrEvsEntryRefused)
+	}
+	manifest, err := self.keys.manifest(ctx, statement.Statement.Push.GetGeneration())
+	if err != nil {
+		return nil, err
+	}
+	var fields *protocol.EvsSealedFields
+	if entry.GetVersioning() == 0 {
+		fields, err = EvsOpenFields(manifest, entry.GetSealedFields())
+	} else {
+		fields, err = EvsOpenFieldsFormat2(manifest, entry.GetSealedFields(), entry.GetVersioning())
+	}
+	if err != nil {
+		self.repo.client.alarm(self.repo.repoId, head.RefId, SidecarEvsAlarmTamper, "", nil)
+		return nil, err
+	}
+	if len(fields.GetGitOid()) != len(EvsGitOid{}) || fields.GetMode() == EvsGitModeGitlink {
+		return nil, fmt.Errorf("%w: an erased git-mode file of no blob", ErrEvsErased)
+	}
+	oid := EvsGitOid(fields.GetGitOid())
+	if _, err := self.store.erase(change, oid); err != nil {
+		return nil, err
+	}
+	return &evsGitWrittenFile{mode: fields.GetMode(), oid: oid}, nil
 }
 
 // A source a push names, replayed to the version it names, whose tip there must exist: a source with no such version,
