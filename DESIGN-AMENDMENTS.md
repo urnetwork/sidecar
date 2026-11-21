@@ -6,11 +6,11 @@ Every design decision made since DESIGN.md was last rebuilt and not yet folded i
 
 **Folding.** Only a design-records track edits `design/source/` and rebuilds DESIGN.md with `design/source/build.sh`. Each design-records track takes one DESIGN.md section, applies its items below (and the matching "Proposed DESIGN.md text" of DESIGN-DETAILS.md), and in the same commit deletes those items from this file. When this file holds no items it is deleted. Owner decisions that change behavior go into `design/source/owner/DECISIONS.md` as numbered owner decisions, after decision 197, as decision 197 was.
 
-Generated from the ledger on 2026-11-10, it holds no item under a DESIGN.md section now: the last were folded on 2026-11-18 by track dr4-outside-docs, their parts in RECORD.md, the review ledger, pitch5.html and HANDOFF.md with them. "Later decisions", below, holds two items, each waiting on something outside the design-records tracks' reach: QD-024 on the owner's copy of cli/UI.md, and QD-1086 on KEYS's review-phase rework, which DESIGN-DEFER.md's keys-mls entry lists under Held. The draft's final design sweep, track dr9-final-sweep, folded on 2026-11-21 what the late sweeps had left in HANDOFF.md (QD-1083) and in smtpproof/SPEC.md section 3 (QD-1129 with QD-1154), and their items left; the late sweeps before it, tracks dr6-late-sweep to dr8-late-sweep, folded owner decisions 617 to 670, the final sweep owner decisions 671 to 674, the late fold after it, track dr10-late-fold, owner decision 675 (QD-1160), and a second late fold, track dr11-late-fold, owner decision 676 (QD-1161), none of them leaving a part here. QD-597 (owner decision 197) is already folded, and QD-336 went into §4.5 with owner decision 251 (QD-841 to QD-843), which DESIGN.md carries directly.
+Generated from the ledger on 2026-11-10, it holds no item under a DESIGN.md section now: the last were folded on 2026-11-18 by track dr4-outside-docs, their parts in RECORD.md, the review ledger, pitch5.html and HANDOFF.md with them. "Later decisions", below, holds three items, each waiting on something outside the design-records tracks' reach: QD-024 on the owner's copy of cli/UI.md, QD-1086 on KEYS's review-phase rework, which DESIGN-DEFER.md's keys-mls entry lists under Held, and QD-1163's signed field on config.proto, which fix track review-acl-open-questions builds. The draft's final design sweep, track dr9-final-sweep, folded on 2026-11-21 what the late sweeps had left in HANDOFF.md (QD-1083) and in smtpproof/SPEC.md section 3 (QD-1129 with QD-1154), and their items left; the late sweeps before it, tracks dr6-late-sweep to dr8-late-sweep, folded owner decisions 617 to 670, the final sweep owner decisions 671 to 674, the late fold after it, track dr10-late-fold, owner decision 675 (QD-1160), and a second late fold, track dr11-late-fold, owner decision 676 (QD-1161), none of them leaving a part here; a third late fold, track dr12-late-fold, folded owner decisions 677 to 682 (QD-1162 to QD-1167), the four questions the review's fix tracks left open and two the build raised while it ran, and left only QD-1163's fence below. QD-597 (owner decision 197) is already folded, and QD-336 went into §4.5 with owner decision 251 (QD-841 to QD-843), which DESIGN.md carries directly.
 
 ## Index
 
-No section holds an item. "Later decisions" holds QD-024 (§4) and QD-1086 (§22).
+No section holds an item. "Later decisions" holds QD-024 (§4), QD-1163 (§7) and QD-1086 (§22).
 
 ## DESIGN-DETAILS.md sections to fold
 
@@ -61,6 +61,17 @@ Not folded (2026-11-19, track dr7-late-sweep): sidecar/design/UI.md is still abs
 Not folded (2026-11-20, track dr8-late-sweep): sidecar/design/UI.md is still absent, and the copy is the owner's step.
 
 Not folded (2026-11-21, track dr9-final-sweep): sidecar/design/UI.md is still absent; the copy is the owner's step at the review handoff, and HANDOFF section 2's line waits with it.
+
+### QD-1163: Which signed config record declares a Team scope and who may create, retire, or reassign its label?
+*Decided by the owner on 2026-11-21, asked one question at a time; owner decision 678. Folds into §7 Networks, teams, members, enrollment, and SSO.*
+
+The fold's wire part, which waits on the code: the new signed field of the config head's `ServiceSettings` that carries a Team scope's label and either its member or its tag (`TeamScopeRow`'s shape), with its number in §7.9's `ServiceSettings` fence and, should the code give the declarations a file of their own, its line in §7.9's Paths list. The rest is folded (2026-11-21, track dr12-late-fold): owner decision 678 in §7.9's Settings fields, §8.8's Team scopes, §8.19's Later row, §12.5's validation and §13.8's identifier set, with DESIGN-DEFER.md's acl-team-scope-reassignment entry for the reassignment's consent rule; the fence carries a comment naming the decision.
+
+Changes: §7.9's `ServiceSettings` fence, and its Paths list if a file is added, with the field's `testFenceAdditions` entry in protocol/design_unfenced_test.go leaving in the same commit (QD-684).
+
+Questions: `review-fix-acl-team-scope-declarations.md`.
+
+Not folded (2026-11-21, track dr12-late-fold): config.proto does not declare the field yet. Fix track review-acl-open-questions builds it, and a fence never runs ahead of the code.
 
 ### QD-1086: How should M2's gate show FS-15, FS-20, FS-24 and FS-104, whose MLS legs owner decision 610 took off the gates?
 *Decided by the owner on 2026-11-18, asked one question at a time; owner decision 627. Folds into §22 Testing and verification.*
