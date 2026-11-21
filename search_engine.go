@@ -215,6 +215,25 @@ func (self *SearchEngine) open(ctx context.Context, session Id, request *SearchR
 		excluded: excluded, joinAsk: searchJoinAskOf(&kept), more: newSearchEngineMore(), lifetime: lifetime,
 		endLifetime: endLifetime,
 	}
+	visible := make(map[Id]bool, len(scoped)+len(excluded))
+	for _, ref := range scoped {
+		visible[ref.repo.RepoId] = true
+	}
+	for _, row := range excluded {
+		visible[row.RepoId] = true
+	}
+	for _, repo := range repos {
+		if repo == nil || !visible[repo.RepoId] {
+			continue
+		}
+		id := repo.RepoId
+		if repo.valid != nil {
+			stream.validScope = append(stream.validScope, repo.valid)
+		}
+		if allow := kept.allowRepo; allow != nil {
+			stream.validScope = append(stream.validScope, func() bool { return allow(id) })
+		}
+	}
 	if err := stream.open(ctx, scoped); err != nil {
 		stream.Close()
 		return nil, "", err
@@ -261,6 +280,9 @@ func (self *SearchEngine) EndSession(session Id) {
 func (self *SearchEngine) RunBackgroundSync(ctx context.Context) error {
 	if self.background == nil {
 		return ErrSidecarSearchUnavailable
+	}
+	if _, err := self.args.Scope.Repos(ctx); err != nil {
+		return err
 	}
 	return self.background.RunBackgroundSync(ctx)
 }
@@ -440,17 +462,10 @@ func (self *searchEngineStream) open(ctx context.Context, scoped []*searchScoped
 	tables := indexLinkedTables()
 	nowMs := engine.clock.Now().UnixMilli()
 	planScope := map[SearchScope]searchPlanScope{SearchCached: searchPlanCached, SearchLatest: searchPlanLatest, SearchAll: searchPlanAll}[self.request.Scope]
-	var previous *SearchScopeRepo
 	for _, entry := range scoped {
 		repoId, refId := entry.repo.RepoId, entry.ref.RefId
-		if previous != entry.repo {
-			if entry.repo.valid != nil {
-				self.validScope = append(self.validScope, entry.repo.valid)
-			}
-			if allow := self.request.allowRepo; allow != nil {
-				self.validScope = append(self.validScope, func() bool { return allow(repoId) })
-			}
-			previous = entry.repo
+		if entry.ref.valid != nil {
+			self.validScope = append(self.validScope, entry.ref.valid)
 		}
 		name := entry.ref.Name
 		if name == "" && !entry.ref.Default && len(entry.repo.Refs) != 0 && entry.repo.Refs[0] != entry.ref {

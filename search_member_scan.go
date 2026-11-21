@@ -72,6 +72,9 @@ func (self *memberSearchSource) scan(ctx context.Context, repo, ref Id) (*Search
 			return
 		}
 		for _, row := range held.reads {
+			if indexExcluded(indexPlace{repoKind: protocol.RepoKind_REPO_KIND_GENERAL, path: row.Path}) {
+				continue
+			}
 			observed := row.search
 			if row.RefId != ref || observed == nil || observed.Head != pin.Version || observed.Chain != pin.Chain || (ruleSet && !bytes.Equal(observed.AuthChain, state.Pin().GetChain())) {
 				continue

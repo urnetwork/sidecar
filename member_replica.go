@@ -204,11 +204,12 @@ func (self *MemberReplica) open() error {
 	}
 	running.BindEvsFormat2(self.evs)
 	self.evs.EnablePrefixRules(running.EvsPrefixRulesArgs())
-	running.BindMemberSearch(self.ctx, func() (*EvsClient, *GkmGroupClient, error) {
-		if self.Evs() == nil {
-			return nil, nil, ErrSidecarSearchUnavailable
+	running.BindMemberSearch(self.ctx, func() (*EvsClient, error) {
+		evs := self.Evs()
+		if evs == nil {
+			return nil, ErrSidecarSearchUnavailable
 		}
-		return self.evs, group, nil
+		return evs, nil
 	})
 	if err := running.BindSearchWrites(self.evs); err != nil {
 		return err
