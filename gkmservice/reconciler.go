@@ -1447,8 +1447,26 @@ func gkmNewestFormGroup(ctx context.Context, cluster sidecar.BlobCluster, repoId
 	return forms[len(forms)-1].GroupId, true, nil
 }
 
+// RepoAckKeys returns the Redis acknowledgment hash for each group whose
+// stored GroupForm names repoId, including groups preceding a re-form.
+func RepoAckKeys(ctx context.Context, cluster sidecar.BlobCluster, repoId sidecar.Id) ([]string, error) {
+	forms, err := readRepoForms(ctx, cluster, repoId, DefaultGkmServiceSettings(), false)
+	if err != nil {
+		return nil, err
+	}
+	keys := make([]string, 0, len(forms))
+	for _, form := range forms {
+		keys = append(keys, GkmAckRedisKey(form.GroupId))
+	}
+	return keys, nil
+}
+
 // A repo's GroupForms, oldest first, with no cache.
 func gkmReadForms(ctx context.Context, cluster sidecar.BlobCluster, repoId sidecar.Id, settings *GkmServiceSettings) ([]*gkmForm, error) {
+	return readRepoForms(ctx, cluster, repoId, settings, true)
+}
+
+func readRepoForms(ctx context.Context, cluster sidecar.BlobCluster, repoId sidecar.Id, settings *GkmServiceSettings, skipGone bool) ([]*gkmForm, error) {
 	prefix := GkmFormPrefix(repoId)
 	infos, err := listGkmKeys(ctx, cluster, prefix, settings.ListPageCount, settings.FormMaxCount)
 	if err != nil {
@@ -1461,7 +1479,7 @@ func gkmReadForms(ctx context.Context, cluster sidecar.BlobCluster, repoId sidec
 			return nil, errors.Join(errGkmStoreFault, errors.New("a GroupForm key out of form"))
 		}
 		objectBytes, _, err := readGkmObject(ctx, cluster, info.Key, settings.ObjectMaxByteCount)
-		if errors.Is(err, sidecar.ErrBlobNotFound) {
+		if skipGone && errors.Is(err, sidecar.ErrBlobNotFound) {
 			continue
 		}
 		if err != nil {
