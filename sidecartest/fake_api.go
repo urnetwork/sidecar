@@ -34,6 +34,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/urnetwork/connect"
 	"github.com/urnetwork/sidecar"
 )
 
@@ -256,6 +257,18 @@ func (self *Net) AddApi(settings *FakeApiSettings) (*FakeApi, error) {
 		return nil, err
 	}
 	api := newFakeApi(self.ctx, self.clock, self.faults, self.barriers, cluster, self.fakes.Authenticator, settings)
+	api.mux.HandleFunc("GET /sidecar/limits", api.counted("GET /sidecar/limits", func(w http.ResponseWriter, request *http.Request) {
+		client, _ := api.requireClient(w, request)
+		if client == nil {
+			return
+		}
+		limits, err := self.Host().Quota.Limits(request.Context(), connect.Id(client.networkId))
+		if err != nil {
+			http.Error(w, "limits unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		fakeApiWriteJson(w, http.StatusOK, limits)
+	}))
 	api.secretSink = self.capture.AddSecret
 	// §6.8's sync routes from the Net's hint state (fake_api_sync.go)
 	api.sync.push = self.push

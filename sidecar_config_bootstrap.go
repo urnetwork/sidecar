@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sync/atomic"
 	"time"
 
@@ -29,6 +30,8 @@ type sidecarFirstConfigDraft struct {
 	OwnerMemberId Id
 	SidecarId     Id
 	TimeMillis    int64
+	Team          bool              `json:",omitempty"`
+	PolicyFiles   map[string][]byte `json:",omitempty"`
 	Chain         [sha256.Size]byte
 	SignedPush    []byte
 	Payload       []byte
@@ -80,14 +83,17 @@ func (self *SidecarConfigFollower) firstOwnerGenesis(ctx context.Context, networ
 		}
 		claims := parseSidecarJwt(running.sidecarApi.currentByJwt())
 		member := claims.stringClaim("member_id")
-		if member == "" {
+		// Only a Team credential carries a member_id. The API authenticates this same
+		// device and verifies its owner's membership before accepting its Genesis.
+		team := member != ""
+		if !team {
 			member = claims.stringClaim("user_id")
 		}
 		memberId, err := ParseId(member)
 		if err != nil || memberId == (Id{}) {
 			return nil, errors.New("no owner membership is available for the first configuration")
 		}
-		draft = &sidecarFirstConfigDraft{RepoId: NewEvsRepoId(), OwnerMemberId: memberId,
+		draft = &sidecarFirstConfigDraft{RepoId: NewEvsRepoId(), OwnerMemberId: memberId, Team: team,
 			SidecarId: identity.SidecarId, TimeMillis: self.clock.Now().UnixMilli()}
 		if err := draft.keep(secrets); err != nil {
 			return nil, err
@@ -126,6 +132,28 @@ func (self *SidecarConfigFollower) firstOwnerGenesis(ctx context.Context, networ
 		},
 		Publisher: running.sidecarApi, Projection: running.sidecarApi,
 		First: &ConfigFirstHead{
+			Initialize: func(ctx context.Context, genesis *ConfigState, head *ConfigHead) (*ConfigHead, error) {
+				if !draft.Team {
+					return head, nil
+				}
+				if len(draft.SignedPush) != 0 {
+					// Its randomized atom and rule ids are already in the signed push.
+					return restoreFirstAclFiles(head, draft.PolicyFiles)
+				}
+				quota, err := running.sidecarApi.Limits(ctx)
+				if err != nil {
+					return nil, err
+				}
+				plan, err := planFirstTeamAcl(ctx, genesis, head, quota, self.clock.Now())
+				if err != nil {
+					return nil, err
+				}
+				draft.PolicyFiles = make(map[string][]byte, len(aclSaveHeadPaths))
+				for _, path := range aclSaveHeadPaths {
+					draft.PolicyFiles[path] = plan.Head.File(path)
+				}
+				return plan.Head, nil
+			},
 			Draft: func(ctx context.Context, genesis *ConfigState) (*EvsRepoKey, error) {
 				// The tentative state serves only to draft the candidate's local config group.
 				if joiner, ok := gkm.(GkmConfigJoiner); ok {
@@ -166,4 +194,40 @@ func (self *SidecarConfigFollower) firstOwnerGenesis(ctx context.Context, networ
 		}
 	}
 	return result.SignedGenesis, secrets.Delete(sidecarFirstConfigDraftName)
+}
+
+// A retry of the exact already-sealed Team head. Empty table files are significant.
+func restoreFirstAclFiles(head *ConfigHead, files map[string][]byte) (*ConfigHead, error) {
+	restored := head.Files()
+	for _, path := range aclSaveHeadPaths {
+		contents, found := files[path]
+		if !found {
+			return nil, ErrSidecarStoreFailed
+		}
+		if contents != nil {
+			restored[path] = contents
+		} else {
+			delete(restored, path)
+		}
+	}
+	return NewConfigHead(restored)
+}
+
+// The Owner's Team creation includes the fixed starter. Its request rule and grants must
+// fit the network's effective limits, and its policy tests must pass before the first signature.
+func planFirstTeamAcl(ctx context.Context, state *ConfigState, head *ConfigHead, quota *QuotaLimits, now time.Time) (*AclSavePlan, error) {
+	requests := 0
+	if quotaLocalLimit(quota, "acl_requests") != 0 {
+		requests = -1
+	}
+	rules := min(quotaLocalLimit(quota, "acl_rules"), int64(math.MaxInt))
+	limits := &AclLimits{Rules: int(rules), Requests: requests}
+	plan, err := PlanAclSave(ctx, &AclSaveInput{Policy: AclTeamStartDocument(), Head: head, State: state, Limits: limits, Now: now})
+	if err != nil {
+		return nil, err
+	}
+	if err := plan.Tests.Err(); err != nil {
+		return nil, err
+	}
+	return plan, nil
 }

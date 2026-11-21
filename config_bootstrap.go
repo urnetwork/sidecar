@@ -82,6 +82,9 @@ type ConfigBootstrapArgs struct {
 // The network's first config head on evs (QD-824): its push is signed before base 1, which names it, under the
 // generation pin of a config group that KF1 forms only after base 1.
 type ConfigFirstHead struct {
+	// Adds the first Owner's starting policy before base 1 is signed. A retry must return the
+	// same files once Prepare has retained a signed push. Nil keeps the supplied files.
+	Initialize func(context.Context, *ConfigState, *ConfigHead) (*ConfigHead, error)
 	// KF1's bootstrap draft: the config group's id and RK_1, drawn and kept before base 1, so a retry seals under the
 	// same (GkmGroupClient.DraftGroup). Answers generation 1's key as the draft holds it. genesis is the genesis state,
 	// S(0), the only state before base 1, which a host's key client takes to choose its leaf; the draft reads none.
@@ -158,6 +161,15 @@ func BootstrapNetwork(ctx context.Context, args *ConfigBootstrapArgs) (*ConfigBo
 		genesisLog, err := NewConfigLog(DefaultConfigLogSettings(), signedGenesis)
 		if err != nil {
 			return nil, err
+		}
+		if initialize := args.First.Initialize; initialize != nil {
+			head, err = initialize(ctx, genesisLog.State(), head)
+			if err != nil {
+				return nil, fmt.Errorf("config bootstrap: the starting policy: %w", err)
+			}
+			if head == nil || !bytes.Equal(head.File(ConfigHeadGenesisPath), signedGenesis) {
+				return nil, errors.New("config bootstrap: the starting policy did not preserve Genesis")
+			}
 		}
 		key, err := args.First.Draft(ctx, genesisLog.State())
 		if err != nil {

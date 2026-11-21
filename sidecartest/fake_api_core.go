@@ -112,8 +112,9 @@ type fakeApiClientBinding struct {
 
 // The core routes' state on FakeApi, under its stateLock.
 type fakeApiCoreState struct {
-	// Personal network owners, when a fixture exercises the owner's own CLI enrollment.
-	ownerUserIds map[sidecar.Id]sidecar.Id
+	// The owner's user and, only in a Team, that user's separate membership id.
+	ownerUserIds  map[sidecar.Id]sidecar.Id
+	teamMemberIds map[sidecar.Id]sidecar.Id
 	// signs the tokens this api mints
 	tokenKey   []byte
 	authKeys   map[string]*fakeApiAuthKey
@@ -169,6 +170,7 @@ func newFakeApiCoreState() fakeApiCoreState {
 		routeCounts:             map[string]int{},
 		newestTokens:            map[sidecar.Id]fakeApiTokenTimes{},
 		ownerUserIds:            map[sidecar.Id]sidecar.Id{},
+		teamMemberIds:           map[sidecar.Id]sidecar.Id{},
 		clientTokens:            map[sidecar.Id][]string{},
 	}
 }
@@ -208,6 +210,15 @@ func (self *FakeApi) SetPersonalOwner(networkId sidecar.Id, userId sidecar.Id) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.core.ownerUserIds[networkId] = userId
+	delete(self.core.teamMemberIds, networkId)
+}
+
+// Issues the first Team owner's credential with both its account and membership claims.
+func (self *FakeApi) SetTeamOwner(networkId sidecar.Id, userId sidecar.Id, memberId sidecar.Id) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.core.ownerUserIds[networkId] = userId
+	self.core.teamMemberIds[networkId] = memberId
 }
 
 // Mints client's token, as server signs a by_jwt: client_id, device_id, session_id, network_id, create_time,
@@ -230,9 +241,13 @@ func (self *FakeApi) mintClientToken(client *fakeApiClient) string {
 	}
 	self.stateLock.Lock()
 	ownerId := self.core.ownerUserIds[minted.networkId]
+	memberId := self.core.teamMemberIds[minted.networkId]
 	self.stateLock.Unlock()
 	if ownerId != (sidecar.Id{}) {
 		claims["user_id"] = ownerId.String()
+	}
+	if memberId != (sidecar.Id{}) {
+		claims["member_id"] = memberId.String()
 	}
 	if minted.strictExp {
 		claims["strict_exp"] = true
