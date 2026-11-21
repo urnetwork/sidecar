@@ -317,6 +317,7 @@ func (self *urDaemonNetwork) enroll(ctx context.Context, credential *sidecar.Sid
 		self.further = nil
 		self.stateLock.Unlock()
 	}
+	startUrHostedMail(target)
 	// the keychain's, which the enrollment wrote: Status names it only once the run loop has moved to it
 	return target.BoundGeneration(), nil
 }
@@ -352,6 +353,7 @@ func (self *urDaemonNetwork) PairChild(ctx context.Context, childJwt string) (*s
 		self.further = nil
 		self.stateLock.Unlock()
 	}
+	startUrHostedMail(target)
 	return &sidecar.DaemonPairReply{NetworkId: networkId, Generation: target.BoundGeneration()}, nil
 }
 
@@ -600,6 +602,12 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 	if urlsErr == nil {
 		// a proxy ur cannot use runs no Sidecar, rather than a direct one
 		urlsErr = applyUrHttpsProxy(cli.getenv, settings)
+	}
+
+	if !ephemeral && urlsErr == nil {
+		if hosts, err := sidecar.SidecarHostListV1(); err == nil {
+			settings.Connect.SmtpProver = newSmtpProver(filepath.Join(stateDirectory, "smtp-proof"), hosts.SmtpProofKeysUrl())
+		}
 	}
 
 	var keyStore sidecar.SidecarKeyStore

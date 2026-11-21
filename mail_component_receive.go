@@ -52,6 +52,8 @@ func newMailSidecarReceiverFactory(sidecar *Sidecar) mailReceiverFactory {
 		}
 		root := args.Root
 		config := args.Config
+		validator := NewDnsWatchStrictValidator(dohCache, nil, nil)
+		platformZones := DefaultDnsWatchSettings().UrnetworkZones
 		strict := NewMailStrictPolicy(&MailStrictPolicyArgs{
 			Strict: func() bool {
 				state, err := sidecar.configState()
@@ -63,8 +65,10 @@ func newMailSidecarReceiverFactory(sidecar *Sidecar) mailReceiverFactory {
 			},
 			Root: func() string { return root },
 			Chain: func(ctx context.Context, sniHost string, recipientDomains []string, spkiSha256 []byte) bool {
-				watch := sidecar.mailDnsWatch()
-				return watch != nil && watch.StrictChain(ctx, sniHost, recipientDomains, spkiSha256)
+				if watch := sidecar.mailDnsWatch(); watch != nil && watch.strict != nil {
+					return watch.StrictChain(ctx, sniHost, recipientDomains, spkiSha256)
+				}
+				return dnsWatchStrictChain(ctx, validator, platformZones, root, args.Clock, sniHost, recipientDomains, spkiSha256)
 			},
 		})
 		sessions, err := NewMailSessionServer(&MailSessionArgs{
