@@ -477,6 +477,9 @@ func (self *EvsRepo) reconstructContent(ctx context.Context, result *evsReadResu
 		}
 	}
 	objectIds = append(objectIds, entry.GetSlotIds()...)
+	if result.searchReceipt != nil {
+		objectIds = [][]byte{result.searchReceipt[:]}
+	}
 	if !result.receiptExempt {
 		if err := self.client.preDecrypt(ctx, self.repoId, result.refId, objectIds); err != nil {
 			return nil, nil, EvsGitOid{}, err

@@ -159,7 +159,7 @@ func searchRegistryOf(kind protocol.RepoKind) *IndexFieldRegistry {
 
 // Opens one kept file for reading: RK_g of its generation asked of gkm.
 func (self *searchOpenedRef) openRead(ctx context.Context, file *SearchManifestFile) (*SearchCacheRecordRead, error) {
-	key := SearchCacheKey{RepoId: self.repoId, RefId: self.refId, Path: file.Path, Version: file.Version}
+	key := SearchCacheKey{RepoId: self.repoId, RefId: self.snap.ref.args.refId, Path: file.Path, Version: file.Version}
 	keys := self.keys
 	if keys == nil {
 		keys = self.engine.args.Gkm

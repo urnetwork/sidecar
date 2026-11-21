@@ -344,7 +344,7 @@ func (self *searchEngineRemoteView) openRef(ctx context.Context, ask searchRemot
 			repo = candidate
 		}
 	}
-	if repo == nil {
+	if repo == nil || repo.receiptSkipped {
 		return refuse(protocol.SearchServed_REFUSED_ALL_ABSENT)
 	}
 	var ref *SearchScopeRef
@@ -364,14 +364,14 @@ func (self *searchEngineRemoteView) openRef(ctx context.Context, ask searchRemot
 	case ref.Unbuilt || (repo.valid != nil && !repo.valid()) || (ref.valid != nil && !ref.valid()):
 		return refuse(protocol.SearchServed_REFUSED_ALL_ABSENT)
 	}
-	snapshot, err := engine.args.Sync.Snapshot(repo.RepoId, ref.RefId)
+	snapshot, err := engine.args.Sync.Snapshot(repo.RepoId, ref.indexId())
 	if err != nil {
-		if errors.Is(err, ErrSidecarStoreAbsent) || errors.Is(err, ErrSearchSyncUnfollowed) || errors.Is(err, ErrSearchSyncClosed) {
+		if errors.Is(err, errSearchSyncReceipt) || errors.Is(err, ErrSidecarStoreAbsent) || errors.Is(err, ErrSearchSyncUnfollowed) || errors.Is(err, ErrSearchSyncClosed) {
 			return refuse(protocol.SearchServed_REFUSED_ALL_ABSENT)
 		}
 		return searchRemoteRefRow{}, nil, err
 	}
-	held, err := engine.args.Cache.Ref(repo.RepoId, ref.RefId)
+	held, err := engine.args.Cache.Ref(repo.RepoId, ref.indexId())
 	if err != nil {
 		snapshot.Release()
 		return searchRemoteRefRow{}, nil, err

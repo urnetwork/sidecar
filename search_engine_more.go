@@ -436,10 +436,10 @@ func (self *searchEngineStream) runWindow(ctx context.Context, timeUp *atomic.Bo
 			return searchMoreEndFinished
 		}
 		search, err := NewSearchMore(&SearchMoreArgs{
-			Sync: engine.args.Sync, Policy: engine.args.Policy, Settings: engine.args.Settings, RepoId: ref.repoId, RefId: ref.refId,
+			Sync: engine.args.Sync, Policy: engine.args.Policy, Settings: engine.args.Settings, RepoId: ref.repoId, RefId: ref.snap.ref.args.refId,
 			AllowMetered: self.request.AllowMetered, Cursor: cursor, Clock: engine.clock,
 			OnShard: func(ctx context.Context, file *SearchManifestFile) error {
-				key := SearchCacheKey{RepoId: ref.repoId, RefId: ref.refId, Path: file.Path, Version: file.Version}
+				key := SearchCacheKey{RepoId: ref.repoId, RefId: ref.snap.ref.args.refId, Path: file.Path, Version: file.Version}
 				if err := ref.snap.holdLanded(key); err != nil {
 					return err
 				}

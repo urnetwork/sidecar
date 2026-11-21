@@ -39,7 +39,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 )
@@ -126,13 +128,15 @@ type SidecarSearchState struct {
 
 // The file's encoding. Every list is sorted, so one state is one set of bytes.
 type searchStateWire struct {
-	Version  int                       `json:"version"`
-	Mode     string                    `json:"mode,omitempty"`
-	Answers  []searchStateAnswerWire   `json:"answers,omitempty"`
-	Policies []searchStatePolicyWire   `json:"policies,omitempty"`
-	Served   []searchStateServedWire   `json:"served,omitempty"`
-	Distrust []searchStateDistrustWire `json:"distrust,omitempty"`
-	Records  []searchStateRecordWire   `json:"records,omitempty"`
+	// The next eligible round and the last receipt outcome for each protected physical index.
+	ReceiptRounds map[string]searchReceiptRoundWire `json:"receipt_rounds,omitempty"`
+	Version       int                               `json:"version"`
+	Mode          string                            `json:"mode,omitempty"`
+	Answers       []searchStateAnswerWire           `json:"answers,omitempty"`
+	Policies      []searchStatePolicyWire           `json:"policies,omitempty"`
+	Served        []searchStateServedWire           `json:"served,omitempty"`
+	Distrust      []searchStateDistrustWire         `json:"distrust,omitempty"`
+	Records       []searchStateRecordWire           `json:"records,omitempty"`
 }
 
 // A notice's answer for one member.
@@ -317,6 +321,12 @@ func (self *searchStateWire) wellFormed() bool {
 	if self.Mode != "" && !isSearchRemoteMode(self.Mode) {
 		return false
 	}
+	for key, round := range self.ReceiptRounds {
+		repo, ref, ok := strings.Cut(key, "/")
+		if !ok || !isId(repo) || !isId(ref) || round.NextMs <= 0 {
+			return false
+		}
+	}
 	for _, answer := range self.Answers {
 		if !isId(answer.Member) {
 			return false
@@ -384,19 +394,25 @@ func (self *searchStateWire) foldRecords() {
 // A deep copy, for a change to edit while readers hold the old one.
 func (self *searchStateWire) clone() *searchStateWire {
 	return &searchStateWire{
-		Version:  self.Version,
-		Mode:     self.Mode,
-		Answers:  slices.Clone(self.Answers),
-		Policies: slices.Clone(self.Policies),
-		Served:   slices.Clone(self.Served),
-		Distrust: slices.Clone(self.Distrust),
-		Records:  slices.Clone(self.Records),
+		ReceiptRounds: maps.Clone(self.ReceiptRounds),
+		Version:       self.Version,
+		Mode:          self.Mode,
+		Answers:       slices.Clone(self.Answers),
+		Policies:      slices.Clone(self.Policies),
+		Served:        slices.Clone(self.Served),
+		Distrust:      slices.Clone(self.Distrust),
+		Records:       slices.Clone(self.Records),
 	}
 }
 
 // Drops what has expired at now and the served rows past their bound, the oldest days first, and sorts every list. A
 // row goes once its day ended more than Search.ServedRecordTimeout ago.
 func (self *SidecarSearchState) prune(wire *searchStateWire, now time.Time) {
+	for key, r := range wire.ReceiptRounds {
+		if !r.Skipped && r.NextMs <= now.UnixMilli() {
+			delete(wire.ReceiptRounds, key)
+		}
+	}
 	servedSince := now.Add(-self.settings.RemoteServedTimeout).UnixMilli()
 	wire.Served = slices.DeleteFunc(wire.Served, func(served searchStateServedWire) bool { return served.AtMs < servedSince })
 	wire.Distrust = slices.DeleteFunc(wire.Distrust, func(distrust searchStateDistrustWire) bool { return distrust.UntilMs <= now.UnixMilli() })

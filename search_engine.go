@@ -464,6 +464,7 @@ func (self *searchEngineStream) open(ctx context.Context, scoped []*searchScoped
 	planScope := map[SearchScope]searchPlanScope{SearchCached: searchPlanCached, SearchLatest: searchPlanLatest, SearchAll: searchPlanAll}[self.request.Scope]
 	for _, entry := range scoped {
 		repoId, refId := entry.repo.RepoId, entry.ref.RefId
+		indexId := entry.ref.indexId()
 		if entry.ref.valid != nil {
 			self.validScope = append(self.validScope, entry.ref.valid)
 		}
@@ -485,7 +486,7 @@ func (self *searchEngineStream) open(ctx context.Context, scoped []*searchScoped
 			self.excluded = append(self.excluded, SearchExclusion{RepoId: repoId, RefId: &refId, Reason: reason})
 		}
 		fallback := func(reason string) error {
-			if entry.repo.ReceiptRequired && errors.Is(engine.args.Sync.lastError(repoId, refId), errSearchSyncReceipt) {
+			if entry.repo.ReceiptRequired && errors.Is(engine.args.Sync.lastError(repoId, indexId), errSearchSyncReceipt) {
 				exclude(SearchExcludedReceipt)
 				return nil
 			}
@@ -531,8 +532,11 @@ func (self *searchEngineStream) open(ctx context.Context, scoped []*searchScoped
 			}
 			continue
 		}
-		snapshot, err := engine.args.Sync.Snapshot(repoId, refId)
+		snapshot, err := engine.args.Sync.Snapshot(repoId, indexId)
 		switch {
+		case errors.Is(err, errSearchSyncReceipt):
+			exclude(SearchExcludedReceipt)
+			continue
 		case errors.Is(err, ErrSidecarStoreAbsent), errors.Is(err, ErrSearchSyncUnfollowed):
 			if err := fallback(SearchExcludedUnbuilt); err != nil {
 				return err
@@ -541,7 +545,7 @@ func (self *searchEngineStream) open(ctx context.Context, scoped []*searchScoped
 		case err != nil:
 			return err
 		}
-		held, err := engine.args.Cache.Ref(repoId, refId)
+		held, err := engine.args.Cache.Ref(repoId, indexId)
 		if err != nil {
 			snapshot.Release()
 			return err
@@ -602,7 +606,7 @@ func (self *searchEngineStream) open(ctx context.Context, scoped []*searchScoped
 		}
 		opened.source = &searchRankSource{repoId: repoId, refId: refId, companion: companion, mask: mask, confirmer: confirmer}
 		self.refs = append(self.refs, opened)
-		engine.args.Cache.MarkSearched(repoId, refId, SearchCachePartition{})
+		engine.args.Cache.MarkSearched(repoId, indexId, SearchCachePartition{})
 	}
 	return nil
 }

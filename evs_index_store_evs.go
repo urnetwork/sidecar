@@ -58,6 +58,8 @@ type indexEvsStore struct {
 	// The content ref's name, or ur/index.
 	refName   []byte
 	companion bool
+	// A protected search listing reads only authenticated file metadata; the round requests the bodies later.
+	searchMetadata bool
 }
 
 // The store of a file-mode ref's own index (refName nil is main), or of the repo's ur/index (companion).
@@ -236,6 +238,13 @@ func (self *indexEvsStore) fileVersion(ctx context.Context, result *evsReadResul
 	}
 	if len(fields.GetContentSha256()) == sha256.Size {
 		copy(file.contentSha256[:], fields.GetContentSha256())
+		return file, nil
+	}
+	if self.searchMetadata {
+		// A missing digest is left to the protected settings history. No body opens during discovery.
+		if parsed, ok := indexParsePath(path, self.companion); ok && parsed.kind == indexPathSettings {
+			file.contentSha256 = memberSearchSettingsDigest(fields)
+		}
 		return file, nil
 	}
 	// a versioned file, the settings: its content, verified by evs's reader, is what its hash is of

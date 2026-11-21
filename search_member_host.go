@@ -57,6 +57,7 @@ type memberSearchKeys struct {
 	running *Sidecar
 }
 
+// Opens only a key generation already held by this member.
 func (self memberSearchKeys) RepoKey(ctx context.Context, repo Id, generation uint64) (*EvsRepoKey, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -117,7 +118,7 @@ func (self *memberSearchHost) open() (*SearchEngine, error) {
 	limits := DefaultEvsFormatSettings()
 	format := DefaultIndexFormatSettings()
 	syncer, err := newSearchSync(&searchSyncArgs{cache: cache, settings: settings, format: format, clock: running.clock, log: running.log,
-		events: running.searchEvents(), readPathCount: limits.ReadMaxPathCount, readByteCount: limits.ReadStreamMaxByteCount, budget: policy})
+		events: running.searchEvents(), readPathCount: limits.ReadMaxPathCount, readByteCount: limits.ReadStreamMaxByteCount, budget: policy, receiptState: state})
 	if err != nil {
 		return nil, err
 	}
@@ -259,6 +260,18 @@ func (self *memberSearchSource) Repos(ctx context.Context) ([]*SearchScopeRepo, 
 				repo.valid = func() bool { return authorized() && mail() }
 			}
 		}
+		if memberSearchCompanion(repo.Kind) && slices.ContainsFunc(repo.Refs, func(ref *SearchScopeRef) bool { return !ref.Unbuilt && !ref.IndexOff }) {
+			rows, valid := self.recordIndexRows(repo)
+			if valid == nil {
+				for _, ref := range repo.Refs {
+					ref.Unbuilt = true
+				}
+			} else {
+				authorized := repo.valid
+				repo.valid = func() bool { return authorized() && valid() }
+				repo.acceptRow = func(row *indexRow) bool { return memberSearchIndexRow(repo, row) && rows(row) }
+			}
+		}
 		if repo.Kind == protocol.RepoKind_REPO_KIND_DIRECTORY {
 			age, policy := self.directoryAge(id)
 			repo.SearchableAge = age
@@ -299,6 +312,19 @@ func memberSearchIndexRow(repo *SearchScopeRepo, row *indexRow) bool {
 	switch repo.Kind {
 	case protocol.RepoKind_REPO_KIND_GENERAL:
 		return row.docKind == IndexDocFile
+	case protocol.RepoKind_REPO_KIND_VAULT, protocol.RepoKind_REPO_KIND_TEAM_RECORD, protocol.RepoKind_REPO_KIND_RECORD:
+		if row.docKind == IndexDocDerived && indexRunCardLog(repo.Kind) {
+			id, ok := strings.CutPrefix(row.locator, indexRunCardPrefix)
+			if !ok || len(id) != 2*len(Id{}) || strings.Trim(id, "0123456789abcdef") != "" ||
+				row.fields[indexFieldFirstRegistered] != RecordKindRun.String() || row.fields[indexFieldFirstRegistered+4] != id {
+				return false
+			}
+			return repo.Kind != protocol.RepoKind_REPO_KIND_TEAM_RECORD || row.fields[indexFieldTitle] == "" &&
+				row.fields[indexFieldFirstRegistered+6] == "" && row.fields[indexFieldFirstRegistered+7] == "" && row.fields[indexFieldFirstRegistered+8] == ""
+		}
+		kind, known := RecordKindNamed(row.fields[indexFieldFirstRegistered])
+		_, stream := RecordStreamPathCounter(row.locator)
+		return row.docKind == IndexDocRecord && stream && known && indexRecordIndexesEntry(repo.Kind, kind)
 	case protocol.RepoKind_REPO_KIND_DIRECTORY:
 		// Cards and repo files produce announcement documents named a/<announcement> or a/<writer><announcement>.
 		ids, ok := strings.CutPrefix(row.locator, directoryIndexAnnouncementPrefix)
@@ -357,6 +383,31 @@ func memberSearchDefaultFileRef(kind protocol.RepoKind) string {
 	return ""
 }
 
+// Record streams have a single shared index, with each row naming its content ref.
+func memberSearchCompanion(kind protocol.RepoKind) bool {
+	return indexRunCardLog(kind) || kind == protocol.RepoKind_REPO_KIND_RECORD
+}
+
+// Returns the physical cache ref of a verified stream. Other content refs have their own index.
+func (self *memberSearchSource) indexId(repo, ref Id) Id {
+	state := self.state()
+	if state == nil || state.Repo(repo) == nil {
+		return Id{}
+	}
+	if !memberSearchCompanion(state.Repo(repo).GetKind()) {
+		return ref
+	}
+	key, err := self.refKey(repo)
+	if err != nil || key == nil {
+		return Id{}
+	}
+	index, err := EvsRefId(key, EvsIndexRefName)
+	if err != nil {
+		return Id{}
+	}
+	return index
+}
+
 // The signed record reader knows each stream's name. The pins and sealed observations name ordinary file refs.
 func (self *memberSearchSource) refs(repo *SearchScopeRepo, unrestricted bool, live map[[2]Id]bool) ([]*SearchScopeRef, error) {
 	key, err := self.refKey(repo.RepoId)
@@ -372,9 +423,49 @@ func (self *memberSearchSource) refs(repo *SearchScopeRepo, unrestricted bool, l
 		if err != nil || verified != id {
 			return
 		}
-		refs[id] = &SearchScopeRef{RefId: id, Name: name, Default: def, Unbuilt: true}
+		ref := &SearchScopeRef{RefId: id, Name: name, Default: def, Unbuilt: true}
+		if memberSearchCompanion(repo.Kind) {
+			ref.Companion = true
+			ref.indexRef, err = EvsRefId(key, EvsIndexRefName)
+			if err != nil {
+				return
+			}
+		}
+		refs[id] = ref
 	}
 	defaultFileRef := memberSearchDefaultFileRef(repo.Kind)
+	if memberSearchCompanion(repo.Kind) {
+		index, err := EvsRefId(key, EvsIndexRefName)
+		if err != nil {
+			return nil, err
+		}
+		if unrestricted {
+			// Schedule the shared index even before this device has read a stream. Replay discovers signed stream heads.
+			live[[2]Id{repo.RepoId, index}] = true
+			if err := self.follow(repo, &SearchScopeRef{Companion: true, indexRef: index}); err != nil {
+				return nil, err
+			}
+		}
+		state := self.state()
+		if state == nil {
+			return nil, ErrSidecarSearchUnavailable
+		}
+		pins, err := self.evs.pins.Pins(&repo.RepoId)
+		if err != nil {
+			return nil, err
+		}
+		pinned := make(map[Id]bool, len(pins))
+		for _, pin := range pins {
+			pinned[pin.RefId] = pin.Version > 0
+		}
+		for _, writer := range state.SidecarIds() {
+			name := RecordStreamRefName(writer)
+			id, err := EvsRefId(key, name)
+			if err == nil && pinned[id] {
+				add(id, string(name), writer == self.record.writer.sidecarId)
+			}
+		}
+	}
 	if memberSearchRecordKind(repo.Kind) {
 		reader := self.record.Reader()
 		reader.stateLock.Lock()
@@ -405,8 +496,8 @@ func (self *memberSearchSource) refs(repo *SearchScopeRepo, unrestricted bool, l
 	}
 	out := make([]*SearchScopeRef, 0, len(refs))
 	for _, r := range refs {
-		if unrestricted && defaultFileRef != "" && !repo.ReceiptRequired && (!memberSearchRecordKind(repo.Kind) || r.Name == defaultFileRef) {
-			live[[2]Id{repo.RepoId, r.RefId}] = true
+		if unrestricted && (r.Companion || defaultFileRef != "" && (!memberSearchRecordKind(repo.Kind) || r.Name == defaultFileRef)) {
+			live[[2]Id{repo.RepoId, r.indexId()}] = true
 			if err := self.follow(repo, r); err != nil {
 				return nil, err
 			}
@@ -427,11 +518,17 @@ func (self *memberSearchSource) refs(repo *SearchScopeRepo, unrestricted bool, l
 
 // Follow starts no network work. Rounds run only on a sync trigger. A verified cache manifest chooses index or scan.
 func (self *memberSearchSource) follow(repo *SearchScopeRepo, ref *SearchScopeRef) error {
-	key := [2]Id{repo.RepoId, ref.RefId}
+	indexId := ref.indexId()
+	key := [2]Id{repo.RepoId, indexId}
 	self.followLock.Lock()
-	if !self.followed[key] {
-		source := &memberIndexSource{member: self, store: newIndexEvsStore(self.evs.Repo(repo.RepoId), []byte(ref.Name), ref.Companion), contentRef: ref.RefId, kind: repo.Kind}
-		err := self.syncer.Follow(&searchSyncRefArgs{repoId: repo.RepoId, refId: ref.RefId, repoKind: repo.Kind, companion: ref.Companion, source: source,
+	if nonWriter, followed := self.followed[key]; !followed || nonWriter != repo.ReceiptRequired {
+		if followed {
+			self.syncer.Unfollow(repo.RepoId, indexId)
+		}
+		nonWriter, deposit := searchReceiptFollowArgs(repo, self.record.Receipts().Deposit)
+		source := &memberIndexSource{member: self, store: newIndexEvsStore(self.evs.Repo(repo.RepoId), []byte(ref.Name), ref.Companion), contentRef: indexId, kind: repo.Kind, nonWriter: nonWriter}
+		source.store.searchMetadata = nonWriter
+		err := self.syncer.Follow(&searchSyncRefArgs{repoId: repo.RepoId, refId: indexId, repoKind: repo.Kind, companion: ref.Companion, source: source, nonWriter: nonWriter, depositReceipt: deposit,
 			keepLatest: func() bool { return self.policy.KeepsLatest(repo.Kind) }, keepAll: func() bool { return self.policy.KeepsAll(repo.RepoId, 0) },
 			mayErase: func(signer Id, when int64) bool {
 				state := self.state()
@@ -448,10 +545,14 @@ func (self *memberSearchSource) follow(repo *SearchScopeRepo, ref *SearchScopeRe
 		if self.followed == nil {
 			self.followed = make(map[[2]Id]bool)
 		}
-		self.followed[key] = true
+		self.followed[key] = nonWriter
 	}
 	self.followLock.Unlock()
-	snapshot, err := self.syncer.Snapshot(repo.RepoId, ref.RefId)
+	snapshot, err := self.syncer.Snapshot(repo.RepoId, indexId)
+	if errors.Is(err, errSearchSyncReceipt) {
+		repo.receiptSkipped = true
+		return nil
+	}
 	if errors.Is(err, ErrSidecarStoreAbsent) {
 		return nil
 	}
@@ -464,13 +565,16 @@ func (self *memberSearchSource) follow(repo *SearchScopeRepo, ref *SearchScopeRe
 	defer snapshot.Release()
 	held := snapshot.Pin()
 	current := func() bool {
-		pin, found, err := self.evs.pins.Pin(repo.RepoId, ref.RefId)
+		pin, found, err := self.evs.pins.Pin(repo.RepoId, indexId)
 		return err == nil && found && pin.Version == held.Version && pin.Chain == held.Chain
 	}
 	if !current() {
 		return nil
 	}
 	ref.valid = current
+	if repo.ReceiptRequired {
+		ref.valid = func() bool { return current() && !self.syncer.receiptSkipped(repo.RepoId, indexId) }
+	}
 	for _, f := range snapshot.manifest.Files {
 		if f.State != SearchManifestHeld {
 			continue

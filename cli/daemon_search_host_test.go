@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime"
+	"slices"
 	"testing"
 	"time"
 
@@ -113,22 +115,52 @@ func hostedSearchHits(t *testing.T, ctx context.Context, running *sidecar.Sideca
 
 func hostedSearchPage(t *testing.T, ctx context.Context, running *sidecar.Sidecar, r *sidecar.SearchRequest) ([]sidecar.SearchHit, sidecar.SearchProgress) {
 	t.Helper()
-	stream, err := running.Search(ctx, r)
+	hits, progress, err := readHostedSearchPage(ctx, running, r)
 	if err != nil {
 		t.Fatal(err)
+	}
+	return hits, progress
+}
+
+// Opens the public stream and releases it even when a concurrent read invalidates the page.
+func readHostedSearchPage(ctx context.Context, running *sidecar.Sidecar, r *sidecar.SearchRequest) ([]sidecar.SearchHit, sidecar.SearchProgress, error) {
+	stream, err := running.Search(ctx, r)
+	if err != nil {
+		return nil, sidecar.SearchProgress{}, err
 	}
 	defer stream.Close()
 	var hits []sidecar.SearchHit
 	for {
 		page, progress, done, err := stream.Next()
 		if err != nil {
-			t.Fatal(err)
+			return nil, progress, err
 		}
 		hits = append(hits, page...)
 		if done {
-			return hits, progress
+			return hits, progress, nil
 		}
 	}
+}
+
+// Startup ingestion can advance the signed reader's revision between opening a scan and consuming its page.
+func hostedRecordSearchPage(t *testing.T, ctx context.Context, running *sidecar.Sidecar, r *sidecar.SearchRequest) ([]sidecar.SearchHit, sidecar.SearchProgress) {
+	t.Helper()
+	for range 8 {
+		runtime.Gosched()
+		hits, progress, err := readHostedSearchPage(ctx, running, r)
+		if errors.Is(err, sidecar.ErrSearchCursorExpired) {
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(progress.Coverage) == 0 && slices.ContainsFunc(progress.Excluded, func(row sidecar.SearchExclusion) bool { return row.Reason == sidecar.SearchExcludedUnbuilt }) {
+			continue
+		}
+		return hits, progress
+	}
+	t.Fatal("signed reader did not hold one revision through the search")
+	return nil, sidecar.SearchProgress{}
 }
 
 // The actual signed record reader and its governing class policy drive the fallback view.
@@ -138,7 +170,7 @@ func TestDaemonSearchOpensSignedVaultDocumentsOnTheirWriterRef(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := &sidecar.SearchRequest{Text: "first vault note", Repos: []sidecar.Id{vault}, Ref: string(sidecar.RecordStreamRefName(running.Identity().SidecarId))}
-	hits := hostedSearchHits(t, world.ctx, running, request)
+	hits, _ := hostedRecordSearchPage(t, world.ctx, running, request)
 	if len(hits) != 1 || hits[0].Repo != vault || hits[0].Signer != running.Identity().SidecarId {
 		t.Fatalf("signed vault search: %+v", hits)
 	}
@@ -156,8 +188,54 @@ func TestDaemonSearchOpensSignedVaultDocumentsOnTheirWriterRef(t *testing.T) {
 		t.Fatalf("signed retention policy: %d days", d)
 	}
 	world.net.Clock().Advance(24*time.Hour + time.Second)
-	if hits := hostedSearchHits(t, world.ctx, running, request); len(hits) != 0 {
+	if hits, _ := hostedRecordSearchPage(t, world.ctx, running, request); len(hits) != 0 {
 		t.Fatalf("signed searchable age still exposed: %+v", hits)
+	}
+}
+
+// A signed context reaches its own stream's derived card through the stock member binding, including its sync control.
+func TestDaemonSearchFollowsSignedRecordCompanionAndScansItsRun(t *testing.T) {
+	world, running, evs, record, vault, _ := hostedRecordNote(t, true)
+	run := sidecar.NewId()
+	refs, err := record.Writer().Append(&sidecar.RecordDraft{Kind: sidecar.RecordKindContext, Source: sidecar.RecordSourceHook,
+		RunId: &run, NoSession: true, Body: &protocol.ContextBody{Stage: 1, Harness: "claude-code", Title: "Orchard run"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 1 || refs[0].LogId != vault || refs[0].Spooled {
+		t.Fatalf("signed context did not reach the vault: %+v", refs)
+	}
+	if err := record.Land(world.ctx, refs); err != nil {
+		t.Fatal(err)
+	}
+	if err := record.Reader().Sync(world.ctx, vault); err != nil {
+		t.Fatal(err)
+	}
+	streamName := sidecar.RecordStreamRefName(running.Identity().SidecarId)
+	entry, ok := record.Reader().Entry(vault, refs[0].EntryId)
+	if !ok || entry.State != sidecar.RecordEntryLive || entry.BodyInvalid {
+		t.Fatalf("signed context is unavailable: %+v", entry)
+	}
+	hits, progress := hostedRecordSearchPage(t, world.ctx, running, &sidecar.SearchRequest{Text: "orchard", Repos: []sidecar.Id{vault}, Ref: string(streamName)})
+	stream, err := evs.Repo(vault).RefIdOf(world.ctx, streamName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 1 || hits[0].Path != fmt.Sprintf("run/%x", run.Bytes()) || hits[0].Repo != vault || hits[0].Ref != stream ||
+		hits[0].DocKind != int(sidecar.IndexDocDerived) {
+		t.Fatalf("signed stream's run card: %+v; progress %+v", hits, progress)
+	}
+	params, err := json.Marshal(&sidecar.DaemonSearchSyncParams{Repo: vault.String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := sidecar.DaemonSearchSyncMethods()[0].Handler(world.ctx, &sidecar.DaemonCall{Sidecar: running, Params: params})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply := raw.(*sidecar.DaemonSearchSyncReply)
+	if reply.Synced != 1 || len(reply.Failed) != 0 {
+		t.Fatalf("expected one physical index for the signed stream: %+v, failures %+v", reply, reply.Failed)
 	}
 }
 
