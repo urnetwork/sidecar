@@ -7,7 +7,49 @@ import (
 	"testing"
 
 	"github.com/urnetwork/sidecar/protocol"
+	"github.com/urnetwork/sidecar/protocol/bridge"
 )
+
+func TestMemberSearchAttributesDeviceAndTaggedWriterToItsSignedMember(t *testing.T) {
+	owner, other := evsTestId("owner"), evsTestId("other")
+	device, tagged, separate, unseen := evsTestId("device"), evsTestId("tagged"), evsTestId("separate"), evsTestId("unseen")
+	state := &ConfigState{sidecars: map[Id]*bridge.SidecarRow{
+		device: {MemberId: owner[:], RevokedAt: 9}, tagged: {Sponsor: owner[:]}, separate: {MemberId: other[:]},
+	}}
+	for id, want := range map[Id]Id{device: owner, tagged: owner, separate: other, unseen: {}} {
+		got, ok := state.searchWriterMember(id)
+		if got != want || ok != (want != (Id{})) {
+			t.Errorf("writer %v: got %v, %v, want %v", id, got, ok, want)
+		}
+	}
+}
+
+func TestMemberSearchFollowsTheContentRefOfEachSignedRepoClass(t *testing.T) {
+	key, err := NewEvsRefKey(evsTestRepoKey(evsTestId("repo"), 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		kind protocol.RepoKind
+		name []byte
+	}{
+		{protocol.RepoKind_REPO_KIND_DIRECTORY, DirectoryCardsRefName()},
+		{protocol.RepoKind_REPO_KIND_GENERAL, EvsMainRefName},
+		{protocol.RepoKind_REPO_KIND_MAILBOX, EvsMainRefName},
+		{protocol.RepoKind_REPO_KIND_TEAM_RECORD, nil},
+	} {
+		name := memberSearchDefaultFileRef(tc.kind)
+		if name != string(tc.name) {
+			t.Fatalf("class %v follows %q, expected %q", tc.kind, name, tc.name)
+		}
+		if name != "" {
+			id, err := EvsRefId(key, []byte(name))
+			if err != nil || id == (Id{}) {
+				t.Fatalf("invalid content ref for class %v: %v", tc.kind, err)
+			}
+		}
+	}
+}
 
 func TestMemberSearchConfirmsOnlyTheSignedReposDocumentClass(t *testing.T) {
 	id := evsTestId("item")

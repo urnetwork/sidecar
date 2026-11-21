@@ -182,11 +182,22 @@ func (self *memberSearchSource) memberSidecars(member Id) []Id {
 	}
 	var ids []Id
 	for _, id := range state.SidecarIds() {
-		if row := state.SidecarRow(id); row != nil && bytes.Equal(row.GetMemberId(), member[:]) {
+		if writer, ok := state.searchWriterMember(id); ok && writer == member {
 			ids = append(ids, id)
 		}
 	}
 	return ids
+}
+
+// A historical writer belongs to its signed member, or to the sponsor its tagged admission names.
+func (self *ConfigState) searchWriterMember(sidecar Id) (Id, bool) {
+	row := self.SidecarRow(sidecar)
+	member := row.GetMemberId()
+	if len(member) == 0 {
+		member = row.GetSponsor()
+	}
+	id, err := IdFromBytes(member)
+	return id, err == nil
 }
 
 // Every ref is named by local verified evidence and scoped to the reader that holds it.
@@ -335,6 +346,17 @@ func (self *memberSearchSource) refKey(repo Id) (*EvsRefKey, error) {
 	return NewEvsRefKey(key)
 }
 
+// Only these classes keep an index on a named content ref of their own.
+func memberSearchDefaultFileRef(kind protocol.RepoKind) string {
+	switch kind {
+	case protocol.RepoKind_REPO_KIND_DIRECTORY:
+		return string(DirectoryCardsRefName())
+	case protocol.RepoKind_REPO_KIND_GENERAL, protocol.RepoKind_REPO_KIND_MAILBOX:
+		return string(EvsMainRefName)
+	}
+	return ""
+}
+
 // The signed record reader knows each stream's name. The pins and sealed observations name ordinary file refs.
 func (self *memberSearchSource) refs(repo *SearchScopeRepo, unrestricted bool, live map[[2]Id]bool) ([]*SearchScopeRef, error) {
 	key, err := self.refKey(repo.RepoId)
@@ -352,30 +374,30 @@ func (self *memberSearchSource) refs(repo *SearchScopeRepo, unrestricted bool, l
 		}
 		refs[id] = &SearchScopeRef{RefId: id, Name: name, Default: def, Unbuilt: true}
 	}
+	defaultFileRef := memberSearchDefaultFileRef(repo.Kind)
 	if memberSearchRecordKind(repo.Kind) {
 		reader := self.record.Reader()
 		reader.stateLock.Lock()
 		if log := reader.logs[repo.RepoId]; log != nil && log.complete {
 			for writer, ref := range log.streamRefIds {
-				add(ref, string(RecordStreamRefName(writer)), writer == self.record.writer.sidecarId)
+				add(ref, string(RecordStreamRefName(writer)), defaultFileRef == "" && writer == self.record.writer.sidecarId)
 			}
 		}
 		reader.stateLock.Unlock()
 	}
-	fileIndex := repo.Kind == protocol.RepoKind_REPO_KIND_DIRECTORY || repo.Kind == protocol.RepoKind_REPO_KIND_GENERAL || repo.Kind == protocol.RepoKind_REPO_KIND_MAILBOX
-	if fileIndex {
+	if defaultFileRef != "" {
 		pins, err := self.evs.pins.Pins(&repo.RepoId)
 		if err != nil {
 			return nil, err
 		}
 		for _, p := range pins {
-			add(p.RefId, string(EvsMainRefName), true)
+			add(p.RefId, defaultFileRef, true)
 		}
 		self.evs.pins.stateLock.Lock()
 		if state := self.evs.pins.repoIdRepos[repo.RepoId]; state != nil {
 			for _, r := range state.reads {
 				if r.search != nil {
-					add(r.RefId, r.search.RefName, r.search.RefName == string(EvsMainRefName))
+					add(r.RefId, r.search.RefName, r.search.RefName == defaultFileRef)
 				}
 			}
 		}
@@ -383,7 +405,7 @@ func (self *memberSearchSource) refs(repo *SearchScopeRepo, unrestricted bool, l
 	}
 	out := make([]*SearchScopeRef, 0, len(refs))
 	for _, r := range refs {
-		if unrestricted && fileIndex && !repo.ReceiptRequired && (!memberSearchRecordKind(repo.Kind) || r.Name == string(EvsMainRefName)) {
+		if unrestricted && defaultFileRef != "" && !repo.ReceiptRequired && (!memberSearchRecordKind(repo.Kind) || r.Name == defaultFileRef) {
 			live[[2]Id{repo.RepoId, r.RefId}] = true
 			if err := self.follow(repo, r); err != nil {
 				return nil, err
