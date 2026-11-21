@@ -29,6 +29,7 @@ type mailTestFile struct {
 type mailTestStore struct {
 	stateLock   sync.Mutex
 	files       map[string]*mailTestFile
+	removed     map[string]bool
 	beforeWrite func()
 	// A write fails with this, once, before any check.
 	failWrite error
@@ -38,7 +39,7 @@ type mailTestStore struct {
 }
 
 func newMailTestStore() *mailTestStore {
-	return &mailTestStore{files: map[string]*mailTestFile{}}
+	return &mailTestStore{files: map[string]*mailTestFile{}, removed: map[string]bool{}}
 }
 
 func (self *mailTestStore) Read(ctx context.Context, path string, maxByteCount int) ([]byte, uint64, error) {
@@ -96,6 +97,9 @@ func (self *mailTestStore) Write(ctx context.Context, writes []*mailStoreWrite) 
 	}
 	conflicts := []string{}
 	for _, write := range writes {
+		if write.CreateOnce && self.removed[write.Path] {
+			return nil, ErrEvsPathMoved
+		}
 		current := uint64(0)
 		if file := self.files[write.Path]; file != nil {
 			current = file.version
@@ -112,6 +116,7 @@ func (self *mailTestStore) Write(ctx context.Context, writes []*mailStoreWrite) 
 		if write.Remove {
 			// a removed path reads absent, its version 0, as evs's does
 			delete(self.files, write.Path)
+			self.removed[write.Path] = true
 			versions = append(versions, 0)
 			continue
 		}

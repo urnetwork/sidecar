@@ -171,7 +171,8 @@ type MailSendRecipient struct {
 
 // What Send answers.
 type MailSendResult struct {
-	// The message's id: its sent copy's, and its Message-ID's left side.
+	// A draft's send id. Queued mail takes the id in its committed Message-ID. A raw SMTP submission can have
+	// a client-chosen Message-ID that names no send.
 	SendId Id
 	// Each distinct recipient, in the order named, To then Cc then Bcc.
 	Recipients []*MailSendRecipient
@@ -398,6 +399,10 @@ func mailSendStandingEffectKey() []byte {
 // and the queue. effectKey is the use's, nil for a send to members alone, which queues nothing.
 func (self *MailClient) deliverSend(ctx context.Context, plan *mailSendPlan, content *mailSendContent, effectKey []byte) (*MailSendResult, error) {
 	row, authority, fromAddress := plan.row, plan.authority, plan.fromAddress
+	// A retry may find its queue committed before the gate recorded the answer.
+	if replay, err := self.priorSend(ctx, plan, content, effectKey); err != nil || replay != nil {
+		return replay, err
+	}
 
 	// split and resolve
 	result := &MailSendResult{}
@@ -504,21 +509,52 @@ func (self *MailClient) deliverSend(ctx context.Context, plan *mailSendPlan, con
 		for _, recipient := range outside {
 			addresses = append(addresses, recipient.Address)
 		}
-		outcome := queue.queue(ctx, &mailSendQueueArgs{
+		queued, outcome, err := queue.queue(ctx, &mailSendQueueArgs{
 			effectKey:  effectKey,
 			recipients: addresses,
 			message:    sendable,
 			flags:      flags,
 			notAfter:   mailSendApprovalNotAfter(ctx),
 		})
+		if err != nil {
+			return nil, err
+		}
 		for _, recipient := range outside {
 			recipient.Outcome = outcome
 		}
-		if outcome == MailSendQueued {
-			result.EffectKey = append([]byte(nil), effectKey...)
+		if queued != nil {
+			if !queued.Created {
+				return content.replayedSend(queued.SendId, queued.EffectKey)
+			}
+			result.EffectKey = queued.EffectKey
+			result.SendId = queued.SendId
 		}
 	}
 	return result, nil
+}
+
+// The recorded queue result, read before repeating any effect and when a gate answers from its ledger.
+func (self *MailClient) priorSend(ctx context.Context, plan *mailSendPlan, content *mailSendContent, effectKey []byte) (*MailSendResult, error) {
+	if len(effectKey) != mailEffectKeyByteCount || len(plan.outsideRecipients()) == 0 {
+		return nil, nil
+	}
+	queued, err := self.queuedSend(ctx, plan, effectKey)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrMailSendUncertain, err)
+	}
+	if queued == nil {
+		return nil, nil
+	}
+	return content.replayedSend(queued.SendId, queued.EffectKey)
+}
+
+// The result known on replay. A raw submission may carry a client-chosen Message-ID, and an old outcome may
+// omit send_id. A draft needs its committed id for GetSendResult.
+func (self *mailSendContent) replayedSend(sendId Id, effectKey []byte) (*MailSendResult, error) {
+	if sendId == (Id{}) && self.draft != nil {
+		return nil, fmt.Errorf("%w: the recorded outcome names no send", ErrMailSendUncertain)
+	}
+	return &MailSendResult{SendId: sendId, EffectKey: effectKey}, nil
 }
 
 // The Message-ID an internet send names, <id>@<domain>: id the lowercase base32 of the send's 16 bytes, which a
@@ -542,10 +578,19 @@ type mailSendQueueArgs struct {
 	notAfter   time.Time
 }
 
+// What MailOutbox.Queue committed or found under the same key.
+type MailOutboxQueued struct {
+	EffectKey []byte
+	// The id in the committed message or outcome record, zero if it names none.
+	SendId Id
+	// This call wrote the entry.
+	Created bool
+}
+
 // Where a send's internet mail goes: the member's outbox on the legs that send mail (mail_send_queue.go).
 type mailSendQueue interface {
-	// Queues args' message for its internet recipients: MailSendQueued, or the outcome they answer instead.
-	queue(ctx context.Context, args *mailSendQueueArgs) MailSendOutcome
+	// Queues args' message for its internet recipients. An error means a committed receipt could not be read.
+	queue(ctx context.Context, args *mailSendQueueArgs) (*MailOutboxQueued, MailSendOutcome, error)
 }
 
 // The distinct recipients of args, lowercase, To then Cc then Bcc, each parsing as a bare RFC 5322 address, within

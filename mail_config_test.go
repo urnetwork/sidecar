@@ -402,6 +402,7 @@ func (self *mailConfigTestGate) Authorize(ctx context.Context, action *SidecarAc
 		return err
 	}
 	if recorded != nil {
+		recorded.effectKey = mailConfigTestEffectKey(action.Canonical)
 		action.Outcome = recorded
 		return nil
 	}

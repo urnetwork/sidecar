@@ -104,12 +104,12 @@ func TestMailOutboxQueuesOnceUnderItsKey(t *testing.T) {
 	effectKey := testMailOutboxEffectKey()
 	sendId := newMailOutboxSendId()
 	queued, err := outbox.Queue(ctx, testMailOutboxQueueArgs(effectKey, testMailOutboxMessage(sendId)))
-	if err != nil || !queued.Created || !bytes.Equal(queued.EffectKey, effectKey) {
+	if err != nil || !queued.Created || queued.SendId != sendId || !bytes.Equal(queued.EffectKey, effectKey) {
 		t.Fatalf("the first queue %+v: %v", queued, err)
 	}
 	writesBefore := store.writeCount
-	again, err := outbox.Queue(ctx, testMailOutboxQueueArgs(effectKey, testMailOutboxMessage(sendId)))
-	if err != nil || again.Created || store.writeCount != writesBefore {
+	again, err := outbox.Queue(ctx, testMailOutboxQueueArgs(effectKey, testMailOutboxMessage(newMailOutboxSendId())))
+	if err != nil || again.Created || again.SendId != sendId || store.writeCount != writesBefore {
 		t.Fatalf("a second queue under the key %+v, %d writes: %v", again, store.writeCount-writesBefore, err)
 	}
 	path, _ := MailOutboxPath(effectKey)
@@ -176,12 +176,53 @@ func TestMailOutboxLookupFindsItsEntryAfterARestart(t *testing.T) {
 	if err := restarted.mailbox.RemoveOutbox(ctx, effectKey); err != nil {
 		t.Fatal(err)
 	}
-	if outcome, err := restarted.Lookup(ctx, nil, effectKey); err != nil || outcome.State != ApprovalOutcomeDone {
+	if outcome, err := restarted.Lookup(ctx, nil, effectKey); err != nil || outcome.State != ApprovalOutcomeDone || !bytes.Equal(outcome.EffectRef, sendId.Bytes()) {
 		t.Fatalf("an entry sent and removed, its or/ standing %+v: %v", outcome, err)
+	}
+	writesBefore := store.writeCount
+	retry := newTestMailOutbox(t, store, signer, testMailOutboxStanding(AbuseStandingStandard, true))
+	queued, err := retry.Queue(ctx, testMailOutboxQueueArgs(effectKey, testMailOutboxMessage(newMailOutboxSendId())))
+	if err != nil || queued.Created || queued.SendId != sendId || store.writeCount != writesBefore {
+		t.Fatalf("retry after removal %+v, %d writes: %v", queued, store.writeCount-writesBefore, err)
+	}
+	// An older writer could create the just-removed entry again. Its later Message-ID does not replace or/'s.
+	stale := testMailOutboxQueueArgs(effectKey, testMailOutboxMessage(newMailOutboxSendId()))
+	signed, err := SignSmtpOutboxEntry(&SmtpOutboundMessage{
+		EffectKey: effectKey, Sender: stale.Sender, Recipients: stale.Recipients, Message: stale.Message,
+	}, signer.sign)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, _ := MailOutboxPath(effectKey)
+	if _, err := store.Write(ctx, []*mailStoreWrite{{Path: path, Content: mailOutboxFileBytes(signed, stale.Message)}}); err != nil {
+		t.Fatal(err)
+	}
+	if outcome, err := restarted.Lookup(ctx, nil, effectKey); err != nil || !bytes.Equal(outcome.EffectRef, sendId.Bytes()) {
+		t.Fatalf("receipt with a recreated entry %+v: %v", outcome, err)
 	}
 	broken := newTestMailOutbox(t, &mailOutboxTestBrokenStore{}, signer, nil)
 	if outcome, err := broken.Lookup(ctx, nil, effectKey); err != nil || outcome.State != ApprovalOutcomeUncertain {
 		t.Fatalf("an unreadable mailbox %+v: %v", outcome, err)
+	}
+}
+
+// An older outcome or a raw SMTP submission can name no send id. That receipt still prevents a second entry.
+func TestMailOutboxKeepsAnOutcomeWithoutASendId(t *testing.T) {
+	ctx := t.Context()
+	store := newMailTestStore()
+	outbox := newTestMailOutbox(t, store, newTestMailOutboxSigner(testMailId(0xb1)), testMailOutboxStanding(AbuseStandingStandard, true))
+	effectKey := testMailOutboxEffectKey()
+	if err := outbox.mailbox.WriteOutcomes(ctx, effectKey, []*SmtpDomainOutcome{{Domain: "outside.example", Outcome: SmtpOutcomeSent}}); err != nil {
+		t.Fatal(err)
+	}
+	writes := store.writeCount
+	queued, err := outbox.Queue(ctx, testMailOutboxQueueArgs(effectKey, testMailOutboxMessage(newMailOutboxSendId())))
+	if err != nil || queued.Created || queued.SendId != (Id{}) || store.writeCount != writes {
+		t.Fatalf("legacy receipt %+v, %d writes: %v", queued, store.writeCount-writes, err)
+	}
+	outcome, err := outbox.Lookup(ctx, nil, effectKey)
+	if err != nil || outcome.State != ApprovalOutcomeDone || len(outcome.EffectRef) != 0 {
+		t.Fatalf("legacy outcome %+v: %v", outcome, err)
 	}
 }
 
@@ -209,17 +250,17 @@ func TestMailOutboxTwoDevicesQueueOneObject(t *testing.T) {
 	standing := testMailOutboxStanding(AbuseStandingStandard, true)
 	ctx := context.Background()
 	effectKey := testMailOutboxEffectKey()
-	message := testMailOutboxMessage(newMailOutboxSendId())
+	winnerId := newMailOutboxSendId()
 	firstOutbox := newTestMailOutbox(t, store, first, standing)
 	secondOutbox := newTestMailOutbox(t, store, second, standing)
 	// the second device's write lands between the first's read and its write
 	store.beforeWrite = func() {
-		if _, err := secondOutbox.Queue(ctx, testMailOutboxQueueArgs(effectKey, message)); err != nil {
+		if _, err := secondOutbox.Queue(ctx, testMailOutboxQueueArgs(effectKey, testMailOutboxMessage(winnerId))); err != nil {
 			t.Error(err)
 		}
 	}
-	queued, err := firstOutbox.Queue(ctx, testMailOutboxQueueArgs(effectKey, message))
-	if err != nil || queued.Created {
+	queued, err := firstOutbox.Queue(ctx, testMailOutboxQueueArgs(effectKey, testMailOutboxMessage(newMailOutboxSendId())))
+	if err != nil || queued.Created || queued.SendId != winnerId {
 		t.Fatalf("the racing first device %+v: %v", queued, err)
 	}
 	if count := len(store.paths()); count != 1 {
@@ -232,6 +273,32 @@ func TestMailOutboxTwoDevicesQueueOneObject(t *testing.T) {
 	signed := &bridge.Signed{}
 	if err := proto.Unmarshal(file.Signed, signed); err != nil || !bytes.Equal(signed.GetSignerId(), second.sidecarId.Bytes()) {
 		t.Fatalf("the object kept is not the one written first: %v", err)
+	}
+}
+
+// Another device can queue, finish and remove this effect between the first device's reads and its create.
+func TestMailOutboxRemovalDuringQueueKeepsTheCompletedSend(t *testing.T) {
+	ctx := t.Context()
+	store := newMailTestStore()
+	outbox := newTestMailOutbox(t, store, newTestMailOutboxSigner(testMailId(0xb1)), testMailOutboxStanding(AbuseStandingStandard, true))
+	effectKey, winnerId := testMailOutboxEffectKey(), newMailOutboxSendId()
+	store.beforeWrite = func() {
+		if _, err := outbox.Queue(ctx, testMailOutboxQueueArgs(effectKey, testMailOutboxMessage(winnerId))); err != nil {
+			t.Fatal(err)
+		}
+		if err := outbox.mailbox.WriteOutcomes(ctx, effectKey, []*SmtpDomainOutcome{{Domain: "outside.example", Outcome: SmtpOutcomeSent}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := outbox.mailbox.RemoveOutbox(ctx, effectKey); err != nil {
+			t.Fatal(err)
+		}
+	}
+	queued, err := outbox.Queue(ctx, testMailOutboxQueueArgs(effectKey, testMailOutboxMessage(newMailOutboxSendId())))
+	if err != nil || queued.Created || queued.SendId != winnerId {
+		t.Fatalf("receipt after concurrent removal %+v: %v", queued, err)
+	}
+	if _, err := outbox.mailbox.ReadOutbox(ctx, effectKey); !errors.Is(err, ErrSmtpMailboxNotFound) {
+		t.Fatalf("completed entry was recreated: %v", err)
 	}
 }
 
