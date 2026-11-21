@@ -772,6 +772,12 @@ func (self *SmtpSender) sendDomain(ctx context.Context, plan *smtpSendPlan, doma
 			return scheduled("")
 		}
 		switch {
+		case proof.RequireTlsMissing:
+			return end(SmtpOutcomeTlsRefused, &SmtpDsn{
+				Outcome:    SmtpOutcomeTlsRefused,
+				Recipients: self.dsnRecipients(pending, smtpDsnStatusRequireTlsMissing, 0),
+				Reason:     "The receiving mail server did not advertise REQUIRETLS after TLS was established.",
+			})
 		case proof.TooLarge:
 			byteCount, _ := plan.wire.ByteCount(SmtpModeData)
 			outcome.ByteCount = byteCount

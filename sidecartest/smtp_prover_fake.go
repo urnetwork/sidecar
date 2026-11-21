@@ -407,18 +407,23 @@ func (self *fakeSmtpProverRun) run(ctx context.Context, conn net.Conn) (*sidecar
 	if reply.code != "250" {
 		return &sidecar.SmtpProofResult{RefusedCode: reply.code}, nil
 	}
-	chunking, pipelining := false, false
+	chunking, pipelining, requireTls := false, false, false
 	for _, line := range reply.lines[1:] {
-		switch strings.ToUpper(strings.Fields(line + " ")[0]) {
+		switch strings.ToUpper(line) {
 		case "CHUNKING":
 			chunking = true
 		case "PIPELINING":
 			pipelining = true
+		case "REQUIRETLS":
+			requireTls = true
 		}
 	}
 	mode := sidecar.SmtpModeData
 	if chunking && !self.prover.settings.ForceData {
 		mode = sidecar.SmtpModeBdat
+	}
+	if job.Preamble.Flags&sidecar.SmtpFlagRequireTls != 0 && !requireTls {
+		return &sidecar.SmtpProofResult{Mode: uint32(mode), RequireTlsMissing: true}, nil
 	}
 	count := uint64(len(job.Message))
 	if mode == sidecar.SmtpModeData {

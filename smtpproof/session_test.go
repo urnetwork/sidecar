@@ -577,6 +577,32 @@ func TestSendBdatThroughTheGate(t *testing.T) {
 	}
 }
 
+// Only an exact REQUIRETLS extension in the post-TLS EHLO permits the flagged envelope on either TLS version.
+func TestSendRequiresThePostTlsRequireTlsKeywordBeforeMail(t *testing.T) {
+	for _, leg := range testTlsLegs() {
+		job := testJob("A message requiring TLS.\r\n", "bob")
+		job.Preamble.Flags |= preambleFlagRequireTls
+		mxSettings := testMxDefaults()
+		mxSettings.keywords = append(mxSettings.keywords, "XREQUIRETLS", "REQUIRETLS-NO")
+		send := testRunSend(t, leg, mxSettings, DefaultProverSettings(), job)
+		if send.err != nil || send.result == nil || !send.result.RequireTlsMissing || send.result.Accepted {
+			t.Fatalf("%s missing extension: %+v, %v", leg.name, send.result, send.err)
+		}
+		if seen := send.mx.seen(); len(seen) != 1 || seen[0] != "EHLO "+testHeloName || len(send.edge.parts) != 1 {
+			t.Fatalf("%s missing extension: MX saw %v, parts %d", leg.name, seen, len(send.edge.parts))
+		}
+
+		mxSettings.keywords = append(mxSettings.keywords, "ReQuIrEtLs")
+		send = testRunSend(t, leg, mxSettings, DefaultProverSettings(), job)
+		if send.err != nil || send.result == nil || !send.result.Accepted || send.result.RequireTlsMissing {
+			t.Fatalf("%s advertised extension: %+v, %v", leg.name, send.result, send.err)
+		}
+		if seen := send.mx.seen(); len(seen) < 2 || !strings.HasSuffix(seen[1], "> REQUIRETLS") {
+			t.Fatalf("%s advertised extension: MX saw %v", leg.name, seen)
+		}
+	}
+}
+
 func TestSendThroughTheGateAfterAHelloRetryRequest(t *testing.T) {
 	// an MX preferring another group retries, and Go's server follows the retry with a dummy
 	// change_cipher_spec, which reaches the gate ahead of the second ClientHello

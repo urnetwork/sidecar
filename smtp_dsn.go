@@ -33,7 +33,8 @@ type SmtpDsnRecipient struct {
 	// The addr-spec, lowercase.
 	Address string
 	// RFC 3463's enhanced status, a 5.x.x: 5.0.0 for the MX's own refusal, 5.7.10 for TLS that could not be
-	// authenticated (SmtpTlsRefusalStatus), 5.3.4 for a message too large, 4.4.7 for one that timed out.
+	// authenticated (SmtpTlsRefusalStatus), 5.7.30 for a missing REQUIRETLS extension, 5.3.4 for a message
+	// too large, 4.4.7 for one that timed out.
 	Status string
 	// The MX's reply code, when it refused the recipient; 0 otherwise.
 	ReplyCode uint32
@@ -172,6 +173,8 @@ func smtpDsnStatusOfReply(code uint32) string {
 
 // RFC 3463's statuses the sender's own ends give.
 const (
+	// RFC 8689: the MX did not advertise REQUIRETLS after STARTTLS.
+	smtpDsnStatusRequireTlsMissing = "5.7.30"
 	// A message too large for the system: too_large.
 	smtpDsnStatusTooLarge = "5.3.4"
 	// Delivery time expired: given up at 5 days.

@@ -233,8 +233,8 @@ type SmtpConnectionResult struct {
 }
 
 // Whether the connection may have spent a unit: the MX may have seen MAIL (§14.7). A preamble refusal, KEYS,
-// an EHLO the MX refused, a too_large and a mode's reconnect never reach MAIL; a send that failed after OK
-// without saying how far it got may have.
+// an EHLO refusal, a missing REQUIRETLS extension, a too_large and a mode's reconnect all end before MAIL.
+// A send that failed after OK without saying how far it got may have spent a unit.
 func (self *SmtpConnectionResult) MailMayHaveGone() bool {
 	if self.NoProver || self.EnvelopeRefused || self.PreambleCode != protocol.SmtpPreambleCode_SMTP_PREAMBLE_OK {
 		return false
@@ -245,7 +245,7 @@ func (self *SmtpConnectionResult) MailMayHaveGone() bool {
 	if self.Proof == nil {
 		return true
 	}
-	return self.Proof.Mode != 0 && !self.Proof.TooLarge && self.Proof.ReconnectByteCount == 0
+	return self.Proof.Mode != 0 && !self.Proof.RequireTlsMissing && !self.Proof.TooLarge && self.Proof.ReconnectByteCount == 0
 }
 
 // SmtpOutcome's form of a send that got a send_id (§14.4's step 5): the level, the mode, every reply code the

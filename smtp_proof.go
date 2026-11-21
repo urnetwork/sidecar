@@ -140,6 +140,8 @@ type SmtpProofResult struct {
 	Accepted bool
 	// The reply that ended the send when it did not take the message, such as "550".
 	RefusedCode string
+	// A REQUIRETLS message stopped before MAIL because the post-TLS EHLO omitted the extension.
+	RequireTlsMissing bool
 	// DATA mode and over the prover's smtp_data_proof_bytes, decided before MAIL (§14.5).
 	TooLarge bool
 	// TooLarge: the smtp_data_proof_bytes the message passed, which its too_large outcome and DSN cite.

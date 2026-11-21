@@ -430,10 +430,17 @@ func (self *proverRun) run(ctx context.Context) (*sidecar.SmtpProofResult, error
 		mode = adversary.forceMode
 	}
 	pipelining := false
-	for i, text := range replies[0].lines {
-		if 0 < i && asciiLower([]byte(text)) == "pipelining" {
+	requireTls := false
+	for _, text := range replies[0].lines[1:] {
+		switch asciiLower([]byte(text)) {
+		case "pipelining":
 			pipelining = true
+		case "requiretls":
+			requireTls = true
 		}
+	}
+	if self.preamble.flags&preambleFlagRequireTls != 0 && !requireTls {
+		return &sidecar.SmtpProofResult{Mode: mode, RequireTlsMissing: true}, nil
 	}
 	// the count was declared before the mode was known, for the mode the sidecar expected
 	// (plan-SMTP-preamble-byte-count). BDAT's n is the message's length and DATA's count its stuffed
