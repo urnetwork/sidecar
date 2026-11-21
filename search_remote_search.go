@@ -118,6 +118,7 @@ type searchRemoteSearch struct {
 	own         *SearchStream
 	ownDone     bool
 	repoEnds    []<-chan struct{}
+	rowsCurrent func() bool
 	progress    SearchProgress
 	fallbacks   []*searchRemoteFallback
 	firstPages  int
@@ -198,6 +199,9 @@ func (self *SearchRemoteClient) newSearch(ctx context.Context, request *SearchRe
 		search.repos[repoId] = &searchRemoteRepo{repoId: repoId, state: searchRemoteRepoTodo, asking: map[*searchRemoteLeg]bool{}, tried: map[Id]bool{}}
 	}
 	search.merge = newSearchRemoteMerge(self.settings, self.ownIndexOf, self.maskedOf)
+	if host, ok := self.args.Local.(memberRequesterLocal); ok {
+		search.merge.acceptRemote, search.rowsCurrent = host.remoteRows(searchCtx, request)
+	}
 	local := *request
 	local.Scope = SearchCached
 	local.Remote = SearchRemoteOff
@@ -238,6 +242,7 @@ func (self *SearchRemoteClient) scopeOf(state *ConfigState, selfId Id, request *
 	if err != nil {
 		return nil
 	}
+	at := time.UnixMilli(max(state.timeMs, self.clock.Now().UnixMilli()))
 	reads := func(repoId Id) bool {
 		repo := acl.Repo(repoId)
 		if request.allowRepo != nil && !request.allowRepo(repoId) {
@@ -249,7 +254,7 @@ func (self *SearchRemoteClient) scopeOf(state *ConfigState, selfId Id, request *
 		if _, ok := searchRemoteKindOf(repo.GetKind()); !ok {
 			return false
 		}
-		return slices.Contains(state.RepoReadersAt(repoId, self.clock.Now()), selfId)
+		return self.readsAt(state, selfId, repoId, at)
 	}
 	scope := []Id{}
 	if 0 < len(request.Repos) {
@@ -267,6 +272,18 @@ func (self *SearchRemoteClient) scopeOf(state *ConfigState, selfId Id, request *
 	}
 	slices.SortFunc(scope, Id.Cmp)
 	return scope
+}
+
+func (self *SearchRemoteClient) readsAt(state *ConfigState, selfId, repo Id, at time.Time) bool {
+	if !slices.Contains(state.RepoReadersAt(repo, at), selfId) {
+		return false
+	}
+	if _, stock := self.args.Local.(memberRequesterLocal); !stock || !aclRepoKindOwnerBound(state.Repo(repo).GetKind()) {
+		return true
+	}
+	// The stock member has no receipt bound to this search. An owner-bound non-writer must acquire one before reading.
+	acl, err := state.Acl()
+	return err == nil && acl.EvsAccess(AclSidecarSubject(selfId), repo, AclTokenAudienceEvs, at).Rights.Has(AclEvsWrite)
 }
 
 // The device's own index of a ref, as the merge reads it.
@@ -359,7 +376,7 @@ func (self *searchRemoteSearch) Next() (page []SearchHit, progress SearchProgres
 // A local cached leg keeps the original scope even after giving its last page. A later reply must still respect a
 // cut learned by that device while the remote search was in flight.
 func (self *searchRemoteSearch) scopeEnded() bool {
-	if searchReposEnded(self.repoEnds) {
+	if searchReposEnded(self.repoEnds) || self.rowsCurrent != nil && !self.rowsCurrent() {
 		return true
 	}
 	state, err := self.client.args.Config()
@@ -367,8 +384,9 @@ func (self *searchRemoteSearch) scopeEnded() bool {
 	if err != nil || state == nil || !ok || current != self.selfId {
 		return true
 	}
+	at := time.UnixMilli(max(state.timeMs, self.client.clock.Now().UnixMilli()))
 	for _, repo := range self.scope {
-		if (self.request.allowRepo != nil && !self.request.allowRepo(repo)) || !slices.Contains(state.RepoReadersAt(repo, self.client.clock.Now()), current) {
+		if (self.request.allowRepo != nil && !self.request.allowRepo(repo)) || !self.client.readsAt(state, current, repo, at) {
 			return true
 		}
 	}
@@ -515,7 +533,7 @@ func (self *searchRemoteSearch) plan() []searchRemoteMergeKey {
 		return nil
 	}
 	view, err := client.orderView(self.scope)
-	if err != nil {
+	if err != nil || view.selfId != self.selfId {
 		for _, repoId := range todo {
 			repo := self.repos[repoId]
 			repo.state, repo.reason = searchRemoteRepoFallback, SearchFallbackNone
@@ -749,7 +767,8 @@ func (self *searchRemoteSearch) handle(event *searchRemoteLegEvent) []searchRemo
 			touched = append(touched, client.mismatch(self, leg.indexerId, repoId)...)
 			continue
 		}
-		if hit, ok := searchRemoteHitOfWire(wireHit, name); ok {
+		// A named repo asks for one ref. Each page stays on the ref its coverage row selected.
+		if hit, ok := searchRemoteHitOfWire(wireHit, name); ok && hit.Ref == leg.refs[repoId] {
 			hits = append(hits, hit)
 		}
 	}
@@ -834,7 +853,7 @@ func (self *searchRemoteSearch) pageZero(leg *searchRemoteLeg, reply *protocol.S
 			client.log.Infof("[search]the served memory was not written: %s", err)
 		}
 		leg.source.spans[repoId] = &searchRemoteSpan{
-			text: served == protocol.SearchServed_SERVED_TEXT, uncovered: row.GetUncovered(), untilMs: leg.untilMs,
+			refId: refId, text: served == protocol.SearchServed_SERVED_TEXT, uncovered: row.GetUncovered(), untilMs: leg.untilMs,
 			pinVersion: row.GetRefVersion(), pinChain: row.GetChain(), refTimeMs: row.GetRefTimeMs(),
 		}
 		forked, waiting := self.merge.checkPin(leg.source, repoId, refId)
@@ -1088,8 +1107,10 @@ func (self *searchRemoteSearch) maySend(indexerId Id, named []Id) bool {
 	if err != nil || state == nil || !ok || id != self.selfId || !client.mayDiscloseTo(state, id, indexerId, client.mode()) {
 		return false
 	}
+	at := time.UnixMilli(max(state.timeMs, client.clock.Now().UnixMilli()))
 	for _, repo := range named {
-		if (self.request.allowRepo != nil && !self.request.allowRepo(repo)) || !slices.Contains(state.searchIndexersAt(id, repo, client.args.Services, client.clock.Now().UnixMilli()), indexerId) {
+		if (self.request.allowRepo != nil && !self.request.allowRepo(repo)) || !client.readsAt(state, id, repo, at) ||
+			!slices.Contains(state.searchIndexersAt(id, repo, client.args.Services, at.UnixMilli()), indexerId) {
 			return false
 		}
 	}

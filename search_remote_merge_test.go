@@ -27,7 +27,7 @@ func testSearchRemoteClaimOf(repoId Id, label string, version uint64, timeMs int
 // A leg's source serving repoId from text, pinned at version with refTimeMs, its span checked through checkedMs.
 func testSearchRemoteLegOf(merge *searchRemoteMerge, repoId Id, version uint64, refTimeMs int64, checkedMs int64, order int) *searchRemoteSource {
 	source := merge.newSource(NewId(), "indexer", order)
-	source.spans[repoId] = &searchRemoteSpan{text: true, pinVersion: version, pinChain: make([]byte, 32), refTimeMs: refTimeMs}
+	source.spans[repoId] = &searchRemoteSpan{refId: repoId, text: true, pinVersion: version, pinChain: make([]byte, 32), refTimeMs: refTimeMs}
 	merge.moveSpan(source, []Id{repoId}, checkedMs)
 	return source
 }
@@ -64,6 +64,46 @@ func TestMergeTable(t *testing.T) {
 		if row == nil || row.State != c.wantRow || (row.By != "") != c.wantBy {
 			t.Errorf("%s: %+v", c.label, row)
 		}
+	}
+}
+
+func TestRemoteRequesterRechecksMasksWhenShowingRetainedClaims(t *testing.T) {
+	repo := NewId()
+	merge := testSearchRemoteMergeOf(6, false)
+	source := testSearchRemoteLegOf(merge, repo, 6, 0, 0, 0)
+	through := uint64(0)
+	merge.masked = func(_ searchRemoteMergeKey, version uint64) bool { return version <= through }
+	own := testSearchRemoteClaimOf(repo, "memo", 6, 1000, SearchPossible)
+	remote := testSearchRemoteClaimOf(repo, "memo", 5, 1000, SearchVerified)
+	merge.add(nil, []SearchHit{own})
+	keys := merge.add(source, []SearchHit{remote})
+	if rows := merge.rows(keys); len(rows) != 1 || rows[0].State != SearchVerified {
+		t.Fatalf("initial claims %+v", rows)
+	}
+	through = 5
+	if rows := merge.rows(keys); len(rows) != 1 || rows[0].Version != 6 {
+		t.Fatalf("masked remote claim remained %+v", rows)
+	}
+	through = 6
+	if rows := merge.rows(keys); len(rows) != 0 {
+		t.Fatalf("masked claims remained %+v", rows)
+	}
+}
+
+func TestRemoteRequesterNeverFoldsAnotherLocalRef(t *testing.T) {
+	repo := NewId()
+	merge := testSearchRemoteMergeOf(6, false)
+	source := testSearchRemoteLegOf(merge, repo, 6, 20_000, 0, 0)
+	own := testSearchRemoteClaimOf(repo, "memo", 6, 1000, SearchPossible)
+	own.Ref = NewId()
+	keys := merge.add(nil, []SearchHit{own})
+	if rows := merge.rows(keys); len(rows) != 1 || rows[0].State != SearchPossible || rows[0].By != "" {
+		t.Fatalf("another ref folded %+v", rows)
+	}
+	own.State = SearchConfirmed
+	merge.add(nil, []SearchHit{own})
+	if merge.omitted(source, keys[0]) {
+		t.Fatal("another ref raised omission")
 	}
 }
 

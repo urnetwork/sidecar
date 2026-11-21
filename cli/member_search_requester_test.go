@@ -59,6 +59,14 @@ func (self *testMemberSearchIndexer) answer(ctx context.Context, message *sideca
 		Hits: []*protocol.SearchHit{{RepoId: self.repo.Bytes(), RefId: self.ref.Bytes(), DocKey: self.doc.Bytes(), Version: 1, State: uint32(sidecar.SearchConfirmed),
 			DocKind: 1, Partition: 1, TimeMs: 1000, Locator: "orchard.txt", Signer: self.requester.Bytes()}},
 	}
+	for _, extra := range []struct {
+		ref  sidecar.Id
+		path string
+	}{{sidecar.NewId(), "orchard-on-another-ref.txt"}, {self.ref, ".ur-index/orchard"}} {
+		other := proto.Clone(reply.Hits[0]).(*protocol.SearchHit)
+		other.RefId, other.DocKey, other.Locator = extra.ref.Bytes(), sidecar.NewId().Bytes(), extra.path
+		reply.Hits = append(reply.Hits, other)
+	}
 	size := int(request.Steps) * sidecar.DefaultSearchWireSettings().StepByteCount
 	reply.Pad = make([]byte, size-proto.Size(reply))
 	reply.Pad = reply.Pad[:len(reply.Pad)-(proto.Size(reply)-size)]
@@ -128,6 +136,16 @@ func TestEnrolledAppAsksOnlyItsCurrentSignedSearchIndexer(t *testing.T) {
 		t.Fatal(err)
 	}
 	indexer := &testMemberSearchIndexer{ready: make(chan struct{}), requester: app.Identity().SidecarId, repo: repo, ref: sidecar.NewId(), doc: sidecar.NewId()}
+	if key := app.GkmHeldKey(repo, 1); key != nil {
+		refKey, err := sidecar.NewEvsRefKey(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		indexer.ref, err = sidecar.EvsRefId(refKey, sidecar.EvsMainRefName)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	if _, err := peer.AddComponent(indexer); err != nil {
 		t.Fatal(err)
 	}
