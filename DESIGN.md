@@ -6206,9 +6206,7 @@ message ProjectionRows {             // projrows/<network_id>/<rows_sha256>/_: a
                                      // imports nothing, each EvsShare with its signer and at; with
                                      // AclRepo.holders_shrunk_at and its time (shrink, below);
                                      // sidecar/device's posture reads only its has_document (field 1)
-                                     // 6 stays unused until M6, when Team scopes define repeated
-                                     // TeamScopeRow team_scopes {label, member_id or tag atom}; format-1
-                                     // readers skip it
+  repeated TeamScopeRow team_scopes = 6;    // Team scopes in label order. A format-1 reader skips field 6.
   repeated ProposalRow proposals = 7;       // every AuthorityProposal open at folded_through, by proposal_id
                                             // (7.9's proposal row; owner decision 314)
   ProjectionSettings settings = 8;          // the ServiceSettings values a verifier judges by, self_admit
@@ -6300,6 +6298,11 @@ message KeyRow {                     // a KeyRegister, with its KeyRevoke's posi
   uint64 at = 7;
   int64 not_after = 8;
   uint64 revoked_at = 9;
+}
+message TeamScopeRow {               // §2.8 api-7, QD-059. Exactly one owner field is present.
+  string label = 1;                  // the public Team scope label
+  bytes member_id = 2;
+  bytes tag_atom = 3;                // the opaque tag atom
 }
 message ProposalRow {                // an AuthorityProposal open at folded_through (proposal)
   bytes proposal_id = 1;
