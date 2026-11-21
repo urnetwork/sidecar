@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 
 	"github.com/urnetwork/connect"
@@ -31,6 +32,7 @@ type FakeServiceClientSource struct {
 
 	stateLock    sync.Mutex
 	indexClients map[int]connect.Id
+	streamRanges map[int]uint64
 	issueCount   int
 }
 
@@ -38,7 +40,7 @@ func NewFakeServiceClientSource(faults *FaultQueue, settings *FakeServiceClientS
 	if settings == nil {
 		settings = DefaultFakeServiceClientSettings()
 	}
-	return &FakeServiceClientSource{faults: faults, settings: settings, indexClients: map[int]connect.Id{}}
+	return &FakeServiceClientSource{faults: faults, settings: settings, indexClients: map[int]connect.Id{}, streamRanges: map[int]uint64{}}
 }
 
 func (self *FakeServiceClientSource) ServiceClient(ctx context.Context, clientIndex int) (*sidecar.ServiceClientAuth, error) {
@@ -71,4 +73,17 @@ func (self *FakeServiceClientSource) ServiceClient(ctx context.Context, clientIn
 		return nil, err
 	}
 	return auth, nil
+}
+
+func (self *FakeServiceClientSource) ReserveStreamIdRange(ctx context.Context, index int, clientId sidecar.Id) (uint64, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if id, ok := self.indexClients[index]; !ok || sidecar.Id(id) != clientId || self.streamRanges[index] == math.MaxUint64 {
+		return 0, errors.New("no stream ID range for this client")
+	}
+	self.streamRanges[index]++
+	return self.streamRanges[index], nil
 }

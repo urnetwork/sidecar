@@ -103,6 +103,92 @@ func testStreamsSettled(t *testing.T, side *testRpcSide) {
 	}
 }
 
+func TestStreamOpenAfterSameClientRestarts(t *testing.T) {
+	testStreamOpenAfterRestart(t, false)
+}
+
+func TestStreamOpenAfterEdgeClientRestarts(t *testing.T) {
+	testStreamOpenAfterRestart(t, true)
+}
+
+func testStreamOpenAfterRestart(t *testing.T, edge bool) {
+	t.Helper()
+	pair := newTestRpcPair(t)
+	listener := pair.add(nil, nil)
+	incoming := testStreamAccepting(t, listener, testStreamTarget)
+	clientId, identity := connect.NewId(), newTestRpcIdentity()
+	start := func() *testRpcSide {
+		if edge {
+			return pair.addEdgeClient(clientId, identity, nil)
+		}
+		return pair.addClient(clientId, identity, nil)
+	}
+	first := start()
+	old, other := testStreamOpen(t, first, listener, incoming, nil)
+	if err := old.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := other.Close(); err != nil {
+		t.Fatal(err)
+	}
+	first.subprotocol.Close()
+	first.cancel()
+
+	second := start()
+	fresh, accepted := testStreamOpen(t, second, listener, incoming, nil)
+	if fresh.StreamId() <= old.StreamId() || fresh.StreamId()%2 != old.StreamId()%2 {
+		t.Fatalf("new stream ID %d after %d", fresh.StreamId(), old.StreamId())
+	}
+	// Deliver late copies of the old connection's real open and close.
+	// The surviving listener must keep them on their original ID.
+	late := 0
+	for _, frame := range first.sent() {
+		switch protocol.MessageType(frame.Type) {
+		case protocol.MessageType_STREAM_OPEN, protocol.MessageType_STREAM_CLOSE:
+			if _, err := first.send(listener.clientId, frame, nil, 0); err != nil {
+				t.Fatal(err)
+			}
+			late++
+		}
+	}
+	if late != 2 {
+		t.Fatalf("expected the old open and close, got %d", late)
+	}
+	if _, err := fresh.Write([]byte("new")); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(testStreamReadFull(t, accepted, 3)); got != "new" {
+		t.Fatalf("new connection read %q", got)
+	}
+	select {
+	case <-incoming:
+		t.Fatal("listener reopened the previous stream")
+	default:
+	}
+	fresh.Close()
+	accepted.Close()
+}
+
+// An expired range reservation cannot publish an open to the listener.
+func TestStreamOpenDeadlineCoversRangeReservation(t *testing.T) {
+	pair := newTestRpcPair(t)
+	edge := pair.addEdge(nil)
+	listener := pair.add(nil, nil)
+	testStreamAccepting(t, listener, testStreamTarget)
+	edge.subprotocol.streams.reserveIds = func(context.Context) (uint64, error) {
+		edge.clock.Advance(edge.settings.DefaultCallTimeout)
+		return 1, nil
+	}
+	_, err := edge.subprotocol.OpenStream(t.Context(), Id(listener.clientId), &StreamOpenRequest{Target: testStreamTarget})
+	var protocolErr *SubprotocolError
+	if !errors.As(err, &protocolErr) || protocolErr.Code != protocol.ErrorCode_ERR_DEADLINE_EXCEEDED {
+		t.Fatalf("expired reservation returned %v", err)
+	}
+	if slices.Contains(testSentTypes(edge), protocol.MessageType_STREAM_OPEN) {
+		t.Fatal("sent a stream open after its reservation deadline")
+	}
+}
+
 // The open's whole path: Hello first, the acceptor told the target, metadata, ticket and the peer's
 // verified identity, early data read first, then bytes both ways; both Closes finish the stream and give
 // every byte of credit back.
