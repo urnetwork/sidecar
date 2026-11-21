@@ -20,9 +20,22 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// An owner previews and confirms a named-member policy through the stock daemon and its EVS ref.
-func testDaemonOwnerAclPlanAndConfirm(t *testing.T, ctx context.Context, running *sidecar.Sidecar, first *enginenet.BootstrapResult, net *sidecartest.Net, engines *enginenet.Engines) {
-	t.Helper()
+// An owner previews and confirms a named-member policy through the stock daemon, then retries a signed push.
+func TestDaemonOwnerConfirmsPolicyAndRetriesPreparedCommit(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*urTestTimeout)
+	defer cancel()
+	net := sidecartest.NewNet(ctx, nil)
+	t.Cleanup(net.Close)
+	engines := enginenet.NewEngines(t, net, nil)
+	running, _, first := bootstrapTestDaemonOwner(t, ctx, net, engines)
+	follower := startUrConfigFollower(running, sidecar.NewNoopLogger())
+	if follower == nil {
+		t.Fatal("no follower started")
+	}
+	client, err := follower.WaitStanding(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 	quota := net.Fakes().Quota
 	setRuleLimit := func(rules int64) {
 		quota.SetLimits(connect.Id(running.Identity().NetworkId), &sidecar.QuotaLimits{Tier: "free", Limits: map[string]int64{"acl_rules": rules}})
@@ -80,8 +93,6 @@ func testDaemonOwnerAclPlanAndConfirm(t *testing.T, ctx context.Context, running
 			t.Fatalf("missing %s in stock preview: %s", value, stdout)
 		}
 	}
-	follower := running.ConfigFollower()
-	client := follower.Client()
 	if client.Writer() != nil {
 		t.Fatal("the stock follower installed a general or background config writer")
 	}
@@ -168,14 +179,11 @@ func testDaemonOwnerAclPlanAndConfirm(t *testing.T, ctx context.Context, running
 	if client.Writer() != nil {
 		t.Fatal("a confirmed ACL save installed a general config writer")
 	}
-	t.Run("prepared commits and retries", func(t *testing.T) {
-		// Deliver the newly published projection to the fixture's EVS and GKM gates.
-		if err := engines.Sync(ctx, running.Identity().NetworkId); err != nil {
-			t.Fatal(err)
-		}
-		testDaemonConfigHeadCommit(t, ctx, ref, evs.Repo(first.ConfigRepoId), running.Identity().SidecarId, state.Base().GetConfigVersion())
-	})
-
+	// Deliver the newly published projection to the fixture's EVS and GKM gates.
+	if err := engines.Sync(ctx, running.Identity().NetworkId); err != nil {
+		t.Fatal(err)
+	}
+	testDaemonConfigHeadCommit(t, ctx, ref, evs.Repo(first.ConfigRepoId), running.Identity().SidecarId, state.Base().GetConfigVersion())
 }
 
 // A disjoint write after an exact push was signed makes the commit itself stale. A lost receipt

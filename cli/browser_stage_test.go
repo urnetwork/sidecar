@@ -24,6 +24,28 @@ import (
 	"github.com/urnetwork/sidecar/sidecartest/enginenet"
 )
 
+// Wakes the relay after the fixture's push store records a service notice.
+type stagedBrowserPush struct {
+	*sidecartest.FakePush
+	changed *connect.Monitor
+}
+
+func (self *stagedBrowserPush) Hint(ctx context.Context, clientIds []connect.Id, hint *sidecar.ClientHint) error {
+	if err := self.FakePush.Hint(ctx, clientIds, hint); err != nil {
+		return err
+	}
+	self.changed.NotifyAll()
+	return nil
+}
+
+func (self *stagedBrowserPush) HintSidecars(ctx context.Context, sidecarIds []connect.Id, hint *sidecar.ClientHint) error {
+	if err := self.FakePush.HintSidecars(ctx, sidecarIds, hint); err != nil {
+		return err
+	}
+	self.changed.NotifyAll()
+	return nil
+}
+
 // Playwright stages the real key-origin Worker. This companion serves only on loopback.
 // It holds the fixture owner's signing key. The browser enrolls with its own key.
 func TestStagedBrowserMemberServices(t *testing.T) {
@@ -44,6 +66,10 @@ func TestStagedBrowserMemberServices(t *testing.T) {
 	netSettings.Api.ServiceDomain = domain
 	world := sidecartest.NewNet(ctx, netSettings)
 	t.Cleanup(world.Close)
+	servicePush := &stagedBrowserPush{FakePush: world.Fakes().Push, changed: connect.NewMonitor()}
+	engineHost := world.Fakes().ServiceHost()
+	engineHost.Push = servicePush
+	world.AddEngines(engineHost)
 	api, err := world.Api()
 	if err != nil {
 		t.Fatal(err)
@@ -135,7 +161,7 @@ func TestStagedBrowserMemberServices(t *testing.T) {
 	}
 
 	identity := owner.Identity()
-	world.Fakes().Push.BindSidecar(connect.Id(identity.SidecarId), connect.Id(identity.ClientId))
+	servicePush.BindSidecar(connect.Id(identity.SidecarId), connect.Id(identity.ClientId))
 	push, err := world.HintWriter()
 	if err != nil {
 		t.Fatal(err)
@@ -150,30 +176,26 @@ func TestStagedBrowserMemberServices(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		tick := time.NewTicker(100 * time.Millisecond)
-		defer tick.Stop()
 		read := 0
 		for {
+			changed := servicePush.changed.NotifyChannel()
+			items := servicePush.AllHints()
+			for ; read < len(items); read++ {
+				item := items[read]
+				h := item.Hint
+				if item.ClientId == connect.Id(identity.ClientId) {
+					if h.Topic == sidecar.PushTopicGkm || strings.HasPrefix(h.Topic, sidecar.PushTopicGkmGroupPrefix) {
+						hints.Receive(sidecar.PushNotice{Topic: h.Topic, Version: h.Version, Kind: h.Kind, Hint: h.Body})
+					}
+				} else if _, err := push.HintClient(poll, item.ClientId, h); err != nil && poll.Err() == nil {
+					t.Errorf("forward service hint to poll: %v", err)
+					return
+				}
+			}
 			select {
 			case <-poll.Done():
 				return
-			case now := <-tick.C:
-				if world.Clock().Now().Before(now) {
-					world.Clock().AdvanceTo(now)
-				}
-				items := world.Fakes().Push.AllHints()
-				for ; read < len(items); read++ {
-					item := items[read]
-					h := item.Hint
-					if item.ClientId == connect.Id(identity.ClientId) {
-						if h.Topic == sidecar.PushTopicGkm || strings.HasPrefix(h.Topic, sidecar.PushTopicGkmGroupPrefix) {
-							hints.Receive(sidecar.PushNotice{Topic: h.Topic, Version: h.Version, Kind: h.Kind, Hint: h.Body})
-						}
-					} else if _, err := push.HintClient(poll, item.ClientId, h); err != nil && poll.Err() == nil {
-						t.Errorf("forward service hint to poll: %v", err)
-						return
-					}
-				}
+			case <-changed:
 			}
 		}
 	}()
@@ -191,7 +213,14 @@ func TestStagedBrowserMemberServices(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(v)
 	}
+	// The browser's tokens and proofs carry real time. Bring the shared clock up to each request.
+	var clockLock sync.Mutex
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		func() {
+			clockLock.Lock()
+			defer clockLock.Unlock()
+			world.Clock().AdvanceTo(time.Now())
+		}()
 		if r.Method == "POST" && r.URL.Path == "/finish" {
 			finishOnce.Do(func() { close(finish) })
 			return
@@ -213,7 +242,7 @@ func TestStagedBrowserMemberServices(t *testing.T) {
 			lock.Lock()
 			clientId := browserClient
 			lock.Unlock()
-			world.Fakes().Push.BindSidecar(connect.Id(p.SidecarID), connect.Id(clientId))
+			servicePush.BindSidecar(connect.Id(p.SidecarID), connect.Id(clientId))
 			if err = owner.ConfirmBrowserAdmission(r.Context(), p.SidecarID, *preview, nil); err != nil {
 				t.Logf("owner confirmation: %v", err)
 				w.WriteHeader(503)
