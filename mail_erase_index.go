@@ -36,7 +36,9 @@
 // rides an ERASE that destroys a key, or a completion ERASE (evs_erase_completion.go; QD-1137), flagged COMPLETION, which
 // evs takes once a key of the erasure's ERASEs no completion named since. An erasure whose index rewrite is unproven
 // (a history the store could not walk whole) ends with every key it could find destroyed and no complete, sending no
-// completion: it stays rewriting, fail closed.
+// completion: it stays rewriting, fail closed. A format-1 mailbox, which has neither this index nor a completion ERASE
+// (COMPLETION is format 2's flag, QD-1137), reads an erasure with nothing left done on this device instead
+// (mail_erase.go's settleFormat1), so only a format-2 one waits on evs's state to say so.
 //
 // On every leg but the extension's. The types here are used under MailEraser's lock.
 
