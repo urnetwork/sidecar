@@ -9,6 +9,14 @@
 // for the case and for its twin. Each run checks the row's invariants after every step. A failure is
 // reported once, as it happened: nothing reruns a failed attempt to see whether it passes (R-TEST-9).
 //
+// The explorer takes its short form after a fixed run that passed no barrier, of a schedule with no
+// Background step, where nothing else left a seed anything to order (QD-1151; explore.go): one seed, the
+// report saying "no barrier passed: every seed takes this order". The gate's rules item names the cases
+// some registered schedule of which takes it (exploreOneOrderCases). On the gate's build, with the hooks
+// linked, a registered case, twin or clause that takes it for a case the list leaves out fails, and
+// rules_testhooks_test.go holds the list to every registered T2 schedule's fixed run, so the item stays
+// true.
+//
 // T3 runs the same registration's builder through server's sidecart3, with the nightly seeds.
 
 package fault
@@ -17,11 +25,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/urnetwork/sidecar/sidecartest"
 )
+
+// The cases, as Case.String names them, some registered T2 schedule of which the explorer runs in its short
+// form under sidecar_testhooks (QD-1151), which the gate's rules item names. FS-116's to FS-118's governor
+// worlds, on fake clocks of their own, touch no store; FS-45's, FS-47's and FS-61's cases and clauses step
+// their fakes and models a step at a time and pass no barrier, as their file headers say; FS-44's clauses
+// two hosts on one balance and edge killed before its post do the same over the fake Quota; and FS-27's
+// twin, the untainted run keeping its grant, passes none either. FS-27's case and FS-44's case and other
+// clauses pass barriers and run every seed.
+func exploreOneOrderCases() []string {
+	return []string{"FS-27", "FS-44", "FS-45", "FS-47", "FS-61", "FS-116", "FS-117", "FS-118"}
+}
 
 // What CheckRow ran for one case.
 type RowReport struct {
@@ -146,13 +166,22 @@ func CheckRow(ctx context.Context, registration *Registration, settings *RuleSet
 		report.fail(report.Twin)
 	}
 
-	report.Explore = Explore(ctx, builder, settings)
+	report.Explore = exploreAfter(ctx, builder, report.Fixed, settings)
 	report.Failures = append(report.Failures, report.Explore.Failures...)
 	report.Errors = append(report.Errors, report.Explore.TraceErrors...)
 	if twin != nil {
-		report.ExploreTwin = Explore(ctx, twin, settings)
+		report.ExploreTwin = exploreAfter(ctx, twin, report.Twin, settings)
 		report.Failures = append(report.Failures, report.ExploreTwin.Failures...)
 		report.Errors = append(report.Errors, report.ExploreTwin.TraceErrors...)
+	}
+	// the registered case alone, which the gate shows, on the build it runs: the rules' own tests run toys
+	// under rows' names
+	tier := settings.Tier
+	if tier == "" {
+		tier = TierT2
+	}
+	if sidecartest.HooksLinked && Lookup(registration.Row, registration.Case, tier) == registration {
+		report.Errors = append(report.Errors, report.oneOrderErrors(testCase)...)
 	}
 
 	if testCase.Row.Unknown {
@@ -180,6 +209,26 @@ func (self *RowReport) fail(result *Result) {
 	if result != nil && result.Err != nil {
 		self.Failures = append(self.Failures, result)
 	}
+}
+
+// An explorer of this run, over the schedule or its twin, that took the short form though exploreOneOrderCases
+// leaves out testCase, the case the run's schedule or clause is of, so the gate's rules item would say every seed
+// ran where one did. That a case the list names has a schedule taking it is rules_testhooks_test.go's to hold,
+// since its other schedules may run every seed.
+func (self *RowReport) oneOrderErrors(testCase *Case) []error {
+	if slices.Contains(exploreOneOrderCases(), testCase.String()) {
+		return nil
+	}
+	errs := []error{}
+	for _, explore := range []*ExploreReport{self.Explore, self.ExploreTwin} {
+		if explore != nil && explore.OneOrder {
+			errs = append(errs, fmt.Errorf(
+				"%s: the explorer ran one seed, %s, and the gate's rules item does not name %s among the cases it runs one seed for (exploreOneOrderCases; QD-1151)",
+				explore.Id, ExploreOneOrderText, testCase,
+			))
+		}
+	}
+	return errs
 }
 
 // CheckRow for the case's T2 registration, failing t with each failure and logging what ran. A case
