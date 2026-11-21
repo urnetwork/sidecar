@@ -9,12 +9,12 @@
 //
 //   - FS-25's dns-route case runs on T3 alone, in server's api through the real POST /dns/records (MCP-M5-01).
 //   - FS-34 runs on T2 through the front's own table in the sidecar package and through the whole edge path in
-//     sidecartest, and on T3 in server's cli/tlsedge on the block and the production front (TLS-M5-25, TLS-M5-26).
+//     sidecartest, and on T3 in server's tlsedgehost on the block and the production front (TLS-M5-25, TLS-M5-26).
 //   - FS-39's report-intake case runs on T2 in smtpedgeservice, with the canary's listener half in mxedgeservice and
 //     the joint run in sidecartest (SMTP-M5-05, MAIL-M5-04). What its owners ran on Postgres, which the catalog does
 //     not ask for, is an item.
 //   - FS-41's and FS-42's M5 steps run on T3 where SOCK, TLS, DNS and OPS wrote each: listeners back by their next
-//     heartbeat in cli/sockets, the kill switch through a Redis loss and a Postgres restore in cli/tlsedge, the dns
+//     heartbeat in socketshost, the kill switch through a Redis loss and a Postgres restore in tlsedgehost, the dns
 //     step and the labels step through both edges in cli/dns with the reclaim's rows in model, and the frame's order
 //     in sidecarrestore. The run through xops's real dumps skips outside server/local/sidecar-restore-t3/run.sh,
 //     which reads open, never pass.
@@ -55,7 +55,7 @@ import (
 // The catalog's name for M5's exit.
 const gateM5OutGate = "M5-out"
 
-// The tags server's cli/tlsedge builds FS-34's T3 run under: the pending migration groups, and the hooks, which hand
+// The tags server's tlsedgehost builds FS-34's T3 run under: the pending migration groups, and the hooks, which hand
 // the block's stream to the front.
 const gateM5FrontTags = "sidecar_pending,sidecar_testhooks"
 
@@ -113,7 +113,7 @@ func gateLaterCases(catalog *Catalog, gate string) []string {
 // FS-41's and FS-42's M5 socket step, which both rows run: after Redis loses every key, listeners come back by their
 // next heartbeat with no other action.
 func gateM5SocketStepTest() *GateTest {
-	return &GateTest{Repo: "server", Package: "./cli/sockets", Stores: true, Names: []string{"TestT3RedisLossHealsByTheNextHeartbeat"}}
+	return &GateTest{Repo: "server", Package: "./socketshost", Stores: true, Names: []string{"TestT3RedisLossHealsByTheNextHeartbeat"}}
 }
 
 // Where M5's cases run their tests outside the convention: see the file header.
@@ -131,7 +131,7 @@ func gateM5Cases(catalog *Catalog) map[string][]*GateTest {
 	cases[caseOf("FS-34", "").String()] = []*GateTest{
 		gateSidecarTests("TestTlsFrontZeroBytesBeforeAuthentication"),
 		{Repo: "sidecar", Package: "./sidecartest", Tags: "sidecar_testhooks", Names: []string{"TestTlsFrontSuiteNoByteReachesAPrivateAudiencesService"}},
-		{Repo: "server", Package: "./cli/tlsedge", Tags: gateM5FrontTags, Stores: true, Names: []string{"TestT3Fs34NoByteReachesAPrivateAudiencesService"}},
+		{Repo: "server", Package: "./tlsedgehost", Tags: gateM5FrontTags, Stores: true, Names: []string{"TestT3Fs34NoByteReachesAPrivateAudiencesService"}},
 	}
 
 	cases[caseOf("FS-39", "report-intake").String()] = []*GateTest{
@@ -149,7 +149,7 @@ func gateM5Cases(catalog *Catalog) map[string][]*GateTest {
 		gatePendingTests("./cli/dns", "TestFs42DnsStepThroughBothEdges"),
 		gatePendingTests("./model", "TestDnsCtReplayInsertsOnlyMissingNames", "TestDnsLabelReclaimRebindsTheName", "TestDnsLabelReclaimRefusals"),
 		gateM5SocketStepTest(),
-		gatePendingTests("./cli/tlsedge", "TestT3TlsedgeKillsHoldThroughARedisLoss"),
+		gatePendingTests("./tlsedgehost", "TestT3TlsedgeKillsHoldThroughARedisLoss"),
 		{Repo: "server", Package: "./sidecarrestore", Names: []string{"TestLabelsStepSchedulesEachRootsReplayFromTheSidecarDump"}},
 	}
 
@@ -157,7 +157,7 @@ func gateM5Cases(catalog *Catalog) map[string][]*GateTest {
 	// the dump hold through the edges' first reloads, and §19.10's dns step, every clause
 	cases[caseOf("FS-42", "m5").String()] = []*GateTest{
 		gatePendingTests("./cli/dns", "TestFs42DnsStepThroughBothEdges", "TestFs42DnsStepOnTheRestoreFrame", "TestFs42DnsStepPersistsAnNsStopAcrossRerun"),
-		gatePendingTests("./cli/tlsedge", "TestT3TlsedgeKillsHoldThroughAPostgresRestore", "TestT3TlsedgeTakesASnapshotAfterALabelMapRestore"),
+		gatePendingTests("./tlsedgehost", "TestT3TlsedgeKillsHoldThroughAPostgresRestore", "TestT3TlsedgeTakesASnapshotAfterALabelMapRestore"),
 		gateM5SocketStepTest(),
 		{Repo: "server", Package: "./sidecarrestore", Names: []string{
 			"TestM5StepsAreRegisteredInTheProcesssFrame", "TestM5StepsRunInTheFramesOrder", "TestAbuseStepPlansFirstAndAppliesOnlyWhenTold",
@@ -264,8 +264,8 @@ func gateM5OutItems(catalog *Catalog) []*GateItem {
 					"TestTlsRevocationEndsARemovedDevicesCertificateAndSockets",
 				}},
 				gateSidecarTests("TestTlsEdgeLoginFullFlow", "TestTlsEdgeLoginRefusesBadTokens", "TestTlsEdgeLoginRefusesANonMember", "TestTlsEdgeLoginStateIsSingleUse"),
-				gatePendingTests("./cli/tlsedge", "TestT3TlsedgePassthroughEndsOnTheDeviceKey"),
-				{Repo: "server", Package: "./cli/sockets", Stores: true, Names: []string{"TestT3EdgeFindPassesUnderEachAudiencesPublish"}},
+				gatePendingTests("./tlsedgehost", "TestT3TlsedgePassthroughEndsOnTheDeviceKey"),
+				{Repo: "server", Package: "./socketshost", Stores: true, Names: []string{"TestT3EdgeFindPassesUnderEachAudiencesPublish"}},
 			},
 			External: "production: S5's T6 cell in main, dark, on test roots and LE staging (§19.11)",
 		},
@@ -276,7 +276,7 @@ func gateM5OutItems(catalog *Catalog) []*GateItem {
 					"TestTlsSuiteKillSwitchEndsNewAndOpenConnectionsWithinFiveSeconds", "TestTlsSuiteKillWaitKeepsTheListenersLeaseThroughAKillReadMidFind",
 					"TestTlsSuitePublishEndsItsSweepBeforeAKillCanMeetIt",
 				}},
-				gatePendingTests("./cli/tlsedge", "TestT3TlsedgeKillSwitchEndsNewAndOpenConnections"),
+				gatePendingTests("./tlsedgehost", "TestT3TlsedgeKillSwitchEndsNewAndOpenConnections"),
 			},
 		},
 		&GateItem{
@@ -358,8 +358,8 @@ func gateM5OutItems(catalog *Catalog) []*GateItem {
 		&GateItem{
 			Item: "the inline paths and the CROSSSLOT lints on M5's engines (§22.5's hot-path gates, §22.4; I-12; SOCK-M5-17, TLS-M5-26, DNS-M5-24): Find one script with Postgres refused, every script of the sockets engine in one slot, tlsedge's route holding to its inline-path row with its keys sharing their slot, a route probe making no Find, and dns's Redis calls naming one hash tag",
 			Tests: []*GateTest{
-				{Repo: "server", Package: "./cli/sockets", Stores: true, Names: []string{"TestT3FindIsOneScriptWithPostgresRefused", "TestT3EveryScriptOfTheEngineKeepsToOneSlot", "TestT3ThreeThousandNamesInThreePages"}},
-				gatePendingTests("./cli/tlsedge", "TestT3TlsedgeRouteHoldsToItsInlinePathRow", "TestT3TlsedgeKeysShareTheirSlot", "TestT3TlsedgeRouteProbeMakesNoFind"),
+				{Repo: "server", Package: "./socketshost", Stores: true, Names: []string{"TestT3FindIsOneScriptWithPostgresRefused", "TestT3EveryScriptOfTheEngineKeepsToOneSlot", "TestT3ThreeThousandNamesInThreePages"}},
+				gatePendingTests("./tlsedgehost", "TestT3TlsedgeRouteHoldsToItsInlinePathRow", "TestT3TlsedgeKeysShareTheirSlot", "TestT3TlsedgeRouteProbeMakesNoFind"),
 				gatePendingTests("./cli/dns", "TestDnsT3RedisCallsNameOneHashTag"),
 			},
 		},

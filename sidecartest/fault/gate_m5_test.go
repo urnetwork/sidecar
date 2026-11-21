@@ -83,7 +83,7 @@ func TestGateM5NamesEachRowsTestsWhereTheyRun(t *testing.T) {
 				repos = append(repos, test.Repo)
 			}
 			// a server test on rows that MG5 holds runs with the pending groups linked, or it skips and reads open
-			if test.Repo == "server" && test.Stores && test.Package != "./cli/sockets" && !strings.Contains(test.Tags, "sidecar_pending") {
+			if test.Repo == "server" && test.Stores && test.Package != "./socketshost" && !strings.Contains(test.Tags, "sidecar_pending") {
 				t.Errorf("%s at M5 runs %s's %v on the stores with tags %q", testCase, test.Package, test.Names, test.Tags)
 			}
 		}
