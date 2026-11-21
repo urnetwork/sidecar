@@ -27,6 +27,7 @@ var searchAgentsKinds = []string{"claim", "handoff", "ask", "note", "run"}
 
 // search_agents' request.
 type SearchAgentsRequest struct {
+	allowRepo func(Id) bool
 	// The task, a query as search's; empty lists the agents active in the window.
 	Task string
 	// Zero: now less SearchGroupSettings.AgentsSince, and no end.
@@ -85,7 +86,7 @@ func (self *SearchEngine) Agents(ctx context.Context, session Id, networkId Id, 
 	}
 	settings := self.groups
 	now := self.clock.Now()
-	search := &SearchRequest{Text: request.Task, Repos: request.Repos, Since: request.Since, Until: request.Until}
+	search := &SearchRequest{allowRepo: request.allowRepo, Text: request.Task, Repos: request.Repos, Since: request.Since, Until: request.Until}
 	if search.Since.IsZero() {
 		search.Since = now.Add(-settings.AgentsSince)
 	}

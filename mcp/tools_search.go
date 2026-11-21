@@ -64,7 +64,14 @@ func mcpSearchOfNetwork(call *McpCall) (McpSearch, error) {
 	if err != nil {
 		return nil, err
 	}
-	return tools, nil
+	network, ok := mcpToolNetworkOf(call)
+	if !ok {
+		return nil, errMcpNoToolNetwork
+	}
+	return tools.WithRepoAccess(func(repoId sidecar.Id, now time.Time) bool {
+		check, installed := network.Allow(protocol.AclAction_ACL_ACTION_READ, sidecar.AclResource{Kind: sidecar.AclResourceRepo, RepoId: repoId}, now)
+		return installed && check.Allowed
+	}), nil
 }
 
 // The tools' refusals, each constant.

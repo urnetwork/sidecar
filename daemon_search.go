@@ -335,6 +335,7 @@ type SearchTools struct {
 	// The team directory's folded view behind search_agents (DirectoryClient.SearchAgentsFold); nil in a personal
 	// network and before the directory exists.
 	agentsFold func(hits []SearchHit) []SearchHit
+	allowRepo  func(Id) bool
 }
 
 // Tools over engine, on networkId, judged for reader (nil judges every hit untrusted); nil settings take
@@ -353,6 +354,14 @@ func NewSearchTools(engine *SearchEngine, networkId Id, reader func() *SearchTru
 		reader = func() *SearchTrustReader { return nil }
 	}
 	return &SearchTools{engine: engine, networkId: networkId, reader: reader, settings: settings}, nil
+}
+
+// Narrows the tool view to the caller's current repo grants, including queries and status without named repos.
+// The host keeps its own view. Each paged request keeps checking the original session's grant.
+func (self *SearchTools) WithRepoAccess(allow func(Id, time.Time) bool) *SearchTools {
+	narrowed := *self
+	narrowed.allowRepo = func(repo Id) bool { return allow != nil && allow(repo, self.engine.clock.Now()) }
+	return &narrowed
 }
 
 // The search tools of this Sidecar's network: its installed engine, judged for this sidecar's member by its newest
@@ -758,6 +767,7 @@ func (self *SearchTools) stream(ctx context.Context, session Id, args *SearchToo
 	if err != nil {
 		return nil, "", err
 	}
+	request.allowRepo = self.allowRepo
 	stream, token, err := self.engine.open(ctx, session, request)
 	if err != nil {
 		return nil, "", err
@@ -911,7 +921,7 @@ func (self *SearchTools) Agents(ctx context.Context, env *SearchToolEnv, args *S
 	reader := self.reader()
 	request := &SearchAgentsRequest{
 		Task: args.Task, GroupCount: groupCount, Include: include, Taint: env.Taint, Reader: reader, Secret: env.Secret, Admit: env.Admit,
-		Wait: wait, Fold: self.agentsFold,
+		Wait: wait, Fold: self.agentsFold, allowRepo: self.allowRepo,
 	}
 	if request.Since, err = searchToolParseTime(args.Since); err != nil {
 		return nil, err
@@ -955,7 +965,7 @@ func (self *SearchTools) Status(args *SearchStatusToolArgs) (*SearchStatusToolRe
 	}
 	result := &SearchStatusToolResult{Repos: []*SearchToolRepoStatus{}}
 	read := func(repoId *Id) error {
-		status, err := self.engine.Status(repoId)
+		status, err := self.engine.status(repoId, self.allowRepo)
 		if err != nil {
 			return err
 		}
@@ -974,6 +984,9 @@ func (self *SearchTools) Status(args *SearchStatusToolArgs) (*SearchStatusToolRe
 		return result, read(nil)
 	}
 	for _, repoId := range repoIds {
+		if self.allowRepo != nil && !self.allowRepo(repoId) {
+			continue
+		}
 		if err := read(&repoId); err != nil {
 			return nil, err
 		}

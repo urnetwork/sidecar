@@ -96,6 +96,8 @@ type SearchFieldFilter struct {
 
 // §5.4's request.
 type SearchRequest struct {
+	// A tool session may read a narrower set than its host. Rechecked while the cursor lives.
+	allowRepo func(Id) bool
 	// §16.10's query.
 	Text string
 	// Empty: every readable repo with its index on (never secret, config or mailcfg).

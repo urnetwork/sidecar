@@ -382,6 +382,7 @@ type searchEngineStream struct {
 	normalizer *indexNormalizer
 	excluded   []SearchExclusion
 	repoEnds   []<-chan struct{}
+	validScope []func() bool
 	refNames   map[[2]Id]string
 	// What the request asks of mail's joins.
 	joinAsk SearchJoinAsk
@@ -439,8 +440,18 @@ func (self *searchEngineStream) open(ctx context.Context, scoped []*searchScoped
 	tables := indexLinkedTables()
 	nowMs := engine.clock.Now().UnixMilli()
 	planScope := map[SearchScope]searchPlanScope{SearchCached: searchPlanCached, SearchLatest: searchPlanLatest, SearchAll: searchPlanAll}[self.request.Scope]
+	var previous *SearchScopeRepo
 	for _, entry := range scoped {
 		repoId, refId := entry.repo.RepoId, entry.ref.RefId
+		if previous != entry.repo {
+			if entry.repo.valid != nil {
+				self.validScope = append(self.validScope, entry.repo.valid)
+			}
+			if allow := self.request.allowRepo; allow != nil {
+				self.validScope = append(self.validScope, func() bool { return allow(repoId) })
+			}
+			previous = entry.repo
+		}
 		name := entry.ref.Name
 		if name == "" && !entry.ref.Default && len(entry.repo.Refs) != 0 && entry.repo.Refs[0] != entry.ref {
 			name = "id:" + refId.String()
@@ -591,7 +602,7 @@ func (self *searchEngineStream) reads(repoId Id) bool {
 
 // Whether an erasure or a lost read has invalidated the query's scope, even after a finished stream released its snapshots.
 func (self *searchEngineStream) scopeEnded() bool {
-	return searchReposEnded(self.repoEnds)
+	return searchReposEnded(self.repoEnds) || slices.ContainsFunc(self.validScope, func(valid func() bool) bool { return !valid() })
 }
 
 func searchReposEnded(ends []<-chan struct{}) bool {
