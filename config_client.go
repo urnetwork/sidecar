@@ -261,6 +261,7 @@ type configVerifiedHead struct {
 	versioningRules *protocol.VersioningRules
 }
 
+// Holds the decrypted head with the version and digest the client verified for offline policy tests.
 type configClientLocalHead struct {
 	version uint64
 	chain   [sha256.Size]byte

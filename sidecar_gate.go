@@ -127,6 +127,7 @@ func (self *Sidecar) InstallGate(gate SidecarGate) func() {
 	return self.installGate(gate, false)
 }
 
+// Returns a removal function for this gate, or nil if onlyIfAbsent kept the current gate in place.
 func (self *Sidecar) installGate(gate SidecarGate, onlyIfAbsent bool) func() {
 	self.gates.stateLock.Lock()
 	if onlyIfAbsent && self.gates.gate != nil {

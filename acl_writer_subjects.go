@@ -32,10 +32,12 @@ func (self *AclPolicy) MemberEmails() []string {
 	return slices.Sorted(maps.Keys(aclSaveNamesOf(self).users))
 }
 
+// Describes the directory read the writer needs before previewing the policy.
 func (self *AclMemberLookupRequired) Error() string {
 	return "the writer needs an Owner or Admin member-directory read to resolve the policy's emails"
 }
 
+// Resolves policy selectors using the writer's verified state and enrolled networks.
 type aclWriterSubjectResolver struct {
 	writer       *Sidecar
 	state        *ConfigState
@@ -45,6 +47,7 @@ type aclWriterSubjectResolver struct {
 	unreadLabels error
 }
 
+// Accepts the proposed email mapping only while its member is live in the signed state.
 func (self *aclWriterSubjectResolver) ResolveMember(ctx context.Context, email string) (Id, bool, error) {
 	memberId, ok := self.subjects.Members[email]
 	if !ok || memberId == (Id{}) || self.state.Member(memberId) == nil {
@@ -93,6 +96,7 @@ func (self *aclWriterSubjectResolver) ResolveNetwork(ctx context.Context, text s
 	return id, err == nil, err
 }
 
+// Combines the enrollment's current zone label and alias with its locally retained retiring aliases.
 func aclWriterNetworkLabel(ctx context.Context, running *Sidecar) (NetworkLabelRow, error) {
 	dns, err := running.Dns()
 	if err != nil {
@@ -124,6 +128,7 @@ func aclWriterNetworkLabel(ctx context.Context, running *Sidecar) (NetworkLabelR
 	return row, nil
 }
 
+// Verifies the client's signed binding against its sidecar's admission in the writer's network.
 func (self *aclWriterSubjectResolver) ResolveClient(ctx context.Context, clientId Id) (Id, bool, error) {
 	if self.writer.sidecarApi == nil {
 		return Id{}, false, errors.New("no identity service for the client's binding")
@@ -147,6 +152,7 @@ func (self *aclWriterSubjectResolver) ResolveClient(ctx context.Context, clientI
 	return binding.SidecarId, true, nil
 }
 
+// Prepares a policy save against the supplied head using the writer's subjects and current limits.
 func (self *Sidecar) aclWriterPlan(ctx context.Context, source []byte, subjects *AclWriterSubjects, state *ConfigState, head *ConfigHead) (*AclSavePlan, error) {
 	policy, err := ParseAclPolicy(source)
 	if err != nil {

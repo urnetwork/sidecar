@@ -712,6 +712,7 @@ func (self *DirectoryView) Close() {
 	self.closeLocked()
 }
 
+// Discards the directory view and resets its store while the caller holds the fetch lock.
 func (self *DirectoryView) closeLocked() {
 	func() {
 		self.stateLock.Lock()

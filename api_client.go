@@ -242,6 +242,7 @@ func (self *SidecarApi) apiNow() time.Time {
 	return self.now().Add(self.currentApiClockOffset())
 }
 
+// Dates statements using the sequencer's clock offset at receipt, or local time before the first sample.
 func (self *SidecarApi) statementTime() time.Time {
 	now := self.now()
 	self.stateLock.Lock()

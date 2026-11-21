@@ -3,6 +3,7 @@
 // A network device opens the verified binding under its held config generations and seals its own local root.
 package sidecar
 
+// Opens the member's effective recovery binding with the held key for its config repo generation.
 func (self *Sidecar) gkmRecoveryKeyAt(view GkmAuthView, memberId Id) (*GkmRecoveryKey, error) {
 	state, ok := view.(*ConfigState)
 	if !ok {

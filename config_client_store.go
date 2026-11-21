@@ -68,6 +68,7 @@ type configClientHeadRecord struct {
 	Recovery         []*configClientRecoveryRecord `json:"recovery,omitempty"`
 }
 
+// Persists a member's recovery binding statement and its effective log position with the verified head.
 type configClientRecoveryRecord struct {
 	MemberId Id                `json:"member_id"`
 	At       uint64            `json:"at"`
