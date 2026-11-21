@@ -31,6 +31,8 @@ type MemberReplica struct {
 	removeRecovery func()
 	follower       *SidecarConfigFollower
 	closeOnce      sync.Once
+
+	removeSearchRequester func()
 }
 
 // Opens the enrolled identity's replica. Calls for the same identity share the same replica and its lifetime.
@@ -135,6 +137,9 @@ func (self *MemberReplica) activeIdentity() *SidecarIdentity {
 func (self *MemberReplica) Close() {
 	self.closeOnce.Do(func() {
 		self.cancel()
+		if self.removeSearchRequester != nil {
+			self.removeSearchRequester()
+		}
 		if self.follower != nil {
 			self.follower.Close()
 		}
@@ -222,7 +227,10 @@ func (self *MemberReplica) open() error {
 	if err != nil {
 		return err
 	}
-	return self.follower.followIdentity(&self.identity)
+	if err := self.follower.followIdentity(&self.identity); err != nil {
+		return err
+	}
+	return self.bindSearchRequester()
 }
 
 // A config head's verifier may need its previously verified rows while the initial anchor check is in progress.

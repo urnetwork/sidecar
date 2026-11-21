@@ -28,6 +28,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -308,13 +309,19 @@ func configApplySponsorSet(next *configStateBuilder, statement *configStatement)
 // services opens a designation's sealed services, the caller holding the key of the config's generation
 // (ConfigIndexerServicesOpener); a designation it cannot open serves no search.
 func (self *ConfigState) SearchIndexersFor(searcherId Id, repoId Id, services func(indexer ConfigIndexer) ([]protocol.IndexerService, bool)) []Id {
+	return self.searchIndexersAt(searcherId, repoId, services, self.timeMs)
+}
+
+// The signed state remains authoritative as admissions and grants expire between config entries.
+func (self *ConfigState) searchIndexersAt(searcherId Id, repoId Id, services func(ConfigIndexer) ([]protocol.IndexerService, bool), nowMs int64) []Id {
+	nowMs = max(self.timeMs, nowMs)
 	acl, err := self.Acl()
 	if err != nil || services == nil {
 		return nil
 	}
 	repo := acl.Repo(repoId)
 	// E3
-	searcher, standing := self.standingSidecar(searcherId, self.timeMs)
+	searcher, standing := self.standingSidecar(searcherId, nowMs)
 	if repo == nil || !standing || !configRowMemberDevice(searcher) || acl.Suspended(searcherId) {
 		return nil
 	}
@@ -329,7 +336,7 @@ func (self *ConfigState) SearchIndexersFor(searcherId Id, repoId Id, services fu
 	default:
 		return nil
 	}
-	readers := self.RepoReaders(repoId)
+	readers := self.RepoReadersAt(repoId, time.UnixMilli(nowMs))
 	if !slices.Contains(readers, searcherId) {
 		return nil
 	}
@@ -340,7 +347,7 @@ func (self *ConfigState) SearchIndexersFor(searcherId Id, repoId Id, services fu
 		if err != nil || ownerId == (Id{}) {
 			return nil
 		}
-		if !acl.ConsentedFor(searcherId, ownerId) && !self.evsShareSubject(acl, searcherId, repoId) {
+		if !acl.ConsentedFor(searcherId, ownerId) && !self.evsShareSubjectAt(acl, searcherId, repoId, nowMs) {
 			return nil
 		}
 	}
@@ -376,7 +383,7 @@ func (self *ConfigState) SearchIndexersFor(searcherId Id, repoId Id, services fu
 			continue
 		}
 		// E1; Indexers left out a revoked, parked or suspended subject
-		indexer, standing := self.standingSidecar(scopes.sidecarId, self.timeMs)
+		indexer, standing := self.standingSidecar(scopes.sidecarId, nowMs)
 		if !standing || indexer.GetEphemeral() || configRowReadOnly(indexer) || scopes.sidecarId == searcherId {
 			continue
 		}

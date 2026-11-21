@@ -147,7 +147,7 @@ func (self *SearchRemoteClient) eligibleFor(view *searchRemoteOrderView, repoId 
 	if indexers, ok := view.eligible[repoId]; ok {
 		return indexers
 	}
-	indexers := view.state.SearchIndexersFor(view.selfId, repoId, self.args.Services)
+	indexers := view.state.searchIndexersAt(view.selfId, repoId, self.args.Services, self.clock.Now().UnixMilli())
 	view.eligible[repoId] = indexers
 	return indexers
 }
