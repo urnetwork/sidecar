@@ -152,9 +152,11 @@ type socketDialer struct {
 	urnetworkEdge *Id
 	// the registrar's newest answer for admission: the service's ticket keys and clock, which a ur/ ticket is held to
 	admission *socketAdmissionState
-	find      *socketFindClient
-	opener    socketStreamOpener
-	policy    SocketPolicy
+	// One authenticated metadata refresh per Dial if Find has already rotated to a newer key.
+	refreshAdmission func(context.Context, *socketAdmissionState) (*socketAdmissionState, error)
+	find             *socketFindClient
+	opener           socketStreamOpener
+	policy           SocketPolicy
 	// ur share get's: the sidecar whose listener alone this Dial opens to, nil for any (§9.9)
 	listenerSidecarId *Id
 }
@@ -385,6 +387,16 @@ func (self *socketDialer) attemptPlatform(ctx context.Context, target *socketDia
 		return &socketAttempt{kind: socketAttemptRefused}
 	}
 	ticket, err := VerifySocketTicket(findTicket.Ticket, admission.ticketKeys, admission.serverNowMillis(self.clock.Now()))
+	if self.refreshAdmission != nil && (errors.Is(err, ErrSocketTicketKeyUnknown) || errors.Is(err, ErrSocketTicketKeyExpired)) {
+		refresh := self.refreshAdmission
+		self.refreshAdmission = nil
+		admission, err = refresh(ctx, admission)
+		if err != nil {
+			return &socketAttempt{kind: socketAttemptRefused}
+		}
+		self.admission = admission
+		ticket, err = VerifySocketTicket(findTicket.Ticket, admission.ticketKeys, admission.serverNowMillis(self.clock.Now()))
+	}
 	if err != nil {
 		return &socketAttempt{kind: socketAttemptRefused}
 	}
@@ -632,9 +644,22 @@ func (self *SocketComponent) dialer() (*socketDialer, error) {
 
 // A Dial on this component; allowShare lets share/ through for `ur share get` (SOCK-M5-15).
 func (self *SocketComponent) dial(ctx context.Context, address *SocketAddress, settings *SocketDialSettings, allowShare bool) (*SocketConn, error) {
+	_, namespace, parseErr := ParseSocketName(address.Name)
+	if parseErr != nil {
+		return nil, parseErr
+	}
 	dialer, err := self.dialer()
 	if err != nil {
 		return nil, err
+	}
+	if namespace == SocketNamespacePlatform && address.NetworkLabel == "" {
+		admission, err := self.registrar.platformAdmission(ctx, nil)
+		if err != nil {
+			return nil, err
+		}
+		dialer.admission = admission
+		dialer.urnetworkEdge = admission.urnetworkEdge
+		dialer.refreshAdmission = self.registrar.platformAdmission
 	}
 	return dialer.dial(ctx, address, settings, allowShare)
 }
