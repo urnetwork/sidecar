@@ -57,6 +57,8 @@ type mailIndexTestWorld struct {
 func newMailIndexTestWorld(t *testing.T, kind protocol.RepoKind) *mailIndexTestWorld {
 	t.Helper()
 	writer := newEvsTestWriter(t)
+	// A verified mail read also checks the repo's erasure ref, initially at version zero.
+	writer.world.autoRefs = true
 	func() {
 		writer.world.config.stateLock.Lock()
 		defer writer.world.config.stateLock.Unlock()

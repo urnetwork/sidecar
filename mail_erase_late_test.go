@@ -35,7 +35,10 @@ func TestMailEraseResumesLateIngestAfterTerminalDepositErase(t *testing.T) {
 	world := newMailEraseTestWorld(t)
 	ctx := t.Context()
 	kept := world.ingestMessages("keep")
-	deposit := world.depositMessage(testMailIngestMessage("late", "private body"))
+	message := testMailIngestMessage("late", "private body")
+	trailer := testMailIngestTrailer(world.receiverId, message)
+	trailer.Evidence.ReceiveTimeMillis++
+	deposit := world.repo.deposit(world.receiverId, world.receiverId, testMailIngestPlaintext(t, message, trailer))
 	messagePath := MailMessagePath(world.month, deposit.id)
 	segmentPath := MailIndexPath(world.month, 0)
 	view := NewMailView(&MailViewArgs{MailboxId: world.repoId, Mailbox: world.eraseStore, Settings: DefaultMailStoreSettings()})
@@ -74,8 +77,8 @@ func TestMailEraseResumesLateIngestAfterTerminalDepositErase(t *testing.T) {
 	if _, err := view.Entry(ctx, world.month, deposit.id); !errors.Is(err, ErrMailViewEntryAbsent) {
 		t.Fatalf("an interim mail read released the erased row: %v", err)
 	}
-	page, err := view.List(ctx, &MailListArgs{})
-	if err != nil || len(page.Entries) != 1 || mailEntryId(page.Entries[0].Entry) != kept[0] {
+	page, err := view.List(ctx, &MailListArgs{Limit: 1})
+	if err != nil || len(page.Entries) != 1 || mailEntryId(page.Entries[0].Entry) != kept[0] || page.Next != nil {
 		t.Fatalf("interim list: %+v, %v", page, err)
 	}
 	// A new admin with neither process's state discovers the completed erasure on its regular ingest pass.
