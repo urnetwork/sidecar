@@ -34,6 +34,11 @@
 // it ran raises no record (RaiseReadRecords), and a read in flight loads its records again when the ref's count of
 // reseeds moves (reseedCount).
 //
+// A path's record is newer than another by where its entry committed once both hold that, else by its entry version.
+// The two agree for a file, whose versions only rise (§11.7's 5g); a directory's do not, since its deltas merge
+// without a path-level CAS, each at the version its writer read plus one (§11.7's directory row), so a delta its
+// writer based on an older table commits a lower version after a higher one, while where each committed only rises.
+//
 // Overlapping reads of one client (the e2e-client-origins bug): a read asks at the pin it holds then (ask), and its
 // answer is judged against that, never against a pin another of the client's calls raised since; the pin only rises.
 //
@@ -1001,6 +1006,11 @@ func (self *EvsPinStore) RaiseReadRecords(repoId Id, records []*EvsReadRecord) e
 			raised.RepoId = repoId
 			if held := reads[key]; held != nil {
 				switch {
+				case raised.CommitVersion != 0 && held.CommitVersion != 0:
+					// where each committed orders them, a directory's merged deltas among them (see the file header)
+					if raised.CommitVersion < held.CommitVersion {
+						raised.EntryVersion, raised.CommitVersion = held.EntryVersion, held.CommitVersion
+					}
 				case raised.EntryVersion < held.EntryVersion:
 					raised.EntryVersion, raised.CommitVersion = held.EntryVersion, held.CommitVersion
 				case raised.EntryVersion == held.EntryVersion && held.CommitVersion != 0:

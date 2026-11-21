@@ -1111,6 +1111,19 @@ func (self *EvsRepo) statementNames(ctx context.Context, keys *evsReadKeys, stat
 	return false, nil
 }
 
+// Whether the version a read verified of a path lies below the one its read record holds. A file's versions only rise
+// (§11.7's 5g), and so does the ref version a directory's newest delta committed at, while a directory's own versions
+// do not: its deltas merge without a path-level CAS, each at the version its writer read plus one (§11.7's directory
+// row), so a writer that read an older table commits a lower version after a higher one, as a client's own creations
+// running at once do. A directory is held to where its newest delta committed; a record stored before the commit
+// version was kept, to its version, as before.
+func evsBelowReadRecord(verified *EvsVerifiedPath, record *EvsReadRecord) bool {
+	if verified.Entry.GetKind() == uint32(protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY) && record.CommitVersion != 0 {
+		return verified.CommitVersion < record.CommitVersion
+	}
+	return verified.Entry.GetVersion() < record.EntryVersion
+}
+
 // Ends a read: the records' rule over each path, the pin, each record a gap head passed of a path served absent or
 // its removal dropped, and each record raised with the ref version its entry committed at, its floor and the epoch it
 // is pinned in. A path a lookup settled absent was never asked, so its record, which a lookup never consults, keeps.
@@ -1118,7 +1131,7 @@ func (self *EvsRepo) statementNames(ctx context.Context, keys *evsReadKeys, stat
 // (EvsPinStore.RaiseReadRecords), or the read answers ErrEvsReadStale for readPaths to read again.
 //
 // The records' rule, for a path read at its newest (an older version asked for by number is history, not a rollback):
-// a path this device read a version of is never served a version below it, gap or not, and never
+// a path this device read a version of is never served a version below it, gap or not (evsBelowReadRecord), and never
 // absent, removed at most, which a path served absent is where the walk from the record's pin ends on its removal
 // (QD-979). Each path is held to the record this call loaded when it asked, never to one another read raised since,
 // whose newer version this call's older head may well not hold. On a gap head whose re-pin passed the record's pin,
@@ -1153,7 +1166,7 @@ func (self *EvsRepo) finishRead(ctx context.Context, refId Id, keys *evsReadKeys
 			// the gap's walk starts after FromVersion, so a record pinned below it lost the statements between
 			gapPassed := head.Gap && path.record.PinVersion < head.FromVersion
 			switch {
-			case verified.Entry != nil && verified.Entry.GetVersion() < path.record.EntryVersion:
+			case verified.Entry != nil && evsBelowReadRecord(verified, path.record):
 				return refuse("a version below the one this device read")
 			case (absent || verified.Removal != nil) && gapPassed:
 				dropped = append(dropped, path.record)
