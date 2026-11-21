@@ -839,7 +839,7 @@ func (self *RecordReader) readErasures(ctx context.Context, streams RecordStream
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	for _, erasure := range erasures {
-		for _, key := range erasure.Keys {
+		for _, key := range erasure.destroyedKeys() {
 			log.erasedKeys[*key] = true
 		}
 		// an erasure's note names its entries (record_erase.go), so the ERASE alone is its record until the erasure
@@ -1046,7 +1046,7 @@ func (self *RecordReader) HoldsIn(logId Id, streamId Id, leaf [sha256.Size]byte)
 // carries, or false for a note of another kind's, a mailbox's paths, say.
 func recordErasureNoteBody(erasure *RecordStreamErasure) (*protocol.ErasureBody, bool) {
 	body := &protocol.ErasureBody{}
-	if len(erasure.SealedNote) == 0 || proto.Unmarshal(erasure.SealedNote, body) != nil || !bytes.Equal(body.GetErasureId(), erasure.ErasureId[:]) {
+	if erasure.Completion || len(erasure.SealedNote) == 0 || proto.Unmarshal(erasure.SealedNote, body) != nil || !bytes.Equal(body.GetErasureId(), erasure.ErasureId[:]) {
 		return nil, false
 	}
 	return body, true

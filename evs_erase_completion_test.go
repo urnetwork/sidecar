@@ -106,3 +106,18 @@ func TestEvsStatementTakesCompletionWithEraseAlone(t *testing.T) {
 		}
 	}
 }
+
+// A terminal flag on an ordinary ERASE does not change what it destroyed. A flagged completion has no physical keys.
+func TestEvsCompletionDoesNotSupplyDestructionEvidence(t *testing.T) {
+	key := &EvsErasedKey{SlotId: evsTestId("consumed slot"), KeyIndex: 4}
+	for _, complete := range []bool{false, true} {
+		row := &EvsErasure{ErasureId: evsTestId("erasure"), Keys: []*EvsErasedKey{key}, Complete: complete}
+		if got := row.destroyedKeys(); len(got) != 1 || *got[0] != *key {
+			t.Fatalf("ordinary ERASE with complete %t lost its physical key", complete)
+		}
+		row.Completion = true
+		if got := row.destroyedKeys(); len(got) != 0 || len(row.Keys) != 1 {
+			t.Fatalf("completion with complete %t yielded physical keys %v, named %v", complete, got, row.Keys)
+		}
+	}
+}

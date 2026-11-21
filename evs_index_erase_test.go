@@ -540,8 +540,8 @@ func (self *testEraseWorld) completingEraser(t testing.TB) *IndexEraser {
 	return self.eraserJudging(t, evsTestId("eraser"), nil, func(ctx context.Context, erasureIds []Id) (map[Id]bool, error) {
 		self.evs.stateLock.Lock()
 		defer self.evs.stateLock.Unlock()
-		return recordEraseCompleteByNewest(self.evs.erases, func(erase *testEraseErase) (Id, bool) {
-			return erase.erasureId, erase.erased.complete
+		return recordEraseCompleteByNewest(self.evs.erases, func(erase *testEraseErase) (Id, bool, bool) {
+			return erase.erasureId, erase.erased.complete, true
 		}), nil
 	})
 }

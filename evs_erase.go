@@ -98,6 +98,19 @@ type EvsErasure struct {
 	Note       []byte
 }
 
+// A completion signs a claim about an earlier ERASE. Its keys remain visible in the audit log.
+func (self *EvsErasure) destroyedKeys() []*EvsErasedKey {
+	if self.Completion {
+		return nil
+	}
+	return self.Keys
+}
+
+// A matching completion ends its erasure. An unrelated completion changes no state.
+func (self *EvsErasure) completionState() (id Id, complete bool, applies bool) {
+	return self.ErasureId, self.Complete, !self.Completion || self.Complete
+}
+
 // An erasure note's layout (EVS-FORMAT.md's erasure notes; QD-682): the erasure's id, 16 B, which is all of a
 // CLOSURE's note, and in an ERASE's the complete byte after it, then the caller's bytes.
 const (
@@ -291,7 +304,7 @@ func (self *EvsRepo) ReadErasures(ctx context.Context, afterVersion uint64) ([]*
 				if named.ErasureId != erasure.ErasureId {
 					continue
 				}
-				for _, key := range named.Keys {
+				for _, key := range named.destroyedKeys() {
 					delete(unnamed, *key)
 				}
 			}
@@ -351,7 +364,7 @@ func (self *EvsRepo) erasureNoteOf(ctx context.Context, head *EvsVerifiedHead, s
 }
 
 // The repo's erasures as this device sees them from evs's state (§18.5, §11.12's reconcile row): one per erasure the
-// committed ERASEs name, done once one completes it, stalled 25 h after its last ERASE with none since, else
+// committed ERASEs name, done while its newest applicable ERASE completes it, stalled 25 h after the newest ERASE, else
 // rewriting. Erasures with no committed ERASE yet, a crash before the first, are their devices' journals'.
 func (self *EvsRepo) Erasures(ctx context.Context) ([]*SidecarErasure, error) {
 	erasures, err := self.ReadErasures(ctx, 0)
@@ -363,19 +376,23 @@ func (self *EvsRepo) Erasures(ctx context.Context) ([]*SidecarErasure, error) {
 	last := map[Id]time.Time{}
 	order := []Id{}
 	for _, erasure := range erasures {
-		state := byId[erasure.ErasureId]
-		if state == nil {
-			state = &SidecarErasure{ErasureId: erasure.ErasureId, State: "rewriting"}
-			byId[erasure.ErasureId] = state
-			order = append(order, erasure.ErasureId)
+		id, complete, applies := erasure.completionState()
+		if !applies {
+			continue
 		}
-		if erasure.Complete {
+		state := byId[id]
+		if state == nil {
+			state = &SidecarErasure{ErasureId: id}
+			byId[id] = state
+			order = append(order, id)
+		}
+		if complete {
 			state.State = "done"
-		} else if !erasure.Completion {
+		} else {
 			// A late copy's destructive ERASE reopens an earlier completion.
 			state.State = "rewriting"
 		}
-		last[erasure.ErasureId] = erasure.Time
+		last[id] = erasure.Time
 	}
 	states := []*SidecarErasure{}
 	for _, erasureId := range order {

@@ -1270,7 +1270,7 @@ func (self *RecordEvsStreams) ReadErasures(ctx context.Context, repoId Id, after
 	for _, erasure := range erasures {
 		recordErasure := &RecordStreamErasure{
 			Version: erasure.Version, PushId: erasure.PushId, TimeMillis: erasure.Time.UnixMilli(), EraserSidecarId: erasure.EraserSidecarId,
-			ErasureId: erasure.ErasureId, Complete: erasure.Complete, SealedNote: bytes.Clone(erasure.Note),
+			ErasureId: erasure.ErasureId, Complete: erasure.Complete, Completion: erasure.Completion, SealedNote: bytes.Clone(erasure.Note),
 		}
 		for _, key := range erasure.Keys {
 			recordErasure.Keys = append(recordErasure.Keys, &RecordSlotKey{SlotId: key.SlotId, KeyIndex: uint32(key.KeyIndex)})

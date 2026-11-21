@@ -9,14 +9,19 @@
 //	List     the index's directories walked at the head, one verified read a directory, then every file's entry
 //	         version a ReadMaxPathCount at a time: its version, its push's commit version, signer and signed time,
 //	         and its plaintext's length and content_sha256 from its sealed fields. The settings, the one versioned
-//	         file, carry no content_sha256, so its content is read and hashed, which is what Read holds it to.
+//	         file, carry no content_sha256, so its content is read and hashed, which is what Read holds it to; a
+//	         settings version whose key a committed ERASE destroyed (ErrEvsErased) is listed with no hash, by the
+//	         version a write replacing it names, and History passes over it
 //	         EvsRepo reads a directory or a file at the ref's head, or at a version of the path itself, never at an
 //	         older ref version, so a listing asked at a ref version is the head's, and where the head is no longer
 //	         that version, or moves while the walk reads, the index moved under its reader: errIndexCollected, on
 //	         which a builder reruns from its read, and errEvsIndexMoved, on which a hooked push is planned again,
 //	         never a state other than the one asked for under its name
 //	History  a path's versions at the head, newest first, those a push after the ref version asked for wrote left
-//	         out, each read and hashed the same way
+//	         out, each read and hashed the same way; one evs no longer keeps, collected, or whose key a committed
+//	         ERASE destroyed, which reads as erased (evs_read_erased.go), left out too, so the settings that count are
+//	         the newest an admin signed that still reads, and a write over an erased version plans a checkpoint
+//	         (evs_plan_erased.go)
 //	Read     one version's plaintext, reconstructed and verified by evs's reader, then held to its content_sha256
 //	         where the version carries one; a replaced versionless version answers errIndexCollected. A version the
 //	         eraser's Retained names from History carries none, and is held to what evs's reader held it to, its
@@ -233,6 +238,10 @@ func (self *indexEvsStore) fileVersion(ctx context.Context, result *evsReadResul
 	}
 	// a versioned file, the settings: its content, verified by evs's reader, is what its hash is of
 	plaintext, err := self.readVerified(ctx, result.refId, path, file.version)
+	if errors.Is(err, ErrEvsErased) {
+		// its key a committed ERASE destroyed: listed by its version, with no hash (the file header's List row)
+		return file, nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -273,7 +282,9 @@ func (self *indexEvsStore) History(ctx context.Context, path string, refVersion 
 			continue
 		}
 		plaintext, err := self.readVerified(ctx, refId, path, version.Version)
-		if errors.Is(err, errIndexCollected) {
+		if errors.Is(err, errIndexCollected) || errors.Is(err, ErrEvsErased) {
+			// no version the ref still keeps, or one whose key a committed ERASE destroyed (the file header's History
+			// row)
 			continue
 		}
 		if err != nil {
