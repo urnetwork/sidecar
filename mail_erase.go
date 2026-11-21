@@ -47,7 +47,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"slices"
 	"sync"
@@ -232,7 +231,7 @@ type MailEraser struct {
 	sidecarId Id
 	store     mailEraseStore
 	// The repo's deposit refs, for a deposit's slot; nil where the repo takes none.
-	deposits  mailIngestRepo
+	deposits  mailEraseDeposits
 	erased    *mailErasedView
 	authority MailEraseAuthority
 	purge     MailLocalPurge
@@ -273,7 +272,7 @@ func NewMailEraser(args *MailEraserArgs) (*MailEraser, error) {
 }
 
 // An eraser of repoId over store's files and deposits' refs.
-func newMailEraser(repoId Id, store mailEraseStore, deposits mailIngestRepo, args *MailEraserArgs) *MailEraser {
+func newMailEraser(repoId Id, store mailEraseStore, deposits mailEraseDeposits, args *MailEraserArgs) *MailEraser {
 	settings := args.Settings
 	if settings == nil {
 		settings = DefaultMailEraseSettings()
@@ -369,9 +368,8 @@ func (self *MailEraser) pathKeysAt(ctx context.Context, path string) ([]*EvsEras
 	return keys, newest, nil
 }
 
-// The slot of each standing deposit whose id is one of messageIds, by message: a deposit not yet consumed, which the
-// first ERASE takes, and the largest such deposit's size by message. A deposit that does not open has no key left to
-// take and is passed over.
+// The slots of all standing deposits of the requested messages and an upper bound on each deposit's size.
+// Every ref must answer before the first CUT or ERASE can commit.
 func (self *MailEraser) depositKeys(ctx context.Context, messageIds []Id) (map[Id][]*EvsErasedKey, map[Id]uint64, error) {
 	keys := map[Id][]*EvsErasedKey{}
 	byteCounts := map[Id]uint64{}
@@ -383,26 +381,13 @@ func (self *MailEraser) depositKeys(ctx context.Context, messageIds []Id) (map[I
 		return nil, nil, err
 	}
 	for _, depositorId := range depositorIds {
-		afterVersion := uint64(0)
-		for {
-			err := self.deposits.ReadDeposits(ctx, depositorId, afterVersion, func(deposit *EvsDeposit, body io.Reader) error {
-				afterVersion = max(afterVersion, deposit.Version)
-				messageId := Id(deposit.EntryId)
-				if slices.Contains(messageIds, messageId) && deposit.SlotId != (Id{}) {
-					keys[messageId] = append(keys[messageId], &EvsErasedKey{SlotId: deposit.SlotId, KeyIndex: mailVaultSlotKeyIndex})
-					byteCounts[messageId] = max(byteCounts[messageId], deposit.Size)
-				}
-				return nil
-			})
-			var openError *EvsDepositOpenError
-			if errors.As(err, &openError) && openError.Deposit != nil && afterVersion < openError.Deposit.Version && ctx.Err() == nil {
-				afterVersion = openError.Deposit.Version
-				continue
-			}
-			if err != nil {
-				return nil, nil, err
-			}
-			break
+		slots, err := self.deposits.depositSlots(ctx, depositorId, messageIds)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, slot := range slots {
+			keys[slot.messageId] = append(keys[slot.messageId], &EvsErasedKey{SlotId: slot.slotId, KeyIndex: mailVaultSlotKeyIndex})
+			byteCounts[slot.messageId] = max(byteCounts[slot.messageId], slot.paddedSize)
 		}
 	}
 	return keys, byteCounts, nil
@@ -457,7 +442,7 @@ func (self *MailEraser) begin(ctx context.Context, erasureId Id, month MailYearM
 	messages := []mailErasedMessage{}
 	// whether any message's m/ file stands: only such a message can be in the search index
 	standing := false
-	documentCount := 0
+	documentCount := uint64(0)
 	for _, messageId := range fresh {
 		path := MailMessagePath(month, messageId)
 		messageKeys, version, err := self.pathKeysAt(ctx, path)
@@ -475,12 +460,12 @@ func (self *MailEraser) begin(ctx context.Context, erasureId Id, month MailYearM
 			if err != nil {
 				return nil, err
 			}
-			documentCount += int(message.ChunkCount)
+			documentCount += uint64(message.ChunkCount)
 		}
 		keys = append(keys, messageKeys...)
 		messages = append(messages, message)
 	}
-	if index != nil && self.settings.CutDocumentMaxCount < documentCount {
+	if index != nil && uint64(max(self.settings.CutDocumentMaxCount, 0)) < documentCount {
 		return nil, ErrMailEraseBatchTooLarge
 	}
 	segments, err := self.segmentsListing(ctx, messages)

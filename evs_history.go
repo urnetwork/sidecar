@@ -68,6 +68,11 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 	if err != nil {
 		return nil, err
 	}
+	return self.historyAt(ctx, refId, args, nil, ruled)
+}
+
+// Reads a named path or a deposit's random token. Deposit refs stay in epoch 1 and carry no prefix rules.
+func (self *EvsRepo) historyAt(ctx context.Context, refId Id, args *EvsReadArgs, token EvsTokenPath, ruled evsPrefixReader) (*EvsHistory, error) {
 	history := &EvsHistory{RefId: refId, Path: args.Path}
 	version := args.Version
 	var expectPushId []byte
@@ -83,8 +88,9 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 	statements := []*EvsVerifiedStatement{}
 	var head *EvsVerifiedHead
 	var keys *evsReadKeys
+	var err error
 	for len(history.Versions) < self.client.settings.HistoryVersionCount {
-		path := &evsReadPath{path: args.Path, version: version}
+		path := &evsReadPath{path: args.Path, token: token, version: version}
 		if version != 0 {
 			path.commitVersion, path.prevPushId = expectCommit, expectPushId
 		}
@@ -223,6 +229,8 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 			DropId:          evsDropIdOf(verified.Drop),
 			DropNotBefore:   evsDropNotBeforeOf(verified.Drop),
 			SlotIds:         slotIds,
+			kind:            info.Kind,
+			paddedSize:      entry.GetPaddedSize(),
 			EntrySha256:     evsHistoryEntrySha256(verified),
 			Epoch:           verified.Statement.Push.GetPathEpoch(),
 		})
