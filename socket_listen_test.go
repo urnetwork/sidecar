@@ -312,7 +312,7 @@ func TestSocketListenHoldsMaxStreams(t *testing.T) {
 // A valid edge splice on a tls/ listener: Authorize first, an edge's open with no Hello admitted.
 func TestSocketListenTakesAnEdgeSplice(t *testing.T) {
 	fixture := newTestListenFixture(t)
-	fixture.component.listenAction = func(name string, settings *SocketListenSettings) (*SidecarAction, error) {
+	fixture.component.listenAction = func(ctx context.Context, generation *socketGeneration, name string, settings *SocketListenSettings) (*SidecarAction, error) {
 		return &SidecarAction{Kind: SidecarActionListen, Canonical: []byte(name), Risk: SidecarRiskNormal}, nil
 	}
 	listener := fixture.listen(t, "tls/443/blog", nil)
@@ -348,7 +348,7 @@ func TestSocketListenTakesAnEdgeSplice(t *testing.T) {
 // protocol is refused before anything registers.
 func TestSocketListenRegistersAReceiverNotServingUntilItsKey(t *testing.T) {
 	fixture := newTestListenFixture(t)
-	fixture.component.listenAction = func(name string, settings *SocketListenSettings) (*SidecarAction, error) {
+	fixture.component.listenAction = func(ctx context.Context, generation *socketGeneration, name string, settings *SocketListenSettings) (*SidecarAction, error) {
 		return &SidecarAction{Kind: SidecarActionListen, Canonical: []byte(name), Risk: SidecarRiskNormal}, nil
 	}
 	for _, refused := range []struct {
@@ -391,11 +391,14 @@ func TestSocketListenRegistersAReceiverNotServingUntilItsKey(t *testing.T) {
 	}
 }
 
-// tls/ and smtp/ go through Authorize: the production action reaches the gate as kind listen naming the socket by its
-// grant_dst alone, sock:<name>, the name and the weight it registers with beside it as the request's and not in its
-// bytes but the grant_dst's (QD-740, QD-772), and a gate's pending answer reaches the caller with nothing registered.
+// tls/ and smtp/ go through Authorize: the production action reaches the gate as kind listen with the grant's fields,
+// this sidecar as subject, the socket by its grant_dst sock:<name>, listen allowed, and the requests rule that takes it
+// with that rule's expiry, the name and the weight it registers with beside it as the request's and not in its bytes
+// but the grant_dst's (QD-740, QD-772), and the grant component's effect on that action; a gate's pending answer
+// reaches the caller with nothing registered.
 func TestSocketListenAuthorizesOutwardNames(t *testing.T) {
 	fixture := newTestListenFixture(t)
+	ruleId := fixture.grantListensByRequest(t, "tls/443/blog")
 	parsed, _ := ParseSocketAddress("tls/443/blog")
 	refused := errors.New("the test's gate refuses")
 	fixture.generation.authorize = func(ctx context.Context, action *SidecarAction, decision *bridge.Signed) error {
@@ -406,7 +409,7 @@ func TestSocketListenAuthorizesOutwardNames(t *testing.T) {
 		settings *SocketListenSettings
 		weight   int32
 	}{
-		{settings: nil, weight: socketListenDefaultWeight},
+		{settings: nil, weight: int32(DefaultSocketFormatSettings().DefaultWeight)},
 		{settings: &SocketListenSettings{Weight: 250}, weight: 250},
 	} {
 		fixture.authorized = nil
@@ -422,6 +425,9 @@ func TestSocketListenAuthorizesOutwardNames(t *testing.T) {
 			t.Fatal(err)
 		}
 		if action.Kind != SidecarActionListen || !slices.Equal(stored.Action.GetGrantDst(), []string{"sock:tls/443/blog"}) ||
+			!slices.Equal(stored.Action.GetGrantAllow(), []string{"listen"}) || !bytes.Equal(stored.Action.GetRuleId(), ruleId) ||
+			!bytes.Equal(stored.Action.GetSubject(), fixture.generation.identity.SidecarId.Bytes()) ||
+			stored.Action.GetExpiresMillis() != fixture.clock.Now().Add(time.Duration(aclRequestDefaultExpiryMs)*time.Millisecond).UnixMilli() ||
 			!action.Detail.Equal(&SidecarActionDetail{SocketName: "tls/443/blog", Weight: c.weight}) {
 			t.Errorf("the action: %+v, detail %+v", stored.Action, action.Detail)
 		}
@@ -429,9 +435,13 @@ func TestSocketListenAuthorizesOutwardNames(t *testing.T) {
 		if err := CheckCanonicalActionForServer(stored); err != nil {
 			t.Errorf("the listen's action on a server path: %v", err)
 		}
+		// the grant component's effect, on the action the gate sees
+		if effect, ok := action.Effect.(*aclGrantEffect); !ok || !bytes.Equal(effect.action.Bytes, stored.Bytes) {
+			t.Errorf("the effect: %#v", action.Effect)
+		}
 	}
 	approvalId := testSocketId("approval")
-	fixture.component.listenAction = func(name string, settings *SocketListenSettings) (*SidecarAction, error) {
+	fixture.component.listenAction = func(ctx context.Context, generation *socketGeneration, name string, settings *SocketListenSettings) (*SidecarAction, error) {
 		return &SidecarAction{Kind: SidecarActionListen, Canonical: []byte(name), Risk: SidecarRiskNormal}, nil
 	}
 	fixture.generation.authorize = func(ctx context.Context, action *SidecarAction, decision *bridge.Signed) error {
