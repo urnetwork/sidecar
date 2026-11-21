@@ -11,6 +11,7 @@ package sidecar
 import (
 	"bytes"
 	"context"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -21,6 +22,7 @@ import (
 	"errors"
 	"math/big"
 	"net/http"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -611,5 +613,470 @@ func TestTlsCustomOrdererMakesADueChangeItMay(t *testing.T) {
 	}
 	if len(api.events) != 0 {
 		t.Fatalf("events from a desktop that may make the change: %+v", api.events)
+	}
+}
+
+// What a test's POST loses after api captured it: the write is made, and the desktop hears nothing.
+var errTlsCustomTestAnswerLost = errors.New("the connection closed before the answer")
+
+// One receipt of the receipt api: the digest it holds, the serial its write took, and whether GET answered that serial
+// stale.
+type tlsCustomTestReceipt struct {
+	value  string
+	serial uint64
+	stale  bool
+}
+
+// One DNS write the receipt api made: under which claim, of which digest, at which serial.
+type tlsCustomTestWrite struct {
+	claimSeq uint64
+	value    string
+	serial   uint64
+}
+
+// The custom routes as api and the certs worker answer one desktop's DNS-01 for one row (17.2.6, 17.2.9; owner
+// decision 680). The account's lock is taken at the next claim sequence by a claim while free, renewed at the same
+// sequence by the holder's claim, and freed by release. There is one receipt a claim: a capture writes its digest at
+// the next serial, a capture of the same digest under the claim answers that serial again with no write, and once
+// GET has answered the serial stale the next capture of the digest writes it again at a new serial. posts scripts each
+// POST by its index: nil captures and answers, errTlsCustomTestAnswerLost captures and loses the answer, and any other
+// error is the answer, with no capture.
+type tlsCustomReceiptApi struct {
+	tlsCustomScriptedApi
+	record  *TlsCertRecord
+	leaseMs uint32
+	posts   func(index int) error
+	// by serial, the answers GET gives in turn, the last repeating; ready for a serial with none
+	readiness map[uint64][]string
+
+	claimSeq uint64
+	held     bool
+	receipts map[uint64]*tlsCustomTestReceipt
+	serial   uint64
+	claims   []*TlsCustomClaimArgs
+	events   []*TlsCustomProgressArgs
+	// the claim each POST came under, 0 while the lock was free
+	postClaimSeqs []uint64
+	writes        []tlsCustomTestWrite
+	statusReads   []uint64
+}
+
+func (self *tlsCustomReceiptApi) Claim(ctx context.Context, args *TlsCustomClaimArgs) (*TlsCustomClaimResult, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.claims = append(self.claims, args)
+	if !self.held {
+		self.claimSeq += 1
+		self.held = true
+	}
+	return &TlsCustomClaimResult{ClaimSeq: self.claimSeq, LeaseMs: self.leaseMs, Record: self.record}, nil
+}
+
+func (self *tlsCustomReceiptApi) Progress(ctx context.Context, args *TlsCustomProgressArgs) (*TlsCustomClaimResult, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.events = append(self.events, args)
+	if args.Event == TlsCustomEventRelease {
+		self.held = false
+	}
+	return &TlsCustomClaimResult{}, nil
+}
+
+func (self *tlsCustomReceiptApi) Challenge(ctx context.Context, args *TlsCustomChallengeArgs) (*TlsCustomChallengeResult, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	index := len(self.postClaimSeqs)
+	claimSeq := uint64(0)
+	if self.held {
+		claimSeq = self.claimSeq
+	}
+	self.postClaimSeqs = append(self.postClaimSeqs, claimSeq)
+	var answerErr error
+	if self.posts != nil {
+		answerErr = self.posts(index)
+	}
+	if answerErr != nil && answerErr != errTlsCustomTestAnswerLost {
+		return nil, answerErr
+	}
+	if !self.held {
+		return nil, &TlsCustomError{Status: http.StatusConflict, Refusal: TlsCustomRefusal{Reason: TlsCustomRefusalClaim}}
+	}
+	receipt := self.receipts[claimSeq]
+	if receipt == nil || receipt.value != args.Value || receipt.stale {
+		// the claim's first capture, another digest, or the digest a stale verdict owes again: a write
+		self.serial += 1
+		receipt = &tlsCustomTestReceipt{value: args.Value, serial: self.serial}
+		self.receipts[claimSeq] = receipt
+		self.writes = append(self.writes, tlsCustomTestWrite{claimSeq: claimSeq, value: args.Value, serial: self.serial})
+	}
+	if answerErr != nil {
+		return nil, answerErr
+	}
+	return &TlsCustomChallengeResult{ChallengeId: receipt.serial}, nil
+}
+
+func (self *tlsCustomReceiptApi) ChallengeStatus(ctx context.Context, challengeId uint64) (*TlsCustomChallengeResult, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	readCount := 0
+	for _, read := range self.statusReads {
+		if read == challengeId {
+			readCount += 1
+		}
+	}
+	self.statusReads = append(self.statusReads, challengeId)
+	readiness := TlsCustomReadinessReady
+	if answers := self.readiness[challengeId]; 0 < len(answers) {
+		readiness = answers[min(readCount, len(answers)-1)]
+	}
+	if readiness == TlsCustomReadinessStale {
+		// the verdict is recorded on the receipt whose write took the serial
+		for _, receipt := range self.receipts {
+			if receipt.serial == challengeId {
+				receipt.stale = true
+			}
+		}
+	}
+	return &TlsCustomChallengeResult{ChallengeId: challengeId, Readiness: readiness}, nil
+}
+
+// The values the acme name's TXT holds: each digest written.
+func (self *tlsCustomReceiptApi) txt() []string {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	values := []string{}
+	for _, write := range self.writes {
+		values = append(values, write.value)
+	}
+	return values
+}
+
+// How many progress events of a kind api heard.
+func (self *tlsCustomReceiptApi) eventCount(event string) int {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	count := 0
+	for _, args := range self.events {
+		if args.Event == event {
+			count += 1
+		}
+	}
+	return count
+}
+
+// Public DNS as the customer delegated it: _acme-challenge to the account's acme name, whose TXT api writes.
+type tlsCustomDnsResolver struct {
+	acmeName string
+	api      *tlsCustomReceiptApi
+}
+
+func (self *tlsCustomDnsResolver) LookupCname(ctx context.Context, name string) (string, error) {
+	return self.acmeName + ".", nil
+}
+
+func (self *tlsCustomDnsResolver) LookupTxt(ctx context.Context, name string) ([]string, error) {
+	return self.api.txt(), nil
+}
+
+// A CA whose one order is pending on one authorization offering dns-01, which goes valid, and the order ready, once
+// its challenge is answered. Each method runs on the test's goroutine.
+type tlsCustomDnsCa struct {
+	tlsCustomUnreachedCa
+	authorizationUrl string
+	challengeUrl     string
+	token            string
+	challengeCount   int
+	deactivateCount  int
+}
+
+func (self *tlsCustomDnsCa) Authorization(ctx context.Context, key crypto.Signer, accountUri string, url string) (*TlsAcmeAuthorization, error) {
+	status := TlsAcmeStatusPending
+	if 0 < self.challengeCount {
+		status = TlsAcmeStatusValid
+	}
+	return &TlsAcmeAuthorization{
+		Url:        url,
+		Status:     status,
+		Challenges: []*TlsAcmeChallenge{{Type: TlsAcmeChallengeDns, Url: self.challengeUrl, Token: self.token, Status: status}},
+	}, nil
+}
+
+func (self *tlsCustomDnsCa) KeyAuthorization(key crypto.Signer, token string) (string, error) {
+	return token + ".thumbprint", nil
+}
+
+func (self *tlsCustomDnsCa) Challenge(ctx context.Context, key crypto.Signer, accountUri string, url string) error {
+	self.challengeCount += 1
+	return nil
+}
+
+func (self *tlsCustomDnsCa) Order(ctx context.Context, key crypto.Signer, accountUri string, orderUrl string) (*TlsAcmeOrder, error) {
+	status := TlsAcmeStatusPending
+	if 0 < self.challengeCount {
+		status = TlsAcmeStatusReady
+	}
+	return &TlsAcmeOrder{Url: orderUrl, Status: status, Authorizations: []string{self.authorizationUrl}}, nil
+}
+
+func (self *tlsCustomDnsCa) DeactivateAuthorization(ctx context.Context, key crypto.Signer, accountUri string, url string) error {
+	self.deactivateCount += 1
+	return nil
+}
+
+// A clock each wait of which passes at once, moving its time on by the wait, which it records.
+type tlsCustomJumpClock struct {
+	stateLock sync.Mutex
+	now       time.Time
+	waits     []time.Duration
+}
+
+func (self *tlsCustomJumpClock) Now() time.Time {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.now
+}
+
+func (self *tlsCustomJumpClock) After(timeout time.Duration) <-chan time.Time {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.waits = append(self.waits, timeout)
+	self.now = self.now.Add(max(timeout, 0))
+	fired := make(chan time.Time, 1)
+	fired <- self.now
+	return fired
+}
+
+func (self *tlsCustomJumpClock) AfterFunc(timeout time.Duration, function func()) (stop func() bool) {
+	return func() bool { return true }
+}
+
+// One desktop's DNS-01 for one row, its claim taken under a lease of leaseMs and its order's attempt begun: the
+// orderer on the receipt api, the CA and the resolver, on a clock whose waits pass at once.
+type tlsCustomDnsWorld struct {
+	api     *tlsCustomReceiptApi
+	ca      *tlsCustomDnsCa
+	clock   *tlsCustomJumpClock
+	orderer *TlsCustomDomainOrderer
+	hold    *tlsCustomHold
+	key     *ecdsa.PrivateKey
+	order   *TlsAcmeOrder
+}
+
+func newTlsCustomDnsWorld(t *testing.T, settings *TlsCustomSettings, leaseMs uint32, posts func(index int) error) *tlsCustomDnsWorld {
+	t.Helper()
+	row := &TlsCertRecord{CertId: NewId(), CustomHost: "www.customer.example", CustomDomain: "customer.example", Owner: "shop"}
+	api := &tlsCustomReceiptApi{record: row, leaseMs: leaseMs, posts: posts, readiness: map[uint64][]string{}, receipts: map[uint64]*tlsCustomTestReceipt{}}
+	account := &TlsCustomAccount{Domain: "customer.example", Ca: "letsencrypt", AccountUri: "https://ca.example/acct/1", KeySeq: 1, AcmeName: "a1b2c3.acme.sidecar.example"}
+	ca := &tlsCustomDnsCa{authorizationUrl: "https://ca.example/authz/1", challengeUrl: "https://ca.example/chall/1", token: "token-1"}
+	clock := &tlsCustomJumpClock{now: time.Date(2026, time.December, 1, 0, 0, 0, 0, time.UTC)}
+	orderer, err := NewTlsCustomDomainOrderer(&TlsCustomDomainOrdererDeps{
+		Api:      api,
+		Acme:     ca,
+		Resolver: &tlsCustomDnsResolver{acmeName: account.AcmeName, api: api},
+		Devices:  &tlsCustomTestDevices{},
+		Keys:     &tlsCustomTestKeys{files: map[Id][]byte{}, locals: map[string][]byte{}},
+		Roots:    []string{"sidecar.example"},
+		Clock:    clock,
+	}, settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hold, err := orderer.claim(context.Background(), account, &TlsCustomClaimArgs{Domain: account.Domain, Purpose: TlsCustomPurposeOrder, CertId: row.CertId, KeySeq: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// as step 4 begins the attempt (17.2.7)
+	hold.attemptStart = clock.Now()
+	return &tlsCustomDnsWorld{
+		api:     api,
+		ca:      ca,
+		clock:   clock,
+		orderer: orderer,
+		hold:    hold,
+		key:     key,
+		order:   &TlsAcmeOrder{Url: "https://ca.example/order/1", Status: TlsAcmeStatusPending, Authorizations: []string{ca.authorizationUrl}},
+	}
+}
+
+// Step 5's pending order through 17.2.9's DNS-01: the order it answers, or done once the row was handed back.
+func (self *tlsCustomDnsWorld) authorize() (*TlsAcmeOrder, bool) {
+	return self.orderer.authorize(context.Background(), &TlsCustomPassReport{}, self.hold, self.key, self.order)
+}
+
+// Owner decision 680: a POST whose answer is lost after api captured it is sent again under the same claim, whose
+// receipt answers it with the first write's serial; nothing is written twice, and the claim is not released.
+func TestTlsCustomOrdererRetriesALostChallengeAnswerUnderItsClaim(t *testing.T) {
+	world := newTlsCustomDnsWorld(t, DefaultTlsCustomSettings(), 120_000, func(index int) error {
+		if index == 0 {
+			return errTlsCustomTestAnswerLost
+		}
+		return nil
+	})
+	order, done := world.authorize()
+	if done || order == nil || order.Status != TlsAcmeStatusReady {
+		t.Fatalf("the authorization after a lost answer: %+v, done %v", order, done)
+	}
+	if !slices.Equal(world.api.postClaimSeqs, []uint64{1, 1}) {
+		t.Fatalf("the POSTs came under claims %v", world.api.postClaimSeqs)
+	}
+	if len(world.api.writes) != 1 || world.api.writes[0].serial != 1 {
+		t.Fatalf("the writes: %+v", world.api.writes)
+	}
+	if !slices.Equal(world.api.statusReads, []uint64{1}) {
+		t.Fatalf("GET asked about serials %v", world.api.statusReads)
+	}
+	if world.api.claimSeq != 1 || world.api.eventCount(TlsCustomEventRelease) != 0 || world.hold.lost {
+		t.Fatalf("the claim: at %d, %d releases, lost %v", world.api.claimSeq, world.api.eventCount(TlsCustomEventRelease), world.hold.lost)
+	}
+	if world.clock.waits[0] != DefaultTlsCustomSettings().OrderPollInterval {
+		t.Fatalf("the retry waited %v", world.clock.waits[0])
+	}
+	if world.ca.challengeCount != 1 {
+		t.Fatalf("the CA's challenge was answered %d times", world.ca.challengeCount)
+	}
+}
+
+// A confirmed stale verdict still lets the same digest be written again, under the same claim and at a new serial,
+// which GET is asked about next; a lost answer to that POST is recovered with the new serial, not a third write.
+func TestTlsCustomOrdererWritesTheSameDigestAgainAfterAStaleVerdict(t *testing.T) {
+	world := newTlsCustomDnsWorld(t, DefaultTlsCustomSettings(), 120_000, func(index int) error {
+		if index == 1 {
+			return errTlsCustomTestAnswerLost
+		}
+		return nil
+	})
+	world.api.readiness[1] = []string{TlsCustomReadinessStale}
+	order, done := world.authorize()
+	if done || order == nil || order.Status != TlsAcmeStatusReady {
+		t.Fatalf("the authorization after a stale verdict: %+v, done %v", order, done)
+	}
+	writes := world.api.writes
+	if len(writes) != 2 || writes[0].serial != 1 || writes[1].serial != 2 || writes[0].value != writes[1].value || writes[0].claimSeq != 1 || writes[1].claimSeq != 1 {
+		t.Fatalf("the writes: %+v", writes)
+	}
+	if !slices.Equal(world.api.postClaimSeqs, []uint64{1, 1, 1}) {
+		t.Fatalf("the POSTs came under claims %v", world.api.postClaimSeqs)
+	}
+	if !slices.Equal(world.api.statusReads, []uint64{1, 2}) {
+		t.Fatalf("GET asked about serials %v", world.api.statusReads)
+	}
+	if world.api.eventCount(TlsCustomEventRelease) != 0 || world.hold.lost || world.ca.challengeCount != 1 {
+		t.Fatalf("%d releases, lost %v, %d challenges", world.api.eventCount(TlsCustomEventRelease), world.hold.lost, world.ca.challengeCount)
+	}
+}
+
+// A refusal decides how a failed POST ends the work, after that one POST and with nothing written: 409 claim and 403
+// lose the hold, with no release; any other refusal, which no retry under the claim changes, releases the claim. The
+// CA's challenge is never answered.
+func TestTlsCustomOrdererEndsAChallengeWriteByItsRefusal(t *testing.T) {
+	for _, c := range []struct {
+		refusal  error
+		released bool
+	}{
+		{refusal: &TlsCustomError{Status: http.StatusConflict, Refusal: TlsCustomRefusal{Reason: TlsCustomRefusalClaim}}, released: false},
+		{refusal: &TlsCustomError{Status: http.StatusForbidden, Refusal: TlsCustomRefusal{Reason: TlsCustomRefusalGrant}}, released: false},
+		{refusal: &TlsCustomError{Status: http.StatusNotFound, Refusal: TlsCustomRefusal{Reason: TlsCustomRefusalNoAccount}}, released: true},
+		{refusal: &SidecarApiError{Route: "POST /tls/custom-challenge", Status: http.StatusBadRequest}, released: true},
+	} {
+		world := newTlsCustomDnsWorld(t, DefaultTlsCustomSettings(), 120_000, func(index int) error {
+			return c.refusal
+		})
+		if order, done := world.authorize(); !done || order != nil {
+			t.Errorf("%v: answered %+v, done %v", c.refusal, order, done)
+			continue
+		}
+		if len(world.api.postClaimSeqs) != 1 || len(world.api.writes) != 0 || world.ca.challengeCount != 0 {
+			t.Errorf("%v: %d POSTs, %d writes, %d challenges", c.refusal, len(world.api.postClaimSeqs), len(world.api.writes), world.ca.challengeCount)
+		}
+		if released := world.api.eventCount(TlsCustomEventRelease) == 1; released != c.released || world.hold.lost == c.released {
+			t.Errorf("%v: released %v, lost %v", c.refusal, released, world.hold.lost)
+		}
+	}
+}
+
+// 409 in_flight and 429 budget are asked again under the same claim once their retry_after has passed, the claim
+// renewed once its renewal comes due while the holder waits.
+func TestTlsCustomOrdererWaitsOutAChallengeRefusalsRetryAfter(t *testing.T) {
+	world := newTlsCustomDnsWorld(t, DefaultTlsCustomSettings(), 120_000, func(index int) error {
+		switch index {
+		case 0:
+			return &TlsCustomError{Status: http.StatusConflict, Refusal: TlsCustomRefusal{Reason: TlsCustomRefusalInFlight, CertId: NewId(), RetryAfterMs: 45_000}}
+		case 1:
+			return &TlsCustomError{Status: http.StatusTooManyRequests, Refusal: TlsCustomRefusal{Reason: TlsCustomRefusalBudget, RetryAfterMs: 5_000}}
+		}
+		return nil
+	})
+	order, done := world.authorize()
+	if done || order == nil || order.Status != TlsAcmeStatusReady {
+		t.Fatalf("the authorization: %+v, done %v", order, done)
+	}
+	if len(world.clock.waits) < 2 || world.clock.waits[0] != 45*time.Second || world.clock.waits[1] != 5*time.Second {
+		t.Fatalf("the waits: %v", world.clock.waits)
+	}
+	if !slices.Equal(world.api.postClaimSeqs, []uint64{1, 1, 1}) || len(world.api.writes) != 1 {
+		t.Fatalf("the POSTs came under claims %v, writing %+v", world.api.postClaimSeqs, world.api.writes)
+	}
+	// the claim, its renewal a third of the lease on, once the 45 s wait passed, and the one before the CA's challenge
+	if len(world.api.claims) != 3 || world.api.claimSeq != 1 || world.api.eventCount(TlsCustomEventRelease) != 0 {
+		t.Fatalf("%d claims, at %d, %d releases", len(world.api.claims), world.api.claimSeq, world.api.eventCount(TlsCustomEventRelease))
+	}
+}
+
+// A POST the server keeps failing, its write still owed, is sent again under the same claim, renewed as it comes due,
+// until the attempt's OrderDeadline, where the claim is released and the order stays recorded, never killed.
+func TestTlsCustomOrdererReleasesAFailingChallengeWriteAtTheAttemptsDeadline(t *testing.T) {
+	settings := DefaultTlsCustomSettings()
+	settings.OrderDeadline = time.Minute
+	world := newTlsCustomDnsWorld(t, settings, 30_000, func(index int) error {
+		return &SidecarApiError{Route: "POST /tls/custom-challenge", Status: http.StatusServiceUnavailable}
+	})
+	start := world.clock.Now()
+	if order, done := world.authorize(); !done || order != nil {
+		t.Fatalf("answered %+v, done %v", order, done)
+	}
+	if world.api.eventCount(TlsCustomEventRelease) != 1 || world.api.eventCount(TlsCustomEventOrderInvalid) != 0 || world.ca.deactivateCount != 0 || world.ca.challengeCount != 0 {
+		t.Fatalf("%d releases, %d order_invalid, %d deactivations, %d challenges", world.api.eventCount(TlsCustomEventRelease), world.api.eventCount(TlsCustomEventOrderInvalid), world.ca.deactivateCount, world.ca.challengeCount)
+	}
+	// a POST every OrderPollInterval from the attempt's start, the last one before the deadline
+	if postCount := len(world.api.postClaimSeqs); postCount != int(settings.OrderDeadline/settings.OrderPollInterval) {
+		t.Fatalf("%d POSTs", postCount)
+	}
+	for _, claimSeq := range world.api.postClaimSeqs {
+		if claimSeq != 1 {
+			t.Fatalf("the POSTs came under claims %v", world.api.postClaimSeqs)
+		}
+	}
+	if elapsed := world.clock.Now().Sub(start); settings.OrderDeadline < elapsed {
+		t.Fatalf("released %v into an attempt of %v", elapsed, settings.OrderDeadline)
+	}
+	// a lease of 30 s, renewed every 10 s of the minute's waits
+	if len(world.api.claims) != 6 || world.api.claimSeq != 1 {
+		t.Fatalf("%d claims, at %d", len(world.api.claims), world.api.claimSeq)
+	}
+}
+
+// While GET waits for the edges, the claim is renewed as it comes due, so a wait longer than the lease leaves the
+// holder its claim, and the CA's challenge goes out under it; a lapsed hold would leave the row to a new claim, whose
+// receipt is new and its write a second one.
+func TestTlsCustomOrdererKeepsItsClaimWhileTheEdgesCatchUp(t *testing.T) {
+	world := newTlsCustomDnsWorld(t, DefaultTlsCustomSettings(), 30_000, nil)
+	readiness := []string{}
+	for range 20 {
+		readiness = append(readiness, "waiting")
+	}
+	world.api.readiness[1] = append(readiness, TlsCustomReadinessReady)
+	order, done := world.authorize()
+	if done || order == nil || order.Status != TlsAcmeStatusReady {
+		t.Fatalf("the authorization after 40 s of waiting under a 30 s lease: %+v, done %v, lost %v", order, done, world.hold.lost)
+	}
+	if len(world.api.writes) != 1 || !slices.Equal(world.api.postClaimSeqs, []uint64{1}) || world.ca.challengeCount != 1 {
+		t.Fatalf("%d writes, POSTs under %v, %d challenges", len(world.api.writes), world.api.postClaimSeqs, world.ca.challengeCount)
+	}
+	if len(world.api.claims) < 4 || world.api.claimSeq != 1 || world.api.eventCount(TlsCustomEventRelease) != 0 {
+		t.Fatalf("%d claims, at %d, %d releases", len(world.api.claims), world.api.claimSeq, world.api.eventCount(TlsCustomEventRelease))
 	}
 }
