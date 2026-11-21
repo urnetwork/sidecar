@@ -8,7 +8,8 @@
 //	records   addr/<h>/<address> holds one MailAddress and burner/<h>/<blabel> one MailBurner (MAIL-FORMAT.md). An
 //	          address is spelled under the network's label, <name>@<label>.<root>, a scope's under <scope>.<label>,
 //	          a bounce's under b.<label>, so an alias zone resolves to the label's record; admin@ holds the record
-//	          postmaster@ and abuse@ reach
+//	          postmaster@ and abuse@ reach. A network's mailcfg also holds the bounces a strict custom domain's
+//	          envelope stands at, bounces+<token>@b.<domain> (QD-1129; mail_bounce.go)
 //	authority a record's authority is its evs push, judged per version (I-4), so a reader replays every version of
 //	          a path, oldest first (mail_config_read.go): the first version counts only when its creator field is
 //	          its push's signer, a later one only from a device that may change the record, and a version that

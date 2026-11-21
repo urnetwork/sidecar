@@ -49,6 +49,21 @@ var registeredClauses = []*ClauseRegistration{
 	RegisterClause("FS-14", "", "acl two removals", Fs14AclTwoRemovals),
 	RegisterClause("FS-14", "", "acl forked readers", Fs14AclForkedReaders),
 
+	// QUOTA-M2-13's producer and lease rows on the Net's fake Quota, beside the registered kill (fs44.go)
+	RegisterClause("FS-44", "", "lost response retried", Fs44LostResponseRetried),
+	RegisterClause("FS-44", "", "killed with an applied batch unanswered", Fs44KilledWithAnAppliedBatchUnanswered),
+	RegisterClause("FS-44", "", "drain loses nothing", Fs44DrainLosesNothing),
+	RegisterClause("FS-44", "", "api unavailable eleven minutes", Fs44ApiUnavailableElevenMinutes),
+	RegisterClause("FS-44", "", "edge killed before its post", Fs44EdgeKilledBeforeItsPost),
+	RegisterClause("FS-44", "", "two hosts on one balance", Fs44TwoHostsOnOneBalance),
+
+	// the relayed reservation rule's twin (fs45.go)
+	RegisterClause("FS-45", "", "stream-bound pair is unaffected", Fs45StreamBoundPairIsUnaffected),
+	RegisterClause("FS-45", "", "one debit per contract", Fs45OneDebitPerContract),
+	RegisterClause("FS-45", "", "redis loss over-admits by the outstanding grants", Fs45RedisLossOverAdmitsByTheOutstandingGrants),
+
+	RegisterClause("FS-47", "", "one eraser keeps its own rate", Fs47OneEraserKeepsItsOwnRate),
+
 	RegisterClause("FS-57", "", "store unreachable", Fs57StoreUnreachable, ClauseOnT3("./evshost")),
 
 	RegisterClause("FS-58", "", "folds killed and raced", Fs58FoldKilledAndRaced, ClauseOnT3("./evshost")),
@@ -57,6 +72,11 @@ var registeredClauses = []*ClauseRegistration{
 	// a pending record and a small repo's parcels at 7 d, beside the registered kills (fs60.go)
 	RegisterClause("FS-60", "", "pending record fenced then dropped", Fs60PendingRecordFencedThenDropped, ClauseOnT3("./evshost")),
 	RegisterClause("FS-60", "", "parcels pack at seven days", Fs60ParcelsPackAtSevenDays, ClauseOnT3("./evshost")),
+
+	// EVSB-M2-07's budget loop on the Net's host (fs61.go)
+	RegisterClause("FS-61", "", "p0 proceeds at once with its bytes by kind", Fs61P0ProceedsAtOnceWithItsBytesByKind),
+	RegisterClause("FS-61", "", "governor killed processes fall back", Fs61GovernorKilledProcessesFallBack),
+	RegisterClause("FS-61", "", "budget keys pass the schema guard", Fs61BudgetKeysPassTheSchemaGuard),
 
 	RegisterClause("FS-62", "", "lease holder resync", Fs62LeaseHolderResync, ClauseOnT3("./evshost")),
 	RegisterClause("FS-62", "", "acl gate", Fs62AclGate, ClauseOnT3("./sidecart3")),
@@ -99,4 +119,12 @@ var registeredClauses = []*ClauseRegistration{
 	RegisterClause("FS-95", "", "owner-bound", Fs95OwnerBound, ClauseOnT3("./evshost")),
 	RegisterClause("FS-95", "", "list missing a version", Fs95ListMismatch(false), ClauseOnT3("./evshost")),
 	RegisterClause("FS-95", "", "list adding a version", Fs95ListMismatch(true), ClauseOnT3("./evshost")),
+
+	// EVSB-M2-05's runs of the governor alone, beside the registered steady run (fs116.go)
+	RegisterClause("FS-116", "", "paused p2 drains the wallet without stalling pushes", Fs116PausedP2DrainsTheWalletWithoutStallingPushes),
+	RegisterClause("FS-116", "", "killed processes pay deferred work once", Fs116KilledProcessesPayDeferredWorkOnce),
+	RegisterClause("FS-116", "", "lost state restarts the wallet at zero", Fs116LostStateRestartsTheWalletAtZero),
+	RegisterClause("FS-116", "", "unfunded backlog takes only its share", Fs116UnfundedBacklogTakesOnlyItsShare),
+	RegisterClause("FS-116", "", "low prices converge and hold the bound", Fs116LowPricesConvergeAndHoldTheBound),
+	RegisterClause("FS-116", "", "allowance ramps back after a storm", Fs116AllowanceRampsBackAfterAStorm),
 }

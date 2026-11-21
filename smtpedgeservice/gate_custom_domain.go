@@ -15,7 +15,9 @@
 //	           which the next preamble sees, nothing being deleted (D-QUOTA-6)
 //	envelope   b.<net>.<root>, as for the network's own mail; b.<domain> for a domain in strict mode
 //	           (StrictDomains; §15.4), with the customer's MX and SPF include. Z4 proves MAIL FROM is at it,
-//	           and the edge derives it from the network alone, never from the sidecar (SPEC.md section 3)
+//	           and the edge derives it from the network alone, never from the sidecar (SPEC.md section 3).
+//	           The domain is picked by sidecar.SmtpStrictCustomDomain, the rule MAIL's bounce address picks by
+//	           over the same set as GET /mail/status names it (QD-1129)
 //
 // The signature's d= is header_from_domain (Z5's literal), so a custom-domain send signs under that domain or
 // fails: its selectors go through POST /smtp/dkim-keys with d=<domain>, which takes them only while this row
@@ -67,11 +69,7 @@ func checkSmtpCustomDomain(facts *SmtpGateFacts, fromDomain string, networkZone 
 	if !SmtpCustomDomainSendable(facts.Limits.Tier, facts.CustomDomainWithholdTime, now) {
 		return "", smtpGateReasonCustomDomainWithheld
 	}
-	strict := slices.ContainsFunc(facts.StrictDomains, func(strictDomain string) bool {
-		return strings.TrimSuffix(strings.ToLower(strictDomain), ".") == fromDomain
-	})
-	if strict {
-		return sidecar.SmtpEnvelopeDomain(networkZone, fromDomain), ""
-	}
-	return sidecar.SmtpEnvelopeDomain(networkZone, ""), ""
+	// the sender's bounce address picks by the same rule over the same set (GET /mail/status), so the two agree
+	strictDomain := sidecar.SmtpStrictCustomDomain(fromDomain, facts.StrictDomains, settings.Root)
+	return sidecar.SmtpEnvelopeDomain(networkZone, strictDomain), ""
 }
