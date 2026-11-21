@@ -130,6 +130,13 @@
 //	           QD-1168; §11.12's reconcile row; FI-19): the pass reads the ledger whatever the check reads, which gates
 //	           only what is new, and takes the window row's form whatever the window, so it erases no announce entry,
 //	           CUTs no document newly found and reads no path the ledger first meets after the check failed
+//	gone       a begun erasure whose request this copy no longer holds, retention having expired the request's entry
+//	           (400 days by default, or a directory admin's shorter keep) or a restarted reader having refused it
+//	           after a compromise revocation voided its signer's signature, still has what its ledger row owes
+//	           finished (QD-1169; §11.12's reconcile row): each pass works in the begun row's form every row of this
+//	           device whose erasure an ERASE names and whose request the copy no longer holds, reading the sync's
+//	           files by the repo and marker version the row kept; a row written before it kept them is worked from the
+//	           ledger alone where no file need be read, and is otherwise left as it is
 //	authority  CUT, CLOSURE, their uploads and ERASE take admin, which evs checks before any commit or slot rewrite
 //	           (I-EVS-16): the calls go through DirectoryErasureFiles alone, and with none bound nothing of this half
 //	           is cut, rewritten or erased (ErrDirectoryErasureFilesUnbound)
@@ -740,9 +747,30 @@ func (self *DirectoryErasureRunner) Pass(ctx context.Context) (*DirectoryErasure
 			firstErr = err
 		}
 	}
+	// when a request's waiting work may run, drawn at the sync that first showed it, and forgotten once it ran
+	dueOf := func(requestId Id) int64 {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		due, ok := self.dueMillis[requestId]
+		if !ok {
+			due = nowMillis + self.delay().Milliseconds()
+			self.dueMillis[requestId] = due
+		}
+		return due
+	}
+	ran := func(requestId Id) {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		delete(self.dueMillis, requestId)
+	}
 	// the requests whose work waits for its delay at this pass
 	delayedRequests := []*DirectoryErasureRequestView{}
-	for _, request := range self.client.ErasureRequests() {
+	requests := self.client.ErasureRequests()
+	heldRequestIds := map[Id]bool{}
+	for _, request := range requests {
+		heldRequestIds[request.RequestId] = true
+	}
+	for _, request := range requests {
 		age := max(0, time.Duration(nowMillis-request.PushTimeMillis)*time.Millisecond)
 		verdict := self.check(auth, request, nowMillis)
 		if request.Erased {
@@ -851,17 +879,7 @@ func (self *DirectoryErasureRunner) Pass(ctx context.Context) (*DirectoryErasure
 				continue
 			}
 		}
-		due := func() int64 {
-			self.stateLock.Lock()
-			defer self.stateLock.Unlock()
-			due, ok := self.dueMillis[request.RequestId]
-			if !ok {
-				due = nowMillis + self.delay().Milliseconds()
-				self.dueMillis[request.RequestId] = due
-			}
-			return due
-		}()
-		if nowMillis < due {
+		if nowMillis < dueOf(request.RequestId) {
 			pass.Delayed = append(pass.Delayed, request.RequestId)
 			delayedRequests = append(delayedRequests, request)
 			if !request.Erased {
@@ -894,14 +912,52 @@ func (self *DirectoryErasureRunner) Pass(ctx context.Context) (*DirectoryErasure
 				firstErr = err
 			}
 		}
-		func() {
-			self.stateLock.Lock()
-			defer self.stateLock.Unlock()
-			delete(self.dueMillis, request.RequestId)
-		}()
+		ran(request.RequestId)
 		if !request.Erased && (firstErr != nil || (len(pass.Erased[request.RequestId]) == 0 && !erasedFiles)) {
 			// no ERASE of this pass names it: a CUT alone, or a card that waits for its writer
 			pending()
+		}
+	}
+	if format2 && pass.Runs && erase != nil && firstErr == nil {
+		// a begun erasure whose request this copy no longer holds: its ledger row worked in the begun row's form, by the
+		// repo and marker version it kept (the file header's gone row; QD-1169)
+		for _, gone := range self.client.erasureFilesGone(heldRequestIds) {
+			var work *directoryErasureWork
+			if gone.repoId != nil {
+				work = self.fileCopies(&DirectoryErasureRequestView{
+					RequestId: gone.erasureId, RepoId: *gone.repoId, MarkerVersion: gone.markerVersion, Erased: true,
+				})
+			} else {
+				// a row written before it kept them: the ledger alone, no file read
+				work = newDirectoryErasureWork()
+				work.erasureId, work.reason, work.requestId, work.began = gone.erasureId, gone.reason, gone.erasureId.Bytes(), true
+			}
+			work.owedOnly = true
+			owed, waits := self.client.erasureFilesOwed(work)
+			if waits {
+				pass.Waiting = append(pass.Waiting, gone.erasureId)
+			}
+			if !owed {
+				continue
+			}
+			if self.client.erasureFiles() == nil {
+				// fail closed: nothing of the files is cut or erased
+				pass.FilesUnbound = true
+				continue
+			}
+			if nowMillis < dueOf(gone.erasureId) {
+				pass.Delayed = append(pass.Delayed, gone.erasureId)
+				continue
+			}
+			files, err := self.client.eraseFiles(ctx, work)
+			if files != nil {
+				pass.Files[gone.erasureId] = files
+			}
+			ran(gone.erasureId)
+			if err != nil {
+				firstErr = err
+				break
+			}
 		}
 	}
 	if pass.Runs && self.expire != nil && firstErr == nil {
@@ -1073,6 +1129,10 @@ type directoryErasureLedgerRow struct {
 	RequestId  []byte `json:"request_id,omitempty"`
 	// A person's erasure this device began, which only it resumes; a request's is every runner's.
 	Own bool `json:"own,omitempty"`
+	// A revocation's repo and marker version, by which a pass reads the sync's files once the copy no longer holds the
+	// request's entry (the file header's gone row; QD-1169): nil and 0 in a row written before they were kept.
+	RepoId        *Id    `json:"repo_id,omitempty"`
+	MarkerVersion uint64 `json:"marker_version,omitempty"`
 	// A moderation's announcements its notes name, so a resumed call's ERASEs name them as its first did.
 	AnnouncementIds []Id                                `json:"announcement_ids,omitempty"`
 	Paths           map[string]*directoryErasurePathRow `json:"paths,omitempty"`
@@ -1121,6 +1181,9 @@ type directoryErasureFilesState struct {
 	loaded   bool
 	// the erasures whose state at evs this process has read
 	resumed map[Id]bool
+	// the erasure an eraseFiles call works now, whose row no keep forgets before the call is over, so none of its
+	// updates makes the row again as newly begun; zero for none
+	working Id
 	// DirectoryErasureSettings.LedgerHold and DroppedCutCount, the runner's where one is built
 	ledgerHold      time.Duration
 	droppedCutCount int
@@ -1205,13 +1268,14 @@ func (self *DirectoryClient) loadErasureLedgerWithLock(state *directoryErasureFi
 }
 
 // Keeps the ledger, less the erasures with nothing owed first worked past the ledger's hold ago: a path still owed its
-// CLOSURE keeps its row, which a pass past the request's sweep window rewrites once its writer has (QD-1166). The
-// caller holds state.stateLock.
+// CLOSURE keeps its row, which a pass past the request's sweep window rewrites once its writer has (QD-1166), and so
+// does an erasure's end still owed (QD-1168), and the row of the erasure a call works now. The caller holds
+// state.stateLock.
 func (self *DirectoryClient) keepErasureLedgerWithLock(state *directoryErasureFilesState) error {
 	forgetMillis := self.clock.Now().UnixMilli() - state.ledgerHold.Milliseconds()
 	document := &directoryErasureLedgerDocument{Version: directoryErasureFilesStoreVersion, Erasures: map[string]*directoryErasureLedgerRow{}}
 	for erasureId, row := range state.rows {
-		if row.TimeMillis < forgetMillis && !row.owes() && !row.closureOwed() {
+		if erasureId != state.working && row.TimeMillis < forgetMillis && !row.owes() && !row.closureOwed() && !row.endOwed() {
 			delete(state.rows, erasureId)
 			continue
 		}
@@ -1233,8 +1297,10 @@ type directoryErasureFile struct {
 type directoryErasureWork struct {
 	erasureId Id
 	reason    RecordErasureReason
-	// a revocation's request, whose id the erasure's is
-	requestId []byte
+	// a revocation's request, whose id the erasure's is, with its repo and marker version; zero for a person's erasure
+	requestId     []byte
+	repoId        Id
+	markerVersion uint64
 	// a person's erasure this device began
 	own bool
 	// a moderation's announcements, taken off the cards holding them, which its notes name (the file's header's note
@@ -1345,6 +1411,7 @@ func (self *DirectoryErasureRunner) fileCopies(request *DirectoryErasureRequestV
 	work.erasureId = request.RequestId
 	work.reason = RecordErasureReasonRevocation
 	work.requestId = request.RequestId.Bytes()
+	work.repoId, work.markerVersion = request.RepoId, request.MarkerVersion
 	work.began = request.Erased
 	repoPath := DirectoryRepoPath(request.RepoId)
 	for _, taken := range self.client.files().standing() {
@@ -1619,6 +1686,10 @@ func (self *DirectoryClient) erasureLedgerRowWithLock(state *directoryErasureFil
 	if row.StreamDocuments == nil {
 		row.StreamDocuments = map[string]uint64{}
 	}
+	if row.RepoId == nil && work.repoId != (Id{}) {
+		repoId := work.repoId
+		row.RepoId, row.MarkerVersion = &repoId, work.markerVersion
+	}
 	return row
 }
 
@@ -1687,6 +1758,50 @@ func (self *DirectoryClient) erasureFilesLedger(erasureId Id) bool {
 	return ok && (row.owes() || row.closureOwed() || row.endOwed())
 }
 
+// One begun erasure of this device's ledger whose request the copy no longer holds.
+type directoryErasureGone struct {
+	erasureId Id
+	reason    RecordErasureReason
+	// the repo and marker version its row kept; nil and 0 in a row written before they were kept
+	repoId        *Id
+	markerVersion uint64
+}
+
+// The begun erasures this device's ledger holds for a request not among held, which an ERASE names and whose row shows
+// work for the begun row's form: owed work, a path owed a CLOSURE or the erasure's end (the file header's gone row;
+// QD-1169). A row that kept no repo while a path it met is owed a CLOSURE, which only a read of the sync's files judges,
+// is left as it is.
+func (self *DirectoryClient) erasureFilesGone(held map[Id]bool) []*directoryErasureGone {
+	erased := self.erasedRequests()
+	state := self.erasureFilesState()
+	state.stateLock.Lock()
+	defer state.stateLock.Unlock()
+	self.loadErasureLedgerWithLock(state)
+	gone := []*directoryErasureGone{}
+	for _, erasureId := range slices.SortedFunc(maps.Keys(state.rows), func(a Id, b Id) int { return a.Cmp(b) }) {
+		row := state.rows[erasureId]
+		if row.Own || len(row.RequestId) != len(Id{}) || recordIdOf(row.RequestId) != erasureId || held[erasureId] {
+			continue
+		}
+		if _, ok := erased[erasureId]; !ok {
+			continue
+		}
+		if !row.owes() && !row.closureOwed() && !row.endOwed() {
+			continue
+		}
+		if row.RepoId == nil && row.closureOwed() {
+			continue
+		}
+		each := &directoryErasureGone{erasureId: erasureId, reason: RecordErasureReason(row.Reason), markerVersion: row.MarkerVersion}
+		if row.RepoId != nil {
+			repoId := *row.RepoId
+			each.repoId = &repoId
+		}
+		gone = append(gone, each)
+	}
+	return gone
+}
+
 // The cards ref paths the erasure's ledger row met that are still owed a CLOSURE; none where this device holds no row.
 func (self *DirectoryClient) erasureFilesClosurePaths(erasureId Id) map[string]bool {
 	state := self.erasureFilesState()
@@ -1722,6 +1837,13 @@ func (self *DirectoryClient) eraseFiles(ctx context.Context, work *directoryEras
 	state := self.erasureFilesState()
 	state.workLock.Lock()
 	defer state.workLock.Unlock()
+	working := func(erasureId Id) {
+		state.stateLock.Lock()
+		defer state.stateLock.Unlock()
+		state.working = erasureId
+	}
+	working(work.erasureId)
+	defer working(Id{})
 	result := &DirectoryErasureFilesResult{ErasureId: work.erasureId}
 	if self.readOnly {
 		return result, ErrDirectoryReadOnly

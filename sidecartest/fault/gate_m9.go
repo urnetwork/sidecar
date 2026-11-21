@@ -10,11 +10,11 @@
 //   - FS-31 runs in smtpproof, a module of its own (§4.4), in its two legs: the plain one, where edgeSession takes each
 //     part with the part's circuit solved on gnark's solver beside the relation, and sidecar_testhooks, where the real
 //     engine verifies through smtpproof's Verifier (SMTP-M9-30's matrix, smtpproof/testdata/fs31/matrix.md). On T3,
-//     server's cli/smtpedge reruns the rows a crypto/tls ScriptedMx serves and whose sender acts on the wire alone; the
+//     server's smtpedgehost reruns the rows a crypto/tls ScriptedMx serves and whose sender acts on the wire alone; the
 //     rows that change a witness run at T2 alone, as SMTP-M9-30 reads them.
 //   - FS-123 runs on SmtpSendWorld's stub edge in sidecartest (SMTP-M9-31), MAIL's side through MailClient on M9World
 //     (MAIL-M9-06), the root's CheckSend, SendResult and send watch with the daemon's backends over them (QD-1122), and
-//     the sdk's bound half (SDK-M9-01); on T3 in server's cli/smtpedge on the block's engine over the private stores.
+//     the sdk's bound half (SDK-M9-01); on T3 in server's smtpedgehost on the block's engine over the private stores.
 //   - FS-42's M9 step runs on T3 alone in server's model: a sending sidecar revoked after the dump has no DKIM selector on
 //     either NS once api's replay ends (SMTP-M9-19), through DNS-M9-01's delete in the caller's transaction.
 //
@@ -55,7 +55,7 @@ const (
 	gateM9OutGate = "M9-out"
 )
 
-// The tags server's cli/smtpedge builds its T3 rows under: the pending migration groups, MG9's smtp_* among them, and
+// The tags server's smtpedgehost builds its T3 rows under: the pending migration groups, MG9's smtp_* among them, and
 // the hooks, which hand the block its streams and smtpproof's relation key set.
 const gateM9SmtpEdgeTags = "sidecar_pending,sidecar_testhooks"
 
@@ -81,8 +81,8 @@ var gateFs31EngineTests = gateSmtpproofTests(".", "sidecar_testhooks",
 	"TestFs31MaliciousEdge", "TestFs31TheSenderKeepsAMessageTheEdgeForgedSent",
 )
 
-// FS-31 on T3: the rows server's cli/smtpedge reruns on the block's engine over the private stores.
-var gateFs31T3Tests = &GateTest{Repo: "server", Package: "./cli/smtpedge", Tags: gateM9SmtpEdgeTags, Stores: true, Names: []string{
+// FS-31 on T3: the rows server's smtpedgehost reruns on the block's engine over the private stores.
+var gateFs31T3Tests = &GateTest{Repo: "server", Package: "./smtpedgehost", Tags: gateM9SmtpEdgeTags, Stores: true, Names: []string{
 	"TestT3Fs31AnHonestSend", "TestT3Fs31AnHonestSendTo100Recipients", "TestT3Fs31AnHonestSendWithA16KibHeaderBlock", "TestT3Fs31NoChunking",
 	"TestT3Fs31ChunkingOnlyBeforeTls", "TestT3Fs31NoPipelining", "TestT3Fs31MailRefused", "TestT3Fs31RcptRefused", "TestT3Fs31MixedRecipients",
 	"TestT3Fs31No354", "TestT3Fs31A451", "TestT3Fs31ASecondTransactionInTheBdatBody", "TestT3Fs31ReplyCountOneFewer", "TestT3Fs31ReplyCountOneMore",
@@ -90,7 +90,7 @@ var gateFs31T3Tests = &GateTest{Repo: "server", Package: "./cli/smtpedge", Tags:
 }}
 
 // S6's rows on T3, on the block's engine over the private stores (SMTP-M9-31).
-var gateS6T3Tests = &GateTest{Repo: "server", Package: "./cli/smtpedge", Tags: gateM9SmtpEdgeTags, Stores: true, Names: []string{
+var gateS6T3Tests = &GateTest{Repo: "server", Package: "./smtpedgehost", Tags: gateM9SmtpEdgeTags, Stores: true, Names: []string{
 	"TestT3S6NoRecordReachesTheMxBeforeItsPart", "TestT3S6NoUnauthenticatedMx", "TestT3S6TooLargeForTheNonChunkingDomainAlone",
 }}
 
@@ -116,7 +116,7 @@ func gateM9Cases(catalog *Catalog) map[string][]*GateTest {
 			"TestDaemonMailSendResultAnswersAKnownSendAndRefusesAnUnknownId",
 		),
 		{Repo: "sdk", Package: ".", Names: []string{"TestCheckSendPredictsPerDomain", "TestSendResultsReachGetSendResultAndMailSend", "TestSendCopyNamesNoIndexer"}},
-		{Repo: "server", Package: "./cli/smtpedge", Tags: gateM9SmtpEdgeTags, Stores: true, Names: []string{
+		{Repo: "server", Package: "./smtpedgehost", Tags: gateM9SmtpEdgeTags, Stores: true, Names: []string{
 			"TestT3Fs123SentFromADesktop", "TestT3Fs123QueuedFromAPhone", "TestT3Fs123OtherOutcomesReachTheResult",
 		}},
 	}
@@ -549,7 +549,7 @@ func gateM9OutItems(catalog *Catalog) []*GateItem {
 				{Repo: "sidecar", Package: "./sidecartest", Tags: "sidecar_testhooks", Names: []string{
 					"TestSmtpSendCarriesNoCanaryPastTheDevice", "TestSmtpReportCanariesStayInTheListenerInput", "TestSmtpAttributedReportCanariesStaySealed",
 				}},
-				{Repo: "server", Package: "./cli/smtpedge", Tags: gateM9SmtpEdgeTags, Stores: true, Names: []string{"TestT3SmtpSendCarriesNoCanaryPastTheDevice"}},
+				{Repo: "server", Package: "./smtpedgehost", Tags: gateM9SmtpEdgeTags, Stores: true, Names: []string{"TestT3SmtpSendCarriesNoCanaryPastTheDevice"}},
 			},
 		},
 		&GateItem{
