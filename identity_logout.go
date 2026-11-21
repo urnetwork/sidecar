@@ -88,12 +88,17 @@ func (self *Sidecar) Logout(ctx context.Context) error {
 	if err := self.instance.forgetNetwork(*networkId); err != nil {
 		return err
 	}
-	event := SidecarEvent{Kind: SidecarEventState, State: SidecarStateUnenrolled, logoutNetwork: networkId}
+	event := sidecarQueuedEvent{
+		SidecarEvent: SidecarEvent{Kind: SidecarEventState, State: SidecarStateUnenrolled},
+		networkId:    networkId,
+		loggedOut:    true,
+	}
 	if record != nil {
-		event.logoutSidecar = &record.identity.SidecarId
+		sidecarId := record.identity.SidecarId
+		event.originSidecarId = &sidecarId
 		event.Generation = record.identity.Generation
 	}
-	self.emitEvent(event)
+	self.enqueueEvent(event)
 	self.log.Infof("[identity]logged out")
 	return nil
 }

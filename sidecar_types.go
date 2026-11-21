@@ -32,7 +32,7 @@ type Sidecar struct {
 	followCoreGates bool
 	// Mirrors lifecycle's state for a caller waiting on a change, and is written only with it.
 	state          *MonitorValue[SidecarState]
-	eventCallbacks *CallbackList[SidecarEventFunction]
+	eventCallbacks *CallbackList[func(sidecarQueuedEvent)]
 	// ServiceToken's cache, under its own lock (api_service_token.go).
 	serviceTokens sidecarServiceTokens
 	// The network's DnsClient and its zone watch.
@@ -114,7 +114,7 @@ type Sidecar struct {
 	stateLock sync.Mutex
 	lifecycle sidecarLifecycle
 	// raised and not yet delivered, oldest first
-	eventQueue []SidecarEvent
+	eventQueue []sidecarQueuedEvent
 	// a goroutine is delivering eventQueue, which every later event joins
 	eventDelivering bool
 	// The core's namespace of this network's keychain.ur, which holds the identity key, the ClientKey
@@ -620,10 +620,7 @@ const (
 // What AddEventCallback, `ur status` and the sdk listener see (§18.5). Each field's comment says
 // which kinds fill it. Never log a Path, which is local to this device (I-13).
 type SidecarEvent struct {
-	// A completed logout retains its origin until the daemon has published this final state.
-	logoutNetwork *Id
-	logoutSidecar *Id
-	Kind          SidecarEventKind
+	Kind SidecarEventKind
 	// The client generation it comes from, as §18.5's State block has every event name. A callback
 	// of an older generation is dropped (D-SDK-14). Zero is an event no client raised, such as a
 	// config alarm, which emitEvent stamps with the current generation.

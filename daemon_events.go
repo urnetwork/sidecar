@@ -264,13 +264,16 @@ func newDaemonEvents(settings *SidecarLocalSettings, clock Clock) *DaemonEvents 
 // the id source then names. A host attaches each Sidecar it starts and may leave it attached: a Sidecar that closed
 // raises nothing more, and its last events, a logout's state among them, are kept as any other.
 func (self *DaemonEvents) Attach(source DaemonEventSource) func() {
-	return source.AddEventCallback(func(event SidecarEvent) {
-		if event.logoutNetwork != nil {
-			wire := newDaemonEvent(event.logoutNetwork, event.logoutSidecar, &event)
-			wire.LoggedOut = true
+	if stamped, ok := source.(interface {
+		addQueuedEventCallback(func(sidecarQueuedEvent)) func()
+	}); ok {
+		return stamped.addQueuedEventCallback(func(event sidecarQueuedEvent) {
+			wire := newDaemonEvent(event.networkId, event.originSidecarId, &event.SidecarEvent)
+			wire.LoggedOut = event.loggedOut
 			self.add(wire)
-			return
-		}
+		})
+	}
+	return source.AddEventCallback(func(event SidecarEvent) {
 		var originSidecarId *Id
 		if identity := source.Identity(); identity != nil {
 			sidecarId := identity.SidecarId
