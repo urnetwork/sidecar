@@ -1,6 +1,7 @@
 # Sidecar: implementation review handoff
 
-*2026-11-20, 13:40 (UTC−6), written while the draft's last tracks run. From the build to the peer reviewer.*
+*2026-11-21, 17:53 (UTC−6), updated as the draft ended; first written 2026-11-20 at 13:40. From the build to the peer
+reviewer.*
 
 [HANDOFF.md](HANDOFF.md) handed the design to the implementation team. This document hands the implementation to
 its reviewers. It summarizes:
@@ -10,7 +11,7 @@ its reviewers. It summarizes:
 - what is known to be missing;
 - where a reviewer's time is best spent.
 
-It is a snapshot. The numbers below were true when it was written; the branches keep moving until the draft ends.
+The draft has ended, and the numbers below were true at this update.
 
 ## Contents
 
@@ -31,44 +32,61 @@ It is a snapshot. The numbers below were true when it was written; the branches 
   recURd and burner email, built on the `sidecar` branch of each repo it touches. The owner set the run's shape on
   2026-11-07: draft the whole surface first, then a review phase for integration tests and debugging, then app UI.
   This document opens the review phase.
-- **What "drafted" means.** No one but its author has reviewed it, person or agent. For each piece of work:
+- **What "drafted" means.** For each piece of work:
   1. An agent built the track from its brief and wrote its tests.
   2. The track landed through `track-land` once it compiled and its tests and `landcheck` passed: the sidecar module,
      plain and under `sidecar_testhooks`, plus the packages it touched in other repos.
   3. After it landed, `tip-check` reran the module's whole check at each new sidecar tip (section 6).
 
   The build ran second-agent reviews only on 2026-11-06 and 2026-11-07, for about 50 early tracks, most of M0's
-  bootstrap, before the owner switched the run to drafting. Every track since then, roughly 700, is its author's work
-  alone; no reviewer read it before or after it landed. Treat every claim in a commit message or a track report as the
+  bootstrap, before the owner switched the run to drafting. Every build track since then, roughly 700, is its author's
+  work alone; no reviewer read it before it landed. Treat every claim in a commit message or a track report as the
   author's claim.
+- **One peer review so far.** A reviewer read the draft on 2026-11-20 with this document's first version and wrote
+  `REVIEW.md` in the build's sidecar checkout. It is not committed, so ask for a copy. It found release blockers at the
+  entry points: the first owner's flow could not publish its initial config from the stock daemon and API, and evs,
+  scoped service tokens, socket publication and SMTP had entry-point gaps of their own. A separate session, not the
+  build's, then fixed its findings as `review-fix-*` tracks. They landed on sidecar from the evening of 2026-11-20 into
+  2026-11-21, and in server, sdk, connect, build, warp, xops and mmm too. The owner closed that review on 2026-11-21
+  with its changes merged. Their commit messages are their record. Four questions it left open were then decided as
+  QD-1162 to QD-1165 (owner decisions 677 to 680) and built by the build's tracks. Section 7 says which of the first
+  version's gaps that work closed.
 - **How much.** The plan has 923 tasks across 24 areas:
 
   | State | Tasks |
   |---|---|
   | Done | 18 |
-  | Drafted | 895 |
-  | Landed with an item still open | 6 |
-  | Running | 3 |
+  | Drafted | 897 |
+  | Landed with an item still open | 3 |
+  | Held by a decision deferred to Later | 5 |
+  | Running | 0 |
   | Stuck | 0 |
 
-  M0 to M3, M5 and M8 are complete. M4 is at 60 of 61, M6 at 103 of 105, M7 at 39 of 40, M9 at 57 of 58, and M10 at
-  131 of 134. Five tasks are held for decisions deferred to Later: QD-1038 (2), QD-1032, QD-047 and owner decision 279.
-- **What is still running.** 12 tracks remain across five lanes. Most are fixes that follow answered questions. The
-  largest are `fault-clause-registry` (QD-1084's clause registry, 49 files) and `mcp-m7-01` (MCP-M7-01, MCP-M9-01 and
-  MCP-M10-01). Section 10 covers what follows them.
-- **Health.** The build's continuous check (`tip-check`, section 6) was green at sidecar `503269c2`. The `sidecar`
-  branches were last pushed to origin at sidecar `1d70ee9d`. The local tip when this was written was `99de6ff9`. `main`
-  is untouched in every repo, and nothing is deployed.
+  M0 to M3, M5 and M7 to M9 are complete. M4 is at 60 of 61, M6 at 103 of 105 and M10 at 132 of 134. The five
+  missing tasks are the held ones: QD-1038's two (PROTO-M10-05, QUOTA-M10-02), QD-1032's (TEST-M6-03), QD-047's
+  (EVSB-M6-01) and owner decision 279's (MCP-M4-03).
+- **What landed since the first version.** The build's last tracks, among them:
+  - `mcp-m7-01`, for MCP's mail tools and format-2 evs tools (MCP-M7-01, MCP-M9-01 and MCP-M10-01);
+  - `fault-clause-registry` (QD-1084) and `fault-package-run-time`, which sends the fault rows' runs to child
+    processes;
+  - the erased-version readers (QD-1145, QD-1156 and QD-1157);
+  - erasure completion (QD-1137, QD-1158, QD-1160, QD-1161 and QD-1166 to QD-1169);
+  - darwin's ICMP echo identifiers (QD-1159);
+  - three sdk tests that had gone red unseen (`sdk-root-tests-red`).
+- **Health.** `tip-check` (section 6) was green at sidecar `515c42f9`. The `sidecar` branches were last pushed to
+  origin at sidecar `515c42f9`. `main` is untouched in every repo, and nothing is deployed.
 - **Decisions.**
-  - Owner decisions run to 646.
-  - The build's question ledger runs to QD-1149.
+  - Owner decisions run to 684.
+  - The build's question ledger runs to QD-1169.
   - Since 2026-11-16 the owner's standing instruction has been to accept each question's recommended option. So most
     late QDs were answered that way, recorded, and turned into fix tracks.
+  - The final design sweep (`dr9-final-sweep`, then `dr10-late-fold` to `dr13-late-fold`, all 2026-11-21) folded
+    every decision through QD-1169 into DESIGN.md, DESIGN-DETAILS.md and RECORD.md. Two wait: QD-024 for the
+    owner's `design/UI.md`, and QD-1086 for KEYS's review-phase rework.
   - [DESIGN-AMENDMENTS.md](DESIGN-AMENDMENTS.md) holds decisions that [DESIGN.md](DESIGN.md) does not have yet, and
     [DESIGN-DEFER.md](DESIGN-DEFER.md) holds what was put off.
-  - A final design sweep folds QD-1115 onward into the design before the handoff.
-- **Where to start.** Read section 7's first item, host composition: much of the system is built and tested but not
-  yet wired into `ur daemon` or the apps. Then follow section 8's order.
+- **Where to start.** Read `REVIEW.md` if you can get a copy, then section 7: the review fixes closed much of the
+  first version's largest gap, host composition, and what is left is listed there. Then follow section 8's order.
 
 ## 2. Repos and branches
 
@@ -77,20 +95,20 @@ fork's default branch), and the size of the diff.
 
 | Repo | Commits | Diff | What is there |
 |---|---:|---|---|
-| sidecar | 2,949 | 6,529 files, +1.74M / −8.8k | The new module: the core, the `ur` CLI, MCP, the service engines, the test worlds and the design sources. The size includes vendored `third_party/` and generated protobuf code. |
-| server | 844 | 1,454 files, +386k / −1.2k | The service blocks and their hosts, team and ACL state, mail, dns, abuse, quota, `sidecarctl`, the gate tool and the T3 tests (section 4). |
-| sdk | 158 | 235 files, +86k / −12k | `sdk/sidecar.go` and the app-facing bindings (mail, directory, search, state events). |
-| connect | 161 | 117 files, +40k / −12k | The default-off connect changes (the C-numbered list in §4.18), and the API spec `api/bringyour.yml`. |
-| warp | 68 | 80 files, +25k / −0.9k | `services/sidecar-blocks/` fragments, the lb's `internal_routes`, warpctl. |
-| minio (fork) | 44 | 91 files, +18k / −0.3k | The `urnetwork/minio` fork's changes for evs's storage. |
-| xops | 52 | 108 files, +12.5k / −0.2k | Ansible plays: the edges play, the dbs play (PgBouncer entries, HBA rules, slot budget) and the Redis backup filter. |
-| build | 40 | 88 files, +9.9k / −0.1k | Release Makefiles and the pending-tag guard. |
-| mmm | 22 | 108 files, +8.9k | ur.io's `install.sh` and its OAuth consent page for `ur login`. |
+| sidecar | 3,326 | 6,732 files, +1.81M / −8.9k | The new module: the core, the `ur` CLI, MCP, the service engines, the test worlds and the design sources. The size includes vendored `third_party/` and generated protobuf code. |
+| server | 987 | 1,567 files, +414.7k / −1.3k | The service blocks and their hosts, team and ACL state, mail, dns, abuse, quota, `sidecarctl`, the gate tool and the T3 tests (section 4). |
+| sdk | 186 | 242 files, +85.8k / −10.6k | `sdk/sidecar.go` and the app-facing bindings (mail, directory, search, state events). |
+| connect | 177 | 125 files, +41.6k / −11.9k | The default-off connect changes (the C-numbered list in §4.18), and the API spec `api/bringyour.yml`. |
+| warp | 73 | 82 files, +25.4k / −924 | `services/sidecar-blocks/` fragments, the lb's `internal_routes`, warpctl. |
+| minio (fork) | 47 | 92 files, +18.7k / −273 | The `urnetwork/minio` fork's changes for evs's storage. |
+| xops | 61 | 118 files, +13.2k / −260 | Ansible plays: the edges play, the dbs play (PgBouncer entries, HBA rules, slot budget) and the Redis backup filter. |
+| build | 51 | 93 files, +10.3k / −107 | Release Makefiles and the pending-tag guard. |
+| mmm | 31 | 114 files, +10k / −93 | ur.io's `install.sh` and its OAuth consent page for `ur login`. |
 | operator-core | 9 | 38 files, +4.5k | The host contract (owner decision 251): package `operator`'s `Env`, its global env (QD-1027), and the quota refusal and limits types. |
-| config, sn, tests | 29, 12, 3 | small | Settings, the sn changes and test fixtures. |
+| config, sn, tests | 29, 14, 5 | small | Settings, the sn changes and test fixtures. |
 | glog, userwireguard, proxy | 1 each | one line | The Go 1.27.4 line (QD-674). |
 
-DESIGN.md is generated from `sidecar/design/source/`: its 23 section files, and the owner's record of decisions 1 to 646
+DESIGN.md is generated from `sidecar/design/source/`: its 23 section files, and the owner's record of decisions 1 to 684
 (`owner/DECISIONS.md`). Code conventions are in [CODESTYLE.md](CODESTYLE.md).
 
 ## 3. The sidecar module
@@ -150,6 +168,7 @@ Three things recur across the module:
 - **Lanes and tracks.** The plan lives in the build workspace's `.stack/plan/`, one file per area (ABUSE, ACL, BRIDGE
   and so on). Work ran in five lanes. Each lane ran tracks in order, and a validator kept two lanes from holding the
   same file at once. A track is one brief's work over one or more repos. Its worktrees are under `.tracks/<track>/`.
+  The review-fix session's worktrees are there too, as `.tracks/review-fix-*`.
 - **Questions.** An agent that met a choice the design left open stopped and wrote a question, with options and a
   recommendation (`.stack/questions/`). Each answer has a QD number in `.stack/decisions/` (`LEDGER.json`,
   `RESOLUTIONS.md`), and is written back into its question file. Answers that needed code became fix tracks. Design
@@ -157,17 +176,17 @@ Three things recur across the module:
 - **The trail behind a line of code.**
   - Commit messages are long. They name the task (for example `EVS2-M10-31`) and the decisions (QD-n, owner decision
     n) they implement, so `git log -S` and `git blame` usually find the reason.
-  - `.stack/state/drafted.txt` holds 995 entries, one per drafted task, each saying what landed and what was put off.
-    729 of them name review-phase work.
+  - `.stack/state/drafted.txt` holds 998 entries, one per drafted task, each saying what landed and what was put
+    off. 749 of them name review-phase work.
   - `.stack/state/review-phase-work.md` holds the owner decisions that place work in the review phase, and the open
     items from each recent track's report.
-  - `.stack/state/final-design-sweep.md` holds what the last sweep folds, the owner's steps before deploy, and the
-    handoff's test notes.
+  - `.stack/state/final-design-sweep.md` holds what the final sweep folded and left, the owner's steps before deploy,
+    and the handoff's test notes.
 
   `.stack` is the build's local workspace, not a repo, so it is not on origin. Ask for a copy if you review from
   origin.
-- **Commit rules.** Merge, never rebase. No AI attribution in any commit. Only the orchestrator pushes, at
-  checkpoints, and only `sidecar` branches.
+- **Commit rules.** Merge, never rebase. No AI attribution in any commit. Pushes go only to `sidecar` branches, at
+  checkpoints. The build's orchestrator made them, and since 2026-11-21 the review-fix session has made them too.
 
 ## 6. Testing: tiers, commands and rules
 
@@ -183,13 +202,21 @@ Three things recur across the module:
 **Commands:**
 
 - sidecar: `make check` runs every module's tests plain and under `sidecar_testhooks`, then the leak leg, then
-  `check/` under `sidecar_check`.
+  `check/` under `sidecar_check`. The build runs it with `TEST_TIMEOUT=120m`, since the fault package once outgrew 60
+  minutes on this loaded host. `fault-package-run-time` has since cut its hooks leg from 975 s to 561 s.
 - server: run tests through the build's `.stack/server-test.sh <server checkout> <go test args>`. It keeps
   `server/test-env.sh`'s guards on.
 - Gates: `sidecar-gate <gate> -list` lists a gate's rows. A full run needs the private stores and T3's layouts. M9's,
   M10's and the held gate's full runs have not been taken; only `-list` and direct package runs have.
-- `tip-check` runs at every new sidecar tip. It runs `make check`, plus server's untagged vet and a set of named audits:
-  the root package's, and evshost's routes against `bringyour.yml`. It also runs sdk's vet and root-package audits.
+- `tip-check` runs at every new sidecar tip. It runs:
+  - `make check`;
+  - server's untagged vet and a set of named audits: the root package's, and evshost's routes against
+    `bringyour.yml`;
+  - sdk's untagged vet and its whole root package on both legs, less two tests that fail only beside the rest of the
+    package (section 7, item 5).
+
+  Before 2026-11-21 it ran only five of the sdk root package's audits, and three of the package's tests were red for
+  five hours unseen.
 
 **Rules that bind reviewers as they bound the build:**
 
@@ -219,26 +246,32 @@ The full list is in the final design sweep's test notes.
 
 ## 7. Known gaps: the review's agenda
 
-**1. Host composition.** This is the largest theme. Components that are built and tested at unit and T2 level have no
-production host yet:
+Each item was checked against the code at this update. Where a fix landed since the first version, the end of this
+section says so.
 
-- No Sidecar builds an `SmtpSender` or runs an `SmtpOutboxRunner`. So `CheckSend` prices through `p/` records on every
-  host.
-- Nothing installs the search `IndexWriter`, builds `SearchRemoteServer` for `Daemon.ServeRemoteSearch`, or calls
-  `ApplySearchDesignatedSettings`. Only mail binds `ConfigIndexerServicesOpener`.
-- No search scope source exists, so production searches apply no `searchable_days` mask. QD-1138 says what it must
-  pass.
-- The record runs on `RecordAuthUnavailable`. Nothing builds `RecordEvsStreams` or `NewRecordComponent`, or calls
-  `SetEraseIndex`, so format 2's record erasure and Team cost entries are off in a real daemon.
-- Nothing calls `SaveAclTeamStart`.
+**1. Host composition.** The review fixes wired much of what this item listed on 2026-11-20: search's index writer,
+remote serving and scope masks; the record's evs streams, erasure index and component; and the mail sender's runner.
+What is still missing:
+
+- **Mail sending.** `SmtpSender` and `SmtpOutboxRunner` are built only when a prover is set
+  (`mail_component_smtp.go`), and `cli/smtp_prover.go` returns none while no release pins a key set. So `CheckSend`
+  still prices through `p/` records on every host.
+- **Executed drops.** Nothing in production calls `EvsClient.SetDropApplier`. A format-2 executed drop meets
+  `ErrEvsDropApplierMissing` and never reaches `Sidecar.ApplyExecutedDrop` or the restore-point holder.
+- **Team start.** `SaveAclTeamStart` still has no caller. The first Owner's first config head signs the Team starter
+  policy instead (307e4ab4).
+- **The DNS watch.** Nothing in production builds a `DnsWatch`, so `DnsWatch.StrictChain` answers false.
+- **evs mirror views.** `NewRecordEvsMirrorView` and `EvsMirrorStatusLines` have no production host.
+- **Mail attachments over MCP.** `mail_read`'s attachment links answer not found, because `MailClient` reads no
+  part's bytes.
 
 To find more, search `drafted.txt` for "Nothing constructs", "no Sidecar builds", "nothing calls", "has no caller" and
-"not wired".
+"not wired". Check each hit against the code: the review fixes wired some after their entries were written.
 
 **2. Owner decisions that put work in the review phase.**
 
 - **QD-1028.** Move server-hosted sidecar code into `sidecar/{model,controller,work,handler}`. It runs as a barrier
-  once the lanes drain.
+  when the next phase starts.
 - **QD-1035.** Remove presence-key attestation.
 - **QD-1040.** MLS is set aside. Rework key formation onto KeyDelivery wraps, and keep the MLS code dark.
 - **QD-706.** The settings sweep.
@@ -248,28 +281,38 @@ To find more, search `drafted.txt` for "Nothing constructs", "no Sidecar builds"
 
 **3. Gates that read missing or open.**
 
-- M9's and M10's exits and the held gate list many rows as missing. Reasons include:
-  - case-tiers with no registered builder (33 at M10's exit, 17 cases in the held gate);
-  - FI-13, FI-14, FI-25 and FI-26 not bound;
-  - schedules that name no invariant (FS-74, FS-75, FS-87, FS-88, FS-99, FS-107, FS-108, FS-111);
-  - S6 missing from §22.7's registry;
-  - owners' inline paths not calling `InlinePath` yet.
+- M9's and M10's exits and the held gate list many rows as missing:
+  - case-tiers with no registered builder: 33 at M10's exit and 17 cases in the held gate when counted on
+    2026-11-20. Since then only FS-44, FS-45, FS-47, FS-53, FS-60, FS-61 and FS-116 to FS-118 have gained builders;
+  - FI-13, FI-14, FI-25 and FI-26 are not bound. FS-118's case checks FI-14 through a case-local invariant of its own;
+  - schedules that name no invariant: FS-99's cards, FS-107, FS-108 and FS-111. The first version also named FS-74,
+    FS-75, FS-87 and FS-88, which already had case-local checks then. `gate_held_test.go` still lists FS-87's index and
+    FS-88's searches as known failing;
+  - S6 has its row in `sidecartest/scenario.go` but no registered test;
+  - two inline paths do not call `InlinePath` yet: smtpedge's preamble gate (SMTP-M9-10) and evs's write-budget
+    admission (EVSB-M2-06).
 - The rows people, hardware or production owe are listed with the owner's steps.
-- QD-1084's clause registry is still landing.
+- No T3 row has run the explorer's one-seed short form (owner decision 667), and nothing checks T3's registrations as
+  `rules_testhooks_test.go` checks T2's.
 
 **4. Items that deserve a careful eye first.**
 
-- **Held drop jobs.** This bug predates the draft's last fixes. A held job that resumes after its hold ends and then
-  fails leaves its entries held with no record. Their dropped ids can then be read again.
-- **`mail_strict`.** It can be set, but until connect's C20 DNSSEC validator lands, strict mode refuses every spliced
-  session.
 - **The shared edge bearer.** tlsedge, smtpedge and mxedge share one bearer class. A stolen one can mark a Team's MX row
   verified or failing.
 - **PgBouncer.** Its HBA rules and two `min_pool_size` readings have not been checked against a running PgBouncer 1.26.
-- **Completion ERASEs (QD-1137).**
-  - A stray completion naming another erasure's key blocks that erasure's own completion.
-  - On real evs, `IndexEraser` sends no completion yet, because `Retained` always answers incomplete.
-- **Policy tests.** An activated route grant meets no `ip:` check. This is a candidate question.
+- **Completion ERASEs (QD-1137).** A stray completion naming another erasure's key now blocks that erasure only where
+  every key it named first was named again (3e04fc2d). evs still refuses a completion on a key whose last naming was a
+  completion. Review the rule as a whole.
+- **Directory erasure completion (QD-1158, QD-1160, QD-1161, QD-1166 to QD-1169).** It is built and tested on fakes
+  only: no real-engine world holds M6 announce entries in a format-2 directory. A person's erasure whose card removal
+  meets a path conflict stays incomplete until it runs again under a new id.
+- **Git-mode export of an erased blob (QD-1156).** Export writes the blob's stub and rewrites the later commits under
+  new oids, noting the originals. It is tested only on a stand-in evs, since no client of this codebase writes a
+  git-mode push in a slot-keyed repo. A rewritten commit's gpgsig no longer verifies.
+- **`mail_strict`.** The desktop receiver now checks the DNSSEC chain itself (connect 933c06eb, sidecar 4ba6bd62).
+  DESIGN-DEFER.md still says C20 blocks `strict_chain`, and `DnsWatch` (item 1) answers false.
+- **Policy tests.** An activated route grant meets no `ip:` check. The review-fix session has an open question on it
+  (`review-fix-acl-test-activated-route`).
 - **MTA-STS.**
   - A verification change with no writer reaches the zone only at the network's next sign-in or payment.
   - The reconcile's post-commit hint takes a pooled connection while its caller holds one.
@@ -279,17 +322,29 @@ To find more, search `drafted.txt` for "Nothing constructs", "no Sidecar builds"
 - Mutation sweeps beyond spot mutants, fuzzing, exhaustive FS schedules, T3 runs of many format-2 cases, and
   benchmarks.
 - Known flaky behaviour:
-  - `TestEvsMapperUploadsPartsAtOnce` can hang a run; a fix track is placed.
+  - sdk's `TestDeviceLocalCloseAndWaitJoinsCurrentMuxPump` and `TestDeviceLocalCloseAndWaitJoinsRetiredMuxPump` fail
+    only inside the whole package, on state other tests leave behind. `tip-check` skips both until sdk-test-isolation
+    fixes them. The three sdk flakes found first are fixed; one was a real race, in which a camouflage report could go
+    out under the next account's token.
   - `sidecartest`'s `FakeClock.Advance` can set the clock back under two movers.
+- The fault package keeps five schedules whose connect clients ran in one process (FS-17, FS-38, FS-56, FS-98,
+  FS-124). Darwin's ICMP fix (QD-1159, connect 7a8f2a3b) removes the reason, so they can move to child processes.
 
 **6. Spec and doc drift.**
 
-- `bringyour.yml` still has gaps:
-  - evs push refusals with no body content;
-  - 402 answers worded "with terms";
-  - `test_spec.py`'s served set lacking 14 evs operations.
-- `check-routes.sh` does not see routes a handler registers through `Routes()`.
-- The design wording items are listed in the final design sweep.
+- `bringyour.yml` still words its 402 answers "with terms" (the segments PUT and the push POST).
+- DESIGN-DEFER.md's C20 line (item 4).
+- RECORD.md 5.7's open BASE row stays open, because `record_md_test.go` holds its sentence.
+- The rest of what the final sweep left is in `.stack/state/final-design-sweep.md`.
+
+**Fixed since the first version.** These no longer need a look:
+- held drop jobs that lost their hold on a failed resume (c834387b, 5114b0fa);
+- `IndexEraser`'s completion on real evs, where `Retained` always answered incomplete (3e04fc2d);
+- `TestEvsMapperUploadsPartsAtOnce`'s hang (e6d91cc1);
+- `bringyour.yml`'s evs refusal bodies and its served-set gap, and `check-routes.sh`'s blind spot for routes registered
+  through `Routes()` (bc3d9488, bc8ab84d);
+- QD-1084's clause registry, which has landed (its leftovers are in `review-phase-work.md`);
+- most of item 1.
 
 The review phase list in `.stack/state/review-phase-work.md` has each item with its source; `drafted.txt` has the
 rest per task.
@@ -331,8 +386,11 @@ list with each step's order is in the final design sweep's owner steps.
   - make 33 connection slots of room for the edges' budget.
 - **The internal gate bearers** for edge, mxedge-platform, evs and gkm: draw them with `sidecarctl internal
   bearer-keygen`, and add api's verify entries.
-- **The lb.** Fill in its allow-list site ranges, and rebuild its image and units.
-- **Key files.** Draw smtpedge's X-UR-Ref key file before M9's platform fragment. Draw the abuse mailbox's keys.
+- **The lb.** Fill in its allow-list site ranges, deploy its widened CORS list after the review phase (QD-221), and
+  rebuild its image and units.
+- **Key files.** Draw smtpedge's X-UR-Ref key file before M9's platform fragment. Draw the abuse mailbox's keys after
+  the review phase.
+- **The competition patch validator.** Record its two digests when it is compiled (QD-874).
 - **The Redis backup filter.** Deploy it.
 - **Postmaster tools.** Register them.
 - **The CLI's spellings.** Supply the owner's `design/UI.md` for the CLI's final spellings.
@@ -341,16 +399,44 @@ list with each step's order is in the final design sweep's owner steps.
 
 ## 10. What happens next
 
-The lanes finish their last tracks. Then come, in order:
+The draft ended with:
 
-1. **The final design sweep.** It folds QD-1115 onward into DESIGN.md, DESIGN-DETAILS.md and RECORD.md. Its list is
-   in the final design sweep file.
-2. **A green tip-check.**
-3. **The final push of the `sidecar` branches.**
-4. **A pause for the owner's next-phase instructions:**
-   - the review phase, which this document opens;
-   - then the apps' UI;
-   - QD-1028's layout move, which runs as a barrier once the lanes drain.
+1. **The final design sweep.** `dr9-final-sweep` and `dr10-late-fold` to `dr13-late-fold` folded every decision
+   through QD-1169.
+2. **A green tip-check**, at sidecar `515c42f9`.
+3. **The last push of the `sidecar` branches**, at sidecar `515c42f9`.
+
+The owner's first instruction for the next phase (2026-11-21) is end-to-end integration tests for the new server
+services. They spin up all the server services and their clients and test concurrency, in the manner of
+`server/connect`'s and `server/proxy`'s tests.
+
+Progress at this update, in `server/sidecare2e` and `server/sidecart3` (plan: `.stack/state/e2e-plan.md`):
+
+- **The world.** Every block's host runs in one process, with real sidecar clients across several networks, the
+  mail step in and out, and usage ledgers that reconcile exactly per meter after restarts. Its package header names
+  each stand-in left.
+- **Bugs it found and that are fixed:**
+  - an EvsClient's overlapping calls raised false fork and tamper alarms, and the desktop sync engine could let a
+    fork through (evs-client-concurrent-pin, evs-readers-pin-snapshot);
+  - a joining device got its config key only at the next rotation, up to 30 days (keys-late-delivery);
+  - repo creation lost to its own readers' cached 404 at gkm (gkm-repo-create-race).
+- **Bugs it found that are being fixed:**
+  - the approval gate refuses `Sidecar.Listen`;
+  - a dns label drawn out of serial order is never routed;
+  - a member's own device has no deposit on its mailbox, and the receiver never answers 451;
+  - a mailbox's first deposit never wakes its reader;
+  - api never installs the SMTP api gate;
+  - the receiver's reception checks query public DoH resolvers from tests.
+- **The owner's two named cases are running:** "blogger" (writers' webservers behind one tlsedge name through
+  sockets' fair scheduler, each serving articles from a cache cleared on evs's change hint) and "it bridge" (subnets
+  and port forwards churning while gVisor clients' traffic must reach the right destinations).
+- **A sweep of every sidecar-related server package** is running, after four server tests turned out red unseen.
+
+Then come:
+
+- the rest of the review phase, which this document opens;
+- the apps' UI;
+- QD-1028's layout move, which runs as a barrier in the next phase.
 
 Findings are most useful as concrete inputs and the wrong output or crash they cause, each tied to the decision or
 section it breaks.
