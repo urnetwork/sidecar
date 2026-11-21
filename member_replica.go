@@ -53,7 +53,8 @@ func (self *Sidecar) openMemberReplica(ctx context.Context, browserSignIn bool) 
 		return nil, ErrSidecarNoIdentity
 	}
 	if current, ok := self.memberReplica.(*MemberReplica); ok {
-		sameIdentity := current.identity.SidecarId == identity.SidecarId && current.identity.NetworkId == identity.NetworkId
+		sameIdentity := current.identity.SidecarId == identity.SidecarId && current.identity.NetworkId == identity.NetworkId &&
+			bytes.Equal(current.identity.IdentityPublicKey, identity.IdentityPublicKey)
 		if current.ctx.Err() == nil && sameIdentity && (!browserSignIn || current.trustFirstUse || current.Config() != nil) {
 			return current, nil
 		}
@@ -109,10 +110,27 @@ func (self *MemberReplica) Evs() *EvsClient {
 
 // The configuration only once its follower has verified the enrolled anchor.
 func (self *MemberReplica) Config() *ConfigClient {
-	if self.ctx.Err() != nil {
+	if self.activeIdentity() == nil {
 		return nil
 	}
 	return self.follower.Client()
+}
+
+// The live identity for file and record access. The core retains the public
+// identity while locked, although the instance can no longer serve member data.
+func (self *MemberReplica) activeIdentity() *SidecarIdentity {
+	if self.ctx.Err() != nil {
+		return nil
+	}
+	if state, _ := self.running.instance.State(); state != SidecarInstanceOpen {
+		return nil
+	}
+	identity := self.running.Identity()
+	if identity == nil || identity.SidecarId != self.identity.SidecarId || identity.NetworkId != self.identity.NetworkId ||
+		!bytes.Equal(identity.IdentityPublicKey, self.identity.IdentityPublicKey) {
+		return nil
+	}
+	return identity
 }
 
 // Ends the follower, hints and key upkeep, and releases any open repo subscriptions.
@@ -186,6 +204,7 @@ func (self *MemberReplica) open() error {
 		return err
 	}
 	args.GroupHead = group.GroupHead
+	args.Identity = self.activeIdentity
 	self.setStatementPoster(args)
 	self.evs, err = NewEvsClient(args)
 	if err != nil {
@@ -224,7 +243,7 @@ func (self *MemberReplica) bindRecord(config *ConfigClient) error {
 
 // A config head's verifier may need its previously verified rows while the initial anchor check is in progress.
 func (self *MemberReplica) verifiedConfig() GkmAuthView {
-	if self.ctx.Err() != nil {
+	if self.activeIdentity() == nil {
 		return nil
 	}
 	follower := self.running.ConfigFollower()

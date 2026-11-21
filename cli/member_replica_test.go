@@ -68,6 +68,10 @@ func TestMemberReplicaReadsTheEnrolledNetworksEncryptedHeadAfterRestart(t *testi
 		return replica
 	}
 	first := open(running)
+	instance.Instance().Lock()
+	if first.Config() != nil || first.Evs() != nil {
+		t.Fatal("the locked instance still served member data")
+	}
 	if err := instance.Restart(); err != nil {
 		t.Fatal(err)
 	}

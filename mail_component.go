@@ -334,7 +334,7 @@ func (self *MailClient) bindFromSidecar(ctx context.Context, env *SidecarEnv) {
 
 // A member host's verified client, including when it only exposes mail, or the daemon's EVS component.
 func (self *Sidecar) mailEvsClient() *EvsClient {
-	if self.ctx.Err() != nil {
+	if self.ctx != nil && self.ctx.Err() != nil {
 		return nil
 	}
 	if replica := self.registeredMemberReplica(); replica != nil {
