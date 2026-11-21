@@ -13,6 +13,7 @@ import (
 	"errors"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -246,27 +247,31 @@ func TestEvsMapperSortsOnDisk(t *testing.T) {
 }
 
 // MapUploadCount parts at once: with four, a part waits at evs until a second one arrives beside it, which an
-// upload of one at a time never sends; every part goes once and the map commits.
+// upload of one at a time never sends; every part goes once and the map commits. The barrier opens once, at the
+// second arrival or any after it, so parts that all arrive before any of them checks still open it. One deadline
+// bounds every wait and the tick: past it each part refuses at once and the tick's retries stop, so an uploader that
+// sends one part at a time fails the test rather than hanging it.
 func TestEvsMapperUploadsPartsAtOnce(t *testing.T) {
 	writer := newEvsTestMapperWriter(t)
 	writer.test.client.settings.MapPartFillByteCount = 300
 	writer.test.client.settings.MapUploadCount = 4
-	arrived := make(chan uint32, 64)
+	deadline, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var arrivedCount atomic.Int32
 	second := make(chan struct{})
 	var once sync.Once
 	writer.server.onMapPart = func(part uint32) error {
-		arrived <- part
-		if len(arrived) == 2 {
+		if 2 <= arrivedCount.Add(1) {
 			once.Do(func() { close(second) })
 		}
 		select {
 		case <-second:
 			return nil
-		case <-time.After(10 * time.Second):
+		case <-deadline.Done():
 			return errors.New("no second part arrived beside the first")
 		}
 	}
-	if err := writer.repo.TickMapper(context.Background(), writer.world.refId); err != nil {
+	if err := writer.repo.TickMapper(deadline, writer.world.refId); err != nil {
 		t.Fatalf("the tick: %v", err)
 	}
 	if writer.world.currentEpoch != 2 {

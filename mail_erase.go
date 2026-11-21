@@ -17,8 +17,9 @@
 //	         The last part's ERASE completes the erasure; one with no row in any segment is complete at its first.
 //	         One whose parts ran with no segment left to carry complete, as when another step took its rows, ends by
 //	         a completion ERASE in a format-2 mailbox (QD-1132, QD-1137; evs_erase_completion.go) unless evs's state
-//	         shows it complete, and stays rewriting where evs does not take it or, in format 1, which has no
-//	         completion ERASE, until an ERASE of it says complete: never done on this device alone
+//	         shows it complete, and stays rewriting where evs does not take it. A format-1 mailbox has no completion
+//	         ERASE, COMPLETION being format 2's flag (QD-1137), so there such an erasure reads done on this device
+//	         alone once its pass left nothing, its deposits' inventory taken again first (settleFormat1)
 //	wait     a part evs refuses 429, past the eraser's closure rate, its turn or its day's allowance, stops the
 //	         erasure there with the time to try again (retry_after_ms) and §11.13's estimate of its end: the rows
 //	         still listed stay openable to key holders until their part commits, and the bodies are gone already
@@ -560,7 +561,8 @@ func (self *MailEraser) beginAttempt(ctx context.Context, erasureId Id, month Ma
 // last ERASE of them completing the erasure where the index's rewrite left nothing unproven. With no i/ segment left
 // to carry complete, the index's rewrite ends the erasure, by its last ERASE or a completion ERASE, or the last
 // orphan's ERASE does; one evs's state still shows incomplete then takes a completion ERASE here (QD-1132), so no
-// erasure reads done on this device alone. Fills erasure with where it stands.
+// format-2 erasure reads done on this device alone. A format-1 one that evs's state shows incomplete once every part
+// ran reads done on this device where nothing is left (settleFormat1). Fills erasure with where it stands.
 func (self *MailEraser) parts(ctx context.Context, erasure *MailErasure, messages []mailErasedMessage, index *mailEraseIndex, role IndexResumeRole, erasedKeys map[EvsErasedKey]bool) error {
 	segments, err := self.segmentsListing(ctx, messages)
 	if err != nil {
@@ -607,7 +609,73 @@ func (self *MailEraser) parts(ctx context.Context, erasure *MailErasure, message
 		return err
 	}
 	// Even the last segment's ERASE may have found its keys already gone and committed nothing.
-	return self.complete(ctx, erasure, index != nil && !indexEnds)
+	if err := self.complete(ctx, erasure, index != nil && !indexEnds); err != nil || erasure.State == MailErasureDone || index != nil {
+		return err
+	}
+	return self.settleFormat1(ctx, erasure, messages)
+}
+
+// Ends a format-1 erasure whose every part ran, though evs's state shows it incomplete: another step took its i/
+// rows, or its last ERASE found its keys gone and committed nothing. A format-1 mailbox has no completion ERASE,
+// since COMPLETION is format 2's flag (QD-1137), and an ERASE naming only keys already gone commits nothing, so evs
+// would show the erasure rewriting for good. Read rewriting here too, it would end every Resume at itself, leaving
+// the keys of a later erasure's orphaned CLOSURE standing, and would keep the ingest's reconcile walking it at each
+// pass. So it reads done on this device once nothing is left, as format 1 read before QD-1132's completion ERASE and
+// QD-1137's flag: its first ERASE took every slot an inventory that every ref answered found (beginAttempt), no late
+// body stands (eraseLateBodies), each orphaned CLOSURE's keys went and every i/ segment listing a message was re-keyed
+// (parts). The deposits' inventory is taken again first, as beginAttempt takes it, and a failure there reads nothing
+// done: a slot of a deposit standing since the first ERASE goes by an ERASE that says complete, which evs then shows.
+// Another device reads the erasure from evs's state and judges it so again.
+func (self *MailEraser) settleFormat1(ctx context.Context, erasure *MailErasure, messages []mailErasedMessage) error {
+	messageIds := make([]Id, 0, len(messages))
+	for _, message := range messages {
+		messageIds = append(messageIds, message.MessageId)
+	}
+	depositKeys, _, err := self.depositKeys(ctx, messageIds)
+	if err != nil {
+		erasure.State = MailErasureRewriting
+		return err
+	}
+	erasures, err := self.store.Erasures(ctx, 0)
+	if err != nil {
+		erasure.State = MailErasureRewriting
+		return err
+	}
+	erased := mailErasedKeys(erasures)
+	keys := []*EvsErasedKey{}
+	standing := []mailErasedMessage{}
+	for _, message := range messages {
+		held := false
+		for _, key := range depositKeys[message.MessageId] {
+			if !erased[*key] {
+				keys = append(keys, key)
+				held = true
+			}
+		}
+		if held {
+			standing = append(standing, message)
+		}
+	}
+	if 0 < len(keys) {
+		testHookBarrier("mail.erase.deposit.before", "")
+		err := self.store.Erase(ctx, &EvsEraseArgs{
+			ErasureId: erasure.ErasureId, Keys: keys, Complete: true, Note: mailErasureNote(standing, nil),
+		})
+		testHookBarrier("mail.erase.deposit.after", "")
+		if wait, refused := mailEraseRefusedForNow(err); refused {
+			erasure.State = MailErasureWaiting
+			erasure.NextTry = self.clock.Now().Add(wait)
+			return nil
+		}
+		if err != nil {
+			erasure.State = MailErasureRewriting
+			return err
+		}
+		// an ERASE commits where a key it names stands, and answers nothing to erase where a CONSUME's slot delete
+		// took every one first: no slot it names holds a key either way
+	}
+	erasure.State = MailErasureDone
+	return nil
 }
 
 // Ends an erasure whose every part ran with no i/ segment left to carry complete (QD-1132): done where an ERASE of it
