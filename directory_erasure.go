@@ -49,17 +49,16 @@
 //	           row), saying nothing complete, since this half follows under the same erasure id
 //	           (RecordEraseArgs.Journaled; DESIGN-DETAILS 15.2.10's step 2; QD-1158): no ERASE of a format-2 directory
 //	           erasure says complete before its CUT; then a CUT on the cards ref and on ur/index listing the documents at
-//	           the newest version erased,
-//	           through each ref's eraser (DirectoryErasureIndex, the index's IndexEraser), which folds nothing again:
-//	           an announcement's document goes whole (15.2.10); then each ref's CLOSURE and ERASE pairs over its index
-//	           files (IndexEraser.Rewrite); then a CLOSURE a file, rewriting in place under a fresh key each card and
-//	           repo file whose earlier versions held a document, and its ERASE of every key a stored version of the
-//	           file names. The files go last so that the ERASE that says the erasure complete names keys that stand:
-//	           a ref whose index holds none of the documents sends no pair, and where no file is left either the
-//	           rewrite of the last ref a CUT of the erasure stands on ends it by a completion ERASE, which names a key
-//	           an ERASE of the erasure destroyed (IndexRewriteArgs.Completion; QD-1132, QD-1137). Every ERASE of a
-//	           file's keys, and the index's completing one, carries as its sealed note an ErasureBody naming the
-//	           erasure, its reason and, for a revocation, the request, whose id is the erasure's
+//	           the newest version erased, through each ref's eraser (DirectoryErasureIndex, the index's IndexEraser),
+//	           which folds nothing again: an announcement's document goes whole (15.2.10); then each ref's CLOSURE and
+//	           ERASE pairs over its index files (IndexEraser.Rewrite); then a CLOSURE a file, rewriting in place under a
+//	           fresh key each card and repo file whose earlier versions held a document, and its ERASE of every key a
+//	           stored version of the file names. The files go last so that the ERASE that says the erasure complete
+//	           names keys that stand: a ref whose index holds none of the documents sends no pair, and where no file is
+//	           left either the rewrite of the last ref a CUT of the erasure stands on ends it by a completion ERASE,
+//	           which names a key an ERASE of the erasure destroyed (IndexRewriteArgs.Completion; QD-1132, QD-1137).
+//	           Every ERASE of a file's keys, and the index's completing one, carries as its sealed note an ErasureBody
+//	           naming the erasure, its reason and, for a revocation, the request, whose id is the erasure's
 //	note       a moderation, a directory admin's erase of an announcement another sidecar's card holds, names that
 //	           announcement in its note too (ErasureBody.announcement_ids; QD-1148), the ERASE of the removed card's
 //	           keys carrying it, every later ERASE of the erasure alike: the card's writer reads it at its next sync and
