@@ -40,6 +40,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // The registry's directory in the evs component's store.
@@ -123,6 +124,13 @@ type EvsMounts struct {
 	gitTree string
 	git     *EvsGitRunner
 
+	// Serializes registration and recovery before a mount can serve git. Workers live until the client closes.
+	mountLock     sync.Mutex
+	workerCtx     context.Context
+	cancelWorkers context.CancelFunc
+	workers       sync.WaitGroup
+	managed       atomic.Bool
+
 	stateLock    sync.Mutex
 	repoIdMounts map[Id]*EvsLocalRepo
 	// a test's stand-in sync engine imports run through in place of each mount's own (evs_local_import.go)
@@ -159,11 +167,13 @@ func NewEvsMounts(client *EvsClient, state string, git *EvsGitRunner) (*EvsMount
 	if !filepath.IsAbs(state) {
 		return nil, fmt.Errorf("%w: the mount state by an absolute path", errInvalidSettings)
 	}
+	workerCtx, cancelWorkers := context.WithCancel(context.Background())
 	self := &EvsMounts{
 		client:       client,
 		gitTree:      evsLocalGitTree(state, client.NetworkId()),
 		git:          git,
 		repoIdMounts: map[Id]*EvsLocalRepo{},
+		workerCtx:    workerCtx, cancelWorkers: cancelWorkers,
 	}
 	client.stateLock.Lock()
 	client.localTier = self
@@ -178,6 +188,11 @@ func (self *EvsMounts) GitTree() string {
 
 // Reopens every mount the store records.
 func (self *EvsMounts) Load(ctx context.Context) error {
+	self.mountLock.Lock()
+	defer self.mountLock.Unlock()
+	if err := self.workerCtx.Err(); err != nil {
+		return err
+	}
 	store := self.client.args.Store
 	entries, err := store.List(evsMountDirectory)
 	if err != nil {
@@ -186,6 +201,9 @@ func (self *EvsMounts) Load(ctx context.Context) error {
 	for _, entry := range entries {
 		repoId, err := ParseId(strings.TrimPrefix(entry.Name, evsMountDirectory))
 		if err != nil {
+			continue
+		}
+		if _, ok := self.Get(repoId); ok {
 			continue
 		}
 		reader, err := store.Open(entry.Name)
@@ -205,6 +223,9 @@ func (self *EvsMounts) Load(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		if self.managed.Load() {
+			self.startWorkerWithLock(mount)
+		}
 		func() {
 			self.stateLock.Lock()
 			defer self.stateLock.Unlock()
@@ -212,6 +233,41 @@ func (self *EvsMounts) Load(ctx context.Context) error {
 		}()
 	}
 	return nil
+}
+
+// Starts each restored mount's journal recovery and publication, then does the same for new mounts.
+// Calling it again on a later connection keeps each mount's existing worker.
+func (self *EvsMounts) StartWorkers() {
+	if self.managed.Load() {
+		return
+	}
+	self.mountLock.Lock()
+	defer self.mountLock.Unlock()
+	if self.managed.Load() || self.workerCtx.Err() != nil {
+		return
+	}
+	for _, mount := range self.List() {
+		self.startWorkerWithLock(mount)
+	}
+	self.managed.Store(true)
+}
+
+// Recovers before serving the mount, so restart's stale-lock cleanup cannot race a live git process.
+func (self *EvsMounts) startWorkerWithLock(mount *EvsLocalRepo) {
+	mount.start(self.workerCtx)
+	self.workers.Go(func() { mount.run(self.workerCtx) })
+}
+
+// Cancels and joins all publication and replay before another client can reopen the same journals.
+func (self *EvsMounts) closeMounts() {
+	if self.cancelWorkers == nil {
+		return
+	}
+	self.cancelWorkers()
+	// A registration already in progress can launch its worker until it releases mountLock.
+	self.mountLock.Lock()
+	self.mountLock.Unlock()
+	self.workers.Wait()
 }
 
 // The mount of repoId, false when none.
@@ -247,6 +303,11 @@ func (self *EvsMounts) localRepo(repoId Id, record *evsMountRecord) (*EvsLocalRe
 // Mounts repoId: its bare repository created SHA-1 and configured, or reopened; the working clone's committer set
 // when args names one that is a git repository; the record kept. An implicit mount names no directory.
 func (self *EvsMounts) Add(ctx context.Context, repoId Id, args *EvsMountArgs) (*EvsLocalRepo, error) {
+	self.mountLock.Lock()
+	defer self.mountLock.Unlock()
+	if err := self.workerCtx.Err(); err != nil {
+		return nil, err
+	}
 	if args.Dir != "" && !filepath.IsAbs(args.Dir) {
 		return nil, fmt.Errorf("%w: a mount by a relative path", errInvalidSettings)
 	}
@@ -347,12 +408,14 @@ func (self *EvsMounts) Add(ctx context.Context, repoId Id, args *EvsMountArgs) (
 	if err := writer.Commit(); err != nil {
 		return nil, err
 	}
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	if held := self.repoIdMounts[repoId]; held != nil {
+	if held, ok := self.Get(repoId); ok {
 		// the same mount again: its locks, its engine, which may be mid-replay, and its receive path stay
 		mount.locks, mount.sync, mount.receiver = held.locks, held.sync, held.receiver
+	} else if self.managed.Load() {
+		self.startWorkerWithLock(mount)
 	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
 	self.repoIdMounts[repoId] = mount
 	return mount, nil
 }

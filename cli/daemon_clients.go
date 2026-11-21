@@ -134,7 +134,14 @@ func urNetworkEvsClient(running *sidecar.Sidecar) (*sidecar.EvsClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	return clients.evsClient()
+	client, err := clients.evsClient()
+	if err != nil {
+		return nil, err
+	}
+	if mounts, err := client.Mounts(); err == nil {
+		mounts.StartWorkers()
+	}
+	return client, nil
 }
 
 // running's clients, made at the first call with their component on the Sidecar, and kept until it closes;
