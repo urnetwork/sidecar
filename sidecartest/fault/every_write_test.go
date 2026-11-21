@@ -18,6 +18,7 @@ import (
 	"github.com/urnetwork/sidecar/sidecartest"
 )
 
+// byteCount of evs's bytes for networkId, under a batch id of its own.
 func everyWriteBatch(networkId connect.Id, byteCount int64) *sidecar.UsageBatch {
 	return &sidecar.UsageBatch{
 		BatchId:  connect.NewId(),
