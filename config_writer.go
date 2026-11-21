@@ -380,8 +380,15 @@ func (self *ConfigWriter) plan(ctx context.Context, previous *configWriterPlan, 
 	if head == nil || version < base.GetConfigVersion() {
 		return nil, fmt.Errorf("%w: the config repo holds version %d, below the newest base's %d", ErrConfigHeadConflict, version, base.GetConfigVersion())
 	}
-	if edit != nil && expected != nil && (version != expected.Version || chain != expected.Chain) {
-		return nil, fmt.Errorf("%w: the previewed config head moved", ErrConfigHeadConflict)
+	if expected != nil {
+		requiredVersion, requiredChain := expected.Version, expected.Chain
+		if previous != nil {
+			// The approved push already landed. Re-sign only for its result.
+			requiredVersion, requiredChain = previous.configVersion, previous.headChain
+		}
+		if version != requiredVersion || chain != requiredChain {
+			return nil, fmt.Errorf("%w: the confirmed config head moved", ErrConfigHeadConflict)
+		}
 	}
 
 	// the fold and the records it adds, read under the client's follow lock: the log's kept entries are its follower's.
@@ -442,6 +449,9 @@ func (self *ConfigWriter) plan(ctx context.Context, previous *configWriterPlan, 
 		return nil, err
 	}
 	if !configHeadsEqual(next, head) {
+		if previous != nil && expected != nil {
+			return nil, fmt.Errorf("%w: publication now requires a further config head edit", ErrConfigHeadConflict)
+		}
 		push, err := self.args.Heads.PrepareConfigHead(ctx, next, version)
 		if err != nil {
 			return nil, err
