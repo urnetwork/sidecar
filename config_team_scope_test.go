@@ -5,6 +5,7 @@ package sidecar
 
 import (
 	"bytes"
+	"errors"
 	"slices"
 	"testing"
 
@@ -21,8 +22,8 @@ func TestConfigVerifiedTeamScopeRows(t *testing.T) {
 	rows := net.log.State().Rows()
 	tagId := testConfigId("scope tag")
 	rows.TeamScopes = []*bridge.TeamScopeRow{
-		{Label: "alpha-unit", Owner: &bridge.TeamScopeRow_MemberId{MemberId: net.ownerMemberId.Bytes()}},
-		{Label: "beta-unit", Owner: &bridge.TeamScopeRow_TagAtom{TagAtom: tagId.Bytes()}},
+		{Label: "alpha-unit", MemberId: net.ownerMemberId.Bytes()},
+		{Label: "beta-unit", TagAtom: tagId.Bytes()},
 	}
 	gate := net.apiAtTip()
 	if _, ok := gate.State().TeamScope("alpha-unit"); ok {
@@ -75,20 +76,29 @@ func TestConfigVerifiedTeamScopeRows(t *testing.T) {
 // A signed base with an unusable or ambiguous binding is refused as a whole.
 func TestConfigTeamScopeRejectsMalformedBindings(t *testing.T) {
 	net := newTestConfigNet(t)
-	valid := &bridge.TeamScopeRow{Label: "team-unit", Owner: &bridge.TeamScopeRow_MemberId{MemberId: net.ownerMemberId.Bytes()}}
+	registerTestConfigAclCompiler(t)
+	head := testConfigHead(t, net)
+	valid := &bridge.TeamScopeRow{Label: "team-unit", MemberId: net.ownerMemberId.Bytes()}
 	for _, scopes := range [][]*bridge.TeamScopeRow{
 		{valid, valid},
 		{{Label: "team-unit"}},
-		{{Label: "nested.label", Owner: valid.Owner}},
-		{{Label: "team-unit", Owner: &bridge.TeamScopeRow_MemberId{MemberId: make([]byte, len(Id{}))}}},
-		{{Label: "team-unit", Owner: &bridge.TeamScopeRow_TagAtom{TagAtom: make([]byte, len(Id{}))}}},
+		{{Label: "team-unit", MemberId: valid.MemberId, TagAtom: testConfigId("scope tag").Bytes()}},
+		{{Label: "nested.label", MemberId: valid.MemberId}},
+		{{Label: "team-unit", MemberId: make([]byte, len(Id{}))}},
+		{{Label: "team-unit", TagAtom: make([]byte, len(Id{}))}},
 	} {
+		source := ConfigCompileRowsOf(net.log.State())
+		source.TeamScopes = scopes
+		if _, err := CompileProjectionRows(head, source); !errors.Is(err, ErrConfigRowsMalformed) {
+			t.Errorf("compiling malformed scope rows %v: %v", scopes, err)
+		}
 		gate := net.apiAtTip()
+		held := gate.State()
 		rows := net.log.State().Rows()
 		rows.TeamScopes = scopes
 		entry := net.makeBase(net.owner, rows, net.n, 2, 0)
-		if verdicts, err := gate.ApplyRun([][]byte{entry}, net.rowsOnlySource()); err == nil && len(verdicts) == 1 && verdicts[0].Accepted() {
-			t.Errorf("accepted malformed scope rows %v", scopes)
+		if _, err := gate.ApplyRun([][]byte{entry}, net.rowsOnlySource()); !errors.Is(err, ErrConfigFork) || gate.State() != held {
+			t.Errorf("verifying malformed scope rows %v: %v", scopes, err)
 		}
 	}
 }
@@ -101,12 +111,12 @@ func TestConfigTeamScopeForDeviceRejectsAmbiguity(t *testing.T) {
 	state := &ConfigState{sidecars: map[Id]*bridge.SidecarRow{
 		device: {TagIds: [][]byte{first.Bytes(), second.Bytes()}},
 	}, teamScopes: []*bridge.TeamScopeRow{
-		{Label: "scope-one", Owner: &bridge.TeamScopeRow_TagAtom{TagAtom: first.Bytes()}},
+		{Label: "scope-one", TagAtom: first.Bytes()},
 	}}
 	if scope, ok := state.TeamScopeForDevice(device); !ok || scope.Label != "scope-one" || scope.TagId != first {
 		t.Fatalf("one tag scope: %v, %t", scope, ok)
 	}
-	state.teamScopes = append(state.teamScopes, &bridge.TeamScopeRow{Label: "scope-two", Owner: &bridge.TeamScopeRow_TagAtom{TagAtom: second.Bytes()}})
+	state.teamScopes = append(state.teamScopes, &bridge.TeamScopeRow{Label: "scope-two", TagAtom: second.Bytes()})
 	if scope, ok := state.TeamScopeForDevice(device); !ok || scope != (AclScope{}) {
 		t.Fatalf("ambiguous scope: %v, %t", scope, ok)
 	}

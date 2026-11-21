@@ -83,13 +83,11 @@ message ProjectionRows {             // projrows/<network_id>/<rows_sha256>/_: a
                                           //   (question team-m2-07-indexer-rows)
 }
 
-// A Team scope's one public label and its member or opaque tag atom (§7.9, §13.8).
+// A Team scope's public label and exactly one owner (§7.9, §13.8).
 message TeamScopeRow {
   string label = 1;
-  oneof owner {
-    bytes member_id = 2;
-    bytes tag_atom = 3;
-  }
+  bytes member_id = 2; // 16-byte member id when the member owns this scope
+  bytes tag_atom = 3;  // 16-byte opaque tag atom when the tag owns this scope
 }
 
 // An AuthorityProposal open at a state (§7.9's proposal row; DESIGN-DETAILS 5.2.2), so a cosign, veto, void or

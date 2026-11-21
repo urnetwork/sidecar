@@ -217,17 +217,18 @@ func configCheckTeamScope(row *bridge.TeamScopeRow) error {
 	if !isDnsLowerLdhLabel(label) || (len(label) >= 4 && label[2:4] == "--") || IsReservedDnsLabel(label) || IsWordNumberDnsLabel(label) {
 		return fmt.Errorf("%w: invalid team scope label", ErrConfigRowsMalformed)
 	}
-	switch owner := row.GetOwner().(type) {
-	case *bridge.TeamScopeRow_MemberId:
-		if id, err := IdFromBytes(owner.MemberId); err == nil && id != (Id{}) {
+	memberId, tagAtom := row.GetMemberId(), row.GetTagAtom()
+	switch {
+	case len(memberId) != 0 && len(tagAtom) == 0:
+		if id, err := IdFromBytes(memberId); err == nil && id != (Id{}) {
 			return nil
 		}
-	case *bridge.TeamScopeRow_TagAtom:
-		if id, err := IdFromBytes(owner.TagAtom); err == nil && !aclAtomHasAutogroupForm(id) {
+	case len(tagAtom) != 0 && len(memberId) == 0:
+		if id, err := IdFromBytes(tagAtom); err == nil && !aclAtomHasAutogroupForm(id) {
 			return nil
 		}
 	}
-	return fmt.Errorf("%w: invalid team scope owner", ErrConfigRowsMalformed)
+	return fmt.Errorf("%w: team scope must have exactly one valid member_id or tag_atom", ErrConfigRowsMalformed)
 }
 
 // A ring row's sort key, its position: the ring runs in position order, at most one statement a position.

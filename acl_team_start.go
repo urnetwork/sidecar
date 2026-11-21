@@ -61,7 +61,7 @@ func (self *ConfigState) TeamScope(label string) (AclScope, bool) {
 	}
 	row := self.teamScopes[i]
 	scope := AclScope{Label: row.GetLabel()}
-	if row.GetMemberId() != nil {
+	if len(row.GetMemberId()) != 0 {
 		scope.MemberId = Id(row.GetMemberId())
 	} else {
 		scope.TagId = Id(row.GetTagAtom())
@@ -95,7 +95,7 @@ func (self *ConfigState) TeamScopeForDevice(sidecarId Id) (AclScope, bool) {
 	var matched AclScope
 	for _, row := range self.teamScopes {
 		scope := AclScope{Label: row.GetLabel()}
-		if member := row.GetMemberId(); member != nil {
+		if member := row.GetMemberId(); len(member) != 0 {
 			scope.MemberId = Id(member)
 			if scope.MemberId != device.MemberId {
 				continue

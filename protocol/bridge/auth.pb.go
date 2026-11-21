@@ -863,15 +863,12 @@ func (x *ProjectionRows) GetIndexers() []*IndexerRow {
 	return nil
 }
 
-// A Team scope's one public label and its member or opaque tag atom (§7.9, §13.8).
+// A Team scope's public label and exactly one owner (§7.9, §13.8).
 type TeamScopeRow struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	Label string                 `protobuf:"bytes,1,opt,name=label,proto3" json:"label,omitempty"`
-	// Types that are valid to be assigned to Owner:
-	//
-	//	*TeamScopeRow_MemberId
-	//	*TeamScopeRow_TagAtom
-	Owner         isTeamScopeRow_Owner `protobuf_oneof:"owner"`
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Label         string                 `protobuf:"bytes,1,opt,name=label,proto3" json:"label,omitempty"`
+	MemberId      []byte                 `protobuf:"bytes,2,opt,name=member_id,json=memberId,proto3" json:"member_id,omitempty"` // 16-byte member id when the member owns this scope
+	TagAtom       []byte                 `protobuf:"bytes,3,opt,name=tag_atom,json=tagAtom,proto3" json:"tag_atom,omitempty"`    // 16-byte opaque tag atom when the tag owns this scope
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -913,46 +910,19 @@ func (x *TeamScopeRow) GetLabel() string {
 	return ""
 }
 
-func (x *TeamScopeRow) GetOwner() isTeamScopeRow_Owner {
-	if x != nil {
-		return x.Owner
-	}
-	return nil
-}
-
 func (x *TeamScopeRow) GetMemberId() []byte {
 	if x != nil {
-		if x, ok := x.Owner.(*TeamScopeRow_MemberId); ok {
-			return x.MemberId
-		}
+		return x.MemberId
 	}
 	return nil
 }
 
 func (x *TeamScopeRow) GetTagAtom() []byte {
 	if x != nil {
-		if x, ok := x.Owner.(*TeamScopeRow_TagAtom); ok {
-			return x.TagAtom
-		}
+		return x.TagAtom
 	}
 	return nil
 }
-
-type isTeamScopeRow_Owner interface {
-	isTeamScopeRow_Owner()
-}
-
-type TeamScopeRow_MemberId struct {
-	MemberId []byte `protobuf:"bytes,2,opt,name=member_id,json=memberId,proto3,oneof"`
-}
-
-type TeamScopeRow_TagAtom struct {
-	TagAtom []byte `protobuf:"bytes,3,opt,name=tag_atom,json=tagAtom,proto3,oneof"`
-}
-
-func (*TeamScopeRow_MemberId) isTeamScopeRow_Owner() {}
-
-func (*TeamScopeRow_TagAtom) isTeamScopeRow_Owner() {}
 
 // An AuthorityProposal open at a state (§7.9's proposal row; DESIGN-DETAILS 5.2.2), so a cosign, veto, void or
 // activation after a fold finds it at every verifier.
@@ -2776,12 +2746,11 @@ const file_protocol_bridge_auth_proto_rawDesc = "" +
 	"\bsettings\x18\b \x01(\v2%.urnetwork.sidecar.ProjectionSettingsR\bsettings\x12.\n" +
 	"\x04ring\x18\t \x03(\v2\x1a.urnetwork.sidecar.RingRowR\x04ring\x129\n" +
 	"\bindexers\x18\n" +
-	" \x03(\v2\x1d.urnetwork.sidecar.IndexerRowR\bindexers\"i\n" +
+	" \x03(\v2\x1d.urnetwork.sidecar.IndexerRowR\bindexers\"\\\n" +
 	"\fTeamScopeRow\x12\x14\n" +
-	"\x05label\x18\x01 \x01(\tR\x05label\x12\x1d\n" +
-	"\tmember_id\x18\x02 \x01(\fH\x00R\bmemberId\x12\x1b\n" +
-	"\btag_atom\x18\x03 \x01(\fH\x00R\atagAtomB\a\n" +
-	"\x05owner\"\xd0\x02\n" +
+	"\x05label\x18\x01 \x01(\tR\x05label\x12\x1b\n" +
+	"\tmember_id\x18\x02 \x01(\fR\bmemberId\x12\x19\n" +
+	"\btag_atom\x18\x03 \x01(\fR\atagAtom\"\xd0\x02\n" +
 	"\vProposalRow\x12\x1f\n" +
 	"\vproposal_id\x18\x01 \x01(\fR\n" +
 	"proposalId\x12%\n" +
@@ -3079,10 +3048,6 @@ func init() { file_protocol_bridge_auth_proto_init() }
 func file_protocol_bridge_auth_proto_init() {
 	if File_protocol_bridge_auth_proto != nil {
 		return
-	}
-	file_protocol_bridge_auth_proto_msgTypes[5].OneofWrappers = []any{
-		(*TeamScopeRow_MemberId)(nil),
-		(*TeamScopeRow_TagAtom)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
