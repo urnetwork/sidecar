@@ -271,16 +271,15 @@ func gatePrivacyItems(asserts *sidecartest.PrivacyAsserts, gate string) []*GateI
 	return items
 }
 
-// The item that says which cases of the catalog's gate read their stored ages through T3's store clock (QD-264),
-// with the clock's own tests.
+// The clock's own control tests and the catalog cases whose named T3 runs must separately show translation.
 func gateStoreClockItem(catalog *Catalog, gate string) *GateItem {
 	cases := gateStoreClockCases(catalog, gate)
-	casesText := "no case at this gate"
+	casesText := "The catalog flags no case at this gate."
 	if 0 < len(cases) {
-		casesText = strings.Join(cases, ", ")
+		casesText = "The named T3 tests for " + strings.Join(cases, ", ") + " each require their own observed translation."
 	}
 	return &GateItem{
-		Item: fmt.Sprintf("T3's store clock (QD-264; TEST-M2-07): %s read LastModified and their ttls on the schedule's clock, and FS-114 never does", casesText),
+		Item: "T3's store clock controls (QD-264, TEST-M2-07) check that LastModified and Redis expiries use schedule time and that FS-114 never does. " + casesText,
 		Tests: []*GateTest{
 			{Repo: "server", Package: "./sidecart3", Tags: gateT3Tags, Stores: true, Names: []string{"TestT3StoreClockReadsAgesOnTheScheduleClock", "TestT3AnAdvancePassesATtl", "TestT3EachNetHasItsOwnStoreClock"}},
 			{Repo: "server", Package: "./sidecart3", Names: []string{"TestFs114RefusesTheStoreClock"}},
