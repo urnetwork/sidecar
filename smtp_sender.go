@@ -800,7 +800,7 @@ func (self *SmtpSender) sendDomain(ctx context.Context, plan *smtpSendPlan, doma
 		case proof.RequireTlsMissing:
 			return end(SmtpOutcomeTlsRefused, &SmtpDsn{
 				Outcome:    SmtpOutcomeTlsRefused,
-				Recipients: self.dsnRecipients(pending, smtpDsnStatusRequireTlsMissing, 0),
+				Recipients: self.dsnRecipients(remaining(), smtpDsnStatusRequireTlsMissing, 0),
 				Reason:     "The receiving mail server did not advertise REQUIRETLS after TLS was established.",
 			})
 		case proof.TooLarge:

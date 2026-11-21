@@ -265,7 +265,7 @@ func (self *GkmEngine) judgeDelivery(batch *gkmWrapBatchContext, deliveryBytes [
 	default:
 		return nil, 403, true
 	}
-	write := &gkmWrapWrite{key: key, body: raw, late: body.GetDeliveryKind() == gkmDeliveryKindLate}
+	write = &gkmWrapWrite{key: key, body: raw, late: body.GetDeliveryKind() == gkmDeliveryKindLate}
 	if write.late && delivery.Type == sidecar.GkmWrapTypeReader && !self.settings.DraftMls {
 		recipient, _ := sidecar.IdFromBytes(body.GetRecipient()) // judgeLateDelivery checked this id
 		write.wakeReader = &recipient
