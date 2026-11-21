@@ -73,7 +73,7 @@ func TestApproveBrowserComparesSafetyAndSignsOnlyAfterTerminalYes(t *testing.T) 
 			if row.mode == sidecar.BrowserAdmissionBurner {
 				deadline := args.Terms.NotAfterMs
 				if args.Network != "example" || args.Terms.MailboxId != mailbox || deadline < before.Add(time.Hour).UnixMilli() || deadline > time.Now().Add(time.Hour).UnixMilli() ||
-					!strings.Contains(screen, mailbox.String()) || !strings.Contains(screen, time.UnixMilli(deadline).Format(time.RFC3339)) {
+					!strings.Contains(screen, mailbox.String()) || !strings.Contains(screen, time.UnixMilli(deadline).Format(time.RFC3339Nano)) {
 					t.Fatalf("burner terms: %+v %q", args, screen)
 				}
 			}

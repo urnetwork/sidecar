@@ -79,7 +79,7 @@ func runUrApproveBrowser(ctx context.Context, cli *urCli, options docopt.Opts) e
 	}
 	fmt.Fprintf(tty, "Member %s in network %s.\n", args.MemberId, args.NetworkId)
 	if args.Terms.Mode == sidecar.BrowserAdmissionBurner {
-		fmt.Fprintf(tty, "Grant ephemeral device %s read access to mailbox %s until %s.\n", target, args.Terms.MailboxId, time.UnixMilli(args.Terms.NotAfterMs).Format(time.RFC3339))
+		fmt.Fprintf(tty, "Grant ephemeral device %s read access to mailbox %s until %s.\n", target, args.Terms.MailboxId, time.UnixMilli(args.Terms.NotAfterMs).Format(time.RFC3339Nano))
 	} else {
 		fmt.Fprintf(tty, "Admit browser device %s as read-only for your member account.\n", target)
 	}
