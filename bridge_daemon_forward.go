@@ -192,7 +192,11 @@ func (self *DaemonBridges) Forward(ctx context.Context, networkId Id, running *S
 		cancel()
 		return nil, ErrDaemonBridgeForwardLimit
 	}
-	forward.setExpiry(route.ExpiresAt)
+	// A withdrawal may have landed while the bind was in progress. Once registered, later changes also find us.
+	if err := forward.recheck(ctx); err != nil {
+		forward.close(err)
+		return nil, err
+	}
 	if forward.local != nil {
 		go forward.runTcp()
 	}
@@ -279,20 +283,22 @@ func (self *daemonBridgeForward) expired() bool {
 // Rereads the forward's grant: closes the forward when it is no longer active, and moves its expiry when that
 // changed. A reread that fails leaves the forward as it is, since the target's hook refuses what the grant no longer
 // admits either way.
-func (self *daemonBridgeForward) recheck(ctx context.Context) {
+func (self *daemonBridgeForward) recheck(ctx context.Context) error {
 	route, err := self.backend.ForwardRoute(ctx, self.request, self.grantId)
 	if err != nil {
 		self.bridges.log.Infof("[bridge]forward %s grant unread", self.id)
-		return
+		return err
 	}
-	if route == nil || !route.Live {
+	if route == nil || !route.Live || route.Address != self.address.Addr() {
 		self.close(ErrDaemonBridgeGrantEnded)
-		return
+		return ErrDaemonBridgeGrantEnded
 	}
 	self.setExpiry(route.ExpiresAt)
 	if self.expired() {
 		self.close(ErrDaemonBridgeGrantEnded)
+		return ErrDaemonBridgeGrantEnded
 	}
+	return nil
 }
 
 // Closes the listeners alone.
