@@ -688,6 +688,7 @@ type tlsFrontOwnerCertificates struct {
 	owner   string
 }
 
+// Lists the owner's custom hosts in name order, with a certificate for each host that has one available.
 func (self *tlsFrontOwnerCertificates) CustomCertificates() []*TlsFrontCustomCertificate {
 	manager := self.manager
 	now := manager.clock.Now()
@@ -709,6 +710,7 @@ func (self *tlsFrontOwnerCertificates) CustomCertificates() []*TlsFrontCustomCer
 	return entries
 }
 
+// The returned channel closes on the next change to custom certificates or host ownership.
 func (self *tlsFrontOwnerCertificates) CustomChanged() <-chan struct{} {
 	_, changed := self.manager.WatchCustomCertificates()
 	return changed

@@ -19,6 +19,7 @@ type tlsDesktopChallenge struct {
 	leaf             []byte
 }
 
+// Serves custom-host challenges on the owner's listener and retains each active claim for its public probe.
 type sidecarTlsCustomAlpn struct {
 	sidecar   *Sidecar
 	stateLock sync.Mutex
@@ -45,10 +46,12 @@ func (self *sidecarTlsCustomAlpn) front(host, owner string) *TlsFront {
 	return endpoint.front
 }
 
+// Reports whether this desktop is ready to answer the host's challenge for the owner.
 func (self *sidecarTlsCustomAlpn) CanServe(ctx context.Context, host, owner string) bool {
 	return self.readyFront(ctx, host, owner) != nil
 }
 
+// Returns the owner's port 443 listener when the device's zone marks the custom host active and ready.
 func (self *sidecarTlsCustomAlpn) readyFront(ctx context.Context, host, owner string) *TlsFront {
 	front := self.front(host, owner)
 	if front == nil {
@@ -108,6 +111,7 @@ func (self *sidecarTlsCustomAlpn) Serve(ctx context.Context, host, owner, keyAut
 	return nil
 }
 
+// Removes the saved claim and clears its challenge from the listener.
 func (self *sidecarTlsCustomAlpn) Clear(host string) {
 	claim := func() *tlsDesktopChallenge {
 		self.stateLock.Lock()
@@ -121,6 +125,7 @@ func (self *sidecarTlsCustomAlpn) Clear(host string) {
 	}
 }
 
+// Accepts the probe only when the peer negotiates the challenge protocol and presents the pinned leaf alone.
 func (self *tlsDesktopChallenge) verifyPeer(state tls.ConnectionState) error {
 	if state.NegotiatedProtocol != tlsAlpnAcme || len(state.PeerCertificates) != 1 || !bytes.Equal(state.PeerCertificates[0].Raw, self.leaf) {
 		return errors.New("the public endpoint did not return this ACME challenge")
@@ -163,6 +168,7 @@ func (self *socketRegistrarEntry) wakeAcme() {
 	}
 }
 
+// Waits for the current registrar attachment to acknowledge this host and claim sequence.
 func (self *SocketListener) awaitAcmeClaim(ctx context.Context, host string, claimSeq uint64) error {
 	registrar := self.component.registrar
 	for {

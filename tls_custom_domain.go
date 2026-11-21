@@ -1692,6 +1692,7 @@ func (self *sidecarTlsCustomDevices) granted(sidecarId Id, ownerLabel string, po
 	return tlsDevicePublishGrant(self.state(), sidecarId, ownerLabel, ports, self.sidecar.clock.Now())
 }
 
+// Requires a publish grant on one of the ports and, for a scoped owner label, permission in that team scope.
 func tlsDevicePublishGrant(state *AclState, sidecarId Id, ownerLabel string, ports []int, now time.Time) bool {
 	if state == nil || ownerLabel == "" {
 		return false
