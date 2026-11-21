@@ -8,7 +8,9 @@ import (
 )
 
 func TestGkmRoutesMatchOpenApi(t *testing.T) {
-	fixture := newGkmFixture(t)
+	fixture := newGkmFixtureWith(t, func(settings *GkmServiceSettings, _ *GkmEngineDeps) {
+		settings.DraftMls = DefaultGkmServiceSettings().DraftMls
+	})
 	patterns := make([]string, 0, len(gkmRoutes))
 	for _, route := range gkmRoutes {
 		patterns = append(patterns, route.Pattern)

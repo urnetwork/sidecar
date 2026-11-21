@@ -41,7 +41,7 @@ func Check(t *testing.T, prefix string, mux *http.ServeMux, patterns []string) {
 		return found
 	}
 
-	documented := map[string]bool{}
+	documented := map[string]string{}
 	for path, item := range spec.Paths {
 		if !strings.HasPrefix(path, prefix) {
 			continue
@@ -60,7 +60,7 @@ func Check(t *testing.T, prefix string, mux *http.ServeMux, patterns []string) {
 			}
 			pattern := strings.ToUpper(method) + " " + path
 			found := matched(pattern)
-			documented[pathParameter.ReplaceAllString(pattern, "{}")] = true
+			documented[pathParameter.ReplaceAllString(pattern, "{}")] = operation.Status
 			if operation.Status != "planned" &&
 				pathParameter.ReplaceAllString(pattern, "{}") != pathParameter.ReplaceAllString(found, "{}") {
 				t.Errorf("%s is documented as served and matches %q in the mux", pattern, found)
@@ -76,8 +76,11 @@ func Check(t *testing.T, prefix string, mux *http.ServeMux, patterns []string) {
 			continue
 		}
 		active += 1
-		if !documented[pathParameter.ReplaceAllString(pattern, "{}")] {
+		status, exists := documented[pathParameter.ReplaceAllString(pattern, "{}")]
+		if !exists {
 			t.Errorf("%s is registered and missing from %s", pattern, path)
+		} else if status == "planned" {
+			t.Errorf("%s is registered and still marked planned in %s", pattern, path)
 		}
 	}
 	if active == 0 {
