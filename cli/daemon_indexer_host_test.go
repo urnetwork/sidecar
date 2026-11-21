@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/urnetwork/sidecar"
@@ -43,8 +45,13 @@ func TestDaemonDesignatesSearchOnTheSelectedNetwork(t *testing.T) {
 	}
 	first, second := host(), host()
 	daemon := startTestUrDaemon(t, shortTestDirectory(t), func(daemon *sidecar.Daemon) {
+		budget, err := sidecar.NewSidecarRemoteBudget(sidecar.DefaultSidecarSettings().Search, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hosted := &urDaemonNetwork{daemon: daemon, searchBudget: budget}
 		for _, running := range []*sidecar.Sidecar{first, second} {
-			if err := daemon.AddSidecar(*running.NetworkId(), running); err != nil {
+			if err := hosted.addSidecar(*running.NetworkId(), running); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -54,12 +61,20 @@ func TestDaemonDesignatesSearchOnTheSelectedNetwork(t *testing.T) {
 			}
 		}
 	})
-	cli, _, _ := newTestUrCli(daemon.socketPath)
-	params := &urIndexerParams{Network: second.NetworkId().String(), Scope: int32(protocol.IndexerScope_INDEXER_SCOPE_NETWORK),
-		Services: []int32{int32(protocol.IndexerService_INDEXER_SERVICE_SEARCH)}}
-	if err := cli.callDaemon(ctx, urMethodIndexerDesignate, params, true, nil); err != nil {
-		t.Fatal(err)
+	cli := newUnitTestUrCli(t, daemon.socketPath, t.TempDir(), &testUnitRunner{})
+	cli.openTty = func() (urTty, error) { return &testTty{lines: []string{"yes"}}, nil }
+	var output bytes.Buffer
+	cli.stdout = &output
+	command := func(args ...string) string {
+		t.Helper()
+		output.Reset()
+		if code := cli.main(ctx, append([]string{"ur", "indexer"}, args...)); code != urExitOk {
+			t.Fatalf("indexer %v: %d: %v", args, code, cli.stderr)
+		}
+		return output.String()
 	}
+	selected := "--network=" + second.NetworkId().String()
+	command("add", "--services=search", selected)
 	client := second.ConfigFollower().Client()
 	if err := client.CatchUp(ctx); err != nil {
 		t.Fatal(err)
@@ -76,9 +91,13 @@ func TestDaemonDesignatesSearchOnTheSelectedNetwork(t *testing.T) {
 	if services, opened := opener(records[0]); !opened || !slices.Equal(services, []protocol.IndexerService{protocol.IndexerService_INDEXER_SERVICE_SEARCH}) {
 		t.Fatal("could not open the signed search service under the selected config generation")
 	}
-	if err := cli.callDaemon(ctx, urMethodIndexerRetireOne, params, true, nil); err != nil {
-		t.Fatal(err)
+	if shown := command("ls", selected); !strings.Contains(shown, second.Identity().SidecarId.String()) {
+		t.Fatalf("selected network indexers: %s", shown)
 	}
+	if shown := command("ls", "--network="+first.NetworkId().String()); !strings.Contains(shown, "no indexer") {
+		t.Fatalf("first network indexers: %s", shown)
+	}
+	command("rm", selected)
 	if err := client.CatchUp(ctx); err != nil {
 		t.Fatal(err)
 	}
