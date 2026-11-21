@@ -60,6 +60,8 @@ Not folded (2026-11-19, track dr7-late-sweep): sidecar/design/UI.md is still abs
 
 Not folded (2026-11-20, track dr8-late-sweep): sidecar/design/UI.md is still absent, and the copy is the owner's step.
 
+Not folded (2026-11-21, track dr9-final-sweep): sidecar/design/UI.md is still absent; the copy is the owner's step at the review handoff, and HANDOFF section 2's line waits with it.
+
 ### QD-1086: How should M2's gate show FS-15, FS-20, FS-24 and FS-104, whose MLS legs owner decision 610 took off the gates?
 *Decided by the owner on 2026-11-18, asked one question at a time; owner decision 627. Folds into §22 Testing and verification.*
 
@@ -74,3 +76,5 @@ Not folded (2026-11-19, track dr6-late-sweep): KEYS's review-phase rework of the
 Not folded (2026-11-19, track dr7-late-sweep): the rework is review-phase work and has not landed; the four rows keep their drafted schedules.
 
 Not folded (2026-11-20, track dr8-late-sweep): KEYS's review-phase rework has still not landed, and the catalog's tests hold §22.8's rows as drafted.
+
+Not folded (2026-11-21, track dr9-final-sweep): the rework has not landed, so the fold stays deferred: DESIGN-DEFER.md's keys-mls entry names it under Held (owner decision 627; QD-1086), and sidecartest/fault's catalog.yml keeps the four rows as drafted.
