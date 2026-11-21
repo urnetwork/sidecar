@@ -18,13 +18,21 @@
 //	           the path goes to a backfill, which writes the tombstone or the newer version
 //	tombstone  a tombstone of a path's chunk at version v: the path at v must be removed, binary, skipped by D6 or
 //	           without that chunk; a chunk the text keeps live is a document hidden, and the host's own entry stands
-//	           for it
+//	           for it; a version the path never held passes, as a directory removal's or one this device ignores
+//	           (DESIGN-DETAILS 16.2.5) may be, but for one above the bound
+//	bound      no path version exceeds the effective ref version it commits at (§11.7's versions row, which evs and
+//	           replaying readers hold), so an entry of a path's chunk above the effective ref version at the pin is
+//	           never honest, and is planted (QD-1153): a live one as the live row finds it, and a tombstone whatever
+//	           the path holds at the pin, since newest-wins takes it over every version the path reaches below it, a
+//	           path removed or binary now among them; over a chunk the text keeps live at the pin it is a document
+//	           hidden, and the host's own entry stands for it; a content ref that does not give the bound
+//	           (indexContentVersionBound) is read as no overlay, its pin the bound
 //	omitted    a push that changed its signer's head enters every document the content push beside it changed
 //	           (QD-1098): each doc_key the path's text gives at the push's version, extracted as the writer extracts
 //	           it (a binary version, a path under the never row and a chunk D6 skips give none) and the erasure set's
-//	           documents left out, stands at that version or above in the signer's files or the buckets' shards; a
-//	           missing one is a document left out, the host's own entry stands for it, the path goes to a backfill, and
-//	           the event names the head the push wrote
+//	           documents left out, stands at that version or above, and a path's chunk at or below the bound, in the
+//	           signer's files or the buckets' shards; a missing one is a document left out, the host's own entry
+//	           stands for it, the path goes to a backfill, and the event names the head the push wrote
 //	unknown    a doc_key that no path the host walks names (a registered class's derived document, a chunk of a removed
 //	           path past its first) is not judged here
 //
@@ -97,6 +105,14 @@ type indexTextAdded struct {
 type indexTextPlace struct {
 	path  string
 	chunk uint32
+}
+
+// What a content ref tells a host with the text of §11.7's bound on its path versions (QD-1153), where it holds an
+// overlay: an EvsRepo-backed ref knows its chain of EvsOverlay bases.
+type indexContentVersionBound interface {
+	// The effective ref version at refVersion, which no path version committed at or below it exceeds: refVersion
+	// plus, on an overlay, the base versions along its chain of EvsOverlay bases.
+	EffectiveVersion(ctx context.Context, refVersion uint64) (uint64, error)
 }
 
 // The entries a push's own files add: every entry of each slot and large entry it wrote that the version it replaced
@@ -221,6 +237,13 @@ func indexCheckWithText(ctx context.Context, args *indexTextCheckArgs) (*indexTe
 	if err != nil {
 		return nil, err
 	}
+	// §11.7's bound on every path version at the pin (QD-1153): a ref that does not give it has no overlay
+	bound := args.pin
+	if bounded, ok := args.content.(indexContentVersionBound); ok {
+		if bound, err = bounded.EffectiveVersion(ctx, args.pin); err != nil {
+			return nil, err
+		}
+	}
 	// every doc_key the host can name: each standing path's chunks up to four times its bytes over ChunkByteCount
 	// (R3), and chunk 0 of every path a push changed
 	places := map[[indexIdByteCount]byte]indexTextPlace{}
@@ -288,9 +311,12 @@ func indexCheckWithText(ctx context.Context, args *indexTextCheckArgs) (*indexTe
 		return entries, nil
 	}
 	var held *indexHeldKeys
+	// one own entry a document, which two rows may each find mismatched
+	ownKeys := map[[indexIdByteCount]byte]bool{}
 	mismatchAt := func(filePath string, key [indexIdByteCount]byte, version uint64, own *indexEntry) {
 		outcome.mismatches = append(outcome.mismatches, &indexTextMismatch{path: filePath, key: key, version: version})
-		if own != nil {
+		if own != nil && !ownKeys[own.key] {
+			ownKeys[own.key] = true
 			outcome.own = append(outcome.own, own)
 		}
 		for _, event := range outcome.events {
@@ -363,6 +389,21 @@ func indexCheckWithText(ctx context.Context, args *indexTextCheckArgs) (*indexTe
 				}
 			}
 		case indexEntryTombstone:
+			if bound < entry.version {
+				// above every version the path can hold at the pin, so planted whatever the path holds there: readers
+				// take it over every version the path reaches below it. Over a chunk the text keeps live at the pin, a
+				// document hidden now, the host's own entry standing for it
+				var own *indexEntry
+				if pinState.version != 0 && !pinState.removed && !pinState.unopenable {
+					entries, err := extract(place.path, pinState, timeMs)
+					if err != nil {
+						return nil, err
+					}
+					own = entries[entry.key]
+				}
+				mismatch(one, own)
+				continue
+			}
 			if state == nil || state.removed || state.unopenable {
 				continue
 			}
@@ -378,7 +419,7 @@ func indexCheckWithText(ctx context.Context, args *indexTextCheckArgs) (*indexTe
 	}
 	// omitted: each document the content push changed, which rode with its signer's head, held to an entry
 	if committed != nil {
-		entered, err := indexTextEntered(ctx, view, view.writeRoot(), args.push.signer)
+		entered, enteredWithin, err := indexTextEntered(ctx, view, view.writeRoot(), args.push.signer, bound)
 		if err != nil {
 			return nil, err
 		}
@@ -399,8 +440,14 @@ func indexCheckWithText(ctx context.Context, args *indexTextCheckArgs) (*indexTe
 			if err := extractor.extract(change.path, state, args.push.signedTimeMs); err != nil {
 				return nil, err
 			}
+			// a path's chunk is held only by an entry at or below the bound; a registered class's document keeps its
+			// own versions, which the bound does not reach
+			newests := enteredWithin
+			if state.documents != nil {
+				newests = entered
+			}
 			for _, expected := range extractor.entries {
-				if version, ok := entered[expected.key]; ok && expected.version <= version {
+				if version, ok := newests[expected.key]; ok && expected.version <= version {
 					continue
 				}
 				mismatchAt(writtenPath, expected.key, expected.version, expected)
@@ -459,14 +506,16 @@ func indexTextWrittenHead(view *indexView, push *indexReproducePush) string {
 	return head
 }
 
-// The newest version of each doc_key that signer's own files and the buckets' shards hold, live or tombstone: where a
-// push's entries stand once it lands, a push past DirectBytes merging its own into the shards in the same push.
-func indexTextEntered(ctx context.Context, view *indexView, root *indexViewRoot, signer Id) (map[[indexIdByteCount]byte]uint64, error) {
+// The newest version of each doc_key that signer's own files and the buckets' shards hold, live or tombstone, and the
+// newest of those at or below bound: where a push's entries stand once it lands, a push past DirectBytes merging its
+// own into the shards in the same push.
+func indexTextEntered(ctx context.Context, view *indexView, root *indexViewRoot, signer Id, bound uint64) (map[[indexIdByteCount]byte]uint64, map[[indexIdByteCount]byte]uint64, error) {
 	entered := map[[indexIdByteCount]byte]uint64{}
+	enteredWithin := map[[indexIdByteCount]byte]uint64{}
 	for _, bucket := range root.buckets {
 		documents, err := view.bucketDocuments(ctx, bucket)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		for key, entries := range documents.entries {
 			for _, entry := range entries {
@@ -474,10 +523,13 @@ func indexTextEntered(ctx context.Context, view *indexView, root *indexViewRoot,
 					continue
 				}
 				entered[key] = max(entered[key], entry.version)
+				if entry.version <= bound {
+					enteredWithin[key] = max(enteredWithin[key], entry.version)
+				}
 			}
 		}
 	}
-	return entered, nil
+	return entered, enteredWithin, nil
 }
 
 // Whether two rows encode alike.

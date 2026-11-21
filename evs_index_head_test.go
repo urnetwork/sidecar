@@ -1,8 +1,9 @@
 // Writer heads (SEARCH-M10-09 and SEARCH-M10-45; §11.14's dependency, seal and large rows; owner decision 584): every
 // entry full or a tombstone, an edit's full entry replacing its writer's older one in the head and standing beside it
 // once the head sealed, the head rule's two pushes of one writer on one base, an absorbed slot reused and absorbed
-// large entries removed, a plan run twice giving equal bytes, seals, the ring and the push past DirectBytes, and the
-// head vectors with plaintext hashes (D-TEST-15), all on the fake store.
+// large entries removed, a plan run twice giving equal bytes, seals, the ring and the push past DirectBytes, a writer's
+// first among them opening its slot 0 (QD-1150), and the head vectors with plaintext hashes (D-TEST-15), all on the
+// fake store.
 
 package sidecar
 
@@ -613,6 +614,115 @@ func TestIndexHeadPastDirectBytesWritesItsHead(t *testing.T) {
 	head := plan.buckets[0].head
 	if files := plan.files(); len(files) != 1 || head == nil || head.replaces == 0 || len(head.slot.entries) != 1 || head.slot.entries[0].key != testIndexId("d", 1) {
 		t.Errorf("the head past DirectBytes: %+v", head)
+	}
+}
+
+// QD-1150 (QD-689's reading 9; DESIGN-DETAILS 1.2.3's R2): a writer's push past DirectBytes into a bucket where it
+// holds no slot creates its slot 0 head there, empty, carrying the push's coverage, at the seq the head rule numbers,
+// beside the shards its merge writes: a writer's first push ever, which opens the bucket, and another writer's first
+// push into it. Committed, the head reads at slot 0 with nothing in it, a reader's coverage takes the push's row from
+// it, and every document is in the shards; the writer's next push writes that head again under its CAS, keeping its
+// seq.
+func TestIndexHeadPastDirectBytesOpensSlotZero(t *testing.T) {
+	world := testNewHeadWorld()
+	a, b := evsTestId("writer a"), evsTestId("writer b")
+	bulk := func(label string) []*indexPendingDocument {
+		pending := []*indexPendingDocument{}
+		for index := range 40 {
+			pending = append(pending, testLive(label, index, 1, testIndexKeys(index*0x10000, 7000, 1)))
+		}
+		return pending
+	}
+	// writer's plan of pending carrying coverage, past DirectBytes into one bucket, its head the slot 0 it opens there
+	planFirst := func(writer Id, coverage []*protocol.IndexCoverage, pending []*indexPendingDocument) (*indexHeadPlan, *indexView) {
+		view := world.view(t, writer)
+		plan, err := indexPlanHead(context.Background(), &indexHeadPlanArgs{
+			view: view, root: view.writeRoot(), writer: writer, signedTimeMs: world.at.UnixMilli(), tables: testHeadTables,
+			pending: pending, mayMerge: true, coverage: coverage,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !plan.mergeInPush || len(plan.buckets) != 1 || len(plan.buckets[0].direct) != len(pending) {
+			t.Fatalf("plan %+v", plan)
+		}
+		planned := plan.buckets[0]
+		head := planned.head
+		if files := plan.files(); len(files) != 1 || head == nil || head.path.kind != indexPathSlot || head.path.slotIndex != 0 || head.replaces != 0 || len(head.slot.entries) != 0 {
+			t.Fatalf("a writer's first head past DirectBytes: %+v", head)
+		}
+		header := head.slot.header
+		if header.Type != indexFileSlot || header.Seq != 1 || !bytes.Equal(header.WriterSidecarId, writer.Bytes()) ||
+			header.BucketStartDay != planned.window.startDay || header.BucketDays != planned.window.days {
+			t.Fatalf("a writer's first head past DirectBytes has header %v", header)
+		}
+		if len(header.Coverage) != len(coverage) {
+			t.Fatalf("a writer's first head past DirectBytes carries coverage %v, not %v", header.Coverage, coverage)
+		}
+		for index := range coverage {
+			if !proto.Equal(header.Coverage[index], coverage[index]) {
+				t.Fatalf("a writer's first head past DirectBytes carries coverage %v, not %v", header.Coverage, coverage)
+			}
+		}
+		return plan, view
+	}
+	// commits a plan with the merge inside it
+	commitMerging := func(writer Id, plan *indexHeadPlan, view *indexView) {
+		files, removals, err := indexMergeHeadPlan(context.Background(), view, view.writeRoot(), plan, testPadKey(t, 2), testHeadTables)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = world.ref.store(writer).Commit(context.Background(), &indexPush{
+			pushId: NewId(), baseVersion: view.head.version, indexEpoch: view.head.indexEpoch, signedTimeMs: world.at.UnixMilli(),
+			files: files, removals: removals,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		world.at = world.at.Add(time.Minute)
+	}
+
+	// b's first push ever opens the bucket, its coverage row on its new head, as a companion push's or a backfill's
+	content := evsTestId("content ref")
+	coverage := []*protocol.IndexCoverage{{RefId: content.Bytes(), Version: 7}}
+	plan, view := planFirst(b, coverage, bulk("bulk"))
+	if !plan.buckets[0].created {
+		t.Fatal("the first push into the window did not open its bucket")
+	}
+	commitMerging(b, plan, view)
+	writer := world.writer(t, b)
+	if writer == nil || len(writer.slots) != 1 || len(writer.large) != 0 {
+		t.Fatalf("b's files after its first push past DirectBytes: %+v", writer)
+	}
+	head := writer.head()
+	if head.path.slotIndex != 0 || head.seq() != 1 || len(head.slot.entries) != 0 || len(head.slot.header.Coverage) != 1 || !proto.Equal(head.slot.header.Coverage[0], coverage[0]) {
+		t.Fatalf("b's head after its first push past DirectBytes: slot %d, seq %d, %d entries, coverage %v", head.path.slotIndex, head.seq(), len(head.slot.entries), head.slot.header.Coverage)
+	}
+	if merged := world.mergedBucket(t); len(merged.documents) != 40 || merged.bucket.manifest == nil || len(merged.bucket.manifest.Absorbed) != 0 {
+		t.Fatalf("%d documents in the shards after b's first push", len(merged.documents))
+	}
+	// a reader's coverage takes b's row from that head (§11.14's coverage row)
+	if horizon, writerRows := indexCoverageRows(world.view(t, evsTestId("reader")).writeRoot(), content); horizon != 0 || writerRows[b] != 7 {
+		t.Fatalf("coverage reads horizon %d and b's row %d", horizon, writerRows[b])
+	}
+
+	// a's first push into the bucket b opened, with no coverage asked: its slot 0, carrying none
+	plan, view = planFirst(a, nil, bulk("more"))
+	if plan.buckets[0].created {
+		t.Fatal("a's push opened a bucket b had opened")
+	}
+	commitMerging(a, plan, view)
+	if head := world.writer(t, a).head(); head == nil || head.path.slotIndex != 0 || head.seq() != 1 || len(head.slot.entries) != 0 {
+		t.Fatalf("a's head after its first push past DirectBytes: %+v", head)
+	}
+	if merged := world.mergedBucket(t); len(merged.documents) != 80 {
+		t.Fatalf("%d documents in the shards after a's first push", len(merged.documents))
+	}
+
+	// b's next push writes its head again at the version its base shows (R2), its seq kept
+	next := world.push(t, b, testLive("d", 1, 1, testHeadKeys(1, 0)))
+	if written := next.buckets[0].head; written.path.slotIndex != 0 || written.replaces != head.file.version || written.slot.header.Seq != 1 || len(written.slot.entries) != 1 {
+		t.Fatalf("b's next push wrote head %+v", written)
 	}
 }
 
