@@ -78,5 +78,10 @@ func TestMemberReplicaReadsTheEnrolledNetworksEncryptedHeadAfterRestart(t *testi
 	if first.Config() != nil || first.Evs() != nil || running.MemberReplica() != nil {
 		t.Fatal("the closed host still publishes the old replica")
 	}
-	open(instance.Sidecar(networkId))
+	restarted := instance.Sidecar(networkId)
+	second := open(restarted)
+	restarted.Close()
+	if second.Config() != nil || second.Evs() != nil || restarted.MemberReplica() != nil {
+		t.Fatal("the host still serves its replica after Close")
+	}
 }
