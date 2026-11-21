@@ -12,7 +12,7 @@
   "num": 2,
   "code": "TRUST",
   "words": 9282,
-  "code_words": 21489,
+  "code_words": 21630,
   "ceiling": 3000,
   "over": 6282,
   "over_pct": 209.4
@@ -101,20 +101,20 @@
  {
   "num": 12,
   "code": "DNS",
-  "words": 6327,
+  "words": 6475,
   "code_words": 2026,
   "ceiling": 3000,
-  "over": 3327,
-  "over_pct": 110.9
+  "over": 3475,
+  "over_pct": 115.8
  },
  {
   "num": 13,
   "code": "TLS",
-  "words": 10306,
-  "code_words": 1330,
+  "words": 10381,
+  "code_words": 1419,
   "ceiling": 3800,
-  "over": 6506,
-  "over_pct": 171.2
+  "over": 6581,
+  "over_pct": 173.2
  },
  {
   "num": 14,
