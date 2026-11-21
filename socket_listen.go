@@ -827,9 +827,9 @@ func (self *SocketComponent) keptListenAction(key socketListenActionKey, fresh *
 		}
 	}
 	if kept := self.listenActions[key]; kept != nil {
-		clear := proto.Clone(fresh.Action).(*protocol.CanonicalAction)
-		clear.ExpiresMillis = kept.Action.GetExpiresMillis()
-		if kept.Action.GetExpiresMillis() <= fresh.Action.GetExpiresMillis() && proto.Equal(kept.Action, clear) {
+		freshAtKeptExpiry := proto.Clone(fresh.Action).(*protocol.CanonicalAction)
+		freshAtKeptExpiry.ExpiresMillis = kept.Action.GetExpiresMillis()
+		if kept.Action.GetExpiresMillis() <= fresh.Action.GetExpiresMillis() && proto.Equal(kept.Action, freshAtKeptExpiry) {
 			return kept
 		}
 	}

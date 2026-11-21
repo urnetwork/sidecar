@@ -13,6 +13,8 @@
 //     the expiry the rule gives, with its name and weight beside it, and the same listen asked again later finds that
 //     request; the member's decision then spends into the GrantActivate the approval fixes, done with its grant_id, which
 //     the log holds and the listen kind's Lookup finds, and the listen registers;
+//   - a listen's kept action stands while its expiry is ahead and a fresh build differs from it in that alone, and
+//     gives way once it expires, its rule changes or the rule gives a shorter grant;
 //   - a use that came to not_done refuses the listen and an uncertain one answers unavailable, nothing registered;
 //   - the standing effect does nothing under an empty key and proves nothing happened under a use's;
 //   - ActiveGrant judges a listen that names no requests rule on its subject, socket and action alone, and still covers
@@ -535,6 +537,55 @@ func TestSocketListenStandingEffectAndLookup(t *testing.T) {
 	if _, err := fixture.component.listenLookup(t.Context(), []byte("not an action"), []byte("an effect key")); err == nil {
 		t.Error("a canonical that does not parse answered")
 	}
+}
+
+// A listen's kept action stands while its expiry is ahead and a fresh build differs from it in that expiry alone; a
+// fresh one replaces it once it expires, once the fresh one names another rule, and once the rule gives a shorter
+// grant than the kept one asks; another weight is another key.
+func TestSocketListenKeepsTheActionItsRequestWasFiledWith(t *testing.T) {
+	fixture := newTestListenFixture(t)
+	component := fixture.component
+	nowMs := testSocketNow.UnixMilli()
+	action := func(ruleLabel string, expiresMs int64) *StoredCanonicalAction {
+		return buildTestAction(t, &protocol.CanonicalAction{
+			Kind: uint32(SidecarActionListen), RuleId: testSocketId(ruleLabel).Bytes()[:aclAtomByteCount],
+			Subject: fixture.generation.identity.SidecarId.Bytes(), ExpiresMillis: expiresMs,
+			GrantDst: []string{"sock:tls/443/blog"}, GrantAllow: []string{"listen"},
+		})
+	}
+	key := socketListenActionKey{name: "tls/443/blog", weight: 100}
+	first := action("rule", nowMs+60_000)
+	if kept := component.keptListenAction(key, first, testSocketNow); kept != first {
+		t.Fatal("the first action was not kept")
+	}
+	later := action("rule", nowMs+120_000)
+	if kept := component.keptListenAction(key, later, testSocketNow.Add(time.Minute-time.Millisecond)); kept != first {
+		t.Error("a later build replaced the action its request was filed with")
+	}
+	if kept := component.keptListenAction(socketListenActionKey{name: "tls/443/blog", weight: 250}, later, testSocketNow); kept != later {
+		t.Error("another weight took the first weight's action")
+	}
+	if kept := component.keptListenAction(key, action("another rule", nowMs+120_000), testSocketNow); kept == first {
+		t.Error("an action naming another rule kept the first")
+	}
+	component.keptListenAction(key, first, testSocketNow)
+	shorter := action("rule", nowMs+30_000)
+	if kept := component.keptListenAction(key, shorter, testSocketNow); kept != shorter {
+		t.Error("a grant shorter than the kept one asks kept the longer")
+	}
+	// the kept one, shorter, has expired a minute on, and the fresh one takes its place
+	if kept := component.keptListenAction(key, later, testSocketNow.Add(time.Minute)); kept != later {
+		t.Error("an expired action was kept")
+	}
+	func() {
+		component.stateLock.Lock()
+		defer component.stateLock.Unlock()
+		for keptKey, kept := range component.listenActions {
+			if kept.Action.GetExpiresMillis() <= nowMs+60_000 {
+				t.Errorf("an expired action under %+v outlived its expiry", keptKey)
+			}
+		}
+	}()
 }
 
 // ActiveGrant judges a listen that names no requests rule on its subject, socket and action alone: a standing rule
