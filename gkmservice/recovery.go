@@ -25,7 +25,9 @@ import (
 	"bytes"
 	"encoding/hex"
 	"errors"
+	"net/http"
 	"slices"
+	"sync"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -73,6 +75,13 @@ func (self *GkmEngine) serveRecoveryWrapBatch(request *GkmRequest) {
 		}
 		current = bindings
 	}
+	afterBudget := sync.OnceValue(func() map[sidecar.Id][]byte {
+		bindings, answer := self.currentRepoRecoveryBindings(request)
+		if answer != GkmAuthAllowed {
+			return nil
+		}
+		return bindings
+	})
 	for i, item := range items {
 		reply.Results[i] = &protocol.GkmWrapResult{}
 		memberId, err := sidecar.IdFromBytes(item.GetMemberId())
@@ -98,7 +107,23 @@ func (self *GkmEngine) serveRecoveryWrapBatch(request *GkmRequest) {
 			continue
 		}
 		key := GkmRecoveryWrapKey(memberId, groupId, generation, c8, hex.EncodeToString(item.GetBindingPrefix()))
-		writes = append(writes, &gkmWrapWrite{key: key, body: item.GetCiphertext(), result: reply.Results[i]})
+		write := &gkmWrapWrite{key: key, body: item.GetCiphertext(), result: reply.Results[i]}
+		if current != nil {
+			write.beforePut = func() bool {
+				bindings := afterBudget()
+				if bindings == nil {
+					write.result.Status = gkmWrapStatusNotTried
+					return false
+				}
+				digest := bindings[memberId]
+				if len(digest) != 32 || !bytes.Equal(digest[:gkmPrefixByteCount], item.GetBindingPrefix()) {
+					write.result.Status = http.StatusConflict
+					return false
+				}
+				return true
+			}
+		}
+		writes = append(writes, write)
 	}
 	if !self.writeWrapBatch(request, groupId, generation, writes) {
 		return
@@ -120,14 +145,6 @@ func (self *GkmEngine) serveRecoveryWrapWrite(request *GkmRequest) {
 		return
 	}
 	if !request.AuthorizeGroup(groupId) {
-		return
-	}
-	coverage, ok := self.recoveryCoverage(request)
-	if !ok {
-		return
-	}
-	if !slices.Contains(coverage.RepoIds, request.RepoId) || !bytes.Equal(coverage.Current[:gkmPrefixByteCount], wrap.GetBindingPrefix()) {
-		request.Conflict(nil)
 		return
 	}
 	facts, err := self.generationFacts(request.Ctx, request.Cluster, groupId, wrap.GetGeneration())
@@ -152,6 +169,14 @@ func (self *GkmEngine) serveRecoveryWrapWrite(request *GkmRequest) {
 	}
 	barrierKey := gkmBarrierNumberKey(groupId, wrap.GetGeneration())
 	testHookBarrier(BarrierWrapPutBefore, barrierKey)
+	coverage, ok := self.recoveryCoverage(request)
+	if !ok {
+		return
+	}
+	if !slices.Contains(coverage.RepoIds, request.RepoId) || !bytes.Equal(coverage.Current[:gkmPrefixByteCount], wrap.GetBindingPrefix()) {
+		request.Conflict(nil)
+		return
+	}
 	winner, err := createGkmObject(writeCtx, request.Cluster, key, wrap.GetCiphertext(), gkmDeliveryMaxByteCount)
 	testHookBarrier(BarrierWrapPutAfter, barrierKey)
 	if err != nil {
@@ -232,19 +257,22 @@ type gkmRepoRecoveryState interface {
 	RepoRecoveryBindings(principal *sidecar.Principal, repoId sidecar.Id, now time.Time) (map[sidecar.Id][]byte, GkmAuthAnswer)
 }
 
-func (self *GkmEngine) repoRecoveryBindings(request *GkmRequest) (map[sidecar.Id][]byte, bool) {
+func (self *GkmEngine) currentRepoRecoveryBindings(request *GkmRequest) (map[sidecar.Id][]byte, GkmAuthAnswer) {
 	source, ok := self.deps.AuthState.(gkmRepoRecoveryState)
 	if !ok {
-		request.Unavailable()
-		return nil, false
+		return nil, GkmAuthUnknown
 	}
 	bindings, answer := source.RepoRecoveryBindings(request.Principal, request.RepoId, request.Now())
+	if answer == GkmAuthAllowed && bindings == nil {
+		return nil, GkmAuthUnknown
+	}
+	return bindings, answer
+}
+
+func (self *GkmEngine) repoRecoveryBindings(request *GkmRequest) (map[sidecar.Id][]byte, bool) {
+	bindings, answer := self.currentRepoRecoveryBindings(request)
 	if answer != GkmAuthAllowed {
 		answerGkmAuth(request, answer)
-		return nil, false
-	}
-	if bindings == nil {
-		request.Unavailable()
 		return nil, false
 	}
 	return bindings, true
@@ -449,17 +477,10 @@ func (self *GkmEngine) serveRecoveryWrapsRead(request *GkmRequest) {
 	request.Reply(reply)
 }
 
-// DELETE /gkm/recovery/<member_id>/wraps?binding=<b8>: every wrap of the member whose b8 names a retired binding, on
-// each cluster, by the member's own device. A delete is a user's own, which no hold pauses (owner decision 133).
-func (self *GkmEngine) serveRecoveryWrapsDelete(request *GkmRequest) {
-	b8 := request.Http.URL.Query().Get("binding")
-	if !gkmHexPrefixForm(b8) {
-		request.BadRequest()
-		return
-	}
+func (self *GkmEngine) canRetireRecoveryBinding(request *GkmRequest, b8 string) bool {
 	coverage, ok := self.recoveryCoverage(request)
 	if !ok {
-		return
+		return false
 	}
 	current, _ := gkmDigestPrefix(coverage.Current)
 	retired := slices.ContainsFunc(coverage.Retired, func(digest []byte) bool {
@@ -468,9 +489,20 @@ func (self *GkmEngine) serveRecoveryWrapsDelete(request *GkmRequest) {
 	})
 	if !retired || current == b8 {
 		request.Conflict(nil)
+		return false
+	}
+	return self.checkRecoveryCoverage(request, coverage)
+}
+
+// DELETE /gkm/recovery/<member_id>/wraps?binding=<b8>: every wrap of the member whose b8 names a retired binding, on
+// each cluster, by the member's own device. A delete is a user's own, which no hold pauses (owner decision 133).
+func (self *GkmEngine) serveRecoveryWrapsDelete(request *GkmRequest) {
+	b8 := request.Http.URL.Query().Get("binding")
+	if !gkmHexPrefixForm(b8) {
+		request.BadRequest()
 		return
 	}
-	if !self.checkRecoveryCoverage(request, coverage) {
+	if !self.canRetireRecoveryBinding(request, b8) {
 		return
 	}
 	found, ok := self.listRecoveryWraps(request, request.pathMemberId)
@@ -497,7 +529,7 @@ func (self *GkmEngine) serveRecoveryWrapsDelete(request *GkmRequest) {
 		}
 		keys := clusterIdKeys[clusterId]
 		writeCtx, ok := request.SpendWrites(cluster, "", int64(len(keys))*self.settings.Prices.delete())
-		if !ok {
+		if !ok || !self.canRetireRecoveryBinding(request, b8) {
 			return
 		}
 		for _, key := range keys {
