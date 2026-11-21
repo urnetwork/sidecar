@@ -18,10 +18,16 @@
 //     (TestActionsDescriptorLint);
 //   - CC4: canaries in a harness's prompt, tool inputs and tool outputs, canaries in a call's own input, and every key
 //     testHookSecret reports, are absent from every MCP result, the environment, each hook's answer and the daemon's
-//     log, raw and in every encoding the capture scans (TestActionsCc4).
+//     log, raw and in every encoding the capture scans (TestActionsCc4);
+//   - the rcpt/ family (QD-1097): an agent's evs_read, evs_write, evs_list, search and ur://evs read are refused on a
+//     mailbox's and a group inbox's, and on every general repo's while mailcfg cannot be read, and answer on an
+//     ordinary file repo's (TestActionsApprovedRecipientsRefused);
+//   - DROP (D-MCP-32, MCP-M10-01): a DROP push or its cancel is refused before any handler, no catalog tool but the
+//     dry run reaches drops, and an admin's evs_drop_preview files nothing, refused on the config and secret repos
+//     (TestActionsDropRefused).
 //
 // The row's later clauses join with their owners, each adding its case here: BridgeAddress filings with MCP-M4-01, the
-// directory's and claims' with RECORD-M6-22, DROP pushes and evs_drop_preview with MCP-M10-01.
+// directory's and claims' with RECORD-M6-22.
 
 package mcp
 
@@ -31,6 +37,7 @@ import (
 	"encoding/json"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -429,5 +436,166 @@ func TestActionsCc4CatchesALeak(t *testing.T) {
 	capture.Add(sidecartest.PrivacyClassMcp, "a result that leaks", leaked)
 	if findings := capture.Scan(); len(findings) == 0 {
 		t.Error("a result holding the key, base64'd, was not found")
+	}
+}
+
+// The suite's network with mailcfg's group records behind it: the general repos that are group inboxes, or an error
+// while mailcfg cannot be read (QD-1097).
+type actionsSuiteRecipientNetwork struct {
+	*actionsSuiteNetwork
+	stateLock sync.Mutex
+	groups    map[sidecar.Id]bool
+	groupsErr error
+}
+
+func (self *actionsSuiteRecipientNetwork) MailGroupInboxes(ctx context.Context) (map[sidecar.Id]bool, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.groups, self.groupsErr
+}
+
+// QD-1097 (owner decision 635; §16.6's refused table): an agent's evs_read, evs_write, evs_list, search and ur://evs
+// read of the rcpt/ family are refused on a mailbox and on a group inbox, the family left out of their listings, so no
+// agent reads a standing approved-recipient record to write its bytes back; the same paths on an ordinary file repo
+// answer, until mailcfg cannot be read, when every general repo's rcpt/ is refused too.
+func TestActionsApprovedRecipientsRefused(t *testing.T) {
+	env := newActionsSuiteEnv(t)
+	mailbox, group := sidecar.NewId(), sidecar.NewId()
+	env.tools.repoKinds[mailbox] = protocol.RepoKind_REPO_KIND_MAILBOX
+	env.tools.repoKinds[group] = protocol.RepoKind_REPO_KIND_GENERAL
+	for _, repoId := range []sidecar.Id{mailbox, group} {
+		env.evs.repos[repoId] = newFakeMcpEvsRepo()
+		for _, action := range []protocol.AclAction{protocol.AclAction_ACL_ACTION_READ, protocol.AclAction_ACL_ACTION_WRITE} {
+			env.tools.allow(McpAccess{Action: action, Resource: sidecar.AclResource{Kind: sidecar.AclResourceRepo, RepoId: repoId}})
+		}
+	}
+	for _, repoId := range []sidecar.Id{mailbox, group, env.general} {
+		env.putWith(repoId, "rcpt/ab/record", "a recipient approval's bytes", env.tools.identity.SidecarId, testEvsCleanProvenance())
+		env.putWith(repoId, "notes", "ordinary", env.tools.identity.SidecarId, testEvsCleanProvenance())
+		// the fake lists a file's own directory alone, so the root names the family's directory here
+		env.evs.repos[repoId].children[""] = []string{"notes", "rcpt"}
+	}
+	network := &actionsSuiteRecipientNetwork{
+		actionsSuiteNetwork: &actionsSuiteNetwork{fakeMcpEvsNetwork: env.evs, team: env.team},
+		groups:              map[sidecar.Id]bool{group: true},
+	}
+	env.daemon.hostNetwork(env.networkId, network)
+	search := newTestSessionSearch()
+	catalog := NewMcpCatalog(env.server.settings.Mcp, env.clock, nil)
+	addSearchTools(catalog, func(call *McpCall) (McpSearch, error) { return search, nil })
+	catalog.Install(env.server)
+	conn := env.conn(actionsSuiteVersion)
+	reaches := func(repoId sidecar.Id) map[string]*testMcpResponse {
+		repo := repoId.String()
+		return map[string]*testMcpResponse{
+			"evs_read":  env.callTool(conn, actionsSuiteVersion, "evs_read", map[string]any{"repo": repo, "path": "rcpt/ab/record"}),
+			"evs_write": env.callTool(conn, actionsSuiteVersion, "evs_write", map[string]any{"repo": repo, "path": "rcpt/ab/record", "content": "a recipient approval's bytes", "base_version": 3}),
+			"evs_list":  env.callTool(conn, actionsSuiteVersion, "evs_list", map[string]any{"repo": repo, "path": "rcpt"}),
+			"search": env.callTool(conn, actionsSuiteVersion, "search", map[string]any{
+				"query": "recipient", "repos": []string{repo}, "filters": map[string]any{"path_prefix": "rcpt"},
+			}),
+			"ur://evs": conn.call("resources/read", map[string]any{"uri": McpEvsUri(repoId, "rcpt/ab/record")}),
+		}
+	}
+	listed := func(repoId sidecar.Id) []string {
+		listing := &mcpEvsListOut{}
+		testViewData(t, env.callTool(conn, actionsSuiteVersion, "evs_list", map[string]any{"repo": repoId.String()}), listing)
+		names := []string{}
+		for _, entry := range listing.Entries {
+			names = append(names, entry.Name)
+		}
+		return names
+	}
+	for name, repoId := range map[string]sidecar.Id{"a mailbox": mailbox, "a group inbox": group} {
+		for reach, response := range reaches(repoId) {
+			if response.Error == nil || response.Error.Code != McpCodeRefused || !strings.Contains(response.Error.Message, "approved-recipient") ||
+				strings.Contains(string(response.Result), "a recipient approval's bytes") {
+				t.Errorf("%s on %s: %s %+v", reach, name, response.Result, response.Error)
+			}
+		}
+		if names := listed(repoId); slices.Contains(names, "rcpt") || !slices.Contains(names, "notes") {
+			t.Errorf("%s's listing: %v", name, names)
+		}
+		if writes := env.evs.repos[repoId].writes; len(writes) != 0 {
+			t.Errorf("a refused write reached %s", name)
+		}
+	}
+	for reach, response := range reaches(env.general) {
+		if response.Error != nil {
+			t.Errorf("%s on an ordinary file repo: %d %s", reach, response.Error.Code, response.Error.Message)
+		}
+	}
+	if names := listed(env.general); !slices.Contains(names, "rcpt") {
+		t.Errorf("an ordinary file repo's listing: %v", names)
+	}
+
+	// while mailcfg cannot be read, no general repo's rcpt/ is reachable
+	network.stateLock.Lock()
+	network.groups, network.groupsErr = nil, sidecar.ErrMailConfigNotSynced
+	network.stateLock.Unlock()
+	for reach, response := range reaches(env.general) {
+		if response.Error == nil || !strings.Contains(response.Error.Message, "approved-recipient") {
+			t.Errorf("%s while mailcfg cannot be read: %s %+v", reach, response.Result, response.Error)
+		}
+	}
+}
+
+// The actions row's DROP clause (D-MCP-32; §16.6's refused table): no MCP path signs a DROP push or its cancel. A tool
+// that reports one is refused by the guard before its handler runs, whatever it claims; no tool of the daemon's
+// catalog but the dry run reaches drops; and an admin's evs_drop_preview answers its dry run and files nothing, while
+// the same call on the config repo and a secret repo is refused before evs is asked.
+func TestActionsDropRefused(t *testing.T) {
+	env := newActionsSuiteEnv(t)
+	ran := 0
+	catalog := NewMcpCatalog(env.server.settings.Mcp, env.clock, nil)
+	AddTool(catalog, &McpToolSpec[actionsStatementIn]{
+		Name:        "actions_fixture_drop",
+		Tier:        McpTierWrite,
+		Description: "pushes one fixture DROP",
+		Targets: func(call *McpCall, in *actionsStatementIn) ([]McpTarget, error) {
+			return []McpTarget{{Kind: McpTargetDrop}}, nil
+		},
+		Access: func(call *McpCall, in *actionsStatementIn) ([]McpAccess, error) { return nil, nil },
+	}, func(ctx context.Context, call *McpCall, in *actionsStatementIn, result *McpResult) (*actionsStatementOut, error) {
+		ran += 1
+		return &actionsStatementOut{Filed: true}, nil
+	})
+	catalog.Install(env.server)
+	conn := env.conn(actionsSuiteVersion)
+	if response := env.callTool(conn, actionsSuiteVersion, "actions_fixture_drop", map[string]any{"statement": 0, "own_resource": true}); response.Error == nil ||
+		response.Error.Code != McpCodeRefused {
+		t.Fatalf("a DROP through MCP: %s %+v", response.Result, response.Error)
+	}
+	if ran != 0 {
+		t.Errorf("the DROP's handler ran %d times", ran)
+	}
+	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
+	for _, name := range NewDaemonMcpCatalog(newTestMcpServer(newFakeMcpDaemon(), clock), nil).Names() {
+		if strings.Contains(name, "drop") && name != "evs_drop_preview" {
+			t.Errorf("%s reaches drops", name)
+		}
+	}
+
+	env.put(env.general, "notes.md", "the notes", env.tools.identity.SidecarId)
+	for _, repoId := range []sidecar.Id{env.general, env.config, env.secret} {
+		env.tools.allow(McpAccess{Action: protocol.AclAction_ACL_ACTION_ADMIN, Resource: sidecar.AclResource{Kind: sidecar.AclResourceRepo, RepoId: repoId}})
+	}
+	preview := &mcpEvsDropPreviewOut{}
+	testViewData(t, env.callTool(conn, actionsSuiteVersion, "evs_drop_preview", map[string]any{"repo": env.general.String(), "path": "notes.md"}), preview)
+	repo := env.evs.repos[env.general]
+	if !preview.ListMatch || len(repo.previews) != 1 || len(repo.writes) != 0 || len(env.evs.actions) != 0 {
+		t.Fatalf("an admin's dry run: %+v, %d dry runs, %d writes, %d actions", preview, len(repo.previews), len(repo.writes), len(env.evs.actions))
+	}
+	for _, c := range []struct {
+		repoId      sidecar.Id
+		messagePart string
+	}{
+		{repoId: env.config, messagePart: "config repo"},
+		{repoId: env.secret, messagePart: "secret repo"},
+	} {
+		wantMcpError(t, env.callTool(conn, actionsSuiteVersion, "evs_drop_preview", map[string]any{"repo": c.repoId.String(), "path": "a"}), McpCodeRefused, c.messagePart)
+		if previews := env.evs.repos[c.repoId].previews; len(previews) != 0 {
+			t.Errorf("a refused dry run reached the %s", c.messagePart)
+		}
 	}
 }

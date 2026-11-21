@@ -215,11 +215,8 @@ var mcpCatalogDesign = []mcpCatalogDesignTool{
 }
 
 // The design names whose owners have not landed their tools: every one, at MCP-M3-12. An owner removes its names
-// in the change that registers them.
-var mcpCatalogUnbuilt = []string{
-	"evs_drop_preview",
-	"mail_list", "mail_read", "mail_send", "mail_aliases", "mail_alias_create", "mail_alias_delete",
-}
+// in the change that registers them; none is left.
+var mcpCatalogUnbuilt = []string{}
 
 // Whether a §16.5 tool is an evs or a search tool, the classes §16.6's refused table names: each reports what a call
 // reaches (McpToolSpec.Targets), so no repo row, a mailbox's vault/ family's among them (QD-673), rests on a tool
