@@ -937,10 +937,16 @@ func (self *EvsRepo) planPath(ctx context.Context, plan *EvsWritePlan, result *e
 		verified = &EvsVerifiedPath{TokenPath: verified.TokenPath}
 	} else if stands {
 		content, state, keys, fields, err := self.readBaseKeys(ctx, result, verified)
+		if errors.Is(err, ErrEvsErased) && plan.RefMode != protocol.EvsRefMode_EVS_REF_GIT {
+			// a version a committed ERASE emptied: nothing to diff against, so a checkpoint (evs_plan_erased.go)
+			fields, err = self.erasedBaseFields(ctx, result, verified)
+		}
 		if err != nil {
 			return nil, err
 		}
-		defer content.close()
+		if content != nil {
+			defer content.close()
+		}
 		previous, previousContent, previousKeys, previousFields = state, content, keys, fields
 		planned.Fields.FileId = fields.GetFileId()
 		planned.Fields.Mode = fields.GetMode()
