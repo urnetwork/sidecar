@@ -99,7 +99,7 @@ const (
 	// An api route, on FakeApi.
 	FaultOpHttp = "http"
 	// Every call of a Quota, Tasks or Push fake, which have no key: KeyPrefix then matches the
-	// method's name.
+	// method's name. A call its fake declares a write counts as one (fake_host.go's hostWrite).
 	FaultOpHost = "host"
 )
 
@@ -128,7 +128,8 @@ type FaultPlan struct {
 	// schedule's own FailBeforeApply fails, which a caller cannot tell apart from a lost response.
 	Displaces bool
 	// Only operations that write match and count toward Nth, so a Redis plan can name the nth Redis
-	// write whatever reads come between, as §22.8's unknown rule needs. A PUT and a DELETE always write.
+	// write whatever reads come between, as §22.8's unknown rule needs. A PUT and a DELETE always write,
+	// and a host call when its fake declares it a write.
 	WritesOnly bool
 }
 

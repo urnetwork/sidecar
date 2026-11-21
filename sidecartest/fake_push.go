@@ -1,6 +1,8 @@
 // ServiceHost.Push in memory (host_push.go, §6.8): what a client would have been told. It keeps a
 // topic's version from lowering, as the real script does, and refuses a body past the 256 B a hint may
-// carry, since that limit keeps content out of hints.
+// carry, since that limit keeps content out of hints. Hint and HintSidecars send, so each is a write
+// (hostWrite): §22.8's unknown rule loses its answer with the hint delivered, which a caller counts and
+// goes on from, as host_push.go has it.
 
 package sidecartest
 
@@ -12,10 +14,21 @@ import (
 
 	"github.com/urnetwork/connect"
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/pushservice"
 )
 
-// The most a hint's Body holds (§6.8).
-const fakePushMaxBodyByteCount = 256
+// What a FakePush holds a hint to.
+type FakePushSettings struct {
+	// §6.8's wire limits, a hint body's 256 B among them: pushservice's, whose defaults are the protocol's.
+	Format *pushservice.PushFormatSettings
+}
+
+// The protocol's limits.
+func DefaultFakePushSettings() *FakePushSettings {
+	return &FakePushSettings{
+		Format: pushservice.DefaultPushFormatSettings(),
+	}
+}
 
 // One hint as a client received it.
 type FakeHint struct {
@@ -24,7 +37,8 @@ type FakeHint struct {
 }
 
 type FakePush struct {
-	faults *FaultQueue
+	faults   *FaultQueue
+	settings *FakePushSettings
 
 	stateLock        sync.Mutex
 	hints            []*FakeHint
@@ -33,9 +47,19 @@ type FakePush struct {
 	missedSidecarIds []connect.Id
 }
 
+// On the defaults.
 func NewFakePush(faults *FaultQueue) *FakePush {
+	return NewFakePushWithSettings(faults, nil)
+}
+
+// settings nil takes the defaults.
+func NewFakePushWithSettings(faults *FaultQueue, settings *FakePushSettings) *FakePush {
+	if settings == nil {
+		settings = DefaultFakePushSettings()
+	}
 	return &FakePush{
 		faults:           faults,
+		settings:         settings,
 		clientVersions:   map[connect.Id]map[string]uint64{},
 		sidecarClientIds: map[connect.Id]connect.Id{},
 	}
@@ -61,18 +85,18 @@ func (self *FakePush) hintClientWithLock(clientId connect.Id, hint *sidecar.Clie
 	self.hints = append(self.hints, &FakeHint{ClientId: clientId, Hint: &hintCopy})
 }
 
-func checkHint(hint *sidecar.ClientHint) error {
-	if fakePushMaxBodyByteCount < len(hint.Body) {
-		return fmt.Errorf("a hint body of %d bytes", len(hint.Body))
+func (self *FakePush) checkHint(hint *sidecar.ClientHint) error {
+	if maxHintByteCount := self.settings.Format.MaxHintByteCount; maxHintByteCount < len(hint.Body) {
+		return fmt.Errorf("a hint body of %d bytes, past %d", len(hint.Body), maxHintByteCount)
 	}
 	return nil
 }
 
 func (self *FakePush) Hint(ctx context.Context, clientIds []connect.Id, hint *sidecar.ClientHint) error {
-	if err := checkHint(hint); err != nil {
+	if err := self.checkHint(hint); err != nil {
 		return err
 	}
-	return hostCall(ctx, self.faults, "push.Hint", func() error {
+	return hostWrite(ctx, self.faults, "push.Hint", func() error {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		for _, clientId := range clientIds {
@@ -83,10 +107,10 @@ func (self *FakePush) Hint(ctx context.Context, clientIds []connect.Id, hint *si
 }
 
 func (self *FakePush) HintSidecars(ctx context.Context, sidecarIds []connect.Id, hint *sidecar.ClientHint) error {
-	if err := checkHint(hint); err != nil {
+	if err := self.checkHint(hint); err != nil {
 		return err
 	}
-	return hostCall(ctx, self.faults, "push.HintSidecars", func() error {
+	return hostWrite(ctx, self.faults, "push.HintSidecars", func() error {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		for _, sidecarId := range sidecarIds {

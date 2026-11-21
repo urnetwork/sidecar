@@ -2,6 +2,12 @@
 // beside this one keeps its interface's promises as host_*.go states them and reads the shared clock
 // and fault queue. A call goes through hostCall, so a schedule can drop an answer, fail a call or crash
 // its caller, by FaultOpHost and the method's name as key, such as "quota.ReportUsage".
+//
+// A fake declares each call that writes by making it through hostWrite (QD-1155): the Quota's ReportUsage,
+// CountRate, a Lease that draws and a lease's settling Close (fake_quota.go), Tasks' Schedule (fake_tasks.go)
+// and Push's Hint and HintSidecars (fake_push.go). The queue counts those among the host's writes, so a WritesOnly plan
+// names one by its place among them, and §22.8's unknown rule loses each one's answer in turn on T2
+// (fault.EveryWrite), as it does a store's writes. Every other call reads, and is never counted as a write.
 
 package sidecartest
 
@@ -15,8 +21,21 @@ import (
 // What a client sees when a fault plan drops a call to a host service.
 var errHostTransport = errors.New("host call dropped by the fault plan")
 
-// One call through a fake's fault: serve runs on the caller's goroutine, under whatever lock it takes.
+// One call that reads through a fake's fault: serve runs on the caller's goroutine, under whatever lock it
+// takes.
 func hostCall(ctx context.Context, faults *FaultQueue, method string, serve func() error) error {
+	return hostCallWriting(ctx, faults, method, false, serve)
+}
+
+// One call that writes through a fake's fault, as hostCall: the queue counts it among the host's writes. See the
+// file header.
+func hostWrite(ctx context.Context, faults *FaultQueue, method string, serve func() error) error {
+	return hostCallWriting(ctx, faults, method, true, serve)
+}
+
+// hostWrite where write, hostCall otherwise: for a call whose fake knows only as it is made whether it writes, as a
+// Lease that may or may not draw.
+func hostCallWriting(ctx context.Context, faults *FaultQueue, method string, write bool, serve func() error) error {
 	stopIfDead(ctx)
 	if isInspecting(ctx) {
 		return serve()
@@ -24,7 +43,7 @@ func hostCall(ctx context.Context, faults *FaultQueue, method string, serve func
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	plan := faults.take(ctx, FaultOpHost, "", method, false)
+	plan := faults.take(ctx, FaultOpHost, "", method, write)
 	result := FaultResult(0)
 	if plan != nil {
 		result = plan.Result
@@ -51,6 +70,7 @@ type FakeHostSettings struct {
 	Redis         *FakeRedisSettings
 	Tasks         *FakeTasksSettings
 	Quota         *FakeQuotaSettings
+	Push          *FakePushSettings
 	Metrics       *FakeMetricsSettings
 	ServiceClient *FakeServiceClientSettings
 	Gates         *FakeServiceGatesSettings
@@ -64,6 +84,7 @@ func DefaultFakeHostSettings() *FakeHostSettings {
 		Redis:         DefaultFakeRedisSettings(),
 		Tasks:         DefaultFakeTasksSettings(),
 		Quota:         DefaultFakeQuotaSettings(),
+		Push:          DefaultFakePushSettings(),
 		Metrics:       DefaultFakeMetricsSettings(),
 		ServiceClient: DefaultFakeServiceClientSettings(),
 		Gates:         DefaultFakeServiceGatesSettings(),
@@ -113,7 +134,7 @@ func NewFakeHost(ctx context.Context, clock Clock, faults *FaultQueue, barriers 
 		Redis:         NewFakeRedis(ctx, clock, faults, barriers, settings.Redis),
 		Blobs:         NewFakeBlobs(clock, faults, barriers, settings.Blobs),
 		ClockCheck:    NewFakeClockCheck(settings.ClockCheck),
-		Push:          NewFakePush(faults),
+		Push:          NewFakePushWithSettings(faults, settings.Push),
 		ServiceClient: NewFakeServiceClientSource(faults, settings.ServiceClient),
 		Gates:         NewFakeServiceGates(settings.Gates),
 		Budget:        NewFakeWriteBudget(settings.Budget),
