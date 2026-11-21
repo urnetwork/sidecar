@@ -18,6 +18,8 @@ type MailSettings struct {
 	Config *MailConfigSettings
 	// Ingest, with its parse, spam and store bounds.
 	Ingest *MailIngestSettings
+	// Reconciliation of shared messages into the member mailbox.
+	GroupRefs *MailGroupRefSettings
 	// The mailbox view's and the i/ and f/ writers' bounds.
 	Store *MailStoreSettings
 	// A receiver's parts, on the legs a receiver builds on; nothing on the page Worker's.
@@ -67,6 +69,7 @@ func DefaultMailSettings() *MailSettings {
 	return &MailSettings{
 		Config:                      DefaultMailConfigSettings(),
 		Ingest:                      ingest,
+		GroupRefs:                   DefaultMailGroupRefSettings(),
 		Store:                       DefaultMailStoreSettings(),
 		Receive:                     defaultMailReceiveSettings(),
 		Imap:                        DefaultMailImapSettings(),

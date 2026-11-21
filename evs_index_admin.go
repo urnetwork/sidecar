@@ -791,9 +791,14 @@ func (self *EvsRepo) IndexRebuild(ctx context.Context, args *EvsIndexRebuildArgs
 	if args == nil {
 		args = &EvsIndexRebuildArgs{}
 	}
-	kind, err := self.indexRepoKind()
+	row, err := self.repoRow()
 	if err != nil {
 		return nil, err
+	}
+	kind := row.GetKind()
+	groupInbox := AclRepoIsInbox(row)
+	if indexRepoExcluded(kind) || (args.groupInbox && !groupInbox) {
+		return nil, ErrEvsIndexExcluded
 	}
 	if len(args.contents) == 0 {
 		return nil, ErrEvsIndexNoText
@@ -825,7 +830,7 @@ func (self *EvsRepo) IndexRebuild(ctx context.Context, args *EvsIndexRebuildArgs
 		refId:      refId,
 		repoKind:   kind,
 		companion:  args.Companion,
-		groupInbox: args.groupInbox,
+		groupInbox: groupInbox,
 		isAdmin:    isAdmin,
 		format:     DefaultIndexFormatSettings(),
 		tables:     indexLinkedTables(),

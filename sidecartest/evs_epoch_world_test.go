@@ -134,6 +134,11 @@ func newEpochWorldOf(t *testing.T, kind protocol.RepoKind) *epochWorld {
 
 func newEpochWorldWithInbox(t *testing.T, kind protocol.RepoKind, inbox protocol.RepoInbox) *epochWorld {
 	t.Helper()
+	return newEpochWorldWithInbox(t, kind, protocol.RepoInbox_REPO_INBOX_NONE)
+}
+
+func newEpochWorldWithInbox(t *testing.T, kind protocol.RepoKind, inbox protocol.RepoInbox) *epochWorld {
+	t.Helper()
 	ctx := t.Context()
 	clock := NewFakeClock(DefaultClockStart())
 	hostSettings := DefaultFakeHostSettings()
@@ -1063,6 +1068,38 @@ func TestEvsRecordClassWritesSlotKeyedEndToEnd(t *testing.T) {
 		if _, err := fresh.repo.ReadHead(world.ctx, &sidecar.EvsReadArgs{Path: "ledger/a", Version: version.Version}, out); err == nil {
 			t.Fatalf("version %d of ledger/a opened after its key was erased", version.Version)
 		}
+	}
+}
+
+// A marked general repo stores even the smallest messages under independently destroyable slots.
+func TestEvsGroupInboxErasesOnlyTheSelectedMessageSlot(t *testing.T) {
+	world := newEpochWorldWithInbox(t, protocol.RepoKind_REPO_KIND_GENERAL, protocol.RepoInbox_REPO_INBOX_GROUP)
+	writer := world.device("w", nil)
+	if _, err := writer.write("m/one", []byte("first message")); err != nil {
+		t.Fatal(err)
+	}
+	first := world.slotKeys()
+	if len(first) != 1 {
+		t.Fatalf("slots after one message: %d", len(first))
+	}
+	if _, err := writer.write("m/two", []byte("second message")); err != nil {
+		t.Fatal(err)
+	}
+	if second := world.slotKeys(); len(second) != 2 || len(epochNewSlots(first, second)) != 1 {
+		t.Fatalf("second message did not receive a separate slot: %v", second)
+	}
+	slot := epochNewSlots(nil, first)[0]
+	_, err := writer.repo.Erase(world.ctx, &sidecar.EvsEraseArgs{ErasureId: sidecar.NewId(),
+		Keys: []*sidecar.EvsErasedKey{{SlotId: slot, KeyIndex: 0}}, Complete: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := world.device("r", nil)
+	if _, _, err := reader.read("m/one"); err == nil {
+		t.Fatal("a new reader opened the erased group message")
+	}
+	if body, _, err := reader.read("m/two"); err != nil || string(body) != "second message" {
+		t.Fatalf("the other group message: %q, %v", body, err)
 	}
 }
 
