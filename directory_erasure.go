@@ -68,13 +68,15 @@
 //	           signs no card and no repo file. So it rewrites a file only once its standing version no longer holds
 //	           the document: the repo file once the marker stands over it, a card once its writer wrote the run private
 //	           or left it out. A card whose standing version still holds one waits for its writer, which rewrites it
-//	           at its next write after reading the marker, and is caught at a later sync, for 30 days; a directory
-//	           admin's own erase takes such a card by moderation's removal (§16.11's path rules) and the ERASE of its
-//	           keys, and refuses an announcement that stands on a repo file, which only its owner's revocation takes
-//	           (question record-m10-05-card-closure-content)
+//	           at its next write after reading the marker, and is rewritten at a later sync, past the request's 30 days
+//	           too where one of them met it (the window row; QD-1166); a directory admin's own erase takes such a card
+//	           by moderation's removal (§16.11's path rules) and the ERASE of its keys, and refuses an announcement
+//	           that stands on a repo file, which only its owner's revocation takes (question
+//	           record-m10-05-card-closure-content)
 //	revoke     the runner works a request's files as its entries: the repo file's versions below the marker, each
 //	           card holding a run that names the repo, and their documents; a later-signed card naming the repo is
-//	           cut at the sync that shows it and rewritten once its writer has, while the marker stands, for 30 days
+//	           cut at the sync that shows it while the marker stands, for 30 days, and rewritten once its writer has,
+//	           past them too (the window row)
 //	complete   an erasure is complete while its newest ERASE says so (owner decision 658): each index ref's eraser reads
 //	           its progress that way (recordEraseNewestStore), as its CUTs read which erasures are complete, and every
 //	           rewrite this half asks lists before it trusts a complete it reads (IndexRewriteArgs.Relisted; QD-1158),
