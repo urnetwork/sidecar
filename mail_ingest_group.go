@@ -24,6 +24,7 @@ package sidecar
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"slices"
@@ -88,19 +89,27 @@ type mailGroupRefPosition struct {
 	n     uint64
 }
 
+// The bytes of an index segment whose references have been reconciled.
+type mailGroupRefCheckpoint struct {
+	byteCount int
+	digest    [sha256.Size]byte
+	complete  bool
+}
+
 // One member's references to one group repo's mail. See the file header.
 type MailGroupRefs struct {
 	groupRepoId Id
 	group       mailStore
 	mailbox     mailRemoveStore
 	erasures    func(ctx context.Context, afterVersion uint64) ([]*EvsErasure, error)
-	erased      *mailErasedView
 	settings    *MailGroupRefSettings
 
 	// Held over a Sync, so one runs at a time.
 	syncLock sync.Mutex
-	// The records of each segment whose references are settled.
-	settledCounts map[mailGroupRefPosition]int
+	// The last erasure whose references were all removed and the messages that cannot gain another reference.
+	erasureVersion uint64
+	erased         map[Id]bool
+	settled        map[mailGroupRefPosition]mailGroupRefCheckpoint
 }
 
 // The references in args.Mailbox to args.Group's mail.
@@ -119,13 +128,13 @@ func newMailGroupRefs(groupRepoId Id, group mailStore, mailbox mailRemoveStore, 
 		settings = DefaultMailGroupRefSettings()
 	}
 	return &MailGroupRefs{
-		groupRepoId:   groupRepoId,
-		group:         group,
-		mailbox:       mailbox,
-		erasures:      erasures,
-		erased:        newMailErasedView(),
-		settings:      settings,
-		settledCounts: map[mailGroupRefPosition]int{},
+		groupRepoId: groupRepoId,
+		group:       group,
+		mailbox:     mailbox,
+		erasures:    erasures,
+		erased:      map[Id]bool{},
+		settings:    settings,
+		settled:     map[mailGroupRefPosition]mailGroupRefCheckpoint{},
 	}
 }
 
@@ -140,16 +149,17 @@ func (self *MailGroupRefs) Sync(ctx context.Context) (*MailGroupRefSync, error) 
 	self.syncLock.Lock()
 	defer self.syncLock.Unlock()
 	result := &MailGroupRefSync{}
-	fresh, err := self.erased.refresh(ctx, self.erasures)
+	fresh, err := self.erasures(ctx, self.erasureVersion)
 	if err != nil {
 		return result, err
 	}
 	for _, erasure := range fresh {
-		messages, _, ok := parseMailErasureNote(erasure.Note)
-		if !ok {
+		if erasure.Version <= self.erasureVersion {
 			continue
 		}
+		messages, _, _ := parseMailErasureNote(erasure.Note)
 		for _, message := range messages {
+			self.erased[message.MessageId] = true
 			dropped, err := self.drop(ctx, message)
 			if err != nil {
 				return result, err
@@ -158,6 +168,7 @@ func (self *MailGroupRefs) Sync(ctx context.Context) (*MailGroupRefSync, error) 
 				result.Dropped += 1
 			}
 		}
+		self.erasureVersion = erasure.Version
 	}
 
 	monthNames, err := self.group.List(ctx, mailIndexFamily)
@@ -197,28 +208,26 @@ func (self *MailGroupRefs) syncSegment(ctx context.Context, position mailGroupRe
 	if err != nil {
 		return err
 	}
-	messageIds := []Id{}
-	count := 0
-	err = mailSegmentRecords(segment, func(index int, record []byte) error {
-		count += 1
+	offset := 0
+	previous, ok := self.settled[position]
+	if ok && previous.byteCount <= len(segment) && sha256.Sum256(segment[:previous.byteCount]) == previous.digest {
+		if previous.byteCount == len(segment) {
+			return nil
+		}
+		if previous.complete {
+			offset = previous.byteCount
+		}
+	}
+	// A CLOSURE can remove rows before another append brings the segment back to its old length or row count.
+	// Only a matching prefix ending on a record boundary can be skipped.
+	var messageIds []Id
+	walkErr := mailSegmentRecords(segment[offset:], func(index int, record []byte) error {
 		messageId, timeMillis, ok := mailIndexRecordKey(record)
-		if ok && MailYearMonthOf(timeMillis) == position.month {
+		if ok && messageId != (Id{}) && !self.erased[messageId] && MailYearMonthOf(timeMillis) == position.month {
 			messageIds = append(messageIds, messageId)
-		} else {
-			// a row with no key, or under another month than its own: no reference, and its place still counts
-			messageIds = append(messageIds, Id{})
 		}
 		return nil
 	})
-	if err != nil {
-		// a segment that does not parse is read no further; its rows before the break still take references
-		count = len(messageIds)
-	}
-	settled := self.settledCounts[position]
-	if count < settled {
-		// a re-checkpoint wrote the segment again without its erased rows (§15.7): read it whole
-		settled = 0
-	}
 	batch := []*mailStoreWrite{}
 	flush := func() error {
 		if len(batch) == 0 {
@@ -230,14 +239,7 @@ func (self *MailGroupRefs) syncSegment(ctx context.Context, position mailGroupRe
 		batch = batch[:0]
 		return err
 	}
-	for index := settled; index < count; index += 1 {
-		messageId := messageIds[index]
-		if messageId == (Id{}) {
-			continue
-		}
-		if _, erased := self.erased.erased(messageId); erased {
-			continue
-		}
+	for _, messageId := range messageIds {
 		content, err := self.refContent(messageId)
 		if err != nil {
 			return err
@@ -252,7 +254,7 @@ func (self *MailGroupRefs) syncSegment(ctx context.Context, position mailGroupRe
 	if err := flush(); err != nil {
 		return err
 	}
-	self.settledCounts[position] = count
+	self.settled[position] = mailGroupRefCheckpoint{byteCount: len(segment), digest: sha256.Sum256(segment), complete: walkErr == nil}
 	return nil
 }
 
