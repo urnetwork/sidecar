@@ -4,7 +4,8 @@
 //
 // Every walk: a git-mode ref commits only on its tip, so each push's base_version is the version before it and its
 // base_chain C there (TIP); a file-mode push is based at most 63 versions back (the 64-version bound) on a chain the
-// walk holds; the ref's kind, mode and owner never change; the authorization and generation pins never fall, and an
+// walk holds. An exact-head file-mode push must name the immediately preceding version and its chain.
+// The ref's kind, mode and owner never change; the authorization and generation pins never fall, and an
 // equal version carries an equal chain or commitment; the path epoch never falls, and only a PATH_EPOCH push moves it.
 //
 // With entry versions (EvsReplayPaths): a write's version is its base entry version + 1 and its base the path's
@@ -37,8 +38,13 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-// §11.7's file-mode bound: a push may be based on any of the 64 versions up to the head it commits on.
-const evsBaseVersionWindow = 63
+// An exact-head push can appear only at the version immediately after its signed base, including on a gap read.
+func evsCheckExactHeadVersion(push *protocol.EvsPush, version uint64) error {
+	if push.GetFlags()&uint32(protocol.EvsPushFlag_EVS_PUSH_EXACT_HEAD) != 0 && (version == 0 || push.GetBaseVersion() != version-1) {
+		return fmt.Errorf("%w: an exact-head push at version %d based at %d", ErrEvsChainBroken, version, push.GetBaseVersion())
+	}
+	return nil
+}
 
 // The rules every walk holds, from the chain at fromVersion on.
 func evsCheckWalkRules(walked []*EvsVerifiedStatement, fromVersion uint64, fromChain [sha256.Size]byte) error {
@@ -51,6 +57,7 @@ func evsCheckWalkRules(walked []*EvsVerifiedStatement, fromVersion uint64, fromC
 		}
 		return walked[version-fromVersion-1].Chain, true
 	}
+	maxBaseLag := DefaultEvsFormatSettings().FileBaseMaxLag
 	var previous *protocol.EvsPush
 	for _, statement := range walked {
 		push := statement.Statement.Push
@@ -64,14 +71,17 @@ func evsCheckWalkRules(walked []*EvsVerifiedStatement, fromVersion uint64, fromC
 				return fmt.Errorf("%w: a git-mode push off the tip", ErrEvsChainBroken)
 			}
 		case protocol.EvsRefMode_EVS_REF_FILE:
-			if push.GetBaseVersion()+evsBaseVersionWindow < version-1 {
+			if err := evsCheckExactHeadVersion(push, version); err != nil {
+				return err
+			}
+			if maxBaseLag < version-1-push.GetBaseVersion() {
 				return fmt.Errorf("%w: a file-mode push past the 64-version bound", ErrEvsChainBroken)
 			}
 		default:
 			return fmt.Errorf("%w: ref mode %d", ErrEvsChainBroken, push.GetRefMode())
 		}
 		if baseChain, ok := chainAt(push.GetBaseVersion()); ok {
-			if push.GetBaseVersion() == 0 && len(push.GetBaseChain()) == 0 {
+			if push.GetBaseVersion() == 0 && len(push.GetBaseChain()) == 0 && push.GetFlags()&uint32(protocol.EvsPushFlag_EVS_PUSH_EXACT_HEAD) == 0 {
 				// a ref's first push may name C_0 or none
 			} else if !bytes.Equal(push.GetBaseChain(), baseChain[:]) {
 				return fmt.Errorf("%w: a push based on a chain the ref never held", ErrEvsChainBroken)

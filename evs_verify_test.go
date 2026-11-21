@@ -307,6 +307,31 @@ func TestEvsWalkRulesRefuse(t *testing.T) {
 	}
 }
 
+func TestEvsWalkChecksExactHeadVersionAndChain(t *testing.T) {
+	chain := sha256.Sum256([]byte("confirmed predecessor"))
+	push := &protocol.EvsPush{
+		RefMode: uint32(protocol.EvsRefMode_EVS_REF_FILE), Flags: uint32(protocol.EvsPushFlag_EVS_PUSH_EXACT_HEAD),
+		BaseVersion: 8, BaseChain: bytes.Clone(chain[:]),
+	}
+	walked := []*EvsVerifiedStatement{{Version: 9, Statement: &EvsStatement{Push: push}}}
+	if err := evsCheckWalkRules(walked, 8, chain); err != nil {
+		t.Fatalf("matching predecessor: %v", err)
+	}
+	push.BaseChain[0] ^= 1
+	if err := evsCheckWalkRules(walked, 8, chain); !errors.Is(err, ErrEvsChainBroken) {
+		t.Fatalf("wrong predecessor chain: %v", err)
+	}
+	push.BaseChain[0] ^= 1
+	push.BaseVersion = 7
+	if err := evsCheckWalkRules(walked, 8, chain); !errors.Is(err, ErrEvsChainBroken) {
+		t.Fatalf("an earlier base inside the file-mode window: %v", err)
+	}
+	push.Flags = 0
+	if err := evsCheckWalkRules(walked, 8, chain); err != nil {
+		t.Fatalf("ordinary file-mode push based before the reader's pin: %v", err)
+	}
+}
+
 // A path a 1,200-change push left alone, though the push's covering prefixes reach it, is verified by adjacent-leaf
 // proofs with no change list fetched; the same read with the proofs dropped is refused. The reader read the path
 // before the push, so its record's pin walks the push; a reader with no pin pins the head in its first round

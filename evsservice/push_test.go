@@ -733,7 +733,7 @@ func TestResolvePush(t *testing.T) {
 		t.Fatalf("resolution %+v %v", resolution, err)
 	}
 	// 64 commits after the pending push's base: it can no longer land within (b, b+64]
-	for i := 0; i < evsFileModeBaseWindow+1; i += 1 {
+	for i := range sidecar.DefaultEvsFormatSettings().FileBaseMaxLag + 1 {
 		next := fixture.plan()
 		fixture.create(next, fmt.Sprintf("after %d", i))
 		fixture.requireCommitted(fixture.push(next), uint64(2+i))

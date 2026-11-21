@@ -14,7 +14,8 @@
 //	5f  git mode: b = v (TIP), else final 409 non-fast-forward, and no other push's live seal lease, else 429 with
 //	    the lease's remaining time, refusing nothing; file mode: v - 63 <= b <= v, so the push lands within
 //	    (b, b+64], else final 409 BASE_STALE, which on the caller's own deposit ref carries its head
-//	    (plan-EVS1-deposit-head); either mode: base_chain is C_b as the history holds it.
+//	    (plan-EVS1-deposit-head). With the exact-head flag the signed base must equal the version and chain of
+//	    the head being written. In either mode base_chain is C_b as the history holds it.
 //	5g  each changed file's newest committed version (§11.7's newest rule, which step 4 ran) equals its
 //	    base_entry_version, 0 naming it absent, and each new version follows the versions rule: base + 1, or for a
 //	    creation max(b, m) + 1 with b the effective base version (I-EVS-8); a file over a standing directory, or a
@@ -41,9 +42,6 @@ import (
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
 )
-
-// §11.8's 5f: a file-mode push's base lies within 63 versions of the head, so it lands within (b, b+64].
-const evsFileModeBaseWindow = 63
 
 // 5e: see the file header.
 func CheckPathEpoch(view *PushView) *EvsCheckRefusal {
@@ -137,7 +135,10 @@ func CheckBase(view *PushView) *EvsCheckRefusal {
 			return refusal
 		}
 	case protocol.EvsRefMode_EVS_REF_FILE:
-		if version < baseVersion || (evsFileModeBaseWindow < version && baseVersion < version-evsFileModeBaseWindow) {
+		if refusal := checkExactHead(view, view.Head); refusal != nil {
+			return refusal
+		}
+		if version < baseVersion || sidecar.DefaultEvsFormatSettings().FileBaseMaxLag < version-baseVersion {
 			return baseStale(view, fmt.Sprintf("base %d at version %d", baseVersion, version))
 		}
 	default:
@@ -151,6 +152,27 @@ func CheckBase(view *PushView) *EvsCheckRefusal {
 			return newEvsCheckRefusal(EvsCheckReasonNonFastForward, "a base chain the history does not hold")
 		}
 		return baseStale(view, "a base chain the history does not hold")
+	}
+	return nil
+}
+
+// Compare the signed base with the head whose ETag protects this write. An absent or fenced, uncommitted
+// ref has version zero and its own genesis chain.
+func checkExactHead(view *PushView, head *protocol.EvsHead) *EvsCheckRefusal {
+	if !view.has(protocol.EvsPushFlag_EVS_PUSH_EXACT_HEAD) {
+		return nil
+	}
+	push := view.Statement.Push
+	if push.GetBaseVersion() != head.GetVersion() {
+		return baseStale(view, fmt.Sprintf("exact base %d at version %d", push.GetBaseVersion(), head.GetVersion()))
+	}
+	chain := head.GetChain()
+	if head.GetVersion() == 0 {
+		start := sidecar.EvsChainStart(view.RepoId, sidecar.Id(push.GetRefId()))
+		chain = start[:]
+	}
+	if !bytes.Equal(push.GetBaseChain(), chain) {
+		return baseStale(view, "the signed base chain differs from the current head")
 	}
 	return nil
 }

@@ -397,6 +397,57 @@ func evsTestBuiltInline(t testing.TB, signer *evsTestSigner) *EvsBuiltPush {
 	return built
 }
 
+// Both storage formats sign the file-mode precondition in the same statement as its base version and chain.
+func TestEvsExactHeadStatement(t *testing.T) {
+	signer := newEvsTestSigner("exact head")
+	plan := evsTestPlan(t, signer, "confirmed", 1)
+	plan.Flags = uint32(protocol.EvsPushFlag_EVS_PUSH_EXACT_HEAD)
+	builder := NewEvsStatementBuilder(signer.sign)
+	for _, build := range []func(*EvsPushPlan) (*EvsBuiltPush, error){builder.Build, builder.BuildFormat2} {
+		built, err := build(plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, parse := range []func([]byte) (*EvsStatement, error){ParseEvsStatement, ParseEvsStatementFormat2} {
+			statement, err := parse(built.Statement.Bytes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if statement.Push.GetFlags() != plan.Flags || statement.Push.GetBaseVersion() != plan.BaseVersion ||
+				!bytes.Equal(statement.Push.GetBaseChain(), plan.BaseChain[:]) || statement.Verify(signer.publicKey()) != nil {
+				t.Fatal("the signed statement did not bind the exact base")
+			}
+			for _, change := range []func(*protocol.EvsPush){
+				func(p *protocol.EvsPush) { p.Flags = 0 },
+				func(p *protocol.EvsPush) { p.BaseVersion++ },
+				func(p *protocol.EvsPush) { p.BaseChain[0] ^= 1 },
+			} {
+				push := proto.CloneOf(statement.Push)
+				change(push)
+				envelope := proto.CloneOf(statement.Signed)
+				envelope.Body, err = proto.MarshalOptions{Deterministic: true}.Marshal(push)
+				if err != nil {
+					t.Fatal(err)
+				}
+				wire, err := proto.Marshal(envelope)
+				if err != nil {
+					t.Fatal(err)
+				}
+				changed, err := parse(wire)
+				if err != nil || changed.Verify(signer.publicKey()) == nil {
+					t.Fatalf("modified field: parse %v, signature should fail", err)
+				}
+			}
+		}
+	}
+	plan.RefMode = protocol.EvsRefMode_EVS_REF_GIT
+	for _, build := range []func(*EvsPushPlan) (*EvsBuiltPush, error){builder.Build, builder.BuildFormat2} {
+		if _, err := build(plan); !errors.Is(err, ErrEvsPushInvalid) {
+			t.Fatalf("exact-head flag in git mode: %v", err)
+		}
+	}
+}
+
 // A statement past 1 KiB is refused, never trimmed; and every shape rule refuses with its code: format 2's flags and
 // fields as needing format 2, the rest as INVALID.
 func TestEvsStatementShapeRefusals(t *testing.T) {
@@ -418,7 +469,7 @@ func TestEvsStatementShapeRefusals(t *testing.T) {
 		{name: "drop_sha256", mutate: func(push *protocol.EvsPush) { push.DropSha256 = evsTestBytes("drop", 32) }, want: ErrEvsFormatUnsupported},
 		{name: "index_epoch", mutate: func(push *protocol.EvsPush) { push.IndexEpoch = 3 }, want: ErrEvsFormatUnsupported},
 		{name: "COMPLETION", mutate: func(push *protocol.EvsPush) { push.Flags |= uint32(protocol.EvsPushFlag_EVS_PUSH_COMPLETION) }, want: ErrEvsFormatUnsupported},
-		{name: "an unknown flag", mutate: func(push *protocol.EvsPush) { push.Flags |= 2048 }, want: ErrEvsPushInvalid},
+		{name: "an unknown flag", mutate: func(push *protocol.EvsPush) { push.Flags |= 4096 }, want: ErrEvsPushInvalid},
 		{name: "consumed_through alone", mutate: func(push *protocol.EvsPush) { push.ConsumedThrough = 5 }, want: ErrEvsPushInvalid},
 		{name: "an erased list alone", mutate: func(push *protocol.EvsPush) { push.ErasedSha256 = evsTestBytes("erased", 32) }, want: ErrEvsPushInvalid},
 		{name: "one part", mutate: func(push *protocol.EvsPush) { push.PartCount = 1 }, want: ErrEvsPushInvalid},

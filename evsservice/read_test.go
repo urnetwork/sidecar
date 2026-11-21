@@ -672,6 +672,9 @@ func TestRefsListsCommittedHeads(t *testing.T) {
 	if !bytes.Equal(ref.GetRefId(), fixture.check.refId.Bytes()) || ref.GetVersion() != 1 || ref.GetPushSequence() == 0 {
 		t.Fatalf("ref %v", ref)
 	}
+	if ref.GetSupportsExactHead() {
+		t.Fatal("a refs listing advertised a fresh single-ref capability")
+	}
 }
 
 // GET .../log pages statements from since, at most LogReplyStatementCount an answer, next_version 0 at the head.
