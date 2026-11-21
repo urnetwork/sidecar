@@ -197,8 +197,12 @@ func (self *GkmEngine) serveLadder(request *GkmRequest) {
 		request.Forbidden()
 		return
 	}
-	// open only before the group's first commit
-	_, err := request.Cluster.Head(request.Ctx, GkmEpochKey(groupId, 1))
+	// Once a generation belonging to the new group is claimed its historical ladder is closed.
+	closedKey := GkmGenerationKey(groupId, form.GetGeneration()+1)
+	if self.settings.DraftMls {
+		closedKey = GkmEpochKey(groupId, 1)
+	}
+	_, err := request.Cluster.Head(request.Ctx, closedKey)
 	switch {
 	case errors.Is(err, sidecar.ErrBlobNotFound):
 	case err != nil:

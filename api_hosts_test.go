@@ -151,6 +151,9 @@ func TestApplyServiceUrlsFillsEveryUrl(t *testing.T) {
 			t.Errorf("a url is %q, not %q", got, wanted)
 		}
 	}
+	if settings.Tls.CertsResource != "https://certs.hosttest.example" {
+		t.Errorf("certs audience %q", settings.Tls.CertsResource)
+	}
 	if len(want) != 7 {
 		t.Errorf("%d distinct urls", len(want))
 	}

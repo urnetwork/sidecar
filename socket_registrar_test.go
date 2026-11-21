@@ -1536,6 +1536,15 @@ func TestSocketRegistrarTlsListsGoAtOnceUnderTheSameListenId(t *testing.T) {
 		t.Fatalf("the change went as %d calls", len(calls))
 	}
 	after := calls[0].args.Registrations[0]
+	socket := &SocketListener{listenId: entry.listenId, component: &SocketComponent{registrar: &socketRegistrar{state: state}}}
+	if err := socket.awaitAcmeClaim(t.Context(), acmeNames[0].Name, 7); err != nil {
+		t.Fatal(err)
+	}
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := socket.awaitAcmeClaim(cancelled, acmeNames[0].Name, 8); !errors.Is(err, context.Canceled) {
+		t.Fatalf("the old page acknowledged a new claim: %v", err)
+	}
 	if *after.ListenId != *before.ListenId || !bytes.Equal(after.Claim, before.Claim) {
 		t.Error("the lists moved the entry's listen id or claim")
 	}

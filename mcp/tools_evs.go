@@ -50,6 +50,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"io"
+	"net/url"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -432,7 +433,8 @@ func mcpEvsTrust(info *sidecar.EvsFileInfo, ownSidecarId sidecar.Id) McpTrust {
 // A read of one path's version into the result: its bytes held to the settings' bound, its trust by its push's
 // provenance (mcpEvsTrust), and for an untrusted version the run tainted first and its content fenced then. The
 // resource of the path is named for an over-limit result.
-func mcpEvsRead(ctx context.Context, call *McpCall, repoId sidecar.Id, repo McpEvsRepo, path string, version uint64, result *McpResult) (*mcpEvsReadOut, error) {
+func mcpEvsRead(ctx context.Context, call *McpCall, repo McpEvsRepo, ref *sidecar.SearchHitRef, hit string, result *McpResult) (*mcpEvsReadOut, error) {
+	repoId, path := ref.RepoId, ref.Path
 	network, ok := mcpToolNetworkOf(call)
 	if !ok {
 		return nil, errMcpNoToolNetwork
@@ -446,14 +448,34 @@ func mcpEvsRead(ctx context.Context, call *McpCall, repoId sidecar.Id, repo McpE
 	ctx = sidecar.WithEvsReadContext(ctx, &sidecar.EvsReadContext{Purpose: sidecar.RecordReadPurposeRead, RunId: &runId})
 	limit := call.Session.server.settings.Mcp.ResourceByteCount
 	content := &mcpLimitedBuffer{limit: limit}
-	info, err := repo.ReadHead(ctx, &sidecar.EvsReadArgs{Path: path, Version: version, Provenance: true}, content)
+	args := &sidecar.EvsReadArgs{Path: path, Version: ref.Version, Provenance: true}
+	if ref.RefName != "" {
+		args.RefName = []byte(ref.RefName)
+	}
+	info, err := repo.ReadHead(ctx, args, content)
 	if err != nil {
 		if content.over {
 			return nil, errMcpEvsTooLarge
 		}
 		return nil, mcpEvsError(err)
 	}
-	result.SetResource(McpEvsUri(repoId, path) + "?network=" + call.NetworkId.String() + "&version=" + strconv.FormatUint(info.Version, 10))
+	if hit != "" {
+		current, err := mcpHitOfKind(call, hit, sidecar.IndexDocFile)
+		if err != nil {
+			return nil, err
+		}
+		if *current != *ref {
+			return nil, errMcpHitUnknown
+		}
+	}
+	uri := McpEvsUri(repoId, path) + "?network=" + call.NetworkId.String() + "&version=" + strconv.FormatUint(info.Version, 10)
+	if ref.RefName != "" {
+		if info.RefId != ref.RefId || info.Version != ref.Version {
+			return nil, errMcpHitUnknown
+		}
+		uri += "&hit=" + url.QueryEscape(hit)
+	}
+	result.SetResource(uri)
 	McpMeter(ctx, int64(content.buffer.Len()))
 	out := &mcpEvsReadOut{
 		Path:          path,
@@ -762,30 +784,30 @@ func addEvsTools(catalog *McpCatalog) {
 		Tier:        McpTierRead,
 		Description: "Reads a file of a repo, its newest version or an older one, or the file a search hit names by its hit id; content a tainted run wrote, or an import brought in from outside, comes back marked untrusted, and reading it taints the run.",
 		Targets: func(call *McpCall, in *mcpEvsReadIn) ([]McpTarget, error) {
-			repoId, path, _, err := mcpEvsReadOf(call, in)
+			ref, err := mcpEvsReadOf(call, in)
 			if err != nil {
 				return nil, err
 			}
-			return []McpTarget{mcpEvsTarget(call, repoId, McpRepoRead, path)}, nil
+			return []McpTarget{mcpEvsReadTarget(call, ref)}, nil
 		},
 		Access: func(call *McpCall, in *mcpEvsReadIn) ([]McpAccess, error) {
-			repoId, _, _, err := mcpEvsReadOf(call, in)
+			ref, err := mcpEvsReadOf(call, in)
 			if err != nil {
 				return nil, err
 			}
-			return mcpEvsAccess(repoId, protocol.AclAction_ACL_ACTION_READ), nil
+			return mcpEvsAccess(ref.RepoId, protocol.AclAction_ACL_ACTION_READ), nil
 		},
 	}, func(ctx context.Context, call *McpCall, in *mcpEvsReadIn, result *McpResult) (*mcpEvsReadOut, error) {
 		// a hit resolves again here: one whose cursor ended since the guard ran opens nothing
-		repoId, path, version, err := mcpEvsReadOf(call, in)
+		ref, err := mcpEvsReadOf(call, in)
 		if err != nil {
 			return nil, err
 		}
-		_, repo, err := mcpEvsRepoOf(call, repoId)
+		_, repo, err := mcpEvsRepoOf(call, ref.RepoId)
 		if err != nil {
 			return nil, err
 		}
-		return mcpEvsRead(ctx, call, repoId, repo, path, version, result)
+		return mcpEvsRead(ctx, call, repo, ref, in.Hit, result)
 	})
 
 	writeTargets := func(call *McpCall, repoText string, pathText string, operation McpRepoOperation) ([]McpTarget, error) {

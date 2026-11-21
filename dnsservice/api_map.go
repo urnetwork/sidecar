@@ -133,6 +133,13 @@ type DnsMapPoll struct {
 	Time   time.Time
 }
 
+// The complete first load an interface acknowledged for a restore. It lives with the incident,
+// independently of ordinary readiness probes and the interface's lifetime.
+type DnsMapRestoreReport struct {
+	Added   []string `json:"added,omitempty"`
+	Dropped []string `json:"dropped,omitempty"`
+}
+
 // What the store keeps of one interface: dns_custom_host_map_applied's row (§12.14).
 type DnsMapInterface struct {
 	Name string

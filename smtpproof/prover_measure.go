@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"errors"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -24,16 +25,28 @@ import (
 // One line of the filler a measuring part carries. Its content does not change the cost.
 const measureLine = "a line of DATA text as a later part carries it, whole and ending CRLF\r\n"
 
-// What a Prover's last Measure found, which overrides its settings' DATA cap.
+// The measurement and the ready catalog families it covered.
 type proverMeasured struct {
-	measure *sidecar.SmtpProverMeasure
+	measure  sidecar.SmtpProverMeasure
+	proof    *ProofSettings
+	families []ShapeFamily
 }
 
 // Measure of sidecar.SmtpProver. It proves a body unit per ready family, which takes seconds to minutes,
-// so a host runs it at idle and when its keys or hardware change. With no family ready it fails, and the
-// settings' cap stands. A proof that fails ends it with no result.
-func (self *Prover) Measure(ctx context.Context) (*sidecar.SmtpProverMeasure, error) {
+// so a host runs it at idle and when its keys or hardware change. A host without a completed unit only queues.
+func (self *Prover) Measure(ctx context.Context) (measure *sidecar.SmtpProverMeasure, err error) {
 	proof, families := self.measureFamilies()
+	defer func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if err == nil {
+			self.measured = &proverMeasured{measure: *measure, proof: proof, families: families}
+		} else if ctx.Err() == nil {
+			// A failed unit closes local proving until a later measurement succeeds. Idle work interrupted
+			// for an already admitted send retains the last successful measurement of the same families.
+			self.measured = nil
+		}
+	}()
 	var slowest time.Duration
 	var slowestFamily ShapeFamily
 	capacity := 0
@@ -53,7 +66,7 @@ func (self *Prover) Measure(ctx context.Context) (*sidecar.SmtpProverMeasure, er
 		start := self.now()
 		_, err = self.backend.provePart(ctx, statement, witness)
 		elapsed := self.now().Sub(start)
-		if errors.Is(err, errNoKeys) {
+		if self.keys == nil && errors.Is(err, errNoKeys) {
 			// a family with no keys sends nothing, so its unit is no bar
 			continue
 		}
@@ -104,11 +117,6 @@ func (self *Prover) Measure(ctx context.Context) (*sidecar.SmtpProverMeasure, er
 	if slowest <= self.settings.DataPartTime {
 		result.DataProofBytes = uint64(float64(bytesPerSecond) * self.settings.DataConnectionTime.Seconds())
 	}
-	func() {
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
-		self.measured = &proverMeasured{measure: result}
-	}()
 	return result, nil
 }
 
@@ -140,13 +148,21 @@ func (self *Prover) measureFamilies() (*ProofSettings, []ShapeFamily) {
 	return keySet.proof, families
 }
 
-// The settings a send runs under: the Prover's own, with the last Measure's cap over them.
+// A send uses the current ready families' measurement. A measured zero admits BDAT only.
 func (self *Prover) sendSettings() *ProverSettings {
-	settings := *self.settings
+	proof, families := self.measureFamilies()
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	if self.measured != nil {
-		settings.DataProofBytes = int(min(self.measured.measure.DataProofBytes, uint64(1<<31-1)))
+	m := self.measured
+	if m == nil || self.keys != nil && (m.proof != proof || !slices.Equal(m.families, families)) {
+		return nil
+	}
+	settings := *self.settings
+	settings.DataProofBytes = int(min(m.measure.DataProofBytes, uint64(math.MaxInt)))
+	if self.keys != nil {
+		settings.SuiteOrder = slices.DeleteFunc(slices.Clone(settings.SuiteOrder), func(suite uint16) bool {
+			return !slices.Contains(m.families, suiteFamily(suite))
+		})
 	}
 	return &settings
 }

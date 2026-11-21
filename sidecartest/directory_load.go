@@ -801,6 +801,39 @@ func (self *directoryCostMeterCards) ReadCards(ctx context.Context, repoId sidec
 	return changes, err
 }
 
+// Charge metadata and file reads separately, as the native phone opens only the
+// latest version of each file that fits its current budget.
+func (self *directoryCostMeterCards) PlanCards(ctx context.Context, repoId sidecar.Id, after uint64) (*sidecar.DirectoryCardsChanges, error) {
+	source, ok := self.DirectoryCards.(sidecar.DirectoryViewCards)
+	if !ok {
+		return nil, sidecar.ErrDirectoryCardsUnavailable
+	}
+	changes, err := source.PlanCards(ctx, repoId, after)
+	settings := self.meter.settings
+	cost := &DirectoryCost{RequestCount: 1, PathReadCount: settings.CardsPathReadCount}
+	if changes != nil {
+		count := int64(changes.ThroughVersion - after)
+		cost.PathReadCount += count * settings.CardStatementPathReadCount
+		cost.ByteCount = count * settings.StatementByteCount
+	}
+	self.meter.charge(self.sidecarId, cost)
+	return changes, err
+}
+
+func (self *directoryCostMeterCards) ReadPlannedCard(ctx context.Context, repoId sidecar.Id, file *sidecar.DirectoryCardFile) ([]byte, error) {
+	source, ok := self.DirectoryCards.(sidecar.DirectoryViewCards)
+	if !ok {
+		return nil, sidecar.ErrDirectoryCardsUnavailable
+	}
+	body, err := source.ReadPlannedCard(ctx, repoId, file)
+	cost := &DirectoryCost{RequestCount: 1, PathReadCount: self.meter.settings.CardPathReadCount}
+	if err == nil {
+		cost.ByteCount = int64(file.StoredByteCount)
+	}
+	self.meter.charge(self.sidecarId, cost)
+	return body, err
+}
+
 // Whether path is a card's or a repo file's on the cards ref.
 func directoryLoadCardPath(path string) bool {
 	return strings.HasPrefix(path, "d/") || strings.HasPrefix(path, "r/")

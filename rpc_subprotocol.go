@@ -299,6 +299,7 @@ func ApplySidecarClientSettings(clientSettings *connect.ClientSettings) {
 	}
 	clientSettings.EncryptionSettings.Mode = connect.EncryptionModeRequired
 	clientSettings.EncryptionSettings.ExposeVerifiedPeerClientKey = true
+	clientSettings.EncryptionSettings.GateReceiveOnSignedIdentity = true
 	clientSettings.DefaultTransferOpts.ForceStream = false
 	// a Service-mode source reaches this client on id 21842 alone, and nothing else of it, IP included,
 	// gets in (C9; stream_edge.go); connect names no id, so the owner lists its own

@@ -207,9 +207,6 @@ func TestUrBridgeStackRoundTripsTcpAndUdpOverAFakeLink(t *testing.T) {
 // While the daemon follows no network's config, every bridge method refuses, naming it, and nothing is filed or
 // bound: on a network whose bridge the daemon holds, and on one it does not.
 func TestUrBridgeMethodsRefuseWhileTheDaemonFollowsNoConfig(t *testing.T) {
-	if urBridgeConfigOf != nil {
-		t.Skip("the daemon follows its networks' config")
-	}
 	networkId := sidecar.NewId()
 	bridges, _ := newTestUrBridgeDaemon(t, newTestTunSystem(), networkId, false)
 	daemonBridges, err := newUrDaemonBridges(bridges, sidecar.DaemonLocalListen)

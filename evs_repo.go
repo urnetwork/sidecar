@@ -208,6 +208,9 @@ type EvsHistoryVersion struct {
 	// what an erasure names to destroy the version (§11.12's closure row: "each retained version's slot keys"). None
 	// for a general repo's version, whose keys ride its segments, and for a removal.
 	SlotIds []Id
+	// The signed entry metadata with which a deposit eraser verifies the slot and bounds its CUT.
+	kind       protocol.EvsEntryKind
+	paddedSize uint64
 	// The version's push's sealed provenance, for a History that asked for it, as EvsFileInfo.Provenance reads.
 	Provenance *EvsPushProvenance
 }

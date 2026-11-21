@@ -34,8 +34,9 @@ import (
 
 // One repo of the network as search's scope reads it.
 type SearchScopeRepo struct {
-	RepoId Id
-	Kind   protocol.RepoKind
+	RepoId     Id
+	Kind       protocol.RepoKind
+	GroupInbox bool
 	// This sidecar reads it: a repo it does not read is never listed.
 	Readable bool
 	// It may only deposit to it.
@@ -70,6 +71,8 @@ func searchSearchableSinceSeconds(nowMs int64, age time.Duration) uint64 {
 // One ref of a repo search follows.
 type SearchScopeRef struct {
 	RefId Id
+	// The verified local name of this content ref.
+	Name string
 	// The repo's default ref.
 	Default bool
 	// The index rides the repo's ur/index (git-mode refs, record streams), whose rows carry their ref_id.
@@ -105,7 +108,7 @@ func searchResolveScope(repos []*SearchScopeRepo, request *SearchRequest) ([]*se
 			named[repoId] = index
 		}
 	}
-	ordered := slices.Clone(repos)
+	ordered := slices.DeleteFunc(slices.Clone(repos), func(repo *SearchScopeRepo) bool { return repo == nil })
 	slices.SortStableFunc(ordered, func(a *SearchScopeRepo, b *SearchScopeRepo) int {
 		if breadth == SearchBreadthRepo {
 			return named[a.RepoId] - named[b.RepoId]
@@ -115,7 +118,7 @@ func searchResolveScope(repos []*SearchScopeRepo, request *SearchRequest) ([]*se
 	scoped := []*searchScopedRef{}
 	excluded := []SearchExclusion{}
 	for _, repo := range ordered {
-		if repo == nil || !repo.Readable && !repo.DepositOnly {
+		if !repo.Readable && !repo.DepositOnly {
 			// a repo this sidecar cannot read is never listed
 			continue
 		}
@@ -138,10 +141,28 @@ func searchResolveScope(repos []*SearchScopeRepo, request *SearchRequest) ([]*se
 			excluded = append(excluded, SearchExclusion{RepoId: repo.RepoId, Reason: SearchExcludedConsentPending})
 			continue
 		}
-		for _, ref := range repo.Refs {
-			if ref == nil {
+		if len(repo.Refs) == 0 {
+			excluded = append(excluded, SearchExclusion{RepoId: repo.RepoId, Reason: SearchExcludedUnbuilt})
+			continue
+		}
+		selected := false
+		for index, ref := range repo.Refs {
+			if ref == nil || ref.Name == string(EvsIndexRefName) {
 				continue
 			}
+			if breadth == SearchBreadthRepo {
+				switch {
+				case request.Ref == "":
+					if !ref.Default && index != 0 {
+						continue
+					}
+				case request.Ref == ref.Name, request.Ref == "id:"+ref.RefId.String():
+				case ref.Default && ref.Name == "" && request.Ref == string(EvsMainRefName):
+				default:
+					continue
+				}
+			}
+			selected = true
 			if ref.IndexOff || ref.Unbuilt {
 				reason := SearchExcludedUnbuilt
 				if ref.IndexOff {
@@ -156,6 +177,9 @@ func searchResolveScope(repos []*SearchScopeRepo, request *SearchRequest) ([]*se
 				continue
 			}
 			scoped = append(scoped, &searchScopedRef{repo: repo, ref: ref, index: len(scoped)})
+		}
+		if !selected && breadth == SearchBreadthRepo && request.Ref != "" {
+			excluded = append(excluded, SearchExclusion{RepoId: repo.RepoId, Reason: SearchExcludedUnbuilt})
 		}
 	}
 	return scoped, excluded

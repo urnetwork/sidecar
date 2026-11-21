@@ -268,7 +268,9 @@ func NewEvsEngine(ctx context.Context, host *sidecar.ServiceHost, settings *EvsS
 	self.dropIndex = NewDropIndex(settings.Drop, self.records, self.locator)
 	self.notifier = deps.CommitNotifier
 	if self.notifier == nil {
-		self.notifier = NewEvsHintNotifier(cancelCtx, clock, host.Redis, host.Push, deps.GateViews, log)
+		notifier := NewEvsHintNotifier(cancelCtx, clock, host.Redis, host.Push, deps.GateViews, log)
+		notifier.outcomes = host.Metrics.Counter("urnetwork_evs_head_hints_total", "Eligible committed head notifications handed to push within the delivery target, late or failed.", "result")
+		self.notifier = notifier
 	}
 	mux := http.NewServeMux()
 	self.servedRoutes = self.routes()

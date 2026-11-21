@@ -643,7 +643,10 @@ func TestRecordTeamModeSwitchesAtTheRepoCreate(t *testing.T) {
 	if len(refs) != 3 || refs[1].LogId != teamRecordId {
 		t.Fatalf("from the RepoCreate: %+v", refs)
 	}
-	directoryId := sidecar.NewId()
+	directoryId, err := world.streams.NewRepo(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
 	world.fixture.Logs = &sidecar.RecordLogIds{Team: true, TeamRecordId: &teamRecordId, DirectoryId: &directoryId}
 	world.publish()
 	claim := &sidecar.RecordDraft{Kind: sidecar.RecordKindClaim, Source: sidecar.RecordSourceAgent, RunId: &runId,
@@ -653,7 +656,13 @@ func TestRecordTeamModeSwitchesAtTheRepoCreate(t *testing.T) {
 	}
 	note := testRecordNote(&runId, "a note to the team")
 	world.fixture.Repos[directoryId] = &sidecartest.FakeRecordRepoAuth{Writers: []sidecar.Id{device.sidecarId}}
+	if err := world.streams.Grant(directoryId, device.sidecarId, sidecartest.RecordStreamsScope{Read: true, Write: true}); err != nil {
+		t.Fatal(err)
+	}
 	world.publish()
+	if err := record.PrepareDirectWrites(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if refs := testRecordAppendAll(t, record, note); len(refs) != 1 || refs[0].LogId != directoryId {
 		t.Errorf("a note with a directory: %+v", refs)
 	}
@@ -718,5 +727,76 @@ func TestRecordTeamAdminApprovalGoesToTAlone(t *testing.T) {
 	refused := testRecordParsedRequest(t, personal.approvalRequest(personalDevice, action.Bytes, "set it", [][]byte{sidecar.NewId().Bytes()}))
 	if _, err := personalDevice.open().Approvals().FileRequest(refused); !errors.Is(err, sidecar.ErrRecordApprovalTeamRoute) {
 		t.Errorf("an admin's request with no team record: %v", err)
+	}
+}
+
+// A member's projection, its vault source and its copy keep their signed identities at every destination-install cut.
+func TestRecordTeamCaptureResumesEachDestinationOnce(t *testing.T) {
+	for _, spooled := range []bool{false, true} {
+		for cut := 1; cut <= 4; cut++ {
+			world := newTestTeamWorld(t)
+			device := world.memberDevice(true)
+			admin := world.adminDevice()
+			record := device.open()
+			runId := sidecar.NewId()
+			world.runs.StartRun(runId)
+			draft := testTeamRunDrafts(&runId)[0]
+			var refs []*sidecar.RecordEntryRef
+			if spooled {
+				device.setLocked(true)
+				if ref := testRecordAppend(t, record, draft); !ref.Spooled {
+					t.Fatal("locked capture did not spool")
+				}
+				device.setLocked(false)
+				device.files.FailWritesAfter(cut)
+				_ = record.DrainSpool(t.Context())
+			} else {
+				device.files.FailWritesAfter(cut)
+				var err error
+				refs, err = record.Writer().Append(draft)
+				if err != nil || len(refs) != 3 {
+					t.Fatalf("cut %d, durable destinations: %v, %v", cut, refs, err)
+				}
+				if err := record.Land(t.Context(), refs); !errors.Is(err, sidecar.ErrRecordNotLanded) {
+					t.Fatalf("cut %d, unfinished capture released a write-ahead act: %v", cut, err)
+				}
+			}
+			device.files.FailWritesAfter(-1)
+			record = device.open()
+			if err := record.DrainSpool(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if err := record.Flush(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			vault := world.storedEntries(device.sidecarId)
+			team := world.teamDeposits(device.sidecarId, admin.sidecarId)
+			if len(vault) != 2 || len(team) != 1 {
+				t.Fatalf("spooled %v, cut %d: %d vault entries, %d team entries", spooled, cut, len(vault), len(team))
+			}
+			content := team[0].header.Header.GetContent()
+			if len(content) != 1 || !bytes.Equal(content[0].GetObjectId(), vault[0].header.GetEntryId()) ||
+				!bytes.Equal(content[0].GetCommitment(), vault[0].header.GetBodyCommitment()) {
+				t.Fatal("team projection names another vault source")
+			}
+			copyBody := &protocol.CopyBody{}
+			if err := proto.Unmarshal(vault[1].body, copyBody); err != nil || len(copyBody.GetEntries()) != 1 {
+				t.Fatalf("bad vault copy: %v", err)
+			}
+			opened, err := sidecar.VerifyRecordOpening(copyBody.GetEntries()[0])
+			if err != nil || opened.Header.LeafHash() != team[0].header.LeafHash() {
+				t.Fatalf("vault copy does not open the deposited team entry: %v", err)
+			}
+			if !spooled {
+				if err := record.Land(t.Context(), refs); err != nil {
+					t.Fatalf("cut %d, original refs did not land: %v", cut, err)
+				}
+				for i, header := range []*protocol.RecordHeader{vault[0].header, team[0].header.Header, vault[1].header} {
+					if !bytes.Equal(header.GetEntryId(), refs[i].EntryId[:]) || header.GetSeq() != refs[i].Seq {
+						t.Fatalf("cut %d, destination %d changed identity after restart", cut, i)
+					}
+				}
+			}
+		}
 	}
 }

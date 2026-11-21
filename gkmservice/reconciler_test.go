@@ -121,7 +121,9 @@ func newGkmReconcilerWorld(t *testing.T) *gkmReconcilerWorld {
 	fixture.placeRepo(world.repoId, "meta-2", protocol.EvsRepoState_EVS_REPO_ACTIVE)
 	fixture.fileForm(world.repoId, "meta-2", 1, world.groupId)
 	world.signer = fixture.newSidecar("sc-signer", memberDeviceFacts(world.memberId))
-	world.startReconciler(fixture.host.ServiceHost(), DefaultGkmReconcilerSettings(), &GkmReconcilerDeps{State: world.state})
+	settings := DefaultGkmReconcilerSettings()
+	settings.Service.DraftMls = true
+	world.startReconciler(fixture.host.ServiceHost(), settings, &GkmReconcilerDeps{State: world.state})
 	return world
 }
 

@@ -17,6 +17,7 @@ package sidecar
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"time"
 )
@@ -131,6 +132,9 @@ func (self *SearchEngine) Agents(ctx context.Context, session Id, networkId Id, 
 	if 0 < request.GroupCount && request.GroupCount < len(groups) {
 		groups = groups[:request.GroupCount]
 	}
+	if stream.scopeEnded() {
+		return nil, ErrSearchCursorExpired
+	}
 	result.Groups = groups
 	return result, nil
 }
@@ -156,7 +160,7 @@ func searchCollect(ctx context.Context, stream *searchEngineStream, clock Clock,
 		}
 		page, pageProgress, pageDone, err := stream.nextReporting(pageCtx, report)
 		if err != nil {
-			if !first && waitCtx.Err() != nil && ctx.Err() == nil {
+			if !errors.Is(err, ErrSearchCursorExpired) && !first && waitCtx.Err() != nil && ctx.Err() == nil {
 				// the wait ended mid-page: what landed answers
 				break
 			}

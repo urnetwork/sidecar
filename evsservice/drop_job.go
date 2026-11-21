@@ -927,15 +927,20 @@ func setDropPhase(state *DropTableState, job *DropJobRecord, phase protocol.EvsD
 // stay theirs (QD-1127).
 func (self *dropJobRun) end(state DropState) error {
 	ownDropIds := map[sidecar.Id]bool{}
-	if state == DropStateDone && self.last != nil && self.last.Job != nil && self.last.Job.JobId == self.jobId && self.last.Job.Resumed {
+	if self.last.Job.Resumed {
+		if state != DropStateDone {
+			// A refusal cannot release objects this job already withheld.
+			return self.hold()
+		}
 		file, err := self.files.Read(self.ctx, DropFileSnap, 0)
 		if err != nil {
 			return err
 		}
-		if file != nil {
-			for _, drop := range file.Covered {
-				ownDropIds[drop.DropId] = true
-			}
+		if file == nil {
+			return fmt.Errorf("%w: no snap-0 for resumed job", ErrDropJobState)
+		}
+		for _, drop := range file.Covered {
+			ownDropIds[drop.DropId] = true
 		}
 	}
 	movedCount := 0
@@ -1095,7 +1100,13 @@ func (self *dropJobRun) next(table *DropTableState) error {
 	if 0 < len(dueHeldJobs(table, now)) {
 		cover, err := self.job.holds.CoveringRepo(self.ctx, self.repoId, self.repoObject)
 		if err == nil && cover != nil && !cover.Unknown && len(cover.Holds) == 0 {
-			return self.resumeHeld(table.HeldJobs[0].JobId)
+			for _, job := range table.HeldJobs {
+				// Wake the oldest job on hold release. A previously resumed job that
+				// still cannot delete keeps its retry time while others take their turn.
+				if !job.Resumed || !now.Before(time.UnixMilli(job.RetryMs)) {
+					return self.resumeHeld(job.JobId)
+				}
+			}
 		}
 		if err := self.waitHeld(); err != nil {
 			return err
@@ -1140,7 +1151,9 @@ func (self *dropJobRun) resumeHeld(jobId sidecar.Id) error {
 		job := table.HeldJobs[index]
 		table.HeldJobs = slices.Delete(table.HeldJobs, index, index+1)
 		for _, queued := range table.HeldJobs {
-			queued.RetryMs = 0
+			if !queued.Resumed {
+				queued.RetryMs = 0
+			}
 		}
 		job.Held, job.Resumed = false, true
 		job.Phase = protocol.EvsDropPhase_EVS_DROP_HORIZON
@@ -1585,6 +1598,11 @@ func (self *dropJobRun) deleteSet(cursor DropCursor) ([]*DropCandidate, error) {
 
 // format2.drop: observe: D recorded as del files, every outcome observed, nothing deleted; each covered drop observed.
 func (self *dropJobRun) observe() error {
+	if self.last.Job.Resumed {
+		// Observed is a final per-object answer. These held objects still need
+		// physical deletion when the gate permits it.
+		return self.hold()
+	}
 	set, err := self.deleteSet(DropCursor{})
 	if err != nil {
 		return err
@@ -1613,6 +1631,9 @@ func (self *dropJobRun) observe() error {
 // next round for young ids, or a wait for unanswered ones.
 func (self *dropJobRun) deletes(table *DropTableState) (*DropTableState, error) {
 	job := table.Job
+	if self.job.format2.DropMode() != sidecar.Format2On {
+		return nil, self.observe()
+	}
 	set, err := self.deleteSet(job.Cursor)
 	if err != nil {
 		return nil, err

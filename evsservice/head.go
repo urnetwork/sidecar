@@ -47,7 +47,8 @@ var (
 	// This process's clock is unsure, so it raises no evacuation fence and opens no batch (§19.6's clocks row).
 	ErrEvsClockUnsure = errors.New("evs clock unsure")
 	// RaiseFence lost FenceRetryCount races in a row.
-	ErrEvsHeadBusy = errors.New("evs head busy")
+	ErrEvsHeadBusy     = errors.New("evs head busy")
+	errHeadIssueWindow = errors.New("head write issue window elapsed")
 )
 
 // What a placeholder head a fence makes holds, for its create's price: its fence, fence_ms and written_ms, under
@@ -219,6 +220,12 @@ func (self *HeadStore) ReadCached(ctx context.Context, cluster sidecar.BlobClust
 // The answer is the head as written. ErrBlobPrecondition means another write came first, and the caller rereads;
 // a *sidecar.BlobUnknownError leaves the write's outcome to a reread (§11.8's unknown row). next is not kept.
 func (self *HeadStore) Commit(ctx context.Context, cluster sidecar.BlobCluster, repoId sidecar.Id, refId sidecar.Id, prior *EvsStoredHead, next *protocol.EvsHead) (*EvsStoredHead, error) {
+	return self.commitBefore(ctx, cluster, repoId, refId, prior, next, time.Time{})
+}
+
+// A push must issue its conditional write before step 4's view expires. Fence
+// writes carry no such window. A write already issued keeps its normal outcome.
+func (self *HeadStore) commitBefore(ctx context.Context, cluster sidecar.BlobCluster, repoId sidecar.Id, refId sidecar.Id, prior *EvsStoredHead, next *protocol.EvsHead, issueBefore time.Time) (*EvsStoredHead, error) {
 	written := CloneEvsHead(next)
 	now := self.clock.Now()
 	written.WrittenMs = now.UnixMilli()
@@ -246,6 +253,9 @@ func (self *HeadStore) Commit(ctx context.Context, cluster sidecar.BlobCluster, 
 	barrierKey := barrierRefKey(repoId, refId)
 	var etag string
 	testHookBarrier(BarrierHeadCasBefore, barrierKey)
+	if !issueBefore.IsZero() && !self.clock.Now().Before(issueBefore) {
+		return nil, errHeadIssueWindow
+	}
 	if prior.Absent() {
 		etag, err = cluster.PutIfNoneMatch(ctx, key, headBytes, nil)
 	} else {

@@ -138,6 +138,8 @@ type sidecarAct struct {
 	at         *bridge.AuthPin
 	random     io.Reader
 	statements []*sidecarActStatement
+	// Set by a browser admission; its second statement depends on the first becoming verified config state.
+	browserTarget *Id
 	// set by CountersignedBytes and Countersign
 	countersigned []byte
 	presence      bool
@@ -454,6 +456,7 @@ func (self *sidecarAct) Run(ctx context.Context, check SidecarPresenceCheck) ([]
 		return nil, fmt.Errorf("no randomness for an act id: %w", err)
 	}
 	signedStatements := make([]*sidecarPendingStatement, 0, len(self.statements))
+	var browserAdmission *browserAdmissionDependency
 	for index, statement := range self.statements {
 		signed, err := self.sidecar.Sign(statement.purpose, statement.signedType, statement.body, nil)
 		if err != nil {
@@ -475,6 +478,18 @@ func (self *sidecarAct) Run(ctx context.Context, check SidecarPresenceCheck) ([]
 			notAfterMs: statement.notAfterMs,
 			act:        &sidecarPendingAct{actId: actId, index: uint32(index), stale: statement.stale},
 		})
+		if self.browserTarget != nil {
+			switch statement.signedType {
+			case bridge.SignedType_SIGNED_SIDECAR_ADMIT:
+				browserAdmission = &browserAdmissionDependency{target: *self.browserTarget,
+					digest: bridge.SignedBytesSha256(statement.purpose, statement.signedType, signed.GetBody())}
+			case bridge.SignedType_SIGNED_OWNER_CONFIRM, bridge.SignedType_SIGNED_EVS_SHARE:
+				if browserAdmission == nil {
+					return nil, ErrSidecarActState
+				}
+				signedStatements[index].act.admission = browserAdmission
+			}
+		}
 		self.signed = append(self.signed, bytes.Clone(signedBytes))
 	}
 	// every statement is kept before any is posted, so a kill between two posts retries the rest's same bytes

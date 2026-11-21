@@ -30,12 +30,16 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/urnetwork/sidecar/protocol"
 )
+
+// Public SMTP port from §15.4, shared by every direct MX and the edge's probes.
+const mailDirectSmtpPort = 25
 
 // The replies the dialog gives. Fixed texts: nothing a sender sent is echoed.
 const (
@@ -46,45 +50,6 @@ const (
 	mailDirectReplySyntax      = "501 5.5.4 Syntax error\r\n"
 	mailDirectReplyBusy        = "421 4.7.0 Too many connections, try again later\r\n"
 )
-
-// What a direct listener is tuned by. Every value must be positive.
-type MailDirectSettings struct {
-	// Sessions at once from one sender /64 or /32, and from one /48 or /24 (§15.4's router caps, reading 2).
-	SenderSessionCount          int
-	SenderAggregateSessionCount int
-	// Sessions at once in all: max_streams' 16 (§15.5).
-	SessionCount int
-	// The whole pre-TLS dialog's bound: RFC 5321 §4.5.3.2.7's 5 min.
-	DialogTimeout time.Duration
-	// All a sender may send before TLS, a line's bound without its CRLF, and an EHLO name's: connect's 2,048 B and
-	// 510 B, RFC 5321's 255 (§15.3).
-	DialogMaxByteCount   int
-	LineMaxByteCount     int
-	EhloNameMaxByteCount int
-	// The TLS handshake's bound, from STARTTLS's 220.
-	HandshakeTimeout time.Duration
-}
-
-// The one default.
-func DefaultMailDirectSettings() *MailDirectSettings {
-	return &MailDirectSettings{
-		SenderSessionCount:          8,
-		SenderAggregateSessionCount: 32,
-		SessionCount:                16,
-		DialogTimeout:               5 * time.Minute,
-		DialogMaxByteCount:          2048,
-		LineMaxByteCount:            510,
-		EhloNameMaxByteCount:        255,
-		HandshakeTimeout:            60 * time.Second,
-	}
-}
-
-// Whether every value is in range.
-func (self *MailDirectSettings) valid() bool {
-	return self != nil && 0 < self.SenderSessionCount && 0 < self.SenderAggregateSessionCount && 0 < self.SessionCount &&
-		0 < self.DialogTimeout && 0 < self.DialogMaxByteCount && 0 < self.LineMaxByteCount && 0 < self.EhloNameMaxByteCount &&
-		0 < self.HandshakeTimeout
-}
 
 // What NewMailDirectListener builds on.
 type MailDirectListenerArgs struct {
@@ -109,11 +74,9 @@ type MailDirectListener struct {
 	clock    Clock
 	log      Logger
 
-	stateLock     sync.Mutex
-	sessionCount  int
-	senderCounts  map[netip.Prefix]int
-	group         sync.WaitGroup
-	liveListeners map[net.Listener]bool
+	stateLock    sync.Mutex
+	sessionCount int
+	senderCounts map[netip.Prefix]int
 }
 
 // A listener over args, which takes nothing until Serve.
@@ -134,18 +97,79 @@ func NewMailDirectListener(args *MailDirectListenerArgs) (*MailDirectListener, e
 	}
 	return &MailDirectListener{
 		args: args, settings: settings, clock: clockOrReal(args.Clock), log: log,
-		senderCounts: map[netip.Prefix]int{}, liveListeners: map[net.Listener]bool{},
+		senderCounts: map[netip.Prefix]int{},
 	}, nil
 }
 
-// Takes listener's connections until ctx ends or the listener fails, each on its own goroutine, all joined before it
-// returns.
+// Reconciles the assignments for this receiver, including pending probes. Each public address owns its listener
+// and its accepted connections. Removing an assignment, losing the grant, or ending the component closes both.
+func (self *MailDirectListener) runAssigned(ctx context.Context, interval time.Duration, assignments func(context.Context) []netip.Addr, listen func(context.Context, string, string) (net.Listener, error)) {
+	type binding struct {
+		cancel context.CancelFunc
+		done   chan struct{}
+	}
+	bindings := map[netip.Addr]binding{}
+	defer func() {
+		for _, current := range bindings {
+			current.cancel()
+		}
+		for _, current := range bindings {
+			<-current.done
+		}
+	}()
+	for ctx.Err() == nil {
+		addresses := assignments(ctx)
+		for address, current := range bindings {
+			if !slices.Contains(addresses, address) {
+				current.cancel()
+				<-current.done
+				delete(bindings, address)
+			}
+		}
+		for _, address := range addresses {
+			if current, ok := bindings[address]; ok {
+				select {
+				case <-current.done:
+					current.cancel()
+					delete(bindings, address)
+				default:
+					continue
+				}
+			}
+			endpoint := netip.AddrPortFrom(address, mailDirectSmtpPort)
+			listener, err := listen(ctx, "tcp", endpoint.String())
+			if err != nil {
+				self.log.Warningf("[mail]an assigned direct MX listener could not bind: %T", err)
+				continue
+			}
+			listenCtx, cancel := context.WithCancel(ctx)
+			done := make(chan struct{})
+			bindings[address] = binding{cancel: cancel, done: done}
+			go func() {
+				defer close(done)
+				if err := self.Serve(listenCtx, listener); err != nil {
+					self.log.Warningf("[mail]an assigned direct MX listener ended: %T", err)
+				}
+			}()
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-self.clock.After(interval):
+		}
+	}
+}
+
+// Takes the listener's connections until ctx ends or the listener fails. All connections on this address close
+// and join before it returns, independently of the receiver's other public addresses.
 func (self *MailDirectListener) Serve(ctx context.Context, listener net.Listener) error {
-	stop := context.AfterFunc(ctx, func() {
-		listener.Close()
-	})
+	serveCtx, cancel := context.WithCancel(ctx)
+	var group sync.WaitGroup
+	defer group.Wait()
+	defer cancel()
+	defer listener.Close()
+	stop := context.AfterFunc(ctx, func() { listener.Close() })
 	defer stop()
-	defer self.group.Wait()
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -154,9 +178,7 @@ func (self *MailDirectListener) Serve(ctx context.Context, listener net.Listener
 			}
 			return err
 		}
-		self.group.Go(func() {
-			self.serveConn(ctx, conn)
-		})
+		group.Go(func() { self.serveConn(serveCtx, conn) })
 	}
 }
 
@@ -200,6 +222,8 @@ func (self *MailDirectListener) admit(sender netip.Addr) (func(), bool) {
 // One connection: the caps, the dialog, the handshake, then the session (see the file header).
 func (self *MailDirectListener) serveConn(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
 	remote, ok := conn.RemoteAddr().(*net.TCPAddr)
 	var sender netip.AddrPort
 	if ok {

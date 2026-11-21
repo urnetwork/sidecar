@@ -309,6 +309,31 @@ func TestGkmGroupCreateWritesItsFormEpochZeroAndFirstGeneration(t *testing.T) {
 	}
 }
 
+// The production configuration creates a group from its signed form and generation alone, even on retry.
+func TestGkmV0CreateUsesOnlyTheFormAndGeneration(t *testing.T) {
+	world := newGkmGroupWorld(t)
+	fixture := world.fixture
+	fixture.settings = DefaultGkmServiceSettings()
+	fixture.start()
+	request := world.createRequest(world.groupId)
+	request.CipherSuite, request.GenWrap, request.SealedGroupInfo = 0, nil, nil
+	for range 2 {
+		if response := world.postCreate(request); response.Code != http.StatusOK {
+			t.Fatalf("create: %d", response.Code)
+		}
+	}
+	if got := fixture.object("meta-2", GkmGenerationKey(world.groupId, 1)); !bytes.Equal(got, fixture.marshal(world.rotate1)) {
+		t.Fatal("the winning generation did not survive retry")
+	}
+	if world.storedEpoch(0) != nil {
+		t.Fatal("a KeyDelivery group created an epoch")
+	}
+	reader := fixture.token(world.admin.sidecarId, repoScope(world.repoId, "r"))
+	if reply := fixture.serve(http.MethodGet, "/gkm/groups/"+sidecar.EvsKeyId(world.groupId)+"/epochs", reader, nil); reply.Code != http.StatusNotFound {
+		t.Fatalf("draft epoch route: %d", reply.Code)
+	}
+}
+
 // QD-464: a creation whose answer was lost, or that crashed between its writes, is sent again and finishes; nothing
 // is written twice.
 func TestGkmGroupCreateResumesAfterACrash(t *testing.T) {

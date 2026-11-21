@@ -194,6 +194,8 @@ type directoryWorkerState struct {
 	// An erasure took the item last written, which this sidecar's card leaves out: none is announced until the
 	// device's own on (the file's header's moderated row).
 	Moderated bool `json:"moderated,omitempty"`
+	// The terminal item still owed, including its previous announcement id.
+	PendingWithdrawal *protocol.Announcement `json:"pending_withdrawal,omitempty"`
 }
 
 // The store's document of the worker item.
@@ -563,6 +565,13 @@ func (self *DirectoryWorker) maintain(ctx context.Context, change func(state *di
 		return DirectoryWorkerUnchanged, ErrDirectoryWorkerClosed
 	}
 	state := self.stateNow()
+	retriedWithdrawal := state.PendingWithdrawal != nil
+	if retriedWithdrawal {
+		if err := self.publishWithdrawal(state); err != nil {
+			return DirectoryWorkerUnchanged, err
+		}
+		state = self.stateNow()
+	}
 	// before any change, so the device's own on in the same call announces again
 	moderatedNow, err := self.moderatedItem(state)
 	if err != nil {
@@ -652,7 +661,7 @@ func (self *DirectoryWorker) maintain(ctx context.Context, change func(state *di
 		if err := DirectoryCheckItem(withdrawal); err != nil {
 			return DirectoryWorkerUnchanged, err
 		}
-		announcementId := state.AnnouncementId
+		state.PendingWithdrawal = withdrawal
 		// terminal: the next announcement takes a new id
 		state.AnnouncementId = Id{}
 		state.Version = 0
@@ -662,7 +671,7 @@ func (self *DirectoryWorker) maintain(ctx context.Context, change func(state *di
 		if err := self.persist(state); err != nil {
 			return DirectoryWorkerUnchanged, err
 		}
-		if err := self.append(announcementId, withdrawal); err != nil {
+		if err := self.publishWithdrawal(state); err != nil {
 			return DirectoryWorkerUnchanged, err
 		}
 		return DirectoryWorkerWithdrawn, nil
@@ -675,7 +684,21 @@ func (self *DirectoryWorker) maintain(ctx context.Context, change func(state *di
 	if moderatedNow {
 		return DirectoryWorkerModerated, nil
 	}
+	if retriedWithdrawal {
+		return DirectoryWorkerWithdrawn, nil
+	}
 	return DirectoryWorkerUnchanged, nil
+}
+
+// Replays the saved item without minting a new version or changing its times.
+func (self *DirectoryWorker) publishWithdrawal(state *directoryWorkerState) error {
+	item := state.PendingWithdrawal
+	if err := self.append(recordIdOf(item.GetAnnouncementId()), item); err != nil && !errors.Is(err, ErrDirectoryItemModerated) {
+		return err
+	}
+	written := *state
+	written.PendingWithdrawal = nil
+	return self.persist(&written)
 }
 
 // Whether an erasure took the item state holds, which this sidecar's card writer's journal says: state then holds none

@@ -13,6 +13,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"testing"
 	"time"
@@ -94,11 +95,11 @@ func (self *reseedFormat2History) staged(site *pushFixture, plan *sidecar.EvsPus
 }
 
 // Commits body at the site as the history's next version and keeps its statement, record and chain.
-func (self *reseedFormat2History) commit(site *pushFixture, body *protocol.EvsPushRequest) {
+func (self *reseedFormat2History) commit(site *pushFixture, body *protocol.EvsPushRequest, roles ...string) {
 	t := site.t
 	t.Helper()
 	version := uint64(len(self.statements) + 1)
-	site.requireCommitted(site.post(site.token(site.check.signerId), body), version)
+	site.requireCommitted(site.post(site.token(site.check.signerId, roles...), body), version)
 	site.awaitStepEights()
 	head := site.head()
 	entry := windowEntryAt(head.Head, version)
@@ -112,6 +113,128 @@ func (self *reseedFormat2History) commit(site *pushFixture, body *protocol.EvsPu
 	self.statements = append(self.statements, body.GetStatement())
 	self.records = append(self.records, recordBytes)
 	self.chains = append(self.chains, [32]byte(head.Head.GetChain()))
+}
+
+func TestReseedReadsSlotKeyedContentNamedAfterACut(t *testing.T) {
+	site, history := newReseedFormat2Site(t)
+	source := reseedFixtureOf(site)
+	target := newReseedFixture(t)
+	for _, fixture := range []*reseedFixture{source, target} {
+		fixture.gateFormat2(true)
+		check := fixture.check
+		fixture.appendState(check.signingKey, []sidecar.Id{check.signerId, check.otherId}, check.signerId, check.otherId)
+	}
+	site.auth.grant(site.check.signerId, site.check.repoId, sidecar.AclEvsAdmin)
+	cut := site.plan()
+	cut.Auth = site.check.auth.Pin()
+	cut.Flags = uint32(protocol.EvsPushFlag_EVS_PUSH_CUT)
+	staged := cutTestIndexFile(t, site.check, cut, checkTestPath("set"), 0, 1, "set")
+	history.commit(site, site.bodyStaged(cut, [][]byte{staged}), "admin")
+
+	repoKey, _, err := sidecar.NewGkmFirstGeneration(site.check.repoId, site.check.groupId, &sidecar.GkmGenerationArgs{
+		Cause: sidecar.GkmCauseRequest, Auth: site.check.auth.Pin(), Time: site.clock.Now(), HoldersSha256: make([]byte, 32),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := sidecar.NewEvsManifestKey(repoKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fek, err := sidecar.NewEvsFekKey(repoKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileId, slotId := testId("reseed file"), testId("reseed slot")
+	objectKey := sidecar.NewEvsObjectKey()
+	wrapped, err := sidecar.EvsWrapObjectKey(fek, objectKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slot, err := sidecar.EvsEncodeSlotObject(&protocol.EvsSlotObject{Keys: []*protocol.EvsSlotKey{{Generation: 1, Wrapped: wrapped}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("a slot-keyed file written after the CUT")
+	segment := &bytes.Buffer{}
+	builder, err := sidecar.NewEvsSlotKeyedSegmentBuilder(segment, manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := builder.BeginSlotRecord(manifest, objectKey, fileId, &sidecar.EvsRecordHeader{
+		RecordId: testId("restored record"), SlotId: slotId, Generation: 1, BodyLength: uint64(len(content)),
+		Kind: protocol.EvsRecordKind_EVS_RECORD_CHECKPOINT, KeyRefKind: protocol.EvsKeyRefKind_EVS_KEY_REF_SLOT, OidKind: protocol.EvsOidKind_EVS_OID_SHA1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = record.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	if err = record.Close(); err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := builder.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+	place := sealed.Places[0]
+	plan := site.plan()
+	plan.Auth = site.check.auth.Pin()
+	plan.IndexEpoch = site.head().Head.GetIndexEpoch()
+	upload := site.clock.Now()
+	receipt, err := IssueUploadReceipt(site.check.receiptKeys, site.check.repoId, sealed.Id, sealed.PaddedSize, upload, site.check.signerId, false, upload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.NewObjects = []*sidecar.EvsNewObject{
+		{Kind: protocol.EvsNewObjectKind_EVS_NEW_OBJECT_SEGMENT, Id: sealed.Id[:], PaddedSize: sealed.PaddedSize, UploadDay: uint32(upload.UnixMilli() / evsUploadDayMs)},
+		{Kind: protocol.EvsNewObjectKind_EVS_NEW_OBJECT_SLOT, Id: slotId.Bytes()},
+	}
+	plan.SlotBodies = [][]byte{slot}
+	locator := &protocol.EvsLocator{Kind: uint32(protocol.EvsLocatorKind_EVS_LOCATOR_SEGMENT), Id: sealed.Id[:], Offset: place.Offset, Length: place.Length}
+	plan.Changes = []*sidecar.EvsPlannedChange{{TokenPath: checkTestPath("file"), EntryVersion: site.check.fileEntry(plan, 2, []*protocol.EvsLocator{locator}, slotId)}}
+	body := site.bodyFormat2(plan)
+	body.Receipts = []*protocol.EvsUploadReceipt{receipt}
+	history.commit(site, body)
+	history.segments[sealed.Id] = segment.Bytes()
+	device := target.format2Device(history, 2, sealed.Id)
+	if err := device.mirror.Put(sidecar.EvsMirrorSlotKey(slotId.Bytes()), bytes.NewReader(slot)); err != nil {
+		t.Fatal(err)
+	}
+	result, ref := device.reseedFormat2()
+	if !result.Whole() || ref.Version != 2 || result.SlotCount != 1 {
+		t.Fatalf("restore stopped at %d: %v, slots %v", ref.Version, ref.Stopped, result.Slots)
+	}
+	reply := target.read(target.token(target.check.signerId), &protocol.EvsReadRequest{
+		RefId: target.check.refId.Bytes(), SlotIds: [][]byte{slotId.Bytes()},
+		Ranges: []*protocol.EvsReadRange{{SegmentId: sealed.Id[:], Length: uint32(sealed.PaddedSize)}},
+	})
+	if len(reply.objects) != 2 || reply.objects[0].GetMissing() || reply.objects[1].GetMissing() {
+		t.Fatal("restored slot or segment missing from service read")
+	}
+	restored, err := sidecar.EvsDecodeSlotObject(reply.objects[0].GetBody())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := sidecar.NewEvsSlotKeyedSegmentReader(bytes.NewReader(reply.objects[1].GetBody()), sealed.PaddedSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, plaintext, err := reader.OpenRecord(manifest, place, fileId, func(id sidecar.Id, index uint16, generation uint64) (*sidecar.EvsObjectKey, error) {
+		key, ok := sidecar.EvsSlotKeyAt(restored, uint32(index))
+		if !ok || id != slotId || key.GetGeneration() != generation {
+			return nil, sidecar.ErrEvsKeyMissing
+		}
+		return sidecar.EvsOpenSlotKey(fek, key)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(plaintext)
+	if err != nil || !bytes.Equal(got, content) {
+		t.Fatalf("restored plaintext %q, error %v", got, err)
+	}
 }
 
 // The new site in its recovery with the format2 gate open to its network, or closed, and a recording purge sink.

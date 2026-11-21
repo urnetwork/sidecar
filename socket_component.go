@@ -7,19 +7,10 @@
 // live listener takes its stream target on every generation's dispatcher as that generation attaches (socket_listen.go),
 // and the dialer opens on the generation attached when it dials (socket_dial.go).
 //
-// Three things come from outside, each through a setter, and each refusal stands until it comes:
-//
-//   - K_sock's ring, through SetKeyRing from whoever reads the verified config head (§7.9), which nothing in the core
-//     does yet. Without it a Listen or a Dial on an application or share/ name is refused, since that name has no
-//     token path and never leaves the device in the clear (D-SOCK-13); edge names register without one.
-//   - The network's labels, through SetNetworkLabels: its 10-character label, which every stream target names
-//     (plan reading 12), and §12's resolver for a <net> a Dial names. Without them no stream target exists, so
-//     Listen and Dial answer unavailable.
-//   - This device's own evaluation of its config (owner decisions 3 and 6), through SetPolicy, an AclEngine's view
-//     (NewSocketEnginePolicy). Without it admission's step 6 refuses every dial and a dialer opens no ticket.
-//
-// Nothing adds this component to a Sidecar yet: the daemon's composition does, beside evs's. connect legs only: the
-// sidecar_http leg runs no component (§18.10). Safe for concurrent use.
+// The stock daemon and native SDK use Sidecar.NewSocketComponent. Its application and share names use only the
+// network's verified config head's K_sock ring. It follows the standing ACL engine for admissions and revocations,
+// and resolves labels through the authenticated network APIs. Each prerequisite is required by its consumer.
+// Connect legs only. Safe for concurrent use.
 
 package sidecar
 
@@ -134,11 +125,16 @@ type socketGeneration struct {
 
 // The sockets component.
 type SocketComponent struct {
-	registrar *socketRegistrar
-	networkId Id
-	settings  *SidecarSocketSettings
-	clock     Clock
-	log       Logger
+	// The production host, which supplies authenticated network labels and verified config.
+	host          *Sidecar
+	configLock    sync.Mutex
+	configDone    chan struct{}
+	configInstall *aclEngineInstall
+	registrar     *socketRegistrar
+	networkId     Id
+	settings      *SidecarSocketSettings
+	clock         Clock
+	log           Logger
 
 	stateLock sync.Mutex
 	// the attached generation, nil between generations
@@ -166,6 +162,35 @@ func (self *Sidecar) SocketComponentArgs() (*SocketComponentArgs, error) {
 		Clock:     self.clock,
 		Log:       self.log,
 	}, nil
+}
+
+// Builds a socket component as soon as this Sidecar is enrolled. Its config follower,
+// label API and DNS zone supply policy, keys and names until ctx ends or Close.
+func (self *Sidecar) NewSocketComponent(ctx context.Context) (*SocketComponent, error) {
+	var args *SocketComponentArgs
+	for {
+		_, changed := self.state.Get()
+		var err error
+		args, err = self.SocketComponentArgs()
+		if err == nil {
+			break
+		}
+		select {
+		case <-self.ctx.Done():
+			return nil, ErrSidecarClosed
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-changed:
+		}
+	}
+	component, err := NewSocketComponent(ctx, args)
+	if err != nil {
+		return nil, err
+	}
+	component.host = self
+	component.configDone = make(chan struct{})
+	go component.followSocketConfig()
+	return component, nil
 }
 
 // A component whose registrar runs until Close or ctx ends, attached to no generation yet.
@@ -292,6 +317,9 @@ func (self *SocketComponent) current() (*socketGeneration, SocketPolicy, *Socket
 // registrar's own goroutine.
 func (self *SocketComponent) Close() {
 	self.registrar.close()
+	if self.configDone != nil {
+		<-self.configDone
+	}
 }
 
 // Installs the newest K_sock ring of the network's verified config head (§7.9): blinded names register under it, both
@@ -336,6 +364,9 @@ func (self *Sidecar) SocketKeyRing() *SocketKeyRing {
 	component := self.socketComponent()
 	if component == nil {
 		return nil
+	}
+	if component.host != nil {
+		component.refreshSocketConfig()
 	}
 	return component.currentKeyRing()
 }

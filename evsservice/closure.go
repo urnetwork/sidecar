@@ -241,14 +241,21 @@ func (self *pushAttempt) countReadReceipts() *pushOutcome {
 	return nil
 }
 
-// After a CONSUME commits, or an attempt of it finds it committed: the slots the versions it removes name, deleted,
-// P0 as an ERASE's rewrites are. A delete that does not answer answers 503 unknown, which the retry finishes.
-func (self *pushAttempt) finishConsume() *pushOutcome {
+// A CONSUME answers after every slot named by the versions it removed has been deleted. On replay the paths already
+// show their removal, so read the predecessor named by each signed change below this particular commit.
+func (self *pushAttempt) finishConsume(outcome *pushOutcome) *pushOutcome {
 	slotIds := map[sidecar.Id]bool{}
-	for _, read := range self.reads.view.Paths {
-		replaced, err := replacedEntryVersion(read)
+	for _, change := range self.payload.Changes {
+		var replaced *protocol.EvsEntryVersion
+		var err error
+		if outcome.ownCommit == nil {
+			replaced, err = self.readReplacedVersion(self.ctx, self.statement.Push.GetPathEpoch(), change.TokenPath,
+				change.Change.GetBaseEntryVersion(), outcome.committedVersion)
+		} else {
+			replaced, err = replacedEntryVersion(self.reads.view.Paths[change.TokenPath.KeyString()])
+		}
 		if err != nil || replaced == nil {
-			continue
+			return self.unknown()
 		}
 		for _, slotId := range replaced.GetSlotIds() {
 			slotIds[sidecar.Id(slotId)] = true

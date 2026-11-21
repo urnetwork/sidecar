@@ -6,7 +6,7 @@
 // (mail_send_daemon.go) or a mail client's on the submission port (MailClient.SubmitMessage). Each starts from the
 // same plan, so a send the gate holds was refused for no shape, zone or From, and then:
 //
-//	action    MCP-M3-02's mail_send row: every recipient, Bcc included, distinct and lowercase in the order Send names
+//	action    MCP-M3-02's mail_send row: every recipient, Bcc included, distinct with its delivery spelling in the order Send names
 //	          them (To, Cc, Bcc; a submission's envelope order); the From in its one form as from_alias; body_sha256,
 //	          for a draft SHA-256 over the subject, a CRLF and the text as the draft gives them (a subject holds no line
 //	          break, so its first CRLF ends it), for a submission SHA-256 over the message's bytes as submitted; and a
@@ -20,7 +20,7 @@
 //	effect    once the gate passes it, the send planned again, so a From that policy no longer grants at the spend is
 //	          refused there, and then its delivery under the use's effect key: the member part deposits and the
 //	          internet part queues at o/<h>/<effect_key> (mail_outbox.go), created only if absent, so a run the gate
-//	          repeats after an uncertain outcome (AU4) queues no second entry, though it deposits again. The outbox's
+//	          repeats after its queue committed (AU4) reads the receipt before keeping or depositing again. The outbox's
 //	          Lookup, which the client registers on its gate for kind mail, reconciles a reserved use at a restart
 //	answer    the delivery's MailSendResult; *ApprovalPendingError while a person's decision is awaited; a retry of a
 //	          send whose use is done answers its send_id alone, the effect not run again (AU4)
@@ -33,6 +33,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -63,7 +64,7 @@ func (self *MailClient) gatedSend(ctx context.Context, plan *mailSendPlan, conte
 	if err != nil {
 		return nil, err
 	}
-	effect := &mailSendEffect{client: self, replan: replan, content: content}
+	effect := &mailSendEffect{client: self, replan: replan, content: content, approved: stored.Action}
 	action := &SidecarAction{
 		Kind:      SidecarActionMail,
 		Canonical: stored.Bytes,
@@ -87,16 +88,18 @@ func (self *MailClient) gatedSend(ctx context.Context, plan *mailSendPlan, conte
 		if result := effect.answer(); result != nil {
 			return result, nil
 		}
-		// a retry the gate answered from the recorded outcome: the effect did not run again
+		// Earlier gate rows may hold a different id from the queue, or none after removal.
+		if replay, err := self.priorSend(ctx, plan, content, outcome.effectKey); err != nil || replay != nil {
+			return replay, err
+		}
 		if len(outcome.EffectRef) == 0 {
-			// a restart's Lookup that found the send's outcomes alone, its entry sent and removed
-			return &MailSendResult{}, nil
+			return content.replayedSend(Id{}, nil)
 		}
 		sendId, err := IdFromBytes(outcome.EffectRef)
 		if err != nil {
 			return nil, fmt.Errorf("%w: the recorded outcome names no send", ErrMailSendUncertain)
 		}
-		return &MailSendResult{SendId: sendId}, nil
+		return content.replayedSend(sendId, nil)
 	case outcome.State == ApprovalOutcomeNotDone:
 		if outcome.Err != nil {
 			return nil, outcome.Err
@@ -196,8 +199,9 @@ func mailSendApprovalNotAfter(ctx context.Context) time.Time {
 type mailSendEffect struct {
 	client *MailClient
 	// the send's plan made again at the spend, held to policy as it stands then
-	replan  func() (*mailSendPlan, error)
-	content *mailSendContent
+	replan   func() (*mailSendPlan, error)
+	content  *mailSendContent
+	approved *protocol.CanonicalAction
 
 	stateLock sync.Mutex
 	result    *MailSendResult
@@ -214,7 +218,13 @@ func (self *mailSendEffect) Run(ctx context.Context, effectKey []byte) ([]byte, 
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrSidecarEffectNotDone, err)
 	}
+	if plan.fromAddress != self.approved.GetAlias() || !slices.Equal(plan.recipients, self.approved.GetRecipients()) {
+		return nil, fmt.Errorf("%w: the delivery addresses changed after approval", ErrSidecarEffectNotDone)
+	}
 	result, err := self.client.deliverSend(ctx, plan, self.content, effectKey)
+	if errors.Is(err, ErrMailSendUncertain) {
+		return nil, err
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrSidecarEffectNotDone, err)
 	}
@@ -235,7 +245,12 @@ func (self *mailSendEffect) Run(ctx context.Context, effectKey []byte) ([]byte, 
 		defer self.stateLock.Unlock()
 		self.result = result
 	}()
-	return result.SendId.Bytes(), nil
+	// A sent copy alone does not prove delivery. A retry sees only this ref, without the first call's
+	// per-recipient failures.
+	if result.SendId != (Id{}) && (len(result.EffectKey) != 0 || len(result.Delivered()) != 0) {
+		return result.SendId.Bytes(), nil
+	}
+	return nil, nil
 }
 
 // What the effect's run answered, nil where it did not run.

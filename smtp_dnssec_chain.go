@@ -126,6 +126,11 @@ type SmtpDnssecChain struct {
 // validates nothing, which is what an edge sends when the chain would pass the frame
 // (plan-SMTP-wire-gaps#3). Errors are ErrSmtpDnssecBogus.
 func ParseSmtpDnssecChain(chain []byte, settings *SmtpDaneSettings) (*SmtpDnssecChain, error) {
+	return parseSmtpLookupChain(chain, settings, 0)
+}
+
+// The edge also validates the one address or PTR type it requested. Those records never enter the preamble.
+func parseSmtpLookupChain(chain []byte, settings *SmtpDaneSettings, extraType uint16) (*SmtpDnssecChain, error) {
 	if settings == nil {
 		settings = DefaultSmtpDaneSettings()
 	}
@@ -135,7 +140,7 @@ func ParseSmtpDnssecChain(chain []byte, settings *SmtpDaneSettings) (*SmtpDnssec
 	if settings.MaxChainByteCount < len(chain) {
 		return nil, fmt.Errorf("%w: a %d-octet chain", ErrSmtpDnssecBogus, len(chain))
 	}
-	rrs, err := parseSmtpDnsRrs(chain, settings.MaxRrCount)
+	rrs, err := parseSmtpLookupRrs(chain, settings.MaxRrCount, extraType)
 	if err != nil {
 		return nil, err
 	}
@@ -237,7 +242,13 @@ func (self *SmtpDnssecChain) Validate(anchors *SmtpDnssecAnchors, now time.Time,
 	if !domainOk || !hostOk || domainName == smtpDnsRoot || hostName == smtpDnsRoot {
 		return nil, fmt.Errorf("%w: a domain or host outside its form", ErrSmtpDnssecBogus)
 	}
-	validator := &smtpDnssecValidator{
+	validator := self.validator(anchors, now)
+	return validator.validateMxHost(domainName, hostName)
+}
+
+// One validation's caches and signature budget.
+func (self *SmtpDnssecChain) validator(anchors *SmtpDnssecAnchors, now time.Time) *smtpDnssecValidator {
+	return &smtpDnssecValidator{
 		chain:         self,
 		anchors:       anchors,
 		now:           now,
@@ -245,7 +256,19 @@ func (self *SmtpDnssecChain) Validate(anchors *SmtpDnssecAnchors, now time.Time,
 		zoneKeyErrors: map[smtpDnsName]error{},
 		rrsetErrors:   map[*smtpDnsRrset]error{},
 	}
-	mx, err := validator.lookup(domainName, smtpDnsTypeMx)
+}
+
+// Checks both names of the peer end to end. Aliases count only with a validated CNAME at each hop.
+func (self *smtpDnssecValidator) validateMxHost(domainName, hostName smtpDnsName) (*SmtpDnssecResult, error) {
+	mxName := domainName
+	mx, err := self.lookup(mxName, smtpDnsTypeMx)
+	for hop := 0; err == nil && mx.cname != ""; hop++ {
+		if hop >= self.chain.settings.MaxCnameDepth {
+			return nil, ErrSmtpDnssecBogus
+		}
+		mxName = mx.cname
+		mx, err = self.lookup(mxName, smtpDnsTypeMx)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -261,14 +284,14 @@ func (self *SmtpDnssecChain) Validate(anchors *SmtpDnssecAnchors, now time.Time,
 		if !named {
 			return nil, fmt.Errorf("%w: the mx rrset does not name the host", ErrSmtpDnssecBogus)
 		}
-	case mx.absent && hostName == domainName:
+	case mx.absent && hostName == mxName:
 		// the implicit MX
 	default:
 		return nil, fmt.Errorf("%w: no mx proves the host", ErrSmtpDnssecBogus)
 	}
 	tlsaName := hostName.child("_tcp").child("_25")
-	for range self.settings.MaxCnameDepth + 1 {
-		tlsa, err := validator.lookup(tlsaName, smtpDnsTypeTlsa)
+	for range self.chain.settings.MaxCnameDepth + 1 {
+		tlsa, err := self.lookup(tlsaName, smtpDnsTypeTlsa)
 		if err != nil {
 			return nil, err
 		}
@@ -287,7 +310,7 @@ func (self *SmtpDnssecChain) Validate(anchors *SmtpDnssecAnchors, now time.Time,
 		}
 		tlsaName = tlsa.cname
 	}
-	return nil, fmt.Errorf("%w: past %d cname hops", ErrSmtpDnssecBogus, self.settings.MaxCnameDepth)
+	return nil, fmt.Errorf("%w: past %d cname hops", ErrSmtpDnssecBogus, self.chain.settings.MaxCnameDepth)
 }
 
 // What name holds of rrtype: the validated RRset, a validated CNAME to follow, a proven absence, or an

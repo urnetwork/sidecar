@@ -34,6 +34,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -372,16 +373,11 @@ func TestDaemonsFirstNetworkStandsOnItsBaseOne(t *testing.T) {
 	if auth := key.Auth(); auth.GetVersion() != 1 || !bytes.Equal(auth.GetChain(), bootstrap.Pin.GetChain()) {
 		t.Fatalf("GenRotate_1 signed at %v, not at S(1)", auth)
 	}
-	// the key client holds a leaf, its MLS engine built at KF1 under the admission base 1's row names, A_0 (QD-825)
 	clients := testUrClientsOf(running)
-	if clients.builtGroup() == nil || !clients.leaf {
-		t.Fatal("the first device's key client holds no leaf")
-	}
-	clients.mls.stateLock.Lock()
-	admission, engine := clients.mls.admissionSha256, clients.mls.engine
-	clients.mls.stateLock.Unlock()
-	if engine == nil || !bytes.Equal(admission, bootstrap.GenesisChain[:]) {
-		t.Fatal("the first device's MLS engine is not built under the Genesis's hash")
+	if group := clients.builtGroup(); group == nil || !group.KeyDeliveryOnly() {
+		t.Fatal("the first config group was not formed by KeyDelivery")
+	} else if _, exists := group.GroupHead(key.GroupId()); exists {
+		t.Fatal("the first config group has an epoch head")
 	}
 	heads, err := engines.RefHeads(ctx, result.ConfigRepoId)
 	if err != nil {
@@ -418,6 +414,319 @@ func TestDaemonsFirstNetworkStandsOnItsBaseOne(t *testing.T) {
 	}
 	if !running.Admitted() {
 		t.Fatal("the first device is not admitted at base 1")
+	}
+}
+
+// The daemon signs both bindings, rewraps and rotates through the real service, and restarts. Opening the
+// service's winning generation then needs only the replacement code and the public authenticated log.
+func TestDaemonRecoveryRotationSurvivesRestart(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 8*urTestTimeout)
+	defer cancel()
+	net := sidecartest.NewNet(ctx, nil)
+	t.Cleanup(net.Close)
+	engines := enginenet.NewEngines(t, net, nil)
+	instance, err := net.StartInstance("recovery", &sidecartest.TestInstanceArgs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(instance.Close)
+	networkId, memberId := sidecar.NewId(), sidecar.NewId()
+	engines.Api().SetPersonalOwner(networkId, memberId)
+	running, err := instance.AddSidecarIn(networkId, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gkm, err := urDaemonGkmClient(running)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := engines.Bootstrap(ctx, &enginenet.BootstrapArgs{Sidecar: running, Gkm: gkm, OwnerMemberId: memberId}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	follow := func(running *sidecar.Sidecar) *sidecar.ConfigClient {
+		t.Helper()
+		startUrConfigFollower(running, sidecar.NewNoopLogger())
+		client, err := running.ConfigFollower().WaitStanding(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return client
+	}
+	client := follow(running)
+	rotate := func() *sidecar.RecoveryRotation {
+		t.Helper()
+		rotation, err := running.RotateRecovery(ctx, false, sidecar.SidecarActConfirmed, nil)
+		if err != nil || rotation == nil || rotation.Entry == nil {
+			t.Fatalf("binding: %v", err)
+		}
+		if err := engines.Sync(ctx, networkId); err != nil {
+			t.Fatal(err)
+		}
+		if err := client.CatchUp(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if err := testUrClientsOf(running).builtGroup().CompleteRecoveryBinding(ctx, rotation.KeySha256); err != nil {
+			t.Fatal(err)
+		}
+		return rotation
+	}
+	initial, replacement := rotate(), rotate()
+	if !bytes.Equal(replacement.PreviousKeySha256, initial.KeySha256) {
+		t.Fatal("the replacement did not retire the first binding")
+	}
+	if err := instance.Restart(); err != nil {
+		t.Fatal(err)
+	}
+	running = instance.Sidecar(networkId)
+	client = follow(running)
+	clients := testUrClientsOf(running)
+	wraps, err := clients.api.RecoveryWraps(ctx, memberId, false)
+	if err != nil || len(wraps.GetWraps()) != 1 {
+		t.Fatalf("replacement wraps after restart: %v", err)
+	}
+	wrap := wraps.GetWraps()[0]
+	if !bytes.Equal(wrap.GetBindingPrefix(), replacement.KeySha256[:8]) {
+		t.Fatal("the surviving wrap names the retired code")
+	}
+	groupId := result.DraftedKey.GroupId()
+	page, err := clients.api.Generations(ctx, result.ConfigRepoId, groupId, wrap.GetGeneration()-1)
+	if err != nil || len(page.GetGenerations()) != 1 {
+		t.Fatalf("the winning generation: %v", err)
+	}
+	body, err := proto.MarshalOptions{Deterministic: true}.Marshal(page.GetGenerations()[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	generation, err := sidecar.ParseGenRotate(body, groupId, wrap.GetGeneration(), sidecar.GkmIdentityKeys(client.State()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := sidecar.ParseRecoveryCode(strings.Join(replacement.Words, " "))
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := code.Keys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer keys.Erase()
+	privateKey, err := keys.XwingPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, err := sidecar.OpenGkmRecoveryWrap(wrap.GetCiphertext(), generation, &sidecar.GkmRecoveryArgs{
+		MemberId: memberId, GroupId: groupId, BindingKeySha256: keys.KeySha256(),
+	}, privateKey)
+	if err != nil || !bytes.Equal(opened.Commitment(), generation.Rotate.GetCommitment()) {
+		t.Fatalf("replacement code alone: %v", err)
+	}
+
+	// The replacement has a new instance, key store, identity and member-owned session. Its previous devices are gone.
+	instance.Close()
+	fresh, err := net.StartInstance("fresh-recovery", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(fresh.Close)
+	device, err := fresh.AddSidecarIn(networkId, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	follower := startUrConfigFollower(device, sidecar.NewNoopLogger())
+	if follower == nil {
+		t.Fatal("the fresh device has no config follower")
+	}
+	cold := testUrClientsOf(device)
+	select {
+	case <-cold.groupBuilt():
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	for {
+		_, changed := cold.upkeep.Passes()
+		state, _, _ := cold.gkm.joiningState()
+		if state != nil && bytes.Equal(state.Member(memberId).GetRecoveryKeySha256(), replacement.KeySha256) {
+			break
+		}
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+	}
+	if device.GkmRepoKeyHeld(result.ConfigRepoId) || device.Admitted() {
+		t.Fatal("the fresh device already has a repo key or admission")
+	}
+	recoverCode := func() *sidecar.SidecarRecovery {
+		t.Helper()
+		code, err := sidecar.ParseRecoveryCode(strings.Join(replacement.Words, " "))
+		if err != nil {
+			t.Fatal(err)
+		}
+		progress, err := device.RecoverWithCode(ctx, code, sidecar.SidecarActConfirmed)
+		if err != nil {
+			t.Fatalf("recovering with the replacement on the fresh device: %v", err)
+		}
+		return progress
+	}
+	pending := recoverCode()
+	if pending.Phase != sidecar.SidecarRecoveryPending || pending.Entry == nil || pending.ActivatesAfter.IsZero() {
+		t.Fatalf("the owner's recovery proposal did not enter its window: %+v", pending)
+	}
+	net.Clock().Advance(pending.ActivatesAfter.Sub(net.Clock().Now()) + time.Millisecond)
+	if _, err := engines.Api().AppendTick(ctx, networkId, &bridge.ApiTick{ActivatedProposalIds: [][]byte{pending.StatementId}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := engines.Sync(ctx, networkId); err != nil {
+		t.Fatal(err)
+	}
+	recovered := recoverCode()
+	if recovered.Phase != sidecar.SidecarRecoveryAnchored || !device.Admitted() || !recovered.OfferRotate {
+		t.Fatalf("the fresh device did not finish recovery: %+v", recovered)
+	}
+	current, err := cold.builtGroup().CurrentRepoKey(ctx, result.ConfigRepoId)
+	if err != nil || !bytes.Equal(current.Commitment(), opened.Commitment()) {
+		t.Fatalf("the fresh device's recovered commitment: %v", err)
+	}
+
+}
+
+// The production startup composition initializes an empty network and follows the first head through EVS.
+func TestDaemonFollowerBootstrapsAnEmptyOwnerNetwork(t *testing.T) {
+	t.Run("first start", func(t *testing.T) { testDaemonFirstOwner(t, false) })
+	t.Run("restart after base one", func(t *testing.T) { testDaemonFirstOwner(t, true) })
+}
+
+// Two enrolled owner devices both see an empty log. Hold the first POST until the other device has published
+// and activated its candidate, then make the losing device follow the winning Genesis and repo.
+func TestDaemonFollowersAgreeOnTheFirstOwner(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*urTestTimeout)
+	defer cancel()
+	net := sidecartest.NewNet(ctx, nil)
+	t.Cleanup(net.Close)
+	settings := enginenet.DefaultEnginesSettings()
+	settings.FollowBeforeExchange = true
+	engines := enginenet.NewEngines(t, net, settings)
+	networkId := sidecar.NewId()
+	engines.OpenNetwork(networkId)
+	engines.Api().SetPersonalOwner(networkId, sidecar.NewId())
+	device := func(name string) *sidecar.Sidecar {
+		instance, err := net.StartInstance(name, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(instance.Close)
+		running, err := instance.AddSidecarIn(networkId, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return running
+	}
+	first, winner := device("first"), device("winner")
+	posting, release := make(chan struct{}), make(chan struct{})
+	net.Faults().SetOnFire(func(*sidecartest.FaultPlan) {
+		close(posting)
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+	})
+	if _, err := net.Faults().Add(&sidecartest.FaultPlan{Op: sidecartest.FaultOpHttp,
+		KeyPrefix: "/network/config/projection", WritesOnly: true, Result: sidecartest.ApplyThenDrop}); err != nil {
+		t.Fatal(err)
+	}
+	reads, allowRead := make(chan *testUrProbedRead, 1), make(chan struct{})
+	close(allowRead)
+	heads := urDaemonConfigHeads
+	urDaemonConfigHeads = func(running *sidecar.Sidecar) sidecar.ConfigHeadReader {
+		return &testUrProbedHeads{next: heads(running), running: running, answers: reads, admitted: allowRead}
+	}
+	firstFollower := startUrConfigFollower(first, sidecar.NewNoopLogger())
+	urDaemonConfigHeads = heads
+	select {
+	case <-posting:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	winnerFollower := startUrConfigFollower(winner, sidecar.NewNoopLogger())
+	if _, err := winnerFollower.WaitStanding(ctx); err != nil {
+		t.Fatalf("the winning owner: %v", err)
+	}
+	close(release)
+	select {
+	case <-reads:
+	case <-ctx.Done():
+		t.Fatalf("the losing follower: %+v: %v", firstFollower.Status(), ctx.Err())
+	}
+	a, err := first.Anchor()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := winner.Anchor()
+	if err != nil || !bytes.Equal(a.GenesisSha256, b.GenesisSha256) || first.Admitted() {
+		t.Fatalf("the losing device did not retain the winning anchor: %+v %+v %v", a, b, err)
+	}
+}
+
+func testDaemonFirstOwner(t *testing.T, restart bool) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*urTestTimeout)
+	defer cancel()
+	net := sidecartest.NewNet(ctx, nil)
+	t.Cleanup(net.Close)
+	settings := enginenet.DefaultEnginesSettings()
+	settings.FollowBeforeExchange = true
+	engines := enginenet.NewEngines(t, net, settings)
+	networkId, ownerId := sidecar.NewId(), sidecar.NewId()
+	engines.OpenNetwork(networkId)
+	engines.Api().SetPersonalOwner(networkId, ownerId)
+	instance, err := net.StartInstance("owner", &sidecartest.TestInstanceArgs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(instance.Close)
+	running, err := instance.AddSidecarIn(networkId, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstId := running.Identity().SidecarId
+	site := sidecartest.BarrierSite("api.config.appended", networkId.String())
+	if restart {
+		if err := net.Barriers().Arm(site, "", 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	follower := startUrConfigFollower(running, sidecar.NewNoopLogger())
+	if restart {
+		if err := net.Barriers().AwaitHeld(ctx, site, ""); err != nil {
+			t.Fatal(err)
+		}
+		follower.Close()
+		if err := net.Barriers().Release(site); err != nil {
+			t.Fatal(err)
+		}
+		if err := instance.Restart(); err != nil {
+			t.Fatal(err)
+		}
+		running = instance.Sidecar(networkId)
+		follower = startUrConfigFollower(running, sidecar.NewNoopLogger())
+	}
+	client, err := follower.WaitStanding(ctx)
+	if err != nil {
+		t.Fatalf("first-owner startup: %+v: %v", follower.Status(), err)
+	}
+	state := follower.VerifiedState()
+	if client.Pin().GetVersion() != 1 || !bytes.Equal(state.Genesis().GetOwnerMemberId(), ownerId.Bytes()) ||
+		!bytes.Equal(state.Genesis().GetOwnerSidecarId(), firstId.Bytes()) || running.Identity().SidecarId != firstId {
+		t.Fatalf("the owner did not stand on its own base: %v", client.Pin())
+	}
+	repoId, err := sidecar.IdFromBytes(state.Genesis().GetConfigRepoId())
+	if err != nil {
+		t.Fatal(err)
+	}
+	heads, err := engines.RefHeads(ctx, repoId)
+	if err != nil || len(heads) != 1 || heads[0].GetVersion() != 1 {
+		t.Fatalf("the first config repo heads: %v %v", heads, err)
 	}
 }
 
@@ -484,13 +793,8 @@ func TestDaemonsFirstNetworkRetriesUnderItsDraft(t *testing.T) {
 	}
 }
 
-// A member device joining a network its first device bootstrapped on evs (QD-817), each device the daemon's Sidecar in
-// an instance of its own: the second, admitted by the first as the owner member's device, holds no generation of the
-// config repo, so its follower's full pass is withheld at base 1; its rows-only pass hands its key client the state its
-// admission lands in, unconfirmed, which builds its group client, a leaf, whose upkeep's KeyPackages reach gkm; the first
-// device's pending engine adds it to the config group, and its key client takes the Welcome on the unconfirmed state;
-// the keychain's wait wakes its follower, whose full re-read opens base 1's head over evs and stands, the device
-// admitted and its key client handed verified states from then on.
+// A new device publishes its ReaderKey, receives the config key by a signed LATE KeyDelivery under
+// its rows-only state, then verifies base one on real EVS. Both devices use the daemon's stock clients.
 func TestDaemonsSecondDeviceJoinsOverEvs(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*urTestTimeout)
 	defer cancel()
@@ -561,49 +865,34 @@ func TestDaemonsSecondDeviceJoinsOverEvs(t *testing.T) {
 		t.Fatal("the second device's clients are not built")
 	}
 
-	// the rows-only pass chooses the second device's key client on the state its admission lands in
 	select {
 	case <-secondClients.groupBuilt():
 	case <-ctx.Done():
-		t.Fatalf("the second device's group client was never built (%+v)", second.ConfigFollower().Status())
+		t.Fatal(ctx.Err())
 	}
-	state, configRepoId, confirmed := secondClients.gkm.joiningState()
-	if state == nil || confirmed || configRepoId != result.ConfigRepoId || state.Pin().GetVersion() < pin.GetVersion() ||
-		state.SidecarRow(identity.SidecarId) == nil || !secondClients.leaf {
-		t.Fatalf("the second device's key client joins at %v, confirmed %t", state, confirmed)
-	}
-	if second.ConfigFollower().Client() != nil || second.Admitted() {
-		t.Fatal("the second device stood before it held the config key")
-	}
-
-	// its KeyPackages reach gkm at its upkeep's next pass, which a resync would ask for
-	upkeep := func() *sidecar.GkmUpkeep {
-		secondClients.stateLock.Lock()
-		defer secondClients.stateLock.Unlock()
-		return secondClients.upkeep
-	}()
-	passes, _ := upkeep.Passes()
-	upkeep.RefillKeyPackages()
+	upkeep := secondClients.upkeep
 	for {
-		count, changed := upkeep.Passes()
-		if passes < count {
+		_, changed := upkeep.Passes()
+		state, repoId, confirmed := secondClients.gkm.joiningState()
+		if state != nil && (confirmed || repoId == result.ConfigRepoId) && state.Pin().GetVersion() >= pin.GetVersion() &&
+			state.SidecarRow(identity.SidecarId) != nil && len(upkeep.CurrentReaderKeySha256()) != 0 {
 			break
 		}
 		select {
 		case <-changed:
 		case <-ctx.Done():
-			t.Fatal("the second device's upkeep ran no pass")
+			t.Fatalf("the admitted device has no ReaderKey at its joining state: %v", second.ConfigFollower().Status())
 		}
 	}
-
-	// the first device adds it to the config group, and it takes the Welcome on its unconfirmed state
-	firstGroup := testUrClientsOf(first).builtGroup()
-	if err := firstGroup.RunPending(ctx, result.ConfigRepoId); err != nil {
-		t.Fatalf("the first device's Add: %v", err)
+	if err := first.ConfigFollower().Client().CatchUp(ctx); err != nil {
+		t.Fatal(err)
 	}
-	joined, err := secondClients.builtGroup().JoinWelcomes(ctx)
-	if err != nil || !slices.Equal(joined, []sidecar.Id{result.ConfigRepoId}) {
-		t.Fatalf("the second device's join: %v %v", joined, err)
+	firstGroup := testUrClientsOf(first).builtGroup()
+	if err := firstGroup.DeliverFirstWrap(ctx, result.ConfigRepoId, identity.SidecarId); err != nil {
+		t.Fatalf("the first device's delivery: %v", err)
+	}
+	if err := secondClients.builtGroup().SyncRepo(ctx, result.ConfigRepoId); err != nil {
+		t.Fatalf("the second device's first wrap: %v", err)
 	}
 
 	client := standing(second)

@@ -38,6 +38,7 @@ import (
 type fakeEvsFile struct {
 	content []byte
 	signer  sidecar.Id
+	refId   sidecar.Id
 	version uint64
 	// its push's sealed provenance as a read that asks gives it, nil for a push that sealed none
 	provenance *sidecar.EvsPushProvenance
@@ -47,6 +48,7 @@ type fakeEvsFile struct {
 type fakeMcpEvsRepo struct {
 	stateLock  sync.Mutex
 	files      map[string]*fakeEvsFile
+	refs       map[string]map[string]*fakeEvsFile
 	retained   map[string]map[uint64]*fakeEvsFile
 	children   map[string][]string
 	writeErr   error
@@ -91,7 +93,10 @@ func (self *fakeMcpEvsRepo) History(ctx context.Context, args *sidecar.EvsReadAr
 func (self *fakeMcpEvsRepo) ReadHead(ctx context.Context, args *sidecar.EvsReadArgs, out io.Writer) (*sidecar.EvsFileInfo, error) {
 	self.stateLock.Lock()
 	file, ok := self.files[args.Path]
-	if args.Version != 0 && (!ok || file.version != args.Version) {
+	if len(args.RefName) != 0 {
+		file, ok = self.refs[string(args.RefName)][args.Path]
+		ok = ok && (args.Version == 0 || file.version == args.Version)
+	} else if args.Version != 0 && (!ok || file.version != args.Version) {
 		file, ok = self.retained[args.Path][args.Version]
 	}
 	gate := self.gate
@@ -107,7 +112,7 @@ func (self *fakeMcpEvsRepo) ReadHead(ctx context.Context, args *sidecar.EvsReadA
 	if _, err := out.Write(file.content); err != nil {
 		return nil, err
 	}
-	info := &sidecar.EvsFileInfo{Path: args.Path, Version: file.version, CommitVersion: 9, SignerSidecarId: file.signer, Size: uint64(len(file.content))}
+	info := &sidecar.EvsFileInfo{RefId: file.refId, Path: args.Path, Version: file.version, CommitVersion: 9, SignerSidecarId: file.signer, Size: uint64(len(file.content))}
 	if args.Provenance && file.provenance != nil {
 		// only a read that asks is given the push's provenance (EvsReadArgs.Provenance)
 		provenance := *file.provenance

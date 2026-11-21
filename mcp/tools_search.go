@@ -71,7 +71,7 @@ func mcpSearchOfNetwork(call *McpCall) (McpSearch, error) {
 var (
 	errMcpSearchUnavailable = NewMcpError(McpCodeUnavailable, "this daemon runs no search engine for the network yet: run ur search status in your own terminal", true)
 	errMcpSearchArguments   = NewMcpError(McpCodeInvalidArguments, "search takes a query or filters, and scope, group_by, sort, verify, untrusted, limit and wait_ms within their ranges", false)
-	errMcpSearchUnbuilt     = NewMcpError(McpCodeInvalidArguments, "scope all and a named ref are not built yet: search each network on its default refs", false)
+	errMcpSearchUnbuilt     = NewMcpError(McpCodeInvalidArguments, "all-network scope requires a host-wide search session", false)
 	errMcpSearchBusy        = NewMcpError(McpCodeRateLimited, "this session's searches are busy: try again shortly", true)
 	errMcpSearchCursor      = NewMcpError(McpCodeInvalidArguments, "the cursor is not one this session holds", false)
 	errMcpSearchExpired     = NewMcpError(McpCodeFailedPrecondition, "cursor_expired: the search ended (an erasure, a drop or a lost read in its scope, or idle past its time); search again", false)

@@ -72,10 +72,12 @@ const gkmWrapStatusNotTried = 0
 // One item of a batch on its way to the store: its key and bytes, whether it is a LATE delivery, and where its answer
 // goes.
 type gkmWrapWrite struct {
-	key    string
-	body   []byte
-	late   bool
-	result *protocol.GkmWrapResult
+	beforePut  func() bool
+	wakeReader *sidecar.Id
+	key        string
+	body       []byte
+	late       bool
+	result     *protocol.GkmWrapResult
 }
 
 // What a batch judges each item against: gen/<g> as it stands, the repo's state and the STAGED bound.
@@ -263,7 +265,12 @@ func (self *GkmEngine) judgeDelivery(batch *gkmWrapBatchContext, deliveryBytes [
 	default:
 		return nil, 403, true
 	}
-	return &gkmWrapWrite{key: key, body: raw, late: body.GetDeliveryKind() == gkmDeliveryKindLate}, 0, true
+	write = &gkmWrapWrite{key: key, body: raw, late: body.GetDeliveryKind() == gkmDeliveryKindLate}
+	if write.late && delivery.Type == sidecar.GkmWrapTypeReader && !self.settings.DraftMls {
+		recipient, _ := sidecar.IdFromBytes(body.GetRecipient()) // judgeLateDelivery checked this id
+		write.wakeReader = &recipient
+	}
+	return write, 0, true
 }
 
 // §10.6's late row for one LATE delivery: 0 when it passes, else the status refusing it. ok false once it has
@@ -394,6 +401,17 @@ func (self *GkmEngine) serveWrapBatch(request *GkmRequest) {
 	if !self.writeWrapBatch(request, batch.groupId, generation, writes) {
 		return
 	}
+	// A first wrap can arrive without changing the generation, so its reader needs a work hint even
+	// when it has already seen that generation's commit.
+	readers := []sidecar.Id{}
+	for _, write := range writes {
+		if write.wakeReader != nil && (write.result.GetStatus() == 201 || write.result.GetStatus() == 412) {
+			readers = append(readers, *write.wakeReader)
+		}
+	}
+	if len(readers) != 0 {
+		self.hintWork(readers, protocol.GkmHintKind_GKM_HINT_PENDING, &batch.groupId, 0, nil)
+	}
 	request.Reply(reply)
 }
 
@@ -473,6 +491,9 @@ func (self *GkmEngine) putWraps(ctx context.Context, request *GkmRequest, writes
 			defer group.Done()
 			defer func() { <-slots }()
 			testHookBarrier(BarrierWrapPutBefore, barrierKey)
+			if write.beforePut != nil && !write.beforePut() {
+				return
+			}
 			winner, err := createGkmObject(ctx, request.Cluster, write.key, write.body, gkmDeliveryMaxByteCount)
 			testHookBarrier(BarrierWrapPutAfter, barrierKey)
 			switch {

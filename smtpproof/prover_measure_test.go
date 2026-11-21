@@ -127,8 +127,8 @@ func TestMeasureRecordsNothingWhereAUnitCannotProve(t *testing.T) {
 	if len(backend.statements) != 1 {
 		t.Errorf("proved %d parts after the first failed", len(backend.statements))
 	}
-	if settings := prover.sendSettings(); settings.DataProofBytes != DefaultProverSettings().DataProofBytes {
-		t.Errorf("a failed measure set the cap %d", settings.DataProofBytes)
+	if settings := prover.sendSettings(); settings != nil {
+		t.Fatal("a failed measure admitted a send")
 	}
 }
 
@@ -206,12 +206,41 @@ func TestMeasureClosesDataWhereAUnitCannotProveInTime(t *testing.T) {
 	mxSettings := testMxDefaults()
 	mxSettings.keywords = []string{"PIPELINING"}
 	job := testJob("a small body\r\n", "bob")
-	send := testRunSend(t, testTlsLegs()[0], mxSettings, settings, job)
+	backend := newTestWitnessBackend()
+	send := testRunSendThrough(t, testTlsLegs()[0], mxSettings, settings, job, backend, backend, nil, measure)
 	if send.err != nil || send.result == nil || !send.result.TooLarge || send.result.DataProofByteCount != 0 {
 		t.Fatalf("result %+v, %v", send.result, send.err)
 	}
 	if commands := send.mx.seen(); len(commands) != 1 {
 		t.Errorf("the MX saw %q, want EHLO alone", commands)
+	}
+	backend = newTestWitnessBackend()
+	send = testRunSendThrough(t, testTlsLegs()[0], testMxDefaults(), settings, job, backend, backend, nil, measure)
+	testExpectOneTransaction(t, testTlsLegs()[0], send, job)
+}
+
+func TestMeasuredPositiveDataLimitIsAppliedBeforeMail(t *testing.T) {
+	prover, _ := testMeasuringProver(map[uint16]time.Duration{tlsSuiteAes128GcmSha256: 10 * time.Second})
+	mx := testMxDefaults()
+	mx.keywords = []string{"PIPELINING"}
+	leg := testTlsLegs()[0]
+	job := testJob("a small body\r\n", "bob")
+	for _, window := range []time.Duration{time.Second, time.Hour} {
+		prover.settings.DataConnectionTime = window
+		measure, err := prover.Measure(context.Background())
+		if err != nil || measure.DataProofBytes == 0 {
+			t.Fatalf("measure for %v: %+v, %v", window, measure, err)
+		}
+		backend := newTestWitnessBackend()
+		send := testRunSendThrough(t, leg, mx, prover.sendSettings(), job, backend, backend, nil, measure)
+		if window == time.Hour {
+			testExpectOneTransaction(t, leg, send, job)
+			continue
+		}
+		if send.err != nil || send.result == nil || !send.result.TooLarge || send.result.DataProofByteCount != measure.DataProofBytes ||
+			len(send.mx.seen()) != 1 {
+			t.Fatalf("cap %d: %+v, %v; commands %v", measure.DataProofBytes, send.result, send.err, send.mx.seen())
+		}
 	}
 }
 
@@ -225,13 +254,13 @@ func TestMeasureSkipsFamiliesWithoutKeysAndFailsWithNone(t *testing.T) {
 		t.Errorf("%d parts, rate %d", len(backend.statements), measure.DataBytesPerSecond)
 	}
 
-	// what cli/ holds before keys load: the measure fails, and the settings' unmeasured limits stand
+	// Before keys load, a failed measure keeps this host queued.
 	unloaded := NewProver(DefaultProverSettings(), DefaultKeySettings(), nil, t.TempDir())
 	if _, err := unloaded.Measure(context.Background()); !errors.Is(err, errNoKeys) {
 		t.Errorf("err %v", err)
 	}
-	if settings := unloaded.sendSettings(); settings.DataProofBytes != DefaultProverSettings().DataProofBytes {
-		t.Errorf("cap %d", settings.DataProofBytes)
+	if settings := unloaded.sendSettings(); settings != nil {
+		t.Fatal("a prover without a measurement admitted a send")
 	}
 }
 

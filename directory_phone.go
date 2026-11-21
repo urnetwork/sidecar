@@ -1,36 +1,10 @@
 //go:build !ios_extension
 
-// §16.11's phones row in M6's form (RECORD-M6-27): a phone keeps the directory's current announcements only while a
-// view is open, in memory, and fetches them through a DirectoryView apart from any sync, up to
-// Directory.PhoneMeteredByteCount a metered session. It sits in the root, not the sdk, because FS-86's M6 case runs a
-// cold phone before any app host exists at M8; SDK-M6-03's SidecarDirectory.List wraps it.
-//
-//	order      the announcing sidecars' streams newest first, by the push sequence their last commit raised, then by
-//	           id: an order no filter or query changes, since a view takes neither until it lists (I-19), so every
-//	           filter at one moment asks evs the same reads
-//	fetch      each stream whole from its first version, 64 to a request (§11.9), following more and paging the log for
-//	           behind, each read kept in the view's memory store before the next; the reader verifies them as a
-//	           sync's does, and the fold shows them as List does
-//	metered    on a metered link at most PhoneMeteredByteCount of reads a session: the first request reads the newest
-//	           stream alone, so a version's cost is measured before any is guessed, and each later one is planned from
-//	           its streams' versions left at the costliest version read so far; fetching stops at a stream the rest of
-//	           the cap would not hold, so the view reports partial coverage: the announcing sidecars fetched and those
-//	           left, the bytes left, and waiting=metered (§18.4)
-//	continue   on an unmetered link (SetMetered(false)) or once the person allows the metered bytes (AllowMetered),
-//	           Fetch goes on from where it stopped; a stream read in part resumes at its next version, so nothing is
-//	           read twice
-//	refresh    while the view stays open, a Fetch with nothing left lists the streams moved since its last listing
-//	           (moved_after) and reads what they added, in the same order
-//	never      a partial view is never shown as complete or as empty: its coverage says what is left; a phone stays off
-//	           the follow, leasing nothing, and keeps no directory buckets (D-MCP-31, D-SDK-21)
-//
-// At M6 evs's listing names each stream's versions and not its bytes, so the cap holds to what was read and the plan
-// to an estimate: a request can pass the cap by what its streams cost above the costliest version read before it, and
-// the first by its one stream's frame. The bytes left are the versions left at the mean a fetched version cost, or,
-// before any fetch, Directory.PhoneVersionByteCount, an entry and its push statement as §16.11's sizes row prices
-// them. From format 2 the cards ref's statements name each card's size.
-//
-// Safe for concurrent use: one Fetch at a time, and List any time. Close drops everything the view holds.
+// An open phone view of §16.11's team directory. Format 2 files are planned by
+// verified metadata, newest first, and opened within the metered allowance. Reads
+// of retained announce streams resume by writer and version. Filters run locally
+// over verified items and never change what the view fetches. Closing a native
+// view drops its separate sealed store.
 
 package sidecar
 
@@ -38,8 +12,12 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"fmt"
+	"math"
 	"slices"
 	"sync"
+
+	"github.com/urnetwork/sidecar/protocol"
 )
 
 // DirectoryCoverage.Waiting while the metered cap holds a view (§18.4's waiting=metered).
@@ -58,11 +36,11 @@ type DirectoryViewArgs struct {
 
 // How much of the directory a view holds.
 type DirectoryCoverage struct {
-	// Every announcing sidecar's stream is fetched to the head the view listed.
+	// Every listed announcement file and stream has been read and folded.
 	Complete bool
 	// Why fetching stopped short: DirectoryCoverageWaitingMetered while the metered cap holds it; empty otherwise.
 	Waiting string
-	// The announcing sidecars whose streams were fetched whole, and those left, in fetch order.
+	// The announcing sidecars fetched whole, and those with files or stream versions left.
 	FetchedSidecarIds []Id
 	LeftSidecarIds    []Id
 	// The bytes the view fetched, those of them on a metered link, and an estimate of the bytes left.
@@ -87,12 +65,13 @@ type directoryViewStream struct {
 // One open view of a phone's.
 type DirectoryView struct {
 	client      *DirectoryClient
+	files       *directoryFiles
 	directoryId Id
-	memory      *searchMemoryStore
-	store       *DirectoryStore
-	adapter     *directoryStreams
-	reader      *RecordReader
-	fold        *DirectoryFold
+
+	store   *DirectoryStore
+	adapter *directoryStreams
+	reader  *RecordReader
+	fold    *DirectoryFold
 
 	// one Fetch at a time
 	fetchLock sync.Mutex
@@ -105,19 +84,25 @@ type DirectoryView struct {
 	// the push sequence the last listing ended at: the next one's moved_after
 	sequence uint64
 	// what is left, in fetch order, and the writers fetched whole
-	queue      []*directoryViewStream
-	fetchedIds []Id
+	queue []*directoryViewStream
+	// Metadata only, newest changed path first. File bytes are opened within budget.
+	cardQueue    []*DirectoryCardFile
+	cardVersion  uint64
+	refreshCards bool
+	pendingIds   []Id
+	verified     bool
+	fetchedIds   []Id
 	// bytes and versions read so far, and the most one version has cost
 	fetchedByteCount    int64
 	meteredByteCount    int64
+	streamByteCount     int64
 	fetchedVersionCount int64
 	maxVersionByteCount int64
 	waiting             string
 	closed              bool
 }
 
-// Opens a view of the directory, which fetches nothing until its first Fetch and holds what it fetches in memory
-// alone until Close. ErrDirectoryNone without a directory.
+// Opens a view of the directory. Fetch fills its separate store, Close clears it.
 func (self *DirectoryClient) View(args *DirectoryViewArgs) (*DirectoryView, error) {
 	directoryId, ok := self.DirectoryId()
 	if !ok {
@@ -126,34 +111,51 @@ func (self *DirectoryClient) View(args *DirectoryViewArgs) (*DirectoryView, erro
 	if args == nil {
 		args = &DirectoryViewArgs{Metered: true}
 	}
-	memory := newSearchMemoryStore()
-	store := NewDirectoryStore(memory)
-	if err := store.Load(directoryId); err != nil {
+	var sessionStore SidecarStore = newSearchMemoryStore()
+	if self.viewStore != nil {
+		var err error
+		if sessionStore, err = self.openViewStore(); err != nil {
+			return nil, err
+		}
+	}
+	copy, err := NewDirectoryClient(&DirectoryClientArgs{
+		SidecarId: self.sidecarId, NetworkId: self.networkId, Store: sessionStore, Streams: self.adapter.streams,
+		Auth: self.auth, RecordAuth: self.recordAuth, Settings: self.settings, RecordSettings: self.recordSet,
+		Clock: self.clock, Alarm: self.alarm, Log: self.log, Redactor: self.redactor, ReadOnly: true,
+	})
+	if err != nil {
 		return nil, err
 	}
-	adapter := &directoryStreams{store: store, streams: self.adapter.streams}
-	view := &DirectoryView{
-		client:       self,
-		directoryId:  directoryId,
-		memory:       memory,
-		store:        store,
-		adapter:      adapter,
-		fold:         NewDirectoryFold(directoryId, self.alarm),
-		metered:      args.Metered,
-		allowMetered: args.AllowMetered,
+	copy.store.cardsOnDisk = self.viewStore != nil
+	if err := copy.store.Load(directoryId); err != nil {
+		return nil, err
 	}
-	view.reader = NewRecordReader(&RecordReaderArgs{
-		SidecarId:        self.sidecarId,
-		Store:            memory,
-		Streams:          func() RecordStreams { return adapter },
-		Auth:             self.recordAuth,
-		Alarm:            self.alarm,
-		Clock:            self.clock,
-		Settings:         self.recordSet,
-		Log:              self.log,
-		UnretainedAtHead: true,
-	})
+	copy.SetCardSettings(self.cardSettings())
+	view := &DirectoryView{
+		client: self, directoryId: directoryId, store: copy.store, adapter: copy.adapter,
+		reader: copy.reader, fold: copy.currentFold(), metered: args.Metered, allowMetered: args.AllowMetered,
+	}
+	view.files = copy.filesOf(view.fold)
 	return view, nil
+}
+
+// Opens a sealed scope for one native view. The first view after a restart reclaims interrupted scopes.
+func (self *DirectoryClient) openViewStore() (SidecarStore, error) {
+	self.viewStoreLock.Lock()
+	defer self.viewStoreLock.Unlock()
+	if !self.viewStoreReady {
+		files, err := self.viewStore.List("")
+		if err != nil {
+			return nil, err
+		}
+		for _, file := range files {
+			if err := self.viewStore.Remove(file.Name); err != nil {
+				return nil, err
+			}
+		}
+		self.viewStoreReady = true
+	}
+	return self.viewStore.Directory(recordChainIdText(NewId()), "")
 }
 
 // The link changed: metered or not.
@@ -183,7 +185,7 @@ func (self *DirectoryView) versionByteCountWithLock() int64 {
 	if self.fetchedVersionCount == 0 {
 		return self.client.settings.PhoneVersionByteCount
 	}
-	return max(1, self.fetchedByteCount/self.fetchedVersionCount)
+	return max(1, self.streamByteCount/self.fetchedVersionCount)
 }
 
 // Lists the directory's streams that hold more than the view does, in fetch order: newest first by the push sequence
@@ -209,6 +211,7 @@ func (self *DirectoryView) list(ctx context.Context, cards DirectoryCards) error
 	heldVersions := self.store.State().StreamVersions
 	streams := []*listed{}
 	erasureMoved := false
+	var cardsHead uint64
 	for _, ref := range listing.Refs {
 		switch ref.Kind {
 		case DirectoryRefStream:
@@ -216,8 +219,20 @@ func (self *DirectoryView) list(ctx context.Context, cards DirectoryCards) error
 				stream := &directoryViewStream{writerId: ref.WriterSidecarId, pinVersion: held, headVersion: ref.Version}
 				streams = append(streams, &listed{stream: stream, sequence: ref.Sequence})
 			}
+		case DirectoryRefCards:
+			if listing.Format >= directoryRepoFormat2 {
+				cardsHead = max(cardsHead, ref.Version)
+			}
 		case DirectoryRefErasure:
 			erasureMoved = erasureMoved || 0 < ref.Version
+		}
+	}
+	if err := self.store.NoteFormat(listing.Format); err != nil {
+		return err
+	}
+	if self.cardVersion < cardsHead {
+		if err := self.planCards(ctx, cards, cardsHead); err != nil {
+			return err
 		}
 	}
 	slices.SortFunc(streams, func(a *listed, b *listed) int {
@@ -225,13 +240,145 @@ func (self *DirectoryView) list(ctx context.Context, cards DirectoryCards) error
 	})
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	for _, stream := range streams {
-		self.queue = append(self.queue, stream.stream)
+	merged := make([]*directoryViewStream, 0, len(streams)+len(self.queue))
+	moved := make(map[Id]bool, len(streams))
+	for _, ref := range streams {
+		merged = append(merged, ref.stream)
+		moved[ref.stream.writerId] = true
 	}
+	for _, held := range self.queue {
+		if !moved[held.writerId] {
+			merged = append(merged, held)
+		}
+	}
+	self.queue = merged
 	self.erasureMoved = self.erasureMoved || erasureMoved
 	self.sequence = listing.Sequence
 	self.listed = true
+	self.refreshCards = false
 	return nil
+}
+
+// Reduces verified changes to the newest version of each path before opening any file.
+func (self *DirectoryView) planCards(ctx context.Context, cards DirectoryCards, head uint64) error {
+	source, ok := cards.(DirectoryViewCards)
+	if !ok {
+		return fmt.Errorf("%w: the format 2 view needs card metadata", ErrDirectoryCardsUnavailable)
+	}
+	files := map[string]*DirectoryCardFile{}
+	for _, file := range self.cardQueue {
+		files[file.Path] = file
+	}
+	through := self.cardVersion
+	for through < head {
+		page, err := source.PlanCards(ctx, self.directoryId, through)
+		if err != nil {
+			return err
+		}
+		if page == nil || page.ThroughVersion <= through {
+			return fmt.Errorf("%w: card metadata stopped at %d of %d", ErrDirectoryCardsUnavailable, through, head)
+		}
+		for _, file := range page.Files {
+			if file == nil || file.PushVersion <= through || file.PushVersion > page.ThroughVersion {
+				continue
+			}
+			_, card := directoryCardPathSidecar(file.Path)
+			_, repo := directoryRepoPathRepo(file.Path)
+			if !card && !repo {
+				continue
+			}
+			if earlier := files[file.Path]; earlier == nil || earlier.PushVersion < file.PushVersion {
+				files[file.Path] = file
+			}
+		}
+		through = page.ThroughVersion
+	}
+	queue := make([]*DirectoryCardFile, 0, len(files))
+	for _, file := range files {
+		queue = append(queue, file)
+	}
+	slices.SortFunc(queue, func(a, b *DirectoryCardFile) int {
+		return cmp.Or(cmp.Compare(b.PushVersion, a.PushVersion), cmp.Compare(a.Path, b.Path))
+	})
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.cardQueue, self.cardVersion = queue, through
+	return nil
+}
+
+// Opens planned files in recency order and leaves the first unaffordable file on the queue.
+func (self *DirectoryView) fetchCards(ctx context.Context, cards DirectoryCards) error {
+	for len(self.cardQueue) > 0 {
+		file := self.cardQueue[0]
+		size := int64(min(file.StoredByteCount, uint64(math.MaxInt64)))
+		settings := self.files.client.cardSettings()
+		limit := settings.RepoFileByteCount
+		if _, isCard := directoryCardPathSidecar(file.Path); isCard {
+			limit = settings.CardFileByteCount
+		}
+		// The authenticated length already proves this file exceeds its format cap.
+		// Its empty body goes through the normal refusal and alarm without a download.
+		overCap := size > int64(settings.StoredByteCount(limit))
+		if overCap {
+			size = 0
+		}
+		paused := func() bool {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			budget, capped := self.budgetWithLock()
+			if capped && budget < size {
+				self.waiting = DirectoryCoverageWaitingMetered
+				return true
+			}
+			return false
+		}()
+		if paused {
+			return nil
+		}
+		current := *file
+		if !file.Removed && !overCap {
+			source, ok := cards.(DirectoryViewCards)
+			if !ok {
+				return ErrDirectoryCardsUnavailable
+			}
+			body, err := source.ReadPlannedCard(ctx, self.directoryId, file)
+			if err != nil {
+				self.stateLock.Lock()
+				self.refreshCards = true
+				self.stateLock.Unlock()
+				return err
+			}
+			if uint64(len(body)) > file.StoredByteCount {
+				return fmt.Errorf("%w: card exceeds its verified size", ErrDirectoryFormatInvalid)
+			}
+			current.Content = body
+		}
+		if err := self.store.ApplyCards(&DirectoryCardsChanges{Files: []*DirectoryCardFile{&current}}); err != nil {
+			return err
+		}
+		func() {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			self.cardQueue = self.cardQueue[1:]
+			self.fetchedByteCount += size
+			if self.metered {
+				self.meteredByteCount += size
+			}
+			id := directoryViewCardWriter(file)
+			if !slices.Contains(self.fetchedIds, id) {
+				self.fetchedIds = append(self.fetchedIds, id)
+			}
+		}()
+	}
+	return nil
+}
+
+// The announcing writer a coverage row names, including a card removed by another sidecar.
+func directoryViewCardWriter(file *DirectoryCardFile) Id {
+	if writer, ok := directoryCardPathSidecar(file.Path); ok {
+		return writer
+	}
+	return file.SignerSidecarId
 }
 
 // The next request's streams from the queue's front: under the cap the newest alone until a version's cost is
@@ -304,6 +451,7 @@ func (self *DirectoryView) keep(stream *directoryViewStream, result *DirectorySt
 		self.maxVersionByteCount = max(self.maxVersionByteCount, (byteCount+versionCount-1)/versionCount)
 	}
 	self.fetchedByteCount += byteCount
+	self.streamByteCount += byteCount
 	if self.metered {
 		self.meteredByteCount += byteCount
 	}
@@ -314,17 +462,50 @@ func (self *DirectoryView) keep(stream *directoryViewStream, result *DirectorySt
 // Fetches what the view has left, in its order, until every stream is read to the head it listed or the metered cap
 // holds it; then verifies what it holds and folds it. With nothing left it lists what moved since its last listing
 // first. A view whose cap held it fetches nothing more until SetMetered or AllowMetered lets it.
-func (self *DirectoryView) Fetch(ctx context.Context) error {
+func (self *DirectoryView) Fetch(ctx context.Context) (err error) {
 	self.fetchLock.Lock()
 	defer self.fetchLock.Unlock()
+	defer func() {
+		code, refused := RecordStreamRefusalCode(err)
+		if refused && code == protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE {
+			// The service can know about the loss before the phone's config catches up.
+			err = errors.Join(err, self.resetData())
+		} else if errors.Is(err, ErrRecordNotReader) {
+			// An unbound record view also answers no read. It can verify on the
+			// next refresh once the record state is available.
+			if state := self.client.recordAuth(); state != nil && state.Pin() != nil {
+				err = errors.Join(err, self.resetData())
+			}
+		}
+	}()
 	listing, closed := func() (bool, bool) {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		self.waiting = ""
-		return !self.listed || len(self.queue) == 0, self.closed
+		self.verified = false
+		return !self.listed || self.refreshCards || (len(self.queue) == 0 && len(self.cardQueue) == 0), self.closed
 	}()
 	if closed {
 		return ErrDirectoryViewClosed
+	}
+	auth := self.client.auth()
+	directoryId, exists := auth.Directory()
+	if !exists || directoryId != self.directoryId {
+		self.closeLocked()
+		return ErrDirectoryNone
+	}
+	standing, err := auth.SignerStanding(self.client.sidecarId, auth.Pin())
+	if err != nil {
+		return err
+	}
+	if standing == DirectoryStandingUnadmitted || standing == DirectoryStandingRevoked || standing == DirectoryStandingExpired {
+		return errors.Join(ErrDirectoryReadLost, self.resetData())
+	}
+	if self.fold == nil {
+		// Clearing the prior view may have been interrupted by a locked store.
+		if err := self.resetData(); err != nil {
+			return err
+		}
 	}
 	cards := self.client.boundCards()
 	if listing {
@@ -332,7 +513,10 @@ func (self *DirectoryView) Fetch(ctx context.Context) error {
 			return err
 		}
 	}
-	for {
+	if err := self.fetchCards(ctx, cards); err != nil {
+		return err
+	}
+	for len(self.cardQueue) == 0 {
 		batch := func() []*directoryViewStream {
 			self.stateLock.Lock()
 			defer self.stateLock.Unlock()
@@ -349,16 +533,23 @@ func (self *DirectoryView) Fetch(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		if len(results) != len(batch) {
+			return fmt.Errorf("%w: incomplete directory stream read", ErrDirectoryCardsUnavailable)
+		}
 		for index, result := range results {
-			if result == nil || len(batch) <= index || result.WriterSidecarId != batch[index].writerId {
-				continue
-			}
 			stream := batch[index]
+			if result == nil || result.WriterSidecarId != stream.writerId {
+				return fmt.Errorf("%w: the requested directory stream is missing", ErrDirectoryCardsUnavailable)
+			}
+			before := stream.pinVersion
 			if 0 < result.Behind {
 				for {
 					page, err := cards.ReadStreamLog(ctx, self.directoryId, stream.writerId, stream.pinVersion)
 					if err != nil {
 						return err
+					}
+					if page == nil || page.WriterSidecarId != stream.writerId {
+						return fmt.Errorf("%w: missing directory log page", ErrDirectoryCardsUnavailable)
 					}
 					held := stream.pinVersion
 					if err := self.keep(stream, page); err != nil {
@@ -370,6 +561,9 @@ func (self *DirectoryView) Fetch(ctx context.Context) error {
 				}
 			} else if err := self.keep(stream, result); err != nil {
 				return err
+			}
+			if stream.pinVersion <= before {
+				return fmt.Errorf("%w: directory stream did not advance", ErrDirectoryCardsUnavailable)
 			}
 		}
 		func() {
@@ -396,6 +590,36 @@ func (self *DirectoryView) Fetch(ctx context.Context) error {
 		return err
 	}
 	self.fold.Update(self.reader.Entries(self.directoryId))
+	var pending []Id
+	held := self.store.filesForFold()
+	self.files.stateLock.Lock()
+	for _, file := range held {
+		if self.files.judged[file.Path] < file.PushVersion {
+			id := directoryViewCardWriter(file)
+			if !slices.Contains(pending, id) {
+				pending = append(pending, id)
+			}
+		}
+	}
+	self.files.stateLock.Unlock()
+	// RecordReader also withholds streams whose auth pin is ahead of the local
+	// state. Check its verified positions without copying the stream history.
+	heldStreams := self.store.State().StreamVersions
+	self.reader.stateLock.Lock()
+	log := self.reader.logs[self.directoryId]
+	verifiedStreams := log != nil && log.complete
+	if !verifiedStreams && log != nil {
+		for id, head := range heldStreams {
+			if log.streamVersions[id] < head && !slices.Contains(pending, id) {
+				pending = append(pending, id)
+			}
+		}
+	}
+	self.reader.stateLock.Unlock()
+	self.stateLock.Lock()
+	self.pendingIds = pending
+	self.verified = len(pending) == 0 && verifiedStreams
+	self.stateLock.Unlock()
 	// a phone's notice leases learn its member's workers from what the view shows (directory_notice.go)
 	self.client.notePhoneView(self)
 	return nil
@@ -406,18 +630,30 @@ func (self *DirectoryView) Coverage() *DirectoryCoverage {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	coverage := &DirectoryCoverage{
-		Complete:          self.listed && len(self.queue) == 0,
+		Complete:          !self.closed && self.verified && self.listed && len(self.queue) == 0 && len(self.cardQueue) == 0,
 		Waiting:           self.waiting,
 		FetchedSidecarIds: slices.Clone(self.fetchedIds),
-		LeftSidecarIds:    []Id{},
+		LeftSidecarIds:    slices.Clone(self.pendingIds),
 		FetchedByteCount:  self.fetchedByteCount,
 		MeteredByteCount:  self.meteredByteCount,
 	}
+	for _, file := range self.cardQueue {
+		id := directoryViewCardWriter(file)
+		if !slices.Contains(coverage.LeftSidecarIds, id) {
+			coverage.LeftSidecarIds = append(coverage.LeftSidecarIds, id)
+		}
+		coverage.LeftByteCount += int64(min(file.StoredByteCount, uint64(math.MaxInt64-coverage.LeftByteCount)))
+	}
 	perVersion := self.versionByteCountWithLock()
 	for _, stream := range self.queue {
-		coverage.LeftSidecarIds = append(coverage.LeftSidecarIds, stream.writerId)
+		if !slices.Contains(coverage.LeftSidecarIds, stream.writerId) {
+			coverage.LeftSidecarIds = append(coverage.LeftSidecarIds, stream.writerId)
+		}
 		coverage.LeftByteCount += int64(stream.headVersion-stream.pinVersion) * perVersion
 	}
+	coverage.FetchedSidecarIds = slices.DeleteFunc(coverage.FetchedSidecarIds, func(id Id) bool {
+		return slices.Contains(coverage.LeftSidecarIds, id)
+	})
 	if coverage.Complete {
 		coverage.Waiting = ""
 	}
@@ -428,27 +664,68 @@ func (self *DirectoryView) Coverage() *DirectoryCoverage {
 // what is left, however few items it shows.
 func (self *DirectoryView) List(filter *DirectoryFilter) *DirectoryViewPage {
 	items := []*DirectoryItem{}
-	closed := func() bool {
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
-		return self.closed
-	}()
-	if !closed {
-		items = directoryFilterItems(self.fold.View(self.client.auth(), self.client.clock.Now().UnixMilli()), filter)
+	self.stateLock.Lock()
+	fold := self.fold
+	self.stateLock.Unlock()
+	if fold != nil {
+		items = directoryFilterItems(fold.View(self.client.auth(), self.client.clock.Now().UnixMilli()), filter)
 	}
 	return &DirectoryViewPage{Items: items, Coverage: self.Coverage()}
+}
+
+// Drops a lost read immediately. The same open subscription can try the current
+// heads again when read rights return, under the remainder of its metered allowance.
+func (self *DirectoryView) resetData() error {
+	session := self.files.client
+	self.stateLock.Lock()
+	self.fold = nil
+	self.listed, self.verified, self.erasureMoved, self.refreshCards = false, false, false, false
+	self.sequence, self.cardVersion = 0, 0
+	self.queue, self.cardQueue = nil, nil
+	self.fetchedIds, self.pendingIds = nil, nil
+	self.waiting = ""
+	self.stateLock.Unlock()
+	if err := self.store.Reset(); err != nil {
+		return err
+	}
+	if err := self.store.Load(self.directoryId); err != nil {
+		return err
+	}
+	session.stateLock.Lock()
+	session.fold = nil
+	session.stateLock.Unlock()
+	session.reader = session.newReader()
+	self.reader = session.reader
+	self.adapter.setErasureMoved(false)
+	fold := session.currentFold()
+	self.files = session.filesOf(fold)
+	self.stateLock.Lock()
+	self.fold = fold
+	self.stateLock.Unlock()
+	return nil
 }
 
 // Closes the view: everything it fetched is dropped, as a phone keeps the directory only while its view is open.
 func (self *DirectoryView) Close() {
 	self.fetchLock.Lock()
 	defer self.fetchLock.Unlock()
+	self.closeLocked()
+}
+
+func (self *DirectoryView) closeLocked() {
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		self.closed = true
+		self.fold = nil
+		self.cardQueue = nil
 		self.queue = nil
+		self.pendingIds = nil
+		self.fetchedIds = nil
 	}()
-	self.memory.clear()
-	self.fold.Update(nil)
+	if err := self.store.Reset(); err != nil {
+		self.client.log.Warningf("[directory]could not clear the closed view: %s", err)
+	}
+	self.files = nil
+	self.reader = nil
 }

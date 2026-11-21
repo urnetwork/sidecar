@@ -361,14 +361,8 @@ func TestDaemonWithholdsEveryBaseWithEitherHookUnset(t *testing.T) {
 	}
 }
 
-// Both hooks set: the composition's reader reads base 1 at the start's genesis state, which the follower holds from its
-// first read, so it finds the config repo the genesis names and builds the EvsClient over the key client; a device that
-// holds no generation of that repo yet, handed no state at that first read, gets no key from the key client, so base 1
-// is withheld. The follower then joins (QD-817): its rows-only pass hands the key client its state unconfirmed, which
-// chooses the group client, a member device's with a leaf, gives the upkeep its member-device role so KeyPackages reach
-// gkm, and names the admission its MLS engine is built under, while no verified state is given; the full pass's next
-// read of base 1 reaches that group client, which looks for the config repo's key on the unconfirmed state alone. With
-// no Welcome or wrap at gkm for it here, base 1 stays withheld and the follower never stands.
+// With no config key a full follower withholds base one. The network identity already has a KeyDelivery
+// client for the rows-only join, and it cannot seal on that state.
 func TestDaemonReadsBaseOneAtTheStartsState(t *testing.T) {
 	world := newTestUrFollowWorld(t, 1)
 	network := world.networks[0]
@@ -384,37 +378,26 @@ func TestDaemonReadsBaseOneAtTheStartsState(t *testing.T) {
 	if read.standing || read.verified == nil || read.verified.Pin().GetVersion() != 0 {
 		t.Fatalf("the follower at base 1's read: standing %t, at %v", read.standing, read.verified)
 	}
-	// the start's genesis state names neither this sidecar's row nor it as the Genesis's owner, and the rows-only pass
-	// has handed nothing over yet, so no key client is chosen for it
-	if !errors.Is(read.err, errUrKeysUnchosen) {
-		t.Fatalf("base 1's read stopped at %v, not at the unchosen key client", read.err)
-	}
-
-	// the rows-only pass chose the key client, and its build woke the follower for the next full pass
-	second := testUrNextRead(t, world, answers)
-	if !errors.Is(second.err, sidecar.ErrConfigHeadUnavailable) || errors.Is(second.err, errUrKeysUnchosen) {
-		t.Fatalf("base 1's read once the key client joins: %v", second.err)
-	}
-	if second.standing || second.verified == nil || second.verified.Pin().GetVersion() != 0 {
-		t.Fatalf("the follower at base 1's second read: standing %t, at %v", second.standing, second.verified)
-	}
 	clients := testUrClientsOf(running)
-	if clients == nil || clients.builtGroup() == nil || !clients.leaf {
-		t.Fatal("the joining member device's group client is not built with a leaf")
+	if clients == nil || clients.builtGroup() == nil || !clients.builtGroup().KeyDeliveryOnly() {
+		t.Fatal("the joining member device has no KeyDelivery client")
 	}
 	identity := running.Identity()
-	state, configRepoId, confirmed := clients.gkm.joiningState()
-	if state == nil || confirmed || configRepoId != network.ConfigRepoId() || state.SidecarRow(identity.SidecarId) == nil {
-		t.Fatalf("the key client holds %v, confirmed %t, for repo %s", state, confirmed, configRepoId)
+	for {
+		_, changed := clients.upkeep.Passes()
+		state, repoId, confirmed := clients.gkm.joiningState()
+		if state != nil && !confirmed && repoId == network.ConfigRepoId() && state.SidecarRow(identity.SidecarId) != nil {
+			break
+		}
+		select {
+		case <-changed:
+		case <-world.ctx.Done():
+			t.Fatal("the rows-only pass never reached the client's admission")
+		}
 	}
+	configRepoId := network.ConfigRepoId()
 	if clients.gkm.newestState() != nil {
 		t.Fatal("the key client holds a verified state before the follower stands")
-	}
-	if !clients.upkeepRole().MemberDevice {
-		t.Fatal("the upkeep keeps no KeyPackages for the joining member device")
-	}
-	if admission, err := clients.admission(); err != nil || !bytes.Equal(admission, state.SidecarRow(identity.SidecarId).GetAdmissionSha256()) {
-		t.Fatalf("the joining device's MLS admission: %v", err)
 	}
 	// a seal waits for a verified state
 	if _, err := clients.builtGroup().EnsureWritable(world.ctx, configRepoId); !errors.Is(err, sidecar.ErrGkmUnavailable) {
@@ -428,10 +411,7 @@ func TestDaemonReadsBaseOneAtTheStartsState(t *testing.T) {
 	}
 }
 
-// Each network's key client is chosen from its sidecar's row at the first verified state that names it: a member
-// device's holds a leaf, its MLS engine built under the admission its row names; an ephemeral sidecar's and a tagged
-// one's hold wraps only, built with no MLS engine, so a group creation refuses as one that holds no leaf, the network's
-// engine is never built, and the upkeep keeps no KeyPackage for them.
+// Member devices, ephemeral devices and tagged agents all use the stock KeyDelivery client.
 func TestDaemonChoosesEachKeyClientFromItsRow(t *testing.T) {
 	world := newTestUrFollowWorld(t, 3)
 	kinds := []testUrAdmission{testUrMemberDevice, testUrEphemeral, testUrTagged}
@@ -450,34 +430,9 @@ func TestDaemonChoosesEachKeyClientFromItsRow(t *testing.T) {
 		if again, _ := clients.groupClient(); again != group {
 			t.Fatalf("network %d built two group clients", i)
 		}
-		member := kinds[i] == testUrMemberDevice
-		if clients.leaf != member || clients.upkeepRole().MemberDevice != member {
-			t.Fatalf("network %d (kind %d): leaf %t, member device %t", i, kinds[i], clients.leaf, clients.upkeepRole().MemberDevice)
+		if !group.KeyDeliveryOnly() || !gkm.(*urNetworkGkm).KeyDeliveryOnly() {
+			t.Fatalf("network %d selected an epoch-based key client", i)
 		}
-		configRepoId := network.ConfigRepoId()
-		_, created := gkm.CreateGroup(world.ctx, &sidecar.GkmCreateGroupArgs{
-			NetworkId: network.NetworkId(), RepoId: configRepoId, Kind: protocol.RepoKind_REPO_KIND_CONFIG,
-		})
-		if member {
-			engine, err := clients.mls.get()
-			row := clients.sidecarRow()
-			if err != nil || engine == nil || !bytes.Equal(clients.mls.admissionSha256, row.GetAdmissionSha256()) {
-				t.Fatalf("network %d's MLS engine: %v", i, err)
-			}
-			continue
-		}
-		// the group client's own refusal, which it answers before any state or engine is asked: it holds no engine
-		if !errors.Is(created, sidecar.ErrGkmUnavailable) || !strings.Contains(created.Error(), "creates no group") {
-			t.Fatalf("network %d's group creation by a sidecar with no leaf: %v", i, created)
-		}
-		if _, err := clients.mls.get(); !errors.Is(err, sidecar.ErrGkmUnavailable) {
-			t.Fatalf("network %d's MLS engine for a sidecar with no leaf: %v", i, err)
-		}
-		clients.mls.stateLock.Lock()
-		engine := clients.mls.engine
-		clients.mls.stateLock.Unlock()
-		if engine != nil {
-			t.Fatalf("network %d built an MLS engine for a sidecar with no leaf", i)
-		}
+
 	}
 }

@@ -63,7 +63,7 @@ type EvsCommitted struct {
 	// The statement and what its payload checked to.
 	Statement *sidecar.EvsStatement
 	Payload   *sidecar.EvsCheckedPayload
-	// The record's bytes, which the batch stores until evacuation moves them, and the request's.
+	// The committed batch records' bytes (the selected parts and their seal for a multipart push), and the request's.
 	RecordByteCount  int64
 	RequestByteCount int64
 	// The record's purge list for the purge, nil when it lists none the purge takes (push_purge.go).
@@ -103,12 +103,15 @@ func (self *pushAttempt) commit() (*pushOutcome, bool) {
 		}
 		prior := self.head
 		self.issued = true
-		written, err := self.engine.heads.Commit(self.writeCtx, self.cluster, self.repoId, self.refId, prior, next)
+		written, err := self.engine.heads.commitBefore(self.writeCtx, self.cluster, self.repoId, self.refId, prior, next, self.reads.readAt.Add(self.settings.PushStepSevenWindow))
 		var unknown *sidecar.BlobUnknownError
 		switch {
 		case err == nil:
 			self.head = written
 			return self.committed(written), false
+		case errors.Is(err, errHeadIssueWindow):
+			self.issued = false
+			return nil, true
 		case errors.Is(err, sidecar.ErrBlobPrecondition):
 			// another write came first: this PUT can never apply, since an ETag never repeats
 			self.issued = false
@@ -234,7 +237,7 @@ func (self *pushAttempt) batchRecord() *sidecar.EvsBatchRecord {
 	return record
 }
 
-// The record's bytes as its batch holds them, for the cost and the usage count: a format-2 record's tail included,
+// The record's bytes as its batch holds them, for the write cost: a format-2 record's tail included,
 // its purge list as bounded once computed (push_staged.go).
 func (self *pushAttempt) recordByteCount() int64 {
 	byteCount := int64(sidecar.EvsBatchRecordHeaderByteCount + len(self.batchRecord().Body))
@@ -702,6 +705,12 @@ func (self *pushAttempt) copyCreatingSections(next *protocol.EvsHead) {
 
 // What step 8 takes of this attempt's commit.
 func (self *pushAttempt) newCommitted(head *EvsStoredHead) *EvsCommitted {
+	recordByteCount := int64(self.place.GetLength())
+	if self.seal != nil {
+		for _, part := range self.seal.parts {
+			recordByteCount += int64(part.Place.GetLength())
+		}
+	}
 	return &EvsCommitted{
 		RepoId:           self.repoId,
 		RefId:            self.refId,
@@ -711,7 +720,7 @@ func (self *pushAttempt) newCommitted(head *EvsStoredHead) *EvsCommitted {
 		Head:             head,
 		Statement:        self.statement,
 		Payload:          self.payload,
-		RecordByteCount:  self.recordByteCount(),
+		RecordByteCount:  recordByteCount,
 		RequestByteCount: self.request.requestByteCount,
 		Purge:            self.purgeCommit(head.Version()),
 		// read after step 7's 200 returned, whichever path calls this

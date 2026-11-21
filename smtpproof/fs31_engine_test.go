@@ -574,6 +574,7 @@ func fs31SendThroughTheEngine(t *testing.T, edge *fs31EngineEdgeWorld, keySet *s
 	sender, err := sidecar.NewSmtpSender(&sidecar.SmtpSenderArgs{
 		Dialer:   &fs31EngineSenderDialer{edge: edge},
 		Prover:   keySet.NewProver(nil),
+		Measure:  func() *sidecar.SmtpProverMeasure { return &sidecar.SmtpProverMeasure{DataProofBytes: 1024 * 1024} },
 		Policy:   policy,
 		Pins:     pins,
 		Dkim:     sidecar.NewSmtpDkimKeys(&fs31Secrets{values: map[string][]byte{}}, fs31Publisher{}, settings, edge.clock, nil),

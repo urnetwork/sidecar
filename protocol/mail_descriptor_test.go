@@ -19,8 +19,11 @@ import (
 
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
+	"google.golang.org/protobuf/types/descriptorpb"
+	"google.golang.org/protobuf/types/dynamicpb"
 )
 
 const (
@@ -129,7 +132,8 @@ var testMailMessageFields = map[string][]string{
 		"5 MailOutcomeKind outcome", "6 uint32 reply_code", "7 uint32 retry_after_ms", "8 uint64 update_time_ms",
 		"9 uint32 tls_level",
 	},
-	"MailOutcomeRecord": {"1 repeated MailOutcome outcomes", "2 bytes send_id"},
+	"MailOutcomeRecord":     {"1 repeated MailOutcome outcomes", "2 bytes send_id", "3 repeated MailRecipientProgress recipient_progress"},
+	"MailRecipientProgress": {"1 string domain", "2 bytes envelope_sha256", "3 repeated uint32 delivered", "4 repeated uint32 refused"},
 	"MailProverRecord": {
 		"1 uint64 smtp_data_proof_bytes", "2 uint64 data_bytes_per_s", "3 uint64 measure_time_ms",
 		"4 uint64 unit_millis", "5 uint64 head_byte_count", "6 uint64 header_record_byte_count",
@@ -338,6 +342,46 @@ func TestMailFieldsKeepTheirNumbers(t *testing.T) {
 		if !slices.Equal(gotFields, wantFields) {
 			t.Errorf("%s is\n%q, want\n%q", name, gotFields, wantFields)
 		}
+	}
+}
+
+// An older recipient device can read its send and domain results while the prover privately keeps partial replies.
+func TestMailOutcomeRecipientProgressPreservesOlderReaders(t *testing.T) {
+	legacyFile := protodesc.ToFileDescriptorProto(testFile(t, testMailProtoPath))
+	for _, message := range legacyFile.MessageType {
+		if message.GetName() == "MailOutcomeRecord" {
+			message.Field = slices.DeleteFunc(message.Field, func(field *descriptorpb.FieldDescriptorProto) bool { return field.GetNumber() > 2 })
+		}
+	}
+	legacySchema, err := protodesc.NewFile(legacyFile, protoregistry.GlobalFiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message := &MailOutcomeRecord{
+		SendId:            bytes.Repeat([]byte{2}, 16),
+		Outcomes:          []*MailOutcome{{Domain: "outside.example", Outcome: MailOutcomeKind_MAIL_OUTCOME_DEFERRED}},
+		RecipientProgress: []*MailRecipientProgress{{Domain: "outside.example", EnvelopeSha256: bytes.Repeat([]byte{3}, 32), Delivered: []uint32{1}}},
+	}
+	encoded, err := proto.Marshal(message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := dynamicpb.NewMessage(legacySchema.Messages().ByName("MailOutcomeRecord"))
+	if err := proto.Unmarshal(encoded, legacy); err != nil {
+		t.Fatal(err)
+	}
+	fields := legacy.Descriptor().Fields()
+	if !bytes.Equal(legacy.Get(fields.ByNumber(2)).Bytes(), message.SendId) || legacy.Get(fields.ByNumber(1)).List().Len() != 1 ||
+		len(legacy.GetUnknown()) == 0 {
+		t.Fatal("a legacy reader lost the send, its outcome, or the unknown private state")
+	}
+	rewritten, err := proto.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored := &MailOutcomeRecord{}
+	if err := proto.Unmarshal(rewritten, restored); err != nil || !proto.Equal(message, restored) {
+		t.Fatalf("reading the legacy rewrite: %+v, %v", restored, err)
 	}
 }
 

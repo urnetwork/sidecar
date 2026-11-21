@@ -397,7 +397,7 @@ func (self *DirEvsWorld) open(net *Net, device *DirEvsDevice) error {
 	}
 	recordStore := device.recordStore
 	clock := net.Clock()
-	record, err := sidecar.NewSidecarRecord(&sidecar.SidecarRecordArgs{
+	record, err := sidecar.OpenSidecarRecord(net.Context(), &sidecar.SidecarRecordArgs{
 		SidecarId:         device.SidecarId,
 		IdentityPublicKey: evsDevice.Signer.PublicKey(),
 		Store:             recordStore,

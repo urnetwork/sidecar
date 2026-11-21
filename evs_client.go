@@ -460,6 +460,9 @@ func evsActivateCall(repoId Id) *evsCall {
 // Whether this sidecar holds no leaf at its verified state, a tagged or an ephemeral one, so a member device forms
 // the groups of the repos it creates (QD-638). False with no state, whose CreateGroup refuses for such a sidecar.
 func (self *EvsClient) holdsNoLeaf() bool {
+	if client, ok := self.args.Gkm.(interface{ KeyDeliveryOnly() bool }); ok && client.KeyDeliveryOnly() {
+		return false
+	}
 	if self.args.Config == nil || self.args.Identity == nil {
 		return false
 	}

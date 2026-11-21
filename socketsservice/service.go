@@ -288,11 +288,22 @@ func (self *SocketsService) Close() {
 func (self *SocketsService) Handler() http.Handler {
 	self.handlerOnce.Do(func() {
 		mux := http.NewServeMux()
-		mux.HandleFunc("POST /socket/registrations", self.serveRegistrations)
-		mux.HandleFunc("GET /socket/list", self.serveList)
-		mux.HandleFunc("GET /socket/keys", self.serveKeys)
-		mux.HandleFunc("POST /socket/find", self.serveFind)
+		for _, route := range socketsRoutes {
+			mux.HandleFunc(route.pattern, func(w http.ResponseWriter, r *http.Request) {
+				route.serve(self, w, r)
+			})
+		}
 		self.handler = mux
 	})
 	return self.handler
+}
+
+var socketsRoutes = []struct {
+	pattern string
+	serve   func(*SocketsService, http.ResponseWriter, *http.Request)
+}{
+	{"POST /socket/registrations", (*SocketsService).serveRegistrations},
+	{"GET /socket/list", (*SocketsService).serveList},
+	{"GET /socket/keys", (*SocketsService).serveKeys},
+	{"POST /socket/find", (*SocketsService).serveFind},
 }

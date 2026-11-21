@@ -60,6 +60,55 @@ func TestMeterTransferCountsAnUploadToTheCallerNeverTheRepo(t *testing.T) {
 	}
 }
 
+func TestMeterTransferExcludesReseedSegmentRetries(t *testing.T) {
+	fixture := newUploadFixture(t)
+	fixture.setReseed(true)
+	prior := drainedTransfer(t, fixture.usage, fixture.host.Quota, fixture.networkId)
+	segment := testSegment(fixture.repoId, 300*1024, 0x43)
+	segmentId := sha256.Sum256(segment)
+	for range 2 {
+		fixture.receipt(fixture.upload(fixture.admin, "admin", segment, segmentId, false))
+		if got := drainedTransfer(t, fixture.usage, fixture.host.Quota, fixture.networkId); got != prior {
+			t.Fatalf("re-seed upload billed %d transfer bytes", got-prior)
+		}
+		if got := fixture.host.Quota.StoredDelta(fixture.networkId); got != int64(len(segment)) {
+			t.Fatalf("stored %d bytes, want %d", got, len(segment))
+		}
+	}
+	for i, upload := range []struct {
+		owner   sidecar.Id
+		role    string
+		closure bool
+		reseed  bool
+	}{{fixture.writer, "rw", false, true}, {fixture.admin, "admin", true, true}, {fixture.admin, "admin", false, false}} {
+		fixture.setReseed(upload.reseed)
+		ordinary := testSegment(fixture.repoId, 4*1024, byte(i+1))
+		reply := fixture.upload(upload.owner, upload.role, ordinary, sha256.Sum256(ordinary), upload.closure)
+		fixture.receipt(reply)
+		prior += int64(len(ordinary) + reply.Body.Len())
+		if got := drainedTransfer(t, fixture.usage, fixture.host.Quota, fixture.networkId); got != prior {
+			t.Fatalf("ordinary transfer %d, want %d for %+v", got, prior, upload)
+		}
+	}
+}
+
+func TestMeterTransferExcludesReseedHistoryRetries(t *testing.T) {
+	fixture := newReseedFixture(t)
+	usage := fixture.engine.deps.Uploads.Usage
+	networkId := connect.Id(fixture.check.networkId)
+	prior := drainedTransfer(t, usage, fixture.host.Quota, networkId)
+	plan := fixture.kept()
+	fixture.create(plan, "recovered")
+	body := fixture.reseedBody(plan)
+	for range 2 {
+		fixture.requireCommitted(fixture.reseed(body), 1)
+		fixture.awaitStepEights()
+		if got := drainedTransfer(t, usage, fixture.host.Quota, networkId); got != prior {
+			t.Fatalf("re-seed history billed %d transfer bytes", got-prior)
+		}
+	}
+}
+
 // A read's request and its framed reply count as the caller's transfer, each byte once.
 func TestMeterTransferCountsARead(t *testing.T) {
 	fixture := newUploadFixture(t)

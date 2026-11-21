@@ -435,6 +435,7 @@ func TestMailComponentStartsTheReceiverOnlyWhereGranted(t *testing.T) {
 	var granted sync.Mutex
 	grant := false
 	started := 0
+	directStarted, directStopped := make(chan struct{}), make(chan struct{})
 	world.client.componentSeams = &mailComponentSeams{
 		mayReceive: func() bool {
 			granted.Lock()
@@ -443,7 +444,13 @@ func TestMailComponentStartsTheReceiverOnlyWhereGranted(t *testing.T) {
 		},
 		factory: func(args *mailReceiverFactoryArgs) (*MailReceiver, func(), error) {
 			started += 1
-			return receivers.newReceiver(nil), func() {}, nil
+			receiver := receivers.newReceiver(nil)
+			receiver.runDirect = func(ctx context.Context) {
+				close(directStarted)
+				<-ctx.Done()
+				close(directStopped)
+			}
+			return receiver, func() {}, nil
 		},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -467,6 +474,7 @@ func TestMailComponentStartsTheReceiverOnlyWhereGranted(t *testing.T) {
 	granted.Unlock()
 	world.client.passReceive(run, binding)
 	receivers.publisher.awaitCount(1)
+	<-directStarted
 	if status := world.client.receiverStatus; !status.Running || started != 1 {
 		t.Fatalf("granted %+v, %d started", status, started)
 	}
@@ -478,6 +486,11 @@ func TestMailComponentStartsTheReceiverOnlyWhereGranted(t *testing.T) {
 	grant = false
 	granted.Unlock()
 	world.client.passReceive(run, binding)
+	select {
+	case <-directStopped:
+	default:
+		t.Fatal("the direct listener outlived its grant")
+	}
 	if run.receiver != nil || world.client.receiverStatus.Running {
 		t.Fatal("the receiver outlived its grant")
 	}

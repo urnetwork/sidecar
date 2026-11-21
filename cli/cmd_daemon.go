@@ -160,9 +160,10 @@ type urNetworksTarget interface {
 // The daemon's instance and its Sidecars, one per network (CORE-M6-01), and the unenrolled one a further network's
 // enrollment takes, which joins the daemon's registry once it has a network. Safe for concurrent use.
 type urDaemonNetwork struct {
-	instance  *sidecar.SidecarInstance
-	daemon    *sidecar.Daemon
-	noSidecar string
+	instance    *sidecar.SidecarInstance
+	daemon      *sidecar.Daemon
+	noSidecar   string
+	tlsSettings *sidecar.TlsCustomSettings
 	// a running Sidecar on the instance's store of networkId, nil for one not enrolled yet
 	start func(networkId *sidecar.Id) (*sidecar.Sidecar, error)
 	// ends a Sidecar the daemon no longer hosts
@@ -317,6 +318,7 @@ func (self *urDaemonNetwork) enroll(ctx context.Context, credential *sidecar.Sid
 		self.further = nil
 		self.stateLock.Unlock()
 	}
+	startUrHostedMail(target)
 	// the keychain's, which the enrollment wrote: Status names it only once the run loop has moved to it
 	return target.BoundGeneration(), nil
 }
@@ -352,6 +354,7 @@ func (self *urDaemonNetwork) PairChild(ctx context.Context, childJwt string) (*s
 		self.further = nil
 		self.stateLock.Unlock()
 	}
+	startUrHostedMail(target)
 	return &sidecar.DaemonPairReply{NetworkId: networkId, Generation: target.BoundGeneration()}, nil
 }
 
@@ -602,6 +605,12 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		urlsErr = applyUrHttpsProxy(cli.getenv, settings)
 	}
 
+	if !ephemeral && urlsErr == nil {
+		if hosts, err := sidecar.SidecarHostListV1(); err == nil {
+			settings.Connect.SmtpProver = newSmtpProver(filepath.Join(stateDirectory, "smtp-proof"), hosts.SmtpProofKeysUrl())
+		}
+	}
+
 	var keyStore sidecar.SidecarKeyStore
 	keyStoreKind := osKeyStorePass
 	var backend sidecar.SidecarStoreBackend
@@ -707,7 +716,7 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 			log.Warningf("[ur]this daemon cannot name its own ur, so its git tier takes no push: %s", err)
 		}
 	}
-	network := &urDaemonNetwork{instance: instance, daemon: daemon, stop: closeSidecar}
+	network := &urDaemonNetwork{instance: instance, daemon: daemon, stop: closeSidecar, tlsSettings: urDesktopTlsSettings()}
 	// the bridges and ur tun end with the daemon, the tun's routes removed, on every path Run returns by; each network's
 	// bridge is built over its config follower (daemon_config.go)
 	bridgeArgs := urBridgeDaemonArgsOf(cli.instance, log)
@@ -744,7 +753,9 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 			daemon.Events().Attach(running)
 			// the network's one judge of its log, which starts at the Sidecar's first client generation; one that does
 			// not start leaves this network unjudged and the others following (CORE-M6-01)
-			startUrConfigFollower(running, log)
+			if follower := startUrConfigFollower(running, log); follower != nil {
+				startUrDesktopTls(ctx, running, follower, stateDirectory, network, log)
+			}
 			return running, nil
 		}
 		// a Sidecar per recorded network, each on the one instance, so the key store's wrap of U opens them all

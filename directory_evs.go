@@ -1191,6 +1191,53 @@ func (self *DirectoryEvsCards) learnDelta(ctx context.Context, read *directoryEv
 
 // The cards ref's statements after afterVersion, one page: see the file header's cards row.
 func (self *DirectoryEvsCards) ReadCards(ctx context.Context, repoId Id, afterVersion uint64) (*DirectoryCardsChanges, error) {
+	return self.readCards(ctx, repoId, afterVersion, false)
+}
+
+// Collects the verified paths, versions, writers and sizes without fetching announcement bodies.
+func (self *DirectoryEvsCards) PlanCards(ctx context.Context, repoId Id, afterVersion uint64) (*DirectoryCardsChanges, error) {
+	return self.readCards(ctx, repoId, afterVersion, true)
+}
+
+// Opens the exact version a phone budgeted. A replacement triggers another listing.
+func (self *DirectoryEvsCards) ReadPlannedCard(ctx context.Context, repoId Id, file *DirectoryCardFile) ([]byte, error) {
+	repo := self.client.Repo(repoId)
+	ref, err := repo.RefIdOf(ctx, DirectoryCardsRefName())
+	if err != nil {
+		return nil, err
+	}
+	result, err := repo.read(ctx, ref, []string{file.Path}, 0, true)
+	if err != nil {
+		return nil, recordEvsRefusal(err)
+	}
+	defer result.objects.close()
+	verified := result.replies[0]
+	// Old versions can remain readable until collection. Check the current
+	// head against the budgeted revision before opening any file contents.
+	if verified.Absent || verified.Removal != nil || verified.Entry == nil || verified.Entry.GetVersion() != file.Version ||
+		verified.CommitVersion != file.PushVersion || !bytes.Equal(verified.Statement.Push.GetSignerSidecarId(), file.SignerSidecarId[:]) {
+		return nil, ErrEvsCollected
+	}
+	if ruled, err := repo.prefixRuled(); err != nil {
+		return nil, err
+	} else if ruled != nil {
+		ignored, err := ruled.ignored(ctx, repo, result, 0)
+		if err != nil {
+			return nil, err
+		}
+		if ignored {
+			return nil, &EvsPrefixRuleError{Detail: EvsPrefixDetailRefused, Path: file.Path}
+		}
+	}
+	var body bytes.Buffer
+	if _, err = repo.reconstruct(ctx, result, verified, &body); err != nil {
+		return nil, recordEvsRefusal(err)
+	}
+	return body.Bytes(), nil
+}
+
+// Walks the same verified path changes for desktop copies and phone views.
+func (self *DirectoryEvsCards) readCards(ctx context.Context, repoId Id, afterVersion uint64, plan bool) (*DirectoryCardsChanges, error) {
 	repo := self.client.Repo(repoId)
 	refId, err := repo.RefIdOf(ctx, DirectoryCardsRefName())
 	if err != nil {
@@ -1271,7 +1318,7 @@ func (self *DirectoryEvsCards) ReadCards(ctx context.Context, repoId Id, afterVe
 		readResult: &evsReadResult{refId: refId, head: head, keys: keys, objects: newEvsReadObjects(self.client)},
 	}
 	defer read.readResult.objects.close()
-	files, err := self.cardFiles(ctx, read, walked, payloads)
+	files, err := self.cardFiles(ctx, read, walked, payloads, plan)
 	if err != nil {
 		return nil, err
 	}
@@ -1289,7 +1336,7 @@ type directoryEvsCardChange struct {
 }
 
 // The files the walked statements wrote and removed, in commit order: see the file header's cards row.
-func (self *DirectoryEvsCards) cardFiles(ctx context.Context, read *directoryEvsCardsRead, walked []*EvsVerifiedStatement, payloads []*EvsCheckedPayload) ([]*DirectoryCardFile, error) {
+func (self *DirectoryEvsCards) cardFiles(ctx context.Context, read *directoryEvsCardsRead, walked []*EvsVerifiedStatement, payloads []*EvsCheckedPayload, plan bool) ([]*DirectoryCardFile, error) {
 	repoId := read.repo.repoId
 	// each statement's file changes, by path, after its deltas taught their names
 	type placedChange struct {
@@ -1347,7 +1394,9 @@ func (self *DirectoryEvsCards) cardFiles(ctx context.Context, read *directoryEvs
 				if !directoryCardPathKept(path) {
 					continue
 				}
-				written = append(written, fileChange.entry)
+				if !plan {
+					written = append(written, fileChange.entry)
+				}
 			}
 			placed = append(placed, &placedChange{statement: statement, change: fileChange, path: path})
 		}
@@ -1390,6 +1439,26 @@ func (self *DirectoryEvsCards) cardFiles(ctx context.Context, read *directoryEvs
 			files = append(files, stamp(&DirectoryCardFile{
 				Path: placedChange.path, Version: change.change.Change.GetBaseEntryVersion() + 1, Removed: true,
 			}))
+			continue
+		}
+		if plan {
+			if !directoryCardRemovalKept(placedChange.path) {
+				continue
+			}
+			key, err := read.keys.manifest(ctx, push.GetGeneration())
+			if err != nil {
+				return nil, err
+			}
+			var fields *protocol.EvsSealedFields
+			if change.entry.GetVersioning() == 0 {
+				fields, err = EvsOpenFields(key, change.entry.GetSealedFields())
+			} else {
+				fields, err = EvsOpenFieldsFormat2(key, change.entry.GetSealedFields(), change.entry.GetVersioning())
+			}
+			if err != nil {
+				return nil, err
+			}
+			files = append(files, stamp(&DirectoryCardFile{Path: placedChange.path, Version: change.entry.GetVersion(), StoredByteCount: DirectoryFileStoredByteCount(fields.GetSize())}))
 			continue
 		}
 		if evsStreamFileEmptied(read.readResult.objects, change.entry) {

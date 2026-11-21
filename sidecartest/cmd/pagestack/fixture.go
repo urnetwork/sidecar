@@ -717,6 +717,10 @@ func (self *pagestackGkmAuthState) LateHolders(principal *sidecar.Principal, rep
 	return holderIds, gkmservice.GkmAuthAllowed
 }
 
+func (self *pagestackGkmAuthState) RepoRecoveryBindings(principal *sidecar.Principal, repoId sidecar.Id, now time.Time) (map[sidecar.Id][]byte, gkmservice.GkmAuthAnswer) {
+	return gkmservice.RecoveryBindingsOf(self.fixture.viewOf(principal), repoId, now)
+}
+
 func (self *pagestackGkmAuthState) HoldersDropped(principal *sidecar.Principal, repoId sidecar.Id, pin *bridge.AuthPin, since time.Time, now time.Time) gkmservice.GkmAuthAnswer {
 	view := self.fixture.viewOf(principal)
 	if view == nil {

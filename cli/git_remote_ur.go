@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/urnetwork/sidecar"
 )
@@ -116,7 +117,7 @@ func urConfigureRemoteLfs(ctx context.Context, cli *urCli, url string) error {
 	if err != nil {
 		return err
 	}
-	urPath, err := os.Executable()
+	urPath, err := urCommandExecutable()
 	if err != nil {
 		return err
 	}
@@ -132,4 +133,30 @@ func urConfigureRemoteLfs(ctx context.Context, cli *urCli, url string) error {
 		return err
 	}
 	return sidecar.EvsLfsConfigureClone(ctx, runner, gitDir, urPath, sidecar.EvsLfsAgentArgsFor(repo))
+}
+
+// The command binary beside the packaged Git helper. Invoking the helper for a ur subcommand
+// would enter the remote-helper protocol again. The install directory supplies both names.
+func urCommandExecutable() (string, error) {
+	path, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	switch strings.ToLower(filepath.Base(path)) {
+	case urGitRemoteName + ".exe":
+		return filepath.Join(filepath.Dir(path), "ur.exe"), nil
+	case urGitRemoteName:
+		return filepath.Join(filepath.Dir(path), "ur"), nil
+	default:
+		return path, nil
+	}
+}
+
+// The auto-spawn command, with its platform's detach flags added by the caller.
+func urDaemonCommand(args []string) (*exec.Cmd, error) {
+	path, err := urCommandExecutable()
+	if err != nil {
+		return nil, err
+	}
+	return exec.Command(path, append([]string{"daemon"}, args...)...), nil
 }

@@ -202,8 +202,9 @@ func TestDraftGroupRefusesWhatIsNoBootstrap(t *testing.T) {
 	if _, err := a.client.DraftGroup(world.ctx, general); !errors.Is(err, sidecar.ErrGkmMalformed) {
 		t.Errorf("a draft of a general repo's group: %v", err)
 	}
-	if _, err := world.flows[agent].client.DraftGroup(world.ctx, world.createArgs()); !errors.Is(err, sidecar.ErrGkmUnavailable) {
-		t.Errorf("a draft by a sidecar with no leaf: %v", err)
+	first, err := world.flows[agent].client.DraftGroup(world.ctx, world.createArgs())
+	if err != nil || first == nil || first.Generation() != 1 {
+		t.Fatalf("a KeyDelivery-only bootstrap draft: %v", err)
 	}
 	a.stateless = true
 	if _, err := a.client.DraftGroup(world.ctx, world.createArgs()); !errors.Is(err, sidecar.ErrGkmUnavailable) {

@@ -143,6 +143,29 @@ func TestDirectoryFormat2OneStateFromEitherCarrier(t *testing.T) {
 	}
 }
 
+// The first format 2 write can be a withdrawal. It snapshots the other active
+// runs, and a cold reader cannot resurrect the withdrawn one from retained M6 records.
+func TestDirectoryFormat2FirstCardWithdrawsOneRetainedRun(t *testing.T) {
+	world := newTestDirectoryWorld(t, nil)
+	writer := world.memberWriter(sidecar.NewId())
+	world.publish()
+	device := world.device(writer)
+	kept := world.startRun(device.client, "keep this run")
+	drop := world.startRun(device.client, "withdraw this run")
+	device.flush(t)
+	world.cards.RaiseFormat(world.directoryId)
+	device.mustSync(t)
+	if err := device.client.Runs().Withdraw(drop); err != nil {
+		t.Fatal(err)
+	}
+	reader := world.reader(nil)
+	reader.mustSync(t)
+	items := testFormat2ItemsOf(t, reader, writer.sidecarId)
+	if len(items) != 1 || items[0].EntryId != (sidecar.Id{}) || sidecar.Id(items[0].Announcement.GetWhat().GetRunId()) != kept {
+		t.Fatalf("first card after withdrawing %s: %+v", drop, items)
+	}
+}
+
 // A reader across the switch shows a repo's item throughout; a daemon outside the gate follows once the repo reads
 // format 2, moving the item off its entry onto the r/ file at a higher version; 30 days on the entry is due for expiry,
 // which the runner erases, and the item still shows from its file.

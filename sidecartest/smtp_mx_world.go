@@ -327,6 +327,14 @@ func (self *MxWorld) SetMtaStsPolicy(domain string, id string, policy string) er
 func (self *MxWorld) SetPtr(address netip.Addr, names ...string) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
+	if reverse, err := dns.ReverseAddr(address.Unmap().String()); err == nil {
+		if zone := self.zoneOfWithLock(reverse); zone != nil {
+			delete(zone.records[reverse], dns.TypePTR)
+			for _, name := range names {
+				zone.add(&dns.PTR{Hdr: dns.RR_Header{Name: reverse, Rrtype: dns.TypePTR, Class: dns.ClassINET, Ttl: mxWorldTtl}, Ptr: mxWorldName(name)})
+			}
+		}
+	}
 	if len(names) == 0 {
 		delete(self.addressPtrs, address.Unmap())
 		return

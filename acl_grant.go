@@ -71,8 +71,11 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"fmt"
+	"maps"
 	"slices"
 	"time"
+
+	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
@@ -486,4 +489,119 @@ func aclFoldGrantActivate(rows *protocol.AclRows, verdict *AclStatementVerdict) 
 	}
 	next.SpentGrants = aclSpendGrant(rows.GetSpentGrants(), fold.grantId, fold.retainUntilMs)
 	return next, nil
+}
+
+// The log has already verified the grant id, decisions and action at this point. States share earlier maps.
+func (self *ConfigState) rememberGrantAction(body proto.Message) {
+	switch statement := body.(type) {
+	case *protocol.GrantActivate:
+		action := &protocol.CanonicalAction{}
+		if proto.Unmarshal(statement.GetCanonicalAction(), action) != nil || len(action.GetSealedDetail()) == 0 {
+			return
+		}
+		actions := maps.Clone(self.grantActions)
+		if actions == nil {
+			actions = map[string][]byte{}
+		}
+		actions[string(statement.GetGrantId())] = statement.GetCanonicalAction()
+		self.grantActions = actions
+	case *bridge.GrantRevoke:
+		if _, found := self.grantActions[string(statement.GetGrantId())]; found {
+			self.grantActions = maps.Clone(self.grantActions)
+			delete(self.grantActions, string(statement.GetGrantId()))
+		}
+	}
+}
+
+// A base retains ciphertext only for the activated rules still present in its folded rows.
+func (self *ConfigState) retainGrantActions() {
+	if len(self.grantActions) == 0 {
+		return
+	}
+	actions := map[string][]byte{}
+	for _, rule := range self.aclRows.GetRules() {
+		id := string(rule.GetRuleId())
+		if action := self.grantActions[id]; len(rule.GetSourceRuleId()) != 0 && action != nil {
+			actions[id] = action
+		}
+	}
+	self.grantActions = actions
+}
+
+// A cold reader can join at a base after an active grant landed. Recover its exact action from the head's
+// folded records and recompute the grant id from the approval and payload hash before using its sealed ports.
+func (self *ConfigState) grantActionsAtHead(head *ConfigHead) map[string][]byte {
+	actions := self.grantActions
+	if head == nil || head.FoldedThrough() == 0 || head.FoldedThrough() != self.Base().GetFoldedThrough() {
+		return actions
+	}
+	missing := map[string]bool{}
+	for _, rule := range self.aclRows.GetRules() {
+		id := string(rule.GetRuleId())
+		if rule.GetPortsLimited() && len(rule.GetSourceRuleId()) != 0 && actions[id] == nil {
+			missing[id] = true
+		}
+	}
+	if len(missing) == 0 {
+		return actions
+	}
+	_, genesis := head.Genesis()
+	if bridge.GenesisChain(genesis) != self.genesisChain {
+		return actions
+	}
+	actions = maps.Clone(actions)
+	if actions == nil {
+		actions = map[string][]byte{}
+	}
+	for _, fold := range head.folds {
+		for _, record := range fold.GetRecords() {
+			if record.GetKind() != bridge.AuthEntryKindStatement {
+				continue
+			}
+			signed := &bridge.Signed{}
+			if proto.Unmarshal(record.GetBody(), signed) != nil || signed.GetType() != uint32(bridge.SignedType_SIGNED_GRANT_ACTIVATE) {
+				continue
+			}
+			activated := &protocol.GrantActivate{}
+			if proto.Unmarshal(signed.GetBody(), activated) != nil || !missing[string(activated.GetGrantId())] {
+				continue
+			}
+			body, err := aclParseGrantActivate(activated)
+			if err != nil || !bytes.Equal(body.grantId[:], activated.GetGrantId()) || len(body.action.Action.GetSealedDetail()) == 0 {
+				continue
+			}
+			id := string(activated.GetGrantId())
+			actions[id] = body.action.Bytes
+			delete(missing, id)
+			if len(missing) == 0 {
+				return actions
+			}
+		}
+	}
+	return actions
+}
+
+// Only the ports authorized for this particular destination are eligible. A receipt, row or key on its own
+// supplies no port. Never infer a protocol from target_port, which alone does not name one.
+func (self *ConfigState) grantPortRule(encoded []byte, target Id, repoKeyAt func(uint64) *EvsRepoKey) *AclLocalRule {
+	if len(encoded) == 0 {
+		return nil
+	}
+	action, err := ParseStoredCanonicalAction(encoded)
+	if err != nil {
+		return nil
+	}
+	detail, err := OpenCanonicalActionDetail(action, self.NetworkId(), repoKeyAt)
+	if err != nil || detail == nil {
+		return nil
+	}
+	local := &AclLocalRule{}
+	for _, destination := range detail.GetGrantDst() {
+		recipient, ports, err := ParseAclGrantDst(destination)
+		if err == nil && ports != nil && bytes.Equal(recipient.GetSidecarId(), target[:]) &&
+			(detail.GetTargetPort() == 0 || ports.GetFirst() == detail.GetTargetPort()) {
+			local.Ports = append(local.Ports, AclPortRange{Protocol: ports.GetProtocol(), First: ports.GetFirst(), Last: ports.GetLast()})
+		}
+	}
+	return local
 }

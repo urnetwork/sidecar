@@ -25,7 +25,7 @@ import (
 func testMailSubmitDraft() *MailSendArgs {
 	return &MailSendArgs{
 		From:    testMailSendFrom,
-		To:      []string{testMailIngestRecipient, "Someone@Outside.Example"},
+		To:      []string{testMailIngestRecipient, "someone@Outside.Example"},
 		Bcc:     []string{"hidden@elsewhere.example"},
 		Subject: "Plans",
 		Text:    "Dinner at eight.",
@@ -150,6 +150,142 @@ func TestMailSubmitSendOutsideWaitsOnTheGate(t *testing.T) {
 	}
 }
 
+// The gate can lose its answer after a mixed send committed. Its repeated effect finds the same id in the live
+// queue and later in the completed outcome, without repeating the sent copy or the member deposit.
+func TestMailSubmitSendRecoversTheCommittedSendId(t *testing.T) {
+	ctx := t.Context()
+	world, parts, _ := newMailSendTestWorld(t)
+	draft := testMailSubmitDraft()
+	draft.Bcc = nil
+	first, err := world.client.SubmitSend(ctx, draft)
+	if err != nil || first.SendId == (Id{}) || len(first.EffectKey) != mailEffectKeyByteCount {
+		t.Fatalf("first send %+v: %v", first, err)
+	}
+	action := world.gate.lastAction()
+	replay := func(outcome *SidecarOutcome) {
+		t.Helper()
+		world.gate.stateLock.Lock()
+		world.gate.outcomes[string(action.Canonical)] = outcome
+		world.gate.stateLock.Unlock()
+		writes := world.ingest.store.writeCount
+		again, err := world.client.SubmitSend(ctx, draft)
+		if err != nil || again.SendId != first.SendId {
+			t.Fatalf("replayed send %+v, want %s: %v", again, first.SendId, err)
+		}
+		if len(parts.snapshot()) != 1 || world.ingest.store.writeCount != writes {
+			t.Fatalf("replayed send left %d deposits, %d more mailbox writes", len(parts.snapshot()), world.ingest.store.writeCount-writes)
+		}
+	}
+	uncertain := &SidecarOutcome{State: ApprovalOutcomeUncertain}
+	replay(uncertain)
+
+	mailbox, err := world.client.SmtpMailbox()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mailbox.WriteOutcomes(ctx, first.EffectKey, []*SmtpDomainOutcome{{
+		Domain: "outside.example", Outcome: SmtpOutcomeSent, UpdateTime: world.client.clock.Now(),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := mailbox.RemoveOutbox(ctx, first.EffectKey); err != nil {
+		t.Fatal(err)
+	}
+	replay(uncertain)
+	// A restarted gate can reconcile from its registered lookup without rerunning the effect.
+	outcome, err := world.client.outboxLookup(ctx, action.Canonical, first.EffectKey)
+	if err != nil || outcome.State != ApprovalOutcomeDone || !bytes.Equal(outcome.EffectRef, first.SendId.Bytes()) {
+		t.Fatalf("reconciled outcome %+v: %v", outcome, err)
+	}
+	replay(outcome)
+	delivered, err := world.client.SendResult(ctx, first.SendId)
+	if err != nil || len(delivered.Domains) != 1 || delivered.Domains[0].Outcome != SmtpOutcomeSent {
+		t.Fatalf("completed send %+v: %v", delivered, err)
+	}
+	// Historical ledger rows could omit the ref after removal or record the losing writer's id.
+	replay(&SidecarOutcome{State: ApprovalOutcomeDone})
+	replay(&SidecarOutcome{State: ApprovalOutcomeDone, EffectRef: newMailOutboxSendId().Bytes()})
+}
+
+// A writer can win the key after this send's first receipt read. The queue's actual winner supplies the
+// caller's id as well as the gate's recorded effect ref.
+func TestMailSubmitSendReturnsTheWriterThatWonTheQueue(t *testing.T) {
+	ctx := t.Context()
+	world, _, _ := newMailSendTestWorld(t)
+	draft := &MailSendArgs{From: testMailSendFrom, To: []string{"someone@outside.example"}, Subject: "Plans", Text: "Dinner at eight."}
+	plan, err := world.client.planSend(draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	action, err := mailSendAction(draft, plan, world.client.sendSettings())
+	if err != nil {
+		t.Fatal(err)
+	}
+	effectKey := mailConfigTestEffectKey(action.Bytes)
+	winnerId := newMailOutboxSendId()
+	outbox, err := world.client.memberOutbox(testMailOutboxStanding(AbuseStandingStandard, true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	world.ingest.store.beforeWrite = func() {
+		if _, err := outbox.Queue(ctx, testMailOutboxQueueArgs(effectKey, testMailOutboxMessage(winnerId))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err := world.client.SubmitSend(ctx, draft)
+	if err != nil || result.SendId != winnerId || !bytes.Equal(result.EffectKey, effectKey) {
+		t.Fatalf("racing send %+v, want %s: %v", result, winnerId, err)
+	}
+	if ref := world.gate.lastAction().Outcome.EffectRef; !bytes.Equal(ref, winnerId.Bytes()) {
+		t.Fatalf("the gate recorded %x, want %s", ref, winnerId)
+	}
+}
+
+// When every recipient failed, the sent copy can have an id, but replay has no committed delivery to name.
+func TestMailSubmitSendKeepsNoSuccessRefForAFailedDelivery(t *testing.T) {
+	ctx := t.Context()
+	world, parts, mailboxId := newMailSendTestWorld(t)
+	parts.failing[mailboxId] = true
+	testMailSendBindOutbox(world, newTestMailOutboxSigner(world.device), testMailOutboxStanding(AbuseStandingProbation, true))
+	draft := testMailSubmitDraft()
+	first, err := world.client.SubmitSend(ctx, draft)
+	if err != nil || !first.SentCopy || first.SendId == (Id{}) || len(first.Recipients) != 3 ||
+		first.Recipients[0].Outcome != MailSendFailed || first.Recipients[1].Outcome != MailSendInternetRefused || first.Recipients[2].Outcome != MailSendInternetRefused {
+		t.Fatalf("first send with all recipients unsuccessful %+v: %v", first, err)
+	}
+	if ref := world.gate.lastAction().Outcome.EffectRef; len(ref) != 0 {
+		t.Fatalf("the gate recorded a sent copy as a successful send: %x", ref)
+	}
+	if _, err := world.client.SubmitSend(ctx, draft); !errors.Is(err, ErrMailSendUncertain) {
+		t.Fatalf("replayed unsuccessful send: %v", err)
+	}
+}
+
+// A submission with a client's own Message-ID can queue successfully. The receipt carries no trackable send id,
+// including on the first call, and the queued bytes keep the client's header.
+func TestMailSubmitSendPreservesAClientMessageId(t *testing.T) {
+	ctx := t.Context()
+	world, _, _ := newMailSendTestWorld(t)
+	raw := []byte("From: " + testMailSendFrom + "\r\nTo: someone@outside.example\r\nMessage-ID: <client-1@laptop.example>\r\nSubject: Plans\r\n\r\nDinner at eight.\r\n")
+	submission := &MailSubmitArgs{Message: raw, Recipients: []string{"someone@outside.example"}}
+	first, err := world.client.SubmitMessage(ctx, submission)
+	if err != nil || first.SendId != (Id{}) || len(first.Recipients) != 1 || first.Recipients[0].Outcome != MailSendQueued {
+		t.Fatalf("raw submission %+v: %v", first, err)
+	}
+	mailbox, err := world.client.SmtpMailbox()
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := mailbox.ReadOutbox(ctx, first.EffectKey)
+	if err != nil || !bytes.Equal(file.Message, raw) {
+		t.Fatalf("queued submission changed: %v", err)
+	}
+	again, err := world.client.SubmitMessage(ctx, submission)
+	if err != nil || again.SendId != (Id{}) || !bytes.Equal(again.EffectKey, first.EffectKey) {
+		t.Fatalf("replayed raw submission %+v: %v", again, err)
+	}
+}
+
 // A From this device may not send as is refused before the gate is asked, so no request is filed for a send that
 // cannot go; a draft out of shape too.
 func TestMailSubmitSendRefusesTheFromBeforeTheGate(t *testing.T) {
@@ -241,8 +377,32 @@ func TestMailSubmitSendEffectRefusalAndNoGate(t *testing.T) {
 	}
 }
 
+// Losing a network alias can change a recipient from a case-folded local name to a case-sensitive external
+// mailbox. A decision for the previous spelling cannot dispatch to the new one.
+func TestMailSubmitSendRefusesAChangedDeliveryAddressAtTheSpend(t *testing.T) {
+	world, parts, _ := newMailSendTestWorld(t)
+	binding, _, err := world.client.bound()
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := binding.Network()
+	row.Alias = "former"
+	updated := *binding
+	updated.Network = func() NetworkLabelRow { return row }
+	updated.Gate = &mailSubmitTestGate{beforeEffect: func() { row.Alias = "" }}
+	world.client.Bind(&updated)
+	draft := testMailSubmitDraft()
+	draft.To = append(draft.To, "Bo@former.root.example")
+	if _, err := world.client.SubmitSend(context.Background(), draft); !errors.Is(err, ErrSidecarEffectNotDone) {
+		t.Fatalf("an address changed while awaiting approval: %v", err)
+	}
+	if len(parts.snapshot()) != 0 {
+		t.Fatal("a send with changed recipients deposited mail")
+	}
+}
+
 // The action is the draft's: the same draft builds the same bytes, and a subject, a text, a recipient or a From that
-// differs builds another; recipients are distinct and lowercase, To then Cc then Bcc.
+// differs builds another; distinct external local parts remain in To, Cc and Bcc order.
 func TestMailSubmitSendActionIsTheDrafts(t *testing.T) {
 	world, _, _ := newMailSendTestWorld(t)
 	plan := func(args *MailSendArgs) *StoredCanonicalAction {
@@ -276,10 +436,10 @@ func TestMailSubmitSendActionIsTheDrafts(t *testing.T) {
 		}
 	}
 	args := testMailSubmitDraft()
-	args.To = append(args.To, "SOMEONE@outside.example")
+	args.To = append(args.To, "SOMEONE@outside.example", "SOMEONE@Outside.Example", strings.ToUpper(testMailIngestRecipient))
 	args.Cc = []string{"cc@outside.example"}
 	if recipients := plan(args).Action.GetRecipients(); !slices.Equal(recipients, []string{
-		testMailIngestRecipient, "someone@outside.example", "cc@outside.example", "hidden@elsewhere.example",
+		testMailIngestRecipient, "someone@outside.example", "SOMEONE@outside.example", "cc@outside.example", "hidden@elsewhere.example",
 	}) {
 		t.Fatalf("recipients %v", recipients)
 	}

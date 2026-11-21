@@ -251,6 +251,33 @@ func TestDnsReadyLeavesOutAStoppedNs(t *testing.T) {
 	}
 }
 
+func TestDnsRunningNsInventoryIsSharedOnlyWithTheMonitors(t *testing.T) {
+	api := newTestApi(t, nil)
+	api.ready.setStopped("ns2")
+	for _, class := range []dnsservice.DnsCallerClass{dnsservice.DnsCallerMonitor, dnsservice.DnsCallerMonitorOutside} {
+		reply := api.serve(api.request(http.MethodGet, dnsservice.DnsRunningNsPath, class, ""))
+		answer := &dnsservice.DnsRunningNsAnswer{}
+		if reply.Code != http.StatusOK || json.Unmarshal(reply.Body.Bytes(), answer) != nil || len(answer.Ns) != 1 || answer.Ns[0] != "ns1" {
+			t.Fatalf("%s inventory: %d %+v", class, reply.Code, answer)
+		}
+	}
+	if reply := api.serve(api.request(http.MethodGet, dnsservice.DnsRunningNsPath, dnsservice.DnsCallerCerts, "")); reply.Code != http.StatusForbidden {
+		t.Fatalf("certs read the monitor inventory: %d", reply.Code)
+	}
+}
+
+func TestDnsReadyWaitsWhenEveryNsIsStopped(t *testing.T) {
+	api := newTestApi(t, nil)
+	api.cleanCanary()
+	api.ready.setStopped("ns1", "ns2")
+	answers := api.askReady(t, 4)
+	api.awaitParked(t, 1)
+	api.clock.Advance(time.Duration(api.settings.Api.ReadyHoldSeconds) * time.Second)
+	if answer := api.awaitAnswer(t, answers); answer.Answer != dnsservice.DnsReadyWaiting {
+		t.Fatalf("without a serving authority: %+v", answer)
+	}
+}
+
 // RFC 1982 on the SOA's low 32 bits (plan reading 4): a serial past 2^32 reads against its low bits,
 // and an SOA that wrapped reads above one that did not.
 func TestDnsReadyComparesSerialsAcrossAWrap(t *testing.T) {

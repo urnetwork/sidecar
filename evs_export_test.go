@@ -229,15 +229,28 @@ func TestEvsExportRefusesATreeItsChangesDoNotBuild(t *testing.T) {
 // for the top level (question evs1-m2-24-root-directory-names, option 1): the tree holds what stands at each version,
 // a removal taking its path out, git fsck takes it, and two exporters give one tip.
 func TestEvsExportFileModeRebuildsASmallTree(t *testing.T) {
-	world := newEvsTestWorld(t)
-	world.push(&evsTestChange{path: "", children: []string{"a.txt", "d"}}, &evsTestChange{path: "a.txt", content: []byte("a\n")},
-		&evsTestChange{path: "d", children: []string{"b.txt", "c.txt"}}, &evsTestChange{path: "d/b.txt", content: []byte("b\n")},
-		&evsTestChange{path: "d/c.txt", content: []byte("c\n"), segment: true})
-	world.push(&evsTestChange{path: "d/c.txt"}, &evsTestChange{path: "a.txt", content: []byte("a again\n")})
+	writer := newEvsTestWriter(t)
+	writer.server.know("a.txt", "d/b.txt", "d/c.txt")
+	_, err := writer.repo.WritePaths(t.Context(), &EvsWritePathsArgs{Writes: []*EvsPathWrite{
+		{Path: "a.txt", Content: strings.NewReader("a\n")},
+		{Path: "d/b.txt", Content: strings.NewReader("b\n")},
+		{Path: "d/c.txt", Content: bytes.NewReader(evsTestContent("c.txt", 64*1024))},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = writer.repo.WritePaths(t.Context(), &EvsWritePathsArgs{Writes: []*EvsPathWrite{
+		{Path: "d/c.txt", Remove: true},
+		{Path: "a.txt", Content: strings.NewReader("a again\n")},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	tips := []EvsGitOid{}
 	for _, label := range []string{"one", "two"} {
 		dir := filepath.Join(t.TempDir(), "file.git")
-		result, err := world.reader(t, evsTestId("exporter "+label)).client.Repo(world.repoId).Export(context.Background(), &EvsExportArgs{Dir: dir})
+		reader := writer.otherDevice(t, "exporter "+label)
+		result, err := reader.repo.Export(t.Context(), &EvsExportArgs{Dir: dir})
 		if err != nil {
 			t.Fatal(err)
 		}

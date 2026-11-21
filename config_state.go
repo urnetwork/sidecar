@@ -132,10 +132,11 @@ func (self ConfigSigner) RowsSigner() []byte {
 
 // A base a state stands on.
 type configBase struct {
-	n      uint64
-	chain  [sha256.Size]byte
-	timeMs int64
-	header *bridge.ProjectionHeader
+	recoveryBodies map[Id]*configRecoveryBody
+	n              uint64
+	chain          [sha256.Size]byte
+	timeMs         int64
+	header         *bridge.ProjectionHeader
 }
 
 // One base's (n, A_n) kept for ConfigLogSettings.BasePinRetention.
@@ -172,6 +173,8 @@ func (self *configProposal) windowed() bool {
 
 // §7.9's S(n).
 type ConfigState struct {
+	// The last verified projection's scope declarations, in label order and immutable between bases.
+	teamScopes   []*bridge.TeamScopeRow
 	networkId    Id
 	genesis      *bridge.Genesis
 	genesisChain [sha256.Size]byte
@@ -190,6 +193,8 @@ type ConfigState struct {
 	delegations map[string]*bridge.DelegationRow
 	keys        map[string]*bridge.KeyRow
 	aclRows     *protocol.AclRows
+	// Canonical actions of port-limited grants this reader verified. The ciphertext stays bound to its grant id.
+	grantActions map[string][]byte
 	// the newest AdminSet's threshold as signed, 0 for the default (§7.9's authority row)
 	threshold uint32
 	// the ServiceSettings values every verifier judges by, from the newest base's rows; nil before base 1
@@ -197,6 +202,7 @@ type ConfigState struct {
 	// the ServiceSettings the base's config head holds, nil for none, and whether the head was opened to see them
 	headSettings      *protocol.ServiceSettings
 	headSettingsKnown bool
+	recoveryBodies    map[Id]*configRecoveryBody
 	// the VersioningRules the base's config head holds, nil for none; known by headSettingsKnown (config_versioning.go)
 	headVersioningRules *protocol.VersioningRules
 	proposals           map[[sha256.Size]byte]*configProposal
@@ -592,6 +598,9 @@ func (self *ConfigState) Rows() *bridge.ProjectionRows {
 		}
 	}
 	rows.Settings = proto.Clone(self.Settings()).(*bridge.ProjectionSettings)
+	for _, scope := range self.teamScopes {
+		rows.TeamScopes = append(rows.TeamScopes, proto.Clone(scope).(*bridge.TeamScopeRow))
+	}
 	rows.Proposals = self.openProposalRows()
 	rows.Ring = self.ringRows()
 	for _, key := range self.indexerKeys() {
@@ -698,6 +707,7 @@ type configStateBuilder struct {
 func configCopyState(state *ConfigState) *ConfigState {
 	return &ConfigState{
 		networkId:           state.networkId,
+		teamScopes:          state.teamScopes,
 		genesis:             state.genesis,
 		genesisChain:        state.genesisChain,
 		n:                   state.n,
@@ -710,10 +720,12 @@ func configCopyState(state *ConfigState) *ConfigState {
 		delegations:         state.delegations,
 		keys:                state.keys,
 		aclRows:             state.aclRows,
+		grantActions:        state.grantActions,
 		threshold:           state.threshold,
 		settings:            state.settings,
 		headSettings:        state.headSettings,
 		headSettingsKnown:   state.headSettingsKnown,
+		recoveryBodies:      state.recoveryBodies,
 		headVersioningRules: state.headVersioningRules,
 		proposals:           state.proposals,
 		indexers:            state.indexers,

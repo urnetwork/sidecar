@@ -111,11 +111,7 @@ type SidecarSettings struct {
 	// kill or a lost answer leaves it pending, retried with the same bytes (§5.6's sign row, §5.9). 7 days, §7.9's
 	// most, a reading: §5.6 sets none shorter, and a cosign at k > 1 needs the whole of it.
 	StatementTimeout time.Duration
-	// Whether this sidecar signs a RecoveryBind or RecoveryRebind. Off, the default: QD-010 fixes the derivation
-	// from a code to its keys (keys_recovery.go), and no real binding is signed until §5.9 states it, since a
-	// printed code outlives any regeneration (plan-CORE-recovery-derivation #2's interim). While off,
-	// RotateRecovery answers ErrRecoveryBindingGated and signs nothing; keychain.wrap's copy still follows a
-	// binding another device signed.
+	// Whether this sidecar signs the recovery bindings derived from the §5.9 code.
 	RecoveryBindings bool
 
 	// Nil, the default: connect's default logger, glog, on connect legs (adapted, log_connect.go); no
@@ -179,6 +175,8 @@ type SidecarTokenRefreshSettings struct {
 // stored beside its wrap, so changing these moves only new wraps. A cost of zero would be a pass with
 // no cost, and an interval of zero a limit that never counts, so these are held as every number is.
 type SidecarKeychainSettings struct {
+	// The largest sidecar.json read from disk, in bytes. A larger document fails closed.
+	StateJsonMaxByteCount int
 	// Argon2id memory: 64 MiB (RFC 9106 §4); 19 MiB on mobile and wasm (OWASP).
 	PassMemoryByteCount int64
 	// Argon2id passes: t=3 (RFC 9106 §4); 2 on mobile and wasm (OWASP).
@@ -986,8 +984,9 @@ func (self *SidecarSocketSettings) validate() error {
 func DefaultSidecarSettings() *SidecarSettings {
 	passMemoryByteCount, passIterationCount, passThreadCount := defaultSidecarPassCost()
 	return &SidecarSettings{
-		Instance:   "default",
-		AppVersion: Version,
+		RecoveryBindings: true,
+		Instance:         "default",
+		AppVersion:       Version,
 
 		Connect:          defaultSidecarConnectSettings(),
 		ProtocolSettings: DefaultSidecarProtocolSettings(),
@@ -1000,12 +999,13 @@ func DefaultSidecarSettings() *SidecarSettings {
 			ServiceTokenCacheTimeout:   10 * time.Minute,
 		},
 		KeychainSettings: &SidecarKeychainSettings{
-			PassMemoryByteCount: passMemoryByteCount,
-			PassIterationCount:  passIterationCount,
-			PassThreadCount:     passThreadCount,
-			PassAttemptCount:    5,
-			PassAttemptInterval: 10 * time.Minute,
-			AutoLockTimeout:     10 * time.Minute,
+			StateJsonMaxByteCount: 1024 * 1024,
+			PassMemoryByteCount:   passMemoryByteCount,
+			PassIterationCount:    passIterationCount,
+			PassThreadCount:       passThreadCount,
+			PassAttemptCount:      5,
+			PassAttemptInterval:   10 * time.Minute,
+			AutoLockTimeout:       10 * time.Minute,
 		},
 		LocalSettings: &SidecarLocalSettings{
 			IdleExitTimeout:        10 * time.Minute,

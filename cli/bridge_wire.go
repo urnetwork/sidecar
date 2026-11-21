@@ -383,6 +383,7 @@ type urBridgeNetwork struct {
 	networkId sidecar.Id
 	bridge    urTunBridge
 	links     urTunLinks
+	config    *urBridgeConfig
 	// whether the network's sidecar is a paired child, whose app's device role may hold the block (§17.11's yield)
 	paired            func() bool
 	componentSettings *sidecar.BridgeComponentSettings

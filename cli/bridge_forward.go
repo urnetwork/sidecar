@@ -10,8 +10,7 @@
 //
 // urBridgeBackend is one network's sidecar.DaemonBridgeBackend: the device role's status as the listing, the stack,
 // and what the network's config gives, the filer, the ledger's rules and the grants' state, through urBridgeConfigOf.
-// The daemon follows no network's config yet (bridge_wire.go's comment; question bridge-m4-16-daemon-config-follower),
-// so urBridgeConfigOf is nil and every bridge method refuses, naming it, the closed direction.
+// A network without a standing config follower cannot file or open a forward.
 
 package main
 
@@ -57,12 +56,20 @@ type urBridgeConfig struct {
 	// A private name or an overlay address as its sidecar; nil resolves ids alone.
 	Resolve func(ctx context.Context, name string) (sidecar.Id, error)
 	// Where a forward dials and whether its grant is active; nil refuses every forward.
-	ForwardRoute func(ctx context.Context, request *sidecar.BridgeForwardRequest, grantId []byte) (*sidecar.DaemonBridgeForwardRoute, error)
+	ForwardRoute  func(ctx context.Context, request *sidecar.BridgeForwardRequest, grantId []byte) (*sidecar.DaemonBridgeForwardRoute, error)
+	grantsChanged func() (uint64, chan struct{})
 }
 
-// Builds a network's urBridgeConfig over the daemon's config follower for it: nil until the daemon follows a
-// network's config (the file's comment), and every bridge method then refuses with errUrBridgeUnwired.
-var urBridgeConfigOf func(ctx context.Context, network *urBridgeNetwork, running *sidecar.Sidecar) (*urBridgeConfig, error)
+// Each network's builder installs its filing sources once, alongside the bridge.
+var urBridgeConfigOf = func(ctx context.Context, network *urBridgeNetwork, running *sidecar.Sidecar) (*urBridgeConfig, error) {
+	if network.config == nil || running == nil {
+		return nil, errUrBridgeUnwired
+	}
+	if follower := running.ConfigFollower(); follower == nil || follower.Client() == nil {
+		return nil, errUrBridgeUnwired
+	}
+	return network.config, nil
+}
 
 // The bridge's methods over a target that hosts its networks.
 func urBridgeMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
@@ -106,6 +113,7 @@ func newUrDaemonBridges(bridges *urBridgeDaemon, listen func(args *sidecar.Daemo
 	if err != nil {
 		return nil, err
 	}
+	backends.grantsChanged = daemonBridges.GrantsChanged
 	context.AfterFunc(bridges.ctx, func() {
 		daemonBridges.Close()
 		backends.close()
@@ -115,7 +123,8 @@ func newUrDaemonBridges(bridges *urBridgeDaemon, listen func(args *sidecar.Daemo
 
 // Each network's backend, built on first use and kept until the daemon's bridges end.
 type urBridgeBackends struct {
-	bridges *urBridgeDaemon
+	bridges       *urBridgeDaemon
+	grantsChanged func(sidecar.Id)
 
 	stateLock         sync.Mutex
 	networkIdBackends map[sidecar.Id]*urBridgeBackend
@@ -129,14 +138,6 @@ func (self *urBridgeBackends) backend(ctx context.Context, networkId sidecar.Id,
 	if err != nil {
 		return nil, err
 	}
-	held := func() *urBridgeBackend {
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
-		return self.networkIdBackends[networkId]
-	}()
-	if held != nil && held.network == network {
-		return held, nil
-	}
 	if urBridgeConfigOf == nil {
 		return nil, errUrBridgeUnwired
 	}
@@ -147,7 +148,17 @@ func (self *urBridgeBackends) backend(ctx context.Context, networkId sidecar.Id,
 	if config == nil || config.Filer == nil {
 		return nil, errUrBridgeUnwired
 	}
+	held := func() *urBridgeBackend {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.networkIdBackends[networkId]
+	}()
+	if held != nil && held.network == network {
+		return held, nil
+	}
 	built := &urBridgeBackend{backends: self, network: network, config: config}
+	ctx, cancel := context.WithCancel(self.bridges.ctx)
+	built.cancel = cancel
 	var replaced *urBridgeBackend
 	kept := func() *urBridgeBackend {
 		self.stateLock.Lock()
@@ -164,6 +175,21 @@ func (self *urBridgeBackends) backend(ctx context.Context, networkId sidecar.Id,
 	}()
 	if replaced != nil {
 		replaced.close()
+	}
+	if kept != built {
+		cancel()
+	} else if config.grantsChanged != nil && self.grantsChanged != nil {
+		go func() {
+			for {
+				_, changed := config.grantsChanged()
+				self.grantsChanged(networkId)
+				select {
+				case <-ctx.Done():
+					return
+				case <-changed:
+				}
+			}
+		}()
 	}
 	if kept == nil {
 		return nil, errUrTunClosed
@@ -218,6 +244,7 @@ type urBridgeBackend struct {
 	backends *urBridgeBackends
 	network  *urBridgeNetwork
 	config   *urBridgeConfig
+	cancel   context.CancelFunc
 
 	stateLock sync.Mutex
 	// the userspace stack, made at the first forward's dial
@@ -321,6 +348,9 @@ func (self *urBridgeBackend) DialForward(ctx context.Context, network string, ad
 
 // Ends the backend's stack.
 func (self *urBridgeBackend) close() {
+	if self.cancel != nil {
+		self.cancel()
+	}
 	stack := func() *urBridgeStack {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()

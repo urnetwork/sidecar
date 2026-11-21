@@ -42,6 +42,8 @@ var ErrSearchHitUnknown = errors.New("search: the hit is none a live cursor of t
 type SearchHitRef struct {
 	RepoId Id
 	RefId  Id
+	// Empty for main. A content ref with no local name is represented by id:<ref_id>.
+	RefName string
 	// The path, or a derived document's registered name.
 	Path    string
 	Version uint64
@@ -59,6 +61,15 @@ type searchCursorTable struct {
 	cursors   map[[searchCursorIdByteCount]byte]*searchCursor
 }
 
+// A host-wide search holds the component tokens on its first network's session cursor, sharing its lifetime.
+type daemonHostedSearch struct {
+	pageLock   sync.Mutex
+	networkIds []Id
+	tokens     []string
+	next       int
+	closed     bool
+}
+
 // One open cursor.
 type searchCursor struct {
 	id       [searchCursorIdByteCount]byte
@@ -71,6 +82,28 @@ type searchCursor struct {
 	hitOrder []string
 	// Its search completed and its stream closed (finish): no page is left, and its hit ids open until it idles out.
 	finished bool
+	// The component cursors of a host-wide search anchored by this session's token.
+	hosted *daemonHostedSearch
+}
+
+// Visits a live session cursor under the table lock. Finished cursors still hold their hit references.
+func (self *searchCursorTable) visit(session Id, token string, visit func(*searchCursor)) error {
+	id, ok := self.cursorId(session, token)
+	if !ok {
+		return ErrSearchCursorInvalid
+	}
+	self.sweep()
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	cursor := self.cursors[id]
+	if cursor == nil || cursor.stream.scopeEnded() {
+		return ErrSearchCursorExpired
+	}
+	cursor.usedAt = self.clock.Now()
+	if visit != nil {
+		visit(cursor)
+	}
+	return nil
 }
 
 // A table with a fresh key.
@@ -219,7 +252,7 @@ func (self *searchCursorTable) noteHits(session Id, token string, hits []SearchH
 			cursor.hitOrder = append(cursor.hitOrder, hitId)
 		}
 		cursor.hits[hitId] = &SearchHitRef{
-			RepoId: hit.Repo, RefId: hit.Ref, Path: hit.Path, Version: hit.Version, DocKey: hit.DocKey, DocKind: hit.DocKind,
+			RepoId: hit.Repo, RefId: hit.Ref, RefName: hit.refName, Path: hit.Path, Version: hit.Version, DocKey: hit.DocKey, DocKind: hit.DocKind,
 		}
 	}
 	for maxCount < len(cursor.hitOrder) {
@@ -257,7 +290,7 @@ func (self *searchCursorTable) openHit(session Id, hitId string) (*SearchHitRef,
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	for _, cursor := range self.cursors {
-		if cursor.session != session {
+		if cursor.session != session || cursor.stream.scopeEnded() {
 			continue
 		}
 		if ref, ok := cursor.hits[hitId]; ok {
@@ -276,7 +309,7 @@ func (self *searchCursorTable) sweep() {
 		defer self.stateLock.Unlock()
 		ended := []*searchCursor{}
 		for id, cursor := range self.cursors {
-			if now.Sub(cursor.usedAt) > self.settings.CursorTimeout || !cursor.finished && cursor.stream.ended() {
+			if now.Sub(cursor.usedAt) > self.settings.CursorTimeout || cursor.stream.scopeEnded() || !cursor.finished && cursor.stream.ended() {
 				delete(self.cursors, id)
 				ended = append(ended, cursor)
 			}

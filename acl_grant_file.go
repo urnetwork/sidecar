@@ -127,7 +127,7 @@ func (self *aclEngineInstall) covers(subject AclSubject, target *protocol.AclTar
 			return !rule.portsLimited
 		}
 		for _, port := range ports {
-			if !aclLocalPortsMatch(rule, self.localRules[rule.index], port.GetProtocol(), port.GetFirst()) {
+			if !aclLocalPortsMatch(rule.portsLimited, self.localRules[rule.index], port.GetProtocol(), port.GetFirst()) {
 				return false
 			}
 		}

@@ -182,6 +182,9 @@ func (self *GkmEngine) serveEpochCommit(request *GkmRequest) {
 		self.healGroupInfoPointer(request, request.Cluster, groupId, upload.epoch, writeKind)
 	}
 	request.Reply(nil)
+	if winner == nil {
+		self.metrics.commitSeconds.Observe(self.clock.Now().Sub(request.started).Seconds())
+	}
 }
 
 // Answers a commit whose epoch n-1 is gone: its own commit standing at n is the original 200 (FI-2), another's a 409

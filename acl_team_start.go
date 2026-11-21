@@ -25,8 +25,11 @@ package sidecar
 
 import (
 	_ "embed"
+	"slices"
 	"strings"
 	"time"
+
+	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 //go:embed acl_team_start.hujson
@@ -42,6 +45,73 @@ func AclTeamStartDocument() []byte {
 type AclScope struct {
 	Label    string
 	MemberId Id
+	TagId    Id
+}
+
+// The binding in this verified base. A removed member's label never becomes a tag scope.
+func (self *ConfigState) TeamScope(label string) (AclScope, bool) {
+	if self == nil {
+		return AclScope{}, false
+	}
+	i, ok := slices.BinarySearchFunc(self.teamScopes, label, func(row *bridge.TeamScopeRow, text string) int {
+		return strings.Compare(row.GetLabel(), text)
+	})
+	if !ok {
+		return AclScope{}, false
+	}
+	row := self.teamScopes[i]
+	scope := AclScope{Label: row.GetLabel()}
+	if row.GetMemberId() != nil {
+		scope.MemberId = Id(row.GetMemberId())
+	} else {
+		scope.TagId = Id(row.GetTagAtom())
+	}
+	return scope, true
+}
+
+// All the labels reserved by this verified base, including those whose member is no longer standing.
+func (self *ConfigState) TeamScopeLabels() []string {
+	if self == nil {
+		return nil
+	}
+	labels := make([]string, 0, len(self.teamScopes))
+	for _, scope := range self.teamScopes {
+		labels = append(labels, scope.GetLabel())
+	}
+	return labels
+}
+
+// The scope whose signed member or tag owns this device. Multiple matches return an
+// empty binding with found true so a caller cannot mistake ambiguity for an unscoped device.
+// Consent and eligibility at the requested time are checked by the caller.
+func (self *ConfigState) TeamScopeForDevice(sidecarId Id) (AclScope, bool) {
+	if self == nil {
+		return AclScope{}, false
+	}
+	device := self.Sidecar(sidecarId)
+	if device == nil {
+		return AclScope{}, false
+	}
+	var matched AclScope
+	for _, row := range self.teamScopes {
+		scope := AclScope{Label: row.GetLabel()}
+		if member := row.GetMemberId(); member != nil {
+			scope.MemberId = Id(member)
+			if scope.MemberId != device.MemberId {
+				continue
+			}
+		} else {
+			scope.TagId = Id(row.GetTagAtom())
+			if !slices.Contains(device.TagIds, scope.TagId) {
+				continue
+			}
+		}
+		if matched.Label != "" {
+			return AclScope{}, true
+		}
+		matched = scope
+	}
+	return matched, matched.Label != ""
 }
 
 // The scope a host names, false for a host of no scope: <label>.<scope>, two labels, the second the scope.

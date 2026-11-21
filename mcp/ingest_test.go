@@ -748,7 +748,7 @@ func TestIngestOnRecordStreams(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err := sidecar.NewSidecarRecord(&sidecar.SidecarRecordArgs{
+	record, err := sidecar.OpenSidecarRecord(t.Context(), &sidecar.SidecarRecordArgs{
 		SidecarId:         sidecarId,
 		IdentityPublicKey: publicKey,
 		Store:             store,

@@ -179,7 +179,7 @@ func (self *GkmReconciler) sweepUnit(ctx context.Context, cluster sidecar.BlobCl
 		if err != nil {
 			return key, nil
 		}
-		if !firstCluster {
+		if !firstCluster || family != "rk" && !self.settings.Service.DraftMls {
 			// per-sidecar objects live on the first cluster alone
 			return gkmKeyPrefix + family + "/" + idText + "/" + gkmKeyPastSuffix, nil
 		}
@@ -366,10 +366,13 @@ func (self *GkmReconciler) sweepGroup(ctx context.Context, cluster sidecar.BlobC
 		return nil
 	}
 	ctx = withGkmSweepHeld(ctx, func(ctx context.Context) bool { return self.repoHeld(ctx, cluster, repoId) })
-	if err := self.retainEpochs(ctx, cluster, groupId, listing.epochs, now); err != nil {
+	if err := self.collectWraps(ctx, cluster, groupId, listing, now); err != nil {
 		return err
 	}
-	if err := self.collectWraps(ctx, cluster, groupId, listing, now); err != nil {
+	if !self.settings.Service.DraftMls {
+		return nil
+	}
+	if err := self.retainEpochs(ctx, cluster, groupId, listing.epochs, now); err != nil {
 		return err
 	}
 	for _, info := range listing.welcomes {

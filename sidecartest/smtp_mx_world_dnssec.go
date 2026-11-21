@@ -85,6 +85,11 @@ func (self *MxWorld) dnssecAnswerWithLock(zone *mxWorldZone, name string, rrtype
 		return self.denialWithLock(zone, name), !exists
 	}
 	switch rrtype {
+	case dns.TypeA, dns.TypeAAAA, dns.TypePTR:
+		if records := zone.records[name][rrtype]; len(records) != 0 {
+			return self.signedWithLock(zone, records), false
+		}
+		return denial()
 	case dns.TypeMX:
 		wire, _, _, found := self.mxAnswerWithLock(zone, name)
 		if !found {

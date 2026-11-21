@@ -155,6 +155,8 @@ type SmtpSendResult struct {
 // setting (§14.5's copy rule).
 type SmtpDomainOutcome struct {
 	Domain string
+	// Only the encrypted mailbox stores this. The public MailOutcome omits it.
+	progress *protocol.MailRecipientProgress
 	// The mode the domain's MX selected, or unknown if the send ended before it was known.
 	Mode SmtpMode
 	// too_large: the message's encoded bytes.

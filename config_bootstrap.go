@@ -40,6 +40,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -56,6 +57,8 @@ type ConfigBootstrapArgs struct {
 	Sign              ConfigSignFunction
 	// The config repo the Genesis names, a fresh id.
 	ConfigRepoId Id
+	// The time the first device began its durable draft, kept across retries. Zero uses Clock.
+	GenesisTime time.Time
 	// The first head on evs, keyed by the config group KF1 forms after base 1 (the file header). Nil with Heads.
 	First *ConfigFirstHead
 	// The config repo's main ref as a test's fake keeps it, which keys, signs and sends the first head itself; nil with
@@ -119,13 +122,17 @@ func BootstrapNetwork(ctx context.Context, args *ConfigBootstrapArgs) (*ConfigBo
 	if clock == nil {
 		clock = RealClock{}
 	}
+	genesisTime := args.GenesisTime
+	if genesisTime.IsZero() {
+		genesisTime = clock.Now()
+	}
 	genesis := &bridge.Genesis{
 		NetworkId:              args.NetworkId.Bytes(),
 		ConfigRepoId:           args.ConfigRepoId.Bytes(),
 		OwnerMemberId:          args.OwnerMemberId.Bytes(),
 		OwnerSidecarId:         args.SidecarId.Bytes(),
 		OwnerIdentityPublicKey: bytes.Clone(args.IdentityPublicKey),
-		TimeMs:                 clock.Now().UnixMilli(),
+		TimeMs:                 genesisTime.UnixMilli(),
 	}
 	signedGenesis, err := configSignRecord(args.Sign, bridge.SignedType_SIGNED_GENESIS, genesis)
 	if err != nil {

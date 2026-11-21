@@ -154,24 +154,20 @@ func (self *FakeSmtpMailbox) RemoveOutbox(ctx context.Context, effectKey []byte)
 // Encodes as or/ holds them, refusing what the wire form refuses, the record naming its send as the file's comment
 // says.
 func (self *FakeSmtpMailbox) WriteOutcomes(ctx context.Context, effectKey []byte, outcomes []*sidecar.SmtpDomainOutcome) error {
-	record := &protocol.MailOutcomeRecord{}
-	for _, outcome := range outcomes {
-		mailOutcome, err := outcome.MailOutcome()
-		if err != nil {
-			return err
-		}
-		record.Outcomes = append(record.Outcomes, mailOutcome)
-	}
 	return self.call(ctx, "WriteOutcomes", func() error {
+		previous := &protocol.MailOutcomeRecord{}
 		if standing, ok := self.outcomes[string(effectKey)]; ok {
-			kept := &protocol.MailOutcomeRecord{}
-			if proto.Unmarshal(standing, kept) == nil && len(kept.GetSendId()) == len(sidecar.Id{}) {
-				record.SendId = bytes.Clone(kept.GetSendId())
+			if proto.Unmarshal(standing, previous) != nil {
+				previous.Reset()
 			}
 		} else if file, ok := self.outbox[string(effectKey)]; ok {
 			if sendId, ok := sidecar.MailOutboxSendIdOf(file.Message); ok {
-				record.SendId = sendId.Bytes()
+				previous.SendId = sendId.Bytes()
 			}
+		}
+		record, err := sidecar.SmtpMailboxOutcomeRecord(outcomes, previous)
+		if err != nil {
+			return err
 		}
 		encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(record)
 		if err != nil {
@@ -221,13 +217,9 @@ func (self *FakeSmtpMailbox) readOutcomes(ctx context.Context, method string, ef
 	if err := proto.Unmarshal(encoded, record); err != nil {
 		return sidecar.Id{}, nil, err
 	}
-	outcomes := make([]*sidecar.SmtpDomainOutcome, 0, len(record.GetOutcomes()))
-	for _, mailOutcome := range record.GetOutcomes() {
-		outcome, err := sidecar.SmtpDomainOutcomeFromMailOutcome(mailOutcome)
-		if err != nil {
-			return sidecar.Id{}, nil, err
-		}
-		outcomes = append(outcomes, outcome)
+	outcomes, err := sidecar.SmtpMailboxOutcomes(record)
+	if err != nil {
+		return sidecar.Id{}, nil, err
 	}
 	// a send_id of another length names no send
 	sendId, err := sidecar.IdFromBytes(record.GetSendId())

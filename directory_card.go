@@ -553,6 +553,39 @@ func (self *directoryFiles) acceptedAt(path string) *directoryAcceptedFile {
 	return self.accepted[path]
 }
 
+// A verified current card drops withdrawn items by omission. An older retained
+// announce entry cannot restore one. Later entries still participate in the fold.
+func (self *directoryFiles) supersedesEntry(version *directoryVersion) bool {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	path := DirectoryCardPath(version.writerId)
+	if version.key.Kind == DirectoryAnnouncementKindRepo {
+		path = DirectoryRepoPath(recordIdOf(version.item.GetWhere().GetRepoId()))
+	}
+	taken := self.accepted[path]
+	if taken == nil {
+		return false
+	}
+	if taken.file.Removed {
+		return min(version.pushTimeMillis, version.item.GetRenewedMillis()) <= taken.file.TimeMillis
+	}
+	if taken.repo != nil {
+		// A current repo file contributes its item to the ordinary version comparison.
+		return false
+	}
+	// An offline stream draft may be delivered after the snapshot. Its renewal
+	// and the card's written time are both signed by this same writer.
+	if version.item.GetRenewedMillis() > taken.card.Card.GetWrittenMillis() {
+		return false
+	}
+	for _, item := range taken.card.Card.GetItems() {
+		if item.GetKind() == uint32(version.key.Kind) && bytes.Equal(item.GetAnnouncementId(), version.key.AnnouncementId[:]) {
+			return false
+		}
+	}
+	return true
+}
+
 // Whether the newest version this copy judged at path was refused: a breach, which its rightful writer repairs.
 func (self *directoryFiles) breached(path string) bool {
 	self.stateLock.Lock()
@@ -626,7 +659,7 @@ func (self *directoryFiles) judge(fold *DirectoryFold) []*directoryVersion {
 	recordAuth := client.recordAuth()
 	nowMillis := client.clock.Now().UnixMilli()
 	judge := &directoryJudge{fold: fold, auth: auth, readerPin: auth.Pin(), nowMillis: nowMillis, standingNow: map[Id]DirectoryStanding{}}
-	for _, file := range client.store.Cards() {
+	for _, file := range client.store.filesForFold() {
 		_, card := directoryCardPathSidecar(file.Path)
 		_, repo := directoryRepoPathRepo(file.Path)
 		if !card && !repo {
@@ -638,6 +671,11 @@ func (self *directoryFiles) judge(fold *DirectoryFold) []*directoryVersion {
 			return self.judged[file.Path]
 		}()
 		if file.PushVersion <= judgedVersion {
+			continue
+		}
+		file, err := client.store.forJudgement(file)
+		if err != nil {
+			client.log.Warningf("[directory]could not open a staged file: %v", err)
 			continue
 		}
 		var judgement directoryFileJudgement

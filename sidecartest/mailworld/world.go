@@ -136,6 +136,8 @@ type MailWorldSettings struct {
 	// scenario gives its run's hosts, which are server's stores on T3. Every other part of a host stays the fake
 	// host's: its gates, quota, authenticator, push and metrics.
 	Stores func(service string) *sidecar.ServiceHost
+	// A transport failure before a selected EVS read reaches the handler.
+	EvsReadError func(request *protocol.EvsReadRequest) error
 	// Told of each request a device's client sent evs and the answer it took, its status and body, on the device's
 	// goroutine, as M10's rows read a push's refusal (m10_rows.go); nil for none.
 	EvsAnswered func(request *http.Request, status int, body []byte)
@@ -712,6 +714,24 @@ func (self *MailWorld) ReaderIds() []sidecar.Id {
 
 // The devices' transport: the engine's handler, its step 8s waited out after each push.
 func (self *MailWorld) RoundTrip(request *http.Request) (*http.Response, error) {
+	if fail := self.settings.EvsReadError; fail != nil && strings.HasSuffix(request.URL.Path, "/read") {
+		body, err := request.GetBody()
+		if err != nil {
+			return nil, err
+		}
+		data, err := io.ReadAll(body)
+		body.Close()
+		if err != nil {
+			return nil, err
+		}
+		read := &protocol.EvsReadRequest{}
+		if err := proto.Unmarshal(data, read); err != nil {
+			return nil, err
+		}
+		if err := fail(read); err != nil {
+			return nil, err
+		}
+	}
 	recorder := httptest.NewRecorder()
 	self.Engine.Handler().ServeHTTP(recorder, request)
 	if strings.HasSuffix(request.URL.Path, "/push") {

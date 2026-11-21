@@ -859,7 +859,7 @@ a drop job stuck           another taskworker takes it once its lease lapsed   r
                            (owner decision 397)
 ```
 
-**Postgres-loss and site-loss recovery (D-OPS-14, D-OPS-18),** ordering §7.9's, §10.8's, §11.13's, §12.6's and §21.10's mechanisms; steps run in order, each idempotent, and a recovery's identity is its incident id; §22.8 drills both (FS-41, FS-42):
+**Postgres-loss and site-loss recovery (D-OPS-14, D-OPS-18),** ordering §7.9's, §10.8's, §11.13's, §12.6's and §21.10's mechanisms; steps run in order, each idempotent, and a recovery's identity is its incident id; §22.8 drills both (FS-41, FS-42). A site loss also runs hardware, authority and the steps from groups through close.
 
 ```text
 postgres   ops            first set sidecar.yml's restore_hold (19.11), before the primary answers; restore the
@@ -880,7 +880,11 @@ postgres   ops            first set sidecar.yml's restore_hold (19.11), before t
                                          deactivated to re-enroll (§7.4)
                           rows the sidecar dump does not name come back as the main dump holds them, a deletion
                           after the main dump's snapshot undone (19.3); a network newer than both is lost with its
-                          rows, and taskworker's sidecar_restore_orphan_log job takes each proj/ log whose network
+                          rows
+hardware   ops            qualify the replacement hardware and its empty buckets with §22's suite before ops reads
+                          proj/. Keep restore_hold on and set reseed: true. This limits evs and gkm to re-seed
+                          uploads and GroupForms for absent repos and enables api's log upload (§7.9) when the hold clears
+ops        ops            taskworker's sidecar_restore_orphan_log job takes each proj/ log whose network
                           the restored rows lack: the log's repos stay active, unreachable since the network's
                           tokens are refused, and 7 d 10 min after the incident, the network's rows re-checked
                           still absent (else it cancels), each moves active -> shredding{incident} with
@@ -922,17 +926,6 @@ labels     taskworker     re-reads CT for <root> names logged since the sidecar 
                           certificate naming it re-binds it (POST /dns/label-reclaim, or the console's POST
                           /network/dns/label-reclaim); names nobody re-binds tombstone after D-DNS-10's 90
                           days, so I-14 holds across the gap
-rows       daemons        a refresh whose identity, binding or registration api lacks answers
-                          restore_required; the daemon re-registers its identity and newest binding (api takes
-                          them only once the projection, after a site loss the resumed log, admits that
-                          identity key), then its mail host keys, TLS endpoints, a certificate whose row the
-                          dump lost re-ordered first with replaces (§13.8), and push token
-billing    taskworker     recomputes stripe_meter_report rows newer than the dump from network_service_usage
-                          and re-sends them (§20.9's daily rows replace, never add); debits lost with the dump
-                          go unbilled
---- site loss only ---
-hardware   ops            new hardware with empty buckets passes §22's suite; reseed: true limits evs and gkm to
-                          re-seed uploads and GroupForms for absent repos, and opens api's log upload (§7.9)
 authority  token exchange re-seed mode (§7.8): until a network's log resumes, it mints only repo:<id>:admin,
                           for evs's /reseed and gkm's GroupForm, to the sidecars the restored rows list as that
                           network's Owners and Admins; other requests get restore_required; the mode ends
@@ -952,6 +945,15 @@ authority  token exchange re-seed mode (§7.8): until a network's log resumes, i
                           run that fails, then appends the base and re-derives its ticks; the base resumes the
                           log at unchanged positions and digests (no reader FORKs) and names each repo live,
                           deleted (restorable) or shredded; signers re-submit statements no adopted entry holds
+rows       daemons        a refresh whose identity, binding or registration api lacks answers
+                          restore_required; the daemon re-registers its identity and newest binding (api takes
+                          them only once the projection, after a site loss the resumed log, admits that
+                          identity key), then its mail host keys, TLS endpoints, a certificate whose row the
+                          dump lost re-ordered first with replaces (§13.8), and push token
+billing    taskworker     recomputes stripe_meter_report rows newer than the dump from network_service_usage
+                          and re-sends them (§20.9's daily rows replace, never add); debits lost with the dump
+                          go unbilled
+--- site loss only ---
 groups     repo admins'   place each repo they hold afresh (§11.8), evs's place route writing repo/ deleted{...}
            devices        at creation, while reseed is on, for one the repos step re-seeds as deleted (§11.12),
                           and re-form its group under a GroupForm linked through the ladder (D-KEYS-13); an
@@ -993,7 +995,8 @@ repos      devices        first the ERASE pushes (§11.12) each device signed in
 drops      taskworker     runs each re-seeded repo's drops (v1) again from their signed state (not_before_ms,
                           cancels; §11.13), so listed content a stale mirror re-seeded is stored again only until
                           the re-run job deletes it
-close      ops            after 30 days reseed turns off; admins learn which projected repos nothing
+close      ops            turn reseed off at least 30 days after both hardware qualification and the held api
+                          replay have ended. Admins learn which projected repos nothing
                           re-seeded, and which came back only below a surviving reader's pin, under an
                           EvsReseed, where a lost ERASE may let a stale mirror's slot keys return (§11.12's
                           residual), and which drops' listed content a stale mirror returned until the re-run
