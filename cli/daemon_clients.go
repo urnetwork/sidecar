@@ -536,6 +536,7 @@ func (self *urNetworkClients) evsClient() (*sidecar.EvsClient, error) {
 	if err != nil {
 		return nil, err
 	}
+	self.running.BindEvsFormat2(client)
 	// the repo's prefix write rules, read and written through this Sidecar's follower (DESIGN-DETAILS 16.2.5, 16.2.7)
 	prefixRules := self.running.EvsPrefixRulesArgs()
 	// the daemon is a desktop's: it repairs what its mirrors journal (16.2.8's who)
