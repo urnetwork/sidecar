@@ -1,8 +1,8 @@
 package gkmservice
 
 import (
-	"bytes"
 	"context"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -68,14 +68,15 @@ func (self *gkmWaitingBudget) AcquireP2(ctx context.Context, clusterId string, w
 	return self.WriteBudget.AcquireP2(ctx, clusterId, work)
 }
 
-// A reconciler over a slow-listing hold store and a waiting budget, with one sidecar's KeyPackage past its 90 d. The
+// A reconciler over a slow-listing hold store and a waiting budget, with one sidecar's published ReaderKey expired. The
 // budget's first turn comes past the bound, so the turn's recheck reads hold/ again; slow sets that read to answer past
 // the bound too, missing a hold acknowledged while it was out.
 func runGkmSweepAtABudgetTurnPastTheBound(t *testing.T, slow bool) (stands bool, lists int) {
-	fixture := newGkmFixture(t)
+	world := newGkmReaderKeyWorld(t)
+	fixture := world.fixture
 	state := newFakeGkmReconcilerState()
-	networkId, leaf := testId("network-a"), testId("sc-leaf")
-	state.sidecarNetworks[leaf] = networkId
+	networkId := testId("network-a")
+	state.sidecarNetworks[world.device.sidecarId] = networkId
 	holdBlobs := &gkmSlowHoldListBlobs{BlobStore: fixture.host.Blobs}
 	host := fixture.host.ServiceHost()
 	budget := &gkmWaitingBudget{WriteBudget: host.Budget}
@@ -87,9 +88,11 @@ func runGkmSweepAtABudgetTurnPastTheBound(t *testing.T, slow bool) (stands bool,
 		t.Fatal(err)
 	}
 	t.Cleanup(reconciler.Close)
-	kpKey, _ := GkmKeyPackageKey(leaf, bytes.Repeat([]byte{0x11}, gkmKeyPackageRefByteCount))
-	fixture.put("meta-1", kpKey, []byte("a KeyPackage"))
-	fixture.clock.Advance(91 * 24 * time.Hour)
+	if status := world.upload(world.token, world.readerKey(sidecar.GkmReaderKeyLifetime)); status != http.StatusOK {
+		t.Fatalf("publishing the ReaderKey: %d", status)
+	}
+	key := GkmReaderKeyKey(world.device.sidecarId)
+	fixture.clock.Advance(sidecar.GkmReaderKeyLifetime + time.Hour)
 
 	bound := sidecar.DefaultHoldSetSettings().RereadInterval
 	waited := false
@@ -130,17 +133,17 @@ func runGkmSweepAtABudgetTurnPastTheBound(t *testing.T, slow bool) (stands bool,
 		cursor = next
 	}
 	if !waited {
-		t.Fatal("the KeyPackage's DELETE never asked the budget")
+		t.Fatal("the ReaderKey's DELETE never asked the budget")
 	}
-	return fixture.object("meta-1", kpKey) != nil, holdBlobs.lists()
+	return fixture.object("meta-1", key) != nil, holdBlobs.lists()
 }
 
 // Owner decision 629 at gkm's DELETE: the budget's recheck is the last request before the DELETE, and its read of hold/
-// came back past the bound, missing a hold acknowledged while it was out, so the KeyPackage stays.
+// came back past the bound, missing a hold acknowledged while it was out, so the ReaderKey stays.
 func TestGkmSweepKeepsWhatAReadPastItsBoundCannotClear(t *testing.T) {
 	stands, lists := runGkmSweepAtABudgetTurnPastTheBound(t, true)
 	if !stands {
-		t.Fatal("the KeyPackage went on a read of hold/ older than its bound")
+		t.Fatal("the ReaderKey went on a read of hold/ older than its bound")
 	}
 	if lists != 2 {
 		t.Fatalf("%d LISTs of hold/, want the first check's and the recheck's", lists)
@@ -151,7 +154,7 @@ func TestGkmSweepKeepsWhatAReadPastItsBoundCannotClear(t *testing.T) {
 func TestGkmSweepDeletesOnAQuickReadAtItsBudgetTurn(t *testing.T) {
 	stands, lists := runGkmSweepAtABudgetTurnPastTheBound(t, false)
 	if stands {
-		t.Fatal("the KeyPackage stayed on a fresh read that shows no hold")
+		t.Fatal("the ReaderKey stayed on a fresh read that shows no hold")
 	}
 	if lists != 2 {
 		t.Fatalf("%d LISTs of hold/, want the first check's and one at the turn", lists)
