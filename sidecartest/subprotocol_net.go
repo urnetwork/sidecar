@@ -36,6 +36,43 @@ type SubprotocolSidecar struct {
 	attached    chan struct{}
 }
 
+// The fake issuer's stable client slots and stream ID ranges, with platform tokens the Net's API recognizes.
+type netEdgeClientSource struct {
+	*FakeServiceClientSource
+	api       *FakeApi
+	networkId sidecar.Id
+}
+
+// Mints the slot's credential on the same fake API that authenticates its transport.
+func (self *netEdgeClientSource) ServiceClient(ctx context.Context, index int) (*sidecar.ServiceClientAuth, error) {
+	credential, err := self.FakeServiceClientSource.ServiceClient(ctx, index)
+	if err != nil {
+		return nil, err
+	}
+	credential.ByJwt = self.api.ClientToken(self.networkId, sidecar.Id(credential.ClientId), sidecar.Id{})
+	return credential, nil
+}
+
+// Supplies a stock edge pool with credentials for its network and a transport on this in-process exchange.
+// The caller sets the pool's settings and inbound policy as its block does, and closes the resulting pool.
+func (self *Net) EdgeClientPoolArgs(networkId sidecar.Id) (*sidecar.EdgeClientPoolArgs, error) {
+	if self.OnPlatform() {
+		return nil, fmt.Errorf("a platform-backed Net takes edge clients from its platform")
+	}
+	api, err := self.Api()
+	if err != nil {
+		return nil, err
+	}
+	return &sidecar.EdgeClientPoolArgs{
+		Source: &netEdgeClientSource{
+			FakeServiceClientSource: NewFakeServiceClientSource(self.faults, nil),
+			api:                     api,
+			networkId:               networkId,
+		},
+		Platform: newNetSidecarPlatform(self, "edge", api),
+	}, nil
+}
+
 // The running generation's dispatcher.
 func (self *SubprotocolSidecar) Subprotocol() *sidecar.Subprotocol {
 	self.stateLock.Lock()
