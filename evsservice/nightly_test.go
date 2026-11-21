@@ -117,10 +117,10 @@ func TestNightlyPassCountsOnlyCommittedMultipartPlaces(t *testing.T) {
 	fixture.requireCommitted(fixture.seal(token, built, places), 1)
 	check(want)
 	for version := 2; EvsHeadWindowFirstVersion(fixture.head().Head) == 1; version++ {
-		if version > 2*EvsLogPageVersionCount+1 {
+		if version > sidecar.EvsWindowMaxEntryCount {
 			t.Fatal("expected the first version to page out")
 		}
-		place, _ := fixture.commit(fmt.Sprintf("after-multipart-%d", version))
+		place, _ := fixture.commit(fmt.Sprintf("p%03d", version))
 		want += int64(place.GetLength())
 	}
 	check(want)
