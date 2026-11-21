@@ -158,5 +158,5 @@ D['D-REPO-3'] = "Engines live in sidecar over operator-core's Env; sidecar owns 
 # Owner decision 141's file-mode amendment, approved 2026-11-20.
 D['D-EVS-22'] = ("Git-mode refs require their tip. File-mode refs admit disjoint writes and optionally require "
                  "the signed base version and chain.")
-Q['Q-EVS-8'] = (Q['Q-EVS-8'][0], "Git requires its tip. File mode admits disjoint writes by default and supports "
-                "an exact-head precondition.")
+Q['Q-EVS-8'] = (Q['Q-EVS-8'][0], "Git requires its tip; file mode admits disjoint writes unless the writer "
+                "signs EXACT_HEAD.")
