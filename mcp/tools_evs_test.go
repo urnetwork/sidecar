@@ -36,6 +36,7 @@ import (
 
 // One file of a fake repo.
 type fakeEvsFile struct {
+	readErr error
 	content []byte
 	signer  sidecar.Id
 	refId   sidecar.Id
@@ -108,6 +109,9 @@ func (self *fakeMcpEvsRepo) ReadHead(ctx context.Context, args *sidecar.EvsReadA
 		if err := gate(ctx); err != nil {
 			return nil, err
 		}
+	}
+	if file.readErr != nil {
+		return nil, file.readErr
 	}
 	if _, err := out.Write(file.content); err != nil {
 		return nil, err
@@ -1076,8 +1080,14 @@ func TestEvsWriteSealsTheSessionsAgentId(t *testing.T) {
 
 // A committed erasure has a stable terminal tool result without the underlying path.
 func TestMcpEvsErasedVersionResult(t *testing.T) {
-	result := mcpEvsError(fmt.Errorf("private path: %w", sidecar.ErrEvsErased))
-	if result != errMcpEvsErased || strings.Contains(result.Error(), "private path") {
-		t.Fatalf("erased version: %v", result)
+	env := newTestEvsToolEnv(t)
+	conn := env.conn("2025-11-25")
+	const path = "private.md"
+	env.put(env.general, path, "formerly held", env.tools.identity.SidecarId)
+	env.evs.repos[env.general].files[path].readErr = fmt.Errorf("%s: %w", path, sidecar.ErrEvsErased)
+	result := env.callTool(conn, "2025-11-25", "evs_read", map[string]any{"repo": env.general.String(), "path": path, "version": 3})
+	wantMcpError(t, result, McpCodeFailedPrecondition, "this version was erased")
+	if strings.Contains(result.Error.Message, path) || len(result.Result) != 0 {
+		t.Fatalf("erased version exposed its path or result: %+v", result)
 	}
 }
