@@ -5,7 +5,8 @@ This directory holds ten packages of `github.com/mjl-/mox v0.0.17` (module zip
 proxy.golang.org and checked against Go's checksum database): `dkim`, `dmarc`
 and `spf`, which D-MAIL-3 names, and the seven they import, `dns`, `message`,
 `mlog`, `moxio`, `publicsuffix`, `smtp` and `stub`. Each is as published, its
-tests included, except for the change to `mlog/log.go` below. Beside them are
+tests included, except for the changes to `mlog/log.go` and
+`publicsuffix/list.go` below. Beside them are
 mox's two license files, `testdata/message/`'s two messages, which `message`'s
 tests read, a `go.mod` naming only what these packages need, and this file.
 Nothing else of mox is here. The module path stays `github.com/mjl-/mox`, so a
@@ -16,7 +17,7 @@ mox is MIT, in `LICENSE.MIT`. `publicsuffix/public_suffix_list.txt`, which
 `LICENSE.MPLv2.0`, so `dependencies.yml` lists the module as `MIT AND
 MPL-2.0`. No file here carries the Go Authors' BSD code mox's README mentions.
 
-## The change
+## The changes
 
 As published, every mox package imports `mlog`, and `mlog` registers three
 Prometheus counters, `mox_logging_level_{info,warn,error}_total`, which pull
@@ -26,6 +27,18 @@ measured them at about 5.8 MB of an android/arm64 binary. `mlog/log.go`
 drops the two prometheus imports, the three counters and the block of
 `handler.Handle` that counts a record at info, warn or error. Nothing else
 reads them, and logging is otherwise unchanged.
+
+As published, `publicsuffix` parses its embedded list in a package `init`,
+into a tree of maps that holds about 2 MiB of heap for the life of the
+process, so every process that links a verifier carries it whether or not it
+ever looks a domain up. The sdk links one through sidecar's mail checks in
+every build but the iOS packet tunnel's, whose `ios_extension` tag leaves
+those checks out, so the Android and iOS apps and the desktop builds carried
+it, provide path and all: the sdk's TestDeviceLocalProviderMemoryUnderLoad,
+which holds the provide path to a 32 MiB budget, measured the tree at 2.0 MiB
+of an 8.4 MiB idle heap (2026-11-21). `publicsuffix/list.go` parses the list
+at the first `Lookup` instead, once, under a `sync.Once`. The list, the parse
+and every answer are unchanged.
 
 `go.mod` requires `github.com/mjl-/adns`, `github.com/mjl-/flate`,
 `golang.org/x/net` and `golang.org/x/text` at mox v0.0.17's versions, and no
@@ -62,5 +75,5 @@ in `sidecar/go.mod`, `../third_party/mox` in `sidecar/cli`,
 `../sidecar/third_party/mox` (one level further up in the nested sdk modules)
 in server, sn and the four sdk modules. upstream's API is a superset of this
 subset's, so the release fixture, which builds without replaces, still
-builds. Offering the `mlog` change upstream is an outward action for the
+builds. Offering either change upstream is an outward action for the
 owner.

@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"sync"
 
 	_ "embed"
 
@@ -39,18 +40,28 @@ type List struct {
 	includes, excludes labels
 }
 
-var publicsuffixList List
+var (
+	publicsuffixOnce sync.Once
+	publicsuffixList List
+)
 
 //go:embed public_suffix_list.txt
 var publicsuffixData []byte
 
-func init() {
-	log := mlog.New("publicsuffix", nil)
-	l, err := ParseList(log.Logger, bytes.NewReader(publicsuffixData))
-	if err != nil {
-		log.Fatalx("parsing public suffix list", err)
-	}
-	publicsuffixList = l
+// builtinList parses the embedded list at its first lookup rather than at package
+// init: parsed, it holds about 2 MiB of heap, which every process that links a
+// verifier would otherwise carry for its whole life, whether it ever looks up a
+// domain or not (urnetwork's change, URNETWORK.md).
+func builtinList() List {
+	publicsuffixOnce.Do(func() {
+		log := mlog.New("publicsuffix", nil)
+		l, err := ParseList(log.Logger, bytes.NewReader(publicsuffixData))
+		if err != nil {
+			log.Fatalx("parsing public suffix list", err)
+		}
+		publicsuffixList = l
+	})
+	return publicsuffixList
 }
 
 // ParseList parses a public suffix list.
@@ -129,7 +140,7 @@ func ParseList(elog *slog.Logger, r io.Reader) (List, error) {
 // Lookup calls Lookup on the builtin public suffix list, from
 // https://publicsuffix.org/list/.
 func Lookup(ctx context.Context, elog *slog.Logger, domain dns.Domain) (orgDomain dns.Domain) {
-	return publicsuffixList.Lookup(ctx, elog, domain)
+	return builtinList().Lookup(ctx, elog, domain)
 }
 
 // Lookup returns the organizational domain. If domain is an organizational
