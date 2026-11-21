@@ -156,7 +156,7 @@ func gateM5Cases(catalog *Catalog) map[string][]*GateTest {
 	// FS-42's M5 step: labels re-bind and TLS endpoints re-register, a kill, a suspension and a lift mailed after
 	// the dump hold through the edges' first reloads, and §19.10's dns step, every clause
 	cases[caseOf("FS-42", "m5").String()] = []*GateTest{
-		gatePendingTests("./cli/dns", "TestFs42DnsStepThroughBothEdges", "TestFs42DnsStepOnTheRestoreFrame", "TestFs42DnsStepCountsAnNsItCannotStop"),
+		gatePendingTests("./cli/dns", "TestFs42DnsStepThroughBothEdges", "TestFs42DnsStepOnTheRestoreFrame", "TestFs42DnsStepPersistsAnNsStopAcrossRerun"),
 		gatePendingTests("./cli/tlsedge", "TestT3TlsedgeKillsHoldThroughAPostgresRestore", "TestT3TlsedgeTakesASnapshotAfterALabelMapRestore"),
 		gateM5SocketStepTest(),
 		{Repo: "server", Package: "./sidecarrestore", Names: []string{

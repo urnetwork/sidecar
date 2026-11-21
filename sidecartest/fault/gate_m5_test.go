@@ -46,7 +46,7 @@ func TestGateM5NamesEachRowsTestsWhereTheyRun(t *testing.T) {
 			"TestFs42DnsStepThroughBothEdges", "TestDnsLabelReclaimRebindsTheName", "TestT3RedisLossHealsByTheNextHeartbeat", "TestT3TlsedgeKillsHoldThroughARedisLoss",
 		}},
 		{rowId: "FS-42", caseName: "m5", repos: []string{"server"}, names: []string{
-			"TestFs42DnsStepThroughBothEdges", "TestFs42DnsStepOnTheRestoreFrame", "TestFs42DnsStepCountsAnNsItCannotStop", "TestT3TlsedgeKillsHoldThroughAPostgresRestore",
+			"TestFs42DnsStepThroughBothEdges", "TestFs42DnsStepOnTheRestoreFrame", "TestFs42DnsStepPersistsAnNsStopAcrossRerun", "TestT3TlsedgeKillsHoldThroughAPostgresRestore",
 			"TestT3RedisLossHealsByTheNextHeartbeat", "TestM5StepsRunInTheFramesOrder",
 		}},
 		{rowId: "FS-47", caseName: "section-21", repos: []string{"sidecar", "server"}, names: []string{
