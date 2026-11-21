@@ -405,25 +405,13 @@ func (self *Sidecar) searchTrustReader() *SearchTrustReader {
 	if state == nil {
 		return nil
 	}
-	memberOf := func(sidecarId Id) (Id, bool) {
-		row := state.SidecarRow(sidecarId)
-		if row == nil {
-			return Id{}, false
-		}
-		member := row.GetMemberId()
-		if len(member) == 0 {
-			member = row.GetSponsor()
-		}
-		memberId, err := IdFromBytes(member)
-		return memberId, err == nil
-	}
-	memberId, ok := memberOf(identity.SidecarId)
+	memberId, ok := state.searchWriterMember(identity.SidecarId)
 	if !ok {
 		return nil
 	}
 	return &SearchTrustReader{
 		MemberId: memberId,
-		MemberOf: memberOf,
+		MemberOf: state.searchWriterMember,
 		RepoKind: func(repoId Id) protocol.RepoKind {
 			return state.Repo(repoId).GetKind()
 		},
