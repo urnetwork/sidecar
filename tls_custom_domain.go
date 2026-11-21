@@ -43,6 +43,7 @@ import (
 	"fmt"
 	"math/big"
 	mathrand "math/rand/v2"
+	"net/http"
 	"slices"
 	"strconv"
 	"strings"
@@ -359,6 +360,10 @@ type TlsCustomSettings struct {
 	OrderPollInterval time.Duration
 	// The holder's local deadline is the claim's send plus lease_ms less this.
 	LeaseMargin time.Duration
+	// While it waits between requests, the holder renews its claim once this fraction of lease_ms has passed since
+	// the claim it holds was sent: 17.2.6's LockLease / 3, a third. Not positive renews at every wait; 1 or more
+	// lets the local deadline pass first.
+	LeaseRenewFraction float64
 	// An attempt at one order lasts at most this; past it the holder releases, the order staying recorded.
 	OrderDeadline time.Duration
 	// How long a challenge is served.
@@ -391,6 +396,7 @@ func DefaultTlsCustomSettings() *TlsCustomSettings {
 		PollJitter:          1.0 / 5.0,
 		OrderPollInterval:   2 * time.Second,
 		LeaseMargin:         10 * time.Second,
+		LeaseRenewFraction:  1.0 / 3.0,
 		OrderDeadline:       10 * time.Minute,
 		ChallengeLifetime:   10 * time.Minute,
 		NonceRetryCount:     3,
@@ -575,7 +581,11 @@ type tlsCustomHold struct {
 	args     *TlsCustomClaimArgs
 	claim    *TlsCustomClaimResult
 	deadline time.Time
-	lost     bool
+	// when a holder waiting between requests renews the claim next (keep)
+	renewTime time.Time
+	// when the order's attempt began, which lasts at most OrderDeadline (17.2.7); zero outside one
+	attemptStart time.Time
+	lost         bool
 }
 
 // Takes the claim, answering the hold or the claim's refusal.
@@ -585,13 +595,21 @@ func (self *TlsCustomDomainOrderer) claim(ctx context.Context, account *TlsCusto
 	if err != nil {
 		return nil, err
 	}
-	return &tlsCustomHold{
-		orderer:  self,
-		account:  account,
-		args:     args,
-		claim:    claim,
-		deadline: sent.Add(time.Duration(claim.LeaseMs)*time.Millisecond - self.settings.LeaseMargin),
-	}, nil
+	hold := &tlsCustomHold{
+		orderer: self,
+		account: account,
+		args:    args,
+		claim:   claim,
+	}
+	hold.held(sent, claim)
+	return hold, nil
+}
+
+// The local deadline and the next renewal, from a claim answered to the call sent at sent.
+func (self *tlsCustomHold) held(sent time.Time, claim *TlsCustomClaimResult) {
+	lease := time.Duration(claim.LeaseMs) * time.Millisecond
+	self.deadline = sent.Add(lease - self.orderer.settings.LeaseMargin)
+	self.renewTime = sent.Add(time.Duration(float64(lease) * self.orderer.settings.LeaseRenewFraction))
 }
 
 // Renews the claim before a request that changes something at the CA; false once the hold is lost.
@@ -606,8 +624,21 @@ func (self *tlsCustomHold) renew(ctx context.Context) bool {
 		self.lost = true
 		return false
 	}
-	self.deadline = sent.Add(time.Duration(claim.LeaseMs)*time.Millisecond - self.orderer.settings.LeaseMargin)
+	self.held(sent, claim)
 	return true
+}
+
+// Renews the claim while the holder waits between requests, once its renewal is due (17.2.6: every LockLease / 3), so
+// the lock does not lapse under a holder still working on the row; false once the hold is lost.
+func (self *tlsCustomHold) keep(ctx context.Context) bool {
+	if self.lost || !self.orderer.clock.Now().Before(self.deadline) {
+		self.lost = true
+		return false
+	}
+	if self.orderer.clock.Now().Before(self.renewTime) {
+		return true
+	}
+	return self.renew(ctx)
 }
 
 // A progress event under the hold's claim.
@@ -740,6 +771,7 @@ func (self *TlsCustomDomainOrderer) order(ctx context.Context, report *TlsCustom
 	accountUri := hold.account.AccountUri
 	row := hold.claim.Record
 	attemptStart := self.clock.Now()
+	hold.attemptStart = attemptStart
 	release := func() {
 		hold.progress(ctx, &TlsCustomProgressArgs{Event: TlsCustomEventRelease})
 	}
@@ -963,9 +995,8 @@ func (self *TlsCustomDomainOrderer) authorize(ctx context.Context, report *TlsCu
 	case TlsAcmeChallengeDns:
 		digest := sha256.Sum256([]byte(keyAuthorization))
 		value := base64.RawURLEncoding.EncodeToString(digest[:])
-		written, err := self.deps.Api.Challenge(ctx, &TlsCustomChallengeArgs{Domain: hold.account.Domain, Value: value})
-		if err != nil {
-			hold.progress(ctx, &TlsCustomProgressArgs{Event: TlsCustomEventRelease})
+		written, done := self.challengeWrite(ctx, hold, value)
+		if done {
 			return nil, true
 		}
 		writtenTime := self.clock.Now()
@@ -975,8 +1006,8 @@ func (self *TlsCustomDomainOrderer) authorize(ctx context.Context, report *TlsCu
 				break
 			}
 			if err == nil && status.Readiness == TlsCustomReadinessStale {
-				if written, err = self.deps.Api.Challenge(ctx, &TlsCustomChallengeArgs{Domain: hold.account.Domain, Value: value}); err != nil {
-					hold.progress(ctx, &TlsCustomProgressArgs{Event: TlsCustomEventRelease})
+				// stale confirmed for this serial: the same digest again, under the same claim, at a new serial
+				if written, done = self.challengeWrite(ctx, hold, value); done {
 					return nil, true
 				}
 			}
@@ -986,6 +1017,11 @@ func (self *TlsCustomDomainOrderer) authorize(ctx context.Context, report *TlsCu
 				return nil, true
 			}
 			if err := self.wait(ctx, self.settings.OrderPollInterval); err != nil {
+				return nil, true
+			}
+			// kept while the edges catch up, so a POST after a stale verdict comes under the claim its receipt is
+			// kept for; a lapsed lock would make the next claim's a new receipt and a new write
+			if !hold.keep(ctx) {
 				return nil, true
 			}
 		}
@@ -1030,6 +1066,78 @@ func (self *TlsCustomDomainOrderer) authorize(ctx context.Context, report *TlsCu
 	}
 	hold.progress(ctx, &TlsCustomProgressArgs{Event: TlsCustomEventRelease})
 	return nil, true
+}
+
+// POST /tls/custom-challenge under the hold's claim (17.2.9's DNS-01 steps 1 and 2; owner decision 680): the answer
+// naming the serial the write took, or done once the row was handed back or the hold lost. api keeps one receipt for
+// the domain and claim, which answers a POST sent again under the same claim with the write already made or still
+// owed, never a second one, and owes a new write of the same digest only after GET confirmed a stale verdict for its
+// serial. So a failed POST is sent again under the claim, which the holder keeps meanwhile:
+//
+//   - no answer, or the server's failure, such as 503 with the write still owed: again after OrderPollInterval;
+//   - 409 in_flight, another digest's write under the claim not yet settled, and 429 budget, the name's writes of the
+//     hour spent: again once the answer's retry_after has passed, at least OrderPollInterval on;
+//   - 409 claim, the lock another's, and 403, the caller no longer an orderer of the domain: the hold is lost, and
+//     nothing more is sent for the row;
+//   - any other refusal, which no retry under the claim changes and for which nothing was written: progress release.
+//
+// The claim is released otherwise only where 17.2.7 ends the attempt: once its OrderDeadline has passed, or would
+// before the next try, the order staying recorded.
+func (self *TlsCustomDomainOrderer) challengeWrite(ctx context.Context, hold *tlsCustomHold, value string) (*TlsCustomChallengeResult, bool) {
+	release := func() {
+		hold.progress(ctx, &TlsCustomProgressArgs{Event: TlsCustomEventRelease})
+	}
+	for {
+		written, err := self.deps.Api.Challenge(ctx, &TlsCustomChallengeArgs{Domain: hold.account.Domain, Value: value})
+		if err == nil {
+			return written, false
+		}
+		if ctx.Err() != nil {
+			return nil, true
+		}
+		wait := self.settings.OrderPollInterval
+		retryAfter := func(retryAfterMs uint32) {
+			wait = max(wait, time.Duration(retryAfterMs)*time.Millisecond)
+		}
+		var refusal *TlsCustomError
+		var apiErr *SidecarApiError
+		switch {
+		case errors.As(err, &refusal):
+			switch {
+			case refusal.Refusal.Reason == TlsCustomRefusalClaim || refusal.Status == http.StatusForbidden:
+				hold.lost = true
+				return nil, true
+			case refusal.Refusal.Reason == TlsCustomRefusalInFlight || refusal.Refusal.Reason == TlsCustomRefusalBudget:
+				retryAfter(refusal.Refusal.RetryAfterMs)
+			case refusal.Status < http.StatusInternalServerError:
+				release()
+				return nil, true
+			}
+		case errors.As(err, &apiErr):
+			switch {
+			case apiErr.Status == http.StatusTooManyRequests:
+				retryAfter(apiErr.RetryAfterMs)
+			case http.StatusOK < apiErr.Status && apiErr.Status < http.StatusInternalServerError:
+				release()
+				return nil, true
+			}
+		case errors.Is(err, ErrSidecarApiArgs):
+			// refused here, before any request: the same request would be again
+			release()
+			return nil, true
+		}
+		if !self.clock.Now().Add(wait).Before(hold.attemptStart.Add(self.settings.OrderDeadline)) {
+			// the attempt ends, its order recorded for the next claim
+			release()
+			return nil, true
+		}
+		if err := self.wait(ctx, wait); err != nil {
+			return nil, true
+		}
+		if !hold.keep(ctx) {
+			return nil, true
+		}
+	}
 }
 
 // Kills a live order a holder must give up (17.2.7): deactivates each authorization and reads the order again, up to
