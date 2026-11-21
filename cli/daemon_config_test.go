@@ -197,6 +197,29 @@ func (self *testUrConfigHeads) ReadConfigHead(ctx context.Context, version uint6
 	return nil, sidecar.ErrConfigHeadUnavailable
 }
 
+// The normal CLI bridge builder serves the authenticated config-backed methods after the follower is standing.
+func TestBridgeStatusReadsItsStandingFollower(t *testing.T) {
+	world := newTestUrFollowWorld(t, 1)
+	network := world.networks[0]
+	running := world.host(network, nil)
+	world.saveBlock(network, 80)
+	world.standing(running, network)
+	control, err := newUrDaemonBridges(world.bridges, sidecar.DaemonLocalListen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.Close()
+	networkId := network.NetworkId()
+	if _, err := control.Status(world.ctx, networkId, running); err != nil {
+		t.Fatal(err)
+	}
+	world.awaitEnforcing(world.heldBridges()[networkId])
+	status, err := control.Status(world.ctx, networkId, running)
+	if err != nil || status.List == nil || status.List.NetworkId != networkId {
+		t.Fatalf("standing network's bridge status: %+v, %v", status, err)
+	}
+}
+
 // ur tun brings the tun up over a network's bridge, built over that network's own follower, where it answered "no
 // bridge runs for this network" before: each network's bridge, built when ur tun ip first asks for it, compiles its own
 // network's verified state, the block its config head holds, from its own follower's log, rows and heads, and ur tun

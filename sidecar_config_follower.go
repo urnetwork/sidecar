@@ -822,6 +822,12 @@ func (self *SidecarConfigFollower) stand(networkId Id, sidecarId Id, client *Con
 		self.refuse(fmt.Errorf("%w: the acl follower did not start: %w", ErrSidecarConfigRefused, err))
 		return
 	}
+	// A native host installs the VPN forwarding setup for the lifetime of this signing authority.
+	if host, ok := any(self).(interface {
+		installForwardingSources(*ConfigClient, func()) func()
+	}); ok {
+		removeAuthority = host.installForwardingSources(client, removeAuthority)
+	}
 	kept := func() bool {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()

@@ -486,6 +486,7 @@ func configLoadRows(state *ConfigState, rows *bridge.ProjectionRows) error {
 	if err := proto.Unmarshal(rows.GetAcl(), state.aclRows); err != nil {
 		return fmt.Errorf("rows: acl: %w", err)
 	}
+	state.retainGrantActions()
 	if err := configCheckRowsSettings(rows.GetSettings()); err != nil {
 		return err
 	}

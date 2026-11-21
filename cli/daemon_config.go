@@ -167,7 +167,7 @@ func newUrBridgeBuild(args *urBridgeBuildArgs) urBridgeBuildFunction {
 		if err != nil {
 			return nil, err
 		}
-		return wire.network(), nil
+		return newUrBridgeFilingNetwork(wire, running, follower, client)
 	}
 }
 

@@ -210,8 +210,8 @@ func (self *AclEngine) checkMs(now time.Time) int64 {
 
 // Whether a protocol and port pass a rule's local ports: every port for a rule that limits none, none for one whose
 // ports the device does not hold.
-func aclLocalPortsMatch(rule *aclRule, local *AclLocalRule, ipProtocol uint32, port uint32) bool {
-	if !rule.portsLimited {
+func aclLocalPortsMatch(portsLimited bool, local *AclLocalRule, ipProtocol uint32, port uint32) bool {
+	if !portsLimited {
 		return true
 	}
 	if local == nil {
@@ -260,7 +260,7 @@ func (self *AclEngine) AllowInbound(inbound *AclInbound, now time.Time) AclDecis
 		})
 	}
 	return state.mayDial(inbound.Source, installed.self, nowMs, func(rule *aclRule) bool {
-		return aclLocalPortsMatch(rule, installed.localRules[rule.index], inbound.IpProtocol, inbound.Port)
+		return aclLocalPortsMatch(rule.portsLimited, installed.localRules[rule.index], inbound.IpProtocol, inbound.Port)
 	})
 }
 
@@ -308,7 +308,7 @@ func (self *AclEngine) AllowRoute(source AclSubject, address netip.Addr, ipProto
 	public := aclAddressPublic(address)
 	rule := state.findResourceRule(&sourceResolved, nowMs, protocol.AclAction_ACL_ACTION_ROUTE, func(rule *aclRule) bool {
 		local := installed.localRules[rule.index]
-		if !aclLocalPortsMatch(rule, local, ipProtocol, port) || !state.routeTakes(&sourceResolved, &viaResolved, rule) {
+		if !aclLocalPortsMatch(rule.portsLimited, local, ipProtocol, port) || !state.routeTakes(&sourceResolved, &viaResolved, rule) {
 			return false
 		}
 		if rule.internetTarget && public {
