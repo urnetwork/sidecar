@@ -6,12 +6,13 @@
 // CUT, reading the erasure complete by its newest ERASE, drops it from the cards ref's set, and the rewrite would list
 // nothing and leave the card's index slot under its live key, no longer masked. The directory CUTs the same document
 // again, which adds the entry back at the head's epoch, and rewrites again, so the slot ends rewritten under a fresh
-// key; dropped a second time, the document goes back uncut in the ledger and the next sync cuts and rewrites it; a kill
-// between the CUT and the rewrite leaves the document in the ledger, so the rewrite of the next sync CUTs it again;
-// and an erasure an ERASE opened after the dropping CUT read it complete, which the rewrite then finds no CUT of, reads
-// the same. FI-19's index and keys clauses on both refs after each step. Both index refs are the index's own erasers
-// on its in-memory fake with one erasure ref between them (directory_erasure_after_cut_export_test.go), as in QD-1158's
-// tests (directory_erasure_after_cut_test.go), the cards ref's eraser hooked where the other device's push lands.
+// key; dropped a second time, the document goes back uncut in the ledger and the next sync cuts and rewrites it, as at
+// the first drop where DroppedCutCount is zero; a kill between the CUT and the rewrite leaves the document in the
+// ledger, so the rewrite of the next sync CUTs it again; and an erasure an ERASE opened after the dropping CUT read it
+// complete, which the rewrite then finds no CUT of, reads the same. FI-19's index and keys clauses on both refs after
+// each step. Both index refs are the index's own erasers on its in-memory fake with one erasure ref between them
+// (directory_erasure_after_cut_export_test.go), as in QD-1158's tests (directory_erasure_after_cut_test.go), the cards
+// ref's eraser hooked where the other device's push lands.
 
 package sidecar_test
 
@@ -125,9 +126,9 @@ func newTestDroppedSeedWith(t *testing.T, settings *sidecar.DirectoryErasureSett
 	return dropped
 }
 
-// Another directory admin's device's CUT on the cards ref of an erasure of its own, listing a document no index file
-// holds: as every CUT does, it reads which erasures are complete by their newest ERASE, as index does, and drops each
-// complete one from the set by raising listed_since.
+// Another directory admin's device's CUT on the cards ref through index, of an erasure of its own listing a document
+// no index file holds: as every CUT does, it drops from the set, by raising listed_since, each erasure index reads
+// complete.
 func (self *testDroppedSeed) otherCut(t *testing.T, index sidecar.DirectoryErasureIndex, label string) *sidecar.IndexCutResult {
 	t.Helper()
 	key, err := index.DocKey([]byte("a/elsewhere " + label))
