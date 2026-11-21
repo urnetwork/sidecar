@@ -75,6 +75,12 @@ const sidecarRecoveryRecordName = "recovery"
 // The record's format version.
 const sidecarRecoveryRecordVersion = 1
 
+// A moving config tip leaves the anchor undecided. Each attempt snapshots outside the group lock.
+const recoveryAnchorAttempts = 3
+
+// The proof must be repeated against a newly verified tip.
+var errRecoveryAnchorMoved = errors.New("recovery anchor: the verified log moved during the check")
+
 var (
 	// The code's binding is not its member's binding in effect: another member's code, a code a rebind retired, or
 	// a member the verified log holds no binding of, as after a compromise cascade voided it (QD-1034). Nothing was
@@ -187,6 +193,8 @@ type SidecarRecoveryLog struct {
 	// The newest verified base, and its (n, A_n).
 	Base    *bridge.ProjectionHeader
 	BasePin *bridge.AuthPin
+	// The verified (n, A_n) through Held, including entries after the base.
+	Tip *bridge.AuthPin
 	// The first position the log holds an entry at, and that entry's prev_chain, A_{HeldFrom-1}.
 	HeldFrom      uint64
 	HeldPrevChain [sha256.Size]byte
@@ -582,38 +590,65 @@ func (self *Sidecar) RecoverWithCode(ctx context.Context, code *RecoveryCode, or
 	if err != nil {
 		return resultOf(), err
 	}
-	// the base whose head the check reads, which a failed check's alarm names
-	var anchorBasePin *bridge.AuthPin
+	checkHead := func(ctx context.Context, key *EvsRepoKey) error {
+		head, keyAt, err := recoveryArgs.Heads.ReadRecoveryHead(ctx, key, log.Base.GetConfigVersion(), log.Base.GetConfigHeadSha256())
+		if err != nil {
+			if errors.Is(err, ErrConfigHeadUnavailable) || ctx.Err() != nil {
+				return err
+			}
+			return fmt.Errorf("%w: the config head the newest base names is not one this key opens: %w", ErrGkmRecoveryAnchor, err)
+		}
+		return checkRecoveryCodeAnchor(&recoveryCodeAnchorArgs{
+			log:              log,
+			head:             head,
+			keyAt:            keyAt,
+			networkId:        identity.NetworkId,
+			memberId:         record.MemberId,
+			ed25519PublicKey: keys.Ed25519PublicKey(),
+			xwingPublicKey:   keys.XwingPublicKey(),
+		})
+	}
 	gkmArgs := &GkmRecoverArgs{
 		Binding:      gkmBinding,
 		ConfigRepoId: log.ConfigRepoId,
 		Anchor: func(ctx context.Context, key *EvsRepoKey) error {
-			log, err := view.RecoveryLog()
+			tip, err := log.anchorTip()
 			if err != nil {
 				return err
 			}
-			anchorBasePin = log.BasePin
-			head, keyAt, err := recoveryArgs.Heads.ReadRecoveryHead(ctx, key, log.Base.GetConfigVersion(), log.Base.GetConfigHeadSha256())
-			if err != nil {
-				if errors.Is(err, ErrConfigHeadUnavailable) || ctx.Err() != nil {
-					return err
-				}
-				return fmt.Errorf("%w: the config head the newest base names is not one this key opens: %w", ErrGkmRecoveryAnchor, err)
+			// The follower can be reading this group's key under its follow lock. Only consult its
+			// published pin here, before the proof and before accepting either success or a refusal.
+			if !proto.Equal(tip, authority.Pin()) {
+				return errRecoveryAnchorMoved
 			}
-			return checkRecoveryCodeAnchor(&recoveryCodeAnchorArgs{
-				log:              log,
-				head:             head,
-				keyAt:            keyAt,
-				networkId:        identity.NetworkId,
-				memberId:         record.MemberId,
-				ed25519PublicKey: keys.Ed25519PublicKey(),
-				xwingPublicKey:   keys.XwingPublicKey(),
-			})
+			proofErr := checkHead(ctx, key)
+			if !proto.Equal(tip, authority.Pin()) {
+				return errRecoveryAnchorMoved
+			}
+			return proofErr
 		},
 	}
 	if record.Phase != SidecarRecoveryAnchored {
 		testHookBarrier("identity.recover.anchor.before", identity.SidecarId.String())
-		err := recoveryArgs.Groups.AnchorRecovery(ctx, gkmArgs)
+		for attempt := range recoveryAnchorAttempts {
+			if attempt > 0 {
+				log, err = view.RecoveryLog()
+				if err != nil {
+					return resultOf(), err
+				}
+				if !self.admittedBy(authority) {
+					return resultOf(), nil
+				}
+				gkmArgs.ConfigRepoId = log.ConfigRepoId
+			}
+			err = recoveryArgs.Groups.AnchorRecovery(ctx, gkmArgs)
+			if !errors.Is(err, errRecoveryAnchorMoved) {
+				break
+			}
+			if ctx.Err() != nil {
+				return resultOf(), ctx.Err()
+			}
+		}
 		testHookBarrier("identity.recover.anchor.after", identity.SidecarId.String())
 		switch {
 		case err == nil:
@@ -626,11 +661,8 @@ func (self *Sidecar) RecoverWithCode(ctx context.Context, code *RecoveryCode, or
 			if persistErr := persistSidecarRecoveryRecord(secrets, record); persistErr != nil {
 				self.log.Warningf("[identity]a failed recovery anchor was not kept as stopped: %s", persistErr)
 			}
-			if anchorBasePin == nil {
-				anchorBasePin = log.BasePin
-			}
 			self.log.Errorf("[identity]the recovery anchor failed: the network's config does not chain to the genesis this code signed")
-			self.emitEvent(SidecarEvent{Kind: SidecarEventHeadAlarm, HeadAlarm: SidecarHeadAlarmFork, Evidence: [2][]byte{configPinBytes(anchorBasePin), nil}})
+			self.emitEvent(SidecarEvent{Kind: SidecarEventHeadAlarm, HeadAlarm: SidecarHeadAlarmFork, Evidence: [2][]byte{configPinBytes(log.BasePin), nil}})
 			return resultOf(), fmt.Errorf("%w: %w", ErrSidecarRecoveryStopped, err)
 		case errors.Is(err, ErrGkmWait):
 			result := resultOf()
@@ -970,8 +1002,29 @@ func configRecoveryLog(log *ConfigLog) (*SidecarRecoveryLog, error) {
 		GenesisChain:  bridge.GenesisChain(log.signedGenesis),
 		Base:          proto.Clone(state.base.header).(*bridge.ProjectionHeader),
 		BasePin:       &bridge.AuthPin{Version: state.base.n, Chain: bytes.Clone(state.base.chain[:])},
+		Tip:           state.Pin(),
 		HeldFrom:      log.keptFrom,
 		HeldPrevChain: [sha256.Size]byte(prevChain),
 		Held:          held,
 	}, nil
+}
+
+// Returns the tip copied under the follower lock. Hosts supplying only retained records can
+// recover the same pin from the first entry's previous chain and the complete retained suffix.
+func (self *SidecarRecoveryLog) anchorTip() (*bridge.AuthPin, error) {
+	if self.Tip != nil {
+		return self.Tip, nil
+	}
+	if len(self.Held) == 0 {
+		return nil, errors.New("recovery anchor: no retained entries for the verified tip")
+	}
+	chain := self.HeldPrevChain
+	for _, r := range self.Held {
+		next, err := bridge.AuthChainDigest(r.N, chain[:], r.Kind, r.TimeMs, r.Body)
+		if err != nil {
+			return nil, err
+		}
+		chain = next
+	}
+	return &bridge.AuthPin{Version: self.Held[len(self.Held)-1].N, Chain: chain[:]}, nil
 }
