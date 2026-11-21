@@ -90,6 +90,16 @@ func startUrConfigFollower(running *sidecar.Sidecar, log sidecar.Logger) *sideca
 		return nil
 	}
 	startUrScimSigner(running, log)
+	if evsClient := urDaemonEvsClient; evsClient != nil && urDaemonClients != nil && urDaemonClients.StateDirectory != "" && urDaemonClients.GitPath != "" {
+		// Recover persisted pushes without waiting for a git session. Closing the follower also ends the wait.
+		go func() {
+			if _, err := follower.WaitStanding(context.Background()); err == nil {
+				if _, err := evsClient(running); err != nil {
+					log.Warningf("[ur]the network's git mounts could not start: %s", err)
+				}
+			}
+		}()
+	}
 	return follower
 }
 
