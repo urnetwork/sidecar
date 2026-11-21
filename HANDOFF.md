@@ -81,7 +81,7 @@ This is where building the sidecar infrastructure starts. The design is finished
 | `Q-CODE-n` | A question, with its answer |
 | `I-1`-`I-20` | Security invariants ([§2.9](DESIGN.md#29-security-invariants)) |
 | `I-EVS-1`-`I-EVS-17` | Storage invariants |
-| `C1`-`C19` | Connect changes |
+| `C1`-`C20` | Connect changes, C19 withdrawn (owner decision 609) |
 | `FS-n` | Fault schedules |
 | `FI-n` | The invariants fault schedules check |
 | `M0`-`M10` | Milestones |
@@ -230,7 +230,7 @@ These rules are hard. When a section cannot meet one, it raises a Q- item for th
 | Repo | Visibility | What it gets | `sidecar` branch from |
 |---|---|---|---|
 | sidecar | public (MPL-2.0) | The module: core, subprotocol, MCP, the `ur` CLI, the engines, protos and test support | M0 |
-| connect | public | C1-C19's default-off changes ([§4.6](DESIGN.md#46-connect-changes-x9)) | M0 |
+| connect | public | C1-C20's default-off changes, C19 withdrawn ([§4.6](DESIGN.md#46-connect-changes-x9)) | M0 |
 | server | public | Engine hosts (`server/cli/<svc>`), api routes, stores and migrations, taskworker, team management and access control, and the source-graph lock | M0 |
 | sdk | public | `sdk/sidecar.go`, and four modules that require and replace sidecar | M0 |
 | build | public | The `sidecar` submodule, the release step, and `warpctl build` and a rollout class for each service | M0 |
@@ -310,7 +310,7 @@ Each milestone is a vertical slice with an entry review, an exit review and a da
 | **M7** Inbound mail | <ul><li>§9's `smtp/`</li><li>§12's mail records, TLSA and the DS</li><li>§15's receive path</li><li>mxedge on port 25</li></ul> | <ul><li>SNI inbound reaches desktop, NAS and VPS mail indexers</li><li>DANE TLSA live</li><li>Plaintext senders refused</li><li>Validated labels</li><li>D-MAIL-9's census run</li></ul> |
 | **M8** Burner; BS1, receive-only | <ul><li>§15's burners and app seams</li><li>App hosts, with sdk hosts and wake pushes</li><li>§13's app listeners</li><li>§17's forwarding in every app's VPN component, with its own key and compile (owner decision 197), app-device hosts after C16, and private names on app paths</li><li>The directory's notice wakes on phones</li></ul> | <ul><li>Burner create and burn</li><li>Vault entries and one-time codes</li><li>The DeviceRemote mirror and receiver hosting API pass T4</li><li>Wake tokens in revision order (FS-120)</li><li>Release readiness, never a per-user gate</li></ul> |
 | **M9** Outbound mail | <ul><li>§14 v0 on the shared lb addresses, with `ur/`, reverse zones and burner records</li><li>Sending, replies and forwarding</li><li>§21's mail ladder and breakers</li></ul> | <ul><li>D-SMTP-16's proof tests, DATA mode included (FS-123)</li><li>DANE-only MXs reached, and unauthenticated ones refused</li><li>Halt, ARF and RUA joins</li></ul> |
-| **M10** Format 2, beside M6 | <ul><li>Versionless objects, the purge and history drops</li><li>git-lfs's versionless store</li><li>Format-1 migration</li><li>The search index in every eligible repo</li><li>Remote search and C19</li><li>`ur search`, `ur agents` and MCP search</li><li>The directory's cards</li></ul> | <ul><li>M10's schedules</li><li>D-TEST-13's drive-write gate</li><li>Index vectors byte-equal on every leg</li><li>A migrated repo's search equal to the oracle</li><li>Purge and drops in observe mode until production soaks pass</li></ul> |
+| **M10** Format 2, beside M6 | <ul><li>Versionless objects, the purge and history drops</li><li>git-lfs's versionless store</li><li>Format-1 migration</li><li>The search index in every eligible repo</li><li>Remote search</li><li>`ur search`, `ur agents` and MCP search</li><li>The directory's cards</li></ul> | <ul><li>M10's schedules</li><li>D-TEST-13's drive-write gate</li><li>Index vectors byte-equal on every leg</li><li>A migrated repo's search equal to the oracle</li><li>Purge and drops in observe mode until production soaks pass</li></ul> |
 
 **Later.** These follow M9 and M10:
 
@@ -493,7 +493,7 @@ M0's exit needs G0 passed, `make check` green, the lock entry on server@sidecar,
 
 **The fault program** ([§22.8](DESIGN.md#228-load-soak-failure-injection)):
 
-- **Schedules.** FS-1 to FS-125 are deterministic schedules of actor steps, barriers, store faults and clock moves. They are checked against FI-1 to FI-30, and §23.6 names the gate each must pass.
+- **Schedules.** FS-1 to FS-126 are deterministic schedules of actor steps, barriers, store faults and clock moves. They are checked against FI-1 to FI-30, and §23.6 names the gate each must pass.
 - **Invariants.** FI-1 to FI-30 are closure, outcomes, commit-point authorization, one ladder, lifecycle, visibility, effects, attribution, git, witnesses, path integrity, recovery, accounting, the write budget, file-mode CAS, purge, versioning, index results, index erasure, roll-up, scope and taint, determinism, fetch privacy, remote search, directory authorship, request soundness, drop history, deliveries, copies and store settle.
 - **Models.** TLC checks three TLA+ models at small bounds: `EvsCommit.tla` and `StoreSettle.tla` at M2, and `IndexRollup.tla` at M10.
 - **Linearizability.** Porcupine checks T3's histories, per ref, against §11.8's commit rule.
@@ -582,7 +582,7 @@ Each guide covers one area: where its code goes, when it lands, what to read fir
 How sidecars talk over connect (subprotocol id 21842): chunked envelopes, peer RPC, streams, server hint push, Hello's identity check, HeadCheck witnessing and typed `Signed`.
 
 - **Code:** sidecar root `envelope_`, `rpc_`, `stream_`, `push_`, `codec_` files; `sidecar/protocol`; `Signed` in `protocol/bridge`; server-only `sidecar/pushservice`, hosted by server/connect residents (`EnableSidecarPush`), api (long-poll) and taskworker (wakes).
-- **Lands:** M1 envelope, Hello, RPC, push (C3, C12, C15); M2 Hello's admission check, HeadCheck, wire freeze; M4 control contracts, C13; M5 streams, edges (C9); M6 shares (C18); M8 wakes; M10 SEARCH, C19.
+- **Lands:** M1 envelope, Hello, RPC, push (C3, C12, C15); M2 Hello's admission check, HeadCheck, wire freeze; M4 control contracts, C13; M5 streams, edges (C9); M6 shares (C18); M8 wakes; M10 SEARCH, with no C19: owner decision 609 withdrew its windows.
 - **Read first:** [§6.5](DESIGN.md#65-envelope-size-budget-chunking) (envelope, chunking); [§6.4](DESIGN.md#64-id-allocation-versioning-negotiation-peer-identity) (Hello, identity check, HeadCheck); [§6.6](DESIGN.md#66-requestresponse-rpc) (RPC, settings); [§6.8](DESIGN.md#68-server-push-x8) (push, long-poll); [§6.11](DESIGN.md#611-message-catalog-index-and-codec-conventions) (registries).
 - **Build first:**
   1. M1: protos; the envelope codec with TOO_LARGE past 4,080 B, 4,016 B chunks, a final-chunk SHA-256.
@@ -599,7 +599,7 @@ How sidecars talk over connect (subprotocol id 21842): chunked envelopes, peer R
   - §22.5's §6 row: chunk limits, idempotency, zero rule, `oneof` lint, nothing before a verified Hello, p2p ControlId push dropped, partial reset, receive allocs.
   - M1 exit: Required RPC after the identity check; push resyncs after resident restarts; envelope fuzzing (§22.6).
   - FS-17 (M2-out), FS-21 (M4-out; Team at M6-out): forks, relays, control contracts (FI-10).
-  - FS-125 (FI-24; M10-out, app hosts at M8-out): C19's windows.
+  - FS-125 keeps its number with C19's windows withdrawn (owner decision 609): held with PROTO-M10-05, it runs only if the windows return, and FS-83 checks the remote-search pair's contracts, accounted like any peer's.
 - **Still open:** streams revisited if TLS-edge p99 shared-sequence stalls exceed 500 ms (D-PROTO-4); pooled codec only if §22 measures it worthwhile (D-PROTO-11); §2.8's bound fails across a split (D-PROTO-14).
 
 ### 9.3 Networks, teams, enrollment and the authorization log
@@ -777,13 +777,13 @@ evs stores segments on an HDD cluster and metadata on clusters of 8 × PM9A3 at 
 
 Committers' pushes update a repo's encrypted, versionless trigram index; devices search it locally, app hosts optionally via a designated indexer; evs never sees a query.
 
-- **Code:** sidecar root `evs_index_*.go`, `search_*.go`, `search_remote_*.go`; `sidecar/protocol/evsindex.proto`, `search.proto`; §5.9's `search/` cache; `evsservice`'s INDEX_EPOCH check; C19 in connect.
+- **Code:** sidecar root `evs_index_*.go`, `search_*.go`, `search_remote_*.go`; `sidecar/protocol/evsindex.proto`, `search.proto`; §5.9's `search/` cache; `evsservice`'s INDEX_EPOCH check; nothing in connect, C19 being withdrawn (owner decision 609).
 - **Lands:** M2 reserves `.ur-index/`, `ur/index`, `index_epoch`; M10 the rest; remote search at the later of M10's exit and M8's (app hosts) or M6's (team indexers) ([§11.22](DESIGN.md#1122-phasing)).
-- **Read first:** [§11.14](DESIGN.md#1114-the-encrypted-search-index) (format, upkeep, remote); [§5.9](DESIGN.md#59-local-state-keychain-os-key-stores-recovery) (cache, version table); [§16.10](DESIGN.md#1610-search) (engine, tools); [§6.10](DESIGN.md#610-contracts-and-accounting) (C19).
+- **Read first:** [§11.14](DESIGN.md#1114-the-encrypted-search-index) (format, upkeep, remote); [§5.9](DESIGN.md#59-local-state-keychain-os-key-stores-recovery) (cache, version table); [§16.10](DESIGN.md#1610-search) (engine, tools); [§6.10](DESIGN.md#610-contracts-and-accounting) (the pair's contracts, accounted like any peer's).
 - **Build first:**
   1. M10 Gn-in: schemas reviewed; IndexRollup.tla passes TLC; FS rows on fakes.
   2. M10: normalizer 1, `testdata/index/` vectors (D-TEST-15), codecs, commit path, merges, roll-up, CUT, reads.
-  3. M10: SEARCH serving (Hello bit 0), C19 (55-minute windows, 256 KiB floor; D-PROTO-22), app-host requester (bit 1).
+  3. M10: SEARCH serving (Hello bit 0) and the app-host requester (bit 1), with no window ledger, floor or keepalive (D-PROTO-22 withdrawn; owner decision 609).
 - **Easy to get wrong:**
   - One head per writer (≤ 16,208 B, an entry per `doc_key`), never shared; no diff rests on a head (D-EVS-46).
   - Every index push except a CLOSURE names the head's `index_epoch` or gets 409 INDEX_EPOCH and rebuilds without listed documents; only CUTs move it (I-EVS-17).
@@ -791,7 +791,7 @@ Committers' pushes update a repo's encrypted, versionless trigram index; devices
   - Mask candidates through §5.9's version table (FS-109 fails per-search key collection); "search more" fetches every missing all shard, in fixed order (D-EVS-50, D-EVS-52).
   - Fixed remote sizes: requests 4,016 B, replies steps × 16,384 B, post-parse failures included; no Cancel, early reply or sync before answering (D-EVS-59, D-TEST-16).
 - **Gated by:**
-  - M10-out: FS-74 to FS-79, FS-83 (FI-24), FS-107 to FS-112, searches checked against `SearchOracle` (D-TEST-14); FS-125's C19 sweep in connect's tests before its `main` merge.
+  - M10-out: FS-74 to FS-79, FS-83 (FI-24), FS-107 to FS-112, searches checked against `SearchOracle` (D-TEST-14); no connect merge waits on FS-125's sweep, which runs only if C19's windows return (owner decision 609).
   - IndexRollup.tla (I-EVS-11 to 13, I-EVS-17, FI-19, FI-20) at Gn-in; at Gn-out, index vectors byte-equal on every leg, §22.6's index and SEARCH fuzzing.
 - **Still open:**
   - D-TEST-13 gates format 2's freeze: the index puts a push at ~42-45 KiB per drive (2× year one, 4 KiB blocks; ~34-37 on 1 KiB) against 43.
@@ -1139,7 +1139,7 @@ Most come from [Appendix C](DESIGN.md#appendix-c-glossary), which defines 330 te
 | indexer, IndexerSet | An always-on device its network designates, none by default, to run background services: mail, mirrors and search upkeep. It is never an app (owner decision 197), and it gains no access. `IndexerSet` is the config statement that designates it (§3.6, §7.9). |
 | format 2, versionless | v1's storage format: versionless content, history drops, the search index and git-lfs. Versionless content is purged once a newer version commits (§11.6, §11.7). |
 | erasure, CUT | Destroying chosen entries' keys everywhere by a push on the repo's `erasure` ref; with the search index, a CUT goes first on each index ref (§11.12) |
-| C19 window | A 55-minute span of a phone-to-indexer search pair whose reports connect withholds to the window's end, at a 256 KiB floor each way (§6.10) |
+| C19 window | Withdrawn by owner decision 609: a 55-minute span of a phone-to-indexer search pair whose reports connect was to withhold to the window's end at a floor; the pair's contracts are accounted like any peer's (§6.10) |
 | sockets, Find | The abstract socket registry and scheduler; the call that returns tickets for one listener of a name (§9.6, §9.8) |
 | contract gate | The check, when a contract is created, that the projection allows one client to reach another (§8.10) |
 | tlsedge | The public TLS edge: a layer-4 SNI router that never terminates user TLS (§13.5) |

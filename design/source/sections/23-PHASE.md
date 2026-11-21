@@ -127,7 +127,9 @@ M6       the CAA chain (§12, §13); the audit reader's receipts and the team   
          signers (§17); Stripe meters, downgrade (§20); the escrow order,     and FS-42's M6 steps (meters, custom
          frozen once FS-46 and 20.9's benchmark pass on M4's build            hosts); FS-122; FS-97's, FS-98's and
          (Q-QUOTA-3's residual); the custom-host map's versions, interface    FS-124's Team cases; FS-126, the P2P
-         reports and readiness (§12, §13, §19)                                schedule (D-PROTO-10); FS-76's and
+         reports and readiness (§12, §13, §19)                                schedule (D-PROTO-10); the record's
+                                                                              checkpoint and packet vectors
+                                                                              (RECORD.md section 20); FS-76's and
                                                                               FS-80's team-record cases, FS-83's
                                                                               team cases, the directory's format-2
                                                                               cases and FS-111's team-record case

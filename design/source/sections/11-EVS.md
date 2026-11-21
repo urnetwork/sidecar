@@ -2128,7 +2128,13 @@ reconcile an erasure resumes from evs's state, not one device's memory: its CUTs
           finding no file that holds a listed version, a resume finding an orphaned CLOSURE, or mail's erasure
           finding no i/ segment that holds the message, its device sends a completion ERASE (push, above), and a
           late copy's ERASE reopens a complete erasure, whose rewrite runs again and which a later completion
-          ends again, a racing runner's second completion being refused (owner decision 658);
+          ends again, a racing runner's second completion being refused (owner decision 658); as no ERASE
+          before its CUT says complete, neither does a format-2 directory erasure's record ERASE of its M6
+          entries, the directory telling the record's eraser that its format-2 half follows under the same
+          erasure id; every reader of an erasure's progress reads its newest ERASE, the directory's index
+          binding among them, whose resumed orphan ERASE says complete where nothing else is left; and a
+          rewrite that a CUT of its call listed documents for again, a late copy's or the 30-day sweep's
+          later-signed card's, lists before it trusts a complete it reads (owner decision 673);
           its CLOSUREs' and ERASEs' erasure_notes name its id (for the directory's erasure runner the
           DirectoryErasureRequest's request_id, which racing runners and the 30-day sweep share, as RECORD.md's
           ErasureBody.request_id does, so the note's id is that request_id), and its ERASEs' notes name its documents
@@ -2144,7 +2150,9 @@ reconcile an erasure resumes from evs's state, not one device's memory: its CUTs
           retries it; `ur status` and §5.4's erasure event show each one's state, what is left and its next turn
           (11.13's wait)
 retention a record-class BASE or retention expiry erases keys as above; export renders an erased or expired entry
-          as a stub {token path, entry hash, erased}
+          as a stub {token path, entry hash, erased}, the blob `ur-erased <token path hex> <entry hash hex>\n`
+          under its entry version's mode, a git-mode ref's erased blob included, whose commits from the first
+          one holding it export under new oids (Export, below; owner decision 671)
 bytes     ciphertext stays in batch records (at most 26 h), parcels, packs and segments until a later compaction,
           unscheduled, so erased and dropped inline ciphertext and packed segments stay stored and billed for the
           repo's life, unreadable once their keys are gone (owner decision 247), except
@@ -2171,7 +2179,9 @@ directory the team directory's ERASE, CUT and CLOSURE pushes, their uploads and 
           owner's revocation reaches the keys through an erasure_request that the directory's erasure runner, a
           directory admin's indexer or daemon, checks and erases (§16.11; owner decision 181); readers count a
           directory ERASE only from a directory admin and alarm on any other, which only a server breaching this rule
-          commits
+          commits; a format-2 directory erasure whose announcements' M6 entries stand ERASEs those first through
+          the record's eraser, which then says nothing complete, the erasure completing only after its CUT, by
+          the directory's last ERASE or a completion (reconcile, above; owner decision 673)
 ```
 
 **Deletion (owner decision 82)** is a state of `repo/<id>` (D-EVS-19):
@@ -2239,7 +2249,7 @@ drops      a drop's job pauses while repo/ shows deleted, resumes at a restore a
            deleting everything (11.13)
 ```
 
-**Export** (`ur evs export`) rebuilds plain git: git-mode refs with their original oids, rebuilt from each push's sealed commits, raw trees, tags and history blobs, replaying a push's sources first, a version a replaying reader refuses reported and skipped to the ref's next DELETE, file-mode refs with one deterministic commit per version (11.7), leaving out the search index's `.ur-index/` files (its roots and erasure set) and the `ur/index` ref, which are derived (11.14), and the `ur/lfs` store (11.11), checked by `git fsck`, with signed provenance in `refs/notes/ur`; every replaced versionless version exports as the git-lfs pointer to its content_sha256 and size, noted there, whether or not its bytes survive in a store, batch or cache, and only a path's newest version exports its content, and a dropped version as the stub blob `ur-dropped <drop id hex> <entry hash hex>\n`, its mode from its entry version where served, else the next kept version's, the drop noted there; a pending drop's versions export with their content.
+**Export** (`ur evs export`) rebuilds plain git: git-mode refs with their original oids, rebuilt from each push's sealed commits, raw trees, tags and history blobs, replaying a push's sources first, a version a replaying reader refuses reported and skipped to the ref's next DELETE, and, from the first commit holding a blob a committed ERASE destroyed, with new oids: that blob is the retention row's erased stub, named by the first entry version in the replay that carried it, and the trees, commits and tags holding it, and every later commit of the ref, are written with every other byte their own, the replay going on in the original oids, each rewritten commit's note naming its original (`rewritten <oid hex>`) and the note of the push that wrote a stub naming the stub's token path and entry hash (`erased <token path hex> <entry hash hex>`), while the local tier's replay still meets such a blob as erased, since a mount pushes on its tip's original oid, and a history blob so erased still ends the export (owner decision 671), file-mode refs with one deterministic commit per version (11.7), leaving out the search index's `.ur-index/` files (its roots and erasure set) and the `ur/index` ref, which are derived (11.14), and the `ur/lfs` store (11.11), checked by `git fsck`, with signed provenance in `refs/notes/ur`; every replaced versionless version exports as the git-lfs pointer to its content_sha256 and size, noted there, whether or not its bytes survive in a store, batch or cache, and only a path's newest version exports its content, and a dropped version as the stub blob `ur-dropped <drop id hex> <entry hash hex>\n`, its mode from its entry version where served, else the next kept version's, the drop noted there; a pending drop's versions export with their content.
 
 ### 11.13 Backend, IOPS, GC, quotas, durability
 
@@ -3729,8 +3739,12 @@ cut       an erasure's first push on the index's ref (the entry's own, or ur/ind
           push but a CLOSURE built before it is refused and rebuilt without them (commit path's epoch row); readers
           mask each listed document, at or below its version, from the CUT on, a run card being listed through the
           epoch its CUT names, so at every version of that epoch or an older one (owner decision 459); a set
-          version from a signer who may not erase its documents is ignored and alarms (the directory, §16.11)
-erase     at a head at or after its CUT the eraser lists every index file holding the document: each writer's slots
+          version from a signer who may not erase its documents is ignored and alarms (the directory, §16.11); a
+          CUT that lists documents again for an erasure already complete, a late copy's or the directory's
+          30-day sweep's later-signed card's, has its call's rewrite list again (erase, below; owner decision 673)
+erase     at a head at or after its CUT the eraser, which reads the erasure's progress by its newest ERASE and,
+          where a CUT of its call listed documents again, lists before it trusts a complete it reads (owner
+          decision 673), lists every index file holding the document: each writer's slots
           and large entries in each bucket, the bucket shard holding it, and the one all shard holding it, found by
           a/m's days and that shard's doc table (I-EVS-11), a list no later push lengthens; CLOSURE pushes on the
           index's ref rewrite each in place without the document (at the storage limit or while spent, in pairs
@@ -3977,7 +3991,7 @@ never     a query, which documents match it, or which trigrams documents share: 
 
 **D-EVS-21 (proposed).** 11.13 budgets every metadata write in drive bytes, which bound its IOs too, with leases, the push sequence and gkm acks in Redis and a per-network fair share that sheds the heaviest network first. *Why:* every drive takes every write (owner decisions 21, 116, 140).
 
-**D-EVS-22 (decided; owner decision 141).** Refs have a mode fixed at creation: git-mode refs commit only on their tip and keep the original commits; file-mode refs use path-level CAS and export one deterministic commit per version. A file-mode writer may also sign EXACT_HEAD to require the version and chain it read. Head mode writes file-mode refs only. *Why:* git commits bind tree and parents (owner decisions 2, 24, 81).
+**D-EVS-22 (decided; owner decision 141).** Refs have a mode fixed at creation: git-mode refs commit only on their tip and keep the original commits, which export rewrites only from the first commit holding a blob a committed ERASE destroyed, each rewritten commit noting its original (owner decision 671); file-mode refs use path-level CAS and export one deterministic commit per version. A file-mode writer may also sign EXACT_HEAD to require the version and chain it read. Head mode writes file-mode refs only. *Why:* git commits bind tree and parents (owner decisions 2, 24, 81).
 
 **D-EVS-23 (proposed).** A push id names one statement, whose retry returns its original version; an unknown outcome resolves from the head and at most two log pages, or stays unknown; a refusal the head does not settle for good is answered only once a head CAS records the push id, its code and its statement's time bound in the head, at most 8 records a ref and one a second, else 429, and every attempt of that push id that reads the record gets that refusal; no answer deletes anything, and evacuation deletes only a dead push's slots. *Why:* a store can apply a write and lose its response, and another attempt of the same push id, a client's retry or the lb's re-send, can reach evs at any time, even after another attempt's answer reached the client, so only state the commit point covers keeps a refusal true; a fence timed by attempts' arrival cannot.
 
