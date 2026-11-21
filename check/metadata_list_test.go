@@ -73,6 +73,40 @@ type metadataListAddition struct {
 // QD-1034's with the late sweep's (owner decision 592), and QD-1137's, QD-1130's and QD-1154's with the fifth late
 // sweep's (owner decisions 658, 656 and 655); each here waits for the next fold.
 var metadataListAdditions = []metadataListAddition{
+	{
+		// QD-1165: the list's v65, for cert-1's delegated DNS-01 challenge receipts
+		question: "review-fix-tls-delegated-challenge-handoff",
+		block:    "# metadata_list.yml v64;",
+		list:     "# metadata_list.yml v65;",
+	},
+	{
+		question: "review-fix-tls-delegated-challenge-handoff",
+		block: "# the sidecar.\n" +
+			"# Each row gives service, store",
+		list: "# the sidecar.\n" +
+			"# v65, updated 2026-11-21 for the owner's answer QD-1165 (review-fix-tls-delegated-challenge-handoff), adds to\n" +
+			"# cert-1 network_tls_custom_challenge, a delegated DNS-01 challenge's receipt per domain and claim, which api\n" +
+			"# captures for the certs worker and the worker completes with the serial its write took, kept at most the\n" +
+			"# challenge's hour.\n" +
+			"# Each row gives service, store",
+	},
+	{
+		// QD-1165: api captures the challenge and the certs worker writes it, so cert-1 stores the receipt
+		question: "review-fix-tls-delegated-challenge-handoff",
+		block:    "network_tls_custom_spend, network_tls_name_backoff; Redis {tcb_",
+		list:     "network_tls_custom_spend, network_tls_name_backoff, network_tls_custom_challenge; Redis {tcb_",
+	},
+	{
+		question: "review-fix-tls-delegated-challenge-handoff",
+		block:    "next allowed attempt time). Never the account key",
+		list:     "next allowed attempt time); per domain and claim, a delegated DNS-01 challenge's receipt, with its certificate row, claim sequence, holder sidecar, digest, acme name and root, its capture and expiry, and the certs worker's write, its state, its dispatches with the last one's time and the root's serial then, the DNS serial it took and when, or why none was made and when to retry, and the newest answer of /dns/ready for that serial with when it was read and asked for. Never the account key",
+	},
+	{
+		// QD-1165: receipt retention is bounded by the challenge lifetime
+		question: "review-fix-tls-delegated-challenge-handoff",
+		block:    "or 8 d past its next allowed attempt",
+		list:     "or 8 d past its next allowed attempt; a delegated DNS-01 challenge's receipt at most the challenge's hour from its capture",
+	},
 }
 
 // §2.8's block with each addition in place, in order, and a finding for each that does not apply.
