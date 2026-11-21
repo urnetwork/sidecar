@@ -84,6 +84,12 @@ type testDroppedSeed struct {
 
 func newTestDroppedSeed(t *testing.T) *testDroppedSeed {
 	t.Helper()
+	return newTestDroppedSeedWith(t, nil)
+}
+
+// newTestDroppedSeed with its runner on settings, nil for the defaults.
+func newTestDroppedSeedWith(t *testing.T, settings *sidecar.DirectoryErasureSettings) *testDroppedSeed {
+	t.Helper()
 	seed, admin, refs, erase := newTestErasureRefsSeed(t)
 	hooks := &testDroppedHooks{}
 	admin.client.BindErasureFiles(&testDroppedClient{
@@ -95,7 +101,12 @@ func newTestDroppedSeed(t *testing.T) *testDroppedSeed {
 	otherId := sidecar.NewId()
 	refs.Admit(otherId)
 	revocation := seed.revoke(t)
-	runner := testRefsRunner(t, admin, erase)
+	runner, err := sidecar.NewDirectoryErasureRunner(&sidecar.DirectoryErasureRunnerArgs{
+		Client: admin.client, Erase: erase, Raise: (&testErasureRaises{}).raise, Random: &testErasureDelay{}, Settings: settings,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	dropped := &testDroppedSeed{
 		testErasureSeed: seed, admin: admin, refs: refs, runner: runner, hooks: hooks, otherId: otherId,
 		requestId: revocation.RequestId, cardPath: sidecar.DirectoryCardPath(seed.daemon.writer.sidecarId),
@@ -247,6 +258,39 @@ func TestDirectoryFormat2CutDroppedTwiceGoesBackUncutForTheNextSync(t *testing.T
 	}
 	if readable := refs.Readable(sidecar.DirectoryErasureTestCardsRef, seed.runDocument); len(readable) == 0 {
 		t.Fatal("a rewrite took the later card's document while its erasure was off the set")
+	}
+	refs.Sweep()
+
+	files = seed.admin.pass(t, seed.runner).Files[seed.requestId]
+	if files == nil || files.CutCount != 1 || files.IndexPairCount == 0 || files.IndexWaiting || files.Complete {
+		t.Fatalf("the next sync's pass: %+v", files)
+	}
+	seed.slotRewritten(t)
+	seed.ends(t)
+}
+
+// With DroppedCutCount zero the first drop already puts the document back uncut: the pass CUTs nothing again and
+// waits, saying nothing complete, and the next sync's CUT and rewrite take the slot.
+func TestDirectoryFormat2CutDroppedWithNoCutAgainGoesBackUncutAtOnce(t *testing.T) {
+	settings := sidecar.DefaultDirectoryErasureSettings()
+	settings.DroppedCutCount = 0
+	seed := newTestDroppedSeedWith(t, settings)
+	refs := seed.refs
+	drops := 0
+	seed.hooks.afterCut = func(args *sidecar.IndexCutArgs) {
+		if args.ErasureId != seed.requestId || 0 < drops {
+			return
+		}
+		drops += 1
+		seed.otherCut(t, refs.Open(sidecar.DirectoryErasureTestCardsRef, seed.otherId), "once")
+	}
+
+	files := seed.admin.pass(t, seed.runner).Files[seed.requestId]
+	if drops != 1 || files == nil || files.CutCount != 1 || files.IndexPairCount != 0 || !files.IndexWaiting || files.Complete {
+		t.Fatalf("the pass dropped with no CUT again: %d drops, files %+v", drops, files)
+	}
+	if refs.Lists(sidecar.DirectoryErasureTestCardsRef, seed.requestId) {
+		t.Fatal("the set lists the erasure after its drop")
 	}
 	refs.Sweep()
 

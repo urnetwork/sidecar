@@ -86,11 +86,11 @@
 //	           ERASE and drop it from the set; the rewrite then lists nothing of what the CUT added, which readers no
 //	           longer mask (IndexRewriteResult.Dropped; QD-1160). The ledger keeps the documents a ref's CUTs listed
 //	           since its rewrite last ran through, so a rewrite that finds the erasure off the set with such documents
-//	           owed, in the call of the CUT or after a kill, CUTs them again once, which adds the entry back at the
-//	           head's epoch, and rewrites again; off the set once more, they go back uncut in the ledger, nothing of the
-//	           call says complete, and the next sync cuts them again, as a CUT a full set refused waits. The record's
-//	           late copy meets no such race, its ERASE, which opens the erasure, going before its CUT; the directory's
-//	           cannot go first, a card's keys waiting for its writer's rewrite
+//	           owed, in the call of the CUT or after a kill, CUTs them again once (DroppedCutCount), which adds the
+//	           entry back at the head's epoch, and rewrites again; off the set once more, they go back uncut in the
+//	           ledger, nothing of the call says complete, and the next sync cuts them again, as a CUT a full set
+//	           refused waits. The record's late copy meets no such race, its ERASE, which opens the erasure, going
+//	           before its CUT; the directory's cannot go first, a card's keys waiting for its writer's rewrite
 //	ledger     what this device cut, rewrote and still owes of each erasure is kept in the copy (erasure files), so a
 //	           later sync repeats nothing; a file whose standing version another admin's CLOSURE left reads as
 //	           rewritten there. Two runners that race meet at the path's CAS and at evs: one CLOSURE commits, the
@@ -175,17 +175,23 @@ type DirectoryErasureSettings struct {
 	// How long a device keeps what it cut and rewrote of an erasure with nothing owed, from when it first worked it:
 	// 60 days, twice the sweep window, so no sync inside the window repeats a rewrite.
 	LedgerHold time.Duration
+	// How many times one call CUTs again what a CUT of this device listed on a ref whose rewrite finds the erasure
+	// dropped from the set before it listed them, rewriting again after each: 1 (QD-1160), since dropping it twice
+	// takes two other erasures' CUTs inside one call; past it the documents go back uncut and the next sync cuts them
+	// again (the file header's dropped row). Zero or negative puts them back uncut at the first drop.
+	DroppedCutCount int
 }
 
 // §16.11's values.
 func DefaultDirectoryErasureSettings() *DirectoryErasureSettings {
 	return &DirectoryErasureSettings{
-		Delay:        10 * time.Minute,
-		SweepWindow:  30 * 24 * time.Hour,
-		PendingAlarm: 24 * time.Hour,
-		AnnounceHold: 30 * 24 * time.Hour,
-		EntryCount:   512,
-		LedgerHold:   60 * 24 * time.Hour,
+		Delay:           10 * time.Minute,
+		SweepWindow:     30 * 24 * time.Hour,
+		PendingAlarm:    24 * time.Hour,
+		AnnounceHold:    30 * 24 * time.Hour,
+		EntryCount:      512,
+		LedgerHold:      60 * 24 * time.Hour,
+		DroppedCutCount: 1,
 	}
 }
 
@@ -461,14 +467,15 @@ func NewDirectoryErasureRunner(args *DirectoryErasureRunnerArgs) (*DirectoryEras
 		client: args.Client, erase: args.Erase, expire: args.Expire, base: args.Base, indexers: args.Indexers, raise: args.Raise, random: random,
 		settings: settings, dueMillis: map[Id]int64{}, refused: map[Id]bool{}, raised: map[Id]string{},
 	}
-	if 0 < settings.LedgerHold {
-		state := args.Client.erasureFilesState()
-		func() {
-			state.stateLock.Lock()
-			defer state.stateLock.Unlock()
+	state := args.Client.erasureFilesState()
+	func() {
+		state.stateLock.Lock()
+		defer state.stateLock.Unlock()
+		if 0 < settings.LedgerHold {
 			state.ledgerHold = settings.LedgerHold
-		}()
-	}
+		}
+		state.droppedCutCount = settings.DroppedCutCount
+	}()
 	args.Client.addSyncHook(func(ctx context.Context) {
 		if _, err := self.Pass(ctx); err != nil {
 			self.client.log.Infof("[directory]the erasure runner stopped: %s", err)
@@ -1048,15 +1055,18 @@ type directoryErasureFilesState struct {
 	loaded   bool
 	// the erasures whose state at evs this process has read
 	resumed map[Id]bool
-	// DirectoryErasureSettings.LedgerHold, the runner's where one is built
-	ledgerHold time.Duration
+	// DirectoryErasureSettings.LedgerHold and DroppedCutCount, the runner's where one is built
+	ledgerHold      time.Duration
+	droppedCutCount int
 }
 
 // The client's erasure files part.
 func (self *DirectoryClient) erasureFilesState() *directoryErasureFilesState {
 	return self.part(directoryErasureFilesPart, func() any {
+		defaults := DefaultDirectoryErasureSettings()
 		return &directoryErasureFilesState{
-			rows: map[Id]*directoryErasureLedgerRow{}, resumed: map[Id]bool{}, ledgerHold: DefaultDirectoryErasureSettings().LedgerHold,
+			rows: map[Id]*directoryErasureLedgerRow{}, resumed: map[Id]bool{}, ledgerHold: defaults.LedgerHold,
+			droppedCutCount: defaults.DroppedCutCount,
 		}
 	}).(*directoryErasureFilesState)
 }
@@ -1671,21 +1681,24 @@ func (self *DirectoryClient) eraseFiles(ctx context.Context, work *directoryEras
 	//
 	// A rewrite that finds the erasure off the ref's set while the ledger holds documents a CUT of this device listed
 	// there since the ref's rewrite last ran through lists nothing of them: another erasure's CUT dropped it in between
-	// (the file header's dropped row; QD-1160). They are CUT again once, adding the erasure back at the head's epoch,
-	// and the ref rewritten again; off the set a second time, they go back uncut and the call waits, saying nothing
-	// complete. A CUT again that the set cannot hold answers ErrIndexErasureSetFull, the documents back uncut.
+	// (the file header's dropped row; QD-1160). They are CUT again, adding the erasure back at the head's epoch, and
+	// the ref rewritten again, DroppedCutCount times (once); off the set after that, they go back uncut and the call
+	// waits, saying nothing complete. A CUT again that the set cannot hold answers ErrIndexErasureSetFull, the
+	// documents back uncut.
 	rewrite := func(index func(ctx context.Context, repoId Id) (DirectoryErasureIndex, error), cards bool, complete bool) (bool, error) {
 		eraser, err := index(ctx, directoryId)
 		if err != nil {
 			return false, err
 		}
-		documents := func() map[string]uint64 {
+		var documents map[string]uint64
+		var droppedCutCount int
+		func() {
 			state.stateLock.Lock()
 			defer state.stateLock.Unlock()
 			_, owed := self.erasureLedgerRowWithLock(state, work).refDocuments(cards)
-			return maps.Clone(owed)
+			documents, droppedCutCount = maps.Clone(owed), state.droppedCutCount
 		}()
-		for recut := false; ; recut = true {
+		for recuts := 0; ; recuts += 1 {
 			rewritten, err := eraser.Rewrite(ctx, &IndexRewriteArgs{
 				ErasureId: work.erasureId, Complete: complete, Note: note, Completion: complete, Relisted: true,
 			})
@@ -1702,7 +1715,7 @@ func (self *DirectoryClient) eraseFiles(ctx context.Context, work *directoryEras
 			// dropped it, or opened again by an ERASE after that CUT read it complete
 			dropped := 0 < len(documents) && (!cut || (rewritten != nil && rewritten.Dropped))
 			switch {
-			case dropped && !recut:
+			case dropped && recuts < droppedCutCount:
 				cutErr := cutOn(eraser, slices.Sorted(maps.Keys(documents)), documents)
 				if errors.Is(cutErr, ErrIndexErasureSetFull) {
 					// back uncut: the next sync's CUT waits on the set as a first CUT does
