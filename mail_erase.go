@@ -35,9 +35,9 @@
 //	who      only a sidecar the authority says administers the repo erases: a consented, not read-only device of a
 //	         mailbox's owner, or a group repo's admin. With no authority every call refuses
 //
-// A general repo's versions name no slot, since its keys ride its segments, so a group repo's mail is not shreddable
-// by slot keys and its erasure refuses (ErrMailNotShreddable) until §15.7's group inbox gives group mail slots
-// (QD-102): nothing here claims a group message erased.
+// A general repo whose signed RepoCreate marks it as a group or admin inbox uses a deletable slot per message
+// (§15.7, QD-102). A retained version whose key is in a segment header has no slot to destroy and returns
+// ErrMailNotShreddable.
 //
 // On every leg but the extension's. A MailEraser is safe for concurrent use: one erasure step runs at a time.
 

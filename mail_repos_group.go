@@ -4,10 +4,9 @@
 // whose readers are the group's members, at most mail_group_members of them (§20.4).
 //
 //	create    `ur id group-create [--private]`: a general repo announced in a team network with requests closed and
-//	          no roles offered, or a private marker with --private (EvsCreateRepoArgs.GroupInbox, which the
-//	          directory's announcement writer reads), and the group's address in mailcfg. A group inbox takes
-//	          deposits, so its RepoCreate must carry the inbox marker plan-MAIL-group-inbox decided (QD-102:
-//	          RepoCreate.inbox, with the drop key KEYS-M2-20 rotates for it and the deposit grant to tag:mail).
+//	          no roles offered, or a private marker with --private, and the group's address in mailcfg. The
+//	          signed RepoCreate.inbox role selects the drop key and per-message slots. On Team networks the
+//	          creator also grants deposit to tag:mail (QD-102).
 //	          The device keeps the reserved random repo id and publication choice in its sealed store until the
 //	          approved address, repo activation, directory publication and Team deposit grant have all succeeded.
 //	join      `ur id group-add` is the only way in: it writes the member into the group's mailcfg record and files
