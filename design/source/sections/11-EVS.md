@@ -2142,7 +2142,12 @@ reconcile an erasure resumes from evs's state, not one device's memory: its CUTs
           having read it complete between this call's CUT and the list, it says so, and the directory CUTs
           the same documents once more, which adds the erasure again under the head's epoch, and rewrites
           again, a second drop putting the documents back as uncut in its ledger, owed at its next sync as
-          a CUT a full set holds back is (owner decision 675);
+          a CUT a full set holds back is (owner decision 675); past a revocation request's 30-day sweep
+          window, which bounds only how long the directory's erasure runner catches new copies, the runner
+          still finishes what its ledger owes the request, a ref's rewrite waiting on the allowance (11.13's
+          wait) or on a history it could not yet walk whole, a cards ref CLOSURE whose ERASE a kill cut off
+          and documents a second drop put back uncut, and cuts nothing it newly finds, a ledger mark telling
+          those documents apart from new finds (§16.11's runner row; owner decision 676);
           its CLOSUREs' and ERASEs' erasure_notes name its id (for the directory's erasure runner the
           DirectoryErasureRequest's request_id, which racing runners and the 30-day sweep share, as RECORD.md's
           ErasureBody.request_id does, so the note's id is that request_id), and its ERASEs' notes name its documents

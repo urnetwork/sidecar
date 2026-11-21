@@ -2276,3 +2276,26 @@ assert DECISIONS_INTRO.count(_D674) == 1, 'decisions lead moved'
 DECISIONS_INTRO = DECISIONS_INTRO.replace(
     _D674, _D674 + "A late fold the same day numbers the answer recorded after it: a directory erasure that another "
     "erasure's CUT dropped between its re-CUT and its rewrite (675), refining @@OD:673@@. ")
+
+# The second late fold (dr11-late-fold, 2026-11-21): the answer recorded after the late fold, QD-1161.
+INDEX += [
+    (676, "A directory erasure's owed work past its window",
+     "Past a request's 30-day sweep window the runner still finishes what its ledger owes, cutting nothing new."),
+]
+for _n, _note in [
+        (673, ' Followed by @@OD:676@@: past the 30-day sweep window the runner still runs the rewrites its ledger '
+              'owes.'),
+        (675, ' Extended by @@OD:676@@: documents a second drop put back uncut are CUT past the 30-day sweep window '
+              'too.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 677))
+DATES[676] = '2026-11-21'
+_D675 = "dropped between its re-CUT and its rewrite (675), refining @@OD:673@@. "
+assert DECISIONS_INTRO.count(_D675) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D675, _D675 + "A second late fold the same day numbers the answer recorded after that: the work a directory "
+    "erasure's ledger owes past its request's 30-day sweep window (676), following @@OD:673@@ and extending "
+    "@@OD:675@@. ")

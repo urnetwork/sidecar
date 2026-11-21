@@ -1797,7 +1797,13 @@ authority   every key destruction here takes admin scope, as in every repo, whic
 runner      the directory's erasure runner: a network-scope indexer that is itself a directory admin, else each
             directory admin's daemon (never an app host or page Worker) 0-10 min after it first syncs the work,
             the first commit winning and later ones skipping what an ERASE already names; it runs retention
-            expiry (the repo's retention row) and repo owners' erasure_request entries (Repos' revoke)
+            expiry (the repo's retention row) and repo owners' erasure_request entries (Repos' revoke); past a
+            request's 30-day sweep window, which bounds only how long later copies are caught, it still finishes
+            the format-2 work its ledger owes the request, a ref's rewrite waiting on the eraser's closure
+            allowance (§11.13's wait row) or on a history it could not yet walk whole, a cards ref CLOSURE whose
+            ERASE a kill cut off and documents a second drop put back uncut (the erasure row), and cuts nothing
+            it newly finds after the window, a ledger mark telling those documents, still owed a CUT, apart from
+            new finds (owner decision 676)
 erasure     a directory admin's ur directory erase <id>: for an announcement, a CUT on the cards ref and on
             ur/index listing its documents (§11.12), then a CLOSURE rewriting under fresh keys the index files and
             the card holding its document, then the ERASE of the old slots' keys (§11.12, §11.14), a moderation's
@@ -1810,15 +1816,18 @@ erasure     a directory admin's ur directory erase <id>: for an announcement, a 
             ref's rewrite list again before it trusts that complete (owner decision 673); should another
             erasure's CUT drop the erasure from a ref's set between that CUT and its rewrite's list, the
             rewrite says so and the directory CUTs the same documents on that ref once more and rewrites
-            again, a second drop leaving them uncut in its ledger for the next sync (owner decision 675); a
-            member asks an admin, or withdraws, which tombstones and purges but destroys no key
+            again, a second drop leaving them uncut in its ledger for the next sync (owner decision 675), whose
+            pass CUTs them past a request's 30-day sweep window too, by the ledger's mark (the runner row; owner
+            decision 676); a member asks an admin, or withdraws, which tombstones and purges but destroys no key
 closure     the eraser holds neither a card's key nor a repo admin's, and readers refuse any other bytes at d/ and
             r/ (path rules), so its CLOSURE rewrites a card (d/<h>/<sid>) or a repo file (r/<h>/<repo>) only once
             the standing version no longer holds the erased document, writing that version's own bytes under a
             fresh key (owner decision 636): for a revocation, the repo file at once, the owner's marker standing
             as the revoke row orders, and each card naming the repo once its writer wrote the run private or left
             it out, a card that still names the repo having its document CUT from both indexes at once and
-            waiting for its writer, caught at each later sync for 30 days; for a directory admin's own erase, a
+            waiting for its writer, caught at each later sync for 30 days, past which the runner catches no new
+            copy but still sends the ERASE a kill cut off after a CLOSURE of the cards ref, with the rest its
+            ledger owes the request (the runner row; owner decision 676); for a directory admin's own erase, a
             card that still holds the item is removed whole by moderation's removal and its keys erased, its
             writer's other runs coming back with its next card, which, as the first card a writer writes after
             another signer removed its path (read at its sync, as its moderation notice shows), raises every
