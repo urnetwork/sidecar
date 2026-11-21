@@ -826,7 +826,13 @@ barriers    each owning section names a barrier at every linearization point and
             push, the migration's format flip, the drop job's take and phase CASes, its hold/ reread and each HEAD and
             DELETE, and a remote search's page replies
 unknown     ApplyThenDrop applies a write and shows the caller a transport error; every write in FS-1, FS-3, FS-15,
-            FS-25, FS-43 to FS-45, FS-57, FS-63, FS-65, FS-72 and FS-75 also runs with it
+            FS-25, FS-43 to FS-45, FS-57, FS-63, FS-65, FS-72 and FS-75 also runs with it, on T2 the fake hosts'
+            writing calls among them (owner decision 670): each fake declares which of its calls write, the
+            Quota's ReportUsage and CountRate, a Lease that draws and the Close that settles a lease, Tasks'
+            Schedule and Push's Hint and HintSidecars, and EveryWrite loses each one's answer in turn beside the
+            stores' writes, a Lease whose answer is lost leaving its caller no handle, so the fake closes the lease
+            the call opened, as server's Lease does on an unanswered draw; FS-43 to FS-45 on a T3 quota tier over
+            the private stores wait for the review phase (DESIGN-DEFER.md's test-quota-t3-tier entry)
 determinism fake clocks and barriers only, no sleeps; a schedule waiting over 60 s of real time for a barrier fails
             with its trace, the barrier driver's default, which a test that sets its own bound replaces
             (owner decision 637): a holder the driver's stall check finds blocked fails its run within seconds, so

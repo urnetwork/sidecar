@@ -4351,6 +4351,13 @@ The design-records track that swept up the answers recorded after the fourth lat
     - Not taken: (2) leaving it to the review phase, a writer hiding any document it commits with no alarm meanwhile.
     - Raised by the build (the index-check-omitted-document track; the build's ledger, QD-1153). It follows owner decision 621.
 
+670. **§22.8's unknown rule on T2 also loses the answers of the fake hosts' writing calls, each fake declaring which of its calls write (option 1, the recommendation, 2026-11-20).**
+    - Question: §22.8's unknown rule runs every write of the rows it lists once with its answer lost, and on T2 EveryWrite counted only the writes a dry run issues to the Net's stores, its PUTs, DELETEs, Redis writes and Postgres commits. The fake Quota, Tasks and Push take their plans as host calls, which hostCall recorded as reads, so the rule found no write in FS-44's or FS-45's schedules, their reports saying 0 writes run with their responses lost, and a usage batch, a lease draw, a task or a hint, each a write whose unknown outcome no caller may take as a failure, never had its answer lost.
+    - Answer: the fake hosts declare which of their calls write, and the fault queue counts those among the host's writes, so EveryWrite loses each one's answer in turn beside the stores' writes: the Quota's ReportUsage and CountRate, a Lease that draws and the Close that settles a lease, Tasks' Schedule, and Push's Hint and HintSidecars. Limits and OverLimit stay reads. A Lease whose answer is lost leaves its caller no handle, so the fake closes the lease the call opened, as server's Lease does on an unanswered draw. Every unknown row whose schedule calls a fake host reruns once more for each such write, and rows that passed before may find what they never lost; that is the rule working. FS-43 to FS-45 on a T3 quota tier over the private stores, the third option, wait for the review phase (§22.8's unknown row; DESIGN-DEFER.md's test-quota-t3-tier entry).
+    - Cost: the fakes mark their writing calls once; each unknown row runs once more for each host write it makes.
+    - Not taken: (2) keeping the rule to store writes on T2, each quota row losing its host answers by hand where its author named them; (3) leaving the rule to T3 for the quota rows, through a quota tier that sidecart3 and quotahost do not have yet, which the answer takes later for T3.
+    - Raised by the build (the fault-clause-registry track; the build's ledger, QD-1155).
+
 ## Owner instructions after the v1 build (2026-11-05)
 
 These are instructions, not design decisions, so they carry no number.

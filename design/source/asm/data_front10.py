@@ -2174,6 +2174,9 @@ INDEX += [
     (669, "Index entries above the pin's ref version",
      "A host with the text holds every entry to the effective ref version at the pin, catching a future "
      'tombstone.'),
+    (670, "The unknown rule on the fake hosts' writes",
+     "On T2 the rule also loses the answers of the calls the fake hosts declare as writes, the Quota's among "
+     'them.'),
 ]
 for _n, _note in [
         (531, ' Followed by @@OD:652@@: a suspension holds mail at the send gate as a halt.'),
@@ -2193,9 +2196,9 @@ for _n, _note in [
     _i = [r[0] for r in INDEX].index(_n)
     assert _note not in INDEX[_i][2], _n
     INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
-assert [r[0] for r in INDEX] == list(range(1, 670))
+assert [r[0] for r in INDEX] == list(range(1, 671))
 DATES.update({647: '2026-11-19', 648: '2026-11-19', 649: '2026-11-19'})
-DATES.update({_n: '2026-11-20' for _n in range(650, 670)})
+DATES.update({_n: '2026-11-20' for _n in range(650, 671)})
 _D646 = "and T3's reread of admin info after a clock move (646). "
 assert DECISIONS_INTRO.count(_D646) == 1, 'decisions lead moved'
 DECISIONS_INTRO = DECISIONS_INTRO.replace(
@@ -2211,7 +2214,8 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "extending @@OD:618@@, a moderated run left out of its writer's card (664), following @@OD:636@@, the "
     "erased-key judge's leg seam (665), extending @@OD:596@@, a rotation draft's freshness (666), the explorer on "
     "a barrier-free schedule (667), following @@OD:626@@, the shed past a weighted share (668), refining "
-    "@@OD:617@@, and index entries above the pin's ref version (669), following @@OD:621@@. ")
+    "@@OD:617@@, index entries above the pin's ref version (669), following @@OD:621@@, and the unknown rule on "
+    "the fake hosts' writes (670). ")
 
 # Owner decision 141's file-mode amendment, approved 2026-11-20.
 _i = [row[0] for row in INDEX].index(141)

@@ -18,6 +18,16 @@ Stage: Review phase
 - **Held:** Nothing: no task or track waits on it.
 - **To bring back:** A two-instance configuration for each drop story's liveness run, recorded in modelled.yml as a mode M10's exit needs, with its states and time measured.
 
+### test-quota-t3-tier: FS-43 to FS-45 on a T3 quota tier
+Stage: Review phase
+- **Deferred:** A T3 quota tier for §22.8's rules, server's Quota over the private stores on the Net's clock and fault queue, as SetEvsTier gives evs, with FS-43 to FS-45 run on it, so the unknown rule loses their writes' answers at server's own Postgres commits and Redis calls (§22.8's unknown row; owner decision 670, whose answer leaves this, the question's third option, to the review phase; ledger id QD-1155).
+- **Why:** The owner took the fake hosts' writing calls on T2 now, which keeps every unknown row honest without each author listing its host writes, and left for later the T3 tier, which neither server's sidecart3 nor quotahost has yet. DESIGN.md gives no other reason.
+- **Launch instead:** On T2 the unknown rule loses, one at a time, the answer of each call the fake hosts declare as a write, the Quota's ReportUsage and CountRate, a Lease that draws and the Close that settles a lease among them, so FS-44's and FS-45's runs on the Net's fake Quota lose their host writes' answers; their T3 legs run as quotahost's own tests (§22.8's unknown row).
+- **Lost:** No run under §22.8's rules holds FS-43 to FS-45 to the unknown rule over server's real Quota, so a lost answer at one of its Postgres commits or Redis calls is caught only where quotahost's own tests lose it.
+- **Dark in code:** sidecartest/fault runs FS-44 and FS-45 on the Net's fake Quota (fs44.go, fs45.go); it has an evs tier and an ACL exchange tier (SetEvsTier, SetAclExchangeTier) and no quota tier.
+- **Held:** Nothing: no task or track waits on it.
+- **To bring back:** A quota tier like SetEvsTier, server's Quota over the private stores on the Net's clock and queue, which sidecart3 sets as it sets the evs tier, and FS-43 to FS-45 run on it, each run's writes counted at its Postgres commits and Redis calls.
+
 ### test-v1: §22's v1 set
 Stage: v1 (M6, M10)
 - **Deferred:** §22.17's v1 rows. At M6: S3b, S4b, the OIDC, JIT, SCIM and custom-domain rows, the seat cases, FS-30's audit reader, S13, FI-25, FI-26 and the M6 cases of FS-84 to FS-88 and FS-97 to FS-101. At M10 (owner decision 169): S11, S12, FI-16 to FI-24, FI-27, FS-64 to FS-81, FS-83, FS-89 to FS-96, FS-107 to FS-112, FS-114's purge and drop cases and FS-125; the index vectors on every leg; git-lfs conformance; both models and `EvsCommit.tla`'s drop extension.
