@@ -327,6 +327,8 @@ barrier evs.migrate.raise.after evsservice/repo_format.go
 barrier evs.migrate.raise.before evsservice/repo_format.go
 barrier evs.part.append.after evsservice/push_part.go
 barrier evs.part.append.before evsservice/push_part.go
+barrier evs.pin.raise.after evs_verify.go
+barrier evs.pin.raise.before evs_verify.go
 barrier evs.place.put.after evsservice/place.go
 barrier evs.place.put.before evsservice/place.go
 barrier evs.prefix.journal.after evs_prefix.go

@@ -999,7 +999,8 @@ func TestTlsCustomOrdererEndsAChallengeWriteByItsRefusal(t *testing.T) {
 }
 
 // 409 in_flight and 429 budget are asked again under the same claim once their retry_after has passed, the claim
-// renewed once its renewal comes due while the holder waits.
+// renewed once its renewal comes due while the holder waits: a retry_after longer than a third of the lease is cut
+// there, the claim renewed, and the rest waited out.
 func TestTlsCustomOrdererWaitsOutAChallengeRefusalsRetryAfter(t *testing.T) {
 	world := newTlsCustomDnsWorld(t, DefaultTlsCustomSettings(), 120_000, func(index int) error {
 		switch index {
@@ -1014,13 +1015,14 @@ func TestTlsCustomOrdererWaitsOutAChallengeRefusalsRetryAfter(t *testing.T) {
 	if done || order == nil || order.Status != TlsAcmeStatusReady {
 		t.Fatalf("the authorization: %+v, done %v", order, done)
 	}
-	if len(world.clock.waits) < 2 || world.clock.waits[0] != 45*time.Second || world.clock.waits[1] != 5*time.Second {
+	// 45 s cut at the renewal 40 s into the 120 s lease, then 5 s
+	if len(world.clock.waits) < 3 || world.clock.waits[0] != 40*time.Second || world.clock.waits[1] != 5*time.Second || world.clock.waits[2] != 5*time.Second {
 		t.Fatalf("the waits: %v", world.clock.waits)
 	}
 	if !slices.Equal(world.api.postClaimSeqs, []uint64{1, 1, 1}) || len(world.api.writes) != 1 {
 		t.Fatalf("the POSTs came under claims %v, writing %+v", world.api.postClaimSeqs, world.api.writes)
 	}
-	// the claim, its renewal a third of the lease on, once the 45 s wait passed, and the one before the CA's challenge
+	// the claim, its renewal a third of the lease on, inside the 45 s wait, and the one before the CA's challenge
 	if len(world.api.claims) != 3 || world.api.claimSeq != 1 || world.api.eventCount(TlsCustomEventRelease) != 0 {
 		t.Fatalf("%d claims, at %d, %d releases", len(world.api.claims), world.api.claimSeq, world.api.eventCount(TlsCustomEventRelease))
 	}
