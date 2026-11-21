@@ -127,6 +127,7 @@ func (self *testBridgeEffectWorld) open() {
 	}
 	self.filer = self.newFiler()
 	unregister := self.filer.Register()
+	removeForward := self.sidecar.RegisterEffectLookup(SidecarActionForward, self.filer.args.Grants.Lookup)
 	counter, err := NewApprovalPresenceCounts(self.localStore)
 	if err != nil {
 		self.t.Fatal(err)
@@ -178,6 +179,7 @@ func (self *testBridgeEffectWorld) open() {
 	self.closeOpen = func() {
 		bridges.Close()
 		uninstall()
+		removeForward()
 		unregister()
 	}
 }
@@ -274,6 +276,8 @@ func TestBridgeToolPathForwardUsesTheReviewedRequestOnRetry(t *testing.T) {
 	}
 	world.approve(approved)
 	world.clock.advance(30 * time.Second)
+	world.net.tickAt(world.clock.Now().UnixMilli())
+	world.install()
 	world.open()
 	other := *request
 	other.Port++
@@ -287,7 +291,7 @@ func TestBridgeToolPathForwardUsesTheReviewedRequestOnRetry(t *testing.T) {
 	filed, err := world.filer.Forward(ctx, origin, request)
 	wantGrant := AclGrantId(approvalId, approved.Action.PayloadSha256())
 	if err != nil || filed.ApprovalId != approvalId || !bytes.Equal(filed.GrantId, wantGrant[:]) {
-		t.Fatalf("the approved forward after restart: %+v, %v", filed, err)
+		t.Fatalf("the approved forward after restart: %+v, %v (log refusal: %v)", filed, err, world.net.verdicts[world.net.n].Refusal)
 	}
 	if err := world.filer.confirmForwardGrant(ctx, before, world.api.posts[0], filed.GrantId); !errors.Is(err, ErrBridgeFileRefused) {
 		t.Fatalf("a receipt from before the approval: %v", err)
