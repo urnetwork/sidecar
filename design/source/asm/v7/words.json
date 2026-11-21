@@ -56,20 +56,20 @@
  {
   "num": 7,
   "code": "TEAM",
-  "words": 12576,
-  "code_words": 14983,
+  "words": 12713,
+  "code_words": 15069,
   "ceiling": 3500,
-  "over": 9076,
-  "over_pct": 259.3
+  "over": 9213,
+  "over_pct": 263.2
  },
  {
   "num": 8,
   "code": "ACL",
-  "words": 12650,
+  "words": 12985,
   "code_words": 5343,
   "ceiling": 3800,
-  "over": 8850,
-  "over_pct": 232.9
+  "over": 9185,
+  "over_pct": 241.7
  },
  {
   "num": 9,
@@ -101,20 +101,20 @@
  {
   "num": 12,
   "code": "DNS",
-  "words": 6128,
+  "words": 6327,
   "code_words": 2026,
   "ceiling": 3000,
-  "over": 3128,
-  "over_pct": 104.3
+  "over": 3327,
+  "over_pct": 110.9
  },
  {
   "num": 13,
   "code": "TLS",
-  "words": 10195,
-  "code_words": 1272,
+  "words": 10302,
+  "code_words": 1330,
   "ceiling": 3800,
-  "over": 6395,
-  "over_pct": 168.3
+  "over": 6502,
+  "over_pct": 171.1
  },
  {
   "num": 14,
@@ -146,11 +146,11 @@
  {
   "num": 17,
   "code": "BRIDGE",
-  "words": 9826,
+  "words": 9870,
   "code_words": 6402,
   "ceiling": 3800,
-  "over": 6026,
-  "over_pct": 158.6
+  "over": 6070,
+  "over_pct": 159.7
  },
  {
   "num": 18,

@@ -2299,3 +2299,37 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     _D675, _D675 + "A second late fold the same day numbers the answer recorded after that: the work a directory "
     "erasure's ledger owes past its request's 30-day sweep window (676), following @@OD:673@@ and extending "
     "@@OD:675@@. ")
+
+# The third late fold (dr12-late-fold, 2026-11-21): the four questions the review's fix tracks left open, which the
+# owner had the run take over, QD-1162 to QD-1165.
+INDEX += [
+    (677, "A policy writer's later member-directory pages",
+     "A one-command admin read takes a later page's `after` member ID in its signed body, each page its own "
+     'command.'),
+    (678, 'Team scope declarations',
+     'An Owner or Admin declares a scope in signed settings; its label keeps its first binding, and reassignment '
+     'waits.'),
+    (679, '`ip:` tests and activated route grants',
+     "A save's `ip:` tests count the activated grants it can open; one it cannot open fails a deny as "
+     'indeterminate.'),
+    (680, "A delegated DNS-01 challenge's handoff",
+     "api hands a desktop's DNS-01 to certs' worker as a command with a restart-safe receipt and the real serial."),
+]
+for _n, _note in [
+        (40, ' Followed by @@OD:678@@: an Owner or Admin declares each scope in signed settings, its label never '
+             'reassigned.'),
+        (417, " Followed by @@OD:680@@: a desktop's delegated DNS-01 reaches the write only through certs' worker."),
+        (615, ' Extended by @@OD:679@@: a deny test also counts the activated route grants the head keeps.'),
+]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert _note not in INDEX[_i][2], _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 681))
+DATES.update({_n: '2026-11-21' for _n in range(677, 681)})
+_D676 = "sweep window (676), following @@OD:673@@ and extending @@OD:675@@. "
+assert DECISIONS_INTRO.count(_D676) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D676, _D676 + "A third late fold the same day numbers the four questions the review's fix tracks left open, "
+    "which the owner had the run take over: a policy writer's later member-directory pages (677), Team scope "
+    "declarations (678), following @@OD:40@@, `ip:` tests and activated route grants (679), extending @@OD:615@@, "
+    "and a delegated DNS-01 challenge's handoff (680), following @@OD:417@@. ")

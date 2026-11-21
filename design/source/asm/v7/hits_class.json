@@ -1003,7 +1003,7 @@
  {
   "family": "mib64_trigger",
   "file": "07-TEAM.md",
-  "line": 351,
+  "line": 355,
   "col": 22,
   "match": "64 MiB",
   "snippet": "  [{size_above_bytes: 64 MiB, off}]; v1, its type reserved at M2:",
@@ -1016,7 +1016,7 @@
  {
   "family": "device_cap_1000",
   "file": "07-TEAM.md",
-  "line": 393,
+  "line": 397,
   "col": 88,
   "match": "member-device cap",
   "snippet": "           §20.4's 5,000 Team admissions count member devices and agents alike, with no member-device cap",
@@ -1029,7 +1029,7 @@
  {
   "family": "mib64_trigger",
   "file": "07-TEAM.md",
-  "line": 655,
+  "line": 661,
   "col": 256,
   "match": "64 MiB",
   "snippet": "ing an honest writer gives each path it creates, existing paths keeping theirs (§11.7; owner decision 167); without the record the platform rule holds, versionless above 64 MiB of plaintext; Owners, Admins and Network admins write the record with `ur admin versioning`. The rules cover file-mode refs of every repo kind but config and mailcfg, ne",
@@ -1042,7 +1042,7 @@
  {
   "family": "window_14d_weekly",
   "file": "07-TEAM.md",
-  "line": 1439,
+  "line": 1445,
   "col": 67,
   "match": "weekly",
   "snippet": "         to the member (owner decision 126); together these hold a weekly re-enroller near 14 admitted",
@@ -1055,7 +1055,7 @@
  {
   "family": "window_14d_weekly",
   "file": "07-TEAM.md",
-  "line": 1512,
+  "line": 1518,
   "col": 118,
   "match": "14 days",
   "snippet": "**D-TEAM-1 (proposed).** P0 stage 1 refuses child and admin-refused tokens on all 37 routes before any sidecar, after 14 days log-only, confines `strict_exp` bearers to 7.4's route allowlist and closes AUTH.md:202. *Why:* owner decision 45.",
@@ -1068,7 +1068,7 @@
  {
   "family": "window_14d_weekly",
   "file": "07-TEAM.md",
-  "line": 1568,
+  "line": 1574,
   "col": 1178,
   "match": "weekly",
   "snippet": "ry admin device lists each member's page Workers but its newest for an admin to revoke (7.10's `cleanup` row). *Why:* with `self_admit` off no member device admits, so a weekly re-enroller's evicted Workers would pile up toward Team's 5,000 `config_admissions` (§20.4); a stale-removed Worker has had no leaf change for 90 days and holds no leaf ",
@@ -1081,7 +1081,7 @@
  {
   "family": "device_cap_1000",
   "file": "07-TEAM.md",
-  "line": 1642,
+  "line": 1648,
   "col": 3706,
   "match": "member-device cap",
   "snippet": "ed, consent, recovery and cascade rows, and its approval suite a cancel under §7.4's allowlist (owner decision 551); §20.4 allows Team 5,000 `config_admissions`, with no member-device cap; §2.8's api-7 shows each `IndexerSet`'s signer, subject, scope and `retire`, its services sealed, and §15.5 keeps an undesignated `tag:mail` device off the mail listener",
@@ -1107,7 +1107,7 @@
  {
   "family": "window_14d_weekly",
   "file": "08-ACL.md",
-  "line": 694,
+  "line": 696,
   "col": 117,
   "match": "7-day window",
   "snippet": "- **Invite.** `ur bridge invite` (cli/UI.md:50) files X's request with a hashed 256-bit code, `uses = --count` and a 7-day window; `accept-invite` (`:51`) files Y's, the server binds `invited_network_id`, and each activation is a delta in its network. `POST /acl/accept-invite` takes two body forms ",
@@ -1120,7 +1120,7 @@
  {
   "family": "device_cap_1000",
   "file": "08-ACL.md",
-  "line": 733,
+  "line": 735,
   "col": 11,
   "match": "1,000 member devices",
   "snippet": "| A cap of 1,000 member devices per network | config leaves only | refuses Teams past about 330 members with three devices each | rejected (owner decision 144) |",
@@ -1133,7 +1133,7 @@
  {
   "family": "device_cap_1000",
   "file": "08-ACL.md",
-  "line": 773,
+  "line": 775,
   "col": 542,
   "match": "1,000 member devices",
   "snippet": "r decisions 114, 144 and 182: agents cost no commit and read with no member device online, members accept config Adds by one function of the log, and no network stops at 1,000 member devices.",
@@ -1146,7 +1146,7 @@
  {
   "family": "pg_redis_durable",
   "file": "08-ACL.md",
-  "line": 828,
+  "line": 830,
   "col": 65,
   "match": "evs`, `gkm`, `tlsedge`, `certs`, `dns`, `smtpedge`, `mxedge`; Redis",
   "snippet": "- **Services and config:** gates in `api`/`connect`, `sockets`, `evs`, `gkm`, `tlsedge`, `certs`, `dns`, `smtpedge`, `mxedge`; Redis `{acl_<networkId>}v` (48 h after its last change), with §7.9's `{acl_<networkId>}e` read only; `config/all/pro.yml`.",
@@ -1159,7 +1159,7 @@
  {
   "family": "device_cap_1000",
   "file": "08-ACL.md",
-  "line": 840,
+  "line": 842,
   "col": 35,
   "match": "1,000 member devices",
   "snippet": "| A data repo granted to more than 1,000 member devices seats only 1,000; the rest wait keyless | Low | Medium | the preview and console name the repo; seats fill earliest-admitted first; data-repo wraps would need the owner ",
@@ -2069,7 +2069,7 @@
  {
   "family": "window_14d_weekly",
   "file": "13-TLS.md",
-  "line": 245,
+  "line": 249,
   "col": 473,
   "match": "weekly",
   "snippet": "and ARI renewals skip all limits. certs (`certsservice`, taskworker chains) reimplements the extender pattern, which sidecar cannot import: a `network_tls_cert` queue, a weekly new-set cap below the CA's, counted in Redis `{tcb_}` (13.15), Retry-After holds, the row written before the order; a row keeps its issued chain, which `GET /tls/cert-or",
@@ -2082,7 +2082,7 @@
  {
   "family": "window_14d_weekly",
   "file": "13-TLS.md",
-  "line": 267,
+  "line": 271,
   "col": 74,
   "match": "14-day",
   "snippet": "           a network whose tier fell keeps a standing grant until §20.7's 14-day clock ends",
@@ -2095,7 +2095,7 @@
  {
   "family": "edge_termination",
   "file": "13-TLS.md",
-  "line": 315,
+  "line": 319,
   "col": 2,
   "match": "Edge termination",
   "snippet": "| Edge termination, in a TEE or not, and edge interstitials (PLAN.md:84) | WAF, edge auth, warnings | Plaintext and keys on servers | Ruled out (owner directive 2026-11-03) |",
@@ -2108,7 +2108,7 @@
  {
   "family": "edge_termination",
   "file": "13-TLS.md",
-  "line": 368,
+  "line": 372,
   "col": 35,
   "match": "edge can do its own certificate termination",
   "snippet": "- **PLAN.md:84** (\"so that the tls edge can do its own certificate termination\"): superseded by owner directive 2026-11-03. Certificates stay automatic but go to the listening sidecar (D-TLS-1, D-TLS-6).",
@@ -2121,7 +2121,7 @@
  {
   "family": "offsite",
   "file": "13-TLS.md",
-  "line": 386,
+  "line": 390,
   "col": 1681,
   "match": "off-site",
   "snippet": "on each interface loaded (13.4); §12.6's edges route-probe each interface's reported version and drop map-stale interfaces; §19.10's abuse step re-applies, from §21.10's off-site record, the kills and lifts mailed after a restored dump; §19.7 and §2.8 cert-1 name `{tcb_}`.",

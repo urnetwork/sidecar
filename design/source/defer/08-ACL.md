@@ -18,6 +18,16 @@ Stage: Later
 - **Held:** Nothing: no task or track waits on it.
 - **To bring back:** A design: what a client attests, who verifies it, how a rule names it, and what §2.8's list then publishes.
 
+### acl-team-scope-reassignment: Reassigning a Team scope's label
+Stage: Later, until a consented-member transition rule is decided
+- **Deferred:** Reassigning a Team scope's label (owner decisions 40, 58; Q-TLS-3) to another member or tag, and the consented-member transition rule that must come first (owner decision 678; QD-1163). An Owner or Admin declares each scope's first binding, its label and either its member or its tag, in the config head's signed `ServiceSettings`, and that binding is immutable, across the label's retirement too.
+- **Why:** A label's member or tag decides which devices hold its certificates and receive its mail (§13.8, §15.5), so moving a member's label could hand both to devices the member never consented to. The owner kept reassignment unavailable until a rule for that member's consent is decided.
+- **Launch instead:** Every label keeps its first member or tag. A Team that wants a scope under another member or tag declares a new label, and DNS, ACL and certificate readers take scopes only from the verified projection (§8.8).
+- **Lost:** Moving a scope label, with its hosts' names and mail addresses, from one member or tag to another, as when a member leaves and a colleague takes over the scope.
+- **Dark in code:** Nothing: no command reassigns a label. The signed field, its writer and the check that refuses a declaration binding a label to another member or tag are fix track review-acl-open-questions' work (QD-1163), not yet landed when this entry was written.
+- **Held:** Nothing: no task or track waits on it.
+- **To bring back:** A decision on the consented-member transition: who signs a reassignment, how the member a label names consents to it (from a consented device, as owner decision 126's owner-bound rule asks), what becomes of the scope's issued certificates, mail hosts and mail in flight at the change, and its tests; then the immutability check admits a reassignment that carries that consent.
+
 ### acl-v1: §8's v1 set
 Stage: v1 (M6, M10)
 - **Deferred:** §8.19's v1 rows. At M6: team networks (owner decision 55) with two-approver rules, scope hosts, the audit reader (owner decision 63) and config wraps past the first 1,000 member devices (owner decision 144); the team directory and its default rule (owner decisions 171, 180, 182); cross-network shares (Q-PROTO-3, Q-QUOTA-5, C18); peer-list filtering. At M10 (owner decision 169): `RepoVersioning` enforced with storage format 2 (owner decisions 163, 173, 183), and the `control` class's remote search (owner decisions 175, 178).
