@@ -21,6 +21,12 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
+// The formats a repo may be in (§11.6): 1, and 2 from its first push carrying a format-2 value.
+const (
+	EvsRepoFormat1 = 1
+	EvsRepoFormat2 = 2
+)
+
 // Whether statement and payload carry a format-2 value: the statement's flags and fields, each change's entry
 // version, the new-objects list and the staged bytes. A nil payload, a seal's before its parts are read, answers for
 // the statement alone.

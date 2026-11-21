@@ -47,12 +47,6 @@ const EvsRepoObjectKeyPrefix = "repo/"
 // §11.8's bound on repo/'s bytes.
 const EvsRepoObjectMaxByteCount = 4 * 1024
 
-// The formats a repo may be in (§11.6): 1, and 2 from its first push carrying a format-2 value.
-const (
-	EvsRepoFormat1 = 1
-	EvsRepoFormat2 = 2
-)
-
 var (
 	// No repo/ object: a placed repo whose create has not written it yet, or a key never created.
 	ErrEvsRepoNotFound = errors.New("evs repo not found")
