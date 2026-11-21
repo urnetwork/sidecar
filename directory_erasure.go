@@ -114,19 +114,22 @@
 //	           drop; and the CLOSURE, and the ERASE of its keys, of each path the ledger met inside the window once its
 //	           standing version no longer holds the document, a card whose writer wrote the run private after the
 //	           window among them, which ends the erasure, so the next CUT on each ref drops it from the set (QD-1166).
-//	           Of what the sync shows it reads only the paths the ledger met, and only for a request whose ledger row
-//	           owes work or shows a path still owed its CLOSURE (directoryErasureLedgerRow.closureOwed): one whose
-//	           standing version still holds the document waits for its writer, keeping every ERASE of the call from
-//	           saying complete, and one first met past the window is none of the erasure's. A request whose ledger
-//	           row shows neither is read no further
+//	           Where every path the ledger met reads rewritten, by this erasure's CLOSURE or another's, with nothing
+//	           else owed and no ERASE having said the erasure complete, a rewrite of a ref a CUT of it stands on ends
+//	           it, its last ERASE saying complete, a completion ERASE where nothing there is left to rewrite (QD-1168,
+//	           QD-1132's form): a superseded erasure whose card the later request rewrote first leaves the set too
+//	           (directoryErasureLedgerRow.endOwed). Of what the sync shows it reads only the paths the ledger met,
+//	           and only for a request whose ledger row owes work, shows a path still owed its CLOSURE
+//	           (directoryErasureLedgerRow.closureOwed) or owes that end: one whose standing version still holds the
+//	           document waits for its writer, keeping every ERASE of the call from saying complete, and one first met
+//	           past the window is none of the erasure's. A request whose ledger row shows none of these is read no
+//	           further
 //	begun      a request an ERASE names whose check fails now, its repo announced again, its signer's signature voided
 //	           or a later request superseding it, and one whose check cannot be judged now, still has what its ledger
-//	           row owes finished (QD-1167; §11.12's reconcile row; FI-19): the pass reads the ledger whatever the check
-//	           reads, which gates only what is new, and takes QD-1161's form of the window row, whatever the window,
-//	           so it erases no announce entry, CUTs no document newly found and rewrites no card or repo file. A path
-//	           the ledger met that is still owed its CLOSURE keeps every ERASE of the call from saying complete
-//	           (DirectoryErasureFilesResult.UnclosedPaths), and a request whose ledger row owes no work is read no
-//	           further
+//	           row owes finished, the CLOSUREs of the paths it met and the end that follows them among it (QD-1167,
+//	           QD-1168; §11.12's reconcile row; FI-19): the pass reads the ledger whatever the check reads, which gates
+//	           only what is new, and takes the window row's form whatever the window, so it erases no announce entry,
+//	           CUTs no document newly found and reads no path the ledger first meets after the check failed
 //	authority  CUT, CLOSURE, their uploads and ERASE take admin, which evs checks before any commit or slot rewrite
 //	           (I-EVS-16): the calls go through DirectoryErasureFiles alone, and with none bound nothing of this half
 //	           is cut, rewritten or erased (ErrDirectoryErasureFilesUnbound)
@@ -705,8 +708,8 @@ func (self *DirectoryErasureRunner) raiseOnce(request *DirectoryErasureRequestVi
 	}
 }
 
-// One pass: see the file's header's runner, expiry, waiting and window rows. On a device that is no directory admin it
-// does nothing; on an admin's that is not the runner it only raises what waits past 24 h.
+// One pass: see the file's header's runner, expiry, waiting, window and begun rows. On a device that is no directory
+// admin it does nothing; on an admin's that is not the runner it only raises what waits past 24 h.
 func (self *DirectoryErasureRunner) Pass(ctx context.Context) (*DirectoryErasurePass, error) {
 	self.passLock.Lock()
 	defer self.passLock.Unlock()
@@ -788,9 +791,8 @@ func (self *DirectoryErasureRunner) Pass(ctx context.Context) (*DirectoryErasure
 		}
 		// past its sweep window, or with its check failing once an ERASE names it, a request catches no copy, and
 		// format 2's half still finishes what its ledger row owes (the file header's window and begun rows; QD-1161,
-		// QD-1167); only a request whose check holds has the paths its ledger met rewritten then (QD-1166)
-		checkHolds := verdict == directoryErasureCheckPassed
-		owedOnly := request.Erased && (!checkHolds || self.settings.SweepWindow < age)
+		// QD-1166, QD-1167, QD-1168)
+		owedOnly := request.Erased && (verdict != directoryErasureCheckPassed || self.settings.SweepWindow < age)
 		if owedOnly && !format2 {
 			continue
 		}
@@ -805,15 +807,13 @@ func (self *DirectoryErasureRunner) Pass(ctx context.Context) (*DirectoryErasure
 		owed := false
 		if owedOnly {
 			// no announce entry and nothing the sync newly shows: the ledger's work alone, the sync's files read only
-			// where the ledger owes work or, for a request whose check holds, shows a path still owed its CLOSURE, and
-			// then only at the paths it met
-			rowOwes, closureOwed := self.client.erasureFilesLedger(request.RequestId)
-			if !rowOwes && !(checkHolds && closureOwed) {
+			// where the ledger owes work, shows a path still owed its CLOSURE or owes the erasure's end, and then only
+			// at the paths it met
+			if !self.client.erasureFilesLedger(request.RequestId) {
 				continue
 			}
 			work = self.fileCopies(request)
 			work.owedOnly = true
-			work.closesMet = checkHolds
 			var waits bool
 			owed, waits = self.client.erasureFilesOwed(work)
 			if waits {
@@ -1035,9 +1035,6 @@ type DirectoryErasureFilesResult struct {
 	RemovedPaths []string
 	// The paths whose standing version still holds a document: each waits for its writer.
 	WaitingPaths []string
-	// For a request an ERASE names whose check fails now, the paths the ledger met that are still owed a CLOSURE,
-	// which no pass sends for it: while one is left nothing of the call says complete (the file header's begun row).
-	UnclosedPaths []string
 	// The paths another push changed under this call: judged again at the next sync.
 	ConflictPaths []string
 	// Keys the cards ref's ERASEs named, and the index refs' pairs.
@@ -1100,7 +1097,7 @@ type directoryErasureLedgerRow struct {
 	// A CLOSURE of the cards ref this device sent may stand with no ERASE after it: evs's state is read before
 	// anything else.
 	Unerased bool `json:"unerased,omitempty"`
-	// Its last work ended with an ERASE that said complete.
+	// Its last work ended with an ERASE that said complete, or with nothing sent by a rewrite that read it complete.
 	Complete bool `json:"complete,omitempty"`
 }
 
@@ -1254,12 +1251,9 @@ type directoryErasureWork struct {
 	// a holding card goes by moderation's removal; false waits for its writer
 	remove bool
 	// past the request's sweep window, or its check failing once an ERASE names it: the call sends only what the
-	// ledger owes, and of what the sync showed reads only the paths the ledger met (the file header's window and
-	// begun rows)
+	// ledger owes, the CLOSUREs of the paths it met and the end that follows them among it, and of what the sync
+	// showed reads only the paths the ledger met (the file header's window and begun rows)
 	owedOnly bool
-	// with owedOnly, the request's check holds: a path the ledger met whose standing version no longer holds the
-	// document is rewritten by CLOSURE and its keys erased (QD-1166); false lists it unclosed
-	closesMet bool
 }
 
 // A work with nothing found yet.
@@ -1341,9 +1335,12 @@ func (self *DirectoryClient) announcementFiles(id Id, work *directoryErasureWork
 
 // What a request finds on format 2's carriers at this sync: the repo's file once its marker stands, the versions
 // below the marker its document's; each card holding a run that names the repo, holding it still where the run is
-// not private, held by an earlier version where its writer wrote it private at a raised version; and the documents
-// the request's announce entries folded into on ur/index.
+// not private, held by an earlier version where its writer wrote it private at a raised version, and at a path the
+// ledger met still owed its CLOSURE, held by an earlier version where its standing version names the repo in no run,
+// its writer having left the run out (§16.11's closure row); and the documents the request's announce entries folded
+// into on ur/index.
 func (self *DirectoryErasureRunner) fileCopies(request *DirectoryErasureRequestView) *directoryErasureWork {
+	owedPaths := self.client.erasureFilesClosurePaths(request.RequestId)
 	work := newDirectoryErasureWork()
 	work.erasureId = request.RequestId
 	work.reason = RecordErasureReasonRevocation
@@ -1373,7 +1370,7 @@ func (self *DirectoryErasureRunner) fileCopies(request *DirectoryErasureRequestV
 			switch {
 			case holds:
 				work.holding = append(work.holding, erasureFile)
-			case held:
+			case held, owedPaths[taken.file.Path]:
 				work.held = append(work.held, erasureFile)
 			}
 		case taken.repo != nil && taken.file.Path == repoPath:
@@ -1423,6 +1420,11 @@ func (self *directoryErasureLedgerRow) path(path string) *directoryErasurePathRo
 	return row
 }
 
+// Whether a stored version of the path at or below Held still has its key: the path is owed a CLOSURE.
+func (self *directoryErasurePathRow) owesClosure() bool {
+	return 0 < self.Held && self.Closed <= self.Held
+}
+
 // Notes a file the sync showed, and answers whether its path is owed a CLOSURE: a stored version at or below Held
 // still has its key. A standing version another sidecar than its rightful writer pushed is an admin's CLOSURE, so
 // the path reads rewritten there; a file first met with nothing rewritten is taken to have held the document at the
@@ -1438,7 +1440,7 @@ func (self *directoryErasureLedgerRow) noteHeld(erasureFile *directoryErasureFil
 			row.Held = max(row.Held, erasureFile.file.Version-1)
 		}
 	}
-	return 0 < row.Held && row.Closed <= row.Held
+	return row.owesClosure()
 }
 
 // Notes a file whose standing version holds a document.
@@ -1467,11 +1469,21 @@ func (self *directoryErasureLedgerRow) owes() bool {
 // such a path once its writer has (the file header's window row; QD-1166).
 func (self *directoryErasureLedgerRow) closureOwed() bool {
 	for _, row := range self.Paths {
-		if 0 < row.Held && row.Closed <= row.Held {
+		if row.owesClosure() {
 			return true
 		}
 	}
 	return false
+}
+
+// Whether the erasure's work here is over with nothing of it said complete: every path the row met reads rewritten, by
+// this erasure's CLOSURE or another erasure's, nothing else is owed, and neither an ERASE of this device's work nor a
+// rewrite's reading since said it complete, while a CUT of it listed documents a ref rewrite can end it on. What a
+// pass past the request's sweep window, or for a request whose check fails, ends by a ref rewrite's completion ERASE
+// (the file header's window row; QD-1168).
+func (self *directoryErasureLedgerRow) endOwed() bool {
+	return !self.Complete && 0 < len(self.Paths) && !self.owes() && !self.closureOwed() &&
+		(0 < len(self.CardsDocuments) || 0 < len(self.StreamDocuments))
 }
 
 // The documents the CUTs listed on a ref, the cards ref's own index where cards and else ur/index, and those listed
@@ -1613,8 +1625,8 @@ func (self *DirectoryClient) erasureLedgerRowWithLock(state *directoryErasureFil
 // Whether work leaves this device anything to send, and whether a file waits for its writer: read against the
 // ledger, which takes note of what the sync showed, each document no CUT of this device listed journaled owed a CUT
 // before the pass's ERASEs of the announce entries that showed it (the file header's ledger row). With work.owedOnly
-// nothing new is noted: no row is made, no document journaled and no path the ledger has not met read, and a path it
-// met that is owed a CLOSURE is something to send only where work.closesMet (the file header's window and begun rows).
+// nothing new is noted: no row is made, no document journaled and no path the ledger has not met read, and once every
+// path it met reads rewritten the erasure's end is something to send (the file header's window and begun rows).
 // Nothing is sent.
 func (self *DirectoryClient) erasureFilesOwed(work *directoryErasureWork) (bool, bool) {
 	state := self.erasureFilesState()
@@ -1639,8 +1651,7 @@ func (self *DirectoryClient) erasureFilesOwed(work *directoryErasureWork) (bool,
 			// first met past the window, or after the check failed: none of the erasure's
 			continue
 		}
-		closure := row.noteHeld(held)
-		owed = (closure && (!work.owedOnly || work.closesMet)) || owed
+		owed = row.noteHeld(held) || owed
 	}
 	waits := false
 	for _, holding := range work.holding {
@@ -1654,26 +1665,43 @@ func (self *DirectoryClient) erasureFilesOwed(work *directoryErasureWork) (bool,
 			waits = true
 		}
 	}
+	if work.owedOnly && row.endOwed() {
+		owed = true
+	}
 	if err := self.keepErasureLedgerWithLock(state); err != nil {
 		self.log.Warningf("[directory]the erasure files were not kept: %s", err)
 	}
 	return owed, waits
 }
 
-// What the erasure's ledger row shows with nothing the sync showed read or noted: whether it owes work that no copy
-// found at the sync is needed for (owes), and whether a path it met is still owed a CLOSURE (closureOwed), which a pass
-// past the request's sweep window reads the sync's files for (the file header's window and begun rows). A request
-// this device holds no row of shows neither.
-func (self *DirectoryClient) erasureFilesLedger(erasureId Id) (bool, bool) {
+// Whether the erasure's ledger row, with nothing the sync showed read or noted, owes work that no copy found at the sync
+// is needed for (owes), shows a path it met still owed a CLOSURE (closureOwed) or owes the erasure's end (endOwed):
+// what a pass past the request's sweep window, or for a request whose check fails, reads the sync's files for (the
+// file header's window and begun rows). A request this device holds no row of shows none.
+func (self *DirectoryClient) erasureFilesLedger(erasureId Id) bool {
 	state := self.erasureFilesState()
 	state.stateLock.Lock()
 	defer state.stateLock.Unlock()
 	self.loadErasureLedgerWithLock(state)
 	row, ok := state.rows[erasureId]
-	if !ok {
-		return false, false
+	return ok && (row.owes() || row.closureOwed() || row.endOwed())
+}
+
+// The cards ref paths the erasure's ledger row met that are still owed a CLOSURE; none where this device holds no row.
+func (self *DirectoryClient) erasureFilesClosurePaths(erasureId Id) map[string]bool {
+	state := self.erasureFilesState()
+	state.stateLock.Lock()
+	defer state.stateLock.Unlock()
+	self.loadErasureLedgerWithLock(state)
+	paths := map[string]bool{}
+	if row, ok := state.rows[erasureId]; ok {
+		for path, pathRow := range row.Paths {
+			if pathRow.owesClosure() {
+				paths[path] = true
+			}
+		}
 	}
-	return row.owes(), row.closureOwed()
+	return paths
 }
 
 // Runs fn on the erasure's row and keeps the ledger.
@@ -1688,8 +1716,8 @@ func (self *DirectoryClient) updateErasureLedger(work *directoryErasureWork, fn 
 // Format 2's half of one erasure: see the file's header's order, files, ledger, resume, window and begun rows. It sends
 // what the ledger shows owed of work and no more, so a call that follows a finished one sends nothing; past the
 // request's sweep window, or for a request whose check fails (work.owedOnly), it sends only what the ledger owed before
-// the call, with the CLOSUREs of the paths it met that their writers rewrote where work.closesMet. On an error what
-// committed stands and the next call carries on from the ledger and evs's state.
+// the call, with the CLOSUREs of the paths it met that their writers rewrote and, once every one reads rewritten, the
+// erasure's end. On an error what committed stands and the next call carries on from the ledger and evs's state.
 func (self *DirectoryClient) eraseFiles(ctx context.Context, work *directoryErasureWork) (*DirectoryErasureFilesResult, error) {
 	state := self.erasureFilesState()
 	state.workLock.Lock()
@@ -1715,8 +1743,7 @@ func (self *DirectoryClient) eraseFiles(ctx context.Context, work *directoryEras
 
 	// what the ledger shows owed, read once: the documents owed a CUT, those the sync found journaled first, and the
 	// files owed a CLOSURE. Past the request's sweep window, or for a request whose check fails, nothing the sync found
-	// is journaled and of its files only the paths the ledger met are noted, rewritten only where work.closesMet (the
-	// file header's window and begun rows)
+	// is journaled and of its files only the paths the ledger met are noted (the file header's window and begun rows)
 	var uncutCards, uncutStreams []string
 	var cardsVersions, streamsVersions map[string]uint64
 	closes := []*directoryErasureFile{}
@@ -1738,12 +1765,7 @@ func (self *DirectoryClient) eraseFiles(ctx context.Context, work *directoryEras
 				// first met past the window, or after the check failed: none of the erasure's
 				continue
 			}
-			if !row.noteHeld(held) {
-				continue
-			}
-			if work.owedOnly && !work.closesMet {
-				result.UnclosedPaths = append(result.UnclosedPaths, held.file.Path)
-			} else {
+			if row.noteHeld(held) {
 				closes = append(closes, held)
 			}
 		}
@@ -1787,7 +1809,7 @@ func (self *DirectoryClient) eraseFiles(ctx context.Context, work *directoryEras
 			return result, err
 		}
 		last := len(uncutCards) == 0 && len(uncutStreams) == 0 && len(closes) == 0 && len(removes) == 0 &&
-			len(result.WaitingPaths) == 0 && len(result.UnclosedPaths) == 0 && !rewriteOwed
+			len(result.WaitingPaths) == 0 && !rewriteOwed
 		if err := eraseKeys(orphans, last); err != nil {
 			return result, err
 		}
@@ -1864,10 +1886,9 @@ func (self *DirectoryClient) eraseFiles(ctx context.Context, work *directoryEras
 		row := self.erasureLedgerRowWithLock(state, work)
 		cardsOwed, streamsOwed = row.CardsRewriteOwed, row.StreamsRewriteOwed
 	}()
-	// whether an ERASE may yet say the erasure complete: no file waits for its writer, none met a conflict, and for a
-	// request whose check fails no path the ledger met is still owed a CLOSURE
+	// whether an ERASE may yet say the erasure complete: no file waits for its writer, and none met a conflict
 	settled := func() bool {
-		return len(result.WaitingPaths) == 0 && len(result.ConflictPaths) == 0 && len(result.UnclosedPaths) == 0
+		return len(result.WaitingPaths) == 0 && len(result.ConflictPaths) == 0
 	}
 
 	// each ref's index files: the eraser's CLOSURE and ERASE pairs, which read their own progress from evs's state.
@@ -1884,6 +1905,8 @@ func (self *DirectoryClient) eraseFiles(ctx context.Context, work *directoryEras
 	// the ref rewritten again, DroppedCutCount times (once); off the set after that, they go back uncut and the call
 	// waits, saying nothing complete. A CUT again that the set cannot hold answers ErrIndexErasureSetFull, the
 	// documents back uncut.
+	// a rewrite of this call read the erasure complete, by an ERASE of its own or one before
+	readDone := false
 	rewrite := func(index func(ctx context.Context, repoId Id) (DirectoryErasureIndex, error), cards bool, complete bool) (bool, error) {
 		eraser, err := index(ctx, directoryId)
 		if err != nil {
@@ -1909,6 +1932,7 @@ func (self *DirectoryClient) eraseFiles(ctx context.Context, work *directoryEras
 			if rewritten != nil {
 				result.IndexPairCount += rewritten.PairCount
 				result.Complete = result.Complete || rewritten.Completed
+				readDone = readDone || (rewritten.Erasure != nil && rewritten.Erasure.State == SidecarErasureDone)
 			}
 			// off the set after a CUT of this device listed documents there: complete when another erasure's CUT
 			// dropped it, or opened again by an ERASE after that CUT read it complete
@@ -1970,6 +1994,35 @@ func (self *DirectoryClient) eraseFiles(ctx context.Context, work *directoryEras
 			// read owed here: the cards ref's rewrite was its last, which is asked again to end it
 			if _, err := rewrite(files.CardsIndex, true, true); err != nil {
 				return stopped(err)
+			}
+		}
+	}
+	if work.owedOnly && !cardsOwed && !streamsOwed && ends() && !result.Complete {
+		// every path the ledger met reads rewritten, by this erasure's CLOSURE or another's, and nothing else is owed,
+		// with no ERASE having said the erasure complete: a rewrite of a ref a CUT of it stands on ends it, its last
+		// ERASE saying complete, by a completion ERASE where nothing there is left to rewrite (the file header's
+		// window row; QD-1168)
+		var cardsDocuments, streamDocuments bool
+		endOwed := func() bool {
+			state.stateLock.Lock()
+			defer state.stateLock.Unlock()
+			row := self.erasureLedgerRowWithLock(state, work)
+			cardsDocuments, streamDocuments = 0 < len(row.CardsDocuments), 0 < len(row.StreamDocuments)
+			return row.endOwed()
+		}()
+		if endOwed {
+			cut := false
+			if cardsDocuments {
+				cardsCut, err := rewrite(files.CardsIndex, true, true)
+				if err != nil {
+					return stopped(err)
+				}
+				cut = cardsCut
+			}
+			if !cut && streamDocuments && !result.IndexWaiting {
+				if _, err := rewrite(files.StreamsIndex, false, true); err != nil {
+					return stopped(err)
+				}
 			}
 		}
 	}
@@ -2044,9 +2097,8 @@ func (self *DirectoryClient) eraseFiles(ctx context.Context, work *directoryEras
 	}
 
 	slices.Sort(result.WaitingPaths)
-	slices.Sort(result.UnclosedPaths)
 	if err := self.updateErasureLedger(work, func(row *directoryErasureLedgerRow) {
-		row.Complete = result.Complete || (row.Complete && !result.erased())
+		row.Complete = result.Complete || ((row.Complete || readDone) && !result.erased())
 	}); err != nil {
 		return result, err
 	}

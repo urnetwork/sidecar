@@ -21,7 +21,7 @@ import (
 var gateM9WitnessesFlagValue = flag.Bool(gateM9WitnessesFlag, false, "report M9's witness-listing item for sidecar-gate M9")
 
 // M9's rows: FS-31 in smtpproof's plain leg, where the circuits are solved, and its engine leg, and on T3 in server's
-// cli/smtpedge; FS-123 in sidecartest, the root and the sdk and on T3; FS-42's M9 step on server's model alone. Each
+// smtpedgehost; FS-123 in sidecartest, the root and the sdk and on T3; FS-42's M9 step on server's model alone. Each
 // case of M9's exit is one the sweep names, so none keeps the convention's entries, which nothing has written.
 func TestGateM9NamesEachRowsTestsWhereTheyRun(t *testing.T) {
 	catalog := DefaultCatalog()
@@ -46,14 +46,14 @@ func TestGateM9NamesEachRowsTestsWhereTheyRun(t *testing.T) {
 		{rowId: "FS-31", wheres: []where{
 			{repo: "sidecar", dir: "smtpproof", packagePath: ".", names: []string{"TestFs31HonestControls", "TestFs31MaliciousSender", "TestFs31MatrixTable", "FuzzSmtpTranscript"}},
 			{repo: "sidecar", dir: "smtpproof", packagePath: ".", tags: "sidecar_testhooks", names: []string{"TestFs31ScriptedMxs", "TestFs31TheSenderKeepsAMessageTheEdgeForgedSent"}},
-			{repo: "server", packagePath: "./cli/smtpedge", tags: "sidecar_pending,sidecar_testhooks", stores: true, names: []string{"TestT3Fs31AnHonestSend", "TestT3Fs31A451", "TestT3Fs31AMessageRecordBeforeTheEnvelopesReplies"}},
+			{repo: "server", packagePath: "./smtpedgehost", tags: "sidecar_pending,sidecar_testhooks", stores: true, names: []string{"TestT3Fs31AnHonestSend", "TestT3Fs31A451", "TestT3Fs31AMessageRecordBeforeTheEnvelopesReplies"}},
 		}},
 		{rowId: "FS-123", wheres: []where{
 			{repo: "sidecar", packagePath: "./sidecartest", names: []string{"TestFs123SentFromADesktop", "TestFs123QueuedFromAPhone", "TestFs123OtherOutcomesReachTheResult"}},
 			{repo: "sidecar", packagePath: "./sidecartest", tags: "sidecar_testhooks", names: []string{"TestFs123MailOutcomesStandInTheSendingMailbox", "TestFs123CoverageCopySaysNothingOfSending"}},
 			{repo: "sidecar", packagePath: ".", names: []string{"TestMailSendResultReadsASendByItsId", "TestMailSendWatchRaisesOncePerChangedOutcome"}},
 			{repo: "sdk", packagePath: ".", names: []string{"TestCheckSendPredictsPerDomain", "TestSendResultsReachGetSendResultAndMailSend"}},
-			{repo: "server", packagePath: "./cli/smtpedge", tags: "sidecar_pending,sidecar_testhooks", stores: true, names: []string{"TestT3Fs123SentFromADesktop", "TestT3Fs123OtherOutcomesReachTheResult"}},
+			{repo: "server", packagePath: "./smtpedgehost", tags: "sidecar_pending,sidecar_testhooks", stores: true, names: []string{"TestT3Fs123SentFromADesktop", "TestT3Fs123OtherOutcomesReachTheResult"}},
 		}},
 		{rowId: "FS-42", caseName: "m9", wheres: []where{
 			{repo: "server", packagePath: "./model", tags: "sidecar_pending", stores: true, names: []string{"TestSmtpDkimRevokedAfterTheDumpHasNoSelectorOnceTheReplayEnds", "TestDnsDkimDeleteInTheCallersTransaction"}},

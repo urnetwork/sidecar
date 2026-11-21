@@ -186,25 +186,25 @@ func gateM6Cases(catalog *Catalog) map[string][]*GateTest {
 		}},
 	}
 	cases[caseOf("FS-35", "").String()] = []*GateTest{
-		gatePendingTests("./cli/tlsedge", "TestT3Fs35CustomHostThroughTheRealSplitter"),
+		gatePendingTests("./tlsedgehost", "TestT3Fs35CustomHostThroughTheRealSplitter"),
 	}
 	cases[caseOf("FS-122", "").String()] = []*GateTest{
-		gatePendingTests("./cli/tlsedge",
+		gatePendingTests("./tlsedgehost",
 			"TestT3Fs122AnLbRestartedOnAnOldMapLoadsTheCurrentVersionFirst", "TestT3Fs122TheDnsApiDownAtStartLeavesTheSplitOnNoVersion",
 			"TestT3Fs122AHostAddedWhileOneInterfaceIsDownStaysPendingNamingIt", "TestT3Fs122AMapNginxRefusesKeepsTheHostPending",
 			"TestT3Fs122AnLbmapReportingAVersionItsNginxDidNotLoadStaysNotCurrent", "TestT3Fs122AMapThatDropsAnAddedHostFailsItsProbeUntilAReload",
 			"TestT3Fs122ChangesInsideOneWindowLoadInOneReload",
 		),
-		{Repo: "server", Package: "./cli/tlsedge", Tags: "sidecar_pending,sidecar_testhooks", Stores: true, Names: []string{"TestT3Fs122TlsAlpnOrdersWaitForTheHostToBeReady"}},
+		{Repo: "server", Package: "./tlsedgehost", Tags: "sidecar_pending,sidecar_testhooks", Stores: true, Names: []string{"TestT3Fs122TlsAlpnOrdersWaitForTheHostToBeReady"}},
 	}
 
 	// FS-41's and FS-42's M6 steps, meters and custom hosts, where their owners wrote each
 	cases[caseOf("FS-41", "m6").String()] = []*GateTest{
-		{Repo: "server", Package: "./cli/tlsedge", Tags: "sidecar_pending,sidecar_testhooks", Stores: true, Names: []string{"TestT3Fs41CustomHostListenersComeBackByTheirNextHeartbeat"}},
+		{Repo: "server", Package: "./tlsedgehost", Tags: "sidecar_pending,sidecar_testhooks", Stores: true, Names: []string{"TestT3Fs41CustomHostListenersComeBackByTheirNextHeartbeat"}},
 		gatePendingTests("./controller", "TestRecomputeStripeMeterReportsResendsWithoutDoubleBilling"),
 	}
 	cases[caseOf("FS-42", "m6").String()] = []*GateTest{
-		gatePendingTests("./cli/tlsedge", "TestT3Fs42CustomHostsAfterTheDumpLeaveOrReturnToTheRestoredMap"),
+		gatePendingTests("./tlsedgehost", "TestT3Fs42CustomHostsAfterTheDumpLeaveOrReturnToTheRestoredMap"),
 		gatePendingTests("./model", "TestDnsRestoreRaisesTheCustomHostMapAndListsItsLoad"),
 		gatePendingTests("./controller", "TestRecomputeStripeMeterReportsResendsWithoutDoubleBilling"),
 		{Repo: "server", Package: "./sidecarrestore", Names: []string{"TestBillingStepRecomputesFromTheSidecarDumpAfterTheRowsStep", "TestBillingStepSkipsADatabaseBeforeMg6AndRefusesAnUnlinkedBinary"}},
