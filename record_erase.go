@@ -1919,7 +1919,7 @@ func (self *recordEraseNewestStore) Progress(ctx context.Context, erasureId Id) 
 	if err != nil || len(progress.erases) == 0 || progress.erases[len(progress.erases)-1].complete {
 		return progress, err
 	}
-	reopened := &indexEraseProgress{closures: progress.closures}
+	reopened := &indexEraseProgress{closures: progress.closures, completionKey: progress.completionKey}
 	for _, erased := range progress.erases {
 		copied := *erased
 		copied.complete = false
