@@ -703,8 +703,9 @@ func (self *DirectoryClient) keepLapsedWithLock(part *directoryRevocations) erro
 }
 
 // §16.11's readers row for the directory's ERASEs, before the reader takes them: one from a sidecar the state names a
-// directory admin counts, its note's request and entries remembered; any other is left out and alarms bad_erasure,
-// naming its signer, once.
+// directory admin counts, its note's request and entries remembered, and a directory admin's moderation note's
+// announcements journaled where this sidecar's card held them (directory_cards_erasure.go's note row); any other is
+// left out and alarms bad_erasure, naming its signer, once.
 func (self *DirectoryClient) judgeErasures(repoId Id, erasures []*RecordStreamErasure) ([]*RecordStreamErasure, error) {
 	if len(erasures) == 0 {
 		return erasures, nil
@@ -718,6 +719,7 @@ func (self *DirectoryClient) judgeErasures(repoId Id, erasures []*RecordStreamEr
 	part := self.revocations()
 	accepted := []*RecordStreamErasure{}
 	refused := []Id{}
+	notes := []*directoryModerationNote{}
 	err = func() error {
 		part.stateLock.Lock()
 		defer part.stateLock.Unlock()
@@ -750,6 +752,13 @@ func (self *DirectoryClient) judgeErasures(repoId Id, erasures []*RecordStreamEr
 					part.entryErasures[recordIdOf(entryId)] = seen
 				}
 			}
+			if seen.Reason == RecordErasureReasonModeration && slices.Contains(admins, erasure.EraserSidecarId) {
+				for _, announcementId := range body.GetAnnouncementIds() {
+					if len(announcementId) == len(Id{}) {
+						notes = append(notes, &directoryModerationNote{erasureId: erasure.ErasureId, announcementId: recordIdOf(announcementId)})
+					}
+				}
+			}
 		}
 		if changed {
 			return self.keepErasedWithLock(part)
@@ -759,6 +768,8 @@ func (self *DirectoryClient) judgeErasures(repoId Id, erasures []*RecordStreamEr
 	for _, signerId := range refused {
 		self.raise(SidecarRecordAlarmBadErasure, repoId, &signerId)
 	}
+	// what a moderation took off this sidecar's card stays off every card after, whatever this judge's keep did
+	self.journalModerationNotes(notes)
 	if err != nil {
 		return nil, err
 	}

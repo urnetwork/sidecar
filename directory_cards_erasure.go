@@ -26,13 +26,26 @@
 //	closed     a return whose check cannot be made, no binding reading the set, a set that does not read, one no
 //	           directory admin signed, refuses with ErrDirectoryCardReturnUnchecked before anything is signed or put:
 //	           the next write checks again, and nothing that may be listed comes back unread
+//	note       the backstop (QD-1148, question moderated-run-left-out-dropped-erasure, option 2): what the set no longer
+//	           lists the read cannot find, since another erasure's CUT drops a complete one from it (indexCutSet's
+//	           listed_since), and a directory admin's moderation of an announcement says complete with the ERASE of the
+//	           removed card's keys once its index rewrites are proven (directory_erasure.go; on evs, once the index's
+//	           eraser walks a removed path's history, evs_index_erase.go). So that ERASE's sealed note names the
+//	           moderation took (ErasureBody.announcement_ids), and every sync of this device reads the erasure ref's
+//	           ERASEs (the judge of directory_revoke.go): each announcement a directory admin's moderation note names
+//	           that the card this device put last holds is journaled at once, as a return's finds are, whatever the set
+//	           lists by then and however long this device was off, so its return, every card after, the format 2
+//	           carrier's seed and the run and worker writers leave it out. A sync journals under the card writer's
+//	           stateLock, never its writeLock, which a card write holds across its conflict's sync; a write takes into
+//	           its journal what a sync journaled since it read it (takeJournal), and one the store did not keep is held
+//	           for the next keep. The return's read stays for what no note names: a moderation whose ERASE has not
+//	           committed yet is still listed, being incomplete
 //
-// The read costs one index file read at a return, which is rare, and changes no format. What the set no longer lists
-// is not left out: an erasure that a later CUT dropped as complete before this device returned (indexCutSet's
-// listed_since) lists nothing, so a device whose return comes after another erasure in the directory carries its
-// moderated item again, as before this rule (question moderated-run-left-out-dropped-erasure). Nothing of a view or a
-// search reaches evs (I-19): the read names the ref and its erasure set's path, and the doc_keys stay on the device. On
-// every leg but the ios_extension legs. Safe for concurrent use.
+// The read costs one index file read at a return, which is rare, and changes no format; the note's ids are sealed, so
+// no server sees more. Nothing of a view or a search reaches evs (I-19): the read names the ref and its erasure set's
+// path, and the doc_keys stay on the device. Neither finds an item only a card put just before a kill held, a card
+// the card written document never recorded: it comes back. On every leg but the ios_extension legs. Safe for
+// concurrent use.
 
 package sidecar
 
@@ -155,13 +168,24 @@ func (self *DirectoryEvsCards) CardsErasedVersions(ctx context.Context, repoId I
 	return versions, nil
 }
 
-// One item a return left out, as the card written document journals it.
+// One item an erasure took, as the card written document journals it: one a return left out, or one a moderation's
+// note named.
 type directoryCardModerated struct {
 	AnnouncementId Id `json:"announcement_id"`
-	// The version the erasure set listed its document at, at or above the one the card put last held it at.
+	// The version the erasure set listed its document at, at or above the one the card put last held it at; for one a
+	// note named, the version that card held it at, which the moderation's CUT listed.
 	ListedVersion uint64 `json:"listed_version"`
-	// The push version of the removal whose return read it.
+	// The push version of the removal whose return read it; 0 for one a note named.
 	Removal uint64 `json:"removal"`
+	// The erasure whose moderation's note named it (the file's header's note row); nil for one a return found.
+	NotedBy *Id `json:"noted_by,omitempty"`
+}
+
+// One announcement a directory admin's moderation took off a card, as its ERASE's sealed note names it
+// (ErasureBody.announcement_ids).
+type directoryModerationNote struct {
+	erasureId      Id
+	announcementId Id
 }
 
 // Whether the journal leaves announcementId out.
@@ -210,8 +234,77 @@ func (self *directoryCardWrittenDocument) noteModerated(found map[Id]uint64, rem
 			AnnouncementId: announcementId, ListedVersion: found[announcementId], Removal: removal,
 		})
 	}
+	self.keepNewestModerated(itemCount)
+}
+
+// Keeps the journal's newest itemCount; non-positive keeps every one.
+func (self *directoryCardWrittenDocument) keepNewestModerated(itemCount int) {
 	if 0 < itemCount && itemCount < len(self.Moderated) {
 		self.Moderated = slices.Clone(self.Moderated[len(self.Moderated)-itemCount:])
+	}
+}
+
+// Takes into the journal what kept, the document as the store holds it now, journals that this one does not: what a
+// sync journaled since this one was read. kept's entries keep their order and this one's own follow, the newest
+// itemCount kept; non-positive keeps every one.
+func (self *directoryCardWrittenDocument) takeJournal(kept []*directoryCardModerated, itemCount int) {
+	merged := slices.Clone(kept)
+	for _, moderated := range self.Moderated {
+		if !slices.ContainsFunc(merged, func(held *directoryCardModerated) bool { return held.AnnouncementId == moderated.AnnouncementId }) {
+			merged = append(merged, moderated)
+		}
+	}
+	self.Moderated = merged
+	self.keepNewestModerated(itemCount)
+}
+
+// Journals at once each announcement notes name that the card this device put last holds (the file's header's note
+// row), as a return's finds are, so every card after leaves it out whatever the erasure set lists by then. Called by
+// a sync's judge of the erasure ref, which holds syncLock, so it takes the card writer's stateLock and never its
+// writeLock. A journal the store does not keep is held for the document's next keep, and every read of the document
+// meanwhile holds it too.
+func (self *DirectoryClient) journalModerationNotes(notes []*directoryModerationNote) {
+	if len(notes) == 0 {
+		return
+	}
+	settings := self.cardSettings()
+	writer := self.cardWriter()
+	err := func() error {
+		writer.stateLock.Lock()
+		defer writer.stateLock.Unlock()
+		written, err := self.readCardWrittenWithLock(writer)
+		if err != nil {
+			return err
+		}
+		held := map[Id]uint64{}
+		for _, item := range written.card(self.sidecarId).GetItems() {
+			held[recordIdOf(item.GetAnnouncementId())] = item.GetVersion()
+		}
+		noted := []*directoryCardModerated{}
+		for _, note := range notes {
+			version, ok := held[note.announcementId]
+			if !ok || written.moderated(note.announcementId) {
+				// another sidecar's, or one this card never held, or journaled already
+				continue
+			}
+			erasureId := note.erasureId
+			moderated := &directoryCardModerated{AnnouncementId: note.announcementId, ListedVersion: version, NotedBy: &erasureId}
+			written.Moderated = append(written.Moderated, moderated)
+			noted = append(noted, moderated)
+		}
+		if len(noted) == 0 {
+			return nil
+		}
+		written.keepNewestModerated(settings.ModeratedItemCount)
+		if err := self.store.writeDocument(directoryCardWrittenName, written); err != nil {
+			writer.unkept = append(writer.unkept, noted...)
+			return err
+		}
+		writer.unkept = nil
+		return nil
+	}()
+	if err != nil {
+		self.log.Warningf("[directory]what a moderation's note names was not journaled: %s", err)
 	}
 }
 
