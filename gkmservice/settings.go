@@ -36,6 +36,12 @@ func (self GkmRate) valid() bool {
 
 // The engine's settings. Every field is read where it is used, from one instance.
 type GkmServiceSettings struct {
+	// Enables the deferred MLS wire only for explicit interop and legacy schedule fixtures.
+	DraftMls bool `json:"-" yaml:"-"`
+
+	// Bucket boundaries for the §19.8 group commit latency SLO.
+	CommitSecondsBuckets []float64
+
 	// place/'s resolution: a 404 cached 5 s, the placements a process keeps (§10.6's placement row).
 	Place *sidecar.EvsRepoPlaceSettings
 
@@ -191,7 +197,8 @@ type GkmServiceSettings struct {
 // The production defaults.
 func DefaultGkmServiceSettings() *GkmServiceSettings {
 	return &GkmServiceSettings{
-		Place: sidecar.DefaultEvsRepoPlaceSettings(),
+		CommitSecondsBuckets: []float64{0.3},
+		Place:                sidecar.DefaultEvsRepoPlaceSettings(),
 
 		RepoCacheMaxTtl:          5 * time.Second,
 		RepoCacheTtl:             5 * time.Second,

@@ -3,6 +3,7 @@
 // UsageBatcher.AddTransfer, on meter evs, for the caller's network: the token's, never the repo's, which takes
 // only stored-byte deltas. Reads, uploads and pushes count alike, a refused one's bytes and a phone's fallback
 // download included, and a spent network's unpaid reads too, which api then finds no balance for (reading 5).
+// An admitted re-seed upload, including its retries, is free (§11.13).
 //
 //   - The caller is known once the guard has verified the token, and it tells the meter then. A request with no
 //     verified token names no network, so its bytes count for no one.
@@ -83,6 +84,7 @@ type transferMeterWriter struct {
 	stateLock sync.Mutex
 	// the token's network, zero until the guard has verified one
 	callerNetworkId connect.Id
+	reseedUpload    bool
 	// counted and not yet handed to the batcher
 	pendingByteCount int64
 }
@@ -105,6 +107,9 @@ func (self *transferMeterWriter) add(byteCount int64, end bool) {
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
+		if self.reseedUpload {
+			return
+		}
 		self.pendingByteCount += byteCount
 		if self.callerNetworkId == (connect.Id{}) {
 			return
@@ -165,15 +170,31 @@ func (self *transferMeterBody) Read(body []byte) (int, error) {
 // Tells the meter serving writer, if one is, that its request's token verified for networkId. A paced writer
 // stands in front of the meter's, so the chain is walked.
 func meterTransferCaller(writer http.ResponseWriter, networkId connect.Id) {
+	if meter := requestTransferMeter(writer); meter != nil {
+		meter.setCaller(networkId)
+	}
+}
+
+// Called after recovery admission and before the first body read, so even a streamed upload never flushes
+// transfer to the caller's open usage window. Its stored bytes follow the ordinary storage accounting.
+func excludeReseedTransfer(writer http.ResponseWriter) {
+	if meter := requestTransferMeter(writer); meter != nil {
+		meter.stateLock.Lock()
+		defer meter.stateLock.Unlock()
+		meter.reseedUpload = true
+	}
+}
+
+func requestTransferMeter(writer http.ResponseWriter) *transferMeterWriter {
 	for writer != nil {
 		if meterWriter, ok := writer.(*transferMeterWriter); ok {
-			meterWriter.setCaller(networkId)
-			return
+			return meterWriter
 		}
 		unwrapper, ok := writer.(interface{ Unwrap() http.ResponseWriter })
 		if !ok {
-			return
+			break
 		}
 		writer = unwrapper.Unwrap()
 	}
+	return nil
 }

@@ -230,8 +230,11 @@ func gkmHintWakeOf(notice PushNotice) (*GkmHintWake, error) {
 			return nil, errors.New("gkm hints: a group topic out of form")
 		}
 		wake.GroupId = &groupId
-		wake.Epoch = notice.Version >> gkmGroupGenerationBitCount
-		wake.Generation = notice.Version & (1<<gkmGroupGenerationBitCount - 1)
+		wake.Generation = notice.Version
+		// Previously issued MLS notices carry their epoch in the body.
+		if wake.Epoch != 0 {
+			wake.Generation &= 1<<gkmGroupGenerationBitCount - 1
+		}
 		return wake, nil
 	}
 	if notice.Topic != PushTopicGkm {

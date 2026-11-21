@@ -116,31 +116,38 @@ func mcpHitOfKind(call *McpCall, hitId string, kinds ...sidecar.IndexDocKind) (*
 }
 
 // evs_read's file: its repo, path and version as named, or as its hit names them, a file's hit standing alone.
-func mcpEvsReadOf(call *McpCall, in *mcpEvsReadIn) (sidecar.Id, string, uint64, error) {
+func mcpEvsReadOf(call *McpCall, in *mcpEvsReadIn) (*sidecar.SearchHitRef, error) {
 	if in.Hit == "" {
 		repoId, err := mcpEvsRepoId(in.Repo)
 		if err != nil {
-			return sidecar.Id{}, "", 0, err
+			return nil, err
 		}
 		path, err := mcpEvsPath(in.Path, false)
 		if err != nil {
-			return sidecar.Id{}, "", 0, err
+			return nil, err
 		}
-		return repoId, path, in.Version, nil
+		return &sidecar.SearchHitRef{RepoId: repoId, Path: path, Version: in.Version}, nil
 	}
 	if in.Repo != "" || in.Path != "" || in.Version != 0 {
-		return sidecar.Id{}, "", 0, errMcpHitAlone
+		return nil, errMcpHitAlone
 	}
 	ref, err := mcpHitOfKind(call, in.Hit, sidecar.IndexDocFile)
 	if err != nil {
-		return sidecar.Id{}, "", 0, err
+		return nil, err
 	}
-	// a hit's path is a path evs_read takes by name, or it opens nothing
-	path, err := mcpEvsPath(ref.Path, false)
-	if err != nil {
-		return sidecar.Id{}, "", 0, errMcpHitKind
+	// Only a content ref whose name can be guarded may be opened. EVS derives its ID and verifies it at read.
+	if _, err := mcpEvsPath(ref.Path, false); err != nil || ref.RefName == "id:"+ref.RefId.String() {
+		return nil, errMcpHitKind
 	}
-	return ref.RepoId, path, ref.Version, nil
+	return ref, nil
+}
+
+func mcpEvsReadTarget(call *McpCall, ref *sidecar.SearchHitRef) McpTarget {
+	target := mcpEvsTarget(call, ref.RepoId, McpRepoRead, ref.Path)
+	if ref.RefName != "" {
+		target.Ref = ref.RefName
+	}
+	return target
 }
 
 // What record_query reads for a hit: the hit's log by its id, and the run of a run card's hit or the copy of an entry's.

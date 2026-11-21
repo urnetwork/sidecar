@@ -595,18 +595,14 @@ func (self *EvsRepo) listingAt(ctx context.Context, refId Id, directory string) 
 	return listing, nil
 }
 
-// A path's row in its parent's verified listing at the head, nil when the parent does not stand or holds no row for
-// the name (9.2.4's lookup): what a path with no floor is found by, sending no token of it.
-func (self *EvsRepo) lookup(ctx context.Context, refId Id, path string) (*evsListedRow, error) {
+// A path's row and the head version of its parent's verified listing. A nil row proves absence at that version.
+func (self *EvsRepo) lookup(ctx context.Context, refId Id, path string) (*evsListedRow, uint64, error) {
 	parent, name := evsSplitParent(path)
 	listing, err := self.listingAt(ctx, refId, parent)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	if listing.rows == nil {
-		return nil, nil
-	}
-	return listing.rows[string(name)], nil
+	return listing.rows[string(name)], listing.headVersion, nil
 }
 
 // One opened row of a listing: the child's raw name, kind, the epoch it opened under, the source epoch a carried
@@ -765,7 +761,7 @@ func (self *EvsRepo) readPaths(ctx context.Context, refId Id, paths []*evsReadPa
 			if path.token != nil {
 				continue
 			}
-			path.record, path.floor, path.more, path.moreAsked, path.lookedUp = nil, 0, nil, false, false
+			path.record, path.floor, path.more, path.moreAsked = nil, 0, nil, false
 			record, ok, err := self.client.pins.ReadRecord(self.repoId, refId, path.path)
 			if err != nil {
 				return err
@@ -809,8 +805,6 @@ func (self *EvsRepo) readPaths(ctx context.Context, refId Id, paths []*evsReadPa
 			roundFresh = false
 			continue
 		}
-		// choose settles every path of a ref with no head absent, sending no token of it
-		noHead := state.version == 0 && self.client.epochs.committedVersion(self.repoId, refId) == 0
 		asked, needFresh, err := self.choose(ctx, refId, keys, state, paths)
 		if err != nil {
 			return nil, err
@@ -836,28 +830,35 @@ func (self *EvsRepo) readPaths(ctx context.Context, refId Id, paths []*evsReadPa
 			round.objects.close()
 			continue
 		}
-		// a round chosen on a ref this client saw with no head asked no path, so a head evs answers now, another writer's
-		// first push, is a state to ask every path again on, whatever its epoch
-		created := noHead && round.head.Head.GetVersion() != 0
-		if created || !evsSamePathEpoch(round.head.Head.GetPathEpoch(), state.epoch) {
-			// a head of another epoch state: pinned, adopted, and every path asked again on it
-			round.objects.close()
-			if err := self.client.verifier.Pin(round.head); err != nil {
+		if evsSamePathEpoch(round.head.Head.GetPathEpoch(), state.epoch) {
+			again, err := self.verifyRound(ctx, refId, state, round, asked)
+			if err != nil {
+				round.objects.close()
 				return nil, err
 			}
-			self.client.noteVerifiedHead(self.repoId, refId, round.head.Head)
+			if again {
+				round.objects.close()
+				continue
+			}
+			// A missing row proves absence only at its listing's head. This also covers a ref that had no head
+			// when the paths were chosen and whose first push has since committed.
+			lookupMoved := slices.ContainsFunc(paths, func(path *evsReadPath) bool {
+				usedListing := path.settled != nil || path.verified.Absent && path.lookupVersion != 0
+				return usedListing && path.lookupVersion != round.head.Version
+			})
+			if !lookupMoved {
+				return self.finishRead(ctx, refId, keys, round, paths)
+			}
+		}
+		// Choose again on the newer head. A lookup during verification may already have pinned it.
+		round.objects.close()
+		if held := self.client.refEpochState(self.repoId, refId); held != nil && round.head.Version < held.version {
 			continue
 		}
-		again, err := self.verifyRound(ctx, refId, state, round, asked)
-		if err != nil {
-			round.objects.close()
+		if err := self.client.verifier.Pin(round.head); err != nil {
 			return nil, err
 		}
-		if again {
-			round.objects.close()
-			continue
-		}
-		return self.finishRead(ctx, refId, keys, round, paths)
+		self.client.noteVerifiedHead(self.repoId, refId, round.head.Head)
 	}
 }
 
@@ -870,7 +871,7 @@ func (self *EvsRepo) choose(ctx context.Context, refId Id, keys *evsReadKeys, st
 		// a ref with no head holds no entry: every path is absent, and no token of it is sent, so a request on a ref
 		// with no head sets no floor (DESIGN-DETAILS 9.2.3; E3 does not count it)
 		for _, path := range paths {
-			path.epochs, path.verified = nil, nil
+			path.epochs, path.verified, path.lookupVersion = nil, nil, 0
 			path.settled = &EvsVerifiedPath{Absent: true}
 			// its token path in the epoch an absent head reads as, made here and sent nowhere, which a first push's
 			// plan moves to the epoch its ref starts in (evs_plan.go)
@@ -889,7 +890,7 @@ func (self *EvsRepo) choose(ctx context.Context, refId Id, keys *evsReadKeys, st
 	asked := []*evsReadPath{}
 	for _, path := range paths {
 		// each round chooses afresh on its state, a lookup hitting the listing cache while the head stands
-		path.epochs, path.settled, path.verified = nil, nil, nil
+		path.epochs, path.settled, path.verified, path.lookupVersion = nil, nil, nil, 0
 		if path.token != nil {
 			// an id in epoch 1, which deposit and erasure refs never leave
 			if current != 1 {
@@ -916,11 +917,11 @@ func (self *EvsRepo) choose(ctx context.Context, refId Id, keys *evsReadKeys, st
 				return nil, true, nil
 			}
 			if lookup {
-				row, err := self.lookup(ctx, refId, path.path)
+				row, version, err := self.lookup(ctx, refId, path.path)
 				if err != nil {
 					return nil, false, err
 				}
-				path.lookedUp = true
+				path.lookupVersion = version
 				if row == nil {
 					path.settled = &EvsVerifiedPath{Absent: true}
 					continue
@@ -1041,12 +1042,14 @@ func (self *EvsRepo) verifyRound(ctx context.Context, refId Id, state *evsRefEpo
 			for _, source := range sources {
 				allAsked = allAsked && path.named[source]
 			}
-			if !allAsked && !path.lookedUp {
-				row, err := self.lookup(ctx, refId, path.path)
+			if allAsked {
+				path.lookupVersion = 0
+			} else if path.lookupVersion != round.head.Version {
+				row, version, err := self.lookup(ctx, refId, path.path)
 				if err != nil {
 					return false, err
 				}
-				path.lookedUp = true
+				path.lookupVersion = version
 				if row != nil && row.epoch < path.floor {
 					path.floor = row.epoch
 					again = true

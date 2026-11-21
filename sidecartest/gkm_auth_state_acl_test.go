@@ -163,7 +163,9 @@ func newGkmAclStateWorld(t *testing.T) *gkmAclStateWorld {
 	}
 	world.cache = sidecar.NewAclGateCache(admission.Context(), world.source, net.Clock(), gateSettings)
 	world.state = gkmservice.NewAclGkmAuthState(world.cache, world.revocations, net.Clock())
-	world.engine, err = gkmservice.NewGkmEngine(t.Context(), net.Host(), nil, &gkmservice.GkmEngineDeps{AuthState: world.state})
+	legacy := gkmservice.DefaultGkmServiceSettings()
+	legacy.DraftMls = true
+	world.engine, err = gkmservice.NewGkmEngine(t.Context(), net.Host(), legacy, &gkmservice.GkmEngineDeps{AuthState: world.state})
 	if err != nil {
 		t.Fatal(err)
 	}

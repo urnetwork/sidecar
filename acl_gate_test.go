@@ -278,6 +278,40 @@ func TestAclGateLoadsCoalesce(t *testing.T) {
 	}
 }
 
+// A running gate can consume the same signed retained base as a cold one,
+// carrying forward its pin and the membership changes the base folded.
+func TestAclGateResumesAboveItsPinAfterRetention(t *testing.T) {
+	net := newTestConfigNet(t)
+	source := newAclGateTestSource()
+	source.publish(net)
+	cache, loads := newAclGateTestCache(t, source, newAclGateTestClock(), nil)
+	cache.Changed(net.networkId)
+	if load := aclGateTestNextLoad(t, loads); load.err != nil {
+		t.Fatal(load.err)
+	}
+	held := net.n
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_MEMBER_ADMIT, net.memberAdmitStatement("new-member"))
+	net.foldPast(held)
+	source.publish(net)
+	retained := net.log.Retained().Entries
+	source.stateLock.Lock()
+	source.rewrite = func(_ Id, _ *bridge.AuthPin, _ [][]byte) [][]byte { return retained }
+	source.stateLock.Unlock()
+	cache.Changed(net.networkId)
+	if load := aclGateTestNextLoad(t, loads); load.err != nil || !proto.Equal(load.pin, net.log.Pin()) {
+		t.Fatalf("retained log after %d: %+v, %v", held, load.pin, load.err)
+	}
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_MEMBER_ADMIT, net.memberAdmitStatement("later-member"))
+	source.publish(net)
+	source.stateLock.Lock()
+	source.rewrite = nil
+	source.stateLock.Unlock()
+	cache.Changed(net.networkId)
+	if load := aclGateTestNextLoad(t, loads); load.err != nil || !proto.Equal(load.pin, net.log.Pin()) {
+		t.Fatalf("entry after the restored base: %+v, %v", load.pin, load.err)
+	}
+}
+
 // A run with a gap, or carrying a second A_n at a position the gate holds, is refused with an alarm, and the old state
 // keeps serving; proj/'s true run then moves it on.
 func TestAclGateRefusesAGapAndAForkWithAnAlarm(t *testing.T) {

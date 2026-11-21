@@ -9,9 +9,12 @@ package sidecar
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -122,4 +125,117 @@ func TestSocketComponentFollowsAGeneration(t *testing.T) {
 	if !admission.known {
 		t.Errorf("no admission state after an answer")
 	}
+}
+
+// A sidecar that only dials learns platform ticket keys from the service. A
+// restart rebases an old set version, and an idle dialer refreshes rotated keys.
+func TestSocketComponentDialsPlatformWithoutListeners(t *testing.T) {
+	world := newTestServiceDial(t)
+	clock := newTestSocketClock()
+	edge := connect.Id(testSocketId("platform network"))
+	settings := DefaultSidecarSocketSettings()
+	device := newTestSocketSigner("dial-only")
+	identity := &SidecarIdentity{
+		NetworkId: testRegistrarNetworkId, ClientId: Id(world.sidecar.clientId), IdentityPublicKey: device.publicKey(),
+	}
+	var pages, finds, keyVersion atomic.Int32
+	keyVersion.Store(1)
+	var rebase atomic.Bool
+	rebase.Store(true)
+	api, _ := newTestSocketsApi(t, &scriptedApiTransport{answer: func(request *http.Request, body []byte) (*http.Response, error) {
+		keyId := fmt.Sprintf("service-%d", keyVersion.Load())
+		key := newTestSocketSigner(keyId)
+		now := clock.Now()
+		var answer any
+		switch request.URL.Path {
+		case "/socket/registrations":
+			var args SocketRegistrationsArgs
+			if err := json.Unmarshal(body, &args); err != nil || len(args.Registrations) != 0 {
+				return nil, fmt.Errorf("expected an empty listener set")
+			}
+			pages.Add(1)
+			result := &SocketRegistrationsResult{Statuses: []SocketRegistrationStatus{}, SetVersion: args.SetVersion}
+			if rebase.Swap(false) {
+				result.Error = &SocketError{Code: SocketErrorCodeStale}
+				result.SetVersion += 100
+			} else {
+				result.ServerTimeMillis = uint64(now.UnixMilli())
+				result.UrnetworkEdge = &edge
+				result.TicketKeys = []*SocketTicketKey{{
+					KeyId: keyId, PublicKey: key.publicKey(), ExpireTimeMillis: uint64(now.Add(settings.HeartbeatInterval).UnixMilli()),
+				}}
+			}
+			answer = result
+		case "/socket/find":
+			var args SocketFindArgs
+			if err := json.Unmarshal(body, &args); err != nil || args.NetworkId == nil || *args.NetworkId != edge || args.Name != "ur/smtpedge" {
+				return nil, fmt.Errorf("the lookup did not use the service's edge network")
+			}
+			ticket := &protocol.SocketTicket{
+				TicketId:  testSocketId(fmt.Sprintf("ticket-%d", finds.Add(1))).Bytes(),
+				NetworkId: edge.Bytes(), Name: args.Name, ListenerClientId: world.edge.clientId.Bytes(),
+				ListenId: testSocketId("smtpedge listener").Bytes(), DialerClientId: identity.ClientId.Bytes(),
+				DialerNetworkId: identity.NetworkId.Bytes(), IssueTimeMillis: uint64(now.UnixMilli()),
+				ExpireTimeMillis: uint64(now.Add(time.Minute).UnixMilli()),
+			}
+			signed, err := SignSocketTicket(keyId, key.privateKey, ticket)
+			if err != nil {
+				return nil, err
+			}
+			wire, err := proto.Marshal(signed)
+			if err != nil {
+				return nil, err
+			}
+			answer = &SocketFindResult{Primary: &SocketFindTicket{Ticket: wire}}
+		default:
+			return nil, fmt.Errorf("unexpected path %s", request.URL.Path)
+		}
+		wire, err := json.Marshal(answer)
+		return syntheticResponse(request, 200, string(wire), nil), err
+	}})
+	start := func() *SocketComponent {
+		t.Helper()
+		component, err := NewSocketComponent(t.Context(), &SocketComponentArgs{
+			NetworkId: testRegistrarNetworkId, Settings: settings, Sign: device.sign, Clock: clock, Log: NewNoopLogger(),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(t.Context())
+		t.Cleanup(cancel)
+		if err := component.Attach(&SidecarEnv{Ctx: ctx, SidecarApi: api, Identity: identity, Subprotocol: world.sidecar.subprotocol}); err != nil {
+			component.Close()
+			t.Fatal(err)
+		}
+		t.Cleanup(component.Close)
+		return component
+	}
+	dial := func(component *SocketComponent, wantPages, wantFinds int32) {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+		defer cancel()
+		conn, err := component.dial(ctx, &SocketAddress{Name: "ur/smtpedge"}, nil, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		incoming := testAwait(t, world.incomings, "smtpedge's incoming stream")
+		world.exchange(t, conn, incoming.Stream)
+		conn.Close()
+		incoming.Stream.Close()
+		if pages.Load() != wantPages || finds.Load() != wantFinds {
+			t.Fatalf("dial sent %d registration pages and %d finds", pages.Load(), finds.Load())
+		}
+	}
+	first := start()
+	dial(first, 2, 1)
+	dial(first, 2, 2)
+	// Find can start signing with an overlapping new key before the cached metadata ages out.
+	keyVersion.Store(2)
+	dial(first, 3, 3)
+	clock.advance(settings.HeartbeatInterval)
+	keyVersion.Store(3)
+	dial(first, 4, 4)
+	first.Close()
+	rebase.Store(true)
+	dial(start(), 6, 5)
 }

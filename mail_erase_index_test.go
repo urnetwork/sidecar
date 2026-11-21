@@ -850,6 +850,10 @@ func TestMailEraseFormat2ListsEveryChunkOfALargeMessage(t *testing.T) {
 		mailIndexChunkBound(uint64(format.ChunkByteCount/4+1), 4, format) != 2 {
 		t.Fatal("the bound's edges")
 	}
+	if mailIndexChunkBound(^uint64(0), 4, format) != ^uint32(0) ||
+		mailIndexChunkBound((1<<32)*uint64(format.ChunkByteCount), 1, format) != ^uint32(0) {
+		t.Fatal("an oversized deposit claim wrapped into the CUT budget")
+	}
 
 	world := newMailEraseIndexTestWorld(t)
 	ctx := context.Background()

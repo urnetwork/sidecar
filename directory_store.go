@@ -136,7 +136,10 @@ type directoryCardDocument struct {
 
 // The directory's copy over a sealed directory of its own.
 type DirectoryStore struct {
-	store SidecarStore
+	// Phone views stage raw file bodies in their session store. Keep only their
+	// metadata here until the directory fold needs to verify a changed file.
+	cardsOnDisk bool
+	store       SidecarStore
 
 	stateLock sync.Mutex
 	loaded    bool
@@ -314,7 +317,11 @@ func (self *DirectoryStore) ApplyCards(changes *DirectoryCardsChanges) error {
 			return err
 		}
 		kept := *file
-		kept.Content = bytes.Clone(file.Content)
+		if self.cardsOnDisk {
+			kept.Content = nil
+		} else {
+			kept.Content = bytes.Clone(file.Content)
+		}
 		func() {
 			self.stateLock.Lock()
 			defer self.stateLock.Unlock()
@@ -331,6 +338,36 @@ func (self *DirectoryStore) ApplyCards(changes *DirectoryCardsChanges) error {
 // Whether a removal at path is kept: a card's or a repo file's, d/ or r/, whose path rule judges who removed it.
 func directoryCardRemovalKept(path string) bool {
 	return strings.HasPrefix(path, "d/") || strings.HasPrefix(path, "r/")
+}
+
+// The immutable files held for judging. A phone's rows have only metadata here.
+func (self *DirectoryStore) filesForFold() []*DirectoryCardFile {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	files := make([]*DirectoryCardFile, 0, len(self.cards))
+	for _, file := range self.cards {
+		files = append(files, file)
+	}
+	slices.SortFunc(files, func(a, b *DirectoryCardFile) int { return strings.Compare(a.Path, b.Path) })
+	return files
+}
+
+// Loads one staged file for verification, keeping the bulk data on disk between reads.
+func (self *DirectoryStore) forJudgement(file *DirectoryCardFile) (*DirectoryCardFile, error) {
+	if !self.cardsOnDisk || file.Removed {
+		return file, nil
+	}
+	raw, err := self.readFile(directoryStoreCardPrefix + file.Path)
+	if err != nil {
+		return nil, err
+	}
+	var doc directoryCardDocument
+	if raw == nil || recordChainDecode(raw, &doc) != nil || doc.Version != directoryStoreVersion || doc.Path != file.Path || doc.PushVersion != file.PushVersion {
+		return nil, fmt.Errorf("%w: staged directory file %s", ErrDirectoryStoreCorrupt, file.Path)
+	}
+	opened := *file
+	opened.Content = doc.Content
+	return &opened, nil
 }
 
 // The cards ref's files this copy holds, in path order, a card's or repo file's removal among them. Copies.

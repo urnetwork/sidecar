@@ -422,6 +422,15 @@ func fakeDirectoryCardCopy(file *sidecar.DirectoryCardFile) *sidecar.DirectoryCa
 }
 
 func (self *fakeDirectoryCardsClient) ReadCards(ctx context.Context, repoId sidecar.Id, afterVersion uint64) (*sidecar.DirectoryCardsChanges, error) {
+	return self.readCards(ctx, repoId, afterVersion, false)
+}
+
+// A phone asks for sizes and signatures without downloading each revision's body.
+func (self *fakeDirectoryCardsClient) PlanCards(ctx context.Context, repoId sidecar.Id, afterVersion uint64) (*sidecar.DirectoryCardsChanges, error) {
+	return self.readCards(ctx, repoId, afterVersion, true)
+}
+
+func (self *fakeDirectoryCardsClient) readCards(ctx context.Context, repoId sidecar.Id, afterVersion uint64, metadata bool) (*sidecar.DirectoryCardsChanges, error) {
 	func() {
 		self.fake.stateLock.Lock()
 		defer self.fake.stateLock.Unlock()
@@ -444,6 +453,16 @@ func (self *fakeDirectoryCardsClient) ReadCards(ctx context.Context, repoId side
 			break
 		}
 		for _, file := range statement.files {
+			if metadata {
+				row := *file
+				row.AuthPin = fakeRecordClonePin(file.AuthPin)
+				if !file.Removed {
+					row.StoredByteCount = sidecar.DirectoryFileStoredByteCount(uint64(len(file.Content)))
+				}
+				row.Content = nil
+				changes.Files = append(changes.Files, &row)
+				continue
+			}
 			copied := fakeDirectoryCardCopy(file)
 			if self.fake.purgedWithLock(repo, file) {
 				// a versionless path's replaced content is gone (format 2)
@@ -455,6 +474,20 @@ func (self *fakeDirectoryCardsClient) ReadCards(ctx context.Context, repoId side
 		taken += 1
 	}
 	return changes, nil
+}
+
+// Opens a budgeted file only while its committed version is current.
+func (self *fakeDirectoryCardsClient) ReadPlannedCard(ctx context.Context, repoId sidecar.Id, file *sidecar.DirectoryCardFile) ([]byte, error) {
+	if err := self.checkRead(repoId); err != nil {
+		return nil, err
+	}
+	self.fake.stateLock.Lock()
+	defer self.fake.stateLock.Unlock()
+	current := self.fake.repoWithLock(repoId).files[file.Path]
+	if current == nil || current.Removed || current.PushVersion != file.PushVersion {
+		return nil, sidecar.ErrEvsCollected
+	}
+	return bytes.Clone(current.Content), nil
 }
 
 // One path CAS commit on the cards ref, its leases called once the lock is gone.

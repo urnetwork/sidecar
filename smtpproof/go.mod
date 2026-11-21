@@ -17,8 +17,10 @@ replace gvisor.dev/gvisor => ../../gvisor
 require (
 	github.com/consensys/gnark v0.15.0
 	github.com/consensys/gnark-crypto v0.20.1
+	github.com/urnetwork/connect v0.0.0
 	github.com/urnetwork/sidecar v0.0.0
 	golang.org/x/crypto v0.58.0
+	google.golang.org/protobuf v1.36.11
 )
 
 require (
@@ -71,7 +73,6 @@ require (
 	github.com/ronanh/intcomp v1.1.1 // indirect
 	github.com/rs/zerolog v1.34.0 // indirect
 	github.com/theodorsm/covert-dtls v1.5.1 // indirect
-	github.com/urnetwork/connect v0.0.0 // indirect
 	github.com/urnetwork/glog v0.0.0 // indirect
 	github.com/urnetwork/operator-core v0.0.0 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
@@ -84,7 +85,6 @@ require (
 	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	golang.org/x/tools v0.51.0 // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gvisor.dev/gvisor v0.0.0-20260909230408-9b1144b679cb // indirect
 	src.agwa.name/tlshacks v0.0.4 // indirect

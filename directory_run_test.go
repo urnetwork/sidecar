@@ -30,11 +30,17 @@ import (
 type testRunsWriter struct {
 	stateLock sync.Mutex
 	drafts    []*sidecar.RecordDraft
+	appendErr error
+	refused   *protocol.Announcement
 }
 
 func (self *testRunsWriter) Append(draft *sidecar.RecordDraft) ([]*sidecar.RecordEntryRef, error) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
+	if self.appendErr != nil {
+		self.refused = proto.Clone(draft.Body).(*protocol.Announcement)
+		return nil, self.appendErr
+	}
 	self.drafts = append(self.drafts, draft)
 	return []*sidecar.RecordEntryRef{{EntryId: sidecar.NewId()}}, nil
 }
@@ -610,4 +616,29 @@ func TestDirectoryRunModeratedStaysOutAcrossARestart(t *testing.T) {
 		t.Fatal("a card after the restart read the erasure set again")
 	}
 	runs.Close()
+}
+
+// A failed withdrawal survives a process restart with its original bytes and is delivered once.
+func TestDirectoryRunResumesFailedWithdrawal(t *testing.T) {
+	env := newTestRunsEnv(t)
+	start := env.start(sidecar.DirectoryRunClaimsAuto)
+	env.clock.Advance(10 * time.Second)
+	env.writer.appendErr = errors.New("writer unavailable")
+	if err := env.runs.Withdraw(start.RunId); !errors.Is(err, env.writer.appendErr) {
+		t.Fatalf("withdraw: %v", err)
+	}
+	owed := env.writer.refused
+	env.runs.Close()
+	env.runs = env.open()
+	env.clock.Advance(time.Minute)
+	env.writer.appendErr = nil
+	if err := env.runs.Resume(nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.runs.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	if items := env.writer.items(t); len(items) != 2 || owed == nil || !proto.Equal(owed, items[1]) {
+		t.Fatalf("recovered %d items, wanted the original withdrawal", len(items))
+	}
 }

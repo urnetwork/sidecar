@@ -75,6 +75,7 @@ func (self *ApprovalGate) spend(ctx context.Context, action *SidecarAction, stor
 	if err != nil {
 		return err
 	}
+	outcome.effectKey = effectKey[:]
 	action.Outcome = outcome
 	return nil
 }

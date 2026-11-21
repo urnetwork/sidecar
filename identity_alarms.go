@@ -101,8 +101,9 @@ type sidecarApprovalRecord struct {
 	Decided    bool   `json:"decided,omitempty"`
 	Decision   string `json:"decision,omitempty"`
 	// an admission request's: the new device's identity key and the capabilities its admission carries
-	IdentityPublicKey []byte `json:"identity_public_key,omitempty"`
-	Capabilities      uint32 `json:"capabilities,omitempty"`
+	IdentityPublicKey []byte                 `json:"identity_public_key,omitempty"`
+	Capabilities      uint32                 `json:"capabilities,omitempty"`
+	Browser           *BrowserAdmissionTerms `json:"browser,omitempty"`
 }
 
 // The persisted record.

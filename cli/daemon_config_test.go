@@ -197,6 +197,29 @@ func (self *testUrConfigHeads) ReadConfigHead(ctx context.Context, version uint6
 	return nil, sidecar.ErrConfigHeadUnavailable
 }
 
+// The normal CLI bridge builder serves the authenticated config-backed methods after the follower is standing.
+func TestBridgeStatusReadsItsStandingFollower(t *testing.T) {
+	world := newTestUrFollowWorld(t, 1)
+	network := world.networks[0]
+	running := world.host(network, nil)
+	world.saveBlock(network, 80)
+	world.standing(running, network)
+	control, err := newUrDaemonBridges(world.bridges, sidecar.DaemonLocalListen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.Close()
+	networkId := network.NetworkId()
+	if _, err := control.Status(world.ctx, networkId, running); err != nil {
+		t.Fatal(err)
+	}
+	world.awaitEnforcing(world.heldBridges()[networkId])
+	status, err := control.Status(world.ctx, networkId, running)
+	if err != nil || status.List == nil || status.List.NetworkId != networkId {
+		t.Fatalf("standing network's bridge status: %+v, %v", status, err)
+	}
+}
+
 // ur tun brings the tun up over a network's bridge, built over that network's own follower, where it answered "no
 // bridge runs for this network" before: each network's bridge, built when ur tun ip first asks for it, compiles its own
 // network's verified state, the block its config head holds, from its own follower's log, rows and heads, and ur tun
@@ -322,5 +345,46 @@ func TestDaemonRunsOneFollowerASidecar(t *testing.T) {
 	}
 	if len(world.heldBridges()) != 0 {
 		t.Fatal("a bridge was built with no follower")
+	}
+}
+
+// The stock TLS installer attaches to an enrolled daemon's verified follower. The real publish handler then
+// evaluates the reserved system name, and removing the component makes that same handler unavailable again.
+func TestUrDesktopTlsInstallsTheDaemonPublisher(t *testing.T) {
+	world := newTestUrFollowWorld(t, 1)
+	network := world.networks[0]
+	running := world.host(network, nil)
+	world.saveBlock(network, 80)
+	world.standing(running, network)
+	service := &urDesktopTls{
+		running: running, follower: running.ConfigFollower(), stateDirectory: t.TempDir(), network: &urDaemonNetwork{},
+	}
+	if _, err := service.clientNames(world.ctx); err != nil {
+		t.Fatalf("client names from the verified config head: %v", err)
+	}
+	var publish *sidecar.DaemonMethod
+	for _, method := range sidecar.DaemonTlsMethods() {
+		if method.Name == sidecar.DaemonMethodTlsPublish {
+			publish = method
+		}
+	}
+	if publish == nil {
+		t.Fatal("the daemon has no TLS publish handler")
+	}
+	call := &sidecar.DaemonCall{Sidecar: running, Params: []byte(`{"host":"mta-sts","target":"8080"}`)}
+	if _, err := publish.Handler(world.ctx, call); !errors.Is(err, sidecar.ErrTlsComponentAbsent) {
+		t.Fatalf("publish before TLS installation: %v", err)
+	}
+	remove, err := service.install(world.ctx, sidecar.NewNoopLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer remove()
+	if _, err := publish.Handler(world.ctx, call); !errors.Is(err, sidecar.ErrTlsPublishHostTaken) {
+		t.Fatalf("reserved publish through installed TLS: %v", err)
+	}
+	remove()
+	if _, err := publish.Handler(world.ctx, call); !errors.Is(err, sidecar.ErrTlsComponentAbsent) {
+		t.Fatalf("publish after removing TLS: %v", err)
 	}
 }

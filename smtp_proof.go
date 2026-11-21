@@ -21,6 +21,9 @@ var ErrSmtpRecordCut = errors.New("smtp record cut")
 // naming a key set it cannot prove under.
 var ErrSmtpProofKeySet = errors.New("smtp proof key set not accepted")
 
+// The host has no completed measurement for its ready keys. The outbox keeps the message queued.
+var ErrSmtpProverUnmeasured = errors.New("smtp prover has no current measurement")
+
 // A decoded SmtpProof (§14.5; DESIGN-DETAILS 3.2.5).
 type SmtpProofPart struct {
 	SendId []byte
@@ -140,6 +143,8 @@ type SmtpProofResult struct {
 	Accepted bool
 	// The reply that ended the send when it did not take the message, such as "550".
 	RefusedCode string
+	// A REQUIRETLS message stopped before MAIL because the post-TLS EHLO omitted the extension.
+	RequireTlsMissing bool
 	// DATA mode and over the prover's smtp_data_proof_bytes, decided before MAIL (§14.5).
 	TooLarge bool
 	// TooLarge: the smtp_data_proof_bytes the message passed, which its too_large outcome and DSN cite.

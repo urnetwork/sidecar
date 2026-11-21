@@ -12,15 +12,12 @@
 //
 // The names a certificate is ordered for come from the zone the DnsClient reads (its root, the network's label and
 // alias), and the set is computed here by TlsIdentifierSet, so no certificate row's names are ever taken as the
-// device's. Two parts are not there to read yet, and each stays empty until its task lands: a Team scope's label
-// (TLS-M6-03) and the custom hosts this device may serve, which DnsClient.Zone lists once DNS-M6-02 has landed and
-// whose grant test is verified config's (DESIGN-DETAILS 17.2.5). A host that knows them passes its own Names.
+// device's. The verified ownership rows and the device's publish grants select its scope and mapped custom hosts.
 //
 // Two kinds of host make one (§18.4). A host that stays up, a desktop or CLI daemon, takes TlsComponentArgs, which runs
 // D-TLS-8's CT watch while it listens (tls_ct.go). An app's sidecar role runs only while the app is open (owner
 // decision 197), so it takes TlsForegroundComponentArgs, which runs no watch and makes no CT client: the network's
-// other listening devices that stay up keep the watch (TLS-M8-01). sdk/sidecar_tls.go makes the one its host class
-// asks for; nothing in the daemon adds this component yet, beside the sockets component's.
+// other listening devices that stay up keep the watch (TLS-M8-01). The CLI and SDK install the appropriate component.
 //
 // An app listener (ListenTls, §13.17's app listeners): a tls/ name this process serves itself rather than through a
 // local port, as sdk's SidecarSockets.Listen does on a tls/ name (§18.5). Its registration goes through Sidecar.Listen,
@@ -57,8 +54,7 @@ const tlsComponentName = "tls"
 var (
 	// No tls component is attached to this Sidecar, so nothing orders or holds an issued certificate.
 	ErrTlsComponentAbsent = errors.New("tls: this sidecar runs no tls component")
-	// A name an app listener cannot serve: no tls/<port>/<host> name, a Team scope's host before scopes land
-	// (TLS-M6-03), or §13.9's system publish, which is a mail receiver's alone.
+	// A name this device cannot serve, including a scope it does not own or the mail receiver's system publish.
 	ErrTlsListenInvalid = errors.New("tls listen refused")
 	// The tls component has closed, so it serves no new listener.
 	errTlsComponentClosed = errors.New("tls: the component has closed")
@@ -160,21 +156,53 @@ func (self *sidecarTlsCertKeys) PromoteTlsKey(spkiSha256 [sha256.Size]byte) erro
 }
 
 // The names of this Sidecar's network as its DnsClient's zone gives them: the root, the label and the alias. No
-// scope and no custom host yet (see the file header).
+// name from another device is accepted for ordering.
 func (self *Sidecar) tlsCertNames(ctx context.Context) (*TlsCertNames, error) {
 	client, err := self.Dns()
 	if err != nil {
 		return nil, err
 	}
-	zone, err := client.Zone(ctx)
+	// Read current ownership when an order, publish or DNS hint asks. Readiness may change without a record write.
+	zone, err := client.fetchZone(ctx)
 	if err != nil {
 		return nil, err
 	}
-	names := &TlsCertNames{Root: zone.Root, Label: zone.Label}
-	if zone.Alias != "" {
+	identity := self.currentIdentity()
+	state, err := self.configState()
+	if identity == nil || err != nil {
+		return nil, ErrTlsPublishUnavailable
+	}
+	acl, err := state.Acl()
+	if err != nil {
+		return nil, err
+	}
+	scope, scoped := state.TeamScopeForDevice(identity.SidecarId)
+	if scoped && (scope.Label == "" || scope.MemberId != (Id{}) && !acl.ConsentedFor(identity.SidecarId, scope.MemberId)) {
+		return nil, ErrTlsPublishUnavailable
+	}
+	return tlsDeviceZoneNames(zone, scope.Label, func(owner string) bool {
+		return tlsDevicePublishGrant(acl, identity.SidecarId, owner, tlsCustomPublishPorts, self.clock.Now())
+	}), nil
+}
+
+// The carrier's canonical operator owners and this device's verified publish grants select its custom SANs.
+func tlsDeviceZoneNames(zone *DnsZone, scope string, granted func(string) bool) *TlsCertNames {
+	names := &TlsCertNames{Root: strings.TrimSuffix(zone.Root, "."), Label: zone.Label, Scope: scope, CustomHostOwners: map[string]string{}}
+	if zone.Alias != "" && scope == "" {
 		names.Aliases = []string{zone.Alias}
 	}
-	return names, nil
+	for _, mapping := range zone.CustomHosts {
+		owner, inside := strings.CutSuffix(strings.TrimSuffix(mapping.Owner, "."), "."+zone.Label+"."+names.Root)
+		if !inside || mapping.State != DnsCustomHostStateActive || granted == nil || !granted(owner) {
+			continue
+		}
+		if _, err := TlsCustomIdentifierSet(mapping.Host, []string{names.Root}); err != nil {
+			continue
+		}
+		names.CustomHosts = append(names.CustomHosts, mapping.Host)
+		names.CustomHostOwners[mapping.Host] = owner
+	}
+	return names
 }
 
 // The args a TlsComponent takes from this Sidecar for the network it is enrolled in, on a host that stays up (a
@@ -344,16 +372,20 @@ func (self *TlsComponent) Attach(env *SidecarEnv) error {
 		return self.generationSeq
 	}()
 	self.manager.SetApi(env.SidecarApi)
-	remove := func() {}
+	var subscriptions []func()
 	if env.Subprotocol != nil {
-		if unsubscribe, err := env.Subprotocol.Subscribe(PushTopicTls, self.manager.Hint); err == nil {
-			remove = unsubscribe
+		for _, topic := range []string{PushTopicTls, PushTopicDns} {
+			if unsubscribe, err := env.Subprotocol.Subscribe(topic, self.manager.Hint); err == nil {
+				subscriptions = append(subscriptions, unsubscribe)
+			}
 		}
 	}
 	go func() {
 		defer close(generationEnded)
 		<-env.Ctx.Done()
-		remove()
+		for _, remove := range subscriptions {
+			remove()
+		}
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		if self.generationSeq == generationSeq {
@@ -551,10 +583,7 @@ func (self *TlsComponent) listen(ctx context.Context, address string, settings *
 		return nil, fmt.Errorf("%w: a tls/<port>/<host> name, on port 443, 8443, 8883 or 5671", ErrTlsListenInvalid)
 	}
 	host := socketTlsHost(name)
-	switch {
-	case strings.Contains(host, "."):
-		return nil, fmt.Errorf("%w: a scoped host waits on Team scopes", ErrTlsListenInvalid)
-	case name == tlsSystemPublishName:
+	if name == tlsSystemPublishName {
 		// §13.9: a receiver's system publish, which no listener takes
 		return nil, fmt.Errorf("%w: the system publish's", ErrTlsListenInvalid)
 	}
@@ -564,7 +593,7 @@ func (self *TlsComponent) listen(ctx context.Context, address string, settings *
 	}
 	serverNames, err := tlsPublishServerNames(host, names)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrTlsListenInvalid, err)
 	}
 	if _, err := self.manager.EnsureTlsCertificate(ctx); err != nil {
 		return nil, err
@@ -582,7 +611,13 @@ func (self *TlsComponent) listen(ctx context.Context, address string, settings *
 	if err != nil {
 		return nil, err
 	}
+	var update func(*TlsFrontUpdate) error
+	if socket, ok := registration.(*SocketListener); ok {
+		update = socket.updateTls
+	}
 	listener, err := newTlsListener(self.ctx, &TlsFrontArgs{
+		Custom:    &tlsFrontOwnerCertificates{manager: self.manager, owner: host},
+		UpdateTls: update,
 		Settings:  settings.Front,
 		Target:    target,
 		NetworkId: parts.NetworkId,
@@ -610,7 +645,7 @@ func (self *TlsComponent) listen(ctx context.Context, address string, settings *
 }
 
 // Serves a tls/ name in this process (TLS-M8-01; §13.17's app listeners): see the file header. address is
-// tls/<port>/<host>, its host a label or @, never a scoped host until Team scopes land, nor §13.9's mta-sts. The
+// tls/<port>/<host>, with a network or scoped host this device holds. The
 // network's certificate on this device's key is ensured first, ordered through certs if it is missing, then the name
 // registers through Listen, whose §5.4 gate may answer *ApprovalPendingError, the same call made again after the
 // decision carrying on. ErrTlsComponentAbsent on a Sidecar that runs no tls component.

@@ -171,7 +171,7 @@ func (self *s13World) open(device *s13Device) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err := sidecar.NewSidecarRecord(&sidecar.SidecarRecordArgs{
+	record, err := sidecar.OpenSidecarRecord(self.t.Context(), &sidecar.SidecarRecordArgs{
 		SidecarId: device.sidecarId, IdentityPublicKey: device.key.Public().(ed25519.PublicKey), Store: recordStore, Sign: device.sign,
 		Streams: self.streams.For(device.sidecarId), Auth: func() sidecar.RecordAuthView { return self.recordAuth.Tip() },
 		Clock: self.clock, Settings: sidecar.DefaultSidecarSettings().Record,

@@ -95,25 +95,12 @@ func (self *dnsAclRecordGate) MayAdmin(networkId sidecar.Id, sidecarId sidecar.I
 	return dnsGateVerdictOf(self.view.MayAdminDns(networkId, sidecar.AclSidecarSubject(sidecarId), host, now))
 }
 
-// admin through the view, which applies its refusals, then publish on the same loaded state, which the view has no
-// method for: a rule refusal of admin means the state is loaded and the network neither halted nor over its limit.
+// Read either grant through the same verified view, including the service's standing checks.
 func (self *dnsAclRecordGate) MayView(networkId sidecar.Id, sidecarId sidecar.Id, host string, now time.Time) DnsGateVerdict {
 	if self.view == nil || self.states == nil {
 		return DnsGateUnavailable
 	}
-	subject := sidecar.AclSidecarSubject(sidecarId)
-	verdict := dnsGateVerdictOf(self.view.MayAdminDns(networkId, subject, host, now))
-	if verdict != DnsGateDenied {
-		return verdict
-	}
-	snapshot, status := self.states.State(networkId)
-	if status != sidecar.AclGateLoaded || snapshot == nil || snapshot.Acl == nil {
-		return DnsGateUnavailable
-	}
-	if snapshot.Acl.MayPublish(subject, host, now).Allowed {
-		return DnsGateAllowed
-	}
-	return DnsGateDenied
+	return dnsGateVerdictOf(self.view.MayViewDns(networkId, sidecar.AclSidecarSubject(sidecarId), host, now))
 }
 
 // The gate of a host that installed none: unavailable to everything, so no write passes under a grant and the zone
@@ -403,8 +390,23 @@ func (self *DnsApi) serveZone(writer http.ResponseWriter, request *http.Request)
 		self.writeRecordsError(writer, &sidecar.DnsApiError{Status: http.StatusServiceUnavailable, Code: sidecar.DnsApiCodeUnavailable})
 		return
 	}
-	zone.RecordSets = self.visibleRecordSets(root, networkId, sidecarId, zone.RecordSets)
-	answer, err := json.Marshal(zone)
+	visible := *zone
+	visible.RecordSets = self.visibleRecordSets(root, networkId, sidecarId, zone.RecordSets)
+	visible.CustomHosts = nil
+	if gate := self.deps.RecordGate; gate != nil {
+		now := self.clock.Now()
+		for _, mapped := range zone.CustomHosts {
+			if !strings.HasSuffix(mapped.Owner, "."+zone.Apex()) {
+				continue
+			}
+			host, ok := DnsOwnerHost(root, mapped.Owner)
+			if ok && gate.MayView(networkId, sidecarId, host, now) == DnsGateAllowed {
+				mapped.PendingInterfaces = nil
+				visible.CustomHosts = append(visible.CustomHosts, mapped)
+			}
+		}
+	}
+	answer, err := json.Marshal(&visible)
 	if err != nil {
 		self.writeRecordsError(writer, &sidecar.DnsApiError{Status: http.StatusServiceUnavailable, Code: sidecar.DnsApiCodeUnavailable})
 		return

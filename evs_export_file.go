@@ -358,9 +358,23 @@ func (self *EvsRepo) exportFileRef(ctx context.Context, writer *evsGitObjectWrit
 		}
 		ignoredCount := 0
 		noteLines := []string{}
+		// A removal can follow its parent's directory delta or removal in the same push. Keep the names
+		// of its explicit removals from the preceding version while applying changes in signed order.
+		removalNames := map[string][][]byte{}
+		for _, change := range payload.Changes {
+			if !change.WritesEntry() {
+				key := string(change.TokenPath.Bytes())
+				if pathNames, named := names[key]; named {
+					removalNames[key] = pathNames
+				}
+			}
+		}
 		for _, change := range payload.Changes {
 			key := string(change.TokenPath.Bytes())
 			pathNames, named := names[key]
+			if !named && !change.WritesEntry() {
+				pathNames, named = removalNames[key]
+			}
 			changeIgnored := false
 			if judge != nil {
 				held := func(token EvsToken) (protocol.EvsEntryKind, bool) {

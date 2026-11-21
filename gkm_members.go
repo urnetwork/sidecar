@@ -357,6 +357,21 @@ func (self *GkmGroupClient) RunPending(ctx context.Context, repoId Id) error {
 // commit (KF6), or whose commit a newer generation outran at gkm (QD-956), leaves the next to commit what remains.
 func (self *gkmGroupManager) runPendingInFlow(ctx context.Context) error {
 	client := self.client
+	if client.args.Mls == nil {
+		state, err := client.currentState()
+		if err != nil {
+			return err
+		}
+		if err := self.takeGenerationsInFlow(ctx, state); err != nil {
+			return err
+		}
+		cause, due, err := self.rotationDueInFlow(state)
+		if err != nil || !due {
+			return err
+		}
+		_, err = self.rotateInFlow(ctx, cause)
+		return err
+	}
 	for passCount := 0; passCount < max(1, client.settings.PendingPassCount); passCount += 1 {
 		state, err := client.currentState()
 		if err != nil {

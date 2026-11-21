@@ -261,7 +261,10 @@ func (self *gkmGroupManager) rotateDraft(ctx context.Context, state GkmAuthView,
 			// at, since a clock set back leaves a draft dated ahead of it
 			fresh := 0 < client.settings.RotateDraftMaxAge && at.Sub(draftAt).Abs() <= client.settings.RotateDraftMaxAge &&
 				bytes.Equal(rotate.GetGroupId(), pins.groupId.Bytes())
-			if draftState, stateErr := state.At(rotate.GetAuth()); chains && fresh && stateErr == nil {
+			// In v0 a claim must cover the current recovery bindings. If another log entry overtook an
+			// unclaimed draft, rebuild it at the new pin before staging another generation.
+			current := !client.KeyDeliveryOnly() || rotate.GetAuth().GetVersion() == state.Pin().GetVersion()
+			if draftState, stateErr := state.At(rotate.GetAuth()); chains && fresh && current && stateErr == nil {
 				holders, err := KeyHolders(draftState, self.repoId, draftAt)
 				if err != nil {
 					return nil, nil, err
@@ -376,7 +379,7 @@ func (self *gkmGroupManager) claim(ctx context.Context, groupId Id, draft *gkmRo
 				return nil, nil, fmt.Errorf("%w: a claim's winner", ErrGkmReplyInvalid)
 			}
 			return nil, winner, nil
-		case refused && gkmError.Status == http.StatusForbidden:
+		case refused && (gkmError.Status == http.StatusForbidden || gkmError.Status == http.StatusConflict):
 			// its signer, auth or time check: gkm's state is ahead of this one, or this clock is off
 			return nil, nil, fmt.Errorf("%w: gkm refused the claim of generation %d", ErrGkmWait, generation)
 		case refused:

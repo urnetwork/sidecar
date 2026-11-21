@@ -49,6 +49,8 @@ func TestSearchToolsRefuseArgumentsOutsideTheirRanges(t *testing.T) {
 		{Query: "limiter", GroupBy: "agent", Limit: 51},
 		{Query: "limiter", Scope: "galaxy"},
 		{Query: "limiter", Scope: "repo"},
+		{Query: "limiter", Ref: "main"},
+		{Query: "limiter", Repos: []string{"id:" + world.sync.repoId.String()}, Ref: string(EvsIndexRefName)},
 		{Query: "limiter", GroupBy: "colour"},
 		{Query: "limiter", Untrusted: "maybe"},
 		{Query: "limiter", Verify: "fetch"},
@@ -65,7 +67,7 @@ func TestSearchToolsRefuseArgumentsOutsideTheirRanges(t *testing.T) {
 			t.Errorf("%+v: %v", args, err)
 		}
 	}
-	for _, args := range []*SearchToolArgs{{Query: "limiter", Scope: "all"}, {Query: "limiter", Ref: "main"}} {
+	for _, args := range []*SearchToolArgs{{Query: "limiter", Scope: "all"}} {
 		if _, err := tools.Search(context.Background(), env, args); !errors.Is(err, ErrSearchToolUnbuilt) {
 			t.Errorf("%+v: %v", args, err)
 		}
@@ -472,5 +474,96 @@ func TestDaemonSearchMethods(t *testing.T) {
 		if response = dispatch(DaemonModeControl, pid, line); response.Error == nil || response.Result != nil {
 			t.Fatalf("a search answered unchecked: %+v %s", response.Error, response.Result)
 		}
+	}
+}
+
+func TestDaemonSearchAllResumesAcrossHostedNetworks(t *testing.T) {
+	daemon := newDispatchTestDaemon(t)
+	hosted := map[*Sidecar]*SearchTools{}
+	worlds := []*testEngineWorld{}
+	for _, label := range []string{"east", "west"} {
+		world := newTestEngineWorld(t, nil, testEngineDocument(t, label, 1, 1, label+".md", "harbor log"))
+		worlds = append(worlds, world)
+		networkId := evsTestId(label + " network")
+		shell := newSidecarBase(nil, cheapKeychainSettings())
+		if err := daemon.AddSidecar(networkId, shell); err != nil {
+			t.Fatal(err)
+		}
+		tools, err := NewSearchTools(world.engine, networkId, testTrustReader, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hosted[shell] = tools
+	}
+	for _, method := range DaemonSearchMethods(&DaemonSearchBackends{
+		Tools:  func(shell *Sidecar) (*SearchTools, error) { return hosted[shell], nil },
+		Secret: func(*Sidecar) (func([]byte) bool, error) { return func([]byte) bool { return false }, nil },
+	}) {
+		if err := daemon.RegisterMethod(method); err != nil {
+			t.Fatal(err)
+		}
+	}
+	session := func() *daemonSession {
+		done := make(chan struct{})
+		t.Cleanup(func() { close(done) })
+		return &daemonSession{hello: &DaemonHello{Mode: DaemonModeControl}, done: done}
+	}
+	call := func(s *daemonSession, args *SearchToolArgs) (*SearchToolResult, *DaemonRpcError) {
+		data, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": DaemonMethodSearch, "params": args})
+		if err != nil {
+			t.Fatal(err)
+		}
+		reply := daemon.dispatch(data, s, runUnbounded)
+		if reply.Error != nil {
+			return nil, reply.Error
+		}
+		out := &SearchToolResult{}
+		if err := json.Unmarshal(reply.Result, out); err != nil {
+			t.Fatal(err)
+		}
+		return out, nil
+	}
+	s := session()
+	request := &SearchToolArgs{Query: "harbor", Scope: "all", Limit: 1}
+	restricted := session()
+	restricted.hello.Mode = DaemonModeMcp
+	if result, failure := call(restricted, request); result != nil || failure == nil || failure.Code != DaemonRpcFailedPrecondition {
+		t.Fatalf("membership-scoped session initiated a host-wide query: %+v, %+v", result, failure)
+	}
+	first, failure := call(s, request)
+	if failure != nil || len(first.Hits) != 1 || first.Status.Complete || first.Status.NextCursor == "" || len(first.Coverage) != 2 {
+		t.Fatalf("first host-wide page: %+v, %+v", first, failure)
+	}
+	if _, foreign := call(session(), &SearchToolArgs{Cursor: first.Status.NextCursor}); foreign == nil {
+		t.Fatal("foreign session resumed all-network search")
+	}
+	seen := map[string]bool{first.Hits[0].Network: true}
+	page := first
+	for i := 0; i < 8 && !page.Status.Complete; i++ {
+		page, failure = call(s, &SearchToolArgs{Cursor: page.Status.NextCursor, Limit: 2})
+		if failure != nil {
+			t.Fatal(failure)
+		}
+		for _, hit := range page.Hits {
+			if seen[hit.Network] {
+				t.Fatalf("duplicate network hit: %+v", hit)
+			}
+			seen[hit.Network] = true
+		}
+	}
+	if !page.Status.Complete || len(seen) != 2 {
+		t.Fatalf("hit networks: %v, complete %t", seen, page.Status.Complete)
+	}
+	first, failure = call(s, request)
+	if failure != nil {
+		t.Fatal(failure)
+	}
+	world := worlds[1]
+	doc := testEngineDocument(t, "west", 1, 1, "west.md", "harbor log")
+	eraser := testNewEraser(t, world.sync.head.ref.store(evsTestId("all cut")), false, &testIndexWorldClock{world: world.sync.head}, nil)
+	testCut(t, eraser, "all cut", &IndexCutDocument{Key: doc.key, Version: 1})
+	world.sync.round(t)
+	if result, failure := call(s, &SearchToolArgs{Cursor: first.Status.NextCursor}); result != nil || failure == nil || !strings.Contains(failure.Message, ErrSearchCursorExpired.Error()) {
+		t.Fatalf("continued past remote-network cut: %+v, %+v", result, failure)
 	}
 }

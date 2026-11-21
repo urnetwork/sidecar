@@ -223,6 +223,11 @@ func (self *EvsEngine) serveUploadSegment(request *EvsRequest) {
 
 	clusterFull := request.Cluster != nil && deps.ClusterLimit.Full(request.Cluster.ClusterId())
 	reseed := self.host.GatesOrClosed().Reseed()
+	// The recovery client uploads the owner's segments under its admin token before posting the kept history.
+	// Even a retry answered by admission must leave its transfer out of the caller's usage window.
+	if reseed && !closure && request.Rights.Has(sidecar.AclEvsAdmin) && facts.NetworkId == networkIdOf(request.Principal) {
+		excludeReseedTransfer(request.Writer)
+	}
 	switch {
 	case closure && clusterFull:
 		debitSum := sha256.Sum256(append(append([]byte(evsUploadClosureDebitDomain), segmentId[:]...), request.SidecarId[:]...))

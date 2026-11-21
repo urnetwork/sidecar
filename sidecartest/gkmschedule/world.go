@@ -286,6 +286,7 @@ func NewFsKeysWorldOn(t FsKeysT, kind protocol.RepoKind, clock *sidecartest.Fake
 	}
 	host.Gates.OpenService(sidecar.ServiceGateGkm, world.NetworkId)
 	engineSettings := gkmservice.DefaultGkmServiceSettings()
+	engineSettings.DraftMls = true
 	engineSettings.RepoCacheTtl = 0
 	engineSettings.FormCacheTtl = 0
 	engineSettings.GroupInfoCacheTtl = 0
@@ -502,6 +503,7 @@ func (self *FsKeysWorld) StartReconciler(settings *gkmservice.GkmReconcilerSetti
 	self.t.Helper()
 	if settings == nil {
 		settings = gkmservice.DefaultGkmReconcilerSettings()
+		settings.Service.DraftMls = self.engineSettings.DraftMls
 		settings.Service = self.engineSettings
 	}
 	reconciler, err := gkmservice.NewGkmReconciler(self.Ctx, self.serviceHost(), settings, &gkmservice.GkmReconcilerDeps{State: &fsKeysReconcilerState{world: self}})
@@ -691,7 +693,7 @@ func (self *FsKeysDevice) Restart() {
 	self.Api = api
 	self.rescope()
 	self.Mls = nil
-	if self.member() {
+	if self.member() && world.engineSettings.DraftMls {
 		self.Mls, err = sidecar.NewMlsEngine(&sidecar.MlsEngineArgs{
 			SidecarId:         self.signer.SidecarId,
 			IdentityPublicKey: self.signer.PublicKey(),
@@ -706,7 +708,7 @@ func (self *FsKeysDevice) Restart() {
 		}
 	}
 	settings := sidecar.DefaultGkmSettings()
-	client, err := sidecar.NewGkmGroupClient(&sidecar.GkmGroupClientArgs{
+	args := &sidecar.GkmGroupClientArgs{
 		SidecarId: self.signer.SidecarId,
 		NetworkId: sidecar.Id(world.NetworkId),
 		Api:       api,
@@ -727,7 +729,19 @@ func (self *FsKeysDevice) Restart() {
 		Jitter:          func(max time.Duration) time.Duration { return 0 },
 		Settings:        settings,
 		Clock:           deviceClock,
-	})
+	}
+	if !world.engineSettings.DraftMls {
+		args.RecoveryKeyAt = func(state sidecar.GkmAuthView, memberId sidecar.Id) (*sidecar.GkmRecoveryKey, error) {
+			digest := state.Member(memberId).GetRecoveryKeySha256()
+			for _, binding := range world.bindings {
+				if memberId == world.MemberId && bytes.Equal(digest, binding.KeySha256) {
+					return binding.Key(), nil
+				}
+			}
+			return nil, sidecar.ErrGkmKeyMissing
+		}
+	}
+	client, err := sidecar.NewGkmGroupClient(args)
 	if err != nil {
 		world.t.Fatal(err)
 	}
@@ -1988,4 +2002,35 @@ func (self *fsKeysKeychain) List(prefix string) ([]string, error) {
 // What a schedule's failure prints of a device.
 func (self *FsKeysDevice) String() string {
 	return fmt.Sprintf("%s (%s)", self.Label, self.SidecarId())
+}
+
+func (self *fsKeysWorldState) RecoveryCoverage(principal *sidecar.Principal, memberId sidecar.Id, now time.Time) (*gkmservice.RecoveryWrapCoverage, gkmservice.GkmAuthAnswer) {
+	view := self.tip()
+	if view == nil {
+		return nil, gkmservice.GkmAuthUnknown
+	}
+	row := view.Member(memberId)
+	if len(row.GetRecoveryKeySha256()) == 0 {
+		return nil, gkmservice.GkmAuthDenied
+	}
+	result := &gkmservice.RecoveryWrapCoverage{Current: row.GetRecoveryKeySha256()}
+	for _, prior := range row.GetBindings() {
+		if !bytes.Equal(prior.GetKeySha256(), result.Current) {
+			result.Retired = append(result.Retired, prior.GetKeySha256())
+		}
+	}
+	for _, repoId := range self.world.repoIds() {
+		holders, err := sidecar.KeyHolders(view, repoId, now)
+		if err != nil {
+			return nil, gkmservice.GkmAuthUnknown
+		}
+		if holders.Contains(sidecar.GkmHolderRecovery, memberId.Bytes()) {
+			result.RepoIds = append(result.RepoIds, repoId)
+		}
+	}
+	return result, gkmservice.GkmAuthAllowed
+}
+
+func (self *fsKeysWorldState) RepoRecoveryBindings(principal *sidecar.Principal, repoId sidecar.Id, now time.Time) (map[sidecar.Id][]byte, gkmservice.GkmAuthAnswer) {
+	return gkmservice.RecoveryBindingsOf(self.tip(), repoId, now)
 }

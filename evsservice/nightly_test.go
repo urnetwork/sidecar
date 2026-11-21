@@ -2,14 +2,18 @@ package evsservice
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"maps"
 	"slices"
 	"testing"
 	"time"
 
 	"google.golang.org/protobuf/proto"
+
+	"github.com/urnetwork/connect"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
@@ -70,6 +74,163 @@ func TestNightlyPassCountsWhileItMayNotDelete(t *testing.T) {
 	}
 	if stored := result.NetworkBytes[fixture.check.networkId]; stored == nil || stored.SegmentByteCount != int64(len(body)) {
 		t.Fatalf("stored %+v", stored)
+	}
+}
+
+// Unsealed parts, including an abandoned copy of a selected part, do not enter either count. The seal makes
+// its selected bytes billable exactly once, including when a later head pages the version out of its window.
+func TestNightlyPassCountsOnlyCommittedMultipartPlaces(t *testing.T) {
+	fixture := newNightlyFixture(t)
+	networkId := connect.Id(fixture.check.networkId)
+	token := fixture.token(fixture.check.signerId)
+	built := fixture.built(fixture.partsPlan(protocol.EvsRefMode_EVS_REF_FILE, 1100))
+	unused := fixture.requirePlace(fixture.postPart(token, built, 0))
+	places := fixture.postParts(token, built)
+	if sameEvsPlace(unused, places[0]) {
+		t.Fatal("expected two different stored copies of the first part")
+	}
+	check := func(want int64) {
+		t.Helper()
+		fixture.awaitStepEights()
+		if err := fixture.engine.deps.Uploads.Usage.Drain(fixture.ctx); err != nil {
+			t.Fatal(err)
+		}
+		if got := fixture.host.Quota.StoredDelta(networkId); got != want {
+			t.Fatalf("incremental count %d, want %d", got, want)
+		}
+		result := fixture.runPass()
+		if got := result.NetworkBytes[fixture.check.networkId].BatchRecordByteCount; !result.Complete || got != want {
+			t.Fatalf("nightly count %d, want %d (complete %t)", got, want, result.Complete)
+		}
+	}
+	check(0)
+	fixture.requireCommitted(fixture.seal(token, built, places), 1)
+	window, err := EvsHeadWindow(fixture.head().Head)
+	if err != nil || len(window) != 1 {
+		t.Fatalf("committed window %v, %v", window, err)
+	}
+	want := int64(window[0].Place.GetLength())
+	for _, place := range places {
+		want += int64(place.GetLength())
+	}
+	check(want)
+	fixture.requireCommitted(fixture.seal(token, built, places), 1)
+	check(want)
+	for version := 2; EvsHeadWindowFirstVersion(fixture.head().Head) == 1; version++ {
+		if version > sidecar.EvsWindowMaxEntryCount {
+			t.Fatal("expected the first version to page out")
+		}
+		place, _ := fixture.commit(fmt.Sprintf("p%03d", version))
+		want += int64(place.GetLength())
+	}
+	check(want)
+	// A packed log page can name still-standing batches. The two copies overlap until log/ is unlinked.
+	repoId, refId := fixture.check.repoId, fixture.check.refId
+	pageKey := LogPageKey(repoId, refId, 0)
+	pageBytes, err := readBlob(fixture.ctx, fixture.cluster, pageKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pack, err := BuildContainer(protocol.EvsContainerKind_EVS_CONTAINER_PACK, nil, []*ContainerLogPage{{RefId: refId, Page: 0, Bytes: pageBytes}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteContainer(fixture.ctx, fixture.host.Blobs, fixture.cluster, repoId, pack); err != nil {
+		t.Fatal(err)
+	}
+	check(want)
+	if err := fixture.cluster.Delete(fixture.ctx, pageKey); err != nil {
+		t.Fatal(err)
+	}
+	check(want)
+}
+
+func TestNightlyPassCountsMultipartBatchesAcrossEvacuation(t *testing.T) {
+	fixture := newNightlyFixture(t)
+	built := fixture.built(fixture.partsPlan(protocol.EvsRefMode_EVS_REF_FILE, 1100))
+	token := fixture.token(fixture.check.signerId)
+	places := []*protocol.EvsPlace{fixture.requirePlace(fixture.postPart(token, built, 0))}
+	fixture.clock.Advance(2 * time.Minute)
+	for i := 1; i < len(built.Parts); i++ {
+		places = append(places, fixture.requirePlace(fixture.postPart(token, built, i)))
+	}
+	fixture.requireCommitted(fixture.seal(token, built, places), 1)
+	fixture.awaitStepEights()
+	window, err := EvsHeadWindow(fixture.head().Head)
+	if err != nil || len(window) != 1 {
+		t.Fatalf("seal window %v, %v", window, err)
+	}
+	want := int64(window[0].Place.GetLength())
+	for _, place := range places[1:] {
+		want += int64(place.GetLength())
+	}
+	fixture.clock.Advance(fixture.settings.MinuteAge - time.Minute)
+	fixture.mustRun()
+	count := fixture.runPass().NetworkBytes[fixture.check.networkId]
+	if count.BatchRecordByteCount != want || count.ParcelByteCount+count.PackByteCount == 0 {
+		t.Fatalf("counts after only the oldest part evacuated: %+v, want %d bytes in batches", count, want)
+	}
+	fixture.clock.Advance(3 * time.Minute)
+	fixture.mustRun()
+	count = fixture.runPass().NetworkBytes[fixture.check.networkId]
+	if count.BatchRecordByteCount != 0 || count.ParcelByteCount+count.PackByteCount == 0 {
+		t.Fatalf("counts after all batches evacuated: %+v", count)
+	}
+}
+
+// A DROP runs against identical stored objects with or without a hold. The retained segment and the normal
+// DELETE produce the same negative delta and the same absolute count. An unrelated segment stays billable.
+func TestNightlyPassCountsAHeldDropAsDeleted(t *testing.T) {
+	for _, held := range []bool{false, true} {
+		fixture := newDropDeleteFixture(t)
+		world := fixture.world
+		networkId := testId("network-a")
+		candidate := fixture.putSegment("drop candidate", 300)
+		fixture.putSegment("still live", 145)
+		stored := func() int64 {
+			t.Helper()
+			pass, err := NewNightlyPass(world.host.ServiceHost(), &NightlyPassDeps{
+				EvsSettings:        world.settings,
+				SegmentClusterBusy: func(context.Context, string) bool { return true },
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := pass.Run(world.ctx, world.cluster.ClusterId(), "", "")
+			if err != nil || !result.Complete {
+				t.Fatalf("nightly: %v, %v", result, err)
+			}
+			return result.NetworkBytes[networkId].StoredByteCount()
+		}
+		before := stored()
+		world.clock.Advance(30 * time.Hour)
+		fixture.horizon = world.clock.Now()
+		if held {
+			hold := &sidecar.HoldRecord{NetworkId: networkId, CaseId: testId("case"), Kind: sidecar.HoldKindPreserve2703f,
+				Scope: sidecar.HoldScopeNetwork(), PlaceTime: world.clock.Now(), ExpireTime: world.clock.Now().Add(24 * time.Hour)}
+			if err := sidecartest.PlaceHold(world.paidCtx, world.host.Blobs, hold); err != nil {
+				t.Fatal(err)
+			}
+		}
+		outcome := fixture.run(candidate)
+		if outcome.Held != held || fixture.stored(candidate) != held {
+			t.Fatalf("hold %t: %+v", held, outcome)
+		}
+		if held {
+			table, err := EncodeDropTable(&DropTableState{HeldJobs: []*DropJobRecord{
+				{JobId: world.jobId, Held: true, Phase: protocol.EvsDropPhase_EVS_DROP_DELETE},
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := world.cluster.PutIfNoneMatch(world.paidCtx, DropsKey(world.repoId), table, nil); err != nil {
+				t.Fatal(err)
+			}
+		}
+		delta := world.host.Quota.StoredDelta(connect.Id(networkId))
+		if after := stored(); before != 445 || delta != -300 || after != before+delta {
+			t.Fatalf("hold %t: initial count %d, delta %d, nightly count %d", held, before, delta, after)
+		}
 	}
 }
 

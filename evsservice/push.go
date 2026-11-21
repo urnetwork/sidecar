@@ -513,8 +513,8 @@ func (self *pushAttempt) afterCommitted(outcome *pushOutcome) *pushOutcome {
 		if unfinished := self.finishErase(); unfinished != nil {
 			return unfinished
 		}
-	case flags&uint32(protocol.EvsPushFlag_EVS_PUSH_CONSUME) != 0 && outcome.ownCommit != nil:
-		if unfinished := self.finishConsume(); unfinished != nil {
+	case flags&uint32(protocol.EvsPushFlag_EVS_PUSH_CONSUME) != 0:
+		if unfinished := self.finishConsume(outcome); unfinished != nil {
 			return unfinished
 		}
 	}

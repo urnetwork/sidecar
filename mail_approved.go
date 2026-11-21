@@ -157,8 +157,8 @@ func (self *MailApprovedRecipients) Record(ctx context.Context, alias string, re
 
 // Removes the record approving recipient for alias, as `ur mail recipients rm` asks, and says whether one stood. alias
 // and recipient are as a person types them: each is put in the one form a send records it under, the alias this
-// network's address and the recipient lowercase. ErrMailRecipientApproval for an alias that is no address of this
-// network's with a mailbox, or a recipient that is no address.
+// network's address and the recipient with its canonical domain. ErrMailRecipientApproval for an alias that has no mailbox in this
+// network, or a recipient that is no address.
 func (self *MailApprovedRecipients) Remove(ctx context.Context, alias string, recipient string) (bool, error) {
 	client := self.client
 	row := client.networkRow()
@@ -169,7 +169,7 @@ func (self *MailApprovedRecipients) Remove(ctx context.Context, alias string, re
 	if !own {
 		return false, ErrMailRecipientApproval
 	}
-	recipients, err := mailSendAddressList(client.sendSettings(), []string{recipient})
+	recipients, err := mailSendAddressList(row, client.sendSettings(), []string{recipient})
 	if err != nil || len(recipients) != 1 {
 		return false, ErrMailRecipientApproval
 	}

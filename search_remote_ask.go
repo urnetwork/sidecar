@@ -361,6 +361,10 @@ func (self *SearchRemoteClient) Ask(ctx context.Context, request *SearchRequest)
 	if request == nil {
 		return nil, ErrSearchRequest
 	}
+	if request.Ref != "" {
+		// This request names a local content ref. The outbound planner only constructs requests for default refs.
+		return nil, nil
+	}
 	search, err := self.newSearch(ctx, request)
 	if err != nil || search == nil {
 		return nil, err

@@ -7,11 +7,8 @@
 // one write, and notifies the owners by an admin event and a hint (§15.5; owner decision 443). The block hands the
 // body on as it parsed it: the model alone judges the list, so a hash naming another receiver's key retires nothing.
 //
-// A scope's host is judged in its scope (MAIL-M8-09): the gate resolves mx.<scope> through its DnsKeyRecordScopeOf to
-// the scope and, for a member scope, its member, and asks MayReceive there, so a member scope's key is taken only from
-// that member's consented devices. A gate with no resolver, or one that cannot name the scope, answers 503, the closed
-// direction: no state carries §7.9's TeamScopeRow yet, so no block has a resolver. A block with no store or gate
-// answers 503.
+// For a scope's host (MAIL-M8-09), the hosted gate resolves its signed §7.9 TeamScopeRow and reads its
+// receiver grant from the same snapshot. A missing scope, store or gate answers 503.
 
 package dnsservice
 
@@ -50,9 +47,15 @@ type dnsAclKeyRecordGate struct {
 	scopeOf DnsKeyRecordScopeOf
 }
 
-// The key route's gate over view, taking no scope's host. nil answers unavailable to everything.
+// The hosted gate uses one verified snapshot for both scope ownership and the receiver grant.
+type verifiedDnsKeyRecordGate struct{ view *sidecar.AclGateView }
+
 func NewDnsAclKeyRecordGate(view *sidecar.AclGateView) DnsKeyRecordGate {
-	return NewDnsAclScopedKeyRecordGate(view, nil)
+	return verifiedDnsKeyRecordGate{view}
+}
+
+func (self verifiedDnsKeyRecordGate) MayReceive(networkId sidecar.Id, sidecarId sidecar.Id, scope string, now time.Time) DnsGateVerdict {
+	return dnsGateVerdictOf(self.view.MayReceiveByScopeLabel(networkId, sidecar.AclSidecarSubject(sidecarId), scope, now))
 }
 
 // The key route's gate over view, judging a Team scope's host in the scope scopeOf names (see the file header). nil

@@ -131,6 +131,10 @@ func parseMcpTemplate(template string) ([]mcpTemplatePart, error) {
 func (self *mcpResourceFamily) match(uri string) (map[string]string, bool) {
 	variables := map[string]string{}
 	rest := uri
+	if strings.HasPrefix(uri, mcpEvsUriPrefix) {
+		// An EVS result's selector follows the raw path. A '?' in a file name is escaped.
+		rest, _, _ = strings.Cut(uri, "?")
+	}
 	for i, part := range self.parts {
 		if part.name == "" {
 			if !strings.HasPrefix(rest, part.literal) {

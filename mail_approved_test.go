@@ -134,7 +134,13 @@ func TestMailApprovedRecipientSparesTheGate(t *testing.T) {
 	if !approved.ApprovedAll(ctx, testMailSendFrom, []string{recipient}) {
 		t.Fatal("a removal of another pair took this one's record")
 	}
-	if removed, err := approved.Remove(ctx, " Ann@ACME.root.example ", " Someone@Outside.Example"); err != nil || !removed {
+	if approved.ApprovedAll(ctx, testMailSendFrom, []string{"Someone@outside.example"}) {
+		t.Fatal("approval for one external mailbox covered another spelling")
+	}
+	if removed, err := approved.Remove(ctx, testMailSendFrom, "Someone@Outside.Example"); err != nil || removed {
+		t.Fatalf("another mailbox removed a record: %t %v", removed, err)
+	}
+	if removed, err := approved.Remove(ctx, " Ann@ACME.root.example ", " someone@Outside.Example"); err != nil || !removed {
 		t.Fatalf("the pair as a person types it: %v %v", removed, err)
 	}
 	if approved.ApprovedAll(ctx, testMailSendFrom, []string{recipient}) {

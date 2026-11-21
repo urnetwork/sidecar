@@ -74,6 +74,8 @@ const (
 type mxMetrics struct {
 	// Sessions, by how each ended.
 	sessions sidecar.MetricsCounter
+	// Outcomes of the SMTP dialog through the STARTTLS reply, independent of the later TLS session.
+	preambles sidecar.MetricsCounter
 	// Sessions refused, by the cap that refused them.
 	capRefusals sidecar.MetricsCounter
 	// Sessions that tried a plaintext transaction, by the refusal they got.
@@ -112,6 +114,7 @@ type mxMetrics struct {
 func newMxMetrics(metrics sidecar.Metrics) *mxMetrics {
 	return &mxMetrics{
 		sessions:           metrics.Counter("urnetwork_mxedge_sessions_total", "Sessions on TCP 25, by how each ended.", "result"),
+		preambles:          metrics.Counter("urnetwork_mxedge_preambles_total", "Router and platform SMTP dialogs through the STARTTLS reply, by outcome.", "result"),
 		capRefusals:        metrics.Counter("urnetwork_mxedge_cap_refusals_total", "Sessions refused, by the cap that refused them.", "result"),
 		plaintextSessions:  metrics.Counter("urnetwork_mxedge_plaintext_sessions_total", "Sessions that tried a plaintext transaction, by the refusal.", "result"),
 		memoryReads:        metrics.Counter("urnetwork_mxedge_closed_handshake_reads_total", "Reads of the closed-handshake memory, by answer.", "result"),

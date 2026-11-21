@@ -812,6 +812,9 @@ func (self *SocketComponent) listenAs(ctx context.Context, address *SocketAddres
 		// the system publish is a mail receiver's own component's, which no other caller reaches
 		return nil, &SocketCodeError{Err: ErrSocketDenied}
 	}
+	if err := self.prepareSocketNetwork(ctx, address.NetworkLabel); err != nil {
+		return nil, err
+	}
 	generation, policy, labels := self.current()
 	if labels == nil {
 		return nil, &SocketCodeError{Err: ErrSocketUnavailable}

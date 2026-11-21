@@ -457,6 +457,17 @@ func (self *MxEdgeService) serveConnection(conn net.Conn) {
 			defer session.ptr.Stop()
 		}
 		result, readyForTls := self.runDialog(session)
+		role := "router"
+		if self.platform != nil {
+			role = "platform"
+		}
+		if self.platform != nil || self.router != nil {
+			preamble := result
+			if readyForTls {
+				preamble = "ready"
+			}
+			self.metrics.preambles.Add(1, role+"_"+preamble)
+		}
 		if !readyForTls {
 			return result
 		}

@@ -115,6 +115,7 @@ type testSenderOptions struct {
 	dialer       func(stub *sidecartest.StubSmtpEdgeDialer) sidecar.SmtpEdgeDialer
 	readyKeySets [][]byte
 	measure      *sidecar.SmtpProverMeasure
+	proverHost   *sidecar.SmtpProverHost
 	memberDevice func(sidecarId sidecar.Id) bool
 	// replaces the world's DKIM keys, given its device DoH, clock and settings
 	dkim func(zone *sidecartest.FakeMailZone, clock *sidecartest.FakeClock, settings *sidecar.SmtpSenderSettings) *sidecar.SmtpDkimKeys
@@ -201,9 +202,15 @@ func newTestSenderWorld(t *testing.T, options *testSenderOptions) *testSenderWor
 		readyKeySets := options.readyKeySets
 		args.ReadyKeySets = func() [][]byte { return readyKeySets }
 	}
+	if self.prover != nil {
+		args.Measure = self.prover.SendMeasure
+	}
 	if options.measure != nil {
 		measure := options.measure
 		args.Measure = func() *sidecar.SmtpProverMeasure { return measure }
+	}
+	if host := options.proverHost; host != nil {
+		args.Measure, args.ReadyKeySets, args.SendHold = host.Measure, host.ReadyKeySets, host.HoldForSend
 	}
 	sender, err := sidecar.NewSmtpSender(args)
 	if err != nil {
@@ -540,6 +547,7 @@ func TestSmtpConnectionCancelledSendJoins(t *testing.T) {
 	sender, err := sidecar.NewSmtpSender(&sidecar.SmtpSenderArgs{
 		Dialer:   world.stub,
 		Prover:   blocking,
+		Measure:  blocking.SendMeasure,
 		Policy:   sidecar.NewSmtpTlsPolicy(sidecar.NewSmtpDane(world.tls.anchors, world.tls.clock, nil), sidecar.NewSmtpMtaSts(world.tls.zone, world.tls.world.MtaStsTransport(), world.tls.store.Root(), world.settings, world.tls.clock), world.pins, sidecar.NewSmtpTlsAllowanceStore(world.tls.store.Root(), world.settings, world.tls.clock), world.tls.gate, world.tls.zone, world.tls.pki.roots, world.settings, world.tls.clock),
 		Pins:     world.pins,
 		Dkim:     sidecar.NewSmtpDkimKeys(newTestMemorySecrets(), testEchoDkimPublisher{}, world.settings, world.tls.clock, nil),

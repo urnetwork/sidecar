@@ -14,6 +14,11 @@ import (
 func (self *MailClient) registerOutboxLookup(gate MailConfigGate) {
 }
 
+// No queued send on this leg.
+func (self *MailClient) queuedSend(ctx context.Context, plan *mailSendPlan, effectKey []byte) (*MailOutboxQueued, error) {
+	return nil, nil
+}
+
 // No queue on this leg: internet recipients wait for a leg that sends.
 func (self *MailClient) prepareQueue(ctx context.Context, plan *mailSendPlan) (mailSendQueue, MailSendOutcome) {
 	return nil, MailSendInternetWaits

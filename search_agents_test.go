@@ -62,6 +62,25 @@ func newTestAgentsWorld(t *testing.T) *testEngineWorld {
 	return world
 }
 
+func TestSearchAgentsExpiresDuringGrouping(t *testing.T) {
+	world := newTestAgentsWorld(t)
+	result, err := world.engine.Agents(t.Context(), NewId(), evsTestId("network"), &SearchAgentsRequest{
+		Task: "limiter", Since: time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC), Reader: testTrustReader(),
+		Fold: func(hits []SearchHit) []SearchHit {
+			if len(hits) == 0 {
+				t.Fatal("expected indexed task entries")
+			}
+			if err := world.sync.cache.cache.ApplyCut(t.Context(), world.sync.repoId, world.sync.refId, &protocol.IndexErasureSet{}); err != nil {
+				t.Fatal(err)
+			}
+			return hits
+		},
+	})
+	if !errors.Is(err, ErrSearchCursorExpired) || result != nil {
+		t.Fatalf("after CUT during grouping, got %+v, %v", result, err)
+	}
+}
+
 func TestSearchEngineAgentsGroupsWhoWorksOnATask(t *testing.T) {
 	world := newTestAgentsWorld(t)
 	since := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)

@@ -192,6 +192,10 @@ func (self *fsKeysDelegationState) LateHolders(principal *sidecar.Principal, rep
 	return nil, gkmservice.GkmAuthAllowed
 }
 
+func (self *fsKeysDelegationState) RepoRecoveryBindings(principal *sidecar.Principal, repoId sidecar.Id, now time.Time) (map[sidecar.Id][]byte, gkmservice.GkmAuthAnswer) {
+	return gkmservice.RecoveryBindingsOf(self.log.Tip(), repoId, now)
+}
+
 func (self *fsKeysDelegationState) HoldersDropped(principal *sidecar.Principal, repoId sidecar.Id, pin *bridge.AuthPin, since time.Time, now time.Time) gkmservice.GkmAuthAnswer {
 	dropped, err := sidecar.GkmRemoveDue(self.log.Tip(), repoId, pin, since, now)
 	if err != nil {

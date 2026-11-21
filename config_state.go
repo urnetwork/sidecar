@@ -132,10 +132,11 @@ func (self ConfigSigner) RowsSigner() []byte {
 
 // A base a state stands on.
 type configBase struct {
-	n      uint64
-	chain  [sha256.Size]byte
-	timeMs int64
-	header *bridge.ProjectionHeader
+	recoveryBodies map[Id]*configRecoveryBody
+	n              uint64
+	chain          [sha256.Size]byte
+	timeMs         int64
+	header         *bridge.ProjectionHeader
 }
 
 // One base's (n, A_n) kept for ConfigLogSettings.BasePinRetention.
@@ -192,6 +193,8 @@ type ConfigState struct {
 	delegations map[string]*bridge.DelegationRow
 	keys        map[string]*bridge.KeyRow
 	aclRows     *protocol.AclRows
+	// Canonical actions of port-limited grants this reader verified. The ciphertext stays bound to its grant id.
+	grantActions map[string][]byte
 	// the newest AdminSet's threshold as signed, 0 for the default (§7.9's authority row)
 	threshold uint32
 	// the ServiceSettings values every verifier judges by, from the newest base's rows; nil before base 1
@@ -199,6 +202,7 @@ type ConfigState struct {
 	// the ServiceSettings the base's config head holds, nil for none, and whether the head was opened to see them
 	headSettings      *protocol.ServiceSettings
 	headSettingsKnown bool
+	recoveryBodies    map[Id]*configRecoveryBody
 	// the VersioningRules the base's config head holds, nil for none; known by headSettingsKnown (config_versioning.go)
 	headVersioningRules *protocol.VersioningRules
 	proposals           map[[sha256.Size]byte]*configProposal
@@ -716,10 +720,12 @@ func configCopyState(state *ConfigState) *ConfigState {
 		delegations:         state.delegations,
 		keys:                state.keys,
 		aclRows:             state.aclRows,
+		grantActions:        state.grantActions,
 		threshold:           state.threshold,
 		settings:            state.settings,
 		headSettings:        state.headSettings,
 		headSettingsKnown:   state.headSettingsKnown,
+		recoveryBodies:      state.recoveryBodies,
 		headVersioningRules: state.headVersioningRules,
 		proposals:           state.proposals,
 		indexers:            state.indexers,

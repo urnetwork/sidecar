@@ -244,7 +244,10 @@ func (self *urCli) main(ctx context.Context, args []string) int {
 		return urExitUsage
 	}
 	// Windows runs git-remote-ur.exe, and its file names keep no one case (§4.10)
-	if base := strings.TrimSuffix(strings.ToLower(filepath.Base(args[0])), ".exe"); base == urGitRemoteName {
+	// Older clones saved the helper itself as their LFS executable. Its saved argument pair is distinct from
+	// git's <remote> <url>, even for a remote named lfs-agent.
+	savedLfsAgent := len(args) == 3 && args[1] == "lfs-agent" && strings.HasPrefix(args[2], "--repo=")
+	if base := strings.TrimSuffix(strings.ToLower(filepath.Base(args[0])), ".exe"); base == urGitRemoteName && !savedLfsAgent {
 		if urGitRemoteEntry == nil {
 			fmt.Fprintln(self.stderr, "git-remote-ur: the git remote helper is not built yet")
 			return urExitFailed

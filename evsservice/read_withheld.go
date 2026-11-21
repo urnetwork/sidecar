@@ -4,8 +4,7 @@
 // such a slot answer missing, as a deleted object's would, whether or not the object is still stored, so a held drop
 // reads as a finished one (owner decision 184) and nothing on the wire shows a hold. The set is the del and held files
 // of the repo's running job and of every held job, which gave up the slot to it (QD-1127; DropIndex.Withheld), loaded
-// through the table and refreshed with it; a repo with no table, or a table naming no job, pays nothing past the
-// table's cached GET. A set that cannot be read fails the read 503.
+// from the current table and file inventory before opening the object. A set that cannot be read fails the read 503.
 
 package evsservice
 
@@ -18,15 +17,15 @@ func (self *readAttempt) withheld(id DropScanId) (bool, error) {
 	if !self.engine.format2Instance() {
 		return false, nil
 	}
-	table, err := self.dropTable()
-	if err != nil || table == nil || (table.Job == nil && len(table.HeldJobs) == 0) {
+	table, err := self.engine.drops.Read(self.ctx, self.cluster, self.repoId)
+	if err != nil || table.Etag == "" || (table.State.Job == nil && len(table.State.HeldJobs) == 0) {
 		return false, err
 	}
 	segmentCluster, err := self.engine.blobs.SegmentCluster()
 	if err != nil {
 		return false, err
 	}
-	set, err := self.engine.dropIndex.Withheld(self.ctx, segmentCluster, self.cluster.ClusterId(), self.repoId, table, self.engine.clock.Now())
+	set, err := self.engine.dropIndex.Withheld(self.ctx, segmentCluster, self.cluster.ClusterId(), self.repoId, table.State, self.engine.clock.Now())
 	if err != nil {
 		return false, err
 	}
