@@ -226,10 +226,6 @@ func (self *Sidecar) BindSearchWrites(evs *EvsClient) error {
 	writer, err := newIndexWriter(&indexWriterArgs{client: evs, settings: format, clock: self.clock, log: self.log,
 		store:   func(repo *EvsRepo, name []byte) indexRefStore { return newIndexEvsStore(repo, name, false) },
 		isAdmin: func(repo Id) func(*indexFileVersion) bool { judge, _ := evs.Repo(repo).indexAdmins(); return judge },
-		groupInbox: func(repo Id) bool {
-			state, err := evs.verifier.config()
-			return err == nil && state != nil && AclRepoIsInbox(state.Repo(repo))
-		},
 		mayMerge: func() bool {
 			conditions, _ := self.SearchConditions()
 			fg, _ := self.SearchForeground()
