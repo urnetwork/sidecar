@@ -207,19 +207,33 @@ func (self *EvsConfigHeadReader) CachedConfigHead(version uint64, chain []byte) 
 
 // Opens the current main-ref head through the same verified replay as a base's head.
 func (self *EvsConfigHeadReader) CurrentConfigHead(ctx context.Context) (*ConfigHead, uint64, [sha256.Size]byte, error) {
-	refId, err := self.repo.resolveRefId(ctx, EvsMainRefName, nil)
+	tip, err := self.CurrentConfigHeadTip(ctx)
 	if err != nil {
 		return nil, 0, [sha256.Size]byte{}, err
+	}
+	return tip.Head, tip.Version, tip.Chain, nil
+}
+
+// Reads the host's exact-head capability alongside the same authenticated fresh ref and
+// verifies its history. An older host's absent field permits an ordinary read-only preview.
+func (self *EvsConfigHeadReader) CurrentConfigHeadTip(ctx context.Context) (*ConfigHeadTip, error) {
+	refId, err := self.repo.resolveRefId(ctx, EvsMainRefName, nil)
+	if err != nil {
+		return nil, err
 	}
 	tip, err := self.repo.readHeadAlone(ctx, refId, true)
 	if err != nil {
-		return nil, 0, [sha256.Size]byte{}, err
+		return nil, err
 	}
+	position := &ConfigHeadTip{Version: tip.Version, Chain: tip.Chain, SupportsExactHead: tip.Head.GetSupportsExactHead()}
 	if tip.Version == 0 {
-		return nil, 0, tip.Chain, nil
+		return position, nil
 	}
-	head, err := self.ReadConfigHead(ctx, tip.Version, tip.Chain[:])
-	return head, tip.Version, tip.Chain, err
+	position.Head, err = self.ReadConfigHead(ctx, tip.Version, tip.Chain[:])
+	if err != nil {
+		return nil, err
+	}
+	return position, nil
 }
 
 // A head answered before at configVersion with chain, nil for none.
@@ -595,7 +609,7 @@ func (self *evsConfigHeadReplay) apply(ctx context.Context, keys *evsReadKeys, s
 	case flags == uint32(protocol.EvsPushFlag_EVS_PUSH_DELETE):
 		self.remove("")
 		return nil
-	case flags != 0:
+	case flags != 0 && flags != uint32(protocol.EvsPushFlag_EVS_PUSH_EXACT_HEAD):
 		return fmt.Errorf("%w: flags %d", errEvsConfigHeadPush, flags)
 	case payload == nil:
 		return fmt.Errorf("%w: no payload", ErrEvsObjectMissing)

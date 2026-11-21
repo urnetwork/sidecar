@@ -43,6 +43,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
@@ -62,7 +63,9 @@ var (
 // A head push signed and not yet sent: what a base names and carries before its head lands (plan-TEAM-api-config-head-
 // reach #2, #4).
 type ConfigHeadPush struct {
-	Head *ConfigHead
+	// A native writer holds the sealed request, including any parts and receipts, until commit.
+	deliver func(ctx context.Context, networkId Id, repoId Id) error
+	Head    *ConfigHead
 	// The ref's version after the push, and its chain value C_v, which a base names as config_head_sha256.
 	Version uint64
 	Chain   [sha256.Size]byte
@@ -73,10 +76,33 @@ type ConfigHeadPush struct {
 	Payload []byte
 }
 
+// A confirmed edit compares the signed parent with the exact head it previewed.
+func (self *ConfigHeadPush) extends(version uint64, chain [sha256.Size]byte) bool {
+	signed, statement := &bridge.Signed{}, &protocol.EvsPush{}
+	return self != nil && self.Version == version+1 && proto.Unmarshal(self.SignedPush, signed) == nil &&
+		signed.GetType() == uint32(bridge.SignedType_SIGNED_EVS_PUSH) && proto.Unmarshal(signed.GetBody(), statement) == nil &&
+		statement.GetBaseVersion() == version && bytes.Equal(statement.GetBaseChain(), chain[:])
+}
+
 // The current verified main-ref head, including a pending head that no base names yet.
 type ConfigHeadTipReader interface {
 	// A nil head at version 0 before the first push.
 	CurrentConfigHead(ctx context.Context) (*ConfigHead, uint64, [sha256.Size]byte, error)
+}
+
+// A verified config ref position. A native EVS reader also reports whether the host that
+// answered its fresh read enforces the signed exact-head flag.
+type ConfigHeadTip struct {
+	Head              *ConfigHead
+	Version           uint64
+	Chain             [sha256.Size]byte
+	SupportsExactHead bool
+}
+
+// A host can supply an exact ref only for explicitly confirmed ACL edits. The ordinary
+// follower keeps its existing head reader and never runs its periodic writer on this ref.
+type ConfirmedAclConfigRefProvider interface {
+	ConfirmedAclConfigRef() ConfigHeadRef
 }
 
 // The config repo's file-mode main ref as a writer saves heads to it (§11.8).
@@ -212,7 +238,7 @@ func NewConfigWriter(ctx context.Context, args *ConfigWriterArgs) (*ConfigWriter
 	return self, nil
 }
 
-// A writer with no fold loop, for BootstrapNetwork and tests.
+// A writer with no fold loop, for a confirmed ACL save, BootstrapNetwork and tests.
 func newConfigWriter(ctx context.Context, args *ConfigWriterArgs) *ConfigWriter {
 	settings := args.Settings
 	if settings == nil {
@@ -269,13 +295,13 @@ func configSignal(channel chan struct{}) {
 // Saves a head edit makes from the current one, the fold where it is, and publishes its base: the path SOCK's K_sock
 // file, §17's bridge files and every other config file a writer changes take. Answers the base's pin.
 func (self *ConfigWriter) SaveHead(ctx context.Context, edit func(head *ConfigHead) (*ConfigHead, error)) (*bridge.AuthPin, error) {
-	return self.publish(ctx, false, edit)
+	return self.publish(ctx, false, edit, nil)
 }
 
 // Publishes a base at the tip: folding through it when fold is set or the tail would pass the cap, else keeping the
 // previous base's fold, over the store's current head, a pending one included. Answers the base's pin.
 func (self *ConfigWriter) PublishBase(ctx context.Context, fold bool) (*bridge.AuthPin, error) {
-	return self.publish(ctx, fold, nil)
+	return self.publish(ctx, fold, nil, nil)
 }
 
 // What one publish holds across re-signs: its fold, the head it names and the pushes that reach it, and the rows.
@@ -291,13 +317,13 @@ type configWriterPlan struct {
 }
 
 // One publish (DESIGN-DETAILS 5.2.4's WriterPublishBase), re-signing at each new tip up to PublishAttemptCount times.
-func (self *ConfigWriter) publish(ctx context.Context, fold bool, edit func(head *ConfigHead) (*ConfigHead, error)) (*bridge.AuthPin, error) {
+func (self *ConfigWriter) publish(ctx context.Context, fold bool, edit func(head *ConfigHead) (*ConfigHead, error), expected *ConfigHeadTip) (*bridge.AuthPin, error) {
 	self.publishLock.Lock()
 	defer self.publishLock.Unlock()
 	var plan *configWriterPlan
 	for range max(self.settings.PublishAttemptCount, 1) {
 		var err error
-		plan, err = self.plan(ctx, plan, fold, edit)
+		plan, err = self.plan(ctx, plan, fold, edit, expected)
 		if err != nil {
 			return nil, err
 		}
@@ -330,7 +356,7 @@ func (self *ConfigWriter) publish(ctx context.Context, fold bool, edit func(head
 // The plan for a base at the client's tip. A plan from the attempt before is kept, its fold and compile, while no
 // other base landed and its fold stays within FoldEntryCount of the tip; else the fold, the head and the rows are
 // planned anew from the newest base.
-func (self *ConfigWriter) plan(ctx context.Context, previous *configWriterPlan, fold bool, edit func(head *ConfigHead) (*ConfigHead, error)) (*configWriterPlan, error) {
+func (self *ConfigWriter) plan(ctx context.Context, previous *configWriterPlan, fold bool, edit func(head *ConfigHead) (*ConfigHead, error), expected *ConfigHeadTip) (*configWriterPlan, error) {
 	state := self.args.Client.State()
 	if state == nil {
 		return nil, ErrConfigWriterNotWriter
@@ -353,6 +379,9 @@ func (self *ConfigWriter) plan(ctx context.Context, previous *configWriterPlan, 
 	}
 	if head == nil || version < base.GetConfigVersion() {
 		return nil, fmt.Errorf("%w: the config repo holds version %d, below the newest base's %d", ErrConfigHeadConflict, version, base.GetConfigVersion())
+	}
+	if edit != nil && expected != nil && (version != expected.Version || chain != expected.Chain) {
+		return nil, fmt.Errorf("%w: the previewed config head moved", ErrConfigHeadConflict)
 	}
 
 	// the fold and the records it adds, read under the client's follow lock: the log's kept entries are its follower's.
@@ -416,6 +445,11 @@ func (self *ConfigWriter) plan(ctx context.Context, previous *configWriterPlan, 
 		push, err := self.args.Heads.PrepareConfigHead(ctx, next, version)
 		if err != nil {
 			return nil, err
+		}
+		// Prepare may read the ref again. Even at the same version a restored or forked
+		// ref must never substitute another chain for the one whose files the edit saw.
+		if expected != nil && !push.extends(version, chain) {
+			return nil, fmt.Errorf("%w: the prepared push does not extend the selected version and chain", ErrConfigHeadConflict)
 		}
 		if err := self.args.Heads.CommitConfigHead(ctx, push); err != nil {
 			return nil, err
