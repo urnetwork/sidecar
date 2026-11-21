@@ -3,9 +3,11 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -19,7 +21,12 @@ import (
 // Stock git receives the local acknowledgement from the daemon. Clock and store barriers separate receipt,
 // an ordinary background publication, and the restart's publication without a further request to the daemon.
 func TestDaemonPublishesOwnedGitRefsAcrossRestart(t *testing.T) {
-	world := newTestUrFollowWorld(t, 1)
+	world := newTestUrFollowWorldWithSettings(t, 1, func() *sidecar.SidecarSettings {
+		settings := sidecar.DefaultSidecarSettings()
+		// The only representable duration strictly below one nanosecond is zero.
+		settings.Gkm.LateDeliverJitter = time.Nanosecond
+		return settings
+	})
 	engines := enginenet.NewEngines(t, world.net, nil)
 	network := world.networks[0]
 	networkId := network.NetworkId()
@@ -63,18 +70,20 @@ func TestDaemonPublishesOwnedGitRefsAcrossRestart(t *testing.T) {
 	git.must("", "clone", "-q", url, clone)
 	git.must(clone, "config", "user.name", "git writer")
 	git.must(clone, "config", "user.email", running.Identity().ClientId.String()+"@ur.invalid")
-	const content = "committed by the publication worker\n"
-	if err := os.WriteFile(filepath.Join(clone, "README"), []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	git.must(clone, "add", "README")
-	git.must(clone, "commit", "-q", "-m", "publish an owned ref")
 	client, err := urDaemonEvsClient(running)
 	if err != nil {
 		t.Fatal(err)
 	}
 	repo := client.Repo(repoId)
 	for _, branch := range []string{"live", "restart"} {
+		// Each push owns a distinct change. A second ref of an identical commit
+		// inherits its path from its overlay base and cannot prove this worker's write.
+		content := "committed on " + branch + "\n"
+		if err := os.WriteFile(filepath.Join(clone, "README"), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		git.must(clone, "add", "README")
+		git.must(clone, "commit", "-q", "-m", "publish "+branch)
 		name := sidecar.EvsOwnedRefName(running.Identity().SidecarId, branch)
 		refId, err := repo.RefIdOf(world.ctx, name)
 		if err != nil {
@@ -192,7 +201,7 @@ func testDaemonGitReader(t *testing.T, world *testUrFollowWorld, engines *engine
 		t.Fatal("the reader has no key upkeep")
 	}
 	passes, _ := upkeep.Passes()
-	upkeep.RefillKeyPackages()
+	upkeep.Refresh()
 	for {
 		count, changed := upkeep.Passes()
 		if passes < count {
@@ -201,17 +210,25 @@ func testDaemonGitReader(t *testing.T, world *testUrFollowWorld, engines *engine
 		select {
 		case <-changed:
 		case <-world.ctx.Done():
-			t.Fatal("the reader posted no KeyPackages")
+			t.Fatal("the reader did not finish publishing its key")
 		}
 	}
 	writerGroup, err := testUrClientsOf(writer).groupClient()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writerGroup.RunPending(world.ctx, repoId); err != nil {
-		t.Fatal(err)
+	if _, err := readerGroup.CurrentRepoKey(world.ctx, repoId); err != nil {
+		if !errors.Is(err, sidecar.ErrGkmUnavailable) {
+			t.Fatal(err)
+		}
+		if err := writerGroup.SyncRepo(world.ctx, repoId); err != nil {
+			t.Fatal(err)
+		}
+		if err := writerGroup.DeliverLate(world.ctx, repoId, "s:"+sidecar.EvsKeyId(reader.Identity().SidecarId)); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if _, err := readerGroup.JoinWelcomes(world.ctx); err != nil {
+	if _, err := readerGroup.CurrentRepoKey(world.ctx, repoId); err != nil {
 		t.Fatal(err)
 	}
 	client, err := urDaemonEvsClient(reader)
