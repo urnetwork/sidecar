@@ -656,7 +656,7 @@ func (self *evsGitExport) applyUpdate(ctx context.Context, head *EvsVerifiedHead
 		if !change.WritesEntry() {
 			continue
 		}
-		file, err := self.repo.exportBlob(ctx, self.objects, head, self.keys, statement, change)
+		file, err := self.repo.exportBlob(ctx, self.objects, head, self.keys, statement, change, "")
 		if err != nil {
 			return nil, err
 		}
@@ -914,7 +914,7 @@ func (self *evsGitExport) historyBlob(ctx context.Context, result *evsReadResult
 // One entry of a push reconstructed into a blob written to sink, its oid checked by reconstruction, and the file's
 // sealed mode and oid; nil for an entry that is no file's. A gitlink, whose oid names a commit and which has no
 // content, writes nothing and answers its mode and oid.
-func (self *EvsRepo) exportBlob(ctx context.Context, sink EvsGitObjectSink, head *EvsVerifiedHead, keys *evsReadKeys, statement *EvsVerifiedStatement, change *EvsCheckedChange) (*evsGitWrittenFile, error) {
+func (self *EvsRepo) exportBlob(ctx context.Context, sink EvsGitObjectSink, head *EvsVerifiedHead, keys *evsReadKeys, statement *EvsVerifiedStatement, change *EvsCheckedChange, path string) (*evsGitWrittenFile, error) {
 	entry := &protocol.EvsEntryVersion{}
 	if err := proto.Unmarshal(change.EntryVersion, entry); err != nil {
 		return nil, fmt.Errorf("%w: an entry that does not parse", ErrEvsEntryRefused)
@@ -925,6 +925,7 @@ func (self *EvsRepo) exportBlob(ctx context.Context, sink EvsGitObjectSink, head
 	result := &evsReadResult{refId: head.RefId, head: head, keys: keys, objects: newEvsReadObjects(self.client)}
 	defer result.objects.close()
 	verified := &EvsVerifiedPath{TokenPath: change.TokenPath, EntryBytes: change.EntryVersion, Entry: entry, Statement: statement.Statement, CommitVersion: statement.Version}
+	result.exportPath = path
 	spill := newEvsSpill(self.client.args.Store, self.client.settings.DeltaBaseMemoryByteCount)
 	defer spill.close()
 	info, err := self.reconstruct(ctx, result, verified, spill)

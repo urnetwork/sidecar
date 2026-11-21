@@ -418,6 +418,8 @@ type evsReadResult struct {
 	// genesis names, whose kind no read receipt covers: its content is decrypted without asking the receipt gate,
 	// which asks a verified state that a reader starting at a base does not hold yet
 	receiptExempt bool
+	mailSegment   bool
+	exportPath    string
 }
 
 // One round's reply: its parts as they arrived and their objects, its head verified but not pinned, and the ref pin
@@ -697,6 +699,7 @@ func (self *EvsRepo) readFile(ctx context.Context, refId Id, args *EvsReadArgs, 
 	case verified.Entry.GetKind() != uint32(protocol.EvsEntryKind_EVS_ENTRY_FILE):
 		return nil, fmt.Errorf("%w: a directory, which List reads", ErrEvsTokenInvalid)
 	}
+	result.mailSegment = args.mailSegment
 	if !args.Provenance || evsProvenanceRead == nil {
 		info, err := self.reconstruct(ctx, result, verified, out)
 		if err != nil {
@@ -715,6 +718,9 @@ func (self *EvsRepo) readFile(ctx context.Context, refId Id, args *EvsReadArgs, 
 	}
 	defer content.close()
 	if info.Provenance, err = evsProvenanceRead(ctx, self, result, verified); err != nil {
+		return nil, err
+	}
+	if err := self.checkMailRead(ctx, result, verified, content); err != nil {
 		return nil, err
 	}
 	if _, err := io.Copy(out, content.reader()); err != nil {

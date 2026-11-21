@@ -173,11 +173,13 @@ type MailView struct {
 	// Months and segments kept, least recently used first.
 	months   []*mailViewMonth
 	segments []*mailViewSegment
+	// Signed message tombstones survive cache invalidation.
+	erased map[Id]*mailErasedView
 }
 
 // A view over args' stores, holding nothing until it lists.
 func NewMailView(args *MailViewArgs) *MailView {
-	return &MailView{args: args}
+	return &MailView{args: args, erased: map[Id]*mailErasedView{}}
 }
 
 // Drops every kept month and segment, so the next call reads afresh.
@@ -254,6 +256,7 @@ func (self *MailView) List(ctx context.Context, args *MailListArgs) (*MailListPa
 			break
 		}
 	}
+	masks := map[Id]*mailErasedView{}
 	for _, pick := range picks {
 		entry, err := self.decode(ctx, pick.month, pick.key)
 		if err != nil {
@@ -262,6 +265,22 @@ func (self *MailView) List(ctx context.Context, args *MailListArgs) (*MailListPa
 		if entry == nil {
 			page.Unreadable += 1
 			continue
+		}
+		// A later page can still hold an old segment. Check the signed erasure ref
+		// after reading its entries, once per source for this page.
+		mask, seen := masks[entry.RepoId]
+		if !seen {
+			mask, err = self.readErased(ctx, entry.RepoId)
+			if err != nil {
+				return nil, err
+			}
+			masks[entry.RepoId] = mask
+		}
+		if mask != nil {
+			if _, erased := mask.erased(pick.key.id); erased {
+				self.InvalidateMonth(pick.month.month)
+				continue
+			}
 		}
 		page.Entries = append(page.Entries, entry)
 	}
@@ -302,6 +321,16 @@ func (self *MailView) find(ctx context.Context, month MailYearMonth, id Id) (*ma
 			return nil, mailViewKey{}, err
 		}
 		if key, ok := viewMonth.key(id); ok {
+			mask, err := self.readErased(ctx, viewMonth.sources[key.source])
+			if err != nil {
+				return nil, mailViewKey{}, err
+			}
+			if mask != nil {
+				if _, erased := mask.erased(id); erased {
+					self.InvalidateMonth(month)
+					return nil, mailViewKey{}, ErrMailViewEntryAbsent
+				}
+			}
 			return viewMonth, key, nil
 		}
 		self.InvalidateMonth(month)
@@ -712,4 +741,35 @@ func (self *MailView) segment(ctx context.Context, viewMonth *mailViewMonth, key
 		}
 	}
 	return content, nil
+}
+
+// The verified tombstones of one source, brought up to date even for a cached page.
+// A transient read error withholds the page. Memory-only stores without an erasure ref have no tombstones.
+func (self *MailView) readErased(ctx context.Context, repoId Id) (*mailErasedView, error) {
+	store := self.args.Mailbox
+	if repoId != self.args.MailboxId {
+		if self.args.Groups == nil {
+			return nil, ErrMailViewEntryAbsent
+		}
+		var err error
+		store, err = self.args.Groups(ctx, repoId)
+		if err != nil {
+			return nil, err
+		}
+	}
+	reader, ok := store.(interface {
+		Erasures(context.Context, uint64) ([]*EvsErasure, error)
+	})
+	if !ok {
+		return nil, nil
+	}
+	self.stateLock.Lock()
+	mask := self.erased[repoId]
+	if mask == nil {
+		mask = newMailErasedView()
+		self.erased[repoId] = mask
+	}
+	self.stateLock.Unlock()
+	_, err := mask.refresh(ctx, reader.Erasures)
+	return mask, err
 }

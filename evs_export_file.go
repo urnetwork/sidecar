@@ -458,7 +458,7 @@ func (self *EvsRepo) exportFileRef(ctx context.Context, writer *evsGitObjectWrit
 					continue
 				}
 			}
-			file, err := self.exportBlob(ctx, writer, head, keys, statement, change)
+			file, err := self.exportBlob(ctx, writer, head, keys, statement, change, string(bytes.Join(pathNames, []byte("/"))))
 			if err != nil {
 				return nil, nil, err
 			}

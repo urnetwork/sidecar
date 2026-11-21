@@ -44,6 +44,7 @@
 package sidecar
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -308,7 +309,7 @@ func (self *MailEraser) Refresh(ctx context.Context) ([]Id, error) {
 	messageIds := []Id{}
 	for _, erasure := range fresh {
 		messages, _, ok := parseMailErasureNote(erasure.Note)
-		if !ok {
+		if !ok || erasure.Completion {
 			continue
 		}
 		for _, message := range messages {
@@ -433,6 +434,21 @@ func (self *MailEraser) Erase(ctx context.Context, month MailYearMonth, messageI
 // Begins the erasure of fresh, none of which an ERASE named, under erasureId: its CUT in a format-2 mailbox, its
 // first ERASE, then its parts. Nil with an error where nothing was destroyed.
 func (self *MailEraser) begin(ctx context.Context, erasureId Id, month MailYearMonth, fresh []Id, index *mailEraseIndex) (*MailErasure, error) {
+	// CONSUME can destroy the inventoried deposit slot after ingest published the body.
+	// A no-op ERASE made no durable promise. Re-inventory under the same erasure id.
+	for attempt := 0; ; attempt++ {
+		erasure, err := self.beginAttempt(ctx, erasureId, month, fresh, index)
+		if !errors.Is(err, errMailEraseUncommitted) || attempt >= self.settings.SegmentRetryCount {
+			return erasure, err
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
+}
+
+// One inventory and first ERASE under the original erasure id.
+func (self *MailEraser) beginAttempt(ctx context.Context, erasureId Id, month MailYearMonth, fresh []Id, index *mailEraseIndex) (*MailErasure, error) {
 	erasure := &MailErasure{MessageIds: fresh, State: MailErasureDone}
 	depositKeys, depositByteCounts, err := self.depositKeys(ctx, fresh)
 	if err != nil {
@@ -499,6 +515,15 @@ func (self *MailEraser) begin(ctx context.Context, erasureId Id, month MailYearM
 	if err != nil {
 		return nil, err
 	}
+	erasures, err := self.store.Erasures(ctx, 0)
+	if err != nil {
+		return nil, err
+	}
+	if !slices.ContainsFunc(erasures, func(row *EvsErasure) bool {
+		return row.ErasureId == erasureId && bytes.Equal(row.Note, mailErasureNote(messages, nil))
+	}) {
+		return nil, errMailEraseUncommitted
+	}
 	if index != nil {
 		if err := self.journal.done(erasureId); err != nil {
 			// the next step finds its ERASE in evs's state and drops the entry
@@ -511,6 +536,11 @@ func (self *MailEraser) begin(ctx context.Context, erasureId Id, month MailYearM
 	if err := self.purgeLocal(ctx, fresh); err != nil {
 		// the bodies are gone from evs; this device's copies go at its next Refresh or restart
 		self.log.Warningf("[mail]erase %s: the local purge failed: %v", self.repoId, err)
+	}
+	messages, complete, _, err = self.eraseLateBodies(ctx, erasureId, messages, mailErasedKeys(erasures), index, complete)
+	if err != nil {
+		erasure.State = MailErasureRewriting
+		return erasure, err
 	}
 	if complete {
 		self.report(erasure)
@@ -612,9 +642,12 @@ func (self *MailEraser) complete(ctx context.Context, erasure *MailErasure, send
 
 // Whether an ERASE of erasureId among erasures says complete, as Resume reads an erasure done.
 func mailErasureComplete(erasures []*EvsErasure, erasureId Id) bool {
-	return slices.ContainsFunc(erasures, func(erasure *EvsErasure) bool {
-		return erasure.ErasureId == erasureId && erasure.Complete
-	})
+	for _, erasure := range slices.Backward(erasures) {
+		if erasure.ErasureId == erasureId && (!erasure.Completion || erasure.Complete) {
+			return erasure.Complete
+		}
+	}
+	return false
 }
 
 // Finishes every erasure of the repo no ERASE completed: see the file header's resume row. Each erasure it took up is
@@ -664,27 +697,38 @@ func (self *MailEraser) Resume(ctx context.Context) ([]*MailErasure, error) {
 			byId[erasure.ErasureId] = state
 			order = append(order, erasure.ErasureId)
 		}
-		state.complete = state.complete || erasure.Complete
+		if !erasure.Completion || erasure.Complete {
+			state.complete = erasure.Complete
+		}
 		for _, key := range erasure.Keys {
 			state.erasedSlotIds[key.SlotId] = true
 		}
-		if messages, _, ok := parseMailErasureNote(erasure.Note); ok {
-			state.messages = append(state.messages, messages...)
+		if messages, _, ok := parseMailErasureNote(erasure.Note); !erasure.Completion && ok {
+			state.messages = mailMergeErasedMessages(state.messages, messages)
 		}
 	}
 	closures, err := self.store.Closures(ctx)
 	if err != nil {
 		return resumed, err
 	}
+	erasedKeys := mailErasedKeys(erasures)
 	began := slices.Clone(resumed)
 	for _, erasureId := range order {
 		state := byId[erasureId]
-		if state.complete || len(state.messages) == 0 {
-			// done, or another writer's erasure, a vault entry's among them
+		if len(state.messages) == 0 {
+			// Another writer's erasure, a vault entry's among them.
 			continue
 		}
 		if slices.ContainsFunc(began, func(erasure *MailErasure) bool { return erasure.ErasureId == erasureId }) {
 			// a journaled erasure this call just ran
+			continue
+		}
+		messages, complete, late, err := self.eraseLateBodies(ctx, erasureId, state.messages, erasedKeys, index, state.complete)
+		if err != nil {
+			return resumed, err
+		}
+		state.messages = messages
+		if complete && !late {
 			continue
 		}
 		erasure := &MailErasure{ErasureId: erasureId, State: MailErasureRewriting}
@@ -692,6 +736,11 @@ func (self *MailEraser) Resume(ctx context.Context) ([]*MailErasure, error) {
 			erasure.MessageIds = append(erasure.MessageIds, message.MessageId)
 		}
 		resumed = append(resumed, erasure)
+		if complete {
+			erasure.State = MailErasureDone
+			self.report(erasure)
+			continue
+		}
 		// a CLOSURE no ERASE followed: its replaced chain's keys still stand
 		orphans := []*EvsClosure{}
 		for _, closure := range closures {

@@ -168,7 +168,8 @@ func newMailEvsStore(repo *EvsRepo, refName []byte, settings *MailStoreSettings)
 // ReadHead's verified newest version, held to maxByteCount.
 func (self *mailEvsStore) Read(ctx context.Context, path string, maxByteCount int) ([]byte, uint64, error) {
 	out := &mailBoundedBuffer{maxByteCount: maxByteCount}
-	info, err := self.repo.ReadHead(ctx, &EvsReadArgs{RefName: self.refName, Path: path}, out)
+	_, _, segment := parseMailIndexPath(path)
+	info, err := self.repo.ReadHead(ctx, &EvsReadArgs{RefName: self.refName, Path: path, mailSegment: segment}, out)
 	if err != nil {
 		if errors.Is(err, ErrMailStoreTooLarge) {
 			return nil, 0, ErrMailStoreTooLarge
@@ -176,6 +177,11 @@ func (self *mailEvsStore) Read(ctx context.Context, path string, maxByteCount in
 		return nil, 0, err
 	}
 	return out.buffer.Bytes(), info.Version, nil
+}
+
+// The signed erasure notes for readers that serve messages or cached list entries.
+func (self *mailEvsStore) Erasures(ctx context.Context, afterVersion uint64) ([]*EvsErasure, error) {
+	return self.repo.ReadErasures(ctx, afterVersion)
 }
 
 // List's verified children.

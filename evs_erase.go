@@ -371,6 +371,9 @@ func (self *EvsRepo) Erasures(ctx context.Context) ([]*SidecarErasure, error) {
 		}
 		if erasure.Complete {
 			state.State = "done"
+		} else if !erasure.Completion {
+			// A late copy's destructive ERASE reopens an earlier completion.
+			state.State = "rewriting"
 		}
 		last[erasure.ErasureId] = erasure.Time
 	}

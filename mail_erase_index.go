@@ -141,8 +141,8 @@ func mailNewEraseIndex(ctx context.Context, repo *EvsRepo, args *MailEraserArgs,
 			}
 			complete := map[Id]bool{}
 			for _, erasure := range erasures {
-				if erasure.Complete {
-					complete[erasure.ErasureId] = true
+				if !erasure.Completion || erasure.Complete {
+					complete[erasure.ErasureId] = erasure.Complete
 				}
 			}
 			return complete, nil
