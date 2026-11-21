@@ -10,6 +10,7 @@ package sidecar
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"slices"
 	"sync"
@@ -381,5 +382,32 @@ func TestAclFollowerPropagationMeetsTheTargets(t *testing.T) {
 	}
 	if len(acks) <= 1 || len(entries) <= len(acks) {
 		t.Errorf("%d acks for %d entries", len(acks), len(entries))
+	}
+}
+
+// Advancing the rows withdraws the old head's private rule details before a
+// newly authenticated head becomes available.
+func TestAclFollowerWithdrawsDetailsFromThePreviousHead(t *testing.T) {
+	world := newAclFollowWorld(t)
+	state := world.net.log.State()
+	oldPolicy := &AclLocalPolicy{}
+	world.follower.local.Store(&aclFollowerLocal{headSha256: [sha256.Size]byte(state.Base().GetConfigHeadSha256()), local: oldPolicy})
+	world.source.applied(state)
+	if world.follower.installedLocal() != oldPolicy {
+		t.Fatal("the matching local policy did not install")
+	}
+	if verdict := world.net.fold(world.net.owner, world.net.n, state.Base().GetConfigVersion()+1); !verdict.Accepted() {
+		t.Fatal(verdict.Refusal)
+	}
+	state = world.net.log.State()
+	world.source.applied(state)
+	if !proto.Equal(world.engine.Pin(), state.Pin()) || world.follower.installedLocal() != nil {
+		t.Fatal("the new rows retained the previous head's detailed policy")
+	}
+	newPolicy := &AclLocalPolicy{}
+	world.follower.local.Store(&aclFollowerLocal{headSha256: [sha256.Size]byte(state.Base().GetConfigHeadSha256()), local: newPolicy})
+	world.source.applied(state)
+	if world.follower.installedLocal() != newPolicy {
+		t.Fatal("the new detail did not install at the same pin")
 	}
 }
