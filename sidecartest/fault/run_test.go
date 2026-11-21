@@ -685,11 +685,12 @@ func TestExplorerPassesACorrectProtocol(t *testing.T) {
 	}
 }
 
-// Rule settings for a toy: the merge seeds, and traces into a directory of the test's own, never the
-// repository's.
+// Rule settings for a toy: the merge seeds, and traces written to and read from a directory of the
+// test's own, never the repository's or the one UR_FAULT_TRACE_DIR names.
 func toyRuleSettings(t *testing.T) *RuleSettings {
 	settings := DefaultRuleSettings()
 	settings.SeedsDirectory = t.TempDir()
+	settings.TraceDirectory = settings.SeedsDirectory
 	return settings
 }
 

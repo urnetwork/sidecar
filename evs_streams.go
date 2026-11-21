@@ -14,7 +14,13 @@
 //	         checked as a record keeps it, with no slot body (EvsCheckRecordPayload, QD-806; a sealed push's parts
 //	         EvsCheckStoredSeal), each key taken from a slot the reply carried; each file a version creates rebuilt
 //	         from the ranges and slots the reply carried, through the receipt gate, and held to its sealed fields;
-//	         a stream read to its head is pinned, as a head read is
+//	         a stream read to its head is pinned, as a head read is, before any file is rebuilt
+//	pins     each stream's head is held to this device's pin of its ref as the read asked at it, not as another call
+//	         of the client raised it since, and raised with the walk from the caller's pin, judged against the pin as
+//	         it then stands (evs_pin_walk.go): a head another raise passed stands where that raise's walk places it,
+//	         and where nothing does the whole read is read again, at most EvsSettings.ReadStaleRetryCount times, before
+//	         it answers ErrEvsReadStale; a stream that stops short of its head, more, is a page, judged against what
+//	         the pin store holds and raising nothing
 //	erased   a file whose every slot came back emptied reads as erased only where a committed ERASE on the repo's
 //	         erasure ref names each of them, judged on the ERASEs read after the slots (evs_read_erased.go: read once a
 //	         call at the first emptied slot, and again before a slot the list in hand does not name alarms); an
@@ -116,6 +122,26 @@ type evsStreamGroup struct {
 
 // Reads streams after their pins in one request: see the file header. The answer holds one entry a read, in order.
 func (self *EvsRepo) ReadStreams(ctx context.Context, reads []*EvsStreamRead) ([]*EvsStreamVersions, error) {
+	request, err := self.streamsRequest(ctx, reads)
+	if err != nil {
+		return nil, err
+	}
+	// each stream's read in flight from its first ask to its raise, so another raise meanwhile keeps the chains that
+	// place its head
+	for _, read := range reads {
+		done := self.client.pins.beginRead(self.repoId, read.RefId)
+		defer done()
+	}
+	for staleCount := 0; ; staleCount += 1 {
+		answers, err := self.readStreamsOnce(ctx, request, reads)
+		if !errors.Is(err, ErrEvsReadStale) || self.client.settings.ReadStaleRetryCount <= staleCount {
+			return answers, err
+		}
+	}
+}
+
+// The request ReadStreams sends for reads, each stream's ref id resolved into its read.
+func (self *EvsRepo) streamsRequest(ctx context.Context, reads []*EvsStreamRead) (*protocol.EvsReadRequest, error) {
 	formats := DefaultEvsFormatSettings()
 	if len(reads) == 0 || formats.ReadStreamMaxRefCount < len(reads) {
 		return nil, fmt.Errorf("%w: a streams read of %d refs", ErrEvsWriteInvalid, len(reads))
@@ -139,6 +165,19 @@ func (self *EvsRepo) ReadStreams(ctx context.Context, reads []*EvsStreamRead) ([
 		seen[read.RefId] = true
 		request.Refs = append(request.Refs, &protocol.EvsReadRef{RefId: read.RefId.Bytes(), PinVersion: read.PinVersion})
 	}
+	return request, nil
+}
+
+// One ReadStreams request, each stream judged against the pin its ref held as the request was sent.
+func (self *EvsRepo) readStreamsOnce(ctx context.Context, request *protocol.EvsReadRequest, reads []*EvsStreamRead) ([]*EvsStreamVersions, error) {
+	asks := make([]*evsPinAsk, len(reads))
+	for i, read := range reads {
+		ask, err := self.client.pins.ask(self.repoId, read.RefId)
+		if err != nil {
+			return nil, err
+		}
+		asks[i] = ask
+	}
 	groups, err := self.client.postReadStreams(ctx, self.repoId, request, reads)
 	if err != nil {
 		return nil, err
@@ -151,8 +190,8 @@ func (self *EvsRepo) ReadStreams(ctx context.Context, reads []*EvsStreamRead) ([
 	answers := []*EvsStreamVersions{}
 	// one judge of emptied slots for the whole call, every group's reconstructions judging by it too
 	erasures := &evsErasedKeys{}
-	for _, group := range groups {
-		answer, err := self.streamVersions(ctx, group, erasures)
+	for i, group := range groups {
+		answer, err := self.streamVersions(ctx, group, asks[i], erasures)
 		if err != nil {
 			return nil, err
 		}
@@ -161,8 +200,9 @@ func (self *EvsRepo) ReadStreams(ctx context.Context, reads []*EvsStreamRead) ([
 	return answers, nil
 }
 
-// One stream's versions from its group: see the file header's verify row.
-func (self *EvsRepo) streamVersions(ctx context.Context, group *evsStreamGroup, erasures *evsErasedKeys) (*EvsStreamVersions, error) {
+// One stream's versions from its group, judged against the pin its ref held at ask: see the file header's verify and
+// pins rows.
+func (self *EvsRepo) streamVersions(ctx context.Context, group *evsStreamGroup, ask *evsPinAsk, erasures *evsErasedKeys) (*EvsStreamVersions, error) {
 	read := group.read
 	answer := &EvsStreamVersions{RefId: read.RefId, Head: group.head, More: group.more, Behind: group.behind, ByteCount: group.byteCount}
 	if group.behind != 0 {
@@ -194,7 +234,7 @@ func (self *EvsRepo) streamVersions(ctx context.Context, group *evsStreamGroup, 
 	}
 	verified := &EvsVerifiedHead{
 		RepoId: self.repoId, RefId: read.RefId, Head: group.head, Version: headVersion, Chain: headChain,
-		Statements: walked, FromVersion: read.PinVersion,
+		Statements: walked, FromVersion: read.PinVersion, ask: ask, fromChain: fromChain, ownStart: true,
 	}
 	if group.more == 0 {
 		switch {
@@ -203,7 +243,21 @@ func (self *EvsRepo) streamVersions(ctx context.Context, group *evsStreamGroup, 
 		case len(walked) == 0 && fromChain != headChain:
 			return nil, fmt.Errorf("%w: a head at the pin's version with another chain", ErrEvsHeadForked)
 		}
-		if err := self.client.verifier.checkPin(self.repoId, read.RefId, headVersion, headChain); err != nil {
+		if err := self.client.verifier.checkAsked(self.repoId, read.RefId, ask, headVersion, headChain); err != nil {
+			return nil, err
+		}
+		if 0 < len(walked) {
+			if err := self.client.verifier.Pin(verified); err != nil {
+				return nil, err
+			}
+		}
+	} else if 0 < len(walked) {
+		// a page short of the head: held to what the pin store holds, raising nothing
+		page := &EvsVerifiedHead{
+			RepoId: self.repoId, RefId: read.RefId, Head: group.head, Version: through, Chain: walked[len(walked)-1].Chain,
+			Statements: walked, FromVersion: read.PinVersion, ask: ask, fromChain: fromChain, ownStart: true, page: true,
+		}
+		if _, err := self.client.verifier.judgeHead(page, nil); err != nil {
 			return nil, err
 		}
 	}
@@ -216,11 +270,6 @@ func (self *EvsRepo) streamVersions(ctx context.Context, group *evsStreamGroup, 
 			return nil, err
 		}
 		answer.Versions = append(answer.Versions, version)
-	}
-	if group.more == 0 && 0 < len(walked) {
-		if err := self.client.verifier.Pin(verified); err != nil {
-			return nil, err
-		}
 	}
 	return answer, nil
 }

@@ -35,6 +35,9 @@ type Result struct {
 	// order was the schedule's and this fails nothing: it says where a slow machine's time went when a
 	// wait then ran out.
 	Slow []string
+	// For a failing explorer's seed, the file the explorer wrote its trace to (explore.go), empty where it
+	// wrote none.
+	TracePath string
 }
 
 func (self *Result) String() string {
@@ -44,6 +47,9 @@ func (self *Result) String() string {
 		text.WriteString(" passed\n")
 	} else {
 		fmt.Fprintf(&text, " failed at step %d: %v\n", self.FailedStep, self.Err)
+	}
+	if self.TracePath != "" {
+		fmt.Fprintf(&text, "  its trace: %s, a fixed schedule once committed to testdata/fault/seeds\n", self.TracePath)
 	}
 	if self.LeftTrace != "" {
 		fmt.Fprintf(&text, "  the replay left its trace: %s\n", self.LeftTrace)

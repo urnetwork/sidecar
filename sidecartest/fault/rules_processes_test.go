@@ -99,16 +99,23 @@ func seedToyHeadEndingAChild(ctx context.Context, net *Net) error {
 	return err
 }
 
-// The rules over toy, on row FS-1's unknown list, with settings' processes at count and its traces in directory: a
-// child rebuilds the toy by its name.
+// The rules over toy, on row FS-1's unknown list, with settings' processes at count and its traces written to and read
+// from directory: a child rebuilds the toy by its name.
 func checkToyRules(t *testing.T, toy string, directory string, count int, seeds []int64) *RowReport {
 	t.Helper()
 	settings := DefaultRuleSettings()
 	settings.SeedsDirectory = directory
+	settings.TraceDirectory = directory
 	settings.Processes.Count = count
 	if seeds != nil {
 		settings.Seeds = seeds
 	}
+	return checkToyRulesUnder(t, toy, settings)
+}
+
+// The rules over toy, on row FS-1's unknown list, under settings: a child rebuilds the toy by its name.
+func checkToyRulesUnder(t *testing.T, toy string, settings *RuleSettings) *RowReport {
+	t.Helper()
 	report := &RowReport{Case: &Case{Name: toy, Row: &Row{Id: "FS-1", Number: 1, Unknown: true}}}
 	report.checkRules(t.Context(), &ruleSubject{id: "toy-race", builder: ruleChildTestBuilders[toy], unknown: true, child: &ruleChildName{Test: toy}}, settings)
 	return report

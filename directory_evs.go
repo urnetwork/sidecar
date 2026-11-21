@@ -12,31 +12,32 @@
 //	          (RecordStreamRefName), anything else Other. Heads are evs's word: what a sync acts on it reads verified
 //	streams   POST .../read {refs} (EvsRepo.ReadStreams), up to ReadStreamMaxRefCount streams in the order asked, each
 //	          walked and verified from the version the reader holds and C there (the chain row), and pinned once read to
-//	          its head. Each version's payload is held to the creates-only rule as far as its entry versions show it
-//	          (EvsVerifier.VerifyPayloadRefRules, with no path state: a directory delta's base on its newest version is
-//	          the record chain's to hold), each file it creates is named by its counter in its push epoch, RECORD.md
-//	          section 5.2's e/<a>/<b>/<n> (record_evs.go's counter row), and its own slot, the new slot no file's chain
-//	          names, is opened row by row under fek of each key's generation. Every version is answered, one creating
-//	          no entry too, so a copy keeps its stream's versions with no gap
+//	          its head (the pins row). Each version's payload is held to the creates-only rule as far as its entry
+//	          versions show it (EvsVerifier.VerifyPayloadRefRules, with no path state: a directory delta's base on its
+//	          newest version is the record chain's to hold), each file it creates is named by its counter in its push
+//	          epoch, RECORD.md section 5.2's e/<a>/<b>/<n> (record_evs.go's counter row), and its own slot, the new slot
+//	          no file's chain names, is opened row by row under fek of each key's generation. Every version is
+//	          answered, one creating no entry too, so a copy keeps its stream's versions with no gap
 //	log       GET .../log?ref=&since= for a stream past the window: one page, LogPageVersionCount versions at most,
-//	          verified from the version before it, its pin raised as far as it reaches, each version's push record read
-//	          ReadObjectCount to a read and each file rebuilt as the streams read rebuilds it. A page that ends before
-//	          the head gives the next page's first version as HeadVersion, so a caller pages on until more ends
+//	          verified from the version before it, its pin raised as far as it reaches (the pins row), each version's
+//	          push record read ReadObjectCount to a read and each file rebuilt as the streams read rebuilds it. A page
+//	          that ends before the head gives the next page's first version as HeadVersion, so a caller pages on until
+//	          more ends
 //	chain     a read verifies from (v, C_v): C_0 for none; else C_v as a read of this binding was asked from or answered
 //	          to for the ref, the two newest kept for ChainRefCount refs; else the client's pin when it stands at v;
 //	          else a walk of the ref's log from its first statement, verified, which only a restart between a read
 //	          and its copy's write needs
 //	cards     the shared file-mode ref cards: one read for its head and the window's statements after the copy's
 //	          version, GET .../log past the window, CardsPageVersionCount statements a page, verified from the version
-//	          and pinned. Each statement's push record is read, ReadObjectCount to a read, and its changes taken in
-//	          commit order: a directory's delta teaches the names it adds, a file's version is rebuilt (its per-path
-//	          keys from its slots, a page's slots and segment ranges read together) and a removal is one. Each file is named by its
-//	          plaintext path, found from its token path in its push's epoch among the names this binding knows: the
-//	          rows of the deltas it read, the shards of q/, d/ and r/, the copy's own paths
-//	          (DirectoryCardsCopyPaths), and for a token no known name gives the listing of the directory above it at
-//	          the head (EvsRepo.List). A change no name places is no file the copy holds or will hold: its path was
-//	          never one the copy kept, and it stands nowhere at the head, so it is left out. A removed directory
-//	          removes each file the names hold below it
+//	          and pinned (the pins row). Each statement's push record is read, ReadObjectCount to a read, and its
+//	          changes taken in commit order: a directory's delta teaches the names it adds, a file's version is
+//	          rebuilt (its per-path keys from its slots, a page's slots and segment ranges read together) and a
+//	          removal is one. Each file is named by its plaintext path, found from its token path in its push's epoch
+//	          among the names this binding knows: the rows of the deltas it read, the shards of q/, d/ and r/, the
+//	          copy's own paths (DirectoryCardsCopyPaths), and for a token no known name gives the listing of the
+//	          directory above it at the head (EvsRepo.List). A change no name places is no file the copy holds or will
+//	          hold: its path was never one the copy kept, and it stands nowhere at the head, so it is left out. A
+//	          removed directory removes each file the names hold below it
 //	format 2  a format-2 repo's push records are read as format 2 keeps them (ParseEvsBatchRecordFormat2: the record
 //	          and its tail, whose staged segments answer the payload's new objects), each payload checked as stored
 //	          (EvsCheckStoredPayload). A versionless file's version names its path to evs's reader in its push's
@@ -44,6 +45,12 @@
 //	          version whose slots hold no key reads the same way where a committed ERASE names each slot, as an
 //	          erasure's CLOSURE and ERASE leave every version the path held before them (§11.12's closure row); with
 //	          no such ERASE the key was withheld, which alarms tamper, and the version is left out
+//	pins      each read is held to this device's pin of its ref as the read asked at it, before its request, never to
+//	          a pin another call of the client raised since: a head below that pin is a fork, alarmed. A read to the
+//	          head pins it with its walk, and a page short of the head raises the pin to its end where that stands above
+//	          it, each judged against the pin as it then stands (evs_pin_walk.go), so a head another raise passed stands
+//	          where that raise's walk places it; where nothing does, the cards or log read is read again, fresh, at most
+//	          EvsSettings.ReadStaleRetryCount times, before it answers ErrEvsReadStale
 //	erased    every read here judges a key gone from its slot, the cards ref's and a stream's alike, on the repo's
 //	          ERASEs read after the slot (evs_read_erased.go): a page read a statement at a time reads them again,
 //	          once, before a slot the ERASEs it read earlier do not name alarms, since an ERASE may commit between
@@ -290,7 +297,9 @@ func (self *DirectoryEvsCards) keptChain(repoId Id, refId Id, version uint64) ([
 	return chain, ok
 }
 
-// C at version of the ref, which a read verifies from: see the file header's chain row.
+// C at version of the ref, which a read verifies from: see the file header's chain row. A walk of the ref's log is a
+// page of its history from C_0, held to what the pin store holds as it was asked before the log was read, raising
+// nothing.
 func (self *DirectoryEvsCards) chainAt(ctx context.Context, repoId Id, refId Id, version uint64) ([sha256.Size]byte, error) {
 	if version == 0 {
 		return EvsChainStart(repoId, refId), nil
@@ -298,43 +307,46 @@ func (self *DirectoryEvsCards) chainAt(ctx context.Context, repoId Id, refId Id,
 	if chain, ok := self.keptChain(repoId, refId, version); ok {
 		return chain, nil
 	}
-	pin, pinned, err := self.client.pins.Pin(repoId, refId)
+	ask, err := self.client.pins.ask(repoId, refId)
 	if err != nil {
 		return [sha256.Size]byte{}, err
 	}
-	if pinned && pin.Version == version {
+	if pin := ask.pin; pin != nil && pin.Version == version {
 		return pin.Chain, nil
 	}
-	walked, err := self.client.verifier.Walk(ctx, repoId, refId, 0, EvsChainStart(repoId, refId), version)
+	start := EvsChainStart(repoId, refId)
+	walked, err := self.client.verifier.Walk(ctx, repoId, refId, 0, start, version)
 	if err != nil {
 		return [sha256.Size]byte{}, recordEvsRefusal(err)
 	}
 	if len(walked) == 0 {
 		return [sha256.Size]byte{}, fmt.Errorf("%w: no statement up to version %d", ErrEvsChainBroken, version)
 	}
-	if err := self.client.verifier.checkPinOnWalk(repoId, refId, walked); err != nil {
+	chain := walked[len(walked)-1].Chain
+	page := &EvsVerifiedHead{
+		RepoId: repoId, RefId: refId, Head: &protocol.EvsHeadSummary{RefId: refId.Bytes()}, Version: version, Chain: chain,
+		Statements: walked, ask: ask, fromChain: start, page: true,
+	}
+	if _, err := self.client.verifier.judgeHead(page, nil); err != nil {
 		return [sha256.Size]byte{}, err
 	}
-	chain := walked[len(walked)-1].Chain
 	self.keepChain(repoId, refId, version, chain)
 	return chain, nil
 }
 
-// Raises the ref's pin to a verified walk's last statement where the pin stands below it: a verified prefix, which a
-// later head below it would contradict (I-16).
-func (self *DirectoryEvsCards) raisePin(repoId Id, refId Id, walked []*EvsVerifiedStatement) error {
+// Raises the ref's pin to a verified walk's last statement where the pin stands below it as it stands then: a
+// verified prefix, which a later head below it would contradict (I-16). The walk, from fromVersion and C there, the
+// reader's own state, is a page of the history read at ask, judged as Pin judges one: a version it holds that the pin
+// store holds on another chain is a fork, alarmed.
+func (self *DirectoryEvsCards) raisePin(repoId Id, refId Id, ask *evsPinAsk, fromVersion uint64, fromChain [sha256.Size]byte, walked []*EvsVerifiedStatement) error {
 	if len(walked) == 0 {
 		return nil
 	}
 	last := walked[len(walked)-1]
-	pin, pinned, err := self.client.pins.Pin(repoId, refId)
-	if err != nil {
-		return err
-	}
-	if pinned && last.Version <= pin.Version {
-		return nil
-	}
-	return self.client.verifier.Pin(&EvsVerifiedHead{RepoId: repoId, RefId: refId, Head: &protocol.EvsHeadSummary{}, Version: last.Version, Chain: last.Chain})
+	return self.client.verifier.Pin(&EvsVerifiedHead{
+		RepoId: repoId, RefId: refId, Head: &protocol.EvsHeadSummary{}, Version: last.Version, Chain: last.Chain, Statements: walked,
+		FromVersion: fromVersion, ask: ask, fromChain: fromChain, ownStart: true, page: true,
+	})
 }
 
 // Up to ReadStreamMaxRefCount streams after the versions held: see the file header's streams row.
@@ -595,14 +607,32 @@ func (self *DirectoryEvsCards) logPage(ctx context.Context, repoId Id, refId Id,
 	return reply, nil
 }
 
-// One page of a stream past the window: see the file header's log row.
+// One page of a stream past the window: see the file header's log row. A page whose raise finds the pin moved in a
+// way nothing places is read again, at most ReadStaleRetryCount times (the pins row).
 func (self *DirectoryEvsCards) ReadStreamLog(ctx context.Context, repoId Id, writerSidecarId Id, afterVersion uint64) (*DirectoryStreamVersions, error) {
 	repo := self.client.Repo(repoId)
 	refId, err := repo.RefIdOf(ctx, RecordStreamRefName(writerSidecarId))
 	if err != nil {
 		return nil, err
 	}
+	done := self.client.pins.beginRead(repoId, refId)
+	defer done()
+	for staleCount := 0; ; staleCount += 1 {
+		result, err := self.readStreamLogOnce(ctx, repo, refId, writerSidecarId, afterVersion)
+		if !errors.Is(err, ErrEvsReadStale) || self.client.settings.ReadStaleRetryCount <= staleCount {
+			return result, err
+		}
+	}
+}
+
+// ReadStreamLog's one read, from the pin as it stands when it starts.
+func (self *DirectoryEvsCards) readStreamLogOnce(ctx context.Context, repo *EvsRepo, refId Id, writerSidecarId Id, afterVersion uint64) (*DirectoryStreamVersions, error) {
+	repoId := repo.repoId
 	fromChain, err := self.chainAt(ctx, repoId, refId, afterVersion)
+	if err != nil {
+		return nil, err
+	}
+	ask, err := self.client.pins.ask(repoId, refId)
 	if err != nil {
 		return nil, err
 	}
@@ -624,10 +654,7 @@ func (self *DirectoryEvsCards) ReadStreamLog(ctx context.Context, repoId Id, wri
 	if err != nil {
 		return nil, err
 	}
-	if err := self.client.verifier.checkPinOnWalk(repoId, refId, walked); err != nil {
-		return nil, err
-	}
-	if err := self.raisePin(repoId, refId, walked); err != nil {
+	if err := self.raisePin(repoId, refId, ask, afterVersion, fromChain, walked); err != nil {
 		return nil, err
 	}
 	head := &EvsVerifiedHead{RepoId: repoId, RefId: refId, Head: &protocol.EvsHeadSummary{RefId: refId.Bytes()}, Version: through}
@@ -1236,16 +1263,36 @@ func (self *DirectoryEvsCards) ReadPlannedCard(ctx context.Context, repoId Id, f
 	return body.Bytes(), nil
 }
 
-// Walks the same verified path changes for desktop copies and phone views.
+// Walks the same verified path changes for desktop copies and phone views. A read whose raise finds the pin moved in
+// a way nothing places is read again, fresh, at most ReadStaleRetryCount times (the file header's pins row).
 func (self *DirectoryEvsCards) readCards(ctx context.Context, repoId Id, afterVersion uint64, plan bool) (*DirectoryCardsChanges, error) {
 	repo := self.client.Repo(repoId)
 	refId, err := repo.RefIdOf(ctx, DirectoryCardsRefName())
 	if err != nil {
 		return nil, err
 	}
+	done := self.client.pins.beginRead(repoId, refId)
+	defer done()
+	fresh := false
+	for staleCount := 0; ; staleCount += 1 {
+		changes, err := self.readCardsOnce(ctx, repo, refId, afterVersion, plan, fresh)
+		if !errors.Is(err, ErrEvsReadStale) || self.client.settings.ReadStaleRetryCount <= staleCount {
+			return changes, err
+		}
+		fresh = true
+	}
+}
+
+// readCards' one read, from the pin as it stands when it starts, past evs's head cache where fresh.
+func (self *DirectoryEvsCards) readCardsOnce(ctx context.Context, repo *EvsRepo, refId Id, afterVersion uint64, plan bool, fresh bool) (*DirectoryCardsChanges, error) {
+	repoId := repo.repoId
+	ask, err := self.client.pins.ask(repoId, refId)
+	if err != nil {
+		return nil, err
+	}
 	// the head, and the window's statements after the version held: past evs's head cache when a lease's hint named a
 	// newer version (§11.9's cache row)
-	fresh := afterVersion < self.client.hintedVersion(repoId, refId)
+	fresh = fresh || afterVersion < self.client.hintedVersion(repoId, refId)
 	reply, objects, err := self.client.postRead(ctx, repoId, &protocol.EvsReadRequest{RefId: refId.Bytes(), PinVersion: afterVersion, Fresh: fresh})
 	if err != nil {
 		return nil, recordEvsRefusal(err)
@@ -1258,8 +1305,9 @@ func (self *DirectoryEvsCards) readCards(ctx context.Context, repoId Id, afterVe
 	}
 	changes := &DirectoryCardsChanges{HeadVersion: headVersion, ThroughVersion: afterVersion}
 	if headVersion < afterVersion {
-		// below what the copy holds: the pin rule refuses it, and the copy keeps what it verified (I-16)
-		if err := self.client.verifier.checkPin(repoId, refId, headVersion, headChain); err != nil {
+		// below what the copy holds: the pin rule at the pin the read asked at refuses it, and the copy keeps what it
+		// verified (I-16)
+		if err := self.client.verifier.checkAsked(repoId, refId, ask, headVersion, headChain); err != nil {
 			return nil, err
 		}
 		return nil, fmt.Errorf("%w: the cards ref's head below the version held", ErrEvsHeadForked)
@@ -1293,19 +1341,17 @@ func (self *DirectoryEvsCards) readCards(ctx context.Context, repoId Id, afterVe
 		if walked[len(walked)-1].Chain != headChain {
 			return nil, fmt.Errorf("%w: the statements do not chain to the head", ErrEvsChainBroken)
 		}
-		if err := self.client.verifier.checkPin(repoId, refId, headVersion, headChain); err != nil {
+		if err := self.client.verifier.checkAsked(repoId, refId, ask, headVersion, headChain); err != nil {
 			return nil, err
 		}
-		if err := self.client.verifier.Pin(&EvsVerifiedHead{RepoId: repoId, RefId: refId, Head: reply.head, Version: headVersion, Chain: headChain}); err != nil {
+		if err := self.client.verifier.Pin(&EvsVerifiedHead{
+			RepoId: repoId, RefId: refId, Head: reply.head, Version: headVersion, Chain: headChain, Statements: walked,
+			FromVersion: afterVersion, ask: ask, fromChain: fromChain, ownStart: true,
+		}); err != nil {
 			return nil, err
 		}
-	} else {
-		if err := self.client.verifier.checkPinOnWalk(repoId, refId, walked); err != nil {
-			return nil, err
-		}
-		if err := self.raisePin(repoId, refId, walked); err != nil {
-			return nil, err
-		}
+	} else if err := self.raisePin(repoId, refId, ask, afterVersion, fromChain, walked); err != nil {
+		return nil, err
 	}
 	head := &EvsVerifiedHead{RepoId: repoId, RefId: refId, Head: reply.head, Version: headVersion, Chain: headChain}
 	payloads, err := self.pushPayloads(ctx, repo, head, walked)

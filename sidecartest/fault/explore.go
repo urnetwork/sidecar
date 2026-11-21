@@ -1,8 +1,9 @@
 // §22.8's explorer: each schedule also runs under seeded barrier orders, 10 seeds a merge for a T2 row
 // and 100 a night for a T3 one, checking its invariants after every step as any run does. A failing
-// seed writes its trace beside the repository's other seeds, where Replay makes it a fixed schedule
-// that runs from then on. The trace is kept and not the seed alone, since a goroutine no actor owns
-// runs free and a seed may not order it the same way twice.
+// seed writes its trace where RuleSettings.TraceDirectory says, outside every source tree unless it
+// names one, and the failure names the file; committed beside the repository's other seeds, the trace
+// is a fixed schedule Replay runs from then on (replay.go). The trace is kept and not the seed alone,
+// since a goroutine no actor owns runs free and a seed may not order it the same way twice.
 //
 // Nothing here retries: a seed that failed once is a failure, whatever a second run of it would do
 // (R-TEST-9). And a seed that passes proves only the orders it reached, so a report says how many seeds
@@ -26,6 +27,7 @@ package fault
 import (
 	"context"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 
@@ -43,10 +45,16 @@ type RuleSettings struct {
 	Net *sidecartest.NetSettings
 	// The explorer's seeds: MergeSeeds for a T2 row, NightlySeeds for a T3 one.
 	Seeds []int64
-	// Where traces are written and read. Empty: testdata/fault/seeds in the repository above the
-	// working directory, found as SeedsDirectory says.
+	// Where the traces committed for a schedule are read from, each of which its runs replay. Empty:
+	// testdata/fault/seeds in the repository above the working directory, found as SeedsDirectory says.
+	// Nothing is written here unless TraceDirectory names it too.
 	SeedsDirectory string
-	// Whether a failing seed writes its trace there.
+	// Where a failing seed writes its trace, an absolute path, made if missing: UR_FAULT_TRACE_DIR's
+	// value by default. Empty: a directory of the explorer's own, made under the host's temporary
+	// directory at its first failing seed and kept, so the path its failure names outlives the test.
+	// Only a directory named here puts a trace in a source tree, testdata/fault/seeds to commit it, say.
+	TraceDirectory string
+	// Whether a failing seed writes its trace.
 	WriteTraces bool
 	// The child processes CheckRow and CheckClause send the runs that depend on nothing but their own
 	// schedule to, where a child can rebuild them (rules_processes.go). Nil runs every run here.
@@ -55,10 +63,11 @@ type RuleSettings struct {
 
 func DefaultRuleSettings() *RuleSettings {
 	return &RuleSettings{
-		Net:         sidecartest.DefaultNetSettings(),
-		Seeds:       MergeSeeds(),
-		WriteTraces: true,
-		Processes:   DefaultRuleProcessSettings(),
+		Net:            sidecartest.DefaultNetSettings(),
+		Seeds:          MergeSeeds(),
+		TraceDirectory: os.Getenv(traceDirectoryEnvironment),
+		WriteTraces:    true,
+		Processes:      DefaultRuleProcessSettings(),
 	}
 }
 
@@ -94,6 +103,9 @@ type ExploreReport struct {
 	TracePaths []string
 	// Why a failure's trace could not be written.
 	TraceErrors []error
+
+	// where its failing seeds' traces go, from the settings of the first it records
+	traces *traceDestination
 }
 
 // What a report of the short form says, after its seeds (QD-1151).
@@ -152,7 +164,8 @@ func (self *ExploreReport) runSeed(ctx context.Context, builder Builder, setting
 }
 
 // Records seed's run, wherever it ran, writing a failure's trace when settings say so and traced holds: a run
-// whose child process ended under it left no events to write.
+// whose child process ended under it left no events to write. The trace goes where settings' TraceDirectory says,
+// never where its seeds are read from unless that names them, and the failure names its file.
 func (self *ExploreReport) record(seed int64, result *Result, settings *RuleSettings, traced bool) {
 	self.Id = result.Id
 	self.Seeds = append(self.Seeds, seed)
@@ -162,11 +175,15 @@ func (self *ExploreReport) record(seed int64, result *Result, settings *RuleSett
 	self.Failures = append(self.Failures, result)
 	tracePath := ""
 	if settings.WriteTraces && traced {
-		path, err := WriteTrace(settings.SeedsDirectory, TraceOf(result))
+		if self.traces == nil {
+			self.traces = &traceDestination{named: settings.TraceDirectory}
+		}
+		path, err := self.traces.write(TraceOf(result))
 		if err != nil {
 			self.TraceErrors = append(self.TraceErrors, err)
 		}
 		tracePath = path
+		result.TracePath = path
 	}
 	self.TracePaths = append(self.TracePaths, tracePath)
 }
