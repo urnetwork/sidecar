@@ -15,22 +15,23 @@ import (
 
 // One enrolled network's replica, closed by its host or when either owner context ends.
 type MemberReplica struct {
-	running      *Sidecar
-	ctx          context.Context
-	cancel       context.CancelFunc
-	identity     SidecarIdentity
-	presenceLock sync.Mutex
-	presence     SidecarPresenceCheck
-	headsLock    sync.Mutex
-	heads        *EvsConfigHeadReader
-	configRepoId Id
-	evs          *EvsClient
-	hints        *GkmHints
-	upkeep       *GkmUpkeep
-	follower     *SidecarConfigFollower
-	recordLock   sync.Mutex
-	record       *SidecarRecord
-	closeOnce    sync.Once
+	running        *Sidecar
+	ctx            context.Context
+	cancel         context.CancelFunc
+	identity       SidecarIdentity
+	presenceLock   sync.Mutex
+	presence       SidecarPresenceCheck
+	headsLock      sync.Mutex
+	heads          *EvsConfigHeadReader
+	configRepoId   Id
+	evs            *EvsClient
+	hints          *GkmHints
+	upkeep         *GkmUpkeep
+	removeRecovery func()
+	follower       *SidecarConfigFollower
+	recordLock     sync.Mutex
+	record         *SidecarRecord
+	closeOnce      sync.Once
 }
 
 // Opens the enrolled identity's replica. Calls for the same identity share the same replica and its lifetime.
@@ -115,6 +116,9 @@ func (self *MemberReplica) Close() {
 		if self.evs != nil {
 			self.evs.Close()
 		}
+		if self.removeRecovery != nil {
+			self.removeRecovery()
+		}
 		if self.upkeep != nil {
 			self.upkeep.Close()
 		}
@@ -152,7 +156,7 @@ func (self *MemberReplica) open() error {
 		return err
 	}
 	groupArgs.ReaderPrivateKey = self.upkeep.ReaderPrivateKey
-	groupArgs.ReaderKeySha256 = self.currentReaderKey
+	groupArgs.ReaderKeySha256 = self.upkeep.CurrentReaderKeySha256
 	keys := &memberReplicaKeys{replica: self, api: api}
 	groupArgs.ReaderRepoIds = keys.readerRepos
 	group, err := NewGkmGroupClient(groupArgs)
@@ -160,6 +164,7 @@ func (self *MemberReplica) open() error {
 		return err
 	}
 	keys.GkmGroupClient = group
+	self.installRecovery(group)
 	group.AttachHints(self.ctx, self.hints)
 	args, err := running.EvsClientArgs(keys, self.verifiedConfig, nil)
 	if err != nil {
@@ -199,21 +204,6 @@ func (self *MemberReplica) bindRecord(config *ConfigClient) error {
 		return err
 	}
 	self.record = record
-	return nil
-}
-
-// The newest uploaded and still valid ReaderKey usable for late deliveries.
-func (self *MemberReplica) currentReaderKey() []byte {
-	records, err := self.upkeep.readerKeyRecords()
-	if err != nil {
-		return nil
-	}
-	defer clearGkmReaderKeySeeds(records)
-	for _, record := range slices.Backward(records) {
-		if record.uploaded && self.running.clock.Now().Before(record.notAfter) {
-			return append([]byte(nil), record.keySha256...)
-		}
-	}
 	return nil
 }
 

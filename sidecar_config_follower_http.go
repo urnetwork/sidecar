@@ -14,3 +14,6 @@ func (self *Sidecar) setMemberEvsHooks(args *EvsClientArgs) {
 
 // The Worker has no repo administration surface.
 func (self *MemberReplica) setStatementPoster(args *EvsClientArgs) {}
+
+// Browser enrollment is through the owner's signed-in handoff.
+func (self *MemberReplica) installRecovery(group *GkmGroupClient) {}

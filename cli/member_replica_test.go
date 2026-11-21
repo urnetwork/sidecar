@@ -39,6 +39,10 @@ func TestMemberReplicaReadsTheEnrolledNetworksEncryptedHeadAfterRestart(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := instance.Restart(); err != nil {
+		t.Fatal(err)
+	}
+	running = instance.Sidecar(networkId)
 	open := func(running *sidecar.Sidecar) *sidecar.MemberReplica {
 		t.Helper()
 		replica, err := running.OpenMemberReplica(ctx)

@@ -36,3 +36,9 @@ func (self *SidecarConfigFollower) Attach(env *SidecarEnv) error {
 func (self *MemberReplica) EvsComponent() *EvsComponent {
 	return NewEvsComponent(self.evs)
 }
+
+// Native members use the same verified group, sealed generations and temporary
+// config-head reader for recovery that they use for ordinary file access.
+func (self *MemberReplica) installRecovery(group *GkmGroupClient) {
+	self.removeRecovery = self.running.InstallNetworkRecovery(group)
+}
